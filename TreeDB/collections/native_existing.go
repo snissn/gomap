@@ -82,7 +82,7 @@ func (c *Collection) nativeInsertBatchWithStatsProjection(ids, documents [][]byt
 	if err != nil {
 		return nil, err
 	}
-	unlockVector, vectorMutationHeld, err := c.prepareNativeProducerMutation()
+	unlockVector, _, err := c.prepareNativeProducerMutation()
 	if err != nil {
 		return nil, err
 	}
@@ -91,11 +91,7 @@ func (c *Collection) nativeInsertBatchWithStatsProjection(ids, documents [][]byt
 	if err != nil {
 		return nil, err
 	}
-	if c.nativeHNSWMaintenanceNeeded() {
-		if err = c.finishNativeHNSWMutation(ids, vectorMutationHeld); err != nil {
-			return result, commitAmbiguousError("native vector maintenance", err)
-		}
-	}
+
 	if recordStats {
 		c.recordInsertBatchStats(stats, insertBatchExecutionOptions{insertStats: requested})
 	}

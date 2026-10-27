@@ -25,11 +25,7 @@ type vectorIndexSearchView struct {
 	mu                       sync.RWMutex
 	reuseState               atomic.Uint32
 	nodes                    []vectorIndexNode
-	deltaNodes               []vectorIndexNode
-	scalarColumns            map[string]vectorIndexScalarColumn
-	deltaScalarColumns       map[string]vectorIndexScalarColumn
 	currentNode              map[string]int
-	deltaCurrentNode         map[string]int
 	name                     string
 	field                    string
 	metric                   VectorMetric
@@ -41,14 +37,9 @@ type vectorIndexSearchView struct {
 	schemaGeneration         uint64
 	entry                    int
 	maxLevel                 int
-	deltaEntry               int
-	deltaMaxLevel            int
 	liveDocs                 int
-	deltaLiveDocs            int
 	sourceDocumentRootsValid bool
-	rebuildDeletedRatio      float64
 	persisted                atomic.Pointer[vectorIndexSearchPersistedMetadata]
-	fullRebuilds             uint64
 	mutationSeq              uint64
 	sourceDocumentGeneration uint64
 }
@@ -59,29 +50,17 @@ type vectorIndexSearchPersistedMetadata struct {
 }
 
 type vectorIndexNativeSearchState struct {
-	liveDocs                 int
-	rebuildNeeded            bool
-	fullRebuilds             uint64
 	mutationSeq              uint64
 	sourceDocumentGeneration uint64
 }
 
 type vectorIndexNativeSearchWork struct {
-	queryPreparations      int
-	scoreCalls             int
-	baseVisited            int
-	deltaPasses            int
-	deltaRetries           int
-	deltaResumes           int
-	deltaVisited           int
-	deltaInitialTopK       int
-	deltaTerminalTopK      int
-	deltaInitialEfSearch   int
-	deltaTerminalEfSearch  int
-	retryChangedMergedTopK bool
+	queryPreparations int
+	scoreCalls        int
+	baseVisited       int
 }
 
-func (idx *VectorIndex) publishSearchView() {
+func (idx *columnGraphPartitionLiveCarrier) publishSearchView() {
 	if idx == nil {
 		return
 	}
@@ -90,7 +69,7 @@ func (idx *VectorIndex) publishSearchView() {
 	idx.mu.Unlock()
 }
 
-func (idx *VectorIndex) acknowledgeSearchViewStateLocked() {
+func (idx *columnGraphPartitionLiveCarrier) acknowledgeSearchViewStateLocked() {
 	if !idx.sourceDocumentRootsValid || len(idx.unnotifiedDocumentIDs) != 0 {
 		idx.searchViewAcknowledged = false
 		return
@@ -100,7 +79,7 @@ func (idx *VectorIndex) acknowledgeSearchViewStateLocked() {
 	idx.searchViewAcknowledgedGeneration = idx.sourceDocumentGeneration
 }
 
-func (idx *VectorIndex) publishSearchViewLocked(forceFull bool) {
+func (idx *columnGraphPartitionLiveCarrier) publishSearchViewLocked(forceFull bool) {
 	forceFull = forceFull || idx.searchViewForceFull
 	previous := idx.searchView.Load()
 	next := idx.searchViewSpare.Swap(nil)
@@ -116,16 +95,11 @@ func (idx *VectorIndex) publishSearchViewLocked(forceFull bool) {
 	}
 	// A spare can alias the previous immutable image. Drop its headers before
 	// cloning; never clear shared nodes or their neighbor backings in place.
-	if idx.nativeHNSWOwned {
-		next.nodes, next.deltaNodes = nil, nil
-		next.scalarColumns, next.deltaScalarColumns = nil, nil
-		next.currentNode, next.deltaCurrentNode = nil, nil
-	}
+
 	next.reuseState.Store(vectorIndexSearchViewActive)
-	var previousNodes, previousDeltaNodes []vectorIndexNode
+	var previousNodes []vectorIndexNode
 	if previous != nil {
 		previousNodes = previous.nodes
-		previousDeltaNodes = previous.deltaNodes
 	}
 	var nodes []vectorIndexNode
 	if previous != nil && !forceFull && len(idx.searchViewDirty) == 0 && len(previousNodes) == len(idx.nodes) {
@@ -133,50 +107,15 @@ func (idx *VectorIndex) publishSearchViewLocked(forceFull bool) {
 	} else {
 		nodes = copyVectorIndexSearchNodes(nil, previousNodes, idx.nodes, idx.searchViewDirty, forceFull)
 	}
-	var deltaNodes []vectorIndexNode
-	deltaEntry, deltaMaxLevel, deltaLiveDocs := -1, -1, 0
-	if idx.liveDelta != nil {
-		deltaNodes = copyVectorIndexSearchNodes(next.deltaNodes, previousDeltaNodes, idx.liveDelta.nodes, idx.liveDelta.searchViewDirty, forceFull)
-		deltaEntry = idx.liveDelta.entry
-		deltaMaxLevel = idx.liveDelta.maxLevel
-		deltaLiveDocs = len(idx.liveDelta.currentNode)
-	} else {
-		deltaNodes = copyVectorIndexSearchNodes(next.deltaNodes, previousDeltaNodes, nil, nil, true)
-	}
 	epoch := idx.persistedEpoch
 	if epoch == 0 {
 		epoch = idx.fullSnapshotBaseEpoch
 	}
 	next.nodes = nodes
-	next.deltaNodes = deltaNodes
-	next.scalarColumns = nil
-	if idx.validateNativeScalarColumnLengthsLocked() == nil {
-		if previous != nil && !forceFull && len(previousNodes) == len(idx.nodes) {
-			next.scalarColumns = previous.scalarColumns
-		} else {
-			next.scalarColumns = snapshotVectorIndexScalarColumns(idx.scalarColumns)
-		}
-	}
-	next.deltaScalarColumns = nil
-	if idx.liveDelta != nil && idx.liveDelta.validateNativeScalarColumnLengthsLocked() == nil {
-		if previous != nil && !forceFull && len(previousDeltaNodes) == len(idx.liveDelta.nodes) {
-			next.deltaScalarColumns = previous.deltaScalarColumns
-		} else {
-			next.deltaScalarColumns = snapshotVectorIndexScalarColumns(idx.liveDelta.scalarColumns)
-		}
-	}
 	if previous != nil && !forceFull && len(previousNodes) == len(idx.nodes) {
 		next.currentNode = previous.currentNode
 	} else {
 		next.currentNode = vectorIndexNodeOrdinalMap(idx.nodes)
-	}
-	next.deltaCurrentNode = nil
-	if idx.liveDelta != nil {
-		if previous != nil && !forceFull && len(previousDeltaNodes) == len(idx.liveDelta.nodes) {
-			next.deltaCurrentNode = previous.deltaCurrentNode
-		} else {
-			next.deltaCurrentNode = vectorIndexNodeOrdinalMap(idx.liveDelta.nodes)
-		}
 	}
 	next.name = idx.name
 	next.field = idx.field
@@ -189,20 +128,15 @@ func (idx *VectorIndex) publishSearchViewLocked(forceFull bool) {
 	next.schemaGeneration = idx.schemaGeneration
 	next.entry = idx.entry
 	next.maxLevel = idx.maxLevel
-	next.deltaEntry = deltaEntry
-	next.deltaMaxLevel = deltaMaxLevel
-	next.liveDocs = len(idx.currentNode) + deltaLiveDocs
-	next.deltaLiveDocs = deltaLiveDocs
+	next.liveDocs = len(idx.currentNode)
 	next.sourceDocumentRootsValid = idx.sourceDocumentRootsValid && len(idx.unnotifiedDocumentIDs) == 0
-	next.rebuildDeletedRatio = idx.rebuildDeletedRatio
 	next.persisted.Store(&vectorIndexSearchPersistedMetadata{epoch: epoch, bytesDisk: idx.persistedBytesDisk})
-	next.fullRebuilds = idx.liveANNFullRebuilds
 	next.mutationSeq = idx.mutationSeq
 	next.sourceDocumentGeneration = idx.sourceDocumentGeneration
 	next.mu.Unlock()
 	idx.searchView.Store(next)
-	if !idx.nativeHNSWOwned && previous != nil {
-		if len(previous.nodes) > len(next.nodes) || len(previous.deltaNodes) > len(next.deltaNodes) {
+	if previous != nil {
+		if len(previous.nodes) > len(next.nodes) {
 			previous.reuseState.Store(vectorIndexSearchViewDiscarded)
 		} else {
 			previous.reuseState.Store(vectorIndexSearchViewRetired)
@@ -210,9 +144,6 @@ func (idx *VectorIndex) publishSearchViewLocked(forceFull bool) {
 		}
 	}
 	clear(idx.searchViewDirty)
-	if idx.liveDelta != nil {
-		clear(idx.liveDelta.searchViewDirty)
-	}
 	idx.searchViewForceFull = false
 	idx.acknowledgeSearchViewStateLocked()
 	idx.searchViewCurrent.Store(true)
@@ -248,12 +179,12 @@ func copyVectorIndexSearchNodes(dst, previous, current []vectorIndexNode, dirty 
 	return dst
 }
 
-func (idx *VectorIndex) releaseSearchView(view *vectorIndexSearchView) {
+func (idx *columnGraphPartitionLiveCarrier) releaseSearchView(view *vectorIndexSearchView) {
 	view.mu.RUnlock()
 	idx.recycleSearchView(view)
 }
 
-func (idx *VectorIndex) recycleSearchView(view *vectorIndexSearchView) {
+func (idx *columnGraphPartitionLiveCarrier) recycleSearchView(view *vectorIndexSearchView) {
 	if idx == nil || view == nil || view.reuseState.Load() != vectorIndexSearchViewRetired || !view.mu.TryLock() {
 		return
 	}
@@ -276,17 +207,8 @@ func cloneVectorIndexSearchNode(node vectorIndexNode) vectorIndexNode {
 	return out
 }
 
-func (idx *VectorIndex) prepareSearchViewForMutationLocked() {
-	if idx != nil && idx.nativeHNSWOwned && idx.searchView.Load() != nil {
-		// Native mutators hold Use exclusively (or own a private candidate).
-		// No retired reader image survives that boundary. Keep the last current
-		// image for dirty-row sharing and live-delta routing, but do not publish
-		// intermediate images between rows in one accepted mutation. With no
-		// image yet, retain the maintained first-publication path below.
-		idx.searchViewSpare.Store(nil)
-		return
-	}
-	if idx == nil || !idx.liveDeltaEnabled.Load() || idx.searchViewCurrent.Load() {
+func (idx *columnGraphPartitionLiveCarrier) prepareSearchViewForMutationLocked() {
+	if idx == nil || !idx.preserveAcknowledgedView.Load() || idx.searchViewCurrent.Load() {
 		return
 	}
 	if idx.searchViewAcknowledged &&
@@ -296,7 +218,7 @@ func (idx *VectorIndex) prepareSearchViewForMutationLocked() {
 	}
 }
 
-func (idx *VectorIndex) acquireSearchView() *vectorIndexSearchView {
+func (idx *columnGraphPartitionLiveCarrier) acquireSearchView() *vectorIndexSearchView {
 	if idx == nil {
 		return nil
 	}
@@ -361,46 +283,7 @@ func (view *vectorIndexSearchView) matchesDefinition(def VectorIndexDefinition) 
 		view.efSearch == def.EfSearch && view.schemaGeneration == def.SchemaGeneration
 }
 
-func (idx *VectorIndex) publishedNativeSearchLoadStatus(def VectorIndexDefinition) (VectorIndexLoadStatus, bool) {
-	if idx == nil {
-		return VectorIndexLoadStatus{}, false
-	}
-	view := idx.acquireSearchView()
-	if !view.matchesDefinition(def) {
-		if view != nil {
-			idx.releaseSearchView(view)
-		}
-		return VectorIndexLoadStatus{}, false
-	}
-	persisted := view.persisted.Load()
-	if persisted == nil {
-		idx.releaseSearchView(view)
-		return VectorIndexLoadStatus{}, false
-	}
-	status := VectorIndexLoadStatus{
-		Loaded:    true,
-		RootName:  idx.nativeRootName,
-		RootID:    persisted.epoch,
-		Epoch:     persisted.epoch,
-		BytesDisk: persisted.bytesDisk,
-	}
-	idx.releaseSearchView(view)
-	return status, true
-}
-
-func (view *vectorIndexSearchView) nativeSearchState() vectorIndexNativeSearchState {
-	nodes := len(view.nodes) + len(view.deltaNodes)
-	deletedDocs := nodes - view.liveDocs
-	return vectorIndexNativeSearchState{
-		liveDocs:                 view.liveDocs,
-		rebuildNeeded:            deletedDocs > 0 && nodes > 0 && float64(deletedDocs)/float64(nodes) >= view.rebuildDeletedRatio,
-		fullRebuilds:             view.fullRebuilds,
-		mutationSeq:              view.mutationSeq,
-		sourceDocumentGeneration: view.sourceDocumentGeneration,
-	}
-}
-
-func (idx *VectorIndex) nativeSearchStateCoversCurrentDocuments(state vectorIndexNativeSearchState) bool {
+func (idx *columnGraphPartitionLiveCarrier) nativeSearchStateCoversCurrentDocuments(state vectorIndexNativeSearchState) bool {
 	if idx == nil || idx.collection == nil || idx.collection.nativeVectorIndexMutationActive() {
 		return false
 	}
@@ -434,7 +317,7 @@ func (view *vectorIndexSearchView) searchGraphOnlyWithCanonicalScoreBudget(query
 		return nil, errors.New("collections: vector index search score budget must not be negative")
 	}
 	if !view.sourceDocumentRootsValid {
-		return nil, fmt.Errorf("%w: native_runtime vector index %q does not cover current documents", ErrVectorIndexSearchUnavailable, view.name)
+		return nil, fmt.Errorf("%w: ColumnGraph partition carrier %q does not cover current documents", ErrVectorIndexSearchUnavailable, view.name)
 	}
 	if topK < 0 {
 		return nil, errors.New("collections: vector search TopK must be positive")
@@ -458,113 +341,29 @@ func (view *vectorIndexSearchView) searchGraphOnlyWithCanonicalScoreBudget(query
 		}
 		buffer.nativeSearchScratch.stopScoreTracking()
 	}()
-	if len(view.deltaNodes) == 0 {
-		results, err := searchVectorIndexViewPlane(query, queryNorm, prepared, topK, efSearch, view.nodes, view.entry, view.maxLevel, view.liveDocs, view, canonical, &buffer.nativeSearchScratch, &buffer.results, &buffer.idBytes)
-		if buffer.nativeSearchWorkEnabled {
-			buffer.nativeSearchWork.baseVisited = buffer.nativeSearchScratch.explored
-		}
-		return results, err
-	}
-	baseResults, err := searchVectorIndexViewPlane(query, queryNorm, prepared, topK, efSearch, view.nodes, view.entry, view.maxLevel, view.liveDocs-view.deltaLiveDocs, view, canonical, &buffer.nativeSearchScratch, &buffer.baseResults, &buffer.baseIDBytes)
-	if err != nil {
-		return nil, err
-	}
+	results, err := searchVectorIndexViewPlane(query, queryNorm, prepared, topK, efSearch, view.nodes, view.entry, view.maxLevel, view.liveDocs, view, canonical, &buffer.nativeSearchScratch, &buffer.results, &buffer.idBytes)
 	if buffer.nativeSearchWorkEnabled {
 		buffer.nativeSearchWork.baseVisited = buffer.nativeSearchScratch.explored
 	}
-	deltaTopK := vectorIndexLiveDeltaSearchBudget(topK, view.deltaLiveDocs, view.liveDocs)
-	deltaEfSearch := efSearch
-	if deltaEfSearch <= 0 {
-		deltaEfSearch = view.efSearch
-	}
-	deltaEfSearch = vectorIndexLiveDeltaSearchBudget(deltaEfSearch, view.deltaLiveDocs, view.liveDocs)
-	if buffer.nativeSearchWorkEnabled {
-		buffer.nativeSearchWork.deltaInitialTopK = deltaTopK
-		buffer.nativeSearchWork.deltaInitialEfSearch = deltaEfSearch
-	}
-	buffer.nativeSearchScratch.startResumableSearch()
-	defer buffer.nativeSearchScratch.stopResumableSearch()
-	deltaResults, err := searchVectorIndexViewPlane(query, queryNorm, prepared, deltaTopK, deltaEfSearch, view.deltaNodes, view.deltaEntry, view.deltaMaxLevel, view.deltaLiveDocs, view, canonical, &buffer.nativeSearchScratch, &buffer.deltaResults, &buffer.deltaIDBytes)
-	if err != nil {
-		return nil, err
-	}
-	var initialMergedFingerprint uint64
-	if buffer.nativeSearchWorkEnabled {
-		buffer.nativeSearchWork.deltaPasses = 1
-		buffer.nativeSearchWork.deltaVisited = buffer.nativeSearchScratch.explored
-		initialMerged, mergeErr := mergeVectorIndexViewResults(baseResults, deltaResults, topK, buffer)
-		if mergeErr != nil {
-			return nil, mergeErr
-		}
-		initialMergedFingerprint = vectorIndexSearchResultsFingerprint(initialMerged)
-	}
-	for deltaTopK < topK && len(deltaResults) == deltaTopK && (len(baseResults) < topK || vectorIndexSearchResultBefore(deltaResults[len(deltaResults)-1], baseResults[len(baseResults)-1])) {
-		buffer.nativeSearchScratch.resumeSearch()
-		deltaTopK = minInt(topK, deltaTopK*2)
-		deltaEfSearch = maxInt(deltaEfSearch, deltaTopK)
-		deltaResults, err = searchVectorIndexViewPlane(query, queryNorm, prepared, deltaTopK, deltaEfSearch, view.deltaNodes, view.deltaEntry, view.deltaMaxLevel, view.deltaLiveDocs, view, canonical, &buffer.nativeSearchScratch, &buffer.deltaResults, &buffer.deltaIDBytes)
-		if err != nil {
-			return nil, err
-		}
-		if buffer.nativeSearchWorkEnabled {
-			buffer.nativeSearchWork.deltaPasses++
-			buffer.nativeSearchWork.deltaRetries++
-			if buffer.nativeSearchScratch.resumed {
-				buffer.nativeSearchWork.deltaResumes++
-			}
-			buffer.nativeSearchWork.deltaVisited += buffer.nativeSearchScratch.explored
-		}
-	}
-	merged, err := mergeVectorIndexViewResults(baseResults, deltaResults, topK, buffer)
-	if buffer.nativeSearchWorkEnabled {
-		buffer.nativeSearchWork.deltaTerminalTopK = deltaTopK
-		buffer.nativeSearchWork.deltaTerminalEfSearch = deltaEfSearch
-		buffer.nativeSearchWork.retryChangedMergedTopK = buffer.nativeSearchWork.deltaRetries > 0 && initialMergedFingerprint != vectorIndexSearchResultsFingerprint(merged)
-	}
-	return merged, err
-}
-
-func vectorIndexSearchResultsFingerprint(results []VectorIndexSearchResult) uint64 {
-	const (
-		offset = uint64(14695981039346656037)
-		prime  = uint64(1099511628211)
-	)
-	hash := offset
-	for _, result := range results {
-		for _, value := range result.ID {
-			hash = (hash ^ uint64(value)) * prime
-		}
-		hash = (hash ^ math.Float64bits(result.Score)) * prime
-	}
-	return hash
-}
-
-func vectorIndexLiveDeltaSearchBudget(requested, deltaDocs, totalDocs int) int {
-	if requested <= 0 || deltaDocs <= 0 || totalDocs <= 0 {
-		return requested
-	}
-	budget := (requested*deltaDocs + totalDocs - 1) / totalDocs
-	budget = maxInt(budget, minInt(16, requested))
-	return minInt(budget, requested)
+	return results, err
 }
 
 func searchVectorIndexViewPlane(query []float32, queryNorm float64, prepared *preparedFloat32CosineQuery, topK, efSearch int, nodes []vectorIndexNode, entry, maxLevel, liveDocs int, view *vectorIndexSearchView, canonical *CanonicalVectorPartitionCosineScorerV1, scratch *vectorIndexSearchScratch, results *[]VectorIndexSearchResult, idBytes *[]byte) ([]VectorIndexSearchResult, error) {
-	runtimeIndex := VectorIndex{
-		metric:     view.metric,
+	runtimeIndex := columnGraphPartitionLiveCarrier{columnGraphHNSWBuilder: columnGraphHNSWBuilder{metric: view.metric,
 		encoding:   view.encoding,
 		dimensions: view.dimensions,
 		m:          view.m,
-		efSearch:   view.efSearch,
-		nodes:      nodes,
-		entry:      entry,
-		maxLevel:   maxLevel,
+
+		nodes:    nodes,
+		entry:    entry,
+		maxLevel: maxLevel}, efSearch: view.efSearch,
 	}
 	candidates, err := runtimeIndex.searchGraphOnlyCandidatesWithPreparedQueryLocked(query, queryNorm, prepared, topK, efSearch, liveDocs, scratch)
 	if err != nil {
 		return nil, err
 	}
 	if canonical != nil {
-		// Rerank the bounded ANN candidates before either plane's TopK cut.
+		// Rerank the bounded ANN candidates before the bounded domain TopK cut.
 		// Negative scores preserve the exact FP32 bits; 1-score would round.
 		live := candidates[:0]
 		for i, candidate := range candidates {
@@ -719,4 +518,15 @@ func vectorIndexViewResultAlreadySelected(results []VectorIndexSearchResult, id 
 		}
 	}
 	return false
+}
+
+func vectorIndexNodeOrdinalMap(nodes []vectorIndexNode) map[string]int {
+	if len(nodes) == 0 {
+		return nil
+	}
+	out := make(map[string]int, len(nodes))
+	for nodeID := range nodes {
+		out[string(nodes[nodeID].documentID)] = nodeID
+	}
+	return out
 }

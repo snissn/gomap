@@ -94,7 +94,7 @@ func TestDenseVectorSearchOrdinaryNativeDefaultParity(t *testing.T) {
 			request := DenseVectorSearchRequest{Index: "docs", Query: []float32{1, 0}, TopK: 2, EfSearch: 8, ExpectedGeneration: info.Generation, Filter: tc.filter}
 			want, err := service.SearchDenseVector(ctx, request.Index, documentservice.DenseVectorSearchRequest{
 				ExpectedGeneration: request.ExpectedGeneration, QueryEmbedding: request.Query,
-				TopK: request.TopK, EfSearch: request.EfSearch, Filter: request.Filter,
+				TopK: request.TopK, EfSearch: request.EfSearch, Filter: request.Filter, Route: tc.route,
 			})
 			if err != nil || want.Route != tc.route || want.Exact != (tc.route == documentservice.RouteExact) || len(want.Documents) != len(tc.ids) {
 				t.Fatalf("maintained ordinary service route: %+v err=%v", want, err)
@@ -139,10 +139,16 @@ func TestDenseVectorSearchOrdinaryNativeDefaultParity(t *testing.T) {
 			}
 			client.denseOrdinaryNegotiated = true
 			got, err := client.DenseVectorSearch(ctx, request)
+			if tc.route == documentservice.RouteExact {
+				if !isRemoteError(err, iwire.ErrUnsupportedFeature) {
+					t.Fatalf("ordinary filtered wire request must fail closed: %v", err)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("ordinary default wire search refused after successful public service query: %v", err)
 			}
-			if got.Route != want.Route || got.NativeBasePlusLiveDelta || got.TypedColumnGraph || got.Candidates != want.Candidates || len(got.Results) != len(want.Documents) {
+			if got.Route != want.Route || got.TypedColumnGraph || got.Candidates != want.Candidates || len(got.Results) != len(want.Documents) {
 				t.Fatalf("wire ordinary route/candidates: %+v service=%+v", got, want)
 			}
 			if got.Exact != want.Exact || got.ColumnGraphPreparedSearch != want.ColumnGraphPreparedSearch || got.SearchPackSearch != want.SearchPackSearch || got.ColumnGraphDeltaScored != want.ColumnGraphDeltaScored || got.DocumentsScanned != want.DocumentsScanned {
@@ -202,20 +208,16 @@ func TestDenseVectorSearchOrdinaryVersionTruthfulness(t *testing.T) {
 			r.Candidates = 2
 			r.DocumentsScanned = 3
 		}},
-		{name: "native_runtime", change: func(r *documentservice.RawDenseVectorSearchResponse) {
-			r.NativeBasePlusLiveDelta = true
-			r.ColumnGraphPreparedSearch = 0
-		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := base
 			tc.change(&r)
 			meta := appendVersionedDenseVectorSearchResponse(nil, r, iwire.DenseVectorSearchOrdinaryVersion)
 			got, err := decode(iwire.DenseVectorSearchOrdinaryVersion, meta)
-			if err != nil || got.Route != r.Route || got.Exact != r.Exact || got.NativeBasePlusLiveDelta != r.NativeBasePlusLiveDelta || got.ColumnGraphPreparedSearch != r.ColumnGraphPreparedSearch || got.SearchPackSearch != r.SearchPackSearch || got.ColumnGraphDeltaScored != r.ColumnGraphDeltaScored || got.DocumentsScanned != r.DocumentsScanned || got.Candidates != r.Candidates {
+			if err != nil || got.Route != r.Route || got.Exact != r.Exact || got.ColumnGraphPreparedSearch != r.ColumnGraphPreparedSearch || got.SearchPackSearch != r.SearchPackSearch || got.ColumnGraphDeltaScored != r.ColumnGraphDeltaScored || got.DocumentsScanned != r.DocumentsScanned || got.Candidates != r.Candidates {
 				t.Fatalf("ordinary result/counters=%+v want=%+v err=%v", got, r, err)
 			}
-			for _, version := range []uint64{iwire.DenseVectorSearchLegacyVersion, iwire.DenseVectorSearchTypedVersion, iwire.DenseVectorSearchTypedQuantizedVersion, iwire.DenseVectorSearchNormalizedVersion} {
+			for _, version := range []uint64{1, iwire.DenseVectorSearchTypedVersion, iwire.DenseVectorSearchTypedQuantizedVersion, iwire.DenseVectorSearchNormalizedVersion} {
 				if _, err := decode(version, meta); err == nil {
 					t.Fatalf("ordinary metadata accepted as version %d", version)
 				}
@@ -252,12 +254,6 @@ func TestDenseVectorSearchOrdinaryVersionTruthfulness(t *testing.T) {
 			r.SearchPackSearch = 1
 			r.DocumentsScanned = 1
 		}},
-		{name: "hnsw_claims_prepared", change: func(r *documentservice.RawDenseVectorSearchResponse) { r.NativeBasePlusLiveDelta = true }},
-		{name: "native_runtime_claims_pack", change: func(r *documentservice.RawDenseVectorSearchResponse) {
-			r.NativeBasePlusLiveDelta = true
-			r.ColumnGraphPreparedSearch = 0
-			r.SearchPackSearch = 1
-		}},
 		{name: "fallback", change: func(r *documentservice.RawDenseVectorSearchResponse) { r.FullDocumentScanFallbacks = 1 }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -269,7 +265,7 @@ func TestDenseVectorSearchOrdinaryVersionTruthfulness(t *testing.T) {
 		})
 	}
 	meta := appendVersionedDenseVectorSearchResponse(nil, base, iwire.DenseVectorSearchOrdinaryVersion)
-	for _, tag := range []byte{0, iwire.DenseVectorSearchTypedRouteTag, iwire.DenseVectorSearchTypedQuantizedRouteTag, 255} {
+	for _, tag := range []byte{0, 1, iwire.DenseVectorSearchTypedRouteTag, iwire.DenseVectorSearchTypedQuantizedRouteTag, 255} {
 		bad := append([]byte(nil), meta...)
 		bad[0] = tag
 		if _, err := decode(iwire.DenseVectorSearchOrdinaryVersion, bad); err == nil {
@@ -295,7 +291,7 @@ func TestDenseVectorSearchOrdinaryVersionTruthfulness(t *testing.T) {
 }
 
 func TestDenseVectorSearchNativewireParityAndBorrowing(t *testing.T) {
-	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -308,9 +304,6 @@ func TestDenseVectorSearchNativewireParityAndBorrowing(t *testing.T) {
 		Name:      "docs",
 		Dimension: 2,
 		Metric:    documentservice.MetricCosine,
-		VectorIndexOptions: &documentservice.BenchmarkVectorIndexOptions{
-			Strategy: collections.VectorIndexStrategyNativeRuntime,
-		},
 		ScalarFields: []documentservice.ScalarFieldDeclaration{
 			{Field: "meta.user_id", ValueType: documentservice.ScalarFieldString},
 			{Field: "meta.rank", ValueType: documentservice.ScalarFieldInt64},
@@ -325,7 +318,7 @@ func TestDenseVectorSearchNativewireParityAndBorrowing(t *testing.T) {
 		{ID: "c", Content: "c", Embedding: []float32{0.8, 0.2}, Meta: map[string]any{"user_id": "alpha", "rank": int64(3)}},
 		{ID: "d", Content: string(bytes.Repeat([]byte("x"), 1024)), Embedding: []float32{-1, 0}, Meta: map[string]any{"user_id": "beta", "rank": int64(0)}},
 	}
-	if _, err = svc.UpsertDocuments(ctx, "docs", documentservice.UpsertDocumentsRequest{Documents: documents}); err != nil {
+	if _, err = svc.UpsertDocuments(ctx, "docs", documentservice.UpsertDocumentsRequest{Documents: documents, DeferVectorIndexRebuild: true}); err != nil {
 		t.Fatal(err)
 	}
 	client, cleanup, err := NewInProcessClient(ctx, server)
@@ -337,35 +330,31 @@ func TestDenseVectorSearchNativewireParityAndBorrowing(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := client.DenseVectorSearch(ctx, DenseVectorSearchRequest{Index: "docs", Query: []float32{1, 0}, TopK: 1, TypedColumnGraph: true}); err == nil {
-		t.Fatal("typed command accepted legacy native-runtime index")
+		t.Fatal("typed command accepted ordinary index")
 	}
 	client.denseOrdinaryNegotiated = false
-	legacy, err := client.DenseVectorSearch(ctx, DenseVectorSearchRequest{Index: "docs", Query: []float32{1, 0}, TopK: 1})
+	if _, err := client.DenseVectorSearch(ctx, DenseVectorSearchRequest{Index: "docs", Query: []float32{1, 0}, TopK: 1}); err == nil {
+		t.Fatal("ordinary request accepted without v5 negotiation")
+	}
 	client.denseOrdinaryNegotiated = true
-	if err != nil || !legacy.NativeBasePlusLiveDelta || legacy.Route != documentservice.RouteAnn || legacy.TypedColumnGraph {
-		t.Fatalf("older-peer HNSW capability changed: %+v err=%v", legacy, err)
+	if _, err := svc.OptimizeIndex(ctx, "docs", documentservice.OptimizeIndexRequest{}); err != nil {
+		t.Fatal(err)
 	}
 
-	filters := []*documentservice.Filter{
-		{Field: "meta.user_id", Operator: "==", Value: "alpha"},
-		{Operator: "AND", Conditions: []documentservice.Filter{
-			{Field: "meta.user_id", Operator: "==", Value: "alpha"},
-			{Field: "meta.rank", Operator: ">=", Value: int64(3)},
-		}},
-	}
+	filters := []*documentservice.Filter{nil}
 	for _, filter := range filters {
 		request := DenseVectorSearchRequest{Index: "docs", Query: []float32{1, 0}, TopK: 2, EfSearch: 8, Filter: filter}
 		got, err := client.DenseVectorSearch(ctx, request)
 		if err != nil {
 			t.Fatal(err)
 		}
-		wantRawResults, err := svc.SearchDenseVectorNativeRaw(ctx, request.Index, documentservice.DenseVectorSearchRequest{
+		wantRawResults, err := svc.SearchDenseVectorRawInto(ctx, request.Index, documentservice.DenseVectorSearchRequest{
 			QueryEmbedding: request.Query,
 			TopK:           request.TopK,
 			EfSearch:       request.EfSearch,
 			Route:          documentservice.RouteAnn,
 			Filter:         request.Filter,
-		})
+		}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -379,7 +368,7 @@ func TestDenseVectorSearchNativewireParityAndBorrowing(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got.Route != documentservice.RouteAnn || !got.NativeBasePlusLiveDelta || got.ExactFallbacks != 0 || got.FullDocumentScanFallbacks != 0 {
+		if got.Route != documentservice.RouteAnn || got.ExactFallbacks != 0 || got.FullDocumentScanFallbacks != 0 {
 			t.Fatalf("native route proof missing: %+v", got)
 		}
 		if len(got.Results) != len(want.Documents) || got.Candidates != want.Candidates {
@@ -442,7 +431,7 @@ func TestDenseVectorSearchNativewireParityAndBorrowing(t *testing.T) {
 			{Field: "meta.user_id", Operator: "==", Value: "beta"},
 		}},
 	}); nativeCodeOf(err) != iwire.ErrUnsupportedFeature {
-		t.Fatalf("OR filter error=%v code=%d", err, nativeCodeOf(err))
+		t.Fatalf("OR filter local encoding error=%v code=%d", err, nativeCodeOf(err))
 	}
 	server.limits.MaxByteVectorBytes = 1
 	if _, err = client.DenseVectorSearch(ctx, DenseVectorSearchRequest{Index: "docs", Query: []float32{1, 0}, TopK: 1}); !isRemoteError(err, iwire.ErrResourceExhausted) {
@@ -556,92 +545,6 @@ func TestDenseVectorSearchRoutedClusterFailsClosedBeforeLocalSearch(t *testing.T
 	}
 	if routes := routeProvider.snapshotRoutes(); len(routes) != 0 {
 		t.Fatalf("routed dense search reached route provider: %+v", routes)
-	}
-}
-
-func TestDenseVectorSearchInvalidatesPreparedCacheOnNativeIndexMetadataMutation(t *testing.T) {
-	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	mgr := collections.NewCollectionManager(db)
-	svc := documentservice.New(mgr)
-	server := NewServer(ServerOptions{Collections: mgr, Backend: db, DocumentService: svc})
-	t.Cleanup(func() { _ = server.Close(); _ = svc.Close(); _ = db.Close() })
-	ctx := denseSearchTestContext(t)
-	if _, err := svc.CreateIndex(ctx, documentservice.CreateIndexRequest{
-		Name:      "docs",
-		Dimension: 2,
-		Metric:    documentservice.MetricCosine,
-		VectorIndexOptions: &documentservice.BenchmarkVectorIndexOptions{
-			Strategy: collections.VectorIndexStrategyNativeRuntime,
-		},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := svc.UpsertDocuments(ctx, "docs", documentservice.UpsertDocumentsRequest{Documents: []documentservice.Document{{
-		ID: "alpha", Content: "alpha", Embedding: []float32{1, 0}, Meta: map[string]any{"user_id": "alpha"},
-	}}}); err != nil {
-		t.Fatal(err)
-	}
-	client, cleanup, err := NewInProcessClient(ctx, server)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer cleanup()
-	// NewInProcessClient completed a real Hello. Keep the original metadata
-	// cache regression on the maintained older-peer command-v1 capability.
-	client.denseOrdinaryNegotiated = false
-	if _, err := client.DenseVectorSearch(ctx, DenseVectorSearchRequest{Index: "docs", Query: []float32{1, 0}, TopK: 1, EfSearch: 8}); err != nil {
-		t.Fatalf("warm dense search: %v", err)
-	}
-	if _, err := client.CreateIndex(ctx, "docs", collections.IndexDefinition{Name: "meta_user_id", Field: "meta.user_id", ValueType: collections.IndexValueString}); err != nil {
-		t.Fatalf("CreateIndex: %v", err)
-	}
-	filtered := DenseVectorSearchRequest{
-		Index: "docs", Query: []float32{1, 0}, TopK: 1, EfSearch: 8,
-		Filter: &documentservice.Filter{Field: "meta.user_id", Operator: "==", Value: "alpha"},
-	}
-	if _, err := client.DenseVectorSearch(ctx, filtered); err != nil && !isRemoteError(err, iwire.ErrConsistencyUnavailable) {
-		t.Fatalf("filtered search after create err=%v; new scalar schema was not observed", err)
-	}
-	if _, err := client.DropIndex(ctx, "docs", "meta_user_id"); err != nil {
-		t.Fatalf("DropIndex: %v", err)
-	}
-	if _, err := client.DenseVectorSearch(ctx, filtered); !isRemoteError(err, iwire.ErrInvalidCommand) {
-		t.Fatalf("filtered search after drop err=%v want invalid command", err)
-	}
-	// A real renewed Hello restores command-v5 ordinary service negotiation.
-	// Its unchanged filtered request can intentionally scan exactly after the
-	// scalar index is dropped; that policy must not weaken the v1 assertion.
-	if err := client.Hello(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if !client.denseOrdinaryNegotiated {
-		t.Fatal("hello did not restore ordinary service capability")
-	}
-	serviceRequest := documentservice.DenseVectorSearchRequest{QueryEmbedding: filtered.Query, TopK: filtered.TopK, EfSearch: filtered.EfSearch, Filter: filtered.Filter}
-	want, err := svc.SearchDenseVector(ctx, filtered.Index, serviceRequest)
-	if err != nil || want.Route != documentservice.RouteExact || !want.Exact || want.DocumentsScanned != 1 || want.Candidates != 1 || len(want.Documents) != 1 || want.Documents[0].ID != "alpha" {
-		t.Fatalf("ordinary service policy after scalar drop: %+v %v", want, err)
-	}
-	wantRaw, err := svc.SearchDenseVectorRawInto(ctx, filtered.Index, serviceRequest, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, err := client.DenseVectorSearch(ctx, filtered)
-	if err != nil || got.Route != want.Route || got.Exact != want.Exact || got.Candidates != want.Candidates || got.DocumentsScanned != want.DocumentsScanned || len(got.Results) != len(want.Documents) {
-		t.Fatalf("ordinary wire policy after scalar drop: got=%+v service=%+v err=%v", got, want, err)
-	}
-	if got.NativeBasePlusLiveDelta || got.TypedColumnGraph || got.ColumnGraphPreparedSearch != want.ColumnGraphPreparedSearch || got.SearchPackSearch != want.SearchPackSearch || got.ColumnGraphDeltaScored != want.ColumnGraphDeltaScored || got.FullDocumentScanFallbacks != want.FullDocumentScanFallbacks || got.ExactFallbacks != want.ExactFallbacks {
-		t.Fatalf("ordinary wire changed exact attribution: got=%+v service=%+v", got, want)
-	}
-	if len(wantRaw.Results) != 1 || want.Documents[0].Score == nil || math.Abs(got.Results[0].Score-*want.Documents[0].Score) > 1e-12 || got.Results[0].Score != wantRaw.Results[0].Score || !bytes.Equal(got.Results[0].ID, wantRaw.Results[0].ID) || !bytes.Equal(got.Results[0].Document, wantRaw.Results[0].Document) {
-		t.Fatalf("ordinary wire changed exact result: got=%+v service=%+v raw=%+v", got.Results, want.Documents, wantRaw.Results)
-	}
-	var projected documentservice.Document
-	if err := json.Unmarshal(got.Results[0].Document, &projected); err != nil || projected.ID != "alpha" || projected.Content != "alpha" || projected.Meta["user_id"] != "alpha" || len(projected.Embedding) != 0 {
-		t.Fatalf("ordinary wire projected document=%s err=%v", got.Results[0].Document, err)
 	}
 }
 
@@ -825,7 +728,7 @@ func TestDenseVectorSearchExpiredDeadlineStopsBeforeSearch(t *testing.T) {
 	deadline := binary.AppendUvarint(nil, uint64(time.Now().Add(-time.Second).UnixNano()))
 	server := NewServer(ServerOptions{})
 	defer server.Close()
-	_, err = server.handleDenseVectorSearch(context.Background(), &connState{}, []iwire.Section{
+	_, err = server.handleVersionedDenseVectorSearch(context.Background(), &connState{}, iwire.DenseVectorSearchOrdinaryVersion, []iwire.Section{
 		{ID: iwire.SectionDenseSearchRequest, Bytes: request},
 		{ID: iwire.SectionDeadline, Bytes: deadline},
 	}, nil)

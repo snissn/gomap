@@ -2,35 +2,24 @@ package collections
 
 import (
 	"bytes"
-	"crypto/sha256"
+
 	"encoding/binary"
-	"encoding/hex"
+
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
-	"os"
-	"path/filepath"
-	"runtime"
+
 	"sort"
+
 	"strconv"
-	"strings"
-	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
 
 const (
-	vectorIndexFormatVersion             = 1
 	vectorIndexDocumentGenerationVersion = 3
-	vectorIndexDirName                   = "vector_indexes"
-	vectorIndexManifestFile              = "manifest.json"
-	vectorIndexMetaFile                  = "meta.json"
-	vectorIndexNodesFile                 = "nodes.json"
-	vectorIndexEdgesFile                 = "edges.json"
-	vectorIndexTombstonesFile            = "tombstones.json"
-	vectorIndexDocMapFile                = "docmap.json"
 
 	vectorIndexNativeKeyMeta             = "meta"
 	vectorIndexNativeKeyPrefixNode       = "node/"
@@ -49,46 +38,21 @@ var (
 	errVectorIndexStaleDocumentGeneration = errors.New("collections: vector index document generation changed since load")
 )
 
-// VectorIndexLoadStatus reports whether a persisted vector index loaded or why
-// callers should use exact search as the safe fallback.
-type VectorIndexLoadStatus struct {
+// columnGraphPartitionLiveLoadStatus reports a persisted carrier load or refusal.
+type columnGraphPartitionLiveLoadStatus struct {
 	Loaded              bool
 	ExactFallbackReason string
-	ManifestPath        string
 	RootName            string
 	RootID              uint64
-	LogicalVersion      uint64
 	Epoch               uint64
 	BytesDisk           int64
 }
 
-// VectorIndexPruneStatus reports persisted vector-index epoch cleanup.
-type VectorIndexPruneStatus struct {
-	IndexDir      string
-	ActiveEpoch   string
-	RemovedEpochs int
-	RemovedBytes  int64
-}
-
-// SaveSnapshot persists the current in-memory vector index. Declared collection
-// vector indexes use a native TreeDB collection root; ad hoc in-memory indexes
-// keep using the legacy sidecar snapshot path.
-func (idx *VectorIndex) SaveSnapshot() (VectorIndexLoadStatus, error) {
-	status, err := idx.SaveNativeSnapshot()
-	if err == nil || !errors.Is(err, errVectorIndexNotDeclared) {
-		return status, err
-	}
-	return idx.saveLegacySnapshot()
-}
-
-// SaveNativeSnapshot persists the current in-memory vector index as ordinary
+// saveColumnGraphPartitionLiveSnapshot persists the current in-memory vector index as ordinary
 // TreeDB collection-root content and publishes that root through the collection
 // root descriptor system state.
-func (idx *VectorIndex) SaveNativeSnapshot() (VectorIndexLoadStatus, error) {
-	if idx != nil && idx.collection != nil && idx.collection.nativeJSON != nil {
-		return idx.saveNativeHNSW()
-	}
-	status := VectorIndexLoadStatus{}
+func (idx *columnGraphPartitionLiveCarrier) saveColumnGraphPartitionLiveSnapshot() (columnGraphPartitionLiveLoadStatus, error) {
+	status := columnGraphPartitionLiveLoadStatus{}
 	if idx == nil {
 		return status, errors.New("collections: vector index is nil")
 	}
@@ -106,12 +70,12 @@ func (idx *VectorIndex) SaveNativeSnapshot() (VectorIndexLoadStatus, error) {
 	return idx.saveNativeSnapshotWithCoverageLocked()
 }
 
-func (idx *VectorIndex) saveNativeSnapshotWithCoverageLocked() (VectorIndexLoadStatus, error) {
+func (idx *columnGraphPartitionLiveCarrier) saveNativeSnapshotWithCoverageLocked() (columnGraphPartitionLiveLoadStatus, error) {
 	return idx.saveNativeSnapshotWithCoverageLockedAndCommandWALIntent(nil)
 }
 
-func (idx *VectorIndex) saveNativeSnapshotWithCoverageLockedAndCommandWALIntent(replay *backenddb.CommandWALIntent) (VectorIndexLoadStatus, error) {
-	status := VectorIndexLoadStatus{}
+func (idx *columnGraphPartitionLiveCarrier) saveNativeSnapshotWithCoverageLockedAndCommandWALIntent(replay *backenddb.CommandWALIntent) (columnGraphPartitionLiveLoadStatus, error) {
+	status := columnGraphPartitionLiveLoadStatus{}
 	c := idx.collection
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
@@ -131,8 +95,8 @@ func (idx *VectorIndex) saveNativeSnapshotWithCoverageLockedAndCommandWALIntent(
 	return idx.saveNativeSnapshotPreparedWithCommandWALIntent(replay)
 }
 
-func staleNativeSnapshotSaveStatus(c *Collection, idx *VectorIndex) (VectorIndexLoadStatus, bool, error) {
-	status := VectorIndexLoadStatus{}
+func staleNativeSnapshotSaveStatus(c *Collection, idx *columnGraphPartitionLiveCarrier) (columnGraphPartitionLiveLoadStatus, bool, error) {
+	status := columnGraphPartitionLiveLoadStatus{}
 	if c == nil || idx == nil {
 		return status, false, nil
 	}
@@ -141,7 +105,7 @@ func staleNativeSnapshotSaveStatus(c *Collection, idx *VectorIndex) (VectorIndex
 		return status, false, fmt.Errorf("%w: index %q does not cover current documents", errVectorIndexStaleNativeRoot, idx.name)
 	}
 	if c.isRegisteredVectorIndex(idx) {
-		stale, err := c.registeredVectorIndexNativeRuntimeIsStale(idx)
+		stale, err := c.registeredColumnGraphPartitionLiveCarrierIsStale(idx)
 		if err == nil && stale {
 			status.ExactFallbackReason = vectorIndexFallbackStaleRuntimeIndex
 			if idx.needsNativeAutoPersist() {
@@ -165,16 +129,16 @@ func staleNativeSnapshotSaveStatus(c *Collection, idx *VectorIndex) (VectorIndex
 
 // saveNativeSnapshotPrepared publishes the current graph after the caller has
 // already acquired the collection mutation barrier and flushed buffered writes.
-func (idx *VectorIndex) saveNativeSnapshotPrepared() (VectorIndexLoadStatus, error) {
+func (idx *columnGraphPartitionLiveCarrier) saveNativeSnapshotPrepared() (columnGraphPartitionLiveLoadStatus, error) {
 	return idx.saveNativeSnapshotPreparedWithCommandWALIntent(nil)
 }
 
-func (idx *VectorIndex) saveNativeSnapshotPreparedWithCommandWALIntent(replay *backenddb.CommandWALIntent) (VectorIndexLoadStatus, error) {
+func (idx *columnGraphPartitionLiveCarrier) saveNativeSnapshotPreparedWithCommandWALIntent(replay *backenddb.CommandWALIntent) (columnGraphPartitionLiveLoadStatus, error) {
 	return idx.saveNativeSnapshotPreparedWithCommandWALIntentAndPublicationHandoff(replay, nil)
 }
 
-func (idx *VectorIndex) saveNativeSnapshotPreparedWithCommandWALIntentAndPublicationHandoff(replay *backenddb.CommandWALIntent, preparePublication func() (bool, error)) (VectorIndexLoadStatus, error) {
-	status := VectorIndexLoadStatus{}
+func (idx *columnGraphPartitionLiveCarrier) saveNativeSnapshotPreparedWithCommandWALIntentAndPublicationHandoff(replay *backenddb.CommandWALIntent, preparePublication func() (bool, error)) (columnGraphPartitionLiveLoadStatus, error) {
+	status := columnGraphPartitionLiveLoadStatus{}
 	if idx == nil {
 		return status, errors.New("collections: vector index is nil")
 	}
@@ -219,11 +183,8 @@ func (idx *VectorIndex) saveNativeSnapshotPreparedWithCommandWALIntentAndPublica
 		return status, err
 	}
 
-	if err := idx.foldLiveDeltaForPersistence(); err != nil {
-		return status, err
-	}
 	snapshot, snapshotSeq := idx.persistSnapshot()
-	var nativeVersion *nativeHNSWRootVersion
+	var nativeVersion *vectorDomainRootVersion
 	if _, present, e := getSystemValue(pin, nativeCatalogIncarnationPrefix+catalog.meta.Name); e != nil {
 		return status, e
 	} else if present {
@@ -245,7 +206,7 @@ func (idx *VectorIndex) saveNativeSnapshotPreparedWithCommandWALIntentAndPublica
 			return status, memtable.ErrCOWCapacity
 		}
 		snapshot.Meta.NativeLogicalVersion = version + 1
-		nativeVersion = &nativeHNSWRootVersion{key: key, value: nativeVectorVersionRecord(version+1, snapshot.Meta.SourceDocumentGeneration)}
+		nativeVersion = &vectorDomainRootVersion{key: key, value: nativeVectorVersionRecord(version+1, snapshot.Meta.SourceDocumentGeneration)}
 	}
 
 	table, bytesDisk, err := buildVectorIndexNativeSnapshotTable(snapshot)
@@ -292,14 +253,14 @@ func (idx *VectorIndex) saveNativeSnapshotPreparedWithCommandWALIntentAndPublica
 		Iter:          iter,
 		StoragePolicy: policy,
 	}}, columnWritePublishInput{
-		nativeHNSWVersion: nativeVersion,
-		meta:              catalog.meta,
-		baseCommitSeq:     baseCommitSeq,
-		baseSystemRoot:    baseSystemRoot,
-		rootNames:         []string{rootName},
-		baseRootIDs:       baseRootIDs,
-		commandWALIntent:  intent,
-		rawPublishLocked:  rawPublishLocked,
+		vectorDomainVersion: nativeVersion,
+		meta:                catalog.meta,
+		baseCommitSeq:       baseCommitSeq,
+		baseSystemRoot:      baseSystemRoot,
+		rootNames:           []string{rootName},
+		baseRootIDs:         baseRootIDs,
+		commandWALIntent:    intent,
+		rawPublishLocked:    rawPublishLocked,
 	})
 	if err == nil && len(rootIDs) == 1 {
 		status.Loaded = true
@@ -308,7 +269,7 @@ func (idx *VectorIndex) saveNativeSnapshotPreparedWithCommandWALIntentAndPublica
 		status.BytesDisk = bytesDisk
 		idx.setNativePersistent(true)
 		idx.recordPersistedSnapshot(status.Epoch, bytesDisk, snapshotSeq)
-		c.registerVectorIndexCurrentCatalog(idx)
+		c.registerColumnGraphPartitionLiveCarrier(idx)
 	}
 	publicationMu.Unlock()
 	_ = iter.Close()
@@ -352,7 +313,7 @@ func (c *Collection) currentNativeVectorIndexRootID(name string) (uint64, error)
 	return catalog.rootID(collectionVectorIndexRootName(catalog.meta.Name, name)), nil
 }
 
-func (c *Collection) installNativeVectorIndexCandidate(candidate *VectorIndex, expectedRoot uint64, replaceCurrent *VectorIndex, replaceMutationSeq uint64) (*VectorIndex, error) {
+func (c *Collection) installColumnGraphPartitionLiveCarrier(candidate *columnGraphPartitionLiveCarrier, expectedRoot uint64, replaceCurrent *columnGraphPartitionLiveCarrier, replaceMutationSeq uint64) (*columnGraphPartitionLiveCarrier, error) {
 	if c == nil {
 		return nil, errCollectionNil
 	}
@@ -385,7 +346,7 @@ func (c *Collection) installNativeVectorIndexCandidate(candidate *VectorIndex, e
 	hasPartitionLive := candidate.partitionLive != nil
 	candidate.mu.RUnlock()
 	partitionLiveCarrier := ok && def.Strategy == VectorIndexStrategyColumnGraph && hasPartitionLive
-	if !ok || !vectorIndexDefinitionUsesNativeRuntime(def) && !partitionLiveCarrier {
+	if !ok || !partitionLiveCarrier {
 		return nil, fmt.Errorf("%w: %q", errVectorIndexNotDeclared, candidate.name)
 	}
 	candidate.setPartitionLiveCarrier(partitionLiveCarrier)
@@ -394,7 +355,7 @@ func (c *Collection) installNativeVectorIndexCandidate(candidate *VectorIndex, e
 	if err != nil {
 		return nil, err
 	}
-	current := c.registeredVectorIndex(def.Name)
+	current := c.registeredColumnGraphPartitionLiveCarrier(def.Name)
 	replaceCurrentUnchanged := current != nil && current == replaceCurrent && current.nativeMutationSequence() == replaceMutationSeq && activeRoot == expectedRoot
 	if current != nil && current.validateNativeSnapshotDefinition(def) == "" && current.nativeSnapshotBaseEpochForFullSave() == activeRoot && current.coversSourceDocumentGeneration(documentGeneration) {
 		if !replaceCurrentUnchanged {
@@ -413,15 +374,15 @@ func (c *Collection) installNativeVectorIndexCandidate(candidate *VectorIndex, e
 	c.meta = catalog.meta
 	c.rememberCatalog(snap, catalog)
 	candidate.invalidateSourceDocumentRoots()
-	c.registerVectorIndexCurrentCatalog(candidate)
+	c.registerColumnGraphPartitionLiveCarrier(candidate)
 	rollback := func() {
-		if c.registeredVectorIndex(def.Name) != candidate {
+		if c.registeredColumnGraphPartitionLiveCarrier(def.Name) != candidate {
 			return
 		}
 		if current != nil {
-			c.registerVectorIndexCurrentCatalog(current)
+			c.registerColumnGraphPartitionLiveCarrier(current)
 		} else {
-			c.unregisterVectorIndex(def.Name, c.collectionSchemaCoordinator())
+			c.removeColumnGraphPartitionLiveCarrierLocked(def.Name, c.collectionSchemaCoordinator())
 		}
 	}
 	postInstall := c.db.AcquireSnapshot()
@@ -467,19 +428,16 @@ func (c *Collection) installNativeVectorIndexCandidate(candidate *VectorIndex, e
 	return candidate, nil
 }
 
-// SaveNativeDeltaSnapshot persists dirty graph records for a declared vector
+// saveColumnGraphPartitionLiveDelta persists dirty graph records for a declared vector
 // index as a collection-root delta. It is used by live write maintenance; full
-// rebuild/shrink publication should continue to use SaveNativeSnapshot so
+// rebuild/shrink publication should continue to use saveColumnGraphPartitionLiveSnapshot so
 // removed graph keys cannot survive.
-func (idx *VectorIndex) SaveNativeDeltaSnapshot() (VectorIndexLoadStatus, error) {
-	if idx != nil && idx.collection != nil && idx.collection.nativeJSON != nil {
-		return idx.saveNativeHNSW()
-	}
+func (idx *columnGraphPartitionLiveCarrier) saveColumnGraphPartitionLiveDelta() (columnGraphPartitionLiveLoadStatus, error) {
 	return idx.saveNativeDeltaSnapshotWithCommandWALIntent(nil)
 }
 
-func (idx *VectorIndex) saveNativeDeltaSnapshotWithCommandWALIntent(replay *backenddb.CommandWALIntent) (VectorIndexLoadStatus, error) {
-	status := VectorIndexLoadStatus{}
+func (idx *columnGraphPartitionLiveCarrier) saveNativeDeltaSnapshotWithCommandWALIntent(replay *backenddb.CommandWALIntent) (columnGraphPartitionLiveLoadStatus, error) {
+	status := columnGraphPartitionLiveLoadStatus{}
 	if idx == nil {
 		return status, errors.New("collections: vector index is nil")
 	}
@@ -499,11 +457,11 @@ func (idx *VectorIndex) saveNativeDeltaSnapshotWithCommandWALIntent(replay *back
 // native delta while its caller owns native-vector publication admission.
 // First standalone partition binding uses the stronger write admission lock so
 // no document mutation can observe the carrier before its durable root exists.
-func (idx *VectorIndex) saveNativeDeltaSnapshotWithAdmissionHeldAndCommandWALIntent(replay *backenddb.CommandWALIntent) (VectorIndexLoadStatus, error) {
+func (idx *columnGraphPartitionLiveCarrier) saveNativeDeltaSnapshotWithAdmissionHeldAndCommandWALIntent(replay *backenddb.CommandWALIntent) (columnGraphPartitionLiveLoadStatus, error) {
 	return idx.saveNativeDeltaSnapshotWithAdmissionHeldAndCommandWALIntentAndOwner(replay, nil)
 }
-func (idx *VectorIndex) saveNativeDeltaSnapshotWithAdmissionHeldAndCommandWALIntentAndOwner(replay *backenddb.CommandWALIntent, owner *CommandWALAdmittedCollection) (VectorIndexLoadStatus, error) {
-	status := VectorIndexLoadStatus{}
+func (idx *columnGraphPartitionLiveCarrier) saveNativeDeltaSnapshotWithAdmissionHeldAndCommandWALIntentAndOwner(replay *backenddb.CommandWALIntent, owner *CommandWALAdmittedCollection) (columnGraphPartitionLiveLoadStatus, error) {
+	status := columnGraphPartitionLiveLoadStatus{}
 	c := idx.collection
 	if owner == nil {
 		unlockCoverage := c.lockVectorIndexCoveragePersistence()
@@ -582,9 +540,6 @@ func (idx *VectorIndex) saveNativeDeltaSnapshotWithAdmissionHeldAndCommandWALInt
 		return status, err
 	}
 
-	if err := idx.foldLiveDeltaForPersistence(); err != nil {
-		return status, err
-	}
 	table, bytesDisk, snapshotSeq, persistedEpoch, hasWork, err := idx.persistNativeDeltaTable(baseRoot == 0)
 	if err != nil {
 		return status, err
@@ -658,153 +613,11 @@ func (idx *VectorIndex) saveNativeDeltaSnapshotWithAdmissionHeldAndCommandWALInt
 	return status, nil
 }
 
-func (idx *VectorIndex) saveLegacySnapshot() (VectorIndexLoadStatus, error) {
-	status := VectorIndexLoadStatus{}
-	if idx == nil {
-		return status, errors.New("collections: vector index is nil")
-	}
-	if idx.collection == nil || idx.collection.db == nil {
-		return status, errCollectionDBNil
-	}
-	unlockSidecar := idx.collection.lockLegacyVectorSidecar()
-	defer unlockSidecar()
-	indexDir, err := idx.persistDir()
-	if err != nil {
-		return status, err
-	}
-	status.ManifestPath = filepath.Join(indexDir, vectorIndexManifestFile)
-	if err := os.MkdirAll(indexDir, 0o755); err != nil {
-		return status, err
-	}
-	epoch := uint64(time.Now().UnixNano())
-	epochName := fmt.Sprintf("epoch-%020d", epoch)
-	epochDir := filepath.Join(indexDir, epochName)
-	tmpDir := filepath.Join(indexDir, ".tmp-"+epochName)
-	if err := os.RemoveAll(tmpDir); err != nil {
-		return status, err
-	}
-	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
-		return status, err
-	}
-	cleanupTmp := true
-	defer func() {
-		if cleanupTmp {
-			_ = os.RemoveAll(tmpDir)
-		}
-	}()
-
-	snapshot, snapshotSeq := idx.persistSnapshot()
-	files := map[string]any{
-		vectorIndexMetaFile:       snapshot.Meta,
-		vectorIndexNodesFile:      snapshot.Nodes,
-		vectorIndexEdgesFile:      snapshot.Edges,
-		vectorIndexTombstonesFile: snapshot.Tombstones,
-		vectorIndexDocMapFile:     snapshot.DocMap,
-	}
-	fileEntries := make([]vectorIndexManifestFileEntry, 0, len(files))
-	for name, payload := range files {
-		data, err := json.MarshalIndent(payload, "", "  ")
-		if err != nil {
-			return status, err
-		}
-		data = append(data, '\n')
-		path := filepath.Join(tmpDir, name)
-		if err := os.WriteFile(path, data, 0o644); err != nil {
-			return status, err
-		}
-		if err := fsyncFile(path); err != nil {
-			return status, err
-		}
-		sum := sha256.Sum256(data)
-		fileEntries = append(fileEntries, vectorIndexManifestFileEntry{
-			Name:   name,
-			Size:   int64(len(data)),
-			SHA256: hex.EncodeToString(sum[:]),
-		})
-	}
-	sort.Slice(fileEntries, func(i, j int) bool {
-		return fileEntries[i].Name < fileEntries[j].Name
-	})
-	if err := fsyncDir(tmpDir); err != nil {
-		return status, err
-	}
-	if err := os.Rename(tmpDir, epochDir); err != nil {
-		return status, err
-	}
-	cleanupTmp = false
-	if err := fsyncDir(indexDir); err != nil {
-		return status, err
-	}
-	runLegacyVectorSnapshotPostEpochRenameHookForTest()
-
-	manifest := vectorIndexManifest{
-		FormatVersion:  vectorIndexFormatVersion,
-		Collection:     idx.collection.meta.Name,
-		IndexName:      idx.name,
-		Epoch:          epoch,
-		EpochDir:       epochName,
-		Dims:           snapshot.Meta.Dimensions,
-		Metric:         idx.metric,
-		Encoding:       snapshot.Meta.Encoding,
-		M:              idx.m,
-		EfConstruction: idx.efConstruction,
-		EfSearch:       idx.efSearch,
-		MaxLevel:       snapshot.Meta.MaxLevel,
-		NodeCount:      len(snapshot.Nodes),
-		LiveDocCount:   len(snapshot.DocMap.Current),
-		DeletedCount:   len(snapshot.Tombstones.NodeIDs),
-		CreatedAtUnix:  time.Now().Unix(),
-		Files:          fileEntries,
-	}
-	manifestData, err := json.MarshalIndent(manifest, "", "  ")
-	if err != nil {
-		return status, err
-	}
-	manifestData = append(manifestData, '\n')
-	bytesDisk := vectorIndexSnapshotBytes(manifestData, fileEntries)
-	tmpManifest := filepath.Join(indexDir, ".manifest.tmp")
-	if err := os.WriteFile(tmpManifest, manifestData, 0o644); err != nil {
-		return status, err
-	}
-	if err := fsyncFile(tmpManifest); err != nil {
-		return status, err
-	}
-	if err := os.Rename(tmpManifest, status.ManifestPath); err != nil {
-		return status, err
-	}
-	if err := fsyncDir(indexDir); err != nil {
-		return status, err
-	}
-	status.Loaded = true
-	status.Epoch = epoch
-	status.BytesDisk = bytesDisk
-	idx.recordPersistedSnapshot(epoch, bytesDisk, snapshotSeq)
-	return status, nil
-}
-
-// LoadVectorIndexSnapshot loads the currently published persisted vector index
-// epoch. Missing, incomplete, or corrupt snapshots return a non-loaded status
-// with ExactFallbackReason set and no error, so callers can safely use exact
-// search as the correctness fallback.
-func (c *Collection) LoadVectorIndexSnapshot(opts VectorIndexOptions) (*VectorIndex, VectorIndexLoadStatus, error) {
-	index, status, err := c.LoadNativeVectorIndexSnapshot(opts)
-	if err != nil {
-		return nil, status, err
-	}
-	if index != nil || status.Loaded || status.ExactFallbackReason != vectorIndexFallbackMissingVectorIndexMetadata {
-		return index, status, nil
-	}
-	return c.loadLegacyVectorIndexSnapshot(opts)
-}
-
-// LoadNativeVectorIndexSnapshot loads a declared vector index from its TreeDB
-// collection root. Missing or invalid graph roots return a non-loaded status so
-// callers can safely fall back to exact search.
-func (c *Collection) LoadNativeVectorIndexSnapshot(opts VectorIndexOptions) (*VectorIndex, VectorIndexLoadStatus, error) {
-	if c != nil && c.nativeJSON != nil {
-		return c.loadNativeHNSW(opts)
-	}
-	status := VectorIndexLoadStatus{}
+// loadColumnGraphPartitionLiveCarrier restores a bound modern carrier from its
+// published root. Missing, incomplete or corrupt state returns an unavailable
+// status; callers must not rebuild or select a fallback engine here.
+func (c *Collection) loadColumnGraphPartitionLiveCarrier(opts columnGraphPartitionLiveOptions) (*columnGraphPartitionLiveCarrier, columnGraphPartitionLiveLoadStatus, error) {
+	status := columnGraphPartitionLiveLoadStatus{}
 	if c == nil {
 		return nil, status, errCollectionNil
 	}
@@ -844,12 +657,7 @@ func (c *Collection) LoadNativeVectorIndexSnapshot(opts VectorIndexOptions) (*Ve
 		status.ExactFallbackReason = reason
 		return nil, status, nil
 	}
-	if def.Strategy == VectorIndexStrategyColumnGraph {
-		if snapshot.Meta.PartitionLive == nil {
-			status.ExactFallbackReason = vectorIndexFallbackMetaMismatch
-			return nil, status, nil
-		}
-	} else if snapshot.Meta.PartitionLive != nil || !vectorIndexDefinitionUsesNativeRuntime(def) {
+	if def.Strategy != VectorIndexStrategyColumnGraph || snapshot.Meta.PartitionLive == nil {
 		status.ExactFallbackReason = vectorIndexFallbackMetaMismatch
 		return nil, status, nil
 	}
@@ -861,7 +669,7 @@ func (c *Collection) LoadNativeVectorIndexSnapshot(opts VectorIndexOptions) (*Ve
 		status.ExactFallbackReason = vectorIndexFallbackStaleDocumentRoot
 		return nil, status, nil
 	}
-	index, err := newVectorIndex(c, vectorIndexOptionsFromDefinition(def))
+	index, err := newColumnGraphPartitionLiveDomain(c, vectorIndexOptionsFromDefinition(def))
 	if err != nil {
 		return nil, status, err
 	}
@@ -874,14 +682,9 @@ func (c *Collection) LoadNativeVectorIndexSnapshot(opts VectorIndexOptions) (*Ve
 		status.ExactFallbackReason = vectorIndexFallbackMetaMismatch
 		return nil, status, nil
 	}
-	if def.Strategy != VectorIndexStrategyColumnGraph {
-		if err := populateNativeScalarColumnsFromSecondaryIndexes(index, snap, catalog); err != nil {
-			return nil, status, fmt.Errorf("%w: native scalar columns: %v", ErrVectorIndexSearchUnavailable, err)
-		}
-	}
 	status.RootID = rootID
 	index.recordLoadedSnapshot(rootID, bytesDisk)
-	installed, err := c.installNativeVectorIndexCandidate(index, rootID, nil, 0)
+	installed, err := c.installColumnGraphPartitionLiveCarrier(index, rootID, nil, 0)
 	if err != nil {
 		if errors.Is(err, errVectorIndexStaleDocumentGeneration) {
 			status.ExactFallbackReason = vectorIndexFallbackStaleDocumentRoot
@@ -891,7 +694,7 @@ func (c *Collection) LoadNativeVectorIndexSnapshot(opts VectorIndexOptions) (*Ve
 		return nil, status, err
 	}
 	status.Loaded = true
-	status.Epoch, status.BytesDisk, _, _, _ = installed.nativeSearchState()
+	status.Epoch, status.BytesDisk = installed.persistedCarrierMetadata()
 	status.RootID = status.Epoch
 	return installed, status, nil
 }
@@ -907,234 +710,15 @@ func vectorIndexSnapshotMatchesDocumentRoots(meta vectorIndexPersistMeta, catalo
 	return meta.SourceDocumentGeneration == generation, nil
 }
 
-func (c *Collection) loadLegacyVectorIndexSnapshot(opts VectorIndexOptions) (*VectorIndex, VectorIndexLoadStatus, error) {
-	status := VectorIndexLoadStatus{}
-	if c == nil {
-		return nil, status, errCollectionNil
-	}
-	if c.db == nil {
-		return nil, status, errCollectionDBNil
-	}
-	unlockSidecar := c.lockLegacyVectorSidecar()
-	defer unlockSidecar()
-	if opts.Name == "" {
-		opts.Name = vectorIndexDefaultName(opts.Field)
-	}
-	indexDir, err := vectorIndexPersistDir(c.db.Dir(), c.meta.Name, opts.Name)
-	if err != nil {
-		return nil, status, err
-	}
-	status.ManifestPath = filepath.Join(indexDir, vectorIndexManifestFile)
-	index, err := newVectorIndex(c, opts)
-	if err != nil {
-		return nil, status, err
-	}
-	manifestData, err := os.ReadFile(status.ManifestPath)
-	if errors.Is(err, os.ErrNotExist) {
-		status.ExactFallbackReason = vectorIndexFallbackMissingManifest
-		return nil, status, nil
-	}
-	if err != nil {
-		return nil, status, err
-	}
-	var manifest vectorIndexManifest
-	if err := json.Unmarshal(manifestData, &manifest); err != nil {
-		status.ExactFallbackReason = vectorIndexFallbackInvalidManifest
-		return nil, status, nil
-	}
-	if reason := validateVectorIndexManifest(manifest, c.meta.Name, index.name, index.metric, index.encoding, index.dimensions); reason != "" {
-		status.ExactFallbackReason = reason
-		return nil, status, nil
-	}
-	epochDir := filepath.Join(indexDir, manifest.EpochDir)
-	files, reason, err := readVectorIndexSnapshotFiles(epochDir, manifest.Files)
-	if err != nil {
-		return nil, status, err
-	}
-	if reason != "" {
-		status.ExactFallbackReason = reason
-		return nil, status, nil
-	}
-	if reason := validateVectorIndexSnapshotManifestCounts(manifest, files); reason != "" {
-		status.ExactFallbackReason = reason
-		return nil, status, nil
-	}
-	if reason := index.loadPersistSnapshot(files); reason != "" {
-		status.ExactFallbackReason = reason
-		return nil, status, nil
-	}
-	status.Loaded = true
-	status.Epoch = manifest.Epoch
-	status.BytesDisk = vectorIndexSnapshotBytes(manifestData, manifest.Files)
-	index.recordLoadedSnapshot(status.Epoch, status.BytesDisk)
-	if err := c.RegisterVectorIndex(index); err != nil {
-		return nil, status, err
-	}
-	return index, status, nil
-}
-
-func (idx *VectorIndex) persistDir() (string, error) {
-	if idx == nil || idx.collection == nil || idx.collection.db == nil {
-		return "", errCollectionDBNil
-	}
-	return vectorIndexPersistDir(idx.collection.db.Dir(), idx.collection.meta.Name, idx.name)
-}
-
 // PruneOldSnapshots removes older immutable epoch directories for this vector
 // index while preserving the currently published manifest epoch and the newest
 // keep-1 additional epochs. It never removes temp directories.
-func (idx *VectorIndex) PruneOldSnapshots(keep int) (VectorIndexPruneStatus, error) {
-	status := VectorIndexPruneStatus{}
-	if idx == nil {
-		return status, errors.New("collections: vector index is nil")
-	}
-	if keep <= 0 {
-		return status, errors.New("collections: vector index snapshot keep count must be positive")
-	}
-	unlockSidecar := idx.collection.lockLegacyVectorSidecar()
-	defer unlockSidecar()
-	indexDir, err := idx.persistDir()
-	if err != nil {
-		return status, err
-	}
-	status.IndexDir = indexDir
-	manifestPath := filepath.Join(indexDir, vectorIndexManifestFile)
-	manifestData, err := os.ReadFile(manifestPath)
-	if err != nil {
-		return status, err
-	}
-	var manifest vectorIndexManifest
-	if err := json.Unmarshal(manifestData, &manifest); err != nil {
-		return status, err
-	}
-	if manifest.EpochDir == "" || strings.ContainsAny(manifest.EpochDir, `/\`) {
-		return status, errors.New("collections: invalid vector index manifest epoch dir")
-	}
-	status.ActiveEpoch = manifest.EpochDir
-
-	epochs, err := vectorIndexEpochDirs(indexDir)
-	if err != nil {
-		return status, err
-	}
-	preserve := map[string]struct{}{manifest.EpochDir: {}}
-	for i := len(epochs) - 1; i >= 0 && len(preserve) < keep; i-- {
-		preserve[epochs[i]] = struct{}{}
-	}
-	for _, epoch := range epochs {
-		if _, ok := preserve[epoch]; ok {
-			continue
-		}
-		path := filepath.Join(indexDir, epoch)
-		bytes, err := dirSize(path)
-		if err != nil {
-			return status, err
-		}
-		if err := os.RemoveAll(path); err != nil {
-			return status, err
-		}
-		status.RemovedEpochs++
-		status.RemovedBytes += bytes
-	}
-	if status.RemovedEpochs > 0 {
-		if err := fsyncDir(indexDir); err != nil {
-			return status, err
-		}
-	}
-	return status, nil
-}
-
-func vectorIndexEpochDirs(indexDir string) ([]string, error) {
-	entries, err := os.ReadDir(indexDir)
-	if err != nil {
-		return nil, err
-	}
-	var epochs []string
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		if strings.HasPrefix(name, "epoch-") {
-			epochs = append(epochs, name)
-		}
-	}
-	sort.Strings(epochs)
-	return epochs, nil
-}
-
-func dirSize(path string) (int64, error) {
-	var total int64
-	err := filepath.WalkDir(path, func(_ string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		info, err := d.Info()
-		if err != nil {
-			return err
-		}
-		total += info.Size()
-		return nil
-	})
-	return total, err
-}
-
-func vectorIndexPersistDir(dbDir, collection, indexName string) (string, error) {
-	if dbDir == "" {
-		return "", errors.New("collections: vector index persistence requires a database directory")
-	}
-	collectionComponent, err := vectorIndexSafePathComponent(collection)
-	if err != nil {
-		return "", err
-	}
-	indexComponent, err := vectorIndexSafePathComponent(indexName)
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dbDir, vectorIndexDirName, collectionComponent, indexComponent), nil
-}
 
 func vectorIndexDefaultName(field string) string {
 	if field == "" {
 		return "default"
 	}
 	return field
-}
-
-func vectorIndexSafePathComponent(s string) (string, error) {
-	s = strings.TrimSpace(s)
-	if s == "" || s == "." || s == ".." || strings.ContainsAny(s, `/\`) {
-		return "", fmt.Errorf("collections: invalid vector index path component %q", s)
-	}
-	return s, nil
-}
-
-type vectorIndexManifest struct {
-	FormatVersion  int                            `json:"format_version"`
-	Collection     string                         `json:"collection"`
-	IndexName      string                         `json:"index_name"`
-	Epoch          uint64                         `json:"epoch"`
-	EpochDir       string                         `json:"epoch_dir"`
-	Dims           int                            `json:"dims"`
-	Metric         VectorMetric                   `json:"metric"`
-	Encoding       VectorIndexEncoding            `json:"encoding"`
-	M              int                            `json:"m"`
-	EfConstruction int                            `json:"ef_construction"`
-	EfSearch       int                            `json:"ef_search"`
-	MaxLevel       int                            `json:"max_level"`
-	NodeCount      int                            `json:"node_count"`
-	LiveDocCount   int                            `json:"live_doc_count"`
-	DeletedCount   int                            `json:"deleted_doc_count"`
-	CreatedAtUnix  int64                          `json:"created_at_unix"`
-	Files          []vectorIndexManifestFileEntry `json:"files"`
-}
-
-type vectorIndexManifestFileEntry struct {
-	Name   string `json:"name"`
-	Size   int64  `json:"size"`
-	SHA256 string `json:"sha256"`
 }
 
 type vectorIndexPersistSnapshot struct {
@@ -1190,7 +774,7 @@ type vectorIndexPersistDocMap struct {
 	Current map[string]int `json:"current"`
 }
 
-func (idx *VectorIndex) persistSnapshot() (vectorIndexPersistSnapshot, uint64) {
+func (idx *columnGraphPartitionLiveCarrier) persistSnapshot() (vectorIndexPersistSnapshot, uint64) {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 	seq := idx.mutationSeq
@@ -1260,14 +844,6 @@ func (idx *VectorIndex) persistSnapshot() (vectorIndexPersistSnapshot, uint64) {
 	}
 	sort.Ints(snapshot.Tombstones.NodeIDs)
 	return snapshot, seq
-}
-
-func vectorIndexSnapshotBytes(manifestData []byte, entries []vectorIndexManifestFileEntry) int64 {
-	total := int64(len(manifestData))
-	for _, entry := range entries {
-		total += entry.Size
-	}
-	return total
 }
 
 func buildVectorIndexNativeSnapshotTable(snapshot vectorIndexPersistSnapshot) (memtable.Table, int64, error) {
@@ -1358,7 +934,7 @@ func vectorIndexPartitionLiveDomainPrefixV2(domain uint32, epoch uint64) []byte 
 	return []byte(fmt.Sprintf("%s%020d/%020d/", vectorIndexNativeKeyPrefixLiveDomain, domain, epoch))
 }
 
-func (idx *VectorIndex) persistNativeDeltaTable(includeMeta bool) (memtable.Table, int64, uint64, uint64, bool, error) {
+func (idx *columnGraphPartitionLiveCarrier) persistNativeDeltaTable(includeMeta bool) (memtable.Table, int64, uint64, uint64, bool, error) {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 	seq := idx.mutationSeq
@@ -1494,7 +1070,7 @@ func (idx *VectorIndex) persistNativeDeltaTable(includeMeta bool) (memtable.Tabl
 	return table, bytesDisk, seq, persistedEpoch, true, nil
 }
 
-func (idx *VectorIndex) persistMetaLocked() vectorIndexPersistMeta {
+func (idx *columnGraphPartitionLiveCarrier) persistMetaLocked() vectorIndexPersistMeta {
 	return vectorIndexPersistMeta{
 		Name:                            idx.name,
 		Field:                           idx.field,
@@ -1517,7 +1093,7 @@ func (idx *VectorIndex) persistMetaLocked() vectorIndexPersistMeta {
 // emitNativeNodeLocked uses the maintained record structs and edge normalization.
 // Encoding is synchronous under the graph read lock; vectors may be borrowed,
 // and one edge-conversion workspace is reused instead of copying a full graph.
-func (idx *VectorIndex) emitNativeNodeLocked(nodeID int, edge *vectorIndexPersistEdges, add func([]byte, any) error) error {
+func (idx *columnGraphPartitionLiveCarrier) emitNativeNodeLocked(nodeID int, edge *vectorIndexPersistEdges, add func([]byte, any) error) error {
 	node := idx.nodes[nodeID]
 	if err := add(vectorIndexNativeNodeKey(nodeID), vectorIndexPersistNode{
 		DocumentID: string(node.documentID), Vector: node.vector, Quantized: node.quantized,
@@ -1800,15 +1376,15 @@ func parseVectorIndexNativeOrdinal(value string) (int, bool) {
 	return parsed, true
 }
 
-func vectorIndexOptionName(opts VectorIndexOptions) string {
+func vectorIndexOptionName(opts columnGraphPartitionLiveOptions) string {
 	if opts.Name != "" {
 		return opts.Name
 	}
 	return vectorIndexDefaultName(opts.Field)
 }
 
-func vectorIndexOptionsFromDefinition(def VectorIndexDefinition) VectorIndexOptions {
-	return VectorIndexOptions{
+func vectorIndexOptionsFromDefinition(def VectorIndexDefinition) columnGraphPartitionLiveOptions {
+	return columnGraphPartitionLiveOptions{
 		Name:             def.Name,
 		Field:            def.Field,
 		Metric:           def.Metric,
@@ -1818,11 +1394,11 @@ func vectorIndexOptionsFromDefinition(def VectorIndexDefinition) VectorIndexOpti
 		EfSearch:         def.EfSearch,
 		Encoding:         def.Encoding,
 		schemaGeneration: def.SchemaGeneration,
-		nativeRuntime:    vectorIndexDefinitionUsesNativeRuntime(def),
+		ownerDefinition:  &def,
 	}
 }
 
-func (idx *VectorIndex) validateNativeSnapshotDefinition(def VectorIndexDefinition) string {
+func (idx *columnGraphPartitionLiveCarrier) validateNativeSnapshotDefinition(def VectorIndexDefinition) string {
 	if idx == nil {
 		return "nil_index"
 	}
@@ -1847,7 +1423,7 @@ func (idx *VectorIndex) validateNativeSnapshotDefinition(def VectorIndexDefiniti
 	return ""
 }
 
-func (idx *VectorIndex) recordPersistedSnapshot(epoch uint64, bytesDisk int64, snapshotSeq uint64) {
+func (idx *columnGraphPartitionLiveCarrier) recordPersistedSnapshot(epoch uint64, bytesDisk int64, snapshotSeq uint64) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 	idx.persistedEpoch = epoch
@@ -1865,7 +1441,7 @@ func (idx *VectorIndex) recordPersistedSnapshot(epoch uint64, bytesDisk int64, s
 	}
 }
 
-func (idx *VectorIndex) recordLoadedSnapshot(epoch uint64, bytesDisk int64) {
+func (idx *columnGraphPartitionLiveCarrier) recordLoadedSnapshot(epoch uint64, bytesDisk int64) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 	idx.persistedEpoch = epoch
@@ -1879,7 +1455,7 @@ func (idx *VectorIndex) recordLoadedSnapshot(epoch uint64, bytesDisk int64) {
 	idx.publishSearchViewLocked(false)
 }
 
-func (idx *VectorIndex) needsNativeAutoPersist() bool {
+func (idx *columnGraphPartitionLiveCarrier) needsNativeAutoPersist() bool {
 	if idx == nil {
 		return false
 	}
@@ -1888,66 +1464,13 @@ func (idx *VectorIndex) needsNativeAutoPersist() bool {
 	return idx.dirtyMeta || (idx.mutationSeq != 0 && (idx.persistedEpoch == 0 || idx.persistedSnapshotDirty))
 }
 
-func (idx *VectorIndex) needsNativeFullSnapshotAutoPersist() bool {
+func (idx *columnGraphPartitionLiveCarrier) needsNativeFullSnapshotAutoPersist() bool {
 	if idx == nil {
 		return false
 	}
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 	return idx.fullSnapshotBaseEpoch != 0 && idx.mutationSeq != 0
-}
-
-func validateVectorIndexManifest(manifest vectorIndexManifest, collection, indexName string, metric VectorMetric, encoding VectorIndexEncoding, dimensions int) string {
-	if manifest.FormatVersion != vectorIndexFormatVersion {
-		return "unsupported_format_version"
-	}
-	if manifest.Collection != collection || manifest.IndexName != indexName {
-		return "manifest_scope_mismatch"
-	}
-	if manifest.Metric != metric {
-		return "manifest_metric_mismatch"
-	}
-	if manifest.Encoding != encoding {
-		return "manifest_encoding_mismatch"
-	}
-	if dimensions != 0 && manifest.Dims != dimensions {
-		return "manifest_dimension_mismatch"
-	}
-	if manifest.EpochDir == "" || strings.ContainsAny(manifest.EpochDir, `/\`) {
-		return "invalid_epoch_dir"
-	}
-	if manifest.M <= 0 || manifest.EfConstruction <= 0 || manifest.EfSearch <= 0 {
-		return "invalid_manifest_hnsw_params"
-	}
-	if manifest.NodeCount < 0 || manifest.LiveDocCount < 0 || manifest.DeletedCount < 0 {
-		return "invalid_manifest_counts"
-	}
-	if len(manifest.Files) == 0 {
-		return "manifest_missing_files"
-	}
-	return ""
-}
-
-func validateVectorIndexSnapshotManifestCounts(manifest vectorIndexManifest, snapshot vectorIndexPersistSnapshot) string {
-	if manifest.NodeCount != len(snapshot.Nodes) {
-		return "manifest_node_count_mismatch"
-	}
-	if manifest.LiveDocCount != len(snapshot.DocMap.Current) {
-		return "manifest_live_count_mismatch"
-	}
-	if manifest.DeletedCount != len(snapshot.Tombstones.NodeIDs) {
-		return "manifest_deleted_count_mismatch"
-	}
-	if snapshot.Meta.EfConstruction != manifest.EfConstruction || snapshot.Meta.EfSearch != manifest.EfSearch || snapshot.Meta.M != manifest.M {
-		return "manifest_meta_param_mismatch"
-	}
-	if snapshot.Meta.Encoding != manifest.Encoding {
-		return "manifest_meta_encoding_mismatch"
-	}
-	if snapshot.Meta.MaxLevel != manifest.MaxLevel {
-		return "manifest_max_level_mismatch"
-	}
-	return ""
 }
 
 func validateVectorIndexPersistNode(node vectorIndexPersistNode, meta vectorIndexPersistMeta) string {
@@ -1985,53 +1508,7 @@ func validateVectorIndexPersistNode(node vectorIndexPersistNode, meta vectorInde
 	return ""
 }
 
-func readVectorIndexSnapshotFiles(epochDir string, entries []vectorIndexManifestFileEntry) (vectorIndexPersistSnapshot, string, error) {
-	var snapshot vectorIndexPersistSnapshot
-	for _, entry := range entries {
-		if entry.Name == "" || strings.ContainsAny(entry.Name, `/\`) {
-			return snapshot, "invalid_file_name", nil
-		}
-		data, err := os.ReadFile(filepath.Join(epochDir, entry.Name))
-		if errors.Is(err, os.ErrNotExist) {
-			return snapshot, "missing_epoch_file", nil
-		}
-		if err != nil {
-			return snapshot, "", err
-		}
-		if int64(len(data)) != entry.Size {
-			return snapshot, "file_size_mismatch", nil
-		}
-		sum := sha256.Sum256(data)
-		if hex.EncodeToString(sum[:]) != entry.SHA256 {
-			return snapshot, "file_checksum_mismatch", nil
-		}
-		switch entry.Name {
-		case vectorIndexMetaFile:
-			if err := json.Unmarshal(data, &snapshot.Meta); err != nil {
-				return snapshot, "invalid_meta_file", nil
-			}
-		case vectorIndexNodesFile:
-			if err := json.Unmarshal(data, &snapshot.Nodes); err != nil {
-				return snapshot, "invalid_nodes_file", nil
-			}
-		case vectorIndexEdgesFile:
-			if err := json.Unmarshal(data, &snapshot.Edges); err != nil {
-				return snapshot, "invalid_edges_file", nil
-			}
-		case vectorIndexTombstonesFile:
-			if err := json.Unmarshal(data, &snapshot.Tombstones); err != nil {
-				return snapshot, "invalid_tombstones_file", nil
-			}
-		case vectorIndexDocMapFile:
-			if err := json.Unmarshal(data, &snapshot.DocMap); err != nil {
-				return snapshot, "invalid_docmap_file", nil
-			}
-		}
-	}
-	return snapshot, "", nil
-}
-
-func (idx *VectorIndex) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot) string {
+func (idx *columnGraphPartitionLiveCarrier) loadPersistSnapshot(snapshot vectorIndexPersistSnapshot) string {
 	if snapshot.Meta.Field != idx.field || snapshot.Meta.Metric != idx.metric {
 		return vectorIndexFallbackMetaMismatch
 	}
@@ -2117,7 +1594,7 @@ func validateVectorIndexPersistShape(meta vectorIndexPersistMeta, nodes, edges, 
 
 // convertVectorIndexPersistNode and the edge/doc-map helpers are the maintained
 // snapshot-loader contract, also used by native family-at-a-time loading.
-func (idx *VectorIndex) convertVectorIndexPersistNode(node vectorIndexPersistNode, meta vectorIndexPersistMeta) (vectorIndexNode, string) {
+func (idx *columnGraphPartitionLiveCarrier) convertVectorIndexPersistNode(node vectorIndexPersistNode, meta vectorIndexPersistMeta) (vectorIndexNode, string) {
 	if reason := validateVectorIndexPersistNode(node, meta); reason != "" {
 		return vectorIndexNode{}, reason
 	}
@@ -2129,16 +1606,11 @@ func (idx *VectorIndex) convertVectorIndexPersistNode(node vectorIndexPersistNod
 		quantized: append([]int8(nil), node.Quantized...), quantScale: node.QuantScale,
 		level: node.Level, neighbors: make([][]vectorIndexNeighbor, node.Level+1), deleted: node.Deleted,
 	}
-	if idx.nativeHNSWOwned {
-		for layer := range out.neighbors {
-			out.neighbors[layer] = make([]vectorIndexNeighbor, 0, idx.maxNeighborsForLayer(layer)+1)
-		}
-	}
 	out.cacheVectorNorms()
 	return out, ""
 }
 
-func (idx *VectorIndex) applyVectorIndexPersistEdge(nodes []vectorIndexNode, edge vectorIndexPersistEdges, meta vectorIndexPersistMeta) string {
+func (idx *columnGraphPartitionLiveCarrier) applyVectorIndexPersistEdge(nodes []vectorIndexNode, edge vectorIndexPersistEdges, meta vectorIndexPersistMeta) string {
 	if edge.NodeID < 0 || edge.NodeID >= len(nodes) {
 		return vectorIndexFallbackInvalidEdgeNode
 	}
@@ -2157,14 +1629,7 @@ func (idx *VectorIndex) applyVectorIndexPersistEdge(nodes []vectorIndexNode, edg
 		return "invalid_edge_distance_count"
 	}
 	var neighbors []vectorIndexNeighbor
-	if idx.nativeHNSWOwned {
-		if len(edge.Neighbor) > idx.maxNeighborsForLayer(edge.Layer) {
-			return "invalid_edge_neighbor_count"
-		}
-		neighbors = nodes[edge.NodeID].neighbors[edge.Layer][:len(edge.Neighbor)]
-	} else {
-		neighbors = make([]vectorIndexNeighbor, len(edge.Neighbor))
-	}
+	neighbors = make([]vectorIndexNeighbor, len(edge.Neighbor))
 	for i, neighbor := range edge.Neighbor {
 		if neighbor < 0 || neighbor >= len(nodes) {
 			return "invalid_edge_neighbor"
@@ -2206,11 +1671,11 @@ func validateVectorIndexPersistDocMapNode(nodes []vectorIndexNode, docID string,
 	return ""
 }
 
-func (idx *VectorIndex) finishVectorIndexPersistLoad(meta vectorIndexPersistMeta, nodes []vectorIndexNode, current map[string]int) string {
+func (idx *columnGraphPartitionLiveCarrier) finishVectorIndexPersistLoad(meta vectorIndexPersistMeta, nodes []vectorIndexNode, current map[string]int) string {
 	return idx.finishVectorIndexPersistLoadWithPartitions(meta, nodes, current, nil, nil)
 }
 
-func (idx *VectorIndex) finishVectorIndexPersistLoadWithPartitions(meta vectorIndexPersistMeta, nodes []vectorIndexNode, current map[string]int, owners []vectorIndexPartitionLivePersistOwnerV1, domains []vectorIndexPartitionLivePersistDomainV1) string {
+func (idx *columnGraphPartitionLiveCarrier) finishVectorIndexPersistLoadWithPartitions(meta vectorIndexPersistMeta, nodes []vectorIndexNode, current map[string]int, owners []vectorIndexPartitionLivePersistOwnerV1, domains []vectorIndexPartitionLivePersistDomainV1) string {
 	entry := meta.Entry
 	if entry < 0 || entry >= len(nodes) || nodes[entry].deleted {
 		entry = -1
@@ -2251,29 +1716,4 @@ func (idx *VectorIndex) finishVectorIndexPersistLoadWithPartitions(meta vectorIn
 	idx.partitionPreparation = meta.Preparation
 	idx.publishSearchViewLocked(true)
 	return ""
-}
-
-func fsyncFile(path string) error {
-	flag := os.O_RDONLY
-	if runtime.GOOS == "windows" {
-		flag = os.O_RDWR
-	}
-	f, err := os.OpenFile(path, flag, 0)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = f.Close() }()
-	return f.Sync()
-}
-
-func fsyncDir(path string) error {
-	if runtime.GOOS == "windows" {
-		return nil
-	}
-	f, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = f.Close() }()
-	return f.Sync()
 }

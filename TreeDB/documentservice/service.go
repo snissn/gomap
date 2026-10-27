@@ -223,13 +223,7 @@ func (s *Service) createIndexLocked(ctx context.Context, req CreateIndexRequest)
 	if err != nil {
 		return IndexInfo{}, err
 	}
-	// Preserve the metric's create default unless a stored declaration supplies
-	// the omitted strategy. Existing indexes still pass the normal complete-schema
-	// compatibility check; storage ownership does not select another algorithm.
-	defaultStrategy := collections.VectorIndexStrategyNativeRuntime
-	if metric == MetricCosine || req.TypedInput {
-		defaultStrategy = collections.VectorIndexStrategyColumnGraph
-	}
+	defaultStrategy := collections.VectorIndexStrategyColumnGraph
 	var existingMeta *collections.CollectionMeta
 	existing, openErr := s.manager.OpenCollection(req.Name)
 	switch {
@@ -340,53 +334,6 @@ func (s *Service) createIndexLocked(ctx context.Context, req CreateIndexRequest)
 	info, err := indexInfoFromMeta(*created)
 	if err != nil {
 		return IndexInfo{}, err
-	}
-	if info.VectorStrategy == collections.VectorIndexStrategyNativeRuntime {
-		s.benchmarkSearchCacheMu.RLock()
-		cached := s.benchmarkSearchCache[req.Name].matches(req.Name)
-		s.benchmarkSearchCacheMu.RUnlock()
-		if cached {
-			s.noteDiagnosticsIndex(req.Name, info)
-			return info, nil
-		}
-		col, _, err := s.openIndex(ctx, req.Name, 0)
-		if err != nil {
-			return IndexInfo{}, err
-		}
-		opts := collections.VectorIndexOptions{
-			Name:           info.VectorIndexName,
-			Field:          info.EmbeddingField,
-			Metric:         collectionMetric,
-			Dimensions:     info.Dimension,
-			M:              info.VectorM,
-			EfConstruction: info.VectorEfConstruction,
-			EfSearch:       info.VectorEfSearch,
-			Encoding:       collections.VectorIndexEncodingFloat32,
-		}
-		index, load, err := col.LoadNativeVectorIndexSnapshot(opts)
-		if err != nil {
-			return IndexInfo{}, mapCollectionMaintenanceError("load native vector index", err)
-		}
-		if index == nil && !load.Loaded && load.RootName != "" && load.RootID == 0 {
-			empty := true
-			if _, err := col.ScanDocumentsFunc(1, func(collections.DocumentRecord) (bool, error) {
-				empty = false
-				return false, nil
-			}); err != nil {
-				return IndexInfo{}, mapCollectionMaintenanceError("inspect native vector index", err)
-			}
-			if empty {
-				index, err = col.BuildVectorIndex(opts)
-				if err != nil {
-					return IndexInfo{}, mapCollectionMaintenanceError("initialize native vector index", err)
-				}
-			}
-		}
-		if index != nil {
-			if err := s.primeBenchmarkSearchCache(req.Name, col, info); err != nil {
-				return IndexInfo{}, wrapServiceError(CodeInternal, "prime native vector search cache after create index failed", err)
-			}
-		}
 	}
 	s.noteDiagnosticsIndex(req.Name, info)
 	return info, nil
@@ -924,15 +871,17 @@ func exactDocumentIDFilter(filter *Filter) (string, bool) {
 	return id, ok
 }
 
-// SearchDenseVector scores QueryEmbedding over the index. Route=ann uses a
-// compatible native_runtime or column_graph vector index; declared scalar
-// filters are supported by native_runtime. Route=exact keeps the bounded
-// document scan. Route selection is deterministic and echoed in the response;
-// there is no silent downgrade.
+// SearchDenseVector scores QueryEmbedding using ColumnGraph ANN or an
+// explicitly requested bounded document scan. Ordinary filtered ANN is not
+// supported; typed ColumnGraph filters remain available.
 func (s *Service) SearchDenseVector(ctx context.Context, index string, req DenseVectorSearchRequest) (DenseVectorSearchResponse, error) {
 	col, info, err := s.openIndex(ctx, index, req.ExpectedGeneration)
 	if err != nil {
 		return DenseVectorSearchResponse{}, err
+	}
+	routeOption := Route(strings.TrimSpace(strings.ToLower(string(req.Route))))
+	if !info.TypedInput && req.Filter != nil && (routeOption == "" || routeOption == RouteAnn) {
+		return DenseVectorSearchResponse{}, serviceError(CodeUnsupported, "ordinary filtered ANN is not implemented")
 	}
 	// Ordinary ColumnGraph Dense and Hybrid must share the service-owned
 	// collection before either opens a retained prepared pack. Native runtime
@@ -1047,10 +996,8 @@ func bindDenseVectorRepresentation(req *DenseVectorSearchRequest, info IndexInfo
 	return nil
 }
 
-// resolveDenseSearchRoute applies the deterministic route defaulting rules:
-// explicit route values are validated; an omitted route selects ann when the
-// index declares a compatible no-document vector route, including declared
-// scalar filters on native_runtime. Other valid metadata filters retain exact.
+// resolveDenseSearchRoute defaults to ANN and never silently falls back to a
+// document scan. Exact scanning must be explicitly requested.
 func resolveDenseSearchRoute(req DenseVectorSearchRequest, info IndexInfo) (Route, error) {
 	if info.TypedInput {
 		route := Route(strings.TrimSpace(strings.ToLower(string(req.Route))))
@@ -1060,31 +1007,13 @@ func resolveDenseSearchRoute(req DenseVectorSearchRequest, info IndexInfo) (Rout
 		return "", serviceError(CodeUnsupported, "typed input requires the admitted graph route; document-scan exact is unavailable")
 	}
 	switch Route(strings.TrimSpace(strings.ToLower(string(req.Route)))) {
-	case "":
-		if !info.Capabilities.NoDocumentVectorSearch {
-			return RouteExact, nil
-		}
-		if req.Filter == nil {
-			return RouteAnn, nil
-		}
-		if err := req.Filter.Validate(); err != nil {
-			return "", err
-		}
-		if info.VectorStrategy == collections.VectorIndexStrategyNativeRuntime {
-			// Select before execution: arbitrary valid metadata filters keep
-			// the existing exact route, while declared scalar plans use ANN.
-			if _, err := translateScalarFilter(req.Filter, newScalarSchema(info.ScalarFields)); err == nil {
-				return RouteAnn, nil
-			}
-		}
-		return RouteExact, nil
-	case RouteExact:
-		return RouteExact, nil
-	case RouteAnn:
-		if req.Filter != nil && info.VectorStrategy != collections.VectorIndexStrategyNativeRuntime {
-			return "", serviceError(CodeInvalidRequest, "dense route \"ann\" metadata filters require a native_runtime vector index")
+	case "", RouteAnn:
+		if req.Filter != nil {
+			return "", serviceError(CodeUnsupported, "ordinary filtered ANN is not implemented")
 		}
 		return RouteAnn, nil
+	case RouteExact:
+		return RouteExact, nil
 	default:
 		return "", serviceErrorf(CodeInvalidRequest, "unsupported dense search route %q; use \"ann\" or \"exact\"", req.Route)
 	}
@@ -1207,7 +1136,7 @@ func (s *Service) ResetIndex(ctx context.Context, index string, req ResetIndexRe
 		}
 	}
 
-	existingCol, existingInfo, err := s.openIndex(ctx, index, 0)
+	_, _, err := s.openIndex(ctx, index, 0)
 	if err != nil {
 		if ErrorCodeOf(err) != CodeIndexNotFound {
 			return ResetIndexResponse{}, err
@@ -1221,40 +1150,7 @@ func (s *Service) ResetIndex(ctx context.Context, index string, req ResetIndexRe
 	if !req.DropOld {
 		return ResetIndexResponse{}, serviceErrorf(CodeConflict, "index %q already exists and drop_old=false", index)
 	}
-	if req.Dimension == 0 {
-		req.Dimension = existingInfo.Dimension
-	}
-	if req.Metric == "" {
-		req.Metric = existingInfo.Metric
-	}
-	if existingInfo.VectorStrategy == collections.VectorIndexStrategyColumnGraph {
-		return ResetIndexResponse{}, serviceErrorf(CodeUnsupported, "drop_old reset for column_graph benchmark index %q requires a fresh data directory or unique index name", index)
-	}
-	if _, err := s.createIndexLocked(ctx, CreateIndexRequest{Name: index, Dimension: req.Dimension, Metric: req.Metric, TypedInput: req.TypedInput, VectorIndexOptions: req.VectorIndexOptions, ScalarFields: req.ScalarFields}); err != nil {
-		return ResetIndexResponse{}, err
-	}
-
-	ids, err := s.collectMatchingIDs(ctx, existingCol, nil, 0)
-	if err != nil {
-		return ResetIndexResponse{}, err
-	}
-	if len(ids) > 0 {
-		deleteIDs := make([][]byte, len(ids))
-		for i, id := range ids {
-			deleteIDs[i] = []byte(id)
-		}
-		if _, err := existingCol.DeleteBatch(deleteIDs); err != nil {
-			return ResetIndexResponse{}, mapCollectionMaintenanceError("reset index", err)
-		}
-		if err := s.finishVectorMutation(index, existingCol, existingInfo); err != nil {
-			return ResetIndexResponse{}, wrapServiceError(CodeInternal, "publish vector mutation after reset failed", err)
-		}
-	}
-	_, info, err := s.openIndex(ctx, index, 0)
-	if err != nil {
-		return ResetIndexResponse{}, err
-	}
-	return ResetIndexResponse{Index: info, Created: false, Reset: true, DropOld: req.DropOld, DroppedDocuments: len(ids)}, nil
+	return ResetIndexResponse{}, serviceErrorf(CodeUnsupported, "drop_old reset for column_graph index %q requires a fresh data directory or unique index name", index)
 }
 
 func reconcileOptimizeIndexTiming(timing *OptimizeIndexTiming, status VectorIndexMaintenanceStatus) {
@@ -1530,12 +1426,8 @@ func (s *Service) SearchHybrid(ctx context.Context, index string, req HybridSear
 	if err := validateTextQueryMode(req.TextQueryMode); err != nil {
 		return HybridSearchResponse{}, err
 	}
-	nativeVectorOnly := !hasText &&
-		hasVector &&
-		info.VectorStrategy == collections.VectorIndexStrategyNativeRuntime &&
-		info.Capabilities.NoDocumentVectorSearch
-	if !nativeVectorOnly && !info.Capabilities.HybridSearch {
-		return HybridSearchResponse{}, serviceError(CodeIndexUnavailable, "hybrid search requires a cosine column_graph or native_runtime vector index and content text index")
+	if !info.Capabilities.HybridSearch {
+		return HybridSearchResponse{}, serviceError(CodeIndexUnavailable, "hybrid search requires a cosine column_graph vector index and content text index")
 	}
 	if req.CandidateLimit < 0 || req.TextCandidateLimit < 0 || req.VectorCandidateLimit < 0 || req.MaxPostingsScanned < 0 || req.QuantizedRerankCandidates < 0 || req.EfSearch < 0 {
 		return HybridSearchResponse{}, serviceError(CodeInvalidRequest, "candidate limits, max_postings_scanned, and ef_search must be non-negative")
@@ -1548,6 +1440,9 @@ func (s *Service) SearchHybrid(ctx context.Context, index string, req HybridSear
 		if err := req.Filter.Validate(); err != nil {
 			return HybridSearchResponse{}, err
 		}
+	}
+	if !info.TypedInput && req.Filter != nil && hasVector {
+		return HybridSearchResponse{}, serviceError(CodeUnsupported, "ordinary filtered hybrid vector search is not implemented")
 	}
 	scalarFilter, err := translateScalarFilter(req.Filter, schema)
 	if err != nil {
@@ -1721,13 +1616,10 @@ func (s *Service) primeBenchmarkSearchCache(name string, col *collections.Collec
 }
 
 func (s *Service) finishVectorMutation(name string, col *collections.Collection, info IndexInfo) error {
-	if info.TypedInput && info.VectorStrategy == collections.VectorIndexStrategyColumnGraph {
+	if info.TypedInput {
 		return s.primeBenchmarkSearchCache(name, col, info)
 	}
-	if info.VectorStrategy != collections.VectorIndexStrategyNativeRuntime || !info.Capabilities.NoDocumentVectorSearch {
-		return s.invalidateBenchmarkSearchCache(name)
-	}
-	return s.primeBenchmarkSearchCache(name, col, info)
+	return s.invalidateBenchmarkSearchCache(name)
 }
 
 // finishDeferredColumnGraphMutation preserves the service-owned handle for an
@@ -1938,8 +1830,7 @@ func indexInfoFromMeta(meta collections.CollectionMeta) (IndexInfo, error) {
 	if generation == 0 {
 		generation = 1
 	}
-	nativeHybrid := vectorDef.Strategy == collections.VectorIndexStrategyNativeRuntime && meta.Options.ColumnStore == nil && vectorDef.Representation == "" && len(vectorDef.QuantizedIndexes) == 0
-	hybridSearch := (vectorDef.Strategy == collections.VectorIndexStrategyColumnGraph || nativeHybrid) && vectorDef.Metric == collections.VectorMetricCosine && vectorDef.Encoding == collections.VectorIndexEncodingFloat32
+	hybridSearch := vectorDef.Strategy == collections.VectorIndexStrategyColumnGraph && vectorDef.Metric == collections.VectorMetricCosine && vectorDef.Encoding == collections.VectorIndexEncodingFloat32
 	scalarFields := scalarFieldsFromCollectionIndexes(meta.Indexes)
 	typedInput := serviceUsesTypedInput(meta)
 	capabilities := indexCapabilities(vectorDef, hybridSearch)
@@ -1955,7 +1846,7 @@ func indexInfoFromMeta(meta collections.CollectionMeta) (IndexInfo, error) {
 		capabilities.NoDocumentVectorSearch = false
 	}
 	capabilities.KeywordMetadataFilters = len(scalarFields) > 0
-	capabilities.HybridMetadataFilters = len(scalarFields) > 0
+	capabilities.HybridMetadataFilters = typedInput && hybridSearch && len(scalarFields) > 0
 	return IndexInfo{
 		TypedInput:           typedInput,
 		Name:                 meta.Name,
@@ -1991,7 +1882,7 @@ func serviceVectorIndexDefinition(meta collections.CollectionMeta) (collections.
 			if candidate.Encoding != collections.VectorIndexEncodingFloat32 {
 				return collections.VectorIndexDefinition{}, serviceErrorf(CodeIndexUnavailable, "collection %q uses unsupported vector index encoding %s", meta.Name, candidate.Encoding.String())
 			}
-			if candidate.Strategy != collections.VectorIndexStrategyNativeRuntime && candidate.Strategy != collections.VectorIndexStrategyColumnGraph {
+			if candidate.Strategy != collections.VectorIndexStrategyColumnGraph {
 				return collections.VectorIndexDefinition{}, serviceErrorf(CodeIndexUnavailable, "collection %q uses unsupported vector index strategy %q", meta.Name, candidate.Strategy)
 			}
 			return candidate, nil
@@ -2044,8 +1935,10 @@ func benchmarkVectorIndexOptionsForCreate(metric Metric, opts *BenchmarkVectorIn
 	out.efSearch = opts.EfSearch
 	if opts.Strategy != "" {
 		switch opts.Strategy {
-		case collections.VectorIndexStrategyNativeRuntime, collections.VectorIndexStrategyColumnGraph:
+		case collections.VectorIndexStrategyColumnGraph:
 			out.strategy = opts.Strategy
+		case "native_runtime":
+			return normalizedBenchmarkVectorIndexOptions{}, serviceError(CodeUnsupported, "native_runtime has been removed; create a column_graph index")
 		default:
 			return normalizedBenchmarkVectorIndexOptions{}, serviceErrorf(CodeInvalidRequest, "unsupported vector index strategy %q", opts.Strategy)
 		}
@@ -2059,7 +1952,7 @@ func benchmarkVectorIndexOptionsForCreate(metric Metric, opts *BenchmarkVectorIn
 		return normalizedBenchmarkVectorIndexOptions{}, serviceErrorf(CodeInvalidRequest, "unsupported vector index representation %q", opts.Representation)
 	}
 	if out.strategy == collections.VectorIndexStrategyColumnGraph && metric != MetricCosine {
-		return normalizedBenchmarkVectorIndexOptions{}, serviceErrorf(CodeInvalidRequest, "vector index strategy %q requires metric %q", out.strategy, MetricCosine)
+		return normalizedBenchmarkVectorIndexOptions{}, serviceErrorf(CodeUnsupported, "vector index strategy %q requires metric %q", out.strategy, MetricCosine)
 	}
 	if out.representation == collections.VectorIndexRepresentationCosineNormalizedF32V1 && out.strategy != collections.VectorIndexStrategyColumnGraph {
 		return normalizedBenchmarkVectorIndexOptions{}, serviceErrorf(CodeInvalidRequest, "vector index representation %q requires strategy %q", out.representation, collections.VectorIndexStrategyColumnGraph)
@@ -2604,16 +2497,14 @@ func serviceDocumentFetchOptions(returnEmbedding bool) collections.DocumentFetch
 
 func vectorIndexMaintenanceStatus(status collections.VectorIndexStatus) VectorIndexMaintenanceStatus {
 	return VectorIndexMaintenanceStatus{
-		Name:             status.Name,
-		Strategy:         status.Strategy,
-		State:            status.State,
-		Reason:           status.Reason,
-		Loaded:           status.Loaded,
-		RebuildNeeded:    status.RebuildNeeded,
-		RootID:           status.RootID,
-		NativeRootLoaded: status.NativeRootLoaded,
-		NativeRootBytes:  status.NativeRootBytes,
-		DurationNanos:    status.Duration.Nanoseconds(),
+		Name:          status.Name,
+		Strategy:      status.Strategy,
+		State:         status.State,
+		Reason:        status.Reason,
+		Loaded:        status.Loaded,
+		RebuildNeeded: status.RebuildNeeded,
+		RootID:        status.RootID,
+		DurationNanos: status.Duration.Nanoseconds(),
 		ColumnGraphBuild: ColumnGraphBuildTiming{
 			TotalNanos:                     status.ColumnGraphBuild.Total.Nanoseconds(),
 			SnapshotNanos:                  status.ColumnGraphBuild.Snapshot.Nanoseconds(),
@@ -2780,9 +2671,8 @@ func validateBenchmarkVectorSearchRoute(mode BenchmarkVectorQueryMode, req Bench
 	}
 	switch mode {
 	case BenchmarkVectorQueryModeExact:
-		nativeRoute := response.Strategy == collections.VectorIndexStrategyNativeRuntime && diag.Route == collections.VectorIndexSearchRouteNativeRuntime && diag.LiveANN.Enabled && diag.LiveANN.ExactFallbacks == 0 && diag.LiveANN.FullRebuilds == 0
 		packRoute := response.Strategy == collections.VectorIndexStrategyColumnGraph && diag.Route == collections.VectorIndexSearchRouteExactHNSWSearchPackV1 && diag.ExactHNSWSearchPackNoDocRoute
-		if (!nativeRoute && !packRoute) || diag.FallbackReason != collections.VectorIndexSearchFallbackReasonNone {
+		if !packRoute || diag.FallbackReason != collections.VectorIndexSearchFallbackReasonNone {
 			return serviceErrorf(CodeIndexUnavailable, "exact benchmark vector search did not use the exact no-document hnsw_search_pack_v1 route: diagnostics=%+v", diag)
 		}
 	case BenchmarkVectorQueryModeQuantizedOnly, BenchmarkVectorQueryModeQuantizedRerank:

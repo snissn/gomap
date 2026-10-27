@@ -795,8 +795,13 @@ func applicationIndexRequest(cfg applicationConfig, dims int) documentservice.Cr
 
 func applicationSourceCollectionMeta(cfg applicationConfig, dims int) *collections.CollectionMeta {
 	return &collections.CollectionMeta{
-		Name:    applicationSourceCollection,
-		Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatJSON},
+		Name: applicationSourceCollection,
+		Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatJSON, ColumnStore: &collections.ColumnStoreConfig{
+			Enabled:                 true,
+			Columns:                 []collections.ColumnStoreColumn{{Name: applicationVectorField, Path: applicationVectorField, Owner: collections.TypedStorageOwnerColumnPart, ValueType: collections.ColumnStoreValueFloat32Vector, VectorDims: dims}},
+			RetainedPayload:         collections.ColumnRetainedPayloadFull,
+			RetainedPayloadEncoding: collections.ColumnRetainedPayloadEncodingJSON,
+		}},
 		Indexes: []collections.IndexDefinition{
 			{Name: "meta_tenant_id", Field: "meta.tenant_id", ValueType: collections.IndexValueString},
 			{Name: "meta_workspace_id", Field: "meta.workspace_id", ValueType: collections.IndexValueString},
@@ -806,7 +811,7 @@ func applicationSourceCollectionMeta(cfg applicationConfig, dims int) *collectio
 			Name: applicationVectorIndex, Field: applicationVectorField,
 			Metric: collections.VectorMetricCosine, Dimensions: dims, M: cfg.M,
 			Encoding: collections.VectorIndexEncodingFloat32,
-			Strategy: collections.VectorIndexStrategyNativeRuntime,
+			Strategy: collections.VectorIndexStrategyColumnGraph,
 		}},
 		TextIndexes: []collections.TextIndexDefinition{{
 			Name:     applicationTextField,
@@ -1034,7 +1039,7 @@ func queryApplicationIndexes(col *collections.Collection, fixture *applicationFi
 		if err != nil {
 			return snapshot, fmt.Errorf("vector index query %q: %w", childIDs[i], err)
 		}
-		if response.Path != collections.VectorIndexSearchPathNativeRuntime || len(response.Results) != 1 {
+		if response.Path != collections.VectorIndexSearchPathColumnGraphNativeReader || len(response.Results) != 1 {
 			return snapshot, fmt.Errorf("vector index query %q path=%q results=%d", childIDs[i], response.Path, len(response.Results))
 		}
 		snapshot.VectorChildIDs = append(snapshot.VectorChildIDs, string(response.Results[0].ID))

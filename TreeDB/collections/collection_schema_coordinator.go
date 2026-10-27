@@ -29,16 +29,14 @@ type collectionSchemaCoordinator struct {
 	typedPublicationChanged  chan struct{}
 	typedPublicationClosed   bool
 
-	nativeHNSWMutationMu                   sync.Mutex
-	nativeHNSWIndexesMu                    sync.RWMutex
-	nativeHNSWIndexes                      map[string]*VectorIndex
+	vectorDDLMutationMu                    sync.Mutex
 	schemaMu                               sync.RWMutex
 	nativeVectorIndexLoadMu                sync.Mutex
 	nativeVectorAdmissionMu                sync.RWMutex
 	nativeVectorBaseline                   atomic.Pointer[uint64]
 	hasNativeVectorIndexes                 atomic.Bool
 	partitionLiveMu                        sync.RWMutex
-	partitionLiveCarriers                  map[string]*VectorIndex
+	partitionLiveCarriers                  map[string]*columnGraphPartitionLiveCarrier
 	partitionLiveReplayFinalizerRegistered bool
 	partitionLivePublishMu                 sync.RWMutex
 	partitionLiveSearchPins                map[vectorPartitionLiveSearchPinKeyV1]int
@@ -93,7 +91,7 @@ func (coord *collectionSchemaCoordinator) hasPartitionLiveSearchPin(key vectorPa
 	return has
 }
 
-func (coord *collectionSchemaCoordinator) partitionLiveCarrier(name string) *VectorIndex {
+func (coord *collectionSchemaCoordinator) partitionLiveCarrier(name string) *columnGraphPartitionLiveCarrier {
 	if coord == nil || name == "" {
 		return nil
 	}
@@ -103,7 +101,7 @@ func (coord *collectionSchemaCoordinator) partitionLiveCarrier(name string) *Vec
 	return carrier
 }
 
-func (coord *collectionSchemaCoordinator) partitionLiveCarrierList() []*VectorIndex {
+func (coord *collectionSchemaCoordinator) partitionLiveCarrierList() []*columnGraphPartitionLiveCarrier {
 	if coord == nil {
 		return nil
 	}
@@ -112,7 +110,7 @@ func (coord *collectionSchemaCoordinator) partitionLiveCarrierList() []*VectorIn
 		coord.partitionLiveMu.RUnlock()
 		return nil
 	}
-	out := make([]*VectorIndex, 0, len(coord.partitionLiveCarriers))
+	out := make([]*columnGraphPartitionLiveCarrier, 0, len(coord.partitionLiveCarriers))
 	for _, carrier := range coord.partitionLiveCarriers {
 		out = append(out, carrier)
 	}
@@ -130,13 +128,13 @@ func (coord *collectionSchemaCoordinator) hasPartitionLiveCarrier() bool {
 	return has
 }
 
-func (coord *collectionSchemaCoordinator) registerPartitionLiveCarrier(carrier *VectorIndex) {
+func (coord *collectionSchemaCoordinator) registerPartitionLiveCarrier(carrier *columnGraphPartitionLiveCarrier) {
 	if coord == nil || carrier == nil || carrier.name == "" {
 		return
 	}
 	coord.partitionLiveMu.Lock()
 	if coord.partitionLiveCarriers == nil {
-		coord.partitionLiveCarriers = make(map[string]*VectorIndex)
+		coord.partitionLiveCarriers = make(map[string]*columnGraphPartitionLiveCarrier)
 	}
 	coord.partitionLiveCarriers[carrier.name] = carrier
 	registerReplayFinalizer := !coord.partitionLiveReplayFinalizerRegistered
@@ -154,14 +152,14 @@ func (coord *collectionSchemaCoordinator) persistPartitionLiveReplayCarriers() e
 	}
 	var persistErr error
 	for _, carrier := range coord.partitionLiveCarrierList() {
-		if _, err := carrier.SaveNativeDeltaSnapshot(); err != nil {
+		if _, err := carrier.saveColumnGraphPartitionLiveDelta(); err != nil {
 			persistErr = errors.Join(persistErr, err)
 		}
 	}
 	return persistErr
 }
 
-func (coord *collectionSchemaCoordinator) unregisterPartitionLiveCarrier(name string, expected *VectorIndex) {
+func (coord *collectionSchemaCoordinator) unregisterPartitionLiveCarrier(name string, expected *columnGraphPartitionLiveCarrier) {
 	if coord == nil || name == "" || expected == nil {
 		return
 	}
@@ -351,11 +349,10 @@ func collectionDBSchemaCoordinatorForDB(db *backenddb.DB) *collectionDBSchemaCoo
 			// coordinator. Persist replay-reconciled carriers at the real DB close
 			// boundary so a later checkpoint/reopen does not lose the overlay.
 			for _, carrier := range collection.partitionLiveCarrierList() {
-				if _, err := carrier.SaveNativeDeltaSnapshot(); err != nil {
+				if _, err := carrier.saveColumnGraphPartitionLiveDelta(); err != nil {
 					closeErr = errors.Join(closeErr, err)
 				}
 			}
-			closeErr = errors.Join(closeErr, collection.closeNativeHNSWForDB())
 			collection.typedPublicationDebtMu.Lock()
 			collection.typedPublicationClosed = true
 			collection.wakeTypedGraphPublicationWaitersLocked()

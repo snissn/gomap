@@ -416,9 +416,6 @@ func (c *Collection) openCollectionVectorIndexPreparedExactSearch(opts VectorInd
 	response.IndexName = def.Name
 	response.Strategy = def.Strategy
 	switch def.Strategy {
-	case VectorIndexStrategyNativeRuntime:
-		response.Status = VectorIndexStatus{Name: def.Name, Strategy: def.Strategy, State: VectorIndexStateNativeRuntime, Reason: VectorIndexReasonNativeRuntime}
-		return nil, response, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer requires an explicit column_graph index; native_runtime cannot serve the no-document hnsw_search_pack_v1 route", ErrVectorIndexSearchUnavailable, def.Name)
 	case VectorIndexStrategyColumnGraph:
 	default:
 		response.Status = VectorIndexStatus{Name: def.Name, Strategy: def.Strategy, State: VectorIndexStateColumnGraphUnavailable, Reason: VectorIndexReasonUnsupportedStrategy}
@@ -553,9 +550,6 @@ func (c *Collection) openCollectionVectorIndexPreparedQuantizedSearch(opts Vecto
 	response.IndexName = def.Name
 	response.Strategy = def.Strategy
 	switch def.Strategy {
-	case VectorIndexStrategyNativeRuntime:
-		response.Status = VectorIndexStatus{Name: def.Name, Strategy: def.Strategy, State: VectorIndexStateNativeRuntime, Reason: VectorIndexReasonNativeRuntime}
-		return nil, response, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer quantized mode requires an explicit column_graph index; native_runtime cannot serve the no-document quantized route", ErrVectorIndexSearchUnavailable, def.Name)
 	case VectorIndexStrategyColumnGraph:
 	default:
 		response.Status = VectorIndexStatus{Name: def.Name, Strategy: def.Strategy, State: VectorIndexStateColumnGraphUnavailable, Reason: VectorIndexReasonUnsupportedStrategy}

@@ -91,7 +91,8 @@ type vectorIndexNeighborTopologySnapshot4257 struct {
 	distanceBits uint32
 }
 
-func snapshotVectorIndexTopology4257(index *VectorIndex) vectorIndexTopologySnapshot4257 {
+func snapshotVectorIndexTopology4257(graph any) vectorIndexTopologySnapshot4257 {
+	index := columnGraphBuilderForTest4257(graph)
 	out := vectorIndexTopologySnapshot4257{entry: index.entry, maxLevel: index.maxLevel, nodes: make([]vectorIndexNodeTopologySnapshot4257, len(index.nodes))}
 	for nodeID := range index.nodes {
 		node := &index.nodes[nodeID]
@@ -107,8 +108,9 @@ func snapshotVectorIndexTopology4257(index *VectorIndex) vectorIndexTopologySnap
 	return out
 }
 
-func snapshotVectorIndexSearches4257(t *testing.T, index *VectorIndex, rows [][]float32) [][]vectorIndexNeighborTopologySnapshot4257 {
+func snapshotVectorIndexSearches4257(t *testing.T, graph any, rows [][]float32) [][]vectorIndexNeighborTopologySnapshot4257 {
 	t.Helper()
+	index := columnGraphBuilderForTest4257(graph)
 	out := make([][]vectorIndexNeighborTopologySnapshot4257, 3)
 	for query, row := range []int{0, len(rows) / 2, len(rows) - 1} {
 		norm := vectorNormSquared(rows[row])
@@ -126,9 +128,9 @@ func snapshotVectorIndexSearches4257(t *testing.T, index *VectorIndex, rows [][]
 	return out
 }
 
-func buildVectorIndexReciprocalParity4257(t *testing.T, rows [][]float32, m, construction int, parallel, native bool) *VectorIndex {
+func buildVectorIndexReciprocalParity4257(t *testing.T, rows [][]float32, m, construction int, parallel, native bool) *columnGraphPartitionLiveCarrier {
 	t.Helper()
-	index, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: len(rows[0]), M: m, EfConstruction: construction})
+	index, err := newColumnGraphPartitionLiveDomain(nil, columnGraphPartitionLiveOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: len(rows[0]), M: m, EfConstruction: construction})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,4 +158,15 @@ func vectorIndexReciprocalParityRows4257(rows, dims int, tieHeavy bool) [][]floa
 		out[row][row%dims] += 16
 	}
 	return out
+}
+
+func columnGraphBuilderForTest4257(graph any) *columnGraphHNSWBuilder {
+	switch index := graph.(type) {
+	case *columnGraphHNSWBuilder:
+		return index
+	case *columnGraphPartitionLiveCarrier:
+		return &index.columnGraphHNSWBuilder
+	default:
+		panic("unsupported construction graph")
+	}
 }

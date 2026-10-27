@@ -100,8 +100,8 @@ func ragParityCreateIndex(t testing.TB, handler *Handler, name string) {
 		t.Fatalf("meta.priority scalar entry missing: %#v", second)
 	}
 	caps := ragParityObjectValue(t, info["capabilities"], "capabilities")
-	if caps["keyword_metadata_filters"] != true || caps["hybrid_metadata_filters"] != true {
-		t.Fatalf("capabilities=%#v want keyword/hybrid metadata filters declared", caps)
+	if caps["keyword_metadata_filters"] != true || caps["hybrid_metadata_filters"] != false {
+		t.Fatalf("capabilities=%#v want keyword filtering and no ordinary filtered vector hybrid", caps)
 	}
 }
 
@@ -153,7 +153,7 @@ func TestHTTPFilteredKeywordSearchReturnsOnlyMatchingTenantDocs(t *testing.T) {
 	}
 }
 
-func TestHTTPFilteredHybridSearchReturnsOnlyMatchingTenantDocs(t *testing.T) {
+func TestHTTPFilteredVectorHybridFailsClosed(t *testing.T) {
 	svc, db := newTestService(t)
 	defer db.Close()
 	handler := NewHandler(svc)
@@ -162,24 +162,9 @@ func TestHTTPFilteredHybridSearchReturnsOnlyMatchingTenantDocs(t *testing.T) {
 
 	status, payload := ragParityPost(t, handler, "/v1/indexes/docs/search/hybrid",
 		`{"query":"refund","query_embedding":[0.95,0.05,0,0],"top_k":10,"ef_search":16,"filter":{"field":"meta.tenant","operator":"==","value":"t1"}}`)
-	if status != http.StatusOK {
-		code, message := ragParityError(t, payload)
-		t.Fatalf("filtered hybrid search status=%d code=%s message=%q", status, code, message)
-	}
-	docs := ragParityArrayValue(t, payload["documents"], "hybrid documents")
-	if len(docs) == 0 {
-		t.Fatalf("filtered hybrid documents empty")
-	}
-	for i, raw := range docs {
-		doc := ragParityObjectValue(t, raw, fmt.Sprintf("hybrid document[%d]", i))
-		meta := ragParityObjectValue(t, doc["meta"], fmt.Sprintf("hybrid document[%d].meta", i))
-		if meta["tenant"] != "t1" {
-			t.Fatalf("filtered hybrid leaked document %v tenant=%v", doc["id"], meta["tenant"])
-		}
-	}
-	plan := ragParityObjectValue(t, payload["plan"], "hybrid plan")
-	if plan["scalar_filter_strategy"] != "prefilter" {
-		t.Fatalf("plan=%s want prefilter strategy", mustJSON(plan))
+	code, _ := ragParityError(t, payload)
+	if status != http.StatusNotImplemented || code != string(CodeUnsupported) || payload["documents"] != nil {
+		t.Fatalf("filtered vector hybrid status=%d body=%s want unsupported without results", status, mustJSON(payload))
 	}
 }
 
@@ -224,7 +209,7 @@ func TestHTTPMultiFieldANDKeywordHybridParity4292(t *testing.T) {
 		t.Fatalf("keyword stats=%s", mustJSON(keywordStats))
 	}
 
-	status, hybrid := ragParityPost(t, handler, "/v1/indexes/docs/search/hybrid", `{"query":"refund","query_embedding":[0.95,0.05,0,0],"top_k":10,"ef_search":16,`+filter+`}`)
+	status, hybrid := ragParityPost(t, handler, "/v1/indexes/docs/search/hybrid", `{"query":"refund","top_k":10,`+filter+`}`)
 	if status != http.StatusOK {
 		code, message := ragParityError(t, hybrid)
 		t.Fatalf("hybrid status=%d code=%s message=%q", status, code, message)
@@ -260,7 +245,7 @@ func TestHTTPLiteralAndBoundedFilteredLexicalSearch4766(t *testing.T) {
 	}
 
 	status, hybrid := ragParityPost(t, handler, "/v1/indexes/docs/search/hybrid",
-		`{"query":"(alpha) refund","text_query_mode":"literal","text_operator":"and","max_postings_scanned":64,"query_embedding":[1,0,0,0],"top_k":10,`+filter+`}`)
+		`{"query":"(alpha) refund","text_query_mode":"literal","text_operator":"and","max_postings_scanned":64,"top_k":10,`+filter+`}`)
 	if status != http.StatusOK {
 		code, message := ragParityError(t, hybrid)
 		t.Fatalf("literal filtered hybrid status=%d code=%s message=%q", status, code, message)
@@ -531,6 +516,9 @@ func TestHTTPDenseAnnRouteParityWithExactRoute(t *testing.T) {
 		docs = append(docs, Document{ID: fmt.Sprintf("doc-%02d", i), Content: content, Embedding: embedding})
 	}
 	ragParityUpsertTenantDocs(t, handler, "docs", docs)
+	if _, err := svc.OptimizeIndex(context.Background(), "docs", OptimizeIndexRequest{}); err != nil {
+		t.Fatalf("optimize ColumnGraph: %v", err)
+	}
 
 	query := `[0.85,0.15,0.05,0.25]`
 	exactStatus, exactPayload := ragParityPost(t, handler, "/v1/indexes/docs/search/vector",
@@ -577,12 +565,12 @@ func TestHTTPDenseAnnRouteParityWithExactRoute(t *testing.T) {
 	}
 }
 
-func TestHTTPDenseNativeRuntimeDefaultAndExplicitAnnWireParity(t *testing.T) {
+func TestHTTPDenseColumnGraphDefaultAndExplicitAnnWireParity(t *testing.T) {
 	svc, db := newTestService(t)
 	defer db.Close()
 	handler := NewHandler(svc)
 	status, payload := ragParityPost(t, handler, "/v1/indexes",
-		`{"name":"native_docs","dimension":2,"metric":"cosine","vector_index_options":{"strategy":"native_runtime"}}`)
+		`{"name":"native_docs","dimension":2,"metric":"cosine"}`)
 	if status != http.StatusOK {
 		t.Fatalf("create native index status=%d body=%s", status, mustJSON(payload))
 	}
@@ -590,6 +578,9 @@ func TestHTTPDenseNativeRuntimeDefaultAndExplicitAnnWireParity(t *testing.T) {
 		{ID: "a", Content: "alpha", Embedding: []float32{1, 0}},
 		{ID: "b", Content: "beta", Embedding: []float32{0, 1}},
 	})
+	if _, err := svc.OptimizeIndex(context.Background(), "native_docs", OptimizeIndexRequest{}); err != nil {
+		t.Fatalf("optimize ColumnGraph: %v", err)
+	}
 	for _, body := range []string{
 		`{"query_embedding":[1,0],"top_k":2,"return_embedding":true}`,
 		`{"query_embedding":[1,0],"top_k":2,"route":"ann","ef_search":8,"return_embedding":true}`,
@@ -630,7 +621,7 @@ func TestHTTPDenseAnnRouteValidationFailsClosed(t *testing.T) {
 		wantCode ErrorCode
 	}{
 		{name: "unknown route value", index: "docs", body: `{"query_embedding":[1,0,0,0],"top_k":2,"route":"fast"}`, wantCode: CodeInvalidRequest},
-		{name: "ann with filter requires exact", index: "docs", body: `{"query_embedding":[1,0,0,0],"top_k":2,"route":"ann","filter":{"field":"meta.tenant","operator":"==","value":"t1"}}`, wantCode: CodeInvalidRequest},
+		{name: "ann with filter unsupported", index: "docs", body: `{"query_embedding":[1,0,0,0],"top_k":2,"route":"ann","filter":{"field":"meta.tenant","operator":"==","value":"t1"}}`, wantCode: CodeUnsupported},
 		{name: "negative ef_search", index: "docs", body: `{"query_embedding":[1,0,0,0],"top_k":2,"route":"ann","ef_search":-1}`, wantCode: CodeInvalidRequest},
 	}
 	for _, tc := range cases {
@@ -643,25 +634,12 @@ func TestHTTPDenseAnnRouteValidationFailsClosed(t *testing.T) {
 		})
 	}
 
-	// Non-column_graph indexes keep exact dense scoring and reject ann.
+	// L2 vector index declarations are not supported by ColumnGraph.
 	body := `{"name":"l2docs","dimension":4,"metric":"l2"}`
 	status, payload := ragParityPost(t, handler, "/v1/indexes", body)
-	if status != http.StatusOK {
-		t.Fatalf("create l2 index status=%d body=%s", status, mustJSON(payload))
-	}
-	status, payload = ragParityPost(t, handler, "/v1/indexes/l2docs/search/vector",
-		`{"query_embedding":[1,0,0,0],"top_k":2,"route":"ann"}`)
 	code, _ := ragParityError(t, payload)
-	if code != string(CodeUnsupported) {
-		t.Fatalf("l2 ann status=%d code=%s want unsupported", status, code)
-	}
-	status, payload = ragParityPost(t, handler, "/v1/indexes/l2docs/search/vector",
-		`{"query_embedding":[1,0,0,0],"top_k":2}`)
-	if status != http.StatusOK {
-		t.Fatalf("l2 default route status=%d body=%s", status, mustJSON(payload))
-	}
-	if payload["route"] != "exact" {
-		t.Fatalf("l2 default route=%v want exact fallback documented as deterministic defaulting", payload["route"])
+	if status != http.StatusNotImplemented || code != string(CodeUnsupported) {
+		t.Fatalf("create l2 status=%d code=%s want unsupported", status, code)
 	}
 }
 

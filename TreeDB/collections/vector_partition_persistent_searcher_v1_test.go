@@ -72,13 +72,13 @@ func TestVectorPartitionGenerationSearchOpenPlanV1IndexesAndOwnsInputs(t *testin
 }
 
 func TestVectorIndexSourceRevalidationPreservesPersistenceDebt(t *testing.T) {
-	for _, record := range []func(*VectorIndex, uint64){
-		func(idx *VectorIndex, generation uint64) { idx.recordSourceDocumentGeneration(generation) },
-		func(idx *VectorIndex, generation uint64) {
+	for _, record := range []func(*columnGraphPartitionLiveCarrier, uint64){
+		func(idx *columnGraphPartitionLiveCarrier, generation uint64) { idx.recordSourceDocumentGeneration(generation) },
+		func(idx *columnGraphPartitionLiveCarrier, generation uint64) {
 			idx.recordSourceDocumentState(generation, idx.sourceDocumentState)
 		},
 	} {
-		idx := &VectorIndex{nativePersistent: true, persistedEpoch: 1, sourceDocumentGeneration: 7, sourceDocumentRootsValid: true}
+		idx := &columnGraphPartitionLiveCarrier{nativePersistent: true, persistedEpoch: 1, sourceDocumentGeneration: 7, sourceDocumentRootsValid: true}
 		idx.invalidateSourceDocumentRoots()
 		record(idx, 7)
 		if !idx.hasValidSourceDocumentRoots() || idx.needsNativeAutoPersist() {
@@ -130,7 +130,7 @@ func TestPreparedVectorPartitionReplicatedLiveOpenPlanRestoresDurableCarrierRead
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := reopened.registeredVectorIndex(def.Name); got != nil {
+	if got := reopened.registeredColumnGraphPartitionLiveCarrier(def.Name); got != nil {
 		t.Fatalf("collection reopen eagerly registered carrier=%p", got)
 	}
 	if router, _, err := reopened.OpenPreparedVectorPartitionRouterForGenerationWithContextV1(t.Context(), def.Name, manifest.Generation); err == nil {
@@ -145,8 +145,8 @@ func TestPreparedVectorPartitionReplicatedLiveOpenPlanRestoresDurableCarrierRead
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !plan.liveRecovery || reopened.registeredVectorIndex(def.Name) == nil {
-		t.Fatalf("replicated live plan=%+v carrier=%p", plan, reopened.registeredVectorIndex(def.Name))
+	if !plan.liveRecovery || reopened.registeredColumnGraphPartitionLiveCarrier(def.Name) == nil {
+		t.Fatalf("replicated live plan=%+v carrier=%p", plan, reopened.registeredColumnGraphPartitionLiveCarrier(def.Name))
 	}
 	if afterLSN := reopenedDB.State().AppliedCommandLSN; afterLSN != beforeLSN {
 		t.Fatalf("read-only replicated live carrier restore advanced command-WAL coverage: before=%d after=%d", beforeLSN, afterLSN)
@@ -166,12 +166,12 @@ func TestPreparedVectorPartitionReplicatedLiveOpenPlanRestoresDurableCarrierRead
 		t.Fatal(err)
 	}
 	pin.Release()
-	carrier := reopened.registeredVectorIndex(def.Name)
+	carrier := reopened.registeredColumnGraphPartitionLiveCarrier(def.Name)
 	beforeRoot := carrier.nativeSnapshotBaseEpochForFullSave()
 	if carrier.needsNativeAutoPersist() {
 		t.Fatal("unchanged restored carrier needs persistence")
 	}
-	if _, err := carrier.SaveNativeDeltaSnapshot(); err != nil {
+	if _, err := carrier.saveColumnGraphPartitionLiveDelta(); err != nil {
 		t.Fatal(err)
 	}
 	if reopenedDB.State().AppliedCommandLSN != beforeLSN || carrier.nativeSnapshotBaseEpochForFullSave() != beforeRoot {

@@ -12,9 +12,9 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
 
-// This test controls the real boundary between original off-gate preparation
-// and gate acquisition without a global hook or a retained opening transaction.
-func TestNativeProducerGateRevalidatesStalePreparation(t *testing.T) {
+// A later producer must observe intervening pressure and materialize its exact
+// accepted prefix before opening an application transaction or running its body.
+func TestNativeProducerPreparationDrainsInterveningPressure(t *testing.T) {
 	opts := nativeTypedGroupOptions(t.TempDir())
 	owner, err := treedb.Open(opts)
 	if err != nil {
@@ -49,19 +49,15 @@ func TestNativeProducerGateRevalidatesStalePreparation(t *testing.T) {
 	}
 	// The contender cannot enter its original body until explicitly released.
 	entered, release := make(chan struct{}), make(chan struct{})
-	type result struct {
-		err  error
-		held bool
-	}
-	done := make(chan result, 1)
+	done := make(chan error, 1)
 	go func() {
 		close(entered)
 		<-release
-		unlock, held, err := c.lockNativeProducerAfterPreparation(prepared)
+		unlock, _, err := c.prepareNativeProducerMutation()
 		if err == nil {
 			unlock()
 		}
-		done <- result{err, held}
+		done <- err
 	}()
 	<-entered
 	released, joined := false, false
@@ -115,7 +111,7 @@ func TestNativeProducerGateRevalidatesStalePreparation(t *testing.T) {
 	stats, limits := budget.Stats(), budget.Limits()
 	// Leave the same genuine reservation headroom as the held-pressure control.
 	// The original exactly-at-75% fixture could fall below the advisory watermark
-	// when previously queued cleanup completed before gated observation.
+	// when previously queued cleanup completed before producer observation.
 	target := limits.MaxInFlightBytes - limits.MaxInFlightBytes/8
 	if stats.ReservedBytes >= target {
 		t.Fatal("fixture began above pressure watermark")
@@ -143,12 +139,12 @@ func TestNativeProducerGateRevalidatesStalePreparation(t *testing.T) {
 	select {
 	case got := <-done:
 		joined = true
-		if got.err != nil || !got.held {
-			t.Fatalf("revalidated gate: %+v", got)
+		if got != nil {
+			t.Fatalf("producer preparation: %v", got)
 		}
 	case <-time.After(10 * time.Second):
 		filler.Close()
-		t.Fatal("stale preflight did not complete its off-gate drain")
+		t.Fatal("producer preparation did not complete its drain")
 	}
 	// A real original checkpoint materialized the intervening logical source;
 	// observation alone cannot remove its typed delta. No application body/WAL
@@ -180,7 +176,7 @@ func TestNativeProducerGateRevalidatesStalePreparation(t *testing.T) {
 		}
 		sequence, generation := read.capture.LogicalSequence(), read.collection.documentGeneration
 		read.Close()
-		t.Fatalf("stale preflight did not materialize exact prefix: before basis=%+v primary=%d manifest=%d typed=%d/%d/%d sequence=%d generation=%d; after basis=%+v valid=%v primary=%d manifest=%d typed=%d/%d/%d sequence=%d generation=%d next=%d release_pressure=%+v", beforeBasis, beforePrimary, beforeManifestRoot, beforeDeltas, beforeRows, beforeDeletes, beforeSequence, beforeGeneration, afterBasis, valid, primary, manifest, afterDeltas, afterRows, afterDeletes, sequence, generation, next, pressured)
+		t.Fatalf("producer preparation did not materialize exact prefix: before basis=%+v primary=%d manifest=%d typed=%d/%d/%d sequence=%d generation=%d; after basis=%+v valid=%v primary=%d manifest=%d typed=%d/%d/%d sequence=%d generation=%d next=%d release_pressure=%+v", beforeBasis, beforePrimary, beforeManifestRoot, beforeDeltas, beforeRows, beforeDeletes, beforeSequence, beforeGeneration, afterBasis, valid, primary, manifest, afterDeltas, afterRows, afterDeletes, sequence, generation, next, pressured)
 	}
 	got, err := read.Get([]byte("first"))
 	closeErr := read.Close()
@@ -199,10 +195,12 @@ func TestNativeProducerGateRevalidatesStalePreparation(t *testing.T) {
 }
 
 // Unreclaimable owners must terminate the pre-opening loop and preserve the
-// original exact refusal. Revalidation does not grant an admission allowance.
-func TestNativeProducerGateUnchangedHeldPressureRefuses(t *testing.T) {
-	c, closeAll, _, _, _ := openHNSWPublicFixture(t, "native", 2, 2)
-	defer closeAll()
+// original exact refusal. Preparation does not grant an admission allowance.
+func TestNativeProducerPreparationHeldPressureRefuses(t *testing.T) {
+	_, _, c := openNativeScanCursorFixture(t, 1<<20)
+	if _, err := c.Insert([]byte("row-00000"), []byte(`{"value":1}`)); err != nil {
+		t.Fatal(err)
+	}
 	read, err := c.nativeJSON.Capture(c.name)
 	if err != nil {
 		t.Fatal(err)
@@ -225,31 +223,24 @@ func TestNativeProducerGateUnchangedHeldPressureRefuses(t *testing.T) {
 	if err != nil || !prepared.UnderPressure {
 		t.Fatalf("held pressure preparation=%+v err=%v", prepared, err)
 	}
-	type result struct {
-		unlock func()
-		held   bool
-		err    error
-	}
-	done := make(chan result, 1)
+	done := make(chan error, 1)
 	go func() {
-		unlock, held, err := c.lockNativeProducerAfterPreparation(prepared)
-		done <- result{unlock, held, err}
+		unlock, _, err := c.prepareNativeProducerMutation()
+		if err == nil {
+			unlock()
+		}
+		done <- err
 	}()
-	var got result
 	select {
-	case got = <-done:
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("held-pressure preparation: %v", err)
+		}
 	case <-time.After(10 * time.Second):
 		filler.Close()
-		got = <-done
-		if got.unlock != nil {
-			got.unlock()
-		}
+		<-done
 		t.Fatal("unchanged reader pressure spun instead of reaching finite admission")
 	}
-	if got.err != nil || !got.held {
-		t.Fatalf("held-pressure gate=%+v", got)
-	}
-	defer got.unlock()
 	next := c.nativeJSON.db.CommandWALNextLSN()
 	// The completed drain remains pressured, but may not reclaim this reader or
 	// the external owner. A further genuine owner occupies the remaining bytes

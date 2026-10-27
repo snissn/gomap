@@ -894,38 +894,34 @@ ingress group.
 ### 10.1. Document-service dense search
 
 Command `64 dense_vector_search` is a LocalOnly read, never a deterministic
-mutation or command-WAL entry. Version 1 selects the cosine float32
-`native_runtime` service route. Version 2 selects the explicitly admitted,
+mutation or command-WAL entry. Version 1 is retired and rejected. Version 2 selects the explicitly admitted,
 persisted typed-input `column_graph` service route. Version 3 selects the same
 typed owner path with the explicitly negotiated legacy scalar-u8/v1 quantized
 rerank score plane. A mismatched strategy or capability fails closed; none
-of versions 1-4 permits the legacy full-document scan route. Typed native filter
+of versions 2-4 permits the full-document scan route. Typed native filter
 planning may choose bounded exact scoring internally.
 
 Version 5 selects the ordinary public service query policy and excludes typed
 input. It reuses sections 4 and 129 and their existing request encoding, with no
 new request fields. The client uses it for ordinary queries only when Hello
 advertises version 5. An omitted route selects maintained unfiltered ColumnGraph
-ANN, declared-scalar native_runtime ANN, or the existing intentional exact
-route for other valid metadata filters. No algorithm or storage owner is
-substituted. Peers without version 5 retain strict v1 admission; failure does
-not trigger a different algorithm. Explicit typed, quantized and normalized
+ANN; ordinary filtered ANN fails closed. Peers without version 5 reject ordinary
+queries rather than falling back. Version 5 has no explicit exact-route request
+field; a client cannot request a document scan using this encoding. Explicit typed, quantized and normalized
 requests still select their independent versions 2, 3 and 4.
 
 Version-5 response sections remain exactly IDs (102), documents (103), and
 response metadata (130), with zero flags and no typed proof sections. Metadata
 is: route byte; uvarint candidates, exact-fallbacks, full-document-scan-fallbacks,
 ColumnGraph-prepared-search, search-pack-search, ColumnGraph-delta-scored, documents-scanned,
-result count; then one little-endian float64 score per result. Tag 1 means
-validated native_runtime ANN, tag 4 ordinary ColumnGraph ANN, and tag 5
-intentional ordinary exact. Tags 0, 2, 3 and unknown values fail closed. Old
+result count; then one little-endian float64 score per result. Tag 4 means
+ordinary ColumnGraph ANN and tag 5 means ordinary exact. Tags 0, 1, 2, 3 and unknown values fail closed. Old
 versions do not accept this version-specific payload. ANN has zero scanned
 documents; ordinary ColumnGraph reports exactly one measured physical route:
 the prepared-reader counter or the search-pack counter is one, and the other is
 zero. `search-pack-search` copies the collection's actual
-`SearchRouteHNSWSearchPack` statistic; it names physical pack execution and does
-not identify the native_runtime base-plus-live-delta algorithm. Native_runtime
-reports neither counter. Intentional exact reports no prepared/pack/delta work,
+`SearchRouteHNSWSearchPack` statistic; it names physical pack execution.
+Intentional exact reports no prepared/pack/delta work,
 and matching candidates cannot exceed actual scanned rows.
 All routes preserve the existing finite counts, frame/section limits and finite
 score validation. Unexpected/duplicate sections and inconsistent route/counters

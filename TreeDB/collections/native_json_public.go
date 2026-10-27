@@ -38,7 +38,7 @@ func nativeJSONMeta(meta CollectionMeta) (CollectionMeta, error) {
 		return CollectionMeta{}, err
 	}
 	format := normalizedDocumentFormat(normalized.Options.DocumentFormat)
-	if (!nativeOrdinaryHNSWMeta(normalized) && len(normalized.VectorIndexes) != 0 && !nativeSourceImportMetaV2(normalized) && !nativeOrdinaryColumnGraphMeta(normalized)) || !nativeTextMeta(normalized) || (normalized.Options.ColumnStore != nil && (normalized.Options.AllowArrayValuesInIndex || !nativeTypedMeta(normalized))) || (format != DocumentFormatJSON && format != DocumentFormatBSON && format != DocumentFormatTemplateV1) {
+	if (len(normalized.VectorIndexes) != 0 && !nativeSourceImportMetaV2(normalized) && !nativeOrdinaryColumnGraphMeta(normalized)) || !nativeTextMeta(normalized) || (normalized.Options.ColumnStore != nil && (normalized.Options.AllowArrayValuesInIndex || !nativeTypedMeta(normalized))) || (format != DocumentFormatJSON && format != DocumentFormatBSON && format != DocumentFormatTemplateV1) {
 		return CollectionMeta{}, backenddb.ErrNativeSemanticUnsupported
 	}
 	for _, index := range normalized.Indexes {
@@ -210,11 +210,7 @@ func prepareNativeJSONCreate(base *nativeEngineVersion, meta CollectionMeta) (pu
 	if base == nil || base.inventory != nil {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
-	vectorDomains := 0
-	if nativeOrdinaryHNSWMeta(meta) {
-		vectorDomains = len(meta.VectorIndexes)
-	}
-	domainCount := nativeTextDomainCount(meta) + vectorDomains
+	domainCount := nativeTextDomainCount(meta)
 	scratch, err := newNativeEnginePreparation(base, 1, domainCount, base.allocator)
 	if err != nil {
 		return nil, err
@@ -242,24 +238,7 @@ func prepareNativeJSONCreate(base *nativeEngineVersion, meta CollectionMeta) (pu
 	if err != nil {
 		return nil, err
 	}
-	// Declared ordinary HNSW indexes need the same clean logical domain as
-	// CreateVectorIndex. ColumnGraph source imports keep their separate route.
-	for i := 0; i < vectorDomains; i++ {
-		def := meta.VectorIndexes[i]
-		policy, err := collectionRootStoragePolicy(meta, collectionVectorIndexRootName(meta.Name, def.Name))
-		if err != nil {
-			return nil, err
-		}
-		name := "vector-index/" + def.Name
-		domain, err := newNativeDomainState(name, 0, 1, policy, nil, admit)
-		if err != nil {
-			return nil, err
-		}
-		p.ownedDomains = append(p.ownedDomains, domain)
-		if err := p.domainBuilder.Set(name, domain); err != nil {
-			return nil, err
-		}
-	}
+
 	if len(meta.TextIndexes) != 0 {
 		initialTextLease, err := base.allocator.AdmitNativeBytes(0)
 		if err != nil {

@@ -3136,65 +3136,29 @@ declarations, when present, live under `vector_indexes[].quantized_indexes` and
 are declarations only until matching derived assets are built and loaded; explicit
 quantized query modes must fail closed when those assets are absent or stale.
 
-### Native-runtime vector-index roots
+### Vector-index metadata and live-overlay carriers
 
-A `native_runtime` vector index is persisted in the catalog root
-`<collection>/vector-index/<index_name>`. Values are newline-terminated JSON.
-The root contains `meta`, `node/<20-digit-node-id>`,
-`edge/<20-digit-node-id>/<3-digit-layer>`, `tomb/<20-digit-node-id>`, and
-`doc/<document-id>` keys. Nodes and edges store the HNSW graph, tombstone keys
-mark deleted nodes, and document keys map the current document ID to its node.
+New vector-index declarations use `column_graph`; omitted strategy on a new
+request normalizes to that strategy. Persisted metadata that declares the
+retired `native_runtime` strategy, or whose omitted strategy has an ambiguous
+legacy meaning, is rejected during open and replay. Pre-alpha data using the
+retired format requires a fresh data directory and re-ingestion; it is not
+silently migrated or reinterpreted as ColumnGraph.
 
-The shared COW owner persists the system-catalog key
-`collection-vector-version/<collection>/<index_name>` with the graph root in
-one physical publication. Its value is exactly 16 bytes: a big-endian `uint64`
-graph-domain interpretation in bytes `[0:8]`, followed by the saved collection
-document generation as a big-endian `uint64` in `[8:16]`. Interpretation zero,
-wrong record lengths, and read errors fail closed. The saved document generation
-may be zero for an empty initial collection. This is an identity record, not a
-command LSN or a physical page ID.
-
-Current shared-COW saves also write `meta.native_logical_version` equal to the
-new graph interpretation. Reopen imports the persisted 16-byte identity and
-Load authenticates the graph meta against that interpretation and the current
-collection document generation. A physical checkpoint can change the root ID
-without changing this logical version; `VectorIndexLoadStatus.LogicalVersion`
-reports it separately from the physical `RootID` and `Epoch`. An acknowledged
-logical save can therefore have the same physical fields as its predecessor
-until materialization. These logical fields are not aliases for the current
-process's captured sequence, which may restart at zero after reopen. Legacy
-physical roots lacking the version record retain their existing import rule;
-this record does not introduce a migration or permit mismatched graph metadata.
-
-The `meta` value binds the graph to one collection document snapshot. Coverage
-version `3` stores `source_document_generation_version` and
-`source_document_generation`. The generation is the big-endian `uint64` value
-of the collection system key `collections/document-generation/<collection>`;
-an absent key is generation zero. A successful
-document mutation advances that key atomically with its primary-root or
-primary-overlay descriptor. Physical root remapping during checkpoint,
-compaction, or vacuum and vector-index-only publication do not advance it.
-
-Load and status checks reject persisted metadata as `stale_document_root`
-unless the coverage version and generation match the current collection.
-Search rejects a runtime whose in-memory coverage is invalid or differs from
-the generation in the current search snapshot. Save rejects invalid in-memory
-coverage.
-Under the coverage barrier, save may advance coverage after successful graph
-maintenance, including by publishing a meta-only delta when document metadata
-changed but vector values did not. Older coverage versions are not migrated in
-this pre-alpha format; the index must be rebuilt.
+The collection document generation is stored as a big-endian `uint64` at
+`collections/document-generation/<collection>`; an absent key is generation
+zero. Successful document mutations advance it with their primary publication.
+Physical root remapping and vector-index-only publication do not advance it.
 
 For a standalone ready vector-partition generation, `meta` may also contain the
 optional `partition_live` object. Native roots write version `3`; version `1`
 is the earlier inline snapshot representation accepted by the pre-alpha restore
 path and fully materialized as V3 on its first compact publication. The unsafe
 intermediate compact version `2` is rejected because it did not retain
-inactive-domain epoch high-water. A `native_runtime` index stores
-it in its existing graph root. A `column_graph` index stores the same object in
+inactive-domain epoch high-water. A `column_graph` index stores the object in
 an otherwise graph-empty `<collection>/vector-index/<index_name>` live-overlay
 carrier; immutable column-graph/router/search-pack assets remain the base and
-are not copied into that root. In either case the live object is part of one
+are not copied into that root. The live object is part of one
 atomic vector-index snapshot, not a sidecar or a second mutation log. The object
 persists the immutable partition binding (index-definition digest, source
 identity, partition generation, pack-to-domain mapping, and canonical
@@ -3454,12 +3418,8 @@ bytes IndexName[IndexNameLen]
 The collection and index names must be non-empty. The command payload names the
 logical rebuild request only; it does not carry vector graph bytes, physical root
 deltas, or a vector-only sidecar file. Normal execution and replay re-enter the
-collection vector-index rebuild path for the named index. For `native_runtime`
-indexes, that path scans the canonical collection rows and publishes a complete
-`<collection>/vector-index/<index_name>` root in the native format described
-above. For explicit `column_graph` indexes, that path rebuilds any legacy row
-graph asset only for compatibility, publishes inverse norms, HNSW adjacency,
-base row references,
+collection vector-index rebuild path for the named index. For `column_graph`
+indexes, that path publishes inverse norms, HNSW adjacency, base row references,
 returned document IDs, and declared quantized code score planes as vector-index
 state assets, and records vector-index control identity in the `TVIS` state
 record. Quantized assets use role `quantized_codes`; scalar_u8 assets use asset

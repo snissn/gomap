@@ -305,26 +305,7 @@ func (c *Collection) OpenCollectionReadViewForVectorIndexSearch(response VectorI
 	}
 	visibility := response.visibility
 	if view.nativeRead != nil {
-		read := view.nativeRead
-		index := visibility.runtime
-		if index == nil || visibility.collectionName != c.name || visibility.indexName != response.IndexName || visibility.strategy != VectorIndexStrategyNativeRuntime || c.registeredVectorIndex(visibility.indexName) != index {
-			return closeWithError(ErrVectorIndexSnapshotMismatch)
-		}
-		index.nativeHNSWUseMu.RLock()
-		defer index.nativeHNSWUseMu.RUnlock()
-		domain, ok := read.collection.domains.Get("vector-index/" + visibility.indexName)
-		if !ok || read.collection.incarnation != visibility.nativeIncarnation || domain.interpretation != visibility.nativeVersion || read.collection.documentGeneration != visibility.sourceDocumentGeneration || index.validateNativeHNSWRead(read) != nil || !index.nativeSearchStateCoversCurrentDocuments(vectorIndexNativeSearchState{mutationSeq: visibility.mutationSeq, sourceDocumentGeneration: visibility.sourceDocumentGeneration}) {
-			return closeWithError(ErrVectorIndexSnapshotMismatch)
-		}
-		scratch, e := newHybridNativeScratch(view)
-		if e != nil {
-			return closeWithError(e)
-		}
-		view.catalog, e = newNativeTextCatalog(read, scratch.admitFn)
-		if e != nil {
-			return closeWithError(e)
-		}
-		return view, nil
+		return closeWithError(ErrVectorIndexSnapshotMismatch)
 	}
 	if visibility.runtime == nil ||
 		visibility.collectionName != view.catalog.meta.Name ||
@@ -336,7 +317,7 @@ func (c *Collection) OpenCollectionReadViewForVectorIndexSearch(response VectorI
 	if !ok ||
 		def.Strategy != visibility.strategy ||
 		def.SchemaGeneration != visibility.schemaGeneration ||
-		c.registeredVectorIndex(visibility.indexName) != visibility.runtime {
+		c.registeredColumnGraphPartitionLiveCarrier(visibility.indexName) != visibility.runtime {
 		return closeWithError(fmt.Errorf("%w: vector index %q identity changed", ErrVectorIndexSnapshotMismatch, visibility.indexName))
 	}
 	if !visibility.runtime.nativeSearchStateCoversCurrentDocuments(vectorIndexNativeSearchState{

@@ -131,12 +131,14 @@ func validateMinimaPeakRSSLifetimes(raw minimaRawBackendEvidence) error {
 	return nil
 }
 
-func validateMinimaCompletedBounded(artifact *minimaArtifact, raw minimaRawBackendEvidence) error {
+// validateMinimaHistoricalCompletedBounded interprets frozen bounded evidence.
+// Its retired runtime requirements do not describe a supported active campaign.
+func validateMinimaHistoricalCompletedBounded(artifact *minimaArtifact, raw minimaRawBackendEvidence) error {
 	backend := artifact.Backends[0]
 	switch backend.Name {
 	case "treedb":
 		if artifact.NativePathProof == nil || artifact.NativePathProof.Strategy != "native_runtime" || backend.Configuration["vector_strategy"] != "native_runtime" {
-			return fmt.Errorf("minima bounded diagnostic: completed strategy must be native_runtime until M4")
+			return fmt.Errorf("minima bounded diagnostic: historical completed strategy must be native_runtime")
 		}
 		if raw.ResourceMeasurement.PeakRSSAvailability == "" {
 			return fmt.Errorf("minima bounded diagnostic: missing peak RSS availability")

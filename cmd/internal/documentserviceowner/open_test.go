@@ -235,7 +235,7 @@ func TestOwnerLegacyAdvancedAndCloseErrors(t *testing.T) {
 			t.Fatal(err)
 		}
 		ownerRequireDocumentIDs(t, dense.Documents, "source#0", "source#1")
-		if dense.Route != documentservice.RouteAnn || dense.Exact || dense.NativeBasePlusLiveDelta || dense.ColumnGraphPreparedSearch != 1 || dense.DenseWork == nil || !dense.DenseWork.Completed {
+		if dense.Route != documentservice.RouteAnn || dense.Exact || dense.ColumnGraphPreparedSearch != 1 || dense.DenseWork == nil || !dense.DenseWork.Completed {
 			t.Fatalf("specialized Dense route lost %+v", dense)
 		}
 		hybrid, err := o.Service.SearchHybrid(ctx, req.Name, documentservice.HybridSearchRequest{ExpectedGeneration: info.Generation, Query: "fresh", QueryEmbedding: []float32{1, 0}, TopK: 8, TextCandidateLimit: 8, VectorCandidateLimit: 8, EfSearch: 8, Filter: filter})

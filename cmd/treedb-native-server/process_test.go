@@ -169,7 +169,7 @@ func TestNativeServerCommandIndexedCRUDAndDense(t *testing.T) {
 			checkDense := func(client *nativewire.Client) {
 				t.Helper()
 				out, err := client.DenseVectorSearch(ctx, nativewire.DenseVectorSearchRequest{Index: "dense", Query: []float32{1, 0}, TopK: 1, EfSearch: 8})
-				if err != nil || len(out.Results) != 1 || string(out.Results[0].ID) != "a" || out.Route != documentservice.RouteAnn || out.NativeBasePlusLiveDelta || out.TypedColumnGraph || out.FullDocumentScanFallbacks != 0 || out.ExactFallbacks != 0 {
+				if err != nil || len(out.Results) != 1 || string(out.Results[0].ID) != "a" || out.Route != documentservice.RouteAnn || out.TypedColumnGraph || out.FullDocumentScanFallbacks != 0 || out.ExactFallbacks != 0 {
 					t.Fatalf("Dense: %+v %v", out, err)
 				}
 			}
@@ -177,7 +177,7 @@ func TestNativeServerCommandIndexedCRUDAndDense(t *testing.T) {
 				t.Helper()
 				out, err := client.DenseVectorSearch(ctx, nativewire.DenseVectorSearchRequest{Index: "dense", Query: []float32{1, 0}, TopK: 1, EfSearch: 8})
 				var wireErr *nativewire.WireError
-				if !errors.As(err, &wireErr) || wireErr.Message != "consistency unavailable" || len(out.Results) != 0 || out.Route != "" || out.Exact || out.NativeBasePlusLiveDelta || out.TypedColumnGraph || out.SearchPackSearch != 0 || out.ColumnGraphPreparedSearch != 0 {
+				if !errors.As(err, &wireErr) || wireErr.Message != "consistency unavailable" || len(out.Results) != 0 || out.Route != "" || out.Exact || out.TypedColumnGraph || out.SearchPackSearch != 0 || out.ColumnGraphPreparedSearch != 0 {
 					t.Fatalf("pending graph falsely served ANN: %+v %v", out, err)
 				}
 			}

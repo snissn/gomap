@@ -14,7 +14,7 @@ import (
 // parameters and mutations. A pass here does not establish that its failing
 // public search used this plane; that still requires the public causal capture.
 func TestNativePublishedSameIDChurnRestoresAllLiveCandidatesV1(t *testing.T) {
-	index, err := newVectorIndex(nil, VectorIndexOptions{
+	index, err := newColumnGraphPartitionLiveDomain(nil, columnGraphPartitionLiveOptions{
 		Name: "embedding_graph", Field: "embedding", Metric: VectorMetricCosine,
 		Dimensions: 2, M: 2, EfConstruction: 8, EfSearch: 8,
 	})
@@ -53,7 +53,7 @@ func TestNativePublishedSameIDChurnRestoresAllLiveCandidatesV1(t *testing.T) {
 	defer index.releaseSearchView(view)
 	index.mu.RLock()
 	if len(index.nodes) != 36 || len(index.currentNode) != 3 ||
-		!reflect.DeepEqual(snapshotVectorIndexTopology4257(index), snapshotVectorIndexTopology4257(&VectorIndex{nodes: view.nodes, entry: view.entry, maxLevel: view.maxLevel})) ||
+		!reflect.DeepEqual(snapshotVectorIndexTopology4257(index), snapshotVectorIndexTopology4257(&columnGraphPartitionLiveCarrier{columnGraphHNSWBuilder: columnGraphHNSWBuilder{nodes: view.nodes, entry: view.entry, maxLevel: view.maxLevel}})) ||
 		!reflect.DeepEqual(index.currentNode, view.currentNode) {
 		index.mu.RUnlock()
 		t.Fatal("published topology/current ordinals differ from the restored mutable graph")
@@ -87,7 +87,7 @@ func TestNativePublishedSameIDChurnRestoresAllLiveCandidatesV1(t *testing.T) {
 
 // The small-graph traversal below is diagnostic only. It never supplies search
 // results or changes any adjacency, entry, construction or serving budget.
-func logColocatedChurnGraphV1(t *testing.T, phase string, index *VectorIndex, query []float32) {
+func logColocatedChurnGraphV1(t *testing.T, phase string, index *columnGraphPartitionLiveCarrier, query []float32) {
 	t.Helper()
 	index.mu.RLock()
 	defer index.mu.RUnlock()

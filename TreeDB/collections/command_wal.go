@@ -280,6 +280,13 @@ func DecodeCatalogCreateCollectionCommandWALPayload(raw []byte, create bool) (Co
 	if len(disk.Indexes) > 1<<16 || len(disk.VectorIndexes) > 1<<16 || len(disk.TextIndexes) > 1<<16 {
 		return CollectionMeta{}, errors.New("collections: catalog create wire index count exceeds limit")
 	}
+	if !create {
+		for _, def := range disk.VectorIndexes {
+			if def.Strategy != VectorIndexStrategyColumnGraph {
+				return CollectionMeta{}, fmt.Errorf("%w: stored vector index %q has retired or ambiguous strategy %q", backenddb.ErrNativeSemanticUnsupported, def.Name, def.Strategy)
+			}
+		}
+	}
 	meta, err := normalizeCollectionMeta(CollectionMeta{Name: disk.Name, Options: disk.Options, Indexes: disk.Indexes, VectorIndexes: disk.VectorIndexes, TextIndexes: disk.TextIndexes})
 	if err != nil {
 		return CollectionMeta{}, err

@@ -39,7 +39,7 @@ func setColumnPhysicalAssetPreparationAfterPrepareTestHook(hook func(ColumnPubli
 }
 
 type columnWritePublishInput struct {
-	nativeHNSWVersion    *nativeHNSWRootVersion
+	vectorDomainVersion  *vectorDomainRootVersion
 	colocated            *colocatedVectorMutationPublicationV1
 	splitInsert          *splitInsertPublicationV1
 	splitProjection      *commitlog.SplitVectorInsertV1

@@ -12,7 +12,7 @@ Each case:
 
 1. create a TreeDB collection with a declared vector field index,
 2. load deterministic synthetic JSON documents,
-3. rebuild and persist the native HNSW graph,
+3. rebuild and persist the ColumnGraph HNSW assets,
 4. optionally run `DB.CompactStorage(ctx, CompactStorageFull)`,
 5. close and reopen the datastore,
 6. validate document reads and ANN recall against exact search,
@@ -21,16 +21,15 @@ Each case:
 
 The benchmark search phase is a no-document ANN/search-throughput boundary:
 serial and parallel search metrics return IDs/scores and do not time final
-document fetch, reconstruction, projection, or serialization. For
-`column_graph` rows, the timed search loop uses caller-owned reusable result
-buffers and excludes response-owned convenience allocation. Native-runtime rows
-remain on the native-runtime benchmark path and should not be read as buffered
-zero-allocation evidence. Document reads in validation are correctness checks,
+document fetch, reconstruction, projection, or serialization. The timed
+`column_graph` search loop uses caller-owned reusable result buffers and excludes
+response-owned convenience allocation. Document reads in validation are correctness checks,
 not the preferred vector response-shape evidence; use
 `ProjectionOrientedVectorDocumentFetchPreset` in collection/vector APIs when
 timing projected documents without embeddings.
 
-For `-vector-index-strategy column_graph`, the demo can also select explicit
+`column_graph` is the default and only accepted strategy. Removed strategy flags
+are rejected before opening or creating the data directory. The demo can also select explicit
 TreeDB query modes with `-vector-query-mode exact|quantized_only|quantized_rerank`.
 Quantized modes declare a named `scalar_u8` or `rabitq_1bit` score plane on the
 TreeDB vector index, build it during `RebuildVectorIndex`, validate recall
@@ -121,10 +120,8 @@ GOWORK=off go run ./cmd/treedb_vector_search_demo \
   -json
 ```
 
-Use `-search-profile-dir DIR` with `-vector-index-strategy column_graph` to
-write per-concurrency profiles for the column_graph search stage. Native
-`native_runtime` search profiling is not implemented, so the flag is rejected
-unless the column_graph strategy is selected. Each measured concurrency emits
+Use `-search-profile-dir DIR` to write per-concurrency profiles for the
+`column_graph` search stage. Each measured concurrency emits
 `search_<mode>_c<N>_cpu.pprof`, plus `heap`, `allocs`, `block`, and `mutex`
 runtime snapshots with the same prefix. In matrix mode, each storage case writes
 under `DIR/<matrix_case>/` (for example
@@ -152,19 +149,17 @@ record, including the `embedding` field, while comparator backends may consume
 the binary `documents.f32` vectors directly. Storage numbers should be read with
 that representation difference in mind.
 
-The demo defaults to TreeDB's `bench_unsafe` profile because this is a benchmark
-harness. That profile is the explicit no-WAL benchmark ceiling: outer index
-leaves are stored in the leaf value log, leaf prefix compression is enabled, and
-value-log compression remains profile/default driven. The demo
-also defaults to `-value-pointer-threshold 1024` and
+The demo defaults to TreeDB's `command_wal_durable` profile. ColumnGraph
+construction requires a command-WAL profile; `bench_unsafe` and `no_wal_fast`
+are refused. The demo also defaults to `-value-pointer-threshold 1024` and
 `-leaf-generation-segment-target 4194304` for this vector-search workload, so
 the leaf-vlog layout keeps ordinary vector documents in outer leaves and gives
 the optional `CompactStorageFull` path sealed leaf generations to rewrite and
 GC. Use
-`-profile command_wal_durable|command_wal_relaxed|no_wal_fast|bench_unsafe` to
-select a canonical TreeDB profile, or pass `0` for either demo storage knob to
-use the selected profile default. `bench_unsafe` is accepted only by this
-explicit benchmark path; legacy/raw profile names are rejected.
+`-profile command_wal_durable|command_wal_relaxed` to select a command-WAL
+profile, or pass `0` for either demo storage knob to use the selected profile
+default. A relaxed profile does not provide durable-at-ACK semantics;
+legacy/raw profile names are rejected.
 
 The output includes the persisted TreeDB `format.json` knobs and storage-domain
 bytes for `index.db`, `value_vlog`, and `leaf_vlog`. Use
@@ -181,8 +176,6 @@ Useful flags:
   phase.
 - `-dir PATH`: write into a caller-chosen empty directory and keep it after the
   run.
-- `-disable-exact-fallback=false`: allow exact fallback during benchmark
-  searches.
 - `-search-profile-dir DIR`: write per-concurrency column_graph search profiles
   under `DIR`; requires `-vector-index-strategy column_graph`.
 - `-validate-queries N` and `-min-recall R`: run recall validation for `N`
@@ -191,8 +184,8 @@ Useful flags:
 - `-validation-exact-source treedb|dataset`: select the exact baseline for
   recall validation. The default `treedb` preserves current behavior; `dataset`
   requires `-dataset-dir` and computes exact IDs from exported dataset vectors.
-- `-vector-index-strategy column_graph`: use TreeDB's persisted column-store
-  graph search path instead of the native runtime snapshot path.
+- `-vector-index-strategy column_graph`: explicitly select the default persisted
+  column-store graph search path; other strategies are unsupported.
 - `-vector-query-mode exact|quantized_only|quantized_rerank`: select the
   column_graph score plane. The default is `exact`; quantized modes require
   `column_graph` and a quantized index name.

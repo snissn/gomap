@@ -12,9 +12,9 @@ import (
 )
 
 // Use the maintained durable typed asset hook solely to pause the real old
-// complete-cut build. Both graph replacements use the ordinary HNSW API and
-// canonical durable publication; no graph command or physical root is forged.
-func TestNativeHNSWReplacementDuringCapturedBuild(t *testing.T) {
+// complete-cut build. Both scalar domain replacements use ordinary index DDL
+// and canonical durable publication; no command or physical root is forged.
+func TestNativeScalarReplacementDuringCapturedBuild(t *testing.T) {
 	t.Setenv("TREEDB_DISABLE_VLOG_GENERATION_LOOP", "1")
 	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir())
 	opts.MemtableMode = "cow_btree"
@@ -45,23 +45,15 @@ func TestNativeHNSWReplacementDuringCapturedBuild(t *testing.T) {
 			}
 		}
 	}()
-	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Dimensions: 2, Metric: VectorMetricCosine, M: 4}
-	if _, err = manager.CreateCollection(&CollectionMeta{Name: "graphs", VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+	def := IndexDefinition{Name: "tenant", Field: "tenant", ValueType: IndexValueString}
+	if _, err = manager.CreateCollection(&CollectionMeta{Name: "graphs", Indexes: []IndexDefinition{def}}); err != nil {
 		t.Fatal(err)
 	}
 	c, err := manager.OpenCollection("graphs")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = c.InsertBatch([][]byte{[]byte("a"), []byte("b"), []byte("c")}, [][]byte{[]byte(`{"embedding":[1,0]}`), []byte(`{"embedding":[0,1]}`), []byte(`{"embedding":[0.8,0.2]}`)}); err != nil {
-		t.Fatal(err)
-	}
-	indexOptions := vectorIndexOptionsFromDefinition(def)
-	idx, err := c.BuildVectorIndex(indexOptions)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = idx.SaveSnapshot(); err != nil {
+	if _, err = c.InsertBatch([][]byte{[]byte("a"), []byte("b"), []byte("c")}, [][]byte{[]byte(`{"tenant":"one"}`), []byte(`{"tenant":"one"}`), []byte(`{"tenant":"one"}`)}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = manager.CreateCollection(&CollectionMeta{Name: "build_pause", Options: CollectionOptions{ColumnStore: &ColumnStoreConfig{
@@ -99,7 +91,7 @@ func TestNativeHNSWReplacementDuringCapturedBuild(t *testing.T) {
 		result := map[string]string{}
 		var start []byte
 		for {
-			key, value, found, err := read.namedDomainSeek("vector-index/embedding", start, nil, false)
+			key, value, found, err := read.namedDomainSeek("index/tenant", start, nil, false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -118,9 +110,6 @@ func TestNativeHNSWReplacementDuringCapturedBuild(t *testing.T) {
 		}
 	}()
 	for _, stage := range []string{"full", "empty"} {
-		if _, err = idx.SaveSnapshot(); err != nil {
-			t.Fatal(err)
-		}
 		if _, _, err = pauseCollection.InsertTypedBatchWithStats([][]byte{[]byte(stage)}, [][]byte{[]byte(`{"id":"` + stage + `"}`)}, []TypedColumnBatch{{Name: "label", Strings: []string{stage}}}); err != nil {
 			t.Fatal(err)
 		}
@@ -153,31 +142,36 @@ func TestNativeHNSWReplacementDuringCapturedBuild(t *testing.T) {
 			t.Fatal("checkpoint did not reach typed preparation")
 		}
 		if stage == "full" {
-			idx.TombstoneDocumentID([]byte("c"))
+			if err = c.Delete([]byte("c")); err != nil {
+				t.Fatal(err)
+			}
 		} else {
-			idx.TombstoneDocumentID([]byte("a"))
-			idx.TombstoneDocumentID([]byte("b"))
+			if _, err = c.DeleteBatch([][]byte{[]byte("a"), []byte("b")}); err != nil {
+				t.Fatal(err)
+			}
 		}
-		if _, err = idx.SaveSnapshot(); err != nil {
+		// Adding a scalar index backfills the complete current image and replaces
+		// the existing scalar domains while the older build is still paused.
+		if _, err = c.CreateIndex(IndexDefinition{Name: "extra_" + stage, Field: "tenant", ValueType: IndexValueString}); err != nil {
 			t.Fatal(err)
 		}
 		replacement := capture()
 		replacementImage := image(replacement)
 		if reflect.DeepEqual(oldImage, replacementImage) {
-			t.Fatal("replacement did not change saved graph")
+			t.Fatal("replacement did not change scalar image")
 		}
-		domain, _ := replacement.collection.domains.Get("vector-index/embedding")
+		domain, _ := replacement.collection.domains.Get("index/tenant")
 		if domain.baseRoot != 0 {
 			t.Fatal("replacement has a physical read base")
 		}
 		finishCheckpoint()
 		current := capture()
-		handed, _ := current.collection.domains.Get("vector-index/embedding")
+		handed, _ := current.collection.domains.Get("index/tenant")
 		token, ok := current.capture.Snapshot().StateToken()
 		if !ok {
 			t.Fatal("physical token")
 		}
-		raw, err := current.capture.Snapshot().GetAtRoot(token.SystemRootPageID, []byte(systemCollectionRootPrefix+"graphs/vector-index/embedding"))
+		raw, err := current.capture.Snapshot().GetAtRoot(token.SystemRootPageID, []byte(systemCollectionRootPrefix+"graphs/index/tenant"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -189,7 +183,7 @@ func TestNativeHNSWReplacementDuringCapturedBuild(t *testing.T) {
 			t.Fatalf("old build changed replacement or lost catalog provenance: before=%+v after=%+v root=%d", domain, handed, root)
 		}
 		if !reflect.DeepEqual(image(old), oldImage) || !reflect.DeepEqual(image(replacement), replacementImage) || !reflect.DeepEqual(image(current), replacementImage) {
-			t.Fatal("old handoff resurrected captured graph or changed held cuts")
+			t.Fatal("old handoff resurrected captured scalar image or changed held cuts")
 		}
 		refreshed, err := prepareNativeEngineBasisRefresh(current.capture.State().(*nativeEngineVersion), current.capture.Snapshot(), current.capture.Snapshot())
 		if refreshed != nil {
@@ -200,13 +194,13 @@ func TestNativeHNSWReplacementDuringCapturedBuild(t *testing.T) {
 		if err != nil {
 			t.Fatalf("post-handoff equivalent basis: %v", err)
 		}
-		rows, _, err := idx.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 3, DisableExactFallback: true})
+		rows, err := c.FindByIndex("tenant", "one")
 		want := 2
 		if stage == "empty" {
 			want = 0
 		}
 		if err != nil || len(rows) != want {
-			t.Fatalf("replacement search stage=%s rows=%+v err=%v", stage, rows, err)
+			t.Fatalf("replacement scalar read stage=%s rows=%+v err=%v", stage, rows, err)
 		}
 		if err = database.Checkpoint(); err != nil {
 			t.Fatal(err)
@@ -243,12 +237,8 @@ func TestNativeHNSWReplacementDuringCapturedBuild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	idx, loaded, err := c.LoadVectorIndexSnapshot(indexOptions)
-	if err != nil || !loaded.Loaded {
-		t.Fatalf("reopen load: %+v %v", loaded, err)
-	}
-	rows, _, err := idx.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 3, DisableExactFallback: true})
+	rows, err := c.FindByIndex("tenant", "one")
 	if err != nil || len(rows) != 0 {
-		t.Fatalf("reopen resurrected graph: %+v %v", rows, err)
+		t.Fatalf("reopen resurrected scalar image: %+v %v", rows, err)
 	}
 }

@@ -528,7 +528,7 @@ func runCollectionStorageSuite(baseCfg BenchConfig, opts collectionStorageSuiteO
 				return "", fmt.Errorf("collection_storage: mode %s vector rebuild: %w", mode, err)
 			}
 			rt.VectorRebuildDuration = time.Since(start)
-			stages = append(stages, collectionStorageStageFromDuration(mode, "vector_rebuild", rt.VectorRebuildDuration, rows, int64(status.NativeRootBytes)))
+			stages = append(stages, collectionStorageStageFromDuration(mode, "vector_rebuild", rt.VectorRebuildDuration, rows, status.Stats.BytesDisk))
 			if err := refreshCollectionStorageModeStorage(rt); err != nil {
 				return "", err
 			}

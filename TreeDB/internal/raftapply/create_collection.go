@@ -693,7 +693,7 @@ func decodeCreateVectorIndexEncoding(value uint64) (collections.VectorIndexEncod
 func decodeCreateVectorIndexStrategy(value uint64) (collections.VectorIndexStrategy, error) {
 	switch value {
 	case 1:
-		return collections.VectorIndexStrategyNativeRuntime, nil
+		return "", codedError(raftentry.ErrorUnsupportedFeatureV1, "raftapply: retired native_runtime vector strategy is unsupported")
 	case 2:
 		return collections.VectorIndexStrategyColumnGraph, nil
 	default:

@@ -236,16 +236,16 @@ func TestDocumentServiceCommandHTTPAndWireLifecycle(t *testing.T) {
 					t.Fatalf("keyword=%+v", keyword)
 				}
 				var dense documentservice.DenseVectorSearchResponse
-				p.post(t, "/v1/indexes/docs/search/vector", documentservice.DenseVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, EfSearch: 8, Filter: filter}, &dense)
-				if len(dense.Documents) != 1 || dense.Documents[0].ID != "wire" || dense.Route != documentservice.RouteExact || !dense.Exact || dense.NativeBasePlusLiveDelta {
+				p.post(t, "/v1/indexes/docs/search/vector", documentservice.DenseVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, EfSearch: 8, Filter: filter, Route: documentservice.RouteExact}, &dense)
+				if len(dense.Documents) != 1 || dense.Documents[0].ID != "wire" || dense.Route != documentservice.RouteExact || !dense.Exact {
 					t.Fatalf("dense=%+v", dense)
 				}
 				if !graphReady {
 					return
 				}
 				var hybrid documentservice.HybridSearchResponse
-				p.post(t, "/v1/indexes/docs/search/hybrid", documentservice.HybridSearchRequest{Query: "refund", QueryEmbedding: []float32{1, 0}, TopK: 1, TextCandidateLimit: 8, VectorCandidateLimit: 8, EfSearch: 8, Filter: filter}, &hybrid)
-				if len(hybrid.Documents) != 1 || hybrid.Documents[0].ID != "wire" || !hybrid.Snapshot.Native || hybrid.Stats.FullDocumentScanFallbacks != 0 {
+				p.post(t, "/v1/indexes/docs/search/hybrid", documentservice.HybridSearchRequest{Query: "refund", QueryEmbedding: []float32{1, 0}, TopK: 1, TextCandidateLimit: 8, VectorCandidateLimit: 8, EfSearch: 8}, &hybrid)
+				if len(hybrid.Documents) != 1 || !hybrid.Snapshot.Native || hybrid.Stats.FullDocumentScanFallbacks != 0 {
 					t.Fatalf("hybrid=%+v", hybrid)
 				}
 			}
@@ -253,14 +253,18 @@ func TestDocumentServiceCommandHTTPAndWireLifecycle(t *testing.T) {
 			// before graph maintenance; ANN and mixed Hybrid must refuse it.
 			check(p, false)
 			p.postError(t, "/v1/indexes/docs/search/vector", documentservice.DenseVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, EfSearch: 8}, http.StatusServiceUnavailable, documentservice.CodeIndexUnavailable)
-			p.postError(t, "/v1/indexes/docs/search/hybrid", documentservice.HybridSearchRequest{Query: "refund", QueryEmbedding: []float32{1, 0}, TopK: 1, TextCandidateLimit: 8, VectorCandidateLimit: 8, EfSearch: 8, Filter: filter}, http.StatusServiceUnavailable, documentservice.CodeIndexUnavailable)
+			p.postError(t, "/v1/indexes/docs/search/hybrid", documentservice.HybridSearchRequest{Query: "refund", QueryEmbedding: []float32{1, 0}, TopK: 1, TextCandidateLimit: 8, VectorCandidateLimit: 8, EfSearch: 8, Filter: filter}, http.StatusNotImplemented, documentservice.CodeUnsupported)
 			p.post(t, "/v1/indexes/docs/optimize", documentservice.OptimizeIndexRequest{}, nil)
 			check(p, true)
 			denseCtx, denseCancel := context.WithTimeout(t.Context(), 5*time.Second)
 			defer denseCancel()
 			got, err := wire.DenseVectorSearch(denseCtx, nativewire.DenseVectorSearchRequest{Index: "docs", Query: []float32{1, 0}, TopK: 1, EfSearch: 8, Filter: filter})
-			if err != nil || len(got.Results) != 1 || string(got.Results[0].ID) != "wire" || got.Route != documentservice.RouteExact || got.NativeBasePlusLiveDelta || got.TypedColumnGraph {
-				t.Fatalf("wire Dense: %+v %v", got, err)
+			if err == nil || len(got.Results) != 0 {
+				t.Fatalf("filtered wire Dense must fail closed: %+v %v", got, err)
+			}
+			got, err = wire.DenseVectorSearch(denseCtx, nativewire.DenseVectorSearchRequest{Index: "docs", Query: []float32{1, 0}, TopK: 1, EfSearch: 8})
+			if err != nil || len(got.Results) != 1 || got.Route != documentservice.RouteAnn || got.TypedColumnGraph {
+				t.Fatalf("unfiltered wire Dense: %+v %v", got, err)
 			}
 			_ = wire.Close()
 			p.stop(t)

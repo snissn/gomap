@@ -224,8 +224,8 @@ the maintained scan and ranking. Do not fetch them again by primary key. Exact
 scan work is explicit and must not be reported as a no-document ANN route.
 Ordinary ColumnGraph ANN admits exactly one measured prepared-reader or
 search-pack route. Copy `SearchRouteHNSWSearchPack` into `SearchPackSearch`;
-the physical pack name does not imply native_runtime algorithm attribution.
-Intentional exact and native_runtime report neither ordinary graph counter.
+the physical pack name identifies an asset representation, not a separate runtime.
+Intentional exact reports neither ordinary graph counter.
 Select typed work requirements by explicit versions 2/3/4, never by a numeric
 `>= 2` test that would impose typed proofs on ordinary v5. Version-specific
 metadata validation rejects HNSW/typed relabeling, impossible counters and

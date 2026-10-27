@@ -191,6 +191,9 @@ class FakeClient:
         self.count = count
         self.upsert_error = upsert_error
 
+    def optimize_index(self, *_args: object, **_kwargs: object) -> object:
+        return SimpleNamespace()
+
     def query_by_embedding(self, *args: object, **kwargs: object) -> object:
         self.call = (*args, kwargs)
         return self.response
@@ -454,7 +457,10 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
                  client: FakeClient | None = None) -> runner.TreeDBMinimaRunner:
         workload = object.__new__(runner.TreeDBMinimaRunner)
         workload.client = client or FakeClient(response)
-        workload.strategy, workload.transport = "native_runtime", "http"
+        workload.strategy, workload.transport = "column_graph", "http"
+        workload.index_info = response.index
+        workload.column_graph_serving = column_graph_serving_options()
+        workload._graph_built = False
         workload.query_mode = "exact"
         workload.quantized_index_name = None
         workload.quantized_rerank_candidates = None
@@ -488,7 +494,10 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
 
     def response(self, **changes: object) -> object:
         values = {
-            "route": "ann", "native_base_plus_live_delta": True, "exact_fallbacks": 0,
+            "route": "ann", "exact_fallbacks": 0,
+            "index": SimpleNamespace(vector_strategy="column_graph", generation=7,
+                                     extra={"typed_input": True}, vector_ef_construction=32),
+            "native_command_version": 2,
             "full_document_scan_fallbacks": 0, "documents": [SimpleNamespace(
                 id="d", content="c", score=1.0, meta={"user_id": "u", "fpath": "/a"})],
         }
@@ -516,7 +525,7 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         load.assert_not_called()
         controller.assert_not_called()
 
-    def test_quantized_mode_rejects_incompatible_runner_before_loading_or_launching(self) -> None:
+    def test_retired_strategy_rejected_before_loading_or_launching(self) -> None:
         args = SimpleNamespace(
             strategy="native_runtime", transport="http", query_mode="quantized_rerank",
             quantized_index_name="minima_sq8", quantized_rerank_candidates=64,
@@ -526,7 +535,7 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         with mock.patch.object(runner, "parse_args", return_value=args), \
              mock.patch.object(common, "load_manifest") as load, \
              mock.patch.object(runner, "ServiceController") as controller:
-            with self.assertRaisesRegex(SystemExit, "quantized.*column_graph.*native"):
+            with self.assertRaisesRegex(SystemExit, "Minima supports only the column_graph strategy"):
                 runner.main()
         load.assert_not_called()
         controller.assert_not_called()
@@ -636,7 +645,8 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
              mock.patch.object(runner, "file_sha256", return_value="f" * 64):
             workload = runner.TreeDBMinimaRunner(
                 quantized_manifest(), controller=controller, collection="owned",
-                operation_timeout=1, ef_search=64,
+                operation_timeout=1, ef_search=64, transport="http",
+                column_graph_serving=column_graph_serving_options(),
             )
         self.assertIsNone(workload.quantized_requests)
         self.assertIsNone(workload._quantized_request_lock)
@@ -901,6 +911,37 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         ]})
         self.assertEqual(call[4], {"route": "ann", "ef_search": 64})
         self.assertIs(workload.route_evidence["mixed"], workload.client.response)
+
+    def test_search_refuses_unsupported_filtered_input_before_request(self) -> None:
+        for unsupported in ("native_runtime", "ordinary_column_graph", "missing_index"):
+            with self.subTest(unsupported=unsupported):
+                workload = self.workload(self.response())
+                if unsupported == "native_runtime":
+                    workload.strategy = unsupported
+                elif unsupported == "ordinary_column_graph":
+                    workload.index_info.extra = {"typed_input": False}
+                else:
+                    workload.index_info = None
+                with self.assertRaisesRegex(RuntimeError, "requires authoritative typed ColumnGraph"):
+                    workload.search("timed", "mixed")
+                self.assertIsNone(workload.client.call)
+                self.assertEqual(workload.route_evidence, {})
+
+    def test_search_refuses_wrong_response_owner_or_input(self) -> None:
+        for mismatch in ("strategy", "generation", "typed_input"):
+            with self.subTest(mismatch=mismatch):
+                response = self.response()
+                workload = self.workload(self.response())
+                workload.client.response = response
+                if mismatch == "strategy":
+                    response.index.vector_strategy = "native_runtime"
+                elif mismatch == "generation":
+                    response.index.generation += 1
+                else:
+                    response.index.extra = {"typed_input": False}
+                with self.assertRaisesRegex(RuntimeError, "left required native route"):
+                    workload.search("timed", "mixed")
+                self.assertEqual(workload.route_evidence, {})
 
     def test_search_rejects_hidden_exact_fallback(self) -> None:
         workload = self.workload(self.response(exact_fallbacks=1))
@@ -1580,7 +1621,9 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
                 "failures": list(workload.evidence.failures),
                 "phase_attribution": workload._finish_phase_attribution(),
             }
-            args = SimpleNamespace(strategy="native_runtime",
+            serving = root / "serving.json"
+            serving.write_text(json.dumps(column_graph_serving_options()))
+            args = SimpleNamespace(strategy="column_graph", transport="http", column_graph_serving=serving,
                 manifest=root / "manifest.json", output=output, service_bin=root / "service",
                 url="http://127.0.0.1:17120", data_dir=root / "data",
                 profile="command_wal_durable", startup_timeout=3600,
@@ -1717,7 +1760,9 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
                 "failures": list(workload.evidence.failures),
                 "phase_attribution": workload._finish_phase_attribution(),
             }
-            args = SimpleNamespace(strategy="native_runtime",
+            serving = root / "serving.json"
+            serving.write_text(json.dumps(column_graph_serving_options()))
+            args = SimpleNamespace(strategy="column_graph", transport="http", column_graph_serving=serving,
                 manifest=root / "manifest.json", output=output, service_bin=root / "service",
                 url="http://127.0.0.1:17120", data_dir=root / "data",
                 profile="command_wal_durable", startup_timeout=3600,
@@ -1751,9 +1796,14 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         ]
         with mock.patch.object(sys, "argv", argv):
             args = runner.parse_args()
+        self.assertEqual(args.strategy, "column_graph")
         self.assertEqual(args.operation_timeout, 120)
         self.assertEqual(args.startup_timeout, 120)
         self.assertEqual(args.ef_construction, 32)
+        with mock.patch.object(sys, "argv", [*argv, "--strategy", "native_runtime"]), \
+             mock.patch.object(sys, "stderr", io.StringIO()), self.assertRaises(SystemExit) as rejected:
+            runner.parse_args()
+        self.assertEqual(rejected.exception.code, 2)
         self.assertIsNone(args.diagnostics_dir)
         self.assertIsNone(args.diagnostic_resume_scenario)
         self.assertIsNone(args.diagnostic_resume_start)
@@ -1832,7 +1882,9 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
             (data_dir / "compatible").touch()
             output = root / "output-directory"
             output.mkdir()
-            args = SimpleNamespace(strategy="native_runtime",
+            serving = root / "serving.json"
+            serving.write_text(json.dumps(column_graph_serving_options()))
+            args = SimpleNamespace(strategy="column_graph", transport="http", column_graph_serving=serving,
                 manifest=root / "manifest.json", output=output, service_bin=binary,
                 url=f"http://127.0.0.1:{port}", data_dir=data_dir, profile="test",
                 startup_timeout=2, collection="owned", operation_timeout=1, ef_search=1, small=False,
@@ -1933,8 +1985,10 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
             log_evidence=lambda: {"path": "/tmp/service.log", "tail": "test", "max_tail_bytes": 64 << 10},
         )
         workload.source_commit = "a" * 40
-        workload.strategy, workload.transport = "native_runtime", "http"
-        workload.column_graph_serving = None
+        workload.strategy, workload.transport = "column_graph", "http"
+        workload.column_graph_serving = column_graph_serving_options()
+        workload.ef_construction = 32
+        workload.index_info = self.response().index
         workload.runner_sha256 = "b" * 64
         workload.service_binary_sha256 = "c" * 64
         workload.service_binary_vcs_revision = "a" * 40
@@ -1964,7 +2018,7 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
                 {"field": "meta.user_id", "value_type": "string"},
                 {"field": "meta.fpath", "value_type": "string"},
             ],
-            "vector_strategy": "native_runtime",
+            "vector_strategy": "column_graph",
         }
         workload.batch_correlations = []
         workload._batch_correlation_max_records = 10
@@ -1973,25 +2027,7 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         workload.diagnostic_slow_seconds = 30
         workload.diagnostic_profile_seconds = 5
         workload.diagnostic_capture_timeout = 10
-        workload.route_evidence = {"small": SimpleNamespace(
-            native_base_plus_live_delta=True,
-            full_document_scan_fallbacks=0,
-            scalar_filter_unbounded=0,
-            scalar_filter_probe_ids=0,
-            scalar_filter_candidates=41,
-            scalar_filter_candidate_ids=5,
-            scalar_filter_retained_candidate_ids=5,
-            scalar_filter_refined_candidate_ids=5,
-            scalar_filter_membership_source="finite_scalar",
-            scalar_filter_plan="complete_finite_ann",
-            allowed_id_materialization_rows=0,
-            primary_document_scans=0,
-            scalar_filter_visited=41,
-            scalar_filter_scored=41,
-            scalar_filter_admitted=5,
-            visibility_mismatch_count=0,
-            visibility_retry_count=0,
-        )}
+        workload.route_evidence = {"small": self.response()}
         base_artifact = {
             "backends": [{"configuration": {"initial_upload_hnsw": "qdrant-only"}}],
             "scenarios": [{"scenario": "small"}],
@@ -2032,11 +2068,14 @@ class MinimaTreeDBRunnerTest(unittest.TestCase):
         self.assertEqual(configuration["service_binary_vcs_revision"], "a" * 40)
         self.assertEqual(configuration["service_binary_vcs_modified"], "false")
         self.assertEqual(raw["phase_attribution"]["phases"][0]["classification"], "production_path")
-        self.assertEqual(artifact["scenarios"][0]["route"]["candidate_ids"], 5)
-        self.assertEqual(artifact["scenarios"][0]["route"]["visited_candidates"], 41)
-        self.assertEqual(raw["native_route_responses"]["small"]["candidates"], 41)
-        self.assertEqual(raw["native_route_responses"]["small"]["candidate_ids"], 5)
-        self.assertNotIn("ef_construction_requested", configuration)
+        self.assertEqual(artifact["scenarios"][0]["route"]["identity"], "typed_column_graph_dispatch")
+        self.assertEqual(artifact["scenarios"][0]["route"]["work_counters_availability"], "unavailable")
+        self.assertEqual(raw["native_route_responses"]["small"], {
+            "native_command_version": 2, "generation": 7, "work_counters_availability": "unavailable"})
+        self.assertEqual(artifact["native_path_proof"]["strategy"], "column_graph")
+        self.assertEqual(artifact["native_path_proof"]["availability"], "unavailable")
+        self.assertIsNone(artifact["native_path_proof"]["counters"])
+        self.assertEqual(configuration["ef_construction_requested"], "32")
 
         workload.strategy, workload.transport = "column_graph", "native"
         workload.ef_construction = 32
@@ -2101,7 +2140,8 @@ class MinimaTypedRunnerTest(unittest.TestCase):
         workload.quantized_rerank_candidates = workload.ef_search
         workload.quantized_requests = []
         workload._quantized_request_lock = runner.threading.Lock()
-        workload.index_info = SimpleNamespace(generation=1)
+        workload.index_info = SimpleNamespace(generation=1, vector_strategy="column_graph",
+                                              extra={"typed_input": True})
         workload._quantized_candidate_counts = {}
         workload._quantized_state_works = {}
         workload._quantized_exact_rankings = {}
@@ -2150,7 +2190,7 @@ class MinimaTypedRunnerTest(unittest.TestCase):
                                               for name in ("user_id", "fpath")],
                                to_dict=lambda: {"typed_input": True, "generation": 7,
                                                 "vector_ef_construction": info.vector_ef_construction})
-        response = self.response(native_base_plus_live_delta=False, native_command_version=2, index=info)
+        response = self.response(native_command_version=2, index=info)
         workload = self.workload(response)
         workload.strategy, workload.transport = "column_graph", "native"
         workload.config.update(dimension=2, metric="cosine")
@@ -2235,7 +2275,7 @@ class MinimaTypedRunnerTest(unittest.TestCase):
         score = common.document_score(document)
         info = quantized_index_info()
         response = self.response(
-            native_base_plus_live_delta=False, native_command_version=3, index=info,
+            native_command_version=3, index=info,
             dense_work=work, score_plane=proof,
         )
         response.documents = [SimpleNamespace(
@@ -2546,7 +2586,7 @@ class MinimaTypedRunnerTest(unittest.TestCase):
         work, proof = quantized_small_filter_proof(public_dense_work())
         info = quantized_index_info()
         response = self.response(
-            native_base_plus_live_delta=False, native_command_version=3, index=info,
+            native_command_version=3, index=info,
             dense_work=work, score_plane=proof,
         )
         response.documents = [SimpleNamespace(
@@ -2671,7 +2711,8 @@ class MinimaMeasuredRunnerTest(unittest.TestCase):
         response = self.response(dense_work=proof)
         workload = self.workload(response)
         workload.measured = True
-        workload.index_info = SimpleNamespace(generation=7)
+        workload.index_info = SimpleNamespace(generation=7, vector_strategy="column_graph",
+                                                  extra={"typed_input": True})
         workload.evidence.request_context = lambda: {
             "phase": "warmup_search", "lifetime_ordinal": 0, "transport": "http"}
         with mock.patch.object(runner.time, "monotonic_ns", side_effect=[10, 20, 30, 40, 50, 60]), \
@@ -2696,7 +2737,8 @@ class MinimaMeasuredRunnerTest(unittest.TestCase):
                 response = self.response(dense_work=proof)
                 workload = self.workload(response)
                 workload.measured = True
-                workload.index_info = SimpleNamespace(generation=7)
+                workload.index_info = SimpleNamespace(generation=7, vector_strategy="column_graph",
+                                                  extra={"typed_input": True})
                 workload.evidence.request_context = lambda: {
                     "phase": "timed_search_write_overlap", "lifetime_ordinal": 0, "transport": "http"}
                 if failure_kind == "runner_decode":

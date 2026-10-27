@@ -22,7 +22,8 @@ TREEDB_DATA_DIR=${TREEDB_DATA_DIR:-$RUN_DIR/treedb-data}
 TREEDB_URL=${TREEDB_URL:-http://127.0.0.1:17120}
 TREEDB_COLLECTION=${TREEDB_COLLECTION:-gomap_minima_${RANDOM}_$$}
 TREEDB_PROFILE=${TREEDB_PROFILE:-command_wal_durable}
-TREEDB_STRATEGY=${TREEDB_STRATEGY:-native_runtime}
+TREEDB_STRATEGY=${TREEDB_STRATEGY:-column_graph}
+TREEDB_TRANSPORT=${TREEDB_TRANSPORT:-native}
 TREEDB_EF_SEARCH=${TREEDB_EF_SEARCH:-128}
 TREEDB_QUERY_MODE=${TREEDB_QUERY_MODE:-exact}
 TREEDB_QUANTIZED_INDEX_NAME=${TREEDB_QUANTIZED_INDEX_NAME:-}
@@ -147,8 +148,6 @@ elif [[ "$TREEDB_QUERY_MODE" == quantized_rerank ]]; then
 		fi
 	done
 	treedb_quantized_args=(
-		--transport native --native-address "$TREEDB_NATIVE_ADDRESS"
-		--column-graph-serving "$TREEDB_COLUMN_GRAPH_SERVING"
 		--quantized-plan "$TREEDB_QUANTIZED_PLAN"
 		--expected-quantized-plan-sha256 "$MINIMA_EXPECTED_QUANTIZED_PLAN_SHA256"
 		--query-mode quantized_rerank --quantized-index-name minima_sq8
@@ -182,6 +181,22 @@ bounded-50k|bounded-250k|bounded-500k|bounded-1000k|measured)
 	;;
 esac
 
+# All active Minima queries are filtered ANN over authoritative typed input.
+if [[ "$TREEDB_STRATEGY" != column_graph || ! "$TREEDB_TRANSPORT" =~ ^(http|native)$ ||
+	-z "${TREEDB_COLUMN_GRAPH_SERVING:-}" || ! -f "$TREEDB_COLUMN_GRAPH_SERVING" ||
+	( "$TREEDB_TRANSPORT" == native && -z "${TREEDB_NATIVE_ADDRESS:-}" ) ]]; then
+	printf '%s\n' 'Minima requires TREEDB_STRATEGY=column_graph and TREEDB_COLUMN_GRAPH_SERVING; TREEDB_TRANSPORT=native also requires TREEDB_NATIVE_ADDRESS.' >&2
+	exit 2
+fi
+if ! validate_column_graph_serving "$TREEDB_COLUMN_GRAPH_SERVING"; then
+	printf '%s\n' 'Minima requires the exact positive-integer ColumnGraphServingOptions schema' >&2
+	exit 2
+fi
+treedb_serving_args=(--transport "$TREEDB_TRANSPORT" --column-graph-serving "$TREEDB_COLUMN_GRAPH_SERVING")
+if [[ "$TREEDB_TRANSPORT" == native ]]; then
+	treedb_serving_args+=(--native-address "$TREEDB_NATIVE_ADDRESS")
+fi
+
 treedb_diagnostic_args=()
 if [[ -n "$TREEDB_DIAGNOSTICS_DIR" ]]; then
 	treedb_diagnostic_args+=(
@@ -213,23 +228,9 @@ if [[ "$MODE" == measured ]]; then
 			exit 2
 		fi
 	done
-	if [[ "$TREEDB_STRATEGY" != column_graph || ! "${TREEDB_TRANSPORT:-}" =~ ^(http|native)$ ||
-		-z "${TREEDB_COLUMN_GRAPH_SERVING:-}" || ! -f "$TREEDB_COLUMN_GRAPH_SERVING" ||
-		( "$TREEDB_TRANSPORT" == native && -z "${TREEDB_NATIVE_ADDRESS:-}" ) ]]; then
-		printf '%s\n' 'Measured TreeDB requires TREEDB_STRATEGY=column_graph, explicit TREEDB_TRANSPORT and TREEDB_COLUMN_GRAPH_SERVING; native also requires TREEDB_NATIVE_ADDRESS.' >&2
-		exit 2
-	fi
-	if ! validate_column_graph_serving "$TREEDB_COLUMN_GRAPH_SERVING"; then
-		printf '%s\n' 'Measured TreeDB requires the exact positive-integer ColumnGraphServingOptions schema' >&2
-		exit 2
-	fi
 	treedb_measured_args=(--measured --freeze "$MINIMA_FREEZE"
 		--expected-freeze-sha256 "$MINIMA_EXPECTED_FREEZE_SHA256" --comparator-bin "$MINIMA_COMPARATOR_BIN"
-		--transport "$TREEDB_TRANSPORT" --column-graph-serving "$TREEDB_COLUMN_GRAPH_SERVING"
 		--diagnostics-url "$TREEDB_DIAGNOSTICS_URL")
-	if [[ "$TREEDB_TRANSPORT" == native ]]; then
-		treedb_measured_args+=(--native-address "$TREEDB_NATIVE_ADDRESS")
-	fi
 	comparator_measured_args=(-minima-freeze "$MINIMA_FREEZE" -minima-expected-freeze-sha256 "$MINIMA_EXPECTED_FREEZE_SHA256")
 	mkdir -p "$RUN_DIR"
 else
@@ -251,6 +252,7 @@ bounded-50k|bounded-250k|bounded-500k|bounded-1000k)
 		--strategy "$TREEDB_STRATEGY" --operation-timeout "$TREEDB_OPERATION_TIMEOUT" \
 		--startup-timeout 120 --ef-search "$TREEDB_EF_SEARCH" \
 		${treedb_quantized_args[@]+"${treedb_quantized_args[@]}"} \
+		${treedb_serving_args[@]+"${treedb_serving_args[@]}"} \
 		${treedb_diagnostic_args[@]+"${treedb_diagnostic_args[@]}"}
 	"$RUN_DIR/bin/treedb-rag-benchmark" -workload=minima -validate-minima-artifact "$TREEDB_EVIDENCE" \
 		-minima-expected-commit "$(git rev-parse HEAD)" \
@@ -299,6 +301,7 @@ small)
 		--operation-timeout "$TREEDB_OPERATION_TIMEOUT" \
 		--startup-timeout "$TREEDB_STARTUP_TIMEOUT" \
 		--ef-search "$TREEDB_EF_SEARCH" \
+		${treedb_serving_args[@]+"${treedb_serving_args[@]}"} \
 		${treedb_diagnostic_args[@]+"${treedb_diagnostic_args[@]}"} ||
 		treedb_status=$?
 	"$RUN_DIR/bin/treedb-rag-benchmark" -workload=minima -validate-minima-artifact "$TREEDB_EVIDENCE"
@@ -335,6 +338,7 @@ PYTHONPATH=clients/python/treedb_client/src "$PYTHON" \
 	--operation-timeout "$TREEDB_OPERATION_TIMEOUT" \
 	--startup-timeout "$TREEDB_STARTUP_TIMEOUT" \
 	${treedb_measured_args[@]+"${treedb_measured_args[@]}"} \
+	${treedb_serving_args[@]+"${treedb_serving_args[@]}"} \
 	${treedb_diagnostic_args[@]+"${treedb_diagnostic_args[@]}"} ||
 	treedb_status=$?
 

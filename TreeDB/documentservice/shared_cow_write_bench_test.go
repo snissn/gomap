@@ -315,15 +315,15 @@ func checkSharedCOWWriteQueries(b *testing.B, svc *Service, backend string) shar
 	b.Helper()
 	ctx := context.Background()
 	filter := &Filter{Field: "meta.tenant", Operator: "==", Value: "tenant-00"}
-	check := func(label string, docs []Document) {
+	check := func(label string, docs []Document, filtered bool) {
 		b.Helper()
 		if len(docs) != 10 {
 			b.Fatalf("%s returned%d documents, want10", label, len(docs))
 		}
 		seen := make(map[string]bool, len(docs))
 		for _, doc := range docs {
-			if seen[doc.ID] || doc.Meta["tenant"] != "tenant-00" || len(doc.Embedding) != 0 || doc.Score == nil || math.IsNaN(*doc.Score) || math.IsInf(*doc.Score, 0) {
-				b.Fatalf("%s incorrect filtered/projected result: %+v", label, doc)
+			if seen[doc.ID] || (filtered && doc.Meta["tenant"] != "tenant-00") || len(doc.Embedding) != 0 || doc.Score == nil || math.IsNaN(*doc.Score) || math.IsInf(*doc.Score, 0) {
+				b.Fatalf("%s incorrect projected result: %+v", label, doc)
 			}
 			seen[doc.ID] = true
 		}
@@ -332,20 +332,25 @@ func checkSharedCOWWriteQueries(b *testing.B, svc *Service, backend string) shar
 	if err != nil {
 		b.Fatalf("Keyword: %v", err)
 	}
-	check("Keyword", keyword.Documents)
+	check("Keyword", keyword.Documents, true)
 	if keyword.Stats.FullDocumentScanFallbacks != 0 {
 		b.Fatal("keyword document scan fallback")
 	}
-	dense, err := svc.SearchDenseVector(ctx, sharedCOWWriteIndex, DenseVectorSearchRequest{QueryEmbedding: []float32{1, 1}, TopK: 10, EfSearch: 100, Filter: filter})
+	dense, err := svc.SearchDenseVector(ctx, sharedCOWWriteIndex, DenseVectorSearchRequest{QueryEmbedding: []float32{1, 1}, TopK: 10, EfSearch: 100, Filter: filter, Route: RouteExact})
 	if err != nil {
 		b.Fatalf("Dense: %v", err)
 	}
-	check("Dense", dense.Documents)
-	hybrid, err := svc.SearchHybrid(ctx, sharedCOWWriteIndex, HybridSearchRequest{Query: "content", QueryEmbedding: []float32{1, 1}, TopK: 10, TextCandidateLimit: 64, VectorCandidateLimit: 64, EfSearch: 100, Filter: filter})
+	check("Dense", dense.Documents, true)
+	checkSharedCOWFrozenResult(b, dense.Documents, 16, false, 1e-12)
+	if dense.Route != RouteExact || !dense.Exact {
+		b.Fatal("filtered Dense did not execute explicit exact")
+	}
+	hybrid, err := svc.SearchHybrid(ctx, sharedCOWWriteIndex, HybridSearchRequest{Query: "content", QueryEmbedding: []float32{1, 1}, TopK: 10, TextCandidateLimit: 64, VectorCandidateLimit: 64, EfSearch: 100})
 	if err != nil {
 		b.Fatalf("Hybrid: %v; cause=%v; stats=%+v", err, errors.Unwrap(err), hybrid.Stats)
 	}
-	check("Hybrid", hybrid.Documents)
+	check("Hybrid", hybrid.Documents, false)
+	checkSharedCOWFrozenResult(b, hybrid.Documents, 1, true, 1e-12)
 	encoded, err := json.Marshal(hybrid.Snapshot)
 	if err != nil {
 		b.Fatal(err)

@@ -71,7 +71,7 @@ func TestNativeScalarForwardPublicLifecycle(t *testing.T) {
 	if cold.Stats.ScalarFilterPlanCacheMisses != 1 || cold.Stats.ScalarFilterInputIDs == 0 || warm.Stats.ScalarFilterPlanCacheHits != 1 || warm.Stats.ScalarFilterInputIDs != 0 || warm.Stats.ScalarFilterPlanCacheEntries != 1 || warm.Stats.ScalarFilterPlanCacheRetainedBytes == 0 {
 		t.Fatalf("ordinary no-vector cold=%+v warm=%+v", cold.Stats, warm.Stats)
 	}
-	if c.registeredVectorIndex("embedding") != nil || len(c.meta.VectorIndexes) != 0 {
+	if c.registeredColumnGraphPartitionLiveCarrier("embedding") != nil || len(c.meta.VectorIndexes) != 0 {
 		t.Fatal("text reuse opened or declared a vector runtime")
 	}
 	var wg sync.WaitGroup

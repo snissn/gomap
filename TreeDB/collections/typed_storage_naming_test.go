@@ -331,6 +331,11 @@ type typedStorageLegacyNameAllowlistEntry struct {
 }
 
 var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
+	// Modern DDL, hybrid admission and pressure tests consume the retained
+	// public typed-schema configuration; they do not introduce storage owners.
+	{path: "TreeDB/collections/column_graph_ddl.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
+	{path: "TreeDB/collections/hybrid_executor.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
+	{path: "TreeDB/collections/native_scalar_pressure_gate_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 4},
 	// Native ordinary graph/scan and raw-image fixtures consume retained public
 	// configuration/value names; derived assets remain non-authoritative.
 	{path: "TreeDB/collections/column_vector_graph_raw_ordinal_image_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 12, occurrences: 13},
@@ -393,14 +398,12 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/native_json_public.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	// Native V2 text eligibility consumes the retained public typed-schema field.
 	{path: "TreeDB/collections/native_text_plan.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
-	// Ordinary HNSW eligibility consumes the retained public typed-schema field.
-	{path: "TreeDB/collections/native_hnsw.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 3},
 	{path: "TreeDB/collections/native_json_rows.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
 	{path: "TreeDB/collections/native_json_txn.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	// Scalar index DROP consumes the retained schema field, preserving physical
 	// manifest progress while changing only eligible typed index declarations.
 	// Declared-column CREATE remains refused in foreground and replay.
-	{path: "TreeDB/collections/native_index_ddl.go", classification: typedStorageLegacyCompatibility, matchingLines: 9, occurrences: 10},
+	{path: "TreeDB/collections/native_index_ddl.go", classification: typedStorageLegacyCompatibility, matchingLines: 10, occurrences: 11},
 	// Existing native documents select ordinary semantics using the retained
 	// public schema field; this does not introduce a physical storage owner.
 	{path: "TreeDB/collections/native_existing.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
@@ -833,7 +836,6 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/vector_partition_manifest_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 4},
 	{path: "TreeDB/collections/vector_partition_router_v1.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
 	{path: "TreeDB/collections/vector_partition_router_v1_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
-	{path: "TreeDB/collections/vector_index.go", classification: typedStorageLegacyDerived, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/collections/column_vector_rebuild_stable_authority.go", classification: typedStorageLegacyDerived, matchingLines: 2, occurrences: 2},
 	{path: "TreeDB/collections/column_vector_rebuild_stable_authority_test.go", classification: typedStorageLegacyDerived, matchingLines: 8, occurrences: 8},
 	{path: "TreeDB/collections/column_vector_graph_quantized_asset.go", classification: typedStorageLegacyDerived, matchingLines: 114, occurrences: 128},
@@ -841,7 +843,6 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/vector_index_metadata_test.go", classification: typedStorageLegacyDerived, matchingLines: 9, occurrences: 11},
 	{path: "TreeDB/collections/vector_usearch_bench_test.go", classification: typedStorageLegacyDerived, matchingLines: 1, occurrences: 2},
 	{path: "TreeDB/collections/vector_document_fetch_preset_1903_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 5},
-	{path: "TreeDB/collections/vector_index_insert_cache_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 2},
 	{path: "TreeDB/collections/vector_index_retained_payload_policy_1876_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 5, occurrences: 5},
 	{path: "TreeDB/collections/vector_index_search_test.go", classification: typedStorageLegacyDerived, matchingLines: 7, occurrences: 9},
 	{path: "TreeDB/collections/vector_index_rebuild.go", classification: typedStorageLegacyDerived, matchingLines: 29, occurrences: 31},

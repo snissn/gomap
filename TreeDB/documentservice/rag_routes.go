@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"sort"
 	"strings"
 
@@ -149,19 +148,9 @@ func sortedSetStrings(set map[string]struct{}) []string {
 	return out
 }
 
-const denseVectorNativeSnapshotAttempts = 3
-
-// searchDenseVectorAnn serves route=ann without silent fallback. The existing
-// column_graph branch keeps one-shot snapshot materialization; native_runtime
-// uses the buffered no-document route plus a generation-validated read view.
+// searchDenseVectorAnn serves the selected ColumnGraph route without fallback.
 func (s *Service) searchDenseVectorAnn(ctx context.Context, col *collections.Collection, info IndexInfo, req DenseVectorSearchRequest) (DenseVectorSearchResponse, error) {
 	if info.TypedInput {
-		return s.searchDenseVectorNative(ctx, col, info, req)
-	}
-	if info.VectorStrategy == collections.VectorIndexStrategyNativeRuntime {
-		if !info.Capabilities.NoDocumentVectorSearch {
-			return DenseVectorSearchResponse{}, serviceError(CodeUnsupported, "dense route \"ann\" requires a cosine float32 native_runtime vector index; use route \"exact\" for this index")
-		}
 		return s.searchDenseVectorNative(ctx, col, info, req)
 	}
 	raw, err := s.searchDenseVectorOrdinaryAnnRaw(ctx, col, info, req, nil)
@@ -259,13 +248,11 @@ type RawDenseVectorSearchResponse struct {
 	Results                   []RawDenseVectorResult
 	Route                     Route
 	Candidates                int
-	NativeBasePlusLiveDelta   bool
 	ExactFallbacks            uint64
 	FullDocumentScanFallbacks uint64
 	info                      IndexInfo
 	searchStats               collections.VectorIndexSearchStats
 	fetchedStats              collections.DocumentMaterializationStats
-	attempts                  int
 }
 
 func resizeDenseRawResults(dst []RawDenseVectorResult, count int) []RawDenseVectorResult {
@@ -306,9 +293,6 @@ func (r RawDenseVectorSearchResponse) response(docs []Document) DenseVectorSearc
 	out.ScorePlane = r.ScorePlane
 	out.ColumnGraphPreparedSearch = stats.SearchRouteColumnGraphPrepared
 	out.ColumnGraphDeltaScored = stats.ColumnGraphDeltaScored
-	out.NativeBasePlusLiveDelta = r.NativeBasePlusLiveDelta
-	out.ScalarFilterMembershipSource = denseNativeScalarMembershipSource(stats.ScalarFilterPlan)
-	out.ScalarFilterPlan = stats.ScalarFilterPlan
 	out.ScalarFilterProbeIDs = stats.ScalarFilterProbeIDs
 	out.ScalarFilterProbeTruncated = stats.ScalarFilterProbeTruncated
 	out.ScalarFilterCandidates = stats.ScalarFilterCandidates
@@ -331,13 +315,10 @@ func (r RawDenseVectorSearchResponse) response(docs []Document) DenseVectorSearc
 	out.FullDocumentScanFallbacks = r.FullDocumentScanFallbacks
 	out.AllowedIDMaterializationRows = stats.ScalarFilterRetainedCandidateIDs
 	out.DocumentMaterializationRows = r.fetchedStats.DocumentsFetched
-	out.VisibilityMismatchCount = uint64(r.attempts)
-	out.VisibilityRetryCount = uint64(r.attempts)
 	return out
 }
 
-// SearchDenseVectorNativeRaw exposes the admitted native_runtime or selected
-// typed column_graph snapshot/search/fetch path without decoding stored documents.
+// SearchDenseVectorNativeRaw exposes the typed ColumnGraph search and fetch path.
 func (s *Service) SearchDenseVectorNativeRaw(ctx context.Context, index string, req DenseVectorSearchRequest) (RawDenseVectorSearchResponse, error) {
 	return s.SearchDenseVectorNativeRawInto(ctx, index, req, nil)
 }
@@ -405,8 +386,8 @@ func (s *Service) searchDenseVectorRawInto(ctx context.Context, index string, re
 			return s.searchDenseVectorOrdinaryAnnRaw(ctx, col, info, req, dst)
 		}
 	}
-	if route != RouteAnn || (!info.TypedInput && info.VectorStrategy != collections.VectorIndexStrategyNativeRuntime) || !info.Capabilities.NoDocumentVectorSearch {
-		return RawDenseVectorSearchResponse{}, serviceError(CodeUnsupported, "dense nativewire search requires a cosine float32 native_runtime or selected typed column_graph index")
+	if route != RouteAnn || !info.TypedInput || !info.Capabilities.NoDocumentVectorSearch {
+		return RawDenseVectorSearchResponse{}, serviceError(CodeUnsupported, "dense typed wire search requires a selected typed column_graph index")
 	}
 	return s.searchDenseVectorNativeRawLocked(ctx, col, info, req, dst)
 }
@@ -455,7 +436,7 @@ func (s *Service) searchDenseVectorNativeRawLocked(ctx context.Context, col *col
 	}
 	buffer := s.benchmarkSearchBufferPool.Get().(*collections.VectorIndexSearchBuffer)
 	defer func() { buffer.Reset(); s.benchmarkSearchBufferPool.Put(buffer) }()
-	for attempt := range denseVectorNativeSnapshotAttempts {
+	{
 		if err := ctxErr(ctx); err != nil {
 			return RawDenseVectorSearchResponse{}, err
 		}
@@ -468,17 +449,9 @@ func (s *Service) searchDenseVectorNativeRawLocked(ctx context.Context, col *col
 			proof.Graph = search.Stats.ColumnGraphWork
 		}
 		if err != nil {
-			if !info.TypedInput && errors.Is(err, collections.ErrVectorIndexSnapshotMismatch) {
-				buffer.Reset()
-				continue
-			}
 			return RawDenseVectorSearchResponse{}, mapVectorIndexSearchError("native ann vector search", err)
 		}
-		validate := validateDenseNativeVectorSearchRoute
-		if info.TypedInput {
-			validate = validateDenseTypedVectorSearchRoute
-		}
-		if err := validate(search); err != nil {
+		if err := validateDenseTypedVectorSearchRoute(search); err != nil {
 			_ = view.Close()
 			return RawDenseVectorSearchResponse{}, err
 		}
@@ -495,7 +468,7 @@ func (s *Service) searchDenseVectorNativeRawLocked(ctx context.Context, col *col
 			}
 		}
 		if s.denseVectorNativeAfterSearch != nil {
-			if err := s.denseVectorNativeAfterSearch(attempt, search); err != nil {
+			if err := s.denseVectorNativeAfterSearch(0, search); err != nil {
 				_ = view.Close()
 				return RawDenseVectorSearchResponse{}, mapVectorIndexSearchError("native ann vector search hook", err)
 			}
@@ -530,11 +503,6 @@ func (s *Service) searchDenseVectorNativeRawLocked(ctx context.Context, col *col
 		if fetched.Stats.DocumentsRequested != uint64(len(search.Results)) || fetched.Stats.DocumentsFetched != uint64(len(search.Results)) || fetched.Stats.DocumentsMissing != 0 || len(fetched.Results) != len(search.Results) {
 			return RawDenseVectorSearchResponse{}, serviceErrorf(CodeIndexUnavailable, "native ann document fetch did not materialize exactly the returned candidates: candidates=%d requested=%d fetched=%d missing=%d results=%d", len(search.Results), fetched.Stats.DocumentsRequested, fetched.Stats.DocumentsFetched, fetched.Stats.DocumentsMissing, len(fetched.Results))
 		}
-		var exactFallbacks uint64
-		if info.VectorRepresentation != collections.VectorIndexRepresentationCosineNormalizedF32V1 {
-			diagnostics := search.Diagnostics()
-			exactFallbacks = diagnostics.LiveANN.ExactFallbacks
-		}
 		if len(search.Results) <= cap(dst) {
 			if len(search.Results) < cap(dst) {
 				clear(dst[len(search.Results):cap(dst)])
@@ -550,13 +518,10 @@ func (s *Service) searchDenseVectorNativeRawLocked(ctx context.Context, col *col
 			Results:                   dst,
 			Route:                     RouteAnn,
 			Candidates:                len(search.Results),
-			NativeBasePlusLiveDelta:   !info.TypedInput,
-			ExactFallbacks:            exactFallbacks,
 			FullDocumentScanFallbacks: 0,
 			info:                      info,
 			searchStats:               search.Stats,
 			fetchedStats:              fetched.Stats,
-			attempts:                  attempt,
 		}
 		if info.TypedInput && info.VectorRepresentation == collections.VectorIndexRepresentationCosineNormalizedF32V1 {
 			identity := denseSearchRouteIdentity(req, info, search.Stats, fetched.Stats)
@@ -574,11 +539,10 @@ func (s *Service) searchDenseVectorNativeRawLocked(ctx context.Context, col *col
 		}
 		return out, nil
 	}
-	return RawDenseVectorSearchResponse{}, mapVectorIndexSearchError("native ann vector search", fmt.Errorf("%w after %d attempts", collections.ErrVectorIndexSnapshotMismatch, denseVectorNativeSnapshotAttempts))
 }
 
 func validateDenseTypedVectorSearchRoute(response collections.VectorIndexSearchResponse) error {
-	if response.Strategy != collections.VectorIndexStrategyColumnGraph || response.Path != collections.VectorIndexSearchPathColumnGraphNativeReader || response.Stats.SearchRouteColumnGraphPrepared != 1 || response.Stats.SearchRouteNativeRuntime != 0 || response.Stats.DocumentsFetched != 0 {
+	if response.Strategy != collections.VectorIndexStrategyColumnGraph || response.Path != collections.VectorIndexSearchPathColumnGraphNativeReader || response.Stats.SearchRouteColumnGraphPrepared != 1 || response.Stats.DocumentsFetched != 0 {
 		return serviceError(CodeIndexUnavailable, "typed graph search left the admitted no-document route")
 	}
 	return nil
@@ -805,38 +769,6 @@ func validateDenseTypedQuantizedVectorSearchRoute(response collections.VectorInd
 	}
 	if response.Stats.DocumentsFetched != 0 || response.Stats.DocumentBytes != 0 || response.Stats.DocumentOutputBytes != 0 {
 		return serviceError(CodeIndexUnavailable, "typed quantized dense search left the no-document scoring route")
-	}
-	return nil
-}
-
-func denseNativeScalarMembershipSource(plan collections.NativeScalarFilterPlan) string {
-	switch plan {
-	case collections.NativeScalarFilterPlanCompleteExact, collections.NativeScalarFilterPlanCompleteFinite:
-		return "bounded_complete_set"
-	case collections.NativeScalarFilterPlanMixed:
-		return "bounded_candidate_refinement"
-	case collections.NativeScalarFilterPlanVectorAligned:
-		return "vector_aligned_scalar"
-	default:
-		return ""
-	}
-}
-
-func validateDenseNativeVectorSearchRoute(response collections.VectorIndexSearchResponse) error {
-	diagnostics := response.Diagnostics()
-	stats := response.Stats
-	if response.Strategy != collections.VectorIndexStrategyNativeRuntime ||
-		response.Path != collections.VectorIndexSearchPathNativeRuntime ||
-		diagnostics.Route != collections.VectorIndexSearchRouteNativeRuntime ||
-		!diagnostics.LiveANN.Enabled ||
-		diagnostics.LiveANN.ExactFallbacks != 0 ||
-		diagnostics.FallbackReason != collections.VectorIndexSearchFallbackReasonNone ||
-		!diagnostics.NoDocumentGuardrailsOK ||
-		stats.SearchRouteNativeRuntime != 1 ||
-		stats.DocumentsFetched != 0 ||
-		stats.DocumentBytes != 0 ||
-		stats.DocumentOutputBytes != 0 {
-		return serviceErrorf(CodeIndexUnavailable, "native ann vector search left the buffered no-document native_runtime route: diagnostics=%+v", diagnostics)
 	}
 	return nil
 }

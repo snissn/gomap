@@ -71,24 +71,6 @@ capture, PRIMARY choice, value-copy/codec admission and status checks still appl
 Reader storage, its method closure and lazy physical projection are admitted on
 the enclosing cumulative receipt and detached before that receipt is released.
 
-Ordinary `native_runtime` cosine float32 vector candidates borrow the same cut.
-The existing graph-only traversal and scalar-column matcher supply IDs and
-scores without document fetch or exact scan fallback. Cold load decodes that
-captured graph image; short installer captures validate identity only. Native
-scalar plans may retain independent complete exact/finite ID sets in the
-registered runtime after validating the captured schema, incarnation, document
-and vector generations, mutation sequence, graph version, scalar-domain
-interpretations, clauses and lookup limits. Retention admits its independent
-cell/array/string backing on the runtime's original lease before copying; it
-retains no request callback or capture. The existing 64-slot and 8 MiB limits
-remain, with no separate 896-ID cutoff. Slot or byte exhaustion, overflow or
-optional retention refusal leaves the successful request-local plan usable.
-Slots are not replaced while readers can borrow them; the native Use gate and
-runtime lifetime protect retained storage. The original 4096-ID probe and
-4097th-entry truncation sentinel remain unchanged. Parallel text/vector branches
-serialize request receipt growth through a private mutex, while traversal remains
-independent.
-
 Ordinary unquantized `column_graph` candidates use the existing prepared-pack
 cache with the same captured native read and manifest identity. For default
 mixed-source execution, cold pack preparation finishes before text/vector
@@ -117,16 +99,13 @@ A native `VectorIndexSearchBuffer` retains its separate query receipt until
 `Reset` or reuse. Reset drops all native scratch/result backing before refund,
 so returning buffers to an existing pool cannot retain uncharged arrays. Result
 IDs remain valid after the read view closes, until buffer reset; document fetch
-must finish before then. Legacy buffers retain their existing reusable capacity.
-The public ordinary `idx.Search` retains its existing ownership and callback
-postvalidation; its query charge calculation is shared without changing ranking.
+must finish before then.
 
 Specialized typed, normalized and quantized vector dispatch remain explicit and
-are not reinterpreted by this adapter. New ordinary service indexes retain the
-original omitted-strategy policy: cosine selects `column_graph`; other supported
-metrics select `native_runtime`. An existing index with omitted strategy binds its
-persisted algorithm. Explicit native-runtime HNSW remains supported within this
-adapter's capability. Ordinary native ColumnGraph supports its captured graph,
+are not reinterpreted by this adapter. New ordinary service indexes select cosine
+`column_graph`. Ordinary filtered ANN and vector hybrid requests fail closed;
+typed filtered graph requests and text-only filters retain their own contracts.
+Ordinary native ColumnGraph supports its captured graph,
 text, scalar and final-document reads without algorithm substitution or legacy
 fallback. Broader default adoption and actual server storage defaults remain
 separate parent obligations and require their public performance gates.

@@ -265,7 +265,7 @@ func (c *Collection) requireTypedBatchVectorAdmission() error {
 	if coord := c.collectionSchemaCoordinator(); coord != nil && coord.adHocVectorIndexes.Load() != 0 {
 		return errors.New("collections: typed batches do not support registered ad-hoc vector runtimes")
 	}
-	if len(c.registeredVectorIndexes()) != 0 {
+	if len(c.registeredColumnGraphPartitionLiveCarriers()) != 0 {
 		return errors.New("collections: typed batches require column_graph vector indexes")
 	}
 	return nil

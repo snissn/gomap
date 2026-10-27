@@ -33,12 +33,14 @@ This accessor adds no acknowledgement or durability boundary.
 
 ## Service vector strategy selection
 
-New ordinary service indexes retain the original metric-based strategy when
-`vector_index_options.strategy` is omitted: cosine selects `column_graph`; other
-supported metrics select `native_runtime`. `IndexInfo.vector_strategy` reports
-the selected declaration. Explicit native-runtime HNSW remains available within
-its supported capability. Typed input, normalized representation and quantized
-declarations retain their ColumnGraph contracts.
+New eligible service indexes select `column_graph` when
+`vector_index_options.strategy` is omitted. This is the only serving strategy;
+the service supports cosine/float32 declarations. Explicit `native_runtime`,
+L2/inner-product ANN and primary int8 declarations return `unsupported`/HTTP 501
+before mutation. `IndexInfo.vector_strategy` reports the selected declaration.
+Typed input, normalized representation and derived quantized declarations retain
+their separate ColumnGraph contracts; a derived `scalar_u8` plane is not a
+primary int8 index.
 
 Ordinary native-storage ColumnGraph supports the captured graph, text, scalar
 and final-document reads used by the service. Omitted cosine requests retain
@@ -46,28 +48,31 @@ ColumnGraph without algorithm substitution or legacy fallback. Typed input,
 normalized representation and quantized serving keep their separate admission
 contracts. Public default and performance qualification remain parent gates.
 
-An idempotent Create with omitted strategy derives only the stored strategy from
-the existing service declaration. Existing ColumnGraph indexes keep their schema
-and strategy, including an index created by the previous cosine default. Metric,
+An idempotent Create with omitted strategy reuses a compatible stored ColumnGraph
+declaration. Persisted removed strategies and ambiguous old omitted-strategy
+metadata are refused, not reinterpreted as ColumnGraph. Use a fresh directory
+and rebuild from source documents; there is no automatic migration. Metric,
 dimension, scalar declarations and tuning still pass the ordinary compatibility
 checks; omission does not copy arbitrary stored options. An explicit strategy
 mismatch returns conflict before staging a replacement. One existing collection
 lookup supplies both this choice and ColumnStore compatibility handling.
 
-The Hybrid consumer selects production counters for an actual native-runtime
-declaration, reusing the maintained graph-only buffered executor. ColumnGraph
-keeps its diagnostics route, and explicit public full-diagnostics requests against
-native-runtime indexes retain their refusal. Ordinary ColumnGraph is supported
-on the native owner; typed, normalized and quantized declarations retain their
-separate specialized capability and admission contracts.
+Unfiltered Dense defaults to `route=ann` and serves ColumnGraph. Ordinary Dense
+with a filter and an omitted or explicit `ann` route returns
+`unsupported`/HTTP 501 without search or fallback. Explicit `route=exact`
+retains bounded ordinary exact scanning, filtering, scoring and projection;
+the response reports `route=exact` and its actual scan work. Ordinary Hybrid
+with a vector source and a filter also returns `unsupported`/HTTP 501. Pure-text
+filtered retrieval and unfiltered vector-bearing Hybrid remain supported.
+Admitted typed ColumnGraph filters, including selected typed quantized Hybrid,
+retain their own bounded execution and lifetime contracts. Typed input does not
+enable the ordinary document-scan exact route.
 
-Dense route selection preserves valid arbitrary metadata filters: an omitted
-route uses ANN for a supported declared scalar plan and the existing exact
-executor otherwise. Explicit ANN retains its scalar validation errors; typed
-input remains on its admitted graph route. The deterministic choice is returned
-in `route`, before query execution. The compiler probe adds a second scalar-plan
-compilation for declared filtered ANN requests; its feature cost remains to be
-measured. This does not add a new document-scan or allocation-governor guarantee.
+Mongo BSON vector-index DDL is unsupported. A `createIndexes` request containing
+any vector declaration returns `BadValue`/code 2 before creating a collection or
+publishing any index, including scalar siblings in that request. Scalar-only
+DDL and BSON CRUD retain their existing contracts, including scalar DDL partial
+completion errors; this vector preflight does not make all scalar DDL atomic.
 
 ## Command storage owner
 
@@ -115,7 +120,8 @@ specialized typed, normalized and quantized configurations. Select it before
 opening the original directory with its original profile. Ordinary ColumnGraph,
 including omitted cosine and compatible persisted declarations, is supported on
 the native owner and does not require this flag. Omitted strategy on compatible
-Create preserves the stored algorithm; explicit mismatch still conflicts. A
+Create preserves the supported stored declaration; explicit mismatch still
+conflicts. A
 capability refusal never retries another owner or converts the declaration.
 Typed serving still requires its complete positive engine limits on admission
 after reopen. The switch neither manufactures those limits nor expands eligibility.
@@ -150,17 +156,17 @@ optional native listener queries the HTTP-created service index on the same owne
 ## Ordinary wire queries
 
 Negotiated command 64/v5 follows the public ordinary service query policy.
-Unfiltered omitted-cosine ColumnGraph uses its maintained ANN search and
+Unfiltered ColumnGraph uses its maintained ANN search and
 same-search projected document bytes. Its prepared-reader, search-pack and delta
 counters come from the actual search result. Native ordinary ColumnGraph's
-prepared pack reports `search_pack_search=1` and `column_graph_prepared_search=0`;
-that physical route does not imply native_runtime base-plus-live-delta execution.
-Filtered ordinary ColumnGraph uses the existing exact
-scan, scoring, tie order and projection, reporting `route=exact`, `exact=true`
-and its actual `documents_scanned`. This intentional exact route is not reported
-as an ANN fallback or as HNSW. Supported native_runtime ANN remains explicit in
-its attribution. The original strict HNSW, typed, quantized and normalized wire
-versions retain their independent admission and proof contracts.
+prepared pack reports `search_pack_search=1` and `column_graph_prepared_search=0`.
+Filtered ordinary requests must explicitly select `route=exact`; omitted or
+explicit ANN is refused without results or fallback. Exact responses retain
+scoring, tie order and projection, reporting `route=exact`, `exact=true`
+and their actual `documents_scanned`. Dense command 64/v1 and the removed runtime
+strategy tag are rejected; modern v2–v5 commands retain their independent typed,
+quantized, normalized and ordinary admission and proof contracts. The client
+does not negotiate a removed version or retry another route after refusal.
 
 ## Specialized-owner continuity proof
 

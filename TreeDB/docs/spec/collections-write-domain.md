@@ -70,12 +70,9 @@ Projection reads the view's captured document cut through physical handoff.
 BSON and template-v1 keep the existing stored-format contract; the shared
 projection validator permits JSON documents only.
 
-Ordinary native HNSW definitions declared in `CreateCollection` initialize the
-same clean logical index domains as `CreateVectorIndex`. Each domain and its
-directory are admitted before allocation and enter the original private
-successor cleanup; refusal publishes no catalog successor. Empty clean domains
-do not create physical checkpoint debt. Typed/ColumnGraph source imports keep
-their existing construction route. JSON materialization clones captured JSON,
+Supported vector definitions declared in `CreateCollection` select ColumnGraph;
+unsupported or retired definitions are rejected before catalog publication.
+Typed/ColumnGraph source imports keep their existing construction route. JSON materialization clones captured JSON,
 converts captured BSON, and invokes the captured template resolver only for
 template-v1 documents, including exact vector-search fallback.
 

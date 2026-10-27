@@ -47,7 +47,7 @@ func nativeJSONDomainNumber(meta CollectionMeta, name string) uint64 {
 	}
 	// Source-only ColumnGraph declarations retain their original empty root
 	// descriptors. They are catalog identities, not live ANN publication.
-	if nativeSourceImportMetaV2(meta) || nativeOrdinaryHNSWMeta(meta) {
+	if nativeSourceImportMetaV2(meta) {
 		for i, index := range meta.VectorIndexes {
 			if name == "vector-index/"+index.Name {
 				return uint64(len(meta.Indexes)+i) + 7

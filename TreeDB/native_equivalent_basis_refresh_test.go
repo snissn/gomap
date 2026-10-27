@@ -131,43 +131,44 @@ func testNativeExistingCollectionEquivalentBasisRewrite(t *testing.T, partialCan
 	if _, err = manager.CreateCollection(&collections.CollectionMeta{Name: "spare"}); err != nil {
 		t.Fatal(err)
 	}
-	// Keep a persisted ordinary HNSW graph while a newer full image is still
+	// Keep a persisted scalar domain while a newer full replacement is still
 	// logical-only. The real rewrite below moves another qualified domain;
-	// basis refresh must authenticate this graph's old catalog descriptor too.
-	definition := collections.VectorIndexDefinition{Name: "embedding", Field: "embedding", Dimensions: 2, Metric: collections.VectorMetricCosine, M: 4}
-	if _, err = manager.CreateCollection(&collections.CollectionMeta{Name: "graphs", VectorIndexes: []collections.VectorIndexDefinition{definition}}); err != nil {
+	// basis refresh must authenticate this index's old catalog descriptor too.
+	definition := collections.IndexDefinition{Name: "tenant", Field: "tenant", ValueType: collections.IndexValueString}
+	if _, err = manager.CreateCollection(&collections.CollectionMeta{Name: "indexed", Indexes: []collections.IndexDefinition{definition}}); err != nil {
 		t.Fatal(err)
 	}
-	graphs, err := manager.OpenCollection("graphs")
+	indexed, err := manager.OpenCollection("indexed")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = graphs.InsertBatch([][]byte{[]byte("a"), []byte("b")}, [][]byte{[]byte(`{"embedding":[1,0]}`), []byte(`{"embedding":[0,1]}`)}); err != nil {
-		t.Fatal(err)
-	}
-	graphOptions := collections.VectorIndexOptions{Name: "embedding", Field: "embedding", Dimensions: 2, Metric: collections.VectorMetricCosine, M: 4}
-	graph, err := graphs.BuildVectorIndex(graphOptions)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = graph.SaveSnapshot(); err != nil {
+	if _, err = indexed.InsertBatch([][]byte{[]byte("a"), []byte("b")}, [][]byte{[]byte(`{"tenant":"live"}`), []byte(`{"tenant":"live"}`)}); err != nil {
 		t.Fatal(err)
 	}
 	if err = database.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
-	graph.TombstoneDocumentID([]byte("a"))
-	if _, err = graph.SaveSnapshot(); err != nil {
+	if err = indexed.Delete([]byte("a")); err != nil {
 		t.Fatal(err)
 	}
-	checkGraph := func(index *collections.VectorIndex) {
+	// Backfilling another scalar index replaces the existing index domain in
+	// the same publication, including its absence for the deleted row.
+	if _, err = indexed.CreateIndex(collections.IndexDefinition{Name: "tenant_copy", Field: "tenant", ValueType: collections.IndexValueString}); err != nil {
+		t.Fatal(err)
+	}
+	checkIndex := func(collection *collections.Collection) {
 		t.Helper()
-		result, _, err := index.Search([]float32{1, 0}, collections.VectorIndexSearchOptions{TopK: 1, DisableExactFallback: true})
-		if err != nil || len(result) != 1 || string(result[0].DocumentID) != "b" {
-			t.Fatalf("replacement graph resurrected omitted node: %+v %v", result, err)
+		for _, name := range []string{"tenant", "tenant_copy"} {
+			ids, err := collection.FindByIndex(name, "live")
+			if err != nil || len(ids) != 1 || string(ids[0]) != "b" {
+				t.Fatalf("replacement index %s resurrected omitted row: %q %v", name, ids, err)
+			}
+		}
+		if document, err := collection.Get([]byte("a")); err != nil || document != nil {
+			t.Fatalf("replacement primary resurrected omitted row: %q %v", document, err)
 		}
 	}
-	checkGraph(graph)
+	checkIndex(indexed)
 	rows, err := manager.OpenCollection("rows")
 	if err != nil {
 		t.Fatal(err)
@@ -333,7 +334,7 @@ func testNativeExistingCollectionEquivalentBasisRewrite(t *testing.T, partialCan
 	if err = after.Close(); err != nil {
 		t.Fatal(err)
 	}
-	checkGraph(graph)
+	checkIndex(indexed)
 	for _, c := range []*collections.Collection{rows, alias} {
 		got, e := c.Get([]byte("old"))
 		if e != nil || !bytes.Equal(got, document) {
@@ -399,15 +400,11 @@ func testNativeExistingCollectionEquivalentBasisRewrite(t *testing.T, partialCan
 		t.Fatal(err)
 	}
 	manager = collections.NewCollectionManager(backend)
-	graphs, err = manager.OpenCollection("graphs")
+	indexed, err = manager.OpenCollection("indexed")
 	if err != nil {
 		t.Fatal(err)
 	}
-	graph, loaded, err := graphs.LoadVectorIndexSnapshot(graphOptions)
-	if err != nil || !loaded.Loaded {
-		t.Fatalf("reopen graph: %+v %v", loaded, err)
-	}
-	checkGraph(graph)
+	checkIndex(indexed)
 	for _, name := range []string{"rows", "alias"} {
 		c, e := manager.OpenCollection(name)
 		if e != nil {

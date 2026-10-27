@@ -260,7 +260,7 @@ func TestNativeTypedFinalInsertSpanPublic(t *testing.T) {
 		if e != nil || cfg == nil || cfg.ActiveManifest == nil || cfg.RecoveryAuthoritativeManifest == nil || *cfg.ActiveManifest != *cfg.RecoveryAuthoritativeManifest || cfg.RecoveryAuthoritativeAppliedCommandLSN != lsns[3] {
 			t.Fatalf("target physical frontier must be original target LSN %d, not unrelated %d: %+v: %v", lsns[3], noiseLSN, cfg, e)
 		}
-		if col.registeredVectorIndex("vec") != nil {
+		if col.registeredColumnGraphPartitionLiveCarrier("vec") != nil {
 			t.Fatal("graph-free insert span installed HNSW")
 		}
 	}
@@ -401,7 +401,7 @@ func TestNativeTypedFinalInsertSpanRepeatedPhysicalBasis(t *testing.T) {
 		if err != nil || cfg == nil || cfg.ActiveManifest == nil || cfg.RecoveryAuthoritativeManifest == nil || *cfg.ActiveManifest != *cfg.RecoveryAuthoritativeManifest || cfg.RecoveryAuthoritativeAppliedCommandLSN != targetLSN {
 			t.Fatalf("nonempty physical basis/frontier target=%d: %+v: %v", targetLSN, cfg, err)
 		}
-		if col.registeredVectorIndex("vec") != nil {
+		if col.registeredColumnGraphPartitionLiveCarrier("vec") != nil {
 			t.Fatal("graph-free repeated span installed HNSW")
 		}
 		return *cfg.ActiveManifest

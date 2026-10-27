@@ -136,7 +136,7 @@ func TestNativeCreateCollectionWithStatus(t *testing.T) {
 }
 
 func TestNativeCreateCollectionWithStatusRefusal(t *testing.T) {
-	c, def, budget := openPinnedNativeHNSWAdmissionFixture(t, nil)
+	c, _, budget := openPinnedNativeHNSWAdmissionFixture(t, nil)
 	read, err := c.nativeJSON.Capture(c.name)
 	if err != nil {
 		t.Fatal(err)
@@ -155,7 +155,7 @@ func TestNativeCreateCollectionWithStatusRefusal(t *testing.T) {
 	if err = blocker.Resize(available - captureBytes); err != nil {
 		t.Fatal(err)
 	}
-	meta := CollectionMeta{Name: "new", VectorIndexes: []VectorIndexDefinition{def}}
+	meta := CollectionMeta{Name: "new", Indexes: []IndexDefinition{{Name: "tenant", Field: "tenant", ValueType: IndexValueString}}}
 	dbCoord := collectionDBSchemaCoordinatorForDB(c.nativeJSON.db)
 	dbCoord.mu.Lock()
 	beforeNamespaces := len(dbCoord.collections)

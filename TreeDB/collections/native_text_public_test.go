@@ -26,9 +26,8 @@ func nativeTextPublicMeta(versions ...TextIndexVersion) *CollectionMeta {
 		version = versions[0]
 	}
 	return &CollectionMeta{Name: "docs",
-		Indexes:       []IndexDefinition{{Name: "tenant", Field: "tenant", ValueType: IndexValueString}},
-		VectorIndexes: []VectorIndexDefinition{{Name: "embedding", Field: "embedding", Dimensions: 2, Metric: VectorMetricCosine, M: 4}},
-		TextIndexes:   []TextIndexDefinition{{Name: "content", Version: version, Fields: []TextIndexField{{Field: "content"}}, Analyzer: TextAnalyzerSimple, StorePositions: true}},
+		Indexes:     []IndexDefinition{{Name: "tenant", Field: "tenant", ValueType: IndexValueString}},
+		TextIndexes: []TextIndexDefinition{{Name: "content", Version: version, Fields: []TextIndexField{{Field: "content"}}, Analyzer: TextAnalyzerSimple, StorePositions: true}},
 	}
 }
 
@@ -496,9 +495,8 @@ func testNativeTextPublicLifecycle(t *testing.T, version TextIndexVersion) {
 				manager = NewCollectionManager(backend)
 				if create {
 					_, err = manager.CreateCollection(&CollectionMeta{Name: "docs",
-						Indexes:       []IndexDefinition{{Name: "tenant", Field: "tenant", ValueType: IndexValueString}},
-						VectorIndexes: []VectorIndexDefinition{{Name: "embedding", Field: "embedding", Dimensions: 2, Metric: VectorMetricCosine, M: 4}},
-						TextIndexes:   []TextIndexDefinition{{Name: "content", Version: version, Fields: []TextIndexField{{Field: "content"}}, Analyzer: TextAnalyzerSimple, StorePositions: true}},
+						Indexes:     []IndexDefinition{{Name: "tenant", Field: "tenant", ValueType: IndexValueString}},
+						TextIndexes: []TextIndexDefinition{{Name: "content", Version: version, Fields: []TextIndexField{{Field: "content"}}, Analyzer: TextAnalyzerSimple, StorePositions: true}},
 					})
 					if err != nil {
 						t.Fatalf("ordinary native text create: %v", err)
@@ -549,10 +547,6 @@ func testNativeTextPublicLifecycle(t *testing.T, version TextIndexVersion) {
 				return []byte(fmt.Sprintf(`{"tenant":"a","content":%q,"embedding":[%d,%d],"payload":%q}`, content, x, y, payload))
 			}
 			if _, err := collection.InsertBatch([][]byte{[]byte("a"), []byte("b")}, [][]byte{doc("refund policy", 1, 0), doc("shipping policy", 0, 1)}); err != nil {
-				t.Fatal(err)
-			}
-			idx, err := collection.BuildVectorIndex(VectorIndexOptions{Name: "embedding", Field: "embedding", Dimensions: 2, Metric: VectorMetricCosine, M: 4})
-			if err != nil {
 				t.Fatal(err)
 			}
 			if version == TextIndexVersionV1 {
@@ -649,9 +643,9 @@ func testNativeTextPublicLifecycle(t *testing.T, version TextIndexVersion) {
 			if err != nil || stats.Documents != 1 {
 				t.Fatalf("live text storage=%+v err=%v", stats, err)
 			}
-			rows, _, err := idx.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 8})
+			rows, err := collection.SearchVectorsExact([]float32{1, 0}, VectorSearchOptions{Field: "embedding", TopK: 8})
 			if err != nil || len(rows) != 1 {
-				t.Fatalf("active HNSW after text CRUD: rows=%d err=%v", len(rows), err)
+				t.Fatalf("explicit exact vector read after text CRUD: rows=%d err=%v", len(rows), err)
 			}
 			if err := owner.Checkpoint(); err != nil {
 				t.Fatal(err)

@@ -89,7 +89,7 @@ func TestCommandPublicPerformance(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer output.Close()
-	report := commandPerfReport{Version: "actual-command-v1", Command: os.Getenv("GOMAP_COMMAND_PERF_COMMAND"), Operation: os.Getenv("GOMAP_COMMAND_PERF_OPERATION"), Label: os.Getenv("GOMAP_COMMAND_PERF_LABEL"), HTTPBinary: os.Getenv("GOMAP_COMMAND_PERF_HTTP_BINARY"), NativeBinary: os.Getenv("GOMAP_COMMAND_PERF_NATIVE_BINARY"), Directory: prefix + ".db", Requested: 1000, AllocationEvidence: "Server TotalAlloc/Mallocs are not exported by these command diagnostics. Driver Go B/op is inapplicable; use the separately reviewed in-process service benchmark for allocation attribution."}
+	report := commandPerfReport{Version: "actual-command-v2", Command: os.Getenv("GOMAP_COMMAND_PERF_COMMAND"), Operation: os.Getenv("GOMAP_COMMAND_PERF_OPERATION"), Label: os.Getenv("GOMAP_COMMAND_PERF_LABEL"), HTTPBinary: os.Getenv("GOMAP_COMMAND_PERF_HTTP_BINARY"), NativeBinary: os.Getenv("GOMAP_COMMAND_PERF_NATIVE_BINARY"), Directory: prefix + ".db", Requested: 1000, AllocationEvidence: "Server TotalAlloc/Mallocs are not exported by these command diagnostics. Driver Go B/op is inapplicable; use the separately reviewed in-process service benchmark for allocation attribution."}
 	defer func() {
 		if err := json.NewEncoder(output).Encode(report); err != nil {
 			t.Error(err)
@@ -167,7 +167,7 @@ func runCommandPerf(parent context.Context, prefix string, r *commandPerfReport)
 		}
 	}()
 	r.Phase = "create"
-	declaration := documentservice.CreateIndexRequest{Name: "docs", Dimension: 8, VectorIndexOptions: &documentservice.BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyNativeRuntime, M: 16, EfConstruction: 128, EfSearch: 64}, ScalarFields: []documentservice.ScalarFieldDeclaration{{Field: "meta.tenant", ValueType: documentservice.ScalarFieldString}, {Field: "meta.rank", ValueType: documentservice.ScalarFieldInt64}}}
+	declaration := documentservice.CreateIndexRequest{Name: "docs", Dimension: 8, VectorIndexOptions: &documentservice.BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyColumnGraph, M: 16, EfConstruction: 128, EfSearch: 64}, ScalarFields: []documentservice.ScalarFieldDeclaration{{Field: "meta.tenant", ValueType: documentservice.ScalarFieldString}, {Field: "meta.rank", ValueType: documentservice.ScalarFieldInt64}}}
 	var created struct {
 		Index documentservice.IndexInfo `json:"index"`
 	}
@@ -175,8 +175,8 @@ func runCommandPerf(parent context.Context, prefix string, r *commandPerfReport)
 		return err
 	}
 	r.Index = created.Index
-	if r.Index.VectorStrategy != collections.VectorIndexStrategyNativeRuntime {
-		return fmt.Errorf("declared native_runtime, got %q", r.Index.VectorStrategy)
+	if r.Index.VectorStrategy != collections.VectorIndexStrategyColumnGraph {
+		return fmt.Errorf("declared column_graph, got %q", r.Index.VectorStrategy)
 	}
 	r.Phase = "load"
 	for first := 0; first < 4096; first += 128 {
@@ -299,7 +299,7 @@ func commandPerfRequest(p *commandPerfProcess, wire *nativewire.Client, r *comma
 	case "hybrid":
 		return func(ctx context.Context) error {
 			var response documentservice.HybridSearchResponse
-			if err := p.post(ctx, "/v1/indexes/docs/search/hybrid", documentservice.HybridSearchRequest{Query: "policy", QueryEmbedding: query, TopK: 10, TextCandidateLimit: 64, VectorCandidateLimit: 64, EfSearch: 64, Filter: filter}, &response); err != nil {
+			if err := p.post(ctx, "/v1/indexes/docs/search/hybrid", documentservice.HybridSearchRequest{Query: "policy", QueryEmbedding: query, TopK: 10, TextCandidateLimit: 64, VectorCandidateLimit: 64, EfSearch: 64}, &response); err != nil {
 				return err
 			}
 			r.LastHybridStats = response.Stats
@@ -317,28 +317,28 @@ func commandPerfRequest(p *commandPerfProcess, wire *nativewire.Client, r *comma
 		return func(ctx context.Context) error {
 			if r.Command == "http" {
 				var response documentservice.DenseVectorSearchResponse
-				if err := p.post(ctx, "/v1/indexes/docs/search/vector", documentservice.DenseVectorSearchRequest{QueryEmbedding: query, TopK: 10, Route: documentservice.RouteAnn, EfSearch: 64, Filter: filter}, &response); err != nil {
+				if err := p.post(ctx, "/v1/indexes/docs/search/vector", documentservice.DenseVectorSearchRequest{QueryEmbedding: query, TopK: 10, Route: documentservice.RouteExact, EfSearch: 64, Filter: filter}, &response); err != nil {
 					return err
 				}
 				r.LastDenseRoute = response.Route
-				if response.Route != documentservice.RouteAnn || !response.NativeBasePlusLiveDelta || response.ExactFallbacks != 0 || response.FullDocumentScanFallbacks != 0 {
+				if response.Route != documentservice.RouteExact || !response.Exact || response.ExactFallbacks != 0 {
 					return fmt.Errorf("Dense route: %+v", response)
 				}
 				return commandPerfDocuments(r, response.Documents)
 			}
-			response, err := wire.DenseVectorSearch(ctx, nativewire.DenseVectorSearchRequest{Index: "docs", Query: query, TopK: 10, EfSearch: 64, Filter: filter})
+			response, err := wire.DenseVectorSearch(ctx, nativewire.DenseVectorSearchRequest{Index: "docs", Query: query, TopK: 10, EfSearch: 64})
 			if err != nil {
 				return err
 			}
 			r.LastDenseRoute = response.Route
-			if response.Route != documentservice.RouteAnn || !response.NativeBasePlusLiveDelta || response.ExactFallbacks != 0 || response.FullDocumentScanFallbacks != 0 || len(response.Results) != 10 {
+			if response.Route != documentservice.RouteAnn || response.ExactFallbacks != 0 || response.FullDocumentScanFallbacks != 0 || len(response.Results) != 10 {
 				return fmt.Errorf("wire Dense route/results: %+v", response)
 			}
 			var seen [4096]bool
 			for _, row := range response.Results {
 				ordinal, e := commandPerfOrdinal(string(row.ID))
-				if e != nil || ordinal%16 != 0 || seen[ordinal] {
-					return fmt.Errorf("wire Dense duplicate/noncorpus ID outside scalar membership %q", row.ID)
+				if e != nil || seen[ordinal] {
+					return fmt.Errorf("wire Dense duplicate/noncorpus ID %q", row.ID)
 				}
 				seen[ordinal] = true
 			}
@@ -431,7 +431,7 @@ func commandPerfDocuments(r *commandPerfReport, docs []documentservice.Document)
 	var seen [4096]bool
 	for _, doc := range docs {
 		ordinal, err := commandPerfOrdinal(doc.ID)
-		if err != nil || ordinal%16 != 0 || seen[ordinal] || doc.Meta["tenant"] != "t00" || len(doc.Embedding) != 0 || !strings.Contains(doc.Content, "policy") {
+		if err != nil || (r.Operation != "hybrid" && (ordinal%16 != 0 || doc.Meta["tenant"] != "t00")) || seen[ordinal] || len(doc.Embedding) != 0 || !strings.Contains(doc.Content, "policy") {
 			return fmt.Errorf("unexpected/duplicate projected result %q", doc.ID)
 		}
 		seen[ordinal] = true

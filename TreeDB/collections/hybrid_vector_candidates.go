@@ -153,15 +153,14 @@ func (c *Collection) searchHybridVectorCandidatesDeclaredScalarAtReadViewWithAll
 		var vectorResponse VectorIndexSearchResponse
 		var err error
 		if nativeOrdinaryColumnGraphMeta(view.nativeRead.meta) {
-			// The executor prepares a bounded scalar allow-set at this same cut.
-			// ColumnGraph retains its maintained pack route rather than the
-			// native-runtime index's specialized scalar-filter planner.
+			// Ordinary filtered ANN is unsupported; admitted unfiltered searches
+			// use the maintained ColumnGraph pack route.
 			if filter != nil {
 				return HybridCandidateResponse{}, ErrHybridSearchUnsupported
 			}
 			vectorResponse, err = c.searchNativeColumnGraphAtReadViewWithPrepared(opts, &buffer, view, allowSet, acquisition)
 		} else {
-			vectorResponse, err = c.searchNativeHNSWAtReadView(opts, &buffer, view, allowSet)
+			return HybridCandidateResponse{}, ErrHybridSearchUnsupported
 		}
 		if err != nil {
 			stats := hybridVectorCandidateStatsFromSearch(requested, vectorResponse.Stats, 0)

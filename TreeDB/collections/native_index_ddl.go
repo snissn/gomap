@@ -239,6 +239,11 @@ func (m *NativeJSONManager) mutateIndexFamilies(owner *Collection, name string, 
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.mutateIndexFamiliesLocked(owner, name, create, remove, all, vector, dropVector, text)
+}
+
+// mutateIndexFamiliesLocked requires the manager DDL authority and vector mutation gate.
+func (m *NativeJSONManager) mutateIndexFamiliesLocked(owner *Collection, name string, create *IndexDefinition, remove map[string]struct{}, all bool, vector *VectorIndexDefinition, dropVector string, text *nativeTextIndexDDL) (out *CollectionMeta, resultErr error) {
 	read, err := m.Capture(name)
 	if err != nil {
 		return nil, err
@@ -246,6 +251,21 @@ func (m *NativeJSONManager) mutateIndexFamilies(owner *Collection, name string, 
 	defer func() { resultErr = errors.Join(resultErr, read.Close()) }()
 	if read.meta.Options.ColumnStore != nil && (create != nil || !nativeTypedMeta(read.meta)) {
 		return nil, backenddb.ErrNativeSemanticUnsupported
+	}
+	if vector != nil {
+		normalized, e := normalizeVectorIndexDefinition(*vector)
+		if e != nil {
+			return nil, e
+		}
+		candidate := *read.meta.copy()
+		candidate.VectorIndexes = append(candidate.VectorIndexes, normalized)
+		if _, e := normalizeCollectionMeta(candidate); e != nil {
+			return nil, e
+		}
+		if read.meta.Options.ColumnStore != nil {
+			return nil, backenddb.ErrNativeSemanticUnsupported
+		}
+		*vector = normalized
 	}
 	base := read.engine
 	// All temporary arrays, decoder objects and encoded bytes remain within this
@@ -357,11 +377,6 @@ func (m *NativeJSONManager) mutateIndexFamilies(owner *Collection, name string, 
 		if err != nil {
 			return nil, err
 		}
-		finishHNSW, e := owner.prepareNativeHNSWSchemaChange(read, meta, admit)
-		if e != nil {
-			return nil, e
-		}
-		defer finishHNSW(false)
 		var rows nativeJSONRows
 		var domains []nativeJSONDomainChange
 		var catalog []memtable.COWMutation
@@ -546,7 +561,6 @@ func (m *NativeJSONManager) mutateIndexFamilies(owner *Collection, name string, 
 		}
 		result, err := m.db.WriteNativePublication(publication, intent, false)
 		if result.LogicalInstalled {
-			finishHNSW(true)
 		}
 		if err != nil && (result.Assigned || result.LogicalInstalled) {
 			err = commitAmbiguousError("native index DDL completion", err)
@@ -806,4 +820,54 @@ func nativeIndexJSONBound(v reflect.Value, depth int) (uint64, error) {
 		return 0, backenddb.ErrNativeSemanticUnsupported
 	}
 	return total, nil
+}
+
+func nativeVectorDomainRemoved(name string, meta CollectionMeta) bool {
+	n, ok := strings.CutPrefix(name, "vector-index/")
+	if !ok {
+		return false
+	}
+	_, found := findVectorIndex(meta.VectorIndexes, n)
+	return !found
+}
+
+func (c *Collection) nativeCreateVectorIndex(def VectorIndexDefinition) (*CollectionMeta, error) {
+	if c.manager.isClosing() {
+		return nil, backenddb.ErrClosed
+	}
+	if err := c.nativeJSON.db.PrepareNativeProducer(); err != nil {
+		return nil, err
+	}
+	unlock := c.lockVectorIndexMutation()
+	defer unlock()
+	meta, err := c.nativeJSON.mutateIndexFamilies(c, c.name, nil, nil, false, &def, "", nil)
+	if meta != nil {
+		c.collectionSchemaCoordinator().hasNativeVectorIndexes.Store(len(meta.VectorIndexes) != 0)
+	}
+	return meta, err
+}
+
+func (c *Collection) nativeDropVectorIndex(name string) (*CollectionMeta, error) {
+	if c.manager.isClosing() {
+		return nil, backenddb.ErrClosed
+	}
+	if err := c.nativeJSON.db.PrepareNativeProducer(); err != nil {
+		return nil, err
+	}
+	unlock := c.lockVectorIndexMutation()
+	defer unlock()
+	meta, err := c.nativeJSON.mutateIndexFamilies(c, c.name, nil, nil, false, nil, name, nil)
+	if meta != nil {
+		c.collectionSchemaCoordinator().hasNativeVectorIndexes.Store(len(meta.VectorIndexes) != 0)
+		c.removeColumnGraphPartitionLiveCarrier(name)
+	}
+	return meta, err
+}
+func (c *Collection) nativeMutateIndexes(create *IndexDefinition, remove map[string]struct{}, all bool) (*CollectionMeta, error) {
+	if err := c.nativeJSON.db.PrepareNativeProducer(); err != nil {
+		return nil, err
+	}
+	unlock := c.lockVectorIndexMutation()
+	defer unlock()
+	return c.nativeJSON.mutateIndexFamilies(c, c.name, create, remove, all, nil, "", nil)
 }

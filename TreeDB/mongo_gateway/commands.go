@@ -3290,17 +3290,23 @@ func (s *Server) createIndexesResponse(command wire.Document) (wire.Document, er
 	}
 
 	createdAutomatically := false
-	s.invalidateCollectionCache(name)
 	col, err := s.Collections.OpenCollection(name)
 	if err != nil {
 		if !errors.Is(err, collections.ErrCollectionNotFound) {
 			return commandError(commandCodeBadValue, "BadValue", err.Error())
 		}
 		meta := s.defaultCollectionMeta(name)
+		if len(vectorDefs) != 0 && meta.Options.DocumentFormat == collections.DocumentFormatBSON {
+			return commandError(commandCodeBadValue, "BadValue", "Mongo BSON vector indexes are unsupported; ColumnGraph BSON support is not implemented")
+		}
 		meta.Indexes = scalarDefs
 		meta.VectorIndexes = vectorDefs
+		if len(vectorDefs) != 0 {
+			if err := collections.ValidateOrdinaryColumnGraphCollectionMeta(*meta); err != nil {
+				return commandError(commandCodeBadValue, "BadValue", err.Error())
+			}
+		}
 		created, err := s.Collections.CreateCollection(meta)
-		s.invalidateCollectionCache(name)
 		if err != nil {
 			// If another request created the collection after our miss, fall
 			// through to the idempotent add-index path below.
@@ -3310,6 +3316,7 @@ func (s *Server) createIndexesResponse(command wire.Document) (wire.Document, er
 				return commandError(commandCodeBadValue, "BadValue", createErr.Error())
 			}
 		} else {
+			s.invalidateCollectionCache(name)
 			return marshalDocument(bson.D{
 				{Key: "ok", Value: 1.0},
 				{Key: "createdCollectionAutomatically", Value: true},
@@ -3318,6 +3325,72 @@ func (s *Server) createIndexesResponse(command wire.Document) (wire.Document, er
 			})
 		}
 	}
+	if len(vectorDefs) != 0 {
+		var meta collections.CollectionMeta
+		var numBefore int32
+		mutated := false
+		code, codeName := commandCodeBadValue, "BadValue"
+		err := col.WithVectorIndexDDL(vectorDefs, func(ddl *collections.CollectionIndexDDL) error {
+			meta = ddl.Meta()
+			numBefore = int32(1 + len(meta.Indexes) + len(meta.VectorIndexes))
+			if err := validateCreateIndexesCrossKindNames(meta, scalarDefs, vectorDefs); err != nil {
+				code, codeName = commandCodeDuplicateKey, "DuplicateKey"
+				return err
+			}
+			if err := validateCreateIndexesExistingVectorDefinitions(meta, vectorDefs); err != nil {
+				return err
+			}
+			proposed := meta
+			proposed.VectorIndexes = append([]collections.VectorIndexDefinition(nil), meta.VectorIndexes...)
+			for _, def := range vectorDefs {
+				if _, ok := findVectorIndexDefinition(meta.VectorIndexes, def.Name); !ok {
+					proposed.VectorIndexes = append(proposed.VectorIndexes, def)
+				}
+			}
+			if err := collections.ValidateOrdinaryColumnGraphCollectionMeta(proposed); err != nil {
+				return err
+			}
+			for _, def := range scalarDefs {
+				if existing, ok := findIndexDefinition(meta.Indexes, def.Name); ok && sameIndexDefinition(existing, def) {
+					continue
+				}
+				next, err := ddl.CreateIndex(def)
+				if err != nil {
+					if collections.IsDuplicateKeyError(err) {
+						code, codeName = commandCodeDuplicateKey, "DuplicateKey"
+					}
+					return err
+				}
+				meta = *next
+				mutated = true
+			}
+			for _, def := range vectorDefs {
+				if existing, ok := findVectorIndexDefinition(meta.VectorIndexes, def.Name); ok && sameVectorIndexDefinition(existing, def) {
+					continue
+				}
+				next, err := ddl.CreateVectorIndex(def)
+				if err != nil {
+					return err
+				}
+				meta = *next
+				mutated = true
+			}
+			return nil
+		})
+		if mutated {
+			s.invalidateCollectionCache(name)
+		}
+		if err != nil {
+			return commandError(code, codeName, err.Error())
+		}
+		return marshalDocument(bson.D{
+			{Key: "ok", Value: 1.0},
+			{Key: "createdCollectionAutomatically", Value: createdAutomatically},
+			{Key: "numIndexesBefore", Value: numBefore},
+			{Key: "numIndexesAfter", Value: int32(1 + len(meta.Indexes) + len(meta.VectorIndexes))},
+		})
+	}
+	s.invalidateCollectionCache(name)
 	numBefore := int32(1 + len(col.MetaView().Indexes) + len(col.MetaView().VectorIndexes))
 	meta := col.MetaView()
 	if err := validateCreateIndexesCrossKindNames(meta, scalarDefs, vectorDefs); err != nil {
@@ -6439,6 +6512,23 @@ func parseCreateVectorIndexDefinition(doc wire.Document, field, name string, nam
 	if err != nil {
 		return createIndexDefinition{}, err
 	}
+	optionElements, err := bson.Raw(options).Elements()
+	if err != nil {
+		return createIndexDefinition{}, err
+	}
+	seenOptions := make(map[string]struct{}, len(optionElements))
+	for _, element := range optionElements {
+		key := element.Key()
+		switch key {
+		case "dimensions", "metric", "m", "efConstruction", "efSearch", "encoding":
+		default:
+			return createIndexDefinition{}, fmt.Errorf("Mongo gateway createIndexes vector option %q is unsupported", key)
+		}
+		if _, seen := seenOptions[key]; seen {
+			return createIndexDefinition{}, fmt.Errorf("Mongo gateway createIndexes vector option %q is duplicated", key)
+		}
+		seenOptions[key] = struct{}{}
+	}
 	dimensions, err := requiredPositiveIntField(options, "dimensions")
 	if err != nil {
 		return createIndexDefinition{}, err
@@ -6463,6 +6553,9 @@ func parseCreateVectorIndexDefinition(doc wire.Document, field, name string, nam
 	if err != nil {
 		return createIndexDefinition{}, err
 	}
+	if metric != collections.VectorMetricCosine || encoding != collections.VectorIndexEncodingFloat32 {
+		return createIndexDefinition{}, errors.New("Mongo gateway vector indexes currently require cosine metric and float32 encoding")
+	}
 	if m == 0 {
 		m = mongoDefaultVectorIndexM
 	}
@@ -6483,6 +6576,7 @@ func parseCreateVectorIndexDefinition(doc wire.Document, field, name string, nam
 		vectorDef: collections.VectorIndexDefinition{
 			Name:           name,
 			Field:          field,
+			Strategy:       collections.VectorIndexStrategyColumnGraph,
 			Metric:         metric,
 			Dimensions:     dimensions,
 			M:              m,
@@ -6785,14 +6879,7 @@ func indexDefinitionComponents(def collections.IndexDefinition) []collections.In
 }
 
 func sameVectorIndexDefinition(left, right collections.VectorIndexDefinition) bool {
-	return left.Name == right.Name &&
-		left.Field == right.Field &&
-		left.Metric == right.Metric &&
-		left.Dimensions == right.Dimensions &&
-		left.M == right.M &&
-		left.EfConstruction == right.EfConstruction &&
-		left.EfSearch == right.EfSearch &&
-		left.Encoding == right.Encoding
+	return collections.VectorIndexDefinitionsLogicallyEqual(left, right)
 }
 
 func validateCreateIndexesRequestDuplicates(scalarDefs []collections.IndexDefinition, vectorDefs []collections.VectorIndexDefinition) error {

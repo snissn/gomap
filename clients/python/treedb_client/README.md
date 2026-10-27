@@ -15,14 +15,15 @@ Service contract: [`docs/TREEDB_DOCUMENT_SERVICE_API.md`](../../../docs/TREEDB_D
 - delete by explicit IDs
 - delete by server-side metadata filter
 - count/filter/list documents
-- legacy exact dense-vector search with optional metadata filters and embedding echo
-- `ann` dense-vector search through compatible `native_runtime` and
+- explicit `route="exact"` ordinary dense-vector search with optional metadata filters and embedding echo
+- `ann` dense-vector search through compatible cosine/float32
   `column_graph` indexes; selected typed string equality/range filters joined
   by `AND` may use empty, bounded typed exact, or HNSW execution within that route
 - benchmark lifecycle helpers for reset/create, vector-index optimize/rebuild, and fail-closed no-document vector-index search
 - explicit scalar_u8 + rerank benchmark request fields (`query_mode="quantized_rerank"`, quantized index name, rerank candidate count)
 - ranked keyword search over the service `content` text index, including declared-field metadata filters
-- TreeDB-native hybrid text/vector search with declared-field metadata filters and deterministic RRF fusion options
+- TreeDB-native hybrid text/vector search with deterministic RRF fusion options;
+  filters are supported on text-only requests and admitted typed vector paths
 - typed dataclasses for documents, index metadata, benchmark vector options/responses, keyword/hybrid requests and responses, stats, plan/snapshot, fusion options, and errors
 - Haystack-style filter conversion/validation without a Haystack dependency
 
@@ -30,11 +31,20 @@ Not supported:
 
 - using benchmark no-document vector-index routes as Haystack/exact dense-search evidence
 - in-place `drop_old` reset for existing `column_graph` benchmark indexes; use a fresh data directory or unique index name
-- unsupported filtered `route="ann"` shapes (the service fails closed rather than using exact or primary-scan fallback)
+- ordinary filtered dense requests with an omitted or `ann` route, and ordinary
+  filtered Hybrid with a vector source (`UnsupportedError`, HTTP 501, no fallback)
+- removed `native_runtime` declarations, L2/inner-product ANN and primary int8
+  vector indexes; use a derived `scalar_u8` plane for supported quantized serving
 - async client APIs
 - client-side scans or text/vector fallbacks to emulate unsupported TreeDB behavior
 
 TreeDB and this client are pre-alpha; APIs may change with the service contract.
+
+Fresh eligible declarations default to `column_graph`. An explicit removed
+strategy returns `unsupported`/HTTP 501 on the service; client model validation
+rejects it before sending a request. Persisted removed strategies and ambiguous
+old omitted-strategy metadata are refused. Recreate from source documents in a
+fresh data directory; there is no automatic migration or transport fallback.
 
 ## Optional native typed transport
 
@@ -67,6 +77,9 @@ embedding materialization. V4 validates returned canonical vectors when true
 but never parses them to recompute scores. Commands 64 and 65 pack query and
 ingest FP32 values respectively; document responses remain JSON. Legacy
 representations retain dense 64/v2 exact and 64/v3 scalar-u8 rerank.
+Dense 64/v1 and the removed runtime response tag are rejected; the client never
+negotiates or retries that retired version. Python's typed codecs remain v2–v4;
+the ordinary Go wire service separately supports v5.
 
 Native dense preparation converts each query component once and validates
 finiteness in that same pass, then packs the unchanged FP32 request format.
@@ -293,6 +306,7 @@ print(count.count)
 results = client.query_by_embedding(
     "docs",
     query_embedding=[0.1, 0.2, 0.3],
+    route="exact",
     top_k=5,
     filter=Filter(
         operator="AND",
@@ -385,9 +399,6 @@ hybrid = client.search_hybrid(
     text_candidate_limit=100,
     max_postings_scanned=100000,
     vector_candidate_limit=100,
-    vector_query_mode="quantized_rerank",
-    quantized_index_name="embedding.scalar_u8.fast",
-    quantized_rerank_candidates=100,
     ef_search=64,
     max_chunks_per_parent=2,
     fusion={
@@ -402,8 +413,9 @@ for doc in hybrid.documents:
     print(doc.id, doc.score, doc.meta.get("_treedb_search"))
 ```
 
-Hybrid vectors use exact scoring by default. To select the admitted scalar-u8
-rerank path, set `vector_query_mode="quantized_rerank"` and
+Hybrid vectors use FP32 scoring on the graph route by default. For a separately
+declared and admitted typed index with a scalar-u8 plane, select the rerank path
+with `vector_query_mode="quantized_rerank"` and
 `quantized_index_name`. `quantized_rerank_candidates` is optional; omission or
 zero lets the service use its effective traversal width, while a nonzero value
 must cover the effective vector candidate limit. The response records the
@@ -448,16 +460,22 @@ Unsupported operators and the top-level `embedding` field filter raise
 `meta.embedding.provider` are allowed. The client does not broaden unsupported
 filters into local document scans.
 
-The full filter AST is supported by document count/filter/delete and legacy
-exact dense-vector search. Selected typed dense supports declared string
+The full filter AST is supported by document count/filter/delete and explicit
+ordinary `route="exact"` dense-vector search. Omitted ordinary dense routes
+select ANN, so a filter requires an explicit exact route. Selected typed dense
+supports declared string
 equality/range leaves joined by `AND` and rejects the document-scan route.
-Filtered keyword/hybrid methods accept equality and one- or two-sided range
+Filtered keyword and text-only Hybrid methods accept equality and one- or two-sided range
 leaves, alone or nested under `AND`, only when every field was declared in
 `scalar_fields` at index creation. Same-field
 bounds merge; different fields resolve through bounded scalar indexes and
 intersect before text/vector work. `OR`, `NOT`, `!=`, `in`, and `not in` remain
 typed `UnsupportedError` results on keyword/hybrid routes even though the client
 can serialize them for other document methods.
+
+Ordinary Hybrid requests combining a vector source and a filter are unavailable
+even when every field is declared. Admitted typed Hybrid retains its selected
+string-filter and quantized-rerank contracts described below.
 
 Any missing/corrupt index, truncated lookup, or snapshot change fails closed
 without partial ranking or a local/primary document scan. Truncation raises

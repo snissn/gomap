@@ -44,7 +44,6 @@ const (
 	defaultQuantizedIndexName       = "embedding.scalar_u8.fast"
 	defaultRabitQQuantizedIndexName = "embedding.rabitq_1bit.fast"
 	quantizedVectorCodecRabitQ1Bit  = "rabitq_1bit"
-	nativeRuntimeSnapshotPath       = collections.VectorIndexSearchPath("native_runtime_snapshot")
 )
 
 type validationExactSource string
@@ -137,7 +136,6 @@ type result struct {
 	StorageAfterVacuum        storageReport                     `json:"storage_after_index_vacuum"`
 	IndexStatsBefore          collections.VectorIndexStats      `json:"index_stats_before_compact"`
 	IndexStatsLoaded          collections.VectorIndexStats      `json:"index_stats_loaded"`
-	NativeRootBytes           int64                             `json:"native_root_bytes"`
 	VectorIndexStatus         collections.VectorIndexStatus     `json:"vector_index_status"`
 	CompactStorage            *backenddb.CompactStorageStats    `json:"compact_storage,omitempty"`
 	FormatConfig              *backenddb.FormatConfig           `json:"format_config,omitempty"`
@@ -354,8 +352,8 @@ func parseConfig(args []string) (config, error) {
 		compact:               false,
 		vacuumIndex:           true,
 		disableExactFallback:  true,
-		profile:               treedb.ProfileBenchUnsafe,
-		vectorIndexStrategy:   collections.VectorIndexStrategyNativeRuntime,
+		profile:               treedb.ProfileCommandWALDurable,
+		vectorIndexStrategy:   collections.VectorIndexStrategyColumnGraph,
 		vectorQueryMode:       collections.VectorIndexQueryModeExact,
 	}
 	profileRaw := string(cfg.profile)
@@ -370,7 +368,7 @@ func parseConfig(args []string) (config, error) {
 	fs.BoolVar(&cfg.keepDir, "keep-dir", false, "Keep the DB directory after the run")
 	fs.BoolVar(&cfg.matrix, "matrix", cfg.matrix, "Run the storage/search benchmark matrix instead of a single storage case")
 	fs.StringVar(&profileRaw, "profile", profileRaw, "TreeDB profile: "+treedb.BenchmarkProfileFlagHelp)
-	fs.StringVar(&vectorIndexStrategyRaw, "vector-index-strategy", vectorIndexStrategyRaw, "TreeDB vector index strategy: native_runtime or column_graph")
+	fs.StringVar(&vectorIndexStrategyRaw, "vector-index-strategy", vectorIndexStrategyRaw, "TreeDB vector index strategy: column_graph")
 	fs.StringVar(&vectorQueryModeRaw, "vector-query-mode", vectorQueryModeRaw, "TreeDB vector query mode: exact, quantized_only, or quantized_rerank")
 	fs.StringVar(&validationExactSourceRaw, "validation-exact-source", validationExactSourceRaw, "Exact baseline source for recall validation: treedb or dataset")
 	fs.StringVar(&cfg.quantizedCodec, "quantized-codec", cfg.quantizedCodec, "Quantized codec for column_graph quantized query modes: scalar_u8 or rabitq_1bit; empty defaults to scalar_u8 for quantized modes")
@@ -512,9 +510,7 @@ func parseConfig(args []string) (config, error) {
 
 func parseVectorIndexStrategy(raw string) (collections.VectorIndexStrategy, error) {
 	switch collections.VectorIndexStrategy(strings.ToLower(strings.TrimSpace(raw))) {
-	case "", collections.VectorIndexStrategyNativeRuntime:
-		return collections.VectorIndexStrategyNativeRuntime, nil
-	case collections.VectorIndexStrategyColumnGraph:
+	case "", collections.VectorIndexStrategyColumnGraph:
 		return collections.VectorIndexStrategyColumnGraph, nil
 	default:
 		return "", fmt.Errorf("unsupported -vector-index-strategy %q", raw)
@@ -678,18 +674,15 @@ func applySearchBenchmarkDefaults(cfg *config) error {
 }
 
 func defaultProfileForStrategy(profile treedb.Profile, strategy collections.VectorIndexStrategy) treedb.Profile {
-	if profile == "" && strategy == collections.VectorIndexStrategyColumnGraph {
-		return treedb.ProfileCommandWALDurable
-	}
 	if profile == "" {
-		return treedb.ProfileBenchUnsafe
+		return treedb.ProfileCommandWALDurable
 	}
 	return profile
 }
 
 func validateDemoProfile(profile treedb.Profile, strategy collections.VectorIndexStrategy) error {
 	if strategy != collections.VectorIndexStrategyColumnGraph {
-		return nil
+		return fmt.Errorf("unsupported vector index strategy %q; use column_graph", strategy)
 	}
 	if !treedb.OptionsForBenchmark(profile, "").CommandWAL {
 		return fmt.Errorf("-vector-index-strategy column_graph requires a command-WAL profile; got %q", profile)
@@ -798,7 +791,7 @@ func resultBackendForStrategy(strategy collections.VectorIndexStrategy) string {
 	if strategy == collections.VectorIndexStrategyColumnGraph {
 		return "treedb_column_graph"
 	}
-	return "treedb"
+	return "unavailable"
 }
 
 func resultBackendForQuery(strategy collections.VectorIndexStrategy, mode collections.VectorIndexQueryMode, quantizedCodec string) string {
@@ -877,7 +870,7 @@ func columnGraphDemoColumnStoreConfig(dims int) *collections.ColumnStoreConfig {
 
 func execute(ctx context.Context, cfg config) (result, error) {
 	if cfg.vectorIndexStrategy == "" {
-		cfg.vectorIndexStrategy = collections.VectorIndexStrategyNativeRuntime
+		cfg.vectorIndexStrategy = collections.VectorIndexStrategyColumnGraph
 	}
 	cfg.profile = defaultProfileForStrategy(cfg.profile, cfg.vectorIndexStrategy)
 	if err := validateDemoProfile(cfg.profile, cfg.vectorIndexStrategy); err != nil {
@@ -1042,29 +1035,17 @@ func execute(ctx context.Context, cfg config) (result, error) {
 	}
 	res.Insert = phaseSince(insertStart)
 
-	if def.Strategy != collections.VectorIndexStrategyColumnGraph {
-		if _, err := col.CreateVectorIndex(def); err != nil {
-			_ = cleanupBackend()
-			return result{}, err
-		}
-	}
 	rebuildStart := time.Now()
 	status, err := col.RebuildVectorIndex(def.Name)
 	if err != nil {
 		_ = cleanupBackend()
 		return result{}, err
 	}
-	if def.Strategy == collections.VectorIndexStrategyColumnGraph {
-		if !status.Loaded || status.State != collections.VectorIndexStateColumnGraphLoaded {
-			_ = cleanupBackend()
-			return result{}, fmt.Errorf("unexpected column_graph vector status: %+v", status)
-		}
-	} else if !status.NativeRootLoaded || status.RootID == 0 {
+	if !status.Loaded || status.State != collections.VectorIndexStateColumnGraphLoaded {
 		_ = cleanupBackend()
-		return result{}, fmt.Errorf("unexpected native vector root status: %+v", status)
+		return result{}, fmt.Errorf("unexpected column_graph vector status: %+v", status)
 	}
 	res.Rebuild = phaseSince(rebuildStart)
-	res.NativeRootBytes = status.NativeRootBytes
 	res.IndexStatsBefore = status.Stats
 	res.VectorIndexStatus = status
 
@@ -1171,7 +1152,6 @@ func execute(ctx context.Context, cfg config) (result, error) {
 	var beforeLoad runtime.MemStats
 	runtime.GC()
 	runtime.ReadMemStats(&beforeLoad)
-	var loaded *collections.VectorIndex
 	var columnGraphSearcher *collections.VectorIndexSearcher
 	if def.Strategy == collections.VectorIndexStrategyColumnGraph {
 		columnGraphSearcher, err = col.OpenVectorIndexSearcher(collections.VectorIndexSearcherOptions{IndexName: def.Name})
@@ -1193,28 +1173,6 @@ func execute(ctx context.Context, cfg config) (result, error) {
 		res.VectorIndexSearchPath = response.Path
 		res.IndexStatsLoaded = response.Status.Stats
 		res.VectorIndexStatus = response.Status
-	} else {
-		var loadStatus collections.VectorIndexLoadStatus
-		loaded, loadStatus, err = col.LoadVectorIndexSnapshot(vectorIndexOptions(def))
-		if err != nil {
-			return result{}, err
-		}
-		if loaded == nil {
-			return result{}, fmt.Errorf("native vector root load returned no runtime: %+v", loadStatus)
-		}
-		if !loadStatus.Loaded {
-			return result{}, fmt.Errorf("native vector root not marked loaded: %+v", loadStatus)
-		}
-		if loadStatus.RootID == 0 {
-			return result{}, fmt.Errorf("native vector root loaded with zero root id: %+v", loadStatus)
-		}
-		res.VectorIndexSearchPath = nativeRuntimeSnapshotPath
-		res.IndexStatsLoaded = loaded.Stats()
-		status, err := col.VectorIndexStatus(def.Name)
-		if err != nil {
-			return result{}, err
-		}
-		res.VectorIndexStatus = status
 	}
 	res.ReopenLoad = phaseSince(reopenStart)
 	var afterLoad runtime.MemStats
@@ -1240,17 +1198,6 @@ func execute(ctx context.Context, cfg config) (result, error) {
 		}
 		res.Validation = validation
 		searchBenchmarks, err := benchmarkColumnGraphSearchMatrix(col, def.Name, cfg, work)
-		if err != nil {
-			return result{}, err
-		}
-		res.SearchBenchmarks = searchBenchmarks
-	} else {
-		validation, err := validateCompactedData(col, loaded, cfg, work)
-		if err != nil {
-			return result{}, err
-		}
-		res.Validation = validation
-		searchBenchmarks, err := benchmarkSearchMatrix(loaded, cfg, work)
 		if err != nil {
 			return result{}, err
 		}
@@ -1283,7 +1230,7 @@ func allocDeltaBytes(after, before uint64) int64 {
 
 func executeMatrix(ctx context.Context, cfg config) (matrixResult, error) {
 	if cfg.vectorIndexStrategy == "" {
-		cfg.vectorIndexStrategy = collections.VectorIndexStrategyNativeRuntime
+		cfg.vectorIndexStrategy = collections.VectorIndexStrategyColumnGraph
 	}
 	cfg.profile = defaultProfileForStrategy(cfg.profile, cfg.vectorIndexStrategy)
 	if err := validateDemoProfile(cfg.profile, cfg.vectorIndexStrategy); err != nil {
@@ -1578,90 +1525,6 @@ func validateDatasetDocuments(cfg config, work workload) error {
 		return fmt.Errorf("dataset documents rows=%d, want %d", rows, cfg.docs)
 	}
 	return nil
-}
-
-func validateCompactedData(col *collections.Collection, idx *collections.VectorIndex, cfg config, work workload) (out validationResult, err error) {
-	start := time.Now()
-	defer func() {
-		elapsed := phaseSince(start)
-		out.DurationNanos = elapsed.DurationNanos
-		out.Seconds = elapsed.Seconds
-	}()
-	out = validationResult{
-		DocumentsChecked: cfg.validateDocs,
-		QueriesChecked:   cfg.validateQueries,
-		ExactSource:      cfg.validationExactSource,
-		MinRecall:        cfg.minRecall,
-	}
-	expectedDocs, err := expectedValidationDocuments(cfg, work)
-	if err != nil {
-		return out, err
-	}
-	for i := 0; i < cfg.validateDocs; i++ {
-		expected := expectedDocs[i]
-		id := expected.id
-		want := expected.line
-		got, err := col.Get(id)
-		if err != nil {
-			return out, fmt.Errorf("get compacted doc %q: %w", id, err)
-		}
-		if !bytes.Equal(got, want) {
-			return out, fmt.Errorf("compacted doc %d mismatch", expected.index)
-		}
-	}
-	if cfg.validateQueries == 0 {
-		return out, nil
-	}
-	queries, err := loadQueries(cfg.validateQueries, cfg, work, 0)
-	if err != nil {
-		return out, err
-	}
-	if cfg.validationExactSource == validationExactSourceDataset {
-		exactSets, err := datasetExactIDSets(queries, cfg, work)
-		if err != nil {
-			return out, err
-		}
-		for i, query := range queries {
-			ann, _, err := idx.Search(query, collections.VectorIndexSearchOptions{
-				TopK:                 cfg.topK,
-				EfSearch:             cfg.efSearch,
-				DisableExactFallback: true,
-			})
-			if err != nil {
-				return out, err
-			}
-			exactIDs := exactSets[i]
-			out.ExactTotal += len(exactIDs)
-			out.ANNTotal += len(ann)
-			for _, result := range ann {
-				if _, ok := exactIDs[string(result.DocumentID)]; ok {
-					out.Overlap++
-				}
-			}
-		}
-	} else {
-		// Recall validation disables exact fallback on the ANN side so it measures
-		// the graph result against the exact baseline computed inside CheckRecall.
-		recall, err := idx.CheckRecall(queries, collections.VectorIndexSearchOptions{
-			TopK:                 cfg.topK,
-			EfSearch:             cfg.efSearch,
-			DisableExactFallback: true,
-		})
-		if err != nil {
-			return out, err
-		}
-		out.ExactTotal = recall.ExactTotal
-		out.ANNTotal = recall.ANNTotal
-		out.Overlap = recall.Overlap
-		out.Recall = recall.Recall
-	}
-	if out.ExactTotal > 0 {
-		out.Recall = float64(out.Overlap) / float64(out.ExactTotal)
-	}
-	if out.Recall < cfg.minRecall {
-		return out, fmt.Errorf("recall %.4f below minimum %.4f", out.Recall, cfg.minRecall)
-	}
-	return out, nil
 }
 
 func validateCompactedColumnGraphData(col *collections.Collection, indexName string, cfg config, work workload) (out validationResult, err error) {
@@ -2066,132 +1929,6 @@ func datasetDocuments(docIndexes []int, work workload, visit func(docIndex int, 
 	return fmt.Errorf("dataset document %d not found", missing[0])
 }
 
-func benchmarkSearch(idx *collections.VectorIndex, cfg config, work workload) (searchBenchmarkResult, error) {
-	return benchmarkSearchConcurrent(idx, cfg, work, 1)
-}
-
-func benchmarkSearchMatrix(idx *collections.VectorIndex, cfg config, work workload) ([]searchBenchmarkResult, error) {
-	levels := make([]int, 0, len(cfg.searchConcurrency)+1)
-	levels = append(levels, 1)
-	levels = append(levels, cfg.searchConcurrency...)
-	queries, err := loadQueries(cfg.queries, cfg, work, cfg.validateQueries)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]searchBenchmarkResult, 0, len(levels))
-	for _, concurrency := range levels {
-		bench, err := benchmarkSearchLoadedConcurrent(idx, cfg, queries, concurrency)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, bench)
-	}
-	return out, nil
-}
-
-func benchmarkSearchConcurrent(idx *collections.VectorIndex, cfg config, work workload, concurrency int) (searchBenchmarkResult, error) {
-	if concurrency <= 0 {
-		return searchBenchmarkResult{}, errors.New("search concurrency must be positive")
-	}
-	queries, err := loadQueries(cfg.queries, cfg, work, cfg.validateQueries)
-	if err != nil {
-		return searchBenchmarkResult{}, err
-	}
-	return benchmarkSearchLoadedConcurrent(idx, cfg, queries, concurrency)
-}
-
-func benchmarkSearchLoadedConcurrent(idx *collections.VectorIndex, cfg config, queries [][]float32, concurrency int) (searchBenchmarkResult, error) {
-	if concurrency <= 0 {
-		return searchBenchmarkResult{}, errors.New("search concurrency must be positive")
-	}
-	latencies := make([]int64, len(queries))
-	var next atomic.Int64
-	var candidatesTotal int64
-	var rerankTotal int64
-	var exactFallbacks int64
-	var errMu sync.Mutex
-	var firstErr error
-	setErr := func(err error) {
-		errMu.Lock()
-		defer errMu.Unlock()
-		if firstErr == nil {
-			firstErr = err
-		}
-	}
-	worker := func() {
-		for {
-			i := int(next.Add(1) - 1)
-			if i >= len(queries) {
-				return
-			}
-			start := time.Now()
-			results, trace, err := idx.Search(queries[i], collections.VectorIndexSearchOptions{
-				TopK:                 cfg.topK,
-				EfSearch:             cfg.efSearch,
-				DisableExactFallback: cfg.disableExactFallback,
-			})
-			if err != nil {
-				setErr(err)
-				return
-			}
-			latencies[i] = time.Since(start).Nanoseconds()
-			if len(results) == 0 {
-				setErr(errors.New("vector search returned no results"))
-				return
-			}
-			atomic.AddInt64(&candidatesTotal, int64(trace.CandidatesExamined))
-			atomic.AddInt64(&rerankTotal, int64(trace.RerankCount))
-			if trace.ExactFallbackReason != "" {
-				atomic.AddInt64(&exactFallbacks, 1)
-			}
-		}
-	}
-	startAll := time.Now()
-	if concurrency == 1 {
-		worker()
-	} else {
-		var wg sync.WaitGroup
-		wg.Add(concurrency)
-		for i := 0; i < concurrency; i++ {
-			go func() {
-				defer wg.Done()
-				worker()
-			}()
-		}
-		wg.Wait()
-	}
-	total := time.Since(startAll)
-	if firstErr != nil {
-		return searchBenchmarkResult{}, firstErr
-	}
-	var latencyTotal int64
-	for _, latency := range latencies {
-		latencyTotal += latency
-	}
-	sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
-	avg := float64(latencyTotal) / float64(len(queries))
-	opsPerSecond := 0.0
-	if total > 0 {
-		opsPerSecond = float64(len(queries)) / total.Seconds()
-	}
-	return searchBenchmarkResult{
-		Concurrency:          concurrency,
-		Queries:              len(queries),
-		QueryMode:            collections.VectorIndexQueryModeExact,
-		TotalDurationNanos:   total.Nanoseconds(),
-		AvgNanos:             avg,
-		AvgMicros:            avg / 1000,
-		OpsPerSecond:         opsPerSecond,
-		P50Nanos:             percentile(latencies, 0.50),
-		P95Nanos:             percentile(latencies, 0.95),
-		P99Nanos:             percentile(latencies, 0.99),
-		AvgCandidates:        float64(candidatesTotal) / float64(len(queries)),
-		AvgRerank:            float64(rerankTotal) / float64(len(queries)),
-		ExactFallbacks:       int(exactFallbacks),
-		DisableExactFallback: cfg.disableExactFallback,
-	}, nil
-}
-
 func benchmarkColumnGraphSearchMatrix(col *collections.Collection, indexName string, cfg config, work workload) ([]searchBenchmarkResult, error) {
 	levels := make([]int, 0, len(cfg.searchConcurrency)+1)
 	levels = append(levels, 1)
@@ -2484,19 +2221,6 @@ func writeRuntimeProfile(path, name string) error {
 	return nil
 }
 
-func vectorIndexOptions(def collections.VectorIndexDefinition) collections.VectorIndexOptions {
-	return collections.VectorIndexOptions{
-		Name:           def.Name,
-		Field:          def.Field,
-		Metric:         def.Metric,
-		Dimensions:     def.Dimensions,
-		M:              def.M,
-		EfConstruction: def.EfConstruction,
-		EfSearch:       def.EfSearch,
-		Encoding:       def.Encoding,
-	}
-}
-
 func loadQueries(count int, cfg config, work workload, syntheticOffset int) ([][]float32, error) {
 	if work.datasetDir == "" {
 		return syntheticQueries(count, cfg.docs, cfg.dimensions, syntheticOffset), nil
@@ -2748,7 +2472,7 @@ func printText(w io.Writer, res result) {
 	}
 	fmt.Fprintf(w, "\nPhases\n")
 	fmt.Fprintf(w, "insert: %.3fs\n", res.Insert.Seconds)
-	fmt.Fprintf(w, "rebuild_vector_index strategy=%s: %.3fs native_root_bytes=%d\n", resultStrategy(res), res.Rebuild.Seconds, res.NativeRootBytes)
+	fmt.Fprintf(w, "rebuild_vector_index strategy=%s: %.3fs\n", resultStrategy(res), res.Rebuild.Seconds)
 	if res.Compact {
 		fully := false
 		if res.CompactStorage != nil {
@@ -2881,14 +2605,14 @@ func resultStrategy(res result) collections.VectorIndexStrategy {
 	if res.VectorIndexStrategy != "" {
 		return res.VectorIndexStrategy
 	}
-	return collections.VectorIndexStrategyNativeRuntime
+	return ""
 }
 
 func resultSearchPath(res result) string {
 	if res.VectorIndexSearchPath != "" {
 		return string(res.VectorIndexSearchPath)
 	}
-	return string(nativeRuntimeSnapshotPath)
+	return "unavailable"
 }
 
 func resultQueryMode(res result) collections.VectorIndexQueryMode {

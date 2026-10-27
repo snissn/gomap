@@ -46,9 +46,7 @@ type hybridSearchExecutionPlan struct {
 	vectorCandidateAllowSetBudget int
 	scalarFilter                  *HybridScalarFilter
 	scalarFilterStrategy          HybridScalarFilterStrategy
-	nativeVectorRuntime           bool
 	nativeColumnGraph             bool
-	nativeVectorScalar            bool
 	ownerBoundVectorScalar        bool
 	fusion                        HybridFusionOptions
 	resultMode                    HybridResultMode
@@ -105,6 +103,13 @@ func (c *Collection) searchHybridWithCandidateBudgetPolicy(opts HybridSearchOpti
 	if err != nil {
 		return hybridSearchFailClosed(response, hybridPlanFailClosedReason(err), err)
 	}
+	if plan.vector != nil && plan.scalarFilter != nil && c.typedGraphServingPolicy() == nil {
+		cfg := c.meta.Options.ColumnStore
+		typedQuantized := c.nativeJSON == nil && cfg != nil && cfg.Enabled && cfg.RetainedPayload == ColumnRetainedPayloadNonColumn && hybridVectorQuerySelectsQuantizedRerank(plan.vector)
+		if !typedQuantized {
+			return hybridSearchFailClosed(response, HybridFailClosedReasonUnsupported, fmt.Errorf("%w: ordinary filtered vector hybrid search is not implemented", ErrHybridSearchUnsupported))
+		}
+	}
 
 	var baseState hybridSearchStateToken
 	if c.nativeJSON != nil {
@@ -140,8 +145,7 @@ func (c *Collection) searchHybridWithCandidateBudgetPolicy(opts HybridSearchOpti
 		if plan.vector != nil {
 			def, ok := findVectorIndex(view.nativeRead.meta.VectorIndexes, plan.vector.IndexName)
 			plan.nativeColumnGraph = ok && nativeOrdinaryColumnGraphMeta(view.nativeRead.meta) && def.Strategy == VectorIndexStrategyColumnGraph
-			plan.nativeVectorRuntime = ok && nativeOrdinaryHNSWMeta(view.nativeRead.meta) && vectorIndexDefinitionUsesNativeRuntime(def)
-			if !ok || (!plan.nativeColumnGraph && !plan.nativeVectorRuntime) || def.Metric != VectorMetricCosine || def.Encoding != VectorIndexEncodingFloat32 || def.Representation != "" || len(def.QuantizedIndexes) != 0 || hybridVectorQuerySelectsQuantizedRerank(plan.vector) {
+			if !ok || !plan.nativeColumnGraph || def.Metric != VectorMetricCosine || def.Encoding != VectorIndexEncodingFloat32 || def.Representation != "" || len(def.QuantizedIndexes) != 0 || hybridVectorQuerySelectsQuantizedRerank(plan.vector) {
 				return hybridSearchFailClosed(response, HybridFailClosedReasonVectorIndexUnavailable, fmt.Errorf("%w: ordinary native vector declaration required", ErrHybridSearchUnsupported))
 			}
 		}
@@ -182,26 +186,15 @@ func (c *Collection) searchHybridWithCandidateBudgetPolicy(opts HybridSearchOpti
 
 	var allowSet hybridScalarIDs
 	var scalarStats HybridSearchStats
-	if plan.vector != nil && c.nativeJSON == nil {
-		plan.nativeVectorRuntime, err = c.hybridVectorQueryUsesNativeRuntime(plan.vector)
-		if err != nil {
-			return hybridSearchFailClosed(response, HybridFailClosedReasonVectorIndexUnavailable, err)
-		}
-	}
 	nativeVectorOnlyShape := plan.text == nil && plan.vector != nil
 	if nativeVectorOnlyShape {
-		plan.nativeVectorScalar = plan.nativeVectorRuntime &&
-			plan.scalarFilter != nil &&
-			plan.scalarFilterStrategy == HybridScalarFilterStrategyPrefilter
-		// Selected typed serving owns vector-only scalar preparation even when
-		// the catalog definition itself is column_graph rather than
-		// native_runtime. Keep this distinct from the legacy native seam.
+		// Selected typed serving owns vector-only scalar preparation.
 		plan.ownerBoundVectorScalar = plan.readView != nil &&
 			!plan.nativeColumnGraph &&
 			plan.scalarFilter != nil &&
 			plan.scalarFilterStrategy == HybridScalarFilterStrategyPrefilter
 	}
-	if !plan.nativeVectorScalar && !plan.ownerBoundVectorScalar {
+	if !plan.ownerBoundVectorScalar {
 		if plan.readView != nil {
 			allowSet, scalarStats, err = c.hybridScalarAllowSetAtReadView(plan, plan.readView)
 		} else {
@@ -1047,34 +1040,6 @@ func (c *Collection) hybridScalarIndexExists(indexName string) (bool, error) {
 	return ok, nil
 }
 
-func (c *Collection) hybridVectorQueryUsesNativeRuntime(query *HybridVectorQuery) (bool, error) {
-	if query == nil {
-		return false, nil
-	}
-	if c == nil {
-		return false, errCollectionNil
-	}
-	if c.db == nil {
-		return false, errCollectionDBNil
-	}
-	if def, found, current := c.cachedVectorIndexDefinitionForCurrentState(query.IndexName); found && current {
-		return vectorIndexDefinitionUsesNativeRuntime(def), nil
-	}
-	snap := c.db.AcquireSnapshot()
-	if snap == nil {
-		return false, backenddb.ErrClosed
-	}
-	defer func() { _ = snap.Close() }()
-	catalog, err := c.catalogForSnapshot(snap)
-	if err != nil {
-		return false, err
-	}
-	if catalog == nil {
-		return false, errCollectionNotFound
-	}
-	def, ok := findVectorIndex(catalog.meta.VectorIndexes, query.IndexName)
-	return ok && vectorIndexDefinitionUsesNativeRuntime(def), nil
-}
 func (c *Collection) hybridSearchCandidates(plan hybridSearchExecutionPlan, allowSet hybridScalarIDs) ([]HybridSearchCandidate, HybridSearchStats, error) {
 	var out []HybridSearchCandidate
 	if capHint := hybridSearchCandidatePreallocHint(plan); capHint > 0 {
@@ -1086,11 +1051,11 @@ func (c *Collection) hybridSearchCandidates(plan hybridSearchExecutionPlan, allo
 	var acquisition *nativeColumnGraphPreparedSearchAcquisition
 	searchVector := func() (HybridCandidateResponse, error) {
 		selectedTyped := c.typedGraphServingPolicy() != nil
-		if plan.nativeVectorRuntime || plan.nativeColumnGraph || selectedTyped {
+		if plan.nativeColumnGraph || selectedTyped {
 			var filter *HybridScalarFilter
 			// Keep prefilter admission/order in the executor, but let the
 			// selected owner search its captured base and current mutations.
-			if plan.nativeVectorScalar || plan.ownerBoundVectorScalar || (plan.nativeVectorRuntime && plan.scalarFilterStrategy == HybridScalarFilterStrategyPrefilter) || (selectedTyped && allowSet.present()) {
+			if plan.ownerBoundVectorScalar || (selectedTyped && allowSet.present()) {
 				filter = plan.scalarFilter
 			}
 			if plan.readView != nil {
@@ -1166,13 +1131,6 @@ func (c *Collection) hybridSearchCandidates(plan hybridSearchExecutionPlan, allo
 				vectorResponse, vectorErr = searchVector()
 			}
 		}
-	}
-	if plan.nativeVectorRuntime && plan.text != nil && plan.scalarFilter != nil {
-		// Mixed search already reports the complete scalar allow-set above.
-		// HNSW retains its probe/visited/plan work, but its copied population
-		// counters must not count that same lookup result a second time.
-		vectorResponse.Stats.ScalarFilterInputIDs = 0
-		vectorResponse.Stats.ScalarFilterFinalIDs = 0
 	}
 	if plan.scalarFilterStrategy == HybridScalarFilterStrategyVectorFirst {
 		hybridMergeStats(&stats, vectorResponse.Stats)

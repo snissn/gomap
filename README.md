@@ -57,8 +57,16 @@ Run the native server:
 ```
 
 The native server and `cmd/treedb-document-service` use the shared COW document
-owner by default. Ordinary ColumnGraph and explicit native_runtime declarations
-retain their service strategy policy. Ordinary ColumnGraph requires
+owner by default. New vector indexes default to cosine/float32 `column_graph`,
+the only supported serving strategy. Removed strategies, L2/inner-product ANN,
+primary int8 vector indexes and BSON vector-index declarations are refused before
+mutation. Mongo BSON CRUD and scalar indexes remain supported; Mongo vector
+`createIndexes` requests return `BadValue` (code 2) without creating a collection
+or any indexes, including scalar siblings in the same request.
+Ordinary filtered ANN and vector-bearing filtered Hybrid are unavailable;
+request `route=exact` explicitly for ordinary filtered dense search. Admitted
+typed filtering and derived quantized score planes retain their own contracts.
+Ordinary ColumnGraph requires
 `command_wal_durable` under both storage owners. After deferred or raw wire vector
 mutations, keyword and filtered exact reads remain available, while ANN/mixed
 Hybrid require explicit graph maintenance. The HTTP service exposes Optimize;

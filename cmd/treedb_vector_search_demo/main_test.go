@@ -268,7 +268,7 @@ func TestExecuteConsumesDatasetDir(t *testing.T) {
 	}
 }
 
-func TestExecuteDatasetExactValidationNativeRuntime(t *testing.T) {
+func TestExecuteDatasetExactValidationDefaultColumnGraph(t *testing.T) {
 	datasetDir := writeDemoDataset(t, 96, 8, 6, 3)
 	res, err := execute(context.Background(), config{
 		dir:                   t.TempDir(),
@@ -292,7 +292,7 @@ func TestExecuteDatasetExactValidationNativeRuntime(t *testing.T) {
 		disableExactFallback:  true,
 	})
 	if err != nil {
-		t.Fatalf("execute dataset exact native_runtime: %v", err)
+		t.Fatalf("execute dataset exact ColumnGraph: %v", err)
 	}
 	if res.ValidationExactSource != validationExactSourceDataset || res.Validation.ExactSource != validationExactSourceDataset {
 		t.Fatalf("validation exact source result=%q validation=%q, want dataset", res.ValidationExactSource, res.Validation.ExactSource)
@@ -1356,10 +1356,10 @@ func TestRunTextOutput(t *testing.T) {
 	out := stdout.String()
 	for _, want := range []string{
 		"TreeDB vector search demo",
-		"profile=bench_unsafe",
+		"profile=command_wal_durable",
 		"backend=treedb",
-		"vector_index_strategy=native_runtime",
-		"vector_index_search_path=native_runtime_snapshot",
+		"vector_index_strategy=column_graph",
+		"vector_index_search_path=column_graph_native_reader",
 		"value_pointer_threshold=1024",
 		"leaf_generation_segment_target=4194304",
 		"Storage",

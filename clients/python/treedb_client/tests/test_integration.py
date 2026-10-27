@@ -285,7 +285,7 @@ class TreeDBClientIntegrationTests(unittest.TestCase):
                         native_response = native.query_by_embedding("typed", [1, 0], 4, wanted, return_embedding=True, index_info=info)
                         self.assertEqual(len(native_response.documents), 4)
                         self.assertEqual(native_response.native_command_version, 2)
-                        self.assertFalse(native_response.native_base_plus_live_delta)
+                        self.assertFalse(hasattr(native_response, "native_base_plus_live_delta"))
                         self.assertEqual(native_response.documents[0].id, "0")
                         self.assertEqual(native_response.documents[0].content, "text 0")
                         proof = native_response.dense_work

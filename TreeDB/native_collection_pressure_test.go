@@ -12,10 +12,10 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-// Pause the real checkpoint cutover, then exercise the ordinary mutation gate
-// and graph query. Producer preflight must hold neither while waiting for IO.
-func TestNativeProducerPressurePrecedesCollectionLocks(t *testing.T) {
-	for _, operation := range []string{"update", "save", "scalar-ddl", "rebuild", "nativewire-insert"} {
+// Pause the real checkpoint cutover, then exercise ordinary scalar reads.
+// Producer preflight must leave the committed collection readable during IO.
+func TestNativeProducerPressurePreservesCollectionReads(t *testing.T) {
+	for _, operation := range []string{"update", "insert", "scalar-ddl", "delete", "nativewire-insert"} {
 		t.Run(operation, func(t *testing.T) {
 			opts := OptionsFor(ProfileNoWALFast, t.TempDir())
 			opts.MemtableMode = "cow_btree"
@@ -40,27 +40,23 @@ func TestNativeProducerPressurePrecedesCollectionLocks(t *testing.T) {
 				}
 				requirePublicCOWFinalZero(t, cache)
 			}()
-			def := collections.VectorIndexDefinition{Name: "embedding", Field: "embedding", Dimensions: 2, Metric: collections.VectorMetricCosine, M: 4}
-			if _, err := manager.CreateCollection(&collections.CollectionMeta{Name: "rows", Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatJSON}, VectorIndexes: []collections.VectorIndexDefinition{def}}); err != nil {
+			def := collections.IndexDefinition{Name: "marker", Field: "marker", ValueType: collections.IndexValueInt64}
+			if _, err := manager.CreateCollection(&collections.CollectionMeta{Name: "rows", Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatJSON}, Indexes: []collections.IndexDefinition{def}}); err != nil {
 				t.Fatal(err)
 			}
 			c, err := manager.OpenCollection("rows")
 			if err != nil {
 				t.Fatal(err)
 			}
-			document := []byte(`{"embedding":[1,0],"marker":1}`)
+			document := []byte(`{"marker":1}`)
 			if _, err := c.Insert([]byte("first"), document); err != nil {
-				t.Fatal(err)
-			}
-			idx, err := c.BuildVectorIndex(collections.VectorIndexOptions{Name: def.Name, Field: def.Field, Dimensions: def.Dimensions, Metric: def.Metric, M: def.M})
-			if err != nil {
 				t.Fatal(err)
 			}
 			for i := 0; database.cached.COWMemoryStats().Sources < DefaultCOWMemtableLimits().MaxSources; i++ {
 				if i > DefaultCOWMemtableLimits().MaxSources+4 {
 					t.Fatal("source ceiling was not reached")
 				}
-				if _, err := idx.SaveSnapshot(); err != nil {
+				if _, err := c.Insert([]byte(fmt.Sprintf("filler-%d", i)), document); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -73,14 +69,14 @@ func TestNativeProducerPressurePrecedesCollectionLocks(t *testing.T) {
 				case "update":
 					_, _, err = c.Update([]byte("first"), func([]byte) ([]byte, bool, error) {
 						callbacks.Add(1)
-						return []byte(`{"embedding":[1,0],"marker":2}`), true, nil
+						return []byte(`{"marker":2}`), true, nil
 					})
-				case "save":
-					_, err = idx.SaveSnapshot()
+				case "insert":
+					_, err = c.Insert([]byte("second"), document)
 				case "scalar-ddl":
-					_, err = c.CreateIndex(collections.IndexDefinition{Name: "marker", Field: "marker", ValueType: collections.IndexValueInt64})
-				case "rebuild":
-					_, err = c.RebuildVectorIndex(def.Name)
+					_, err = c.CreateIndex(collections.IndexDefinition{Name: "marker_copy", Field: "marker", ValueType: collections.IndexValueInt64})
+				case "delete":
+					err = c.Delete([]byte("first"))
 				case "nativewire-insert":
 					err = c.NativewireInsertBatchNoResultIDs([][]byte{[]byte("second")}, [][]byte{document}, false)
 				}
@@ -109,8 +105,21 @@ func TestNativeProducerPressurePrecedesCollectionLocks(t *testing.T) {
 			}
 			available = make(chan error, 1)
 			go func() {
-				c.UnregisterVectorIndex("absent")
-				_, _, err := idx.Search([]float32{1, 0}, collections.VectorIndexSearchOptions{TopK: 1, DisableExactFallback: true})
+				got, err := c.Get([]byte("first"))
+				if err == nil && !bytes.Equal(got, document) {
+					err = fmt.Errorf("committed document changed during preflight: %q", got)
+				}
+				if err == nil {
+					var ids [][]byte
+					ids, err = c.FindByIndexValue("marker", int64(1))
+					found := false
+					for _, id := range ids {
+						found = found || string(id) == "first"
+					}
+					if err == nil && !found {
+						err = fmt.Errorf("committed scalar membership absent during preflight")
+					}
+				}
 				available <- err
 			}()
 			select {
@@ -120,7 +129,7 @@ func TestNativeProducerPressurePrecedesCollectionLocks(t *testing.T) {
 					t.Fatal(err)
 				}
 			case <-time.After(5 * time.Second):
-				t.Fatal("checkpoint preflight held collection or graph query gate")
+				t.Fatal("checkpoint preflight blocked committed collection reads")
 			}
 			if callbacks.Load() != 0 {
 				t.Fatal("callback ran before maintenance completed")

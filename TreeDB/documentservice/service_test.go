@@ -18,7 +18,6 @@ import (
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
-	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
 
 func TestVectorIndexUnavailablePreservesDiagnosticCause(t *testing.T) {
@@ -1053,7 +1052,10 @@ func TestServiceDenseVectorSearchStableIDsScoresMetadataAndEmbeddingEcho(t *test
 	if err != nil {
 		t.Fatalf("UpsertDocuments: %v", err)
 	}
-	res, err := svc.SearchDenseVector(ctx, "docs", DenseVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 3, Filter: &Filter{Field: "meta.repo", Operator: "==", Value: "gomap"}, ReturnEmbedding: false})
+	if out, err := svc.SearchDenseVector(ctx, "docs", DenseVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 3, Filter: &Filter{Field: "meta.repo", Operator: "==", Value: "gomap"}}); ErrorCodeOf(err) != CodeUnsupported || len(out.Documents) != 0 {
+		t.Fatalf("filtered ANN must fail closed: %+v %v", out, err)
+	}
+	res, err := svc.SearchDenseVector(ctx, "docs", DenseVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 3, Route: RouteExact, Filter: &Filter{Field: "meta.repo", Operator: "==", Value: "gomap"}, ReturnEmbedding: false})
 	if err != nil {
 		t.Fatalf("SearchDenseVector: %v", err)
 	}
@@ -1077,7 +1079,7 @@ func TestServiceDenseVectorSearchStableIDsScoresMetadataAndEmbeddingEcho(t *test
 	if res.Documents[0].Meta["path"] != "a.go" {
 		t.Fatalf("metadata=%+v", res.Documents[0].Meta)
 	}
-	withEmbedding, err := svc.SearchDenseVector(ctx, "docs", DenseVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, ReturnEmbedding: true})
+	withEmbedding, err := svc.SearchDenseVector(ctx, "docs", DenseVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, Route: RouteExact, ReturnEmbedding: true})
 	if err != nil {
 		t.Fatalf("SearchDenseVector echo: %v", err)
 	}
@@ -1257,30 +1259,18 @@ func TestServiceKeywordHybridFiltersAndMissingIndexesFailClosed(t *testing.T) {
 	}
 }
 
-func TestServiceNonCosineHybridCapabilityFailsClosedButDenseAndKeywordWork(t *testing.T) {
+func TestServiceNonCosineANNCreationFailsClosed(t *testing.T) {
 	svc, db := newTestService(t)
 	defer db.Close()
-	ctx := context.Background()
-	info, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "l2docs", Dimension: 2, Metric: MetricL2})
-	if err != nil {
-		t.Fatalf("CreateIndex l2docs: %v", err)
-	}
-	if info.Capabilities.HybridSearch {
-		t.Fatalf("l2 capabilities=%+v want hybrid_search=false", info.Capabilities)
-	}
-	if _, err := svc.UpsertDocuments(ctx, "l2docs", UpsertDocumentsRequest{Documents: []Document{{ID: "a", Content: "refund", Embedding: []float32{1, 0}}}}); err != nil {
-		t.Fatalf("UpsertDocuments l2docs: %v", err)
-	}
-	keyword, err := svc.SearchKeyword(ctx, "l2docs", KeywordSearchRequest{Query: "refund", TopK: 1})
-	if err != nil || len(keyword.Documents) != 1 || keyword.Documents[0].ID != "a" {
-		t.Fatalf("SearchKeyword l2docs=%+v err=%v", keyword, err)
-	}
-	dense, err := svc.SearchDenseVector(ctx, "l2docs", DenseVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1})
-	if err != nil || len(dense.Documents) != 1 || dense.Documents[0].ID != "a" {
-		t.Fatalf("SearchDenseVector l2docs=%+v err=%v", dense, err)
-	}
-	if _, err := svc.SearchHybrid(ctx, "l2docs", HybridSearchRequest{Query: "refund", TopK: 1}); ErrorCodeOf(err) != CodeIndexUnavailable {
-		t.Fatalf("SearchHybrid l2 err=%v code=%s", err, ErrorCodeOf(err))
+	defer svc.Close()
+	for _, metric := range []Metric{MetricL2, MetricInnerProduct} {
+		name := "unsupported-" + string(metric)
+		if _, err := svc.CreateIndex(context.Background(), CreateIndexRequest{Name: name, Dimension: 2, Metric: metric}); ErrorCodeOf(err) != CodeUnsupported {
+			t.Fatalf("metric %s: %v", metric, err)
+		}
+		if _, err := svc.manager.OpenCollection(name); err == nil {
+			t.Fatalf("metric %s created collection", metric)
+		}
 	}
 }
 
@@ -1295,7 +1285,7 @@ func TestServiceOpenedIncompatibleTextVectorSchemasFailClosed(t *testing.T) {
 		Metric:     collections.VectorMetricCosine,
 		Dimensions: 2,
 		Encoding:   collections.VectorIndexEncodingFloat32,
-		Strategy:   collections.VectorIndexStrategyNativeRuntime,
+		Strategy:   collections.VectorIndexStrategyColumnGraph,
 	}
 	baseText := collections.TextIndexDefinition{
 		Name:           defaultTextIndexName,
@@ -1324,11 +1314,8 @@ func TestServiceOpenedIncompatibleTextVectorSchemasFailClosed(t *testing.T) {
 		Options:       collections.CollectionOptions{DocumentFormat: collections.DocumentFormatJSON},
 		VectorIndexes: []collections.VectorIndexDefinition{badVector},
 		TextIndexes:   []collections.TextIndexDefinition{baseText},
-	}); err != nil {
-		t.Fatalf("CreateCollection badvector: %v", err)
-	}
-	if _, err := svc.OpenIndex(ctx, "badvector"); ErrorCodeOf(err) != CodeIndexUnavailable {
-		t.Fatalf("bad vector schema err=%v code=%s", err, ErrorCodeOf(err))
+	}); err == nil {
+		t.Fatal("primary int8 vector schema was accepted")
 	}
 }
 
@@ -1824,594 +1811,6 @@ func BenchmarkVectorIndexMaintenanceStatusTimingCopy(b *testing.B) {
 	}
 }
 
-func TestServiceBenchmarkResetDeletesCompatibleNativeIndex(t *testing.T) {
-	svc, db := newTestService(t)
-	defer db.Close()
-	ctx := context.Background()
-	vectorOptions := &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyNativeRuntime}
-	if _, err := svc.ResetIndex(ctx, "nativebench", ResetIndexRequest{Dimension: 2, Metric: MetricCosine, DropOld: true, VectorIndexOptions: vectorOptions}); err != nil {
-		t.Fatalf("ResetIndex create native: %v", err)
-	}
-	loadBenchmarkDocs(t, svc, "nativebench", []Document{
-		{ID: "old-a", Content: "old alpha", Embedding: []float32{1, 0}},
-		{ID: "old-b", Content: "old beta", Embedding: []float32{0, 1}},
-	})
-	reset, err := svc.ResetIndex(ctx, "nativebench", ResetIndexRequest{Dimension: 2, Metric: MetricCosine, DropOld: true, VectorIndexOptions: vectorOptions})
-	if err != nil {
-		t.Fatalf("ResetIndex existing native: %v", err)
-	}
-	if reset.Created || !reset.Reset || reset.DroppedDocuments != 2 {
-		t.Fatalf("reset existing native response=%+v", reset)
-	}
-	count, err := svc.CountDocuments(ctx, "nativebench", CountDocumentsRequest{})
-	if err != nil || count.Count != 0 {
-		t.Fatalf("count after native reset=%+v err=%v", count, err)
-	}
-}
-
-func TestServiceBenchmarkNativeRuntimeLiveMutationRoute(t *testing.T) {
-	ctx := context.Background()
-	svc, db := newTestService(t)
-	defer db.Close()
-	vectorOptions := &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyNativeRuntime}
-	info, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "native", Dimension: 2, Metric: MetricCosine, VectorIndexOptions: vectorOptions})
-	if err != nil {
-		t.Fatalf("CreateIndex: %v", err)
-	}
-	if !info.Capabilities.NoDocumentVectorSearch {
-		t.Fatalf("capabilities=%+v want native no-document search", info.Capabilities)
-	}
-	upsert := func(docs ...Document) {
-		t.Helper()
-		if _, err := svc.UpsertDocuments(ctx, "native", UpsertDocumentsRequest{Documents: docs, DeferVectorIndexRebuild: true}); err != nil {
-			t.Fatalf("UpsertDocuments: %v: %v", err, errors.Unwrap(err))
-		}
-	}
-	search := func(query []float32) BenchmarkVectorSearchResponse {
-		t.Helper()
-		got, err := svc.SearchBenchmarkVector(ctx, "native", BenchmarkVectorSearchRequest{QueryEmbedding: query, TopK: 2, EfSearch: 8, StatsMode: collections.VectorIndexSearchStatsModeProduction})
-		if err != nil {
-			t.Fatalf("SearchBenchmarkVector: %v", err)
-		}
-		if got.Diagnostics.Route != collections.VectorIndexSearchRouteNativeRuntime || !got.Diagnostics.LiveANN.Enabled || got.Diagnostics.LiveANN.ExactFallbacks != 0 || got.Diagnostics.LiveANN.FullRebuilds != 0 || !got.NoDocuments || got.Stats.DocumentsFetched != 0 {
-			t.Fatalf("native response=%+v", got)
-		}
-		return got
-	}
-
-	upsert(Document{ID: "a", Embedding: []float32{1, 0}}, Document{ID: "b", Embedding: []float32{0, 1}})
-	for _, mode := range []collections.VectorIndexSearchStatsMode{collections.VectorIndexSearchStatsModeDefault, collections.VectorIndexSearchStatsModeFullDiagnostics, collections.VectorIndexSearchStatsModeWorkAccounting} {
-		if _, err := svc.SearchBenchmarkVector(ctx, "native", BenchmarkVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, StatsMode: mode}); ErrorCodeOf(err) != CodeIndexUnavailable {
-			t.Fatalf("native stats mode %q err=%v code=%s want unavailable until instrumented", mode, err, ErrorCodeOf(err))
-		}
-	}
-	if got := search([]float32{1, 0}); len(got.Results) != 2 || got.Results[0].ID != "a" {
-		t.Fatalf("insert results=%+v want a first", got.Results)
-	}
-	if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "native", Dimension: 2, Metric: MetricCosine, VectorIndexOptions: vectorOptions}); err != nil {
-		t.Fatalf("compatible CreateIndex: %v", err)
-	}
-	if got := search([]float32{1, 0}); len(got.Results) != 2 || got.Results[0].ID != "a" {
-		t.Fatalf("compatible create results=%+v want live handle preserved", got.Results)
-	}
-	upsert(Document{ID: "a", Embedding: []float32{-1, 0}})
-	if got := search([]float32{1, 0}); len(got.Results) != 2 || got.Results[0].ID == "a" {
-		t.Fatalf("update results=%+v want replacement excluded from old-vector top hit", got.Results)
-	}
-	if _, err := svc.DeleteDocuments(ctx, "native", DeleteDocumentsRequest{IDs: []string{"a"}}); err != nil {
-		t.Fatalf("DeleteDocuments: %v", err)
-	}
-	if got := search([]float32{-1, 0}); len(got.Results) != 1 || got.Results[0].ID != "b" {
-		t.Fatalf("delete results=%+v want only b", got.Results)
-	}
-}
-
-func TestServiceDenseNativeRuntimeOrdinaryRouteLifecycleAndReopen(t *testing.T) {
-	beforeWork := workstats.Read()
-	defer func() {
-		after := workstats.Read()
-		if after.Runtime.QueryAttempts <= beforeWork.Runtime.QueryAttempts || after.Runtime.QueriesCompleted <= beforeWork.Runtime.QueriesCompleted || after.IndexedJSON.VectorRows <= beforeWork.IndexedJSON.VectorRows {
-			t.Errorf("native producer control: before=%+v after=%+v", beforeWork, after)
-		}
-	}()
-
-	dir := t.TempDir()
-	ctx := context.Background()
-	open := func() (*Service, *backenddb.DB) {
-		t.Helper()
-		db, err := backenddb.Open(testBackendOptions(dir))
-		if err != nil {
-			t.Fatalf("open db: %v", err)
-		}
-		return New(collections.NewCollectionManager(db)), db
-	}
-	svc, db := open()
-	create := CreateIndexRequest{
-		Name:               "native_dense",
-		Dimension:          2,
-		Metric:             MetricCosine,
-		VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyNativeRuntime},
-	}
-	info, err := svc.CreateIndex(ctx, create)
-	if err != nil {
-		t.Fatalf("CreateIndex: %v", err)
-	}
-	if !info.Capabilities.NoDocumentVectorSearch || info.Capabilities.ColumnGraphVectorSearch {
-		t.Fatalf("native capabilities=%+v", info.Capabilities)
-	}
-	if _, err := svc.UpsertDocuments(ctx, create.Name, UpsertDocumentsRequest{
-		Documents: []Document{
-			{ID: "a", Content: "old-a", Embedding: []float32{1, 0}},
-			{ID: "b", Content: "b", Embedding: []float32{0, 1}},
-		},
-		DeferVectorIndexRebuild: true,
-	}); err != nil {
-		t.Fatalf("UpsertDocuments: %v", err)
-	}
-	assertSearch := func(route Route, query []float32, topK int, wantIDs ...string) DenseVectorSearchResponse {
-		t.Helper()
-		got, err := svc.SearchDenseVector(ctx, create.Name, DenseVectorSearchRequest{
-			QueryEmbedding:  query,
-			TopK:            topK,
-			Route:           route,
-			EfSearch:        8,
-			ReturnEmbedding: true,
-		})
-		if err != nil {
-			t.Fatalf("SearchDenseVector route=%q: %v", route, err)
-		}
-		if got.Route != RouteAnn || got.Exact || got.Candidates != len(got.Documents) || len(got.Documents) != len(wantIDs) {
-			t.Fatalf("dense native response=%+v want ids=%v", got, wantIDs)
-		}
-		for i, want := range wantIDs {
-			if got.Documents[i].ID != want || got.Documents[i].Score == nil || len(got.Documents[i].Embedding) != 2 {
-				t.Fatalf("dense native document[%d]=%+v want id=%q score and embedding", i, got.Documents[i], want)
-			}
-		}
-		return got
-	}
-	defaultRoute := assertSearch("", []float32{1, 0}, 2, "a", "b")
-	explicitRoute := assertSearch(RouteAnn, []float32{1, 0}, 2, "a", "b")
-	if math.Abs(*defaultRoute.Documents[0].Score-*explicitRoute.Documents[0].Score) > 1e-9 {
-		t.Fatalf("default and explicit ANN score mismatch: default=%v explicit=%v", *defaultRoute.Documents[0].Score, *explicitRoute.Documents[0].Score)
-	}
-	if _, err := svc.UpsertDocuments(ctx, create.Name, UpsertDocumentsRequest{
-		Documents:               []Document{{ID: "a", Content: "new-a", Embedding: []float32{-1, 0}}},
-		DeferVectorIndexRebuild: true,
-	}); err != nil {
-		t.Fatalf("update a: %v", err)
-	}
-	updated := assertSearch("", []float32{-1, 0}, 1, "a")
-	if updated.Documents[0].Content != "new-a" {
-		t.Fatalf("updated document=%+v", updated.Documents[0])
-	}
-	if _, err := svc.DeleteDocuments(ctx, create.Name, DeleteDocumentsRequest{IDs: []string{"a"}}); err != nil {
-		t.Fatalf("DeleteDocuments: %v", err)
-	}
-	assertSearch("", []float32{-1, 0}, 1, "b")
-	if err := db.Checkpoint(); err != nil {
-		t.Fatalf("Checkpoint: %v", err)
-	}
-	if err := svc.Close(); err != nil {
-		t.Fatalf("close service: %v", err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatalf("close db: %v", err)
-	}
-	svc, db = open()
-	defer func() {
-		_ = svc.Close()
-		_ = db.Close()
-	}()
-	reopened := assertSearch("", []float32{0, 1}, 1, "b")
-	if reopened.Documents[0].Content != "b" {
-		t.Fatalf("reopened document=%+v", reopened.Documents[0])
-	}
-}
-
-func TestServiceDenseNativeRuntimeSearchMaterializesOneStableSnapshot(t *testing.T) {
-	ctx := context.Background()
-	svc, db := newTestService(t)
-	defer db.Close()
-	create := CreateIndexRequest{
-		Name:               "native_snapshot",
-		Dimension:          2,
-		Metric:             MetricCosine,
-		VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyNativeRuntime},
-	}
-	info, err := svc.CreateIndex(ctx, create)
-	if err != nil {
-		t.Fatalf("CreateIndex: %v", err)
-	}
-	if _, err := svc.UpsertDocuments(ctx, create.Name, UpsertDocumentsRequest{
-		Documents:               []Document{{ID: "a", Content: "v0", Embedding: []float32{1, 0}}},
-		DeferVectorIndexRebuild: true,
-	}); err != nil {
-		t.Fatalf("initial UpsertDocuments: %v", err)
-	}
-	col, _, err := svc.openIndex(ctx, create.Name, 0)
-	if err != nil {
-		t.Fatalf("openIndex: %v", err)
-	}
-	replace := func(doc Document) error {
-		prepared, err := prepareDocumentsForWrite([]Document{doc}, info, false)
-		if err != nil {
-			return err
-		}
-		matched, err := col.Replace([]byte(doc.ID), prepared[0].raw)
-		if err == nil && !matched {
-			return fmt.Errorf("document %q disappeared before replacement", doc.ID)
-		}
-		return err
-	}
-	hookCalls := 0
-	svc.denseVectorNativeAfterSearch = func(attempt int, search collections.VectorIndexSearchResponse) error {
-		hookCalls++
-		diagnostics := search.Diagnostics()
-		if attempt != 0 || diagnostics.Route != collections.VectorIndexSearchRouteNativeRuntime ||
-			!diagnostics.LiveANN.Enabled || diagnostics.LiveANN.ExactFallbacks != 0 ||
-			diagnostics.LiveANN.FullRebuilds != 0 || search.Stats.SearchRouteNativeRuntime != 1 {
-			return fmt.Errorf("unexpected native attempt=%d response=%+v diagnostics=%+v", attempt, search, diagnostics)
-		}
-		return replace(Document{ID: "a", Content: "v1", Embedding: []float32{0, 1}})
-	}
-	got, err := svc.SearchDenseVector(ctx, create.Name, DenseVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, ReturnEmbedding: true})
-	if err != nil || hookCalls != 1 || len(got.Documents) != 1 ||
-		got.Documents[0].Content != "v0" ||
-		!reflect.DeepEqual(got.Documents[0].Embedding, []float32{1, 0}) ||
-		got.Documents[0].Score == nil || math.Abs(*got.Documents[0].Score-1) > 1e-9 ||
-		got.VisibilityMismatchCount != 0 || got.VisibilityRetryCount != 0 ||
-		!got.NativeBasePlusLiveDelta || got.ExactFallbacks != 0 ||
-		got.DocumentMaterializationRows != 1 {
-		t.Fatalf("stable snapshot response=%+v err=%v hookCalls=%d", got, err, hookCalls)
-	}
-
-	svc.denseVectorNativeAfterSearch = nil
-	updated, err := svc.SearchDenseVector(ctx, create.Name, DenseVectorSearchRequest{QueryEmbedding: []float32{0, 1}, TopK: 1, ReturnEmbedding: true})
-	if err != nil || len(updated.Documents) != 1 || updated.Documents[0].Content != "v1" ||
-		!reflect.DeepEqual(updated.Documents[0].Embedding, []float32{0, 1}) {
-		t.Fatalf("updated response=%+v err=%v", updated, err)
-	}
-}
-
-type cancelAfterContextChecks struct {
-	context.Context
-	checks, cancelAfter int
-}
-
-func (ctx *cancelAfterContextChecks) Err() error {
-	ctx.checks++
-	if ctx.checks >= ctx.cancelAfter {
-		return context.Canceled
-	}
-	return nil
-}
-
-type cancelDuringMaterializationContext struct {
-	context.Context
-	armed               bool
-	checks, cancelAfter int
-}
-
-func (ctx *cancelDuringMaterializationContext) Err() error {
-	if !ctx.armed {
-		return nil
-	}
-	ctx.checks++
-	if ctx.checks >= ctx.cancelAfter {
-		return context.Canceled
-	}
-	return nil
-}
-
-func TestServiceDenseNativeRuntimeSearchStopsDuringTraversal(t *testing.T) {
-	base := context.Background()
-	svc, db := newTestService(t)
-	defer db.Close()
-	create := CreateIndexRequest{
-		Name:               "native_cancel",
-		Dimension:          2,
-		Metric:             MetricCosine,
-		VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyNativeRuntime},
-	}
-	if _, err := svc.CreateIndex(base, create); err != nil {
-		t.Fatal(err)
-	}
-	docs := make([]Document, 128)
-	for i := range docs {
-		docs[i] = Document{ID: fmt.Sprintf("doc-%03d", i), Content: "document", Embedding: []float32{1, float32(i + 1)}}
-	}
-	if _, err := svc.UpsertDocuments(base, create.Name, UpsertDocumentsRequest{Documents: docs, DeferVectorIndexRebuild: true}); err != nil {
-		t.Fatal(err)
-	}
-	ctx := &cancelAfterContextChecks{Context: base, cancelAfter: 3}
-	_, err := svc.SearchDenseVector(ctx, create.Name, DenseVectorSearchRequest{QueryEmbedding: []float32{1, 1}, TopK: 1, EfSearch: len(docs)})
-	if !errors.Is(err, context.Canceled) || ctx.checks != ctx.cancelAfter {
-		t.Fatalf("traversal cancellation err=%v checks=%d", err, ctx.checks)
-	}
-}
-
-func TestServiceDenseNativeRuntimeSearchStopsDuringDocumentMaterialization(t *testing.T) {
-	base := context.Background()
-	svc, db := newTestService(t)
-	defer db.Close()
-	create := CreateIndexRequest{
-		Name:               "native_fetch_cancel",
-		Dimension:          2,
-		Metric:             MetricCosine,
-		VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyNativeRuntime},
-	}
-	if _, err := svc.CreateIndex(base, create); err != nil {
-		t.Fatal(err)
-	}
-	docs := make([]Document, 4)
-	for i := range docs {
-		docs[i] = Document{ID: fmt.Sprintf("doc-%03d", i), Content: "document", Embedding: []float32{1, float32(i + 1)}}
-	}
-	if _, err := svc.UpsertDocuments(base, create.Name, UpsertDocumentsRequest{Documents: docs, DeferVectorIndexRebuild: true}); err != nil {
-		t.Fatal(err)
-	}
-	ctx := &cancelDuringMaterializationContext{Context: base, cancelAfter: 9}
-	svc.denseVectorNativeAfterSearch = func(int, collections.VectorIndexSearchResponse) error {
-		ctx.armed = true
-		ctx.checks = 0
-		return nil
-	}
-	_, err := svc.SearchDenseVector(ctx, create.Name, DenseVectorSearchRequest{QueryEmbedding: []float32{1, 1}, TopK: len(docs), EfSearch: len(docs)})
-	if !errors.Is(err, context.Canceled) || ctx.checks != ctx.cancelAfter+1 {
-		t.Fatalf("document materialization cancellation err=%v checks=%d", err, ctx.checks)
-	}
-}
-
-func TestServiceDenseNativeRuntimeCloseWaitsForPooledSearch(t *testing.T) {
-	ctx := context.Background()
-	svc, db := newTestService(t)
-	defer db.Close()
-	create := CreateIndexRequest{
-		Name:               "native_close",
-		Dimension:          2,
-		Metric:             MetricCosine,
-		VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyNativeRuntime},
-	}
-	if _, err := svc.CreateIndex(ctx, create); err != nil {
-		t.Fatalf("CreateIndex: %v", err)
-	}
-	if _, err := svc.UpsertDocuments(ctx, create.Name, UpsertDocumentsRequest{
-		Documents:               []Document{{ID: "a", Content: "a", Embedding: []float32{1, 0}}},
-		DeferVectorIndexRebuild: true,
-	}); err != nil {
-		t.Fatalf("UpsertDocuments: %v", err)
-	}
-	searchEntered := make(chan struct{})
-	releaseSearch := make(chan struct{})
-	var enterOnce sync.Once
-	svc.denseVectorNativeAfterSearch = func(int, collections.VectorIndexSearchResponse) error {
-		enterOnce.Do(func() { close(searchEntered) })
-		<-releaseSearch
-		return nil
-	}
-	type searchResult struct {
-		response DenseVectorSearchResponse
-		err      error
-	}
-	searchDone := make(chan searchResult, 1)
-	go func() {
-		response, err := svc.SearchDenseVector(ctx, create.Name, DenseVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1})
-		searchDone <- searchResult{response: response, err: err}
-	}()
-	<-searchEntered
-
-	closeStarted := make(chan struct{})
-	closeDone := make(chan error, 1)
-	go func() {
-		close(closeStarted)
-		closeDone <- svc.Close()
-	}()
-	<-closeStarted
-	select {
-	case err := <-closeDone:
-		t.Fatalf("Close returned while native dense search held the pooled-search read lock: %v", err)
-	default:
-	}
-	close(releaseSearch)
-	searched := <-searchDone
-	if searched.err != nil || len(searched.response.Documents) != 1 || searched.response.Documents[0].ID != "a" {
-		t.Fatalf("in-flight search response=%+v err=%v", searched.response, searched.err)
-	}
-	if err := <-closeDone; err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-	if _, err := svc.SearchDenseVector(ctx, create.Name, DenseVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1}); ErrorCodeOf(err) != CodeIndexUnavailable {
-		t.Fatalf("post-close native dense search err=%v code=%s", err, ErrorCodeOf(err))
-	}
-}
-func TestServiceBenchmarkNativeRuntimeCompatibleCreateAfterEmptyReopen(t *testing.T) {
-	dir := t.TempDir()
-	open := func() (*Service, *backenddb.DB) {
-		t.Helper()
-		db, err := backenddb.Open(testBackendOptions(dir))
-		if err != nil {
-			t.Fatalf("open db: %v", err)
-		}
-		return New(collections.NewCollectionManager(db)), db
-	}
-	ctx := context.Background()
-	req := CreateIndexRequest{Name: "native_empty", Dimension: 2, Metric: MetricCosine, VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyNativeRuntime}}
-
-	svc, db := open()
-	if _, err := svc.CreateIndex(ctx, req); err != nil {
-		t.Fatalf("initial CreateIndex: %v", err)
-	}
-	if err := svc.Close(); err != nil {
-		t.Fatalf("close initial service: %v", err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatalf("close initial db: %v", err)
-	}
-
-	svc, db = open()
-	defer db.Close()
-	if _, err := svc.CreateIndex(ctx, req); err != nil {
-		t.Fatalf("compatible CreateIndex after reopen: %v", err)
-	}
-	empty, err := svc.SearchBenchmarkVector(ctx, req.Name, BenchmarkVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, EfSearch: 8, StatsMode: collections.VectorIndexSearchStatsModeProduction})
-	if err != nil || len(empty.Results) != 0 || empty.Diagnostics.Route != collections.VectorIndexSearchRouteNativeRuntime || empty.Diagnostics.LiveANN.FullRebuilds != 0 {
-		t.Fatalf("empty native search response=%+v err=%v", empty, err)
-	}
-	if _, err := svc.UpsertDocuments(ctx, req.Name, UpsertDocumentsRequest{Documents: []Document{{ID: "a", Embedding: []float32{1, 0}}}, DeferVectorIndexRebuild: true}); err != nil {
-		t.Fatalf("first UpsertDocuments after reopen: %v", err)
-	}
-	got, err := svc.SearchBenchmarkVector(ctx, req.Name, BenchmarkVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, EfSearch: 8, StatsMode: collections.VectorIndexSearchStatsModeProduction})
-	if err != nil || len(got.Results) != 1 || got.Results[0].ID != "a" || got.Diagnostics.LiveANN.FullRebuilds != 0 {
-		t.Fatalf("native search after first upsert response=%+v err=%v", got, err)
-	}
-}
-
-func TestServiceBenchmarkNativeRuntimeConcurrentFirstMutationsShareHandle(t *testing.T) {
-	dir := t.TempDir()
-	open := func() (*Service, *backenddb.DB) {
-		t.Helper()
-		db, err := backenddb.Open(testBackendOptions(dir))
-		if err != nil {
-			t.Fatalf("open db: %v", err)
-		}
-		return New(collections.NewCollectionManager(db)), db
-	}
-	ctx := context.Background()
-	req := CreateIndexRequest{Name: "native_concurrent", Dimension: 2, Metric: MetricCosine, VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyNativeRuntime}}
-	svc, db := open()
-	if _, err := svc.CreateIndex(ctx, req); err != nil {
-		t.Fatalf("CreateIndex: %v", err)
-	}
-	if err := svc.Close(); err != nil {
-		t.Fatalf("close initial service: %v", err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatalf("close initial db: %v", err)
-	}
-
-	svc, db = open()
-	defer db.Close()
-	if _, err := svc.CreateIndex(ctx, req); err != nil {
-		t.Fatalf("compatible CreateIndex after reopen: %v", err)
-	}
-	if err := svc.invalidateBenchmarkSearchCache(req.Name); err != nil {
-		t.Fatalf("invalidate native cache before concurrent mutations: %v", err)
-	}
-	const workers = 16
-	svc.writeMu.Lock()
-	ready := make(chan struct{}, workers)
-	errs := make(chan error, workers)
-	var wg sync.WaitGroup
-	for i := 0; i < workers; i++ {
-		i := i
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			ready <- struct{}{}
-			_, err := svc.UpsertDocuments(ctx, req.Name, UpsertDocumentsRequest{Documents: []Document{{
-				ID:        fmt.Sprintf("doc-%02d", i),
-				Embedding: []float32{1, float32(i + 1)},
-			}}, DeferVectorIndexRebuild: true})
-			errs <- err
-		}()
-	}
-	for range workers {
-		<-ready
-	}
-	time.Sleep(50 * time.Millisecond)
-	svc.writeMu.Unlock()
-	wg.Wait()
-	close(errs)
-	for err := range errs {
-		if err != nil {
-			t.Fatalf("concurrent upsert: %v", err)
-		}
-	}
-	svc.benchmarkSearchCacheMu.RLock()
-	entry := svc.benchmarkSearchCache[req.Name]
-	if entry == nil || entry.collection == nil {
-		svc.benchmarkSearchCacheMu.RUnlock()
-		t.Fatal("concurrent mutations did not prime native cache")
-	}
-	var buffer collections.VectorIndexSearchBuffer
-	got, err := entry.collection.SearchVectorIndexWithBuffer(collections.VectorIndexSearchOptions{
-		IndexName: defaultVectorIndexName,
-		Query:     []float32{1, 1},
-		TopK:      workers,
-		EfSearch:  workers * 2,
-		StatsMode: collections.VectorIndexSearchStatsModeProduction,
-	}, &buffer)
-	svc.benchmarkSearchCacheMu.RUnlock()
-	if err != nil || len(got.Results) != workers {
-		t.Fatalf("native search after concurrent first mutations results=%d err=%v want %d", len(got.Results), err, workers)
-	}
-}
-
-func TestServicesShareNativeRuntimeMutationsThroughManager(t *testing.T) {
-	db, err := backenddb.Open(testBackendOptions(t.TempDir()))
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	defer db.Close()
-	manager := collections.NewCollectionManager(db)
-	first := New(manager)
-	second := New(manager)
-	ctx := context.Background()
-	req := CreateIndexRequest{Name: "native_shared", Dimension: 2, Metric: MetricCosine, VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyNativeRuntime}}
-	if _, err := first.CreateIndex(ctx, req); err != nil {
-		t.Fatalf("first CreateIndex: %v", err)
-	}
-	if _, err := first.UpsertDocuments(ctx, req.Name, UpsertDocumentsRequest{Documents: []Document{{ID: "a", Embedding: []float32{1, 0}}}, DeferVectorIndexRebuild: true}); err != nil {
-		t.Fatalf("first UpsertDocuments: %v", err)
-	}
-	if _, err := first.OptimizeIndex(ctx, req.Name, OptimizeIndexRequest{}); err != nil {
-		t.Fatalf("persist initial native graph: %v", err)
-	}
-	if _, err := first.UpsertDocuments(ctx, req.Name, UpsertDocumentsRequest{Documents: []Document{{ID: "b", Embedding: []float32{0, 1}}}, DeferVectorIndexRebuild: true}); err != nil {
-		t.Fatalf("dirty first native graph: %v", err)
-	}
-	if _, err := second.CreateIndex(ctx, req); err != nil {
-		t.Fatalf("second compatible CreateIndex: %v", err)
-	}
-	if _, err := second.UpsertDocuments(ctx, req.Name, UpsertDocumentsRequest{Documents: []Document{{ID: "c", Embedding: []float32{-1, 0}}}, DeferVectorIndexRebuild: true}); err != nil {
-		t.Fatalf("second UpsertDocuments: %v", err)
-	}
-	for name, service := range map[string]*Service{"first": first, "second": second} {
-		got, err := service.SearchBenchmarkVector(ctx, req.Name, BenchmarkVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 3, EfSearch: 8, StatsMode: collections.VectorIndexSearchStatsModeProduction})
-		if err != nil || len(got.Results) != 3 {
-			t.Fatalf("%s SearchBenchmarkVector results=%+v err=%v", name, got.Results, err)
-		}
-	}
-}
-
-func TestServiceOptimizeNativeRuntimeDoesNotWarmColumnGraph(t *testing.T) {
-	db, err := backenddb.Open(testBackendOptions(t.TempDir()))
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	defer db.Close()
-	svc := New(collections.NewCollectionManager(db))
-	ctx := context.Background()
-	if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "native_optimize", Dimension: 2, Metric: MetricCosine, VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyNativeRuntime}}); err != nil {
-		t.Fatalf("CreateIndex: %v", err)
-	}
-	if _, err := svc.UpsertDocuments(ctx, "native_optimize", UpsertDocumentsRequest{Documents: []Document{{ID: "a", Embedding: []float32{1, 0}}}, DeferVectorIndexRebuild: true}); err != nil {
-		t.Fatalf("UpsertDocuments: %v", err)
-	}
-	optimized, err := svc.OptimizeIndex(ctx, "native_optimize", OptimizeIndexRequest{})
-	if err != nil {
-		t.Fatalf("OptimizeIndex: %v", err)
-	}
-	if !optimized.Status.Loaded || optimized.Status.RootID == 0 || optimized.Status.RebuildNeeded {
-		t.Fatalf("OptimizeIndex status=%+v want published clean native root", optimized.Status)
-	}
-	response, err := svc.SearchBenchmarkVector(ctx, "native_optimize", BenchmarkVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, EfSearch: 8, StatsMode: collections.VectorIndexSearchStatsModeProduction})
-	if err != nil || len(response.Results) != 1 || response.Results[0].ID != "a" || response.Diagnostics.Route != collections.VectorIndexSearchRouteNativeRuntime {
-		t.Fatalf("SearchBenchmarkVector response=%+v err=%v", response, err)
-	}
-}
-
 func TestServiceOptimizeConstructionDecisionDiagnosticsOptIn(t *testing.T) {
 	db, err := backenddb.Open(testBackendOptions(t.TempDir()))
 	if err != nil {
@@ -2552,15 +1951,8 @@ func TestServiceBenchmarkVectorFailClosed(t *testing.T) {
 		t.Fatalf("dense exact fallback contract changed dense=%+v err=%v", dense, err)
 	}
 
-	l2Info, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "l2bench", Dimension: 2, Metric: MetricL2, VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyNativeRuntime}})
-	if err != nil {
-		t.Fatalf("CreateIndex l2bench: %v", err)
-	}
-	if l2Info.Capabilities.NoDocumentVectorSearch {
-		t.Fatalf("l2 capabilities=%+v want no_document_vector_search=false", l2Info.Capabilities)
-	}
-	if _, err := svc.SearchBenchmarkVector(ctx, "l2bench", BenchmarkVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1}); ErrorCodeOf(err) != CodeIndexUnavailable {
-		t.Fatalf("unsupported metric/strategy err=%v code=%s", err, ErrorCodeOf(err))
+	if _, err := svc.CreateIndex(ctx, CreateIndexRequest{Name: "l2bench", Dimension: 2, Metric: MetricL2}); ErrorCodeOf(err) != CodeUnsupported {
+		t.Fatalf("unsupported metric accepted: %v", err)
 	}
 }
 

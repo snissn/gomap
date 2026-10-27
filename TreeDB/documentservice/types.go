@@ -128,10 +128,8 @@ type IndexInfo struct {
 }
 
 // BenchmarkVectorIndexOptions configures the service-owned collection vector
-// index for lifecycle setups. A new cosine index defaults to column_graph;
-// other metrics default to native_runtime. Typed input, normalized representation
-// and quantized declarations require column_graph. Omitted strategy on an
-// existing index preserves its declaration.
+// index for lifecycle setups. New indexes use cosine ColumnGraph. Normalized
+// representations and quantized declarations use the typed ColumnGraph route.
 type BenchmarkVectorIndexOptions struct {
 	Strategy         collections.VectorIndexStrategy       `json:"strategy,omitempty"`
 	Representation   collections.VectorIndexRepresentation `json:"representation,omitempty"`
@@ -256,10 +254,8 @@ type FilterDocumentsResponse struct {
 }
 
 // DenseVectorSearchRequest scores QueryEmbedding against the index. Route
-// selects ann (compatible native_runtime or column_graph traversal; the default
-// when one exists) or exact (bounded filtered scan). Declared scalar filters use
-// native_runtime ANN. Other valid filters with omitted route retain exact; an
-// explicit ANN request with unsupported scalar fields or shapes fails closed.
+// selects ColumnGraph ann by default or exact for a bounded document scan.
+// Ordinary filtered ANN is unsupported; typed ColumnGraph filters are retained.
 type DenseVectorSearchRequest struct {
 	ExpectedGeneration        uint64                                `json:"expected_generation,omitempty"`
 	QueryEmbedding            []float32                             `json:"query_embedding"`
@@ -325,42 +321,37 @@ type DenseVectorSearchResponse struct {
 	SearchPackSearch          uint64                                 `json:"search_pack_search,omitempty"`
 	ColumnGraphDeltaScored    uint64                                 `json:"column_graph_delta_scored,omitempty"`
 	// DocumentsScanned counts actual documents visited by an intentional exact query.
-	DocumentsScanned                        uint64                             `json:"documents_scanned,omitempty"`
-	Index                                   IndexInfo                          `json:"index"`
-	Documents                               []Document                         `json:"documents"`
-	Metric                                  Metric                             `json:"metric"`
-	Route                                   Route                              `json:"route,omitempty"`
-	Exact                                   bool                               `json:"exact"`
-	Candidates                              int                                `json:"candidates"`
-	NativeBasePlusLiveDelta                 bool                               `json:"native_base_plus_live_delta,omitempty"`
-	ScalarFilterMembershipSource            string                             `json:"scalar_filter_membership_source,omitempty"`
-	ScalarFilterPlan                        collections.NativeScalarFilterPlan `json:"scalar_filter_plan,omitempty"`
-	ScalarFilterProbeIDs                    uint64                             `json:"scalar_filter_probe_ids,omitempty"`
-	ScalarFilterProbeTruncated              uint64                             `json:"scalar_filter_probe_truncated,omitempty"`
-	ScalarFilterCandidates                  uint64                             `json:"scalar_filter_candidates,omitempty"`
-	ScalarFilterCandidateIDs                uint64                             `json:"scalar_filter_candidate_ids,omitempty"`
-	ScalarFilterRetainedCandidateIDs        uint64                             `json:"scalar_filter_retained_candidate_ids,omitempty"`
-	ScalarFilterRefinedCandidateIDs         uint64                             `json:"scalar_filter_refined_candidate_ids,omitempty"`
-	ScalarFilterVisited                     uint64                             `json:"scalar_filter_visited,omitempty"`
-	ScalarFilterScored                      uint64                             `json:"scalar_filter_scored,omitempty"`
-	ScalarFilterAdmitted                    uint64                             `json:"scalar_filter_admitted,omitempty"`
-	ScalarFilterExactScoring                bool                               `json:"scalar_filter_exact_scoring,omitempty"`
-	ScalarFilterUnderfill                   bool                               `json:"scalar_filter_underfill,omitempty"`
-	ScalarFilterPlanCacheHits               uint64                             `json:"scalar_filter_plan_cache_hits,omitempty"`
-	ScalarFilterPlanCacheMisses             uint64                             `json:"scalar_filter_plan_cache_misses,omitempty"`
-	ScalarFilterPlanCacheInvalidations      uint64                             `json:"scalar_filter_plan_cache_invalidations,omitempty"`
-	ScalarFilterPlanCacheGenerationBypasses uint64                             `json:"scalar_filter_plan_cache_generation_bypasses,omitempty"`
-	ScalarFilterPlanCacheEvictions          uint64                             `json:"scalar_filter_plan_cache_evictions,omitempty"`
-	ScalarFilterPlanCacheEntries            uint64                             `json:"scalar_filter_plan_cache_entries,omitempty"`
-	ScalarFilterPlanCacheRetainedBytes      uint64                             `json:"scalar_filter_plan_cache_retained_bytes,omitempty"`
-	ScalarFilterUnbounded                   uint64                             `json:"scalar_filter_unbounded,omitempty"`
-	ExactFallbacks                          uint64                             `json:"exact_fallbacks,omitempty"`
-	FullDocumentScanFallbacks               uint64                             `json:"full_document_scan_fallbacks,omitempty"`
-	AllowedIDMaterializationRows            uint64                             `json:"allowed_id_materialization_rows,omitempty"`
-	PrimaryDocumentScans                    uint64                             `json:"primary_document_scans,omitempty"`
-	DocumentMaterializationRows             uint64                             `json:"document_materialization_rows,omitempty"`
-	VisibilityMismatchCount                 uint64                             `json:"visibility_mismatch_count,omitempty"`
-	VisibilityRetryCount                    uint64                             `json:"visibility_retry_count,omitempty"`
+	DocumentsScanned                        uint64     `json:"documents_scanned,omitempty"`
+	Index                                   IndexInfo  `json:"index"`
+	Documents                               []Document `json:"documents"`
+	Metric                                  Metric     `json:"metric"`
+	Route                                   Route      `json:"route,omitempty"`
+	Exact                                   bool       `json:"exact"`
+	Candidates                              int        `json:"candidates"`
+	ScalarFilterProbeIDs                    uint64     `json:"scalar_filter_probe_ids,omitempty"`
+	ScalarFilterProbeTruncated              uint64     `json:"scalar_filter_probe_truncated,omitempty"`
+	ScalarFilterCandidates                  uint64     `json:"scalar_filter_candidates,omitempty"`
+	ScalarFilterCandidateIDs                uint64     `json:"scalar_filter_candidate_ids,omitempty"`
+	ScalarFilterRetainedCandidateIDs        uint64     `json:"scalar_filter_retained_candidate_ids,omitempty"`
+	ScalarFilterRefinedCandidateIDs         uint64     `json:"scalar_filter_refined_candidate_ids,omitempty"`
+	ScalarFilterVisited                     uint64     `json:"scalar_filter_visited,omitempty"`
+	ScalarFilterScored                      uint64     `json:"scalar_filter_scored,omitempty"`
+	ScalarFilterAdmitted                    uint64     `json:"scalar_filter_admitted,omitempty"`
+	ScalarFilterExactScoring                bool       `json:"scalar_filter_exact_scoring,omitempty"`
+	ScalarFilterUnderfill                   bool       `json:"scalar_filter_underfill,omitempty"`
+	ScalarFilterPlanCacheHits               uint64     `json:"scalar_filter_plan_cache_hits,omitempty"`
+	ScalarFilterPlanCacheMisses             uint64     `json:"scalar_filter_plan_cache_misses,omitempty"`
+	ScalarFilterPlanCacheInvalidations      uint64     `json:"scalar_filter_plan_cache_invalidations,omitempty"`
+	ScalarFilterPlanCacheGenerationBypasses uint64     `json:"scalar_filter_plan_cache_generation_bypasses,omitempty"`
+	ScalarFilterPlanCacheEvictions          uint64     `json:"scalar_filter_plan_cache_evictions,omitempty"`
+	ScalarFilterPlanCacheEntries            uint64     `json:"scalar_filter_plan_cache_entries,omitempty"`
+	ScalarFilterPlanCacheRetainedBytes      uint64     `json:"scalar_filter_plan_cache_retained_bytes,omitempty"`
+	ScalarFilterUnbounded                   uint64     `json:"scalar_filter_unbounded,omitempty"`
+	ExactFallbacks                          uint64     `json:"exact_fallbacks,omitempty"`
+	FullDocumentScanFallbacks               uint64     `json:"full_document_scan_fallbacks,omitempty"`
+	AllowedIDMaterializationRows            uint64     `json:"allowed_id_materialization_rows,omitempty"`
+	PrimaryDocumentScans                    uint64     `json:"primary_document_scans,omitempty"`
+	DocumentMaterializationRows             uint64     `json:"document_materialization_rows,omitempty"`
 }
 
 // Route selects the dense search execution path.
@@ -409,8 +400,6 @@ type VectorIndexMaintenanceStatus struct {
 	Loaded           bool                            `json:"loaded"`
 	RebuildNeeded    bool                            `json:"rebuild_needed"`
 	RootID           uint64                          `json:"root_id,omitempty"`
-	NativeRootLoaded bool                            `json:"native_root_loaded,omitempty"`
-	NativeRootBytes  int64                           `json:"native_root_bytes,omitempty"`
 	DurationNanos    int64                           `json:"duration_nanos,omitempty"`
 	ColumnGraphBuild ColumnGraphBuildTiming          `json:"column_graph_build,omitempty"`
 }
@@ -646,7 +635,6 @@ func metricFromCollection(metric collections.VectorMetric) (Metric, error) {
 
 func indexCapabilities(vectorDef collections.VectorIndexDefinition, hybridSearch bool) IndexCapabilities {
 	columnGraph := vectorDef.Strategy == collections.VectorIndexStrategyColumnGraph && vectorDef.Metric == collections.VectorMetricCosine && vectorDef.Encoding == collections.VectorIndexEncodingFloat32
-	nativeRuntime := vectorDef.Strategy == collections.VectorIndexStrategyNativeRuntime && vectorDef.Metric == collections.VectorMetricCosine && vectorDef.Encoding == collections.VectorIndexEncodingFloat32
 	quantized := columnGraph && len(vectorDef.QuantizedIndexes) > 0
 	quantizedRerank := columnGraph && quantizedIndexRerankCapabilityDeclared(vectorDef)
 	return IndexCapabilities{
@@ -659,7 +647,7 @@ func indexCapabilities(vectorDef collections.VectorIndexDefinition, hybridSearch
 		HybridMetadataFilters:   false,
 		BenchmarkLifecycle:      true,
 		VectorIndexMaintenance:  true,
-		NoDocumentVectorSearch:  columnGraph || nativeRuntime,
+		NoDocumentVectorSearch:  columnGraph,
 		ColumnGraphVectorSearch: columnGraph,
 		ExactColumnGraphSearch:  columnGraph,
 		QuantizedVectorSearch:   quantized,

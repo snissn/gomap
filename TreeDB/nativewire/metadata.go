@@ -52,6 +52,11 @@ func appendCollectionHandleRefPayload(dst []byte, handle CollectionHandle) []byt
 }
 
 func encodeCollectionMeta(meta collections.CollectionMeta) ([]byte, error) {
+	for _, def := range meta.VectorIndexes {
+		if def.Strategy != collections.VectorIndexStrategyColumnGraph {
+			return nil, invalidMetadata("vector index %q requires an explicit column_graph strategy", def.Name)
+		}
+	}
 	if len(meta.TextIndexes) != 0 {
 		payload, err := collections.EncodeCatalogCreateCollectionCommandWALPayload(meta)
 		if err != nil {
@@ -241,6 +246,9 @@ func decodeCollectionMetaForPurpose(src []byte, create bool) (collections.Collec
 		}
 		if vectorIndexCount > maxCollectionMetaIndexDefinitions {
 			return collections.CollectionMeta{}, protocolError(iwire.ErrResourceExhausted, "vector index count %d exceeds limit %d", vectorIndexCount, maxCollectionMetaIndexDefinitions)
+		}
+		if version == 2 && vectorIndexCount != 0 {
+			return collections.CollectionMeta{}, protocolError(iwire.ErrUnsupportedVersion, "vector-bearing collection_meta version 2 has no strategy identity")
 		}
 		if vectorIndexCount > uint64((len(src)-off)/minEncodedVectorIndexDefinitionLen) {
 			return collections.CollectionMeta{}, protocolError(iwire.ErrMalformedFrame, "vector index count %d exceeds remaining collection_meta payload", vectorIndexCount)
@@ -846,8 +854,6 @@ func decodeVectorIndexEncodingStrict(encoding uint64) (collections.VectorIndexEn
 
 func encodeVectorIndexStrategy(strategy collections.VectorIndexStrategy) uint64 {
 	switch strategy {
-	case "", collections.VectorIndexStrategyNativeRuntime:
-		return 1
 	case collections.VectorIndexStrategyColumnGraph:
 		return 2
 	default:
@@ -858,7 +864,7 @@ func encodeVectorIndexStrategy(strategy collections.VectorIndexStrategy) uint64 
 func decodeVectorIndexStrategyStrict(strategy uint64) (collections.VectorIndexStrategy, error) {
 	switch strategy {
 	case 1:
-		return collections.VectorIndexStrategyNativeRuntime, nil
+		return "", protocolError(iwire.ErrUnsupportedFeature, "retired native_runtime vector strategy is unsupported")
 	case 2:
 		return collections.VectorIndexStrategyColumnGraph, nil
 	default:

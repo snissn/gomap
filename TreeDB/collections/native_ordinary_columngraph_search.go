@@ -629,7 +629,7 @@ func (c *Collection) searchNativeVectorWithBufferReadView(opts VectorIndexSearch
 	} else if def.Strategy == VectorIndexStrategyColumnGraph {
 		response, err = c.searchNativeColumnGraphAtReadView(opts, buffer, view, hybridScalarIDs{})
 	} else {
-		response, err = c.searchNativeHNSWAtReadView(opts, buffer, view, hybridScalarIDs{})
+		err = backenddb.ErrNativeSemanticUnsupported
 	}
 	if err != nil {
 		buffer.Reset()

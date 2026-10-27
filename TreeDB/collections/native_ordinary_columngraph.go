@@ -14,6 +14,20 @@ import (
 // This is the retained-document lane, not the optimized source importer or a
 // typed/normalized/quantized capability. Scalar and text indexes consume the
 // exact complete JSON document through their existing native planner.
+// ValidateOrdinaryColumnGraphCollectionMeta validates a complete proposed
+// retained-document ColumnGraph schema before an adapter publishes any effects.
+// Generic collection creation also supports other explicitly selected shapes.
+func ValidateOrdinaryColumnGraphCollectionMeta(meta CollectionMeta) error {
+	normalized, err := normalizeCollectionMeta(meta)
+	if err != nil {
+		return err
+	}
+	if !nativeOrdinaryColumnGraphMeta(normalized) {
+		return fmt.Errorf("%w: ordinary ColumnGraph requires a fully configured retained JSON float32 vector schema", backenddb.ErrNativeSemanticUnsupported)
+	}
+	return nil
+}
+
 func nativeOrdinaryColumnGraphMeta(meta CollectionMeta) bool {
 	cfg := meta.Options.ColumnStore
 	if cfg == nil || !cfg.Enabled || cfg.RetainedPayload != ColumnRetainedPayloadFull || columnRetainedPayloadEffectiveEncoding(cfg) != ColumnRetainedPayloadEncodingJSON || normalizedDocumentFormat(meta.Options.DocumentFormat) != DocumentFormatJSON || meta.Options.AllowArrayValuesInIndex || len(cfg.Columns) != 1 || len(cfg.AggregateMetadata) != 0 || len(meta.VectorIndexes) != 1 {

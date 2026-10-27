@@ -10,7 +10,7 @@ import (
 )
 
 func TestVectorIndexBatchValidationObservesCancellation(t *testing.T) {
-	index, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2048, M: 4, EfConstruction: 16})
+	index, err := newColumnGraphHNSWBuilder(columnGraphHNSWBuildOptions{Encoding: VectorIndexEncodingFloat32, Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2048, M: 4, EfConstruction: 16})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,7 +26,7 @@ func TestVectorIndexBatchValidationObservesCancellation(t *testing.T) {
 }
 
 func TestVectorIndexBatchDoesNotCancelAfterRowMutationStarts(t *testing.T) {
-	index, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16})
+	index, err := newColumnGraphHNSWBuilder(columnGraphHNSWBuildOptions{Encoding: VectorIndexEncodingFloat32, Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,11 +43,11 @@ func TestVectorIndexBatchDoesNotCancelAfterRowMutationStarts(t *testing.T) {
 }
 
 func TestVectorIndexSerialFallbackChecksCancellationBetweenRows(t *testing.T) {
-	index, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 16, EfConstruction: 16})
+	index, err := newColumnGraphHNSWBuilder(columnGraphHNSWBuildOptions{Encoding: VectorIndexEncodingFloat32, Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 16, EfConstruction: 16})
 	if err != nil {
 		t.Fatal(err)
 	}
-	index.setNativePersistent(true)
+	index.parallelReciprocalLinks = true
 	if err := index.insertVectorLocked([]byte("existing"), []float32{1, 0}); err != nil {
 		t.Fatal(err)
 	}
@@ -118,11 +118,11 @@ func TestVectorIndexFrozenPrefixBatchFallsBackForUpdates4297(t *testing.T) {
 }
 
 func TestVectorIndexFrozenPrefixBatchValidatesBeforeMutation4297(t *testing.T) {
-	index, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16})
+	index, err := newColumnGraphHNSWBuilder(columnGraphHNSWBuildOptions{Encoding: VectorIndexEncodingFloat32, Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16})
 	if err != nil {
 		t.Fatal(err)
 	}
-	index.setNativePersistent(true)
+	index.parallelReciprocalLinks = true
 	err = index.insertVectorBatchLocked(
 		[][]byte{[]byte("valid"), []byte("invalid")},
 		[][]float32{{1, 0}, {1}},
@@ -141,14 +141,14 @@ func TestVectorIndexFrozenPrefixBatchKeepsSmallBatchesSerial4297(t *testing.T) {
 	for row := range ids {
 		ids[row] = []byte(fmt.Sprintf("doc-%04d", row))
 	}
-	indexes := make([]*VectorIndex, 2)
+	indexes := make([]*columnGraphHNSWBuilder, 2)
 	for i := range indexes {
 		var err error
-		indexes[i], err = newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 8, M: 16, EfConstruction: 64})
+		indexes[i], err = newColumnGraphHNSWBuilder(columnGraphHNSWBuildOptions{Encoding: VectorIndexEncodingFloat32, Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 8, M: 16, EfConstruction: 64})
 		if err != nil {
 			t.Fatal(err)
 		}
-		indexes[i].setNativePersistent(true)
+		indexes[i].parallelReciprocalLinks = true
 	}
 	if err := indexes[0].insertVectorBatchLocked(ids, rows); err != nil {
 		t.Fatal(err)
@@ -172,11 +172,11 @@ func TestVectorIndexFrozenPrefixBatchUsesExactMinimum4297(t *testing.T) {
 	for row := range ids {
 		ids[row] = []byte(fmt.Sprintf("doc-%04d", row))
 	}
-	index, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 8, M: 16, EfConstruction: 64})
+	index, err := newColumnGraphHNSWBuilder(columnGraphHNSWBuildOptions{Encoding: VectorIndexEncodingFloat32, Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 8, M: 16, EfConstruction: 64})
 	if err != nil {
 		t.Fatal(err)
 	}
-	index.setNativePersistent(true)
+	index.parallelReciprocalLinks = true
 	if err := index.insertVectorBatchLocked(ids, rows); err != nil {
 		t.Fatal(err)
 	}
@@ -187,13 +187,13 @@ func TestVectorIndexFrozenPrefixBatchUsesExactMinimum4297(t *testing.T) {
 
 func TestVectorIndexFrozenPrefixBatchM8IsDeterministicSearchableAndReachable4487(t *testing.T) {
 	rows := vectorIndexReciprocalParityRows4257(32, 16, false)
-	build := func(workers int) *VectorIndex {
+	build := func(workers int) *columnGraphHNSWBuilder {
 		t.Helper()
-		index, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 16, M: 8, EfConstruction: 128})
+		index, err := newColumnGraphHNSWBuilder(columnGraphHNSWBuildOptions{Encoding: VectorIndexEncodingFloat32, Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 16, M: 8, EfConstruction: 128})
 		if err != nil {
 			t.Fatal(err)
 		}
-		index.setNativePersistent(true)
+		index.parallelReciprocalLinks = true
 		index.constructionWorkers = workers
 		ids := make([][]byte, len(rows))
 		for row := range ids {
@@ -237,11 +237,11 @@ func TestVectorIndexFrozenPrefixBatchM8IsDeterministicSearchableAndReachable4487
 }
 
 func TestVectorIndexFrozenPrefixBatchKeepsSmallMReachable4297(t *testing.T) {
-	index, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 1, EfConstruction: 16})
+	index, err := newColumnGraphHNSWBuilder(columnGraphHNSWBuildOptions{Encoding: VectorIndexEncodingFloat32, Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 1, EfConstruction: 16})
 	if err != nil {
 		t.Fatal(err)
 	}
-	index.setNativePersistent(true)
+	index.parallelReciprocalLinks = true
 	ids := make([][]byte, 0, nativeVectorFrozenPrefixBatchMinimum)
 	for candidate := 0; len(ids) < nativeVectorFrozenPrefixBatchMinimum; candidate++ {
 		id := []byte(fmt.Sprintf("doc-%04d", candidate))
@@ -280,11 +280,11 @@ func TestVectorIndexFrozenPrefixWorkerBudgetsPreserveTopology4300(t *testing.T) 
 	rows := vectorIndexReciprocalParityRows4257(192, 16, false)
 	want := snapshotVectorIndexTopology4257(buildVectorIndexFrozenPrefixBatch4297(t, rows))
 	for _, workers := range []int{1, 2, 4} {
-		index, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 16, M: 16, EfConstruction: 64})
+		index, err := newColumnGraphHNSWBuilder(columnGraphHNSWBuildOptions{Encoding: VectorIndexEncodingFloat32, Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 16, M: 16, EfConstruction: 64})
 		if err != nil {
 			t.Fatal(err)
 		}
-		index.setNativePersistent(true)
+		index.parallelReciprocalLinks = true
 		index.constructionWorkers = workers
 		ids := make([][]byte, len(rows))
 		for row := range ids {
@@ -303,7 +303,7 @@ func TestVectorIndexFrozenPrefixReciprocalScratchDoesNotAliasNodes4514(t *testin
 	rows := vectorIndexReciprocalParityRows4257(192, 16, false)
 	withoutScratch := buildVectorIndexFrozenPrefixBatch4297(t, rows)
 	withScratch := buildVectorIndexFrozenPrefixBatch4297(t, rows)
-	link := func(index *VectorIndex) vectorIndexFrozenPrefixReciprocalLink {
+	link := func(index *columnGraphHNSWBuilder) vectorIndexFrozenPrefixReciprocalLink {
 		t.Helper()
 		for from, node := range index.nodes {
 			if len(node.neighbors) == 0 || len(node.neighbors[0]) != index.maxNeighborsForLayer(0) {
@@ -355,11 +355,11 @@ func BenchmarkVectorIndexFrozenPrefixBatch4297(b *testing.B) {
 		b.Run(fmt.Sprintf("candidate=%v", candidate), func(b *testing.B) {
 			b.ReportAllocs()
 			for b.Loop() {
-				index, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: dimensions, M: 16, EfConstruction: 128})
+				index, err := newColumnGraphHNSWBuilder(columnGraphHNSWBuildOptions{Encoding: VectorIndexEncodingFloat32, Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: dimensions, M: 16, EfConstruction: 128})
 				if err != nil {
 					b.Fatal(err)
 				}
-				index.setNativePersistent(true)
+				index.parallelReciprocalLinks = true
 				if candidate {
 					err = index.insertVectorBatchLocked(ids, rows)
 				} else {
@@ -378,13 +378,13 @@ func BenchmarkVectorIndexFrozenPrefixBatch4297(b *testing.B) {
 	}
 }
 
-func buildVectorIndexFrozenPrefixBatch4297(t *testing.T, rows [][]float32) *VectorIndex {
+func buildVectorIndexFrozenPrefixBatch4297(t *testing.T, rows [][]float32) *columnGraphHNSWBuilder {
 	t.Helper()
-	index, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: len(rows[0]), M: 16, EfConstruction: 64})
+	index, err := newColumnGraphHNSWBuilder(columnGraphHNSWBuildOptions{Encoding: VectorIndexEncodingFloat32, Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: len(rows[0]), M: 16, EfConstruction: 64})
 	if err != nil {
 		t.Fatal(err)
 	}
-	index.setNativePersistent(true)
+	index.parallelReciprocalLinks = true
 	ids := make([][]byte, len(rows))
 	for row := range ids {
 		ids[row] = []byte(fmt.Sprintf("doc-%04d", row))

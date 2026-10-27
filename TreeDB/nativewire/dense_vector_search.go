@@ -77,7 +77,6 @@ type DenseVectorSearchResponse struct {
 	Results                   []DenseVectorSearchResult
 	Route                     documentservice.Route
 	Candidates                int
-	NativeBasePlusLiveDelta   bool
 	ExactFallbacks            uint64
 	FullDocumentScanFallbacks uint64
 }
@@ -107,10 +106,7 @@ func (c *Client) DenseVectorSearch(ctx context.Context, request DenseVectorSearc
 		return DenseVectorSearchResponse{}, protocolError(iwire.ErrInvalidCommand, "quantized dense search requires an index name")
 	}
 	request.QueryMode = mode
-	version := iwire.DenseVectorSearchLegacyVersion
-	if c.denseOrdinaryNegotiated {
-		version = iwire.DenseVectorSearchOrdinaryVersion
-	}
+	version := iwire.DenseVectorSearchOrdinaryVersion
 	if request.VectorRepresentation != "" {
 		if request.VectorRepresentation != collections.VectorIndexRepresentationCosineNormalizedF32V1 {
 			return DenseVectorSearchResponse{}, protocolError(iwire.ErrUnsupportedFeature, "unsupported dense vector representation")
@@ -150,6 +146,8 @@ func (c *Client) DenseVectorSearch(ctx context.Context, request DenseVectorSearc
 		}
 	} else if request.QueryMode != "" && request.QueryMode != collections.VectorIndexQueryModeExact {
 		return DenseVectorSearchResponse{}, protocolError(iwire.ErrUnsupportedFeature, "quantized dense search requires typed column graph")
+	} else if !c.denseOrdinaryNegotiated {
+		return DenseVectorSearchResponse{}, protocolError(iwire.ErrUnsupportedFeature, "hello did not negotiate ordinary dense search")
 	}
 
 	payload, err := appendDenseVectorSearchRequest(c.denseRequest[:0], request, c.limits)
@@ -289,7 +287,7 @@ func (c *Client) DenseVectorSearch(ctx context.Context, request DenseVectorSearc
 	if err == nil && (version == iwire.DenseVectorSearchTypedVersion || version == iwire.DenseVectorSearchTypedQuantizedVersion) {
 		err = validateDenseWorkResults(out.DenseWork, out.Results)
 	}
-	if err == nil && version == iwire.DenseVectorSearchOrdinaryVersion && !out.NativeBasePlusLiveDelta {
+	if err == nil && version == iwire.DenseVectorSearchOrdinaryVersion {
 		if !denseV3ResultsHaveValidIDs(out.Results) || !denseResultDocumentsMatchRequest(out.Results, request, false) || !denseV3ResultsOrdered(out.Results) {
 			err = protocolError(iwire.ErrConsistencyUnavailable, "ordinary dense results do not match the request or ranking")
 		}
@@ -822,15 +820,11 @@ func denseScorePlaneByteCountersMatch(proof *collections.ColumnGraphScorePlaneWo
 		proof.ExactSuffixVectorBytesRead == proof.ExactSuffixScoreCalls*bytesPerExact
 }
 
-func (s *Server) handleDenseVectorSearch(ctx context.Context, state *connState, sections []iwire.Section, dst []byte) ([]byte, error) {
-	return s.handleVersionedDenseVectorSearch(ctx, state, iwire.DenseVectorSearchLegacyVersion, sections, dst)
-}
-
 func (s *Server) handleVersionedDenseVectorSearch(ctx context.Context, state *connState, version uint64, sections []iwire.Section, dst []byte) (_ []byte, err error) {
 	if version == iwire.DenseVectorSearchNormalizedVersion {
 		return s.handleDenseNormalizedVectorSearch(ctx, state, sections, dst)
 	}
-	if version != iwire.DenseVectorSearchLegacyVersion && version != iwire.DenseVectorSearchTypedVersion && version != iwire.DenseVectorSearchTypedQuantizedVersion && version != iwire.DenseVectorSearchOrdinaryVersion {
+	if version != iwire.DenseVectorSearchTypedVersion && version != iwire.DenseVectorSearchTypedQuantizedVersion && version != iwire.DenseVectorSearchOrdinaryVersion {
 		return nil, protocolError(iwire.ErrUnsupportedVersion, "unsupported dense query version")
 	}
 	typed := version == iwire.DenseVectorSearchTypedVersion || version == iwire.DenseVectorSearchTypedQuantizedVersion
@@ -1568,15 +1562,9 @@ func denseDecodeError(err error, message string) error {
 	return protocolError(iwire.ErrMalformedFrame, "%s", message)
 }
 
-func appendDenseVectorSearchResponse(dst []byte, response documentservice.RawDenseVectorSearchResponse) []byte {
-	return appendVersionedDenseVectorSearchResponse(dst, response, iwire.DenseVectorSearchLegacyVersion)
-}
-
 func appendVersionedDenseVectorSearchResponse(dst []byte, response documentservice.RawDenseVectorSearchResponse, version uint64) []byte {
 	tag := byte(0)
-	if response.NativeBasePlusLiveDelta {
-		tag = 1
-	} else if version == iwire.DenseVectorSearchOrdinaryVersion {
+	if version == iwire.DenseVectorSearchOrdinaryVersion {
 		tag = iwire.DenseVectorSearchOrdinaryANNRouteTag
 		if response.Route == documentservice.RouteExact {
 			tag = iwire.DenseVectorSearchOrdinaryExactRouteTag
@@ -1616,25 +1604,20 @@ func validateOrdinaryDenseSections(sections []iwire.Section) error {
 	return nil
 }
 
-func decodeDenseVectorSearchResponse(idsRaw, docsRaw, meta []byte, topK int, limits iwire.Limits, ids, docs [][]byte, results []DenseVectorSearchResult) (DenseVectorSearchResponse, [][]byte, [][]byte, []DenseVectorSearchResult, error) {
-	return decodeVersionedDenseVectorSearchResponse(iwire.DenseVectorSearchLegacyVersion, idsRaw, docsRaw, meta, topK, limits, ids, docs, results)
-}
-
 func decodeVersionedDenseVectorSearchResponse(version uint64, idsRaw, docsRaw, meta []byte, topK int, limits iwire.Limits, ids, docs [][]byte, results []DenseVectorSearchResult) (DenseVectorSearchResponse, [][]byte, [][]byte, []DenseVectorSearchResult, error) {
 	limits = denseDefaultLimits(limits)
 	var response DenseVectorSearchResponse
 	var err error
-	if version != iwire.DenseVectorSearchLegacyVersion && version != iwire.DenseVectorSearchTypedVersion && version != iwire.DenseVectorSearchTypedQuantizedVersion && version != iwire.DenseVectorSearchOrdinaryVersion {
+	if version != iwire.DenseVectorSearchTypedVersion && version != iwire.DenseVectorSearchTypedQuantizedVersion && version != iwire.DenseVectorSearchOrdinaryVersion {
 		return response, ids, docs, results, protocolError(iwire.ErrUnsupportedVersion, "unsupported dense search response version %d", version)
 	}
 	typed := version == iwire.DenseVectorSearchTypedVersion || version == iwire.DenseVectorSearchTypedQuantizedVersion
 	ordinary := version == iwire.DenseVectorSearchOrdinaryVersion
 	validTypedTag := metaTagForDenseVersion(version)
-	if topK <= 0 || len(meta) == 0 || (typed && meta[0] != validTypedTag) || (!typed && !ordinary && meta[0] > 1) || (ordinary && meta[0] != 1 && meta[0] != iwire.DenseVectorSearchOrdinaryANNRouteTag && meta[0] != iwire.DenseVectorSearchOrdinaryExactRouteTag) {
+	if topK <= 0 || len(meta) == 0 || (typed && meta[0] != validTypedTag) || (ordinary && meta[0] != iwire.DenseVectorSearchOrdinaryANNRouteTag && meta[0] != iwire.DenseVectorSearchOrdinaryExactRouteTag) {
 		return response, ids, docs, results, protocolError(iwire.ErrMalformedFrame, "dense route proof is invalid")
 	}
 	response.Route = documentservice.RouteAnn
-	response.NativeBasePlusLiveDelta = meta[0] == 1
 	response.TypedColumnGraph = typed
 	if ordinary && meta[0] == iwire.DenseVectorSearchOrdinaryExactRouteTag {
 		response.Route = documentservice.RouteExact
@@ -1673,8 +1656,7 @@ func decodeVersionedDenseVectorSearchResponse(version uint64, idsRaw, docsRaw, m
 		ordinaryGraphRoute := (response.ColumnGraphPreparedSearch == 1 && response.SearchPackSearch == 0) || (response.ColumnGraphPreparedSearch == 0 && response.SearchPackSearch == 1)
 		if (response.Exact && (response.ColumnGraphPreparedSearch != 0 || response.SearchPackSearch != 0 || response.ColumnGraphDeltaScored != 0 || uint64(response.Candidates) > response.DocumentsScanned)) ||
 			(!response.Exact && response.DocumentsScanned != 0) ||
-			(meta[0] == iwire.DenseVectorSearchOrdinaryANNRouteTag && !ordinaryGraphRoute) ||
-			(response.NativeBasePlusLiveDelta && (response.ColumnGraphPreparedSearch != 0 || response.SearchPackSearch != 0 || response.ColumnGraphDeltaScored != 0)) {
+			(meta[0] == iwire.DenseVectorSearchOrdinaryANNRouteTag && !ordinaryGraphRoute) {
 			return response, ids, docs, results, protocolError(iwire.ErrConsistencyUnavailable, "ordinary dense counters do not match the selected route")
 		}
 	}
@@ -1709,7 +1691,7 @@ func decodeVersionedDenseVectorSearchResponse(version uint64, idsRaw, docsRaw, m
 		results[i] = DenseVectorSearchResult{ID: ids[i], Score: score, Document: docs[i]}
 	}
 	response.Results = results
-	if (!typed && !ordinary && !response.NativeBasePlusLiveDelta) || response.ExactFallbacks != 0 || response.FullDocumentScanFallbacks != 0 || response.Candidates < len(results) {
+	if response.ExactFallbacks != 0 || response.FullDocumentScanFallbacks != 0 || response.Candidates < len(results) {
 		return DenseVectorSearchResponse{}, ids, docs, results, protocolError(iwire.ErrConsistencyUnavailable, "dense response did not prove the native route")
 	}
 	return response, ids, docs, results, nil

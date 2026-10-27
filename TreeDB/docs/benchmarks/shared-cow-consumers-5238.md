@@ -1,5 +1,10 @@
 # Ordinary service COW consumer diagnostic
 
+This page records the historical fixture and results, not a current supported
+benchmark recipe. The retired `native_runtime` control is unavailable, and
+ordinary filtered ANN and filtered vector Hybrid now fail closed. Qualification
+uses the separately frozen supported fixture; historical failures remain evidence.
+
 `BenchmarkServiceSharedCOWConsumers` reuses the maintained dense visibility
 fixture geometry (4096 ordinary JSON documents, two-dimensional embeddings,
 top10, ef100), adding sixteen declared scalar tenants. It exercises public

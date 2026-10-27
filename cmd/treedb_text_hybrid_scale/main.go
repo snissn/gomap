@@ -2040,9 +2040,6 @@ func vectorStatusBytes(status *collections.VectorIndexStatus) int64 {
 	if status == nil {
 		return 0
 	}
-	if status.NativeRootBytes != 0 {
-		return status.NativeRootBytes
-	}
 	return status.Stats.BytesDisk
 }
 

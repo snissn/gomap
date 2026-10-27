@@ -321,11 +321,14 @@ func codeOf(err error) ErrorCode {
 
 func TestOrdinaryDenseVersionUsesExistingSections(t *testing.T) {
 	registry := MustV1Registry()
-	for _, version := range []uint64{DenseVectorSearchLegacyVersion, DenseVectorSearchTypedVersion, DenseVectorSearchTypedQuantizedVersion, DenseVectorSearchNormalizedVersion, DenseVectorSearchOrdinaryVersion} {
+	for _, version := range []uint64{DenseVectorSearchTypedVersion, DenseVectorSearchTypedQuantizedVersion, DenseVectorSearchNormalizedVersion, DenseVectorSearchOrdinaryVersion} {
 		schema, ok := registry.LookupCommand(CommandDenseVectorSearch, version)
 		if !ok || !schema.LocalOnly || schema.Kind != CommandKindRead {
 			t.Fatalf("dense version %d lost its independent read capability", version)
 		}
+	}
+	if _, ok := registry.LookupCommand(CommandDenseVectorSearch, 1); ok {
+		t.Fatal("retired dense v1 must not be registered")
 	}
 	sections := []Section{
 		{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandDenseVectorSearch, Version: DenseVectorSearchOrdinaryVersion})},

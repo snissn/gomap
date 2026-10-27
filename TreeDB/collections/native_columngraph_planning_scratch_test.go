@@ -18,9 +18,9 @@ func nativeColumnGraphScratchFixture(t *testing.T, count int, ties bool) (Vector
 	return def, ids, vectors
 }
 
-func nativeColumnGraphScratchIndex(t *testing.T, def VectorIndexDefinition, count int) *VectorIndex {
+func nativeColumnGraphScratchIndex(t *testing.T, def VectorIndexDefinition, count int) *columnGraphPartitionLiveCarrier {
 	t.Helper()
-	idx, err := newVectorIndex(nil, vectorIndexOptionsFromDefinition(def))
+	idx, err := newColumnGraphPartitionLiveDomain(nil, vectorIndexOptionsFromDefinition(def))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +31,7 @@ func nativeColumnGraphScratchIndex(t *testing.T, def VectorIndexDefinition, coun
 
 // The nil owner uses the original Get/Put planner. Both executions retain the
 // same frozen-prefix batch cuts, reciprocal commit and observer algorithm.
-func nativeColumnGraphOriginalScratchBatch(t *testing.T, idx *VectorIndex, ids [][]byte, vectors [][]float32) {
+func nativeColumnGraphOriginalScratchBatch(t *testing.T, idx *columnGraphPartitionLiveCarrier, ids [][]byte, vectors [][]float32) {
 	t.Helper()
 	ctx := context.Background()
 	if err := idx.validateVectorBatchWithContext(ctx, ids, vectors); err != nil {

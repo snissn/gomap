@@ -151,14 +151,13 @@ Supported now:
 - upsert Haystack-style documents;
 - delete by ID or metadata filter;
 - count/filter/list documents;
-- legacy exact dense-vector search with optional metadata filters;
-- dense `route=ann` search through compatible `native_runtime` and
-  `column_graph` vector indexes, including declared scalar filters on
-  `native_runtime` and selected typed `column_graph`;
+- explicit exact dense-vector document scans with optional metadata filters;
+- dense `route=ann` search through compatible `column_graph` indexes, including
+  declared scalar filters on selected typed indexes;
 - ranked keyword search over the declared `content` text index, including
   declared-field metadata filters;
-- TreeDB collection-native hybrid search over text and/or vector sources,
-  including declared-field metadata filters;
+- TreeDB collection-native hybrid search over text and/or vector sources;
+  text-only searches support declared-field metadata filters;
 - optional embedding echo in returned documents.
 
 Not supported now:
@@ -166,7 +165,8 @@ Not supported now:
 - client-side or service-side full-document scan fallbacks for keyword/hybrid;
 - silent vector-only/text-only downgrade when a requested source/index is
   missing, stale, corrupt, or unavailable;
-- unsupported scalar shapes on filtered `route=ann` dense requests.
+- ordinary filtered ANN and vector hybrid requests; Mongo BSON vector indexes;
+- L2 or inner-product ANN and int8 primary vector indexes.
 
 Dense `route=ann` uses a compatible vector index and exact scores for its
 candidates. Selected `typed_input=true` indexes accept an omitted route or
@@ -176,9 +176,7 @@ executed branch can be empty, typed exact for a complete eligible set of at most
 `dense_work.graph.route` for that distinction. Selected `route=exact` rejects,
 including before build/admission.
 
-Declared scalar filters on legacy `native_runtime` expose plan, membership,
-candidate-work, fallback, materialization, and visibility-retry diagnostics.
-Legacy `route=exact` explicitly scans documents and evaluates the optional
+Ordinary `route=exact` explicitly scans documents and evaluates the optional
 metadata predicate before scoring matches; it permits an absent filter.
 An ANN request never silently becomes that document scan.
 
@@ -257,14 +255,12 @@ Service-created indexes declare these stable names:
 - text field/index: `content`;
 - document type: `treedb_document_service_v1`.
 
-New ordinary indexes with omitted `vector_index_options.strategy` retain the
-metric's original policy: cosine uses `column_graph`; other supported metrics use
-`native_runtime`. Omission when opening an existing compatible index preserves
-its stored strategy; other schema and tuning checks still apply. Explicit
-`native_runtime`, typed input, normalized representation and quantized declarations
-retain their contracts and eligibility. Cosine float32 ordinary native-runtime
-HNSW supports indexed Dense ANN and Hybrid vector candidates; non-cosine indexes
-retain exact Dense scoring and do not advertise Hybrid vector capability.
+New indexes default to `column_graph`, with cosine float32 ANN. Explicit
+`native_runtime` and unsupported primary representations or ANN metrics fail
+closed. Typed input, normalized representation and derived quantized score
+planes retain their stated admission requirements. Stored removed or ambiguous
+strategy identities are refused; use a fresh data directory rather than an
+automatic conversion.
 
 Ordinary native-storage ColumnGraph supports durable service collections,
 including the omitted cosine strategy. Without declared scalar fields, the
@@ -792,9 +788,9 @@ Response:
 ```
 
 Omit `route` (or use `route=ann`) to select the compatible vector-index route.
-ANN responses report `route=ann` and `exact=false`. Declared scalar filters are
-supported by `native_runtime` and selected typed `column_graph`; unsupported
-shapes fail closed. Typed clients validate every decoded result document against
+ANN responses report `route=ann` and `exact=false`. Ordinary filtered ANN is
+unsupported; use explicit `route=exact` for a filtered document scan. Selected
+typed `column_graph` supports its declared scalar filters. Typed clients validate every decoded result document against
 the requested filter rather than treating filter-work counts as membership proof.
 Selected legacy or diagnostic empty/exact/HNSW behavior is reported in
 `dense_work.graph.route`; canonical production reports the same value in

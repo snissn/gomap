@@ -1183,8 +1183,10 @@ func validateDeterministicVectorIndexEncodingEnum(value uint64) error {
 
 func validateDeterministicVectorIndexStrategyEnum(value uint64) error {
 	switch value {
-	case 1, 2:
+	case 2:
 		return nil
+	case 1:
+		return protocolError(ErrUnsupportedFeature, "retired native_runtime vector strategy is unsupported")
 	default:
 		return protocolError(ErrInvalidCommand, "unsupported vector_index_strategy enum %d", value)
 	}
@@ -1321,6 +1323,9 @@ func validateDeterministicCollectionMeta(raw []byte, limits Limits) error {
 		}
 		if vectorIndexCount > maxDeterministicCollectionIndexes {
 			return protocolError(ErrResourceExhausted, "vector index count %d exceeds limit %d", vectorIndexCount, maxDeterministicCollectionIndexes)
+		}
+		if version == 2 && vectorIndexCount != 0 {
+			return protocolError(ErrUnsupportedVersion, "vector-bearing collection_meta version 2 has no strategy identity")
 		}
 		if vectorIndexCount > uint64((len(raw)-off)/minDeterministicVectorDefinitionLen) {
 			return protocolError(ErrMalformedFrame, "vector index count %d exceeds remaining collection_meta payload", vectorIndexCount)

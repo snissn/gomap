@@ -427,31 +427,7 @@ func (t *NativeJSONTxn) validateDocument(g *nativeJSONTxnBinding, doc []byte, ru
 	g.validation.scratch = g.validation.scratch[:0]
 	g.validation.states = g.validation.states[:0]
 	g.validation.valueRefs = g.validation.valueRefs[:0]
-	if err != nil || !opts.allowArrayValuesInIndex || len(g.probe.meta.VectorIndexes) == 0 || !nativeOrdinaryHNSWMeta(g.probe.meta) {
-		return retained, err
-	}
-	// Ordinary HNSW stores one value per eligible scalar column. Reuse its
-	// strict maintained parser before publication so an allowed collection
-	// array cannot become a canonical row that graph maintenance cannot read.
-	// Explicit MultiKey indexes are excluded by the same column predicate.
-	strict := opts
-	strict.allowArrayValuesInIndex = false
-	for i, def := range g.probe.meta.Indexes {
-		if !supportsNativeScalarColumn(def) {
-			continue
-		}
-		_, err = orderedIndexStateForDocumentWithArena(doc, runtimes[i:i+1], strict, &g.validation)
-		clear(g.validation.states)
-		clear(g.validation.valueRefs)
-		g.validation.buf = g.validation.buf[:0]
-		g.validation.scratch = g.validation.scratch[:0]
-		g.validation.states = g.validation.states[:0]
-		g.validation.valueRefs = g.validation.valueRefs[:0]
-		if err != nil {
-			return nil, fmt.Errorf("collections: native HNSW scalar index %q: %w", def.Name, err)
-		}
-	}
-	return nil, err
+	return retained, err
 }
 
 func (t *NativeJSONTxn) admitMemberPayload(g *nativeJSONTxnBinding, docs []commitlog.CollectionDocument, ids [][]byte) error {

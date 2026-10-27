@@ -56,7 +56,7 @@ func TestNativeEffectImagePublicSeed(t *testing.T) {
 	ctx := context.Background()
 	_, err = svc.CreateIndex(ctx, documentservice.CreateIndexRequest{
 		Name: "docs", Dimension: 8,
-		VectorIndexOptions: &documentservice.BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyNativeRuntime, M: 16, EfConstruction: 128, EfSearch: 64},
+		VectorIndexOptions: &documentservice.BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyColumnGraph, M: 16, EfConstruction: 128, EfSearch: 64},
 		ScalarFields:       []documentservice.ScalarFieldDeclaration{{Field: "meta.tenant", ValueType: documentservice.ScalarFieldString}, {Field: "meta.rank", ValueType: documentservice.ScalarFieldInt64}},
 	})
 	if err != nil {

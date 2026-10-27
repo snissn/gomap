@@ -67,8 +67,7 @@ func TestNativeTextPublicDDL(t *testing.T) {
 				}
 				defer close()
 				open()
-				vector := VectorIndexDefinition{Name: "embedding", Field: "embedding", Dimensions: 2, Metric: VectorMetricCosine, M: 4}
-				if _, err := manager.CreateCollection(&CollectionMeta{Name: "docs", Indexes: []IndexDefinition{{Name: "tenant", Field: "tenant", ValueType: IndexValueString}}, VectorIndexes: []VectorIndexDefinition{vector}}); err != nil {
+				if _, err := manager.CreateCollection(&CollectionMeta{Name: "docs", Indexes: []IndexDefinition{{Name: "tenant", Field: "tenant", ValueType: IndexValueString}}}); err != nil {
 					t.Fatal(err)
 				}
 				c, err := manager.OpenCollection("docs")
@@ -84,10 +83,6 @@ func TestNativeTextPublicDDL(t *testing.T) {
 				if _, err = c.Insert([]byte("b"), []byte(`{"content":"alpha gamma","tenant":"two","embedding":[0,1]}`)); err != nil {
 					t.Fatal(err)
 				}
-				idx, err := c.BuildVectorIndex(vectorIndexOptionsFromDefinition(vector))
-				if err != nil {
-					t.Fatal(err)
-				}
 				def := TextIndexDefinition{Name: "content", Version: version, Fields: []TextIndexField{{Field: "content"}}, Analyzer: TextAnalyzerSimple, StorePositions: version == TextIndexVersionV2}
 				meta, stats, err := c.CreateTextIndex(def)
 				if err != nil {
@@ -99,7 +94,7 @@ func TestNativeTextPublicDDL(t *testing.T) {
 				requireNativeTextIDs(t, c, "alpha", "a", "b")
 				if route == "native" {
 					// Exercise the existing shared mutation owner: an unrelated text
-					// family changes schema while the ordinary facade reconciles HNSW.
+					// family changes schema while the ordinary facade updates scalar state.
 					done := make(chan error, 2)
 					go func() {
 						other := def
@@ -136,8 +131,8 @@ func TestNativeTextPublicDDL(t *testing.T) {
 						t.Fatal(concurrentErr)
 					}
 				}
-				if _, _, err = idx.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 2}); err != nil {
-					t.Fatalf("held HNSW after text create: %v", err)
+				if rows, e := c.SearchVectorsExact([]float32{1, 0}, VectorSearchOptions{Field: "embedding", TopK: 2}); e != nil || len(rows) != 2 {
+					t.Fatalf("explicit exact read after text create: rows=%d err=%v", len(rows), e)
 				}
 				view, err := c.OpenCollectionReadView()
 				if err != nil {
@@ -175,21 +170,11 @@ func TestNativeTextPublicDDL(t *testing.T) {
 				if err = view.Close(); err != nil {
 					t.Fatal(err)
 				}
-				if _, _, err = idx.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 1}); err != nil {
-					t.Fatalf("held HNSW after text drop: %v", err)
+				if rows, e := c.SearchVectorsExact([]float32{1, 0}, VectorSearchOptions{Field: "embedding", TopK: 1}); e != nil || len(rows) != 1 || string(rows[0].DocumentID) != "a" {
+					t.Fatalf("explicit exact read after text drop: rows=%v err=%v", rows, e)
 				}
-				if _, err = idx.SaveSnapshot(); err != nil {
-					if c.nativeJSON == nil {
-						t.Fatal(err)
-					}
-					cut, captureErr := c.nativeJSON.db.CaptureNativeSemanticState()
-					if captureErr == nil {
-						if budget, ok := cut.NativeAllocator().(nativeHNSWAdmissionBudget); ok {
-							t.Logf("save refusal budget: %+v limits=%+v", budget.Stats(), budget.Limits())
-						}
-						cut.Close()
-					}
-					t.Fatalf("held HNSW save after text DDL: %v (capture diagnostic=%v)", err, captureErr)
+				if ids, e := c.FindByIndex("tenant", "one"); e != nil || len(ids) != 1 || string(ids[0]) != "a" {
+					t.Fatalf("scalar index after text DDL: ids=%q err=%v", ids, e)
 				}
 				if err = checkpoint(); err != nil {
 					t.Fatal(err)

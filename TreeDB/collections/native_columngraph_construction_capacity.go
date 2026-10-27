@@ -92,7 +92,7 @@ func nativeColumnGraphConstructionCapacityForWorkers(def VectorIndexDefinition, 
 	if rows > maxColumnVectorGraphAdjacencyOrdinal || rows > uint64(int(^uint(0)>>1)) || !vectorIndexNodeOrdinalsFitUint32(0, rows) {
 		return p, memtable.ErrCOWCapacity
 	}
-	probe := VectorIndex{name: def.Name, m: def.M}
+	probe := columnGraphPartitionLiveCarrier{columnGraphHNSWBuilder: columnGraphHNSWBuilder{name: def.Name, m: def.M}}
 	var ids, nativeRows, adjacency nativeColumnGraphCapacitySum
 	maxLevel := 0
 	err := walkIDs(func(id []byte) error {
@@ -107,7 +107,7 @@ func nativeColumnGraphConstructionCapacityForWorkers(def VectorIndexDefinition, 
 			return err
 		}
 		ids.allocation(uint64(len(id)), 1)
-		n, err := nativeHNSWRowCharge(def, id)
+		n, err := columnGraphHNSWRowCharge(def, id)
 		if err != nil {
 			return err
 		}
@@ -167,12 +167,12 @@ func nativeColumnGraphConstructionCapacityForWorkers(def VectorIndexDefinition, 
 	}
 	// insertScratch remains owned even after first/serial fallback rows. The
 	// bounded planning array is a distinct owner throughout all batch loops.
-	search, err := nativeHNSWConstructionChargeForWorkers(def, rows, planningWorkers+1)
+	search, err := columnGraphHNSWConstructionChargeForWorkers(def, rows, planningWorkers+1)
 	if err != nil {
 		return nativeColumnGraphConstructionPlan{}, err
 	}
 	p.SearchScratchBytes = search
-	p.SerialScratchBytes, err = nativeHNSWConstructionCharge(def, rows)
+	p.SerialScratchBytes, err = columnGraphHNSWConstructionCharge(def, rows)
 	if err != nil {
 		return nativeColumnGraphConstructionPlan{}, err
 	}
@@ -269,7 +269,7 @@ func nativeColumnGraphConstructionCapacityForWorkers(def VectorIndexDefinition, 
 	p.LocalityBytes = locality.bytes
 
 	var control nativeColumnGraphCapacitySum
-	control.allocation(1, uint64(unsafe.Sizeof(VectorIndex{})))
+	control.allocation(1, uint64(unsafe.Sizeof(columnGraphPartitionLiveCarrier{})))
 	control.allocation(uint64(len(def.Field))+1, uint64(unsafe.Sizeof(string(""))))
 	control.allocation(1, uint64(unsafe.Sizeof(vectorIndexFrozenPrefixCommitScratch{})))
 	control.allocation(1, uint64(unsafe.Sizeof(nativeColumnGraphConstructionPlan{})))

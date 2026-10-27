@@ -74,7 +74,9 @@ evidence. No timeout, cleanup/provenance failure, additional mismatch, different
 row count, changed route, or contradictory completion evidence is equivalent.
 The SQ8 bounded control remains clean-completion-only.
 
-The historical shell lane defaults to `native_runtime` for baseline reproduction.
+The historical shell lane used `native_runtime` for baseline reproduction; that
+strategy is retired and cannot be run on current sources. Preserve its original
+source and artifacts when reproducing or interpreting historical results.
 The Python runner also supports explicit `--strategy column_graph` with declared
 typed input and native binary hot-path transport. Supply
 `--column-graph-serving /path/to/serving.json`: an explicit JSON object matching

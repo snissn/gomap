@@ -258,7 +258,7 @@ func TestDiagnosticsSnapshotCachedNativeCreateIsLastOpened(t *testing.T) {
 	ctx := context.Background()
 	svc.DiagnosticsHandler(nil)
 	request := func(name string) CreateIndexRequest {
-		return CreateIndexRequest{Name: name, Dimension: 2, Metric: MetricCosine, VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyNativeRuntime}}
+		return CreateIndexRequest{Name: name, Dimension: 2, Metric: MetricCosine, VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyColumnGraph}}
 	}
 	if _, err := svc.CreateIndex(ctx, request("a")); err != nil {
 		t.Fatalf("CreateIndex a: %v", err)
@@ -280,7 +280,7 @@ func TestDiagnosticsSnapshotCachedBenchmarkSearchIsLastOpened(t *testing.T) {
 	ctx := context.Background()
 	svc.DiagnosticsHandler(nil)
 	request := func(name string) CreateIndexRequest {
-		return CreateIndexRequest{Name: name, Dimension: 2, Metric: MetricCosine, VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyNativeRuntime}}
+		return CreateIndexRequest{Name: name, Dimension: 2, Metric: MetricCosine, VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyColumnGraph}}
 	}
 	for _, name := range []string{"a", "b"} {
 		if _, err := svc.CreateIndex(ctx, request(name)); err != nil {

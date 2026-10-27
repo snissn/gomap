@@ -74,13 +74,13 @@ func TestNativeOrdinaryColumnGraphCanonicalProjection(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(got, ids) || stats.Documents != 2 {
 		t.Fatalf("canonical projection: ids=%q stats=%+v err=%v", got, stats, err)
 	}
-	if col.registeredVectorIndex("vec") != nil {
+	if col.registeredColumnGraphPartitionLiveCarrier("vec") != nil {
 		t.Fatal("ordinary ColumnGraph write installed HNSW")
 	}
 	if err = col.Flush(); err != nil {
 		t.Fatalf("ordinary ColumnGraph Flush invoked HNSW: %v", err)
 	}
-	if col.registeredVectorIndex("vec") != nil {
+	if col.registeredColumnGraphPartitionLiveCarrier("vec") != nil {
 		t.Fatal("ordinary ColumnGraph Flush installed HNSW")
 	}
 	before := col.LastInsertStats()
@@ -174,7 +174,7 @@ func TestNativeOrdinaryColumnGraphBuildPromiseCarrier(t *testing.T) {
 	// representation keeps the complete old structural allowance.
 	excluded := meta
 	excluded.VectorIndexes = append([]VectorIndexDefinition(nil), meta.VectorIndexes...)
-	excluded.VectorIndexes[0].Strategy = VectorIndexStrategyNativeRuntime
+	excluded.VectorIndexes[0].Strategy = VectorIndexStrategy("native_runtime")
 	old, err := nativeTypedDeltaRowBuildCapacity(excluded, idBytes, retainedBytes)
 	if err != nil || old-full != memtable.COWAllocationCharge(retainedBytes*unit) {
 		t.Fatalf("excluded carrier full=%d old=%d err=%v", full, old, err)
