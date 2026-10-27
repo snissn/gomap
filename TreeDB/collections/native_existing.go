@@ -82,10 +82,10 @@ func (c *Collection) nativeInsertBatchWithStatsProjection(ids, documents [][]byt
 	if err != nil {
 		return nil, err
 	}
-	if err = c.nativeJSON.db.PrepareNativeProducer(); err != nil {
+	unlockVector, vectorMutationHeld, err := c.prepareNativeProducerMutation()
+	if err != nil {
 		return nil, err
 	}
-	unlockVector, vectorMutationHeld := c.lockNativeHNSWMutationIfNeeded()
 	defer unlockVector()
 	recordStats, err := c.nativeJSON.insertPrepared(c.name, ids, documents, &stats, requested != nil, projection)
 	if err != nil {

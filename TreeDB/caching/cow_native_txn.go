@@ -90,62 +90,85 @@ func (c *cowCache) nativeProducerPressureState() (state cowNativePressureState, 
 	return state, err
 }
 
-// PrepareNativeProducer joins at most one existing checkpoint before any
-// consumer lock, capture or private preparation. Semantic sources can exhaust
-// independently of bytes. This maintenance is not an admission promise: old
-// readers or concurrent producers can retain the original finite capacity.
-func (db *DB) PrepareNativeProducer() error {
+func (s cowNativePressureState) observation(limits memtable.COWLimits) backenddb.NativeProducerObservation {
+	return backenddb.NativeProducerObservation{
+		LogicalSequence: s.logicalSeq, Basis: s.basis, Semantic: s.semantic,
+		ReservedBytes: s.stats.ReservedBytes, Sources: s.stats.Sources,
+		Generations: s.stats.Generations, UnderPressure: s.underPressure(limits),
+	}
+}
+
+// ObserveNativeProducer releases its borrowed cut before returning this scalar
+// identity. In particular it does not wait for nativePressureMu, checkpoint or
+// semantic cleanup while its caller holds a consumer mutation gate.
+func (db *DB) ObserveNativeProducer() (backenddb.NativeProducerObservation, error) {
 	if db == nil || db.cow == nil {
-		return ErrCOWUnsupported
+		return backenddb.NativeProducerObservation{}, ErrCOWUnsupported
+	}
+	state, err := db.cow.nativeProducerPressureState()
+	if err != nil {
+		return backenddb.NativeProducerObservation{}, err
+	}
+	return state.observation(db.cow.budget.Limits()), nil
+}
+
+// PrepareNativeProducer joins at most one existing checkpoint before any
+// consumer lock, capture or private preparation. It reserves no future capacity.
+func (db *DB) PrepareNativeProducer() error {
+	_, err := db.PrepareNativeProducerObservation()
+	return err
+}
+
+// PrepareNativeProducerObservation preserves the original preparation algorithm
+// and returns the observation at its successful exit, after any original drain.
+func (db *DB) PrepareNativeProducerObservation() (backenddb.NativeProducerObservation, error) {
+	if db == nil || db.cow == nil {
+		return backenddb.NativeProducerObservation{}, ErrCOWUnsupported
 	}
 	c := db.cow
 	limits := c.budget.Limits()
 	observed, err := c.nativeProducerPressureState()
 	if err != nil {
-		return err
+		return backenddb.NativeProducerObservation{}, err
 	}
 	if !observed.underPressure(limits) {
-		return nil
+		return observed.observation(limits), nil
 	}
 	// A cleanup/Finish callback cannot join its own original worker frontier.
 	if err := db.ownedCloseGuard.CheckClose(); err != nil {
-		return err
+		return backenddb.NativeProducerObservation{}, err
 	}
-	// Concurrent producers join one drain and recheck after it, before acquiring
-	// any opening, allocation receipt, writer gate or append authority. Never
-	// retry an application callback or a partially prepared transaction here.
+	// No consumer gate or opening is held while waiting for the original drain.
 	c.nativePressureMu.Lock()
 	defer c.nativePressureMu.Unlock()
 	before, err := c.nativeProducerPressureState()
 	if err != nil {
-		return err
+		return backenddb.NativeProducerObservation{}, err
 	}
 	if !before.underPressure(limits) {
-		return nil
+		return before.observation(limits), nil
 	}
 	if c.nativePressureRemembered && c.nativePressureState == before {
-		return nil
+		return before.observation(limits), nil
 	}
 	c.nativePressureRemembered = false
 	if err := db.Checkpoint(); err != nil {
-		return err
+		return backenddb.NativeProducerObservation{}, err
 	}
-	// Physical handoff queues old semantic edges. Join their actual refunds on
-	// the original worker; NoWAL can otherwise return before source slots retire.
+	// Join the actual refunds on the original worker, before consumer locks.
 	if err := db.joinSemanticCleanupFrontier(); err != nil {
-		return err
+		return backenddb.NativeProducerObservation{}, err
 	}
 	after, err := c.nativeProducerPressureState()
 	if err != nil {
-		return err
+		return backenddb.NativeProducerObservation{}, err
 	}
-	// A concurrently published suffix may not have been covered by this drain.
-	// Its new debt must remain eligible for a later producer's checkpoint.
+	// A concurrently published suffix is not remembered as covered by this drain.
 	if after.logicalSeq == before.logicalSeq {
 		c.nativePressureState = after
 		c.nativePressureRemembered = true
 	}
-	return nil
+	return after.observation(limits), nil
 }
 func (tx *nativeConditionalTxn) State() backenddb.NativeSemanticState {
 	if tx == nil || tx.ConditionalTxn == nil || tx.closed || tx.snap == nil {

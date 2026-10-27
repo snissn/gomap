@@ -403,6 +403,10 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	// Existing native documents select ordinary semantics using the retained
 	// public schema field; this does not introduce a physical storage owner.
 	{path: "TreeDB/collections/native_existing.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
+	// Producer scheduling uses the retained public typed-schema declaration;
+	// the frozen log preserves the inventory test's original subtest names.
+	{path: "TreeDB/collections/native_producer_gate_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 5},
+	{path: "TreeDB/docs/benchmarks/native-service-write-5242/20261026-2354/cold-repair/cold-inventory1.log", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 6},
 	// Constructor and write-domain docs describe compatibility with that same
 	// public schema field and the existing statistics eligibility boundary.
 	{path: "TreeDB/docs/document-service-native-constructor.md", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},

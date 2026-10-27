@@ -513,6 +513,17 @@ suffix prevents remembering that checkpoint as covering the new work. The
 remembered state holds no additional captures or allocation leases, and is
 covered by the original cache header admission.
 
+The four existing gated native CRUD paths revalidate a value-only current
+pressure observation after acquiring their collection mutation gate, before
+opening a transaction or invoking a document callback. Changed pressured state
+releases that gate before the same producer checkpoint and cleanup join, then
+revalidates again. An unchanged pressured post-preparation observation proceeds
+to exact admission/refusal; pinned owners cannot cause a maintenance spin. The
+non-draining observation retains no cut on return, never waits for the producer
+maintenance mutex and grants no reserved headroom. No application body is retried
+by this pre-opening loop, and different collections keep their original gates.
+Plain collections retain the original advisory preparation without a new gate.
+
 ## Complete-prefix and native ownership seam
 
 The existing lower publication owner keeps one finite accepted FIFO for the DB.

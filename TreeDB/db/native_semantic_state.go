@@ -78,6 +78,19 @@ type NativeSemanticProducerPressure struct {
 	MaxSources        int
 }
 
+// NativeProducerObservation is a comparable, advisory identity of current
+// pressure. It retains no cut, reserves no capacity and grants no publication
+// authority. Historical high water is intentionally excluded.
+type NativeProducerObservation struct {
+	LogicalSequence uint64
+	Basis           StateToken
+	Semantic        NativeSemanticProducerPressure
+	ReservedBytes   uint64
+	Sources         int
+	Generations     int
+	UnderPressure   bool
+}
+
 // NativeSemanticProducerPressureState optionally observes the SAME retained
 // cut's immutable state and exact borrowed backend Snapshot. The caller holds
 // that cut throughout this call, outside the cut latch, and releases it before
@@ -238,6 +251,8 @@ type NativeSemanticBridge interface {
 	CompactNativeColumnStore(context.Context, NativeColumnStoreCompaction) error
 	Checkpoint() error
 	PrepareNativeProducer() error
+	ObserveNativeProducer() (NativeProducerObservation, error)
+	PrepareNativeProducerObservation() (NativeProducerObservation, error)
 	CaptureNativeCut() (NativeSemanticCapture, error)
 	BeginNativeConditionalTxn() (NativeConditionalTxn, error)
 	BeginPreparedNativeConditionalTxn() (NativeConditionalTxn, error)
@@ -307,6 +322,25 @@ func (db *DB) PrepareNativeProducer() error {
 		return ErrNativeSemanticUnsupported
 	}
 	return db.nativeSemanticBridge.PrepareNativeProducer()
+}
+
+// ObserveNativeProducer borrows and releases the original cut to inspect its
+// current inventory. It never takes the producer maintenance mutex, checkpoints
+// or joins cleanup, and can be called under a consumer mutation gate.
+func (db *DB) ObserveNativeProducer() (NativeProducerObservation, error) {
+	if !db.HasNativeSemanticBridge() {
+		return NativeProducerObservation{}, ErrNativeSemanticUnsupported
+	}
+	return db.nativeSemanticBridge.ObserveNativeProducer()
+}
+
+// PrepareNativeProducerObservation runs the original off-gate maintenance and
+// returns the exact final observation. The result owns no retained resources.
+func (db *DB) PrepareNativeProducerObservation() (NativeProducerObservation, error) {
+	if !db.HasNativeSemanticBridge() {
+		return NativeProducerObservation{}, ErrNativeSemanticUnsupported
+	}
+	return db.nativeSemanticBridge.PrepareNativeProducerObservation()
 }
 
 // BeginPreparedNativeConditionalTxn is the opening-only adapter for consumers

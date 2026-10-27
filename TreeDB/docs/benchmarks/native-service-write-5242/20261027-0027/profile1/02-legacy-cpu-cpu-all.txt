@@ -1,0 +1,49 @@
+File: documentservice.test
+Build ID: 46f165d1cd4e65321e0b73e41c0d81b9784f3bf1
+Type: cpu
+Time: 2026-10-26 14:12:33 HST
+Duration: 5.90s, Total samples = 3.71s (62.90%)
+Showing nodes accounting for 2.20s, 59.30% of 3.71s total
+Dropped 477 nodes (cum <= 0.02s)
+Showing top 40 nodes out of 507
+      flat  flat%   sum%        cum   cum%
+     0.32s  8.63%  8.63%      0.32s  8.63%  internal/runtime/syscall/linux.Syscall6
+     0.21s  5.66% 14.29%      0.72s 19.41%  github.com/snissn/gomap/TreeDB/collections.(*VectorIndex).searchLayerWithCandidateSeedsScratchModeObservedOrderLocked
+     0.13s  3.50% 17.79%      0.13s  3.50%  runtime.memmove
+     0.12s  3.23% 21.02%      0.12s  3.23%  memeqbody
+     0.10s  2.70% 23.72%      0.10s  2.70%  runtime.memclrNoHeapPointers
+     0.08s  2.16% 25.88%      0.08s  2.16%  github.com/snissn/compress/zstd.(*fseEncoder).buildCTable
+     0.08s  2.16% 28.03%      0.08s  2.16%  github.com/snissn/gomap/TreeDB/internal/vectorops.cosineDistanceFloat32NormalizedScalar (inline)
+     0.07s  1.89% 29.92%      0.07s  1.89%  github.com/snissn/gomap/TreeDB/collections.(*VectorIndex).layerNeighborsLocked (inline)
+     0.07s  1.89% 31.81%      0.07s  1.89%  github.com/snissn/gomap/TreeDB/collections.sortVectorIndexCandidates.func1
+     0.07s  1.89% 33.69%      0.08s  2.16%  github.com/snissn/gomap/TreeDB/collections.vectorIndexMinCandidateHeap.down
+     0.06s  1.62% 35.31%      0.10s  2.70%  slices.partitionCmpFunc[go.shape.struct { github.com/snissn/gomap/TreeDB/collections.nodeID int; github.com/snissn/gomap/TreeDB/collections.distance float32 }]
+     0.05s  1.35% 36.66%      0.08s  2.16%  runtime.scanObject
+     0.05s  1.35% 38.01%      0.07s  1.89%  slices.insertionSortCmpFunc[go.shape.struct { github.com/snissn/gomap/TreeDB/collections.nodeID int; github.com/snissn/gomap/TreeDB/collections.distance float32 }] (inline)
+     0.04s  1.08% 39.08%      0.06s  1.62%  encoding/json.(*Decoder).readValue
+     0.04s  1.08% 40.16%      0.26s  7.01%  encoding/json.(*decodeState).object
+     0.04s  1.08% 41.24%      0.05s  1.35%  github.com/snissn/compress/zstd.(*blockEnc).genCodes
+     0.04s  1.08% 42.32%      0.15s  4.04%  github.com/snissn/gomap/TreeDB/collections.(*VectorIndex).distanceToNodeWithPreparedQueryLocked
+     0.04s  1.08% 43.40%      0.22s  5.93%  github.com/snissn/gomap/TreeDB/collections.(*VectorIndex).linkFrozenPrefixReciprocalGroupObservedLocked
+     0.04s  1.08% 44.47%      0.12s  3.23%  github.com/snissn/gomap/TreeDB/internal/vectorops.cosineDistanceFloat32Normalized
+     0.04s  1.08% 45.55%      0.04s  1.08%  runtime.nextFreeFast (inline)
+     0.04s  1.08% 46.63%      0.06s  1.62%  runtime.tryDeferToSpanScan
+     0.04s  1.08% 47.71%      0.09s  2.43%  slices.symMergeCmpFunc[go.shape.struct { github.com/snissn/gomap/TreeDB/collections.fromNodeID int; github.com/snissn/gomap/TreeDB/collections.toNodeID int; github.com/snissn/gomap/TreeDB/collections.layer int }]
+     0.03s  0.81% 48.52%      0.09s  2.43%  github.com/snissn/compress/zstd.(*fastEncoderDict).Reset
+     0.03s  0.81% 49.33%      0.04s  1.08%  github.com/snissn/gomap/TreeDB/collections.(*VectorIndex).linkLayerLocked
+     0.03s  0.81% 50.13%      0.11s  2.96%  github.com/snissn/gomap/TreeDB/collections.vectorDistanceToFloat32NodeCosineUnchecked
+     0.03s  0.81% 50.94%      0.03s  0.81%  math.IsInf (inline)
+     0.03s  0.81% 51.75%      0.03s  0.81%  runtime.(*spanSet).push
+     0.03s  0.81% 52.56%      0.34s  9.16%  runtime.mallocgc
+     0.03s  0.81% 53.37%      0.03s  0.81%  slices.swapRangeCmpFunc[go.shape.struct { github.com/snissn/gomap/TreeDB/collections.fromNodeID int; github.com/snissn/gomap/TreeDB/collections.toNodeID int; github.com/snissn/gomap/TreeDB/collections.layer int }] (inline)
+     0.02s  0.54% 53.91%      0.02s  0.54%  crypto/internal/fips140/sha256.blockSHANI
+     0.02s  0.54% 54.45%      0.05s  1.35%  encoding/json.(*decodeState).scanWhile
+     0.02s  0.54% 54.99%      0.02s  0.54%  encoding/json.stateEndValue
+     0.02s  0.54% 55.53%      0.02s  0.54%  github.com/pierrec/lz4/v4/internal/lz4block.decodeBlock
+     0.02s  0.54% 56.06%      0.04s  1.08%  github.com/snissn/compress/zstd.(*fastEncoderDict).Encode
+     0.02s  0.54% 56.60%      0.02s  0.54%  github.com/snissn/compress/zstd.matchLen
+     0.02s  0.54% 57.14%      0.03s  0.81%  github.com/snissn/gomap/TreeDB/batch.(*Batch).setViewWithMVCCInput
+     0.02s  0.54% 57.68%      0.51s 13.75%  github.com/snissn/gomap/TreeDB/collections.(*Collection).scanDocumentsFuncWithVectorMutationState
+     0.02s  0.54% 58.22%      0.22s  5.93%  github.com/snissn/gomap/TreeDB/collections.(*VectorIndex).commitFrozenPrefixBatchLocked
+     0.02s  0.54% 58.76%      0.02s  0.54%  github.com/snissn/gomap/TreeDB/collections.(*VectorIndex).compareVectorIndexCandidatesByDistanceLocked
+     0.02s  0.54% 59.30%      0.02s  0.54%  github.com/snissn/gomap/TreeDB/collections.(*VectorIndex).constructionCandidatesHaveIdenticalVectorsLocked

@@ -33,10 +33,10 @@ func (c *Collection) nativeUpdateBatchMode(items []UpdateBatchItem, mode updateB
 	if bsonItems == nil && len(items) == 0 {
 		return nil, true, nil
 	}
-	if err := c.nativeJSON.db.PrepareNativeProducer(); err != nil {
+	unlockVector, vectorMutationHeld, err := c.prepareNativeProducerMutation()
+	if err != nil {
 		return nil, false, err
 	}
-	unlockVector, vectorMutationHeld := c.lockNativeHNSWMutationIfNeeded()
 	defer unlockVector()
 	tx, err := c.nativeJSON.beginPrepared(c.name)
 	if err != nil {
@@ -119,10 +119,10 @@ func (c *Collection) nativeDeleteBatch(ids [][]byte) (count int, resultErr error
 	if len(ids) == 0 {
 		return 0, nil
 	}
-	if err := c.nativeJSON.db.PrepareNativeProducer(); err != nil {
+	unlockVector, vectorMutationHeld, err := c.prepareNativeProducerMutation()
+	if err != nil {
 		return 0, err
 	}
-	unlockVector, vectorMutationHeld := c.lockNativeHNSWMutationIfNeeded()
 	defer unlockVector()
 	tx, err := c.nativeJSON.beginPrepared(c.name)
 	if err != nil {
@@ -291,10 +291,10 @@ func (c *Collection) nativeDeleteDocumentIfOnce(id []byte, predicate func([]byte
 	if len(id) == 0 {
 		return false, errors.New("collections: document id cannot be empty")
 	}
-	if err := c.nativeJSON.db.PrepareNativeProducer(); err != nil {
+	unlockVector, vectorMutationHeld, err := c.prepareNativeProducerMutation()
+	if err != nil {
 		return false, err
 	}
-	unlockVector, vectorMutationHeld := c.lockNativeHNSWMutationIfNeeded()
 	defer unlockVector()
 	tx, err := c.nativeJSON.beginPrepared(c.name)
 	if err != nil {
