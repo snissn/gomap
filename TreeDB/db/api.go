@@ -888,11 +888,22 @@ func (s *Snapshot) iterate(start, end []byte, reverse bool, fn func(key, value [
 
 // Stats returns database statistics.
 func (db *DB) Stats() map[string]string {
+	return db.StatsWithCapacity(2048)
+}
+
+// StatsWithCapacity returns a caller-owned map containing the same statistics
+// as Stats, reserving room for callers that append their own fields. Capacity is
+// only a hint:
+// dynamic statistics are never omitted when the map grows beyond it.
+func (db *DB) StatsWithCapacity(capacity int) map[string]string {
+	if capacity < 2048 {
+		capacity = 2048
+	}
 	// The fixed backend schema contains more than two thousand fields. Reserve
 	// its working size once instead of repeatedly growing and rehashing the map.
 	// Cached callers may append their own fields without retaining extra capacity
 	// in backend-only snapshots.
-	stats := make(map[string]string, 2048)
+	stats := make(map[string]string, capacity)
 	stats["treedb.negative_lookup_filter.active_bytes"] = "0"
 	if view := db.snapshotViewRO.Load(); view != nil {
 		stats["treedb.negative_lookup_filter.active_bytes"] = fmt.Sprint(view.negativeFilter.Bytes())

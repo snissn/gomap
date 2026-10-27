@@ -31984,7 +31984,17 @@ func (db *DB) maybeRunLeafGenerationPackMaintenance(runGC bool, quiet bool, admi
 }
 
 func (db *DB) Stats() map[string]string {
-	stats := db.backend.Stats()
+	var stats map[string]string
+	// The typical combined schema contains over four thousand fields. Reserve
+	// the output once at its owner rather than growing the backend map while
+	// appending cache telemetry. This is a capacity hint, not a field limit.
+	// Only the concrete native backend uses this capability: decorators keep
+	// their Stats overrides and generic backends retain the existing contract.
+	if native, ok := db.backend.(*backenddb.DB); ok {
+		stats = native.StatsWithCapacity(4608)
+	} else {
+		stats = db.backend.Stats()
+	}
 	if stats == nil {
 		stats = make(map[string]string)
 	}
