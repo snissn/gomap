@@ -36,7 +36,8 @@ Text index v2 is B-tree-native TreeDB storage:
 ### Shared COW collection adapter
 
 The native semantic collection owner can create ordinary JSON, BSON or template-v1 collections with
-declared V1 or V2 text indexes, scalar indexes, and ordinary runtime HNSW indexes. Its
+declared V1 or V2 text indexes and scalar indexes. Ordinary JSON collections can
+also declare cosine float32 `column_graph` indexes. Its
 CRUD finalizer feeds the maintained text reducer's old/new document effects into
 the same immutable publication as primary and scalar changes. V1 retains its
 three posting/state/statistics domains; V2 retains its seven domains and
@@ -49,7 +50,7 @@ V1 instead authenticates its complete statistics domain, including replacements
 that change field/term counts without changing corpus cardinality. Native
 transactions record these dependencies and every emitted text key effect, so
 incompatible captured plans fail before publication. Ordinary
-mixed text/HNSW mutations also retain the existing DB-scoped HNSW mutation gate.
+mixed text/vector mutations share the collection schema and mutation gate.
 Canonical singleton and composite command replay regenerate text effects using
 the maintained reducer against the original physical replay snapshot.
 

@@ -1,7 +1,7 @@
 # Native captured hybrid reads
 
 Ordinary JSON collections use the maintained hybrid executor for lexical search,
-ordinary cosine float32 ColumnGraph and native-runtime HNSW, scalar equality/range/conjunction
+ordinary cosine float32 ColumnGraph, scalar equality/range/conjunction
 filters, rank fusion and final JSON projection.
 This is a read adapter over existing text and scalar domains. It does not add a
 publication authority or select a server default.

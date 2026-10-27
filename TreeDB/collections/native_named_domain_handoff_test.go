@@ -110,10 +110,26 @@ func TestNativeScalarReplacementDuringCapturedBuild(t *testing.T) {
 		}
 	}()
 	for _, stage := range []string{"full", "empty"} {
+		// The physical builder scans only pending domains. Seed an actual scalar
+		// change after the prior checkpoint, so the paused old build owns this
+		// domain and must advance its catalog provenance after replacement.
+		changedID := []byte("c")
+		if stage == "empty" {
+			changedID = []byte("a")
+		}
+		if _, changed, updateErr := c.Update(changedID, func([]byte) ([]byte, bool, error) {
+			return []byte(`{"tenant":"two"}`), true, nil
+		}); updateErr != nil || !changed {
+			t.Fatalf("seed captured scalar change stage=%s changed=%t err=%v", stage, changed, updateErr)
+		}
 		if _, _, err = pauseCollection.InsertTypedBatchWithStats([][]byte{[]byte(stage)}, [][]byte{[]byte(`{"id":"` + stage + `"}`)}, []TypedColumnBatch{{Name: "label", Strings: []string{stage}}}); err != nil {
 			t.Fatal(err)
 		}
 		old := capture()
+		capturedDomain, pending := old.collection.pending.Get("index/tenant")
+		if !pending || capturedDomain == nil || ((capturedDomain.pending == nil || capturedDomain.pending.Len() == 0) && capturedDomain.captured == nil) {
+			t.Fatalf("stage=%s old checkpoint has no pending scalar domain", stage)
+		}
 		oldImage := image(old)
 		entered, release, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
 		var once, releaseOnce sync.Once

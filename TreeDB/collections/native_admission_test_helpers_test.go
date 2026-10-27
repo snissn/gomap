@@ -1,7 +1,6 @@
 package collections
 
 import (
-	"encoding/json"
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
@@ -15,9 +14,10 @@ type nativeHNSWAdmissionBudget interface {
 	Limits() memtable.COWLimits
 }
 
-func openPinnedNativeHNSWAdmissionFixture(t *testing.T, id []byte) (*Collection, VectorIndexDefinition, nativeHNSWAdmissionBudget) {
+// This fixture tests shared finite-budget admission, independently of vector DDL.
+func openPinnedNativeScalarAdmissionFixture(t *testing.T) (*Collection, nativeHNSWAdmissionBudget) {
 	t.Helper()
-	opts := treedb.OptionsFor(treedb.ProfileDurable, t.TempDir())
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir())
 	opts.MemtableMode = "cow_btree"
 	opts.FlushThreshold = 1 << 30
 	opts.BackgroundCheckpointInterval = -1
@@ -65,7 +65,7 @@ func openPinnedNativeHNSWAdmissionFixture(t *testing.T, id []byte) (*Collection,
 	pin() // OPEN, before the first catalog publication
 	budget = pins[0].NativeAllocator().(nativeHNSWAdmissionBudget)
 	manager = NewCollectionManager(backend)
-	if _, err = manager.CreateCollection(&CollectionMeta{Name: "docs", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON}}); err != nil {
+	if _, err = manager.CreateCollection(&CollectionMeta{Name: "docs", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON}, Indexes: []IndexDefinition{{Name: "tenant", Field: "tenant", ValueType: IndexValueString}}}); err != nil {
 		t.Fatal(err)
 	}
 	pin()
@@ -73,22 +73,7 @@ func openPinnedNativeHNSWAdmissionFixture(t *testing.T, id []byte) (*Collection,
 	if err != nil {
 		t.Fatal(err)
 	}
-	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Dimensions: 2, Metric: VectorMetricCosine, M: 16, Strategy: VectorIndexStrategyColumnGraph}
-	if _, err = collection.CreateVectorIndex(def); err != nil {
-		t.Fatal(err)
-	}
-	pin()
-	if id != nil {
-		document, err := json.Marshal(map[string]any{"embedding": []float32{1, 0}})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err = collection.Insert(id, document); err != nil {
-			t.Fatal(err)
-		}
-		pin()
-	}
-	return collection, def, budget
+	return collection, budget
 }
 
 func nativeHNSWAdmissionCaptureBytes(t *testing.T, c *Collection, budget nativeHNSWAdmissionBudget) uint64 {

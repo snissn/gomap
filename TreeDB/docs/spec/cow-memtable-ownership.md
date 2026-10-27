@@ -12,19 +12,9 @@ finite limits, refusal, recovery and lifetime obligations.
 ## Private preparation and immutable read headers
 
 `NewCOWWriter` owns a degree-32 tidwall/btree v1.8.1 private map and one source
-generation. `Prepare` first validates and reserves the complete conservative
-allocation charge. If that bound refuses byte capacity, a nonempty raw PUT-only
-batch (including stored tombstones) may reserve its complete payload, wrappers
-and temporary owner first, then use the existing `Map.SetWithWork` to reserve
-each rounded private-node work cohort before allocation or mutation. Both paths
-use the same generation receipt and original limits; ordered history and
-physical deletes retain their conservative batch reservation. Preparation then
-forks the private header, copies accepted keys/values into owned immutable
-strings and applies the batch. A partial private refusal detaches every staged
-alias and refunds its complete current receipt; it installs no writer pending
-state or published root. Actual node allocation reconciles the conservative
-work charge after successful preparation. Historical peak counters may record
-the discarded private work. `Remove` physically deletes a key;
+generation. `Prepare` first validates and reserves the complete allocation
+charge, then forks that private header, copies accepted keys/values into owned
+immutable strings and applies the batch. `Remove` physically deletes a key;
 a normal entry carrying `FlagTombstone` preserves a cached physical-key deletion
 marker and its revision. This is distinct from an MVCC logical tombstone, whose
 existing codec remains in ordinary value bytes. Pointer/revision/flags metadata

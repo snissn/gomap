@@ -2,6 +2,7 @@ package collections
 
 import (
 	"fmt"
+	"sort"
 	"sync"
 	"testing"
 
@@ -29,22 +30,94 @@ func TestTextHybridScaleLargeFixtureSmoke2731(t *testing.T) {
 		t.Fatal("text common returned no results")
 	}
 
-	hybrid, err := fixture.col.SearchHybrid(HybridSearchOptions{
+	opts := HybridSearchOptions{
 		TopK:       10,
 		ResultMode: HybridResultModeScoreOnly,
 		Text:       &HybridTextQuery{IndexName: hybridCloseoutTextIndexName2506, Query: "refund policy", CandidateLimit: 64},
 		Vector:     &HybridVectorQuery{IndexName: fixture.def.Name, Query: hybridCloseoutQueryVector2506(8), CandidateLimit: 64, EfSearch: 64, QueryMode: VectorIndexQueryModeExact},
-		ScalarFilter: &HybridScalarFilter{
-			IndexName: hybridCloseoutTenantIndexName2506,
-			Value:     "tenant-rare-06pct",
-		},
-	})
+	}
+	hybrid, err := fixture.col.SearchHybrid(opts)
 	if err != nil {
 		t.Fatalf("SearchHybrid: %v", err)
 	}
 	assertHybridScaleZeroDocStats2731(t, "hybrid", hybrid.Stats)
-	if len(hybrid.Results) == 0 {
-		t.Fatal("hybrid returned no results")
+	if len(hybrid.Results) != opts.TopK || hybrid.Stats.TextCandidatesReturned != 64 || hybrid.Stats.VectorCandidatesReturned != 64 || hybrid.Stats.ScalarFilterLookups != 0 {
+		t.Fatalf("hybrid results=%d stats=%+v want bounded unfiltered text/vector fusion", len(hybrid.Results), hybrid.Stats)
+	}
+	assertHybridScaleRRF2731(t, fixture.col, opts, hybrid.Results)
+
+	// The same indexed fixture must refuse the retired ordinary filtered-vector
+	// route before it executes either source or reads scalar postings.
+	opts.ScalarFilter = &HybridScalarFilter{IndexName: hybridCloseoutTenantIndexName2506, Value: "tenant-rare-06pct"}
+	unsupported, err := fixture.col.SearchHybrid(opts)
+	requireFilteredVectorHybridUnsupported5275(t, unsupported, err)
+}
+
+func assertHybridScaleRRF2731(t *testing.T, col *Collection, opts HybridSearchOptions, got []HybridSearchResult) {
+	t.Helper()
+	text, err := col.SearchHybridTextCandidates(*opts.Text)
+	if err != nil {
+		t.Fatalf("independent text candidates: %v", err)
+	}
+	vector, err := col.SearchHybridVectorCandidates(*opts.Vector)
+	if err != nil {
+		t.Fatalf("independent vector candidates: %v", err)
+	}
+	if len(text.Candidates) != opts.Text.CandidateLimit || len(vector.Candidates) != opts.Vector.CandidateLimit {
+		t.Fatalf("independent candidates: text=%d vector=%d want %d/%d", len(text.Candidates), len(vector.Candidates), opts.Text.CandidateLimit, opts.Vector.CandidateLimit)
+	}
+	// Build the default RRF oracle from independently executed source rankings,
+	// without calling the executor's fusion or ordering helpers.
+	type expectedResult struct {
+		id         string
+		score      float64
+		bestRank   int
+		bestSource int
+		sources    int
+	}
+	byID := make(map[string]*expectedResult)
+	for source, candidates := range [][]HybridSearchCandidate{text.Candidates, vector.Candidates} {
+		for i, candidate := range candidates {
+			id, rank := string(candidate.ID), i+1
+			want := byID[id]
+			if want == nil {
+				want = &expectedResult{id: id, bestRank: rank, bestSource: source}
+				byID[id] = want
+			}
+			want.score += 1 / float64(60+rank)
+			want.sources++
+			if rank < want.bestRank {
+				want.bestRank, want.bestSource = rank, source
+			}
+		}
+	}
+	want := make([]*expectedResult, 0, len(byID))
+	for _, result := range byID {
+		want = append(want, result)
+	}
+	sort.Slice(want, func(i, j int) bool {
+		a, b := want[i], want[j]
+		if a.score != b.score {
+			return a.score > b.score
+		}
+		if a.bestRank != b.bestRank {
+			return a.bestRank < b.bestRank
+		}
+		if a.sources != b.sources {
+			return a.sources > b.sources
+		}
+		if a.bestSource != b.bestSource {
+			return a.bestSource < b.bestSource
+		}
+		return a.id < b.id
+	})
+	for i, result := range got {
+		if string(result.ID) != want[i].id || result.FusedScore != want[i].score || result.Rank != i+1 {
+			t.Fatalf("hybrid rank %d: got=%+v want=%+v", i+1, result, *want[i])
+		}
+		if result.DocumentFound || len(result.Document) != 0 || len(result.Sources) != 0 {
+			t.Fatalf("score-only hybrid result carried document or attribution: %+v", result)
+		}
 	}
 }
 

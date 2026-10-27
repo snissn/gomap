@@ -189,11 +189,31 @@ func TestOrdinaryColumnGraphNativeOptimizeCrashReopen(t *testing.T) {
 		t.Fatalf("recovered Keyword=%+v err=%v", keyword, err)
 	}
 	checkFiltered(keyword.Documents)
-	hybrid, err := svc.SearchHybrid(ctx, "crash_docs", HybridSearchRequest{Query: "policy", QueryEmbedding: document(0).Embedding, TopK: 4, TextCandidateLimit: 8, VectorCandidateLimit: 8, EfSearch: 64, Filter: filter})
+	exact, err := svc.SearchDenseVector(ctx, "crash_docs", DenseVectorSearchRequest{QueryEmbedding: document(0).Embedding, TopK: 4, Filter: filter, Route: RouteExact})
+	if err != nil || !exact.Exact || exact.Route != RouteExact {
+		t.Fatalf("recovered filtered exact Dense=%+v err=%v", exact, err)
+	}
+	checkFiltered(exact.Documents)
+	hybridRequest := HybridSearchRequest{Query: "policy", QueryEmbedding: document(0).Embedding, TopK: 4, TextCandidateLimit: 8, VectorCandidateLimit: 8, EfSearch: 64, Filter: filter}
+	if refused, err := svc.SearchHybrid(ctx, "crash_docs", hybridRequest); ErrorCodeOf(err) != CodeUnsupported || len(refused.Documents) != 0 {
+		t.Fatalf("recovered filtered Hybrid: documents=%d err=%v", len(refused.Documents), err)
+	}
+	hybridRequest.Filter = nil
+	hybrid, err := svc.SearchHybrid(ctx, "crash_docs", hybridRequest)
 	if err != nil || hybrid.TextIndex != defaultTextIndexName || hybrid.VectorIndex != defaultVectorIndexName || hybrid.Stats.TextCandidatesReturned == 0 || hybrid.Stats.VectorCandidatesReturned == 0 || hybrid.Stats.FullDocumentScanFallbacks != 0 {
 		t.Fatalf("recovered mixed Hybrid=%+v err=%v", hybrid, err)
 	}
-	checkFiltered(hybrid.Documents)
+	if len(hybrid.Documents) != 4 {
+		t.Fatalf("recovered mixed Hybrid count=%d", len(hybrid.Documents))
+	}
+	seen := make(map[string]bool)
+	for _, doc := range hybrid.Documents {
+		var ordinal int
+		if _, err := fmt.Sscanf(doc.ID, "d%03d", &ordinal); err != nil || ordinal < 0 || ordinal >= 8 || doc.ID != document(ordinal).ID || seen[doc.ID] || doc.Content != document(ordinal).Content || doc.Meta["tenant"] != document(ordinal).Meta["tenant"] || len(doc.Embedding) != 0 {
+			t.Fatalf("recovered mixed Hybrid projection=%+v", doc)
+		}
+		seen[doc.ID] = true
+	}
 	if got := manifest(svc, dir); got != accepted {
 		t.Fatalf("serving changed accepted manifest: %+v want=%+v", got, accepted)
 	}

@@ -157,8 +157,8 @@ func TestServiceTypedHybridCurrentMutationLifecycle(t *testing.T) {
 	before := workstats.Read()
 	defer func() {
 		after := workstats.Read()
-		if after.IndexedJSON != before.IndexedJSON || after.Runtime != before.Runtime || after.Scans != before.Scans {
-			t.Errorf("selected hybrid used JSON/runtime/scan work: before=%+v after=%+v", before, after)
+		if after.IndexedJSON != before.IndexedJSON || after.Scans != before.Scans {
+			t.Errorf("selected hybrid used JSON/scan work: before=%+v after=%+v", before, after)
 		}
 		if after.Typed.TextRows <= before.Typed.TextRows || after.Typed.TextOldRows <= before.Typed.TextOldRows {
 			t.Error("typed text mutation producers did not run")

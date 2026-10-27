@@ -11,7 +11,7 @@ import (
 )
 
 // The maintained write-load geometry must also serve its first mixed request
-// after reopening. Filtered exact Dense and an ANN warm-up must not hide cold
+// after reopening. Explicit exact Dense and an ANN warm-up must not hide cold
 // pack validation's temporary admission overlapping text candidate admission.
 func TestOrdinaryColumnGraphNativeColdHybrid4096(t *testing.T) {
 	ctx := context.Background()
@@ -79,7 +79,7 @@ func TestOrdinaryColumnGraphNativeColdHybrid4096(t *testing.T) {
 	if _, err := svc.OptimizeIndex(ctx, name, OptimizeIndexRequest{}); err != nil {
 		t.Fatal(err)
 	}
-	request := HybridSearchRequest{Query: "content", QueryEmbedding: []float32{1, 1}, TopK: 10, TextCandidateLimit: 64, VectorCandidateLimit: 64, EfSearch: 100, Filter: &Filter{Field: "meta.tenant", Operator: "==", Value: "tenant-00"}}
+	request := HybridSearchRequest{Query: "content", QueryEmbedding: []float32{1, 1}, TopK: 10, TextCandidateLimit: 64, VectorCandidateLimit: 64, EfSearch: 100}
 	check := func(out HybridSearchResponse, err error) {
 		t.Helper()
 		if err != nil {
@@ -97,16 +97,16 @@ func TestOrdinaryColumnGraphNativeColdHybrid4096(t *testing.T) {
 		seen := make(map[string]bool)
 		for _, doc := range out.Documents {
 			var i int
-			if _, err := fmt.Sscanf(doc.ID, "doc-%04d", &i); err != nil || i < 0 || i >= 4096 || i%16 != 0 || doc.ID != fmt.Sprintf("doc-%04d", i) || seen[doc.ID] {
+			if _, err := fmt.Sscanf(doc.ID, "doc-%04d", &i); err != nil || i < 0 || i >= 4096 || doc.ID != fmt.Sprintf("doc-%04d", i) || seen[doc.ID] {
 				t.Fatalf("invalid or duplicate ID %q", doc.ID)
 			}
 			seen[doc.ID] = true
-			if doc.Content != fmt.Sprintf("content-%04d", i) || doc.Meta["tenant"] != "tenant-00" || len(doc.Embedding) != 0 {
-				t.Fatalf("filtered projection=%+v", doc)
+			if doc.Content != fmt.Sprintf("content-%04d", i) || doc.Meta["tenant"] != fmt.Sprintf("tenant-%02d", i%16) || len(doc.Embedding) != 0 {
+				t.Fatalf("projection=%+v", doc)
 			}
 		}
 		stats := out.Stats
-		if stats.TextCandidatesRequested != 64 || stats.VectorCandidatesRequested != 64 || stats.TextCandidatesReturned == 0 || stats.VectorCandidatesReturned == 0 || stats.TextPostingsScanned == 0 || stats.VectorCandidatesExamined == 0 || stats.ScalarFilterLookups == 0 || stats.DocumentsFetched != 10 || stats.EmbeddingOutputBytes != 0 || stats.FullDocumentScanFallbacks != 0 || stats.FailClosed != 0 {
+		if stats.TextCandidatesRequested != 64 || stats.VectorCandidatesRequested != 64 || stats.TextCandidatesReturned == 0 || stats.VectorCandidatesReturned == 0 || stats.TextPostingsScanned == 0 || stats.VectorCandidatesExamined == 0 || stats.ScalarFilterLookups != 0 || stats.DocumentsFetched != 10 || stats.EmbeddingOutputBytes != 0 || stats.FullDocumentScanFallbacks != 0 || stats.FailClosed != 0 {
 			t.Fatalf("work=%+v", stats)
 		}
 	}
@@ -144,6 +144,11 @@ func TestOrdinaryColumnGraphNativeColdHybrid4096(t *testing.T) {
 		if cold.Documents[i].ID != again.Documents[i].ID {
 			t.Fatalf("cold/warm rank[%d]=%q/%q", i, cold.Documents[i].ID, again.Documents[i].ID)
 		}
+	}
+	filtered := request
+	filtered.Filter = &Filter{Field: "meta.tenant", Operator: "==", Value: "tenant-00"}
+	if out, err := svc.SearchHybrid(ctx, name, filtered); ErrorCodeOf(err) != CodeUnsupported || len(out.Documents) != 0 {
+		t.Fatalf("filtered Hybrid must refuse: documents=%d err=%v", len(out.Documents), err)
 	}
 	closeOwner()
 }

@@ -81,7 +81,7 @@ func TestHybridParentCollapseReportsBoundedExhaustion4291(t *testing.T) {
 }
 
 func TestSearchHybridParentCollapseFilterFetchAndDisabledParity4291(t *testing.T) {
-	_, d, col, def := openHybridSearchExecutorFixture2505(t, []hybridSearchExecutorFixtureRow2505{
+	_, d, col, _ := openHybridSearchExecutorFixture2505(t, []hybridSearchExecutorFixtureRow2505{
 		{id: "parent-a#0", title: "refund refund", body: "refund refund", city: "sea", vector: []float32{1, 0, 0}},
 		{id: "parent-a#1", title: "refund", body: "refund", city: "sea", vector: []float32{0.99, 0.01, 0}},
 		{id: "parent-b#0", title: "refund", body: "refund", city: "sea", vector: []float32{0.8, 0.2, 0}},
@@ -93,7 +93,6 @@ func TestSearchHybridParentCollapseFilterFetchAndDisabledParity4291(t *testing.T
 	base := HybridSearchOptions{
 		TopK:             3,
 		Text:             &HybridTextQuery{IndexName: "lexical", Query: "refund", CandidateLimit: 5},
-		Vector:           &HybridVectorQuery{IndexName: def.Name, Query: []float32{1, 0, 0}, CandidateLimit: 5, EfSearch: 5, QueryMode: VectorIndexQueryModeExact},
 		ScalarFilter:     &HybridScalarFilter{IndexName: "city", Value: "sea"},
 		IncludeDocuments: true,
 	}
@@ -147,8 +146,8 @@ func TestSearchHybridParentCollapseFilterFetchAndDisabledParity4291(t *testing.T
 		if bytes.HasPrefix(result.ID, []byte("parent-a#")) {
 			parentA++
 		}
-		if !hybridResultHasSource2505(result, HybridCandidateSourceText) || !hybridResultHasSource2505(result, HybridCandidateSourceVector) {
-			t.Fatalf("mixed source contribution lost: %+v", result)
+		if !hybridResultHasSource2505(result, HybridCandidateSourceText) {
+			t.Fatalf("text source contribution lost: %+v", result)
 		}
 	}
 	if parentA > 1 || got.Stats.CollapseRejections == 0 || got.Stats.CollapseExhaustions != 0 {

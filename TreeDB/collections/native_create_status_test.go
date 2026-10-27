@@ -136,7 +136,7 @@ func TestNativeCreateCollectionWithStatus(t *testing.T) {
 }
 
 func TestNativeCreateCollectionWithStatusRefusal(t *testing.T) {
-	c, _, budget := openPinnedNativeHNSWAdmissionFixture(t, nil)
+	c, budget := openPinnedNativeScalarAdmissionFixture(t)
 	read, err := c.nativeJSON.Capture(c.name)
 	if err != nil {
 		t.Fatal(err)

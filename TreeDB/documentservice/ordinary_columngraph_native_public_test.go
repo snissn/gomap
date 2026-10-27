@@ -139,8 +139,8 @@ func TestOrdinaryColumnGraphNativeService4096(t *testing.T) {
 				if keyword.Stats.FullDocumentScanFallbacks != 0 {
 					t.Fatal("keyword scan fallback")
 				}
-				// ColumnGraph's maintained public ANN route is unfiltered. An
-				// omitted route with metadata filters selects exact document scan.
+				// ColumnGraph's maintained public ANN route is unfiltered.
+				// Filtered ANN must refuse; exact document scan is explicit.
 				dense, err := svc.SearchDenseVector(ctx, "docs", DenseVectorSearchRequest{QueryEmbedding: document(0).Embedding, TopK: 10, Route: RouteAnn, EfSearch: 64})
 				if err != nil {
 					t.Fatalf("Dense: %v", err)
@@ -149,7 +149,13 @@ func TestOrdinaryColumnGraphNativeService4096(t *testing.T) {
 				if dense.Exact || dense.Route != RouteAnn {
 					t.Fatalf("dense route=%s exact=%v", dense.Route, dense.Exact)
 				}
-				filteredDense, err := svc.SearchDenseVector(ctx, "docs", DenseVectorSearchRequest{QueryEmbedding: document(0).Embedding, TopK: 10, Filter: filter})
+				for _, route := range []Route{"", RouteAnn} {
+					refused, err := svc.SearchDenseVector(ctx, "docs", DenseVectorSearchRequest{QueryEmbedding: document(0).Embedding, TopK: 10, Filter: filter, Route: route})
+					if ErrorCodeOf(err) != CodeUnsupported || len(refused.Documents) != 0 {
+						t.Fatalf("filtered ANN route=%q: documents=%d err=%v", route, len(refused.Documents), err)
+					}
+				}
+				filteredDense, err := svc.SearchDenseVector(ctx, "docs", DenseVectorSearchRequest{QueryEmbedding: document(0).Embedding, TopK: 10, Filter: filter, Route: RouteExact})
 				if err != nil {
 					t.Fatalf("filtered Dense: %v", err)
 				}
@@ -157,11 +163,16 @@ func TestOrdinaryColumnGraphNativeService4096(t *testing.T) {
 				if !filteredDense.Exact || filteredDense.Route != RouteExact {
 					t.Fatalf("filtered dense route=%s exact=%v", filteredDense.Route, filteredDense.Exact)
 				}
-				hybrid, err := svc.SearchHybrid(ctx, "docs", HybridSearchRequest{Query: "policy", QueryEmbedding: document(0).Embedding, TopK: 10, TextCandidateLimit: 64, VectorCandidateLimit: 64, EfSearch: 64, Filter: filter})
+				hybridRequest := HybridSearchRequest{Query: "policy", QueryEmbedding: document(0).Embedding, TopK: 10, TextCandidateLimit: 64, VectorCandidateLimit: 64, EfSearch: 64, Filter: filter}
+				if refused, err := svc.SearchHybrid(ctx, "docs", hybridRequest); ErrorCodeOf(err) != CodeUnsupported || len(refused.Documents) != 0 {
+					t.Fatalf("filtered Hybrid: documents=%d err=%v", len(refused.Documents), err)
+				}
+				hybridRequest.Filter = nil
+				hybrid, err := svc.SearchHybrid(ctx, "docs", hybridRequest)
 				if err != nil {
 					t.Fatalf("Hybrid: %v", err)
 				}
-				verify(hybrid.Documents, true)
+				verify(hybrid.Documents, false)
 			}
 			check(4096, false)
 			closeAll()

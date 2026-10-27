@@ -106,9 +106,7 @@ func TestCOWPackedPointerAdmissionCancelAndRetention(t *testing.T) {
 	}
 	before := b.Stats()
 	originalLimit := b.limits.MaxInFlightBytes
-	// Refuse the irreducible header/payload envelope, independent of the
-	// conservative node bound which raw preparation can now refine.
-	b.limits.MaxInFlightBytes = charge.Total() - charge.Nodes - charge.Payload
+	b.limits.MaxInFlightBytes = charge.Total() - charge.Payload
 	if p, err := w.Prepare(entries, COWPrepareOptions{}); p != nil || !errors.Is(err, ErrCOWCapacity) {
 		t.Fatal("prefix escaped finite admission", p, err)
 	}

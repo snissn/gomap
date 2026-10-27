@@ -255,7 +255,11 @@ persistent cache, or durable artifact storage as
 fallback. Local focused smoke tests are not retained performance acceptance.
 
 For Q5's bounded ordinary-mutable controls, keep the existing Go validator
-boundary intact. The exact bounded `native_runtime` baseline is either a clean
+boundary intact. The following legacy-v2 baseline and preparation contracts
+describe frozen historical evidence only. Current sources reject the retired
+strategy; the analyzer requires `--historical-analysis` and cannot qualify
+these packets. Preserve their original source, commands and artifacts.
+The exact bounded `native_runtime` baseline is either a clean
 completed application-lifecycle control or the one exact failed regression
 already frozen by #4617: bounded-50K `broad_10pct`, 1,000 eligible IDs, no
 returned IDs, `complete_finite_ann`, and positive integral visited/scored work

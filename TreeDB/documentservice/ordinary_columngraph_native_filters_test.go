@@ -9,8 +9,8 @@ import (
 	"github.com/snissn/gomap/TreeDB/collections"
 )
 
-// Exercise the captured ColumnGraph reader on both sides of the maintained
-// allow-set cutoff, including the vector-only path and empty predicates.
+// Ordinary filtered vector requests refuse on both sides of the former allow-set
+// cutoff, including empty predicates. Explicit exact scoring remains supported.
 func TestNativeOrdinaryColumnGraphHybridFilters(t *testing.T) {
 	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir())
 	opts.MemtableMode = "cow_btree"
@@ -85,19 +85,30 @@ func TestNativeOrdinaryColumnGraphHybridFilters(t *testing.T) {
 				req.TextCandidateLimit = tc.candidates
 			}
 			out, err := svc.SearchHybrid(ctx, "filters", req)
-			if err != nil {
-				t.Fatal(err)
+			if ErrorCodeOf(err) != CodeUnsupported || len(out.Documents) != 0 || out.Stats.VectorCandidatesExamined != 0 || out.Stats.DocumentsFetched != 0 || out.Stats.FullDocumentScanFallbacks != 0 {
+				t.Fatalf("filtered Hybrid must refuse without candidate work: err=%v stats=%+v", err, out.Stats)
 			}
-			if len(out.Documents) != tc.want || out.Stats.FullDocumentScanFallbacks != 0 {
-				t.Fatalf("count=%d want=%d stats=%+v", len(out.Documents), tc.want, out.Stats)
+			for _, route := range []Route{"", RouteAnn} {
+				refused, err := svc.SearchDenseVector(ctx, "filters", DenseVectorSearchRequest{QueryEmbedding: req.QueryEmbedding, TopK: req.TopK, Filter: req.Filter, Route: route})
+				if ErrorCodeOf(err) != CodeUnsupported || len(refused.Documents) != 0 || refused.DocumentsScanned != 0 {
+					t.Fatalf("filtered ANN route=%q: response=%+v err=%v", route, refused, err)
+				}
 			}
-			if tc.want == 0 && (out.Stats.VectorCandidatesReturned != 0 || out.Stats.VectorCandidatesExamined != 0) {
-				t.Fatalf("empty predicate traversed graph: %+v", out.Stats)
+			exact, err := svc.SearchDenseVector(ctx, "filters", DenseVectorSearchRequest{QueryEmbedding: req.QueryEmbedding, TopK: req.TopK, Filter: req.Filter, Route: RouteExact})
+			if err != nil || !exact.Exact || exact.Route != RouteExact || len(exact.Documents) != tc.want {
+				t.Fatalf("explicit exact count=%d want=%d route=%s exact=%v err=%v", len(exact.Documents), tc.want, exact.Route, exact.Exact, err)
 			}
-			for _, doc := range out.Documents {
+			for _, doc := range exact.Documents {
 				if doc.Meta[tc.field] != tc.value || len(doc.Embedding) != 0 {
 					t.Fatalf("filter/projection: %+v", doc)
 				}
+			}
+			// Refusing the filtered request must leave its unfiltered graph
+			// route usable, for both mixed and vector-only requests.
+			req.Filter = nil
+			positive, err := svc.SearchHybrid(ctx, "filters", req)
+			if err != nil || len(positive.Documents) != 5 || positive.Stats.VectorCandidatesReturned == 0 || positive.Stats.FullDocumentScanFallbacks != 0 {
+				t.Fatalf("unfiltered Hybrid count=%d stats=%+v err=%v", len(positive.Documents), positive.Stats, err)
 			}
 		})
 	}

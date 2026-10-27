@@ -8,6 +8,10 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
+// ErrIndexNameConflict identifies a cross-kind index name collision detected
+// under the collection's schema authority.
+var ErrIndexNameConflict = errors.New("collections: index name conflicts with another index kind")
+
 // CollectionIndexDDL is an operation-scoped index publication owner. It is valid
 // only inside WithVectorIndexDDL's callback. Call its methods instead of the
 // collection's public DDL methods while that callback holds schema authority.
@@ -86,6 +90,9 @@ func (c *Collection) WithVectorIndexDDL(definitions []VectorIndexDefinition, fn 
 			return fmt.Errorf("collections: duplicate index %q", def.Name)
 		}
 		vectors[def.Name] = def
+		if _, found := findIndex(meta.Indexes, def.Name); found {
+			return fmt.Errorf("%w: %q", ErrIndexNameConflict, def.Name)
+		}
 		if existing, found := findVectorIndex(meta.VectorIndexes, def.Name); found {
 			if !VectorIndexDefinitionsLogicallyEqual(existing, def) {
 				return fmt.Errorf("collections: existing vector index %q has a different definition", def.Name)

@@ -137,7 +137,7 @@ func TestNativeServerCommandIndexedCRUDAndDense(t *testing.T) {
 					t.Fatalf("seed ordinary service index: %+v create=%v", info, createErr)
 				}
 			} else {
-				if createErr == nil || documentservice.ErrorCodeOf(createErr) != documentservice.CodeInternal {
+				if createErr == nil || documentservice.ErrorCodeOf(createErr) != documentservice.CodeUnsupported {
 					t.Fatalf("unsupported profile accepted ordinary ColumnGraph: %+v %v", info, createErr)
 				}
 				if metas, err := owner.Manager.ListCollections(); err != nil || len(metas) != 0 {
@@ -169,7 +169,7 @@ func TestNativeServerCommandIndexedCRUDAndDense(t *testing.T) {
 			checkDense := func(client *nativewire.Client) {
 				t.Helper()
 				out, err := client.DenseVectorSearch(ctx, nativewire.DenseVectorSearchRequest{Index: "dense", Query: []float32{1, 0}, TopK: 1, EfSearch: 8})
-				if err != nil || len(out.Results) != 1 || string(out.Results[0].ID) != "a" || out.Route != documentservice.RouteAnn || out.TypedColumnGraph || out.FullDocumentScanFallbacks != 0 || out.ExactFallbacks != 0 {
+				if err != nil || len(out.Results) != 1 || string(out.Results[0].ID) != "a" || out.Route != documentservice.RouteAnn || out.TypedColumnGraph || out.Exact || out.SearchPackSearch+out.ColumnGraphPreparedSearch != 1 || out.DocumentsScanned != 0 || out.FullDocumentScanFallbacks != 0 || out.ExactFallbacks != 0 {
 					t.Fatalf("Dense: %+v %v", out, err)
 				}
 			}
@@ -228,6 +228,23 @@ func TestNativeServerCommandIndexedCRUDAndDense(t *testing.T) {
 			current, present, err = client.GetMany(ctx, "docs", ids)
 			if err != nil || len(present) != 2 || !present[0] || present[1] || !bytes.Contains(current[0], []byte(`"rank":3`)) {
 				t.Fatalf("reopened CRUD state: docs=%q present=%v err=%v", current, present, err)
+			}
+			if profile == "command_wal_durable" {
+				checkDense(client)
+			}
+			_ = client.Close()
+			if err := cmd.Process.Signal(os.Interrupt); err != nil {
+				t.Fatal(err)
+			}
+			if err := cmd.Wait(); err != nil {
+				t.Fatal(err)
+			}
+			// A second fresh process must load the persisted graph and CRUD cut
+			// without another Optimize or reseeding the collection.
+			cmd, client = startNativeCommand(t, dir, "-profile", profile)
+			current, present, err = client.GetMany(ctx, "docs", ids)
+			if err != nil || len(present) != 2 || !present[0] || present[1] || !bytes.Contains(current[0], []byte(`"rank":3`)) {
+				t.Fatalf("second reopened CRUD state: docs=%q present=%v err=%v", current, present, err)
 			}
 			if profile == "command_wal_durable" {
 				checkDense(client)

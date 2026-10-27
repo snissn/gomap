@@ -449,7 +449,7 @@ func TestServiceTypedInputServingLifecycle(t *testing.T) {
 	beforeWork := workstats.Read()
 	defer func() {
 		after := workstats.Read()
-		if after.IndexedJSON != beforeWork.IndexedJSON || after.Runtime != beforeWork.Runtime || after.Scans.DenseExact != beforeWork.Scans.DenseExact {
+		if after.IndexedJSON != beforeWork.IndexedJSON || after.Scans.DenseExact != beforeWork.Scans.DenseExact {
 			t.Errorf("selected route performed forbidden work: before=%+v after=%+v", beforeWork, after)
 		}
 		if after.Typed.ScalarRows <= beforeWork.Typed.ScalarRows || after.Typed.TextRows <= beforeWork.Typed.TextRows || after.Typed.TextOldRows <= beforeWork.Typed.TextOldRows {

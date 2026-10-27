@@ -62,8 +62,8 @@ func TestExecuteSmokeCompactsReopensValidatesAndBenchmarks(t *testing.T) {
 	if len(res.SearchBenchmarks) != 2 || res.SearchBenchmarks[0].Concurrency != 1 || res.SearchBenchmarks[1].Concurrency != 2 {
 		t.Fatalf("unexpected search benchmarks: %+v", res.SearchBenchmarks)
 	}
-	if res.Profile != "bench_unsafe" {
-		t.Fatalf("profile=%q want bench_unsafe", res.Profile)
+	if res.Profile != "command_wal_durable" {
+		t.Fatalf("profile=%q want command_wal_durable", res.Profile)
 	}
 	if res.ValuePointerThreshold != defaultValuePointerThreshold {
 		t.Fatalf("value pointer threshold=%d want %d", res.ValuePointerThreshold, defaultValuePointerThreshold)
@@ -679,11 +679,11 @@ func TestRunJSONOutput(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &res); err != nil {
 		t.Fatalf("decode JSON output: %v\n%s", err, stdout.String())
 	}
-	if res.Profile != "bench_unsafe" || res.Docs != 64 || res.Search.Queries != 4 || res.StorageAfterCompact.TotalBytes <= 0 {
+	if res.Profile != "command_wal_durable" || res.Docs != 64 || res.Search.Queries != 4 || res.StorageAfterCompact.TotalBytes <= 0 {
 		t.Fatalf("unexpected JSON result: %+v", res)
 	}
-	if res.VectorIndexSearchPath != nativeRuntimeSnapshotPath {
-		t.Fatalf("JSON vector index search path=%q want %q", res.VectorIndexSearchPath, nativeRuntimeSnapshotPath)
+	if res.VectorIndexSearchPath != collections.VectorIndexSearchPathColumnGraphNativeReader {
+		t.Fatalf("JSON vector index search path=%q want %q", res.VectorIndexSearchPath, collections.VectorIndexSearchPathColumnGraphNativeReader)
 	}
 	if res.ValuePointerThreshold != defaultValuePointerThreshold {
 		t.Fatalf("JSON value pointer threshold=%d want %d", res.ValuePointerThreshold, defaultValuePointerThreshold)
@@ -699,7 +699,7 @@ func TestRunJSONOutput(t *testing.T) {
 	}
 }
 
-func TestExecuteRequireLeafVLogBytesPassesWithDefaultBenchProfile(t *testing.T) {
+func TestExecuteRequireLeafVLogBytesPassesWithDefaultDurableProfile(t *testing.T) {
 	res, err := execute(context.Background(), config{
 		dir:                   t.TempDir(),
 		keepDir:               true,
@@ -724,8 +724,8 @@ func TestExecuteRequireLeafVLogBytesPassesWithDefaultBenchProfile(t *testing.T) 
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
-	if res.Profile != "bench_unsafe" {
-		t.Fatalf("profile=%q want bench_unsafe", res.Profile)
+	if res.Profile != "command_wal_durable" {
+		t.Fatalf("profile=%q want command_wal_durable", res.Profile)
 	}
 	if res.StorageExpectation.LeafVLogBytes <= 0 {
 		t.Fatalf("missing leaf value-log bytes: %+v", res.StorageExpectation)

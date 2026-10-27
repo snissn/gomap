@@ -930,7 +930,7 @@ its document-scan work is reported by `documents_scanned`. Response documents
 come from the actual maintained search or exact scan, without a primary relookup.
 Scores and query projections retain the public service semantics.
 
-Versions 1 and 2 require `deadline` (4) and `dense_search_request` (129).
+Version 2 requires `deadline` (4) and `dense_search_request` (129).
 Version 3 additionally requires the critical `dense_search_quantized_options`
 (135). Request
 payload order is: length-prefixed UTF-8 index name; uvarint top-K, efSearch and
@@ -943,15 +943,15 @@ include 16 filter levels and 64 leaves; unsupported operators fail closed.
 Version 3 requires a positive efSearch. A caller using the index default resolves
 it from generation-bound index metadata before encoding, so the score-plane
 `requested_ef_search` is the authenticated candidate-width bound; raw zero is
-rejected by both the native client and server. Versions 1 and 2 retain their
+rejected by both the native client and server. Version 2 retains its
 existing zero/default behavior.
 
 Response sections are ordered IDs (102), requested JSON documents (103), and
 `dense_search_response` (130). The metadata payload contains one route byte,
 uvarint candidates, exact-fallbacks, full-document-scan-fallbacks, result count,
-then one little-endian float64 score per result. Version 1 retains its legacy
-native-runtime bool byte (successful route `1`). Version 2 requires route tag
-`2`. Cross-version tags are rejected. Tag 2 identifies validated dispatch,
+then one little-endian float64 score per result. Version 2 requires route tag
+`2`; retired version 1 and its route tag `1` are rejected. Cross-version tags
+are rejected. Tag 2 identifies validated dispatch,
 **not measured execution-work evidence**. Version 2 additionally requires the
 critical `dense_search_work` section (134), independently versioned below.
 Version 3 requires route tag `3`, the same critical section 134, and the

@@ -3381,6 +3381,9 @@ func (s *Server) createIndexesResponse(command wire.Document) (wire.Document, er
 			s.invalidateCollectionCache(name)
 		}
 		if err != nil {
+			if errors.Is(err, collections.ErrIndexNameConflict) {
+				code, codeName = commandCodeDuplicateKey, "DuplicateKey"
+			}
 			return commandError(code, codeName, err.Error())
 		}
 		return marshalDocument(bson.D{

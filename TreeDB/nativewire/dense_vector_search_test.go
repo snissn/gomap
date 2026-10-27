@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"net"
 	"strings"
@@ -518,7 +519,9 @@ func TestDenseVectorSearchUnconfiguredFailsClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer cleanup()
-	_ = client.Hello(ctx)
+	if err := client.Hello(ctx); err != nil {
+		t.Fatal(err)
+	}
 	if _, err = client.DenseVectorSearch(ctx, DenseVectorSearchRequest{Index: "docs", Query: []float32{1}, TopK: 1}); err == nil {
 		t.Fatal("unconfigured search succeeded")
 	}
@@ -540,7 +543,30 @@ func TestDenseVectorSearchRoutedClusterFailsClosedBeforeLocalSearch(t *testing.T
 		t.Fatal(err)
 	}
 	defer cleanup()
-	if _, err := client.DenseVectorSearch(ctx, DenseVectorSearchRequest{Index: "docs", Query: []float32{1, 0}, TopK: 1}); !isRemoteError(err, iwire.ErrReadOnly) || !strings.Contains(err.Error(), "dense vector search") {
+	if err := client.Hello(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if client.denseOrdinaryNegotiated {
+		t.Fatal("routed cluster advertised ordinary dense search")
+	}
+	request := DenseVectorSearchRequest{Index: "docs", Query: []float32{1, 0}, TopK: 1}
+	if _, err := client.DenseVectorSearch(ctx, request); nativeCodeOf(err) != iwire.ErrUnsupportedFeature {
+		t.Fatalf("unnegotiated routed dense search err=%v want local unsupported feature", err)
+	}
+	// Routed peers deliberately omit dense capabilities. Send an explicit v5
+	// frame to exercise the server's rejection before any local search or route.
+	payload, err := appendDenseVectorSearchRequest(nil, request, iwire.DefaultLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := appendVersionedCommandRequestBody(nil, iwire.CommandDenseVectorSearch, iwire.DenseVectorSearchOrdinaryVersion,
+		iwire.Section{ID: iwire.SectionDenseSearchRequest, Bytes: payload},
+		iwire.Section{ID: iwire.SectionDeadline, Bytes: binary.AppendUvarint(nil, uint64(time.Now().Add(time.Minute).UnixNano()))},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := client.roundTrip(ctx, iwire.FrameRequest, body, iwire.FrameResponse); !isRemoteError(err, iwire.ErrReadOnly) || !strings.Contains(err.Error(), "dense vector search") {
 		t.Fatalf("routed dense search err=%v want read-only route rejection", err)
 	}
 	if routes := routeProvider.snapshotRoutes(); len(routes) != 0 {
@@ -626,9 +652,11 @@ func TestDenseVectorSearchBoundsOversizedRequestScratch(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 	client := NewClient(clientConn)
 	t.Cleanup(func() { _ = client.Close(); _ = serverConn.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	serverErr := make(chan error, 1)
 	go func() {
-		header, _, err := readFrame(serverConn, iwire.DefaultLimits())
+		header, err := readOrdinaryDenseTestRequest(serverConn)
 		if err == nil {
 			body, appendErr := iwire.AppendSection(nil, iwire.Section{ID: iwire.SectionError, Bytes: appendErrorPayload(nil, iwire.ErrInvalidCommand, false, "test")})
 			if appendErr != nil {
@@ -639,14 +667,15 @@ func TestDenseVectorSearchBoundsOversizedRequestScratch(t *testing.T) {
 		}
 		serverErr <- err
 	}()
-	if _, err := client.DenseVectorSearch(denseSearchTestContext(t), DenseVectorSearchRequest{
+	if err := client.Hello(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.DenseVectorSearch(ctx, DenseVectorSearchRequest{
 		Index: "docs", Query: make([]float32, maxRetainedGetManyPayloadBytes/4+1), TopK: 1,
-	}); err == nil {
-		t.Fatal("dense search unexpectedly succeeded")
+	}); !isRemoteError(err, iwire.ErrInvalidCommand) {
+		t.Fatalf("oversized request err=%v want fake server rejection", err)
 	}
-	if err := <-serverErr; err != nil {
-		t.Fatalf("fake server: %v", err)
-	}
+	waitOrdinaryDenseTestServer(t, ctx, serverErr)
 	if client.denseRequest != nil || client.requestBody != nil {
 		t.Fatalf("oversized request scratch retained dense=%d body=%d", cap(client.denseRequest), cap(client.requestBody))
 	}
@@ -656,6 +685,8 @@ func TestDenseVectorSearchReleasesRejectedOversizedResponse(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 	client := NewClient(clientConn)
 	t.Cleanup(func() { _ = client.Close(); _ = serverConn.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	const count = maxRetainedGetManyScratchItems + 1
 	ids := make([][]byte, count)
 	docs := make([][]byte, count)
@@ -663,14 +694,12 @@ func TestDenseVectorSearchReleasesRejectedOversizedResponse(t *testing.T) {
 		ids[i] = []byte("id")
 		docs[i] = []byte("document")
 	}
-	meta := []byte{1}
-	meta = binary.AppendUvarint(meta, count)
-	meta = binary.AppendUvarint(meta, 0)
-	meta = binary.AppendUvarint(meta, 0)
-	meta = binary.AppendUvarint(meta, count)
-	for range count {
-		meta = binary.LittleEndian.AppendUint64(meta, math.Float64bits(0))
-	}
+	// Use a truthful ordinary v5 route proof so this refusal exercises the
+	// oversized result count, independently of retired response-tag rejection.
+	meta := appendVersionedDenseVectorSearchResponse(nil, documentservice.RawDenseVectorSearchResponse{
+		Route: documentservice.RouteExact, Exact: true, Candidates: count, DocumentsScanned: count,
+		Results: make([]documentservice.RawDenseVectorResult, count),
+	}, iwire.DenseVectorSearchOrdinaryVersion)
 	response, err := iwire.AppendSection(nil, iwire.Section{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, ids...)})
 	if err != nil {
 		t.Fatal(err)
@@ -688,18 +717,19 @@ func TestDenseVectorSearchReleasesRejectedOversizedResponse(t *testing.T) {
 	}
 	errCh := make(chan error, 1)
 	go func() {
-		header, _, err := readFrame(serverConn, iwire.DefaultLimits())
+		header, err := readOrdinaryDenseTestRequest(serverConn)
 		if err == nil {
 			err = writeFrame(serverConn, iwire.Header{Type: iwire.FrameResponse, RequestID: header.RequestID}, response)
 		}
 		errCh <- err
 	}()
-	if _, err := client.DenseVectorSearch(denseSearchTestContext(t), DenseVectorSearchRequest{Index: "docs", Query: []float32{1}, TopK: 1}); nativeCodeOf(err) != iwire.ErrMalformedFrame {
-		t.Fatalf("dense response err=%v want malformed frame", err)
+	if err := client.Hello(ctx); err != nil {
+		t.Fatal(err)
 	}
-	if err := <-errCh; err != nil {
-		t.Fatalf("server response: %v", err)
+	if _, err := client.DenseVectorSearch(ctx, DenseVectorSearchRequest{Index: "docs", Query: []float32{1}, TopK: 1}); nativeCodeOf(err) != iwire.ErrMalformedFrame || !strings.Contains(err.Error(), "dense response lengths do not match") {
+		t.Fatalf("dense response err=%v want malformed result-count refusal", err)
 	}
+	waitOrdinaryDenseTestServer(t, ctx, errCh)
 	if client.readBody != nil || client.denseIDs != nil || client.denseDocuments != nil || client.denseResults != nil {
 		t.Fatalf("retained rejected response body=%d ids=%d docs=%d results=%d", cap(client.readBody), cap(client.denseIDs), cap(client.denseDocuments), cap(client.denseResults))
 	}
@@ -710,6 +740,60 @@ func TestDenseVectorSearchReleasesRejectedOversizedResponse(t *testing.T) {
 		if section.Bytes != nil {
 			t.Fatalf("retained rejected response section: %+v", section)
 		}
+	}
+}
+
+// Each fake peer performs a real Hello exchange and verifies the subsequent
+// request is the retained ordinary command. Deadlines also bound regressions
+// that cause the client to refuse locally before sending a request.
+func readOrdinaryDenseTestRequest(conn net.Conn) (iwire.Header, error) {
+	if err := conn.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		return iwire.Header{}, err
+	}
+	header, _, err := readFrame(conn, iwire.DefaultLimits())
+	if err != nil {
+		return iwire.Header{}, err
+	}
+	if header.Type != iwire.FrameHello {
+		return iwire.Header{}, fmt.Errorf("fake dense peer expected Hello, got frame %d", header.Type)
+	}
+	body, err := iwire.AppendSection(nil, iwire.Section{ID: iwire.SectionCapabilitySet, Bytes: appendStringMap(nil, map[string]string{"dense_vector_search_versions": "5"})})
+	if err != nil {
+		return iwire.Header{}, err
+	}
+	if err := writeFrame(conn, iwire.Header{Type: iwire.FrameHelloOK, RequestID: header.RequestID}, body); err != nil {
+		return iwire.Header{}, err
+	}
+	header, body, err = readFrame(conn, iwire.DefaultLimits())
+	if err != nil {
+		return iwire.Header{}, err
+	}
+	if header.Type != iwire.FrameRequest {
+		return iwire.Header{}, fmt.Errorf("fake dense peer expected request, got frame %d", header.Type)
+	}
+	sections, err := iwire.DecodeSections(body, iwire.DefaultLimits())
+	if err != nil {
+		return iwire.Header{}, err
+	}
+	cmd, err := iwire.MustV1Registry().ValidateRequestSections(sections)
+	if err != nil {
+		return iwire.Header{}, err
+	}
+	if cmd.Header.ID != iwire.CommandDenseVectorSearch || cmd.Header.Version != iwire.DenseVectorSearchOrdinaryVersion {
+		return iwire.Header{}, fmt.Errorf("fake dense peer got command %d version %d, want ordinary dense v5", cmd.Header.ID, cmd.Header.Version)
+	}
+	return header, nil
+}
+
+func waitOrdinaryDenseTestServer(t *testing.T, ctx context.Context, done <-chan error) {
+	t.Helper()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("fake dense server: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatalf("fake dense server did not finish: %v", ctx.Err())
 	}
 }
 

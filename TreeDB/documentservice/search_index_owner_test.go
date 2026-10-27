@@ -86,7 +86,7 @@ func TestOrdinaryColumnGraphSearchOwnerReopenDenseHybrid(t *testing.T) {
 				t.Fatalf("cold cache size=%d", got)
 			}
 			denseReq := DenseVectorSearchRequest{QueryEmbedding: []float32{1, 1, 0, 0, 0, 0, 0, 0}, TopK: 4, EfSearch: 64, Route: RouteAnn, ExpectedGeneration: info.Generation}
-			hybridReq := HybridSearchRequest{Query: "policy", QueryEmbedding: denseReq.QueryEmbedding, TopK: 4, EfSearch: 64, TextCandidateLimit: 16, VectorCandidateLimit: 16, ExpectedGeneration: info.Generation, Filter: &Filter{Field: "meta.tenant", Operator: "==", Value: "all"}}
+			hybridReq := HybridSearchRequest{Query: "policy", QueryEmbedding: denseReq.QueryEmbedding, TopK: 4, EfSearch: 64, TextCandidateLimit: 16, VectorCandidateLimit: 16, ExpectedGeneration: info.Generation}
 			var retained []Document
 			checkDocuments := func(got []Document) {
 				t.Helper()

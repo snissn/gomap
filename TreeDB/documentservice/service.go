@@ -321,6 +321,9 @@ func (s *Service) createIndexLocked(ctx context.Context, req CreateIndexRequest)
 	}
 	created, alreadyExisted, err := s.manager.CreateCollectionWithStatus(*meta)
 	if err != nil {
+		if errors.Is(err, backenddb.ErrNativeSemanticUnsupported) {
+			return IndexInfo{}, wrapServiceError(CodeUnsupported, "create index is unsupported for this backend or profile", err)
+		}
 		if strings.Contains(err.Error(), "incompatible") {
 			return IndexInfo{}, wrapServiceError(CodeConflict, fmt.Sprintf("index %q already exists with an incompatible schema", req.Name), err)
 		}
@@ -884,8 +887,8 @@ func (s *Service) SearchDenseVector(ctx context.Context, index string, req Dense
 		return DenseVectorSearchResponse{}, serviceError(CodeUnsupported, "ordinary filtered ANN is not implemented")
 	}
 	// Ordinary ColumnGraph Dense and Hybrid must share the service-owned
-	// collection before either opens a retained prepared pack. Native runtime
-	// and typed Dense retain their existing raw-route lifetime lock instead.
+	// collection before either opens a retained prepared pack. Typed Dense
+	// retains its existing raw-route lifetime lock instead.
 	if !info.TypedInput && info.VectorStrategy == collections.VectorIndexStrategyColumnGraph {
 		var release func()
 		col, info, release, err = s.acquireBenchmarkSearchIndex(ctx, index, req.ExpectedGeneration)

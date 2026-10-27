@@ -29,7 +29,18 @@ func (c *Collection) SearchHybridVectorCandidates(query HybridVectorQuery) (Hybr
 		if err != nil {
 			return HybridCandidateResponse{}, err
 		}
+		// Candidate conversion uses the same operation-scoped admission receipt
+		// as the full Hybrid executor. A bare native read view has no catalog.
+		scratch, err := newHybridNativeScratch(view)
+		if err != nil {
+			return HybridCandidateResponse{}, errors.Join(err, view.Close())
+		}
+		view.catalog, err = newNativeTextCatalog(view.nativeRead, scratch.admitFn)
+		if err != nil {
+			return HybridCandidateResponse{}, errors.Join(err, view.Close())
+		}
 		response, err := c.searchHybridVectorCandidatesDeclaredScalarAtReadView(context.Background(), query, nil, view, 0, false)
+		view.catalog = nil
 		return response, errors.Join(err, view.Close())
 	}
 

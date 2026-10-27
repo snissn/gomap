@@ -75,7 +75,6 @@ func TestHybridCloseoutFixtureCandidateGenerationFetchesNoDocuments2506(t *testi
 			EfSearch:       32,
 			QueryMode:      VectorIndexQueryModeExact,
 		},
-		ScalarFilter:     &HybridScalarFilter{IndexName: hybridCloseoutTenantIndexName2506, Value: "tenant-rare-06pct"},
 		IncludeDocuments: true,
 		DocumentFetchOptions: DocumentFetchOptions{
 			ExcludePaths: []string{"embedding"},

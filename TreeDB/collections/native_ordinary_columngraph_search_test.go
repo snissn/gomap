@@ -14,6 +14,24 @@ import (
 // The original public4096 service fixture remains the default-budget product
 // discriminator. This small sufficiently funded fixture isolates serving
 // custody/identity from the separately tested construction promise.
+func TestNativeOrdinaryColumnGraphHybridVectorCandidates(t *testing.T) {
+	_, _, _, col := openNativeOrdinaryGraphExecutionFixture(t)
+	docs := [][]byte{[]byte(`{"embedding":[1,0],"body":"first"}`), []byte(`{"embedding":[0,1],"body":"second"}`)}
+	if _, _, err := col.InsertBatchWithStatsValidatedFloat32Projection([][]byte{[]byte("a"), []byte("b")}, docs, "embedding", VectorMetricCosine, [][]float32{{1, 0}, {0, 1}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := col.RebuildVectorIndex("vec"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := col.SearchHybridVectorCandidates(HybridVectorQuery{IndexName: "vec", Query: []float32{1, 0}, CandidateLimit: 2, EfSearch: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Candidates) != 2 || string(got.Candidates[0].ID) != "a" || string(got.Candidates[1].ID) != "b" || got.Stats.DocumentsFetched != 0 || got.Stats.FullDocumentScanFallbacks != 0 {
+		t.Fatalf("unexpected ordinary ColumnGraph candidates: %+v", got)
+	}
+}
+
 func TestNativeOrdinaryColumnGraphCapturedPreparedSearch(t *testing.T) {
 	owner, _, manager, col := openNativeOrdinaryGraphExecutionFixture(t)
 	docs := [][]byte{[]byte(`{"embedding":[1,0],"body":"first"}`), []byte(`{"embedding":[0,1],"body":"second"}`)}

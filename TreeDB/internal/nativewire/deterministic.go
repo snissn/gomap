@@ -6,11 +6,13 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"slices"
 	"sync"
 	"unicode/utf8"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 )
 
@@ -1204,7 +1206,11 @@ func validateDeterministicCollectionMeta(raw []byte, limits Limits) error {
 	if version == 7 {
 		meta, err := collections.DecodeCatalogCreateCollectionCommandWALPayload(raw[off:], true)
 		if err != nil {
-			return protocolError(ErrInvalidCommand, "collection_meta: %v", err)
+			code := ErrInvalidCommand
+			if errors.Is(err, backenddb.ErrNativeSemanticUnsupported) {
+				code = ErrUnsupportedFeature
+			}
+			return fmt.Errorf("%w: %w", protocolError(code, "collection_meta"), err)
 		}
 		if err := validateDeterministicNameValue("collection name", []byte(meta.Name), limits); err != nil {
 			return err

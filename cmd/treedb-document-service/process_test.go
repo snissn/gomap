@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"io"
 	"net"
@@ -185,7 +186,7 @@ func TestDocumentServiceCommandHTTPAndWireLifecycle(t *testing.T) {
 			p := startDocumentCommand(t, dir, profile)
 			req := documentservice.CreateIndexRequest{Name: "docs", Dimension: 2, ScalarFields: []documentservice.ScalarFieldDeclaration{{Field: "meta.tenant", ValueType: documentservice.ScalarFieldString}, {Field: "meta.rank", ValueType: documentservice.ScalarFieldInt64}}}
 			if profile != "command_wal_durable" {
-				p.postError(t, "/v1/indexes", req, http.StatusInternalServerError, documentservice.CodeInternal)
+				p.postError(t, "/v1/indexes", req, http.StatusNotImplemented, documentservice.CodeUnsupported)
 				wire, err := nativewire.DialContext(t.Context(), "tcp", p.native)
 				if err != nil {
 					t.Fatal(err)
@@ -230,6 +231,15 @@ func TestDocumentServiceCommandHTTPAndWireLifecycle(t *testing.T) {
 			}
 			filter := &documentservice.Filter{Operator: "AND", Conditions: []documentservice.Filter{{Field: "meta.tenant", Operator: "==", Value: "blue"}, {Field: "meta.rank", Operator: ">=", Value: 9}}}
 			check := func(p *documentCommand, graphReady bool) {
+				// Unsupported filtered vector routes refuse even when the graph is
+				// prepared, and after reopening. An intentional exact read remains
+				// a separate supported route over the same current documents.
+				for _, route := range []documentservice.Route{"", documentservice.RouteAnn} {
+					p.postError(t, "/v1/indexes/docs/search/vector", documentservice.DenseVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, EfSearch: 8, Filter: filter, Route: route}, http.StatusNotImplemented, documentservice.CodeUnsupported)
+				}
+				for _, query := range []string{"", "refund"} {
+					p.postError(t, "/v1/indexes/docs/search/hybrid", documentservice.HybridSearchRequest{Query: query, QueryEmbedding: []float32{1, 0}, TopK: 1, TextCandidateLimit: 8, VectorCandidateLimit: 8, EfSearch: 8, Filter: filter}, http.StatusNotImplemented, documentservice.CodeUnsupported)
+				}
 				var keyword documentservice.KeywordSearchResponse
 				p.post(t, "/v1/indexes/docs/search/keyword", documentservice.KeywordSearchRequest{Query: "refund", TopK: 1, Filter: filter}, &keyword)
 				if len(keyword.Documents) != 1 || keyword.Documents[0].ID != "wire" || len(keyword.Documents[0].Embedding) != 0 || keyword.Stats.FullDocumentScanFallbacks != 0 {
@@ -259,18 +269,23 @@ func TestDocumentServiceCommandHTTPAndWireLifecycle(t *testing.T) {
 			denseCtx, denseCancel := context.WithTimeout(t.Context(), 5*time.Second)
 			defer denseCancel()
 			got, err := wire.DenseVectorSearch(denseCtx, nativewire.DenseVectorSearchRequest{Index: "docs", Query: []float32{1, 0}, TopK: 1, EfSearch: 8, Filter: filter})
-			if err == nil || len(got.Results) != 0 {
+			var wireErr *nativewire.WireError
+			// UnsupportedFeature is stable native-wire error code 3; its enum
+			// lives below TreeDB's internal import boundary.
+			if !errors.As(err, &wireErr) || wireErr.Code != 3 || len(got.Results) != 0 || got.Route != "" || got.Exact || got.SearchPackSearch != 0 || got.ColumnGraphPreparedSearch != 0 || got.DocumentsScanned != 0 {
 				t.Fatalf("filtered wire Dense must fail closed: %+v %v", got, err)
 			}
 			got, err = wire.DenseVectorSearch(denseCtx, nativewire.DenseVectorSearchRequest{Index: "docs", Query: []float32{1, 0}, TopK: 1, EfSearch: 8})
-			if err != nil || len(got.Results) != 1 || got.Route != documentservice.RouteAnn || got.TypedColumnGraph {
+			if err != nil || len(got.Results) != 1 || got.Route != documentservice.RouteAnn || got.TypedColumnGraph || got.Exact || got.SearchPackSearch+got.ColumnGraphPreparedSearch != 1 || got.DocumentsScanned != 0 || got.ExactFallbacks != 0 || got.FullDocumentScanFallbacks != 0 {
 				t.Fatalf("unfiltered wire Dense: %+v %v", got, err)
 			}
 			_ = wire.Close()
 			p.stop(t)
-			p = startDocumentCommand(t, dir, profile)
-			check(p, true)
-			p.stop(t)
+			for reopen := 0; reopen < 2; reopen++ {
+				p = startDocumentCommand(t, dir, profile)
+				check(p, true)
+				p.stop(t)
+			}
 		})
 	}
 }
@@ -312,6 +327,84 @@ func TestDocumentServiceCommandPlainWireCRUDProfiles(t *testing.T) {
 	}
 }
 
+func TestDocumentServiceCommandWireCreatedModernSchemaLifecycle(t *testing.T) {
+	dir := t.TempDir()
+	p := startDocumentCommand(t, dir, "command_wal_durable")
+	wire, err := nativewire.DialContext(t.Context(), "tcp", p.native)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = wire.Close() })
+	// This declaration crosses the actual wire create decoder. It contains
+	// both modern vector and text metadata, independently of service CreateIndex.
+	meta := collections.CollectionMeta{
+		Name: "wire_schema",
+		Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatJSON, ColumnStore: &collections.ColumnStoreConfig{
+			Enabled: true, RetainedPayload: collections.ColumnRetainedPayloadFull, RetainedPayloadEncoding: collections.ColumnRetainedPayloadEncodingJSON,
+			Columns: []collections.ColumnStoreColumn{{Name: "embedding", Path: "embedding", Owner: collections.TypedStorageOwnerColumnPart, ValueType: collections.ColumnStoreValueFloat32Vector, VectorDims: 2}},
+		}},
+		VectorIndexes: []collections.VectorIndexDefinition{{Name: "embedding", Field: "embedding", Metric: collections.VectorMetricCosine, Dimensions: 2, Encoding: collections.VectorIndexEncodingFloat32, Strategy: collections.VectorIndexStrategyColumnGraph, SchemaGeneration: 1}},
+		TextIndexes:   []collections.TextIndexDefinition{{Name: "content", Fields: []collections.TextIndexField{{Field: "content"}}, Analyzer: collections.TextAnalyzerSimple, StorePositions: true, SchemaGeneration: 1}},
+	}
+	created, err := wire.CreateCollection(t.Context(), meta)
+	if err != nil || len(created.VectorIndexes) != 1 || created.VectorIndexes[0].Strategy != collections.VectorIndexStrategyColumnGraph || len(created.TextIndexes) != 1 || created.TextIndexes[0].Name != "content" {
+		t.Fatalf("wire-created modern declaration: %+v %v", created, err)
+	}
+	id := []byte("wire")
+	doc := []byte(`{"id":"wire","content":"refund wire","embedding":[1,0]}`)
+	if _, err := wire.InsertBatch(t.Context(), meta.Name, collections.DocumentFormatJSON, [][]byte{id}, [][]byte{doc}, nativewire.AckVisible); err != nil {
+		t.Fatal(err)
+	}
+	checkKeyword := func(p *documentCommand) {
+		t.Helper()
+		var out documentservice.KeywordSearchResponse
+		p.post(t, "/v1/indexes/wire_schema/search/keyword", documentservice.KeywordSearchRequest{Query: "refund", TopK: 1}, &out)
+		if len(out.Documents) != 1 || out.Documents[0].ID != "wire" || out.Stats.FullDocumentScanFallbacks != 0 {
+			t.Fatalf("wire-created text search: %+v", out)
+		}
+	}
+	checkKeyword(p)
+	p.postError(t, "/v1/indexes/wire_schema/search/vector", documentservice.DenseVectorSearchRequest{QueryEmbedding: []float32{1, 0}, TopK: 1, EfSearch: 8}, http.StatusServiceUnavailable, documentservice.CodeIndexUnavailable)
+	p.post(t, "/v1/indexes/wire_schema/optimize", documentservice.OptimizeIndexRequest{}, nil)
+	checkDense := func(wire *nativewire.Client) {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		defer cancel()
+		out, err := wire.DenseVectorSearch(ctx, nativewire.DenseVectorSearchRequest{Index: meta.Name, Query: []float32{1, 0}, TopK: 1, EfSearch: 8})
+		if err != nil || len(out.Results) != 1 || string(out.Results[0].ID) != "wire" || out.Route != documentservice.RouteAnn || out.TypedColumnGraph || out.Exact || out.SearchPackSearch+out.ColumnGraphPreparedSearch != 1 || out.DocumentsScanned != 0 || out.ExactFallbacks != 0 || out.FullDocumentScanFallbacks != 0 {
+			t.Fatalf("wire-created modern prepared Dense: %+v %v", out, err)
+		}
+	}
+	checkDense(wire)
+	if err := wire.FlushAll(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := wire.CheckpointWithAck(t.Context(), nativewire.AckSynced); err != nil {
+		t.Fatal(err)
+	}
+	_ = wire.Close()
+	p.stop(t)
+	for reopen := 0; reopen < 2; reopen++ {
+		p = startDocumentCommand(t, dir, "command_wal_durable")
+		wire, err = nativewire.DialContext(t.Context(), "tcp", p.native)
+		if err != nil {
+			t.Fatal(err)
+		}
+		metas, err := wire.ListCollections(t.Context())
+		if err != nil || len(metas) != 1 || metas[0].Name != meta.Name || len(metas[0].VectorIndexes) != 1 || metas[0].VectorIndexes[0].Strategy != collections.VectorIndexStrategyColumnGraph || len(metas[0].TextIndexes) != 1 || metas[0].TextIndexes[0].Name != "content" {
+			t.Fatalf("reopened wire-created declaration: %+v %v", metas, err)
+		}
+		got, present, err := wire.GetMany(t.Context(), meta.Name, [][]byte{id})
+		if err != nil || len(present) != 1 || !present[0] || len(got) != 1 || !bytes.Equal(got[0], doc) {
+			t.Fatalf("reopened wire-created document: %q %v %v", got, present, err)
+		}
+		checkKeyword(p)
+		checkDense(wire)
+		_ = wire.Close()
+		p.stop(t)
+	}
+}
+
 func TestDocumentServiceCommandLegacyStorage(t *testing.T) {
 	dir := t.TempDir()
 	p := startDocumentCommand(t, dir, "command_wal_durable", "-legacy-storage")
@@ -337,7 +430,7 @@ func TestDocumentServiceCommandLegacyStorage(t *testing.T) {
 }
 
 func TestDocumentServiceCommandListenFailureReleasesOwner(t *testing.T) {
-	for _, flagName := range []string{"-addr", "-pprof"} {
+	for _, flagName := range []string{"-addr", "-pprof", "-native-addr"} {
 		t.Run(flagName, func(t *testing.T) {
 			busy, err := net.Listen("tcp", "127.0.0.1:0")
 			if err != nil {

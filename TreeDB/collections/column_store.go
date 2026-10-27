@@ -431,7 +431,7 @@ func validateColumnStoreProfileSupportForDB(db *backenddb.DB, cfg *ColumnStoreCo
 		if profileSupport == ColumnStoreProfileBenchmarkRelaxed {
 			return nil
 		}
-		return fmt.Errorf("collections: column_store profile support %q requires durable backend for %s (durability=%s)", profileSupport, operation, columnStoreDurabilityModeName(db.DurabilityMode()))
+		return fmt.Errorf("%w: collections: column_store profile support %q requires durable backend for %s (durability=%s)", backenddb.ErrNativeSemanticUnsupported, profileSupport, operation, columnStoreDurabilityModeName(db.DurabilityMode()))
 	default:
 		return fmt.Errorf("collections: unsupported backend durability mode %s for column_store %s", columnStoreDurabilityModeName(db.DurabilityMode()), operation)
 	}

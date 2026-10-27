@@ -336,6 +336,14 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/column_graph_ddl.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
 	{path: "TreeDB/collections/hybrid_executor.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/collections/native_scalar_pressure_gate_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 4},
+	// Retirement controls and the application source collection configure the
+	// supported graph path through the retained public typed-schema API.
+	{path: "TreeDB/cmd/treedb_rag_benchmark/application_runner.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 4},
+	{path: "TreeDB/collections/native_text_sizing_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 4},
+	{path: "TreeDB/mongo_gateway/vector_retirement_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 4},
+	{path: "TreeDB/nativewire/create_unsupported_profile_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 4},
+	{path: "TreeDB/collections/native_ordinary_columngraph_publication_fault_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 5},
+	{path: "TreeDB/internal/raftapply/vector_strategy_retirement_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 4},
 	// Native ordinary graph/scan and raw-image fixtures consume retained public
 	// configuration/value names; derived assets remain non-authoritative.
 	{path: "TreeDB/collections/column_vector_graph_raw_ordinal_image_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 12, occurrences: 13},
@@ -713,7 +721,7 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/documentservice/typed_get_many_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
 	{path: "TreeDB/documentservice/typed_input.go", classification: typedStorageLegacyCompatibility, matchingLines: 10, occurrences: 10},
 	{path: "TreeDB/documentservice/typed_input_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
-	{path: "TreeDB/documentservice/service.go", classification: typedStorageLegacyCompatibility, matchingLines: 14, occurrences: 18},
+	{path: "TreeDB/documentservice/service.go", classification: typedStorageLegacyCompatibility, matchingLines: 13, occurrences: 17},
 	{path: "TreeDB/documentservice/service_column_graph_buffer_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 8, occurrences: 8},
 	{path: "TreeDB/documentservice/service_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 2},
 	{path: "TreeDB/cmd/treedb_rag_benchmark/service_overhead.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 4},

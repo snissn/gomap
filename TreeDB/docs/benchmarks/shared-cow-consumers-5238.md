@@ -55,9 +55,10 @@ alternating trio per diagnostic pair. That blanket default change is retired;
 its original source/binary bindings and every failed or partial result remain
 historical evidence. Report resolved strategy and Dense route for every actual
 run. This omitted-strategy benchmark cannot currently supply a valid native
-same-default comparison. The existing explicit native_runtime
-`BenchmarkServiceDenseNativeRuntimeVisibilityOverhead` remains a matched
-algorithm control, not public-default acceptance. A few short processes are
+same-default comparison. The former explicit native_runtime
+`BenchmarkServiceDenseNativeRuntimeVisibilityOverhead` was a matched
+algorithm control, not public-default acceptance; it is retired on current
+sources. A few short processes are
 viability evidence only. Retained qualification requires a reviewed landed
 harness, frozen identities, explicit acceptance matrix and all original failures
 retained. These read rows do not qualify write ACK, tail SLOs, held-reader

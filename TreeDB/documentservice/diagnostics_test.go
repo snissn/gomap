@@ -290,6 +290,13 @@ func TestDiagnosticsSnapshotCachedBenchmarkSearchIsLastOpened(t *testing.T) {
 			t.Fatalf("UpsertDocuments %q: %v", name, err)
 		}
 	}
+	// Search never builds a deferred graph; publish it explicitly before the
+	// cached-search diagnostic check.
+	for _, name := range []string{"a", "b"} {
+		if _, err := svc.OptimizeIndex(ctx, name, OptimizeIndexRequest{}); err != nil {
+			t.Fatalf("OptimizeIndex %q: %v", name, err)
+		}
+	}
 	if got := svc.benchmarkSearchCacheSizeForTest(); got != 2 {
 		t.Fatalf("native cache size=%d want 2", got)
 	}

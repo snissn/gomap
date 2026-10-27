@@ -56,6 +56,42 @@ type commandPerfReport struct {
 	LastHybridPlan                                                    collections.HybridSearchPlan
 	LastHybridTextIndex, LastHybridVectorIndex                        string
 	LastDenseRoute                                                    documentservice.Route
+	// Verification is collected after the timed requests and resource snapshots.
+	// Raw responses retain the result and modern route evidence for inspection.
+	Verification                              map[string]json.RawMessage
+	Quality                                   map[string]commandPerfQuality
+	MaintenanceNanoseconds, ReopenNanoseconds int64
+	ReopenCloseNanoseconds                    int64
+}
+type commandPerfQuality struct {
+	NativeANN *commandPerfANNQuality    `json:"native_ann,omitempty"`
+	Hybrid    *commandPerfHybridQuality `json:"hybrid,omitempty"`
+}
+
+// These metrics describe only the fixed fixture, with no acceptance threshold.
+// Recall credits any ID tied at the exact corpus cutoff; regret uses true cosine.
+type commandPerfANNQuality struct {
+	TopK, CorpusRows, ExactStrictlyAboveCutoff, ExactTiedAtCutoff int
+	ExactCutoffCosine, TieAwareRecallAtK, MeanCosineRegret        float64
+}
+type commandPerfHybridQuality struct {
+	DocumentsChecked, TextContributions, VectorContributions, BothSources int
+	MaximumRRFError, MeanReturnedVectorCosine                             float64
+}
+type commandPerfHybridSource struct {
+	Source      string   `json:"source"`
+	IndexName   string   `json:"index_name"`
+	SourceRank  int      `json:"source_rank"`
+	Score       *float64 `json:"score"`
+	ScoreKind   string   `json:"score_kind"`
+	FusionScore *float64 `json:"fusion_score"`
+}
+type commandPerfHybridMeta struct {
+	Type         string                    `json:"type"`
+	Rank         int                       `json:"rank"`
+	FusionMethod string                    `json:"fusion_method"`
+	FusedScore   *float64                  `json:"fused_score"`
+	Sources      []commandPerfHybridSource `json:"sources"`
 }
 type commandPerfLatency struct{ P50, P95, P99, Max int64 }
 type commandPerfResources struct {
@@ -111,7 +147,7 @@ func TestCommandPublicPerformance(t *testing.T) {
 	if report.Command == "native" || report.Operation == "get" || report.Operation == "range" || report.Operation == "crud" {
 		report.Transport = "nativewire (HTTP command uses its native listener)"
 	}
-	report.CleanupEvidence = "Records explicit Flushed FlushAll then Synced Checkpoint, process exit and logs; baseline a621 standalone main ignores service/backend deferred Close errors, so its clean process exit does not prove those Close calls succeeded. Candidate owner Close propagates errors. No equivalence claim for unavailable baseline cleanup errors."
+	report.CleanupEvidence = "Records explicit Flushed FlushAll, Synced Checkpoint, both process exits and logs; source inspection of baseline ea129 and the candidate is required to establish that command owner Close errors propagate."
 	report.MutationACK = "nativewire AckSynced; seed HTTP uses selected durable profile"
 	report.RequestBoundary = "one synchronous client round trip plus response validation; CRUD is Insert/Get/Replace/Delete (four round trips, three Synced mutations); setup/warmup/maintenance/Close excluded and reported separately"
 
@@ -217,6 +253,9 @@ func runCommandPerf(parent context.Context, prefix string, r *commandPerfReport)
 		return err
 	}
 	defer func() {
+		if p.closed {
+			return
+		}
 		start := time.Now()
 		if err := p.stop(); err != nil {
 			r.CleanupErrors = append(r.CleanupErrors, "serve: "+err.Error())
@@ -267,11 +306,51 @@ func runCommandPerf(parent context.Context, prefix string, r *commandPerfReport)
 	}
 	r.LatencyNanoseconds = &commandPerfLatency{P50: percentile(.50), P95: percentile(.95), P99: percentile(.99), Max: sorted[len(sorted)-1]}
 	r.After = commandPerfSample(ctx, p, r.Directory, r.Command == "http")
+	r.Phase = "verify-after-requests"
+	r.Verification = make(map[string]json.RawMessage)
+	r.Quality = make(map[string]commandPerfQuality)
+	if err := commandPerfVerify(ctx, p, wire, r, "after_requests"); err != nil {
+		return err
+	}
 	r.Phase = "maintenance"
+	maintenanceStart := time.Now()
 	if err := wire.FlushAllWithAck(ctx, nativewire.AckFlushed); err != nil {
 		return err
 	}
 	if err := wire.CheckpointWithAck(ctx, nativewire.AckSynced); err != nil {
+		return err
+	}
+	r.MaintenanceNanoseconds = time.Since(maintenanceStart).Nanoseconds()
+	if err := wire.Close(); err != nil {
+		return err
+	}
+	r.Phase = "serve-close"
+	closeStart := time.Now()
+	closeErr := p.stop()
+	r.CloseNanoseconds = time.Since(closeStart).Nanoseconds()
+	if closeErr != nil {
+		return closeErr
+	}
+	r.Phase = "second-fresh-reopen"
+	reopenStart := time.Now()
+	reopened, err := startCommandPerf(ctx, prefix+".reopen.log", bin, r.Directory, r.Command == "http", r.LegacyFlag)
+	if err != nil {
+		return err
+	}
+	r.ReopenNanoseconds = time.Since(reopenStart).Nanoseconds()
+	defer func() {
+		start := time.Now()
+		if err := reopened.stop(); err != nil {
+			r.CleanupErrors = append(r.CleanupErrors, "reopen: "+err.Error())
+		}
+		r.ReopenCloseNanoseconds = time.Since(start).Nanoseconds()
+	}()
+	reopenWire, err := nativewire.DialContext(ctx, "tcp", reopened.wire)
+	if err != nil {
+		return err
+	}
+	defer reopenWire.Close()
+	if err := commandPerfVerify(ctx, reopened, reopenWire, r, "second_reopen"); err != nil {
 		return err
 	}
 	r.Phase = "complete"
@@ -444,6 +523,254 @@ func commandPerfDocuments(r *commandPerfReport, docs []documentservice.Document)
 	return nil
 }
 
+// These additional requests run only after the timed interval and its resource
+// snapshots, and again after a second fresh process open. They never warm the
+// measured requests or replace their existing per-request checks.
+func commandPerfVerify(ctx context.Context, p *commandPerfProcess, wire *nativewire.Client, r *commandPerfReport, phase string) error {
+	store := func(value any) error {
+		raw, err := json.Marshal(value)
+		if err == nil {
+			r.Verification[phase] = raw
+		}
+		return err
+	}
+	filter := &documentservice.Filter{Field: "meta.tenant", Operator: "==", Value: "t00"}
+	query := []float32{1, 0, 0, 0, 0, 0, 0, 0}
+	switch r.Operation {
+	case "keyword":
+		var response documentservice.KeywordSearchResponse
+		if err := p.post(ctx, "/v1/indexes/docs/search/keyword", documentservice.KeywordSearchRequest{Query: "policy", TopK: 10, Filter: filter}, &response); err != nil {
+			return err
+		}
+		if err := store(response); err != nil {
+			return err
+		}
+		return commandPerfVerifyDocuments(response.Documents, true, false)
+	case "hybrid":
+		var response documentservice.HybridSearchResponse
+		if err := p.post(ctx, "/v1/indexes/docs/search/hybrid", documentservice.HybridSearchRequest{Query: "policy", QueryEmbedding: query, TopK: 10, TextCandidateLimit: 64, VectorCandidateLimit: 64, EfSearch: 64}, &response); err != nil {
+			return err
+		}
+		if err := store(response); err != nil {
+			return err
+		}
+		if response.TextIndex != "content" || response.VectorIndex != "embedding" || response.Stats.TextCandidatesReturned == 0 || response.Stats.VectorCandidatesReturned == 0 || response.Stats.VectorCandidatesExamined == 0 || response.Stats.VectorEdgesVisited == 0 || response.Stats.FullDocumentScanFallbacks != 0 || response.Stats.FailClosed != 0 {
+			return fmt.Errorf("verification Hybrid source/work: %+v", response.Stats)
+		}
+		if err := commandPerfVerifyDocuments(response.Documents, false, false); err != nil {
+			return err
+		}
+		quality, err := commandPerfVerifyHybridRRF(response)
+		r.Quality[phase] = commandPerfQuality{Hybrid: &quality}
+		return err
+	case "dense":
+		if r.Command == "http" {
+			var response documentservice.DenseVectorSearchResponse
+			if err := p.post(ctx, "/v1/indexes/docs/search/vector", documentservice.DenseVectorSearchRequest{QueryEmbedding: query, TopK: 10, Route: documentservice.RouteExact, EfSearch: 64, Filter: filter}, &response); err != nil {
+				return err
+			}
+			if err := store(response); err != nil {
+				return err
+			}
+			if response.Route != documentservice.RouteExact || !response.Exact || response.ExactFallbacks != 0 || response.FullDocumentScanFallbacks != 0 {
+				return fmt.Errorf("verification HTTP exact route: %+v", response)
+			}
+			return commandPerfVerifyDocuments(response.Documents, true, true)
+		}
+		response, err := wire.DenseVectorSearch(ctx, nativewire.DenseVectorSearchRequest{Index: "docs", Query: query, TopK: 10, EfSearch: 64})
+		if err != nil {
+			return err
+		}
+		// Marshal while the borrowed response ID/document buffers are live.
+		if err := store(response); err != nil {
+			return err
+		}
+		if err := commandPerfVerifyNativeANN(response); err != nil {
+			return err
+		}
+		ordinals := make([]int, len(response.Results))
+		for i, row := range response.Results {
+			ordinals[i], _ = commandPerfOrdinal(string(row.ID))
+		}
+		quality := commandPerfMeasureANNQuality(ordinals)
+		r.Quality[phase] = commandPerfQuality{NativeANN: &quality}
+		return nil
+	case "get", "range":
+		request, err := commandPerfRequest(p, wire, r)
+		if err != nil {
+			return err
+		}
+		if err := request(ctx); err != nil {
+			return err
+		}
+		return store(map[string]any{"operation": r.Operation, "original_membership_check": "passed"})
+	case "crud":
+		docs, present, err := wire.GetMany(ctx, "crud", [][]byte{[]byte("mutation")})
+		if err != nil {
+			return err
+		}
+		if err := store(map[string]any{"documents": docs, "present": present}); err != nil {
+			return err
+		}
+		if len(present) != 1 || present[0] {
+			return errors.New("verification CRUD deleted row reappeared")
+		}
+		return nil
+	}
+	return errors.New("unknown verification operation")
+}
+
+// commandPerfVerifyNativeANN checks the two supported ordinary graph routes
+// and the existing corpus/score invariants outside timing. It does not impose
+// an exact top-K identity or a tie-breaking policy on approximate results.
+func commandPerfVerifyNativeANN(response nativewire.DenseVectorSearchResponse) error {
+	modernGraph := (response.ColumnGraphPreparedSearch == 1 && response.SearchPackSearch == 0) ||
+		(response.ColumnGraphPreparedSearch == 0 && response.SearchPackSearch == 1)
+	if response.Route != documentservice.RouteAnn || response.TypedColumnGraph || response.Exact || !modernGraph || response.DocumentsScanned != 0 || response.ExactFallbacks != 0 || response.FullDocumentScanFallbacks != 0 || len(response.Results) != 10 {
+		return fmt.Errorf("verification native modern ANN route: %+v", response)
+	}
+	var seen [4096]bool
+	previous := math.Inf(1)
+	for _, row := range response.Results {
+		ordinal, err := commandPerfOrdinal(string(row.ID))
+		if err != nil || seen[ordinal] || math.IsNaN(row.Score) || math.IsInf(row.Score, 0) || row.Score > previous+1e-6 || math.Abs(row.Score-commandPerfCosine(ordinal)) > 1e-5 {
+			return fmt.Errorf("verification ANN result/score %q=%g", row.ID, row.Score)
+		}
+		seen[ordinal], previous = true, row.Score
+	}
+	return nil
+}
+
+func commandPerfCosine(ordinal int) float64 {
+	norm := 1.0
+	for d := 1; d < 8; d++ {
+		value := float64(float32((ordinal+d)%17) / 17)
+		norm += value * value
+	}
+	return 1 / math.Sqrt(norm)
+}
+
+// This full-corpus calculation never queries the server or requires a tied ID
+// ordering. Input ordinals have already passed the unique corpus-ID checks.
+func commandPerfMeasureANNQuality(ordinals []int) commandPerfANNQuality {
+	exact := make([]float64, 4096)
+	for i := range exact {
+		exact[i] = commandPerfCosine(i)
+	}
+	sort.Sort(sort.Reverse(sort.Float64Slice(exact)))
+	k := len(ordinals)
+	q := commandPerfANNQuality{TopK: k, CorpusRows: len(exact), ExactCutoffCosine: exact[k-1]}
+	for _, score := range exact {
+		if score > q.ExactCutoffCosine+1e-12 {
+			q.ExactStrictlyAboveCutoff++
+		} else if math.Abs(score-q.ExactCutoffCosine) <= 1e-12 {
+			q.ExactTiedAtCutoff++
+		}
+	}
+	above, tied := 0, 0
+	for i, ordinal := range ordinals {
+		score := commandPerfCosine(ordinal)
+		q.MeanCosineRegret += exact[i] - score
+		if score > q.ExactCutoffCosine+1e-12 {
+			above++
+		} else if math.Abs(score-q.ExactCutoffCosine) <= 1e-12 {
+			tied++
+		}
+	}
+	q.TieAwareRecallAtK = float64(above+min(tied, k-q.ExactStrictlyAboveCutoff)) / float64(k)
+	q.MeanCosineRegret = math.Max(0, q.MeanCosineRegret/float64(k))
+	return q
+}
+
+// Recompute the fixed default RRF formula without calling production fusion.
+// Only returned source contributions are visible: this proves their scores and
+// provenance are consistent, not that unseen candidates could not rank higher.
+func commandPerfVerifyHybridRRF(response documentservice.HybridSearchResponse) (commandPerfHybridQuality, error) {
+	var q commandPerfHybridQuality
+	if response.Plan.FusionMethod != collections.HybridFusionMethodRRF || response.Plan.TextCandidateLimit != 64 || response.Plan.VectorCandidateLimit != 64 || response.Plan.FinalTopK != 10 {
+		return q, fmt.Errorf("verification Hybrid fixed RRF plan: %+v", response.Plan)
+	}
+	seenRanks := map[string]map[int]bool{"text": {}, "vector": {}}
+	for i, doc := range response.Documents {
+		raw, err := json.Marshal(doc.Meta["_treedb_search"])
+		if err != nil {
+			return q, err
+		}
+		var meta commandPerfHybridMeta
+		if err := json.Unmarshal(raw, &meta); err != nil {
+			return q, err
+		}
+		if meta.Type != "hybrid" || meta.Rank != i+1 || meta.FusionMethod != "rrf" || meta.FusedScore == nil || len(meta.Sources) < 1 || len(meta.Sources) > 2 || doc.Score == nil || math.IsNaN(*doc.Score) || math.IsInf(*doc.Score, 0) {
+			return q, fmt.Errorf("verification Hybrid metadata %q: %+v", doc.ID, meta)
+		}
+		ordinal, err := commandPerfOrdinal(doc.ID)
+		if err != nil {
+			return q, err
+		}
+		seenSource := map[string]bool{}
+		fused := 0.0
+		for _, source := range meta.Sources {
+			if (source.Source != "text" && source.Source != "vector") || seenSource[source.Source] || source.SourceRank < 1 || source.SourceRank > 64 || seenRanks[source.Source][source.SourceRank] || source.Score == nil || source.FusionScore == nil {
+				return q, fmt.Errorf("verification Hybrid source %q: %+v", doc.ID, source)
+			}
+			seenSource[source.Source], seenRanks[source.Source][source.SourceRank] = true, true
+			if source.Source == "text" {
+				if source.IndexName != "content" || (source.ScoreKind != "bm25" && source.ScoreKind != "bm25f") || *source.Score <= 0 {
+					return q, fmt.Errorf("verification Hybrid text source %q: %+v", doc.ID, source)
+				}
+				q.TextContributions++
+			} else {
+				if source.IndexName != "embedding" || source.ScoreKind != "vector_similarity" || math.Abs(*source.Score-commandPerfCosine(ordinal)) > 1e-5 {
+					return q, fmt.Errorf("verification Hybrid vector source %q: %+v", doc.ID, source)
+				}
+				q.VectorContributions++
+				q.MeanReturnedVectorCosine += commandPerfCosine(ordinal)
+			}
+			contribution := 1 / float64(60+source.SourceRank)
+			q.MaximumRRFError = math.Max(q.MaximumRRFError, math.Abs(*source.FusionScore-contribution))
+			fused += contribution
+		}
+		q.MaximumRRFError = math.Max(q.MaximumRRFError, math.Max(math.Abs(*meta.FusedScore-fused), math.Abs(*doc.Score-fused)))
+		if q.MaximumRRFError > 1e-12 {
+			return q, fmt.Errorf("verification Hybrid RRF score %q error=%g", doc.ID, q.MaximumRRFError)
+		}
+		if len(meta.Sources) == 2 {
+			q.BothSources++
+		}
+		q.DocumentsChecked++
+	}
+	if q.VectorContributions > 0 {
+		q.MeanReturnedVectorCosine /= float64(q.VectorContributions)
+	}
+	return q, nil
+}
+
+func commandPerfVerifyDocuments(docs []documentservice.Document, filtered, exact bool) error {
+	if len(docs) != 10 {
+		return fmt.Errorf("verification result count=%d", len(docs))
+	}
+	var expected []float64
+	if exact {
+		for ordinal := 0; ordinal < 4096; ordinal += 16 {
+			expected = append(expected, commandPerfCosine(ordinal))
+		}
+		sort.Sort(sort.Reverse(sort.Float64Slice(expected)))
+	}
+	var seen [4096]bool
+	previous := math.Inf(1)
+	for i, doc := range docs {
+		ordinal, err := commandPerfOrdinal(doc.ID)
+		if err != nil || seen[ordinal] || (filtered && ordinal%16 != 0) || len(doc.Embedding) != 0 || doc.Content != "refund policy "+strings.Repeat("payload ", 32) || doc.Meta["tenant"] != fmt.Sprintf("t%02d", ordinal%16) || fmt.Sprint(doc.Meta["rank"]) != strconv.Itoa(ordinal) || doc.Score == nil || math.IsNaN(*doc.Score) || math.IsInf(*doc.Score, 0) || *doc.Score > previous+1e-6 {
+			return fmt.Errorf("verification result content/membership/score %q", doc.ID)
+		}
+		if exact && (math.Abs(*doc.Score-commandPerfCosine(ordinal)) > 1e-5 || math.Abs(*doc.Score-expected[i]) > 1e-5) {
+			return fmt.Errorf("verification exact rank%d id%s score%g want%g", i, doc.ID, *doc.Score, expected[i])
+		}
+		seen[ordinal], previous = true, *doc.Score
+	}
+	return nil
+}
+
 // Reject alternative spellings as well as values outside the fixed seed corpus.
 func commandPerfOrdinal(id string) (int, error) {
 	if len(id) != 7 || id[0] != 'd' {
@@ -473,6 +800,222 @@ func TestCommandPerfResultValidation(t *testing.T) {
 			}
 		})
 	}
+	t.Run("outside-timed-native-ann", func(t *testing.T) {
+		// Distinct corpus members with independently derived scores exercise the
+		// verifier without claiming an exact ANN top-K or tied-ID policy.
+		ordinals := make([]int, 17)
+		for i := range ordinals {
+			ordinals[i] = i
+		}
+		sort.Slice(ordinals, func(i, j int) bool { return commandPerfCosine(ordinals[i]) > commandPerfCosine(ordinals[j]) })
+		results := make([]nativewire.DenseVectorSearchResult, 10)
+		for i, ordinal := range ordinals[:10] {
+			results[i] = nativewire.DenseVectorSearchResult{ID: []byte(fmt.Sprintf("d%06d", ordinal)), Score: commandPerfCosine(ordinal)}
+		}
+		for _, route := range []struct {
+			name           string
+			prepared, pack uint64
+		}{{"prepared", 1, 0}, {"search-pack", 0, 1}} {
+			t.Run(route.name, func(t *testing.T) {
+				valid := nativewire.DenseVectorSearchResponse{Route: documentservice.RouteAnn, ColumnGraphPreparedSearch: route.prepared, SearchPackSearch: route.pack, Results: results}
+				if err := commandPerfVerifyNativeANN(valid); err != nil {
+					t.Fatal(err)
+				}
+				for _, mutation := range []string{"no-route", "both-routes", "multiple-prepared", "multiple-search-pack", "counter-wrap", "exact-route", "exact-result", "typed-result", "document-scan", "exact-fallback", "scan-fallback", "missing-result", "extra-result", "duplicate-id", "noncorpus-id", "noncanonical-id", "wrong-score", "nan-score", "positive-infinity", "negative-infinity", "unordered-results"} {
+					t.Run(mutation, func(t *testing.T) {
+						changed := valid
+						changed.Results = append([]nativewire.DenseVectorSearchResult(nil), valid.Results...)
+						switch mutation {
+						case "no-route":
+							changed.ColumnGraphPreparedSearch, changed.SearchPackSearch = 0, 0
+						case "both-routes":
+							changed.ColumnGraphPreparedSearch, changed.SearchPackSearch = 1, 1
+						case "multiple-prepared":
+							changed.ColumnGraphPreparedSearch, changed.SearchPackSearch = 2, 0
+						case "multiple-search-pack":
+							changed.ColumnGraphPreparedSearch, changed.SearchPackSearch = 0, 2
+						case "counter-wrap":
+							changed.ColumnGraphPreparedSearch, changed.SearchPackSearch = ^uint64(0), 2
+						case "exact-route":
+							changed.Route = documentservice.RouteExact
+						case "exact-result":
+							changed.Exact = true
+						case "typed-result":
+							changed.TypedColumnGraph = true
+						case "document-scan":
+							changed.DocumentsScanned = 1
+						case "exact-fallback":
+							changed.ExactFallbacks = 1
+						case "scan-fallback":
+							changed.FullDocumentScanFallbacks = 1
+						case "missing-result":
+							changed.Results = changed.Results[:9]
+						case "extra-result":
+							changed.Results = append(changed.Results, changed.Results[0])
+						case "duplicate-id":
+							changed.Results[1] = changed.Results[0]
+						case "noncorpus-id":
+							changed.Results[0].ID = []byte("d004096")
+						case "noncanonical-id":
+							changed.Results[0].ID = []byte("d+00000")
+						case "wrong-score":
+							changed.Results[0].Score += 0.1
+						case "nan-score":
+							changed.Results[0].Score = math.NaN()
+						case "positive-infinity":
+							changed.Results[0].Score = math.Inf(1)
+						case "negative-infinity":
+							changed.Results[0].Score = math.Inf(-1)
+						case "unordered-results":
+							changed.Results[0], changed.Results[9] = changed.Results[9], changed.Results[0]
+						}
+						if err := commandPerfVerifyNativeANN(changed); err == nil {
+							t.Fatalf("accepted corrupted native ANN response %s", mutation)
+						}
+					})
+				}
+			})
+		}
+	})
+	t.Run("outside-timed-exact-oracle", func(t *testing.T) {
+		ordinals := make([]int, 0, 256)
+		for ordinal := 0; ordinal < 4096; ordinal += 16 {
+			ordinals = append(ordinals, ordinal)
+		}
+		sort.SliceStable(ordinals, func(i, j int) bool { return commandPerfCosine(ordinals[i]) > commandPerfCosine(ordinals[j]) })
+		var exact []documentservice.Document
+		for _, ordinal := range ordinals[:10] {
+			score := commandPerfCosine(ordinal)
+			exact = append(exact, documentservice.Document{ID: fmt.Sprintf("d%06d", ordinal), Content: "refund policy " + strings.Repeat("payload ", 32), Meta: map[string]any{"tenant": "t00", "rank": float64(ordinal)}, Score: &score})
+		}
+		if err := commandPerfVerifyDocuments(exact, true, true); err != nil {
+			t.Fatal(err)
+		}
+		for _, mutation := range []string{"wrong-score", "nan", "wrong-payload", "wrong-rank", "non-top-result"} {
+			t.Run(mutation, func(t *testing.T) {
+				changed := append([]documentservice.Document(nil), exact...)
+				switch mutation {
+				case "wrong-score":
+					score := 0.0
+					changed[0].Score = &score
+				case "nan":
+					score := math.NaN()
+					changed[0].Score = &score
+				case "wrong-payload":
+					changed[0].Content = "policy"
+				case "wrong-rank":
+					changed[0].Meta = map[string]any{"tenant": "t00", "rank": -1}
+				case "non-top-result":
+					ordinal := ordinals[len(ordinals)-1]
+					score := commandPerfCosine(ordinal)
+					changed[9] = documentservice.Document{ID: fmt.Sprintf("d%06d", ordinal), Content: exact[0].Content, Meta: map[string]any{"tenant": "t00", "rank": ordinal}, Score: &score}
+				}
+				if err := commandPerfVerifyDocuments(changed, true, true); err == nil {
+					t.Fatalf("accepted corrupted oracle result %s", mutation)
+				}
+			})
+		}
+	})
+	t.Run("outside-timed-ann-quality-ties", func(t *testing.T) {
+		best, worst := 0, 0
+		for i := 1; i < 17; i++ {
+			if commandPerfCosine(i) > commandPerfCosine(best) {
+				best = i
+			}
+			if commandPerfCosine(i) < commandPerfCosine(worst) {
+				worst = i
+			}
+		}
+		ordinals := make([]int, 10)
+		for i := range ordinals {
+			// Deliberately use later tied IDs, not a canonical exact-ID top ten.
+			ordinals[i] = best + 17*(i+100)
+		}
+		q := commandPerfMeasureANNQuality(ordinals)
+		if q.TieAwareRecallAtK != 1 || q.MeanCosineRegret != 0 || q.ExactTiedAtCutoff < 10 || q.ExactStrictlyAboveCutoff != 0 {
+			t.Fatalf("tied optimum quality=%+v", q)
+		}
+		ordinals[9] = worst
+		q = commandPerfMeasureANNQuality(ordinals)
+		if q.TieAwareRecallAtK != .9 || q.MeanCosineRegret <= 0 {
+			t.Fatalf("one low-quality result not measured: %+v", q)
+		}
+		for i := range ordinals {
+			ordinals[i] = worst + 17*i
+		}
+		q = commandPerfMeasureANNQuality(ordinals)
+		if q.TieAwareRecallAtK != 0 || q.MeanCosineRegret <= 0 {
+			t.Fatalf("valid but poor ANN quality not measured: %+v", q)
+		}
+	})
+	t.Run("outside-timed-hybrid-rrf", func(t *testing.T) {
+		makeResponse := func() documentservice.HybridSearchResponse {
+			response := documentservice.HybridSearchResponse{Plan: collections.HybridSearchPlan{FusionMethod: collections.HybridFusionMethodRRF, TextCandidateLimit: 64, VectorCandidateLimit: 64, FinalTopK: 10}}
+			for i := 0; i < 10; i++ {
+				text, vector, contribution := 1.0, commandPerfCosine(i), 1/float64(61+i)
+				fused := 2 * contribution
+				meta := commandPerfHybridMeta{Type: "hybrid", Rank: i + 1, FusionMethod: "rrf", FusedScore: &fused, Sources: []commandPerfHybridSource{
+					{Source: "text", IndexName: "content", SourceRank: i + 1, Score: &text, ScoreKind: "bm25f", FusionScore: &contribution},
+					{Source: "vector", IndexName: "embedding", SourceRank: i + 1, Score: &vector, ScoreKind: "vector_similarity", FusionScore: &contribution},
+				}}
+				response.Documents = append(response.Documents, documentservice.Document{ID: fmt.Sprintf("d%06d", i), Score: &fused, Meta: map[string]any{"_treedb_search": meta}})
+			}
+			return response
+		}
+		quality, err := commandPerfVerifyHybridRRF(makeResponse())
+		if err != nil || quality.DocumentsChecked != 10 || quality.TextContributions != 10 || quality.VectorContributions != 10 || quality.BothSources != 10 || quality.MaximumRRFError != 0 {
+			t.Fatalf("valid returned RRF contributions: quality=%+v err=%v", quality, err)
+		}
+		for _, mutation := range []string{"missing-metadata", "wrong-plan", "wrong-rank", "wrong-method", "no-sources", "duplicate-source", "duplicate-source-rank", "out-of-bounds-source-rank", "wrong-index", "wrong-vector-score", "wrong-contribution", "wrong-fused-score", "wrong-document-score", "missing-source-score", "nonfinite-source-score"} {
+			t.Run(mutation, func(t *testing.T) {
+				response := makeResponse()
+				doc := &response.Documents[0]
+				meta := doc.Meta["_treedb_search"].(commandPerfHybridMeta)
+				wrong := 0.5
+				switch mutation {
+				case "missing-metadata":
+					meta = commandPerfHybridMeta{}
+				case "wrong-plan":
+					response.Plan.VectorCandidateLimit = 128
+				case "wrong-rank":
+					meta.Rank = 2
+				case "wrong-method":
+					meta.FusionMethod = "normalized_score"
+				case "no-sources":
+					meta.Sources = nil
+				case "duplicate-source":
+					meta.Sources[1] = meta.Sources[0]
+				case "duplicate-source-rank":
+					meta.Sources[0].SourceRank = 2
+					contribution := 1 / float64(62)
+					meta.Sources[0].FusionScore = &contribution
+					fused := contribution + *meta.Sources[1].FusionScore
+					meta.FusedScore, doc.Score = &fused, &fused
+				case "out-of-bounds-source-rank":
+					meta.Sources[1].SourceRank = 65
+				case "wrong-index":
+					meta.Sources[1].IndexName = "retired"
+				case "wrong-vector-score":
+					meta.Sources[1].Score = &wrong
+				case "wrong-contribution":
+					meta.Sources[1].FusionScore = &wrong
+				case "wrong-fused-score":
+					meta.FusedScore = &wrong
+				case "wrong-document-score":
+					doc.Score = &wrong
+				case "missing-source-score":
+					meta.Sources[1].Score = nil
+				case "nonfinite-source-score":
+					nan := math.NaN()
+					meta.Sources[1].Score = &nan
+				}
+				doc.Meta["_treedb_search"] = meta
+				if _, err := commandPerfVerifyHybridRRF(response); err == nil {
+					t.Fatalf("accepted corrupted returned Hybrid contribution %s", mutation)
+				}
+			})
+		}
+	})
 }
 
 func startCommandPerf(ctx context.Context, logPath, bin, dir string, httpCommand, legacy bool) (*commandPerfProcess, error) {

@@ -374,7 +374,7 @@ class ProbeContractTest(unittest.TestCase):
     def test_build_requires_complete_profile_identity_and_work(self):
         def snapshot(renews, allocated):
             return {'work': {'pid': 42, 'origin_unix_nano': 7, 'indexed_json': {'rows': 0},
-                    'runtime': {'queries_completed': 0}, 'memory': {'total_alloc': allocated, 'mallocs': allocated},
+                    'memory': {'total_alloc': allocated, 'mallocs': allocated},
                     'fold': {'publications': 0, 'candidate_bytes_charged': 0, 'appender_attempts_charged': 0,
                              **{key: {'attempts': n, 'completed': n, 'errors': 0}
                                 for key, n in [('build', 0), ('public', 0), ('renew', renews)]}}}}

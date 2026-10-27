@@ -117,7 +117,11 @@ func decodeCollectionMetaForPurpose(src []byte, create bool) (collections.Collec
 	if version == 7 {
 		meta, err := collections.DecodeCatalogCreateCollectionCommandWALPayload(src[off:], create)
 		if err != nil {
-			return collections.CollectionMeta{}, invalidMetadata("%v", err)
+			code := iwire.ErrInvalidCommand
+			if errors.Is(err, backenddb.ErrNativeSemanticUnsupported) {
+				code = iwire.ErrUnsupportedFeature
+			}
+			return collections.CollectionMeta{}, fmt.Errorf("%w: %w", protocolError(code, "collection_meta"), err)
 		}
 		return meta, nil
 	}

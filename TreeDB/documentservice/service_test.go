@@ -1421,7 +1421,20 @@ func TestServiceLegacyColumnGraphMutationDefaultRouteAndReopen(t *testing.T) {
 				if err != nil || info.Capabilities.NoDocumentVectorSearch {
 					t.Fatalf("mutated graph info=%+v err=%v", info, err)
 				}
-				got, err := svc.SearchDenseVector(ctx, "docs", query)
+				col, _, err := svc.openIndex(ctx, "docs", 0)
+				if err != nil {
+					t.Fatal(err)
+				}
+				before, err := col.VectorIndexStatus(defaultVectorIndexName)
+				if err != nil || !before.RebuildNeeded || before.Loaded {
+					t.Fatalf("mutated graph status=%+v err=%v", before, err)
+				}
+				if got, err := svc.SearchDenseVector(ctx, "docs", query); ErrorCodeOf(err) != CodeIndexUnavailable || len(got.Documents) != 0 {
+					t.Fatalf("default stale ANN must refuse: documents=%d err=%v", len(got.Documents), err)
+				}
+				exact := query
+				exact.Route = RouteExact
+				got, err := svc.SearchDenseVector(ctx, "docs", exact)
 				if err != nil || got.Route != RouteExact || !got.Exact || len(got.Documents) != len(docs) {
 					t.Fatalf("mutated graph response=%+v err=%v", got, err)
 				}
@@ -1438,6 +1451,10 @@ func TestServiceLegacyColumnGraphMutationDefaultRouteAndReopen(t *testing.T) {
 				if _, err := svc.SearchBenchmarkVector(ctx, "docs", BenchmarkVectorSearchRequest{QueryEmbedding: query.QueryEmbedding, TopK: 1}); ErrorCodeOf(err) != CodeIndexUnavailable {
 					t.Fatalf("stale no-document search err=%v", err)
 				}
+				after, err := col.VectorIndexStatus(defaultVectorIndexName)
+				if err != nil || !after.RebuildNeeded || after.Loaded || after.RootID != before.RootID || after.State != before.State {
+					t.Fatalf("reads changed stale graph: before=%+v after=%+v err=%v", before, after, err)
+				}
 			}
 			check()
 			if err := svc.Close(); err != nil {
@@ -1448,6 +1465,30 @@ func TestServiceLegacyColumnGraphMutationDefaultRouteAndReopen(t *testing.T) {
 			}
 			svc, db = open()
 			check()
+			if _, err := svc.OptimizeIndex(ctx, "docs", OptimizeIndexRequest{}); err != nil {
+				t.Fatalf("explicit maintenance: %v", err)
+			}
+			checkMaintained := func() {
+				t.Helper()
+				got, err := svc.SearchDenseVector(ctx, "docs", query)
+				if err != nil || got.Route != RouteAnn || got.Exact || len(got.Documents) != len(docs) {
+					t.Fatalf("maintained default ANN=%+v err=%v", got, err)
+				}
+				for i, want := range docs {
+					if doc := got.Documents[i]; doc.ID != want.ID || doc.Content != want.Content || !reflect.DeepEqual(doc.Embedding, want.Embedding) {
+						t.Fatalf("maintained document=%+v want %+v", doc, want)
+					}
+				}
+			}
+			checkMaintained()
+			if err := svc.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+			svc, db = open()
+			checkMaintained()
 		})
 	}
 }

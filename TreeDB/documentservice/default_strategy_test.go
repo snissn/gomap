@@ -118,6 +118,9 @@ func TestServiceNativeDefaultColumnGraphProfiles(t *testing.T) {
 			if !errors.Is(err, backenddb.ErrNativeSemanticUnsupported) {
 				t.Fatalf("unsupported native ColumnGraph profile: %v", err)
 			}
+			if ErrorCodeOf(err) != CodeUnsupported || httpStatusForError(err) != 501 {
+				t.Fatalf("unsupported native profile mapped to code=%q status=%d: %v", ErrorCodeOf(err), httpStatusForError(err), err)
+			}
 			after, err := backend.CaptureNativeSemanticState()
 			if err != nil {
 				t.Fatal(err)

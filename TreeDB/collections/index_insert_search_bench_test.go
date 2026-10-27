@@ -50,7 +50,9 @@ func TestIndexInsertSearchFixtureGuardrails2564(t *testing.T) {
 		t.Fatalf("vector candidate stats=%+v want no document fetch/fallback/fail-closed", vector.Stats)
 	}
 
-	hybrid, err := fixture.col.SearchHybrid(indexInsertSearchHybridOptions2564(fixture.def.Name, 8, true))
+	opts := indexInsertSearchHybridOptions2564(fixture.def.Name, 8, true)
+	opts.ScalarFilter = nil // Ordinary mixed fusion remains supported without metadata filtering.
+	hybrid, err := fixture.col.SearchHybrid(opts)
 	if err != nil {
 		t.Fatalf("SearchHybrid: %v", err)
 	}

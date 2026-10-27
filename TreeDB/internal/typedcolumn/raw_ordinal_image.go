@@ -380,8 +380,8 @@ func PlanRawOrdinalColumnPartImageShape(opts Options, shape RawOrdinalColumnShap
 	array(12, unsafe.Sizeof(ColumnPartImageSectionByteAccounting{}))
 	array(24, unsafe.Sizeof(ColumnPartImageSectionByteAccounting{}))
 	// Repository policy: four slots per logical map entry, with a minimum
-	// group, plus 1KiB per entry/control allowance (native_hnsw.go and
-	// column_retained_semantic_stream.go). Values are charged at their full
+	// group, plus 1KiB per entry/control allowance, matching
+	// column_retained_semantic_stream.go. Values are charged at their full
 	// source type size even when runtime maps store them indirectly. There is
 	// no runtime ABI/version dispatch. All maps here have fixed cardinality.
 	mapCharge := func(entries uint64, key, value uintptr) {

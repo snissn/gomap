@@ -18814,9 +18814,9 @@ func TestCollectionVectorIndexMetadataJSONUsesStableStrings(t *testing.T) {
 		VectorIndexes: []VectorIndexDefinition{{
 			Name:       "embedding",
 			Field:      "embedding",
-			Metric:     VectorMetricInnerProduct,
+			Metric:     VectorMetricCosine,
 			Dimensions: 64,
-			Encoding:   VectorIndexEncodingInt8,
+			Encoding:   VectorIndexEncodingFloat32,
 		}},
 	})
 	if err != nil {
@@ -18826,8 +18826,12 @@ func TestCollectionVectorIndexMetadataJSONUsesStableStrings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal meta: %v", err)
 	}
-	if !bytes.Contains(raw, []byte(`"metric":"inner_product"`)) || !bytes.Contains(raw, []byte(`"encoding":"int8"`)) {
-		t.Fatalf("vector metadata JSON=%s want string metric and encoding", raw)
+	if !bytes.Contains(raw, []byte(`"metric":"cosine"`)) || bytes.Contains(raw, []byte(`"encoding":`)) {
+		t.Fatalf("vector metadata JSON=%s want string metric and omitted default encoding", raw)
+	}
+	encodingJSON, err := json.Marshal(VectorIndexEncodingFloat32)
+	if err != nil || string(encodingJSON) != `"float32"` {
+		t.Fatalf("float32 encoding JSON=%s err=%v", encodingJSON, err)
 	}
 	var decoded CollectionMeta
 	if err := json.Unmarshal(raw, &decoded); err != nil {
@@ -18841,7 +18845,7 @@ func TestCollectionVectorIndexMetadataJSONUsesStableStrings(t *testing.T) {
 		t.Fatalf("decoded meta=%+v want %+v", decoded, meta)
 	}
 	var numericDecoded CollectionMeta
-	if err := json.Unmarshal([]byte(`{"name":"docs","vector_indexes":[{"name":"embedding","field":"embedding","metric":0,"dimensions":64,"encoding":1}]}`), &numericDecoded); err != nil {
+	if err := json.Unmarshal([]byte(`{"name":"docs","vector_indexes":[{"name":"embedding","field":"embedding","metric":0,"dimensions":64,"encoding":0}]}`), &numericDecoded); err != nil {
 		t.Fatalf("unmarshal numeric compatibility meta: %v", err)
 	}
 	numericDecoded, err = normalizeCollectionMeta(numericDecoded)
@@ -18849,7 +18853,7 @@ func TestCollectionVectorIndexMetadataJSONUsesStableStrings(t *testing.T) {
 		t.Fatalf("normalize numeric meta: %v", err)
 	}
 	got, ok := findVectorIndex(numericDecoded.VectorIndexes, "embedding")
-	if !ok || got.Metric != VectorMetricCosine || got.Encoding != VectorIndexEncodingInt8 {
+	if !ok || got.Metric != VectorMetricCosine || got.Encoding != VectorIndexEncodingFloat32 {
 		t.Fatalf("numeric decoded vector index=%+v ok=%v", got, ok)
 	}
 }

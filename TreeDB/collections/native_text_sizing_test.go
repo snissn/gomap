@@ -556,9 +556,17 @@ func TestNativeTextPublicRepeatedContentBatch128(t *testing.T) {
 	meta := nativeTextPublicMeta()
 	meta.Indexes[0].Field = "meta.tenant"
 	meta.Indexes = append(meta.Indexes, IndexDefinition{Name: "rank", Field: "meta.rank", ValueType: IndexValueInt64})
-	meta.VectorIndexes[0].Dimensions = 8
-	meta.VectorIndexes[0].M = 16
-	meta.VectorIndexes[0].EfConstruction = 128
+	meta.VectorIndexes = []VectorIndexDefinition{{
+		Name: "embedding", Field: "embedding", Strategy: VectorIndexStrategyColumnGraph,
+		Metric: VectorMetricCosine, Dimensions: 8, M: 16, EfConstruction: 128,
+	}}
+	meta.Options.ColumnStore = &ColumnStoreConfig{
+		Enabled: true, RetainedPayload: ColumnRetainedPayloadFull, RetainedPayloadEncoding: ColumnRetainedPayloadEncodingJSON,
+		Columns: []ColumnStoreColumn{{Name: "embedding", Path: "embedding", Owner: TypedStorageOwnerColumnPart, ValueType: ColumnStoreValueFloat32Vector, VectorDims: 8}},
+	}
+	if err = ValidateOrdinaryColumnGraphCollectionMeta(*meta); err != nil {
+		t.Fatalf("invalid ordinary mixed-index fixture: %v", err)
+	}
 	if _, err = manager.CreateCollection(meta); err != nil {
 		t.Fatal(err)
 	}

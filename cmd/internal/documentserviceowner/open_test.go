@@ -71,7 +71,7 @@ func TestOwnerModesAndLifetime(t *testing.T) {
 						}
 					}
 					_, createErr := o.Service.CreateIndex(ctx, req)
-					if createErr == nil || documentservice.ErrorCodeOf(createErr) != documentservice.CodeInternal {
+					if createErr == nil || documentservice.ErrorCodeOf(createErr) != documentservice.CodeUnsupported {
 						t.Fatalf("unsupported ordinary ColumnGraph profile accepted: %v", createErr)
 					}
 					if !legacy && !errors.Is(createErr, backenddb.ErrNativeSemanticUnsupported) {
