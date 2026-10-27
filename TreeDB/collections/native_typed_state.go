@@ -15,8 +15,10 @@ import (
 // nativeTypedDelta retains declared values and their original retained JSON or
 // semantic-stream carrier, including the complete document for Full.
 // previous is an original immutable state edge, not a second visibility owner.
-// appliedLSN and memberOrdinal are bound once, before the private successor is
-// installed; checkpoint progress never supplies a command's physical identity.
+// appliedLSN and memberOrdinal are the original command identity, bound once
+// before the private successor is installed. Physical insert-span materialization
+// may cover several such members using the last original member's LSN; it never
+// rewrites these identities or derives command coverage from checkpoint progress.
 type nativeTypedDelta struct {
 	refs          atomic.Int64
 	previous      *nativeTypedDelta

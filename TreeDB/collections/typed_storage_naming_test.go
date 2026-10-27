@@ -421,7 +421,9 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/native_source_directory_v2.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
 	{path: "TreeDB/collections/native_source_import_v2.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 5},
 	{path: "TreeDB/native_vector_source_import_v2_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 5, occurrences: 6},
-	{path: "TreeDB/collections/native_typed_materialize.go", classification: typedStorageLegacyCompatibility, matchingLines: 27, occurrences: 29},
+	{path: "TreeDB/collections/native_typed_materialize.go", classification: typedStorageLegacyCompatibility, matchingLines: 29, occurrences: 31},
+	// Public span controls configure and inspect the retained typed schema API.
+	{path: "TreeDB/collections/native_typed_final_span_public_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 7, occurrences: 14},
 	// Native typed scalar indexes consume the retained declared-column API;
 	// their values share the maintained typed encoder, not another row owner.
 	{path: "TreeDB/collections/native_typed_index.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 3},

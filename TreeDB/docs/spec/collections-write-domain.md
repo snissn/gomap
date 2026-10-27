@@ -113,6 +113,22 @@ identities. Durable requests wait for their own completion, including persistent
 dependencies. Existing solo-sync eligibility avoids an extra barrier for an
 uncontended mutation. See `write-path-and-durability.md` for the ACK contract.
 
+For the existing ordinary Full+JSON ColumnGraph layout, a captured graph-free
+segment of at least two insert-only members may use one maintained physical
+column publication plan. Its assets, manifest generation and row locators use
+the last original member's LSN in that collection segment as physical coverage;
+they do not create an aggregate command or claim the enclosing global frontier.
+Every original command identity, conditional outcome and logical successor is
+preserved. The existing accepted-prefix cut still certifies contiguous journal
+coverage, and held reads retain their original semantic rows and paired physical
+basis through the existing handoff. Graph recipes remain barriers. Mixed
+operations, deletes, source imports, compaction and other layouts retain their
+member publication path. The span borrows immutable row backing and uses the
+original construction receipt and shared codec workspace; eligibility checks
+its aggregate source promise against the original member promises before asset
+construction. Build errors retain the existing work's custody and do not retry
+through the member path.
+
 Mongo insert coalescing bounds combined stored documents and ID bytes by the
 configured message envelope. A staged invalid indexed request may be isolated
 only on an explicit pre-assignment rejection marker or duplicate-key outcome;
