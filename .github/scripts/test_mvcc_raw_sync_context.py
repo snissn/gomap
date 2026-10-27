@@ -69,6 +69,44 @@ class ContextTests(unittest.TestCase):
             self.assertNotEqual(subprocess.run(command, capture_output=True).returncode, 0)
             self.assertEqual(target.read_text(), 'preserved')
 
+    def test_incomplete_mountinfo_withholds_mount_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            proc = root / 'proc'
+            (proc / 'self').mkdir(parents=True)
+            mountinfo = proc / 'self/mountinfo'
+            mountinfo.write_text('1 0 8:0 / / rw - ext4 /dev/fake rw\n' +
+                                 ' ' * context.LIMIT +
+                                 f'2 1 8:1 / {root} rw - ext4 /dev/actual rw\n')
+            fixture = context.fixture_identity(proc, root)
+            self.assertEqual(fixture['mountinfo_status'], 'truncated')
+            self.assertEqual(fixture['parent_mount']['status'], 'unavailable')
+            self.assertNotIn('source', fixture['parent_mount'])
+            mountinfo.unlink()
+            fixture = context.fixture_identity(proc, root)
+            self.assertEqual(fixture['mountinfo_status'], 'unavailable')
+            self.assertEqual(fixture['parent_mount']['status'], 'unavailable')
+
+    def test_full_driver_refuses_occupied_output_before_any_work(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            occupied = root / 'occupied'
+            occupied.mkdir()
+            marker = occupied / 'original.json'
+            marker.write_text('retained original evidence')
+            for output in (occupied, root / 'dangling'):
+                if output != occupied:
+                    output.symlink_to(root / 'absent')
+                environment = dict(os.environ, RAW_SYNC_CONTEXT='1', OUT_DIR=str(output),
+                                   BASELINE_HASH='invalid-no-fetch-allowed', CANDIDATE_HASH='HEAD')
+                result = subprocess.run(['bash', str(ROOT / 'scripts/mvcc_raw_path_gate.sh')],
+                                        env=environment, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn('refusing preexisting OUT_DIR', result.stderr)
+                self.assertEqual(marker.read_text(), 'retained original evidence')
+                self.assertNotIn('fetch', result.stderr)
+            self.assertTrue((root / 'dangling').is_symlink())
+
     def test_missing_proc_is_explicit(self):
         with tempfile.TemporaryDirectory() as directory:
             result = context.snapshot(Path(directory))

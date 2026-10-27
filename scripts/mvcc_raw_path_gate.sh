@@ -49,6 +49,10 @@ for command in git go lscpu ps python3 realpath taskset sha256sum timeout; do
   fi
 done
 
+if [[ "$RAW_SYNC_CONTEXT" == 1 && ( -e "$OUT_DIR" || -L "$OUT_DIR" ) ]]; then
+  echo "refusing preexisting OUT_DIR with RAW_SYNC_CONTEXT=1: $OUT_DIR" >&2
+  exit 2
+fi
 OUT_DIR=$(realpath -m "$OUT_DIR")
 if [[ -z "$OUT_DIR" || "$OUT_DIR" == "/" || "$OUT_DIR" == "$ROOT" ]]; then
   echo "refusing unsafe OUT_DIR: $OUT_DIR" >&2
@@ -66,8 +70,14 @@ if [[ "$BASELINE_SHA" == "$CANDIDATE_SHA" ]]; then
   exit 2
 fi
 
-rm -rf "$OUT_DIR"
-mkdir -p "$OUT_DIR"
+if [[ "$RAW_SYNC_CONTEXT" == 1 ]]; then
+  # Exclusive mkdir also protects against a path created after the early check.
+  mkdir -p "$(dirname "$OUT_DIR")"
+  mkdir "$OUT_DIR"
+else
+  rm -rf "$OUT_DIR"
+  mkdir -p "$OUT_DIR"
+fi
 TMP_ROOT=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/mvcc-raw-path-gate.XXXXXX")
 BASELINE_WT="$TMP_ROOT/baseline"
 cleanup() {

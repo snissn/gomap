@@ -39,6 +39,8 @@ def unescape(value):
 def mounts(proc):
     record = read_counter(proc / 'self/mountinfo')
     result = []
+    if record['status'] != 'available':
+        return {'status': record['status'], 'entries': []}
     for line in record.get('text', '').splitlines():
         fields = line.split()
         try:
@@ -48,7 +50,7 @@ def mounts(proc):
                            'source': unescape(fields[separator + 2])})
         except (ValueError, IndexError):
             continue
-    return result
+    return {'status': 'available', 'entries': result}
 
 
 def fixture_identity(proc, fixture_root):
@@ -58,8 +60,11 @@ def fixture_identity(proc, fixture_root):
     try:
         metadata = path.stat()
         result['parent_device'] = f'{os.major(metadata.st_dev)}:{os.minor(metadata.st_dev)}'
-        eligible = [m for m in mounts(proc) if path.is_relative_to(m['mount'])]
-        result['parent_mount'] = max(eligible, key=lambda m: len(m['mount'])) if eligible else {'status': 'unavailable'}
+        mount_record = mounts(proc)
+        result['mountinfo_status'] = mount_record['status']
+        eligible = [m for m in mount_record['entries'] if path.is_relative_to(m['mount'])]
+        result['parent_mount'] = (max(eligible, key=lambda m: len(m['mount'])) if eligible
+                                  else {'status': 'unavailable', 'mountinfo_status': mount_record['status']})
     except OSError as error:
         result['status'] = 'unavailable'
         result['errno'] = error.errno
@@ -75,7 +80,7 @@ def snapshot(proc):
         if len(fields) != 3:
             continue
         _, controllers, relative = fields
-        for mount in mounts(proc):
+        for mount in mounts(proc)['entries']:
             if mount['filesystem'] != 'cgroup2':
                 continue
             # v1 layouts differ by controller: explicitly unavailable below.

@@ -22,7 +22,9 @@ Monotonic boundaries enclose the child process, including calibration, setup and
 teardown. They do not identify the benchmark timer phase. Context reads and writes
 are outside the benchmark process but can perturb the host. Context-enabled
 results must retain that label and are not evidence that instrumentation is free.
-Artifacts are exclusively created; existing files and symlinks are rejected.
+In opt-in mode the driver refuses any preexisting output directory or symlink,
+preserving prior evidence; per-sample artifacts are exclusively created. Incomplete
+mountinfo is labeled truncated/unavailable and parent mount inference is withheld.
 
 No syscall, scheduler or blocked-stack tracing is implemented or required for the
 gate. A separate future tracing mode must bind exact executable/build identity,
