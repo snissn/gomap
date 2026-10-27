@@ -95,11 +95,12 @@ def _typed_serving_limits():
 
 
 class TreeDBServiceProcess:
-    def __init__(self, repo_root: Path, data_dir: str, *, native: bool = False) -> None:
+    def __init__(self, repo_root: Path, data_dir: str, *, native: bool = False, legacy_storage: bool = False) -> None:
         self.repo_root = repo_root
         self.data_dir = data_dir
         self.addr = _free_addr()
         self.native_addr = _free_addr() if native else None
+        self.legacy_storage = legacy_storage
         self.log = tempfile.NamedTemporaryFile("w+", prefix="treedb_document_service_", suffix=".log", delete=False)
         self.proc: Optional[subprocess.Popen[str]] = None
 
@@ -121,6 +122,8 @@ class TreeDBServiceProcess:
         ]
         if self.native_addr is not None:
             cmd.extend(["-native-addr", self.native_addr])
+        if self.legacy_storage:
+            cmd.append("-legacy-storage")
         self.proc = subprocess.Popen(
             cmd,
             cwd=str(self.repo_root),
@@ -253,7 +256,7 @@ class TreeDBClientIntegrationTests(unittest.TestCase):
     def test_column_graph_declared_scalar_lifecycle(self) -> None:
         """Exercise the real public client; no mocked transport or exact fallback."""
         with tempfile.TemporaryDirectory(prefix="treedb_typed_client_") as data_dir:
-            service = TreeDBServiceProcess(_support.REPO_ROOT, data_dir, native=True)
+            service = TreeDBServiceProcess(_support.REPO_ROOT, data_dir, native=True, legacy_storage=True)
             declarations = [{"field": "meta.user_id", "value_type": "string"},
                             {"field": "meta.fpath", "value_type": "string"}]
             wanted = {"field": "meta.user_id", "operator": "==", "value": "owner"}
@@ -347,7 +350,7 @@ class TreeDBClientIntegrationTests(unittest.TestCase):
                     client.optimize_index("typed", column_graph_action="fold")
             finally:
                 service.stop()
-            reopened = TreeDBServiceProcess(_support.REPO_ROOT, data_dir, native=True)
+            reopened = TreeDBServiceProcess(_support.REPO_ROOT, data_dir, native=True, legacy_storage=True)
             try:
                 reopened.start()
                 with closing(TreeDBClient(reopened.base_url, timeout=10)) as client:
@@ -396,7 +399,7 @@ class TreeDBClientIntegrationTests(unittest.TestCase):
             live = [Document(id=f"source#{i}", content="fresh", embedding=[1 - i, i],
                              meta={"user_id": "owner"}) for i in range(2)]
 
-            service = TreeDBServiceProcess(_support.REPO_ROOT, data_dir, native=True)
+            service = TreeDBServiceProcess(_support.REPO_ROOT, data_dir, native=True, legacy_storage=True)
             try:
                 service.start()
                 with closing(TreeDBClient(service.base_url, timeout=10)) as control:
@@ -429,7 +432,7 @@ class TreeDBClientIntegrationTests(unittest.TestCase):
             finally:
                 service.stop()
 
-            reopened = TreeDBServiceProcess(_support.REPO_ROOT, data_dir, native=True)
+            reopened = TreeDBServiceProcess(_support.REPO_ROOT, data_dir, native=True, legacy_storage=True)
             try:
                 reopened.start()
                 with closing(TreeDBClient(reopened.base_url, timeout=10)) as control:
@@ -454,7 +457,7 @@ class TreeDBClientIntegrationTests(unittest.TestCase):
             finally:
                 reopened.stop()
 
-            final = TreeDBServiceProcess(_support.REPO_ROOT, data_dir, native=True)
+            final = TreeDBServiceProcess(_support.REPO_ROOT, data_dir, native=True, legacy_storage=True)
             try:
                 final.start()
                 with closing(TreeDBClient(final.base_url, timeout=10)) as control:
@@ -471,7 +474,7 @@ class TreeDBClientIntegrationTests(unittest.TestCase):
     @unittest.skipUnless(sys.platform.startswith("linux"), "selected serving fixture requires Linux namespace authority and mmap")
     def test_typed_metadata_update_without_vector_roundtrip(self) -> None:
         with tempfile.TemporaryDirectory(prefix="treedb_metadata_update_") as data_dir:
-            service = TreeDBServiceProcess(_support.REPO_ROOT, data_dir, native=True)
+            service = TreeDBServiceProcess(_support.REPO_ROOT, data_dir, native=True, legacy_storage=True)
             try:
                 service.start()
                 with closing(TreeDBClient(service.base_url, timeout=10)) as control:
@@ -509,7 +512,7 @@ class TreeDBClientIntegrationTests(unittest.TestCase):
     def test_normalized_v4_column_graph_public_clients(self) -> None:
         """Cross the 4,096 cutoff through real native-v4 and HTTP clients."""
         with tempfile.TemporaryDirectory(prefix="treedb_quantized_client_") as data_dir:
-            service = TreeDBServiceProcess(_support.REPO_ROOT, data_dir, native=True)
+            service = TreeDBServiceProcess(_support.REPO_ROOT, data_dir, native=True, legacy_storage=True)
             limits = {
                 "Publication": {"Rows": 8192, "Tombstones": 8192, "ValueSlots": 16384,
                                 "OwnedBytes": 64 << 20, "EncodedOutputBytes": 64 << 20},
