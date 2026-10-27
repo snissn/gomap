@@ -162,3 +162,45 @@ limits or public query options.
 reopen, without a preceding ANN warm-up. It also checks retained pack reuse and
 stable cold/warm ranks on the same unchanged cut. This correctness control does
 not qualify concurrent ingestion, performance or power-loss recovery.
+
+Ordinary native V2 Keyword requests with a finite primitive scalar prefilter and
+no vector source may reuse a composite derived entry on the existing immutable
+`nativeCollectionState`. It contains the complete conjunction's immutable IDs
+and the already validated forward ordinal identities/sorted ordinal vector.
+Mixed Hybrid, V1, compound/multikey or unsupported clauses, absent filters and
+empty selections keep the existing path. Query analysis, root formats/status,
+posting/norm validation, candidate limits, final capture checks and projection
+still run for each request. Misses perform the original scalar and forward work
+before optional publication at final successful query completion; malformed forward identities are never published.
+
+The exact captured owner supplies schema, domain roots and source interpretation;
+ordered typed clauses (including absent bounds and inclusivity), text index and
+scalar lookup/aggregate limits supply the query key. A forward borrower also
+checks its owning capture and freshly decoded complete text status. No read,
+callback, context or scratch is retained. Published IDs are read-only and never
+enter destructive mixed-Hybrid refinement. An operation-local construction is
+attached only after the full conjunction is finished.
+
+Native read-view foreground scopes use the backend already borrowed by the live
+`NativeJSONRead`, including warm scalar-plan reuse. The native collection facade
+keeps its legacy handle empty. Closed views do not start a foreground scope.
+
+The existing original parent admits a separate independent retention lease,
+bounded by the same 64 slots and 8 MiB used by native scalar plans. Complete
+independent table, map, vector, clause/string and metadata backing is admitted
+before cloning or publication. Optional lookup keys use a separate short-lived
+independent lease, with every key alias cleared and the lease released before
+original miss work. Empty owners skip key compilation. The existing operation
+scratch holds the unencoded construction inline; successful completion alone
+attempts retention after all original result/projection/fusion admission.
+Concurrent fills recheck under the owner mutex;
+there is no eviction of active borrowers. Optional refusal or saturation leaves
+the successful uncached construction available. New logical, DDL and physical
+replacement states start empty, while held old captures retain their entries.
+Last-reference cleanup detaches all entry and lease aliases before transferring
+the independent receipt to the existing completion chain. Maintenance can make
+subsequent requests cold; it remains enabled during public measurement.
+
+This is a provisional Keyword optimization. Its activation/lifetime controls and
+original public workload comparison are required before adoption; helper results
+or profile ceilings do not establish public performance acceptance.

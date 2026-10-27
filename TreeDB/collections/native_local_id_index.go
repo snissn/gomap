@@ -219,6 +219,8 @@ func admitLocalIDArray(admit func(uint64) error, n int, width uint64) error {
 type hybridScalarIDs struct {
 	legacy hybridScalarAllowSet
 	native *localIDIndex
+	// Operation-local construction or immutable independently owned entry only.
+	forwardPlan *nativeScalarForwardPlan
 }
 
 func legacyScalarIDs(s hybridScalarAllowSet) hybridScalarIDs { return hybridScalarIDs{legacy: s} }
@@ -255,6 +257,9 @@ func (s hybridScalarIDs) all(yield func(string) bool) {
 	}
 }
 func (s hybridScalarIDs) delete(key string) {
+	if s.forwardPlan != nil {
+		panic("collections: mutate scalar-forward selection")
+	}
 	if s.native == nil {
 		delete(s.legacy, key)
 		return

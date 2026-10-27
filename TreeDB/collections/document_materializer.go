@@ -404,6 +404,11 @@ func newCollectionReadViewScopeID(kind mappedresource.ScopeKind) string {
 }
 
 func (v *CollectionReadView) beginForegroundRead() func() {
+	// Native collection facades intentionally have no legacy DB handle. The
+	// live read already borrows its original backend for its captured lifetime.
+	if v != nil && !v.closed && v.nativeRead != nil && v.nativeRead.database != nil {
+		return v.nativeRead.database.BeginForegroundRead()
+	}
 	if v == nil || v.collection == nil || v.collection.db == nil {
 		return noCollectionForegroundReadEnd
 	}

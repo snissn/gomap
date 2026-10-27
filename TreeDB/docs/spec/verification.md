@@ -4732,3 +4732,21 @@ they do not substitute for crash recovery. The unchanged public
 `TestPublicCommandWALCheckpointReleasesCoveredRotationDebtBeforeNextBarrier`
 requires checkpoint cleanup to reclaim every covered predecessor, including a
 validated frame-free reserve.
+
+`TestNativeScalarForwardForegroundReadScope` checks a native view enters and ends
+the observer on its existing backend, and a closed view starts no scope.
+The provisional ordinary no-vector V2 Keyword composite reuse is covered by
+`TestNativeScalarForwardPublicLifecycle` (actual public cold/warm activation,
+concurrent borrowers, cancellation/foreground callbacks, mutation, held capture
+and final parent Close zero), `TestNativeScalarForwardPublicPhysicalReuse`
+(checkpointed storage-call reduction with unchanged result and distinct predicate),
+`TestNativeScalarForwardOptionalRefusalAndBound` (original independent parent
+exhaustion, unchanged original scratch/headroom on optional key refusal and original fallback, full retained backing, independent clones, forward reuse versus the
+uncached constructor's original refusal, and 64-slot non-eviction), and
+`TestNativeScalarForwardPublicSchemaAndPhysicalRefresh` (DDL, held old state,
+physical replacement and dropped declaration). Existing
+`TestNativeTextV2ForwardIdentity*`, `TestNativeHybridPublicScalarPhysicalWork`,
+`TestNativeScalarPlanReuse*` and `TestNativeScalarPlanCache*` retain their original
+forward-corruption, source-work and HNSW cache oracles. The frozen baseline RED
+controls are separate from candidate-focused and unchanged original Keyword
+B/A/A/B public evidence; no helper result replaces performance qualification.

@@ -117,6 +117,9 @@ func (c *Collection) searchHybridWithCandidateBudgetPolicy(opts HybridSearchOpti
 			// Catalog and operation scratch borrow this view only; no aliases are
 			// installed on the facade or its shared native decoder.
 			view.catalog = nil
+			if plan.nativeScratch != nil {
+				plan.nativeScratch.scalarForwardBuild = nativeScalarForwardPlan{}
+			}
 			plan.nativeScratch = nil
 			if closeErr := view.Close(); closeErr != nil {
 				if err == nil {
@@ -294,6 +297,9 @@ func (c *Collection) searchHybridWithCandidateBudgetPolicy(opts HybridSearchOpti
 		}
 	}
 	hybridSetScalarFilterSelectivity(&response.Stats)
+	if plan.nativeScratch != nil {
+		nativeScalarForwardFinish(plan.readView.nativeRead, &plan.nativeScratch.scalarForwardBuild)
+	}
 	return response, nil
 }
 
@@ -754,6 +760,19 @@ func (c *Collection) hybridScalarAllowSetAtReadView(plan hybridSearchExecutionPl
 	endRead := readView.beginForegroundRead()
 	defer endRead()
 	stats := HybridSearchStats{}
+	if plan.context != nil {
+		if err := plan.context.Err(); err != nil {
+			return hybridScalarIDs{}, stats, err
+		}
+	}
+	forwardEligible := nativeScalarForwardEligible(plan, readView, filters)
+	if forwardEligible {
+		if cached := nativeScalarForwardLookup(readView.nativeRead, plan.text.IndexName, filters, limit, aggregateLimit, &stats); cached != nil {
+			ids := cached.ids
+			ids.forwardPlan = cached
+			return ids, stats, nil
+		}
+	}
 	sets := make([]hybridScalarIDs, 0, len(filters))
 	for i := range filters {
 		stats.ScalarFilterLookups++
@@ -803,6 +822,11 @@ func (c *Collection) hybridScalarAllowSetAtReadView(plan hybridSearchExecutionPl
 	stats.ScalarFilterFinalIDs = uint64(allowSet.len())
 	if plan.scalarFilterStrategy == HybridScalarFilterStrategyPrefilter {
 		stats.ScalarPrefilterIDs = uint64(allowSet.len())
+	}
+	if forwardEligible && allowSet.present() && allowSet.len() != 0 {
+		build := &plan.nativeScratch.scalarForwardBuild
+		*build = nativeScalarForwardPlan{textIndex: plan.text.IndexName, lookupLimit: limit, aggregateLimit: aggregateLimit, rawFilters: filters, ids: allowSet}
+		allowSet.forwardPlan = build
 	}
 	return allowSet, stats, nil
 }
@@ -1699,10 +1723,11 @@ func hybridSearchReadViewStateToken(view *CollectionReadView) hybridSearchStateT
 // cumulative across serial phases: retired Go backing may coexist until GC.
 // No receipt, scratch pool or mutable decoder is installed on a shared owner.
 type hybridNativeScratch struct {
-	mu      sync.Mutex
-	view    *CollectionReadView
-	charged uint64
-	admitFn func(uint64) error
+	mu                 sync.Mutex
+	view               *CollectionReadView
+	charged            uint64
+	admitFn            func(uint64) error
+	scalarForwardBuild nativeScalarForwardPlan
 }
 
 func newHybridNativeScratch(view *CollectionReadView) (*hybridNativeScratch, error) {

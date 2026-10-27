@@ -644,6 +644,11 @@ func newTextV2SearchOrdinalAllowSet(snap *backenddb.Snapshot, catalog *collectio
 	if !allowedIDs.present() {
 		return nil, nil
 	}
+	// Context/root-format/status validation has already run for this request.
+	// Reuse only a published entry in the exact captured immutable collection.
+	if p := allowedIDs.forwardPlan; p != nil && p.published && p.textIndex == ctx.indexName && p.status == ctx.status && catalog != nil && catalog.nativeText != nil && catalog.nativeText.read.collection.scalarForwardOwns(p) {
+		return &p.forward, nil
+	}
 	if catalog != nil && catalog.nativeText != nil {
 		if err := catalog.nativeText.admitForwardIdentities(allowedIDs); err != nil {
 			return nil, err
@@ -696,6 +701,12 @@ func newTextV2SearchOrdinalAllowSet(snap *backenddb.Snapshot, catalog *collectio
 	slices.Sort(set.sorted)
 	set.count = len(set.sorted)
 	set.all = uint64(set.count) == ctx.status.LiveDocuments
+	// Nothing is retained until every original missing/future/tombstone/duplicate
+	// forward-identity check above succeeded. Final successful query completion
+	// alone attempts publication, after all original operation admission.
+	if p := allowedIDs.forwardPlan; p != nil && !p.published && catalog != nil && catalog.nativeText != nil && p.textIndex == ctx.indexName {
+		p.status, p.forward = ctx.status, *set
+	}
 	return set, nil
 }
 
