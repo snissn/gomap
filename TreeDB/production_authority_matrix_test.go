@@ -1442,7 +1442,12 @@ func TestProductionAuthorityNamespaceAsymmetryVariants(t *testing.T) {
 			}
 
 			target := powerlossoracle.DirtyResource{Kind: powerlossoracle.ResourceIndex, ID: "all-kind-target", Path: targetPath}
-			variants, coverage, err := powerlossoracle.GenerateVariants(powerlossoracle.CutSpec{
+			dependencyByQualifier := make(map[string]powerlossoracle.DirtyResource, len(dependencies))
+			for _, dependency := range dependencies {
+				dependencyByQualifier[string(dependency.Kind)+"/"+dependency.ID] = dependency
+			}
+			materializationRoot := t.TempDir()
+			coverage, err := powerlossoracle.VisitVariants(powerlossoracle.CutSpec{
 				ID: "production-authority-real-namespace", Point: powerlossoracle.AfterMetaWrite, Occurrence: 1,
 				Model: model, TargetMeta: &target, Dependencies: dependencies,
 				RequiredFamilies: []powerlossoracle.VariantFamily{
@@ -1462,23 +1467,17 @@ func TestProductionAuthorityNamespaceAsymmetryVariants(t *testing.T) {
 					powerlossoracle.VariantFullWriteback:        powerlossoracle.ExpectedNewRoot,
 				},
 				MaxVariants: powerlossoracle.MaxVariantsPerCut,
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			wantVariants := len(dependencies) + 3 + 2*len(dependencies)
-			if len(variants) != wantVariants || coverage.ByFamily[powerlossoracle.VariantOneMissingDependency] != len(dependencies) ||
-				coverage.ByFamily[powerlossoracle.VariantDataWithoutNamespace] != len(dependencies) ||
-				coverage.ByFamily[powerlossoracle.VariantNamespaceWithoutData] != len(dependencies) {
-				t.Fatalf("namespace variants=%d want=%d coverage=%v dependencies=%d namespace=%d",
-					len(variants), wantVariants, coverage.ByFamily, len(dependencies), len(dependencies))
-			}
-			dependencyByQualifier := make(map[string]powerlossoracle.DirtyResource, len(dependencies))
-			for _, dependency := range dependencies {
-				dependencyByQualifier[string(dependency.Kind)+"/"+dependency.ID] = dependency
-			}
-			for _, variant := range variants {
-				materialized := t.TempDir()
+			}, func(variant powerlossoracle.Variant) error {
+				materialized, err := os.MkdirTemp(materializationRoot, "variant-")
+				if err != nil {
+					return err
+				}
+				defer func() {
+					if err := os.RemoveAll(materialized); err != nil {
+						t.Errorf("remove variant %s: %v", variant.ID, err)
+					}
+				}()
+
 				if err := variant.Model.MaterializeStable(materialized); err != nil {
 					t.Fatalf("materialize %s: %v", variant.ID, err)
 				}
@@ -1531,8 +1530,19 @@ func TestProductionAuthorityNamespaceAsymmetryVariants(t *testing.T) {
 						}
 					}
 				}
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
 			}
-			t.Logf("real authority namespace recovery: descriptors=%d namespace_dependencies=%d generated=%d", len(descriptors), len(dependencies), len(variants))
+			wantVariants := len(dependencies) + 3 + 2*len(dependencies)
+			if coverage.Generated != wantVariants || coverage.ByFamily[powerlossoracle.VariantOneMissingDependency] != len(dependencies) ||
+				coverage.ByFamily[powerlossoracle.VariantDataWithoutNamespace] != len(dependencies) ||
+				coverage.ByFamily[powerlossoracle.VariantNamespaceWithoutData] != len(dependencies) {
+				t.Fatalf("namespace variants=%d want=%d coverage=%v dependencies=%d namespace=%d",
+					coverage.Generated, wantVariants, coverage.ByFamily, len(dependencies), len(dependencies))
+			}
+			t.Logf("real authority namespace recovery: descriptors=%d namespace_dependencies=%d generated=%d", len(descriptors), len(dependencies), coverage.Generated)
 			return nil
 		})
 	})
