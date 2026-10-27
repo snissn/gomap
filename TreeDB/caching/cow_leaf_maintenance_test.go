@@ -28,6 +28,7 @@ type privateCOWPackHeldBackend struct {
 	calls           int
 	gcCalls         int
 	last            backenddb.LeafGenerationPackRunOnceStats
+	gcCompleted     chan backenddb.LeafGenerationGCStats
 }
 
 func (b *privateCOWPackHeldBackend) LeafGenerationPackRunOnceForPrivateCOW(owner *transactionowner.Owner, ctx context.Context, opts backenddb.LeafGenerationPackFromPlanOptions) (backenddb.LeafGenerationPackRunOnceStats, error) {
@@ -54,7 +55,11 @@ func (b *privateCOWPackHeldBackend) CommandWALCheckpointFallbackNeedsRefresh(bas
 
 func (b *privateCOWPackHeldBackend) LeafGenerationGC(ctx context.Context, opts backenddb.LeafGenerationGCOptions) (backenddb.LeafGenerationGCStats, error) {
 	b.gcCalls++
-	return b.DB.LeafGenerationGC(ctx, opts)
+	stats, err := b.DB.LeafGenerationGC(ctx, opts)
+	if b.gcCompleted != nil {
+		b.gcCompleted <- stats
+	}
+	return stats, err
 }
 
 func privateCOWPackFixture(t *testing.T) (*DB, *privateCOWPackHeldBackend) {

@@ -571,6 +571,18 @@ failed identity proof stops before copy/publication. No-source, declined-plan an
 failed target-preflight paths perform no source handoff. No idle or endpoint
 trigger is added.
 
+After a successful selected-writer handoff, the backend reconciles the fresh
+successor files into the manifest under its existing writer lock, before copy
+and publication capture their generation view. Empty successors need this
+registration even before their first leaf append. Deferring it until GC would
+replace that view after the cache had adopted its Snapshot, making the cache's
+own stale generation view pin the copied sources during their retirement pass.
+A reconciliation failure stops before copy/publication; already-installed
+rotations retain their original writer ownership and error handling.
+This uses the maintained directory reconciliation pass: its file enumeration
+and transient manifest work scale with the leaf namespace, not just the
+selected sources. It adds no append/read-path work or persistent scheduler state.
+
 The automatic private-COW pack slice adopts its replacement Snapshot and then
 attempts same-endpoint fallback convergence under the original flush owner
 before its maintained GC pass. The endpoint is captured before packing, not
@@ -583,6 +595,12 @@ therefore do not prove reclaimed space. After reader release, normal GC can mark
 retirement before its scan Snapshot releases the final file pin; a later normal
 GC pass can prune and report the actual deletion, without a logical write or
 checkpoint.
+
+With no old reader or independently recoverable reference, the original
+automatic packet can mark the selected sources eligible and release their
+physical file pins through its normal Snapshot adoption. It does not require
+an additional GC, checkpoint, rotation, or scheduler retry to undo its own
+successor registration.
 
 After refresh and manifest reconciliation, a segment pass avoids root capture
 and reachability scans when every record is Writable or Sealed with a current

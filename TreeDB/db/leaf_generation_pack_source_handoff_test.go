@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"errors"
+	"os"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -16,6 +17,65 @@ func (*packHandoffCachedLog) CompactStorageCachedWrapperOwner() bool { return tr
 type packHandoffObservedLog struct {
 	packHandoffCachedLog
 	handoff func(context.Context, *transactionowner.Owner, []LeafPageLogPackSource) error
+}
+
+func TestPrivateCOWLeafPackSuccessorReconciliationFailureKeepsInstalledWriter(t *testing.T) {
+	for _, canceled := range []bool{false, true} {
+		t.Run(map[bool]string{false: "manifest-refusal", true: "canceled-after-rotation"}[canceled], func(t *testing.T) {
+			d, leafLog, _ := openLeafGenerationPackTestDB(t)
+			prepareLeafGenerationPackTestCandidate(t, d, leafLog, 1024)
+			owner := transactionowner.New()
+			if err := d.BindPrivateCOWOwner(owner); err != nil {
+				t.Fatal(err)
+			}
+			d.nativeSemanticActive.Store(true)
+			before, _ := d.StateToken()
+			manifest := d.leafGenerationManifest
+			path := leafLog.leafCurrentPath
+			identity, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			failure := errors.New("successor manifest registration refused")
+			if canceled {
+				failure = context.Canceled
+			}
+			originalLog := d.leafPageLog
+			observed := &packHandoffObservedLog{packHandoffCachedLog: packHandoffCachedLog{LeafPageLog: originalLog}}
+			calls := 0
+			observed.handoff = func(context.Context, *transactionowner.Owner, []LeafPageLogPackSource) error {
+				calls++
+				if err := leafLog.rotateLeaf(); err != nil {
+					return err
+				}
+				if canceled {
+					cancel()
+				} else {
+					d.leafGenerationManifestStore.hooks.BeforeTempCreate = func() error { return failure }
+				}
+				return nil
+			}
+			d.leafPageLog = observed
+			t.Cleanup(func() {
+				d.leafPageLog = originalLog
+				d.leafGenerationManifestStore.hooks.BeforeTempCreate = nil
+			})
+			stats, err := d.LeafGenerationPackRunOnceForPrivateCOW(owner, ctx, LeafGenerationPackFromPlanOptions{MaxGenerations: 1, Force: true, Sync: true})
+			if !errors.Is(err, failure) || calls != 1 || stats.Ran || stats.Pack.CopyAttempts != 0 {
+				t.Fatalf("post-handoff registration failure: calls=%d stats=%+v err=%v", calls, stats, err)
+			}
+			after, _ := d.StateToken()
+			if after != before || d.leafGenerationManifest != manifest || leafLog.leafCurrentPath == path {
+				t.Fatalf("registration refusal changed publication or lost installed writer: before=%+v after=%+v old=%s current=%s", before, after, path, leafLog.leafCurrentPath)
+			}
+			if info, err := os.Stat(path); err != nil || !os.SameFile(identity, info) {
+				t.Fatalf("closed source lost exact inode after refusal: %v", err)
+			}
+			expectLeafGenerationValue(t, d, leafGenerationKey("pack-concurrent", 768), 'a')
+		})
+	}
 }
 
 func (l *packHandoffObservedLog) HandoffPrivateCOWLeafPackSources(ctx context.Context, owner *transactionowner.Owner, sources []LeafPageLogPackSource) error {

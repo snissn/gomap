@@ -47,5 +47,23 @@ func (db *DB) handoffPrivateCOWLeafPackSources(ctx context.Context, owner *trans
 		}
 		sources = append(sources, LeafPageLogPackSource{FileID: page.ValueLogFileID(id), Identity: identity})
 	}
-	return handoff.HandoffPrivateCOWLeafPackSources(ctx, owner, sources)
+	if err := handoff.HandoffPrivateCOWLeafPackSources(ctx, owner, sources); err != nil {
+		return err
+	}
+	// Rotation creates empty successor files before their first physical leaf
+	// append. Register them under the original backend writer owner now, before
+	// copy/publication captures its generation view. Otherwise the ensuing GC
+	// would discover them and stale the cache's just-adopted Snapshot, making
+	// that same basis pin the selected sources during its own retirement pass.
+	db.writeMu.Lock()
+	defer db.writeMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	state := db.state.Load()
+	if state == nil {
+		return ErrClosed
+	}
+	_, err := db.reconcileLeafGenerationManifestWithDirLocked(state.CommitSeq)
+	return err
 }
