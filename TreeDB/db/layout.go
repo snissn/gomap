@@ -46,19 +46,19 @@ func resolveStorageLayout(dir string) storageLayout {
 }
 
 func WALDirPath(dir string) string {
-	return resolveStorageLayout(dir).walDir
+	return filepath.Join(dir, walDirName)
 }
 
 func ValueLogDirPath(dir string) string {
-	return resolveStorageLayout(dir).valueVLogDir
+	return filepath.Join(dir, valueVLogDirName)
 }
 
 func LeafLogDirPath(dir string) string {
-	return resolveStorageLayout(dir).leafVLogDir
+	return filepath.Join(dir, leafVLogDirName)
 }
 
 func ColumnAssetRootDirPath(dir string) string {
-	return resolveStorageLayout(dir).columnAssetDir
+	return filepath.Join(dir, columnAssetDirName)
 }
 
 func ensureStorageLayoutDirs(dir string) error {
