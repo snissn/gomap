@@ -3,9 +3,12 @@
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import unittest
+import traceback
+from unittest import mock
 from pathlib import Path
 
 
@@ -33,14 +36,39 @@ def matrix_entries(source: str) -> dict[str, dict[str, str]]:
     return entries
 
 
-def command_lines(*args: str) -> list[str]:
-    result = subprocess.run(
-        list(args),
-        cwd=ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
+def redact_command_diagnostic(value: str) -> str:
+    """Keep useful command output without URL credentials or known secret values."""
+    value = re.sub(r"([A-Za-z][A-Za-z0-9+.-]*://)[^/\s]*@", r"\1[REDACTED]@", value)
+    credential_name = re.compile(
+        r"(?:^|_)(?:TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|PRIVATE_KEY|ACCESS_KEY(?:_ID)?)(?:$|_)",
+        re.IGNORECASE,
     )
+    secrets = {secret for name, secret in os.environ.items()
+               if secret and credential_name.search(name)}
+    for secret in sorted(secrets, key=len, reverse=True):
+        value = value.replace(secret, "[REDACTED]")
+    return value
+
+
+def command_lines(*args: str) -> list[str]:
+    try:
+        result = subprocess.run(
+            list(args),
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as error:
+        # Suppress the original exception's rendering: its command can contain
+        # credentials even after the diagnostic below has been sanitized.
+        raise RuntimeError(
+            f"command {[redact_command_diagnostic(arg) for arg in args]!r} "
+            f"in {redact_command_diagnostic(str(ROOT))} "
+            f"failed with exit status {error.returncode}\n"
+            f"stdout:\n{redact_command_diagnostic(error.stdout or '')}\n"
+            f"stderr:\n{redact_command_diagnostic(error.stderr or '')}"
+        ) from None
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
@@ -96,6 +124,67 @@ def awk_shards(items: list[str], count: int) -> list[list[str]]:
             [line.strip() for line in result.stdout.splitlines() if line.strip()]
         )
     return shards
+
+
+class CommandLinesTests(unittest.TestCase):
+    def test_success_preserves_existing_nonempty_stripped_lines_and_runs_once(self) -> None:
+        completed = subprocess.CompletedProcess(['go', 'list', './...'], 0,
+                                                stdout='  first/package  \n\n second/package\n',
+                                                stderr='unused success diagnostic')
+        with mock.patch('subprocess.run', return_value=completed) as run:
+            self.assertEqual(command_lines('go', 'list', './...'),
+                             ['first/package', 'second/package'])
+        run.assert_called_once_with(['go', 'list', './...'], cwd=ROOT, check=True,
+                                    capture_output=True, text=True)
+
+    def test_failure_exposes_both_streams_context_and_status_without_environment(self) -> None:
+        error = subprocess.CalledProcessError(17, ['go', 'list', './...'],
+                                             output='  partial package output\n',
+                                             stderr='original dependency failure\n')
+        with mock.patch.dict(os.environ, {'UNRELATED_CI_SECRET': 'must-never-be-printed'}), \
+             mock.patch('subprocess.run', side_effect=error) as run:
+            with self.assertRaises(RuntimeError) as raised:
+                command_lines('go', 'list', './...')
+        message = str(raised.exception)
+        for value in ("['go', 'list', './...']", str(ROOT), '17', error.stdout, error.stderr):
+            self.assertIn(value, message)
+        self.assertNotIn('UNRELATED_CI_SECRET', message)
+        self.assertNotIn('must-never-be-printed', message)
+        self.assertIs(raised.exception.__context__, error)
+        self.assertTrue(raised.exception.__suppress_context__)
+        run.assert_called_once_with(['go', 'list', './...'], cwd=ROOT, check=True,
+                                    capture_output=True, text=True)
+
+    def test_failure_redacts_url_userinfo_and_environment_credentials_in_traceback(self) -> None:
+        args = ['go', 'list', 'https://cli-user:cli-password@packages.example/module']
+        stdout = 'partial output https://other-user:other-password@proxy.example/path\n'
+        stderr = 'https://error-user:error-password@host.example/path?token=environment-token-value\n'
+        error = subprocess.CalledProcessError(1, args, output=stdout, stderr=stderr)
+        environment = {'GITHUB_TOKEN': 'environment-token-value',
+                       'SERVICE_PASSWORD': 'environment-password-value',
+                       'UNRELATED_SETTING': 'must-not-dump-unrelated-setting'}
+        error.stderr += 'credential=' + environment['SERVICE_PASSWORD'] + '\n'
+        with mock.patch.dict(os.environ, environment), mock.patch('subprocess.run', side_effect=error) as run:
+            with self.assertRaises(RuntimeError) as raised:
+                command_lines(*args)
+        rendered = ''.join(traceback.format_exception(raised.exception))
+        for secret in ('cli-user', 'cli-password', 'other-user', 'other-password',
+                       'error-user', 'error-password', *environment.values()):
+            self.assertNotIn(secret, rendered)
+        for useful in ('packages.example/module', 'proxy.example/path', 'host.example/path',
+                       'partial output', 'exit status 1', '[REDACTED]'):
+            self.assertIn(useful, rendered)
+        run.assert_called_once()
+
+    def test_nonzero_exit_with_no_captured_output_still_fails_once(self) -> None:
+        error = subprocess.CalledProcessError(1, ['go', 'list', './...'])
+        with mock.patch('subprocess.run', side_effect=error) as run:
+            with self.assertRaisesRegex(RuntimeError, 'exit status 1') as raised:
+                command_lines('go', 'list', './...')
+        self.assertIn('stdout:\n\nstderr:\n', str(raised.exception))
+        self.assertIs(raised.exception.__context__, error)
+        self.assertTrue(raised.exception.__suppress_context__)
+        run.assert_called_once()
 
 
 class RootCIHeadroomContractTests(unittest.TestCase):
