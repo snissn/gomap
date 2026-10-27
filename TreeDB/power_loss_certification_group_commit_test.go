@@ -315,7 +315,7 @@ func TestPowerLossCertificationGroupedRotationExternalPublicReopen(t *testing.T)
 	if err := powerlosscert.ValidateFrozenWALContainer(os.Getenv("TREEDB_POWERLOSS_WAL_CONTAINER"), database.Stats()["treedb.command_wal.writer.container"]); err != nil {
 		t.Fatal(err)
 	}
-	wantOrder := []string{"auxiliary", "auxiliary", "published-old"}
+	wantOrder := []string{"auxiliary", "published-old"}
 	wantInitializers := 0
 	if database.Stats()["treedb.command_wal.writer.container"] == "fixed" {
 		wantInitializers = 1
@@ -326,8 +326,8 @@ func TestPowerLossCertificationGroupedRotationExternalPublicReopen(t *testing.T)
 		t.Fatalf("physical sync order=%v want=%v; published=%d initializer=%d frozen=%t before-published=%t", syncOrder, wantOrder, publishedSyncs, initializerSyncs, frozen, beforePublishedSync != nil)
 	}
 	// Occurrences count every successful physical file-sync event, including
-	// both auxiliary events and private initialization. The active barrier is
-	// /004 on fixed-container platforms, /003 on the stream fallback.
+	// the single dependency drain and private initialization. The active barrier
+	// is /003 on fixed-container platforms, /002 on the stream fallback.
 	cutOccurrence := len(wantOrder) - 1
 	requireGroupCertificationSelector(t, groupedRotationExternalVariant, durabilitycut.AfterDependencyFileSync, cutOccurrence)
 	t.Logf("rotation/external physical sync order=%v stable cut occurrence=%d", syncOrder, cutOccurrence)
@@ -351,7 +351,7 @@ func TestPowerLossCertificationGroupedRotationExternalPublicReopen(t *testing.T)
 			t.Fatalf("recovered external value %d len=%d err=%v", index, len(value), err)
 		}
 	}
-	// Before the first published WAL sync, both auxiliary sync events have
+	// Before the first published WAL sync, the auxiliary dependency drain has
 	// completed but neither accepted frame nor barrier is durable. The group must
 	// remain absent. The later old-segment sync may already persist the frame.
 	t.Run("before-published-sync-does-not-recover-group", func(t *testing.T) {
