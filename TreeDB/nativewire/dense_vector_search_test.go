@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"math"
 	"net"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -102,12 +101,10 @@ func TestDenseVectorSearchOrdinaryNativeDefaultParity(t *testing.T) {
 				t.Fatalf("maintained ordinary service route: %+v err=%v", want, err)
 			}
 			if tc.route == documentservice.RouteAnn {
-				wantPack, wantFallback := uint64(1), uint64(0)
-				if runtime.GOOS == "windows" {
-					wantPack, wantFallback = 0, 1
-				}
-				if want.ColumnGraphPreparedSearch != 0 || want.SearchPackSearch != wantPack || want.ColumnGraphFallbackSearch != wantFallback || want.DocumentsScanned != 0 {
-					t.Fatalf("public ANN did not report its platform's actual traversal: %+v", want)
+				// The prepared pack permits heap-copy access when mmap is
+				// unsupported, including on Windows; its traversal stays a pack search.
+				if want.ColumnGraphPreparedSearch != 0 || want.SearchPackSearch != 1 || want.ColumnGraphFallbackSearch != 0 || want.DocumentsScanned != 0 {
+					t.Fatalf("public ANN did not report its prepared pack traversal: %+v", want)
 				}
 			}
 			if tc.route == documentservice.RouteExact && (want.DocumentsScanned != uint64(len(documents)) || want.ColumnGraphPreparedSearch != 0 || want.SearchPackSearch != 0 || want.ColumnGraphFallbackSearch != 0) {

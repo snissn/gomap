@@ -2129,6 +2129,17 @@ func TestIngestSourcesColumnGraphParentShapeFailsClosedEntireBatch(t *testing.T)
 
 func ingestWALContents5275(t *testing.T, dir string) map[string][32]byte {
 	t.Helper()
+	files, err := readIngestWALContents5275(dir, os.ReadFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) == 0 {
+		t.Fatal("no WAL files observed")
+	}
+	return files
+}
+
+func readIngestWALContents5275(dir string, readFile func(string) ([]byte, error)) (map[string][32]byte, error) {
 	files := map[string][32]byte{}
 	err := filepath.WalkDir(dir, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -2144,20 +2155,75 @@ func ingestWALContents5275(t *testing.T, dir string) map[string][32]byte {
 		if !strings.Contains(strings.ToLower(relative), "wal") {
 			return nil
 		}
-		raw, err := os.ReadFile(path)
+		// This file coordinates journal ownership; it is not WAL data. Windows
+		// holds an exclusive byte-range lock, so reading it would fail before
+		// we could compare the actual journal bytes across a rejected ingest.
+		if entry.Name() == "command-wal-journal-owner.lock" {
+			return nil
+		}
+		raw, err := readFile(path)
 		if err != nil {
 			return err
 		}
 		files[relative] = sha256.Sum256(raw)
 		return nil
 	})
+	return files, err
+}
+
+func TestIngestWALContents5275LockedOwnershipAndReadFailures(t *testing.T) {
+	dir := t.TempDir()
+	walDir := filepath.Join(dir, "wal")
+	if err := os.Mkdir(walDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	segment := filepath.Join(walDir, "commit-l0-000001.log")
+	lock := filepath.Join(walDir, "command-wal-journal-owner.lock")
+	// Keep every non-lock file under observation, including unrecognized files.
+	other := filepath.Join(walDir, "other.data")
+	for path, raw := range map[string]string{segment: "journal bytes", lock: "lease", other: "other WAL bytes"} {
+		if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lockReads := 0
+	readWithLockedOwner := func(path string) ([]byte, error) {
+		if path == lock {
+			lockReads++
+			// Model Windows' mandatory byte-range lock without requiring Windows.
+			return nil, &os.PathError{Op: "read", Path: path, Err: os.ErrPermission}
+		}
+		return os.ReadFile(path)
+	}
+	before, err := readIngestWALContents5275(dir, readWithLockedOwner)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(files) == 0 {
-		t.Fatal("no WAL files observed")
+	want := map[string][32]byte{
+		filepath.Join("wal", filepath.Base(segment)): sha256.Sum256([]byte("journal bytes")),
+		filepath.Join("wal", filepath.Base(other)):   sha256.Sum256([]byte("other WAL bytes")),
 	}
-	return files
+	if lockReads != 0 || !reflect.DeepEqual(before, want) {
+		t.Fatalf("WAL inventory=%v want=%v lock reads=%d", before, want, lockReads)
+	}
+	if err := os.WriteFile(segment, []byte("changed journal bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	after, err := readIngestWALContents5275(dir, readWithLockedOwner)
+	if err != nil || reflect.DeepEqual(before, after) {
+		t.Fatalf("WAL byte change was not observed: before=%v after=%v err=%v", before, after, err)
+	}
+	for _, denied := range []string{segment, other} {
+		_, err := readIngestWALContents5275(dir, func(path string) ([]byte, error) {
+			if path == denied {
+				return nil, &os.PathError{Op: "read", Path: path, Err: os.ErrPermission}
+			}
+			return readWithLockedOwner(path)
+		})
+		if !errors.Is(err, os.ErrPermission) {
+			t.Fatalf("WAL read failure for %q was hidden: %v", denied, err)
+		}
+	}
 }
 
 // Persist the path in the real catalog: mutating handle metadata cannot model
