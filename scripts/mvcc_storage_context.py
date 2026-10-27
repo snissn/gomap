@@ -61,7 +61,11 @@ def inventory(path, mounts, sysroot):
         eligible = [m for m in mounts or [] if resolved.is_relative_to(m['mount'])]
         if not eligible:
             return {'status': 'unavailable', 'reason': 'mount_unresolved'}
-        mount = max(eligible, key=lambda m: len(m['mount']))
+        longest = max(len(m['mount']) for m in eligible)
+        matches = [m for m in eligible if len(m['mount']) == longest]
+        if len(matches) != 1:
+            return {'status': 'unavailable', 'reason': 'ambiguous_mount'}
+        mount = matches[0]
         if device != mount['device']:
             return {'status': 'unavailable', 'reason': 'device_mismatch'}
         result = {'status': 'available', 'mount_id': mount['id'],
@@ -118,7 +122,8 @@ def write_fresh(output, record):
     payload = (json.dumps(record, sort_keys=True, indent=2) + '\n').encode()
     if len(payload) > MAX_OUTPUT:
         raise ValueError('output bound exceeded')
-    # Require an existing real parent. Open directory then use dir_fd to avoid
+    # Require an existing parent with trusted ancestors: O_NOFOLLOW protects
+    # only the final directory component. Open it then use dir_fd to avoid
     # final-component symlink substitution; O_EXCL never overwrites evidence.
     parent = Path(output).parent
     fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)

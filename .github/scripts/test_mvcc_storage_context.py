@@ -54,6 +54,9 @@ class StorageContextTest(unittest.TestCase):
             self.assertEqual(result['physical_isolation'], 'unavailable')
             self.assertEqual(result['device_stat']['status'], 'unavailable')
             self.assertEqual(m.inventory(root, None, root)['status'], 'unavailable')
+            rows.append(dict(rows[-1], id=3))
+            self.assertEqual(m.inventory(root, rows, root)['reason'], 'ambiguous_mount')
+            rows.pop()
             rows[-1]['device'] = '9:9'
             self.assertEqual(m.inventory(root, rows, root)['reason'], 'device_mismatch')
 

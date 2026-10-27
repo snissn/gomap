@@ -11,7 +11,9 @@ reads; missing counters never establish quiet or qualification.
 
 A path record describes the current existing root only, not Go's future TempDir
 child. Longest-parent mount resolution requires matching stat and mountinfo device
-identities. Unknown mapping remains unavailable. Mount sources/options, arbitrary
+identities. Multiple equally specific mount matches (including stacked mounts)
+remain unavailable; device equality cannot disambiguate mount identity. Unknown
+mapping remains unavailable. Mount sources/options, arbitrary
 counter text, environment and command lines are omitted. Filesystems, device and
 mount IDs are context; physical topology/isolation and ownership are explicitly
 unavailable. Separate roots/devices do not prove separate physical storage.
@@ -21,7 +23,8 @@ statistics in their native Linux field order. Neither establishes task attributi
 request latency, clean page cache or quiet. Snapshot reads can perturb a host.
 Outputs are exclusively created with mode0600; existing files/symlinks are refused.
 Inputs cap at64KiB, paths16, serialized output256KiB. Use a trusted existing output
-parent; no secrets should appear in supplied paths. Collection errors exit2;
+parent with trusted ancestors: O_NOFOLLOW protects only the final parent component,
+and intermediate directory symlinks are followed during path resolution; no secrets should appear in supplied paths. Collection errors exit2;
 a partial write is incomplete evidence, never qualification. No gate checker
 consumes these records.
 
