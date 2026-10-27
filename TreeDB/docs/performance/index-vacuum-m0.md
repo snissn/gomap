@@ -227,7 +227,8 @@ capture stays RED; the controlled stability and five hosted-allocation exit
 criteria remain open.
 
 Workflow artifacts are named `treedb-vacuum-m0-<source-sha>-attempt-<run-attempt>`.
-Each authorized job attempt retains its own immutable packet with overwrite
-disabled, preserving previous failed artifacts. This naming permits retention
-of a separately authorized attempt; it does not authorize a retry or change any
+Successful uploads from authorized job attempts have distinct names and disable
+overwrite, preserving earlier uploaded artifacts. A failed upload does not
+guarantee packet retention. This naming permits retention of a separately
+authorized attempt; it does not authorize a retry or change any
 workload, threshold or prior result. Older captures retain their original names.
