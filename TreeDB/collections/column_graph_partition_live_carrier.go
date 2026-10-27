@@ -660,8 +660,6 @@ func (c *Collection) nativeVectorAdmissionMutex() *sync.RWMutex {
 	return &c.writeDomain.nativeVectorAdmissionMu
 }
 
-func collectionMetaHasNativeVectorIndexes(meta CollectionMeta) bool { return false }
-
 func (c *Collection) lockVectorIndexCoverageMutation() func() {
 	return c.lockVectorIndexCoverageMutationWithColdCarrier(false)
 }
@@ -671,7 +669,6 @@ func (c *Collection) lockVectorIndexCoverageMutationWithColdCarrier(forceColdCar
 		return func() {}
 	}
 	domain := c.writeDomain
-	unlockAdHocAdmission := c.lockAdHocVectorAdmissionRead()
 	admissionMu := c.nativeVectorAdmissionMutex()
 	coord := domain.schemaCoordinator
 	var hasMaintainedVectorIndexes bool
@@ -680,7 +677,6 @@ func (c *Collection) lockVectorIndexCoverageMutationWithColdCarrier(forceColdCar
 		admissionMu.RLock()
 		hasMaintainedVectorIndexes = coord != nil && (coord.hasNativeVectorIndexes.Load() || coord.hasPartitionLiveCarrier())
 		domain.mu.RLock()
-		hasMaintainedVectorIndexes = hasMaintainedVectorIndexes || collectionMetaHasNativeVectorIndexes(domain.meta)
 		if forceColdCarrier {
 			// A cold ColumnGraph can have a durable live carrier before serving
 			// registers it. Loading requires exclusive admission, never an upgrade.
@@ -731,7 +727,6 @@ func (c *Collection) lockVectorIndexCoverageMutationWithColdCarrier(forceColdCar
 	domain.nativeVectorSearchActive.Store(hasMaintainedVectorIndexes && baselineCurrent)
 	domain.nativeVectorActiveMu.Unlock()
 	return func() {
-		defer unlockAdHocAdmission()
 		domain.mu.RLock()
 		domain.nativeVectorActiveMu.Lock()
 		domain.nativeVectorActive--
@@ -781,9 +776,6 @@ func (c *Collection) lockVectorIndexPublicationAdmission() func() {
 	admissionMu.RLock()
 	coord := domain.schemaCoordinator
 	hasMaintainedVectorIndexes := coord != nil && (coord.hasNativeVectorIndexes.Load() || coord.hasPartitionLiveCarrier())
-	domain.mu.RLock()
-	hasMaintainedVectorIndexes = hasMaintainedVectorIndexes || collectionMetaHasNativeVectorIndexes(domain.meta)
-	domain.mu.RUnlock()
 	domain.nativeVectorIndexesMu.RLock()
 	hasMaintainedVectorIndexes = hasMaintainedVectorIndexes || len(domain.nativeVectorIndexes) != 0
 	domain.nativeVectorIndexesMu.RUnlock()

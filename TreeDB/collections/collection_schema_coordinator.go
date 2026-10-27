@@ -42,8 +42,6 @@ type collectionSchemaCoordinator struct {
 	partitionLiveReplayFinalizerRegistered bool
 	partitionLivePublishMu                 sync.RWMutex
 	partitionLiveSearchPins                map[vectorPartitionLiveSearchPinKeyV1]int
-	adHocVectorAdmissionMu                 sync.RWMutex
-	adHocVectorIndexes                     atomic.Int64
 	domainsMu                              sync.Mutex
 	domains                                map[*collectionWriteDomain]struct{}
 	// No-WAL sync drains pause workers across current and newly registered domains.
@@ -424,23 +422,6 @@ func (c *Collection) lockCollectionSchemaWrite() func() {
 	}
 	coord.schemaMu.Lock()
 	return coord.schemaMu.Unlock
-}
-
-func (c *Collection) registeredAdHocVectorIndexCount() int64 {
-	coord := c.collectionSchemaCoordinator()
-	if coord == nil {
-		return 0
-	}
-	return coord.adHocVectorIndexes.Load()
-}
-
-func (c *Collection) lockAdHocVectorAdmissionRead() func() {
-	coord := c.collectionSchemaCoordinator()
-	if coord == nil {
-		return func() {}
-	}
-	coord.adHocVectorAdmissionMu.RLock()
-	return coord.adHocVectorAdmissionMu.RUnlock
 }
 
 func (c *Collection) lockNativeVectorAdmissionWrite() func() {

@@ -4182,9 +4182,6 @@ func (m *CollectionManager) openCollectionWithCommandWALIntent(name string, comm
 	if catalog == nil {
 		return nil, errCollectionNotFound
 	}
-	if schemaCoord != nil && collectionMetaHasNativeVectorIndexes(catalog.meta) {
-		schemaCoord.hasNativeVectorIndexes.Store(true)
-	}
 	if !coveredCommandWALIntent {
 		if err := validateColumnStoreProfileSupportForDB(m.db, catalog.meta.Options.ColumnStore, "open"); err != nil {
 			return nil, err
@@ -4750,7 +4747,7 @@ func (c *Collection) createVectorIndexSchemaLocked(def VectorIndexDefinition) (*
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
 	if coord := c.collectionSchemaCoordinator(); coord != nil {
-		coord.hasNativeVectorIndexes.Store(collectionMetaHasNativeVectorIndexes(newMeta))
+		coord.hasNativeVectorIndexes.Store(false)
 	}
 
 	return newMeta.copy(), nil
@@ -4850,7 +4847,7 @@ func (c *Collection) DropVectorIndex(name string) (*CollectionMeta, error) {
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
 	if coord != nil {
-		coord.hasNativeVectorIndexes.Store(collectionMetaHasNativeVectorIndexes(newMeta))
+		coord.hasNativeVectorIndexes.Store(false)
 	}
 	c.removeColumnGraphPartitionLiveCarrierLocked(name, coord)
 	return newMeta.copy(), nil
@@ -5021,9 +5018,6 @@ func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 	if len(meta.Indexes) == 0 && len(meta.VectorIndexes) == 0 && len(meta.TextIndexes) == 0 && !c.db.CommandWALEnabled() {
 		admission := c.lockCollectionCommandWALAdmission()
 		defer admission.unlock()
-		if c.registeredAdHocVectorIndexCount() > 0 {
-			return c.insertOneViaBatchWithCoverageLocked(id, document, &admission)
-		}
 		if c.hasBufferedNoIndexBSONPrimaryOverlayOrRootRuns() {
 			if err := c.withMutationLock(func() error {
 				return c.flushBufferedWrites()
