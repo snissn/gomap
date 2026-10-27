@@ -343,6 +343,9 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	// the disabled-schema test label, rather than a new storage umbrella.
 	{path: "TreeDB/collections/native_create_syntax_precedence_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 7},
 	{path: "TreeDB/collections/whole_request_validation_precedence_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 4},
+	// Nativewire syntax and V5/V6/V7 controls use retained public schema and
+	// value-type symbols, including hostile physical-authority declarations.
+	{path: "TreeDB/nativewire/client_collection_syntax_precedence_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 13},
 	// Modern DDL, hybrid admission and pressure tests consume the retained
 	// public typed-schema configuration; they do not introduce storage owners.
 	{path: "TreeDB/collections/column_graph_ddl.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
