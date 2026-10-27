@@ -152,6 +152,51 @@ func TestCOWRecordRawAndGroupedNoAllocation(t *testing.T) {
 	}
 }
 
+// The two inspectors and full-read revalidation must bind exactly the same
+// header/prefix bytes, including the maximum grouped offset table. Value bytes
+// and following records must not become part of the metadata authority.
+func TestCOWRecordMetadataDigestExactWindow(t *testing.T) {
+	for _, k := range []int{0, 1, MaxFrameK} {
+		t.Run(fmt.Sprint(k), func(t *testing.T) {
+			body := []byte("value")
+			prefixBytes := 0
+			if k != 0 {
+				values := make([][]byte, k)
+				for i := range values {
+					values[i] = []byte("value")
+				}
+				body = cowTestFrame(0, BlockCodecNone, values, nil)
+				prefixBytes = FrameHeaderSize + k*8 + (k+1)*4
+			}
+			f, ptr, record := cowTestRecord(t, body, k != 0, 0)
+			shape, err := InspectCOWRecord(f, ptr, cowTestLimits)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := sha256.Sum256(record[:HeaderSize+prefixBytes])
+			if shape.metadata != want {
+				t.Fatalf("metadata=%x want=%x", shape.metadata, want)
+			}
+			if got := cowTestRead(t, f, ptr, shape, nil); string(got) != "value" {
+				t.Fatalf("read=%q", got)
+			}
+		})
+	}
+	// Leaf inspection reuses a wider window which can contain value bytes.
+	f, ptr := cowTestLeafRecord(t, buildSparseLeafPageForPayloadTest(t), BlockCodecNone)
+	shape, err := InspectCOWLeafRecord(f, ptr, cowTestLimits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata := make([]byte, HeaderSize+shape.prefix)
+	if _, err := f.ReadAt(metadata, int64(ptr.Offset-4)); err != nil {
+		t.Fatal(err)
+	}
+	if want := sha256.Sum256(metadata); shape.metadata != want {
+		t.Fatalf("leaf metadata=%x want=%x", shape.metadata, want)
+	}
+}
+
 func TestCOWRecordRefusesLimitsMalformedAndEncodings(t *testing.T) {
 	f, ptr, _ := cowTestRecord(t, []byte("value"), false, 0)
 	for _, lim := range []COWReadLimits{{}, {HeaderSize + 4, 1 << 20, 1 << 20}, {1 << 20, 4, 1 << 20}, {1 << 20, 1 << 20, 4}} {

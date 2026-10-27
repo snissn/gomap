@@ -101,7 +101,7 @@ func cowCheckReadHeader(ptr page.ValuePtr, header []byte, limits COWReadLimits) 
 	return n, nil
 }
 
-func cowShape(header, prefix []byte, n uint32, ptr page.ValuePtr, limits COWReadLimits) (COWRecordShape, error) {
+func cowShape(header, prefix, metadata []byte, n uint32, ptr page.ValuePtr, limits COWReadLimits) (COWRecordShape, error) {
 	s := COWRecordShape{RecordBytes: uint64(n) + HeaderSize, ptr: ptr, limits: limits, valid: true}
 	grouped := header[5]&recordFlagGrouped != 0
 	if grouped != page.ValuePtrIsGrouped(ptr) {
@@ -159,10 +159,18 @@ func cowShape(header, prefix []byte, n uint32, ptr page.ValuePtr, limits COWRead
 	if s.RawBytes > limits.MaxRawBytes || s.ValueBytes > limits.MaxValueBytes {
 		return COWRecordShape{}, ErrCOWReadCapacity
 	}
-	var metadata [HeaderSize + cowMaxPrefix]byte
-	copy(metadata[:HeaderSize], header)
-	copy(metadata[HeaderSize:], prefix)
-	s.metadata = sha256.Sum256(metadata[:HeaderSize+len(prefix)])
+	if metadata != nil {
+		// Leaf inspection and full reads already own this exact contiguous
+		// window. Hash only the validated header/prefix, never trailing values.
+		s.metadata = sha256.Sum256(metadata[:HeaderSize+len(prefix)])
+	} else {
+		// Ordinary inspection admits its header and prefix separately. Keep
+		// that envelope and hash without a second maximum-sized copy.
+		h := sha256.New()
+		_, _ = h.Write(header)
+		_, _ = h.Write(prefix)
+		h.Sum(s.metadata[:0])
+	}
 	return s, nil
 }
 
@@ -231,7 +239,7 @@ func inspectCOWLeafRecord(f *os.File, ptr page.ValuePtr, limits COWReadLimits) (
 			return COWRecordShape{}, io.EOF
 		}
 	}
-	s, err := cowShape(header, metadata[HeaderSize:HeaderSize+p], n, ptr, limits)
+	s, err := cowShape(header, metadata[HeaderSize:HeaderSize+p], metadata[:HeaderSize+p], n, ptr, limits)
 	if err != nil {
 		return COWRecordShape{}, err
 	}
@@ -265,7 +273,7 @@ func inspectCOWRecord(f *os.File, ptr page.ValuePtr, limits COWReadLimits, leaf 
 			return COWRecordShape{}, err
 		}
 	}
-	s, err := cowShape(header[:], prefix[:p], n, ptr, limits)
+	s, err := cowShape(header[:], prefix[:p], nil, n, ptr, limits)
 	if err != nil {
 		return COWRecordShape{}, err
 	}
@@ -397,7 +405,7 @@ func readCOWRecordValue(f *os.File, ptr page.ValuePtr, shape COWRecordShape, ver
 			return nil, ErrCorrupt
 		}
 	}
-	actual, err := cowShape(header, payload[:p], n, ptr, shape.limits)
+	actual, err := cowShape(header, payload[:p], input[:HeaderSize+p], n, ptr, shape.limits)
 	if err != nil {
 		return nil, err
 	}

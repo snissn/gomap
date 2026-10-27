@@ -113,28 +113,30 @@ func (t *Tree) SeekGEWithFixedScratch(start, end, keyScratch, leafScratch []byte
 	if err := t.loadReadRefInto(&root, page.PageChildRef(t.rootPageID), true, keyScratch, leafScratch, readLeaf, true); err != nil {
 		return node.LeafEntry{}, false, err
 	}
-	rootRef := page.PageChildRef(t.rootPageID)
-	var directory node.PrimaryDirectoryView
-	primary := root.Type() == page.PageTypePrimaryDirectory
-	if primary {
-		var err error
-		directory, err = node.DecodePrimaryDirectory(root.Data())
-		if err != nil {
-			return node.LeafEntry{}, false, err
-		}
-		// The same complete base/digest validation used by ordinary PRIMARY reads.
-		base, _ := directory.Base()
-		var n node.Node
-		if err = t.loadReadRefInto(&n, base.Ref, true, keyScratch, leafScratch, readLeaf, true); err != nil {
-			return node.LeafEntry{}, false, err
-		}
-		if !node.VerifyPrimaryOperand(base, n.Data()) || (n.Type() != page.PageTypeInternal && n.Type() != page.PageTypeLeaf) {
-			return node.LeafEntry{}, false, node.ErrPrimaryDirectory
-		}
-		rootRef = base.Ref
+	if root.Type() != page.PageTypePrimaryDirectory {
+		return t.seekBaseGE(page.PageChildRef(t.rootPageID), start, end, keyScratch, leafScratch, scratch, readLeaf, true)
 	}
-	best, found, err := t.seekBaseGE(rootRef, start, end, keyScratch, leafScratch, scratch, readLeaf, !primary)
-	if err != nil || !primary {
+	return t.seekPrimaryGE(root.Data(), start, end, keyScratch, leafScratch, scratch, readLeaf)
+}
+
+// Keep PRIMARY validation/merge state off the ordinary successor frame. The
+// directory bytes remain borrowed from the captured immutable tree owner.
+func (t *Tree) seekPrimaryGE(rootData, start, end, keyScratch, leafScratch []byte, scratch *OwnedSuccessorScratch, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error)) (node.LeafEntry, bool, error) {
+	directory, err := node.DecodePrimaryDirectory(rootData)
+	if err != nil {
+		return node.LeafEntry{}, false, err
+	}
+	// The same complete base/digest validation used by ordinary PRIMARY reads.
+	base, _ := directory.Base()
+	var n node.Node
+	if err = t.loadReadRefInto(&n, base.Ref, true, keyScratch, leafScratch, readLeaf, true); err != nil {
+		return node.LeafEntry{}, false, err
+	}
+	if !node.VerifyPrimaryOperand(base, n.Data()) || (n.Type() != page.PageTypeInternal && n.Type() != page.PageTypeLeaf) {
+		return node.LeafEntry{}, false, node.ErrPrimaryDirectory
+	}
+	best, found, err := t.seekBaseGE(base.Ref, start, end, keyScratch, leafScratch, scratch, readLeaf, false)
+	if err != nil {
 		return best, found, err
 	}
 	// Directory order and equal-key precedence are the maintained PRIMARY merge
@@ -165,11 +167,10 @@ func (t *Tree) SeekGEWithFixedScratch(start, end, keyScratch, leafScratch []byte
 	if delta.InlineAbsence() {
 		return node.LeafEntry{Key: delta.Key, Flags: node.FlagTombstone, Revision: delta.Revision}, true, nil
 	}
-	ref, _, err := t.selectPrimaryOperand(root.Data(), delta.Key, readLeaf, leafScratch, true)
+	ref, _, err := t.selectPrimaryOperand(rootData, delta.Key, readLeaf, leafScratch, true)
 	if err != nil {
 		return node.LeafEntry{}, false, err
 	}
-	var n node.Node
 	if err = t.loadReadRefInto(&n, ref, true, keyScratch, leafScratch, readLeaf, true); err != nil {
 		return node.LeafEntry{}, false, err
 	}
