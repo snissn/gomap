@@ -302,13 +302,17 @@ func TestVectorSearchDemoDocsRequireCommandWALProfiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{
-		"defaults to TreeDB's `command_wal_durable` profile",
-		"`-profile command_wal_durable|command_wal_relaxed`",
-		"`bench_unsafe` and `no_wal_fast`\nare refused",
-	} {
-		if !strings.Contains(string(content), want) {
-			t.Fatalf("%s missing durability contract %q", path, want)
+	canonical := strings.ReplaceAll(string(content), "\r\n", "\n")
+	for _, text := range []string{canonical, strings.ReplaceAll(canonical, "\n", "\r\n")} {
+		text = strings.ReplaceAll(text, "\r\n", "\n")
+		for _, want := range []string{
+			"defaults to TreeDB's `command_wal_durable` profile",
+			"`-profile command_wal_durable|command_wal_relaxed`",
+			"`bench_unsafe` and `no_wal_fast`\nare refused",
+		} {
+			if !strings.Contains(text, want) {
+				t.Fatalf("%s missing durability contract %q", path, want)
+			}
 		}
 	}
 }
