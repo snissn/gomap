@@ -42,21 +42,27 @@ func (s *Store) GetManyAt(keys [][]byte, timestamp uint64) (results []GetManyRes
 	}
 	results = make([]GetManyResult, len(keys))
 	// A singleton retains the scalar operation and avoids the fixed batch plan.
-	// Storage errors (including capture/cleanup) and floor failures affect this
-	// sole call; invalid keys/records remain ordered per-key outcomes.
+	// Error provenance comes from the actual scalar failure site, independently
+	// of Result state or error causes nested by a backend.
 	if len(keys) == 1 {
 		result, e := s.GetAt(keys[0], timestamp)
-		if errors.Is(e, ErrStorage) || errors.Is(e, ErrReadBeforeDiscardFloor) {
-			return nil, e
+		itemErr, callErr := splitGetAtError(e)
+		if phase, ok := e.(*getAtError); ok && !phase.cleanup {
+			return nil, callErr
 		}
-		results[0] = GetManyResult{Result: result, Err: e}
-		return results, nil
+		results[0] = GetManyResult{Result: result, Err: itemErr}
+		return results, callErr
 	}
 	if s.readCuts == nil {
 		for i, key := range keys {
-			results[i].Result, results[i].Err = s.GetAt(key, timestamp)
+			var e, callErr error
+			results[i].Result, e = s.GetAt(key, timestamp)
+			results[i].Err, callErr = splitGetAtError(e)
+			if callErr != nil {
+				err = errors.Join(err, callErr)
+			}
 		}
-		return results, nil
+		return results, err
 	}
 	// These interface-bound arrays escape; size their backing to the actual
 	// input rather than making small batches allocate the full32-key plan.

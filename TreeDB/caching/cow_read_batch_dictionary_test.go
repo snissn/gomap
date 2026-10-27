@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime"
 	"testing"
+	"time"
 	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -271,7 +273,21 @@ func TestCOWReadBatchConcurrentSnapshotClose(t *testing.T) {
 		}
 		readDone <- e
 	}()
-	go func() { closeDone <- s.Close() }()
+	deadline := time.Now().Add(5 * time.Second)
+	for s.readState.Load() == 0 && time.Now().Before(deadline) {
+		runtime.Gosched()
+	}
+	if s.readState.Load() != 1 {
+		db.cow.physicalMu.Unlock()
+		cowWait(t, readDone)
+		t.Fatal("read did not retain its original cut before Close")
+	}
+	closeDone <- s.Close()
+	if s.readState.Load() != snapshotReadClosedBit|1 || s.finalized.Load() {
+		db.cow.physicalMu.Unlock()
+		cowWait(t, readDone)
+		t.Fatal("Close finalized the active read before it released its cut")
+	}
 	db.cow.physicalMu.Unlock()
 	cowWait(t, readDone)
 	cowWait(t, closeDone)

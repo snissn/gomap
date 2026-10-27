@@ -60,6 +60,13 @@ func (db *DB) refreshCOWAutomaticCheckpointFallback(ctx context.Context, through
 	if c.prefix.LogicalFrontiers().S != through {
 		return nil
 	}
+	// WaitAccepted can return immediately for an already accepted prefix even
+	// after this optional slice expired. Do not start another physical build in
+	// that case. Once begun, native I/O and accepted custody must finish under
+	// the original owner; this remains a cooperative, not a syscall deadline.
+	if err = ctx.Err(); err != nil {
+		return err
+	}
 	err = db.flushCOWFrozenCutForFallback(true, nil, cut, true)
 	cut = nil // the existing flush owner consumed this exact retained cut
 	if err != nil {

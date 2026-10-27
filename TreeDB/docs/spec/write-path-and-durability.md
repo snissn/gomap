@@ -38,14 +38,19 @@ sequence, independently of the visible cut's newer mutable or frozen suffix.
 The authenticated backend role authorizes only equivalent physical packing;
 it grants no new logical publication or callback authority.
 
-After a successful pack and exact Snapshot adoption, the same flush owner
+After a successful pack or no-op plan, the same flush owner
 attempts fallback convergence through the pre-pack basis's captured logical and
 canonical endpoint before maintained GC. It reuses complete-cut owner-bound
 publication and its accepted Snapshot handoff, appending no command and granting
 no new logical coverage. Mutable suffixes remain visible and unconsumed; a newer
 frozen suffix safely defers convergence to its checkpoint. Accepted pack errors
 still reconcile the exact physical basis before returning; publication/custody
-failures do not authorize GC. Independent readers still retain exact source
+failures do not authorize GC. A later normal slice retries pending convergence
+through the backend's existing predicate even when no new pack is selected.
+An expired slice does not start fallback publication after joining accepted
+custody, and receives no fresh post-pack timeout budget. Native I/O already in
+flight and accepted handoffs still complete under their original owner.
+Independent readers still retain exact source
 files until released; unrelated current writers keep their own files. Convergence
 and selected-source handoff do not bypass any root, reader or resource pin.
 

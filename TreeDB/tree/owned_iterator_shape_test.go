@@ -161,7 +161,9 @@ func TestOwnedProjectionShapesPrimaryExternalBaseLeaf(t *testing.T) {
 			_ = it.Close()
 		}
 		var backing *byte
+		reads := 0
 		readLeaf := func(got page.LeafLogPtr, dst []byte) ([]byte, error) {
+			reads++
 			if got != ref || cap(dst) != page.PageSize {
 				t.Fatal("wrong PRIMARY base leaf or scratch capacity")
 			}
@@ -181,6 +183,19 @@ func TestOwnedProjectionShapesPrimaryExternalBaseLeaf(t *testing.T) {
 				t.Fatalf("bounded PRIMARY delta lost: reverse=%v err=%v", reverse, it.Error())
 			}
 			it.Next()
+			if it.Error() != nil {
+				t.Fatalf("PRIMARY traversal failed after delta: reverse=%v err=%v", reverse, it.Error())
+			}
+			if reverse {
+				if it.Valid() {
+					t.Fatalf("reverse traversal continued below c: key=%q", it.UnsafeKey())
+				}
+			} else if !it.Valid() || string(it.UnsafeKey()) != "d" || !it.IsDeleted() {
+				t.Fatalf("forward traversal after c: valid=%v deleted=%v", it.Valid(), it.IsDeleted())
+			}
+		}
+		if reads == 0 {
+			t.Fatal("external PRIMARY base leaf was not read")
 		}
 		_ = it.Close()
 	}

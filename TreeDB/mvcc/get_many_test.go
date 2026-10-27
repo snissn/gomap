@@ -274,8 +274,11 @@ func TestGetManyAtCapturedCutSurvivesFloorPrune(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	for _, r := range got {
-		if r.Err != nil || r.Result.Timestamp != 10 {
+	if len(got) != len(keys) {
+		t.Fatalf("results=%d keys=%d", len(got), len(keys))
+	}
+	for i, r := range got {
+		if r.Err != nil || r.Result.State != Present || r.Result.Timestamp != 10 || string(r.Result.Value) != fmt.Sprintf("value-%06d", 256+i) {
 			t.Fatal(r)
 		}
 	}
@@ -351,6 +354,248 @@ func BenchmarkGetManyAt(b *testing.B) {
 					}
 				})
 			}
+		}
+	}
+}
+
+// These adapters retain scalar operation boundaries, including legacy iterator
+// cleanup. They deliberately expose no batch implementation.
+type getManyErrorDB struct {
+	treeDB
+	key, record                []byte
+	found                      bool
+	readErr, closeErr, openErr error
+	closes, reads              int
+}
+
+func (d *getManyErrorDB) Iterator(_, _ []byte) (treedb.Iterator, error) {
+	if d.openErr != nil {
+		return nil, d.openErr
+	}
+	return &getManyErrorIterator{d: d}, nil
+}
+
+type getManyErrorIterator struct {
+	treedb.Iterator
+	d *getManyErrorDB
+}
+
+func (i *getManyErrorIterator) Valid() bool   { return i.d.found }
+func (i *getManyErrorIterator) Key() []byte   { return i.d.key }
+func (i *getManyErrorIterator) Value() []byte { return i.d.record }
+func (i *getManyErrorIterator) Error() error  { i.d.reads++; return i.d.readErr }
+func (i *getManyErrorIterator) Close() error  { i.d.closes++; return i.d.closeErr }
+
+type getManyErrorCutDB struct {
+	*getManyErrorDB
+	captureErr error
+	nilCut     bool
+}
+
+func (*getManyErrorCutDB) SupportsMVCCReadCut() bool { return true }
+func (d *getManyErrorCutDB) AcquireMVCCReadCut() (treedb.MVCCReadSnapshot, error) {
+	if d.captureErr != nil {
+		return nil, d.captureErr
+	}
+	if d.nilCut {
+		return nil, nil
+	}
+	return &getManyErrorCut{d: d.getManyErrorDB}, nil
+}
+
+type getManyErrorCut struct {
+	treedb.MVCCReadSnapshot
+	d *getManyErrorDB
+}
+
+func (c *getManyErrorCut) SeekGEVersionRange(_, _ []byte) ([]byte, []byte, bool, error) {
+	c.d.reads++
+	return bytes.Clone(c.d.key), bytes.Clone(c.d.record), c.d.found, c.d.readErr
+}
+func (c *getManyErrorCut) Close() error { c.d.closes++; return c.d.closeErr }
+
+func TestGetManyAtScalarErrorProvenance(t *testing.T) {
+	physical, e := mvcckey.Encode([]byte("key"), 7)
+	if e != nil {
+		t.Fatal(e)
+	}
+	readErr, closeErr := errors.New("scalar read failure"), errors.New("scalar cleanup failure")
+	for _, qualified := range []bool{false, true} {
+		for _, n := range []int{1, 2} {
+			for _, cleanup := range []bool{false, true} {
+				for _, tc := range []struct {
+					name             string
+					found            bool
+					record           []byte
+					readErr, itemErr error
+					want             Result
+				}{
+					{name: "present", found: true, record: []byte{recordValueV1, 'v'}, want: Result{State: Present, Timestamp: 7, Value: []byte("v")}},
+					{name: "absent", want: Result{State: Absent}},
+					{name: "tombstone", found: true, record: []byte{recordTombstoneV1}, want: Result{State: Tombstone, Timestamp: 7}},
+					{name: "seek", readErr: readErr, itemErr: readErr},
+					{name: "decode", found: true, record: []byte{255}, itemErr: ErrMalformedRecord},
+				} {
+					t.Run(fmt.Sprintf("qualified%t/n%d/close%t/%s", qualified, n, cleanup, tc.name), func(t *testing.T) {
+						d := &getManyErrorDB{key: physical, record: tc.record, found: tc.found, readErr: tc.readErr}
+						var db treeDB = d
+						if qualified {
+							db = &getManyErrorCutDB{getManyErrorDB: d}
+						}
+						if cleanup {
+							d.closeErr = closeErr
+						}
+						s := newStore(db)
+						s.floorLoaded = true
+						input := make([][]byte, n)
+						for i := range input {
+							input[i] = []byte("key")
+						}
+						got, callErr := s.GetManyAt(input, 9)
+						if (callErr != nil) != cleanup || cleanup && !errors.Is(callErr, closeErr) {
+							t.Fatalf("call error %v", callErr)
+						}
+						if callErr != nil && errors.Is(callErr, readErr) {
+							t.Fatalf("read error escaped per-item channel: %v", callErr)
+						}
+						if len(got) != n {
+							t.Fatalf("results=%d want%d", len(got), n)
+						}
+						for i, r := range got {
+							if !reflect.DeepEqual(r.Result, tc.want) || !errors.Is(r.Err, tc.itemErr) || cleanup && errors.Is(r.Err, closeErr) {
+								t.Fatalf("item%d=%+v want%+v itemErr%v", i, r, tc.want, tc.itemErr)
+							}
+						}
+						wantCloses := n
+						if qualified && n > 1 {
+							wantCloses = 1
+						}
+						if d.closes != wantCloses || d.reads != n {
+							t.Fatalf("closes/reads=%d/%d want%d/%d", d.closes, d.reads, wantCloses, n)
+						}
+						_, scalarErr := s.GetAt([]byte("key"), 9)
+						if !errors.Is(scalarErr, tc.itemErr) && tc.itemErr != nil || cleanup && !errors.Is(scalarErr, closeErr) {
+							t.Fatalf("GetAt lost cause: %v", scalarErr)
+						}
+						var wantRead, wantClose error
+						if tc.name == "seek" {
+							op := "iterate"
+							if qualified {
+								op = "seek version"
+							}
+							wantRead = storageError(op, readErr)
+						} else if tc.name == "decode" {
+							wantRead = fmt.Errorf("%w: unknown envelope tag 0xff", ErrMalformedRecord)
+						}
+						if cleanup {
+							op := "close iterator"
+							if qualified {
+								op = "close read cut"
+							}
+							wantClose = storageError(op, closeErr)
+						}
+						wantError := errors.Join(wantRead, wantClose)
+						if (scalarErr == nil) != (wantError == nil) || scalarErr != nil && scalarErr.Error() != wantError.Error() {
+							t.Fatalf("GetAt text=%v want%v", scalarErr, wantError)
+						}
+					})
+				}
+			}
+		}
+	}
+}
+
+func TestGetManyAtScalarCallFailures(t *testing.T) {
+	failure := errors.New("scalar admission failure")
+	for _, n := range []int{1, 2} {
+		for _, tc := range []string{"capture", "nil-cut", "open", "floor", "floor-record"} {
+			t.Run(fmt.Sprintf("n%d/%s", n, tc), func(t *testing.T) {
+				d := &getManyErrorDB{}
+				var db treeDB = d
+				want := failure
+				switch tc {
+				case "capture":
+					db = &getManyErrorCutDB{getManyErrorDB: d, captureErr: failure}
+				case "nil-cut":
+					db = &getManyErrorCutDB{getManyErrorDB: d, nilCut: true}
+					want = treedb.ErrClosed
+				case "open":
+					d.openErr = failure
+				case "floor":
+					want = ErrReadBeforeDiscardFloor
+				case "floor-record":
+					d.key = discardFloorKey
+					d.record = []byte{255}
+					d.found = true
+					want = ErrMalformedRecord
+				}
+				s := newStore(db)
+				s.floorLoaded = true
+				if tc == "floor" {
+					s.discardFloor = 9
+				}
+				if tc == "floor-record" {
+					s.floorLoaded = false
+				}
+				keys := make([][]byte, n)
+				for i := range keys {
+					keys[i] = []byte("key")
+				}
+				got, err := s.GetManyAt(keys, 9)
+				if !errors.Is(err, want) {
+					t.Fatalf("got%+v callErr%v want%v", got, err, want)
+				}
+				if n == 1 && got != nil {
+					t.Fatalf("pre-read admission failure produced singleton results: %+v", got)
+				}
+				for _, r := range got {
+					if r.Err != nil {
+						t.Fatalf("call failure became item error: %v", r.Err)
+					}
+				}
+			})
+		}
+	}
+}
+
+type getManyTypedFailure struct{ message string }
+
+func (e *getManyTypedFailure) Error() string { return e.message }
+
+func TestGetManyAtNestedReadErrorStaysPerItem(t *testing.T) {
+	failure := &getManyTypedFailure{message: "nested source open failure"}
+	inner := newStore(&getManyErrorDB{openErr: failure})
+	inner.floorLoaded = true
+	_, nested := inner.GetAt([]byte("key"), 9)
+	var typed *getManyTypedFailure
+	if !errors.As(nested, &typed) || typed != failure || nested.Error() != storageError("open iterator", failure).Error() {
+		t.Fatalf("GetAt changed text or cause: %v", nested)
+	}
+	for _, qualified := range []bool{false, true} {
+		for _, n := range []int{1, 2} {
+			t.Run(fmt.Sprintf("qualified%t/n%d", qualified, n), func(t *testing.T) {
+				d := &getManyErrorDB{readErr: nested}
+				var db treeDB = d
+				if qualified {
+					db = &getManyErrorCutDB{getManyErrorDB: d}
+				}
+				s := newStore(db)
+				s.floorLoaded = true
+				keys := make([][]byte, n)
+				for i := range keys {
+					keys[i] = []byte("key")
+				}
+				got, err := s.GetManyAt(keys, 9)
+				if err != nil || len(got) != n {
+					t.Fatalf("nested cause escaped key error: %+v %v", got, err)
+				}
+				for _, r := range got {
+					var typed *getManyTypedFailure
+					if !errors.Is(r.Err, nested) || !errors.As(r.Err, &typed) || typed != failure {
+						t.Fatalf("nested cause lost: %v", r.Err)
+					}
+				}
+			})
 		}
 	}
 }

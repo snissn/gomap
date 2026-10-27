@@ -132,6 +132,18 @@ func TestPrivateCOWLeafSourceHandoffPartialRotationFailureKeepsInstalledOwner(t 
 			if got, err := cache.Get([]byte("pack-00000")); err != nil || len(got) != 128 || got[0] != 5 {
 				t.Fatalf("post-failure writer unusable: %x err=%v", got, err)
 			}
+			dir := backend.DB.Dir()
+			if err := cache.Close(); err != nil {
+				t.Fatal(err)
+			}
+			reopened, err := backenddb.Open(backenddb.Options{Dir: dir, CommandWAL: true, Durability: backenddb.DurabilityWALOnRelaxed, DisableBackgroundPrune: true, IndexOuterLeavesInValueLog: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer reopened.Close()
+			if got, err := reopened.Get([]byte("pack-00000")); err != nil || len(got) != 128 || got[0] != 5 {
+				t.Fatalf("post-failure write lost after reopen: %x err=%v", got, err)
+			}
 		})
 	}
 }

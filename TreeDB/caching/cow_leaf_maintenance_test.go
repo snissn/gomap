@@ -12,6 +12,7 @@ import (
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
@@ -29,10 +30,16 @@ type privateCOWPackHeldBackend struct {
 	gcCalls         int
 	last            backenddb.LeafGenerationPackRunOnceStats
 	gcCompleted     chan backenddb.LeafGenerationGCStats
+	forceNoop       bool
+	hideRanOnError  bool
 }
 
 func (b *privateCOWPackHeldBackend) LeafGenerationPackRunOnceForPrivateCOW(owner *transactionowner.Owner, ctx context.Context, opts backenddb.LeafGenerationPackFromPlanOptions) (backenddb.LeafGenerationPackRunOnceStats, error) {
 	b.calls++
+	if b.forceNoop {
+		b.last = backenddb.LeafGenerationPackRunOnceStats{SkipReason: "test: no remaining pack candidate"}
+		return b.last, nil
+	}
 	stats, err := b.DB.LeafGenerationPackRunOnceForPrivateCOW(owner, ctx, opts)
 	b.last = stats
 	if b.published != nil {
@@ -43,7 +50,13 @@ func (b *privateCOWPackHeldBackend) LeafGenerationPackRunOnceForPrivateCOW(owner
 			return stats, errors.Join(err, ctx.Err())
 		}
 	}
-	return stats, errors.Join(err, b.failure)
+	err = errors.Join(err, b.failure)
+	if err != nil && b.hideRanOnError {
+		// The real RunOnce wrapper can return before assigning Ran when the
+		// selected pack accepted a root and then reported a finalization error.
+		stats.Ran = false
+	}
+	return stats, err
 }
 
 func (b *privateCOWPackHeldBackend) CommandWALCheckpointFallbackNeedsRefresh(basis backenddb.StateToken) (bool, error) {
@@ -619,4 +632,78 @@ func TestPrivateCOWLeafPackFallbackFailureDoesNotCollect(t *testing.T) {
 		t.Fatalf("reader after fallback refusal: %x %v", got, err)
 	}
 	backend.fallbackFailure = nil
+}
+
+func TestPrivateCOWLeafPackDeferredFallbackResumesOnNoop(t *testing.T) {
+	requireLeafGenerationPackPromotionSupport(t)
+	for _, hideRan := range []bool{false, true} {
+		t.Run(fmt.Sprintf("accepted-error-ran-hidden-%v", hideRan), func(t *testing.T) {
+			cache, backend := privateCOWPackFixture(t)
+			preparePrivateCOWPack(t, cache, backend.DB)
+			held := cache.AcquireSnapshot()
+			if held == nil {
+				t.Fatal("missing original reader")
+			}
+			defer held.Close()
+			next := backend.DB.CommandWALNextLSN()
+			failure := errors.New("finalization failed after durable pack")
+			backend.failure, backend.hideRanOnError = failure, hideRan
+			attempted, err := cache.runPrivateCOWLeafPackSlice()
+			if !attempted || !backend.last.Ran || !errors.Is(err, failure) || cache.cow.refreshRequired.Load() || backend.gcCalls != 0 {
+				t.Fatalf("accepted pack must retain its error and adopt: attempted=%v actual=%+v err=%v", attempted, backend.last, err)
+			}
+			cut := cache.cow.retainCut()
+			if cut == nil {
+				t.Fatal("missing accepted replacement")
+			}
+			basis, live := cut.basis.snapshot.StateToken()
+			through := rootpublication.SealedPrefix{LogicalSequence: cut.basis.logicalSeq, CanonicalLSN: basis.AppliedCommandLSN}
+			if err := cache.cow.releaseCut(cut); err != nil || !live {
+				t.Fatalf("captured basis: live=%v err=%v", live, err)
+			}
+			if needed, err := backend.DB.CommandWALCheckpointFallbackNeedsRefresh(basis); err != nil || !needed {
+				t.Fatalf("expected lawful pending convergence: needed=%v err=%v", needed, err)
+			}
+			if err := cache.cow.prefix.WaitAccepted(context.Background(), through); err != nil {
+				t.Fatal(err)
+			}
+			// Already accepted custody must not let an expired optional slice
+			// enter the synchronous physical build. No native I/O is abandoned.
+			ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+			defer cancel()
+			before, _ := backend.DB.StateToken()
+			cache.flushMu.Lock()
+			err = cache.refreshCOWAutomaticCheckpointFallback(ctx, through)
+			cache.flushMu.Unlock()
+			after, _ := backend.DB.StateToken()
+			if !errors.Is(err, context.DeadlineExceeded) || after != before || backend.DB.CommandWALNextLSN() != next {
+				t.Fatalf("expired fallback published: before=%+v after=%+v err=%v", before, after, err)
+			}
+			backend.failure, backend.forceNoop = nil, true
+			cache.vlogGenerationPrivateCOWPackLastAttemptNS.Store(0)
+			if attempted, err = cache.runPrivateCOWLeafPackSlice(); !attempted || err != nil || backend.last.Ran || backend.gcCalls != 1 {
+				t.Fatalf("no-op slice did not resume convergence and GC: attempted=%v ran=%v GC=%d err=%v", attempted, backend.last.Ran, backend.gcCalls, err)
+			}
+			after, _ = backend.DB.StateToken()
+			if needed, err := backend.DB.CommandWALCheckpointFallbackNeedsRefresh(after); err != nil || needed || backend.DB.CommandWALNextLSN() != next || after.AppliedCommandLSN != basis.AppliedCommandLSN {
+				t.Fatalf("no-op failed original-cut convergence: needed=%v state=%+v err=%v", needed, after, err)
+			}
+			if got, err := held.Get([]byte("pack-03000")); err != nil || !bytes.Equal(got, bytes.Repeat([]byte{1}, 128)) {
+				t.Fatalf("held reader lost after resumed convergence: %x %v", got, err)
+			}
+			// Once converged, repeated healthy no-op slices must not manufacture
+			// another root publication or command. They still run maintained GC.
+			for range 2 {
+				before, _ = backend.DB.StateToken()
+				cache.vlogGenerationPrivateCOWPackLastAttemptNS.Store(0)
+				if attempted, err = cache.runPrivateCOWLeafPackSlice(); !attempted || err != nil {
+					t.Fatalf("healthy no-op: attempted=%v err=%v", attempted, err)
+				}
+				after, _ = backend.DB.StateToken()
+				if after != before || backend.DB.CommandWALNextLSN() != next {
+					t.Fatalf("healthy no-op published: before=%+v after=%+v", before, after)
+				}
+			}
+		})
+	}
 }
