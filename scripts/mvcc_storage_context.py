@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Optional read-only storage snapshot. Never executes work or qualifies a gate."""
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -11,6 +12,9 @@ import time
 LIMIT = 65536
 MAX_PATHS = 16
 MAX_OUTPUT = 262144
+MAX_DIGEST_BYTES = 512 * 1024 * 1024
+STAGES = ('before-build', 'after-build', 'after-lifecycle', 'quiet-start',
+          'quiet-end', 'collection-start', 'collection-end')
 # Bounded O_NOFOLLOW counter reads follow mvcc_raw_sync_context.py at #5282
 # af8a87f45. No import or dependency on that unmerged collector is required.
 
@@ -61,6 +65,8 @@ def inventory(path, mounts, sysroot):
         eligible = [m for m in mounts or [] if resolved.is_relative_to(m['mount'])]
         if not eligible:
             return {'status': 'unavailable', 'reason': 'mount_unresolved'}
+        if len({m['mount'] for m in eligible}) != len(eligible):
+            return {'status': 'unavailable', 'reason': 'ambiguous_mount'}
         longest = max(len(m['mount']) for m in eligible)
         matches = [m for m in eligible if len(m['mount']) == longest]
         if len(matches) != 1:
@@ -108,11 +114,51 @@ def memory(proc):
             'unit': 'KiB', **fields}
 
 
-def collect(paths, proc=Path('/proc'), sysroot=Path('/sys')):
+def file_digest(path):
+    if path is None:
+        return {'status': 'unavailable', 'reason': 'not_provided'}
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+        with os.fdopen(fd, 'rb') as stream:
+            before = os.fstat(stream.fileno())
+            if not stat.S_ISREG(before.st_mode):
+                return {'status': 'unavailable', 'reason': 'nonregular'}
+            if before.st_size > MAX_DIGEST_BYTES:
+                return {'status': 'unavailable', 'reason': 'size_limit'}
+            digest = hashlib.sha256()
+            count = 0
+            while True:
+                chunk = stream.read(min(LIMIT, MAX_DIGEST_BYTES + 1 - count))
+                if not chunk:
+                    break
+                count += len(chunk)
+                if count > MAX_DIGEST_BYTES:
+                    return {'status': 'unavailable', 'reason': 'size_limit'}
+                digest.update(chunk)
+            after = os.fstat(stream.fileno())
+            identity = lambda st: (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+            if identity(before) != identity(after) or count != before.st_size:
+                return {'status': 'unavailable', 'reason': 'changed_during_read'}
+            return {'status': 'available', 'bytes': count, 'sha256': digest.hexdigest()}
+    except OSError:
+        return {'status': 'unavailable', 'reason': 'read_failed'}
+
+
+def collect(paths, *, stage, source_sha=None, binary=None, harness=None,
+            proc=Path('/proc'), sysroot=Path('/sys')):
+    if stage not in STAGES:
+        raise ValueError('known stage required')
+    if source_sha is not None and not re.fullmatch(r'[0-9a-f]{40}', source_sha):
+        raise ValueError('full lowercase source SHA required')
     if not 1 <= len(paths) <= MAX_PATHS:
         raise ValueError('one to sixteen paths required')
     mounts = mount_table(proc)
-    return {'schema': 1, 'qualification': 'unavailable', 'diagnostic_only': True,
+    return {'schema': 2, 'qualification': 'unavailable', 'diagnostic_only': True,
+            'stage': stage, 'stage_origin': 'operator label; execution phase not verified',
+            'identity': {'source': ({'status': 'available', 'sha': source_sha,
+                                     'scope': 'operator assertion; checkout not verified'}
+                                    if source_sha else {'status': 'unavailable', 'reason': 'not_provided'}),
+                         'binary': file_digest(binary), 'harness': file_digest(harness)},
             'scope': 'single read-only snapshot; no history, quiet verdict, or causal attribution',
             'monotonic_ns': time.monotonic_ns(), 'machinewide_memory': memory(proc),
             'paths': [inventory(p, mounts, sysroot) for p in paths]}
@@ -140,9 +186,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', required=True)
     parser.add_argument('--path', action='append', required=True)
+    parser.add_argument('--stage', choices=STAGES, required=True)
+    parser.add_argument('--source-sha')
+    parser.add_argument('--binary')
+    parser.add_argument('--harness')
     args = parser.parse_args()
     try:
-        write_fresh(args.output, collect(args.path))
+        write_fresh(args.output, collect(args.path, stage=args.stage, source_sha=args.source_sha,
+                                         binary=args.binary, harness=args.harness))
     except (OSError, ValueError):
         parser.exit(2, 'storage context unavailable; no qualification result\n')
 

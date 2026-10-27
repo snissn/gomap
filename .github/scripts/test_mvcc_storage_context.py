@@ -3,6 +3,8 @@ from pathlib import Path
 import tempfile
 import unittest
 import os
+import hashlib
+from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location('storage', Path(__file__).resolve().parents[2] / 'scripts/mvcc_storage_context.py')
 m = importlib.util.module_from_spec(spec)
@@ -57,6 +59,9 @@ class StorageContextTest(unittest.TestCase):
             rows.append(dict(rows[-1], id=3))
             self.assertEqual(m.inventory(root, rows, root)['reason'], 'ambiguous_mount')
             rows.pop()
+            rows.append(dict(rows[0], id=4))
+            self.assertEqual(m.inventory(root, rows, root)['reason'], 'ambiguous_mount')
+            rows.pop()
             rows[-1]['device'] = '9:9'
             self.assertEqual(m.inventory(root, rows, root)['reason'], 'device_mismatch')
 
@@ -66,14 +71,41 @@ class StorageContextTest(unittest.TestCase):
             (root / 'meminfo').write_text('Dirty: 7 kB\nWriteback: 2 kB\nSecret: ignored\n')
             self.assertEqual(m.memory(root)['Dirty'], 7)
             self.assertNotIn('Secret', str(m.memory(root)))
-            result = m.collect([root], proc=root, sysroot=root)
+            result = m.collect([root], stage="before-build", proc=root, sysroot=root)
             self.assertEqual(result['qualification'], 'unavailable')
             self.assertTrue(result['diagnostic_only'])
             self.assertEqual(result['paths'][0]['status'], 'unavailable')
             with self.assertRaises(ValueError):
-                m.collect([root] * 17)
+                m.collect([root] * 17, stage="before-build")
             (root / 'meminfo').write_text('Dirty: 7 kB\n')
             self.assertEqual(m.memory(root)['status'], 'unavailable')
+
+    def test_required_labels_and_identity_limits(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            file = root / 'binary'
+            file.write_bytes(b'abc')
+            with self.assertRaises(TypeError):
+                m.collect([root])
+            with self.assertRaises(ValueError):
+                m.collect([root], stage='secret stage')
+            with self.assertRaises(ValueError):
+                m.collect([root], stage='before-build', source_sha='bad')
+            result = m.collect([root], stage='collection-end', source_sha='a' * 40,
+                               binary=file, proc=root, sysroot=root)
+            self.assertEqual(result['identity']['binary']['sha256'], hashlib.sha256(b'abc').hexdigest())
+            self.assertEqual(result['identity']['harness']['reason'], 'not_provided')
+            self.assertEqual(result['qualification'], 'unavailable')
+            self.assertNotIn(str(file), str(result))
+            link = root / 'link'
+            link.symlink_to(file)
+            self.assertEqual(m.file_digest(link)['status'], 'unavailable')
+            with patch.object(m, 'MAX_DIGEST_BYTES', 2):
+                self.assertEqual(m.file_digest(file)['reason'], 'size_limit')
+            with patch.object(m, 'MAX_OUTPUT', 1):
+                with self.assertRaises(ValueError):
+                    m.write_fresh(root / 'oversize', result)
+                self.assertFalse((root / 'oversize').exists())
 
 
 if __name__ == '__main__':
