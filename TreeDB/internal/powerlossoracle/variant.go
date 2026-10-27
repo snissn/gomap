@@ -113,6 +113,22 @@ type Coverage struct {
 // GenerateVariants derives legal partial-writeback images from stable resource
 // identities, exact format boundaries, and namespace durability events.
 func GenerateVariants(spec CutSpec) ([]Variant, Coverage, error) {
+	return generateVariants(spec, nil)
+}
+
+// VisitVariants generates and visits one complete crash image at a time. The
+// visitor must not retain Model if it needs bounded memory. Visits follow the
+// deterministic generation order, rather than GenerateVariants' sorted ID order.
+// An error stops visits; coverage is complete only after a successful return.
+func VisitVariants(spec CutSpec, visit func(Variant) error) (Coverage, error) {
+	if visit == nil {
+		return Coverage{}, errorsf("variant visitor is nil")
+	}
+	_, coverage, err := generateVariants(spec, visit)
+	return coverage, err
+}
+
+func generateVariants(spec CutSpec, visit func(Variant) error) ([]Variant, Coverage, error) {
 	coverage := Coverage{ByFamily: make(map[VariantFamily]int), ByFormat: make(map[FormatKind]int)}
 	if spec.Model == nil {
 		return nil, coverage, errorsf("cut %q has no model", spec.ID)
@@ -150,8 +166,9 @@ func GenerateVariants(spec CutSpec) ([]Variant, Coverage, error) {
 	}
 
 	variants := make([]Variant, 0, 2+len(dependencies)+len(oldWrites))
+	generated := 0
 	add := func(family VariantFamily, qualifier string, model *Model, format FormatKind) error {
-		if len(variants) == limit {
+		if generated == limit {
 			return errorsf("cut %s exceeds bounded variant limit %d", cutID, limit)
 		}
 		expected, exists := spec.ExpectedByFamily[family]
@@ -165,7 +182,15 @@ func GenerateVariants(spec CutSpec) ([]Variant, Coverage, error) {
 		if qualifier != "" {
 			id += "/" + stableComponent(qualifier)
 		}
-		variants = append(variants, Variant{CutID: cutID, ID: id, Family: family, Seed: stableSeed(id), Expected: expected, Qualifier: qualifier, Model: model})
+		variant := Variant{CutID: cutID, ID: id, Family: family, Seed: stableSeed(id), Expected: expected, Qualifier: qualifier, Model: model}
+		if visit != nil {
+			if err := visit(variant); err != nil {
+				return err
+			}
+		} else {
+			variants = append(variants, variant)
+		}
+		generated++
 		coverage.ByFamily[family]++
 		if format != "" {
 			coverage.ByFormat[format]++
@@ -269,7 +294,7 @@ func GenerateVariants(spec CutSpec) ([]Variant, Coverage, error) {
 	}
 
 	sort.Slice(variants, func(i, j int) bool { return variants[i].ID < variants[j].ID })
-	coverage.Generated = len(variants)
+	coverage.Generated = generated
 	for _, family := range spec.RequiredFamilies {
 		if coverage.ByFamily[family] == 0 {
 			return nil, coverage, errorsf("cut %s silently skipped required family %s", cutID, family)
