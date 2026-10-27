@@ -6,6 +6,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
@@ -202,5 +203,59 @@ func TestNativeOrdinaryColumnGraphSearchAdmissionAndCancel(t *testing.T) {
 	}
 	if got := budget.Stats(); got.TotalBytes != 0 || got.ExternalLeases != 0 {
 		t.Fatalf("full Close retained custody: %+v", got)
+	}
+}
+
+// Actual raw document-ID validation must fit without reserving an unused generic
+// decoder. The same original owner remains finitely pressured for both warm and
+// search; the independent default-budget 4096 lifecycle remains unchanged.
+func TestNativeOrdinaryColumnGraphRawWarmFiniteHeadroom(t *testing.T) {
+	_, _, _, col := openNativeOrdinaryGraphExecutionFixture(t)
+	if _, _, err := col.InsertBatchWithStatsValidatedFloat32Projection([][]byte{[]byte("a"), []byte("b")}, [][]byte{[]byte(`{"embedding":[1,0]}`), []byte(`{"embedding":[0,1]}`)}, "embedding", VectorMetricCosine, [][]float32{{1, 0}, {0, 1}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := col.RebuildVectorIndex("vec"); err != nil {
+		t.Fatal(err)
+	}
+	read, err := col.nativeJSON.Capture(col.name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	budget := read.capture.NativeAllocator().(*memtable.COWBudget)
+	if err := read.Close(); err != nil {
+		t.Fatal(err)
+	}
+	fixed, err := nativeTypedDecoderFixedCapacity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	headroom := fixed / 2
+	overhead := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
+	before := budget.Stats()
+	if before.ReservedBytes+headroom+overhead >= budget.Limits().MaxInFlightBytes {
+		t.Fatalf("fixture has no finite pressure room: %+v", before)
+	}
+	pressure, err := budget.AcquireExternal(budget.Limits().MaxInFlightBytes - before.ReservedBytes - headroom - overhead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pressure.Close()
+	opts := VectorIndexSearchOptions{IndexName: "vec", Query: []float32{1, 0}, TopK: 2, StatsMode: VectorIndexSearchStatsModeProduction}
+	warm, err := col.WarmVectorIndexPreparedSearch(opts)
+	if err != nil {
+		t.Fatalf("raw warm with %d bytes of actual original-owner headroom: %v", headroom, err)
+	}
+	if warm.Stats.HNSWSearchPackCacheBuilds != 1 {
+		t.Fatalf("warm did not build maintained pack: %+v", warm.Stats)
+	}
+	var buffer VectorIndexSearchBuffer
+	defer buffer.Reset()
+	response, err := col.SearchVectorIndexWithBuffer(opts, &buffer)
+	if err != nil || len(response.Results) != 2 || string(response.Results[0].ID) != "a" || string(response.Results[1].ID) != "b" {
+		t.Fatalf("pressured exact search: response=%+v err=%v", response, err)
+	}
+	buffer.Reset()
+	if err := col.CloseVectorIndexPreparedSearchCache(); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -2,6 +2,7 @@ package caching
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"unsafe"
 
@@ -738,14 +739,20 @@ func (b *cowBackendBasis) readPhysicalLeafWithWorkspace(c *cowCache, w *cowReadW
 func (b *cowBackendBasis) readPhysicalLeafWithDictionary(c *cowCache, w *cowReadWorkspace, ptr page.LeafLogPtr, dst []byte, native, localBlock bool, independent *cowCacheDictionaryRead) ([]byte, error) {
 	f, identity, err := b.snapshot.PinnedValueLogFile(ptr.ValuePtr().FileID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("COW physical leaf pinned-file ptr=%+v: %w", ptr.ValuePtr(), err)
 	}
 	shape, err := valuelog.InspectCOWLeafRecord(f, ptr.ValuePtr(), w.limits)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("COW physical leaf inspect ptr=%+v file=%q identity=%+v: %w", ptr.ValuePtr(), f.Name(), identity, err)
 	}
-	if native && shape.Compressed && (shape.DictID != 0 || (shape.Codec != valuelog.BlockCodecSnappy && shape.Codec != valuelog.BlockCodecLZ4)) {
-		return nil, valuelog.ErrCOWReadUnsupported
+	// Packing/rewrite may legitimately publish dictionary leaves even though
+	// the ordinary caching appender supplies dictionary zero. Native callers
+	// must bring their original independently retainable definition capability.
+	// Dictionary-free ZSTD keeps its explicit native refusal policy.
+	unsupportedDictionary := shape.DictID != 0 && (independent == nil || independent.provider == nil || independent.cache != c)
+	unsupportedBlock := shape.DictID == 0 && shape.Codec != valuelog.BlockCodecSnappy && shape.Codec != valuelog.BlockCodecLZ4
+	if native && shape.Compressed && (unsupportedDictionary || unsupportedBlock) {
+		return nil, fmt.Errorf("COW physical leaf native-codec ptr=%+v file=%q compressed=%t dictionary=%d codec=%d record=%d raw=%d value=%d: %w", ptr.ValuePtr(), f.Name(), shape.Compressed, shape.DictID, shape.Codec, shape.RecordBytes, shape.RawBytes, shape.ValueBytes, valuelog.ErrCOWReadUnsupported)
 	}
 	if shape.DictID != 0 && independent == nil {
 		if w.snapshot == nil {
@@ -761,6 +768,9 @@ func (b *cowBackendBasis) readPhysicalLeafWithDictionary(c *cowCache, w *cowRead
 	// different limits must pass their original decode/definition policy again.
 	if shape.DictID == 0 || w.limits == c.readLimits() {
 		if data, hit, err := b.snapshot.CopyVerifiedCachedLeafPage(ptr, f, identity, dst); err != nil || hit {
+			if err != nil {
+				return nil, fmt.Errorf("COW physical leaf verified-cache ptr=%+v file=%q: %w", ptr.ValuePtr(), f.Name(), err)
+			}
 			return data, err
 		}
 	}
@@ -791,10 +801,10 @@ func (b *cowBackendBasis) readPhysicalLeafWithDictionary(c *cowCache, w *cowRead
 		if shape.DictID != 0 && errors.Is(err, memtable.ErrCOWCapacity) {
 			return nil, &cowPhysicalDictionaryCapacity{cause: err}
 		}
-		return nil, err
+		return nil, fmt.Errorf("COW physical leaf decode ptr=%+v file=%q compressed=%t dictionary=%d codec=%d record=%d raw=%d value=%d: %w", ptr.ValuePtr(), f.Name(), shape.Compressed, shape.DictID, shape.Codec, shape.RecordBytes, shape.RawBytes, shape.ValueBytes, err)
 	}
 	if err = b.snapshot.AdmitVerifiedCachedLeafPage(ptr, f, identity, data); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("COW physical leaf verified-admission ptr=%+v file=%q: %w", ptr.ValuePtr(), f.Name(), err)
 	}
 	return data, nil
 }

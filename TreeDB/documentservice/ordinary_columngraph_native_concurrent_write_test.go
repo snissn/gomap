@@ -170,7 +170,7 @@ func TestOrdinaryColumnGraphNativeConcurrentWrite4096(t *testing.T) {
 	}
 	verify("after-writes")
 	if _, err := svc.OptimizeIndex(ctx, name, OptimizeIndexRequest{}); err != nil {
-		t.Fatal(err)
+		t.Fatalf("phase=optimize err=%v cause=%v budget=%+v", err, errors.Unwrap(err), budget.Stats())
 	}
 	closeAll()
 	open()

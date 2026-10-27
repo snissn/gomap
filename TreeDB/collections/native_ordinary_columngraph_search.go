@@ -37,7 +37,7 @@ func nativeColumnGraphPreparedIdentityAtRead(read *NativeJSONRead) (nativeColumn
 func (c *Collection) warmNativeColumnGraphPreparedSearch(opts VectorIndexSearchOptions) (response VectorIndexSearchResponse, resultErr error) {
 	read, err := c.nativeJSON.Capture(c.name)
 	if err != nil {
-		return response, err
+		return response, fmt.Errorf("native prepared search capture: %w", err)
 	}
 	defer func() { resultErr = errors.Join(resultErr, read.Close()) }()
 	prepared, response, stats, err := c.acquireNativeColumnGraphPreparedSearchAtRead(opts, read)
@@ -101,7 +101,7 @@ func (c *Collection) acquireNativeColumnGraphPreparedSearchAtRead(opts VectorInd
 	}
 	lease, err := read.capture.NativeAllocator().AdmitNativeBytes(control)
 	if err != nil {
-		return nil, response, stats, err
+		return nil, response, stats, fmt.Errorf("native prepared search control admission bytes=%d: %w", control, err)
 	}
 	transferred := false
 	defer func() {
@@ -167,7 +167,7 @@ func (c *Collection) openNativeColumnGraphPreparedSearch(opts VectorIndexSearchO
 	}
 	operation, err := read.capture.NativeAllocator().AdmitNativeBytes(charge)
 	if err != nil {
-		return nil, response, err
+		return nil, response, fmt.Errorf("native prepared search initial setup admission bytes=%d: %w", charge, err)
 	}
 	defer operation.Close()
 	local := read.nativeTypedReadCollection()
@@ -203,7 +203,10 @@ func (c *Collection) openNativeColumnGraphPreparedSearch(opts VectorIndexSearchO
 			if e := nativeTypedCheckedAdd(&n, setup); e != nil {
 				return e
 			}
-			return operation.Resize(n)
+			if e := operation.Resize(n); e != nil {
+				return fmt.Errorf("native prepared search asset census admission bytes=%d: %w", n, e)
+			}
+			return nil
 		})
 		if e != nil {
 			return nil, response, e
@@ -230,7 +233,7 @@ func (c *Collection) openNativeColumnGraphPreparedSearch(opts VectorIndexSearchO
 		return nil, response, err
 	}
 	if err = operation.Resize(charge); err != nil {
-		return nil, response, err
+		return nil, response, fmt.Errorf("native prepared search norm setup admission bytes=%d: %w", charge, err)
 	}
 	def, graph, view, err := local.columnVectorGraphPhysicalRowReaderViewFromRecords(def, local.catalog, records, nil)
 	if err != nil {
@@ -240,7 +243,7 @@ func (c *Collection) openNativeColumnGraphPreparedSearch(opts VectorIndexSearchO
 	err = func() error {
 		temporary, e := read.capture.NativeAllocator().AdmitNativeBytes(setup)
 		if e != nil {
-			return e
+			return fmt.Errorf("native prepared search document-ID setup admission bytes=%d: %w", setup, e)
 		}
 		defer temporary.Close()
 		key, response, e = local.validateCollectionVectorIndexPreparedExactSearchView(opts, def, graph, view, 0, 0)
@@ -282,7 +285,7 @@ func (c *Collection) openNativeColumnGraphPreparedSearch(opts VectorIndexSearchO
 		return nil, response, err
 	}
 	if err = retained.Resize(packCharge); err != nil {
-		return nil, response, err
+		return nil, response, fmt.Errorf("native prepared search retained pack admission bytes=%d setup=%d: %w", packCharge, charge, err)
 	}
 	// Definition strings in a cached response must not depend on the read's
 	// schema receipt. Ordinary definitions contain no quantized option slices.
@@ -308,9 +311,10 @@ func (c *Collection) openNativeColumnGraphPreparedSearch(opts VectorIndexSearchO
 	return p, response, nil
 }
 
-// The original full TCIM parser may decode compressed metadata even when its
-// selected data section is raw. The fixed codec and loose malformed dictionary
-// census deliberately remain the maintained strong read contract.
+// Document-ID setup does not decode granules or row locators. Its maintained
+// TCIM parser only needs a generic decoder for compressed image sections, even
+// when selected data is raw. Keep the original full compressed-section envelope
+// and malformed dictionary census; entirely raw images need no decoder.
 func nativeColumnGraphAssetReadCapacity(root string, asset columnVectorIndexStateAssetSnapshot, admit func(uint64) error) (uint64, error) {
 	if asset.Ref.Length <= 0 {
 		return 0, ErrVectorIndexSearchUnavailable
@@ -330,7 +334,9 @@ func nativeColumnGraphAssetReadCapacity(root string, asset columnVectorIndexStat
 	if err != nil {
 		return 0, err
 	}
+	compressed := false
 	for _, section := range image.Sections {
+		compressed = compressed || section.Compression != typedcolumn.CompressionNone
 		n := uint64(max(section.RawBytes, section.Length))
 		extra, e := nativeTypedCheckedMul(n, 12)
 		if e != nil {
@@ -352,12 +358,14 @@ func nativeColumnGraphAssetReadCapacity(root string, asset columnVectorIndexStat
 			}
 		}
 	}
-	fixed, err := nativeTypedDecoderFixedCapacity()
-	if err != nil {
-		return 0, err
-	}
-	if err = nativeTypedCheckedAdd(&total, fixed); err != nil {
-		return 0, err
+	if compressed {
+		fixed, err := nativeTypedDecoderFixedCapacity()
+		if err != nil {
+			return 0, err
+		}
+		if err = nativeTypedCheckedAdd(&total, fixed); err != nil {
+			return 0, err
+		}
 	}
 	return total, nil
 }

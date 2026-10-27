@@ -124,7 +124,7 @@ func TestCOWPhysicalLeafCacheActivationAndCapturedCuts(t *testing.T) {
 				if !ok {
 					t.Fatal("missing captured token")
 				}
-				entry, err := basis.nativeEntryAtRoot(db.cow, token.RootPageID, []byte("a000"), true)
+				entry, err := basis.nativeEntryAtRoot(db.cow, nil, token.RootPageID, []byte("a000"), true)
 				if err != nil || !bytes.Equal(entry.Value, want) {
 					t.Fatalf("native physical entry: %q %v", entry.Value, err)
 				}

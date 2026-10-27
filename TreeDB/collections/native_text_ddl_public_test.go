@@ -2,6 +2,7 @@ package collections
 
 import (
 	"errors"
+	"fmt"
 	"reflect"
 	"sort"
 	"testing"
@@ -105,11 +106,11 @@ func TestNativeTextPublicDDL(t *testing.T) {
 						other.Name = "secondary"
 						for i := 0; i < 3; i++ {
 							if _, _, e := c.CreateTextIndex(other); e != nil {
-								done <- e
+								done <- fmt.Errorf("concurrent text create round=%d: %w", i, e)
 								return
 							}
 							if _, e := c.DropTextIndex(other.Name); e != nil {
-								done <- e
+								done <- fmt.Errorf("concurrent text drop round=%d: %w", i, e)
 								return
 							}
 						}
@@ -121,7 +122,7 @@ func TestNativeTextPublicDDL(t *testing.T) {
 								return []byte(`{"content":"alpha beta","tenant":"one","embedding":[1,0]}`), true, nil
 							})
 							if e != nil {
-								done <- e
+								done <- fmt.Errorf("concurrent document update round=%d: %w", i, e)
 								return
 							}
 						}
