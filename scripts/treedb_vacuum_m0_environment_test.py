@@ -127,6 +127,30 @@ class LeaseTests(unittest.TestCase):
 
 
 class CaptureTests(unittest.TestCase):
+    def test_m4_initialization_leaves_m0_directory_for_exclusive_capture(self):
+        # Run the actual caller initialization without expensive test/bench work.
+        source = (HERE / 'treedb_index_vacuum_m4_capture.sh').read_text()
+        initialization = source.split('\nfor command in lscpu free findmnt;', 1)[0]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            scripts = root / 'scripts'
+            scripts.mkdir()
+            caller = scripts / 'm4.sh'
+            caller.write_text(initialization)
+            shim = root / 'bin'
+            shim.mkdir()
+            (shim / 'git').write_text('#!/bin/sh\nexit 0\n')
+            (shim / 'git').chmod(0o755)
+            packet = root / 'packet'
+            environment = dict(os.environ, RUN_DIR=str(packet),
+                               PATH=str(shim) + os.pathsep + os.environ['PATH'])
+            result = subprocess.run(['bash', str(caller)], env=environment,
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue((packet / 'tests').is_dir())
+            self.assertTrue((packet / 'profiles').is_dir())
+            self.assertFalse((packet / 'm0').exists())
+
     def run_capture(self, failure='', overrides=None, occupied=None):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
