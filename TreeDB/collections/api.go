@@ -26141,6 +26141,31 @@ func decodeCollectionMeta(raw []byte) (CollectionMeta, error) {
 }
 
 func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
+	normalized, err := normalizeCollectionMetaSyntax(meta)
+	if err != nil {
+		return CollectionMeta{}, err
+	}
+	// Validate the complete request's shape and shared index namespace before
+	// refusing an individually well-formed but unsupported vector capability.
+	for _, def := range normalized.VectorIndexes {
+		if err := validateVectorIndexCapabilities(def); err != nil {
+			return CollectionMeta{}, fmt.Errorf("collections: invalid vector index %q: %w", def.Name, err)
+		}
+	}
+	// Representation/schema compatibility follows vector capability refusal,
+	// preserving typed errors for unsupported strategies, metrics and encodings.
+	if err := validateVectorIndexRepresentationSchema(normalized); err != nil {
+		return CollectionMeta{}, err
+	}
+	if len(normalized.VectorIndexes) != 0 && normalizedDocumentFormat(normalized.Options.DocumentFormat) == DocumentFormatBSON {
+		return CollectionMeta{}, fmt.Errorf("%w: BSON vector indexes are unsupported; ColumnGraph BSON support is not implemented", backenddb.ErrNativeSemanticUnsupported)
+	}
+	return normalized, nil
+}
+
+// normalizeCollectionMetaSyntax canonicalizes all declarations and validates
+// their syntax and shared namespace before deciding vector capability eligibility.
+func normalizeCollectionMetaSyntax(meta CollectionMeta) (CollectionMeta, error) {
 	if err := ValidateCollectionName(meta.Name); err != nil {
 		return CollectionMeta{}, err
 	}
@@ -26234,7 +26259,7 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 	meta.Indexes = indexes
 	vectorIndexes := append([]VectorIndexDefinition(nil), meta.VectorIndexes...)
 	for i := range vectorIndexes {
-		normalized, err := normalizeVectorIndexDefinition(vectorIndexes[i])
+		normalized, err := normalizeVectorIndexDefinitionSyntax(vectorIndexes[i])
 		if err != nil {
 			name := vectorIndexes[i].Name
 			if name == "" {
@@ -26254,9 +26279,6 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 		seen[vectorIndexes[i].Name] = struct{}{}
 	}
 	meta.VectorIndexes = vectorIndexes
-	if err := validateVectorIndexRepresentationSchema(meta); err != nil {
-		return CollectionMeta{}, err
-	}
 	textIndexes := copyTextIndexDefinitions(meta.TextIndexes)
 	for i := range textIndexes {
 		normalized, err := normalizeTextIndexDefinition(textIndexes[i])
@@ -26279,9 +26301,6 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 		seen[textIndexes[i].Name] = struct{}{}
 	}
 	meta.TextIndexes = textIndexes
-	if len(meta.VectorIndexes) != 0 && documentFormat == DocumentFormatBSON {
-		return CollectionMeta{}, fmt.Errorf("%w: BSON vector indexes are unsupported; ColumnGraph BSON support is not implemented", backenddb.ErrNativeSemanticUnsupported)
-	}
 	return normalizeCollectionIndexedBufferOptions(meta), nil
 }
 
@@ -26419,6 +26438,19 @@ func NormalizeVectorIndexDefinitionV1(def VectorIndexDefinition) (VectorIndexDef
 }
 
 func normalizeVectorIndexDefinition(def VectorIndexDefinition) (VectorIndexDefinition, error) {
+	normalized, err := normalizeVectorIndexDefinitionSyntax(def)
+	if err != nil {
+		return VectorIndexDefinition{}, err
+	}
+	if err := validateVectorIndexCapabilities(normalized); err != nil {
+		return VectorIndexDefinition{}, err
+	}
+	return normalized, nil
+}
+
+// normalizeVectorIndexDefinitionSyntax recognizes retired strategies as valid
+// spellings so callers can finish validating an entire request before refusal.
+func normalizeVectorIndexDefinitionSyntax(def VectorIndexDefinition) (VectorIndexDefinition, error) {
 	if def.Name == "" {
 		def.Name = vectorIndexDefaultName(def.Field)
 	}
@@ -26434,6 +26466,16 @@ func normalizeVectorIndexDefinition(def VectorIndexDefinition) (VectorIndexDefin
 	if def.Dimensions <= 0 {
 		return VectorIndexDefinition{}, errors.New("dimensions must be positive")
 	}
+	// Validate malformed declarations before rejecting unsupported capabilities.
+	if def.M < 0 {
+		return VectorIndexDefinition{}, errors.New("m cannot be negative")
+	}
+	if def.EfConstruction < 0 {
+		return VectorIndexDefinition{}, errors.New("ef_construction cannot be negative")
+	}
+	if def.EfSearch < 0 {
+		return VectorIndexDefinition{}, errors.New("ef_search cannot be negative")
+	}
 	metric, err := normalizeVectorMetric(def.Metric)
 	if err != nil {
 		return VectorIndexDefinition{}, err
@@ -26442,13 +26484,8 @@ func normalizeVectorIndexDefinition(def VectorIndexDefinition) (VectorIndexDefin
 	if err != nil {
 		return VectorIndexDefinition{}, err
 	}
-	strategy, err := normalizeVectorIndexStrategy(def.Strategy)
-	if err != nil {
-		return VectorIndexDefinition{}, err
-	}
 	def.Metric = metric
 	def.Encoding = encoding
-	def.Strategy = strategy
 	representation, err := normalizeVectorIndexRepresentation(def.Representation)
 	if err != nil {
 		return VectorIndexDefinition{}, err
@@ -26459,31 +26496,11 @@ func normalizeVectorIndexDefinition(def VectorIndexDefinition) (VectorIndexDefin
 		return VectorIndexDefinition{}, err
 	}
 	def.QuantizedIndexes = quantized
-	if len(def.QuantizedIndexes) > 0 && def.Strategy != VectorIndexStrategyColumnGraph {
-		return VectorIndexDefinition{}, fmt.Errorf("collections: quantized vector indexes require strategy %q", VectorIndexStrategyColumnGraph)
+	strategy, err := normalizeVectorIndexStrategySyntax(def.Strategy)
+	if err != nil {
+		return VectorIndexDefinition{}, err
 	}
-	if def.Strategy == VectorIndexStrategyColumnGraph {
-		if def.Metric != VectorMetricCosine {
-			return VectorIndexDefinition{}, fmt.Errorf("%w: column_graph vector index %q supports only metric %q", backenddb.ErrNativeSemanticUnsupported, def.Name, VectorMetricCosine)
-		}
-		if def.Encoding != VectorIndexEncodingFloat32 {
-			return VectorIndexDefinition{}, fmt.Errorf("%w: column_graph vector index %q supports only encoding %q", backenddb.ErrNativeSemanticUnsupported, def.Name, VectorIndexEncodingFloat32)
-		}
-	}
-	if vectorIndexUsesCosineNormalizedF32V1(def) {
-		if def.Strategy != VectorIndexStrategyColumnGraph || def.Metric != VectorMetricCosine || def.Encoding != VectorIndexEncodingFloat32 {
-			return VectorIndexDefinition{}, fmt.Errorf("collections: representation %q requires strategy=%q metric=%q encoding=%q", def.Representation, VectorIndexStrategyColumnGraph, VectorMetricCosine, VectorIndexEncodingFloat32)
-		}
-	}
-	if def.M < 0 {
-		return VectorIndexDefinition{}, errors.New("m cannot be negative")
-	}
-	if def.EfConstruction < 0 {
-		return VectorIndexDefinition{}, errors.New("ef_construction cannot be negative")
-	}
-	if def.EfSearch < 0 {
-		return VectorIndexDefinition{}, errors.New("ef_search cannot be negative")
-	}
+	def.Strategy = strategy
 	if def.M <= 0 {
 		def.M = defaultVectorIndexM
 	}
@@ -26499,14 +26516,46 @@ func normalizeVectorIndexDefinition(def VectorIndexDefinition) (VectorIndexDefin
 	return def, nil
 }
 
+func validateVectorIndexCapabilities(def VectorIndexDefinition) error {
+	if _, err := normalizeVectorIndexStrategy(def.Strategy); err != nil {
+		return err
+	}
+	if len(def.QuantizedIndexes) > 0 && def.Strategy != VectorIndexStrategyColumnGraph {
+		return fmt.Errorf("collections: quantized vector indexes require strategy %q", VectorIndexStrategyColumnGraph)
+	}
+	if def.Strategy == VectorIndexStrategyColumnGraph {
+		if def.Metric != VectorMetricCosine {
+			return fmt.Errorf("%w: column_graph vector index %q supports only metric %q", backenddb.ErrNativeSemanticUnsupported, def.Name, VectorMetricCosine)
+		}
+		if def.Encoding != VectorIndexEncodingFloat32 {
+			return fmt.Errorf("%w: column_graph vector index %q supports only encoding %q", backenddb.ErrNativeSemanticUnsupported, def.Name, VectorIndexEncodingFloat32)
+		}
+	}
+	if vectorIndexUsesCosineNormalizedF32V1(def) {
+		if def.Strategy != VectorIndexStrategyColumnGraph || def.Metric != VectorMetricCosine || def.Encoding != VectorIndexEncodingFloat32 {
+			return fmt.Errorf("collections: representation %q requires strategy=%q metric=%q encoding=%q", def.Representation, VectorIndexStrategyColumnGraph, VectorMetricCosine, VectorIndexEncodingFloat32)
+		}
+	}
+	return nil
+}
+
 func normalizeVectorIndexStrategy(strategy VectorIndexStrategy) (VectorIndexStrategy, error) {
+	normalized, err := normalizeVectorIndexStrategySyntax(strategy)
+	if err != nil {
+		return "", err
+	}
+	if normalized == "native_runtime" {
+		return "", fmt.Errorf("%w: vector strategy %q has been retired; use column_graph in a fresh database directory", backenddb.ErrNativeSemanticUnsupported, normalized)
+	}
+	return normalized, nil
+}
+
+func normalizeVectorIndexStrategySyntax(strategy VectorIndexStrategy) (VectorIndexStrategy, error) {
 	switch strategy {
 	case "":
 		return VectorIndexStrategyColumnGraph, nil
-	case VectorIndexStrategyColumnGraph:
+	case VectorIndexStrategyColumnGraph, "native_runtime":
 		return strategy, nil
-	case "native_runtime":
-		return "", fmt.Errorf("%w: vector strategy %q has been retired; use column_graph in a fresh database directory", backenddb.ErrNativeSemanticUnsupported, strategy)
 	default:
 		return "", fmt.Errorf("unsupported strategy %q", strategy)
 	}

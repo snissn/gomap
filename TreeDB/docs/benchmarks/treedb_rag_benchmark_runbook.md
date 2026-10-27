@@ -1,11 +1,19 @@
 # TreeDB retained RAG application baseline runbook (#4289)
 
-The current ColumnGraph parent/chunk ingestion shape is unavailable: source
-parents omit the non-null declared embedding. `IngestSources` refuses the full
-batch before provider work or publication, naming the parent and field. The
-application smoke and cell worker verify that refusal and return no lifecycle
-or query samples. [#5289](https://github.com/snissn/gomap/issues/5289) owns a
-supported mixed-parent/chunk representation and lifecycle restoration.
+The current ColumnGraph parent/chunk ingestion shape is unavailable. On
+legacy-backed collection handles, source parents omit the non-null declared
+embedding; `IngestSources` refuses the full batch before provider work or
+publication with a typed storage-stage error naming the parent and field. The
+application smoke and cell worker verify that legacy-backed refusal and return
+no lifecycle or query samples.
+
+Native semantic collection handles do not implement this source-replacement
+pipeline. They currently return `collections: db is nil` before provider work,
+schema preflight, or mutation, including when native buffered DDL has advanced
+the logical schema. This earlier refusal does not validate parent shape or
+establish native ingestion lifecycle support.
+[#5289](https://github.com/snissn/gomap/issues/5289) owns a supported
+mixed-parent/chunk representation and lifecycle restoration.
 Ordinary filtered vector Hybrid and direct filtered ANN cells are unsupported
 ([#5276](https://github.com/snissn/gomap/issues/5276)); explicit service Dense
 exact filtering remains separate. `QueryModeExact` on the vector-index API

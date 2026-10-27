@@ -241,16 +241,24 @@ func (s *Service) createIndexLocked(ctx context.Context, req CreateIndexRequest)
 	case !errors.Is(openErr, collections.ErrCollectionNotFound):
 		return IndexInfo{}, wrapServiceError(CodeInternal, "open existing index before create failed", openErr)
 	}
+	// Malformed scalar declarations are invalid independently of vector capabilities.
+	scalarDeclarations, err := normalizeScalarFieldDeclarations(req.ScalarFields)
+	if err != nil {
+		return IndexInfo{}, err
+	}
+	var typedInputConfig *collections.ColumnStoreConfig
+	if req.TypedInput {
+		typedInputConfig, err = serviceTypedInputConfig(req.Dimension, scalarDeclarations)
+		if err != nil {
+			return IndexInfo{}, err
+		}
+	}
 	vectorOptions, err := benchmarkVectorIndexOptionsForCreate(metric, req.VectorIndexOptions, defaultStrategy)
 	if err != nil {
 		return IndexInfo{}, err
 	}
 	if existingMeta != nil && vectorOptions.strategy != defaultStrategy {
 		return IndexInfo{}, serviceError(CodeConflict, "existing index has incompatible vector strategy")
-	}
-	scalarDeclarations, err := normalizeScalarFieldDeclarations(req.ScalarFields)
-	if err != nil {
-		return IndexInfo{}, err
 	}
 	options := collections.CollectionOptions{DocumentFormat: collections.DocumentFormatJSON}
 	if req.TypedInput && vectorOptions.strategy != collections.VectorIndexStrategyColumnGraph {
@@ -262,10 +270,7 @@ func (s *Service) createIndexLocked(ctx context.Context, req CreateIndexRequest)
 	if vectorOptions.strategy == collections.VectorIndexStrategyColumnGraph {
 		options.ColumnStore = serviceColumnStoreConfig(req.Dimension)
 		if req.TypedInput {
-			options.ColumnStore, err = serviceTypedInputConfig(req.Dimension, scalarDeclarations)
-			if err != nil {
-				return IndexInfo{}, err
-			}
+			options.ColumnStore = typedInputConfig
 		} else if len(scalarDeclarations) != 0 || s.manager.UsesNativeCommandWALApply() {
 			// Native ordinary ColumnGraph requires full retained JSON even
 			// without scalar indexes. Legacy scalar indexes also require it
@@ -1941,7 +1946,7 @@ func benchmarkVectorIndexOptionsForCreate(metric Metric, opts *BenchmarkVectorIn
 		case collections.VectorIndexStrategyColumnGraph:
 			out.strategy = opts.Strategy
 		case "native_runtime":
-			return normalizedBenchmarkVectorIndexOptions{}, serviceError(CodeUnsupported, "native_runtime has been removed; create a column_graph index")
+			out.strategy = opts.Strategy
 		default:
 			return normalizedBenchmarkVectorIndexOptions{}, serviceErrorf(CodeInvalidRequest, "unsupported vector index strategy %q", opts.Strategy)
 		}
@@ -1954,19 +1959,10 @@ func benchmarkVectorIndexOptionsForCreate(metric Metric, opts *BenchmarkVectorIn
 	default:
 		return normalizedBenchmarkVectorIndexOptions{}, serviceErrorf(CodeInvalidRequest, "unsupported vector index representation %q", opts.Representation)
 	}
-	if out.strategy == collections.VectorIndexStrategyColumnGraph && metric != MetricCosine {
-		return normalizedBenchmarkVectorIndexOptions{}, serviceErrorf(CodeUnsupported, "vector index strategy %q requires metric %q", out.strategy, MetricCosine)
+	// Validate every declaration before rejecting an unsupported capability.
+	if len(opts.QuantizedIndexes) > 0 {
+		out.quantizedIndexes = make([]collections.QuantizedVectorIndexDefinition, len(opts.QuantizedIndexes))
 	}
-	if out.representation == collections.VectorIndexRepresentationCosineNormalizedF32V1 && out.strategy != collections.VectorIndexStrategyColumnGraph {
-		return normalizedBenchmarkVectorIndexOptions{}, serviceErrorf(CodeInvalidRequest, "vector index representation %q requires strategy %q", out.representation, collections.VectorIndexStrategyColumnGraph)
-	}
-	if len(opts.QuantizedIndexes) > 0 && out.strategy != collections.VectorIndexStrategyColumnGraph {
-		return normalizedBenchmarkVectorIndexOptions{}, serviceErrorf(CodeInvalidRequest, "quantized vector indexes require strategy %q", collections.VectorIndexStrategyColumnGraph)
-	}
-	if len(opts.QuantizedIndexes) == 0 {
-		return out, nil
-	}
-	out.quantizedIndexes = make([]collections.QuantizedVectorIndexDefinition, len(opts.QuantizedIndexes))
 	seen := make(map[string]struct{}, len(opts.QuantizedIndexes))
 	for i, q := range opts.QuantizedIndexes {
 		if q.Name == "" {
@@ -2001,6 +1997,18 @@ func benchmarkVectorIndexOptionsForCreate(metric Metric, opts *BenchmarkVectorIn
 		}
 		collectionQ.ScalarU8Calibration = scalarU8Calibration
 		out.quantizedIndexes[i] = collectionQ
+	}
+	if out.strategy == "native_runtime" {
+		return normalizedBenchmarkVectorIndexOptions{}, serviceError(CodeUnsupported, "native_runtime has been removed; create a column_graph index")
+	}
+	if out.strategy == collections.VectorIndexStrategyColumnGraph && metric != MetricCosine {
+		return normalizedBenchmarkVectorIndexOptions{}, serviceErrorf(CodeUnsupported, "vector index strategy %q requires metric %q", out.strategy, MetricCosine)
+	}
+	if out.representation == collections.VectorIndexRepresentationCosineNormalizedF32V1 && out.strategy != collections.VectorIndexStrategyColumnGraph {
+		return normalizedBenchmarkVectorIndexOptions{}, serviceErrorf(CodeInvalidRequest, "vector index representation %q requires strategy %q", out.representation, collections.VectorIndexStrategyColumnGraph)
+	}
+	if len(opts.QuantizedIndexes) > 0 && out.strategy != collections.VectorIndexStrategyColumnGraph {
+		return normalizedBenchmarkVectorIndexOptions{}, serviceErrorf(CodeInvalidRequest, "quantized vector indexes require strategy %q", collections.VectorIndexStrategyColumnGraph)
 	}
 	return out, nil
 }

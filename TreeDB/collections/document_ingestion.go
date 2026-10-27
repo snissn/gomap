@@ -221,6 +221,13 @@ type ingestPlan struct {
 
 // IngestSources chunks, embeds, and indexes sources in one call.
 //
+// This pipeline currently requires a legacy-backed Collection. Native semantic
+// collection handles refuse with "collections: db is nil" before provider work,
+// schema preflight, or mutation; native source replacement is not implemented.
+// That early refusal does not validate parent shape. Legacy-backed collections
+// instead validate every parent against their captured current schema and return
+// a typed storage-stage IngestError for incompatible declared parent values.
+//
 // # Atomicity And Durability Contract
 //
 // Parent IDs, source metadata, declared parent values, and every chunk plan

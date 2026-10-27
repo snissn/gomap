@@ -83,11 +83,13 @@ func (m *NativeJSONManager) createCollectionWithStatus(meta CollectionMeta, appl
 	if m == nil || m.db == nil {
 		return nil, false, backenddb.ErrClosed
 	}
-	if err := nativeTypedProfile(m.db, meta); err != nil {
-		return nil, false, err
-	}
 	normalized, err := nativeJSONMeta(meta)
 	if err != nil {
+		return nil, false, err
+	}
+	// Syntax precedes profile capability rejection. Keep the original request
+	// for the profile check: normalization can erase a disabled ColumnStore.
+	if err := nativeTypedProfile(m.db, meta); err != nil {
 		return nil, false, err
 	}
 	if apply == nil {

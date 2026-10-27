@@ -108,8 +108,9 @@ func (c *Collection) WithVectorIndexDDL(definitions []VectorIndexDefinition, fn 
 func validateVectorIndexDDL(meta CollectionMeta, definitions []VectorIndexDefinition, native bool) (map[string]VectorIndexDefinition, error) {
 	vectors := make(map[string]VectorIndexDefinition, len(definitions))
 	candidate := *meta.copy()
+	added := false
 	for _, requested := range definitions {
-		def, err := normalizeVectorIndexDefinition(requested)
+		def, err := normalizeVectorIndexDefinitionSyntax(requested)
 		if err != nil {
 			return nil, err
 		}
@@ -120,26 +121,35 @@ func validateVectorIndexDDL(meta CollectionMeta, definitions []VectorIndexDefini
 		if _, found := findIndex(meta.Indexes, def.Name); found {
 			return nil, fmt.Errorf("%w: %q", ErrIndexNameConflict, def.Name)
 		}
+		if _, found := findTextIndex(meta.TextIndexes, def.Name); found {
+			return nil, fmt.Errorf("collections: duplicate index %q", def.Name)
+		}
 		if existing, found := findVectorIndex(meta.VectorIndexes, def.Name); found {
-			if !VectorIndexDefinitionsLogicallyEqual(existing, def) {
+			existing, err = normalizeVectorIndexDefinitionSyntax(existing)
+			if err != nil {
+				return nil, err
+			}
+			existing.SchemaGeneration = 0
+			requestedIdentity := def
+			requestedIdentity.SchemaGeneration = 0
+			if !vectorIndexDefinitionValuesEqual(existing, requestedIdentity) {
 				return nil, fmt.Errorf("collections: existing vector index %q has a different definition", def.Name)
 			}
 			continue
 		}
-		var errAdd error
-		candidate, _, errAdd = addVectorIndexToCollectionMeta(candidate, def)
-		if errAdd != nil {
-			return nil, errAdd
-		}
-		// Typed native collections support their original configured vector only;
-		// adding an index is unsupported even when its declaration shape is valid.
-		if native && meta.Options.ColumnStore != nil {
-			return nil, fmt.Errorf("%w: adding vector indexes to an existing ColumnStore collection is unsupported", backenddb.ErrNativeSemanticUnsupported)
-		}
+		// Build one private candidate; per-index normalization would refuse an
+		// earlier capability before checking later declarations in the request.
+		candidate.VectorIndexes = append(candidate.VectorIndexes, def)
+		added = true
 	}
 	// This check also refuses existing BSON declarations before fn can publish.
 	if _, err := normalizeCollectionMeta(candidate); err != nil {
 		return nil, err
+	}
+	// Typed native collections support their original configured vector only;
+	// refuse additions after validating every declaration and name above.
+	if native && added && meta.Options.ColumnStore != nil {
+		return nil, fmt.Errorf("%w: adding vector indexes to an existing ColumnStore collection is unsupported", backenddb.ErrNativeSemanticUnsupported)
 	}
 	if native {
 		if _, err := nativeJSONMeta(candidate); err != nil {

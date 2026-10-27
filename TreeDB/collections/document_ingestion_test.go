@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	treedb "github.com/snissn/gomap/TreeDB"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 )
@@ -2204,4 +2205,170 @@ func openIngestPathTestCollection5275(t *testing.T, field string) (*backenddb.DB
 		}
 	})
 	return d, col
+}
+
+// Native handles have no legacy source-replacement owner. Preserve their early
+// refusal even when native COW DDL is ahead of the facade/physical catalog.
+func TestNativeIngestSourcesRefusesBeforeProviderWithoutEffects(t *testing.T) {
+	for _, bufferedDDL := range []bool{false, true} {
+		t.Run(fmt.Sprintf("buffered_scalar_ddl_%t", bufferedDDL), func(t *testing.T) {
+			provider := fmt.Sprintf("native-ingest-refusal-5275-%t", bufferedDDL)
+			var factories, calls atomic.Int32
+			if err := embedding.DefaultRegistry().Register(provider, func(embedding.Config) (embedding.Embedder, error) {
+				factories.Add(1)
+				return outputFuncEmbedder{dims: 2, fn: func(texts [][]byte) [][]float32 {
+					calls.Add(1)
+					out := make([][]float32, len(texts))
+					for i := range out {
+						out[i] = []float32{1, 0}
+					}
+					return out
+				}}, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			dir := t.TempDir()
+			owner, err := treedb.Open(nativeTypedGroupOptions(dir))
+			if err != nil {
+				t.Fatal(err)
+			}
+			backend, err := owner.NativeSemanticBackend()
+			if err != nil {
+				owner.Close()
+				t.Fatal(err)
+			}
+			manager := NewCollectionManager(backend)
+			t.Cleanup(func() {
+				if manager != nil {
+					manager.Close()
+				}
+				if owner != nil {
+					owner.Close()
+				}
+			})
+			meta := nativeOrdinaryPendingGraphMeta()
+			if bufferedDDL {
+				meta = CollectionMeta{Name: "docs"}
+			}
+			if _, err = manager.CreateCollection(&meta); err != nil {
+				t.Fatal(err)
+			}
+			col, err := manager.OpenCollection(meta.Name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ids := [][]byte{[]byte("first"), []byte("later")}
+			originals := [][]byte{[]byte(`{"body":"old first","embedding":[1,0]}`), []byte(`{"body":"old later","embedding":[0,1]}`)}
+			if _, err = col.InsertBatch(ids, originals); err != nil {
+				t.Fatal(err)
+			}
+			if err = owner.Checkpoint(); err != nil {
+				t.Fatal(err)
+			}
+			if bufferedDDL {
+				sibling, openErr := manager.OpenCollection(meta.Name)
+				if openErr != nil {
+					t.Fatal(openErr)
+				}
+				if _, err = sibling.CreateIndex(IndexDefinition{Name: "body", Field: "body", ValueType: IndexValueString}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			held, err := col.nativeJSON.Capture(meta.Name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { held.Close() })
+			if bufferedDDL {
+				if len(col.meta.Indexes) != 0 || len(held.meta.Indexes) != 1 || held.meta.Indexes[0].Name != "body" {
+					t.Fatal("test did not establish stale native handle metadata after DDL")
+				}
+				snap := backend.AcquireSnapshot()
+				if snap == nil {
+					t.Fatal("missing physical snapshot")
+				}
+				physical, captureErr := loadCollectionCatalog(snap, meta.Name)
+				snap.Close()
+				if captureErr != nil || physical == nil || len(physical.meta.Indexes) != 0 {
+					t.Fatalf("DDL did not retain buffered schema cut: catalog=%+v err=%v", physical, captureErr)
+				}
+			}
+			before, ok := backend.StateToken()
+			if !ok {
+				t.Fatal("missing initial publication state")
+			}
+			walBefore, nextLSN := ingestWALContents5275(t, dir), backend.CommandWALNextLSN()
+			cfg := ingestTestCfg(2)
+			cfg.VectorIndexName = "vec"
+			cfg.Embedding.Provider = provider
+			res, err := col.IngestSources(context.Background(), []SourceDocument{
+				{ID: ids[0], Fields: map[string]any{"body": "replacement", "embedding": []float32{1, 0}}},
+				{ID: ids[1], Fields: map[string]any{"body": "unembedded replacement"}},
+			}, cfg)
+			if !errors.Is(err, errCollectionDBNil) || err.Error() != "collections: db is nil" {
+				t.Fatalf("native ingestion refusal changed: %v", err)
+			}
+			if len(res.Ingested) != 0 || res.ChunkNanos != 0 || res.EmbedNanos != 0 || res.IndexNanos != 0 || factories.Load() != 0 || calls.Load() != 0 {
+				t.Fatalf("native refusal did work: result=%+v factories=%d embeds=%d", res, factories.Load(), calls.Load())
+			}
+			after, ok := backend.StateToken()
+			if !ok || after != before || backend.CommandWALNextLSN() != nextLSN || !reflect.DeepEqual(walBefore, ingestWALContents5275(t, dir)) {
+				t.Fatal("native refusal changed physical publication or WAL")
+			}
+			current, err := col.nativeJSON.Capture(meta.Name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if current.capture.LogicalSequence() != held.capture.LogicalSequence() || current.collection.incarnation != held.collection.incarnation || current.collection.documentGeneration != held.collection.documentGeneration || !nativeIndexLogicalMetaEqual(current.meta, held.meta) {
+				current.Close()
+				t.Fatal("native refusal changed logical publication or schema")
+			}
+			if err = current.Close(); err != nil {
+				t.Fatal(err)
+			}
+			verify := func(c *Collection) {
+				t.Helper()
+				for i, id := range ids {
+					got, getErr := c.Get(id)
+					if getErr != nil || !bytes.Equal(got, originals[i]) {
+						t.Fatalf("original %q changed: %s %v", id, got, getErr)
+					}
+					child, childErr := c.Get(append(append([]byte(nil), id...), []byte("#0")...))
+					if childErr != nil || child != nil {
+						t.Fatalf("native refusal created child for %q: %s %v", id, child, childErr)
+					}
+				}
+			}
+			verify(col)
+			if err = held.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err = manager.Close(); err != nil {
+				t.Fatal(err)
+			}
+			manager = nil
+			if err = owner.Close(); err != nil {
+				t.Fatal(err)
+			}
+			owner = nil
+			owner, err = treedb.Open(nativeTypedGroupOptions(dir))
+			if err != nil {
+				t.Fatal(err)
+			}
+			backend, err = owner.NativeSemanticBackend()
+			if err != nil {
+				t.Fatal(err)
+			}
+			manager = NewCollectionManager(backend)
+			reopened, err := manager.OpenCollection(meta.Name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			verify(reopened)
+			reopenedMeta := reopened.Meta()
+			if bufferedDDL && (len(reopenedMeta.Indexes) != 1 || reopenedMeta.Indexes[0].Name != "body") {
+				t.Fatalf("reopen lost accepted native DDL: %+v", reopenedMeta)
+			}
+		})
+	}
 }
