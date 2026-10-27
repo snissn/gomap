@@ -218,6 +218,45 @@ activation evidence and separate natural versus instrumented observations.
 
 ## Immutable COW cache qualification
 
+Exact-cut cold native catalog controls:
+`TestCOWNativeCatalogProjectionOriginalCutLifetime` checks single initialization,
+unchanged published authority, successor separation, refusal and partial-error
+cleanup, held readers, closed-capture refusal and terminal original-budget zero.
+`TestNativeColdCatalogProjectionReuse` checks concurrent reuse through sibling
+managers, old/current document and schema isolation, checkpoint, reopen and
+owner Close with zero retained receipts. The catalog remains derived from the
+same original cut; these controls do not qualify performance or default adoption.
+
+```sh
+go test -race -count=1 ./TreeDB/caching ./TreeDB/collections \
+  -run '^(TestCOWNativeCatalogProjectionOriginalCutLifetime|TestNativeColdCatalogProjectionReuse)$'
+```
+
+Bounded COW ZSTD decoder controls:
+`TestCOWBoundedDecoder*` covers original-receipt retention, definition provenance,
+frame reuse and caller-buffer detachment, real allocation refusal, finite quantum
+and overflow handling, phase-only cleanup, exact output and concatenated-frame
+limits, plus decode/Close serialization. The operation-refusal fixture first
+proves that its exact frame needs additional retained storage before applying
+pressure. `TestCOWNativeDictionaryUsesBoundedOriginalReceipt` checks actual
+captured dictionary dispatch and same-receipt reuse. Preserve the original
+`TestCOWNativeValueWorkspaceAdmissionAndLifetime` output-admission and held-reader
+controls, and `TestCOWSuccessorFreshDictionaryLaneRefundsBeforeLocalTraversal`
+warm local-decoder handoff/refund controls; extra budget must not mask decoder
+storage discarded between reads.
+
+```sh
+go test -race -count=1 ./TreeDB/internal/valuelog -run '^TestCOWBoundedDecoder'
+go test -race -count=1 ./TreeDB/caching \
+  -run '^(TestCOWNativeDictionaryUsesBoundedOriginalReceipt|TestCOWNativeValueWorkspaceAdmissionAndLifetime|TestCOWSuccessorFreshDictionaryLaneRefundsBeforeLocalTraversal)$'
+```
+
+These controls require the compression dependency's bounded reader and explicit
+frame-rebind support. Focused results do not establish dependency landing,
+public sustained-read resource or performance acceptance, or default adoption.
+The original first mixed request after fresh reopen and sustained public workload
+remain separate lifecycle and qualification evidence.
+
 Paired native read lifecycle controls:
 `TestCOWNativeIdleDictionaryDecoderLifetime` checks a real dictionary decoder,
 nonblocking busy refusal, detach-before-refund, reconstruction on the same capture

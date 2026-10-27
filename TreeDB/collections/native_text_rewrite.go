@@ -104,10 +104,7 @@ func (c *Collection) nativeRewriteTextIndex(ctx context.Context, indexName strin
 	if err != nil {
 		return stats, before, "", err
 	}
-	base, _ := read.capture.State().(*nativeEngineVersion)
-	if base == nil {
-		base = read.privateEngine
-	}
+	base := read.engine
 	lease, err := base.allocator.AdmitNativeBytes(0)
 	if err != nil {
 		return stats, before, "", errors.Join(err, read.Close())

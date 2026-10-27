@@ -803,10 +803,7 @@ func (idx *VectorIndex) saveNativeHNSWWithMutationHeld() (status VectorIndexLoad
 		return status, err
 	}
 
-	base, _ := read.capture.State().(*nativeEngineVersion)
-	if base == nil {
-		base = read.privateEngine
-	}
+	base := read.engine
 	custody, err := newNativeMutationCustody(0, 1, base.allocator)
 	if err != nil {
 		return status, err

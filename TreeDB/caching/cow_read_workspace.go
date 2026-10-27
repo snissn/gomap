@@ -28,10 +28,15 @@ type cowCacheDictionaryRead struct {
 	cache    *cowCache
 }
 
+type cowReadDecoder interface {
+	Decode(valuelog.FrameHeader, []byte, []byte) ([]byte, error)
+	Close()
+}
+
 type cowReadCodec struct {
 	id         uint64
 	codec      valuelog.BlockCodec
-	decoder    *valuelog.COWDecoder
+	decoder    cowReadDecoder
 	definition *dictdb.DictionaryReadDefinition // nil when borrowed from the cut
 	input, raw []byte
 	lease      *memtable.COWExternalLease
@@ -309,6 +314,10 @@ func (w *cowReadWorkspace) codecWithDictionary(shape valuelog.COWRecordShape, in
 			continue
 		}
 		if c.id == shape.DictID && c.codec == shape.Codec {
+			if bounded, ok := c.decoder.(*valuelog.COWBoundedDecoder); ok && bounded.Closed() {
+				slot = i
+				break
+			}
 			if c.definition != nil && uint64(len(c.definition.Bytes)) > w.limits.MaxValueBytes {
 				return nil, dictdb.ErrReadDefinitionCapacity
 			}
@@ -361,7 +370,7 @@ func (w *cowReadWorkspace) codecWithDictionary(shape valuelog.COWRecordShape, in
 	if blockOnly {
 		sizes, err = valuelog.COWBlockDecoderRetentionSizes(shape.Codec, raw, input)
 	} else {
-		sizes, err = valuelog.COWDecoderRetentionSizes(uint64(len(definition)), raw, input, max(raw, 2048))
+		sizes, err = valuelog.COWBoundedDecoderRetentionSizes(raw, input, max(raw, 2048))
 	}
 	if err != nil {
 		owner.Close()
@@ -385,11 +394,20 @@ func (w *cowReadWorkspace) codecWithDictionary(shape valuelog.COWRecordShape, in
 		owner.Close()
 		return nil, err
 	}
-	var decoder *valuelog.COWDecoder
+	var decoder cowReadDecoder
 	if blockOnly {
 		decoder, err = valuelog.NewCOWBlockDecoder(shape.Codec, raw, input, func(valuelog.COWDecoderAllocationSizes) error { return nil })
 	} else {
-		decoder, err = valuelog.NewCOWDecoder(shape.DictID, definition, raw, input, max(raw, 2048), func(valuelog.COWDecoderAllocationSizes) error { return nil })
+		// Dictionary bytes remain owned by the independent definition or original
+		// cut. The bounded continuation grows THIS original codec receipt before
+		// each concrete allocation, never a second retention owner.
+		var dictionaryOwner any
+		if owner != nil {
+			dictionaryOwner = owner
+		} else if w.snapshot != nil {
+			dictionaryOwner = w.snapshot
+		}
+		decoder, err = valuelog.NewCOWBoundedDecoder(shape.DictID, definition, dictionaryOwner, raw, input, max(raw, 2048), lease, bytes)
 	}
 	if err != nil {
 		lease.Close()

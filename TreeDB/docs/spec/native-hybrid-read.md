@@ -83,7 +83,7 @@ their existing short-circuit order and finite admission checks.
 
 Cold pack opening still reserves its complete construction envelope before file
 mapping, parsing and validation. On capacity refusal it may ask the original live
-capture to [release idle generic decoder scratch](cow-cache-publication.md), then
+capture to [release idle shared ZSTD decoder scratch](cow-cache-publication.md), then
 retry the same reservation once only after an actual release. After the complete
 opener succeeds, a supported flat single-file view may shrink that same receipt
 to its checked retained backing, preserving the original state/graph and control

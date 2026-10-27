@@ -247,10 +247,7 @@ func (m *NativeJSONManager) mutateIndexFamilies(owner *Collection, name string, 
 	if read.meta.Options.ColumnStore != nil && (create != nil || !nativeTypedMeta(read.meta)) {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
-	base, _ := read.capture.State().(*nativeEngineVersion)
-	if base == nil {
-		base = read.privateEngine
-	}
+	base := read.engine
 	// All temporary arrays, decoder objects and encoded bytes remain within this
 	// operation receipt until private COW sources own their copies and Write returns.
 	lease, err := base.allocator.AdmitNativeBytes(0)

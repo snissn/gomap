@@ -445,6 +445,13 @@ func TestValueLogGC_KeepsSegmentMadeReachableByDeltaGroupSystemDescriptorOnly(t 
 	}
 	assertCandidateTrackerMatchesFullScan(t, d)
 
+	// Keep the tracker oracle above the durability fence: sealing must not
+	// repair the tracker before its delta-group update is checked.
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint delta-group descriptor before GC: %v", err)
+	}
+	requireLeafGenerationGCPublisherDrained(t, d)
+
 	stats, err := d.ValueLogGC(context.Background(), ValueLogGCOptions{})
 	if err != nil {
 		t.Fatalf("ValueLogGC: %v", err)

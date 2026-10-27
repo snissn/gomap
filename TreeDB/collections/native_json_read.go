@@ -25,6 +25,9 @@ type NativeJSONRead struct {
 	capture       backenddb.NativeSemanticCapture
 	domain        nativeDomainRead
 	collection    *nativeCollectionState
+	// engine borrows the resolved immutable catalog from capture or privateEngine.
+	// Only private successor preparation may produce mutation/publication state.
+	engine        *nativeEngineVersion
 	privateEngine *nativeEngineVersion
 	scratch       *nativeDomainReadScratch
 	scratchLease  *memtable.COWExternalLease
@@ -62,13 +65,32 @@ func (m *NativeJSONManager) Capture(name string) (result *NativeJSONRead, result
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
 	if base == nil {
-		r.privateEngine, err = importNativeJSONCatalog(capture)
-		if err != nil {
-			return nil, err
+		if projection, ok := capture.(interface {
+			NativeCatalogProjection(func(backenddb.NativeSemanticCapture) (backenddb.NativeSemanticState, error)) (backenddb.NativeSemanticState, error)
+		}); ok {
+			state, projectionErr := projection.NativeCatalogProjection(nativeJSONCatalogProjection)
+			base, ok = state.(*nativeEngineVersion)
+			if projectionErr != nil {
+				// Partial failed construction remains on the original read's
+				// cleanup path, outside both projection locks; never shared.
+				r.privateEngine = base
+				return nil, projectionErr
+			}
+			if !ok || base == nil {
+				return nil, backenddb.ErrNativeSemanticUnsupported
+			}
+		} else {
+			// Other original capture implementations retain private import
+			// ownership. No process/manager cache or alternate capture is used.
+			r.privateEngine, err = importNativeJSONCatalog(capture)
+			if err != nil {
+				return nil, err
+			}
+			base = r.privateEngine
 		}
-		base = r.privateEngine
 	}
 
+	r.engine = base
 	c, ok := base.names.Get(name)
 	if !ok {
 		return nil, tree.ErrKeyNotFound
@@ -84,6 +106,17 @@ func (m *NativeJSONManager) Capture(name string) (result *NativeJSONRead, result
 		return nil, err
 	}
 	return r, nil
+}
+
+// Static adapter avoids a newly allocated callback closure on every capture.
+// Successful import transfers its original reference to the retained cut. On
+// error its partial engine returns to the caller's original private cleanup.
+func nativeJSONCatalogProjection(capture backenddb.NativeSemanticCapture) (backenddb.NativeSemanticState, error) {
+	engine, err := importNativeJSONCatalog(capture)
+	if engine == nil {
+		return nil, err
+	}
+	return engine, err
 }
 
 func (m *NativeJSONManager) Get(collection string, id []byte) (value []byte, resultErr error) {
@@ -462,6 +495,7 @@ func (r *NativeJSONRead) Close() error {
 	r.metadataLease = nil
 	var err error
 	r.collection = nil
+	r.engine = nil
 	if r.privateEngine != nil {
 		record := r.privateEngine.Release()
 		r.privateEngine = nil
