@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -25,6 +26,7 @@ type fixedWALAheadSlot struct {
 	identity                                          [16]byte
 	capacity, budget, target                          int64
 	reserve                                           *fixedWALAheadReserve
+	started                                           time.Time
 	signal                                            chan struct{}
 	ready, cancelled, claimed, done                   bool
 }
@@ -155,21 +157,22 @@ func (j *CommandJournal) fixedWALAheadErrorLocked() error {
 	return j.fixedAheadErr
 }
 
-// This is reached before an append that still fits, using flushed occupancy.
+// This is reached before an append that still fits, using physical demand.
 // The worker sees only immutable scalars and a duplicated retained parent.
-func (j *CommandJournal) maybeStartFixedWALAheadLocked() error {
+func (j *CommandJournal) maybeStartFixedWALAheadLocked(incoming int64) error {
 	w := j.writer
 	if j.fixedAhead != nil || j.closing || w == nil || w.fixed == nil || j.stableParent == nil || !FixedWALCreationSupported() ||
 		j.pendingStableSuccessor != nil || len(j.pendingStableRotations) != 0 || j.segmentSeq == ^uint64(0) || j.fixedAheadGeneration == ^uint64(0) {
 		return nil
 	}
 	current := w.fixed
-	if current.physical-fixedWALHeaderSize < (current.capacity-fixedWALHeaderSize+1)/2 {
-		return nil
-	}
 	plan, err := fixedSuccessorSizePlan(current, w.fixedBudget, fixedWALPressureRotation, 0)
 	if err != nil {
 		return err
+	}
+	buffered := w.ActiveBytes() - current.logical
+	if !j.fixedAheadPolicy.shouldStart(current, buffered, incoming, plan.capacity, time.Now) {
+		return nil
 	}
 	if plan.capacity <= 0 || plan.capacity > fixedWALDefaultPhysicalBudget {
 		return nil
@@ -190,7 +193,7 @@ func (j *CommandJournal) maybeStartFixedWALAheadLocked() error {
 	slot := &fixedWALAheadSlot{
 		generation: j.fixedAheadGeneration, sequence: j.segmentSeq, namespace: j.namespaceGeneration, parentGeneration: parentGeneration,
 		currentInfo: info, identity: current.identity, capacity: current.capacity, budget: w.fixedBudget, target: j.segmentTargetBytes,
-		reserve: &fixedWALAheadReserve{parent: parent, state: &fixedWAL{capacity: plan.capacity}}, signal: make(chan struct{}),
+		reserve: &fixedWALAheadReserve{parent: parent, state: &fixedWAL{capacity: plan.capacity}}, signal: make(chan struct{}), started: time.Now(),
 	}
 	j.fixedAhead = slot
 	go j.runFixedWALAhead(slot)
@@ -212,6 +215,10 @@ func (j *CommandJournal) runFixedWALAhead(slot *fixedWALAheadSlot) {
 		r.state, err = writeInitializedFixedWAL(r.file, r.state.capacity)
 	}
 	j.mu.Lock()
+	elapsed := time.Since(slot.started)
+	if err == nil {
+		j.fixedAheadPolicy.prepared(r.state.capacity, elapsed)
+	}
 	if err == nil && !slot.cancelled && !j.closing {
 		slot.ready = true
 		j.mu.Unlock()

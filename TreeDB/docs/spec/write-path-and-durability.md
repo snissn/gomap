@@ -1078,6 +1078,16 @@ A fixed-container journal can initialize one unpublished pressure successor
 behind current appends, using the same full reserve write/sync proof. The append
 owner alone adopts a ready exact-plan/identity match through existing canonical
 publication; it never uses the private diagnostic handle as its active resource.
+Preparation begins according to a journal-local estimate of physical demand
+and completed private initialization time. Cold start retains a half-full lead;
+a successful ahead preparation calibrates later segments. Physical observations
+are amortized over 64 KiB, which is also included in the lead alongside incoming
+extent and conservative accepted-buffer headroom. A recent rate peak decays
+with elapsed time, including idle periods. The preparation budget scales observed
+work for the exact planned successor capacity, with two budgets of slack. This
+estimate changes neither capacity growth nor exact adoption checks, and may
+still miss an unobserved burst or storage stall. It does not guarantee zero
+unused reserve at an arbitrary stop time.
 A miss keeps synchronous preparation without waiting for worker readiness.
 Forced resets, stale predictions and Close cancel adoption; exact cleanup and
 actual worker join remain mandatory. A cancelled worker and synchronous reserve
