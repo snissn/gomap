@@ -490,7 +490,7 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/column_store_wire_v1_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 23, occurrences: 27},
 	{path: "TreeDB/collections/vector_partition_prepare_v1.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 3},
 	{path: "TreeDB/db/vector_prepare_ownership_external_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 4},
-	{path: "TreeDB/internal/nativewire/deterministic.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
+	{path: "TreeDB/internal/nativewire/deterministic.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 2},
 	{path: "TreeDB/internal/raftapply/column_store_create_v6_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 9},
 	{path: "TreeDB/internal/raftapply/create_collection.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 3},
 	// Logical digests and their reconstruction fixture read the retained public
@@ -507,6 +507,8 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/nativewire/fixed_peer_vector_initialize_client_v1.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 5},
 	{path: "TreeDB/nativewire/fixed_peer_vector_initialize_client_v1_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
 	{path: "TreeDB/nativewire/metadata.go", classification: typedStorageLegacyCompatibility, matchingLines: 6, occurrences: 10},
+	// Raw v6 request validation exercises the retained public schema API.
+	{path: "TreeDB/nativewire/raw_collection_syntax_precedence_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 4},
 	// Colocated outcomes and recovery use the retained public configuration API.
 	{path: "TreeDB/collections/vector_partition_colocated_outcome_v1.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/internal/raftfsm/colocated_vector_mutation_recovery_v1_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 4},
