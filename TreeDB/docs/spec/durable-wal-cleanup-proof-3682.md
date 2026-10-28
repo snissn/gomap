@@ -148,10 +148,32 @@ the frontier through its separate dependency-closure contract.
 `DB.Close` runs this algorithm after closing write admission and draining the
 durable-root publisher, but before releasing journal or recovery ownership. It
 retains the namespace without failing close when proof construction is
-unavailable or stale, including an ambiguous retained replay lineage. Once the
-destructive batch is entered, identity/delete-lease, unlink, observer, and
+unavailable or stale, including an ambiguous retained replay lineage or an
+expected resource pin encountered before any unlink. Explicit cleanup still
+reports the pin; it never releases another owner's pin. Once the destructive
+batch is entered, other identity/delete-lease, unlink, observer, and
 directory-sync failures are returned to the caller. Resource teardown continues
 in either case so a cleanup failure cannot strand the journal owner.
+
+At a zero cleanup frontier, an absence check can avoid reading fixed reserves
+only when the WAL namespace contains no recognized non-value log entry other
+than the captured active pathname, and reopening that pathname proves its exact
+captured physical identity. The check uses the same filename parser as the full
+listing, including legacy spellings; any additional recognized entry, missing
+active path, or changed identity requires the full scanner, and filesystem errors
+are returned. It does not validate the active payload or authorize any deletion.
+The active identity is protected regardless of payload contents. Append and
+rotation are excluded during the check. Rotation after the check can create an
+inactive predecessor that is retained until a later cleanup pass; it cannot turn
+this non-destructive pass into deletion authority.
+
+This saves payload reads for the common sole-active namespace. A namespace with
+inactive files still performs the existing complete listing/reserve and frame
+validation, with cost proportional to the recognized files and their physical
+reserves. No content-prefix shortcut is safe for arbitrary corrupt suffixes.
+High-segment zero-frontier histories therefore incur this validation cost until
+empty predecessors are reclaimed or the oldest recovery root advances. Cleanup
+does not change publication cadence or advance a recovery root to avoid the cost.
 
 Acquiring every delete lease before the first unlink prevents a later pinned
 candidate from producing an avoidable partial batch. If an observer, unlink,

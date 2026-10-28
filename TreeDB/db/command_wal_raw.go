@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"sort"
 	"sync"
@@ -966,6 +967,20 @@ func (db *DB) cleanupCommandWALCoveredSegmentsV1() (retErr error) {
 	// A zero replay frontier still covers positively classified empty fixed
 	// containers. Scan them through the same identity, pin, and namespace checks;
 	// otherwise every reopen can retain another empty predecessor forever.
+	if proof.cleanupThrough == 0 {
+		var inactive bool
+		err := proof.journalOwner.WithCleanupScan(proof.journal, func() error {
+			var err error
+			inactive, err = commandWALHasInactiveCleanupFiles(db.dir, proof.journal)
+			return err
+		})
+		if err != nil {
+			return err
+		}
+		if !inactive {
+			return db.syncCommandWALCleanupNamespaceIfDirty()
+		}
+	}
 	scanStart := time.Now()
 	var decisions []commandWALSegmentCleanupDecision
 	// Listing and reader construction both validate fixed-container reserve.
@@ -1009,6 +1024,14 @@ func (db *DB) cleanupCommandWALCoveredSegmentsV1() (retErr error) {
 					if proof.segments[i].Removed {
 						return true, removeErr
 					}
+				}
+				// Delete leases are acquired for the whole batch before the
+				// first unlink. A pinned candidate therefore leaves every path
+				// intact: retain it as temporarily unavailable authority, while
+				// explicit callers still receive ErrResourcePinned. Do not
+				// normalize combined errors or any partial destructive batch.
+				if removeErr == rootpublication.ErrResourcePinned {
+					removeErr = errors.Join(errDurableWALCleanupProofUnavailable, removeErr)
 				}
 				return false, removeErr
 			})
@@ -1105,6 +1128,44 @@ func (db *DB) cleanupCommandWALCoveredSegmentsV1() (retErr error) {
 		return syncErr
 	}
 	return err
+}
+
+// commandWALHasInactiveCleanupFiles is a conservative absence check, never
+// deletion authority. Only the sole captured active physical identity permits
+// skipping payload scans. Every other command-shaped entry, including unknown
+// streams and aliases, goes through the complete cleanup scanner. The caller
+// holds the journal's cleanup-scan exclusion while inspecting its namespace.
+func commandWALHasInactiveCleanupFiles(dir string, snapshot commitlog.CommandJournalCleanupSnapshot) (bool, error) {
+	walDir := WALDirPath(dir)
+	entries, err := os.ReadDir(walDir)
+	if err != nil {
+		return false, err
+	}
+	activeSeen := false
+	for _, entry := range entries {
+		// Use the listing parser, including its legacy WAL spellings. Even a
+		// non-command legacy file can make that listing fail validation.
+		_, _, valueLog, recognized := parseLogSeq(entry.Name())
+		if !recognized || valueLog {
+			continue
+		}
+		if entry.Name() != filepath.Base(snapshot.ActivePath) {
+			return true, nil
+		}
+		file, err := os.Open(filepath.Join(walDir, entry.Name()))
+		if err != nil {
+			return false, err
+		}
+		identity, identityErr := rootpublication.StableIdentityFromFile(file)
+		if err := errors.Join(identityErr, file.Close()); err != nil {
+			return false, err
+		}
+		if !rootpublication.SamePhysicalIdentity(identity, snapshot.ActiveIdentity) {
+			return true, nil
+		}
+		activeSeen = true
+	}
+	return !activeSeen, nil
 }
 
 func (db *DB) syncCommandWALCleanupNamespaceIfDirty() error {
