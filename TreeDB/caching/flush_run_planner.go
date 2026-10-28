@@ -938,10 +938,18 @@ func appendCanonicalFlushRunChunkToBackendBatch(backendBatch batch.Interface, op
 	if backendBatch == nil {
 		return errors.New("cachingdb: missing backend batch")
 	}
-	sv, _ := backendBatch.(backendBatchSetViewer)
-	dv, _ := backendBatch.(backendBatchDeleteViewer)
-	psv, _ := backendBatch.(backendBatchPointerSetterView)
-	ps, _ := backendBatch.(backendBatchPointerSetter)
+	var sv backendBatchSetViewer
+	var dv backendBatchDeleteViewer
+	var psv backendBatchPointerSetterView
+	var ps backendBatchPointerSetter
+	if native, ok := backendBatch.(*backenddb.Batch); ok {
+		sv, dv, psv, ps = native, native, native, native
+	} else {
+		sv, _ = backendBatch.(backendBatchSetViewer)
+		dv, _ = backendBatch.(backendBatchDeleteViewer)
+		psv, _ = backendBatch.(backendBatchPointerSetterView)
+		ps, _ = backendBatch.(backendBatchPointerSetter)
+	}
 	revOps := resolveBackendBatchRevisionOps(backendBatch)
 	for i := range ops {
 		op := ops[i]
