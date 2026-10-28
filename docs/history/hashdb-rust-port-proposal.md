@@ -185,4 +185,3 @@ If you need the HashDB cache semantics (write-back cache + optional WAL):
 - [ ] No raw struct overlays in persistent storage
 - [ ] Crash tests cover torn records and partial batches
 - [ ] Benchmarks run but do not gate correctness
-
