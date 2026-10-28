@@ -38,8 +38,9 @@ text capture. Consolidation can follow integration of a reviewed common helper.
 Before a causal experiment, predeclare full build and lifecycle dirty-page history,
 including existing observer/receipt writes. An idle control alone does not reproduce
 that history. Preserve exact binaries, fixture storage/durability, all eight pairs
-and sixteen samples. Guard remains per-process CPU >=2% over its original measured
-observation; aggregate foreign CPU is a different predicate. CPU-only and foreign
+and sixteen samples. The active guard uses the shared [external-cpu-v2 policy](quiet-host-policy.md):
+10% per process and 50% observed aggregate, in units of one logical CPU. Historical
+2% failures retain their original disposition. CPU-only and foreign
 writer controls need known process/inode identity; block statistics alone cannot
 attribute shared-worker CPU. No control campaign is authorized here.
 

@@ -167,7 +167,9 @@ def run(root: Path, output: Path, baseline: str, candidate: str) -> int:
              environment_sha256=hashlib.sha256(json.dumps(environment, sort_keys=True).encode()).hexdigest(),
              thresholds=dict(time_percent=maintained.TIME_LIMIT_PERCENT, median_bytes_growth=0, median_allocations_growth=0),
              quiet=dict(window_s=maintained.QUIET_WINDOW_SECONDS, cap_s=maintained.QUIET_ACQUISITION_SECONDS,
-                        external_cpu_percent=maintained.QUIET_LIMIT_PERCENT)))
+                        external_cpu_percent=maintained.QUIET_LIMIT_PERCENT,
+                        aggregate_external_cpu_percent=maintained.QUIET_AGGREGATE_LIMIT_PERCENT,
+                        policy="external-cpu-v2")))
         benchmark_argv = ["-test.run=^$", "-test.bench=^" + BENCHMARK + "$", "-test.benchtime=" + BENCHTIME,
                           "-test.count=1", "-test.benchmem", "-test.timeout=60s"]
 
