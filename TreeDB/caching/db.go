@@ -25301,11 +25301,11 @@ func appendCheckpointStageStats(stats map[string]string, name string, s *checkpo
 	if stats == nil || s == nil || name == "" {
 		return
 	}
-	prefix := "treedb.cache.checkpoint.stage." + name
-	stats[prefix+".samples"] = fmt.Sprintf("%d", s.samples.Load())
-	stats[prefix+".last_ns"] = fmt.Sprintf("%d", s.lastNs.Load())
-	stats[prefix+".total_ns"] = fmt.Sprintf("%d", s.totalNs.Load())
-	stats[prefix+".max_ns"] = fmt.Sprintf("%d", s.maxNs.Load())
+	keys := checkpointStageMetricKeys(name)
+	stats[keys.samples] = fmt.Sprintf("%d", s.samples.Load())
+	stats[keys.lastNs] = fmt.Sprintf("%d", s.lastNs.Load())
+	stats[keys.totalNs] = fmt.Sprintf("%d", s.totalNs.Load())
+	stats[keys.maxNs] = fmt.Sprintf("%d", s.maxNs.Load())
 }
 
 func checkpointRatePerSecond(amount, ns uint64) float64 {
