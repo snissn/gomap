@@ -259,7 +259,7 @@ func decodeCollectionMetaForPurpose(src []byte, create bool) (collections.Collec
 		}
 		meta.VectorIndexes = make([]collections.VectorIndexDefinition, 0, int(vectorIndexCount))
 		for i := uint64(0); i < vectorIndexCount; i++ {
-			def, next, err := decodeVectorIndexDefinitionForCollectionMeta(src, off, version)
+			def, next, err := decodeVectorIndexDefinitionForCollectionMeta(src, off, version, create)
 			if err != nil {
 				return collections.CollectionMeta{}, err
 			}
@@ -481,7 +481,7 @@ func decodeVectorIndexDefinitionAt(src []byte, off int, withVersion bool) (colle
 	}, off, nil
 }
 
-func decodeVectorIndexDefinitionForCollectionMeta(src []byte, off int, collectionMetaVersion uint64) (collections.VectorIndexDefinition, int, error) {
+func decodeVectorIndexDefinitionForCollectionMeta(src []byte, off int, collectionMetaVersion uint64, create bool) (collections.VectorIndexDefinition, int, error) {
 	def, off, err := decodeVectorIndexDefinitionAt(src, off, false)
 	if err != nil {
 		return collections.VectorIndexDefinition{}, 0, err
@@ -493,9 +493,16 @@ func decodeVectorIndexDefinitionForCollectionMeta(src []byte, off int, collectio
 	if err != nil {
 		return collections.VectorIndexDefinition{}, 0, err
 	}
-	decodedStrategy, err := decodeVectorIndexStrategyStrict(strategy)
-	if err != nil {
-		return collections.VectorIndexDefinition{}, 0, err
+	// Create ingress must parse every declaration before capability refusal.
+	// Response decoding keeps the strict retired-tag rejection.
+	var decodedStrategy collections.VectorIndexStrategy
+	if create && strategy == 1 {
+		decodedStrategy = "native_runtime"
+	} else {
+		decodedStrategy, err = decodeVectorIndexStrategyStrict(strategy)
+		if err != nil {
+			return collections.VectorIndexDefinition{}, 0, err
+		}
 	}
 	quantizedCount, err := readUvarintField(src, &off, "quantized_index_count")
 	if err != nil {
