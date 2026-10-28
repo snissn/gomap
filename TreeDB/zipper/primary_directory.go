@@ -376,7 +376,19 @@ func (z *Zipper) applyPrimaryDirectory(rootID uint64, ops []batch.Entry, ranges 
 	}
 	base := node.PrimaryOperand{Ref: page.PageChildRef(rootID), Digest: sha256.Sum256(image)}
 	baseSeq := uint64(1)
-	entries, err := makePrimaryScratch[node.PrimaryDirectoryEntry](z.primaryArena, 0, node.PrimaryDirectoryMaxEntries)
+	var directory node.PrimaryDirectoryView
+	if node.NewNode(image).Type() == page.PageTypePrimaryDirectory {
+		directory, err = node.DecodePrimaryDirectory(image)
+		if err != nil {
+			return 0, nil, metrics, err
+		}
+	}
+	// Each operation can insert at most one entry. Materialization clears the
+	// inherited entries, and oversized batches return through the DATA path
+	// before this vector grows. The existing owner admits and refunds the full
+	// backing allocation, including capacity unused by replacements.
+	entryCapacity := directory.Count() + min(len(ops), node.PrimaryDirectoryMaxEntries-directory.Count())
+	entries, err := makePrimaryScratch[node.PrimaryDirectoryEntry](z.primaryArena, 0, entryCapacity)
 	if err != nil {
 		return 0, nil, metrics, err
 	}
@@ -398,15 +410,11 @@ func (z *Zipper) applyPrimaryDirectory(rootID uint64, ops []batch.Entry, ranges 
 		metrics.PrimaryBankWorkBytes += work.Bytes
 	}()
 	if node.NewNode(image).Type() == page.PageTypePrimaryDirectory {
-		d, e := node.DecodePrimaryDirectory(image)
-		if e != nil {
-			return 0, nil, metrics, e
-		}
-		base, baseSeq = d.Base()
+		base, baseSeq = directory.Base()
 		metrics.PrimaryDirectoryPagesRead++
-		entries = entries[:d.Count()]
+		entries = entries[:directory.Count()]
 		for i := range entries {
-			entries[i], _ = d.Entry(i)
+			entries[i], _ = directory.Entry(i)
 		}
 		if !primaryarena.IsPage(rootID) {
 			retired = append(retired, rootID)
