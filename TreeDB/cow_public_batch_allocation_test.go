@@ -57,6 +57,7 @@ func TestCOWPublicCommandBatchOwnedStagingAndWrapperAdmission(t *testing.T) {
 			}
 			// Exhaust the actual shared authority. Refused constructors and every
 			// method use immutable carriers, including repeated/concurrent Close.
+			cowPublicPressureEvictIdle(t, database)
 			s := database.cached.COWMemoryStats()
 			limits := memtable.DefaultCOWLimits()
 			overhead := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
