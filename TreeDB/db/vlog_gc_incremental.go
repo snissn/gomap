@@ -378,6 +378,18 @@ func (t *valueLogRefTracker) replaceUnlessAdvanced(counts map[uint32]uint64, seq
 	return t.replaceUnlessAdvancedOwned(&next, seq, incarnation, dirty, revision)
 }
 func (t *valueLogRefTracker) replaceUnlessAdvancedOwned(counts *valueLogRefCounts, seq uint64, incarnation valueLogRefIncarnation, dirty bool, revision uint64) bool {
+	return t.replaceUnlessAdvancedOwnedWithBasis(counts, seq, incarnation, dirty, revision, nil)
+}
+
+// Only a scan's original immutable roots can authorize retaining an existing
+// raw-edge census. Logical counts alone never supply missing raw evidence.
+type valueLogRefScanBasis struct {
+	commitSeq                uint64
+	incarnation              valueLogRefIncarnation
+	userRootID, systemRootID uint64
+}
+
+func (t *valueLogRefTracker) replaceUnlessAdvancedOwnedWithBasis(counts *valueLogRefCounts, seq uint64, incarnation valueLogRefIncarnation, dirty bool, revision uint64, basis *valueLogRefScanBasis) bool {
 	if t == nil {
 		return false
 	}
@@ -387,8 +399,18 @@ func (t *valueLogRefTracker) replaceUnlessAdvancedOwned(counts *valueLogRefCount
 	if t.revision != revision && (t.commitSeq > seq || (t.commitSeq == seq && t.incarnation != incarnation)) {
 		return false
 	}
-	t.rawCounts.close()
-	t.rawValid = false
+	// A GC scan can refresh logical counts for the exact roots already covered
+	// by the publication-owned raw census. Preserve that original collector only
+	// while every generation and root binding still matches under this lock.
+	preserveRaw := basis != nil && basis.commitSeq == seq && basis.incarnation == incarnation &&
+		basis.userRootID != 0 && basis.systemRootID != 0 && basis.userRootID != basis.systemRootID &&
+		incarnation.valid() && t.valid && t.rawValid && t.commitSeq == seq && t.incarnation == incarnation &&
+		t.rawCommitSeq == seq && t.rawIncarnation == incarnation &&
+		t.rawUserRoot == basis.userRootID && t.rawSystemRoot == basis.systemRootID
+	if !preserveRaw {
+		t.rawCounts.close()
+		t.rawValid = false
+	}
 	old := t.counts.take()
 	t.counts = counts.take()
 	t.commitSeq, t.incarnation, t.valid, t.dirty = seq, incarnation, true, dirty
@@ -692,12 +714,12 @@ func (db *DB) referencedValueLogSegmentsWithSourceAtSeqPolicy(ctx context.Contex
 			return refs, valueLogRefResolutionSourceTracker, seq, nil
 		}
 	}
-	counts, scannedSeq, incarnation, err := db.scanValueLogRefCountsOwned(ctx)
+	counts, basis, err := db.scanValueLogRefCountsOwnedWithBasis(ctx)
 	if err != nil && errors.Is(err, valuelog.ErrFileNotFound) {
 		if refreshErr := db.RefreshValueLogSet(); refreshErr != nil {
 			return nil, valueLogRefResolutionSourceFallbackScan, 0, refreshErr
 		}
-		counts, scannedSeq, incarnation, err = db.scanValueLogRefCountsOwned(ctx)
+		counts, basis, err = db.scanValueLogRefCountsOwnedWithBasis(ctx)
 	}
 	if err != nil {
 		return nil, valueLogRefResolutionSourceFallbackScan, 0, err
@@ -706,13 +728,13 @@ func (db *DB) referencedValueLogSegmentsWithSourceAtSeqPolicy(ctx context.Contex
 	refs := counts.referencedSet()
 	if db.valueLogRefTracker != nil {
 		if guardConcurrentAdvance {
-			db.valueLogRefTracker.replaceUnlessAdvancedOwned(&counts, scannedSeq, incarnation, true, trackerRevisionBeforeScan)
+			db.valueLogRefTracker.replaceUnlessAdvancedOwnedWithBasis(&counts, basis.commitSeq, basis.incarnation, true, trackerRevisionBeforeScan, &basis)
 		} else {
-			db.valueLogRefTracker.replaceOwned(&counts, scannedSeq, incarnation, true)
+			db.valueLogRefTracker.replaceOwned(&counts, basis.commitSeq, basis.incarnation, true)
 		}
 	}
 
-	return refs, valueLogRefResolutionSourceFallbackScan, scannedSeq, nil
+	return refs, valueLogRefResolutionSourceFallbackScan, basis.commitSeq, nil
 }
 
 // Logical-only diagnostic projection; production replacement uses the bound result.
@@ -752,6 +774,11 @@ func (db *DB) scanValueLogRefCountsBound(ctx context.Context) (map[uint32]uint64
 }
 
 func (db *DB) scanValueLogRefCountsOwned(ctx context.Context) (valueLogRefCounts, uint64, valueLogRefIncarnation, error) {
+	counts, basis, err := db.scanValueLogRefCountsOwnedWithBasis(ctx)
+	return counts, basis.commitSeq, basis.incarnation, err
+}
+
+func (db *DB) scanValueLogRefCountsOwnedWithBasis(ctx context.Context) (valueLogRefCounts, valueLogRefScanBasis, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -762,25 +789,26 @@ func (db *DB) scanValueLogRefCountsOwned(ctx context.Context) (valueLogRefCounts
 		if snap != nil {
 			err = errors.Join(err, snap.Close())
 		}
-		return valueLogRefCounts{}, 0, valueLogRefIncarnation{}, err
+		return valueLogRefCounts{}, valueLogRefScanBasis{}, err
 	}
 	commitSeq := snap.state.CommitSeq
 	incarnation, captureErr := captureValueLogRefIncarnation(snap.idx)
 	if captureErr != nil {
-		return valueLogRefCounts{}, 0, valueLogRefIncarnation{}, errors.Join(captureErr, snap.Close())
+		return valueLogRefCounts{}, valueLogRefScanBasis{}, errors.Join(captureErr, snap.Close())
 	}
 	result, err := db.maintenanceReachabilityScan(ctx, snap, maintenanceReachabilityScanOptions{
 		Collectors:    maintenanceReachabilityValueLogRefCounts,
 		CountMetadata: db.valueLogIdentityPins.MetadataOwner(),
 	})
 	if err != nil {
-		return valueLogRefCounts{}, 0, valueLogRefIncarnation{}, errors.Join(err, snap.Close())
+		return valueLogRefCounts{}, valueLogRefScanBasis{}, errors.Join(err, snap.Close())
 	}
+	basis := valueLogRefScanBasis{commitSeq: commitSeq, incarnation: incarnation, userRootID: snap.state.RootPageID, systemRootID: snap.state.SystemRootPageID}
 	if err := snap.Close(); err != nil {
 		result.countRecords.close()
-		return valueLogRefCounts{}, 0, valueLogRefIncarnation{}, err
+		return valueLogRefCounts{}, valueLogRefScanBasis{}, err
 	}
-	return result.countRecords.take(), commitSeq, incarnation, nil
+	return result.countRecords.take(), basis, nil
 }
 
 func (db *DB) referencedValueLogSegmentsForRecoverableRootSet(ctx context.Context, roots *RecoverableRootSet) (map[uint32]struct{}, error) {
