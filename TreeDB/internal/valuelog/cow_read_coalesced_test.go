@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/page"
@@ -105,6 +106,9 @@ func TestCOWFullReadTruncationAndHeaderPrecedence(t *testing.T) {
 }
 
 func TestCOWFullReadKeepsPinnedFileAcrossPathReplacement(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows open file does not permit rename without FILE_SHARE_DELETE")
+	}
 	f, ptr, _ := cowTestRecord(t, []byte("original"), false, 0)
 	shape, err := InspectCOWRecord(f, ptr, cowTestLimits)
 	if err != nil {
@@ -118,5 +122,34 @@ func TestCOWFullReadKeepsPinnedFileAcrossPathReplacement(t *testing.T) {
 	}
 	if got := cowTestRead(t, f, ptr, shape, nil); !bytes.Equal(got, []byte("original")) {
 		t.Fatalf("read replacement instead of pinned source: %q", got)
+	}
+}
+
+func TestCOWFullReadNonEOFSourceErrorsMatchHeaderRead(t *testing.T) {
+	for _, mode := range []string{"closed", "write-only"} {
+		t.Run(mode, func(t *testing.T) {
+			f, ptr, _ := cowTestRecord(t, []byte("original"), false, 0)
+			shape, err := InspectCOWRecord(f, ptr, cowTestLimits)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if mode == "closed" {
+				if err := f.Close(); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				f, err = os.OpenFile(f.Name(), os.O_WRONLY, 0)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = f.Close() })
+			}
+			_, want := cowReadHeader(f, ptr, make([]byte, HeaderSize), shape.limits, false)
+			_, got := ReadCOWRecord(f, ptr, shape, true, make([]byte, shape.PayloadBytes()), nil, make([]byte, shape.ValueBytes), nil)
+			var wantPath, gotPath *os.PathError
+			if !errors.As(want, &wantPath) || !errors.As(got, &gotPath) || wantPath.Op != gotPath.Op || wantPath.Path != gotPath.Path || !errors.Is(gotPath.Err, wantPath.Err) {
+				t.Fatalf("got %v want %v", got, want)
+			}
+		})
 	}
 }
