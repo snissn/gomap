@@ -257,11 +257,22 @@ type storageExpectationReport struct {
 	IndexBytes           int64 `json:"index_bytes"`
 }
 
+func (r storageExpectationReport) validate() error {
+	if r.RequireValueLogBytes && r.ValueLogBytes == 0 {
+		return errors.New("compacted storage has zero value_vlog bytes")
+	}
+	if r.RequireLeafVLogBytes && r.LeafVLogBytes == 0 {
+		return errors.New("compacted storage has zero leaf_vlog bytes")
+	}
+	return nil
+}
+
 type memoryReport struct {
 	AllocBeforeLoadBytes uint64 `json:"alloc_before_load_bytes"`
 	AllocAfterLoadBytes  uint64 `json:"alloc_after_load_bytes"`
 	LoadAllocDeltaBytes  int64  `json:"load_alloc_delta_bytes"`
-	IndexBytesMemory     int64  `json:"index_bytes_memory"`
+	// Nil means that the serving backend does not expose resident index memory.
+	IndexBytesMemory *int64 `json:"index_bytes_memory"`
 }
 
 type datasetManifest struct {
@@ -1094,13 +1105,9 @@ func execute(ctx context.Context, cfg config) (result, error) {
 		LeafVLogBytes:        res.StorageAfterCompact.Domains["leaf_vlog"],
 		IndexBytes:           res.StorageAfterCompact.Domains["index.db"],
 	}
-	if cfg.requireValueLogBytes && res.StorageExpectation.ValueLogBytes == 0 {
+	if err := res.StorageExpectation.validate(); err != nil {
 		_ = cleanupBackend()
-		return result{}, errors.New("compacted storage has zero value_vlog bytes")
-	}
-	if cfg.requireLeafVLogBytes && res.StorageExpectation.LeafVLogBytes == 0 {
-		_ = cleanupBackend()
-		return result{}, errors.New("compacted storage has zero leaf_vlog bytes")
+		return result{}, err
 	}
 	mgr = nil
 	col = nil
@@ -1171,8 +1178,19 @@ func execute(ctx context.Context, cfg config) (result, error) {
 			return result{}, fmt.Errorf("unexpected column_graph search path after reopen: strategy=%s path=%s", response.Strategy, response.Path)
 		}
 		res.VectorIndexSearchPath = response.Path
-		res.IndexStatsLoaded = response.Status.Stats
-		res.VectorIndexStatus = response.Status
+		// The search response proves the physical route but carries only a
+		// lightweight status. Read the complete persisted graph status separately.
+		status, err := col.VectorIndexStatus(def.Name)
+		if err != nil {
+			return result{}, fmt.Errorf("read column_graph status after reopen: %w", err)
+		}
+		if status.Name != def.Name || status.Strategy != collections.VectorIndexStrategyColumnGraph ||
+			!status.Loaded || status.State != collections.VectorIndexStateColumnGraphLoaded ||
+			status.Stats.LiveDocs != cfg.docs || status.Stats.Nodes != cfg.docs || status.Stats.BytesDisk <= 0 {
+			return result{}, fmt.Errorf("unexpected persisted column_graph status after reopen: %+v", status)
+		}
+		res.IndexStatsLoaded = status.Stats
+		res.VectorIndexStatus = status
 	}
 	res.ReopenLoad = phaseSince(reopenStart)
 	var afterLoad runtime.MemStats
@@ -1182,7 +1200,8 @@ func execute(ctx context.Context, cfg config) (result, error) {
 		AllocBeforeLoadBytes: beforeLoad.Alloc,
 		AllocAfterLoadBytes:  afterLoad.Alloc,
 		LoadAllocDeltaBytes:  allocDeltaBytes(afterLoad.Alloc, beforeLoad.Alloc),
-		IndexBytesMemory:     res.IndexStatsLoaded.BytesMemory,
+		// ColumnGraph does not expose resident index-memory accounting. Its
+		// zero Stats.BytesMemory is unavailable, not a measurement of zero bytes.
 	}
 	if columnGraphSearcher != nil {
 		if closeErr := columnGraphSearcher.Close(); closeErr != nil {
@@ -2544,8 +2563,12 @@ func printText(w io.Writer, res result) {
 		res.StorageExpectation.LeafVLogBytes)
 	printDomains(w, "after_compact", res.StorageAfterCompact.Domains)
 	fmt.Fprintf(w, "\nMemory\n")
-	fmt.Fprintf(w, "index_bytes_memory=%d load_alloc_delta=%d alloc_after_load=%d\n",
-		res.Memory.IndexBytesMemory, res.Memory.LoadAllocDeltaBytes, res.Memory.AllocAfterLoadBytes)
+	indexBytesMemory := "unavailable"
+	if res.Memory.IndexBytesMemory != nil {
+		indexBytesMemory = strconv.FormatInt(*res.Memory.IndexBytesMemory, 10)
+	}
+	fmt.Fprintf(w, "index_bytes_memory=%s load_alloc_delta=%d alloc_after_load=%d\n",
+		indexBytesMemory, res.Memory.LoadAllocDeltaBytes, res.Memory.AllocAfterLoadBytes)
 }
 
 func printMatrixText(w io.Writer, res matrixResult) {

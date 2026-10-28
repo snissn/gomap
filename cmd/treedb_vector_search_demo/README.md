@@ -168,6 +168,15 @@ meant to prove that the compacted datastore actually used those storage domains.
 Those flags are assertions, not format selectors; the demo fails if the selected
 TreeDB settings leave the asserted domain empty.
 
+After proving the physical ColumnGraph search route on reopen, the demo reads
+the complete persisted index status to report live rows and graph disk bytes.
+ColumnGraph does not expose resident index-memory accounting:
+`memory.index_bytes_memory` is JSON `null` and text output says `unavailable`.
+The raw status's zero `BytesMemory` field is unmeasured, not proof of zero memory
+use. The comparison summary renders unavailable values (including older
+ColumnGraph zero placeholders) as `n/a`. Go heap allocations around reopen remain
+separate process measurements; they do not establish index-resident bytes or RSS.
+
 Useful flags:
 
 - `-compact=false`: skip `CompactStorageFull` and report uncompacted reopen/load
