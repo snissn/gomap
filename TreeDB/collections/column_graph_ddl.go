@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
@@ -11,6 +12,17 @@ import (
 // ErrIndexNameConflict identifies a cross-kind index name collision detected
 // under the collection's schema authority.
 var ErrIndexNameConflict = errors.New("collections: index name conflicts with another index kind")
+
+type nativeVectorIndexDDLAfterPrepareHookState struct {
+	fn func(*Collection)
+}
+
+var nativeVectorIndexDDLAfterPrepareHook atomic.Pointer[nativeVectorIndexDDLAfterPrepareHookState]
+
+func setNativeVectorIndexDDLAfterPrepareHookForTest(fn func(*Collection)) func() {
+	previous := nativeVectorIndexDDLAfterPrepareHook.Swap(&nativeVectorIndexDDLAfterPrepareHookState{fn: fn})
+	return func() { nativeVectorIndexDDLAfterPrepareHook.Store(previous) }
+}
 
 // CollectionIndexDDL is an operation-scoped index publication owner. It is valid
 // only inside WithVectorIndexDDL's callback. Call its methods instead of the
@@ -50,6 +62,11 @@ func (c *Collection) WithVectorIndexDDL(definitions []VectorIndexDefinition, fn 
 		// locks to be available. Revalidate the later capture under authority.
 		if err := c.nativeJSON.db.PrepareNativeProducer(); err != nil {
 			return err
+		}
+		// The test hook runs after pressure preparation has released its worker
+		// mutex and before either DDL authority is reacquired.
+		if hook := nativeVectorIndexDDLAfterPrepareHook.Load(); hook != nil && hook.fn != nil {
+			hook.fn(c)
 		}
 		unlockMutation := c.lockVectorIndexMutation()
 		defer unlockMutation()

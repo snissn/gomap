@@ -452,6 +452,9 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/native_typed_final_span_public_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 7, occurrences: 14},
 	// Public pressure and default-strategy controls use the retained exported API.
 	{path: "TreeDB/collections/native_pressure_drain_public_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 4},
+	// Vector DDL schema recapture configures its real public-path fixture with
+	// the retained exported configuration and typed-column value API.
+	{path: "TreeDB/collections/native_vector_ddl_revalidation_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 4},
 	{path: "TreeDB/documentservice/default_strategy_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 3},
 	// Native typed scalar indexes consume the retained declared-column API;
 	// their values share the maintained typed encoder, not another row owner.
