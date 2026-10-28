@@ -384,17 +384,28 @@ func readCOWRecordValue(f *os.File, ptr page.ValuePtr, shape COWRecordShape, ver
 
 	input := payloadScratch[:int(shape.RecordBytes):int(shape.RecordBytes)]
 	header := input[:HeaderSize:HeaderSize]
-	n, err := cowReadHeader(f, ptr, header, shape.limits, leaf)
+	if err := cowCheckReadSource(f, ptr, shape.limits, leaf); err != nil {
+		return nil, err
+	}
+	// Input already owns the entire admitted record. Preserve the old header
+	// validation precedence even if a single read encounters a truncated body:
+	// a short header returns its I/O error, while a complete invalid header
+	// wins over the body's I/O error.
+	readBytes, readErr := f.ReadAt(input, int64(ptr.Offset-4))
+	if readBytes < HeaderSize {
+		return nil, readErr
+	}
+	n, err := cowCheckReadHeader(ptr, header, shape.limits)
 	if err != nil {
 		return nil, err
 	}
 	if uint64(n)+HeaderSize != shape.RecordBytes {
 		return nil, ErrCorrupt
 	}
-	payload := input[HeaderSize:]
-	if _, err := f.ReadAt(payload, int64(ptr.Offset-4)+HeaderSize); err != nil {
-		return nil, err
+	if readErr != nil {
+		return nil, readErr
 	}
+	payload := input[HeaderSize:]
 	p := 0
 	if header[5]&recordFlagGrouped != 0 {
 		if len(payload) < FrameHeaderSize {
