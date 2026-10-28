@@ -57,6 +57,7 @@ type cowReadWorkspace struct {
 	codecs        []*cowReadCodec
 	input, output []byte
 	point         *cowPointScratch
+	poolable      bool
 }
 
 // Cut-local workspaces are serialized by cowReadMu. Their fixed traversal and
@@ -75,6 +76,17 @@ func (s *Snapshot) cowWorkspaceLocked() (*cowReadWorkspace, error) {
 }
 
 func newCOWReadWorkspace(s *Snapshot) (*cowReadWorkspace, error) {
+	if idle, leases := s.cowCache.budget.TakeIdleReadScratch(); idle != nil {
+		w := idle.(*cowReadWorkspace)
+		w.lease = leases[0]
+		if w.point != nil {
+			w.point.lease = leases[1]
+		}
+		w.snapshot = s
+		w.poolable = false
+		w.limits = s.cowCache.readLimits()
+		return w, nil
+	}
 	w, err := admitCOWReadWorkspace(s.cowCache.budget, s.cowCache.readLimits())
 	if err == nil {
 		w.snapshot = s
@@ -430,6 +442,35 @@ func (c *cowReadCodec) close() {
 	c.lease = nil
 	lease.Close()
 }
+
+// Value buffers and codecs remain cut-owned. After the final admitted read,
+// discard those children and refund every value receipt before recycling only
+// the original workspace metadata and optional point arrays. No output,
+// dictionary, file, snapshot or page alias crosses this ownership transfer.
+func (w *cowReadWorkspace) releaseSnapshotScratch() {
+	if w != nil && w.poolable {
+		// End traversal aliases before any decoder/buffer charge is refunded.
+		if w.point != nil {
+			w.point.successor = tree.OwnedSuccessorScratch{}
+		}
+		w.snapshot, w.basis = nil, nil
+		w.closeValueScratch()
+		leases := [2]*memtable.COWExternalLease{w.lease, nil}
+		w.lease = nil
+		if w.point != nil {
+			leases[1], w.point.lease = w.point.lease, nil
+		}
+		if w.budget.PutIdleReadScratch(w, leases) {
+			return
+		}
+		w.lease = leases[0]
+		if w.point != nil {
+			w.point.lease = leases[1]
+		}
+	}
+	w.close()
+}
+
 func (w *cowReadWorkspace) close() {
 	if w == nil {
 		return
@@ -442,6 +483,15 @@ func (w *cowReadWorkspace) close() {
 		point = nil
 		lease.Close()
 	}
+	w.closeValueScratch()
+	w.snapshot, w.basis, w.budget = nil, nil, nil
+	lease := w.lease
+	w.lease = nil
+	lease.Close()
+}
+
+// Drop all cut-bound value state before its independent receipts are refunded.
+func (w *cowReadWorkspace) closeValueScratch() {
 	for i, c := range w.codecs {
 		w.codecs[i] = nil
 		if c != nil {
@@ -459,13 +509,10 @@ func (w *cowReadWorkspace) close() {
 		a = nil
 		lease.Close()
 	}
-	w.snapshot, w.basis, w.budget = nil, nil, nil
-	lease := w.lease
-	w.lease = nil
-	lease.Close()
 }
 
 func (w *cowReadWorkspace) read(ptr page.ValuePtr, leaf bool, dst []byte) ([]byte, error) {
+	w.poolable = false
 	f, err := w.file(ptr)
 	if err != nil {
 		return nil, err
@@ -623,7 +670,13 @@ func (w *cowReadWorkspace) prepareRead(shape valuelog.COWRecordShape, outputNeed
 // appendPointer finishes the owned public point result before releasing the
 // exact cut or its original decoder owner. It never changes borrowed Snapshot,
 // iterator, View or leaf materialization and retains no caller destination.
-func (w *cowReadWorkspace) appendPointer(ptr page.ValuePtr, dst []byte) ([]byte, error) {
+func (w *cowReadWorkspace) appendPointer(ptr page.ValuePtr, dst []byte) (result []byte, err error) {
+	defer func() {
+		if err == nil {
+			w.poolable = true
+		}
+	}()
+	w.poolable = false
 	f, err := w.file(ptr)
 	if err != nil {
 		return dst, err
@@ -661,10 +714,15 @@ func (w *cowReadWorkspace) appendWithInspection(f *os.File, ptr page.ValuePtr, s
 // copy-out while its original physical owner is locked. Shared dictionary
 // storage owns its definition independently of this cut; no borrowed output or
 // file capability escapes into that storage.
-func (w *cowReadWorkspace) readOwnedSuccessor(ptr page.ValuePtr, leaf bool, dst []byte, inspected *cowSuccessorInspection) ([]byte, error) {
+func (w *cowReadWorkspace) readOwnedSuccessor(ptr page.ValuePtr, leaf bool, dst []byte, inspected *cowSuccessorInspection) (result []byte, err error) {
+	defer func() {
+		if err == nil {
+			w.poolable = true
+		}
+	}()
+	w.poolable = false
 	var f *os.File
 	var shape valuelog.COWRecordShape
-	var err error
 	if inspected != nil && inspected.file != nil {
 		f, shape = inspected.file, inspected.shape
 	} else {
@@ -714,6 +772,7 @@ func (w *cowReadWorkspace) appendInspected(f *os.File, ptr page.ValuePtr, shape 
 }
 
 func (w *cowReadWorkspace) readLeaf(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
+	w.poolable = false
 	return w.read(ptr.ValuePtr(), true, dst)
 }
 
@@ -914,7 +973,11 @@ func (s *Snapshot) cowGetVersionedAppendOpen(key, dst []byte) ([]byte, page.Entr
 	if err != nil {
 		return dst, revision, err
 	}
-	return append(dst, value...), revision, nil
+	out := append(dst, value...)
+	if s.cowReader != nil {
+		s.cowReader.poolable = true
+	}
+	return out, revision, nil
 }
 
 // cowOwnedPointAppendOpen is only the DB point-read continuation. Exported

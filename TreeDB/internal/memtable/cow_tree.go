@@ -523,7 +523,7 @@ func (w *COWWriter) Prepare(entries []COWMutation, opts COWPrepareOptions) (*COW
 		return nil, ErrCOWPending
 	}
 	total := c.Total()
-	if g.frozen || !cowFits(b.limits.MaxInFlightBytes, b.stats.ReservedBytes, total) ||
+	if g.frozen || !b.inFlightFitsLocked(total) ||
 		!cowFits(b.limits.MaxGenerationBytes, g.generationHistoryLocked(), g.pending) ||
 		!cowFits(b.limits.MaxGenerationBytes, g.generationHistoryLocked()+g.pending, c.History()) ||
 		!b.retirementFitsLocked(total) ||
