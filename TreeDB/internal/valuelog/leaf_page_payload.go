@@ -3,8 +3,10 @@ package valuelog
 import (
 	"bytes"
 	"encoding/binary"
+	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -165,6 +167,18 @@ func appendCompactLeafLogPayload(dst, payload []byte) ([]byte, error) {
 func allowsCompactLeafLogPayload(fileID uint32, path string) bool {
 	if !isLeafLogFileID(fileID) || path == "" {
 		return false
+	}
+	// On slash-separated platforms, an absolute path whose final component
+	// is neither empty nor a dot component has this lexical parent unchanged
+	// by Dir's Clean: cleaning the earlier prefix cannot remove leaf_vlog.
+	// This is positive-only admission; all other paths retain the original
+	// platform-specific classification below (including Windows volumes).
+	if os.PathSeparator == '/' && path[0] == '/' {
+		if i := strings.LastIndexByte(path, '/'); i > len(compactLeafPagePayloadDirName) &&
+			path[i+1:] != "" && path[i+1:] != "." && path[i+1:] != ".." &&
+			strings.HasSuffix(path[:i], "/"+compactLeafPagePayloadDirName) {
+			return true
+		}
 	}
 	// Windows Dir joins the volume back onto the parent, allocating even for
 	// canonical native paths. Base discards that volume, so omit the join. A
