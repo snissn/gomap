@@ -156,7 +156,7 @@ jobs:
           go list ./... > "$package_all_file"
           weighted_shard_file package 1 3 ../.github/ci/treedb_unix_weighted_shards.tsv "$package_all_file" "$package_file"
           test -s "$package_file"
-          rg -Fx github.com/snissn/gomap/TreeDB/collections "$package_file"
+          grep -Fx github.com/snissn/gomap/TreeDB/collections "$package_file"
           cat "$package_file"
           printf '%s\n' 'xargs go test -json -timeout 30m -p 1 < selected-packages.txt 2> treedb-test.stderr | tee treedb-test.jsonl' 'GOMEMLIMIT=4GiB GOMAXPROCS=2' 'stdout and stderr files are written directly under EVIDENCE' > "$EVIDENCE/command.txt"
           set +e
