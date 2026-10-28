@@ -99,6 +99,15 @@ A segment is eligible only when all of the following hold:
 
 Any ambiguity retains data. Rotation alone authorizes no deletion.
 
+A valid proof may have `cleanupThrough = 0` while an initial recovery-selectable
+root still needs every command. Cleanup still scans in that case: an exact
+fixed container positively classified as empty has maximum LSN zero and may be
+removed when all the other eligibility rules hold. Frame-bearing segments stay
+uncovered, the active container and pinned identities stay protected, and empty
+legacy or unrecognized streams are not classified as empty fixed containers.
+This prevents empty predecessors from accumulating across reopen without
+advancing either root or the cleanup frontier.
+
 ## Ordered cleanup algorithm
 
 Ordinary cleanup is serialized per DB and follows this order:

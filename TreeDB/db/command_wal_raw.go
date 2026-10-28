@@ -963,9 +963,9 @@ func (db *DB) cleanupCommandWALCoveredSegmentsV1() (retErr error) {
 	db.commandWALCleanupOlderRoot.Store(proof.olderCommitSeq())
 	db.commandWALCleanupCaptureEpoch.Store(proof.journal.CleanupEpoch)
 	db.commandWALCleanupNamespaceGen.Store(proof.journal.NamespaceGeneration)
-	if proof.cleanupThrough == 0 {
-		return db.syncCommandWALCleanupNamespaceIfDirty()
-	}
+	// A zero replay frontier still covers positively classified empty fixed
+	// containers. Scan them through the same identity, pin, and namespace checks;
+	// otherwise every reopen can retain another empty predecessor forever.
 	scanStart := time.Now()
 	var decisions []commandWALSegmentCleanupDecision
 	// Listing and reader construction both validate fixed-container reserve.
