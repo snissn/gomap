@@ -1,7 +1,9 @@
 package treedb
 
 import (
+	"bytes"
 	"fmt"
+	"runtime/pprof"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -88,14 +90,25 @@ func TestPublicCommandWALContinuousPayloadHeldSync(t *testing.T) {
 				default:
 				}
 				unblock()
-				for _, done := range []chan error{first, second, closed} {
+				for _, completion := range []struct {
+					name string
+					done <-chan error
+				}{
+					{"first payload", first},
+					{"successor payload", second},
+					{"Close", closed},
+				} {
 					select {
-					case err := <-done:
+					case err := <-completion.done:
 						if err != nil {
-							t.Fatal(err)
+							t.Fatalf("%s failed: %v", completion.name, err)
 						}
 					case <-time.After(2 * time.Second):
-						t.Fatal("payload completion/Close stalled")
+						var stacks bytes.Buffer
+						if err := pprof.Lookup("goroutine").WriteTo(&stacks, 2); err != nil {
+							t.Logf("capture goroutine stacks: %v", err)
+						}
+						t.Fatalf("payload completion/Close stalled: waiting for %s\n%s", completion.name, stacks.String())
 					}
 				}
 				reopened, err := Open(opts)
