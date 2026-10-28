@@ -250,7 +250,7 @@ cut, preserving fresh-owner refund outside the basis mutex.
 
 Successful cut-local plain traversal can return its workspace and point buffers
 through the original budget's idle scratch stack. It retains at most four
-entries and 64 KiB of charged payload. Snapshot, backend basis and all successor
+entries and 128 KiB of charged payload. Snapshot, backend basis and all successor
 page aliases are cleared first; workspaces with codecs, input/output buffers or
 allocation chains retain their ordinary close behavior. Parking consumes the
 original receipt capabilities and refunds their wrappers; a borrower receives

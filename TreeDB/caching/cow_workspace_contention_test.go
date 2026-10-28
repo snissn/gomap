@@ -3,7 +3,11 @@ package caching
 import (
 	"bytes"
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/tree"
 	"testing"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/internal/mvcckey"
 )
@@ -189,5 +193,46 @@ func TestCOWWorkspaceIdleReuseAcrossCapturedBases(t *testing.T) {
 	}
 	if old.cowReader != scratch || r[0].Err != nil || !bytes.Equal(r[0].Value, original) || !bytes.Equal(owned, original) {
 		t.Fatalf("retained old cut scratch=%p want=%p value=%+v", old.cowReader, scratch, r[0])
+	}
+}
+
+// Derive the retained payload from the current concrete layout and allocator
+// charges. A future scratch-field change must preserve all four warm owners
+// inside the configured byte ceiling, with continuously accounted storage.
+func TestCOWWorkspaceIdleFourOwnerBoundAndRefund(t *testing.T) {
+	b, err := memtable.NewCOWBudget(memtable.DefaultCOWLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseline := b.Stats()
+	payload := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowReadWorkspace{}))) + cowReadWorkspaceInspectionCharge() + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowPointScratch{})))
+	if 4*payload > 128<<10 {
+		t.Fatalf("current four-owner payload %d exceeds byte ceiling", 4*payload)
+	}
+	t.Logf("workspace=%d point=%d successor=%d charged payload=%d four owners=%d", unsafe.Sizeof(cowReadWorkspace{}), unsafe.Sizeof(cowPointScratch{}), unsafe.Sizeof(tree.OwnedSuccessorScratch{}), payload, 4*payload)
+	for i := 0; i < 5; i++ {
+		w, e := admitCOWReadWorkspace(b, valuelog.COWReadLimits{})
+		if e != nil {
+			t.Fatal(e)
+		}
+		if _, e = w.pointScratch(); e != nil {
+			t.Fatal(e)
+		}
+		w.poolable = true
+		w.releaseSnapshotScratch()
+		if i < 4 && (w.point == nil || w.budget == nil || w.lease != nil || w.point.lease != nil) {
+			t.Fatalf("owner%d did not park its payload", i)
+		}
+		if i == 4 && (w.point != nil || w.budget != nil) {
+			t.Fatal("fifth owner was not closed/refunded")
+		}
+		expected := baseline.ReservedBytes + uint64(min(i+1, 4))*payload
+		if after := b.Stats(); after.ReservedBytes != expected || after.ExternalLeases != baseline.ExternalLeases {
+			t.Fatalf("owner%d accounting %+v expected%d", i, after, expected)
+		}
+	}
+	b.Close()
+	if got := b.Stats(); got.TotalBytes != 0 || got.ReservedBytes != 0 || got.ExternalLeases != 0 {
+		t.Fatalf("idle final close: %+v", got)
 	}
 }
