@@ -397,11 +397,16 @@ durable WAL LSN, remaining segment frame/LSN intervals, cumulative cleanup
 reason counters, and the last cleanup error. Post-close segment classifications
 are observations, not deletion authority or the decisions of a specific
 cleanup attempt. An unavailable proof can be a legitimate conservative
-retention result.
+retention result. In that case inspection inventories remaining segment frames
+without asserting any replay lower bound or missing historical prefix.
+`replay_lineage_validated` is false; lineage validation runs only when the
+captured cleanup proof supplies valid replay bounds.
 
 Set `GOMAP_M3_DIAGNOSTICS_DIR` to a directory outside every measured database
 to retain each boundary snapshot and the complete report independently of
-benchmark/test temporary-directory cleanup. Files have unique names per
+benchmark/test temporary-directory cleanup. Before creating directories or files, the destination and measured roots are
+resolved through existing filesystem symlinks and ancestors; writes use that
+resolved destination. An alias into a measured database is rejected. Files have unique names per
 observation; `database_directory`, generation, overlap ratio and source identity
 associate snapshots with report rows. Root CI uploads this directory after the
 test step, including failed jobs. A diagnostic or retention error fails the

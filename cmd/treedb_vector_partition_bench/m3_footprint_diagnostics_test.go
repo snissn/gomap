@@ -140,3 +140,62 @@ func TestM3FootprintCaptureErrorKeepsObservationAndFailsStage(t *testing.T) {
 		t.Fatalf("created diagnostic files in measured DB: %v", err)
 	}
 }
+
+func TestM3FootprintRetentionRejectsFilesystemAliases(t *testing.T) {
+	for _, name := range []string{"destination symlink", "symlinked ancestor", "DB path alias"} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			database := filepath.Join(root, "database")
+			if err := os.Mkdir(database, 0755); err != nil {
+				t.Fatal(err)
+			}
+			alias := filepath.Join(root, "alias")
+			if err := os.Symlink(database, alias); err != nil {
+				t.Skipf("symlinks unavailable: %v", err)
+			}
+			measured := database
+			destination := alias
+			switch name {
+			case "symlinked ancestor":
+				destination = filepath.Join(alias, "new", "evidence")
+			case "DB path alias":
+				measured = alias
+				destination = filepath.Join(database, "new", "evidence")
+			}
+			t.Setenv(m3DiagnosticsDirEnv, destination)
+			if err := m3RetainDiagnostic("alias-control", []byte(`{}`), measured); err == nil {
+				t.Fatal("accepted destination alias into measured DB")
+			}
+			entries, err := os.ReadDir(database)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(entries) != 0 {
+				t.Fatalf("wrote directories or artifacts inside measured DB: %v", entries)
+			}
+		})
+	}
+}
+
+func TestM3FootprintRetentionAllowsResolvedExternalDestination(t *testing.T) {
+	root := t.TempDir()
+	database := filepath.Join(root, "database")
+	external := filepath.Join(root, "external")
+	for _, path := range []string{database, external} {
+		if err := os.Mkdir(path, 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	alias := filepath.Join(root, "external-alias")
+	if err := os.Symlink(external, alias); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	t.Setenv(m3DiagnosticsDirEnv, filepath.Join(alias, "new", "evidence"))
+	if err := m3RetainDiagnostic("external-control", []byte(`{}`), database); err != nil {
+		t.Fatal(err)
+	}
+	files, err := filepath.Glob(filepath.Join(external, "new", "evidence", "*.json"))
+	if err != nil || len(files) != 1 {
+		t.Fatalf("external artifact missing: %v %v", files, err)
+	}
+}

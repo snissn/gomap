@@ -2,6 +2,8 @@ package db
 
 import (
 	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -13,15 +15,16 @@ import (
 // Counters are cumulative for this handle; segment classifications describe the
 // post-close directory, not the decisions of any particular cleanup attempt.
 type CommandWALClosedDiagnosticsV1 struct {
-	LastCleanupError string                          `json:"last_cleanup_error,omitempty"`
-	SelectedSlot     uint64                          `json:"selected_slot"`
-	Roots            [2]CommandWALDiagnosticRootV1   `json:"roots"`
-	DurableWALLSN    uint64                          `json:"durable_wal_lsn"`
-	CleanupThrough   uint64                          `json:"cleanup_through"`
-	ProofError       string                          `json:"proof_error,omitempty"`
-	ScanError        string                          `json:"scan_error,omitempty"`
-	CleanupCounters  map[string]string               `json:"cleanup_counters"`
-	Segments         []CommandWALDiagnosticSegmentV1 `json:"segments"`
+	LastCleanupError       string                          `json:"last_cleanup_error,omitempty"`
+	SelectedSlot           uint64                          `json:"selected_slot"`
+	Roots                  [2]CommandWALDiagnosticRootV1   `json:"roots"`
+	DurableWALLSN          uint64                          `json:"durable_wal_lsn"`
+	CleanupThrough         uint64                          `json:"cleanup_through"`
+	ProofError             string                          `json:"proof_error,omitempty"`
+	ReplayLineageValidated bool                            `json:"replay_lineage_validated"`
+	ScanError              string                          `json:"scan_error,omitempty"`
+	CleanupCounters        map[string]string               `json:"cleanup_counters"`
+	Segments               []CommandWALDiagnosticSegmentV1 `json:"segments"`
 }
 
 type CommandWALDiagnosticRootV1 struct {
@@ -77,17 +80,72 @@ func (db *DB) InspectClosedCommandWALV1() (CommandWALClosedDiagnosticsV1, error)
 			out.CleanupCounters[key] = value
 		}
 	}
-	decisions, scanErr := scanCommandWALSegmentsForCleanupProof(db.dir, out.CleanupThrough, out.DurableWALLSN, db.walMaxSegmentBytes)
-	defer closeCommandWALCleanupDecisions(decisions)
-	for _, decision := range decisions {
-		rel, err := filepath.Rel(db.dir, decision.Path)
-		if err != nil {
-			return out, err
-		}
-		out.Segments = append(out.Segments, CommandWALDiagnosticSegmentV1{Path: filepath.ToSlash(rel), PhysicalBytes: decision.Size, LogicalBytes: decision.LogicalSize, Frames: decision.Frames, MinLSN: decision.MinLSN, MaxLSN: decision.MaxLSN, ActiveByLane: decision.Active, CoveredByRoots: proofErr == nil && decision.Covered, Error: decision.Error})
+
+	// An unavailable proof supplies no replay lower bound. Inventoring the
+	// remaining frames must not invent a zero lower bound: earlier legitimate
+	// cleanup may already have removed that historical prefix.
+	var validProof *durableWALCleanupProofV1
+	if proofErr == nil {
+		validProof = &proof
 	}
+	var scanErr error
+	out.Segments, scanErr = scanCommandWALDiagnosticInventoryV1(db.dir, db.walMaxSegmentBytes, validProof)
 	if scanErr != nil {
 		out.ScanError = scanErr.Error()
+	}
+	out.ReplayLineageValidated = validProof != nil && scanErr == nil
+	return out, scanErr
+}
+
+// scanCommandWALDiagnosticInventoryV1 owns read-only handles only. Cross-file
+// replay validation is permitted solely when a captured proof defines the lower
+// and upper bounds; physical/frame inventory does not require that authority.
+func scanCommandWALDiagnosticInventoryV1(dir string, maxSegmentBytes int64, proof *durableWALCleanupProofV1) ([]CommandWALDiagnosticSegmentV1, error) {
+	segments, err := listWALSegments(dir)
+	if err != nil {
+		return nil, err
+	}
+	activeByLane := commandWALActiveSeqByLane(segments)
+	var out []CommandWALDiagnosticSegmentV1
+	var scanErr error
+	options := commandWALSegmentScanOptions{}
+	if proof != nil {
+		options.seenLSNs = make(map[uint64]struct{})
+		options.seenLSNAppliedLSN = proof.cleanupThrough
+		options.seenLSNMax = proof.durableWALLSN
+	}
+	for _, segment := range segments {
+		if segment.valueLog || !isCommandWALLaneSegment(segment) {
+			continue
+		}
+		rel, err := filepath.Rel(dir, segment.path)
+		if err != nil {
+			scanErr = errors.Join(scanErr, err)
+			continue
+		}
+		item := CommandWALDiagnosticSegmentV1{Path: filepath.ToSlash(rel), LogicalBytes: segment.size, ActiveByLane: segment.seq == activeByLane[segment.lane]}
+		file, openErr := os.Open(segment.path)
+		if openErr != nil {
+			item.Error = openErr.Error()
+		} else {
+			info, statErr := file.Stat()
+			if statErr == nil {
+				item.PhysicalBytes = info.Size()
+			}
+			scan, frameErr := scanCommandWALSegmentFileWithOptions(file, maxSegmentBytes, item.ActiveByLane, options)
+			item.Frames, item.MinLSN, item.MaxLSN = scan.frames, scan.minLSN, scan.maxLSN
+			item.CoveredByRoots = proof != nil && frameErr == nil && (scan.typed || scan.emptyFixed) && scan.maxLSN <= proof.cleanupThrough
+			if itemErr := errors.Join(statErr, frameErr, file.Close()); itemErr != nil {
+				item.Error = itemErr.Error()
+			}
+		}
+		if item.Error != "" {
+			scanErr = errors.Join(scanErr, fmt.Errorf("inventory command WAL segment %s: %s", item.Path, item.Error))
+		}
+		out = append(out, item)
+	}
+	if proof != nil {
+		scanErr = errors.Join(scanErr, validateCommandWALCleanupReplayLineage(options.seenLSNs, proof.cleanupThrough, proof.durableWALLSN))
 	}
 	return out, scanErr
 }

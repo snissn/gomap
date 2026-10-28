@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"os"
 	"testing"
 )
@@ -74,5 +75,75 @@ func TestInspectClosedCommandWALPreservesRetentionAndReopen(t *testing.T) {
 	defer reopened.Close()
 	if value, err := reopened.Get([]byte("retained")); err != nil || string(value) != "value" {
 		t.Fatalf("reopen value=%q error=%v", value, err)
+	}
+}
+
+func TestInspectClosedCommandWALUnavailableProofAfterEarlierCleanup(t *testing.T) {
+	dir := t.TempDir()
+	database, err := Open(Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := database.SetSync([]byte("covered"), []byte("first")); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.rootPublication.coordinator.WaitThrough(context.Background(), database.State().CommitSeq); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.RefreshCommandWALCheckpointFallback(); err != nil {
+		t.Fatal(err)
+	}
+	coveredPath, _ := database.commandWALActiveSegmentSnapshot()
+	if err := database.RotateCommandWALActiveSegment(true); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.CleanupCommandWALCoveredSegments(false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(coveredPath); !os.IsNotExist(err) {
+		t.Fatalf("earlier covered WAL was not removed: %v", err)
+	}
+	durableLSN := database.commandWALDurableLSN.Load()
+	if durableLSN == 0 {
+		t.Fatal("fixture lacks a nonzero removed prefix")
+	}
+	// Publish a relaxed successor beyond the dependency-closed WAL frontier.
+	if err := database.Set([]byte("retained-later"), []byte("second")); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.rootPublication.coordinator.WaitThrough(context.Background(), database.State().CommitSeq); err != nil {
+		t.Fatal(err)
+	}
+	if database.State().AppliedCommandLSN <= database.commandWALDurableLSN.Load() {
+		t.Fatal("fixture lacks unavailable cleanup proof")
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// The old diagnostic used cleanupThrough=0 and fabricated a replay gap for
+	// the prefix which the earlier successful cleanup legitimately removed.
+	decisions, oldErr := scanCommandWALSegmentsForCleanupProof(dir, 0, database.commandWALDurableLSN.Load(), database.walMaxSegmentBytes)
+	closeCommandWALCleanupDecisions(decisions)
+	if !errors.Is(oldErr, ErrCommandWALAppliedLSNNonContig) {
+		t.Fatalf("control did not expose the zero-frontier diagnostic error: %v", oldErr)
+	}
+	out, err := database.InspectClosedCommandWALV1()
+	if err != nil || out.ScanError != "" || out.ProofError == "" || out.ReplayLineageValidated {
+		t.Fatalf("unavailable proof became fabricated scan failure: %+v; %v", out, err)
+	}
+	if len(out.Segments) == 0 {
+		t.Fatal("lost remaining segment inventory")
+	}
+	reopened, err := Open(Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	for key, want := range map[string]string{"covered": "first", "retained-later": "second"} {
+		got, err := reopened.Get([]byte(key))
+		if err != nil || string(got) != want {
+			t.Fatalf("reopen %q=%q error=%v", key, got, err)
+		}
 	}
 }

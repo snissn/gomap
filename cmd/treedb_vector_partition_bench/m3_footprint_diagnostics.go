@@ -99,12 +99,12 @@ func m3RetainDiagnostic(kind string, raw []byte, excludedRoots ...string) (resul
 	if root == "" {
 		return nil
 	}
-	destination, err := filepath.Abs(root)
+	destination, err := m3ResolveDiagnosticPathV1(root)
 	if err != nil {
 		return err
 	}
 	for _, excluded := range excludedRoots {
-		measuredRoot, err := filepath.Abs(excluded)
+		measuredRoot, err := m3ResolveDiagnosticPathV1(excluded)
 		if err != nil {
 			return err
 		}
@@ -116,10 +116,10 @@ func m3RetainDiagnostic(kind string, raw []byte, excludedRoots ...string) (resul
 			return errors.New("M3 diagnostics destination must be outside the measured database")
 		}
 	}
-	if err := os.MkdirAll(root, 0755); err != nil {
+	if err := os.MkdirAll(destination, 0755); err != nil {
 		return err
 	}
-	file, err := os.CreateTemp(root, "m3-"+kind+"-*.json")
+	file, err := os.CreateTemp(destination, "m3-"+kind+"-*.json")
 	if err != nil {
 		return err
 	}
@@ -140,4 +140,37 @@ func m3FootprintDiagnosticErrors(report m3PartitionIndexReport) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// Resolve the existing filesystem prefix before appending absent components.
+// Lstat distinguishes absent components from dangling symlinks: an existing
+// symlink that cannot be resolved is an error, never an unvalidated pathname.
+// Use the resolved result for writes as well as containment checks.
+func m3ResolveDiagnosticPathV1(path string) (string, error) {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	existing := absolute
+	var absent []string
+	for {
+		if _, err := os.Lstat(existing); err == nil {
+			resolved, err := filepath.EvalSymlinks(existing)
+			if err != nil {
+				return "", err
+			}
+			for i := len(absent) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, absent[i])
+			}
+			return resolved, nil
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+		parent := filepath.Dir(existing)
+		if parent == existing {
+			return "", fmt.Errorf("resolve diagnostic path %q: no existing filesystem ancestor", path)
+		}
+		absent = append(absent, filepath.Base(existing))
+		existing = parent
+	}
 }
