@@ -274,7 +274,9 @@ def run(root: Path, output: Path, baseline: str, candidate: str) -> int:
              runtime_environment={name: environment.get(name) for name in
                  ("GOMAXPROCS", "GOGC", "GOMEMLIMIT", "GODEBUG", "GOFLAGS", "GOENV", "GOTOOLCHAIN", "GOROOT")},
              quiet=dict(window_s=maintained.QUIET_WINDOW_SECONDS, cap_s=maintained.QUIET_ACQUISITION_SECONDS,
-                        external_cpu_percent=maintained.QUIET_LIMIT_PERCENT)))
+                        external_cpu_percent=maintained.QUIET_LIMIT_PERCENT,
+                        aggregate_external_cpu_percent=maintained.QUIET_AGGREGATE_LIMIT_PERCENT,
+                        policy="external-cpu-v2")))
 
         def runtime_inputs(phase):
             bindings = {revision: maintained.runtime_binding(Path(record["path"]), checked,

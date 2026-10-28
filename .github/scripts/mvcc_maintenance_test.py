@@ -12,6 +12,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 sys.dont_write_bytecode = True
 os.environ.setdefault('RUNNER_TEMP', '/nonexistent-maintenance-static-check')
@@ -65,6 +66,47 @@ class Contract(unittest.TestCase):
     def test_syntax(self):
         for path in SCRIPTS.glob('mvcc_maintenance_*.py'):
             ast.parse(path.read_text(), filename=str(path))
+
+    def test_actual_maintained_observer_load_ignores_frozen_product_copy(self):
+        with tempfile.TemporaryDirectory() as directory:
+            product = Path(directory)
+            (product / 'scripts').mkdir()
+            (product / 'scripts/mvcc_primary_cost_gate.py').write_text(
+                'raise RuntimeError("frozen historical observer must not be imported")\n')
+            with mock.patch.dict(collector.ROOTS, candidate=product):
+                observer, path, identity = collector.load_observer()
+            self.assertEqual(path, ROOT / 'scripts/mvcc_primary_cost_gate.py')
+            self.assertEqual(identity, collector.digest(path))
+            watch = observer.ProcessObservation.__new__(observer.ProcessObservation)
+            watch.started = 0
+            watch.observe = lambda: None
+            for ticks, busy in ((16, False), (50, True)):
+                watch.totals = {(91, 'original'): {'pid': 91, 'start': 'original',
+                    'command': 'gnome-shell', 'ticks': ticks}}
+                with mock.patch.object(observer.time, 'monotonic', return_value=5), \
+                        mock.patch.object(observer.os, 'sysconf', return_value=100):
+                    result = watch.finish()
+                self.assertEqual(bool(result['busy']), busy)
+                self.assertEqual(result['policy'], 'external-cpu-v2')
+                self.assertEqual(result['aggregate_cpu_threshold_percent'], 50)
+            self.assertEqual(len(collector.schedule()), 14)
+
+    def test_observer_authorization_precedes_execution_and_binds_loaded_bytes(self):
+        path = ROOT / 'scripts/mvcc_primary_cost_gate.py'
+        source = path.read_bytes()
+        expected = hashlib.sha256(source).hexdigest()
+        poison = b'raise RuntimeError("unauthorized code executed")'
+        with mock.patch.object(Path, 'read_bytes', return_value=poison):
+            with self.assertRaisesRegex(ValueError, 'authorization mismatch'):
+                collector.load_observer(expected)
+        # Even if disk contents change after the read, the executed bytes and
+        # returned binding must be the single authorized read, not a second read.
+        with mock.patch.object(Path, 'read_bytes', side_effect=[source, poison]) as reads:
+            observer, loaded_path, identity = collector.load_observer(expected)
+        self.assertEqual(reads.call_count, 1)
+        self.assertEqual(identity, expected)
+        self.assertEqual(loaded_path, path)
+        self.assertEqual(observer.QUIET_LIMIT_PERCENT, 10)
 
     def test_original_parser_controls(self):
         collector.selftest()  # Original positive/six negative controls unchanged.

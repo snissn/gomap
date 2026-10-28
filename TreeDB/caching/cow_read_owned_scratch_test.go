@@ -138,6 +138,7 @@ func TestCOWRetainedPhysicalScratchAdmissionAndRelease(t *testing.T) {
 	if err := b.Close(); err != nil {
 		t.Fatal(err)
 	}
+	cowPressureEvictIdleReadScratch(t, budget)
 	if after := budget.Stats(); after.ExternalBytes != before.ExternalBytes || after.ExternalLeases != before.ExternalLeases || after.ReservedBytes != before.ReservedBytes || after.Views != before.Views {
 		t.Fatalf("retained physical owners did not refund: before=%+v after=%+v", before, after)
 	}
