@@ -195,7 +195,7 @@ func TestCOWFullReadNonEOFSourceErrorsMatchHeaderRead(t *testing.T) {
 }
 
 func TestCOWFullReadSourceAndOutputAdmission(t *testing.T) {
-	f, ptr, _ := cowTestRecord(t, []byte("original"), false, 0)
+	f, ptr, record := cowTestRecord(t, []byte("original"), false, 0)
 	shape, err := InspectCOWRecord(f, ptr, cowTestLimits)
 	if err != nil {
 		t.Fatal(err)
@@ -210,6 +210,15 @@ func TestCOWFullReadSourceAndOutputAdmission(t *testing.T) {
 		if _, err := InspectCOWRecord(f, bad, cowTestLimits); err == nil {
 			t.Fatalf("accepted offset %d", off)
 		}
+	}
+	overflow := ptr
+	overflow.Offset = ^uint64(0)
+	if _, err := InspectCOWRecord(f, overflow, cowTestLimits); !errors.Is(err, ErrCOWReadUnsupported) {
+		t.Fatalf("source offset overflow: %v", err)
+	}
+	overflow.Offset = (1 << 63) - 1
+	if _, err := cowCheckReadHeader(overflow, record[:HeaderSize], cowTestLimits); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("record end overflow: %v", err)
 	}
 	leaf := ptr
 	leaf.FileID, err = EncodeFileID(ReservedLeafLogLaneID, 1)
