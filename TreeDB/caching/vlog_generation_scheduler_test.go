@@ -5236,10 +5236,13 @@ func TestVlogGenerationRewriteQueue_PrefersHistoricallyUsefulExpiredRetry(t *tes
 	forceVlogMaintenanceIdle(db)
 	runRewriteQueueMaintenanceForTest(db)
 
-	opts, calls := recorder.recordedRewrite()
-	if calls != 1 {
-		t.Fatalf("rewrite calls=%d want=1", calls)
+	// The first useful rewrite can immediately schedule a follow-up for the
+	// remaining debt. Assert the initial choice, independently of that work.
+	rewrites := recorder.recordedRewrites()
+	if len(rewrites) == 0 {
+		t.Fatal("rewrite calls=0 want>=1")
 	}
+	opts := rewrites[0]
 	if got, want := opts.SourceFileIDs, []uint32{22}; len(got) != len(want) || got[0] != want[0] {
 		t.Fatalf("rewrite SourceFileIDs=%v want=%v", got, want)
 	}
