@@ -289,7 +289,7 @@ func (c *Client) DenseVectorSearch(ctx context.Context, request DenseVectorSearc
 		err = validateDenseWorkResults(out.DenseWork, out.Results)
 	}
 	if err == nil && version == iwire.DenseVectorSearchOrdinaryVersion {
-		if !denseV3ResultsHaveValidIDs(out.Results) || !denseResultDocumentsMatchRequest(out.Results, request, false) || !denseV3ResultsOrdered(out.Results) {
+		if !denseV3ResultsHaveValidIDs(out.Results) || !denseResultDocumentsMatchRequest(out.Results, request, false) || !denseOrdinaryResultsOrdered(out) {
 			err = protocolError(iwire.ErrConsistencyUnavailable, "ordinary dense results do not match the request or ranking")
 		}
 	}
@@ -515,6 +515,21 @@ func decodeDenseV3UniqueJSONValue(decoder *json.Decoder) (any, bool) {
 	default:
 		return nil, false
 	}
+}
+
+// Ordinary ANN preserves the service's equal-score order, which can follow
+// physical graph ordinals rather than lexical IDs. Exact and typed-v3 responses
+// retain their stricter score-and-ID ordering.
+func denseOrdinaryResultsOrdered(response DenseVectorSearchResponse) bool {
+	if response.Exact {
+		return denseV3ResultsOrdered(response.Results)
+	}
+	for i := 1; i < len(response.Results); i++ {
+		if response.Results[i-1].Score < response.Results[i].Score {
+			return false
+		}
+	}
+	return true
 }
 
 func denseV3ResultsOrdered(results []DenseVectorSearchResult) bool {
