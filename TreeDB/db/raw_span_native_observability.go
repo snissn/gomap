@@ -2,6 +2,7 @@ package db
 
 import (
 	"fmt"
+	"sync"
 	"sync/atomic"
 
 	"github.com/snissn/gomap/TreeDB/batch"
@@ -344,11 +345,87 @@ func (db *DB) observeRawSpanNativeObservation(observation rawSpanNativeObservati
 	routeCounters.fallbackSpans[reason].Add(observation.spans)
 }
 
+// spanNativeStatKeys stores only immutable metric names. Values and maps are
+// always built afresh from the current counters by the caller.
+type spanNativeStatKeys struct {
+	reasons   [FlushSpanRunFallbackReasonCount][3]string
+	routes    map[string]*spanNativeRouteStatKeys
+	hasTriage bool
+}
+
+type spanNativeRouteStatKeys struct {
+	totals  [10]string
+	reasons [FlushSpanRunFallbackReasonCount][3]string
+	triage  []string
+}
+
+var spanNativeTotalSuffixes = [...]string{"observations_total", "candidate_ops_total", "candidate_spans_total", "eligible_ops_total", "eligible_spans_total", "used_ops_total", "used_spans_total", "ineligible_ops_total", "ineligible_spans_total", "fallbacks_total"}
+var spanNativeReasonSuffixes = [...]string{"count_total", "ops_total", "spans_total"}
+var spanNativeTriageSuffixes = [...]string{"context", "status", "candidate", "eligible", "used", "fallback_reason", "fallback_class", "admission_policy", "admission_admitted", "admission_reason", "selected_workers", "detail"}
+
+func newSpanNativeRouteStatKeys(prefix, route string, hasTriage bool) *spanNativeRouteStatKeys {
+	out := &spanNativeRouteStatKeys{}
+	routePrefix := prefix + "route." + route + "."
+	for i, suffix := range spanNativeTotalSuffixes {
+		out.totals[i] = routePrefix + suffix
+	}
+	for _, reason := range FlushSpanRunFallbackReasons() {
+		for i, suffix := range spanNativeReasonSuffixes {
+			out.reasons[reason][i] = routePrefix + "fallback.reason." + reason.String() + "." + suffix
+		}
+	}
+	if hasTriage {
+		out.triage = make([]string, len(spanNativeTriageSuffixes))
+		for i, suffix := range spanNativeTriageSuffixes {
+			out.triage[i] = prefix + "triage.route." + route + "." + suffix
+		}
+	}
+	return out
+}
+
+func newSpanNativeStatKeys(prefix string, routes []string, hasTriage bool) *spanNativeStatKeys {
+	out := &spanNativeStatKeys{routes: make(map[string]*spanNativeRouteStatKeys, len(routes)), hasTriage: hasTriage}
+	for _, reason := range FlushSpanRunFallbackReasons() {
+		for i, suffix := range spanNativeReasonSuffixes {
+			out.reasons[reason][i] = prefix + "fallback.reason." + reason.String() + "." + suffix
+		}
+	}
+	for _, route := range routes {
+		out.routes[route] = newSpanNativeRouteStatKeys(prefix, route, hasTriage)
+	}
+	return out
+}
+
+func (k *spanNativeStatKeys) route(prefix, route string) *spanNativeRouteStatKeys {
+	if keys, ok := k.routes[route]; ok {
+		return keys
+	}
+	// Preserve emission for a future route unknown to the initial table.
+	return newSpanNativeRouteStatKeys(prefix, route, k.hasTriage)
+}
+
+var rawSpanNativeStatNames = sync.OnceValue(func() *spanNativeStatKeys {
+	routes := make([]string, 0, len(rawSpanNativeRoutes()))
+	for _, route := range rawSpanNativeRoutes() {
+		routes = append(routes, string(route))
+	}
+	return newSpanNativeStatKeys("treedb.raw.span_native.", routes, false)
+})
+
+var orderedRootSpanNativeStatNames = sync.OnceValue(func() *spanNativeStatKeys {
+	routes := make([]string, 0, len(orderedRootSpanNativeRoutes()))
+	for _, route := range orderedRootSpanNativeRoutes() {
+		routes = append(routes, string(route))
+	}
+	return newSpanNativeStatKeys("treedb.publish.ordered_root_delta_group.span_native.", routes, true)
+})
+
 func (db *DB) appendRawSpanNativeStats(stats map[string]string) {
 	if db == nil || stats == nil {
 		return
 	}
 	prefix := "treedb.raw.span_native."
+	names := rawSpanNativeStatNames()
 	stats[prefix+"candidate_ops_total"] = fmt.Sprintf("%d", db.rawSpanNativeCandidateOps.Load())
 	stats[prefix+"candidate_spans_total"] = fmt.Sprintf("%d", db.rawSpanNativeCandidateSpans.Load())
 	stats[prefix+"eligible_ops_total"] = fmt.Sprintf("%d", db.rawSpanNativeEligibleOps.Load())
@@ -359,32 +436,30 @@ func (db *DB) appendRawSpanNativeStats(stats map[string]string) {
 	stats[prefix+"ineligible_spans_total"] = fmt.Sprintf("%d", db.rawSpanNativeIneligibleSpans.Load())
 	stats[prefix+"fallbacks_total"] = fmt.Sprintf("%d", db.rawSpanNativeFallbacks.Load())
 	for _, reason := range FlushSpanRunFallbackReasons() {
-		name := reason.String()
-		stats[prefix+"fallback.reason."+name+".count_total"] = fmt.Sprintf("%d", db.rawSpanNativeFallbackReasonCounts[reason].Load())
-		stats[prefix+"fallback.reason."+name+".ops_total"] = fmt.Sprintf("%d", db.rawSpanNativeFallbackOps[reason].Load())
-		stats[prefix+"fallback.reason."+name+".spans_total"] = fmt.Sprintf("%d", db.rawSpanNativeFallbackSpans[reason].Load())
+		stats[names.reasons[reason][0]] = fmt.Sprintf("%d", db.rawSpanNativeFallbackReasonCounts[reason].Load())
+		stats[names.reasons[reason][1]] = fmt.Sprintf("%d", db.rawSpanNativeFallbackOps[reason].Load())
+		stats[names.reasons[reason][2]] = fmt.Sprintf("%d", db.rawSpanNativeFallbackSpans[reason].Load())
 	}
 	for _, route := range rawSpanNativeRoutes() {
 		routeCounters := db.rawSpanNativeRouteCountersFor(route)
 		if routeCounters == nil {
 			continue
 		}
-		routePrefix := prefix + "route." + string(route) + "."
-		stats[routePrefix+"observations_total"] = fmt.Sprintf("%d", routeCounters.observations.Load())
-		stats[routePrefix+"candidate_ops_total"] = fmt.Sprintf("%d", routeCounters.candidateOps.Load())
-		stats[routePrefix+"candidate_spans_total"] = fmt.Sprintf("%d", routeCounters.candidateSpans.Load())
-		stats[routePrefix+"eligible_ops_total"] = fmt.Sprintf("%d", routeCounters.eligibleOps.Load())
-		stats[routePrefix+"eligible_spans_total"] = fmt.Sprintf("%d", routeCounters.eligibleSpans.Load())
-		stats[routePrefix+"used_ops_total"] = fmt.Sprintf("%d", routeCounters.usedOps.Load())
-		stats[routePrefix+"used_spans_total"] = fmt.Sprintf("%d", routeCounters.usedSpans.Load())
-		stats[routePrefix+"ineligible_ops_total"] = fmt.Sprintf("%d", routeCounters.ineligibleOps.Load())
-		stats[routePrefix+"ineligible_spans_total"] = fmt.Sprintf("%d", routeCounters.ineligibleSpans.Load())
-		stats[routePrefix+"fallbacks_total"] = fmt.Sprintf("%d", routeCounters.fallbacks.Load())
+		routeKeys := names.route(prefix, string(route))
+		stats[routeKeys.totals[0]] = fmt.Sprintf("%d", routeCounters.observations.Load())
+		stats[routeKeys.totals[1]] = fmt.Sprintf("%d", routeCounters.candidateOps.Load())
+		stats[routeKeys.totals[2]] = fmt.Sprintf("%d", routeCounters.candidateSpans.Load())
+		stats[routeKeys.totals[3]] = fmt.Sprintf("%d", routeCounters.eligibleOps.Load())
+		stats[routeKeys.totals[4]] = fmt.Sprintf("%d", routeCounters.eligibleSpans.Load())
+		stats[routeKeys.totals[5]] = fmt.Sprintf("%d", routeCounters.usedOps.Load())
+		stats[routeKeys.totals[6]] = fmt.Sprintf("%d", routeCounters.usedSpans.Load())
+		stats[routeKeys.totals[7]] = fmt.Sprintf("%d", routeCounters.ineligibleOps.Load())
+		stats[routeKeys.totals[8]] = fmt.Sprintf("%d", routeCounters.ineligibleSpans.Load())
+		stats[routeKeys.totals[9]] = fmt.Sprintf("%d", routeCounters.fallbacks.Load())
 		for _, reason := range FlushSpanRunFallbackReasons() {
-			name := reason.String()
-			stats[routePrefix+"fallback.reason."+name+".count_total"] = fmt.Sprintf("%d", routeCounters.fallbackReasonCounts[reason].Load())
-			stats[routePrefix+"fallback.reason."+name+".ops_total"] = fmt.Sprintf("%d", routeCounters.fallbackOps[reason].Load())
-			stats[routePrefix+"fallback.reason."+name+".spans_total"] = fmt.Sprintf("%d", routeCounters.fallbackSpans[reason].Load())
+			stats[routeKeys.reasons[reason][0]] = fmt.Sprintf("%d", routeCounters.fallbackReasonCounts[reason].Load())
+			stats[routeKeys.reasons[reason][1]] = fmt.Sprintf("%d", routeCounters.fallbackOps[reason].Load())
+			stats[routeKeys.reasons[reason][2]] = fmt.Sprintf("%d", routeCounters.fallbackSpans[reason].Load())
 		}
 	}
 }
