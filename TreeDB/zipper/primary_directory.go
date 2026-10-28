@@ -376,22 +376,18 @@ func (z *Zipper) applyPrimaryDirectory(rootID uint64, ops []batch.Entry, ranges 
 	}
 	base := node.PrimaryOperand{Ref: page.PageChildRef(rootID), Digest: sha256.Sum256(image)}
 	baseSeq := uint64(1)
-	var directory node.PrimaryDirectoryView
-	if node.NewNode(image).Type() == page.PageTypePrimaryDirectory {
-		directory, err = node.DecodePrimaryDirectory(image)
-		if err != nil {
+	// The format bounds this private vector. Its entries never outlive the
+	// synchronous component/directory seals, so stack backing avoids a heap
+	// allocation without adding retained scratch to the shared cache. Keep the
+	// full original admission charge and deferred alias clearing/refund.
+	var entryBacking [node.PrimaryDirectoryMaxEntries]node.PrimaryDirectoryEntry
+	if z.primaryArena != nil {
+		charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(entryBacking)))
+		if err := z.primaryArena.MetadataOwner().AddPending(charge); err != nil {
 			return 0, nil, metrics, err
 		}
 	}
-	// Each operation can insert at most one entry. Materialization clears the
-	// inherited entries, and oversized batches return through the DATA path
-	// before this vector grows. The existing owner admits and refunds the full
-	// backing allocation, including capacity unused by replacements.
-	entryCapacity := directory.Count() + min(len(ops), node.PrimaryDirectoryMaxEntries-directory.Count())
-	entries, err := makePrimaryScratch[node.PrimaryDirectoryEntry](z.primaryArena, 0, entryCapacity)
-	if err != nil {
-		return 0, nil, metrics, err
-	}
+	entries := entryBacking[:0]
 	defer releasePrimaryScratch(z.primaryArena, &entries)
 	var privateComponents []primaryarena.Ref
 	if z.primaryArena != nil && constructor == nil {
@@ -410,6 +406,10 @@ func (z *Zipper) applyPrimaryDirectory(rootID uint64, ops []batch.Entry, ranges 
 		metrics.PrimaryBankWorkBytes += work.Bytes
 	}()
 	if node.NewNode(image).Type() == page.PageTypePrimaryDirectory {
+		directory, e := node.DecodePrimaryDirectory(image)
+		if e != nil {
+			return 0, nil, metrics, e
+		}
 		base, baseSeq = directory.Base()
 		metrics.PrimaryDirectoryPagesRead++
 		entries = entries[:directory.Count()]
