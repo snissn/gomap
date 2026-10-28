@@ -33,11 +33,17 @@ func enterIsolatedVectorAllocationGate(t *testing.T, gate string) bool {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, os.Args[0],
+	args := []string{
 		"-test.run=^"+regexp.QuoteMeta(t.Name())+"$",
 		"-test.count=1",
 		"-test.timeout=90s",
-	)
+	}
+	// The SearchWithBuffer measurement can be advisory. Include its child
+	// logs so that a passing advisory is visible in the parent CI test output.
+	if gate == "search-with-buffer" {
+		args = append(args, "-test.v")
+	}
+	cmd := exec.CommandContext(ctx, os.Args[0], args...)
 	prefix := collectionsVectorAllocationGateEnv + "="
 	cmd.Env = make([]string, 0, len(os.Environ())+1)
 	for _, entry := range os.Environ() {
@@ -52,6 +58,9 @@ func enterIsolatedVectorAllocationGate(t *testing.T, gate string) bool {
 	}
 	if err != nil {
 		t.Fatalf("isolated vector allocation gate %q: %v\n%s", gate, err, output)
+	}
+	if gate == "search-with-buffer" {
+		t.Logf("isolated vector allocation measurement %q:\n%s", gate, output)
 	}
 	return false
 }
