@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -520,22 +521,31 @@ func TestCollectionSearchVectorIndexWithBufferRabitQQuantized2452(t *testing.T) 
 	// need a fresh process, while both parent and child retain the cache-lifetime
 	// checks below after the measurement.
 	if !collectionsRaceEnabled && enterIsolatedVectorAllocationGate(t, "collection-buffered-rabitq-quantized") {
+		oldRate := runtime.MemProfileRate
+		runtime.MemProfileRate = 1
+		defer func() { runtime.MemProfileRate = oldRate }()
+		rabitQAllocationDiagnosticSnapshot(t, col, "before-quantized-only")
 		quantizedOnlyAllocs := testing.AllocsPerRun(100, func() {
 			got, err := col.SearchVectorIndexWithBuffer(quantizedOnlyOpts, &buffer)
 			if err != nil || len(got.Results) != quantizedOnlyOpts.TopK {
 				panic("unexpected rabitq quantized_only SearchVectorIndexWithBuffer allocation probe result")
 			}
 		})
+		rabitQAllocationDiagnosticSnapshot(t, col, "after-quantized-only")
+		t.Logf("DIAGNOSTIC_NONQUALIFYING quantized_only_allocs_per_run=%v", quantizedOnlyAllocs)
 		if quantizedOnlyAllocs != 0 {
 			_ = d.Close()
 			t.Fatalf("rabitq quantized_only SearchVectorIndexWithBuffer steady-state allocs/run=%v want 0", quantizedOnlyAllocs)
 		}
+		rabitQAllocationDiagnosticSnapshot(t, col, "before-rerank")
 		rerankAllocs := testing.AllocsPerRun(100, func() {
 			got, err := col.SearchVectorIndexWithBuffer(rerankOpts, &buffer)
 			if err != nil || len(got.Results) != rerankOpts.TopK {
 				panic("unexpected rabitq quantized_rerank SearchVectorIndexWithBuffer allocation probe result")
 			}
 		})
+		rabitQAllocationDiagnosticSnapshot(t, col, "after-rerank")
+		t.Logf("DIAGNOSTIC_NONQUALIFYING rerank_allocs_per_run=%v", rerankAllocs)
 		if rerankAllocs != 0 {
 			_ = d.Close()
 			t.Fatalf("rabitq quantized_rerank SearchVectorIndexWithBuffer steady-state allocs/run=%v want 0", rerankAllocs)
