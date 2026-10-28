@@ -127,3 +127,103 @@ func TestOwnedSuccessorExternalLeafRefusesUnownedBuffer(t *testing.T) {
 		t.Fatal("global reader used")
 	}
 }
+
+// The initial view is valid only inside one seek. A later seek must verify
+// its root again, and reusing the caller's scratch must not cross tree owners.
+func TestOwnedSuccessorCapturedRootsAndCorruption(t *testing.T) {
+	for _, mode := range []string{"DATA_leaf", "DATA_internal", "PRIMARY"} {
+		t.Run(mode, func(t *testing.T) {
+			p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 65536)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer p.Close()
+			if _, err = p.Alloc(2); err != nil {
+				t.Fatal(err)
+			}
+			alloc := func() (uint64, []byte) {
+				id, e := p.Alloc(1)
+				if e != nil {
+					t.Fatal(e)
+				}
+				image, e := p.GetForWrite(id)
+				if e != nil {
+					t.Fatal(e)
+				}
+				return id, image
+			}
+			makeLeaf := func(k, v string) (uint64, []byte) {
+				id, image := alloc()
+				b := node.NewBuilder(image, page.PageTypeLeaf)
+				b.SetPageID(id)
+				if k != "" {
+					if e := b.AddLeafEntryWithRevision([]byte(k), []byte(v), node.FlagInline, page.ValuePtr{}, 7); e != nil {
+						t.Fatal(e)
+					}
+				}
+				b.FinishNoNode()
+				return id, image
+			}
+			emptyID, _ := makeLeaf("", "")
+			oldLeafID, oldLeaf := makeLeaf("m", "old")
+			newLeafID, _ := makeLeaf("m", "new")
+			makeRoot := func(leafID uint64) (uint64, []byte, []byte) {
+				if mode == "DATA_leaf" {
+					image, e := p.Get(leafID)
+					if e != nil {
+						t.Fatal(e)
+					}
+					return leafID, image, image
+				}
+				baseID, baseImage := alloc()
+				b := node.NewBuilder(baseImage, page.PageTypeInternal)
+				b.SetPageID(baseID)
+				if e := b.AddInternalChild([]byte("a"), emptyID); e != nil {
+					t.Fatal(e)
+				}
+				if e := b.AddInternalChild([]byte("m"), leafID); e != nil {
+					t.Fatal(e)
+				}
+				b.FinishNoNode()
+				if mode != "PRIMARY" {
+					return baseID, baseImage, baseImage
+				}
+				id, image := alloc()
+				base := node.PrimaryOperand{Ref: page.PageChildRef(baseID), Digest: sha256.Sum256(baseImage)}
+				if e := node.EncodePrimaryDirectory(image, id, 1, base, nil); e != nil {
+					t.Fatal(e)
+				}
+				return id, image, baseImage
+			}
+			oldRootID, oldRoot, oldBase := makeRoot(oldLeafID)
+			newRootID, _, _ := makeRoot(newLeafID)
+			oldTree, newTree := New(p, nil, oldRootID), New(p, nil, newRootID)
+			var key, leaf [page.PageSize]byte
+			var scratch OwnedSuccessorScratch
+			seek := func(tr *Tree, start, want string) {
+				t.Helper()
+				got, ok, e := tr.SeekGEWithFixedScratch([]byte(start), nil, key[:], leaf[:], &scratch, nil)
+				if e != nil || !ok || string(got.Key) != "m" || string(got.Value) != want || got.Revision != 7 {
+					t.Fatalf("seek %q: %+v %v %v", start, got, ok, e)
+				}
+			}
+			// Both direct descent and an empty first child followed by ancestor
+			// reload must preserve the captured immutable root's result.
+			for _, start := range []string{"a", "m"} {
+				seek(oldTree, start, "old")
+				seek(newTree, start, "new")
+				seek(oldTree, start, "old")
+			}
+			for _, image := range [][]byte{oldRoot, oldBase, oldLeaf} {
+				// Corrupt bytes outside the structural fields without updating CRC.
+				image[len(image)-1] ^= 1
+				if _, _, e := oldTree.SeekGEWithFixedScratch([]byte("m"), nil, key[:], leaf[:], &scratch, nil); e == nil {
+					t.Fatal("corruption accepted after previous successful seek")
+				}
+				seek(newTree, "m", "new")
+				image[len(image)-1] ^= 1
+				seek(oldTree, "m", "old")
+			}
+		})
+	}
+}
