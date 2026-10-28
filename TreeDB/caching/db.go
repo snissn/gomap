@@ -10468,6 +10468,7 @@ type memtableView struct {
 	queueHasRangeSpans       bool // captured while cloning the immutable span layers
 	rootVersion              uint64
 	rootPointShards          []rootDomainSnapshot
+	rootSnapshotOnce         sync.Once
 	rootSnapshotShards       []rootDomainSnapshot
 	rootSystem               rootDomainSnapshot
 	rootIterator             rootDomainSnapshot

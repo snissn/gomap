@@ -160,10 +160,7 @@ func memtableViewAllowsBackendSnapshotFastPath(view *memtableView) bool {
 			return false
 		}
 	}
-	pointSnapshots := view.rootSnapshotShards
-	if len(pointSnapshots) == 0 {
-		pointSnapshots = view.rootPointShards
-	}
+	pointSnapshots := view.rootPointShards
 	for i := range pointSnapshots {
 		if snapshotRootDomainStaticBlocksBackendFastPath(pointSnapshots[i]) {
 			return false
@@ -305,7 +302,9 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	)
 	if view != nil {
 		viewRootVersion = view.rootVersion
-		viewRootPointShards = view.rootSnapshotShards
+		if len(view.queue) != 0 || view.publishedRoots != nil {
+			viewRootPointShards = view.snapshotPointShards()
+		}
 		viewRootSystem = view.rootSystem
 		viewRootIterator = view.rootIterator
 		viewPublishedRoots = view.publishedRoots

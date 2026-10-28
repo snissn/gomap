@@ -252,14 +252,10 @@ func (db *DB) publishRootDomainSnapshotsLocked(view *memtableView) {
 		return
 	}
 	points := make([]rootDomainSnapshot, len(db.rootPointStates))
-	snapshots := make([]rootDomainSnapshot, len(db.rootPointStates))
 	for i := range db.rootPointStates {
 		points[i] = db.rootPointStates[i].snapshot()
-		snapshots[i] = points[i]
-		snapshots[i].mutable = nil
 	}
 	view.rootPointShards = points
-	view.rootSnapshotShards = snapshots
 	view.rootSystem = db.rootSystemState.snapshot()
 	view.rootSystem.mutable = nil
 	view.rootIterator = db.rootIteratorState.snapshot()
@@ -270,6 +266,24 @@ func (db *DB) publishRootDomainSnapshotsLocked(view *memtableView) {
 	} else {
 		view.publishedRoots = publishedRootSetFromMemtableView(view)
 	}
+}
+
+// snapshotPointShards creates detached snapshot-only state at most once per
+// view. A snapshot may outlive its view, so these shards must never share their
+// backing allocation with the live shards holding mutable memtables.
+func (view *memtableView) snapshotPointShards() []rootDomainSnapshot {
+	view.rootSnapshotOnce.Do(func() {
+		if len(view.rootPointShards) == 0 {
+			return
+		}
+		points := make([]rootDomainSnapshot, len(view.rootPointShards))
+		for i := range points {
+			points[i] = view.rootPointShards[i]
+			points[i].mutable = nil
+		}
+		view.rootSnapshotShards = points
+	})
+	return view.rootSnapshotShards
 }
 
 func clonePublishedRootSet(set *publishedRootSet) *publishedRootSet {
@@ -839,9 +853,6 @@ func rootDomainSnapshotFromMemtableView(view *memtableView, shardIdx int, includ
 		if includeMutable {
 			return view.rootPointShards[shardIdx]
 		}
-		if shardIdx < len(view.rootSnapshotShards) {
-			return view.rootSnapshotShards[shardIdx]
-		}
 		snap := view.rootPointShards[shardIdx]
 		snap.mutable = nil
 		return snap
@@ -885,10 +896,7 @@ func publishedRootSetFromMemtableView(view *memtableView) *publishedRootSet {
 	if view.publishedRoots != nil {
 		return view.publishedRoots
 	}
-	pointSource := view.rootSnapshotShards
-	if len(pointSource) == 0 {
-		pointSource = view.rootPointShards
-	}
+	pointSource := view.rootPointShards
 	pointShards := make([]publishedRootRef, len(pointSource))
 	hasPublished := false
 	for i := range pointSource {

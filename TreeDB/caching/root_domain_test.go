@@ -549,10 +549,10 @@ func TestPublishMemtablesLocked_UsesRootDomainStateAuthority(t *testing.T) {
 		t.Fatalf("root point shards=%d want 1", got)
 	}
 	assertRootDomainVisibleValue(t, view.rootPointShards[0], "k", "state-mutable")
-	if got := len(view.rootSnapshotShards); got != 1 {
+	if got := len(view.snapshotPointShards()); got != 1 {
 		t.Fatalf("snapshot shards=%d want 1", got)
 	}
-	assertRootDomainVisibleValue(t, view.rootSnapshotShards[0], "k", "state-queued")
+	assertRootDomainVisibleValue(t, view.snapshotPointShards()[0], "k", "state-queued")
 	assertRootDomainVisibleValue(t, view.rootIterator, "scan", "state-iter")
 }
 
@@ -589,7 +589,7 @@ func TestPublishMemtablesLocked_RootDomainSnapshotsDoNotAliasLaterStateReuse(t *
 	db.rootIteratorState.immutables = append(db.rootIteratorState.immutables, iterSecond)
 
 	assertRootDomainVisibleValue(t, view.rootPointShards[0], "k", "first")
-	assertRootDomainVisibleValue(t, view.rootSnapshotShards[0], "k", "first")
+	assertRootDomainVisibleValue(t, view.snapshotPointShards()[0], "k", "first")
 	assertRootDomainVisibleValue(t, view.rootIterator, "scan", "iter-first")
 }
 
