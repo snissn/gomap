@@ -179,8 +179,12 @@ physical roots. The cache identity includes native publication identity, and
 its mapped or heap-backed assets retain independent admission until their final
 handles close. Dense and hybrid materialization keep that original capture
 through document fetch. Full retained JSON uses the existing admitted primary
-reader. Scalar-filtered dense search keeps its document-scan exact route;
-hybrid retains the maintained bounded allow-set cutoff and ANN postfiltering.
+reader. Scalar-filtered dense search keeps its document-scan exact route.
+Ordinary vector-bearing Hybrid queries with scalar filters fail closed with
+`ErrHybridSearchUnsupported`; they do not use an ANN postfilter fallback.
+Text-only Hybrid scalar filtering remains supported. Maintained typed graph
+serving and eligible typed quantized rerank routes retain their explicit
+admission policies.
 
 The operation-local native text catalog lends one owned pointer-projection workspace across sequential scalar, document-ID and posting phases. Each actually encountered ordinary or PRIMARY backing is admitted before allocation and remains charged to the original operation through its final alias. A cursor holds its loan until Close; overlapping cursors use separately admitted independent storage because inline page bytes can remain borrowed outside the read mutex. Close clears tree, page, directory, key and callback aliases before reuse. Query specialization stays local to the text request, and abandoned or partially constructed posting iterators close before fallback or error return. No pool, new capture, owner or admission authority is introduced.
 

@@ -49,6 +49,7 @@ const (
 type queryRowClass struct {
 	hybrid         bool
 	vectorRequired bool
+	unsupported    string
 }
 
 // queryRowClasses is the public -query-rows contract and classifies every row
@@ -61,7 +62,7 @@ var queryRowClasses = map[string]queryRowClass{
 	queryRowHybridText:          {hybrid: true},
 	queryRowHybridTextScalar:    {hybrid: true},
 	queryRowHybridTextVector:    {hybrid: true, vectorRequired: true},
-	queryRowHybridTextVecScalar: {hybrid: true, vectorRequired: true},
+	queryRowHybridTextVecScalar: {hybrid: true, vectorRequired: true, unsupported: "ordinary filtered vector hybrid search is not implemented; explicit diagnostic probe only"},
 }
 
 type config struct {
@@ -100,24 +101,31 @@ type config struct {
 }
 
 type report struct {
-	SchemaVersion    string             `json:"schema_version"`
-	GeneratedAt      string             `json:"generated_at"`
-	Context          reportContext      `json:"context"`
-	Config           reportConfig       `json:"config"`
-	Artifacts        reportArtifacts    `json:"artifacts"`
-	Load             loadReport         `json:"load"`
-	Backfill         *backfillReport    `json:"backfill,omitempty"`
-	Reopen           *reopenReport      `json:"reopen,omitempty"`
-	Queries          []queryReport      `json:"queries,omitempty"`
-	Concurrent       *concurrentReport  `json:"concurrent,omitempty"`
-	Maintenance      *maintenanceReport `json:"maintenance,omitempty"`
-	StorageSnapshots []storageSnapshot  `json:"storage_snapshots,omitempty"`
-	Guardrails       []guardrailResult  `json:"guardrails,omitempty"`
-	Bottlenecks      []bottleneckRow    `json:"bottlenecks,omitempty"`
-	Caveats          []string           `json:"caveats,omitempty"`
-	SelectedPhases   []string           `json:"selected_phases"`
-	CompletedPhases  []string           `json:"completed_phases"`
-	Complete         bool               `json:"complete"`
+	SchemaVersion     string             `json:"schema_version"`
+	GeneratedAt       string             `json:"generated_at"`
+	Context           reportContext      `json:"context"`
+	Config            reportConfig       `json:"config"`
+	Artifacts         reportArtifacts    `json:"artifacts"`
+	Load              loadReport         `json:"load"`
+	Backfill          *backfillReport    `json:"backfill,omitempty"`
+	Reopen            *reopenReport      `json:"reopen,omitempty"`
+	Queries           []queryReport      `json:"queries,omitempty"`
+	Concurrent        *concurrentReport  `json:"concurrent,omitempty"`
+	Maintenance       *maintenanceReport `json:"maintenance,omitempty"`
+	StorageSnapshots  []storageSnapshot  `json:"storage_snapshots,omitempty"`
+	Guardrails        []guardrailResult  `json:"guardrails,omitempty"`
+	Bottlenecks       []bottleneckRow    `json:"bottlenecks,omitempty"`
+	Caveats           []string           `json:"caveats,omitempty"`
+	SelectedPhases    []string           `json:"selected_phases"`
+	CompletedPhases   []string           `json:"completed_phases"`
+	Complete          bool               `json:"complete"`
+	SelectedQueryRows []string           `json:"selected_query_rows"`
+	ExcludedQueryRows []excludedQueryRow `json:"excluded_query_rows,omitempty"`
+}
+
+type excludedQueryRow struct {
+	Name   string `json:"name"`
+	Reason string `json:"reason"`
 }
 
 type reportContext struct {
@@ -296,7 +304,7 @@ type storageSnapshot struct {
 	V2PostingBlocks             uint64  `json:"v2_posting_blocks,omitempty"`
 	V2LiveDocuments             uint64  `json:"v2_live_documents,omitempty"`
 	V2DeletedDocs               uint64  `json:"v2_deleted_docs,omitempty"`
-	VectorNativeBytes           int64   `json:"vector_native_bytes,omitempty"`
+	ColumnGraphDiskBytes        int64   `json:"column_graph_disk_bytes,omitempty"`
 }
 
 type guardrailResult struct {
@@ -370,7 +378,7 @@ func parseFlags(args []string) (config, error) {
 	fs.StringVar(&cfg.baseSHA, "base-sha", "", "Base SHA for report context")
 	fs.StringVar(&cfg.phases, "phases", "all", "Comma-separated phase selector: all or retrieval (load,queries,reopen)")
 	var queryRows string
-	fs.StringVar(&queryRows, "query-rows", "", "Comma-separated retrieval row names; empty runs the complete matrix")
+	fs.StringVar(&queryRows, "query-rows", "", "Comma-separated retrieval row names; empty runs the supported matrix; explicitly select hybrid_text_vector_scalar_no_docs for an unsupported diagnostic probe")
 	fs.StringVar(&cfg.cpuProfile, "cpu-profile", "", "Write a CPU profile for the selected single hybrid query row")
 	fs.StringVar(&cfg.allocProfile, "alloc-profile", "", "Write post-query and .base allocation profiles for one selected hybrid row")
 	if err := fs.Parse(args); err != nil {
@@ -676,8 +684,19 @@ func run(cfg config) (report, error) {
 		},
 		SelectedPhases: selectedPhaseNames(cfg.selectedPhases),
 	}
+	if cfg.selectedPhases["queries"] {
+		for name, class := range queryRowClasses {
+			if selectedQueryRow(cfg, name) {
+				rep.SelectedQueryRows = append(rep.SelectedQueryRows, name)
+			} else if len(cfg.queryRows) == 0 && cfg.includeVector && class.unsupported != "" {
+				rep.ExcludedQueryRows = append(rep.ExcludedQueryRows, excludedQueryRow{Name: name, Reason: class.unsupported})
+			}
+		}
+		sort.Strings(rep.SelectedQueryRows)
+		sort.Slice(rep.ExcludedQueryRows, func(i, j int) bool { return rep.ExcludedQueryRows[i].Name < rep.ExcludedQueryRows[j].Name })
+	}
 	if !cfg.includeVector {
-		rep.Caveats = append(rep.Caveats, "Vector/hybrid rows were skipped because -include-vector=false.")
+		rep.Caveats = append(rep.Caveats, "Vector-bearing hybrid rows were skipped because -include-vector=false.")
 	}
 
 	fixture, load, err := loadPrimaryFixture(cfg)
@@ -1267,7 +1286,14 @@ func runQueryMatrix(col *collections.Collection, cfg config) ([]queryReport, []g
 }
 
 func selectedQueryRow(cfg config, name string) bool {
-	return len(cfg.queryRows) == 0 || cfg.queryRows[name]
+	class, known := queryRowClasses[name]
+	if !known || class.vectorRequired && !cfg.includeVector {
+		return false
+	}
+	if len(cfg.queryRows) != 0 {
+		return cfg.queryRows[name]
+	}
+	return class.unsupported == ""
 }
 
 func runTextQueryRow(col *collections.Collection, cfg config, name, query string, operator collections.TextSearchOperator, shape string) (queryReport, guardrailResult, error) {
@@ -2031,12 +2057,12 @@ func storageSnapshotFromText(label string, docs int, bytes int64, stats collecti
 		snap.TextStatusFormatBytesPerDoc = float64(stats.V2StatusFormatBytes) / docsDivisor
 	}
 	if vectorStatus != nil {
-		snap.VectorNativeBytes = vectorStatusBytes(vectorStatus)
+		snap.ColumnGraphDiskBytes = columnGraphDiskBytes(vectorStatus)
 	}
 	return snap
 }
 
-func vectorStatusBytes(status *collections.VectorIndexStatus) int64 {
+func columnGraphDiskBytes(status *collections.VectorIndexStatus) int64 {
 	if status == nil {
 		return 0
 	}
@@ -2087,14 +2113,18 @@ func renderMarkdown(rep report) string {
 	fmt.Fprintf(&b, "- base: `%s` / `%s`\n", rep.Context.BaseRef, rep.Context.BaseSHA)
 	fmt.Fprintf(&b, "- rows: `%d`, dims: `%d`, batch: `%d`, queries/row: `%d`\n", rep.Config.Rows, rep.Config.Dims, rep.Config.BatchSize, rep.Config.Queries)
 	fmt.Fprintf(&b, "- phases: selected `%s`; completed `%s`; status **%s**\n", strings.Join(rep.SelectedPhases, ","), strings.Join(rep.CompletedPhases, ","), reportStatus(rep.Complete))
+	fmt.Fprintf(&b, "- selected query rows: `%s` (completion applies only to this scope)\n", strings.Join(rep.SelectedQueryRows, ","))
+	for _, row := range rep.ExcludedQueryRows {
+		fmt.Fprintf(&b, "- excluded query row: `%s`: %s; no qualification or latency evidence\n", row.Name, row.Reason)
+	}
 	fmt.Fprintf(&b, "- db dir: `%s` (kept=%v)\n\n", rep.Artifacts.DBDir, rep.Artifacts.DBKept)
 
 	fmt.Fprintf(&b, "## Load/storage\n\n")
-	fmt.Fprintf(&b, "| phase | seconds | rows/s | storage bytes | bytes/doc | text bytes/doc | vector native bytes |\n")
+	fmt.Fprintf(&b, "| phase | seconds | rows/s | storage bytes | bytes/doc | text bytes/doc | ColumnGraph persisted disk bytes |\n")
 	fmt.Fprintf(&b, "| --- | ---: | ---: | ---: | ---: | ---: | ---: |\n")
 	vectorBytes := int64(0)
 	if rep.Load.VectorStatus != nil {
-		vectorBytes = vectorStatusBytes(rep.Load.VectorStatus)
+		vectorBytes = columnGraphDiskBytes(rep.Load.VectorStatus)
 	}
 	fmt.Fprintf(&b, "| load | %.3f | %.1f | %d | %.1f | %.1f | %d |\n", rep.Load.TotalSeconds, rep.Load.RowsPerSecond, rep.Load.StorageBytesAfterLoad, rep.Load.StorageBytesPerDoc, float64(rep.Load.TextStorage.EncodedBytes)/float64(maxInt(rep.Load.Rows, 1)), vectorBytes)
 	if rep.Backfill != nil {

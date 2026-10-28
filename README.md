@@ -407,6 +407,11 @@ same-host/context evidence, not universal throughput claims.
 | Hybrid no-doc search | `SearchHybrid` + rare scalar filter, no docs | 163,924 | 6,100.41 | 198,426 | 1,078 | B/op -61.4%; allocs/op -86.2% | 64 text + 64 vector candidates; 16 fused; 0 docs fetched |
 | Hybrid final fetch | `SearchHybrid` + rare scalar filter + final topK fetch | 377,382 | 2,649.83 | 256,232 | 2,055 | B/op -55.2%; allocs/op -76.6% | 10 docs fetched at topK=10; 112 scalar rejections; 0 fail/fallback |
 
+The two filtered vector Hybrid rows above are historical measurements. Ordinary
+vector+scalar Hybrid is currently unsupported and fails closed; these numbers
+provide no current latency or qualification evidence. Current benchmark probes
+verify the rejection and explicitly skip those cells without success metrics.
+
 The strict same-host M4 paired insert/readiness delta was B/op -28.2%,
 allocs/op -71.8%, and ns/op +0.8%. Remaining allocation floors include DB
 open/commitlog setup in profiles plus value-log append buffers, typed-column
