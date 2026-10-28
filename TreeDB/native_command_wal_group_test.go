@@ -82,13 +82,47 @@ func testNativeCommandWALGroupBSONUpdates(t *testing.T, sameCollection bool) {
 	database.commandWALGroupCommit.delay = time.Second
 	database.commandWALGroupCommit.maxCommits = waiters
 	database.commandWALGroupCommit.maxBytes = 1 << 30
+	// Registration precedes the semantic cut swap. A full WAL group alone
+	// does not prove that every native writer has finished installation.
+	// Hold completion after the producer gates release until all cuts install,
+	// then let the leader reach the shared durability barrier.
+	installed := make(chan struct{}, waiters)
+	releaseInstalled := make(chan struct{})
+	var installedOnce sync.Once
+	unblockInstalled := func() { installedOnce.Do(func() { close(releaseInstalled) }) }
+	database.commandWALGroupCommit.testBeforeNativeComplete = func() {
+		installed <- struct{}{}
+		<-releaseInstalled
+	}
 	atSync := make(chan int, 1)
 	release := make(chan struct{})
-	defer close(release)
-	database.commandWALGroupCommit.testBeforeSync = func(n int) { atSync <- n; <-release }
+	var releaseOnce sync.Once
+	unblockSync := func() { releaseOnce.Do(func() { close(release) }) }
+	database.commandWALGroupCommit.testBeforeSync = func(n int) {
+		select {
+		case atSync <- n:
+		case <-release:
+			return
+		}
+		<-release
+	}
 	errs := make(chan error, waiters)
+	joined := make(chan struct{}, waiters)
+	defer func() {
+		unblockInstalled()
+		unblockSync()
+		for range waiters {
+			select {
+			case <-joined:
+			case <-time.After(5 * time.Second):
+				t.Error("native writer did not join after fixture release")
+				return
+			}
+		}
+	}()
 	for i, c := range rows {
 		go func(i int, c *collections.Collection) {
+			defer func() { joined <- struct{}{} }()
 			id := []byte("a")
 			if sameCollection {
 				id = []byte(fmt.Sprintf("a%d", i))
@@ -97,6 +131,16 @@ func testNativeCommandWALGroupBSONUpdates(t *testing.T, sameCollection bool) {
 			errs <- err
 		}(i, c)
 	}
+	for range waiters {
+		select {
+		case <-installed:
+		case err := <-errs:
+			t.Fatalf("native writer returned before installation rendezvous: %v", err)
+		case <-time.After(5 * time.Second):
+			t.Fatal("native writers did not finish installation")
+		}
+	}
+	unblockInstalled()
 	select {
 	case n := <-atSync:
 		if n != waiters {
@@ -124,10 +168,15 @@ func testNativeCommandWALGroupBSONUpdates(t *testing.T, sameCollection bool) {
 		t.Fatalf("ACK before sync: %v", err)
 	default:
 	}
-	release <- struct{}{}
+	unblockSync()
 	for range waiters {
-		if err := <-errs; err != nil {
-			t.Fatal(err)
+		select {
+		case err := <-errs:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("native ACK did not complete after sync")
 		}
 	}
 	after := database.Stats()
