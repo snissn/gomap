@@ -53,10 +53,12 @@ type COWStats struct {
 // C2 charges caller-owned cut/vector/backend-lease allocations through an
 // external lease before allocation, or ExtraBytes before private preparation.
 type COWBudget struct {
-	mu     sync.Mutex
-	limits COWLimits
-	stats  COWStats
-	closed bool
+	mu            sync.Mutex
+	limits        COWLimits
+	stats         COWStats
+	closed        bool
+	idleRead      [4]cowIdleReadScratch
+	idleReadCount int
 	// Exactly one coarse physical-maintenance partition. Its original parent
 	// lease is retained through Close and the last child finalizer.
 	maintenance      *COWBudget
@@ -83,6 +85,8 @@ func (b *COWBudget) Limits() COWLimits { return b.limits }
 func (b *COWBudget) Close() {
 	b.mu.Lock()
 	b.closed = true
+	for b.reclaimReadScratchLocked() {
+	}
 	maintenance := b.maintenance
 	b.releaseControlLocked()
 	b.mu.Unlock()
@@ -92,7 +96,7 @@ func (b *COWBudget) Close() {
 	b.releaseMaintenanceReservation()
 }
 func (b *COWBudget) releaseControlLocked() {
-	if b.closed && b.stats.Generations == 0 && b.stats.Views == 0 && b.stats.DeferredBytes == 0 && b.stats.ExternalLeases == 0 {
+	if b.closed && b.stats.Generations == 0 && b.stats.Views == 0 && b.stats.DeferredBytes == 0 && b.stats.ExternalLeases == 0 && !b.hasIdleReadScratchLocked() {
 		b.stats.TotalBytes -= b.stats.ControlBytes
 		b.stats.ControlBytes = 0
 	}
@@ -179,7 +183,7 @@ func (b *COWBudget) acquireExternal(bytes uint64, nativeSource bool) (*COWExtern
 	if b.closed {
 		return nil, ErrCOWClosed
 	}
-	if (nativeSource && b.stats.Sources >= b.limits.MaxSources) || b.stats.ExternalLeases == int(^uint(0)>>1) || !cowFits(b.limits.MaxInFlightBytes, b.stats.ReservedBytes, charge) ||
+	if (nativeSource && b.stats.Sources >= b.limits.MaxSources) || b.stats.ExternalLeases == int(^uint(0)>>1) || !b.inFlightFitsLocked(charge) ||
 		!b.retirementFitsLocked(charge) || !b.addLocked(charge) {
 		return nil, ErrCOWCapacity
 	}
@@ -219,7 +223,7 @@ func (l *COWExternalLease) Resize(bytes uint64) error {
 		if b.closed {
 			return ErrCOWClosed
 		}
-		if !cowFits(b.limits.MaxInFlightBytes, b.stats.ReservedBytes, delta) ||
+		if !b.inFlightFitsLocked(delta) ||
 			!b.retirementFitsLocked(delta) || !b.addLocked(delta) {
 			return ErrCOWCapacity
 		}
@@ -243,15 +247,7 @@ func (l *COWExternalLease) Close() {
 	}
 	b := l.budget
 	b.mu.Lock()
-	if l.closed {
-		b.mu.Unlock()
-		return
-	}
-	l.closed = true
-	b.stats.TotalBytes -= l.charge
-	b.stats.ReservedBytes -= l.charge
-	b.stats.ExternalBytes -= l.charge
-	b.stats.ExternalLeases--
+	l.closeLocked()
 	b.releaseControlLocked()
 	b.mu.Unlock()
 	b.releaseMaintenanceReservation()
@@ -260,12 +256,18 @@ func (l *COWExternalLease) Close() {
 func cowFits(limit, used, n uint64) bool { return used <= limit && n <= limit-used }
 
 func (b *COWBudget) retirementFitsLocked(n uint64) bool {
-	used, ok := cowAdd(b.stats.HistoryBytes, b.stats.ReservedBytes)
-	if !ok {
-		return false
+	for {
+		used, ok := cowAdd(b.stats.HistoryBytes, b.stats.ReservedBytes)
+		if ok {
+			used, ok = cowAdd(used, b.stats.DeferredBytes)
+		}
+		if ok && cowFits(b.limits.MaxRetiredBytes, used, n) {
+			return true
+		}
+		if !b.reclaimReadScratchLocked() {
+			return false
+		}
 	}
-	used, ok = cowAdd(used, b.stats.DeferredBytes)
-	return ok && cowFits(b.limits.MaxRetiredBytes, used, n)
 }
 
 func cowAdd(a, c uint64) (uint64, bool) {
@@ -283,8 +285,11 @@ func cowAllocation(n uint64) uint64 { return retainedalloc.AllocationCharge(n) }
 
 func (b *COWBudget) addLocked(n uint64) bool {
 	total, ok := cowAdd(b.stats.TotalBytes, n)
-	if !ok || total > b.limits.MaxTotalBytes {
-		return false
+	for !ok || total > b.limits.MaxTotalBytes {
+		if !b.reclaimReadScratchLocked() {
+			return false
+		}
+		total, ok = cowAdd(b.stats.TotalBytes, n)
 	}
 	b.stats.TotalBytes = total
 	if total > b.stats.PeakBytes {

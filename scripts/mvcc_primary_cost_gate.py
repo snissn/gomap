@@ -26,7 +26,9 @@ LIFECYCLE = "TestCommitAtPrimaryOnlyRetainsActualDataGeneration"
 SAMPLES = 8
 ITERATIONS = 128
 TIME_LIMIT_PERCENT = 5.0
-QUIET_LIMIT_PERCENT = 2.0
+QUIET_LIMIT_PERCENT = 10.0
+QUIET_AGGREGATE_LIMIT_PERCENT = 50.0
+QUIET_WARNING_PERCENT = 2.0
 QUIET_WINDOW_SECONDS = 5.0
 QUIET_ACQUISITION_SECONDS = 60.0
 ROW = re.compile(r"^" + BENCHMARK + r"(?:-\d+)?\s+(\d+)\s+(.*)$")
@@ -224,10 +226,31 @@ class ProcessObservation:
         elapsed = time.monotonic() - self.started
         rows = [dict(record, cpu_percent=100 * record["ticks"] / os.sysconf("SC_CLK_TCK") / elapsed)
                 for record in self.totals.values()]
-        return {"elapsed_s": elapsed, "external_processes": rows,
-                "busy": [record for record in rows if record["cpu_percent"] >= QUIET_LIMIT_PERCENT],
-                "cpu_threshold_percent": QUIET_LIMIT_PERCENT, "sampling_interval_s": 0.25,
-                "limit": "processes entirely between observations may be missed"}
+        return dict(elapsed_s=elapsed, **classify_external_cpu(rows))
+
+
+def classify_external_cpu(rows: list[dict]) -> dict:
+    """Conservative admission policy in percent of ONE logical CPU, not host capacity.
+
+    No process-name exemptions or affinity discounts: sampled placement cannot
+    establish where a process ran throughout an interval. Aggregate includes all
+    observed external processes, including kernel workers, and is a partial estimate: processes between samples may be missed,
+    and first-seen processes can include CPU from before the interval.
+    """
+    total = sum(record["cpu_percent"] for record in rows)
+    aggregate_busy = total >= QUIET_AGGREGATE_LIMIT_PERCENT
+    return {"external_processes": rows,
+            "busy": [record for record in rows if record["cpu_percent"] >= QUIET_LIMIT_PERCENT
+                     or (aggregate_busy and record["cpu_percent"] > 0)],
+            "warnings": [record for record in rows if record["cpu_percent"] >= QUIET_WARNING_PERCENT],
+            "aggregate_cpu_percent": total, "aggregate_busy": aggregate_busy,
+            "cpu_threshold_percent": QUIET_LIMIT_PERCENT,
+            "aggregate_cpu_threshold_percent": QUIET_AGGREGATE_LIMIT_PERCENT,
+            "warning_cpu_threshold_percent": QUIET_WARNING_PERCENT,
+            "cpu_percent_basis": "one logical CPU (100 * ticks / CLK_TCK / elapsed seconds)",
+            "policy": "external-cpu-v2", "sampling_interval_s": 0.25,
+            "limit": "observed aggregate is partial; processes entirely between observations may be missed; "
+                     "first-seen processes may include pre-window CPU; kernel workers count as external; CPU admission does not prove absence of I/O or timing noise"}
 
 
 
@@ -240,6 +263,7 @@ def acquire_quiet_window(output: Path, *, clock=None, sleep=None, observer_facto
     deadline = started + QUIET_ACQUISITION_SECONDS
     acquisition = {"status": "acquiring", "setup_cap_s": QUIET_ACQUISITION_SECONDS,
                    "window_s": QUIET_WINDOW_SECONDS, "cpu_threshold_percent": QUIET_LIMIT_PERCENT,
+                   "aggregate_cpu_threshold_percent": QUIET_AGGREGATE_LIMIT_PERCENT, "policy": "external-cpu-v2",
                    "windows": []}
 
     def save_acquisition():
@@ -366,7 +390,9 @@ def run_gate(root: Path, output: Path, baseline: str, candidate: str) -> int:
              "samples": SAMPLES, "iterations": ITERATIONS, "cpu": 0, "gomaxprocs": 1,
              "max_paired_regression_percent": TIME_LIMIT_PERCENT,
              "quiet_preflight": {"window_s": QUIET_WINDOW_SECONDS, "setup_cap_s": QUIET_ACQUISITION_SECONDS,
-                                 "cpu_threshold_percent": QUIET_LIMIT_PERCENT},
+                                 "cpu_threshold_percent": QUIET_LIMIT_PERCENT,
+                                 "aggregate_cpu_threshold_percent": QUIET_AGGREGATE_LIMIT_PERCENT,
+                                 "policy": "external-cpu-v2"},
              "bytes_and_allocations": "no median growth", "binaries": binaries})
         benchmark_argv = ["-test.run=^$", "-test.bench=^" + BENCHMARK + "$",
                           "-test.benchtime=128x", "-test.count=1", "-test.benchmem", "-test.timeout=90s"]

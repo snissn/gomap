@@ -11,7 +11,9 @@ import (
 	"strconv"
 	"testing"
 	"time"
+	"unsafe"
 
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
 
@@ -88,6 +90,14 @@ func TestCOWReadBatchLocalCorruptionAndRefund(t *testing.T) {
 				if err = s.Close(); err != nil {
 					t.Fatal(err)
 				}
+				// Successful recovered traversal may retain revocable plain
+				// scratch. Pressure must refund it before another admission.
+				header := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
+				pressure, err := db.cow.budget.AcquireExternal(db.cow.budget.Limits().MaxInFlightBytes - baseline.ReservedBytes - header)
+				if err != nil {
+					t.Fatal(err)
+				}
+				pressure.Close()
 				if after := db.cow.budget.Stats(); after.ExternalBytes != baseline.ExternalBytes || after.ExternalLeases != baseline.ExternalLeases || after.ReservedBytes != baseline.ReservedBytes || after.TotalBytes != baseline.TotalBytes {
 					t.Fatalf("local Close did not refund: before%+v after%+v", baseline, after)
 				}
