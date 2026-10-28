@@ -386,3 +386,40 @@ not the clustered/1M enablement win required by the issue.
 
 Routing, RPC, Raft placement, distributed merge, and document fetch remain
 later milestones.
+
+### Physical-footprint failure diagnostics
+
+M3 reports include `source_footprint_diagnostic` and
+`final_footprint_diagnostic` at the existing closed-directory measurement
+boundaries. Each records relative file lengths, the total measured bytes,
+both durable root-slot identities and applied command LSNs, selected slot,
+durable WAL LSN, remaining segment frame/LSN intervals, cumulative cleanup
+reason counters, and the last cleanup error. Post-close segment classifications
+are observations, not deletion authority or the decisions of a specific
+cleanup attempt. An unavailable proof can be a legitimate conservative
+retention result. In that case inspection inventories remaining segment frames
+without asserting any replay lower bound or missing historical prefix.
+`replay_lineage_validated` is false; lineage validation runs only when the
+captured cleanup proof supplies valid replay bounds.
+
+Set `GOMAP_M3_DIAGNOSTICS_DIR` to a directory outside every measured database
+to retain each boundary snapshot and the complete report independently of
+benchmark/test temporary-directory cleanup. Before creating directories or files, the destination and measured roots are
+resolved through existing filesystem symlinks and ancestors; writes use that
+resolved destination. An alias into a measured database is rejected. Files have unique names per
+observation; `database_directory`, generation, overlap ratio and source identity
+associate snapshots with report rows. Root CI uploads this directory after the
+test step, including failed jobs. A diagnostic or retention error fails the
+stage after the ordinary report is written and validated, preserving any
+original gate failure alongside it. The focused test also logs its completed
+report before temporary-directory cleanup on failure.
+
+This instrumentation does not change the 1.35x gate, fixture, or accounting:
+every DB file, including preallocated WAL reserve, remains in the physical
+footprint. Retained variant descriptors continue to be added after the final
+closed-directory boundary as documented by `variant_descriptor_bytes`.
+Diagnostic scans add observation overhead, so these changes establish capture
+behavior rather than a performance improvement. The two historical 87.544638x
+CI failures in issue #5294 remain unexplained by direct file evidence; an extra
+4,199,424-byte file reproduces their arithmetic but does not establish which
+files those failed jobs retained.

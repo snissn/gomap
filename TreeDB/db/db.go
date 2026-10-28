@@ -300,6 +300,7 @@ type DB struct {
 	closeTeardownErr        error
 	closeTeardownCleanupErr error
 	closeTeardownCompleted  bool
+	closeDiagnosticsReady   atomic.Bool
 
 	ownedFinishGuardV6 *OwnedCallbackCloseGuard
 
@@ -685,6 +686,7 @@ type DB struct {
 	commandWALCleanupRetainedUncover atomic.Uint64
 	commandWALCleanupRetainedPinned  atomic.Uint64
 	commandWALCleanupRetainedError   atomic.Uint64
+	commandWALCleanupLastError       atomic.Pointer[string]
 	commandWALCleanupRetries         atomic.Uint64
 	commandWALCleanupNamespaceSyncs  atomic.Uint64
 	commandWALCleanupNamespaceErrors atomic.Uint64
@@ -3536,6 +3538,7 @@ func (db *DB) closeAfterHooksOnce() error {
 		}
 		db.closeTeardownErr, db.closeTeardownCleanupErr = db.closeAfterHooks()
 		db.closeTeardownCompleted = true
+		db.closeDiagnosticsReady.Store(true)
 	})
 	return db.closeTeardownErr
 }

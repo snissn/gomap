@@ -937,6 +937,10 @@ func (db *DB) cleanupCommandWALCoveredSegmentsV1() (retErr error) {
 		}
 		if retErr != nil {
 			db.commandWALCleanupRetries.Add(1)
+			message := retErr.Error()
+			db.commandWALCleanupLastError.Store(&message)
+		} else {
+			db.commandWALCleanupLastError.Store(nil)
 		}
 	}()
 	if db.readOnly {
