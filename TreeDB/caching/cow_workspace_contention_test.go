@@ -6,6 +6,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/tree"
+	"reflect"
 	"testing"
 	"unsafe"
 
@@ -234,5 +235,83 @@ func TestCOWWorkspaceIdleFourOwnerBoundAndRefund(t *testing.T) {
 	b.Close()
 	if got := b.Stats(); got.TotalBytes != 0 || got.ReservedBytes != 0 || got.ExternalLeases != 0 {
 		t.Fatalf("idle final close: %+v", got)
+	}
+}
+
+// Preserve tests of cold admission/full refund while separately authenticating
+// the newly permitted idle payload. Inspect every parked owner through real
+// capability transfers, restore its identical charged payload, then force the
+// ordinary budget pressure path to evict it before checking the old baseline.
+func cowPressureEvictIdleReadScratch(t testing.TB, budget *memtable.COWBudget) {
+	t.Helper()
+	before := budget.Stats()
+	type parked struct {
+		w      *cowReadWorkspace
+		leases [2]*memtable.COWExternalLease
+	}
+	var owners [4]parked
+	count := 0
+	payload := uint64(0)
+	for {
+		value, leases := budget.TakeIdleReadScratch()
+		if value == nil {
+			break
+		}
+		if count == len(owners) {
+			t.Fatal("idle owner count exceeded bound")
+		}
+		w := value.(*cowReadWorkspace)
+		if w.budget != budget || w.snapshot != nil || w.basis != nil || w.lease != nil || w.codecs != nil || w.input != nil || w.output != nil || w.allocations != nil || (w.point != nil && w.point.lease != nil) {
+			t.Fatal("idle owner retained cut/value state")
+		}
+		if w.point != nil && !reflect.DeepEqual(w.point.successor, tree.OwnedSuccessorScratch{}) {
+			t.Fatal("idle owner retained successor/page state")
+		}
+		payload += memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowReadWorkspace{}))) + cowReadWorkspaceInspectionCharge()
+		if w.point != nil {
+			payload += memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowPointScratch{})))
+		}
+		owners[count] = parked{w, leases}
+		count++
+	}
+	for i := 0; i < count; i++ {
+		if !budget.PutIdleReadScratch(owners[i].w, owners[i].leases) {
+			t.Fatal("restoring inspected idle owner failed")
+		}
+		owners[i] = parked{}
+	}
+	restored := budget.Stats()
+	restored.PeakBytes = before.PeakBytes
+	if restored != before {
+		t.Fatalf("idle inspection changed live charges: before%+v after%+v", before, restored)
+	}
+	if count == 0 {
+		return
+	}
+	liveReserved := before.ReservedBytes - payload
+	liveTotal := before.TotalBytes - payload
+	liveRetirement := before.HistoryBytes + liveReserved + before.DeferredBytes
+	limits := budget.Limits()
+	headroom := min(limits.MaxInFlightBytes-liveReserved, limits.MaxTotalBytes-liveTotal, limits.MaxRetiredBytes-liveRetirement)
+	header := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
+	if headroom < header {
+		t.Fatal("fixture cannot pressure-evict idle payload")
+	}
+	pressure, e := budget.AcquireExternal(headroom - header)
+	if e != nil {
+		t.Fatalf("idle payload blocked pressure admission: %v", e)
+	}
+	pressure.Close()
+	after := budget.Stats()
+	after.PeakBytes = before.PeakBytes
+	expected := before
+	expected.TotalBytes -= payload
+	expected.ReservedBytes -= payload
+	expected.ExternalBytes -= payload
+	if after != expected {
+		t.Fatalf("pressure did not refund exact idle payload%d: expected%+v after%+v", payload, expected, after)
+	}
+	if value, _ := budget.TakeIdleReadScratch(); value != nil {
+		t.Fatal("idle payload survived pressure")
 	}
 }

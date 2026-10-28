@@ -330,6 +330,7 @@ func TestCOWSuccessorFreshCompressedHandoffRefundsBeforeLocalAdmission(t *testin
 			// The old independent cut can admit traversal plus output. Retaining a
 			// fresh primary or extra lane would leave only outputCharge, stranding local admission.
 			remaining := workspaceCharge + pointCharge + outputCharge
+			cowPressureEvictIdleReadScratch(t, budget)
 			before := budget.Stats()
 			pressure, err := budget.AcquireExternal(budget.Limits().MaxInFlightBytes - before.ReservedBytes - remaining - leaseCharge)
 			if err != nil {
