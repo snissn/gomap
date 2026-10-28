@@ -1,9 +1,11 @@
 package powerlossoracle
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -375,4 +377,50 @@ func requireVariantFamily(t *testing.T, variants []Variant, family VariantFamily
 func containsString(values []string, want string) bool {
 	position := sort.SearchStrings(values, want)
 	return position < len(values) && values[position] == want
+}
+
+func TestVisitVariantsMatchesCollectedImagesAndStopsOnError(t *testing.T) {
+	spec := variantFixture(t, "stream-parity")
+	collected, wantCoverage, err := GenerateVariants(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := make(map[string]Variant, len(collected))
+	for _, variant := range collected {
+		want[variant.ID] = variant
+	}
+	seen := make(map[string]bool, len(collected))
+	coverage, err := VisitVariants(spec, func(variant Variant) error {
+		expected, ok := want[variant.ID]
+		if !ok || seen[variant.ID] {
+			t.Fatalf("unexpected or duplicate variant %s", variant.ID)
+		}
+		seen[variant.ID] = true
+		if variant.CutID != expected.CutID || variant.Family != expected.Family || variant.Seed != expected.Seed || variant.Expected != expected.Expected || variant.Qualifier != expected.Qualifier {
+			t.Fatalf("variant metadata changed: got=%+v want=%+v", variant, expected)
+		}
+		actualModel, expectedModel := *variant.Model, *expected.Model
+		// Functions cannot be compared by reflect; both models retain the same
+		// source snapshot callback, while every modeled field is checked below.
+		actualModel.identityFromFile, expectedModel.identityFromFile = nil, nil
+		if !reflect.DeepEqual(actualModel, expectedModel) {
+			t.Fatalf("variant %s changed modeled bytes, names, identities or volatility", variant.ID)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) != len(collected) || !reflect.DeepEqual(coverage, wantCoverage) {
+		t.Fatalf("visit coverage=%+v seen=%d want=%+v", coverage, len(seen), wantCoverage)
+	}
+	sentinel := errors.New("visitor failure")
+	visits := 0
+	_, err = VisitVariants(spec, func(Variant) error { visits++; return sentinel })
+	if !errors.Is(err, sentinel) || visits != 1 {
+		t.Fatalf("error=%v visits=%d", err, visits)
+	}
+	if _, err := VisitVariants(spec, nil); err == nil {
+		t.Fatal("nil visitor accepted")
+	}
 }
