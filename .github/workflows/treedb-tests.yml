@@ -31,7 +31,7 @@ jobs:
       GOTOOLCHAIN: local
       ORIGINAL_MERGE: 4238ac962aa4b4eb5d3c744426f2bd57d501c872
       PROBE_SOURCE: 02b58d31280cb0825db625f79384ac5cc8e68449
-      EXPECTED_PATCH_SHA256: 85bcf7f8b5212b780caf21c014bddc553ba07092d8d8a036fecbb039ed43d479
+      EXPECTED_PATCH_SHA256: 477f0a3ddf7a20654be7567fe8a69fa7b7ecc285c532071efaeacb65d5c34604
     steps:
       - name: Reject retry and record diagnostic scope
         shell: bash
@@ -76,8 +76,21 @@ jobs:
           for file in column_vector_graph_rabitq_quantized_asset_test.go rabitq_allocation_diagnostic_test.go; do
             cp "probe-source/TreeDB/collections/$file" "workload/TreeDB/collections/$file"
           done
+          test "$(git -C workload rev-parse HEAD:TreeDB/collections/column_vector_graph_rabitq_quantized_asset_test.go)" = 9a5448774b8232e0210da158994bfd7e6045e6d1
+          test "$(git -C workload hash-object TreeDB/collections/column_vector_graph_rabitq_quantized_asset_test.go)" = 3297f4dc336d3c7d2c99a18458cadfea06376375
+          test "$(git -C workload hash-object TreeDB/collections/rabitq_allocation_diagnostic_test.go)" = 75b7b72fe26e4d4a013879b80845662589d8d099
+          if git -C workload cat-file -e HEAD:TreeDB/collections/rabitq_allocation_diagnostic_test.go 2>/dev/null; then
+            echo "Unexpected preexisting helper in original source" >&2
+            exit 1
+          fi
+          {
+            echo "original_fixture_blob=9a5448774b8232e0210da158994bfd7e6045e6d1"
+            echo "probe_fixture_blob=3297f4dc336d3c7d2c99a18458cadfea06376375"
+            echo "probe_helper_blob=75b7b72fe26e4d4a013879b80845662589d8d099"
+            echo "original_helper=absent"
+          } > "$out/source-blobs.txt"
           git -C workload add -N TreeDB/collections/rabitq_allocation_diagnostic_test.go
-          git -C workload diff --binary -- TreeDB/collections/column_vector_graph_rabitq_quantized_asset_test.go TreeDB/collections/rabitq_allocation_diagnostic_test.go > "$out/probe.patch"
+          git -C workload diff --binary --full-index -- TreeDB/collections/column_vector_graph_rabitq_quantized_asset_test.go TreeDB/collections/rabitq_allocation_diagnostic_test.go > "$out/probe.patch"
           printf '%s  %s\n' "$EXPECTED_PATCH_SHA256" "$out/probe.patch" | sha256sum -c -
           git -C workload diff --name-only > "$out/actual-paths.txt"
           printf '%s\n' TreeDB/collections/column_vector_graph_rabitq_quantized_asset_test.go TreeDB/collections/rabitq_allocation_diagnostic_test.go > "$out/allowed-paths.txt"
