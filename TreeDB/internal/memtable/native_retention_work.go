@@ -12,7 +12,7 @@ func (b *COWBudget) AcquireRetentionWork(bytes uint64, w *iterator.OrdinalScanWo
 	if w == nil {
 		return nil, false, retainedalloc.ErrWorkRequired
 	}
-	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*b))+uint64(unsafe.Sizeof(COWExternalLease{}))) {
+	if !w.Reserve(1, COWRetentionAcquireWorkBytes()) {
 		return nil, false, nil
 	}
 	lease, err := b.AcquireExternal(bytes)
@@ -22,7 +22,7 @@ func (l *COWExternalLease) ResizeWork(bytes uint64, w *iterator.OrdinalScanWork)
 	if w == nil {
 		return false, retainedalloc.ErrWorkRequired
 	}
-	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*l))+2*uint64(unsafe.Sizeof(COWBudget{}))) {
+	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*l))+2*uint64(unsafe.Sizeof(COWBudget{}))+cowIdleReadEvictionWorkBytes()) {
 		return false, nil
 	}
 	err := l.Resize(bytes)
@@ -32,11 +32,11 @@ func (l *COWExternalLease) ResizeWork(bytes uint64, w *iterator.OrdinalScanWork)
 // AdmitRetentionClose admits the SAME concrete lease and budget operations
 // before the caller detaches its private constructor alias and invokes Close.
 func (l *COWExternalLease) AdmitRetentionClose(w *iterator.OrdinalScanWork) bool {
-	return w != nil && w.Reserve(1, 2*uint64(unsafe.Sizeof(*l))+2*uint64(unsafe.Sizeof(COWBudget{})))
+	return w != nil && w.Reserve(1, 2*uint64(unsafe.Sizeof(*l))+2*uint64(unsafe.Sizeof(COWBudget{}))+cowIdleReadEvictionWorkBytes())
 }
 
 func COWRetentionAcquireWorkBytes() uint64 {
-	return 2*uint64(unsafe.Sizeof(COWBudget{})) + uint64(unsafe.Sizeof(COWExternalLease{}))
+	return 2*uint64(unsafe.Sizeof(COWBudget{})) + uint64(unsafe.Sizeof(COWExternalLease{})) + cowIdleReadEvictionWorkBytes()
 }
 
 // cowViewReleaseLease is the original view admission's external terminal
@@ -65,3 +65,9 @@ func (l *cowViewReleaseLease) Close() {
 	b.mu.Unlock()
 	b.releaseMaintenanceReservation()
 }
+
+// One admission can discard at most four entries across all byte predicates.
+// Each constant-time pop copies then clears exactly one inline descriptor.
+// Reserve those eight descriptor touches before the admission's first effect;
+// budget/counter accesses retain their existing full-budget read/write bound.
+func cowIdleReadEvictionWorkBytes() uint64 { return 8 * uint64(unsafe.Sizeof(cowIdleReadScratch{})) }

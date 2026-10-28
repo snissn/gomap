@@ -114,7 +114,7 @@ func (t *Tree) SeekGEWithFixedScratch(start, end, keyScratch, leafScratch []byte
 		return node.LeafEntry{}, false, err
 	}
 	if root.Type() != page.PageTypePrimaryDirectory {
-		return t.seekBaseGE(page.PageChildRef(t.rootPageID), start, end, keyScratch, leafScratch, scratch, readLeaf, true)
+		return t.seekBaseGE(&root, page.PageChildRef(t.rootPageID), start, end, keyScratch, leafScratch, scratch, readLeaf, true)
 	}
 	return t.seekPrimaryGE(root.Data(), start, end, keyScratch, leafScratch, scratch, readLeaf)
 }
@@ -135,7 +135,7 @@ func (t *Tree) seekPrimaryGE(rootData, start, end, keyScratch, leafScratch []byt
 	if !node.VerifyPrimaryOperand(base, n.Data()) || (n.Type() != page.PageTypeInternal && n.Type() != page.PageTypeLeaf) {
 		return node.LeafEntry{}, false, node.ErrPrimaryDirectory
 	}
-	best, found, err := t.seekBaseGE(base.Ref, start, end, keyScratch, leafScratch, scratch, readLeaf, false)
+	best, found, err := t.seekBaseGE(&n, base.Ref, start, end, keyScratch, leafScratch, scratch, readLeaf, false)
 	if err != nil {
 		return best, found, err
 	}
@@ -178,16 +178,26 @@ func (t *Tree) seekPrimaryGE(rootData, start, end, keyScratch, leafScratch []byt
 	return node.LeafEntry{Key: k, Value: v, ValuePtr: p, Flags: f, Revision: r}, err == nil, err
 }
 
-func (t *Tree) seekBaseGE(ref page.ChildRef, start, end, keyScratch, leafScratch []byte, scratch *OwnedSuccessorScratch, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error), ordinary bool) (node.LeafEntry, bool, error) {
+func (t *Tree) seekBaseGE(validatedRoot *node.Node, ref page.ChildRef, start, end, keyScratch, leafScratch []byte, scratch *OwnedSuccessorScratch, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error), ordinary bool) (node.LeafEntry, bool, error) {
 	depth := 0
 	leftmost := false
 	for {
 		if depth >= maxTraversalDepth {
 			return node.LeafEntry{}, false, node.ErrCorruptedNode
 		}
-		var n node.Node
-		if err := t.loadReadRefInto(&n, ref, true, keyScratch, leafScratch, readLeaf, true); err != nil {
-			return node.LeafEntry{}, false, err
+		var loaded node.Node
+		n := validatedRoot
+		if n != nil {
+			// The caller just validated this exact root in the same captured
+			// tree. Consume its view once, before any child can overwrite the
+			// caller's leaf scratch. Descendants and reloaded ancestors still
+			// pass through the normal integrity checks.
+			validatedRoot = nil
+		} else {
+			if err := t.loadReadRefInto(&loaded, ref, true, keyScratch, leafScratch, readLeaf, true); err != nil {
+				return node.LeafEntry{}, false, err
+			}
+			n = &loaded
 		}
 		switch n.Type() {
 		case page.PageTypeInternal:

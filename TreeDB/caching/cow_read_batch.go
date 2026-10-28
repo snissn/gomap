@@ -219,6 +219,7 @@ func (s *Snapshot) cowReadBatchLocal(starts, ends [][]byte, results []mvcckey.Ve
 		s.cowReadBatchScalar(starts, ends, results)
 		return
 	}
+	w.poolable = false
 	w.point.successor.BeginLeafBatch()
 	for i := range starts {
 		r := &results[i]
@@ -236,6 +237,13 @@ func (s *Snapshot) cowReadBatchLocal(starts, ends [][]byte, results []mvcckey.Ve
 			// Keep the real error at this input; never retry a failed probe.
 			w.point.successor.EndLeafBatch()
 			w.point.successor.BeginLeafBatch()
+		}
+	}
+	w.poolable = true
+	for i := range starts {
+		if results[i].Err != nil {
+			w.poolable = false
+			break
 		}
 	}
 	w.point.successor.EndLeafBatch()
