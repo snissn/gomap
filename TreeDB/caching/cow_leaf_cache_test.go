@@ -19,7 +19,7 @@ func cowLeafCacheFixture(t *testing.T, entries int, compressed bool) (*DB, *back
 	return cowLeafCacheModeFixture(t, entries, compressed, "cow_btree")
 }
 
-func cowLeafCacheModeFixture(t *testing.T, entries int, compressed bool, mode string) (*DB, *backenddb.DB, []byte) {
+func cowLeafCacheModeFixture(t testing.TB, entries int, compressed bool, mode string) (*DB, *backenddb.DB, []byte) {
 	t.Helper()
 	dir := t.TempDir()
 	backend, err := backenddb.Open(backenddb.Options{Dir: dir, IndexOuterLeavesInValueLog: true, LeafPageReadCacheEntries: entries})
