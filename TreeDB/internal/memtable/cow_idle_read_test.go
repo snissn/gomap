@@ -248,3 +248,35 @@ func TestCOWIdleReadScratchWriterPreparationPressure(t *testing.T) {
 		t.Fatal("drain")
 	}
 }
+
+func TestCOWIdleReadScratchByteCeiling(t *testing.T) {
+	b, e := NewCOWBudget(DefaultCOWLimits())
+	if e != nil {
+		t.Fatal(e)
+	}
+	for i := 0; i < 3; i++ {
+		var leases [2]*COWExternalLease
+		for j := range leases {
+			leases[j], e = b.AcquireExternal(32 << 10)
+			if e != nil {
+				t.Fatal(e)
+			}
+		}
+		admitted := b.PutIdleReadScratch(new([64 << 10]byte), leases)
+		if admitted != (i < 2) {
+			t.Fatalf("64KiB payload%d admitted=%t", i, admitted)
+		}
+		if !admitted {
+			for _, l := range leases {
+				l.Close()
+			}
+		}
+	}
+	if got := b.Stats(); got.ReservedBytes != 128<<10 || got.ExternalLeases != 0 {
+		t.Fatalf("byte ceiling retention: %+v", got)
+	}
+	b.Close()
+	if b.Stats().TotalBytes != 0 {
+		t.Fatal("byte-ceiling close did not drain")
+	}
+}
