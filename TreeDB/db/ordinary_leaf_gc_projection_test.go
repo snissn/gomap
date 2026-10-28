@@ -4,7 +4,14 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"maps"
+	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
+	"time"
+
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 // Refreshing logical counts for unchanged roots must retain the independently
@@ -206,4 +213,300 @@ func TestOrdinaryDATAGCScanConcurrentPublicationPreservesNewCensus(t *testing.T)
 		assertOrdinaryRawCensus(t, d)
 		assertCandidateTrackerMatchesFullScan(t, d)
 	}
+}
+
+// Channels impose both orderings, rather than relying on the scheduler to pick
+// a different winner across repetitions of the concurrent control above.
+func TestOrdinaryDATAGCScanForcedPublicationOrderings(t *testing.T) {
+	for _, gcFirst := range []bool{true, false} {
+		t.Run(fmt.Sprintf("gc-first=%t", gcFirst), func(t *testing.T) {
+			d, _ := openOrdinaryGCProjectionFixture(t)
+			tracker := d.valueLogRefTracker
+			revision := tracker.revisionSnapshot()
+			counts, basis, err := d.scanValueLogRefCountsOwnedWithBasis(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer counts.close()
+			tracker.mu.RLock()
+			rawBacking := &tracker.rawCounts.slots[0]
+			tracker.mu.RUnlock()
+			start := make(chan struct{})
+			done := make(chan error, 1)
+			go func() { <-start; done <- d.SetSync([]byte("ordered/tail"), []byte("next")) }()
+			published := false
+			publish := func() {
+				published = true
+				close(start)
+				if err := <-done; err != nil {
+					t.Fatal(err)
+				}
+			}
+			defer func() {
+				if !published {
+					publish()
+				}
+			}()
+			if !gcFirst {
+				publish()
+			}
+			// In the publication-first case, save the exact successor before the
+			// stale installer runs, including both collectors and their backing.
+			tracker.mu.RLock()
+			beforeSeq, beforeInc, beforeRev := tracker.commitSeq, tracker.incarnation, tracker.revision
+			beforeLogical, beforeRaw := tracker.counts.toMap(), tracker.rawCounts.toMap()
+			logicalBacking, successorRawBacking := &tracker.counts.slots[0], &tracker.rawCounts.slots[0]
+			tracker.mu.RUnlock()
+			installed := tracker.replaceUnlessAdvancedOwnedWithBasis(&counts, basis.commitSeq, basis.incarnation, true, revision, &basis)
+			if installed != gcFirst {
+				t.Fatalf("installed=%t want %t", installed, gcFirst)
+			}
+			tracker.mu.RLock()
+			if gcFirst {
+				if counts.slots != nil || !tracker.rawValid || &tracker.rawCounts.slots[0] != rawBacking {
+					t.Error("GC-first install did not transfer logical ownership and preserve original raw backing")
+				}
+			} else if counts.slots == nil || tracker.commitSeq != beforeSeq || tracker.incarnation != beforeInc || tracker.revision != beforeRev ||
+				!tracker.rawValid || !maps.Equal(tracker.counts.toMap(), beforeLogical) || !maps.Equal(tracker.rawCounts.toMap(), beforeRaw) ||
+				&tracker.counts.slots[0] != logicalBacking || &tracker.rawCounts.slots[0] != successorRawBacking {
+				t.Error("stale GC install consumed caller ownership or changed successor census")
+			}
+			tracker.mu.RUnlock()
+			if gcFirst {
+				publish()
+			}
+			assertOrdinaryRawCensus(t, d)
+			assertCandidateTrackerMatchesFullScan(t, d)
+			if got, err := d.Get([]byte("ordered/tail")); err != nil || !bytes.Equal(got, []byte("next")) {
+				t.Fatalf("published value=%q err=%v", got, err)
+			}
+		})
+	}
+}
+
+func openOrdinaryGCProjectionFixture(t *testing.T) (*DB, *registeredLeafPageLog) {
+	t.Helper()
+	d, err := Open(Options{Dir: t.TempDir(), Durability: DurabilityWALOffRelaxed, IndexOuterLeavesInValueLog: true, DisableBackgroundPrune: true, KeepRecent: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := d.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	log := &registeredLeafPageLog{db: d, dir: d.dir}
+	if err := log.ensureWriter(); err != nil {
+		t.Fatal(err)
+	}
+	d.SetLeafPageLog(log)
+	t.Cleanup(func() { closeVacuumTestLeafPageLog(t, d, log) })
+	// Include a real logical ValuePtr as well as raw outer-leaf references, so
+	// ownership assertions exercise nonempty backing for both collectors.
+	ptr := appendPointersInNewSegment(t, d.dir, 101, 1, 1, 1, func(int) []byte { return []byte("seed pointer value") })[0]
+	b := d.NewBatch()
+	defer b.Close()
+	if err := b.(interface {
+		SetPointer([]byte, page.ValuePtr) error
+	}).SetPointer([]byte("pointer/seed"), ptr); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 1000; i++ {
+		if err := b.Set([]byte(fmt.Sprintf("key/%05d", i)), bytes.Repeat([]byte{byte(i)}, 128)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := b.WriteSync(); err != nil {
+		t.Fatal(err)
+	}
+	b.Close()
+	assertOrdinaryRawCensus(t, d)
+	return d, log
+}
+
+// A real same-DB physical cutover advances CommitSeq by one. The scanner's
+// retained old generation must never overwrite that successor. A same-sequence
+// public cutover is not supported by VacuumIndexOnline's publication contract.
+func TestOrdinaryDATAGCScanRejectsPriorPhysicalVacuumGeneration(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum not supported on windows")
+	}
+	d, _ := openOrdinaryGCProjectionFixture(t)
+	old := d.AcquireSnapshot()
+	defer old.Close()
+	tracker := d.valueLogRefTracker
+	revision := tracker.revisionSnapshot()
+	counts, basis, err := d.scanValueLogRefCountsOwnedWithBasis(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer counts.close()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := d.VacuumIndexOnline(ctx); err != nil {
+		t.Fatal(err)
+	}
+	nextInc, err := captureValueLogRefIncarnation(d.idx.Load())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nextInc.indexID == basis.incarnation.indexID || nextInc.samePhysical(basis.incarnation) {
+		t.Fatal("fixture did not replace the physical index generation")
+	}
+	if got := d.State().CommitSeq; got != basis.commitSeq+1 {
+		t.Fatalf("physical cutover sequence=%d want %d", got, basis.commitSeq+1)
+	}
+	tracker.mu.RLock()
+	beforeSeq, beforeInc, beforeRevision := tracker.commitSeq, tracker.incarnation, tracker.revision
+	beforeLogical, beforeRaw := tracker.counts.toMap(), tracker.rawCounts.toMap()
+	beforeRawValid := tracker.rawValid
+	tracker.mu.RUnlock()
+	if tracker.replaceUnlessAdvancedOwnedWithBasis(&counts, basis.commitSeq, basis.incarnation, true, revision, &basis) {
+		t.Fatal("prior physical generation scan installed after real cutover")
+	}
+	tracker.mu.RLock()
+	unchanged := tracker.commitSeq == beforeSeq && tracker.incarnation == beforeInc && tracker.revision == beforeRevision &&
+		tracker.rawValid == beforeRawValid && maps.Equal(tracker.counts.toMap(), beforeLogical) && maps.Equal(tracker.rawCounts.toMap(), beforeRaw)
+	tracker.mu.RUnlock()
+	if !unchanged || counts.slots == nil {
+		t.Fatal("rejected old scan mutated successor or consumed caller's collector")
+	}
+	assertCandidateTrackerMatchesFullScan(t, d)
+	// The first append repairs any old raw basis conservatively. Then the new
+	// physical generation has independently checked logical and raw censuses.
+	if err := d.SetSync([]byte("after/vacuum"), []byte("next")); err != nil {
+		t.Fatal(err)
+	}
+	assertOrdinaryRawCensus(t, d)
+	assertCandidateTrackerMatchesFullScan(t, d)
+	current := d.AcquireSnapshot()
+	defer current.Close()
+	for _, snap := range []*Snapshot{old, current} {
+		for i := 0; i < 1000; i++ {
+			got, err := snap.Get([]byte(fmt.Sprintf("key/%05d", i)))
+			if err != nil || !bytes.Equal(got, bytes.Repeat([]byte{byte(i)}, 128)) {
+				t.Fatalf("retained/current value %d mismatch err=%v", i, err)
+			}
+		}
+	}
+	t.Logf("same DB physical cutover index %d→%d sequence %d→%d; old scan refused", basis.incarnation.indexID, nextInc.indexID, basis.commitSeq, beforeSeq)
+}
+
+func TestOrdinaryDATAGCScanPreservedCensusDeletesAndReopens(t *testing.T) {
+	d, log := openOrdinaryGCProjectionFixture(t)
+	dead := appendPointersInNewSegment(t, d.dir, 100, 1, 1, 1, func(int) []byte { return []byte("dead value") })[0]
+	liveValue := bytes.Repeat([]byte("live value"), 128)
+	live := appendPointersInNewSegment(t, d.dir, 100, 2, 2, 1, func(int) []byte { return liveValue })[0]
+	// Keep both referenced producers inactive, so GC must use reachability.
+	appendPointersInNewSegment(t, d.dir, 100, 3, 3, 1, func(int) []byte { return []byte("active value") })
+	b := d.NewBatch()
+	ptrBatch := b.(interface {
+		SetPointer([]byte, page.ValuePtr) error
+	})
+	if err := ptrBatch.SetPointer([]byte("dead"), dead); err != nil {
+		t.Fatal(err)
+	}
+	if err := ptrBatch.SetPointer([]byte("live"), live); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.WriteSync(); err != nil {
+		t.Fatal(err)
+	}
+	b.Close()
+	if err := d.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := recoverableValueLogSegmentsForTest(t, d)[dead.FileID]; !ok {
+		t.Fatal("dead pointer was never recovery-selectable")
+	}
+	assertOrdinaryRawCensus(t, d)
+	tracker := d.valueLogRefTracker
+	tracker.mu.RLock()
+	rawBacking := &tracker.rawCounts.slots[0]
+	tracker.mu.RUnlock()
+	if _, _, _, err := d.referencedValueLogSegmentsForGCAtSeq(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	tracker.mu.RLock()
+	preserved := tracker.rawValid && &tracker.rawCounts.slots[0] == rawBacking
+	tracker.mu.RUnlock()
+	if !preserved {
+		t.Fatal("same-root resolver did not preserve original raw census")
+	}
+	if err := d.DeleteSync([]byte("dead")); err != nil {
+		t.Fatal(err)
+	}
+	deleteSeq := d.State().CommitSeq
+	if err := d.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	// An ordinary successor overwrites the older pointer-bearing durable slot
+	// without introducing a nonempty system tree that disables raw projection.
+	if err := d.SetSync([]byte("after/delete"), []byte("settled")); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	settled := captureValueLogGCDurableSlotState(t, d, "ordinary deletion settled")
+	for slot, seq := range settled.slotCommits {
+		if seq < deleteSeq {
+			t.Fatalf("slot %d still predates deletion: %d < %d", slot, seq, deleteSeq)
+		}
+	}
+	recoverable := recoverableValueLogSegmentsForTest(t, d)
+	if _, ok := recoverable[dead.FileID]; ok {
+		t.Fatal("dead producer remains in recoverable closure")
+	}
+	if _, ok := recoverable[live.FileID]; !ok {
+		t.Fatal("live producer missing from recoverable closure")
+	}
+	assertOrdinaryRawCensus(t, d)
+	stats, err := d.ValueLogGC(context.Background(), ValueLogGCOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadPath := filepath.Join(ValueLogDirPath(d.dir), "value-l100-000001.log")
+	livePath := filepath.Join(ValueLogDirPath(d.dir), "value-l100-000002.log")
+	if stats.SegmentsDeleted == 0 {
+		t.Fatalf("no producer deleted: %+v", stats)
+	}
+	if _, err := os.Stat(deadPath); !os.IsNotExist(err) {
+		t.Fatalf("dead producer not deleted: %v", err)
+	}
+	if _, err := os.Stat(livePath); err != nil {
+		t.Fatalf("live producer not retained: %v", err)
+	}
+	assertOrdinaryRawCensus(t, d)
+	assertCandidateTrackerMatchesFullScan(t, d)
+	if got, err := d.Get([]byte("live")); err != nil || !bytes.Equal(got, liveValue) {
+		t.Fatalf("live before reopen=%q err=%v", got, err)
+	}
+	// Close the externally owned writer before DB close; its cleanup is
+	// idempotent and still runs on a failure earlier in this test.
+	closeVacuumTestLeafPageLog(t, d, log)
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(Options{Dir: d.dir, Durability: DurabilityWALOffRelaxed, IndexOuterLeavesInValueLog: true, DisableBackgroundPrune: true, KeepRecent: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if got, err := reopened.Get([]byte("dead")); err != nil || got != nil {
+		t.Fatalf("deleted key after reopen=%q err=%v", got, err)
+	}
+	if got, err := reopened.Get([]byte("live")); err != nil || !bytes.Equal(got, liveValue) {
+		t.Fatalf("live after reopen=%q err=%v", got, err)
+	}
+	for i := 0; i < 1000; i++ {
+		got, err := reopened.Get([]byte(fmt.Sprintf("key/%05d", i)))
+		if err != nil || !bytes.Equal(got, bytes.Repeat([]byte{byte(i)}, 128)) {
+			t.Fatalf("ordinary value %d after reopen mismatch err=%v", i, err)
+		}
+	}
+	if _, err := os.Stat(deadPath); !os.IsNotExist(err) {
+		t.Fatalf("dead producer resurrected on reopen: %v", err)
+	}
+	t.Logf("real GC deleted %d segments/%d bytes, live producer and 1000 ordinary values survive reopen", stats.SegmentsDeleted, stats.BytesDeleted)
 }
