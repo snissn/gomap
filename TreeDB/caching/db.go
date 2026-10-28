@@ -3858,6 +3858,15 @@ type backendBatchRevisionOps struct {
 }
 
 func resolveBackendBatchRevisionOps(backendBatch batch.Interface) backendBatchRevisionOps {
+	// The native batch has a fixed capability set. Static conversions avoid
+	// repeatedly discovering it through runtime interface assertion caches.
+	// Decorators retain their own methods and capability discovery below.
+	if native, ok := backendBatch.(*backenddb.Batch); ok {
+		return backendBatchRevisionOps{
+			set: native, setView: native, del: native, delView: native,
+			ptr: native, ptrView: native,
+		}
+	}
 	ops := backendBatchRevisionOps{}
 	ops.set, _ = backendBatch.(backendBatchSetRevision)
 	ops.setView, _ = backendBatch.(backendBatchSetViewRevision)
@@ -31975,7 +31984,17 @@ func (db *DB) maybeRunLeafGenerationPackMaintenance(runGC bool, quiet bool, admi
 }
 
 func (db *DB) Stats() map[string]string {
-	stats := db.backend.Stats()
+	var stats map[string]string
+	// The typical combined schema contains over four thousand fields. Reserve
+	// the output once at its owner rather than growing the backend map while
+	// appending cache telemetry. This is a capacity hint, not a field limit.
+	// Only the concrete native backend uses this capability: decorators keep
+	// their Stats overrides and generic backends retain the existing contract.
+	if native, ok := db.backend.(*backenddb.DB); ok {
+		stats = native.StatsWithCapacity(4608)
+	} else {
+		stats = db.backend.Stats()
+	}
 	if stats == nil {
 		stats = make(map[string]string)
 	}
@@ -33112,21 +33131,21 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.batch_pool.drop_under_pressure.int_slices_total"] = fmt.Sprintf("%d", batchIntPoolDropUnderPressureTotal.Load())
 	stats["treedb.process.batch_pool.drop_under_pressure.int64_slices_total"] = fmt.Sprintf("%d", batchInt64PoolDropUnderPressureTotal.Load())
 	stats["treedb.process.memory.pool_pressure_level"] = poolPressureLevelString(poolPressure.level)
-	stats["treedb.process.memory.pool_pressure_used_bytes"] = fmt.Sprintf("%d", poolPressure.usedBytes)
-	stats["treedb.process.memory.heap_alloc_bytes"] = fmt.Sprintf("%d", poolPressure.heapAllocBytes)
-	stats["treedb.process.memory.heap_inuse_bytes"] = fmt.Sprintf("%d", poolPressure.heapInuseBytes)
-	stats["treedb.process.memory.heap_sys_bytes"] = fmt.Sprintf("%d", poolPressure.heapSysBytes)
-	stats["treedb.process.memory.heap_idle_bytes"] = fmt.Sprintf("%d", poolPressure.heapIdleBytes)
-	stats["treedb.process.memory.heap_released_bytes"] = fmt.Sprintf("%d", poolPressure.heapReleasedBytes)
-	stats["treedb.process.memory.heap_idle_unreleased_bytes"] = fmt.Sprintf("%d", poolPressure.heapIdleUnreleased)
-	stats["treedb.process.memory.stack_inuse_bytes"] = fmt.Sprintf("%d", poolPressure.stackInuseBytes)
-	stats["treedb.process.memory.stack_sys_bytes"] = fmt.Sprintf("%d", poolPressure.stackSysBytes)
-	stats["treedb.process.memory.total_sys_bytes"] = fmt.Sprintf("%d", poolPressure.totalSysBytes)
-	stats["treedb.process.memory.non_heap_sys_bytes"] = fmt.Sprintf("%d", poolPressure.nonHeapSysBytes)
-	stats["treedb.process.memory.next_gc_bytes"] = fmt.Sprintf("%d", poolPressure.nextGCBytes)
-	stats["treedb.process.memory.num_gc"] = fmt.Sprintf("%d", poolPressure.numGC)
+	stats["treedb.process.memory.pool_pressure_used_bytes"] = strconv.FormatUint(poolPressure.usedBytes, 10)
+	stats["treedb.process.memory.heap_alloc_bytes"] = strconv.FormatUint(poolPressure.heapAllocBytes, 10)
+	stats["treedb.process.memory.heap_inuse_bytes"] = strconv.FormatUint(poolPressure.heapInuseBytes, 10)
+	stats["treedb.process.memory.heap_sys_bytes"] = strconv.FormatUint(poolPressure.heapSysBytes, 10)
+	stats["treedb.process.memory.heap_idle_bytes"] = strconv.FormatUint(poolPressure.heapIdleBytes, 10)
+	stats["treedb.process.memory.heap_released_bytes"] = strconv.FormatUint(poolPressure.heapReleasedBytes, 10)
+	stats["treedb.process.memory.heap_idle_unreleased_bytes"] = strconv.FormatUint(poolPressure.heapIdleUnreleased, 10)
+	stats["treedb.process.memory.stack_inuse_bytes"] = strconv.FormatUint(poolPressure.stackInuseBytes, 10)
+	stats["treedb.process.memory.stack_sys_bytes"] = strconv.FormatUint(poolPressure.stackSysBytes, 10)
+	stats["treedb.process.memory.total_sys_bytes"] = strconv.FormatUint(poolPressure.totalSysBytes, 10)
+	stats["treedb.process.memory.non_heap_sys_bytes"] = strconv.FormatUint(poolPressure.nonHeapSysBytes, 10)
+	stats["treedb.process.memory.next_gc_bytes"] = strconv.FormatUint(poolPressure.nextGCBytes, 10)
+	stats["treedb.process.memory.num_gc"] = strconv.FormatUint(uint64(poolPressure.numGC), 10)
 	stats["treedb.process.memory.gc_cpu_fraction"] = fmt.Sprintf("%.6f", poolPressure.gcCPUFraction)
-	stats["treedb.process.memory.gomemlimit_bytes"] = fmt.Sprintf("%d", poolPressure.memoryLimitBytes)
+	stats["treedb.process.memory.gomemlimit_bytes"] = strconv.FormatInt(poolPressure.memoryLimitBytes, 10)
 	stats["treedb.process.memory.mutable_bytes"] = fmt.Sprintf("%d", db.mutableBytes.Load())
 	stats["treedb.process.memory.memtable_view_deferred_bytes_current"] = fmt.Sprintf("%d", memViewDeferredBytesCurrent)
 	stats["treedb.process.memory.memtable_view_deferred_bytes_max"] = fmt.Sprintf("%d", memViewDeferredBytesMax)
