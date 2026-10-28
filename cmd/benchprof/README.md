@@ -1,5 +1,10 @@
 # benchprof
 
+For the standalone `BenchmarkCollectionShapeInsertBatch` compression capture,
+including its command and artifact names, see the [collection insert profiling
+recipe](../unified_bench/README.md#focused-collection-insert-compression-profile).
+Its Go test profiles are not benchprof inputs.
+
 Mongo startup-default comparisons use the standalone
 `BenchmarkStandalonePublicIndexedUpdate` in `cmd/mongo_gateway_bench`, through
 the product opener and official driver. See its [run instructions and timing
