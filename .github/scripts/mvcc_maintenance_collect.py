@@ -142,7 +142,8 @@ def main():
     spec = importlib.util.spec_from_file_location('maintenance_observer', observer_path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    assert module.QUIET_LIMIT_PERCENT == 2.0
+    assert module.QUIET_LIMIT_PERCENT == 10.0
+    assert module.QUIET_AGGREGATE_LIMIT_PERCENT == 50.0
     assert {0, 1}.issubset(os.sched_getaffinity(0))
     save('binding.json', {'authorization': auth, 'authorization_sha256': digest(auth_path),
         'build_freeze_sha256': digest(B / 'freeze.json'), 'sources': {k: {x: v[x] for x in ('head', 'tree')} for k, v in frozen.items()},

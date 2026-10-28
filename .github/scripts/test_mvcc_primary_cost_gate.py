@@ -241,6 +241,25 @@ class PrimaryCostGateTests(unittest.TestCase):
                 with self.subTest(listing=listing), self.assertRaises((ValueError, OSError)):
                     gate.runtime_binding(binary, command, "invalid", {})
 
+    def test_external_cpu_admission_policy(self):
+        def classify(values, command="external"):
+            return gate.classify_external_cpu([{"pid": i, "start": "original", "ticks": 1,
+                "command": command, "cpu_percent": value} for i, value in enumerate(values)])
+        for command in ("gnome-shell", "worker", "flush-8:0"):
+            result = classify([2.1343612909678398, 2.65], command)
+            self.assertEqual(result["busy"], [])
+            self.assertEqual(len(result["warnings"]), 2)
+            self.assertAlmostEqual(result["aggregate_cpu_percent"], 4.78436129096784)
+            self.assertEqual(result["external_processes"][0]["command"], command)
+        self.assertFalse(classify([9.999])["busy"])
+        self.assertTrue(classify([10])["busy"])
+        self.assertFalse(classify([4.999] * 10)["busy"])
+        distributed = classify([5] * 10)
+        self.assertTrue(distributed["aggregate_busy"])
+        self.assertEqual(len(distributed["busy"]), 10)
+        self.assertFalse(classify([])["busy"])
+        self.assertEqual(classify([2])["warnings"][0]["cpu_percent"], 2)
+
     def test_process_cpu_survives_exit_and_pid_reuse(self):
         watch = gate.ProcessObservation.__new__(gate.ProcessObservation)
         watch.previous, watch.totals, watch.first = {}, {}, True
@@ -365,8 +384,8 @@ class QuietAcquisitionTests(unittest.TestCase):
                 if finish_cost:
                     self.assertFalse(receipt["windows"][-1]["within_cap"])
 
-    def test_original_process_predicate_rejects_exact_two_percent(self):
-        for ticks, busy in [(9, False), (10, True), (16, True)]:
+    def test_observer_uses_one_cpu_ticks_and_rejects_exact_ten_percent(self):
+        for ticks, busy in [(9, False), (10, False), (16, False), (49, False), (50, True)]:
             with self.subTest(ticks=ticks):
                 observer = gate.ProcessObservation.__new__(gate.ProcessObservation)
                 observer.started = 0
@@ -377,7 +396,7 @@ class QuietAcquisitionTests(unittest.TestCase):
                         mock.patch.object(gate.os, "sysconf", return_value=100):
                     result = observer.finish()
                 self.assertEqual(bool(result["busy"]), busy)
-                self.assertEqual(result["cpu_threshold_percent"], 2.0)
+                self.assertEqual(result["cpu_threshold_percent"], gate.QUIET_LIMIT_PERCENT)
 
     def test_run_gate_exhaustion_never_starts_measured_observer_or_benchmark(self):
         self.assert_run_gate_never_launches([True] * 12)

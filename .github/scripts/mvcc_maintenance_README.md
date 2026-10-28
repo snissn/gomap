@@ -16,8 +16,10 @@ The collector preserves reviewed collect-02.py's fourteen calls: three AB/BA
 pairs of dirty durable pointer Checkpoint16x, three AB/BA pairs of actual
 production foreground-churn Vacuum1x, then candidate-only cohort8/16 at128x.
 The exact selectors, metric parser, zero-error/fixed-work receipts, CPU0,1,
-GOMAXPROCS2, strict2% external-process threshold,250ms sampling,10s preflight,
-120s Go child timeout and150s outer child cap are unchanged. Busy preflight
+GOMAXPROCS2, shared external-cpu-v2 admission policy (see
+`docs/diagnostics/quiet-host-policy.md`),250ms sampling,10s preflight,
+120s Go child timeout and150s outer child cap remain unchanged; CPU admission
+has moved from the historical 2% rule to the shared policy. Busy preflight
 refuses before a benchmark; busy measurement is contaminated. No sample is
 retried or selectively discarded. Hosted execution is not presumed quiet.
 
