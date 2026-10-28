@@ -985,6 +985,21 @@ func TestM3OverlapPartitionIndexBuildsReopensAndSearchesNativePacks(t *testing.T
 	}
 	dataset := writeFixtureForTest(t, 64, 8, 8)
 	out := t.TempDir()
+	t.Cleanup(func() {
+		if !t.Failed() {
+			return
+		}
+		matches, err := filepath.Glob(filepath.Join(out, "vector_partition_m3_*.json"))
+		if err != nil {
+			t.Logf("locate M3 failure report: %v", err)
+			return
+		}
+		for _, path := range matches {
+			raw, err := os.ReadFile(path)
+			t.Logf("M3 failure report %s (read error=%v):\n%s", path, err, raw)
+		}
+	})
+
 	args := []string{
 		"-dataset", dataset,
 		"-out", out,
@@ -1014,6 +1029,20 @@ func TestM3OverlapPartitionIndexBuildsReopensAndSearchesNativePacks(t *testing.T
 	if report.ResultKind != "m3_native_partition_hnsw_evidence" || report.LogicalDomains != 4 || report.Partitions != 12 || len(report.Rows) != 2 || !strings.HasPrefix(report.ReplicationGate, "passed:") {
 		t.Fatalf("report=%+v", report)
 	}
+
+	// Force the historical arithmetic fingerprint against an otherwise valid
+	// report, preserving the unchanged physical-footprint gate.
+	t.Run("forced physical footprint failure", func(t *testing.T) {
+		candidate := report
+		candidate.Rows = append([]m3PartitionIndexRow(nil), report.Rows...)
+		candidate.Rows[1].FinalDerivedPhysicalBytes = 52444 + 4199424
+		candidate.Rows[0].FinalDerivedPhysicalBytes = 48568
+		candidate.Rows[1].PeakDerivedTemporaryBytes = candidate.Rows[1].FinalDerivedPhysicalBytes
+		candidate.ReplicationGate = m3ReplicationGate(candidate.Rows)
+		if err := validateM3PartitionIndexReport(candidate); err == nil || err.Error() != "failed: 87.544638x exceeds 1.35x" {
+			t.Fatalf("forced footprint failure=%v", err)
+		}
+	})
 	for name, mutate := range map[string]func(*m3PartitionIndexRow){
 		"negative":       func(row *m3PartitionIndexRow) { row.PartitionLoads[0] = -1 },
 		"over capacity":  func(row *m3PartitionIndexRow) { row.PartitionLoads[0] = row.Capacity + 1 },
@@ -1030,6 +1059,10 @@ func TestM3OverlapPartitionIndexBuildsReopensAndSearchesNativePacks(t *testing.T
 		})
 	}
 	for _, row := range report.Rows {
+		if row.SourceFootprintDiagnostic.TotalBytes != row.SourcePhysicalBytes || row.FinalFootprintDiagnostic.TotalBytes != row.SourcePhysicalBytes+row.FinalDerivedPhysicalBytes || len(row.SourceFootprintDiagnostic.Files) == 0 || len(row.FinalFootprintDiagnostic.WAL.Segments) == 0 {
+			t.Fatalf("missing boundary inventories: %+v", row)
+		}
+
 		wantUnused := row.DomainCapacity*report.LogicalDomains - int(row.SourceRows) - row.OverlapRealized
 		if row.DomainCapacity != 19 || row.Capacity != 7 || row.OverlapUnusedCapacity != wantUnused ||
 			row.SourcePhysicalBytes <= 0 || row.PeakDerivedTemporaryBytes < row.FinalDerivedPhysicalBytes || row.FinalDerivedPhysicalBytes < int64(row.PackBytes) || row.PackBytes == 0 || row.PartitionHNSWM != partitionLocalHNSWDefaultM || row.LocalSearches != row.Queries*report.LogicalDomains || row.SearchRoute != collections.VectorPartitionSearchRouteHNSWSearchPackV1 || row.MissingAssets != 0 || row.CorruptAssets != 0 || row.StaleAssets != 0 || row.ExactLocalRecallAtK <= 0 || row.EdgesPerOp <= 0 || len(row.OverlapReplicas) != row.OverlapRealized || len(row.OverlapDestinationDiversity) != report.LogicalDomains {
