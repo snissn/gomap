@@ -415,7 +415,7 @@ func (s *Snapshot) finalizeCloseIfUnreferenced() error {
 	var err error
 	if s.cowCut != nil {
 		if s.cowReader != nil {
-			s.cowReader.close()
+			s.cowReader.releaseSnapshotScratch()
 			s.cowReader = nil
 		}
 		s.cowPin.Close()

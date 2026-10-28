@@ -408,6 +408,7 @@ func cowAssertFreshPointHandoffRefundsBeforeLocalAdmission(t *testing.T, db *DB,
 			t.Fatalf("fixture requires an actual physical pointer: entry=%+v err=%v", entry, err)
 		}
 	}
+	cowPressureEvictIdleReadScratch(t, budget)
 	before := budget.Stats()
 	s, err := db.acquireCOWSnapshotWithError()
 	if err != nil {
@@ -429,6 +430,7 @@ func cowAssertFreshPointHandoffRefundsBeforeLocalAdmission(t *testing.T, db *DB,
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
+	cowPressureEvictIdleReadScratch(t, budget)
 	afterMeasurement := budget.Stats()
 	// PeakBytes is cumulative; only live ownership must return to its baseline.
 	afterMeasurement.PeakBytes = before.PeakBytes
@@ -452,6 +454,7 @@ func cowAssertFreshPointHandoffRefundsBeforeLocalAdmission(t *testing.T, db *DB,
 		if err != nil || !bytes.Equal(got, expected) {
 			t.Fatalf("%s fresh handoff exceeded original local budget: len=%d err=%v", api, len(got), err)
 		}
+		cowPressureEvictIdleReadScratch(t, budget)
 		after := budget.Stats()
 		// PeakBytes is a cumulative high-water counter, not live ownership.
 		// Preserve exact equality for every current byte/lease/view counter.
