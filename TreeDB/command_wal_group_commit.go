@@ -499,11 +499,13 @@ func (group *publicCommandWALGroupCommit) registerCollected(bytes int, durable, 
 		group.pendingForceTickets = append(group.pendingForceTickets, ticket)
 	}
 	group.pendingBytes += bytes
-	leader = durable && !group.leaderActive
-	if leader {
-		group.leaderActive = true
-		group.leaders.Add(1)
-	} else {
+	// Do not reserve the driver for a registration: native callers may
+	// complete handles in a different order than they were submitted. The
+	// first waiter claims the pending epoch under group.mu instead. The
+	// returned hint identifies the first pending registration for singleton
+	// bookkeeping and follower statistics; it does not grant leadership.
+	leader = durable && !group.leaderActive && group.pendingCount == 1
+	if !leader {
 		group.followers.Add(1)
 	}
 	switch {
@@ -540,11 +542,10 @@ func (group *publicCommandWALGroupCommit) awaitRegistered(tdb *DB, ticket uint64
 	return ticket, err
 }
 
-func (group *publicCommandWALGroupCommit) awaitRegisteredSince(tdb *DB, ticket uint64, leader, force, observeWait bool, enqueued time.Time) (uint64, time.Duration, error) {
-	if leader {
-		group.runLeader(tdb)
-	}
-
+func (group *publicCommandWALGroupCommit) awaitRegisteredSince(tdb *DB, ticket uint64, _ bool, force, observeWait bool, enqueued time.Time) (uint64, time.Duration, error) {
+	// Leadership is claimed by a waiter, never reserved for a handle at
+	// registration. This permits an earlier handle to drive a later pending
+	// epoch when completions are consumed in submission order.
 	group.mu.Lock()
 	for (group.completedTicket < ticket || group.publishTicket != ticket) && group.terminalErr == nil {
 		if !group.leaderActive && group.pendingCount != 0 && group.completedTicket < ticket {
