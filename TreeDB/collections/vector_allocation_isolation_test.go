@@ -34,7 +34,7 @@ func enterIsolatedVectorAllocationGate(t *testing.T, gate string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	args := []string{
-		"-test.run=^"+regexp.QuoteMeta(t.Name())+"$",
+		"-test.run=^" + regexp.QuoteMeta(t.Name()) + "$",
 		"-test.count=1",
 		"-test.timeout=90s",
 	}
