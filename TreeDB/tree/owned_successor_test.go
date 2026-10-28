@@ -10,7 +10,7 @@ import (
 )
 
 func TestOwnedSuccessorPrimarySelectionAndErrors(t *testing.T) {
-	for _, kind := range []string{"put", "absence", "bad_base", "bad_component"} {
+	for _, kind := range []string{"put", "absence", "bad_base", "bad_base_type", "bad_component"} {
 		t.Run(kind, func(t *testing.T) {
 			p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 65536)
 			if err != nil {
@@ -41,6 +41,11 @@ func TestOwnedSuccessorPrimarySelectionAndErrors(t *testing.T) {
 			}
 			baseID, baseImage := makeLeaf([]string{"a", "c"}, []string{"base-a", "base-c"})
 			componentID, component := makeLeaf([]string{"c"}, []string{"delta-c"})
+			if kind == "bad_base_type" {
+				n := node.NewNode(baseImage)
+				n.SetType(page.PageType(15))
+				n.UpdateChecksum()
+			}
 			base := node.PrimaryOperand{Ref: page.PageChildRef(baseID), Digest: sha256.Sum256(baseImage)}
 			entry := node.PrimaryDirectoryEntry{Key: []byte("c"), Revision: 1, Kind: node.PrimaryPut, Operand: node.PrimaryOperand{Ref: page.PageChildRef(componentID), Digest: sha256.Sum256(component)}}
 			if kind == "absence" {
@@ -69,7 +74,10 @@ func TestOwnedSuccessorPrimarySelectionAndErrors(t *testing.T) {
 			scratch.BeginLeafBatch()
 			defer scratch.EndLeafBatch()
 			got, ok, e := tr.SeekGEWithFixedScratch([]byte("b"), nil, key[:], leaf[:], &scratch, nil)
-			if kind == "bad_base" || kind == "bad_component" {
+			if kind == "bad_base" || kind == "bad_base_type" || kind == "bad_component" {
+				if kind == "bad_base_type" && e != node.ErrPrimaryDirectory {
+					t.Fatalf("unsupported PRIMARY base type: %v", e)
+				}
 				if e == nil {
 					t.Fatal("corrupt operand accepted")
 				}
@@ -116,12 +124,24 @@ func TestOwnedSuccessorExternalLeafRefusesUnownedBuffer(t *testing.T) {
 			t.Fatalf("unowned read accepted: %v", e)
 		}
 	}
+	reads := 0
 	read := func(_ page.LeafLogPtr, dst []byte) ([]byte, error) {
+		reads++
 		copy(dst[:page.PageSize], data)
 		return dst[:page.PageSize], nil
 	}
 	if got, ok, e := tr.SeekGEWithFixedScratch([]byte("j"), nil, key[:], leaf[:], &scratch, read); e != nil || !ok || string(got.Value) != "v" {
 		t.Fatalf("bounded leaf: %+v %v %v", got, ok, e)
+	}
+	if reads != 1 {
+		t.Fatalf("external child read %d times, want one", reads)
+	}
+	if _, ok, e := tr.SeekGEWithFixedScratch([]byte("j"), []byte("k"), key[:], leaf[:], &scratch, read); e != nil || ok {
+		t.Fatalf("exclusive external bound: found=%v err=%v", ok, e)
+	}
+	data[len(data)-1] ^= 1
+	if _, _, e := tr.SeekGEWithFixedScratch([]byte("j"), nil, key[:], leaf[:], &scratch, read); e == nil {
+		t.Fatal("corrupt external child accepted after a successful seek")
 	}
 	if reader.readUnsafeCalls != 0 {
 		t.Fatal("global reader used")
@@ -225,5 +245,30 @@ func TestOwnedSuccessorCapturedRootsAndCorruption(t *testing.T) {
 				seek(oldTree, "m", "old")
 			}
 		})
+	}
+}
+
+func TestOwnedSuccessorUnsupportedRootType(t *testing.T) {
+	p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	if _, err = p.Alloc(3); err != nil {
+		t.Fatal(err)
+	}
+	image, err := p.GetForWrite(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := node.NewNode(image)
+	n.SetPageID(2)
+	n.SetType(page.PageTypeFreelist)
+	n.UpdateChecksum()
+	tr := New(p, nil, 2)
+	var key, leaf [page.PageSize]byte
+	var scratch OwnedSuccessorScratch
+	if _, _, err = tr.SeekGEWithFixedScratch(nil, nil, key[:], leaf[:], &scratch, nil); err != page.ErrInvalidPageType {
+		t.Fatalf("unsupported root: got %v want %v", err, page.ErrInvalidPageType)
 	}
 }
