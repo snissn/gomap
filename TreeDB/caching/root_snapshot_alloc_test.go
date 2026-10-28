@@ -6,6 +6,7 @@ import (
 	"testing"
 	"weak"
 
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
 
@@ -36,6 +37,45 @@ func TestRootSnapshotDetachedMutableLifetime(t *testing.T) {
 		}
 		runtime.KeepAlive(shards)
 	}
+}
+
+//go:noinline
+func releasedViewSnapshotWitness(t *testing.T) (*Snapshot, weak.Pointer[rootSnapshotLifetimeWitness]) {
+	t.Helper()
+	backend, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = backend.Close() })
+	mutable := &rootSnapshotLifetimeWitness{Table: memtable.NewAppendOnlyWithCapacityHint(0, 96)}
+	db := &DB{backend: backend, mutableShards: []memShard{{mem: mutable}}}
+	db.mu.Lock()
+	db.installPublishedRootSetLocked(&publishedRootSet{generation: 1, pointShards: []publishedRootRef{{
+		lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "k", value: "old"}), rootID: 101,
+	}}})
+	db.mu.Unlock()
+	snap := db.AcquireSnapshot()
+	if snap == nil || snap.view != nil {
+		t.Fatal("snapshot did not release its empty-queue view")
+	}
+	db.mu.Lock()
+	db.mutableShards[0].mem = nil
+	db.installPublishedRootSetLocked(&publishedRootSet{generation: 2, pointShards: []publishedRootRef{{
+		lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "k", value: "new"}), rootID: 102,
+	}}})
+	db.mu.Unlock()
+	return snap, weak.Make(mutable)
+}
+
+func TestAcquireSnapshotReleasedViewDoesNotRetainMutable(t *testing.T) {
+	snap, mutable := releasedViewSnapshotWitness(t)
+	defer snap.Close()
+	runtime.GC()
+	if mutable.Value() != nil {
+		t.Fatal("released-view snapshot retained the retired mutable memtable")
+	}
+	assertRootDomainVisibleValue(t, rootDomainSnapshotFromCachedSnapshot(snap, []byte("k")), "k", "old")
+	runtime.KeepAlive(snap)
 }
 
 func TestRootSnapshotConcurrentMaterialization(t *testing.T) {
