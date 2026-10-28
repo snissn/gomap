@@ -356,10 +356,16 @@ explicitly deferred.
 
 Use `-profile-dir` so all profiles and ops outputs are captured in one place.
 This example uses unified-bench's `fast` preset, selecting production
-`no_wal_fast` for TreeDB. Use `bench_unsafe` only for an explicit unsafe ceiling:
+`no_wal_fast` for TreeDB. Use `bench_unsafe` only for an explicit unsafe ceiling.
+
+The profile examples below use this host's `/mnt/fast4tb` mount. Verify that it
+is mounted and writable before running them. On other machines, replace that
+prefix with an existing writable data directory; for the collection recipe,
+set `RUN_DIR` to a directory on that filesystem. Keep captures on a filesystem
+with enough free space for the database and profiles.
 
 ```bash
-OUT=$(mktemp -d /mnt/fast4tb/gomap_profiles_XXXXXX)
+OUT=$(mktemp -d /mnt/fast4tb/gomap_profiles_XXXXXX) || exit 1
 BENCH_PROFILE=fast # cross-DB benchmark preset, not a TreeDB server profile
 
 ./bin/unified-bench \
@@ -424,7 +430,8 @@ maintenance or silently relax correctness, durability or agreed thresholds.
 ### Focused collection insert compression profile
 
 To investigate TreeDB collection `InsertBatch` throughput and value-log
-compression allocations, run from the repository root:
+compression allocations, run from the repository root after checking the output
+filesystem as described in the standard profile workflow above:
 
 ```sh
 RUN_DIR=/mnt/fast4tb/treedb_insert_compression_profile_$(date +%Y%m%d_%H%M%S) \
