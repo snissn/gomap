@@ -17,16 +17,21 @@ type cowIdleReadScratch struct {
 func (b *COWBudget) PutIdleReadScratch(value any, leases [2]*COWExternalLease) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.closed || value == nil || leases[0] == nil || leases[1] == nil || leases[0] == leases[1] {
+	if b.closed || value == nil || leases[0] == nil || leases[0] == leases[1] {
 		return false
 	}
 	header := cowAllocation(uint64(unsafe.Sizeof(COWExternalLease{})))
 	var charges [2]uint64
+	receipts := uint64(0)
 	for i, l := range leases {
-		if l.budget != b || l.closed || l.charge < header {
+		if l == nil {
+			continue
+		}
+		if l.budget != b || l.closed || l.charge <= header {
 			return false
 		}
 		charges[i] = l.charge - header
+		receipts++
 	}
 	charge := charges[0] + charges[1]
 	for _, e := range b.idleRead[:b.idleReadCount] {
@@ -38,12 +43,14 @@ func (b *COWBudget) PutIdleReadScratch(value any, leases [2]*COWExternalLease) b
 	// Payload stays charged continuously. Retired capability wrappers are dropped
 	// before refund, just as an ordinary Close consumes its original receipt.
 	for _, l := range leases {
-		l.closed = true
+		if l != nil {
+			l.closed = true
+		}
 	}
-	b.stats.TotalBytes -= 2 * header
-	b.stats.ReservedBytes -= 2 * header
-	b.stats.ExternalBytes -= 2 * header
-	b.stats.ExternalLeases -= 2
+	b.stats.TotalBytes -= receipts * header
+	b.stats.ReservedBytes -= receipts * header
+	b.stats.ExternalBytes -= receipts * header
+	b.stats.ExternalLeases -= int(receipts)
 	b.idleRead[b.idleReadCount] = cowIdleReadScratch{value: value, charges: charges}
 	b.idleReadCount++
 	return true
@@ -60,15 +67,23 @@ func (b *COWBudget) TakeIdleReadScratch() (any, [2]*COWExternalLease) {
 		e := b.idleRead[b.idleReadCount]
 		b.idleRead[b.idleReadCount] = cowIdleReadScratch{} // payload stays charged during transfer
 		header := cowAllocation(uint64(unsafe.Sizeof(COWExternalLease{})))
-		extra := 2 * header
-		if b.stats.ExternalLeases > int(^uint(0)>>1)-2 || !b.inFlightFitsLocked(extra) || !b.retirementFitsLocked(extra) || !b.addLocked(extra) {
+		receipts := 1
+		if e.charges[1] != 0 {
+			receipts++
+		}
+		extra := uint64(receipts) * header
+		if b.stats.ExternalLeases > int(^uint(0)>>1)-receipts || !b.inFlightFitsLocked(extra) || !b.retirementFitsLocked(extra) || !b.addLocked(extra) {
 			b.refundIdleReadLocked(e)
 			return nil, [2]*COWExternalLease{}
 		}
 		b.stats.ReservedBytes += extra
 		b.stats.ExternalBytes += extra
-		b.stats.ExternalLeases += 2
-		return e.value, [2]*COWExternalLease{{budget: b, charge: e.charges[0] + header}, {budget: b, charge: e.charges[1] + header}}
+		b.stats.ExternalLeases += receipts
+		leases := [2]*COWExternalLease{{budget: b, charge: e.charges[0] + header}, nil}
+		if receipts == 2 {
+			leases[1] = &COWExternalLease{budget: b, charge: e.charges[1] + header}
+		}
+		return e.value, leases
 	}
 	return nil, [2]*COWExternalLease{}
 }
