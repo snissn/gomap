@@ -72,3 +72,9 @@ the unchanged applicable requirements and any observed tradeoff separately.
 Local preparation may run only mvcc_maintenance_test.py: pure Python syntax,
 parser positives/negatives, toy process-group join controls and static workflow/context checks. It does not call
 bootstrap, compile Go, execute a Go test body, benchmark, fetch or dispatch.
+
+The CPU observer is loaded from the reviewed harness checkout containing this
+collector, independently of the immutable baseline/candidate product checkouts.
+Bootstrap authorization binds its SHA-256 separately; collection verifies that
+binding before preflight and rechecks it with the frozen inputs. The archived
+historical product observer is never imported for current maintenance admission.
