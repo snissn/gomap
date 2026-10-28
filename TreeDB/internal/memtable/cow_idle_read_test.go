@@ -280,3 +280,62 @@ func TestCOWIdleReadScratchByteCeiling(t *testing.T) {
 		t.Fatal("byte-ceiling close did not drain")
 	}
 }
+
+func TestCOWIdleReadScratchSingleReceiptOwnershipPressureAndClose(t *testing.T) {
+	limits := DefaultCOWLimits()
+	limits.MaxInFlightBytes = 32 << 10
+	b, e := NewCOWBudget(limits)
+	if e != nil {
+		t.Fatal(e)
+	}
+	baseline := b.Stats()
+	old, e := b.AcquireExternal(256)
+	if e != nil {
+		t.Fatal(e)
+	}
+	value := new([128]byte)
+	if !b.PutIdleReadScratch(value, [2]*COWExternalLease{old, nil}) {
+		t.Fatal("single receipt park refused")
+	}
+	v, fresh := b.TakeIdleReadScratch()
+	if v != value || fresh[0] == nil || fresh[0] == old || fresh[1] != nil {
+		t.Fatal("single receipt ownership transfer")
+	}
+	active := b.Stats()
+	old.Close()
+	if !errors.Is(old.Resize(1), ErrCOWClosed) || !errors.Is(old.ShrinkNativeBytes(1, 0), ErrCOWClosed) {
+		t.Fatal("stale single receipt mutation")
+	}
+	if _, e = old.SplitNativeBytes(1, 0); !errors.Is(e, ErrCOWClosed) {
+		t.Fatal("stale single receipt split")
+	}
+	if b.Stats() != active {
+		t.Fatal("stale handle changed active borrow")
+	}
+	if !b.PutIdleReadScratch(v, fresh) {
+		t.Fatal("return single receipt")
+	}
+	header := cowAllocation(uint64(unsafe.Sizeof(COWExternalLease{})))
+	pressure, e := b.AcquireExternal(limits.MaxInFlightBytes - header)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if v, _ := b.TakeIdleReadScratch(); v != nil {
+		t.Fatal("single receipt survived pressure")
+	}
+	pressure.Close()
+	if b.Stats().TotalBytes != baseline.TotalBytes {
+		t.Fatal("single receipt pressure leaked")
+	}
+	l, e := b.AcquireExternal(256)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if !b.PutIdleReadScratch(value, [2]*COWExternalLease{l, nil}) {
+		t.Fatal("repark")
+	}
+	b.Close()
+	if got := b.Stats(); got.TotalBytes != 0 || got.ExternalLeases != 0 || got.ReservedBytes != 0 {
+		t.Fatalf("single receipt close: %+v", got)
+	}
+}

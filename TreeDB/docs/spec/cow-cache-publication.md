@@ -248,13 +248,17 @@ materialization still uses the complete caller cut after traversal unlocks.
 A dictionary capacity refusal can hand a synchronous point back to that same
 cut, preserving fresh-owner refund outside the basis mutex.
 
-Successful cut-local plain traversal can return its workspace and point buffers
-through the original budget's idle scratch stack. It retains at most four
+Successful owned point copy-out and cut-local traversal can return workspace
+metadata and optional point buffers through the original budget's idle scratch
+stack. It retains at most four
 entries and 128 KiB of charged payload. Snapshot, backend basis and all successor
-page aliases are cleared first; workspaces with codecs, input/output buffers or
-allocation chains retain their ordinary close behavior. Parking consumes the
-original receipt capabilities and refunds their wrappers; a borrower receives
-fresh receipts. Stale close, resize, shrink or split cannot affect a new owner.
+page aliases are cleared first. Cut-local codecs, dictionary capabilities,
+input/output buffers and allocation chains are discarded and fully refunded
+before parking; they are never pooled. Parking consumes the original one or two
+receipt capabilities and refunds their wrappers; a borrower receives fresh
+receipts. Pointer-only cached reads need no point arrays or second receipt.
+Borrowed value/iterator materialization stays conservative; owned append paths
+become eligible only after copying into the caller's destination. Stale close, resize, shrink or split cannot affect a new owner.
 Any otherwise refused in-flight, retirement or total byte admission discards
 idle payload and refunds its charge under the same budget mutex, without
 callbacks, I/O or cache locks. Active borrowers are never reclaimed. Budget
