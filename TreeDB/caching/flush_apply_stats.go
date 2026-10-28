@@ -53,6 +53,11 @@ func (db *DB) backendFlushApplyReducerPublishNs() uint64 {
 	if db == nil || db.backend == nil {
 		return 0
 	}
+	// The public backend has a statically known accessor. Keep decorators on
+	// the optional-interface route without caching a replaceable producer.
+	if concrete, ok := db.backend.(*backenddb.DB); ok {
+		return concrete.FlushApplyReducerPublishNs()
+	}
 	if provider, ok := db.backend.(backendFlushApplyReducerPublishNser); ok {
 		return provider.FlushApplyReducerPublishNs()
 	}

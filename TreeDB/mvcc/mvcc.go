@@ -216,7 +216,7 @@ func (s *Store) CommitGroupAt(groups []CommitGroup, mode CommitMode) error {
 		return nil
 	}
 	if s.admission != nil {
-		if writer, ok := s.db.(logicalMVCCWriter); ok && writer.SupportsLogicalMVCC() {
+		if writer := logicalMVCCWriterFor(s.db); writer != nil && writer.SupportsLogicalMVCC() {
 			return s.commitLogicalGroups(writer, groups, total, mode)
 		}
 	}
@@ -282,9 +282,7 @@ func (s *Store) CommitGroupAt(groups []CommitGroup, mode CommitMode) error {
 		}
 	}
 	if s.admission != nil && len(staged) == 1 {
-		if writer, ok := s.db.(interface {
-			SetPointWithMVCCInput([]byte, []byte, bool, mvccadmission.Input) error
-		}); ok {
+		if writer := pointMVCCInputWriterFor(s.db); writer != nil {
 			entry := staged[0]
 			if err := writer.SetPointWithMVCCInput(entry.physical, entry.record, mode == CommitDurable, s.admission.Input(entry.physical, entry.timestamp, floor)); err != nil {
 				return storageError("commit point", err)
