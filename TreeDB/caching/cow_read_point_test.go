@@ -454,6 +454,7 @@ func cowAssertFreshPointHandoffRefundsBeforeLocalAdmission(t *testing.T, db *DB,
 		if err != nil || !bytes.Equal(got, expected) {
 			t.Fatalf("%s fresh handoff exceeded original local budget: len=%d err=%v", api, len(got), err)
 		}
+		cowPressureEvictIdleReadScratch(t, budget)
 		after := budget.Stats()
 		// PeakBytes is a cumulative high-water counter, not live ownership.
 		// Preserve exact equality for every current byte/lease/view counter.
