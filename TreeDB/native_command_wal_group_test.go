@@ -82,6 +82,27 @@ func testNativeCommandWALGroupBSONUpdates(t *testing.T, sameCollection bool) {
 	database.commandWALGroupCommit.delay = time.Second
 	database.commandWALGroupCommit.maxCommits = waiters
 	database.commandWALGroupCommit.maxBytes = 1 << 30
+	// Registration precedes logical installation. Hold the final accepted cut
+	// before its swap so the group-size observation cannot imply installation.
+	lastInstall := make(chan struct{})
+	releaseLastInstall := make(chan struct{})
+	var releaseInstallOnce sync.Once
+	releaseInstall := func() { releaseInstallOnce.Do(func() { close(releaseLastInstall) }) }
+	defer releaseInstall()
+	var installations atomic.Int32
+	cacheRoot := filepath.Join(dir, "maindb", "wal")
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Point == durabilitycut.BeforeCOWCutSwap && event.Root == cacheRoot && installations.Add(1) == waiters {
+			close(lastInstall)
+			<-releaseLastInstall
+		}
+		return nil
+	})
+	defer restore()
+	// This existing observer runs after installation and release of producer/raw
+	// gates, before the request enters its durability completion wait.
+	installed := make(chan struct{}, waiters)
+	database.commandWALGroupCommit.testBeforeNativeComplete = func() { installed <- struct{}{} }
 	atSync := make(chan int, 1)
 	release := make(chan struct{})
 	defer close(release)
@@ -107,8 +128,37 @@ func testNativeCommandWALGroupBSONUpdates(t *testing.T, sameCollection bool) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("native group did not form")
 	}
+	select {
+	case <-lastInstall:
+	case <-time.After(5 * time.Second):
+		t.Fatal("last native installation did not reach cut swap")
+	}
 	if got := backend.CommandWALNextLSN(); got != beforeLSN+waiters {
 		t.Fatalf("independent assigned prefix=%d want%d", got, beforeLSN+waiters)
+	}
+	capture, err = backend.CaptureNativeSemanticState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	registeredSequence := capture.LogicalSequence()
+	capture.Close()
+	if registeredSequence != beforeSequence+waiters-1 {
+		t.Fatalf("installations with final cut held=%d want%d", registeredSequence, beforeSequence+waiters-1)
+	}
+	select {
+	case err := <-errs:
+		t.Fatalf("ACK before final installation and sync: %v", err)
+	default:
+	}
+	releaseInstall()
+	for range waiters {
+		select {
+		case <-installed:
+		case err := <-errs:
+			t.Fatalf("ACK before sync: %v", err)
+		case <-time.After(5 * time.Second):
+			t.Fatal("native installation did not complete")
+		}
 	}
 	capture, err = backend.CaptureNativeSemanticState()
 	if err != nil {
