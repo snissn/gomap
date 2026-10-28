@@ -1020,17 +1020,19 @@ func (db *DB) cleanupCommandWALCoveredSegmentsV1() (retErr error) {
 				}
 				var removeErr error
 				proof.segments, removeErr = removeCoveredCommandWALSegmentsWithRegistry(proof.segments, registry)
+				retainedPin := false
 				for i := range proof.segments {
 					if proof.segments[i].Removed {
 						return true, removeErr
 					}
+					retainedPin = retainedPin || proof.segments[i].Pinned
 				}
 				// Delete leases are acquired for the whole batch before the
 				// first unlink. A pinned candidate therefore leaves every path
 				// intact: retain it as temporarily unavailable authority, while
 				// explicit callers still receive ErrResourcePinned. Do not
-				// normalize combined errors or any partial destructive batch.
-				if removeErr == rootpublication.ErrResourcePinned {
+				// normalize observer errors, combined errors, or a partial batch.
+				if retainedPin && removeErr == rootpublication.ErrResourcePinned {
 					removeErr = errors.Join(errDurableWALCleanupProofUnavailable, removeErr)
 				}
 				return false, removeErr

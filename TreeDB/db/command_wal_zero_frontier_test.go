@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
@@ -34,6 +35,7 @@ func testCommandWALZeroFrontierReopens(t *testing.T, coalesced bool) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = database.Close() })
+	requireZeroFrontierFixedContainer(t, database)
 	wantLSN := uint64(1)
 	if coalesced {
 		// An admitted extra builder holds the real coordinator's publication gate.
@@ -179,6 +181,7 @@ func TestCommandWALZeroFrontierRetainsProtectedFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = database.Close() })
+	requireZeroFrontierFixedContainer(t, database)
 	if err := database.SetSync([]byte("retained"), []byte("value")); err != nil {
 		t.Fatal(err)
 	}
@@ -275,6 +278,7 @@ func TestCommandWALZeroFrontierCloseRetainsProducerPin(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = database.Close() })
+	requireZeroFrontierFixedContainer(t, database)
 	value := bytes.Repeat([]byte("x"), commandWALDeferredPointBufferRetainSize+8192)
 	if _, err := database.AppendRawKVPointCommandWALTrusted(commitlog.RawKVOpSet, []byte("large"), value, false); err != nil {
 		t.Fatal(err)
@@ -415,6 +419,7 @@ func TestCommandWALZeroFrontierEmptyNamespaceScanBounds(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = database.Close() })
+	requireZeroFrontierFixedContainer(t, database)
 	before := database.commandWALCleanupScans.Load()
 	if err := database.CleanupCommandWALCoveredSegments(false); err != nil {
 		t.Fatal(err)
@@ -446,5 +451,88 @@ func TestCommandWALZeroFrontierEmptyNamespaceScanBounds(t *testing.T) {
 	}
 	if got := database.commandWALCleanupScans.Load(); got != before+1 {
 		t.Fatalf("sole active Close scanned: %d", got)
+	}
+}
+
+// An observer can return the same sentinel as the registry. Only the registry
+// decision's Pinned provenance permits opportunistic retention normalization.
+func TestCommandWALZeroFrontierPropagatesObserverPinSentinel(t *testing.T) {
+	for _, test := range []struct {
+		operation string
+		joined    bool
+	}{
+		{"explicit", false}, {"checkpoint", false}, {"close", false},
+		{"explicit", true}, {"checkpoint", true}, {"close", true},
+	} {
+		name := test.operation
+		if test.joined {
+			name += "_joined"
+		}
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			database, err := Open(Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = database.Close() })
+			requireZeroFrontierFixedContainer(t, database)
+			if err := database.RotateCommandWALActiveSegment(true); err != nil {
+				t.Fatal(err)
+			}
+			before := make(map[string][32]byte)
+			segments, err := listWALSegments(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, segment := range segments {
+				raw, err := os.ReadFile(segment.path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				before[segment.path] = sha256.Sum256(raw)
+			}
+			observerFault := errors.New("unrelated observer fault")
+			var observerError error = rootpublication.ErrResourcePinned
+			if test.joined {
+				observerError = errors.Join(observerError, observerFault)
+			}
+			observed := false
+			restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+				if event.Point == durabilitycut.BeforeWALOrAssetUnlink && event.Resource == durabilitycut.ResourceCommandWAL {
+					observed = true
+					return observerError
+				}
+				return nil
+			})
+			defer restore()
+			switch test.operation {
+			case "explicit":
+				err = database.CleanupCommandWALCoveredSegments(false)
+			case "checkpoint":
+				err = database.CleanupCommandWALCoveredSegmentsAtCheckpoint(false)
+			case "close":
+				err = database.Close()
+			}
+			if !observed || !errors.Is(err, rootpublication.ErrResourcePinned) || errors.Is(err, errDurableWALCleanupProofUnavailable) || (test.joined && !errors.Is(err, observerFault)) {
+				t.Fatalf("observer failure lost provenance: observed=%t err=%v", observed, err)
+			}
+			for path, digest := range before {
+				raw, readErr := os.ReadFile(path)
+				if readErr != nil || sha256.Sum256(raw) != digest {
+					t.Fatalf("failed observer changed %s: %v", path, readErr)
+				}
+			}
+		})
+	}
+}
+
+// The product only retires positively classified fixed empty containers.
+// Production intentionally uses streams on unsupported platforms and memory
+// filesystems; those are outside this fixed-container regression's fixture.
+func requireZeroFrontierFixedContainer(t *testing.T, database *DB) {
+	t.Helper()
+	stats := database.commandJournal.WriterBufferStats()
+	if stats.Container != "fixed" {
+		t.Skipf("requires production fixed container; selected %s (%s)", stats.Container, stats.ContainerReason)
 	}
 }
