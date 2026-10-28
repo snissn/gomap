@@ -444,6 +444,7 @@ func assertRabitQPreparedPackResultsMatch2587(tb testing.TB, got []VectorIndexSe
 }
 
 func TestCollectionSearchVectorIndexWithBufferRabitQQuantized2452(t *testing.T) {
+	diagnostic := newRabitQFailureCapture5313()
 	rows := []columnGraphRebuildInputRowV2A{
 		{id: "doc-a", vector: []float32{1, 0, 0}},
 		{id: "doc-b", vector: []float32{0.5, 0.5, 0}},
@@ -520,6 +521,7 @@ func TestCollectionSearchVectorIndexWithBufferRabitQQuantized2452(t *testing.T) 
 	// need a fresh process, while both parent and child retain the cache-lifetime
 	// checks below after the measurement.
 	if !collectionsRaceEnabled && enterIsolatedVectorAllocationGate(t, "collection-buffered-rabitq-quantized") {
+		diagnostic.begin(col)
 		quantizedOnlyAllocs := testing.AllocsPerRun(100, func() {
 			got, err := col.SearchVectorIndexWithBuffer(quantizedOnlyOpts, &buffer)
 			if err != nil || len(got.Results) != quantizedOnlyOpts.TopK {
@@ -527,9 +529,11 @@ func TestCollectionSearchVectorIndexWithBufferRabitQQuantized2452(t *testing.T) 
 			}
 		})
 		if quantizedOnlyAllocs != 0 {
+			diagnostic.capture(t, col, "quantized-only", quantizedOnlyAllocs)
 			_ = d.Close()
 			t.Fatalf("rabitq quantized_only SearchVectorIndexWithBuffer steady-state allocs/run=%v want 0", quantizedOnlyAllocs)
 		}
+		diagnostic.begin(col)
 		rerankAllocs := testing.AllocsPerRun(100, func() {
 			got, err := col.SearchVectorIndexWithBuffer(rerankOpts, &buffer)
 			if err != nil || len(got.Results) != rerankOpts.TopK {
@@ -537,6 +541,7 @@ func TestCollectionSearchVectorIndexWithBufferRabitQQuantized2452(t *testing.T) 
 			}
 		})
 		if rerankAllocs != 0 {
+			diagnostic.capture(t, col, "rerank", rerankAllocs)
 			_ = d.Close()
 			t.Fatalf("rabitq quantized_rerank SearchVectorIndexWithBuffer steady-state allocs/run=%v want 0", rerankAllocs)
 		}
