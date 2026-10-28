@@ -266,7 +266,9 @@ def main():
         spec = importlib.util.spec_from_file_location('fixed_maintenance_collector', collect)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
-        save('authorization.json', {'runner_sha256': digest(collect), 'schedule': module.schedule(),
+        _, observer_path, observer_sha256 = module.load_observer()
+        save('authorization.json', {'runner_sha256': digest(collect),
+             'observer_sha256': observer_sha256, 'schedule': module.schedule(),
              'runtime_authorized': True, 'grant_source': 'manual workflow_dispatch of separately reviewed landed harness on main',
              'maximum_benchmark_calls': 14, 'maximum_benchmark_child_seconds': 14 * 150,
              'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],

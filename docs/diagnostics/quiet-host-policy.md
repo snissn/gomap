@@ -44,4 +44,6 @@ loads an exact SHA-256-pinned historical observer from its externally frozen
 product input and retains its 2% protocol. It does not import the maintained
 observer. Changing it requires a new input/protocol freeze, rather than silently
 reinterpreting existing frozen executions. The active maintenance collector
-(`mvcc_maintenance_collect.py`) uses the current policy.
+(`mvcc_maintenance_collect.py`) imports the current observer from its reviewed
+harness checkout, separately SHA-256-bound in bootstrap authorization and checked
+for drift with the frozen inputs. Its old product checkout is unchanged.

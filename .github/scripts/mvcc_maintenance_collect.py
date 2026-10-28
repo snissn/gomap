@@ -25,6 +25,21 @@ COHORT = 'BenchmarkPrimaryBorrowedValueLogCohort'
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
+def load_observer(expected_sha256=None):
+    # Observation policy belongs to the reviewed diagnostic harness, not either
+    # immutable product checkout used to build the benchmark binaries.
+    path = Path(__file__).resolve().parents[2] / 'scripts/mvcc_primary_cost_gate.py'
+    source = path.read_bytes()
+    source_sha256 = hashlib.sha256(source).hexdigest()
+    if expected_sha256 is not None and source_sha256 != expected_sha256:
+        raise ValueError('maintained observer authorization mismatch')
+    spec = importlib.util.spec_from_file_location('maintenance_observer', path)
+    module = importlib.util.module_from_spec(spec)
+    exec(compile(source, str(path), 'exec'), module.__dict__)
+    if module.QUIET_LIMIT_PERCENT != 10.0 or module.QUIET_AGGREGATE_LIMIT_PERCENT != 50.0:
+        raise ValueError('maintained observer policy mismatch')
+    return module, path, source_sha256
+
 def schedule():
     result = []
     for kind, name, count, package in [('checkpoint', CHECKPOINT, 16, 'public'),
@@ -120,10 +135,12 @@ def main():
     auth = json.loads(auth_path.read_text())
     assert auth['runner_sha256'] == digest(Path(__file__))
     assert auth['schedule'] == schedule() and auth['runtime_authorized'] is True
+    module, observer_path, observer_sha256 = load_observer(auth['observer_sha256'])
     frozen = json.loads((B / 'sources-after.json').read_text())
     binaries = json.loads((B / 'binaries.json').read_text())
     assert json.loads((B / 'freeze.json').read_text())['source_unchanged']
     def verify():
+        assert digest(observer_path) == observer_sha256
         for label, root in ROOTS.items():
             assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip() == frozen[label]['head']
             assert not subprocess.check_output(['git', 'status', '--porcelain'], cwd=root, text=True).strip()
@@ -138,12 +155,6 @@ def main():
     env.update(json.loads((B / 'environment.json').read_text()))
     env.update(TMPDIR=str(P / 'tmp'), PYTHONDONTWRITEBYTECODE='1')
     sys.dont_write_bytecode = True
-    observer_path = ROOTS['candidate'] / 'scripts/mvcc_primary_cost_gate.py'
-    spec = importlib.util.spec_from_file_location('maintenance_observer', observer_path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    assert module.QUIET_LIMIT_PERCENT == 10.0
-    assert module.QUIET_AGGREGATE_LIMIT_PERCENT == 50.0
     assert {0, 1}.issubset(os.sched_getaffinity(0))
     save('binding.json', {'authorization': auth, 'authorization_sha256': digest(auth_path),
         'build_freeze_sha256': digest(B / 'freeze.json'), 'sources': {k: {x: v[x] for x in ('head', 'tree')} for k, v in frozen.items()},
