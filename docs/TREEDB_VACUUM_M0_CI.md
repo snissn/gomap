@@ -30,9 +30,11 @@ receipt. Descendants are killed even if the leader exits first. Abrupt SIGKILL o
 the supervisor or machine loss cannot emit a final receipt and must remain an
 incomplete harness failure, never a successful packet.
 
-The CI wrapper permits 720 seconds of hosted capture (plus at most 60 seconds for
-TERM grace and final KILL/reap cleanup) within the 20-minute job. Controlled capture gets 900
-seconds plus the same cleanup budget. A nonzero exit, timeout, failed test, incomplete
+The CI wrapper permits 720 seconds of hosted capture, followed by a cleanup
+budget of up to 120 seconds for TERM, KILL and reaping, within the 20-minute
+job. Controlled capture gets 900 seconds plus the same cleanup budget. These
+budgets bound normal waits, not stalled filesystem or operating-system calls.
+A nonzero exit, timeout, failed test, incomplete
 capture or failed applicable gate emits `completed:false` and fails the job.
 Partial artifacts upload with a unique run/attempt name; existing packets are
 refused. Checkout, toolchain setup and upload occupy the remaining job headroom.
