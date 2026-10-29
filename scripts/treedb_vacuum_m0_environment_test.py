@@ -192,7 +192,11 @@ fi
             path.chmod(0o755)
         env = dict(os.environ, PATH=f'{binary}:{os.environ["PATH"]}', M0_TEST_ROOT=str(root),
                    M0_FAIL=failure, RUN_DIR=str(root / 'packet'), PYTHONDONTWRITEBYTECODE='1',
-                   M0_CONTROLLED='0', M0_QUALIFICATION_PROFILE='hosted-semantic', GOMAXPROCS='2')
+                   M0_CONTROLLED='0', M0_QUALIFICATION_PROFILE='hosted-semantic', GOMAXPROCS='2',
+                   # This fixture owns the original semantic schedule even when
+                   # invoked by a workflow explicitly selecting controlled v4.
+                   # Intentional negative/admission overrides are applied below.
+                   M0_ACCEPTANCE_CONTRACT='v3')
         env.pop('CPU_SET', None)
         env.update(overrides or {})
         self.capture_env = env
@@ -200,6 +204,33 @@ fi
         result = subprocess.run(['bash', str(root / 'scripts' / script)],
                                 env=env, text=True, capture_output=True)
         return root, result
+
+    def test_semantic_fixture_isolates_inherited_controlled_v4_contract(self):
+        inherited = {
+            'M0_CONTROLLED': '1', 'M0_ACCEPTANCE_CONTRACT': 'v4-proposal',
+            'M0_QUALIFICATION_PROFILE': 'controlled-performance', 'CPU_SET': '0,1',
+            'GOMAXPROCS': '2', 'M0_LEASE_PATH': '/run/gomap-perf-custody/host111.lock',
+            'M0_BASELINE_SHA': '8e8c15938cb588fe22fd2f9afc46433ef70936a4',
+        }
+        with mock.patch.dict(os.environ, inherited):
+            for failure, status in [('', 0), ('public', 17)]:
+                with self.subTest(failure=failure):
+                    root, result = self.run_capture(failure, supervised=True)
+                    self.assertEqual(result.returncode, status, result.stderr)
+                    self.assertEqual(self.capture_env['M0_ACCEPTANCE_CONTRACT'], 'v3')
+                    self.assertEqual(self.capture_env['M0_CONTROLLED'], '0')
+                    terminal = json.loads((root / 'packet/environment-terminal.json').read_text())
+                    self.assertEqual(terminal['exit_code'], status)
+                    self.assertEqual(len(terminal['raw_files']), 20 if status == 0 else 2)
+
+    def test_semantic_fixture_preserves_explicit_contract_override_rejection(self):
+        for contract in ('v4-proposal', 'unknown-contract'):
+            with self.subTest(contract=contract):
+                root, result = self.run_capture(overrides={'M0_ACCEPTANCE_CONTRACT': contract})
+                self.assertEqual(result.returncode, 2)
+                self.assertIn('requires explicit controlled opt-in', result.stderr)
+                self.assertFalse((root / 'go-calls').exists())
+                self.assertEqual(self.capture_env['M0_ACCEPTANCE_CONTRACT'], contract)
 
     def test_supervisor_and_capture_compose_without_claiming_the_packet_twice(self):
         for failure, status in [('', 0), ('public', 17)]:
