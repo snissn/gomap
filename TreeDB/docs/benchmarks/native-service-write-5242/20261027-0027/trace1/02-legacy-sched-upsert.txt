@@ -1,0 +1,48 @@
+File: documentservice.test
+Type: delay
+Active filters:
+   focus=UpsertDocuments
+Showing nodes accounting for 6.65ms, 42.42% of 15.67ms total
+Dropped 1 node (cum <= 0.08ms)
+Showing top 40 nodes out of 60
+      flat  flat%   sum%        cum   cum%
+    4.45ms 28.38% 28.38%     4.74ms 30.25%  github.com/snissn/gomap/TreeDB/collections.collectionMutationUnlock.Unlock
+    0.87ms  5.55% 33.93%     0.88ms  5.58%  sync.(*RWMutex).Unlock
+    0.38ms  2.43% 36.35%     0.40ms  2.56%  runtime.gcStart
+    0.30ms  1.91% 38.26%     0.30ms  1.91%  runtime.semrelease1
+    0.23ms  1.44% 39.69%     0.23ms  1.44%  github.com/snissn/gomap/TreeDB/collections.(*Collection).lockVectorIndexCoverageMutationWithColdCarrier.func2
+    0.15ms  0.98% 40.67%     0.15ms  0.98%  github.com/snissn/gomap/TreeDB/db.(*DB).protectPendingValueLogAppendPtrs.deferwrap1
+    0.11ms  0.68% 41.36%     0.11ms  0.68%  sync.(*Once).doSlow.deferwrap1
+    0.06ms  0.39% 41.74%     0.06ms  0.39%  github.com/snissn/gomap/TreeDB/caching.storeValueLogPtrLease
+    0.05ms  0.34% 42.09%     0.05ms  0.34%  github.com/snissn/gomap/TreeDB/collections.(*Collection).lockAndValidateInsertBatchPlan
+    0.05ms  0.33% 42.42%     0.05ms  0.33%  github.com/snissn/gomap/TreeDB/collections.(*Collection).lockVectorIndexCoverageMutationWithColdCarrier
+         0     0% 42.42%     0.11ms  0.68%  encoding/json.(*encodeState).marshal
+         0     0% 42.42%     0.11ms  0.68%  encoding/json.(*encodeState).reflectValue
+         0     0% 42.42%     0.11ms  0.68%  encoding/json.Marshal
+         0     0% 42.42%     0.11ms  0.68%  encoding/json.typeEncoder.OnceValue[go.shape.func].func3
+         0     0% 42.42%     0.11ms  0.68%  encoding/json.typeEncoder.func2
+         0     0% 42.42%     0.06ms  0.39%  github.com/snissn/gomap/TreeDB/caching.(*cachingValueLogAppender).AppendValues
+         0     0% 42.42%     0.06ms  0.39%  github.com/snissn/gomap/TreeDB/caching.(*cachingValueLogAppender).appendRecords
+         0     0% 42.42%     0.06ms  0.39%  github.com/snissn/gomap/TreeDB/caching.(*cachingValueLogAppender).appendRecords.func1
+         0     0% 42.42%     6.50ms 41.49%  github.com/snissn/gomap/TreeDB/collections.(*Collection).InsertBatchWithStatsValidatedFloat32Projection
+         0     0% 42.42%     0.23ms  1.44%  github.com/snissn/gomap/TreeDB/collections.(*Collection).InsertBatchWithStatsValidatedFloat32Projection.deferwrap1
+         0     0% 42.42%     0.61ms  3.91%  github.com/snissn/gomap/TreeDB/collections.(*Collection).bufferDirectIndexedInsertPlanLocked
+         0     0% 42.42%     0.70ms  4.47%  github.com/snissn/gomap/TreeDB/collections.(*Collection).bufferIndexedInsertPlanLocked
+         0     0% 42.42%     6.23ms 39.72%  github.com/snissn/gomap/TreeDB/collections.(*Collection).insertBatchOnce
+         0     0% 42.42%     6.23ms 39.72%  github.com/snissn/gomap/TreeDB/collections.(*Collection).insertBatchOnceWithLockState
+         0     0% 42.42%     1.65ms 10.50%  github.com/snissn/gomap/TreeDB/collections.(*Collection).insertBatchOnceWithLockState.func1
+         0     0% 42.42%     0.61ms  3.91%  github.com/snissn/gomap/TreeDB/collections.(*Collection).insertBatchOnceWithLockState.func4
+         0     0% 42.42%     6.23ms 39.72%  github.com/snissn/gomap/TreeDB/collections.(*Collection).insertBatchWithCommandWALIntentSchemaLocked
+         0     0% 42.42%     6.23ms 39.72%  github.com/snissn/gomap/TreeDB/collections.(*Collection).insertBatchWithCommandWALIntentSchemaLocked.func2
+         0     0% 42.42%     0.12ms  0.74%  github.com/snissn/gomap/TreeDB/collections.(*Collection).lockMutationForCommandWALStaging
+         0     0% 42.42%     0.06ms  0.38%  github.com/snissn/gomap/TreeDB/collections.(*Collection).noteWriteDomainCatalog
+         0     0% 42.42%     0.06ms  0.38%  github.com/snissn/gomap/TreeDB/collections.(*CollectionManager).openCollectionWithCommandWALIntent
+         0     0% 42.42%     0.40ms  2.56%  github.com/snissn/gomap/TreeDB/collections.analyzeTextIndexDocument
+         0     0% 42.42%     0.40ms  2.56%  github.com/snissn/gomap/TreeDB/collections.analyzeTextIndexDocumentJSONRootFastPath
+         0     0% 42.42%     0.40ms  2.56%  github.com/snissn/gomap/TreeDB/collections.analyzeTextIndexField
+         0     0% 42.42%     0.40ms  2.56%  github.com/snissn/gomap/TreeDB/collections.analyzeTextIndexStoredDocumentWithAnalysis
+         0     0% 42.42%     0.21ms  1.37%  github.com/snissn/gomap/TreeDB/collections.appendCollectionPointerizedBatchValues
+         0     0% 42.42%     0.21ms  1.37%  github.com/snissn/gomap/TreeDB/collections.pointerizeDirectBufferedPrimaryEntries
+         0     0% 42.42%     0.21ms  1.37%  github.com/snissn/gomap/TreeDB/collections.pointerizeDirectBufferedPrimaryEntries.func2
+         0     0% 42.42%     0.40ms  2.56%  github.com/snissn/gomap/TreeDB/collections.prepareTextIndexInsertDocuments
+         0     0% 42.42%     6.23ms 39.72%  github.com/snissn/gomap/TreeDB/collections.retryInsertBatchMutation

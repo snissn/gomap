@@ -12,10 +12,25 @@ import (
 
 func TestM3FootprintDiagnosticsSurviveForcedGateFailureAndCleanup(t *testing.T) {
 	retained := t.TempDir()
+	// A caller can retain the forced-failure control beyond all test cleanup.
+	// Keep each invocation isolated so previous observations are never replaced.
+	if external := os.Getenv(m3DiagnosticsDirEnv); external != "" {
+		if err := os.MkdirAll(external, 0755); err != nil {
+			t.Fatal(err)
+		}
+		var err error
+		retained, err = os.MkdirTemp(external, "forced-retention-control-*")
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	t.Setenv(m3DiagnosticsDirEnv, retained)
 	dir := filepath.Join(t.TempDir(), "db")
 	database, err := backenddb.Open(backenddb.Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true})
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.SetSync([]byte("retained-control"), []byte("value")); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.Close(); err != nil {
@@ -42,6 +57,9 @@ func TestM3FootprintDiagnosticsSurviveForcedGateFailureAndCleanup(t *testing.T) 
 	snapshot, err := m3CaptureClosedFootprint(config{headSHA: "candidate", command: []string{"test-control"}}, database, dir, "forced_retention", .2, 2, measured)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if snapshot.WAL.DurableWALLSN == 0 || len(snapshot.WAL.Segments) == 0 || snapshot.WAL.Roots[snapshot.WAL.SelectedSlot].AppliedCommandLSN == 0 || len(snapshot.WAL.CleanupCounters) == 0 {
+		t.Fatalf("missing root/LSN/cleanup evidence: %+v", snapshot.WAL)
 	}
 	found := false
 	for _, file := range snapshot.Files {
@@ -82,7 +100,7 @@ func TestM3FootprintDiagnosticsSurviveForcedGateFailureAndCleanup(t *testing.T) 
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !json.Valid(raw) || !strings.Contains(string(raw), "retained-reserve.control") {
+		if !json.Valid(raw) || !strings.Contains(string(raw), "retained-reserve.control") || !strings.Contains(string(raw), "applied_command_lsn") || !strings.Contains(string(raw), "cleanup_counters") {
 			t.Fatalf("lost diagnostic: %s", raw)
 		}
 	}
@@ -93,6 +111,7 @@ func TestM3FootprintDiagnosticsSurviveForcedGateFailureAndCleanup(t *testing.T) 
 	if len(entries) != 3 {
 		t.Fatalf("attempt overwrite: %d", len(entries))
 	}
+	t.Logf("forced-failure artifacts survived database cleanup: %s", retained)
 }
 
 func TestM3FootprintDiagnosticWriteFailureIsAnError(t *testing.T) {

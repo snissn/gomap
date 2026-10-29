@@ -59,7 +59,7 @@ func TestSearchHybridVectorCandidatesNoDocumentsStableIDs2503(t *testing.T) {
 func TestHybridVectorAllowSetExactScanBudget2729(t *testing.T) {
 	allowSet := hybridScalarAllowSet{"doc-a": {}}
 	query := HybridVectorQuery{CandidateLimit: 1, Query: []float32{1, 0, 0}}
-	if !hybridVectorCandidateUseExactAllowSet(query, allowSet) {
+	if !hybridVectorCandidateUseExactAllowSet(query, legacyScalarIDs(allowSet)) {
 		t.Fatalf("expected small allow-set to be eligible before row-count budget")
 	}
 	if !hybridVectorAllowSetExactScanEligible(hybridVectorScalarPrefilterExactMaxScanRows) {

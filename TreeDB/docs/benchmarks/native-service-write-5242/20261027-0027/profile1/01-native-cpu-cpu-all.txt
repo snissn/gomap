@@ -1,0 +1,49 @@
+File: documentservice.test
+Build ID: 46f165d1cd4e65321e0b73e41c0d81b9784f3bf1
+Type: cpu
+Time: 2026-10-26 14:12:18 HST
+Duration: 15.10s, Total samples = 6.12s (40.54%)
+Showing nodes accounting for 3.35s, 54.74% of 6.12s total
+Dropped 981 nodes (cum <= 0.03s)
+Showing top 40 nodes out of 531
+      flat  flat%   sum%        cum   cum%
+     0.85s 13.89% 13.89%      0.85s 13.89%  internal/runtime/syscall/linux.Syscall6
+     0.18s  2.94% 16.83%      0.18s  2.94%  internal/sync.(*Mutex).Lock (inline)
+     0.18s  2.94% 19.77%      0.18s  2.94%  runtime.memclrNoHeapPointers
+     0.15s  2.45% 22.22%      0.56s  9.15%  github.com/snissn/gomap/TreeDB/collections.(*VectorIndex).searchLayerWithCandidateSeedsScratchModeObservedOrderLocked
+     0.12s  1.96% 24.18%      0.14s  2.29%  github.com/pierrec/lz4/v4/internal/lz4block.decodeBlock
+     0.10s  1.63% 25.82%      0.11s  1.80%  github.com/snissn/gomap/TreeDB/collections.vectorIndexMinCandidateHeap.down
+     0.10s  1.63% 27.45%      0.10s  1.63%  github.com/snissn/gomap/TreeDB/internal/vectorops.cosineDistanceFloat32NormalizedScalar (inline)
+     0.10s  1.63% 29.08%      0.10s  1.63%  internal/sync.(*Mutex).Unlock (inline)
+     0.09s  1.47% 30.56%      0.09s  1.47%  runtime.memmove
+     0.09s  1.47% 32.03%      0.10s  1.63%  slices.partitionCmpFunc[go.shape.struct { github.com/snissn/gomap/TreeDB/collections.nodeID int; github.com/snissn/gomap/TreeDB/collections.distance float32 }]
+     0.08s  1.31% 33.33%      0.30s  4.90%  github.com/snissn/gomap/TreeDB/collections.(*VectorIndex).selectConstructionDiverseCandidatesLocked
+     0.08s  1.31% 34.64%      0.08s  1.31%  runtime.nextFreeFast (inline)
+     0.07s  1.14% 35.78%      0.07s  1.14%  github.com/pierrec/lz4/v4/internal/lz4block.(*Compressor).CompressBlock
+     0.07s  1.14% 36.93%      0.07s  1.14%  runtime.madvise
+     0.06s  0.98% 37.91%      0.06s  0.98%  cmpbody
+     0.06s  0.98% 38.89%      0.06s  0.98%  countbody
+     0.06s  0.98% 39.87%      0.06s  0.98%  github.com/snissn/gomap/TreeDB/collections.(*VectorIndex).layerNeighborsLocked (inline)
+     0.05s  0.82% 40.69%      0.05s  0.82%  github.com/snissn/gomap/TreeDB/collections.sortVectorIndexCandidates.func1
+     0.05s  0.82% 41.50%      0.64s 10.46%  runtime.mallocgc
+     0.05s  0.82% 42.32%      0.11s  1.80%  runtime.scanObject
+     0.05s  0.82% 43.14%      0.05s  0.82%  runtime.step
+     0.05s  0.82% 43.95%      0.05s  0.82%  slices.insertionSortCmpFunc[go.shape.struct { github.com/snissn/gomap/TreeDB/collections.fromNodeID int; github.com/snissn/gomap/TreeDB/collections.toNodeID int; github.com/snissn/gomap/TreeDB/collections.layer int }]
+     0.05s  0.82% 44.77%      0.05s  0.82%  slices.swapRangeCmpFunc[go.shape.struct { github.com/snissn/gomap/TreeDB/collections.fromNodeID int; github.com/snissn/gomap/TreeDB/collections.toNodeID int; github.com/snissn/gomap/TreeDB/collections.layer int }] (inline)
+     0.05s  0.82% 45.59%      0.12s  1.96%  slices.symMergeCmpFunc[go.shape.struct { github.com/snissn/gomap/TreeDB/collections.fromNodeID int; github.com/snissn/gomap/TreeDB/collections.toNodeID int; github.com/snissn/gomap/TreeDB/collections.layer int }]
+     0.04s  0.65% 46.24%      0.04s  0.65%  github.com/snissn/go-crc32-asm.crc32IEEEVPCLMUL512
+     0.04s  0.65% 46.90%      0.15s  2.45%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*resourceReleaseFrameV6).stepMetadata
+     0.04s  0.65% 47.55%      0.17s  2.78%  github.com/snissn/gomap/TreeDB/internal/vectorops.CosineDistanceFloat32Normalized (inline)
+     0.04s  0.65% 48.20%      0.04s  0.65%  memeqbody
+     0.04s  0.65% 48.86%      0.04s  0.65%  runtime.(*mspan).writeHeapBitsSmall
+     0.04s  0.65% 49.51%      0.04s  0.65%  runtime.acquirem (inline)
+     0.04s  0.65% 50.16%      0.27s  4.41%  runtime.mallocgcSmallScanNoHeader
+     0.04s  0.65% 50.82%      0.04s  0.65%  sync/atomic.(*Int64).CompareAndSwap (inline)
+     0.03s  0.49% 51.31%      0.09s  1.47%  encoding/json.(*Decoder).readValue
+     0.03s  0.49% 51.80%      0.16s  2.61%  github.com/snissn/gomap/TreeDB/collections.(*VectorIndex).vectorIndexCandidateIsDiverseWithFrozenPrefixScratchObservedLocked
+     0.03s  0.49% 52.29%      0.04s  0.65%  github.com/snissn/gomap/TreeDB/internal/cowbtree.(*Map[go.shape.string,go.shape.string]).nodeAscend
+     0.03s  0.49% 52.78%      0.34s  5.56%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*resourceReleaseFrameV6).releaseGraph
+     0.03s  0.49% 53.27%      0.15s  2.45%  github.com/snissn/gomap/TreeDB/internal/rootpublication.rebuildOwnedResourceKindCollision.func4
+     0.03s  0.49% 53.76%      0.13s  2.12%  github.com/snissn/gomap/TreeDB/internal/vectorops.cosineDistanceFloat32Normalized
+     0.03s  0.49% 54.25%      0.28s  4.58%  runtime.newobject
+     0.03s  0.49% 54.74%      0.12s  1.96%  runtime.sweepone

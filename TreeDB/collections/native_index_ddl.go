@@ -186,7 +186,8 @@ func prepareNativeIndexMutation(base *nativeEngineVersion, old *nativeCollection
 		return nil, err
 	}
 	old.domains.Scan(func(name string, _ *nativeDomainState) bool {
-		if (nativeIndexDomain(name) && !scalarSame && (!pureDrop || nativeIndexRemovedDomain(name, meta.Indexes))) || nativeVectorDomainRemoved(name, meta) {
+		_, _, text := nativeTextDomain(name)
+		if (nativeIndexDomain(name) && !scalarSame && (!pureDrop || nativeIndexRemovedDomain(name, meta.Indexes))) || nativeVectorDomainRemoved(name, meta) || (text && !nativeTextDomainDeclared(meta, name)) {
 			err = p.domainBuilder.Delete(name)
 			if err == nil {
 				err = p.pendingDomainBuilder.Delete(name)
@@ -198,7 +199,7 @@ func prepareNativeIndexMutation(base *nativeEngineVersion, old *nativeCollection
 		return nil, err
 	}
 	for _, change := range changes {
-		if !nativeIndexDomain(change.name) && !strings.HasPrefix(change.name, "vector-index/") {
+		if !nativeIndexDomain(change.name) && !strings.HasPrefix(change.name, "vector-index/") && !nativeTextDomainDeclared(meta, change.name) {
 			return nil, backenddb.ErrNativeSemanticUnsupported
 		}
 		domain, e := prepareNativeDomainUpdate(nil, change.name, 0, interpretation, change.policy, change.entries, base.allocator)
@@ -207,6 +208,9 @@ func prepareNativeIndexMutation(base *nativeEngineVersion, old *nativeCollection
 		}
 		if e != nil {
 			return nil, e
+		}
+		if prior, found := old.domains.Get(change.name); found {
+			domain.catalogRoot = prior.catalogRoot
 		}
 		if err = p.domainBuilder.Set(change.name, domain); err != nil {
 			return nil, err
@@ -229,12 +233,17 @@ func prepareNativeIndexMutation(base *nativeEngineVersion, old *nativeCollection
 
 // Every DDL operation conflicts on the catalog name already read by native
 // transaction bindings. The facade holds its shared vector mutation gate.
-func (m *NativeJSONManager) mutateIndexFamilies(owner *Collection, name string, create *IndexDefinition, remove map[string]struct{}, all bool, vector *VectorIndexDefinition, dropVector string) (out *CollectionMeta, resultErr error) {
+func (m *NativeJSONManager) mutateIndexFamilies(owner *Collection, name string, create *IndexDefinition, remove map[string]struct{}, all bool, vector *VectorIndexDefinition, dropVector string, text *nativeTextIndexDDL) (out *CollectionMeta, resultErr error) {
 	if m == nil || m.db == nil {
 		return nil, backenddb.ErrClosed
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.mutateIndexFamiliesLocked(owner, name, create, remove, all, vector, dropVector, text)
+}
+
+// mutateIndexFamiliesLocked requires the manager DDL authority and vector mutation gate.
+func (m *NativeJSONManager) mutateIndexFamiliesLocked(owner *Collection, name string, create *IndexDefinition, remove map[string]struct{}, all bool, vector *VectorIndexDefinition, dropVector string, text *nativeTextIndexDDL) (out *CollectionMeta, resultErr error) {
 	read, err := m.Capture(name)
 	if err != nil {
 		return nil, err
@@ -243,10 +252,14 @@ func (m *NativeJSONManager) mutateIndexFamilies(owner *Collection, name string, 
 	if read.meta.Options.ColumnStore != nil && (create != nil || !nativeTypedMeta(read.meta)) {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
-	base, _ := read.capture.State().(*nativeEngineVersion)
-	if base == nil {
-		base = read.privateEngine
+	if vector != nil {
+		normalized, e := validateNativeVectorIndexCreate(read.meta, *vector)
+		if e != nil {
+			return nil, e
+		}
+		*vector = normalized
 	}
+	base := read.engine
 	// All temporary arrays, decoder objects and encoded bytes remain within this
 	// operation receipt until private COW sources own their copies and Write returns.
 	lease, err := base.allocator.AdmitNativeBytes(0)
@@ -272,7 +285,44 @@ func (m *NativeJSONManager) mutateIndexFamilies(owner *Collection, name string, 
 		}
 		meta := read.meta
 		var normalizedVector VectorIndexDefinition
-		if vector != nil {
+		if text != nil {
+			if !nativeTextDocumentFormat(meta.Options.DocumentFormat) || meta.Options.ColumnStore != nil {
+				return nil, backenddb.ErrNativeSemanticUnsupported
+			}
+			if text.create != nil {
+				// Admit the extra declaration before the maintained normalizer
+				// allocates candidate/normalized copies and analyzer options.
+				n, e := nativeTextDefinitionCharge(*text.create, 4)
+				if e != nil {
+					return nil, e
+				}
+				if e = admit(n); e != nil {
+					return nil, e
+				}
+				meta, _, err = addTextIndexToCollectionMeta(meta, *text.create)
+			} else {
+				meta = *meta.copy()
+				found := false
+				kept := meta.TextIndexes[:0]
+				for _, def := range meta.TextIndexes {
+					if def.Name == text.drop {
+						found = true
+					} else {
+						kept = append(kept, def)
+					}
+				}
+				if !found {
+					return nil, ErrIndexNotFound
+				}
+				meta.TextIndexes = kept
+			}
+			if err != nil {
+				return nil, err
+			}
+			if err = nativeIndexSchemaScratch(meta, nil, admit); err != nil {
+				return nil, err
+			}
+		} else if vector != nil {
 			vector.SchemaGeneration = read.capture.LogicalSequence() + 1
 			meta, normalizedVector, err = addVectorIndexToCollectionMeta(meta, *vector)
 		} else if dropVector != "" {
@@ -319,11 +369,6 @@ func (m *NativeJSONManager) mutateIndexFamilies(owner *Collection, name string, 
 		if err != nil {
 			return nil, err
 		}
-		finishHNSW, e := owner.prepareNativeHNSWSchemaChange(read, meta, admit)
-		if e != nil {
-			return nil, e
-		}
-		defer finishHNSW(false)
 		var rows nativeJSONRows
 		var domains []nativeJSONDomainChange
 		var catalog []memtable.COWMutation
@@ -336,7 +381,7 @@ func (m *NativeJSONManager) mutateIndexFamilies(owner *Collection, name string, 
 		if read.meta.Options.ColumnStore != nil && !pureDrop {
 			return nil, backenddb.ErrNativeSemanticUnsupported
 		}
-		if !pureDrop && vector == nil && dropVector == "" {
+		if !pureDrop && vector == nil && dropVector == "" && text == nil {
 			if err = admit(uint64(page.PageSize)); err != nil {
 				return nil, err
 			}
@@ -461,6 +506,14 @@ func (m *NativeJSONManager) mutateIndexFamilies(owner *Collection, name string, 
 			domains = append(domains, nativeJSONDomainChange{name: "vector-index/" + normalizedVector.Name})
 		}
 
+		if text != nil && text.create != nil {
+			def, _ := findTextIndex(meta.TextIndexes, text.create.Name)
+			domains, text.stats, err = nativeTextBackfill(read, meta, def, admit)
+			if err != nil {
+				return nil, err
+			}
+		}
+
 		before, err := encodeNormalizedCollectionMeta(read.meta)
 		if err != nil {
 			return nil, err
@@ -500,7 +553,6 @@ func (m *NativeJSONManager) mutateIndexFamilies(owner *Collection, name string, 
 		}
 		result, err := m.db.WriteNativePublication(publication, intent, false)
 		if result.LogicalInstalled {
-			finishHNSW(true)
 		}
 		if err != nil && (result.Assigned || result.LogicalInstalled) {
 			err = commitAmbiguousError("native index DDL completion", err)
@@ -530,7 +582,7 @@ func nativeIndexCatalogEffects(before, after CollectionMeta, encoded []byte, inc
 	if err = admit(uint64(len(after.Name)+len(nativeCatalogIncarnationPrefix)+len(nativeCatalogNextIncarnationKey)) + 32); err != nil {
 		return nil, err
 	}
-	count := 4 + len(before.Indexes) + 2*len(before.VectorIndexes) + len(after.VectorIndexes)
+	count := 4 + len(before.Indexes) + 2*len(before.VectorIndexes) + len(after.VectorIndexes) + 10*len(before.TextIndexes)
 	if err = admitNativeInsertArray(count, uint64(unsafe.Sizeof(memtable.COWMutation{})), admit); err != nil {
 		return nil, err
 	}
@@ -583,6 +635,21 @@ func nativeIndexCatalogEffects(before, after CollectionMeta, encoded []byte, inc
 				return nil, err
 			}
 			if err = add(nativeVectorVersionKey(before.Name, def.Name), nil, node.FlagTombstone); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	for _, def := range before.TextIndexes {
+		if _, exists := findTextIndex(after.TextIndexes, def.Name); exists {
+			continue
+		}
+		// Match legacy DropTextIndex: clear both maintained version families.
+		if err = admit(10 * (uint64(len(before.Name)+len(def.Name)) + 128)); err != nil {
+			return nil, err
+		}
+		for _, root := range collectionTextAllRootNames(before.Name, def.Name) {
+			if err = add(systemCollectionRootKey(root), nil, node.FlagTombstone); err != nil {
 				return nil, err
 			}
 		}
@@ -745,4 +812,81 @@ func nativeIndexJSONBound(v reflect.Value, depth int) (uint64, error) {
 		return 0, backenddb.ErrNativeSemanticUnsupported
 	}
 	return total, nil
+}
+
+func nativeVectorDomainRemoved(name string, meta CollectionMeta) bool {
+	n, ok := strings.CutPrefix(name, "vector-index/")
+	if !ok {
+		return false
+	}
+	_, found := findVectorIndex(meta.VectorIndexes, n)
+	return !found
+}
+
+// Unlike a DDL owner's idempotent declaration admission, public creation
+// rejects duplicate names. Keep this candidate identical to publication's check.
+func validateNativeVectorIndexCreate(meta CollectionMeta, requested VectorIndexDefinition) (VectorIndexDefinition, error) {
+	normalized, err := normalizeVectorIndexDefinition(requested)
+	if err != nil {
+		return VectorIndexDefinition{}, err
+	}
+	candidate := *meta.copy()
+	candidate.VectorIndexes = append(candidate.VectorIndexes, normalized)
+	if _, err := normalizeCollectionMeta(candidate); err != nil {
+		return VectorIndexDefinition{}, err
+	}
+	if meta.Options.ColumnStore != nil {
+		return VectorIndexDefinition{}, backenddb.ErrNativeSemanticUnsupported
+	}
+	if _, err := nativeJSONMeta(candidate); err != nil {
+		return VectorIndexDefinition{}, err
+	}
+	return normalized, nil
+}
+
+func (c *Collection) nativeCreateVectorIndex(def VectorIndexDefinition) (*CollectionMeta, error) {
+	if c.manager.isClosing() {
+		return nil, backenddb.ErrClosed
+	}
+	if err := c.nativeVectorIndexDDLPreflight(func(meta CollectionMeta) error {
+		_, err := validateNativeVectorIndexCreate(meta, def)
+		return err
+	}); err != nil {
+		return nil, err
+	}
+	if err := c.nativeJSON.db.PrepareNativeProducer(); err != nil {
+		return nil, err
+	}
+	unlock := c.lockVectorIndexMutation()
+	defer unlock()
+	meta, err := c.nativeJSON.mutateIndexFamilies(c, c.name, nil, nil, false, &def, "", nil)
+	if meta != nil {
+		c.collectionSchemaCoordinator().hasNativeVectorIndexes.Store(len(meta.VectorIndexes) != 0)
+	}
+	return meta, err
+}
+
+func (c *Collection) nativeDropVectorIndex(name string) (*CollectionMeta, error) {
+	if c.manager.isClosing() {
+		return nil, backenddb.ErrClosed
+	}
+	if err := c.nativeJSON.db.PrepareNativeProducer(); err != nil {
+		return nil, err
+	}
+	unlock := c.lockVectorIndexMutation()
+	defer unlock()
+	meta, err := c.nativeJSON.mutateIndexFamilies(c, c.name, nil, nil, false, nil, name, nil)
+	if meta != nil {
+		c.collectionSchemaCoordinator().hasNativeVectorIndexes.Store(len(meta.VectorIndexes) != 0)
+		c.removeColumnGraphPartitionLiveCarrier(name)
+	}
+	return meta, err
+}
+func (c *Collection) nativeMutateIndexes(create *IndexDefinition, remove map[string]struct{}, all bool) (*CollectionMeta, error) {
+	if err := c.nativeJSON.db.PrepareNativeProducer(); err != nil {
+		return nil, err
+	}
+	unlock := c.lockVectorIndexMutation()
+	defer unlock()
+	return c.nativeJSON.mutateIndexFamilies(c, c.name, create, remove, all, nil, "", nil)
 }

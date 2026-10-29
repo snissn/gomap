@@ -1,0 +1,31 @@
+{
+  "argv": [
+    "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.0.linux-amd64/bin/go",
+    "tool",
+    "pprof",
+    "-top",
+    "-nodecount=40",
+    "-focus=UpsertDocuments",
+    "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/current-feature-service-write-diagnostic2/documentservice.test",
+    "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/current-feature-service-write-trace1/01-native-sched.pprof"
+  ],
+  "cwd": "/mnt/fast4tb/gomap-mongo-execution-20261024/consumer-canonical",
+  "environment_policy": "explicit whitelist plus frozen cell values; no full environment dump",
+  "start_utc": "2026-10-27T00:14:45.953299+00:00",
+  "wall_limit_seconds": 60,
+  "exit_code": 0,
+  "timed_out": false,
+  "error": null,
+  "cleanup": {
+    "pgid": 220781,
+    "alive_before_cleanup": false,
+    "signals": [],
+    "alive_after_cleanup": false
+  },
+  "pid": 220781,
+  "end_utc": "2026-10-27T00:14:46.067992+00:00",
+  "elapsed_seconds": 0.11470076348632574,
+  "log": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/current-feature-service-write-trace1/01-native-sched-upsert.txt",
+  "log_sha256": "d6bab84383392c375f4261e53fdc36ba371480fb06cf80fcd4625823b2c1e79e",
+  "process_ok": true
+}

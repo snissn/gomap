@@ -18,8 +18,16 @@ The benchmark has two timing boundaries:
    - `search_text_v2_candidates_no_docs` uses the v2/default text index;
    - `search_vector_candidates_no_docs` uses `SearchHybridVectorCandidates`;
    - `search_hybrid_no_docs_scalar_filter` uses the explicit v1 compatibility text index plus vector/scalar filtering without final document fetch;
-   - `search_hybrid_v2_no_docs_scalar_filter` uses the v2/default text index plus vector/scalar filtering without final document fetch;
+   - `search_hybrid_v2_no_docs_scalar_filter` uses the v2/default text index plus scalar filtering, without a vector source or final document fetch;
    - `search_hybrid_fetch_topk_scalar_filter` uses bounded final fetch and excludes `embedding` from returned documents.
+
+The v1 `search_hybrid_no_docs_scalar_filter` and
+`search_hybrid_fetch_topk_scalar_filter` workloads are now unsupported ordinary
+vector+scalar Hybrid probes. They verify the real fail-closed rejection and
+explicitly SKIP without latency or success metrics. Use `-v` to retain that
+disposition. The v2 text+scalar row remains supported. Historical tables below
+retain their original measurements and do not establish current support or
+qualification; a successful benchmark process does not qualify skipped cells.
 
 Candidate-generation rows must keep `docs_fetched/search=0` and `full_doc_fallbacks/search=0`. The final-fetch hybrid row must keep `docs_fetched/search <= topk/search`.
 
@@ -52,7 +60,7 @@ TREEDB_INDEX_BENCH_M=8 \
 go test ./TreeDB/collections \
   -run '^$' \
   -bench '^BenchmarkIndexInsertSearch2564$' \
-  -benchmem \
+  -v -benchmem \
   -benchtime=5x \
   -count=3 \
   | tee "$OUT/index_insert_search_bench.txt"
@@ -115,7 +123,7 @@ Primary command:
 GOWORK=off go test ./TreeDB/collections \
   -run '^$' \
   -bench '^BenchmarkIndexInsertSearch2564/indexed_insert_batch_flush_vector_rebuild$' \
-  -benchmem \
+  -v -benchmem \
   -benchtime=5x \
   -count=3
 ```
@@ -126,7 +134,7 @@ Guardrail command:
 GOWORK=off go test ./TreeDB/collections \
   -run '^$' \
   -bench '^BenchmarkIndexInsertSearch2564/(search_text_candidates_no_docs|search_vector_candidates_no_docs|search_hybrid_no_docs_scalar_filter|search_hybrid_fetch_topk_scalar_filter)$' \
-  -benchmem \
+  -v -benchmem \
   -benchtime=3x \
   -count=2
 ```

@@ -815,10 +815,6 @@ func (c *Collection) columnGraphVectorIndexStatusAtSnapshot(name string, snap *b
 		return VectorIndexStatus{}, ErrIndexNotFound
 	}
 	switch def.Strategy {
-	case VectorIndexStrategyNativeRuntime:
-		status.State = VectorIndexStateNativeRuntime
-		status.Reason = VectorIndexReasonNativeRuntime
-		return status, nil
 	case VectorIndexStrategyColumnGraph:
 	default:
 		return VectorIndexStatus{}, fmt.Errorf("collections: unsupported vector index strategy %q", def.Strategy)

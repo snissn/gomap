@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -53,7 +54,7 @@ func TestInspectClosedCommandWALPreservesRetentionAndReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out.ProofError == "" || out.LastCleanupError == "" || len(out.Segments) == 0 || out.CleanupCounters["treedb.command_wal.cleanup.retries_total"] == "0" {
+	if out.ProofError == "" || len(out.Segments) == 0 || out.CleanupCounters["treedb.command_wal.cleanup.retries_total"] == "0" {
 		t.Fatalf("lost conservative retention evidence: %+v", out)
 	}
 	if out.Roots[out.SelectedSlot].AppliedCommandLSN != database.State().AppliedCommandLSN {
@@ -145,5 +146,87 @@ func TestInspectClosedCommandWALUnavailableProofAfterEarlierCleanup(t *testing.T
 		if err != nil || string(got) != want {
 			t.Fatalf("reopen %q=%q error=%v", key, got, err)
 		}
+	}
+}
+
+// The observer reads existing terminal results; recording diagnostics must not
+// require fields or writes in the production close/cleanup paths.
+func TestInspectClosedCommandWALRetainsExistingCloseErrors(t *testing.T) {
+	database, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failure := errors.New("injected terminal teardown failure")
+	database.registerInternalTeardownHook(func() error { return failure })
+	if err := database.Close(); !errors.Is(err, failure) {
+		t.Fatalf("close error=%v", err)
+	}
+	out, err := database.InspectClosedCommandWALV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.CloseError, failure.Error()) || !strings.Contains(out.CloseCleanupError, failure.Error()) {
+		t.Fatalf("lost existing terminal errors: %+v", out)
+	}
+}
+
+func TestInspectClosedCommandWALPoisonPreventsReplayAuthority(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		fail        func(*DB) error
+		wantError   error
+		publication bool
+	}{
+		{"ambiguous metadata sync", func(db *DB) error {
+			db.testFailSyncMeta.Store(true)
+			defer db.testFailSyncMeta.Store(false)
+			return db.SetSync([]byte("uncertain"), []byte("second"))
+		}, errTestSyncMetaFailpoint, true},
+		{"post-append WAL flush", func(db *DB) error {
+			db.testFailCommandWALFlush.Store(true)
+			defer db.testFailCommandWALFlush.Store(false)
+			return db.SetSync([]byte("uncertain"), []byte("second"))
+		}, errTestCommandWALFlushFailpoint, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			enableCommandWALFormat(t, dir)
+			database := openCommandWALDB(t, dir)
+			defer database.Close()
+			if err := database.SetSync([]byte("covered"), []byte("first")); err != nil {
+				t.Fatal(err)
+			}
+			if err := tc.fail(database); !errors.Is(err, tc.wantError) {
+				t.Fatalf("fault did not execute: %v", err)
+			}
+			if tc.publication && !database.publicationPoisoned.Load() || !tc.publication && !database.commandWALFlushPoisoned.Load() {
+				t.Fatal("fault did not poison the intended path")
+			}
+			_ = database.Close()
+			if !database.closeTeardownCompleted {
+				t.Fatal("close did not complete teardown")
+			}
+			// This is the old, insufficient check. After teardown its internally
+			// consistent runtime slots can supply a proof despite persistent poison.
+			if _, err := captureDurableWALCleanupProofFromRuntimeV1(database.durableRoot, database.commandWALDurableLSN.Load()); err != nil {
+				t.Fatalf("control lacks an otherwise plausible runtime proof: %v", err)
+			}
+			out, err := database.InspectClosedCommandWALV1()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if out.ProofError == "" || !strings.Contains(out.ProofError, ErrRecoveryRequired.Error()) || out.ReplayLineageValidated ||
+				out.RootObservation != "closed_handle_runtime_not_persisted_slot_verification" || len(out.Segments) == 0 {
+				t.Fatalf("poisoned runtime claimed recovery authority or lost inventory: %+v", out)
+			}
+			if tc.publication && !out.PublicationPoisoned || !tc.publication && !out.CommandWALFlushPoisoned {
+				t.Fatalf("lost poison evidence: %+v", out)
+			}
+			for _, segment := range out.Segments {
+				if segment.CoveredByRoots {
+					t.Fatalf("poisoned roots claimed coverage: %+v", segment)
+				}
+			}
+		})
 	}
 }

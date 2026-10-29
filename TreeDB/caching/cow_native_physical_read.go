@@ -10,7 +10,7 @@ import (
 
 // nativeEntryAtRoot shares only physical decoding/traversal, never logical
 // visibility. The caller's original cut retains this basis through copy-out.
-func (b *cowBackendBasis) nativeEntryAtRoot(cache *cowCache, root uint64, key []byte, copyValue bool) (node.LeafEntry, error) {
+func (b *cowBackendBasis) nativeEntryAtRoot(cache *cowCache, provider cowDictionaryReadProvider, root uint64, key []byte, copyValue bool) (node.LeafEntry, error) {
 	b.readMu.Lock()
 	defer b.readMu.Unlock()
 	limit := cache.budget.Limits().MaxInFlightBytes
@@ -27,7 +27,7 @@ func (b *cowBackendBasis) nativeEntryAtRoot(cache *cowCache, root uint64, key []
 		return node.LeafEntry{}, err
 	}
 	entry, err := reader.GetEntryExactWithFixedScratch(key, point.key[:], point.leaf[:], func(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
-		return b.readPhysicalLeafLocked(cache, ptr, dst, true)
+		return b.readNativePhysicalLeafLocked(cache, provider, ptr, dst)
 	})
 	if err != nil {
 		return node.LeafEntry{}, err
@@ -48,7 +48,7 @@ func (c *NativeSemanticCapture) NativeEntryAtRoot(root uint64, key []byte, copyV
 	if c == nil || c.cut == nil || c.cache == nil {
 		return node.LeafEntry{}, backenddb.ErrClosed
 	}
-	return c.cut.basis.nativeEntryAtRoot(c.cache, root, key, copyValue)
+	return c.cut.basis.nativeEntryAtRoot(c.cache, c.dictionary, root, key, copyValue)
 }
 func (tx *nativeConditionalTxn) NativeEntryAtRoot(root uint64, key []byte, copyValue bool) (node.LeafEntry, error) {
 	if tx == nil || tx.ConditionalTxn == nil {
@@ -57,27 +57,28 @@ func (tx *nativeConditionalTxn) NativeEntryAtRoot(root uint64, key []byte, copyV
 	if err := tx.ensureOpen(); err != nil {
 		return node.LeafEntry{}, err
 	}
-	return tx.snap.cowCut.basis.nativeEntryAtRoot(tx.db.cow, root, key, copyValue)
+	provider, _ := tx.db.dictStore.(cowDictionaryReadProvider)
+	return tx.snap.cowCut.basis.nativeEntryAtRoot(tx.db.cow, provider, root, key, copyValue)
 }
 
 // nativeLeafPage uses the SAME basis traversal lock and cache decoder owner as
 // nativeEntryAtRoot. ReadCOWLeafPage and verified cache hits copy into caller dst
 // before these locks end; no shared scratch or file authority escapes.
-func (b *cowBackendBasis) nativeLeafPage(cache *cowCache, ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
+func (b *cowBackendBasis) nativeLeafPage(cache *cowCache, provider cowDictionaryReadProvider, ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
 	b.readMu.Lock()
 	defer b.readMu.Unlock()
 	limit := cache.budget.Limits().MaxInFlightBytes
 	if _, err := b.physicalWorkspaceLocked(cache.budget, valuelog.COWReadLimits{MaxRecordBytes: limit, MaxRawBytes: limit, MaxValueBytes: limit}); err != nil {
 		return nil, err
 	}
-	return b.readPhysicalLeafLocked(cache, ptr, dst, true)
+	return b.readNativePhysicalLeafLocked(cache, provider, ptr, dst)
 }
 
 func (c *NativeSemanticCapture) NativeLeafPage(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
 	if c == nil || c.cut == nil || c.cache == nil {
 		return nil, backenddb.ErrClosed
 	}
-	return c.cut.basis.nativeLeafPage(c.cache, ptr, dst)
+	return c.cut.basis.nativeLeafPage(c.cache, c.dictionary, ptr, dst)
 }
 
 func (tx *nativeConditionalTxn) NativeLeafPage(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
@@ -87,7 +88,19 @@ func (tx *nativeConditionalTxn) NativeLeafPage(ptr page.LeafLogPtr, dst []byte) 
 	if err := tx.ensureOpen(); err != nil {
 		return nil, err
 	}
-	return tx.snap.cowCut.basis.nativeLeafPage(tx.db.cow, ptr, dst)
+	provider, _ := tx.db.dictStore.(cowDictionaryReadProvider)
+	return tx.snap.cowCut.basis.nativeLeafPage(tx.db.cow, provider, ptr, dst)
+}
+
+// The provider is a synchronous capability from the original capture/txn.
+// readPhysicalLeafWithDictionary inspects its exact pinned file before any hit;
+// the cache decoder independently owns admitted definition bytes on a miss.
+func (b *cowBackendBasis) readNativePhysicalLeafLocked(cache *cowCache, provider cowDictionaryReadProvider, ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
+	var independent *cowCacheDictionaryRead
+	if provider != nil {
+		independent = &cowCacheDictionaryRead{provider: provider, cache: cache}
+	}
+	return b.readPhysicalLeafWithDictionary(cache, b.reader, ptr, dst, true, false, independent)
 }
 
 // nativeValueAtPointer borrows the exact retained basis file and the original

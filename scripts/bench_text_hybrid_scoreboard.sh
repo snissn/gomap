@@ -85,7 +85,7 @@ run_go_bench "TreeDB $DOCS_10K-doc text-v2/vector/hybrid+scalar candidates" "$IN
 
 HYBRID_10K_LABEL="treedb_hybrid_closeout_$(scoreboard_doc_label "$DOCS_10K")"
 HYBRID_10K="$RUN_DIR/$HYBRID_10K_LABEL.txt"
-run_go_bench "TreeDB $DOCS_10K-doc text-only/vector-only/hybrid/hybrid+scalar executor rows" "$HYBRID_10K" \
+run_go_bench "TreeDB $DOCS_10K-doc supported executor rows and unavailable filtered vector probes" "$HYBRID_10K" \
   env GOWORK=off \
     TREEDB_HYBRID_BENCH_DOCS="$DOCS_10K" \
     TREEDB_HYBRID_BENCH_DIMS="$DIMS" \
@@ -93,7 +93,7 @@ run_go_bench "TreeDB $DOCS_10K-doc text-only/vector-only/hybrid/hybrid+scalar ex
     "$GO_BIN" test ./TreeDB/collections \
       -run '^$' \
       -bench '^BenchmarkSearchHybridCloseout2506/mode_(text_only_no_docs|vector_only_no_docs|hybrid_no_docs)/topK_10/candidates_64/filter_(none_100pct|rare_06pct)$' \
-      -benchmem \
+      -v -benchmem \
       -benchtime="$BENCHTIME" \
       -count="$COUNT"
 
@@ -117,7 +117,7 @@ SCOREBOARD_ARGS=(
   -go-bench "$HYBRID_10K_LABEL=$HYBRID_10K"
   -go-bench "treedb_text_blockmax_10k=$TEXT_BLOCKMAX_10K"
   -command "treedb_index_insert_search_10k=GOWORK=off TREEDB_INDEX_BENCH_DOCS=$DOCS_10K TREEDB_INDEX_BENCH_DIMS=$DIMS TREEDB_INDEX_BENCH_M=$M $GO_BIN test ./TreeDB/collections -run '^$' -bench '^BenchmarkIndexInsertSearch2564/(search_text_v2_candidates_no_docs|search_vector_candidates_no_docs|search_hybrid_v2_no_docs_scalar_filter|indexed_insert_batch_flush_vector_rebuild)$' -benchmem -benchtime=$BENCHTIME -count=$COUNT"
-  -command "$HYBRID_10K_LABEL=GOWORK=off TREEDB_HYBRID_BENCH_DOCS=$DOCS_10K TREEDB_HYBRID_BENCH_DIMS=$DIMS TREEDB_HYBRID_BENCH_M=$M $GO_BIN test ./TreeDB/collections -run '^$' -bench '^BenchmarkSearchHybridCloseout2506/mode_(text_only_no_docs|vector_only_no_docs|hybrid_no_docs)/topK_10/candidates_64/filter_(none_100pct|rare_06pct)$' -benchmem -benchtime=$BENCHTIME -count=$COUNT"
+  -command "$HYBRID_10K_LABEL=GOWORK=off TREEDB_HYBRID_BENCH_DOCS=$DOCS_10K TREEDB_HYBRID_BENCH_DIMS=$DIMS TREEDB_HYBRID_BENCH_M=$M $GO_BIN test ./TreeDB/collections -run '^$' -bench '^BenchmarkSearchHybridCloseout2506/mode_(text_only_no_docs|vector_only_no_docs|hybrid_no_docs)/topK_10/candidates_64/filter_(none_100pct|rare_06pct)$' -v -benchmem -benchtime=$BENCHTIME -count=$COUNT"
   -command "treedb_text_blockmax_10k=GOWORK=off TREEDB_TEXT_V2_BLOCKMAX_DOCS=$DOCS_10K $GO_BIN test ./TreeDB/collections -run '^$' -bench '^BenchmarkTextV2BlockMaxCommonTerm2628/(blockmax_common_topk|exhaustive_common_topk)$' -benchmem -benchtime=$BENCHTIME -count=$COUNT"
 )
 
@@ -144,6 +144,7 @@ else
 fi
 
 SCOREBOARD_ARGS+=(
+  -unavailable "TreeDB ordinary filtered vector Hybrid=not implemented; vector_only_no_docs and hybrid_no_docs scalar-filter probes verify rejection then SKIP without timing or success metrics; historical full matrix is not qualified"
   -unavailable "Tantivy lexical=not measured by this harness; no Tantivy adapter or retained evidence is included"
   -unavailable "Qdrant/Weaviate/Milvus/OpenSearch hybrid=not run by the default smoke harness; use service-specific durable deployments or documented local proxies before citing industry hybrid parity"
 )

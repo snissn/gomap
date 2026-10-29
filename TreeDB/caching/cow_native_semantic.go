@@ -2,6 +2,7 @@ package caching
 
 import (
 	"context"
+	"sync"
 	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -14,10 +15,11 @@ import (
 // backend capture. State and Snapshot are borrowed until Close. This internal
 // capability is admitted before allocation and belongs to this public owner.
 type NativeSemanticCapture struct {
-	cache      *cowCache
-	cut        *cowReadCut
-	lease      *memtable.COWExternalLease
-	dictionary cowDictionaryReadProvider // immutable provider capability; shared decoders own copied definitions
+	projectionMu sync.Mutex // derived initialization versus this capture's Close
+	cache        *cowCache
+	cut          *cowReadCut
+	lease        *memtable.COWExternalLease
+	dictionary   cowDictionaryReadProvider // immutable provider capability; shared decoders own copied definitions
 }
 
 func (db *DB) CaptureNativeSemanticState(owner *transactionowner.Owner) (*NativeSemanticCapture, error) {
@@ -36,6 +38,54 @@ func (db *DB) CaptureNativeSemanticState(owner *transactionowner.Owner) (*Native
 	provider, _ := db.dictStore.(cowDictionaryReadProvider)
 	return &NativeSemanticCapture{cache: db.cow, cut: cut, lease: lease, dictionary: provider}, nil
 }
+
+// One fixed, separately synchronized derived slot belongs to the original cut.
+// It is not inherited by successors, included in State(), or used for native
+// publication/OCC. Its containing allocation is admitted by cowCutCharge.
+// The imported state owns only its original admitted immutable catalog backing.
+type cowNativeCatalogProjection struct {
+	mu    sync.Mutex
+	state backenddb.NativeSemanticState
+}
+
+// NativeCatalogProjection derives the cold catalog once from THIS retained cut.
+// build borrows this exact capture synchronously; it must not reenter this method
+// or Close this capture. On success it transfers one state reference to the cut;
+// on error the partial state is returned to the caller for its existing cleanup.
+// The callback must be a preadmitted/static function; no closure is retained. The result
+// is borrowed until this capture closes, not a new semantic publication.
+func (c *NativeSemanticCapture) NativeCatalogProjection(build func(backenddb.NativeSemanticCapture) (backenddb.NativeSemanticState, error)) (backenddb.NativeSemanticState, error) {
+	if c == nil {
+		return nil, backenddb.ErrClosed
+	}
+	c.projectionMu.Lock()
+	defer c.projectionMu.Unlock()
+	if c.cut == nil || c.cache == nil {
+		return nil, backenddb.ErrClosed
+	}
+	if c.cut.semanticRootSet != nil {
+		return c.cut.semanticRootSet, nil
+	}
+	if build == nil {
+		return nil, backenddb.ErrNativeSemanticUnsupported
+	}
+	projection := &c.cut.catalogProjection
+	projection.mu.Lock()
+	defer projection.mu.Unlock()
+	if projection.state != nil {
+		return projection.state, nil
+	}
+	state, err := build(c)
+	if err != nil {
+		return state, err
+	}
+	if state == nil {
+		return nil, backenddb.ErrNativeSemanticUnsupported
+	}
+	projection.state = state
+	return state, nil
+}
+
 func (c *NativeSemanticCapture) State() backenddb.NativeSemanticState { return c.cut.semanticRootSet }
 func (c *NativeSemanticCapture) Snapshot() *backenddb.Snapshot        { return c.cut.basis.snapshot }
 func (c *NativeSemanticCapture) LogicalSequence() uint64              { return c.cut.logicalSeq }
@@ -59,12 +109,25 @@ func (c *NativeSemanticCapture) NativeMaintenanceAllocator() backenddb.NativeSem
 	return c.cache.maintenance
 }
 
+// This optional operation belongs to the original live capture, never to the
+// cache-free allocator or a retained receipt. It changes no captured authority.
+func (c *NativeSemanticCapture) TryReleaseIdleNativeReadScratch() bool {
+	return c != nil && c.cut != nil && c.cache != nil && c.cache.tryReleaseIdleGenericReadScratch()
+}
+
 func (c *NativeSemanticCapture) Close() error {
-	if c == nil || c.cut == nil {
+	if c == nil {
+		return nil
+	}
+	c.projectionMu.Lock()
+	if c.cut == nil {
+		c.projectionMu.Unlock()
 		return nil
 	}
 	cut, cache, lease := c.cut, c.cache, c.lease
 	c.cut, c.cache, c.lease, c.dictionary = nil, nil, nil, nil
+	c.projectionMu.Unlock()
+	// Release and any last-cut cleanup run outside both projection locks.
 	err := cache.releaseCut(cut)
 	lease.Close() // final containing-owner access follows alias scrubbing
 	return err

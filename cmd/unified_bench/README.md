@@ -356,10 +356,16 @@ explicitly deferred.
 
 Use `-profile-dir` so all profiles and ops outputs are captured in one place.
 This example uses unified-bench's `fast` preset, selecting production
-`no_wal_fast` for TreeDB. Use `bench_unsafe` only for an explicit unsafe ceiling:
+`no_wal_fast` for TreeDB. Use `bench_unsafe` only for an explicit unsafe ceiling.
+
+The profile examples below use this host's `/mnt/fast4tb` mount. Verify that it
+is mounted and writable before running them. On other machines, replace that
+prefix with an existing writable data directory; for the collection recipe,
+set `RUN_DIR` to a directory on that filesystem. Keep captures on a filesystem
+with enough free space for the database and profiles.
 
 ```bash
-OUT=$(mktemp -d /tmp/gomap_profiles_XXXXXX)
+OUT=$(mktemp -d /mnt/fast4tb/gomap_profiles_XXXXXX) || exit 1
 BENCH_PROFILE=fast # cross-DB benchmark preset, not a TreeDB server profile
 
 ./bin/unified-bench \
@@ -372,6 +378,7 @@ BENCH_PROFILE=fast # cross-DB benchmark preset, not a TreeDB server profile
   -path-label native-fastpath \
   -progress=false
 
+# Optional: rerun the analyzer separately; -profile-dir already runs it.
 ./bin/benchprof -profiles-dir "$OUT"
 ```
 
@@ -405,6 +412,44 @@ from one source family. The `collection_storage` suite also
 adds `runs[].collection_workloads` entries with stable mode/workload names,
 semantic-equivalence flags, correctness-validation status, asset-byte splits,
 and materialization / typed-column / vector counters for `benchprof` rendering.
+
+### Interpreting storage and completion time
+
+For fixed work, a faster run can reach its endpoint with less elapsed time for
+background cleanup. Report physical allocated storage at the original endpoint,
+and, where available, distinguish reachable data, cleanup debt, and deliberate
+preallocated reserve. Compare like durability and logical work, matched
+idle/maintenance observations and sustained-load behavior; include maintenance
+I/O, CPU and effects on foreground latency when material. Do not assume idle
+cleanup actually occurs or reserve is returned: demonstrate the lifecycle.
+A substantial measured speed win may justify an explicitly accepted, bounded
+space tradeoff when the workload and applicable acceptance gates permit it.
+Preserve the original endpoint and any failed gate; do not exclude required
+maintenance or silently relax correctness, durability or agreed thresholds.
+
+### Focused collection insert compression profile
+
+To investigate TreeDB collection `InsertBatch` throughput and value-log
+compression allocations, run from the repository root after checking the output
+filesystem as described in the standard profile workflow above:
+
+```sh
+RUN_DIR=/mnt/fast4tb/treedb_insert_compression_profile_$(date +%Y%m%d_%H%M%S) \
+  scripts/treedb_insert_compression_profile.sh
+```
+
+The script runs the short-lived `BenchmarkCollectionShapeInsertBatch` insert
+shape for template-v1 collections on the native fast path. It captures default
+value-log compression under `auto/`, optionally a compression-off ceiling under
+`off/`, and writes `benchstat_auto_vs_off.txt` if `benchstat` is installed.
+Primary artifacts include `auto/collections_report.md`,
+`auto/collections_cpu.pprof`, `auto/collections_cpu_top.txt`,
+`auto/collections_mem.pprof`, and `auto/collections_mem_top.txt`. These Go test
+profiles are standalone artifacts, not benchprof inputs.
+
+Useful overrides: `COUNT=1 BENCHTIME=1000x RUN_COMPRESSION_OFF=false` for a
+smoke run; `INDEXES_REGEX='0|1|2|3'` for all current insert index counts; and
+`RUN_TIMED_CPU=true` to additionally capture the timed CPU-only profile.
 
 ## Collection Storage Suite
 
@@ -1745,16 +1790,40 @@ configuration, `go test -c`/prebuilt-binary commands and ten-cell, three-pair
 diagnostic boundary are in
 [the #5214 packet](../../TreeDB/docs/benchmarks/cow-successor-workspace-5214.md).
 
-`BenchmarkStandalonePublicVectorBuildSaveLoad` and
-`BenchmarkStandalonePublicVectorSearch` in `cmd/mongo_gateway_bench` exercise
-ordinary BSON/HNSW APIs on the standalone owner. Their fixture, commands and
-Go-row artifact boundary are documented in
-[the Mongo benchmark README](../mongo_gateway_bench/README.md).
-`BenchmarkStandalonePublicVectorSaveReopenLoad` also charges the physical
-owner-close and fresh-owner reconstruction boundary.
+BSON vector-index construction and the former standalone runtime vector
+benchmarks are retired. Mongo BSON CRUD and scalar-index benchmarks remain
+supported; a Mongo `createIndexes` request containing a vector declaration is
+refused as a whole before publication. Use the maintained ColumnGraph demos and
+[typed-vector guide](../../TreeDB/docs/guides/vector-search-typed-column.md)
+for current vector construction and search boundaries. Frozen BSON/runtime
+benchmark results remain historical evidence, not executable success gates.
 
 `BenchmarkServiceSharedCOWConsumers` in `TreeDB/documentservice` measures
-ordinary Get, filtered keyword, Dense and combined Hybrid through legacy/native
-public constructors. Its fixed fixture, strategy/route attribution limits and
+ordinary Get, filtered keyword, unfiltered Dense ANN and unfiltered combined
+Hybrid through legacy/native public constructors. Filtered ordinary Dense must
+explicitly request the exact route; ordinary filtered ANN and vector-bearing
+filtered Hybrid are refusal cases. The original filtered Hybrid +6.38% FAIL
+remains historical, nonblocking evidence for a removed capability and is never
+relabeled PASS. Its fixed fixtures, strategy/route attribution limits and
 fresh-process commands are in [the consumer diagnostic packet](../../TreeDB/docs/benchmarks/shared-cow-consumers-5238.md).
 It emits Go benchmark rows, not benchprof inputs.
+
+### Ordinary durable service write diagnostic
+
+`BenchmarkServiceSharedCOWWriteLoad` times successful public `UpsertDocuments`
+returns for one fresh4096-document load (32 batches of128), with1 and4 writers.
+Use `GOMAXPROCS=4 GOMAP_SERVICE_BENCH_BACKEND=legacy` or `native` and
+`GOMAP_SERVICE_BENCH_PROFILE=command_wal_durable`, then run:
+
+```sh
+go test ./TreeDB/documentservice -run '^$' -bench '^BenchmarkServiceSharedCOWWriteLoad$' -benchtime=1x -count=1 -benchmem -v
+```
+
+Standard ns/op, B/op and allocs/op are per whole load. `ns/request` is throughput
+normalization, not request latency. Create/fixtures, validation, Optimize, Close
+and reopen remain outside request timing; their phase costs and success are
+reported separately. Fixed-process artifacts live under
+`evidence/current-feature-service-write-diagnostic1/` in the execution root:
+`public-write-plan.json`, `source-binding.json`, `cell-*-receipt.json`,
+`cell-*.log`, and `result.json`. This diagnostic has no numerical acceptance
+threshold and does not replace final G1 or actual command/Mongo gates.

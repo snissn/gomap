@@ -14,17 +14,23 @@ import (
 // files. It is observation only, never authority to delete or truncate a file.
 // Counters are cumulative for this handle; segment classifications describe the
 // post-close directory, not the decisions of any particular cleanup attempt.
+// Close errors come from the existing terminal results; this does not retain a
+// history of individual cleanup errors or infer which attempt retained a file.
 type CommandWALClosedDiagnosticsV1 struct {
-	LastCleanupError       string                          `json:"last_cleanup_error,omitempty"`
-	SelectedSlot           uint64                          `json:"selected_slot"`
-	Roots                  [2]CommandWALDiagnosticRootV1   `json:"roots"`
-	DurableWALLSN          uint64                          `json:"durable_wal_lsn"`
-	CleanupThrough         uint64                          `json:"cleanup_through"`
-	ProofError             string                          `json:"proof_error,omitempty"`
-	ReplayLineageValidated bool                            `json:"replay_lineage_validated"`
-	ScanError              string                          `json:"scan_error,omitempty"`
-	CleanupCounters        map[string]string               `json:"cleanup_counters"`
-	Segments               []CommandWALDiagnosticSegmentV1 `json:"segments"`
+	RootObservation         string                          `json:"root_observation"`
+	PublicationPoisoned     bool                            `json:"publication_poisoned"`
+	CommandWALFlushPoisoned bool                            `json:"command_wal_flush_poisoned"`
+	CloseError              string                          `json:"close_error,omitempty"`
+	CloseCleanupError       string                          `json:"close_cleanup_error,omitempty"`
+	SelectedSlot            uint64                          `json:"selected_slot"`
+	Roots                   [2]CommandWALDiagnosticRootV1   `json:"roots"`
+	DurableWALLSN           uint64                          `json:"durable_wal_lsn"`
+	CleanupThrough          uint64                          `json:"cleanup_through"`
+	ProofError              string                          `json:"proof_error,omitempty"`
+	ReplayLineageValidated  bool                            `json:"replay_lineage_validated"`
+	ScanError               string                          `json:"scan_error,omitempty"`
+	CleanupCounters         map[string]string               `json:"cleanup_counters"`
+	Segments                []CommandWALDiagnosticSegmentV1 `json:"segments"`
 }
 
 type CommandWALDiagnosticRootV1 struct {
@@ -48,24 +54,44 @@ type CommandWALDiagnosticSegmentV1 struct {
 
 // InspectClosedCommandWALV1 scans without opening a new DB owner or changing
 // recovery/cleanup state. Call after Close has returned, and before any other
-// owner opens or modifies this directory. A failed Close may still have finished
-// teardown. ProofError records legitimate conservative retention; ScanError and
+// owner opens or modifies this directory. Calls must not race Close (including
+// another Close on this handle) or any other lifecycle operation. A failed Close
+// may still have finished teardown. ProofError is the post-close assessment
+// of whether conservative retention remains necessary; ScanError and
 // the returned error indicate an incomplete diagnostic, with partial data kept.
 func (db *DB) InspectClosedCommandWALV1() (CommandWALClosedDiagnosticsV1, error) {
 	var out CommandWALClosedDiagnosticsV1
-	if db == nil || !db.closeDiagnosticsReady.Load() {
+	if db == nil || !db.closeTeardownCompleted {
 		return out, errors.New("command WAL diagnostics require completed Close")
 	}
-	if message := db.commandWALCleanupLastError.Load(); message != nil {
-		out.LastCleanupError = *message
+	if err := errors.Join(db.closeHooksErr, db.closeTeardownErr); err != nil {
+		out.CloseError = err.Error()
 	}
+	if err := errors.Join(db.closeHooksErr, db.closeTeardownCleanupErr); err != nil {
+		out.CloseCleanupError = err.Error()
+	}
+	// These are the closed handle's last runtime observations, not a readback
+	// of the persisted slots or a fresh recovery selection. An ambiguous write
+	// may have changed a persisted slot without updating these observations.
+	out.RootObservation = "closed_handle_runtime_not_persisted_slot_verification"
+	out.PublicationPoisoned = db.publicationPoisoned.Load()
+	out.CommandWALFlushPoisoned = db.commandWALFlushPoisoned.Load()
 	runtime := db.durableRoot
 	out.SelectedSlot = runtime.slot
 	out.DurableWALLSN = db.commandWALDurableLSN.Load()
 	for slot := range out.Roots {
 		out.Roots[slot] = CommandWALDiagnosticRootV1{Slot: uint64(slot), CommitSeq: runtime.slotCommit[slot], AppliedCommandLSN: runtime.slotRecord[slot].AppliedCommandLSN, Meta: runtime.slotMeta[slot]}
 	}
-	proof, proofErr := captureDurableWALCleanupProofFromRuntimeV1(runtime, out.DurableWALLSN)
+	var proof durableWALCleanupProofV1
+	proofErr := db.commandWALPoisonedError()
+	if proofErr != nil {
+		// Teardown may have released and cleared ambiguous candidates. The
+		// persistent poison flags still prohibit treating stale runtime roots as
+		// recovery authority, even if their identities are internally consistent.
+		proofErr = fmt.Errorf("%w: closed handle is poisoned: %w", errDurableWALCleanupProofUnavailable, proofErr)
+	} else {
+		proof, proofErr = captureDurableWALCleanupProofFromRuntimeV1(runtime, out.DurableWALLSN)
+	}
 	if proofErr != nil {
 		out.ProofError = proofErr.Error()
 	} else {
@@ -81,8 +107,9 @@ func (db *DB) InspectClosedCommandWALV1() (CommandWALClosedDiagnosticsV1, error)
 		}
 	}
 
-	// An unavailable proof supplies no replay lower bound. Inventoring the
-	// remaining frames must not invent a zero lower bound: earlier legitimate
+	// This is a post-close proof assessment, not the proof used by an earlier
+	// cleanup attempt. An unavailable proof supplies no replay lower bound.
+	// Inventorying frames must not invent a zero lower bound: earlier legitimate
 	// cleanup may already have removed that historical prefix.
 	var validProof *durableWALCleanupProofV1
 	if proofErr == nil {

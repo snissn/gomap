@@ -3956,6 +3956,7 @@ func appendBackendBatchPointOp(
 }
 
 type checkpointCommandWALPublish struct {
+	seal       rootpublication.PhysicalSealReceipt
 	appliedLSN uint64
 	ranges     []backenddb.CommandWALLSNRange
 	consumed   bool
@@ -10199,12 +10200,15 @@ type DB struct {
 	autoCheckpointLastWALTrimmed           atomic.Int64
 	autoCheckpointLastWALBytes             atomic.Int64
 	autoCheckpointMaxWALBytes              atomic.Int64
-	commandWALCleanupPending               atomic.Bool
-	commandWALCleanupActive                atomic.Bool
-	commandWALCleanupRequests              atomic.Uint64
-	commandWALCleanupCoalesced             atomic.Uint64
-	commandWALCleanupCompletions           atomic.Uint64
-	commandWALCleanupRetries               atomic.Uint64
+	// Immutable threshold captured by the actually started worker, not a later
+	// StartAutoCheckpoint notification reconfiguration.
+	autoCheckpointWorkerMaxWALBytes atomic.Int64
+	commandWALCleanupPending        atomic.Bool
+	commandWALCleanupActive         atomic.Bool
+	commandWALCleanupRequests       atomic.Uint64
+	commandWALCleanupCoalesced      atomic.Uint64
+	commandWALCleanupCompletions    atomic.Uint64
+	commandWALCleanupRetries        atomic.Uint64
 
 	checkpointCutoverLastNanos    atomic.Int64
 	checkpointCutoverMaxNanos     atomic.Int64
@@ -13857,9 +13861,10 @@ func (db *DB) startProcessMemorySampler() {
 // prefix; legacy or otherwise unwired modes use a full checkpoint. When
 // idleInterval > 0, the loop also runs after a period of write-idleness.
 //
-// interval > 0 enables periodic passes. maxWALBytes is a safety cap: if > 0,
-// the loop will attempt maintenance when the effective WAL bytes exceed this
-// cap. maxWALBytes <= 0 disables the size trigger.
+// interval > 0 enables periodic passes. maxWALBytes is a soft size trigger:
+// if > 0, the loop attempts maintenance after notified WAL growth exceeds the
+// threshold. It is not a hard byte limit. maxWALBytes <= 0 disables the size
+// trigger of a newly started worker; a running worker retains its first options.
 func (db *DB) StartAutoCheckpoint(interval time.Duration, maxWALBytes int64, idleInterval time.Duration) {
 	if db == nil {
 		return
@@ -13874,6 +13879,7 @@ func (db *DB) StartAutoCheckpoint(interval time.Duration, maxWALBytes int64, idl
 	if !db.autoCheckpointOn.CompareAndSwap(false, true) {
 		return
 	}
+	db.autoCheckpointWorkerMaxWALBytes.Store(maxWALBytes)
 	db.wg.Add(1)
 	go db.autoCheckpointLoop(interval, maxWALBytes, idleInterval)
 }
@@ -25295,11 +25301,11 @@ func appendCheckpointStageStats(stats map[string]string, name string, s *checkpo
 	if stats == nil || s == nil || name == "" {
 		return
 	}
-	prefix := "treedb.cache.checkpoint.stage." + name
-	stats[prefix+".samples"] = fmt.Sprintf("%d", s.samples.Load())
-	stats[prefix+".last_ns"] = fmt.Sprintf("%d", s.lastNs.Load())
-	stats[prefix+".total_ns"] = fmt.Sprintf("%d", s.totalNs.Load())
-	stats[prefix+".max_ns"] = fmt.Sprintf("%d", s.maxNs.Load())
+	keys := checkpointStageMetricKeys(name)
+	stats[keys.samples] = fmt.Sprintf("%d", s.samples.Load())
+	stats[keys.lastNs] = fmt.Sprintf("%d", s.lastNs.Load())
+	stats[keys.totalNs] = fmt.Sprintf("%d", s.totalNs.Load())
+	stats[keys.maxNs] = fmt.Sprintf("%d", s.maxNs.Load())
 }
 
 func checkpointRatePerSecond(amount, ns uint64) float64 {
@@ -25994,7 +26000,8 @@ func (db *DB) checkpointContext(ctx context.Context, automatic bool) error {
 	if frontierLaneCount == 0 {
 		frontierLaneCount = 1
 	}
-	_, frontierActiveLanes := db.checkpointFrontierActiveLanes(frontier, frontierLaneCount)
+	var frontierLaneScratch [64]bool
+	_, frontierActiveLanes := db.checkpointFrontierActiveLanes(frontier, frontierLaneCount, frontierLaneScratch[:])
 	db.observeCheckpointFlushAllFrontierLanes(frontierActiveLanes)
 	checkpointDrainUnitsBefore := db.checkpointSharedDrainCheckpointUnits.Load()
 	checkpointDrainOpsBefore := db.checkpointSharedDrainCheckpointOps.Load()
@@ -29463,13 +29470,22 @@ func (db *DB) flushLoop() {
 		select {
 		case <-db.closeCh:
 			db.flushAll(true)
-			db.drainSemanticCleanup()
-			db.wg.Done()
-			joined = true
 			for {
 				db.drainSemanticCleanup()
 				if db.semanticCleanupTerminal() {
 					return
+				}
+				if !joined {
+					// With no retained cut, join terminal physical-reader disposal
+					// and the cache refund before Close can return. A last cut may
+					// enqueue cleanup between the drain and terminal check above.
+					if db.cow.activeCuts.Load() == 0 {
+						continue
+					}
+					// User-held cuts retain their own resources after DB Close;
+					// this same worker remains their cleanup owner.
+					db.wg.Done()
+					joined = true
 				}
 				<-db.flushCh
 			}
@@ -29556,8 +29572,16 @@ func filterFlushUnitsToCheckpointFrontier(units []flushUnit, ids []uint64, front
 	return outUnits, outIDs, totalBytes, totalLen
 }
 
-func (db *DB) checkpointFrontierActiveLanes(frontier checkpointFrontier, lanes int) ([]bool, int) {
-	active := make([]bool, lanes)
+// scratch belongs to the calling checkpoint/flush invocation. The result may
+// alias it and must be consumed before the next call reuses that scratch.
+func (db *DB) checkpointFrontierActiveLanes(frontier checkpointFrontier, lanes int, scratch []bool) ([]bool, int) {
+	active := scratch
+	if cap(active) < lanes {
+		active = make([]bool, lanes)
+	} else {
+		active = active[:lanes]
+		clear(active)
+	}
 	if db == nil || len(frontier.ids) == 0 {
 		return active, 0
 	}
@@ -29617,9 +29641,10 @@ func (db *DB) flushCheckpointFrontierLocked(reqSync bool, commandPublish *checkp
 	if lanes == 0 {
 		lanes = 1
 	}
+	var laneScratch [64]bool
 
 	for {
-		active, activeCount := db.checkpointFrontierActiveLanes(frontier, lanes)
+		active, activeCount := db.checkpointFrontierActiveLanes(frontier, lanes, laneScratch[:])
 		if activeCount == 0 {
 			return
 		}
@@ -29688,7 +29713,8 @@ func (db *DB) flushAllLocked(reqSync bool, commandPublish *checkpointCommandWALP
 	for {
 		if activeFrontier, ok := db.activeCheckpointFrontier(); ok {
 			frontierSyncFlag := db.flushSyncRequested(true)
-			active, activeCount := db.checkpointFrontierActiveLanes(activeFrontier, lanes)
+			var laneScratch [64]bool
+			active, activeCount := db.checkpointFrontierActiveLanes(activeFrontier, lanes, laneScratch[:])
 			if activeCount == 0 {
 				return
 			}
@@ -33157,8 +33183,8 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.memory.pool_pressure_critical_samples_total"] = fmt.Sprintf("%d", poolPressureCriticalSamplesTotal.Load())
 	rssBytes := db.processRSSBytes.Load()
 	rssHWMBytes := db.processRSSHWMBytes.Load()
-	stats["treedb.process.memory.rss_bytes"] = fmt.Sprintf("%d", rssBytes)
-	stats["treedb.process.memory.rss_hwm_bytes"] = fmt.Sprintf("%d", rssHWMBytes)
+	stats["treedb.process.memory.rss_bytes"] = strconv.FormatUint(rssBytes, 10)
+	stats["treedb.process.memory.rss_hwm_bytes"] = strconv.FormatUint(rssHWMBytes, 10)
 	if rssBytes > poolPressure.heapInuseBytes {
 		stats["treedb.process.memory.rss_minus_heap_inuse_bytes"] = fmt.Sprintf("%d", rssBytes-poolPressure.heapInuseBytes)
 	} else {
@@ -33169,10 +33195,10 @@ func (db *DB) Stats() map[string]string {
 	} else {
 		stats["treedb.process.memory.rss_minus_total_sys_bytes"] = "0"
 	}
-	stats["treedb.process.memory.peak_rss_bytes"] = fmt.Sprintf("%d", db.processPeakRSSBytes.Load())
-	stats["treedb.process.memory.peak_heap_alloc_bytes"] = fmt.Sprintf("%d", db.processPeakHeapAllocBytes.Load())
-	stats["treedb.process.memory.peak_heap_inuse_bytes"] = fmt.Sprintf("%d", db.processPeakHeapInuseBytes.Load())
-	stats["treedb.process.memory.peak_total_sys_bytes"] = fmt.Sprintf("%d", db.processPeakTotalSysBytes.Load())
+	stats["treedb.process.memory.peak_rss_bytes"] = strconv.FormatUint(db.processPeakRSSBytes.Load(), 10)
+	stats["treedb.process.memory.peak_heap_alloc_bytes"] = strconv.FormatUint(db.processPeakHeapAllocBytes.Load(), 10)
+	stats["treedb.process.memory.peak_heap_inuse_bytes"] = strconv.FormatUint(db.processPeakHeapInuseBytes.Load(), 10)
+	stats["treedb.process.memory.peak_total_sys_bytes"] = strconv.FormatUint(db.processPeakTotalSysBytes.Load(), 10)
 	db.domainIngressMu.Lock()
 	ingressWorkers := len(db.domainIngressCh)
 	ingressQueueSize := db.domainIngressQueueSize

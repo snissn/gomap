@@ -25,7 +25,7 @@ func TestSearchHybridExecutorTextVectorOverlapAndBoundedFetch2505(t *testing.T) 
 		{id: "doc-shared", title: "refund", body: "refund refund", city: "sea", score: 10, vector: []float32{1, 0, 0}},
 		{id: "doc-text", title: "refund", body: "refund customer policy", city: "sea", score: 20, vector: []float32{0.2, 0.8, 0}},
 		{id: "doc-vector", title: "shipping", body: "shipping update", city: "sea", score: 30, vector: []float32{0.99, 0.01, 0}},
-		{id: "doc-filtered", title: "refund", body: "refund", city: "sfo", score: 40, vector: []float32{0.4, 0.6, 0}},
+		{id: "doc-secondary", title: "refund", body: "refund", city: "sea", score: 40, vector: []float32{0.4, 0.6, 0}},
 		{id: "doc-background", title: "other", body: "other", city: "sea", score: 50, vector: []float32{0, 0, 1}},
 	})
 	defer func() { _ = d.Close() }()
@@ -34,7 +34,6 @@ func TestSearchHybridExecutorTextVectorOverlapAndBoundedFetch2505(t *testing.T) 
 		TopK:             3,
 		Text:             &HybridTextQuery{IndexName: "lexical", Query: "refund", CandidateLimit: 4},
 		Vector:           &HybridVectorQuery{IndexName: def.Name, Query: []float32{1, 0, 0}, CandidateLimit: 4, EfSearch: 5, QueryMode: VectorIndexQueryModeExact},
-		ScalarFilter:     &HybridScalarFilter{IndexName: "city", Value: "sea"},
 		IncludeDocuments: true,
 		DocumentFetchOptions: DocumentFetchOptions{
 			ExcludePaths: []string{"embedding"},
@@ -45,8 +44,8 @@ func TestSearchHybridExecutorTextVectorOverlapAndBoundedFetch2505(t *testing.T) 
 	if err != nil {
 		t.Fatalf("SearchHybrid: %v", err)
 	}
-	if got.Plan.FinalTopK != opts.TopK || got.Plan.TextCandidateLimit != 4 || got.Plan.VectorCandidateLimit != 4 || got.Plan.ScalarFilterStrategy != HybridScalarFilterStrategyPrefilter || got.Plan.ScalarFilterLookupCount != 1 || got.Plan.ScalarFilterLookupLimit != hybridScalarDefaultLookupLimit || got.Plan.ScalarFilterAggregateLimit != hybridScalarDefaultLookupLimit || got.Plan.FusionMethod != HybridFusionMethodRRF {
-		t.Fatalf("plan=%+v want compatible one-lookup bounded prefilter RRF plan", got.Plan)
+	if got.Plan.FinalTopK != opts.TopK || got.Plan.TextCandidateLimit != 4 || got.Plan.VectorCandidateLimit != 4 || got.Plan.ScalarFilterStrategy != HybridScalarFilterStrategyUnionFusion || got.Plan.ScalarFilterLookupCount != 0 || got.Plan.ScalarFilterLookupLimit != 0 || got.Plan.ScalarFilterAggregateLimit != 0 || got.Plan.FusionMethod != HybridFusionMethodRRF {
+		t.Fatalf("plan=%+v want compatible unfiltered bounded RRF plan", got.Plan)
 	}
 	if got.Snapshot.Consistency != HybridConsistencyCurrentSnapshot || got.Snapshot.CommitSeq == 0 || got.Snapshot.SystemRootPageID == 0 {
 		t.Fatalf("snapshot=%+v want current snapshot identity", got.Snapshot)
@@ -61,9 +60,6 @@ func TestSearchHybridExecutorTextVectorOverlapAndBoundedFetch2505(t *testing.T) 
 		t.Fatalf("top sources=%+v want text+vector overlap attribution", got.Results[0].Sources)
 	}
 	for _, result := range got.Results {
-		if string(result.ID) == "doc-filtered" {
-			t.Fatalf("scalar-filtered document reached results: %+v", got.Results)
-		}
 		if !result.DocumentFound || len(result.Document) == 0 || bytes.Contains(result.Document, []byte("embedding")) || !bytes.Contains(result.Document, []byte(`"city":"sea"`)) {
 			t.Fatalf("result=%+v want bounded fetched sea document respecting projection", result)
 		}
@@ -71,16 +67,11 @@ func TestSearchHybridExecutorTextVectorOverlapAndBoundedFetch2505(t *testing.T) 
 	if len(got.Candidates) == 0 {
 		t.Fatalf("debug candidates missing")
 	}
-	for _, candidate := range got.Candidates {
-		if string(candidate.ID) == "doc-filtered" {
-			t.Fatalf("prefiltered debug candidate escaped scalar allow-set: %+v", got.Candidates)
-		}
-	}
 	if got.Stats.TextCandidatesReturned == 0 || got.Stats.VectorCandidatesReturned == 0 || got.Stats.CandidatesFused != uint64(len(got.Candidates)) || got.Stats.FusionBoth == 0 {
 		t.Fatalf("stats=%+v want text/vector/fusion counters", got.Stats)
 	}
-	if got.Stats.ScalarPrefilterIDs != 4 || got.Stats.ScalarFilterRejected == 0 || got.Stats.DocumentsFetched != uint64(len(got.Results)) || got.Stats.DocumentsFetched > uint64(opts.TopK) || got.Stats.FullDocumentScanFallbacks != 0 || got.Stats.FailClosed != 0 {
-		t.Fatalf("stats=%+v want scalar filtering and bounded final fetch only", got.Stats)
+	if got.Stats.ScalarPrefilterIDs != 0 || got.Stats.ScalarFilterLookups != 0 || got.Stats.DocumentsFetched != uint64(len(got.Results)) || got.Stats.DocumentsFetched > uint64(opts.TopK) || got.Stats.FullDocumentScanFallbacks != 0 || got.Stats.FailClosed != 0 {
+		t.Fatalf("stats=%+v want unfiltered fusion and bounded final fetch only", got.Stats)
 	}
 
 	noDocsOpts := opts
@@ -160,7 +151,7 @@ func TestSearchHybridExecutorTextOnlyAndVectorOnly2505(t *testing.T) {
 	}
 }
 
-func TestSearchHybridScalarPrefilterPushesIntoVectorCandidates2729(t *testing.T) {
+func TestSearchHybridScalarPrefilterRejectsOrdinaryVector5275(t *testing.T) {
 	_, d, col, def := openHybridSearchExecutorFixture2505(t, []hybridSearchExecutorFixtureRow2505{
 		{id: "doc-unallowed-best", title: "shipping", body: "shipping", city: "sfo", score: 10, vector: []float32{1, 0, 0}},
 		{id: "doc-allowed-best", title: "shipping", body: "shipping", city: "sea", score: 20, vector: []float32{0.8, 0.2, 0}},
@@ -173,18 +164,7 @@ func TestSearchHybridScalarPrefilterPushesIntoVectorCandidates2729(t *testing.T)
 		Vector:       &HybridVectorQuery{IndexName: def.Name, Query: []float32{1, 0, 0}, CandidateLimit: 1, EfSearch: 1, QueryMode: VectorIndexQueryModeExact},
 		ScalarFilter: &HybridScalarFilter{IndexName: "city", Value: "sea"},
 	})
-	if err != nil {
-		t.Fatalf("SearchHybrid vector scalar prefilter: %v", err)
-	}
-	if gotIDs := hybridResultIDs2505(got.Results); !slicesEqualStrings(gotIDs, []string{"doc-allowed-best"}) {
-		t.Fatalf("ids=%v response=%+v want best allowed vector result despite unallowed global top-1", gotIDs, got)
-	}
-	if got.Stats.DocumentsFetched != 0 || got.Stats.FullDocumentScanFallbacks != 0 || got.Stats.VectorCandidatesReturned != 1 || got.Stats.VectorCandidatesExamined != 1 || got.Stats.Truncated != 0 {
-		t.Fatalf("stats=%+v want no-doc vector allow-set candidate generation", got.Stats)
-	}
-	if got.Stats.ScalarPrefilterIDs != 1 || got.Stats.ScalarPostfilterChecks != 1 || got.Stats.ScalarFilterMatched != 1 || got.Stats.ScalarFilterRejected != 2 {
-		t.Fatalf("stats=%+v want exact vector allow-set matched/rejected counters", got.Stats)
-	}
+	requireFilteredVectorHybridUnsupported5275(t, got, err)
 }
 
 func TestSearchHybridResultModes2505(t *testing.T) {
@@ -529,6 +509,10 @@ func TestSearchHybridMultiFieldANDRoutesCountersAndFailures4292(t *testing.T) {
 	for _, route := range routes {
 		t.Run(route.name, func(t *testing.T) {
 			response, err := col.SearchHybrid(HybridSearchOptions{TopK: 4, Text: route.text, Vector: route.vector, ScalarFilter: threeField(false)})
+			if route.vector != nil {
+				requireFilteredVectorHybridUnsupported5275(t, response, err)
+				return
+			}
 			if err != nil {
 				t.Fatalf("SearchHybrid: %v", err)
 			}
@@ -542,7 +526,7 @@ func TestSearchHybridMultiFieldANDRoutesCountersAndFailures4292(t *testing.T) {
 			if response.Stats.ScalarFilterLookups != 3 || response.Stats.ScalarFilterInputIDs != 9 || response.Stats.ScalarFilterIntersectionSteps != 2 || response.Stats.ScalarFilterFinalIDs != 2 || response.Stats.FullDocumentScanFallbacks != 0 {
 				t.Fatalf("stats=%+v", response.Stats)
 			}
-			if route.name == "hybrid" {
+			if route.name == "text" {
 				ordered = ids
 			}
 		})
@@ -550,7 +534,6 @@ func TestSearchHybridMultiFieldANDRoutesCountersAndFailures4292(t *testing.T) {
 	reversed, err := col.SearchHybrid(HybridSearchOptions{
 		TopK:         4,
 		Text:         &HybridTextQuery{IndexName: "lexical", Query: "refund", CandidateLimit: 4},
-		Vector:       &HybridVectorQuery{IndexName: def.Name, Query: []float32{1, 0, 0}, CandidateLimit: 4, EfSearch: 8, QueryMode: VectorIndexQueryModeExact},
 		ScalarFilter: threeField(true),
 	})
 	if err != nil || !slicesEqualStrings(hybridResultIDs2505(reversed.Results), ordered) {
@@ -560,7 +543,6 @@ func TestSearchHybridMultiFieldANDRoutesCountersAndFailures4292(t *testing.T) {
 	empty, err := col.SearchHybrid(HybridSearchOptions{
 		TopK:                 2,
 		Text:                 &HybridTextQuery{IndexName: "lexical", Query: "refund", CandidateLimit: 4},
-		Vector:               &HybridVectorQuery{IndexName: def.Name, Query: []float32{1, 0, 0}, CandidateLimit: 4, EfSearch: 8, QueryMode: VectorIndexQueryModeExact},
 		ScalarFilterStrategy: HybridScalarFilterStrategyPostfilter,
 		ScalarFilter: &HybridScalarFilter{And: []HybridScalarFilter{
 			{IndexName: "city", Value: "sfo"},

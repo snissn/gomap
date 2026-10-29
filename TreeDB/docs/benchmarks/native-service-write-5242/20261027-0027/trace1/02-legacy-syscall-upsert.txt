@@ -1,0 +1,29 @@
+File: documentservice.test
+Type: delay
+Active filters:
+   focus=UpsertDocuments
+Showing nodes accounting for 75.38ms, 12.17% of 619.46ms total
+Dropped 7 nodes (cum <= 3.10ms)
+      flat  flat%   sum%        cum   cum%
+   75.38ms 12.17% 12.17%    75.38ms 12.17%  golang.org/x/sys/unix.Fdatasync
+         0     0% 12.17%    75.68ms 12.22%  github.com/snissn/gomap/TreeDB/collections.(*Collection).InsertBatchWithStatsValidatedFloat32Projection
+         0     0% 12.17%    75.68ms 12.22%  github.com/snissn/gomap/TreeDB/collections.(*Collection).bufferIndexedInsertPlanLocked
+         0     0% 12.17%    75.68ms 12.22%  github.com/snissn/gomap/TreeDB/collections.(*Collection).insertBatchOnce
+         0     0% 12.17%    75.68ms 12.22%  github.com/snissn/gomap/TreeDB/collections.(*Collection).insertBatchOnceWithLockState
+         0     0% 12.17%    75.68ms 12.22%  github.com/snissn/gomap/TreeDB/collections.(*Collection).insertBatchWithCommandWALIntentSchemaLocked
+         0     0% 12.17%    75.68ms 12.22%  github.com/snissn/gomap/TreeDB/collections.(*Collection).insertBatchWithCommandWALIntentSchemaLocked.func2
+         0     0% 12.17%    75.68ms 12.22%  github.com/snissn/gomap/TreeDB/collections.retryInsertBatchMutation
+         0     0% 12.17%    75.68ms 12.22%  github.com/snissn/gomap/TreeDB/db.(*DB).AppendStagedCommandWALIntent
+         0     0% 12.17%    75.68ms 12.22%  github.com/snissn/gomap/TreeDB/db.(*DB).appendCommandWALIntentWithTiming
+         0     0% 12.17%    75.68ms 12.22%  github.com/snissn/gomap/TreeDB/db.(*DB).appendPublicCommandWALIntent
+         0     0% 12.17%    75.68ms 12.22%  github.com/snissn/gomap/TreeDB/db.(*DB).flushCommandWALForPath
+         0     0% 12.17%    75.68ms 12.22%  github.com/snissn/gomap/TreeDB/documentservice.(*Service).UpsertDocuments
+         0     0% 12.17%    75.68ms 12.22%  github.com/snissn/gomap/TreeDB/documentservice.(*Service).upsertDocuments
+         0     0% 12.17%    75.68ms 12.22%  github.com/snissn/gomap/TreeDB/documentservice.(*Service).upsertDocuments.func4
+         0     0% 12.17%    75.68ms 12.22%  github.com/snissn/gomap/TreeDB/documentservice.benchmarkSharedCOWWriteLoad.func2
+         0     0% 12.17%    75.68ms 12.22%  github.com/snissn/gomap/TreeDB/internal/commitlog.(*CommandJournal).FlushObserved
+         0     0% 12.17%    75.68ms 12.22%  github.com/snissn/gomap/TreeDB/internal/commitlog.(*CommandJournal).flushDirectCommandWALLocked
+         0     0% 12.17%    75.68ms 12.22%  github.com/snissn/gomap/TreeDB/internal/commitlog.(*CommandJournal).flushLocked
+         0     0% 12.17%    75.68ms 12.22%  github.com/snissn/gomap/TreeDB/internal/commitlog.(*Writer).Sync
+         0     0% 12.17%    75.38ms 12.17%  github.com/snissn/gomap/TreeDB/internal/commitlog.(*Writer).syncFile
+         0     0% 12.17%    75.38ms 12.17%  github.com/snissn/gomap/TreeDB/internal/commitlog.syncWALData

@@ -1,5 +1,11 @@
 # TreeDB Typed-Storage Performance Guide
 
+Vector serving uses cosine/float32 `column_graph` only. Ordinary filtered ANN
+and vector-bearing filtered Hybrid are unavailable; explicit exact scanning and
+admitted typed filtering remain supported separately. Derived quantized planes
+retain their own contracts; primary int8 and BSON vector-index declarations are
+unsupported. These capability limits do not change frozen benchmark results.
+
 This guide explains how to choose TreeDB collection storage layouts, run the
 current typed-storage benchmarks/profiles, and interpret counters honestly.
 It is benchmark-adjacent documentation for a **pre-alpha** subsystem: APIs,

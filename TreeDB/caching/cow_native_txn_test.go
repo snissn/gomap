@@ -39,6 +39,51 @@ func TestCOWNativeProducerPressureCannotDiscountRetainedReservations(t *testing.
 	if backend.CommandWALNextLSN() != next || cache.cow.prepareCalls.Load() != prepared || cache.cow.prefix.LogicalFrontiers() != frontiers {
 		t.Fatal("pressure refusal prepared, assigned or installed a publication")
 	}
+	// A retained opening and external owner cannot be flushed away. Repeating
+	// producer admission with exactly the same debt must not run more no-op
+	// checkpoints, and must still preserve the original capacity refusal.
+	drainedRuns := cache.checkpointRuns.Load()
+	for i := 0; i < 3; i++ {
+		tx, err = backend.BeginNativeConditionalTxn()
+		if tx != nil || !errors.Is(err, memtable.ErrCOWCapacity) {
+			if tx != nil {
+				_ = tx.Close()
+			}
+			t.Fatalf("retained repeated admission %d: %v/%v", i, tx, err)
+		}
+	}
+	if got := cache.checkpointRuns.Load(); got != drainedRuns {
+		t.Fatalf("unchanged retained debt repeated checkpoints: before=%d after=%d", drainedRuns, got)
+	}
+	// Changed retained ownership permits one new drain, even though the old
+	// reader still pins the same logical image and byte pressure remains high.
+	fillBytes := cache.cow.budget.Limits().MaxInFlightBytes - before.ReservedBytes - leaseCharge
+	if err := filler.Resize(fillBytes - 8<<20); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.PrepareNativeProducer(); err != nil {
+		t.Fatal(err)
+	}
+	if got := cache.checkpointRuns.Load(); got != drainedRuns+1 {
+		t.Fatalf("changed ownership did not renew maintenance: before=%d after=%d", drainedRuns, got)
+	}
+	drainedRuns = cache.checkpointRuns.Load()
+	if err := backend.PrepareNativeProducer(); err != nil {
+		t.Fatal(err)
+	}
+	if cache.checkpointRuns.Load() != drainedRuns {
+		t.Fatal("unchanged renewed ownership repeated maintenance")
+	}
+	// New logical work must never be hidden by the old no-progress memory.
+	if err := cache.Set([]byte("new-pressure-work"), []byte("value")); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.PrepareNativeProducer(); err != nil {
+		t.Fatal(err)
+	}
+	if got := cache.checkpointRuns.Load(); got != drainedRuns+1 {
+		t.Fatalf("new logical work did not renew maintenance: before=%d after=%d", drainedRuns, got)
+	}
 	filler.Close()
 	tx, err = backend.BeginNativeConditionalTxn()
 	if err != nil {

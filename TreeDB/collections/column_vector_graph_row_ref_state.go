@@ -153,27 +153,65 @@ func prepareColumnVectorGraphRowRefStateAssets(assetRootDir, collection string, 
 	return prepareColumnVectorGraphRowRefStateAssetsWithStableAuthority(assetRootDir, collection, base, def, generation, firstPartID, rows, nil, false)
 }
 
+// Build and append one field at a time under the original family appender.
+// Only configuration/ref metadata survives each private constructor phase.
 func prepareColumnVectorGraphRowRefStateAssetsWithStableAuthority(assetRootDir, collection string, base ColumnStoreConfig, def VectorIndexDefinition, generation, firstPartID uint64, rows []columnVectorGraphAssetRow, authority *columnVectorGraphStableResourceAccumulator, inverseOnly bool) ([]columnVectorGraphPreparedRowRefStateAsset, error) {
-	payloads, err := prepareColumnVectorGraphRowRefStatePayloads(collection, base, def, generation, firstPartID, rows, inverseOnly)
-	if err != nil {
-		return nil, err
-	}
-	if len(payloads) == 0 {
+	if len(rows) == 0 {
 		return nil, nil
 	}
-	if assetRootDir == "" {
-		return nil, errors.New("collections: column_graph row-ref state requires asset root dir")
+	if generation == 0 || firstPartID == 0 {
+		return nil, errors.New("collections: column_graph row-ref state requires generation and first part_id")
 	}
-	appender, err := newColumnVectorGraphAssetAppender(assetRootDir, payloads[0].Config, authority)
+	fields := columnVectorGraphRowRefStateFields
+	if inverseOnly {
+		fields = fields[len(fields)-1:]
+	}
+	assets := make([]columnVectorGraphPreparedRowRefStateAsset, len(fields))
+	var appender *columnPhysicalAssetSegmentAppender
+	var err error
+	partID := firstPartID
+	for i, field := range fields {
+		assets[i], err = prepareAppendColumnVectorGraphRowRefStateAsset(assetRootDir, collection, base, def, generation, partID, field, rows, authority, &appender)
+		if err != nil {
+			break
+		}
+		if i != len(fields)-1 {
+			if partID == ^uint64(0) {
+				err = errors.New("collections: column_graph row-ref state part_id overflow")
+				break
+			}
+			partID = nextColumnVectorGraphPartIDAfter(partID, partID)
+		}
+	}
 	if err != nil {
-		return nil, err
+		if appender == nil {
+			return nil, err
+		}
+		appender.failed = true
+		return nil, errors.Join(err, closeColumnVectorGraphAssetAppender(appender, authority))
 	}
-	assets, appendErr := appendColumnVectorGraphRowRefStatePayloads(appender, generation, payloads)
-	closeErr := closeColumnVectorGraphAssetAppender(appender, authority)
-	if appendErr != nil {
-		return nil, errors.Join(appendErr, closeErr)
+	return assets, closeColumnVectorGraphAssetAppender(appender, authority)
+}
+
+func prepareAppendColumnVectorGraphRowRefStateAsset(assetRootDir, collection string, base ColumnStoreConfig, def VectorIndexDefinition, generation, partID uint64, field columnVectorGraphRowRefStateField, rows []columnVectorGraphAssetRow, authority *columnVectorGraphStableResourceAccumulator, appender **columnPhysicalAssetSegmentAppender) (columnVectorGraphPreparedRowRefStateAsset, error) {
+	values, err := columnVectorGraphRowRefStateValues(field, rows, generation)
+	if err != nil {
+		return columnVectorGraphPreparedRowRefStateAsset{}, err
 	}
-	return assets, closeErr
+	payload, err := prepareColumnVectorGraphRowRefStatePayloadFromValues(collection, base, def, partID, field, values)
+	if err != nil {
+		return columnVectorGraphPreparedRowRefStateAsset{}, err
+	}
+	if assetRootDir == "" {
+		return columnVectorGraphPreparedRowRefStateAsset{}, errors.New("collections: column_graph row-ref state requires asset root dir")
+	}
+	if *appender == nil {
+		*appender, err = newColumnVectorGraphAssetAppender(assetRootDir, payload.Config, authority)
+		if err != nil {
+			return columnVectorGraphPreparedRowRefStateAsset{}, err
+		}
+	}
+	return appendColumnVectorGraphRowRefStatePayload(*appender, generation, payload)
 }
 
 func prepareColumnVectorGraphRowRefStatePayloads(collection string, base ColumnStoreConfig, def VectorIndexDefinition, generation, firstPartID uint64, rows []columnVectorGraphAssetRow, inverseOnly bool) ([]columnVectorGraphPreparedRowRefStatePayload, error) {
@@ -271,39 +309,7 @@ func prepareColumnVectorGraphRowRefStatePayloadFromValues(collection string, bas
 	if err != nil {
 		return columnVectorGraphPreparedRowRefStatePayload{}, err
 	}
-	primaryIDs := make([]int64, len(values))
-	for rowIdx := range primaryIDs {
-		primaryIDs[rowIdx] = int64(rowIdx)
-	}
-	part, err := typedcolumn.BuildColumnPart(partID, typedcolumn.Options{
-		SchemaVersion: uint32(sourceCfg.SchemaHash),
-		SchemaMode:    typedcolumn.ColumnSchemaFixed,
-		Columns: []typedcolumn.ColumnDefinition{
-			{
-				Name:           typedColumnAdapterPrimaryIDColumn,
-				Type:           typedcolumn.ColumnTypeInt64,
-				Encoding:       typedcolumn.EncodingRawInt64,
-				Compression:    typedcolumn.CompressionNone,
-				CompressionSet: true,
-				StatsDisabled:  true,
-			},
-			adapterColumn.Definition,
-		},
-		LogicalPrimaryKey: typedcolumn.LogicalPrimaryKey{Columns: []string{typedColumnAdapterPrimaryIDColumn}},
-		SortKey:           typedcolumn.SortKey{Columns: []typedcolumn.SortKeyColumn{{Column: typedColumnAdapterPrimaryIDColumn}}},
-		PartPolicy:        typedcolumn.ColumnPartPolicy{RowsPerGranule: typedcolumn.DefaultRowsPerGranule},
-		Compression:       typedcolumn.ColumnCompressionPolicy{Default: typedcolumn.CompressionNone},
-	}, typedcolumn.Batch{
-		Rows: len(values),
-		Columns: map[string][]int64{
-			typedColumnAdapterPrimaryIDColumn: primaryIDs,
-			adapterColumn.Definition.Name:     values,
-		},
-	})
-	if err != nil {
-		return columnVectorGraphPreparedRowRefStatePayload{}, err
-	}
-	image, err := typedcolumn.BuildColumnPartImage(part, typedcolumn.ColumnPartImageOptions{
+	built, err := typedcolumn.BuildRawOrdinalColumnPartImage(partID, columnVectorGraphRawOrdinalOptions(sourceCfg, adapterColumn), typedcolumn.RawOrdinalColumnValues{Rows: len(values), Int64: values}, typedcolumn.ColumnPartImageOptions{
 		Dictionaries: typedColumnAdapterDictionaries([]typedColumnAdapterColumn{adapterColumn}),
 		LayoutLogicalTypes: map[string]string{
 			typedColumnAdapterPrimaryIDColumn: string(typedcolumn.ColumnTypeInt64),
@@ -313,10 +319,11 @@ func prepareColumnVectorGraphRowRefStatePayloadFromValues(collection string, bas
 	if err != nil {
 		return columnVectorGraphPreparedRowRefStatePayload{}, err
 	}
+	image := built.Image
 	if image.Rows != len(values) || image.PartID != partID {
 		return columnVectorGraphPreparedRowRefStatePayload{}, fmt.Errorf("collections: column_graph row-ref state %s image rows/part=(%d,%d) want (%d,%d)", field, image.Rows, image.PartID, len(values), partID)
 	}
-	accounting := part.ByteAccountingFromImage(image)
+	accounting := built.Accounting
 	return columnVectorGraphPreparedRowRefStatePayload{
 		Field:        field,
 		Config:       sourceCfg,
@@ -332,26 +339,34 @@ func prepareColumnVectorGraphRowRefStatePayloadFromValues(collection string, bas
 func appendColumnVectorGraphRowRefStatePayloads(appender *columnPhysicalAssetSegmentAppender, generation uint64, payloads []columnVectorGraphPreparedRowRefStatePayload) ([]columnVectorGraphPreparedRowRefStateAsset, error) {
 	assets := make([]columnVectorGraphPreparedRowRefStateAsset, len(payloads))
 	for i, payload := range payloads {
-		alignment := columnAssetSegmentPayloadAlignment(ColumnAssetKindTCS1TypedColumnPart, payload.Config)
-		ref, err := appender.appendKindWithAlignment(payload.Payload, ColumnAssetKindTCS1TypedColumnPart, generation, payload.PartID, alignment)
+		prepared, err := appendColumnVectorGraphRowRefStatePayload(appender, generation, payload)
 		if err != nil {
 			return nil, err
 		}
-		if err := validateColumnVectorGraphPreparedRowRefStateRef(payload, ref, generation); err != nil {
-			appender.failed = true
-			return nil, err
-		}
-		assets[i] = columnVectorGraphPreparedRowRefStateAsset{
-			Field:        payload.Field,
-			Config:       payload.Config,
-			Ref:          ref,
-			Bytes:        ref.Length,
-			Rows:         payload.Rows,
-			PaddingBytes: payload.PaddingBytes,
-			SchemaHash:   payload.SchemaHash,
-		}
+		assets[i] = prepared
 	}
 	return assets, nil
+}
+
+func appendColumnVectorGraphRowRefStatePayload(appender *columnPhysicalAssetSegmentAppender, generation uint64, payload columnVectorGraphPreparedRowRefStatePayload) (columnVectorGraphPreparedRowRefStateAsset, error) {
+	alignment := columnAssetSegmentPayloadAlignment(ColumnAssetKindTCS1TypedColumnPart, payload.Config)
+	ref, err := appender.appendKindWithAlignment(payload.Payload, ColumnAssetKindTCS1TypedColumnPart, generation, payload.PartID, alignment)
+	if err != nil {
+		return columnVectorGraphPreparedRowRefStateAsset{}, err
+	}
+	if err := validateColumnVectorGraphPreparedRowRefStateRef(payload, ref, generation); err != nil {
+		appender.failed = true
+		return columnVectorGraphPreparedRowRefStateAsset{}, err
+	}
+	return columnVectorGraphPreparedRowRefStateAsset{
+		Field:        payload.Field,
+		Config:       payload.Config,
+		Ref:          ref,
+		Bytes:        ref.Length,
+		Rows:         payload.Rows,
+		PaddingBytes: payload.PaddingBytes,
+		SchemaHash:   payload.SchemaHash,
+	}, nil
 }
 
 func validateColumnVectorGraphPreparedRowRefStateRef(payload columnVectorGraphPreparedRowRefStatePayload, ref ColumnAssetRef, generation uint64) error {

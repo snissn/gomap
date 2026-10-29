@@ -4,8 +4,10 @@ import (
 	"errors"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/tree"
 )
 
 // MarkNativeSemanticBuildRecoveryRequired fences the original backend before
@@ -55,6 +57,29 @@ func (group *RootPublicationBuildGroup) buildNativeOrderedRootLocked(input Order
 	group.mergeValueLogRefDeltaLocked(delta)
 	releaseValueLogRefDelta(delta)
 	group.pinBatchValueLogSegmentsLocked(input.Delta)
+	// Replace superseded outputs in-place. A fifth distinct current output
+	// evicts only the oldest READ capability; original construction is unchanged.
+	if root != input.BaseRoot {
+		count := int(group.nativeBuiltRootCount)
+		for i := 0; i < count; i++ {
+			if group.nativeBuiltRoots[i] != input.BaseRoot {
+				continue
+			}
+			copy(group.nativeBuiltRoots[i:count-1], group.nativeBuiltRoots[i+1:count])
+			count--
+			group.nativeBuiltRoots[count] = 0
+			break
+		}
+		if root != 0 {
+			if count == len(group.nativeBuiltRoots) {
+				copy(group.nativeBuiltRoots[:count-1], group.nativeBuiltRoots[1:count])
+				count--
+			}
+			group.nativeBuiltRoots[count] = root
+			count++
+		}
+		group.nativeBuiltRootCount = uint8(count)
+	}
 	group.retired = append(group.retired, retired...)
 	mergeOrderedRootPublishMetrics(&group.metrics, metrics)
 	return root, nil
@@ -173,4 +198,63 @@ func (group *RootPublicationBuildGroup) AppendNativeValueLogValues(values [][]by
 	}
 	group.db.ReleaseValueLogValues(ptrs)
 	return ptrs, nil
+}
+
+// WithNativeConstructionRoots borrows current roots produced by this same
+// group synchronously, restricted to its four newest current outputs. Evicted,
+// superseded and foreign roots refuse; zero denotes an empty tree.
+// The original basis owns old files; durablePublishMu
+// excludes reclamation and the maintained Manager reads newly registered leaf
+// segments through its writable-read barrier. No Snapshot is acquired.
+// visit must not retain an iterator or its borrowed key/value views.
+func (group *RootPublicationBuildGroup) WithNativeConstructionRoots(roots []uint64, visit func([]iterator.UnsafeIterator) error) (resultErr error) {
+	if group == nil {
+		return ErrNativeSemanticUnsupported
+	}
+	group.mu.Lock()
+	defer group.mu.Unlock()
+	if group.db == nil || group.closed || group.failed || !group.writeLocked || !group.durablePublishLocked || group.tracker == nil || group.idx == nil || group.capturedBasis == nil || visit == nil || len(roots) > len(group.nativeBuiltRoots) {
+		return ErrNativeSemanticUnsupported
+	}
+	for _, root := range roots {
+		if root == 0 {
+			continue
+		}
+		found := false
+		for _, owned := range group.nativeBuiltRoots[:group.nativeBuiltRootCount] {
+			if root == owned {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return ErrRootPublicationBasisMismatch
+		}
+	}
+	// Make freshly appended leaf segments available through the SAME maintained
+	// Manager/barrier; this registers physical files without selecting any catalog.
+	if _, err := group.db.registerLeafPageLogSegmentsForPublish(); err != nil {
+		return err
+	}
+	var readerStorage [4]iterator.UnsafeIterator
+	readers := readerStorage[:len(roots)]
+	defer func() {
+		for _, it := range readers {
+			if it != nil {
+				resultErr = errors.Join(resultErr, it.Close())
+			}
+		}
+		clear(readers)
+	}()
+	for i, root := range roots {
+		if root == 0 {
+			continue
+		}
+		tr := tree.New(group.idx.pager, newValueReader(group.db.valueLogManager), root)
+		readers[i] = tr.Iterator(nil, nil)
+		if err := readers[i].Error(); err != nil {
+			return err
+		}
+	}
+	return visit(readers)
 }

@@ -10,7 +10,33 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/documentservice"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
+	"github.com/snissn/gomap/TreeDB/internal/raftcluster"
 )
+
+func TestErrorCodeForNativeSemanticUnsupported(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want iwire.ErrorCode
+	}{
+		{"unsupported", backenddb.ErrNativeSemanticUnsupported, iwire.ErrUnsupportedFeature},
+		{"metadata_wrapped", metadataWrap(backenddb.ErrNativeSemanticUnsupported), iwire.ErrUnsupportedFeature},
+		{"ambiguous", errors.Join(backenddb.ErrNativeSemanticUnsupported, collections.ErrCommitAmbiguous), iwire.ErrCommitAmbiguous},
+		{"raft_ambiguous", errors.Join(backenddb.ErrNativeSemanticUnsupported, raftcluster.ErrCommitAmbiguous), iwire.ErrCommitAmbiguous},
+		{"recovery", errors.Join(backenddb.ErrNativeSemanticUnsupported, collections.ErrRecoveryRequired), iwire.ErrDurabilityUnavailable},
+		{"backend_recovery", errors.Join(backenddb.ErrNativeSemanticUnsupported, backenddb.ErrRecoveryRequired), iwire.ErrDurabilityUnavailable},
+		{"documentservice_recovery", &documentservice.Error{Code: documentservice.CodeRecoveryRequired, Err: backenddb.ErrNativeSemanticUnsupported}, iwire.ErrDurabilityUnavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := errorCodeFor(tc.err); got != tc.want {
+				t.Errorf("errorCodeFor(%v)=%d want=%d", tc.err, got, tc.want)
+			}
+			if retryableError(tc.err, tc.want) {
+				t.Errorf("unsupported or uncertain mutation outcome must not be retryable: %v", tc.err)
+			}
+		})
+	}
+}
 
 func TestErrorCodeForMutationOutcomeOutranksContext(t *testing.T) {
 	if got := errorCodeFor(errors.Join(collections.ErrCommitAmbiguous, context.Canceled)); got != iwire.ErrCommitAmbiguous {

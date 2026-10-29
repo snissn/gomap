@@ -1,0 +1,50 @@
+File: documentservice.test
+Build ID: 46f165d1cd4e65321e0b73e41c0d81b9784f3bf1
+Type: alloc_space
+Time: 2026-10-26 14:12:53 HST
+Active filters:
+   focus=UpsertDocuments
+Showing nodes accounting for 105MB, 26.26% of 399.81MB total
+Dropped 1185 nodes (cum <= 2MB)
+Showing top 40 nodes out of 295
+      flat  flat%   sum%        cum   cum%
+   14.10MB  3.53%  3.53%    14.10MB  3.53%  github.com/snissn/gomap/TreeDB/internal/rootpublication.newResourceAllocation
+    8.28MB  2.07%  5.60%     8.28MB  2.07%  github.com/snissn/gomap/TreeDB/batch.NewBoundedRetainingLargeEntries (inline)
+    5.25MB  1.31%  6.91%     7.19MB  1.80%  encoding/json.(*decodeState).objectInterface
+    4.96MB  1.24%  8.15%     7.64MB  1.91%  github.com/snissn/gomap/TreeDB/internal/rootpublication.newImportedResourceToken
+    4.91MB  1.23%  9.38%     4.91MB  1.23%  github.com/snissn/gomap/TreeDB/internal/cowbtree.(*Map[go.shape.string,go.shape.string]).growItems
+    4.51MB  1.13% 10.51%     7.52MB  1.88%  github.com/snissn/gomap/TreeDB/internal/rootpublication.cloneOwnedResourceObligationIndex
+    4.51MB  1.13% 11.64%     4.51MB  1.13%  bufio.NewReaderSize (inline)
+       4MB  1.00% 12.64%        4MB  1.00%  encoding/json.(*Decoder).refill
+       4MB  1.00% 13.64%        4MB  1.00%  github.com/snissn/gomap/TreeDB/internal/valuelog.getWriterAppendBuf
+    3.60MB   0.9% 14.54%     3.62MB   0.9%  github.com/tidwall/btree.(*Map[go.shape.string,go.shape.struct { github.com/snissn/gomap/TreeDB/internal/memtable.value []uint8; github.com/snissn/gomap/TreeDB/internal/memtable.ptr github.com/snissn/gomap/TreeDB/page.ValuePtr; github.com/snissn/gomap/TreeDB/internal/memtable.revision github.com/snissn/gomap/TreeDB/page.EntryRevision; github.com/snissn/gomap/TreeDB/internal/memtable.flags uint8 }]).nodeSet
+    3.50MB  0.88% 15.42%     3.50MB  0.88%  github.com/snissn/gomap/TreeDB/collections.newTextV2DocumentPostingAccumulator (inline)
+    2.96MB  0.74% 16.16%     2.96MB  0.74%  internal/bytealg.MakeNoZero
+    2.69MB  0.67% 16.83%     2.81MB   0.7%  github.com/snissn/gomap/TreeDB/collections.nativeTextPrepareCurrent
+    2.54MB  0.64% 17.46%     2.54MB  0.64%  github.com/snissn/gomap/TreeDB/internal/commitlog.writeInitializedFixedWAL
+    2.50MB  0.63% 18.09%     2.50MB  0.63%  encoding/json.NewDecoder (inline)
+    2.50MB  0.62% 18.71%     2.50MB  0.62%  bytes.Clone (inline)
+    2.13MB  0.53% 19.25%     2.13MB  0.53%  github.com/snissn/gomap/TreeDB/db.(*leafPageReadCacheSlot).storeLockedWithRecordChecksumState
+    1.89MB  0.47% 19.72%     2.83MB  0.71%  github.com/snissn/gomap/TreeDB/collections.nativeTextTables
+    1.78MB  0.45% 20.17%     9.99MB  2.50%  github.com/snissn/gomap/TreeDB/collections.nativeJSONFinalRowsResolved
+    1.68MB  0.42% 20.59%     4.77MB  1.19%  github.com/snissn/gomap/TreeDB/internal/rootpublication.cloneOwnedResourcePhysical
+    1.64MB  0.41% 20.99%     2.21MB  0.55%  github.com/snissn/gomap/TreeDB/collections.extractNativeInsertEffectsAndText
+    1.49MB  0.37% 21.37%     1.56MB  0.39%  github.com/snissn/gomap/TreeDB/collections.(*NativeJSONTxn).trackDependency
+    1.49MB  0.37% 21.74%     2.30MB  0.58%  github.com/snissn/gomap/TreeDB/internal/rootpublication.newResourceEntryBacking
+    1.41MB  0.35% 22.09%     1.48MB  0.37%  github.com/snissn/gomap/TreeDB/collections.extractColumnDeclaredRowsFromRootJSONDocumentsFastPath
+    1.40MB  0.35% 22.45%     1.40MB  0.35%  github.com/snissn/gomap/TreeDB/collections.(*textV2PostingBatchBuilder).finishDocument (inline)
+    1.37MB  0.34% 22.79%     4.12MB  1.03%  github.com/snissn/gomap/TreeDB/internal/rootpublication.cloneOwnedResourceLogical
+    1.35MB  0.34% 23.13%     1.35MB  0.34%  internal/stringslite.Clone (inline)
+    1.31MB  0.33% 23.45%     1.31MB  0.33%  github.com/snissn/gomap/TreeDB/documentservice.cloneMeta
+    1.22MB   0.3% 23.76%     1.22MB   0.3%  github.com/snissn/gomap/TreeDB/internal/rootpublication.newOwnedStableResourceEntryLeaf
+    1.08MB  0.27% 24.03%     1.08MB  0.27%  github.com/snissn/gomap/TreeDB/internal/rootpublication.concatOwnedAdmittedStableResourceEntryNodes
+    1.06MB  0.27% 24.29%     3.10MB  0.77%  github.com/snissn/gomap/TreeDB/internal/rootpublication.combineResourceFieldCells
+    1.02MB  0.26% 24.55%     3.12MB  0.78%  github.com/snissn/gomap/TreeDB/documentservice.prepareDocumentsForWrite
+    1.01MB  0.25% 24.80%     1.61MB   0.4%  github.com/snissn/gomap/TreeDB/internal/rootpublication.NormalizeStableLogicalObligationRequirements
+    0.92MB  0.23% 25.03%     0.92MB  0.23%  github.com/snissn/gomap/TreeDB/internal/valuelog.getDecodeScratch
+    0.87MB  0.22% 25.25%     4.27MB  1.07%  github.com/snissn/gomap/TreeDB/internal/commitlog.loadFixedWAL
+    0.83MB  0.21% 25.46%    11.58MB  2.90%  github.com/snissn/gomap/TreeDB/collections.(*nativeTypedMaterialization).materializeDelta
+    0.81MB   0.2% 25.66%     1.38MB  0.34%  github.com/snissn/gomap/TreeDB/collections.encodeTextV2PositionValue
+    0.81MB   0.2% 25.87%     0.81MB   0.2%  github.com/snissn/gomap/TreeDB/collections.encodeTextV2PostingBlockValueFromSorted
+    0.81MB   0.2% 26.07%   135.95MB 34.00%  github.com/snissn/gomap/TreeDB/documentservice.(*Service).upsertDocuments
+    0.78MB  0.19% 26.26%     0.78MB  0.19%  github.com/snissn/gomap/TreeDB/internal/memtable.newCOWGenerationWithConstruction

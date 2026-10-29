@@ -130,6 +130,23 @@ func m3RetainDiagnostic(kind string, raw []byte, excludedRoots ...string) (resul
 	return file.Sync()
 }
 
+// Neither output destination owns validation or the other destination's attempt.
+// In particular, a failed ordinary report write must not discard an externally
+// retained report or hide its original gate/diagnostic failures.
+func m3WriteAndRetainPartitionIndexReport(path string, report m3PartitionIndexReport, raw []byte) error {
+	writeErr := os.WriteFile(path, raw, 0644)
+	measuredDirs := make([]string, 0, 2*len(report.Rows))
+	for _, row := range report.Rows {
+		for _, diagnostic := range []m3FootprintDiagnostic{row.SourceFootprintDiagnostic, row.FinalFootprintDiagnostic} {
+			if diagnostic.DatabaseDirectory != "" {
+				measuredDirs = append(measuredDirs, diagnostic.DatabaseDirectory)
+			}
+		}
+	}
+	retainErr := m3RetainDiagnostic("report", raw, measuredDirs...)
+	return errors.Join(validateM3PartitionIndexReport(report), m3FootprintDiagnosticErrors(report), writeErr, retainErr)
+}
+
 func m3FootprintDiagnosticErrors(report m3PartitionIndexReport) error {
 	var errs []error
 	for _, row := range report.Rows {

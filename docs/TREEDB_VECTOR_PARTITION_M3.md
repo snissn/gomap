@@ -392,32 +392,48 @@ later milestones.
 M3 reports include `source_footprint_diagnostic` and
 `final_footprint_diagnostic` at the existing closed-directory measurement
 boundaries. Each records relative file lengths, the total measured bytes,
-both durable root-slot identities and applied command LSNs, selected slot,
+both last observed runtime root-slot identities and applied command LSNs,
+last runtime-selected slot,
 durable WAL LSN, remaining segment frame/LSN intervals, cumulative cleanup
-reason counters, and the last cleanup error. Post-close segment classifications
-are observations, not deletion authority or the decisions of a specific
+reason counters, and the existing terminal close/cleanup errors. This capture
+does not retain the text of each earlier cleanup error. The post-close proof
+assessment is reported separately as `proof_error`; it does not identify the
+proof or error observed by a particular historical cleanup attempt. Post-close
+segment classifications are observations, not deletion authority or the decisions of a specific
 cleanup attempt. An unavailable proof can be a legitimate conservative
 retention result. In that case inspection inventories remaining segment frames
 without asserting any replay lower bound or missing historical prefix.
 `replay_lineage_validated` is false; lineage validation runs only when the
-captured cleanup proof supplies valid replay bounds.
+captured cleanup proof supplies valid replay bounds. Root fields are explicitly
+labeled as closed-handle runtime observations, not persisted-slot readback or a
+new recovery selection. Publication or command-WAL flush poison makes the proof
+unavailable and all segment coverage/lineage assertions false, while the file and
+frame inventory remains available. Teardown clearing ambiguous candidates cannot
+turn a poisoned handle into recovery authority.
 
 Set `GOMAP_M3_DIAGNOSTICS_DIR` to a directory outside every measured database
 to retain each boundary snapshot and the complete report independently of
-benchmark/test temporary-directory cleanup. Before creating directories or files, the destination and measured roots are
+benchmark/test temporary-directory cleanup. The forced-retention control test
+also retains its observations in a unique subdirectory when this variable is set. Before creating directories or files, the destination and measured roots are
 resolved through existing filesystem symlinks and ancestors; writes use that
 resolved destination. An alias into a measured database is rejected. Files have unique names per
 observation; `database_directory`, generation, overlap ratio and source identity
 associate snapshots with report rows. Root CI uploads this directory after the
 test step, including failed jobs. A diagnostic or retention error fails the
-stage after the ordinary report is written and validated, preserving any
-original gate failure alongside it. The focused test also logs its completed
+stage with the original validation error. Ordinary report writing, external
+retention, and validation are all attempted independently: a failed ordinary
+report write still retains the complete external report when that destination
+works, and the returned error joins the write, validation, diagnostic, and
+retention failures. The focused test also logs its completed
 report before temporary-directory cleanup on failure.
 
 This instrumentation does not change the 1.35x gate, fixture, or accounting:
 every DB file, including preallocated WAL reserve, remains in the physical
 footprint. Retained variant descriptors continue to be added after the final
 closed-directory boundary as documented by `variant_descriptor_bytes`.
+Inspection requires Close to have returned and excludes concurrent Close,
+reopen, or directory modification. It reads the existing terminal fields and
+cleanup counters without adding fields to DB or writes to cleanup/close paths.
 Diagnostic scans add observation overhead, so these changes establish capture
 behavior rather than a performance improvement. The two historical 87.544638x
 CI failures in issue #5294 remain unexplained by direct file evidence; an extra

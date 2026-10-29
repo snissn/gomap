@@ -58,7 +58,7 @@ func TestServiceOverheadParityRows(t *testing.T) {
 			t.Fatalf("%s/%s p50=%f p99=%f invalid percentiles", row.Lane, row.Path, row.P50Millis, row.P99Millis)
 		}
 	}
-	for _, lane := range []string{"filtered_hybrid", "ann_dense"} {
+	for _, lane := range []string{"hybrid_unfiltered_ann_fp32", "dense_ann_unfiltered_fp32"} {
 		direct, ok := byKey[lane+"/direct_collection_api"]
 		if !ok {
 			t.Fatalf("missing direct row for %s", lane)

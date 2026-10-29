@@ -133,10 +133,8 @@ func prepareColumnVectorGraphInvNormStatePayload(collection string, base ColumnS
 	if partID == 0 {
 		return columnVectorGraphPreparedInvNormStatePayload{}, errors.New("collections: column_graph inv_norm state requires non-zero part_id")
 	}
-	primaryIDs := make([]int64, len(rows))
 	invNorms := make([]float32, len(rows))
 	for ordinal, row := range rows {
-		primaryIDs[ordinal] = int64(ordinal)
 		invNorm, err := columnVectorGraphInvNorm(row.Vector)
 		if err != nil {
 			return columnVectorGraphPreparedInvNormStatePayload{}, fmt.Errorf("collections: column_graph inv_norm state ordinal=%d: %w", ordinal, err)
@@ -146,37 +144,7 @@ func prepareColumnVectorGraphInvNormStatePayload(collection string, base ColumnS
 		}
 		invNorms[ordinal] = invNorm
 	}
-	part, err := typedcolumn.BuildColumnPart(partID, typedcolumn.Options{
-		SchemaVersion: uint32(cfg.SchemaHash),
-		SchemaMode:    typedcolumn.ColumnSchemaFixed,
-		Columns: []typedcolumn.ColumnDefinition{
-			{
-				Name:           typedColumnAdapterPrimaryIDColumn,
-				Type:           typedcolumn.ColumnTypeInt64,
-				Encoding:       typedcolumn.EncodingRawInt64,
-				Compression:    typedcolumn.CompressionNone,
-				CompressionSet: true,
-				StatsDisabled:  true,
-			},
-			adapterColumn.Definition,
-		},
-		LogicalPrimaryKey: typedcolumn.LogicalPrimaryKey{Columns: []string{typedColumnAdapterPrimaryIDColumn}},
-		SortKey:           typedcolumn.SortKey{Columns: []typedcolumn.SortKeyColumn{{Column: typedColumnAdapterPrimaryIDColumn}}},
-		PartPolicy:        typedcolumn.ColumnPartPolicy{RowsPerGranule: typedcolumn.DefaultRowsPerGranule},
-		Compression:       typedcolumn.ColumnCompressionPolicy{Default: typedcolumn.CompressionNone},
-	}, typedcolumn.Batch{
-		Rows: len(rows),
-		Columns: map[string][]int64{
-			typedColumnAdapterPrimaryIDColumn: primaryIDs,
-		},
-		Float32Columns: map[string][]float32{
-			adapterColumn.Definition.Name: invNorms,
-		},
-	})
-	if err != nil {
-		return columnVectorGraphPreparedInvNormStatePayload{}, err
-	}
-	image, err := typedcolumn.BuildColumnPartImage(part, typedcolumn.ColumnPartImageOptions{
+	built, err := typedcolumn.BuildRawOrdinalColumnPartImage(partID, columnVectorGraphRawOrdinalOptions(cfg, adapterColumn), typedcolumn.RawOrdinalColumnValues{Rows: len(rows), Float32: invNorms}, typedcolumn.ColumnPartImageOptions{
 		Dictionaries: typedColumnAdapterDictionaries([]typedColumnAdapterColumn{adapterColumn}),
 		LayoutLogicalTypes: map[string]string{
 			typedColumnAdapterPrimaryIDColumn: string(typedcolumn.ColumnTypeInt64),
@@ -186,10 +154,11 @@ func prepareColumnVectorGraphInvNormStatePayload(collection string, base ColumnS
 	if err != nil {
 		return columnVectorGraphPreparedInvNormStatePayload{}, err
 	}
+	image := built.Image
 	if image.Rows != len(rows) || image.PartID != partID {
 		return columnVectorGraphPreparedInvNormStatePayload{}, fmt.Errorf("collections: column_graph inv_norm state image rows/part=(%d,%d) want (%d,%d)", image.Rows, image.PartID, len(rows), partID)
 	}
-	accounting := part.ByteAccountingFromImage(image)
+	accounting := built.Accounting
 	return columnVectorGraphPreparedInvNormStatePayload{
 		Config:       cfg,
 		PartID:       partID,
@@ -369,13 +338,14 @@ func newColumnVectorGraphInvNormStateSourceFromRaw(rootDir, collection string, d
 	if image.PartID != asset.Ref.PartID || image.Rows != asset.RowCount {
 		return nil, typeddecode.ReasonRowCountMismatch, fmt.Errorf("collections: column_graph %q inv_norm state image part/rows=(%d,%d) want (%d,%d)", def.Name, image.PartID, image.Rows, asset.Ref.PartID, asset.RowCount)
 	}
-	fields := columnStoreTypedColumnPartFields(sourceCfg)
-	adapterPart, err := typedColumnAdapterPartFromImageWithoutRowLocators(typedColumnAdapterOptions{Fields: fields, SchemaVersion: uint32(sourceCfg.SchemaHash)}, image)
+	// Norm validation consumes only its raw float32 column. Reuse the same
+	// all-schema projection as graph vectors; unused metadata is not decoded.
+	part, err := columnVectorGraphTypedColumnProjectionPart(sourceCfg, image)
 	if err != nil {
 		return nil, typeddecode.ReasonValidationFailed, err
 	}
-	if adapterPart.Part.Descriptor.SchemaVersion != uint32(sourceCfg.SchemaHash) {
-		return nil, typeddecode.ReasonValidationFailed, fmt.Errorf("collections: column_graph %q inv_norm state schema_version=%d want %d", def.Name, adapterPart.Part.Descriptor.SchemaVersion, uint32(sourceCfg.SchemaHash))
+	if part.Descriptor.SchemaVersion != uint32(sourceCfg.SchemaHash) {
+		return nil, typeddecode.ReasonValidationFailed, fmt.Errorf("collections: column_graph %q inv_norm state schema_version=%d want %d", def.Name, part.Descriptor.SchemaVersion, uint32(sourceCfg.SchemaHash))
 	}
 	certification, err := typedcolumn.CertifyColumnPartLayoutContractFromImage(image)
 	if err != nil {
@@ -389,7 +359,7 @@ func newColumnVectorGraphInvNormStateSourceFromRaw(rootDir, collection string, d
 	if err != nil {
 		return nil, typeddecode.ReasonValidationFailed, err
 	}
-	if err := validateColumnVectorGraphInvNormStateSection(adapterPart.Part, section, certColumn, adapterColumn.Definition.Name, asset.RowCount); err != nil {
+	if err := validateColumnVectorGraphInvNormStateSection(part, section, certColumn, adapterColumn.Definition.Name, asset.RowCount); err != nil {
 		return nil, typeddecode.ReasonValidationFailed, err
 	}
 	sectionBytes, err := image.SectionBytes(section)

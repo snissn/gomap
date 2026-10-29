@@ -83,9 +83,10 @@ func TestNativeExistingCollectionPublicLifecycle(t *testing.T) {
 			if _, e := collection.CreateIndex(collections.IndexDefinition{Name: "blocked"}); e == nil {
 				t.Fatal("unsupported index accepted")
 			}
-			// Scalar compound indexes are supported; text metadata remains ineligible.
-			if _, e := manager.CreateCollection(&collections.CollectionMeta{Name: "blocked", Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}, Indexes: []collections.IndexDefinition{{Name: "compound", ValueType: collections.IndexValueBSONOrderedV2, Components: []collections.IndexComponent{{Field: "x", Direction: collections.IndexDirectionAscending}, {Field: "y", Direction: collections.IndexDirectionAscending}}}}, TextIndexes: []collections.TextIndexDefinition{{Name: "lexical", Version: collections.TextIndexVersionV1, Analyzer: collections.TextAnalyzerSimple, Fields: []collections.TextIndexField{{Field: "body"}}}}}); !errors.Is(e, backenddb.ErrNativeSemanticUnsupported) {
-				t.Fatalf("unsupported text metadata admission: %v", e)
+			// BSON compound and V1 text are supported; explicit ordered multikey remains
+			// ineligible and must preserve the same no-effect refusal frontier.
+			if _, e := manager.CreateCollection(&collections.CollectionMeta{Name: "blocked", Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}, Indexes: []collections.IndexDefinition{{Name: "ordered_multikey", ValueType: collections.IndexValueBSONOrderedV2, MultiKey: true, Components: []collections.IndexComponent{{Field: "x", Direction: collections.IndexDirectionAscending}}}}, TextIndexes: []collections.TextIndexDefinition{{Name: "lexical", Version: collections.TextIndexVersionV1, Analyzer: collections.TextAnalyzerSimple, Fields: []collections.TextIndexField{{Field: "body"}}}}}); !errors.Is(e, backenddb.ErrNativeSemanticUnsupported) {
+				t.Fatalf("unsupported explicit ordered multikey metadata admission: %v", e)
 			}
 			if backend.CommandWALNextLSN() != assignedBefore {
 				t.Fatal("unsupported operation assigned WAL")

@@ -213,6 +213,50 @@ func TestColumnVectorGraphPreparedSearchNonMmapCompatibility2045(t *testing.T) {
 	assertColumnVectorGraphDebugCountersZero2126(t, stats)
 }
 
+// This control uses a real rebuilt collection and the public bound searcher.
+// Its existing reader seam forces non-mmap compatibility; full public service
+// and nativewire platform parity is covered by their actual Windows execution.
+func TestColumnVectorGraphPublicSearcherNonMmapCompatibilityRoute(t *testing.T) {
+	rows := columnGraphRebuildSyntheticRowsV2A(24, 8)
+	_, d, col, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 8, 4, rows)
+	defer func() { _ = d.Close() }()
+	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
+		t.Fatal(err)
+	}
+	searcher, err := col.OpenVectorIndexSearcher(VectorIndexSearcherOptions{IndexName: def.Name, MaxDecodedBlocks: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = searcher.Close() }()
+	forceColumnVectorGraphPreparedSearchNonMmapCompatibility2045(searcher.reader)
+	if err := maybePrepareColumnVectorGraphPreparedSearchView(searcher.reader); err != nil {
+		t.Fatal(err)
+	}
+	if searcher.reader.preparedSearch != nil {
+		t.Fatal("non-mmap reader unexpectedly retained prepared search")
+	}
+	// Open normally captures these counters once from its reader. Recapture
+	// after the test-only source transition, before running the real traversal.
+	searcher.routeStats = vectorIndexSearchRouteStatsForColumnGraphReader(searcher.reader)
+	query := append([]float32(nil), rows[5].vector...)
+	got, err := searcher.Search(VectorIndexSearcherSearchOptions{
+		Query: query, TopK: 5, EfSearch: len(rows), IncludeDocuments: true,
+		StatsMode: VectorIndexSearchStatsModeMinimal,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertColumnGraphSearchResponseLoadedV4(t, got, def.Name, 5)
+	assertVectorIndexSearchResultsV4(t, got.Results, exactColumnGraphTopKForTest(t, rows, query, 5), true)
+	stats := got.Stats
+	if stats.SearchRouteColumnGraphFallback != 1 || stats.SearchRouteColumnGraphPrepared != 0 || stats.SearchRouteHNSWSearchPack != 0 || stats.PreparedGraphSearchViews != 0 || stats.GraphRowFallbacks != 0 || stats.ResultIDGraphFallbacks != 0 {
+		t.Fatalf("non-mmap compatibility route proof=%+v", stats)
+	}
+	if stats.Candidates == 0 || stats.Edges == 0 || stats.DocumentsFetched != uint64(len(got.Results)) || stats.VectorHeapCopyTypedViews+stats.VectorScratchDecodes == 0 || stats.NormHeapCopyTypedViews+stats.NormScratchDecodes == 0 {
+		t.Fatalf("non-mmap public search omitted traversal/materialization work: %+v", stats)
+	}
+}
+
 func TestColumnVectorGraphPreparedSearchNonMmapWarmScratchZeroAllocs3996(t *testing.T) {
 	if collectionsRaceEnabled {
 		t.Skip("exact allocation counts are unstable under race instrumentation")
@@ -244,6 +288,7 @@ func TestColumnVectorGraphPreparedSearchNonMmapWarmScratchZeroAllocs3996(t *test
 	if !enterIsolatedVectorAllocationGate(t, "non-mmap-native-search-warm-scratch") {
 		return
 	}
+	completeVectorAllocationSetup(t, d)
 	var searchErr error
 	allocs := testing.AllocsPerRun(1000, func() {
 		got, _, err := reader.SearchCosine(query, options, &scratch)

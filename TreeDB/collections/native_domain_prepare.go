@@ -63,6 +63,7 @@ func prepareNativeDomainUpdate(base *nativeDomainState, name string, baseRoot, i
 		return nil, err
 	}
 	if base != nil {
+		domain.catalogRoot = base.catalogRoot
 		domain.sourceGeneration = base.sourceGeneration
 		base.typed.retain()
 		domain.typed = base.typed

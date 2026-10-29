@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"unsafe"
+
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
 
 var ErrTextIndexStorageCorrupt = errors.New("collections: malformed text index storage")
@@ -417,6 +420,13 @@ func encodeTextDocumentStateValue(value textDocumentStateValue) []byte {
 }
 
 func decodeTextDocumentStateValue(raw []byte) (textDocumentStateValue, error) {
+	return decodeTextDocumentStateValueAdmitted(raw, nil)
+}
+
+// The identical parser and malformed guards serve both paths. Admission is
+// cumulative on the original phase receipt; a partial failure returns no state
+// and leaves every successful prefix charged until the enclosing owner ends.
+func decodeTextDocumentStateValueAdmitted(raw []byte, admit func(uint64) error) (textDocumentStateValue, error) {
 	if len(raw) == 0 {
 		return textDocumentStateValue{}, errMalformedTextStorage("empty text-state value")
 	}
@@ -424,6 +434,7 @@ func decodeTextDocumentStateValue(raw []byte) (textDocumentStateValue, error) {
 		return textDocumentStateValue{}, errUnsupportedTextStorageVersion("text-state value", raw[0])
 	}
 	cur := textCursor{buf: raw[1:]}
+	allocation := textDecodeAdmission{admit: admit}
 	fieldCount, err := cur.readUvarint()
 	if err != nil {
 		return textDocumentStateValue{}, errMalformedTextStorage("text-state field count: %v", err)
@@ -431,10 +442,16 @@ func decodeTextDocumentStateValue(raw []byte) (textDocumentStateValue, error) {
 	if fieldCount > uint64(cur.remaining()+1) {
 		return textDocumentStateValue{}, errMalformedTextStorage("text-state field count too large")
 	}
+	if err := allocation.array(fieldCount, uint64(unsafe.Sizeof(textDocumentFieldState{}))); err != nil {
+		return textDocumentStateValue{}, err
+	}
 	value := textDocumentStateValue{Fields: make([]textDocumentFieldState, 0, fieldCount)}
 	for i := uint64(0); i < fieldCount; i++ {
-		fieldName, err := cur.readString()
+		fieldName, err := cur.readStringAdmitted(&allocation)
 		if err != nil {
+			if allocation.err != nil {
+				return textDocumentStateValue{}, allocation.err
+			}
 			return textDocumentStateValue{}, errMalformedTextStorage("text-state field[%d] name: %v", i, err)
 		}
 		length, err := cur.readUvarint()
@@ -451,10 +468,16 @@ func decodeTextDocumentStateValue(raw []byte) (textDocumentStateValue, error) {
 		if termCount > uint64(cur.remaining()+1) {
 			return textDocumentStateValue{}, errMalformedTextStorage("text-state field[%d] term count too large", i)
 		}
+		if err := allocation.array(termCount, uint64(unsafe.Sizeof(textDocumentTermState{}))); err != nil {
+			return textDocumentStateValue{}, err
+		}
 		field := textDocumentFieldState{Field: fieldName, Length: uint32(length), Terms: make([]textDocumentTermState, 0, termCount)}
 		for j := uint64(0); j < termCount; j++ {
-			termName, err := cur.readString()
+			termName, err := cur.readStringAdmitted(&allocation)
 			if err != nil {
+				if allocation.err != nil {
+					return textDocumentStateValue{}, allocation.err
+				}
 				return textDocumentStateValue{}, errMalformedTextStorage("text-state field[%d] term[%d] name: %v", i, j, err)
 			}
 			freq, err := cur.readUvarint()
@@ -464,12 +487,18 @@ func decodeTextDocumentStateValue(raw []byte) (textDocumentStateValue, error) {
 			if uint64(checkedTextUint32(freq)) != freq {
 				return textDocumentStateValue{}, errMalformedTextStorage("text-state field[%d] term[%d] frequency overflows uint32", i, j)
 			}
-			positions, err := cur.readUint32Slice()
+			positions, err := cur.readUint32SliceAdmitted(&allocation)
 			if err != nil {
+				if allocation.err != nil {
+					return textDocumentStateValue{}, allocation.err
+				}
 				return textDocumentStateValue{}, errMalformedTextStorage("text-state field[%d] term[%d] positions: %v", i, j, err)
 			}
-			offsets, err := cur.readOffsetSlice()
+			offsets, err := cur.readOffsetSliceAdmitted(&allocation)
 			if err != nil {
+				if allocation.err != nil {
+					return textDocumentStateValue{}, allocation.err
+				}
 				return textDocumentStateValue{}, errMalformedTextStorage("text-state field[%d] term[%d] offsets: %v", i, j, err)
 			}
 			if len(offsets) != 0 && len(offsets) != len(positions) {
@@ -749,6 +778,27 @@ func appendTextOffsetSlice(dst []byte, values []textTokenOffset) []byte {
 	return dst
 }
 
+// Width/count checks precede make even for malformed input. The callback is
+// borrowed from the existing scope; this value retains no decoded resources.
+// err distinguishes admission refusal from malformed grammar without changing
+// the legacy parser's error text or classifying capacity as corruption.
+type textDecodeAdmission struct {
+	admit func(uint64) error
+	err   error
+}
+
+func (a *textDecodeAdmission) array(count, width uint64) error {
+	if a == nil || a.admit == nil {
+		return nil
+	}
+	if width == 0 || count > uint64(int(^uint(0)>>1))/width {
+		a.err = memtable.ErrCOWCapacity
+		return a.err
+	}
+	a.err = a.admit(memtable.COWAllocationCharge(count * width))
+	return a.err
+}
+
 type textCursor struct {
 	buf []byte
 	pos int
@@ -790,8 +840,15 @@ func (c *textCursor) readBytes() ([]byte, error) {
 }
 
 func (c *textCursor) readString() (string, error) {
+	return c.readStringAdmitted(nil)
+}
+
+func (c *textCursor) readStringAdmitted(allocation *textDecodeAdmission) (string, error) {
 	value, err := c.readBytes()
 	if err != nil {
+		return "", err
+	}
+	if err := allocation.array(uint64(len(value)), 1); err != nil {
 		return "", err
 	}
 	return string(value), nil
@@ -823,12 +880,19 @@ func textBytesEqualString(value []byte, intern string) bool {
 }
 
 func (c *textCursor) readUint32Slice() ([]uint32, error) {
+	return c.readUint32SliceAdmitted(nil)
+}
+
+func (c *textCursor) readUint32SliceAdmitted(allocation *textDecodeAdmission) ([]uint32, error) {
 	count, err := c.readUvarint()
 	if err != nil {
 		return nil, err
 	}
 	if count > uint64(c.remaining()+1) {
 		return nil, errors.New("count too large")
+	}
+	if err := allocation.array(count, uint64(unsafe.Sizeof(uint32(0)))); err != nil {
+		return nil, err
 	}
 	out := make([]uint32, 0, count)
 	for i := uint64(0); i < count; i++ {
@@ -865,12 +929,19 @@ func (c *textCursor) skipUint32Slice() (uint64, error) {
 }
 
 func (c *textCursor) readOffsetSlice() ([]textTokenOffset, error) {
+	return c.readOffsetSliceAdmitted(nil)
+}
+
+func (c *textCursor) readOffsetSliceAdmitted(allocation *textDecodeAdmission) ([]textTokenOffset, error) {
 	count, err := c.readUvarint()
 	if err != nil {
 		return nil, err
 	}
 	if count > uint64(c.remaining()+1) {
 		return nil, errors.New("count too large")
+	}
+	if err := allocation.array(count, uint64(unsafe.Sizeof(textTokenOffset{}))); err != nil {
+		return nil, err
 	}
 	out := make([]textTokenOffset, 0, count)
 	for i := uint64(0); i < count; i++ {

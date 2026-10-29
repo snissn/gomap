@@ -3789,7 +3789,7 @@ def lifecycle_ready_asset(
     *,
     expected_m: int | None = None,
     expected_ef_construction: int | None = None,
-    require_column_graph: bool = False,
+    require_column_graph: bool = True,
 ) -> tuple[str, int, int | None]:
     index_info = optimize.get("index")
     status = optimize.get("status")
@@ -3797,7 +3797,9 @@ def lifecycle_ready_asset(
         raise RuntimeError("optimize response is missing index/status evidence")
     vector_index_name = optimize.get("vector_index_name")
     strategy = index_info.get("vector_strategy")
-    if require_column_graph and strategy != "column_graph":
+    # Keep the keyword for older callers, but it cannot opt back into a retired
+    # owner. Every active route/lifecycle proof requires ColumnGraph.
+    if strategy != "column_graph":
         raise RuntimeError("completed lifecycle requires a durable column graph asset")
     if (
         index_info.get("name") != index_name
@@ -3835,17 +3837,6 @@ def lifecycle_ready_asset(
         ):
             raise RuntimeError(f"optimize response does not prove a ready durable column graph: {optimize}")
         expected_service_generation = generation
-    elif strategy == "native_runtime":
-        generation = status.get("root_id")
-        if (
-            status.get("state") != "native_runtime"
-            or isinstance(generation, bool)
-            or not isinstance(generation, int)
-            or generation <= 0
-        ):
-            raise RuntimeError(f"optimize response does not prove a ready native vector root: {optimize}")
-    else:
-        raise RuntimeError(f"optimize response has unsupported vector strategy: {strategy!r}")
     return f"{index_name}:{vector_index_name}", generation, expected_service_generation
 
 

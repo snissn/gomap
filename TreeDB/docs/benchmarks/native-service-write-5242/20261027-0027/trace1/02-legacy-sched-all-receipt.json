@@ -1,0 +1,30 @@
+{
+  "argv": [
+    "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.0.linux-amd64/bin/go",
+    "tool",
+    "pprof",
+    "-top",
+    "-nodecount=40",
+    "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/current-feature-service-write-diagnostic2/documentservice.test",
+    "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/current-feature-service-write-trace1/02-legacy-sched.pprof"
+  ],
+  "cwd": "/mnt/fast4tb/gomap-mongo-execution-20261024/consumer-canonical",
+  "environment_policy": "explicit whitelist plus frozen cell values; no full environment dump",
+  "start_utc": "2026-10-27T00:14:47.732129+00:00",
+  "wall_limit_seconds": 60,
+  "exit_code": 0,
+  "timed_out": false,
+  "error": null,
+  "cleanup": {
+    "pgid": 221160,
+    "alive_before_cleanup": false,
+    "signals": [],
+    "alive_after_cleanup": false
+  },
+  "pid": 221160,
+  "end_utc": "2026-10-27T00:14:47.845965+00:00",
+  "elapsed_seconds": 0.11384637467563152,
+  "log": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/current-feature-service-write-trace1/02-legacy-sched-all.txt",
+  "log_sha256": "fc4d6350c44396dbcfa8e8b9e9163c6783e0df2c84a2130d3e27701d1e2be882",
+  "process_ok": true
+}

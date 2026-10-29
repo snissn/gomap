@@ -5,6 +5,10 @@ import (
 	"fmt"
 	"strings"
 	"unicode"
+	"unicode/utf8"
+	"unsafe"
+
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
 
 // TextToken is one analyzed token. Position is zero-based token order; offsets
@@ -72,9 +76,29 @@ func AnalyzeTextToSinkWithOptions(analyzer TextAnalyzer, options *TextAnalyzerOp
 	if sink == nil {
 		return errors.New("collections: text analyzer sink is nil")
 	}
+	// Capture the private capability before the stopword wrapper: stopped
+	// tokens allocate normalizer backing too. Reuse the sink's existing
+	// callback, without a closure or a second owner/lease.
+	var admit func(uint64) error
+	if owner, ok := sink.(textNormalizerAdmissionSink); ok {
+		admit = owner.textNormalizerAdmission()
+	}
 	normalized, err := normalizeTextAnalyzer(analyzer)
 	if err != nil {
 		return err
+	}
+	if admit != nil {
+		words, err := nativeTextStopWords(normalized, options, admit)
+		if err != nil {
+			return err
+		}
+		if len(words) > 0 {
+			if err = admit(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeTextStopFilter{})))); err != nil {
+				return err
+			}
+			sink = nativeTextStopFilter{sink: sink, words: words}
+		}
+		return analyzeSimpleTextToSinkAdmitted(text, sink, admit)
 	}
 	normalizedOptions, err := normalizeTextAnalyzerOptions(normalized, options)
 	if err != nil {
@@ -85,10 +109,15 @@ func AnalyzeTextToSinkWithOptions(analyzer TextAnalyzer, options *TextAnalyzerOp
 	}
 	switch normalized {
 	case TextAnalyzerSimple:
-		return analyzeSimpleTextToSink(text, sink)
+		return analyzeSimpleTextToSinkAdmitted(text, sink, admit)
 	default:
 		return fmt.Errorf("unsupported analyzer %q", normalized)
 	}
+}
+
+// Only internal sinks can opt in. A nil callback keeps legacy Builder growth.
+type textNormalizerAdmissionSink interface {
+	textNormalizerAdmission() func(uint64) error
 }
 
 type textStopWordFilterSink struct {
@@ -104,6 +133,47 @@ func (s textStopWordFilterSink) AddTextToken(token TextToken) error {
 }
 
 func analyzeSimpleTextToSink(text string, sink TextTokenSink) error {
+	return analyzeSimpleTextToSinkAdmitted(text, sink, nil)
+}
+
+// textNormalizerGrowthCharge checks the Go 1.26 Builder.Grow allocation target
+// 2*cap+width before any growth. Q covers allocator rounding for the complete new
+// backing; obsolete cohorts are never subtracted. Width is the encoded rune size.
+func textNormalizerGrowthCharge(length, capacity, width int) (uint64, error) {
+	maxInt := int(^uint(0) >> 1)
+	if length < 0 || capacity < length || width < 1 || width > utf8.UTFMax || length > maxInt-width {
+		return 0, memtable.ErrCOWCapacity
+	}
+	if capacity-length >= width {
+		return 0, nil
+	}
+	if capacity > (maxInt-width)/2 {
+		return 0, memtable.ErrCOWCapacity
+	}
+	charge := memtable.COWAllocationCharge(uint64(2*capacity + width))
+	if charge == ^uint64(0) {
+		return 0, memtable.ErrCOWCapacity
+	}
+	return charge, nil
+}
+
+func growTextNormalizer(builder *strings.Builder, r rune, admit func(uint64) error) error {
+	width := utf8.RuneLen(r)
+	charge, err := textNormalizerGrowthCharge(builder.Len(), builder.Cap(), width)
+	if err != nil || charge == 0 {
+		return err
+	}
+	if err := admit(charge); err != nil {
+		return err
+	}
+	// Go 1.26 WriteRune uses utf8.AppendRune's exact-width append. Grow
+	// guarantees that width free, so the following WriteRune cannot allocate.
+	// Do not observe/charge capacity afterward.
+	builder.Grow(width)
+	return nil
+}
+
+func analyzeSimpleTextToSinkAdmitted(text string, sink TextTokenSink, admit func(uint64) error) error {
 	var builder strings.Builder
 	start := -1
 	position := 0
@@ -129,10 +199,16 @@ func analyzeSimpleTextToSink(text string, sink TextTokenSink) error {
 	}
 	for offset, r := range text {
 		if simpleTextTokenRune(r) {
+			r = unicode.ToLower(r)
+			if admit != nil {
+				if err := growTextNormalizer(&builder, r, admit); err != nil {
+					return err
+				}
+			}
 			if start < 0 {
 				start = offset
 			}
-			builder.WriteRune(unicode.ToLower(r))
+			builder.WriteRune(r)
 			continue
 		}
 		if err := flush(offset); err != nil {

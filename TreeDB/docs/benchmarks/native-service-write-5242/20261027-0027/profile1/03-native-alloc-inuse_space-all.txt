@@ -1,0 +1,48 @@
+File: documentservice.test
+Build ID: 46f165d1cd4e65321e0b73e41c0d81b9784f3bf1
+Type: inuse_space
+Time: 2026-10-26 14:12:53 HST
+Showing nodes accounting for 20731.53kB, 97.95% of 21164.77kB total
+Dropped 696 nodes (cum <= 105.82kB)
+Showing top 40 nodes out of 88
+      flat  flat%   sum%        cum   cum%
+   20480kB 96.76% 96.76%    20480kB 96.76%  github.com/snissn/gomap/TreeDB/internal/valuelog.getWriterAppendBuf
+     136kB  0.64% 97.41%      136kB  0.64%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*blockCodecScratch).lz4 (inline)
+  111.47kB  0.53% 97.93%   111.47kB  0.53%  github.com/snissn/gomap/TreeDB/internal/leafrefscan.init.func1
+    2.25kB 0.011% 97.94%   138.25kB  0.65%  github.com/snissn/gomap/TreeDB/internal/valuelog.encodeBlockPayloadWithScratch
+    1.20kB 0.0057% 97.95% 16385.65kB 77.42%  github.com/snissn/gomap/TreeDB/zipper.(*ApplyWorkerPool).worker
+    0.45kB 0.0021% 97.95%   376.54kB  1.78%  github.com/snissn/gomap/TreeDB/caching.(*DB).vlogGenerationLoop
+    0.11kB 0.00052% 97.95%  4104.09kB 19.39%  github.com/snissn/gomap/TreeDB/documentservice.benchmarkSharedCOWWriteLoad.func2
+    0.05kB 0.00022% 97.95% 12288.09kB 58.06%  github.com/snissn/gomap/TreeDB/db.(*leafPageLogWithRecordLengthHints).AppendPreparedLeafPage
+         0     0% 97.95%  4104.83kB 19.39%  github.com/snissn/gomap/TreeDB/caching.(*DB).Checkpoint (inline)
+         0     0% 97.95%  4100.34kB 19.37%  github.com/snissn/gomap/TreeDB/caching.(*DB).PrepareNativeProducerObservation
+         0     0% 97.95%  8192.19kB 38.71%  github.com/snissn/gomap/TreeDB/caching.(*DB).appendValueLog
+         0     0% 97.95%  8192.19kB 38.71%  github.com/snissn/gomap/TreeDB/caching.(*DB).appendValueLogInternal (inline)
+         0     0% 97.95%  8192.19kB 38.71%  github.com/snissn/gomap/TreeDB/caching.(*DB).appendValueLogInternalObserved
+         0     0% 97.95% 12429.35kB 58.73%  github.com/snissn/gomap/TreeDB/caching.(*DB).appendValueLogOneInternal
+         0     0% 97.95%  4104.83kB 19.39%  github.com/snissn/gomap/TreeDB/caching.(*DB).checkpointCOWColumnCompaction
+         0     0% 97.95%  4104.83kB 19.39%  github.com/snissn/gomap/TreeDB/caching.(*DB).checkpointCOWContext (inline)
+         0     0% 97.95%  4104.83kB 19.39%  github.com/snissn/gomap/TreeDB/caching.(*DB).checkpointContext
+         0     0% 97.95%  4156.23kB 19.64%  github.com/snissn/gomap/TreeDB/caching.(*DB).flushCOWFrozenCutWithColumnCompaction
+         0     0% 97.95%   376.09kB  1.78%  github.com/snissn/gomap/TreeDB/caching.(*DB).maybeRunPeriodicVlogGenerationMaintenance
+         0     0% 97.95%   141.30kB  0.67%  github.com/snissn/gomap/TreeDB/caching.(*DB).prepareAppendFrameOne
+         0     0% 97.95%   376.09kB  1.78%  github.com/snissn/gomap/TreeDB/caching.(*DB).runPrivateCOWLeafPackSlice
+         0     0% 97.95%   145.83kB  0.69%  github.com/snissn/gomap/TreeDB/caching.(*cachingLeafPageLog).AppendLeafPage
+         0     0% 97.95% 12288.05kB 58.06%  github.com/snissn/gomap/TreeDB/caching.(*cachingLeafPageLog).AppendPreparedLeafPage
+         0     0% 97.95%  8192.42kB 38.71%  github.com/snissn/gomap/TreeDB/caching.(*cachingLeafPageLog).AppendPreparedLeafPageChildRefs
+         0     0% 97.95%   145.83kB  0.69%  github.com/snissn/gomap/TreeDB/caching.(*cachingLeafPageLogGroup).AppendLeafPage
+         0     0% 97.95%  4096.05kB 19.35%  github.com/snissn/gomap/TreeDB/caching.(*cachingLeafPageLogGroup).AppendPreparedLeafPage
+         0     0% 97.95%  4101.05kB 19.38%  github.com/snissn/gomap/TreeDB/collections.(*Collection).InsertBatchWithStatsValidatedFloat32Projection
+         0     0% 97.95%  4101.05kB 19.38%  github.com/snissn/gomap/TreeDB/collections.(*Collection).nativeInsertBatchWithStatsProjection
+         0     0% 97.95%  4100.34kB 19.37%  github.com/snissn/gomap/TreeDB/collections.(*Collection).prepareNativeProducerMutation
+         0     0% 97.95%  4098.41kB 19.36%  github.com/snissn/gomap/TreeDB/collections.(*nativeDomainBuild).buildSource
+         0     0% 97.95%  4098.36kB 19.36%  github.com/snissn/gomap/TreeDB/collections.(*nativeDomainBuild).flush
+         0     0% 97.95%  4098.41kB 19.36%  github.com/snissn/gomap/TreeDB/collections.(*nativeDomainBuild).materializeWithCatalog
+         0     0% 97.95%  4104.41kB 19.39%  github.com/snissn/gomap/TreeDB/collections.(*nativeEngineBuild).materializeDomains
+         0     0% 97.95%  4104.41kB 19.39%  github.com/snissn/gomap/TreeDB/collections.(*nativeEngineVersion).PrepareBuild
+         0     0% 97.95%   354.75kB  1.68%  github.com/snissn/gomap/TreeDB/db.(*DB).LeafGenerationPackRunOnceForPrivateCOW
+         0     0% 97.95%  4100.34kB 19.37%  github.com/snissn/gomap/TreeDB/db.(*DB).PrepareNativeProducerObservation
+         0     0% 97.95%      343kB  1.62%  github.com/snissn/gomap/TreeDB/db.(*DB).leafGenerationPackLocked
+         0     0% 97.95%   354.75kB  1.68%  github.com/snissn/gomap/TreeDB/db.(*DB).leafGenerationPackRunOnceWithOwner
+         0     0% 97.95%      343kB  1.62%  github.com/snissn/gomap/TreeDB/db.(*DB).leafGenerationPackSelected (inline)
+         0     0% 97.95%      343kB  1.62%  github.com/snissn/gomap/TreeDB/db.(*DB).leafGenerationPackSelectedWithCarry

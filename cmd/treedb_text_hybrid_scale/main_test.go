@@ -61,7 +61,16 @@ func TestScaleCommandSmokeReport2731(t *testing.T) {
 	if len(rep.Queries) == 0 {
 		t.Fatal("no query rows")
 	}
+	if !rep.Complete || len(rep.Queries) != 7 || len(rep.SelectedQueryRows) != 7 {
+		t.Fatalf("supported matrix incomplete: complete=%v selected=%v queries=%d", rep.Complete, rep.SelectedQueryRows, len(rep.Queries))
+	}
+	if len(rep.ExcludedQueryRows) != 1 || rep.ExcludedQueryRows[0].Name != queryRowHybridTextVecScalar || !strings.Contains(rep.ExcludedQueryRows[0].Reason, "not implemented") {
+		t.Fatalf("missing unsupported scope disclosure: %+v", rep.ExcludedQueryRows)
+	}
 	for _, row := range rep.Queries {
+		if row.Name == queryRowHybridTextVecScalar || !containsString(rep.SelectedQueryRows, row.Name) || !row.GuardrailOK || row.Samples != cfg.queries {
+			t.Fatalf("unexpected supported matrix row: %+v", row)
+		}
 		if len(row.RawLatencyNS) != row.Samples {
 			t.Fatalf("row %q raw samples=%d want %d", row.Name, len(row.RawLatencyNS), row.Samples)
 		}
@@ -90,9 +99,73 @@ func TestScaleCommandSmokeReport2731(t *testing.T) {
 	if decoded.SchemaVersion != scaleSchemaVersion || len(decoded.Queries) != len(rep.Queries) {
 		t.Fatalf("decoded schema/queries mismatch: %q/%d", decoded.SchemaVersion, len(decoded.Queries))
 	}
+	if len(decoded.SelectedQueryRows) != 7 || len(decoded.ExcludedQueryRows) != 1 {
+		t.Fatalf("persisted scope mismatch: selected=%v excluded=%+v", decoded.SelectedQueryRows, decoded.ExcludedQueryRows)
+	}
+	if bytes.Contains(payload, []byte("vector_native_bytes")) || !bytes.Contains(payload, []byte("column_graph_disk_bytes")) {
+		t.Fatalf("persisted ColumnGraph disk bytes mislabeled: %s", payload)
+	}
+	if rep.Load.VectorStatus == nil || len(rep.StorageSnapshots) == 0 || rep.StorageSnapshots[0].ColumnGraphDiskBytes != rep.Load.VectorStatus.Stats.BytesDisk {
+		t.Fatalf("disk bytes do not match persisted ColumnGraph stats: load=%+v snapshots=%+v", rep.Load.VectorStatus, rep.StorageSnapshots)
+	}
+	markdown, err := os.ReadFile(markdownPath)
+	if err != nil || !strings.Contains(string(markdown), "excluded query row: `"+queryRowHybridTextVecScalar+"`") || !strings.Contains(string(markdown), "no qualification or latency evidence") {
+		t.Fatalf("markdown missing excluded workload disclosure: err=%v report=%s", err, markdown)
+	}
+	if !strings.Contains(string(markdown), "ColumnGraph persisted disk bytes") || strings.Contains(string(markdown), "vector native bytes") {
+		t.Fatal("markdown mislabels ColumnGraph disk bytes")
+	}
 	if _, err := os.Stat(rep.Artifacts.DBDir); !os.IsNotExist(err) {
 		t.Fatalf("primary db dir kept unexpectedly err=%v", err)
 	}
+}
+
+func TestExplicitUnsupportedFilteredHybridProbeRemainsIncomplete5275(t *testing.T) {
+	for _, allow := range []bool{false, true} {
+		t.Run(strconv.FormatBool(allow), func(t *testing.T) {
+			cfg, err := parseFlags([]string{"-out-dir", t.TempDir(), "-phases", "retrieval", "-run-reopen=false", "-query-rows", queryRowHybridTextVecScalar, "-allow-guardrail-failures=" + strconv.FormatBool(allow)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg.rows, cfg.batchSize, cfg.dims, cfg.m, cfg.efConstruction, cfg.efSearch = 96, 48, 4, 4, 32, 32
+			cfg.topK, cfg.candidateLimit, cfg.queries = 5, 16, 1
+			rep, err := run(cfg)
+			if allow && err != nil || !allow && !errors.Is(err, collections.ErrHybridSearchUnsupported) {
+				t.Fatalf("diagnostic=%v err=%v", allow, err)
+			}
+			if rep.Complete || strings.Join(rep.CompletedPhases, ",") != "load" || strings.Join(rep.SelectedQueryRows, ",") != queryRowHybridTextVecScalar || len(rep.ExcludedQueryRows) != 0 {
+				t.Fatalf("unsupported probe credited or omitted: %+v", rep)
+			}
+			if len(rep.Queries) != 1 || len(rep.Guardrails) != 1 {
+				t.Fatalf("missing probe evidence: rows=%+v guards=%+v", rep.Queries, rep.Guardrails)
+			}
+			row := rep.Queries[0]
+			if row.Samples != 0 || len(row.RawLatencyNS) != 0 || row.Results != 0 || row.OpsPerSec != 0 || row.GuardrailOK || rep.Guardrails[0].OK || !strings.Contains(row.GuardrailFailure, "ordinary filtered vector hybrid search is not implemented") {
+				t.Fatalf("unsupported probe emitted success evidence: row=%+v guard=%+v", row, rep.Guardrails[0])
+			}
+			stats := row.HybridStats
+			if stats == nil || stats.FailClosed != 1 || stats.FailClosedReason != collections.HybridFailClosedReasonUnsupported || stats.DocumentsFetched != 0 || stats.FullDocumentScanFallbacks != 0 {
+				t.Fatalf("missing real fail-closed counters: %+v", stats)
+			}
+			payload, err := os.ReadFile(rep.Artifacts.JSONReport)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var persisted report
+			if err := json.Unmarshal(payload, &persisted); err != nil || persisted.Complete || len(persisted.Queries) != 1 || persisted.Queries[0].GuardrailOK || strings.Join(persisted.CompletedPhases, ",") != "load" {
+				t.Fatalf("persisted unsupported evidence lost: err=%v report=%+v", err, persisted)
+			}
+		})
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestRetrievalPhaseSelectorSkipsUnrelatedPhases2731(t *testing.T) {
@@ -1167,6 +1240,14 @@ func TestManualProfileWrapperGuards4546(t *testing.T) {
 	}
 	if os.Getenv("TREEDB_TEXT_PROFILE_RUN_SMOKE") != "true" {
 		return
+	}
+	broadSmoke := t.TempDir()
+	if output, err := run("RUN_DIR="+broadSmoke, "PHASES=broad", "TINY_SMOKE=true", "TIMEOUT=2m"); err != nil {
+		t.Fatalf("supported broad profile smoke err=%v output=%s", err, output)
+	}
+	broadLog, err := os.ReadFile(filepath.Join(broadSmoke, "10000", "broad", "phase.log"))
+	if err != nil || !strings.Contains(string(broadLog), "query_row="+queryRowHybridTextVector+" scalar_filter=false historical_filtered_workload_qualified=false") {
+		t.Fatalf("broad profile scope lost: err=%v log=%s", err, broadLog)
 	}
 	smoke := t.TempDir()
 	if output, err := run("RUN_DIR="+smoke, "PHASES=load", "TINY_SMOKE=true", "TIMEOUT=2m"); err != nil {

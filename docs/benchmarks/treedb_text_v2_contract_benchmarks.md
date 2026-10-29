@@ -47,11 +47,16 @@ mkdir -p "$OUT"
 
 Search guardrails:
 
+The historical v1 vector+scalar Hybrid rows below now verify an unsupported
+fail-closed rejection and SKIP without timing metrics. Retain `-v` output and
+do not count them as passing search measurements or full-matrix qualification.
+The subsequent v2 text+scalar and unfiltered vector rows remain supported.
+
 ```sh
 GOWORK=off go test ./TreeDB/collections \
   -run '^$' \
   -bench '^BenchmarkIndexInsertSearch2564/(search_text_candidates_no_docs|search_hybrid_no_docs_scalar_filter|search_hybrid_fetch_topk_scalar_filter)$' \
-  -benchmem \
+  -v -benchmem \
   -benchtime=5x \
   -count=3 \
   | tee "$OUT/index_insert_search_guardrail.txt"

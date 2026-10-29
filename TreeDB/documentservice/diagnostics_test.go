@@ -258,7 +258,7 @@ func TestDiagnosticsSnapshotCachedNativeCreateIsLastOpened(t *testing.T) {
 	ctx := context.Background()
 	svc.DiagnosticsHandler(nil)
 	request := func(name string) CreateIndexRequest {
-		return CreateIndexRequest{Name: name, Dimension: 2, Metric: MetricCosine, VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyNativeRuntime}}
+		return CreateIndexRequest{Name: name, Dimension: 2, Metric: MetricCosine, VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyColumnGraph}}
 	}
 	if _, err := svc.CreateIndex(ctx, request("a")); err != nil {
 		t.Fatalf("CreateIndex a: %v", err)
@@ -280,7 +280,7 @@ func TestDiagnosticsSnapshotCachedBenchmarkSearchIsLastOpened(t *testing.T) {
 	ctx := context.Background()
 	svc.DiagnosticsHandler(nil)
 	request := func(name string) CreateIndexRequest {
-		return CreateIndexRequest{Name: name, Dimension: 2, Metric: MetricCosine, VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyNativeRuntime}}
+		return CreateIndexRequest{Name: name, Dimension: 2, Metric: MetricCosine, VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyColumnGraph}}
 	}
 	for _, name := range []string{"a", "b"} {
 		if _, err := svc.CreateIndex(ctx, request(name)); err != nil {
@@ -288,6 +288,13 @@ func TestDiagnosticsSnapshotCachedBenchmarkSearchIsLastOpened(t *testing.T) {
 		}
 		if _, err := svc.UpsertDocuments(ctx, name, UpsertDocumentsRequest{Documents: []Document{{ID: name, Embedding: []float32{1, 0}}}, DeferVectorIndexRebuild: true}); err != nil {
 			t.Fatalf("UpsertDocuments %q: %v", name, err)
+		}
+	}
+	// Search never builds a deferred graph; publish it explicitly before the
+	// cached-search diagnostic check.
+	for _, name := range []string{"a", "b"} {
+		if _, err := svc.OptimizeIndex(ctx, name, OptimizeIndexRequest{}); err != nil {
+			t.Fatalf("OptimizeIndex %q: %v", name, err)
 		}
 	}
 	if got := svc.benchmarkSearchCacheSizeForTest(); got != 2 {

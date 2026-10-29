@@ -167,7 +167,7 @@ func cloneVectorIndexStringSetV2(in map[string]struct{}) map[string]struct{} {
 	return out
 }
 
-func (idx *VectorIndex) beginPartitionLiveDomainMutationV2Locked() error {
+func (idx *columnGraphPartitionLiveCarrier) beginPartitionLiveDomainMutationV2Locked() error {
 	if idx.partitionLiveMutationUndo != nil {
 		return nil
 	}
@@ -206,7 +206,7 @@ func (idx *VectorIndex) beginPartitionLiveDomainMutationV2Locked() error {
 	return nil
 }
 
-func (idx *VectorIndex) capturePartitionLiveDomainNodeV2Locked(nodeID int) {
+func (idx *columnGraphPartitionLiveCarrier) capturePartitionLiveDomainNodeV2Locked(nodeID int) {
 	undo := idx.partitionLiveMutationUndo
 	if undo == nil || nodeID < 0 || nodeID >= undo.nodesLen {
 		return
@@ -217,7 +217,7 @@ func (idx *VectorIndex) capturePartitionLiveDomainNodeV2Locked(nodeID int) {
 	undo.nodes[nodeID] = cloneVectorIndexSearchNode(idx.nodes[nodeID])
 }
 
-func (idx *VectorIndex) capturePartitionLiveDomainCurrentNodeV2Locked(documentID []byte) {
+func (idx *columnGraphPartitionLiveCarrier) capturePartitionLiveDomainCurrentNodeV2Locked(documentID []byte) {
 	undo := idx.partitionLiveMutationUndo
 	if undo == nil {
 		return
@@ -230,7 +230,7 @@ func (idx *VectorIndex) capturePartitionLiveDomainCurrentNodeV2Locked(documentID
 	undo.currentNodes[key] = vectorIndexPartitionLiveUndoCurrentNodeV2{nodeID: nodeID, exists: exists}
 }
 
-func (idx *VectorIndex) rollbackPartitionLiveDomainMutationV2Locked() {
+func (idx *columnGraphPartitionLiveCarrier) rollbackPartitionLiveDomainMutationV2Locked() {
 	undo := idx.partitionLiveMutationUndo
 	if undo == nil {
 		return
@@ -276,7 +276,7 @@ func (idx *VectorIndex) rollbackPartitionLiveDomainMutationV2Locked() {
 	idx.partitionLiveMutationUndo = nil
 }
 
-func (idx *VectorIndex) commitPartitionLiveDomainMutationV2Locked() {
+func (idx *columnGraphPartitionLiveCarrier) commitPartitionLiveDomainMutationV2Locked() {
 	if idx.partitionLiveMutationUndo == nil {
 		return
 	}
@@ -286,7 +286,7 @@ func (idx *VectorIndex) commitPartitionLiveDomainMutationV2Locked() {
 }
 
 // vectorIndexPartitionLiveStateV1 is deliberately owned by the registered
-// VectorIndex. The immutable partition generation remains the base; this is
+// columnGraphPartitionLiveCarrier. The immutable partition generation remains the base; this is
 // only its bounded, durable live overlay.
 type vectorIndexPartitionLiveStateV1 struct {
 	indexDefinitionDigest string
@@ -296,7 +296,7 @@ type vectorIndexPartitionLiveStateV1 struct {
 	coverage              uint64
 	packDomains           []uint32
 	representatives       []vectorPartitionLiveRepresentativeV1
-	domains               map[uint32]*VectorIndex
+	domains               map[uint32]*columnGraphPartitionLiveCarrier
 	owners                map[string]vectorPartitionLiveOwnerV1
 	ownerCount            int
 	ownerEpoch            uint64
@@ -307,8 +307,8 @@ type vectorIndexPartitionLiveStateV1 struct {
 	fullDomains           map[uint32]struct{}
 	stagedOwners          map[string]vectorPartitionLiveOwnerV1
 	sharedDomains         map[uint32]struct{}
-	domainTransactions    map[uint32]*VectorIndex
-	ownerSource           *VectorIndex
+	domainTransactions    map[uint32]*columnGraphPartitionLiveCarrier
+	ownerSource           *columnGraphPartitionLiveCarrier
 	cutovers              uint64
 	cutoverPublications   uint64
 	nodeCapacity          int
@@ -386,7 +386,7 @@ type vectorPartitionLiveSearchPinKeyV1 struct {
 }
 
 type vectorIndexPartitionLiveDomainPinV1 struct {
-	index            *VectorIndex
+	index            *columnGraphPartitionLiveCarrier
 	view             *vectorIndexSearchView
 	maxStableIDBytes int
 }
@@ -436,7 +436,7 @@ func vectorPartitionLiveRepresentativeLessV1(a, b vectorPartitionLiveRepresentat
 	return len(a.vector) < len(b.vector)
 }
 
-func (idx *VectorIndex) bindVectorPartitionLiveV1(manifest VectorPartitionManifestV1, coverage uint64, representatives []vectorPartitionLiveRepresentativeV1) error {
+func (idx *columnGraphPartitionLiveCarrier) bindVectorPartitionLiveV1(manifest VectorPartitionManifestV1, coverage uint64, representatives []vectorPartitionLiveRepresentativeV1) error {
 	if idx == nil {
 		return ErrVectorIndexPartitionLiveUnavailableV1
 	}
@@ -531,7 +531,7 @@ func (idx *VectorIndex) bindVectorPartitionLiveV1(manifest VectorPartitionManife
 	idx.partitionLive = &vectorIndexPartitionLiveStateV1{
 		indexDefinitionDigest: manifest.IndexDefinitionDigest, source: source, generation: manifest.Generation,
 		coverage: coverage, packDomains: packDomains, representatives: clonedReps,
-		domains: make(map[uint32]*VectorIndex), owners: make(map[string]vectorPartitionLiveOwnerV1),
+		domains: make(map[uint32]*columnGraphPartitionLiveCarrier), owners: make(map[string]vectorPartitionLiveOwnerV1),
 		ownerEpoch: ownerEpoch, domainEpochHighWater: domainEpochHighWater, domainEpochs: domainEpochs, dirtyOwners: make(map[string]struct{}),
 		dirtyDomains: make(map[uint32]struct{}), fullDomains: make(map[uint32]struct{}),
 		nodeCapacity: vectorIndexPartitionLiveMaxMutatedIDsV1, byteCapacity: vectorIndexPartitionLiveMaxBytesV1, bindingDurable: idx.collection == nil,
@@ -541,7 +541,7 @@ func (idx *VectorIndex) bindVectorPartitionLiveV1(manifest VectorPartitionManife
 	return nil
 }
 
-func (idx *VectorIndex) invalidateVectorPartitionLiveLocked() {
+func (idx *columnGraphPartitionLiveCarrier) invalidateVectorPartitionLiveLocked() {
 	if idx.partitionLive != nil {
 		idx.partitionLive.invalid = true
 		idx.mutationSeq++
@@ -549,7 +549,7 @@ func (idx *VectorIndex) invalidateVectorPartitionLiveLocked() {
 	}
 }
 
-func (idx *VectorIndex) newPartitionLiveDomainIndexV1() (*VectorIndex, error) {
+func (idx *columnGraphPartitionLiveCarrier) newPartitionLiveDomainIndexV1() (*columnGraphPartitionLiveCarrier, error) {
 	delta, err := idx.newPartitionLiveDomainIndexUnpublishedV1()
 	if err != nil {
 		return nil, err
@@ -559,8 +559,8 @@ func (idx *VectorIndex) newPartitionLiveDomainIndexV1() (*VectorIndex, error) {
 	return delta, nil
 }
 
-func (idx *VectorIndex) newPartitionLiveDomainIndexUnpublishedV1() (*VectorIndex, error) {
-	delta, err := newVectorIndex(nil, VectorIndexOptions{Name: idx.name, Field: idx.field, Metric: idx.metric, Encoding: idx.encoding, Dimensions: idx.dimensions, M: idx.m, EfConstruction: idx.efConstruction, EfSearch: idx.efSearch, RebuildDeletedRatio: idx.rebuildDeletedRatio})
+func (idx *columnGraphPartitionLiveCarrier) newPartitionLiveDomainIndexUnpublishedV1() (*columnGraphPartitionLiveCarrier, error) {
+	delta, err := newColumnGraphPartitionLiveDomain(nil, columnGraphPartitionLiveOptions{Name: idx.name, Field: idx.field, Metric: idx.metric, Encoding: idx.encoding, Dimensions: idx.dimensions, M: idx.m, EfConstruction: idx.efConstruction, EfSearch: idx.efSearch, RebuildDeletedRatio: idx.rebuildDeletedRatio})
 	if err != nil {
 		return nil, err
 	}
@@ -571,7 +571,7 @@ func (idx *VectorIndex) newPartitionLiveDomainIndexUnpublishedV1() (*VectorIndex
 	return delta, nil
 }
 
-func (idx *VectorIndex) partitionLiveRouteLocked(vector []float32) (uint32, error) {
+func (idx *columnGraphPartitionLiveCarrier) partitionLiveRouteLocked(vector []float32) (uint32, error) {
 	if len(vector) != idx.dimensions || idx.partitionLive == nil {
 		return 0, ErrVectorIndexPartitionLiveUnavailableV1
 	}
@@ -655,7 +655,7 @@ func (live *vectorIndexPartitionLiveStateV1) rangeOwnersV1(fn func(string, vecto
 	}
 }
 
-func (idx *VectorIndex) ensurePartitionLiveDomainWritableLocked(domain uint32) (*VectorIndex, error) {
+func (idx *columnGraphPartitionLiveCarrier) ensurePartitionLiveDomainWritableLocked(domain uint32) (*columnGraphPartitionLiveCarrier, error) {
 	live := idx.partitionLive
 	if live == nil {
 		return nil, ErrVectorIndexPartitionLiveUnavailableV1
@@ -679,7 +679,7 @@ func (idx *VectorIndex) ensurePartitionLiveDomainWritableLocked(domain uint32) (
 		live.fullDomains[domain] = struct{}{}
 	} else if _, shared := live.sharedDomains[domain]; shared {
 		if live.domainTransactions == nil {
-			live.domainTransactions = make(map[uint32]*VectorIndex)
+			live.domainTransactions = make(map[uint32]*columnGraphPartitionLiveCarrier)
 		}
 		if live.domainTransactions[domain] == nil {
 			delta.mu.Lock()
@@ -698,7 +698,7 @@ func (idx *VectorIndex) ensurePartitionLiveDomainWritableLocked(domain uint32) (
 	return delta, nil
 }
 
-func (idx *VectorIndex) reconcileVectorPartitionMutationLocked(documentID []byte, vector []float32) error {
+func (idx *columnGraphPartitionLiveCarrier) reconcileVectorPartitionMutationLocked(documentID []byte, vector []float32) error {
 	live := idx.partitionLive
 	if live == nil || live.invalid {
 		return nil
@@ -793,7 +793,7 @@ func (idx *VectorIndex) reconcileVectorPartitionMutationLocked(documentID []byte
 	return nil
 }
 
-func (idx *VectorIndex) partitionLiveNodeCountLocked() int {
+func (idx *columnGraphPartitionLiveCarrier) partitionLiveNodeCountLocked() int {
 	if idx.partitionLive == nil {
 		return 0
 	}
@@ -807,14 +807,14 @@ func (idx *VectorIndex) partitionLiveNodeCountLocked() int {
 	return total
 }
 
-func (idx *VectorIndex) partitionLiveNodeCapacityLocked() int {
+func (idx *columnGraphPartitionLiveCarrier) partitionLiveNodeCapacityLocked() int {
 	if idx.partitionLive == nil || idx.partitionLive.nodeCapacity <= 0 {
 		return vectorIndexPartitionLiveMaxMutatedIDsV1
 	}
 	return idx.partitionLive.nodeCapacity
 }
 
-func (idx *VectorIndex) partitionLiveByteCapacityLocked() uint64 {
+func (idx *columnGraphPartitionLiveCarrier) partitionLiveByteCapacityLocked() uint64 {
 	if idx.partitionLive == nil || idx.partitionLive.byteCapacity == 0 {
 		return vectorIndexPartitionLiveMaxBytesV1
 	}
@@ -829,7 +829,7 @@ func vectorPartitionLiveAddBytesV1(total *uint64, value uint64) bool {
 	return true
 }
 
-func (idx *VectorIndex) vectorPartitionLiveNodeBytesV1() (uint64, bool) {
+func (idx *columnGraphPartitionLiveCarrier) vectorPartitionLiveNodeBytesV1() (uint64, bool) {
 	dimensions, m := uint64(idx.dimensions), uint64(maxInt(idx.m, 1))
 	// Runtime node/vector data, all 33 bounded HNSW layers, and conservative
 	// slice/fixed overhead. The final multiplier in the state estimate covers
@@ -840,7 +840,7 @@ func (idx *VectorIndex) vectorPartitionLiveNodeBytesV1() (uint64, bool) {
 	return 1024 + dimensions*5 + m*34*8, true
 }
 
-func (idx *VectorIndex) vectorPartitionLiveBindingBytesFitV1(packDomains []uint32, reps []vectorPartitionLiveRepresentativeV1) bool {
+func (idx *columnGraphPartitionLiveCarrier) vectorPartitionLiveBindingBytesFitV1(packDomains []uint32, reps []vectorPartitionLiveRepresentativeV1) bool {
 	total := uint64(1024 + len(packDomains)*4)
 	for _, rep := range reps {
 		if !vectorPartitionLiveAddBytesV1(&total, uint64(len(rep.vector))*4+64) {
@@ -850,7 +850,7 @@ func (idx *VectorIndex) vectorPartitionLiveBindingBytesFitV1(packDomains []uint3
 	return total <= vectorIndexPartitionLiveMaxBytesV1/8
 }
 
-func (idx *VectorIndex) partitionLiveBytesFitLocked(additionalNodes, additionalOwners int, additionalNodeIDBytes, additionalOwnerIDBytes uint64) bool {
+func (idx *columnGraphPartitionLiveCarrier) partitionLiveBytesFitLocked(additionalNodes, additionalOwners int, additionalNodeIDBytes, additionalOwnerIDBytes uint64) bool {
 	live := idx.partitionLive
 	if live == nil || additionalNodes < 0 || additionalOwners < 0 {
 		return live == nil
@@ -878,7 +878,7 @@ func (idx *VectorIndex) partitionLiveBytesFitLocked(additionalNodes, additionalO
 	return total*8 <= idx.partitionLiveByteCapacityLocked()
 }
 
-func (idx *VectorIndex) vectorPartitionLivePersistBytesFitV1(persisted *vectorIndexPartitionLivePersistV1) bool {
+func (idx *columnGraphPartitionLiveCarrier) vectorPartitionLivePersistBytesFitV1(persisted *vectorIndexPartitionLivePersistV1) bool {
 	if persisted == nil {
 		return true
 	}
@@ -915,7 +915,7 @@ func (idx *VectorIndex) vectorPartitionLivePersistBytesFitV1(persisted *vectorIn
 	return total <= vectorIndexPartitionLiveMaxBytesV1/8
 }
 
-func (idx *VectorIndex) partitionLiveActiveOwnerCountLocked() int {
+func (idx *columnGraphPartitionLiveCarrier) partitionLiveActiveOwnerCountLocked() int {
 	if idx.partitionLive == nil {
 		return 0
 	}
@@ -932,7 +932,7 @@ func (idx *VectorIndex) partitionLiveActiveOwnerCountLocked() int {
 // cutoverVectorPartitionLiveLocked compacts each logical domain from current
 // live owners. The parent lock makes the map swap atomic; existing pins keep
 // their old indexes and immutable search views until Release.
-func (idx *VectorIndex) cutoverVectorPartitionLiveLocked() error {
+func (idx *columnGraphPartitionLiveCarrier) cutoverVectorPartitionLiveLocked() error {
 	live := idx.partitionLive
 	if live == nil || live.invalid {
 		return ErrVectorIndexPartitionLiveUnavailableV1
@@ -948,7 +948,7 @@ func (idx *VectorIndex) cutoverVectorPartitionLiveLocked() error {
 		return true
 	})
 	sort.Strings(ownerIDs)
-	fresh := make(map[uint32]*VectorIndex, len(live.domains))
+	fresh := make(map[uint32]*columnGraphPartitionLiveCarrier, len(live.domains))
 	for _, id := range ownerIDs {
 		owner, _ := live.ownerV1(id)
 		old := live.domains[owner.domain]
@@ -1020,7 +1020,7 @@ func (idx *VectorIndex) cutoverVectorPartitionLiveLocked() error {
 	return nil
 }
 
-func (idx *VectorIndex) ensureVectorPartitionLiveCapacityLocked(additionalNodes int) error {
+func (idx *columnGraphPartitionLiveCarrier) ensureVectorPartitionLiveCapacityLocked(additionalNodes int) error {
 	if idx.partitionLive == nil || additionalNodes <= 0 {
 		return nil
 	}
@@ -1043,7 +1043,7 @@ func (idx *VectorIndex) ensureVectorPartitionLiveCapacityLocked(additionalNodes 
 	return nil
 }
 
-func (idx *VectorIndex) ensureVectorPartitionLiveByteCapacityLocked(additionalNodes, additionalOwners int, additionalNodeIDBytes, additionalOwnerIDBytes uint64) error {
+func (idx *columnGraphPartitionLiveCarrier) ensureVectorPartitionLiveByteCapacityLocked(additionalNodes, additionalOwners int, additionalNodeIDBytes, additionalOwnerIDBytes uint64) error {
 	if idx.partitionLive == nil || idx.partitionLiveBytesFitLocked(additionalNodes, additionalOwners, additionalNodeIDBytes, additionalOwnerIDBytes) {
 		return nil
 	}
@@ -1059,7 +1059,7 @@ func (idx *VectorIndex) ensureVectorPartitionLiveByteCapacityLocked(additionalNo
 	return nil
 }
 
-func (idx *VectorIndex) preflightVectorPartitionMutationLocked(documentID []byte, vector []float32) error {
+func (idx *columnGraphPartitionLiveCarrier) preflightVectorPartitionMutationLocked(documentID []byte, vector []float32) error {
 	if idx.partitionLive == nil {
 		return nil
 	}
@@ -1107,7 +1107,7 @@ func (idx *VectorIndex) preflightVectorPartitionMutationLocked(documentID []byte
 	return nil
 }
 
-func (idx *VectorIndex) preflightVectorPartitionMutationBatchLocked(documentIDs [][]byte, vectors [][]float32) error {
+func (idx *columnGraphPartitionLiveCarrier) preflightVectorPartitionMutationBatchLocked(documentIDs [][]byte, vectors [][]float32) error {
 	if idx.partitionLive == nil {
 		return nil
 	}
@@ -1177,7 +1177,7 @@ func (idx *VectorIndex) preflightVectorPartitionMutationBatchLocked(documentIDs 
 	return idx.ensureVectorPartitionLiveByteCapacityLocked(additionalNodes, len(newOwners), additionalNodeIDBytes, additionalOwnerIDBytes)
 }
 
-func (idx *VectorIndex) acquireVectorPartitionLiveSearchPinV1(manifest VectorPartitionManifestV1) (*VectorIndexPartitionLiveSearchPinV1, error) {
+func (idx *columnGraphPartitionLiveCarrier) acquireVectorPartitionLiveSearchPinV1(manifest VectorPartitionManifestV1) (*VectorIndexPartitionLiveSearchPinV1, error) {
 	if idx == nil {
 		return nil, ErrVectorIndexPartitionLiveUnavailableV1
 	}
@@ -1228,7 +1228,7 @@ func (idx *VectorIndex) acquireVectorPartitionLiveSearchPinV1(manifest VectorPar
 	return pin, nil
 }
 
-func (idx *VectorIndex) partitionLiveMetaPersistLockedV2() *vectorIndexPartitionLivePersistV1 {
+func (idx *columnGraphPartitionLiveCarrier) partitionLiveMetaPersistLockedV2() *vectorIndexPartitionLivePersistV1 {
 	live := idx.partitionLive
 	if live == nil || live.invalid {
 		return nil
@@ -1256,7 +1256,7 @@ func (idx *VectorIndex) partitionLiveMetaPersistLockedV2() *vectorIndexPartition
 	return persisted
 }
 
-func (idx *VectorIndex) partitionLiveSnapshotRecordsLockedV2() ([]vectorIndexPartitionLivePersistOwnerV1, []vectorIndexPartitionLivePersistDomainV1) {
+func (idx *columnGraphPartitionLiveCarrier) partitionLiveSnapshotRecordsLockedV2() ([]vectorIndexPartitionLivePersistOwnerV1, []vectorIndexPartitionLivePersistDomainV1) {
 	live := idx.partitionLive
 	if live == nil || live.invalid {
 		return nil, nil
@@ -1280,7 +1280,7 @@ func (idx *VectorIndex) partitionLiveSnapshotRecordsLockedV2() ([]vectorIndexPar
 	return owners, domains
 }
 
-func (idx *VectorIndex) acknowledgePartitionLivePersistenceLockedV2() {
+func (idx *columnGraphPartitionLiveCarrier) acknowledgePartitionLivePersistenceLockedV2() {
 	live := idx.partitionLive
 	if live == nil {
 		return
@@ -1298,7 +1298,7 @@ func (idx *VectorIndex) acknowledgePartitionLivePersistenceLockedV2() {
 	clear(live.fullDomains)
 }
 
-func (idx *VectorIndex) materializePartitionLiveStagedOwnersV2() {
+func (idx *columnGraphPartitionLiveCarrier) materializePartitionLiveStagedOwnersV2() {
 	if idx == nil {
 		return
 	}
@@ -1320,7 +1320,7 @@ func (idx *VectorIndex) materializePartitionLiveStagedOwnersV2() {
 	live.ownerSource = nil
 }
 
-func (idx *VectorIndex) clonePartitionLiveReplayStateV2(before *VectorIndex, beforeSeq, baseRoot uint64) string {
+func (idx *columnGraphPartitionLiveCarrier) clonePartitionLiveReplayStateV2(before *columnGraphPartitionLiveCarrier, beforeSeq, baseRoot uint64) string {
 	if idx == nil || before == nil || baseRoot == 0 {
 		return "invalid replay clone"
 	}
@@ -1349,7 +1349,7 @@ func (idx *VectorIndex) clonePartitionLiveReplayStateV2(before *VectorIndex, bef
 		nodeIDBytes: old.nodeIDBytes, ownerIDBytes: old.ownerIDBytes, bindingDurable: old.bindingDurable,
 		packDomains:     append([]uint32(nil), old.packDomains...),
 		representatives: make([]vectorPartitionLiveRepresentativeV1, len(old.representatives)),
-		domains:         make(map[uint32]*VectorIndex, len(old.domains)), owners: old.owners,
+		domains:         make(map[uint32]*columnGraphPartitionLiveCarrier, len(old.domains)), owners: old.owners,
 		ownerCount: old.ownerCount, ownerEpoch: old.ownerEpoch, domainEpochHighWater: old.domainEpochHighWater, domainEpochs: make(map[uint32]uint64, len(old.domainEpochs)),
 		dirtyOwners: make(map[string]struct{}, len(old.dirtyOwners)), dirtyDomains: make(map[uint32]struct{}, len(old.dirtyDomains)), fullDomains: make(map[uint32]struct{}, len(old.fullDomains)),
 		stagedOwners: make(map[string]vectorPartitionLiveOwnerV1), sharedDomains: make(map[uint32]struct{}, len(old.domains)), ownerSource: before,
@@ -1393,14 +1393,14 @@ func (idx *VectorIndex) clonePartitionLiveReplayStateV2(before *VectorIndex, bef
 	return ""
 }
 
-func (idx *VectorIndex) restorePartitionLiveV1(persisted *vectorIndexPartitionLivePersistV1, sourceCoverage uint64) (*vectorIndexPartitionLiveStateV1, string) {
+func (idx *columnGraphPartitionLiveCarrier) restorePartitionLiveV1(persisted *vectorIndexPartitionLivePersistV1, sourceCoverage uint64) (*vectorIndexPartitionLiveStateV1, string) {
 	if persisted == nil {
 		return nil, ""
 	}
 	return idx.restorePartitionLiveSnapshotV2(persisted, persisted.Owners, persisted.Domains, sourceCoverage)
 }
 
-func (idx *VectorIndex) restorePartitionLiveSnapshotV2(persisted *vectorIndexPartitionLivePersistV1, owners []vectorIndexPartitionLivePersistOwnerV1, domains []vectorIndexPartitionLivePersistDomainV1, sourceCoverage uint64) (*vectorIndexPartitionLiveStateV1, string) {
+func (idx *columnGraphPartitionLiveCarrier) restorePartitionLiveSnapshotV2(persisted *vectorIndexPartitionLivePersistV1, owners []vectorIndexPartitionLivePersistOwnerV1, domains []vectorIndexPartitionLivePersistDomainV1, sourceCoverage uint64) (*vectorIndexPartitionLiveStateV1, string) {
 	if persisted == nil {
 		return nil, ""
 	}
@@ -1464,7 +1464,7 @@ func (idx *VectorIndex) restorePartitionLiveSnapshotV2(persisted *vectorIndexPar
 	if ownerEpoch == 0 {
 		ownerEpoch = 1
 	}
-	live := &vectorIndexPartitionLiveStateV1{indexDefinitionDigest: persisted.IndexDefinitionDigest, source: persisted.Source, generation: persisted.Generation, revision: persisted.Revision, coverage: persisted.Coverage, cutovers: persisted.Cutovers, nodeCapacity: vectorIndexPartitionLiveMaxMutatedIDsV1, byteCapacity: vectorIndexPartitionLiveMaxBytesV1, bindingDurable: true, packDomains: append([]uint32(nil), persisted.PackDomains...), representatives: make([]vectorPartitionLiveRepresentativeV1, len(persisted.Representatives)), domains: make(map[uint32]*VectorIndex), owners: make(map[string]vectorPartitionLiveOwnerV1, len(owners)), ownerCount: len(owners), ownerEpoch: ownerEpoch, domainEpochHighWater: domainEpochHighWater, domainEpochs: make(map[uint32]uint64), dirtyOwners: make(map[string]struct{}), dirtyDomains: make(map[uint32]struct{}), fullDomains: make(map[uint32]struct{})}
+	live := &vectorIndexPartitionLiveStateV1{indexDefinitionDigest: persisted.IndexDefinitionDigest, source: persisted.Source, generation: persisted.Generation, revision: persisted.Revision, coverage: persisted.Coverage, cutovers: persisted.Cutovers, nodeCapacity: vectorIndexPartitionLiveMaxMutatedIDsV1, byteCapacity: vectorIndexPartitionLiveMaxBytesV1, bindingDurable: true, packDomains: append([]uint32(nil), persisted.PackDomains...), representatives: make([]vectorPartitionLiveRepresentativeV1, len(persisted.Representatives)), domains: make(map[uint32]*columnGraphPartitionLiveCarrier), owners: make(map[string]vectorPartitionLiveOwnerV1, len(owners)), ownerCount: len(owners), ownerEpoch: ownerEpoch, domainEpochHighWater: domainEpochHighWater, domainEpochs: make(map[uint32]uint64), dirtyOwners: make(map[string]struct{}), dirtyDomains: make(map[uint32]struct{}), fullDomains: make(map[uint32]struct{})}
 	representedDomains := make(map[uint32]struct{}, len(persisted.Representatives))
 	for i, rep := range persisted.Representatives {
 		if len(rep.Vector) != idx.dimensions {
@@ -1589,13 +1589,13 @@ func (idx *VectorIndex) restorePartitionLiveSnapshotV2(persisted *vectorIndexPar
 }
 
 // EnsureVectorPartitionLiveBindingV1 binds the ready immutable generation to
-// the same registered VectorIndex that production collection reconciliation
+// the same registered columnGraphPartitionLiveCarrier that production collection reconciliation
 // updates. It does not alter partition lifecycle authority.
 func (c *Collection) EnsureVectorPartitionLiveBindingV1(ctx context.Context, manifest VectorPartitionManifestV1) error {
 	return c.ensureVectorPartitionLiveBindingV1(ctx, manifest, nil)
 }
 
-func (idx *VectorIndex) vectorPartitionLiveBindingCurrentV1(manifest VectorPartitionManifestV1) bool {
+func (idx *columnGraphPartitionLiveCarrier) vectorPartitionLiveBindingCurrentV1(manifest VectorPartitionManifestV1) bool {
 	if idx == nil {
 		return false
 	}
@@ -1612,7 +1612,7 @@ func (c *Collection) vectorPartitionLiveWarmBindingCurrentV1(manifest VectorPart
 	if c == nil || c.db == nil {
 		return false
 	}
-	idx := c.registeredVectorIndex(manifest.IndexName)
+	idx := c.registeredColumnGraphPartitionLiveCarrier(manifest.IndexName)
 	if idx == nil || !idx.vectorPartitionLiveBindingCurrentV1(manifest) {
 		return false
 	}
@@ -1628,7 +1628,7 @@ func (c *Collection) vectorPartitionLiveCoordinatorBindingPinnedV1(manifest Vect
 	if coord == nil {
 		return false
 	}
-	idx := c.registeredVectorIndex(manifest.IndexName)
+	idx := c.registeredColumnGraphPartitionLiveCarrier(manifest.IndexName)
 	key, ok := idx.vectorPartitionLiveSearchPinKeyV1(manifest)
 	return ok && coord.hasPartitionLiveSearchPin(key)
 }
@@ -1641,7 +1641,7 @@ func (c *Collection) validateVectorPartitionLiveCoordinatorPinnedAuthorityV1(ind
 	if coord == nil {
 		return ErrVectorIndexPartitionLiveMismatchV1
 	}
-	idx := c.registeredVectorIndex(index)
+	idx := c.registeredColumnGraphPartitionLiveCarrier(index)
 	if idx == nil {
 		return ErrVectorIndexPartitionLiveUnavailableV1
 	}
@@ -1664,7 +1664,7 @@ func (c *Collection) validateVectorPartitionLiveCoordinatorPinnedAuthorityV1(ind
 	return nil
 }
 
-func (idx *VectorIndex) vectorPartitionLiveSearchPinKeyV1(manifest VectorPartitionManifestV1) (vectorPartitionLiveSearchPinKeyV1, bool) {
+func (idx *columnGraphPartitionLiveCarrier) vectorPartitionLiveSearchPinKeyV1(manifest VectorPartitionManifestV1) (vectorPartitionLiveSearchPinKeyV1, bool) {
 	if idx == nil {
 		return vectorPartitionLiveSearchPinKeyV1{}, false
 	}
@@ -1723,14 +1723,14 @@ func (c *Collection) vectorPartitionLiveCurrentDocumentStateV1(ctx context.Conte
 // loadVectorPartitionLiveIndexForServingV1 restores only a durable registered
 // runtime. It never scans collection rows or invokes an automatic graph
 // rebuild; missing, stale, or corrupt coverage is reported to the caller.
-func (c *Collection) loadVectorPartitionLiveIndexForServingV1(def VectorIndexDefinition) (*VectorIndex, VectorIndexLoadStatus, error) {
-	if idx := c.registeredVectorIndex(def.Name); idx != nil {
+func (c *Collection) loadVectorPartitionLiveIndexForServingV1(def VectorIndexDefinition) (*columnGraphPartitionLiveCarrier, columnGraphPartitionLiveLoadStatus, error) {
+	if idx := c.registeredColumnGraphPartitionLiveCarrier(def.Name); idx != nil {
 		if idx.validateNativeSnapshotDefinition(def) != "" || !idx.hasValidSourceDocumentRoots() {
-			return nil, VectorIndexLoadStatus{ExactFallbackReason: vectorIndexFallbackStaleDocumentRoot}, ErrVectorIndexPartitionLiveMismatchV1
+			return nil, columnGraphPartitionLiveLoadStatus{ExactFallbackReason: vectorIndexFallbackStaleDocumentRoot}, ErrVectorIndexPartitionLiveMismatchV1
 		}
-		return idx, VectorIndexLoadStatus{Loaded: true}, nil
+		return idx, columnGraphPartitionLiveLoadStatus{Loaded: true}, nil
 	}
-	return c.LoadNativeVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
+	return c.loadColumnGraphPartitionLiveCarrier(vectorIndexOptionsFromDefinition(def))
 }
 
 // loadVectorPartitionLiveCarriersBeforeMutationV1 runs under schema read and
@@ -1739,7 +1739,7 @@ func (c *Collection) loadVectorPartitionLiveIndexForServingV1(def VectorIndexDef
 func (c *Collection) loadVectorPartitionLiveCarriersBeforeMutationV1() error {
 	needsLoad := false
 	for _, def := range c.metadataForIngress().VectorIndexes {
-		if def.Strategy == VectorIndexStrategyColumnGraph && c.registeredVectorIndex(def.Name) == nil {
+		if def.Strategy == VectorIndexStrategyColumnGraph && c.registeredColumnGraphPartitionLiveCarrier(def.Name) == nil {
 			needsLoad = true
 			break
 		}
@@ -1769,7 +1769,7 @@ func (c *Collection) loadVectorPartitionLiveCarriersForReplayV1(catalog *collect
 	unlockLoad := c.lockNativeVectorIndexLoad()
 	defer unlockLoad()
 	for _, def := range catalog.meta.VectorIndexes {
-		if def.Strategy != VectorIndexStrategyColumnGraph || c.registeredVectorIndex(def.Name) != nil {
+		if def.Strategy != VectorIndexStrategyColumnGraph || c.registeredColumnGraphPartitionLiveCarrier(def.Name) != nil {
 			continue
 		}
 		rootName := collectionVectorIndexRootName(catalog.meta.Name, def.Name)
@@ -1848,12 +1848,12 @@ func (c *Collection) ensureVectorPartitionLiveBindingV1(ctx context.Context, man
 		return nil
 	}
 
-	idx, needsBindingPublication, err := func() (*VectorIndex, bool, error) {
+	idx, needsBindingPublication, err := func() (*columnGraphPartitionLiveCarrier, bool, error) {
 		if owner == nil {
 			unlockMutation := c.lockMutation()
 			defer unlockMutation.Unlock()
 		}
-		if idx := c.registeredVectorIndex(manifest.IndexName); idx != nil && idx.vectorPartitionLiveBindingCurrentV1(manifest) {
+		if idx := c.registeredColumnGraphPartitionLiveCarrier(manifest.IndexName); idx != nil && idx.vectorPartitionLiveBindingCurrentV1(manifest) {
 			if err := c.validateCurrentVectorPartitionLiveBindingV1(ctx, manifest); err != nil {
 				return nil, false, err
 			}
@@ -1903,7 +1903,7 @@ func (c *Collection) ensureVectorPartitionLiveBindingV1(ctx context.Context, man
 			if def.Strategy != VectorIndexStrategyColumnGraph || loadStatus.ExactFallbackReason != vectorIndexFallbackMissingGraphRoot {
 				return nil, false, fmt.Errorf("%w: durable live carrier load failed: %s", ErrVectorIndexPartitionLiveUnavailableV1, loadStatus.ExactFallbackReason)
 			}
-			idx, err = newVectorIndex(c, vectorIndexOptionsFromDefinition(def))
+			idx, err = newColumnGraphPartitionLiveDomain(c, vectorIndexOptionsFromDefinition(def))
 			if err != nil {
 				return nil, false, err
 			}
@@ -1974,12 +1974,12 @@ func (c *Collection) ensureVectorPartitionLiveBindingV1(ctx context.Context, man
 			idx.dirtyMeta = true
 			idx.mu.Unlock()
 		}
-		rollbackRegistration := c.registeredVectorIndex(manifest.IndexName) == nil
+		rollbackRegistration := c.registeredColumnGraphPartitionLiveCarrier(manifest.IndexName) == nil
 		if rollbackRegistration {
-			c.registerVectorIndexCurrentCatalog(idx)
+			c.registerColumnGraphPartitionLiveCarrier(idx)
 			defer func() {
-				if rollbackRegistration && c.registeredVectorIndex(manifest.IndexName) == idx {
-					c.UnregisterVectorIndex(manifest.IndexName)
+				if rollbackRegistration && c.registeredColumnGraphPartitionLiveCarrier(manifest.IndexName) == idx {
+					c.removeColumnGraphPartitionLiveCarrier(manifest.IndexName)
 				}
 			}()
 		}
@@ -2014,7 +2014,7 @@ func (c *Collection) validateAndRecordVectorPartitionLiveAuthorityStateV1(manife
 	if c == nil || currentGeneration == 0 {
 		return ErrVectorIndexPartitionLiveUnavailableV1
 	}
-	idx := c.registeredVectorIndex(manifest.IndexName)
+	idx := c.registeredColumnGraphPartitionLiveCarrier(manifest.IndexName)
 	if idx == nil {
 		return ErrVectorIndexPartitionLiveUnavailableV1
 	}
@@ -2038,7 +2038,7 @@ func (c *Collection) validateVectorPartitionLiveAuthorityStateV1(index string, g
 	if c == nil {
 		return ErrVectorIndexPartitionLiveUnavailableV1
 	}
-	idx := c.registeredVectorIndex(index)
+	idx := c.registeredColumnGraphPartitionLiveCarrier(index)
 	if idx == nil {
 		return ErrVectorIndexPartitionLiveUnavailableV1
 	}
@@ -2057,7 +2057,7 @@ func (c *Collection) AcquireVectorPartitionLiveSearchPinV1(manifest VectorPartit
 	if c == nil {
 		return nil, ErrVectorIndexPartitionLiveUnavailableV1
 	}
-	idx := c.registeredVectorIndex(manifest.IndexName)
+	idx := c.registeredColumnGraphPartitionLiveCarrier(manifest.IndexName)
 	if idx == nil {
 		return nil, ErrVectorIndexPartitionLiveUnavailableV1
 	}
@@ -2083,7 +2083,7 @@ func (c *Collection) AcquireVectorPartitionLiveCoordinatorSearchPinV1(manifest V
 		coord.partitionLivePublishMu.RUnlock()
 		return nil, err
 	}
-	idx := c.registeredVectorIndex(manifest.IndexName)
+	idx := c.registeredColumnGraphPartitionLiveCarrier(manifest.IndexName)
 	key, ok := idx.vectorPartitionLiveSearchPinKeyV1(manifest)
 	if !ok || key.revision != pin.status.Revision || key.coverage != pin.status.Coverage {
 		pin.Release()
@@ -2176,7 +2176,7 @@ func (p *VectorIndexPartitionLiveSearchPinV1) DomainSearchPreflightV1(domain uin
 	if pin.maxStableIDBytes > opts.MaxStableIDBytes {
 		return 0, 0, fmt.Errorf("%w: stable ID bytes=%d exceeds limit=%d", ErrVectorIndexPartitionLiveUnavailableV1, pin.maxStableIDBytes, opts.MaxStableIDBytes)
 	}
-	nodes := uint64(len(pin.view.nodes) + len(pin.view.deltaNodes))
+	nodes := uint64(len(pin.view.nodes))
 	if nodes > vectorIndexPartitionLiveMaxMutatedIDsV1 {
 		return 0, 0, ErrVectorIndexPartitionLiveCapacityV1
 	}
@@ -2237,6 +2237,6 @@ func (p *VectorIndexPartitionLiveSearchPinV1) SearchDomainV1(ctx context.Context
 	for i, result := range results {
 		out[i] = VectorPartitionSearchResultV1{ID: string(result.ID), Score: float32(result.Score)}
 	}
-	candidates := uint64(buffer.nativeSearchWork.baseVisited + buffer.nativeSearchWork.deltaVisited)
+	candidates := uint64(buffer.nativeSearchWork.baseVisited)
 	return out, VectorPartitionSearchMetricsV1{ScoreCalls: uint64(buffer.nativeSearchWork.scoreCalls), Candidates: candidates, Route: VectorPartitionSearchRouteHNSWSearchPackV1}, nil
 }

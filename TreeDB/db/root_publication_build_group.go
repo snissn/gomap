@@ -26,6 +26,10 @@ type privatePrimaryConstructionV6 interface {
 // This is an internal cross-package bridge for caching; callers outside TreeDB
 // internals must not depend on it as a stable API.
 type RootPublicationBuildGroup struct {
+	// Only the four newest current outputs can be borrowed synchronously.
+	// This is a read-capability window, never a construction limit or registry.
+	nativeBuiltRoots           [4]uint64
+	nativeBuiltRootCount       uint8
 	nativeResources            *rootpublication.StableResourceSet
 	nativeRequirements         rootpublication.StableLogicalObligationRequirements
 	nativeAppend               rootpublication.StableLogicalObligationMutation
@@ -504,7 +508,9 @@ func (group *RootPublicationBuildGroup) finalizeLocked(b *Batch, syncWrite bool)
 		commandOpts.durableResourceRequirementsFallback = opts.durableResourceRequirementsFallback
 		opts = commandOpts
 	}
-	group.nativeResources = nil            // finalize owns the original closure on every exit
+	group.nativeResources = nil // finalize owns the original closure on every exit
+	clear(group.nativeBuiltRoots[:])
+	group.nativeBuiltRootCount = 0
 	group.nativeRequirementsFallback = nil // finalize borrows the original captured fallback only synchronously
 	post, err := db.finalizeCommitLockedWithOptions(
 		group.currentRoot, group.systemRoot, group.retired, syncWrite, group.metrics,
@@ -584,6 +590,8 @@ func (group *RootPublicationBuildGroup) cleanupLocked(abandon bool) error {
 	if group != nil {
 		// Requirement streams borrow the exact captured basis only through
 		// synchronous finalize. Drop all aliases before endRead on every exit.
+		clear(group.nativeBuiltRoots[:])
+		group.nativeBuiltRootCount = 0
 		group.nativeRequirementsFallback = nil
 		group.nativeRequirements = rootpublication.StableLogicalObligationRequirements{}
 		group.nativeAppend = rootpublication.StableLogicalObligationMutation{}

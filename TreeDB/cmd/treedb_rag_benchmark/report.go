@@ -204,7 +204,7 @@ func buildReport(out *runOutput, cfg benchConfig, issue, hostNote string) (*ragB
 			Dims:           out.Ingest.Dims,
 			VectorM:        out.Ingest.VectorM,
 			VectorEfSearch: out.Ingest.VectorEfSearch,
-			VectorMode:     "exact (column_graph exact score plane)",
+			VectorMode:     "ANN with FP32 scoring (QueryModeExact)",
 			Queries:        len(out.Corpus.Queries),
 			TopK:           cfg.TopK,
 			CandidateLimit: cfg.CandidateLimit,

@@ -110,52 +110,19 @@ func prepareColumnVectorGraphDocumentIDStatePayload(collection string, base Colu
 	if err != nil {
 		return columnVectorGraphPreparedDocumentIDStatePayload{}, err
 	}
-	primaryIDs := make([]int64, len(rows))
-	for rowIdx := range primaryIDs {
-		primaryIDs[rowIdx] = int64(rowIdx)
-	}
-	part, err := typedcolumn.BuildColumnPart(partID, typedcolumn.Options{
-		SchemaVersion: uint32(sourceCfg.SchemaHash),
-		SchemaMode:    typedcolumn.ColumnSchemaFixed,
-		Columns: []typedcolumn.ColumnDefinition{
-			{
-				Name:           typedColumnAdapterPrimaryIDColumn,
-				Type:           typedcolumn.ColumnTypeInt64,
-				Encoding:       typedcolumn.EncodingRawInt64,
-				Compression:    typedcolumn.CompressionNone,
-				CompressionSet: true,
-				StatsDisabled:  true,
-			},
-			adapterColumn.Definition,
-		},
-		LogicalPrimaryKey: typedcolumn.LogicalPrimaryKey{Columns: []string{typedColumnAdapterPrimaryIDColumn}},
-		SortKey:           typedcolumn.SortKey{Columns: []typedcolumn.SortKeyColumn{{Column: typedColumnAdapterPrimaryIDColumn}}},
-		PartPolicy:        typedcolumn.ColumnPartPolicy{RowsPerGranule: typedcolumn.DefaultRowsPerGranule},
-		Compression:       typedcolumn.ColumnCompressionPolicy{Default: typedcolumn.CompressionNone},
-	}, typedcolumn.Batch{
-		Rows: len(rows),
-		Columns: map[string][]int64{
-			typedColumnAdapterPrimaryIDColumn: primaryIDs,
-		},
-		BytesColumns: map[string]typedcolumn.RawBytesOffsets{
-			adapterColumn.Definition.Name: ids,
-		},
-	})
-	if err != nil {
-		return columnVectorGraphPreparedDocumentIDStatePayload{}, err
-	}
 	logicalTypes := make(map[string]string, 1)
 	if logical, ok := columnStoreSemanticLogicalType(ColumnStoreValueBytes); ok {
 		logicalTypes[adapterColumn.Definition.Name] = string(logical)
 	}
-	image, err := typedcolumn.BuildColumnPartImage(part, typedcolumn.ColumnPartImageOptions{Dictionaries: typedColumnAdapterDictionaries([]typedColumnAdapterColumn{adapterColumn}), LayoutLogicalTypes: logicalTypes})
+	built, err := typedcolumn.BuildRawOrdinalColumnPartImage(partID, columnVectorGraphRawOrdinalOptions(sourceCfg, adapterColumn), typedcolumn.RawOrdinalColumnValues{Rows: len(rows), Bytes: ids}, typedcolumn.ColumnPartImageOptions{Dictionaries: typedColumnAdapterDictionaries([]typedColumnAdapterColumn{adapterColumn}), LayoutLogicalTypes: logicalTypes})
 	if err != nil {
 		return columnVectorGraphPreparedDocumentIDStatePayload{}, err
 	}
+	image := built.Image
 	if image.Rows != len(rows) || image.PartID != partID {
 		return columnVectorGraphPreparedDocumentIDStatePayload{}, fmt.Errorf("collections: column_graph document-id state image rows/part=(%d,%d) want (%d,%d)", image.Rows, image.PartID, len(rows), partID)
 	}
-	accounting := part.ByteAccountingFromImage(image)
+	accounting := built.Accounting
 	if accounting.DeclaredColumnOffsetsBytes <= 0 {
 		return columnVectorGraphPreparedDocumentIDStatePayload{}, errors.New("collections: column_graph document-id state missing offsets bytes")
 	}
@@ -176,17 +143,27 @@ func prepareColumnVectorGraphDocumentIDStatePayload(collection string, base Colu
 }
 
 func buildColumnVectorGraphDocumentIDStateBytes(rows []columnVectorGraphAssetRow) (typedcolumn.RawBytesOffsets, error) {
-	offsets := make([]uint64, len(rows)+1)
-	values := make([]byte, 0)
+	// Size the borrowed value carrier before allocation, so its caller charge
+	// is Q(8*(N+1)) + Q(total ID bytes), without append-growth cohorts.
+	if len(rows) > math.MaxInt/8-1 {
+		return typedcolumn.RawBytesOffsets{}, errors.New("collections: column_graph document-id state offsets overflow")
+	}
+	total := 0
 	for ordinal, row := range rows {
 		if len(row.ID) == 0 {
 			return typedcolumn.RawBytesOffsets{}, fmt.Errorf("collections: column_graph document-id state ordinal=%d missing document id", ordinal)
 		}
-		if len(row.ID) > math.MaxInt-len(values) {
+		if len(row.ID) > math.MaxInt-total {
 			return typedcolumn.RawBytesOffsets{}, errors.New("collections: column_graph document-id state values overflow")
 		}
-		values = append(values, row.ID...)
-		offsets[ordinal+1] = uint64(len(values))
+		total += len(row.ID)
+	}
+	offsets := make([]uint64, len(rows)+1)
+	values := make([]byte, total)
+	pos := 0
+	for ordinal, row := range rows {
+		pos += copy(values[pos:], row.ID)
+		offsets[ordinal+1] = uint64(pos)
 	}
 	ids := typedcolumn.RawBytesOffsets{Rows: len(rows), Offsets: offsets, Values: values}
 	if err := ids.Validate(); err != nil {

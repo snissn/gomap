@@ -31,8 +31,12 @@ func TestServiceTypedHybridQuantizedRerankPublicRoute4767(t *testing.T) {
 		},
 		ScalarFields: []ScalarFieldDeclaration{{Field: "meta.user_id", ValueType: ScalarFieldString}},
 	}
-	if _, err := svc.CreateIndex(ctx, create); err != nil {
+	info, err := svc.CreateIndex(ctx, create)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if !info.Capabilities.HybridMetadataFilters {
+		t.Fatal("typed filtered hybrid capability was not advertised")
 	}
 	docs := []Document{
 		{ID: "a", Content: "refund", Embedding: []float32{1, 0}, Meta: map[string]any{"user_id": "u"}},
@@ -153,8 +157,8 @@ func TestServiceTypedHybridCurrentMutationLifecycle(t *testing.T) {
 	before := workstats.Read()
 	defer func() {
 		after := workstats.Read()
-		if after.IndexedJSON != before.IndexedJSON || after.Runtime != before.Runtime || after.Scans != before.Scans {
-			t.Errorf("selected hybrid used JSON/runtime/scan work: before=%+v after=%+v", before, after)
+		if after.IndexedJSON != before.IndexedJSON || after.Scans != before.Scans {
+			t.Errorf("selected hybrid used JSON/scan work: before=%+v after=%+v", before, after)
 		}
 		if after.Typed.TextRows <= before.Typed.TextRows || after.Typed.TextOldRows <= before.Typed.TextOldRows {
 			t.Error("typed text mutation producers did not run")

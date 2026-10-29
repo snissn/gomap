@@ -1986,6 +1986,9 @@ func (n *Node) searchLeafColumnarPrefixV2BlockWithMeta(data []byte, count uint16
 		if keyLen <= len(stackScratch) {
 			cur = stackScratch[:keyLen]
 		} else {
+			// Long-key search shares reconstruction backing with cached key
+			// views. Intermediate keys invalidate that cached row identity.
+			n.leafValid = false
 			cur = n.ensureKeyScratch(keyLen)
 			if len(cur) != keyLen {
 				return 0, false, ErrCorruptedNode

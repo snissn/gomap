@@ -113,7 +113,7 @@ func runApplicationCellWorker(cfg applicationConfig, input io.Reader, output io.
 		dims, provider := embeddingCellConfig(embeddingCell, bundle)
 		env, lifecycle, err := openApplicationEnvironment(cfg, &fixture, bundle, embeddingCell, provider, dims, environmentDir)
 		if err != nil {
-			return nil, err
+			return nil, errors.Join(err, os.RemoveAll(environmentDir))
 		}
 		if err := validateLifecycleEvidence(embeddingCell, lifecycle); err != nil {
 			return nil, errors.Join(err, env.closeWithError())

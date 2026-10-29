@@ -300,7 +300,6 @@ type DB struct {
 	closeTeardownErr        error
 	closeTeardownCleanupErr error
 	closeTeardownCompleted  bool
-	closeDiagnosticsReady   atomic.Bool
 
 	ownedFinishGuardV6 *OwnedCallbackCloseGuard
 
@@ -686,7 +685,6 @@ type DB struct {
 	commandWALCleanupRetainedUncover atomic.Uint64
 	commandWALCleanupRetainedPinned  atomic.Uint64
 	commandWALCleanupRetainedError   atomic.Uint64
-	commandWALCleanupLastError       atomic.Pointer[string]
 	commandWALCleanupRetries         atomic.Uint64
 	commandWALCleanupNamespaceSyncs  atomic.Uint64
 	commandWALCleanupNamespaceErrors atomic.Uint64
@@ -3538,7 +3536,6 @@ func (db *DB) closeAfterHooksOnce() error {
 		}
 		db.closeTeardownErr, db.closeTeardownCleanupErr = db.closeAfterHooks()
 		db.closeTeardownCompleted = true
-		db.closeDiagnosticsReady.Store(true)
 	})
 	return db.closeTeardownErr
 }
@@ -3618,8 +3615,12 @@ func (db *DB) closeAfterHooks() (outcome, cleanup error) {
 	// publication poison is likewise not cleanup authority: retain the complete
 	// WAL unchanged for the next owner. Healthy handles surface actual cleanup
 	// failures, but teardown continues so cleanup errors never strand resources.
+	// A pure pin refusal also retains the namespace without failing Close:
+	// dependency debt and recovery handoffs stay pinned until shutdown below.
+	// Only the exact pre-unlink sentinel qualifies; joined failures must surface.
 	if db.commandWAL && !db.readOnly && db.commandJournal != nil && db.commandWALPoisonedError() == nil {
 		if err := db.cleanupCommandWALCoveredSegmentsV1(); err != nil &&
+			err != rootpublication.ErrResourcePinned &&
 			!errors.Is(err, errDurableWALCleanupProofUnavailable) &&
 			!errors.Is(err, errDurableWALCleanupProofStale) &&
 			!errors.Is(err, commitlog.ErrCommandWALCleanupSnapshotStale) {

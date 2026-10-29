@@ -9,6 +9,13 @@ TreeDB remains **pre-alpha**. Vector storage metadata, graph/search APIs, and
 on-disk formats may change. Rebuild demo/benchmark DB directories across branch
 changes.
 
+`column_graph` is the default and only serving strategy. Ordinary filtered ANN
+and vector-bearing filtered Hybrid are unavailable; the admitted typed filtering
+paths in this guide remain supported. The `exact` score plane means FP32 scoring
+within graph search, independently of an explicitly requested document-scan
+exact route. Primary int8 indexes are unavailable; supported derived quantized
+planes, including `scalar_u8`, retain their separate contracts.
+
 The opt-in
 [`cosine_normalized_f32_v1`](../spec/cosine-normalized-f32-v1.md)
 representation stores one canonical normalized FP32 plane and uses scalar-u8
