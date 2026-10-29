@@ -17,7 +17,11 @@ must accept this prospective supersession before publication.
 
 Pushing the successor branch can trigger ordinary repository-wide push CI, including
 unified-bench suites and other workload-bearing jobs. It is not measurement-free
-publication. This diagnostic workflow itself has no push trigger; any publication
+publication. Opening the draft PR also triggers ordinary TreeDB and read-snapshot
+CI in addition to this diagnostic. Frozen copied Go inputs are known to fail
+repository gofmt checks; that preexisting formatting failure must remain visible,
+not be fixed by altering frozen science or presented as an all-CI-green result.
+This diagnostic workflow itself has no push trigger; any publication
 authority must account for those independent existing CI side effects.
 
 Publication is prospective registration, while ONLY the first owner-opened draft
@@ -101,12 +105,19 @@ The job holds an authenticated owned0600 nofollow regular per-job lock through a
 
 Hosted bounds deliberately differ from the local packet:20GiB free floor instead of100GiB (the hosted filesystem cannot promise100GiB),2GiB sampled output cap,16MiB command logs,100000-entry census,90s samples,600s builds,30minute measured campaign,75minute controller and90minute GitHub job with cleanup/upload slack. The exact reviewed v3 census is reused except its free floor/message; only tmp ENOENT allows bounded complete rescan. Bounds are cooperative/sample-based, not hard quotas or syscall deadlines. No unreviewed disk-space reclamation is performed. Free-space/hardware failure stops rather than selecting another runner.
 
-Both exact source paths are predeclared and checked absent in filesystem and Git
-worktree registrations before add. Add intent is recorded before spawn. Cleanup
-reconciles partial directories and registered worktrees even if add or its observer
-raises, attempts both owned paths, and checks both paths and registrations absent
-before cleanup_complete can be true. Unknown/preexisting residue is preserved and
-reported incomplete; no global worktree prune is used.
+Sources live beneath an exclusively created mode0700 private per-run parent.
+The controller holds no-follow descriptors for that parent and every source
+it creates. A post-prepare path/registration collision is never claimed.
+Successful add must establish exact no-follow source, .git link, registration
+metadata-directory and backlink identities; cleanup requires those identities
+unchanged before Git removal. Failed add/observer paths have no registration
+provenance and are preserved as incomplete. Missing/replaced sources or parents,
+changed registration links, and residue recreated after removal are preserved;
+there is no fallback rmtree of source paths and no global Git prune. Both intended
+paths and registrations plus the private parent must be absent for completion.
+The private namespace and held identities isolate ordinary task collisions; this
+is not protection against a malicious same-UID process racing inside the owner's
+private namespace or a platform administrator.
 
 All commands, including builds/discovery/cleanup, use one concrete supervisor. On ordinary errors/signals, drain exact owned descendants before removing only this invocation's clean worktrees and tmp, and write actual cleanup/session/lease audit. Keep controller, process, command, environment, source/ELF, raw sample and terminal evidence plus artifact digest inventory. Upload uses always(), unique run/attempt name, no overwrite and30day retention. Failure before a terminal or artifact upload failure is INCOMPLETE, never success. Retrieve and preserve the completed artifact/ZIP digest outside retention before making claims.
 

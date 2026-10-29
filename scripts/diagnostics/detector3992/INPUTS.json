@@ -1,16 +1,16 @@
 {
-  "DESIGN.md": "116d7268b8cb23ea2e2b4a69b634bd16df955c743b6ccf0efd31b720d27dada7",
+  "DESIGN.md": "707d5a457a2e9c7f76fb1ab2b29e908be46d1fe1246fa070fc5e64765b6986c1",
   "REUSE.json": "1893628c3e942b1bc61f8faba315fae764b442ee538e49a087f251ca775f534b",
   "census.py": "8663944f3600045c0dfc971f5c2aee39187bce1029bb8a58f0c6481bb47a9cb7",
   "detector_test.go": "a1804609952272b56e494e5f0add189be8677c370d6cce8641dccd3302ca54ed",
   "frozen/mvcc_primary_cost_gate.py": "b57bc93ce46900357052b07a796158eaef71d931bcfb59990992cb97b4f706a3",
   "frozen/primary_generation_routing_v6_test.go": "2642bedc0ed6edbea8d7a599c66642c1d2107d93f1faf03355fb8cb071c56ab9",
   "guard_regression_test.go": "e0822e594295b1ee38754327b5fab2855ef03d0475d777174e8af539e0258473",
-  "hosted.py": "58a6f1e6a4635cc0a10a44a112e757ca2292cecb59ff7e6bf6d92bf2c900b8fa",
+  "hosted.py": "13bb13a6c137de8858509d9f08ff99677f772498ae55c8c2408a6a78dafa7732",
   "instrumented_mvcc.go": "a0645a83645ff3d882b1a5307b7809b0bb31788d6d97a17a14b734409c31bc3c",
   "leader_exec.py": "7448eebd1929b4666afec6c88ebcbdd70129ae643f039ac519613dc585d191b2",
   "science.py": "aaddfa3602932c8eb7245f71e853cb4dc80ed975d58f3d18217a1db36f40640e",
   "supervisor.py": "c7e4cd2d9b11f742fb1a77327d43532c4ca0eade29e09794490d2ad20bc0609e",
   "test_hosted.py": "5b0d1051331baf5a3071cebb0b8096c78eaddcf664a3c7030e5f6cc6d16be516",
-  "test_processes.py": "044e2a2ae66f29db436df0bd800a129e66660dbcdf8af967ac19bc191b493285"
+  "test_processes.py": "48ef955bfd31fa8a79110106aaf1ea75845511790b0d27d0a4125f7ea45dfaf8"
 }

@@ -99,43 +99,88 @@ class Commands:
   if restore:self.owner.restore_handlers()
 
 class OwnedSources:
- """Predeclare exact paths, establish absence, then reconcile even failed adds."""
+ """Exclusive private namespace; never infer ownership from absence or intent."""
  def __init__(self,parent,run_id,repo,owner):
-  self.paths={label:parent/('gomap3992-source-'+label+'-'+run_id) for label in ['A','C']}
-  self.repo=repo;self.owner=owner;self.claimed=False;self.started=set()
+  self.root=parent/('gomap3992-owned-sources-'+run_id)
+  self.paths={label:self.root/label for label in ['A','C']}
+  self.repo=repo;self.owner=owner;self.root_fd=None;self.source_fds={};self.provenance={};self.started=set()
+ @staticmethod
+ def identity(path,directory=False):
+  fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|(os.O_DIRECTORY if directory else 0))
+  try:
+   st=os.fstat(fd)
+   if not directory and not stat.S_ISREG(st.st_mode):raise RuntimeError('not regular provenance file')
+   return (st.st_dev,st.st_ino),None if directory else os.read(fd,65537)
+  finally:os.close(fd)
+ def root_matches(self):
+  if self.root_fd is None:raise RuntimeError('private source parent not owned')
+  current,_=self.identity(self.root,True);st=os.fstat(self.root_fd)
+  if current!=(st.st_dev,st.st_ino) or st.st_uid!=os.getuid() or stat.S_IMODE(st.st_mode)!=0o700:raise RuntimeError('private source parent replaced or permission drift')
+ def source_matches(self,label):
+  self.root_matches();src=self.paths[label]
+  if label not in self.source_fds:raise RuntimeError('source directory ownership not established')
+  current,_=self.identity(src,True);st=os.fstat(self.source_fds[label])
+  if current!=(st.st_dev,st.st_ino):raise RuntimeError('source directory replaced')
  def registrations(self,label):
   text=self.owner(label,['git','-c','core.quotePath=false','worktree','list','--porcelain'],self.repo)
   paths=[field.removeprefix('worktree ') for field in text.splitlines() if field.startswith('worktree ')]
   return {pathlib.Path(ast.literal_eval(path) if path.startswith(chr(34)) else path) for path in paths}
+ def registration_identity(self,label):
+  self.source_matches(label);src=self.paths[label]
+  link_id,data=self.identity(src/'.git')
+  if not data.startswith(b'gitdir: ') or not data.endswith(b'\n') or len(data)>65536:raise RuntimeError('invalid source registration link')
+  gitdir=pathlib.Path(os.fsdecode(data[8:-1]))
+  if not gitdir.is_absolute():raise RuntimeError('absolute registration metadata required')
+  directory_id,_=self.identity(gitdir,True)
+  backlink_id,backlink=self.identity(gitdir/'gitdir')
+  if backlink!=os.fsencode(str(src/'.git'))+b'\n':raise RuntimeError('registration backlink mismatch')
+  return (str(gitdir),link_id,data,directory_id,backlink_id,backlink)
  def prepare(self):
   registered=self.registrations('sources-preflight')
-  if any(os.path.lexists(src) or src in registered for src in self.paths.values()):raise RuntimeError('source path or registration already exists')
-  self.claimed=True
+  if any(src in registered for src in self.paths.values()):raise RuntimeError('source registration already exists')
+  # mkdir is exclusive: an existing parent, including a symlink, is never claimed.
+  self.root.mkdir(mode=0o700)
+  self.root_fd=os.open(self.root,os.O_RDONLY|os.O_NOFOLLOW|os.O_DIRECTORY)
+  self.root_matches()
  def add(self,label,commit):
-  if not self.claimed or label in self.started:raise RuntimeError('unowned or repeated source add')
-  self.started.add(label) # Must precede spawn and any command/observer exception.
-  src=self.paths[label];self.owner('worktree-'+label,['git','worktree','add','--detach',src,commit],self.repo)
+  self.root_matches();src=self.paths[label]
+  if label in self.started or src in self.registrations('before-add-'+label):raise RuntimeError('repeated or foreign source registration')
+  # Create and pin our directory before Git may use it. A collision is preserved.
+  os.mkdir(label,mode=0o700,dir_fd=self.root_fd)
+  self.source_fds[label]=os.open(label,os.O_RDONLY|os.O_NOFOLLOW|os.O_DIRECTORY,dir_fd=self.root_fd)
+  self.started.add(label)
+  self.owner('worktree-'+label,['git','worktree','add','--detach',src,commit],self.repo)
+  self.provenance[label]=self.registration_identity(label)
   return src
  def cleanup(self):
   errors=[]
   for label,src in self.paths.items():
    try:
-    registered=self.registrations('cleanup-list-'+label)
-    exists=os.path.lexists(src)
+    registered=self.registrations('cleanup-list-'+label);exists=os.path.lexists(src)
     if not exists and src not in registered:continue
-    if not self.claimed or label not in self.started:raise RuntimeError('unexpected unowned source residue: '+str(src))
-    if exists and (src.is_symlink() or not src.is_dir()):raise RuntimeError('unsafe source residue: '+str(src))
-    if src in registered:self.owner('remove-'+label,['git','worktree','remove','--force',src],self.repo)
-    # An interrupted add can leave a directory before registration exists.
-    if os.path.lexists(src):
-     if src.is_symlink() or not src.is_dir():raise RuntimeError('unsafe source residue: '+str(src))
-     shutil.rmtree(src)
+    self.source_matches(label)
+    if src in registered:
+     # A failed add/observer never confers registration-removal authority.
+     if label not in self.provenance or self.registration_identity(label)!=self.provenance[label]:raise RuntimeError('unproved or replaced source registration')
+     self.owner('remove-'+label,['git','worktree','remove','--force',src],self.repo)
+    elif exists:raise RuntimeError('unregistered source residue preserved')
+    # Never rmtree a path left or recreated by remove, even if formerly owned.
+    if os.path.lexists(src):raise RuntimeError('source residue after removal preserved')
    except BaseException as exc:errors.append(repr(exc))
-  # No success claim from command return codes alone; inspect both namespaces.
   try:
    registered=self.registrations('cleanup-final-registrations')
    remaining=[str(src) for src in self.paths.values() if os.path.lexists(src) or src in registered]
-  except BaseException as exc:errors.append(repr(exc));remaining=['REGISTRATIONS_UNVERIFIED']
+   if self.root_fd is not None:
+    self.root_matches()
+    if not errors and not remaining:
+     os.rmdir(self.root)
+     if os.path.lexists(self.root):raise RuntimeError('private source parent remains')
+   elif os.path.lexists(self.root):raise RuntimeError('unowned private parent preserved')
+  except BaseException as exc:errors.append(repr(exc));remaining=['SOURCE_NAMESPACE_UNVERIFIED']
+  finally:
+   for fd in self.source_fds.values():os.close(fd)
+   self.source_fds.clear()
+   if self.root_fd is not None:os.close(self.root_fd);self.root_fd=None
   return {'complete':not errors and not remaining,'errors':errors,'remaining':remaining,'intended':[str(p) for p in self.paths.values()],'attempted':sorted(self.started)}
 
 def main():

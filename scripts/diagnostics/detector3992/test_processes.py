@@ -61,54 +61,78 @@ class SourceCleanupContracts(unittest.TestCase):
   self.root=pathlib.Path(self.temp.name);self.repo=self.root/'repo';self.repo.mkdir()
   self.git_run(['git','init','-q'],self.repo)
   self.git_run(['git','-c','user.name=Inert Test','-c','user.email=inert@example.invalid','commit','-q','--allow-empty','-m','inert fixture'],self.repo)
-  self.failure=None
-  self.sources=hosted.OwnedSources(self.root,'123',self.repo,self.owner)
+  self.failure=None;self.sources=hosted.OwnedSources(self.root,'123',self.repo,self.owner)
  def git_run(self,argv,cwd):return subprocess.check_output(list(map(str,argv)),cwd=cwd,stderr=subprocess.STDOUT,text=True)
  def owner(self,label,argv,cwd):
   if label=='worktree-A' and self.failure=='partial-directory':
-   self.sources.paths['A'].mkdir();(self.sources.paths['A']/'partial').write_text('inert')
+   (self.sources.paths['A']/'partial').write_text('inert')
    raise RuntimeError('injected add failure before registration')
   result=self.git_run(argv,cwd)
   if label=='worktree-A' and self.failure=='observer':raise RuntimeError('injected observer failure after real registration')
   if label=='remove-A' and self.failure=='remove-observer':raise RuntimeError('injected observer failure after removal')
+  if label=='remove-A' and self.failure=='post-remove-replacement':
+   src=self.sources.paths['A'];src.mkdir();(src/'foreign').write_text('preserve')
   return result
- def assert_absent(self):
-  registrations=self.sources.registrations('test-list')
-  for src in self.sources.paths.values():self.assertFalse(src.exists());self.assertNotIn(src,registrations)
- def test_partial_add_directory_is_reconciled(self):
-  self.sources.prepare();self.failure='partial-directory'
-  with self.assertRaises(RuntimeError):self.sources.add('A','HEAD')
-  self.assertTrue(self.sources.cleanup()['complete']);self.assert_absent()
- def test_registered_add_observer_failure_is_reconciled(self):
-  self.sources.prepare();self.failure='observer'
-  with self.assertRaises(RuntimeError):self.sources.add('A','HEAD')
-  self.assertTrue(self.sources.cleanup()['complete']);self.assert_absent()
- def test_both_sources_and_missing_directory_registration(self):
+ def test_successful_owned_sources_removed(self):
   self.sources.prepare()
   for label in ['A','C']:self.sources.add(label,'HEAD')
+  self.assertTrue(self.sources.cleanup()['complete']);self.assertFalse(self.sources.root.exists())
+ def test_partial_add_directory_is_preserved(self):
+  self.sources.prepare();self.failure='partial-directory'
+  with self.assertRaises(RuntimeError):self.sources.add('A','HEAD')
+  self.assertFalse(self.sources.cleanup()['complete']);self.assertEqual((self.sources.paths['A']/'partial').read_text(),'inert')
+ def test_registered_add_observer_failure_is_preserved(self):
+  self.sources.prepare();self.failure='observer'
+  with self.assertRaises(RuntimeError):self.sources.add('A','HEAD')
+  self.assertFalse(self.sources.cleanup()['complete']);self.assertIn(self.sources.paths['A'],self.sources.registrations('test-list'))
+ def test_missing_directory_registration_is_preserved(self):
+  self.sources.prepare();self.sources.add('A','HEAD');self.sources.add('C','HEAD')
   import shutil
   shutil.rmtree(self.sources.paths['A'])
-  self.assertTrue(self.sources.cleanup()['complete']);self.assert_absent()
- def test_preexisting_path_is_never_claimed_or_removed(self):
-  src=self.sources.paths['A'];src.mkdir();(src/'foreign').write_text('preserve')
-  with self.assertRaises(RuntimeError):self.sources.prepare()
+  self.assertFalse(self.sources.cleanup()['complete']);self.assertIn(self.sources.paths['A'],self.sources.registrations('test-list'));self.assertFalse(self.sources.paths['C'].exists())
+ def test_preexisting_private_parent_is_never_claimed(self):
+  self.sources.root.mkdir();(self.sources.root/'foreign').write_text('preserve')
+  with self.assertRaises(FileExistsError):self.sources.prepare()
+  self.assertFalse(self.sources.cleanup()['complete']);self.assertEqual((self.sources.root/'foreign').read_text(),'preserve')
+ def test_post_prepare_path_collision_is_preserved(self):
+  self.sources.prepare();src=self.sources.paths['A'];src.mkdir();(src/'foreign').write_text('preserve')
+  with self.assertRaises(FileExistsError):self.sources.add('A','HEAD')
   self.assertFalse(self.sources.cleanup()['complete']);self.assertEqual((src/'foreign').read_text(),'preserve')
- def test_preexisting_registration_is_never_claimed_or_removed(self):
-  src=self.sources.paths['A'];self.git_run(['git','worktree','add','--detach',src,'HEAD'],self.repo)
+ def test_post_prepare_foreign_registration_is_preserved(self):
+  self.sources.prepare();src=self.sources.paths['A'];self.git_run(['git','worktree','add','--detach',src,'HEAD'],self.repo)
+  with self.assertRaises(RuntimeError):self.sources.add('A','HEAD')
+  self.assertFalse(self.sources.cleanup()['complete']);self.assertIn(src,self.sources.registrations('test-list'));self.assertTrue((src/'.git').exists())
+ def test_source_directory_replacement_is_preserved(self):
+  self.sources.prepare();src=self.sources.add('A','HEAD');src.rename(self.sources.root/'original-A');src.mkdir();(src/'foreign').write_text('preserve')
+  self.assertFalse(self.sources.cleanup()['complete']);self.assertEqual((src/'foreign').read_text(),'preserve');self.assertIn(src,self.sources.registrations('test-list'))
+ def test_private_parent_replacement_is_preserved(self):
+  self.sources.prepare();self.sources.add('A','HEAD');self.sources.root.rename(self.root/'original-parent');self.sources.root.mkdir();src=self.sources.paths['A'];src.mkdir();(src/'foreign').write_text('preserve')
+  self.assertFalse(self.sources.cleanup()['complete']);self.assertEqual((src/'foreign').read_text(),'preserve')
+ def test_registration_link_replacement_is_preserved(self):
+  self.sources.prepare();src=self.sources.add('A','HEAD');link=src/'.git';replacement=src/'replacement';replacement.write_bytes(link.read_bytes());replacement.replace(link)
+  self.assertFalse(self.sources.cleanup()['complete']);self.assertTrue(link.exists());self.assertIn(src,self.sources.registrations('test-list'))
+ def test_registration_metadata_replacement_is_preserved(self):
+  self.sources.prepare();src=self.sources.add('A','HEAD');metadata=pathlib.Path((src/'.git').read_text().removeprefix('gitdir: ').strip())
+  original=metadata.with_name(metadata.name+'-original');metadata.rename(original)
   import shutil
-  shutil.rmtree(src)
-  with self.assertRaises(RuntimeError):self.sources.prepare()
-  self.assertFalse(self.sources.cleanup()['complete']);self.assertIn(src,self.sources.registrations('test-list'))
+  shutil.copytree(original,metadata)
+  self.assertFalse(self.sources.cleanup()['complete']);self.assertTrue(metadata.exists());self.assertTrue(src.exists())
+ def test_source_symlink_replacement_does_not_follow(self):
+  self.sources.prepare();src=self.sources.add('A','HEAD');src.rename(self.sources.root/'original-A')
+  foreign=self.root/'foreign';foreign.mkdir();(foreign/'keep').write_text('preserve');src.symlink_to(foreign,target_is_directory=True)
+  self.assertFalse(self.sources.cleanup()['complete']);self.assertTrue(src.is_symlink());self.assertEqual((foreign/'keep').read_text(),'preserve')
+ def test_residue_created_after_remove_is_preserved(self):
+  self.sources.prepare();src=self.sources.add('A','HEAD');self.failure='post-remove-replacement'
+  self.assertFalse(self.sources.cleanup()['complete']);self.assertEqual((src/'foreign').read_text(),'preserve')
  def test_removal_observer_failure_cannot_claim_complete(self):
   self.sources.prepare();self.sources.add('A','HEAD');self.sources.add('C','HEAD');self.failure='remove-observer'
-  self.assertFalse(self.sources.cleanup()['complete']);self.assert_absent()
+  self.assertFalse(self.sources.cleanup()['complete'])
+  for src in self.sources.paths.values():self.assertFalse(src.exists());self.assertNotIn(src,self.sources.registrations('test-list'))
  def test_final_registration_query_failure_is_incomplete(self):
-  self.sources.prepare()
-  original=self.sources.owner
+  self.sources.prepare();original=self.sources.owner
   def fail(label,argv,cwd):
    if label=='cleanup-final-registrations':raise RuntimeError('injected observation failure')
    return original(label,argv,cwd)
-  self.sources.owner=fail
-  result=self.sources.cleanup();self.assertFalse(result['complete']);self.assertIn('REGISTRATIONS_UNVERIFIED',result['remaining'])
+  self.sources.owner=fail;result=self.sources.cleanup();self.assertFalse(result['complete']);self.assertIn('SOURCE_NAMESPACE_UNVERIFIED',result['remaining'])
 
 if __name__=='__main__':unittest.main()
