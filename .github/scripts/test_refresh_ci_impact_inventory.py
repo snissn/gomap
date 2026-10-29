@@ -138,6 +138,18 @@ class RefreshSnapshotContract(unittest.TestCase):
             self.assertEqual(workflow['git_blob'], blob)
             self.assertEqual(workflow['sha256'], ci_impact.digest(ci_impact.git(self.repo, 'cat-file', 'blob', blob)))
 
+    def test_step_environment_cannot_be_rebound_as_job_environment(self):
+        policy = self.refresh()
+        job = policy['workflows']['treedb-vacuum-m0.yml']['jobs']['capture']
+        self.assertEqual(job['environment'], {})
+        self.assertEqual(job['commands'][0]['env'],
+                         {'M0_QUALIFICATION_PROFILE': 'hosted-semantic'})
+        inputs, _ = ci_impact.tree_inventory(self.repo, self.git('rev-parse', 'HEAD'))
+        refresh_ci_impact_inventory.check_source_contracts(self.repo, policy, inputs)
+        job['environment'] = job['commands'][0].pop('env')
+        with self.assertRaisesRegex(ci_impact.ContractError, 'workflow-source-contract-mismatch'):
+            refresh_ci_impact_inventory.check_source_contracts(self.repo, policy, inputs)
+
     def test_untracked_sources_do_not_enter_snapshot(self):
         self.write('scratch.go', 'package untracked\n')
         policy = self.refresh()

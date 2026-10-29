@@ -12,7 +12,7 @@
     "M0 observation is manual diagnostic-only on a separately fixed product; no forecast starts it or replaces failed M0 acceptance.",
     "Bounded maintenance comparison is a manually granted diagnostic on fixed baseline/candidate products; no forecast starts it or establishes cost, M0 or native acceptance."
   ],
-  "discovery_source_sha256": "8f501f954d56056abb840ade49aa6b52a21844af755817dda0b791be04904320",
+  "discovery_source_sha256": "44a5173c5b3eb4bb28b00124d84b07ba200a2e36eda837f627c8346883a3667f",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
@@ -3051,13 +3051,14 @@
             {
               "command_sha256": "82330780432e9084e7f13206380b8069775be3a1cc69a3e194b982fdccbe0e24",
               "entrypoint": ".github/workflows/treedb-vacuum-m0.yml:57",
+              "env": {
+                "M0_QUALIFICATION_PROFILE": "hosted-semantic"
+              },
               "invocation": "RUN_DIR=\"$RUNNER_TEMP/treedb-vacuum-m0\" scripts/treedb_vacuum_m0_ci.sh",
               "name": "Capture and enforce declared M0 qualification"
             }
           ],
-          "environment": {
-            "M0_QUALIFICATION_PROFILE": "hosted-semantic"
-          },
+          "environment": {},
           "matrix": null,
           "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
           "race": false,
