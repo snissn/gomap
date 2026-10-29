@@ -4,6 +4,7 @@
 The packet is an externally SHA-256-pinned inventory.  This program validates
 the retained producer evidence and derives the qualification result; it does
 not run a benchmark or infer an independently verified final-state digest.
+Legacy-v2 packets require --historical-analysis and always remain nonqualifying.
 """
 from __future__ import annotations
 
@@ -1703,7 +1704,11 @@ def _known_legacy_baseline_failure(artifact, backend):
     return True
 
 
-def validate_bounded_artifacts(packet, paths, runner=default_validator_runner):
+def validate_bounded_artifacts(packet, paths, runner=default_validator_runner, *, historical=False):
+    # The v2 packet requires a removed owner. Its frozen schema is only useful
+    # for historical evidence inspection, never a current qualification route.
+    if not historical:
+        raise EvidenceError("legacy bounded native_runtime baseline is retired; historical analysis only")
     exact = paths[packet["arms"]["bounded_exact"]]
     sq8 = paths[packet["arms"]["bounded_sq8"]]
     exact_json = read_json(exact, "bounded exact artifact")
@@ -4375,18 +4380,22 @@ def _analyze_normalized(packet_path, packet, expected_sha256, *, analyzer_commit
     }
 
 
-def _analyze(packet_path, expected_sha256, validator_runner, *, analyzer_commit=None):
+def _analyze(packet_path, expected_sha256, validator_runner, *, analyzer_commit=None, historical=False):
     packet_path, packet = load_packet(packet_path, expected_sha256)
     if packet["schema"] == NORMALIZED_PACKET_SCHEMA:
+        if historical:
+            raise EvidenceError("historical analysis supports legacy-v2 packets only")
         return _analyze_normalized(packet_path, packet, expected_sha256, analyzer_commit=analyzer_commit)
     if analyzer_commit is not None:
         raise EvidenceError("analyzer commit override is supported only for normalized-v4 packets")
+    if not historical:
+        raise EvidenceError("legacy-v2 packet requires a retired native_runtime baseline; use --historical-analysis for nonqualifying inspection")
     consumer_source = validate_consumer_source(packet["candidate_commit"])
     paths = resolve_inventory(packet_path, packet)
     dataset_paths, _ = validate_dataset(packet, paths)
     go_builds = validate_go_inputs(packet, paths)
     validate_plans(packet, paths)
-    baseline = validate_bounded_artifacts(packet, paths, validator_runner)
+    baseline = validate_bounded_artifacts(packet, paths, validator_runner, historical=True)
     validate_receipts(
         packet, paths, packet["files"][packet["dataset"]["manifest"]]["sha256"],
         _dataset_hashes(packet), baseline,
@@ -4430,14 +4439,16 @@ def _analyze(packet_path, expected_sha256, validator_runner, *, analyzer_commit=
         "vectors_checked": None,
     })
     qualified = passed and tradeoff_accepted
-    reasons = []
+    reasons = ["historical-v2 evidence requires a retired baseline and cannot qualify an active campaign"]
     if not passed:
         reasons.append("frozen quality gate missed; no coordinate or graph retry is authorized")
     elif not tradeoff_accepted:
         reasons.append("material regression remains unaccepted by the issue owner")
     return {
         "schema": ANALYSIS_SCHEMA,
-        "state": "qualified" if qualified else "valid_unqualified",
+        "state": "historical_nonqualifying",
+        "qualification_available": False,
+        "historical_quality_and_tradeoff_passed": qualified,
         "candidate_commit": packet["candidate_commit"],
         "consumer_source": consumer_source,
         "go_binary_builds": go_builds,
@@ -4466,9 +4477,9 @@ def _analyze(packet_path, expected_sha256, validator_runner, *, analyzer_commit=
     }
 
 
-def analyze(packet_path, expected_sha256, validator_runner=default_validator_runner, *, analyzer_commit=None):
+def analyze(packet_path, expected_sha256, validator_runner=default_validator_runner, *, analyzer_commit=None, historical=False):
     try:
-        return _analyze(packet_path, expected_sha256, validator_runner, analyzer_commit=analyzer_commit)
+        return _analyze(packet_path, expected_sha256, validator_runner, analyzer_commit=analyzer_commit, historical=historical)
     except Exception as exc:
         schema = ANALYSIS_SCHEMA
         try:
@@ -4489,8 +4500,11 @@ def main():
     parser.add_argument("--expected-packet-sha256", required=True)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--analyzer-commit", help="reviewed consumer-only descendant; normalized-v4 only")
+    parser.add_argument("--historical-analysis", action="store_true",
+                        help="inspect frozen legacy-v2 evidence; output is always nonqualifying")
     args = parser.parse_args()
-    result = analyze(args.packet, args.expected_packet_sha256, analyzer_commit=args.analyzer_commit)
+    result = analyze(args.packet, args.expected_packet_sha256,
+                     analyzer_commit=args.analyzer_commit, historical=args.historical_analysis)
     raw = json.dumps(result, sort_keys=True, separators=(",", ":"), allow_nan=False).encode() + b"\n"
     with args.output.open("xb") as output:
         output.write(raw)

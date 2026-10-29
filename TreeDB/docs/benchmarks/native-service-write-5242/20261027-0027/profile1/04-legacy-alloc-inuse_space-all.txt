@@ -1,0 +1,48 @@
+File: documentservice.test
+Build ID: 46f165d1cd4e65321e0b73e41c0d81b9784f3bf1
+Type: inuse_space
+Time: 2026-10-26 14:13:13 HST
+Showing nodes accounting for 28436.22kB, 98.89% of 28756.05kB total
+Dropped 609 nodes (cum <= 143.78kB)
+Showing top 40 nodes out of 92
+      flat  flat%   sum%        cum   cum%
+   24576kB 85.46% 85.46%    24576kB 85.46%  github.com/snissn/gomap/TreeDB/internal/valuelog.getWriterAppendBuf
+    2748kB  9.56% 95.02%     2748kB  9.56%  github.com/snissn/gomap/TreeDB/internal/memtable.getAppendOnlyEntries
+     704kB  2.45% 97.47%      704kB  2.45%  github.com/snissn/gomap/TreeDB/collections.growFreezeSortRunEntries (inline)
+     408kB  1.42% 98.89%      408kB  1.42%  github.com/snissn/gomap/TreeDB/collections.(*freezeSortRunTable).setEntryStealOwned
+    0.11kB 0.00038% 98.89%  1125.64kB  3.91%  github.com/snissn/gomap/TreeDB/documentservice.benchmarkSharedCOWWriteLoad.func2
+    0.09kB 0.00033% 98.89%  4096.12kB 14.24%  github.com/snissn/gomap/TreeDB/collections.(*CollectionManager).withCommandWALPublishCoordinator
+    0.02kB 5.4e-05% 98.89%  4103.80kB 14.27%  github.com/snissn/gomap/TreeDB/internal/compression.(*Trainer).train
+         0     0% 98.89% 16386.22kB 56.98%  github.com/snissn/gomap/TreeDB/caching.(*DB).appendValueLogForRecords (inline)
+         0     0% 98.89% 16386.22kB 56.98%  github.com/snissn/gomap/TreeDB/caching.(*DB).appendValueLogForRecordsObserved
+         0     0% 98.89% 16389.77kB 57.00%  github.com/snissn/gomap/TreeDB/caching.(*DB).appendValueLogInternalObserved
+         0     0% 98.89% 16386.22kB 56.98%  github.com/snissn/gomap/TreeDB/caching.(*DB).appendValueLogObserved (inline)
+         0     0% 98.89%     4096kB 14.24%  github.com/snissn/gomap/TreeDB/caching.(*DB).appendValueLogOneInternal
+         0     0% 98.89%  4096.04kB 14.24%  github.com/snissn/gomap/TreeDB/caching.(*DB).applyValueLogDictProfileForClass
+         0     0% 98.89%  4096.04kB 14.24%  github.com/snissn/gomap/TreeDB/caching.(*DB).ensureValueLogDictTrainer.func1.1
+         0     0% 98.89%     4096kB 14.24%  github.com/snissn/gomap/TreeDB/caching.(*cachingLeafPageLog).AppendLeafPage
+         0     0% 98.89%  4098.84kB 14.25%  github.com/snissn/gomap/TreeDB/caching.(*cachingLeafPageLog).AppendLeafPages (inline)
+         0     0% 98.89%  4098.84kB 14.25%  github.com/snissn/gomap/TreeDB/caching.(*cachingLeafPageLog).appendLeafPages
+         0     0% 98.89%  4098.84kB 14.25%  github.com/snissn/gomap/TreeDB/caching.(*cachingLeafPageLogGroup).AppendLeafPages
+         0     0% 98.89% 16386.22kB 56.98%  github.com/snissn/gomap/TreeDB/caching.(*cachingValueLogAppender).appendRecords.func2
+         0     0% 98.89% 16386.22kB 56.98%  github.com/snissn/gomap/TreeDB/caching.(*cachingValueLogAppender).appendRecordsToLane
+         0     0% 98.89%  1122.44kB  3.90%  github.com/snissn/gomap/TreeDB/collections.(*Collection).InsertBatchWithStatsValidatedFloat32Projection
+         0     0% 98.89%  2690.07kB  9.35%  github.com/snissn/gomap/TreeDB/collections.(*Collection).ScanDocumentIDsFunc
+         0     0% 98.89%  2688.23kB  9.35%  github.com/snissn/gomap/TreeDB/collections.(*Collection).appendBufferedTextIndexFlushDeltas
+         0     0% 98.89%  1112.28kB  3.87%  github.com/snissn/gomap/TreeDB/collections.(*Collection).bufferDirectIndexedInsertPlanLocked
+         0     0% 98.89%  1112.33kB  3.87%  github.com/snissn/gomap/TreeDB/collections.(*Collection).bufferIndexedInsertPlanLocked
+         0     0% 98.89%  2690.07kB  9.35%  github.com/snissn/gomap/TreeDB/collections.(*Collection).flushBufferedIndexedLockedWithRawPublishState
+         0     0% 98.89%  2690.07kB  9.35%  github.com/snissn/gomap/TreeDB/collections.(*Collection).flushBufferedWrites (inline)
+         0     0% 98.89%  2690.07kB  9.35%  github.com/snissn/gomap/TreeDB/collections.(*Collection).flushBufferedWritesLockedWithRawPublishState
+         0     0% 98.89%  2690.07kB  9.35%  github.com/snissn/gomap/TreeDB/collections.(*Collection).flushBufferedWritesWithRawPublishStateAndCoverage
+         0     0% 98.89%  1122.44kB  3.90%  github.com/snissn/gomap/TreeDB/collections.(*Collection).insertBatchOnce
+         0     0% 98.89%  1122.44kB  3.90%  github.com/snissn/gomap/TreeDB/collections.(*Collection).insertBatchOnceWithLockState
+         0     0% 98.89%  1122.44kB  3.90%  github.com/snissn/gomap/TreeDB/collections.(*Collection).insertBatchWithCommandWALIntentSchemaLocked
+         0     0% 98.89%  1122.44kB  3.90%  github.com/snissn/gomap/TreeDB/collections.(*Collection).insertBatchWithCommandWALIntentSchemaLocked.func2
+         0     0% 98.89%  4218.06kB 14.67%  github.com/snissn/gomap/TreeDB/collections.(*CollectionManager).CreateCollectionWithStatus
+         0     0% 98.89%  4218.06kB 14.67%  github.com/snissn/gomap/TreeDB/collections.(*CollectionManager).createCollectionWithPreparedCommandWALIntent
+         0     0% 98.89%  4096.02kB 14.24%  github.com/snissn/gomap/TreeDB/collections.(*CollectionManager).createCollectionWithPreparedCommandWALIntent.func7
+         0     0% 98.89%  4096.12kB 14.24%  github.com/snissn/gomap/TreeDB/collections.(*CollectionManager).withCommandWALPublishCoordinatorForIntent
+         0     0% 98.89%      704kB  2.45%  github.com/snissn/gomap/TreeDB/collections.(*freezeSortRunTable).applyStealEntryFuncOwned
+         0     0% 98.89%      704kB  2.45%  github.com/snissn/gomap/TreeDB/collections.(*freezeSortRunTable).applyStealEntryFuncWithRevisionOwned
+         0     0% 98.89%   928.14kB  3.23%  github.com/snissn/gomap/TreeDB/collections.addTextV2PositionEntriesForState

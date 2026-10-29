@@ -1,0 +1,27 @@
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/documentservice
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkServiceSharedCOWWriteLoad
+BenchmarkServiceSharedCOWWriteLoad/writers1
+    shared_cow_write_bench_test.go:65: backend=native profile=command_wal_durable requested_memtable=cow_btree resolved_strategy=column_graph metric=cosine rows=4096 batch=128 writers=1 defer_rebuild=true
+    shared_cow_write_bench_test.go:65: Hybrid: index_unavailable: hybrid search index is unavailable
+--- FAIL: BenchmarkServiceSharedCOWWriteLoad/writers1
+BenchmarkServiceSharedCOWWriteLoad/writers4
+    shared_cow_write_bench_test.go:65: backend=native profile=command_wal_durable requested_memtable=cow_btree resolved_strategy=column_graph metric=cosine rows=4096 batch=128 writers=4 defer_rebuild=true
+    shared_cow_write_bench_test.go:65: load0 batch4 attempted=true error=internal: insert documents failed cause=collections: native typed construction total=33597504 typed=29702016 keys=1024 catalog=81920 domains=13 in_flight_limit=33554432 total_limit=33554432: immutable memtable capacity exhausted
+    shared_cow_write_bench_test.go:65: load0 batch6 attempted=true error=internal: insert documents failed cause=immutable memtable capacity exhausted
+    shared_cow_write_bench_test.go:65: load0 batch8 attempted=true error=internal: insert documents failed cause=immutable memtable capacity exhausted
+    shared_cow_write_bench_test.go:65: load0 batch9 attempted=true error=internal: insert documents failed cause=immutable memtable capacity exhausted
+    shared_cow_write_bench_test.go:65: load0 batch14 attempted=true error=internal: insert documents failed cause=collections: native typed construction total=33931680 typed=30177152 keys=1024 catalog=0 domains=12 in_flight_limit=33554432 total_limit=33554432: immutable memtable capacity exhausted
+    shared_cow_write_bench_test.go:65: load0 batch16 attempted=true error=internal: insert documents failed cause=immutable memtable capacity exhausted
+    shared_cow_write_bench_test.go:65: load0 batch18 attempted=true error=internal: insert documents failed cause=immutable memtable capacity exhausted
+    shared_cow_write_bench_test.go:65: load0 batch19 attempted=true error=internal: insert documents failed cause=immutable memtable capacity exhausted
+    shared_cow_write_bench_test.go:65: load0 batch24 attempted=true error=internal: insert documents failed cause=collections: native typed construction total=34324896 typed=30570368 keys=1024 catalog=0 domains=12 in_flight_limit=33554432 total_limit=33554432: immutable memtable capacity exhausted
+    shared_cow_write_bench_test.go:65: load0 batch26 attempted=true error=internal: insert documents failed cause=immutable memtable capacity exhausted
+    shared_cow_write_bench_test.go:65: load0 batch28 attempted=true error=internal: insert documents failed cause=immutable memtable capacity exhausted
+    shared_cow_write_bench_test.go:65: load0 batch29 attempted=true error=internal: insert documents failed cause=immutable memtable capacity exhausted
+    shared_cow_write_bench_test.go:65: load0 public request failure: attempted=32 completed=20; no caller retry
+--- FAIL: BenchmarkServiceSharedCOWWriteLoad/writers4
+--- FAIL: BenchmarkServiceSharedCOWWriteLoad
+FAIL

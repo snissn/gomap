@@ -606,6 +606,27 @@ class Q5AnalyzeTest(unittest.TestCase):
                 self.assertRaisesRegex(analyzer.EvidenceError, "producer import"):
             analyzer.validate_consumer_source(COMMIT, analyzer_commit=repair)
 
+    def test_active_legacy_analysis_refuses_before_inventory_or_validator_execution(self):
+        runner = mock.Mock()
+        with mock.patch.object(analyzer, "load_packet", return_value=(Path("packet"), {
+                "schema": analyzer.PACKET_SCHEMA, "candidate_commit": COMMIT})), \
+                mock.patch.object(analyzer, "resolve_inventory") as inventory, \
+                self.assertRaisesRegex(analyzer.EvidenceError, "retired"):
+            analyzer._analyze("packet", "a" * 64, runner)
+        inventory.assert_not_called()
+        runner.assert_not_called()
+        with self.assertRaisesRegex(analyzer.EvidenceError, "historical analysis only"):
+            analyzer.validate_bounded_artifacts({}, {}, runner)
+        runner.assert_not_called()
+
+    def test_historical_option_cannot_emit_modern_qualification(self):
+        with mock.patch.object(analyzer, "load_packet", return_value=(Path("packet"), {
+                "schema": analyzer.NORMALIZED_PACKET_SCHEMA})), \
+                mock.patch.object(analyzer, "_analyze_normalized") as normalized, \
+                self.assertRaisesRegex(analyzer.EvidenceError, "legacy-v2 packets only"):
+            analyzer._analyze("packet", "a" * 64, mock.Mock(), historical=True)
+        normalized.assert_not_called()
+
     def test_analyzer_commit_override_is_normalized_only(self):
         with mock.patch.object(analyzer, "load_packet", return_value=(Path("packet"), {
                 "schema": analyzer.PACKET_SCHEMA, "candidate_commit": COMMIT})), \
@@ -691,7 +712,7 @@ class Q5AnalyzeTest(unittest.TestCase):
                 "service": service, "serving": serving_path, "exact": exact, "sq8": sq8,
             }
             calls = []
-            baseline = analyzer.validate_bounded_artifacts(packet, paths, calls.append)
+            baseline = analyzer.validate_bounded_artifacts(packet, paths, calls.append, historical=True)
             self.assertEqual(baseline["classification"], "completed_clean")
             self.assertEqual(len(calls), 2)
             self.assertNotIn("-minima-quantized-plan", calls[0])
@@ -704,26 +725,26 @@ class Q5AnalyzeTest(unittest.TestCase):
             changed["raw_evidence"] = changed.pop("backend_raw_evidence")
             sq8.write_bytes(canonical(changed))
             with self.assertRaisesRegex(analyzer.EvidenceError, "completed clean"):
-                analyzer.validate_bounded_artifacts(packet, paths, calls.append)
+                analyzer.validate_bounded_artifacts(packet, paths, calls.append, historical=True)
             sq8.write_bytes(canonical(sq8_clean))
 
             changed_plan = copy.deepcopy(plan_json)
             changed_plan["ef_construction"] = 64
             plan.write_bytes(canonical(changed_plan))
             with self.assertRaisesRegex(analyzer.EvidenceError, "frozen manifest and profile"):
-                analyzer.validate_bounded_artifacts(packet, paths, calls.append)
+                analyzer.validate_bounded_artifacts(packet, paths, calls.append, historical=True)
             plan.write_bytes(canonical(plan_json))
 
             changed = json.loads(exact.read_text())
             changed["manifest"]["fixture"] = "bounded-250k"
             exact.write_bytes(canonical(changed))
             with self.assertRaisesRegex(analyzer.EvidenceError, "inventoried manifest"):
-                analyzer.validate_bounded_artifacts(packet, paths, calls.append)
+                analyzer.validate_bounded_artifacts(packet, paths, calls.append, historical=True)
 
             exact.write_bytes(canonical(known_legacy_failure_artifact(
                 manifest, service, service_sha,
             )))
-            baseline = analyzer.validate_bounded_artifacts(packet, paths, calls.append)
+            baseline = analyzer.validate_bounded_artifacts(packet, paths, calls.append, historical=True)
             self.assertEqual(
                 baseline["classification"], "known_legacy_complete_finite_ann_failure",
             )
@@ -734,7 +755,7 @@ class Q5AnalyzeTest(unittest.TestCase):
             changed["native_path_proof"]["strategy"] = "column_graph"
             exact.write_bytes(canonical(changed))
             with self.assertRaisesRegex(analyzer.EvidenceError, "native_runtime"):
-                analyzer.validate_bounded_artifacts(packet, paths, calls.append)
+                analyzer.validate_bounded_artifacts(packet, paths, calls.append, historical=True)
 
     def test_frozen_legacy_baseline_failure_is_narrow_and_uses_real_raw_key(self):
         self.assertEqual(analyzer.BOUNDED_MANIFEST_SCHEMA, "treedb_rag_minima_manifest/v2")
@@ -2159,8 +2180,9 @@ class Q5AnalyzeTest(unittest.TestCase):
                     mock.patch.object(analyzer.np, "memmap", return_value=object()), \
                     mock.patch.object(analyzer, "validate_full_sq8_log",
                                       return_value=(False, None, None)):
-                result = analyzer.analyze(path, pin, lambda _: None)
-                self.assertEqual(result["state"], "valid_unqualified", result)
+                result = analyzer.analyze(path, pin, lambda _: None, historical=True)
+                self.assertEqual(result["state"], "historical_nonqualifying", result)
+                self.assertFalse(result["qualification_available"])
                 self.assertEqual(
                     result["bounded_legacy_control"]["classification"],
                     analyzer.LEGACY_BASELINE_CLASSIFICATION,
@@ -2177,8 +2199,17 @@ class Q5AnalyzeTest(unittest.TestCase):
                 packet["declared_quality_outcome"] = "pass"
                 raw = canonical(packet)
                 path.write_bytes(raw)
+                with mock.patch.object(analyzer, "validate_full_sq8_log",
+                                       return_value=(True, {}, None)), \
+                        mock.patch.object(analyzer, "validate_tradeoff_review", return_value=True):
+                    historical_pass = analyzer.analyze(
+                        path, hashlib.sha256(raw).hexdigest(), lambda _: None, historical=True,
+                    )
+                self.assertEqual(historical_pass["state"], "historical_nonqualifying", historical_pass)
+                self.assertFalse(historical_pass["qualification_available"])
+                self.assertTrue(historical_pass["historical_quality_and_tradeoff_passed"])
                 result = analyzer.analyze(
-                    path, hashlib.sha256(raw).hexdigest(), lambda _: None,
+                    path, hashlib.sha256(raw).hexdigest(), lambda _: None, historical=True,
                 )
                 self.assertEqual(result["state"], "invalid")
 

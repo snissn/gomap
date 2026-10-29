@@ -531,9 +531,8 @@ class TreeDBClient:
         leaves joined by AND. ``dense_work.graph.route`` identifies executed
         empty, typed exact (complete eligible sets up to 4096), or HNSW work
         independently of the public ``ann`` tag. Selected ``"exact"`` rejects rather than scanning.
-        Legacy ``"exact"`` scans documents and applies an optional filter;
-        compatible native_runtime ANN also supports declared scalar filters.
-        Unsupported ANN shapes fail closed without a document-scan fallback.
+        Ordinary ``"exact"`` scans documents and applies an optional filter;
+        ordinary filtered ANN fails closed without a document-scan fallback.
         Embedding echo is opt-in via ``return_embedding=True`` on either
         transport. Native dense requires caller-held selected typed IndexInfo.
         """
@@ -712,7 +711,7 @@ class TreeDBClient:
                 )
             return DenseVectorSearchResponse(index=index_info, documents=documents, metric=index_info.metric,
                                              exact=False, candidates=candidates, route="ann",
-                                             native_base_plus_live_delta=False, native_command_version=version, dense_work=work,
+                                             native_command_version=version, dense_work=work,
                                              score_plane=score_plane, route_identity=route_identity)
         request: dict[str, Any] = {
             "query_embedding": [float(value) for value in query_embedding],
@@ -1525,13 +1524,10 @@ def _validate_http_dense_quantized_response(
         or not response.index.capabilities.typed_dense_quantized_rerank
         or response.route != "ann"
         or response.exact
-        or response.native_base_plus_live_delta
         or response.exact_fallbacks != 0
         or response.full_document_scan_fallbacks != 0
         or response.primary_document_scans != 0
         or response.document_materialization_rows != len(response.documents)
-        or response.scalar_filter_membership_source != ""
-        or response.scalar_filter_plan != ""
         or response.scalar_filter_exact_scoring
         or response.scalar_filter_underfill
         or any((
@@ -1546,8 +1542,6 @@ def _validate_http_dense_quantized_response(
             response.scalar_filter_admitted,
             response.scalar_filter_unbounded,
             response.allowed_id_materialization_rows,
-            response.visibility_mismatch_count,
-            response.visibility_retry_count,
         ))
         or (proof.route == "typed_empty" and (
             len(response.documents) != 0

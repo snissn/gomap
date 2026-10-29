@@ -19,8 +19,8 @@ func TestPreparedVectorPartitionStartupWaitsForAcceptedLivePublicationV1(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	carrier := collection.registeredVectorIndex(manifest.IndexName)
-	if source.collectionSchemaCoordinator() != collection.collectionSchemaCoordinator() || source.registeredVectorIndex(manifest.IndexName) != carrier {
+	carrier := collection.registeredColumnGraphPartitionLiveCarrier(manifest.IndexName)
+	if source.collectionSchemaCoordinator() != collection.collectionSchemaCoordinator() || source.registeredColumnGraphPartitionLiveCarrier(manifest.IndexName) != carrier {
 		t.Fatal("startup source does not share the publishing DB coordinator and carrier")
 	}
 	if _, err := source.NewPreparedVectorPartitionGenerationReplicatedLiveStartupSearchOpenPlanWithContextV1(t.Context(), manifest); err != nil {
@@ -141,7 +141,7 @@ func TestPreparedVectorPartitionStartupColdLoadIsReadOnlyAndFailClosedV1(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if source.registeredVectorIndex(manifest.IndexName) != nil {
+	if source.registeredColumnGraphPartitionLiveCarrier(manifest.IndexName) != nil {
 		t.Fatal("startup source eagerly loaded the carrier")
 	}
 	before := *database.State()
@@ -151,7 +151,7 @@ func TestPreparedVectorPartitionStartupColdLoadIsReadOnlyAndFailClosedV1(t *test
 	if plan, err := source.NewPreparedVectorPartitionGenerationReplicatedLiveStartupSearchOpenPlanWithContextV1(t.Context(), manifest); err != nil || plan == nil || !plan.liveRecovery {
 		t.Fatalf("cold startup plan=%+v err=%v", plan, err)
 	}
-	carrier := source.registeredVectorIndex(manifest.IndexName)
+	carrier := source.registeredColumnGraphPartitionLiveCarrier(manifest.IndexName)
 	carrier.mu.Lock()
 	coverage, originalSource := carrier.partitionLive.coverage, carrier.partitionLive.source
 	carrier.partitionLive.coverage++

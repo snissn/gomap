@@ -553,10 +553,44 @@ index_storage_policy
 vector_indexes
 quantized_indexes
 scalar_u8_calibration
+text_indexes
 ```
 
-The current nativewire collection metadata frame version is `5`; version `5`
-includes persisted scalar_u8 calibration semantics for quantized vector indexes.
+Collection metadata emission uses version `5` for schemas without text indexes
+or a column store, preserving its scalar_u8 calibration encoding. Version `6`
+adds the maintained column-store schema payload. These non-text encodings and
+versions `1` through `6` decoding remain unchanged.
+
+Schemas declaring text indexes use version `7`: `uvarint(7)` followed directly
+by the canonical catalog-create command-WAL payload returned by
+`collections.EncodeCatalogCreateCollectionCommandWALPayload`. That payload has a
+little-endian `uint16(1)`, two little-endian `uint32` byte lengths (collection
+name, metadata), the collection name, and the current canonical persisted
+`CollectionMeta` JSON document. The envelope name must match the metadata name.
+V7 carries the full maintained logical metadata model rather than another text
+serializer: fields and weights, analyzer and stop words, text V1/V2 version,
+rollout, positions/offsets, storage policy, schema generation, all collection
+options, and scalar/vector/column declarations. Text defaults and restrictions
+use the collections normalizer; unsupported analyzers, stemming, synonyms,
+rollout modes, versions, invalid weights and contradictory options fail closed.
+
+V7 requires current canonical metadata bytes. Unknown fields, duplicate keys,
+case aliases, trailing JSON or payload bytes, unsupported inner versions and
+normalization-changing spellings are rejected. Create requests are bounded to
+1 MiB of catalog payload before JSON allocation and at most 65,536 declarations
+of each index kind. Existing column create limits (16 KiB, 1..32 columns, no
+physical authority) and deterministic name/opaque limits still apply. Metadata
+responses preserve durable schemas under the enclosing frame/section limits.
+The client normalizes before sending; the server validates before catalog or
+WAL effects. Native create retains its existing fast collection data/index-state
+policy override while preserving declared text-index policies. Deterministic
+create validation and Raft lowering use the same strict decoder.
+
+Older peers reject V7 instead of silently dropping text declarations. This
+pre-alpha wire addition adds no on-disk migration and does not change historical
+WAL replay compatibility. It adds metadata fidelity to create/list/mutation
+responses, with no new text-query transport command.
+
 Metadata mutation responses SHOULD include the resulting catalog version or
 equivalent schema guard. Later single-node mutation requests MAY use
 `expected_catalog_version` to fail fast when a client planned against stale
@@ -860,15 +894,43 @@ ingress group.
 ### 10.1. Document-service dense search
 
 Command `64 dense_vector_search` is a LocalOnly read, never a deterministic
-mutation or command-WAL entry. Version 1 selects the cosine float32
-`native_runtime` service route. Version 2 selects the explicitly admitted,
+mutation or command-WAL entry. Version 1 is retired and rejected. Version 2 selects the explicitly admitted,
 persisted typed-input `column_graph` service route. Version 3 selects the same
 typed owner path with the explicitly negotiated legacy scalar-u8/v1 quantized
-rerank score plane. A mismatched strategy or capability fails closed; no
-version permits the legacy full-document scan route. Typed native filter
+rerank score plane. A mismatched strategy or capability fails closed; none
+of versions 2-4 permits the full-document scan route. Typed native filter
 planning may choose bounded exact scoring internally.
 
-Versions 1 and 2 require `deadline` (4) and `dense_search_request` (129).
+Version 5 selects the ordinary public service query policy and excludes typed
+input. It reuses sections 4 and 129 and their existing request encoding, with no
+new request fields. The client uses it for ordinary queries only when Hello
+advertises version 5. An omitted route selects maintained unfiltered ColumnGraph
+ANN; ordinary filtered ANN fails closed. Peers without version 5 reject ordinary
+queries rather than falling back. Version 5 has no explicit exact-route request
+field; a client cannot request a document scan using this encoding. Explicit typed, quantized and normalized
+requests still select their independent versions 2, 3 and 4.
+
+Version-5 response sections remain exactly IDs (102), documents (103), and
+response metadata (130), with zero flags and no typed proof sections. Metadata
+is: route byte; uvarint candidates, exact-fallbacks, full-document-scan-fallbacks,
+ColumnGraph-prepared-search, search-pack-search, ColumnGraph-delta-scored, documents-scanned,
+result count; then one little-endian float64 score per result. Tag 4 means
+ordinary ColumnGraph ANN and tag 5 means ordinary exact. Tags 0, 1, 2, 3 and unknown values fail closed. Old
+versions do not accept this version-specific payload. ANN has zero scanned
+documents; ordinary ColumnGraph reports exactly one measured physical route:
+the prepared-reader counter or the search-pack counter is one, and the other is
+zero. `search-pack-search` copies the collection's actual
+`SearchRouteHNSWSearchPack` statistic; it names physical pack execution.
+Intentional exact reports no prepared/pack/delta work,
+and matching candidates cannot exceed actual scanned rows.
+All routes preserve the existing finite counts, frame/section limits and finite
+score validation. Unexpected/duplicate sections and inconsistent route/counters
+fail closed. The exact route is explicit (`exact=true`), not a fallback counter;
+its document-scan work is reported by `documents_scanned`. Response documents
+come from the actual maintained search or exact scan, without a primary relookup.
+Scores and query projections retain the public service semantics.
+
+Version 2 requires `deadline` (4) and `dense_search_request` (129).
 Version 3 additionally requires the critical `dense_search_quantized_options`
 (135). Request
 payload order is: length-prefixed UTF-8 index name; uvarint top-K, efSearch and
@@ -881,15 +943,15 @@ include 16 filter levels and 64 leaves; unsupported operators fail closed.
 Version 3 requires a positive efSearch. A caller using the index default resolves
 it from generation-bound index metadata before encoding, so the score-plane
 `requested_ef_search` is the authenticated candidate-width bound; raw zero is
-rejected by both the native client and server. Versions 1 and 2 retain their
+rejected by both the native client and server. Version 2 retains its
 existing zero/default behavior.
 
 Response sections are ordered IDs (102), requested JSON documents (103), and
 `dense_search_response` (130). The metadata payload contains one route byte,
 uvarint candidates, exact-fallbacks, full-document-scan-fallbacks, result count,
-then one little-endian float64 score per result. Version 1 retains its legacy
-native-runtime bool byte (successful route `1`). Version 2 requires route tag
-`2`. Cross-version tags are rejected. Tag 2 identifies validated dispatch,
+then one little-endian float64 score per result. Version 2 requires route tag
+`2`; retired version 1 and its route tag `1` are rejected. Cross-version tags
+are rejected. Tag 2 identifies validated dispatch,
 **not measured execution-work evidence**. Version 2 additionally requires the
 critical `dense_search_work` section (134), independently versioned below.
 Version 3 requires route tag `3`, the same critical section 134, and the
@@ -1250,6 +1312,17 @@ backend commit.
 server running a mode that cannot provide fsync for the touched state MUST fail
 with `durability_unavailable`; it must not reinterpret `synced` as a relaxed
 checkpoint.
+
+For native shared-COW collections, `flushed` publishes through the original
+accepted COW authority. A `synced` mutation or `checkpoint` then seals that same
+owner's complete captured prefix through `CollectionManager.CheckpointStorage`;
+checkpointing only its borrowed backend does not cover native accepted state.
+This also covers earlier visible writes and a repeated boundary with no new work.
+Legacy managers retain their backend physical-checkpoint operation. Callers
+publish collection buffers before this storage boundary; a mutation flushes its
+collection, while `checkpoint` flushes all collections. `flush_collection` and
+`flush_all` provide `flushed` and reject `synced`; clients needing both explicit
+barriers request a `flushed` flush followed by a `synced` checkpoint.
 
 `raft_committed` is reserved for distributed mode. It means consensus commit
 plus the cluster-defined local apply/recoverability rule. It is not local WAL

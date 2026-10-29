@@ -227,7 +227,7 @@ func TestApplicationModeDetectsEveryMinimaFlag(t *testing.T) {
 	}
 }
 
-func TestMinimaContractRejectsDoctoredArtifacts(t *testing.T) {
+func TestMinimaHistoricalStructureRejectsDoctoredArtifacts(t *testing.T) {
 	mutations := []struct {
 		name   string
 		mutate func(*minimaArtifact)
@@ -738,7 +738,7 @@ func TestMinimaContractRejectsDoctoredArtifacts(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			artifact := cloneMinimaArtifact(t, validMinimaArtifact())
 			test.mutate(&artifact)
-			if err := validateMinimaArtifact(&artifact); err == nil {
+			if err := validateMinimaHistoricalArtifactStructure(&artifact); err == nil {
 				t.Fatal("doctored Minima artifact accepted")
 			}
 		})
@@ -757,17 +757,24 @@ func TestMinimaContractAcceptsEnrichedQdrantTransitionConfiguration(t *testing.T
 	backend.Configuration["initial_upload_optimizers"] = initial
 	backend.Configuration["production_optimizers"] = production
 
-	if err := validateMinimaArtifact(&artifact); err != nil {
-		t.Fatalf("enriched Qdrant transition configuration rejected: %v", err)
+	if err := validateMinimaHistoricalArtifactStructure(&artifact); err != nil {
+		t.Fatalf("enriched historical transition configuration rejected: %v", err)
+	}
+	_, qdrant := minimaPartialBackendEvidence(t)
+	qdrant.RawEvidence["qdrant"] = raw
+	qdrant.Backends[0].Configuration["initial_upload_optimizers"] = initial
+	qdrant.Backends[0].Configuration["production_optimizers"] = production
+	if err := validateMinimaArtifact(&qdrant); err != nil {
+		t.Fatalf("active Qdrant transition configuration rejected: %v", err)
 	}
 }
 
-func TestMinimaProbeIDsUseAggregateLookupLimit(t *testing.T) {
+func TestMinimaHistoricalProbeIDsUseAggregateLookupLimit(t *testing.T) {
 	artifact := validMinimaArtifact()
 	if got := *minimaTestRow(&artifact, "treedb", "mixed_broad_narrow").Route.ProbeIDs; got != minimaLookupLimit+5 {
 		t.Fatalf("mixed probe IDs=%d want %d", got, minimaLookupLimit+5)
 	}
-	if err := validateMinimaArtifact(&artifact); err != nil {
+	if err := validateMinimaHistoricalArtifactStructure(&artifact); err != nil {
 		t.Fatalf("valid mixed aggregate rejected: %v", err)
 	}
 
@@ -796,6 +803,47 @@ func TestMinimaProbeIDsUseAggregateLookupLimit(t *testing.T) {
 			}
 			if test.wantError != "" && (err == nil || !strings.Contains(err.Error(), test.wantError)) {
 				t.Fatalf("probe validation error=%v want %q", err, test.wantError)
+			}
+		})
+	}
+}
+
+func TestMinimaActiveValidationRefusesHistoricalTreeDBEvidence(t *testing.T) {
+	legacy := validMinimaArtifact()
+	if err := validateMinimaHistoricalArtifactStructure(&legacy); err != nil {
+		t.Fatalf("historical fixture is structurally invalid: %v", err)
+	}
+	for _, strategy := range []string{"native_runtime", "column_graph"} {
+		t.Run(strategy, func(t *testing.T) {
+			artifact := cloneMinimaArtifact(t, legacy)
+			minimaTestBackend(&artifact, "treedb").Configuration["vector_strategy"] = strategy
+			if err := validateMinimaArtifact(&artifact); err == nil || !strings.Contains(err.Error(), "historical only") {
+				t.Fatalf("legacy evidence relabeled as %s was accepted: %v", strategy, err)
+			}
+		})
+	}
+}
+
+func TestMinimaActiveValidationRefusesHistoricalBoundedSetupEvidence(t *testing.T) {
+	manifest, err := buildMinimaBoundedManifest(50000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, strategy := range []string{"native_runtime", "column_graph"} {
+		t.Run(strategy, func(t *testing.T) {
+			artifact := minimaArtifact{
+				Schema: minimaBoundedArtifactSchema, State: "partial", Manifest: manifest,
+				Recommendation: "not_evaluated",
+				NativePathProof: &minimaNativePathProof{
+					Schema: minimaNativeProofSchema, Strategy: strategy,
+					Availability: "unavailable", Reason: "historical setup did not execute",
+				},
+			}
+			if err := validateMinimaHistoricalArtifactStructure(&artifact); err != nil {
+				t.Fatalf("historical setup evidence is structurally invalid: %v", err)
+			}
+			if err := validateMinimaArtifact(&artifact); err == nil || !strings.Contains(err.Error(), "historical only") {
+				t.Fatalf("active bounded setup evidence accepted: %v", err)
 			}
 		})
 	}
@@ -1184,7 +1232,7 @@ func cloneMinimaArtifact(t *testing.T, artifact minimaArtifact) minimaArtifact {
 func TestMinimaArtifactRejectsNonFiniteMetrics(t *testing.T) {
 	artifact := validMinimaArtifact()
 	minimaTestRow(&artifact, "treedb", "small").Recall = math.NaN()
-	if err := validateMinimaArtifact(&artifact); err == nil {
+	if err := validateMinimaHistoricalArtifactStructure(&artifact); err == nil {
 		t.Fatal("non-finite quality metric accepted")
 	}
 }
@@ -1428,7 +1476,7 @@ func TestMinimaBatchCorrelationContract(t *testing.T) {
 	}
 }
 
-func TestMinimaComparatorCombinesBackendEvidenceThroughValidator(t *testing.T) {
+func TestMinimaHistoricalCombinationPreservesBackendEvidence(t *testing.T) {
 	tree, qdrant := minimaPartialBackendEvidence(t)
 	if qdrant.RawEvidence["qdrant"].PhaseAttribution != nil {
 		t.Fatal("Qdrant input fixture unexpectedly contains TreeDB phase attribution")
@@ -1445,7 +1493,15 @@ func TestMinimaComparatorCombinesBackendEvidenceThroughValidator(t *testing.T) {
 		}
 	}
 	out, report := filepath.Join(dir, "qualification.json"), filepath.Join(dir, "report.md")
-	if err := compareMinimaEvidence(treePath, qdrantPath, out, report, "ready_with_alpha_limitations", strings.Repeat("a", 40)); err != nil {
+	if err := compareMinimaEvidence(treePath, qdrantPath, out, report, "ready_with_alpha_limitations", strings.Repeat("a", 40)); err == nil || !strings.Contains(err.Error(), "retired") {
+		t.Fatalf("active comparator accepted legacy runtime evidence: %v", err)
+	}
+	if _, err := os.Stat(out); !os.IsNotExist(err) {
+		t.Fatalf("refused legacy comparison wrote qualification output: %v", err)
+	}
+	// Preserve historical serialization coverage without invoking qualification.
+	historical := combineMinimaEvidence(tree, qdrant, "ready_with_alpha_limitations")
+	if err := writeMinimaComparisonArtifacts(historical, out, report); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(out)
@@ -1500,7 +1556,7 @@ func TestMinimaComparatorCombinesBackendEvidenceThroughValidator(t *testing.T) {
 	if _, ok := qdrantRaw["readiness"]; !ok {
 		t.Fatal("combined Qdrant raw evidence dropped readiness")
 	}
-	if err := validateMinimaArtifact(&combined); err != nil || combined.State != "pass" || !combined.Passing {
+	if err := validateMinimaHistoricalArtifactStructure(&combined); err != nil || combined.State != "pass" || !combined.Passing {
 		t.Fatalf("combined artifact=%+v err=%v", combined, err)
 	}
 	if info, err := os.Stat(report); err != nil || info.Size() == 0 {
@@ -1508,7 +1564,7 @@ func TestMinimaComparatorCombinesBackendEvidenceThroughValidator(t *testing.T) {
 	}
 }
 
-func TestMinimaComparatorWritesPartialOracleFailureAndReturnsError(t *testing.T) {
+func TestMinimaHistoricalPartialCombinationPreservesOracleFailure(t *testing.T) {
 	tree, qdrant := minimaPartialBackendEvidence(t)
 	tree.Failures = append(tree.Failures, "treedb final oracle mismatch")
 	dir := t.TempDir()
@@ -1523,8 +1579,12 @@ func TestMinimaComparatorWritesPartialOracleFailureAndReturnsError(t *testing.T)
 		}
 	}
 	out, report := filepath.Join(dir, "qualification.json"), filepath.Join(dir, "report.md")
-	if err := compareMinimaEvidence(treePath, qdrantPath, out, report, "ready_with_alpha_limitations", strings.Repeat("a", 40)); err == nil {
-		t.Fatal("partial oracle failure returned success")
+	if err := compareMinimaEvidence(treePath, qdrantPath, out, report, "ready_with_alpha_limitations", strings.Repeat("a", 40)); err == nil || !strings.Contains(err.Error(), "retired") {
+		t.Fatalf("active comparator did not refuse legacy evidence: %v", err)
+	}
+	historical := combineMinimaEvidence(tree, qdrant, "ready_with_alpha_limitations")
+	if err := writeMinimaComparisonArtifacts(historical, out, report); err != nil {
+		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(out)
 	if err != nil {
@@ -1538,7 +1598,7 @@ func TestMinimaComparatorWritesPartialOracleFailureAndReturnsError(t *testing.T)
 		len(combined.Failures) != 1 || combined.Failures[0] != "treedb final oracle mismatch" {
 		t.Fatalf("combined partial artifact=%+v", combined)
 	}
-	if err := validateMinimaArtifact(&combined); err != nil {
+	if err := validateMinimaHistoricalArtifactStructure(&combined); err != nil {
 		t.Fatalf("preserved partial artifact is invalid: %v", err)
 	}
 	if info, err := os.Stat(report); err != nil || info.Size() == 0 {

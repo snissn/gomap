@@ -1,0 +1,11 @@
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/documentservice
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkServiceSharedCOWConsumers
+    shared_cow_consumers_bench_test.go:90: backend=native profile=command_wal_durable requested_memtable=cow_btree resolved_strategy=column_graph rows=4096 load_batch=128
+BenchmarkServiceSharedCOWConsumers/keyword
+BenchmarkServiceSharedCOWConsumers/keyword-4         	    1000	    761467 ns/op	       640.0 postings/op	  219227 B/op	    1883 allocs/op
+BenchmarkServiceSharedCOWConsumers/hybrid
+BenchmarkServiceSharedCOWConsumers/hybrid-4          	    1000	    789090 ns/op	        10.00 docs_fetched/op	      1024 postings/op	  347010 B/op	    1916 allocs/op
+PASS

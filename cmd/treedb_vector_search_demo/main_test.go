@@ -62,8 +62,8 @@ func TestExecuteSmokeCompactsReopensValidatesAndBenchmarks(t *testing.T) {
 	if len(res.SearchBenchmarks) != 2 || res.SearchBenchmarks[0].Concurrency != 1 || res.SearchBenchmarks[1].Concurrency != 2 {
 		t.Fatalf("unexpected search benchmarks: %+v", res.SearchBenchmarks)
 	}
-	if res.Profile != "bench_unsafe" {
-		t.Fatalf("profile=%q want bench_unsafe", res.Profile)
+	if res.Profile != "command_wal_durable" {
+		t.Fatalf("profile=%q want command_wal_durable", res.Profile)
 	}
 	if res.ValuePointerThreshold != defaultValuePointerThreshold {
 		t.Fatalf("value pointer threshold=%d want %d", res.ValuePointerThreshold, defaultValuePointerThreshold)
@@ -89,14 +89,20 @@ func TestExecuteSmokeCompactsReopensValidatesAndBenchmarks(t *testing.T) {
 	if res.StorageExpectation.LeafVLogBytes <= 0 {
 		t.Fatalf("missing leaf value-log bytes: %+v", res.StorageExpectation)
 	}
-	if res.Memory.IndexBytesMemory <= 0 {
-		t.Fatalf("missing index memory report: %+v", res.Memory)
+	if res.Memory.IndexBytesMemory != nil {
+		t.Fatalf("ColumnGraph resident index memory must be unavailable: %+v", res.Memory)
 	}
 	if res.CompactStorage == nil || !res.CompactStorage.FullyCompacted {
 		t.Fatalf("compact storage stats=%+v, want fully compacted", res.CompactStorage)
 	}
 	if res.IndexStatsLoaded.LiveDocs != 128 {
 		t.Fatalf("loaded live docs=%d want 128", res.IndexStatsLoaded.LiveDocs)
+	}
+	if res.IndexStatsLoaded.Nodes != 128 || res.IndexStatsLoaded.BytesDisk <= 0 ||
+		!res.VectorIndexStatus.Loaded || res.VectorIndexStatus.State != collections.VectorIndexStateColumnGraphLoaded ||
+		res.VectorIndexStatus.Stats != res.IndexStatsLoaded ||
+		res.VectorIndexSearchPath != collections.VectorIndexSearchPathColumnGraphNativeReader {
+		t.Fatalf("missing full loaded ColumnGraph status or physical route: %+v", res)
 	}
 }
 
@@ -268,7 +274,7 @@ func TestExecuteConsumesDatasetDir(t *testing.T) {
 	}
 }
 
-func TestExecuteDatasetExactValidationNativeRuntime(t *testing.T) {
+func TestExecuteDatasetExactValidationDefaultColumnGraph(t *testing.T) {
 	datasetDir := writeDemoDataset(t, 96, 8, 6, 3)
 	res, err := execute(context.Background(), config{
 		dir:                   t.TempDir(),
@@ -292,7 +298,7 @@ func TestExecuteDatasetExactValidationNativeRuntime(t *testing.T) {
 		disableExactFallback:  true,
 	})
 	if err != nil {
-		t.Fatalf("execute dataset exact native_runtime: %v", err)
+		t.Fatalf("execute dataset exact ColumnGraph: %v", err)
 	}
 	if res.ValidationExactSource != validationExactSourceDataset || res.Validation.ExactSource != validationExactSourceDataset {
 		t.Fatalf("validation exact source result=%q validation=%q, want dataset", res.ValidationExactSource, res.Validation.ExactSource)
@@ -679,11 +685,20 @@ func TestRunJSONOutput(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &res); err != nil {
 		t.Fatalf("decode JSON output: %v\n%s", err, stdout.String())
 	}
-	if res.Profile != "bench_unsafe" || res.Docs != 64 || res.Search.Queries != 4 || res.StorageAfterCompact.TotalBytes <= 0 {
+	if res.Profile != "command_wal_durable" || res.Docs != 64 || res.Search.Queries != 4 || res.StorageAfterCompact.TotalBytes <= 0 {
 		t.Fatalf("unexpected JSON result: %+v", res)
 	}
-	if res.VectorIndexSearchPath != nativeRuntimeSnapshotPath {
-		t.Fatalf("JSON vector index search path=%q want %q", res.VectorIndexSearchPath, nativeRuntimeSnapshotPath)
+	if res.VectorIndexSearchPath != collections.VectorIndexSearchPathColumnGraphNativeReader {
+		t.Fatalf("JSON vector index search path=%q want %q", res.VectorIndexSearchPath, collections.VectorIndexSearchPathColumnGraphNativeReader)
+	}
+	var wire struct {
+		Memory map[string]json.RawMessage `json:"memory"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &wire); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(wire.Memory["index_bytes_memory"]); got != "null" {
+		t.Fatalf("JSON index_bytes_memory=%q want explicit null", got)
 	}
 	if res.ValuePointerThreshold != defaultValuePointerThreshold {
 		t.Fatalf("JSON value pointer threshold=%d want %d", res.ValuePointerThreshold, defaultValuePointerThreshold)
@@ -699,7 +714,7 @@ func TestRunJSONOutput(t *testing.T) {
 	}
 }
 
-func TestExecuteRequireLeafVLogBytesPassesWithDefaultBenchProfile(t *testing.T) {
+func TestExecuteRequireLeafVLogBytesPassesWithDefaultDurableProfile(t *testing.T) {
 	res, err := execute(context.Background(), config{
 		dir:                   t.TempDir(),
 		keepDir:               true,
@@ -724,8 +739,8 @@ func TestExecuteRequireLeafVLogBytesPassesWithDefaultBenchProfile(t *testing.T) 
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
-	if res.Profile != "bench_unsafe" {
-		t.Fatalf("profile=%q want bench_unsafe", res.Profile)
+	if res.Profile != "command_wal_durable" {
+		t.Fatalf("profile=%q want command_wal_durable", res.Profile)
 	}
 	if res.StorageExpectation.LeafVLogBytes <= 0 {
 		t.Fatalf("missing leaf value-log bytes: %+v", res.StorageExpectation)
@@ -886,19 +901,9 @@ func TestParseConfigVectorQueryMode(t *testing.T) {
 			want: "unsupported -validation-exact-source",
 		},
 		{
-			name: "search profile dir requires column graph",
-			args: []string{"-search-profile-dir", filepath.Join("tmp", "profiles")},
-			want: "requires -vector-index-strategy column_graph",
-		},
-		{
 			name: "dataset validation source requires dataset dir",
 			args: []string{"-validation-exact-source", "dataset"},
 			want: "requires -dataset-dir",
-		},
-		{
-			name: "quantized requires column graph",
-			args: []string{"-vector-query-mode", "quantized_only", "-quantized-index-name", defaultQuantizedIndexName},
-			want: "require -vector-index-strategy column_graph",
 		},
 		{
 			name: "quantized requires index name",
@@ -940,6 +945,34 @@ func TestParseConfigVectorQueryMode(t *testing.T) {
 				t.Fatalf("error=%v, want %q", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestParseConfigColumnGraphDefaultSupportsProfilesAndQuantizedQueries(t *testing.T) {
+	for _, args := range [][]string{
+		{"-search-profile-dir", filepath.Join("tmp", "profiles")},
+		{"-vector-query-mode", "quantized_only", "-quantized-index-name", defaultQuantizedIndexName},
+	} {
+		cfg, err := parseConfig(args)
+		if err != nil {
+			t.Fatalf("parseConfig(%v): %v", args, err)
+		}
+		if cfg.vectorIndexStrategy != collections.VectorIndexStrategyColumnGraph || cfg.profile != treedb.ProfileCommandWALDurable {
+			t.Fatalf("unexpected strategy/profile defaults: %+v", cfg)
+		}
+	}
+}
+
+func TestRemovedVectorStrategyFailsBeforeDirectoryCreation(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "must-not-exist")
+	if _, err := parseConfig([]string{"-dir", dir, "-vector-index-strategy", "native_runtime"}); err == nil {
+		t.Fatal("parseConfig accepted removed strategy")
+	}
+	if _, err := execute(context.Background(), config{dir: dir, vectorIndexStrategy: "native_runtime"}); err == nil {
+		t.Fatal("execute accepted removed strategy")
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("removed strategy created data directory: %v", err)
 	}
 }
 
@@ -1041,8 +1074,8 @@ func TestExecuteMatrixReportsNestedKeptDirFromRoot(t *testing.T) {
 	}
 }
 
-func TestExecuteRequireValueLogBytesFailsOnPagerBackedDefault(t *testing.T) {
-	_, err := execute(context.Background(), config{
+func TestExecuteRequireValueLogBytesPassesWithDefaultColumnGraph(t *testing.T) {
+	res, err := execute(context.Background(), config{
 		dir:                  t.TempDir(),
 		keepDir:              true,
 		docs:                 64,
@@ -1060,13 +1093,38 @@ func TestExecuteRequireValueLogBytesFailsOnPagerBackedDefault(t *testing.T) {
 		disableExactFallback: true,
 		requireValueLogBytes: true,
 	})
-	if err == nil {
-		t.Fatal("execute succeeded, want value-log requirement failure")
+	if err != nil {
+		t.Fatalf("execute: %v", err)
 	}
-	// These assertions intentionally describe the current default backend
-	// profile, where this demo does not force value-log storage.
-	if !strings.Contains(err.Error(), "zero value_vlog bytes") {
-		t.Fatalf("error=%v, want zero value_vlog bytes", err)
+	if res.Profile != string(treedb.ProfileCommandWALDurable) || !res.StorageExpectation.RequireValueLogBytes ||
+		res.StorageExpectation.ValueLogBytes <= 0 || res.StorageExpectation.ValueLogBytes != res.StorageAfterCompact.Domains["value_vlog"] {
+		t.Fatalf("default ColumnGraph must prove actual value-log bytes: %+v", res)
+	}
+}
+
+func TestStorageExpectationsRejectEmptyRequiredDomains(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		report storageExpectationReport
+		want   string
+	}{
+		{name: "optional empty domains"},
+		{name: "required value log", report: storageExpectationReport{RequireValueLogBytes: true}, want: "zero value_vlog bytes"},
+		{name: "required leaf log", report: storageExpectationReport{RequireLeafVLogBytes: true}, want: "zero leaf_vlog bytes"},
+		{name: "leaf cannot substitute for value log", report: storageExpectationReport{RequireValueLogBytes: true, LeafVLogBytes: 32}, want: "zero value_vlog bytes"},
+		{name: "value cannot substitute for leaf log", report: storageExpectationReport{RequireLeafVLogBytes: true, ValueLogBytes: 32}, want: "zero leaf_vlog bytes"},
+		{name: "both present", report: storageExpectationReport{RequireValueLogBytes: true, RequireLeafVLogBytes: true, ValueLogBytes: 32, LeafVLogBytes: 64}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.report.validate()
+			if tc.want == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error=%v want %q", err, tc.want)
+			}
+		})
 	}
 }
 
@@ -1356,16 +1414,17 @@ func TestRunTextOutput(t *testing.T) {
 	out := stdout.String()
 	for _, want := range []string{
 		"TreeDB vector search demo",
-		"profile=bench_unsafe",
+		"profile=command_wal_durable",
 		"backend=treedb",
-		"vector_index_strategy=native_runtime",
-		"vector_index_search_path=native_runtime_snapshot",
+		"vector_index_strategy=column_graph",
+		"vector_index_search_path=column_graph_native_reader",
 		"value_pointer_threshold=1024",
 		"leaf_generation_segment_target=4194304",
 		"Storage",
 		"format index_outer_leaves_in_vlog=",
 		"storage_domains index_db=",
 		"Memory",
+		"index_bytes_memory=unavailable",
 		"avg=",
 		"Parallel Search Benchmark",
 	} {

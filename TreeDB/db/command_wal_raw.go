@@ -963,9 +963,9 @@ func (db *DB) cleanupCommandWALCoveredSegmentsV1() (retErr error) {
 	db.commandWALCleanupOlderRoot.Store(proof.olderCommitSeq())
 	db.commandWALCleanupCaptureEpoch.Store(proof.journal.CleanupEpoch)
 	db.commandWALCleanupNamespaceGen.Store(proof.journal.NamespaceGeneration)
-	if proof.cleanupThrough == 0 {
-		return db.syncCommandWALCleanupNamespaceIfDirty()
-	}
+	// A valid zero frontier still permits positively validated empty fixed
+	// containers to be reclaimed. Scan the complete retained replay lineage
+	// and apply the same active-generation, identity and pin gates below.
 	scanStart := time.Now()
 	var decisions []commandWALSegmentCleanupDecision
 	// Listing and reader construction both validate fixed-container reserve.

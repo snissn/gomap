@@ -11,15 +11,19 @@ import (
 	"io"
 	"math"
 	"net"
+	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/x/bsonx/bsoncore"
@@ -1324,34 +1328,90 @@ func TestServerUpdateBatchDuplicateBSONIDRemainsSequential(t *testing.T) {
 	}
 }
 
-func TestServerUpdateBatchVectorMaintenanceIsCommitAmbiguous(t *testing.T) {
-	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	s := NewServer()
-	s.Collections = collections.NewCollectionManager(db)
-	s.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
-	index := bson.D{{Key: "key", Value: bson.D{{Key: "embedding", Value: "vector"}}}, {Key: "name", Value: "embedding_vector"}, {Key: "treedbIndexType", Value: "vector"}, {Key: "treedbVector", Value: bson.D{{Key: "dimensions", Value: int32(2)}, {Key: "metric", Value: "cosine"}, {Key: "m", Value: int32(16)}, {Key: "efConstruction", Value: int32(128)}, {Key: "efSearch", Value: int32(64)}, {Key: "encoding", Value: "float32"}}}}
-	assertOK(t, serveCommand(t, s, 2290, bson.D{{Key: "createIndexes", Value: "users"}, {Key: "indexes", Value: bson.A{index}}, {Key: "$db", Value: "app"}}))
-	assertOK(t, serveCommand(t, s, 2291, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "embedding", Value: bson.A{1.0, 2.0}}}, bson.D{{Key: "_id", Value: "u2"}, {Key: "embedding", Value: bson.A{1.0, 2.0}}}}}, {Key: "$db", Value: "app"}}))
-	updates := bson.A{bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u1"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "embedding", Value: bson.A{1.0, 2.0, 3.0}}}}}}}, bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: "u2"}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "embedding", Value: bson.A{1.0, 2.0, 3.0}}}}}}}}
-	response := serveCommand(t, s, 2292, bson.D{{Key: "update", Value: "users"}, {Key: "ordered", Value: false}, {Key: "updates", Value: updates}, {Key: "$db", Value: "app"}})
-	assertCommandError(t, response, "ShutdownInProgress")
-	assertInt32(t, response, "code", 91)
-	if raw := bson.Raw(response); !raw.Lookup("n").IsZero() || !raw.Lookup("nModified").IsZero() {
-		t.Fatalf("ambiguous batch leaked success counts: %s", response)
-	}
-	if !bson.Raw(response).Lookup("writeErrors").IsZero() {
-		t.Fatalf("ambiguous batch returned indexed errors: %s", response)
-	}
-	for _, id := range []string{"u1", "u2"} {
-		find := serveCommand(t, s, 2293, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: id}}}, {Key: "$db", Value: "app"}})
-		values, _ := cursorFirstBatch(t, find)[0].Lookup("embedding").Array().Values()
-		if len(values) != 3 {
-			t.Fatalf("%s vector len=%d", id, len(values))
+// Exercise the actual durable BSON batch boundary independently of vector DDL.
+// Process loss after the injected cut proves recovery without a graceful Close.
+func TestServerUpdateBatchDurableFaultBoundaries(t *testing.T) {
+	open := func(dir string) *StandaloneServer {
+		t.Helper()
+		server, err := OpenStandaloneServer(StandaloneOptions{Dir: dir, Profile: treedb.ProfileCommandWALDurable, DefaultCollectionOptions: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}})
+		if err != nil {
+			t.Fatal(err)
 		}
+		return server
+	}
+	if dir := os.Getenv("GOMAP_MONGO_BATCH_CUT_DIR"); dir != "" {
+		standalone := open(dir)
+		mode := os.Getenv("GOMAP_MONGO_BATCH_CUT_MODE")
+		point := durabilitycut.BeforeDependencyAppend
+		if mode == "after_sync" {
+			point = durabilitycut.AfterDependencyFileSync
+		}
+		var fired atomic.Int32
+		durabilitycut.Install(func(event durabilitycut.Event) error {
+			if event.Resource == durabilitycut.ResourceCommandWAL && event.Point == point {
+				fired.Add(1)
+				return errors.New("injected BSON update WAL boundary failure")
+			}
+			return nil
+		})
+		updates := bson.A{}
+		for _, id := range []string{"u1", "u2"} {
+			updates = append(updates, bson.D{{Key: "q", Value: bson.D{{Key: "_id", Value: id}}}, {Key: "u", Value: bson.D{{Key: "$set", Value: bson.D{{Key: "score", Value: int32(1)}}}}}})
+		}
+		response := serveCommand(t, standalone.Server, 2292, bson.D{{Key: "update", Value: "users"}, {Key: "ordered", Value: false}, {Key: "updates", Value: updates}, {Key: "$db", Value: "app"}})
+		if fired.Load() == 0 {
+			t.Fatal("update did not reach the command WAL cut")
+		}
+		if mode == "after_sync" {
+			assertCommandError(t, response, "ShutdownInProgress")
+			assertInt32(t, response, "code", 91)
+			if raw := bson.Raw(response); !raw.Lookup("n").IsZero() || !raw.Lookup("nModified").IsZero() || !raw.Lookup("writeErrors").IsZero() {
+				t.Fatalf("ambiguous batch leaked success counts or indexed errors: %s", response)
+			}
+		} else {
+			assertOK(t, response)
+			assertInt32(t, response, "n", 0)
+			assertInt32(t, response, "nModified", 0)
+			values, err := bson.Raw(response).Lookup("writeErrors").Array().Values()
+			if err != nil || len(values) != 2 {
+				t.Fatalf("rejected updates must each report indexed errors: %s, %v", response, err)
+			}
+			for i, value := range values {
+				assertInt32(t, wire.Document(value.Document()), "index", int32(i))
+			}
+		}
+		os.Exit(0) // Deliberate crash boundary: no Close or deferred cleanup.
+	}
+	for _, mode := range []string{"before_append", "after_sync"} {
+		t.Run(mode, func(t *testing.T) {
+			dir := t.TempDir()
+			standalone := open(dir)
+			assertOK(t, serveCommand(t, standalone.Server, 2291, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "score", Value: int32(0)}}, bson.D{{Key: "_id", Value: "u2"}, {Key: "score", Value: int32(0)}}}}, {Key: "$db", Value: "app"}}))
+			if err := standalone.Close(); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestServerUpdateBatchDurableFaultBoundaries$")
+			cmd.Env = append(os.Environ(), "GOMAP_MONGO_BATCH_CUT_DIR="+dir, "GOMAP_MONGO_BATCH_CUT_MODE="+mode)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("fault subprocess: %v\n%s", err, out)
+			}
+			standalone = open(dir)
+			defer func() { _ = standalone.Close() }()
+			want := int32(0)
+			if mode == "after_sync" {
+				want = 1
+			}
+			for _, id := range []string{"u1", "u2"} {
+				find := serveCommand(t, standalone.Server, 2293, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: id}}}, {Key: "$db", Value: "app"}})
+				batch := cursorFirstBatch(t, find)
+				if len(batch) != 1 {
+					t.Fatalf("recovered %s count=%d want 1", id, len(batch))
+				}
+				assertInt32(t, wire.Document(batch[0]), "score", want)
+			}
+		})
 	}
 }
 
@@ -3089,254 +3149,84 @@ func TestServerIndexMetadataCommands(t *testing.T) {
 	assertIndexName(t, indexBatch[0], "_id_")
 }
 
-func TestServerVectorIndexMetadataExtension(t *testing.T) {
+func TestServerBSONVectorRefusalPreservesScalarMetadataAndCRUD(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
-		t.Fatalf("open db: %v", err)
+		t.Fatal(err)
 	}
 	defer func() { _ = db.Close() }()
-
 	server := NewServer()
 	server.Collections = collections.NewCollectionManager(db)
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
 	vectorIndex := bson.D{
 		{Key: "key", Value: bson.D{{Key: "embedding", Value: "vector"}}},
 		{Key: "name", Value: "embedding_vector"},
 		{Key: "treedbIndexType", Value: "vector"},
-		{Key: "treedbVector", Value: bson.D{
-			{Key: "dimensions", Value: int32(64)},
-			{Key: "metric", Value: "cosine"},
-			{Key: "m", Value: int32(16)},
-			{Key: "efConstruction", Value: int32(128)},
-			{Key: "efSearch", Value: int32(64)},
-			{Key: "encoding", Value: "float32"},
-		}},
+		{Key: "treedbVector", Value: bson.D{{Key: "dimensions", Value: int32(64)}, {Key: "metric", Value: "cosine"}}},
 	}
-	createResponse := serveCommand(t, server, 23101, bson.D{
-		{Key: "createIndexes", Value: "users"},
-		{Key: "indexes", Value: bson.A{
-			bson.D{
-				{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}},
-				{Key: "name", Value: "email_1"},
-				{Key: "treedbValueType", Value: "string"},
-			},
-			vectorIndex,
-		}},
-		{Key: "$db", Value: "app"},
-	})
-	assertOK(t, createResponse)
-	assertInt32(t, createResponse, "numIndexesBefore", 1)
-	assertInt32(t, createResponse, "numIndexesAfter", 3)
-
-	col, err := server.Collections.OpenCollection("app.users")
-	if err != nil {
-		t.Fatalf("open collection: %v", err)
+	scalarIndex := bson.D{{Key: "key", Value: bson.D{{Key: "email", Value: int32(1)}}}, {Key: "name", Value: "email_1"}, {Key: "treedbValueType", Value: "string"}}
+	assertCommandError(t, serveCommand(t, server, 23101, bson.D{{Key: "createIndexes", Value: "users"}, {Key: "indexes", Value: bson.A{scalarIndex, vectorIndex}}, {Key: "$db", Value: "app"}}), "BadValue")
+	if _, err := server.Collections.OpenCollection("app.users"); !errors.Is(err, collections.ErrCollectionNotFound) {
+		t.Fatalf("rejected DDL created collection: %v", err)
 	}
-	if got := len(col.Meta().VectorIndexes); got != 1 {
-		t.Fatalf("vector indexes=%d want 1", got)
+	created := serveCommand(t, server, 23102, bson.D{{Key: "createIndexes", Value: "users"}, {Key: "indexes", Value: bson.A{scalarIndex}}, {Key: "$db", Value: "app"}})
+	assertOK(t, created)
+	assertInt32(t, created, "numIndexesAfter", 2)
+	assertCommandError(t, serveCommand(t, server, 23103, bson.D{{Key: "createIndexes", Value: "users"}, {Key: "indexes", Value: bson.A{vectorIndex}}, {Key: "$db", Value: "app"}}), "BadValue")
+	indexes := cursorFirstBatch(t, serveCommand(t, server, 23104, bson.D{{Key: "listIndexes", Value: "users"}, {Key: "$db", Value: "app"}}))
+	if len(indexes) != 2 {
+		t.Fatalf("indexes after refusal=%d want 2", len(indexes))
 	}
-	stored := col.Meta().VectorIndexes[0]
-	if stored.Name != "embedding_vector" || stored.Field != "embedding" || stored.Dimensions != 64 || stored.Metric != collections.VectorMetricCosine || stored.Encoding != collections.VectorIndexEncodingFloat32 {
-		t.Fatalf("stored vector index=%+v", stored)
+	assertIndexName(t, indexes[0], "_id_")
+	assertIndexName(t, indexes[1], "email_1")
+	replay := serveCommand(t, server, 23105, bson.D{{Key: "createIndexes", Value: "users"}, {Key: "indexes", Value: bson.A{indexes[1]}}, {Key: "$db", Value: "app"}})
+	assertOK(t, replay)
+	assertInt32(t, replay, "numIndexesBefore", 2)
+	assertInt32(t, replay, "numIndexesAfter", 2)
+	assertOK(t, serveCommand(t, server, 23106, bson.D{{Key: "insert", Value: "users"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "u1"}, {Key: "email", Value: "ada@example.com"}}, bson.D{{Key: "_id", Value: "u2"}, {Key: "email", Value: "grace@example.com"}}}}, {Key: "$db", Value: "app"}}))
+	found := serveCommand(t, server, 23107, bson.D{{Key: "find", Value: "users"}, {Key: "filter", Value: bson.D{{Key: "email", Value: "ada@example.com"}}}, {Key: "$db", Value: "app"}})
+	assertBatchIDs(t, cursorFirstBatch(t, found), []string{"u1"})
+	// Repeated drop names must remain idempotent for supported scalar indexes.
+	dropped := serveCommand(t, server, 23108, bson.D{{Key: "dropIndexes", Value: "users"}, {Key: "index", Value: bson.A{"email_1", "email_1"}}, {Key: "$db", Value: "app"}})
+	assertOK(t, dropped)
+	assertInt32(t, dropped, "nIndexesWas", 2)
+	assertOK(t, serveCommand(t, server, 23109, bson.D{{Key: "createIndexes", Value: "users"}, {Key: "indexes", Value: bson.A{scalarIndex}}, {Key: "$db", Value: "app"}}))
+	dropped = serveCommand(t, server, 23110, bson.D{{Key: "dropIndexes", Value: "users"}, {Key: "index", Value: "*"}, {Key: "$db", Value: "app"}})
+	assertOK(t, dropped)
+	assertInt32(t, dropped, "nIndexesWas", 2)
+	indexes = cursorFirstBatch(t, serveCommand(t, server, 23111, bson.D{{Key: "listIndexes", Value: "users"}, {Key: "$db", Value: "app"}}))
+	if len(indexes) != 1 {
+		t.Fatalf("indexes after drop all=%d want 1", len(indexes))
 	}
-
-	indexesResponse := serveCommand(t, server, 23102, bson.D{
-		{Key: "listIndexes", Value: "users"},
-		{Key: "$db", Value: "app"},
-	})
-	indexBatch := cursorFirstBatch(t, indexesResponse)
-	if got, want := len(indexBatch), 3; got != want {
-		t.Fatalf("index batch len=%d want %d", got, want)
-	}
-	assertIndexName(t, indexBatch[0], "_id_")
-	assertIndexName(t, indexBatch[1], "email_1")
-	assertIndexName(t, indexBatch[2], "embedding_vector")
-	keyDoc, ok := indexBatch[2].Lookup("key").DocumentOK()
-	if !ok {
-		t.Fatalf("vector index key missing: %v", indexBatch[2])
-	}
-	if got, ok := keyDoc.Lookup("embedding").StringValueOK(); !ok || got != "vector" {
-		t.Fatalf("vector key embedding=%q ok=%v want vector", got, ok)
-	}
-	if got, ok := indexBatch[2].Lookup("treedbIndexType").StringValueOK(); !ok || got != "vector" {
-		t.Fatalf("treedbIndexType=%q ok=%v want vector", got, ok)
-	}
-	options, ok := indexBatch[2].Lookup("treedbVector").DocumentOK()
-	if !ok {
-		t.Fatalf("treedbVector missing: %v", indexBatch[2])
-	}
-	if got, ok := options.Lookup("dimensions").Int32OK(); !ok || got != 64 {
-		t.Fatalf("dimensions=%d ok=%v want 64", got, ok)
-	}
-	if got, ok := options.Lookup("metric").StringValueOK(); !ok || got != "cosine" {
-		t.Fatalf("metric=%q ok=%v want cosine", got, ok)
-	}
-	if got, ok := options.Lookup("encoding").StringValueOK(); !ok || got != "float32" {
-		t.Fatalf("encoding=%q ok=%v want float32", got, ok)
-	}
-
-	doubleOptionsResponse := serveCommand(t, server, 231021, bson.D{
-		{Key: "createIndexes", Value: "users_double_vector_options"},
-		{Key: "indexes", Value: bson.A{bson.D{
-			{Key: "key", Value: bson.D{{Key: "embedding", Value: "vector"}}},
-			{Key: "name", Value: "embedding_vector"},
-			{Key: "treedbIndexType", Value: "vector"},
-			{Key: "treedbVector", Value: bson.D{
-				{Key: "dimensions", Value: float64(64)},
-				{Key: "m", Value: float64(16)},
-				{Key: "efConstruction", Value: float64(128)},
-				{Key: "efSearch", Value: float64(64)},
-			}},
-		}}},
-		{Key: "$db", Value: "app"},
-	})
-	assertOK(t, doubleOptionsResponse)
-	doubleOptionsCol, err := server.Collections.OpenCollection("app.users_double_vector_options")
-	if err != nil {
-		t.Fatalf("open double-options collection: %v", err)
-	}
-	if got := doubleOptionsCol.Meta().VectorIndexes[0]; got.Dimensions != 64 || got.M != 16 || got.EfConstruction != 128 || got.EfSearch != 64 {
-		t.Fatalf("double vector options stored=%+v", got)
-	}
-
-	replayResponse := serveCommand(t, server, 23103, bson.D{
-		{Key: "createIndexes", Value: "users"},
-		{Key: "indexes", Value: bson.A{indexBatch[2]}},
-		{Key: "$db", Value: "app"},
-	})
-	assertOK(t, replayResponse)
-	assertInt32(t, replayResponse, "numIndexesBefore", 3)
-	assertInt32(t, replayResponse, "numIndexesAfter", 3)
-
-	assertOK(t, serveCommand(t, server, 23104, bson.D{
-		{Key: "insert", Value: "users"},
-		{Key: "documents", Value: bson.A{
-			bson.D{{Key: "_id", Value: "u1"}, {Key: "email", Value: "ada@example.com"}},
-			bson.D{{Key: "_id", Value: "u2"}, {Key: "email", Value: "grace@example.com"}},
-		}},
-		{Key: "$db", Value: "app"},
-	}))
-	findResponse := serveCommand(t, server, 23105, bson.D{
-		{Key: "find", Value: "users"},
-		{Key: "filter", Value: bson.D{{Key: "email", Value: "ada@example.com"}}},
-		{Key: "$db", Value: "app"},
-	})
-	assertBatchIDs(t, cursorFirstBatch(t, findResponse), []string{"u1"})
-
-	dropResponse := serveCommand(t, server, 23106, bson.D{
-		{Key: "dropIndexes", Value: "users"},
-		{Key: "index", Value: "embedding_vector"},
-		{Key: "$db", Value: "app"},
-	})
-	assertOK(t, dropResponse)
-	assertInt32(t, dropResponse, "nIndexesWas", 3)
-	afterDrop := cursorFirstBatch(t, serveCommand(t, server, 23107, bson.D{
-		{Key: "listIndexes", Value: "users"},
-		{Key: "$db", Value: "app"},
-	}))
-	if got, want := len(afterDrop), 2; got != want {
-		t.Fatalf("index batch after vector drop len=%d want %d", got, want)
-	}
-	assertIndexName(t, afterDrop[0], "_id_")
-	assertIndexName(t, afterDrop[1], "email_1")
-
-	assertOK(t, serveCommand(t, server, 23108, bson.D{
-		{Key: "createIndexes", Value: "users"},
-		{Key: "indexes", Value: bson.A{vectorIndex}},
-		{Key: "$db", Value: "app"},
-	}))
-	duplicateVectorDropResponse := serveCommand(t, server, 23109, bson.D{
-		{Key: "dropIndexes", Value: "users"},
-		{Key: "index", Value: bson.A{"embedding_vector", "embedding_vector"}},
-		{Key: "$db", Value: "app"},
-	})
-	assertOK(t, duplicateVectorDropResponse)
-	assertInt32(t, duplicateVectorDropResponse, "nIndexesWas", 3)
-	afterDuplicateVectorDrop := cursorFirstBatch(t, serveCommand(t, server, 23110, bson.D{
-		{Key: "listIndexes", Value: "users"},
-		{Key: "$db", Value: "app"},
-	}))
-	if got, want := len(afterDuplicateVectorDrop), 2; got != want {
-		t.Fatalf("index batch after duplicate vector drop len=%d want %d", got, want)
-	}
-	assertOK(t, serveCommand(t, server, 23111, bson.D{
-		{Key: "createIndexes", Value: "users"},
-		{Key: "indexes", Value: bson.A{vectorIndex}},
-		{Key: "$db", Value: "app"},
-	}))
-	dropAllResponse := serveCommand(t, server, 23112, bson.D{
-		{Key: "dropIndexes", Value: "users"},
-		{Key: "index", Value: "*"},
-		{Key: "$db", Value: "app"},
-	})
-	assertOK(t, dropAllResponse)
-	assertInt32(t, dropAllResponse, "nIndexesWas", 3)
-	afterDropAll := cursorFirstBatch(t, serveCommand(t, server, 23113, bson.D{
-		{Key: "listIndexes", Value: "users"},
-		{Key: "$db", Value: "app"},
-	}))
-	if got, want := len(afterDropAll), 1; got != want {
-		t.Fatalf("index batch after drop all len=%d want %d", got, want)
-	}
-	assertIndexName(t, afterDropAll[0], "_id_")
+	assertIndexName(t, indexes[0], "_id_")
 }
 
-func TestServerCreateIndexesConflictingExistingVectorDoesNotCreateScalar(t *testing.T) {
+func TestServerCreateIndexesVectorConflictingWithScalarDoesNotCreateScalar(t *testing.T) {
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
-		t.Fatalf("open db: %v", err)
+		t.Fatal(err)
 	}
 	defer func() { _ = db.Close() }()
-
 	server := NewServer()
 	server.Collections = collections.NewCollectionManager(db)
-	vectorIndex := bson.D{
-		{Key: "key", Value: bson.D{{Key: "embedding", Value: "vector"}}},
-		{Key: "name", Value: "embedding_vector"},
-		{Key: "treedbIndexType", Value: "vector"},
-		{Key: "treedbVector", Value: bson.D{
-			{Key: "dimensions", Value: int32(64)},
-			{Key: "metric", Value: "cosine"},
-		}},
-	}
-	assertOK(t, serveCommand(t, server, 23114, bson.D{
-		{Key: "createIndexes", Value: "users"},
-		{Key: "indexes", Value: bson.A{vectorIndex}},
-		{Key: "$db", Value: "app"},
-	}))
-
-	conflictingVector := bson.D{
-		{Key: "key", Value: bson.D{{Key: "embedding", Value: "vector"}}},
-		{Key: "name", Value: "embedding_vector"},
-		{Key: "treedbIndexType", Value: "vector"},
-		{Key: "treedbVector", Value: bson.D{
-			{Key: "dimensions", Value: int32(32)},
-			{Key: "metric", Value: "cosine"},
-		}},
-	}
-	response := serveCommand(t, server, 23115, bson.D{
-		{Key: "createIndexes", Value: "users"},
-		{Key: "indexes", Value: bson.A{
-			bson.D{
-				{Key: "key", Value: bson.D{{Key: "city", Value: int32(1)}}},
-				{Key: "name", Value: "city_1"},
-				{Key: "treedbValueType", Value: "string"},
-			},
-			conflictingVector,
-		}},
-		{Key: "$db", Value: "app"},
-	})
-	assertCommandError(t, response, "BadValue")
-
+	server.DefaultCollectionOptions = collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}
+	assertOK(t, serveCommand(t, server, 23114, bson.D{{Key: "createIndexes", Value: "users"}, {Key: "indexes", Value: bson.A{bson.D{{Key: "key", Value: bson.D{{Key: "label", Value: int32(1)}}}, {Key: "name", Value: "embedding_vector"}, {Key: "treedbValueType", Value: "string"}}}}, {Key: "$db", Value: "app"}}))
+	response := serveCommand(t, server, 23115, bson.D{{Key: "createIndexes", Value: "users"}, {Key: "indexes", Value: bson.A{
+		bson.D{{Key: "key", Value: bson.D{{Key: "city", Value: int32(1)}}}, {Key: "name", Value: "city_1"}, {Key: "treedbValueType", Value: "string"}},
+		bson.D{{Key: "key", Value: bson.D{{Key: "embedding", Value: "vector"}}}, {Key: "name", Value: "embedding_vector"}, {Key: "treedbIndexType", Value: "vector"}, {Key: "treedbVector", Value: bson.D{{Key: "dimensions", Value: int32(64)}}}},
+	}}, {Key: "$db", Value: "app"}})
+	assertCommandError(t, response, "DuplicateKey")
 	col, err := server.Collections.OpenCollection("app.users")
 	if err != nil {
-		t.Fatalf("open collection: %v", err)
+		t.Fatal(err)
 	}
-	if _, ok := findIndexDefinition(col.Meta().Indexes, "city_1"); ok {
-		t.Fatalf("conflicting vector request created scalar index: %+v", col.Meta().Indexes)
+	meta := col.Meta()
+	if len(meta.Indexes) != 1 || len(meta.VectorIndexes) != 0 {
+		t.Fatalf("conflicting vector request changed indexes: %+v", meta)
 	}
-	stored, ok := findVectorIndexDefinition(col.Meta().VectorIndexes, "embedding_vector")
-	if !ok || stored.Dimensions != 64 {
-		t.Fatalf("vector index changed after conflicting request: %+v ok=%v", stored, ok)
+	stored := meta.Indexes[0]
+	if stored.Name != "embedding_vector" || stored.Field != "label" || stored.ValueType != collections.IndexValueString {
+		t.Fatalf("existing scalar changed: %+v", stored)
 	}
 }
 

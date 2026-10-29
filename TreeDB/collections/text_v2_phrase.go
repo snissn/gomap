@@ -40,7 +40,7 @@ func executeTextV2PhraseSearchAtSnapshot(
 		response.Results = []TextSearchResult{}
 		return response, nil
 	}
-	allowSet, err := newTextV2SearchOrdinalAllowSet(snap, catalog, ctx, opts.textV2AllowedDocumentIDs)
+	allowSet, err := newTextV2SearchOrdinalAllowSet(snap, catalog, ctx, opts.scalarAllowedIDs())
 	if err != nil {
 		return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
 	}
@@ -98,7 +98,7 @@ func executeTextV2PhraseSearchAtSnapshot(
 		if !ok || norm.tombstoned() {
 			continue
 		}
-		docMap, ok, err := cache.docMapEntry(snap, catalog, ctx, candidate.ordinal)
+		docMap, ok, err := cache.identityEntry(snap, catalog, ctx, candidate.ordinal)
 		if err != nil {
 			return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
 		}
@@ -135,7 +135,7 @@ func executeTextV2PhraseSearchAtSnapshot(
 			return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
 		}
 		candidate.generation = norm.Generation
-		candidate.documentID = append(candidate.documentID[:0], docMap.DocumentID...)
+		candidate.documentID = docMap.appendTo(candidate.documentID[:0])
 		candidate.score = score
 		scored = append(scored, candidate)
 	}

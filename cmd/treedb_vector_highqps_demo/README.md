@@ -3,6 +3,11 @@
 Small exact-only TreeDB vector serving demo for
 `Collection.SearchVectorIndexWithBuffer`.
 
+This uses exact FP32 scoring on the ColumnGraph ANN route. It is separate from
+the explicit document-scan exact API. `column_graph` is the only serving strategy;
+ordinary filtered ANN is unavailable, while admitted typed filters and derived
+quantized planes have separate APIs and admission contracts.
+
 The command builds a fresh collection with a `column_graph` float32/cosine vector
 index, checkpoints and reopens the DB, warms the collection-owned prepared
 `hnsw_search_pack_v1` state, then runs a timed no-document search loop while

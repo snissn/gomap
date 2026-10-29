@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1377,11 +1378,8 @@ func (db *DB) captureRegisteredDurableValueLogResourcesWithMetadataV1(references
 	}
 	set := db.valueLogManager.CurrentSubsetNoRefresh(references)
 	defer func() { retErr = errors.Join(retErr, db.retainResourceCleanupError(db.valueLogManager.Release(set))) }()
-	fileIDs := make([]uint32, 0, len(references))
-	for fileID := range references {
-		fileIDs = append(fileIDs, fileID)
-	}
-	sort.Slice(fileIDs, func(i, j int) bool { return fileIDs[i] < fileIDs[j] })
+	var fileIDScratch [8]uint32
+	fileIDs := sortedDurableResourceFileIDs(references, fileIDScratch[:])
 	required := make([]rootpublication.ReachabilityField, 0, 2)
 	var requiresValueLog, requiresOuterLeafRaw bool
 	for _, fileID := range fileIDs {
@@ -3355,4 +3353,18 @@ func (db *DB) releaseDurableRootResourcesV1() error {
 	db.durableRoot.pending, db.durableRoot.ambiguous = nil, nil
 	db.durablePublishMu.Unlock()
 	return nil
+}
+
+// sortedDurableResourceFileIDs returns transient capture scratch, never retained by a resource owner.
+// Larger captures spill once without limiting the complete registered resource set.
+func sortedDurableResourceFileIDs(references map[uint32]struct{}, scratch []uint32) []uint32 {
+	ids := scratch[:0]
+	if len(references) > cap(ids) {
+		ids = make([]uint32, 0, len(references))
+	}
+	for id := range references {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	return ids
 }

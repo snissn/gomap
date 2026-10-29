@@ -50,6 +50,27 @@ When the schema grows enough that manual duplication becomes risky, generate
 either constants or documentation tables from the registry. Do not introduce a
 generator until it removes real drift risk.
 
+### Collection metadata V7
+
+Text-bearing collection metadata uses the V7 payload contract in protocol
+section 9. Keep the full catalog-create codec and its strict inverse as the
+shared schema boundary for nativewire response/create decoding, deterministic
+validation, and Raft lowering; do not add another text-definition serializer.
+The existing `create_collection` command remains version 1 and section 107
+remains the required deterministic opaque `collection_meta` field. No command,
+section, feature, or error ID changes, so existing ID and legacy entry golden
+bytes remain fixed. `TestTextMetadataV7CanonicalCodecAndDeterministicCreate`
+checks exact V7 bytes against the maintained canonical catalog payload and
+re-encoding, while the public Create/List/reopen and hostile-input controls
+check semantics independently. Keep the V5 exact-byte and V6 column controls.
+
+V7 create decoding must enforce its 1 MiB bound before JSON allocation, plus
+semantic normalization, canonical bytes, index counts, deterministic name
+limits and existing column create authority/bounds. Response decoding retains
+the enclosing frame limits. Historical WAL replay must retain its own
+compatibility decoder. This is a pre-alpha metadata addition; it does not add
+text-query transport or establish live multi-node qualification.
+
 ## 3. Package Boundaries
 
 The exact package names can change, but the implementation should preserve these
@@ -194,6 +215,21 @@ Do not sample process counters per request. Shared Go/Python golden, strict
 presence/duplicate/numeric checks, zero-allocation Go proof decoding and real
 service/client lifecycle controls cover this boundary. Legacy 64/v1 bytes and
 GetMany's separate list/result contract remain unchanged.
+
+Command 64/v5 reuses the ordinary public service ANN/exact execution and existing
+request/result section IDs. Propagate actual prepared-reader/search-pack/delta/scan counters;
+never derive them from a declared strategy. ANN returns the maintained search's
+owned projected documents; exact serializes the documents already selected by
+the maintained scan and ranking. Do not fetch them again by primary key. Exact
+scan work is explicit and must not be reported as a no-document ANN route.
+Ordinary ColumnGraph ANN admits exactly one measured prepared-reader or
+search-pack route. Copy `SearchRouteHNSWSearchPack` into `SearchPackSearch`;
+the physical pack name identifies an asset representation, not a separate runtime.
+Intentional exact reports neither ordinary graph counter.
+Select typed work requirements by explicit versions 2/3/4, never by a numeric
+`>= 2` test that would impose typed proofs on ordinary v5. Version-specific
+metadata validation rejects HNSW/typed relabeling, impossible counters and
+unnegotiated capability claims while retaining each independent proof version.
 
 Fuzz tests should target frame and section decoding, byte vectors, compression
 boundaries, and command normalization. Fuzzers must use memory and frame-size

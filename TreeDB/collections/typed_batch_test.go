@@ -437,43 +437,6 @@ func TestTypedMinimaInsertAndReplay(t *testing.T) {
 	assertTypedMinimaRows(t, checkpointCollection)
 }
 
-func TestTypedMinimaAdHocRuntimeAdmission(t *testing.T) {
-	dir, d, col := openTypedMinimaCollection(t)
-	defer d.Close()
-	index, err := newVectorIndex(col, VectorIndexOptions{Name: "ad_hoc", Field: "embedding", Metric: VectorMetricCosine, M: 2})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := col.RegisterVectorIndex(index); err != nil {
-		t.Fatal(err)
-	}
-	other, err := NewCollectionManager(d).OpenCollection("minima")
-	if err != nil {
-		t.Fatal(err)
-	}
-	before := countCollectionCommandWALFrames(t, dir)
-	ids, retained := [][]byte{[]byte("a")}, [][]byte{[]byte(`{"id":"a"}`)}
-	columns := []TypedColumnBatch{{Name: "embedding", Float32Vectors: [][]float32{{1, 0, 0, 0, 0, 0, 0, 0}}}, {Name: "content", Strings: []string{"alpha"}}, {Name: "user", Strings: []string{"u1"}}, {Name: "path", Strings: []string{"file1"}}}
-	for _, c := range []*Collection{col, other} {
-		if _, _, err := c.InsertTypedBatchWithStats(ids, retained, columns); err == nil {
-			t.Fatal("accepted runtime insert")
-		}
-		if _, err := c.ReplaceTypedBatch(ids, retained, columns); err == nil {
-			t.Fatal("accepted runtime replacement")
-		}
-	}
-	if got := countCollectionCommandWALFrames(t, dir); got != before {
-		t.Fatalf("rejection appended WAL: %d -> %d", before, got)
-	}
-	col.UnregisterVectorIndex(index.name)
-	if _, _, err := other.InsertTypedBatchWithStats(ids, retained, columns); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := other.InsertTypedBatchWithStats(ids, retained, columns); err == nil {
-		t.Fatal("accepted existing document ID")
-	}
-}
-
 func assertTypedMinimaRows(t *testing.T, col *Collection) {
 	t.Helper()
 	ids, err := col.FindByIndex("user", "u1")

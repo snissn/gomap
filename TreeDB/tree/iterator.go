@@ -1026,7 +1026,9 @@ func (it *Iterator) UnsafeEntryWithRevision() ([]byte, page.ValuePtr, byte, page
 	if top.Node.Type() != page.PageTypeLeaf || top.Index < 0 || top.Index >= int(top.Node.Count()) {
 		return val, ptr, flags, page.LegacyEntryRevision
 	}
-	_, _, _, _, revision, err := top.Node.GetLeafEntryViewWithRevision(uint16(top.Index))
+	// Key reconstruction already belongs to the cursor. Reading only value
+	// metadata preserves that key view and avoids a second key scratch cohort.
+	_, _, _, revision, err := top.Node.GetLeafValueViewWithRevision(uint16(top.Index))
 	if err != nil {
 		it.err = err
 		it.valid = false
@@ -1084,6 +1086,37 @@ func (it *Iterator) Seek(key []byte) {
 	}
 	if it.start != nil && (key == nil || compareTreeKey(key, it.start) < 0) {
 		key = it.start
+	}
+	if it.owned && it.valid && it.err == nil && key != nil && len(it.stack) > 0 && compareTreeKey(key, it.currKey) >= 0 {
+		top := &it.stack[len(it.stack)-1]
+		if top.Node.Type() == page.PageTypeLeaf && top.Node.Count() > 0 && len(key) <= cap(it.leafState.keyScratch) {
+			// SearchLeaf and last-key reconstruction share nodeKeyScratch. The
+			// target may itself be the current borrowed key in that scratch, so
+			// preserve it in the other already-owned fixed buffer first. Keep
+			// this copy for the original seek too if leaf coverage is unproved.
+			target := it.leafState.keyScratch[:len(key)]
+			copy(target, key)
+			key = target
+			last, _, err := top.Node.GetLeafKeyFlagsView(top.Node.Count() - 1)
+			if err == nil && compareTreeKey(key, last) <= 0 {
+				index, _, err := top.Node.SearchLeaf(key)
+				if err == nil {
+					// The exact immutable leaf was authenticated on load. Reuse
+					// its path, but discard every prior row/prefetch result just
+					// as root positioning does. loadCurrent enforces end bounds.
+					it.resetPointerPrefetch()
+					it.prefetchArmed = false
+					it.leafState.resetPage()
+					it.valid = false
+					it.currKey, it.currVal = nil, nil
+					it.currPtr = page.ValuePtr{}
+					it.flags, it.valOK, it.ptrOK = 0, false, false
+					top.Index = int(index)
+					it.loadCurrent()
+					return
+				}
+			}
+		}
 	}
 	it.seek(key)
 	// Check bounds? Handled in loadCurrent

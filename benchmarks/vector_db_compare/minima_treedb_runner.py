@@ -843,18 +843,16 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
                  operation_timeout: float, ef_search: int, ef_construction: int = 32,
                  diagnostics_dir: Path | None = None,
                  diagnostic_slow_seconds: float = 30, diagnostic_profile_seconds: int = 5,
-                 diagnostic_capture_timeout: float = 10, strategy: str = "native_runtime",
+                 diagnostic_capture_timeout: float = 10, strategy: str = "column_graph",
                  transport: str | None = None, column_graph_serving: dict[str, Any] | None = None,
                  query_mode: str = "exact", quantized_index_name: str | None = None,
                  quantized_rerank_candidates: int | None = None) -> None:
         self.strategy = strategy
-        self.transport = transport or ("native" if strategy == "column_graph" else "http")
-        if strategy not in ("native_runtime", "column_graph") or self.transport not in ("http", "native"):
+        self.transport = transport or "native"
+        if strategy != "column_graph" or self.transport not in ("http", "native"):
             raise ValueError("unsupported Minima strategy or transport")
         if strategy == "column_graph" and (type(ef_construction) is not int or ef_construction <= 0):
             raise ValueError("column_graph ef_construction must be a positive integer")
-        if strategy == "native_runtime" and self.transport != "http":
-            raise ValueError("legacy Minima baseline requires HTTP transport")
         if strategy == "column_graph" and not column_graph_serving:
             raise ValueError("column_graph requires explicit serving limits")
         if strategy == "column_graph":
@@ -2046,6 +2044,10 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
 
     def search(self, operation: str, scenario: str, interval: dict[str, int] | None = None) -> tuple[list[str], list[float]]:
         assert self.client is not None
+        if (self.strategy != "column_graph" or self.index_info is None
+                or self.index_info.vector_strategy != "column_graph"
+                or self.index_info.extra.get("typed_input") is not True):
+            raise RuntimeError("filtered Minima ANN requires authoritative typed ColumnGraph input")
         spec, query = self.specs[scenario], self.queries[scenario]
         measured = getattr(self, "measured", False)
         quantized = getattr(self, "query_mode", "exact") == "quantized_rerank"
@@ -2125,12 +2127,10 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
                     quantized_record["score_plane"] = asdict(score_plane)
             if failure is not None:
                 raise failure
-            selected = response.native_base_plus_live_delta
-            if self.strategy == "column_graph":
-                selected = (not response.native_base_plus_live_delta
-                            and response.index.vector_strategy == "column_graph"
-                            and response.index.generation == self.index_info.generation
-                            and (self.transport != "native" or response.native_command_version == (3 if quantized else 2)))
+            selected = (response.index.vector_strategy == "column_graph"
+                        and response.index.extra.get("typed_input") is True
+                        and response.index.generation == self.index_info.generation
+                        and (self.transport != "native" or response.native_command_version == (3 if quantized else 2)))
             if response.route != "ann" or not selected or response.exact_fallbacks != 0 or response.full_document_scan_fallbacks != 0:
                 raise RuntimeError(f"TreeDB query left required native route: {response!r}")
             if quantized and (response.dense_work is None or response.score_plane is None
@@ -2363,11 +2363,6 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
         artifact = super().artifact()
         if self.manifest.get("schema") == common.BOUNDED_MANIFEST_SCHEMA:
             artifact["schema"] = common.BOUNDED_ARTIFACT_SCHEMA
-            artifact["native_path_proof"] = {
-                "schema": "treedb_minima_native_path_proof/v1", "strategy": "native_runtime",
-                "availability": "unavailable", "counters": None,
-                "reason": "native baseline diagnostic; typed column_graph lifecycle counters require M1-M4; bounded sparse scenario does not preserve full <1% selectivity",
-            }
         if self.strategy == "column_graph":
             artifact["native_path_proof"] = {
                 "schema": "treedb_minima_native_path_proof/v1", "strategy": "column_graph",
@@ -2435,23 +2430,6 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
             route = self.route_evidence.get(row["scenario"])
             if route is None:
                 continue
-            row["route"] = {
-                "identity": "native_base_plus_live_delta", "declared_scalar_filtering": True,
-                "native_base_plus_live_delta": route.native_base_plus_live_delta,
-                "full_document_scan_fallbacks": route.full_document_scan_fallbacks,
-                "scalar_filter_unbounded": route.scalar_filter_unbounded,
-                "probe_ids": route.scalar_filter_probe_ids, "candidate_ids": route.scalar_filter_candidate_ids,
-                "retained_candidate_ids": route.scalar_filter_retained_candidate_ids,
-                "refined_candidate_ids": route.scalar_filter_refined_candidate_ids,
-                "membership_source": route.scalar_filter_membership_source, "plan": route.scalar_filter_plan,
-                "allowed_id_materialization_rows": route.allowed_id_materialization_rows,
-                "primary_document_scans": route.primary_document_scans,
-                "visited_candidates": route.scalar_filter_visited, "scored_candidates": route.scalar_filter_scored,
-                "admitted_candidates": route.scalar_filter_admitted,
-            }
-            row["visibility"] = {"generation_consistent": True,
-                                 "visibility_mismatch_count": route.visibility_mismatch_count,
-                                 "visibility_retry_count": route.visibility_retry_count}
             row["resource"] = {"captured": resource["captured"], "bytes_per_op": None, "allocs_per_op": None,
                                "allocation_availability": "unavailable", "rss_bytes": resource["rss_bytes"],
                                "cpu_seconds": resource["cpu_seconds"], "disk_bytes": resource["disk_bytes"]}
@@ -2467,19 +2445,6 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
         artifact["backend_raw_evidence"]["treedb"] = raw
         raw.pop("collection_configuration_transition", None)
         raw.pop("readiness", None)
-        raw["native_route_responses"] = {
-            scenario: {"membership_source": value.scalar_filter_membership_source,
-                       "plan": value.scalar_filter_plan, "probe_ids": value.scalar_filter_probe_ids,
-                       "candidates": value.scalar_filter_candidates,
-                       "candidate_ids": value.scalar_filter_candidate_ids,
-                       "retained": value.scalar_filter_retained_candidate_ids,
-                       "refined": value.scalar_filter_refined_candidate_ids,
-                       "visited": value.scalar_filter_visited, "scored": value.scalar_filter_scored,
-                       "admitted": value.scalar_filter_admitted,
-                       "visibility_mismatches": value.visibility_mismatch_count,
-                       "visibility_retries": value.visibility_retry_count}
-            for scenario, value in self.route_evidence.items()
-        }
         raw["resource_measurement"] = resource
         if self.strategy == "column_graph":
             raw["native_route_responses"] = {
@@ -2536,7 +2501,7 @@ class TreeDBMinimaRunner(common.QdrantMinimaRunner):
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--strategy", choices=("native_runtime", "column_graph"), default="native_runtime")
+    parser.add_argument("--strategy", choices=("column_graph",), default="column_graph")
     parser.add_argument("--transport", choices=("http", "native"), help="column_graph defaults to native; HTTP enables the bridge comparison")
     parser.add_argument("--native-address", default="127.0.0.1:17122")
     parser.add_argument("--column-graph-serving", type=Path, help="explicit JSON serving limits for column_graph")
@@ -2564,7 +2529,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--quantized-index-name")
     parser.add_argument("--quantized-rerank-candidates", type=int)
     parser.add_argument("--ef-construction", type=int, default=32,
-                        help="column_graph construction EF (default: 32; ignored by native_runtime)")
+                        help="column_graph construction EF (default: 32)")
     parser.add_argument("--small", action="store_true", help="run the real small-scenario lifecycle and emit validated partial evidence")
     parser.add_argument("--diagnostics-dir", type=Path)
     parser.add_argument("--diagnostics-url", default="http://127.0.0.1:17121")
@@ -2655,6 +2620,8 @@ def main() -> int:
                           ("write_quantized_plan", None)):
         if not hasattr(args, name):
             setattr(args, name, default)
+    if args.strategy != "column_graph":
+        raise SystemExit("Minima supports only the column_graph strategy")
     validate_quantized_launch(args)
     serving = None
     if args.strategy == "column_graph":
@@ -2665,7 +2632,7 @@ def main() -> int:
             validate_column_graph_serving(serving)
         except ValueError as exc:
             raise SystemExit(f"invalid column_graph serving limits: {exc}") from exc
-    transport = getattr(args, "transport", None) or ("native" if args.strategy == "column_graph" else "http")
+    transport = getattr(args, "transport", None) or "native"
     manifest = common.load_manifest(args.manifest)
     validate_quantized_launch(args, manifest)
     expected_quantized_plan = quantized_plan(manifest, serving, args) if args.query_mode == "quantized_rerank" else None

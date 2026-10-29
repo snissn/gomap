@@ -174,6 +174,17 @@ Acceptance:
 R1 closeout evidence is recorded in
 `TreeDB/docs/spec/native-wire-r1-closeout.md`.
 
+Collection metadata fidelity follow-up: text-bearing schemas use the V7
+catalog-payload envelope described in protocol section 9. Single-node
+Create/List and reopen must preserve full V1/V2 declarations across JSON, BSON
+and template-v1. Deterministic create validation and Raft lowering use the same
+strict codec; local service parity alone does not certify live distributed
+apply. Existing command/section IDs and the deterministic-entry envelope stay
+fixed, and older peers must reject V7 rather than discard text declarations.
+The verification matrix records the focused controls; final performance and
+applicable cluster qualification remain required. No query-phase sequencing or
+new text-query transport command follows from this metadata change.
+
 ### R2. Deterministic Command Entry v1
 
 Implement a canonical command-entry encoder for mutating commands:

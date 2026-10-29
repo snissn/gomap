@@ -243,8 +243,7 @@ func (c *Collection) notifyAdmittedUpdateResults(items []updateBatchItem, result
 	return commitAmbiguousError("update vector index maintenance", c.notifyVectorIndexesUpsert(ids))
 }
 
-// Distinct handles can share a write domain while retaining handle-local ad-hoc
-// runtimes. Notify each affected handle before releasing execution admission.
+// Notify each affected handle before releasing execution admission.
 func notifyUpdateCombineResults(batch []collectionUpdateCombineRequest, results []UpdateBatchResult) error {
 	byCollection := make(map[*Collection][][]byte)
 	for i, req := range batch {

@@ -44,10 +44,10 @@ func TestNativeJSONPublicCreateActivation(t *testing.T) {
 		t.Fatal(err)
 	}
 	refused := collections.NewCollectionManager(database.backend)
-	// Scalar compound indexes are supported; valid text metadata still refuses
-	// native admission without creating a catalog entry or a legacy producer.
-	if _, err := refused.CreateCollection(&collections.CollectionMeta{Name: "legacy", Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}, Indexes: []collections.IndexDefinition{{Name: "compound", ValueType: collections.IndexValueBSONOrderedV2, Components: []collections.IndexComponent{{Field: "x", Direction: collections.IndexDirectionAscending}, {Field: "y", Direction: collections.IndexDirectionAscending}}}}, TextIndexes: []collections.TextIndexDefinition{{Name: "lexical", Version: collections.TextIndexVersionV1, Analyzer: collections.TextAnalyzerSimple, Fields: []collections.TextIndexField{{Field: "body"}}}}}); !errors.Is(err, backenddb.ErrNativeSemanticUnsupported) {
-		t.Fatalf("unsupported text metadata admission: %v", err)
+	// BSON compound and V1 text metadata are supported. Explicit ordered multikey
+	// metadata still refuses native admission without a catalog or legacy producer.
+	if _, err := refused.CreateCollection(&collections.CollectionMeta{Name: "legacy", Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}, Indexes: []collections.IndexDefinition{{Name: "ordered_multikey", ValueType: collections.IndexValueBSONOrderedV2, MultiKey: true, Components: []collections.IndexComponent{{Field: "x", Direction: collections.IndexDirectionAscending}}}}, TextIndexes: []collections.TextIndexDefinition{{Name: "lexical", Version: collections.TextIndexVersionV1, Analyzer: collections.TextAnalyzerSimple, Fields: []collections.TextIndexField{{Field: "body"}}}}}); !errors.Is(err, backenddb.ErrNativeSemanticUnsupported) {
+		t.Fatalf("unsupported explicit ordered multikey metadata admission: %v", err)
 	}
 	if metas, truncated, err := refused.ListCollectionsBounded(1); err != nil || len(metas) != 0 || truncated {
 		t.Fatalf("empty native list=%+v truncated=%v err=%v", metas, truncated, err)

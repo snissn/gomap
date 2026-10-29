@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"sync"
 	"sync/atomic"
 	"unsafe"
 
@@ -18,15 +19,21 @@ import (
 // persisted catalog marker advances atomically with the captured primary root,
 // so native readers use this immutable field while newer rows remain pending.
 type nativeCollectionState struct {
-	refs               atomic.Int64
-	incarnation        uint64
-	documentGeneration uint64
-	schema             *nativeSchemaState
-	domains            *cowbtree.OwnedMap[string, *nativeDomainState]
-	pending            *cowbtree.OwnedMap[string, *nativeDomainState]
-	refund             *cowbtree.OwnedMapRefund
-	attempted          bool
-	err                error
+	refs                atomic.Int64
+	scalarForwardMu     sync.Mutex
+	scalarForwardPlans  *[nativeScalarPlanCacheMaxEntries]nativeScalarForwardPlan
+	scalarForwardCount  int
+	scalarForwardBytes  uint64
+	scalarForwardLease  *memtable.COWExternalLease
+	scalarForwardRefund *cowbtree.OwnedMapRefund
+	incarnation         uint64
+	documentGeneration  uint64
+	schema              *nativeSchemaState
+	domains             *cowbtree.OwnedMap[string, *nativeDomainState]
+	pending             *cowbtree.OwnedMap[string, *nativeDomainState]
+	refund              *cowbtree.OwnedMapRefund
+	attempted           bool
+	err                 error
 }
 
 // newNativeCollectionState adopts the supplied original schema/directory
@@ -81,6 +88,15 @@ func (nativeCollectionLifetime) Release(c *nativeCollectionState) (completion co
 	if c.err != nil {
 		return completion, c.err
 	}
+	// Last capture is gone. Drop all independently owned entry aliases before
+	// transferring the original lease receipt to deferred completion.
+	c.scalarForwardPlans = nil
+	c.scalarForwardCount = 0
+	c.scalarForwardBytes = 0
+	c.scalarForwardLease = nil
+	scalarRefund := c.scalarForwardRefund
+	c.scalarForwardRefund = nil
+	completion.Append(scalarRefund.Completion())
 	completion.Append(c.schema.release())
 	c.schema = nil
 	refund := c.refund

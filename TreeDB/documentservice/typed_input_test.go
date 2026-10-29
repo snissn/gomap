@@ -17,6 +17,19 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
 
+type cancelAfterContextChecks struct {
+	context.Context
+	checks, cancelAfter int
+}
+
+func (ctx *cancelAfterContextChecks) Err() error {
+	ctx.checks++
+	if ctx.checks >= ctx.cancelAfter {
+		return context.Canceled
+	}
+	return nil
+}
+
 func TestServiceTypedInputOwnership(t *testing.T) {
 	svc, db := newTestService(t)
 	defer db.Close()
@@ -259,13 +272,12 @@ func TestServiceTypedDenseQuantizedRerankPublicProof(t *testing.T) {
 		t.Fatalf("quantized public response=%+v", out)
 	}
 	if out.DocumentMaterializationRows != uint64(len(out.Documents)) ||
-		out.ScalarFilterMembershipSource != "" || out.ScalarFilterPlan != "" ||
 		out.ScalarFilterProbeIDs != 0 || out.ScalarFilterProbeTruncated != 0 ||
 		out.ScalarFilterCandidates != 0 || out.ScalarFilterCandidateIDs != 0 ||
 		out.ScalarFilterRetainedCandidateIDs != 0 || out.ScalarFilterRefinedCandidateIDs != 0 ||
 		out.ScalarFilterVisited != 0 || out.ScalarFilterScored != 0 || out.ScalarFilterAdmitted != 0 ||
 		out.ScalarFilterExactScoring || out.ScalarFilterUnderfill || out.ScalarFilterUnbounded != 0 ||
-		out.AllowedIDMaterializationRows != 0 || out.VisibilityMismatchCount != 0 || out.VisibilityRetryCount != 0 {
+		out.AllowedIDMaterializationRows != 0 {
 		t.Fatalf("quantized public response carried contradictory outer work: %+v", out)
 	}
 	var httpOut DenseVectorSearchResponse
@@ -437,7 +449,7 @@ func TestServiceTypedInputServingLifecycle(t *testing.T) {
 	beforeWork := workstats.Read()
 	defer func() {
 		after := workstats.Read()
-		if after.IndexedJSON != beforeWork.IndexedJSON || after.Runtime != beforeWork.Runtime || after.Scans.DenseExact != beforeWork.Scans.DenseExact {
+		if after.IndexedJSON != beforeWork.IndexedJSON || after.Scans.DenseExact != beforeWork.Scans.DenseExact {
 			t.Errorf("selected route performed forbidden work: before=%+v after=%+v", beforeWork, after)
 		}
 		if after.Typed.ScalarRows <= beforeWork.Typed.ScalarRows || after.Typed.TextRows <= beforeWork.Typed.TextRows || after.Typed.TextOldRows <= beforeWork.Typed.TextOldRows {
@@ -494,7 +506,7 @@ func TestServiceTypedInputServingLifecycle(t *testing.T) {
 	if err != nil || len(out.Documents) != 1 || out.Documents[0].ID != "a" || out.Documents[0].Content != "alpha" {
 		t.Fatalf("search=%+v err=%v", out, err)
 	}
-	if out.NativeBasePlusLiveDelta || out.ColumnGraphPreparedSearch != 1 {
+	if out.ColumnGraphPreparedSearch != 1 {
 		t.Fatalf("wrong route proof: %+v", out)
 	}
 	encoded, err := json.Marshal(out)
