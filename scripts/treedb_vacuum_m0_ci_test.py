@@ -9,6 +9,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 sys.dont_write_bytecode = True
 SCRIPT = Path(__file__).with_name('treedb_vacuum_m0_ci.py')
@@ -93,6 +94,81 @@ class SupervisorTest(unittest.TestCase):
                         os.kill(descendant, signal.SIGKILL)
                     except ProcessLookupError:
                         pass
+
+    def test_success_drains_descendant_before_receipt_and_reap(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            pid_file = root / 'pid'
+            code = ("import os,signal,time,pathlib; "
+                    "signal.signal(signal.SIGTERM,signal.SIG_IGN); "
+                    f"pathlib.Path({str(pid_file)!r}).write_text(str(os.getpid())); time.sleep(60)")
+            parent = ("import subprocess,sys,time,pathlib; "
+                      f"subprocess.Popen([sys.executable,'-c',{code!r}]); "
+                      f"p=pathlib.Path({str(pid_file)!r}); "
+                      "exec('while not p.exists(): time.sleep(0.01)')")
+            real_kill = os.killpg
+            def checked_kill(pid, sig):
+                # Every signal must occur while the real child is unreaped.
+                self.assertIsNotNone(os.waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT))
+                return real_kill(pid, sig)
+            with mock.patch.object(m.os, 'killpg', side_effect=checked_kill):
+                self.assertEqual(m.supervise([sys.executable, '-c', parent], root / 'packet',
+                                             'hosted-semantic', 5, grace=0.1), 0)
+            pid = int(pid_file.read_text())
+            stat = Path(f'/proc/{pid}/stat')
+            self.assertTrue(not stat.exists() or stat.read_text().split()[2] == 'Z')
+            self.assertTrue(json.loads((root / 'packet/ci-budget.json').read_text())['completed'])
+
+    def test_lost_reaped_custody_never_signals_reused_id(self):
+        real_spawn = subprocess.Popen
+        def reaped(*args, **kwargs):
+            child = real_spawn(*args, **kwargs)
+            child.wait()
+            return child
+        with tempfile.TemporaryDirectory() as directory, \
+             mock.patch.object(m.subprocess, 'Popen', side_effect=reaped), \
+             mock.patch.object(m.os, 'killpg') as kill:
+            packet = Path(directory) / 'packet'
+            self.assertEqual(m.supervise([sys.executable, '-c', 'pass'], packet,
+                                         'hosted-semantic', 5, grace=0.1), 125)
+            kill.assert_not_called()
+            self.assertFalse(json.loads((packet / 'ci-budget.json').read_text())['completed'])
+
+    def test_failed_drain_is_incomplete(self):
+        real_read = Path.read_text
+        def fail_proc(path, *args, **kwargs):
+            if str(path).startswith('/proc/'):
+                raise PermissionError('injected failed drain observation')
+            return real_read(path, *args, **kwargs)
+        with tempfile.TemporaryDirectory() as directory, \
+             mock.patch.object(Path, 'read_text', fail_proc):
+            packet = Path(directory) / 'packet'
+            self.assertEqual(m.supervise([sys.executable, '-c', 'pass'], packet,
+                                         'hosted-semantic', 5, grace=0.1), 125)
+            self.assertFalse(json.loads(real_read(packet / 'ci-budget.json'))['completed'])
+
+    def test_failed_termination_is_incomplete(self):
+        with tempfile.TemporaryDirectory() as directory, \
+             mock.patch.object(m.os, 'killpg', side_effect=PermissionError('injected termination failure')):
+            packet = Path(directory) / 'packet'
+            self.assertEqual(m.supervise([sys.executable, '-c', 'pass'], packet,
+                                         'hosted-semantic', 5, grace=0.1), 125)
+            self.assertFalse(json.loads((packet / 'ci-budget.json').read_text())['completed'])
+            # Reap only after the failed supervisor has finished issuing signals.
+            while True:
+                try:
+                    if os.waitpid(-1, os.WNOHANG) == (0, 0):
+                        break
+                except ChildProcessError:
+                    break
+
+    def test_receipt_write_failure_cannot_return_success(self):
+        with tempfile.TemporaryDirectory() as directory, \
+             mock.patch.object(Path, 'write_text', side_effect=OSError('injected receipt failure')):
+            packet = Path(directory) / 'packet'
+            self.assertEqual(m.supervise([sys.executable, '-c', 'pass'], packet,
+                                         'hosted-semantic', 5, grace=0.1), 125)
+            self.assertFalse((packet / 'ci-budget.json').exists())
 
     def test_workflow_does_not_infer_controlled_custody(self):
         workflow = SCRIPT.parent.parent / '.github/workflows/treedb-vacuum-m0.yml'
