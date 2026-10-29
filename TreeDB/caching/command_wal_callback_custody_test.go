@@ -126,7 +126,7 @@ func TestCommandWALCallbackWriteLeaseCustody(t *testing.T) {
 }
 
 func TestCommandWALCallbackCustodyCOWExclusion(t *testing.T) {
-	// COW publication owns the combined writer/cache lease; this wrapper must
+	// COW publication owns the combined writer/cache lease; the invocation guard must
 	// propagate the unwind without releasing any part of that custody.
 	db := &DB{cow: &cowCache{}}
 	b := &Batch{db: db}
@@ -139,10 +139,93 @@ func TestCommandWALCallbackCustodyCOWExclusion(t *testing.T) {
 				t.Error("panic identity changed")
 			}
 		}()
-		b.commandWALAppendWithWriteLeaseCustody(func() error { panic(sentinel) })()
+		b.commandWALAppend = func() error { panic(sentinel) }
+		_ = b.invokeCommandWALAppend(false, db.writeMu.RUnlock)
 	}()
 	if db.writeMu.TryLock() {
 		db.writeMu.Unlock()
-		t.Fatal("wrapper released COW lease")
+		t.Fatal("invocation guard released COW lease")
+	}
+}
+
+// ConditionalTxn owns an exclusive write lease and releases it in commit's
+// defer. Its callback must never take ordinary point-path RUnlock custody.
+func TestCommandWALCallbackConditionalTxnCustody(t *testing.T) {
+	for _, mode := range []string{"success", "error", "panic", "nil", "goexit"} {
+		t.Run(mode, func(t *testing.T) {
+			db, err := Open(t.TempDir(), NewMockBackend(), Options{ExternalCommandWAL: true, FlushThreshold: 1 << 30})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			tx, err := db.NewConditionalTxn()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tx.Close()
+			if err := tx.Set([]byte("key"), []byte("value")); err != nil {
+				t.Fatal(err)
+			}
+			sentinel := errors.New("conditional callback error")
+			calls, returned := 0, false
+			var got error
+			var recovered any
+			tx.batch.commandWALAppend = func() error {
+				calls++
+				switch mode {
+				case "error":
+					return sentinel
+				case "panic":
+					panic(sentinel)
+				case "nil":
+					panic(nil)
+				case "goexit":
+					runtime.Goexit()
+				}
+				return nil
+			}
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				defer func() { recovered = recover() }()
+				got = tx.Commit()
+				returned = true
+			}()
+			<-done
+			if calls != 1 {
+				t.Fatalf("calls=%d", calls)
+			}
+			if !db.writeMu.TryLock() {
+				t.Fatal("exclusive write lease retained")
+			}
+			db.writeMu.Unlock()
+			switch mode {
+			case "success":
+				if !returned || got != nil || recovered != nil {
+					t.Fatalf("returned=%v err=%v panic=%v", returned, got, recovered)
+				}
+			case "error":
+				if !returned || got != sentinel || recovered != nil {
+					t.Fatalf("returned=%v err=%v panic=%v", returned, got, recovered)
+				}
+			case "panic":
+				if returned || recovered != sentinel {
+					t.Fatalf("returned=%v panic=%v", returned, recovered)
+				}
+			case "nil":
+				if returned {
+					t.Fatal("nil panic returned")
+				}
+				if recovered != nil {
+					if _, ok := recovered.(*runtime.PanicNilError); !ok {
+						t.Fatalf("nil panic changed: %T", recovered)
+					}
+				}
+			case "goexit":
+				if returned || recovered != nil {
+					t.Fatalf("returned=%v panic=%v", returned, recovered)
+				}
+			}
+		})
 	}
 }

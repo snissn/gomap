@@ -37861,26 +37861,19 @@ type CommandWALBatchWriteTiming struct {
 	MemtablePublicationReset time.Duration
 }
 
-// commandWALAppendWithWriteLeaseCustody transfers only abnormal callback
-// unwinds out of the ordinary point path. Decide custody before range
-// materialization clears hasDeleteRanges: range and COW paths own their own
-// unwind cleanup. Normal callback returns leave release to publication.
-func (b *Batch) commandWALAppendWithWriteLeaseCustody(appendCommand func() error) func() error {
-	if b.db.cow != nil || b.hasDeleteRanges {
-		return appendCommand
-	}
-	db := b.db
-	return func() error {
-		returned := false
-		defer func() {
-			if !returned {
-				db.writeMu.RUnlock()
-			}
-		}()
-		err := appendCommand()
-		returned = true
-		return err
-	}
+// invokeCommandWALAppend retains ordinary point-path lease custody only while
+// the callback runs. Range and conditional callers own their unwind cleanup.
+// The returned flag preserves panic(nil) and Goexit without recovering either.
+func (b *Batch) invokeCommandWALAppend(releaseOnUnwind bool, unlockWriteMu func()) (err error) {
+	returned := false
+	defer func() {
+		if !returned && releaseOnUnwind {
+			unlockWriteMu()
+		}
+	}()
+	err = b.commandWALAppend()
+	returned = true
+	return err
 }
 
 // WriteAfterCommandWALAppend writes a cached batch by running appendCommand
@@ -37912,7 +37905,7 @@ func (b *Batch) WriteAfterCommandWALAppend(sync bool, appendCommand func() error
 	}
 
 	prevAppend := b.commandWALAppend
-	b.commandWALAppend = b.commandWALAppendWithWriteLeaseCustody(appendCommand)
+	b.commandWALAppend = appendCommand
 	defer func() {
 		b.commandWALAppend = prevAppend
 	}()
@@ -37958,7 +37951,7 @@ func (b *Batch) WriteAfterCommandWALAppendWithPreparedRevision(sync bool, append
 	prevAppend := b.commandWALAppend
 	prevPreparedRevision := b.commandWALPreparedRevision
 	b.commandWALPreparedRevision = true
-	b.commandWALAppend = b.commandWALAppendWithWriteLeaseCustody(appendCommand)
+	b.commandWALAppend = appendCommand
 	defer func() {
 		b.commandWALAppend = prevAppend
 		b.commandWALPreparedRevision = prevPreparedRevision
@@ -38013,7 +38006,7 @@ func (b *Batch) WriteAfterCommandWALAppendMeasured(sync bool, appendCommand func
 		return appendErr
 	}
 	prevAppend := b.commandWALAppend
-	b.commandWALAppend = b.commandWALAppendWithWriteLeaseCustody(measuredAppend)
+	b.commandWALAppend = measuredAppend
 	defer func() {
 		b.commandWALAppend = prevAppend
 	}()
@@ -38076,7 +38069,7 @@ func (b *Batch) WriteAfterCommandWALAppendWithPreparedRevisionMeasured(sync bool
 	prevAppend := b.commandWALAppend
 	prevPreparedRevision := b.commandWALPreparedRevision
 	b.commandWALPreparedRevision = true
-	b.commandWALAppend = b.commandWALAppendWithWriteLeaseCustody(measuredAppend)
+	b.commandWALAppend = measuredAppend
 	defer func() {
 		b.commandWALAppend = prevAppend
 		b.commandWALPreparedRevision = prevPreparedRevision
@@ -38303,7 +38296,7 @@ func (b *Batch) writeRangeBatch(sync bool) error {
 	// refer to the original entry indexes. Force the safe copy path for this write
 	// instead of retaining batch arenas by stale indexes.
 	b.hasViewOps = true
-	err := b.writeRegularLocked(sync, unlockWriteMu)
+	err := b.writeRegularLocked(sync, unlockWriteMu, false)
 	if err != nil {
 		b.entries = origEntries
 		b.hasDeleteRanges = origHasRanges
@@ -38517,10 +38510,10 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 	if err := b.db.beginDirectWrite(); err != nil {
 		return err
 	}
-	return b.writeRegularLocked(syncWrite, b.db.writeMu.RUnlock)
+	return b.writeRegularLocked(syncWrite, b.db.writeMu.RUnlock, true)
 }
 
-func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
+func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func(), releaseCallbackLeaseOnUnwind bool) error {
 	if b.db.cow != nil {
 		if len(b.entries) == 0 && b.cowState.native == nil {
 			// Empty writes publish no cut. A WAL-off explicit sync still covers
@@ -39243,7 +39236,7 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 				}
 			}
 		}
-		if err := b.commandWALAppend(); err != nil {
+		if err := b.invokeCommandWALAppend(releaseCallbackLeaseOnUnwind, unlockWriteMu); err != nil {
 			unlockWriteMu()
 			return err
 		}
