@@ -1105,7 +1105,9 @@ func (z *Zipper) stitchSpanNativeRecursive(ref page.ChildRef, low, high []byte, 
 			if key == nil {
 				key = []byte{}
 			} else if copyKeys {
-				key = append([]byte(nil), key...)
+				// The empty left-edge separator is present; nil means absent
+				// to spanNativeReplacementParentKey and would shift the fence.
+				key = bytes.Clone(key)
 			}
 			childLow := low
 			if len(key) != 0 {
@@ -1120,7 +1122,7 @@ func (z *Zipper) stitchSpanNativeRecursive(ref page.ChildRef, low, high []byte, 
 				if nextKey == nil {
 					nextKey = []byte{}
 				} else if copyKeys {
-					nextKey = append([]byte(nil), nextKey...)
+					nextKey = bytes.Clone(nextKey)
 				}
 				childHigh = nextKey
 			}

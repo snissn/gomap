@@ -216,6 +216,24 @@ checks bind the reconciled head. Public 500k raw-KV comparisons and managed
 historical-MVCC comparisons exercise different routes; both require actual-mode
 activation evidence and separate natural versus instrumented observations.
 
+## Native COW JSON load and checkpoint regression
+
+`TestSpanNativeApplyBaseDeltaLeftEdgePartialStitch` checks partial rewrites of
+scratch-backed base-delta internal separators, including a non-nil empty left
+edge. `TestCOWNativewireJSONLoadCheckpointReopen` sends concurrent JSON inserts
+through public native-wire clients and a `cow_btree` native semantic owner,
+checks acknowledged values and complete enumeration, checkpoints, checks
+close errors and reopens all three production profiles. Its deterministic
+4,096-row shape is lifecycle coverage, not the original 100,000-row RED.
+`TestCOWNativewireJSONDurableACKRecovery` exits the owner process without close
+after synced ACKs and verifies the recovered documents.
+`TestCOWNativewireJSONDurableVisibleACKWALReplay` separately observes replay of
+unapplied command WAL frames after ordinary durable-profile visible ACKs and an
+unclean exit. The wire and owner checkpoint error-propagation tests exercise
+real maintenance capacity refusal;
+the owner test also checks final-close failure and durable value recovery.
+These controls do not extend relaxed or no-WAL ordinary ACK guarantees.
+
 ## Immutable COW cache qualification
 
 Exact-cut cold native catalog controls:
