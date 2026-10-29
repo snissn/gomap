@@ -12073,10 +12073,7 @@ func (c *Collection) InsertBatchWithCommandWALIntent(ids, documents [][]byte, tr
 // InsertBatch or InsertBatchValidatedBSON.
 func (c *Collection) NativewireInsertBatchNoResultIDs(ids, documents [][]byte, trustedValidBSON bool) error {
 	if c != nil && c.nativeJSON != nil {
-		if trustedValidBSON {
-			return backenddb.ErrNativeSemanticUnsupported
-		}
-		_, err := c.nativeInsertBatch(ids, documents)
+		_, err := c.nativeInsertBatchWithResultIDs(ids, documents, nil, nil, false)
 		return err
 	}
 	unlockSchema := c.lockCollectionSchemaRead()
@@ -12421,7 +12418,7 @@ func (c *Collection) insertBatchOnceWithOptimisticPlanning(ids, documents [][]by
 	plan, err := planner.planInsertBatchWithPreflight(ids, documents, persistedConflictPreflightForInsertBatchSnapshot(snap, catalog))
 	if err != nil {
 		closePlanningSnapshot()
-		return nil, err, true
+		return nil, mutationNotAcceptedError(err), true
 	}
 	plan.stats.BufferedIndexedBatches = 1
 	if !insertBatchPlanHasRootWork(plan) {
@@ -12788,6 +12785,11 @@ func (c *Collection) insertBatchOnceWithLockState(
 	}
 	if err != nil {
 		closePlanningSnapshot()
+		// Planning has installed no part of this mutation. Recovery callers
+		// may already own an assigned intent and must retain that distinction.
+		if commandWALIntent == nil || commandWALIntent.AssignedLSN() == 0 {
+			err = mutationNotAcceptedError(err)
+		}
 		return nil, err
 	}
 	if bufferIndexedInserts {

@@ -4,6 +4,26 @@ This document maps specification invariants to existing tests and harnesses.
 
 ## Standalone shared COW delivery
 
+- `TestCOWNativewireInsertResultIDParity` exercises Client -> Server -> public
+  shared COW insertion for JSON/BSON with returned and omitted IDs under all
+  three production profiles. It checks native BSON binary bytes, caller-buffer
+  reuse, malformed/mixed input rejection, duplicates, checkpoint, checked close
+  and fresh reopen. `TestCollectionNativewireInsertBatchNoResultIDsCopiesInputID`
+  retains collection-level COW BSON ID/document ownership and legacy controls.
+- `TestCOWNativewireBSONInsertCombiner` and
+  `TestCOWNativewireBSONCombinerPrepublicationFallback` preassemble deterministic
+  groups, check exact member outcomes, response omission, journal attempts and
+  retained rows/indexes. `TestNativeInsertFinalPreparationOutcomeBoundary`
+  independently checks private unique rejection: no journal append, logical
+  sequence advance, checkpoint-authority change or rows/index effects; ordinary
+  calls receive the not-accepted marker and apply owners do not.
+- `TestCOWNativewireBSONCombinerUnprovenErrorNoRetry` injects an unmarked real
+  command-WAL preappend failure: no member replay or insertion occurs and the
+  decoded wire error remains non-retryable internal error.
+  `TestCOWNativewireBSONCombinerAmbiguousNoRetry` cuts real durable command-WAL
+  completion after file sync in a child, retains one group assignment, ambiguous
+  member errors, the recovery-required write fence and prior frame contents,
+  then recovers both indexed rows exactly once without a rescuing child close.
 - `TestStandaloneSharedCOWCollectionLifecycle` and
   `TestStandaloneSharedCOWCrashReopen` exercise ordinary startup, indexed BSON
   mutation/read, authentication and explicit journal ACK across all three

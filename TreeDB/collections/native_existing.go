@@ -40,6 +40,13 @@ func (c *Collection) nativeInsertBatchWithStats(ids, documents [][]byte, request
 }
 
 func (c *Collection) nativeInsertBatchWithStatsProjection(ids, documents [][]byte, requested *CollectionInsertStats, projection *trustedFloat32Projection) ([][]byte, error) {
+	return c.nativeInsertBatchWithResultIDs(ids, documents, requested, projection, true)
+}
+
+// The transaction owns mutation inputs independently of optional response IDs.
+// Omitted-ID gateways share preparation, validation and publication with the
+// ordinary API, without allocating a response-only ID vector and byte arena.
+func (c *Collection) nativeInsertBatchWithResultIDs(ids, documents [][]byte, requested *CollectionInsertStats, projection *trustedFloat32Projection, returnResultIDs bool) ([][]byte, error) {
 	if c.manager.isClosing() {
 		return nil, backenddb.ErrClosed
 	}
@@ -78,9 +85,13 @@ func (c *Collection) nativeInsertBatchWithStatsProjection(ids, documents [][]byt
 	}
 	// Returned IDs and diagnostics are caller/handle-owned outputs, like the
 	// legacy planner result; neither borrows the transaction's captured schema.
-	result, err := cloneBatchDocumentIDs(ids)
-	if err != nil {
-		return nil, err
+	var result [][]byte
+	if returnResultIDs {
+		var err error
+		result, err = cloneBatchDocumentIDs(ids)
+		if err != nil {
+			return nil, err
+		}
 	}
 	unlockVector, _, err := c.prepareNativeProducerMutation()
 	if err != nil {
