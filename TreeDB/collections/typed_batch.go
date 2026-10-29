@@ -123,7 +123,6 @@ func newTrustedTypedProjection(meta CollectionMeta, ids, retained [][]byte, colu
 // the matching id and no declared paths. Inputs may be reused after return.
 // Scalar/text indexes are maintained immediately; column_graph serving remains
 // subject to its existing explicit rebuild and insert-only base restrictions.
-// Registered ad-hoc vector runtimes are not supported by this typed admission.
 func (c *Collection) InsertTypedBatchWithStats(ids, retained [][]byte, columns []TypedColumnBatch) ([][]byte, CollectionInsertStats, error) {
 	if c != nil && c.nativeJSON != nil {
 		return c.nativeInsertTypedBatch(ids, retained, columns)
@@ -259,13 +258,8 @@ func (c *Collection) ReplaceTypedBatch(ids, retained [][]byte, columns []TypedCo
 	return results, c.invalidateVectorIndexCoverageOnAcceptedMutation(err)
 }
 
-// Called with schema and ad-hoc admission read locks held, so registration
-// cannot introduce a document-extracting runtime during typed admission.
 func (c *Collection) requireTypedBatchVectorAdmission() error {
-	if coord := c.collectionSchemaCoordinator(); coord != nil && coord.adHocVectorIndexes.Load() != 0 {
-		return errors.New("collections: typed batches do not support registered ad-hoc vector runtimes")
-	}
-	if len(c.registeredVectorIndexes()) != 0 {
+	if len(c.registeredColumnGraphPartitionLiveCarriers()) != 0 {
 		return errors.New("collections: typed batches require column_graph vector indexes")
 	}
 	return nil

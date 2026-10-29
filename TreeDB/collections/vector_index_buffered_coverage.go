@@ -11,7 +11,7 @@ import (
 // It pins installed identities and the durable baseline before any runs reset.
 type bufferedVectorPublication struct {
 	generation  uint64
-	indexes     []*VectorIndex
+	indexes     []*columnGraphPartitionLiveCarrier
 	documentIDs [][]byte
 }
 
@@ -19,12 +19,12 @@ type bufferedVectorPublication struct {
 // Admission can hand off for a foreign drain; that establishes a different
 // baseline pointer and cannot reuse this predecessor proof.
 type unnotifiedVectorMutation struct {
-	indexes           []*VectorIndex
+	indexes           []*columnGraphPartitionLiveCarrier
 	admissionBaseline *uint64
 }
 
 func (c *Collection) captureUnnotifiedVectorMutation() (*unnotifiedVectorMutation, error) {
-	indexes := c.registeredVectorIndexes()
+	indexes := c.registeredColumnGraphPartitionLiveCarriers()
 	if len(indexes) == 0 {
 		return nil, nil
 	}
@@ -45,7 +45,7 @@ func (c *Collection) captureUnnotifiedVectorMutation() (*unnotifiedVectorMutatio
 }
 
 func (c *Collection) markVectorIndexDocumentsUnnotified(documentIDs [][]byte, proof *unnotifiedVectorMutation) {
-	indexes := c.registeredVectorIndexes()
+	indexes := c.registeredColumnGraphPartitionLiveCarriers()
 	if len(indexes) == 0 {
 		return
 	}
@@ -86,7 +86,7 @@ func (c *Collection) markVectorIndexDocumentsUnnotified(documentIDs [][]byte, pr
 	}
 }
 
-func (idx *VectorIndex) clearUnnotifiedDocuments(documentIDs [][]byte) {
+func (idx *columnGraphPartitionLiveCarrier) clearUnnotifiedDocuments(documentIDs [][]byte) {
 	idx.mu.Lock()
 	for _, id := range documentIDs {
 		delete(idx.unnotifiedDocumentIDs, string(id))
@@ -95,7 +95,7 @@ func (idx *VectorIndex) clearUnnotifiedDocuments(documentIDs [][]byte) {
 }
 
 func (c *Collection) captureBufferedVectorPublicationLocked(domain *collectionWriteDomain, unit *indexedFlushUnit) (*bufferedVectorPublication, error) {
-	indexes := c.registeredVectorIndexes()
+	indexes := c.registeredColumnGraphPartitionLiveCarriers()
 	if len(indexes) == 0 {
 		return nil, nil
 	}
@@ -272,9 +272,8 @@ func (c *Collection) reconcileBufferedVectorPublicationWithMutationState(proof *
 		if !eligible {
 			continue
 		}
-		var scalarScratch nativeScalarRowScratch
 		for i, id := range proof.documentIDs {
-			if err := index.reconcileBufferedStoredDocumentWithScalarScratch(materializer, id, documents[i], &scalarScratch); err != nil {
+			if err := index.reconcileBufferedStoredDocument(materializer, id, documents[i]); err != nil {
 				index.invalidateSourceDocumentRoots()
 				return err
 			}
@@ -283,7 +282,7 @@ func (c *Collection) reconcileBufferedVectorPublicationWithMutationState(proof *
 		// Retain the genuine published baseline even while unrelated raw IDs
 		// keep this index unavailable. Never erase those missing-ID proofs.
 		index.recordSourceDocumentState(generation, state)
-		if err := c.recordReconciledVectorIndexCoverage([]*VectorIndex{index}); err != nil {
+		if err := c.recordReconciledVectorIndexCoverage([]*columnGraphPartitionLiveCarrier{index}); err != nil {
 			return err
 		}
 	}
@@ -292,79 +291,36 @@ func (c *Collection) reconcileBufferedVectorPublicationWithMutationState(proof *
 
 // Publication repair may replay an already maintained logical row. Compare the
 // effective delta before the base and all scalar presence/bytes before mutation.
-func (idx *VectorIndex) reconcileBufferedStoredDocument(materializer *StoredDocumentJSONMaterializer, documentID, document []byte) error {
-	return idx.reconcileBufferedStoredDocumentWithScalarScratch(materializer, documentID, document, nil)
-}
-
-func (idx *VectorIndex) reconcileBufferedStoredDocumentWithScalarScratch(materializer *StoredDocumentJSONMaterializer, documentID, document []byte, scratch *nativeScalarRowScratch) error {
-	vector, scalarRow, err := idx.parseStoredVectorRowWithScalarScratch(materializer, documentID, document, scratch)
+func (idx *columnGraphPartitionLiveCarrier) reconcileBufferedStoredDocument(materializer *StoredDocumentJSONMaterializer, documentID, document []byte) error {
+	vector, err := idx.parseStoredVectorRow(materializer, documentID, document)
 	if err != nil {
 		return err
 	}
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
-	if idx.bufferedStoredVectorMatchesLocked(documentID, vector, scalarRow) {
+	if idx.bufferedStoredVectorMatchesLocked(documentID, vector) {
 		return nil
 	}
-	return idx.insertParsedStoredDocumentLocked(documentID, vector, scalarRow, false)
+	return idx.insertParsedStoredDocumentLocked(documentID, vector, false)
 }
-
-func (idx *VectorIndex) bufferedStoredVectorMatchesLocked(documentID []byte, vector []float32, scalarRow map[string][]byte) bool {
-	if live := idx.partitionLive; live != nil && !live.invalid {
-		owner, exists := live.ownerV1(string(documentID))
-		if vector == nil {
-			if !exists || !owner.deleted {
-				return false
-			}
-		} else {
-			domain, err := idx.partitionLiveRouteLocked(vector)
-			if err != nil || !exists || owner.deleted || owner.domain != domain {
-				return false
-			}
-			delta := live.domains[domain]
-			if delta == nil {
-				return false
-			}
-			delta.mu.RLock()
-			matches := delta.currentVectorMatchesLocked(documentID, vector)
-			delta.mu.RUnlock()
-			if !matches {
-				return false
-			}
-		}
-		if idx.partitionLiveOnly {
-			return true
-		}
-	}
-	plane := idx
-	key := string(documentID)
-	if idx.liveDelta != nil {
-		if _, exists := idx.liveDelta.currentNode[key]; exists {
-			plane = idx.liveDelta
-		}
-	}
-	nodeID, exists := plane.currentNode[key]
-	if !exists || nodeID < 0 || nodeID >= len(plane.nodes) {
-		return vector == nil
-	}
-	node := &plane.nodes[nodeID]
-	if vector == nil {
-		return node.deleted
-	}
-	if node.deleted || !plane.vectorIndexNodeMatchesSourceVectorLocked(node, vector) {
+func (idx *columnGraphPartitionLiveCarrier) bufferedStoredVectorMatchesLocked(documentID []byte, vector []float32) bool {
+	live := idx.partitionLive
+	if live == nil || live.invalid {
 		return false
 	}
-	for _, def := range idx.scalarDefinitions {
-		column, exists := plane.scalarColumns[def.Name]
-		var value []byte
-		var present bool
-		if exists {
-			value, present = column.value(nodeID)
-		}
-		expected, expectedPresent := scalarRow[def.Name]
-		if present != expectedPresent || !bytes.Equal(value, expected) {
-			return false
-		}
+	owner, exists := live.ownerV1(string(documentID))
+	if vector == nil {
+		return exists && owner.deleted
 	}
-	return true
+	domain, err := idx.partitionLiveRouteLocked(vector)
+	if err != nil || !exists || owner.deleted || owner.domain != domain {
+		return false
+	}
+	delta := live.domains[domain]
+	if delta == nil {
+		return false
+	}
+	delta.mu.RLock()
+	defer delta.mu.RUnlock()
+	return delta.currentVectorMatchesLocked(documentID, vector)
 }

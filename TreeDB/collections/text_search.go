@@ -115,6 +115,7 @@ type TextSearchOptions struct {
 	// text search cannot accidentally bind to a scalar index outside the hybrid
 	// snapshot checks.
 	textV2AllowedDocumentIDs hybridScalarAllowSet
+	textV2AllowedIDs         hybridScalarIDs
 	textV2DisableBlockMax    bool
 }
 
@@ -283,7 +284,7 @@ func (c *Collection) searchText(opts TextSearchOptions, resultMode textSearchRes
 	if c == nil {
 		return response, errCollectionNil
 	}
-	if c.db == nil {
+	if c.db == nil && c.nativeJSON == nil {
 		return response, errCollectionDBNil
 	}
 	if err := ValidateIndexName(opts.IndexName); err != nil {
@@ -306,6 +307,9 @@ func (c *Collection) searchText(opts TextSearchOptions, resultMode textSearchRes
 	}
 	if _, err := normalizeTextSearchOperator(opts.Operator); err != nil {
 		return response, err
+	}
+	if c.nativeJSON != nil {
+		return c.searchNativeText(opts, resultMode, nil, response)
 	}
 	if err := c.flushBufferedWrites(); err != nil {
 		return response, err
@@ -334,14 +338,16 @@ func (c *Collection) searchTextAtReadView(opts TextSearchOptions, resultMode tex
 	if c == nil {
 		return response, errCollectionNil
 	}
-	if c.db == nil {
+	if c.db == nil && c.nativeJSON == nil {
 		return response, errCollectionDBNil
 	}
 	if view == nil || view.collection != c {
 		return response, ErrVectorIndexSnapshotMismatch
 	}
-	if err := view.validateOpen(); err != nil {
-		return response, err
+	if view.nativeRead == nil {
+		if err := view.validateOpen(); err != nil {
+			return response, err
+		}
 	}
 	if err := ValidateIndexName(opts.IndexName); err != nil {
 		return response, err
@@ -363,6 +369,16 @@ func (c *Collection) searchTextAtReadView(opts TextSearchOptions, resultMode tex
 	}
 	if _, err := normalizeTextSearchOperator(opts.Operator); err != nil {
 		return response, err
+	}
+	if view.nativeRead != nil {
+		read, err := nativeTextViewRead(view)
+		if err != nil {
+			return response, err
+		}
+		if view.catalog != nil && view.catalog.nativeText != nil {
+			return c.searchNativeTextAtCatalog(opts, resultMode, read, response, view.catalog)
+		}
+		return c.searchNativeText(opts, resultMode, read, response)
 	}
 	endRead := view.beginForegroundRead()
 	defer endRead()
@@ -422,6 +438,11 @@ func (c *Collection) searchTextAtSnapshot(opts TextSearchOptions, resultMode tex
 	response.Stats.TextCandidatesRequested = uint64(candidateLimit)
 	textSearchExplainBindParsed(response.Explain, terms, operator, candidateLimit, maxPostingsScanned)
 	if idx.Version == TextIndexVersionV2 {
+		if catalog.nativeText != nil && len(terms) == 1 && !opts.Explain {
+			if err := catalog.nativeText.admitSingleTermServing(idx, opts); err != nil {
+				return textSearchFailClosed(response, textSearchFailClosedStorageCorrupt, err)
+			}
+		}
 		return executeTextV2SearchAtSnapshot(c, snap, catalog, idx, opts, terms, operator, candidateLimit, maxPostingsScanned, resultMode, response)
 	}
 
@@ -724,11 +745,19 @@ func fetchTextSearchResultDocuments(c *Collection, snap *backenddb.Snapshot, cat
 	for i := range response.Results {
 		ids[i] = response.Results[i].DocumentID
 	}
-	view := newCollectionReadViewAtSnapshot(c, snap, catalog, false, "")
+	var view *CollectionReadView
+	if catalog.nativeText != nil {
+		view = &CollectionReadView{collection: c, nativeRead: catalog.nativeText.read}
+	} else {
+		view = newCollectionReadViewAtSnapshot(c, snap, catalog, false, "")
+	}
 	fetchStart := time.Now()
 	fetch, err := view.FetchDocumentsByID(ids, opts.DocumentFetchOptions)
 	response.Stats.DocumentFetchNanos += uint64(time.Since(fetchStart).Nanoseconds())
-	closeErr := view.Close()
+	var closeErr error
+	if catalog.nativeText == nil {
+		closeErr = view.Close()
+	}
 	if err != nil {
 		return err
 	}
@@ -1178,4 +1207,11 @@ func parseTextSearchPhraseQuery(idx TextIndexDefinition, phrase TextSearchPhrase
 		return textSearchParsedPhrase{}, err
 	}
 	return parsed, nil
+}
+
+func (opts TextSearchOptions) scalarAllowedIDs() hybridScalarIDs {
+	if opts.textV2AllowedIDs.present() {
+		return opts.textV2AllowedIDs
+	}
+	return legacyScalarIDs(opts.textV2AllowedDocumentIDs)
 }

@@ -56,6 +56,27 @@ Run the native server:
   -addr 127.0.0.1:17130
 ```
 
+The native server and `cmd/treedb-document-service` use the shared COW document
+owner by default. New vector indexes default to cosine/float32 `column_graph`,
+the only supported serving strategy. Removed strategies, L2/inner-product ANN,
+primary int8 vector indexes and BSON vector-index declarations are refused before
+mutation. Mongo BSON CRUD and scalar indexes remain supported; Mongo vector
+`createIndexes` requests return `BadValue` (code 2) without creating a collection
+or any indexes, including scalar siblings in the same request.
+Ordinary filtered ANN and vector-bearing filtered Hybrid are unavailable;
+request `route=exact` explicitly for ordinary filtered dense search. Admitted
+typed filtering and derived quantized score planes retain their own contracts.
+Ordinary ColumnGraph requires
+`command_wal_durable` under both storage owners. After deferred or raw wire vector
+mutations, keyword and filtered exact reads remain available, while ANN/mixed
+Hybrid require explicit graph maintenance. The HTTP service exposes Optimize;
+the standalone wire server requires orderly shutdown, public owner/API Optimize
+against the same directory, then restart. Flush/Checkpoint do not rebuild graphs.
+Use `-legacy-storage` for a process that serves specialized typed or
+normalized/quantized routes. This is an explicit
+storage choice; unsupported requests do not fall back automatically. See the
+[command ownership contract](TreeDB/docs/document-service-native-constructor.md#command-storage-owner).
+
 Run the Mongo-compatible gateway:
 
 ```sh
@@ -385,6 +406,11 @@ same-host/context evidence, not universal throughput claims.
 | Vector candidates | `SearchHybridVectorCandidates`, no docs | 20,584 | 48,582.60 | 36,408 | 82 | B/op 0.0%; allocs/op 0.0% | 64 vector candidates; 0 docs fetched; 0 fail/fallback |
 | Hybrid no-doc search | `SearchHybrid` + rare scalar filter, no docs | 163,924 | 6,100.41 | 198,426 | 1,078 | B/op -61.4%; allocs/op -86.2% | 64 text + 64 vector candidates; 16 fused; 0 docs fetched |
 | Hybrid final fetch | `SearchHybrid` + rare scalar filter + final topK fetch | 377,382 | 2,649.83 | 256,232 | 2,055 | B/op -55.2%; allocs/op -76.6% | 10 docs fetched at topK=10; 112 scalar rejections; 0 fail/fallback |
+
+The two filtered vector Hybrid rows above are historical measurements. Ordinary
+vector+scalar Hybrid is currently unsupported and fails closed; these numbers
+provide no current latency or qualification evidence. Current benchmark probes
+verify the rejection and explicitly skip those cells without success metrics.
 
 The strict same-host M4 paired insert/readiness delta was B/op -28.2%,
 allocs/op -71.8%, and ns/op +0.8%. Remaining allocation floors include DB

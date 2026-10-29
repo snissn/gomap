@@ -5,6 +5,8 @@ import (
 	"errors"
 	"math"
 	"time"
+
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
 const (
@@ -170,11 +172,14 @@ func (m *CollectionManager) MaintainTextIndexes(ctx context.Context, opts TextIn
 	if m == nil {
 		return stats, errCollectionManagerNil
 	}
-	if m.db == nil {
+	if m.db == nil && m.nativeJSON == nil {
 		return stats, errCollectionDBNil
 	}
 	if err := validateTextIndexMaintenanceOptions(opts); err != nil {
 		return stats, err
+	}
+	if m.nativeJSON != nil && opts.RunStorageCompaction {
+		return stats, backenddb.ErrNativeSemanticUnsupported
 	}
 	stats.PhysicalReclamationPath = TextIndexPhysicalReclamationTreeDB
 	metas, err := m.ListCollections()
@@ -238,6 +243,9 @@ func (c *Collection) MaintainTextIndex(ctx context.Context, indexName string, op
 	if err := validateTextIndexMaintenanceOptions(opts); err != nil {
 		return stats, err
 	}
+	if c.nativeJSON != nil && opts.RunStorageCompaction {
+		return stats, backenddb.ErrNativeSemanticUnsupported
+	}
 	stats.CollectionName = c.collectionName()
 	stats.PhysicalReclamationPath = TextIndexPhysicalReclamationTreeDB
 	idx, err := c.maintainTextIndexWithRetry(ctx, indexName, opts)
@@ -267,6 +275,9 @@ func (c *Collection) MaintainTextIndexes(ctx context.Context, opts TextIndexMain
 	}
 	if err := validateTextIndexMaintenanceOptions(opts); err != nil {
 		return stats, err
+	}
+	if c.nativeJSON != nil && opts.RunStorageCompaction {
+		return stats, backenddb.ErrNativeSemanticUnsupported
 	}
 	stats.CollectionName = c.collectionName()
 	stats.PhysicalReclamationPath = TextIndexPhysicalReclamationTreeDB

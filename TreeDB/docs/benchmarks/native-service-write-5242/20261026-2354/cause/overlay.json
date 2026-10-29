@@ -1,0 +1,5 @@
+{
+  "Replace": {
+    "/mnt/fast4tb/gomap-mongo-execution-20261024/consumer-canonical/TreeDB/documentservice/shared_cow_write_bench_test.go": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/current-feature-service-write-cause-diagnostic1/shared_cow_write_bench_test.go"
+  }
+}

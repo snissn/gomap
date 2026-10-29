@@ -38,6 +38,7 @@ type Client struct {
 	denseTypedNegotiated          bool
 	denseTypedQuantizedNegotiated bool
 	denseNormalizedNegotiated     bool
+	denseOrdinaryNegotiated       bool
 }
 
 // requestNotSubmittedError marks failures before local handler dispatch or a
@@ -88,6 +89,7 @@ func (c *Client) Hello(ctx context.Context) error {
 	c.denseTypedNegotiated = false
 	c.denseTypedQuantizedNegotiated = false
 	c.denseNormalizedNegotiated = false
+	c.denseOrdinaryNegotiated = false
 	_, response, err := c.roundTripLocked(ctx, iwire.FrameHello, nil, iwire.FrameHelloOK)
 	if err != nil {
 		return err
@@ -113,6 +115,9 @@ func (c *Client) Hello(ctx context.Context) error {
 		}
 		if version == "4" {
 			c.denseNormalizedNegotiated = true
+		}
+		if version == "5" {
+			c.denseOrdinaryNegotiated = true
 		}
 	}
 	return nil
@@ -408,7 +413,7 @@ func decodeWireErrorVersion(body []byte, limits iwire.Limits, denseVersion uint6
 	if err != nil {
 		return err
 	}
-	denseWorkAllowed := denseVersion >= iwire.DenseVectorSearchTypedVersion
+	denseWorkAllowed := denseVersion == iwire.DenseVectorSearchTypedVersion || denseVersion == iwire.DenseVectorSearchTypedQuantizedVersion || denseVersion == iwire.DenseVectorSearchNormalizedVersion
 	out := new(WireError)
 	var workErr, scoreErr error
 	if denseWorkAllowed {

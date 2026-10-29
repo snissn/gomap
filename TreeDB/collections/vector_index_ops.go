@@ -20,8 +20,6 @@ type VectorIndexStatus struct {
 	Loaded              bool
 	RootName            string
 	RootID              uint64
-	NativeRootLoaded    bool
-	NativeRootBytes     int64
 	ExactFallbackReason string
 	Registered          bool
 	Stats               VectorIndexStats
@@ -76,13 +74,6 @@ func (c *Collection) VectorIndexStatus(name string) (VectorIndexStatus, error) {
 // collection change rejects the rebuild before append; unrelated writes do not.
 func (c *Collection) RebuildVectorIndex(name string) (VectorIndexStatus, error) {
 	if c != nil && c.nativeJSON != nil {
-		ordinary, err := c.nativeOrdinaryHNSWRole(name)
-		if err != nil {
-			return VectorIndexStatus{}, err
-		}
-		if ordinary {
-			return c.rebuildNativeOrdinaryHNSW(name)
-		}
 		return c.nativeRebuildVectorGraph(name)
 	}
 	if policy := c.typedGraphServingPolicy(); policy != nil {
@@ -198,13 +189,6 @@ func (c *Collection) vectorIndexStatus(name string, inspectNativeRoot bool) (Vec
 		return VectorIndexStatus{}, errCollectionNil
 	}
 	if c.nativeJSON != nil {
-		ordinary, err := c.nativeOrdinaryHNSWRole(name)
-		if err != nil {
-			return VectorIndexStatus{}, err
-		}
-		if ordinary {
-			return c.nativeOrdinaryHNSWStatus(name, inspectNativeRoot)
-		}
 		return c.nativeVectorGraphStatus(name)
 	}
 	if c.db == nil {
@@ -237,75 +221,7 @@ func (c *Collection) vectorIndexStatus(name string, inspectNativeRoot bool) (Vec
 		return c.columnGraphVectorIndexStatusAtSnapshot(def.Name, snap)
 	}
 
-	rootName := collectionVectorIndexRootName(catalog.meta.Name, def.Name)
-	rootID, overlayRootIDs := vectorIndexStatusRootID(catalog, rootName)
-	status := VectorIndexStatus{
-		Definition: def,
-		Name:       def.Name,
-		Strategy:   def.Strategy,
-		RootName:   rootName,
-		RootID:     rootID,
-	}
-	if def.Strategy == VectorIndexStrategyNativeRuntime {
-		status.State = VectorIndexStateNativeRuntime
-		status.Reason = VectorIndexReasonNativeRuntime
-	}
-	registeredRuntimeStale := false
-	if runtimeIdx := c.registeredVectorIndex(def.Name); runtimeIdx != nil {
-		status.Registered = true
-		registeredRuntimeStale = runtimeIdx.validateNativeSnapshotDefinition(def) != "" || rootID != runtimeIdx.nativeSnapshotBaseEpochForFullSave()
-		if !registeredRuntimeStale {
-			status.Stats = runtimeIdx.Stats()
-		}
-	}
-	if status.RootID == 0 && len(overlayRootIDs) == 0 {
-		status.ExactFallbackReason = vectorIndexFallbackMissingGraphRoot
-		status.RebuildNeeded = true
-		return status, nil
-	}
-	if !inspectNativeRoot {
-		status.NativeRootLoaded = status.RootID != 0 || len(overlayRootIDs) != 0
-		status.RebuildNeeded = status.Stats.RebuildNeeded || status.Stats.SnapshotDirty
-		return status, nil
-	}
-
-	snapshot, bytesDisk, reason, err := readVectorIndexNativeSnapshot(snap, catalog, rootName)
-	if err != nil {
-		return VectorIndexStatus{}, err
-	}
-	if reason != "" {
-		status.ExactFallbackReason = reason
-		status.RebuildNeeded = true
-		return status, nil
-	}
-	matchesDocumentRoots, err := vectorIndexSnapshotMatchesDocumentRoots(snapshot.Meta, catalog, snap)
-	if err != nil {
-		return VectorIndexStatus{}, err
-	}
-	if !matchesDocumentRoots {
-		status.ExactFallbackReason = vectorIndexFallbackStaleDocumentRoot
-		status.RebuildNeeded = true
-		return status, nil
-	}
-	probe, err := newVectorIndex(c, vectorIndexOptionsFromDefinition(def))
-	if err != nil {
-		return VectorIndexStatus{}, err
-	}
-	if reason := probe.loadPersistSnapshot(snapshot); reason != "" {
-		status.ExactFallbackReason = reason
-		status.RebuildNeeded = true
-		return status, nil
-	}
-	probe.recordLoadedSnapshot(status.RootID, bytesDisk)
-	status.NativeRootLoaded = true
-	status.NativeRootBytes = bytesDisk
-	if !status.Registered || registeredRuntimeStale {
-		status.Stats = probe.Stats()
-	} else if status.Stats.BytesDisk == 0 {
-		status.Stats.BytesDisk = bytesDisk
-	}
-	status.RebuildNeeded = status.Stats.RebuildNeeded || status.Stats.SnapshotDirty
-	return status, nil
+	return VectorIndexStatus{}, fmt.Errorf("%w: unsupported vector strategy %q", backenddb.ErrNativeSemanticUnsupported, def.Strategy)
 }
 
 func vectorIndexStatusRootID(catalog *collectionCatalog, rootName string) (uint64, []uint64) {
@@ -317,35 +233,7 @@ func vectorIndexStatusRootID(catalog *collectionCatalog, rootName string) (uint6
 	return rootID, overlayRootIDs
 }
 
-func (c *Collection) registeredVectorIndex(name string) *VectorIndex {
-	if c != nil && c.nativeJSON != nil {
-		coord := c.collectionSchemaCoordinator()
-		coord.nativeHNSWIndexesMu.RLock()
-		defer coord.nativeHNSWIndexesMu.RUnlock()
-		return coord.nativeHNSWIndexes[name]
-	}
-	if c == nil {
-		return nil
-	}
-	if coord := c.collectionSchemaCoordinator(); coord != nil {
-		if carrier := coord.partitionLiveCarrier(name); carrier != nil {
-			return carrier
-		}
-	}
-	if c.writeDomain != nil {
-		c.writeDomain.nativeVectorIndexesMu.RLock()
-		index := c.writeDomain.nativeVectorIndexes[name]
-		c.writeDomain.nativeVectorIndexesMu.RUnlock()
-		if index != nil {
-			return index
-		}
-	}
-	c.vectorIndexesMu.RLock()
-	defer c.vectorIndexesMu.RUnlock()
-	return c.vectorIndexes[name]
-}
-
-func (c *Collection) registeredVectorPartitionLiveCarriersV1() []*VectorIndex {
+func (c *Collection) registeredVectorPartitionLiveCarriersV1() []*columnGraphPartitionLiveCarrier {
 	if c == nil {
 		return nil
 	}
@@ -354,4 +242,14 @@ func (c *Collection) registeredVectorPartitionLiveCarriersV1() []*VectorIndex {
 		return nil
 	}
 	return coord.partitionLiveCarrierList()
+}
+
+func (c *Collection) registeredColumnGraphPartitionLiveCarrier(name string) *columnGraphPartitionLiveCarrier {
+	if c == nil {
+		return nil
+	}
+	if coord := c.collectionSchemaCoordinator(); coord != nil {
+		return coord.partitionLiveCarrier(name)
+	}
+	return nil
 }

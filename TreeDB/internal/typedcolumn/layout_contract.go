@@ -306,7 +306,7 @@ func CertifyColumnPartLayoutContract(image ColumnPartImage, desc ColumnPartDescr
 			cert.PruningCertified++
 		}
 		if !contractColumn.DirectViewCertified && !contractColumn.StreamingCertified {
-			cert.CertificationFallback = append(cert.CertificationFallback, fmt.Sprintf("%s:no_fast_layout", contractColumn.Name))
+			cert.CertificationFallback = append(cert.CertificationFallback, contractColumn.Name+":no_fast_layout")
 		}
 	}
 	return cert, nil
@@ -319,6 +319,10 @@ type columnPartImageColumnSections struct {
 }
 
 func encodeColumnPartLayoutContract(part *ColumnPart, opts ColumnPartImageOptions, sectionData []columnPartImageSectionData, manifestBytes int) ([]byte, error) {
+	return encodeColumnPartLayoutContractWithCapacity(part, opts, sectionData, manifestBytes, 0)
+}
+
+func encodeColumnPartLayoutContractWithCapacity(part *ColumnPart, opts ColumnPartImageOptions, sectionData []columnPartImageSectionData, manifestBytes int, capacity int) ([]byte, error) {
 	if part == nil {
 		return nil, fmt.Errorf("typedcolumn: nil part")
 	}
@@ -348,7 +352,7 @@ func encodeColumnPartLayoutContract(part *ColumnPart, opts ColumnPartImageOption
 	if descriptorData.section.Kind != ColumnPartImageSectionDescriptor {
 		return nil, fmt.Errorf("typedcolumn: layout contract requires descriptor section")
 	}
-	var enc columnPartImageEncoder
+	enc := columnPartImageEncoder{buf: make([]byte, 0, capacity)}
 	enc.u16(ColumnPartLayoutContractVersion)
 	enc.u16(0)
 	enc.u64(part.Descriptor.PartID)

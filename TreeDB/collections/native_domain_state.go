@@ -13,6 +13,9 @@ import (
 // nativeDomainState is the original owner of one immutable root-local source.
 // baseRoot and pending are resolved under the enclosing complete engine cut's
 // exact disk snapshot. No read follows a mutable write-domain table or catalog.
+// catalogRoot authenticates the separately persisted catalog descriptor. A full
+// replacement keeps that provenance while setting baseRoot to zero, so physical
+// maintenance cannot turn the superseded graph back into a logical read source.
 // Ordinary changes preserve interpretation; DDL replaces it explicitly.
 // sourceGeneration records the primary generation covered by a named saved
 // image; physical rollover/handoff and ordinary domain deltas preserve it.
@@ -20,6 +23,7 @@ type nativeDomainState struct {
 	refs             atomic.Int64
 	name             string
 	baseRoot         uint64
+	catalogRoot      uint64 // authenticated physical catalog provenance; not a read source
 	interpretation   uint64
 	sourceGeneration uint64
 	storagePolicy    backenddb.OrderedRootStoragePolicy
@@ -45,7 +49,7 @@ func newNativeDomainState(name string, baseRoot, interpretation uint64, policy b
 	}
 	refund := new(cowbtree.OwnedMapRefund)
 	refund.Init(lease)
-	d := &nativeDomainState{name: strings.Clone(name), baseRoot: baseRoot, interpretation: interpretation, storagePolicy: policy, pending: pending, refund: refund}
+	d := &nativeDomainState{name: strings.Clone(name), baseRoot: baseRoot, catalogRoot: baseRoot, interpretation: interpretation, storagePolicy: policy, pending: pending, refund: refund}
 	d.refs.Store(1)
 	return d, nil
 }

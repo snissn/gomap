@@ -184,7 +184,7 @@ func TestTypedGraphPreparedFilterSelectiveAND(t *testing.T) {
 		// One entry check, five ID checks, five encoding checks, one submit
 		// check: the next context check is the first storage callback.
 		ctx := &typedGraphFilterErrorContext{Context: context.Background(), at: 13, err: tree.ErrKeyNotFound}
-		err = refineTypedGraphAND(ctx, plan, allowed, idx, prefix, limits)
+		err = refineTypedGraphAND(ctx, plan, legacyScalarIDs(allowed), idx, prefix, limits)
 		if !errors.Is(err, tree.ErrKeyNotFound) || len(allowed) != 5 || plan.mappingWork != keyBytes+5 || ctx.calls != 13 {
 			t.Fatalf("swallowed/repeated callback error=%v IDs=%d mapping=%d checks=%d", err, len(allowed), plan.mappingWork, ctx.calls)
 		}
@@ -395,7 +395,7 @@ func TestTypedGraphANDProbePhysicalTombstoneCap(t *testing.T) {
 	limits := typedGraphFilterLimits{SourceIDs: 512, SourceBytes: 1024, MappingWork: 1024, InspectedEntries: 3}
 	plan := &typedGraphPreparedFilter{}
 	got, complete, err := probeTypedGraphANDLeaf(context.Background(), plan, &lookup, HybridScalarFilter{IndexName: "user", Value: "same"}, limits, 512, 10)
-	if got != nil || complete || !errors.Is(err, errTypedGraphSearchBudget) || plan.sourceIDs != 0 || plan.inspectedEntries != 3 || plan.mappingWork != 60 {
+	if got.present() || complete || !errors.Is(err, errTypedGraphSearchBudget) || plan.sourceIDs != 0 || plan.inspectedEntries != 3 || plan.mappingWork != 60 {
 		t.Fatalf("tombstone cap complete=%t source=%d inspected=%d mapping=%d err=%v", complete, plan.sourceIDs, plan.inspectedEntries, plan.mappingWork, err)
 	}
 	// With sufficient physical work, the same real deleted posting stream
@@ -403,7 +403,7 @@ func TestTypedGraphANDProbePhysicalTombstoneCap(t *testing.T) {
 	limits.InspectedEntries = 32
 	plan = &typedGraphPreparedFilter{}
 	got, complete, err = probeTypedGraphANDLeaf(context.Background(), plan, &lookup, HybridScalarFilter{IndexName: "user", Value: "same"}, limits, 512, 10)
-	if err != nil || !complete || len(got) != 0 || plan.sourceIDs != 0 || plan.inspectedEntries <= 3 {
+	if err != nil || !complete || got.len() != 0 || plan.sourceIDs != 0 || plan.inspectedEntries <= 3 {
 		t.Fatalf("tombstone retry complete=%t source=%d inspected=%d err=%v", complete, plan.sourceIDs, plan.inspectedEntries, err)
 	}
 }

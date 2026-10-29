@@ -281,11 +281,18 @@ func TestNativeMixedEngineLifecycle(t *testing.T) {
 		key := (generation - 1) % len(ids)
 		before := database.Stats()
 		next, sequence := handle.CommandWALNextLSN(), before["treedb.cache.cow.txn.logical_seq"]
-		physical := indexedCRUDAppliedLSN(t, handle)
 		tx, err := native.Begin("labels", "vectors", "docs", "bson_arrays", "templates")
 		if err != nil {
 			t.Fatalf("Begin generation%d accepted%d: %v", generation, accepted, err)
 		}
+		// Begin may drain prior accepted work before opening this transaction.
+		// Keep the physical-prefix oracle around this transaction's mutations
+		// and Commit; preparation must not assign a new logical command.
+		before = database.Stats()
+		if handle.CommandWALNextLSN() != next || before["treedb.cache.cow.txn.logical_seq"] != sequence {
+			t.Fatal("Begin assigned a logical command during producer preparation")
+		}
+		physical := indexedCRUDAppliedLSN(t, handle)
 		// Keep one ordinary public transaction, rather than single-shot fixtures.
 		err = func() error {
 			defer tx.Close()

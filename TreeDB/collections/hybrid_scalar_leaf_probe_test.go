@@ -85,18 +85,18 @@ func TestHybridScalarLeafProbeParity4475(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open scalar lookup view: %v", err)
 	}
-	var ownedAfterClose hybridScalarAllowSet
+	var ownedAfterClose hybridScalarIDs
 	for i, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			set, inputIDs, truncated, err := view.leafProbe(tc.filter, tc.limit)
 			if err != nil {
 				t.Fatalf("leafProbe: %v", err)
 			}
-			if inputIDs != uint64(len(expected[i].ids)) || truncated != expected[i].truncated || len(set) != len(expected[i].ids) {
+			if inputIDs != uint64(len(expected[i].ids)) || truncated != expected[i].truncated || set.len() != len(expected[i].ids) {
 				t.Fatalf("set=%v input_ids=%d truncated=%v want ids=%q input_ids=%d truncated=%v", set, inputIDs, truncated, expected[i].ids, len(expected[i].ids), expected[i].truncated)
 			}
 			for _, id := range expected[i].ids {
-				if _, ok := set[string(id)]; !ok {
+				if ok := set.contains(string(id)); !ok {
 					t.Fatalf("set=%v missing reference id %q", set, id)
 				}
 			}
@@ -106,11 +106,11 @@ func TestHybridScalarLeafProbeParity4475(t *testing.T) {
 		})
 	}
 	set, inputIDs, truncated, err := view.leafProbe(HybridScalarFilter{IndexName: "missing", Value: "a"}, 10)
-	if !errors.Is(err, ErrHybridSearchIndexUnavailable) || set != nil || inputIDs != 0 || truncated {
+	if !errors.Is(err, ErrHybridSearchIndexUnavailable) || set.present() || inputIDs != 0 || truncated {
 		t.Fatalf("missing index set=%v input_ids=%d truncated=%v err=%v", set, inputIDs, truncated, err)
 	}
 	view.close()
-	if _, ok := ownedAfterClose["e"]; !ok {
+	if ok := ownedAfterClose.contains("e"); !ok {
 		t.Fatalf("borrowed probe result did not retain its owned ID after closing the snapshot: %v", ownedAfterClose)
 	}
 
@@ -123,15 +123,15 @@ func TestHybridScalarLeafProbeParity4475(t *testing.T) {
 	}
 	defer nextView.close()
 	next, nextInputIDs, nextTruncated, err := nextView.leafProbe(HybridScalarFilter{IndexName: "tag", Value: "a"}, 10)
-	if err != nil || nextTruncated || nextInputIDs != uint64(len(ownedAfterClose)+1) || len(next) != len(ownedAfterClose)+1 {
+	if err != nil || nextTruncated || nextInputIDs != uint64(ownedAfterClose.len()+1) || next.len() != ownedAfterClose.len()+1 {
 		t.Fatalf("next-generation set=%v input_ids=%d truncated=%v err=%v", next, nextInputIDs, nextTruncated, err)
 	}
-	if _, ok := next["f"]; !ok {
+	if ok := next.contains("f"); !ok {
 		t.Fatalf("next-generation set=%v missing f", next)
 	}
 }
 
-var hybridScalarLeafProbeBenchmarkSink4475 hybridScalarAllowSet
+var hybridScalarLeafProbeBenchmarkSink4475 hybridScalarIDs
 
 func BenchmarkHybridScalarLeafProbe4475(b *testing.B) {
 	const documents = 1024
@@ -155,15 +155,15 @@ func BenchmarkHybridScalarLeafProbe4475(b *testing.B) {
 	filter := HybridScalarFilter{IndexName: "city", Value: "benchmark"}
 
 	set, inputIDs, truncated, err := view.leafProbe(filter, documents)
-	if err != nil || truncated || inputIDs != documents || len(set) != documents {
-		b.Fatalf("warm leafProbe set=%d input_ids=%d truncated=%v err=%v", len(set), inputIDs, truncated, err)
+	if err != nil || truncated || inputIDs != documents || set.len() != documents {
+		b.Fatalf("warm leafProbe set=%d input_ids=%d truncated=%v err=%v", set.len(), inputIDs, truncated, err)
 	}
 
 	b.ReportAllocs()
 	for b.Loop() {
 		set, inputIDs, truncated, err = view.leafProbe(filter, documents)
-		if err != nil || truncated || inputIDs != documents || len(set) != documents {
-			b.Fatalf("leafProbe set=%d input_ids=%d truncated=%v err=%v", len(set), inputIDs, truncated, err)
+		if err != nil || truncated || inputIDs != documents || set.len() != documents {
+			b.Fatalf("leafProbe set=%d input_ids=%d truncated=%v err=%v", set.len(), inputIDs, truncated, err)
 		}
 	}
 	hybridScalarLeafProbeBenchmarkSink4475 = set

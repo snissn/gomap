@@ -110,7 +110,7 @@ func prepareTypedGraphFilterUnmetered(ctx context.Context, overlay *typedGraphOv
 		return nil, err
 	}
 	// Final intersection, not individual leaf cardinality, chooses exact/ANN.
-	plan.count = len(allowed)
+	plan.count = allowed.len()
 	bytesPerRow := bits.UintSize / 8
 	if plan.count <= typedGraphScalarExactLimit {
 		bytesPerRow *= 2
@@ -180,7 +180,7 @@ func prepareTypedGraphFilterUnmetered(ctx context.Context, overlay *typedGraphOv
 		return nil
 	}
 	copied := 0
-	for id := range allowed {
+	for id := range allowed.all {
 		if copied&255 == 0 {
 			if err := ctx.Err(); err != nil {
 				return nil, err

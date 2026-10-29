@@ -6,6 +6,13 @@ post-#2360 TreeDB collection vector-search docs stack. It is a dated exact-FP32
 or matches USearch outside the stated fixture, hardware, commit, route, and
 counters.
 
+Current serving uses `column_graph` only. Its exact FP32 score plane and derived
+quantized planes remain separate from explicit document-scan exact search.
+Ordinary filtered ANN and vector-bearing filtered Hybrid are refused; retained
+typed-filter benchmarks require their documented admission. Historical runtime
+or BSON vector rows do not authorize those removed capabilities. Keep frozen
+sources, results and failed cells unchanged.
+
 For the #2483 final vector docs closeout, use
 [`vector-search-closeout-2483.md`](../spec/vector-search-closeout-2483.md) as the
 current route/evidence index. It incorporates the #2487 unified current-main

@@ -188,6 +188,17 @@ type DeferredVectorBuildMaintenance struct {
 	owner uint64
 }
 
+// DeferredVectorBuildMaintenance returns the maintenance capability for this
+// same public database owner. It does not extend the database lifetime; callers
+// must close their services before closing db. Scoped gives each service its own
+// existing deferred-build epoch identity.
+func (db *DB) DeferredVectorBuildMaintenance() *DeferredVectorBuildMaintenance {
+	if db == nil {
+		return nil
+	}
+	return &DeferredVectorBuildMaintenance{db: db}
+}
+
 // Scoped returns an independent deferred-build owner for one service.
 func (c *DeferredVectorBuildMaintenance) Scoped() *DeferredVectorBuildMaintenance {
 	if c == nil || c.db == nil {

@@ -17,6 +17,9 @@ import (
 // Domain numbers are derived only from the captured schema, exactly like the
 // maintained planner's runtimeIdx. Physical roots never determine identity.
 func nativeJSONDomainNumber(meta CollectionMeta, name string) uint64 {
+	if number := nativeTextDomainNumber(meta, name); number != 0 {
+		return number
+	}
 	switch name {
 	case "primary":
 		return 1
@@ -44,7 +47,7 @@ func nativeJSONDomainNumber(meta CollectionMeta, name string) uint64 {
 	}
 	// Source-only ColumnGraph declarations retain their original empty root
 	// descriptors. They are catalog identities, not live ANN publication.
-	if nativeSourceImportMetaV2(meta) || nativeOrdinaryHNSWMeta(meta) {
+	if nativeSourceImportMetaV2(meta) {
 		for i, index := range meta.VectorIndexes {
 			if name == "vector-index/"+index.Name {
 				return uint64(len(meta.Indexes)+i) + 7

@@ -161,6 +161,36 @@ func TestNativeNamedDomainReplacement(t *testing.T) {
 		}
 		return d
 	}
+	// Equivalent physical maintenance authenticates the persisted catalog even
+	// while this cut deliberately replaces that catalog's old graph with an
+	// empty logical base. Exercise the unchanged-root case too: other domains
+	// may move while this domain's physical descriptor remains unchanged.
+	refreshReplacement := func(read *NativeJSONRead, want ...string) {
+		t.Helper()
+		base := read.capture.State().(*nativeEngineVersion)
+		refreshed, err := prepareNativeEngineBasisRefresh(base, read.capture.Snapshot(), read.capture.Snapshot())
+		if refreshed != nil {
+			defer func() {
+				if err := finishPrivateNative(refreshed.Release()); err != nil {
+					t.Error(err)
+				}
+			}()
+		}
+		if err != nil {
+			t.Fatalf("equivalent basis with pending graph replacement: %v", err)
+		}
+		current, ok := refreshed.names.Get("events")
+		if !ok {
+			t.Fatal("refresh lost collection")
+		}
+		d, ok := current.domains.Get("vector/graph")
+		old := domain(read)
+		if !ok || d.baseRoot != 0 || d.catalogRoot != old.catalogRoot || d.interpretation != old.interpretation || d.sourceGeneration != old.sourceGeneration {
+			t.Fatalf("refresh reattached replaced physical graph: %+v", d)
+		}
+		borrowed := &NativeJSONRead{capture: read.capture, collection: current, scratch: read.scratch, database: read.database}
+		check(borrowed, want...)
+	}
 	initial := capture()
 	if initial.collection.documentGeneration != 1 {
 		t.Fatalf("initial generation=%d", initial.collection.documentGeneration)
@@ -170,7 +200,7 @@ func TestNativeNamedDomainReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 	old := capture()
-	if d := domain(old); d.baseRoot == 0 || d.interpretation != 1 || d.sourceGeneration != 1 {
+	if d := domain(old); d.baseRoot == 0 || d.catalogRoot != d.baseRoot || d.interpretation != 1 || d.sourceGeneration != 1 {
 		t.Fatalf("physical initial domain=%+v", d)
 	}
 	check(old, "a", "b", "c")
@@ -188,7 +218,7 @@ func TestNativeNamedDomainReplacement(t *testing.T) {
 		t.Fatalf("logical sequence before=%d after=%d", old.capture.LogicalSequence(), replacement.capture.LogicalSequence())
 	}
 	d := domain(replacement)
-	if d.baseRoot != 0 || d.interpretation != 2 || d.sourceGeneration != 1 || replacement.collection.documentGeneration != 1 {
+	if d.baseRoot != 0 || d.catalogRoot != domain(old).catalogRoot || d.interpretation != 2 || d.sourceGeneration != 1 || replacement.collection.documentGeneration != 1 {
 		t.Fatalf("replacement identity=%+v generation=%d", d, replacement.collection.documentGeneration)
 	}
 	if _, err := replacement.namedDomainGet("vector/graph", []byte("a")); !errors.Is(err, tree.ErrKeyNotFound) {
@@ -196,6 +226,7 @@ func TestNativeNamedDomainReplacement(t *testing.T) {
 	}
 	check(old, "a", "b", "c")
 	check(replacement, "b")
+	refreshReplacement(replacement, "b")
 	if err := database.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
@@ -261,6 +292,7 @@ func TestNativeNamedDomainReplacement(t *testing.T) {
 	if _, err := empty.namedDomainGet("vector/graph", []byte("d")); !errors.Is(err, tree.ErrKeyNotFound) {
 		t.Fatalf("empty image retained node: %v", err)
 	}
+	refreshReplacement(empty)
 	if err := database.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}

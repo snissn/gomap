@@ -1,5 +1,7 @@
 package collections
 
+import "unsafe"
+
 const hybridAdaptiveCandidateBudgetMaxProbeIterations = 4
 
 type hybridCandidateBudgetPolicyMode uint8
@@ -40,12 +42,12 @@ func hybridCandidateBudgetPolicyIsAdaptive(policy HybridCandidateBudgetPolicy) b
 	}
 }
 
-func (c *Collection) hybridSearchCandidatesWithBudgetPolicy(plan hybridSearchExecutionPlan, candidateAllowSet, filterAllowSet hybridScalarAllowSet, mode hybridCandidateBudgetPolicyMode) ([]HybridSearchCandidate, HybridSearchStats, error) {
+func (c *Collection) hybridSearchCandidatesWithBudgetPolicy(plan hybridSearchExecutionPlan, candidateAllowSet, filterAllowSet hybridScalarIDs, mode hybridCandidateBudgetPolicyMode) ([]HybridSearchCandidate, HybridSearchStats, error) {
 	defaultMode := mode == hybridCandidateBudgetPolicyDefault
 	if defaultMode {
 		mode = hybridCandidateBudgetPolicyAdaptive
 	}
-	if filterAllowSet != nil && len(filterAllowSet) == 0 {
+	if filterAllowSet.present() && filterAllowSet.len() == 0 {
 		if plan.text != nil {
 			if err := c.validateHybridTextCandidateQueryAtReadView(*plan.text, plan.readView); err != nil {
 				return nil, HybridSearchStats{}, hybridCandidateSourceError{source: HybridCandidateSourceText, err: err}
@@ -106,13 +108,13 @@ func (c *Collection) hybridSearchCandidatesWithBudgetPolicy(plan hybridSearchExe
 	return c.hybridSearchCandidatesHybridAdaptive(plan, candidateAllowSet, filterAllowSet, params)
 }
 
-func (c *Collection) hybridSearchCandidatesFixedBudget(plan hybridSearchExecutionPlan, allowSet hybridScalarAllowSet, stopReason, fallbackReason HybridCandidateBudgetStopReason) ([]HybridSearchCandidate, HybridSearchStats, error) {
+func (c *Collection) hybridSearchCandidatesFixedBudget(plan hybridSearchExecutionPlan, allowSet hybridScalarIDs, stopReason, fallbackReason HybridCandidateBudgetStopReason) ([]HybridSearchCandidate, HybridSearchStats, error) {
 	candidates, stats, err := c.hybridSearchCandidates(plan, allowSet)
 	hybridCandidateBudgetFinalizeStats(&stats, plan, hybridCandidateBudgetRequestedText(plan), hybridCandidateBudgetRequestedVector(plan), HybridCandidateBudgetPolicyFixed, stopReason, fallbackReason, 1)
 	return candidates, stats, err
 }
 
-func (c *Collection) hybridSearchCandidatesSingleSourceAdaptive(plan hybridSearchExecutionPlan, allowSet hybridScalarAllowSet) ([]HybridSearchCandidate, HybridSearchStats, error) {
+func (c *Collection) hybridSearchCandidatesSingleSourceAdaptive(plan hybridSearchExecutionPlan, allowSet hybridScalarIDs) ([]HybridSearchCandidate, HybridSearchStats, error) {
 	textBudget := hybridCandidateBudgetRequestedText(plan)
 	vectorBudget := hybridCandidateBudgetRequestedVector(plan)
 	if plan.text != nil {
@@ -135,7 +137,7 @@ func (c *Collection) hybridSearchCandidatesSingleSourceAdaptive(plan hybridSearc
 	return candidates, stats, err
 }
 
-func (c *Collection) hybridSearchCandidatesHybridAdaptive(plan hybridSearchExecutionPlan, candidateAllowSet, filterAllowSet hybridScalarAllowSet, params hybridCandidateBudgetRRFParams) ([]HybridSearchCandidate, HybridSearchStats, error) {
+func (c *Collection) hybridSearchCandidatesHybridAdaptive(plan hybridSearchExecutionPlan, candidateAllowSet, filterAllowSet hybridScalarIDs, params hybridCandidateBudgetRRFParams) ([]HybridSearchCandidate, HybridSearchStats, error) {
 	textRequested := hybridCandidateBudgetRequestedText(plan)
 	vectorRequested := hybridCandidateBudgetRequestedVector(plan)
 	textBudget := hybridAdaptiveInitialCandidateBudget(textRequested, plan.topK)
@@ -162,11 +164,33 @@ func (c *Collection) hybridSearchCandidatesHybridAdaptive(plan hybridSearchExecu
 			break
 		}
 
+		var admit func(uint64) error
+		if plan.nativeScratch != nil {
+			admit = plan.nativeScratch.admitFn
+		}
+		if admit != nil && filterAllowSet.present() && plan.scalarFilterStrategy != HybridScalarFilterStrategyPostfilter {
+			if err := admitLocalIDArray(admit, len(candidates), uint64(unsafe.Sizeof(HybridSearchCandidate{}))); err != nil {
+				hybridCandidateBudgetApplyAccumulatedWork(&stats, work)
+				hybridCandidateBudgetFinalizeStats(&stats, plan, textBudget, vectorBudget, HybridCandidateBudgetPolicyAdaptiveRRF, HybridCandidateBudgetStopReasonExactBoundInsufficient, HybridCandidateBudgetStopReasonNone, uint64(iterations))
+				return candidates, stats, err
+			}
+		}
 		proofCandidates := hybridCandidateBudgetProofCandidates(candidates, filterAllowSet, plan)
 		results, _, fuseErr := hybridFusePlannedCandidates(proofCandidates, plan)
+		if fuseErr != nil && admit != nil {
+			hybridCandidateBudgetApplyAccumulatedWork(&stats, work)
+			hybridCandidateBudgetFinalizeStats(&stats, plan, textBudget, vectorBudget, HybridCandidateBudgetPolicyAdaptiveRRF, HybridCandidateBudgetStopReasonExactBoundInsufficient, HybridCandidateBudgetStopReasonNone, uint64(iterations))
+			return candidates, stats, fuseErr
+		}
 		if fuseErr == nil {
 			state := hybridCandidateBudgetState(plan, stats, textBudget, vectorBudget)
-			if hybridCandidateBudgetExactRRFStop(proofCandidates, results, state, params, plan.topK) {
+			stop, err := hybridCandidateBudgetExactRRFStopAdmitted(proofCandidates, results, state, params, plan.topK, admit)
+			if err != nil {
+				hybridCandidateBudgetApplyAccumulatedWork(&stats, work)
+				hybridCandidateBudgetFinalizeStats(&stats, plan, textBudget, vectorBudget, HybridCandidateBudgetPolicyAdaptiveRRF, HybridCandidateBudgetStopReasonExactBoundInsufficient, HybridCandidateBudgetStopReasonNone, uint64(iterations))
+				return candidates, stats, err
+			}
+			if stop {
 				hybridCandidateBudgetApplyAccumulatedWork(&stats, work)
 				hybridCandidateBudgetFinalizeStats(&stats, plan, textBudget, vectorBudget, HybridCandidateBudgetPolicyAdaptiveRRF, HybridCandidateBudgetStopReasonExactRRFBound, HybridCandidateBudgetStopReasonNone, uint64(iterations))
 				return candidates, stats, nil
@@ -309,13 +333,13 @@ func hybridCandidateBudgetState(plan hybridSearchExecutionPlan, stats HybridSear
 	}
 }
 
-func hybridCandidateBudgetProofCandidates(candidates []HybridSearchCandidate, allowSet hybridScalarAllowSet, plan hybridSearchExecutionPlan) []HybridSearchCandidate {
-	if allowSet == nil || plan.scalarFilterStrategy == HybridScalarFilterStrategyPostfilter {
+func hybridCandidateBudgetProofCandidates(candidates []HybridSearchCandidate, allowSet hybridScalarIDs, plan hybridSearchExecutionPlan) []HybridSearchCandidate {
+	if !allowSet.present() || plan.scalarFilterStrategy == HybridScalarFilterStrategyPostfilter {
 		return candidates
 	}
 	filtered := make([]HybridSearchCandidate, 0, len(candidates))
 	for _, candidate := range candidates {
-		if _, ok := allowSet[string(candidate.ID)]; ok {
+		if ok := allowSet.contains(string(candidate.ID)); ok {
 			filtered = append(filtered, candidate)
 		}
 	}
@@ -323,60 +347,135 @@ func hybridCandidateBudgetProofCandidates(candidates []HybridSearchCandidate, al
 }
 
 func hybridCandidateBudgetExactRRFStop(candidates []HybridSearchCandidate, results []HybridSearchResult, state [2]hybridCandidateBudgetSourceState, params hybridCandidateBudgetRRFParams, topK int) bool {
-	textState := state[0]
-	vectorState := state[1]
+	stop, _ := hybridCandidateBudgetExactRRFStopAdmitted(candidates, results, state, params, topK, nil)
+	return stop
+}
+
+func hybridCandidateBudgetExactRRFStopAdmitted(candidates []HybridSearchCandidate, results []HybridSearchResult, state [2]hybridCandidateBudgetSourceState, params hybridCandidateBudgetRRFParams, topK int, admit func(uint64) error) (bool, error) {
+	textState, vectorState := state[0], state[1]
 	if len(results) == 0 {
-		return !textState.canHaveUnseen() && !vectorState.canHaveUnseen()
+		return !textState.canHaveUnseen() && !vectorState.canHaveUnseen(), nil
 	}
 	if topK > 0 && len(results) < topK && (textState.canHaveUnseen() || vectorState.canHaveUnseen()) {
-		return false
+		return false, nil
 	}
-	accumulators, ok := hybridCandidateBudgetProofAccumulators(candidates, params)
-	if !ok {
-		return false
+	accumulators, ok, err := hybridCandidateBudgetProofAccumulatorsAdmitted(candidates, params, admit)
+	if err != nil || !ok {
+		return false, err
 	}
-	resultIDs := make(map[string]struct{}, len(results))
+	var resultIDs map[string]struct{}
+	var nativeResults *localIDIndex
+	if admit != nil {
+		nativeResults, err = newLocalIDIndex(len(results), admit)
+		if err != nil {
+			return false, err
+		}
+	} else {
+		resultIDs = make(map[string]struct{}, len(results))
+	}
 	for _, result := range results {
-		idKey := string(result.ID)
-		acc, ok := accumulators[idKey]
-		if !ok {
-			return false
+		idKey := unsafeStringFromBytes(result.ID)
+		if admit == nil {
+			idKey = string(result.ID)
 		}
-		if textState.canHaveUnseen() && !acc.hasText {
-			return false
+		acc, ok := accumulators.get(idKey)
+		if !ok || textState.canHaveUnseen() && !acc.hasText || vectorState.canHaveUnseen() && !acc.hasVector {
+			return false, nil
 		}
-		if vectorState.canHaveUnseen() && !acc.hasVector {
-			return false
+		if nativeResults != nil {
+			if err := nativeResults.setBorrowed(idKey, 0); err != nil {
+				return false, err
+			}
+		} else {
+			resultIDs[idKey] = struct{}{}
 		}
-		resultIDs[idKey] = struct{}{}
 	}
 	threshold := results[len(results)-1].FusedScore
-	for idKey, acc := range accumulators {
-		if _, isResult := resultIDs[idKey]; isResult {
-			continue
+	for idKey, acc := range accumulators.all {
+		isResult := false
+		if nativeResults != nil {
+			_, isResult = nativeResults.lookup(idKey)
+		} else {
+			_, isResult = resultIDs[idKey]
 		}
-		if hybridCandidateBudgetUpperBound(acc, textState, vectorState, params) >= threshold {
-			return false
+		if !isResult && hybridCandidateBudgetUpperBound(acc, textState, vectorState, params) >= threshold {
+			return false, nil
 		}
 	}
 	if hybridCandidateBudgetUnseenUpperBound(textState, vectorState, params) >= threshold {
-		return false
+		return false, nil
 	}
-	return true
+	return true, nil
 }
 
+type hybridCandidateBudgetProofRecord struct {
+	id    string
+	value hybridCandidateBudgetProofAccumulator
+}
+type hybridCandidateBudgetProofIDs struct {
+	legacy  map[string]hybridCandidateBudgetProofAccumulator
+	index   *localIDIndex
+	records []hybridCandidateBudgetProofRecord
+}
+
+func (s hybridCandidateBudgetProofIDs) get(id string) (hybridCandidateBudgetProofAccumulator, bool) {
+	if s.index != nil {
+		n, ok := s.index.lookup(id)
+		if ok {
+			return s.records[n].value, true
+		}
+		return hybridCandidateBudgetProofAccumulator{}, false
+	}
+	value, ok := s.legacy[id]
+	return value, ok
+}
+func (s hybridCandidateBudgetProofIDs) all(yield func(string, hybridCandidateBudgetProofAccumulator) bool) {
+	if s.index != nil {
+		for _, r := range s.records {
+			if !yield(r.id, r.value) {
+				return
+			}
+		}
+		return
+	}
+	for id, value := range s.legacy {
+		if !yield(id, value) {
+			return
+		}
+	}
+}
 func hybridCandidateBudgetProofAccumulators(candidates []HybridSearchCandidate, params hybridCandidateBudgetRRFParams) (map[string]hybridCandidateBudgetProofAccumulator, bool) {
-	accumulators := make(map[string]hybridCandidateBudgetProofAccumulator, len(candidates))
+	s, ok, _ := hybridCandidateBudgetProofAccumulatorsAdmitted(candidates, params, nil)
+	return s.legacy, ok
+}
+func hybridCandidateBudgetProofAccumulatorsAdmitted(candidates []HybridSearchCandidate, params hybridCandidateBudgetRRFParams, admit func(uint64) error) (hybridCandidateBudgetProofIDs, bool, error) {
+	s := hybridCandidateBudgetProofIDs{}
+	if admit != nil {
+		if err := admitLocalIDArray(admit, len(candidates), uint64(unsafe.Sizeof(hybridCandidateBudgetProofRecord{}))); err != nil {
+			return s, false, err
+		}
+		var err error
+		s.index, err = newLocalIDIndex(len(candidates), admit)
+		if err != nil {
+			return s, false, err
+		}
+		s.records = make([]hybridCandidateBudgetProofRecord, 0, len(candidates))
+	} else {
+		s.legacy = make(map[string]hybridCandidateBudgetProofAccumulator, len(candidates))
+	}
 	for _, candidate := range candidates {
 		if candidate.SourceRank <= 0 {
-			return nil, false
+			return s, false, nil
 		}
 		score, ok := params.contribution(candidate.Source, candidate.SourceRank)
 		if !ok {
-			return nil, false
+			return s, false, nil
 		}
-		idKey := string(candidate.ID)
-		acc := accumulators[idKey]
+		idKey := unsafeStringFromBytes(candidate.ID)
+		if admit == nil {
+			idKey = string(candidate.ID)
+		}
+		acc, exists := s.get(idKey)
 		switch candidate.Source {
 		case HybridCandidateSourceText:
 			if !acc.hasText || score > acc.textScore {
@@ -397,11 +496,24 @@ func hybridCandidateBudgetProofAccumulators(candidates []HybridSearchCandidate, 
 				acc.hasVector = true
 			}
 		default:
-			return nil, false
+			return s, false, nil
 		}
-		accumulators[idKey] = acc
+		if s.index != nil {
+			ordinal, _ := s.index.lookup(idKey)
+			if !exists {
+				ordinal = len(s.records)
+				owned, err := s.index.copyKey(candidate.ID, ordinal)
+				if err != nil {
+					return s, false, err
+				}
+				s.records = append(s.records, hybridCandidateBudgetProofRecord{id: owned})
+			}
+			s.records[ordinal].value = acc
+		} else {
+			s.legacy[idKey] = acc
+		}
 	}
-	return accumulators, true
+	return s, true, nil
 }
 
 func (s hybridCandidateBudgetSourceState) canHaveUnseen() bool {

@@ -29,22 +29,19 @@ type collectionSchemaCoordinator struct {
 	typedPublicationChanged  chan struct{}
 	typedPublicationClosed   bool
 
-	nativeHNSWMutationMu                   sync.Mutex
-	nativeHNSWIndexesMu                    sync.RWMutex
-	nativeHNSWIndexes                      map[string]*VectorIndex
+	// Native scalar producers share admission through durable completion. DDL
+	// and vector/carrier mutations exclude every producer for the same namespace.
+	vectorDDLMutationMu                    sync.RWMutex
 	schemaMu                               sync.RWMutex
 	nativeVectorIndexLoadMu                sync.Mutex
 	nativeVectorAdmissionMu                sync.RWMutex
 	nativeVectorBaseline                   atomic.Pointer[uint64]
 	hasNativeVectorIndexes                 atomic.Bool
 	partitionLiveMu                        sync.RWMutex
-	partitionLiveCarriers                  map[string]*VectorIndex
+	partitionLiveCarriers                  map[string]*columnGraphPartitionLiveCarrier
 	partitionLiveReplayFinalizerRegistered bool
 	partitionLivePublishMu                 sync.RWMutex
 	partitionLiveSearchPins                map[vectorPartitionLiveSearchPinKeyV1]int
-	adHocVectorAdmissionMu                 sync.RWMutex
-	adHocVectorIndexes                     atomic.Int64
-	legacyVectorSidecarMu                  sync.Mutex
 	domainsMu                              sync.Mutex
 	domains                                map[*collectionWriteDomain]struct{}
 	// No-WAL sync drains pause workers across current and newly registered domains.
@@ -93,7 +90,7 @@ func (coord *collectionSchemaCoordinator) hasPartitionLiveSearchPin(key vectorPa
 	return has
 }
 
-func (coord *collectionSchemaCoordinator) partitionLiveCarrier(name string) *VectorIndex {
+func (coord *collectionSchemaCoordinator) partitionLiveCarrier(name string) *columnGraphPartitionLiveCarrier {
 	if coord == nil || name == "" {
 		return nil
 	}
@@ -103,7 +100,7 @@ func (coord *collectionSchemaCoordinator) partitionLiveCarrier(name string) *Vec
 	return carrier
 }
 
-func (coord *collectionSchemaCoordinator) partitionLiveCarrierList() []*VectorIndex {
+func (coord *collectionSchemaCoordinator) partitionLiveCarrierList() []*columnGraphPartitionLiveCarrier {
 	if coord == nil {
 		return nil
 	}
@@ -112,7 +109,7 @@ func (coord *collectionSchemaCoordinator) partitionLiveCarrierList() []*VectorIn
 		coord.partitionLiveMu.RUnlock()
 		return nil
 	}
-	out := make([]*VectorIndex, 0, len(coord.partitionLiveCarriers))
+	out := make([]*columnGraphPartitionLiveCarrier, 0, len(coord.partitionLiveCarriers))
 	for _, carrier := range coord.partitionLiveCarriers {
 		out = append(out, carrier)
 	}
@@ -130,13 +127,13 @@ func (coord *collectionSchemaCoordinator) hasPartitionLiveCarrier() bool {
 	return has
 }
 
-func (coord *collectionSchemaCoordinator) registerPartitionLiveCarrier(carrier *VectorIndex) {
+func (coord *collectionSchemaCoordinator) registerPartitionLiveCarrier(carrier *columnGraphPartitionLiveCarrier) {
 	if coord == nil || carrier == nil || carrier.name == "" {
 		return
 	}
 	coord.partitionLiveMu.Lock()
 	if coord.partitionLiveCarriers == nil {
-		coord.partitionLiveCarriers = make(map[string]*VectorIndex)
+		coord.partitionLiveCarriers = make(map[string]*columnGraphPartitionLiveCarrier)
 	}
 	coord.partitionLiveCarriers[carrier.name] = carrier
 	registerReplayFinalizer := !coord.partitionLiveReplayFinalizerRegistered
@@ -154,14 +151,14 @@ func (coord *collectionSchemaCoordinator) persistPartitionLiveReplayCarriers() e
 	}
 	var persistErr error
 	for _, carrier := range coord.partitionLiveCarrierList() {
-		if _, err := carrier.SaveNativeDeltaSnapshot(); err != nil {
+		if _, err := carrier.saveColumnGraphPartitionLiveDelta(); err != nil {
 			persistErr = errors.Join(persistErr, err)
 		}
 	}
 	return persistErr
 }
 
-func (coord *collectionSchemaCoordinator) unregisterPartitionLiveCarrier(name string, expected *VectorIndex) {
+func (coord *collectionSchemaCoordinator) unregisterPartitionLiveCarrier(name string, expected *columnGraphPartitionLiveCarrier) {
 	if coord == nil || name == "" || expected == nil {
 		return
 	}
@@ -173,10 +170,13 @@ func (coord *collectionSchemaCoordinator) unregisterPartitionLiveCarrier(name st
 }
 
 type collectionDBSchemaCoordinators struct {
-	mu            sync.Mutex
-	collections   map[string]*collectionSchemaCoordinator
-	sourceMu      sync.Mutex
-	sourceManager *CollectionManager
+	mu          sync.Mutex
+	collections map[string]*collectionSchemaCoordinator
+	// Create status needs one DB-scoped owner, without retaining a namespace
+	// coordinator for every fresh name refused before native admission.
+	nativeCreateMu sync.Mutex
+	sourceMu       sync.Mutex
+	sourceManager  *CollectionManager
 }
 
 var collectionSchemaCoordinators sync.Map
@@ -189,58 +189,6 @@ var collectionSchemaMutationFlushHook struct {
 var collectionSchemaMutationBeforeLockHook struct {
 	mu sync.Mutex
 	fn func()
-}
-
-var legacyVectorSnapshotPostEpochRenameHook struct {
-	mu sync.Mutex
-	fn func()
-}
-
-var legacyVectorSidecarBeforeLockHook struct {
-	mu sync.Mutex
-	fn func()
-}
-
-func setLegacyVectorSnapshotPostEpochRenameHookForTest(fn func()) func() {
-	legacyVectorSnapshotPostEpochRenameHook.mu.Lock()
-	prev := legacyVectorSnapshotPostEpochRenameHook.fn
-	legacyVectorSnapshotPostEpochRenameHook.fn = fn
-	legacyVectorSnapshotPostEpochRenameHook.mu.Unlock()
-	return func() {
-		legacyVectorSnapshotPostEpochRenameHook.mu.Lock()
-		legacyVectorSnapshotPostEpochRenameHook.fn = prev
-		legacyVectorSnapshotPostEpochRenameHook.mu.Unlock()
-	}
-}
-
-func runLegacyVectorSnapshotPostEpochRenameHookForTest() {
-	legacyVectorSnapshotPostEpochRenameHook.mu.Lock()
-	fn := legacyVectorSnapshotPostEpochRenameHook.fn
-	legacyVectorSnapshotPostEpochRenameHook.mu.Unlock()
-	if fn != nil {
-		fn()
-	}
-}
-
-func setLegacyVectorSidecarBeforeLockHookForTest(fn func()) func() {
-	legacyVectorSidecarBeforeLockHook.mu.Lock()
-	prev := legacyVectorSidecarBeforeLockHook.fn
-	legacyVectorSidecarBeforeLockHook.fn = fn
-	legacyVectorSidecarBeforeLockHook.mu.Unlock()
-	return func() {
-		legacyVectorSidecarBeforeLockHook.mu.Lock()
-		legacyVectorSidecarBeforeLockHook.fn = prev
-		legacyVectorSidecarBeforeLockHook.mu.Unlock()
-	}
-}
-
-func runLegacyVectorSidecarBeforeLockHookForTest() {
-	legacyVectorSidecarBeforeLockHook.mu.Lock()
-	fn := legacyVectorSidecarBeforeLockHook.fn
-	legacyVectorSidecarBeforeLockHook.mu.Unlock()
-	if fn != nil {
-		fn()
-	}
 }
 
 // setCollectionSchemaMutationFlushHookForTest temporarily replaces the flush
@@ -348,11 +296,10 @@ func collectionDBSchemaCoordinatorForDB(db *backenddb.DB) *collectionDBSchemaCoo
 			// coordinator. Persist replay-reconciled carriers at the real DB close
 			// boundary so a later checkpoint/reopen does not lose the overlay.
 			for _, carrier := range collection.partitionLiveCarrierList() {
-				if _, err := carrier.SaveNativeDeltaSnapshot(); err != nil {
+				if _, err := carrier.saveColumnGraphPartitionLiveDelta(); err != nil {
 					closeErr = errors.Join(closeErr, err)
 				}
 			}
-			closeErr = errors.Join(closeErr, collection.closeNativeHNSWForDB())
 			collection.typedPublicationDebtMu.Lock()
 			collection.typedPublicationClosed = true
 			collection.wakeTypedGraphPublicationWaitersLocked()
@@ -477,23 +424,6 @@ func (c *Collection) lockCollectionSchemaWrite() func() {
 	return coord.schemaMu.Unlock
 }
 
-func (c *Collection) registeredAdHocVectorIndexCount() int64 {
-	coord := c.collectionSchemaCoordinator()
-	if coord == nil {
-		return 0
-	}
-	return coord.adHocVectorIndexes.Load()
-}
-
-func (c *Collection) lockAdHocVectorAdmissionRead() func() {
-	coord := c.collectionSchemaCoordinator()
-	if coord == nil {
-		return func() {}
-	}
-	coord.adHocVectorAdmissionMu.RLock()
-	return coord.adHocVectorAdmissionMu.RUnlock
-}
-
 func (c *Collection) lockNativeVectorAdmissionWrite() func() {
 	admissionMu := c.nativeVectorAdmissionMutex()
 	if admissionMu == nil {
@@ -517,16 +447,6 @@ func (c *Collection) lockNativeVectorAdmissionWrite() func() {
 		}
 		admissionMu.Unlock()
 	}
-}
-
-func (c *Collection) lockLegacyVectorSidecar() func() {
-	coord := c.collectionSchemaCoordinator()
-	if coord == nil {
-		return func() {}
-	}
-	runLegacyVectorSidecarBeforeLockHookForTest()
-	coord.legacyVectorSidecarMu.Lock()
-	return coord.legacyVectorSidecarMu.Unlock
 }
 
 func (c *Collection) flushCollectionWriteDomainsForSchemaMutation() error {

@@ -151,7 +151,7 @@ func TestCOWRawBasisWorkspaceLifetime(t *testing.T) {
 	if !ok {
 		t.Fatal("missing basis token")
 	}
-	if _, err := basis.nativeEntryAtRoot(db.cow, token.RootPageID, []byte("a000"), true); !errors.Is(err, valuelog.ErrCOWReadUnsupported) {
+	if _, err := basis.nativeEntryAtRoot(db.cow, nil, token.RootPageID, []byte("a000"), true); !errors.Is(err, valuelog.ErrCOWReadUnsupported) {
 		t.Fatalf("raw initialization changed native codec policy: %v", err)
 	}
 	var wg sync.WaitGroup

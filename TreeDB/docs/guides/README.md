@@ -9,6 +9,13 @@ TreeDB is **pre-alpha**. Public collection APIs, typed-storage metadata, and
 on-disk formats may change without migration guarantees. Rebuild benchmark DB
 directories when moving between branches.
 
+Vector serving uses cosine/float32 `column_graph`, the default and only serving
+strategy. Ordinary filtered ANN and vector-bearing filtered Hybrid are refused;
+use explicit exact scanning or the separately admitted typed filtering paths.
+Derived quantized score planes remain supported; primary int8 and BSON
+vector-index declarations do not. Recreate removed or ambiguous old vector
+declarations from source documents in a fresh directory.
+
 ## Start here
 
 - [Native indexed typed rows](typed-row-store.md) — run the durable row example,

@@ -1,0 +1,63 @@
+{
+  "argv": [
+    "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/native-scan-cursor1/documentservice-after.test",
+    "-test.v",
+    "-test.run=^$",
+    "-test.bench=^BenchmarkServiceSharedCOWConsumers/(keyword|hybrid)$",
+    "-test.benchmem",
+    "-test.benchtime=1000x",
+    "-test.count=1",
+    "-test.timeout=3m"
+  ],
+  "cwd": "/mnt/fast4tb/gomap-mongo-execution-20261024/consumer-canonical",
+  "environment_policy": "explicit whitelist plus frozen cell values; no full environment dump",
+  "start_utc": "2026-10-26T23:10:45.758003+00:00",
+  "wall_limit_seconds": 240,
+  "exit_code": 0,
+  "timed_out": false,
+  "error": null,
+  "cleanup": {
+    "pgid": 148237,
+    "alive_before_cleanup": false,
+    "signals": [],
+    "alive_after_cleanup": false
+  },
+  "pid": 148237,
+  "end_utc": "2026-10-26T23:10:49.027398+00:00",
+  "elapsed_seconds": 3.269393957220018,
+  "log": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/native-projection-reuse1/public-ab-04-before.log",
+  "log_sha256": "7b13e70037a88f36ea1c2c8728a66633f11e5de2762675e22d8dfcdb5503a629",
+  "process_ok": true,
+  "arm": "before",
+  "binary_sha256": "645591919642c46f84ad5e3f3e39c682d3ec6f7bf8d20e7646180c4385536f2c",
+  "source_unchanged": true,
+  "activation_verified": true,
+  "rows": [
+    {
+      "arm": "before",
+      "query": "keyword",
+      "iterations": 1000,
+      "metrics": {
+        "ns/op": 760841.0,
+        "postings/op": 640.0,
+        "B/op": 301540.0,
+        "allocs/op": 1888.0
+      },
+      "raw": "BenchmarkServiceSharedCOWConsumers/keyword-4         \t    1000\t    760841 ns/op\t       640.0 postings/op\t  301540 B/op\t    1888 allocs/op"
+    },
+    {
+      "arm": "before",
+      "query": "hybrid",
+      "iterations": 1000,
+      "metrics": {
+        "ns/op": 830199.0,
+        "docs_fetched/op": 10.0,
+        "postings/op": 1024.0,
+        "B/op": 429339.0,
+        "allocs/op": 1921.0
+      },
+      "raw": "BenchmarkServiceSharedCOWConsumers/hybrid-4          \t    1000\t    830199 ns/op\t        10.00 docs_fetched/op\t      1024 postings/op\t  429339 B/op\t    1921 allocs/op"
+    }
+  ],
+  "valid": true
+}

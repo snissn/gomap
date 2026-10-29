@@ -102,12 +102,9 @@ type textAnalyzedField struct {
 	Terms  map[string]*textAnalyzedTerm
 }
 
-type textAnalyzedTerm struct {
-	Term      string
-	Frequency uint32
-	Positions []uint32
-	Offsets   []textTokenOffset
-}
+// Analysis and retained state share the same owned term/occurrence backing.
+// Legacy map consumers still use pointers to these terms.
+type textAnalyzedTerm = textDocumentTermState
 
 const textTermAccumulatorInlineTerms = 8
 
@@ -118,6 +115,8 @@ type textTermAccumulator struct {
 	inline         [textTermAccumulatorInlineTerms]textAnalyzedTerm
 	terms          []textAnalyzedTerm
 	lookup         map[string]int
+	nativeLookup   *localIDIndex
+	admit          func(uint64) error
 }
 
 func newTextTermAccumulator(storePositions, storeOffsets bool) textTermAccumulator {
@@ -127,6 +126,9 @@ func newTextTermAccumulator(storePositions, storeOffsets bool) textTermAccumulat
 }
 
 func (a *textTermAccumulator) AddTextToken(token TextToken) error {
+	if a.admit != nil {
+		return a.addAdmittedToken(token)
+	}
 	a.addToken(token)
 	return nil
 }
@@ -197,6 +199,19 @@ func buildCreateTextIndexBackfillPlan(
 	if def.Version == TextIndexVersionV2 {
 		return buildCreateTextV2IndexBackfillPlan(snap, catalog, def, opts)
 	}
+	return buildCreateTextV1IndexBackfillPlan(snap, catalog, def, opts)
+}
+
+// The empty native bootstrap has no physical primary to scan. The public
+// planner entry retains its non-nil snapshot contract; physical backfill still
+// requires a snapshot whenever a primary root exists.
+func buildCreateTextV1IndexBackfillPlan(snap *backenddb.Snapshot, catalog *collectionCatalog, def TextIndexDefinition, opts collectionOptions) (*createTextIndexBackfillPlan, error) {
+	if catalog == nil {
+		return nil, errCollectionNotFound
+	}
+	if snap == nil && catalog.rootID(collectionPrimaryRootName(catalog.meta.Name)) != 0 {
+		return nil, backenddb.ErrClosed
+	}
 	postingsRootName := collectionTextIndexRootName(catalog.meta.Name, def.Name)
 	stateRootName := collectionTextStateRootName(catalog.meta.Name, def.Name)
 	statsRootName := collectionTextStatsRootName(catalog.meta.Name, def.Name)
@@ -209,16 +224,16 @@ func buildCreateTextIndexBackfillPlan(
 		},
 	}
 
-	postingsTable := newCollectionRunTable(0)
-	stateTable := newCollectionRunTable(0)
-	statsTable := newCollectionRunTable(0)
+	postingsTable := opts.newTextTable(0)
+	stateTable := opts.newTextTable(0)
+	statsTable := opts.newTextTable(0)
 	acc := textBackfillStatsAccumulator{
 		Terms:  make(map[string]*textStatsTermValue),
 		Fields: make(map[string]*textStatsFieldValue),
 	}
 
 	primaryRootID := catalog.rootID(collectionPrimaryRootName(catalog.meta.Name))
-	if primaryRootID != 0 {
+	if primaryRootID != 0 || catalog.nativeText != nil {
 		it, err := collectionIteratorAtCatalogRoot(snap, catalog, collectionPrimaryRootName(catalog.meta.Name), nil, nil, false)
 		if err != nil {
 			resetCollectionTables([]memtable.Table{postingsTable, stateTable, statsTable})
@@ -321,7 +336,7 @@ func buildCreateTextV2IndexBackfillPlan(
 		resetCollectionTables(owned)
 	}
 	for _, rootName := range rootNames {
-		tables[rootName] = newCollectionRunTable(0)
+		tables[rootName] = opts.newTextTable(0)
 	}
 
 	fieldNames := textV2FieldNames(def)
@@ -363,7 +378,7 @@ func buildCreateTextV2IndexBackfillPlan(
 
 	nextOrdinal := uint64(1)
 	primaryRootID := catalog.rootID(primaryRootName)
-	if primaryRootID != 0 {
+	if primaryRootID != 0 || catalog.nativeText != nil {
 		it, err := collectionIteratorAtCatalogRoot(snap, catalog, primaryRootName, nil, nil, false)
 		if err != nil {
 			resetAll()
@@ -518,11 +533,17 @@ func materializeTextBackfillDocumentJSON(document []byte, opts collectionOptions
 		return document, nil
 	case DocumentFormatBSON:
 		raw := bson.Raw(document)
+		if opts.textMaterializationAdmit != nil {
+			return nativeTextBSONJSON(raw, opts.textMaterializationAdmit)
+		}
 		if err := raw.Validate(); err != nil {
 			return nil, fmt.Errorf("collections: text index backfill BSON document: %w", err)
 		}
 		return bson.MarshalExtJSON(raw, true, false)
 	case DocumentFormatTemplateV1:
+		if opts.textMaterializationAdmit != nil {
+			return nativeTextTemplateJSON(document, opts.templateResolver, opts.textMaterializationAdmit)
+		}
 		return templateV1StoredDocumentJSON(document, opts.templateResolver)
 	default:
 		return nil, fmt.Errorf("collections: unsupported text index backfill document format %q", opts.documentFormat)
@@ -536,21 +557,9 @@ func analyzeTextIndexDocument(def TextIndexDefinition, jsonDocument []byte) (tex
 	if out, ok, err := analyzeTextIndexDocumentJSONRootFastPath(def, jsonDocument); ok || err != nil {
 		return out, err
 	}
-	var decoded any
-	decoder := json.NewDecoder(bytes.NewReader(jsonDocument))
-	decoder.UseNumber()
-	if err := decoder.Decode(&decoded); err != nil {
-		return textAnalyzedDocument{}, fmt.Errorf("collections: text index extraction requires JSON document: %w", err)
-	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		if err == nil {
-			err = errors.New("unexpected trailing JSON value")
-		}
-		return textAnalyzedDocument{}, fmt.Errorf("collections: text index extraction requires JSON document: %w", err)
-	}
-	obj, ok := decoded.(map[string]any)
-	if !ok {
-		return textAnalyzedDocument{}, errors.New("collections: text index extraction requires JSON object document")
+	obj, err := decodeTextIndexDocumentJSONObject(jsonDocument)
+	if err != nil {
+		return textAnalyzedDocument{}, err
 	}
 	out := textAnalyzedDocument{Fields: make([]textAnalyzedField, 0, len(def.Fields))}
 	for _, fieldDef := range def.Fields {
@@ -573,22 +582,38 @@ func analyzeTextIndexDocument(def TextIndexDefinition, jsonDocument []byte) (tex
 	return out, nil
 }
 
+// Shared with native admission: retain the maintained UseNumber, complete-input
+// validation and object-only error contract. Callers own any decoder admission.
+func decodeTextIndexDocumentJSONObject(jsonDocument []byte) (map[string]any, error) {
+	var decoded any
+	decoder := json.NewDecoder(bytes.NewReader(jsonDocument))
+	decoder.UseNumber()
+	if err := decoder.Decode(&decoded); err != nil {
+		return nil, fmt.Errorf("collections: text index extraction requires JSON document: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			err = errors.New("unexpected trailing JSON value")
+		}
+		return nil, fmt.Errorf("collections: text index extraction requires JSON document: %w", err)
+	}
+	obj, ok := decoded.(map[string]any)
+	if !ok {
+		return nil, errors.New("collections: text index extraction requires JSON object document")
+	}
+	return obj, nil
+}
+
 func analyzeTextIndexDocumentJSONRootFastPath(def TextIndexDefinition, jsonDocument []byte) (textAnalyzedDocument, bool, error) {
 	if len(def.Fields) == 0 {
 		return textAnalyzedDocument{}, true, nil
 	}
+	// Reject nested paths before allocating the top-level selection buffer.
 	for _, fieldDef := range def.Fields {
 		if fieldDef.Field == "" || strings.Contains(fieldDef.Field, ".") {
 			return textAnalyzedDocument{}, false, nil
 		}
 	}
-	if !gjson.ValidBytes(jsonDocument) {
-		return textAnalyzedDocument{}, true, errors.New("collections: text index extraction requires JSON document: invalid JSON")
-	}
-	if !jsonDocumentLooksObject(jsonDocument) {
-		return textAnalyzedDocument{}, true, errors.New("collections: text index extraction requires JSON object document")
-	}
-
 	var stackValues [8]jsonParserIndexValue
 	values := stackValues[:]
 	if len(def.Fields) > len(stackValues) {
@@ -596,20 +621,9 @@ func analyzeTextIndexDocumentJSONRootFastPath(def TextIndexDefinition, jsonDocum
 	} else {
 		values = values[:len(def.Fields)]
 	}
-	if err := jsonparser.ObjectEach(jsonDocument, func(key, value []byte, dataType jsonparser.ValueType, _ int) error {
-		// jsonparser.ObjectEach already returns decoded object keys. Unescaping here
-		// would treat literal backslashes as JSON escapes (for example `a\\q` ->
-		// `a\q` -> invalid `\q`) and could reject unrelated top-level fields.
-		for i, fieldDef := range def.Fields {
-			if textBytesEqualString(key, fieldDef.Field) {
-				values[i] = jsonParserIndexValue{raw: value, valueType: dataType}
-			}
-		}
-		return nil
-	}); err != nil {
-		return textAnalyzedDocument{}, true, fmt.Errorf("collections: text index extraction requires JSON document: %w", err)
+	if handled, err := selectTextIndexDocumentJSONRootValues(def, jsonDocument, values); !handled || err != nil {
+		return textAnalyzedDocument{}, handled, err
 	}
-
 	out := textAnalyzedDocument{Fields: make([]textAnalyzedField, 0, len(def.Fields))}
 	var scratch []byte
 	for i, fieldDef := range def.Fields {
@@ -629,6 +643,42 @@ func analyzeTextIndexDocumentJSONRootFastPath(def TextIndexDefinition, jsonDocum
 		}
 	}
 	return out, true, nil
+}
+
+// Selection borrows raw spans. Both native admission and analysis use this
+// exact parser/key interpretation; duplicate keys deliberately keep the last
+// value, and nested paths retain the maintained full-decoder fallback.
+func selectTextIndexDocumentJSONRootValues(def TextIndexDefinition, jsonDocument []byte, values []jsonParserIndexValue) (bool, error) {
+	if len(def.Fields) == 0 {
+		return true, nil
+	}
+	for _, fieldDef := range def.Fields {
+		if fieldDef.Field == "" || strings.Contains(fieldDef.Field, ".") {
+			return false, nil
+		}
+	}
+	if !gjson.ValidBytes(jsonDocument) {
+		return true, errors.New("collections: text index extraction requires JSON document: invalid JSON")
+	}
+	if !jsonDocumentLooksObject(jsonDocument) {
+		return true, errors.New("collections: text index extraction requires JSON object document")
+	}
+
+	clear(values)
+	if err := jsonparser.ObjectEach(jsonDocument, func(key, value []byte, dataType jsonparser.ValueType, _ int) error {
+		// jsonparser.ObjectEach already returns decoded object keys. Unescaping here
+		// would treat literal backslashes as JSON escapes (for example `a\\q` ->
+		// `a\q` -> invalid `\q`) and could reject unrelated top-level fields.
+		for i, fieldDef := range def.Fields {
+			if textBytesEqualString(key, fieldDef.Field) {
+				values[i] = jsonParserIndexValue{raw: value, valueType: dataType}
+			}
+		}
+		return nil
+	}); err != nil {
+		return true, fmt.Errorf("collections: text index extraction requires JSON document: %w", err)
+	}
+	return true, nil
 }
 
 func textIndexFieldTextFromJSONParser(value jsonParserIndexValue, scratch *[]byte) (string, bool, error) {
@@ -768,12 +818,7 @@ func textDocumentStateValueFromAnalysis(analysis textAnalyzedDocument) textDocum
 				Offsets:   analyzedTerm.Offsets,
 			})
 		}
-		slices.SortFunc(terms, func(a, b textDocumentTermState) int { return compareTextStrings(a.Term, b.Term) })
-		state.Fields = append(state.Fields, textDocumentFieldState{
-			Field:  analyzedField.Field,
-			Length: analyzedField.Length,
-			Terms:  terms,
-		})
+		state.Fields = append(state.Fields, orderedTextDocumentField(analyzedField.Field, analyzedField.Length, terms))
 	}
 	slices.SortFunc(state.Fields, func(a, b textDocumentFieldState) int { return compareTextStrings(a.Field, b.Field) })
 	return state
@@ -875,7 +920,7 @@ func addTextStatsEntries(table memtable.Table, acc textBackfillStatsAccumulator)
 	return entries, bytesWritten
 }
 
-func addTextV2StatsEntries(table memtable.Table, acc textBackfillStatsAccumulator, def TextIndexDefinition, generation uint64, postingBlockCounts map[string]uint64) (int, uint64) {
+func addTextV2StatsEntries(table memtable.Table, acc textBackfillStatsAccumulator, def TextIndexDefinition, generation uint64, postingBlockCounts textValues[uint64]) (int, uint64) {
 	if table == nil {
 		return 0, 0
 	}
@@ -901,7 +946,7 @@ func addTextV2StatsEntries(table memtable.Table, acc textBackfillStatsAccumulato
 			StatsGeneration:    generation,
 			DocumentFrequency:  stats.DocumentFrequency,
 			TotalTermFrequency: stats.TotalTermFrequency,
-			PostingBlockCount:  postingBlockCounts[term],
+			PostingBlockCount:  postingBlockCounts.get(term),
 		}))
 	}
 	seenFields := make(map[string]struct{}, len(def.Fields))

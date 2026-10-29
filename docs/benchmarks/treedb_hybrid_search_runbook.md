@@ -46,6 +46,12 @@ Benchmark rows cover:
 - scalar selectivity: no filter, rare ~6%, and narrow 25% where the candidate
   budget is large enough for the bounded scalar allow-set.
 
+Ordinary vector-bearing Hybrid queries with scalar filters are now unsupported.
+Those matrix cells execute a rejection probe and explicitly SKIP, with no timing
+or success metrics. Text-only scalar filtering and unfiltered vector/hybrid
+cells remain measured. Keep verbose output to retain unavailable cells; a
+successful benchmark process does not qualify the historical full matrix.
+
 ## Main benchmark command
 
 ```sh
@@ -60,7 +66,7 @@ TREEDB_HYBRID_BENCH_M=8 \
 go test ./TreeDB/collections \
   -run '^$' \
   -bench '^BenchmarkSearchHybridCloseout2506$' \
-  -benchmem \
+  -v -benchmem \
   -benchtime=100x \
   -count=3 \
   | tee "$OUT/hybrid_bench.txt"
@@ -75,7 +81,7 @@ larger `-benchtime` and run under the quietest available host conditions.
 OUT=${OUT:-/tmp/gomap_2506_hybrid_closeout_$(date +%Y%m%d_%H%M%S)}
 mkdir -p "$OUT"
 set -o pipefail
-BENCH='^BenchmarkSearchHybridCloseout2506/mode_hybrid_fetch_topk/topK_10/candidates_64/filter_rare_06pct$'
+BENCH='^BenchmarkSearchHybridCloseout2506/mode_hybrid_fetch_topk/topK_10/candidates_64/filter_none_100pct$'
 
 GOWORK=off \
 TREEDB_HYBRID_BENCH_DOCS=256 \
@@ -99,6 +105,9 @@ Go CPU profiles cover the benchmark process; use enough timed iterations that
 query work dominates fixture setup and test-package initialization.
 
 ## Metrics to report
+
+The representative profile above now selects an unfiltered workload. Do not
+compare it with historical scalar-filtered profiles as the same workload.
 
 Every accepted table should include:
 

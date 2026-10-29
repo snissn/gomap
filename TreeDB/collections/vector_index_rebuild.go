@@ -104,7 +104,7 @@ func runColumnVectorGraphRebuildAfterMutationReleaseTestHook(c *Collection) {
 
 var columnVectorGraphConstructionMatrixBoundTestHook struct {
 	sync.RWMutex
-	hook func(*VectorIndex)
+	hook func(*columnGraphHNSWBuilder)
 }
 
 var columnVectorGraphConstructionMatrixLastUseTestHook struct {
@@ -154,7 +154,7 @@ func runColumnVectorGraphRebuildBeforeBuildTestHook() {
 	}
 }
 
-func setColumnVectorGraphConstructionMatrixBoundTestHook(hook func(*VectorIndex)) func() {
+func setColumnVectorGraphConstructionMatrixBoundTestHook(hook func(*columnGraphHNSWBuilder)) func() {
 	columnVectorGraphConstructionMatrixBoundTestHook.Lock()
 	previous := columnVectorGraphConstructionMatrixBoundTestHook.hook
 	columnVectorGraphConstructionMatrixBoundTestHook.hook = hook
@@ -166,7 +166,7 @@ func setColumnVectorGraphConstructionMatrixBoundTestHook(hook func(*VectorIndex)
 	}
 }
 
-func runColumnVectorGraphConstructionMatrixBoundTestHook(index *VectorIndex) {
+func runColumnVectorGraphConstructionMatrixBoundTestHook(index *columnGraphHNSWBuilder) {
 	columnVectorGraphConstructionMatrixBoundTestHook.RLock()
 	hook := columnVectorGraphConstructionMatrixBoundTestHook.hook
 	columnVectorGraphConstructionMatrixBoundTestHook.RUnlock()
@@ -382,7 +382,7 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntentAndOwner(name string,
 		return VectorIndexStatus{}, ErrIndexNotFound
 	}
 	if def.Strategy != VectorIndexStrategyColumnGraph {
-		return c.rebuildNativeVectorIndexPrepared(def, catalog, replay, preparePublication)
+		return VectorIndexStatus{}, fmt.Errorf("%w: unsupported vector strategy %q", backenddb.ErrNativeSemanticUnsupported, def.Strategy)
 	}
 	cfg := baseMeta.Options.ColumnStore
 	if cfg == nil || !cfg.Enabled || cfg.AssetManager == nil {
@@ -645,47 +645,6 @@ func (c *Collection) rebuildVectorIndexWithCommandWALIntentAndOwner(name string,
 	return status, nil
 }
 
-func (c *Collection) rebuildNativeVectorIndexPrepared(def VectorIndexDefinition, catalog *collectionCatalog, replay *backenddb.CommandWALIntent, preparePublication func() (bool, error)) (VectorIndexStatus, error) {
-	start := time.Now()
-	index, err := c.buildVectorIndexPrepared(vectorIndexOptionsFromDefinition(def), false, false, false, false)
-	if err != nil {
-		return VectorIndexStatus{}, err
-	}
-	index.setNativePersistent(true)
-	index.recordFullSnapshotBaseEpoch(catalog.rootID(collectionVectorIndexRootName(catalog.meta.Name, def.Name)))
-	native, err := index.saveNativeSnapshotPreparedWithCommandWALIntentAndPublicationHandoff(replay, preparePublication)
-	if err != nil {
-		return VectorIndexStatus{}, err
-	}
-	index.recordNativeDefinition(def)
-	if c.manager != nil {
-		c.manager.registerCollectionHandle(c)
-	}
-	duration := collectionObservedElapsedSince(start)
-	index.mu.Lock()
-	index.lastRebuildDuration = duration
-	index.mu.Unlock()
-	stats := index.Stats()
-	stats.BytesDisk = native.BytesDisk
-	return VectorIndexStatus{
-		Definition:          def,
-		Name:                def.Name,
-		Strategy:            def.Strategy,
-		State:               VectorIndexStateNativeRuntime,
-		Reason:              VectorIndexReasonNativeRuntime,
-		Loaded:              native.Loaded,
-		RootName:            collectionVectorIndexRootName(catalog.meta.Name, def.Name),
-		RootID:              native.RootID,
-		NativeRootLoaded:    native.Loaded,
-		NativeRootBytes:     native.BytesDisk,
-		ExactFallbackReason: native.ExactFallbackReason,
-		Registered:          true,
-		Stats:               stats,
-		RebuildNeeded:       native.ExactFallbackReason != "" || stats.RebuildNeeded || stats.SnapshotDirty,
-		Duration:            duration,
-	}, nil
-}
-
 // rebuildCosineNormalizedF32V1ColumnGraph fuses the first locality rewrite and
 // graph rebuild into one command-WAL publication. The selected typed vector
 // payload is therefore already the graph-ordinal canonical owner when the v4
@@ -935,6 +894,12 @@ func (c *Collection) columnVectorGraphRowsFromTypedColumnCatalogSnapshot(snap *b
 // The native captured builder supplies the original asset directory directly;
 // only legacy callers may use the historical no-locator fallback.
 func columnVectorGraphRowsFromTypedColumnSnapshot(c *Collection, rootDir string, snap *backenddb.Snapshot, catalog *collectionCatalog, cfg ColumnStoreConfig, records []columnManifestRecord, manifest columnManifestSnapshot, def VectorIndexDefinition) ([]columnVectorGraphAssetRow, *columnVectorGraphTypedColumnVectorSource, bool, error) {
+	return columnVectorGraphRowsFromTypedColumnSnapshotWithRoots(c, rootDir, snap, catalog, cfg, records, manifest, def, nil, nil, false, 0)
+}
+
+// Supplied iterators borrow the original build group only for this synchronous
+// call; the returned source owns asset mappings, never these iterator borrows.
+func columnVectorGraphRowsFromTypedColumnSnapshotWithRoots(c *Collection, rootDir string, snap *backenddb.Snapshot, catalog *collectionCatalog, cfg ColumnStoreConfig, records []columnManifestRecord, manifest columnManifestSnapshot, def VectorIndexDefinition, primary, suppliedLocator iterator.UnsafeIterator, supplied bool, rowCapacity int) ([]columnVectorGraphAssetRow, *columnVectorGraphTypedColumnVectorSource, bool, error) {
 	if snap == nil {
 		return nil, nil, false, backenddb.ErrClosed
 	}
@@ -958,7 +923,19 @@ func columnVectorGraphRowsFromTypedColumnSnapshot(c *Collection, rootDir string,
 	}
 	if len(typedRefs) == 0 {
 		if manifest.RowCount == 0 {
-			if err := validateColumnVectorGraphEmptyTypedSource(snap, catalog); err != nil {
+			if supplied {
+				for _, it := range []iterator.UnsafeIterator{primary, suppliedLocator} {
+					if it == nil {
+						continue
+					}
+					if err := it.Error(); err != nil {
+						return nil, nil, false, err
+					}
+					if it.Valid() {
+						return nil, nil, false, errors.New("collections: empty graph source has primary or locator entries")
+					}
+				}
+			} else if err := validateColumnVectorGraphEmptyTypedSource(snap, catalog); err != nil {
 				return nil, nil, false, err
 			}
 			return nil, nil, true, nil
@@ -976,7 +953,7 @@ func columnVectorGraphRowsFromTypedColumnSnapshot(c *Collection, rootDir string,
 		return nil, nil, false, err
 	}
 	locatorRoot := collectionColumnRowLocatorRootName(catalog.meta.Name)
-	useLocator := catalog.rootID(locatorRoot) != 0
+	useLocator := supplied || catalog.rootID(locatorRoot) != 0
 	var physicalLocations map[string]columnVectorGraphTypedColumnPhysicalLocation
 	if !useLocator {
 		if c == nil {
@@ -1006,7 +983,9 @@ func columnVectorGraphRowsFromTypedColumnSnapshot(c *Collection, rootDir string,
 	}()
 	parts := make(map[uint64]*columnVectorGraphTypedColumnVectorPart, len(typedRefs))
 	var locator iterator.UnsafeIterator
-	if useLocator {
+	if supplied {
+		locator = suppliedLocator
+	} else if useLocator {
 		locator, err = collectionIteratorAtCatalogRoot(snap, catalog, locatorRoot, nil, nil, false)
 		if err != nil {
 			return nil, nil, false, err
@@ -1015,9 +994,12 @@ func columnVectorGraphRowsFromTypedColumnSnapshot(c *Collection, rootDir string,
 			defer locator.Close()
 		}
 	}
-	it, err := collectionIteratorAtCatalogRoot(snap, catalog, collectionPrimaryRootName(catalog.meta.Name), nil, nil, false)
-	if err != nil {
-		return nil, nil, false, err
+	it := primary
+	if !supplied {
+		it, err = collectionIteratorAtCatalogRoot(snap, catalog, collectionPrimaryRootName(catalog.meta.Name), nil, nil, false)
+		if err != nil {
+			return nil, nil, false, err
+		}
 	}
 	if it == nil {
 		if locator != nil && (locator.Valid() || locator.Error() != nil) {
@@ -1026,8 +1008,17 @@ func columnVectorGraphRowsFromTypedColumnSnapshot(c *Collection, rootDir string,
 		success = true
 		return nil, source, true, nil
 	}
-	defer func() { _ = it.Close() }()
-	rows := make([]columnVectorGraphAssetRow, 0, len(physicalLocations))
+	if !supplied {
+		defer func() { _ = it.Close() }()
+	}
+	if rowCapacity < 0 {
+		return nil, nil, false, backenddb.ErrNativeSemanticUnsupported
+	}
+	capacity := len(physicalLocations)
+	if rowCapacity > 0 {
+		capacity = rowCapacity
+	}
+	rows := make([]columnVectorGraphAssetRow, 0, capacity)
 	// Locator values are consumed synchronously; only builder IDs are owned.
 	// The caller holds the snapshot throughout construction and source mappings
 	// remain pinned until the existing construction-matrix staging completes.
@@ -1035,6 +1026,9 @@ func columnVectorGraphRowsFromTypedColumnSnapshot(c *Collection, rootDir string,
 		if it.IsDeleted() {
 			it.Next()
 			continue
+		}
+		if rowCapacity > 0 && len(rows) == cap(rows) {
+			return nil, nil, false, errors.New("collections: graph source exceeds preaccepted row capacity")
 		}
 		id := bytes.Clone(it.UnsafeKey())
 		location, exists := physicalLocations[string(id)]
@@ -1261,15 +1255,6 @@ func (c *Collection) rebuildEmptyColumnGraphVectorIndexWithoutBaseManifestRoot(n
 	return status, nil
 }
 
-func (c *Collection) nativeVectorIndexRebuildStatus(def VectorIndexDefinition) VectorIndexStatus {
-	return VectorIndexStatus{
-		Name:     def.Name,
-		Strategy: def.Strategy,
-		State:    VectorIndexStateNativeRuntime,
-		Reason:   VectorIndexReasonNativeRuntime,
-	}
-}
-
 func (c *Collection) finishRebuildVectorIndexNoopStatus(name string, status VectorIndexStatus, statusErr error, replay *backenddb.CommandWALIntent, preparePublication func() (bool, error)) (VectorIndexStatus, error) {
 	if statusErr != nil {
 		return VectorIndexStatus{}, statusErr
@@ -1463,6 +1448,17 @@ func buildColumnVectorGraphAdjacencyV1WithFixedRows(rows []columnVectorGraphAsse
 }
 
 func buildColumnVectorGraphAdjacencyV1WithFixedRowsAndContext(ctx context.Context, rows []columnVectorGraphAssetRow, def VectorIndexDefinition, trace *vectorIndexConstructionTraceV1, recordFinal bool, policy *vectorIndexLayer0ConstructionPolicyV1, parallelReciprocalLinks bool, timing *ColumnGraphBuildTiming, fixedRows []float32, observer *vectorIndexConstructionDecisionObserverV1) error {
+	return buildColumnVectorGraphAdjacencyV1WithFixedRowsAndWorkers(ctx, rows, def, trace, recordFinal, policy, parallelReciprocalLinks, timing, fixedRows, observer, 0)
+}
+
+func buildColumnVectorGraphAdjacencyWithWorkers(rows []columnVectorGraphAssetRow, def VectorIndexDefinition, workers int) error {
+	if workers < 1 || workers > nativeVectorFrozenPrefixBatchWidth {
+		return backenddb.ErrNativeSemanticUnsupported
+	}
+	return buildColumnVectorGraphAdjacencyV1WithFixedRowsAndWorkers(context.Background(), rows, def, nil, true, nil, true, nil, nil, nil, workers)
+}
+
+func buildColumnVectorGraphAdjacencyV1WithFixedRowsAndWorkers(ctx context.Context, rows []columnVectorGraphAssetRow, def VectorIndexDefinition, trace *vectorIndexConstructionTraceV1, recordFinal bool, policy *vectorIndexLayer0ConstructionPolicyV1, parallelReciprocalLinks bool, timing *ColumnGraphBuildTiming, fixedRows []float32, observer *vectorIndexConstructionDecisionObserverV1, workers int) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -1487,10 +1483,11 @@ func buildColumnVectorGraphAdjacencyV1WithFixedRowsAndContext(ctx context.Contex
 	}
 
 	adjacencyStarted := time.Now()
-	index, err := newVectorIndex(nil, vectorIndexOptionsFromDefinition(def))
+	index, err := newColumnGraphHNSWBuilder(columnGraphHNSWBuildOptionsFromDefinition(def))
 	if err != nil {
 		return err
 	}
+	defer index.close()
 	// Offline construction knows its final node count; avoid growing and
 	// copying the node array while the graph and publication buffers coexist.
 	index.nodes = make([]vectorIndexNode, 0, len(rows))
@@ -1498,6 +1495,8 @@ func buildColumnVectorGraphAdjacencyV1WithFixedRowsAndContext(ctx context.Contex
 	index.decisionObserver = observer
 	index.layer0ConstructionPolicy = policy
 	index.parallelReciprocalLinks = parallelReciprocalLinks
+	// Bind the preaccepted ceiling throughout planning, commit and fallback.
+	index.constructionWorkers = workers
 	index.mu.Lock()
 	defer index.mu.Unlock()
 	if fixedRows != nil {
@@ -1616,17 +1615,17 @@ func buildColumnVectorGraphAdjacencyV1WithFixedRowsAndContext(ctx context.Contex
 	return nil
 }
 
-func insertColumnVectorGraphRowsLocked(index *VectorIndex, rows []columnVectorGraphAssetRow) error {
+func insertColumnVectorGraphRowsLocked(index *columnGraphHNSWBuilder, rows []columnVectorGraphAssetRow) error {
 	return insertColumnVectorGraphRowsWithContextLocked(context.Background(), index, rows)
 }
 
-func insertColumnVectorGraphRowsWithContextLocked(ctx context.Context, index *VectorIndex, rows []columnVectorGraphAssetRow) error {
+func insertColumnVectorGraphRowsWithContextLocked(ctx context.Context, index *columnGraphHNSWBuilder, rows []columnVectorGraphAssetRow) error {
 	ids := make([][]byte, len(rows))
 	vectors := make([][]float32, len(rows))
 	for i := range rows {
 		ids[i], vectors[i] = rows[i].ID, rows[i].Vector
 	}
-	if err := index.insertVectorBatchWithContextLocked(ctx, ids, vectors); err != nil {
+	if err := index.insertBatch(ctx, ids, vectors); err != nil {
 		return fmt.Errorf("collections: build column vector graph: %w", err)
 	}
 	return nil
@@ -1637,7 +1636,7 @@ func insertColumnVectorGraphRowsWithContextLocked(ctx context.Context, index *Ve
 // insertion order: it is causal age, not a persisted graph ordinal. Final
 // survivors are deliberately recorded later, after a variant has made every
 // native-adjacency mutation (overlay or reciprocity repair).
-func (t *vectorIndexConstructionTraceV1) remap(index *VectorIndex, nodeOrdinal []int) error {
+func (t *vectorIndexConstructionTraceV1) remap(index *columnGraphHNSWBuilder, nodeOrdinal []int) error {
 	if t == nil {
 		return nil
 	}
@@ -1835,7 +1834,7 @@ func vectorPartitionConstructionAdjacencyLayersV1(adjacency []uint32) ([][]uint3
 	return layers, nil
 }
 
-func columnVectorGraphNativeLocalityOrder(ctx context.Context, index *VectorIndex) ([]int, error) {
+func columnVectorGraphNativeLocalityOrder(ctx context.Context, index *columnGraphHNSWBuilder) ([]int, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}

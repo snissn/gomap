@@ -24,7 +24,7 @@ func TestVectorIndexConstructionDecisionObserverPreservesFrozenPrefix4461(t *tes
 	wantTopology := snapshotVectorIndexTopology4257(off)
 	wantSearch := snapshotVectorIndexSearches4257(t, off, rows)
 	wantMeta := vectorIndexDecisionMetadata4461(off)
-	for name, index := range map[string]*VectorIndex{"observer-on": first, "observer-repeat": second} {
+	for name, index := range map[string]*columnGraphHNSWBuilder{"observer-on": first, "observer-repeat": second} {
 		if got := snapshotVectorIndexTopology4257(index); !reflect.DeepEqual(got, wantTopology) {
 			t.Fatalf("%s changed topology", name)
 		}
@@ -80,56 +80,6 @@ func TestVectorIndexConstructionDecisionObserverPreservesFrozenPrefix4461(t *tes
 		t.Fatalf("rolling row-pair sketch replacements=%d saturated=%t", replacementStats.RowPairReplacements, replacementStats.Saturated)
 	}
 
-	dir := t.TempDir()
-	db := openCollectionCommandWALDB(t, dir)
-	mgr := NewCollectionManager(db)
-	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: dimensions, M: 16, EfConstruction: 64, Strategy: VectorIndexStrategyNativeRuntime}
-	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON}, VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
-		t.Fatal(err)
-	}
-	col, err := mgr.OpenCollection("docs")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = col.RebuildVectorIndex(def.Name); err != nil {
-		t.Fatal(err)
-	}
-	persisted := col.registeredVectorIndex(def.Name)
-	persisted.decisionObserver = &vectorIndexConstructionDecisionObserverV1{}
-	ids, documents := vectorIndexDecisionDocuments4461(t, rows)
-	if _, err = col.InsertBatch(ids, documents); err != nil {
-		t.Fatal(err)
-	}
-	if got := snapshotVectorIndexTopology4257(persisted); !reflect.DeepEqual(got, wantTopology) {
-		t.Fatal("native observer build changed topology")
-	}
-	persistedMeta := persisted.persistMetaLocked()
-	if status, saveErr := persisted.SaveNativeSnapshot(); saveErr != nil || !status.Loaded {
-		t.Fatalf("SaveNativeSnapshot status=%+v err=%v", status, saveErr)
-	}
-	if err = db.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	reopened := openCollectionCommandWALDB(t, dir)
-	defer func() { _ = reopened.Close() }()
-	reopenedCol, err := NewCollectionManager(reopened).OpenCollection("docs")
-	if err != nil {
-		t.Fatal(err)
-	}
-	loaded, status, err := reopenedCol.LoadNativeVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
-	if err != nil || loaded == nil || !status.Loaded {
-		t.Fatalf("LoadNativeVectorIndexSnapshot loaded=%v status=%+v err=%v", loaded != nil, status, err)
-	}
-	if got := snapshotVectorIndexTopology4257(loaded); !reflect.DeepEqual(got, wantTopology) {
-		t.Fatal("reopened topology changed")
-	}
-	if got := snapshotVectorIndexSearches4257(t, loaded, rows); !reflect.DeepEqual(got, wantSearch) {
-		t.Fatal("reopened search results changed")
-	}
-	if got := loaded.persistMetaLocked(); !reflect.DeepEqual(got, persistedMeta) {
-		t.Fatalf("reopened metadata=%+v want %+v", got, persistedMeta)
-	}
 }
 
 func TestVectorIndexConstructionDecisionObserverWorkerLocalReduction(t *testing.T) {
@@ -243,27 +193,27 @@ func TestVectorIndexConstructionDecisionObserverCountsReciprocalCandidateScores(
 
 type vectorIndexDecisionMetadataSnapshot4461 struct {
 	entry, maxLevel, dimensions, m, efConstruction int
-	mutationSeq, frozenPrefixBatches               uint64
+	frozenPrefixBatches                            uint64
 }
 
-func vectorIndexDecisionMetadata4461(index *VectorIndex) vectorIndexDecisionMetadataSnapshot4461 {
-	return vectorIndexDecisionMetadataSnapshot4461{index.entry, index.maxLevel, index.dimensions, index.m, index.efConstruction, index.mutationSeq, index.frozenPrefixBatches}
+func vectorIndexDecisionMetadata4461(index *columnGraphHNSWBuilder) vectorIndexDecisionMetadataSnapshot4461 {
+	return vectorIndexDecisionMetadataSnapshot4461{index.entry, index.maxLevel, index.dimensions, index.m, index.efConstruction, index.frozenPrefixBatches}
 }
 
 // buildVectorIndexDecisionObserver4461 is also the post-merge analysis seam:
 // a focused same-package test can load preserved source rows and snapshot the
 // returned observer without changing the production builder.
-func buildVectorIndexDecisionObserver4461(t testing.TB, rows [][]float32, observer *vectorIndexConstructionDecisionObserverV1) *VectorIndex {
+func buildVectorIndexDecisionObserver4461(t testing.TB, rows [][]float32, observer *vectorIndexConstructionDecisionObserverV1) *columnGraphHNSWBuilder {
 	return buildVectorIndexDecisionObserverWorkers4587(t, rows, observer, 0)
 }
 
-func buildVectorIndexDecisionObserverWorkers4587(t testing.TB, rows [][]float32, observer *vectorIndexConstructionDecisionObserverV1, workers int) *VectorIndex {
+func buildVectorIndexDecisionObserverWorkers4587(t testing.TB, rows [][]float32, observer *vectorIndexConstructionDecisionObserverV1, workers int) *columnGraphHNSWBuilder {
 	t.Helper()
-	index, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: len(rows[0]), M: 16, EfConstruction: 64})
+	index, err := newColumnGraphHNSWBuilder(columnGraphHNSWBuildOptions{Encoding: VectorIndexEncodingFloat32, Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: len(rows[0]), M: 16, EfConstruction: 64})
 	if err != nil {
 		t.Fatal(err)
 	}
-	index.setNativePersistent(true)
+	index.parallelReciprocalLinks = true
 	index.decisionObserver = observer
 	index.constructionWorkers = workers
 	ids := make([][]byte, len(rows))

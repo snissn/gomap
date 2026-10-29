@@ -87,6 +87,26 @@ def result(backend: str, query_mode: str = "", quantized_codec: str = "") -> dic
 
 
 class SummaryRenderTests(unittest.TestCase):
+    def test_unavailable_index_memory_does_not_become_zero_bytes(self) -> None:
+        for payload in (
+            {"backend": "treedb_column_graph", "memory": {}},
+            {"backend": "treedb_column_graph", "memory": {"index_bytes_memory": None}},
+            {"backend": "treedb_column_graph", "memory": {"index_bytes_memory": 0}},
+            {"backend": "treedb_column_graph_rabitq_1bit_quantized_only", "memory": {"index_bytes_memory": 0}},
+            {"backend": "treedb", "vector_index_strategy": "column_graph", "memory": {"index_bytes_memory": 0}},
+        ):
+            with self.subTest(payload=payload):
+                self.assertEqual(summarize.index_memory(payload), "n/a")
+
+    def test_measured_index_memory_and_process_rss_remain_independent(self) -> None:
+        for backend in ("treedb", "pgvector", "treedb_column_graph"):
+            with self.subTest(backend=backend):
+                self.assertEqual(summarize.index_memory({"backend": backend, "memory": {"index_bytes_memory": 1024}}), "1.00KB")
+        self.assertEqual(summarize.index_memory({"backend": "treedb", "memory": {"index_bytes_memory": 0}}), "0B")
+        payload = result("treedb_column_graph", "exact")
+        payload["memory"] = {"index_bytes_memory": None, "max_rss_bytes": 4096}
+        self.assertIn("| n/a | 4.00KB |", summarize.render([payload]))
+
     def test_treedb_quantized_modes_and_pgvector_anchor_are_distinct(self) -> None:
         rendered = summarize.render(
             [

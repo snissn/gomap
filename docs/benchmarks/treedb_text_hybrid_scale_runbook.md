@@ -55,6 +55,12 @@ For `PROFILE_MODE=runtime`, only the read-only `phrase` and `broad` action
 groups repeat until at least 250ms, which is logged in `phase.log` and makes
 their CPU samples useful. Mutating phases and all non-runtime runs execute once.
 
+The `broad` phase now profiles the supported unfiltered
+`hybrid_text_vector_no_docs` row. Its phase log records the row and
+`scalar_filter=false`. The historical text+vector+scalar workload is unsupported;
+this narrower profile provides no qualification for that workload and must not
+be compared with historical filtered captures as if their query shapes matched.
+
 ## Stable commands
 
 ### Bounded local smoke
@@ -71,6 +77,19 @@ scripts/bench_text_hybrid_scale.sh
 The smoke exercises load, text-only retrieval, hybrid retrieval, reopen,
 concurrent search/write sanity, maintenance rewrite postconditions, and text
 backfill with tiny deterministic fixtures.
+
+The default retrieval matrix selects seven supported rows with vectors enabled
+(six with `-include-vector=false`). JSON and Markdown record the selected query
+rows and explicitly disclose the excluded `hybrid_text_vector_scalar_no_docs`
+row and unsupported reason. `complete=true` qualifies only the selected phases
+and rows; it does not qualify the historical full matrix or excluded workloads.
+
+To probe the unsupported ordinary filtered vector workload explicitly, pass
+`-query-rows=hybrid_text_vector_scalar_no_docs`. The real executor rejection is
+preserved: the command exits with an error and writes an incomplete report with
+zero timed samples, no results, and the failed guardrail and fail-closed counters.
+`-allow-guardrail-failures` permits diagnostic completion of the process only;
+the failed query phase and report remain incomplete.
 
 The package guard test keeps its real tiny-workload smoke opt-in so ordinary
 `go test` runs do not execute it. Run that smoke explicitly with:
@@ -259,7 +278,10 @@ The JSON/Markdown report includes:
   time, storage bytes, bytes/doc, and text-v2 lane bytes/doc (docid, docmap,
   postings, norms, positions, term stats, status/format);
 - text-only common, rare, multi-term AND, and multi-term OR score-only query rows;
-- hybrid text-only, text+scalar, and optional text+vector(+scalar) query rows;
+- supported hybrid text-only, text+scalar, and optional unfiltered text+vector
+  query rows; ordinary text+vector+scalar is an explicit unsupported probe;
+- selected query rows and excluded unsupported row/reason, with completion
+  restricted to the selected scope;
 - raw per-query latency samples plus p50/p95/p99/mean latency and derived
   ops/sec for each retrieval row;
 - optional CPU (`-cpu-profile`) or paired baseline/post-query allocation
@@ -273,6 +295,18 @@ The JSON/Markdown report includes:
   postconditions;
 - text backfill timing/storage when enabled;
 - ranked bottleneck rows for follow-up sizing.
+
+Storage snapshots use `column_graph_disk_bytes`, and the load table labels this
+value as ColumnGraph persisted disk bytes. Both read `VectorIndexStatus.Stats.BytesDisk`;
+they do not measure native runtime memory. The former `vector_native_bytes`
+field was mislabeled and is no longer emitted.
+
+Optional Go benchmark matrices retain supported measurements and explicit
+unsupported filtered vector probes. Those probes verify rejection and SKIP;
+verbose raw logs and `unavailable.txt` retain that disposition. The scoreboard
+wrapper also lists ordinary filtered vector Hybrid as unavailable. Neither a
+successful benchmark process nor the narrower supported matrix qualifies the
+historical filtered cells.
 
 ## Guardrails and interpretation
 

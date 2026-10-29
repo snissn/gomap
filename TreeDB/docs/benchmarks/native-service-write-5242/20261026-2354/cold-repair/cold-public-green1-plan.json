@@ -1,0 +1,30 @@
+{
+  "source": {
+    "head": "0a8323f7ca6f6128d53dfca43a408c7e443d39ab",
+    "tree": "996ce4a4f8fc3dcbfd047a8404f488361ad59dd8",
+    "status": "M  .github/ci/ci_impact.json\n M TreeDB/collections/hybrid_executor.go\n M TreeDB/collections/hybrid_vector_candidates.go\n M TreeDB/collections/native_ordinary_columngraph_search.go\nA  TreeDB/documentservice/shared_cow_write_bench_test.go\nM  cmd/benchprof/README.md\nM  cmd/unified_bench/README.md\n?? TreeDB/documentservice/ordinary_columngraph_native_cold_hybrid_test.go",
+    "changed_files": {
+      ".github/ci/ci_impact.json": "e4b7d1e13f8c233d4569b642edde05c3417c845e2a949b710e30df7547fad292",
+      "TreeDB/collections/hybrid_executor.go": "54992c68aae2668d9d0fc62a9755e466a5214b29b83139b017f0c33ad0790c1e",
+      "TreeDB/collections/hybrid_vector_candidates.go": "aad9db30162adf137b4ad06a911ba9b6801b78534a14fd0159632049b35b3827",
+      "TreeDB/collections/native_ordinary_columngraph_search.go": "066f011f1e35a52b32175291b0ae7c47de1710042ee59fa75ee17391dd1655f4",
+      "TreeDB/documentservice/ordinary_columngraph_native_cold_hybrid_test.go": "19f5e1ef1505e1919793e9e80d4d0834e52fdbb91af34f4d9de8e27708a51613",
+      "TreeDB/documentservice/shared_cow_write_bench_test.go": "dd6d7ebcb5638badbb938ba9891c557e51fe3e9c583fc1d679d4e8f02ec29263",
+      "cmd/benchprof/README.md": "d3991e714e057d43f3f0aa85af14673a2b38b296670664821ec2c131359e95f7",
+      "cmd/unified_bench/README.md": "916ad55ee546a17632e93adc1ee74bdaa738426680a4d767a9b25f8ce1ea27df"
+    }
+  },
+  "command": [
+    "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.0.linux-amd64/bin/go",
+    "test",
+    "-json",
+    "-count=1",
+    "-timeout=6m",
+    "-p=1",
+    "./TreeDB/documentservice",
+    "-run",
+    "^Test(OrdinaryColumnGraphNativeColdHybrid4096|OrdinaryColumnGraphNativeService4096|OrdinaryColumnGraphSearchOwnerReopenDenseHybrid|OrdinaryColumnGraphNativeOptimizeCrashReopen)$"
+  ],
+  "outer_wall_seconds": 600,
+  "scope": "Source-bound public cold Hybrid and queued producer-pressure regression repair; preserve actual REDs, sameassertion GREEN, original cap/corpus/strategy/durableACK; no numerical/default qualification"
+}

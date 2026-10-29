@@ -24,7 +24,97 @@ matrix are defined in `TreeDB/docs/spec/collection-text-v2-contract.md`.
 - `DropTextIndex` removes metadata and clears all v1 and v2 text root
   descriptors for that index, including v1 postings/text-state/text-stats roots
   and v2 doc ordinal/docmap/term-stat/norm/status roots.
+  Cleared descriptors persist as encoded zero roots. Cold native catalog import
+  treats well-formed zero-root descriptors as inactive, including the other
+  version's descriptors after recreation. Every nonzero root still requires
+  its current collection and domain declaration; malformed descriptors and root
+  overlays refuse the complete import.
 - `TextIndexStorageStats` validates storage versions and returns root accounting.
+- Direct native text mutation construction uses the original operation/phase
+  receipt for admitted term accumulation, prepared state and reducer working
+  storage. String-keyed native constructor tables pair the concrete local ID
+  index with typed value lanes; block caches use typed sorted lanes. Checked
+  replacement cells and lane capacities are admitted together before growth,
+  and displaced backing stays charged through the existing phase boundary.
+  Shared carriers retain direct map lookup on the legacy route. This adds no
+  owner, pool, storage format or publication authority.
+- The admitted native analyzer retains the maintained tokenization, weights,
+  positions, offsets and stopword semantics. Its normalizer admits replacement
+  backing before growth; stopwords use an admitted sorted/deduplicated lane.
+  Current eligible V2 rows reuse their prepared state rather than reanalyzing it.
+  Nested JSON field extraction uses `encoding/json` RawMessage values and
+  `UseNumber`, validates the complete object and trailing input, and preserves
+  last-duplicate-ancestor selection and existing string/array/error behavior.
+  Each visited object retains the original full-source decoder allowance before
+  decoding; this does not claim exact control of standard-library global caches.
+  BSON/template conversion keeps its separate original admission and ownership.
+- This constructor boundary covers direct native mutation preparation and its
+  reducer working tables. It does not certify every query-validation registry,
+  DDL/backfill map or other consumer of the general record envelope. Existing
+  codec/retry/output allowances remain unless the corresponding allocation was
+  actually replaced. The existing successful-phase cleanup can release ended
+  private construction only after independent domain outputs and their retained
+  floor are established; an error grants no early refund or publication.
+- Direct native mutation phases read V1 document state and fixed V1/V2 scalar
+  statistics through their maintained codecs. Owned source copies and each V1
+  decoder backing are admitted before allocation; count and overflow guards
+  precede admission. V1 retains the already analyzed opening state in an admitted
+  descriptor lane. Exact structural equality lets the stored state share that
+  opening's prepaid downstream allowance. A missing preparation or parseable
+  mismatch first obtains the original general record allowance before reducer
+  key/table effects. Malformed input preserves codec errors; capacity refusal
+  preserves its original error and every successful prefix charge. Other record
+  families, DDL and inspection keep their existing admission paths.
+- Native single-term V2 serving (without `Explain`) admits source copies and
+  decoder/search backing separately on the same cumulative operation receipt.
+  Selection follows the maintained analyzer and includes the existing exact
+  postings fallback. Posting capacity follows `P*(F+4) <= encoded bytes`, with
+  the scanner's maximum three field lanes charged independently before malformed
+  payload validation. Norm/docmap allowances retain the codecs' looser malformed
+  `entryCount <= remaining+1` preallocation bound. Cached arrays, ID copies,
+  candidates, map growth and final result cohorts remain charged through the
+  complete query. V1, multi-term/phrase/explain queries, storage inspection,
+  rewrite and other reducer records retain the general record envelope. This changes
+  admission sizing, not query budgets, ranking, index eligibility or ownership.
+- Native text range scans reuse the existing fixed owned physical-tree cursor
+  inside their original captured domain. Pending/captured COW sources keep the
+  same newest-first merge, including tombstones and per-entry revisions. Each
+  source is inspected before every probe, even when its physical candidate is
+  retained across memory-only results. Arbitrary seeks reposition that cursor
+  within its original `[start,end)` domain, clamping both source families to the
+  original lower bound;
+  forward movement advances it without descending from the root for each row.
+  Cursor backing is admitted before construction and detached before the read
+  and operation receipt are released; no new snapshot, pool or source pin exists.
+- Native text norm-cache reads synchronously validate/decode inline records
+  under the original read mutex into independently owned descriptor/field arrays.
+  Docmap cache reads keep independent raw bytes because decoded document IDs
+  retain raw subslices. Iterators constructed in the existing single-term V2
+  serving scope may borrow inline values from their own physical projection or
+  immutable captured memory source until that same iterator moves or closes.
+  Each borrowed iterator holds one existing read visit: a read
+  Close request rejects further movement immediately, retains active raw values,
+  and completes original capture disposal after the final iterator detaches.
+  General mutation, backfill, rewrite and multi-term iterators keep their owned
+  values and original lifetime behavior. Pointer values use the existing owned
+  decoder. Source-copy promises and all
+  decoded/cursor growth charges retain their original rounding, order and
+  cumulative receipt lifetime, even when an inline copy is omitted. Public Get
+  and returned documents remain independently owned.
+- No-WAL native collections use the maintained V2 rewrite/merge planner through
+  their captured catalog. The six sparse output domains publish together through
+  the existing native COW authority without replacing unaffected records or
+  advancing collection document generation. Old read cuts retain the old index.
+  Dry-run, policy skip, cancellation and exhausted budgets publish no rewrite;
+  temporary decoded/key/map/codec/table/output cohorts retain original-operation
+  admission until publication preparation and cleanup finish. V1 rewrite and
+  command-WAL text maintenance retain their explicit restrictions.
+- Native `MaintainTextIndex` and collection/manager `MaintainTextIndexes` reuse
+  the existing bounded policy. An explicit `RunStorageCompaction` request is
+  rejected before any logical rewrite because the native owner currently lacks
+  full collection compaction authority. Ordinary checkpoint/reclamation remains
+  owned by TreeDB; logical maintenance does not introduce physical maintenance.
+
 - Insert, delete, update, and batch write paths maintain ordinals/generations,
   tombstones, docmap/norm blocks, stats metadata, compressed scoring posting
   blocks, and optional lazy position/detail payloads for default-v2 text indexes.
@@ -34,10 +124,9 @@ matrix are defined in `TreeDB/docs/spec/collection-text-v2-contract.md`.
   weighting from persisted stats/text-state or v2 norm blocks, and fetches
   documents only for final top-K results when requested.
 
-Not implemented yet:
-
-- phrase/proximity/highlighting/stemming/trigram/fuzzy search;
-- query-vector syntax, gateway integration, or hybrid text+vector executor integration.
+The supported query grammar and Hybrid composition follow the maintained text-V2
+and native Hybrid contracts. Storage API support does not imply Mongo gateway
+query syntax or full storage-compaction support.
 
 ## Metadata
 

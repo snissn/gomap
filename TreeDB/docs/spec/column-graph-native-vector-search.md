@@ -5,10 +5,13 @@ TreeDB column assets through the physical column row reader.
 
 ## What Path Runs
 
-`column_graph` is distinct from two older/comparator paths:
+`column_graph` is the supported HNSW serving strategy. The retired
+`native_runtime` strategy is rejected; ordinary filtered ANN and filtered
+vector Hybrid fail closed until their deferred implementations land. Explicit
+filtered exact search and supported typed filtering remain available.
 
-- Native runtime vector indexes are the legacy collection vector path and do not
-  use physical column graph assets.
+Two useful physical paths are:
+
 - Decoded `ColumnVectorGraph` benchmarks fully load vector, invNorm, and
   adjacency columns into Go slices, then search that in-memory graph. That path
   remains useful as an oracle and throughput ceiling.
@@ -62,8 +65,8 @@ The experimental collection-internal consumer combines one immutable prepared
 base with a checked, bounded suffix of authoritative typed rows and tombstones.
 The current read pin owns scalar eligibility and final document materialization;
 the older graph is only an accelerator. Replacements shadow old vectors and
-deletes remain visible as exclusions. It does not select `native_runtime`, add
-a durable log, or extract indexed values from retained JSON.
+deletes remain visible as exclusions. It does not add a durable log or extract
+indexed values from retained JSON.
 
 This is not installed by ordinary mutable `column_graph` search. Existing typed
 writes retain their selected durability profile, but a stale graph search remains
@@ -379,8 +382,8 @@ final top-k-only ID/document materialization.
 
 ## Best Practices
 
-- Use `column_graph` explicitly. Existing native runtime vector indexes remain a
-  separate path.
+- Omit the strategy or select `column_graph`; the retired `native_runtime`
+  strategy and its persisted indexes are rejected.
 - Batch inserts, then call `RebuildVectorIndex` before serving column graph
   queries.
 - Reopen or checkpoint in validation flows when proving durable root/manifest

@@ -53,11 +53,6 @@ type TypedStats struct {
 	TextOldRows  uint64 `json:"text_old_rows"`
 }
 
-var Runtime struct {
-	QueryAttempts    atomic.Uint64
-	QueriesCompleted atomic.Uint64
-}
-
 // RowIndexCache observes the generic immutable row-offset memo. Residency is
 // cache-owned metadata only; live readers can retain evicted slices separately.
 var RowIndexCache struct {
@@ -76,11 +71,6 @@ type RowIndexCacheStats struct {
 	RowsVisited       uint64 `json:"rows_visited"`
 	Evictions         uint64 `json:"evictions"`
 	OversizedBypasses uint64 `json:"oversized_bypasses"`
-}
-
-type RuntimeStats struct {
-	QueryAttempts    uint64 `json:"query_attempts"`
-	QueriesCompleted uint64 `json:"queries_completed"`
 }
 
 var Replay struct {
@@ -132,7 +122,6 @@ type ScanWorkStats struct {
 type Availability struct {
 	IndexedJSON     bool `json:"indexed_json"`
 	Typed           bool `json:"typed"`
-	RuntimeQuery    bool `json:"runtime_query"`
 	Replay          bool `json:"replay"`
 	AttributedScans bool `json:"attributed_scans"`
 	RowIndexCache   bool `json:"row_index_cache"`
@@ -171,7 +160,6 @@ type Snapshot struct {
 	Available        Availability       `json:"available"`
 	IndexedJSON      IndexedJSONStats   `json:"indexed_json"`
 	Typed            TypedStats         `json:"typed"`
-	Runtime          RuntimeStats       `json:"runtime"`
 	Replay           ReplayStats        `json:"replay"`
 	Scans            ScanWorkStats      `json:"scans"`
 	RowIndexCache    RowIndexCacheStats `json:"row_index_cache"`
@@ -186,7 +174,7 @@ func Read() Snapshot {
 		Memory:        MemoryStats{TotalAlloc: mem.TotalAlloc, Mallocs: mem.Mallocs, HeapAlloc: mem.HeapAlloc, HeapSys: mem.HeapSys, Sys: mem.Sys, NumGC: mem.NumGC},
 		SchemaVersion: "treedb-work-v1", Scope: "process", PID: os.Getpid(),
 		OriginKind: "go_package_init", OriginUnixNano: origin.UnixNano(), SnapshotUnixNano: time.Now().UnixNano(),
-		Available: Availability{IndexedJSON: true, Typed: true, RuntimeQuery: true, Replay: true, AttributedScans: true, RowIndexCache: true, Graph: true, Output: true, Fold: true},
+		Available: Availability{IndexedJSON: true, Typed: true, Replay: true, AttributedScans: true, RowIndexCache: true, Graph: true, Output: true, Fold: true},
 		RowIndexCache: RowIndexCacheStats{
 			Entries: RowIndexCache.Entries.Load(), RetainedBytes: RowIndexCache.RetainedBytes.Load(), ByteLimit: RowIndexCache.ByteLimit.Load(),
 			Hits: RowIndexCache.Hits.Load(), Misses: RowIndexCache.Misses.Load(), Builds: RowIndexCache.Builds.Load(), RowsVisited: RowIndexCache.RowsVisited.Load(),
@@ -205,10 +193,6 @@ func Read() Snapshot {
 			TextRows:     Typed.TextRows.Load(),
 			TextFields:   Typed.TextFields.Load(),
 			TextOldRows:  Typed.TextOldRows.Load(),
-		},
-		Runtime: RuntimeStats{
-			QueryAttempts:    Runtime.QueryAttempts.Load(),
-			QueriesCompleted: Runtime.QueriesCompleted.Load(),
 		},
 		Replay: ReplayStats{
 			FramesAttempted:             Replay.FramesAttempted.Load(),
