@@ -27409,12 +27409,29 @@ func (db *DB) setDirectAfterCommandWALAppendWithMVCCInput(key, value []byte, inp
 		}
 		return revision
 	}
-	if err := appendCommand(assignRevision); err != nil {
+	// The caller owns writeMu across the external append callback. Returned
+	// errors release it below; panic(nil) and Goexit must release it too,
+	// without recovering or converting either unwind to a successful write.
+	var appendErr error
+	func() {
+		returned := false
+		defer func() {
+			if !returned {
+				if retainPath != "" {
+					db.markValueLogRetain(retainPath)
+				}
+				db.writeMu.RUnlock()
+			}
+		}()
+		appendErr = appendCommand(assignRevision)
+		returned = true
+	}()
+	if appendErr != nil {
 		if retainPath != "" {
 			db.markValueLogRetain(retainPath)
 		}
 		db.writeMu.RUnlock()
-		return err
+		return appendErr
 	}
 	if revision == page.LegacyEntryRevision {
 		if retainPath != "" {
@@ -33183,8 +33200,8 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.memory.pool_pressure_critical_samples_total"] = fmt.Sprintf("%d", poolPressureCriticalSamplesTotal.Load())
 	rssBytes := db.processRSSBytes.Load()
 	rssHWMBytes := db.processRSSHWMBytes.Load()
-	stats["treedb.process.memory.rss_bytes"] = fmt.Sprintf("%d", rssBytes)
-	stats["treedb.process.memory.rss_hwm_bytes"] = fmt.Sprintf("%d", rssHWMBytes)
+	stats["treedb.process.memory.rss_bytes"] = strconv.FormatUint(rssBytes, 10)
+	stats["treedb.process.memory.rss_hwm_bytes"] = strconv.FormatUint(rssHWMBytes, 10)
 	if rssBytes > poolPressure.heapInuseBytes {
 		stats["treedb.process.memory.rss_minus_heap_inuse_bytes"] = fmt.Sprintf("%d", rssBytes-poolPressure.heapInuseBytes)
 	} else {
@@ -33195,10 +33212,10 @@ func (db *DB) Stats() map[string]string {
 	} else {
 		stats["treedb.process.memory.rss_minus_total_sys_bytes"] = "0"
 	}
-	stats["treedb.process.memory.peak_rss_bytes"] = fmt.Sprintf("%d", db.processPeakRSSBytes.Load())
-	stats["treedb.process.memory.peak_heap_alloc_bytes"] = fmt.Sprintf("%d", db.processPeakHeapAllocBytes.Load())
-	stats["treedb.process.memory.peak_heap_inuse_bytes"] = fmt.Sprintf("%d", db.processPeakHeapInuseBytes.Load())
-	stats["treedb.process.memory.peak_total_sys_bytes"] = fmt.Sprintf("%d", db.processPeakTotalSysBytes.Load())
+	stats["treedb.process.memory.peak_rss_bytes"] = strconv.FormatUint(db.processPeakRSSBytes.Load(), 10)
+	stats["treedb.process.memory.peak_heap_alloc_bytes"] = strconv.FormatUint(db.processPeakHeapAllocBytes.Load(), 10)
+	stats["treedb.process.memory.peak_heap_inuse_bytes"] = strconv.FormatUint(db.processPeakHeapInuseBytes.Load(), 10)
+	stats["treedb.process.memory.peak_total_sys_bytes"] = strconv.FormatUint(db.processPeakTotalSysBytes.Load(), 10)
 	db.domainIngressMu.Lock()
 	ingressWorkers := len(db.domainIngressCh)
 	ingressQueueSize := db.domainIngressQueueSize
@@ -37844,6 +37861,21 @@ type CommandWALBatchWriteTiming struct {
 	MemtablePublicationReset time.Duration
 }
 
+// invokeCommandWALAppend retains ordinary point-path lease custody only while
+// the callback runs. Range and conditional callers own their unwind cleanup.
+// The returned flag preserves panic(nil) and Goexit without recovering either.
+func (b *Batch) invokeCommandWALAppend(releaseOnUnwind bool, unlockWriteMu func()) (err error) {
+	returned := false
+	defer func() {
+		if !returned && releaseOnUnwind {
+			unlockWriteMu()
+		}
+	}()
+	err = b.commandWALAppend()
+	returned = true
+	return err
+}
+
 // WriteAfterCommandWALAppend writes a cached batch by running appendCommand
 // after cached write preflight succeeds and before the mutation becomes
 // visible in the mutable table. This is intentionally limited to command-WAL
@@ -38264,7 +38296,7 @@ func (b *Batch) writeRangeBatch(sync bool) error {
 	// refer to the original entry indexes. Force the safe copy path for this write
 	// instead of retaining batch arenas by stale indexes.
 	b.hasViewOps = true
-	err := b.writeRegularLocked(sync, unlockWriteMu)
+	err := b.writeRegularLocked(sync, unlockWriteMu, false)
 	if err != nil {
 		b.entries = origEntries
 		b.hasDeleteRanges = origHasRanges
@@ -38303,37 +38335,40 @@ func (b *Batch) writeRangeSpanBatch(sync bool, ranges []batch.DeleteRange) (err 
 	}
 	defer b.db.writeMu.Unlock()
 
-	b.db.mu.Lock()
-	rotate := b.db.mutableBytes.Load() > 0
-	if !rotate {
-		for i := range b.db.mutableShards {
-			mt := b.db.mutableShards[i].mem
-			if mt != nil && mt.Len() != 0 {
-				rotate = true
-				break
+	if err := func() error {
+		b.db.mu.Lock()
+		defer b.db.mu.Unlock()
+		rotate := b.db.mutableBytes.Load() > 0
+		if !rotate {
+			for i := range b.db.mutableShards {
+				mt := b.db.mutableShards[i].mem
+				if mt != nil && mt.Len() != 0 {
+					rotate = true
+					break
+				}
 			}
 		}
-	}
-	if rotate {
-		if err := b.db.rotateMutableShardsLocked(minMemtablePrealloc, false); err != nil {
-			b.db.mu.Unlock()
+		if rotate {
+			if err := b.db.rotateMutableShardsLocked(minMemtablePrealloc, false); err != nil {
+				return err
+			}
+		}
+		if b.commandWALAppend != nil {
+			if err := b.commandWALAppend(); err != nil {
+				return err
+			}
+			commandWALAppended = true
+		}
+		if err := b.db.enqueueRangeSpanLayerLocked(ranges); err != nil {
 			return err
 		}
-	}
-	if b.commandWALAppend != nil {
-		if err := b.commandWALAppend(); err != nil {
-			b.db.mu.Unlock()
-			return err
-		}
-		commandWALAppended = true
-	}
-	if err := b.db.enqueueRangeSpanLayerLocked(ranges); err != nil {
-		b.db.mu.Unlock()
+		b.db.conditionalRecordCommittedEntries(nil, ranges)
+		b.db.publishMemtablesLocked()
+
+		return nil
+	}(); err != nil {
 		return err
 	}
-	b.db.conditionalRecordCommittedEntries(nil, ranges)
-	b.db.publishMemtablesLocked()
-	b.db.mu.Unlock()
 
 	b.db.noteWrite()
 	b.db.maybeAssistFlush()
@@ -38475,10 +38510,10 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 	if err := b.db.beginDirectWrite(); err != nil {
 		return err
 	}
-	return b.writeRegularLocked(syncWrite, b.db.writeMu.RUnlock)
+	return b.writeRegularLocked(syncWrite, b.db.writeMu.RUnlock, true)
 }
 
-func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
+func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func(), releaseCallbackLeaseOnUnwind bool) error {
 	if b.db.cow != nil {
 		if len(b.entries) == 0 && b.cowState.native == nil {
 			// Empty writes publish no cut. A WAL-off explicit sync still covers
@@ -39201,7 +39236,7 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 				}
 			}
 		}
-		if err := b.commandWALAppend(); err != nil {
+		if err := b.invokeCommandWALAppend(releaseCallbackLeaseOnUnwind, unlockWriteMu); err != nil {
 			unlockWriteMu()
 			return err
 		}

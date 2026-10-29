@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
 const collectionsVectorAllocationGateEnv = "TREEDB_COLLECTIONS_VECTOR_ALLOCATION_GATE"
@@ -63,4 +65,23 @@ func enterIsolatedVectorAllocationGate(t *testing.T, gate string) bool {
 		t.Logf("isolated vector allocation measurement %q:\n%s", gate, output)
 	}
 	return false
+}
+
+// completeVectorAllocationSetup seals the visible setup prefix before reading
+// process-global allocation counters. Command-WAL rebuild admission can return
+// while its physical publication is still running. This is a test setup barrier,
+// not a synchronous RebuildVectorIndex or search contract.
+func completeVectorAllocationSetup(t *testing.T, database *backenddb.DB) {
+	t.Helper()
+	before, ok := database.StateToken()
+	if !ok {
+		t.Fatal("allocation setup state token unavailable")
+	}
+	if err := database.Checkpoint(); err != nil {
+		t.Fatalf("allocation setup Checkpoint: %v", err)
+	}
+	after, ok := database.StateToken()
+	if !ok || after != before {
+		t.Fatalf("allocation setup Checkpoint changed visible state: before=%+v after=%+v available=%v", before, after, ok)
+	}
 }

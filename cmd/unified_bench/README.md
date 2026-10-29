@@ -356,10 +356,16 @@ explicitly deferred.
 
 Use `-profile-dir` so all profiles and ops outputs are captured in one place.
 This example uses unified-bench's `fast` preset, selecting production
-`no_wal_fast` for TreeDB. Use `bench_unsafe` only for an explicit unsafe ceiling:
+`no_wal_fast` for TreeDB. Use `bench_unsafe` only for an explicit unsafe ceiling.
+
+The profile examples below use this host's `/mnt/fast4tb` mount. Verify that it
+is mounted and writable before running them. On other machines, replace that
+prefix with an existing writable data directory; for the collection recipe,
+set `RUN_DIR` to a directory on that filesystem. Keep captures on a filesystem
+with enough free space for the database and profiles.
 
 ```bash
-OUT=$(mktemp -d /tmp/gomap_profiles_XXXXXX)
+OUT=$(mktemp -d /mnt/fast4tb/gomap_profiles_XXXXXX) || exit 1
 BENCH_PROFILE=fast # cross-DB benchmark preset, not a TreeDB server profile
 
 ./bin/unified-bench \
@@ -372,6 +378,7 @@ BENCH_PROFILE=fast # cross-DB benchmark preset, not a TreeDB server profile
   -path-label native-fastpath \
   -progress=false
 
+# Optional: rerun the analyzer separately; -profile-dir already runs it.
 ./bin/benchprof -profiles-dir "$OUT"
 ```
 
@@ -405,6 +412,44 @@ from one source family. The `collection_storage` suite also
 adds `runs[].collection_workloads` entries with stable mode/workload names,
 semantic-equivalence flags, correctness-validation status, asset-byte splits,
 and materialization / typed-column / vector counters for `benchprof` rendering.
+
+### Interpreting storage and completion time
+
+For fixed work, a faster run can reach its endpoint with less elapsed time for
+background cleanup. Report physical allocated storage at the original endpoint,
+and, where available, distinguish reachable data, cleanup debt, and deliberate
+preallocated reserve. Compare like durability and logical work, matched
+idle/maintenance observations and sustained-load behavior; include maintenance
+I/O, CPU and effects on foreground latency when material. Do not assume idle
+cleanup actually occurs or reserve is returned: demonstrate the lifecycle.
+A substantial measured speed win may justify an explicitly accepted, bounded
+space tradeoff when the workload and applicable acceptance gates permit it.
+Preserve the original endpoint and any failed gate; do not exclude required
+maintenance or silently relax correctness, durability or agreed thresholds.
+
+### Focused collection insert compression profile
+
+To investigate TreeDB collection `InsertBatch` throughput and value-log
+compression allocations, run from the repository root after checking the output
+filesystem as described in the standard profile workflow above:
+
+```sh
+RUN_DIR=/mnt/fast4tb/treedb_insert_compression_profile_$(date +%Y%m%d_%H%M%S) \
+  scripts/treedb_insert_compression_profile.sh
+```
+
+The script runs the short-lived `BenchmarkCollectionShapeInsertBatch` insert
+shape for template-v1 collections on the native fast path. It captures default
+value-log compression under `auto/`, optionally a compression-off ceiling under
+`off/`, and writes `benchstat_auto_vs_off.txt` if `benchstat` is installed.
+Primary artifacts include `auto/collections_report.md`,
+`auto/collections_cpu.pprof`, `auto/collections_cpu_top.txt`,
+`auto/collections_mem.pprof`, and `auto/collections_mem_top.txt`. These Go test
+profiles are standalone artifacts, not benchprof inputs.
+
+Useful overrides: `COUNT=1 BENCHTIME=1000x RUN_COMPRESSION_OFF=false` for a
+smoke run; `INDEXES_REGEX='0|1|2|3'` for all current insert index counts; and
+`RUN_TIMED_CPU=true` to additionally capture the timed CPU-only profile.
 
 ## Collection Storage Suite
 
