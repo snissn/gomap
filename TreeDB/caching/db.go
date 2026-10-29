@@ -38498,6 +38498,50 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 	return b.writeRegularLocked(syncWrite, b.db.writeMu.RUnlock)
 }
 
+// appendOrdinaryCommandWAL keeps callback custody and RID preparation outside
+// the common no-WAL publication body. Returned errors leave the write lease
+// with the caller; an abnormal callback unwind releases it here.
+func (b *Batch) appendOrdinaryCommandWAL(unlockWriteMu func(), appended *bool) error {
+	if b.commandWALMaterializedRID && b.db.memtableValueLogPointers {
+		for _, idx := range b.ptrValueIdxs {
+			if idx < 0 || idx >= len(b.entries) {
+				return fmt.Errorf("cachingdb: ptr value entry index %d out of range", idx)
+			}
+		}
+	}
+	// The external append can unwind after assigning a command. Its owner
+	// poisons that command and releases backend custody; this frame still
+	// owns the cache write lease until the callback returns normally.
+	var appendErr error
+	func() {
+		returned := false
+		defer func() {
+			if !returned {
+				unlockWriteMu()
+			}
+		}()
+		appendErr = b.commandWALAppend()
+		returned = true
+	}()
+	if appendErr != nil {
+		return appendErr
+	}
+	*appended = true
+	if b.commandWALMaterializedRID && b.db.memtableValueLogPointers {
+		// SetMaterializedRID needs the value through the callback above. The
+		// pointer-in-memtable representation needs only ValuePtr, so clear the
+		// serialization copy before any sorted/steal publication path can take
+		// ownership of it.
+		for _, idx := range b.ptrValueIdxs {
+			if b.entries[idx].IsPtr {
+				b.entries[idx].Value = nil
+			}
+		}
+	}
+
+	return nil
+}
+
 func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 	if b.db.cow != nil {
 		if len(b.entries) == 0 && b.cowState.native == nil {
@@ -39213,43 +39257,9 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 	}
 
 	if b.commandWALAppend != nil {
-		if b.commandWALMaterializedRID && b.db.memtableValueLogPointers {
-			for _, idx := range b.ptrValueIdxs {
-				if idx < 0 || idx >= len(b.entries) {
-					unlockWriteMu()
-					return fmt.Errorf("cachingdb: ptr value entry index %d out of range", idx)
-				}
-			}
-		}
-		// The external append can unwind after assigning a command. Its owner
-		// poisons that command and releases backend custody; this frame still
-		// owns the cache write lease until the callback returns normally.
-		var appendErr error
-		func() {
-			returned := false
-			defer func() {
-				if !returned {
-					unlockWriteMu()
-				}
-			}()
-			appendErr = b.commandWALAppend()
-			returned = true
-		}()
-		if appendErr != nil {
+		if err := b.appendOrdinaryCommandWAL(unlockWriteMu, &commandWALAppended); err != nil {
 			unlockWriteMu()
-			return appendErr
-		}
-		commandWALAppended = true
-		if b.commandWALMaterializedRID && b.db.memtableValueLogPointers {
-			// SetMaterializedRID needs the value through the callback above. The
-			// pointer-in-memtable representation needs only ValuePtr, so clear the
-			// serialization copy before any sorted/steal publication path can take
-			// ownership of it.
-			for _, idx := range b.ptrValueIdxs {
-				if b.entries[idx].IsPtr {
-					b.entries[idx].Value = nil
-				}
-			}
+			return err
 		}
 	}
 
