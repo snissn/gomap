@@ -28,6 +28,8 @@ type CommitCompletion struct {
 
 // Complete drives physical progress and original ordered ACK publication, then
 // releases custody once. A zero or already completed record is safe to call.
+// Engine panics propagate after releasing discard-floor custody; subsequent
+// calls retain a storage error with uncertain durability.
 func (c *CommitCompletion) Complete() error {
 	if c == nil {
 		return nil
@@ -35,9 +37,17 @@ func (c *CommitCompletion) Complete() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.store != nil {
+		store := c.store
+		defer func() {
+			panicked := recover()
+			store.mu.RUnlock()
+			c.store = nil
+			if panicked != nil {
+				c.err = storageError("complete batch", treedb.ErrRecoveryRequired)
+				panic(panicked)
+			}
+		}()
 		err := c.engine.Complete()
-		c.store.mu.RUnlock()
-		c.store = nil
 		if err != nil {
 			c.err = storageError("complete batch", err)
 		}

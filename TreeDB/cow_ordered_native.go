@@ -88,7 +88,9 @@ type LogicalMVCCCompletion struct {
 
 // Complete drives the existing captured-prefix coordinator and releases the
 // batch/lifecycle custody exactly once. Repeated calls return the same result.
-func (c *LogicalMVCCCompletion) Complete() error {
+// A panic is propagated after fail-closed cleanup; later calls return the
+// recovery-required error, never a replacement successful acknowledgement.
+func (c *LogicalMVCCCompletion) Complete() (err error) {
 	if c == nil {
 		return nil
 	}
@@ -98,13 +100,58 @@ func (c *LogicalMVCCCompletion) Complete() error {
 		return c.err
 	}
 	b, db := c.batch, c.db
+	inner := b.inner.(*caching.Batch)
 	// The owned batch retains the effective profile-upgraded WAL ACK class.
 	// syncWrite separately records which public API the caller selected.
+	defer func() {
+		panicked := recover()
+		// Custody must retire even if cleanup panics. Preserve the original
+		// panic and never acknowledge a cleared registration on a later call.
+		defer func() {
+			// An unexpected cleanup panic must not replace the physical panic.
+			// Retain failure before releasing custody on every unwind path.
+			if cleanupPanic := recover(); cleanupPanic != nil {
+				c.err = errors.Join(c.err, ErrRecoveryRequired)
+				if panicked == nil {
+					panicked = cleanupPanic
+				}
+			}
+			c.batch, c.db = nil, nil
+			db.lifecycleMu.RUnlock()
+			if panicked != nil {
+				panic(panicked)
+			}
+		}()
+		fail := func() {
+			// Failure bookkeeping must not skip batch closure or replace the
+			// panic being propagated, even if an internal invariant also fails.
+			defer func() {
+				if secondary := recover(); secondary != nil && panicked == nil {
+					panicked = secondary
+				}
+			}()
+			c.err = errors.Join(c.err, ErrRecoveryRequired)
+			db.commandWALGroupCommit.failPanickedCompletion(db)
+			inner.CompleteCOWAcknowledgement(db.txnOwner, b.cowState.commandSync, c.err)
+		}
+		if panicked != nil {
+			fail()
+		}
+		func() {
+			defer func() {
+				if cleanupPanic := recover(); cleanupPanic != nil {
+					if panicked == nil {
+						panicked = cleanupPanic
+					}
+					fail()
+				}
+			}()
+			c.err = errors.Join(c.err, b.Close())
+		}()
+		err = c.err
+	}()
 	c.err = b.completeCOWWrite(b.cowState.commandSync, nil)
 	db.observePublicBatchWrite(c.syncWrite, c.started, c.err)
-	c.err = errors.Join(c.err, b.Close())
-	c.batch, c.db = nil, nil
-	db.lifecycleMu.RUnlock()
 	return c.err
 }
 

@@ -892,6 +892,21 @@ func (group *publicCommandWALGroupCommit) failPanickedLeader(tdb *DB) {
 	group.mu.Unlock()
 }
 
+// failPanickedCompletion poisons an ACK whose owner could not return normally.
+// The physical leader owns its own retirement: a later completion's cleanup
+// must not retire another leader that has already begun driving a new prefix.
+func (group *publicCommandWALGroupCommit) failPanickedCompletion(tdb *DB) {
+	tdb.backend.MarkCommandWALRecoveryRequired()
+	group.mu.Lock()
+	defer group.mu.Unlock()
+	if group.terminalErr == nil {
+		group.errors.Add(1)
+		group.terminalErr = ErrRecoveryRequired
+		group.completedTicket = group.nextTicket
+		group.cond.Broadcast()
+	}
+}
+
 // syncAndCompleteGroup runs after every public append gate is released. A
 // nonzero ordinaryTicket belongs only to the fused ordinary, non-force caller.
 // Its original ACK predicate can be checked under this same completion lock;
