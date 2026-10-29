@@ -77,6 +77,23 @@ func (r *Reader) IsEmptyFixedContainer() bool {
 		len(r.fixed.incomplete) == 0 && r.fixed.reconstructedFooters == 0
 }
 
+// LogicalSize reports the logical stream length already validated during reader
+// construction. It does not rescan the fixed reserve. The caller must retain
+// its existing append exclusion and exact-file ownership for the reader lifetime.
+func (r *Reader) LogicalSize() (int64, error) {
+	if r == nil || r.f == nil {
+		return 0, os.ErrInvalid
+	}
+	if r.fixed != nil {
+		return r.fixed.logical, nil
+	}
+	info, err := r.f.Stat()
+	if err != nil {
+		return 0, err
+	}
+	return info.Size(), nil
+}
+
 // ReadBatch reads the next batch segment.
 func (r *Reader) ReadBatch() ([]Record, error) {
 	payload, err := r.readSegmentPayload(false)

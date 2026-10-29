@@ -983,7 +983,8 @@ func (db *DB) cleanupCommandWALCoveredSegmentsV1() (retErr error) {
 	}
 	scanStart := time.Now()
 	var decisions []commandWALSegmentCleanupDecision
-	// Listing and reader construction both validate fixed-container reserve.
+	// Metadata discovery defers full fixed-container reserve validation to each
+	// exact-handle reader; no payload classification is cached between scans.
 	// Retain append exclusion through the complete scan so they inspect one
 	// immutable physical prefix. Release it before durablePublishMu below.
 	err = proof.journalOwner.WithCleanupScan(proof.journal, func() error {

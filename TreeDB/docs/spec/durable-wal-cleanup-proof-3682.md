@@ -168,9 +168,13 @@ inactive predecessor that is retained until a later cleanup pass; it cannot turn
 this non-destructive pass into deletion authority.
 
 This saves payload reads for the common sole-active namespace. A namespace with
-inactive files still performs the existing complete listing/reserve and frame
-validation, with cost proportional to the recognized files and their physical
-reserves. No content-prefix shortcut is safe for arbitrary corrupt suffixes.
+inactive files performs metadata discovery followed by complete reserve and
+frame validation on each exact opened handle. The cleanup reader supplies the
+already validated logical size, so listing does not read the same reserve a
+second time. Recognized legacy non-command files still undergo reserve
+validation. No classification is retained between cleanup invocations; each
+pass validates current bytes, with cost proportional to recognized files and
+their physical reserves. No content-prefix shortcut is safe for arbitrary corrupt suffixes.
 High-segment zero-frontier histories therefore incur this validation cost until
 empty predecessors are reclaimed or the oldest recovery root advances. Cleanup
 does not change publication cadence or advance a recovery root to avoid the cost.
