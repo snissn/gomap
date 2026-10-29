@@ -39218,9 +39218,23 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 				}
 			}
 		}
-		if err := b.commandWALAppend(); err != nil {
+		// The external append can unwind after assigning a command. Its owner
+		// poisons that command and releases backend custody; this frame still
+		// owns the cache write lease until the callback returns normally.
+		var appendErr error
+		func() {
+			returned := false
+			defer func() {
+				if !returned {
+					unlockWriteMu()
+				}
+			}()
+			appendErr = b.commandWALAppend()
+			returned = true
+		}()
+		if appendErr != nil {
 			unlockWriteMu()
-			return err
+			return appendErr
 		}
 		commandWALAppended = true
 		if b.commandWALMaterializedRID && b.db.memtableValueLogPointers {
