@@ -697,7 +697,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 			phase.Status = CompactStoragePhaseStatusSucceeded
 			stats.IndexVacuum = db.vacuumOnlineStatsSnapshot()
 			indexVacuumCompleted = true
-		case errors.Is(vacuumErr, ErrVacuumUnsupported):
+		case !IsCommandWALCleanupHardFailure(vacuumErr) && errors.Is(vacuumErr, ErrVacuumUnsupported):
 			phase.Status = CompactStoragePhaseStatusUnsupported
 			phase.Reason = vacuumErr.Error()
 			phase.Skipped = true
@@ -815,7 +815,7 @@ func (db *DB) compactStorage(ctx context.Context, opts CompactStorageOptions) (s
 			if err := refreshFinalAudit(); err != nil {
 				return stats, err
 			}
-		case errors.Is(vacuumErr, ErrVacuumUnsupported):
+		case !IsCommandWALCleanupHardFailure(vacuumErr) && errors.Is(vacuumErr, ErrVacuumUnsupported):
 			phase.Status = CompactStoragePhaseStatusUnsupported
 			phase.Reason = vacuumErr.Error()
 			phase.Skipped = true
@@ -892,10 +892,13 @@ func (db *DB) compactStorageIndexVacuumDebt(ctx context.Context, opts CompactSto
 }
 
 func compactStorageIndexVacuumTransient(err error) bool {
+	if IsCommandWALCleanupHardFailure(err) {
+		return false
+	}
 	return errors.Is(err, ErrVacuumConcurrentMutation) ||
 		errors.Is(err, ErrVacuumInProgress) ||
 		errors.Is(err, ErrRecoverableRootSetStale) ||
-		errors.Is(err, ErrDurableWALCleanupProofStale) ||
+		IsCommandWALCleanupProofStale(err) ||
 		errors.Is(err, rootpublication.ErrResourcePinned)
 }
 

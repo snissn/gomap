@@ -219,6 +219,8 @@ func TestCompactStorageIndexVacuumPermanentFailureIsReported(t *testing.T) {
 	for _, wantErr := range []error{
 		errors.New("injected permanent index vacuum failure"),
 		ErrVacuumRecoverableRootSetRequired,
+		hardCommandWALCleanupFailure(ErrVacuumUnsupported),
+		hardCommandWALCleanupFailure(errors.Join(ErrDurableWALCleanupProofStale, ErrVacuumConcurrentMutation)),
 	} {
 		t.Run(wantErr.Error(), func(t *testing.T) {
 			dir := t.TempDir()

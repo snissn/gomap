@@ -20,6 +20,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -2412,7 +2413,7 @@ func TestPublicCommandWALEmptyCheckpointReclaimsCoveredBenchmarkEpochs(t *testin
 		// Publish the durable cached boundary without the public wrapper's
 		// additional cleanup call. Leave fallback refresh and reclamation to
 		// the final public checkpoint under test.
-		if err := db.cached.Checkpoint(); err != nil {
+		if err := db.cached.Checkpoint(); err != nil && (!errors.Is(err, backenddb.ErrDurableWALCleanupProofStale) || backenddb.IsCommandWALCleanupProofStale(err)) {
 			t.Fatalf("%s cached Checkpoint: %v", epoch, err)
 		}
 		if got := db.backend.State().AppliedCommandLSN; got != epochLastLSN {
@@ -6156,5 +6157,49 @@ func TestPublicCommandWALBatchPayloadPoolDropsOversizeBuffer(t *testing.T) {
 	defer func() { _ = small.Close() }()
 	if got := small.payload.RetainedCap(); got > commandWALPublicBatchPayloadPoolRetainMaxBytes {
 		t.Fatalf("small payload retained cap=%d, oversized buffer leaked through pool", got)
+	}
+}
+
+// Observer error trees are not backend proof refusals, even when every leaf
+// resembles a benign maintenance condition. Exercise the full cached facade.
+func TestPublicCommandWALObserverStalePinRemainsHard(t *testing.T) {
+	for _, operation := range []string{"checkpoint", "close"} {
+		t.Run(operation, func(t *testing.T) {
+			dir := t.TempDir()
+			database, err := Open(Options{Dir: dir, Durability: DurabilityWALOnRelaxed, CommandWAL: true, MaxWALBytes: -1, BackgroundCheckpointInterval: -1, BackgroundCheckpointIdleDuration: -1, DisableSideStores: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = database.Close() }()
+			if err := database.backend.RotateCommandWALActiveSegment(true); err != nil {
+				t.Fatal(err)
+			}
+			fault := errors.Join(backenddb.ErrDurableWALCleanupProofStale, rootpublication.ErrResourcePinned)
+			observed := false
+			restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+				if event.Resource == durabilitycut.ResourceCommandWAL && event.Point == durabilitycut.BeforeWALOrAssetUnlink && filepath.Dir(event.Path) == backenddb.WALDirPath(dir) {
+					observed = true
+					return fault
+				}
+				return nil
+			})
+			defer restore()
+			if operation == "checkpoint" {
+				err = database.Checkpoint()
+			} else {
+				err = database.Close()
+			}
+			if !observed || !errors.Is(err, fault) || !backenddb.IsCommandWALCleanupHardFailure(err) || backenddb.IsCommandWALCleanupProofStale(err) {
+				t.Fatalf("observer failure lost: observed=%v err=%v", observed, err)
+			}
+			if !backgroundIndexVacuumShouldReport(err) {
+				t.Fatal("observer failure suppressed by background vacuum")
+			}
+			worker := &bgIndexVacuumWorker{}
+			worker.recordVacuumError(err)
+			if worker.retryProbe || worker.lastOutcome.Load() != backgroundIndexVacuumOutcomePermanentFailure {
+				t.Fatal("observer failure retried by background vacuum")
+			}
+		})
 	}
 }

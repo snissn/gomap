@@ -60,7 +60,7 @@ func (b *checkpointBoundaryBackend) CleanupCommandWALCoveredPrefix() (bool, erro
 	return b.cleanupComplete, b.cleanupErr
 }
 
-func TestBackendSyncBoundaryTreatsStaleCleanupProofAsRetryable(t *testing.T) {
+func TestBackendSyncBoundaryRejectsUnprovenStaleCleanupProof(t *testing.T) {
 	backend := &checkpointBoundaryBackend{
 		err: errors.Join(
 			backenddb.ErrDurableWALCleanupProofStale,
@@ -68,8 +68,8 @@ func TestBackendSyncBoundaryTreatsStaleCleanupProofAsRetryable(t *testing.T) {
 		),
 	}
 
-	if err := backendSyncBoundary(backend); err != nil {
-		t.Fatalf("backendSyncBoundary error=%v, want durable checkpoint success with cleanup retained", err)
+	if err := backendSyncBoundary(backend); !errors.Is(err, backend.err) {
+		t.Fatalf("backendSyncBoundary error=%v, want unproven failure %v", err, backend.err)
 	}
 	if backend.calls != 1 {
 		t.Fatalf("checkpoint calls=%d, want 1", backend.calls)
@@ -301,15 +301,15 @@ func TestAutoCheckpointCoveredPrefixCleanupFailureRetainsDebtAndReports(t *testi
 	}
 }
 
-func TestBackendAutomaticMaintenanceBoundaryRetainsStaleCleanupProof(t *testing.T) {
+func TestBackendAutomaticMaintenanceBoundaryRejectsUnprovenStaleProof(t *testing.T) {
 	backend := &checkpointBoundaryBackend{maintenanceErr: backenddb.ErrDurableWALCleanupProofStale}
 
-	if err := backendAutomaticMaintenanceBoundary(backend); err != nil {
-		t.Fatalf("backendAutomaticMaintenanceBoundary error=%v, want stale proof retained for retry", err)
+	if err := backendAutomaticMaintenanceBoundary(backend); !errors.Is(err, backend.maintenanceErr) {
+		t.Fatalf("backendAutomaticMaintenanceBoundary error=%v, want unproven failure", err)
 	}
 }
 
-func TestCachingDBCheckpointCleanupTreatsStaleProofAsRetryable(t *testing.T) {
+func TestCachingDBCheckpointCleanupRejectsUnprovenStaleProof(t *testing.T) {
 	database := &DB{}
 	calls := 0
 	database.SetCommandWALCheckpointCleanupHook(func(bool) error {
@@ -317,8 +317,8 @@ func TestCachingDBCheckpointCleanupTreatsStaleProofAsRetryable(t *testing.T) {
 		return backenddb.ErrDurableWALCleanupProofStale
 	})
 
-	if err := database.cleanupCommandWALCheckpoint(true); err != nil {
-		t.Fatalf("cleanupCommandWALCheckpoint error=%v, want stale proof retained for retry", err)
+	if err := database.cleanupCommandWALCheckpoint(true); !errors.Is(err, backenddb.ErrDurableWALCleanupProofStale) {
+		t.Fatalf("cleanupCommandWALCheckpoint error=%v, want unproven failure", err)
 	}
 	if calls != 1 {
 		t.Fatalf("cleanup hook calls=%d, want 1", calls)

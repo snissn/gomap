@@ -2,7 +2,6 @@ package caching
 
 import (
 	"context"
-	"errors"
 	"log"
 	"math/bits"
 	"time"
@@ -18,7 +17,7 @@ func (db *DB) reportValueLogDictPublishError(err error) {
 	// Dictionary publication is retried from the unchanged active profile.
 	// Monotonic command-WAL appends and rotations preserve cleanup authority;
 	// only unsafe publication or ownership changes stale it and retain the WAL.
-	if errors.Is(err, backenddb.ErrDurableWALCleanupProofStale) {
+	if backenddb.IsCommandWALCleanupProofStale(err) {
 		return
 	}
 	db.reportError(err)

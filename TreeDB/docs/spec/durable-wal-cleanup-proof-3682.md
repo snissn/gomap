@@ -150,10 +150,18 @@ durable-root publisher, but before releasing journal or recovery ownership. It
 retains the namespace without failing close when proof construction is
 unavailable or stale, including an ambiguous retained replay lineage or an
 expected resource pin encountered before any unlink. Opportunistic handling
-requires every branch of a wrapped or joined error to be an expected refusal.
+requires a backend-private disposition minted only by proof capture/revalidation,
+a journal exclusion refusal before callback entry, a pure lineage-only failure
+of the read-only scan, or an exact registry delete-lease pin refusal before any
+unlink. Sentinel matches and even an error tree of expected leaves do not confer
+this authority. Wrapping or joining a disposition loses its retry authority.
 A lineage gap or duplicate cannot turn accompanying reserve corruption, I/O,
 or observer failure into unavailable proof; checkpoint, prefix cleanup and close
-return those hard errors while retaining the namespace. Explicit cleanup still
+return those hard errors. Mutation callbacks and directory-sync failures carry
+a hard disposition, including observers that replay a genuine prior refusal.
+Their original error tree remains visible through `errors.Is`, but cached
+checkpoint, dictionary reporting, background vacuum, and compact-storage callers
+use disposition predicates before classifying maintenance outcomes. Explicit cleanup still
 reports the pin; it never releases another owner's pin. Once the destructive
 batch is entered, other identity/delete-lease, unlink, observer, and
 directory-sync failures are returned to the caller. Resource teardown continues

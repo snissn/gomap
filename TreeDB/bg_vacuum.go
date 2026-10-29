@@ -13,14 +13,13 @@ import (
 )
 
 func backgroundIndexVacuumShouldReport(err error) bool {
-	return err != nil &&
-		!errors.Is(err, backenddb.ErrVacuumConcurrentMutation) &&
+	return err != nil && (backenddb.IsCommandWALCleanupHardFailure(err) || (!errors.Is(err, backenddb.ErrVacuumConcurrentMutation) &&
 		!errors.Is(err, backenddb.ErrVacuumRecoverableRootSetRequired) &&
 		!errors.Is(err, backenddb.ErrRecoverableRootSetStale) &&
-		!errors.Is(err, backenddb.ErrDurableWALCleanupProofStale) &&
+		!backenddb.IsCommandWALCleanupProofStale(err) &&
 		!errors.Is(err, rootpublication.ErrResourcePinned) &&
 		!errors.Is(err, backenddb.ErrVacuumUnsupported) &&
-		!backgroundIndexVacuumContextEnded(err)
+		!backgroundIndexVacuumContextEnded(err)))
 }
 
 func backgroundIndexVacuumContextEnded(err error) bool {
@@ -936,6 +935,11 @@ func updateBGVacuumMax(dst *atomic.Uint64, value uint64) {
 
 func (w *bgIndexVacuumWorker) recordVacuumError(err error) {
 	switch {
+	case backenddb.IsCommandWALCleanupHardFailure(err):
+		w.retryProbe = false
+		w.lastRetryReason.Store(backgroundIndexVacuumRetryReasonNone)
+		w.permanentFailuresTotal.Add(1)
+		w.lastOutcome.Store(backgroundIndexVacuumOutcomePermanentFailure)
 	case errors.Is(err, backenddb.ErrVacuumUnsupported):
 		w.retryProbe = false
 		w.unsupported = true
@@ -956,7 +960,7 @@ func (w *bgIndexVacuumWorker) recordVacuumError(err error) {
 		w.retryRecoverableRootSetTotal.Add(1)
 		w.lastRetryReason.Store(backgroundIndexVacuumRetryReasonRecoverableRootSet)
 		w.lastOutcome.Store(backgroundIndexVacuumOutcomeRetry)
-	case errors.Is(err, backenddb.ErrDurableWALCleanupProofStale):
+	case backenddb.IsCommandWALCleanupProofStale(err):
 		w.retryProbe = true
 		w.retryCheckpointCleanupTotal.Add(1)
 		w.lastRetryReason.Store(backgroundIndexVacuumRetryReasonCheckpointCleanup)

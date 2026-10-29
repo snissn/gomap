@@ -336,7 +336,7 @@ func TestApplyValueLogDictProfileForClass_SerializesConcurrentPublishers(t *test
 	}
 }
 
-func TestApplyValueLogDictProfileForClass_RetriesStaleCleanupWithoutBackgroundError(t *testing.T) {
+func TestApplyValueLogDictProfileForClass_ReportsUnprovenStaleCleanup(t *testing.T) {
 	tr := &compression.Trainer{}
 	dictBytes := []byte("retryable-dictionary")
 	dictHash := xxhash.Sum64(dictBytes)
@@ -365,8 +365,8 @@ func TestApplyValueLogDictProfileForClass_RetriesStaleCleanupWithoutBackgroundEr
 	database.valueLogDictTrainerByClass[vlogDictClassSingleValue] = tr
 
 	database.applyValueLogDictProfileForClass(vlogDictClassSingleValue)
-	if notifications != 0 || database.backgroundError() != nil {
-		t.Fatalf("stale cleanup poisoned background state: notifications=%d err=%v", notifications, database.backgroundError())
+	if notifications != 1 || !errors.Is(database.backgroundError(), db.ErrDurableWALCleanupProofStale) {
+		t.Fatalf("unproven cleanup error not reported: notifications=%d err=%v", notifications, database.backgroundError())
 	}
 	if got := database.valueLogDictLastAppliedDictHashByClass[vlogDictClassSingleValue].Load(); got != 0 {
 		t.Fatalf("stale cleanup consumed candidate hash=%x want 0", got)
@@ -381,7 +381,7 @@ func TestApplyValueLogDictProfileForClass_RetriesStaleCleanupWithoutBackgroundEr
 	}
 }
 
-func TestApplyValueLogDictProfileForClass_RetriesStaleKWithoutApplyingProfile(t *testing.T) {
+func TestApplyValueLogDictProfileForClass_ReportsUnprovenStaleKWithoutApplyingProfile(t *testing.T) {
 	tr := &compression.Trainer{}
 	dictBytes := []byte("retryable-dictionary-k")
 	dictHash := xxhash.Sum64(dictBytes)
@@ -410,8 +410,8 @@ func TestApplyValueLogDictProfileForClass_RetriesStaleKWithoutApplyingProfile(t 
 	database.valueLogDictTrainerByClass[vlogDictClassSingleValue] = tr
 
 	database.applyValueLogDictProfileForClass(vlogDictClassSingleValue)
-	if notifications != 0 || database.backgroundError() != nil {
-		t.Fatalf("stale K cleanup poisoned background state: notifications=%d err=%v", notifications, database.backgroundError())
+	if notifications != 1 || !errors.Is(database.backgroundError(), db.ErrDurableWALCleanupProofStale) {
+		t.Fatalf("unproven K cleanup error not reported: notifications=%d err=%v", notifications, database.backgroundError())
 	}
 	if got := database.valueLogDictLastAppliedDictHashByClass[vlogDictClassSingleValue].Load(); got != 0 {
 		t.Fatalf("stale K cleanup applied candidate hash=%x want 0", got)

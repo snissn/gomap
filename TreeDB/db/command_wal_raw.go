@@ -922,24 +922,83 @@ func commandWALCleanupErrorOnly(err error, allowed ...error) bool {
 	return false
 }
 
-func commandWALCleanupUnavailableOnly(err error) bool {
-	return errors.Is(err, errDurableWALCleanupProofUnavailable) && commandWALCleanupErrorOnly(err,
-		errDurableWALCleanupProofUnavailable, ErrCommandWALAppliedLSNNonContig,
-		commitlog.ErrCommandWALDuplicateLSN, rootpublication.ErrResourcePinned)
+// Disposition is authority produced by a known pre-deletion phase, not by
+// errors.Is/As or sentinel leaves supplied by an observer. Consumers accept only
+// this exact top-level type; joins and mutation failures never inherit it.
+type commandWALCleanupRefusal struct {
+	cause error
+	stale bool
 }
 
-func commandWALCleanupRetryableOnly(err error) bool {
-	return (errors.Is(err, errDurableWALCleanupProofUnavailable) || errors.Is(err, errDurableWALCleanupProofStale) || errors.Is(err, commitlog.ErrCommandWALCleanupSnapshotStale)) &&
-		commandWALCleanupErrorOnly(err, errDurableWALCleanupProofUnavailable, errDurableWALCleanupProofStale,
-			commitlog.ErrCommandWALCleanupSnapshotStale, ErrCommandWALAppliedLSNNonContig,
-			commitlog.ErrCommandWALDuplicateLSN, rootpublication.ErrResourcePinned)
-}
+func (e *commandWALCleanupRefusal) Error() string { return e.cause.Error() }
+func (e *commandWALCleanupRefusal) Unwrap() error { return e.cause }
 
-func normalizeCommandWALCheckpointCleanupError(err error) error {
-	if errors.Is(err, errDurableWALCleanupProofStale) || errors.Is(err, commitlog.ErrCommandWALCleanupSnapshotStale) {
-		return errors.Join(ErrDurableWALCleanupProofStale, err)
+type commandWALCleanupHardFailure struct{ cause error }
+
+func (e *commandWALCleanupHardFailure) Error() string { return e.cause.Error() }
+func (e *commandWALCleanupHardFailure) Unwrap() error { return e.cause }
+func hardCommandWALCleanupFailure(err error) error {
+	if err == nil {
+		return nil
 	}
-	if commandWALCleanupUnavailableOnly(err) {
+	return &commandWALCleanupHardFailure{cause: err}
+}
+
+// Called only from proof capture/revalidation, or journal exclusion refusal
+// before its callback was entered. Mixed hard failures remain hard.
+func commandWALCleanupProofRefusal(err error) error {
+	if !commandWALCleanupErrorOnly(err, errDurableWALCleanupProofUnavailable, errDurableWALCleanupProofStale, commitlog.ErrCommandWALCleanupSnapshotStale) {
+		return err
+	}
+	unavailable := commandWALCleanupErrorOnly(err, errDurableWALCleanupProofUnavailable)
+	return &commandWALCleanupRefusal{cause: err, stale: !unavailable}
+}
+
+func commandWALCleanupUnavailableOnly(err error) bool {
+	refusal, ok := err.(*commandWALCleanupRefusal)
+	return ok && !refusal.stale
+}
+func commandWALCleanupRetryableOnly(err error) bool {
+	_, ok := err.(*commandWALCleanupRefusal)
+	return ok
+}
+
+// IsCommandWALCleanupHardFailure reports a cleanup failure after entering a
+// mutation-capable phase. Its error tree remains visible to explicit callers,
+// but maintenance classifiers must not interpret its sentinels as retry proof.
+func IsCommandWALCleanupHardFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	if _, ok := err.(*commandWALCleanupHardFailure); ok {
+		return true
+	}
+	switch e := err.(type) {
+	case interface{ Unwrap() []error }:
+		for _, child := range e.Unwrap() {
+			if IsCommandWALCleanupHardFailure(child) {
+				return true
+			}
+		}
+	case interface{ Unwrap() error }:
+		return IsCommandWALCleanupHardFailure(e.Unwrap())
+	}
+	return false
+}
+
+// IsCommandWALCleanupProofStale reports a trusted pre-mutation cleanup refusal.
+// Error matching alone cannot authorize retry: observers may return arbitrary
+// error trees, including the public stale sentinel. Wrapping or joining a
+// refusal also loses this disposition because it may introduce hard failures.
+func IsCommandWALCleanupProofStale(err error) bool {
+	refusal, ok := err.(*commandWALCleanupRefusal)
+	return ok && refusal.stale
+}
+func normalizeCommandWALCheckpointCleanupError(err error) error {
+	if refusal, ok := err.(*commandWALCleanupRefusal); ok {
+		if refusal.stale {
+			return &commandWALCleanupRefusal{cause: errors.Join(ErrDurableWALCleanupProofStale, refusal.cause), stale: true}
+		}
 		return nil
 	}
 	return err
@@ -986,7 +1045,7 @@ func (db *DB) cleanupCommandWALCoveredSegmentsV1() (retErr error) {
 		return ErrReadOnly
 	}
 	if db.commandJournal == nil {
-		return fmt.Errorf("%w: command journal owner is not live", errDurableWALCleanupProofUnavailable)
+		return commandWALCleanupProofRefusal(fmt.Errorf("%w: command journal owner is not live", errDurableWALCleanupProofUnavailable))
 	}
 	if err := db.commandWALPoisonedError(); err != nil {
 		return err
@@ -998,7 +1057,7 @@ func (db *DB) cleanupCommandWALCoveredSegmentsV1() (retErr error) {
 		db.commandWALCleanupProofNs.Add(proofNs)
 	}
 	if err != nil {
-		return err
+		return commandWALCleanupProofRefusal(err)
 	}
 	db.commandWALCleanupProofFrontier.Store(proof.cleanupThrough)
 	db.commandWALCleanupProofDurableLSN.Store(proof.durableWALLSN)
@@ -1011,16 +1070,21 @@ func (db *DB) cleanupCommandWALCoveredSegmentsV1() (retErr error) {
 	// otherwise every reopen can retain another empty predecessor forever.
 	if proof.cleanupThrough == 0 {
 		var inactive bool
+		entered := false
 		err := proof.journalOwner.WithCleanupScan(proof.journal, func() error {
+			entered = true
 			var err error
 			inactive, err = commandWALHasInactiveCleanupFiles(db.dir, proof.journal)
 			return err
 		})
 		if err != nil {
-			return err
+			if !entered {
+				return commandWALCleanupProofRefusal(err)
+			}
+			return hardCommandWALCleanupFailure(err)
 		}
 		if !inactive {
-			return db.syncCommandWALCleanupNamespaceIfDirty()
+			return hardCommandWALCleanupFailure(db.syncCommandWALCleanupNamespaceIfDirty())
 		}
 	}
 	scanStart := time.Now()
@@ -1029,7 +1093,9 @@ func (db *DB) cleanupCommandWALCoveredSegmentsV1() (retErr error) {
 	// exact-handle reader; no payload classification is cached between scans.
 	// Retain append exclusion through the complete scan so they inspect one
 	// immutable physical prefix. Release it before durablePublishMu below.
+	scanEntered := false
 	err = proof.journalOwner.WithCleanupScan(proof.journal, func() error {
+		scanEntered = true
 		var scanErr error
 		decisions, scanErr = scanCommandWALSegmentsForCleanupProof(db.dir, proof.cleanupThrough, proof.durableWALLSN, db.walMaxSegmentBytes)
 		return scanErr
@@ -1040,13 +1106,16 @@ func (db *DB) cleanupCommandWALCoveredSegmentsV1() (retErr error) {
 		db.commandWALCleanupScanNs.Add(scanNs)
 	}
 	defer closeCommandWALCleanupDecisions(decisions)
-	if commandWALCleanupErrorOnly(err, ErrCommandWALAppliedLSNNonContig, commitlog.ErrCommandWALDuplicateLSN) {
+	if err != nil && !scanEntered {
+		err = commandWALCleanupProofRefusal(err)
+	}
+	if scanEntered && commandWALCleanupErrorOnly(err, ErrCommandWALAppliedLSNNonContig, commitlog.ErrCommandWALDuplicateLSN) {
 		// A missing or duplicate frame in the retained replay interval means the
 		// captured roots/WAL lineage cannot authorize deletion. Nothing has been
 		// unlinked yet, so classify this as unavailable proof: explicit cleanup
 		// still receives the exact lineage error, while checkpoint/close retain
 		// the namespace and allow a later recovery baseline to converge.
-		err = errors.Join(errDurableWALCleanupProofUnavailable, err)
+		err = &commandWALCleanupRefusal{cause: errors.Join(errDurableWALCleanupProofUnavailable, err)}
 	}
 	if err == nil && db.testCommandWALCleanupAfterScanHook != nil {
 		db.testCommandWALCleanupAfterScanHook()
@@ -1054,7 +1123,9 @@ func (db *DB) cleanupCommandWALCoveredSegmentsV1() (retErr error) {
 	if err == nil {
 		db.durablePublishMu.Lock()
 		if err = db.revalidateDurableWALCleanupProofV1(proof); err == nil {
+			entered, registryPinRefusal := false, false
 			err = proof.journalOwner.WithCleanupSnapshot(proof.journal, func(registry *rootpublication.IdentityPinRegistry, current commitlog.CommandJournalCleanupSnapshot) (bool, error) {
+				entered = true
 				if poisonErr := db.commandWALPoisonedError(); poisonErr != nil {
 					return false, poisonErr
 				}
@@ -1076,10 +1147,22 @@ func (db *DB) cleanupCommandWALCoveredSegmentsV1() (retErr error) {
 				// explicit callers still receive ErrResourcePinned. Do not
 				// normalize observer errors, combined errors, or a partial batch.
 				if retainedPin && removeErr == rootpublication.ErrResourcePinned {
-					removeErr = errors.Join(errDurableWALCleanupProofUnavailable, removeErr)
+					registryPinRefusal = true
 				}
 				return false, removeErr
 			})
+			if err != nil {
+				switch {
+				case !entered:
+					err = commandWALCleanupProofRefusal(err)
+				case registryPinRefusal:
+					err = &commandWALCleanupRefusal{cause: errors.Join(errDurableWALCleanupProofUnavailable, err)}
+				default:
+					err = hardCommandWALCleanupFailure(err)
+				}
+			}
+		} else {
+			err = commandWALCleanupProofRefusal(err)
 		}
 		db.durablePublishMu.Unlock()
 	}
@@ -1170,7 +1253,7 @@ func (db *DB) cleanupCommandWALCoveredSegmentsV1() (retErr error) {
 		}
 	}
 	if syncErr := db.syncCommandWALCleanupNamespaceIfDirty(); syncErr != nil {
-		return syncErr
+		return hardCommandWALCleanupFailure(errors.Join(err, syncErr))
 	}
 	return err
 }

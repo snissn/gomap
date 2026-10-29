@@ -8482,7 +8482,7 @@ func backendSyncBoundary(backend BackendDB) error {
 		// attempts command-WAL cleanup. Monotonic appends and rotations retain
 		// newer generations while old covered segments can still be deleted;
 		// only unsafe publication or ownership changes stale the proof.
-		if errors.Is(err, backenddb.ErrDurableWALCleanupProofStale) {
+		if backenddb.IsCommandWALCleanupProofStale(err) {
 			return nil
 		}
 		return err
@@ -8504,7 +8504,7 @@ func backendAutomaticMaintenanceBoundary(backend BackendDB) error {
 	}
 	if maintainer, ok := backend.(backendCoveredPrefixMaintainer); ok {
 		err := maintainer.MaintainCommandWALCoveredPrefix()
-		if errors.Is(err, backenddb.ErrDurableWALCleanupProofStale) {
+		if backenddb.IsCommandWALCleanupProofStale(err) {
 			return nil
 		}
 		return err
@@ -26291,7 +26291,7 @@ func (db *DB) cleanupCommandWALCheckpoint(sync bool) error {
 		// retain newer generations while old covered segments can still be
 		// deleted; only unsafe publication or ownership changes stale the proof.
 		// Do not turn that retained-WAL retry condition into a sticky error.
-		if errors.Is(err, backenddb.ErrDurableWALCleanupProofStale) {
+		if backenddb.IsCommandWALCleanupProofStale(err) {
 			return nil
 		}
 		return err

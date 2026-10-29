@@ -1,6 +1,7 @@
 package db
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
@@ -8,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
@@ -185,10 +187,11 @@ func TestCommandWALCleanupErrorNormalizationPreservesMixedBranches(t *testing.T)
 		err  error
 		safe bool
 	}{
-		{"unavailable", errDurableWALCleanupProofUnavailable, true},
-		{"lineage", errors.Join(errDurableWALCleanupProofUnavailable, fmt.Errorf("gap: %w", ErrCommandWALAppliedLSNNonContig)), true},
-		{"duplicate", errors.Join(errDurableWALCleanupProofUnavailable, commitlog.ErrCommandWALDuplicateLSN), true},
-		{"registry_pin", errors.Join(errDurableWALCleanupProofUnavailable, rootpublication.ErrResourcePinned), true},
+		{"unavailable", commandWALCleanupProofRefusal(errDurableWALCleanupProofUnavailable), true},
+		{"raw_unavailable", errDurableWALCleanupProofUnavailable, false},
+		{"lineage", &commandWALCleanupRefusal{cause: errors.Join(errDurableWALCleanupProofUnavailable, fmt.Errorf("gap: %w", ErrCommandWALAppliedLSNNonContig))}, true},
+		{"duplicate", &commandWALCleanupRefusal{cause: errors.Join(errDurableWALCleanupProofUnavailable, commitlog.ErrCommandWALDuplicateLSN)}, true},
+		{"registry_pin", &commandWALCleanupRefusal{cause: errors.Join(errDurableWALCleanupProofUnavailable, rootpublication.ErrResourcePinned)}, true},
 		{"observer_pin", rootpublication.ErrResourcePinned, false},
 		{"observer_joined_pin", errors.Join(rootpublication.ErrResourcePinned, fault), false},
 		{"mixed_corrupt", errors.Join(errDurableWALCleanupProofUnavailable, commitlog.ErrCorrupt, ErrCommandWALAppliedLSNNonContig), false},
@@ -213,5 +216,164 @@ func TestCommandWALCleanupErrorNormalizationPreservesMixedBranches(t *testing.T)
 				}
 			}
 		})
+	}
+}
+
+// Error matching is observer-controlled and cannot confer cleanup authority.
+type cleanupObserverSpoofUnavailable struct{}
+
+func (*cleanupObserverSpoofUnavailable) Error() string { return "observer spoofed unavailable" }
+func (*cleanupObserverSpoofUnavailable) Unwrap() error { return rootpublication.ErrResourcePinned }
+func (*cleanupObserverSpoofUnavailable) Is(target error) bool {
+	return target == errDurableWALCleanupProofUnavailable
+}
+
+func TestCommandWALCleanupObserverCannotAuthorizeRetry(t *testing.T) {
+	for _, operation := range []string{"explicit", "checkpoint", "actual_checkpoint", "prefix", "close"} {
+		for _, kind := range []string{"custom_is", "joined_stale_pin", "replayed_refusal"} {
+			t.Run(operation+"/"+kind, func(t *testing.T) {
+				dir := t.TempDir()
+				d, err := Open(Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true})
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = d.Close() })
+				requireZeroFrontierFixedContainer(t, d)
+				if err = d.RotateCommandWALActiveSegment(true); err != nil {
+					t.Fatal(err)
+				}
+				if operation == "actual_checkpoint" {
+					if err = d.SetSync([]byte("pending"), []byte("value")); err != nil {
+						t.Fatal(err)
+					}
+				}
+				before := map[string][32]byte{}
+				entries, err := os.ReadDir(WALDirPath(dir))
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, entry := range entries {
+					if entry.IsDir() {
+						continue
+					}
+					path := filepath.Join(WALDirPath(dir), entry.Name())
+					raw, e := os.ReadFile(path)
+					if e != nil {
+						t.Fatal(e)
+					}
+					before[path] = sha256.Sum256(raw)
+				}
+				var observerErr error = &cleanupObserverSpoofUnavailable{}
+				if kind == "joined_stale_pin" {
+					observerErr = errors.Join(errDurableWALCleanupProofStale, rootpublication.ErrResourcePinned)
+				}
+				if kind == "replayed_refusal" {
+					observerErr = commandWALCleanupProofRefusal(errDurableWALCleanupProofStale)
+				}
+				observed := false
+				restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+					if event.Point == durabilitycut.BeforeWALOrAssetUnlink && event.Resource == durabilitycut.ResourceCommandWAL {
+						observed = true
+						return observerErr
+					}
+					return nil
+				})
+				defer restore()
+				switch operation {
+				case "explicit":
+					err = d.CleanupCommandWALCoveredSegments(false)
+				case "checkpoint":
+					err = d.CleanupCommandWALCoveredSegmentsAtCheckpoint(false)
+				case "actual_checkpoint":
+					err = d.Checkpoint()
+				case "prefix":
+					_, err = d.CleanupCommandWALCoveredPrefix()
+				case "close":
+					err = d.Close()
+				}
+				if !observed || err == nil || !errors.Is(err, observerErr) {
+					t.Fatalf("observer refusal swallowed: observed=%t err=%v", observed, err)
+				}
+				for path, digest := range before {
+					raw, e := os.ReadFile(path)
+					if e != nil || sha256.Sum256(raw) != digest {
+						t.Fatalf("observer failure changed %s: %v", path, e)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestCommandWALCleanupDispositionCannotEscapeHardPhase(t *testing.T) {
+	stale := normalizeCommandWALCheckpointCleanupError(commandWALCleanupProofRefusal(errDurableWALCleanupProofStale))
+	if !IsCommandWALCleanupProofStale(stale) || !errors.Is(stale, ErrDurableWALCleanupProofStale) {
+		t.Fatalf("trusted stale lost: %v", stale)
+	}
+	for _, err := range []error{ErrDurableWALCleanupProofStale, errors.Join(stale, commitlog.ErrCorrupt), fmt.Errorf("wrapped: %w", stale), hardCommandWALCleanupFailure(stale)} {
+		if IsCommandWALCleanupProofStale(err) {
+			t.Fatalf("untrusted error authorized retry: %v", err)
+		}
+	}
+	hard := hardCommandWALCleanupFailure(errors.Join(stale, rootpublication.ErrResourcePinned))
+	for _, err := range []error{hard, fmt.Errorf("wrapped: %w", hard), errors.Join(hard, ErrVacuumConcurrentMutation)} {
+		if !IsCommandWALCleanupHardFailure(err) || compactStorageIndexVacuumTransient(err) {
+			t.Fatalf("hard cleanup classified transient: %v", err)
+		}
+	}
+}
+
+func TestCommandWALCleanupSyncObserverCannotAuthorizeRetry(t *testing.T) {
+	for _, operation := range []string{"explicit", "checkpoint", "actual_checkpoint", "prefix", "close"} {
+		for _, kind := range []string{"custom_is", "joined_stale_pin", "replayed_refusal"} {
+			t.Run(operation+"/"+kind, func(t *testing.T) {
+				dir := t.TempDir()
+				d, err := Open(Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true})
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = d.Close() })
+				requireZeroFrontierFixedContainer(t, d)
+				if err = d.RotateCommandWALActiveSegment(true); err != nil {
+					t.Fatal(err)
+				}
+				if operation == "actual_checkpoint" {
+					if err = d.SetSync([]byte("pending"), []byte("value")); err != nil {
+						t.Fatal(err)
+					}
+				}
+				var observerErr error = &cleanupObserverSpoofUnavailable{}
+				if kind == "joined_stale_pin" {
+					observerErr = errors.Join(errDurableWALCleanupProofStale, rootpublication.ErrResourcePinned)
+				}
+				if kind == "replayed_refusal" {
+					observerErr = commandWALCleanupProofRefusal(errDurableWALCleanupProofStale)
+				}
+				observed := false
+				restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+					if event.Point == durabilitycut.BeforeDeletionDirectorySync && event.Resource == durabilitycut.ResourceCommandWAL {
+						observed = true
+						return observerErr
+					}
+					return nil
+				})
+				defer restore()
+				switch operation {
+				case "explicit":
+					err = d.CleanupCommandWALCoveredSegments(false)
+				case "checkpoint":
+					err = d.CleanupCommandWALCoveredSegmentsAtCheckpoint(false)
+				case "actual_checkpoint":
+					err = d.Checkpoint()
+				case "prefix":
+					_, err = d.CleanupCommandWALCoveredPrefix()
+				case "close":
+					err = d.Close()
+				}
+				if !observed || err == nil || !errors.Is(err, observerErr) {
+					t.Fatalf("observer refusal swallowed: observed=%t err=%v", observed, err)
+				}
+			})
+		}
 	}
 }

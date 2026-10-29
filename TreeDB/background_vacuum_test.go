@@ -38,8 +38,8 @@ func TestBackgroundIndexVacuumConcurrentMutationIsRetryOnly(t *testing.T) {
 	if backgroundIndexVacuumShouldReport(backenddb.ErrVacuumUnsupported) {
 		t.Fatal("unsupported capability classified as permanent background error")
 	}
-	if backgroundIndexVacuumShouldReport(backenddb.ErrDurableWALCleanupProofStale) {
-		t.Fatal("stale checkpoint-cleanup proof classified as permanent background error")
+	if !backgroundIndexVacuumShouldReport(backenddb.ErrDurableWALCleanupProofStale) {
+		t.Fatal("unproven stale checkpoint error suppressed")
 	}
 	if backgroundIndexVacuumShouldReport(rootpublication.ErrResourcePinned) {
 		t.Fatal("pinned stable resource classified as permanent background error")
@@ -1656,11 +1656,11 @@ func TestBackgroundIndexVacuumErrorOutcomes(t *testing.T) {
 			wantRecoverableRoots: 1,
 		},
 		{
-			name:                  "stale checkpoint cleanup",
-			err:                   backenddb.ErrDurableWALCleanupProofStale,
-			wantRetryReason:       backgroundIndexVacuumRetryReasonCheckpointCleanup,
-			wantOutcome:           backgroundIndexVacuumOutcomeRetry,
-			wantCheckpointCleanup: 1,
+			name:            "unproven stale checkpoint cleanup",
+			err:             backenddb.ErrDurableWALCleanupProofStale,
+			wantRetryReason: backgroundIndexVacuumRetryReasonNone,
+			wantOutcome:     backgroundIndexVacuumOutcomePermanentFailure,
+			wantPermanent:   1, wantReports: 1,
 		},
 		{
 			name:               "pinned stable resource",
