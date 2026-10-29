@@ -44,6 +44,8 @@ job. Controlled capture gets 900 seconds plus the same cleanup budget. These
 budgets bound normal waits, not stalled filesystem or operating-system calls.
 A nonzero exit, timeout, failed test, incomplete
 capture or failed applicable gate emits `completed:false` and fails the job.
+Supervisor receipts bind checkout HEAD and invocation run/attempt before child
+launch; external release rejects foreign or inconsistent supervisor outcomes.
 Partial artifacts upload with a unique run/attempt name; existing packets are
 refused. Checkout, toolchain setup and upload occupy the remaining job headroom.
 The 75%-of-job *whole-job* target is unproven until hosted runs measure those

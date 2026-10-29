@@ -19,6 +19,46 @@ spec.loader.exec_module(m)
 
 
 class SupervisorTest(unittest.TestCase):
+    def test_main_binds_checkout_identity_and_actions_invocation_before_launch(self):
+        env = {'M0_QUALIFICATION_PROFILE': 'controlled-performance', 'M0_CONTROLLED': '1',
+               'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '2', 'M0_SOURCE_SHA': 'b' * 40,
+               'RUN_DIR': '/unused/new-packet'}
+        with mock.patch.dict(os.environ, env), \
+             mock.patch.object(m.subprocess, 'check_output', side_effect=['/bound/root\n', 'a' * 40 + '\n']) as git, \
+             mock.patch.object(m, 'supervise', return_value=0) as launch:
+            self.assertEqual(m.main(), 0)
+        self.assertEqual(git.call_args_list[1].args[0], ['git', '-C', '/bound/root', 'rev-parse', 'HEAD'])
+        self.assertEqual(launch.call_args.kwargs['identity'], {
+            'source_sha': 'a' * 40, 'run': {'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '2'}})
+
+    def test_controlled_invocation_requires_bound_run_and_attempt(self):
+        for key in ('GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT'):
+            with self.subTest(key=key), mock.patch.dict(os.environ, {
+                    'M0_QUALIFICATION_PROFILE': 'controlled-performance', 'M0_CONTROLLED': '1',
+                    'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '2', key: ''}), \
+                 mock.patch.object(m.subprocess, 'check_output', side_effect=['/bound/root', 'a' * 40]), \
+                 mock.patch.object(m, 'supervise') as launch:
+                with self.assertRaisesRegex(ValueError, 'exact source/run/attempt'):
+                    m.main()
+                launch.assert_not_called()
+
+    def test_supervisor_freezes_identity_before_child_launch(self):
+        identity = {'source_sha': 'a' * 40,
+                    'run': {'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '2'}}
+        real_popen = subprocess.Popen
+        def launch(*args, **kwargs):
+            identity['source_sha'] = 'b' * 40
+            identity['run']['GITHUB_RUN_ATTEMPT'] = '3'
+            return real_popen(*args, **kwargs)
+        with tempfile.TemporaryDirectory() as directory, \
+             mock.patch.object(m.subprocess, 'Popen', side_effect=launch):
+            packet = Path(directory) / 'packet'
+            self.assertEqual(m.supervise([sys.executable, '-c', 'pass'], packet,
+                'controlled-performance', 900, grace=0.1, identity=identity), 0)
+            receipt = json.loads((packet / 'ci-budget.json').read_text())
+            self.assertEqual(receipt['source_sha'], 'a' * 40)
+            self.assertEqual(receipt['run']['GITHUB_RUN_ATTEMPT'], '2')
+
     def test_controlled_profile_cannot_bypass_explicit_custody_mode(self):
         for profile, mode in [('controlled-performance', '0'), ('controlled-performance', ''),
                               ('hosted-semantic', '1'), ('hosted-semantic', 'invalid')]:

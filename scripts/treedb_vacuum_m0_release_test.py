@@ -16,6 +16,9 @@ sys.path.insert(0, str(HERE))
 spec = importlib.util.spec_from_file_location('release', HERE / 'treedb_vacuum_m0_release.py')
 m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
+spec_ci = importlib.util.spec_from_file_location('supervisor', HERE / 'treedb_vacuum_m0_ci.py')
+ci = importlib.util.module_from_spec(spec_ci)
+spec_ci.loader.exec_module(ci)
 
 
 class ReleaseTests(unittest.TestCase):
@@ -47,6 +50,7 @@ class ReleaseTests(unittest.TestCase):
         self.final['phase'] = 'post-upload'
         self.write()
         (self.packet / 'ci-budget.json').write_text(json.dumps({
+            'source_sha': self.initial['source_sha'], 'run': self.initial['runner'],
             'qualification_profile': 'controlled-performance', 'completed': True,
             'exit_status': 0, 'termination_reason': 'capture-exit'}))
 
@@ -75,12 +79,56 @@ class ReleaseTests(unittest.TestCase):
 
     def test_failed_capture_remains_failed_after_successful_release(self):
         (self.packet / 'ci-budget.json').write_text(json.dumps({
+            'source_sha': self.initial['source_sha'], 'run': self.initial['runner'],
             'qualification_profile': 'controlled-performance', 'completed': False,
             'exit_status': 124, 'termination_reason': 'timeout'}))
         self.assertFalse(m.observe(self.packet, self.proc)['capture_outcome']['completed'])
         (self.packet / 'ci-budget.json').unlink()
         with self.assertRaises(FileNotFoundError):
             m.observe(self.packet, self.proc)
+
+    def test_real_successful_foreign_supervisor_receipts_are_rejected(self):
+        original = {'source_sha': self.initial['source_sha'], 'run': self.initial['runner']}
+        for field in ('matching', 'source', 'run', 'attempt'):
+            identity = copy.deepcopy(original)
+            if field == 'source':
+                identity['source_sha'] = 'b' * 40
+            elif field == 'run':
+                identity['run']['GITHUB_RUN_ID'] = '124'
+            elif field == 'attempt':
+                identity['run']['GITHUB_RUN_ATTEMPT'] = '3'
+            foreign = self.root / field
+            self.assertEqual(ci.supervise([sys.executable, '-c', 'pass'], foreign,
+                'controlled-performance', 900, grace=0.1, identity=identity), 0)
+            raw = (foreign / 'ci-budget.json').read_bytes()
+            self.assertTrue(json.loads(raw)['completed'])
+            (self.packet / 'ci-budget.json').write_bytes(raw)
+            if field == 'matching':
+                self.assertTrue(m.observe(self.packet, self.proc)['capture_outcome']['completed'])
+            else:
+                with self.subTest(field=field), self.assertRaisesRegex(ValueError, 'supervisor source/run/attempt'):
+                    m.observe(self.packet, self.proc)
+
+    def test_unbound_legacy_supervisor_receipt_is_rejected(self):
+        original = json.loads((self.packet / 'ci-budget.json').read_text())
+        for key in ('source_sha', 'run'):
+            value = dict(original)
+            del value[key]
+            (self.packet / 'ci-budget.json').write_text(json.dumps(value))
+            with self.subTest(key=key), self.assertRaisesRegex(ValueError, 'supervisor source/run/attempt'):
+                m.observe(self.packet, self.proc)
+
+    def test_contradictory_supervisor_outcomes_are_rejected(self):
+        original = json.loads((self.packet / 'ci-budget.json').read_text())
+        for change in ({'exit_status': 124}, {'completed': False},
+                       {'termination_reason': 'timeout'}, {'exit_status': -1},
+                       {'termination_reason': 'interrupted', 'exit_status': 143, 'completed': False},
+                       {'termination_reason': 'cleanup-failure', 'exit_status': 127, 'completed': False},
+                       {'interrupted_signal': True}, {'interrupted_signal': 15}):
+            with self.subTest(change=change):
+                (self.packet / 'ci-budget.json').write_text(json.dumps(dict(original, **change)))
+                with self.assertRaisesRegex(ValueError, 'outcome is inconsistent'):
+                    m.observe(self.packet, self.proc)
 
     def test_missing_post_upload_cannot_complete_custody(self):
         (self.packet / 'environment-post-upload.json').unlink()

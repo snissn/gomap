@@ -2,6 +2,7 @@
 """Own, bound and account for one M0 capture process group."""
 import json
 import os
+import re
 from pathlib import Path
 import signal
 import subprocess
@@ -9,10 +10,14 @@ import sys
 import time
 
 
-def supervise(command, run_dir, profile, budget, grace=30):
+def supervise(command, run_dir, profile, budget, grace=30, identity=None):
     run_dir = Path(run_dir)
     if run_dir.exists():
         raise ValueError(f"refusing existing packet: {run_dir}")
+    # Bind before launch/publication; child-side environment or packet files do
+    # not supply supervisor provenance. Copy the invocation's run map too.
+    source_sha = identity.get("source_sha") if identity is not None else None
+    run_identity = dict(identity["run"]) if identity is not None else None
     child = None
     interrupted = None
     reason = "capture-exit"
@@ -103,7 +108,8 @@ def supervise(command, run_dir, profile, budget, grace=30):
             reason, status = "interrupted", 128 + interrupted
         if status < 0:
             status = 128 - status
-        receipt = {"qualification_profile": profile, "capture_budget_seconds": budget,
+        receipt = {"source_sha": source_sha, "run": run_identity,
+                   "qualification_profile": profile, "capture_budget_seconds": budget,
                    "cleanup_budget_seconds": 4 * grace, "exit_status": status, "completed": status == 0 and reason == "capture-exit",
                    "termination_reason": reason, "interrupted_signal": interrupted}
         publication_mask = None
@@ -146,8 +152,17 @@ def main():
     if (profile == "controlled-performance") != (os.environ.get("M0_CONTROLLED", "0") == "1") or os.environ.get("M0_CONTROLLED", "0") not in ("0", "1"):
         raise ValueError("qualification profile and explicit custody mode disagree")
     root = subprocess.check_output(["git", "rev-parse", "--show-toplevel"], text=True).strip()
+    # Resolve source from this checkout, not M0_SOURCE_SHA or child receipts.
+    # Actions supplies run/attempt at invocation; freeze both before spawn.
+    identity = {"source_sha": subprocess.check_output(
+        ["git", "-C", root, "rev-parse", "HEAD"], text=True).strip(),
+        "run": {key: os.environ.get(key) for key in ("GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT")}}
+    if profile == "controlled-performance" and (
+            not re.fullmatch(r"[0-9a-f]{40}", identity["source_sha"]) or
+            any(not re.fullmatch(r"[1-9]\d*", value or "") for value in identity["run"].values())):
+        raise ValueError("controlled supervisor requires exact source/run/attempt identity")
     return supervise(["bash", str(Path(root) / "scripts/treedb_vacuum_m0_capture.sh")],
-                     os.environ["RUN_DIR"], profile, 720 if profile == "hosted-semantic" else 900)
+                     os.environ["RUN_DIR"], profile, 720 if profile == "hosted-semantic" else 900, identity=identity)
 
 
 if __name__ == "__main__":

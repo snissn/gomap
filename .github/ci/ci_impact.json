@@ -12,7 +12,7 @@
     "M0 observation is manual diagnostic-only on a separately fixed product; no forecast starts it or replaces failed M0 acceptance.",
     "Bounded maintenance comparison is a manually granted diagnostic on fixed baseline/candidate products; no forecast starts it or establishes cost, M0 or native acceptance."
   ],
-  "discovery_source_sha256": "1e78c43b510ef57aa5ec3e95ab02c4fbbb0d042cc82a07f78cc58c73ac9ff5fe",
+  "discovery_source_sha256": "1497b4de1e72e23e7bc962f15136fc850521e5efc6689a79ea5efab63017df75",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
@@ -213,7 +213,7 @@
       "mode": "100755"
     },
     "scripts/treedb_vacuum_m0_ci.py": {
-      "git_blob": "d99a3c3b6aa9510309962c7e1d9038f01357cd84",
+      "git_blob": "2b66fa5071bb0e93b98c5ff164046c9dc1a2b7bc",
       "mode": "100644"
     },
     "scripts/treedb_vacuum_m0_ci.sh": {
@@ -221,7 +221,7 @@
       "mode": "100755"
     },
     "scripts/treedb_vacuum_m0_ci_test.py": {
-      "git_blob": "7c1e85d83a92e9cf9f9af8af4b79a060d29ddc37",
+      "git_blob": "10afdc818b337b660435cc402d4128844b3af72e",
       "mode": "100644"
     },
     "scripts/treedb_vacuum_m0_environment.py": {
@@ -233,11 +233,11 @@
       "mode": "100644"
     },
     "scripts/treedb_vacuum_m0_release.py": {
-      "git_blob": "d9251228d10cd39b0d1ede1b3e92d607beb84b94",
+      "git_blob": "2ea4fc08e65af6bcefbab88f741725c65d60dee1",
       "mode": "100644"
     },
     "scripts/treedb_vacuum_m0_release_test.py": {
-      "git_blob": "09bf52ad6b35cfbb9178c187e7e2eaedb94701f2",
+      "git_blob": "4f87d41ef057afa23c1dee0fc46f1061fd33787b",
       "mode": "100644"
     },
     "scripts/treedb_vacuum_m0_summarize.py": {

@@ -291,7 +291,10 @@ python3 /reviewed-source/scripts/treedb_vacuum_m0_release.py \
 The output must be a new path outside that assembly. Both success and failure
 receipts refuse overwrite. The helper requires successful admission/post-upload
 observations with identical source, run/attempt, boot and lease identity, and the
-controlled supervisor outcome. It verifies that the original listener PID/start
+controlled supervisor outcome. The supervisor independently binds its checkout
+HEAD and invocation run/attempt before child launch. Release requires all three
+identities to match the custody receipts, and rejects contradictory completion,
+exit status, termination reason or interruption outcomes. It verifies that the original listener PID/start
 identity has exited and that the original lease inode has no observed kernel
 locks or blocked requests. It records hashes of both custody receipts and the
 supervisor receipt, preserving the capture outcome even when it failed. It

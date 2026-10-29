@@ -29,6 +29,8 @@ def observe(packet, proc=Path('/proc')):
     raw = (packet / 'ci-budget.json').read_bytes()
     hashes['ci-budget'] = hashlib.sha256(raw).hexdigest()
     capture = json.loads(raw)
+    if not isinstance(capture, dict):
+        raise ValueError('controlled supervisor outcome receipt is missing or malformed')
     if capture.get('qualification_profile') != 'controlled-performance' or type(capture.get('exit_status')) is not int or type(capture.get('completed')) is not bool:
         raise ValueError('controlled supervisor outcome receipt is missing or malformed')
     initial, final = receipts['admission'], receipts['post-upload']
@@ -44,6 +46,20 @@ def observe(packet, proc=Path('/proc')):
     identity = {key: initial['runner'].get(key) for key in ('GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT')}
     if any(not re.fullmatch(r'[1-9]\d*', value or '') for value in identity.values()) or any(final['runner'].get(key) != value for key, value in identity.items()):
         raise ValueError('run identity is missing or changed')
+    if capture.get('source_sha') != initial['source_sha'] or capture.get('run') != identity:
+        raise ValueError('supervisor source/run/attempt identity is missing or changed')
+    reason = capture.get('termination_reason')
+    status = capture['exit_status']
+    interrupted = capture.get('interrupted_signal')
+    if (not 0 <= status <= 255 or
+            reason not in ('capture-exit', 'timeout', 'launch-failure', 'cleanup-failure', 'interrupted') or
+            capture['completed'] != (status == 0 and reason == 'capture-exit') or
+            interrupted is not None and (type(interrupted) is not int or interrupted not in (1, 2, 15)) or
+            reason == 'capture-exit' and interrupted is not None or
+            reason == 'interrupted' and (interrupted is None or status != 128 + interrupted) or
+            reason in ('timeout', 'launch-failure', 'cleanup-failure') and
+            status != {'timeout': 124, 'launch-failure': 127, 'cleanup-failure': 125}[reason]):
+        raise ValueError('supervisor outcome is inconsistent')
     boot = (proc / 'sys/kernel/random/boot_id').read_text()
     if initial.get('boot_id') != {'value': boot} or final.get('boot_id') != {'value': boot}:
         raise ValueError('release must be observed on the original boot')
