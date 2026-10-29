@@ -3,6 +3,7 @@ import fcntl
 import importlib.util
 import json
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -284,7 +285,7 @@ fi
 
 
 class M4CallerTests(unittest.TestCase):
-    def run_m4(self, overrides=None, admitted=False, reuse=None):
+    def run_m4(self, overrides=None, admitted=False, reuse=None, without_host_rg=False):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
@@ -302,11 +303,25 @@ class M4CallerTests(unittest.TestCase):
             'findmnt': '#!/bin/sh\necho "/dev/fixture ext4 rw"\n',
             'go': '#!/bin/bash\nprintf "%s\\n" "$*" >> "$M4_TEST_ROOT/go-calls"\nif [[ "$1" == test ]]; then echo "--- PASS: TestCloseOptInVacuumIndexOnlineShrinksAndReopens"; else echo fixture; fi\n',
         }
+        # Model the fixture's search operations with portable grep, preserving
+        # match/no-match status rather than returning an unconditional success.
+        scripts['rg'] = '#!/bin/sh\ncase "$1" in -n) exec grep -Rn -- "$2" "$3";; -q) exec grep -q -- "$2" "$3";; *) exit 2;; esac\n'
+        host_path = os.environ['PATH']
+        if without_host_rg:
+            system_bin = root / 'system-bin'
+            system_bin.mkdir()
+            for name in ('bash', 'dirname', 'mkdir', 'find', 'python3', 'awk',
+                         'uname', 'env', 'tee', 'cp', 'jq', 'grep'):
+                executable = shutil.which(name)
+                self.assertIsNotNone(executable, name)
+                (system_bin / name).symlink_to(executable)
+            host_path = str(system_bin)
+            self.assertIsNone(shutil.which('rg', path=host_path))
         for name, data in scripts.items():
             path = root / 'bin' / name
             path.write_text(data)
             path.chmod(0o755)
-        env = dict(os.environ, PATH=str(root / 'bin') + os.pathsep + os.environ['PATH'],
+        env = dict(os.environ, PATH=str(root / 'bin') + os.pathsep + host_path,
                    M4_TEST_ROOT=str(root), RUN_DIR=str(root / 'packet'),
                    RUN_FULL_TESTS='false', RUN_RACE_TESTS='false', PYTHONDONTWRITEBYTECODE='1')
         for name in ('M0_CONTROLLED', 'M0_QUALIFICATION_PROFILE', 'CPU_SET', 'GOMAXPROCS', 'M0_LEASE_PATH', 'M0_PACKET_DIR'):
@@ -326,6 +341,20 @@ class M4CallerTests(unittest.TestCase):
             capture.chmod(0o755)
         result = subprocess.run(['bash', str(caller)], env=env, capture_output=True, text=True)
         return root, result
+
+    def test_caller_fixture_without_host_rg_preserves_close_test_gate(self):
+        config = {'M0_CONTROLLED': '1', 'M0_QUALIFICATION_PROFILE': 'controlled-performance',
+                  'CPU_SET': '0', 'GOMAXPROCS': '1', 'M0_LEASE_PATH': '/fixture.lock'}
+        root, result = self.run_m4(config, admitted=True, without_host_rg=True)
+        self.assertEqual(result.returncode, 23, result.stderr)
+        self.assertEqual((root / 'nested-mode').read_text(), 'controlled-performance:1\n')
+        # A search fixture must still reject a missing PASS, not bypass the gate.
+        probe = root / 'missing-pass.txt'
+        probe.write_text('--- SKIP: TestCloseOptInVacuumIndexOnlineShrinksAndReopens\n')
+        checked = subprocess.run([str(root / 'bin/rg'), '-q',
+            '^--- PASS: TestCloseOptInVacuumIndexOnlineShrinksAndReopens', str(probe)],
+            env=dict(os.environ, PATH=str(root / 'system-bin')), capture_output=True)
+        self.assertEqual(checked.returncode, 1)
 
     def test_missing_controlled_configuration_fails_before_any_go_work(self):
         root, result = self.run_m4()
