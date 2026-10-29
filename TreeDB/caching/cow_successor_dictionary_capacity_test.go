@@ -17,6 +17,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/dictdb"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 // Hide only the optional independent definition capture capability.
@@ -319,28 +320,133 @@ func TestCOWOwnedDictionaryBusySharedPreservesBorrowedRefusal(t *testing.T) {
 	}
 	db.dictStore = cowCapturedDictionaryOnlyStore{store}
 	defer func() { db.dictStore = store }()
+	// Pre-admit only the real cut-local workspace's empty codec slot. The
+	// pressure control below must reach codec acquisition, not wrapper growth.
+	s.cowReadMu.Lock()
+	if len(w.codecs) != 0 {
+		s.cowReadMu.Unlock()
+		t.Fatal("fixture unexpectedly warmed a cut-local codec")
+	}
+	slot, slotErr := w.addCodecSlot()
+	localFile, fileErr := w.file(pointer.ValuePtr())
+	s.cowReadMu.Unlock()
+	if slotErr != nil || fileErr != nil {
+		t.Fatalf("pre-admit local slot/file: %v %v", slotErr, fileErr)
+	}
+	budget := db.cow.budget
+	if budget.Limits() != memtable.DefaultCOWLimits() || budget.Stats().ReservedBytes < 32<<20 {
+		t.Fatal("fixture must retain original default limits and maintenance reservation")
+	}
 	db.cow.physicalMu.Lock()
-	codec := db.cow.physicalReader.codecs[0]
+	physicalLocked := true
+	defer func() {
+		if physicalLocked {
+			db.cow.physicalMu.Unlock()
+		}
+	}()
+	shared := db.cow.physicalReader
+	codec := shared.codecs[0]
+	if codec == nil || codec.decoder == nil || codec.lease == nil {
+		t.Fatal("fixture did not retain a live shared codec")
+	}
+	decoder, codecLease := codec.decoder, codec.lease
+	unchanged := func() bool {
+		return db.cow.physicalReader == shared && shared.codecs[0] == codec && codec.decoder == decoder && codec.lease == codecLease
+	}
+	// Actual bounded private storage can coexist with the busy shared owner.
+	// Nil alone is not a semantic or ownership witness.
+	positiveBefore := budget.Stats()
+	positive := make(chan error, 1)
+	go func() {
+		it, readErr := s.Iterator([]byte("a000"), []byte("a001"))
+		if readErr == nil && it == nil {
+			readErr = errors.New("nil busy public iterator")
+		}
+		if it != nil {
+			if readErr == nil && (!it.Valid() || string(it.Key()) != "a000" || !bytes.Equal(it.Value(), want) || it.Error() != nil) {
+				readErr = fmt.Errorf("busy public iterator semantics: %v", it.Error())
+			}
+			if readErr == nil {
+				bound, ok := it.(*snapshotBoundIterator)
+				if !ok {
+					readErr = fmt.Errorf("busy iterator wrapper %T", it)
+				} else if inner, ok := bound.inner.(*cowMergeIterator); !ok || inner.workspace == nil || inner.workspace.snapshot != s {
+					readErr = errors.New("busy iterator lost complete-cut workspace")
+				} else {
+					matching := 0
+					for _, local := range inner.workspace.codecs {
+						if local != nil && local.id == shape.DictID {
+							matching++
+							if _, ok := local.decoder.(*valuelog.COWBoundedDecoder); !ok || local.definition != nil || local == codec {
+								readErr = errors.New("busy iterator did not independently admit its captured bounded codec")
+							}
+						}
+					}
+					if matching != 1 {
+						readErr = fmt.Errorf("busy iterator local matching codecs=%d", matching)
+					}
+				}
+			}
+			readErr = errors.Join(readErr, it.Close())
+		}
+		positive <- readErr
+	}()
+	select {
+	case readErr := <-positive:
+		positiveAfter := budget.Stats()
+		refunded := positiveAfter.TotalBytes == positiveBefore.TotalBytes && positiveAfter.ReservedBytes == positiveBefore.ReservedBytes &&
+			positiveAfter.ExternalBytes == positiveBefore.ExternalBytes && positiveAfter.ExternalLeases == positiveBefore.ExternalLeases
+		if readErr != nil || !unchanged() || !refunded || !bytes.Equal(owned, want) {
+			t.Fatalf("busy public positive: unchanged=%t err=%v", unchanged(), readErr)
+		}
+	case <-time.After(2 * time.Second):
+		db.cow.physicalMu.Unlock()
+		physicalLocked = false
+		<-positive
+		t.Fatal("unpressured borrowed read blocked on busy shared owner")
+	}
+	// The workspace, empty codec slot and pinned file are already admitted,
+	// and this exact cut already owns the captured definition. readInspected
+	// reaches codecWithDictionary before buffer growth; its next admission is
+	// the actual codec base lease. Fill the real parent, including the pressure
+	// lease's own header, rather than duplicating decoder-size formulas.
+	header := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
+	limit, before := budget.Limits().MaxInFlightBytes, budget.Stats()
+	if before.ReservedBytes > limit || limit-before.ReservedBytes < header {
+		t.Fatal("fixture cannot admit its pressure lease")
+	}
+	pressure, err := budget.AcquireExternal(limit - before.ReservedBytes - header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pressure.Close()
+	pressured := budget.Stats()
+	if pressured.ReservedBytes != limit {
+		t.Fatal("pressure did not fill the original parent budget")
+	}
 	done := make(chan error, 1)
 	go func() {
-		it, err := s.Iterator([]byte("a000"), []byte("a001"))
-		if it != nil {
-			_ = it.Close()
-		}
-		done <- err
+		s.cowReadMu.Lock()
+		var leaf [page.PageSize]byte
+		_, readErr := w.readInspected(localFile, pointer.ValuePtr(), shape, true, leaf[:], nil)
+		s.cowReadMu.Unlock()
+		done <- readErr
 	}()
 	var readErr error
 	select {
 	case readErr = <-done:
 	case <-time.After(2 * time.Second):
 		db.cow.physicalMu.Unlock()
+		physicalLocked = false
 		<-done
-		t.Fatal("borrowed admission blocked on busy shared owner")
+		t.Fatal("borrowed codec admission blocked on busy shared owner")
 	}
-	unchanged := db.cow.physicalReader.codecs[0] == codec && codec.decoder != nil && codec.lease != nil
+	stable := unchanged() && w.codecs[slot] == nil && budget.Stats() == pressured
 	db.cow.physicalMu.Unlock()
-	if !unchanged || !errors.Is(readErr, memtable.ErrCOWCapacity) {
-		t.Fatalf("busy shared ownership: unchanged=%t err=%v", unchanged, readErr)
+	physicalLocked = false
+	pressure.Close()
+	if !stable || !errors.Is(readErr, memtable.ErrCOWCapacity) {
+		t.Fatalf("busy shared codec refusal: stable=%t err=%v", stable, readErr)
 	}
 	if !bytes.Equal(owned, want) {
 		t.Fatal("failed borrowed read changed owned result")

@@ -1,0 +1,69 @@
+{
+  "argv": [
+    "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.0.linux-amd64/bin/go",
+    "test",
+    "-json",
+    "-count=1",
+    "-timeout=6m",
+    "-p=1",
+    "./TreeDB/collections",
+    "-run",
+    "^TestTypedStorage.*$"
+  ],
+  "cwd": "/mnt/fast4tb/gomap-mongo-execution-20261024/consumer-canonical",
+  "environment_policy": "explicit whitelist plus frozen cell values; no full environment dump",
+  "start_utc": "2026-10-27T00:08:42.760539+00:00",
+  "wall_limit_seconds": 600,
+  "exit_code": 0,
+  "timed_out": false,
+  "error": null,
+  "cleanup": {
+    "pgid": 211186,
+    "alive_before_cleanup": false,
+    "signals": [],
+    "alive_after_cleanup": false
+  },
+  "pid": 211186,
+  "end_utc": "2026-10-27T00:09:20.340844+00:00",
+  "elapsed_seconds": 37.58029777929187,
+  "log": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/native-write-failure-repair1/capacity-naming-green1.log",
+  "log_sha256": "66fee1514cdad74a1b7ef5f5d139089a637ac592dc000a3384d0c970fc4736c7",
+  "process_ok": true,
+  "source_before": {
+    "head": "49baf47d6c3748467e08845caff0ede779f7f9c6",
+    "tree": "12443f144138a9e979578e3b2d43ee9170b15ab3",
+    "status": "M  .github/ci/ci_impact.json\nA  TreeDB/caching/cow_native_observation_test.go\nM  TreeDB/caching/cow_native_txn.go\nM  TreeDB/collections/native_existing.go\nM  TreeDB/collections/native_json_crud.go\nA  TreeDB/collections/native_producer_gate.go\nA  TreeDB/collections/native_producer_gate_test.go\nM  TreeDB/collections/typed_storage_naming_test.go\nM  TreeDB/db/native_semantic_state.go\nM  TreeDB/docs/spec/cow-cache-publication.md\nA  TreeDB/documentservice/ordinary_columngraph_native_concurrent_write_test.go",
+    "changed_files": {
+      ".github/ci/ci_impact.json": "a79c11b3d465642fd5873627929b783376f6f752204c3ed36cf07a0bb2452752",
+      "TreeDB/caching/cow_native_observation_test.go": "adc2f625c57da234784f1aeca1ce955f030183e274d422692d4cb80564027182",
+      "TreeDB/caching/cow_native_txn.go": "c93489418d3cd108394943955e04efea0cbc1a2c87734681963b1bb4e08079bb",
+      "TreeDB/collections/native_existing.go": "c3e9af37041e24c0647c37588b89a6eb20b7bb866c05c11533e85431d32b7a51",
+      "TreeDB/collections/native_json_crud.go": "348a3b23e9a8999d420f50ed6561963d406a04852c16c3537db3eb2fe4a6601e",
+      "TreeDB/collections/native_producer_gate.go": "44e172cfbfeefb761506e42a37f7bef742080782066981ae93335f6d0d85f663",
+      "TreeDB/collections/native_producer_gate_test.go": "ee17a9d1f61102f08f2dac00d1221f1a31435a45e7062166aba23ca274562e2f",
+      "TreeDB/collections/typed_storage_naming_test.go": "0a5e1c9894ee07465c179ce89951e8310ac8a5c3111b456e0bfb702a5f71d95d",
+      "TreeDB/db/native_semantic_state.go": "34719275931ef9787c0ef4f3cc9a007bc8a07bb925e69b8689ae307d278fbbdf",
+      "TreeDB/docs/spec/cow-cache-publication.md": "0e10a04f5df097ba5d7242fcca0f4313cc4b23b21fb843c193e3bba7709140b5",
+      "TreeDB/documentservice/ordinary_columngraph_native_concurrent_write_test.go": "4d254c8e95f682f6f00b595c541a22e43dd2f1111237c9085d1d1b9c48a465c0"
+    }
+  },
+  "source_after": {
+    "head": "49baf47d6c3748467e08845caff0ede779f7f9c6",
+    "tree": "12443f144138a9e979578e3b2d43ee9170b15ab3",
+    "status": "M  .github/ci/ci_impact.json\nA  TreeDB/caching/cow_native_observation_test.go\nM  TreeDB/caching/cow_native_txn.go\nM  TreeDB/collections/native_existing.go\nM  TreeDB/collections/native_json_crud.go\nA  TreeDB/collections/native_producer_gate.go\nA  TreeDB/collections/native_producer_gate_test.go\nM  TreeDB/collections/typed_storage_naming_test.go\nM  TreeDB/db/native_semantic_state.go\nM  TreeDB/docs/spec/cow-cache-publication.md\nA  TreeDB/documentservice/ordinary_columngraph_native_concurrent_write_test.go",
+    "changed_files": {
+      ".github/ci/ci_impact.json": "a79c11b3d465642fd5873627929b783376f6f752204c3ed36cf07a0bb2452752",
+      "TreeDB/caching/cow_native_observation_test.go": "adc2f625c57da234784f1aeca1ce955f030183e274d422692d4cb80564027182",
+      "TreeDB/caching/cow_native_txn.go": "c93489418d3cd108394943955e04efea0cbc1a2c87734681963b1bb4e08079bb",
+      "TreeDB/collections/native_existing.go": "c3e9af37041e24c0647c37588b89a6eb20b7bb866c05c11533e85431d32b7a51",
+      "TreeDB/collections/native_json_crud.go": "348a3b23e9a8999d420f50ed6561963d406a04852c16c3537db3eb2fe4a6601e",
+      "TreeDB/collections/native_producer_gate.go": "44e172cfbfeefb761506e42a37f7bef742080782066981ae93335f6d0d85f663",
+      "TreeDB/collections/native_producer_gate_test.go": "ee17a9d1f61102f08f2dac00d1221f1a31435a45e7062166aba23ca274562e2f",
+      "TreeDB/collections/typed_storage_naming_test.go": "0a5e1c9894ee07465c179ce89951e8310ac8a5c3111b456e0bfb702a5f71d95d",
+      "TreeDB/db/native_semantic_state.go": "34719275931ef9787c0ef4f3cc9a007bc8a07bb925e69b8689ae307d278fbbdf",
+      "TreeDB/docs/spec/cow-cache-publication.md": "0e10a04f5df097ba5d7242fcca0f4313cc4b23b21fb843c193e3bba7709140b5",
+      "TreeDB/documentservice/ordinary_columngraph_native_concurrent_write_test.go": "4d254c8e95f682f6f00b595c541a22e43dd2f1111237c9085d1d1b9c48a465c0"
+    }
+  },
+  "source_unchanged": true
+}

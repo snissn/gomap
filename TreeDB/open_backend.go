@@ -113,7 +113,7 @@ func OpenBackendWithCachedLeafLogStatsAndDeferredVectorBuildMaintenance(opts Opt
 		_ = database.Close()
 		return nil, nil, nil, nil, db.ErrClosed
 	}
-	return database.backend, database.Close, database.Stats, &DeferredVectorBuildMaintenance{db: database}, nil
+	return database.backend, database.Close, database.Stats, database.DeferredVectorBuildMaintenance(), nil
 }
 
 // Resolve public policy before choosing the backend-only cache lifecycle. In

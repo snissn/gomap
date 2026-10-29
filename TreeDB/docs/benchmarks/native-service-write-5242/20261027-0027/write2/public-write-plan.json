@@ -1,0 +1,70 @@
+{
+  "status": "FROZEN before first build/measurement",
+  "question": "Do corrected cold Hybrid and queued writer pressure make every once-only durable public load/lifecycle succeed, and what is current fresh-load cost versus legacy?",
+  "arms": [
+    "legacy",
+    "native"
+  ],
+  "profile": "command_wal_durable",
+  "requested_memtable": "cow_btree",
+  "resolved_backend_contract": "legacy backendOnly maps cow_btree to mutablebtree; nativepublicOpencow_btree+NativeSemanticBackend; compare publication architectures, not isolatedCOW",
+  "vector_strategy": "omitted cosine ColumnGraph botharms",
+  "corpus": "maintained ServiceSharedCOWConsumers2D4096documentfixture; total4096 forboth1and4writers; fixed32requests\u00d7128documents",
+  "fixed_order": [
+    "legacy",
+    "native",
+    "native",
+    "legacy"
+  ],
+  "fresh_processes": 4,
+  "subcases_per_process": [
+    1,
+    4
+  ],
+  "benchtime": "1x",
+  "expected_rows": 8,
+  "retries": 0,
+  "caller_request_retries": 0,
+  "measured_boundary": "all32publicUpsertDocuments calls with DeferVectorIndexRebuild=true, through successful original durable ACKs; includes internal request preparation/commit/completion; one benchop wholeload",
+  "separate_mandatory_phases": [
+    "create/fixture preparation",
+    "successfulOptimize",
+    "exactCount/docs/queries",
+    "Close/reopencontinuity",
+    "ownercleanup"
+  ],
+  "ownership": "sameService+index eachload; disjoint batches; bounded perloadowners; normalb.Nsupported",
+  "semantic_gate": "all32successfuloriginalresponses plus publicread/Optimize/reopenoracles; any conflict/refusal/error stays failed/null; no harness retry",
+  "numeric_gate": null,
+  "qualification": null,
+  "interpretation": "Four predeclared new changed-source diagnostic processes; retain every row/failure/time/B/objects and phase costs; numerical gate and qualification remain null. Any material regression selects causal profiling rather than favorable reruns.",
+  "routing_owner": "root allGo/runtime/sourceintegration/GitHub; sourceonlypublication_seam owns NEWtestbenchmarkfile",
+  "next_action_after_result": "classify actualcapability or largestcost; selectonecausalnextproof withoutfavorableretry",
+  "source_contract_evidence": "evidence/current-feature-public-write-gate-design1/ack-concurrency-addendum.md",
+  "created_utc": "2026-10-27T00:06:33.583845+00:00",
+  "source_head": "49baf47d6c3748467e08845caff0ede779f7f9c6",
+  "harness": "TreeDB/documentservice/shared_cow_write_bench_test.go",
+  "harness_sha256": "dd6d7ebcb5638badbb938ba9891c557e51fe3e9c583fc1d679d4e8f02ec29263",
+  "public_bench": "^BenchmarkServiceSharedCOWWriteLoad$",
+  "metric_units": "standard ns/op,B/op,allocs/op per4096-load; ns/request and ns/record throughput normalization, not request latency; separatephase ns/load",
+  "toolchain": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.0.linux-amd64",
+  "gomaxprocs": 4,
+  "merged_public_log_sha256": "c08afc780f31e5ffcc5fc56d83667a1229b9b805763ce1cd463e6a8df9d0629e",
+  "merged_race_log_sha256": "68e1fed71dd7fdd62dbaaf8825dc82e8cc5b1d9d41717844f4f3101a919d7da1",
+  "process_wall_limit_seconds": 240,
+  "build_wall_limit_seconds": 600,
+  "frozen_utc": "2026-10-27T00:09:43.301864+00:00",
+  "host_measurement_limit": "root exclusive runtime within this graph; no universal host quiet-window certification claimed; diagnostic qualification staysnull",
+  "prior_failed_packet": "evidence/current-feature-service-write-diagnostic1/result.json",
+  "changed_product": "coldpack acquisition beforemixed candidates + currentpressure revalidation beforeoriginalqueued mutation opening, samecaps/workload/strategy/ACK",
+  "not_a_retry": "All original four cells remain FAIL/null. This is a new changed-production diagnostic, not a replacement collection.",
+  "source_binding_rule": "Exact head, staged tree, status and every changed/untracked file are fixed by runner beforebuild and aftereachcell; harness same dd6 diagnostics only relative original478.",
+  "current_correctness": {
+    "original_public_red_log_sha256": "20c3b1ee7d7c73afa1cf6a5b5b53d45e8d7fa9749f5f6343468cd05458f9ba15",
+    "functional_green2_log_sha256": "dec4127c6b636dbbd6451e9c292efb106a01cc6ac9ee81a4297afd71b699e933",
+    "functional_green2_full_exit": "1 onlynamingcountdrift; ALLfunctionalPASS; originalfailurepreserved",
+    "separate_naming_repair_log_sha256": "66fee1514cdad74a1b7ef5f5d139089a637ac592dc000a3384d0c970fc4736c7",
+    "independent_source_accept": "45cb26fd/3b3ae393/ed26984a; exactpacketreceipts",
+    "race": "due; diagnostic doesnotwaive"
+  }
+}

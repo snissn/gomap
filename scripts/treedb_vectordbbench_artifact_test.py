@@ -4591,7 +4591,7 @@ class LifecycleIntegrationTest(unittest.TestCase):
         self.assertFalse(got["analyzable"], got)
         self.assertTrue(any("column graph" in error for error in got["errors"]), got)
 
-    def test_native_ready_asset_uses_positive_root_id(self) -> None:
+    def test_native_ready_asset_refuses_retired_owner_even_with_positive_root_id(self) -> None:
         optimize = {
             "index": {"name": "cohere", "generation": 7, "vector_strategy": "native_runtime"},
             "vector_index_name": "embedding",
@@ -4604,10 +4604,12 @@ class LifecycleIntegrationTest(unittest.TestCase):
             },
         }
 
-        self.assertEqual(
-            harness.lifecycle_ready_asset(optimize, "cohere"),
-            ("cohere:embedding", 9, None),
-        )
+        for require_column_graph in (False, True):
+            with self.subTest(require_column_graph=require_column_graph), \
+                    self.assertRaisesRegex(RuntimeError, "durable column graph"):
+                harness.lifecycle_ready_asset(
+                    optimize, "cohere", require_column_graph=require_column_graph,
+                )
 
     def test_column_graph_route_proof_rejects_stale_reopen_generation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

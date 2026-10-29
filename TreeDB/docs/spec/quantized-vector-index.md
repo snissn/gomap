@@ -31,6 +31,12 @@ representation only, scalar-u8 traversal supplies candidate ordinals and final
 rerank uses indexed/batched packed FP32 dot scoring over the one canonical
 normalized asset. The legacy close-angle stable scorer is not a fallback.
 
+Primary vector encoding remains FP32; primary int8 declarations fail closed.
+Named derived score planes, including supported typed `scalar_u8` rerank and
+typed filtered Hybrid routes, remain separate opt-in capabilities. Historical
+restrictions in the scoped Q2 section below apply to that particular extension,
+not to all current typed routes.
+
 ## User-visible query modes
 
 `VectorIndexDefinition.QuantizedIndexes` declares one or more named derived score

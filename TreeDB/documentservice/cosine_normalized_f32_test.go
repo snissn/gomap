@@ -24,7 +24,7 @@ func TestServiceDenseDiagnosticsRejectsLegacyRepresentations(t *testing.T) {
 	defer db.Close()
 	defer svc.Close()
 	ctx := context.Background()
-	for _, strategy := range []collections.VectorIndexStrategy{collections.VectorIndexStrategyNativeRuntime, collections.VectorIndexStrategyColumnGraph} {
+	for _, strategy := range []collections.VectorIndexStrategy{collections.VectorIndexStrategyColumnGraph} {
 		t.Run(string(strategy), func(t *testing.T) {
 			info, err := svc.CreateIndex(ctx, CreateIndexRequest{
 				Name: "legacy-" + string(strategy), Dimension: 2, Metric: MetricCosine,
@@ -261,7 +261,7 @@ func TestServiceCosineNormalizedF32V1CreateAndAdmission(t *testing.T) {
 		},
 		"requires_column_graph": {
 			Name: "normalized-native", Dimension: 2, Metric: MetricCosine, TypedInput: true,
-			VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyNativeRuntime, Representation: collections.VectorIndexRepresentationCosineNormalizedF32V1},
+			VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: "native_runtime", Representation: collections.VectorIndexRepresentationCosineNormalizedF32V1},
 		},
 		"requires_cosine": {
 			Name: "normalized-l2", Dimension: 2, Metric: MetricL2, TypedInput: true,
@@ -273,8 +273,13 @@ func TestServiceCosineNormalizedF32V1CreateAndAdmission(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := svc.CreateIndex(ctx, req); ErrorCodeOf(err) != CodeInvalidRequest {
-				t.Fatalf("create error=%v code=%s", err, ErrorCodeOf(err))
+			_, err := svc.CreateIndex(ctx, req)
+			want := CodeInvalidRequest
+			if name == "requires_column_graph" || name == "requires_cosine" {
+				want = CodeUnsupported
+			}
+			if ErrorCodeOf(err) != want {
+				t.Fatalf("create error=%v code=%s want=%s", err, ErrorCodeOf(err), want)
 			}
 		})
 	}

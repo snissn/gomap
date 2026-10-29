@@ -202,7 +202,7 @@ func prepareNativeEngineBuildForCompaction(captured *nativeEngineVersion, basis 
 			}
 			b.built = append(b.built, nativeBuiltDomain{
 				collection: id, interpretation: d.interpretation, name: d.name,
-				oldBaseRoot: d.baseRoot, root: d.baseRoot, boundary: boundary, typedBoundary: d.typed,
+				oldBaseRoot: d.baseRoot, oldCatalogRoot: d.catalogRoot, root: d.baseRoot, boundary: boundary, typedBoundary: d.typed,
 				empty: boundary == nil, physicalOnly: id == target && nativeTypedPhysicalDomain(name),
 				rootKey: systemCollectionRootPrefix + c.schema.meta.Name + "/" + name,
 			})

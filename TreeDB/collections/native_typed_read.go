@@ -461,6 +461,10 @@ func (r *NativeJSONRead) typedRowEqual(id, retained []byte, wanted []columnDecla
 	wrapper = r.nativeTypedReadCollection()
 	catalog = wrapper.catalog
 	view = newCollectionReadViewAtSnapshot(wrapper, r.capture.Snapshot(), catalog, false, "")
-	equal, err = view.typedReplacementValuesEqual(id, wanted)
+	if nativeOrdinaryColumnGraphMeta(r.meta) {
+		equal, err = r.ordinaryColumnGraphValuesEqual(view, id, wanted)
+	} else {
+		equal, err = view.typedReplacementValuesEqual(id, wanted)
+	}
 	return true, equal, err
 }

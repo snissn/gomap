@@ -1,0 +1,19 @@
+{
+  "source": {
+    "head": "0a8323f7ca6f6128d53dfca43a408c7e443d39ab",
+    "tree": "996ce4a4f8fc3dcbfd047a8404f488361ad59dd8",
+    "staged_tree": "f50cc22110eb5a6d35a55f57ea8346568898c7f9",
+    "status": "M  .github/ci/ci_impact.json\nA  TreeDB/documentservice/shared_cow_write_bench_test.go\nM  cmd/benchprof/README.md\nM  cmd/unified_bench/README.md",
+    "files": {
+      ".github/ci/ci_impact.json": "e4b7d1e13f8c233d4569b642edde05c3417c845e2a949b710e30df7547fad292",
+      "TreeDB/documentservice/shared_cow_write_bench_test.go": "478e57f2e84a09caafaff4c2149f40aacd76715adfc2196a268acf4f005963df",
+      "cmd/benchprof/README.md": "d3991e714e057d43f3f0aa85af14673a2b38b296670664821ec2c131359e95f7",
+      "cmd/unified_bench/README.md": "916ad55ee546a17632e93adc1ee74bdaa738426680a4d767a9b25f8ce1ea27df"
+    },
+    "harness_sha256": "478e57f2e84a09caafaff4c2149f40aacd76715adfc2196a268acf4f005963df"
+  },
+  "elf_sha256": "ea62f2241c66e4e76b0ab0e1a4e6b4e787603e4f2af1e39151d89be50318111c",
+  "go_sha256": "61e7455a40a2fdfcdab99e881cd30ba10e216e3d0f32ab5f8e59d10cac4ecf57",
+  "plan_sha256": "df99434f65db7ad943158bd9b6fe1849786249245988d0dcabf97831f6070217",
+  "runner_sha256": "ab05299367bd5f1873cfff70f95a092217b286b99fcc3c9903209fb5d2d52906"
+}

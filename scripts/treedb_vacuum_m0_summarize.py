@@ -19,6 +19,10 @@ REQUIRED_CV_METRICS = (
     "foreground-p99-ns/op",
 )
 PRODUCT_V3_CV_METRICS = ("vacuum-total-ns/op", "foreground-p99-ns/op")
+SIGNED_PHASE_DIAGNOSTICS = {
+    "diagnostic-foreground-wait-gap-ns/op",
+    "diagnostic-other-vacuum-ns/op",
+}
 
 
 def cv_metrics(stability_arm: str, acceptance_contract: str) -> tuple[str, ...]:
@@ -90,7 +94,8 @@ def parse_benchmark(path: Path, expected_benchmark: str | None = None) -> dict[s
         for index, value in enumerate(values):
             unit = units[index]
             number = float(value)
-            if unit in metrics or not math.isfinite(number) or number < 0:
+            if (unit in metrics or not math.isfinite(number)
+                    or (number < 0 and unit not in SIGNED_PHASE_DIAGNOSTICS)):
                 raise ValueError(f"invalid/duplicate metric {unit}: {path}")
             metrics[unit] = number
         rows.append(metrics)

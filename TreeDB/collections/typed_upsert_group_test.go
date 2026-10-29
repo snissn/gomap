@@ -125,10 +125,6 @@ func TestTypedUpsertGroupSharesDurablePrefixAndRootPublication(t *testing.T) {
 		t.Fatal("queued typed requests retained schema admission")
 	}
 	schemaCoord.schemaMu.Unlock()
-	if !schemaCoord.adHocVectorAdmissionMu.TryLock() {
-		t.Fatal("queued typed requests retained ad-hoc vector admission")
-	}
-	schemaCoord.adHocVectorAdmissionMu.Unlock()
 	if !schemaCoord.nativeVectorAdmissionMu.TryLock() {
 		t.Fatal("queued typed requests retained native vector admission")
 	}

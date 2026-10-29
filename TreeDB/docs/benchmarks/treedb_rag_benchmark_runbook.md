@@ -1,5 +1,32 @@
 # TreeDB retained RAG application baseline runbook (#4289)
 
+The current ColumnGraph parent/chunk ingestion shape is unavailable. On
+legacy-backed collection handles, source parents omit the non-null declared
+embedding; `IngestSources` refuses the full batch before provider work or
+publication with a typed storage-stage error naming the parent and field. The
+application smoke and cell worker verify that legacy-backed refusal and return
+no lifecycle or query samples.
+
+Native semantic collection handles do not implement this source-replacement
+pipeline. They currently return `collections: db is nil` before provider work,
+schema preflight, or mutation, including when native buffered DDL has advanced
+the logical schema. This earlier refusal does not validate parent shape or
+establish native ingestion lifecycle support.
+[#5289](https://github.com/snissn/gomap/issues/5289) owns a supported
+mixed-parent/chunk representation and lifecycle restoration.
+Ordinary filtered vector Hybrid and direct filtered ANN cells are unsupported
+([#5276](https://github.com/snissn/gomap/issues/5276)); explicit service Dense
+exact filtering remains separate. `QueryModeExact` on the vector-index API
+selects FP32 scoring inside ANN, not exhaustive exact retrieval.
+
+Service overhead uses the separately identified
+`treedb_rag_service_overhead/v2_unfiltered_column_graph` fixture with
+`hybrid_unfiltered_ann_fp32` and `dense_ann_unfiltered_fp32` lanes, each through
+direct collection and HTTP APIs. IDs, ordering, scores and projected content
+are compared outside the timer; filtered vector requests must refuse explicitly.
+The historical v1 filtered measurements and frozen application evidence below
+retain their original meaning and do not qualify the current architecture.
+
 ## Minima native-path development (#4614)
 
 Minima is a separate workload from the retained application baseline below.
@@ -74,7 +101,9 @@ evidence. No timeout, cleanup/provenance failure, additional mismatch, different
 row count, changed route, or contradictory completion evidence is equivalent.
 The SQ8 bounded control remains clean-completion-only.
 
-The historical shell lane defaults to `native_runtime` for baseline reproduction.
+The historical shell lane used `native_runtime` for baseline reproduction; that
+strategy is retired and cannot be run on current sources. Preserve its original
+source and artifacts when reproducing or interpreting historical results.
 The Python runner also supports explicit `--strategy column_graph` with declared
 typed input and native binary hot-path transport. Supply
 `--column-graph-serving /path/to/serving.json`: an explicit JSON object matching

@@ -25,8 +25,19 @@ func canonicalLiveTestNodesV1(ids []string, vectors [][]float32) []vectorIndexNo
 	return nodes
 }
 
-func canonicalLiveTestPinV1(base, delta []vectorIndexNode, dimensions int) *VectorIndexPartitionLiveSearchPinV1 {
-	view := &vectorIndexSearchView{nodes: base, deltaNodes: delta, metric: VectorMetricCosine, dimensions: dimensions, m: 16, efSearch: 32, entry: 0, maxLevel: 0, deltaEntry: 0, deltaMaxLevel: 0, liveDocs: len(base) + len(delta), deltaLiveDocs: len(delta), sourceDocumentRootsValid: true}
+// Build one complete bounded domain from both input orderings. This preserves
+// canonical score and tie checks without manufacturing a second serving plane.
+func canonicalLiveTestPinV1(first, second []vectorIndexNode, dimensions int) *VectorIndexPartitionLiveSearchPinV1 {
+	var ids []string
+	var vectors [][]float32
+	for _, group := range [][]vectorIndexNode{first, second} {
+		for _, node := range group {
+			ids = append(ids, string(node.documentID))
+			vectors = append(vectors, node.vector)
+		}
+	}
+	nodes := canonicalLiveTestNodesV1(ids, vectors)
+	view := &vectorIndexSearchView{nodes: nodes, metric: VectorMetricCosine, dimensions: dimensions, m: 16, efSearch: 32, entry: 0, maxLevel: 0, liveDocs: len(nodes), sourceDocumentRootsValid: true}
 	return &VectorIndexPartitionLiveSearchPinV1{domains: map[uint32]vectorIndexPartitionLiveDomainPinV1{0: {view: view, maxStableIDBytes: 16}}}
 }
 
@@ -55,20 +66,20 @@ func TestVectorIndexPartitionLiveCanonicalScoresAndCutsV1(t *testing.T) {
 	z := canonicalLiveTestNodesV1([]string{"z"}, [][]float32{{1, .0001}})
 	ties := canonicalLiveTestNodesV1([]string{"z", "a"}, [][]float32{{1, .0001}, {1, .0002}})
 	for _, tc := range []struct {
-		name        string
-		base, delta []vectorIndexNode
-		query       []float32
-		id          string
-		bits        uint32
+		name          string
+		first, second []vectorIndexNode
+		query         []float32
+		id            string
+		bits          uint32
 	}{
 		{"retained", canonicalLiveTestNodesV1([]string{"doc-01"}, [][]float32{retained}), nil, retained, "doc-01", 0x3f7fffff},
-		{"base_cut", ties, nil, []float32{1, 0}, "a", 0x3f800000},
-		{"delta_cut", nil, ties, []float32{1, 0}, "a", 0x3f800000},
-		{"base_delta_tie", z, a, []float32{1, 0}, "a", 0x3f800000},
-		{"delta_base_tie", a, z, []float32{1, 0}, "a", 0x3f800000},
+		{"first_group_cut", ties, nil, []float32{1, 0}, "a", 0x3f800000},
+		{"second_group_cut", nil, ties, []float32{1, 0}, "a", 0x3f800000},
+		{"forward_order_tie", z, a, []float32{1, 0}, "a", 0x3f800000},
+		{"reverse_order_tie", a, z, []float32{1, 0}, "a", 0x3f800000},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			pin := canonicalLiveTestPinV1(tc.base, tc.delta, len(tc.query))
+			pin := canonicalLiveTestPinV1(tc.first, tc.second, len(tc.query))
 			opts := VectorPartitionSearchOptionsV1{TopK: 1, EfSearch: 8}
 			results, metrics, err := pin.SearchDomainV1(t.Context(), 0, tc.query, opts)
 			if err != nil || len(results) != 1 || results[0].ID != tc.id || math.Float32bits(results[0].Score) != tc.bits {
@@ -101,7 +112,7 @@ func TestVectorIndexPartitionLiveCanonicalScoresAndCutsV1(t *testing.T) {
 
 func TestVectorIndexPartitionLiveCanonicalPinnedRevisionV1(t *testing.T) {
 	vector := []float32{-.43388373, .90096885}
-	idx, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
+	idx, err := newColumnGraphPartitionLiveDomain(nil, columnGraphPartitionLiveOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +189,7 @@ func TestVectorIndexPartitionLiveCanonicalCachedNormV1(t *testing.T) {
 	}
 }
 
-func TestVectorIndexPartitionLiveCanonicalDeltaResumeV1(t *testing.T) {
+func TestVectorIndexPartitionLiveCanonicalBoundedRerankBudgetV1(t *testing.T) {
 	ids, vectors := make([]string, 50), make([][]float32, 50)
 	for i := range ids {
 		ids[i] = fmt.Sprintf("z-%02d", i)
@@ -199,8 +210,8 @@ func TestVectorIndexPartitionLiveCanonicalDeltaResumeV1(t *testing.T) {
 			t.Fatalf("rank %d=%v", i, result)
 		}
 	}
-	if metrics.ScoreCalls <= 100 {
-		t.Fatalf("score calls=%d must include resumed canonical rerank", metrics.ScoreCalls)
+	if metrics.ScoreCalls != 100 {
+		t.Fatalf("score calls=%d want 50 graph scores plus 50 canonical rerank scores", metrics.ScoreCalls)
 	}
 	opts.MaxScoreCalls = int(metrics.ScoreCalls)
 	if _, exact, err := pin.SearchDomainV1(t.Context(), 0, []float32{1, 0}, opts); err != nil || exact != metrics {

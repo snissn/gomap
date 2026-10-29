@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"slices"
+	"strings"
 )
 
 const (
@@ -67,20 +68,30 @@ func (f textV2RootFamily) String() string {
 }
 
 func textV2RootFamilyForName(collection, indexName, rootName string) (textV2RootFamily, bool) {
-	switch rootName {
-	case collectionTextV2DocIDRootName(collection, indexName):
+	// Classify borrowed name components rather than constructing up to seven
+	// qualified root names for every record read by serving and maintenance.
+	relative, ok := strings.CutPrefix(rootName, collection)
+	if !ok {
+		return 0, false
+	}
+	family, ok := strings.CutSuffix(relative, indexName)
+	if !ok {
+		return 0, false
+	}
+	switch family {
+	case "/text-v2-docid/":
 		return textV2RootFamilyDocID, true
-	case collectionTextV2DocMapRootName(collection, indexName):
+	case "/text-v2-docmap/":
 		return textV2RootFamilyDocMap, true
-	case collectionTextV2TermsRootName(collection, indexName):
+	case "/text-v2-terms/":
 		return textV2RootFamilyTerms, true
-	case collectionTextV2PostingBlocksRootName(collection, indexName):
+	case "/text-v2-posting-blocks/":
 		return textV2RootFamilyPostingBlocks, true
-	case collectionTextV2NormBlocksRootName(collection, indexName):
+	case "/text-v2-norm-blocks/":
 		return textV2RootFamilyNormBlocks, true
-	case collectionTextV2PositionsRootName(collection, indexName):
+	case "/text-v2-positions/":
 		return textV2RootFamilyPositions, true
-	case collectionTextV2GenerationsRootName(collection, indexName):
+	case "/text-v2-generations/":
 		return textV2RootFamilyGenerations, true
 	default:
 		return 0, false

@@ -84,55 +84,6 @@ func TestServiceBenchmarkVectorSearchCacheWarmOnOptimizeAndReuse(t *testing.T) {
 	assertBenchmarkCacheHit(t, second, "second search")
 }
 
-func TestServiceRawDenseSearchPinsCollectionForScalarPlanReuse(t *testing.T) {
-	svc, db := newTestService(t)
-	defer db.Close()
-	ctx := context.Background()
-	if _, err := svc.CreateIndex(ctx, CreateIndexRequest{
-		Name:               "raw_dense_cache",
-		Dimension:          2,
-		Metric:             MetricCosine,
-		VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyNativeRuntime},
-		ScalarFields:       []ScalarFieldDeclaration{{Field: "meta.user_id", ValueType: ScalarFieldString}},
-	}); err != nil {
-		t.Fatalf("CreateIndex: %v", err)
-	}
-	if _, err := svc.UpsertDocuments(ctx, "raw_dense_cache", UpsertDocumentsRequest{Documents: []Document{
-		{ID: "a", Embedding: []float32{1, 0}, Meta: map[string]any{"user_id": "alpha"}},
-		{ID: "b", Embedding: []float32{0, 1}, Meta: map[string]any{"user_id": "beta"}},
-	}}); err != nil {
-		t.Fatalf("UpsertDocuments: %v", err)
-	}
-	if _, err := svc.OptimizeIndex(ctx, "raw_dense_cache", OptimizeIndexRequest{}); err != nil {
-		t.Fatalf("OptimizeIndex: %v", err)
-	}
-
-	reader := New(collections.NewCollectionManager(db))
-	t.Cleanup(func() {
-		if err := reader.Close(); err != nil {
-			t.Errorf("close reader: %v", err)
-		}
-	})
-	req := DenseVectorSearchRequest{
-		QueryEmbedding: []float32{1, 0},
-		TopK:           1,
-		EfSearch:       8,
-		Route:          RouteAnn,
-		Filter:         &Filter{Field: "meta.user_id", Operator: "==", Value: "alpha"},
-	}
-	first, err := reader.SearchDenseVectorNativeRaw(ctx, "raw_dense_cache", req)
-	if err != nil {
-		t.Fatalf("first raw search: %v", err)
-	}
-	second, err := reader.SearchDenseVectorNativeRaw(ctx, "raw_dense_cache", req)
-	if err != nil {
-		t.Fatalf("second raw search: %v", err)
-	}
-	if first.searchStats.ScalarFilterPlanCacheMisses != 1 || second.searchStats.ScalarFilterPlanCacheHits != 1 {
-		t.Fatalf("scalar plan cache first misses=%d second hits=%d", first.searchStats.ScalarFilterPlanCacheMisses, second.searchStats.ScalarFilterPlanCacheHits)
-	}
-}
-
 func TestServiceDeferredColumnGraphLoadPrimesAndReusesCachedHandle(t *testing.T) {
 	svc, db := newTestService(t)
 	defer db.Close()
@@ -282,120 +233,6 @@ func BenchmarkServiceBenchmarkVectorSearchBufferScratch(b *testing.B) {
 	}
 	b.StopTimer()
 }
-func BenchmarkServiceDenseNativeRuntimeVisibilityOverhead(b *testing.B) {
-	svc, db := newTestService(b)
-	defer db.Close()
-	ctx := context.Background()
-	const rows = 4096
-	docs := make([]Document, rows)
-	for i := range docs {
-		docs[i] = Document{
-			ID:        fmt.Sprintf("doc-%04d", i),
-			Content:   fmt.Sprintf("content-%04d", i),
-			Embedding: []float32{float32(i + 1), 1},
-		}
-	}
-	const indexName = "dense_native_visibility"
-	if _, err := svc.CreateIndex(ctx, CreateIndexRequest{
-		Name:      indexName,
-		Dimension: 2,
-		Metric:    MetricCosine,
-		VectorIndexOptions: &BenchmarkVectorIndexOptions{
-			Strategy: collections.VectorIndexStrategyNativeRuntime,
-		},
-	}); err != nil {
-		b.Fatal(err)
-	}
-	loadBenchmarkDocsDeferred(b, svc, indexName, docs)
-	col, info, err := svc.openIndex(ctx, indexName, 0)
-	if err != nil {
-		b.Fatal(err)
-	}
-	searchOptions := collections.VectorIndexSearchOptions{
-		IndexName: defaultVectorIndexName,
-		Query:     []float32{1, 1},
-		QueryMode: collections.VectorIndexQueryModeExact,
-		TopK:      10,
-		EfSearch:  100,
-		StatsMode: collections.VectorIndexSearchStatsModeProduction,
-	}
-	var searchBuffer collections.VectorIndexSearchBuffer
-	search, err := col.SearchVectorIndexWithBuffer(searchOptions, &searchBuffer)
-	if err != nil {
-		b.Fatal(err)
-	}
-	view, err := col.OpenCollectionReadViewForVectorIndexSearch(search)
-	if err != nil {
-		b.Fatal(err)
-	}
-	fetched, err := view.FetchDocumentsForVectorIndexSearchResults(search.Results, serviceDocumentFetchOptions(false))
-	if err != nil {
-		_ = view.Close()
-		b.Fatal(err)
-	}
-	if err := view.Close(); err != nil {
-		b.Fatal(err)
-	}
-
-	b.Run("direct_buffered_search", func(b *testing.B) {
-		var buffer collections.VectorIndexSearchBuffer
-		b.ReportAllocs()
-		for b.Loop() {
-			result, err := col.SearchVectorIndexWithBuffer(searchOptions, &buffer)
-			if err != nil {
-				b.Fatal(err)
-			}
-			denseNativeBenchmarkResultCount = len(result.Results)
-		}
-	})
-	b.Run("validated_topk_fetch", func(b *testing.B) {
-		b.ReportAllocs()
-		for b.Loop() {
-			readView, err := col.OpenCollectionReadViewForVectorIndexSearch(search)
-			if err != nil {
-				b.Fatal(err)
-			}
-			result, fetchErr := readView.FetchDocumentsForVectorIndexSearchResults(search.Results, serviceDocumentFetchOptions(false))
-			closeErr := readView.Close()
-			if fetchErr != nil || closeErr != nil {
-				b.Fatalf("fetch=%v close=%v", fetchErr, closeErr)
-			}
-			denseNativeBenchmarkResultCount = len(result.Results)
-		}
-	})
-	b.Run("decode_topk", func(b *testing.B) {
-		b.ReportAllocs()
-		for b.Loop() {
-			for _, result := range fetched.Results {
-				doc, err := decodeStoredDocument(result.ID, result.Document)
-				if err != nil {
-					b.Fatal(err)
-				}
-				denseNativeBenchmarkDocument = doc
-			}
-		}
-	})
-	b.Run("service_search_fetch_decode", func(b *testing.B) {
-		req := DenseVectorSearchRequest{QueryEmbedding: []float32{1, 1}, TopK: 10, EfSearch: 100}
-		b.ReportAllocs()
-		for b.Loop() {
-			result, err := svc.SearchDenseVector(ctx, indexName, req)
-			if err != nil {
-				b.Fatal(err)
-			}
-			if result.Index.Generation != info.Generation {
-				b.Fatalf("generation=%d want=%d", result.Index.Generation, info.Generation)
-			}
-			denseNativeBenchmarkResultCount = len(result.Documents)
-		}
-	})
-}
-
-// BenchmarkServiceDenseTypedQuantizedPublicPath measures the public full-document
-// service boundary for the Q3 mode. The two sub-benchmarks share the same
-// admitted typed owner and fixture so the quantized result includes the proof
-// and final document fetch cost, while the exact sub-benchmark is the FP32
-// guardrail.
 func BenchmarkServiceDenseTypedQuantizedPublicPath(b *testing.B) {
 	requireTypedServiceServingTest(b)
 	svc, db := newTestService(b)
@@ -529,7 +366,7 @@ func TestServiceBenchmarkVectorSearchCacheInvalidatesOnDeleteResetAndClose(t *te
 		t.Fatalf("cache size after delete=%d want 0", got)
 	}
 
-	if _, err := svc.ResetIndex(ctx, "native_reset", ResetIndexRequest{Dimension: 2, Metric: MetricCosine, DropOld: true, VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyNativeRuntime}}); err != nil {
+	if _, err := svc.ResetIndex(ctx, "native_reset", ResetIndexRequest{Dimension: 2, Metric: MetricCosine, DropOld: true, VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyColumnGraph}}); err != nil {
 		t.Fatalf("ResetIndex native create: %v", err)
 	}
 	col, info, err := svc.openIndex(ctx, "native_reset", 0)
@@ -542,8 +379,8 @@ func TestServiceBenchmarkVectorSearchCacheInvalidatesOnDeleteResetAndClose(t *te
 	if got := svc.benchmarkSearchCacheSizeForTest(); got != 1 {
 		t.Fatalf("cache size after native prime=%d want 1", got)
 	}
-	if _, err := svc.ResetIndex(ctx, "native_reset", ResetIndexRequest{Dimension: 2, Metric: MetricCosine, DropOld: true, VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyNativeRuntime}}); err != nil {
-		t.Fatalf("ResetIndex native existing: %v", err)
+	if _, err := svc.ResetIndex(ctx, "native_reset", ResetIndexRequest{Dimension: 2, Metric: MetricCosine, DropOld: true, VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyColumnGraph}}); ErrorCodeOf(err) != CodeUnsupported {
+		t.Fatalf("destructive reset should fail closed: %v", err)
 	}
 	if got := svc.benchmarkSearchCacheSizeForTest(); got != 1 {
 		t.Fatalf("cache size after empty native reset=%d want live handle preserved", got)

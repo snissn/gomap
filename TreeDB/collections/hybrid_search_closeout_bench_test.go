@@ -2,6 +2,7 @@ package collections
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -75,7 +76,6 @@ func TestHybridCloseoutFixtureCandidateGenerationFetchesNoDocuments2506(t *testi
 			EfSearch:       32,
 			QueryMode:      VectorIndexQueryModeExact,
 		},
-		ScalarFilter:     &HybridScalarFilter{IndexName: hybridCloseoutTenantIndexName2506, Value: "tenant-rare-06pct"},
 		IncludeDocuments: true,
 		DocumentFetchOptions: DocumentFetchOptions{
 			ExcludePaths: []string{"embedding"},
@@ -175,6 +175,9 @@ func BenchmarkSearchHybridCloseout2506(b *testing.B) {
 							}
 
 							warm, err := fixture.col.SearchHybrid(opts)
+							if mode.withVector && fc.filter != nil {
+								skipUnsupportedFilteredVectorHybridBenchmark5275(b, warm, err)
+							}
 							if err != nil {
 								b.Fatalf("warm SearchHybrid: %v", err)
 							}
@@ -220,6 +223,16 @@ func BenchmarkSearchHybridCloseout2506(b *testing.B) {
 		})
 	}
 	hybridCloseoutBenchmarkSink2506 = sink
+}
+
+// Unsupported probes establish the real rejection contract but produce no
+// timing or success metrics. A supported row cannot enter this path.
+func skipUnsupportedFilteredVectorHybridBenchmark5275(b *testing.B, response HybridSearchResponse, err error) {
+	b.Helper()
+	if !errors.Is(err, ErrHybridSearchUnsupported) || response.Stats.FailClosed != 1 || response.Stats.FailClosedReason != HybridFailClosedReasonUnsupported || len(response.Results) != 0 || response.Stats.DocumentsFetched != 0 || response.Stats.FullDocumentScanFallbacks != 0 {
+		b.Fatalf("ordinary filtered vector Hybrid rejection changed: err=%v response=%+v", err, response)
+	}
+	b.Skip("UNAVAILABLE: ordinary filtered vector hybrid search is not implemented; rejection verified; no latency or qualification evidence")
 }
 
 func openHybridCloseoutFixture2506(tb testing.TB, docs, dims, m int) hybridCloseoutFixture2506 {

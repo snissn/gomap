@@ -41,10 +41,6 @@ func (c *Collection) findNativeCompoundIndexRange(name string, opts CompoundInde
 	// borrowed from the exact captured schema under this read scope.
 	charge := memtable.COWAllocationCharge(page.PageSize+1) + memtable.COWAllocationCharge(page.PageSize) + memtable.COWAllocationCharge(uint64(len(name))+6)
 	dedupe := shouldDedupeIndexDocumentIDs(index, r.meta.Options)
-	if dedupe {
-		// Same original map control and per-entry growth policy as scalar reads.
-		charge += memtable.COWAllocationCharge(256)
-	}
 	scalar := index
 	scalar.Components = nil
 	addBound := func(value any) error {
@@ -76,7 +72,6 @@ func (c *Collection) findNativeCompoundIndexRange(name string, opts CompoundInde
 	}
 	defer lease.Close()
 	admit := func(n uint64) error {
-		n = memtable.COWAllocationCharge(n)
 		if n > ^uint64(0)-charge {
 			return memtable.ErrCOWCapacity
 		}
@@ -148,15 +143,8 @@ func (c *Collection) findNativeCompoundIndexRange(name string, opts CompoundInde
 			}
 			// Own the source key before another seek can reuse physical scratch.
 			// Also admit the maintained logical-prefix copy and escaped-ID decoder.
-			if dedupe && opts.StableDocumentIDTies {
-				// The maintained stable scanner owns its seen map. Admit its conservative
-				// bucket/growth and string allowance before it sees this source key.
-				// The key bounds the decoded ID length, including escaped IDs.
-				if err = admit(768 + uint64(len(entry.Key))); err != nil {
-					return nil, false, false, err
-				}
-			}
-			if err = admit(3 * uint64(len(entry.Key))); err != nil {
+
+			if err = admit(3 * memtable.COWAllocationCharge(uint64(len(entry.Key)))); err != nil {
 				return nil, false, false, err
 			}
 			return bytes.Clone(entry.Key), true, false, nil
@@ -173,7 +161,7 @@ func (c *Collection) findNativeCompoundIndexRange(name string, opts CompoundInde
 			if capacity < 0 || uint64(capacity) > ^uint64(0)/uint64(unsafe.Sizeof([]byte{})) {
 				return false, memtable.ErrCOWCapacity
 			}
-			if err := admit(uint64(capacity) * uint64(unsafe.Sizeof([]byte{}))); err != nil {
+			if err := admit(memtable.COWAllocationCharge(uint64(capacity) * uint64(unsafe.Sizeof([]byte{})))); err != nil {
 				return false, err
 			}
 			grown := make([][]byte, len(ids), capacity)
@@ -196,9 +184,12 @@ func (c *Collection) findNativeCompoundIndexRange(name string, opts CompoundInde
 		}
 		truncated, err = scanCollectionIndexIDsStable(next, index.ValueType, opts.Limit, scanMergedCollectionIndexIDOptions{StableDocumentIDTies: true, DedupeDocumentID: dedupe, DocumentIDLess: less, LogicalIndexKey: BSONIndexKeyStableSortPrefixV2, MaxStableTieBytes: opts.MaxRetainedIDBytes, admitTemporary: admit}, emit)
 	} else {
-		var seen map[string]struct{}
+		var seen *localIDIndex
 		if dedupe {
-			seen = make(map[string]struct{})
+			seen, err = newLocalIDIndex(max(0, min(opts.Limit, 64)), admit)
+			if err != nil {
+				return nil, false, err
+			}
 		}
 		for {
 			key, ok, capped, nextErr := next()
@@ -223,7 +214,7 @@ func (c *Collection) findNativeCompoundIndexRange(name string, opts CompoundInde
 				break
 			}
 			if dedupe {
-				if _, duplicate := seen[string(id)]; duplicate {
+				if _, duplicate := seen.lookup(unsafeStringFromBytes(id)); duplicate {
 					continue
 				}
 			}
@@ -234,12 +225,11 @@ func (c *Collection) findNativeCompoundIndexRange(name string, opts CompoundInde
 				break
 			}
 			if dedupe {
-				if err = admit(768 + uint64(len(id))); err != nil {
+				if err = seen.setCopy(id, 0); err != nil {
 					break
 				}
-				seen[string(id)] = struct{}{}
 			}
-			if err = admit(uint64(len(id))); err != nil {
+			if err = admit(memtable.COWAllocationCharge(uint64(len(id)))); err != nil {
 				break
 			}
 			if _, err = emit(bytes.Clone(id)); err != nil {

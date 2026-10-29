@@ -287,14 +287,21 @@ type HybridSearchPlan struct {
 
 // HybridSearchSnapshot reports the snapshot/epoch identity used by the query.
 // Generation fields are filled when the corresponding source can expose an
-// index/catalog epoch; zero means unavailable or not applicable.
+// index/catalog epoch. With Native=true, logical sequence and document
+// generation zero are valid; legacy epoch zero means unavailable/not applicable.
 type HybridSearchSnapshot struct {
-	Consistency          HybridConsistencyMode `json:"consistency,omitempty"`
-	CommitSeq            uint64                `json:"commit_seq,omitempty"`
-	SystemRootPageID     uint64                `json:"system_root_page_id,omitempty"`
-	CollectionGeneration uint64                `json:"collection_generation,omitempty"`
-	TextIndexEpoch       uint64                `json:"text_index_epoch,omitempty"`
-	VectorIndexEpoch     uint64                `json:"vector_index_epoch,omitempty"`
+	// Native distinguishes a valid native logical sequence of zero from absence.
+	// Physical fields below describe the captured basis, never pending rows.
+	Native                bool                  `json:"native,omitempty"`
+	NativeLogicalSequence uint64                `json:"native_logical_sequence,omitempty"`
+	CollectionIncarnation uint64                `json:"collection_incarnation,omitempty"`
+	DocumentGeneration    uint64                `json:"document_generation,omitempty"`
+	Consistency           HybridConsistencyMode `json:"consistency,omitempty"`
+	CommitSeq             uint64                `json:"commit_seq,omitempty"`
+	SystemRootPageID      uint64                `json:"system_root_page_id,omitempty"`
+	CollectionGeneration  uint64                `json:"collection_generation,omitempty"`
+	TextIndexEpoch        uint64                `json:"text_index_epoch,omitempty"`
+	VectorIndexEpoch      uint64                `json:"vector_index_epoch,omitempty"`
 }
 
 // HybridSearchStats is the common debug/counter vocabulary for hybrid planning,
@@ -395,7 +402,7 @@ func (c *Collection) SearchHybrid(opts HybridSearchOptions) (HybridSearchRespons
 	if c == nil {
 		return HybridSearchResponse{}, errCollectionNil
 	}
-	if c.db == nil {
+	if c.db == nil && c.nativeJSON == nil {
 		return HybridSearchResponse{}, errCollectionDBNil
 	}
 	return c.searchHybrid(opts)

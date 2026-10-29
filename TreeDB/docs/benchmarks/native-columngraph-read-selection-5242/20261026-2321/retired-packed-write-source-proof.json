@@ -1,0 +1,57 @@
+{
+  "reviewed_base_head": "99e71bbca7e01d429fe5704d5ea954a575636173",
+  "current_source_is_dirty": true,
+  "source_files": {
+    "TreeDB/collections/text_v2_storage.go": {
+      "before23e": "1d010ebc864dc980fbb8f829d0fa6c2f40b31aaba46afe1b4e169495ddae8b55",
+      "candidate551": "11f22ae651ef938bfc3fc74fc481162643ccfda08772748239a2aa5b77a265ad",
+      "current_disk": "1d010ebc864dc980fbb8f829d0fa6c2f40b31aaba46afe1b4e169495ddae8b55",
+      "current_equals_original_before": true
+    },
+    "TreeDB/collections/text_maintenance.go": {
+      "before23e": "e9f220e228cfcee0f7f1c9763a991dc7bf462db222fa08cf5036d7c11e9d3a2a",
+      "candidate551": "e9f220e228cfcee0f7f1c9763a991dc7bf462db222fa08cf5036d7c11e9d3a2a",
+      "current_disk": "e9f220e228cfcee0f7f1c9763a991dc7bf462db222fa08cf5036d7c11e9d3a2a",
+      "current_equals_original_before": true
+    },
+    "TreeDB/collections/text_v2_contract_bench_test.go": {
+      "before23e": "87e6f44540998bffed348cff50f0d2d6587963256e6930db51ede78030fabea3",
+      "candidate551": "87e6f44540998bffed348cff50f0d2d6587963256e6930db51ede78030fabea3",
+      "current_disk": "87e6f44540998bffed348cff50f0d2d6587963256e6930db51ede78030fabea3",
+      "current_equals_original_before": true
+    },
+    "TreeDB/internal/memtable/cow_tree.go": {
+      "before23e": "e0743c9f1a7a7ea3e208546523fb306c54caf67437fb8ebe9db6e37f6bebc0e0",
+      "candidate551": "e0743c9f1a7a7ea3e208546523fb306c54caf67437fb8ebe9db6e37f6bebc0e0",
+      "current_disk": "e0743c9f1a7a7ea3e208546523fb306c54caf67437fb8ebe9db6e37f6bebc0e0",
+      "current_equals_original_before": true
+    }
+  },
+  "packed_implementation_exists": false,
+  "raw_refinement_present_before_both_samples": [
+    "4a84fb3c06c5647927d21a88d032714b696b2935",
+    "7a18a3968d5db659dc29860de853239e55ac291f"
+  ],
+  "artifacts_sha256": {
+    "evidence/native-dense-norm-write-cost1/plan.json": "a62c438c4c463b6cedb1d594cdfd2376304fd3f7186e5e17d277649786931cf4",
+    "evidence/native-dense-norm-write-cost1/outcomes.json": "0bc2a217222d1013a01c82c8e993d9627ab45ba7e8c53a73e3788f3f27d73a0a",
+    "evidence/native-dense-norm-write-cost1/contract-correction.md": "2e45555b22b5a42c67360a0f7fce177bb9755fdb5085de94186ceca0f2f350cc",
+    "evidence/native-dense-norm-write-cost1/baseline-overlay.json": "3d66c52c27a771a35cf9133fda96fdcced3d8d33a4b6f881409fe10bbfacedaa",
+    "evidence/native-dense-norm-codec1/write-before1-plan.json": "b8e85d22956c50a0adec01d72497e60addb0b07793f49215646e1517ba139449",
+    "evidence/native-dense-norm-codec1/write-after1-plan.json": "299012ab983c927fc3481ddcc233772478cc54a69c08239edbb4d49e6b550cf9",
+    "evidence/native-dense-norm-codec1/write-before1-receipt.json": "2fb18d53a2e91e7398de990e806516d89346184f764883c229d28614b1e85a30",
+    "evidence/native-dense-norm-codec1/write-after1-receipt.json": "31bdb53d9073d2acf3b5beb60add31998522e73c3ea3164cbc11faf09b3073f4",
+    "evidence/native-dense-norm-codec1/write-before1.log": "d3641035c899b3d17c6e2eafa720e4a4dc05d8a80b0d351831edd67631a0de62",
+    "evidence/native-dense-norm-codec1/write-after1.log": "b21a971c7b929e52b18132527dc7230cf1111ccf432914c514a9c00422caf7be",
+    "evidence/native-dense-norm-write-cost1/causal-plan.json": "e39095ac6e2e1143e024d66b9e0ace4e6ee813383aa87c575422f31af60da929",
+    "evidence/native-dense-norm-write-cost1/causal-analysis.md": "2c57be10fec50761cdac5bbb31c57da020d56aec089d308afebbddeb53e9e85b",
+    "evidence/native-dense-norm-write-cost1/profiles-manifest.json": "b85441b4b915712d359133fc19f7e247ec4894152a0cd0c0b7cd1207e2b3fc03",
+    "evidence/packed-norm-retirement1/decision.json": "219f057fc16ae8fc54dc829c9f5d57772cae8db2942a1768d8504b162e8665b5",
+    "evidence/packed-norm-retirement1/retirement.patch": "774da8228191111590e5bddba58aa89cb5d2b1c68d5831a17ccaf7d3c708fe15"
+  },
+  "unprofiled_ELFs": "go test ephemeral test executables were not separately retained/bound by these original receipts; do not substitute profiled ELFs",
+  "profile_ELFs_recorded_only": {
+    "before": "3b9c98312a6d19ba74ec6a52b893b4efb842d31867f6efc236fc6d4e9154b2b9",
+    "after": "86950d94d1a82e4e8ddcfbd38cef5a3d994c02bbe7eed615c3ba66ac39800b0e"
+  }
+}

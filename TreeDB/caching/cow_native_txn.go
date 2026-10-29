@@ -1,6 +1,7 @@
 package caching
 
 import (
+	"context"
 	"github.com/snissn/gomap/TreeDB/batch"
 	"unsafe"
 
@@ -42,43 +43,166 @@ func (db *DB) BeginPreparedNativeConditionalTxn() (backenddb.NativeConditionalTx
 	return &nativeConditionalTxn{ConditionalTxn: tx, lease: lease}, nil
 }
 
-// PrepareNativeProducer joins at most one existing checkpoint before any
-// consumer lock, capture or private preparation. Semantic sources can exhaust
-// independently of bytes. This maintenance is not an admission promise: old
-// readers or concurrent producers can retain the original finite capacity.
-func (db *DB) PrepareNativeProducer() error {
+// A successful drain cannot reclaim unchanged owners retained by a reader.
+// Keep current finite accounting, construction and physical/logical identity;
+// historical high water is not outstanding debt or new maintenance work.
+type cowNativePressureState struct {
+	stats      memtable.COWStats
+	logicalSeq uint64
+	semantic   backenddb.NativeSemanticProducerPressure
+	basis      backenddb.StateToken
+}
+
+// nativeConstructionUnderPressure applies the original three-quarter policy
+// to the capacity remaining after the SAME inventory's shared build workspace.
+// Subtraction preserves upward rounding and avoids overflow near MaxUint64.
+// Invalid metadata requests maintenance; it never grants construction credit.
+func nativeConstructionUnderPressure(total, fixed, limit uint64) bool {
+	if fixed >= limit || total < fixed {
+		return true
+	}
+	remaining := limit - fixed
+	return total-fixed >= remaining-remaining/4
+}
+
+func (s cowNativePressureState) underPressure(limits memtable.COWLimits) bool {
+	p := s.semantic
+	return s.stats.ReservedBytes >= limits.MaxInFlightBytes-limits.MaxInFlightBytes/4 ||
+		s.stats.Sources >= limits.MaxSources || s.stats.Generations >= limits.MaxGenerations ||
+		(p.ConstructionBytes != 0 &&
+			(nativeConstructionUnderPressure(p.ConstructionBytes, p.FixedConstructionBytes, p.MaxInFlightBytes) ||
+				nativeConstructionUnderPressure(p.ConstructionBytes, p.FixedConstructionBytes, p.MaxTotalBytes) ||
+				p.Sources >= p.MaxSources))
+}
+
+func (c *cowCache) nativeProducerPressureState() (state cowNativePressureState, err error) {
+	// Retain the existing cut, including its exact basis and semantic state, by
+	// incrementing its original edge under cutMu. No capture wrapper, receipt,
+	// new Snapshot, iterator, or participant callback is created under the latch.
+	cut := c.retainCut()
+	if cut == nil {
+		return state, backenddb.ErrClosed
+	}
+	state.logicalSeq = cut.logicalSeq
+	if observer, ok := cut.semanticRootSet.(backenddb.NativeSemanticProducerPressureState); ok {
+		state.semantic, err = observer.NativeProducerPressure(cut.basis.snapshot)
+		if err == nil && state.semantic.ConstructionBytes != 0 {
+			var valid bool
+			state.basis, valid = cut.basis.snapshot.StateToken()
+			if !valid {
+				err = backenddb.ErrClosed
+			}
+		}
+	}
+	// The same cut keeps all borrowed scan inputs alive. End that edge before
+	// returning, including on scan failure, so checkpoint/cleanup cannot wait on
+	// the producer's observation. Drain and error propagation are off all gates.
+	err = joinCOWCleanupError(err, c.releaseCut(cut))
+	state.stats = c.budget.Stats()
+	state.stats.PeakBytes = 0
+	return state, err
+}
+
+func (s cowNativePressureState) observation(limits memtable.COWLimits) backenddb.NativeProducerObservation {
+	return backenddb.NativeProducerObservation{
+		LogicalSequence: s.logicalSeq, Basis: s.basis, Semantic: s.semantic,
+		ReservedBytes: s.stats.ReservedBytes, Sources: s.stats.Sources,
+		Generations: s.stats.Generations, UnderPressure: s.underPressure(limits),
+	}
+}
+
+// ObserveNativeProducer releases its borrowed cut before returning this scalar
+// identity. In particular it does not wait for nativePressureMu, checkpoint or
+// semantic cleanup while its caller holds a consumer mutation gate.
+func (db *DB) ObserveNativeProducer() (backenddb.NativeProducerObservation, error) {
 	if db == nil || db.cow == nil {
-		return ErrCOWUnsupported
+		return backenddb.NativeProducerObservation{}, ErrCOWUnsupported
+	}
+	state, err := db.cow.nativeProducerPressureState()
+	if err != nil {
+		return backenddb.NativeProducerObservation{}, err
+	}
+	return state.observation(db.cow.budget.Limits()), nil
+}
+
+// PrepareNativeProducer joins at most one original captured-prefix drain (or
+// full checkpoint) before consumer locks, captures or private preparation. It
+// reserves no future capacity.
+func (db *DB) PrepareNativeProducer() error {
+	_, err := db.PrepareNativeProducerObservation()
+	return err
+}
+
+// PrepareNativeProducerObservation preserves the original preparation algorithm
+// and returns the observation at its successful exit, after any original drain.
+func (db *DB) PrepareNativeProducerObservation() (backenddb.NativeProducerObservation, error) {
+	if db == nil || db.cow == nil {
+		return backenddb.NativeProducerObservation{}, ErrCOWUnsupported
 	}
 	c := db.cow
 	limits := c.budget.Limits()
-	underPressure := func() bool {
-		stats := c.budget.Stats()
-		return stats.ReservedBytes >= limits.MaxInFlightBytes-limits.MaxInFlightBytes/4 ||
-			stats.Sources >= limits.MaxSources || stats.Generations >= limits.MaxGenerations
+	observed, err := c.nativeProducerPressureState()
+	if err != nil {
+		return backenddb.NativeProducerObservation{}, err
 	}
-	if !underPressure() {
-		return nil
+	if !observed.underPressure(limits) {
+		return observed.observation(limits), nil
 	}
 	// A cleanup/Finish callback cannot join its own original worker frontier.
 	if err := db.ownedCloseGuard.CheckClose(); err != nil {
-		return err
+		return backenddb.NativeProducerObservation{}, err
 	}
-	// Concurrent producers join one drain and recheck after it, before acquiring
-	// any opening, allocation receipt, writer gate or append authority. Never
-	// retry an application callback or a partially prepared transaction here.
+	// No consumer gate or opening is held while waiting for the original drain.
 	c.nativePressureMu.Lock()
 	defer c.nativePressureMu.Unlock()
-	if !underPressure() {
-		return nil
+	before, err := c.nativeProducerPressureState()
+	if err != nil {
+		return backenddb.NativeProducerObservation{}, err
 	}
-	if err := db.Checkpoint(); err != nil {
-		return err
+	if !before.underPressure(limits) {
+		return before.observation(limits), nil
 	}
-	// Physical handoff queues old semantic edges. Join their actual refunds on
-	// the original worker; NoWAL can otherwise return before source slots retire.
-	return db.joinSemanticCleanupFrontier()
+	if c.nativePressureRemembered && c.nativePressureState == before {
+		return before.observation(limits), nil
+	}
+	c.nativePressureRemembered = false
+	if db.nativePressureDrainEnabled() {
+		err = db.materializeCOWPrefix(context.Background(), false, nil, true)
+	} else {
+		err = db.Checkpoint()
+	}
+	if err != nil {
+		return backenddb.NativeProducerObservation{}, err
+	}
+	// Join the actual refunds on the original worker, before consumer locks.
+	if err := db.joinSemanticCleanupFrontier(); err != nil {
+		return backenddb.NativeProducerObservation{}, err
+	}
+	after, err := c.nativeProducerPressureState()
+	if err != nil {
+		return backenddb.NativeProducerObservation{}, err
+	}
+	// A concurrently published suffix is not remembered as covered by this drain.
+	if after.logicalSeq == before.logicalSeq {
+		c.nativePressureState = after
+		c.nativePressureRemembered = true
+	}
+	return after.observation(limits), nil
 }
+
+// nativePressureDrainEnabled requires a real running size-maintenance worker.
+// Its original captured threshold, external total-byte hook and deferred cleanup
+// authority must all exist. Merely reconfiguring the notification atomic cannot
+// turn an interval-only worker into size maintenance. This is a soft asynchronous
+// cleanup capability, not a hard bound on journal bytes.
+func (db *DB) nativePressureDrainEnabled() bool {
+	return db != nil && db.externalCommandWAL && db.autoCheckpointOn.Load() &&
+		db.autoCheckpointWorkerMaxWALBytes.Load() > 0 &&
+		db.loadAutoCheckpointBytesHook() != nil &&
+		db.loadCommandWALCheckpointCutoverHook() != nil &&
+		db.defersAutomaticCommandWALCleanup()
+}
+
 func (tx *nativeConditionalTxn) State() backenddb.NativeSemanticState {
 	if tx == nil || tx.ConditionalTxn == nil || tx.closed || tx.snap == nil {
 		return nil

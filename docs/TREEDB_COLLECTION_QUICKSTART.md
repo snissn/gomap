@@ -73,10 +73,14 @@ make that visible instead of implying the optimized path was used.
 See also `cmd/treedb_vector_demo/README.md` and the pre-alpha
 [TreeDB Document Service API](TREEDB_DOCUMENT_SERVICE_API.md) for the
 Haystack-style HTTP/JSON contract. Declare metadata fields as scalar indexes
-when creating the service index; keyword and hybrid filters then use bounded
-allow-sets and fail closed on truncation. Dense search defaults to the
-`column_graph` `ann` route when available; use `route=exact` for filtered
-correctness checks. No route silently falls back to a full-document scan.
+when creating the service index; keyword and text-only Hybrid filters then use
+bounded allow-sets and fail closed on truncation. Fresh eligible indexes default
+to cosine/float32 `column_graph`, the only serving strategy. Ordinary dense search
+defaults to `ann`; a filter with omitted/ANN route is refused, so request
+`route=exact` explicitly for filtered exact search. Ordinary filtered Hybrid with
+a vector source is unavailable; admitted typed filters and derived quantized
+planes retain their own supported paths. No route silently falls back to a
+full-document scan.
 
 `cmd/treedb_vector_demo` creates a fresh TreeDB directory, declares a collection,
 loads deterministic JSON fixtures, publishes embeddings as typed-column dense
@@ -85,10 +89,11 @@ reopens the DB, and then runs query smoke searches. Metadata can live in the
 retained document or in typed-row fields.
 
 Current optimized vector query shape: typed-column vectors + `column_graph`
-native reader via `OpenVectorIndexSearcher`. Public metadata predicates are not
-yet wired into the `column_graph` search API; `-metadata-filter` therefore uses
-honest deterministic `exact_scoring_metadata_filter` while still publishing the
-typed-column vector assets.
+native reader via `OpenVectorIndexSearcher`. This demo's `-metadata-filter`
+uses explicit deterministic `exact_scoring_metadata_filter` while still
+publishing typed-column vector assets. It does not admit mutable typed graph
+serving; use the [typed-vector guide](../TreeDB/docs/guides/vector-search-typed-column.md)
+for supported typed filtering through explicit admission.
 
 Smoke run:
 

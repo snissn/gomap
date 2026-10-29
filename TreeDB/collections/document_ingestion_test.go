@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -9,6 +10,9 @@ import (
 	"github.com/snissn/gomap/TreeDB/collections/chunking"
 	"github.com/snissn/gomap/TreeDB/collections/embedding"
 	"math"
+	"os"
+	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -16,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	treedb "github.com/snissn/gomap/TreeDB"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 )
@@ -1680,8 +1685,7 @@ func TestIngestSourcesRejectsAncestorTextVectorPaths(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, _, col := openIngestTestCollection(t, 8)
-			col.meta.VectorIndexes[0].Field = tc.vectorPath
+			_, col := openIngestPathTestCollection5275(t, tc.vectorPath)
 			cfg := ingestTestCfg(8)
 			cfg.TextField = tc.textField
 			res, err := col.IngestSources(context.Background(), []SourceDocument{{
@@ -1715,8 +1719,7 @@ func TestIngestSourcesRejectsVectorChunkMetadataOverlap(t *testing.T) {
 		chunking.MetaFieldKind + ".embedding",
 	} {
 		t.Run(field, func(t *testing.T) {
-			_, _, col := openIngestTestCollection(t, 8)
-			col.meta.VectorIndexes[0].Field = field
+			_, col := openIngestPathTestCollection5275(t, field)
 			res, err := col.IngestSources(context.Background(), []SourceDocument{{
 				ID:     []byte("reserved-vector-field"),
 				Fields: map[string]any{"body": "must not be indexed"},
@@ -1741,8 +1744,7 @@ func TestIngestSourcesRejectsVectorChunkMetadataOverlap(t *testing.T) {
 func TestIngestSourcesRejectsVectorSourceMetadataOverlap(t *testing.T) {
 	for _, field := range []string{"meta", "meta.embedding"} {
 		t.Run(field, func(t *testing.T) {
-			_, _, col := openIngestTestCollection(t, 8)
-			col.meta.VectorIndexes[0].Field = field
+			_, col := openIngestPathTestCollection5275(t, field)
 			res, err := col.IngestSources(context.Background(), []SourceDocument{{
 				ID: []byte("metadata-vector-field"),
 				Fields: map[string]any{
@@ -2029,5 +2031,410 @@ func BenchmarkIngestSources10K(b *testing.B) {
 			b.ReportMetric(float64(res.EmbedNanos)/float64(stageTotal)*100, "embed-%")
 			b.ReportMetric(float64(res.IndexNanos)/float64(stageTotal)*100, "index-%")
 		}
+	}
+}
+
+// The later invalid parent must reject the whole batch before provider work or
+// replacement of the earlier, otherwise compatible source.
+func TestIngestSourcesColumnGraphParentShapeFailsClosedEntireBatch(t *testing.T) {
+	const provider = "ingest-parent-shape-preflight-5275"
+	var factories, calls atomic.Int32
+	if err := embedding.DefaultRegistry().Register(provider, func(embedding.Config) (embedding.Embedder, error) {
+		factories.Add(1)
+		return outputFuncEmbedder{dims: 2, fn: func(texts [][]byte) [][]float32 {
+			calls.Add(1)
+			out := make([][]float32, len(texts))
+			for i := range out {
+				out[i] = []float32{1, 0}
+			}
+			return out
+		}}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	d, err := backenddb.Open(backenddb.Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	meta := &CollectionMeta{Name: "parent_shape", Options: CollectionOptions{ColumnStore: &ColumnStoreConfig{
+		Enabled: true, RetainedPayload: ColumnRetainedPayloadFull, RetainedPayloadEncoding: ColumnRetainedPayloadEncodingJSON,
+		Columns: []ColumnStoreColumn{{Name: "embedding", Path: "embedding", ValueType: ColumnStoreValueFloat32Vector, VectorDims: 2, Owner: TypedStorageOwnerColumnPart}},
+	}}, VectorIndexes: []VectorIndexDefinition{{Name: "embedding", Field: "embedding", Dimensions: 2, Metric: VectorMetricCosine, Strategy: VectorIndexStrategyColumnGraph}}}
+	mgr := NewCollectionManager(d)
+	if _, err = mgr.CreateCollection(meta); err != nil {
+		t.Fatal(err)
+	}
+	col, err := mgr.OpenCollection(meta.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := [][]byte{[]byte("first"), []byte("later")}
+	originals := [][]byte{[]byte(`{"body":"old first","embedding":[1,0]}`), []byte(`{"body":"old later","embedding":[0,1]}`)}
+	if _, err = col.InsertBatch(ids, originals); err != nil {
+		t.Fatal(err)
+	}
+	if err = col.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	// Deliberately stale handle state must not define the preflight schema.
+	stale := col.meta
+	stale.Options.ColumnStore = &ColumnStoreConfig{Enabled: true, Columns: []ColumnStoreColumn{{Name: "embedding", Path: "embedding", ValueType: ColumnStoreValueFloat32Vector, VectorDims: 2, Nullable: true}}}
+	stale.VectorIndexes = []VectorIndexDefinition{{Name: "embedding", Field: "stale_field", Dimensions: 2}}
+	col.meta = stale
+	before, ok := d.StateToken()
+	if !ok {
+		t.Fatal("missing initial state")
+	}
+	walBefore := ingestWALContents5275(t, dir)
+	sources := []SourceDocument{
+		{ID: ids[0], Fields: map[string]any{"body": "new first", "embedding": []float32{1, 0}}},
+		{ID: ids[1], Fields: map[string]any{"body": "new later"}},
+	}
+	cfg := ingestTestCfg(2)
+	cfg.Embedding.Provider = provider
+	res, err := col.IngestSources(context.Background(), sources, cfg)
+	var failure *IngestError
+	if !errors.As(err, &failure) || failure.Stage != IngestStageStorage || failure.SourceIndex != 1 || string(failure.SourceID) != "later" || !errors.Is(err, ErrColumnDeclaredValueUnsupported) || !strings.Contains(err.Error(), `"embedding"`) || !strings.Contains(err.Error(), "incompatible source parent shape") {
+		t.Fatalf("unexpected parent preflight result: %+v %v", failure, err)
+	}
+	if len(res.Ingested) != 0 || res.EmbedNanos != 0 || res.IndexNanos != 0 || factories.Load() != 0 || calls.Load() != 0 {
+		t.Fatalf("preflight performed work: result=%+v factories=%d embeds=%d", res, factories.Load(), calls.Load())
+	}
+	after, ok := d.StateToken()
+	if !ok || before != after {
+		t.Fatalf("publication changed: before=%+v after=%+v", before, after)
+	}
+	if got := ingestWALContents5275(t, dir); !reflect.DeepEqual(got, walBefore) {
+		t.Fatalf("WAL changed: before=%v after=%v", walBefore, got)
+	}
+	for i, id := range ids {
+		got, getErr := col.Get(id)
+		if getErr != nil || !bytes.Equal(got, originals[i]) {
+			t.Fatalf("original %q changed: %s %v", id, got, getErr)
+		}
+		children, childErr := col.ChunkChildren(id)
+		if childErr != nil || len(children) != 0 {
+			t.Fatalf("children %q: %q %v", id, children, childErr)
+		}
+	}
+	// A supplied, compatible parent vector is legitimate input; preflight must
+	// preserve this existing supported ingestion behavior.
+	res, err = col.IngestSources(context.Background(), sources[:1], cfg)
+	if err != nil || len(res.Ingested) != 1 || calls.Load() != 1 {
+		t.Fatalf("compatible parent rejected: %+v %v embeds=%d", res, err, calls.Load())
+	}
+}
+
+func ingestWALContents5275(t *testing.T, dir string) map[string][32]byte {
+	t.Helper()
+	files, err := readIngestWALContents5275(dir, os.ReadFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) == 0 {
+		t.Fatal("no WAL files observed")
+	}
+	return files
+}
+
+func readIngestWALContents5275(dir string, readFile func(string) ([]byte, error)) (map[string][32]byte, error) {
+	files := map[string][32]byte{}
+	err := filepath.WalkDir(dir, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		relative, err := filepath.Rel(dir, path)
+		if err != nil {
+			return err
+		}
+		if !strings.Contains(strings.ToLower(relative), "wal") {
+			return nil
+		}
+		// This file coordinates journal ownership; it is not WAL data. Windows
+		// holds an exclusive byte-range lock, so reading it would fail before
+		// we could compare the actual journal bytes across a rejected ingest.
+		if entry.Name() == "command-wal-journal-owner.lock" {
+			return nil
+		}
+		raw, err := readFile(path)
+		if err != nil {
+			return err
+		}
+		files[relative] = sha256.Sum256(raw)
+		return nil
+	})
+	return files, err
+}
+
+func TestIngestWALContents5275LockedOwnershipAndReadFailures(t *testing.T) {
+	dir := t.TempDir()
+	walDir := filepath.Join(dir, "wal")
+	if err := os.Mkdir(walDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	segment := filepath.Join(walDir, "commit-l0-000001.log")
+	lock := filepath.Join(walDir, "command-wal-journal-owner.lock")
+	// Keep every non-lock file under observation, including unrecognized files.
+	other := filepath.Join(walDir, "other.data")
+	for path, raw := range map[string]string{segment: "journal bytes", lock: "lease", other: "other WAL bytes"} {
+		if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lockReads := 0
+	readWithLockedOwner := func(path string) ([]byte, error) {
+		if path == lock {
+			lockReads++
+			// Model Windows' mandatory byte-range lock without requiring Windows.
+			return nil, &os.PathError{Op: "read", Path: path, Err: os.ErrPermission}
+		}
+		return os.ReadFile(path)
+	}
+	before, err := readIngestWALContents5275(dir, readWithLockedOwner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string][32]byte{
+		filepath.Join("wal", filepath.Base(segment)): sha256.Sum256([]byte("journal bytes")),
+		filepath.Join("wal", filepath.Base(other)):   sha256.Sum256([]byte("other WAL bytes")),
+	}
+	if lockReads != 0 || !reflect.DeepEqual(before, want) {
+		t.Fatalf("WAL inventory=%v want=%v lock reads=%d", before, want, lockReads)
+	}
+	if err := os.WriteFile(segment, []byte("changed journal bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	after, err := readIngestWALContents5275(dir, readWithLockedOwner)
+	if err != nil || reflect.DeepEqual(before, after) {
+		t.Fatalf("WAL byte change was not observed: before=%v after=%v err=%v", before, after, err)
+	}
+	for _, denied := range []string{segment, other} {
+		_, err := readIngestWALContents5275(dir, func(path string) ([]byte, error) {
+			if path == denied {
+				return nil, &os.PathError{Op: "read", Path: path, Err: os.ErrPermission}
+			}
+			return readWithLockedOwner(path)
+		})
+		if !errors.Is(err, os.ErrPermission) {
+			t.Fatalf("WAL read failure for %q was hidden: %v", denied, err)
+		}
+	}
+}
+
+// Persist the path in the real catalog: mutating handle metadata cannot model
+// an incompatible schema now that ingestion captures authoritative metadata.
+func openIngestPathTestCollection5275(t *testing.T, field string) (*backenddb.DB, *Collection) {
+	t.Helper()
+	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	mgr := NewCollectionManager(d)
+	meta := &CollectionMeta{Name: "ingest_path", Options: CollectionOptions{ColumnStore: &ColumnStoreConfig{
+		Enabled: true, RetainedPayload: ColumnRetainedPayloadFull, RetainedPayloadEncoding: ColumnRetainedPayloadEncodingJSON,
+		Columns: []ColumnStoreColumn{{Name: "embedding", Path: field, ValueType: ColumnStoreValueFloat32Vector, VectorDims: 8, Owner: TypedStorageOwnerColumnPart}},
+	}}, VectorIndexes: []VectorIndexDefinition{{Name: "embedding", Field: field, Dimensions: 8, Metric: VectorMetricCosine, Strategy: VectorIndexStrategyColumnGraph}}}
+	if _, err = mgr.CreateCollection(meta); err != nil {
+		t.Fatal(err)
+	}
+	col, err := mgr.OpenCollection(meta.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap := d.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("missing catalog snapshot")
+	}
+	catalog, err := col.catalogForSnapshot(snap)
+	_ = snap.Close()
+	if err != nil || catalog == nil {
+		t.Fatalf("capture actual path schema: %v", err)
+	}
+	def, ok := findVectorIndex(catalog.meta.VectorIndexes, "embedding")
+	if !ok || def.Field != field {
+		t.Fatalf("catalog path=%q want %q", def.Field, field)
+	}
+	before, ok := d.StateToken()
+	if !ok {
+		t.Fatal("missing preflight state")
+	}
+	t.Cleanup(func() {
+		after, ok := d.StateToken()
+		if !ok || before != after {
+			t.Errorf("rejected path %q changed publication state: before=%+v after=%+v", field, before, after)
+		}
+	})
+	return d, col
+}
+
+// Native handles have no legacy source-replacement owner. Preserve their early
+// refusal even when native COW DDL is ahead of the facade/physical catalog.
+func TestNativeIngestSourcesRefusesBeforeProviderWithoutEffects(t *testing.T) {
+	for _, bufferedDDL := range []bool{false, true} {
+		t.Run(fmt.Sprintf("buffered_scalar_ddl_%t", bufferedDDL), func(t *testing.T) {
+			provider := fmt.Sprintf("native-ingest-refusal-5275-%t", bufferedDDL)
+			var factories, calls atomic.Int32
+			if err := embedding.DefaultRegistry().Register(provider, func(embedding.Config) (embedding.Embedder, error) {
+				factories.Add(1)
+				return outputFuncEmbedder{dims: 2, fn: func(texts [][]byte) [][]float32 {
+					calls.Add(1)
+					out := make([][]float32, len(texts))
+					for i := range out {
+						out[i] = []float32{1, 0}
+					}
+					return out
+				}}, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			dir := t.TempDir()
+			owner, err := treedb.Open(nativeTypedGroupOptions(dir))
+			if err != nil {
+				t.Fatal(err)
+			}
+			backend, err := owner.NativeSemanticBackend()
+			if err != nil {
+				owner.Close()
+				t.Fatal(err)
+			}
+			manager := NewCollectionManager(backend)
+			t.Cleanup(func() {
+				if manager != nil {
+					manager.Close()
+				}
+				if owner != nil {
+					owner.Close()
+				}
+			})
+			meta := nativeOrdinaryPendingGraphMeta()
+			if bufferedDDL {
+				meta = CollectionMeta{Name: "docs"}
+			}
+			if _, err = manager.CreateCollection(&meta); err != nil {
+				t.Fatal(err)
+			}
+			col, err := manager.OpenCollection(meta.Name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ids := [][]byte{[]byte("first"), []byte("later")}
+			originals := [][]byte{[]byte(`{"body":"old first","embedding":[1,0]}`), []byte(`{"body":"old later","embedding":[0,1]}`)}
+			if _, err = col.InsertBatch(ids, originals); err != nil {
+				t.Fatal(err)
+			}
+			if err = owner.Checkpoint(); err != nil {
+				t.Fatal(err)
+			}
+			if bufferedDDL {
+				sibling, openErr := manager.OpenCollection(meta.Name)
+				if openErr != nil {
+					t.Fatal(openErr)
+				}
+				if _, err = sibling.CreateIndex(IndexDefinition{Name: "body", Field: "body", ValueType: IndexValueString}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			held, err := col.nativeJSON.Capture(meta.Name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { held.Close() })
+			if bufferedDDL {
+				if len(col.meta.Indexes) != 0 || len(held.meta.Indexes) != 1 || held.meta.Indexes[0].Name != "body" {
+					t.Fatal("test did not establish stale native handle metadata after DDL")
+				}
+				snap := backend.AcquireSnapshot()
+				if snap == nil {
+					t.Fatal("missing physical snapshot")
+				}
+				physical, captureErr := loadCollectionCatalog(snap, meta.Name)
+				snap.Close()
+				if captureErr != nil || physical == nil || len(physical.meta.Indexes) != 0 {
+					t.Fatalf("DDL did not retain buffered schema cut: catalog=%+v err=%v", physical, captureErr)
+				}
+			}
+			before, ok := backend.StateToken()
+			if !ok {
+				t.Fatal("missing initial publication state")
+			}
+			walBefore, nextLSN := ingestWALContents5275(t, dir), backend.CommandWALNextLSN()
+			cfg := ingestTestCfg(2)
+			cfg.VectorIndexName = "vec"
+			cfg.Embedding.Provider = provider
+			res, err := col.IngestSources(context.Background(), []SourceDocument{
+				{ID: ids[0], Fields: map[string]any{"body": "replacement", "embedding": []float32{1, 0}}},
+				{ID: ids[1], Fields: map[string]any{"body": "unembedded replacement"}},
+			}, cfg)
+			if !errors.Is(err, errCollectionDBNil) || err.Error() != "collections: db is nil" {
+				t.Fatalf("native ingestion refusal changed: %v", err)
+			}
+			if len(res.Ingested) != 0 || res.ChunkNanos != 0 || res.EmbedNanos != 0 || res.IndexNanos != 0 || factories.Load() != 0 || calls.Load() != 0 {
+				t.Fatalf("native refusal did work: result=%+v factories=%d embeds=%d", res, factories.Load(), calls.Load())
+			}
+			after, ok := backend.StateToken()
+			if !ok || after != before || backend.CommandWALNextLSN() != nextLSN || !reflect.DeepEqual(walBefore, ingestWALContents5275(t, dir)) {
+				t.Fatal("native refusal changed physical publication or WAL")
+			}
+			current, err := col.nativeJSON.Capture(meta.Name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if current.capture.LogicalSequence() != held.capture.LogicalSequence() || current.collection.incarnation != held.collection.incarnation || current.collection.documentGeneration != held.collection.documentGeneration || !nativeIndexLogicalMetaEqual(current.meta, held.meta) {
+				current.Close()
+				t.Fatal("native refusal changed logical publication or schema")
+			}
+			if err = current.Close(); err != nil {
+				t.Fatal(err)
+			}
+			verify := func(c *Collection) {
+				t.Helper()
+				for i, id := range ids {
+					got, getErr := c.Get(id)
+					if getErr != nil || !bytes.Equal(got, originals[i]) {
+						t.Fatalf("original %q changed: %s %v", id, got, getErr)
+					}
+					child, childErr := c.Get(append(append([]byte(nil), id...), []byte("#0")...))
+					if childErr != nil || child != nil {
+						t.Fatalf("native refusal created child for %q: %s %v", id, child, childErr)
+					}
+				}
+			}
+			verify(col)
+			if err = held.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err = manager.Close(); err != nil {
+				t.Fatal(err)
+			}
+			manager = nil
+			if err = owner.Close(); err != nil {
+				t.Fatal(err)
+			}
+			owner = nil
+			owner, err = treedb.Open(nativeTypedGroupOptions(dir))
+			if err != nil {
+				t.Fatal(err)
+			}
+			backend, err = owner.NativeSemanticBackend()
+			if err != nil {
+				t.Fatal(err)
+			}
+			manager = NewCollectionManager(backend)
+			reopened, err := manager.OpenCollection(meta.Name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			verify(reopened)
+			reopenedMeta := reopened.Meta()
+			if bufferedDDL && (len(reopenedMeta.Indexes) != 1 || reopenedMeta.Indexes[0].Name != "body") {
+				t.Fatalf("reopen lost accepted native DDL: %+v", reopenedMeta)
+			}
+		})
 	}
 }

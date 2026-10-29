@@ -1,0 +1,323 @@
+{
+  "utc": "2026-10-27T00:09:54.971639+00:00",
+  "valid": true,
+  "source_unchanged": true,
+  "rows": [
+    {
+      "cell": 1,
+      "arm": "legacy",
+      "writers": 1,
+      "iterations": 1,
+      "metrics": {
+        "ns/op": 119819007.0,
+        "ack_total_ns": 119819007.0,
+        "close_ns/load": 61606158.0,
+        "ns/record": 29253.0,
+        "ns/request": 3744344.0,
+        "optimize_ns/load": 121117737.0,
+        "records/op": 4096.0,
+        "records/s": 34185.0,
+        "reopen_ns/load": 46349818.0,
+        "reopened_close_ns/load": 2869501.0,
+        "requests/op": 32.0,
+        "B/op": 75024640.0,
+        "allocs/op": 236144.0
+      },
+      "raw": "BenchmarkServiceSharedCOWWriteLoad/writers1-4         \t       1\t 119819007 ns/op\t 119819007 ack_total_ns\t  61606158 close_ns/load\t     29253 ns/record\t   3744344 ns/request\t 121117737 optimize_ns/load\t      4096 records/op\t     34185 records/s\t  46349818 reopen_ns/load\t   2869501 reopened_close_ns/load\t        32.00 requests/op\t75024640 B/op\t  236144 allocs/op"
+    },
+    {
+      "cell": 1,
+      "arm": "legacy",
+      "writers": 4,
+      "iterations": 1,
+      "metrics": {
+        "ns/op": 97409630.0,
+        "ack_total_ns": 97409630.0,
+        "close_ns/load": 61450916.0,
+        "ns/record": 23782.0,
+        "ns/request": 3044051.0,
+        "optimize_ns/load": 138868328.0,
+        "records/op": 4096.0,
+        "records/s": 42049.0,
+        "reopen_ns/load": 52157554.0,
+        "reopened_close_ns/load": 3240471.0,
+        "requests/op": 32.0,
+        "B/op": 50894944.0,
+        "allocs/op": 235784.0
+      },
+      "raw": "BenchmarkServiceSharedCOWWriteLoad/writers4-4         \t       1\t  97409630 ns/op\t  97409630 ack_total_ns\t  61450916 close_ns/load\t     23782 ns/record\t   3044051 ns/request\t 138868328 optimize_ns/load\t      4096 records/op\t     42049 records/s\t  52157554 reopen_ns/load\t   3240471 reopened_close_ns/load\t        32.00 requests/op\t50894944 B/op\t  235784 allocs/op"
+    },
+    {
+      "cell": 2,
+      "arm": "native",
+      "writers": 1,
+      "iterations": 1,
+      "metrics": {
+        "ns/op": 1084792121.0,
+        "ack_total_ns": 1084792121.0,
+        "close_ns/load": 25572563.0,
+        "ns/record": 264842.0,
+        "ns/request": 33899754.0,
+        "optimize_ns/load": 260715247.0,
+        "records/op": 4096.0,
+        "records/s": 3776.0,
+        "reopen_ns/load": 91390738.0,
+        "reopened_close_ns/load": 2644528.0,
+        "requests/op": 32.0,
+        "B/op": 193694040.0,
+        "allocs/op": 995464.0
+      },
+      "raw": "BenchmarkServiceSharedCOWWriteLoad/writers1-4         \t       1\t1084792121 ns/op\t1084792121 ack_total_ns\t  25572563 close_ns/load\t    264842 ns/record\t  33899754 ns/request\t 260715247 optimize_ns/load\t      4096 records/op\t      3776 records/s\t  91390738 reopen_ns/load\t   2644528 reopened_close_ns/load\t        32.00 requests/op\t193694040 B/op\t  995464 allocs/op"
+    },
+    {
+      "cell": 2,
+      "arm": "native",
+      "writers": 4,
+      "iterations": 1,
+      "metrics": {
+        "ns/op": 1069444987.0,
+        "ack_total_ns": 1069444987.0,
+        "close_ns/load": 25615841.0,
+        "ns/record": 261095.0,
+        "ns/request": 33420156.0,
+        "optimize_ns/load": 262687424.0,
+        "records/op": 4096.0,
+        "records/s": 3830.0,
+        "reopen_ns/load": 77770783.0,
+        "reopened_close_ns/load": 2553529.0,
+        "requests/op": 32.0,
+        "B/op": 170453576.0,
+        "allocs/op": 995576.0
+      },
+      "raw": "BenchmarkServiceSharedCOWWriteLoad/writers4-4         \t       1\t1069444987 ns/op\t1069444987 ack_total_ns\t  25615841 close_ns/load\t    261095 ns/record\t  33420156 ns/request\t 262687424 optimize_ns/load\t      4096 records/op\t      3830 records/s\t  77770783 reopen_ns/load\t   2553529 reopened_close_ns/load\t        32.00 requests/op\t170453576 B/op\t  995576 allocs/op"
+    },
+    {
+      "cell": 3,
+      "arm": "native",
+      "writers": 1,
+      "iterations": 1,
+      "metrics": {
+        "ns/op": 1097835672.0,
+        "ack_total_ns": 1097835672.0,
+        "close_ns/load": 25227831.0,
+        "ns/record": 268026.0,
+        "ns/request": 34307365.0,
+        "optimize_ns/load": 260786618.0,
+        "records/op": 4096.0,
+        "records/s": 3731.0,
+        "reopen_ns/load": 89982073.0,
+        "reopened_close_ns/load": 2598686.0,
+        "requests/op": 32.0,
+        "B/op": 193903560.0,
+        "allocs/op": 995506.0
+      },
+      "raw": "BenchmarkServiceSharedCOWWriteLoad/writers1-4         \t       1\t1097835672 ns/op\t1097835672 ack_total_ns\t  25227831 close_ns/load\t    268026 ns/record\t  34307365 ns/request\t 260786618 optimize_ns/load\t      4096 records/op\t      3731 records/s\t  89982073 reopen_ns/load\t   2598686 reopened_close_ns/load\t        32.00 requests/op\t193903560 B/op\t  995506 allocs/op"
+    },
+    {
+      "cell": 3,
+      "arm": "native",
+      "writers": 4,
+      "iterations": 1,
+      "metrics": {
+        "ns/op": 1090363956.0,
+        "ack_total_ns": 1090363956.0,
+        "close_ns/load": 25359318.0,
+        "ns/record": 266202.0,
+        "ns/request": 34073874.0,
+        "optimize_ns/load": 264136493.0,
+        "records/op": 4096.0,
+        "records/s": 3757.0,
+        "reopen_ns/load": 76747561.0,
+        "reopened_close_ns/load": 3415515.0,
+        "requests/op": 32.0,
+        "B/op": 172380968.0,
+        "allocs/op": 995657.0
+      },
+      "raw": "BenchmarkServiceSharedCOWWriteLoad/writers4-4         \t       1\t1090363956 ns/op\t1090363956 ack_total_ns\t  25359318 close_ns/load\t    266202 ns/record\t  34073874 ns/request\t 264136493 optimize_ns/load\t      4096 records/op\t      3757 records/s\t  76747561 reopen_ns/load\t   3415515 reopened_close_ns/load\t        32.00 requests/op\t172380968 B/op\t  995657 allocs/op"
+    },
+    {
+      "cell": 4,
+      "arm": "legacy",
+      "writers": 1,
+      "iterations": 1,
+      "metrics": {
+        "ns/op": 115731452.0,
+        "ack_total_ns": 115731452.0,
+        "close_ns/load": 61275702.0,
+        "ns/record": 28255.0,
+        "ns/request": 3616608.0,
+        "optimize_ns/load": 126654020.0,
+        "records/op": 4096.0,
+        "records/s": 35392.0,
+        "reopen_ns/load": 46541139.0,
+        "reopened_close_ns/load": 2622983.0,
+        "requests/op": 32.0,
+        "B/op": 74825568.0,
+        "allocs/op": 235509.0
+      },
+      "raw": "BenchmarkServiceSharedCOWWriteLoad/writers1-4         \t       1\t 115731452 ns/op\t 115731452 ack_total_ns\t  61275702 close_ns/load\t     28255 ns/record\t   3616608 ns/request\t 126654020 optimize_ns/load\t      4096 records/op\t     35392 records/s\t  46541139 reopen_ns/load\t   2622983 reopened_close_ns/load\t        32.00 requests/op\t74825568 B/op\t  235509 allocs/op"
+    },
+    {
+      "cell": 4,
+      "arm": "legacy",
+      "writers": 4,
+      "iterations": 1,
+      "metrics": {
+        "ns/op": 91421142.0,
+        "ack_total_ns": 91421142.0,
+        "close_ns/load": 61390717.0,
+        "ns/record": 22320.0,
+        "ns/request": 2856911.0,
+        "optimize_ns/load": 119462481.0,
+        "records/op": 4096.0,
+        "records/s": 44804.0,
+        "reopen_ns/load": 50635268.0,
+        "reopened_close_ns/load": 2935077.0,
+        "requests/op": 32.0,
+        "B/op": 50788288.0,
+        "allocs/op": 236026.0
+      },
+      "raw": "BenchmarkServiceSharedCOWWriteLoad/writers4-4         \t       1\t  91421142 ns/op\t  91421142 ack_total_ns\t  61390717 close_ns/load\t     22320 ns/record\t   2856911 ns/request\t 119462481 optimize_ns/load\t      4096 records/op\t     44804 records/s\t  50635268 reopen_ns/load\t   2935077 reopened_close_ns/load\t        32.00 requests/op\t50788288 B/op\t  236026 allocs/op"
+    }
+  ],
+  "medians": {
+    "1": {
+      "B/op": {
+        "legacy": 74925104.0,
+        "native": 193798800.0,
+        "change_percent": 158.65669802740615
+      },
+      "ack_total_ns": {
+        "legacy": 117775229.5,
+        "native": 1091313896.5,
+        "change_percent": 826.6073189863748
+      },
+      "allocs/op": {
+        "legacy": 235826.5,
+        "native": 995485.0,
+        "change_percent": 322.1260121318003
+      },
+      "close_ns/load": {
+        "legacy": 61440930.0,
+        "native": 25400197.0,
+        "change_percent": -58.65915929332451
+      },
+      "ns/op": {
+        "legacy": 117775229.5,
+        "native": 1091313896.5,
+        "change_percent": 826.6073189863748
+      },
+      "ns/record": {
+        "legacy": 28754.0,
+        "native": 266434.0,
+        "change_percent": 826.5980385337691
+      },
+      "ns/request": {
+        "legacy": 3680476.0,
+        "native": 34103559.5,
+        "change_percent": 826.6073056854603
+      },
+      "optimize_ns/load": {
+        "legacy": 123885878.5,
+        "native": 260750932.5,
+        "change_percent": 110.47671910402603
+      },
+      "records/op": {
+        "legacy": 4096.0,
+        "native": 4096.0,
+        "change_percent": 0.0
+      },
+      "records/s": {
+        "legacy": 34788.5,
+        "native": 3753.5,
+        "change_percent": -89.21051496902712
+      },
+      "reopen_ns/load": {
+        "legacy": 46445478.5,
+        "native": 90686405.5,
+        "change_percent": 95.253463692919
+      },
+      "reopened_close_ns/load": {
+        "legacy": 2746242.0,
+        "native": 2621607.0,
+        "change_percent": -4.53838372583334
+      },
+      "requests/op": {
+        "legacy": 32.0,
+        "native": 32.0,
+        "change_percent": 0.0
+      }
+    },
+    "4": {
+      "B/op": {
+        "legacy": 50841616.0,
+        "native": 171417272.0,
+        "change_percent": 237.15936959989628
+      },
+      "ack_total_ns": {
+        "legacy": 94415386.0,
+        "native": 1079904471.5,
+        "change_percent": 1043.7801795355685
+      },
+      "allocs/op": {
+        "legacy": 235905.0,
+        "native": 995616.5,
+        "change_percent": 322.0412878065323
+      },
+      "close_ns/load": {
+        "legacy": 61420816.5,
+        "native": 25487579.5,
+        "change_percent": -58.50335284943664
+      },
+      "ns/op": {
+        "legacy": 94415386.0,
+        "native": 1079904471.5,
+        "change_percent": 1043.7801795355685
+      },
+      "ns/record": {
+        "legacy": 23051.0,
+        "native": 263648.5,
+        "change_percent": 1043.7616589301983
+      },
+      "ns/request": {
+        "legacy": 2950481.0,
+        "native": 33747015.0,
+        "change_percent": 1043.7801158522966
+      },
+      "optimize_ns/load": {
+        "legacy": 129165404.5,
+        "native": 263411958.5,
+        "change_percent": 103.93383160116994
+      },
+      "records/op": {
+        "legacy": 4096.0,
+        "native": 4096.0,
+        "change_percent": 0.0
+      },
+      "records/s": {
+        "legacy": 43426.5,
+        "native": 3793.5,
+        "change_percent": -91.26455044730753
+      },
+      "reopen_ns/load": {
+        "legacy": 51396411.0,
+        "native": 77259172.0,
+        "change_percent": 50.32016924294578
+      },
+      "reopened_close_ns/load": {
+        "legacy": 3087774.0,
+        "native": 2984522.0,
+        "change_percent": -3.343897577996313
+      },
+      "requests/op": {
+        "legacy": 32.0,
+        "native": 32.0,
+        "change_percent": 0.0
+      }
+    }
+  },
+  "numeric_gate": null,
+  "qualification": null,
+  "retries": 0,
+  "plan_sha256": "fb52fcd593c29bf224f3714b217516adef01149a8fabcf1882a4acbce0a7b4dd"
+}

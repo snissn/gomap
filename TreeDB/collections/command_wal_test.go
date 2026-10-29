@@ -3711,7 +3711,7 @@ func TestCollectionCommandWALCreateCollectionReplayWithValueLogOuterLeaves(t *te
 			EfConstruction:   300,
 			EfSearch:         100,
 			Encoding:         VectorIndexEncodingFloat32,
-			Strategy:         VectorIndexStrategyNativeRuntime,
+			Strategy:         VectorIndexStrategyColumnGraph,
 			SchemaGeneration: 1,
 		}},
 		TextIndexes: []TextIndexDefinition{{

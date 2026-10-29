@@ -517,7 +517,7 @@ func testTypedGraphBaseAliasControlledFixtureReopen(t *testing.T, direct bool) {
 		for _, tenant := range []string{"tenant", "new-tenant"} {
 			set, _, truncated, err := lookup.leafProbe(HybridScalarFilter{IndexName: "user", Value: tenant}, 2)
 			want := captured == (tenant == "tenant")
-			_, found := set["base"]
+			found := set.contains("base")
 			if err != nil || truncated || found != want {
 				t.Fatalf("captured=%v tenant=%q: ids=%v truncated=%v err=%v", captured, tenant, set, truncated, err)
 			}

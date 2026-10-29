@@ -1,0 +1,46 @@
+File: documentservice.test
+Type: delay
+Showing nodes accounting for 14781.63us, 94.32% of 15672.57us total
+Dropped 268 nodes (cum <= 78.36us)
+Showing top 40 nodes out of 193
+      flat  flat%   sum%        cum   cum%
+ 4447.87us 28.38% 28.38%  4740.35us 30.25%  github.com/snissn/gomap/TreeDB/collections.collectionMutationUnlock.Unlock
+ 2050.56us 13.08% 41.46%  2050.56us 13.08%  runtime.systemstack_switch
+ 1466.11us  9.35% 50.82%  1466.11us  9.35%  runtime.selectnbsend
+ 1389.63us  8.87% 59.69%  1395.78us  8.91%  sync.(*RWMutex).Unlock
+ 1074.05us  6.85% 66.54%  3667.71us 23.40%  github.com/snissn/gomap/TreeDB/caching.(*DB).appendValueLogInternalObserved
+  893.18us  5.70% 72.24%   893.18us  5.70%  runtime.chansend1
+  479.03us  3.06% 75.29%   479.03us  3.06%  sync.(*WaitGroup).Add
+  476.80us  3.04% 78.34%   677.25us  4.32%  runtime.gcStart
+  476.74us  3.04% 81.38%   476.74us  3.04%  runtime.traceLocker.GoUnpark
+  338.43us  2.16% 83.54%   472.26us  3.01%  github.com/snissn/gomap/TreeDB/caching.(*DB).Close
+  311.10us  1.99% 85.52%   311.10us  1.99%  runtime.chanrecv2
+  298.62us  1.91% 87.43%   298.62us  1.91%  runtime.semrelease1
+  225.15us  1.44% 88.86%   225.15us  1.44%  github.com/snissn/gomap/TreeDB/collections.(*Collection).lockVectorIndexCoverageMutationWithColdCarrier.func2
+  153.54us  0.98% 89.84%   153.54us  0.98%  github.com/snissn/gomap/TreeDB/db.(*DB).protectPendingValueLogAppendPtrs.deferwrap1
+  139.78us  0.89% 90.74%  1401.98us  8.95%  runtime.gcMarkDone
+  107.01us  0.68% 91.42%   107.01us  0.68%  sync.(*Once).doSlow.deferwrap1
+  101.70us  0.65% 92.07%   101.70us  0.65%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*File).tryEnableSealedLazyMmap
+   82.50us  0.53% 92.59%    82.50us  0.53%  runtime.asyncPreempt2
+   79.17us  0.51% 93.10%    79.17us  0.51%  github.com/snissn/gomap/TreeDB/caching.(*vlogCompressionSelector).choose.deferwrap1
+   53.18us  0.34% 93.44%  1646.46us 10.51%  runtime.mallocgc
+   48.96us  0.31% 93.75%   122.75us  0.78%  github.com/snissn/compress/zstd.(*Encoder).encodeAll
+   48.26us  0.31% 94.06%    85.95us  0.55%  github.com/snissn/gomap/TreeDB/documentservice.decodeStoredDocument
+   20.48us  0.13% 94.19%  1468.93us  9.37%  github.com/snissn/gomap/TreeDB/documentservice.benchmarkSharedCOWWriteLoad
+   17.34us  0.11% 94.30%   149.89us  0.96%  github.com/snissn/gomap/TreeDB/caching.(*DB).vlogWriteLoop
+    2.43us 0.016% 94.32%   125.18us   0.8%  github.com/snissn/compress/zstd.(*DictEncodeWorkspace).EncodeAllWithDict
+         0     0% 94.32%   107.01us  0.68%  encoding/json.(*encodeState).marshal
+         0     0% 94.32%   107.01us  0.68%  encoding/json.(*encodeState).reflectValue
+         0     0% 94.32%   107.01us  0.68%  encoding/json.Marshal
+         0     0% 94.32%   107.01us  0.68%  encoding/json.typeEncoder.OnceValue[go.shape.func].func3
+         0     0% 94.32%   107.01us  0.68%  encoding/json.typeEncoder.func2
+         0     0% 94.32%   513.02us  3.27%  github.com/snissn/gomap/TreeDB.(*DB).Close
+         0     0% 94.32%   209.41us  1.34%  github.com/snissn/gomap/TreeDB.OpenBackendWithCachedLeafLog
+         0     0% 94.32%   209.41us  1.34%  github.com/snissn/gomap/TreeDB.openBackendWithCachedServices
+         0     0% 94.32%   209.41us  1.34%  github.com/snissn/gomap/TreeDB.openResolvedWithCacheRole
+         0     0% 94.32%   209.41us  1.34%  github.com/snissn/gomap/TreeDB.openValidatedWithCacheRole
+         0     0% 94.32%   928.96us  5.93%  github.com/snissn/gomap/TreeDB/caching.(*DB).appendValueLog
+         0     0% 94.32%  2738.75us 17.47%  github.com/snissn/gomap/TreeDB/caching.(*DB).appendValueLogForRecordsObserved
+         0     0% 94.32%    97.28us  0.62%  github.com/snissn/gomap/TreeDB/caching.(*DB).ensureValueLogDictTrainer.func1.1
+         0     0% 94.32%   579.97us  3.70%  github.com/snissn/gomap/TreeDB/caching.(*DB).ensureValueLogWriterMuHeld
+         0     0% 94.32%   579.97us  3.70%  github.com/snissn/gomap/TreeDB/caching.(*DB).registerValueLogSegmentReplacing

@@ -291,14 +291,7 @@ func TestCollectionQueryReadyGenerationCacheKeepsManagerRegistrationAcrossVector
 		run  func(*Collection) error
 	}{
 		{name: "unregister", run: func(c *Collection) error {
-			index, err := newVectorIndex(c, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2})
-			if err != nil {
-				return err
-			}
-			if err := c.RegisterVectorIndex(index); err != nil {
-				return err
-			}
-			c.UnregisterVectorIndex(index.name)
+			c.removeColumnGraphPartitionLiveCarrier("embedding")
 			return nil
 		}},
 		{name: "persist-clean", run: func(c *Collection) error { return c.persistDirtyNativeVectorIndexes() }},

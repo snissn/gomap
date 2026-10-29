@@ -1206,9 +1206,9 @@ func TestColumnVectorGraphOfflineBuildCoalescesFrozenPrefixPruning4419And4421(t 
 		rows[i] = columnVectorGraphAssetRow{ID: []byte(fmt.Sprintf("doc-%04d", i)), Vector: vectors[i]}
 	}
 	def := columnGraphRebuildVectorIndexDefinitionV2A(64, 16)
-	build := func(workers int, trace *vectorIndexConstructionTraceV1, policy *vectorIndexLayer0ConstructionPolicyV1) *VectorIndex {
+	build := func(workers int, trace *vectorIndexConstructionTraceV1, policy *vectorIndexLayer0ConstructionPolicyV1) *columnGraphPartitionLiveCarrier {
 		t.Helper()
-		index, err := newVectorIndex(nil, vectorIndexOptionsFromDefinition(def))
+		index, err := newColumnGraphPartitionLiveDomain(nil, vectorIndexOptionsFromDefinition(def))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1216,7 +1216,7 @@ func TestColumnVectorGraphOfflineBuildCoalescesFrozenPrefixPruning4419And4421(t 
 		index.constructionWorkers = workers
 		index.constructionTrace = trace
 		index.layer0ConstructionPolicy = policy
-		if err := insertColumnVectorGraphRowsLocked(index, rows); err != nil {
+		if err := insertColumnVectorGraphRowsLocked(index.columnGraphHNSWBuilder, rows); err != nil {
 			t.Fatal(err)
 		}
 		return index
@@ -1306,13 +1306,13 @@ func BenchmarkColumnVectorGraphOfflineFrozenPrefix4419(b *testing.B) {
 		b.Run(fmt.Sprintf("candidate=%v", candidate), func(b *testing.B) {
 			b.ReportAllocs()
 			for b.Loop() {
-				index, err := newVectorIndex(nil, vectorIndexOptionsFromDefinition(def))
+				index, err := newColumnGraphPartitionLiveDomain(nil, vectorIndexOptionsFromDefinition(def))
 				if err != nil {
 					b.Fatal(err)
 				}
 				index.parallelReciprocalLinks = true
 				if candidate {
-					err = insertColumnVectorGraphRowsLocked(index, rows)
+					err = insertColumnVectorGraphRowsLocked(index.columnGraphHNSWBuilder, rows)
 				} else {
 					for i := range rows {
 						if err = index.insertVectorLocked(rows[i].ID, rows[i].Vector); err != nil {
@@ -1765,13 +1765,6 @@ func TestRebuildVectorIndexPublishesCommandWALV2A(t *testing.T) {
 		wantNativeRoot bool
 	}{
 		{
-			name:           "native_strategy",
-			strategy:       VectorIndexStrategyNativeRuntime,
-			wantState:      VectorIndexStateNativeRuntime,
-			wantReason:     VectorIndexReasonNativeRuntime,
-			wantNativeRoot: true,
-		},
-		{
 			name:          "column_graph_physical_support_missing",
 			strategy:      VectorIndexStrategyColumnGraph,
 			wantState:     VectorIndexStateColumnGraphUnavailable,
@@ -1825,7 +1818,7 @@ func TestRebuildVectorIndexPublishesCommandWALV2A(t *testing.T) {
 			if status.State != tt.wantState || status.Reason != tt.wantReason || status.RebuildNeeded != tt.rebuildNeeded {
 				t.Fatalf("status=%+v want state=%q reason=%q rebuild=%t", status, tt.wantState, tt.wantReason, tt.rebuildNeeded)
 			}
-			if tt.wantNativeRoot && (!status.Loaded || status.RootID == 0 || !status.NativeRootLoaded) {
+			if tt.wantNativeRoot && (!status.Loaded || status.RootID == 0) {
 				t.Fatalf("native rebuild status=%+v want published root", status)
 			}
 			if barriers != 2 {
@@ -1908,13 +1901,6 @@ func TestRebuildVectorIndexCommandWALReplayAdvancesLSNV2A(t *testing.T) {
 		wantNativeRoot bool
 	}{
 		{
-			name:           "native_strategy",
-			strategy:       VectorIndexStrategyNativeRuntime,
-			wantState:      VectorIndexStateNativeRuntime,
-			wantReason:     VectorIndexReasonNativeRuntime,
-			wantNativeRoot: true,
-		},
-		{
 			name:          "column_graph_physical_support_missing",
 			strategy:      VectorIndexStrategyColumnGraph,
 			wantState:     VectorIndexStateColumnGraphUnavailable,
@@ -1963,7 +1949,7 @@ func TestRebuildVectorIndexCommandWALReplayAdvancesLSNV2A(t *testing.T) {
 			if status.State != tt.wantState || status.Reason != tt.wantReason || status.RebuildNeeded != tt.rebuildNeeded {
 				t.Fatalf("status=%+v want state=%q reason=%q rebuild=%t", status, tt.wantState, tt.wantReason, tt.rebuildNeeded)
 			}
-			if tt.wantNativeRoot && (status.RootID == 0 || !status.NativeRootLoaded) {
+			if tt.wantNativeRoot && (status.RootID == 0) {
 				t.Fatalf("native replay status=%+v want published root", status)
 			}
 		})
@@ -2225,9 +2211,9 @@ type columnGraphRebuildNativeGraphLayoutResultV2A struct {
 
 func columnGraphRebuildNativeGraphLayoutV2A(tb testing.TB, def VectorIndexDefinition, rows []columnGraphRebuildInputRowV2A) columnGraphRebuildNativeGraphLayoutResultV2A {
 	tb.Helper()
-	index, err := newVectorIndex(nil, vectorIndexOptionsFromDefinition(def))
+	index, err := newColumnGraphPartitionLiveDomain(nil, vectorIndexOptionsFromDefinition(def))
 	if err != nil {
-		tb.Fatalf("newVectorIndex: %v", err)
+		tb.Fatalf("newColumnGraphPartitionLiveDomain: %v", err)
 	}
 	index.mu.Lock()
 	defer index.mu.Unlock()
@@ -2247,7 +2233,7 @@ func columnGraphRebuildNativeGraphLayoutV2A(tb testing.TB, def VectorIndexDefini
 		}
 		inputOrdinalByNode[nodeID] = i
 	}
-	order, err := columnVectorGraphNativeLocalityOrder(context.Background(), index)
+	order, err := columnVectorGraphNativeLocalityOrder(context.Background(), index.columnGraphHNSWBuilder)
 	if err != nil {
 		tb.Fatalf("columnVectorGraphNativeLocalityOrder: %v", err)
 	}
@@ -2275,14 +2261,14 @@ func columnGraphRebuildNativeGraphLayoutV2A(tb testing.TB, def VectorIndexDefini
 }
 
 func TestColumnVectorGraphNativeLocalityOrderObservesCancellation(t *testing.T) {
-	index := &VectorIndex{entry: 0, nodes: make([]vectorIndexNode, 2049)}
+	index := &columnGraphPartitionLiveCarrier{columnGraphHNSWBuilder: &columnGraphHNSWBuilder{entry: 0, nodes: make([]vectorIndexNode, 2049)}}
 	neighbors := make([]vectorIndexNeighbor, 2048)
 	for i := range neighbors {
 		neighbors[i].nodeID = uint32(i + 1)
 	}
 	index.nodes[0].neighbors = [][]vectorIndexNeighbor{neighbors}
 	ctx := &cancelAfterErrContextV1{Context: context.Background(), cancelAfter: 3}
-	order, err := columnVectorGraphNativeLocalityOrder(ctx, index)
+	order, err := columnVectorGraphNativeLocalityOrder(ctx, index.columnGraphHNSWBuilder)
 	if order != nil || !errors.Is(err, context.Canceled) {
 		t.Fatalf("locality cancellation order=%v err=%v", order, err)
 	}

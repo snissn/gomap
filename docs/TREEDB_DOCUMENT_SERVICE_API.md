@@ -68,13 +68,12 @@ terminal work record.
 | --- | --- |
 | `indexed_json` | Scalar, text, physical-column and vector extraction row attempts, including fast parsers and failures. Column batches charge only the attempted prefix. `materialization_rows` counts non-JSON stored-format conversion attempts for indexed extraction. Ordinary final output reconstruction is separate. |
 | `typed` | Typed scalar/text row attempts, successfully encoded scalar values/analyzed text fields, and old text rows analyzed for mutations. Rows are operations, not unique documents. |
-| `runtime` | Native-runtime query dispatch attempts through direct `VectorIndex.Search` or the buffered collection route (including retries), and successful completions. A selected scalar exact route or exact fallback also belongs to that dispatched query; these counters do not measure graph scores or build/mutation work. |
 | `replay` | Backend replay frame attempts, successful applications and failures, including panic failures. Typed payload frame attempts may contain a legacy projection; decoded typed rows and legacy-projection rows are separate. `legacy_collection_frames` covers legacy insert/update/source payload attempts; deletes have their own frame counter. These totals are observations, not durable coverage authority. |
 | `scans` | Dispatches and visited rows for service dense exact, filtered count, filtered retrieval, mutation matching, cursor, ID-only count, and collection exact search (full or index-restricted). Filtered count scans cover predicates outside declared scalar EQ/AND. Cursor/retrieval work is not automatically forbidden. Internal maintenance iterators are outside this group. |
 | `memory` | One `runtime.ReadMemStats` sample before diagnostics serialization: cumulative `total_alloc`/`mallocs` and current `heap_alloc`/`heap_sys`, plus `sys`/`num_gc`. Totals include startup and recovery. Per-operation allocation claims require an externally bounded phase and matching process lifetime. |
 | `row_index_cache` | Generic variable-row offset memo hits/misses, index build attempts, actual rows visited (including a failed prefix), evictions and oversized bypasses. `entries` and `retained_bytes` are current cache-owned metadata gauges; `byte_limit` is 64 MiB. Fixed/dense ID indexing is outside this group. |
 | `graph` | Public selected typed serving attempts/completions/errors. Separate internal overlay/filter producers count executed empty/exact/HNSW branches, prepared-base FP32 scores, exact-base/suffix scores, shadowed/result IDs, actual posting IDs/bytes/inspected entries and charged mapping bounds, including error prefixes. Direct internal overlay consumers contribute work but are not public requests. Generic legacy graph search and construction scores are outside this group. |
-| `output` | `materialization` counts shared collection by-ID/by-ref fetches once; `search` attributes the admitted native-runtime/typed dense service path; `get_many` attributes typed service fetches. Each separates attempts, successful returns, errors, requested/fetched/missing rows, materialized bytes, retained payload fetches, reconstructed JSON rows and typed-column rows. Completed prefixes survive errors. Keyword/hybrid fetches contribute to common materialization. These are document bytes, not serialized response/frame bytes. |
+| `output` | `materialization` counts shared collection by-ID/by-ref fetches once; `search` attributes the admitted typed dense service path; `get_many` attributes typed service fetches. Each separates attempts, successful returns, errors, requested/fetched/missing rows, materialized bytes, retained payload fetches, reconstructed JSON rows and typed-column rows. Completed prefixes survive errors. Keyword/hybrid fetches contribute to common materialization. These are document bytes, not serialized response/frame bytes. |
 | `fold` | Internal build attempts/completions/errors, durable publications, public Fold returns, and internal epoch-renewal attempts/completions/errors are separate. Renewal also runs during Ensure/Fold. Candidate bytes and appender attempts are charged work, not measured file output. Publication remains counted if later install/checkpoint/maintenance/warming fails. |
 
 
@@ -151,14 +150,13 @@ Supported now:
 - upsert Haystack-style documents;
 - delete by ID or metadata filter;
 - count/filter/list documents;
-- legacy exact dense-vector search with optional metadata filters;
-- dense `route=ann` search through compatible `native_runtime` and
-  `column_graph` vector indexes, including declared scalar filters on
-  `native_runtime` and selected typed `column_graph`;
+- explicit exact dense-vector document scans with optional metadata filters;
+- dense `route=ann` search through compatible `column_graph` indexes, including
+  declared scalar filters on selected typed indexes;
 - ranked keyword search over the declared `content` text index, including
   declared-field metadata filters;
-- TreeDB collection-native hybrid search over text and/or vector sources,
-  including declared-field metadata filters;
+- TreeDB collection-native hybrid search over text and/or vector sources;
+  text-only searches support declared-field metadata filters;
 - optional embedding echo in returned documents.
 
 Not supported now:
@@ -166,7 +164,8 @@ Not supported now:
 - client-side or service-side full-document scan fallbacks for keyword/hybrid;
 - silent vector-only/text-only downgrade when a requested source/index is
   missing, stale, corrupt, or unavailable;
-- unsupported scalar shapes on filtered `route=ann` dense requests.
+- ordinary filtered ANN and vector hybrid requests; Mongo BSON vector indexes;
+- L2 or inner-product ANN and int8 primary vector indexes.
 
 Dense `route=ann` uses a compatible vector index and exact scores for its
 candidates. Selected `typed_input=true` indexes accept an omitted route or
@@ -176,9 +175,7 @@ executed branch can be empty, typed exact for a complete eligible set of at most
 `dense_work.graph.route` for that distinction. Selected `route=exact` rejects,
 including before build/admission.
 
-Declared scalar filters on legacy `native_runtime` expose plan, membership,
-candidate-work, fallback, materialization, and visibility-retry diagnostics.
-Legacy `route=exact` explicitly scans documents and evaluates the optional
+Ordinary `route=exact` explicitly scans documents and evaluates the optional
 metadata predicate before scoring matches; it permits an absent filter.
 An ANN request never silently becomes that document scan.
 
@@ -257,10 +254,24 @@ Service-created indexes declare these stable names:
 - text field/index: `content`;
 - document type: `treedb_document_service_v1`.
 
-Cosine indexes are created with the collection `column_graph` vector strategy so
-hybrid vector sources and dense `route=ann` can use the collection graph. Non-
-cosine indexes keep exact dense scoring available, but hybrid vector capability
-is reported false until the collection vector path can serve that metric safely.
+New indexes default to `column_graph`, with cosine float32 ANN. Explicit
+`native_runtime` and unsupported primary representations or ANN metrics fail
+closed. Typed input, normalized representation and derived quantized score
+planes retain their stated admission requirements. Stored removed or ambiguous
+strategy identities are refused; use a fresh data directory rather than an
+automatic conversion.
+
+Ordinary native-storage ColumnGraph supports durable service collections,
+including the omitted cosine strategy. Without declared scalar fields, the
+native owner retains full JSON documents. ColumnGraph requires the durable
+profile in both owners; relaxed and no-WAL requests refuse before publication.
+Supported plain indexed CRUD remains available under all three profiles.
+After raw wire mutations, keyword and filtered-exact reads remain available;
+ANN and Hybrid require explicit graph maintenance. The HTTP command exposes
+Optimize; the standalone native command uses graceful shutdown, the existing
+offline maintenance API and restart. Reads do not rebuild the graph, substitute
+HNSW or switch storage owners.
+
 Metadata filters on keyword/hybrid routes require fields declared in
 `scalar_fields`; undeclared or unbounded filters fail closed.
 
@@ -313,7 +324,8 @@ support on another platform does not establish this full lifecycle.
 GET /v1/indexes/{index}
 ```
 
-Responses include:
+Example for an explicitly declared normalized/quantized ColumnGraph index;
+capabilities reflect that declaration:
 
 ```json
 {
@@ -775,9 +787,9 @@ Response:
 ```
 
 Omit `route` (or use `route=ann`) to select the compatible vector-index route.
-ANN responses report `route=ann` and `exact=false`. Declared scalar filters are
-supported by `native_runtime` and selected typed `column_graph`; unsupported
-shapes fail closed. Typed clients validate every decoded result document against
+ANN responses report `route=ann` and `exact=false`. Ordinary filtered ANN is
+unsupported; use explicit `route=exact` for a filtered document scan. Selected
+typed `column_graph` supports its declared scalar filters. Typed clients validate every decoded result document against
 the requested filter rather than treating filter-work counts as membership proof.
 Selected legacy or diagnostic empty/exact/HNSW behavior is reported in
 `dense_work.graph.route`; canonical production reports the same value in
