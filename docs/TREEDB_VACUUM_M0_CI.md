@@ -93,3 +93,21 @@ controlled noise and injected material-regression controls, complete packets,
 exact-head review and current-head CI are still required. This experimental
 integration retains #5281's external lease checks; no host
 qualification or infrastructure deployment is established by local tests.
+
+
+## M4 nested-capture preflight
+
+M4 certification retains strict controlled M0 semantics. Before any Go tests or
+benchmarks, a new nested capture requires explicit CPU_SET, GOMAXPROCS and
+M0_LEASE_PATH, rejects a requested semantic profile or disabled custody mode, and
+runs physical-topology/kernel-lease admission into m0-preflight. It explicitly
+forwards controlled-performance and M0_CONTROLLED=1 to the later capture, which
+repeats admission. The caller's default strict certification intent does not
+substitute for the external listener lease or physical placement checks.
+
+Packet reuse retains the existing clean/exact-head/ten-sample/all-gates policy,
+validated both before expensive work and again at consumption. This change does
+not broaden its legacy schema support or certify v3 packet reuse. Existing nested
+packet content is refused instead of replaced. The harmless hosted supervisor
+fixture explicitly sets custody mode zero even when its parent is controlled;
+this isolates the test without altering the actual capture's qualification.

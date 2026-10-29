@@ -90,6 +90,11 @@ class SupervisorTest(unittest.TestCase):
             self.assertFalse(receipt['completed'])
             self.assertEqual(receipt['termination_reason'], 'timeout')
 
+    def test_hosted_interrupt_fixture_is_isolated_from_controlled_parent(self):
+        with mock.patch.dict(os.environ, M0_CONTROLLED='1',
+                             M0_QUALIFICATION_PROFILE='controlled-performance'):
+            self.test_external_interrupt_kills_owned_descendants_and_records_failure()
+
     def test_external_interrupt_kills_owned_descendants_and_records_failure(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -112,7 +117,7 @@ class SupervisorTest(unittest.TestCase):
             git.write_text('#!/bin/sh\nprintf %s ' + shlex.quote(str(root)) + '\n')
             git.chmod(0o755)
             env = dict(os.environ, PATH=str(fake_bin) + os.pathsep + os.environ['PATH'],
-                       RUN_DIR=str(packet), M0_QUALIFICATION_PROFILE='hosted-semantic')
+                       RUN_DIR=str(packet), M0_QUALIFICATION_PROFILE='hosted-semantic', M0_CONTROLLED='0')
             supervisor = subprocess.Popen(['bash', str(SCRIPT.with_suffix('.sh'))], env=env)
             descendant = None
             try:

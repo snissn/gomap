@@ -137,12 +137,15 @@ class CaptureTests(unittest.TestCase):
             scripts.mkdir()
             caller = scripts / 'm4.sh'
             caller.write_text(initialization)
+            (scripts / 'treedb_vacuum_m0_environment.py').write_text('')
             shim = root / 'bin'
             shim.mkdir()
             (shim / 'git').write_text('#!/bin/sh\nexit 0\n')
             (shim / 'git').chmod(0o755)
             packet = root / 'packet'
-            environment = dict(os.environ, RUN_DIR=str(packet),
+            environment = dict(os.environ, RUN_DIR=str(packet), M0_CONTROLLED='1',
+                               M0_QUALIFICATION_PROFILE='controlled-performance', CPU_SET='0',
+                               GOMAXPROCS='1', M0_LEASE_PATH='/fixture.lock', M0_PACKET_DIR='',
                                PATH=str(shim) + os.pathsep + os.environ['PATH'])
             result = subprocess.run(['bash', str(caller)], env=environment,
                                     capture_output=True, text=True)
@@ -278,6 +281,99 @@ fi
         self.assertEqual(len(terminal['raw_files']), 2)
         self.assertIn('injected-failure', (root / 'packet/raw/public-1.txt').read_text())
         self.assertFalse((root / 'packet/environment-public-1-after.json').exists())
+
+
+class M4CallerTests(unittest.TestCase):
+    def run_m4(self, overrides=None, admitted=False, reuse=None):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        (root / 'scripts').mkdir()
+        (root / 'bin').mkdir()
+        (root / 'TreeDB').mkdir()
+        caller = root / 'scripts/m4.sh'
+        caller.write_text((HERE / 'treedb_index_vacuum_m4_capture.sh').read_text())
+        for name in ('treedb_vacuum_m0_capture.sh', 'treedb_vacuum_m0_environment.py'):
+            (root / 'scripts' / name).symlink_to(HERE / name)
+        scripts = {
+            'git': '#!/bin/bash\ncase "$1" in status) :;; rev-parse) if [[ "$2" == --show-toplevel ]]; then echo "$M4_TEST_ROOT"; else printf "%040d\\n" 1; fi;; esac\n',
+            'lscpu': '#!/bin/sh\necho "Model name: offline fixture"\n',
+            'free': '#!/bin/sh\necho "Mem: 8G 1G 1G 1G 1G 7G"\n',
+            'findmnt': '#!/bin/sh\necho "/dev/fixture ext4 rw"\n',
+            'go': '#!/bin/bash\nprintf "%s\\n" "$*" >> "$M4_TEST_ROOT/go-calls"\nif [[ "$1" == test ]]; then echo "--- PASS: TestCloseOptInVacuumIndexOnlineShrinksAndReopens"; else echo fixture; fi\n',
+        }
+        for name, data in scripts.items():
+            path = root / 'bin' / name
+            path.write_text(data)
+            path.chmod(0o755)
+        env = dict(os.environ, PATH=str(root / 'bin') + os.pathsep + os.environ['PATH'],
+                   M4_TEST_ROOT=str(root), RUN_DIR=str(root / 'packet'),
+                   RUN_FULL_TESTS='false', RUN_RACE_TESTS='false', PYTHONDONTWRITEBYTECODE='1')
+        for name in ('M0_CONTROLLED', 'M0_QUALIFICATION_PROFILE', 'CPU_SET', 'GOMAXPROCS', 'M0_LEASE_PATH', 'M0_PACKET_DIR'):
+            env.pop(name, None)
+        env.update(overrides or {})
+        if reuse is not None:
+            (root / 'reuse').mkdir()
+            (root / 'reuse/results.json').write_text(json.dumps(reuse))
+            env['M0_PACKET_DIR'] = str(root / 'reuse')
+        if admitted:
+            helper = root / 'scripts/treedb_vacuum_m0_environment.py'
+            helper.unlink()
+            helper.write_text('import os,pathlib\nassert os.environ["M0_CONTROLLED"] == "1"\nassert os.environ["M0_QUALIFICATION_PROFILE"] == "controlled-performance"\npathlib.Path(os.environ["M4_TEST_ROOT"],"preflight-called").touch()\n')
+            capture = root / 'scripts/treedb_vacuum_m0_capture.sh'
+            capture.unlink()
+            capture.write_text('#!/bin/bash\n[[ -e "$M4_TEST_ROOT/preflight-called" ]] || exit 19\nprintf "%s:%s\\n" "$M0_QUALIFICATION_PROFILE" "$M0_CONTROLLED" > "$M4_TEST_ROOT/nested-mode"\nexit 23\n')
+            capture.chmod(0o755)
+        result = subprocess.run(['bash', str(caller)], env=env, capture_output=True, text=True)
+        return root, result
+
+    def test_missing_controlled_configuration_fails_before_any_go_work(self):
+        root, result = self.run_m4()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((root / 'go-calls').exists(), result.stderr)
+        self.assertIn('controlled', result.stderr)
+
+    def test_semantic_mode_cannot_certify_m4(self):
+        root, result = self.run_m4({'M0_CONTROLLED': '0', 'M0_QUALIFICATION_PROFILE': 'hosted-semantic'})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((root / 'go-calls').exists(), result.stderr)
+
+    def test_real_lease_admission_failure_precedes_go_work(self):
+        root, result = self.run_m4({'M0_CONTROLLED': '1', 'M0_QUALIFICATION_PROFILE': 'controlled-performance',
+            'CPU_SET': str(min(os.sched_getaffinity(0))), 'GOMAXPROCS': '1', 'M0_LEASE_PATH': '/missing-m4-fixture.lock'})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((root / 'go-calls').exists(), result.stderr)
+        receipt = json.loads((root / 'packet/m0-preflight/environment-admission.json').read_text())
+        self.assertFalse(receipt['admitted'])
+
+    def test_missing_reused_packet_is_rejected_before_go_work(self):
+        root, result = self.run_m4({'M0_PACKET_DIR': '/missing-m4-fixture-packet'})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((root / 'go-calls').exists(), result.stderr)
+
+    def test_reused_packet_retains_original_exact_gate_policy(self):
+        valid = {'schema_version': 1, 'environment': {'git_sha': '0' * 39 + '1',
+            'dirty_state': 'clean', 'repetitions': 10}, 'gates': {
+            'legacy_completed_without_abort': True, 'legacy_cv_at_most_10_percent': True,
+            'public_status_explicit': True}}
+        root, result = self.run_m4(reuse=valid)
+        # The inert fixture ends at the subsequent unrelated compact-storage call.
+        self.assertTrue((root / 'go-calls').exists(), result.stderr)
+        self.assertEqual(json.loads((root / 'packet/m0/results.json').read_text()), valid)
+        for gate in valid['gates']:
+            failed = dict(valid, gates=dict(valid['gates'], **{gate: False}))
+            root, result = self.run_m4(reuse=failed)
+            with self.subTest(gate=gate):
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse((root / 'go-calls').exists())
+                self.assertIn('all-gates-pass', result.stderr)
+
+    def test_admitted_caller_explicitly_preserves_strict_nested_mode(self):
+        root, result = self.run_m4({'M0_CONTROLLED': '1', 'M0_QUALIFICATION_PROFILE': 'controlled-performance',
+            'CPU_SET': '0', 'GOMAXPROCS': '1', 'M0_LEASE_PATH': '/fixture.lock'}, admitted=True)
+        self.assertEqual(result.returncode, 23, result.stderr)
+        self.assertTrue((root / 'go-calls').exists())
+        self.assertEqual((root / 'nested-mode').read_text(), 'controlled-performance:1\n')
 
 
 class WorkflowTests(unittest.TestCase):

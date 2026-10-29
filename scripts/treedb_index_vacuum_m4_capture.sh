@@ -19,6 +19,39 @@ if [[ -n "$(git status --porcelain)" ]]; then
   exit 1
 fi
 
+# Refuse an invalid nested capture or reuse before tests/benchmarks/toolchain work.
+validate_m0_reuse() {
+  local source_sha
+  M0_PACKET_DIR=$(cd "$M0_PACKET_DIR" && pwd -P)
+  source_sha=$(git rev-parse HEAD)
+  if ! jq -e --arg sha "$source_sha" --argjson count "$COUNT" '
+    .schema_version == 1 and
+    .environment.git_sha == $sha and
+    .environment.dirty_state == "clean" and
+    .environment.repetitions == $count and
+    .gates == {
+      "legacy_completed_without_abort": true,
+      "legacy_cv_at_most_10_percent": true,
+      "public_status_explicit": true
+    }
+  ' \
+    "$M0_PACKET_DIR/results.json" >/dev/null; then
+    printf 'reused M0 packet is not a complete, clean, exact-head all-gates-pass packet\n' >&2
+    exit 1
+  fi
+}
+if [[ -n "$M0_PACKET_DIR" ]]; then
+  validate_m0_reuse
+else
+  export M0_QUALIFICATION_PROFILE=${M0_QUALIFICATION_PROFILE:-controlled-performance}
+  export M0_CONTROLLED=${M0_CONTROLLED:-1}
+  if [[ "$M0_QUALIFICATION_PROFILE" != controlled-performance || "$M0_CONTROLLED" != 1 ||
+        -z ${CPU_SET:-} || -z ${GOMAXPROCS:-} || -z ${M0_LEASE_PATH:-} ]]; then
+    printf 'M4 requires strict controlled M0 with explicit CPU_SET, GOMAXPROCS and M0_LEASE_PATH\n' >&2
+    exit 1
+  fi
+fi
+
 if [[ -z "$RUN_DIR" ]]; then
   RUN_DIR=$(mktemp -d "$TMP_ROOT/treedb_index_vacuum_m4_XXXXXX")
 elif [[ -e "$RUN_DIR" ]]; then
@@ -36,6 +69,13 @@ fi
 # M0 claims its own output directory exclusively; leave it absent until capture.
 mkdir -p "$RUN_DIR"/{tests,benchmarks,profiles,compact-storage}
 RUN_DIR=$(cd "$RUN_DIR" && pwd -P)
+
+if [[ -z "$M0_PACKET_DIR" ]]; then
+  # Recheck physical topology and the real listener-ancestor kernel lease now;
+  # the nested capture repeats admission later and retains its own receipt.
+  M0_SOURCE_SHA="$(git rev-parse HEAD)" python3 "$ROOT/scripts/treedb_vacuum_m0_environment.py" \
+    --run-dir "$RUN_DIR/m0-preflight" --phase admission
+fi
 
 for command in lscpu free findmnt; do
   if ! command -v "$command" >/dev/null 2>&1; then
@@ -124,28 +164,17 @@ env GOWORK=off TMPDIR="$TMP_ROOT" go test ./TreeDB/db -run '^$' \
   -count="$COUNT" -benchtime=1x -benchmem | tee "$RUN_DIR/benchmarks/production.txt"
 
 if [[ -n "$M0_PACKET_DIR" ]]; then
-  M0_PACKET_DIR=$(cd "$M0_PACKET_DIR" && pwd -P)
-  source_sha=$(git rev-parse HEAD)
-  if ! jq -e --arg sha "$source_sha" --argjson count "$COUNT" '
-    .schema_version == 1 and
-    .environment.git_sha == $sha and
-    .environment.dirty_state == "clean" and
-    .environment.repetitions == $count and
-    .gates == {
-      "legacy_completed_without_abort": true,
-      "legacy_cv_at_most_10_percent": true,
-      "public_status_explicit": true
-    }
-  ' \
-    "$M0_PACKET_DIR/results.json" >/dev/null; then
-    printf 'reused M0 packet is not a complete, clean, exact-head all-gates-pass packet\n' >&2
+  # Revalidate at consumption too; an early check cannot authorize changed input.
+  validate_m0_reuse
+  if [[ -e "$RUN_DIR/m0" ]]; then
+    printf 'refusing to replace an existing nested M0 packet\n' >&2
     exit 1
   fi
-  rm -rf "$RUN_DIR/m0"
   cp -a "$M0_PACKET_DIR" "$RUN_DIR/m0"
   printf 'reuse M0_PACKET_DIR=%q\n' "$M0_PACKET_DIR" >>"$RUN_DIR/commands.txt"
 else
-  RUN_DIR="$RUN_DIR/m0" COUNT="$COUNT" scripts/treedb_vacuum_m0_capture.sh
+  M0_QUALIFICATION_PROFILE=controlled-performance M0_CONTROLLED=1 \
+    RUN_DIR="$RUN_DIR/m0" COUNT="$COUNT" scripts/treedb_vacuum_m0_capture.sh
 fi
 RUN_DIR="$RUN_DIR/compact-storage" COUNT="$COUNT" scripts/compact_storage_m0_profile.sh
 
