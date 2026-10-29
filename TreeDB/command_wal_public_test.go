@@ -6171,6 +6171,14 @@ func TestPublicCommandWALObserverStalePinRemainsHard(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer func() { _ = database.Close() }()
+			// Seed a typed command before rotation so both stream and fixed WALs
+			// have a cleanup candidate. Empty streams are deliberately retained;
+			// only fixed containers can positively certify an empty reserve.
+			if err := database.SetSync([]byte("observer-cleanup"), []byte("value")); err != nil {
+				t.Fatal(err)
+			}
+			stats := database.Stats()
+			t.Logf("WAL container=%s reason=%s", stats["treedb.command_wal.writer.container"], stats["treedb.command_wal.writer.container_reason"])
 			if err := database.backend.RotateCommandWALActiveSegment(true); err != nil {
 				t.Fatal(err)
 			}
