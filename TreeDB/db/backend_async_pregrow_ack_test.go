@@ -16,8 +16,9 @@ import (
 )
 
 // Backend scope: an allocator-owned setup proves actual async file extension
-// before one command-WAL SetSync ACK. This does not exercise public COW/MVCC
-// completion ordering, growth concurrent with ACK, or growth-failure recovery.
+// before one command-WAL pointer batch WriteSync ACK. This does not exercise
+// public COW/MVCC completion ordering, growth concurrent with ACK, or
+// growth-failure recovery.
 func TestBackendAsyncPregrowExtensionThenCommandWALStableACK(t *testing.T) {
 	const childEnv = "GOMAP_BACKEND_PREGROW_ACK_CHILD"
 	if os.Getenv(childEnv) != "1" {
@@ -55,8 +56,38 @@ func TestBackendAsyncPregrowExtensionThenCommandWALStableACK(t *testing.T) {
 	if !database.CommandWALEnabled() {
 		t.Fatal("command WAL did not activate")
 	}
+	if !database.HasValueLogAppender() {
+		t.Fatal("command WAL persistent value-log appender unavailable")
+	}
+	// The backend Set/SetSync API accepts inline values only. Forced pointers
+	// require the installed persistent appender plus an ordinary pointer batch;
+	// WriteSync assigns its native revision and publishes its command-WAL LSN.
+	newPointerBatch := func(key, value []byte) (*Batch, page.ValuePtr) {
+		t.Helper()
+		ptrs, err := database.AppendValueLogValues([][]byte{value})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(ptrs) != 1 || !page.IsValueLogFileID(ptrs[0].FileID) || ptrs[0].Length == 0 {
+			t.Fatalf("persistent appender pointers=%+v", ptrs)
+		}
+		batch := database.NewBatch().(*Batch)
+		t.Cleanup(func() {
+			if err := batch.Close(); err != nil {
+				t.Error(err)
+			}
+		})
+		if err := batch.SetPointer(key, ptrs[0]); err != nil {
+			t.Fatal(err)
+		}
+		return batch, ptrs[0]
+	}
 	anchor := []byte("pregrow-anchor")
-	if err := database.SetSync(anchor, []byte("baseline")); err != nil {
+	baselineBatch, _ := newPointerBatch(anchor, []byte("baseline"))
+	if err := baselineBatch.WriteSync(); err != nil {
+		t.Fatal(err)
+	}
+	if err := baselineBatch.Close(); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.Checkpoint(); err != nil {
@@ -193,7 +224,8 @@ func TestBackendAsyncPregrowExtensionThenCommandWALStableACK(t *testing.T) {
 	defer restore()
 	key := []byte("ack-after-async-extension")
 	value := bytes.Repeat([]byte("persistent-after-pregrow/"), 128)
-	if err := database.SetSync(key, value); err != nil {
+	ackBatch, appendedPointer := newPointerBatch(key, value)
+	if err := ackBatch.WriteSync(); err != nil {
 		t.Fatal(err)
 	}
 	// Freeze on ACK before State, Get, snapshot acquisition, Checkpoint or Close.
@@ -223,7 +255,7 @@ func TestBackendAsyncPregrowExtensionThenCommandWALStableACK(t *testing.T) {
 	}
 	entry, entryErr := physical.GetEntryExact(key)
 	closeErr := physical.Close()
-	if entryErr != nil || closeErr != nil || entry.Revision != revision || entry.Flags&node.FlagPointer == 0 || entry.ValuePtr.FileID == 0 || entry.ValuePtr.Length == 0 {
+	if entryErr != nil || closeErr != nil || entry.Revision != revision || entry.Flags&node.FlagPointer == 0 || entry.ValuePtr != appendedPointer || !page.IsValueLogFileID(entry.ValuePtr.FileID) || entry.ValuePtr.Length == 0 {
 		t.Fatalf("ACK did not activate persistent pointer: entry=%+v errors=%v/%v", entry, entryErr, closeErr)
 	}
 
@@ -246,6 +278,15 @@ func TestBackendAsyncPregrowExtensionThenCommandWALStableACK(t *testing.T) {
 	got, recoveredRevision, err := reopened.GetVersioned(key)
 	if err != nil || recoveredRevision != revision || !bytes.Equal(got, value) {
 		t.Fatalf("stable ACK value/revision: revision=%d want=%d equal=%t err=%v", recoveredRevision, revision, bytes.Equal(got, value), err)
+	}
+	recoveredPhysical := reopened.AcquireSnapshot()
+	if recoveredPhysical == nil {
+		t.Fatal("stable ACK physical snapshot unavailable")
+	}
+	recoveredEntry, recoveredEntryErr := recoveredPhysical.GetEntryExact(key)
+	recoveredCloseErr := recoveredPhysical.Close()
+	if recoveredEntryErr != nil || recoveredCloseErr != nil || recoveredEntry.Revision != revision || recoveredEntry.Flags&node.FlagPointer == 0 || !page.IsValueLogFileID(recoveredEntry.ValuePtr.FileID) || recoveredEntry.ValuePtr.Length == 0 {
+		t.Fatalf("stable ACK persistent pointer/revision: entry=%+v want_revision=%d errors=%v/%v", recoveredEntry, revision, recoveredEntryErr, recoveredCloseErr)
 	}
 	if state := reopened.State(); state == nil || state.AppliedCommandLSN < ack.AppliedCommandLSN {
 		t.Fatalf("stable ACK frontier regressed: recovered=%+v ack=%+v", state, ack)
