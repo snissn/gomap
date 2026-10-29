@@ -44,9 +44,14 @@ class PairedTests(unittest.TestCase):
         for name in ['fixture.json', 'baseline-fixture.json']:
             (root/name).write_text(json.dumps(fixture))
         (root/'baseline-db.test').write_bytes(b'inert binary fixture')
+        (root/'candidate-db.test').write_bytes(b'inert candidate binary fixture')
         (root/'paired-provenance.json').write_text(json.dumps({
             'candidate_source_sha': 'a'*40, 'baseline_source_sha': 'b'*40,
             'baseline_binary_sha256': hashlib.sha256(b'inert binary fixture').hexdigest(),
+            'candidate_binary_sha256': hashlib.sha256(b'inert candidate binary fixture').hexdigest(),
+            'baseline_build_environment': {'runtime_environment': {}},
+            'candidate_build_environment': {'runtime_environment': {}},
+            'runtime_environment': {},
             'candidate_db_test_harness_sha256': {}}))
 
     def run_summary(self, root, contract='v4-proposal', profile='controlled-performance'):
@@ -78,13 +83,15 @@ class PairedTests(unittest.TestCase):
             self.assertEqual(result['schema_version'], 4)
             paired = result['paired_regression_proposal']
             self.assertIsNone(paired['statistical_inference'])
+            self.assertFalse(any('public' in k for k in result['gates'] if k.startswith('baseline_')))
+            self.assertIn('public_status_explicit',result['gates'])
             for entry in paired['metrics'].values():
                 self.assertEqual(len(entry['ratios']), 10)
                 self.assertAlmostEqual(entry['ratios'][1], .996)
                 self.assertAlmostEqual(entry['ratios'][9], 1.001)
 
     def test_missing_pairs_fixture_drift_and_wrong_source_fail_closed(self):
-        for defect in ['missing', 'extra', 'fixture', 'source', 'binary', 'harness']:
+        for defect in ['missing', 'extra', 'fixture', 'source', 'binary', 'candidate_binary', 'compiler', 'harness']:
             with self.subTest(defect=defect), tempfile.TemporaryDirectory() as d:
                 root=Path(d);self.packet(root)
                 if defect=='missing': (root/'raw/baseline-4.txt').unlink()
@@ -92,6 +99,9 @@ class PairedTests(unittest.TestCase):
                 if defect=='fixture': (root/'baseline-fixture.json').write_text('{"fixture":{}}')
                 if defect=='source': (root/'paired-provenance.json').write_text('{"candidate_source_sha":"wrong"}')
                 if defect=='binary': (root/'baseline-db.test').write_bytes(b'changed')
+                if defect=='candidate_binary': (root/'candidate-db.test').write_bytes(b'changed')
+                if defect=='compiler':
+                    q=root/'paired-provenance.json';v=json.loads(q.read_text());v['candidate_build_environment']['compiler']='changed';q.write_text(json.dumps(v))
                 if defect=='harness':
                     (root/'TreeDB/db').mkdir(parents=True)
                     (root/'TreeDB/db/changed_test.go').write_text('changed')
@@ -124,9 +134,7 @@ class PairedTests(unittest.TestCase):
 
 
 class CaptureScheduleTests(unittest.TestCase):
-    def test_actual_controlled_capture_alternates_all_ten_pairs(self):
-        # Only external workload/admission tools are inert here; run the actual
-        # capture shell to verify routing, ordering and raw sample preservation.
+    def run_schedule(self, contract=None):
         with tempfile.TemporaryDirectory() as d:
             root=Path(d); scripts=root/'scripts';scripts.mkdir(); shim=root/'bin';shim.mkdir()
             (scripts/'treedb_vacuum_m0_capture.sh').write_bytes((HERE/'treedb_vacuum_m0_capture.sh').read_bytes())
@@ -135,13 +143,24 @@ class CaptureScheduleTests(unittest.TestCase):
                 (scripts/name).write_text('')
             (scripts/'treedb_vacuum_m0_summarize.py').write_text(
                 "import os,pathlib,sys;pathlib.Path(os.environ['M0_TEST_ROOT'],'summary-args').write_text(' '.join(sys.argv))")
-            stub = ('#!/bin/sh\ncase "$*" in *-test.bench*) echo baseline >> "$M0_TEST_ROOT/order";; *)\n'
-                    ': "${TREEDB_VACUUM_M0_COMMAND:?}" "${TREEDB_VACUUM_M0_DIRTY_STATE:?}" '
-                    '"${TREEDB_VACUUM_M0_FILESYSTEM:?}" "${TREEDB_VACUUM_M0_DEVICE:?}" '
-                    '"${TREEDB_VACUUM_M0_TIMING_BOUNDARY:?}" "${TREEDB_VACUUM_M0_GIT_SHA:?}";; esac\necho PASS\n')
-            (scripts/'treedb_vacuum_m0_baseline.py').write_text(
-                "import os,pathlib; p=pathlib.Path(os.environ['RUN_DIR'])/'baseline-db.test'; "
-                + "p.write_text(" + repr(stub) + "); p.chmod(0o755)")
+            (scripts/'treedb_vacuum_m0_baseline.py').write_text("""
+import os,pathlib,sys
+r=pathlib.Path(os.environ['M0_TEST_ROOT'])
+if '--exec-arm' in sys.argv:
+ arm=sys.argv[sys.argv.index('--exec-arm')+1]
+ flags=sys.argv[sys.argv.index('--')+1:]
+ assert all(not f.startswith('-') or f.startswith('-test.') for f in flags),flags
+ if '-test.bench' in sys.argv:
+  label='baseline' if arm=='baseline' else ('public' if 'BenchmarkPL06' in ' '.join(sys.argv) else 'production')
+  with (r/'order').open('a') as f:f.write(label+'\\n')
+ else:
+  if arm=='baseline':
+   for k in ['COMMAND','DIRTY_STATE','FILESYSTEM','DEVICE','TIMING_BOUNDARY','GIT_SHA']:
+    assert os.environ['TREEDB_VACUUM_M0_'+k]
+ print('PASS')
+else:
+ (r/'build-called').write_text('paired')
+""")
             tools={
                 'git': '#!/bin/sh\ncase "$1" in rev-parse) if [ "$2" = --show-toplevel ]; then echo "$M0_TEST_ROOT"; else echo source; fi;; esac\n',
                 'taskset': '#!/bin/sh\nshift 2\nexec "$@"\n',
@@ -151,15 +170,26 @@ class CaptureScheduleTests(unittest.TestCase):
                 (shim/name).write_text(body);(shim/name).chmod(0o755)
             env=dict(os.environ,PATH=str(shim)+os.pathsep+os.environ['PATH'],M0_TEST_ROOT=str(root),
                      RUN_DIR=str(root/'packet'),M0_CONTROLLED='1',M0_QUALIFICATION_PROFILE='controlled-performance',
-                     CPU_SET='0,1',GOMAXPROCS='2',M0_LEASE_PATH='/inert',M0_BASELINE_SHA='b'*40)
+                     CPU_SET='0,1',GOMAXPROCS='2',M0_LEASE_PATH='/inert')
+            env.pop('M0_BASELINE_SHA',None);env.pop('M0_ACCEPTANCE_CONTRACT',None)
+            if contract:
+                env.update(M0_ACCEPTANCE_CONTRACT=contract,M0_BASELINE_SHA='b'*40)
             result=subprocess.run(['bash',str(scripts/'treedb_vacuum_m0_capture.sh')],env=env,capture_output=True,text=True)
             self.assertEqual(result.returncode,0,result.stderr)
+            paired=contract=='v4-proposal'
             expected=[]
             for n in range(1,11):
-                expected.extend(['baseline','production','public'] if n%2 else ['production','baseline','public'])
+                expected.extend((['baseline','production','public'] if n%2 else ['production','baseline','public']) if paired else ['production','public'])
             self.assertEqual((root/'order').read_text().splitlines(),expected)
-            self.assertEqual(len(list((root/'packet/raw').glob('*.txt'))),30)
-            self.assertIn('--acceptance-contract v4-proposal',(root/'summary-args').read_text())
+            self.assertEqual(len(list((root/'packet/raw').glob('*.txt'))),30 if paired else 20)
+            self.assertEqual((root/'build-called').exists(),paired)
+            self.assertIn('--acceptance-contract '+(contract or 'v3'),(root/'summary-args').read_text())
+
+    def test_explicit_opt_in_alternates_all_ten_pairs(self):
+        self.run_schedule('v4-proposal')
+
+    def test_controlled_default_preserves_v3_without_baseline(self):
+        self.run_schedule()
 
 
 class BaselinePreparationTests(unittest.TestCase):
@@ -182,16 +212,22 @@ class BaselinePreparationTests(unittest.TestCase):
             shim=root/'bin';shim.mkdir()
             fake=shim/'go'
             fake.write_text("""#!/usr/bin/python3
-import pathlib,sys
-if sys.argv[1]=='version':
+import pathlib,sys,json,os
+if sys.argv[1]=='env':
+ if sys.argv[2]=='GOROOT': print(pathlib.Path(__file__).parent.parent)
+ else: print(json.dumps({'GOTOOLDIR':str(pathlib.Path(__file__).parent),'GOVERSION':'go1.test'}))
+elif sys.argv[1]=='tool': print('compile version go1.test')
+elif sys.argv[1]=='version':
  print('inert fixture build info')
 else:
- assert pathlib.Path('TreeDB/db/engine.go').read_text()=='baseline production'
+ arm='baseline' if pathlib.Path.cwd().name=='baseline-source' else 'candidate'
+ assert pathlib.Path('TreeDB/db/engine.go').read_text()==arm+' production'
  assert pathlib.Path('TreeDB/db/current_test.go').read_text()=='candidate exact harness'
  assert not pathlib.Path('TreeDB/db/obsolete_test.go').exists()
  pathlib.Path(sys.argv[sys.argv.index('-o')+1]).write_bytes(b'inert compiled fixture')
 """)
             fake.chmod(0o755)
+            (shim/'compile').write_bytes(b'inert same compiler')
             with mock.patch.dict(os.environ, {'PATH':str(shim)+os.pathsep+os.environ['PATH']}):
                 builder.prepare(repo,run,source)
             provenance=json.loads((run/'paired-provenance.json').read_text())
@@ -203,6 +239,32 @@ else:
             (db/'engine.go').write_text('uncommitted')
             with self.assertRaisesRegex(ValueError,'clean candidate'):
                 builder.prepare(repo, root/'unused', source)
+
+
+class SavedExecutableTests(unittest.TestCase):
+    def test_both_arms_execute_bound_bytes_and_reject_runtime_or_binary_drift(self):
+        spec=importlib.util.spec_from_file_location('saved_builder', HERE/'treedb_vacuum_m0_baseline.py')
+        b=importlib.util.module_from_spec(spec);spec.loader.exec_module(b)
+        with tempfile.TemporaryDirectory() as d:
+            run=Path(d);driver=run/'go';compiler=run/'compile'
+            driver.write_bytes(b'driver');compiler.write_bytes(b'compiler')
+            with mock.patch.dict(os.environ,{'GOMAXPROCS':'2'}):
+                runtime=b.runtime_environment(os.environ)
+                record={'pinned_environment':{},'runtime_environment':runtime}
+                for arm in ('baseline','candidate'):
+                    binary=run/(arm+'-db.test')
+                    binary.write_text('#!/bin/sh\n[ "$GOMAXPROCS" = 2 ]\n');binary.chmod(0o755)
+                    record[arm+'_binary_sha256']=b.digest(binary)
+                    record[arm+'_build_environment']={'driver':str(driver),'driver_sha256':b.digest(driver),
+                      'compiler':str(compiler),'compiler_sha256':b.digest(compiler)}
+                (run/'paired-provenance.json').write_text(json.dumps(record))
+                for arm in ('baseline','candidate'):self.assertEqual(b.execute(run,arm,[]),0)
+                with mock.patch.dict(os.environ,{'GOMAXPROCS':'3'}):
+                    with self.assertRaisesRegex(ValueError,'runtime environment'):b.execute(run,'candidate',[])
+                (run/'candidate-db.test').write_text('#!/bin/sh\nexit 17\n')
+                with self.assertRaisesRegex(ValueError,'executable changed'):b.execute(run,'candidate',[])
+                compiler.write_bytes(b'changed compiler')
+                with self.assertRaisesRegex(ValueError,'compiler changed'):b.execute(run,'baseline',[])
 
 
 if __name__=='__main__': unittest.main()

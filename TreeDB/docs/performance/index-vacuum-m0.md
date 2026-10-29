@@ -6,8 +6,10 @@ This unaccepted `v4-proposal` adds a quantitative baseline comparison to the
 controlled path. V3 CV is scale invariant: a uniform slowdown can pass every CV
 predicate. Historical v2/v3 decoders and failures remain unchanged. Hosted CI
 continues production v3 with ten production/public samples, its existing
-720-second capture budget and 20-minute job limit. Controlled capture selects
-v4-proposal and fails closed without a declared baseline; this code does not
+720-second capture budget and 20-minute job limit. Controlled capture also defaults
+to v3, with no baseline requirement. Only explicit M0_ACCEPTANCE_CONTRACT=v4-proposal
+(repository variable TREEDB_M0_ACCEPTANCE_CONTRACT on the admitted controlled route)
+selects the proposal and requires a declared baseline; this code does not
 establish contract acceptance or certify either topology.
 
 Predeclared proposed estimator: for each of total vacuum time and foreground
@@ -31,10 +33,18 @@ full test-harness hashes, build command/info and binary SHA256 are retained in
 is no fallback harness or baseline. Both binaries generate the original fixture
 artifact and its complete fixture object must match, including digest, debt and
 offline accounting. An arbitrary externally supplied binary is not accepted.
-The baseline binary and current harness are rehashed at summary time.
+Both saved binaries and the current harness are rehashed at summary time. Both
+production arms and candidate public/fixture work execute the saved candidate or
+baseline binary through the same descriptor-bound launcher, never an unchecked
+`go test` rebuild. The launcher verifies executable bytes and fixed runtime
+knobs before each invocation. Exact driver/compiler hashes, resolved Go build
+environment and build info are recorded for each arm and must match. A pinned
+resolved GOROOT with GOTOOLCHAIN=local prevents per-module toolchain switching.
+Baseline gates describe baseline production observations only; the unmeasured
+baseline public route receives no public classification. Public evidence is candidate-only.
 
 Controlled output adds `baseline-fixture.json`, `baseline-source.tar`,
-`baseline-source/`, `baseline-db.test`, `raw/baseline-1.txt` through `-10.txt`,
+`baseline-source/`, `baseline-db.test`, `candidate-db.test`, `raw/baseline-1.txt` through `-10.txt`,
 per-sample environment observations and provenance. Schema4 retains every pair
 ratio, baseline metric, both arms' original gates, proposed threshold and source
 identity. `product_performance_approval` remains null. These source/build

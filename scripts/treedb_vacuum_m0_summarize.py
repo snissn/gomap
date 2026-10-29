@@ -183,6 +183,12 @@ def evaluate_gates(
 ) -> dict[str, bool]:
     if stability_arm not in STABILITY_BENCHMARKS:
         raise ValueError("unknown stability arm")
+    gates = evaluate_production_gates(legacy, stability_arm, acceptance_contract)
+    gates["public_status_explicit"] = classify_public_status(public) != "production-index-vacuum-ambiguous"
+    return gates
+
+
+def evaluate_production_gates(legacy, stability_arm="production", acceptance_contract="v3"):
     required_cv = cv_metrics(stability_arm, acceptance_contract)
     missing = [metric for metric in REQUIRED_CV_METRICS if metric not in legacy]
     if missing:
@@ -195,8 +201,6 @@ def evaluate_gates(
             "concurrent-aborts/op" in legacy
             and all(value == 0 for value in legacy["concurrent-aborts/op"]["samples"])
         ),
-        "public_status_explicit": classify_public_status(public)
-        != "production-index-vacuum-ambiguous",
     }
 
     if stability_arm == "production":
@@ -330,7 +334,7 @@ def render_markdown(result: dict[str, object]) -> str:
         paired = result["paired_regression_proposal"]
         lines.extend(["", "## Provisional paired materiality proposal", "",
                       "Median of ten contemporaneous candidate/baseline ratios <= 1.05 for each v3 timing metric.",
-                      "Original CV and semantic predicates remain mandatory for both arms. No statistical confidence or product approval is claimed.",
+                      "Original production CV and completion predicates remain mandatory for both arms; public classification is candidate-only. No statistical confidence or product approval is claimed.",
                       "", *[f"- `{name}`: median ratio `{value['median_ratio']:.6f}`, passed `{value['passed']}`"
                               for name, value in paired["metrics"].items()]])
     return "\n".join(lines)
@@ -373,8 +377,13 @@ def main() -> int:
         if (not re.fullmatch(r"[0-9a-f]{40}", provenance["baseline_source_sha"])
                 or provenance["baseline_source_sha"] != os.environ.get("M0_BASELINE_SHA")):
             raise ValueError("paired baseline differs from explicitly approved source")
-        if hashlib.sha256((run_dir / "baseline-db.test").read_bytes()).hexdigest() != provenance["baseline_binary_sha256"]:
-            raise ValueError("baseline binary changed after setup")
+        for selected in ("baseline", "candidate"):
+            if hashlib.sha256((run_dir / f"{selected}-db.test").read_bytes()).hexdigest() != provenance[f"{selected}_binary_sha256"]:
+                raise ValueError(f"{selected} binary changed after setup")
+        if provenance["baseline_build_environment"] != provenance["candidate_build_environment"]:
+            raise ValueError("paired compiler/environment mismatch")
+        if provenance["runtime_environment"] != provenance["candidate_build_environment"]["runtime_environment"]:
+            raise ValueError("paired runtime environment mismatch")
         harness = {str(path.relative_to(repo)): hashlib.sha256(path.read_bytes()).hexdigest()
                    for path in (repo / "TreeDB/db").glob("*_test.go")}
         if harness != provenance["candidate_db_test_harness_sha256"]:
@@ -382,7 +391,7 @@ def main() -> int:
         paired = paired_comparison(baseline, candidate)
         paired["provenance"] = provenance
         paired["baseline_metrics"] = baseline
-        baseline_gates = evaluate_gates(baseline, public, arm, args.acceptance_contract)
+        baseline_gates = evaluate_production_gates(baseline, arm, args.acceptance_contract)
         gates.update({"baseline_" + name: value for name, value in baseline_gates.items()})
         gates["paired_material_regression_absent"] = paired["passed"]
     public_status = classify_public_status(public)
