@@ -110,6 +110,9 @@ func benchmarkVacuumIndexOnlineCollectionForegroundChurn(b *testing.B, legacy bo
 			// Diagnostic only: measure the existing foreground-drain barrier.
 			var precutoverForegroundWait time.Duration
 			var precutoverForegroundHooks uint64
+			delay := m0PairedControlDelay(b, legacy)
+			var injected time.Duration
+			var injectionHooks uint64
 
 			b.ReportAllocs()
 			b.ResetTimer()
@@ -127,6 +130,12 @@ func benchmarkVacuumIndexOnlineCollectionForegroundChurn(b *testing.B, legacy bo
 						return
 					}
 					hookOnce.Do(func() {
+						if delay > 0 {
+							started := time.Now()
+							time.Sleep(delay)
+							injected += time.Since(started)
+							injectionHooks++
+						}
 						waitStarted := time.Now()
 						startOnce.Do(func() { close(start) })
 						<-warmed
@@ -188,6 +197,10 @@ func benchmarkVacuumIndexOnlineCollectionForegroundChurn(b *testing.B, legacy bo
 			}
 			// These three intervals are disjoint. Other reported phase counters
 			// can overlap and must not be summed into this arithmetic remainder.
+
+			b.ReportMetric(float64(delay.Nanoseconds()), "control-requested-delay-ns/op")
+			b.ReportMetric(float64(injected.Nanoseconds())/float64(b.N), "control-actual-delay-ns/op")
+			b.ReportMetric(float64(injectionHooks)/float64(b.N), "control-injection-hooks/op")
 			otherVacuum := total.TotalDuration - precutoverForegroundWait - total.PreflushDuration - total.FinalPagerSyncDuration
 			b.ReportMetric(float64(precutoverForegroundHooks)/float64(b.N), "diagnostic-precutover-hooks/op")
 			b.ReportMetric(float64(precutoverForegroundWait.Nanoseconds())/float64(b.N), "diagnostic-foreground-wait-ns/op")
