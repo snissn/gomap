@@ -44,6 +44,9 @@ func TestOrderedCompletionStableImageAtAcknowledgement(t *testing.T) {
 
 func proposalOrderedACKImageChild(t *testing.T, scenario string) {
 	opts := cowOrderedDurabilityOptions(treedb.ProfileCommandWALDurable, t.TempDir())
+	// Observe snapshots every file at each staging hook. Keep unused index
+	// capacity small while retaining every observation and the progress deadlines.
+	opts.ChunkSize = 64 << 10
 	opts.BackgroundCheckpointIdleDuration = -1
 	opts.BackgroundIndexVacuumInterval = -1
 	opts.MaxWALBytes = -1
