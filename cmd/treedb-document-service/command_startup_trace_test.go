@@ -1,10 +1,22 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net"
+	"net/http"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/snissn/gomap/TreeDB/nativewire"
 )
 
 const commandPerfStartupRecordLimit = 4096
@@ -184,5 +196,195 @@ func TestCommandStartupTraceBoundAndDisabled(t *testing.T) {
 	}
 	if tr.Totals["terminal"].Failures != 1 {
 		t.Fatal("truncation lost terminal failure")
+	}
+}
+
+// This subprocess serves only readiness protocols; it never opens a database.
+func TestCommandStartupHelperProcess(t *testing.T) {
+	mode := os.Getenv("GOMAP_COMMAND_STARTUP_TEST_HELPER")
+	if mode == "" {
+		t.Skip("integration helper only")
+	}
+	var addr string
+	for i, arg := range os.Args {
+		if arg == "-addr" && i+1 < len(os.Args) {
+			addr = os.Args[i+1]
+		}
+	}
+	if addr == "" {
+		t.Fatal("missing helper address")
+	}
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer cancel()
+	ctx, limit := context.WithTimeout(ctx, 10*time.Second)
+	defer limit()
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	var done = make(chan struct{})
+	switch mode {
+	case "http", "http-retry":
+		var requests atomic.Int32
+		server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/v1/health" {
+				http.NotFound(w, r)
+				return
+			}
+			if requests.Add(1) == 1 && mode == "http-retry" {
+				w.WriteHeader(http.StatusServiceUnavailable)
+			}
+			fmt.Fprint(w, "readiness body")
+		})}
+		go func() { defer close(done); _ = server.Serve(listener) }()
+		<-ctx.Done()
+		_ = server.Close()
+	case "native":
+		server := nativewire.NewServer(nativewire.ServerOptions{})
+		go func() { defer close(done); _ = server.Serve(ctx, listener) }()
+		<-ctx.Done()
+		_ = listener.Close()
+		_ = server.Close()
+	case "native-no-hello":
+		go func() {
+			defer close(done)
+			for {
+				conn, err := listener.Accept()
+				if err != nil {
+					return
+				}
+				fmt.Println("native-no-hello accepted connection")
+				_ = conn.Close()
+			}
+		}()
+		<-ctx.Done()
+		_ = listener.Close()
+	default:
+		t.Fatalf("unknown helper mode %q", mode)
+	}
+	<-done
+}
+
+func TestCommandStartupRealPreStartFailures(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		for _, stage := range []string{"log-open", "spawn"} {
+			t.Run(fmt.Sprintf("enabled=%v/%s", enabled, stage), func(t *testing.T) {
+				dir := t.TempDir()
+				log := filepath.Join(dir, "startup.log")
+				if stage == "log-open" {
+					if err := os.WriteFile(log, []byte("preserve"), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				report := commandPerfReport{startupTraceEnabled: enabled}
+				tr := report.newStartupTrace("reopen")
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				process, err := startCommandPerf(ctx, log, filepath.Join(dir, "missing-executable"), dir, true, false, tr)
+				if err == nil || process != nil {
+					t.Fatalf("expected pre-start failure: %v %+v", err, process)
+				}
+				if !enabled {
+					if report.StartupTrace != nil {
+						t.Fatal("disabled trace created")
+					}
+					return
+				}
+				if tr.Status != "failed" || tr.Totals["terminal"].Failures != 1 {
+					t.Fatalf("lost failure: %+v", tr)
+				}
+				if stage == "log-open" {
+					if len(tr.Events) != 1 {
+						t.Fatalf("unexpected pre-spawn records: %+v", tr.Events)
+					}
+					contents, e := os.ReadFile(log)
+					if e != nil || string(contents) != "preserve" {
+						t.Fatal("existing log changed")
+					}
+				} else if tr.Totals["spawn"].Count != 1 || tr.Totals["spawn"].Failures != 1 {
+					t.Fatalf("missing spawn failure: %+v", tr)
+				}
+			})
+		}
+	}
+}
+
+func TestCommandStartupRealReadiness(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("readiness helper uses /bin/sh; accounting and pre-start failure tests remain portable")
+	}
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		mode          string
+		enabled, fail bool
+	}{
+		{"http", false, false}, {"http-retry", true, false}, {"native", false, false}, {"native", true, false}, {"native-no-hello", true, true},
+	} {
+		t.Run(fmt.Sprintf("%s/trace=%v", test.mode, test.enabled), func(t *testing.T) {
+			t.Setenv("GOMAP_COMMAND_STARTUP_TEST_HELPER", test.mode)
+			dir := t.TempDir()
+			wrapper := filepath.Join(dir, "helper")
+			// exec preserves direct-child ownership; production args follow -- so the
+			// test binary's flag parser leaves the command's flags for the helper.
+			script := "#!/bin/sh\nexec '" + strings.ReplaceAll(binary, "'", "'\"'\"'") + "' -test.run=^TestCommandStartupHelperProcess$ -- \"$@\"\n"
+			if err := os.WriteFile(wrapper, []byte(script), 0700); err != nil {
+				t.Fatal(err)
+			}
+			report := commandPerfReport{startupTraceEnabled: test.enabled}
+			tr := report.newStartupTrace("serve")
+			timeout := 5 * time.Second
+			if test.fail {
+				timeout = 3 * time.Second
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+			process, err := startCommandPerf(ctx, filepath.Join(dir, "start.log"), wrapper, dir, strings.HasPrefix(test.mode, "http"), false, tr)
+			if test.fail {
+				if err == nil || process != nil || tr.Status != "failed" || tr.Totals["native_hello"].Failures == 0 {
+					t.Fatalf("TCP without Hello accepted: %v %+v", err, tr)
+				}
+				raw, readErr := os.ReadFile(filepath.Join(dir, "start.log"))
+				if readErr != nil || !strings.Contains(string(raw), "native-no-hello accepted connection") {
+					t.Fatalf("no accepted TCP connection: %v %s", readErr, raw)
+				}
+				return
+			}
+			if err != nil {
+				raw, _ := os.ReadFile(filepath.Join(dir, "start.log"))
+				t.Fatalf("start: %v\n%s", err, raw)
+			}
+			if err := process.stop(); err != nil {
+				t.Fatalf("helper cleanup: %v", err)
+			}
+			if !test.enabled {
+				if tr != nil || report.StartupTrace != nil {
+					t.Fatal("disabled trace created")
+				}
+				return
+			}
+			kind := "native_hello"
+			if strings.HasPrefix(test.mode, "http") {
+				kind = "http_health"
+			}
+			total := tr.Totals[kind]
+			if tr.Status != "ready" || total.Count <= total.Failures || tr.Totals["terminal"].Failures != 0 {
+				t.Fatalf("readiness accounting: %+v", tr)
+			}
+			if test.mode == "http-retry" {
+				observed503 := false
+				for _, event := range tr.Events {
+					if event.Kind == "http_health" && event.Error == "health status503" {
+						observed503 = true
+					}
+				}
+				if !observed503 || total.Failures == 0 || tr.Totals["poll_sleep"].Count == 0 {
+					t.Fatalf("503 retry absent: %+v", tr)
+				}
+			}
+		})
 	}
 }
