@@ -154,8 +154,8 @@ func importNativeJSONCatalog(capture backenddb.NativeSemanticCapture) (base *nat
 	if err != nil {
 		return base, err
 	}
-	// Every physical collection root must belong to one admitted descriptor;
-	// overlays/unknown domains refuse rather than installing a partial catalog.
+	// Every live physical collection root must belong to one admitted descriptor;
+	// overlays/unknown live domains refuse rather than installing a partial catalog.
 	err = scan(systemCollectionRootOverlayPrefix, func(node.LeafEntry) error { return backenddb.ErrNativeSemanticUnsupported })
 	if err != nil {
 		return base, err
@@ -163,8 +163,18 @@ func importNativeJSONCatalog(capture backenddb.NativeSemanticCapture) (base *nat
 	err = scan(systemCollectionRootPrefix, func(entry node.LeafEntry) error {
 		qualified := strings.TrimPrefix(string(entry.Key), systemCollectionRootPrefix)
 		name, domain, found := strings.Cut(qualified, "/")
-		if !found {
+		if !found || name == "" || domain == "" {
 			return backenddb.ErrNativeSemanticUnsupported
+		}
+		root, err := decodeRootID(entry.Value)
+		if err != nil {
+			return err
+		}
+		// Maintained schema removal clears descriptors with encodeRootID(0).
+		// Text Drop clears both versions, while recreation declares only one.
+		// Such inactive descriptors carry no physical root to import.
+		if root == 0 {
+			return nil
 		}
 		c, ok := base.names.Get(name)
 		if !ok || nativeJSONDomainNumber(*c.schema.meta, domain) == 0 {
@@ -173,10 +183,6 @@ func importNativeJSONCatalog(capture backenddb.NativeSemanticCapture) (base *nat
 		d, ok := c.domains.Get(domain)
 		if !ok {
 			return backenddb.ErrNativeSemanticUnsupported
-		}
-		root, err := decodeRootID(entry.Value)
-		if err != nil {
-			return err
 		}
 		if root != d.baseRoot {
 			return backenddb.ErrNativeSemanticUnsupported

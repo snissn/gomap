@@ -427,40 +427,35 @@ type collectionManagerOptions struct {
 type Collection struct {
 	nativeSchemaCoordinator *collectionSchemaCoordinator
 	// nativeOperationLocalReads keeps admitted temporary read backing out of global pools.
-	nativeOperationLocalReads   bool
-	nativeJSON                  *NativeJSONManager
-	typedGraphReconcile         *typedGraphReconcileToken
-	db                          *backenddb.DB
-	manager                     *CollectionManager
-	writeDomain                 *collectionWriteDomain
-	commandWALRawPublishLocked  bool
-	name                        string
-	meta                        CollectionMeta
-	catalogMu                   sync.RWMutex
-	catalogCommitSeq            uint64
-	catalogSystemRoot           uint64
-	catalog                     *collectionCatalog
-	insertStatsMu               sync.RWMutex
-	lastInsertStats             CollectionInsertStats
-	updateStatsMu               sync.RWMutex
-	lastUpdateStats             CollectionUpdateStats
-	documentScanStatsMu         sync.RWMutex
-	lastDocumentScanStats       CollectionDocumentScanStats
-	vectorIndexLoadMu           sync.Mutex
-	vectorIndexMutationMu       sync.Mutex
-	vectorIndexesMu             sync.RWMutex
-	vectorIndexes               map[string]*VectorIndex
-	vectorPreparedSearchMu      sync.Mutex
-	vectorPreparedSearch        map[columnVectorGraphSharedPreparedSearchKey]*columnVectorGraphSharedPreparedSearchCacheEntry
-	vectorPreparedSearchHits    uint64
-	vectorPreparedSearchMisses  uint64
-	vectorPreparedSearchWaits   uint64
-	vectorPreparedSearchBuilds  uint64
-	nativeScalarPlanCacheMu     sync.Mutex
-	nativeScalarPlanCache       map[nativeScalarPlanCacheKey]nativeScalarPlanCacheEntry
-	nativeScalarPlanCacheEpochs map[*VectorIndex]nativeScalarPlanCacheEpochState
-	nativeScalarPlanCacheOrder  []nativeScalarPlanCacheKey
-	nativeScalarPlanCacheBytes  uint64
+	nativeOperationLocalReads  bool
+	nativeJSON                 *NativeJSONManager
+	typedGraphReconcile        *typedGraphReconcileToken
+	db                         *backenddb.DB
+	manager                    *CollectionManager
+	writeDomain                *collectionWriteDomain
+	commandWALRawPublishLocked bool
+	name                       string
+	meta                       CollectionMeta
+	catalogMu                  sync.RWMutex
+	catalogCommitSeq           uint64
+	catalogSystemRoot          uint64
+	catalog                    *collectionCatalog
+	insertStatsMu              sync.RWMutex
+	lastInsertStats            CollectionInsertStats
+	updateStatsMu              sync.RWMutex
+	lastUpdateStats            CollectionUpdateStats
+	documentScanStatsMu        sync.RWMutex
+	lastDocumentScanStats      CollectionDocumentScanStats
+	vectorIndexLoadMu          sync.Mutex
+	vectorIndexMutationMu      sync.Mutex
+	vectorIndexesMu            sync.RWMutex
+	vectorIndexes              map[string]*columnGraphPartitionLiveCarrier
+	vectorPreparedSearchMu     sync.Mutex
+	vectorPreparedSearch       map[columnVectorGraphSharedPreparedSearchKey]*columnVectorGraphSharedPreparedSearchCacheEntry
+	vectorPreparedSearchHits   uint64
+	vectorPreparedSearchMisses uint64
+	vectorPreparedSearchWaits  uint64
+	vectorPreparedSearchBuilds uint64
 
 	vectorBufferedSearchMu            sync.Mutex
 	vectorBufferedSearch              map[collectionVectorIndexPreparedSearchCacheSlot]*collectionVectorIndexPreparedSearchCacheEntry
@@ -682,6 +677,14 @@ func (work *ColumnPublishCandidateResourceWork) Add(other ColumnPublishCandidate
 
 // CollectionInsertStats captures phase timings and counters from a completed
 // InsertBatch call or an optional diagnostics-enabled typed upsert.
+//
+// Ordinary native facade inserts report counts from their original captured
+// schema and prepared logical domain runs. PrepareDocuments times row staging;
+// Publish times CommitNative, including its required acknowledgement wait.
+// Other phase timings are unmeasured on that route and remain zero. Secondary
+// AlreadySorted describes the prepared run, not the caller's document order.
+// These diagnostics are caller/handle-owned outputs rather than native engine
+// state; LastInsertStats retains one array and WithStats copies it for the caller.
 type CollectionInsertStats struct {
 	Documents                    int
 	Indexes                      int
@@ -1306,6 +1309,7 @@ type collectionMetaDisk struct {
 }
 
 type collectionCatalog struct {
+	nativeText *nativeTextCatalog // borrowed complete-cut text read; never cached
 	// collectionCatalog is immutable once cached or published. Root updates must
 	// create a replacement catalog via cloneCatalogWithRootUpdates.
 	meta                   CollectionMeta
@@ -1574,10 +1578,10 @@ type collectionWriteDomain struct {
 	nativeVectorActive      int
 	// Protected by nativeVectorActiveMu; true only for actual exclusive coverage admission.
 	nativeVectorAsyncAdmissionHeld bool
-	nativeVectorReconciled         map[*VectorIndex]struct{}
+	nativeVectorReconciled         map[*columnGraphPartitionLiveCarrier]struct{}
 	nativeVectorSearchActive       atomic.Bool
 	nativeVectorIndexesMu          sync.RWMutex
-	nativeVectorIndexes            map[string]*VectorIndex
+	nativeVectorIndexes            map[string]*columnGraphPartitionLiveCarrier
 	nativeVectorPublishMu          sync.RWMutex
 	// Built lazily by readers so write-only indexed buffering does not pay for
 	// an auxiliary lookup structure it never uses.
@@ -3382,17 +3386,7 @@ func (m *CollectionManager) existingWriteDomainForCollection(name string) *colle
 // write APIs are still available.
 func (m *CollectionManager) FlushAll() error {
 	if m != nil && m.nativeJSON != nil {
-		m.collectionsMu.RLock()
-		collections := make([]*Collection, 0, len(m.collections))
-		for c := range m.collections {
-			collections = append(collections, c)
-		}
-		m.collectionsMu.RUnlock()
-		var errs []error
-		for _, c := range collections {
-			errs = append(errs, c.flushNativeHNSW())
-		}
-		return errors.Join(errs...)
+		return nil
 	}
 	if m == nil || m.db == nil {
 		return nil
@@ -3481,6 +3475,27 @@ func (m *CollectionManager) holdIndexedAsyncFlushForSync(domains []*collectionWr
 	}
 }
 
+// CheckpointStorage seals this manager's original storage authority. Callers
+// first publish their required collection buffers with Flush or FlushAll. Native
+// collections use the same cache owner's complete accepted-prefix checkpoint;
+// a checkpoint on its borrowed backend alone cannot seal native accepted state.
+// Legacy managers retain the backend's complete physical checkpoint operation.
+func (m *CollectionManager) CheckpointStorage() error {
+	if m != nil && m.initializationError != nil {
+		return m.initializationError
+	}
+	if m == nil || m.isClosing() {
+		return backenddb.ErrClosed
+	}
+	if m.nativeJSON != nil {
+		return m.nativeJSON.db.SyncNativeSemanticPrefix()
+	}
+	if m.db == nil {
+		return backenddb.ErrClosed
+	}
+	return m.db.Checkpoint()
+}
+
 // SyncForStandaloneWriteConcern closes the durable storage boundary used by a
 // standalone Mongo journal acknowledgement. Collection-local buffers are
 // published first. Command-WAL databases then persist a dependency-complete
@@ -3499,10 +3514,7 @@ func (m *CollectionManager) SyncForStandaloneWriteConcern() (physicalSync bool, 
 		return false, backenddb.ErrClosed
 	}
 	if m.nativeJSON != nil {
-		if m.isClosing() {
-			return false, backenddb.ErrClosed
-		}
-		if err := m.nativeJSON.db.SyncNativeSemanticPrefix(); err != nil {
+		if err := m.CheckpointStorage(); err != nil {
 			return false, err
 		}
 		return true, nil
@@ -3723,6 +3735,35 @@ func (m *CollectionManager) CreateCollection(meta *CollectionMeta) (*CollectionM
 		return nil, err
 	}
 	return m.createCollectionWithCommandWALIntent(normalized, nil)
+}
+
+// CreateCollectionWithStatus publishes an ordinary catalog create and reports
+// whether a compatible collection already existed under the catalog owner.
+// It does not accept an externally assigned intent or run a preflight callback.
+func (m *CollectionManager) CreateCollectionWithStatus(meta CollectionMeta) (*CollectionMeta, bool, error) {
+	if m != nil && m.nativeJSON != nil {
+		if m.isClosing() {
+			return nil, false, backenddb.ErrClosed
+		}
+		return m.nativeJSON.CreateCollectionWithStatus(meta)
+	}
+	if m != nil && m.initializationError != nil {
+		return nil, false, m.initializationError
+	}
+	if m == nil {
+		return nil, false, errCollectionManagerNil
+	}
+	if m.db == nil {
+		return nil, false, errCollectionDBNil
+	}
+	if m.isClosing() {
+		return nil, false, backenddb.ErrClosed
+	}
+	normalized, err := normalizeCollectionMeta(meta)
+	if err != nil {
+		return nil, false, err
+	}
+	return m.createCollectionWithPreparedCommandWALIntent(normalized, nil, nil, nil)
 }
 
 // CreateCollectionWithCommandWALIntent applies a catalog create through the
@@ -4141,9 +4182,6 @@ func (m *CollectionManager) openCollectionWithCommandWALIntent(name string, comm
 	if catalog == nil {
 		return nil, errCollectionNotFound
 	}
-	if schemaCoord != nil && collectionMetaHasNativeVectorIndexes(catalog.meta) {
-		schemaCoord.hasNativeVectorIndexes.Store(true)
-	}
 	if !coveredCommandWALIntent {
 		if err := validateColumnStoreProfileSupportForDB(m.db, catalog.meta.Options.ColumnStore, "open"); err != nil {
 			return nil, err
@@ -4483,6 +4521,10 @@ func (c *Collection) CreateIndex(def IndexDefinition) (*CollectionMeta, error) {
 func (c *Collection) createIndexOnce(def IndexDefinition) (*CollectionMeta, error) {
 	unlockSchema := c.lockCollectionSchemaWrite()
 	defer unlockSchema()
+	return c.createIndexOnceSchemaLocked(def)
+}
+
+func (c *Collection) createIndexOnceSchemaLocked(def IndexDefinition) (*CollectionMeta, error) {
 	unlockMutation := c.lockMutation()
 	defer unlockMutation.Unlock()
 	if err := c.flushBufferedWrites(); err != nil {
@@ -4621,9 +4663,8 @@ func columnRetainedPayloadPathOverlaps(indexPath, columnPath string) bool {
 
 // CreateVectorIndex adds vector index metadata to the collection schema.
 //
-// This metadata-only API makes vector fields declarable as document-store
-// indexes. Follow-on PRs persist and maintain the native HNSW graph under the
-// declared index.
+// The declaration selects ColumnGraph. RebuildVectorIndex publishes the graph
+// assets required for search.
 func (c *Collection) CreateVectorIndex(def VectorIndexDefinition) (*CollectionMeta, error) {
 	if c == nil {
 		return nil, errCollectionNil
@@ -4636,6 +4677,18 @@ func (c *Collection) CreateVectorIndex(def VectorIndexDefinition) (*CollectionMe
 	}
 	unlockSchema := c.lockCollectionSchemaWrite()
 	defer unlockSchema()
+	return c.createVectorIndexSchemaLocked(def)
+}
+
+func (c *Collection) createVectorIndexSchemaLocked(def VectorIndexDefinition) (*CollectionMeta, error) {
+	normalized, err := normalizeVectorIndexDefinition(def)
+	if err != nil {
+		return nil, err
+	}
+	def = normalized
+	if _, err := normalizeCollectionMeta(CollectionMeta{Name: c.meta.Name, Options: c.meta.Options, VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+		return nil, err
+	}
 	unlockAdmission := c.lockVectorIndexSynchronousPublicationAdmission()
 	defer unlockAdmission()
 	unlockMutation := c.lockMutation()
@@ -4665,14 +4718,6 @@ func (c *Collection) CreateVectorIndex(def VectorIndexDefinition) (*CollectionMe
 	c.meta = baseMeta
 	primaryRootName := collectionPrimaryRootName(baseMeta.Name)
 	registerEmptyRuntime := catalog.rootID(primaryRootName) == 0 && len(catalog.overlayRootIDs(primaryRootName)) == 0
-	var sourceDocumentGeneration uint64
-	if registerEmptyRuntime {
-		sourceDocumentGeneration, err = vectorIndexDocumentGeneration(snap, catalog)
-		if err != nil {
-			_ = snap.Close()
-			return nil, err
-		}
-	}
 	schemaGeneration := snapshotCommitSeq(snap) + 1
 	if schemaGeneration == 0 {
 		schemaGeneration = 1
@@ -4686,13 +4731,6 @@ func (c *Collection) CreateVectorIndex(def VectorIndexDefinition) (*CollectionMe
 	}
 	if vectorIndexUsesCosineNormalizedF32V1(normalizedDef) && !registerEmptyRuntime {
 		return nil, fmt.Errorf("collections: representation %q may only be created on an empty collection", normalizedDef.Representation)
-	}
-	var runtime *VectorIndex
-	if registerEmptyRuntime {
-		runtime, err = newVectorIndex(c, vectorIndexOptionsFromDefinition(normalizedDef))
-		if err != nil {
-			return nil, err
-		}
 	}
 	encodedMeta, err := encodeCollectionMeta(newMeta)
 	if err != nil {
@@ -4709,18 +4747,9 @@ func (c *Collection) CreateVectorIndex(def VectorIndexDefinition) (*CollectionMe
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
 	if coord := c.collectionSchemaCoordinator(); coord != nil {
-		coord.hasNativeVectorIndexes.Store(collectionMetaHasNativeVectorIndexes(newMeta))
+		coord.hasNativeVectorIndexes.Store(false)
 	}
-	if registerEmptyRuntime {
-		if vectorIndexDefinitionUsesNativeRuntime(normalizedDef) {
-			runtime.recordSourceDocumentGeneration(sourceDocumentGeneration)
-			if _, err := c.installNativeVectorIndexCandidate(runtime, 0, nil, 0); err != nil {
-				return nil, err
-			}
-		} else {
-			c.registerVectorIndexCurrentCatalog(runtime)
-		}
-	}
+
 	return newMeta.copy(), nil
 }
 
@@ -4818,9 +4847,9 @@ func (c *Collection) DropVectorIndex(name string) (*CollectionMeta, error) {
 	c.rememberCatalogAtSystemRoot(newSystemRoot, nextCatalog)
 	c.noteWriteDomainCatalog(newSystemRoot, nextCatalog)
 	if coord != nil {
-		coord.hasNativeVectorIndexes.Store(collectionMetaHasNativeVectorIndexes(newMeta))
+		coord.hasNativeVectorIndexes.Store(false)
 	}
-	c.unregisterVectorIndex(name, coord)
+	c.removeColumnGraphPartitionLiveCarrierLocked(name, coord)
 	return newMeta.copy(), nil
 }
 
@@ -4961,10 +4990,12 @@ func (c *Collection) dropIndexes(names map[string]struct{}, all bool) (*Collecti
 func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 	if c != nil && c.nativeJSON != nil {
 		ids, err := c.nativeInsertBatch([][]byte{id}, [][]byte{document})
-		if err != nil {
+		if len(ids) == 0 {
 			return nil, err
 		}
-		return ids[0], nil
+		// Maintenance can fail after accepting the canonical document. Keep
+		// its owned identity alongside the ambiguous completion result.
+		return ids[0], err
 	}
 	if c == nil {
 		return nil, errCollectionNil
@@ -4987,9 +5018,6 @@ func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 	if len(meta.Indexes) == 0 && len(meta.VectorIndexes) == 0 && len(meta.TextIndexes) == 0 && !c.db.CommandWALEnabled() {
 		admission := c.lockCollectionCommandWALAdmission()
 		defer admission.unlock()
-		if c.registeredAdHocVectorIndexCount() > 0 {
-			return c.insertOneViaBatchWithCoverageLocked(id, document, &admission)
-		}
 		if c.hasBufferedNoIndexBSONPrimaryOverlayOrRootRuns() {
 			if err := c.withMutationLock(func() error {
 				return c.flushBufferedWrites()
@@ -5011,7 +5039,7 @@ func (c *Collection) Flush() error {
 		if c.manager.isClosing() {
 			return backenddb.ErrClosed
 		}
-		return c.flushNativeHNSW()
+		return nil
 	}
 	if c == nil {
 		return errCollectionNil
@@ -8890,53 +8918,6 @@ func stagePrimaryDocumentCacheEntriesLocked(domain *collectionWriteDomain, meta 
 // no-index insert batch in the existing root-bound primary cache. The cache
 // owns its bytes because InsertBatch callers may reuse their input as soon as
 // the call returns.
-func (c *Collection) replacePrimaryDocumentCacheAfterInsert(systemRoot uint64, meta CollectionMeta, entries []noIndexBatchEntry) {
-	if c == nil || c.writeDomain == nil || systemRoot == 0 || len(entries) == 0 ||
-		normalizedDocumentFormat(meta.Options.DocumentFormat) != DocumentFormatJSON ||
-		columnStoreNeedsRetainedPayloadTransform(meta) {
-		return
-	}
-	hasNativeVectorIndex := false
-	for _, def := range meta.VectorIndexes {
-		if vectorIndexDefinitionUsesNativeRuntime(def) {
-			hasNativeVectorIndex = true
-			break
-		}
-	}
-	if !hasNativeVectorIndex {
-		return
-	}
-	maxInt := int(^uint(0) >> 1)
-	totalBytes := 0
-	for _, entry := range entries {
-		if len(entry.id) > maxInt-totalBytes || len(entry.document) > maxInt-totalBytes-len(entry.id) {
-			return
-		}
-		totalBytes += len(entry.id) + len(entry.document)
-	}
-	arena := make([]byte, 0, totalBytes)
-	cacheEntries := make([]directBufferedRootEntry, 0, len(entries))
-	for _, entry := range entries {
-		keyStart := len(arena)
-		arena = append(arena, entry.id...)
-		key := arena[keyStart:len(arena):len(arena)]
-		valueStart := len(arena)
-		arena = append(arena, entry.document...)
-		value := arena[valueStart:len(arena):len(arena)]
-		cacheEntries = append(cacheEntries, directBufferedRootEntry{
-			key:   key,
-			value: value,
-			flags: node.FlagInline,
-		})
-	}
-
-	domain := c.writeDomain
-	domain.mu.Lock()
-	defer domain.mu.Unlock()
-	clearPrimaryDocumentCacheLocked(domain)
-	stagePrimaryDocumentCacheEntriesLocked(domain, meta, systemRoot, cacheEntries)
-	retainPrimaryDocumentCacheForCatalogLocked(domain, meta, systemRoot)
-}
 
 func snapshotUpdateBatchPrimaryCache(domain *collectionWriteDomain, meta CollectionMeta, baseSystemRoot uint64, items []updateBatchItem) updateBatchBufferedRead {
 	if domain == nil || baseSystemRoot == 0 || len(items) == 0 {
@@ -11846,6 +11827,11 @@ func (c *Collection) InsertBatchWithStatsValidatedFloat32Projection(ids, documen
 	if err != nil {
 		return nil, CollectionInsertStats{}, err
 	}
+	if c != nil && c.nativeJSON != nil {
+		var stats CollectionInsertStats
+		result, err := c.nativeInsertBatchWithStatsProjection(ids, documents, &stats, projection)
+		return result, stats, err
+	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
 	admissionState := c.lockCollectionCommandWALAdmission()
@@ -11864,6 +11850,11 @@ func (c *Collection) InsertBatchWithStatsValidatedFloat32Projection(ids, documen
 }
 
 func (c *Collection) insertBatchWithStats(ids, documents [][]byte) ([][]byte, CollectionInsertStats, error) {
+	if c != nil && c.nativeJSON != nil {
+		var stats CollectionInsertStats
+		ids, err := c.nativeInsertBatchWithStats(ids, documents, &stats)
+		return ids, stats, err
+	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
 	admissionState := c.lockCollectionCommandWALAdmission()
@@ -24315,6 +24306,17 @@ const (
 	stableDocumentIDTieEntryOverhead = 32
 )
 
+// Native ID escape decoding owns a separate exact-capacity byte slice. Ordinary
+// suffixes remain iterator-borrowed; legacy callers preserve the original path.
+func indexKeyDocumentIDAdmitted(valueType IndexValueType, key []byte, admit func(uint64) error) ([]byte, error) {
+	if admit != nil && valueType == IndexValueBSONOrderedV2 && bytes.Contains(key, []byte{0, 0xff}) {
+		if err := admit(memtable.COWAllocationCharge(uint64(len(key)))); err != nil {
+			return nil, err
+		}
+	}
+	return indexKeyDocumentID(valueType, key)
+}
+
 func scanMergedCollectionIndexIDsWithOptions(bufferedIt, persistedIt iterator.UnsafeIterator, valueType IndexValueType, maxResults int, opts scanMergedCollectionIndexIDOptions, fn func([]byte) (bool, error)) (bool, error) {
 	return scanMergedCollectionIndexIDsWithOptionsAndDirection(bufferedIt, persistedIt, valueType, maxResults, false, opts, fn)
 }
@@ -24396,11 +24398,16 @@ func scanMergedCollectionIndexIDsWithOptionsAndDirectionWorkCap(bufferedIt, pers
 			if maxResults > 0 && emitted >= maxResults {
 				return true, collectionIndexIteratorError(persistedIt)
 			}
-			id, err := indexKeyDocumentID(valueType, persistedKey)
+			id, err := indexKeyDocumentIDAdmitted(valueType, persistedKey, opts.admitTemporary)
 			if err != nil {
 				return false, err
 			}
 			if opts.CloneDocumentID {
+				if opts.admitTemporary != nil {
+					if err := opts.admitTemporary(memtable.COWAllocationCharge(uint64(len(id)))); err != nil {
+						return false, err
+					}
+				}
 				id = bytes.Clone(id)
 			}
 			cont, err := fn(id)
@@ -24413,8 +24420,15 @@ func scanMergedCollectionIndexIDsWithOptionsAndDirectionWorkCap(bufferedIt, pers
 		return false, collectionIndexIteratorError(persistedIt)
 	}
 	var seen map[string]struct{}
+	var nativeSeen *localIDIndex
 	if opts.DedupeDocumentID {
-		if maxResults > 0 {
+		if opts.admitTemporary != nil {
+			var err error
+			nativeSeen, err = newLocalIDIndex(max(0, min(maxResults, 64)), opts.admitTemporary)
+			if err != nil {
+				return false, err
+			}
+		} else if maxResults > 0 {
 			seen = make(map[string]struct{}, maxResults)
 		} else {
 			seen = make(map[string]struct{})
@@ -24422,21 +24436,35 @@ func scanMergedCollectionIndexIDsWithOptionsAndDirectionWorkCap(bufferedIt, pers
 	}
 	emitted := 0
 	emit := func(key []byte) (bool, bool, error) {
-		id, err := indexKeyDocumentID(valueType, key)
+		id, err := indexKeyDocumentIDAdmitted(valueType, key, opts.admitTemporary)
 		if err != nil {
 			return false, false, err
 		}
 		if opts.DedupeDocumentID {
-			idKey := string(id)
-			if _, ok := seen[idKey]; ok {
-				return true, false, nil
+			if nativeSeen != nil {
+				if _, ok := nativeSeen.lookup(unsafeStringFromBytes(id)); ok {
+					return true, false, nil
+				}
+				if err := nativeSeen.setCopy(id, 0); err != nil {
+					return false, false, err
+				}
+			} else {
+				idKey := string(id)
+				if _, ok := seen[idKey]; ok {
+					return true, false, nil
+				}
+				seen[idKey] = struct{}{}
 			}
-			seen[idKey] = struct{}{}
 		}
 		if maxResults > 0 && emitted >= maxResults {
 			return false, true, nil
 		}
 		if opts.CloneDocumentID {
+			if opts.admitTemporary != nil {
+				if err := opts.admitTemporary(memtable.COWAllocationCharge(uint64(len(id)))); err != nil {
+					return false, false, err
+				}
+			}
 			id = bytes.Clone(id)
 		}
 		cont, err := fn(id)
@@ -24548,11 +24576,21 @@ func scanMergedCollectionIndexIDsStable(bufferedIt, persistedIt iterator.UnsafeI
 				if !inspect(1) {
 					return nil, false, true, collectionIndexIteratorError(persistedIt)
 				}
+				if opts.admitTemporary != nil {
+					if err := opts.admitTemporary(memtable.COWAllocationCharge(uint64(len(persistedKey)))); err != nil {
+						return nil, false, false, err
+					}
+				}
 				key, deleted = bytes.Clone(persistedKey), persistedIt.IsDeleted()
 				persistedIt.Next()
 			case !persistedOK:
 				if !inspect(1) {
 					return nil, false, true, collectionIndexIteratorError(bufferedIt)
+				}
+				if opts.admitTemporary != nil {
+					if err := opts.admitTemporary(memtable.COWAllocationCharge(uint64(len(bufferedKey)))); err != nil {
+						return nil, false, false, err
+					}
 				}
 				key, deleted = bytes.Clone(bufferedKey), bufferedIt.IsDeleted()
 				bufferedIt.Next()
@@ -24562,17 +24600,32 @@ func scanMergedCollectionIndexIDsStable(bufferedIt, persistedIt iterator.UnsafeI
 					if !inspect(1) {
 						return nil, false, true, collectionIndexIteratorError(bufferedIt)
 					}
+					if opts.admitTemporary != nil {
+						if err := opts.admitTemporary(memtable.COWAllocationCharge(uint64(len(bufferedKey)))); err != nil {
+							return nil, false, false, err
+						}
+					}
 					key, deleted = bytes.Clone(bufferedKey), bufferedIt.IsDeleted()
 					bufferedIt.Next()
 				} else if (!reverse && cmp > 0) || (reverse && cmp < 0) {
 					if !inspect(1) {
 						return nil, false, true, collectionIndexIteratorError(persistedIt)
 					}
+					if opts.admitTemporary != nil {
+						if err := opts.admitTemporary(memtable.COWAllocationCharge(uint64(len(persistedKey)))); err != nil {
+							return nil, false, false, err
+						}
+					}
 					key, deleted = bytes.Clone(persistedKey), persistedIt.IsDeleted()
 					persistedIt.Next()
 				} else {
 					if !inspect(2) {
 						return nil, false, true, nil
+					}
+					if opts.admitTemporary != nil {
+						if err := opts.admitTemporary(memtable.COWAllocationCharge(uint64(len(bufferedKey)))); err != nil {
+							return nil, false, false, err
+						}
 					}
 					key, deleted = bytes.Clone(bufferedKey), bufferedIt.IsDeleted()
 					bufferedIt.Next()
@@ -24593,14 +24646,23 @@ func scanMergedCollectionIndexIDsStable(bufferedIt, persistedIt iterator.UnsafeI
 func scanCollectionIndexIDsStable(nextLiveKey func() ([]byte, bool, bool, error), valueType IndexValueType, maxResults int, opts scanMergedCollectionIndexIDOptions, fn func([]byte) (bool, error)) (bool, error) {
 	admit := func(n uint64) error {
 		if opts.admitTemporary != nil {
-			return opts.admitTemporary(n)
+			return opts.admitTemporary(memtable.COWAllocationCharge(n))
 		}
 		return nil
 	}
 
 	var seen map[string]struct{}
+	var nativeSeen *localIDIndex
 	if opts.DedupeDocumentID {
-		seen = make(map[string]struct{})
+		if opts.admitTemporary != nil {
+			var err error
+			nativeSeen, err = newLocalIDIndex(0, opts.admitTemporary)
+			if err != nil {
+				return false, err
+			}
+		} else {
+			seen = make(map[string]struct{})
+		}
 	}
 	emitted := 0
 	var groupKey []byte
@@ -24702,7 +24764,7 @@ func scanCollectionIndexIDsStable(nextLiveKey func() ([]byte, bool, bool, error)
 			groupKey = bytes.Clone(logicalKey)
 			groupBytes += keyBytes
 		}
-		id, err := indexKeyDocumentID(valueType, key)
+		id, err := indexKeyDocumentIDAdmitted(valueType, key, opts.admitTemporary)
 		if err != nil {
 			return false, err
 		}
@@ -24714,13 +24776,21 @@ func scanCollectionIndexIDsStable(nextLiveKey func() ([]byte, bool, bool, error)
 			if entryBytes < len(id) || !canRetain(entryBytes) {
 				return true, nil
 			}
-			idKey := string(id)
-			if _, duplicate := seen[idKey]; duplicate {
-				continue
+			if nativeSeen != nil {
+				if _, duplicate := nativeSeen.lookup(unsafeStringFromBytes(id)); duplicate {
+					continue
+				}
+				if err := nativeSeen.setCopy(id, 0); err != nil {
+					return false, err
+				}
 			} else {
+				idKey := string(id)
+				if _, duplicate := seen[idKey]; duplicate {
+					continue
+				}
 				seen[idKey] = struct{}{}
-				seenBytes += entryBytes
 			}
+			seenBytes += entryBytes
 		}
 		// Never retain a partial stable group: callers would otherwise see an
 		// order that could change once the remaining equal-key IDs were sorted.
@@ -25476,6 +25546,10 @@ func (c *collectionCatalog) rootStack(rootName string) []uint64 {
 }
 
 func collectionGetEntryAtCatalogRoot(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string, key []byte) (node.LeafEntry, uint64, error) {
+	if catalog != nil && catalog.nativeText != nil {
+		entry, err := catalog.nativeText.entry(rootName, key)
+		return entry, 0, err
+	}
 	if snap == nil {
 		return node.LeafEntry{}, 0, backenddb.ErrClosed
 	}
@@ -25505,6 +25579,9 @@ func collectionGetEntryAtCatalogRoot(snap *backenddb.Snapshot, catalog *collecti
 }
 
 func collectionGetAppendAtCatalogRoot(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string, key, dst []byte) ([]byte, bool, error) {
+	if catalog != nil && catalog.nativeText != nil {
+		return catalog.nativeText.get(rootName, key, dst)
+	}
 	if snap == nil {
 		return dst[:0], false, backenddb.ErrClosed
 	}
@@ -25650,6 +25727,9 @@ func collectionIteratorAtCatalogRootWithWorkCapAndInspect(snap *backenddb.Snapsh
 // The optional inspection error checks cancellation during physical merge
 // work, including superseded rows and tombstones that never reach a callback.
 func collectionIteratorAtCatalogRootWithInspectionError(snap *backenddb.Snapshot, catalog *collectionCatalog, rootName string, start, end []byte, includeDeleted bool, maxInspected int, onInspected func(int), inspectionError func() error) (iterator.UnsafeIterator, error) {
+	if catalog != nil && catalog.nativeText != nil {
+		return catalog.nativeText.iterator(rootName, start, end, includeDeleted, maxInspected, onInspected, inspectionError)
+	}
 	if inspectionError != nil {
 		if err := inspectionError(); err != nil {
 			return nil, err
@@ -26046,10 +26126,49 @@ func decodeCollectionMeta(raw []byte) (CollectionMeta, error) {
 			meta.TextIndexes[i].Version = TextIndexVersionV1
 		}
 	}
+	for _, def := range meta.VectorIndexes {
+		if def.Strategy != VectorIndexStrategyColumnGraph {
+			return CollectionMeta{}, fmt.Errorf("%w: stored vector index %q has retired or ambiguous strategy %q; use a fresh database directory", backenddb.ErrNativeSemanticUnsupported, def.Name, def.Strategy)
+		}
+	}
+	return normalizeCollectionMeta(meta)
+}
+
+// NormalizeCollectionMetaV1 validates and canonicalizes a complete collection
+// declaration without opening a collection or constructing indexes. Syntax and
+// the shared index namespace are checked before vector capability eligibility,
+// using the same rules and defaults as collection creation. Wire size limits
+// and create-only physical authority checks remain the caller's responsibility.
+func NormalizeCollectionMetaV1(meta CollectionMeta) (CollectionMeta, error) {
 	return normalizeCollectionMeta(meta)
 }
 
 func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
+	normalized, err := normalizeCollectionMetaSyntax(meta)
+	if err != nil {
+		return CollectionMeta{}, err
+	}
+	// Validate the complete request's shape and shared index namespace before
+	// refusing an individually well-formed but unsupported vector capability.
+	for _, def := range normalized.VectorIndexes {
+		if err := validateVectorIndexCapabilities(def); err != nil {
+			return CollectionMeta{}, fmt.Errorf("collections: invalid vector index %q: %w", def.Name, err)
+		}
+	}
+	// Representation/schema compatibility follows vector capability refusal,
+	// preserving typed errors for unsupported strategies, metrics and encodings.
+	if err := validateVectorIndexRepresentationSchema(normalized); err != nil {
+		return CollectionMeta{}, err
+	}
+	if len(normalized.VectorIndexes) != 0 && normalizedDocumentFormat(normalized.Options.DocumentFormat) == DocumentFormatBSON {
+		return CollectionMeta{}, fmt.Errorf("%w: BSON vector indexes are unsupported; ColumnGraph BSON support is not implemented", backenddb.ErrNativeSemanticUnsupported)
+	}
+	return normalized, nil
+}
+
+// normalizeCollectionMetaSyntax canonicalizes all declarations and validates
+// their syntax and shared namespace before deciding vector capability eligibility.
+func normalizeCollectionMetaSyntax(meta CollectionMeta) (CollectionMeta, error) {
 	if err := ValidateCollectionName(meta.Name); err != nil {
 		return CollectionMeta{}, err
 	}
@@ -26143,7 +26262,7 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 	meta.Indexes = indexes
 	vectorIndexes := append([]VectorIndexDefinition(nil), meta.VectorIndexes...)
 	for i := range vectorIndexes {
-		normalized, err := normalizeVectorIndexDefinition(vectorIndexes[i])
+		normalized, err := normalizeVectorIndexDefinitionSyntax(vectorIndexes[i])
 		if err != nil {
 			name := vectorIndexes[i].Name
 			if name == "" {
@@ -26163,9 +26282,6 @@ func normalizeCollectionMeta(meta CollectionMeta) (CollectionMeta, error) {
 		seen[vectorIndexes[i].Name] = struct{}{}
 	}
 	meta.VectorIndexes = vectorIndexes
-	if err := validateVectorIndexRepresentationSchema(meta); err != nil {
-		return CollectionMeta{}, err
-	}
 	textIndexes := copyTextIndexDefinitions(meta.TextIndexes)
 	for i := range textIndexes {
 		normalized, err := normalizeTextIndexDefinition(textIndexes[i])
@@ -26325,6 +26441,19 @@ func NormalizeVectorIndexDefinitionV1(def VectorIndexDefinition) (VectorIndexDef
 }
 
 func normalizeVectorIndexDefinition(def VectorIndexDefinition) (VectorIndexDefinition, error) {
+	normalized, err := normalizeVectorIndexDefinitionSyntax(def)
+	if err != nil {
+		return VectorIndexDefinition{}, err
+	}
+	if err := validateVectorIndexCapabilities(normalized); err != nil {
+		return VectorIndexDefinition{}, err
+	}
+	return normalized, nil
+}
+
+// normalizeVectorIndexDefinitionSyntax recognizes retired strategies as valid
+// spellings so callers can finish validating an entire request before refusal.
+func normalizeVectorIndexDefinitionSyntax(def VectorIndexDefinition) (VectorIndexDefinition, error) {
 	if def.Name == "" {
 		def.Name = vectorIndexDefaultName(def.Field)
 	}
@@ -26340,6 +26469,16 @@ func normalizeVectorIndexDefinition(def VectorIndexDefinition) (VectorIndexDefin
 	if def.Dimensions <= 0 {
 		return VectorIndexDefinition{}, errors.New("dimensions must be positive")
 	}
+	// Validate malformed declarations before rejecting unsupported capabilities.
+	if def.M < 0 {
+		return VectorIndexDefinition{}, errors.New("m cannot be negative")
+	}
+	if def.EfConstruction < 0 {
+		return VectorIndexDefinition{}, errors.New("ef_construction cannot be negative")
+	}
+	if def.EfSearch < 0 {
+		return VectorIndexDefinition{}, errors.New("ef_search cannot be negative")
+	}
 	metric, err := normalizeVectorMetric(def.Metric)
 	if err != nil {
 		return VectorIndexDefinition{}, err
@@ -26348,13 +26487,8 @@ func normalizeVectorIndexDefinition(def VectorIndexDefinition) (VectorIndexDefin
 	if err != nil {
 		return VectorIndexDefinition{}, err
 	}
-	strategy, err := normalizeVectorIndexStrategy(def.Strategy)
-	if err != nil {
-		return VectorIndexDefinition{}, err
-	}
 	def.Metric = metric
 	def.Encoding = encoding
-	def.Strategy = strategy
 	representation, err := normalizeVectorIndexRepresentation(def.Representation)
 	if err != nil {
 		return VectorIndexDefinition{}, err
@@ -26365,31 +26499,11 @@ func normalizeVectorIndexDefinition(def VectorIndexDefinition) (VectorIndexDefin
 		return VectorIndexDefinition{}, err
 	}
 	def.QuantizedIndexes = quantized
-	if len(def.QuantizedIndexes) > 0 && def.Strategy != VectorIndexStrategyColumnGraph {
-		return VectorIndexDefinition{}, fmt.Errorf("collections: quantized vector indexes require strategy %q", VectorIndexStrategyColumnGraph)
+	strategy, err := normalizeVectorIndexStrategySyntax(def.Strategy)
+	if err != nil {
+		return VectorIndexDefinition{}, err
 	}
-	if def.Strategy == VectorIndexStrategyColumnGraph {
-		if def.Metric != VectorMetricCosine {
-			return VectorIndexDefinition{}, fmt.Errorf("collections: column_graph vector index %q supports only metric %q", def.Name, VectorMetricCosine)
-		}
-		if def.Encoding != VectorIndexEncodingFloat32 {
-			return VectorIndexDefinition{}, fmt.Errorf("collections: column_graph vector index %q supports only encoding %q", def.Name, VectorIndexEncodingFloat32)
-		}
-	}
-	if vectorIndexUsesCosineNormalizedF32V1(def) {
-		if def.Strategy != VectorIndexStrategyColumnGraph || def.Metric != VectorMetricCosine || def.Encoding != VectorIndexEncodingFloat32 {
-			return VectorIndexDefinition{}, fmt.Errorf("collections: representation %q requires strategy=%q metric=%q encoding=%q", def.Representation, VectorIndexStrategyColumnGraph, VectorMetricCosine, VectorIndexEncodingFloat32)
-		}
-	}
-	if def.M < 0 {
-		return VectorIndexDefinition{}, errors.New("m cannot be negative")
-	}
-	if def.EfConstruction < 0 {
-		return VectorIndexDefinition{}, errors.New("ef_construction cannot be negative")
-	}
-	if def.EfSearch < 0 {
-		return VectorIndexDefinition{}, errors.New("ef_search cannot be negative")
-	}
+	def.Strategy = strategy
 	if def.M <= 0 {
 		def.M = defaultVectorIndexM
 	}
@@ -26405,11 +26519,45 @@ func normalizeVectorIndexDefinition(def VectorIndexDefinition) (VectorIndexDefin
 	return def, nil
 }
 
+func validateVectorIndexCapabilities(def VectorIndexDefinition) error {
+	if _, err := normalizeVectorIndexStrategy(def.Strategy); err != nil {
+		return err
+	}
+	if len(def.QuantizedIndexes) > 0 && def.Strategy != VectorIndexStrategyColumnGraph {
+		return fmt.Errorf("collections: quantized vector indexes require strategy %q", VectorIndexStrategyColumnGraph)
+	}
+	if def.Strategy == VectorIndexStrategyColumnGraph {
+		if def.Metric != VectorMetricCosine {
+			return fmt.Errorf("%w: column_graph vector index %q supports only metric %q", backenddb.ErrNativeSemanticUnsupported, def.Name, VectorMetricCosine)
+		}
+		if def.Encoding != VectorIndexEncodingFloat32 {
+			return fmt.Errorf("%w: column_graph vector index %q supports only encoding %q", backenddb.ErrNativeSemanticUnsupported, def.Name, VectorIndexEncodingFloat32)
+		}
+	}
+	if vectorIndexUsesCosineNormalizedF32V1(def) {
+		if def.Strategy != VectorIndexStrategyColumnGraph || def.Metric != VectorMetricCosine || def.Encoding != VectorIndexEncodingFloat32 {
+			return fmt.Errorf("collections: representation %q requires strategy=%q metric=%q encoding=%q", def.Representation, VectorIndexStrategyColumnGraph, VectorMetricCosine, VectorIndexEncodingFloat32)
+		}
+	}
+	return nil
+}
+
 func normalizeVectorIndexStrategy(strategy VectorIndexStrategy) (VectorIndexStrategy, error) {
+	normalized, err := normalizeVectorIndexStrategySyntax(strategy)
+	if err != nil {
+		return "", err
+	}
+	if normalized == "native_runtime" {
+		return "", fmt.Errorf("%w: vector strategy %q has been retired; use column_graph in a fresh database directory", backenddb.ErrNativeSemanticUnsupported, normalized)
+	}
+	return normalized, nil
+}
+
+func normalizeVectorIndexStrategySyntax(strategy VectorIndexStrategy) (VectorIndexStrategy, error) {
 	switch strategy {
 	case "":
-		return VectorIndexStrategyNativeRuntime, nil
-	case VectorIndexStrategyNativeRuntime, VectorIndexStrategyColumnGraph:
+		return VectorIndexStrategyColumnGraph, nil
+	case VectorIndexStrategyColumnGraph, "native_runtime":
 		return strategy, nil
 	default:
 		return "", fmt.Errorf("unsupported strategy %q", strategy)
@@ -27104,3 +27252,7 @@ func ValidateIndexPath(path string) error {
 
 // Close releases a hook-free manager after its last deterministic operation.
 func (m *CollectionManager) Close() error { return m.closeForBackend() }
+
+// ColumnGraph retains canonical roots and never keeps a runtime document shadow.
+func (c *Collection) replacePrimaryDocumentCacheAfterInsert(uint64, CollectionMeta, []noIndexBatchEntry) {
+}

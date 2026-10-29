@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import signal
@@ -17,7 +18,7 @@ from typing import Optional
 
 import _support
 from treedb_client import Document, TreeDBClient, TreeDBClientError
-from treedb_client.errors import TreeDBProtocolError
+from treedb_client.errors import IndexUnavailableError, TreeDBProtocolError
 from treedb_client._dense_work import (
     dense_quantized_response_work_matches,
     dense_score_plane_byte_counters_match,
@@ -95,11 +96,12 @@ def _typed_serving_limits():
 
 
 class TreeDBServiceProcess:
-    def __init__(self, repo_root: Path, data_dir: str, *, native: bool = False) -> None:
+    def __init__(self, repo_root: Path, data_dir: str, *, native: bool = False, legacy_storage: bool = False) -> None:
         self.repo_root = repo_root
         self.data_dir = data_dir
         self.addr = _free_addr()
         self.native_addr = _free_addr() if native else None
+        self.legacy_storage = legacy_storage
         self.log = tempfile.NamedTemporaryFile("w+", prefix="treedb_document_service_", suffix=".log", delete=False)
         self.proc: Optional[subprocess.Popen[str]] = None
 
@@ -121,6 +123,8 @@ class TreeDBServiceProcess:
         ]
         if self.native_addr is not None:
             cmd.extend(["-native-addr", self.native_addr])
+        if self.legacy_storage:
+            cmd.append("-legacy-storage")
         self.proc = subprocess.Popen(
             cmd,
             cwd=str(self.repo_root),
@@ -253,7 +257,7 @@ class TreeDBClientIntegrationTests(unittest.TestCase):
     def test_column_graph_declared_scalar_lifecycle(self) -> None:
         """Exercise the real public client; no mocked transport or exact fallback."""
         with tempfile.TemporaryDirectory(prefix="treedb_typed_client_") as data_dir:
-            service = TreeDBServiceProcess(_support.REPO_ROOT, data_dir, native=True)
+            service = TreeDBServiceProcess(_support.REPO_ROOT, data_dir, native=True, legacy_storage=True)
             declarations = [{"field": "meta.user_id", "value_type": "string"},
                             {"field": "meta.fpath", "value_type": "string"}]
             wanted = {"field": "meta.user_id", "operator": "==", "value": "owner"}
@@ -285,7 +289,7 @@ class TreeDBClientIntegrationTests(unittest.TestCase):
                         native_response = native.query_by_embedding("typed", [1, 0], 4, wanted, return_embedding=True, index_info=info)
                         self.assertEqual(len(native_response.documents), 4)
                         self.assertEqual(native_response.native_command_version, 2)
-                        self.assertFalse(native_response.native_base_plus_live_delta)
+                        self.assertFalse(hasattr(native_response, "native_base_plus_live_delta"))
                         self.assertEqual(native_response.documents[0].id, "0")
                         self.assertEqual(native_response.documents[0].content, "text 0")
                         proof = native_response.dense_work
@@ -347,7 +351,7 @@ class TreeDBClientIntegrationTests(unittest.TestCase):
                     client.optimize_index("typed", column_graph_action="fold")
             finally:
                 service.stop()
-            reopened = TreeDBServiceProcess(_support.REPO_ROOT, data_dir, native=True)
+            reopened = TreeDBServiceProcess(_support.REPO_ROOT, data_dir, native=True, legacy_storage=True)
             try:
                 reopened.start()
                 with closing(TreeDBClient(reopened.base_url, timeout=10)) as client:
@@ -396,7 +400,7 @@ class TreeDBClientIntegrationTests(unittest.TestCase):
             live = [Document(id=f"source#{i}", content="fresh", embedding=[1 - i, i],
                              meta={"user_id": "owner"}) for i in range(2)]
 
-            service = TreeDBServiceProcess(_support.REPO_ROOT, data_dir, native=True)
+            service = TreeDBServiceProcess(_support.REPO_ROOT, data_dir, native=True, legacy_storage=True)
             try:
                 service.start()
                 with closing(TreeDBClient(service.base_url, timeout=10)) as control:
@@ -429,7 +433,7 @@ class TreeDBClientIntegrationTests(unittest.TestCase):
             finally:
                 service.stop()
 
-            reopened = TreeDBServiceProcess(_support.REPO_ROOT, data_dir, native=True)
+            reopened = TreeDBServiceProcess(_support.REPO_ROOT, data_dir, native=True, legacy_storage=True)
             try:
                 reopened.start()
                 with closing(TreeDBClient(reopened.base_url, timeout=10)) as control:
@@ -454,7 +458,7 @@ class TreeDBClientIntegrationTests(unittest.TestCase):
             finally:
                 reopened.stop()
 
-            final = TreeDBServiceProcess(_support.REPO_ROOT, data_dir, native=True)
+            final = TreeDBServiceProcess(_support.REPO_ROOT, data_dir, native=True, legacy_storage=True)
             try:
                 final.start()
                 with closing(TreeDBClient(final.base_url, timeout=10)) as control:
@@ -471,7 +475,7 @@ class TreeDBClientIntegrationTests(unittest.TestCase):
     @unittest.skipUnless(sys.platform.startswith("linux"), "selected serving fixture requires Linux namespace authority and mmap")
     def test_typed_metadata_update_without_vector_roundtrip(self) -> None:
         with tempfile.TemporaryDirectory(prefix="treedb_metadata_update_") as data_dir:
-            service = TreeDBServiceProcess(_support.REPO_ROOT, data_dir, native=True)
+            service = TreeDBServiceProcess(_support.REPO_ROOT, data_dir, native=True, legacy_storage=True)
             try:
                 service.start()
                 with closing(TreeDBClient(service.base_url, timeout=10)) as control:
@@ -509,7 +513,7 @@ class TreeDBClientIntegrationTests(unittest.TestCase):
     def test_normalized_v4_column_graph_public_clients(self) -> None:
         """Cross the 4,096 cutoff through real native-v4 and HTTP clients."""
         with tempfile.TemporaryDirectory(prefix="treedb_quantized_client_") as data_dir:
-            service = TreeDBServiceProcess(_support.REPO_ROOT, data_dir, native=True)
+            service = TreeDBServiceProcess(_support.REPO_ROOT, data_dir, native=True, legacy_storage=True)
             limits = {
                 "Publication": {"Rows": 8192, "Tombstones": 8192, "ValueSlots": 16384,
                                 "OwnedBytes": 64 << 20, "EncodedOutputBytes": 64 << 20},
@@ -676,6 +680,14 @@ class TreeDBClientIntegrationTests(unittest.TestCase):
                 service.stop()
 
     def test_service_round_trip_and_reopen_smoke(self) -> None:
+        def assert_stale_ann(client: TreeDBClient) -> None:
+            with self.assertRaises(IndexUnavailableError) as stale:
+                client.query_by_embedding("docs", [1, 0], 1, return_embedding=True)
+            self.assertEqual(stale.exception.code, "index_unavailable")
+            self.assertEqual(stale.exception.status_code, 503)
+            self.assertIn("ann vector search failed closed", stale.exception.message)
+            self.assertEqual(set(json.loads(stale.exception.response_body)), {"error"})
+
         with tempfile.TemporaryDirectory(prefix="treedb_client_integration_") as data_dir:
             service = TreeDBServiceProcess(_support.REPO_ROOT, data_dir)
             try:
@@ -694,10 +706,14 @@ class TreeDBClientIntegrationTests(unittest.TestCase):
                 self.assertEqual([doc.id for doc in listed.documents], ["a"])
                 self.assertIsNone(listed.documents[0].embedding)
                 searched = client.query_by_embedding("docs", [1, 0], 1, return_embedding=True)
+                self.assertEqual(searched.route, "ann")
+                self.assertFalse(searched.exact)
                 self.assertEqual(searched.documents[0].id, "a")
                 self.assertEqual(searched.documents[0].embedding, [1.0, 0.0])
                 self.assertEqual(client.delete_by_filter("docs", {"field": "meta.repo", "operator": "==", "value": "other"}).deleted, 1)
                 self.assertEqual(client.count_documents("docs").count, 1)
+                # Delete invalidates the immutable graph; reads cannot rebuild it.
+                assert_stale_ann(client)
             finally:
                 service.stop()
 
@@ -708,7 +724,14 @@ class TreeDBClientIntegrationTests(unittest.TestCase):
                 info = client.open_index("docs")
                 self.assertEqual(info.dimension, 2)
                 self.assertEqual(client.count_documents("docs").count, 1)
+                # Reopen preserves the stale boundary until explicit maintenance.
+                assert_stale_ann(client)
+                optimized = client.optimize_index("docs")
+                self.assertTrue(optimized.status.loaded)
+                self.assertFalse(optimized.status.rebuild_needed)
                 searched = client.query_by_embedding("docs", [1, 0], 1, return_embedding=True)
+                self.assertEqual(searched.route, "ann")
+                self.assertFalse(searched.exact)
                 self.assertEqual(searched.documents[0].id, "a")
                 self.assertEqual(searched.documents[0].embedding, [1.0, 0.0])
             finally:

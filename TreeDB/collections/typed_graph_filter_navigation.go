@@ -80,7 +80,7 @@ func buildTypedGraphFilterNavigationFromAdmittedSource(ctx context.Context, sour
 	if !typedGraphFilterNavigationConstructionFits(count, source.def.Dimensions, source.def.EfConstruction) {
 		return nil, errTypedGraphFilterNavigationDeclined
 	}
-	levelIndex, err := newVectorIndex(nil, vectorIndexOptionsFromDefinition(source.def))
+	levelIndex, err := newColumnGraphHNSWBuilder(columnGraphHNSWBuildOptionsFromDefinition(source.def))
 	if err != nil {
 		return nil, err
 	}

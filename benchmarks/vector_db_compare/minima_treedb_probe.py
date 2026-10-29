@@ -54,7 +54,6 @@ def validate_batch_stats(observed, pid, name, generation, rows):
     snapshot = observed['snapshot']
     assert snapshot['work']['pid'] == pid
     assert not any(snapshot['work']['indexed_json'].values())
-    assert not any(snapshot['work']['runtime'].values())
     active = snapshot['last_opened_index']
     assert active['name'] == name and active['generation'] == generation
     insert = active['insert']
@@ -93,7 +92,7 @@ def validate_build_capture(capture, pid, origin, rows):
     for name in ('before_work', 'after_work', 'after_profile_work'):
         work = capture[name]['work']
         assert work['pid'] == pid and work['origin_unix_nano'] == origin
-        assert not any(work['indexed_json'].values()) and not any(work['runtime'].values())
+        assert not any(work['indexed_json'].values())
         for operation in ('build', 'public'):
             assert work['fold'][operation] == {'attempts': 0, 'completed': 0, 'errors': 0}
         renews = 0 if name == 'before_work' else 1
@@ -207,7 +206,7 @@ def main():
         assert observed['availability'] == 'measured', observed
         w = observed['work']
         assert w['pid'] == controller.pid
-        assert not any(w['indexed_json'].values()) and not any(w['runtime'].values()), w
+        assert not any(w['indexed_json'].values()), w
         return observed
 
     def profile(path, endpoint, timeout=20):

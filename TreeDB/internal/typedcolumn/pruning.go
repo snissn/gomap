@@ -429,10 +429,14 @@ func buildInt64ValueRowIndex(desc ColumnPartDescriptor, columnDesc ColumnPartCol
 }
 
 func encodeColumnPartPruningSection(pruning ColumnPartPruning) ([]byte, error) {
+	return encodeColumnPartPruningSectionWithCapacity(pruning, 0)
+}
+
+func encodeColumnPartPruningSectionWithCapacity(pruning ColumnPartPruning, capacity int) ([]byte, error) {
 	if pruning.Empty() {
 		return nil, nil
 	}
-	var enc columnPartImageEncoder
+	enc := columnPartImageEncoder{buf: make([]byte, 0, capacity)}
 	enc.u32(columnPartPruningSectionMagic)
 	enc.u16(columnPartPruningSectionVersion)
 	enc.u16(0)

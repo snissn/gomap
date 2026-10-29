@@ -182,9 +182,12 @@ def result_label(result: dict[str, Any]) -> str:
 
 def index_memory(result: dict[str, Any]) -> str:
     memory = result.get("memory", {})
-    if "index_bytes_memory" in memory:
-        return bytes_human(float(memory["index_bytes_memory"]))
-    return "n/a"
+    value = memory.get("index_bytes_memory")
+    column_graph = str(result.get("backend", "")).startswith("treedb_column_graph") or result.get("vector_index_strategy") == "column_graph"
+    # Older ColumnGraph results exported an unmeasured zero from Stats.BytesMemory.
+    if value is None or (column_graph and value == 0):
+        return "n/a"
+    return bytes_human(float(value))
 
 
 def process_rss(result: dict[str, Any]) -> str:

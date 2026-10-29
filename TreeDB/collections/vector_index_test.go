@@ -1,8 +1,6 @@
 package collections
 
 import (
-	"bytes"
-	"errors"
 	"fmt"
 	"math"
 	"reflect"
@@ -12,7 +10,6 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/vectorops"
-	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
 
 func TestVectorIndexNeighborSlotSize4662(t *testing.T) {
@@ -33,336 +30,8 @@ func TestVectorIndexNodeOrdinalsFitUint324662(t *testing.T) {
 	}
 }
 
-func TestCollectionVectorIndexSearchReranksCanonicalRows(t *testing.T) {
-	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	defer func() { _ = d.Close() }()
-	col := openVectorIndexTestCollection(t, d)
-	if _, err := col.InsertBatch(
-		[][]byte{[]byte("a"), []byte("b"), []byte("c"), []byte("d")},
-		[][]byte{
-			[]byte(`{"embedding":[1,0],"tag":"keep"}`),
-			[]byte(`{"embedding":[0,1],"tag":"keep"}`),
-			[]byte(`{"embedding":[0.9,0.1],"tag":"keep"}`),
-			[]byte(`{"embedding":[0,0.8],"tag":"keep"}`),
-		},
-	); err != nil {
-		t.Fatalf("insert: %v", err)
-	}
-	index, err := col.BuildVectorIndex(VectorIndexOptions{
-		Name:   "embedding",
-		Field:  "embedding",
-		Metric: VectorMetricCosine,
-		M:      4,
-	})
-	if err != nil {
-		t.Fatalf("build vector index: %v", err)
-	}
-
-	beforeWork := workstats.Read().Runtime
-	results, trace, err := index.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true})
-	if err != nil {
-		t.Fatalf("search vector index: %v", err)
-	}
-	afterWork := workstats.Read().Runtime
-	if afterWork.QueryAttempts-beforeWork.QueryAttempts != 1 || afterWork.QueriesCompleted-beforeWork.QueriesCompleted != 1 {
-		t.Fatalf("resident runtime before=%+v after=%+v", beforeWork, afterWork)
-	}
-	if _, _, err := index.Search(nil, VectorIndexSearchOptions{TopK: 1}); err == nil {
-		t.Fatal("invalid query accepted")
-	}
-	if workstats.Read().Runtime != afterWork {
-		t.Fatal("validation dispatched runtime query")
-	}
-	requireVectorResultIDs(t, results, "a", "c")
-	if trace.Strategy != "ann_graph" || trace.CandidatesExamined == 0 || trace.RerankCount == 0 || trace.ReturnedCount != 2 {
-		t.Fatalf("unexpected trace: %+v", trace)
-	}
-	stats := index.Stats()
-	if stats.LiveDocs != 4 || stats.DeletedDocs != 0 || stats.Dimensions != 2 || stats.AvgDegree == 0 {
-		t.Fatalf("unexpected stats: %+v", stats)
-	}
-}
-
-func TestCollectionVectorIndexCloseCosineRerankIsStableWithFilterAndLiveDelta(t *testing.T) {
-	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: backenddb.DurabilityWALOffRelaxed})
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	defer func() { _ = d.Close() }()
-
-	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfSearch: 8}
-	mgr := NewCollectionManager(d)
-	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
-		t.Fatalf("create collection: %v", err)
-	}
-	col, err := mgr.OpenCollection("docs")
-	if err != nil {
-		t.Fatalf("open collection: %v", err)
-	}
-	query := []float32{-0.2935306131839752, -0.0021982011385262012}
-	closer := []byte(`{"embedding":[-0.2935306131839752,-0.0021982009056955576]}`)
-	farther := []byte(`{"embedding":[-0.29353055357933044,-0.0021982011385262012]}`)
-	if _, err := col.InsertBatch([][]byte{[]byte("closer"), []byte("farther")}, [][]byte{closer, farther}); err != nil {
-		t.Fatalf("insert base: %v", err)
-	}
-	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
-		t.Fatalf("rebuild vector index: %v", err)
-	}
-	index := col.registeredVectorIndex(def.Name)
-	if index == nil {
-		t.Fatal("registered vector index is nil")
-	}
-
-	unfiltered, _, err := index.Search(query, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true})
-	if err != nil {
-		t.Fatalf("unfiltered search: %v", err)
-	}
-	filtered, _, err := index.Search(query, VectorIndexSearchOptions{
-		TopK:                 2,
-		DisableExactFallback: true,
-		Filter:               func(DocumentRecord) (bool, error) { return true, nil },
-	})
-	if err != nil {
-		t.Fatalf("filtered search: %v", err)
-	}
-	requireVectorResultIDs(t, unfiltered, "closer", "farther")
-	requireVectorResultIDs(t, filtered, "closer", "farther")
-	for i := range unfiltered {
-		if filtered[i].Distance != unfiltered[i].Distance {
-			t.Fatalf("filtered result %d distance=%g want unfiltered %g", i, filtered[i].Distance, unfiltered[i].Distance)
-		}
-	}
-
-	exact := []byte(`{"embedding":[-0.2935306131839752,-0.0021982011385262012]}`)
-	if _, err := col.InsertBatch([][]byte{[]byte("exact")}, [][]byte{exact}); err != nil {
-		t.Fatalf("insert live delta: %v", err)
-	}
-	index.mu.RLock()
-	hasLiveDelta := index.liveDelta != nil
-	index.mu.RUnlock()
-	if !hasLiveDelta {
-		t.Fatal("expected live delta")
-	}
-	live, _, err := index.Search(query, VectorIndexSearchOptions{TopK: 3, DisableExactFallback: true})
-	if err != nil {
-		t.Fatalf("live-delta search: %v", err)
-	}
-	requireVectorResultIDs(t, live, "exact", "closer", "farther")
-	if live[0].Distance != 0 || live[1].Distance <= 0 || live[2].Distance <= live[1].Distance {
-		t.Fatalf("live-delta distances=%g,%g,%g want zero then increasing", live[0].Distance, live[1].Distance, live[2].Distance)
-	}
-}
-
-func TestCollectionVectorIndexSearchRejectsMixedDocumentGenerationRerank(t *testing.T) {
-	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: backenddb.DurabilityWALOffRelaxed})
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	defer func() { _ = d.Close() }()
-	mgr := NewCollectionManager(d)
-	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfSearch: 8}
-	if _, err := mgr.CreateCollection(&CollectionMeta{
-		Name:          "docs",
-		Options:       CollectionOptions{DisableIndexedWriteMemtables: true},
-		VectorIndexes: []VectorIndexDefinition{def},
-	}); err != nil {
-		t.Fatalf("create collection: %v", err)
-	}
-	col, err := mgr.OpenCollection("docs")
-	if err != nil {
-		t.Fatalf("open collection: %v", err)
-	}
-	if _, err := col.InsertBatch(
-		[][]byte{[]byte("a"), []byte("b")},
-		[][]byte{[]byte(`{"embedding":[0.8,0.2]}`), []byte(`{"embedding":[0,1]}`)},
-	); err != nil {
-		t.Fatalf("insert seed documents: %v", err)
-	}
-	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
-		t.Fatalf("rebuild vector index: %v", err)
-	}
-	index := col.registeredVectorIndex(def.Name)
-	if index == nil {
-		t.Fatal("registered native vector index is nil")
-	}
-	if _, _, err := index.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 1, DisableExactFallback: true}); err != nil {
-		t.Fatalf("prime live-delta search: %v", err)
-	}
-	if _, err := col.InsertBatch([][]byte{[]byte("d")}, [][]byte{[]byte(`{"embedding":[-1,0]}`)}); err != nil {
-		t.Fatalf("insert live-delta document: %v", err)
-	}
-	index.mu.RLock()
-	hasLiveDelta := index.liveDelta != nil
-	index.mu.RUnlock()
-	if !hasLiveDelta {
-		t.Fatal("expected live delta before stale-generation search")
-	}
-	beforeWork := workstats.Read().Runtime
-	liveResults, _, err := index.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 1, DisableExactFallback: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	requireVectorResultIDs(t, liveResults, "a")
-	afterWork := workstats.Read().Runtime
-	if afterWork.QueryAttempts-beforeWork.QueryAttempts != 1 || afterWork.QueriesCompleted-beforeWork.QueriesCompleted != 1 {
-		t.Fatalf("live runtime before=%+v after=%+v", beforeWork, afterWork)
-	}
-	published := index.searchView.Load()
-	if published == nil {
-		t.Fatal("published search view is nil")
-	}
-	index.mu.RLock()
-	publishedGeneration := index.sourceDocumentGeneration
-	index.mu.RUnlock()
-	if _, err := col.insertBatch([][]byte{[]byte("c")}, [][]byte{[]byte(`{"embedding":[1,0]}`)}, false, nil); err != nil {
-		t.Fatalf("commit document before vector reconciliation: %v", err)
-	}
-	index.recordSourceDocumentGeneration(publishedGeneration + 1)
-	if index.searchView.Load() != published {
-		t.Fatal("unreconciled document generation unexpectedly replaced the immutable search view")
-	}
-	if _, trace, err := index.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 1, FetchMultiplier: 1, DisableExactFallback: true}); !errors.Is(err, ErrVectorIndexSearchUnavailable) || trace.ExactFallbackReason != vectorIndexFallbackStaleDocumentRoot {
-		t.Fatalf("disabled exact fallback trace=%+v err=%v want stale-document unavailable", trace, err)
-	}
-
-	failedWork := workstats.Read().Runtime
-	if failedWork.QueryAttempts-afterWork.QueryAttempts != 1 || failedWork.QueriesCompleted != afterWork.QueriesCompleted {
-		t.Fatalf("failed runtime before=%+v after=%+v", afterWork, failedWork)
-	}
-	results, trace, err := index.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 1, FetchMultiplier: 1})
-	if err != nil {
-		t.Fatalf("search stale immutable generation: %v", err)
-	}
-	requireVectorResultIDs(t, results, "c")
-	if trace.Strategy != "ann_graph_exact_fallback" || trace.ExactFallbackReason != vectorIndexFallbackStaleDocumentRoot {
-		t.Fatalf("search trace=%+v want stale-document exact fallback", trace)
-	}
-}
-
-func TestCollectionVectorIndexSearchDocumentsAreOwned(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		opts backenddb.Options
-	}{
-		{name: "inline"},
-		{name: "value_log_pointer", opts: backenddb.Options{
-			ValueLog: backenddb.ValueLogOptions{PointerThreshold: 1, ForcePointers: true},
-		}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			tc.opts.Dir = t.TempDir()
-			d, err := backenddb.Open(tc.opts)
-			if err != nil {
-				t.Fatalf("open db: %v", err)
-			}
-			defer func() { _ = d.Close() }()
-			col := openVectorIndexTestCollection(t, d)
-			docA := []byte(`{"embedding":[1,0],"tag":"alpha"}`)
-			docB := []byte(`{"embedding":[0.9,0.1],"tag":"beta"}`)
-			if _, err := col.InsertBatch(
-				[][]byte{[]byte("a"), []byte("b")},
-				[][]byte{docA, docB},
-			); err != nil {
-				t.Fatalf("insert: %v", err)
-			}
-			index, err := col.BuildVectorIndex(VectorIndexOptions{
-				Name:   "embedding",
-				Field:  "embedding",
-				Metric: VectorMetricCosine,
-				M:      4,
-			})
-			if err != nil {
-				t.Fatalf("build vector index: %v", err)
-			}
-
-			results, _, err := index.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true})
-			if err != nil {
-				t.Fatalf("search vector index: %v", err)
-			}
-			requireVectorResultIDs(t, results, "a", "b")
-			if !bytes.Equal(results[0].Document, docA) || !bytes.Equal(results[1].Document, docB) {
-				t.Fatalf("unexpected documents: %q %q", results[0].Document, results[1].Document)
-			}
-			for i, result := range results {
-				if cap(result.DocumentID) != len(result.DocumentID) {
-					t.Fatalf("result %d document id cap=%d len=%d, want exact cap", i, cap(result.DocumentID), len(result.DocumentID))
-				}
-				if cap(result.Document) != len(result.Document) {
-					t.Fatalf("result %d document cap=%d len=%d, want exact cap", i, cap(result.Document), len(result.Document))
-				}
-			}
-
-			results[0].Document[0] = '['
-			stored, err := col.Get([]byte("a"))
-			if err != nil {
-				t.Fatalf("get document: %v", err)
-			}
-			if !bytes.Equal(stored, docA) {
-				t.Fatalf("stored document changed: %q want %q", stored, docA)
-			}
-			if !bytes.Equal(results[1].Document, docB) {
-				t.Fatalf("second result changed: %q want %q", results[1].Document, docB)
-			}
-		})
-	}
-}
-
-func TestCollectionVectorIndexSearchKeepsExtraCandidatesThroughAttach(t *testing.T) {
-	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	defer func() { _ = d.Close() }()
-	col := openVectorIndexTestCollection(t, d)
-	if _, err := col.InsertBatch(
-		[][]byte{[]byte("a"), []byte("b"), []byte("c")},
-		[][]byte{
-			[]byte(`{"embedding":[1,0]}`),
-			[]byte(`{"embedding":[0.9,0.1]}`),
-			[]byte(`{"embedding":[0.8,0.2]}`),
-		},
-	); err != nil {
-		t.Fatalf("insert: %v", err)
-	}
-	index, err := col.BuildVectorIndex(VectorIndexOptions{
-		Name:     "embedding",
-		Field:    "embedding",
-		Metric:   VectorMetricCosine,
-		M:        4,
-		EfSearch: 8,
-	})
-	if err != nil {
-		t.Fatalf("build vector index: %v", err)
-	}
-	otherCol, err := NewCollectionManager(d).OpenCollection("docs")
-	if err != nil {
-		t.Fatalf("open second collection handle: %v", err)
-	}
-	if deleted, err := otherCol.DeleteBatch([][]byte{[]byte("a")}); err != nil || deleted != 1 {
-		t.Fatalf("delete through second handle deleted=%d err=%v", deleted, err)
-	}
-	if err := otherCol.Flush(); err != nil {
-		t.Fatalf("flush second handle: %v", err)
-	}
-
-	results, trace, err := index.Search([]float32{1, 0}, VectorIndexSearchOptions{
-		TopK:                 2,
-		DisableExactFallback: true,
-	})
-	if err != nil {
-		t.Fatalf("search stale vector index: %v", err)
-	}
-	requireVectorResultIDs(t, results, "b", "c")
-	if trace.ReturnedCount != 2 {
-		t.Fatalf("trace returned count=%d want 2: %+v", trace.ReturnedCount, trace)
-	}
-}
-
 func TestVectorIndexPruneLayerNeighborsUsesDistanceThenDocumentIDForDiverseNeighbors(t *testing.T) {
-	index, err := newVectorIndex(nil, VectorIndexOptions{
+	index, err := newColumnGraphHNSWBuilder(columnGraphHNSWBuildOptions{Encoding: VectorIndexEncodingFloat32,
 		Name:   "embedding",
 		Field:  "embedding",
 		Metric: VectorMetricCosine,
@@ -391,7 +60,7 @@ func TestVectorIndexPruneLayerNeighborsUsesDistanceThenDocumentIDForDiverseNeigh
 }
 
 func TestVectorIndexLevelForDocumentIDUsesMDependentHNSWDistribution(t *testing.T) {
-	index, err := newVectorIndex(nil, VectorIndexOptions{
+	index, err := newColumnGraphHNSWBuilder(columnGraphHNSWBuildOptions{Encoding: VectorIndexEncodingFloat32,
 		Name:   "embedding",
 		Field:  "embedding",
 		Metric: VectorMetricCosine,
@@ -427,7 +96,7 @@ func TestVectorIndexLevelForDocumentIDUsesMDependentHNSWDistribution(t *testing.
 }
 
 func TestVectorIndexSelectLayerNeighborsUsesHNSWDiversity(t *testing.T) {
-	index, err := newVectorIndex(nil, VectorIndexOptions{
+	index, err := newColumnGraphHNSWBuilder(columnGraphHNSWBuildOptions{Encoding: VectorIndexEncodingFloat32,
 		Name:   "embedding",
 		Field:  "embedding",
 		Metric: VectorMetricCosine,
@@ -458,40 +127,8 @@ func TestVectorIndexSelectLayerNeighborsUsesHNSWDiversity(t *testing.T) {
 	}
 }
 
-func TestVectorIndexSelectLayerNeighborsSkipsDiversityForInnerProduct(t *testing.T) {
-	index, err := newVectorIndex(nil, VectorIndexOptions{
-		Name:   "embedding",
-		Field:  "embedding",
-		Metric: VectorMetricInnerProduct,
-		M:      4,
-	})
-	if err != nil {
-		t.Fatalf("new vector index: %v", err)
-	}
-	query := []float32{1, 0}
-	index.nodes = []vectorIndexNode{
-		{documentID: []byte("query"), vector: query, level: 0},
-		{documentID: []byte("best"), vector: []float32{10, 0}, level: 0},
-		{documentID: []byte("next"), vector: []float32{9, 0}, level: 0},
-		{documentID: []byte("orthogonal"), vector: []float32{0, 1}, level: 0},
-	}
-	for i := range index.nodes {
-		index.nodes[i].cacheVectorNorms()
-	}
-	candidates := []vectorIndexCandidate{
-		{nodeID: 1, distance: -10},
-		{nodeID: 2, distance: -9},
-		{nodeID: 3, distance: 0},
-	}
-
-	got := index.selectLayerNeighborsLocked(query, vectorNormSquared(query), nil, candidates, 0, 2, 0)
-	if len(got) != 2 || got[0] != 1 || got[1] != 2 {
-		t.Fatalf("selected neighbors=%v want inner-product top candidates [1 2]", got)
-	}
-}
-
 func TestVectorIndexPruneLayerNeighborsUsesHNSWDiversity(t *testing.T) {
-	index, err := newVectorIndex(nil, VectorIndexOptions{
+	index, err := newColumnGraphHNSWBuilder(columnGraphHNSWBuildOptions{Encoding: VectorIndexEncodingFloat32,
 		Name:   "embedding",
 		Field:  "embedding",
 		Metric: VectorMetricCosine,
@@ -521,7 +158,7 @@ func TestVectorIndexPruneLayerNeighborsUsesHNSWDiversity(t *testing.T) {
 }
 
 func TestVectorIndexSelectLayerNeighborsBackfillsPrunedCandidates(t *testing.T) {
-	index, err := newVectorIndex(nil, VectorIndexOptions{
+	index, err := newColumnGraphHNSWBuilder(columnGraphHNSWBuildOptions{Encoding: VectorIndexEncodingFloat32,
 		Name:   "embedding",
 		Field:  "embedding",
 		Metric: VectorMetricCosine,
@@ -553,7 +190,7 @@ func TestVectorIndexSelectLayerNeighborsBackfillsPrunedCandidates(t *testing.T) 
 }
 
 func TestVectorIndexSelectDiverseCandidatesPrunesBelowCapWithoutBackfill(t *testing.T) {
-	index, err := newVectorIndex(nil, VectorIndexOptions{
+	index, err := newColumnGraphHNSWBuilder(columnGraphHNSWBuildOptions{Encoding: VectorIndexEncodingFloat32,
 		Name:   "embedding",
 		Field:  "embedding",
 		Metric: VectorMetricCosine,
@@ -619,7 +256,7 @@ func TestColumnVectorGraphConstructionTraceIsOptInAndDoesNotChangeGraphV1(t *tes
 }
 
 func TestVectorIndexConstructionTraceSamplesZeroCandidateSelectionV1(t *testing.T) {
-	index, err := newVectorIndex(nil, VectorIndexOptions{
+	index, err := newColumnGraphHNSWBuilder(columnGraphHNSWBuildOptions{Encoding: VectorIndexEncodingFloat32,
 		Name:   "embedding",
 		Field:  "embedding",
 		Metric: VectorMetricCosine,
@@ -649,7 +286,7 @@ func TestVectorIndexConstructionTraceSamplesZeroCandidateSelectionV1(t *testing.
 }
 
 func TestVectorIndexNormalSelectionDoesNotSnapshotPostfillCandidatesV1(t *testing.T) {
-	index, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, M: 2})
+	index, err := newColumnGraphHNSWBuilder(columnGraphHNSWBuildOptions{Encoding: VectorIndexEncodingFloat32, Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, M: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -757,7 +394,7 @@ func TestColumnVectorGraphConstructionEdgeTraceReconcilesLocalityGraphV1(t *test
 }
 
 func TestVectorIndexSelectDiverseCandidatesKeepsBackfillDistanceSorted(t *testing.T) {
-	index, err := newVectorIndex(nil, VectorIndexOptions{
+	index, err := newColumnGraphHNSWBuilder(columnGraphHNSWBuildOptions{Encoding: VectorIndexEncodingFloat32,
 		Name:   "embedding",
 		Field:  "embedding",
 		Metric: VectorMetricCosine,
@@ -888,9 +525,9 @@ func TestVectorIndexQualityPostfillIsFinalStageAndTraceIndependentV1(t *testing.
 		angle := float64((i*i*17)%997) * 2 * math.Pi / 997
 		rows[i] = columnVectorGraphAssetRow{ID: []byte(fmt.Sprintf("postfill-%03d", i)), Vector: []float32{float32(math.Cos(angle)), float32(math.Sin(angle))}}
 	}
-	build := func(trace *vectorIndexConstructionTraceV1) *VectorIndex {
+	build := func(trace *vectorIndexConstructionTraceV1) *columnGraphHNSWBuilder {
 		t.Helper()
-		idx, err := newVectorIndex(nil, vectorIndexOptionsFromDefinition(def))
+		idx, err := newColumnGraphHNSWBuilder(columnGraphHNSWBuildOptionsFromDefinition(def))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -963,9 +600,9 @@ func TestVectorIndexQualityPostfillUsesObservedPairsBidirectionallyV1(t *testing
 
 func TestVectorIndexRobustPruneRetainsRejectedPoolWithoutTraceV1(t *testing.T) {
 	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Encoding: VectorIndexEncodingFloat32, Dimensions: 2, M: 2, EfConstruction: 32}
-	build := func(trace *vectorIndexConstructionTraceV1) *VectorIndex {
+	build := func(trace *vectorIndexConstructionTraceV1) *columnGraphHNSWBuilder {
 		t.Helper()
-		idx, err := newVectorIndex(nil, vectorIndexOptionsFromDefinition(def))
+		idx, err := newColumnGraphHNSWBuilder(columnGraphHNSWBuildOptionsFromDefinition(def))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1019,7 +656,7 @@ func TestVectorIndexCosineCloseVectorsRetainDistanceAndDiversity(t *testing.T) {
 	for _, dims := range []int{8, 64} {
 		for _, scale := range []float32{1, 1e20, 1e-20} {
 			t.Run(fmt.Sprintf("dims=%d/scale=%g", dims, scale), func(t *testing.T) {
-				index, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: dims})
+				index, err := newColumnGraphHNSWBuilder(columnGraphHNSWBuildOptions{Encoding: VectorIndexEncodingFloat32, Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: dims})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -1077,19 +714,6 @@ func TestVectorIndexCosineCloseVectorsRetainDistanceAndDiversity(t *testing.T) {
 						t.Error("eligible diversity check did not exercise the indexed branch")
 					}
 				}
-				candidates := make([]vectorIndexCandidate, len(index.nodes))
-				for i := range candidates {
-					candidates[i].nodeID = len(candidates) - 1 - i
-				}
-				ranked, _, err := index.rerankFloat32CosineCandidatesFromNodesLocked(left.vector, prepared.invNorm, candidates, len(candidates), nil, nil)
-				if err != nil || len(ranked) != len(candidates) {
-					t.Fatalf("rerank len=%d err=%v", len(ranked), err)
-				}
-				for i, row := range ranked {
-					if string(row.DocumentID) != fmt.Sprintf("row-%d", i) || math.Abs(float64(row.Distance-reference(&index.nodes[i]))) > float64(reference(&index.nodes[i]))*1e-5 {
-						t.Errorf("rerank row %d=%+v", i, row)
-					}
-				}
 			})
 		}
 	}
@@ -1100,7 +724,7 @@ func TestVectorIndexCosineIndexedDiversityMatchesStable(t *testing.T) {
 		for _, scale := range []float32{1, 1e-15, 1e-20, 1e20, math.Nextafter32(float32(math.Sqrt(float64(math.MaxFloat32)/float64(dims))), 0)} {
 			for _, shape := range []string{"mixed", "close", "cancellation"} {
 				t.Run(fmt.Sprintf("dims=%d/scale=%g/%s", dims, scale, shape), func(t *testing.T) {
-					index, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: dims})
+					index, err := newColumnGraphHNSWBuilder(columnGraphHNSWBuildOptions{Encoding: VectorIndexEncodingFloat32, Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: dims})
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -1194,7 +818,7 @@ func TestVectorIndexCosineIndexedDiversityMatchesStable(t *testing.T) {
 }
 
 func TestVectorIndexFloat32CosineCandidateDistanceFastPathMatchesExact(t *testing.T) {
-	index, err := newVectorIndex(nil, VectorIndexOptions{
+	index, err := newColumnGraphHNSWBuilder(columnGraphHNSWBuildOptions{Encoding: VectorIndexEncodingFloat32,
 		Name:   "embedding",
 		Field:  "embedding",
 		Metric: VectorMetricCosine,
@@ -1217,37 +841,8 @@ func TestVectorIndexFloat32CosineCandidateDistanceFastPathMatchesExact(t *testin
 	}
 }
 
-func TestVectorIndexInt8InsertUnchangedVectorNoops(t *testing.T) {
-	index, err := newVectorIndex(nil, VectorIndexOptions{
-		Name:       "embedding",
-		Field:      "embedding",
-		Metric:     VectorMetricCosine,
-		Dimensions: 2,
-		M:          4,
-		Encoding:   VectorIndexEncodingInt8,
-	})
-	if err != nil {
-		t.Fatalf("new vector index: %v", err)
-	}
-	index.mu.Lock()
-	if err := index.insertVectorLocked([]byte("a"), []float32{1, 0}); err != nil {
-		index.mu.Unlock()
-		t.Fatalf("insert vector: %v", err)
-	}
-	if err := index.insertVectorLocked([]byte("a"), []float32{1, 0}); err != nil {
-		index.mu.Unlock()
-		t.Fatalf("insert unchanged vector: %v", err)
-	}
-	index.mu.Unlock()
-
-	stats := index.Stats()
-	if stats.Nodes != 1 || stats.LiveDocs != 1 || stats.DeletedDocs != 0 {
-		t.Fatalf("stats=%+v want one unchanged live node", stats)
-	}
-}
-
 func TestVectorIndexCandidateDiversitySkipsInvalidPairDistance(t *testing.T) {
-	index, err := newVectorIndex(nil, VectorIndexOptions{
+	index, err := newColumnGraphHNSWBuilder(columnGraphHNSWBuildOptions{Encoding: VectorIndexEncodingFloat32,
 		Name:   "embedding",
 		Field:  "embedding",
 		Metric: VectorMetricCosine,
@@ -1270,7 +865,7 @@ func TestVectorIndexCandidateDiversitySkipsInvalidPairDistance(t *testing.T) {
 }
 
 func TestVectorIndexDistanceBetweenNodesFastMatchesStoredCosine(t *testing.T) {
-	index, err := newVectorIndex(nil, VectorIndexOptions{
+	index, err := newColumnGraphHNSWBuilder(columnGraphHNSWBuildOptions{Encoding: VectorIndexEncodingFloat32,
 		Name:       "embedding",
 		Field:      "embedding",
 		Metric:     VectorMetricCosine,
@@ -1299,7 +894,7 @@ func TestVectorIndexDistanceBetweenNodesFastMatchesStoredCosine(t *testing.T) {
 }
 
 func TestVectorIndexNewNodeCapsEagerNeighborCapacity(t *testing.T) {
-	index, err := newVectorIndex(nil, VectorIndexOptions{
+	index, err := newColumnGraphHNSWBuilder(columnGraphHNSWBuildOptions{Encoding: VectorIndexEncodingFloat32,
 		Name:   "embedding",
 		Field:  "embedding",
 		Metric: VectorMetricCosine,
@@ -1320,7 +915,7 @@ func TestVectorIndexNewNodeCapsEagerNeighborCapacity(t *testing.T) {
 }
 
 func TestVectorIndexSelectLayerNeighborsReusesCandidateDistances(t *testing.T) {
-	index, err := newVectorIndex(nil, VectorIndexOptions{
+	index, err := newColumnGraphHNSWBuilder(columnGraphHNSWBuildOptions{Encoding: VectorIndexEncodingFloat32,
 		Name:   "embedding",
 		Field:  "embedding",
 		Metric: VectorMetricCosine,
@@ -1357,7 +952,7 @@ func TestVectorIndexSelectLayerNeighborsReusesCandidateDistances(t *testing.T) {
 }
 
 func TestSortVectorIndexCandidatesByDistanceTailInsert(t *testing.T) {
-	index, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine})
+	index, err := newColumnGraphHNSWBuilder(columnGraphHNSWBuildOptions{Encoding: VectorIndexEncodingFloat32, Name: "embedding", Field: "embedding", Metric: VectorMetricCosine})
 	if err != nil {
 		t.Fatalf("new vector index: %v", err)
 	}
@@ -1378,7 +973,7 @@ func TestSortVectorIndexCandidatesByDistanceTailInsert(t *testing.T) {
 }
 
 func TestSortVectorIndexCandidatesByDistanceFallbackSort(t *testing.T) {
-	index, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine})
+	index, err := newColumnGraphHNSWBuilder(columnGraphHNSWBuildOptions{Encoding: VectorIndexEncodingFloat32, Name: "embedding", Field: "embedding", Metric: VectorMetricCosine})
 	if err != nil {
 		t.Fatalf("new vector index: %v", err)
 	}
@@ -1399,7 +994,7 @@ func TestSortVectorIndexCandidatesByDistanceFallbackSort(t *testing.T) {
 }
 
 func TestVectorIndexCandidateDiversityAllowsEqualDistance(t *testing.T) {
-	index, err := newVectorIndex(nil, VectorIndexOptions{
+	index, err := newColumnGraphHNSWBuilder(columnGraphHNSWBuildOptions{Encoding: VectorIndexEncodingFloat32,
 		Name:   "embedding",
 		Field:  "embedding",
 		Metric: VectorMetricCosine,
@@ -1437,7 +1032,7 @@ func mustExactVectorDistance(t *testing.T, left, right []float32) float32 {
 }
 
 func TestVectorIndexInsertCachesStoredNorm(t *testing.T) {
-	index, err := newVectorIndex(nil, VectorIndexOptions{
+	index, err := newColumnGraphHNSWBuilder(columnGraphHNSWBuildOptions{Encoding: VectorIndexEncodingFloat32,
 		Name:   "embedding",
 		Field:  "embedding",
 		Metric: VectorMetricCosine,
@@ -1453,28 +1048,6 @@ func TestVectorIndexInsertCachesStoredNorm(t *testing.T) {
 	}
 	if got, want := index.nodes[0].cachedInvNorm, float64(0.2); got != want {
 		t.Fatalf("node cached inverse norm=%v want %v", got, want)
-	}
-}
-
-func TestVectorIndexInsertCachesInt8StoredNorm(t *testing.T) {
-	index, err := newVectorIndex(nil, VectorIndexOptions{
-		Name:     "embedding",
-		Field:    "embedding",
-		Metric:   VectorMetricCosine,
-		Encoding: VectorIndexEncodingInt8,
-	})
-	if err != nil {
-		t.Fatalf("new vector index: %v", err)
-	}
-	if err := index.insertVectorLocked([]byte("a"), []float32{3, 4}); err != nil {
-		t.Fatalf("insert vector: %v", err)
-	}
-	node := index.nodes[0]
-	if node.normSquared == 0 {
-		t.Fatal("node cached norm is zero")
-	}
-	if got, want := node.normSquared, node.storedNormSquared(); got != want {
-		t.Fatalf("node cached norm=%v want dequantized norm %v", got, want)
 	}
 }
 
@@ -1585,7 +1158,7 @@ func TestPrepareFloat32CosineQueryCachesInverseNorm(t *testing.T) {
 }
 
 func TestVectorIndexSearchLayerScratchReusesBuffers(t *testing.T) {
-	index, err := newVectorIndex(nil, VectorIndexOptions{
+	index, err := newColumnGraphHNSWBuilder(columnGraphHNSWBuildOptions{Encoding: VectorIndexEncodingFloat32,
 		Name:   "embedding",
 		Field:  "embedding",
 		Metric: VectorMetricCosine,
@@ -1631,7 +1204,7 @@ func TestVectorIndexSearchLayerScratchReusesBuffers(t *testing.T) {
 }
 
 func TestVectorIndexConstructionSearchDescendsWithFullSeedSet(t *testing.T) {
-	index, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 2})
+	index, err := newColumnGraphHNSWBuilder(columnGraphHNSWBuildOptions{Encoding: VectorIndexEncodingFloat32, Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1666,7 +1239,7 @@ func TestVectorIndexConstructionSearchDescendsWithFullSeedSet(t *testing.T) {
 }
 
 func TestVectorIndexCanonicalInsertPreservesUpperSearchSetForDescent(t *testing.T) {
-	index, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 2, EfConstruction: 4})
+	index, err := newColumnGraphHNSWBuilder(columnGraphHNSWBuildOptions{Encoding: VectorIndexEncodingFloat32, Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 2, EfConstruction: 4})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1721,7 +1294,7 @@ func TestVectorIndexCanonicalInsertPreservesUpperSearchSetForDescent(t *testing.
 }
 
 func TestVectorIndexCanonicalConstructionUsesStableIDTies(t *testing.T) {
-	index, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 1, EfConstruction: 1})
+	index, err := newColumnGraphHNSWBuilder(columnGraphHNSWBuildOptions{Encoding: VectorIndexEncodingFloat32, Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 1, EfConstruction: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1776,13 +1349,12 @@ func TestVectorIndexCanonicalConstructionUsesStableIDTies(t *testing.T) {
 }
 
 func TestVectorIndexCurrentSearchCountsUpperLayerScoresInBound(t *testing.T) {
-	index, err := newVectorIndex(nil, VectorIndexOptions{
+	index, err := newColumnGraphHNSWBuilder(columnGraphHNSWBuildOptions{Encoding: VectorIndexEncodingFloat32,
 		Name:       "embedding",
 		Field:      "embedding",
 		Metric:     VectorMetricCosine,
 		Dimensions: 2,
 		M:          2,
-		EfSearch:   1,
 	})
 	if err != nil {
 		t.Fatalf("new vector index: %v", err)
@@ -1842,588 +1414,6 @@ func TestVectorIndexSearchScratchVisitedEpochsGrowGeometrically(t *testing.T) {
 		if &scratch.visitedEpochs[0] != visited {
 			t.Fatalf("visited epochs reallocated at nodes=%d before capacity was exhausted", nodes)
 		}
-	}
-}
-
-func TestCollectionVectorIndexInt8EncodingReranksCanonicalRows(t *testing.T) {
-	const (
-		docs = 24
-		dims = 96
-		topK = 5
-	)
-	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	defer func() { _ = d.Close() }()
-	col := openVectorIndexTestCollection(t, d)
-	ids := make([][]byte, 0, docs)
-	documents := make([][]byte, 0, docs)
-	for i := 0; i < docs; i++ {
-		ids = append(ids, []byte(fmt.Sprintf("doc-%02d", i)))
-		documents = append(documents, vectorBenchmarkDocument(i, dims))
-	}
-	if _, err := col.InsertBatch(ids, documents); err != nil {
-		t.Fatalf("insert: %v", err)
-	}
-	floatIndex, err := col.BuildVectorIndex(VectorIndexOptions{
-		Name:   "embedding_f32",
-		Field:  "embedding",
-		Metric: VectorMetricCosine,
-		M:      8,
-	})
-	if err != nil {
-		t.Fatalf("build float32 vector index: %v", err)
-	}
-	int8Index, err := col.BuildVectorIndex(VectorIndexOptions{
-		Name:     "embedding_i8",
-		Field:    "embedding",
-		Metric:   VectorMetricCosine,
-		M:        8,
-		Encoding: VectorIndexEncodingInt8,
-	})
-	if err != nil {
-		t.Fatalf("build int8 vector index: %v", err)
-	}
-	query := vectorBenchmarkEmbedding(7, dims)
-	exact, err := col.SearchVectorsExact(query, VectorSearchOptions{
-		Field:  "embedding",
-		Metric: VectorMetricCosine,
-		TopK:   topK,
-	})
-	if err != nil {
-		t.Fatalf("exact search: %v", err)
-	}
-	results, trace, err := int8Index.Search(query, VectorIndexSearchOptions{
-		TopK:                 topK,
-		EfSearch:             docs,
-		FetchMultiplier:      docs,
-		DisableExactFallback: true,
-	})
-	if err != nil {
-		t.Fatalf("int8 search: %v", err)
-	}
-	if trace.RerankCount < topK {
-		t.Fatalf("int8 search did not rerank canonical rows: %+v", trace)
-	}
-	for i := range exact {
-		if string(results[i].DocumentID) != string(exact[i].DocumentID) {
-			t.Fatalf("int8 result[%d]=%q want exact %q", i, results[i].DocumentID, exact[i].DocumentID)
-		}
-	}
-	floatStats := floatIndex.Stats()
-	int8Stats := int8Index.Stats()
-	if int8Stats.Encoding != VectorIndexEncodingInt8 || int8Stats.Dimensions != dims {
-		t.Fatalf("unexpected int8 stats: %+v", int8Stats)
-	}
-	if int8Stats.BytesMemory >= floatStats.BytesMemory {
-		t.Fatalf("int8 memory bytes=%d want less than float32 %d", int8Stats.BytesMemory, floatStats.BytesMemory)
-	}
-	int8Index.mu.RLock()
-	defer int8Index.mu.RUnlock()
-	if len(int8Index.nodes) == 0 || len(int8Index.nodes[0].vector) != 0 || len(int8Index.nodes[0].quantized) != dims || int8Index.nodes[0].quantScale <= 0 {
-		t.Fatalf("unexpected int8 node storage: %+v", int8Index.nodes[0])
-	}
-}
-
-func TestCollectionVectorIndexSelectiveRangeFilterUsesExactFilteredStrategy(t *testing.T) {
-	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	defer func() { _ = d.Close() }()
-	col := openVectorIndexTestCollectionWithIndexes(t, d, IndexDefinition{Name: "city_idx", Field: "city", ValueType: IndexValueString})
-	if _, err := col.InsertBatch(
-		[][]byte{[]byte("a"), []byte("b"), []byte("c"), []byte("d")},
-		[][]byte{
-			[]byte(`{"embedding":[1,0],"city":"hnl"}`),
-			[]byte(`{"embedding":[1,0],"city":"sea"}`),
-			[]byte(`{"embedding":[0.9,0.1],"city":"hnl"}`),
-			[]byte(`{"embedding":[0,1],"city":"hnl"}`),
-		},
-	); err != nil {
-		t.Fatalf("insert: %v", err)
-	}
-	index, err := col.BuildVectorIndex(VectorIndexOptions{Field: "embedding", Metric: VectorMetricCosine, M: 4})
-	if err != nil {
-		t.Fatalf("build vector index: %v", err)
-	}
-
-	results, trace, err := index.Search([]float32{1, 0}, VectorIndexSearchOptions{
-		TopK: 2,
-		IndexRangeFilter: &VectorIndexRangeFilter{
-			IndexName: "city_idx",
-			Range: IndexRangeOptions{
-				Lower: IndexRangeBound{Value: "hnl", Inclusive: true},
-				Upper: IndexRangeBound{Value: "hnl", Inclusive: true},
-			},
-		},
-	})
-	if err != nil {
-		t.Fatalf("filtered search: %v", err)
-	}
-	requireVectorResultIDs(t, results, "a", "c")
-	if trace.Strategy != "exact_filtered" || trace.CandidatesExamined != 3 || trace.RerankCount != 3 || trace.ReturnedCount != 2 {
-		t.Fatalf("unexpected trace: %+v", trace)
-	}
-}
-
-func TestCollectionVectorIndexBroadRangeFilterUsesANNPostFilter(t *testing.T) {
-	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	defer func() { _ = d.Close() }()
-	col := openVectorIndexTestCollectionWithIndexes(t, d, IndexDefinition{Name: "city_idx", Field: "city", ValueType: IndexValueString})
-	if _, err := col.InsertBatch(
-		[][]byte{[]byte("a"), []byte("b"), []byte("c"), []byte("d")},
-		[][]byte{
-			[]byte(`{"embedding":[1,0],"city":"hnl"}`),
-			[]byte(`{"embedding":[0.95,0.05],"city":"hnl"}`),
-			[]byte(`{"embedding":[0.9,0.1],"city":"sea"}`),
-			[]byte(`{"embedding":[0,1],"city":"hnl"}`),
-		},
-	); err != nil {
-		t.Fatalf("insert: %v", err)
-	}
-	index, err := col.BuildVectorIndex(VectorIndexOptions{Field: "embedding", Metric: VectorMetricCosine, M: 4})
-	if err != nil {
-		t.Fatalf("build vector index: %v", err)
-	}
-
-	results, trace, err := index.Search([]float32{1, 0}, VectorIndexSearchOptions{
-		TopK:                 1,
-		EfSearch:             8,
-		FetchMultiplier:      8,
-		ExactFilterMaxDocs:   1,
-		DisableExactFallback: true,
-		IndexRangeFilter: &VectorIndexRangeFilter{
-			IndexName: "city_idx",
-			Range: IndexRangeOptions{
-				Lower: IndexRangeBound{Value: "hnl", Inclusive: true},
-				Upper: IndexRangeBound{Value: "hnl", Inclusive: true},
-			},
-		},
-	})
-	if err != nil {
-		t.Fatalf("filtered search: %v", err)
-	}
-	requireVectorResultIDs(t, results, "a")
-	if trace.Strategy != "ann_postfilter" || trace.CandidatesAfterFilter == 0 || trace.RerankCount == 0 {
-		t.Fatalf("unexpected trace: %+v", trace)
-	}
-}
-
-func TestCollectionVectorIndexInsertAndTombstone(t *testing.T) {
-	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	defer func() { _ = d.Close() }()
-	col := openVectorIndexTestCollection(t, d)
-	if _, err := col.InsertBatch(
-		[][]byte{[]byte("a"), []byte("b")},
-		[][]byte{
-			[]byte(`{"embedding":[1,0]}`),
-			[]byte(`{"embedding":[0,1]}`),
-		},
-	); err != nil {
-		t.Fatalf("insert: %v", err)
-	}
-	index, err := col.BuildVectorIndex(VectorIndexOptions{Field: "embedding", Metric: VectorMetricCosine, M: 4})
-	if err != nil {
-		t.Fatalf("build vector index: %v", err)
-	}
-	if _, err := col.InsertBatch(
-		[][]byte{[]byte("c")},
-		[][]byte{[]byte(`{"embedding":[0.9,0.1]}`)},
-	); err != nil {
-		t.Fatalf("insert c: %v", err)
-	}
-	results, _, err := index.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true})
-	if err != nil {
-		t.Fatalf("search after insert: %v", err)
-	}
-	requireVectorResultIDs(t, results, "a", "c")
-
-	if deleted, err := col.DeleteBatch([][]byte{[]byte("a")}); err != nil || deleted != 1 {
-		t.Fatalf("delete a deleted=%d err=%v", deleted, err)
-	}
-	results, _, err = index.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true})
-	if err != nil {
-		t.Fatalf("search after tombstone: %v", err)
-	}
-	requireVectorResultIDs(t, results, "c", "b")
-	stats := index.Stats()
-	if stats.LiveDocs != 2 || stats.DeletedDocs != 1 || !stats.RebuildNeeded {
-		t.Fatalf("unexpected post-tombstone stats: %+v", stats)
-	}
-}
-
-func TestCollectionVectorIndexInsertDocumentNoopsWhenVectorUnchanged(t *testing.T) {
-	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	defer func() { _ = d.Close() }()
-	col := openVectorIndexTestCollection(t, d)
-	if _, err := col.InsertBatch(
-		[][]byte{[]byte("a"), []byte("b")},
-		[][]byte{
-			[]byte(`{"embedding":[1,0]}`),
-			[]byte(`{"embedding":[0,1]}`),
-		},
-	); err != nil {
-		t.Fatalf("insert seed: %v", err)
-	}
-	index, err := col.BuildVectorIndex(VectorIndexOptions{Field: "embedding", Metric: VectorMetricCosine, M: 4})
-	if err != nil {
-		t.Fatalf("build vector index: %v", err)
-	}
-	before := index.Stats()
-	if err := index.InsertDocument([]byte("a")); err != nil {
-		t.Fatalf("insert unchanged document: %v", err)
-	}
-	after := index.Stats()
-	if after.Nodes != before.Nodes || after.DeletedDocs != before.DeletedDocs || after.LiveDocs != before.LiveDocs {
-		t.Fatalf("unchanged insert mutated graph before=%+v after=%+v", before, after)
-	}
-}
-
-func TestCollectionVectorIndexTracksRegisteredMutations(t *testing.T) {
-	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	defer func() { _ = d.Close() }()
-	col := openVectorIndexTestCollection(t, d)
-	if _, err := col.InsertBatch(
-		[][]byte{[]byte("a"), []byte("b")},
-		[][]byte{
-			[]byte(`{"embedding":[1,0]}`),
-			[]byte(`{"embedding":[0,1]}`),
-		},
-	); err != nil {
-		t.Fatalf("insert seed: %v", err)
-	}
-	index, err := col.BuildVectorIndex(VectorIndexOptions{Field: "embedding", Metric: VectorMetricCosine, M: 4})
-	if err != nil {
-		t.Fatalf("build vector index: %v", err)
-	}
-	if _, err := col.InsertBatch(
-		[][]byte{[]byte("c")},
-		[][]byte{[]byte(`{"embedding":[0.9,0.1]}`)},
-	); err != nil {
-		t.Fatalf("insert tracked c: %v", err)
-	}
-	results, _, err := index.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true})
-	if err != nil {
-		t.Fatalf("search after tracked insert: %v", err)
-	}
-	requireVectorResultIDs(t, results, "a", "c")
-
-	replaced, err := col.Replace([]byte("b"), []byte(`{"embedding":[0.95,0.05]}`))
-	if err != nil || !replaced {
-		t.Fatalf("replace b replaced=%v err=%v", replaced, err)
-	}
-	results, _, err = index.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 3, DisableExactFallback: true})
-	if err != nil {
-		t.Fatalf("search after tracked replace: %v", err)
-	}
-	requireVectorResultIDs(t, results, "a", "b", "c")
-
-	deleted, err := col.DeleteBatch([][]byte{[]byte("a")})
-	if err != nil || deleted != 1 {
-		t.Fatalf("delete a deleted=%d err=%v", deleted, err)
-	}
-	results, _, err = index.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true})
-	if err != nil {
-		t.Fatalf("search after tracked delete: %v", err)
-	}
-	requireVectorResultIDs(t, results, "b", "c")
-	stats := index.Stats()
-	if stats.LiveDocs != 2 || stats.DeletedDocs != 2 {
-		t.Fatalf("tracked mutation stats=%+v want live=2 deleted=2", stats)
-	}
-}
-
-func TestCollectionVectorIndexRebuildRemovesTombstones(t *testing.T) {
-	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	defer func() { _ = d.Close() }()
-	col := openVectorIndexTestCollection(t, d)
-	if _, err := col.InsertBatch(
-		[][]byte{[]byte("a"), []byte("b"), []byte("c")},
-		[][]byte{
-			[]byte(`{"embedding":[1,0]}`),
-			[]byte(`{"embedding":[0.9,0.1]}`),
-			[]byte(`{"embedding":[0,1]}`),
-		},
-	); err != nil {
-		t.Fatalf("insert: %v", err)
-	}
-	index, err := col.BuildVectorIndex(VectorIndexOptions{Field: "embedding", Metric: VectorMetricCosine, M: 4})
-	if err != nil {
-		t.Fatalf("build vector index: %v", err)
-	}
-	if deleted, err := col.DeleteBatch([][]byte{[]byte("a")}); err != nil || deleted != 1 {
-		t.Fatalf("delete a deleted=%d err=%v", deleted, err)
-	}
-	index.TombstoneDocumentID([]byte("a"))
-	if stats := index.Stats(); stats.DeletedDocs != 1 || !stats.RebuildNeeded {
-		t.Fatalf("pre-rebuild stats=%+v want tombstone and rebuild-needed", stats)
-	}
-	if err := index.Rebuild(); err != nil {
-		t.Fatalf("rebuild vector index: %v", err)
-	}
-	stats := index.Stats()
-	if stats.LiveDocs != 2 || stats.DeletedDocs != 0 || stats.RebuildNeeded {
-		t.Fatalf("post-rebuild stats=%+v want live=2 deleted=0 rebuild=false", stats)
-	}
-	if stats.LastRebuildDuration <= 0 {
-		t.Fatalf("post-rebuild stats missing rebuild duration: %+v", stats)
-	}
-	results, _, err := index.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true})
-	if err != nil {
-		t.Fatalf("search rebuilt index: %v", err)
-	}
-	requireVectorResultIDs(t, results, "b", "c")
-
-	if _, err := col.InsertBatch(
-		[][]byte{[]byte("d")},
-		[][]byte{[]byte(`{"embedding":[0.99,0.01]}`)},
-	); err != nil {
-		t.Fatalf("insert after rebuild: %v", err)
-	}
-	results, _, err = index.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true})
-	if err != nil {
-		t.Fatalf("search after post-rebuild insert: %v", err)
-	}
-	requireVectorResultIDs(t, results, "d", "b")
-}
-
-func TestCollectionVectorIndexUpdateDocumentReplacesCurrentNode(t *testing.T) {
-	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	defer func() { _ = d.Close() }()
-	col := openVectorIndexTestCollection(t, d)
-	if _, err := col.InsertBatch(
-		[][]byte{[]byte("a"), []byte("b")},
-		[][]byte{
-			[]byte(`{"embedding":[1,0]}`),
-			[]byte(`{"embedding":[0,1]}`),
-		},
-	); err != nil {
-		t.Fatalf("insert: %v", err)
-	}
-	index, err := col.BuildVectorIndex(VectorIndexOptions{Field: "embedding", Metric: VectorMetricCosine, M: 4})
-	if err != nil {
-		t.Fatalf("build vector index: %v", err)
-	}
-	replaced, err := col.Replace([]byte("b"), []byte(`{"embedding":[0.95,0.05]}`))
-	if err != nil || !replaced {
-		t.Fatalf("replace b replaced=%v err=%v", replaced, err)
-	}
-	results, _, err := index.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 2, DisableExactFallback: true})
-	if err != nil {
-		t.Fatalf("search after update: %v", err)
-	}
-	requireVectorResultIDs(t, results, "a", "b")
-	stats := index.Stats()
-	if stats.LiveDocs != 2 || stats.DeletedDocs != 1 {
-		t.Fatalf("unexpected stats after update: %+v", stats)
-	}
-}
-
-func TestCollectionVectorIndexUnderfillFallsBackToExact(t *testing.T) {
-	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	defer func() { _ = d.Close() }()
-	col := openVectorIndexTestCollection(t, d)
-	if _, err := col.InsertBatch(
-		[][]byte{[]byte("a"), []byte("b"), []byte("c")},
-		[][]byte{
-			[]byte(`{"embedding":[1,0]}`),
-			[]byte(`{"embedding":[0.9,0.1]}`),
-			[]byte(`{"embedding":[0.8,0.2]}`),
-		},
-	); err != nil {
-		t.Fatalf("insert: %v", err)
-	}
-	index, err := col.BuildVectorIndex(VectorIndexOptions{Field: "embedding", Metric: VectorMetricCosine, M: 1, EfSearch: 1})
-	if err != nil {
-		t.Fatalf("build vector index: %v", err)
-	}
-	results, trace, err := index.Search([]float32{1, 0}, VectorIndexSearchOptions{TopK: 4, EfSearch: 1, FetchMultiplier: 1})
-	if err != nil {
-		t.Fatalf("search with fallback: %v", err)
-	}
-	requireVectorResultIDs(t, results, "a", "b", "c")
-	if trace.Strategy != "ann_graph_exact_fallback" || trace.ExactFallbackReason == "" {
-		t.Fatalf("expected exact fallback trace, got %+v", trace)
-	}
-}
-
-func TestCollectionVectorIndexCheckRecall(t *testing.T) {
-	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	defer func() { _ = d.Close() }()
-	col := openVectorIndexTestCollection(t, d)
-	if _, err := col.InsertBatch(
-		[][]byte{[]byte("a"), []byte("b"), []byte("c")},
-		[][]byte{
-			[]byte(`{"embedding":[1,0]}`),
-			[]byte(`{"embedding":[0,1]}`),
-			[]byte(`{"embedding":[0.8,0.2]}`),
-		},
-	); err != nil {
-		t.Fatalf("insert: %v", err)
-	}
-	index, err := col.BuildVectorIndex(VectorIndexOptions{Field: "embedding", Metric: VectorMetricCosine, M: 4})
-	if err != nil {
-		t.Fatalf("build vector index: %v", err)
-	}
-	recall, err := index.CheckRecall([][]float32{{1, 0}, {0, 1}}, VectorIndexSearchOptions{TopK: 1})
-	if err != nil {
-		t.Fatalf("check recall: %v", err)
-	}
-	if recall.Queries != 2 || recall.ExactTotal != 2 || recall.Overlap != 2 || recall.Recall != 1 {
-		t.Fatalf("unexpected recall: %+v", recall)
-	}
-}
-
-func TestCollectionVectorIndexCheckRecallExactBatchMatchesPerQueryExact(t *testing.T) {
-	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	defer func() { _ = d.Close() }()
-	col := openVectorIndexTestCollection(t, d)
-	if _, err := col.InsertBatch(
-		[][]byte{[]byte("a"), []byte("b"), []byte("c"), []byte("d"), []byte("e")},
-		[][]byte{
-			[]byte(`{"embedding":[1,0,0]}`),
-			[]byte(`{"embedding":[0.9,0.1,0]}`),
-			[]byte(`{"embedding":[0.1,0.9,0]}`),
-			[]byte(`{"embedding":[0,1,0]}`),
-			[]byte(`{"embedding":[0,0.1,0.9]}`),
-		},
-	); err != nil {
-		t.Fatalf("insert: %v", err)
-	}
-	index, err := col.BuildVectorIndex(VectorIndexOptions{Field: "embedding", Metric: VectorMetricCosine, M: 4})
-	if err != nil {
-		t.Fatalf("build vector index: %v", err)
-	}
-	queries := [][]float32{{1, 0.05, 0}, {0.05, 1, 0}}
-	got, usedBatch, err := index.checkRecallExactBatch(queries, VectorIndexSearchOptions{TopK: 3})
-	if err != nil {
-		t.Fatalf("check recall exact batch: %v", err)
-	}
-	if !usedBatch {
-		t.Fatal("exact recall did not use batch path")
-	}
-	for i, query := range queries {
-		want, err := col.SearchVectorsExact(query, VectorSearchOptions{
-			Field:  "embedding",
-			Metric: VectorMetricCosine,
-			TopK:   3,
-		})
-		if err != nil {
-			t.Fatalf("exact search query %d: %v", i, err)
-		}
-		if len(got[i]) != len(want) {
-			t.Fatalf("query %d batch len=%d want %d", i, len(got[i]), len(want))
-		}
-		for j := range want {
-			if !bytes.Equal(got[i][j].DocumentID, want[j].DocumentID) || got[i][j].Distance != want[j].Distance {
-				t.Fatalf("query %d result %d batch=%+v want=%+v", i, j, got[i][j], want[j])
-			}
-		}
-	}
-}
-
-func TestCollectionVectorIndexCheckRecallUsesIndexRangeFilter(t *testing.T) {
-	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	defer func() { _ = d.Close() }()
-	col := openVectorIndexTestCollectionWithIndexes(t, d, IndexDefinition{Name: "city_idx", Field: "city", ValueType: IndexValueString})
-	if _, err := col.InsertBatch(
-		[][]byte{[]byte("a"), []byte("b"), []byte("c"), []byte("d")},
-		[][]byte{
-			[]byte(`{"embedding":[1,0],"city":"hnl"}`),
-			[]byte(`{"embedding":[0.9,0.1],"city":"hnl"}`),
-			[]byte(`{"embedding":[0.8,0.2],"city":"sea"}`),
-			[]byte(`{"embedding":[0,1],"city":"hnl"}`),
-		},
-	); err != nil {
-		t.Fatalf("insert: %v", err)
-	}
-	index, err := col.BuildVectorIndex(VectorIndexOptions{Field: "embedding", Metric: VectorMetricCosine, M: 4})
-	if err != nil {
-		t.Fatalf("build vector index: %v", err)
-	}
-	recall, err := index.CheckRecall([][]float32{{1, 0}}, VectorIndexSearchOptions{
-		TopK: 2,
-		IndexRangeFilter: &VectorIndexRangeFilter{
-			IndexName: "city_idx",
-			Range: IndexRangeOptions{
-				Lower: IndexRangeBound{Value: "hnl", Inclusive: true},
-				Upper: IndexRangeBound{Value: "hnl", Inclusive: true},
-			},
-		},
-	})
-	if err != nil {
-		t.Fatalf("check filtered recall: %v", err)
-	}
-	if recall.ExactTotal != 2 || recall.ANNTotal != 2 || recall.Overlap != 2 || recall.Recall != 1 {
-		t.Fatalf("filtered recall used wrong baseline: %+v", recall)
-	}
-	if len(recall.SearchTraces) != 1 || recall.SearchTraces[0].Strategy != "exact_filtered" {
-		t.Fatalf("unexpected filtered recall traces: %+v", recall.SearchTraces)
-	}
-}
-
-func TestCollectionVectorIndexCheckRecallFallsBackForUnsafeBatchNorms(t *testing.T) {
-	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	defer func() { _ = d.Close() }()
-	col := openVectorIndexTestCollection(t, d)
-	if _, err := col.InsertBatch(
-		[][]byte{[]byte("a"), []byte("b")},
-		[][]byte{
-			[]byte(`{"embedding":[100000000000000000000,100000000000000000000]}`),
-			[]byte(`{"embedding":[100000000000000000000,-100000000000000000000]}`),
-		},
-	); err != nil {
-		t.Fatalf("insert: %v", err)
-	}
-	index, err := col.BuildVectorIndex(VectorIndexOptions{Field: "embedding", Metric: VectorMetricCosine, M: 4})
-	if err != nil {
-		t.Fatalf("build vector index: %v", err)
-	}
-
-	_, usedBatch, err := index.checkRecallExactBatch([][]float32{
-		{1e20, 1e20},
-		{1e20, -1e20},
-	}, VectorIndexSearchOptions{TopK: 1})
-	if err != nil {
-		t.Fatalf("check recall exact batch: %v", err)
-	}
-	if usedBatch {
-		t.Fatal("unsafe cosine norms used float32 batch path")
 	}
 }
 

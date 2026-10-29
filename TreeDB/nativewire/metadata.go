@@ -15,7 +15,7 @@ import (
 type CollectionHandle uint64
 
 const (
-	collectionMetaWireVersion          = 6
+	collectionMetaWireVersion          = 7
 	maxCollectionMetaIndexDefinitions  = 1 << 16
 	minEncodedIndexDefinitionLen       = 6
 	minEncodedVectorIndexDefinitionLen = 7
@@ -52,6 +52,18 @@ func appendCollectionHandleRefPayload(dst []byte, handle CollectionHandle) []byt
 }
 
 func encodeCollectionMeta(meta collections.CollectionMeta) ([]byte, error) {
+	for _, def := range meta.VectorIndexes {
+		if def.Strategy != collections.VectorIndexStrategyColumnGraph {
+			return nil, invalidMetadata("vector index %q requires an explicit column_graph strategy", def.Name)
+		}
+	}
+	if len(meta.TextIndexes) != 0 {
+		payload, err := collections.EncodeCatalogCreateCollectionCommandWALPayload(meta)
+		if err != nil {
+			return nil, invalidMetadata("%v", err)
+		}
+		return append(binary.AppendUvarint(nil, 7), payload...), nil
+	}
 	version := uint64(5)
 	var columnSchema []byte
 	if meta.Options.ColumnStore != nil {
@@ -91,12 +103,27 @@ func encodeCollectionMeta(meta collections.CollectionMeta) ([]byte, error) {
 }
 
 func decodeCollectionMeta(src []byte) (collections.CollectionMeta, error) {
+	return decodeCollectionMetaForPurpose(src, false)
+}
+
+func decodeCollectionMetaForPurpose(src []byte, create bool) (collections.CollectionMeta, error) {
 	version, off, err := readUvarint(src)
 	if err != nil {
 		return collections.CollectionMeta{}, err
 	}
 	if version < 1 || version > collectionMetaWireVersion {
 		return collections.CollectionMeta{}, protocolError(iwire.ErrUnsupportedVersion, "collection_meta version %d", version)
+	}
+	if version == 7 {
+		meta, err := collections.DecodeCatalogCreateCollectionCommandWALPayload(src[off:], create)
+		if err != nil {
+			code := iwire.ErrInvalidCommand
+			if errors.Is(err, backenddb.ErrNativeSemanticUnsupported) {
+				code = iwire.ErrUnsupportedFeature
+			}
+			return collections.CollectionMeta{}, fmt.Errorf("%w: %w", protocolError(code, "collection_meta"), err)
+		}
+		return meta, nil
 	}
 	name, err := readString(src, &off)
 	if err != nil {
@@ -224,12 +251,15 @@ func decodeCollectionMeta(src []byte) (collections.CollectionMeta, error) {
 		if vectorIndexCount > maxCollectionMetaIndexDefinitions {
 			return collections.CollectionMeta{}, protocolError(iwire.ErrResourceExhausted, "vector index count %d exceeds limit %d", vectorIndexCount, maxCollectionMetaIndexDefinitions)
 		}
+		if version == 2 && vectorIndexCount != 0 {
+			return collections.CollectionMeta{}, protocolError(iwire.ErrUnsupportedVersion, "vector-bearing collection_meta version 2 has no strategy identity")
+		}
 		if vectorIndexCount > uint64((len(src)-off)/minEncodedVectorIndexDefinitionLen) {
 			return collections.CollectionMeta{}, protocolError(iwire.ErrMalformedFrame, "vector index count %d exceeds remaining collection_meta payload", vectorIndexCount)
 		}
 		meta.VectorIndexes = make([]collections.VectorIndexDefinition, 0, int(vectorIndexCount))
 		for i := uint64(0); i < vectorIndexCount; i++ {
-			def, next, err := decodeVectorIndexDefinitionForCollectionMeta(src, off, version)
+			def, next, err := decodeVectorIndexDefinitionForCollectionMeta(src, off, version, create)
 			if err != nil {
 				return collections.CollectionMeta{}, err
 			}
@@ -451,7 +481,7 @@ func decodeVectorIndexDefinitionAt(src []byte, off int, withVersion bool) (colle
 	}, off, nil
 }
 
-func decodeVectorIndexDefinitionForCollectionMeta(src []byte, off int, collectionMetaVersion uint64) (collections.VectorIndexDefinition, int, error) {
+func decodeVectorIndexDefinitionForCollectionMeta(src []byte, off int, collectionMetaVersion uint64, create bool) (collections.VectorIndexDefinition, int, error) {
 	def, off, err := decodeVectorIndexDefinitionAt(src, off, false)
 	if err != nil {
 		return collections.VectorIndexDefinition{}, 0, err
@@ -463,9 +493,16 @@ func decodeVectorIndexDefinitionForCollectionMeta(src []byte, off int, collectio
 	if err != nil {
 		return collections.VectorIndexDefinition{}, 0, err
 	}
-	decodedStrategy, err := decodeVectorIndexStrategyStrict(strategy)
-	if err != nil {
-		return collections.VectorIndexDefinition{}, 0, err
+	// Create ingress must parse every declaration before capability refusal.
+	// Response decoding keeps the strict retired-tag rejection.
+	var decodedStrategy collections.VectorIndexStrategy
+	if create && strategy == 1 {
+		decodedStrategy = "native_runtime"
+	} else {
+		decodedStrategy, err = decodeVectorIndexStrategyStrict(strategy)
+		if err != nil {
+			return collections.VectorIndexDefinition{}, 0, err
+		}
 	}
 	quantizedCount, err := readUvarintField(src, &off, "quantized_index_count")
 	if err != nil {
@@ -828,8 +865,6 @@ func decodeVectorIndexEncodingStrict(encoding uint64) (collections.VectorIndexEn
 
 func encodeVectorIndexStrategy(strategy collections.VectorIndexStrategy) uint64 {
 	switch strategy {
-	case "", collections.VectorIndexStrategyNativeRuntime:
-		return 1
 	case collections.VectorIndexStrategyColumnGraph:
 		return 2
 	default:
@@ -840,7 +875,7 @@ func encodeVectorIndexStrategy(strategy collections.VectorIndexStrategy) uint64 
 func decodeVectorIndexStrategyStrict(strategy uint64) (collections.VectorIndexStrategy, error) {
 	switch strategy {
 	case 1:
-		return collections.VectorIndexStrategyNativeRuntime, nil
+		return "", protocolError(iwire.ErrUnsupportedFeature, "retired native_runtime vector strategy is unsupported")
 	case 2:
 		return collections.VectorIndexStrategyColumnGraph, nil
 	default:
@@ -1323,6 +1358,30 @@ func normalizeClientCollectionMeta(meta collections.CollectionMeta) (collections
 			return collections.CollectionMeta{}, invalidMetadata("%v", err)
 		}
 		meta.Options.ColumnStore, err = collections.DecodeColumnStoreWireConfigV1(meta.Name, raw, true)
+		if err != nil {
+			return collections.CollectionMeta{}, invalidMetadata("%v", err)
+		}
+	}
+	if len(meta.VectorIndexes) != 0 {
+		// The shared catalog normalizer validates every declaration and the
+		// collection-wide index namespace before vector capability refusal.
+		// Per-vector normalization here would hide malformed later declarations.
+		normalized, err := collections.NormalizeCollectionMetaV1(meta)
+		if err != nil {
+			code := iwire.ErrInvalidCommand
+			if errors.Is(err, backenddb.ErrNativeSemanticUnsupported) {
+				code = iwire.ErrUnsupportedFeature
+			}
+			return collections.CollectionMeta{}, fmt.Errorf("%w: %w", protocolError(code, "collection_meta"), err)
+		}
+		meta = normalized
+	}
+	if len(meta.TextIndexes) != 0 {
+		payload, err := collections.EncodeCatalogCreateCollectionCommandWALPayload(meta)
+		if err != nil {
+			return collections.CollectionMeta{}, invalidMetadata("%v", err)
+		}
+		meta, err = collections.DecodeCatalogCreateCollectionCommandWALPayload(payload, true)
 		if err != nil {
 			return collections.CollectionMeta{}, invalidMetadata("%v", err)
 		}

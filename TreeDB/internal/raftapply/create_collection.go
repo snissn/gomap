@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	createCollectionMetaMaxWireVersion           = 6
+	createCollectionMetaMaxWireVersion           = 7
 	createCollectionMetaMaxIndexDefinitions      = 1 << 16
 	createCollectionMetaMinIndexDefinitionLen    = 6
 	createCollectionMetaMinVectorDefinitionLen   = 7
@@ -208,6 +208,13 @@ func decodeCreateCollectionMetaV1(raw []byte) (collections.CollectionMeta, error
 	}
 	if version < 1 || version > createCollectionMetaMaxWireVersion {
 		return collections.CollectionMeta{}, codedError(raftentry.ErrorUnsupportedVersionV1, "raftapply: collection_meta version %d", version)
+	}
+	if version == 7 {
+		meta, err := collections.DecodeCatalogCreateCollectionCommandWALPayload(raw[off:], true)
+		if err != nil {
+			return collections.CollectionMeta{}, codedError(raftentry.ErrorMalformedEntryV1, "raftapply: collection_meta: %v", err)
+		}
+		return meta, nil
 	}
 	name, err := readCreateMetaString(raw, &off, "collection name")
 	if err != nil {
@@ -686,7 +693,7 @@ func decodeCreateVectorIndexEncoding(value uint64) (collections.VectorIndexEncod
 func decodeCreateVectorIndexStrategy(value uint64) (collections.VectorIndexStrategy, error) {
 	switch value {
 	case 1:
-		return collections.VectorIndexStrategyNativeRuntime, nil
+		return "", codedError(raftentry.ErrorUnsupportedFeatureV1, "raftapply: retired native_runtime vector strategy is unsupported")
 	case 2:
 		return collections.VectorIndexStrategyColumnGraph, nil
 	default:

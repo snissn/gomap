@@ -5280,6 +5280,9 @@ func TestVlogGenerationRewriteQueue_PrefersHistoricallyUsefulActiveLedgerDebt(t 
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(64)
 	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
 	forceVlogMaintenanceIdle(db)
+	// Scope the exact call-count assertion to this explicit pass. A useful
+	// rewrite leaves eligible debt and otherwise launches an asynchronous drain.
+	holdVlogGenerationRewriteQueueRunnerForTest(t, db)
 	runRewriteQueueMaintenanceForTest(db)
 
 	opts, calls := recorder.recordedRewrite()
@@ -5288,6 +5291,10 @@ func TestVlogGenerationRewriteQueue_PrefersHistoricallyUsefulActiveLedgerDebt(t 
 	}
 	if got, want := opts.SourceFileIDs, []uint32{22}; len(got) != len(want) || got[0] != want[0] {
 		t.Fatalf("rewrite SourceFileIDs=%v want=%v", got, want)
+	}
+	remaining, err := db.currentVlogGenerationRewriteQueue()
+	if err != nil || len(remaining) != 2 || remaining[0] != 11 || remaining[1] != 33 || !db.vlogGenerationRewriteQueuePending.Load() {
+		t.Fatalf("remaining queue=%v pending=%t err=%v want [11 33] pending", remaining, db.vlogGenerationRewriteQueuePending.Load(), err)
 	}
 }
 

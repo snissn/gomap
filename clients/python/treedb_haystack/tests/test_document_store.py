@@ -44,7 +44,7 @@ def haystack_doc(doc_id: str, embedding: list[float], **meta: object) -> Haystac
     return HaystackDocument(id=doc_id, content=f"content {doc_id}", embedding=embedding, meta=dict(meta))
 
 
-def test_scalar_fields_are_forwarded_and_serialized() -> None:
+def test_scalar_fields_are_forwarded_and_serialized(monkeypatch: pytest.MonkeyPatch) -> None:
     store, client = make_store(
         scalar_fields=[{"field": "meta.repo"}, {"field": "priority", "value_type": "int64"}],
     )
@@ -54,6 +54,10 @@ def test_scalar_fields_are_forwarded_and_serialized() -> None:
             {"field": "priority", "value_type": "int64"},
         ]
     ]
+    monkeypatch.setattr(
+        "haystack_integrations.document_stores.treedb.document_store.TreeDBClient",
+        lambda *args, **kwargs: client,
+    )
     restored = TreeDBDocumentStore.from_dict(store.to_dict())
     assert restored.to_dict()["init_parameters"]["scalar_fields"] == [
         {"field": "meta.repo", "value_type": "string"},
@@ -243,7 +247,7 @@ def test_to_dict_from_dict_round_trip_without_network() -> None:
         base_url="http://127.0.0.1:7120",
         index="serialized",
         embedding_dimension=128,
-        similarity="dot_product",
+        similarity=" COSINE ",
         return_embedding=True,
         ensure_index=False,
         timeout=7,
@@ -252,14 +256,57 @@ def test_to_dict_from_dict_round_trip_without_network() -> None:
     data = store.to_dict()
 
     assert data["type"] == "haystack_integrations.document_stores.treedb.document_store.TreeDBDocumentStore"
-    assert data["init_parameters"]["similarity"] == "inner_product"
+    assert data["init_parameters"]["similarity"] == "cosine"
     restored = TreeDBDocumentStore.from_dict(data)
     assert restored.base_url == "http://127.0.0.1:7120"
     assert restored.index == "serialized"
     assert restored.embedding_dimension == 128
-    assert restored.similarity == "inner_product"
+    assert restored.similarity == "cosine"
     assert restored.return_embedding is True
     assert restored.ensure_index is False
+
+
+@pytest.mark.parametrize("ensure_index", [False, True])
+@pytest.mark.parametrize(
+    "similarity",
+    ["l2", "euclidean", "inner_product", "innerproduct", "dot_product", "dotproduct", " INNER-PRODUCT ", "Dot Product"],
+)
+def test_unsupported_similarity_is_rejected_before_client_calls(similarity: str, ensure_index: bool) -> None:
+    class NoRequestsClient(FakeTreeDBClient):
+        def ensure_index(self, *args: object, **kwargs: object) -> object:
+            pytest.fail("unsupported similarity reached ensure_index")
+
+    client = NoRequestsClient()
+    with pytest.raises(ValueError, match="only supports.*cosine"):
+        TreeDBDocumentStore(
+            embedding_dimension=3,
+            similarity=similarity,
+            ensure_index=ensure_index,
+            client=client,  # type: ignore[arg-type]
+        )
+    assert client.documents == {}
+    assert client.upsert_calls == []
+
+
+@pytest.mark.parametrize("similarity", ["cosine", " COSINE "])
+def test_supported_similarity_is_normalized_before_ensuring_index(similarity: str) -> None:
+    client = FakeTreeDBClient()
+    store = TreeDBDocumentStore(
+        embedding_dimension=3,
+        similarity=similarity,
+        client=client,  # type: ignore[arg-type]
+    )
+    assert store.similarity == "cosine"
+    assert client.ensure_calls == [("docs", 3, "cosine")]
+
+
+def test_deserialization_rejects_retired_similarity_without_network() -> None:
+    store, _ = make_store(ensure_index=False)
+    data = store.to_dict()
+    data["init_parameters"]["similarity"] = "dot_product"
+
+    with pytest.raises(ValueError, match="only supports.*cosine"):
+        TreeDBDocumentStore.from_dict(data)
 
 
 def test_invalid_filters_map_to_haystack_filter_error_without_scan_fallback() -> None:

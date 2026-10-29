@@ -497,7 +497,7 @@ func (c *Collection) preflightVectorPartitionSplitInsertV1(ctx context.Context, 
 	} else if err := c.validateCurrentVectorPartitionLiveBindingV1(ctx, manifest); err != nil {
 		return err
 	}
-	idx := c.registeredVectorIndex(v.Index)
+	idx := c.registeredColumnGraphPartitionLiveCarrier(v.Index)
 	if idx == nil || !idx.vectorPartitionLiveBindingCurrentV1(manifest) {
 		return ErrVectorIndexPartitionLiveUnavailableV1
 	}

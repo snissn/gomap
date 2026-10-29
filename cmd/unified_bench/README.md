@@ -1745,16 +1745,40 @@ configuration, `go test -c`/prebuilt-binary commands and ten-cell, three-pair
 diagnostic boundary are in
 [the #5214 packet](../../TreeDB/docs/benchmarks/cow-successor-workspace-5214.md).
 
-`BenchmarkStandalonePublicVectorBuildSaveLoad` and
-`BenchmarkStandalonePublicVectorSearch` in `cmd/mongo_gateway_bench` exercise
-ordinary BSON/HNSW APIs on the standalone owner. Their fixture, commands and
-Go-row artifact boundary are documented in
-[the Mongo benchmark README](../mongo_gateway_bench/README.md).
-`BenchmarkStandalonePublicVectorSaveReopenLoad` also charges the physical
-owner-close and fresh-owner reconstruction boundary.
+BSON vector-index construction and the former standalone runtime vector
+benchmarks are retired. Mongo BSON CRUD and scalar-index benchmarks remain
+supported; a Mongo `createIndexes` request containing a vector declaration is
+refused as a whole before publication. Use the maintained ColumnGraph demos and
+[typed-vector guide](../../TreeDB/docs/guides/vector-search-typed-column.md)
+for current vector construction and search boundaries. Frozen BSON/runtime
+benchmark results remain historical evidence, not executable success gates.
 
 `BenchmarkServiceSharedCOWConsumers` in `TreeDB/documentservice` measures
-ordinary Get, filtered keyword, Dense and combined Hybrid through legacy/native
-public constructors. Its fixed fixture, strategy/route attribution limits and
+ordinary Get, filtered keyword, unfiltered Dense ANN and unfiltered combined
+Hybrid through legacy/native public constructors. Filtered ordinary Dense must
+explicitly request the exact route; ordinary filtered ANN and vector-bearing
+filtered Hybrid are refusal cases. The original filtered Hybrid +6.38% FAIL
+remains historical, nonblocking evidence for a removed capability and is never
+relabeled PASS. Its fixed fixtures, strategy/route attribution limits and
 fresh-process commands are in [the consumer diagnostic packet](../../TreeDB/docs/benchmarks/shared-cow-consumers-5238.md).
 It emits Go benchmark rows, not benchprof inputs.
+
+### Ordinary durable service write diagnostic
+
+`BenchmarkServiceSharedCOWWriteLoad` times successful public `UpsertDocuments`
+returns for one fresh4096-document load (32 batches of128), with1 and4 writers.
+Use `GOMAXPROCS=4 GOMAP_SERVICE_BENCH_BACKEND=legacy` or `native` and
+`GOMAP_SERVICE_BENCH_PROFILE=command_wal_durable`, then run:
+
+```sh
+go test ./TreeDB/documentservice -run '^$' -bench '^BenchmarkServiceSharedCOWWriteLoad$' -benchtime=1x -count=1 -benchmem -v
+```
+
+Standard ns/op, B/op and allocs/op are per whole load. `ns/request` is throughput
+normalization, not request latency. Create/fixtures, validation, Optimize, Close
+and reopen remain outside request timing; their phase costs and success are
+reported separately. Fixed-process artifacts live under
+`evidence/current-feature-service-write-diagnostic1/` in the execution root:
+`public-write-plan.json`, `source-binding.json`, `cell-*-receipt.json`,
+`cell-*.log`, and `result.json`. This diagnostic has no numerical acceptance
+threshold and does not replace final G1 or actual command/Mongo gates.

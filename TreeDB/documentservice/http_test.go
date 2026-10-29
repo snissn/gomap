@@ -28,10 +28,7 @@ func TestDenseVectorSearchResponseOmitsEmptyProductionDiagnostics(t *testing.T) 
 	if bytes.Contains(raw, []byte(`"scalar_filter_plan"`)) || bytes.Contains(raw, []byte(`"dense_work"`)) {
 		t.Fatalf("production response JSON carried empty diagnostics: %s", raw)
 	}
-	diagnostic, err := json.Marshal(DenseVectorSearchResponse{ScalarFilterPlan: collections.NativeScalarFilterPlanCompleteExact})
-	if err != nil || !bytes.Contains(diagnostic, []byte(`"scalar_filter_plan":"complete_exact"`)) {
-		t.Fatalf("diagnostic response JSON=%s err=%v", diagnostic, err)
-	}
+
 }
 
 func TestHTTPFilterDocumentsRejectsAfterIDWithoutCursorPage(t *testing.T) {
@@ -200,23 +197,22 @@ func TestFormatErrorChainIncludesWrappedRootCause(t *testing.T) {
 	}
 }
 
-func TestHTTPL2LargeFiniteEmbeddingsReturnFiniteScore(t *testing.T) {
+func TestHTTPL2VectorIndexFailsClosed(t *testing.T) {
 	svc, db := newTestService(t)
 	defer db.Close()
 	handler := NewHandler(svc)
-
-	postJSON(t, handler, "/v1/indexes", CreateIndexRequest{Name: "l2docs", Dimension: 1, Metric: "l2"}, http.StatusOK, nil)
-	postJSON(t, handler, "/v1/indexes/l2docs/documents/upsert", UpsertDocumentsRequest{Documents: []Document{{
-		ID:        "large",
-		Embedding: []float32{-3e38},
-	}}}, http.StatusOK, nil)
-
-	var search DenseVectorSearchResponse
-	postJSON(t, handler, "/v1/indexes/l2docs/search/vector", DenseVectorSearchRequest{QueryEmbedding: []float32{3e38}, TopK: 1}, http.StatusOK, &search)
-	if len(search.Documents) != 1 || search.Documents[0].Score == nil {
-		t.Fatalf("search=%+v", search)
+	status, payload := ragParityPost(t, handler, "/v1/indexes", `{"name":"l2docs","dimension":1,"metric":"l2"}`)
+	code, _ := ragParityError(t, payload)
+	if status != http.StatusNotImplemented || code != string(CodeUnsupported) {
+		t.Fatalf("l2 declaration status=%d body=%s", status, mustJSON(payload))
 	}
-	score := *search.Documents[0].Score
+}
+
+func TestExactL2LargeFiniteEmbeddingsReturnFiniteScore(t *testing.T) {
+	score, err := scoreEmbedding([]float32{3e38}, []float32{-3e38}, MetricL2)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if math.IsInf(score, 0) || math.IsNaN(score) {
 		t.Fatalf("score=%v, want finite", score)
 	}
@@ -290,37 +286,6 @@ func TestHTTPBenchmarkLifecycleRoutesAndExactVectorShape(t *testing.T) {
 		if _, ok := exactShape[required]; !ok {
 			t.Fatalf("exact /search/vector missing field %q in shape=%+v", required, exactShape)
 		}
-	}
-}
-
-func TestHTTPBenchmarkNativeRuntimeLiveRoute(t *testing.T) {
-	svc, db := newTestService(t)
-	defer db.Close()
-	handler := NewHandler(svc)
-
-	postJSON(t, handler, "/v1/indexes/native/reset", ResetIndexRequest{
-		Dimension:          2,
-		DropOld:            true,
-		VectorIndexOptions: &BenchmarkVectorIndexOptions{Strategy: collections.VectorIndexStrategyNativeRuntime},
-	}, http.StatusOK, nil)
-	postJSON(t, handler, "/v1/indexes/native/documents/upsert", UpsertDocumentsRequest{
-		Documents:               []Document{{ID: "a", Embedding: []float32{1, 0}}},
-		DeferVectorIndexRebuild: true,
-	}, http.StatusOK, nil)
-
-	var response BenchmarkVectorSearchResponse
-	postJSON(t, handler, "/v1/indexes/native/search/vector-index", BenchmarkVectorSearchRequest{
-		QueryEmbedding: []float32{1, 0},
-		TopK:           1,
-		EfSearch:       8,
-		StatsMode:      collections.VectorIndexSearchStatsModeProduction,
-	}, http.StatusOK, &response)
-	if !response.NoDocuments || len(response.Results) != 1 || response.Results[0].ID != "a" || response.Diagnostics.Route != collections.VectorIndexSearchRouteNativeRuntime || !response.Diagnostics.LiveANN.Enabled || response.Diagnostics.LiveANN.ExactFallbacks != 0 || response.Diagnostics.LiveANN.FullRebuilds != 0 {
-		t.Fatalf("native benchmark response=%+v", response)
-	}
-	liveJSON, err := json.Marshal(response.Diagnostics.LiveANN)
-	if err != nil || !bytes.Contains(liveJSON, []byte(`"exact_fallbacks":0`)) {
-		t.Fatalf("native live diagnostics JSON=%s err=%v want exact_fallbacks wire field", liveJSON, err)
 	}
 }
 

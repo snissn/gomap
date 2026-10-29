@@ -156,7 +156,7 @@ func TestDenseWorkGoldenStrictOwnershipAndAllocations(t *testing.T) {
 		}
 	}
 	if _, err := decodeDenseWorkSection([]iwire.Section{section}, false); err == nil {
-		t.Fatal("legacy version accepted typed proof")
+		t.Fatal("untyped call accepted typed proof")
 	}
 	before := w
 	clear(raw)
@@ -286,16 +286,16 @@ func TestDenseWorkNativeServiceAndEncodingErrors(t *testing.T) {
 			t.Fatalf("in-process generic call accepted dense proof: %v", err)
 		}
 	})
-	// A v1 mismatch/error still has exactly the old error section.
-	_, legacyErr := server.handleVersionedDenseVectorSearch(context.Background(), &connState{}, 1, sections, nil)
+	// Retired v1 requests receive only the ordinary error section.
+	_, retiredErr := server.handleVersionedDenseVectorSearch(context.Background(), &connState{}, 1, sections, nil)
 	frame.Reset()
-	if err := server.writeError(&frame, iwire.Header{}, legacyErr); err != nil {
+	if err := server.writeError(&frame, iwire.Header{}, retiredErr); err != nil {
 		t.Fatal(err)
 	}
 	_, payload, _ = readFrame(&frame, iwire.DefaultLimits())
 	decoded, _ = iwire.DecodeSections(payload, iwire.DefaultLimits())
 	if len(decoded) != 1 || decoded[0].ID != iwire.SectionError {
-		t.Fatalf("legacy error gained proof: %+v", decoded)
+		t.Fatalf("retired dense error gained proof: %+v", decoded)
 	}
 }
 
@@ -352,22 +352,33 @@ func TestDenseWorkErrorCallScope(t *testing.T) {
 			t.Fatalf("unrelated proof accepted: %v", got)
 		}
 	}
-	for _, call := range []string{"hello", "get_many", "generic", "discard", "legacy_dense", "typed_dense"} {
+	for _, call := range []string{"hello", "get_many", "generic", "discard", "ordinary_dense", "typed_dense"} {
 		t.Run(call, func(t *testing.T) {
 			left, right := net.Pipe()
 			client := NewClient(left)
 			defer client.Close()
 			defer right.Close()
-			client.denseTypedNegotiated = true
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			deadline, _ := ctx.Deadline()
+			if err := right.SetDeadline(deadline); err != nil {
+				t.Fatal(err)
+			}
+			denseVersion := uint64(0)
+			if call == "ordinary_dense" {
+				denseVersion = iwire.DenseVectorSearchOrdinaryVersion
+			} else if call == "typed_dense" {
+				denseVersion = iwire.DenseVectorSearchTypedVersion
+			}
 			done := make(chan error, 1)
 			go func() {
-				header, _, err := readFrame(right, iwire.DefaultLimits())
-				if err == nil {
-					err = writeFrame(right, iwire.Header{Type: iwire.FrameError, RequestID: header.RequestID}, body)
-				}
-				done <- err
+				done <- serveDenseWorkScopeError(right, body, denseVersion)
 			}()
-			ctx := denseSearchTestContext(t)
+			if denseVersion != 0 {
+				if err := client.Hello(ctx); err != nil {
+					t.Fatal(err)
+				}
+			}
 			var got error
 			switch call {
 			case "hello":
@@ -381,8 +392,13 @@ func TestDenseWorkErrorCallScope(t *testing.T) {
 			default:
 				_, got = client.DenseVectorSearch(ctx, DenseVectorSearchRequest{Index: "docs", Query: []float32{1}, TopK: 1, TypedColumnGraph: call == "typed_dense"})
 			}
-			if err := <-done; err != nil {
-				t.Fatal(err)
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-ctx.Done():
+				t.Fatalf("fake dense-work peer did not finish: %v", ctx.Err())
 			}
 			var remote *WireError
 			if call == "typed_dense" {
@@ -394,4 +410,46 @@ func TestDenseWorkErrorCallScope(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Dense calls negotiate actual retained command versions; the other scope
+// cases receive the hostile proof on their first frame, including Hello.
+func serveDenseWorkScopeError(conn net.Conn, response []byte, denseVersion uint64) error {
+	if denseVersion != 0 {
+		header, _, err := readFrame(conn, iwire.DefaultLimits())
+		if err != nil {
+			return err
+		}
+		if header.Type != iwire.FrameHello {
+			return errors.New("fake dense-work peer expected Hello")
+		}
+		body, err := iwire.AppendSection(nil, iwire.Section{ID: iwire.SectionCapabilitySet, Bytes: appendStringMap(nil, map[string]string{"dense_vector_search_versions": "2,5"})})
+		if err != nil {
+			return err
+		}
+		if err := writeFrame(conn, iwire.Header{Type: iwire.FrameHelloOK, RequestID: header.RequestID}, body); err != nil {
+			return err
+		}
+	}
+	header, body, err := readFrame(conn, iwire.DefaultLimits())
+	if err != nil {
+		return err
+	}
+	if denseVersion != 0 {
+		if header.Type != iwire.FrameRequest {
+			return errors.New("fake dense-work peer expected dense request")
+		}
+		sections, err := iwire.DecodeSections(body, iwire.DefaultLimits())
+		if err != nil {
+			return err
+		}
+		cmd, err := iwire.MustV1Registry().ValidateRequestSections(sections)
+		if err != nil {
+			return err
+		}
+		if cmd.Header.ID != iwire.CommandDenseVectorSearch || cmd.Header.Version != denseVersion {
+			return errors.New("fake dense-work peer received wrong dense command version")
+		}
+	}
+	return writeFrame(conn, iwire.Header{Type: iwire.FrameError, RequestID: header.RequestID}, response)
 }

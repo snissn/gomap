@@ -1,0 +1,50 @@
+File: documentservice.test
+Build ID: 46f165d1cd4e65321e0b73e41c0d81b9784f3bf1
+Type: inuse_space
+Time: 2026-10-26 14:12:53 HST
+Active filters:
+   focus=UpsertDocuments
+Showing nodes accounting for 4096.05kB, 19.35% of 21164.77kB total
+Dropped 184 nodes (cum <= 105.82kB)
+Showing top 40 nodes out of 43
+      flat  flat%   sum%        cum   cum%
+    4096kB 19.35% 19.35%     4096kB 19.35%  github.com/snissn/gomap/TreeDB/internal/valuelog.getWriterAppendBuf
+    0.05kB 0.00022% 19.35%  4096.09kB 19.35%  github.com/snissn/gomap/TreeDB/db.(*leafPageLogWithRecordLengthHints).AppendPreparedLeafPage
+         0     0% 19.35%  4100.34kB 19.37%  github.com/snissn/gomap/TreeDB/caching.(*DB).Checkpoint (inline)
+         0     0% 19.35%  4100.34kB 19.37%  github.com/snissn/gomap/TreeDB/caching.(*DB).PrepareNativeProducerObservation
+         0     0% 19.35%  4096.05kB 19.35%  github.com/snissn/gomap/TreeDB/caching.(*DB).appendValueLogOneInternal
+         0     0% 19.35%  4100.34kB 19.37%  github.com/snissn/gomap/TreeDB/caching.(*DB).checkpointCOWColumnCompaction
+         0     0% 19.35%  4100.34kB 19.37%  github.com/snissn/gomap/TreeDB/caching.(*DB).checkpointCOWContext (inline)
+         0     0% 19.35%  4100.34kB 19.37%  github.com/snissn/gomap/TreeDB/caching.(*DB).checkpointContext
+         0     0% 19.35%  4100.17kB 19.37%  github.com/snissn/gomap/TreeDB/caching.(*DB).flushCOWFrozenCutWithColumnCompaction
+         0     0% 19.35%  4096.05kB 19.35%  github.com/snissn/gomap/TreeDB/caching.(*cachingLeafPageLog).AppendPreparedLeafPage
+         0     0% 19.35%  4096.05kB 19.35%  github.com/snissn/gomap/TreeDB/caching.(*cachingLeafPageLogGroup).AppendPreparedLeafPage
+         0     0% 19.35%  4101.05kB 19.38%  github.com/snissn/gomap/TreeDB/collections.(*Collection).InsertBatchWithStatsValidatedFloat32Projection
+         0     0% 19.35%  4101.05kB 19.38%  github.com/snissn/gomap/TreeDB/collections.(*Collection).nativeInsertBatchWithStatsProjection
+         0     0% 19.35%  4100.34kB 19.37%  github.com/snissn/gomap/TreeDB/collections.(*Collection).prepareNativeProducerMutation
+         0     0% 19.35%  4098.41kB 19.36%  github.com/snissn/gomap/TreeDB/collections.(*nativeDomainBuild).buildSource
+         0     0% 19.35%  4098.36kB 19.36%  github.com/snissn/gomap/TreeDB/collections.(*nativeDomainBuild).flush
+         0     0% 19.35%  4098.41kB 19.36%  github.com/snissn/gomap/TreeDB/collections.(*nativeDomainBuild).materializeWithCatalog
+         0     0% 19.35%  4100.08kB 19.37%  github.com/snissn/gomap/TreeDB/collections.(*nativeEngineBuild).materializeDomains
+         0     0% 19.35%  4100.08kB 19.37%  github.com/snissn/gomap/TreeDB/collections.(*nativeEngineVersion).PrepareBuild
+         0     0% 19.35%  4100.34kB 19.37%  github.com/snissn/gomap/TreeDB/db.(*DB).PrepareNativeProducerObservation
+         0     0% 19.35%  4098.36kB 19.36%  github.com/snissn/gomap/TreeDB/db.(*DB).publishOrderedRootDeltaBatchWithAllocatorResult
+         0     0% 19.35%  4096.07kB 19.35%  github.com/snissn/gomap/TreeDB/db.(*RootPublicationBuildGroup).BuildNativeSystemDelta
+         0     0% 19.35%  4098.41kB 19.36%  github.com/snissn/gomap/TreeDB/db.(*RootPublicationBuildGroup).buildNativeOrderedRootLocked
+         0     0% 19.35%  4103.98kB 19.39%  github.com/snissn/gomap/TreeDB/documentservice.(*Service).UpsertDocuments
+         0     0% 19.35%  4103.98kB 19.39%  github.com/snissn/gomap/TreeDB/documentservice.(*Service).upsertDocuments
+         0     0% 19.35%  4101.05kB 19.38%  github.com/snissn/gomap/TreeDB/documentservice.(*Service).upsertDocuments.func4
+         0     0% 19.35%  4103.98kB 19.39%  github.com/snissn/gomap/TreeDB/documentservice.benchmarkSharedCOWWriteLoad.func2
+         0     0% 19.35%     4096kB 19.35%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*Writer).AppendEncodedFrameOne
+         0     0% 19.35%     4096kB 19.35%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*Writer).ensureAppendBufCap
+         0     0% 19.35%     4096kB 19.35%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*Writer).writeBytes
+         0     0% 19.35%  4096.59kB 19.36%  github.com/snissn/gomap/TreeDB/zipper.(*ApplyWorkerPool).Run (inline)
+         0     0% 19.35%  4096.80kB 19.36%  github.com/snissn/gomap/TreeDB/zipper.(*ApplyWorkerPool).run
+         0     0% 19.35%  4097.98kB 19.36%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).ApplyWithOptions
+         0     0% 19.35%  4097.98kB 19.36%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).applySpanNativeWithPrepared
+         0     0% 19.35%  4096.59kB 19.36%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).applySpanNativeWithPrepared.func2
+         0     0% 19.35%  4096.52kB 19.36%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).mergeLeaf
+         0     0% 19.35%  4096.09kB 19.35%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).persistLeafPageDataWithConfig (inline)
+         0     0% 19.35%  4096.09kB 19.35%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).persistLeafPageDataWithConfigAndCacheOwnership
+         0     0% 19.35%  4096.09kB 19.35%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).persistPreparedLeafPageDataToLog
+         0     0% 19.35%  4096.56kB 19.36%  github.com/snissn/gomap/TreeDB/zipper.(*Zipper).writeRecursive

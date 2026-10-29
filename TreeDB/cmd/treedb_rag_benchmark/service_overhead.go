@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -19,14 +21,14 @@ import (
 // Service-level RAG parity rows (#4273): identical fixture, identical query
 // set, and equivalent retrieval work through (a) direct TreeDB collection API
 // calls and (b) the cmd/treedb-document-service HTTP contract. The delta is
-// observational service overhead (per-query p50/p99), comparable with the
-// engine-only rows in docs/benchmarks/treedb_rag_benchmark_baseline_*.
+// observational service overhead (per-query p50/p99), a new v2 fixture, separate from the historical
+// filtered-hybrid rows in docs/benchmarks/treedb_rag_benchmark_baseline_*.
 //
 // Both lanes use the service-shaped collection schema so the only difference
 // between the two paths is the HTTP/JSON layer itself.
 
 const (
-	svcOverheadSchema       = "treedb_rag_service_overhead/v1"
+	svcOverheadSchema       = "treedb_rag_service_overhead/v2_unfiltered_column_graph"
 	svcOverheadCollection   = "svcparity"
 	svcOverheadTenantIndex  = "meta_tenant"
 	svcOverheadVectorIndex  = "embedding"
@@ -109,15 +111,16 @@ func runServiceOverheadBenchmark(cfg serviceOverheadConfig) (*serviceOverheadRep
 	service := documentservice.New(collections.NewCollectionManager(serviceDB))
 	defer func() { _ = service.Close() }()
 	info, err := service.CreateIndex(ctx, documentservice.CreateIndexRequest{
-		Name:         svcOverheadCollection,
-		Dimension:    cfg.Dims,
-		ScalarFields: []documentservice.ScalarFieldDeclaration{{Field: "meta.tenant"}},
+		Name:               svcOverheadCollection,
+		Dimension:          cfg.Dims,
+		VectorIndexOptions: &documentservice.BenchmarkVectorIndexOptions{M: cfg.M},
+		ScalarFields:       []documentservice.ScalarFieldDeclaration{{Field: "meta.tenant"}},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("service create index: %w", err)
 	}
-	if !info.Capabilities.HybridMetadataFilters {
-		return nil, fmt.Errorf("service index did not declare hybrid metadata filter capability")
+	if !info.Capabilities.HybridSearch || info.Capabilities.HybridMetadataFilters {
+		return nil, fmt.Errorf("service must support unfiltered Hybrid and refuse ordinary vector Hybrid filters")
 	}
 	documents := make([]documentservice.Document, len(corpus.Chunks))
 	for i, ch := range corpus.Chunks {
@@ -150,14 +153,15 @@ func runServiceOverheadBenchmark(cfg serviceOverheadConfig) (*serviceOverheadRep
 		CandidateLimit: cfg.CandidateLimit,
 	}
 
-	filterTenant := ragTenantNarrow
+	if err := validateServiceOverheadParity(col, corpus, cfg, client, server.URL); err != nil {
+		return nil, err
+	}
 
 	directHybridSamples, directHybridHits, err := timeServiceOverheadQueries(corpus, cfg, directTimingIterations, func(q ragQuery) (int, error) {
 		resp, err := col.SearchHybrid(collections.HybridSearchOptions{
 			TopK:             cfg.TopK,
 			Text:             &collections.HybridTextQuery{IndexName: svcOverheadTextField, Query: q.Text, CandidateLimit: cfg.CandidateLimit},
 			Vector:           &collections.HybridVectorQuery{IndexName: svcOverheadVectorIndex, Query: q.Embedding, CandidateLimit: cfg.CandidateLimit, EfSearch: svcOverheadEfSearch, QueryMode: collections.VectorIndexQueryModeExact},
-			ScalarFilter:     &collections.HybridScalarFilter{IndexName: svcOverheadTenantIndex, Value: filterTenant},
 			IncludeDocuments: true,
 		})
 		if err != nil {
@@ -166,9 +170,9 @@ func runServiceOverheadBenchmark(cfg serviceOverheadConfig) (*serviceOverheadRep
 		return len(resp.Results), nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("direct filtered hybrid row: %w", err)
+		return nil, fmt.Errorf("direct unfiltered hybrid row: %w", err)
 	}
-	report.Rows = append(report.Rows, serviceOverheadRowFromSamples("filtered_hybrid", "direct_collection_api", corpus, cfg, directHybridSamples, directHybridHits))
+	report.Rows = append(report.Rows, serviceOverheadRowFromSamples("hybrid_unfiltered_ann_fp32", "direct_collection_api", corpus, cfg, directHybridSamples, directHybridHits))
 
 	serviceHybridSamples, serviceHybridHits, err := timeServiceOverheadQueries(corpus, cfg, serviceTimingIterations, func(q ragQuery) (int, error) {
 		body := map[string]any{
@@ -178,7 +182,6 @@ func runServiceOverheadBenchmark(cfg serviceOverheadConfig) (*serviceOverheadRep
 			"text_candidate_limit":   cfg.CandidateLimit,
 			"vector_candidate_limit": cfg.CandidateLimit,
 			"ef_search":              svcOverheadEfSearch,
-			"filter":                 map[string]any{"field": "meta.tenant", "operator": "==", "value": filterTenant},
 		}
 		var parsed struct {
 			Documents []json.RawMessage `json:"documents"`
@@ -189,9 +192,9 @@ func runServiceOverheadBenchmark(cfg serviceOverheadConfig) (*serviceOverheadRep
 		return len(parsed.Documents), nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("service filtered hybrid row: %w", err)
+		return nil, fmt.Errorf("service unfiltered hybrid row: %w", err)
 	}
-	report.Rows = append(report.Rows, serviceOverheadRowFromSamples("filtered_hybrid", "http_service", corpus, cfg, serviceHybridSamples, serviceHybridHits))
+	report.Rows = append(report.Rows, serviceOverheadRowFromSamples("hybrid_unfiltered_ann_fp32", "http_service", corpus, cfg, serviceHybridSamples, serviceHybridHits))
 	directAnnSamples, directAnnHits, err := timeServiceOverheadQueries(corpus, cfg, directTimingIterations, func(q ragQuery) (int, error) {
 		resp, err := col.SearchVectorIndex(collections.VectorIndexSearchOptions{
 			IndexName:            svcOverheadVectorIndex,
@@ -210,7 +213,7 @@ func runServiceOverheadBenchmark(cfg serviceOverheadConfig) (*serviceOverheadRep
 	if err != nil {
 		return nil, fmt.Errorf("direct ann dense row: %w", err)
 	}
-	report.Rows = append(report.Rows, serviceOverheadRowFromSamples("ann_dense", "direct_collection_api", corpus, cfg, directAnnSamples, directAnnHits))
+	report.Rows = append(report.Rows, serviceOverheadRowFromSamples("dense_ann_unfiltered_fp32", "direct_collection_api", corpus, cfg, directAnnSamples, directAnnHits))
 
 	serviceAnnSamples, serviceAnnHits, err := timeServiceOverheadQueries(corpus, cfg, serviceTimingIterations, func(q ragQuery) (int, error) {
 		body := map[string]any{
@@ -230,7 +233,7 @@ func runServiceOverheadBenchmark(cfg serviceOverheadConfig) (*serviceOverheadRep
 	if err != nil {
 		return nil, fmt.Errorf("service ann dense row: %w", err)
 	}
-	report.Rows = append(report.Rows, serviceOverheadRowFromSamples("ann_dense", "http_service", corpus, cfg, serviceAnnSamples, serviceAnnHits))
+	report.Rows = append(report.Rows, serviceOverheadRowFromSamples("dense_ann_unfiltered_fp32", "http_service", corpus, cfg, serviceAnnSamples, serviceAnnHits))
 
 	for _, row := range report.Rows {
 		if row.Hits <= 0 {
@@ -307,8 +310,8 @@ func ingestServiceOverheadDocs(col *collections.Collection, chunks []ragChunk) e
 // sample batches a caller-selected bounded number of identical calls so fast
 // direct collection queries remain above coarse Windows timer resolution; the
 // reported duration is divided back to one query. HTTP service samples use one
-// call because network/JSON work is already above that resolution. One final
-// untimed call records the result count for the sanity gate.
+// call because network/JSON work is already above that resolution. Untimed
+// validation before these calls checks result IDs, scores, ordering and content.
 func timeServiceOverheadQueries(corpus *ragCorpus, cfg serviceOverheadConfig, timingIterations int, call func(ragQuery) (int, error)) ([]float64, int, error) {
 	for i := range cfg.Warmup {
 		q := corpus.Queries[i%len(corpus.Queries)]
@@ -387,4 +390,110 @@ func postServiceOverheadJSON(client *http.Client, url string, body any, out any)
 		return fmt.Errorf("status %d: %s", resp.StatusCode, string(payload))
 	}
 	return json.Unmarshal(payload, out)
+}
+
+// This oracle is deliberately outside every timed retrieval call. The v2
+// unfiltered fixture has its own identity; historical filtered rows stay frozen.
+func validateServiceOverheadParity(col *collections.Collection, corpus *ragCorpus, cfg serviceOverheadConfig, client *http.Client, baseURL string) error {
+	for _, q := range corpus.Queries {
+		hybrid, err := col.SearchHybrid(collections.HybridSearchOptions{
+			TopK:             cfg.TopK,
+			Text:             &collections.HybridTextQuery{IndexName: svcOverheadTextField, Query: q.Text, CandidateLimit: cfg.CandidateLimit},
+			Vector:           &collections.HybridVectorQuery{IndexName: svcOverheadVectorIndex, Query: q.Embedding, CandidateLimit: cfg.CandidateLimit, EfSearch: svcOverheadEfSearch, QueryMode: collections.VectorIndexQueryModeExact},
+			IncludeDocuments: true,
+		})
+		if err != nil {
+			return fmt.Errorf("untimed direct Hybrid parity: %w", err)
+		}
+		var httpHybrid documentservice.HybridSearchResponse
+		if err = postServiceOverheadJSON(client, baseURL+"/v1/indexes/"+svcOverheadCollection+"/search/hybrid", map[string]any{
+			"query": q.Text, "query_embedding": q.Embedding, "top_k": cfg.TopK,
+			"text_candidate_limit": cfg.CandidateLimit, "vector_candidate_limit": cfg.CandidateLimit, "ef_search": svcOverheadEfSearch,
+		}, &httpHybrid); err != nil {
+			return fmt.Errorf("untimed HTTP Hybrid parity: %w", err)
+		}
+		if len(hybrid.Results) != len(httpHybrid.Documents) || len(hybrid.Results) == 0 {
+			return fmt.Errorf("Hybrid parity query %s result counts differ or empty", q.ID)
+		}
+		for i, result := range hybrid.Results {
+			if err := validateServiceOverheadDocument(result.ID, result.FusedScore, result.Document, httpHybrid.Documents[i]); err != nil {
+				return fmt.Errorf("Hybrid parity query %s rank %d: %w", q.ID, i, err)
+			}
+		}
+		ann, err := col.SearchVectorIndex(collections.VectorIndexSearchOptions{
+			IndexName: svcOverheadVectorIndex, Query: q.Embedding, QueryMode: collections.VectorIndexQueryModeExact,
+			TopK: cfg.TopK, EfSearch: svcOverheadEfSearch, IncludeDocuments: true,
+		})
+		if err != nil {
+			return fmt.Errorf("untimed direct ANN parity: %w", err)
+		}
+		var httpANN documentservice.DenseVectorSearchResponse
+		if err = postServiceOverheadJSON(client, baseURL+"/v1/indexes/"+svcOverheadCollection+"/search/vector", map[string]any{
+			"query_embedding": q.Embedding, "top_k": cfg.TopK, "route": "ann", "ef_search": svcOverheadEfSearch,
+		}, &httpANN); err != nil {
+			return fmt.Errorf("untimed HTTP ANN parity: %w", err)
+		}
+		if len(ann.Results) != len(httpANN.Documents) || len(ann.Results) == 0 {
+			return fmt.Errorf("ANN parity query %s result counts differ or empty", q.ID)
+		}
+		for i, result := range ann.Results {
+			if err := validateServiceOverheadDocument(result.ID, result.Score, result.Document, httpANN.Documents[i]); err != nil {
+				return fmt.Errorf("ANN parity query %s rank %d: %w", q.ID, i, err)
+			}
+		}
+	}
+	q := corpus.Queries[0]
+	refused, err := col.SearchHybrid(collections.HybridSearchOptions{
+		TopK: cfg.TopK, Vector: &collections.HybridVectorQuery{IndexName: svcOverheadVectorIndex, Query: q.Embedding},
+		ScalarFilter: &collections.HybridScalarFilter{IndexName: svcOverheadTenantIndex, Value: ragTenantNarrow}, IncludeDocuments: true,
+	})
+	if !errors.Is(err, collections.ErrHybridSearchUnsupported) || len(refused.Results) != 0 {
+		return fmt.Errorf("filtered Hybrid must fail closed: results=%d err=%v", len(refused.Results), err)
+	}
+	for _, route := range []string{"hybrid", "vector"} {
+		raw, err := json.Marshal(map[string]any{"query_embedding": q.Embedding, "top_k": cfg.TopK, "route": "ann", "filter": map[string]any{"field": "meta.tenant", "operator": "==", "value": ragTenantNarrow}})
+		if err != nil {
+			return err
+		}
+		// Hybrid has no route selector.
+		if route == "hybrid" {
+			raw, _ = json.Marshal(map[string]any{"query": q.Text, "query_embedding": q.Embedding, "top_k": cfg.TopK, "filter": map[string]any{"field": "meta.tenant", "operator": "==", "value": ragTenantNarrow}})
+		}
+		response, err := client.Post(baseURL+"/v1/indexes/"+svcOverheadCollection+"/search/"+route, "application/json", bytes.NewReader(raw))
+		if err != nil {
+			return err
+		}
+		payload, readErr := io.ReadAll(response.Body)
+		response.Body.Close()
+		if readErr != nil {
+			return readErr
+		}
+		var envelope struct {
+			Error struct {
+				Code documentservice.ErrorCode `json:"code"`
+			} `json:"error"`
+			Documents []json.RawMessage `json:"documents"`
+		}
+		if err = json.Unmarshal(payload, &envelope); err != nil {
+			return err
+		}
+		if response.StatusCode != http.StatusNotImplemented || envelope.Error.Code != documentservice.CodeUnsupported || len(envelope.Documents) != 0 {
+			return fmt.Errorf("filtered HTTP %s must fail closed: status=%d body=%s", route, response.StatusCode, payload)
+		}
+	}
+	return nil
+}
+
+func validateServiceOverheadDocument(id []byte, score float64, raw []byte, got documentservice.Document) error {
+	var stored struct {
+		Content string         `json:"content"`
+		Meta    map[string]any `json:"meta"`
+	}
+	if err := json.Unmarshal(raw, &stored); err != nil {
+		return err
+	}
+	if got.ID != string(id) || got.Score == nil || math.Abs(*got.Score-score) > 1e-6 || math.IsNaN(*got.Score) || got.Content != stored.Content || len(got.Embedding) != 0 || got.Meta["tenant"] != stored.Meta["tenant"] || got.Meta["region"] != stored.Meta["region"] {
+		return fmt.Errorf("ID/order, score or projected document mismatch: expected=%q/%g got=%+v", id, score, got)
+	}
+	return nil
 }

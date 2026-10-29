@@ -218,6 +218,67 @@ activation evidence and separate natural versus instrumented observations.
 
 ## Immutable COW cache qualification
 
+Exact-cut cold native catalog controls:
+`TestCOWNativeCatalogProjectionOriginalCutLifetime` checks single initialization,
+unchanged published authority, successor separation, refusal and partial-error
+cleanup, held readers, closed-capture refusal and terminal original-budget zero.
+`TestNativeColdCatalogProjectionReuse` checks concurrent reuse through sibling
+managers, old/current document and schema isolation, checkpoint, reopen and
+owner Close with zero retained receipts. The catalog remains derived from the
+same original cut; these controls do not qualify performance or default adoption.
+
+```sh
+go test -race -count=1 ./TreeDB/caching ./TreeDB/collections \
+  -run '^(TestCOWNativeCatalogProjectionOriginalCutLifetime|TestNativeColdCatalogProjectionReuse)$'
+```
+
+Bounded COW ZSTD decoder controls:
+`TestCOWBoundedDecoder*` covers original-receipt retention, definition provenance,
+frame reuse and caller-buffer detachment, real allocation refusal, finite quantum
+and overflow handling, phase-only cleanup, exact output and concatenated-frame
+limits, plus decode/Close serialization. The operation-refusal fixture first
+proves that its exact frame needs additional retained storage before applying
+pressure. `TestCOWNativeDictionaryUsesBoundedOriginalReceipt` checks actual
+captured dictionary dispatch and same-receipt reuse. Preserve the original
+`TestCOWNativeValueWorkspaceAdmissionAndLifetime` output-admission and held-reader
+controls, and `TestCOWSuccessorFreshDictionaryLaneRefundsBeforeLocalTraversal`
+warm local-decoder handoff/refund controls; extra budget must not mask decoder
+storage discarded between reads.
+
+```sh
+go test -race -count=1 ./TreeDB/internal/valuelog -run '^TestCOWBoundedDecoder'
+go test -race -count=1 ./TreeDB/caching \
+  -run '^(TestCOWNativeDictionaryUsesBoundedOriginalReceipt|TestCOWNativeValueWorkspaceAdmissionAndLifetime|TestCOWSuccessorFreshDictionaryLaneRefundsBeforeLocalTraversal)$'
+```
+
+These controls require the compression dependency's bounded reader and explicit
+frame-rebind support. Focused results do not establish dependency landing,
+public sustained-read resource or performance acceptance, or default adoption.
+The original first mixed request after fresh reopen and sustained public workload
+remain separate lifecycle and qualification evidence.
+
+Paired native read lifecycle controls:
+`TestCOWNativeIdleDictionaryDecoderLifetime` checks a real dictionary decoder,
+nonblocking busy refusal, detach-before-refund, reconstruction on the same capture
+and final original-budget zero. `TestNativeOrdinaryColumnGraphPackEndsConstructionPromise`
+checks successful pack construction ends its temporary promise while warm reuse,
+fetch and cache/owner Close preserve custody. Run both component controls and the
+mapped/heap handle owner controls separately from the original public lifecycle:
+
+```sh
+go test -count=1 ./TreeDB/caching ./TreeDB/collections \
+  -run '^(TestCOWNativeIdleDictionaryDecoderLifetime|TestNativeOrdinaryColumnGraphPackEndsConstructionPromise)$'
+go test -race -count=1 ./TreeDB/internal/mappedresource
+go test -race -count=1 ./TreeDB/documentservice \
+  -run '^(TestOrdinaryColumnGraphNativeService4096|TestOrdinaryColumnGraphNativeColdHybrid4096)$'
+```
+
+Keep both legacy/native roles in the original 4096-row service test and the first
+mixed request after reopen in the cold test; no warm-up or filtered-exact request
+substitutes for that read. These controls establish lifecycle assertions only.
+Public performance, original finite admission, recovery and retained-resource
+qualification remain separate gates; retain source-bound failures and nulls.
+
 `TestCOWSuccessorBasisWorkspaceReuseAndCutOwnership` covers opportunistic
 successor scratch reuse across short-lived cuts, owned output, checkpoint
 handoff and final basis/DB teardown. `TestCOWSuccessorBasisWorkspaceFiniteAdmission`
@@ -2767,9 +2828,38 @@ Coverage:
     vectors, request body section encoding/decoding, decode+validate, and
     deterministic-entry encoding.
 
-The native-wire server does not exist yet. R0 follow-up work must add
-broader negative conformance fixtures, drift tests, and direct collection parity
-tests before claiming native-wire v1 server support.
+Collection metadata V7 coverage:
+- `TreeDB/nativewire/text_metadata_v7_test.go`:
+  - `TestTextMetadataV7PublicCreateListReopen` checks real client/server
+    Create/List and durable reopen through the ordinary shared COW factory,
+    across JSON/BSON/template-v1 and explicit text V1/V2, with complete text
+    declaration and catalog equality.
+  - `TestTextMetadataV7CanonicalCodecAndDeterministicCreate` checks exact V7
+    catalog-payload bytes, deterministic re-encoding and deterministic-entry
+    admission. The opaque section 107 registry contract and existing ID/entry
+    goldens stay unchanged.
+  - `TestTextMetadataV7InvalidDeclarationsHaveNoEffects` and
+    `TestTextMetadataV7HostilePayloadsHaveNoEffects` cover unsupported semantic
+    declarations and malformed, unknown, duplicate, trailing, mismatched and
+    bounded payloads without catalog-version or WAL-LSN effects.
+- `TreeDB/internal/raftapply/text_metadata_v7_test.go`:
+  - `TestCreateCollectionMetaV7LowersFullTextDeclaration` checks full V7
+    declaration lowering and malformed-envelope rejection.
+- Existing `TestCollectionMetaNilColumnStoreExactV5Bytes`,
+  `TestCollectionMetaPhysicalV6RoundTripAndCreateValidation`,
+  `TestMetadataDurableColumnStoreExceedsCreateBounds` and
+  `TestMetadataOversizedColumnStoreBytesRefusesCreate` remain compatibility and
+  column-authority controls.
+
+Focused selectors are `go test ./TreeDB/nativewire -run TestTextMetadataV7`
+and `go test ./TreeDB/internal/raftapply -run TestCreateCollectionMetaV7`.
+Affected-package qualification also includes collections, internal/nativewire,
+internal/raftentry, internal/raftapply and nativewire. These controls map the
+metadata change; they do not substitute for current-head runtime evidence,
+live distributed qualification or final product performance gates.
+
+The original R0 codec entries above do not alone establish server parity;
+current server changes also require their mapped public lifecycle controls.
 
 # Vector partition M1 verification
 
@@ -4440,6 +4530,44 @@ apply paths require their own supported executors and caller migration. Current
 unsupported operations must retain their preaccept refusal. A passing JSON
 lifecycle does not establish full collection migration or performance acceptance.
 
+## Native local indexes and direct text construction
+
+The focused controls below distinguish concrete allocation/ownership closure
+from full query or DDL migration. Run them on the exact candidate, alongside the
+affected existing lifecycle, corruption, replay and race suites:
+
+- `TestNativeLocalIDIndexCollisionBoundaryAndPresence` covers full-key equality,
+  copied-key custody, absent versus empty sets and 896/897/4096/4097 boundaries.
+  `TestNativeLocalIDIndexOriginalReceiptGrowthRefusal` checks real finite-parent
+  refusal before growth, preservation of successful prefixes and final refund.
+  Scanner/sentinel and fusion/adaptive parity controls keep the public lookup
+  limit and truncation semantics intact.
+- `TestNativeScalarPlanReusePublicLifecycle`,
+  `TestNativeScalarPlanReuseHeldGenerationAndSchema`,
+  `TestNativeScalarPlanReuseOptionalRefusalAndBound` and
+  `TestNativeScalarPlanReuseRetainedCardinalityBoundary` exercise runtime-owned
+  clones, captured identity, optional retention and the original slot/byte limits.
+  The cardinality control includes 896, 897 and 4096 IDs; it is not a new cutoff.
+- `TestNativeTextDeterministicTermConstruction`,
+  `TestNativeTextConstructorOriginalLeaseRefusal`,
+  `TestNativeTextNestedConcreteAnalysisParity` and
+  `TestNativeTextPublicConstructorUnion897` cover term/state parity, combined
+  pre-effect cell/lane admission, nested selection and public V1/V2 mutation
+  construction. They do not certify sibling query/DDL map accounting.
+- `TestCOWNativeConstructionWorkspaceWatermarks`,
+  `TestCOWNativeConstructionWorkspaceCurrentIdentity` and
+  `TestNativeTypedProducerPressureSeparatesSharedWorkspace` distinguish advisory
+  fixed-workspace scheduling from unchanged exact admission and independent
+  pressure operands. `TestNativeCollectionVacuumShutdownLifecycle` covers the
+  original owned vacuum guard, held reads and shutdown while unowned native
+  staging remains rejected.
+
+These are correctness and resource-lifetime controls, not performance or default
+acceptance. Keep the original public 4096-document query workload, fixed request
+shape, 4096-ID lookup/4097th-entry sentinel, durability, caps and cleanup oracles
+when measuring the affected paths. Retain failed attempts and distinguish focused
+results from owning-package/race results and the parent performance gates.
+
 ## Complete COW prefix, original custody and sealed completion
 
 The lower native seam is independently testable while unmigrated collection
@@ -4604,3 +4732,21 @@ they do not substitute for crash recovery. The unchanged public
 `TestPublicCommandWALCheckpointReleasesCoveredRotationDebtBeforeNextBarrier`
 requires checkpoint cleanup to reclaim every covered predecessor, including a
 validated frame-free reserve.
+
+`TestNativeScalarForwardForegroundReadScope` checks a native view enters and ends
+the observer on its existing backend, and a closed view starts no scope.
+The provisional ordinary no-vector V2 Keyword composite reuse is covered by
+`TestNativeScalarForwardPublicLifecycle` (actual public cold/warm activation,
+concurrent borrowers, cancellation/foreground callbacks, mutation, held capture
+and final parent Close zero), `TestNativeScalarForwardPublicPhysicalReuse`
+(checkpointed storage-call reduction with unchanged result and distinct predicate),
+`TestNativeScalarForwardOptionalRefusalAndBound` (original independent parent
+exhaustion, unchanged original scratch/headroom on optional key refusal and original fallback, full retained backing, independent clones, forward reuse versus the
+uncached constructor's original refusal, and 64-slot non-eviction), and
+`TestNativeScalarForwardPublicSchemaAndPhysicalRefresh` (DDL, held old state,
+physical replacement and dropped declaration). Existing
+`TestNativeTextV2ForwardIdentity*`, `TestNativeHybridPublicScalarPhysicalWork`,
+`TestNativeScalarPlanReuse*` and `TestNativeScalarPlanCache*` retain their original
+forward-corruption, source-work and HNSW cache oracles. The frozen baseline RED
+controls are separate from candidate-focused and unchanged original Keyword
+B/A/A/B public evidence; no helper result replaces performance qualification.

@@ -131,6 +131,9 @@ printf '{}\n' >"$OUTPUT_PATH"
 EOF
 chmod +x "$REPO/scripts/bench_minima_qdrant.sh"
 
+printf '%s\n' '{"Publication":{"Rows":1,"Tombstones":1,"ValueSlots":1,"OwnedBytes":1,"EncodedOutputBytes":1},"Owners":{"Owners":1,"States":1,"StateBytes":1,"AssetBytes":1,"Cold":{"ManifestRecords":1,"ManifestBytes":1,"AssetBytes":1,"DecodedTermBytes":1},"Physical":{"segments":1,"descriptors":1,"mapped_bytes":1,"fallback_bytes":1,"inventory_bytes":1}},"CandidateOutput":{"Bytes":1,"AppenderAttempts":1},"Maintenance":{"NativeEntries":1,"ColumnSegments":1,"ManifestRecords":1,"LifecycleEntries":1,"NativeBytes":1,"ColumnBytes":1,"ManifestBytes":1,"RetainedBytes":1,"PagerPages":1},"Filter":{"SourceIDs":1,"SourceBytes":1,"RetainedBytes":1,"MappingWork":1,"InspectedEntries":1},"FoldRows":1,"SearchCandidates":1048576}' >"$TMP/quantized-serving.json"
+export TREEDB_COLUMN_GRAPH_SERVING="$TMP/quantized-serving.json" TREEDB_TRANSPORT=http
+
 for fixture in bounded-50k:50000 bounded-250k:250000 bounded-500k:500000 bounded-1000k:1000000; do
 	mode=${fixture%:*}
 	expected_rows=${fixture#*:}
@@ -143,6 +146,12 @@ for fixture in bounded-50k:50000 bounded-250k:250000 bounded-500k:500000 bounded
 	[[ -f "$bounded_dir/treedb_backend.json" ]]
 	[[ ! -f "$bounded_dir/qdrant_backend.json" ]]
 	grep -qx -- '--strategy' "$TMP/$mode-args"
+	for pair in '--strategy:column_graph' '--transport:http' "--column-graph-serving:$TMP/quantized-serving.json"; do
+		flag=${pair%%:*}
+		value=${pair#*:}
+		[[ $(grep -c -x -- "$flag" "$TMP/$mode-args") == 1 ]]
+		awk -v flag="$flag" -v expected="$value" '$0 == flag {getline; if ($0 != expected) exit 1; found=1} END {if (!found) exit 1}' "$TMP/$mode-args"
+	done
 	grep -qx -- "$expected_rows" "$TMP/$mode-rows"
 	if grep -q -- '^--query-mode$\|^--quantized-index-name$\|^--quantized-rerank-candidates$' "$TMP/$mode-args"; then
 		printf 'bounded %s forwarded quantized options\n' "$mode" >&2
@@ -150,7 +159,30 @@ for fixture in bounded-50k:50000 bounded-250k:250000 bounded-500k:500000 bounded
 	fi
 done
 
-printf '%s\n' '{"Publication":{"Rows":1,"Tombstones":1,"ValueSlots":1,"OwnedBytes":1,"EncodedOutputBytes":1},"Owners":{"Owners":1,"States":1,"StateBytes":1,"AssetBytes":1,"Cold":{"ManifestRecords":1,"ManifestBytes":1,"AssetBytes":1,"DecodedTermBytes":1},"Physical":{"segments":1,"descriptors":1,"mapped_bytes":1,"fallback_bytes":1,"inventory_bytes":1}},"CandidateOutput":{"Bytes":1,"AppenderAttempts":1},"Maintenance":{"NativeEntries":1,"ColumnSegments":1,"ManifestRecords":1,"LifecycleEntries":1,"NativeBytes":1,"ColumnBytes":1,"ManifestBytes":1,"RetainedBytes":1,"PagerPages":1},"Filter":{"SourceIDs":1,"SourceBytes":1,"RetainedBytes":1,"MappingWork":1,"InspectedEntries":1},"FoldRows":1,"SearchCandidates":1048576}' >"$TMP/quantized-serving.json"
+
+# Exact-score execution still requires the modern typed filtered-ANN path.
+for hostile in retired_strategy unsupported_transport missing_serving incomplete_serving missing_native_address; do
+    extra=()
+    case "$hostile" in
+    retired_strategy) extra+=(TREEDB_STRATEGY=native_runtime) ;;
+    unsupported_transport) extra+=(TREEDB_TRANSPORT=other) ;;
+    missing_serving) extra+=(TREEDB_COLUMN_GRAPH_SERVING=) ;;
+    incomplete_serving)
+        printf '{"SearchCandidates":64}\n' >"$TMP/exact-incomplete-serving.json"
+        extra+=(TREEDB_COLUMN_GRAPH_SERVING="$TMP/exact-incomplete-serving.json") ;;
+    missing_native_address) extra+=(TREEDB_TRANSPORT=native TREEDB_NATIVE_ADDRESS=) ;;
+    esac
+    set +e
+    env PATH="$FAKE_BIN:$PATH" PYTHON="$FAKE_BIN/python" MODE=small \
+        RUN_DIR="$TMP/exact-$hostile" FAKE_GO_INVOKED="$TMP/exact-$hostile-build" \
+        FAKE_PYTHON_ARGS="$TMP/exact-$hostile-args" "${extra[@]}" \
+        "$REPO/scripts/bench_minima_qualification.sh" >"$TMP/exact-$hostile.log" 2>&1
+    hostile_status=$?
+    set -e
+    [[ "$hostile_status" == 2 ]]
+    [[ ! -e "$TMP/exact-$hostile-build" && ! -e "$TMP/exact-$hostile-args" ]]
+done
+
 printf '{}\n' >"$TMP/quantized-plan.json"
 quantized_plan_sha=$(sha256sum "$TMP/quantized-plan.json" | awk '{print $1}')
 quantized_env=(env -u MINIMA_WALL_SECONDS PATH="$FAKE_BIN:$PATH" PYTHON="$FAKE_BIN/python"

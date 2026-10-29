@@ -1319,7 +1319,29 @@ type minimaArtifact struct {
 	QuantizedProfile    *minimaQuantizedProfile             `json:"quantized_profile,omitempty"`
 }
 
+// validateMinimaArtifact is the active qualification boundary. Legacy TreeDB
+// schemas depend on the retired runtime route and cannot certify ColumnGraph.
 func validateMinimaArtifact(artifact *minimaArtifact, trusted ...*minimaMeasuredFreeze) error {
+	if artifact != nil && artifact.Schema != minimaMeasuredSchema && artifact.Schema != minimaQuantizedArtifactSchema {
+		retired := artifact.NativePathProof != nil
+		for _, backend := range artifact.Backends {
+			retired = retired || backend.Name == "treedb"
+		}
+		for _, row := range artifact.Scenarios {
+			retired = retired || row.Backend == "treedb"
+		}
+		_, treeRaw := artifact.RawEvidence["treedb"]
+		if retired || treeRaw {
+			return fmt.Errorf("minima artifact: legacy TreeDB runtime evidence is retired and historical only; use measured or quantized ColumnGraph evidence")
+		}
+	}
+	return validateMinimaHistoricalArtifactStructure(artifact, trusted...)
+}
+
+// validateMinimaHistoricalArtifactStructure preserves frozen schema checks for
+// historical inspection and regression tests. Success is structural validity,
+// never permission to qualify an active legacy TreeDB campaign.
+func validateMinimaHistoricalArtifactStructure(artifact *minimaArtifact, trusted ...*minimaMeasuredFreeze) error {
 	if artifact != nil && artifact.Schema == minimaQuantizedArtifactSchema {
 		if len(trusted) == 1 && trusted[0] != nil {
 			return fmt.Errorf("trusted measured freeze cannot validate a quantized diagnostic")
@@ -1406,7 +1428,7 @@ func validateMinimaArtifact(artifact *minimaArtifact, trusted ...*minimaMeasured
 				return fmt.Errorf("minima artifact: completed %s partial evidence is missing raw evidence", backendName)
 			}
 			if artifact.Schema == minimaBoundedArtifactSchema {
-				return validateMinimaCompletedBounded(artifact, raw)
+				return validateMinimaHistoricalCompletedBounded(artifact, raw)
 			}
 			if backendName != "treedb" {
 				return nil

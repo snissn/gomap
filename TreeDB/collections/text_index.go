@@ -434,6 +434,21 @@ func (c *Collection) TextIndexStatus(indexName string) (TextIndexStatus, error) 
 	if c == nil {
 		return TextIndexStatus{}, errCollectionNil
 	}
+	if c.nativeJSON != nil {
+		if err := ValidateIndexName(indexName); err != nil {
+			return TextIndexStatus{}, err
+		}
+		read, err := c.nativeJSON.Capture(c.name)
+		if err != nil {
+			return TextIndexStatus{}, err
+		}
+		defer read.Close()
+		def, ok := findTextIndex(read.meta.TextIndexes, indexName)
+		if !ok {
+			return TextIndexStatus{}, ErrIndexNotFound
+		}
+		return textIndexStatusForDefinition(read.meta.Name, def), nil
+	}
 	if c.db == nil {
 		return TextIndexStatus{}, errCollectionDBNil
 	}

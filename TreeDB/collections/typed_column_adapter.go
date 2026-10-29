@@ -23,6 +23,24 @@ import (
 
 var errTypedColumnAdapterUnsupportedType = errors.New("collections: typed-column adapter unsupported type")
 
+// All maintained graph state assets have the same implicit ordinal primary key.
+// Keep this descriptor identical to the general two-column constructor; callers
+// supply their existing adapter definition and image metadata without fallback.
+func columnVectorGraphRawOrdinalOptions(cfg ColumnStoreConfig, column typedColumnAdapterColumn) typedcolumn.Options {
+	return typedcolumn.Options{
+		SchemaVersion: uint32(cfg.SchemaHash),
+		SchemaMode:    typedcolumn.ColumnSchemaFixed,
+		Columns: []typedcolumn.ColumnDefinition{
+			{Name: typedColumnAdapterPrimaryIDColumn, Type: typedcolumn.ColumnTypeInt64, Encoding: typedcolumn.EncodingRawInt64, Compression: typedcolumn.CompressionNone, CompressionSet: true, StatsDisabled: true},
+			column.Definition,
+		},
+		LogicalPrimaryKey: typedcolumn.LogicalPrimaryKey{Columns: []string{typedColumnAdapterPrimaryIDColumn}},
+		SortKey:           typedcolumn.SortKey{Columns: []typedcolumn.SortKeyColumn{{Column: typedColumnAdapterPrimaryIDColumn}}},
+		PartPolicy:        typedcolumn.ColumnPartPolicy{RowsPerGranule: typedcolumn.DefaultRowsPerGranule},
+		Compression:       typedcolumn.ColumnCompressionPolicy{Default: typedcolumn.CompressionNone},
+	}
+}
+
 // The production scalar granule codec is LZ4. Benchmark-relaxed overrides may
 // select ZSTD granules, whose encoder workspace is outside the prepared scalar
 // bound. Image sections can still use the production ZSTD policy.

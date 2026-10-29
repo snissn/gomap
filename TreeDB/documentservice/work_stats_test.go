@@ -74,7 +74,7 @@ func TestWorkStatsDiagnosticsLifetimeAndAvailability(t *testing.T) {
 	if before.PID != after.PID || before.OriginUnixNano != after.OriginUnixNano || before.Scope != "process" || before.OriginKind != "go_package_init" || before.OriginUnixNano <= 0 {
 		t.Fatalf("before=%+v after=%+v", before, after)
 	}
-	if before.IndexedJSON != after.IndexedJSON || before.Typed != after.Typed || before.Replay != after.Replay || before.Scans != after.Scans || before.Runtime != after.Runtime || before.RowIndexCache != after.RowIndexCache {
+	if before.IndexedJSON != after.IndexedJSON || before.Typed != after.Typed || before.Replay != after.Replay || before.Scans != after.Scans || before.RowIndexCache != after.RowIndexCache {
 		t.Fatal("diagnostics or manager creation recorded work")
 	}
 	// A real retained allocation advances runtime lifetime totals before JSON serialization.
@@ -101,10 +101,13 @@ func TestWorkStatsDiagnosticsLifetimeAndAvailability(t *testing.T) {
 	if err = json.Unmarshal(obj["work"], &work); err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"schema_version", "scope", "pid", "origin_kind", "origin_unix_nano", "snapshot_unix_nano", "available", "indexed_json", "typed", "runtime", "replay", "scans", "memory", "row_index_cache"} {
+	for _, key := range []string{"schema_version", "scope", "pid", "origin_kind", "origin_unix_nano", "snapshot_unix_nano", "available", "indexed_json", "typed", "replay", "scans", "memory", "row_index_cache"} {
 		if _, ok := work[key]; !ok {
 			t.Fatalf("missing %s", key)
 		}
+	}
+	if _, ok := work["runtime"]; ok {
+		t.Fatal("retired runtime diagnostics must not be exposed")
 	}
 	var decodedMemory workstats.MemoryStats
 	if err = json.Unmarshal(work["memory"], &decodedMemory); err != nil {
@@ -142,7 +145,7 @@ func TestWorkStatsDiagnosticsLifetimeAndAvailability(t *testing.T) {
 			t.Fatalf("missing available group %s", key)
 		}
 	}
-	if !after.Available.IndexedJSON || !after.Available.Typed || !after.Available.Replay || !after.Available.RuntimeQuery || !after.Available.AttributedScans || !after.Available.RowIndexCache {
+	if !after.Available.IndexedJSON || !after.Available.Typed || !after.Available.Replay || !after.Available.AttributedScans || !after.Available.RowIndexCache {
 		t.Fatalf("missing implemented producer: %+v", after.Available)
 	}
 }

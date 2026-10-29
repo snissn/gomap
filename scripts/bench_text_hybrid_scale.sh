@@ -157,6 +157,7 @@ run_go_benchmarks() {
   local out="$RUN_DIR/go_bench_${rows}"
   mkdir -p "$out"
   echo "==> Go benchmark allocation rows docs=$rows"
+  echo "UNAVAILABLE: ordinary filtered vector Hybrid rows verify rejection and SKIP; the historical full matrix is not qualified." | tee "$out/unavailable.txt"
   env GOWORK=off TREEDB_TEXT_V2_SEARCH_DOCS="$rows" "$GO_BIN" test ./TreeDB/collections \
     -run '^$' \
     -bench "^BenchmarkTextV2ScoreSearchScale2627/docs_${rows}/(score_only_common_no_docs|rare_no_docs|multi_term_and_no_docs)$" \
@@ -168,7 +169,7 @@ run_go_benchmarks() {
   env GOWORK=off TREEDB_HYBRID_BENCH_DOCS="$rows" TREEDB_HYBRID_BENCH_DIMS="$DIMS" TREEDB_HYBRID_BENCH_M="$M" "$GO_BIN" test ./TreeDB/collections \
     -run '^$' \
     -bench '^BenchmarkSearchHybridCloseout2506/mode_(text_only_no_docs|vector_only_no_docs|hybrid_no_docs)/topK_10/candidates_64/filter_(none_100pct|rare_06pct)$' \
-    -benchmem -benchtime="$GO_BENCHTIME" -count="$GO_COUNT" 2>&1 | tee "$out/hybrid_closeout.txt"
+    -v -benchmem -benchtime="$GO_BENCHTIME" -count="$GO_COUNT" 2>&1 | tee "$out/hybrid_closeout.txt"
 }
 
 write_10m_plan
@@ -213,6 +214,10 @@ Primary artifacts:
 - selected phase selector: \`$PHASES\` (use \`PHASES=retrieval\` for bounded #4327 retrieval qualification)
 - exact 10M command plan: \`$RUN_DIR/10m_selected_matrix_commands.md\`
 - optional Go benchmark logs under \`$RUN_DIR/go_bench_*\`
+
+Completion applies only to each report's selected supported scope. Ordinary
+filtered vector Hybrid is unavailable; explicit probes remain incomplete and
+benchmark SKIPs produce no latency or full-matrix qualification evidence.
 
 Full 10M runs are gated by \`RUN_10M=true APPROVE_10M=true\` and should only be
 started after explicit coordinator approval.

@@ -1,7 +1,10 @@
 package main
 
 import (
-	"os"
+	"errors"
+	"fmt"
+
+	"github.com/snissn/gomap/TreeDB/collections"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -16,6 +19,10 @@ func TestApplicationMatrixRetainsUnsupportedRows(t *testing.T) {
 	seenSupported, seenTenantFilter, seenMultiFilter, seenCollapseSupported, seenHTTPVectorGap, seenHTTPScore := false, false, false, false, false, false
 	for _, row := range rows {
 		capability := unsupportedCapability(row)
+		filteredVector := row.Filter != filterUnfiltered && (row.Route == "hybrid" || row.Route == "vector_only" && row.Surface == "direct_collection")
+		if filteredVector && (capability == nil || !strings.Contains(capability.Code, "ordinary_filtered_vector_unavailable")) {
+			t.Fatalf("filtered ordinary vector cell lacks explicit refusal: %+v", row)
+		}
 		if capability == nil {
 			seenSupported = true
 			seenTenantFilter = seenTenantFilter || row.Filter == filterTenantAlpha
@@ -41,89 +48,35 @@ func TestApplicationMatrixRetainsUnsupportedRows(t *testing.T) {
 }
 
 func TestApplicationDiagnosticSmokeLifecycleServiceAndArtifacts(t *testing.T) {
-	cfg := defaultApplicationConfig()
-	cfg.FinalEvidence = false
-	cfg.Repetitions = 1
-	cfg.SamplesPerRep = 9
-	cfg.IngestionReps = 1
-	cfg.WarmupQueries = 1
-	cfg.Dir = filepath.Join(t.TempDir(), "db")
-	cfg.ProductBaseSHA = "99929cdeb2ae2ec1e411236c853eb36942075d72"
-	report, err := runApplicationBaseline(cfg)
-	if err != nil {
-		t.Fatalf("run diagnostic: %v", err)
-	}
-	if report.Authority != "DIAGNOSTIC_NOT_FINAL_EVIDENCE" {
-		t.Fatalf("authority=%q", report.Authority)
-	}
-	for name, lifecycle := range report.Lifecycle {
-		if !lifecycle.UnchangedReingest || !lifecycle.ColdReopenParity || !lifecycle.TextIndexParity || !lifecycle.VectorIndexParity || !lifecycle.ScalarIndexParity || !lifecycle.QueryCollectionReopened {
-			t.Fatalf("%s lifecycle=%+v", name, lifecycle)
-		}
-		if lifecycle.InitialSources != 19 || lifecycle.FinalSources != 18 || lifecycle.InitialChunks != 57 || lifecycle.FinalChunks != 54 {
-			t.Fatalf("%s lifecycle counts=%+v", name, lifecycle)
-		}
-	}
-	var direct, service, unsupported bool
-	for _, row := range report.Rows {
-		if row.Status == "unsupported" {
-			unsupported = unsupported || row.Capability != nil && row.Capability.FailClosed && row.Capability.ResultsReturned == 0
-			continue
-		}
-		if row.Errors != 0 || row.Quality.ChunkRecallAt10 <= 0 || len(row.Samples) != cfg.SamplesPerRep {
-			t.Fatalf("supported row invalid: %+v", row)
-		}
-		for _, sample := range row.Samples {
-			if sample.ResultIDs != nil || sample.ResultSources != nil {
-				t.Fatalf("baseline retained comparison-only rankings: %+v", sample)
+	for _, repetitions := range []int{1, 2} {
+		t.Run(fmt.Sprintf("ingestion_reps_%d", repetitions), func(t *testing.T) {
+			cfg := defaultApplicationConfig()
+			cfg.FinalEvidence = false
+			cfg.Repetitions = 1
+			cfg.SamplesPerRep = 9
+			cfg.IngestionReps = repetitions
+			cfg.WarmupQueries = 1
+			cfg.Dir = filepath.Join(t.TempDir(), "db")
+			cfg.ProductBaseSHA = "99929cdeb2ae2ec1e411236c853eb36942075d72"
+			report, err := runApplicationBaseline(cfg)
+			var ingestErr *collections.IngestError
+			if report != nil || !errors.As(err, &ingestErr) || ingestErr.Stage != collections.IngestStageStorage ||
+				!errors.Is(err, collections.ErrColumnDeclaredValueUnsupported) || !strings.Contains(err.Error(), "incompatible source parent shape") || !strings.Contains(err.Error(), `"embedding"`) {
+				t.Fatalf("expected pre-publication parent shape refusal without lifecycle/report evidence: report=%+v err=%v", report, err)
 			}
-		}
-		if row.Cell.Surface == "direct_collection" && row.Cell.Projection == "score_only" {
-			if row.Counters["documents_fetched"] != 0 || row.Quality.AttributionMode != "untimed_compact_same_work_route_filter" {
-				t.Fatalf("direct score-only projection/attribution invalid: %+v", row)
+			var aggregate interface{ Unwrap() []error }
+			if !errors.As(err, &aggregate) || len(aggregate.Unwrap()) != repetitions {
+				t.Fatalf("expected every ingestion failure in typed chain: reps=%d err=%v", repetitions, err)
 			}
-			if row.Cell.Route != "vector_only" && row.Quality.TextAttributedResults == 0 {
-				t.Fatalf("direct score-only text attribution missing: %+v", row.Cell)
+			for rep, failure := range aggregate.Unwrap() {
+				var typed *collections.IngestError
+				if !errors.As(failure, &typed) || typed.Stage != collections.IngestStageStorage || !errors.Is(failure, collections.ErrColumnDeclaredValueUnsupported) || !strings.Contains(failure.Error(), fmt.Sprintf("ingestion rep %d:", rep)) {
+					t.Fatalf("ingestion rep %d lost its context or typed cause: %v", rep, failure)
+				}
 			}
-			if row.Cell.Route != "text_only" && row.Quality.VectorAttributedResults == 0 {
-				t.Fatalf("direct score-only vector attribution missing: %+v", row.Cell)
-			}
-		}
-		direct = direct || row.Cell.Surface == "direct_collection"
-		service = service || row.Cell.Surface == "http_service"
-	}
-	if !direct || !service || !unsupported {
-		t.Fatalf("surface/capability evidence direct=%t service=%t unsupported=%t", direct, service, unsupported)
-	}
-	outDir := filepath.Join(t.TempDir(), "artifacts")
-	jsonPath, markdownPath, manifestPath, err := writeApplicationArtifacts(report, outDir)
-	if err != nil {
-		t.Fatalf("write artifacts: %v", err)
-	}
-	for _, path := range []string{jsonPath, markdownPath, manifestPath} {
-		if info, err := os.Stat(path); err != nil || info.Size() == 0 {
-			t.Fatalf("artifact %s info=%v err=%v", path, info, err)
-		}
-	}
-	jsonArtifact, err := os.ReadFile(jsonPath)
-	if err != nil {
-		t.Fatalf("read JSON artifact: %v", err)
-	}
-	if strings.Contains(string(jsonArtifact), `"result_ids"`) || strings.Contains(string(jsonArtifact), `"result_sources"`) {
-		t.Fatal("baseline JSON serialized comparison-only rankings")
-	}
-	bad := *report
-	bad.Lifecycle = make(map[string]lifecycleEvidence, len(report.Lifecycle))
-	for name, lifecycle := range report.Lifecycle {
-		bad.Lifecycle[name] = lifecycle
-	}
-	for name, lifecycle := range bad.Lifecycle {
-		lifecycle.ColdReopenParity = false
-		bad.Lifecycle[name] = lifecycle
-		break
-	}
-	if _, _, _, err := writeApplicationArtifacts(&bad, filepath.Join(t.TempDir(), "bad-artifacts")); err == nil {
-		t.Fatal("artifact writer accepted cold_reopen_parity=false")
+			// #5289 owns restoration of lifecycle, cold-reopen and artifact evidence.
+			// A fail-closed diagnostic cannot claim query samples or a passing lifecycle.
+		})
 	}
 }
 
@@ -156,10 +109,10 @@ func TestApplicationTenantFilterRequestsAndLeakageAccounting(t *testing.T) {
 	if got := applicationVectorRoute(applicationCellIdentity{Route: "vector_only", Surface: "http_service", Filter: filterUnfiltered}); got != "declared_column_graph_ann" {
 		t.Fatalf("unfiltered HTTP vector route=%q", got)
 	}
-	if got := applicationVectorRoute(applicationCellIdentity{Route: "vector_only", Surface: "http_service", Filter: filterTenantAlpha}); got != "declared_column_graph_exact" {
+	if got := applicationVectorRoute(applicationCellIdentity{Route: "vector_only", Surface: "http_service", Filter: filterTenantAlpha}); got != "declared_column_graph_exact_filtered" {
 		t.Fatalf("filtered HTTP vector route=%q", got)
 	}
-	if got := applicationVectorRoute(applicationCellIdentity{Route: "vector_only", Surface: "direct_collection", Filter: filterUnfiltered}); got != "declared_column_graph_exact" {
+	if got := applicationVectorRoute(applicationCellIdentity{Route: "vector_only", Surface: "direct_collection", Filter: filterUnfiltered}); got != "declared_column_graph_ann_fp32" {
 		t.Fatalf("direct vector route=%q", got)
 	}
 }

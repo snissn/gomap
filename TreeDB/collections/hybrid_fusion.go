@@ -3,7 +3,9 @@ package collections
 import (
 	"fmt"
 	"math"
+	"slices"
 	"sort"
+	"unsafe"
 )
 
 // HybridFusionDefaultRRFK is the contract default RRF denominator offset used
@@ -22,6 +24,10 @@ const HybridFusionDefaultRRFK = 60
 // is exact over the supplied candidates only. topK bounds only the returned
 // result slice; counters still describe the full supplied candidate set.
 func FuseHybridSearchCandidates(candidates []HybridSearchCandidate, fusion HybridFusionOptions, topK int) ([]HybridSearchResult, HybridSearchStats, error) {
+	return fuseHybridSearchCandidatesAdmitted(candidates, fusion, topK, nil)
+}
+
+func fuseHybridSearchCandidatesAdmitted(candidates []HybridSearchCandidate, fusion HybridFusionOptions, topK int, admit func(uint64) error) ([]HybridSearchResult, HybridSearchStats, error) {
 	method := fusion.Method
 	if method == "" {
 		method = HybridFusionMethodRRF
@@ -67,7 +73,19 @@ func FuseHybridSearchCandidates(candidates []HybridSearchCandidate, fusion Hybri
 	if len(candidates) == 0 {
 		return nil, stats, nil
 	}
-	accByID := make(map[string]int, len(candidates))
+	var accByID map[string]int
+	var nativeIDs *localIDIndex
+	if admit != nil {
+		if err := admitLocalIDArray(admit, len(candidates), uint64(unsafe.Sizeof(hybridFusionAccumulator{}))); err != nil {
+			return nil, stats, err
+		}
+		nativeIDs, err = newLocalIDIndex(len(candidates), admit)
+		if err != nil {
+			return nil, stats, err
+		}
+	} else {
+		accByID = make(map[string]int, len(candidates))
+	}
 	accumulators := make([]hybridFusionAccumulator, 0, len(candidates))
 
 	for _, candidate := range candidates {
@@ -82,11 +100,25 @@ func FuseHybridSearchCandidates(candidates []HybridSearchCandidate, fusion Hybri
 			return nil, HybridSearchStats{}, err
 		}
 
-		idx, ok := accByID[string(candidate.ID)]
+		var idx int
+		var ok bool
+		if nativeIDs != nil {
+			idx, ok = nativeIDs.lookup(unsafeStringFromBytes(candidate.ID))
+		} else {
+			idx, ok = accByID[string(candidate.ID)]
+		}
 		if !ok {
-			idKey := string(candidate.ID)
 			idx = len(accumulators)
-			accByID[idKey] = idx
+			var idKey string
+			if nativeIDs != nil {
+				idKey, err = nativeIDs.copyKey(candidate.ID, idx)
+				if err != nil {
+					return nil, stats, err
+				}
+			} else {
+				idKey = string(candidate.ID)
+				accByID[idKey] = idx
+			}
 			accumulators = append(accumulators, hybridFusionAccumulator{idKey: idKey})
 		}
 
@@ -108,9 +140,19 @@ func FuseHybridSearchCandidates(candidates []HybridSearchCandidate, fusion Hybri
 		}
 	}
 
-	sort.Slice(accumulators, func(i, j int) bool {
-		return hybridFusionAccumulatorLess(accumulators[i], accumulators[j])
-	})
+	if admit != nil {
+		slices.SortFunc(accumulators, func(a, b hybridFusionAccumulator) int {
+			if hybridFusionAccumulatorLess(a, b) {
+				return -1
+			}
+			if hybridFusionAccumulatorLess(b, a) {
+				return 1
+			}
+			return 0
+		})
+	} else {
+		sort.Slice(accumulators, func(i, j int) bool { return hybridFusionAccumulatorLess(accumulators[i], accumulators[j]) })
+	}
 
 	limit := topK
 	if limit < 0 {

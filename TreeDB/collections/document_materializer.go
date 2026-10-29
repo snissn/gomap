@@ -304,6 +304,9 @@ func (c *Collection) OpenCollectionReadViewForVectorIndexSearch(response VectorI
 		return nil, errors.Join(err, view.Close())
 	}
 	visibility := response.visibility
+	if view.nativeRead != nil {
+		return closeWithError(ErrVectorIndexSnapshotMismatch)
+	}
 	if visibility.runtime == nil ||
 		visibility.collectionName != view.catalog.meta.Name ||
 		visibility.indexName != response.IndexName ||
@@ -314,7 +317,7 @@ func (c *Collection) OpenCollectionReadViewForVectorIndexSearch(response VectorI
 	if !ok ||
 		def.Strategy != visibility.strategy ||
 		def.SchemaGeneration != visibility.schemaGeneration ||
-		c.registeredVectorIndex(visibility.indexName) != visibility.runtime {
+		c.registeredColumnGraphPartitionLiveCarrier(visibility.indexName) != visibility.runtime {
 		return closeWithError(fmt.Errorf("%w: vector index %q identity changed", ErrVectorIndexSnapshotMismatch, visibility.indexName))
 	}
 	if !visibility.runtime.nativeSearchStateCoversCurrentDocuments(vectorIndexNativeSearchState{
@@ -342,6 +345,10 @@ func (c *Collection) OpenCollectionReadViewForVectorIndexSearch(response VectorI
 // SearchVectorIndexWithBufferReadView searches and opens the matching document
 // snapshot while excluding coverage mutations across the combined operation.
 func (c *Collection) SearchVectorIndexWithBufferReadView(opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer) (VectorIndexSearchResponse, *CollectionReadView, error) {
+	if c != nil && c.nativeJSON != nil && c.typedGraphServingPolicy() == nil {
+		return c.searchNativeVectorWithBufferReadView(opts, buffer)
+	}
+
 	if c.typedGraphServingPolicy() != nil {
 		return c.searchTypedGraphServing(opts, buffer, true)
 	}
@@ -378,6 +385,11 @@ func newCollectionReadViewScopeID(kind mappedresource.ScopeKind) string {
 }
 
 func (v *CollectionReadView) beginForegroundRead() func() {
+	// Native collection facades intentionally have no legacy DB handle. The
+	// live read already borrows its original backend for its captured lifetime.
+	if v != nil && !v.closed && v.nativeRead != nil && v.nativeRead.database != nil {
+		return v.nativeRead.database.BeginForegroundRead()
+	}
 	if v == nil || v.collection == nil || v.collection.db == nil {
 		return noCollectionForegroundReadEnd
 	}
@@ -393,6 +405,7 @@ func (v *CollectionReadView) Close() error {
 	}
 	v.closed = true
 	if v.nativeRead != nil {
+		v.catalog = nil // drop private admission callbacks before releasing their owner
 		read, lease := v.nativeRead, v.nativeLease
 		v.nativeRead, v.nativeLease, v.collection = nil, nil, nil
 		err := read.Close()

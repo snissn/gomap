@@ -1,0 +1,14 @@
+{
+  "utc": "2026-10-26T23:50:05.426793+00:00",
+  "paths": {
+    "TreeDB/collections/hybrid_executor.go": "54992c68aae2668d9d0fc62a9755e466a5214b29b83139b017f0c33ad0790c1e",
+    "TreeDB/collections/hybrid_vector_candidates.go": "aad9db30162adf137b4ad06a911ba9b6801b78534a14fd0159632049b35b3827",
+    "TreeDB/collections/native_ordinary_columngraph_search.go": "066f011f1e35a52b32175291b0ae7c47de1710042ee59fa75ee17391dd1655f4",
+    "TreeDB/documentservice/ordinary_columngraph_native_cold_hybrid_test.go": "19f5e1ef1505e1919793e9e80d4d0834e52fdbb91af34f4d9de8e27708a51613"
+  },
+  "source_head": "0a8323f7ca6f6128d53dfca43a408c7e443d39ab",
+  "donor_manifest": "evidence/native-columngraph-cold-hybrid-repair1/manifest.json",
+  "root_change": "gofmt; newtestconstructorcorrectedNewmanagerBEFORE originalRED; productionsemanticsmatchdonor",
+  "original_red_log": "4c722de34b40649c98ae9b1c67769c47a5d18d123df7d65187a57161f090b8f8",
+  "original_red_seconds": 4.22052713483572
+}

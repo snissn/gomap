@@ -32,33 +32,68 @@ func (m *CollectionManager) openNativeCollection(name string) (collection *Colle
 }
 
 func (c *Collection) nativeInsertBatch(ids, documents [][]byte) ([][]byte, error) {
+	return c.nativeInsertBatchWithStats(ids, documents, nil)
+}
+
+func (c *Collection) nativeInsertBatchWithStats(ids, documents [][]byte, requested *CollectionInsertStats) ([][]byte, error) {
+	return c.nativeInsertBatchWithStatsProjection(ids, documents, requested, nil)
+}
+
+func (c *Collection) nativeInsertBatchWithStatsProjection(ids, documents [][]byte, requested *CollectionInsertStats, projection *trustedFloat32Projection) ([][]byte, error) {
 	if c.manager.isClosing() {
 		return nil, backenddb.ErrClosed
 	}
 	if len(ids) != len(documents) {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
+	var stats CollectionInsertStats
 	if len(ids) == 0 {
+		read, err := c.nativeJSON.Capture(c.name)
+		if err != nil {
+			return nil, err
+		}
+		ordinary := read.meta.Options.ColumnStore == nil || nativeOrdinaryColumnGraphMeta(read.meta)
+		if projection != nil {
+			if !nativeOrdinaryColumnGraphMeta(read.meta) {
+				err = backenddb.ErrNativeSemanticUnsupported
+			} else {
+				err = validateTrustedFloat32ProjectionMeta(read.meta, projection)
+			}
+			if err != nil {
+				return nil, errors.Join(err, read.Close())
+			}
+		}
+		stats.Indexes = len(read.meta.Indexes)
+		if err = read.Close(); err != nil {
+			return nil, err
+		}
+		if !ordinary {
+			if requested != nil {
+				return nil, backenddb.ErrNativeSemanticUnsupported
+			}
+			return nil, nil
+		}
+		c.recordInsertBatchStats(stats, insertBatchExecutionOptions{insertStats: requested})
 		return nil, nil
 	}
-	// Returned IDs are caller-owned, like the legacy planner result, and cannot
-	// borrow transaction scratch whose original receipt ends at Commit/Close.
+	// Returned IDs and diagnostics are caller/handle-owned outputs, like the
+	// legacy planner result; neither borrows the transaction's captured schema.
 	result, err := cloneBatchDocumentIDs(ids)
 	if err != nil {
 		return nil, err
 	}
-	if err = c.nativeJSON.db.PrepareNativeProducer(); err != nil {
+	unlockVector, _, err := c.prepareNativeProducerMutation()
+	if err != nil {
 		return nil, err
 	}
-	unlockVector, vectorMutationHeld := c.lockNativeHNSWMutationIfNeeded()
 	defer unlockVector()
-	if err = c.nativeJSON.insertPrepared(c.name, ids, documents); err != nil {
+	recordStats, err := c.nativeJSON.insertPrepared(c.name, ids, documents, &stats, requested != nil, projection)
+	if err != nil {
 		return nil, err
 	}
-	if c.nativeHNSWMaintenanceNeeded() {
-		if err = c.finishNativeHNSWMutation(ids, vectorMutationHeld); err != nil {
-			return result, commitAmbiguousError("native vector maintenance", err)
-		}
+
+	if recordStats {
+		c.recordInsertBatchStats(stats, insertBatchExecutionOptions{insertStats: requested})
 	}
 	return result, nil
 }
@@ -104,6 +139,19 @@ func (v *CollectionReadView) fetchNativeDocuments(ids [][]byte, opts DocumentFet
 	}
 	// The stored-format and JSON projection contracts are shared with legacy
 	// materialization; Get already returns independent caller-owned documents.
+	var admitOutput func(uint64) error
+	if v.catalog != nil && v.catalog.nativeText != nil {
+		admitOutput = v.catalog.nativeText.admit
+		if nativeTypedMeta(v.nativeRead.meta) && v.nativeRead.meta.Options.ColumnStore.RetainedPayload != ColumnRetainedPayloadFull {
+			return DocumentFetchResponse{}, backenddb.ErrNativeSemanticUnsupported
+		}
+		if uint64(len(ids)) > ^uint64(0)/uint64(unsafe.Sizeof(DocumentFetchResult{})) {
+			return DocumentFetchResponse{}, memtable.ErrCOWCapacity
+		}
+		if err := admitOutput(memtable.COWAllocationCharge(uint64(len(ids)) * uint64(unsafe.Sizeof(DocumentFetchResult{})))); err != nil {
+			return DocumentFetchResponse{}, err
+		}
+	}
 	projection, err := normalizeDocumentFetchProjection(v.nativeRead.meta, opts)
 	if err != nil {
 		return DocumentFetchResponse{}, err
@@ -116,7 +164,12 @@ func (v *CollectionReadView) fetchNativeDocuments(ids [][]byte, opts DocumentFet
 				return DocumentFetchResponse{}, err
 			}
 		}
-		value, err := v.nativeRead.Get(id)
+		if admitOutput != nil {
+			if err := admitOutput(memtable.COWAllocationCharge(uint64(len(id)))); err != nil {
+				return DocumentFetchResponse{}, err
+			}
+		}
+		value, err := v.nativeRead.getAdmitted(id, admitOutput)
 		out.Results[i].ID = append([]byte(nil), id...)
 		if errors.Is(err, tree.ErrKeyNotFound) {
 			out.Stats.DocumentsMissing++

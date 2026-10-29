@@ -51,14 +51,7 @@ func TestWorkStatsIndexedJSONProducers(t *testing.T) {
 	if _, err = materializeTextBackfillDocumentJSON(raw, collectionOptions{documentFormat: DocumentFormatBSON}); err != nil {
 		t.Fatal(err)
 	}
-	idx := &VectorIndex{scalarDefinitions: []IndexDefinition{{Name: "tag", Field: "tag", ValueType: IndexValueString}}, scalarRuntimes: []indexRuntime{{def: indexDefinition{name: "tag", field: "tag", valueType: IndexValueString}, path: []string{"tag"}}}}
-	if row, err := idx.nativeScalarRow(materializer, []byte(`{"tag":"alpha"}`)); err != nil || len(row) != 1 {
-		t.Fatalf("native scalar=%v err=%v", row, err)
-	}
 	after := workstats.Read()
-	if after.IndexedJSON.ScalarRows-before.IndexedJSON.ScalarRows != 1 {
-		t.Fatal("native scalar extraction was not observed")
-	}
 	if after.IndexedJSON.VectorRows-before.IndexedJSON.VectorRows != 1 || after.IndexedJSON.MaterializationRows-before.IndexedJSON.MaterializationRows != 1 {
 		t.Fatalf("before=%+v after=%+v", before.IndexedJSON, after.IndexedJSON)
 	}

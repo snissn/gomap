@@ -1,0 +1,68 @@
+{
+  "utc": "2026-10-26T22:51:15.355254+00:00",
+  "valid": true,
+  "source_unchanged": true,
+  "rows": [
+    {
+      "arm": "before",
+      "iterations": 1000,
+      "metrics": {
+        "ns/op": 25091867.0,
+        "B/op": 7306652.0,
+        "allocs/op": 107050.0
+      },
+      "raw": "BenchmarkServiceSharedCOWConsumers/dense-4         \t    1000\t  25091867 ns/op\t 7306652 B/op\t  107050 allocs/op"
+    },
+    {
+      "arm": "after",
+      "iterations": 1000,
+      "metrics": {
+        "ns/op": 10561719.0,
+        "B/op": 7282345.0,
+        "allocs/op": 102955.0
+      },
+      "raw": "BenchmarkServiceSharedCOWConsumers/dense-4         \t    1000\t  10561719 ns/op\t 7282345 B/op\t  102955 allocs/op"
+    },
+    {
+      "arm": "after",
+      "iterations": 1000,
+      "metrics": {
+        "ns/op": 10510520.0,
+        "B/op": 7282339.0,
+        "allocs/op": 102955.0
+      },
+      "raw": "BenchmarkServiceSharedCOWConsumers/dense-4         \t    1000\t  10510520 ns/op\t 7282339 B/op\t  102955 allocs/op"
+    },
+    {
+      "arm": "before",
+      "iterations": 1000,
+      "metrics": {
+        "ns/op": 24614024.0,
+        "B/op": 7306649.0,
+        "allocs/op": 107050.0
+      },
+      "raw": "BenchmarkServiceSharedCOWConsumers/dense-4         \t    1000\t  24614024 ns/op\t 7306649 B/op\t  107050 allocs/op"
+    }
+  ],
+  "medians": {
+    "ns/op": {
+      "before": 24852945.5,
+      "after": 10536119.5,
+      "change_percent": -57.60615376555669
+    },
+    "B/op": {
+      "before": 7306650.5,
+      "after": 7282342.0,
+      "change_percent": -0.33269006092463416
+    },
+    "allocs/op": {
+      "before": 107050.0,
+      "after": 102955.0,
+      "change_percent": -3.8253152732368068
+    }
+  },
+  "directionally_viable": true,
+  "qualification": null,
+  "retries": 0,
+  "plan_sha256": "6736812b33cfa361588f2a69458f7e224cd0f252eb44678b289382dac5788dfa"
+}

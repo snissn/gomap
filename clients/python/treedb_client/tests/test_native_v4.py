@@ -154,7 +154,7 @@ class NativeDenseV4Tests(unittest.TestCase):
         raw = {
             "name": "a", "dimension": 2, "metric": "cosine", "generation": 1,
             "contract_version": "v", "embedding_field": "embedding", "document_type": "typed",
-            "capabilities": {}, "vector_representation": REPRESENTATION,
+            "capabilities": {}, "vector_strategy": "column_graph", "vector_representation": REPRESENTATION,
         }
         info = IndexInfo.from_dict(raw)
         self.assertEqual(info.vector_representation, REPRESENTATION)

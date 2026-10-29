@@ -56,13 +56,13 @@ func TestCOWNativeBasisWorkspaceLifetime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = basis.nativeEntryAtRoot(db.cow, token.RootPageID, []byte("a"), true); !errors.Is(err, memtable.ErrCOWCapacity) || basis.reader != nil {
+	if _, err = basis.nativeEntryAtRoot(db.cow, nil, token.RootPageID, []byte("a"), true); !errors.Is(err, memtable.ErrCOWCapacity) || basis.reader != nil {
 		t.Fatalf("admission refusal: %v", err)
 	}
 	pressure.Close()
 	check := func() {
 		t.Helper()
-		entry, err := basis.nativeEntryAtRoot(db.cow, token.RootPageID, []byte("a"), true)
+		entry, err := basis.nativeEntryAtRoot(db.cow, nil, token.RootPageID, []byte("a"), true)
 		if err != nil || string(entry.Value) != "old" || cap(entry.Value) != len(entry.Value) {
 			t.Errorf("old physical read: %q %v", entry.Value, err)
 			return

@@ -268,52 +268,19 @@ func prepareColumnVectorGraphAdjacencySourcePayloadFromList(assetRootDir, collec
 	if err := typedcolumn.ValidateRawUint32OffsetsListShape(list.Rows, list.Offsets, uint64(len(list.Values))); err != nil {
 		return columnVectorGraphPreparedAdjacencySourcePayload{}, fmt.Errorf("collections: column_graph adjacency layer %d source shape: %w", layer, err)
 	}
-	primaryIDs := make([]int64, list.Rows)
-	for rowIdx := range primaryIDs {
-		primaryIDs[rowIdx] = int64(rowIdx)
-	}
-	part, err := typedcolumn.BuildColumnPart(partID, typedcolumn.Options{
-		SchemaVersion: uint32(sourceCfg.SchemaHash),
-		SchemaMode:    typedcolumn.ColumnSchemaFixed,
-		Columns: []typedcolumn.ColumnDefinition{
-			{
-				Name:           typedColumnAdapterPrimaryIDColumn,
-				Type:           typedcolumn.ColumnTypeInt64,
-				Encoding:       typedcolumn.EncodingRawInt64,
-				Compression:    typedcolumn.CompressionNone,
-				CompressionSet: true,
-				StatsDisabled:  true,
-			},
-			adapterColumn.Definition,
-		},
-		LogicalPrimaryKey: typedcolumn.LogicalPrimaryKey{Columns: []string{typedColumnAdapterPrimaryIDColumn}},
-		SortKey:           typedcolumn.SortKey{Columns: []typedcolumn.SortKeyColumn{{Column: typedColumnAdapterPrimaryIDColumn}}},
-		PartPolicy:        typedcolumn.ColumnPartPolicy{RowsPerGranule: typedcolumn.DefaultRowsPerGranule},
-		Compression:       typedcolumn.ColumnCompressionPolicy{Default: typedcolumn.CompressionNone},
-	}, typedcolumn.Batch{
-		Rows: list.Rows,
-		Columns: map[string][]int64{
-			typedColumnAdapterPrimaryIDColumn: primaryIDs,
-		},
-		Uint32OffsetsLists: map[string]typedcolumn.RawUint32OffsetsList{
-			adapterColumn.Definition.Name: list,
-		},
-	})
-	if err != nil {
-		return columnVectorGraphPreparedAdjacencySourcePayload{}, err
-	}
 	logicalTypes := make(map[string]string, 1)
 	if logical, ok := columnStoreSemanticLogicalType(ColumnStoreValueAdjacencyList); ok {
 		logicalTypes[adapterColumn.Definition.Name] = string(logical)
 	}
-	image, err := typedcolumn.BuildColumnPartImage(part, typedcolumn.ColumnPartImageOptions{Dictionaries: typedColumnAdapterDictionaries([]typedColumnAdapterColumn{adapterColumn}), LayoutLogicalTypes: logicalTypes})
+	built, err := typedcolumn.BuildRawOrdinalColumnPartImage(partID, columnVectorGraphRawOrdinalOptions(sourceCfg, adapterColumn), typedcolumn.RawOrdinalColumnValues{Rows: list.Rows, Uint32List: list}, typedcolumn.ColumnPartImageOptions{Dictionaries: typedColumnAdapterDictionaries([]typedColumnAdapterColumn{adapterColumn}), LayoutLogicalTypes: logicalTypes})
 	if err != nil {
 		return columnVectorGraphPreparedAdjacencySourcePayload{}, err
 	}
+	image := built.Image
 	if image.Rows != list.Rows || image.PartID != partID {
 		return columnVectorGraphPreparedAdjacencySourcePayload{}, fmt.Errorf("collections: column_graph adjacency layer %d source image rows/part=(%d,%d) want (%d,%d)", layer, image.Rows, image.PartID, list.Rows, partID)
 	}
-	accounting := part.ByteAccountingFromImage(image)
+	accounting := built.Accounting
 	if accounting.DeclaredColumnOffsetsBytes <= 0 {
 		return columnVectorGraphPreparedAdjacencySourcePayload{}, fmt.Errorf("collections: column_graph adjacency layer %d source missing offsets bytes", layer)
 	}

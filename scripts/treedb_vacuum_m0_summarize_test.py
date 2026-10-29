@@ -247,6 +247,22 @@ class VacuumM0SummarizeTest(unittest.TestCase):
 
     def test_cli_preserves_v2_failure_and_names_v3_pending_pause_review(self):
         production, public = self.production_observations()
+        diagnostics = {
+            "diagnostic-precutover-hooks/op": [1] * 10,
+            "diagnostic-foreground-wait-ns/op": list(range(100, 110)),
+            "diagnostic-foreground-op-sum-ns/op": list(range(90, 100)),
+            "diagnostic-foreground-wait-gap-ns/op": list(range(-5, 5)),
+            "diagnostic-other-vacuum-ns/op": list(range(-10, 0)),
+        }
+        original_gates = {
+            contract: MODULE.evaluate_gates(production, public, "production", contract)
+            for contract in ("v2", "v3")
+        }
+        for name, samples in diagnostics.items():
+            production[name] = {"samples": samples}
+        for contract in ("v2", "v3"):
+            self.assertEqual(MODULE.evaluate_gates(production, public, "production", contract),
+                             original_gates[contract])
         production["max-writer-pause-ns"]["samples"] = [
             2768094, 3870643, 2833540, 2566792, 2822662,
             2749029, 2872057, 3176223, 2623660, 3005264,
@@ -277,11 +293,35 @@ class VacuumM0SummarizeTest(unittest.TestCase):
                 result = json.loads((root / "results.json").read_text())
                 self.assertEqual(result["schema_version"], schema)
                 self.assertEqual(result["acceptance_contract"], contract)
+                # Existing captures preserve lexical filename order: 1,10,2,...,9.
+                sample_order = (0, 9, 1, 2, 3, 4, 5, 6, 7, 8)
+                for name, samples in diagnostics.items():
+                    self.assertEqual(result["metrics"]["production"][name]["samples"],
+                                     [samples[index] for index in sample_order])
                 if contract == "v3":
                     self.assertFalse(result["pause_diagnostic"]["cv_at_most_10_percent"])
                     self.assertIsNone(result["pause_diagnostic"]["owner_review"])
                     self.assertEqual(len(result["pause_diagnostic"]["samples"]), 10)
                     self.assertIn("fail (diagnostic only; owner review required)", (root / "summary.md").read_text())
+
+    def test_phase_diagnostics_do_not_relax_other_metric_validation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "production-1.txt"
+            invalid = [
+                "-1 diagnostic-precutover-hooks/op",
+                "-1 diagnostic-foreground-wait-ns/op",
+                "-1 diagnostic-foreground-op-sum-ns/op",
+                "-1 diagnostic-unknown-ns/op",
+                "nan diagnostic-foreground-wait-gap-ns/op",
+                "inf diagnostic-other-vacuum-ns/op",
+                "-1 diagnostic-foreground-wait-gap-ns/op 1 diagnostic-foreground-wait-gap-ns/op",
+            ]
+            for metrics in invalid:
+                with self.subTest(metrics=metrics):
+                    path.write_text(MODULE.STABILITY_BENCHMARKS["production"]
+                                    + f"-2 1 10 ns/op {metrics}\nPASS\n")
+                    with self.assertRaisesRegex(ValueError, "invalid/duplicate metric"):
+                        MODULE.parse_benchmark(path, MODULE.STABILITY_BENCHMARKS["production"])
 
     def test_raw_decoder_rejects_nonfinite_or_negative_observations(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -70,8 +70,13 @@ Given pre-alpha status, this is a living spec that tracks implementation.
   - dense vector typed-column placement, column graph demo/benchmarks, search-vs-fetch timing boundaries, and caveats.
 - `TreeDB/docs/guides/hybrid-search.md`
   - user-facing `SearchHybrid` index creation and query examples, mode-selection guidance, counters, and caveats.
+- [Native document-service construction](../document-service-native-constructor.md)
+  - shared owner construction, ordinary strategy defaults and remaining adoption obligations.
 
 ### Canonical specs
+
+- [Native Hybrid reads](native-hybrid-read.md)
+  - captured logical identity, scalar/text/vector ownership and fail-closed phase validation.
 
 - [R1 local indexed row contract](r1-indexed-row-contract.md)
   - selected native full-row fixture, capability gaps, matched SQLite durability,
@@ -291,9 +296,6 @@ Given pre-alpha status, this is a living spec that tracks implementation.
   - draft target architecture for rewriting the cached collections execution
     path around native root domains, vectorized probes, and native grouped
     publish.
-- `TreeDB/docs/spec/native-ann-vector-index.md`
-  - draft target architecture and implementation plan for turning the
-    collection ANN vector graph into a native persisted TreeDB secondary index.
 - `TreeDB/docs/spec/collections-native-fastpath-roadmap.md`
   - draft implementation roadmap for the native cached collections rewrite,
     including PR slices, acceptance criteria, and performance gates.

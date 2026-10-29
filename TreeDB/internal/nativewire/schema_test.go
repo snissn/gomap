@@ -318,3 +318,39 @@ func codeOf(err error) ErrorCode {
 	code, _ := ErrorCodeOf(err)
 	return code
 }
+
+func TestOrdinaryDenseVersionUsesExistingSections(t *testing.T) {
+	registry := MustV1Registry()
+	for _, version := range []uint64{DenseVectorSearchTypedVersion, DenseVectorSearchTypedQuantizedVersion, DenseVectorSearchNormalizedVersion, DenseVectorSearchOrdinaryVersion} {
+		schema, ok := registry.LookupCommand(CommandDenseVectorSearch, version)
+		if !ok || !schema.LocalOnly || schema.Kind != CommandKindRead {
+			t.Fatalf("dense version %d lost its independent read capability", version)
+		}
+	}
+	if _, ok := registry.LookupCommand(CommandDenseVectorSearch, 1); ok {
+		t.Fatal("retired dense v1 must not be registered")
+	}
+	sections := []Section{
+		{ID: SectionCommandHeader, Bytes: AppendCommandHeader(nil, CommandHeader{ID: CommandDenseVectorSearch, Version: DenseVectorSearchOrdinaryVersion})},
+		{ID: SectionDeadline, Bytes: []byte{1}},
+		{ID: SectionDenseSearchRequest, Bytes: []byte{1}},
+	}
+	if _, err := registry.ValidateRequestSections(sections); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.ValidateRequestSections(sections[:2]); err == nil {
+		t.Fatal("ordinary dense request accepted missing query")
+	}
+	sections = append(sections, Section{ID: SectionDenseSearchWork, Flags: SectionFlagCritical})
+	if _, err := registry.ValidateRequestSections(sections); err == nil {
+		t.Fatal("ordinary dense request accepted typed work section")
+	}
+}
+
+func TestOrdinaryDenseRouteTagsRemainDisjoint(t *testing.T) {
+	// Tag 1 is the retired runtime route. Ordinary v5 compatibility ANN owns
+	// tag 6, retaining the four v5 counters and leaving typed v2/3/4 unchanged.
+	if DenseVectorSearchOrdinaryVersion != 5 || DenseVectorSearchOrdinaryANNRouteTag != 4 || DenseVectorSearchOrdinaryExactRouteTag != 5 || DenseVectorSearchOrdinaryCompatibilityANNRouteTag != 6 || DenseVectorSearchTypedRouteTag != 2 || DenseVectorSearchTypedQuantizedRouteTag != 3 {
+		t.Fatal("dense route tag reservation changed")
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
@@ -52,11 +53,12 @@ func (r *NativeJSONRead) scanDocuments(afterID []byte, maxDocuments int, documen
 	if len(afterID) > page.PageSize {
 		return false, memtable.ErrCOWCapacity
 	}
-	lease, err := r.capture.NativeAllocator().AdmitNativeBytes(memtable.COWAllocationCharge(page.PageSize + 1))
+	charge := memtable.COWAllocationCharge(page.PageSize+1) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeDomainCursor{}))) + memtable.COWAllocationCharge(2*uint64(unsafe.Sizeof(uintptr(0))))
+	lease, err := r.capture.NativeAllocator().AdmitNativeBytes(charge)
 	if err != nil {
 		return false, err
 	}
-	operation := func() (bool, error) {
+	operation := func() (truncated bool, operationErr error) {
 		cursor := make([]byte, page.PageSize+1)
 		var start []byte
 		if len(afterID) != 0 {
@@ -64,43 +66,75 @@ func (r *NativeJSONRead) scanDocuments(afterID []byte, maxDocuments int, documen
 			cursor[n] = 0
 			start = cursor[:n+1]
 		}
+		physical := nativeDomainCursor{read: r.domain}
+		defer func() {
+			operationErr = errors.Join(operationErr, physical.close())
+			cursor, start = nil, nil
+		}()
+		admit := func(n uint64) error {
+			if n > ^uint64(0)-charge {
+				return memtable.ErrCOWCapacity
+			}
+			if err := lease.Resize(charge + n); err != nil {
+				return err
+			}
+			charge += n
+			return nil
+		}
+		scratch, err := r.physicalScratch()
+		if err != nil {
+			return false, err
+		}
+		// The physical projection retains this method value; its two-word
+		// cohort was admitted alongside the cursor, as for native text scans.
+		readLeaf := r.readLeaf
+		typed := nativeTypedMeta(r.meta)
+		reconstruct := typed && r.meta.Options.ColumnStore.RetainedPayload != ColumnRetainedPayloadFull
 		scanned := 0
+		forward := false
 		for {
 			if r.closing || r.capture == nil || r.failure != nil {
 				return false, backenddb.ErrClosed
 			}
-			entry, found, err := nativeJSONSeekLive(&r.domain, r, start, nil, cursor)
+			entry, found, err := physical.read.seekWithCursor(start, nil, scratch, readLeaf, false, nil, &physical, forward, admit)
 			if err != nil || !found {
 				return false, err
 			}
-			if scanned == maxDocuments {
+			if entry.Flags&node.FlagTombstone == 0 && scanned == maxDocuments {
 				return true, nil
 			}
 			if len(entry.Key) >= len(cursor) {
 				return false, memtable.ErrCOWCapacity
 			}
-			id := bytes.Clone(entry.Key)
 			n := copy(cursor, entry.Key)
 			cursor[n] = 0
 			start = cursor[:n+1]
+			forward = true
+			if entry.Flags&node.FlagTombstone != 0 {
+				continue
+			}
+			record := DocumentRecord{ID: bytes.Clone(entry.Key)}
+			if documents {
+				var handled bool
+				record.Document, handled, err = r.pendingTypedValueLocked(record.ID, typed, nil)
+				if !handled {
+					record.Document, err = r.materializeEntryLocked(record.ID, entry, false, nil, reconstruct)
+				}
+			}
 			entry = node.LeafEntry{}
+			if err != nil {
+				return false, err
+			}
 			scanned++
-			// IDs and documents belong to the caller. No page/entry aliases or
-			// read mutex cross arbitrary callbacks; the visit retains this cut.
+			// The selected entry is materialized before unlock. The callback
+			// owns both outputs; reentrant Get/scan/Close can reuse read scratch
+			// without changing the cursor's independently owned physical page.
 			next, err := func() (bool, error) {
 				r.mu.Unlock()
 				defer r.mu.Lock()
-				record := DocumentRecord{ID: id}
-				if documents {
-					var err error
-					record.Document, err = r.Get(id)
-					if err != nil {
-						return false, err
-					}
-				}
 				return fn(record)
 			}()
-			id = nil
+			record = DocumentRecord{}
 			if err != nil || !next {
 				return false, err
 			}

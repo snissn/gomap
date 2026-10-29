@@ -1,0 +1,25 @@
+{
+  "base_head": "550a813d8421e149e50480c8801f08fe8b9e77c8",
+  "selected_staged_tree": "4c62c3250ac1495b8fbd0709f3e9aa6884240e17",
+  "created_utc": "2026-10-27T01:39:13.181917+00:00",
+  "files": {
+    "TreeDB/caching/cow_leaf_cache_test.go": "ac146365a54b6be91f5e6ff93c4dbe878bb0da152357381ed191a29694b74e6c",
+    "TreeDB/caching/cow_native_leaf_dictionary_test.go": "3cd2abffbf4d35679d48ab02af0f3ee3fda0d593e6a7326236bc711775cb56c5",
+    "TreeDB/caching/cow_native_physical_read.go": "db147fe54a0e7925b2321a0960b0e25ddbadd14156821fb86d08617e8ea285dc",
+    "TreeDB/caching/cow_native_physical_read_test.go": "2f945f6639ddbaba4ea3a9da7d9b47fb723d4f95edb44ca35c063c9ada5b99db",
+    "TreeDB/caching/cow_raw_physical_read_test.go": "aaadfaa96e113d023ceab048b8aeb26da858371a5629f3e7ac9c2f5cdbfbfbc4",
+    "TreeDB/caching/cow_read_workspace.go": "6ae8e86008b1f06ecc3d8636e8c546e3291002a323c37229165c953ce37e2f53",
+    "TreeDB/collections/native_json_rows.go": "84d1355333b8b56e1788a7842cc781f2369db0019d6587e879232e93ff06900b",
+    "TreeDB/collections/native_json_scalar_state_admission_test.go": "8badde52f3773f5e4659b642442e2cd9dd8dd29be7c86433e3625d7be44e8fbd",
+    "TreeDB/collections/native_json_scalar_state_reuse_test.go": "f2c11da8698194ee9badbb28ef658a3c56ae6d84ec7c226c8ccf38f2b1a8e5b9",
+    "TreeDB/collections/native_ordinary_columngraph_asset_capacity_test.go": "ae4c82e9ed63789a0d71dfeae57e44734ffe1008be2af2ade1ddd7593247b0c4",
+    "TreeDB/collections/native_ordinary_columngraph_search.go": "e970cf6b9ac42c001f1e620697e8aa89cd0ffcbcfd7437ad0621189a12858ee8",
+    "TreeDB/collections/native_ordinary_columngraph_search_test.go": "0f14d018cae8fd3054ba83d0767fefa5b38f9f735c97c3b3e756d2693612093f",
+    "TreeDB/collections/native_text_ddl_public_test.go": "339b4fca0a4d048f0fc09bae974b573b85259fbb8bc6c8a5b3be3967282fc264",
+    "TreeDB/collections/typed_storage_naming_test.go": "bcdb5bea10cd296ca3aee6fa6bd27c041e7a0834b6e73c55b57a11d8dfe51bce",
+    "TreeDB/documentservice/ordinary_columngraph_native_concurrent_write_test.go": "88140627f66f455129c4de8fe3acf611b02feb78dcf7673a5ef7120c72f3e8a1",
+    "TreeDB/internal/typedcolumn/transplant_test.go": "01c40636b7c694b9d2dc5dff78fbf9dafeac7adba56ffe9e7e4a7e7e7cba1b14",
+    "TreeDB/native_mixed_engine_lifecycle_test.go": "a4dc3f598187f655c2cc79a352a3b03d23a16c739de2a1ef26c7b46e66d7a86a"
+  },
+  "no_api_format_or_durability_change": true
+}

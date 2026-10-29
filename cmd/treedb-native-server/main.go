@@ -15,27 +15,34 @@ import (
 	"syscall"
 
 	"github.com/snissn/gomap/TreeDB"
-	"github.com/snissn/gomap/TreeDB/collections"
-	"github.com/snissn/gomap/TreeDB/documentservice"
 	"github.com/snissn/gomap/TreeDB/nativewire"
+	"github.com/snissn/gomap/cmd/internal/documentserviceowner"
 )
 
 func main() {
+	if err := run(); err != nil {
+		log.Print(err)
+		os.Exit(1)
+	}
+}
+
+func run() (resultErr error) {
 	addr := flag.String("addr", "127.0.0.1:7100", "TCP address to listen on")
 	dataDir := flag.String("dir", "/tmp/treedb-native-server", "TreeDB data directory")
-	profile := flag.String("profile", string(treedb.ProfileCommandWALDurable), "TreeDB profile: "+treedb.ProfileFlagHelp)
+	profile := flag.String("profile", string(treedb.ProfileCommandWALDurable), "TreeDB profile: "+treedb.ProfileFlagHelp+"; ColumnGraph requires command_wal_durable and offline public owner/API Optimize after vector writes")
+	legacyStorage := flag.Bool("legacy-storage", false, "use legacy storage for specialized typed and normalized/quantized routes; default is shared COW")
 	pprofAddr := flag.String("pprof", "", "optional net/http/pprof listen address, e.g. 127.0.0.1:6060")
 	blockProfileRate := flag.Int("block-profile-rate", 0, "runtime.SetBlockProfileRate value for pprof diagnostics (0=disabled, 1=all blocking events)")
 	mutexProfileFraction := flag.Int("mutex-profile-fraction", 0, "runtime.SetMutexProfileFraction value for pprof diagnostics (0=disabled, 1=all mutex contention)")
 	flag.Parse()
 
 	if *dataDir == "" {
-		log.Fatal("Data directory (-dir) is required")
+		return errors.New("Data directory (-dir) is required")
 	}
 
 	normalizedProfile, err := parsePublicProfileFlag(*profile)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	opts := treedb.OptionsFor(normalizedProfile, *dataDir)
 
@@ -46,51 +53,49 @@ func main() {
 		runtime.SetMutexProfileFraction(*mutexProfileFraction)
 	}
 
+	owner, err := documentserviceowner.Open(opts, *legacyStorage)
+	if err != nil {
+		return fmt.Errorf("open TreeDB: %w", err)
+	}
+	defer func() { resultErr = errors.Join(resultErr, owner.Close()) }()
 	if *pprofAddr != "" {
+		diagnosticsListener, err := net.Listen("tcp", *pprofAddr)
+		if err != nil {
+			return fmt.Errorf("listen for pprof: %w", err)
+		}
+		diagnostics := &http.Server{Handler: http.DefaultServeMux}
+		defer func() { resultErr = errors.Join(resultErr, diagnostics.Shutdown(context.Background())) }()
 		go func() {
-			log.Printf("TreeDB Native Server pprof listening on http://%s/debug/pprof/", *pprofAddr)
-			if err := http.ListenAndServe(*pprofAddr, nil); err != nil && err != http.ErrServerClosed {
+			log.Printf("TreeDB Native Server pprof listening on http://%s/debug/pprof/", diagnosticsListener.Addr())
+			if err := diagnostics.Serve(diagnosticsListener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				log.Printf("pprof server error: %v", err)
 			}
 		}()
 	}
-
-	database, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
-	if err != nil {
-		log.Fatalf("Failed to open TreeDB: %v", err)
-	}
-	defer func() { _ = cleanup() }()
-
-	manager := collections.NewCollectionManager(database)
-	service := documentservice.New(manager)
-	defer service.Close()
 	server := nativewire.NewServer(nativewire.ServerOptions{
-		Collections:     manager,
-		Backend:         database,
-		DocumentService: service,
+		Collections: owner.Manager, Backend: owner.Backend, DocumentService: owner.Service,
 	})
+	defer func() { resultErr = errors.Join(resultErr, server.Close()) }()
 
 	ln, err := net.Listen("tcp", *addr)
 	if err != nil {
-		log.Fatalf("Failed to listen on %s: %v", *addr, err)
+		return fmt.Errorf("listen on %s: %w", *addr, err)
 	}
 	defer ln.Close()
 
 	fmt.Printf("TreeDB Native Server listening on %s\n", ln.Addr().String())
 	fmt.Printf("TreeDB data directory: %s\n", *dataDir)
 	fmt.Printf("TreeDB profile: %s\n", normalizedProfile)
+	fmt.Printf("TreeDB storage: %s\n", owner.Storage)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	err = server.Serve(ctx, ln)
-	closeErr := server.Close()
 	if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-		log.Fatalf("Server error: %v", err)
+		return fmt.Errorf("serve: %w", err)
 	}
-	if closeErr != nil {
-		log.Fatalf("Server close error: %v", closeErr)
-	}
+	return nil
 }
 
 func parsePublicProfileFlag(raw string) (treedb.Profile, error) {
