@@ -468,3 +468,80 @@ func TestEmptyBatchWriteSyncWaitsExistingDurableFrontierWithoutInventingDependen
 		t.Fatalf("leaf log flushes=%d want 0", got)
 	}
 }
+
+// Exact allocation tests use Checkpoint to finish asynchronous setup work.
+// Prove that it seals an already-visible command-WAL prefix without creating a
+// new logical root, even when the normal publication timer has not fired.
+func TestCheckpointCompletesDeferredVisibleSetupWithoutNewCommit(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if d != nil {
+			_ = d.Close()
+		}
+	}()
+	// Retain a real builder lease so setup cannot be published by a timer.
+	builder, err := d.rootPublication.coordinator.AcquireBuilder(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer builder.Release()
+	if err := d.Set([]byte("setup-key"), []byte("setup-value")); err != nil {
+		t.Fatal(err)
+	}
+	before, ok := d.StateToken()
+	if !ok {
+		t.Fatal("setup token unavailable")
+	}
+	pending := d.rootPublication.coordinator.Stats()
+	if pending.DurableCommitSeq >= before.CommitSeq || pending.PendingCommits == 0 {
+		t.Fatalf("setup did not retain deferred publication: %+v token=%+v", pending, before)
+	}
+	checkpointDone := make(chan error, 1)
+	go func() { checkpointDone <- d.Checkpoint() }()
+	deadline := time.Now().Add(5 * time.Second)
+	for d.rootPublication.coordinator.Stats().WaiterCount == 0 {
+		select {
+		case err := <-checkpointDone:
+			t.Fatalf("Checkpoint returned before publication could finish: %v", err)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("Checkpoint did not wait on exact visible setup prefix")
+		}
+		runtime.Gosched()
+	}
+	select {
+	case err := <-checkpointDone:
+		t.Fatalf("Checkpoint crossed active builder: %v", err)
+	default:
+	}
+	builder.Release()
+	if err := <-checkpointDone; err != nil {
+		t.Fatal(err)
+	}
+	after, ok := d.StateToken()
+	if !ok || after != before {
+		t.Fatalf("checkpoint changed logical setup: before=%+v after=%+v", before, after)
+	}
+	sealed := d.rootPublication.coordinator.Stats()
+	if sealed.DurableCommitSeq < before.CommitSeq || sealed.PendingCommits != 0 {
+		t.Fatalf("checkpoint did not seal setup prefix: %+v", sealed)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	d = nil
+	reopened, err := Open(Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	got, err := reopened.Get([]byte("setup-key"))
+	if err != nil || !bytes.Equal(got, []byte("setup-value")) {
+		t.Fatalf("reopen setup value=%q err=%v", got, err)
+	}
+}
