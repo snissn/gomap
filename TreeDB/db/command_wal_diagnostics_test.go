@@ -180,7 +180,13 @@ func TestInspectClosedCommandWALPoisonPreventsReplayAuthority(t *testing.T) {
 		{"ambiguous metadata sync", func(db *DB) error {
 			db.testFailSyncMeta.Store(true)
 			defer db.testFailSyncMeta.Store(false)
-			return db.SetSync([]byte("uncertain"), []byte("second"))
+			if err := db.SetSync([]byte("uncertain"), []byte("second")); err != nil {
+				return err
+			}
+			// Command-WAL SetSync durably appends the journal but may return
+			// before physical root publication. Keep the fault armed through
+			// that exact publication instead of clearing it after admission.
+			return db.rootPublication.coordinator.WaitThrough(context.Background(), db.State().CommitSeq)
 		}, errTestSyncMetaFailpoint, true},
 		{"post-append WAL flush", func(db *DB) error {
 			db.testFailCommandWALFlush.Store(true)
@@ -194,6 +200,9 @@ func TestInspectClosedCommandWALPoisonPreventsReplayAuthority(t *testing.T) {
 			database := openCommandWALDB(t, dir)
 			defer database.Close()
 			if err := database.SetSync([]byte("covered"), []byte("first")); err != nil {
+				t.Fatal(err)
+			}
+			if err := database.rootPublication.coordinator.WaitThrough(context.Background(), database.State().CommitSeq); err != nil {
 				t.Fatal(err)
 			}
 			if err := tc.fail(database); !errors.Is(err, tc.wantError) {
