@@ -118,16 +118,22 @@ class TreeDBCIContractTests(unittest.TestCase):
         self.assertEqual(self.m0.count("vars.TREEDB_PERF_RUNNER_LABEL"), 2)
         self.assertEqual(self.m0.count("vars.TREEDB_PERF_RUNNER_PR"), 2)
 
-    def test_m0_routing_preserves_original_enforced_capture(self) -> None:
+    def test_m0_routing_preserves_supervised_enforced_capture(self) -> None:
         self.assertIn("    timeout-minutes: 20\n", self.m0)
         self.assertNotIn("continue-on-error", self.m0)
         self.assertNotIn("fromJSON", self.m0)
         self.assertNotIn("inputs:", self.m0)
         self.assertIn("ref: ${{ github.event.pull_request.head.sha || github.sha }}", self.m0)
+        self.assertIn("M0_QUALIFICATION_PROFILE: hosted-semantic", self.m0)
         self.assertIn(
-            'run: RUN_DIR="$RUNNER_TEMP/treedb-vacuum-m0" scripts/treedb_vacuum_m0_capture.sh',
+            'run: RUN_DIR="$RUNNER_TEMP/treedb-vacuum-m0" scripts/treedb_vacuum_m0_ci.sh',
             self.m0,
         )
+        wrapper = (ROOT / "scripts/treedb_vacuum_m0_ci.sh").read_text(encoding="utf-8")
+        supervisor = (ROOT / "scripts/treedb_vacuum_m0_ci.py").read_text(encoding="utf-8")
+        self.assertIn('exec python3 "$(dirname "${BASH_SOURCE[0]}")/treedb_vacuum_m0_ci.py"', wrapper)
+        self.assertIn('"scripts/treedb_vacuum_m0_capture.sh"', supervisor)
+        self.assertIn('return supervise(', supervisor)
         self.assertIn("      - name: Upload complete evidence packet\n        if: always()", self.m0)
         self.assertIn("          if-no-files-found: error", self.m0)
 
