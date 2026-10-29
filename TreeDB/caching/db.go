@@ -26000,7 +26000,8 @@ func (db *DB) checkpointContext(ctx context.Context, automatic bool) error {
 	if frontierLaneCount == 0 {
 		frontierLaneCount = 1
 	}
-	_, frontierActiveLanes := db.checkpointFrontierActiveLanes(frontier, frontierLaneCount)
+	var frontierLaneScratch [64]bool
+	_, frontierActiveLanes := db.checkpointFrontierActiveLanes(frontier, frontierLaneCount, frontierLaneScratch[:])
 	db.observeCheckpointFlushAllFrontierLanes(frontierActiveLanes)
 	checkpointDrainUnitsBefore := db.checkpointSharedDrainCheckpointUnits.Load()
 	checkpointDrainOpsBefore := db.checkpointSharedDrainCheckpointOps.Load()
@@ -29571,8 +29572,16 @@ func filterFlushUnitsToCheckpointFrontier(units []flushUnit, ids []uint64, front
 	return outUnits, outIDs, totalBytes, totalLen
 }
 
-func (db *DB) checkpointFrontierActiveLanes(frontier checkpointFrontier, lanes int) ([]bool, int) {
-	active := make([]bool, lanes)
+// scratch belongs to the calling checkpoint/flush invocation. The result may
+// alias it and must be consumed before the next call reuses that scratch.
+func (db *DB) checkpointFrontierActiveLanes(frontier checkpointFrontier, lanes int, scratch []bool) ([]bool, int) {
+	active := scratch
+	if cap(active) < lanes {
+		active = make([]bool, lanes)
+	} else {
+		active = active[:lanes]
+		clear(active)
+	}
 	if db == nil || len(frontier.ids) == 0 {
 		return active, 0
 	}
@@ -29632,9 +29641,10 @@ func (db *DB) flushCheckpointFrontierLocked(reqSync bool, commandPublish *checkp
 	if lanes == 0 {
 		lanes = 1
 	}
+	var laneScratch [64]bool
 
 	for {
-		active, activeCount := db.checkpointFrontierActiveLanes(frontier, lanes)
+		active, activeCount := db.checkpointFrontierActiveLanes(frontier, lanes, laneScratch[:])
 		if activeCount == 0 {
 			return
 		}
@@ -29703,7 +29713,8 @@ func (db *DB) flushAllLocked(reqSync bool, commandPublish *checkpointCommandWALP
 	for {
 		if activeFrontier, ok := db.activeCheckpointFrontier(); ok {
 			frontierSyncFlag := db.flushSyncRequested(true)
-			active, activeCount := db.checkpointFrontierActiveLanes(activeFrontier, lanes)
+			var laneScratch [64]bool
+			active, activeCount := db.checkpointFrontierActiveLanes(activeFrontier, lanes, laneScratch[:])
 			if activeCount == 0 {
 				return
 			}
