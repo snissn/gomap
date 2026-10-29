@@ -25808,7 +25808,7 @@ func (db *DB) checkpointContext(ctx context.Context, automatic bool) error {
 		}
 	}
 	if hasMutable {
-		if err := db.rotateMutableShardsLocked(db.checkpointRotateCapacity(), false); err != nil {
+		if err := db.rotateMutableShardsWithEmptyReuseLocked(db.checkpointRotateCapacity(), false, true); err != nil {
 			db.mu.Unlock()
 			releaseWriteMu()
 			endWriteCutover()
@@ -28804,14 +28804,23 @@ func (db *DB) maybeRotateMemtable(triggerFlush bool) error {
 // for establishing durable boundaries and trimming old segments. This avoids
 // requiring a global writer barrier around WAL rotation.
 func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) error {
+	return db.rotateMutableShardsWithEmptyReuseLocked(newCapacity, triggerFlush, false)
+}
+
+// rotateMutableShardsWithEmptyReuseLocked optionally keeps empty append-only
+// tables at checkpoint cutover. Other rotation callers retain their existing
+// replacement policy, including ordered-MVCC and iterator mode transitions.
+func (db *DB) rotateMutableShardsWithEmptyReuseLocked(newCapacity int, triggerFlush, reuseEmptyAppendOnly bool) error {
 	debugRotate := debugMemtableRotateOn()
 	retiredMems := make([]memtable.Table, 0, len(db.mutableShards))
 	if newCapacity < 0 {
 		newCapacity = db.memtableCap
 	}
+	previousMode := db.currentMemtableMode()
 	if db.memtableAdaptive {
 		db.applyAdaptiveMemtableModeLocked()
 	}
+	reuseEmptyAppendOnly = reuseEmptyAppendOnly && previousMode == memtable.ModeAppendOnly && db.currentMemtableMode() == memtable.ModeAppendOnly
 	if db.memtableWarmupActive {
 		db.memtableWarmupActive = false
 		db.updateAdaptiveObservationLocked()
@@ -28857,6 +28866,23 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 			db.observeAppendOnlyMutableEntries(oldLen)
 		}
 		oldShardBytes := shard.bytes
+		if mt, ok := shard.mem.(*memtable.AppendOnly); reuseEmptyAppendOnly && ok && oldLen == 0 && mt.Size() == 0 && shard.bytes == 0 && !shard.rng.valid && len(shard.appendOnlyDirectValueArena.active) == 0 {
+			// Empty tables have no immutable source to publish. Keep their object
+			// identity, but apply the same capacity limit as a recycled replacement
+			// so checkpoint cutover still sheds oversized retained buffers. The
+			// normal post-checkpoint trim will also drop their idle entry backing.
+			capacity := db.appendOnlyMemtableCapacityHint(newCapacity, appendOnlyEstimatedBytesPerEntryDefault)
+			mt.ResetWithCapacityLimit(capacity, appendOnlyEstimatedBytesPerEntryDefault)
+			db.releaseBatchArenaLeasesForMemtable(mt)
+			db.promoteRootDomainMutableLocked(i, nil, mt)
+			if debugRotate {
+				db.debugMemtableRotatef(
+					"event=shard path=mutable_shards shard=%d lane=%d old_mode=%s old_len=0 old_size=0 old_bytes=0 new_mode=append_only new_capacity=%d reused_empty=true queue_len=%d queue_backlog_bytes=%d",
+					i, db.laneForShardIndex(i), oldMode, newCapacity, len(db.queue), db.queueBacklogBytes.Load(),
+				)
+			}
+			continue
+		}
 
 		// Remove this shard's contribution from the global byte counter before
 		// resetting it, since writers may still be updating other shards.
