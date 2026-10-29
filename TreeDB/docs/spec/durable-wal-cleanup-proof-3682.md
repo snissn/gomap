@@ -151,10 +151,13 @@ retains the namespace without failing close when proof construction is
 unavailable or stale, including an ambiguous retained replay lineage or an
 expected resource pin encountered before any unlink. Opportunistic handling
 requires a backend-private disposition minted only by proof capture/revalidation,
-a journal exclusion refusal before callback entry, a pure lineage-only failure
+a journal exclusion refusal before callback entry (including the journal-owned
+typed pending rotation/successor reason), a pure lineage-only failure
 of the read-only scan, or an exact registry delete-lease pin refusal before any
 unlink. Sentinel matches and even an error tree of expected leaves do not confer
-this authority. Wrapping or joining a disposition loses its retry authority.
+this authority. The pending-ownership reason is minted only by journal snapshot
+validation and accepted only before callback entry; arbitrary stale joins or
+callback replay cannot claim it. Wrapping or joining a disposition loses its retry authority.
 A lineage gap or duplicate cannot turn accompanying reserve corruption, I/O,
 or observer failure into unavailable proof; checkpoint, prefix cleanup and close
 return those hard errors. Mutation callbacks and directory-sync failures carry

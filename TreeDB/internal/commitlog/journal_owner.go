@@ -1237,9 +1237,29 @@ func (j *CommandJournal) WithCleanupScan(snapshot CommandJournalCleanupSnapshot,
 	return fn()
 }
 
+// commandWALCleanupOwnershipPendingError is minted only by journal validation
+// before a cleanup callback runs. Its concrete type carries provenance; an
+// arbitrary stale join or observer Is implementation cannot claim this reason.
+type commandWALCleanupOwnershipPendingError struct{}
+
+func (*commandWALCleanupOwnershipPendingError) Error() string {
+	return "commitlog: command WAL cleanup snapshot stale: command WAL rotation/retry ownership is pending"
+}
+func (*commandWALCleanupOwnershipPendingError) Unwrap() error {
+	return ErrCommandWALCleanupSnapshotStale
+}
+
+// IsCommandWALCleanupOwnershipPending reports an exact journal-owned temporary
+// refusal. Wrapping or joining it loses this disposition. Callers must also
+// establish that their cleanup callback was never entered.
+func IsCommandWALCleanupOwnershipPending(err error) bool {
+	_, ok := err.(*commandWALCleanupOwnershipPendingError)
+	return ok
+}
+
 func validateMonotonicCleanupSnapshot(captured, current CommandJournalCleanupSnapshot) error {
 	if current.PendingStableRotation != 0 || current.PendingSuccessor {
-		return errors.Join(ErrCommandWALCleanupSnapshotStale, errors.New("commitlog: command WAL rotation/retry ownership is pending"))
+		return &commandWALCleanupOwnershipPendingError{}
 	}
 	if current.CleanupEpoch < captured.CleanupEpoch ||
 		current.NamespaceGeneration < captured.NamespaceGeneration ||

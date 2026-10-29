@@ -2136,7 +2136,8 @@ func TestCommandWALCleanupRejectsDecisionWithoutGeneration(t *testing.T) {
 	}
 }
 
-func TestCommandWALCleanupRejectsPendingJournalOwnershipAfterScan(t *testing.T) {
+func commandWALCleanupPendingOwnershipFixture(t *testing.T) (*DB, func()) {
+	t.Helper()
 	dir := t.TempDir()
 	writeCommandWALFrame(t, dir, 1, 1)
 	frame, err := commitlog.EncodeCommandFrame(commitlog.CommandEnvelope{
@@ -2160,7 +2161,7 @@ func TestCommandWALCleanupRejectsPendingJournalOwnershipAfterScan(t *testing.T) 
 	if err != nil {
 		t.Fatalf("OpenCommandJournal: %v", err)
 	}
-	defer func() { _ = journal.Close() }()
+	t.Cleanup(func() { _ = journal.Close() })
 
 	db := &DB{dir: dir, commandWAL: true, durability: DurabilityDurable, commandJournal: journal}
 	installCommandWALCleanupRootRuntimeForTest(db, 1, 1)
@@ -2175,23 +2176,57 @@ func TestCommandWALCleanupRejectsPendingJournalOwnershipAfterScan(t *testing.T) 
 		}
 	}
 
-	err = db.CleanupCommandWALCoveredSegments(false)
-	if appendErr != nil {
-		t.Fatalf("append after cleanup scan: %v", appendErr)
+	return db, func() {
+		if appendErr != nil {
+			t.Fatalf("append after cleanup scan: %v", appendErr)
+		}
+		if _, err := os.Stat(filepath.Join(WALDirPath(dir), commitlog.CommandSegmentName(0, 1))); err != nil {
+			t.Fatalf("covered segment removed with pending ownership: %v", err)
+		}
+		rotations, err := journal.TakePendingStableRotations()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, rotation := range rotations {
+			rotation.Release()
+		}
 	}
-	if !errors.Is(err, commitlog.ErrCommandWALCleanupSnapshotStale) {
-		t.Fatalf("CleanupCommandWALCoveredSegments error=%v, want stale pending ownership", err)
+}
+
+func TestCommandWALCleanupRejectsPendingJournalOwnershipAfterScan(t *testing.T) {
+	for _, operation := range []string{"explicit", "checkpoint", "prefix"} {
+		t.Run(operation, func(t *testing.T) {
+			db, verify := commandWALCleanupPendingOwnershipFixture(t)
+			defer verify()
+			var err error
+			if operation == "prefix" {
+				var complete bool
+				complete, err = db.CleanupCommandWALCoveredPrefix()
+				if complete || err != nil {
+					t.Fatalf("prefix pending ownership: complete=%v err=%v", complete, err)
+				}
+				return
+			}
+			if operation == "checkpoint" {
+				err = db.CleanupCommandWALCoveredSegmentsAtCheckpoint(false)
+			} else {
+				err = db.CleanupCommandWALCoveredSegments(false)
+			}
+			if !errors.Is(err, commitlog.ErrCommandWALCleanupSnapshotStale) {
+				t.Fatalf("pending ownership error=%v, want snapshot stale", err)
+			}
+			if operation == "checkpoint" && !IsCommandWALCleanupProofStale(err) {
+				t.Fatalf("checkpoint pending ownership lost trusted retry: %v", err)
+			}
+		})
 	}
-	if _, statErr := os.Stat(filepath.Join(WALDirPath(dir), commitlog.CommandSegmentName(0, 1))); statErr != nil {
-		t.Fatalf("covered segment removed with pending ownership: %v", statErr)
-	}
-	rotations, err := journal.TakePendingStableRotations()
-	if err != nil {
-		t.Fatalf("TakePendingStableRotations: %v", err)
-	}
-	for _, rotation := range rotations {
-		rotation.Release()
-	}
+}
+
+// Real pending rotation fixture shared with the external cached checkpoint test.
+func PendingCommandWALCleanupCheckpointForTesting(t *testing.T) func(bool) error {
+	db, verify := commandWALCleanupPendingOwnershipFixture(t)
+	t.Cleanup(verify)
+	return db.CleanupCommandWALCoveredSegmentsAtCheckpoint
 }
 
 func TestCommandWALCleanupRejectsMonotonicAuthorityRegression(t *testing.T) {

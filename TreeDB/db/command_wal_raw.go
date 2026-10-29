@@ -947,6 +947,9 @@ func hardCommandWALCleanupFailure(err error) error {
 // Called only from proof capture/revalidation, or journal exclusion refusal
 // before its callback was entered. Mixed hard failures remain hard.
 func commandWALCleanupProofRefusal(err error) error {
+	if commitlog.IsCommandWALCleanupOwnershipPending(err) {
+		return &commandWALCleanupRefusal{cause: err, stale: true}
+	}
 	if !commandWALCleanupErrorOnly(err, errDurableWALCleanupProofUnavailable, errDurableWALCleanupProofStale, commitlog.ErrCommandWALCleanupSnapshotStale) {
 		return err
 	}

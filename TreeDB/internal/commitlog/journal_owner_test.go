@@ -1636,3 +1636,17 @@ func tearCommandWALTailForTest(t *testing.T, path string) {
 		t.Fatal(err)
 	}
 }
+
+func TestCommandJournalCleanupPendingOwnershipDisposition(t *testing.T) {
+	for _, current := range []CommandJournalCleanupSnapshot{{PendingStableRotation: 1}, {PendingSuccessor: true}} {
+		err := validateMonotonicCleanupSnapshot(CommandJournalCleanupSnapshot{}, current)
+		if !IsCommandWALCleanupOwnershipPending(err) || !errors.Is(err, ErrCommandWALCleanupSnapshotStale) {
+			t.Fatalf("pending ownership lost controlled reason: %v", err)
+		}
+		for _, mixed := range []error{ErrCommandWALCleanupSnapshotStale, errors.Join(ErrCommandWALCleanupSnapshotStale, errors.New("I/O fault")), errors.Join(err, errors.New("observer fault")), errors.Join(err)} {
+			if IsCommandWALCleanupOwnershipPending(mixed) {
+				t.Fatalf("uncontrolled error gained pending reason: %v", mixed)
+			}
+		}
+	}
+}

@@ -230,7 +230,7 @@ func (*cleanupObserverSpoofUnavailable) Is(target error) bool {
 
 func TestCommandWALCleanupObserverCannotAuthorizeRetry(t *testing.T) {
 	for _, operation := range []string{"explicit", "checkpoint", "actual_checkpoint", "prefix", "close"} {
-		for _, kind := range []string{"custom_is", "joined_stale_pin", "replayed_refusal"} {
+		for _, kind := range []string{"custom_is", "joined_stale_pin", "replayed_refusal", "replayed_journal_pending"} {
 			t.Run(operation+"/"+kind, func(t *testing.T) {
 				dir := t.TempDir()
 				d, err := Open(Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true})
@@ -269,6 +269,15 @@ func TestCommandWALCleanupObserverCannotAuthorizeRetry(t *testing.T) {
 				}
 				if kind == "replayed_refusal" {
 					observerErr = commandWALCleanupProofRefusal(errDurableWALCleanupProofStale)
+				}
+				if kind == "replayed_journal_pending" {
+					pendingDB, verify := commandWALCleanupPendingOwnershipFixture(t)
+					refusal := pendingDB.CleanupCommandWALCoveredSegments(false)
+					observerErr = errors.Unwrap(refusal)
+					if !commitlog.IsCommandWALCleanupOwnershipPending(observerErr) {
+						t.Fatalf("fixture lacks genuine journal reason: %v", refusal)
+					}
+					verify()
 				}
 				observed := false
 				restore := durabilitycut.Install(func(event durabilitycut.Event) error {
@@ -325,7 +334,7 @@ func TestCommandWALCleanupDispositionCannotEscapeHardPhase(t *testing.T) {
 
 func TestCommandWALCleanupSyncObserverCannotAuthorizeRetry(t *testing.T) {
 	for _, operation := range []string{"explicit", "checkpoint", "actual_checkpoint", "prefix", "close"} {
-		for _, kind := range []string{"custom_is", "joined_stale_pin", "replayed_refusal"} {
+		for _, kind := range []string{"custom_is", "joined_stale_pin", "replayed_refusal", "replayed_journal_pending"} {
 			t.Run(operation+"/"+kind, func(t *testing.T) {
 				dir := t.TempDir()
 				d, err := Open(Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true})
@@ -348,6 +357,15 @@ func TestCommandWALCleanupSyncObserverCannotAuthorizeRetry(t *testing.T) {
 				}
 				if kind == "replayed_refusal" {
 					observerErr = commandWALCleanupProofRefusal(errDurableWALCleanupProofStale)
+				}
+				if kind == "replayed_journal_pending" {
+					pendingDB, verify := commandWALCleanupPendingOwnershipFixture(t)
+					refusal := pendingDB.CleanupCommandWALCoveredSegments(false)
+					observerErr = errors.Unwrap(refusal)
+					if !commitlog.IsCommandWALCleanupOwnershipPending(observerErr) {
+						t.Fatalf("fixture lacks genuine journal reason: %v", refusal)
+					}
+					verify()
 				}
 				observed := false
 				restore := durabilitycut.Install(func(event durabilitycut.Event) error {
