@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import re
+import ast
 import unittest
 from unittest import mock
 from pathlib import Path
@@ -39,6 +40,8 @@ def require_m0_routing_contract(source: str) -> None:
         'CPU_SET': RUNNER_GUARD + " && vars.TREEDB_M0_CPU_SET || ''",
         'GOMAXPROCS': RUNNER_GUARD + " && vars.TREEDB_M0_GOMAXPROCS || ''",
         'M0_LEASE_PATH': RUNNER_GUARD + " && vars.TREEDB_M0_LEASE_PATH || ''",
+        'M0_BASELINE_SHA': RUNNER_GUARD + " && vars.TREEDB_M0_BASELINE_SHA || ''",
+        'M0_ACCEPTANCE_CONTRACT': RUNNER_GUARD + " && vars.TREEDB_M0_CONTROLLED_ADMISSION_SHA == github.event.pull_request.head.sha && vars.TREEDB_M0_ACCEPTANCE_CONTRACT || 'v3'",
     }
     verified_lines = set()
     for name, expression in expected.items():
@@ -171,9 +174,35 @@ class TreeDBCIContractTests(unittest.TestCase):
     def test_m0_routing_contract_ignores_unrelated_variable_mentions(self) -> None:
         require_m0_routing_contract(self.m0 + "\n# vars.TREEDB_PERF_RUNNER_LABEL vars.TREEDB_PERF_RUNNER_PR\n")
 
+    def test_m0_stale_admission_with_configured_v4_falls_back_to_hosted_v3(self) -> None:
+        # Evaluate the actual workflow expressions for this string-only subset,
+        # rather than restating routing in a separate implementation.
+        expressions = {name: next(line.split('${{ ', 1)[1].rsplit(' }}', 1)[0]
+                                  for line in self.m0.splitlines() if line.strip().startswith(name + ':'))
+                       for name in ('M0_CONTROLLED', 'M0_ACCEPTANCE_CONTRACT')}
+        for admitted, configured, expected in [(False, 'v4-proposal', ('0', 'v3')),
+                                               (True, 'v4-proposal', ('1', 'v4-proposal')),
+                                               (True, '', ('1', 'v3'))]:
+            values = {'github.event_name': 'pull_request', 'github.repository': 'owner/repo',
+                      'github.event.pull_request.head.repo.full_name': 'owner/repo',
+                      'vars.TREEDB_PERF_RUNNER_LABEL': 'host111', 'vars.TREEDB_PERF_RUNNER_PR': '5321',
+                      'vars.TREEDB_M0_CONTROLLED_ADMISSION_SHA': 'a'*40 if admitted else 'b'*40,
+                      'github.event.pull_request.head.sha': 'a'*40,
+                      'vars.TREEDB_M0_ACCEPTANCE_CONTRACT': configured}
+            actual = []
+            for expression in expressions.values():
+                expression = expression.replace("format('{0}', github.event.pull_request.number)", repr('5321'))
+                expression = re.sub(r'(?:github|vars)\.[A-Za-z0-9_.]+', lambda m: repr(values[m[0]]), expression)
+                tree = ast.parse(expression.replace('&&', ' and ').replace('||', ' or '), mode='eval')
+                self.assertTrue(all(isinstance(n, (ast.Expression, ast.BoolOp, ast.And, ast.Or,
+                                                   ast.Compare, ast.Eq, ast.NotEq, ast.Constant)) for n in ast.walk(tree)))
+                actual.append(eval(compile(tree, '<workflow-routing>', 'eval'), {'__builtins__': {}}))
+            with self.subTest(admitted=admitted, configured=configured):
+                self.assertEqual(tuple(actual), expected)
+
     def test_m0_routing_rejects_each_missing_administrator_guard(self) -> None:
         clauses = RUNNER_GUARD.split(' && ')
-        for field in ('runs-on', 'M0_CONTROLLED', 'CPU_SET', 'GOMAXPROCS', 'M0_LEASE_PATH'):
+        for field in ('runs-on', 'M0_CONTROLLED', 'CPU_SET', 'GOMAXPROCS', 'M0_LEASE_PATH', 'M0_BASELINE_SHA', 'M0_ACCEPTANCE_CONTRACT'):
             line = next(line for line in self.m0.splitlines() if line.strip().startswith(field + ':'))
             for clause in clauses:
                 with self.subTest(field=field, removed=clause):
