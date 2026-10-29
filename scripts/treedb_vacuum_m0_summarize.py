@@ -31,6 +31,21 @@ def cv_metrics(stability_arm: str, acceptance_contract: str) -> tuple[str, ...]:
     return REQUIRED_CV_METRICS
 
 
+def validate_qualification(profile: str, arm: str, contract: str) -> None:
+    if profile not in ("controlled-performance", "hosted-semantic"):
+        raise ValueError("unknown qualification profile")
+    if profile == "hosted-semantic" and (arm, contract) != ("production", "v3"):
+        raise ValueError("hosted-semantic requires prospective production v3 capture")
+
+
+def capture_passes(gates: dict[str, bool], profile: str) -> bool:
+    validate_qualification(profile, "production", "v3")
+    # Keep the strict predicate, including its failed value, in every packet.
+    # Only the explicitly named timing predicate differs in hosted CI's verdict.
+    return all(value for name, value in gates.items()
+               if profile != "hosted-semantic" or name != "production_cv_at_most_10_percent")
+
+
 def pause_diagnostic(metrics: dict[str, dict[str, object]]) -> dict[str, object]:
     pause = metrics["max-writer-pause-ns"]
     return {
@@ -210,6 +225,7 @@ def render_markdown(result: dict[str, object]) -> str:
     stability_arm = result["stability_arm"]
     contract = result.get("acceptance_contract", "v2")
     required_cv = cv_metrics(stability_arm, contract)
+    qualification = result.get("qualification_profile", "controlled-performance")
     legacy = result["metrics"][stability_arm]
     public = result["metrics"]["public"]
     lines = [
@@ -224,6 +240,10 @@ def render_markdown(result: dict[str, object]) -> str:
         f"- Acceptance contract: `{contract}`; no historical result reinterpreted",
         "- Stability predicates: " + ", ".join(f"`{name}` CV <= 0.10" for name in required_cv) + "; no discarded samples",
         f"- Status: `{result['public_status']}`",
+        "",
+        f"- Qualification profile: `{qualification}`",
+        "- Hosted semantic success certifies completed fixed work and classification only; timing acceptance and product performance approval remain separate.",
+        "- Strict predicates below retain their original verdicts, including failures.",
         "",
         "## Fixture",
         "",
@@ -284,7 +304,10 @@ def main() -> int:
                         help="legacy retains historical interpretation; production is the current capture contract")
     parser.add_argument("--acceptance-contract", choices=("v2", "v3"), default="v2",
                         help="v2 retains all three CV gates; v3 reports pause CV diagnostically with mandatory owner review")
+    parser.add_argument("--qualification-profile", choices=("controlled-performance", "hosted-semantic"),
+                        default="controlled-performance")
     args = parser.parse_args()
+    validate_qualification(args.qualification_profile, args.stability_arm, args.acceptance_contract)
     repo = args.repo_root.resolve()
     run_dir = args.run_dir.resolve()
     fixture = json.loads((run_dir / "fixture.json").read_text())
@@ -298,6 +321,10 @@ def main() -> int:
     result = {
         "schema_version": 3 if args.acceptance_contract == "v3" else 2,
         "acceptance_contract": args.acceptance_contract,
+        "qualification_profile": args.qualification_profile,
+        "capture_passed": capture_passes(gates, args.qualification_profile),
+        "strict_performance_predicates_passed": all(gates.values()),
+        "product_performance_approval": None,
         "stability_arm": arm,
         "stability_contract": {"benchmark": STABILITY_BENCHMARKS[arm], "repetitions": 10,
                                "cv_limit": 0.10, "fixed_foreground_operations": 4096,
@@ -313,7 +340,7 @@ def main() -> int:
         result["pause_diagnostic"] = pause_diagnostic(legacy)
     (run_dir / "results.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
     (run_dir / "summary.md").write_text(render_markdown(result))
-    return 0 if all(gates.values()) else 1
+    return 0 if capture_passes(gates, args.qualification_profile) else 1
 
 
 if __name__ == "__main__":

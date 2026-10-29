@@ -13,6 +13,7 @@ on:
       - "TreeDB/db/db.go"
       - "TreeDB/public.go"
       - "scripts/treedb_vacuum_m0_capture.sh"
+      - "scripts/treedb_vacuum_m0_ci.sh"
       - "scripts/treedb_vacuum_m0_summarize.py"
       - "scripts/treedb_vacuum_m0_summarize_test.py"
       - ".github/workflows/treedb-vacuum-m0.yml"
@@ -46,13 +47,16 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Capture and enforce M0 evidence
-        run: RUN_DIR="$RUNNER_TEMP/treedb-vacuum-m0" scripts/treedb_vacuum_m0_capture.sh
+      - name: Capture and enforce declared M0 qualification
+        env:
+          M0_QUALIFICATION_PROFILE: ${{ runner.environment == 'self-hosted' && 'controlled-performance' || 'hosted-semantic' }}
+        run: RUN_DIR="$RUNNER_TEMP/treedb-vacuum-m0" scripts/treedb_vacuum_m0_ci.sh
 
       - name: Upload complete evidence packet
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: treedb-vacuum-m0-${{ github.event.pull_request.head.sha || github.sha }}
+          name: treedb-vacuum-m0-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/treedb-vacuum-m0
           if-no-files-found: error
+          overwrite: false

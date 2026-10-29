@@ -17,6 +17,71 @@ SPEC.loader.exec_module(MODULE)
 
 
 class VacuumM0SummarizeTest(unittest.TestCase):
+    def test_hosted_verdict_keeps_every_semantic_predicate(self):
+        strict = {"production_cv_at_most_10_percent": False,
+                  "production_fixed_work_complete": True,
+                  "public_status_explicit": True}
+        self.assertFalse(MODULE.capture_passes(strict, "controlled-performance"))
+        self.assertTrue(MODULE.capture_passes(strict, "hosted-semantic"))
+        for name in ("production_fixed_work_complete", "public_status_explicit"):
+            broken = dict(strict, **{name: False})
+            self.assertFalse(MODULE.capture_passes(broken, "hosted-semantic"))
+        with self.assertRaises(ValueError):
+            MODULE.capture_passes(strict, "unknown")
+
+    def test_hosted_requires_all_semantic_samples_despite_timing_noise(self):
+        production, public = self.production_observations()
+        production["foreground-p99-ns/op"]["cv"] = 0.50
+        evaluate = lambda: MODULE.capture_passes(
+            MODULE.evaluate_gates(production, public, "production", "v3"), "hosted-semantic")
+        self.assertTrue(evaluate())
+        for metric in MODULE.REQUIRED_CV_METRICS:
+            production[metric]["samples"].pop()
+            self.assertFalse(evaluate())
+            production[metric]["samples"].append(1)
+        for metric in ("foreground-overlap-samples/op", "foreground-points/op", "foreground-ranges/op",
+                       "foreground-exposure-misses/op", "vacuum-errors/op", "concurrent-aborts/op"):
+            production, public = self.production_observations()
+            production[metric]["samples"][4] += 1
+            self.assertFalse(evaluate(), metric)
+        for metric in ("vacuum-unexpected-errors/op", "foreground-exposure-misses/op"):
+            production, public = self.production_observations()
+            public[metric]["samples"][4] = 1
+            self.assertFalse(evaluate(), metric)
+        production, public = self.production_observations()
+        public["vacuum-concurrent-retries/op"]["samples"] = [1] * 10
+        self.assertFalse(evaluate())
+
+    def test_hosted_profile_cannot_use_legacy_or_historical_contract(self):
+        for arm, contract in (("legacy", "v2"), ("production", "v2")):
+            with self.assertRaises(ValueError):
+                MODULE.validate_qualification("hosted-semantic", arm, contract)
+        MODULE.validate_qualification("hosted-semantic", "production", "v3")
+
+    def test_ci_budget_receipt_fails_closed(self):
+        import os
+        import subprocess
+        wrapper = SCRIPT.with_name("treedb_vacuum_m0_ci.sh")
+        for status in (0, 1, 124, 137):
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                fake = root / "timeout"
+                fake.write_text("#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$TIMEOUT_ARGS\"\nexit " + str(status) + "\n")
+                fake.chmod(0o755)
+                packet = root / "packet"
+                env = dict(os.environ, PATH=str(root) + os.pathsep + os.environ["PATH"],
+                           RUN_DIR=str(packet), M0_QUALIFICATION_PROFILE="hosted-semantic",
+                           TIMEOUT_ARGS=str(root / "args"))
+                proc = subprocess.run(["bash", str(wrapper)], env=env, capture_output=True)
+                self.assertEqual(proc.returncode, status, proc.stderr)
+                receipt = json.loads((packet / "ci-budget.json").read_text())
+                self.assertEqual(receipt["completed"], status == 0)
+                self.assertEqual(receipt["capture_budget_seconds"], 720)
+                self.assertIn("--kill-after=30s 720s bash", (root / "args").read_text())
+                again = subprocess.run(["bash", str(wrapper)], env=env, capture_output=True)
+                self.assertEqual(again.returncode, 2)
+                self.assertEqual(json.loads((packet / "ci-budget.json").read_text()), receipt)
+
     def test_summarize_computes_stable_required_metrics(self):
         with tempfile.TemporaryDirectory() as directory:
             paths = []
