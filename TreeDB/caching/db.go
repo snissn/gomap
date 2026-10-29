@@ -27409,12 +27409,29 @@ func (db *DB) setDirectAfterCommandWALAppendWithMVCCInput(key, value []byte, inp
 		}
 		return revision
 	}
-	if err := appendCommand(assignRevision); err != nil {
+	// The caller owns writeMu across the external append callback. Returned
+	// errors release it below; panic(nil) and Goexit must release it too,
+	// without recovering or converting either unwind to a successful write.
+	var appendErr error
+	func() {
+		returned := false
+		defer func() {
+			if !returned {
+				if retainPath != "" {
+					db.markValueLogRetain(retainPath)
+				}
+				db.writeMu.RUnlock()
+			}
+		}()
+		appendErr = appendCommand(assignRevision)
+		returned = true
+	}()
+	if appendErr != nil {
 		if retainPath != "" {
 			db.markValueLogRetain(retainPath)
 		}
 		db.writeMu.RUnlock()
-		return err
+		return appendErr
 	}
 	if revision == page.LegacyEntryRevision {
 		if retainPath != "" {

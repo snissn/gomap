@@ -284,25 +284,27 @@ func (db *DB) acquireCommandWALPublishWithBarriersAfterAppend(owner *transaction
 		}
 	}
 	held := false
+	returned := false
 	if assignedLSN != 0 {
 		defer func() {
-			if recovered := recover(); recovered != nil {
+			if !returned {
 				// This handles both a hook panic under the acquired leases and
 				// an unlocked Drain panic. Publish poison before any owned release.
 				poisonAssigned()
 				if held {
 					db.unlockCommandWALRawPublishWithAdmissionAndTeardown()
 				}
-				panic(recovered)
 			}
 		}()
 	}
 	if db != nil && db.nativeSemanticActive.Load() && (owner == nil || owner != db.privateCOWOwner) {
 		poisonAssigned()
+		returned = true
 		return ErrNativeSemanticUnsupported
 	}
 	if db == nil || !db.commandWAL {
 		poisonAssigned()
+		returned = true
 		return ErrCommandWALUnsupported
 	}
 	for {
@@ -310,6 +312,7 @@ func (db *DB) acquireCommandWALPublishWithBarriersAfterAppend(owner *transaction
 		if db.closing.Load() {
 			poisonAssigned()
 			db.teardownMu.RUnlock()
+			returned = true
 			return ErrClosed
 		}
 		db.commandWALRawAdmissionMu.Lock()
@@ -319,16 +322,19 @@ func (db *DB) acquireCommandWALPublishWithBarriersAfterAppend(owner *transaction
 			poisonAssigned()
 			db.unlockCommandWALRawPublishWithAdmissionAndTeardown()
 			held = false
+			returned = true
 			return ErrNativeSemanticUnsupported
 		}
 		if db.closing.Load() {
 			poisonAssigned()
 			db.unlockCommandWALRawPublishWithAdmissionAndTeardown()
 			held = false
+			returned = true
 			return ErrClosed
 		}
 		err := db.runCommandWALRawPublishBarriers()
 		if err == nil {
+			returned = true
 			return nil
 		}
 		drain := commandWALPendingDrain(err)
@@ -338,10 +344,12 @@ func (db *DB) acquireCommandWALPublishWithBarriersAfterAppend(owner *transaction
 		db.unlockCommandWALRawPublishWithAdmissionAndTeardown()
 		held = false
 		if drain == nil {
+			returned = true
 			return err
 		}
 		if err := drain.Drain(); err != nil {
 			poisonAssigned()
+			returned = true
 			return err
 		}
 	}

@@ -135,11 +135,10 @@ func (tdb *DB) appendAndCaptureOrdinaryPublicCommandWAL(bytes int, preparedBytes
 	var batch publicCommandWALCapturedGroup
 	captured := false
 	defer func() {
-		if recovered := recover(); recovered != nil {
-			if captured {
-				group.failPanickedLeader(tdb)
-			}
-			panic(recovered)
+		// captured is cleared only after this epoch retires. Let panic(nil)
+		// and Goexit unwind naturally while releasing any owned leader.
+		if captured {
+			group.failPanickedLeader(tdb)
 		}
 	}()
 	appended := false
@@ -765,10 +764,10 @@ func (group *publicCommandWALGroupCommit) runLeader(tdb *DB) {
 	}
 	leaderWaitHook := group.testBeforeLeaderWait
 	group.mu.Unlock()
+	returned := false
 	defer func() {
-		if recovered := recover(); recovered != nil {
+		if !returned {
 			group.failPanickedLeader(tdb)
-			panic(recovered)
 		}
 	}()
 
@@ -832,9 +831,11 @@ func (group *publicCommandWALGroupCommit) runLeader(tdb *DB) {
 		group.captureGroup(tdb, &batch)
 	}()
 	if batch.count == 0 || (batch.commits == 0 && len(batch.forceTickets) == 0) {
+		returned = true
 		return
 	}
 	group.syncAndCompleteGroup(tdb, &batch, 0)
+	returned = true
 }
 
 func (group *publicCommandWALGroupCommit) detachPendingLocked() publicCommandWALCapturedGroup {

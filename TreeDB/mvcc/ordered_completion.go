@@ -38,19 +38,19 @@ func (c *CommitCompletion) Complete() error {
 	defer c.mu.Unlock()
 	if c.store != nil {
 		store := c.store
+		returned := false
 		defer func() {
-			panicked := recover()
 			store.mu.RUnlock()
 			c.store = nil
-			if panicked != nil {
+			if !returned {
 				c.err = storageError("complete batch", treedb.ErrRecoveryRequired)
-				panic(panicked)
 			}
 		}()
 		err := c.engine.Complete()
 		if err != nil {
 			c.err = storageError("complete batch", err)
 		}
+		returned = true
 	}
 	return c.err
 }

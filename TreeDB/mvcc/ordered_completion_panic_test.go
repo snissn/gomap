@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -21,13 +22,17 @@ func TestOrderedCompletionPanicCustody(t *testing.T) {
 		return
 	}
 	for _, point := range []durabilitycut.Point{durabilitycut.BeforeUserspaceFlush, durabilitycut.BeforeDependencyFileSync} {
-		for _, check := range []string{"custody", "repeat"} {
+		for _, check := range []string{"custody", "repeat", "nil-panic", "goexit"} {
 			mode := string(point) + "/" + check
 			t.Run(mode, func(t *testing.T) {
 				ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 				defer cancel()
 				cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestOrderedCompletionPanicCustody$", "-test.v", "-test.timeout=12s")
 				cmd.Env = append(os.Environ(), "GOMAP_COMPLETION_PANIC_CHILD="+mode)
+				if check == "nil-panic" {
+					// Reproduce the legacy runtime mode where recover returns nil.
+					cmd.Env = append(cmd.Env, "GODEBUG=panicnil=1")
+				}
 				out, err := cmd.CombinedOutput() // Wait reaps the sole child on every path.
 				if err != nil {
 					t.Fatalf("child %s: %v\n%s", mode, err, out)
@@ -42,7 +47,7 @@ func orderedCompletionPanicChild(t *testing.T, mode string) {
 	var point durabilitycut.Point
 	check := ""
 	for _, p := range []durabilitycut.Point{durabilitycut.BeforeUserspaceFlush, durabilitycut.BeforeDependencyFileSync} {
-		for _, c := range []string{"custody", "repeat"} {
+		for _, c := range []string{"custody", "repeat", "nil-panic", "goexit"} {
 			if mode == string(p)+"/"+c {
 				point, check = p, c
 			}
@@ -73,20 +78,41 @@ func orderedCompletionPanicChild(t *testing.T, mode string) {
 	restore := durabilitycut.Install(func(e durabilitycut.Event) error {
 		if !fired && e.Resource == durabilitycut.ResourceCommandWAL && e.Point == point {
 			fired = true
+			if check == "goexit" {
+				runtime.Goexit()
+			}
+			if check == "nil-panic" {
+				panic(nil)
+			}
 			panic(sentinel)
 		}
 		return nil
 	})
 	var recovered any
-	func() { defer func() { recovered = recover() }(); _ = completion.Complete() }()
+	returned := false
+	if check == "goexit" {
+		done := make(chan struct{})
+		returned := false
+		go func() { defer close(done); _ = completion.Complete(); returned = true }()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("Goexit failed to unwind")
+		}
+		if returned {
+			t.Fatal("Goexit was converted to a normal return")
+		}
+	} else {
+		func() { defer func() { recovered = recover() }(); _ = completion.Complete(); returned = true }()
+	}
 	restore()
-	if !fired || recovered != sentinel {
+	if !fired || returned || (check == "nil-panic" && recovered != nil) || (check != "goexit" && check != "nil-panic" && recovered != sentinel) {
 		t.Fatalf("physical panic not preserved: fired=%t recovered=%v", fired, recovered)
 	}
 	if err := peer.Complete(); !errors.Is(err, treedb.ErrRecoveryRequired) {
 		t.Fatalf("peer failed to retire: %v", err)
 	}
-	if check == "custody" {
+	if check == "custody" || check == "goexit" {
 		if !store.mu.TryLock() {
 			t.Fatal("panic retained Store discard-floor custody")
 		}
