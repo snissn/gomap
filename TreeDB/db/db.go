@@ -3012,7 +3012,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (result *DB, retErr error) 
 		db.refreshCommandWALClosedBytes()
 		if !db.readOnly {
 			if err := db.CleanupCommandWALCoveredSegments(true); err != nil &&
-				!errors.Is(err, errDurableWALCleanupProofUnavailable) {
+				!commandWALCleanupUnavailableOnly(err) {
 				return nil, err
 			}
 		}
@@ -3617,9 +3617,7 @@ func (db *DB) closeAfterHooks() (outcome, cleanup error) {
 	// failures, but teardown continues so cleanup errors never strand resources.
 	if db.commandWAL && !db.readOnly && db.commandJournal != nil && db.commandWALPoisonedError() == nil {
 		if err := db.cleanupCommandWALCoveredSegmentsV1(); err != nil &&
-			!errors.Is(err, errDurableWALCleanupProofUnavailable) &&
-			!errors.Is(err, errDurableWALCleanupProofStale) &&
-			!errors.Is(err, commitlog.ErrCommandWALCleanupSnapshotStale) {
+			!commandWALCleanupRetryableOnly(err) {
 			cleanupFailed(fmt.Errorf("cleanup command WAL during close: %w", err))
 		}
 	}

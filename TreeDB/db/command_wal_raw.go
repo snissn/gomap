@@ -866,9 +866,7 @@ func (db *DB) CleanupCommandWALCoveredPrefix() (bool, error) {
 		return false, ErrClosed
 	}
 	err := db.cleanupCommandWALCoveredSegmentsV1()
-	if errors.Is(err, errDurableWALCleanupProofUnavailable) ||
-		errors.Is(err, errDurableWALCleanupProofStale) ||
-		errors.Is(err, commitlog.ErrCommandWALCleanupSnapshotStale) {
+	if commandWALCleanupRetryableOnly(err) {
 		return false, nil
 	}
 	if err != nil {
@@ -893,11 +891,55 @@ func (db *DB) cleanupCommandWALCoveredSegmentsAtCheckpointV1(maintenanceAlreadyH
 	return normalizeCommandWALCheckpointCleanupError(err)
 }
 
+// A retry marker never authorizes discarding an unrelated error branch. Walk
+// wrappers and joins to their leaves rather than testing whether any branch Is
+// a lineage/retry sentinel. Exact controlled registry-pin refusal is the only
+// pin error that production joins with unavailable proof.
+func commandWALCleanupErrorOnly(err error, allowed ...error) bool {
+	if err == nil {
+		return false
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		children := joined.Unwrap()
+		if len(children) == 0 {
+			return false
+		}
+		for _, child := range children {
+			if !commandWALCleanupErrorOnly(child, allowed...) {
+				return false
+			}
+		}
+		return true
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		return commandWALCleanupErrorOnly(wrapped.Unwrap(), allowed...)
+	}
+	for _, candidate := range allowed {
+		if err == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+func commandWALCleanupUnavailableOnly(err error) bool {
+	return errors.Is(err, errDurableWALCleanupProofUnavailable) && commandWALCleanupErrorOnly(err,
+		errDurableWALCleanupProofUnavailable, ErrCommandWALAppliedLSNNonContig,
+		commitlog.ErrCommandWALDuplicateLSN, rootpublication.ErrResourcePinned)
+}
+
+func commandWALCleanupRetryableOnly(err error) bool {
+	return (errors.Is(err, errDurableWALCleanupProofUnavailable) || errors.Is(err, errDurableWALCleanupProofStale) || errors.Is(err, commitlog.ErrCommandWALCleanupSnapshotStale)) &&
+		commandWALCleanupErrorOnly(err, errDurableWALCleanupProofUnavailable, errDurableWALCleanupProofStale,
+			commitlog.ErrCommandWALCleanupSnapshotStale, ErrCommandWALAppliedLSNNonContig,
+			commitlog.ErrCommandWALDuplicateLSN, rootpublication.ErrResourcePinned)
+}
+
 func normalizeCommandWALCheckpointCleanupError(err error) error {
 	if errors.Is(err, errDurableWALCleanupProofStale) || errors.Is(err, commitlog.ErrCommandWALCleanupSnapshotStale) {
 		return errors.Join(ErrDurableWALCleanupProofStale, err)
 	}
-	if errors.Is(err, errDurableWALCleanupProofUnavailable) {
+	if commandWALCleanupUnavailableOnly(err) {
 		return nil
 	}
 	return err
@@ -998,7 +1040,7 @@ func (db *DB) cleanupCommandWALCoveredSegmentsV1() (retErr error) {
 		db.commandWALCleanupScanNs.Add(scanNs)
 	}
 	defer closeCommandWALCleanupDecisions(decisions)
-	if errors.Is(err, ErrCommandWALAppliedLSNNonContig) || errors.Is(err, commitlog.ErrCommandWALDuplicateLSN) {
+	if commandWALCleanupErrorOnly(err, ErrCommandWALAppliedLSNNonContig, commitlog.ErrCommandWALDuplicateLSN) {
 		// A missing or duplicate frame in the retained replay interval means the
 		// captured roots/WAL lineage cannot authorize deletion. Nothing has been
 		// unlinked yet, so classify this as unavailable proof: explicit cleanup

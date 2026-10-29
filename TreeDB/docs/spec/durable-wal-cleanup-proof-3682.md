@@ -149,7 +149,11 @@ the frontier through its separate dependency-closure contract.
 durable-root publisher, but before releasing journal or recovery ownership. It
 retains the namespace without failing close when proof construction is
 unavailable or stale, including an ambiguous retained replay lineage or an
-expected resource pin encountered before any unlink. Explicit cleanup still
+expected resource pin encountered before any unlink. Opportunistic handling
+requires every branch of a wrapped or joined error to be an expected refusal.
+A lineage gap or duplicate cannot turn accompanying reserve corruption, I/O,
+or observer failure into unavailable proof; checkpoint, prefix cleanup and close
+return those hard errors while retaining the namespace. Explicit cleanup still
 reports the pin; it never releases another owner's pin. Once the destructive
 batch is entered, other identity/delete-lease, unlink, observer, and
 directory-sync failures are returned to the caller. Resource teardown continues
