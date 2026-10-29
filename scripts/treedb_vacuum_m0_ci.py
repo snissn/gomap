@@ -106,15 +106,34 @@ def supervise(command, run_dir, profile, budget, grace=30):
         receipt = {"qualification_profile": profile, "capture_budget_seconds": budget,
                    "cleanup_budget_seconds": 4 * grace, "exit_status": status, "completed": status == 0 and reason == "capture-exit",
                    "termination_reason": reason, "interrupted_signal": interrupted}
+        publication_mask = None
         try:
             run_dir.mkdir(parents=True, exist_ok=True)
             pending = run_dir / "ci-budget.json.pending"
             pending.write_text(json.dumps(receipt, sort_keys=True) + "\n")
+            # Cancellation is accepted through the initial pending write. The
+            # atomic signal-mask change below is the publication boundary:
+            # cancellation arriving after it cannot change this result, even
+            # during final serialization or atomic rename. All children have
+            # already been drained. At most one corrective write is needed;
+            # repeated signals cannot create an unbounded receipt retry loop.
+            publication_mask = signal.pthread_sigmask(signal.SIG_BLOCK, previous)
+            if interrupted is not None:
+                if reason == "capture-exit":
+                    reason, status = "interrupted", 128 + interrupted
+                receipt.update(exit_status=status, completed=False,
+                               termination_reason=reason, interrupted_signal=interrupted)
+                pending.write_text(json.dumps(receipt, sort_keys=True) + "\n")
             pending.replace(run_dir / "ci-budget.json")
         except OSError as error:
             status = 125
             print(f"incomplete M0 capture: receipt-write-failure: {error}", file=sys.stderr)
         finally:
+            if publication_mask is not None:
+                # Deliver post-boundary pending signals to record-only handlers
+                # before restoring the caller's handlers. The sealed outcome
+                # above remains fixed.
+                signal.pthread_sigmask(signal.SIG_SETMASK, publication_mask)
             for sig, handler in previous.items():
                 signal.signal(sig, handler)
     return status if status >= 0 else 128 - status

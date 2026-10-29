@@ -215,6 +215,67 @@ class SupervisorTest(unittest.TestCase):
             self.assertEqual(receipt['interrupted_signal'], signal.SIGTERM)
             self.assertFalse(receipt['completed'])
 
+    def test_real_signal_receipt_publication_boundary(self):
+        signals = (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)
+        phases = ('pending-write', 'before-boundary', 'after-boundary',
+                  'before-replace', 'after-replace')
+        for sig in signals:
+            for phase in phases:
+                with self.subTest(signal=sig, phase=phase), tempfile.TemporaryDirectory() as directory:
+                    packet = Path(directory) / 'packet'
+                    real_write, real_replace = Path.write_text, Path.replace
+                    real_mask, real_spawn = signal.pthread_sigmask, subprocess.Popen
+                    writes, children = [], []
+                    def send():
+                        # Multiple real deliveries must remain bounded. The first
+                        # observed signal wins when cancellation is accepted.
+                        for _ in range(3):
+                            os.kill(os.getpid(), sig)
+                    def write(path, *args, **kwargs):
+                        if path.name == 'ci-budget.json.pending':
+                            writes.append(True)
+                            if phase == 'pending-write':
+                                send()
+                        return real_write(path, *args, **kwargs)
+                    def mask(how, values):
+                        if how == signal.SIG_BLOCK and phase == 'before-boundary':
+                            send()
+                        result = real_mask(how, values)
+                        if how == signal.SIG_BLOCK and phase == 'after-boundary':
+                            send()
+                        return result
+                    def replace(path, target):
+                        if phase == 'before-replace':
+                            send()
+                        result = real_replace(path, target)
+                        if phase == 'after-replace':
+                            send()
+                        return result
+                    def spawn(*args, **kwargs):
+                        child = real_spawn(*args, **kwargs)
+                        children.append(child)
+                        return child
+                    started = time.monotonic()
+                    with mock.patch.object(Path, 'write_text', write), \
+                         mock.patch.object(Path, 'replace', replace), \
+                         mock.patch.object(m.signal, 'pthread_sigmask', mask), \
+                         mock.patch.object(m.subprocess, 'Popen', side_effect=spawn):
+                        status = m.supervise([sys.executable, '-c', 'pass'], packet,
+                                             'hosted-semantic', 5, grace=0.1)
+                    accepted = phase in ('pending-write', 'before-boundary')
+                    self.assertLess(time.monotonic() - started, 5)
+                    self.assertEqual(len(writes), 2 if accepted else 1)
+                    self.assertEqual(status, 128 + sig if accepted else 0)
+                    receipt = json.loads((packet / 'ci-budget.json').read_text())
+                    self.assertEqual(receipt['completed'], not accepted)
+                    self.assertEqual(receipt['exit_status'], status)
+                    self.assertEqual(receipt['interrupted_signal'], sig if accepted else None)
+                    self.assertEqual(receipt['termination_reason'],
+                                     'interrupted' if accepted else 'capture-exit')
+                    self.assertIsNotNone(children[0].returncode)
+                    with self.assertRaises(ProcessLookupError):
+                        os.killpg(children[0].pid, 0)
+
     def test_spawn_failure_receipt(self):
         with tempfile.TemporaryDirectory() as directory:
             packet = Path(directory) / 'packet'
