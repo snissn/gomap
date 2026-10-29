@@ -1,0 +1,517 @@
+// Package mvcc provides an opt-in external-timestamp MVCC layer over TreeDB.
+//
+// A Store owns TreeDB's reserved external-MVCC physical-key namespace. Mixing
+// unrelated raw TreeDB writes into that namespace is unsupported. The package
+// is pre-alpha: its API and on-disk record format may change without migration.
+package mvcc
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"github.com/snissn/gomap/TreeDB/internal/mvccadmission"
+	"sync"
+
+	treedb "github.com/snissn/gomap/TreeDB"
+	"github.com/snissn/gomap/TreeDB/internal/mvcckey"
+)
+
+// CommitMode selects the acknowledgement and durability boundary for CommitAt.
+type CommitMode uint8
+
+const (
+	// CommitRelaxed publishes atomically using the profile's ordinary ACK class.
+	// Relaxed profiles do not promise an fsync boundary.
+	CommitRelaxed CommitMode = iota
+	// CommitDurable publishes atomically with SetSync or Batch.WriteSync. Production
+	// profiles support this explicit durability opt-up even when ordinary ACKs
+	// are relaxed.
+	CommitDurable
+)
+
+// Mutation is one logical-key mutation in a CommitAt batch. Delete selects a
+// tombstone; otherwise Value is stored verbatim, including nil/empty values.
+type Mutation struct {
+	Key    []byte
+	Value  []byte
+	Delete bool
+}
+
+// CommitGroup is one caller-assigned timestamp and its mutations. CommitGroupAt
+// publishes every non-empty group in its input through one TreeDB batch, so it
+// is useful when an external MVCC coordinator has already formed several
+// commits that must be made visible together.
+type CommitGroup struct {
+	Timestamp uint64
+	Mutations []Mutation
+}
+
+// ReadState identifies the visibility result returned by GetAt.
+type ReadState uint8
+
+const (
+	// Absent means no retained version exists at or below the read timestamp.
+	Absent ReadState = iota
+	// Present means Value and Timestamp describe the visible retained value.
+	Present
+	// Tombstone means Timestamp identifies the visible deletion marker.
+	Tombstone
+)
+
+// Result is the newest retained version visible at a requested timestamp.
+// Value is caller-owned for Present results.
+type Result struct {
+	State     ReadState
+	Value     []byte
+	Timestamp uint64
+}
+
+var (
+	ErrZeroTimestamp     = errors.New("mvcc: timestamp zero is reserved")
+	ErrDuplicateKey      = errors.New("mvcc: duplicate logical key in batch")
+	ErrInvalidCommitMode = errors.New("mvcc: invalid commit mode")
+	ErrInvalidKey        = errors.New("mvcc: invalid logical key")
+	ErrMalformedRecord   = errors.New("mvcc: malformed physical record")
+	ErrStorage           = errors.New("mvcc: storage error")
+)
+
+const (
+	recordValueV1     byte = 0x01
+	recordTombstoneV1 byte = 0x02
+)
+
+type treeDB interface {
+	Iterator(start, end []byte) (treedb.Iterator, error)
+	NewBatchWithSize(size int) treedb.Batch
+}
+
+// pointWriter is an optional optimization implemented by the public TreeDB
+// handle. Keeping it separate from treeDB preserves the narrow test and
+// maintenance adapters that intentionally support only the batch contract.
+type pointWriter interface {
+	Set(key, value []byte) error
+}
+
+// Keep sync capability independent so Set-only adapters retain their relaxed
+// point route and batch-only adapters retain the existing durable contract.
+type pointSyncWriter interface {
+	SetSync(key, value []byte) error
+}
+
+type pointSuccessorDB interface {
+	// Results own their storage, including any internal iterator fallback.
+	SeekGE(start, end []byte) (key, value []byte, found bool, err error)
+}
+
+// Store ownership, rather than physical key shape alone, qualifies this seam.
+type versionRangeSuccessorDB interface {
+	// Results own their storage, including any internal iterator fallback.
+	SeekGEVersionRange(start, end []byte) (key, value []byte, found bool, err error)
+}
+
+type atomicReadCutDB interface {
+	SupportsMVCCReadCut() bool
+	AcquireMVCCReadCut() (treedb.MVCCReadSnapshot, error)
+}
+
+// Store owns the external-version namespace of one TreeDB handle.
+type Store struct {
+	db        treeDB
+	admission *mvccadmission.Capability
+
+	// maintenanceMu serializes floor advancement and pruning. The lock order is
+	// maintenanceMu then mu; foreground reads and commits never take it.
+	maintenanceMu sync.Mutex
+
+	// mu guards floor admission through commit acknowledgement and read-cut
+	// capture. Atomic-cut producers allow grouped writes to share admission;
+	// legacy successor producers require an exclusive grouped publication fence.
+	// Qualified legacy pruning holds it through deletion and lease cleanup;
+	// atomic-cut pruning releases it once the original physical cut is retained.
+	mu           sync.RWMutex
+	discardFloor uint64
+	floorLoaded  bool
+	readCuts     atomicReadCutDB
+}
+
+// New returns the one opt-in MVCC owner for db. Callers must keep exactly one
+// Store per TreeDB handle and must not use raw writes in the reserved MVCC
+// namespace while it owns that handle. A second Store would have independent
+// in-memory floor cache and maintenance serialization and is unsupported.
+func New(db *treedb.DB) *Store {
+	if db == nil {
+		return &Store{}
+	}
+	s := newStore(db)
+	// Only New's concrete TreeDB producer adopts typed input. Internal
+	// decorators can override Set/SetSync; an inherited input method must not
+	// bypass those point-writer contracts or their injected storage errors.
+	s.admission = db.NewMVCCAdmission()
+	return s
+}
+
+func newStore(db treeDB) *Store {
+	s := &Store{db: db}
+	if cuts, ok := db.(atomicReadCutDB); ok && cuts.SupportsMVCCReadCut() {
+		s.readCuts = cuts
+	}
+	return s
+}
+
+// CommitAt atomically writes all mutations at one caller-assigned timestamp.
+//
+// Duplicate logical keys, including nil and empty keys (which are the same
+// logical key), are rejected before a TreeDB batch is created. This deliberately
+// avoids an order-dependent last-write-wins policy. Empty batches are no-ops.
+// After timestamp, mode, and non-nil Store validation, an empty batch returns
+// without accessing TreeDB or checking its configured durability/open state.
+// A returned storage error can be commit-ambiguous, but visibility is always
+// whole-batch: readers may see all mutations or none, never a prefix.
+func (s *Store) CommitAt(timestamp uint64, mutations []Mutation, mode CommitMode) error {
+	// Preserve the established CommitAt validation precedence for callers that
+	// distinguish the reserved timestamp from a later mode/store failure.
+	if timestamp == 0 {
+		return ErrZeroTimestamp
+	}
+	started := detectorStart(timestamp, mutations, mode)
+	err := s.CommitGroupAt([]CommitGroup{{Timestamp: timestamp, Mutations: mutations}}, mode)
+	if err == nil { detectorFinish(started) }
+	return err
+}
+
+// CommitGroupAt validates and atomically publishes timestamped mutation groups.
+// A single physical record uses TreeDB's equivalent Set or SetSync path when
+// the handle supports the selected mode; larger publications and batch-only
+// handles use one Batch.Write or Batch.WriteSync call. Every group is validated before
+// storage is accessed: timestamps must be non-zero and
+// above the discard floor, keys must fit the MVCC codec, and no physical MVCC
+// key may occur twice. Thus the same logical key at distinct timestamps is
+// allowed, while duplicate logical keys at the same timestamp are rejected
+// even when they arrive in different groups.
+//
+// Empty groups are validated for timestamp and contribute no record. An empty
+// group list (or a list containing only empty groups) is a no-op after Store
+// and mode validation. As with CommitAt, a storage error can be commit
+// ambiguous; group visibility is nevertheless all-or-none, never a prefix.
+func (s *Store) CommitGroupAt(groups []CommitGroup, mode CommitMode) error {
+	if mode != CommitRelaxed && mode != CommitDurable {
+		return ErrInvalidCommitMode
+	}
+	if s == nil || s.db == nil {
+		return storageError("create batch", treedb.ErrClosed)
+	}
+	type stagedMutation struct {
+		physical  []byte
+		record    []byte
+		timestamp uint64
+		group     int
+		key       int
+	}
+	total := 0
+	for groupIndex := range groups {
+		group := &groups[groupIndex]
+		if group.Timestamp == 0 {
+			return fmt.Errorf("%w at group index %d", ErrZeroTimestamp, groupIndex)
+		}
+		total += len(group.Mutations)
+	}
+	if total == 0 {
+		return nil
+	}
+	if s.admission != nil {
+		if writer := logicalMVCCWriterFor(s.db); writer != nil && writer.SupportsLogicalMVCC() {
+			return s.commitLogicalGroups(writer, groups, total, mode)
+		}
+	}
+
+	var singleton [1]stagedMutation
+	staged := singleton[:0]
+	if total != 1 {
+		staged = make([]stagedMutation, 0, total)
+	}
+	var seen map[string]struct{}
+	if total > 1 {
+		seen = make(map[string]struct{}, total)
+	}
+	for groupIndex := range groups {
+		group := &groups[groupIndex]
+		for keyIndex := range group.Mutations {
+			mutation := &group.Mutations[keyIndex]
+			physical, err := mvcckey.Encode(mutation.Key, group.Timestamp)
+			if err != nil {
+				return fmt.Errorf("%w at group index %d key index %d: %w", ErrInvalidKey, groupIndex, keyIndex, err)
+			}
+			// The physical encoding contains both logical key and timestamp. This
+			// simultaneously catches duplicates within one commit and across
+			// groups, without rejecting distinct versions of the same logical key.
+			if seen != nil {
+				identity := string(physical)
+				if _, exists := seen[identity]; exists {
+					return fmt.Errorf("%w at group index %d key index %d", ErrDuplicateKey, groupIndex, keyIndex)
+				}
+				seen[identity] = struct{}{}
+			}
+
+			entry := stagedMutation{physical: physical, timestamp: group.Timestamp, group: groupIndex, key: keyIndex}
+			if mutation.Delete {
+				entry.record = []byte{recordTombstoneV1}
+			} else {
+				entry.record = make([]byte, 1+len(mutation.Value))
+				entry.record[0] = recordValueV1
+				copy(entry.record[1:], mutation.Value)
+			}
+			staged = append(staged, entry)
+		}
+	}
+	if _, qualified := s.db.(versionRangeSuccessorDB); s.readCuts == nil && qualified && len(staged) > 1 {
+		// Cached batches apply across shard tables while holding a shared writer
+		// gate. The Store-owned read capability must not expose that prefix.
+		s.mu.Lock()
+		if err := s.loadDiscardFloorLocked(); err != nil {
+			s.mu.Unlock()
+			return err
+		}
+		defer s.mu.Unlock()
+	} else {
+		if err := s.lockDiscardFloorRead(); err != nil {
+			return err
+		}
+		defer s.mu.RUnlock()
+	}
+	floor := s.discardFloor
+	for _, entry := range staged {
+		if entry.timestamp <= floor {
+			return fmt.Errorf("%w: group index %d timestamp %d is not above floor %d", ErrVersionBelowDiscardFloor, entry.group, entry.timestamp, floor)
+		}
+	}
+	if s.admission != nil && len(staged) == 1 {
+		if writer := pointMVCCInputWriterFor(s.db); writer != nil {
+			entry := staged[0]
+			if err := writer.SetPointWithMVCCInput(entry.physical, entry.record, mode == CommitDurable, s.admission.Input(entry.physical, entry.timestamp, floor)); err != nil {
+				return storageError("commit point", err)
+			}
+			return nil
+		}
+	}
+	if mode == CommitRelaxed && len(staged) == 1 {
+		if writer, ok := s.db.(pointWriter); ok {
+			if err := writer.Set(staged[0].physical, staged[0].record); err != nil {
+				return storageError("commit point", err)
+			}
+			return nil
+		}
+	}
+	if mode == CommitDurable && len(staged) == 1 {
+		if writer, ok := s.db.(pointSyncWriter); ok {
+			if err := writer.SetSync(staged[0].physical, staged[0].record); err != nil {
+				return storageError("commit point", err)
+			}
+			return nil
+		}
+	}
+
+	batch := s.db.NewBatchWithSize(len(staged))
+	if batch == nil {
+		return storageError("create batch", treedb.ErrClosed)
+	}
+	for i := range staged {
+		var err error
+		if writer, ok := batch.(interface {
+			SetWithMVCCInput([]byte, []byte, mvccadmission.Input) error
+		}); ok && s.admission != nil {
+			e := staged[i]
+			err = writer.SetWithMVCCInput(e.physical, e.record, s.admission.Input(e.physical, e.timestamp, floor))
+		} else {
+			err = batch.Set(staged[i].physical, staged[i].record)
+		}
+		if err != nil {
+			stageErr := storageError(fmt.Sprintf("stage group index %d key index %d", staged[i].group, staged[i].key), err)
+			return errors.Join(stageErr, storageError("close batch", batch.Close()))
+		}
+	}
+
+	var err error
+	if mode == CommitDurable {
+		err = batch.WriteSync()
+	} else {
+		err = batch.Write()
+	}
+	if err != nil {
+		err = storageError("commit batch", err)
+	}
+	return errors.Join(err, storageError("close batch", batch.Close()))
+}
+
+// GetAt returns the newest retained version of logical at or below timestamp.
+// The lookup constructs an exact lower bound at timestamp and seeks TreeDB
+// directly into that key/time region; it does not materialize key history.
+func (s *Store) GetAt(logical []byte, timestamp uint64) (result Result, err error) {
+	if timestamp == 0 {
+		return Result{}, ErrZeroTimestamp
+	}
+	if s == nil || s.db == nil {
+		return Result{}, &getAtError{callErr: storageError("open iterator", treedb.ErrClosed)}
+	}
+	lower, err := mvcckey.Encode(logical, timestamp)
+	if err != nil {
+		return Result{}, fmt.Errorf("%w: %w", ErrInvalidKey, err)
+	}
+	upper, err := mvcckey.AppendKeyVersionsUpper(nil, logical)
+	if err != nil {
+		return Result{}, fmt.Errorf("%w: %w", ErrInvalidKey, err)
+	}
+	if err := s.lockDiscardFloorRead(); err != nil {
+		return Result{}, &getAtError{callErr: err}
+	}
+	floor := s.discardFloor
+	if floor != 0 && timestamp <= floor {
+		s.mu.RUnlock()
+		return Result{}, &getAtError{callErr: fmt.Errorf("%w: read timestamp %d is at or below floor %d", ErrReadBeforeDiscardFloor, timestamp, floor)}
+	}
+	if s.readCuts != nil {
+		return s.getAtReadCut(logical, timestamp, lower, upper)
+	}
+	var seek func([]byte, []byte) ([]byte, []byte, bool, error)
+	if seeker, ok := s.db.(versionRangeSuccessorDB); ok {
+		seek = seeker.SeekGEVersionRange
+	} else if seeker, ok := s.db.(pointSuccessorDB); ok {
+		seek = seeker.SeekGE
+	}
+	if seek != nil {
+		physical, record, found, seekErr := seek(lower, upper)
+		s.mu.RUnlock()
+		if seekErr != nil {
+			return Result{}, storageError("seek version", seekErr)
+		}
+		if !found {
+			return Result{State: Absent}, nil
+		}
+		return decodePointResult(logical, timestamp, physical, record, true)
+	}
+	it, err := s.db.Iterator(lower, upper)
+	s.mu.RUnlock()
+	if err != nil {
+		return Result{}, &getAtError{callErr: storageError("open iterator", err)}
+	}
+	defer func() {
+		if closeErr := it.Close(); closeErr != nil {
+			err = &getAtError{itemErr: err, callErr: storageError("close iterator", closeErr), cleanup: true}
+		}
+	}()
+
+	if !it.Valid() {
+		if iterErr := it.Error(); iterErr != nil {
+			return Result{}, storageError("iterate", iterErr)
+		}
+		return Result{State: Absent}, nil
+	}
+
+	physical := it.Key()
+	record := it.Value()
+	if iterErr := it.Error(); iterErr != nil {
+		return Result{}, storageError("read value", iterErr)
+	}
+	return decodePointResult(logical, timestamp, physical, record, false)
+}
+
+// getAtReadCut takes over shared floor admission from GetAt and releases it
+// after pinning the cut. Its cleanup stays separate from the legacy read path.
+func (s *Store) getAtReadCut(logical []byte, timestamp uint64, lower, upper []byte) (result Result, err error) {
+	cut, captureErr := s.readCuts.AcquireMVCCReadCut()
+	s.mu.RUnlock()
+	if captureErr != nil {
+		return Result{}, &getAtError{callErr: storageError("acquire read cut", captureErr)}
+	}
+	if cut == nil {
+		return Result{}, &getAtError{callErr: storageError("acquire read cut", treedb.ErrClosed)}
+	}
+	defer func() {
+		if closeErr := cut.Close(); closeErr != nil {
+			err = &getAtError{itemErr: err, callErr: storageError("close read cut", closeErr), cleanup: true}
+		}
+	}()
+	physical, record, found, seekErr := cut.SeekGEVersionRange(lower, upper)
+	if seekErr != nil {
+		return Result{}, storageError("seek version", seekErr)
+	}
+	if !found {
+		return Result{State: Absent}, nil
+	}
+	return decodePointResult(logical, timestamp, physical, record, true)
+}
+
+// getAtError records call-wide failure provenance only on scalar error paths.
+// A cleanup failure retains the independent key/read error and produced Result.
+// GetAt still exposes both causes with the same text as errors.Join.
+type getAtError struct {
+	itemErr error
+	callErr error
+	cleanup bool // distinguishes produced outcomes from pre-read admission errors
+}
+
+func (e *getAtError) Error() string {
+	if e.itemErr == nil {
+		return e.callErr.Error()
+	}
+	return e.itemErr.Error() + "\n" + e.callErr.Error()
+}
+
+func (e *getAtError) Unwrap() []error {
+	if e.itemErr == nil {
+		return []error{e.callErr}
+	}
+	return []error{e.itemErr, e.callErr}
+}
+
+func splitGetAtError(err error) (itemErr, callErr error) {
+	// Only GetAt's outermost wrapper describes this operation. A backend cause
+	// may itself originate in another GetAt and remains this key's read error.
+	if e, ok := err.(*getAtError); ok {
+		return e.itemErr, e.callErr
+	}
+	return err, nil
+}
+
+// recordOwned is true only for successor results. Iterator records remain
+// borrowed and must be copied before the deferred iterator Close.
+func decodePointResult(logical []byte, timestamp uint64, physical, record []byte, recordOwned bool) (Result, error) {
+	decoded, version, decodeErr := mvcckey.Decode(physical)
+	if decodeErr != nil || !bytes.Equal(decoded, logical) || version > timestamp {
+		if decodeErr == nil {
+			decodeErr = errors.New("decoded key or timestamp is outside requested bound")
+		}
+		return Result{}, fmt.Errorf("%w: %w", ErrMalformedRecord, decodeErr)
+	}
+	if len(record) == 0 {
+		return Result{}, fmt.Errorf("%w: empty value envelope", ErrMalformedRecord)
+	}
+	switch record[0] {
+	case recordValueV1:
+		var value []byte
+		if len(record) > 1 {
+			value = record[1:]
+			if !recordOwned {
+				value = append([]byte(nil), value...)
+			}
+		}
+		return Result{
+			State:     Present,
+			Value:     value,
+			Timestamp: version,
+		}, nil
+	case recordTombstoneV1:
+		if len(record) != 1 {
+			return Result{}, fmt.Errorf("%w: tombstone has payload", ErrMalformedRecord)
+		}
+		return Result{State: Tombstone, Timestamp: version}, nil
+	default:
+		return Result{}, fmt.Errorf("%w: unknown envelope tag 0x%02x", ErrMalformedRecord, record[0])
+	}
+}
+
+func storageError(operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%w: %s: %w", ErrStorage, operation, err)
+}

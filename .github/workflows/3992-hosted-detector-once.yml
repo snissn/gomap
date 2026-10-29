@@ -1,0 +1,71 @@
+name: "3992: one-use hosted detector diagnostic (temporary draft PR)"
+
+on:
+  pull_request:
+    types: [opened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gomap-3992-hosted-once-20261029-v1
+  cancel-in-progress: false
+
+jobs:
+  diagnostic:
+    if: ${{ github.repository == 'snissn/gomap' && github.event_name == 'pull_request' && github.event.action == 'opened' && github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'codex/3992-hosted-detector-once-20261029' && github.actor == 'snissn' && github.run_number == '1' && github.run_attempt == '1' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      DIAGNOSTIC_OUTPUT: ${{ runner.temp }}/gomap3992-${{ github.run_id }}
+    steps:
+      - name: Checkout exact independently reviewed PR head without persisted credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Admission only; no measurements
+        run: |
+          python3 -B - <<'PY'
+          import json,os,pathlib,sys
+          sys.path.insert(0,'scripts/diagnostics/detector3992')
+          from hosted import authorize,verify_seal
+          authorize(os.environ,json.loads(pathlib.Path(os.environ['GITHUB_EVENT_PATH']).read_text()))
+          print('EXACT_HOSTED_AUTHORITY_AND_INPUT_SEAL',verify_seal())
+          PY
+      - name: Pinned historical Go driver
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version: "1.26.10"
+          cache: false
+      - name: Harmless controller contract tests
+        working-directory: scripts/diagnostics/detector3992
+        run: python3 -B -m unittest -v test_hosted test_processes
+      - name: One fixed diagnostic; no resume or automatic retry
+        run: |
+          unset GOROOT
+          export GOROOT="$(go env GOROOT)"
+          python3 -B scripts/diagnostics/detector3992/hosted.py
+      - name: Retain raw complete or incomplete evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: detector3992-${{ github.run_id }}-attempt${{ github.run_attempt }}
+          path: ${{ env.DIAGNOSTIC_OUTPUT }}
+          if-no-files-found: warn
+          retention-days: 30
+          overwrite: false
+      - name: Explicit nonacceptance disposition
+        if: ${{ always() }}
+        run: |
+          python3 -B - <<'PY'
+          import json,os,pathlib
+          p=pathlib.Path(os.environ['DIAGNOSTIC_OUTPUT'])/'terminal.json'
+          result=json.loads(p.read_text()) if p.exists() else {'status':'INCOMPLETE_NO_TERMINAL'}
+          assert result.get('product_acceptance',False) is False
+          with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as f:
+              f.write('Diagnostic only. No product acceptance or historical attribution.\n\n')
+              f.write('```json\n'+json.dumps(result,indent=2)+'\n```\n')
+          PY

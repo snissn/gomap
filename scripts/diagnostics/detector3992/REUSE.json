@@ -1,0 +1,12 @@
+{
+  "original_packet": "/home/mikers/gomap-3992-detector-resolution-v3-20261029",
+  "original_reviewed_manifest": "0170ed36fcabf3bcaa1bceff76e94f69c0041ad61d47184dd6b50c8020aa090b",
+  "exact_copied_files_except_ast_extracted_science": {
+    "diagnostic.py": "055518af48aa03e54479066723482c67a1da0c6c29519c9904adfe869f81f3df",
+    "supervisor.py": "c7e4cd2d9b11f742fb1a77327d43532c4ca0eade29e09794490d2ad20bc0609e",
+    "leader_exec.py": "7448eebd1929b4666afec6c88ebcbdd70129ae643f039ac519613dc585d191b2",
+    "detector_test.go": "a1804609952272b56e494e5f0add189be8677c370d6cce8641dccd3302ca54ed",
+    "guard_regression_test.go": "e0822e594295b1ee38754327b5fab2855ef03d0475d777174e8af539e0258473",
+    "instrumented_mvcc.go": "a0645a83645ff3d882b1a5307b7809b0bb31788d6d97a17a14b734409c31bc3c"
+  }
+}
