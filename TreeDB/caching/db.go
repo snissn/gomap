@@ -33183,8 +33183,8 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.memory.pool_pressure_critical_samples_total"] = fmt.Sprintf("%d", poolPressureCriticalSamplesTotal.Load())
 	rssBytes := db.processRSSBytes.Load()
 	rssHWMBytes := db.processRSSHWMBytes.Load()
-	stats["treedb.process.memory.rss_bytes"] = fmt.Sprintf("%d", rssBytes)
-	stats["treedb.process.memory.rss_hwm_bytes"] = fmt.Sprintf("%d", rssHWMBytes)
+	stats["treedb.process.memory.rss_bytes"] = strconv.FormatUint(rssBytes, 10)
+	stats["treedb.process.memory.rss_hwm_bytes"] = strconv.FormatUint(rssHWMBytes, 10)
 	if rssBytes > poolPressure.heapInuseBytes {
 		stats["treedb.process.memory.rss_minus_heap_inuse_bytes"] = fmt.Sprintf("%d", rssBytes-poolPressure.heapInuseBytes)
 	} else {
@@ -33195,10 +33195,10 @@ func (db *DB) Stats() map[string]string {
 	} else {
 		stats["treedb.process.memory.rss_minus_total_sys_bytes"] = "0"
 	}
-	stats["treedb.process.memory.peak_rss_bytes"] = fmt.Sprintf("%d", db.processPeakRSSBytes.Load())
-	stats["treedb.process.memory.peak_heap_alloc_bytes"] = fmt.Sprintf("%d", db.processPeakHeapAllocBytes.Load())
-	stats["treedb.process.memory.peak_heap_inuse_bytes"] = fmt.Sprintf("%d", db.processPeakHeapInuseBytes.Load())
-	stats["treedb.process.memory.peak_total_sys_bytes"] = fmt.Sprintf("%d", db.processPeakTotalSysBytes.Load())
+	stats["treedb.process.memory.peak_rss_bytes"] = strconv.FormatUint(db.processPeakRSSBytes.Load(), 10)
+	stats["treedb.process.memory.peak_heap_alloc_bytes"] = strconv.FormatUint(db.processPeakHeapAllocBytes.Load(), 10)
+	stats["treedb.process.memory.peak_heap_inuse_bytes"] = strconv.FormatUint(db.processPeakHeapInuseBytes.Load(), 10)
+	stats["treedb.process.memory.peak_total_sys_bytes"] = strconv.FormatUint(db.processPeakTotalSysBytes.Load(), 10)
 	db.domainIngressMu.Lock()
 	ingressWorkers := len(db.domainIngressCh)
 	ingressQueueSize := db.domainIngressQueueSize
