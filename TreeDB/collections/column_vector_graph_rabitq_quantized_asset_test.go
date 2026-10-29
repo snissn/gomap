@@ -520,6 +520,7 @@ func TestCollectionSearchVectorIndexWithBufferRabitQQuantized2452(t *testing.T) 
 	// need a fresh process, while both parent and child retain the cache-lifetime
 	// checks below after the measurement.
 	if !collectionsRaceEnabled && enterIsolatedVectorAllocationGate(t, "collection-buffered-rabitq-quantized") {
+		completeVectorAllocationSetup(t, d)
 		quantizedOnlyAllocs := testing.AllocsPerRun(100, func() {
 			got, err := col.SearchVectorIndexWithBuffer(quantizedOnlyOpts, &buffer)
 			if err != nil || len(got.Results) != quantizedOnlyOpts.TopK {
