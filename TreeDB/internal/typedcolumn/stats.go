@@ -389,10 +389,14 @@ func anyInt64BlockSumValid(blocks []Int64BlockStats) bool {
 }
 
 func encodeColumnPartStatsSection(stats ColumnPartStats) ([]byte, error) {
+	return encodeColumnPartStatsSectionWithCapacity(stats, 0)
+}
+
+func encodeColumnPartStatsSectionWithCapacity(stats ColumnPartStats, capacity int) ([]byte, error) {
 	if stats.Empty() {
 		return nil, nil
 	}
-	var enc columnPartImageEncoder
+	enc := columnPartImageEncoder{buf: make([]byte, 0, capacity)}
 	enc.u32(columnPartStatsSectionMagic)
 	enc.u16(columnPartStatsSectionVersion)
 	enc.u16(0)
@@ -406,7 +410,7 @@ func encodeColumnPartStatsSection(stats ColumnPartStats) ([]byte, error) {
 	enc.u32(uint32(len(names)))
 	for _, name := range names {
 		columnStats := stats.Int64[name]
-		payload, err := encodeInt64StatsPayload(columnStats)
+		payload, err := encodeInt64StatsPayloadWithCapacity(columnStats, capacity)
 		if err != nil {
 			return nil, err
 		}
@@ -729,7 +733,11 @@ func decodeStatsCompression(code uint16) (Compression, error) {
 }
 
 func encodeInt64StatsPayload(stats Int64ColumnStats) ([]byte, error) {
-	var enc columnPartImageEncoder
+	return encodeInt64StatsPayloadWithCapacity(stats, 0)
+}
+
+func encodeInt64StatsPayloadWithCapacity(stats Int64ColumnStats, capacity int) ([]byte, error) {
+	enc := columnPartImageEncoder{buf: make([]byte, 0, capacity)}
 	enc.u16(Int64StatsPayloadVersion)
 	enc.u16(0)
 	enc.i64(int64(stats.Count))

@@ -408,6 +408,13 @@ The existing collection replay handler and applied-LSN publication own this
 operation; there is no independent typed-write journal or replay watermark.
 Unsupported payload versions and schema mismatches fail before visible install.
 
+Vector-index metadata that explicitly names the retired `native_runtime`
+strategy, or omits a strategy where the persisted meaning is ambiguous, fails
+closed during open and command replay. It is not converted to `column_graph`.
+Pre-alpha data created by the retired implementation requires a fresh data
+directory and re-ingestion. New requests that omit a strategy select
+`column_graph` before metadata is persisted.
+
 Atomic typed source replacements use kind `CollectionReplaceSourceByID` with
 format 12 (`CollectionTypedSourceByIDV1`). Decode its canonical delete section
 and typed batch section, reject different collection names or legacy projection

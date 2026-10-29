@@ -6,11 +6,13 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"slices"
 	"sync"
 	"unicode/utf8"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 )
 
@@ -45,7 +47,7 @@ const (
 	deterministicTemplateV1MaxDepth       = 64
 	minDeterministicIndexDefinitionLen    = 6
 	minDeterministicVectorDefinitionLen   = 7
-	maxDeterministicCollectionMetaVersion = 6
+	maxDeterministicCollectionMetaVersion = 7
 	maxDeterministicCollectionIndexes     = 1 << 16
 	maxDeterministicUint32                = uint64(^uint32(0))
 )
@@ -1154,6 +1156,12 @@ func validateDeterministicRootStorageEnum(value uint64) error {
 	}
 }
 
+// deterministicRootStoragePolicy translates an already validated legacy enum.
+func deterministicRootStoragePolicy(value uint64) collections.RootStoragePolicy {
+	policies := [...]collections.RootStoragePolicy{collections.RootStorageDefault, collections.RootStorageFast, collections.RootStorageCompressed}
+	return policies[value]
+}
+
 func validateDeterministicIndexValueTypeEnum(value uint64) error {
 	switch value {
 	case 1, 2, 3, 4:
@@ -1183,14 +1191,20 @@ func validateDeterministicVectorIndexEncodingEnum(value uint64) error {
 
 func validateDeterministicVectorIndexStrategyEnum(value uint64) error {
 	switch value {
-	case 1, 2:
+	case 2:
 		return nil
+	case 1:
+		return protocolError(ErrUnsupportedFeature, "retired native_runtime vector strategy is unsupported")
 	default:
 		return protocolError(ErrInvalidCommand, "unsupported vector_index_strategy enum %d", value)
 	}
 }
 
 func validateDeterministicCollectionMeta(raw []byte, limits Limits) error {
+	return validateDeterministicCollectionMetaForRetiredSyntax(raw, limits, false)
+}
+
+func validateDeterministicCollectionMetaForRetiredSyntax(raw []byte, limits Limits, collect bool) error {
 	off := 0
 	version, err := readDeterministicUvarintField(raw, &off, "collection_meta.version")
 	if err != nil {
@@ -1198,6 +1212,35 @@ func validateDeterministicCollectionMeta(raw []byte, limits Limits) error {
 	}
 	if version < 1 || version > maxDeterministicCollectionMetaVersion {
 		return protocolError(ErrUnsupportedVersion, "collection_meta version %d", version)
+	}
+	if version == 7 {
+		meta, err := collections.DecodeCatalogCreateCollectionCommandWALPayload(raw[off:], true)
+		if err != nil {
+			code := ErrInvalidCommand
+			if errors.Is(err, backenddb.ErrNativeSemanticUnsupported) {
+				code = ErrUnsupportedFeature
+			}
+			return fmt.Errorf("%w: %w", protocolError(code, "collection_meta"), err)
+		}
+		if err := validateDeterministicNameValue("collection name", []byte(meta.Name), limits); err != nil {
+			return err
+		}
+		for _, def := range meta.Indexes {
+			if err := validateDeterministicNameValue("index name", []byte(def.Name), limits); err != nil {
+				return err
+			}
+		}
+		for _, def := range meta.VectorIndexes {
+			if err := validateDeterministicNameValue("index name", []byte(def.Name), limits); err != nil {
+				return err
+			}
+		}
+		for _, def := range meta.TextIndexes {
+			if err := validateDeterministicNameValue("index name", []byte(def.Name), limits); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 	nameOff := off
 	if err := readDeterministicNameField(raw, &off, "collection name", limits); err != nil {
@@ -1228,8 +1271,10 @@ func validateDeterministicCollectionMeta(raw []byte, limits Limits) error {
 	if err := validateDeterministicRootStorageEnum(indexStateStorage); err != nil {
 		return err
 	}
-	for _, field := range []string{"allow_array_values_in_index", "disable_indexed_write_memtables", "buffered_indexed_writes"} {
-		if err := readDeterministicBoolField(raw, &off, field); err != nil {
+	var flags [3]bool
+	for i, field := range []string{"allow_array_values_in_index", "disable_indexed_write_memtables", "buffered_indexed_writes"} {
+		flags[i], err = readDeterministicBoolValueField(raw, &off, field)
+		if err != nil {
 			return err
 		}
 	}
@@ -1254,8 +1299,10 @@ func validateDeterministicCollectionMeta(raw []byte, limits Limits) error {
 	if err := validateDeterministicNonNegativeIntCapacity("buffered_indexed_write_max_root_runs", maxRootRuns); err != nil {
 		return err
 	}
-	for _, field := range []string{"buffered_indexed_async_flush", "buffered_indexed_overlay_roots"} {
-		if err := readDeterministicBoolField(raw, &off, field); err != nil {
+	var asyncFlags [2]bool
+	for i, field := range []string{"buffered_indexed_async_flush", "buffered_indexed_overlay_roots"} {
+		asyncFlags[i], err = readDeterministicBoolValueField(raw, &off, field)
+		if err != nil {
 			return err
 		}
 	}
@@ -1279,10 +1326,37 @@ func validateDeterministicCollectionMeta(raw []byte, limits Limits) error {
 	if indexCount > uint64((len(raw)-off)/minDeterministicIndexDefinitionLen) {
 		return protocolError(ErrMalformedFrame, "index count %d exceeds remaining collection_meta payload", indexCount)
 	}
+	meta := collections.CollectionMeta{Name: collectionName}
+	if collect {
+		formats := [...]collections.DocumentFormat{collections.DocumentFormatDefault, collections.DocumentFormatJSON, collections.DocumentFormatBSON, collections.DocumentFormatTemplateV1}
+		meta.Options = collections.CollectionOptions{
+			DocumentFormat:                          formats[documentFormat],
+			DataRootStoragePolicy:                   deterministicRootStoragePolicy(dataRootStorage),
+			IndexStateStoragePolicy:                 deterministicRootStoragePolicy(indexStateStorage),
+			AllowArrayValuesInIndex:                 flags[0],
+			DisableIndexedWriteMemtables:            flags[1],
+			BufferedIndexedWrites:                   flags[2],
+			BufferedIndexedWriteMaxDocuments:        int(maxDocs),
+			BufferedIndexedWriteMaxBytes:            maxBytes,
+			BufferedIndexedWriteMaxRootRuns:         int(maxRootRuns),
+			BufferedIndexedAsyncFlush:               asyncFlags[0],
+			BufferedIndexedOverlayRoots:             asyncFlags[1],
+			BufferedIndexedAsyncFlushMaxQueuedUnits: int(maxQueued),
+		}
+	}
+	retiredStrategy := false
 	for i := uint64(0); i < indexCount; i++ {
-		next, err := validateDeterministicIndexDefinitionAt(raw, off, false, limits)
+		var def collections.IndexDefinition
+		var out *collections.IndexDefinition
+		if collect {
+			out = &def
+		}
+		next, err := validateDeterministicIndexDefinitionAt(raw, off, false, limits, out)
 		if err != nil {
 			return err
+		}
+		if collect {
+			meta.Indexes = append(meta.Indexes, def)
 		}
 		off = next
 	}
@@ -1297,13 +1371,24 @@ func validateDeterministicCollectionMeta(raw []byte, limits Limits) error {
 		if vectorIndexCount > maxDeterministicCollectionIndexes {
 			return protocolError(ErrResourceExhausted, "vector index count %d exceeds limit %d", vectorIndexCount, maxDeterministicCollectionIndexes)
 		}
+		if version == 2 && vectorIndexCount != 0 {
+			return protocolError(ErrUnsupportedVersion, "vector-bearing collection_meta version 2 has no strategy identity")
+		}
 		if vectorIndexCount > uint64((len(raw)-off)/minDeterministicVectorDefinitionLen) {
 			return protocolError(ErrMalformedFrame, "vector index count %d exceeds remaining collection_meta payload", vectorIndexCount)
 		}
 		for i := uint64(0); i < vectorIndexCount; i++ {
-			next, err := validateDeterministicVectorIndexDefinitionAt(raw, off, version)
+			var def collections.VectorIndexDefinition
+			var out *collections.VectorIndexDefinition
+			if collect {
+				out = &def
+			}
+			next, err := validateDeterministicVectorIndexDefinitionAt(raw, off, version, out, &retiredStrategy)
 			if err != nil {
 				return err
+			}
+			if collect {
+				meta.VectorIndexes = append(meta.VectorIndexes, def)
 			}
 			off = next
 		}
@@ -1313,12 +1398,28 @@ func validateDeterministicCollectionMeta(raw []byte, limits Limits) error {
 		if err != nil {
 			return err
 		}
-		if _, err := collections.DecodeColumnStoreWireConfigV1(collectionName, []byte(schema), true); err != nil {
+		meta.Options.ColumnStore, err = collections.DecodeColumnStoreWireConfigV1(collectionName, []byte(schema), true)
+		if err != nil {
 			return protocolError(ErrInvalidCommand, "column_store: %v", err)
 		}
 	}
 	if off != len(raw) {
 		return protocolError(ErrMalformedFrame, "collection_meta has %d trailing bytes", len(raw)-off)
+	}
+	if retiredStrategy {
+		// Modern requests keep the original structural validation path without
+		// constructing declaration slices. Collect a complete private declaration
+		// only when a retired tag requires syntax checks before capability refusal.
+		if !collect {
+			return validateDeterministicCollectionMetaForRetiredSyntax(raw, limits, true)
+		}
+		if _, err := collections.NormalizeCollectionMetaV1(meta); err != nil {
+			code := ErrInvalidCommand
+			if errors.Is(err, backenddb.ErrNativeSemanticUnsupported) {
+				code = ErrUnsupportedFeature
+			}
+			return fmt.Errorf("%w: %w", protocolError(code, "collection_meta"), err)
+		}
 	}
 	return nil
 }
@@ -1341,7 +1442,7 @@ func validateDeterministicNonNegativeIntCapacity(field string, value int64) erro
 }
 
 func validateDeterministicIndexDefinition(raw []byte, withVersion bool, limits Limits) error {
-	off, err := validateDeterministicIndexDefinitionAt(raw, 0, withVersion, limits)
+	off, err := validateDeterministicIndexDefinitionAt(raw, 0, withVersion, limits, nil)
 	if err != nil {
 		return err
 	}
@@ -1351,7 +1452,7 @@ func validateDeterministicIndexDefinition(raw []byte, withVersion bool, limits L
 	return nil
 }
 
-func validateDeterministicIndexDefinitionAt(raw []byte, off int, withVersion bool, limits Limits) (int, error) {
+func validateDeterministicIndexDefinitionAt(raw []byte, off int, withVersion bool, limits Limits, out *collections.IndexDefinition) (int, error) {
 	if withVersion {
 		version, err := readDeterministicUvarintField(raw, &off, "index_definition.version")
 		if err != nil {
@@ -1361,6 +1462,7 @@ func validateDeterministicIndexDefinitionAt(raw []byte, off int, withVersion boo
 			return 0, protocolError(ErrUnsupportedVersion, "index_definition version %d", version)
 		}
 	}
+	nameOff := off
 	if err := readDeterministicNameField(raw, &off, "index name", limits); err != nil {
 		return 0, err
 	}
@@ -1378,10 +1480,12 @@ func validateDeterministicIndexDefinitionAt(raw []byte, off int, withVersion boo
 	if err := validateDeterministicIndexValueTypeEnum(valueType); err != nil {
 		return 0, err
 	}
-	if err := readDeterministicBoolField(raw, &off, "unique"); err != nil {
+	unique, err := readDeterministicBoolValueField(raw, &off, "unique")
+	if err != nil {
 		return 0, err
 	}
-	if err := readDeterministicBoolField(raw, &off, "multi_key"); err != nil {
+	multiKey, err := readDeterministicBoolValueField(raw, &off, "multi_key")
+	if err != nil {
 		return 0, err
 	}
 	storagePolicy, err := readDeterministicUvarintField(raw, &off, "index storage policy")
@@ -1391,14 +1495,24 @@ func validateDeterministicIndexDefinitionAt(raw []byte, off int, withVersion boo
 	if err := validateDeterministicRootStorageEnum(storagePolicy); err != nil {
 		return 0, err
 	}
+	if out != nil {
+		name, _ := readDeterministicStringField(raw, &nameOff, "index name")
+		valueTypes := [...]collections.IndexValueType{"", collections.IndexValueString, collections.IndexValueBool, collections.IndexValueInt64, collections.IndexValueDouble}
+		*out = collections.IndexDefinition{
+			Name: name, Field: field, ValueType: valueTypes[valueType],
+			Unique: unique, MultiKey: multiKey, StoragePolicy: deterministicRootStoragePolicy(storagePolicy),
+		}
+	}
 	return off, nil
 }
 
-func validateDeterministicVectorIndexDefinitionAt(raw []byte, off int, version uint64) (int, error) {
-	if _, err := readDeterministicStringField(raw, &off, "vector index name"); err != nil {
+func validateDeterministicVectorIndexDefinitionAt(raw []byte, off int, version uint64, def *collections.VectorIndexDefinition, retired *bool) (int, error) {
+	name, err := readDeterministicStringField(raw, &off, "vector index name")
+	if err != nil {
 		return 0, err
 	}
-	if _, err := readDeterministicStringField(raw, &off, "vector index field"); err != nil {
+	field, err := readDeterministicStringField(raw, &off, "vector index field")
+	if err != nil {
 		return 0, err
 	}
 	metric, err := readDeterministicUvarintField(raw, &off, "vector index metric")
@@ -1408,7 +1522,8 @@ func validateDeterministicVectorIndexDefinitionAt(raw []byte, off int, version u
 	if err := validateDeterministicVectorMetricEnum(metric); err != nil {
 		return 0, err
 	}
-	for _, field := range []string{"vector index dimensions", "vector index m", "vector index ef_construction", "vector index ef_search"} {
+	var values [4]int
+	for i, field := range []string{"vector index dimensions", "vector index m", "vector index ef_construction", "vector index ef_search"} {
 		value, err := readDeterministicVarintField(raw, &off, field)
 		if err != nil {
 			return 0, err
@@ -1416,6 +1531,7 @@ func validateDeterministicVectorIndexDefinitionAt(raw []byte, off int, version u
 		if err := validateDeterministicNonNegativeIntCapacity(field, value); err != nil {
 			return 0, err
 		}
+		values[i] = int(value)
 	}
 	encoding, err := readDeterministicUvarintField(raw, &off, "vector index encoding")
 	if err != nil {
@@ -1424,6 +1540,14 @@ func validateDeterministicVectorIndexDefinitionAt(raw []byte, off int, version u
 	if err := validateDeterministicVectorIndexEncodingEnum(encoding); err != nil {
 		return 0, err
 	}
+	if def != nil {
+		metrics := [...]collections.VectorMetric{0, collections.VectorMetricCosine, collections.VectorMetricL2, collections.VectorMetricInnerProduct}
+		encodings := [...]collections.VectorIndexEncoding{0, collections.VectorIndexEncodingFloat32, collections.VectorIndexEncodingInt8}
+		*def = collections.VectorIndexDefinition{
+			Name: name, Field: field, Metric: metrics[metric], Encoding: encodings[encoding],
+			Dimensions: values[0], M: values[1], EfConstruction: values[2], EfSearch: values[3],
+		}
+	}
 	if version < 3 {
 		return off, nil
 	}
@@ -1431,8 +1555,20 @@ func validateDeterministicVectorIndexDefinitionAt(raw []byte, off int, version u
 	if err != nil {
 		return 0, err
 	}
-	if err := validateDeterministicVectorIndexStrategyEnum(strategy); err != nil {
-		return 0, err
+	// Tag 1 is a recognized but retired spelling. Retain it until the full
+	// collection declaration has passed syntax validation.
+	if strategy == 1 {
+		*retired = true
+		if def != nil {
+			def.Strategy = "native_runtime"
+		}
+	} else {
+		if err := validateDeterministicVectorIndexStrategyEnum(strategy); err != nil {
+			return 0, err
+		}
+		if def != nil {
+			def.Strategy = collections.VectorIndexStrategyColumnGraph
+		}
 	}
 	quantizedCount, err := readDeterministicUvarintField(raw, &off, "quantized_index_count")
 	if err != nil {
@@ -1445,16 +1581,24 @@ func validateDeterministicVectorIndexDefinitionAt(raw []byte, off int, version u
 		return 0, protocolError(ErrResourceExhausted, "quantized vector index count %d exceeds limit %d", quantizedCount, maxDeterministicCollectionIndexes)
 	}
 	for i := uint64(0); i < quantizedCount; i++ {
-		next, err := validateDeterministicQuantizedVectorIndexDefinitionAt(raw, off, version, i)
+		var q collections.QuantizedVectorIndexDefinition
+		var out *collections.QuantizedVectorIndexDefinition
+		if def != nil {
+			out = &q
+		}
+		next, err := validateDeterministicQuantizedVectorIndexDefinitionAt(raw, off, version, i, out)
 		if err != nil {
 			return 0, err
+		}
+		if def != nil {
+			def.QuantizedIndexes = append(def.QuantizedIndexes, q)
 		}
 		off = next
 	}
 	return off, nil
 }
 
-func validateDeterministicQuantizedVectorIndexDefinitionAt(raw []byte, off int, version uint64, index uint64) (int, error) {
+func validateDeterministicQuantizedVectorIndexDefinitionAt(raw []byte, off int, version uint64, index uint64, out *collections.QuantizedVectorIndexDefinition) (int, error) {
 	name, err := readDeterministicStringField(raw, &off, "quantized index name")
 	if err != nil {
 		return 0, err
@@ -1514,6 +1658,9 @@ func validateDeterministicQuantizedVectorIndexDefinitionAt(raw []byte, off int, 
 		if _, err := collections.NormalizeScalarU8CalibrationConfig("", int(index), q); err != nil {
 			return 0, protocolError(ErrInvalidCommand, "%v", err)
 		}
+	}
+	if out != nil {
+		*out = q
 	}
 	return off, nil
 }

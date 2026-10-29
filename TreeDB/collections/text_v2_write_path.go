@@ -1,7 +1,9 @@
 package collections
 
 import (
+	"hash/maphash"
 	"sort"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
@@ -26,7 +28,8 @@ func textV2ScoringAnalysisDefinition(def TextIndexDefinition) TextIndexDefinitio
 
 type textV2PostingBatchBuilder struct {
 	fieldCount uint32
-	byTerm     map[string][]textV2PostingBlockEntry
+	byTerm     textValues[[]textV2PostingBlockEntry]
+	admit      func(uint64) error
 }
 
 type textV2DocumentPostingTerm struct {
@@ -36,10 +39,12 @@ type textV2DocumentPostingTerm struct {
 }
 
 type textV2DocumentPostingAccumulator struct {
-	fieldCount int
-	inline     [textV2DocumentPostingInlineTerms]textV2DocumentPostingTerm
-	terms      []textV2DocumentPostingTerm
-	lookup     map[string]int
+	fieldCount   int
+	inline       [textV2DocumentPostingInlineTerms]textV2DocumentPostingTerm
+	terms        []textV2DocumentPostingTerm
+	lookup       map[string]int
+	nativeLookup *localIDIndex
+	admit        func(uint64) error
 }
 
 func newTextV2DocumentPostingAccumulator(fieldCount int) textV2DocumentPostingAccumulator {
@@ -56,7 +61,11 @@ func (a *textV2DocumentPostingAccumulator) add(term string, fieldIndex int, freq
 		return errMalformedTextStorage("text-v2 posting accumulator field index %d outside field count %d", fieldIndex, a.fieldCount)
 	}
 	idx := -1
-	if a.lookup != nil {
+	if a.nativeLookup != nil {
+		if found, ok := a.nativeLookup.lookup(term); ok {
+			idx = found
+		}
+	} else if a.lookup != nil {
 		if found, ok := a.lookup[term]; ok {
 			idx = found
 		}
@@ -68,7 +77,44 @@ func (a *textV2DocumentPostingAccumulator) add(term string, fieldIndex int, freq
 			}
 		}
 	}
-	if idx < 0 {
+	if idx < 0 && a.admit != nil {
+		capacity, err := textTermGrowthCapacity(len(a.terms), cap(a.terms))
+		if err != nil {
+			return err
+		}
+		var charge nativeTextAdmissionSum
+		if capacity != cap(a.terms) {
+			charge.array(uint64(capacity), uint64(unsafe.Sizeof(textV2DocumentPostingTerm{})))
+		}
+		charge.array(uint64(a.fieldCount), uint64(unsafe.Sizeof(uint32(0))))
+		if charge.bad {
+			return memtable.ErrCOWCapacity
+		}
+		if a.nativeLookup == nil {
+			initial, err := localIDIndexCharge(len(a.terms) + 1)
+			if err != nil || initial > ^uint64(0)-charge.total {
+				return memtable.ErrCOWCapacity
+			}
+			if err = a.admit(initial + charge.total); err != nil {
+				return err
+			}
+			count, _ := localIDCapacity(len(a.terms) + 1)
+			a.nativeLookup = &localIDIndex{cells: make([]localIDCell, count), admit: a.admit, seed: maphash.MakeSeed()}
+			for i := range a.terms {
+				a.nativeLookup.insert(a.terms[i].Term, i)
+			}
+		} else if err = a.nativeLookup.prepare(charge.total); err != nil {
+			return err
+		}
+		if capacity != cap(a.terms) {
+			next := make([]textV2DocumentPostingTerm, len(a.terms), capacity)
+			copy(next, a.terms)
+			a.terms = next
+		}
+		idx = len(a.terms)
+		a.terms = append(a.terms, textV2DocumentPostingTerm{Term: term, FieldFrequencies: make([]uint32, a.fieldCount)})
+		a.nativeLookup.insert(term, idx)
+	} else if idx < 0 {
 		idx = len(a.terms)
 		a.terms = append(a.terms, textV2DocumentPostingTerm{Term: term, FieldFrequencies: make([]uint32, a.fieldCount)})
 		if a.lookup != nil {
@@ -105,8 +151,7 @@ func (b *textV2PostingBatchBuilder) addDocument(def TextIndexDefinition, ordinal
 			}
 		}
 	}
-	b.finishDocument(ordinal, generation, acc)
-	return nil
+	return b.finishDocument(ordinal, generation, acc)
 }
 
 func (b *textV2PostingBatchBuilder) addDocumentState(def TextIndexDefinition, ordinal, generation uint64, state textDocumentStateValue) error {
@@ -125,8 +170,7 @@ func (b *textV2PostingBatchBuilder) addDocumentState(def TextIndexDefinition, or
 			}
 		}
 	}
-	b.finishDocument(ordinal, generation, acc)
-	return nil
+	return b.finishDocument(ordinal, generation, acc)
 }
 
 func (b *textV2PostingBatchBuilder) beginDocument(def TextIndexDefinition, ordinal, generation uint64) (textV2DocumentPostingAccumulator, error) {
@@ -142,13 +186,13 @@ func (b *textV2PostingBatchBuilder) beginDocument(def TextIndexDefinition, ordin
 	} else if b.fieldCount != uint32(fieldCount) {
 		return textV2DocumentPostingAccumulator{}, errMalformedTextStorage("text-v2 posting batch field count changed from %d to %d", b.fieldCount, fieldCount)
 	}
-	if b.byTerm == nil {
-		b.byTerm = make(map[string][]textV2PostingBlockEntry)
-	}
-	return newTextV2DocumentPostingAccumulator(fieldCount), nil
+	b.byTerm.admit = b.admit
+	acc := newTextV2DocumentPostingAccumulator(fieldCount)
+	acc.admit = b.admit
+	return acc, nil
 }
 
-func (b *textV2PostingBatchBuilder) finishDocument(ordinal, generation uint64, acc textV2DocumentPostingAccumulator) {
+func (b *textV2PostingBatchBuilder) finishDocument(ordinal, generation uint64, acc textV2DocumentPostingAccumulator) error {
 	for _, term := range acc.terms {
 		if term.TermFrequency == 0 {
 			continue
@@ -159,30 +203,37 @@ func (b *textV2PostingBatchBuilder) finishDocument(ordinal, generation uint64, a
 			TermFrequency:    term.TermFrequency,
 			FieldFrequencies: term.FieldFrequencies,
 		}
-		b.byTerm[term.Term] = append(b.byTerm[term.Term], entry)
+		entries, err := appendTextConstructor(b.byTerm.get(term.Term), entry, b.admit)
+		if err != nil {
+			return err
+		}
+		if err = b.byTerm.set(term.Term, entries); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 func (b *textV2PostingBatchBuilder) empty() bool {
-	return b == nil || len(b.byTerm) == 0
+	return b == nil || b.byTerm.len() == 0
 }
 
-func buildTextV2PostingBatchTable(table memtable.Table, builder *textV2PostingBatchBuilder, kind textV2PostingBlockKind, targetPostings uint32, blockIDStart uint64) (int, uint64, map[string]uint64, error) {
-	if table == nil || builder == nil || len(builder.byTerm) == 0 {
-		return 0, 0, nil, nil
+func buildTextV2PostingBatchTable(table memtable.Table, builder *textV2PostingBatchBuilder, kind textV2PostingBlockKind, targetPostings uint32, blockIDStart uint64) (int, uint64, textValues[uint64], error) {
+	if table == nil || builder == nil || builder.byTerm.len() == 0 {
+		return 0, 0, textValues[uint64]{}, nil
 	}
-	terms := make([]string, 0, len(builder.byTerm))
-	for term := range builder.byTerm {
-		terms = append(terms, term)
+	terms, err := builder.byTerm.keys()
+	if err != nil {
+		return 0, 0, textValues[uint64]{}, err
 	}
 	sort.Strings(terms)
-	blockCounts := make(map[string]uint64, len(terms))
+	blockCounts := textValues[uint64]{admit: builder.admit}
 	var blocksWritten int
 	var bytesWritten uint64
 	for _, term := range terms {
-		blocks, err := buildTextV2PostingBlockKVs(term, builder.byTerm[term], builder.fieldCount, textV2PostingBlockBuildOptions{Kind: kind, TargetPostings: targetPostings, BlockIDStart: blockIDStart, FixedBlockID: kind == textV2PostingBlockKindMicro})
+		blocks, err := buildTextV2PostingBlockKVs(term, builder.byTerm.get(term), builder.fieldCount, textV2PostingBlockBuildOptions{Kind: kind, TargetPostings: targetPostings, BlockIDStart: blockIDStart, FixedBlockID: kind == textV2PostingBlockKindMicro})
 		if err != nil {
-			return 0, 0, nil, err
+			return 0, 0, textValues[uint64]{}, err
 		}
 		for _, kv := range blocks {
 			table.SetSteal(kv.Key, kv.Value)
@@ -190,7 +241,9 @@ func buildTextV2PostingBatchTable(table memtable.Table, builder *textV2PostingBa
 			bytesWritten += uint64(len(kv.Key) + len(kv.Value))
 		}
 		if len(blocks) > 0 {
-			blockCounts[term] = uint64(len(blocks))
+			if err := blockCounts.set(term, uint64(len(blocks))); err != nil {
+				return 0, 0, textValues[uint64]{}, err
+			}
 		}
 	}
 	return blocksWritten, bytesWritten, blockCounts, nil

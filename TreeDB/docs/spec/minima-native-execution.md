@@ -3,8 +3,9 @@
 Status: implementation contract frozen by #4615 against
 `c2781c147afe824620d0f3fe662bdaa9e5e81bf9`. This is **not** a claim that mutable
 Minima is already supported by `column_graph`. The feature gates below must
-land before the new route can qualify. The existing public `native_runtime`
-strategy is unchanged here; its documentation-only deprecation is #4621.
+land before the new route can qualify. The historical `native_runtime` strategy
+described in older evidence has since been retired and is rejected; it is not a
+serving or compatibility path.
 
 The target `cosine_normalized_f32_v1` successor is normative in
 [`cosine-normalized-f32-v1.md`](cosine-normalized-f32-v1.md). It requires one

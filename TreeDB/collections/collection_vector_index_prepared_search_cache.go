@@ -7,6 +7,7 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/quantizedasset"
 )
 
@@ -25,18 +26,29 @@ type collectionVectorIndexPreparedSearchCacheSlot struct {
 	maxDecodedBlocks   int
 }
 
+// Native identity belongs to the complete logical cut, independently of its
+// physical checkpoint. Legacy cache entries retain their original disk fence.
+type nativeColumnGraphPreparedIdentity struct {
+	native                                                              bool
+	incarnation, documentGeneration, logicalSequence                    uint64
+	manifestRoot, manifestVersion, manifestGeneration, manifestChecksum uint64
+}
+
 type collectionVectorIndexPreparedSearchCacheEntry struct {
-	ready      chan struct{}
-	building   bool
-	commitSeq  uint64
-	systemRoot uint64
-	prepared   *collectionVectorIndexPreparedSearch
-	response   VectorIndexSearchResponse
-	err        error
+	nativeIdentity nativeColumnGraphPreparedIdentity
+	ready          chan struct{}
+	building       bool
+	commitSeq      uint64
+	systemRoot     uint64
+	prepared       *collectionVectorIndexPreparedSearch
+	response       VectorIndexSearchResponse
+	err            error
 }
 
 type collectionVectorIndexPreparedSearch struct {
-	mu sync.RWMutex
+	nativeIdentity nativeColumnGraphPreparedIdentity
+	nativeLease    *memtable.COWExternalLease
+	mu             sync.RWMutex
 
 	key                string
 	family             collectionVectorIndexPreparedSearchFamily
@@ -135,6 +147,9 @@ func (c *Collection) WarmVectorIndexPreparedSearch(opts VectorIndexSearchOptions
 	if c == nil {
 		return response, errCollectionNil
 	}
+	if c.nativeJSON != nil {
+		return c.warmNativeColumnGraphPreparedSearch(opts)
+	}
 	if c.db == nil {
 		return response, errCollectionDBNil
 	}
@@ -199,6 +214,15 @@ func (c *Collection) acquireCollectionVectorIndexPreparedSearchSlot(opts VectorI
 		return nil, response, acquireStats, backenddb.ErrClosed
 	}
 
+	return c.acquireCollectionVectorIndexPreparedSearchAtIdentity(opts, slot, build, c.db, commitSeq, systemRoot, nativeColumnGraphPreparedIdentity{})
+}
+
+func (c *Collection) acquireCollectionVectorIndexPreparedSearchAtIdentity(opts VectorIndexSearchOptions, slot collectionVectorIndexPreparedSearchCacheSlot, build func() (*collectionVectorIndexPreparedSearch, VectorIndexSearchResponse, error), database *backenddb.DB, commitSeq, systemRoot uint64, identity nativeColumnGraphPreparedIdentity) (*collectionVectorIndexPreparedSearch, VectorIndexSearchResponse, collectionVectorIndexPreparedSearchAcquireStats, error) {
+	var response VectorIndexSearchResponse
+	var acquireStats collectionVectorIndexPreparedSearchAcquireStats
+	if database == nil || database.IsClosing() || (c.manager != nil && c.manager.isClosing()) {
+		return nil, response, acquireStats, backenddb.ErrClosed
+	}
 	for {
 		if opts.Context != nil {
 			if err := opts.Context.Err(); err != nil {
@@ -225,13 +249,15 @@ func (c *Collection) acquireCollectionVectorIndexPreparedSearchSlot(opts VectorI
 					return nil, response, acquireStats, opts.Context.Err()
 				}
 			}
-			commitSeq, systemRoot = dbCommitSeqAndSystemRoot(c.db)
-			if commitSeq == 0 || systemRoot == 0 || c.db.IsClosing() {
+			if !identity.native {
+				commitSeq, systemRoot = dbCommitSeqAndSystemRoot(database)
+			}
+			if (!identity.native && (commitSeq == 0 || systemRoot == 0)) || database.IsClosing() {
 				return nil, response, acquireStats, backenddb.ErrClosed
 			}
 			continue
 		}
-		if entry != nil && entry.commitSeq == commitSeq && entry.systemRoot == systemRoot {
+		if entry != nil && entry.nativeIdentity == identity && (identity.native || (entry.commitSeq == commitSeq && entry.systemRoot == systemRoot)) {
 			if entry.err != nil {
 				delete(c.vectorBufferedSearch, slot)
 				c.vectorBufferedSearchErrors++
@@ -256,10 +282,11 @@ func (c *Collection) acquireCollectionVectorIndexPreparedSearchSlot(opts VectorI
 			c.vectorBufferedSearchInvalidations++
 		}
 		entry = &collectionVectorIndexPreparedSearchCacheEntry{
-			ready:      make(chan struct{}),
-			building:   true,
-			commitSeq:  commitSeq,
-			systemRoot: systemRoot,
+			nativeIdentity: identity,
+			ready:          make(chan struct{}),
+			building:       true,
+			commitSeq:      commitSeq,
+			systemRoot:     systemRoot,
 		}
 		c.vectorBufferedSearch[slot] = entry
 		c.vectorBufferedSearchMisses++
@@ -293,6 +320,7 @@ func (c *Collection) acquireCollectionVectorIndexPreparedSearchSlot(opts VectorI
 		if prepared != nil {
 			entry.commitSeq = prepared.commitSeq
 			entry.systemRoot = prepared.systemRoot
+			entry.nativeIdentity = prepared.nativeIdentity
 		}
 		entry.response = buildResponse
 		entry.err = buildErr
@@ -302,7 +330,7 @@ func (c *Collection) acquireCollectionVectorIndexPreparedSearchSlot(opts VectorI
 		}
 		stored := false
 		c.vectorBufferedSearchMu.Lock()
-		closing := buildErr == nil && ((c.manager != nil && c.manager.isClosing()) || c.db == nil || c.db.IsClosing())
+		closing := buildErr == nil && ((c.manager != nil && c.manager.isClosing()) || database.IsClosing())
 		if closing {
 			buildErr = backenddb.ErrClosed
 		}
@@ -388,9 +416,6 @@ func (c *Collection) openCollectionVectorIndexPreparedExactSearch(opts VectorInd
 	response.IndexName = def.Name
 	response.Strategy = def.Strategy
 	switch def.Strategy {
-	case VectorIndexStrategyNativeRuntime:
-		response.Status = VectorIndexStatus{Name: def.Name, Strategy: def.Strategy, State: VectorIndexStateNativeRuntime, Reason: VectorIndexReasonNativeRuntime}
-		return nil, response, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer requires an explicit column_graph index; native_runtime cannot serve the no-document hnsw_search_pack_v1 route", ErrVectorIndexSearchUnavailable, def.Name)
 	case VectorIndexStrategyColumnGraph:
 	default:
 		response.Status = VectorIndexStatus{Name: def.Name, Strategy: def.Strategy, State: VectorIndexStateColumnGraphUnavailable, Reason: VectorIndexReasonUnsupportedStrategy}
@@ -415,9 +440,22 @@ func (c *Collection) openCollectionVectorIndexPreparedExactSearch(opts VectorInd
 		return nil, response, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer requires loaded column_graph state: state=%s reason=%s", ErrVectorIndexSearchUnavailable, def.Name, status.State, status.Reason)
 	}
 	def = readerDef
+	return c.openCollectionVectorIndexPreparedExactSearchAtView(opts, def, graph, view, snapshotCommitSeq(snap), snapshotSystemRoot(snap))
+}
+
+func (c *Collection) openCollectionVectorIndexPreparedExactSearchAtView(opts VectorIndexSearchOptions, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, view columnPhysicalScanSnapshotView, commitSeq, systemRoot uint64) (*collectionVectorIndexPreparedSearch, VectorIndexSearchResponse, error) {
+	key, response, err := c.validateCollectionVectorIndexPreparedExactSearchView(opts, def, graph, view, commitSeq, systemRoot)
+	if err != nil {
+		return nil, response, err
+	}
+	return c.openCollectionVectorIndexPreparedExactSearchPack(def, graph, view, commitSeq, systemRoot, key, response)
+}
+
+func (c *Collection) validateCollectionVectorIndexPreparedExactSearchView(opts VectorIndexSearchOptions, def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, view columnPhysicalScanSnapshotView, commitSeq, systemRoot uint64) (string, VectorIndexSearchResponse, error) {
+	response := VectorIndexSearchResponse{IndexName: def.Name, Strategy: def.Strategy}
 	readerCatalog := view.Catalog
 	if readerCatalog == nil || readerCatalog.meta.Options.ColumnStore == nil {
-		return nil, response, errors.New("collections: column_graph prepared collection search missing snapshot catalog")
+		return "", response, errors.New("collections: column_graph prepared collection search missing snapshot catalog")
 	}
 	response.IndexName = def.Name
 	response.Strategy = def.Strategy
@@ -426,16 +464,20 @@ func (c *Collection) openCollectionVectorIndexPreparedExactSearch(opts VectorInd
 
 	key, err := collectionVectorIndexPreparedSearchCacheKey(readerCatalog.meta.Name, view.AssetNamespace, def, graph, view.VectorIndexState)
 	if err != nil {
-		return nil, response, err
+		return "", response, err
 	}
-	key = collectionVectorIndexPreparedSearchSnapshotCacheKey(key, snapshotCommitSeq(snap), snapshotSystemRoot(snap))
+	key = collectionVectorIndexPreparedSearchSnapshotCacheKey(key, commitSeq, systemRoot)
 	if !columnVectorGraphDocumentIDProviderPresent(view.VectorIndexState) {
-		return nil, response, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer requires vector-index document-id state for no-document result IDs; rebuild the vector index", ErrVectorIndexSearchUnavailable, def.Name)
+		return "", response, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer requires vector-index document-id state for no-document result IDs; rebuild the vector index", ErrVectorIndexSearchUnavailable, def.Name)
 	}
 	if err := validateColumnVectorGraphDocumentIDStateAssetPayload(c.db.ColumnAssetRootDir(), readerCatalog.meta.Name, *readerCatalog.meta.Options.ColumnStore, def, graph, view.VectorIndexState); err != nil {
-		return nil, response, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer requires valid vector-index document-id state for no-document result IDs; rebuild the vector index", ErrVectorIndexSearchUnavailable, def.Name)
+		return "", response, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer requires valid vector-index document-id state for no-document result IDs; rebuild the vector index", ErrVectorIndexSearchUnavailable, def.Name)
 	}
-	pack, packStatus, packOpenNanos, packErr := c.openColumnHNSWSearchPackPreparedViewForReader(readerCatalog.meta.Name, *readerCatalog.meta.Options.ColumnStore, def, graph, view.VectorIndexState)
+	return key, response, nil
+}
+
+func (c *Collection) openCollectionVectorIndexPreparedExactSearchPack(def VectorIndexDefinition, graph columnVectorGraphManifestSnapshot, view columnPhysicalScanSnapshotView, commitSeq, systemRoot uint64, key string, response VectorIndexSearchResponse) (*collectionVectorIndexPreparedSearch, VectorIndexSearchResponse, error) {
+	pack, packStatus, packOpenNanos, packErr := c.openColumnHNSWSearchPackPreparedViewForReader(view.Catalog.meta.Name, *view.Catalog.meta.Options.ColumnStore, def, graph, view.VectorIndexState)
 	if packErr != nil {
 		response.Stats = VectorIndexSearchStats{}
 		vectorIndexSearchRouteStatsForHNSWSearchPackFastStatus(vectorIndexSearchRouteStats{}, columnHNSWSearchPackPreparedStatusInvalid).apply(&response.Stats)
@@ -456,8 +498,8 @@ func (c *Collection) openCollectionVectorIndexPreparedExactSearch(opts VectorInd
 		collection: c,
 		indexName:  def.Name,
 		dimensions: def.Dimensions,
-		commitSeq:  snapshotCommitSeq(snap),
-		systemRoot: snapshotSystemRoot(snap),
+		commitSeq:  commitSeq,
+		systemRoot: systemRoot,
 		response:   response,
 		pack:       pack,
 		packStatus: packStatus,
@@ -508,9 +550,6 @@ func (c *Collection) openCollectionVectorIndexPreparedQuantizedSearch(opts Vecto
 	response.IndexName = def.Name
 	response.Strategy = def.Strategy
 	switch def.Strategy {
-	case VectorIndexStrategyNativeRuntime:
-		response.Status = VectorIndexStatus{Name: def.Name, Strategy: def.Strategy, State: VectorIndexStateNativeRuntime, Reason: VectorIndexReasonNativeRuntime}
-		return nil, response, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer quantized mode requires an explicit column_graph index; native_runtime cannot serve the no-document quantized route", ErrVectorIndexSearchUnavailable, def.Name)
 	case VectorIndexStrategyColumnGraph:
 	default:
 		response.Status = VectorIndexStatus{Name: def.Name, Strategy: def.Strategy, State: VectorIndexStateColumnGraphUnavailable, Reason: VectorIndexReasonUnsupportedStrategy}
@@ -766,6 +805,8 @@ func (p *collectionVectorIndexPreparedSearch) responseForSearch() VectorIndexSea
 	if p == nil {
 		return VectorIndexSearchResponse{}
 	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	response := p.response
 	response.Stats = VectorIndexSearchStats{}
 	response.Results = nil
@@ -778,7 +819,7 @@ func (p *collectionVectorIndexPreparedSearch) SearchOwnedNoDocuments(opts Vector
 		return response, errors.New("collections: nil collection vector index prepared search")
 	}
 	endForegroundRead := noCollectionForegroundReadEnd
-	if p.collection != nil {
+	if p.collection != nil && p.collection.db != nil {
 		endForegroundRead = p.collection.db.BeginForegroundRead()
 	}
 	defer endForegroundRead()
@@ -830,7 +871,7 @@ func (p *collectionVectorIndexPreparedSearch) SearchWithBuffer(opts VectorIndexS
 		return response, errors.New("collections: nil collection vector index prepared search")
 	}
 	endForegroundRead := noCollectionForegroundReadEnd
-	if p.collection != nil {
+	if p.collection != nil && p.collection.db != nil {
 		endForegroundRead = p.collection.db.BeginForegroundRead()
 	}
 	defer endForegroundRead()
@@ -883,7 +924,7 @@ func (p *collectionVectorIndexPreparedSearch) SearchQuantizedWithBuffer(opts Vec
 	}
 	response := p.responseForSearch()
 	endForegroundRead := noCollectionForegroundReadEnd
-	if p.collection != nil {
+	if p.collection != nil && p.collection.db != nil {
 		endForegroundRead = p.collection.db.BeginForegroundRead()
 	}
 	defer endForegroundRead()
@@ -1086,6 +1127,15 @@ func (p *collectionVectorIndexPreparedSearch) Close() error {
 	if p.searcher != nil {
 		err = errors.Join(err, p.searcher.Close())
 		p.searcher = nil
+	}
+	if p.nativeLease != nil {
+		// All pack handles and derived views have ended before the original receipt.
+		lease := p.nativeLease
+		p.nativeLease = nil
+		p.response = VectorIndexSearchResponse{}
+		p.key = ""
+		p.indexName = ""
+		lease.Close()
 	}
 	return err
 }

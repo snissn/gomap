@@ -34,7 +34,7 @@ func TestColumnGraphRebuildConstructionMatrixLifecycle4438(t *testing.T) {
 		t.Fatalf("baseline adjacency: %v", err)
 	}
 	bound := false
-	restore := setColumnVectorGraphConstructionMatrixBoundTestHook(func(index *VectorIndex) {
+	restore := setColumnVectorGraphConstructionMatrixBoundTestHook(func(index *columnGraphHNSWBuilder) {
 		bound = true
 		if matches, err := filepath.Glob(filepath.Join(d.ColumnAssetRootDir(), columnVectorGraphConstructionMatrixPattern)); err != nil || len(matches) != 0 {
 			t.Fatalf("live construction matrix remains linked matches=%v err=%v", matches, err)
@@ -169,7 +169,7 @@ func TestColumnGraphRebuildReleasesConstructionMatrixBeforePublication4542(t *te
 	}
 	stagedHandles := 0
 	var stagedMappedBytes int64
-	restoreBound := setColumnVectorGraphConstructionMatrixBoundTestHook(func(*VectorIndex) {
+	restoreBound := setColumnVectorGraphConstructionMatrixBoundTestHook(func(*columnGraphHNSWBuilder) {
 		for _, pin := range mappedresource.GlobalPinSummary() {
 			if pin.Root == d.ColumnAssetRootDir() && pin.Key.Kind == "column_graph_construction_matrix" {
 				stagedHandles++

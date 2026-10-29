@@ -788,15 +788,12 @@ func TestCollectionMutationApplyInsertReplaceDeleteFramesAndDigest(t *testing.T)
 
 func TestCollectionMutationCommitAmbiguousAfterPublishRequiresRecovery(t *testing.T) {
 	dir := t.TempDir()
-	db := openApplyHarnessDB(t, dir)
+	db := openApplyHarnessDBWithOptions(t, dir, backenddb.Options{ResolvedProfile: backenddb.ProfileCommandWALDurable})
 	defer func() { _ = db.Close() }()
 
 	progress := NewMemoryApplyProgressStore(8, 8)
 	results := NewMemoryApplyResultStore(8)
-	create := deterministicCreateCollectionEntry(t, "docs", "client-a:create:docs", testCreateCollectionMetaOptions{
-		version:            testCurrentCollectionMetaWireVersion,
-		includeVectorIndex: true,
-	})
+	create := modernColumnGraphCreateEntryForRetirementTest(t, "docs", "client-a:create:docs")
 	createResult, err := ApplyCommittedEntryV1(db, create, applyMeta(1, 1), Options{
 		ProgressStore: progress,
 		ResultStore:   results,
@@ -812,32 +809,41 @@ func TestCollectionMutationCommitAmbiguousAfterPublishRequiresRecovery(t *testin
 	}
 	beforeLSN := db.State().AppliedCommandLSN
 
-	badVectorDoc := []byte(`{"embedding":[1,0,0]}`)
-	insert := deterministicInsertBatchEntry(t, "docs", "client-a:insert:docs:bad-vector", nativewire.DocumentFormatJSON, [][]byte{[]byte("bad")}, [][]byte{badVectorDoc})
+	// The retired runtime used to fail maintenance after committing a malformed
+	// vector. Modern construction validates vectors before publication. Exercise
+	// the retained post-publication uncertainty contract using the existing
+	// after-visible hook and a valid modern document instead.
+	document := []byte(`{"embedding":[1,0]}`)
+	fault := &postVisibleCommitAmbiguousFaultForRetirementTest{}
+	insert := deterministicInsertBatchEntry(t, "docs", "client-a:insert:docs:ambiguous", nativewire.DocumentFormatJSON, [][]byte{[]byte("published")}, [][]byte{document})
 	result, err := ApplyCommittedEntryV1(db, insert, applyMeta(1, 2), Options{
 		ProgressStore: progress,
 		ResultStore:   results,
+		FaultInjector: fault,
 	})
 	assertRecoveryRequired(t, result, err, raftentry.ErrorUnsafeDurabilityModeV1)
+	if !fault.reached {
+		t.Fatal("mutation did not reach the after-visible ambiguity boundary")
+	}
 	if !errors.Is(err, collections.ErrCommitAmbiguous) {
 		t.Fatalf("ApplyCommittedEntryV1 err=%v, want ErrCommitAmbiguous", err)
 	}
 	if progress.Len() != 1 || results.Len() != 1 {
 		t.Fatalf("store lengths after recovery-required mutation progress=%d results=%d, want 1/1", progress.Len(), results.Len())
 	}
-	got, err := collection.Get([]byte("bad"))
+	got, err := collection.Get([]byte("published"))
 	if err != nil {
-		t.Fatalf("Get committed bad-vector document: %v", err)
+		t.Fatalf("Get committed document: %v", err)
 	}
-	if !bytes.Equal(got, badVectorDoc) {
-		t.Fatalf("committed bad-vector document=%s, want %s", got, badVectorDoc)
+	if !bytes.Equal(got, document) {
+		t.Fatalf("committed document=%s, want %s", got, document)
 	}
 	frames := readCommandWALFrames(t, dir)
 	if len(frames) == 0 {
 		t.Fatal("command WAL frames=0, want inserted mutation frame")
 	}
 	last := frames[len(frames)-1]
-	assertCollectionInsertFrame(t, last, "docs", map[string][]byte{"bad": badVectorDoc})
+	assertCollectionInsertFrame(t, last, "docs", map[string][]byte{"published": document})
 	if got := db.State().AppliedCommandLSN; got <= beforeLSN || got != last.LSN {
 		t.Fatalf("AppliedCommandLSN=%d before=%d last_insert_lsn=%d", got, beforeLSN, last.LSN)
 	}
@@ -1059,8 +1065,15 @@ func TestCollectionMutationCoveredCommandWALFailureRequiresRecovery(t *testing.T
 		t.Fatalf("Finalize: %v", err)
 	}
 	entry := raftentry.CommandEntryV1{Digest: raftentry.CommandDigestV1{1, 2, 3}}
-	result, err := NewHarness(db, Options{}).collectionMutationApplyError(entry, handle, fmt.Errorf("publish failed: %w", backenddb.ErrRecoveryRequired))
-	assertRecoveryRequired(t, result, err, raftentry.ErrorUnsafeDurabilityModeV1)
+	for _, cause := range []error{backenddb.ErrRecoveryRequired, collections.ErrCommitAmbiguous} {
+		t.Run(cause.Error(), func(t *testing.T) {
+			result, err := NewHarness(db, Options{}).collectionMutationApplyError(entry, handle, fmt.Errorf("publish failed: %w", cause))
+			assertRecoveryRequired(t, result, err, raftentry.ErrorUnsafeDurabilityModeV1)
+			if !errors.Is(err, cause) {
+				t.Fatalf("covered mutation error=%v, want preserved cause %v", err, cause)
+			}
+		})
+	}
 }
 
 func TestCollectionMutationFinalizeFailureAfterAppendRequiresRecovery(t *testing.T) {
@@ -2514,6 +2527,7 @@ type testCreateCollectionMetaOptions struct {
 	indexStoragePolicy uint64
 	indexUnique        bool
 	includeVectorIndex bool
+	vectorStrategy     uint64
 }
 
 func deterministicCreateCollectionEntry(t *testing.T, collection, idempotency string, opts testCreateCollectionMetaOptions) []byte {
@@ -2589,7 +2603,11 @@ func testCreateCollectionMetaPayload(collection string, opts testCreateCollectio
 		dst = binary.AppendVarint(dst, 8)  // ef_search
 		dst = binary.AppendUvarint(dst, 1) // encoding: float32
 		if version >= 3 {
-			dst = binary.AppendUvarint(dst, 1) // strategy: native runtime
+			strategy := opts.vectorStrategy
+			if strategy == 0 {
+				strategy = 2 // ColumnGraph; tag 1 is reserved for rejection fixtures.
+			}
+			dst = binary.AppendUvarint(dst, strategy)
 			dst = binary.AppendUvarint(dst, 0) // quantized_index_count
 		}
 	}

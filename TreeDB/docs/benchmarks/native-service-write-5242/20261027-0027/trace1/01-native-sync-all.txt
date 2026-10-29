@@ -1,0 +1,46 @@
+File: documentservice.test
+Type: delay
+Showing nodes accounting for 65.98s, 100% of 65.98s total
+Dropped 136 nodes (cum <= 0.33s)
+Showing top 40 nodes out of 49
+      flat  flat%   sum%        cum   cum%
+    40.61s 61.55% 61.55%     40.61s 61.55%  runtime.selectgo
+    14.87s 22.54% 84.09%     14.87s 22.54%  runtime.chanrecv2
+     6.24s  9.46% 93.55%      6.24s  9.46%  runtime.chanrecv1
+     2.72s  4.12% 97.67%      3.02s  4.58%  github.com/snissn/gomap/TreeDB/caching.(*DB).PrepareNativeProducerObservation
+     1.18s  1.79% 99.46%      1.18s  1.79%  sync.(*WaitGroup).Wait
+     0.36s  0.54%   100%      0.36s  0.54%  github.com/snissn/gomap/TreeDB/collections.(*Collection).lockVectorIndexMutation
+         0     0%   100%      1.49s  2.26%  github.com/snissn/gomap/TreeDB.(*bgIndexVacuumWorker).Start.func1
+         0     0%   100%      1.51s  2.29%  github.com/snissn/gomap/TreeDB/caching.(*DB).autoCheckpointLoop
+         0     0%   100%      0.37s  0.56%  github.com/snissn/gomap/TreeDB/caching.(*DB).checkpointCOWColumnCompaction
+         0     0%   100%      0.37s  0.56%  github.com/snissn/gomap/TreeDB/caching.(*DB).checkpointContext
+         0     0%   100%      1.50s  2.27%  github.com/snissn/gomap/TreeDB/caching.(*DB).flushLoop
+         0     0%   100%      1.51s  2.29%  github.com/snissn/gomap/TreeDB/caching.(*DB).startProcessMemorySampler.func1
+         0     0%   100%      1.51s  2.29%  github.com/snissn/gomap/TreeDB/caching.(*DB).valueLogDictLoop
+         0     0%   100%      1.51s  2.29%  github.com/snissn/gomap/TreeDB/caching.(*DB).vlogGenerationLoop
+         0     0%   100%     15.36s 23.28%  github.com/snissn/gomap/TreeDB/caching.(*DB).vlogWriteLoop
+         0     0%   100%      1.51s  2.29%  github.com/snissn/gomap/TreeDB/caching.runPoolPressureSampler
+         0     0%   100%      3.38s  5.12%  github.com/snissn/gomap/TreeDB/collections.(*Collection).InsertBatchWithStatsValidatedFloat32Projection
+         0     0%   100%      0.36s  0.54%  github.com/snissn/gomap/TreeDB/collections.(*Collection).lockNativeHNSWMutationIfNeeded
+         0     0%   100%      2.44s  3.70%  github.com/snissn/gomap/TreeDB/collections.(*Collection).lockNativeProducerAfterPreparation
+         0     0%   100%      3.38s  5.12%  github.com/snissn/gomap/TreeDB/collections.(*Collection).nativeInsertBatchWithStatsProjection
+         0     0%   100%      3.38s  5.12%  github.com/snissn/gomap/TreeDB/collections.(*Collection).prepareNativeProducerMutation
+         0     0%   100%      3.02s  4.58%  github.com/snissn/gomap/TreeDB/db.(*DB).PrepareNativeProducerObservation
+         0     0%   100%      3.21s  4.86%  github.com/snissn/gomap/TreeDB/db.(*DB).commitCombinerLoop
+         0     0%   100%      3.36s  5.09%  github.com/snissn/gomap/TreeDB/db.(*indexGhostManager).loop
+         0     0%   100%      1.53s  2.31%  github.com/snissn/gomap/TreeDB/db.(*pruneWorker).Start.func1
+         0     0%   100%      3.38s  5.12%  github.com/snissn/gomap/TreeDB/documentservice.(*Service).UpsertDocuments
+         0     0%   100%      3.38s  5.12%  github.com/snissn/gomap/TreeDB/documentservice.(*Service).upsertDocuments
+         0     0%   100%      3.38s  5.12%  github.com/snissn/gomap/TreeDB/documentservice.(*Service).upsertDocuments.func4
+         0     0%   100%      1.76s  2.67%  github.com/snissn/gomap/TreeDB/documentservice.BenchmarkServiceSharedCOWWriteLoad
+         0     0%   100%      1.21s  1.83%  github.com/snissn/gomap/TreeDB/documentservice.BenchmarkServiceSharedCOWWriteLoad.func1
+         0     0%   100%      1.76s  2.67%  github.com/snissn/gomap/TreeDB/documentservice.TestMain
+         0     0%   100%      1.21s  1.83%  github.com/snissn/gomap/TreeDB/documentservice.benchmarkSharedCOWWriteLoad
+         0     0%   100%      3.38s  5.12%  github.com/snissn/gomap/TreeDB/documentservice.benchmarkSharedCOWWriteLoad.func2
+         0     0%   100%      1.51s  2.29%  github.com/snissn/gomap/TreeDB/internal/compression.(*Trainer).run
+         0     0%   100%      2.93s  4.45%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).run
+         0     0%   100%      3.36s  5.09%  github.com/snissn/gomap/TreeDB/pager.(*Pager).growLoop
+         0     0%   100%     13.36s 20.26%  github.com/snissn/gomap/TreeDB/zipper.(*ApplyWorkerPool).worker
+         0     0%   100%      1.76s  2.67%  go.uber.org/goleak.VerifyTestMain
+         0     0%   100%      1.76s  2.67%  main.main
+         0     0%   100%         1s  1.52%  runtime.(*traceAdvancerState).start.func1

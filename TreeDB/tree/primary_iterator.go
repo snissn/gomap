@@ -37,6 +37,7 @@ func (t *Tree) initPrimaryIterator(p *primaryIterator, base *Iterator, start, en
 
 // root is the checked view from this exact tree's retained root. Owned
 // construction uses the same probe to choose its storage before allocation.
+// Directory and base authentication stay shared with pooled callers.
 func (t *Tree) initPrimaryIteratorFromRoot(root *node.Node, p *primaryIterator, base *Iterator, start, end []byte, opts IteratorOptions, reverse bool, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error), leafScratch []byte, bounded bool) (*primaryIterator, error) {
 	if root.Type() != page.PageTypePrimaryDirectory {
 		return nil, nil

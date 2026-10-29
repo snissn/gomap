@@ -42,7 +42,7 @@ func (owner *CommandWALAdmittedCollection) ProveVectorPartitionColocatedMutation
 	if !ok || generation == 0 {
 		return zero, ErrVectorIndexPartitionLiveUnavailableV1
 	}
-	idx := c.registeredVectorIndex(manifest.IndexName)
+	idx := c.registeredColumnGraphPartitionLiveCarrier(manifest.IndexName)
 	if idx == nil {
 		return zero, ErrVectorIndexPartitionLiveUnavailableV1
 	}

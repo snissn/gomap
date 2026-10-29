@@ -43,7 +43,7 @@ func runVectorPartitionLiveReplayBeforeDomainCommitHookV2() {
 // vectorPartitionLiveReplaySpecV1 describes one already-restored carrier that
 // must advance in the same root publication as a durable document mutation.
 type vectorPartitionLiveReplaySpecV1 struct {
-	before       *VectorIndex
+	before       *columnGraphPartitionLiveCarrier
 	definition   VectorIndexDefinition
 	rootName     string
 	baseRoot     uint64
@@ -54,7 +54,7 @@ type vectorPartitionLiveReplaySpecV1 struct {
 
 type vectorPartitionLiveReplayEntryV1 struct {
 	spec        vectorPartitionLiveReplaySpecV1
-	candidate   *VectorIndex
+	candidate   *columnGraphPartitionLiveCarrier
 	table       memtable.Table
 	publish     memtable.Table
 	pointerized bool
@@ -144,7 +144,7 @@ func (c *Collection) vectorPartitionLiveReplaySpecsV1(input columnWritePublishIn
 	return specs, nil
 }
 
-func (idx *VectorIndex) vectorPartitionLiveReplayDurableBaseReasonV1(rootID, coverage uint64) string {
+func (idx *columnGraphPartitionLiveCarrier) vectorPartitionLiveReplayDurableBaseReasonV1(rootID, coverage uint64) string {
 	if idx == nil {
 		return "nil carrier"
 	}
@@ -177,7 +177,7 @@ func (c *Collection) vectorPartitionLiveReplayPreflightV1(specs []vectorPartitio
 
 func (c *Collection) validateVectorPartitionLiveReplaySpecsV1(specs []vectorPartitionLiveReplaySpecV1) error {
 	for _, spec := range specs {
-		current := c.registeredVectorIndex(spec.definition.Name)
+		current := c.registeredColumnGraphPartitionLiveCarrier(spec.definition.Name)
 		if current != spec.before || current.nativeMutationSequence() != spec.beforeSeq {
 			return fmt.Errorf("%w: replay carrier %q changed before publication", ErrConcurrentMutation, spec.definition.Name)
 		}
@@ -263,7 +263,7 @@ func (c *Collection) buildVectorPartitionLiveReplayAttemptV1(input columnWritePu
 	}
 	attempt := &vectorPartitionLiveReplayAttemptV1{entries: make([]vectorPartitionLiveReplayEntryV1, 0, len(specs))}
 	for _, spec := range specs {
-		candidate, err := newVectorIndex(c, vectorIndexOptionsFromDefinition(spec.definition))
+		candidate, err := newColumnGraphPartitionLiveDomain(c, vectorIndexOptionsFromDefinition(spec.definition))
 		if err != nil {
 			attempt.discard()
 			return nil, err
@@ -356,9 +356,9 @@ func (a *vectorPartitionLiveReplayAttemptV1) discard() {
 			continue
 		}
 		candidate.mu.Lock()
-		var transactions []*VectorIndex
+		var transactions []*columnGraphPartitionLiveCarrier
 		if live := candidate.partitionLive; live != nil {
-			transactions = make([]*VectorIndex, 0, len(live.domainTransactions))
+			transactions = make([]*columnGraphPartitionLiveCarrier, 0, len(live.domainTransactions))
 			for _, delta := range live.domainTransactions {
 				transactions = append(transactions, delta)
 			}
@@ -428,7 +428,7 @@ func (c *Collection) installVectorPartitionLiveReplayAttemptV1(attempt *vectorPa
 		if !stateOK {
 			return backenddb.ErrClosed
 		}
-		if c.registeredVectorIndex(entry.spec.definition.Name) != entry.spec.before {
+		if c.registeredColumnGraphPartitionLiveCarrier(entry.spec.definition.Name) != entry.spec.before {
 			return fmt.Errorf("%w: replay carrier %q changed during install", ErrConcurrentMutation, entry.spec.definition.Name)
 		}
 
@@ -447,7 +447,7 @@ func (c *Collection) installVectorPartitionLiveReplayAttemptV1(attempt *vectorPa
 		for id, owner := range live.stagedOwners {
 			live.owners[id] = owner
 		}
-		transactions := make([]*VectorIndex, 0, len(live.domainTransactions))
+		transactions := make([]*columnGraphPartitionLiveCarrier, 0, len(live.domainTransactions))
 		for _, delta := range live.domainTransactions {
 			transactions = append(transactions, delta)
 		}

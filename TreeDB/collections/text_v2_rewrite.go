@@ -117,6 +117,7 @@ type textV2RewritePlan struct {
 	statusChanged  bool
 
 	nextStatus textV2IndexStatusValue
+	workspace  *nativeTextRewriteWorkspace
 }
 
 type textV2RewriteBudget struct {
@@ -294,6 +295,9 @@ func (c *Collection) rewriteTextIndexInternal(ctx context.Context, indexName str
 	if c == nil {
 		return empty, emptyStorage, "", errCollectionNil
 	}
+	if c.nativeJSON != nil {
+		return c.nativeRewriteTextIndex(ctx, indexName, run)
+	}
 	if c.db == nil {
 		return empty, emptyStorage, "", errCollectionDBNil
 	}
@@ -343,53 +347,13 @@ func (c *Collection) rewriteTextIndexInternal(ctx context.Context, indexName str
 		return empty, emptyStorage, "", fmt.Errorf("%w: text index %q is %q; rewrite/merge is only available for explicit text index v2", ErrTextIndexUnavailable, indexName, def.Version)
 	}
 
-	budget := newTextV2RewriteBudget(ctx, opts)
-	var beforeStats TextIndexStorageStats
-	if run.NeedStorageStats || run.Decide != nil {
-		beforeStats, err = inspectTextV2IndexStorageWithBudget(snap, catalog, def, budget)
-		if err != nil {
-			if errors.Is(err, errTextV2RewriteBudgetExhausted) {
-				return textV2BudgetExhaustedRewriteStats(indexName, beforeStats, budget.reason), beforeStats, budget.reason, nil
-			}
-			return empty, emptyStorage, "", err
-		}
-	}
-
-	plan, err := buildTextV2RewritePlan(ctx, snap, catalog, def, opts, budget)
+	plan, beforeStats, reason, err := prepareTextV2RewriteRun(ctx, snap, catalog, def, run)
 	if err != nil {
 		return empty, emptyStorage, "", err
 	}
 	defer resetTextV2RewritePlanTables(plan)
-	if plan == nil || plan.stats.BudgetExhausted || (!plan.postingChanged && !plan.termsChanged && !plan.tombChanged && !plan.statusChanged) {
-		stats := TextIndexRewriteStats{IndexName: indexName, Version: TextIndexVersionV2, Noop: true}
-		reason := "no_debt"
-		if plan != nil {
-			stats = plan.stats
-			stats.Noop = true
-			if stats.BudgetExhausted {
-				reason = stats.BudgetExhaustedReason
-			}
-		}
-		return stats, beforeStats, reason, nil
-	}
-	if run.Decide != nil {
-		decision := run.Decide(beforeStats, plan.stats)
-		if !decision.Apply {
-			stats := plan.stats
-			stats.Noop = true
-			return stats, beforeStats, decision.SkippedReason, nil
-		}
-	}
-	if run.DryRun {
-		stats := plan.stats
-		stats.Noop = true
-		return stats, beforeStats, "dry_run", nil
-	}
-	if err := budget.check(); err != nil {
-		if errors.Is(err, errTextV2RewriteBudgetExhausted) {
-			return textV2BudgetExhaustedRewriteStats(indexName, beforeStats, budget.reason), beforeStats, budget.reason, nil
-		}
-		return empty, emptyStorage, "", err
+	if plan.stats.Noop {
+		return plan.stats, beforeStats, reason, nil
 	}
 
 	rootNames := make([]string, 0, 6)
@@ -467,6 +431,62 @@ func (c *Collection) rewriteTextIndexInternal(ctx context.Context, indexName str
 	return stats, beforeStats, "", nil
 }
 
+func prepareTextV2RewriteRun(ctx context.Context, snap *backenddb.Snapshot, catalog *collectionCatalog, def TextIndexDefinition, run textV2RewriteRunOptions) (plan *textV2RewritePlan, beforeStats TextIndexStorageStats, reason string, resultErr error) {
+	opts, indexName := run.Rewrite, def.Name
+	budget := newTextV2RewriteBudget(ctx, opts)
+	defer func() {
+		if resultErr != nil {
+			resetTextV2RewritePlanTables(plan)
+			plan = nil
+		}
+	}()
+	if run.NeedStorageStats || run.Decide != nil {
+		var err error
+		beforeStats, err = inspectTextV2IndexStorageWithBudget(snap, catalog, def, budget)
+		if err != nil {
+			if errors.Is(err, errTextV2RewriteBudgetExhausted) {
+				return &textV2RewritePlan{stats: textV2BudgetExhaustedRewriteStats(indexName, beforeStats, budget.reason)}, beforeStats, budget.reason, nil
+			}
+			return nil, beforeStats, "", err
+		}
+	}
+	var err error
+	plan, err = buildTextV2RewritePlan(ctx, snap, catalog, def, opts, budget)
+	if err != nil {
+		return plan, beforeStats, "", err
+	}
+	if plan == nil {
+		plan = &textV2RewritePlan{stats: TextIndexRewriteStats{IndexName: indexName, Version: TextIndexVersionV2}}
+	}
+	if plan.stats.BudgetExhausted || (!plan.postingChanged && !plan.termsChanged && !plan.tombChanged && !plan.statusChanged) {
+		plan.stats.Noop = true
+		reason = "no_debt"
+		if plan.stats.BudgetExhausted {
+			reason = plan.stats.BudgetExhaustedReason
+		}
+		return plan, beforeStats, reason, nil
+	}
+	if run.Decide != nil {
+		decision := run.Decide(beforeStats, plan.stats)
+		if !decision.Apply {
+			plan.stats.Noop = true
+			return plan, beforeStats, decision.SkippedReason, nil
+		}
+	}
+	if run.DryRun {
+		plan.stats.Noop = true
+		return plan, beforeStats, "dry_run", nil
+	}
+	if err = budget.check(); err != nil {
+		if errors.Is(err, errTextV2RewriteBudgetExhausted) {
+			plan.stats = textV2BudgetExhaustedRewriteStats(indexName, beforeStats, budget.reason)
+			return plan, beforeStats, budget.reason, nil
+		}
+		return plan, beforeStats, "", err
+	}
+	return plan, beforeStats, "", nil
+}
+
 func buildTextV2RewritePlan(ctx context.Context, snap *backenddb.Snapshot, catalog *collectionCatalog, def TextIndexDefinition, opts TextIndexRewriteOptions, budget *textV2RewriteBudget) (*textV2RewritePlan, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -496,13 +516,23 @@ func buildTextV2RewritePlan(ctx context.Context, snap *backenddb.Snapshot, catal
 		target = textV2PostingBlockTargetPostings
 	}
 
+	factory := newCollectionRunTable
+	var workspace *nativeTextRewriteWorkspace
+	if catalog.nativeText != nil {
+		workspace, err = newNativeTextRewriteWorkspace(catalog.nativeText.admit)
+		if err != nil {
+			return nil, err
+		}
+		factory = nativeTextTable
+	}
 	plan := &textV2RewritePlan{
-		postingBlocksTable: newCollectionRunTable(0),
-		termsTable:         newCollectionRunTable(0),
-		docIDTable:         newCollectionRunTable(0),
-		docMapTable:        newCollectionRunTable(0),
-		normTable:          newCollectionRunTable(0),
-		generationsTable:   newCollectionRunTable(1),
+		workspace:          workspace,
+		postingBlocksTable: factory(0),
+		termsTable:         factory(0),
+		docIDTable:         factory(0),
+		docMapTable:        factory(0),
+		normTable:          factory(0),
+		generationsTable:   factory(1),
 		nextStatus:         status,
 	}
 	plan.stats.IndexName = def.Name
@@ -578,6 +608,10 @@ func buildTextV2RewritePlan(ctx context.Context, snap *backenddb.Snapshot, catal
 			return nil, errMalformedTextStorage("text-v2 term %q has live stats but no posting blocks", term)
 		}
 		if stats.PostingBlockCount != 0 {
+			if err := plan.workspace.admitMutation(); err != nil {
+				resetTextV2RewritePlanTables(plan)
+				return nil, err
+			}
 			plan.termsTable.DeleteSteal(encodeTextV2TermStatsKey(term))
 			plan.termsChanged = true
 			plan.stats.TermsPurged++
@@ -612,6 +646,10 @@ func buildTextV2RewritePlan(ctx context.Context, snap *backenddb.Snapshot, catal
 			plan.nextStatus.DocMapGeneration = nextGeneration
 			plan.nextStatus.NormGeneration = nextGeneration
 			plan.nextStatus.DeletedDocuments = 0
+		}
+		if err := plan.workspace.admitMutation(); err != nil {
+			resetTextV2RewritePlanTables(plan)
+			return nil, err
 		}
 		plan.generationsTable.SetSteal(encodeTextV2StatusKey(), encodeTextV2IndexStatusValue(plan.nextStatus))
 		plan.statusChanged = true
@@ -681,9 +719,15 @@ func (p *textV2RewritePlan) processRewriteTerm(
 					return err
 				}
 			}
+			if err := p.workspace.admitMutation(); err != nil {
+				return err
+			}
 			p.postingBlocksTable.DeleteSteal(append([]byte(nil), oldKey...))
 		}
 		if termStats.PostingBlockCount != 0 {
+			if err := p.workspace.admitMutation(); err != nil {
+				return err
+			}
 			p.termsTable.DeleteSteal(encodeTextV2TermStatsKey(term.term))
 			p.termsChanged = true
 		}
@@ -704,7 +748,11 @@ func (p *textV2RewritePlan) processRewriteTerm(
 			return err
 		}
 	}
-	newBlocks, err := buildTextV2PostingBlockKVs(term.term, live, uint32(len(def.Fields)), textV2PostingBlockBuildOptions{Kind: textV2PostingBlockKindSealed, TargetPostings: target, BlockIDStart: 1})
+	var codecAdmit func(uint64) error
+	if p.workspace != nil {
+		codecAdmit = p.workspace.admitCodec
+	}
+	newBlocks, err := buildTextV2PostingBlockKVs(term.term, live, uint32(len(def.Fields)), textV2PostingBlockBuildOptions{Kind: textV2PostingBlockKindSealed, TargetPostings: target, BlockIDStart: 1, admit: codecAdmit})
 	if err != nil {
 		return err
 	}
@@ -722,6 +770,9 @@ func (p *textV2RewritePlan) processRewriteTerm(
 			}
 		}
 		newKeySet[string(block.Key)] = struct{}{}
+		if err := p.workspace.admitMutation(); err != nil {
+			return err
+		}
 		p.postingBlocksTable.SetSteal(append([]byte(nil), block.Key...), append([]byte(nil), block.Value...))
 	}
 	for _, oldKey := range term.oldKeys {
@@ -733,6 +784,9 @@ func (p *textV2RewritePlan) processRewriteTerm(
 		if _, ok := newKeySet[string(oldKey)]; ok {
 			continue
 		}
+		if err := p.workspace.admitMutation(); err != nil {
+			return err
+		}
 		p.postingBlocksTable.DeleteSteal(append([]byte(nil), oldKey...))
 		p.stats.PostingBlocksDeleted++
 	}
@@ -743,6 +797,9 @@ func (p *textV2RewritePlan) processRewriteTerm(
 		nextGeneration := status.RootGeneration + 1
 		if nextGeneration == 0 {
 			return errMalformedTextStorage("text-v2 root generation overflow")
+		}
+		if err := p.workspace.admitMutation(); err != nil {
+			return err
 		}
 		p.termsTable.SetSteal(encodeTextV2TermStatsKey(term.term), encodeTextV2TermStatsValue(textV2TermStatsValue{
 			StatsGeneration:    nextGeneration,
@@ -953,6 +1010,9 @@ func (p *textV2RewritePlan) purgeTextV2DocIDTombstones(snap *backenddb.Snapshot,
 			return nil, errMalformedTextStorage("text-v2 docid tombstone purge entry outside status snapshot")
 		}
 		if doc.tombstoned() {
+			if err := p.workspace.admitMutation(); err != nil {
+				return nil, err
+			}
 			p.docIDTable.DeleteSteal(append([]byte(nil), key...))
 			purged[doc.Ordinal] = struct{}{}
 			p.stats.TombstoneDocIDEntriesPurged++
@@ -1100,8 +1160,14 @@ func (p *textV2RewritePlan) purgeTextV2DocMapTombstones(snap *backenddb.Snapshot
 		if changed {
 			block.Entries = append([]textV2DocMapEntry(nil), kept...)
 			if len(block.Entries) == 0 {
+				if err := p.workspace.admitMutation(); err != nil {
+					return err
+				}
 				p.docMapTable.DeleteSteal(append([]byte(nil), key...))
 			} else {
+				if err := p.workspace.admitMutation(); err != nil {
+					return err
+				}
 				p.docMapTable.SetSteal(append([]byte(nil), key...), encodeTextV2DocMapBlockValue(block))
 			}
 		}
@@ -1156,8 +1222,14 @@ func (p *textV2RewritePlan) purgeTextV2NormTombstones(snap *backenddb.Snapshot, 
 		if changed {
 			block.Entries = append([]textV2NormBlockEntry(nil), kept...)
 			if len(block.Entries) == 0 {
+				if err := p.workspace.admitMutation(); err != nil {
+					return err
+				}
 				p.normTable.DeleteSteal(append([]byte(nil), key...))
 			} else {
+				if err := p.workspace.admitMutation(); err != nil {
+					return err
+				}
 				p.normTable.SetSteal(append([]byte(nil), key...), encodeTextV2NormBlockValue(block))
 			}
 		}

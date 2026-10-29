@@ -17,6 +17,7 @@ func prepareNativeDomainRollover(base *nativeDomainState, admit cowbtree.OwnedMa
 	if err != nil {
 		return nil, err
 	}
+	domain.catalogRoot = base.catalogRoot
 	domain.sourceGeneration = base.sourceGeneration
 	base.typed.retain()
 	domain.typed = base.typed

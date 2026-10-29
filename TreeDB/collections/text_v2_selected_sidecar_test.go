@@ -10,9 +10,9 @@ import (
 )
 
 func selectedSidecarOrdinals(ordinals ...uint64) *textV2SearchOrdinalAllowSet {
-	s := &textV2SearchOrdinalAllowSet{ordinals: make(map[uint64]struct{})}
+	s := &textV2SearchOrdinalAllowSet{ordinals: make(map[uint64]textV2SearchForwardIdentity)}
 	for _, ordinal := range ordinals {
-		s.ordinals[ordinal] = struct{}{}
+		s.ordinals[ordinal] = textV2SearchForwardIdentity{}
 		s.sorted = append(s.sorted, ordinal)
 	}
 	slices.Sort(s.sorted)

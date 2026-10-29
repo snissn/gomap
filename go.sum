@@ -270,6 +270,8 @@ github.com/snissn/compress v1.18.2-snissn.0.0.20260506201017-87fb149e4721 h1:2XY
 github.com/snissn/compress v1.18.2-snissn.0.0.20260506201017-87fb149e4721/go.mod h1:p4xiZN07JMUF5xuybNGkG+pozT12MAblxCx36z+PIYM=
 github.com/snissn/compress v1.18.2-snissn.0.0.20261014112447-88a027b09341 h1:brG2Yps8frK2s7mVF9Lz+N3ettUty+hcX2y3vAyEMUw=
 github.com/snissn/compress v1.18.2-snissn.0.0.20261014112447-88a027b09341/go.mod h1:p4xiZN07JMUF5xuybNGkG+pozT12MAblxCx36z+PIYM=
+github.com/snissn/compress v1.18.2-snissn.0.0.20261027080633-b3eec0dfcc70 h1:n/qzZL5FAwHn+UuY9VojNWoViRUmu6TNPSv5tjYvG/U=
+github.com/snissn/compress v1.18.2-snissn.0.0.20261027080633-b3eec0dfcc70/go.mod h1:p4xiZN07JMUF5xuybNGkG+pozT12MAblxCx36z+PIYM=
 github.com/snissn/go-crc32-asm v0.0.0-20261024205709-cf438531a0f2 h1:jIsbmddbkhwZ1X8RTKLzquYLrwZ7bWLJWzwv9nTl8kk=
 github.com/snissn/go-crc32-asm v0.0.0-20261024205709-cf438531a0f2/go.mod h1:PDwKLbWpRDAN2IPbK9PxIgSx0YdwQaSOLWObRawQJ58=
 github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=

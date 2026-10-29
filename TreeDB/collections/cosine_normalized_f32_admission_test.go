@@ -55,7 +55,7 @@ func TestCosineNormalizedF32V1MetadataContract(t *testing.T) {
 			meta.VectorIndexes[0].Representation = "future"
 		},
 		"wrong_strategy": func(meta *CollectionMeta) {
-			meta.VectorIndexes[0].Strategy = VectorIndexStrategyNativeRuntime
+			meta.VectorIndexes[0].Strategy = VectorIndexStrategy("native_runtime")
 		},
 		"wrong_metric": func(meta *CollectionMeta) {
 			meta.VectorIndexes[0].Metric = VectorMetricL2
@@ -73,7 +73,7 @@ func TestCosineNormalizedF32V1MetadataContract(t *testing.T) {
 			other := meta.VectorIndexes[0]
 			other.Name = "other"
 			other.Field = "other_embedding"
-			other.Strategy = VectorIndexStrategyNativeRuntime
+			other.Strategy = VectorIndexStrategy("native_runtime")
 			other.Representation = ""
 			meta.VectorIndexes = append(meta.VectorIndexes, other)
 		},

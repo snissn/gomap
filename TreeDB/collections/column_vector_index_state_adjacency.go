@@ -210,24 +210,56 @@ func prepareColumnVectorIndexStateAdjacencyAssets(assetRootDir, collection strin
 	return prepareColumnVectorIndexStateAdjacencyAssetsWithStableAuthority(assetRootDir, collection, base, def, generation, firstPartID, rows, nil)
 }
 
+// Each constructor is a private phase: only its certified ref and configuration
+// survive the synchronous append. The single family appender preserves FileID,
+// part order, alignment and the original stable-resource/partial-file authority.
 func prepareColumnVectorIndexStateAdjacencyAssetsWithStableAuthority(assetRootDir, collection string, base ColumnStoreConfig, def VectorIndexDefinition, generation, firstPartID uint64, rows []columnVectorGraphAssetRow, authority *columnVectorGraphStableResourceAccumulator) ([]columnVectorIndexStatePreparedAdjacencyAsset, error) {
-	payloads, err := prepareColumnVectorIndexStateAdjacencyPayloads(assetRootDir, collection, base, def, firstPartID, rows)
-	if err != nil {
+	lists, err := buildColumnVectorIndexStateAdjacencyLists(rows)
+	if err != nil || len(lists) == 0 {
 		return nil, err
 	}
-	if len(payloads) == 0 {
-		return nil, nil
+	var appender *columnPhysicalAssetSegmentAppender
+	layers := make([]columnVectorIndexStatePreparedAdjacencyAsset, len(lists))
+	partID := firstPartID
+	for layer, list := range lists {
+		var prepared columnVectorIndexStatePreparedAdjacencyAsset
+		prepared, err = prepareAppendColumnVectorIndexStateAdjacencyAsset(assetRootDir, collection, base, def, generation, partID, layer, list, authority, &appender)
+		if err != nil {
+			break
+		}
+		layers[layer] = prepared
+		if layer != len(lists)-1 {
+			if partID == ^uint64(0) {
+				err = errors.New("collections: vector-index state adjacency part_id overflow")
+				break
+			}
+			partID = nextColumnVectorGraphPartIDAfter(partID, partID)
+		}
 	}
-	appender, err := newColumnVectorGraphAssetAppender(assetRootDir, payloads[0].Config, authority)
 	if err != nil {
-		return nil, err
+		if appender == nil {
+			return nil, err
+		}
+		appender.failed = true
+		return nil, errors.Join(err, closeColumnVectorGraphAssetAppender(appender, authority))
 	}
-	layers, appendErr := appendColumnVectorIndexStateAdjacencyPayloads(appender, generation, payloads)
-	closeErr := closeColumnVectorGraphAssetAppender(appender, authority)
-	if appendErr != nil {
-		return nil, errors.Join(appendErr, closeErr)
+	return layers, closeColumnVectorGraphAssetAppender(appender, authority)
+}
+
+// Returning ends all payload/part/image aliases before the next layer builds.
+// The appender stores file refs, never the payload's backing array.
+func prepareAppendColumnVectorIndexStateAdjacencyAsset(assetRootDir, collection string, base ColumnStoreConfig, def VectorIndexDefinition, generation, partID uint64, layer int, list typedcolumn.Uint32List, authority *columnVectorGraphStableResourceAccumulator, appender **columnPhysicalAssetSegmentAppender) (columnVectorIndexStatePreparedAdjacencyAsset, error) {
+	payload, err := prepareColumnVectorIndexStateAdjacencyPayloadFromList(assetRootDir, collection, base, def, partID, layer, list)
+	if err != nil {
+		return columnVectorIndexStatePreparedAdjacencyAsset{}, err
 	}
-	return layers, closeErr
+	if *appender == nil {
+		*appender, err = newColumnVectorGraphAssetAppender(assetRootDir, payload.Config, authority)
+		if err != nil {
+			return columnVectorIndexStatePreparedAdjacencyAsset{}, err
+		}
+	}
+	return appendColumnVectorIndexStateAdjacencyPayload(*appender, generation, payload)
 }
 
 func prepareColumnVectorIndexStateAdjacencyPayloads(assetRootDir, collection string, base ColumnStoreConfig, def VectorIndexDefinition, firstPartID uint64, rows []columnVectorGraphAssetRow) ([]columnVectorIndexStatePreparedAdjacencyPayload, error) {
@@ -273,52 +305,19 @@ func prepareColumnVectorIndexStateAdjacencyPayloadFromList(assetRootDir, collect
 	if err != nil {
 		return columnVectorIndexStatePreparedAdjacencyPayload{}, err
 	}
-	primaryIDs := make([]int64, list.Rows)
-	for rowIdx := range primaryIDs {
-		primaryIDs[rowIdx] = int64(rowIdx)
-	}
-	part, err := typedcolumn.BuildColumnPart(partID, typedcolumn.Options{
-		SchemaVersion: uint32(sourceCfg.SchemaHash),
-		SchemaMode:    typedcolumn.ColumnSchemaFixed,
-		Columns: []typedcolumn.ColumnDefinition{
-			{
-				Name:           typedColumnAdapterPrimaryIDColumn,
-				Type:           typedcolumn.ColumnTypeInt64,
-				Encoding:       typedcolumn.EncodingRawInt64,
-				Compression:    typedcolumn.CompressionNone,
-				CompressionSet: true,
-				StatsDisabled:  true,
-			},
-			adapterColumn.Definition,
-		},
-		LogicalPrimaryKey: typedcolumn.LogicalPrimaryKey{Columns: []string{typedColumnAdapterPrimaryIDColumn}},
-		SortKey:           typedcolumn.SortKey{Columns: []typedcolumn.SortKeyColumn{{Column: typedColumnAdapterPrimaryIDColumn}}},
-		PartPolicy:        typedcolumn.ColumnPartPolicy{RowsPerGranule: typedcolumn.DefaultRowsPerGranule},
-		Compression:       typedcolumn.ColumnCompressionPolicy{Default: typedcolumn.CompressionNone},
-	}, typedcolumn.Batch{
-		Rows: list.Rows,
-		Columns: map[string][]int64{
-			typedColumnAdapterPrimaryIDColumn: primaryIDs,
-		},
-		Uint32OffsetsLists: map[string]typedcolumn.RawUint32OffsetsList{
-			adapterColumn.Definition.Name: list,
-		},
-	})
-	if err != nil {
-		return columnVectorIndexStatePreparedAdjacencyPayload{}, err
-	}
 	logicalTypes := make(map[string]string, 1)
 	if logical, ok := columnStoreSemanticLogicalType(ColumnStoreValueUint32List); ok {
 		logicalTypes[adapterColumn.Definition.Name] = string(logical)
 	}
-	image, err := typedcolumn.BuildColumnPartImage(part, typedcolumn.ColumnPartImageOptions{Dictionaries: typedColumnAdapterDictionaries([]typedColumnAdapterColumn{adapterColumn}), LayoutLogicalTypes: logicalTypes})
+	built, err := typedcolumn.BuildRawOrdinalColumnPartImage(partID, columnVectorGraphRawOrdinalOptions(sourceCfg, adapterColumn), typedcolumn.RawOrdinalColumnValues{Rows: list.Rows, Uint32List: list}, typedcolumn.ColumnPartImageOptions{Dictionaries: typedColumnAdapterDictionaries([]typedColumnAdapterColumn{adapterColumn}), LayoutLogicalTypes: logicalTypes})
 	if err != nil {
 		return columnVectorIndexStatePreparedAdjacencyPayload{}, err
 	}
+	image := built.Image
 	if image.Rows != list.Rows || image.PartID != partID {
 		return columnVectorIndexStatePreparedAdjacencyPayload{}, fmt.Errorf("collections: vector-index state adjacency layer %d image rows/part=(%d,%d) want (%d,%d)", layer, image.Rows, image.PartID, list.Rows, partID)
 	}
-	accounting := part.ByteAccountingFromImage(image)
+	accounting := built.Accounting
 	if accounting.DeclaredColumnOffsetsBytes <= 0 {
 		return columnVectorIndexStatePreparedAdjacencyPayload{}, fmt.Errorf("collections: vector-index state adjacency layer %d missing offsets bytes", layer)
 	}
@@ -343,29 +342,37 @@ func prepareColumnVectorIndexStateAdjacencyPayloadFromList(assetRootDir, collect
 func appendColumnVectorIndexStateAdjacencyPayloads(appender *columnPhysicalAssetSegmentAppender, generation uint64, payloads []columnVectorIndexStatePreparedAdjacencyPayload) ([]columnVectorIndexStatePreparedAdjacencyAsset, error) {
 	layers := make([]columnVectorIndexStatePreparedAdjacencyAsset, len(payloads))
 	for i, payload := range payloads {
-		alignment := columnAssetSegmentPayloadAlignment(ColumnAssetKindTCS1TypedColumnPart, payload.Config)
-		ref, err := appender.appendKindWithAlignment(payload.Payload, ColumnAssetKindTCS1TypedColumnPart, generation, payload.PartID, alignment)
+		prepared, err := appendColumnVectorIndexStateAdjacencyPayload(appender, generation, payload)
 		if err != nil {
 			return nil, err
 		}
-		if err := validateColumnVectorIndexStatePreparedAdjacencyRef(payload, ref, generation); err != nil {
-			appender.failed = true
-			return nil, err
-		}
-		layers[i] = columnVectorIndexStatePreparedAdjacencyAsset{
-			Layer:        payload.Layer,
-			Config:       payload.Config,
-			Ref:          ref,
-			Bytes:        ref.Length,
-			Rows:         payload.Rows,
-			Values:       payload.Values,
-			OffsetsBytes: payload.OffsetsBytes,
-			ValuesBytes:  payload.ValuesBytes,
-			PaddingBytes: payload.PaddingBytes,
-			SchemaHash:   payload.SchemaHash,
-		}
+		layers[i] = prepared
 	}
 	return layers, nil
+}
+
+func appendColumnVectorIndexStateAdjacencyPayload(appender *columnPhysicalAssetSegmentAppender, generation uint64, payload columnVectorIndexStatePreparedAdjacencyPayload) (columnVectorIndexStatePreparedAdjacencyAsset, error) {
+	alignment := columnAssetSegmentPayloadAlignment(ColumnAssetKindTCS1TypedColumnPart, payload.Config)
+	ref, err := appender.appendKindWithAlignment(payload.Payload, ColumnAssetKindTCS1TypedColumnPart, generation, payload.PartID, alignment)
+	if err != nil {
+		return columnVectorIndexStatePreparedAdjacencyAsset{}, err
+	}
+	if err := validateColumnVectorIndexStatePreparedAdjacencyRef(payload, ref, generation); err != nil {
+		appender.failed = true
+		return columnVectorIndexStatePreparedAdjacencyAsset{}, err
+	}
+	return columnVectorIndexStatePreparedAdjacencyAsset{
+		Layer:        payload.Layer,
+		Config:       payload.Config,
+		Ref:          ref,
+		Bytes:        ref.Length,
+		Rows:         payload.Rows,
+		Values:       payload.Values,
+		OffsetsBytes: payload.OffsetsBytes,
+		ValuesBytes:  payload.ValuesBytes,
+		PaddingBytes: payload.PaddingBytes,
+		SchemaHash:   payload.SchemaHash,
+	}, nil
 }
 
 func validateColumnVectorIndexStatePreparedAdjacencyRef(payload columnVectorIndexStatePreparedAdjacencyPayload, ref ColumnAssetRef, generation uint64) error {

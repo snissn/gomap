@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"testing"
 
@@ -31,6 +32,10 @@ func BenchmarkServiceSharedCOWConsumers(b *testing.B) {
 	}
 	opts := treedb.OptionsFor(profile, b.TempDir())
 	opts.MemtableMode = "cow_btree"
+	opts.COWMemtableLimits = treedb.DefaultCOWMemtableLimits()
+	if opts.COWMemtableLimits.MaxGenerationBytes != 64<<20 || opts.COWMemtableLimits.MaxInFlightBytes != 64<<20 {
+		b.Fatalf("unexpected COW limits: %+v", opts.COWMemtableLimits)
+	}
 	opts.BackgroundCheckpointInterval = -1
 	opts.BackgroundCheckpointIdleDuration = -1
 	var manager *collections.CollectionManager
@@ -87,7 +92,11 @@ func BenchmarkServiceSharedCOWConsumers(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
+	if info.VectorStrategy != collections.VectorIndexStrategyColumnGraph || info.Metric != MetricCosine || info.Dimension != 2 || info.TypedInput {
+		b.Fatalf("unexpected public index declaration: %+v", info)
+	}
 	b.Logf("backend=%s profile=%s requested_memtable=cow_btree resolved_strategy=%s rows=%d load_batch=%d", backend, profile, info.VectorStrategy, rows, loadBatchSize)
+	b.Logf("cow_limits=%+v", opts.COWMemtableLimits)
 	docs := make([]Document, rows)
 	for i := range docs {
 		docs[i] = Document{ID: fmt.Sprintf("doc-%04d", i), Content: fmt.Sprintf("content-%04d", i), Embedding: []float32{float32(i + 1), 1}, Meta: map[string]any{"tenant": fmt.Sprintf("tenant-%02d", i%16)}}
@@ -148,13 +157,14 @@ func BenchmarkServiceSharedCOWConsumers(b *testing.B) {
 		}
 		b.ReportMetric(float64(out.Stats.PostingsScanned), "postings/op")
 	})
-	b.Run("dense", func(b *testing.B) {
-		req := DenseVectorSearchRequest{QueryEmbedding: []float32{1, 1}, TopK: 10, EfSearch: 100, Filter: filter}
+	b.Run("dense_exact_filtered", func(b *testing.B) {
+		req := DenseVectorSearchRequest{QueryEmbedding: []float32{1, 1}, TopK: 10, EfSearch: 100, Filter: filter, Route: RouteExact}
 		out, err := svc.SearchDenseVector(ctx, name, req)
 		if err != nil {
 			b.Fatal(err)
 		}
 		check(b, out.Documents)
+		checkSharedCOWFrozenResult(b, out.Documents, 16, false, 1e-12)
 		b.ReportAllocs()
 		for b.Loop() {
 			out, err = svc.SearchDenseVector(ctx, name, req)
@@ -163,17 +173,38 @@ func BenchmarkServiceSharedCOWConsumers(b *testing.B) {
 			}
 		}
 		check(b, out.Documents)
-		// Older defaults may select exact. Report the actual route rather than
-		// claiming algorithm-identical ANN across different public defaults.
-		b.Logf("route=%s exact=%t", out.Route, out.Exact)
+		checkSharedCOWFrozenResult(b, out.Documents, 16, false, 1e-12)
+		if out.Route != RouteExact || !out.Exact {
+			b.Fatalf("unexpected dense route=%s exact=%t", out.Route, out.Exact)
+		}
 	})
-	b.Run("hybrid", func(b *testing.B) {
-		req := HybridSearchRequest{Query: "content", QueryEmbedding: []float32{1, 1}, TopK: 10, TextCandidateLimit: 64, VectorCandidateLimit: 64, EfSearch: 100, Filter: filter}
+	b.Run("dense_ann_unfiltered", func(b *testing.B) {
+		req := DenseVectorSearchRequest{QueryEmbedding: []float32{1, 1}, TopK: 10, EfSearch: 100, Route: RouteAnn}
+		out, err := svc.SearchDenseVector(ctx, name, req)
+		if err != nil {
+			b.Fatal(err)
+		}
+		checkSharedCOWFrozenResult(b, out.Documents, 1, false, 1e-6)
+		b.ReportAllocs()
+		for b.Loop() {
+			out, err = svc.SearchDenseVector(ctx, name, req)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+		checkSharedCOWFrozenResult(b, out.Documents, 1, false, 1e-6)
+		if out.Route != RouteAnn || out.Exact || out.FullDocumentScanFallbacks != 0 || out.ExactFallbacks != 0 || out.DocumentsScanned != 0 || out.PrimaryDocumentScans != 0 {
+			b.Fatalf("unexpected dense ANN work: %+v", out)
+		}
+		b.Logf("route=%s prepared=%d search_pack=%d delta_scored=%d candidates=%d materialized=%d", out.Route, out.ColumnGraphPreparedSearch, out.SearchPackSearch, out.ColumnGraphDeltaScored, out.Candidates, out.DocumentMaterializationRows)
+	})
+	b.Run("hybrid_unfiltered", func(b *testing.B) {
+		req := HybridSearchRequest{Query: "content", QueryEmbedding: []float32{1, 1}, TopK: 10, TextCandidateLimit: 64, VectorCandidateLimit: 64, EfSearch: 100}
 		out, err := svc.SearchHybrid(ctx, name, req)
 		if err != nil {
 			b.Fatal(err)
 		}
-		check(b, out.Documents)
+		checkSharedCOWFrozenResult(b, out.Documents, 1, true, 1e-12)
 		b.ReportAllocs()
 		for b.Loop() {
 			out, err = svc.SearchHybrid(ctx, name, req)
@@ -181,7 +212,7 @@ func BenchmarkServiceSharedCOWConsumers(b *testing.B) {
 				b.Fatal(err)
 			}
 		}
-		check(b, out.Documents)
+		checkSharedCOWFrozenResult(b, out.Documents, 1, true, 1e-12)
 		// Inspect the public representation outside timing so this identical
 		// harness also compiles against the original pre-native snapshot type.
 		raw, err := json.Marshal(out.Snapshot)
@@ -197,7 +228,59 @@ func BenchmarkServiceSharedCOWConsumers(b *testing.B) {
 		if snapshot.Native != (backend == "native") || out.Stats.FullDocumentScanFallbacks != 0 || out.Stats.FailClosed != 0 || out.Stats.DocumentsFetched > 10 {
 			b.Fatalf("incorrect capture/work: snapshot=%+v stats=%+v", out.Snapshot, out.Stats)
 		}
+		if out.Plan.TextCandidateLimit != 64 || out.Plan.VectorCandidateLimit != 64 {
+			b.Fatalf("unexpected candidate plan: %+v", out.Plan)
+		}
+		b.Logf("hybrid_plan=%+v hybrid_stats=%+v", out.Plan, out.Stats)
 		b.ReportMetric(float64(out.Stats.DocumentsFetched), "docs_fetched/op")
 		b.ReportMetric(float64(out.Stats.TextPostingsScanned), "postings/op")
 	})
+}
+
+// This source-derived oracle is fixed before performance collection. The
+// corpus vector for ID i is [i+1,1]; cosine against [1,1] decreases with i.
+// Text ranks tie by ID and the default RRF constant is 60. A preflight must
+// establish these source-rank assumptions on both baseline and candidate.
+func checkSharedCOWFrozenResult(tb testing.TB, docs []Document, step int, hybrid bool, tolerance float64) {
+	tb.Helper()
+	if len(docs) != 10 {
+		tb.Fatalf("returned %d documents, want 10", len(docs))
+	}
+	for rank, doc := range docs {
+		i := rank * step
+		if doc.ID != fmt.Sprintf("doc-%04d", i) || doc.Content != fmt.Sprintf("content-%04d", i) || len(doc.Embedding) != 0 || doc.Meta["tenant"] != fmt.Sprintf("tenant-%02d", i%16) || doc.Score == nil {
+			tb.Fatalf("rank %d violates frozen ID/content/projection: %+v", rank+1, doc)
+		}
+		x := float64(i + 1)
+		want := (x + 1) / (math.Sqrt(2) * math.Sqrt(x*x+1))
+		if hybrid {
+			want = 2 / float64(60+rank+1)
+		}
+		if math.IsNaN(*doc.Score) || math.IsInf(*doc.Score, 0) || math.Abs(*doc.Score-want) > tolerance {
+			tb.Fatalf("rank %d score=%g want=%g tolerance=%g", rank+1, *doc.Score, want, tolerance)
+		}
+		if !hybrid {
+			if len(doc.Meta) != 1 {
+				tb.Fatalf("unexpected dense projection: %+v", doc.Meta)
+			}
+			continue
+		}
+		meta, ok := doc.Meta["_treedb_search"].(map[string]any)
+		if !ok || len(doc.Meta) != 2 || meta["type"] != "hybrid" || meta["rank"] != rank+1 || meta["fusion_method"] != "rrf" || meta["fused_score"] != *doc.Score {
+			tb.Fatalf("unexpected hybrid attribution at rank %d: %+v", rank+1, doc.Meta)
+		}
+		sources, ok := meta["sources"].([]map[string]any)
+		if !ok || len(sources) != 2 {
+			tb.Fatalf("unexpected hybrid sources: %+v", meta)
+		}
+		seen := map[string]bool{}
+		for _, source := range sources {
+			name, _ := source["source"].(string)
+			contribution, ok := source["fusion_score"].(float64)
+			if (name != "text" && name != "vector") || seen[name] || source["source_rank"] != rank+1 || !ok || math.Abs(contribution-1/float64(60+rank+1)) > tolerance {
+				tb.Fatalf("unexpected hybrid source rank %d: %+v", rank+1, source)
+			}
+			seen[name] = true
+		}
+	}
 }

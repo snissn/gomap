@@ -3,6 +3,8 @@ package collections
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -548,4 +550,23 @@ func reportRetainedPayloadPolicyFixtureMetrics1876(b *testing.B, fixture retaine
 	if fixture.inputDocumentBytes > 0 {
 		b.ReportMetric(float64(fixture.storage.dbDirBytes)/float64(fixture.inputDocumentBytes), "write_amplification")
 	}
+}
+
+func dirSize(path string) (int64, error) {
+	var total int64
+	err := filepath.WalkDir(path, func(_ string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		total += info.Size()
+		return nil
+	})
+	return total, err
 }

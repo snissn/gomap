@@ -3,11 +3,13 @@ package db
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -98,6 +100,25 @@ func TestNativeRootReaderCapturedRootsWithoutCacheGrowth(t *testing.T) {
 	if empty, err := storage.readers[2].OwnedRootEmpty(); err != nil || empty {
 		t.Fatal(empty, err)
 	}
+	if err := lease.Resize(uint64(unsafe.Sizeof(nativeRootReadTestStorage{})) + memtable.COWAllocationCharge(tree.OwnedPointerProjectionAllocationSize())); err != nil {
+		t.Fatal(err)
+	}
+	projection, err := storage.readers[2].OwnedPointerProjectionIterator([]byte("key-000298"), []byte("key-000303"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 298; i < 303; i++ {
+		if !projection.Valid() || string(projection.UnsafeValue()) != fmt.Sprintf("old-%06d", i) {
+			t.Fatalf("captured projection %d: key=%q value=%q err=%v", i, projection.UnsafeKey(), projection.UnsafeValue(), projection.Error())
+		}
+		projection.Next()
+	}
+	if projection.Valid() || projection.Error() != nil {
+		t.Fatal("projection bounds", projection.Error())
+	}
+	if err := projection.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if len(s.rootTrees) != 0 || cap(s.rootTrees) != 0 {
 		t.Fatal("fixed scratch reads populated root cache")
 	}
@@ -113,6 +134,9 @@ func TestNativeRootReaderCapturedRootsWithoutCacheGrowth(t *testing.T) {
 		}
 		if _, err := storage.readers[i].OwnedRootEmpty(); !errors.Is(err, ErrClosed) {
 			t.Fatal("closed root emptiness", err)
+		}
+		if _, err := storage.readers[i].OwnedPointerProjectionIterator(nil, nil, nil); !errors.Is(err, ErrClosed) {
+			t.Fatal("closed root projection", err)
 		}
 	}
 }
@@ -173,6 +197,22 @@ func TestNativeRootReaderRevisionTombstoneAndCloseOverlap(t *testing.T) {
 	entry, ok, err := reader.SeekGEEntryWithFixedScratch([]byte("b"), nil, key[:], leaf[:], &scratch, nil)
 	if err != nil || !ok || entry.Revision != 41 || entry.Flags&node.FlagTombstone == 0 {
 		t.Fatal("lost physical tombstone", entry, ok, err)
+	}
+	projection, err := reader.OwnedPointerProjectionIterator(nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, revision := iterator.UnsafeEntryWithRevision(projection)
+	if revision != 37 {
+		t.Fatal("projection value revision", revision)
+	}
+	projection.Next()
+	_, _, flags, revision := iterator.UnsafeEntryWithRevision(projection)
+	if !projection.Valid() || flags&node.FlagTombstone == 0 || revision != 41 || projection.Error() != nil {
+		t.Fatal("projection tombstone revision", flags, revision, projection.Error())
+	}
+	if err := projection.Close(); err != nil {
+		t.Fatal(err)
 	}
 	owned, ok, err := d.SeekGEOwnedAtRoot(root, []byte("b"), nil)
 	if err != nil || !ok || owned.Revision != 41 || owned.Flags&node.FlagTombstone == 0 || string(owned.Key) != "b" {

@@ -25,6 +25,9 @@ type NativeJSONRead struct {
 	capture       backenddb.NativeSemanticCapture
 	domain        nativeDomainRead
 	collection    *nativeCollectionState
+	// engine borrows the resolved immutable catalog from capture or privateEngine.
+	// Only private successor preparation may produce mutation/publication state.
+	engine        *nativeEngineVersion
 	privateEngine *nativeEngineVersion
 	scratch       *nativeDomainReadScratch
 	scratchLease  *memtable.COWExternalLease
@@ -62,13 +65,32 @@ func (m *NativeJSONManager) Capture(name string) (result *NativeJSONRead, result
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
 	if base == nil {
-		r.privateEngine, err = importNativeJSONCatalog(capture)
-		if err != nil {
-			return nil, err
+		if projection, ok := capture.(interface {
+			NativeCatalogProjection(func(backenddb.NativeSemanticCapture) (backenddb.NativeSemanticState, error)) (backenddb.NativeSemanticState, error)
+		}); ok {
+			state, projectionErr := projection.NativeCatalogProjection(nativeJSONCatalogProjection)
+			base, ok = state.(*nativeEngineVersion)
+			if projectionErr != nil {
+				// Partial failed construction remains on the original read's
+				// cleanup path, outside both projection locks; never shared.
+				r.privateEngine = base
+				return nil, projectionErr
+			}
+			if !ok || base == nil {
+				return nil, backenddb.ErrNativeSemanticUnsupported
+			}
+		} else {
+			// Other original capture implementations retain private import
+			// ownership. No process/manager cache or alternate capture is used.
+			r.privateEngine, err = importNativeJSONCatalog(capture)
+			if err != nil {
+				return nil, err
+			}
+			base = r.privateEngine
 		}
-		base = r.privateEngine
 	}
 
+	r.engine = base
 	c, ok := base.names.Get(name)
 	if !ok {
 		return nil, tree.ErrKeyNotFound
@@ -84,6 +106,17 @@ func (m *NativeJSONManager) Capture(name string) (result *NativeJSONRead, result
 		return nil, err
 	}
 	return r, nil
+}
+
+// Static adapter avoids a newly allocated callback closure on every capture.
+// Successful import transfers its original reference to the retained cut. On
+// error its partial engine returns to the caller's original private cleanup.
+func nativeJSONCatalogProjection(capture backenddb.NativeSemanticCapture) (backenddb.NativeSemanticState, error) {
+	engine, err := importNativeJSONCatalog(capture)
+	if engine == nil {
+		return nil, err
+	}
+	return engine, err
 }
 
 func (m *NativeJSONManager) Get(collection string, id []byte) (value []byte, resultErr error) {
@@ -142,6 +175,12 @@ func (r *NativeJSONRead) detachScratch() *memtable.COWExternalLease {
 }
 
 func (r *NativeJSONRead) Get(id []byte) ([]byte, error) {
+	return r.getAdmitted(id, nil)
+}
+
+// Internal ordinary readers retain their independent output on the enclosing
+// operation's original receipt. Public Get keeps its caller-owned output contract.
+func (r *NativeJSONRead) getAdmitted(id []byte, admitOutput func(uint64) error) ([]byte, error) {
 	if r == nil {
 		return nil, backenddb.ErrClosed
 	}
@@ -151,26 +190,69 @@ func (r *NativeJSONRead) Get(id []byte) ([]byte, error) {
 		return nil, backenddb.ErrClosed
 	}
 	typed := nativeTypedMeta(r.meta)
-	if typed && r.domain.domain != nil {
-		if row, residual, ok := r.domain.domain.typed.find(id); ok {
-			return r.reconstructPendingTyped(row, residual)
-		}
+	if value, handled, err := r.pendingTypedValueLocked(id, typed, admitOutput); handled {
+		return value, err
 	}
 	if r.domain.domain == nil {
 		return nil, tree.ErrKeyNotFound
 	}
-	entry, owned, err := r.lookupEntry(id, true)
+	var entry node.LeafEntry
+	var owned bool
+	var err error
+	if admitOutput == nil {
+		entry, owned, err = r.lookupEntry(id, true)
+	} else {
+		// The shared physical point reader deliberately returns no inline
+		// bytes without copy-out. Borrow the existing domain/page scratch
+		// instead, so original admission precedes the independent output.
+		var resolved bool
+		entry, resolved, err = r.domain.memoryEntry(id)
+		if !resolved {
+			var scratch *nativeDomainReadScratch
+			scratch, err = r.physicalScratch()
+			if err == nil {
+				entry, err = r.domain.baseEntry(id, scratch, r.readLeaf)
+			}
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
+	return r.materializeEntryLocked(id, entry, owned, admitOutput, typed && r.meta.Options.ColumnStore.RetainedPayload != ColumnRetainedPayloadFull)
+}
+
+// pendingTypedValueLocked preserves the point-read fast path before any
+// physical lookup, and is also used for a selected scan entry. A handled result
+// includes an eligibility refusal or pending tombstone; neither may fall through.
+func (r *NativeJSONRead) pendingTypedValueLocked(id []byte, typed bool, admitOutput func(uint64) error) ([]byte, bool, error) {
+	if typed && admitOutput != nil && r.meta.Options.ColumnStore.RetainedPayload != ColumnRetainedPayloadFull {
+		return nil, true, backenddb.ErrNativeSemanticUnsupported
+	}
+	if typed && r.domain.domain != nil {
+		if row, residual, ok := r.domain.domain.typed.find(id); ok {
+			if admitOutput != nil && row != nil {
+				if err := admitOutput(memtable.COWAllocationCharge(uint64(len(residual)))); err != nil {
+					return nil, true, err
+				}
+			}
+			value, err := r.reconstructPendingTyped(row, residual)
+			return value, true, err
+		}
+	}
+	return nil, false, nil
+}
+
+// materializeEntryLocked resolves an already selected entry under this read's
+// original mutex/capture. Inline bytes and pointer output become independently
+// owned before the caller can move its cursor or unlock for a callback.
+func (r *NativeJSONRead) materializeEntryLocked(id []byte, entry node.LeafEntry, owned bool, admitOutput func(uint64) error, reconstruct bool) ([]byte, error) {
 	if entry.Flags&node.FlagTombstone != 0 {
 		return nil, tree.ErrKeyNotFound
 	}
 	// Full retains the original whole JSON in primary storage. Preserve the
 	// ordinary owned pointer/inline output path without touching typed assets.
-	reconstruct := typed && r.meta.Options.ColumnStore.RetainedPayload != ColumnRetainedPayloadFull
 	if entry.Flags&node.FlagPointer != 0 {
-		value, err := r.readValue(entry.ValuePtr, nil)
+		value, err := r.readValue(entry.ValuePtr, admitOutput)
 		if err != nil {
 			return nil, err
 		}
@@ -185,7 +267,13 @@ func (r *NativeJSONRead) Get(id []byte) ([]byte, error) {
 	if owned {
 		return entry.Value, nil
 	}
-	// The result belongs to the caller, not to retained database accounting.
+	if admitOutput != nil {
+		if err := admitOutput(memtable.COWAllocationCharge(uint64(len(entry.Value)))); err != nil {
+			return nil, err
+		}
+	}
+	// Public nil-admission output belongs to the caller. Internal copies remain
+	// admitted until their enclosing consumer releases the original receipt.
 	value := make([]byte, len(entry.Value))
 	copy(value, entry.Value)
 	return value, nil
@@ -274,6 +362,30 @@ func (r *NativeJSONRead) readValue(ptr page.ValuePtr, admitOutput func(uint64) e
 }
 
 func (r *NativeJSONRead) readLeaf(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
+	if r.capture == nil || r.closing || r.failure != nil {
+		return nil, backenddb.ErrClosed
+	}
+	// This scope already retains its exact immutable capture. Reuse only the
+	// decoded page still resident in its exclusively admitted point scratch.
+	// Importers and iterators also call this reader with OTHER buffers: every
+	// such call invalidates the one-page identity before it can write anything.
+	// Tree/PRIMARY checksum, type and operand validation still run on each use.
+	scratch := r.scratch
+	canonical := scratch != nil && cap(dst) == page.PageSize && &dst[:page.PageSize][0] == &scratch.leaf[0]
+	if canonical && scratch.leafValid && scratch.leafRef == ptr {
+		return scratch.leaf[:], nil
+	}
+	if scratch != nil {
+		scratch.leafValid = false
+	}
+	data, err := r.loadLeaf(ptr, dst)
+	if err == nil && canonical && len(data) == page.PageSize && cap(data) == page.PageSize && &data[0] == &scratch.leaf[0] {
+		scratch.leafRef, scratch.leafValid = ptr, true
+	}
+	return data, err
+}
+
+func (r *NativeJSONRead) loadLeaf(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
 	if physical, ok := r.capture.(backenddb.NativePhysicalLeafReader); ok {
 		return physical.NativeLeafPage(ptr, dst)
 	}
@@ -383,6 +495,7 @@ func (r *NativeJSONRead) Close() error {
 	r.metadataLease = nil
 	var err error
 	r.collection = nil
+	r.engine = nil
 	if r.privateEngine != nil {
 		record := r.privateEngine.Release()
 		r.privateEngine = nil

@@ -169,7 +169,7 @@ func (c *Collection) searchVectorsExactWithRead(query []float32, opts VectorSear
 			return nil, err
 		}
 		defer lease.Close()
-		scratch = nativeHNSWPeakAdmission(lease)
+		scratch = admittedLeasePeakClosure(lease)
 	} else {
 		materializer, err = c.NewStoredDocumentJSONMaterializer()
 	}

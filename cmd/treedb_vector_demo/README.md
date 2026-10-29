@@ -28,8 +28,10 @@ documents without returning embeddings, use the collection/vector APIs (or
 `cmd/treedb_column_graph_demo -include-docs`) with
 `ProjectionOrientedVectorDocumentFetchPreset`. Use `-metadata-filter` for a
 deterministic tenant filter smoke; this uses exact scoring while still
-publishing typed-column vector assets because public `column_graph` metadata
-predicates are not wired yet.
+publishing typed-column vector assets. This demo does not admit mutable typed
+graph serving. For supported typed filtering through explicit admission, see the
+[typed-vector guide](../../TreeDB/docs/guides/vector-search-typed-column.md).
+Ordinary filtered ANN is unavailable and does not fall back to exact scanning.
 
 Text, JSON, and markdown summaries include operation-specific vector search counters such as candidate rows, visited nodes/edges, vector payload bytes, adjacency payload bytes, and direct/scratch decode counts.
 

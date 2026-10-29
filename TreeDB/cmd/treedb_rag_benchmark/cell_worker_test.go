@@ -83,14 +83,13 @@ func TestApplicationCellWorkerReportsUnsupportedAndRangeError(t *testing.T) {
 	if unsupported.Error != "" || unsupported.Row == nil || unsupported.Row.Status != "unsupported" {
 		t.Fatalf("unsupported response=%+v", unsupported)
 	}
-	wantCell, _ := applicationCellByOrdinal(0)
 	for attempt := 0; attempt < 2; attempt++ {
 		var supported applicationCellWorkerResponse
 		if err := decoder.Decode(&supported); err != nil {
 			t.Fatalf("decode supported attempt %d: %v", attempt, err)
 		}
-		if supported.Error != "" || supported.Row == nil || supported.Row.Status != "supported" || supported.Row.Cell != wantCell {
-			t.Fatalf("supported attempt %d response=%+v", attempt, supported)
+		if supported.Row != nil || !strings.Contains(supported.Error, "incompatible source parent shape") || !strings.Contains(supported.Error, `"embedding"`) {
+			t.Fatalf("parent shape failure attempt %d must return no row or samples: %+v", attempt, supported)
 		}
 	}
 	matches, err := filepath.Glob(filepath.Join(cfg.Dir, "*", "cell-*"))

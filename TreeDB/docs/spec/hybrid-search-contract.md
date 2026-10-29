@@ -270,9 +270,9 @@ scan is implied.
 A normal hybrid query binds text, vector, scalar, fusion, and final fetch to one
 collection snapshot:
 
-- `current_snapshot` flushes buffered collection writes first, acquires the
-  current backend snapshot, and opens all candidate/fetch state against that
-  snapshot.
+- `current_snapshot` opens all candidate/fetch state against one captured owner.
+  The legacy owner flushes buffered collection writes first and authenticates
+  physical snapshot identity. The native owner retains one captured logical read.
 - `bound_snapshot` is reserved for future explicit read-view/searcher APIs where
   the caller controls snapshot lifetime.
 
@@ -283,9 +283,16 @@ from a different epoch, the query MUST fail closed with the appropriate error an
 `HybridSearchStats.FailClosedReason`; it MUST NOT silently use another source,
 legacy fallback, or primary-document scan as a substitute.
 
-`HybridSearchSnapshot` reports the snapshot identity (`commit_seq`,
+`HybridSearchSnapshot` reports physical snapshot identity (`commit_seq`,
 `system_root_page_id`) and source epochs when the implementation can expose them.
-Zero epoch fields mean unavailable/not applicable, not proof of freshness.
+The native owner also reports `native`, `native_logical_sequence`,
+`collection_incarnation` and `document_generation`; its physical fields describe
+the captured basis and are not logical-sequence substitutes. Phase-boundary
+validation checks the current global native logical sequence, including
+publications in other collections. Physical-only checkpoint/rebase preserves
+logical identity. Cold private import can legitimately have native logical
+sequence zero. Other zero epoch fields mean unavailable/not applicable, not
+proof of freshness. See [native Hybrid reads](native-hybrid-read.md).
 
 Selected `quantized_rerank` captures one typed read owner before scalar or text
 work. Scalar lookups, lexical postings, scalar-u8 traversal, canonical FP32
@@ -420,5 +427,5 @@ selected typed serving. Explicit `text_first`, `vector_first`, and `union_fusion
 retain the unfiltered source candidate limits and ranks before scalar filtering.
 `bound_snapshot` remains reserved for a
 future explicit read-view/searcher API; the current executor supports
-`current_snapshot` and fails closed on root/commit changes observed between
-bounded phases.
+`current_snapshot` and fails closed when the owner's physical or native logical
+identity changes between bounded phases.

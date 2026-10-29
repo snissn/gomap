@@ -2,6 +2,7 @@ package collections
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"os"
 	"reflect"
@@ -445,7 +446,7 @@ func TestColumnGraphVectorIndexStatusRequiresVectorIndexStateRecord1987(t *testi
 	}
 }
 
-func TestColumnGraphVectorIndexStatusRefreshesNativeRuntimeStrategyV2A(t *testing.T) {
+func TestColumnGraphCatalogOpenRejectsRetiredStrategyV2A(t *testing.T) {
 	dir := t.TempDir()
 	d, err := backenddb.Open(backenddb.Options{Dir: dir})
 	if err != nil {
@@ -459,7 +460,7 @@ func TestColumnGraphVectorIndexStatusRefreshesNativeRuntimeStrategyV2A(t *testin
 	}
 	staleColumnGraphDef := testColumnGraphVectorIndexDefinitionV2A()
 	nativeDef := staleColumnGraphDef
-	nativeDef.Strategy = VectorIndexStrategyNativeRuntime
+	nativeDef.Strategy = VectorIndexStrategy("native_runtime")
 	identity := ColumnManifestIdentity{Generation: 2, Format: columnManifestFormatTCS1, Version: columnManifestIdentityVersion, Checksum: 0x1234}
 	records, identity := testColumnGraphManifestRecordsV2A(t, *baseCfg, staleColumnGraphDef, identity, ColumnAssetRef{
 		Kind:       ColumnAssetKindTCS1PartImage,
@@ -474,20 +475,29 @@ func TestColumnGraphVectorIndexStatusRefreshesNativeRuntimeStrategyV2A(t *testin
 	meta := CollectionMeta{
 		Name:          "docs",
 		Options:       CollectionOptions{ColumnStore: testColumnGraphBaseColumnStoreConfigV2A()},
-		VectorIndexes: []VectorIndexDefinition{nativeDef},
+		VectorIndexes: []VectorIndexDefinition{staleColumnGraphDef},
 	}
 	publishColumnGraphCatalogForTestV2A(t, d, meta, identity, records)
-	col, err := NewCollectionManager(d).OpenCollection("docs")
+	// Corrupt only persisted identity, bypassing new-request admission deliberately.
+	meta.VectorIndexes[0] = nativeDef
+	raw, err := json.Marshal(collectionMetaDisk{Version: collectionMetaVersion, Name: meta.Name, Options: meta.Options, VectorIndexes: meta.VectorIndexes})
 	if err != nil {
-		t.Fatalf("open collection: %v", err)
+		t.Fatal(err)
+	}
+	if _, _, err := d.PublishOrderedRootGroupWithSystemBuilder(nil, func([]uint64) (iterator.UnsafeIterator, error) {
+		snap := d.AcquireSnapshot()
+		if snap == nil {
+			return nil, backenddb.ErrClosed
+		}
+		defer snap.Close()
+		return buildSystemTargetIterator(snap, map[string][]byte{systemCollectionMetaKey(meta.Name): raw})
+	}); err != nil {
+		t.Fatal(err)
 	}
 
-	status, err := col.columnGraphVectorIndexStatus(staleColumnGraphDef.Name)
-	if err != nil {
-		t.Fatalf("columnGraphVectorIndexStatus: %v", err)
-	}
-	if status.Strategy != VectorIndexStrategyNativeRuntime || status.State != VectorIndexStateNativeRuntime || status.Reason != VectorIndexReasonNativeRuntime {
-		t.Fatalf("status=%+v want native_runtime after catalog refresh", status)
+	_, err = NewCollectionManager(d).OpenCollection("docs")
+	if !errors.Is(err, backenddb.ErrNativeSemanticUnsupported) {
+		t.Fatalf("retired stored identity err=%v", err)
 	}
 }
 

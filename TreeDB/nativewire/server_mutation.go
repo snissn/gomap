@@ -692,10 +692,19 @@ func (s *Server) handleCheckpoint(sections []iwire.Section) ([]iwire.Section, er
 			return nil, metadataWrap(err)
 		}
 	}
-	if err := s.backend.Checkpoint(); err != nil {
+	if err := s.checkpointStorage(); err != nil {
 		return nil, metadataWrap(err)
 	}
 	return []iwire.Section{s.ackMeta(actualAck)}, nil
+}
+
+// The manager knows whether its authority is native-active. A backend bridge
+// may be bound for a legacy owner too, so bridge presence cannot select this.
+func (s *Server) checkpointStorage() error {
+	if s.collections != nil {
+		return s.collections.CheckpointStorage()
+	}
+	return s.backend.Checkpoint()
 }
 
 func (s *Server) admitBarrierAck(actual, requested iwire.AckPolicy) error {
@@ -761,7 +770,7 @@ func (s *Server) satisfyAck(collection interface{ Flush() error }, requested iwi
 		if err := s.admitSyncedAck(); err != nil {
 			return 0, err
 		}
-		if err := s.backend.Checkpoint(); err != nil {
+		if err := s.checkpointStorage(); err != nil {
 			return 0, metadataWrap(err)
 		}
 		return iwire.AckSynced, nil

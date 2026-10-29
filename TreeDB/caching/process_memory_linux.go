@@ -37,13 +37,18 @@ func currentProcessRSSBytes() (rssBytes uint64, rssHWMBytes uint64, ok bool) {
 }
 
 func parseProcStatusKBLine(line []byte) (uint64, bool) {
-	fields := bytes.Fields(line)
-	if len(fields) < 2 {
-		return 0, false
+	// Only the second Unicode-whitespace-delimited field is used. Iterate
+	// without allocating a slice containing all of the line's fields.
+	fieldIndex := 0
+	for field := range bytes.FieldsSeq(line) {
+		if fieldIndex == 1 {
+			v, err := strconv.ParseUint(string(field), 10, 64)
+			if err != nil {
+				return 0, false
+			}
+			return v * 1024, true
+		}
+		fieldIndex++
 	}
-	v, err := strconv.ParseUint(string(fields[1]), 10, 64)
-	if err != nil {
-		return 0, false
-	}
-	return v * 1024, true
+	return 0, false
 }
