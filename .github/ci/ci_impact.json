@@ -12,7 +12,7 @@
     "M0 observation is manual diagnostic-only on a separately fixed product; no forecast starts it or replaces failed M0 acceptance.",
     "Bounded maintenance comparison is a manually granted diagnostic on fixed baseline/candidate products; no forecast starts it or establishes cost, M0 or native acceptance."
   ],
-  "discovery_source_sha256": "d3d4daa072d6266cd16bcda71953c7038d38d415b0284d193595437be2c5f5ba",
+  "discovery_source_sha256": "8f501f954d56056abb840ade49aa6b52a21844af755817dda0b791be04904320",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
@@ -149,7 +149,7 @@
       "mode": "100644"
     },
     ".github/scripts/test_treedb_ci_contract.py": {
-      "git_blob": "92223592df2a546b94b1c5ee031a4f24835a383c",
+      "git_blob": "4ac31f2b16839bebf0c239f4b6157186628c8d6f",
       "mode": "100644"
     },
     ".github/scripts/test_treedb_windows_core_headroom.py": {
@@ -206,6 +206,18 @@
     },
     "scripts/cow_c3_read/protocol.py": {
       "git_blob": "36b2e6ab54eba64dc83a657068da500ea46eae82",
+      "mode": "100644"
+    },
+    "scripts/treedb_vacuum_m0_ci.py": {
+      "git_blob": "2570bd6971c7149164e95d980c2b1a6a30e00153",
+      "mode": "100644"
+    },
+    "scripts/treedb_vacuum_m0_ci.sh": {
+      "git_blob": "b323063f046d82c05edb1a25da9f977c02786886",
+      "mode": "100755"
+    },
+    "scripts/treedb_vacuum_m0_ci_test.py": {
+      "git_blob": "260fe227e04c12f470cc131aee4ffeb214b96ea8",
       "mode": "100644"
     }
   },
@@ -3015,6 +3027,9 @@
             "TreeDB/db/db.go",
             "TreeDB/public.go",
             "scripts/treedb_vacuum_m0_capture.sh",
+            "scripts/treedb_vacuum_m0_ci.sh",
+            "scripts/treedb_vacuum_m0_ci.py",
+            "scripts/treedb_vacuum_m0_ci_test.py",
             "scripts/treedb_vacuum_m0_summarize.py",
             "scripts/treedb_vacuum_m0_summarize_test.py",
             ".github/workflows/treedb-vacuum-m0.yml"
@@ -3022,7 +3037,7 @@
         },
         "workflow_dispatch": null
       },
-      "git_blob": "9e222e6ebe64da0f259319d727cdf10b68fe4d8f",
+      "git_blob": "c63423dcc8789384da6c2e3a17cb3a6500c3f332",
       "jobs": {
         "capture": {
           "checkout": [
@@ -3034,20 +3049,22 @@
           ],
           "commands": [
             {
-              "command_sha256": "c670090f86b7b236bdec4c8d60b6c5305cf860be5a6eb46a511f13f342ccebc2",
-              "entrypoint": ".github/workflows/treedb-vacuum-m0.yml:50",
-              "invocation": "RUN_DIR=\"$RUNNER_TEMP/treedb-vacuum-m0\" scripts/treedb_vacuum_m0_capture.sh",
-              "name": "Capture and enforce M0 evidence"
+              "command_sha256": "82330780432e9084e7f13206380b8069775be3a1cc69a3e194b982fdccbe0e24",
+              "entrypoint": ".github/workflows/treedb-vacuum-m0.yml:57",
+              "invocation": "RUN_DIR=\"$RUNNER_TEMP/treedb-vacuum-m0\" scripts/treedb_vacuum_m0_ci.sh",
+              "name": "Capture and enforce declared M0 qualification"
             }
           ],
-          "environment": {},
+          "environment": {
+            "M0_QUALIFICATION_PROFILE": "hosted-semantic"
+          },
           "matrix": null,
           "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
           "race": false,
           "runs_on": "${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && vars.TREEDB_PERF_RUNNER_LABEL != '' && vars.TREEDB_PERF_RUNNER_PR != '' && vars.TREEDB_PERF_RUNNER_PR == format('{0}', github.event.pull_request.number) && format('{0}-m0', vars.TREEDB_PERF_RUNNER_LABEL) || 'ubuntu-24.04' }}"
         }
       },
-      "sha256": "688e5de2f4025d2e45a7fd0b37cfa7cf686de01399c67a3b51431daf22253c96"
+      "sha256": "c02846e0220f432ffbbf7e182b794ac479d3c5fb54cd0822fb085f556096427d"
     },
     "unified-bench-suites.yml": {
       "coverage": "existing execution only; triggers/path filters are unchanged",
