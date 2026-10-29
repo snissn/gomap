@@ -22,7 +22,7 @@ func TestPublicCommandWALRouteUnwind(t *testing.T) {
 		publicCommandWALRouteUnwindChild(t, spec)
 		return
 	}
-	for _, route := range []string{"point-flush", "point-sync", "batch-flush", "batch-postappend-hook", "batch-assigned-hook", "batch-assigned-drain", "batch-assigned-flush", "range-flush", "range-postappend-hook", "mixed-flush"} {
+	for _, route := range []string{"point-flush", "point-sync", "batch-flush", "batch-postappend-hook", "batch-assigned-hook", "batch-assigned-drain", "batch-assigned-flush", "range-flush", "range-postappend-hook", "mixed-flush", "cow-batch-append"} {
 		for _, mode := range []string{"modern-nil", "legacy-nil", "goexit"} {
 			t.Run(route+"/"+mode, func(t *testing.T) {
 				ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -45,14 +45,19 @@ func TestPublicCommandWALRouteUnwind(t *testing.T) {
 
 func publicCommandWALRouteUnwindChild(t *testing.T, spec string) {
 	route, mode, _ := strings.Cut(spec, "/")
+	cow := strings.HasPrefix(route, "cow-")
+	route = strings.TrimPrefix(route, "cow-")
 	opts := commandWALDurabilityProofOptions(t.TempDir())
 	opts.MemtableMode = "btree"
 	opts.MemtableShards = 2
+	if cow {
+		opts.MemtableMode = "cow_ordered"
+	}
 	db, err := Open(opts)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if db.ResolvedProfile() != ProfileCommandWALDurable || db.cached.COWMode() {
+	if db.ResolvedProfile() != ProfileCommandWALDurable || db.cached.COWMode() != cow {
 		t.Fatal("ordinary command WAL fixture inactive")
 	}
 	anchor, value := []byte("0-durable-anchor"), []byte("stable")
@@ -83,29 +88,32 @@ func publicCommandWALRouteUnwindChild(t *testing.T, spec string) {
 		panic(nil)
 	}
 	calls := 0
-	unregister := db.backend.RegisterCommandWALRawPublishBarrier(func() error {
-		calls++
-		if (route == "batch-postappend-hook" || route == "range-postappend-hook") && calls == 2 {
-			fault()
-		}
-		if strings.HasPrefix(route, "batch-assigned-") {
-			if calls == 2 {
-				return &commandwalbarrier.PendingDrain{Drain: func() error { return nil }}
+	unregister := func() {}
+	if !cow {
+		unregister = db.backend.RegisterCommandWALRawPublishBarrier(func() error {
+			calls++
+			if (route == "batch-postappend-hook" || route == "range-postappend-hook") && calls == 2 {
+				fault()
 			}
-			if calls == 3 {
-				if route == "batch-assigned-hook" {
-					fault()
+			if strings.HasPrefix(route, "batch-assigned-") {
+				if calls == 2 {
+					return &commandwalbarrier.PendingDrain{Drain: func() error { return nil }}
 				}
-				if route == "batch-assigned-drain" {
-					return &commandwalbarrier.PendingDrain{Drain: func() error { fault(); return nil }}
+				if calls == 3 {
+					if route == "batch-assigned-hook" {
+						fault()
+					}
+					if route == "batch-assigned-drain" {
+						return &commandwalbarrier.PendingDrain{Drain: func() error { fault(); return nil }}
+					}
 				}
 			}
-		}
-		return nil
-	})
+			return nil
+		})
+	}
 	restore := durabilitycut.Install(func(e durabilitycut.Event) error {
 		if !fired && e.Resource == durabilitycut.ResourceCommandWAL {
-			if (strings.HasSuffix(route, "-flush") && e.Point == durabilitycut.BeforeUserspaceFlush) || (route == "point-sync" && e.Point == durabilitycut.BeforeDependencyFileSync) {
+			if (cow && route == "batch-append" && e.Point == durabilitycut.AfterDependencyAppend) || (strings.HasSuffix(route, "-flush") && e.Point == durabilitycut.BeforeUserspaceFlush) || (route == "point-sync" && e.Point == durabilitycut.BeforeDependencyFileSync) {
 				fault()
 			}
 		}
@@ -157,9 +165,12 @@ func publicCommandWALRouteUnwindChild(t *testing.T, spec string) {
 	}
 	proof := strings.Join(stack, "\n")
 	require := []string{"appendAndCaptureOrdinaryPublicCommandWAL"}
+	if cow {
+		require = []string{"writeCOWPublication", "writeRegularLocked"}
+	}
 	if !strings.HasPrefix(route, "point-") {
 		require = append(require, "WriteSync")
-		if strings.HasPrefix(route, "batch-") {
+		if !cow && strings.HasPrefix(route, "batch-") {
 			require = append(require, "appendRawKVBatchPayloadCommandWALPreparedCapture")
 		}
 	} else {
@@ -200,7 +211,7 @@ func publicCommandWALRouteUnwindChild(t *testing.T, spec string) {
 	db.commandWALGroupCommit.mu.Lock()
 	active, terminal := db.commandWALGroupCommit.leaderActive, db.commandWALGroupCommit.terminalErr
 	db.commandWALGroupCommit.mu.Unlock()
-	if active || !errors.Is(terminal, ErrRecoveryRequired) {
+	if active || (!cow && !errors.Is(terminal, ErrRecoveryRequired)) {
 		t.Fatalf("active=%v terminal=%v", active, terminal)
 	}
 	// Public backend lock APIs test all three transferred leases, without

@@ -407,7 +407,38 @@ func (b *Batch) writeCOWPublication(syncWrite bool, unlock func()) error {
 	checkpoint := syncWrite && b.commandWALAppend == nil
 	var err error
 	if b.commandWALAppend != nil {
+		callbackReturned := false
+		defer func() {
+			if callbackReturned {
+				return
+			}
+			// The append may have reached storage before returning its receipt.
+			// A staged canonical publication is therefore uncertain on unwind;
+			// retire its private preparation but require recovery before reuse.
+			if b.cowState.prepared != nil || b.cowState.receipt.Assigned {
+				if poisoner, ok := b.db.backend.(interface{ MarkCommandWALRecoveryRequired() }); ok {
+					poisoner.MarkCommandWALRecoveryRequired()
+				}
+				b.db.cow.prefix.PoisonAccepted(backenddb.ErrRecoveryRequired)
+				b.cowState.receipt.Uncertain = true
+			}
+			if b.cowState.receipt.Assigned && b.cowState.native != nil {
+				p := b.cowState.prepared
+				owner, opening := b.parkAssignedNative(p, backenddb.ErrRecoveryRequired)
+				unlock()
+				_ = b.drainAssignedNative(owner, opening, p, backenddb.ErrRecoveryRequired)
+				return
+			}
+			p := b.cancelCOWPublication()
+			unlock()
+			if p != nil {
+				if cleanupErr := p.drainCancelled(); cleanupErr != nil {
+					b.db.reportError(cleanupErr)
+				}
+			}
+		}()
 		err = b.commandWALAppend()
+		callbackReturned = true
 	} else if b.db.cow.txnOwner == nil {
 		// Standalone caches use ordinary admission; nil is never private authority.
 		finalizer, ok := b.db.backend.(interface {
