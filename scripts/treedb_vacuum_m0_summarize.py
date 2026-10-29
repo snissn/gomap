@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import re
@@ -26,11 +27,11 @@ SIGNED_PHASE_DIAGNOSTICS = {
 
 
 def cv_metrics(stability_arm: str, acceptance_contract: str) -> tuple[str, ...]:
-    if acceptance_contract not in ("v2", "v3"):
+    if acceptance_contract not in ("v2", "v3", "v4-proposal"):
         raise ValueError("unknown acceptance contract")
-    if acceptance_contract == "v3":
+    if acceptance_contract in ("v3", "v4-proposal"):
         if stability_arm != "production":
-            raise ValueError("v3 requires the production stability arm")
+            raise ValueError("v3/v4-proposal requires the production stability arm")
         return PRODUCT_V3_CV_METRICS
     return REQUIRED_CV_METRICS
 
@@ -122,6 +123,30 @@ def summarize(paths: list[Path], expected_benchmark: str | None = None) -> dict[
             "cv": statistics.stdev(values) / mean if mean else 0.0,
         }
     return result
+
+
+# PROPOSAL: prospective paired guard. This deterministic materiality rule is
+# not a significance test or a confidence bound; no sample may be discarded.
+PAIRED_MATERIAL_RATIO = 1.05
+
+
+def paired_comparison(baseline, candidate):
+    result = {}
+    for name in PRODUCT_V3_CV_METRICS:
+        before, after = baseline[name]["samples"], candidate[name]["samples"]
+        if len(before) != 10 or len(after) != 10:
+            raise ValueError("paired guard requires exactly ten declared pairs")
+        if any(not math.isfinite(x) or x <= 0 for x in [*before, *after]):
+            raise ValueError("paired timing samples must be finite and positive")
+        ratios = [c / b for b, c in zip(before, after)]
+        median = statistics.median(ratios)
+        result[name] = {"ratios": ratios, "median_ratio": median,
+                        "material_ratio_limit": PAIRED_MATERIAL_RATIO,
+                        "passed": median <= PAIRED_MATERIAL_RATIO}
+    return {"status": "provisional-contract-proposal", "estimator": "median of ten paired candidate/baseline ratios",
+            "pair_order": "odd baseline-candidate; even candidate-baseline; public follows each pair",
+            "statistical_inference": None, "metrics": result,
+            "passed": all(x["passed"] for x in result.values())}
 
 
 def classify_public_status(public: dict[str, dict[str, object]]) -> str:
@@ -273,7 +298,7 @@ def render_markdown(result: dict[str, object]) -> str:
         if metric not in required_cv:
             classification += ' (diagnostic only; owner review required)'
         lines.append(f"| `{metric}` | {entry['median']:.3f} | {entry['cv']:.4f} | {classification} |")
-    if contract == "v3":
+    if contract in ("v3", "v4-proposal"):
         pause = result["pause_diagnostic"]
         lines.extend(["", f"- Pause maximum: `{pause['maximum']:.0f} ns`; all ten raw maxima and CV remain above/in results.json.",
                       "- Pause distribution and source phase evidence require separate outcome-owner review; this capture does not grant merge approval."])
@@ -301,6 +326,13 @@ def render_markdown(result: dict[str, object]) -> str:
             "",
         ]
     )
+    if "paired_regression_proposal" in result:
+        paired = result["paired_regression_proposal"]
+        lines.extend(["", "## Provisional paired materiality proposal", "",
+                      "Median of ten contemporaneous candidate/baseline ratios <= 1.05 for each v3 timing metric.",
+                      "Original CV and semantic predicates remain mandatory for both arms. No statistical confidence or product approval is claimed.",
+                      "", *[f"- `{name}`: median ratio `{value['median_ratio']:.6f}`, passed `{value['passed']}`"
+                              for name, value in paired["metrics"].items()]])
     return "\n".join(lines)
 
 
@@ -310,8 +342,8 @@ def main() -> int:
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--stability-arm", choices=tuple(STABILITY_BENCHMARKS), default="legacy",
                         help="legacy retains historical interpretation; production is the current capture contract")
-    parser.add_argument("--acceptance-contract", choices=("v2", "v3"), default="v2",
-                        help="v2 retains all three CV gates; v3 reports pause CV diagnostically with mandatory owner review")
+    parser.add_argument("--acceptance-contract", choices=("v2", "v3", "v4-proposal"), default="v2",
+                        help="v2: historical CV; v3: pause diagnostic; v4-proposal: controlled paired 5 percent guard")
     parser.add_argument("--qualification-profile", choices=("controlled-performance", "hosted-semantic"),
                         default="controlled-performance")
     args = parser.parse_args()
@@ -325,9 +357,37 @@ def main() -> int:
     public = summarize(sorted((run_dir / "raw").glob("public-*.txt")))
 
     gates = evaluate_gates(legacy, public, arm, args.acceptance_contract)
+    paired = None
+    if args.qualification_profile == "controlled-performance" and (arm, args.acceptance_contract) == ("production", "v4-proposal"):
+        if {path.name for path in (run_dir / "raw").glob("baseline-*.txt")} != {f"baseline-{n}.txt" for n in range(1, 11)}:
+            raise ValueError("paired guard requires exactly the ten declared baseline files")
+        baseline = summarize([run_dir / "raw" / f"baseline-{n}.txt" for n in range(1, 11)], STABILITY_BENCHMARKS[arm])
+        # Explicit numeric pairing, rather than lexical order (1,10,2,...).
+        candidate = summarize([run_dir / "raw" / f"production-{n}.txt" for n in range(1, 11)], STABILITY_BENCHMARKS[arm])
+        baseline_fixture = json.loads((run_dir / "baseline-fixture.json").read_text())
+        if baseline_fixture["fixture"] != fixture["fixture"]:
+            raise ValueError("baseline/candidate fixture mismatch")
+        provenance = json.loads((run_dir / "paired-provenance.json").read_text())
+        if provenance["candidate_source_sha"] != command("git", "rev-parse", "HEAD", cwd=repo):
+            raise ValueError("paired candidate source mismatch")
+        if (not re.fullmatch(r"[0-9a-f]{40}", provenance["baseline_source_sha"])
+                or provenance["baseline_source_sha"] != os.environ.get("M0_BASELINE_SHA")):
+            raise ValueError("paired baseline differs from explicitly approved source")
+        if hashlib.sha256((run_dir / "baseline-db.test").read_bytes()).hexdigest() != provenance["baseline_binary_sha256"]:
+            raise ValueError("baseline binary changed after setup")
+        harness = {str(path.relative_to(repo)): hashlib.sha256(path.read_bytes()).hexdigest()
+                   for path in (repo / "TreeDB/db").glob("*_test.go")}
+        if harness != provenance["candidate_db_test_harness_sha256"]:
+            raise ValueError("paired candidate harness changed after setup")
+        paired = paired_comparison(baseline, candidate)
+        paired["provenance"] = provenance
+        paired["baseline_metrics"] = baseline
+        baseline_gates = evaluate_gates(baseline, public, arm, args.acceptance_contract)
+        gates.update({"baseline_" + name: value for name, value in baseline_gates.items()})
+        gates["paired_material_regression_absent"] = paired["passed"]
     public_status = classify_public_status(public)
     result = {
-        "schema_version": 3 if args.acceptance_contract == "v3" else 2,
+        "schema_version": 4 if args.acceptance_contract == "v4-proposal" else (3 if args.acceptance_contract == "v3" else 2),
         "acceptance_contract": args.acceptance_contract,
         "qualification_profile": args.qualification_profile,
         "capture_passed": capture_passes(gates, args.qualification_profile),
@@ -344,7 +404,9 @@ def main() -> int:
         "public_status": public_status,
         "gates": gates,
     }
-    if args.acceptance_contract == "v3":
+    if paired is not None:
+        result["paired_regression_proposal"] = paired
+    if args.acceptance_contract in ("v3", "v4-proposal"):
         result["pause_diagnostic"] = pause_diagnostic(legacy)
     (run_dir / "results.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
     (run_dir / "summary.md").write_text(render_markdown(result))

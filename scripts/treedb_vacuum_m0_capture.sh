@@ -63,6 +63,10 @@ if [[ ${M0_CONTROLLED:-0} == 1 && ( -z ${CPU_SET:-} || -z ${GOMAXPROCS:-} || -z 
   echo 'controlled mode requires explicit CPU_SET, GOMAXPROCS and M0_LEASE_PATH' >&2
   exit 2
 fi
+if [[ ${M0_CONTROLLED:-0} == 1 && ! ${M0_BASELINE_SHA:-} =~ ^[0-9a-f]{40}$ ]]; then
+  echo 'controlled paired proposal requires explicitly approved full M0_BASELINE_SHA' >&2
+  exit 2
+fi
 export CPU_SET=${CPU_SET:-$(default_cpu_set)}
 export GOMAXPROCS=${GOMAXPROCS:-2}
 export GOMEMLIMIT=${GOMEMLIMIT:-8GiB}
@@ -103,11 +107,30 @@ export M0_LAST_PHASE=fixture
 run_go_test -run '^TestVacuumM0FixtureDeterministicDebtAndOfflineCeiling$' -count=1
 capture_fixture "scripts/treedb_vacuum_m0_capture.sh"
 
+if [[ ${M0_CONTROLLED:-0} == 1 ]]; then
+  export M0_LAST_PHASE=baseline-build
+  python3 "$ROOT/scripts/treedb_vacuum_m0_baseline.py" --repo-root "$ROOT" --run-dir "$RUN_DIR" --source "$M0_BASELINE_SHA"
+  TREEDB_VACUUM_M0_ARTIFACT="$RUN_DIR/baseline-fixture.json" \
+  TREEDB_VACUUM_M0_GIT_SHA="$M0_BASELINE_SHA" \
+  taskset -c "$CPU_SET" "$RUN_DIR/baseline-db.test" -test.run '^TestVacuumM0WriteArtifact$' -test.count=1 -test.v
+  printf '%s\n' "baseline source=$M0_BASELINE_SHA; taskset -c $CPU_SET baseline-db.test -test.run '^$' -test.bench '$PRODUCTION_BENCH' -test.benchtime=1x -test.count=1 -test.benchmem" >>"$RUN_DIR/commands.txt"
+fi
+
+baseline_sample() {
+  local sample=$1
+  export M0_LAST_PHASE="baseline-$sample"
+  python3 "$ROOT/scripts/treedb_vacuum_m0_environment.py" --run-dir "$RUN_DIR" --phase "baseline-$sample-before"
+  taskset -c "$CPU_SET" "$RUN_DIR/baseline-db.test" -test.run '^$' -test.bench "$PRODUCTION_BENCH" -test.benchtime=1x -test.count=1 -test.benchmem >"$RUN_DIR/raw/baseline-${sample}.txt" 2>&1
+  python3 "$ROOT/scripts/treedb_vacuum_m0_environment.py" --run-dir "$RUN_DIR" --phase "baseline-$sample-after"
+}
+
 for sample in $(seq 1 10); do
+  if [[ ${M0_CONTROLLED:-0} == 1 ]] && ((sample % 2 == 1)); then baseline_sample "$sample"; fi
   export M0_LAST_PHASE="production-$sample"
   python3 "$ROOT/scripts/treedb_vacuum_m0_environment.py" --run-dir "$RUN_DIR" --phase "production-$sample-before"
   run_go_test -run '^$' -bench "$PRODUCTION_BENCH" -benchtime=1x -count=1 -benchmem >"$RUN_DIR/raw/production-${sample}.txt" 2>&1
   python3 "$ROOT/scripts/treedb_vacuum_m0_environment.py" --run-dir "$RUN_DIR" --phase "production-$sample-after"
+  if [[ ${M0_CONTROLLED:-0} == 1 ]] && ((sample % 2 == 0)); then baseline_sample "$sample"; fi
   export M0_LAST_PHASE="public-$sample"
   python3 "$ROOT/scripts/treedb_vacuum_m0_environment.py" --run-dir "$RUN_DIR" --phase "public-$sample-before"
   run_go_test -run '^$' -bench "$PUBLIC_BENCH" -benchtime=1x -count=1 -benchmem >"$RUN_DIR/raw/public-${sample}.txt" 2>&1
@@ -119,9 +142,12 @@ if command -v benchstat >/dev/null 2>&1; then
   benchstat "$RUN_DIR/production-benchstat-input.txt" >"$RUN_DIR/production-benchstat.txt"
 fi
 
+ACCEPTANCE_CONTRACT=v3
+if [[ ${M0_CONTROLLED:-0} == 1 ]]; then ACCEPTANCE_CONTRACT=v4-proposal; fi
 export M0_LAST_PHASE=summary
 python3 "$ROOT/scripts/treedb_vacuum_m0_summarize_test.py"
+python3 "$ROOT/scripts/treedb_vacuum_m0_paired_test.py"
 python3 "$ROOT/scripts/treedb_vacuum_m0_ci_test.py"
-python3 "$ROOT/scripts/treedb_vacuum_m0_summarize.py" --repo-root "$ROOT" --run-dir "$RUN_DIR" --stability-arm production --acceptance-contract v3 --qualification-profile "${M0_QUALIFICATION_PROFILE:-controlled-performance}"
+python3 "$ROOT/scripts/treedb_vacuum_m0_summarize.py" --repo-root "$ROOT" --run-dir "$RUN_DIR" --stability-arm production --acceptance-contract "$ACCEPTANCE_CONTRACT" --qualification-profile "${M0_QUALIFICATION_PROFILE:-controlled-performance}"
 
 echo "M0 artifacts written to $RUN_DIR"

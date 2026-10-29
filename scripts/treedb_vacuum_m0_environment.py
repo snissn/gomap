@@ -142,7 +142,7 @@ def snapshot():
                        ('RUNNER_NAME', 'RUNNER_OS', 'RUNNER_ARCH', 'GITHUB_RUN_ID',
                         'GITHUB_RUN_ATTEMPT', 'GITHUB_SHA')},
             'configuration': {name: os.environ.get(name) for name in
-                              ('CPU_SET', 'GOMAXPROCS', 'GOMEMLIMIT', 'M0_CONTROLLED', 'M0_LEASE_PATH', 'M0_QUALIFICATION_PROFILE')},
+                              ('CPU_SET', 'GOMAXPROCS', 'GOMEMLIMIT', 'M0_CONTROLLED', 'M0_LEASE_PATH', 'M0_QUALIFICATION_PROFILE', 'M0_BASELINE_SHA')},
             'files': {name: read(name) for name in files}}, cores
 
 

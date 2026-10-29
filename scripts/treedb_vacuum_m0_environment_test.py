@@ -168,7 +168,7 @@ class CaptureTests(unittest.TestCase):
             (root / 'scripts' / name).symlink_to(HERE / name)
         # Summary invocation is inert: these tests own schedule/failure custody,
         # while the real independent summarizer suite owns metric acceptance.
-        for name in ['treedb_vacuum_m0_summarize.py', 'treedb_vacuum_m0_summarize_test.py', 'treedb_vacuum_m0_ci_test.py']:
+        for name in ['treedb_vacuum_m0_summarize.py', 'treedb_vacuum_m0_summarize_test.py', 'treedb_vacuum_m0_paired_test.py', 'treedb_vacuum_m0_ci_test.py']:
             (root / 'scripts' / name).write_text('')
         binary = root / 'bin'
         binary.mkdir()

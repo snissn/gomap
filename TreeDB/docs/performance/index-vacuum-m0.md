@@ -1,5 +1,72 @@
 # Index Vacuum Capture
 
+## Provisional paired regression proposal for #4519
+
+This unaccepted `v4-proposal` adds a quantitative baseline comparison to the
+controlled path. V3 CV is scale invariant: a uniform slowdown can pass every CV
+predicate. Historical v2/v3 decoders and failures remain unchanged. Hosted CI
+continues production v3 with ten production/public samples, its existing
+720-second capture budget and 20-minute job limit. Controlled capture selects
+v4-proposal and fails closed without a declared baseline; this code does not
+establish contract acceptance or certify either topology.
+
+Predeclared proposed estimator: for each of total vacuum time and foreground
+p99, compute all ten candidate/baseline timing ratios by numeric sample ID,
+then take their median. Both medians must be <= 1.05 (5% materiality). Odd pairs
+run baseline then candidate; even pairs reverse order. The unchanged public arm
+follows each pair. No sample is discarded, replaced, retried or normalized by
+CV. Both production arms retain v3 fixed-work, zero-error/abort/exposure-miss,
+completion and CV <= 0.10 gates. Pause maxima and CV still require owner review.
+The public arm retains its original classification and timing scope.
+
+Before arming the existing admitted controlled route, the operator must approve
+an exact trusted ancestor commit and set repository variable
+`TREEDB_M0_BASELINE_SHA` (local capture: `M0_BASELINE_SHA`). This is a trust input,
+not a baseline selected after seeing timings. The capture builds that exact
+ancestor under the same Go toolchain/environment with all candidate
+`TreeDB/db/*_test.go` files replacing the ancestor's package test files. Production
+source remains the baseline's. The clean candidate, baseline archive SHA256,
+full test-harness hashes, build command/info and binary SHA256 are retained in
+`paired-provenance.json`. Compilation incompatibility is setup failure; there
+is no fallback harness or baseline. Both binaries generate the original fixture
+artifact and its complete fixture object must match, including digest, debt and
+offline accounting. An arbitrary externally supplied binary is not accepted.
+The baseline binary and current harness are rehashed at summary time.
+
+Controlled output adds `baseline-fixture.json`, `baseline-source.tar`,
+`baseline-source/`, `baseline-db.test`, `raw/baseline-1.txt` through `-10.txt`,
+per-sample environment observations and provenance. Schema4 retains every pair
+ratio, baseline metric, both arms' original gates, proposed threshold and source
+identity. `product_performance_approval` remains null. These source/build
+artifacts increase controlled storage/upload work. The original 900-second
+controlled capture and 20-minute job budgets are unchanged; fit is unproven and
+an overrun remains engineering failure, never evidence against TreeDB. Do not
+raise budgets, shorten work or drop an arm to obtain a favorable outcome.
+
+The median ratio is a deterministic policy estimator, **not** a significance
+test, confidence interval, power estimate or proof that a <=5% slowdown is absent.
+Ten pairs can miss intermittent/tail regressions, and residual within-pair host
+bias can cause false positives or false negatives near 5%. Alternating order
+reduces a simple order bias; it does not eliminate drift or correlated noise.
+The two metrics also introduce multiple opportunities for a false alarm. A
+failure requires investigation with every predeclared sample retained, not a
+retry toward acceptance. Choosing 5% preserves the existing proposed paired
+guard; its practical false-positive rate and power remain to be demonstrated.
+
+`python3 scripts/treedb_vacuum_m0_paired_test.py` exercises the real summary CLI:
+a synthetic constant 20% slowdown with realistic timing scales and modest noise
+passes historical v3 CV but fails v4-proposal; synthetic unchanged paired noise
+passes. Additional inert tests verify the real shell's alternating 30-sample
+schedule and exact-ancestor/current-harness build preparation. These are
+engineering contract tests, not measured unchanged-noise or injected-regression
+qualification. No physical benchmark or baseline Go compilation was performed
+for this proposal. Before promotion: independent exact-head review, explicit
+owner acceptance of the estimator/threshold and baseline, a compatible real
+baseline build, fresh admitted controlled evidence with unchanged noise and
+physical positive control, custody/release artifacts, budget proof, and the
+applicable exact-head hosted/CI gates remain required. Existing sealed launcher
+packets and their historical source identities do not cover this successor.
+
 ## Current production stability contract
 
 The capture script now measures

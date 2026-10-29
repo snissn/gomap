@@ -13,6 +13,8 @@ on:
       - "TreeDB/db/db.go"
       - "TreeDB/public.go"
       - "scripts/treedb_vacuum_m0_capture.sh"
+      - "scripts/treedb_vacuum_m0_baseline.py"
+      - "scripts/treedb_vacuum_m0_paired_test.py"
       - "scripts/treedb_vacuum_m0_ci.sh"
       - "scripts/treedb_vacuum_m0_ci.py"
       - "scripts/treedb_vacuum_m0_ci_test.py"
@@ -48,6 +50,7 @@ jobs:
       CPU_SET: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && vars.TREEDB_PERF_RUNNER_LABEL != '' && vars.TREEDB_PERF_RUNNER_PR != '' && vars.TREEDB_PERF_RUNNER_PR == format('{0}', github.event.pull_request.number) && vars.TREEDB_M0_CPU_SET || '' }}
       GOMAXPROCS: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && vars.TREEDB_PERF_RUNNER_LABEL != '' && vars.TREEDB_PERF_RUNNER_PR != '' && vars.TREEDB_PERF_RUNNER_PR == format('{0}', github.event.pull_request.number) && vars.TREEDB_M0_GOMAXPROCS || '' }}
       M0_LEASE_PATH: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && vars.TREEDB_PERF_RUNNER_LABEL != '' && vars.TREEDB_PERF_RUNNER_PR != '' && vars.TREEDB_PERF_RUNNER_PR == format('{0}', github.event.pull_request.number) && vars.TREEDB_M0_LEASE_PATH || '' }}
+      M0_BASELINE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && vars.TREEDB_PERF_RUNNER_LABEL != '' && vars.TREEDB_PERF_RUNNER_PR != '' && vars.TREEDB_PERF_RUNNER_PR == format('{0}', github.event.pull_request.number) && vars.TREEDB_M0_BASELINE_SHA || '' }}
     steps:
       - name: Checkout exact head
         id: checkout
@@ -67,6 +70,7 @@ jobs:
         run: |
           python3 scripts/treedb_vacuum_m0_environment_test.py
           python3 scripts/treedb_vacuum_m0_release_test.py
+          python3 scripts/treedb_vacuum_m0_paired_test.py
 
       - name: Capture and enforce declared M0 qualification
         # Routing is independent of explicit administrator controlled admission.
