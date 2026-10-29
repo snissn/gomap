@@ -13,7 +13,8 @@ All timing observations and strict gate values, including failed CV, remain in
 no performance approval and cannot satisfy a controlled qualification obligation.
 
 The default CLI profile remains `controlled-performance`: every existing strict
-predicate must pass. The workflow selects it for an actual self-hosted runner.
+predicate must pass. All CI allocations, including self-hosted runners, use
+`hosted-semantic` until an explicitly admitted controlled path is integrated.
 Runner routing alone does not establish controlled conditions: the CPU admission,
 external one-job lease and custody protocol in PR #5281 must be integrated and
 prospectively qualified before controlled-environment claims. Existing pause
@@ -22,9 +23,16 @@ regression detector: a uniformly slower capture can still have low CV. Exact-hea
 product comparisons and their workload-specific material regression thresholds
 remain separately required.
 
-The CI wrapper permits 720 seconds of hosted capture (plus at most 30 seconds to
-kill the process group) within the 20-minute job. Controlled capture gets 900
-seconds plus the same kill grace. A nonzero exit, timeout, failed test, incomplete
+The shell wrapper execs a Python supervisor owning a new capture process group.
+TERM, INT and HUP interrupt capture, forward TERM to the owned group, escalate to
+KILL after a bounded grace, reap the leader and write an interrupted/incomplete
+receipt. Descendants are killed even if the leader exits first. Abrupt SIGKILL of
+the supervisor or machine loss cannot emit a final receipt and must remain an
+incomplete harness failure, never a successful packet.
+
+The CI wrapper permits 720 seconds of hosted capture (plus at most 60 seconds for
+TERM grace and final KILL/reap cleanup) within the 20-minute job. Controlled capture gets 900
+seconds plus the same cleanup budget. A nonzero exit, timeout, failed test, incomplete
 capture or failed applicable gate emits `completed:false` and fails the job.
 Partial artifacts upload with a unique run/attempt name; existing packets are
 refused. Checkout, toolchain setup and upload occupy the remaining job headroom.
@@ -63,7 +71,10 @@ no exception to owner performance or review obligations.
 Local parser/contract tests exercise noisy timing with retained strict failure,
 every semantic work counter, missing timing observations, public unexpected
 errors/exposure misses, all-retry classification, profile constraints, timeout
-failure receipts and preservation of existing packets. No timed benchmarks or
+failure receipts and preservation of existing packets. Tests also send SIGTERM to the actual shell wrapper with harmless replacement
+capture work and verify its TERM-ignoring descendant stops and an interrupted
+receipt survives. Timeout tests exercise escalation without product work.
+No timed benchmarks or
 controlled qualification were run for this change. #4519 remains open: five
 unchanged-head hosted invocations across allocations, whole-job budget evidence,
 controlled noise and injected material-regression controls, complete packets,

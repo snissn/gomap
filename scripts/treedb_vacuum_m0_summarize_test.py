@@ -58,30 +58,6 @@ class VacuumM0SummarizeTest(unittest.TestCase):
                 MODULE.validate_qualification("hosted-semantic", arm, contract)
         MODULE.validate_qualification("hosted-semantic", "production", "v3")
 
-    def test_ci_budget_receipt_fails_closed(self):
-        import os
-        import subprocess
-        wrapper = SCRIPT.with_name("treedb_vacuum_m0_ci.sh")
-        for status in (0, 1, 124, 137):
-            with tempfile.TemporaryDirectory() as directory:
-                root = Path(directory)
-                fake = root / "timeout"
-                fake.write_text("#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$TIMEOUT_ARGS\"\nexit " + str(status) + "\n")
-                fake.chmod(0o755)
-                packet = root / "packet"
-                env = dict(os.environ, PATH=str(root) + os.pathsep + os.environ["PATH"],
-                           RUN_DIR=str(packet), M0_QUALIFICATION_PROFILE="hosted-semantic",
-                           TIMEOUT_ARGS=str(root / "args"))
-                proc = subprocess.run(["bash", str(wrapper)], env=env, capture_output=True)
-                self.assertEqual(proc.returncode, status, proc.stderr)
-                receipt = json.loads((packet / "ci-budget.json").read_text())
-                self.assertEqual(receipt["completed"], status == 0)
-                self.assertEqual(receipt["capture_budget_seconds"], 720)
-                self.assertIn("--kill-after=30s 720s bash", (root / "args").read_text())
-                again = subprocess.run(["bash", str(wrapper)], env=env, capture_output=True)
-                self.assertEqual(again.returncode, 2)
-                self.assertEqual(json.loads((packet / "ci-budget.json").read_text()), receipt)
-
     def test_summarize_computes_stable_required_metrics(self):
         with tempfile.TemporaryDirectory() as directory:
             paths = []

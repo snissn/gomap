@@ -14,6 +14,8 @@ on:
       - "TreeDB/public.go"
       - "scripts/treedb_vacuum_m0_capture.sh"
       - "scripts/treedb_vacuum_m0_ci.sh"
+      - "scripts/treedb_vacuum_m0_ci.py"
+      - "scripts/treedb_vacuum_m0_ci_test.py"
       - "scripts/treedb_vacuum_m0_summarize.py"
       - "scripts/treedb_vacuum_m0_summarize_test.py"
       - ".github/workflows/treedb-vacuum-m0.yml"
@@ -48,8 +50,10 @@ jobs:
           cache: true
 
       - name: Capture and enforce declared M0 qualification
+        # Runner type does not establish CPU/lease/custody admission.
+        # All CI remains semantic until an explicitly admitted path is integrated.
         env:
-          M0_QUALIFICATION_PROFILE: ${{ runner.environment == 'self-hosted' && 'controlled-performance' || 'hosted-semantic' }}
+          M0_QUALIFICATION_PROFILE: hosted-semantic
         run: RUN_DIR="$RUNNER_TEMP/treedb-vacuum-m0" scripts/treedb_vacuum_m0_ci.sh
 
       - name: Upload complete evidence packet
