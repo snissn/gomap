@@ -1,0 +1,13 @@
+{
+  "updated_utc": "2026-10-26T23:40:26.138750+00:00",
+  "packet": "evidence/current-feature-service-write-diagnostic1",
+  "state": "FAIL",
+  "numeric_gate": null,
+  "qualification": null,
+  "retries": 0,
+  "source_unchanged": true,
+  "single_writer_log_sha256": "878099cbec05066a4d98240933bdeedf9cd9ea610b6eed7703446d7436cc870e",
+  "second_native_log_sha256": "14d3701d22fd9f149fcb3af1383f09a613c48fd87446a56a472e8b44cde97513",
+  "inquiry": "evidence/current-feature-service-write-failure-inquiry1",
+  "next": "One source-backed causal correction per independent failure; do not lower fixture/cap or retry original samples"
+}

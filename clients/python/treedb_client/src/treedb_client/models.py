@@ -410,6 +410,10 @@ class BenchmarkVectorIndexOptions:
     quantized_indexes: Sequence[QuantizedIndexInfo | Mapping[str, Any]] = field(default_factory=list)
     representation: str = ""
 
+    def __post_init__(self) -> None:
+        if self.strategy not in ("", "column_graph"):
+            raise ValueError(f"unsupported vector index strategy {self.strategy!r}; use column_graph")
+
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "BenchmarkVectorIndexOptions":
         data = _as_mapping(data, "vector index options")
@@ -549,6 +553,8 @@ class IndexInfo:
             "capabilities",
         ]
         embedding_field = _as_str(data["embedding_field"], "index.embedding_field")
+        if data.get("vector_strategy") != "column_graph":
+            raise ValueError("index.vector_strategy must identify column_graph")
         return cls(
             name=_as_str(data["name"], "index.name"),
             dimension=_as_int(data["dimension"], "index.dimension"),
@@ -795,12 +801,8 @@ class DenseVectorSearchResponse:
     score_plane: Optional[DenseScorePlaneProof] = None
     # Negotiated dispatch version, not measured execution-work evidence.
     native_command_version: int = 0
-    # v1alpha2: execution route echo ("ann" | "exact"). Empty/absent means the
-    # legacy exact scan path.
+    # Execution route echo ("ann" | "exact").
     route: Optional[str] = None
-    native_base_plus_live_delta: bool = False
-    scalar_filter_membership_source: str = ""
-    scalar_filter_plan: str = ""
     scalar_filter_probe_ids: int = 0
     scalar_filter_probe_truncated: int = 0
     scalar_filter_candidates: int = 0
@@ -818,8 +820,6 @@ class DenseVectorSearchResponse:
     allowed_id_materialization_rows: int = 0
     primary_document_scans: int = 0
     document_materialization_rows: int = 0
-    visibility_mismatch_count: int = 0
-    visibility_retry_count: int = 0
     route_identity: Optional[DenseSearchRouteIdentity] = None
 
     @classmethod
@@ -839,6 +839,15 @@ class DenseVectorSearchResponse:
             raise TreeDBProtocolError(f"invalid dense response work proof: {work_error}", score_plane=score_plane) from work_error
         if score_plane_error is not None:
             raise TreeDBProtocolError(f"invalid dense response score-plane proof: {score_plane_error}", dense_work=work) from score_plane_error
+        retired_fields = (
+            "native_base_plus_live_delta", "scalar_filter_membership_source",
+            "scalar_filter_plan", "visibility_mismatch_count", "visibility_retry_count",
+        )
+        if any(field in data for field in retired_fields):
+            raise TreeDBProtocolError(
+                "invalid dense response score-plane proof: retired runtime diagnostics",
+                dense_work=work, score_plane=score_plane,
+            )
         try:
             out = cls(
                 dense_work=work,
@@ -854,9 +863,6 @@ class DenseVectorSearchResponse:
                 exact=_as_bool(data["exact"], "exact"),
                 candidates=_as_int(data["candidates"], "candidates"),
                 route=_as_optional_str_default(data.get("route"), "vector search response.route"),
-                native_base_plus_live_delta=_as_bool(data.get("native_base_plus_live_delta", False), "native_base_plus_live_delta"),
-                scalar_filter_membership_source=_as_str(data.get("scalar_filter_membership_source", ""), "scalar_filter_membership_source"),
-                scalar_filter_plan=_as_str(data.get("scalar_filter_plan", ""), "scalar_filter_plan"),
                 scalar_filter_probe_ids=_as_int(data.get("scalar_filter_probe_ids", 0), "scalar_filter_probe_ids"),
                 scalar_filter_probe_truncated=_as_int(data.get("scalar_filter_probe_truncated", 0), "scalar_filter_probe_truncated"),
                 scalar_filter_candidates=_as_int(data.get("scalar_filter_candidates", 0), "scalar_filter_candidates"),
@@ -874,8 +880,6 @@ class DenseVectorSearchResponse:
                 allowed_id_materialization_rows=_as_int(data.get("allowed_id_materialization_rows", 0), "allowed_id_materialization_rows"),
                 primary_document_scans=_as_int(data.get("primary_document_scans", 0), "primary_document_scans"),
                 document_materialization_rows=_as_int(data.get("document_materialization_rows", 0), "document_materialization_rows"),
-                visibility_mismatch_count=_as_int(data.get("visibility_mismatch_count", 0), "visibility_mismatch_count"),
-                visibility_retry_count=_as_int(data.get("visibility_retry_count", 0), "visibility_retry_count"),
             )
             if work is not None and (not work.completed or work.output.fetched != len(out.documents)
                                      or out.route != "ann" or out.index.vector_strategy != "column_graph"
@@ -1003,8 +1007,6 @@ class VectorIndexMaintenanceStatus:
     loaded: bool = False
     rebuild_needed: bool = False
     root_id: int = 0
-    native_root_loaded: bool = False
-    native_root_bytes: int = 0
     duration_nanos: int = 0
     column_graph_build: ColumnGraphBuildTiming = field(default_factory=ColumnGraphBuildTiming)
     extra: Dict[str, Any] = field(default_factory=dict)
@@ -1020,11 +1022,11 @@ class VectorIndexMaintenanceStatus:
             "loaded",
             "rebuild_needed",
             "root_id",
-            "native_root_loaded",
-            "native_root_bytes",
             "duration_nanos",
             "column_graph_build",
         ]
+        if data.get("strategy") != "column_graph":
+            raise ValueError("maintenance status.strategy must identify column_graph")
         return cls(
             name=_as_optional_str_default(data.get("name"), "maintenance status.name"),
             strategy=_as_optional_str_default(data.get("strategy"), "maintenance status.strategy"),
@@ -1033,12 +1035,6 @@ class VectorIndexMaintenanceStatus:
             loaded=_as_optional_bool_default(data.get("loaded"), "maintenance status.loaded"),
             rebuild_needed=_as_optional_bool_default(data.get("rebuild_needed"), "maintenance status.rebuild_needed"),
             root_id=_as_optional_int_default(data.get("root_id"), "maintenance status.root_id"),
-            native_root_loaded=_as_optional_bool_default(
-                data.get("native_root_loaded"), "maintenance status.native_root_loaded"
-            ),
-            native_root_bytes=_as_optional_int_default(
-                data.get("native_root_bytes"), "maintenance status.native_root_bytes"
-            ),
             duration_nanos=_as_optional_int_default(data.get("duration_nanos"), "maintenance status.duration_nanos"),
             column_graph_build=ColumnGraphBuildTiming.from_dict(data.get("column_graph_build", {})),
             extra=_copy_extra(data, allowed),

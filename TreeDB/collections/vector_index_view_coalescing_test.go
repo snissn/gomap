@@ -1,119 +1,13 @@
 package collections
 
 import (
-	"fmt"
-	"sync"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
-func TestNativeVectorAcknowledgedMutationsCoalesceSearchViewPublication(t *testing.T) {
-	d, col, def := newNativeScalarTestCollection(t, []IndexDefinition{{Name: "tenant_idx", Field: "tenant", ValueType: IndexValueString}})
-	defer func() { _ = d.Close() }()
-	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
-		t.Fatal(err)
-	}
-	index := col.registeredVectorIndex(def.Name)
-	if index == nil {
-		t.Fatal("registered native runtime is unavailable")
-	}
-	baseline := index.acquireSearchView()
-	if baseline == nil {
-		t.Fatal("initial immutable search view is unavailable")
-	}
-	index.releaseSearchView(baseline)
-
-	for i := range 8 {
-		id := []byte(fmt.Sprintf("doc-%02d", i))
-		document := []byte(fmt.Sprintf(`{"embedding":[1,%0.2f],"tenant":"alpha"}`, float64(i+1)/100))
-		if _, err := col.InsertBatch([][]byte{id}, [][]byte{document}); err != nil {
-			t.Fatalf("insert %q: %v", id, err)
-		}
-		if current := col.registeredVectorIndex(def.Name); current != index {
-			t.Fatalf("acknowledged insert %d replaced runtime %p with %p", i, index, current)
-		}
-		if got := index.searchView.Load(); got != baseline {
-			t.Fatalf("acknowledged insert %d published immutable view %p, want retained %p", i, got, baseline)
-		}
-	}
-	if replaced, err := col.Replace([]byte("doc-03"), []byte(`{"embedding":[1,0.04],"tenant":"beta"}`)); err != nil || !replaced {
-		t.Fatalf("replace matched=%v err=%v", replaced, err)
-	}
-	if deleted, err := col.DeleteBatch([][]byte{[]byte("doc-04")}); err != nil || deleted != 1 {
-		t.Fatalf("delete count=%d err=%v", deleted, err)
-	}
-	if current := col.registeredVectorIndex(def.Name); current != index {
-		t.Fatalf("acknowledged update/delete replaced runtime %p with %p", index, current)
-	}
-	if got := index.searchView.Load(); got != baseline {
-		t.Fatalf("acknowledged update/delete published immutable view %p, want retained %p", got, baseline)
-	}
-	if index.searchViewCurrent.Load() {
-		t.Fatal("acknowledged mutations left the retained immutable view marked current")
-	}
-
-	beta := searchNativeScalarTest(t, col, def, HybridScalarFilter{IndexName: "tenant_idx", Value: "beta"}, 8)
-	if len(beta.Results) != 1 || string(beta.Results[0].ID) != "doc-03" {
-		t.Fatalf("beta results=%+v", beta.Results)
-	}
-	published := index.searchView.Load()
-	if published == nil || published == baseline {
-		t.Fatalf("first post-ack acquisition published view %p, want one replacement for %p", published, baseline)
-	}
-	index.mu.RLock()
-	currentMutation, currentGeneration := index.mutationSeq, index.sourceDocumentGeneration
-	index.mu.RUnlock()
-	if published.mutationSeq != currentMutation || published.sourceDocumentGeneration != currentGeneration {
-		t.Fatalf("published identity mutation=%d generation=%d want mutation=%d generation=%d", published.mutationSeq, published.sourceDocumentGeneration, currentMutation, currentGeneration)
-	}
-
-	alpha := searchNativeScalarTest(t, col, def, HybridScalarFilter{IndexName: "tenant_idx", Value: "alpha"}, 8)
-	if len(alpha.Results) != 6 {
-		t.Fatalf("alpha results=%+v want six live scalar members", alpha.Results)
-	}
-	if got := index.searchView.Load(); got != published {
-		t.Fatalf("subsequent acquisition republished immutable view %p, want %p", got, published)
-	}
-
-	if _, err := col.InsertBatch(
-		[][]byte{[]byte("doc-concurrent")},
-		[][]byte{[]byte(`{"embedding":[1,0.09],"tenant":"alpha"}`)},
-	); err != nil {
-		t.Fatalf("insert before concurrent acquisition: %v", err)
-	}
-	const readers = 16
-	start := make(chan struct{})
-	acquired := make(chan *vectorIndexSearchView, readers)
-	var wg sync.WaitGroup
-	wg.Add(readers)
-	for range readers {
-		go func() {
-			defer wg.Done()
-			<-start
-			view := index.acquireSearchView()
-			acquired <- view
-			if view != nil {
-				index.releaseSearchView(view)
-			}
-		}()
-	}
-	close(start)
-	wg.Wait()
-	close(acquired)
-	concurrent := index.searchView.Load()
-	if concurrent == nil || concurrent == published {
-		t.Fatalf("concurrent first acquisition view=%p previous=%p", concurrent, published)
-	}
-	for view := range acquired {
-		if view != concurrent {
-			t.Fatalf("concurrent acquisition view=%p want single publication %p", view, concurrent)
-		}
-	}
-}
-
 func TestVectorIndexNextMutationRetainsLatestAcknowledgedView(t *testing.T) {
-	index, err := newVectorIndex(nil, VectorIndexOptions{
+	index, err := newColumnGraphPartitionLiveDomain(nil, columnGraphPartitionLiveOptions{
 		Name: "embedding", Field: "embedding", Metric: VectorMetricCosine,
 		Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8,
 	})
@@ -132,7 +26,7 @@ func TestVectorIndexNextMutationRetainsLatestAcknowledgedView(t *testing.T) {
 		t.Fatal("initial immutable view is unavailable")
 	}
 	index.releaseSearchView(initial)
-	index.liveDeltaEnabled.Store(true)
+	index.preserveAcknowledgedView.Store(true)
 
 	index.mu.Lock()
 	if err := index.insertVectorLocked([]byte("first"), []float32{0.8, 0.2}); err != nil {
@@ -174,7 +68,7 @@ func TestVectorIndexNextMutationRetainsLatestAcknowledgedView(t *testing.T) {
 }
 
 func TestVectorIndexStaleAcquisitionPublishesBesidePriorReader(t *testing.T) {
-	index, err := newVectorIndex(nil, VectorIndexOptions{
+	index, err := newColumnGraphPartitionLiveDomain(nil, columnGraphPartitionLiveOptions{
 		Name: "embedding", Field: "embedding", Metric: VectorMetricCosine,
 		Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8,
 	})

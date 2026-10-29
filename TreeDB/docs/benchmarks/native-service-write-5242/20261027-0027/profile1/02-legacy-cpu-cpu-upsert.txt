@@ -1,0 +1,50 @@
+File: documentservice.test
+Build ID: 46f165d1cd4e65321e0b73e41c0d81b9784f3bf1
+Type: cpu
+Time: 2026-10-26 14:12:33 HST
+Duration: 5.90s, Total samples = 3.71s (62.90%)
+Active filters:
+   focus=UpsertDocuments
+Showing nodes accounting for 0.22s, 5.93% of 3.71s total
+Showing top 40 nodes out of 121
+      flat  flat%   sum%        cum   cum%
+     0.02s  0.54%  0.54%      0.02s  0.54%  encoding/json.(*Decoder).readValue
+     0.02s  0.54%  1.08%      0.02s  0.54%  runtime.memclrNoHeapPointers
+     0.01s  0.27%  1.35%      0.02s  0.54%  encoding/json.(*decodeState).arrayInterface
+     0.01s  0.27%  1.62%      0.01s  0.27%  github.com/buger/jsonparser.stringEnd
+     0.01s  0.27%  1.89%      0.01s  0.27%  github.com/snissn/gomap/TreeDB/collections.addBufferedPrimaryRunIndexKeys
+     0.01s  0.27%  2.16%      0.01s  0.27%  github.com/snissn/gomap/TreeDB/collections.directBufferedRootEntriesSize
+     0.01s  0.27%  2.43%      0.01s  0.27%  internal/strconv.genericFtoa
+     0.01s  0.27%  2.70%      0.01s  0.27%  reflect.unpackEface (inline)
+     0.01s  0.27%  2.96%      0.01s  0.27%  runtime.(*mspan).typePointersOfType
+     0.01s  0.27%  3.23%      0.01s  0.27%  runtime.(*mspan).writeHeapBitsSmall
+     0.01s  0.27%  3.50%      0.01s  0.27%  runtime.acquirem (inline)
+     0.01s  0.27%  3.77%      0.01s  0.27%  runtime.findfunc
+     0.01s  0.27%  4.04%      0.01s  0.27%  runtime.gcUsesSpanInlineMarkBits (inline)
+     0.01s  0.27%  4.31%      0.03s  0.81%  runtime.growslice
+     0.01s  0.27%  4.58%      0.09s  2.43%  runtime.mallocgc
+     0.01s  0.27%  4.85%      0.01s  0.27%  runtime.memmove
+     0.01s  0.27%  5.12%      0.02s  0.54%  runtime.pcvalue
+     0.01s  0.27%  5.39%      0.01s  0.27%  runtime.step
+     0.01s  0.27%  5.66%      0.01s  0.27%  strings.(*Builder).WriteRune
+     0.01s  0.27%  5.93%      0.01s  0.27%  unicode.ToLower
+         0     0%  5.93%      0.07s  1.89%  encoding/json.(*Decoder).Decode
+         0     0%  5.93%      0.01s  0.27%  encoding/json.(*decodeState).convertNumber
+         0     0%  5.93%      0.01s  0.27%  encoding/json.(*decodeState).literalInterface
+         0     0%  5.93%      0.03s  0.81%  encoding/json.(*decodeState).object
+         0     0%  5.93%      0.03s  0.81%  encoding/json.(*decodeState).objectInterface
+         0     0%  5.93%      0.01s  0.27%  encoding/json.(*decodeState).scanWhile
+         0     0%  5.93%      0.05s  1.35%  encoding/json.(*decodeState).unmarshal
+         0     0%  5.93%      0.03s  0.81%  encoding/json.(*decodeState).value
+         0     0%  5.93%      0.03s  0.81%  encoding/json.(*decodeState).valueInterface
+         0     0%  5.93%      0.02s  0.54%  encoding/json.(*encodeState).marshal
+         0     0%  5.93%      0.02s  0.54%  encoding/json.(*encodeState).reflectValue
+         0     0%  5.93%      0.01s  0.27%  encoding/json.(*scanner).pushParseState
+         0     0%  5.93%      0.02s  0.54%  encoding/json.Marshal
+         0     0%  5.93%      0.01s  0.27%  encoding/json.NewDecoder
+         0     0%  5.93%      0.01s  0.27%  encoding/json.arrayEncoder.encode
+         0     0%  5.93%      0.01s  0.27%  encoding/json.floatEncoder.encode
+         0     0%  5.93%      0.01s  0.27%  encoding/json.mapEncoder.encode
+         0     0%  5.93%      0.01s  0.27%  encoding/json.sliceEncoder.encode
+         0     0%  5.93%      0.01s  0.27%  encoding/json.stateBeginValue
+         0     0%  5.93%      0.02s  0.54%  encoding/json.structEncoder.encode

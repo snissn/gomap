@@ -42,7 +42,11 @@ ownership is checked across the whole transaction, including value handoffs.
 BSONOrderedV2 compound scalar indexes reuse the same tuple encoder, old/new
 planner and final unique ownership checks. Components may use dotted paths and
 ascending or descending directions; arrays remain rejected for compound keys.
-Text/vector index creation remains outside this route. Eligible BSON collections also support top-level `UpdateBSONSet` and
+Text/vector index creation remains outside this route. BSON vector-index
+declarations are unsupported on either owner. Mongo `createIndexes` preflights
+the whole request: any vector declaration returns `BadValue`/code 2 without
+creating a collection or publishing vector or scalar sibling indexes. BSON CRUD
+and scalar-only DDL keep their existing behavior. Eligible BSON collections also support top-level `UpdateBSONSet` and
 `UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges`, using the maintained BSON
 transformer and canonical full replacement documents. `_id`, dotted or invalid
 field names and malformed raw values retain their existing refusal contracts.
@@ -318,6 +322,16 @@ captured-prefix handoff and does not grant generic backend aliases publication
 authority.
 
 ## Immutable vector source import V2
+
+`column_graph` is the only vector serving strategy. Fresh eligible declarations
+select it by default; removed strategies and ambiguous old omitted-strategy
+metadata are refused before import, replay or publication. They are not migrated
+or reinterpreted. Recreate from source documents in a fresh directory. Ordinary
+ANN declarations require cosine/float32; primary int8 is unavailable, while
+supported derived quantized score planes retain their separate contracts.
+Ordinary filtered ANN and vector-bearing filtered Hybrid fail closed; explicit
+exact scanning and admitted typed ColumnGraph filtering remain separate supported
+paths.
 
 Durable native handles support the existing source-only ColumnGraph declaration
 with typed String RowAsset / Float32Vector ColumnPart and noncolumn JSON payload.

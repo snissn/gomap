@@ -4,18 +4,20 @@ import (
 	"bytes"
 	"fmt"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-// Pause the real checkpoint cutover, then exercise the ordinary mutation gate
-// and graph query. Producer preflight must hold neither while waiting for IO.
-func TestNativeProducerPressurePrecedesCollectionLocks(t *testing.T) {
-	for _, operation := range []string{"update", "save", "scalar-ddl", "rebuild", "nativewire-insert"} {
+// Pause the real checkpoint cutover, then exercise ordinary scalar reads.
+// Producer preflight must leave the committed collection readable during IO.
+func TestNativeProducerPressurePreservesCollectionReads(t *testing.T) {
+	for _, operation := range []string{"update", "insert", "scalar-ddl", "delete", "nativewire-insert"} {
 		t.Run(operation, func(t *testing.T) {
 			opts := OptionsFor(ProfileNoWALFast, t.TempDir())
 			opts.MemtableMode = "cow_btree"
@@ -40,32 +42,94 @@ func TestNativeProducerPressurePrecedesCollectionLocks(t *testing.T) {
 				}
 				requirePublicCOWFinalZero(t, cache)
 			}()
-			def := collections.VectorIndexDefinition{Name: "embedding", Field: "embedding", Dimensions: 2, Metric: collections.VectorMetricCosine, M: 4}
-			if _, err := manager.CreateCollection(&collections.CollectionMeta{Name: "rows", Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatJSON}, VectorIndexes: []collections.VectorIndexDefinition{def}}); err != nil {
+			def := collections.IndexDefinition{Name: "marker", Field: "marker", ValueType: collections.IndexValueInt64}
+			if _, err := manager.CreateCollection(&collections.CollectionMeta{Name: "rows", Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatJSON}, Indexes: []collections.IndexDefinition{def}}); err != nil {
 				t.Fatal(err)
 			}
 			c, err := manager.OpenCollection("rows")
 			if err != nil {
 				t.Fatal(err)
 			}
-			document := []byte(`{"embedding":[1,0],"marker":1}`)
+			document := []byte(`{"marker":1}`)
 			if _, err := c.Insert([]byte("first"), document); err != nil {
 				t.Fatal(err)
 			}
-			idx, err := c.BuildVectorIndex(collections.VectorIndexOptions{Name: def.Name, Field: def.Field, Dimensions: def.Dimensions, Metric: def.Metric, M: def.M})
-			if err != nil {
-				t.Fatal(err)
+			// Retain the real accepted cuts so their original COW sources cannot
+			// retire before the contender reaches preflight. A transient byte
+			// watermark alone can disappear through deferred cleanup and let the
+			// mutation run before an unrelated checkpoint enters the hook.
+			var held []backenddb.NativeSemanticCapture
+			var heldOnce sync.Once
+			closeHeld := func() {
+				heldOnce.Do(func() {
+					for _, capture := range held {
+						if err := capture.Close(); err != nil {
+							t.Error(err)
+						}
+					}
+				})
 			}
-			for i := 0; database.cached.COWMemoryStats().Sources < DefaultCOWMemtableLimits().MaxSources; i++ {
-				if i > DefaultCOWMemtableLimits().MaxSources+4 {
-					t.Fatal("source ceiling was not reached")
+			defer closeHeld()
+			var prefixSequence uint64
+			for i := 0; ; i++ {
+				capture, err := backend.CaptureNativeSemanticState()
+				if err != nil {
+					t.Fatal(err)
 				}
-				if _, err := idx.SaveSnapshot(); err != nil {
+				held = append(held, capture)
+				observation, err := backend.ObserveNativeProducer()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if observation.UnderPressure {
+					// Join the original checkpoint and queued cleanup frontier while
+					// retaining every accepted cut. Remaining pressure now belongs
+					// to live owners, rather than asynchronously retiring scratch.
+					drained, err := backend.PrepareNativeProducerObservation()
+					if err != nil {
+						t.Fatal(err)
+					}
+					if drained.UnderPressure {
+						// Advance the original logical prefix once under the completed
+						// drain. The tested producer cannot reuse that remembered drain,
+						// and its next checkpoint has genuine new committed work.
+						if _, err := c.Insert([]byte(fmt.Sprintf("filler-%d", i)), document); err != nil {
+							t.Fatal(err)
+						}
+						capture, err := backend.CaptureNativeSemanticState()
+						if err != nil {
+							t.Fatal(err)
+						}
+						held = append(held, capture)
+						pressure, err := backend.ObserveNativeProducer()
+						if err != nil || !pressure.UnderPressure || pressure.LogicalSequence != drained.LogicalSequence+1 {
+							t.Fatalf("retained owners lost pressure or exact accepted suffix: drained=%+v current=%+v err=%v", drained, pressure, err)
+						}
+						prefixSequence = pressure.LogicalSequence
+						t.Logf("live retained cuts preserved producer pressure after original cleanup join: drained=%+v prefix=%+v limits=%+v captures=%d", drained, pressure, DefaultCOWMemtableLimits(), len(held))
+						break
+					}
+				}
+				if i >= 2048 {
+					t.Fatalf("bounded accepted prefix did not reach producer pressure: %+v", observation)
+				}
+				if _, err := c.Insert([]byte(fmt.Sprintf("filler-%d", i)), document); err != nil {
 					t.Fatal(err)
 				}
 			}
-			entered, release, finished := make(chan struct{}), make(chan struct{}), make(chan error, 1)
-			database.cached.SetCommandWALCheckpointCutoverHook(func() { close(entered); <-release })
+			type checkpointEntry struct {
+				sequence uint64
+				err      error
+			}
+			entered, release, finished := make(chan checkpointEntry, 1), make(chan struct{}), make(chan error, 1)
+			var hookOnce sync.Once
+			database.cached.SetCommandWALCheckpointCutoverHook(func() {
+				hookOnce.Do(func() {
+					observation, err := backend.ObserveNativeProducer()
+					entered <- checkpointEntry{sequence: observation.LogicalSequence, err: err}
+					<-release
+				})
+			})
 			var callbacks atomic.Int32
 			go func() {
 				var err error
@@ -73,14 +137,14 @@ func TestNativeProducerPressurePrecedesCollectionLocks(t *testing.T) {
 				case "update":
 					_, _, err = c.Update([]byte("first"), func([]byte) ([]byte, bool, error) {
 						callbacks.Add(1)
-						return []byte(`{"embedding":[1,0],"marker":2}`), true, nil
+						return []byte(`{"marker":2}`), true, nil
 					})
-				case "save":
-					_, err = idx.SaveSnapshot()
+				case "insert":
+					_, err = c.Insert([]byte("second"), document)
 				case "scalar-ddl":
-					_, err = c.CreateIndex(collections.IndexDefinition{Name: "marker", Field: "marker", ValueType: collections.IndexValueInt64})
-				case "rebuild":
-					_, err = c.RebuildVectorIndex(def.Name)
+					_, err = c.CreateIndex(collections.IndexDefinition{Name: "marker_copy", Field: "marker", ValueType: collections.IndexValueInt64})
+				case "delete":
+					err = c.Delete([]byte("first"))
 				case "nativewire-insert":
 					err = c.NativewireInsertBatchNoResultIDs([][]byte{[]byte("second")}, [][]byte{document}, false)
 				}
@@ -90,6 +154,7 @@ func TestNativeProducerPressurePrecedesCollectionLocks(t *testing.T) {
 			var available chan error
 			availableJoined := false
 			defer func() {
+				closeHeld()
 				select {
 				case <-release:
 				default:
@@ -103,14 +168,39 @@ func TestNativeProducerPressurePrecedesCollectionLocks(t *testing.T) {
 				}
 			}()
 			select {
-			case <-entered:
+			case entry := <-entered:
+				if entry.err != nil || entry.sequence != prefixSequence {
+					t.Fatalf("checkpoint did not pause the original pre-mutation prefix: sequence=%d want=%d err=%v", entry.sequence, prefixSequence, entry.err)
+				}
+			case err := <-finished:
+				joined = true
+				t.Fatalf("producer completed before its pressure checkpoint: %v", err)
 			case <-time.After(5 * time.Second):
 				t.Fatal("producer did not enter pressure checkpoint")
 			}
+			select {
+			case err := <-finished:
+				joined = true
+				t.Fatalf("producer completed while its pressure checkpoint was paused: %v", err)
+			default:
+			}
 			available = make(chan error, 1)
 			go func() {
-				c.UnregisterVectorIndex("absent")
-				_, _, err := idx.Search([]float32{1, 0}, collections.VectorIndexSearchOptions{TopK: 1, DisableExactFallback: true})
+				got, err := c.Get([]byte("first"))
+				if err == nil && !bytes.Equal(got, document) {
+					err = fmt.Errorf("committed document changed during preflight: %q", got)
+				}
+				if err == nil {
+					var ids [][]byte
+					ids, err = c.FindByIndexValue("marker", int64(1))
+					found := false
+					for _, id := range ids {
+						found = found || string(id) == "first"
+					}
+					if err == nil && !found {
+						err = fmt.Errorf("committed scalar membership absent during preflight")
+					}
+				}
 				available <- err
 			}()
 			select {
@@ -120,11 +210,12 @@ func TestNativeProducerPressurePrecedesCollectionLocks(t *testing.T) {
 					t.Fatal(err)
 				}
 			case <-time.After(5 * time.Second):
-				t.Fatal("checkpoint preflight held collection or graph query gate")
+				t.Fatal("checkpoint preflight blocked committed collection reads")
 			}
 			if callbacks.Load() != 0 {
 				t.Fatal("callback ran before maintenance completed")
 			}
+			closeHeld()
 			close(release)
 			err = <-finished
 			joined = true
@@ -133,6 +224,30 @@ func TestNativeProducerPressurePrecedesCollectionLocks(t *testing.T) {
 			}
 			if operation == "update" && callbacks.Load() != 1 {
 				t.Fatal("callback was replayed")
+			}
+			want := document
+			if operation == "update" {
+				want = []byte(`{"marker":2}`)
+			} else if operation == "delete" {
+				want = nil
+			}
+			if got, err := c.Get([]byte("first")); err != nil || !bytes.Equal(got, want) {
+				t.Fatalf("completed %s changed the wrong document state: got=%q want=%q err=%v", operation, got, want, err)
+			}
+			if operation == "insert" || operation == "nativewire-insert" {
+				if got, err := c.Get([]byte("second")); err != nil || !bytes.Equal(got, document) {
+					t.Fatalf("completed insert absent: %q %v", got, err)
+				}
+			}
+			if operation == "scalar-ddl" {
+				ids, err := c.FindByIndexValue("marker_copy", int64(1))
+				found := false
+				for _, id := range ids {
+					found = found || string(id) == "first"
+				}
+				if err != nil || !found {
+					t.Fatalf("completed DDL lost original membership: %q %v", ids, err)
+				}
 			}
 		})
 	}

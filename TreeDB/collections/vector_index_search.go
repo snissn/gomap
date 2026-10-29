@@ -3,12 +3,12 @@ package collections
 import (
 	"errors"
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"math"
 	"sync"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
-	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
 
 // ErrVectorIndexSearchUnavailable reports that the requested vector index is
@@ -22,9 +22,6 @@ var collectionSearchVectorIndexResponseBufferPool sync.Pool
 type VectorIndexSearchPath string
 
 const (
-	// VectorIndexSearchPathNativeRuntime searches the collection's persistent
-	// mutable native HNSW graph without fetching source documents.
-	VectorIndexSearchPathNativeRuntime VectorIndexSearchPath = "native_runtime"
 	// VectorIndexSearchPathColumnGraphNativeReader searches persisted column_graph
 	// state through the native reader. Current healthy indexes use TVIS/base
 	// typed-column sources; legacy physical graph rows are compatibility fallback
@@ -468,10 +465,6 @@ type VectorIndexSearchStats struct {
 
 	// SearchRouteColumnGraphPrepared reports that this search used the current prepared column_graph route.
 	SearchRouteColumnGraphPrepared uint64 `json:"search_route_column_graph_prepared,omitempty"`
-	// SearchRouteNativeRuntime reports that this search used the persistent mutable native HNSW graph.
-	SearchRouteNativeRuntime uint64 `json:"search_route_native_runtime,omitempty"`
-	// NativeRuntimeFullRebuilds reports automatic document-scan rebuilds retained by the selected live graph.
-	NativeRuntimeFullRebuilds uint64 `json:"native_runtime_full_rebuilds,omitempty"`
 	// SearchRouteColumnGraphFallback reports that this search used the column_graph compatibility/fallback route instead of the prepared route.
 	SearchRouteColumnGraphFallback uint64 `json:"search_route_column_graph_fallback,omitempty"`
 	// SearchRouteHNSWSearchPack reports that this search used the exact FP32 hnsw_search_pack_v1 route.
@@ -636,7 +629,9 @@ type VectorIndexSearchStats struct {
 }
 
 type vectorIndexSearchVisibility struct {
-	runtime                  *VectorIndex
+	nativeIncarnation        uint64
+	nativeVersion            uint64
+	runtime                  *columnGraphPartitionLiveCarrier
 	collectionName           string
 	indexName                string
 	strategy                 VectorIndexStrategy
@@ -675,8 +670,6 @@ type VectorIndexSearchRouteKind string
 const (
 	// VectorIndexSearchRouteUnknown reports that stats did not identify a search route.
 	VectorIndexSearchRouteUnknown VectorIndexSearchRouteKind = "unknown"
-	// VectorIndexSearchRouteNativeRuntime reports the persistent mutable native HNSW route.
-	VectorIndexSearchRouteNativeRuntime VectorIndexSearchRouteKind = "native_runtime"
 	// VectorIndexSearchRouteExactHNSWSearchPackV1 reports the exact FP32 hnsw_search_pack_v1 route.
 	VectorIndexSearchRouteExactHNSWSearchPackV1 VectorIndexSearchRouteKind = "exact_hnsw_search_pack_v1"
 	// VectorIndexSearchRouteQuantizedOnly reports the codec-generic quantized-only route.
@@ -757,7 +750,6 @@ type VectorIndexSearchDiagnostics struct {
 	HNSWSearchPackCacheMisses               uint64                                `json:"hnsw_search_pack_cache_misses,omitempty"`
 	HNSWSearchPackCacheWaits                uint64                                `json:"hnsw_search_pack_cache_waits,omitempty"`
 	HNSWSearchPackCacheBuilds               uint64                                `json:"hnsw_search_pack_cache_builds,omitempty"`
-	LiveANN                                 VectorIndexSearchLiveANNDiagnostics   `json:"live_ann"`
 	ScalarFilterPlan                        NativeScalarFilterPlan                `json:"scalar_filter_plan,omitempty"`
 	ScalarFilterProbeIDs                    uint64                                `json:"scalar_filter_probe_ids,omitempty"`
 	ScalarFilterProbeTruncated              uint64                                `json:"scalar_filter_probe_truncated,omitempty"`
@@ -776,14 +768,6 @@ type VectorIndexSearchDiagnostics struct {
 	ScalarFilterPlanCacheEvictions          uint64                                `json:"scalar_filter_plan_cache_evictions,omitempty"`
 	ScalarFilterPlanCacheEntries            uint64                                `json:"scalar_filter_plan_cache_entries,omitempty"`
 	ScalarFilterPlanCacheRetainedBytes      uint64                                `json:"scalar_filter_plan_cache_retained_bytes,omitempty"`
-}
-
-// VectorIndexSearchLiveANNDiagnostics proves that the selected query stayed on
-// the mutable ANN route rather than rebuilding or scanning exact documents.
-type VectorIndexSearchLiveANNDiagnostics struct {
-	Enabled        bool   `json:"enabled"`
-	ExactFallbacks uint64 `json:"exact_fallbacks"`
-	FullRebuilds   uint64 `json:"full_rebuilds"`
 }
 
 // Diagnostics returns a compact route/status summary for the response.
@@ -828,18 +812,12 @@ func (s VectorIndexSearchStats) Diagnostics() VectorIndexSearchDiagnostics {
 		ScalarFilterPlanCacheEvictions:          s.ScalarFilterPlanCacheEvictions,
 		ScalarFilterPlanCacheEntries:            s.ScalarFilterPlanCacheEntries,
 		ScalarFilterPlanCacheRetainedBytes:      s.ScalarFilterPlanCacheRetainedBytes,
-		LiveANN: VectorIndexSearchLiveANNDiagnostics{
-			Enabled:      s.SearchRouteNativeRuntime > 0,
-			FullRebuilds: s.NativeRuntimeFullRebuilds,
-		},
 	}
 }
 
 // RouteKind reports the low-cardinality route selected for this search.
 func (s VectorIndexSearchStats) RouteKind() VectorIndexSearchRouteKind {
 	switch {
-	case s.SearchRouteNativeRuntime > 0:
-		return VectorIndexSearchRouteNativeRuntime
 	case s.SearchRouteQuantizedOnly > 0:
 		return VectorIndexSearchRouteQuantizedOnly
 	case s.SearchRouteQuantizedRerank > 0:
@@ -925,6 +903,8 @@ func (s VectorIndexSearchStats) ExactHNSWSearchPackNoDocumentRoute() bool {
 // buffer is reused or Reset is called. Parallel callers should use independent
 // searcher/buffer pairs per worker.
 type VectorIndexSearchBuffer struct {
+	// Native backing remains admitted until Reset; legacy reuse is unchanged.
+	nativeLease             *memtable.COWExternalLease
 	results                 []VectorIndexSearchResult
 	idBytes                 []byte
 	baseResults             []VectorIndexSearchResult
@@ -938,13 +918,24 @@ type VectorIndexSearchBuffer struct {
 	nativeSearchWork        vectorIndexNativeSearchWork
 }
 
-// Reset clears the buffer's current response view while retaining reusable
-// capacity. Any response previously returned by a buffered search API with this
+// Reset clears the buffer's current response view. Legacy buffers retain
+// reusable capacity; native buffers drop admitted backing before releasing its receipt. Any response previously returned by a buffered search API with this
 // buffer must be considered invalid after Reset returns.
 func (b *VectorIndexSearchBuffer) Reset() {
 	if b == nil {
 		return
 	}
+	if b.nativeLease != nil {
+		lease := b.nativeLease
+		*b = VectorIndexSearchBuffer{}
+		lease.Close()
+		return
+	}
+	b.resetSearch()
+}
+
+// Internal traversal restarts retain the caller-owned native receipt.
+func (b *VectorIndexSearchBuffer) resetSearch() {
 	clear(b.results)
 	b.nativeSearchWork = vectorIndexNativeSearchWork{}
 	b.resetView()
@@ -1153,9 +1144,7 @@ func (r vectorIndexSearchRouteStats) apply(stats *VectorIndexSearchStats) {
 }
 
 // SearchVectorIndex searches a collection vector index through the public
-// collection lifecycle. V4 wires only explicit column_graph indexes to the
-// native physical column reader; native_runtime remains reported as native
-// rather than silently falling back or pretending to use column storage. When
+// collection lifecycle through the native physical column reader. When
 // availability or staleness checks fail, the returned response may still carry
 // the index status so callers can distinguish rebuild-needed/unavailable cases.
 //
@@ -1172,9 +1161,11 @@ func (r vectorIndexSearchRouteStats) apply(stats *VectorIndexSearchStats) {
 // CollectionReadView.FetchDocumentsForVectorIndexSearchResults as a separate
 // materialization phase with separate counters.
 // Explicitly admitted typed column_graph serving supports native declared
-// filtering here; otherwise the legacy native-runtime buffered-only contract
-// remains fail closed rather than forwarding to an unfiltered one-shot route.
+// filtering here; ordinary filtered ANN requests fail closed.
 func (c *Collection) SearchVectorIndex(opts VectorIndexSearchOptions) (VectorIndexSearchResponse, error) {
+	if c != nil && c.nativeJSON != nil && c.typedGraphServingPolicy() == nil {
+		return c.searchNativeVectorOwned(opts)
+	}
 	if c.typedGraphServingPolicy() != nil {
 		var buffer VectorIndexSearchBuffer
 		response, view, err := c.searchTypedGraphServing(opts, &buffer, false)
@@ -1189,8 +1180,27 @@ func (c *Collection) SearchVectorIndex(opts VectorIndexSearchOptions) (VectorInd
 	if err := validateVectorIndexSearchRequest(opts.TopK, opts.EfSearch); err != nil {
 		return VectorIndexSearchResponse{}, err
 	}
-	if opts.DeclaredScalarFilter != nil {
-		return VectorIndexSearchResponse{}, fmt.Errorf("%w: vector index SearchVectorIndex does not support DeclaredScalarFilter; use SearchVectorIndexWithBuffer for native_runtime declared scalar filtering", ErrVectorIndexSearchUnavailable)
+	// Neither the prepared reader nor the one-shot searcher implements legacy
+	// filtering or its fallback controls. Reject them before opening a reader so
+	// a filtered request cannot silently become an unfiltered ANN search. Native
+	// and admitted typed serving above retain their own filtering contracts.
+	var unsupportedFilterOption string
+	switch {
+	case opts.Filter != nil:
+		unsupportedFilterOption = "Filter"
+	case opts.IndexRangeFilter != nil:
+		unsupportedFilterOption = "IndexRangeFilter"
+	case opts.DeclaredScalarFilter != nil:
+		unsupportedFilterOption = "DeclaredScalarFilter"
+	case opts.FetchMultiplier != 0:
+		unsupportedFilterOption = "FetchMultiplier"
+	case opts.ExactFilterMaxDocs != 0:
+		unsupportedFilterOption = "ExactFilterMaxDocs"
+	case opts.DisableExactFallback:
+		unsupportedFilterOption = "DisableExactFallback"
+	}
+	if unsupportedFilterOption != "" {
+		return VectorIndexSearchResponse{}, fmt.Errorf("%w: vector index SearchVectorIndex does not support %s; use the supported typed ColumnGraph filtering route for declared scalar filters", ErrVectorIndexSearchUnavailable, unsupportedFilterOption)
 	}
 	if collectionSearchVectorIndexCanUseBufferedNoDocumentRoute(opts) {
 		response, err := c.searchVectorIndexPreparedNoDocumentOwned(opts)
@@ -1352,7 +1362,7 @@ func (c *Collection) searchVectorIndexOneShot(opts VectorIndexSearchOptions) (Ve
 // Returned Results and result IDs alias buffer and remain valid only until buffer is reused or
 // Reset is called. The same buffer must not be reused concurrently; parallel
 // callers should use independent buffers.
-// Native-runtime responses also carry an opaque process-local publication
+// ColumnGraph responses also carry an opaque process-local publication
 // identity consumed by OpenCollectionReadViewForVectorIndexSearch; it is not
 // serialized or exposed as a public token.
 //
@@ -1372,6 +1382,21 @@ func (c *Collection) SearchVectorIndexWithBuffer(opts VectorIndexSearchOptions, 
 }
 
 func (c *Collection) searchVectorIndexWithBuffer(opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer, coverageLocked bool) (VectorIndexSearchResponse, error) {
+	if c != nil && c.nativeJSON != nil && c.typedGraphServingPolicy() == nil {
+		response, view, err := c.searchNativeVectorWithBufferReadView(opts, buffer)
+		if view != nil {
+			err = errors.Join(err, view.Close())
+		}
+		if err != nil {
+			buffer.Reset()
+			response.Results = nil
+		}
+		return response, err
+	}
+
+	if buffer != nil && buffer.nativeLease != nil {
+		buffer.Reset()
+	}
 	if c.typedGraphServingPolicy() != nil {
 		response, view, err := c.searchTypedGraphServing(opts, buffer, false)
 		if err != nil {
@@ -1390,39 +1415,13 @@ func (c *Collection) searchVectorIndexWithBuffer(opts VectorIndexSearchOptions, 
 		buffer.Reset()
 		return VectorIndexSearchResponse{}, errCollectionDBNil
 	}
-	def, found, catalogCurrent := c.cachedVectorIndexDefinitionForCurrentState(opts.IndexName)
-	if found && catalogCurrent && vectorIndexDefinitionUsesNativeRuntime(def) {
-		return c.searchNativeRuntimeVectorIndexWithBufferCoverage(def, opts, buffer, coverageLocked)
-	}
 	if err := c.flushBufferedWrites(); err != nil {
 		buffer.Reset()
 		return VectorIndexSearchResponse{}, err
 	}
-	def, found, catalogCurrent = c.cachedVectorIndexDefinitionForCurrentState(opts.IndexName)
-	if !catalogCurrent {
-		snap := c.db.AcquireSnapshot()
-		if snap == nil {
-			buffer.Reset()
-			return VectorIndexSearchResponse{}, backenddb.ErrClosed
-		}
-		catalog, err := c.catalogForSnapshot(snap)
-		_ = snap.Close()
-		if err != nil {
-			buffer.Reset()
-			return VectorIndexSearchResponse{}, err
-		}
-		if catalog == nil {
-			buffer.Reset()
-			return VectorIndexSearchResponse{}, errCollectionNotFound
-		}
-		def, found = findVectorIndex(catalog.meta.VectorIndexes, opts.IndexName)
-	}
-	if found && vectorIndexDefinitionUsesNativeRuntime(def) {
-		return c.searchNativeRuntimeVectorIndexWithBufferCoverage(def, opts, buffer, coverageLocked)
-	}
 	if opts.DeclaredScalarFilter != nil {
 		buffer.Reset()
-		return VectorIndexSearchResponse{}, collectionVectorIndexWithBufferUnsupportedOptionError("DeclaredScalarFilter", "declared scalar filters require a native_runtime vector index")
+		return VectorIndexSearchResponse{}, collectionVectorIndexWithBufferUnsupportedOptionError("DeclaredScalarFilter", "declared scalar filters require an admitted typed ColumnGraph route")
 	}
 	statsMode, err := columnVectorGraphNativeSearchStatsModeFromPublic(opts.StatsMode)
 	if err != nil {
@@ -1498,234 +1497,6 @@ func (c *Collection) searchVectorIndexWithBuffer(opts VectorIndexSearchOptions, 
 	return lastResponse, fmt.Errorf("%w: vector index %q SearchVectorIndexWithBuffer requires a healthy exact no-document hnsw_search_pack_v1 route; rebuild the vector index or use SearchVectorIndex for the response-owned convenience path", ErrVectorIndexSearchUnavailable, opts.IndexName)
 }
 
-func (c *Collection) searchNativeRuntimeVectorIndexWithBuffer(def VectorIndexDefinition, opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer) (VectorIndexSearchResponse, error) {
-	return c.searchNativeRuntimeVectorIndexWithBufferCoverage(def, opts, buffer, false)
-}
-
-func (c *Collection) searchNativeRuntimeVectorIndexWithBufferCoverage(def VectorIndexDefinition, opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer, coverageLocked bool) (VectorIndexSearchResponse, error) {
-	response := VectorIndexSearchResponse{
-		IndexName: def.Name,
-		Strategy:  def.Strategy,
-		Path:      VectorIndexSearchPathNativeRuntime,
-		Status: VectorIndexStatus{
-			Definition: def,
-			Name:       def.Name,
-			Strategy:   def.Strategy,
-			State:      VectorIndexStateNativeRuntime,
-			Reason:     VectorIndexReasonNativeRuntime,
-		},
-	}
-	endForegroundRead := noCollectionForegroundReadEnd
-	if c != nil && c.db != nil {
-		endForegroundRead = c.db.BeginForegroundRead()
-	}
-	defer endForegroundRead()
-	buffer.nativeSearchScratch.setContext(opts.Context)
-	defer buffer.nativeSearchScratch.clearContext()
-	if def.Metric != VectorMetricCosine || def.Encoding != VectorIndexEncodingFloat32 {
-		buffer.Reset()
-		return response, fmt.Errorf("%w: native_runtime vector index %q buffered search supports only cosine float32", ErrVectorIndexSearchUnavailable, def.Name)
-	}
-	if opts.StatsMode == VectorIndexSearchStatsModeDefault || opts.StatsMode == VectorIndexSearchStatsModeFullDiagnostics {
-		buffer.Reset()
-		mode := string(opts.StatsMode)
-		if mode == "" {
-			mode = "default"
-		}
-		return response, collectionVectorIndexWithBufferUnsupportedOptionError("StatsMode="+mode, "native_runtime full-diagnostics counters are not implemented; use production/minimal mode with CPU profiles")
-	}
-	if opts.StatsMode == VectorIndexSearchStatsModeWorkAccounting {
-		buffer.Reset()
-		return response, collectionVectorIndexWithBufferUnsupportedOptionError("StatsMode=work_accounting", "native_runtime work-accounting counters are not implemented; use production/minimal mode with CPU profiles")
-	}
-	queryMode, err := normalizeVectorIndexSearchQueryMode(opts.QueryMode, opts.QuantizedIndexName, opts.QuantizedRerankCandidates, opts.TopK)
-	if err != nil {
-		buffer.Reset()
-		return response, err
-	}
-	if queryMode != columnVectorGraphNativeSearchQueryModeExact {
-		buffer.Reset()
-		return response, fmt.Errorf("%w: native_runtime vector index %q does not support quantized query modes", ErrVectorIndexSearchUnavailable, def.Name)
-	}
-	for attempt := 0; attempt < 2; attempt++ {
-		index, load, err := c.loadNativeRuntimeVectorIndexForSearch(def, coverageLocked)
-		if err != nil {
-			buffer.Reset()
-			response.Status.ExactFallbackReason = load.ExactFallbackReason
-			return response, err
-		}
-		if index == nil || !load.Loaded {
-			buffer.Reset()
-			response.Status.ExactFallbackReason = load.ExactFallbackReason
-			return response, fmt.Errorf("%w: native_runtime vector index %q is not loaded: %s", ErrVectorIndexSearchUnavailable, def.Name, load.ExactFallbackReason)
-		}
-		var scalarPlan *nativeScalarFilterExecution
-		var scalarPlanCache nativeScalarPlanCacheStats
-		if opts.DeclaredScalarFilter != nil {
-			scalarPlan, scalarPlanCache, err = c.planNativeScalarFilter(opts.DeclaredScalarFilter, index, def)
-			if err != nil {
-				buffer.Reset()
-				return response, err
-			}
-		}
-		publicationMu := index.nativePublicationLock()
-		publicationMu.RLock()
-		if c.registeredVectorIndex(def.Name) != index {
-			publicationMu.RUnlock()
-			continue
-		}
-		var searchState vectorIndexNativeSearchState
-		var scalarWork nativeScalarSearchWork
-		workstats.Runtime.QueryAttempts.Add(1)
-		if scalarPlan == nil {
-			response.Results, searchState, err = index.searchGraphOnlyWithBuffer(opts.Query, opts.TopK, opts.EfSearch, buffer)
-		} else {
-			response.Results, searchState, scalarWork, err = index.searchGraphOnlyWithNativeScalarFilterBuffer(opts.Query, opts.TopK, opts.EfSearch, scalarPlan, buffer)
-			if errors.Is(err, ErrHybridSearchStaleIndex) {
-				publicationMu.RUnlock()
-				buffer.Reset()
-				continue
-			}
-		}
-		if err == nil {
-			response.Status.Loaded = true
-			response.Status.Registered = true
-			response.Status.RootName = load.RootName
-			response.Status.RootID = load.RootID
-			response.Status.NativeRootLoaded = load.RootID != 0
-			response.Status.NativeRootBytes = load.BytesDisk
-			response.Status.RebuildNeeded = searchState.rebuildNeeded
-			workstats.Runtime.QueriesCompleted.Add(1)
-			response.Stats.SearchRouteNativeRuntime = 1
-			response.Stats.NativeRuntimeFullRebuilds = searchState.fullRebuilds
-			response.Stats.CandidateRows = uint64(searchState.liveDocs)
-			if scalarPlan != nil {
-				response.Stats.ScalarFilterPlan = scalarPlan.identity
-				response.Stats.ScalarFilterProbeIDs = scalarPlan.probeIDs
-				response.Stats.ScalarFilterProbeTruncated = scalarPlan.probeTruncated
-				response.Stats.ScalarFilterCandidates = uint64(scalarWork.scored)
-				response.Stats.ScalarFilterCandidateIDs = scalarPlan.candidateIDs
-				response.Stats.ScalarFilterRetainedCandidateIDs = scalarPlan.retainedCandidateIDs
-				response.Stats.ScalarFilterRefinedCandidateIDs = scalarPlan.refinedCandidateIDs
-				response.Stats.ScalarFilterVisited = uint64(scalarWork.visited)
-				response.Stats.ScalarFilterScored = uint64(scalarWork.scored)
-				response.Stats.ScalarFilterSeedRowsVisited = uint64(scalarWork.seedRowsVisited)
-				response.Stats.ScalarFilterEligibleSeeds = uint64(scalarWork.eligibleSeeds)
-				response.Stats.ScalarFilterAdmitted = uint64(scalarWork.admitted)
-				if scalarWork.underfill {
-					response.Stats.ScalarFilterUnderfill = 1
-				}
-				if scalarPlan.exact() {
-					response.Stats.ScalarFilterExactScoring = 1
-				}
-				response.Stats.ScalarFilterPlanCacheHits = scalarPlanCache.hits
-				response.Stats.ScalarFilterPlanCacheMisses = scalarPlanCache.misses
-				response.Stats.ScalarFilterPlanCacheInvalidations = scalarPlanCache.invalidations
-				response.Stats.ScalarFilterPlanCacheGenerationBypasses = scalarPlanCache.generationBypasses
-				response.Stats.ScalarFilterPlanCacheEvictions = scalarPlanCache.evictions
-				response.Stats.ScalarFilterPlanCacheEntries = scalarPlanCache.entries
-				response.Stats.ScalarFilterPlanCacheRetainedBytes = scalarPlanCache.retainedBytes
-			}
-			response.visibility = vectorIndexSearchVisibility{
-				runtime:                  index,
-				collectionName:           c.collectionName(),
-				indexName:                def.Name,
-				strategy:                 def.Strategy,
-				schemaGeneration:         def.SchemaGeneration,
-				mutationSeq:              searchState.mutationSeq,
-				sourceDocumentGeneration: searchState.sourceDocumentGeneration,
-			}
-		} else if !index.hasValidSourceDocumentRoots() {
-			response.Status.ExactFallbackReason = vectorIndexFallbackStaleDocumentRoot
-		}
-		publicationMu.RUnlock()
-		return response, err
-	}
-	buffer.Reset()
-	response.Status.ExactFallbackReason = vectorIndexFallbackStaleRuntimeIndex
-	return response, fmt.Errorf("%w: native_runtime vector index %q changed during search validation", ErrVectorIndexSearchUnavailable, def.Name)
-}
-
-func (c *Collection) loadNativeRuntimeVectorIndexForSearch(def VectorIndexDefinition, coverageLocked bool) (*VectorIndex, VectorIndexLoadStatus, error) {
-	if index := c.registeredVectorIndex(def.Name); index != nil {
-		if status, ok := c.publishedNativeSearchLoadStatusDuringMutation(def, index); ok {
-			return index, status, nil
-		}
-		validated, status, err := c.validateRegisteredNativeRuntimeVectorIndexForSearch(def, index)
-		if err != nil {
-			if status.ExactFallbackReason == vectorIndexFallbackStaleDocumentRoot {
-				if status, ok := c.publishedNativeSearchLoadStatusDuringMutation(def, index); ok {
-					return index, status, nil
-				}
-				var unlockCoverage func()
-				if !coverageLocked {
-					unlockCoverage = c.lockVectorIndexCoveragePersistence()
-				}
-				current := c.registeredVectorIndex(def.Name)
-				if current != nil {
-					validated, status, err = c.validateRegisteredNativeRuntimeVectorIndexForSearch(def, current)
-				}
-				if unlockCoverage != nil {
-					unlockCoverage()
-				}
-				if current != nil {
-					return validated, status, err
-				}
-			}
-			if current := c.registeredVectorIndex(def.Name); current != nil && current != index {
-				return c.validateRegisteredNativeRuntimeVectorIndexForSearch(def, current)
-			}
-		}
-		return validated, status, err
-	}
-	unlockLoad := c.lockNativeVectorIndexLoad()
-	defer unlockLoad()
-	if index := c.registeredVectorIndex(def.Name); index != nil {
-		return c.validateRegisteredNativeRuntimeVectorIndexForSearch(def, index)
-	}
-	index, status, err := c.LoadNativeVectorIndexSnapshot(vectorIndexOptionsFromDefinition(def))
-	if err != nil {
-		return nil, status, err
-	}
-	return index, status, nil
-}
-
-func (c *Collection) publishedNativeSearchLoadStatusDuringMutation(def VectorIndexDefinition, index *VectorIndex) (VectorIndexLoadStatus, bool) {
-	if c == nil {
-		return VectorIndexLoadStatus{}, false
-	}
-	if c.nativeVectorIndexMutationActive() {
-		return c.publishedNativeSearchLoadStatus(def, index)
-	}
-	if c.writeDomain != nil {
-		if coord := c.writeDomain.schemaCoordinator; coord != nil {
-			if baseline := coord.nativeVectorBaseline.Load(); baseline != nil {
-				if !index.publishedSearchViewCoversSourceDocumentGeneration(*baseline) {
-					return VectorIndexLoadStatus{}, false
-				}
-				return c.publishedNativeSearchLoadStatus(def, index)
-			}
-		}
-	}
-	return VectorIndexLoadStatus{}, false
-}
-
-func (c *Collection) publishedNativeSearchLoadStatus(def VectorIndexDefinition, index *VectorIndex) (VectorIndexLoadStatus, bool) {
-	status, ok := index.publishedNativeSearchLoadStatus(def)
-	if !ok || c == nil || c.db == nil || status.RootName == "" {
-		return VectorIndexLoadStatus{}, false
-	}
-	state, ok := c.db.StateToken()
-	if !ok {
-		return VectorIndexLoadStatus{}, false
-	}
-	currentDef, rootID, found, current := c.cachedVectorIndexForState(def.Name, status.RootName, state)
-	if !current || !found || !vectorIndexDefinitionValuesEqual(def, currentDef) || rootID != status.RootID {
-		return VectorIndexLoadStatus{}, false
-	}
-	return status, true
-}
-
 func (c *Collection) cachedVectorIndexDefinitionForCurrentState(name string) (VectorIndexDefinition, bool, bool) {
 	if c == nil || c.db == nil {
 		return VectorIndexDefinition{}, false, false
@@ -1755,7 +1526,7 @@ func (c *Collection) cachedVectorIndexForState(name, rootName string, state back
 			}
 			c.writeDomain.mu.RUnlock()
 		} else if catalog.pager == currentPager {
-			if def, ok := findVectorIndex(catalog.meta.VectorIndexes, name); ok && vectorIndexDefinitionUsesNativeRuntime(def) {
+			if def, ok := findVectorIndex(catalog.meta.VectorIndexes, name); ok && def.Strategy == VectorIndexStrategyColumnGraph {
 				return def, catalog.rootID(rootName), true, true
 			}
 		}
@@ -1786,61 +1557,6 @@ func (c *Collection) cachedVectorIndexForState(name, rootName string, state back
 	return def, catalog.rootID(rootName), true, true
 }
 
-func (c *Collection) validateRegisteredNativeRuntimeVectorIndexForSearch(def VectorIndexDefinition, index *VectorIndex) (*VectorIndex, VectorIndexLoadStatus, error) {
-	if index == nil {
-		return nil, VectorIndexLoadStatus{ExactFallbackReason: "nil_index"}, fmt.Errorf("%w: native_runtime vector index %q definition mismatch: nil_index", ErrVectorIndexSearchUnavailable, def.Name)
-	}
-	publicationMu := index.nativePublicationLock()
-	publicationMu.RLock()
-	defer publicationMu.RUnlock()
-	rootName := index.nativeRootName
-	if state, ok := c.db.StateToken(); ok && rootName != "" && index.coversSourceDocumentState(state) {
-		currentDef, rootID, found, current := c.cachedVectorIndexForState(def.Name, rootName, state)
-		if current && found && index.validateNativeSnapshotDefinition(currentDef) == "" && rootID == index.nativeSnapshotBaseEpochForFullSave() {
-			epoch, bytesDisk, _, _, _ := index.nativeSearchState()
-			return index, VectorIndexLoadStatus{Loaded: true, RootName: rootName, RootID: rootID, Epoch: epoch, BytesDisk: bytesDisk}, nil
-		}
-	}
-	snap := c.db.AcquireSnapshot()
-	if snap == nil {
-		return nil, VectorIndexLoadStatus{}, backenddb.ErrClosed
-	}
-	defer func() { _ = snap.Close() }()
-	state, ok := snap.StateToken()
-	if !ok {
-		return nil, VectorIndexLoadStatus{}, backenddb.ErrClosed
-	}
-	catalog, err := c.catalogForSnapshot(snap)
-	if err != nil {
-		return nil, VectorIndexLoadStatus{}, err
-	}
-	if catalog == nil {
-		return nil, VectorIndexLoadStatus{}, errCollectionNotFound
-	}
-	documentGeneration, err := vectorIndexDocumentGeneration(snap, catalog)
-	if err != nil {
-		return nil, VectorIndexLoadStatus{}, err
-	}
-	if !index.coversSourceDocumentGeneration(documentGeneration) {
-		return nil, VectorIndexLoadStatus{ExactFallbackReason: vectorIndexFallbackStaleDocumentRoot}, fmt.Errorf("%w: native_runtime vector index %q does not cover current documents", ErrVectorIndexSearchUnavailable, def.Name)
-	}
-	currentDef, ok := findVectorIndex(catalog.meta.VectorIndexes, def.Name)
-	if !ok {
-		return nil, VectorIndexLoadStatus{ExactFallbackReason: vectorIndexFallbackMissingVectorIndexMetadata}, fmt.Errorf("%w: native_runtime vector index %q is not declared", ErrVectorIndexSearchUnavailable, def.Name)
-	}
-	if reason := index.validateNativeSnapshotDefinition(currentDef); reason != "" {
-		return nil, VectorIndexLoadStatus{ExactFallbackReason: reason}, fmt.Errorf("%w: native_runtime vector index %q definition mismatch: %s", ErrVectorIndexSearchUnavailable, def.Name, reason)
-	}
-	rootName = collectionVectorIndexRootName(catalog.meta.Name, def.Name)
-	rootID := catalog.rootID(rootName)
-	if rootID != index.nativeSnapshotBaseEpochForFullSave() {
-		return nil, VectorIndexLoadStatus{ExactFallbackReason: vectorIndexFallbackStaleRuntimeIndex}, fmt.Errorf("%w: native_runtime vector index %q is stale", ErrVectorIndexSearchUnavailable, def.Name)
-	}
-	index.recordSourceDocumentState(documentGeneration, state)
-	epoch, bytesDisk, _, _, _ := index.nativeSearchState()
-	return index, VectorIndexLoadStatus{Loaded: true, RootName: rootName, RootID: rootID, Epoch: epoch, BytesDisk: bytesDisk}, nil
-}
-
 func validateCollectionVectorIndexSearchWithBufferOptions(opts VectorIndexSearchOptions, buffer *VectorIndexSearchBuffer) error {
 	if buffer == nil {
 		return errors.New("collections: nil vector index search buffer")
@@ -1863,11 +1579,11 @@ func validateCollectionVectorIndexSearchWithBufferOptions(opts VectorIndexSearch
 	}
 	if opts.Filter != nil {
 		buffer.Reset()
-		return collectionVectorIndexWithBufferUnsupportedOptionError("Filter", "filters are outside the exact no-document hnsw_search_pack_v1 route; use SearchVectorIndex for response-owned search or build a separate measured filtered path")
+		return collectionVectorIndexWithBufferUnsupportedOptionError("Filter", "filters are outside the exact no-document hnsw_search_pack_v1 route; use an admitted typed ColumnGraph route with DeclaredScalarFilter")
 	}
 	if opts.IndexRangeFilter != nil {
 		buffer.Reset()
-		return collectionVectorIndexWithBufferUnsupportedOptionError("IndexRangeFilter", "filters are outside the exact no-document hnsw_search_pack_v1 route; use SearchVectorIndex for response-owned search or build a separate measured filtered path")
+		return collectionVectorIndexWithBufferUnsupportedOptionError("IndexRangeFilter", "filters are outside the exact no-document hnsw_search_pack_v1 route; use an admitted typed ColumnGraph route with DeclaredScalarFilter")
 	}
 	if opts.FetchMultiplier != 0 {
 		buffer.Reset()
@@ -2147,14 +1863,6 @@ func (c *Collection) openVectorIndexSearcherUnderStorageBarrier(opts VectorIndex
 	response.IndexName = def.Name
 	response.Strategy = def.Strategy
 	switch def.Strategy {
-	case VectorIndexStrategyNativeRuntime:
-		response.Status = VectorIndexStatus{
-			Name:     def.Name,
-			Strategy: def.Strategy,
-			State:    VectorIndexStateNativeRuntime,
-			Reason:   VectorIndexReasonNativeRuntime,
-		}
-		return nil, response, fmt.Errorf("%w: vector index %q uses native_runtime; public native-reader search currently requires an explicit column_graph index", ErrVectorIndexSearchUnavailable, def.Name)
 	case VectorIndexStrategyColumnGraph:
 	default:
 		response.Status = VectorIndexStatus{
@@ -2391,6 +2099,9 @@ func (s *VectorIndexSearcher) Search(opts VectorIndexSearcherSearchOptions) (Vec
 func (s *VectorIndexSearcher) SearchWithBuffer(opts VectorIndexSearcherSearchOptions, buffer *VectorIndexSearchBuffer) (VectorIndexSearchResponse, error) {
 	if buffer == nil {
 		return VectorIndexSearchResponse{}, errors.New("collections: nil vector index search buffer")
+	}
+	if buffer.nativeLease != nil {
+		buffer.Reset()
 	}
 	previousResults := buffer.results
 	buffer.resetView()
@@ -2978,3 +2689,7 @@ func vectorIndexSearchStatsFromInternal(searchStats columnVectorGraphNativeSearc
 	}
 	return stats
 }
+
+// Shared telemetry is populated only after the maintained graph traversal returns.
+
+// This wrapper owns the view; the AtReadView helper below always borrows it.

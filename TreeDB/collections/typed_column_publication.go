@@ -339,7 +339,16 @@ func buildTypedColumnPartImageFromSourceWithResult(cfg ColumnStoreConfig, genera
 	return buildTypedColumnPartImageFromPreparedBatchWithResult(prepared, partID)
 }
 
+// The validator borrows the producer's exact options and mapped definitions.
+// They are used by this same invocation after validation; no environment policy
+// is read again between validation and part construction.
+type typedColumnPartOptionsValidator func(ColumnStoreConfig, typedColumnAdapterOptions, []typedColumnAdapterColumn) error
+
 func prepareTypedColumnPartBatchFromSource(cfg ColumnStoreConfig, partID uint64, rows typedColumnAdapterRowSource) (*typedColumnAdapterPreparedBatch, error) {
+	return prepareTypedColumnPartBatchFromSourceWithOptionsValidator(cfg, partID, rows, nil)
+}
+
+func prepareTypedColumnPartBatchFromSourceWithOptionsValidator(cfg ColumnStoreConfig, partID uint64, rows typedColumnAdapterRowSource, validate typedColumnPartOptionsValidator) (*typedColumnAdapterPreparedBatch, error) {
 	if !columnStoreHasTypedColumnPartOwners(cfg) {
 		return nil, nil
 	}
@@ -356,6 +365,15 @@ func prepareTypedColumnPartBatchFromSource(cfg ColumnStoreConfig, partID uint64,
 		return nil, err
 	}
 	adapterOpts.DictionaryModes = typedColumnPublicationDictionaryModes(fields)
+	if validate != nil {
+		columns, err := typedColumnAdapterColumnsForFieldsWithOptions(fields, adapterOpts)
+		if err != nil {
+			return nil, err
+		}
+		if err = validate(cfg, adapterOpts, columns); err != nil {
+			return nil, err
+		}
+	}
 	return prepareTypedColumnAdapterBatchFromSource(adapterOpts, rows)
 }
 

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"unsafe"
 )
 
 const (
@@ -22,6 +24,26 @@ var errHybridVectorAllowSetScanBudgetExceeded = errors.New("collections: hybrid 
 // ranks, and fails closed if the backing vector path reports any document
 // materialization or unavailable vector-index state.
 func (c *Collection) SearchHybridVectorCandidates(query HybridVectorQuery) (HybridCandidateResponse, error) {
+	if c != nil && c.nativeJSON != nil && c.typedGraphServingPolicy() == nil {
+		view, err := c.OpenCollectionReadView()
+		if err != nil {
+			return HybridCandidateResponse{}, err
+		}
+		// Candidate conversion uses the same operation-scoped admission receipt
+		// as the full Hybrid executor. A bare native read view has no catalog.
+		scratch, err := newHybridNativeScratch(view)
+		if err != nil {
+			return HybridCandidateResponse{}, errors.Join(err, view.Close())
+		}
+		view.catalog, err = newNativeTextCatalog(view.nativeRead, scratch.admitFn)
+		if err != nil {
+			return HybridCandidateResponse{}, errors.Join(err, view.Close())
+		}
+		response, err := c.searchHybridVectorCandidatesDeclaredScalarAtReadView(context.Background(), query, nil, view, 0, false)
+		view.catalog = nil
+		return response, errors.Join(err, view.Close())
+	}
+
 	policy := c.typedGraphServingPolicy()
 	if hybridVectorQuerySelectsQuantizedRerank(&query) && policy == nil {
 		requested := query.CandidateLimit
@@ -38,10 +60,10 @@ func (c *Collection) SearchHybridVectorCandidates(query HybridVectorQuery) (Hybr
 	if policy != nil {
 		return c.searchHybridVectorCandidatesDeclaredScalar(query, nil)
 	}
-	return c.searchHybridVectorCandidatesWithAllowSetBudget(query, nil, query.CandidateLimit)
+	return c.searchHybridVectorCandidatesWithAllowSetBudget(query, hybridScalarIDs{}, query.CandidateLimit)
 }
 
-func (c *Collection) searchHybridVectorCandidatesWithAllowSetBudget(query HybridVectorQuery, allowSet hybridScalarAllowSet, allowSetBudget int) (HybridCandidateResponse, error) {
+func (c *Collection) searchHybridVectorCandidatesWithAllowSetBudget(query HybridVectorQuery, allowSet hybridScalarIDs, allowSetBudget int) (HybridCandidateResponse, error) {
 	if c == nil {
 		return HybridCandidateResponse{}, errCollectionNil
 	}
@@ -55,7 +77,7 @@ func (c *Collection) searchHybridVectorCandidatesWithAllowSetBudget(query Hybrid
 		response.Stats.FailClosedReason = HybridFailClosedReasonUnsupported
 		return response, err
 	}
-	if allowSet != nil && len(allowSet) == 0 {
+	if allowSet.present() && allowSet.len() == 0 {
 		return HybridCandidateResponse{Stats: hybridVectorCandidateStatsFromSearch(requested, VectorIndexSearchStats{}, 0)}, nil
 	}
 	if allowSetBudget < requested {
@@ -70,6 +92,7 @@ func (c *Collection) searchHybridVectorCandidatesWithAllowSetBudget(query Hybrid
 
 	opts := hybridVectorSearchOptions(query)
 	var buffer VectorIndexSearchBuffer
+	defer buffer.Reset()
 	vectorResponse, err := c.SearchVectorIndexWithBuffer(opts, &buffer)
 	if err != nil {
 		response := HybridCandidateResponse{Stats: hybridVectorCandidateStatsFromSearch(requested, vectorResponse.Stats, 0)}
@@ -97,6 +120,7 @@ func (c *Collection) searchHybridVectorCandidatesDeclaredScalar(query HybridVect
 	}
 	opts.DeclaredScalarFilter = filter
 	var buffer VectorIndexSearchBuffer
+	defer buffer.Reset()
 	var vectorResponse VectorIndexSearchResponse
 	var view *CollectionReadView
 	var err error
@@ -119,11 +143,55 @@ func (c *Collection) searchHybridVectorCandidatesDeclaredScalar(query HybridVect
 }
 
 func (c *Collection) searchHybridVectorCandidatesDeclaredScalarAtReadView(ctx context.Context, query HybridVectorQuery, filter *HybridScalarFilter, view *CollectionReadView, ownerAcquireNanos int64, scalarStatsOwner bool) (HybridCandidateResponse, error) {
+	return c.searchHybridVectorCandidatesDeclaredScalarAtReadViewWithAllowSet(ctx, query, filter, view, ownerAcquireNanos, scalarStatsOwner, hybridScalarIDs{}, nil)
+}
+
+func (c *Collection) searchHybridVectorCandidatesDeclaredScalarAtReadViewWithAllowSet(ctx context.Context, query HybridVectorQuery, filter *HybridScalarFilter, view *CollectionReadView, ownerAcquireNanos int64, scalarStatsOwner bool, allowSet hybridScalarIDs, acquisition *nativeColumnGraphPreparedSearchAcquisition) (HybridCandidateResponse, error) {
 	requested := query.CandidateLimit
 	if err := validateHybridVectorCandidateQuery(query); err != nil {
 		response := HybridCandidateResponse{Stats: hybridVectorCandidateStatsFromSearch(requested, VectorIndexSearchStats{}, 0)}
 		response.Stats.FailClosed = 1
 		response.Stats.FailClosedReason = HybridFailClosedReasonUnsupported
+		return response, err
+	}
+	if view != nil && view.nativeRead != nil {
+		opts := hybridVectorSearchOptions(query)
+		opts.Context = ctx
+		opts.StatsMode = VectorIndexSearchStatsModeProduction
+		opts.DeclaredScalarFilter = filter
+		var buffer VectorIndexSearchBuffer
+		defer buffer.Reset()
+		var vectorResponse VectorIndexSearchResponse
+		var err error
+		if nativeOrdinaryColumnGraphMeta(view.nativeRead.meta) {
+			// Ordinary filtered ANN is unsupported; admitted unfiltered searches
+			// use the maintained ColumnGraph pack route.
+			if filter != nil {
+				return HybridCandidateResponse{}, ErrHybridSearchUnsupported
+			}
+			vectorResponse, err = c.searchNativeColumnGraphAtReadViewWithPrepared(opts, &buffer, view, allowSet, acquisition)
+		} else {
+			return HybridCandidateResponse{}, ErrHybridSearchUnsupported
+		}
+		if err != nil {
+			stats := hybridVectorCandidateStatsFromSearch(requested, vectorResponse.Stats, 0)
+			stats.FailClosed = 1
+			stats.FailClosedReason = hybridVectorCandidateFailClosedReason(err)
+			return HybridCandidateResponse{Stats: stats}, hybridVectorCandidateError(err, query.IndexName)
+		}
+		admit := view.catalog.nativeText.admit
+		if err = admit(memtable.COWAllocationCharge(uint64(len(vectorResponse.Results)) * uint64(unsafe.Sizeof(HybridSearchCandidate{})))); err != nil {
+			return HybridCandidateResponse{}, err
+		}
+		for _, result := range vectorResponse.Results {
+			if err = admit(memtable.COWAllocationCharge(uint64(len(result.ID)))); err != nil {
+				return HybridCandidateResponse{}, err
+			}
+		}
+		response, err := hybridVectorCandidatesFromSearchResponse(requested, query.IndexName, vectorResponse)
+		if nativeOrdinaryColumnGraphMeta(view.nativeRead.meta) && allowSet.present() {
+			hybridVectorCandidateAddAllowSetStats(&response.Stats, vectorResponse.Stats)
+		}
 		return response, err
 	}
 	if view == nil || view.typedGraphOwner == nil {
@@ -134,6 +202,7 @@ func (c *Collection) searchHybridVectorCandidatesDeclaredScalarAtReadView(ctx co
 	opts.StatsMode = VectorIndexSearchStatsModeMinimal
 	opts.DeclaredScalarFilter = filter
 	var buffer VectorIndexSearchBuffer
+	defer buffer.Reset()
 	vectorResponse, gotView, filterWork, err := c.searchTypedGraphServingWithOwner(opts, &buffer, true, view.typedGraphOwner, ownerAcquireNanos, scalarStatsOwner)
 	if err != nil {
 		stats := hybridVectorCandidateStatsFromSearch(requested, vectorResponse.Stats, 0)
@@ -184,18 +253,18 @@ func hybridVectorSearchOptions(query HybridVectorQuery) VectorIndexSearchOptions
 	}
 }
 
-func hybridVectorCandidateUseExactAllowSet(query HybridVectorQuery, allowSet hybridScalarAllowSet) bool {
+func hybridVectorCandidateUseExactAllowSet(query HybridVectorQuery, allowSet hybridScalarIDs) bool {
 	return hybridVectorCandidateUseExactAllowSetBudget(query, allowSet, query.CandidateLimit)
 }
 
-func hybridVectorCandidateUseExactAllowSetBudget(query HybridVectorQuery, allowSet hybridScalarAllowSet, allowSetBudget int) bool {
-	if allowSet == nil || len(allowSet) == 0 || query.CandidateLimit <= 0 || allowSetBudget <= 0 {
+func hybridVectorCandidateUseExactAllowSetBudget(query HybridVectorQuery, allowSet hybridScalarIDs, allowSetBudget int) bool {
+	if !allowSet.present() || allowSet.len() == 0 || query.CandidateLimit <= 0 || allowSetBudget <= 0 {
 		return false
 	}
 	if allowSetBudget > hybridVectorScalarPrefilterExactMax {
 		return false
 	}
-	return len(allowSet) <= allowSetBudget
+	return allowSet.len() <= allowSetBudget
 }
 
 func validateHybridVectorCandidateQuery(query HybridVectorQuery) error {
@@ -219,7 +288,7 @@ func hybridVectorQuerySelectsQuantizedRerank(query *HybridVectorQuery) bool {
 	return query != nil && query.QueryMode == VectorIndexQueryModeQuantizedRerank
 }
 
-func (c *Collection) searchHybridVectorCandidatesAllowSet(query HybridVectorQuery, allowSet hybridScalarAllowSet) (HybridCandidateResponse, error) {
+func (c *Collection) searchHybridVectorCandidatesAllowSet(query HybridVectorQuery, allowSet hybridScalarIDs) (HybridCandidateResponse, error) {
 	requested := query.CandidateLimit
 	opts := hybridVectorSearchOptions(query)
 	statsMode, err := columnVectorGraphNativeSearchStatsModeFromPublic(opts.StatsMode)
@@ -281,7 +350,7 @@ func (c *Collection) searchHybridVectorCandidatesAllowSet(query HybridVectorQuer
 	return response, hybridVectorCandidateError(lastErr, query.IndexName)
 }
 
-func (p *collectionVectorIndexPreparedSearch) searchHybridVectorAllowSetNoDocuments(opts VectorIndexSearchOptions, statsMode columnVectorGraphNativeSearchStatsMode, allowSet hybridScalarAllowSet) (VectorIndexSearchResponse, error) {
+func (p *collectionVectorIndexPreparedSearch) searchHybridVectorAllowSetNoDocuments(opts VectorIndexSearchOptions, statsMode columnVectorGraphNativeSearchStatsMode, allowSet hybridScalarIDs) (VectorIndexSearchResponse, error) {
 	if p == nil {
 		return VectorIndexSearchResponse{}, errors.New("collections: nil collection vector index prepared search")
 	}
@@ -319,7 +388,7 @@ func (p *collectionVectorIndexPreparedSearch) searchHybridVectorAllowSetNoDocume
 	return response, nil
 }
 
-func (v *columnHNSWSearchPackPreparedView) searchCosineAllowSet(query []float32, opts columnVectorGraphNativeSearchOptions, allowSet hybridScalarAllowSet, scratch *columnVectorGraphNativeSearchScratch) ([]columnVectorGraphNativeSearchResult, columnVectorGraphNativeSearchStats, error) {
+func (v *columnHNSWSearchPackPreparedView) searchCosineAllowSet(query []float32, opts columnVectorGraphNativeSearchOptions, allowSet hybridScalarIDs, scratch *columnVectorGraphNativeSearchScratch) ([]columnVectorGraphNativeSearchResult, columnVectorGraphNativeSearchStats, error) {
 	var stats columnVectorGraphNativeSearchStats
 	if v == nil {
 		return nil, stats, errColumnHNSWSearchPackSearchUnavailable
@@ -352,14 +421,14 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineAllowSet(query []float32,
 	if topK < 0 {
 		return nil, stats, errColumnVectorGraphNativeSearchTopKNegative
 	}
-	if topK == 0 || rowCount == 0 || len(allowSet) == 0 {
+	if topK == 0 || rowCount == 0 || allowSet.len() == 0 {
 		return nil, stats, nil
 	}
 	if !hybridVectorAllowSetExactScanEligible(rowCount) {
 		return nil, stats, errHybridVectorAllowSetScanBudgetExceeded
 	}
-	if topK > len(allowSet) {
-		topK = len(allowSet)
+	if topK > allowSet.len() {
+		topK = allowSet.len()
 	}
 	if topK > rowCount {
 		topK = rowCount
@@ -371,6 +440,9 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineAllowSet(query []float32,
 	if degree <= maxCollectionInt/2 {
 		degree *= 2
 	}
+	// This route scans ordinals rather than expanding graph neighbors. Even a
+	// large configured M cannot require a score tile larger than the corpus.
+	degree = min(degree, rowCount)
 	if err := scratch.prepareHNSWSearchPack(rowCount, v.Header.VectorStride, degree, topK, topK, 0, 0, 0); err != nil {
 		return nil, stats, fmt.Errorf("collections: hnsw_search_pack_v1 allow-set search scratch prepare: %w", err)
 	}
@@ -386,13 +458,13 @@ func (v *columnHNSWSearchPackPreparedView) searchCosineAllowSet(query []float32,
 		clear(normalizedQuery[v.Header.Dimensions:])
 	}
 
-	rowIDs := make([]uint32, 0, minInt(len(allowSet), rowCount))
+	rowIDs := make([]uint32, 0, minInt(allowSet.len(), rowCount))
 	for ordinal := 0; ordinal < rowCount; ordinal++ {
 		id, ok := v.documentIDForOrdinal(ordinal)
 		if !ok {
 			return nil, stats, fmt.Errorf("collections: hnsw_search_pack_v1 allow-set result-id unavailable for ordinal=%d", ordinal)
 		}
-		if _, allowed := allowSet[unsafeStringFromBytes(id)]; !allowed {
+		if allowed := allowSet.contains(unsafeStringFromBytes(id)); !allowed {
 			stats.FilterSkips++
 			continue
 		}

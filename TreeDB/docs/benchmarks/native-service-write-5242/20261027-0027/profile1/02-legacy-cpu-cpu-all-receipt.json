@@ -1,0 +1,31 @@
+{
+  "argv": [
+    "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.0.linux-amd64/bin/go",
+    "tool",
+    "pprof",
+    "-top",
+    "-nodecount=40",
+    "-sample_index=cpu",
+    "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/current-feature-service-write-diagnostic2/documentservice.test",
+    "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/current-feature-service-write-profile1/02-legacy-cpu.pprof"
+  ],
+  "cwd": "/mnt/fast4tb/gomap-mongo-execution-20261024/consumer-canonical",
+  "environment_policy": "explicit whitelist plus frozen cell values; no full environment dump",
+  "start_utc": "2026-10-27T00:12:39.630197+00:00",
+  "wall_limit_seconds": 60,
+  "exit_code": 0,
+  "timed_out": false,
+  "error": null,
+  "cleanup": {
+    "pgid": 217249,
+    "alive_before_cleanup": false,
+    "signals": [],
+    "alive_after_cleanup": false
+  },
+  "pid": 217249,
+  "end_utc": "2026-10-27T00:12:39.693937+00:00",
+  "elapsed_seconds": 0.06374090723693371,
+  "log": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/current-feature-service-write-profile1/02-legacy-cpu-cpu-all.txt",
+  "log_sha256": "7d1b361bbefa6a6795c4c364a4daa75ac94fb69c6dfd537760fc50f9dcff43e6",
+  "process_ok": true
+}

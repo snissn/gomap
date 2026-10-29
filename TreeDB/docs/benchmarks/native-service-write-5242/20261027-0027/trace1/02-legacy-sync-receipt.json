@@ -1,0 +1,28 @@
+{
+  "argv": [
+    "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.0.linux-amd64/bin/go",
+    "tool",
+    "trace",
+    "-pprof=sync",
+    "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/current-feature-service-write-trace1/02-legacy.trace"
+  ],
+  "cwd": "/mnt/fast4tb/gomap-mongo-execution-20261024/consumer-canonical",
+  "environment_policy": "explicit whitelist plus frozen cell values; no full environment dump",
+  "start_utc": "2026-10-27T00:14:47.275660+00:00",
+  "wall_limit_seconds": 60,
+  "exit_code": 0,
+  "timed_out": false,
+  "error": null,
+  "cleanup": {
+    "pgid": 221011,
+    "alive_before_cleanup": false,
+    "signals": [],
+    "alive_after_cleanup": false
+  },
+  "pid": 221011,
+  "end_utc": "2026-10-27T00:14:47.389569+00:00",
+  "elapsed_seconds": 0.1139122499153018,
+  "log": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/current-feature-service-write-trace1/02-legacy-sync.pprof",
+  "log_sha256": "742e46f7e06debbdec8f80008a3aaf3adda9411422762290f89314305e6208e5",
+  "process_ok": true
+}

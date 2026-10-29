@@ -788,7 +788,7 @@ def _dense_response(body, top_k, version=2, *, query_mode=None, quantized_index_
             return_embedding=return_embedding,
             diagnostics=diagnostics,
         )
-    if version not in (1, 2, 3):
+    if version not in (2, 3):
         raise TreeDBProtocolError(f"unsupported native dense response version {version}")
     known = {102, 103, 130, 134}
     if version == 3:

@@ -107,8 +107,9 @@ func (b *cowBackendBasis) release() error {
 	return priorErr
 }
 
-// All members are immutable after installation. refs is controlled by cutMu;
-// dropping the last reference transfers bounded retirement to the caller.
+// Authority members are immutable after installation; only the separately
+// synchronized derived catalog slot may initialize once. refs is controlled by
+// cutMu; dropping the last reference transfers bounded retirement to the caller.
 type cowReadCut struct {
 	visibleCommandLSN     uint64
 	logicalSeq            uint64
@@ -116,6 +117,7 @@ type cowReadCut struct {
 	frozenCommandLSN      uint64
 	frozenSemanticRootSet backenddb.NativeSemanticState
 	semanticRootSet       backenddb.NativeSemanticState // immutable semantic/catalog projection installed with this same raw cut
+	catalogProjection     cowNativeCatalogProjection    // derived once from this exact cut; never semantic publication
 	refs                  int
 	shards                []cowTable
 	frozen                []cowTable // oldest to newest; every member precedes basis
@@ -199,6 +201,8 @@ type cowCache struct {
 	semanticCond                                                                                   sync.Cond
 	semanticEnqueued, semanticCompleted                                                            uint64
 	nativePressureMu                                                                               sync.Mutex // only before a native producer captures its opening
+	nativePressureState                                                                            cowNativePressureState
+	nativePressureRemembered                                                                       bool
 	semanticHead, semanticTail, semanticFailed                                                     *rootpublication.SemanticCleanup
 	semanticRunning, semanticStopped, closeCleanupDone                                             bool
 	flushWake                                                                                      chan struct{}

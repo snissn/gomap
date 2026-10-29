@@ -12,7 +12,7 @@ import (
 func TestNativePublishedDuplicateVectorsRemainSearchableAfterDeletes(t *testing.T) {
 	for _, order := range []string{"ascending", "descending", "permuted"} {
 		t.Run(order, func(t *testing.T) {
-			index, err := newVectorIndex(nil, VectorIndexOptions{
+			index, err := newColumnGraphPartitionLiveDomain(nil, columnGraphPartitionLiveOptions{
 				Name: "embedding_graph", Field: "embedding", Metric: VectorMetricCosine,
 				Dimensions: 2, M: 2, EfConstruction: 8, EfSearch: 8,
 			})
@@ -114,10 +114,9 @@ func TestVectorIndexConstructionIdenticalRepresentationValidation(t *testing.T) 
 	for _, metric := range []VectorMetric{VectorMetricCosine, VectorMetricL2, VectorMetricInnerProduct} {
 		for _, encoding := range []VectorIndexEncoding{VectorIndexEncodingFloat32, VectorIndexEncodingInt8} {
 			t.Run(fmt.Sprintf("%s/%d", metric, encoding), func(t *testing.T) {
-				index, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding_graph", Field: "embedding", Metric: metric, Encoding: encoding, Dimensions: 2, M: 2, EfConstruction: 8})
-				if err != nil {
-					t.Fatal(err)
-				}
+				// Exercise representation math directly; these shapes are not
+				// admitted as collection-bound ColumnGraph carriers.
+				index := &columnGraphHNSWBuilder{metric: metric, encoding: encoding, dimensions: 2, m: 2, efConstruction: 8}
 				index.nodes = []vectorIndexNode{index.newVectorIndexNode([]byte("a"), []float32{0, 1}, 0), index.newVectorIndexNode([]byte("b"), []float32{0, 1}, 0), index.newVectorIndexNode([]byte("c"), []float32{1, 0}, 0)}
 				if !index.constructionNodesHaveIdenticalVectorsLocked(0, 1) || index.constructionNodesHaveIdenticalVectorsLocked(0, 2) {
 					t.Fatal("identity must compare actual stored vector representation")
@@ -169,7 +168,7 @@ func TestVectorIndexConstructionIdentityProbesKeepFullComparison(t *testing.T) {
 		for _, metric := range []VectorMetric{VectorMetricCosine, VectorMetricL2, VectorMetricInnerProduct} {
 			for _, encoding := range []VectorIndexEncoding{VectorIndexEncodingFloat32, VectorIndexEncodingInt8} {
 				t.Run(fmt.Sprintf("%d/%s/%d", dimensions, metric, encoding), func(t *testing.T) {
-					index := &VectorIndex{metric: metric, encoding: encoding, dimensions: dimensions}
+					index := &columnGraphHNSWBuilder{metric: metric, encoding: encoding, dimensions: dimensions}
 					makeNode := func(last float32) vectorIndexNode {
 						vector := make([]float32, dimensions)
 						vector[0], vector[dimensions-1] = 1, last
@@ -227,13 +226,8 @@ func TestVectorIndexConstructionIdentityProbesKeepFullComparison(t *testing.T) {
 func TestVectorIndexConstructionAdmissionPreservesLastGeometryAfterEvictions(t *testing.T) {
 	for _, capacity := range []int{7, 129} {
 		t.Run(fmt.Sprint(capacity), func(t *testing.T) {
-			index, err := newVectorIndex(nil, VectorIndexOptions{
-				Name: "embedding_graph", Field: "embedding", Metric: VectorMetricL2,
-				Dimensions: 2, M: 2, EfConstruction: capacity,
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
+			// Pure L2 geometry exercises comparator and eviction primitives only.
+			index := &columnGraphHNSWBuilder{metric: VectorMetricL2, encoding: VectorIndexEncodingFloat32, dimensions: 2, m: 2, efConstruction: capacity}
 			const extras = 8
 			for ordinal := 0; ordinal < capacity+extras; ordinal++ {
 				vector := []float32{float32(ordinal + 2), 1}
@@ -277,13 +271,8 @@ func TestVectorIndexConstructionAdmissionPreservesLastGeometryAfterEvictions(t *
 }
 
 func TestVectorIndexRedundantConstructionLiveTieOrder(t *testing.T) {
-	index, err := newVectorIndex(nil, VectorIndexOptions{
-		Name: "embedding_graph", Field: "embedding", Metric: VectorMetricL2,
-		Dimensions: 2, M: 2, EfConstruction: 8, EfSearch: 8,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	// Pure L2 geometry exercises comparator and eviction primitives only.
+	index := &columnGraphHNSWBuilder{metric: VectorMetricL2, encoding: VectorIndexEncodingFloat32, dimensions: 2, m: 2, efConstruction: 8}
 	// Several exact-vector classes share the same source distance. Pairwise
 	// identity-conditioned ties would cycle among these interleaved classes.
 	for ordinal, vector := range [][]float32{{0, 1}, {1, 0}, {0, -1}, {0, 1}, {-1, 0}, {0, -1}, {0, 1}, {0, 0}} {
@@ -360,7 +349,7 @@ func TestVectorIndexRedundantConstructionLiveTieOrder(t *testing.T) {
 }
 
 func TestVectorIndexCurrentSearchPreservesLiveAndDeletedEntryRoutes(t *testing.T) {
-	index, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 2, EfSearch: 4})
+	index, err := newColumnGraphPartitionLiveDomain(nil, columnGraphPartitionLiveOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 2, EfSearch: 4})
 	if err != nil {
 		t.Fatal(err)
 	}

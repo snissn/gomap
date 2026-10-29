@@ -19,6 +19,14 @@ func (c *Collection) CreateTextIndex(def TextIndexDefinition) (*CollectionMeta, 
 	if c == nil {
 		return nil, emptyStats, errCollectionNil
 	}
+	if c.nativeJSON != nil {
+		request := nativeTextIndexDDL{create: &def}
+		meta, err := c.nativeMutateTextIndex(&request)
+		if err != nil && meta == nil {
+			return nil, emptyStats, err
+		}
+		return meta, request.stats, err
+	}
 	if c.db == nil {
 		return nil, emptyStats, errCollectionDBNil
 	}
@@ -157,6 +165,9 @@ func (c *Collection) DropTextIndex(name string) (*CollectionMeta, error) {
 	}
 	if c == nil {
 		return nil, errCollectionNil
+	}
+	if c.nativeJSON != nil {
+		return c.nativeMutateTextIndex(&nativeTextIndexDDL{drop: name})
 	}
 	if c.db == nil {
 		return nil, errCollectionDBNil
@@ -342,6 +353,9 @@ func (c *Collection) TextIndexStorageStats(indexName string) (TextIndexStorageSt
 	}
 	if c == nil {
 		return stats, errCollectionNil
+	}
+	if c.nativeJSON != nil {
+		return c.nativeTextStorageStats(indexName)
 	}
 	if c.db == nil {
 		return stats, errCollectionDBNil

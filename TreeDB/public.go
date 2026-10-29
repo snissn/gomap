@@ -2938,8 +2938,9 @@ func (db *DB) vacuumIndexOnlineStats(ctx context.Context) (VacuumOnlineStats, er
 		if db.commandWALCached && db.cached != nil && db.cached.COWMode() {
 			// COW's maintenance writer fence precedes raw staging, matching
 			// foreground cache -> group gate -> raw order. No higher-level
-			// barrier callbacks are eligible on this private raw-only backend.
-			guard, guardErr := db.backend.LockCommandWALStagingGuardV1()
+			// barrier callbacks are eligible on this private backend. Borrow
+			// its original owner so native activation keeps unowned guards closed.
+			guard, guardErr := db.backend.LockPrivateCOWStagingGuard(db.txnOwner)
 			if guardErr != nil {
 				return guardErr
 			}

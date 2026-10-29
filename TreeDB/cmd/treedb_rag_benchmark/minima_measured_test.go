@@ -18,7 +18,7 @@ import (
 func measuredTestPointer[T any](v T) *T { return &v }
 func measuredTestWork(pid int) workstats.Snapshot {
 	return workstats.Snapshot{SchemaVersion: "treedb-work-v1", Scope: "process", PID: pid, OriginKind: "go_package_init", OriginUnixNano: 1, SnapshotUnixNano: 2,
-		Available: workstats.Availability{IndexedJSON: true, Typed: true, RuntimeQuery: true, Replay: true, AttributedScans: true, RowIndexCache: true, Graph: true, Output: true, Fold: true},
+		Available: workstats.Availability{IndexedJSON: true, Typed: true, Replay: true, AttributedScans: true, RowIndexCache: true, Graph: true, Output: true, Fold: true},
 		Graph:     workstats.GraphStats{Empty: 1, Exact: 1, HNSW: 1, BaseANNScored: 1, DeltaScored: 1},
 		Typed:     workstats.TypedStats{ScalarRows: 1, TextRows: 1}, Output: workstats.OutputWorkStats{GetMany: workstats.OutputStats{OperationStats: workstats.OperationStats{Attempts: 1, Completed: 1}}},
 		Fold: workstats.FoldStats{Public: workstats.OperationStats{Attempts: 1, Completed: 1}}}

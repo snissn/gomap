@@ -466,15 +466,15 @@ func loadColumnVectorGraphTypedColumnVectorPartFromRawAtRoot(rootDir string, col
 	if image.PartID != typedRef.Ref.PartID || image.Rows != typedRef.Rows {
 		return nil, 0, fmt.Errorf("typed_column_part image/ref mismatch image_part=%d ref_part=%d image_rows=%d ref_rows=%d", image.PartID, typedRef.Ref.PartID, image.Rows, typedRef.Rows)
 	}
-	// A typed part may carry sibling declared columns (including another graph
-	// index's vector). Validate the complete certified schema, then select the
-	// requested column below.
-	adapterPart, err := typedColumnAdapterPartFromImage(typedColumnAdapterOptions{Fields: columnStoreTypedColumnPartFields(cfg)}, image)
+	// Validate all declared columns, but decode only metadata consumed by a
+	// vector projection. The captured collection row locator supplies identity;
+	// dictionaries, locators, aggregates, stats and pruning are not consumed.
+	part, err := columnVectorGraphTypedColumnProjectionPart(cfg, image)
 	if err != nil {
 		return nil, 0, err
 	}
-	if adapterPart.Part.Descriptor.SchemaVersion != uint32(cfg.SchemaHash) {
-		return nil, 0, fmt.Errorf("typed_column_part schema_version=%d want %d", adapterPart.Part.Descriptor.SchemaVersion, uint32(cfg.SchemaHash))
+	if part.Descriptor.SchemaVersion != uint32(cfg.SchemaHash) {
+		return nil, 0, fmt.Errorf("typed_column_part schema_version=%d want %d", part.Descriptor.SchemaVersion, uint32(cfg.SchemaHash))
 	}
 	certification, err := typedcolumn.CertifyColumnPartLayoutContractFromImage(image)
 	if err != nil {
@@ -488,7 +488,7 @@ func loadColumnVectorGraphTypedColumnVectorPartFromRawAtRoot(rootDir string, col
 	if err != nil {
 		return nil, 0, err
 	}
-	if err := validateColumnVectorGraphTypedColumnDenseVectorSection(adapterPart.Part, section, certColumn, adapterColumn.Definition.Name, typedRef.Rows, adapterColumn.Definition.FixedWidthElements); err != nil {
+	if err := validateColumnVectorGraphTypedColumnDenseVectorSection(part, section, certColumn, adapterColumn.Definition.Name, typedRef.Rows, adapterColumn.Definition.FixedWidthElements); err != nil {
 		return nil, 0, err
 	}
 	sectionBytes, err := image.SectionBytes(section)
@@ -516,6 +516,29 @@ func loadColumnVectorGraphTypedColumnVectorPartFromRawAtRoot(rootDir string, col
 		fallbackReason: fallbackReason,
 		handle:         handle,
 	}, decodedBytes, nil
+}
+
+// This is a projection of the existing image, not a new asset format or
+// provenance boundary. The caller already verifies the complete physical asset
+// and image/ref identity; layout certification below still checks every column's
+// stored bytes. Keep the production schema and actual stored-codec checks for
+// every declared sibling, without materializing dictionaries or other unused
+// metadata. ColumnPartFromImageWithOptions still validates section framing,
+// descriptor/block consistency and attached payload bounds for all columns.
+func columnVectorGraphTypedColumnProjectionPart(cfg ColumnStoreConfig, image typedcolumn.ColumnPartImage) (*typedcolumn.ColumnPart, error) {
+	part, err := typedcolumn.ColumnPartFromImageWithOptions(image, typedcolumn.ColumnPartImageReadOptions{})
+	if err != nil {
+		return nil, err
+	}
+	opts := typedColumnAdapterOptions{Fields: columnStoreTypedColumnPartFields(cfg)}
+	columns, err := typedColumnAdapterColumnsForFieldsWithOptions(opts.Fields, opts)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateTypedColumnAdapterImageSchema(part, columns, uint32(cfg.SchemaHash)); err != nil {
+		return nil, err
+	}
+	return part, nil
 }
 
 func columnVectorGraphTypedColumnVectorSection(image typedcolumn.ColumnPartImage, column string) (typedcolumn.ColumnPartImageSection, error) {

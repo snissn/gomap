@@ -11,19 +11,19 @@ const typedGraphFilterProbeRows = 512
 
 var errTypedGraphFilterProbeIncomplete = errors.New("collections: typed graph filter probe incomplete")
 
-func prepareTypedGraphAND(ctx context.Context, plan *typedGraphPreparedFilter, lookup hybridScalarLookupView, leaves []HybridScalarFilter, limits typedGraphFilterLimits) (hybridScalarAllowSet, error) {
+func prepareTypedGraphAND(ctx context.Context, plan *typedGraphPreparedFilter, lookup hybridScalarLookupView, leaves []HybridScalarFilter, limits typedGraphFilterLimits) (hybridScalarIDs, error) {
 	definitions := make([]IndexDefinition, len(leaves))
 	selective := true
 	for i, leaf := range leaves {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return hybridScalarIDs{}, err
 		}
 		idx, ok := findIndex(lookup.catalog.meta.Indexes, leaf.IndexName)
 		if !ok || orderedBSONIndexRequiresCompoundRangeAPI(idx) {
-			return nil, ErrHybridSearchIndexUnavailable
+			return hybridScalarIDs{}, ErrHybridSearchIndexUnavailable
 		}
 		if shouldDedupeIndexDocumentIDs(idx, lookup.catalog.meta.Options) {
-			return nil, ErrHybridSearchUnsupported
+			return hybridScalarIDs{}, ErrHybridSearchUnsupported
 		}
 		definitions[i] = idx
 		selective = selective && leaf.Range == nil && idx.ValueType == IndexValueString && len(idx.Components) == 0
@@ -34,39 +34,39 @@ func prepareTypedGraphAND(ctx context.Context, plan *typedGraphPreparedFilter, l
 		// Validate every value before a complete empty driver may end preparation.
 		for i, leaf := range leaves {
 			if _, ok := leaf.Value.(string); !ok {
-				return nil, fmt.Errorf("%w: hybrid scalar filter index %q requires string value, got %T", ErrHybridSearchIndexUnavailable, definitions[i].Name, leaf.Value)
+				return hybridScalarIDs{}, fmt.Errorf("%w: hybrid scalar filter index %q requires string value, got %T", ErrHybridSearchIndexUnavailable, definitions[i].Name, leaf.Value)
 			}
 		}
 		prefixes, setupBytes = make([][]byte, len(leaves)), make([]int, len(leaves))
 		for i, leaf := range leaves {
 			if err := ctx.Err(); err != nil {
-				return nil, err
+				return hybridScalarIDs{}, err
 			}
 			remaining := limits.MappingWork - plan.mappingWork
 			value := leaf.Value.(string)
 			// Escaped typed-v1 strings use at most two bytes per input byte + terminator.
 			if remaining < 2 || len(value) > (remaining-2)/2 {
-				return nil, errTypedGraphSearchBudget
+				return hybridScalarIDs{}, errTypedGraphSearchBudget
 			}
 			bound := 2*len(value) + 2
 			plan.mappingWork += bound
 			_, prefix, err := appendIndexScalar(make([]byte, 0, bound), definitions[i].ValueType, value)
 			if err != nil {
-				return nil, err
+				return hybridScalarIDs{}, err
 			}
 			prefixes[i] = prefix
 			// The unchanged EQ visitor encodes/copies at most six prefix payloads.
 			// Store one bound; multiplication is checked immediately before each call.
 			setupBytes[i] = bound
 		}
-		var driver hybridScalarAllowSet
+		var driver hybridScalarIDs
 		driverIndex := -1
 		for i, leaf := range leaves {
 			set, complete, err := probeTypedGraphANDLeaf(ctx, plan, &lookup, leaf, limits, typedGraphFilterProbeRows, setupBytes[i])
 			if err != nil {
-				return nil, err
+				return hybridScalarIDs{}, err
 			}
-			if complete && (driverIndex < 0 || len(set) < len(driver)) {
+			if complete && (driverIndex < 0 || set.len() < driver.len()) {
 				driver, driverIndex = set, i
 			}
 		}
@@ -76,7 +76,7 @@ func prepareTypedGraphAND(ctx context.Context, plan *typedGraphPreparedFilter, l
 					continue
 				}
 				if err := refineTypedGraphAND(ctx, plan, driver, idx, prefixes[i], limits); err != nil {
-					return nil, err
+					return hybridScalarIDs{}, err
 				}
 			}
 			return driver, ctx.Err()
@@ -84,7 +84,7 @@ func prepareTypedGraphAND(ctx context.Context, plan *typedGraphPreparedFilter, l
 	}
 	// No complete selective driver (or unsupported optimization shape). Retain
 	// full intersection under the remaining cumulative source/work budgets.
-	var allowed hybridScalarAllowSet
+	var allowed hybridScalarIDs
 	for i, leaf := range leaves {
 		setup := 0
 		if selective {
@@ -92,37 +92,37 @@ func prepareTypedGraphAND(ctx context.Context, plan *typedGraphPreparedFilter, l
 		}
 		set, _, err := probeTypedGraphANDLeaf(ctx, plan, &lookup, leaf, limits, 0, setup)
 		if err != nil {
-			return nil, err
+			return hybridScalarIDs{}, err
 		}
 		if i == 0 {
 			allowed = set
 			continue
 		}
 		checked := 0
-		for id := range allowed {
+		for id := range allowed.all {
 			if checked&255 == 0 {
 				if err := ctx.Err(); err != nil {
-					return nil, err
+					return hybridScalarIDs{}, err
 				}
 			}
 			checked++
-			if _, ok := set[id]; !ok {
-				delete(allowed, id)
+			if ok := set.contains(id); !ok {
+				allowed.delete(id)
 			}
 		}
 	}
 	return allowed, ctx.Err()
 }
 
-func probeTypedGraphANDLeaf(ctx context.Context, plan *typedGraphPreparedFilter, lookup *hybridScalarLookupView, leaf HybridScalarFilter, limits typedGraphFilterLimits, probeRows, prefixBound int) (hybridScalarAllowSet, bool, error) {
+func probeTypedGraphANDLeaf(ctx context.Context, plan *typedGraphPreparedFilter, lookup *hybridScalarLookupView, leaf HybridScalarFilter, limits typedGraphFilterLimits, probeRows, prefixBound int) (hybridScalarIDs, bool, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, false, err
+		return hybridScalarIDs{}, false, err
 	}
 	if plan.inspectedEntries == limits.InspectedEntries {
-		return nil, false, errTypedGraphSearchBudget
+		return hybridScalarIDs{}, false, errTypedGraphSearchBudget
 	}
 	if prefixBound > (limits.MappingWork-plan.mappingWork)/6 {
-		return nil, false, errTypedGraphSearchBudget
+		return hybridScalarIDs{}, false, errTypedGraphSearchBudget
 	}
 	plan.mappingWork += 6 * prefixBound
 	limit := limits.SourceIDs
@@ -158,38 +158,38 @@ func probeTypedGraphANDLeaf(ctx context.Context, plan *typedGraphPreparedFilter,
 		err = errTypedGraphSearchBudget
 	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return nil, false, errors.Join(err, ctxErr)
+		return hybridScalarIDs{}, false, errors.Join(err, ctxErr)
 	}
 	if errors.Is(err, errTypedGraphFilterProbeIncomplete) {
-		return nil, false, nil
+		return hybridScalarIDs{}, false, nil
 	}
 	if err != nil {
-		return nil, false, err
+		return hybridScalarIDs{}, false, err
 	}
 	if truncated {
-		return nil, false, errTypedGraphSearchBudget
+		return hybridScalarIDs{}, false, errTypedGraphSearchBudget
 	}
 	return set, true, nil
 }
 
-func refineTypedGraphAND(ctx context.Context, plan *typedGraphPreparedFilter, allowed hybridScalarAllowSet, idx IndexDefinition, prefix []byte, limits typedGraphFilterLimits) error {
+func refineTypedGraphAND(ctx context.Context, plan *typedGraphPreparedFilter, allowed hybridScalarIDs, idx IndexDefinition, prefix []byte, limits typedGraphFilterLimits) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if len(allowed) == 0 {
+	if allowed.len() == 0 {
 		return nil
 	}
 	remaining := limits.MappingWork - plan.mappingWork
-	if len(allowed) > typedGraphFilterProbeRows || len(allowed) > remaining {
+	if allowed.len() > typedGraphFilterProbeRows || allowed.len() > remaining {
 		return errTypedGraphSearchBudget
 	}
 	// Reserve the request-count bound while admitting all temporary encoded
 	// key payload bytes before allocation. The request units are charged only
 	// immediately before submission; callback errors keep the submitted charge.
-	payloadLimit := remaining - len(allowed)
-	ids := make([]string, 0, len(allowed))
+	payloadLimit := remaining - allowed.len()
+	ids := make([]string, 0, allowed.len())
 	keyBytes := 0
-	for id := range allowed {
+	for id := range allowed.all {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -228,7 +228,7 @@ func refineTypedGraphAND(ctx context.Context, plan *typedGraphPreparedFilter, al
 			return callbackErr
 		}
 		if !found {
-			delete(allowed, ids[i])
+			allowed.delete(ids[i])
 		}
 		return nil
 	})

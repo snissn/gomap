@@ -2,6 +2,7 @@ package caching
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"unsafe"
 
@@ -27,10 +28,15 @@ type cowCacheDictionaryRead struct {
 	cache    *cowCache
 }
 
+type cowReadDecoder interface {
+	Decode(valuelog.FrameHeader, []byte, []byte) ([]byte, error)
+	Close()
+}
+
 type cowReadCodec struct {
 	id         uint64
 	codec      valuelog.BlockCodec
-	decoder    *valuelog.COWDecoder
+	decoder    cowReadDecoder
 	definition *dictdb.DictionaryReadDefinition // nil when borrowed from the cut
 	input, raw []byte
 	lease      *memtable.COWExternalLease
@@ -137,6 +143,27 @@ func (c *cowCache) closePhysicalReader() {
 		reader = nil
 	}
 	c.physicalMu.Unlock()
+}
+
+// Only cache-owned generic decoder scratch is disposable. TryLock excludes
+// every borrower without introducing a wait under a captured reader's locks.
+// Definitions and decoded outputs are detached before their original refund.
+func (c *cowCache) tryReleaseIdleGenericReadScratch() bool {
+	if c == nil || !c.physicalMu.TryLock() {
+		return false
+	}
+	defer c.physicalMu.Unlock()
+	released := false
+	if shared := c.physicalReader; shared != nil {
+		for i, codec := range shared.codecs {
+			if codec != nil && !(codec.id == 0 && (codec.codec == valuelog.BlockCodecSnappy || codec.codec == valuelog.BlockCodecLZ4)) {
+				shared.codecs[i] = nil
+				codec.close()
+				released = true
+			}
+		}
+	}
+	return released
 }
 
 // Point traversal needs page scratch; a winning cached pointer does not.
@@ -299,6 +326,10 @@ func (w *cowReadWorkspace) codecWithDictionary(shape valuelog.COWRecordShape, in
 			continue
 		}
 		if c.id == shape.DictID && c.codec == shape.Codec {
+			if bounded, ok := c.decoder.(*valuelog.COWBoundedDecoder); ok && bounded.Closed() {
+				slot = i
+				break
+			}
 			if c.definition != nil && uint64(len(c.definition.Bytes)) > w.limits.MaxValueBytes {
 				return nil, dictdb.ErrReadDefinitionCapacity
 			}
@@ -351,7 +382,7 @@ func (w *cowReadWorkspace) codecWithDictionary(shape valuelog.COWRecordShape, in
 	if blockOnly {
 		sizes, err = valuelog.COWBlockDecoderRetentionSizes(shape.Codec, raw, input)
 	} else {
-		sizes, err = valuelog.COWDecoderRetentionSizes(uint64(len(definition)), raw, input, max(raw, 2048))
+		sizes, err = valuelog.COWBoundedDecoderRetentionSizes(raw, input, max(raw, 2048))
 	}
 	if err != nil {
 		owner.Close()
@@ -363,23 +394,11 @@ func (w *cowReadWorkspace) codecWithDictionary(shape valuelog.COWRecordShape, in
 		memtable.COWAllocationCharge(sizes.RawBacking) + memtable.COWAllocationCharge(sizes.InputBacking) +
 		memtable.COWAllocationCharge(sizes.SequenceBacking) + uint64(sizes.FixedAllocationCount)*memtable.COWAllocationCharge(sizes.FixedAllocationBytes)
 	lease, err := w.budget.AcquireExternal(bytes)
-	if errors.Is(err, memtable.ErrCOWCapacity) && !blockOnly && w.snapshot != nil && w.snapshot.cowCache.physicalMu.TryLock() {
+	if errors.Is(err, memtable.ErrCOWCapacity) && !blockOnly && w.snapshot != nil {
 		// A borrowed reader still owns its original decoder. Before refusing it,
 		// refund only idle cache scratch; physicalMu proves no decoder borrower
 		// survives, and close drops references before releasing its receipt.
-		c := w.snapshot.cowCache
-		refunded := false
-		if shared := c.physicalReader; shared != nil {
-			for i, codec := range shared.codecs {
-				if codec != nil && !(codec.id == 0 && (codec.codec == valuelog.BlockCodecSnappy || codec.codec == valuelog.BlockCodecLZ4)) {
-					shared.codecs[i] = nil
-					codec.close()
-					refunded = true
-				}
-			}
-		}
-		c.physicalMu.Unlock()
-		if refunded {
+		if w.snapshot.cowCache.tryReleaseIdleGenericReadScratch() {
 			lease, err = w.budget.AcquireExternal(bytes)
 		}
 	}
@@ -387,11 +406,20 @@ func (w *cowReadWorkspace) codecWithDictionary(shape valuelog.COWRecordShape, in
 		owner.Close()
 		return nil, err
 	}
-	var decoder *valuelog.COWDecoder
+	var decoder cowReadDecoder
 	if blockOnly {
 		decoder, err = valuelog.NewCOWBlockDecoder(shape.Codec, raw, input, func(valuelog.COWDecoderAllocationSizes) error { return nil })
 	} else {
-		decoder, err = valuelog.NewCOWDecoder(shape.DictID, definition, raw, input, max(raw, 2048), func(valuelog.COWDecoderAllocationSizes) error { return nil })
+		// Dictionary bytes remain owned by the independent definition or original
+		// cut. The bounded continuation grows THIS original codec receipt before
+		// each concrete allocation, never a second retention owner.
+		var dictionaryOwner any
+		if owner != nil {
+			dictionaryOwner = owner
+		} else if w.snapshot != nil {
+			dictionaryOwner = w.snapshot
+		}
+		decoder, err = valuelog.NewCOWBoundedDecoder(shape.DictID, definition, dictionaryOwner, raw, input, max(raw, 2048), lease, bytes)
 	}
 	if err != nil {
 		lease.Close()
@@ -797,14 +825,20 @@ func (b *cowBackendBasis) readPhysicalLeafWithWorkspace(c *cowCache, w *cowReadW
 func (b *cowBackendBasis) readPhysicalLeafWithDictionary(c *cowCache, w *cowReadWorkspace, ptr page.LeafLogPtr, dst []byte, native, localBlock bool, independent *cowCacheDictionaryRead) ([]byte, error) {
 	f, identity, err := b.snapshot.PinnedValueLogFile(ptr.ValuePtr().FileID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("COW physical leaf pinned-file ptr=%+v: %w", ptr.ValuePtr(), err)
 	}
 	shape, err := valuelog.InspectCOWLeafRecord(f, ptr.ValuePtr(), w.limits)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("COW physical leaf inspect ptr=%+v file=%q identity=%+v: %w", ptr.ValuePtr(), f.Name(), identity, err)
 	}
-	if native && shape.Compressed && (shape.DictID != 0 || (shape.Codec != valuelog.BlockCodecSnappy && shape.Codec != valuelog.BlockCodecLZ4)) {
-		return nil, valuelog.ErrCOWReadUnsupported
+	// Packing/rewrite may legitimately publish dictionary leaves even though
+	// the ordinary caching appender supplies dictionary zero. Native callers
+	// must bring their original independently retainable definition capability.
+	// Dictionary-free ZSTD keeps its explicit native refusal policy.
+	unsupportedDictionary := shape.DictID != 0 && (independent == nil || independent.provider == nil || independent.cache != c)
+	unsupportedBlock := shape.DictID == 0 && shape.Codec != valuelog.BlockCodecSnappy && shape.Codec != valuelog.BlockCodecLZ4
+	if native && shape.Compressed && (unsupportedDictionary || unsupportedBlock) {
+		return nil, fmt.Errorf("COW physical leaf native-codec ptr=%+v file=%q compressed=%t dictionary=%d codec=%d record=%d raw=%d value=%d: %w", ptr.ValuePtr(), f.Name(), shape.Compressed, shape.DictID, shape.Codec, shape.RecordBytes, shape.RawBytes, shape.ValueBytes, valuelog.ErrCOWReadUnsupported)
 	}
 	if shape.DictID != 0 && independent == nil {
 		if w.snapshot == nil {
@@ -821,6 +855,9 @@ func (b *cowBackendBasis) readPhysicalLeafWithDictionary(c *cowCache, w *cowRead
 	cacheEligible := shape.DictID == 0 || w.limits == c.readLimits()
 	if cacheEligible {
 		if data, hit, err := b.snapshot.CopyVerifiedCachedLeafPage(ptr, f, identity, dst); err != nil || hit {
+			if err != nil {
+				return nil, fmt.Errorf("COW physical leaf verified-cache ptr=%+v file=%q: %w", ptr.ValuePtr(), f.Name(), err)
+			}
 			return data, err
 		}
 	}
@@ -871,10 +908,10 @@ func (b *cowBackendBasis) readPhysicalLeafWithDictionary(c *cowCache, w *cowRead
 		if shape.DictID != 0 && errors.Is(err, memtable.ErrCOWCapacity) {
 			return nil, &cowPhysicalDictionaryCapacity{cause: err}
 		}
-		return nil, err
+		return nil, fmt.Errorf("COW physical leaf decode ptr=%+v file=%q compressed=%t dictionary=%d codec=%d record=%d raw=%d value=%d: %w", ptr.ValuePtr(), f.Name(), shape.Compressed, shape.DictID, shape.Codec, shape.RecordBytes, shape.RawBytes, shape.ValueBytes, err)
 	}
 	if err = b.snapshot.AdmitVerifiedCachedLeafPage(ptr, f, identity, data); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("COW physical leaf verified-admission ptr=%+v file=%q: %w", ptr.ValuePtr(), f.Name(), err)
 	}
 	return data, nil
 }

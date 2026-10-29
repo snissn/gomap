@@ -598,8 +598,8 @@ func minimaMeasuredPresence(raw []byte) error {
 func minimaWorkMonotonic(before, after workstats.Snapshot) bool {
 	// All fields in these producer groups are cumulative. Cache residency and
 	// current heap gauges are deliberately excluded (including at owner close).
-	groupsBefore := []any{before.Graph, before.Output, before.Fold, before.IndexedJSON, before.Typed, before.Runtime, before.Replay, before.Scans}
-	groupsAfter := []any{after.Graph, after.Output, after.Fold, after.IndexedJSON, after.Typed, after.Runtime, after.Replay, after.Scans}
+	groupsBefore := []any{before.Graph, before.Output, before.Fold, before.IndexedJSON, before.Typed, before.Replay, before.Scans}
+	groupsAfter := []any{after.Graph, after.Output, after.Fold, after.IndexedJSON, after.Typed, after.Replay, after.Scans}
 	var monotonic func(reflect.Value, reflect.Value) bool
 	monotonic = func(a, b reflect.Value) bool {
 		if a.Kind() == reflect.Struct {
@@ -631,8 +631,8 @@ func validateMinimaWork(w workstats.Snapshot, pid int, origin int64) error {
 			return errors.New("work producer coverage unavailable")
 		}
 	}
-	if w.IndexedJSON != (workstats.IndexedJSONStats{}) || w.Runtime != (workstats.RuntimeStats{}) || w.Replay.LegacyCollectionFrames != 0 || w.Replay.LegacyProjectionRowsDecoded != 0 {
-		return errors.New("forbidden indexed JSON/runtime/legacy replay work")
+	if w.IndexedJSON != (workstats.IndexedJSONStats{}) || w.Replay.LegacyCollectionFrames != 0 || w.Replay.LegacyProjectionRowsDecoded != 0 {
+		return errors.New("forbidden indexed JSON/legacy replay work")
 	}
 	for _, scan := range []workstats.ScanStats{w.Scans.DenseExact, w.Scans.FilteredCount, w.Scans.FilteredRetrieval, w.Scans.MutationMatch, w.Scans.CollectionExact, w.Scans.CollectionIndexedExact} {
 		if scan != (workstats.ScanStats{}) {
@@ -761,7 +761,7 @@ func minimaMeasuredDrainedEqual(a, b workstats.Snapshot) bool {
 	// Observation/serialization allocations may change memory and cache gauges.
 	// No graph, materialization, ingestion, replay or maintenance runs in the gap.
 	return a.Graph == b.Graph && a.Output == b.Output && a.Fold == b.Fold &&
-		a.IndexedJSON == b.IndexedJSON && a.Typed == b.Typed && a.Runtime == b.Runtime &&
+		a.IndexedJSON == b.IndexedJSON && a.Typed == b.Typed &&
 		a.Replay == b.Replay && a.Scans == b.Scans
 }
 

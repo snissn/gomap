@@ -18,6 +18,13 @@ import (
 // Index eligibility remains fenced until captured probes, unique range absence
 // and singleton/composite replay consume these same complete root effects.
 func extractNativeInsertEffects(name string, incarnation uint64, plan *directBufferedInsertPlan, primary []memtable.COWMutation, admit func(uint64) error, typedMeta ...CollectionMeta) ([]nativeJSONDomainChange, []txnhistory.Effect, error) {
+	return extractNativeInsertEffectsAndText(name, incarnation, plan, primary, admit, nil, typedMeta...)
+}
+
+// Ordinary rows supply the already prepared text domains so the complete ordered
+// effect image and additional-domain descriptors each have one original backing.
+// Legacy callers retain the wrapper and their existing secondary-domain rules.
+func extractNativeInsertEffectsAndText(name string, incarnation uint64, plan *directBufferedInsertPlan, primary []memtable.COWMutation, admit func(uint64) error, text []nativeJSONDomainChange, meta ...CollectionMeta) ([]nativeJSONDomainChange, []txnhistory.Effect, error) {
 	if plan == nil || len(plan.rootNames) != len(plan.policies) || len(primary) != len(plan.primaryEntries) || admit == nil {
 		return nil, nil, backenddb.ErrNativeSemanticUnsupported
 	}
@@ -41,19 +48,30 @@ func extractNativeInsertEffects(name string, incarnation uint64, plan *directBuf
 			return nil, nil, memtable.ErrCOWCapacity
 		}
 	}
-	if extra > int(^uint(0)>>1)-len(primary) {
+	textEffects := 0
+	for _, change := range text {
+		if len(change.entries) == 0 {
+			continue
+		}
+		if len(meta) == 0 || nativeTextDomainNumber(meta[0], change.name) == 0 {
+			return nil, nil, backenddb.ErrNativeSemanticUnsupported
+		}
+		textEffects++
+	}
+	limit := int(^uint(0) >> 1)
+	if extra > limit-len(primary) || textEffects > limit-len(primary)-extra || len(text) > limit-roots {
 		return nil, nil, memtable.ErrCOWCapacity
 	}
-	// Existing primary mutations/effects were admitted before planner execution.
-	// Charge only the newly introduced root and effect backing. Individual root
-	// arrays are charged separately, including their allocation rounding.
-	if roots > 0 {
-		if err := admitNativeInsertArray(roots, uint64(unsafe.Sizeof(nativeJSONDomainChange{})), admit); err != nil {
+	// Original no-index callers retain their existing primary allowance. Every
+	// enlarged final backing is admitted in full before make; no earlier backing
+	// is refunded. Text row payloads already belong to their original stage.
+	if roots+len(text) > 0 {
+		if err := admitNativeInsertArray(roots+len(text), uint64(unsafe.Sizeof(nativeJSONDomainChange{})), admit); err != nil {
 			return nil, nil, err
 		}
 		// Admit the entire enlarged backing, not a sum of independently rounded
 		// pieces. The existing primary allowance remains conservative overhead.
-		if err := admitNativeInsertArray(len(primary)+extra, uint64(unsafe.Sizeof(txnhistory.Effect{})), admit); err != nil {
+		if err := admitNativeInsertArray(len(primary)+extra+textEffects, uint64(unsafe.Sizeof(txnhistory.Effect{})), admit); err != nil {
 			return nil, nil, err
 		}
 		chargeRows := func(n int) error {
@@ -75,10 +93,10 @@ func extractNativeInsertEffects(name string, incarnation uint64, plan *directBuf
 		}
 	}
 	var additional []nativeJSONDomainChange
-	if roots > 0 {
-		additional = make([]nativeJSONDomainChange, 0, roots)
+	if roots+len(text) > 0 {
+		additional = make([]nativeJSONDomainChange, 0, roots+len(text))
 	}
-	effects := make([]txnhistory.Effect, len(primary), len(primary)+extra)
+	effects := make([]txnhistory.Effect, len(primary), len(primary)+extra+textEffects)
 	namespace := func(domain uint64) txnhistory.Namespace {
 		return txnhistory.Namespace{Kind: txnhistory.CollectionNamespace, Collection: incarnation, Domain: domain, Interpretation: 1}
 	}
@@ -100,8 +118,8 @@ func extractNativeInsertEffects(name string, incarnation uint64, plan *directBuf
 	appendRows(plan.templateRootName, 2, plan.templateEntries)
 	appendRows(plan.indexStateRootName, 3, plan.indexStateEntries)
 	secondaryDomain := func(index int) uint64 {
-		if len(typedMeta) != 0 {
-			return nativeJSONSecondaryDomainNumber(typedMeta[0], index)
+		if len(meta) != 0 {
+			return nativeJSONSecondaryDomainNumber(meta[0], index)
 		}
 		return uint64(index) + 4
 	}
@@ -119,6 +137,14 @@ func extractNativeInsertEffects(name string, incarnation uint64, plan *directBuf
 			effects = append(effects, txnhistory.Effect{Namespace: namespace(secondaryDomain(secondary.runtimeIdx)), Kind: txnhistory.PointEffect, Key: row.key})
 		}
 		additional = append(additional, delta)
+	}
+	// Full-domain text ranges follow the unchanged non-text point prefix. They
+	// retain the original Interpretation=1 and nil start/end bounds.
+	for _, change := range text {
+		additional = append(additional, change)
+		if len(change.entries) != 0 {
+			effects = append(effects, txnhistory.Effect{Namespace: namespace(nativeTextDomainNumber(meta[0], change.name)), Kind: txnhistory.RangeEffect})
+		}
 	}
 	return additional, effects, nil
 }

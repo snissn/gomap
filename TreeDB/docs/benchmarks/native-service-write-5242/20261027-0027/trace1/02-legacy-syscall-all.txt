@@ -1,0 +1,46 @@
+File: documentservice.test
+Type: delay
+Showing nodes accounting for 608.26ms, 98.19% of 619.46ms total
+Dropped 654 nodes (cum <= 3.10ms)
+Showing top 40 nodes out of 269
+      flat  flat%   sum%        cum   cum%
+  262.25ms 42.34% 42.34%   262.25ms 42.34%  syscall.Fsync
+  171.27ms 27.65% 69.98%   171.27ms 27.65%  golang.org/x/sys/unix.Fdatasync
+  110.68ms 17.87% 87.85%   110.68ms 17.87%  golang.org/x/sys/unix.Fsync
+   31.22ms  5.04% 92.89%    31.22ms  5.04%  golang.org/x/sys/unix.pwritev2
+   18.84ms  3.04% 95.93%    18.84ms  3.04%  syscall.pread
+   10.24ms  1.65% 97.59%    10.24ms  1.65%  golang.org/x/sys/unix.Dup
+    3.76ms  0.61% 98.19%     3.76ms  0.61%  syscall.pwrite
+         0     0% 98.19%    10.31ms  1.66%  bufio.(*Reader).Peek
+         0     0% 98.19%    10.31ms  1.66%  bufio.(*Reader).fill
+         0     0% 98.19%    42.09ms  6.79%  github.com/snissn/gomap/TreeDB.(*DB).Close
+         0     0% 98.19%    30.08ms  4.86%  github.com/snissn/gomap/TreeDB.(*DB).checkpointCachedForPublicCommandWAL
+         0     0% 98.19%   178.70ms 28.85%  github.com/snissn/gomap/TreeDB.OpenBackendWithCachedLeafLog
+         0     0% 98.19%    25.09ms  4.05%  github.com/snissn/gomap/TreeDB.acquireOrdinaryOpenOwnership
+         0     0% 98.19%   178.70ms 28.85%  github.com/snissn/gomap/TreeDB.openBackendWithCachedServices
+         0     0% 98.19%   153.56ms 24.79%  github.com/snissn/gomap/TreeDB.openResolvedWithCacheRole
+         0     0% 98.19%   153.56ms 24.79%  github.com/snissn/gomap/TreeDB.openValidatedWithCacheRole
+         0     0% 98.19%    12.01ms  1.94%  github.com/snissn/gomap/TreeDB/caching.(*DB).Close
+         0     0% 98.19%    34.47ms  5.56%  github.com/snissn/gomap/TreeDB/caching.(*DB).appendValueLogForRecordsObserved
+         0     0% 98.19%    34.47ms  5.56%  github.com/snissn/gomap/TreeDB/caching.(*DB).appendValueLogInternalObserved
+         0     0% 98.19%     4.71ms  0.76%  github.com/snissn/gomap/TreeDB/caching.(*DB).appendValueLogOneInternal
+         0     0% 98.19%    10.38ms  1.68%  github.com/snissn/gomap/TreeDB/caching.(*DB).applyValueLogDictProfileForClass
+         0     0% 98.19%    20.02ms  3.23%  github.com/snissn/gomap/TreeDB/caching.(*DB).backendCheckpointBoundary
+         0     0% 98.19%    22.89ms  3.70%  github.com/snissn/gomap/TreeDB/caching.(*DB).checkpointContext
+         0     0% 98.19%    10.38ms  1.68%  github.com/snissn/gomap/TreeDB/caching.(*DB).ensureValueLogDictTrainer.func1.1
+         0     0% 98.19%    39.18ms  6.32%  github.com/snissn/gomap/TreeDB/caching.(*DB).ensureValueLogWriterMuHeld
+         0     0% 98.19%    39.18ms  6.32%  github.com/snissn/gomap/TreeDB/caching.(*DB).rotateValueLogMuHeldCapture
+         0     0% 98.19%    39.18ms  6.32%  github.com/snissn/gomap/TreeDB/caching.(*DB).rotateValueLogMuHeldToSeqCapture
+         0     0% 98.19%     4.71ms  0.76%  github.com/snissn/gomap/TreeDB/caching.(*cachingLeafPageLog).AppendLeafPage
+         0     0% 98.19%     4.71ms  0.76%  github.com/snissn/gomap/TreeDB/caching.(*cachingLeafPageLog).appendLeafPages
+         0     0% 98.19%     4.71ms  0.76%  github.com/snissn/gomap/TreeDB/caching.(*cachingLeafPageLogGroup).AppendLeafPages
+         0     0% 98.19%    34.47ms  5.56%  github.com/snissn/gomap/TreeDB/caching.(*cachingValueLogAppender).appendRecords.func2
+         0     0% 98.19%    34.47ms  5.56%  github.com/snissn/gomap/TreeDB/caching.(*cachingValueLogAppender).appendRecordsToLane
+         0     0% 98.19%    20.02ms  3.23%  github.com/snissn/gomap/TreeDB/caching.backendSyncBoundary
+         0     0% 98.19%    75.68ms 12.22%  github.com/snissn/gomap/TreeDB/collections.(*Collection).InsertBatchWithStatsValidatedFloat32Projection
+         0     0% 98.19%    58.10ms  9.38%  github.com/snissn/gomap/TreeDB/collections.(*Collection).RebuildVectorIndex
+         0     0% 98.19%    65.74ms 10.61%  github.com/snissn/gomap/TreeDB/collections.(*Collection).ScanDocumentIDsFunc
+         0     0% 98.19%     6.15ms  0.99%  github.com/snissn/gomap/TreeDB/collections.(*Collection).ScanDocumentsAfterFunc
+         0     0% 98.19%    75.68ms 12.22%  github.com/snissn/gomap/TreeDB/collections.(*Collection).bufferIndexedInsertPlanLocked
+         0     0% 98.19%    65.74ms 10.61%  github.com/snissn/gomap/TreeDB/collections.(*Collection).flushBufferedIndexedLockedWithRawPublishState
+         0     0% 98.19%    65.74ms 10.61%  github.com/snissn/gomap/TreeDB/collections.(*Collection).flushBufferedIndexedLockedWithRawPublishState.func4

@@ -3615,6 +3615,9 @@ func (db *DB) closeAfterHooks() (outcome, cleanup error) {
 	// publication poison is likewise not cleanup authority: retain the complete
 	// WAL unchanged for the next owner. Healthy handles surface actual cleanup
 	// failures, but teardown continues so cleanup errors never strand resources.
+	// A pure pin refusal also retains the namespace without failing Close:
+	// dependency debt and recovery handoffs stay pinned until shutdown below.
+	// Only a trusted pre-unlink registry refusal qualifies; joined failures surface.
 	if db.commandWAL && !db.readOnly && db.commandJournal != nil && db.commandWALPoisonedError() == nil {
 		if err := db.cleanupCommandWALCoveredSegmentsV1(); err != nil &&
 			!commandWALCleanupRetryableOnly(err) {

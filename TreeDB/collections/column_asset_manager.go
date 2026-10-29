@@ -1,7 +1,6 @@
 package collections
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -792,11 +791,117 @@ func writeColumnAssetToManagerSegmentWithStatsAndCapture(rootDir string, cfg Col
 }
 
 func nextColumnAssetSegmentFileID(namespace columnAssetManagerNamespace) (uint32, error) {
-	segments, err := listColumnAssetReachabilitySegments(context.Background(), namespace.SegmentDir)
+	return nextColumnAssetSegmentFileIDWithUpper(namespace, columnAssetDirectViewSegmentFileIDBase)
+}
+
+// ID allocation needs name occupancy, not a reachability report or payload
+// identities. Keep one bounded names chunk and, only at high-water exhaustion,
+// a fixed-size window of low-band occupancy. Every scan is advisory: the caller's
+// exclusive create remains the authority, including across concurrent changes.
+const (
+	columnAssetSegmentIDNamesPerRead = 1
+	columnAssetSegmentIDWindowSize   = uint32(4096)
+	columnAssetSegmentIDMaxNameBytes = len(columnAssetSegmentFilePrefix) + 10 + len(columnAssetSegmentFileSuffix)
+
+	// Live backing only, independent of directory cardinality: at most a
+	// 64KiB OS directory buffer and two overlapping name conversions (each
+	// at most 3/2 of that buffer for UTF-16), plus the fixed bitmap and eight
+	// 1KiB structural units. The units cover file/poll wrappers, dirInfo,
+	// slice controls, scan callbacks, parser errors, read/close errors,
+	// open/parent metadata, and call/defer controls. Actual directory path
+	// backing and platform path conversions remain with the caller's path
+	// owner. This is not a cumulative allocation or runtime-pool/RSS bound.
+	columnAssetSegmentFileIDScanWorkspaceBytes = uint64(4*64*1024 + columnAssetSegmentIDWindowSize/8 + 8*1024)
+)
+
+func nextColumnAssetSegmentFileIDWithUpper(namespace columnAssetManagerNamespace, upperExclusive uint32) (uint32, error) {
+	maxFileID := columnAssetM12ASegmentFileID
+	err := scanColumnAssetSegmentFileIDs(namespace.SegmentDir, func(fileID uint32) {
+		if fileID < upperExclusive && fileID > maxFileID {
+			maxFileID = fileID
+		}
+	})
 	if err != nil {
 		return 0, err
 	}
-	return nextColumnAssetSegmentFileIDFromSorted(segments, columnAssetDirectViewSegmentFileIDBase)
+	if maxFileID+1 < upperExclusive {
+		return maxFileID + 1, nil
+	}
+
+	var occupied [columnAssetSegmentIDWindowSize / 64]uint64
+	for first := columnAssetM12ASegmentFileID + 1; first < upperExclusive; {
+		span := columnAssetSegmentIDWindowSize
+		if remaining := upperExclusive - first; remaining < span {
+			span = remaining
+		}
+		clear(occupied[:])
+		err := scanColumnAssetSegmentFileIDs(namespace.SegmentDir, func(fileID uint32) {
+			if fileID >= first && fileID-first < span {
+				offset := fileID - first
+				occupied[offset/64] |= uint64(1) << (offset % 64)
+			}
+		})
+		if err != nil {
+			return 0, err
+		}
+		for offset := uint32(0); offset < span; offset++ {
+			if occupied[offset/64]&(uint64(1)<<(offset%64)) == 0 {
+				return first + offset, nil
+			}
+		}
+		// span <= upperExclusive-first, so even a synthetic uint32 upper
+		// boundary cannot wrap this increment.
+		first += span
+	}
+	return 0, errors.New("collections: column asset segment file_id exhausted before direct-view reserved band")
+}
+
+func scanColumnAssetSegmentFileIDs(segmentDir string, visit func(uint32)) error {
+	var dir *os.File
+	var err error
+	if rootpublication.StableNamespaceCreationSupported() {
+		dir, err = rootpublication.OpenStableParent(segmentDir)
+	} else {
+		dir, err = os.Open(segmentDir)
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return scanColumnAssetSegmentFileIDNames(dir, visit)
+}
+
+// The scanner owns and closes the directory. It never opens or stats a child:
+// regular files, directories and symlinks with canonical names all occupy IDs.
+func scanColumnAssetSegmentFileIDNames(dir interface {
+	Readdirnames(int) ([]string, error)
+	Close() error
+}, visit func(uint32)) (retErr error) {
+	defer func() { retErr = errors.Join(retErr, dir.Close()) }()
+	for {
+		names, err := dir.Readdirnames(columnAssetSegmentIDNamesPerRead)
+		for _, name := range names {
+			// A uint32 has at most ten decimal digits. Reject longer junk
+			// before ParseUint can allocate a NumError containing its text.
+			if len(name) > columnAssetSegmentIDMaxNameBytes {
+				continue
+			}
+			if fileID, ok := columnAssetReachabilitySegmentFileID(name); ok {
+				visit(fileID)
+			}
+		}
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if len(names) == 0 {
+			return io.ErrNoProgress
+		}
+	}
 }
 
 // Prefer the high-water path. On exhaustion, reuse only absent low-band IDs;

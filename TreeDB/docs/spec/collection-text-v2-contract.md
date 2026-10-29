@@ -33,6 +33,135 @@ Text index v2 is B-tree-native TreeDB storage:
 
 ## Public version and rollout vocabulary
 
+### Shared COW collection adapter
+
+The native semantic collection owner can create ordinary JSON, BSON or template-v1 collections with
+declared V1 or V2 text indexes and scalar indexes. Ordinary JSON collections can
+also declare cosine float32 `column_graph` indexes. Its
+CRUD finalizer feeds the maintained text reducer's old/new document effects into
+the same immutable publication as primary and scalar changes. V1 retains its
+three posting/state/statistics domains; V2 retains its seven domains and
+format/status records. Both preserve the maintained names, policies and codecs. Physical checkpoint materializes these domains through the
+existing ordered-root and persistent value-log owner; logical publication does
+not invent physical root IDs or require a checkpoint for visibility.
+
+V2 status is a shared read-modify-write basis even for different document IDs.
+V1 instead authenticates its complete statistics domain, including replacements
+that change field/term counts without changing corpus cardinality. Native
+transactions record these dependencies and every emitted text key effect, so
+incompatible captured plans fail before publication. Ordinary
+mixed text/vector mutations share the collection schema and mutation gate.
+Canonical singleton and composite command replay regenerate text effects using
+the maintained reducer against the original physical replay snapshot.
+
+Search borrows one complete native cut for metadata, text blocks and returned
+documents. It uses the maintained BM25/boolean/phrase executor with captured
+domain Get/iterator adapters. V1 retains the maintained phrase/proximity refusal;
+positive phrase execution remains V2. `TextIndexStatus` reads the captured schema;
+`TextIndexStorageStats` runs the maintained version-specific validator over one
+complete native cut with admitted decode/iteration workspace. Pointer values
+resolve under that same capture;
+iterator work limits and cancellation include inspected physical sources.
+Analysis, table, decoded-block and query workspace are admitted before
+construction; operation receipts close with their scope. Returned documents/results
+follow the existing caller-owned output contract. Conservative source bounds can
+refuse a request under the finite native budget; they do not authorize retrying
+an installed mutation or raising the budget.
+
+This adapter selects declared V1/V2 without typed storage configuration. Ordinary
+`no_wal_fast` text DDL uses the existing native index-family owner for atomic
+schema/backfill/domain replacement; command-WAL text DDL retains its existing
+preassignment refusal. No-WAL native V2 rewrite/maintenance reuses the maintained
+planner and sparse shared publication described in
+[collection text search](collection-text-search.md). V1 rewrite, command-WAL
+text maintenance and explicit native storage compaction retain their existing
+restrictions. Server storage-default promotion and broader typed adoption require
+separate proofs; format eligibility does not establish whole-product or
+performance qualification.
+Ordinary HNSW construction and mutation reconciliation resolve template documents
+through their original captured `NativeJSONRead`, using the maintained admitted
+stored-document materializer rather than an independent latest-state resolver.
+The focused `TestNativeTextPublic*` controls cover ordinary mixed-index CRUD,
+held old/current reads, checkpoint/reopen, process-exit singleton/composite replay,
+shared-status/statistics conflict and finite-admission cleanup; they are not performance or
+whole-product qualification.
+
+Native V1/V2 initial and mutation builders select the existing unpooled BTree
+through a private per-operation table factory; legacy builders retain AppendOnly.
+The maintained reducer emits only stealing setters and tombstones, so this
+BTree route does not allocate its copying arena or transfer temporary backing to
+global memtable pools. Admission includes structural node/slice growth cohorts,
+iterator capacity, selected-text conversion, token/state and emitted-row storage.
+For eligible native V2 top-level unescaped JSON fields, the maintained analyzer
+streams into one admitted owned term/state accumulator. Its inline eight-term
+lane, explicitly grown term/lookup/position/offset backings, and obsolete growth
+cohorts remain on the original stage receipt. The finalizer sorts and transfers
+the same term/occurrence backing to `preparedNew`; it constructs neither an
+intermediate term-pointer map nor a copied state-term array. Legacy analysis
+map consumers keep their existing path and share only the internal term type
+and canonical ordering finalizer. Public analyzed tokens remain owned.
+Input conversion, owner headers and options remain admitted before analysis.
+For this prepared-current path, a private sink capability is captured before
+stopword wrapping and passes the same stage callback into the maintained analyzer
+loop. Before every necessary Builder growth, checked UTF-8 width and signed
+arithmetic bound the Go 1.26 `Grow` target `2*cap+width`; its complete rounded
+allocation charge is admitted before `Grow` or the rune write. The subsequent
+`WriteRune` has sufficient capacity. All initial, later, stopped, duplicate and
+discarded backing cohorts remain charged through the original phase, with no
+post hoc charge or early refund. Nil-capability public/legacy analysis retains
+its existing growth and owned-token behavior. Census and fallback Builder
+envelopes remain unchanged. Prepared state
+still pays downstream encoder clones, retry candidates and all reducer/table
+work. Admission failure publishes no partial state and earns no early refund.
+Fallback formats, V1, nested/escaped/array selection and DDL keep their existing
+eligibility and conservative accounting.
+
+Native CRUD confines catalog, analysis, reducer and temporary-table construction
+to one private planning phase. After successful return, all iterators are closed,
+tables reset and temporary aliases detached. The original stage receipt then
+releases only the completed phase's admitted credit, retaining actual output
+array/key/value capacities, full qualified-name backing, the whole prephase
+floor and all staged-resolver growth outside the phase callback. That same
+receipt remains live for later planning and publication; later growth uses its
+reduced ledger. A failed phase uses normal cancellation without an early refund.
+Other builders retain their operation cleanup scope, including errors and replay
+preparation. Ending allocation custody does not promise immediate garbage
+collection or a process RSS bound.
+
+Top-level analysis and sizing share borrowed-field selection. Nested paths use
+the maintained complete JSON decoder and path walker: the original operation
+lease first admits a full-source decoder cohort, then grows for a second decoder
+cohort and the actual selected values before reducer allocation. Both cohorts
+remain charged through sizing and reduction, until their completed private phase
+or operation cleanup; an individually unreachable sizing tree is not an immediate
+refund. These finite bounds can still refuse large requests. Focused
+refusal controls require no logical/WAL effects, unchanged live reservations and
+zero native receipts at full close; they do not establish a global RSS bound or
+performance qualification.
+
+Stored-format text normalization reuses `materializeTextBackfillDocumentJSON`.
+BSON uses the maintained canonical Extended JSON codec (`canonical=true`,
+`escapeHTML=false`) with a private public writer/encoder; its growing mode stack
+and buffers do not enter mongo-driver's writer pool. Sizing and reduction each
+charge their conversion cohorts on the original operation lease. JSON passes
+through as borrowed bytes. Template-v1 reuses the maintained object decoder and
+`json.Marshal`, resolving names through the original DDL capture or transaction's
+staged dictionary overlay. Composite replay supplies its original planner's
+resolver. No latest-state recapture or physical-only substitute is used.
+
+Template decoding admits the existing 768-byte construction allowance per compact
+source byte, plus that allowance per dictionary-name byte and field occurrence
+before each object's map is constructed. This covers decoded objects, name/read
+storage, JSON output and serial growth cohorts; sizing and reduction retain both
+cohorts through their completed private phase or operation cleanup. Resolver
+backing that outlives the phase remains admitted. The narrow inherited
+library-cache exclusion is
+only encoding/json's inaccessible encodeState buffer, ptrSeen and type caches
+after codec return. It does not exempt decoded application objects, resolver
+reads, returned cloned output, table/source backing or application pools. The
+finite COW budget is not a process RSS quota, and allocation/footprint evidence
+must include this inherited codec-cache cost.
+
 `TextIndexDefinition` now carries the contract fields:
 
 ```go
@@ -232,9 +361,31 @@ Visibility is generation-based: posting entries whose `(ordinal,generation)` do
 not match the current norm/docmap generation or that map to tombstoned ordinals
 are ignored, so append-only historical blocks from updates/deletes are safe until
 later rewrite/merge compacts them. Doc IDs for ranking tie-breaks and final IDs
-come from v2 docmap blocks. Snapshot-local norm/docmap caches are bounded by the
-number of ordinal blocks touched by the query and are discarded after the search;
-no shared cross-snapshot cache is introduced.
+come from v2 docmap blocks for unfiltered or otherwise unknown identities.
+For scalar-filtered serving, the same captured cut's validated `text-v2-docid`
+forward tuple retains the scalar allow-set's already-owned documentID string,
+ordinal, generation and flags. Distinct selected IDs mapping to one ordinal are
+corruption. Every consumed known norm tuple must agree with that forward tuple
+before tombstone, generation or score-bound pruning. The all-live optimization
+retains this mapping; live-count equality does not substitute ordinal order for
+bytewise documentID tie order. Exact, single/AND/OR block-max, phrase and exact
+fallback use the same identity resolution. Known lexical bounds borrow the owned
+string without an inverse lookup or temporary ID conversion; candidate and final
+result IDs remain independent copies.
+
+All seven root-format records are still validated. Every consumed norm/posting/
+position record retains its complete codec validation, including excluded entries.
+A filtered plan deliberately need not detect corruption in inverse DATA records
+it never consumes. Unfiltered queries and full storage inspection retain inverse
+validation. The forward identity is query-local evidence, not a change in storage
+format, catalog authority or cross-capture cache.
+
+Snapshot-local norm/docmap caches are bounded by the number of ordinal blocks
+touched by the query and are discarded after the search; no shared cross-snapshot
+cache is introduced. Native forward maps, sorting storage, lookup conversions and
+keys, and independently copied candidate/detail/result IDs are admitted before
+allocation on the original operation receipt. A block-max exact restart retains
+both constructions' charges; it does not refund already consumed query work.
 
 With a strict scalar ordinal allow-set, each consumed norm/docmap block retains
 only selected decoded entries; norm field-length arrays are bounded by the

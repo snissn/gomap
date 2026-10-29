@@ -257,7 +257,7 @@ func (owner *CommandWALAdmittedCollection) prepareVectorPartitionColocatedMutati
 		return v, ErrVectorIndexPartitionLiveCapacityV1
 	}
 	if affected != 0 {
-		idx := c.registeredVectorIndex(v.Scope.Index)
+		idx := c.registeredColumnGraphPartitionLiveCarrier(v.Scope.Index)
 		if idx == nil {
 			return v, ErrVectorIndexPartitionLiveUnavailableV1
 		}
@@ -328,7 +328,7 @@ func (c *Collection) appendColocatedVectorMutationSystemDeltaV1(it iterator.Unsa
 			}
 		}
 	} else {
-		idx := c.registeredVectorIndex(p.wal.Scope.Index)
+		idx := c.registeredColumnGraphPartitionLiveCarrier(p.wal.Scope.Index)
 		if idx != nil {
 			idx.mu.RLock()
 			if live := idx.partitionLive; live != nil && !live.invalid && live.bindingDurable {

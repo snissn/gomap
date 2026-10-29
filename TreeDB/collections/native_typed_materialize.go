@@ -89,30 +89,12 @@ func nativeTypedDeltaBuildCapacity(meta CollectionMeta, rows []columnDeclaredRow
 	}
 	var total uint64
 	for i, row := range rows {
-		if len(row.Values) != len(meta.Options.ColumnStore.Columns) || len(row.ID) == 0 {
-			return 0, backenddb.ErrNativeSemanticUnsupported
-		}
-		n, err := nativeTypedDeltaRowBuildCapacity(meta, uint64(len(row.ID)), uint64(len(retained[i])))
+		n, err := nativeTypedDeclaredRowBuildCapacity(meta, row, retained[i])
 		if err != nil {
 			return 0, err
 		}
 		if err = nativeTypedCheckedAdd(&total, n); err != nil {
 			return 0, err
-		}
-		for j, col := range meta.Options.ColumnStore.Columns {
-			backing, _, err := nativeTypedValueCapacity(col, row.Values[j])
-			if err != nil {
-				return 0, err
-			}
-			// The maintained publisher's twelve source copies cover dictionary,
-			// vector, granule, section and old/replacement image backing.
-			backing, err = nativeTypedCheckedMul(backing, 12)
-			if err != nil {
-				return 0, err
-			}
-			if err = nativeTypedCheckedAdd(&total, memtable.COWAllocationCharge(backing)); err != nil {
-				return 0, err
-			}
 		}
 	}
 	// Each aggregate entry consumes at least one source row. Repeated group
@@ -133,6 +115,33 @@ func nativeTypedDeltaBuildCapacity(meta CollectionMeta, rows []columnDeclaredRow
 	}
 	if err = nativeTypedCheckedAdd(&total, manifest); err != nil {
 		return 0, err
+	}
+	return total, nil
+}
+
+// Keep the identical per-row source promise for member and span construction.
+// Values, IDs and retained payloads are immutable input backing, not copies.
+func nativeTypedDeclaredRowBuildCapacity(meta CollectionMeta, row columnDeclaredRow, retained []byte) (uint64, error) {
+	if len(row.Values) != len(meta.Options.ColumnStore.Columns) || len(row.ID) == 0 {
+		return 0, backenddb.ErrNativeSemanticUnsupported
+	}
+	total, err := nativeTypedDeltaRowBuildCapacity(meta, uint64(len(row.ID)), uint64(len(retained)))
+	if err != nil {
+		return 0, err
+	}
+	for j, col := range meta.Options.ColumnStore.Columns {
+		backing, _, e := nativeTypedValueCapacity(col, row.Values[j])
+		if e != nil {
+			return 0, e
+		}
+		// Dictionary/vector/granule/section and old/replacement image backing.
+		backing, e = nativeTypedCheckedMul(backing, 12)
+		if e != nil {
+			return 0, e
+		}
+		if e = nativeTypedCheckedAdd(&total, memtable.COWAllocationCharge(backing)); e != nil {
+			return 0, e
+		}
 	}
 	return total, nil
 }
@@ -250,11 +259,21 @@ func nativeTypedManifestAppendCapacity(meta CollectionMeta) (uint64, error) {
 // Retained source bytes bound structural entries independently of their encoded
 // compression ratio. These are the maintained prepared-materializer quota terms.
 func nativeTypedDeltaRowBuildCapacity(meta CollectionMeta, idBytes, retainedBytes uint64) (uint64, error) {
-	structural, err := nativeTypedCheckedMul(retainedBytes, uint64(4*preparedSemanticStreamMapEntryReserveBytes+2*preparedSemanticStreamMaxPathBytes+preparedSemanticStreamMaxCursorDepth*int(unsafe.Sizeof(""))+int(unsafe.Sizeof(columnRetainedSemanticStreamPathNode{}))))
-	if err != nil {
-		return 0, err
+	var total uint64
+	var err error
+	// This eligible Full+JSON lane passes already-declared values and the
+	// original complete JSON directly to the maintained asset builder. It never
+	// constructs the semantic-stream path trie/maps/cursors: validation returns
+	// early for JSON and materializeDelta assigns retained.documents=residual.
+	// Keep every other existing row/image/TCIM/source/codec term below. All
+	// excluded and non-column/semantic carriers retain their original promise.
+	if !nativeOrdinaryColumnGraphMeta(meta) {
+		structural, err := nativeTypedCheckedMul(retainedBytes, uint64(4*preparedSemanticStreamMapEntryReserveBytes+2*preparedSemanticStreamMaxPathBytes+preparedSemanticStreamMaxCursorDepth*int(unsafe.Sizeof(""))+int(unsafe.Sizeof(columnRetainedSemanticStreamPathNode{}))))
+		if err != nil {
+			return 0, err
+		}
+		total = memtable.COWAllocationCharge(structural)
 	}
-	total := memtable.COWAllocationCharge(structural)
 	// Match the maintained prepared publisher: scalar preparation per cell,
 	// TCIM containers per typed cell, C+3 sidecars, row image per cell, and
 	// original root/run controls per row. Codecs remain one shared workspace.
@@ -399,7 +418,10 @@ func nativeTypedCollectionRetainedCapacity(meta CollectionMeta, sourceBytes uint
 	if err = nativeTypedCheckedAdd(&total, schema); err != nil {
 		return 0, err
 	}
-	for _, n := range []uint64{uint64(unsafe.Sizeof(nativeTypedMaterialization{})), uint64(unsafe.Sizeof(cowbtree.OwnedMapRefund{})), 4 * uint64(unsafe.Sizeof(nativeTypedMaterializedRoot{}))} {
+	// The original typed receipt covers the complete original group control,
+	// including its fixed four-root read window, and the borrowed reader array.
+	// Generic group factories retain their existing external accounting owner.
+	for _, n := range []uint64{uint64(unsafe.Sizeof(backenddb.RootPublicationBuildGroup{})), uint64(unsafe.Sizeof(nativeTypedMaterialization{})), uint64(unsafe.Sizeof(cowbtree.OwnedMapRefund{})), 4 * uint64(unsafe.Sizeof(nativeTypedMaterializedRoot{})), 4 * uint64(unsafe.Sizeof(iterator.UnsafeIterator(nil)))} {
 		if err = nativeTypedCheckedAdd(&total, memtable.COWAllocationCharge(n)); err != nil {
 			return 0, err
 		}
@@ -663,12 +685,14 @@ func selectNativeTypedMaterializeMutations(deltas []*nativeTypedDelta) ([]native
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
 	// The existing per-mutation 2 KiB run/control allowance covers this index
-	// and the selected row/residual/delete headers below. Check their rounded
-	// worst case before allocation; ID, value and residual backing is borrowed.
-	// The bound deliberately counts every header for every input mutation even
-	// though only one member's selected headers are live during construction.
+	// and ALL simultaneous selected row/residual/delete/ID/document headers
+	// and physical-input frames (including a possible escaped plan callback).
+	// Check their rounded worst case before allocation; ID, value and residual
+	// backing is borrowed. Count every header for every input mutation, including
+	// the selector's original capacity after winners are compacted. The separate
+	// original root/run and codec promises remain charged without any refund.
 	var selectionBytes uint64
-	for _, width := range []uint64{uint64(unsafe.Sizeof(nativeTypedMaterializeMutation{})), uint64(unsafe.Sizeof(columnDeclaredRow{})), uint64(unsafe.Sizeof([]byte{})), uint64(unsafe.Sizeof([]byte{}))} {
+	for _, width := range []uint64{uint64(unsafe.Sizeof(nativeTypedMaterializeMutation{})), uint64(unsafe.Sizeof(columnDeclaredRow{})), uint64(unsafe.Sizeof([]byte{})), uint64(unsafe.Sizeof([]byte{})), uint64(unsafe.Sizeof([]byte{})), uint64(unsafe.Sizeof(columnWriteDocument{})), uint64(unsafe.Sizeof(columnWriteDocument{})), uint64(unsafe.Sizeof(nativeTypedPhysicalRows{}))} {
 		n, err := nativeTypedCheckedMul(count, width)
 		if err != nil {
 			return nil, err
@@ -737,6 +761,80 @@ func selectNativeTypedMaterializeMutations(deltas []*nativeTypedDelta) ([]native
 	return mutations, nil
 }
 
+// Eligibility and the source-promise inequality are checked before aggregate
+// headers or assets are constructed. A false result leaves the original member
+// path untouched. Errors after span construction begins never retry that path.
+func (w *nativeTypedMaterialization) canMaterializeInsertSpan(deltas []*nativeTypedDelta, selected []nativeTypedMaterializeMutation) (bool, error) {
+	if w.input.compaction != nil || len(deltas) < 2 || !nativeOrdinaryColumnGraphMeta(w.meta) {
+		return false, nil
+	}
+	var original, held uint64
+	for _, d := range deltas {
+		if d.operation != ColumnPublishOperationInsert || len(d.deleted) != 0 || (d.data != nil && (d.data.graph != nil || d.data.source != nil)) {
+			return false, nil
+		}
+		n, err := nativeTypedDeltaBuildCapacity(w.input.meta, d.rows, d.retained)
+		if err != nil {
+			return false, err
+		}
+		if err = nativeTypedCheckedAdd(&original, n); err != nil {
+			return false, err
+		}
+		if err = nativeTypedCheckedAdd(&held, d.buildCapacity); err != nil {
+			return false, err
+		}
+	}
+	// Ordinary Full+JSON has one vector column and no aggregates or string
+	// groups. Its aggregate source requirement is exactly these winning rows
+	// plus one maintained manifest allowance. Do not spend the unused member
+	// allowances elsewhere or reduce the original construction receipt.
+	aggregate, err := nativeTypedManifestAppendCapacity(w.meta)
+	if err != nil {
+		return false, err
+	}
+	for _, mutation := range selected {
+		if mutation.row < 0 {
+			return false, nil
+		}
+		d := deltas[mutation.delta]
+		n, e := nativeTypedDeclaredRowBuildCapacity(w.meta, d.rows[mutation.row], d.retained[mutation.row])
+		if e != nil {
+			return false, e
+		}
+		if e = nativeTypedCheckedAdd(&aggregate, n); e != nil {
+			return false, e
+		}
+	}
+	return len(selected) != 0 && aggregate <= min(original, held), nil
+}
+
+func (w *nativeTypedMaterialization) materializeInsertSpan(context columnPhysicalAssetBuildContext, deltas []*nativeTypedDelta, selected []nativeTypedMaterializeMutation) error {
+	_ = w.codec.Close()
+	if cfg := w.meta.Options.ColumnStore; cfg.ActiveManifest != nil && cfg.ActiveManifest.Generation == ^uint64(0) {
+		return memtable.ErrCOWCapacity
+	}
+	// The selector has already validated EVERY original member and selected
+	// the last writer. Only its borrowed headers are reordered for one physical
+	// row lane; original commands, deltas and captured row backing are untouched.
+	slices.SortFunc(selected, func(a, b nativeTypedMaterializeMutation) int {
+		return bytes.Compare(a.id, b.id)
+	})
+	rows := make([]columnDeclaredRow, len(selected))
+	residual := make([][]byte, len(selected))
+	for i, mutation := range selected {
+		d := deltas[mutation.delta]
+		rows[i], residual[i] = d.rows[mutation.row], d.retained[mutation.row]
+	}
+	// Physical coverage ends at this namespace's last ORIGINAL member, not at
+	// the enclosing global checkpoint frontier. Even a shadowed final member
+	// remains covered; no synthetic command or replacement delta is introduced.
+	endpoint := deltas[len(deltas)-1]
+	return w.materializeRows(context, nativeTypedPhysicalRows{
+		rows: rows, residual: residual, operation: ColumnPublishOperationInsert,
+		appliedLSN: endpoint.appliedLSN, memberOrdinal: endpoint.memberOrdinal,
+	})
+}
+
 func (w *nativeTypedMaterialization) materialize() (resultErr error) {
 	if w == nil || w.started {
 		return backenddb.ErrNativeSemanticUnsupported
@@ -752,37 +850,73 @@ func (w *nativeTypedMaterialization) materialize() (resultErr error) {
 			w.complete = true
 		}
 	}()
+	var previousLSN uint64
+	var previousMember uint32
 	for _, d := range w.input.deltas {
-		if d != nil && d.data != nil && d.data.graph != nil {
-			if w.input.compaction != nil || len(w.input.deltas) != 1 || len(d.rows)+len(d.retained)+len(d.deleted) != 0 {
-				return backenddb.ErrNativeSemanticUnsupported
-			}
-			return w.materializeVectorGraph(d)
+		if d == nil || d.appliedLSN == 0 || (previousLSN != 0 && (d.appliedLSN < previousLSN || (d.appliedLSN == previousLSN && d.memberOrdinal <= previousMember))) {
+			return backenddb.ErrNativeSemanticUnsupported
 		}
-	}
-	var mutations []nativeTypedMaterializeMutation
-	var err error
-	if len(w.input.deltas) != 0 {
-		mutations, err = selectNativeTypedMaterializeMutations(w.input.deltas)
-		if err != nil {
-			return err
-		}
+		previousLSN, previousMember = d.appliedLSN, d.memberOrdinal
 	}
 	rootDir, registry, err := w.input.group.NativeColumnAssetBuildContext()
 	if err != nil {
 		return err
 	}
-	context := columnPhysicalAssetBuildContext{rootDir: rootDir, registry: registry, recovery: w.input.capture, codec: &w.codec, singleOutput: true}
-	for start := 0; start < len(mutations); {
-		end := start + 1
-		for end < len(mutations) && mutations[end].delta == mutations[start].delta {
+	validateOptions, err := w.ordinaryGraphPendingSourceValidator()
+	if err != nil {
+		return err
+	}
+	context := columnPhysicalAssetBuildContext{rootDir: rootDir, registry: registry, recovery: w.input.capture, codec: &w.codec, singleOutput: true, typedColumnOptionsValidator: validateOptions}
+	// Graph recipes are barriers: later mutations must not shadow the source
+	// visible to an earlier recipe. Reuse the original row selector per segment.
+	for first := 0; first < len(w.input.deltas); {
+		end := first
+		for end < len(w.input.deltas) && (w.input.deltas[end] == nil || w.input.deltas[end].data == nil || w.input.deltas[end].data.graph == nil) {
 			end++
 		}
-		d := w.input.deltas[mutations[start].delta]
-		if err = w.materializeDelta(context, d, mutations[start:end]); err != nil {
+		if end > first {
+			mutations, e := selectNativeTypedMaterializeMutations(w.input.deltas[first:end])
+			if e != nil {
+				return e
+			}
+			span, e := w.canMaterializeInsertSpan(w.input.deltas[first:end], mutations)
+			if e != nil {
+				return e
+			}
+			if span {
+				if err = w.materializeInsertSpan(context, w.input.deltas[first:end], mutations); err != nil {
+					return err
+				}
+			}
+			for start := 0; !span && start < len(mutations); {
+				stop := start + 1
+				for stop < len(mutations) && mutations[stop].delta == mutations[start].delta {
+					stop++
+				}
+				d := w.input.deltas[first+mutations[start].delta]
+				if err = w.materializeDelta(context, d, mutations[start:stop]); err != nil {
+					return err
+				}
+				start = stop
+			}
+		}
+		if end == len(w.input.deltas) {
+			break
+		}
+		d := w.input.deltas[end]
+		if w.input.compaction != nil || len(d.rows)+len(d.retained)+len(d.deleted) != 0 {
+			return backenddb.ErrNativeSemanticUnsupported
+		}
+		if !d.data.graph.ordinary {
+			if len(w.input.deltas) != 1 {
+				return backenddb.ErrNativeSemanticUnsupported
+			}
+			return w.materializeVectorGraph(d)
+		}
+		if err = w.materializeOrdinaryVectorGraph(d); err != nil {
 			return err
 		}
-		start = end
+		first = end + 1
 	}
 	if w.input.compaction != nil {
 		if err = w.materializeCompaction(context); err != nil {
@@ -797,13 +931,24 @@ func (w *nativeTypedMaterialization) materialize() (resultErr error) {
 	return nil
 }
 
+// A physical row input may describe one original member or an accepted span's
+// endpoint. It is not a logical command/delta and never owns input row backing.
+type nativeTypedPhysicalRows struct {
+	rows          []columnDeclaredRow
+	residual      [][]byte
+	deletedIDs    [][]byte
+	operation     ColumnPublishOperation
+	appliedLSN    uint64
+	memberOrdinal uint32
+	source        *nativeSourceImportDeltaV2
+}
+
 func (w *nativeTypedMaterialization) materializeDelta(context columnPhysicalAssetBuildContext, d *nativeTypedDelta, selected []nativeTypedMaterializeMutation) error {
 	// Each command's semantic phase precedes its typed encoder phase. The
 	// maintained asset helper also closes after joining its encoder goroutine;
 	// drop again here before the next command.
 	_ = w.codec.Close()
-	cfg := *w.meta.Options.ColumnStore
-	if cfg.ActiveManifest != nil && cfg.ActiveManifest.Generation == ^uint64(0) {
+	if cfg := w.meta.Options.ColumnStore; cfg.ActiveManifest != nil && cfg.ActiveManifest.Generation == ^uint64(0) {
 		return memtable.ErrCOWCapacity
 	}
 	rowCount := 0
@@ -823,6 +968,24 @@ func (w *nativeTypedMaterialization) materializeDelta(context columnPhysicalAsse
 			deletedIDs = append(deletedIDs, d.deleted[-mutation.row-1])
 		}
 	}
+	var source *nativeSourceImportDeltaV2
+	if d.data != nil {
+		source = d.data.source
+	}
+	return w.materializeRows(context, nativeTypedPhysicalRows{
+		rows: rows, residual: residual, deletedIDs: deletedIDs, operation: d.operation,
+		appliedLSN: d.appliedLSN, memberOrdinal: d.memberOrdinal, source: source,
+	})
+}
+
+// One maintained constructor/asset-custody/root suffix serves both inputs.
+// Neither successful nor failed construction changes accepted command history.
+func (w *nativeTypedMaterialization) materializeRows(context columnPhysicalAssetBuildContext, physical nativeTypedPhysicalRows) error {
+	cfg := *w.meta.Options.ColumnStore
+	if cfg.ActiveManifest != nil && cfg.ActiveManifest.Generation == ^uint64(0) {
+		return memtable.ErrCOWCapacity
+	}
+	rows, residual, deletedIDs := physical.rows, physical.residual, physical.deletedIDs
 	// The input already IS the retained noncolumn carrier. A zero-declaration
 	// view preserves every residual field through the maintained semantic codec;
 	// no full JSON document or declared-column shadow is reconstructed here.
@@ -852,7 +1015,7 @@ func (w *nativeTypedMaterialization) materializeDelta(context columnPhysicalAsse
 	for i, id := range deletedIDs {
 		deleted[i] = columnWriteDocument{ID: id}
 	}
-	op := d.operation
+	op := physical.operation
 	if op == "" {
 		op = ColumnPublishOperationInsert
 	}
@@ -865,8 +1028,8 @@ func (w *nativeTypedMaterialization) materializeDelta(context columnPhysicalAsse
 		}
 	}
 	var source *columnSourceDirectoryAppendV2
-	if d.data != nil && d.data.source != nil {
-		publication := d.data.source.publication // private once-bound seal and diagnostics
+	if physical.source != nil {
+		publication := physical.source.publication // private once-bound seal and diagnostics
 		input.sourceImportV2 = &publication
 		if w.sourceDirectory == nil {
 			var e error
@@ -887,11 +1050,11 @@ func (w *nativeTypedMaterialization) materializeDelta(context columnPhysicalAsse
 		// root plus the separately owned fresh suffix, never a complete array.
 		records = nil
 	}
-	plan, err := BuildColumnPublishPlan(ColumnPublishPlanInput{Collection: w.meta.Name, ColumnStore: &cfg, ColumnStoreNormalized: true, ActiveVectorIndexesKnown: true, Operation: input.operation, CurrentManifest: cfg.ActiveManifest, CurrentManifestRecords: records, sourceDirectoryV2: source, AppliedCommandLSN: d.appliedLSN, BaseManifestRootID: w.roots[1].root, Hooks: ColumnPublishPlanHooks{
+	plan, err := BuildColumnPublishPlan(ColumnPublishPlanInput{Collection: w.meta.Name, ColumnStore: &cfg, ColumnStoreNormalized: true, ActiveVectorIndexesKnown: true, Operation: input.operation, CurrentManifest: cfg.ActiveManifest, CurrentManifestRecords: records, sourceDirectoryV2: source, AppliedCommandLSN: physical.appliedLSN, BaseManifestRootID: w.roots[1].root, Hooks: ColumnPublishPlanHooks{
 		PrepareAssets: func(hook ColumnPublishAssetPrepareInput) (ColumnPublishPreparedAssets, error) {
 			prepared, e := context.prepareAssets(input, hook)
 			if e != nil {
-				return prepared, fmt.Errorf("collections: native typed assets collection=%q lsn=%d member=%d: %w", w.meta.Name, d.appliedLSN, d.memberOrdinal, e)
+				return prepared, fmt.Errorf("collections: native typed assets collection=%q lsn=%d member=%d: %w", w.meta.Name, physical.appliedLSN, physical.memberOrdinal, e)
 			}
 			if prepared.stableResources == nil {
 				return prepared, backenddb.ErrNativeSemanticUnsupported
@@ -1428,6 +1591,10 @@ func nativeTypedReadCapacity(meta CollectionMeta, snapshot *backenddb.Snapshot, 
 type nativeTypedFamilyReadShape struct {
 	decodedBytes    uint64
 	dictionarySlots uint64
+	// The graph projection uses scan-only typed decoding: metadata sections are
+	// validated as stored bytes but never decompressed. A data section can still
+	// require the original fixed ZSTD decoder; other read callers ignore this flag.
+	columnDataZSTD bool
 }
 
 func nativeTypedFamilyReadCapacity(meta CollectionMeta, snapshot *backenddb.Snapshot, root uint64, rootDir string, shape *nativeTypedFamilyReadShape, admit func(uint64) error, selected ...columnManifestRecord) (extra, typedJSON uint64, err error) {
@@ -1545,6 +1712,9 @@ func nativeTypedFamilyReadCapacity(meta CollectionMeta, snapshot *backenddb.Snap
 					return e
 				}
 				if shape != nil {
+					if section.Kind == typedcolumn.ColumnPartImageSectionColumnData && section.Compression == typedcolumn.CompressionZSTD {
+						shape.columnDataZSTD = true
+					}
 					if e = nativeTypedCheckedAdd(&shape.decodedBytes, n); e != nil {
 						return e
 					}

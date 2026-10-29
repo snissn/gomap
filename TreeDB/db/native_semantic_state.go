@@ -66,6 +66,46 @@ type NativeSemanticState interface {
 	PrepareHandoff(latest NativeSemanticState, accepted *Snapshot) (NativeSemanticState, error)
 }
 
+// NativeSemanticProducerPressure is an advisory inventory of construction for
+// the current immutable state, not an admission promise for an incoming write.
+// A zero value means no pending typed construction. Nonzero construction uses
+// the original finite maintenance limits and producer source limit.
+type NativeSemanticProducerPressure struct {
+	ConstructionBytes uint64
+	// FixedConstructionBytes is the once-per-build maximum already included in
+	// ConstructionBytes. It changes only advisory scheduling: every hard check
+	// and reservation still uses the full ConstructionBytes. Zero preserves the
+	// original watermark. Invalid/nonfitting fixed terms request maintenance.
+	FixedConstructionBytes uint64
+	MaxInFlightBytes       uint64
+	MaxTotalBytes          uint64
+	Sources                int
+	MaxSources             int
+}
+
+// NativeProducerObservation is a comparable, advisory identity of current
+// pressure. It retains no cut, reserves no capacity and grants no publication
+// authority. Historical high water is intentionally excluded.
+type NativeProducerObservation struct {
+	LogicalSequence uint64
+	Basis           StateToken
+	Semantic        NativeSemanticProducerPressure
+	ReservedBytes   uint64
+	Sources         int
+	Generations     int
+	UnderPressure   bool
+}
+
+// NativeSemanticProducerPressureState optionally observes the SAME retained
+// cut's immutable state and exact borrowed backend Snapshot. The caller holds
+// that cut throughout this call, outside the cut latch, and releases it before
+// joining maintenance. Implementations neither recapture nor retain the basis,
+// allocate publication work, acquire consumer locks, or change admission state.
+// Errors are observations, never retryable build/handoff refusals.
+type NativeSemanticProducerPressureState interface {
+	NativeProducerPressure(*Snapshot) (NativeSemanticProducerPressure, error)
+}
+
 // NativeSemanticBasisRefresher optionally rebinds an immutable semantic root set
 // after logically equivalent backend maintenance. before and after are the exact
 // retained old/new physical Snapshots, never newly captured by the participant.
@@ -216,6 +256,8 @@ type NativeSemanticBridge interface {
 	CompactNativeColumnStore(context.Context, NativeColumnStoreCompaction) error
 	Checkpoint() error
 	PrepareNativeProducer() error
+	ObserveNativeProducer() (NativeProducerObservation, error)
+	PrepareNativeProducerObservation() (NativeProducerObservation, error)
 	CaptureNativeCut() (NativeSemanticCapture, error)
 	BeginNativeConditionalTxn() (NativeConditionalTxn, error)
 	BeginPreparedNativeConditionalTxn() (NativeConditionalTxn, error)
@@ -285,6 +327,25 @@ func (db *DB) PrepareNativeProducer() error {
 		return ErrNativeSemanticUnsupported
 	}
 	return db.nativeSemanticBridge.PrepareNativeProducer()
+}
+
+// ObserveNativeProducer borrows and releases the original cut to inspect its
+// current inventory. It never takes the producer maintenance mutex, checkpoints
+// or joins cleanup, and can be called under a consumer mutation gate.
+func (db *DB) ObserveNativeProducer() (NativeProducerObservation, error) {
+	if !db.HasNativeSemanticBridge() {
+		return NativeProducerObservation{}, ErrNativeSemanticUnsupported
+	}
+	return db.nativeSemanticBridge.ObserveNativeProducer()
+}
+
+// PrepareNativeProducerObservation runs the original off-gate maintenance and
+// returns the exact final observation. The result owns no retained resources.
+func (db *DB) PrepareNativeProducerObservation() (NativeProducerObservation, error) {
+	if !db.HasNativeSemanticBridge() {
+		return NativeProducerObservation{}, ErrNativeSemanticUnsupported
+	}
+	return db.nativeSemanticBridge.PrepareNativeProducerObservation()
 }
 
 // BeginPreparedNativeConditionalTxn is the opening-only adapter for consumers
