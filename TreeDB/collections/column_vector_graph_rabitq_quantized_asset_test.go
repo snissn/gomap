@@ -528,6 +528,7 @@ func TestCollectionSearchVectorIndexWithBufferRabitQQuantized2452(t *testing.T) 
 			}
 		})
 		if quantizedOnlyAllocs != 0 {
+			captureVectorAllocationFailure(t, "collection-buffered-rabitq-quantized", "quantized_only", "RabitQ2452 rows=5 dims=3 query=[0.2,0.9,0.1] topK=3 efSearch=5 rerankCandidates=0 maxDecodedBlocks=1 production-stats", 100, quantizedOnlyAllocs)
 			_ = d.Close()
 			t.Fatalf("rabitq quantized_only SearchVectorIndexWithBuffer steady-state allocs/run=%v want 0", quantizedOnlyAllocs)
 		}
@@ -538,6 +539,7 @@ func TestCollectionSearchVectorIndexWithBufferRabitQQuantized2452(t *testing.T) 
 			}
 		})
 		if rerankAllocs != 0 {
+			captureVectorAllocationFailure(t, "collection-buffered-rabitq-quantized", "quantized_rerank", "RabitQ2452 rows=5 dims=3 query=[0.2,0.9,0.1] topK=2 efSearch=5 rerankCandidates=5 maxDecodedBlocks=1 production-stats", 100, rerankAllocs)
 			_ = d.Close()
 			t.Fatalf("rabitq quantized_rerank SearchVectorIndexWithBuffer steady-state allocs/run=%v want 0", rerankAllocs)
 		}

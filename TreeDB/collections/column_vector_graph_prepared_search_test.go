@@ -304,6 +304,7 @@ func TestColumnVectorGraphPreparedSearchNonMmapWarmScratchZeroAllocs3996(t *test
 		t.Fatalf("SearchCosine: %v", searchErr)
 	}
 	if allocs != 0 {
+		captureVectorAllocationFailure(t, "non-mmap-native-search-warm-scratch", "SearchCosine", "synthetic rows=24 dims=8 m=4 query=row5 topK=5 efSearch=24 maxDecodedBlocks=1 non-mmap", 1000, allocs)
 		t.Fatalf("non-mmap warm SearchCosine allocs=%v want zero", allocs)
 	}
 }

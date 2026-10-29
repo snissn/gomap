@@ -484,6 +484,9 @@ jobs:
         env:
           GOMEMLIMIT: 4GiB
           GOMAXPROCS: 2
+          # Created only by an already-failed isolated allocation gate. Keep
+          # outside the shell tmp_dir and Go's temporary test/fixture paths.
+          TREEDB_COLLECTIONS_VECTOR_ALLOCATION_ARTIFACTS: ${{ github.workspace }}/artifacts/vector-allocation-failures
         run: |
           set -euo pipefail
           tmp_dir="$(mktemp -d)"
@@ -702,6 +705,15 @@ jobs:
               exit 1
               ;;
           esac
+
+      - name: Upload failed vector allocation snapshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vector-allocation-failure-${{ matrix.name }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/vector-allocation-failures/
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Summarize test timings
         if: always()
