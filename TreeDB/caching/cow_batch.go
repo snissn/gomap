@@ -404,6 +404,18 @@ func (p *cowBatchPreparation) detachScratch() *memtable.COWExternalLease {
 }
 
 func (b *Batch) writeCOWPublication(syncWrite bool, unlock func()) error {
+	// Custody begins here: this guard covers publication and callback unwind,
+	// but does not cover abnormal exits in the caller before publication.
+	previousUnlock := unlock
+	released := false
+	unlock = func() {
+		if released {
+			return
+		}
+		released = true
+		previousUnlock()
+	}
+	defer unlock()
 	checkpoint := syncWrite && b.commandWALAppend == nil
 	var err error
 	if b.commandWALAppend != nil {

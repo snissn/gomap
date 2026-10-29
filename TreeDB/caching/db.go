@@ -38619,12 +38619,7 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 		b.db.cow.commitWaitNs.Add(uint64(time.Since(leaseWaitStart)))
 		b.cowState.inPublication = true
 		previousUnlock := unlockWriteMu
-		released := false
 		unlockWriteMu = func() {
-			if released {
-				return
-			}
-			released = true
 			capture := b.cowState.producer
 			b.cowState.inPublication = false
 			b.db.cow.commitHoldNs.Add(uint64(time.Since(b.cowState.holdBegan)))
@@ -38637,10 +38632,6 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 			b.cowState.producer = nil
 			capture.close()
 		}
-		// Normal publication releases before retirement/checkpoint. A callback
-		// panic (including legacy panic(nil)) or Goexit must release the same
-		// leases during unwind; the guard makes that release exactly once.
-		defer unlockWriteMu()
 	} else {
 		// Command-WAL callers may enter here without going through write.
 		b.ensureOrdinaryState()
