@@ -15,6 +15,11 @@ The new workflow path, name, branch and nonce expressly identify this successor.
 Nothing here supplies publication or measurement authority; independent review
 must accept this prospective supersession before publication.
 
+Pushing the successor branch can trigger ordinary repository-wide push CI, including
+unified-bench suites and other workload-bearing jobs. It is not measurement-free
+publication. This diagnostic workflow itself has no push trigger; any publication
+authority must account for those independent existing CI side effects.
+
 Publication is prospective registration, while ONLY the first owner-opened draft
 PR event satisfying all bindings can admit the controller. This successor still
 requires run_number 1 and attempt 1: any earlier registered occurrence (including
@@ -95,6 +100,13 @@ Database TMPDIR is output/tmp on RUNNER_TEMP, matching the historical gate's sto
 The job holds an authenticated owned0600 nofollow regular per-job lock through all direct command subprocesses and terminal drain. This lock coordinates this job only; it is not the local cooperative common lease or a physical-host exclusion claim. Fresh paths must not exist. Reviewed v3 supervisor/leader code is byte-identical: pending owner before spawn, exact immediate parent, signal latch, subreaper/pidfd descendant accounting, unreaped leader through drain and no post-reap numeric signaling. New controller tests exercise real inert success/error, interruption, deadline/grandchildren, lease replacement and capacity rejection. No SSH, root or host111 action exists.
 
 Hosted bounds deliberately differ from the local packet:20GiB free floor instead of100GiB (the hosted filesystem cannot promise100GiB),2GiB sampled output cap,16MiB command logs,100000-entry census,90s samples,600s builds,30minute measured campaign,75minute controller and90minute GitHub job with cleanup/upload slack. The exact reviewed v3 census is reused except its free floor/message; only tmp ENOENT allows bounded complete rescan. Bounds are cooperative/sample-based, not hard quotas or syscall deadlines. No unreviewed disk-space reclamation is performed. Free-space/hardware failure stops rather than selecting another runner.
+
+Both exact source paths are predeclared and checked absent in filesystem and Git
+worktree registrations before add. Add intent is recorded before spawn. Cleanup
+reconciles partial directories and registered worktrees even if add or its observer
+raises, attempts both owned paths, and checks both paths and registrations absent
+before cleanup_complete can be true. Unknown/preexisting residue is preserved and
+reported incomplete; no global worktree prune is used.
 
 All commands, including builds/discovery/cleanup, use one concrete supervisor. On ordinary errors/signals, drain exact owned descendants before removing only this invocation's clean worktrees and tmp, and write actual cleanup/session/lease audit. Keep controller, process, command, environment, source/ELF, raw sample and terminal evidence plus artifact digest inventory. Upload uses always(), unique run/attempt name, no overwrite and30day retention. Failure before a terminal or artifact upload failure is INCOMPLETE, never success. Retrieve and preserve the completed artifact/ZIP digest outside retention before making claims.
 

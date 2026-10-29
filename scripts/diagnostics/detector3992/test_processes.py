@@ -1,7 +1,7 @@
 """Real inert OS lifecycle tests. No product, benchmark or remote execution."""
 import fcntl,json,os,pathlib,signal,sys,tempfile,threading,time,unittest
 from unittest.mock import patch
-import hosted,census
+import hosted,census,subprocess
 from supervisor import read_identity,Cancelled,LifecycleError
 
 class ProcessContracts(unittest.TestCase):
@@ -54,5 +54,61 @@ time.sleep(60)
   with patch.object(census,'CAP_BYTES',0):
    (self.out/'large').write_bytes(b'x')
    with self.assertRaises(census.CensusError):hosted.census(self.out)
+
+class SourceCleanupContracts(unittest.TestCase):
+ def setUp(self):
+  self.temp=tempfile.TemporaryDirectory(prefix='3992-owned-sources-',dir=pathlib.Path(__file__).resolve().parent);self.addCleanup(self.temp.cleanup)
+  self.root=pathlib.Path(self.temp.name);self.repo=self.root/'repo';self.repo.mkdir()
+  self.git_run(['git','init','-q'],self.repo)
+  self.git_run(['git','-c','user.name=Inert Test','-c','user.email=inert@example.invalid','commit','-q','--allow-empty','-m','inert fixture'],self.repo)
+  self.failure=None
+  self.sources=hosted.OwnedSources(self.root,'123',self.repo,self.owner)
+ def git_run(self,argv,cwd):return subprocess.check_output(list(map(str,argv)),cwd=cwd,stderr=subprocess.STDOUT,text=True)
+ def owner(self,label,argv,cwd):
+  if label=='worktree-A' and self.failure=='partial-directory':
+   self.sources.paths['A'].mkdir();(self.sources.paths['A']/'partial').write_text('inert')
+   raise RuntimeError('injected add failure before registration')
+  result=self.git_run(argv,cwd)
+  if label=='worktree-A' and self.failure=='observer':raise RuntimeError('injected observer failure after real registration')
+  if label=='remove-A' and self.failure=='remove-observer':raise RuntimeError('injected observer failure after removal')
+  return result
+ def assert_absent(self):
+  registrations=self.sources.registrations('test-list')
+  for src in self.sources.paths.values():self.assertFalse(src.exists());self.assertNotIn(src,registrations)
+ def test_partial_add_directory_is_reconciled(self):
+  self.sources.prepare();self.failure='partial-directory'
+  with self.assertRaises(RuntimeError):self.sources.add('A','HEAD')
+  self.assertTrue(self.sources.cleanup()['complete']);self.assert_absent()
+ def test_registered_add_observer_failure_is_reconciled(self):
+  self.sources.prepare();self.failure='observer'
+  with self.assertRaises(RuntimeError):self.sources.add('A','HEAD')
+  self.assertTrue(self.sources.cleanup()['complete']);self.assert_absent()
+ def test_both_sources_and_missing_directory_registration(self):
+  self.sources.prepare()
+  for label in ['A','C']:self.sources.add(label,'HEAD')
+  import shutil
+  shutil.rmtree(self.sources.paths['A'])
+  self.assertTrue(self.sources.cleanup()['complete']);self.assert_absent()
+ def test_preexisting_path_is_never_claimed_or_removed(self):
+  src=self.sources.paths['A'];src.mkdir();(src/'foreign').write_text('preserve')
+  with self.assertRaises(RuntimeError):self.sources.prepare()
+  self.assertFalse(self.sources.cleanup()['complete']);self.assertEqual((src/'foreign').read_text(),'preserve')
+ def test_preexisting_registration_is_never_claimed_or_removed(self):
+  src=self.sources.paths['A'];self.git_run(['git','worktree','add','--detach',src,'HEAD'],self.repo)
+  import shutil
+  shutil.rmtree(src)
+  with self.assertRaises(RuntimeError):self.sources.prepare()
+  self.assertFalse(self.sources.cleanup()['complete']);self.assertIn(src,self.sources.registrations('test-list'))
+ def test_removal_observer_failure_cannot_claim_complete(self):
+  self.sources.prepare();self.sources.add('A','HEAD');self.sources.add('C','HEAD');self.failure='remove-observer'
+  self.assertFalse(self.sources.cleanup()['complete']);self.assert_absent()
+ def test_final_registration_query_failure_is_incomplete(self):
+  self.sources.prepare()
+  original=self.sources.owner
+  def fail(label,argv,cwd):
+   if label=='cleanup-final-registrations':raise RuntimeError('injected observation failure')
+   return original(label,argv,cwd)
+  self.sources.owner=fail
+  result=self.sources.cleanup();self.assertFalse(result['complete']);self.assertIn('REGISTRATIONS_UNVERIFIED',result['remaining'])
 
 if __name__=='__main__':unittest.main()

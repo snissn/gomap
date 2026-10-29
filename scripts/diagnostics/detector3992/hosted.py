@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """One hosted diagnostic, never product acceptance. No GitHub writes/host access."""
-import argparse,fcntl,hashlib,json,os,pathlib,re,shutil,signal,stat,sys,time
+import argparse,ast,fcntl,hashlib,json,os,pathlib,re,shutil,signal,stat,sys,time
 from science import ARMS,gate,schedule,parse_raw,analyze,verify_test,verify_discovery
 from supervisor import Supervisor
 from census import enforce as enforce_capacity
@@ -98,6 +98,46 @@ class Commands:
     time.sleep(1)
   if restore:self.owner.restore_handlers()
 
+class OwnedSources:
+ """Predeclare exact paths, establish absence, then reconcile even failed adds."""
+ def __init__(self,parent,run_id,repo,owner):
+  self.paths={label:parent/('gomap3992-source-'+label+'-'+run_id) for label in ['A','C']}
+  self.repo=repo;self.owner=owner;self.claimed=False;self.started=set()
+ def registrations(self,label):
+  text=self.owner(label,['git','-c','core.quotePath=false','worktree','list','--porcelain'],self.repo)
+  paths=[field.removeprefix('worktree ') for field in text.splitlines() if field.startswith('worktree ')]
+  return {pathlib.Path(ast.literal_eval(path) if path.startswith(chr(34)) else path) for path in paths}
+ def prepare(self):
+  registered=self.registrations('sources-preflight')
+  if any(os.path.lexists(src) or src in registered for src in self.paths.values()):raise RuntimeError('source path or registration already exists')
+  self.claimed=True
+ def add(self,label,commit):
+  if not self.claimed or label in self.started:raise RuntimeError('unowned or repeated source add')
+  self.started.add(label) # Must precede spawn and any command/observer exception.
+  src=self.paths[label];self.owner('worktree-'+label,['git','worktree','add','--detach',src,commit],self.repo)
+  return src
+ def cleanup(self):
+  errors=[]
+  for label,src in self.paths.items():
+   try:
+    registered=self.registrations('cleanup-list-'+label)
+    exists=os.path.lexists(src)
+    if not exists and src not in registered:continue
+    if not self.claimed or label not in self.started:raise RuntimeError('unexpected unowned source residue: '+str(src))
+    if exists and (src.is_symlink() or not src.is_dir()):raise RuntimeError('unsafe source residue: '+str(src))
+    if src in registered:self.owner('remove-'+label,['git','worktree','remove','--force',src],self.repo)
+    # An interrupted add can leave a directory before registration exists.
+    if os.path.lexists(src):
+     if src.is_symlink() or not src.is_dir():raise RuntimeError('unsafe source residue: '+str(src))
+     shutil.rmtree(src)
+   except BaseException as exc:errors.append(repr(exc))
+  # No success claim from command return codes alone; inspect both namespaces.
+  try:
+   registered=self.registrations('cleanup-final-registrations')
+   remaining=[str(src) for src in self.paths.values() if os.path.lexists(src) or src in registered]
+  except BaseException as exc:errors.append(repr(exc));remaining=['REGISTRATIONS_UNVERIFIED']
+  return {'complete':not errors and not remaining,'errors':errors,'remaining':remaining,'intended':[str(p) for p in self.paths.values()],'attempted':sorted(self.started)}
+
 def main():
  authority=authorize(os.environ,json.loads(pathlib.Path(os.environ['GITHUB_EVENT_PATH']).read_text()));seal=verify_seal()
  out=pathlib.Path(os.environ['DIAGNOSTIC_OUTPUT']);parent=pathlib.Path(os.environ['RUNNER_TEMP']).resolve()
@@ -109,6 +149,7 @@ def main():
  env={k:v for k,v in os.environ.items() if k in {'PATH','HOME','LANG','LC_ALL','TZ','GOROOT','GOCACHE','GOMODCACHE','GOPATH'}}
  env.update(GOMAXPROCS='1',GOGC='100',GOMEMLIMIT='off',GODEBUG='',GOAMD64='v1',GOTOOLCHAIN='local',GOWORK='off',GOFLAGS='',CGO_ENABLED='1',CC='/usr/bin/gcc',CXX='/usr/bin/g++',CGO_CFLAGS='-O2 -g',CGO_CXXFLAGS='-O2 -g',CGO_CPPFLAGS='',CGO_LDFLAGS='-O2 -g',LD_PRELOAD='',LD_LIBRARY_PATH='',LD_AUDIT='',TMPDIR=str(tmp),PYTHONDONTWRITEBYTECODE='1')
  owner=Commands(out,env,lease);owner.expires=authority['expires_epoch'];terminal={'status':'ENGINEERING_INVALID','diagnostic_only':True,'product_acceptance':False,'original_red_preserved':True};sources=[];rows=[];cleaned=False
+ repo=pathlib.Path(os.environ['GITHUB_WORKSPACE']);owned_sources=OwnedSources(parent,authority['GITHUB_RUN_ID'],repo,owner)
  try:
   before=snapshot(tmp,out);save(out/'host-before.json',before)
   if 0 not in before['affinity'] or os.cpu_count()!=4 or 'AMD EPYC 7763' not in before['proc']['cpuinfo']:raise RuntimeError('historical four-vCPU EPYC7763 class unavailable; no timed sample')
@@ -133,8 +174,9 @@ def main():
   workflow='.github/workflows/3992-hosted-detector-successor.yml'
   workflow_blob=owner('workflow-from-merge',['git','show',authority['GITHUB_WORKFLOW_SHA']+':'+workflow],repo)
   if workflow_blob!=(repo/workflow).read_text():raise RuntimeError('event merge workflow differs from reviewed head workflow')
+  owned_sources.prepare()
   for label,commit in [('A',A),('C',C)]:
-   src=parent/('gomap3992-source-'+label+'-'+authority['GITHUB_RUN_ID']);owner('worktree-'+label,['git','worktree','add','--detach',src,commit],repo);sources.append(src)
+   src=owned_sources.add(label,commit);sources.append(src)
    if owner('tree-'+label,['git','rev-parse','HEAD^{tree}'],src).strip()!=TREES[commit]:raise RuntimeError('wrong source tree')
    bins[label]=src
   for label,src in [('A',bins['A']),('C',bins['C']),('I',bins['C']),('guards',bins['C'])]:
@@ -173,9 +215,11 @@ def main():
   # Commands are drained before any removal. Remove only paths created by this
   # invocation; do not prune unrelated worktrees, caches, services or processes.
   try:
-   for src in sources:
-    owner('remove-'+src.name,['git','worktree','remove',src],pathlib.Path(os.environ['GITHUB_WORKSPACE']))
-   shutil.rmtree(tmp);cleaned=True
+   cleanup=owned_sources.cleanup();save(out/'source-cleanup.json',cleanup)
+   if not cleanup['complete']:raise RuntimeError('source cleanup incomplete: '+repr(cleanup))
+   shutil.rmtree(tmp)
+   if os.path.lexists(tmp):raise RuntimeError('temporary path remains after cleanup')
+   cleaned=True
   except BaseException as exc:terminal.update(status='ENGINEERING_INVALID',cleanup_error=repr(exc))
   terminal.update(session_drained=owner.owner.active is None,cleanup_complete=cleaned,lease_held_through_audit=True,completed_rows=len(rows));save(out/'host-after.json',snapshot(out,out));save(out/'terminal.json',terminal)
   owner.finish()
