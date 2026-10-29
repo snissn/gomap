@@ -80,7 +80,9 @@ def runtime_environment(env):
 def build_environment(driver, cwd, env):
     keys = ['GOVERSION', 'GOROOT', 'GOTOOLDIR', 'GOOS', 'GOARCH', 'GOAMD64',
             'GOEXPERIMENT', 'GOFLAGS', 'GOTOOLCHAIN', 'CGO_ENABLED', 'CC', 'CXX',
-            'CGO_CFLAGS', 'CGO_CPPFLAGS', 'CGO_CXXFLAGS', 'CGO_LDFLAGS', 'GOGCCFLAGS', 'GOWORK']
+            'CGO_CFLAGS', 'CGO_CPPFLAGS', 'CGO_CXXFLAGS', 'CGO_LDFLAGS', 'GOWORK']
+    # GOGCCFLAGS is generated output containing a fresh go-build temp path on
+    # every query, not a user build knob; compare explicit CGO inputs above.
     resolved = json.loads(subprocess.check_output([str(driver), 'env', '-json', *keys], cwd=cwd, env=env, text=True))
     compiler = Path(resolved['GOTOOLDIR'])/'compile'
     compiler_version = subprocess.check_output([str(driver), 'tool', 'compile', '-V'], cwd=cwd, env=env, text=True).strip()
