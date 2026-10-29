@@ -17,6 +17,47 @@ SPEC.loader.exec_module(MODULE)
 
 
 class VacuumM0SummarizeTest(unittest.TestCase):
+    def test_hosted_verdict_keeps_every_semantic_predicate(self):
+        strict = {"production_cv_at_most_10_percent": False,
+                  "production_fixed_work_complete": True,
+                  "public_status_explicit": True}
+        self.assertFalse(MODULE.capture_passes(strict, "controlled-performance"))
+        self.assertTrue(MODULE.capture_passes(strict, "hosted-semantic"))
+        for name in ("production_fixed_work_complete", "public_status_explicit"):
+            broken = dict(strict, **{name: False})
+            self.assertFalse(MODULE.capture_passes(broken, "hosted-semantic"))
+        with self.assertRaises(ValueError):
+            MODULE.capture_passes(strict, "unknown")
+
+    def test_hosted_requires_all_semantic_samples_despite_timing_noise(self):
+        production, public = self.production_observations()
+        production["foreground-p99-ns/op"]["cv"] = 0.50
+        evaluate = lambda: MODULE.capture_passes(
+            MODULE.evaluate_gates(production, public, "production", "v3"), "hosted-semantic")
+        self.assertTrue(evaluate())
+        for metric in MODULE.REQUIRED_CV_METRICS:
+            production[metric]["samples"].pop()
+            self.assertFalse(evaluate())
+            production[metric]["samples"].append(1)
+        for metric in ("foreground-overlap-samples/op", "foreground-points/op", "foreground-ranges/op",
+                       "foreground-exposure-misses/op", "vacuum-errors/op", "concurrent-aborts/op"):
+            production, public = self.production_observations()
+            production[metric]["samples"][4] += 1
+            self.assertFalse(evaluate(), metric)
+        for metric in ("vacuum-unexpected-errors/op", "foreground-exposure-misses/op"):
+            production, public = self.production_observations()
+            public[metric]["samples"][4] = 1
+            self.assertFalse(evaluate(), metric)
+        production, public = self.production_observations()
+        public["vacuum-concurrent-retries/op"]["samples"] = [1] * 10
+        self.assertFalse(evaluate())
+
+    def test_hosted_profile_cannot_use_legacy_or_historical_contract(self):
+        for arm, contract in (("legacy", "v2"), ("production", "v2")):
+            with self.assertRaises(ValueError):
+                MODULE.validate_qualification("hosted-semantic", arm, contract)
+        MODULE.validate_qualification("hosted-semantic", "production", "v3")
+
     def test_summarize_computes_stable_required_metrics(self):
         with tempfile.TemporaryDirectory() as directory:
             paths = []
@@ -213,6 +254,27 @@ class VacuumM0SummarizeTest(unittest.TestCase):
         self.assertFalse(diagnostic["merge_predicate"])
         self.assertTrue(diagnostic["owner_review_required"])
         self.assertIsNone(diagnostic["owner_review"])
+
+    def test_pr5270_original_total_cv_failure_remains_red(self):
+        # Original complete first-attempt artifact12769235519 at23a3b7a95.
+        # Preserve all ten measured values; this is parser replay, never a rerun.
+        values = [1514468486, 1186300422, 1256447210, 1358639595, 1606549816,
+                  1264589982, 1788559538, 1386407771, 1550251359, 1705774132]
+        production, public = self.production_observations()
+        with tempfile.TemporaryDirectory() as directory:
+            paths = []
+            for index, value in enumerate(values):
+                path = Path(directory) / f'production-{index + 1}.txt'
+                path.write_text(MODULE.STABILITY_BENCHMARKS['production'] +
+                                f'-2 1 {value} vacuum-total-ns/op\nPASS\n')
+                paths.append(path)
+            metric = MODULE.summarize(paths, MODULE.STABILITY_BENCHMARKS['production'])['vacuum-total-ns/op']
+        self.assertEqual(metric['samples'], values)
+        self.assertAlmostEqual(metric['cv'], 0.13891715465811041)
+        production['vacuum-total-ns/op'] = metric
+        gates = MODULE.evaluate_gates(production, public, 'production', 'v3')
+        self.assertFalse(gates['production_cv_at_most_10_percent'])
+        self.assertTrue(all(value for name, value in gates.items() if name != 'production_cv_at_most_10_percent'))
 
     def test_v3_preserves_total_and_foreground_cv_limits(self):
         for metric in MODULE.PRODUCT_V3_CV_METRICS:

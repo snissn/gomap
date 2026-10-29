@@ -6,9 +6,16 @@ set -euo pipefail
 ROOT=$(git rev-parse --show-toplevel)
 RUN_DIR=${RUN_DIR:-"$ROOT/artifacts/treedb-vacuum-m0/$(date +%Y%m%d_%H%M%S)"}
 SHA=$(git rev-parse HEAD)
-mkdir -p "$RUN_DIR"
+export M0_SOURCE_SHA="$SHA"
+# Atomically claim a new packet directory before creating or replacing any
+# packet content. Existing directories (even empty) belong to their caller.
+mkdir -p "$(dirname "$RUN_DIR")"
+if ! mkdir "$RUN_DIR"; then
+  echo 'capture directory already exists; use a fresh RUN_DIR' >&2
+  exit 2
+fi
 RUN_DIR=$(cd "$RUN_DIR" && pwd -P)
-mkdir -p "$RUN_DIR/raw"
+mkdir "$RUN_DIR/raw"
 
 default_cpu_set() {
   local allowed range start end cpu
@@ -32,6 +39,41 @@ default_cpu_set() {
   (IFS=,; printf '%s\n' "${selected[*]}")
 }
 
+# The EXIT receipt runs on setup, admission, measurement and parser failure.
+# It never replaces the failing command's status with a telemetry success.
+export M0_QUALIFICATION_PROFILE=${M0_QUALIFICATION_PROFILE:-controlled-performance}
+export M0_LAST_PHASE=initializing
+terminal_receipt() {
+  local status=$?
+  trap - EXIT
+  python3 "$ROOT/scripts/treedb_vacuum_m0_environment.py" --run-dir "$RUN_DIR" \
+    --phase terminal --exit-code "$status" || { ((status != 0)) || status=2; }
+  exit "$status"
+}
+trap terminal_receipt EXIT
+
+case "$M0_QUALIFICATION_PROFILE:${M0_CONTROLLED:-0}" in
+  hosted-semantic:0|controlled-performance:1) ;;
+  *) echo 'qualification profile and explicit custody mode disagree' >&2; exit 2 ;;
+esac
+
+# Controlled placement must be explicitly configured; defaulting here would
+# conceal a missing administrator topology/lease declaration.
+if [[ ${M0_CONTROLLED:-0} == 1 && ( -z ${CPU_SET:-} || -z ${GOMAXPROCS:-} || -z ${M0_LEASE_PATH:-} ) ]]; then
+  echo 'controlled mode requires explicit CPU_SET, GOMAXPROCS and M0_LEASE_PATH' >&2
+  exit 2
+fi
+export M0_ACCEPTANCE_CONTRACT=${M0_ACCEPTANCE_CONTRACT:-v3}
+case "$M0_ACCEPTANCE_CONTRACT:${M0_CONTROLLED:-0}" in
+  v3:0|v3:1|v4-proposal:1) ;;
+  *) echo 'v4-proposal requires explicit controlled opt-in; otherwise select v3' >&2; exit 2 ;;
+esac
+PAIRED=0
+if [[ $M0_ACCEPTANCE_CONTRACT == v4-proposal ]]; then PAIRED=1; fi
+if [[ $PAIRED == 1 && ! ${M0_BASELINE_SHA:-} =~ ^[0-9a-f]{40}$ ]]; then
+  echo 'controlled paired proposal requires explicitly approved full M0_BASELINE_SHA' >&2
+  exit 2
+fi
 export CPU_SET=${CPU_SET:-$(default_cpu_set)}
 export GOMAXPROCS=${GOMAXPROCS:-2}
 export GOMEMLIMIT=${GOMEMLIMIT:-8GiB}
@@ -45,9 +87,22 @@ PRODUCTION_BENCH='^BenchmarkVacuumIndexOnlineCollectionProductionForegroundChurn
 PUBLIC_BENCH='^BenchmarkPL06ExternalVacuumCollectionForegroundChurn/bytes_64x$'
 PRODUCTION_COMMAND="GOWORK=off GOMAXPROCS=$GOMAXPROCS GOMEMLIMIT=$GOMEMLIMIT taskset -c $CPU_SET go test ./TreeDB/db -run '^$' -bench '$PRODUCTION_BENCH' -benchtime=1x -count=1 -benchmem"
 PUBLIC_COMMAND="GOWORK=off GOMAXPROCS=$GOMAXPROCS GOMEMLIMIT=$GOMEMLIMIT taskset -c $CPU_SET go test ./TreeDB/db -run '^$' -bench '$PUBLIC_BENCH' -benchtime=1x -count=1 -benchmem"
+if [[ $PAIRED == 1 ]]; then
+  PRODUCTION_COMMAND="taskset -c $CPU_SET python3 scripts/treedb_vacuum_m0_baseline.py --run-dir $RUN_DIR --exec-arm candidate -- -test.run '^$' -test.bench '$PRODUCTION_BENCH' -test.benchtime=1x -test.count=1 -test.benchmem"
+  PUBLIC_COMMAND="taskset -c $CPU_SET python3 scripts/treedb_vacuum_m0_baseline.py --run-dir $RUN_DIR --exec-arm candidate -- -test.run '^$' -test.bench '$PUBLIC_BENCH' -test.benchtime=1x -test.count=1 -test.benchmem"
+fi
 printf '%s\n%s\n' "$PRODUCTION_COMMAND" "$PUBLIC_COMMAND" >"$RUN_DIR/commands.txt"
 
 run_go_test() {
+  if [[ $PAIRED == 1 ]]; then
+    local -a flags=()
+    local arg
+    for arg in "$@"; do
+      case "$arg" in -*) flags+=("-test.${arg#-}");; *) flags+=("$arg");; esac
+    done
+    taskset -c "$CPU_SET" python3 "$ROOT/scripts/treedb_vacuum_m0_baseline.py" --run-dir "$RUN_DIR" --exec-arm candidate -- "${flags[@]}"
+    return
+  fi
   GOWORK=off GOMAXPROCS="$GOMAXPROCS" GOMEMLIMIT="$GOMEMLIMIT" \
     taskset -c "$CPU_SET" go test ./TreeDB/db "$@"
 }
@@ -64,12 +119,50 @@ capture_fixture() {
 }
 
 cd "$ROOT"
+export M0_LAST_PHASE=admission
+python3 "$ROOT/scripts/treedb_vacuum_m0_environment.py" --run-dir "$RUN_DIR" --phase admission
+GOWORK=off go env -json GOVERSION GOROOT GOTOOLDIR GOOS GOARCH GOFLAGS GOTOOLCHAIN >"$RUN_DIR/go-environment.json"
+go tool compile -V >"$RUN_DIR/compiler-version.txt"
+if [[ $PAIRED == 1 ]]; then
+  export M0_LAST_PHASE=paired-build
+  python3 "$ROOT/scripts/treedb_vacuum_m0_baseline.py" --repo-root "$ROOT" --run-dir "$RUN_DIR" --source "$M0_BASELINE_SHA"
+  printf '%s\n' "paired samples execute hash-checked candidate-db.test and baseline-db.test; see paired-provenance.json" >>"$RUN_DIR/commands.txt"
+fi
+export M0_LAST_PHASE=fixture
 run_go_test -run '^TestVacuumM0FixtureDeterministicDebtAndOfflineCeiling$' -count=1
 capture_fixture "scripts/treedb_vacuum_m0_capture.sh"
 
+if [[ $PAIRED == 1 ]]; then
+  TREEDB_VACUUM_M0_ARTIFACT="$RUN_DIR/baseline-fixture.json" \
+  TREEDB_VACUUM_M0_GIT_SHA="$M0_BASELINE_SHA" \
+  TREEDB_VACUUM_M0_COMMAND="baseline-db.test -test.run '^TestVacuumM0WriteArtifact$' -test.count=1 -test.v" \
+  TREEDB_VACUUM_M0_DIRTY_STATE=baseline-with-candidate-test-overlay \
+  TREEDB_VACUUM_M0_FILESYSTEM="$FILESYSTEM" \
+  TREEDB_VACUUM_M0_DEVICE="$DEVICE" \
+  TREEDB_VACUUM_M0_TIMING_BOUNDARY="one fixed-work vacuum operation; setup excluded" \
+  taskset -c "$CPU_SET" python3 "$ROOT/scripts/treedb_vacuum_m0_baseline.py" --run-dir "$RUN_DIR" --exec-arm baseline -- -test.run '^TestVacuumM0WriteArtifact$' -test.count=1 -test.v
+  printf '%s\n' "baseline source=$M0_BASELINE_SHA; taskset -c $CPU_SET baseline-db.test -test.run '^$' -test.bench '$PRODUCTION_BENCH' -test.benchtime=1x -test.count=1 -test.benchmem" >>"$RUN_DIR/commands.txt"
+fi
+
+baseline_sample() {
+  local sample=$1
+  export M0_LAST_PHASE="baseline-$sample"
+  python3 "$ROOT/scripts/treedb_vacuum_m0_environment.py" --run-dir "$RUN_DIR" --phase "baseline-$sample-before"
+  taskset -c "$CPU_SET" python3 "$ROOT/scripts/treedb_vacuum_m0_baseline.py" --run-dir "$RUN_DIR" --exec-arm baseline -- -test.run '^$' -test.bench "$PRODUCTION_BENCH" -test.benchtime=1x -test.count=1 -test.benchmem >"$RUN_DIR/raw/baseline-${sample}.txt" 2>&1
+  python3 "$ROOT/scripts/treedb_vacuum_m0_environment.py" --run-dir "$RUN_DIR" --phase "baseline-$sample-after"
+}
+
 for sample in $(seq 1 10); do
-  run_go_test -run '^$' -bench "$PRODUCTION_BENCH" -benchtime=1x -count=1 -benchmem >"$RUN_DIR/raw/production-${sample}.txt"
-  run_go_test -run '^$' -bench "$PUBLIC_BENCH" -benchtime=1x -count=1 -benchmem >"$RUN_DIR/raw/public-${sample}.txt"
+  if [[ $PAIRED == 1 ]] && ((sample % 2 == 1)); then baseline_sample "$sample"; fi
+  export M0_LAST_PHASE="production-$sample"
+  python3 "$ROOT/scripts/treedb_vacuum_m0_environment.py" --run-dir "$RUN_DIR" --phase "production-$sample-before"
+  run_go_test -run '^$' -bench "$PRODUCTION_BENCH" -benchtime=1x -count=1 -benchmem >"$RUN_DIR/raw/production-${sample}.txt" 2>&1
+  python3 "$ROOT/scripts/treedb_vacuum_m0_environment.py" --run-dir "$RUN_DIR" --phase "production-$sample-after"
+  if [[ $PAIRED == 1 ]] && ((sample % 2 == 0)); then baseline_sample "$sample"; fi
+  export M0_LAST_PHASE="public-$sample"
+  python3 "$ROOT/scripts/treedb_vacuum_m0_environment.py" --run-dir "$RUN_DIR" --phase "public-$sample-before"
+  run_go_test -run '^$' -bench "$PUBLIC_BENCH" -benchtime=1x -count=1 -benchmem >"$RUN_DIR/raw/public-${sample}.txt" 2>&1
+  python3 "$ROOT/scripts/treedb_vacuum_m0_environment.py" --run-dir "$RUN_DIR" --phase "public-$sample-after"
 done
 
 cat "$RUN_DIR"/raw/production-*.txt >"$RUN_DIR/production-benchstat-input.txt"
@@ -77,7 +170,11 @@ if command -v benchstat >/dev/null 2>&1; then
   benchstat "$RUN_DIR/production-benchstat-input.txt" >"$RUN_DIR/production-benchstat.txt"
 fi
 
+ACCEPTANCE_CONTRACT=$M0_ACCEPTANCE_CONTRACT
+export M0_LAST_PHASE=summary
 python3 "$ROOT/scripts/treedb_vacuum_m0_summarize_test.py"
-python3 "$ROOT/scripts/treedb_vacuum_m0_summarize.py" --repo-root "$ROOT" --run-dir "$RUN_DIR" --stability-arm production --acceptance-contract v3
+python3 "$ROOT/scripts/treedb_vacuum_m0_paired_test.py"
+python3 "$ROOT/scripts/treedb_vacuum_m0_ci_test.py"
+python3 "$ROOT/scripts/treedb_vacuum_m0_summarize.py" --repo-root "$ROOT" --run-dir "$RUN_DIR" --stability-arm production --acceptance-contract "$ACCEPTANCE_CONTRACT" --qualification-profile "${M0_QUALIFICATION_PROFILE:-controlled-performance}"
 
 echo "M0 artifacts written to $RUN_DIR"

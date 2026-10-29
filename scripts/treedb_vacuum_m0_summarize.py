@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import re
@@ -26,13 +27,28 @@ SIGNED_PHASE_DIAGNOSTICS = {
 
 
 def cv_metrics(stability_arm: str, acceptance_contract: str) -> tuple[str, ...]:
-    if acceptance_contract not in ("v2", "v3"):
+    if acceptance_contract not in ("v2", "v3", "v4-proposal"):
         raise ValueError("unknown acceptance contract")
-    if acceptance_contract == "v3":
+    if acceptance_contract in ("v3", "v4-proposal"):
         if stability_arm != "production":
-            raise ValueError("v3 requires the production stability arm")
+            raise ValueError("v3/v4-proposal requires the production stability arm")
         return PRODUCT_V3_CV_METRICS
     return REQUIRED_CV_METRICS
+
+
+def validate_qualification(profile: str, arm: str, contract: str) -> None:
+    if profile not in ("controlled-performance", "hosted-semantic"):
+        raise ValueError("unknown qualification profile")
+    if profile == "hosted-semantic" and (arm, contract) != ("production", "v3"):
+        raise ValueError("hosted-semantic requires prospective production v3 capture")
+
+
+def capture_passes(gates: dict[str, bool], profile: str) -> bool:
+    validate_qualification(profile, "production", "v3")
+    # Keep the strict predicate, including its failed value, in every packet.
+    # Only the explicitly named timing predicate differs in hosted CI's verdict.
+    return all(value for name, value in gates.items()
+               if profile != "hosted-semantic" or name != "production_cv_at_most_10_percent")
 
 
 def pause_diagnostic(metrics: dict[str, dict[str, object]]) -> dict[str, object]:
@@ -109,6 +125,30 @@ def summarize(paths: list[Path], expected_benchmark: str | None = None) -> dict[
     return result
 
 
+# PROPOSAL: prospective paired guard. This deterministic materiality rule is
+# not a significance test or a confidence bound; no sample may be discarded.
+PAIRED_MATERIAL_RATIO = 1.05
+
+
+def paired_comparison(baseline, candidate):
+    result = {}
+    for name in PRODUCT_V3_CV_METRICS:
+        before, after = baseline[name]["samples"], candidate[name]["samples"]
+        if len(before) != 10 or len(after) != 10:
+            raise ValueError("paired guard requires exactly ten declared pairs")
+        if any(not math.isfinite(x) or x <= 0 for x in [*before, *after]):
+            raise ValueError("paired timing samples must be finite and positive")
+        ratios = [c / b for b, c in zip(before, after)]
+        median = statistics.median(ratios)
+        result[name] = {"ratios": ratios, "median_ratio": median,
+                        "material_ratio_limit": PAIRED_MATERIAL_RATIO,
+                        "passed": median <= PAIRED_MATERIAL_RATIO}
+    return {"status": "provisional-contract-proposal", "estimator": "median of ten paired candidate/baseline ratios",
+            "pair_order": "odd baseline-candidate; even candidate-baseline; public follows each pair",
+            "statistical_inference": None, "metrics": result,
+            "passed": all(x["passed"] for x in result.values())}
+
+
 def classify_public_status(public: dict[str, dict[str, object]]) -> str:
     unsupported = public.get("vacuum-unsupported/op", {}).get("samples", [])
     retries = public.get("vacuum-concurrent-retries/op", {}).get("samples", [])
@@ -143,6 +183,12 @@ def evaluate_gates(
 ) -> dict[str, bool]:
     if stability_arm not in STABILITY_BENCHMARKS:
         raise ValueError("unknown stability arm")
+    gates = evaluate_production_gates(legacy, stability_arm, acceptance_contract)
+    gates["public_status_explicit"] = classify_public_status(public) != "production-index-vacuum-ambiguous"
+    return gates
+
+
+def evaluate_production_gates(legacy, stability_arm="production", acceptance_contract="v3"):
     required_cv = cv_metrics(stability_arm, acceptance_contract)
     missing = [metric for metric in REQUIRED_CV_METRICS if metric not in legacy]
     if missing:
@@ -155,8 +201,6 @@ def evaluate_gates(
             "concurrent-aborts/op" in legacy
             and all(value == 0 for value in legacy["concurrent-aborts/op"]["samples"])
         ),
-        "public_status_explicit": classify_public_status(public)
-        != "production-index-vacuum-ambiguous",
     }
 
     if stability_arm == "production":
@@ -201,6 +245,9 @@ def environment(repo: Path, run_dir: Path, stability_arm: str) -> dict[str, obje
             "results.json",
             "summary.md",
             "commands.txt",
+            "go-environment.json",
+            "compiler-version.txt",
+            "environment-*.json (admission, sample boundaries, terminal)",
             f"{stability_arm}-benchstat-input.txt",
             f"{stability_arm}-benchstat.txt (when benchstat is installed)",
             f"raw/{stability_arm}-*.txt",
@@ -215,6 +262,7 @@ def render_markdown(result: dict[str, object]) -> str:
     stability_arm = result["stability_arm"]
     contract = result.get("acceptance_contract", "v2")
     required_cv = cv_metrics(stability_arm, contract)
+    qualification = result.get("qualification_profile", "controlled-performance")
     legacy = result["metrics"][stability_arm]
     public = result["metrics"]["public"]
     lines = [
@@ -229,6 +277,10 @@ def render_markdown(result: dict[str, object]) -> str:
         f"- Acceptance contract: `{contract}`; no historical result reinterpreted",
         "- Stability predicates: " + ", ".join(f"`{name}` CV <= 0.10" for name in required_cv) + "; no discarded samples",
         f"- Status: `{result['public_status']}`",
+        "",
+        f"- Qualification profile: `{qualification}`",
+        "- Hosted semantic success certifies completed fixed work and classification only; timing acceptance and product performance approval remain separate.",
+        "- Strict predicates below retain their original verdicts, including failures.",
         "",
         "## Fixture",
         "",
@@ -250,7 +302,7 @@ def render_markdown(result: dict[str, object]) -> str:
         if metric not in required_cv:
             classification += ' (diagnostic only; owner review required)'
         lines.append(f"| `{metric}` | {entry['median']:.3f} | {entry['cv']:.4f} | {classification} |")
-    if contract == "v3":
+    if contract in ("v3", "v4-proposal"):
         pause = result["pause_diagnostic"]
         lines.extend(["", f"- Pause maximum: `{pause['maximum']:.0f} ns`; all ten raw maxima and CV remain above/in results.json.",
                       "- Pause distribution and source phase evidence require separate outcome-owner review; this capture does not grant merge approval."])
@@ -278,6 +330,13 @@ def render_markdown(result: dict[str, object]) -> str:
             "",
         ]
     )
+    if "paired_regression_proposal" in result:
+        paired = result["paired_regression_proposal"]
+        lines.extend(["", "## Provisional paired materiality proposal", "",
+                      "Median of ten contemporaneous candidate/baseline ratios <= 1.05 for each v3 timing metric.",
+                      "Original production CV and completion predicates remain mandatory for both arms; public classification is candidate-only. No statistical confidence or product approval is claimed.",
+                      "", *[f"- `{name}`: median ratio `{value['median_ratio']:.6f}`, passed `{value['passed']}`"
+                              for name, value in paired["metrics"].items()]])
     return "\n".join(lines)
 
 
@@ -287,9 +346,12 @@ def main() -> int:
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--stability-arm", choices=tuple(STABILITY_BENCHMARKS), default="legacy",
                         help="legacy retains historical interpretation; production is the current capture contract")
-    parser.add_argument("--acceptance-contract", choices=("v2", "v3"), default="v2",
-                        help="v2 retains all three CV gates; v3 reports pause CV diagnostically with mandatory owner review")
+    parser.add_argument("--acceptance-contract", choices=("v2", "v3", "v4-proposal"), default="v2",
+                        help="v2: historical CV; v3: pause diagnostic; v4-proposal: controlled paired 5 percent guard")
+    parser.add_argument("--qualification-profile", choices=("controlled-performance", "hosted-semantic"),
+                        default="controlled-performance")
     args = parser.parse_args()
+    validate_qualification(args.qualification_profile, args.stability_arm, args.acceptance_contract)
     repo = args.repo_root.resolve()
     run_dir = args.run_dir.resolve()
     fixture = json.loads((run_dir / "fixture.json").read_text())
@@ -299,10 +361,47 @@ def main() -> int:
     public = summarize(sorted((run_dir / "raw").glob("public-*.txt")))
 
     gates = evaluate_gates(legacy, public, arm, args.acceptance_contract)
+    paired = None
+    if args.qualification_profile == "controlled-performance" and (arm, args.acceptance_contract) == ("production", "v4-proposal"):
+        if {path.name for path in (run_dir / "raw").glob("baseline-*.txt")} != {f"baseline-{n}.txt" for n in range(1, 11)}:
+            raise ValueError("paired guard requires exactly the ten declared baseline files")
+        baseline = summarize([run_dir / "raw" / f"baseline-{n}.txt" for n in range(1, 11)], STABILITY_BENCHMARKS[arm])
+        # Explicit numeric pairing, rather than lexical order (1,10,2,...).
+        candidate = summarize([run_dir / "raw" / f"production-{n}.txt" for n in range(1, 11)], STABILITY_BENCHMARKS[arm])
+        baseline_fixture = json.loads((run_dir / "baseline-fixture.json").read_text())
+        if baseline_fixture["fixture"] != fixture["fixture"]:
+            raise ValueError("baseline/candidate fixture mismatch")
+        provenance = json.loads((run_dir / "paired-provenance.json").read_text())
+        if provenance["candidate_source_sha"] != command("git", "rev-parse", "HEAD", cwd=repo):
+            raise ValueError("paired candidate source mismatch")
+        if (not re.fullmatch(r"[0-9a-f]{40}", provenance["baseline_source_sha"])
+                or provenance["baseline_source_sha"] != os.environ.get("M0_BASELINE_SHA")):
+            raise ValueError("paired baseline differs from explicitly approved source")
+        for selected in ("baseline", "candidate"):
+            if hashlib.sha256((run_dir / f"{selected}-db.test").read_bytes()).hexdigest() != provenance[f"{selected}_binary_sha256"]:
+                raise ValueError(f"{selected} binary changed after setup")
+        if provenance["baseline_build_environment"] != provenance["candidate_build_environment"]:
+            raise ValueError("paired compiler/environment mismatch")
+        if provenance["runtime_environment"] != provenance["candidate_build_environment"]["runtime_environment"]:
+            raise ValueError("paired runtime environment mismatch")
+        harness = {str(path.relative_to(repo)): hashlib.sha256(path.read_bytes()).hexdigest()
+                   for path in (repo / "TreeDB/db").glob("*_test.go")}
+        if harness != provenance["candidate_db_test_harness_sha256"]:
+            raise ValueError("paired candidate harness changed after setup")
+        paired = paired_comparison(baseline, candidate)
+        paired["provenance"] = provenance
+        paired["baseline_metrics"] = baseline
+        baseline_gates = evaluate_production_gates(baseline, arm, args.acceptance_contract)
+        gates.update({"baseline_" + name: value for name, value in baseline_gates.items()})
+        gates["paired_material_regression_absent"] = paired["passed"]
     public_status = classify_public_status(public)
     result = {
-        "schema_version": 3 if args.acceptance_contract == "v3" else 2,
+        "schema_version": 4 if args.acceptance_contract == "v4-proposal" else (3 if args.acceptance_contract == "v3" else 2),
         "acceptance_contract": args.acceptance_contract,
+        "qualification_profile": args.qualification_profile,
+        "capture_passed": capture_passes(gates, args.qualification_profile),
+        "strict_performance_predicates_passed": all(gates.values()),
+        "product_performance_approval": None,
         "stability_arm": arm,
         "stability_contract": {"benchmark": STABILITY_BENCHMARKS[arm], "repetitions": 10,
                                "cv_limit": 0.10, "fixed_foreground_operations": 4096,
@@ -314,11 +413,13 @@ def main() -> int:
         "public_status": public_status,
         "gates": gates,
     }
-    if args.acceptance_contract == "v3":
+    if paired is not None:
+        result["paired_regression_proposal"] = paired
+    if args.acceptance_contract in ("v3", "v4-proposal"):
         result["pause_diagnostic"] = pause_diagnostic(legacy)
     (run_dir / "results.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
     (run_dir / "summary.md").write_text(render_markdown(result))
-    return 0 if all(gates.values()) else 1
+    return 0 if capture_passes(gates, args.qualification_profile) else 1
 
 
 if __name__ == "__main__":

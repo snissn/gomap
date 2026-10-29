@@ -1,5 +1,87 @@
 # Index Vacuum Capture
 
+## Provisional paired regression proposal for #4519
+
+This unaccepted `v4-proposal` adds a quantitative baseline comparison to the
+controlled path. V3 CV is scale invariant: a uniform slowdown can pass every CV
+predicate. Historical v2/v3 decoders and failures remain unchanged. Hosted CI
+continues production v3 with ten production/public samples, its existing
+720-second capture budget and 20-minute job limit. Controlled capture also defaults
+to v3, with no baseline requirement. Only explicit M0_ACCEPTANCE_CONTRACT=v4-proposal
+(repository variable TREEDB_M0_ACCEPTANCE_CONTRACT on the admitted controlled route)
+selects the proposal and requires a declared baseline; this code does not
+establish contract acceptance or certify either topology.
+
+Predeclared proposed estimator: for each of total vacuum time and foreground
+p99, compute all ten candidate/baseline timing ratios by numeric sample ID,
+then take their median. Both medians must be <= 1.05 (5% materiality). Odd pairs
+run baseline then candidate; even pairs reverse order. The unchanged public arm
+follows each pair. No sample is discarded, replaced, retried or normalized by
+CV. Both production arms retain v3 fixed-work, zero-error/abort/exposure-miss,
+completion and CV <= 0.10 gates. Pause maxima and CV still require owner review.
+The public arm retains its original classification and timing scope.
+
+Before arming the existing admitted controlled route, the operator must approve
+an exact trusted ancestor commit and set repository variable
+`TREEDB_M0_BASELINE_SHA` (local capture: `M0_BASELINE_SHA`). This is a trust input,
+not a baseline selected after seeing timings. The capture builds that exact
+ancestor under the same Go toolchain/environment with all candidate
+`TreeDB/db/*_test.go` files replacing the ancestor's package test files. Production
+source remains the baseline's. The clean candidate, baseline archive SHA256,
+full test-harness hashes, build command/info and binary SHA256 are retained in
+`paired-provenance.json`. Compilation incompatibility is setup failure; there
+is no fallback harness or baseline. Both binaries generate the original fixture
+artifact and its complete fixture object must match, including digest, debt and
+offline accounting. An arbitrary externally supplied binary is not accepted.
+Both saved binaries and the current harness are rehashed at summary time. Both
+production arms and candidate public/fixture work execute the saved candidate or
+baseline binary through the same descriptor-bound launcher, never an unchecked
+`go test` rebuild. The launcher verifies executable bytes and fixed runtime
+knobs before each invocation. Exact driver/compiler hashes, resolved Go build
+environment and build info are recorded for each arm and must match. A pinned
+resolved GOROOT with GOTOOLCHAIN=local prevents per-module toolchain switching.
+Baseline gates describe baseline production observations only; the unmeasured
+baseline public route receives no public classification. Public evidence is candidate-only.
+
+Controlled output adds `baseline-fixture.json`, `baseline-source.tar`,
+`baseline-source/`, `baseline-db.test`, `candidate-db.test`, `raw/baseline-1.txt` through `-10.txt`,
+per-sample environment observations and provenance. Schema4 retains every pair
+ratio, baseline metric, both arms' original gates, proposed threshold and source
+identity. `product_performance_approval` remains null. These source/build
+artifacts increase controlled storage/upload work. The original 900-second
+controlled capture and 20-minute job budgets are unchanged; fit is unproven and
+an overrun remains engineering failure, never evidence against TreeDB. Do not
+raise budgets, shorten work or drop an arm to obtain a favorable outcome.
+
+The median ratio is a deterministic policy estimator, **not** a significance
+test, confidence interval, power estimate or proof that a <=5% slowdown is absent.
+Ten pairs can miss intermittent/tail regressions, and residual within-pair host
+bias can cause false positives or false negatives near 5%. Alternating order
+reduces a simple order bias; it does not eliminate drift or correlated noise.
+The two metrics also introduce multiple opportunities for a false alarm. A
+failure requires investigation with every predeclared sample retained, not a
+retry toward acceptance. Choosing 5% preserves the existing proposed paired
+guard; its practical false-positive rate and power remain to be demonstrated.
+
+`python3 scripts/treedb_vacuum_m0_paired_test.py` exercises the real summary CLI:
+a synthetic constant 20% slowdown with realistic timing scales and modest noise
+passes historical v3 CV but fails v4-proposal; synthetic unchanged paired noise
+passes. Additional inert tests verify the real shell's alternating 30-sample
+schedule and exact-ancestor/current-harness build preparation. These are
+engineering contract tests, not measured unchanged-noise or injected-regression
+qualification. An untimed baseline preparation/build using Go1.26.10 and exact
+PR base `8e8c15938cb588fe22fd2f9afc46433ef70936a4` passed with the candidate test
+overlay. Its real fixture initially failed because required environment metadata
+was omitted; that engineering failure is retained, the capture now supplies all
+required metadata, and the corrected fixture passed. Its complete fixture
+matches the retained exact `24f6b3e` Go1.26.10 fixture. There are no Go/go.mod/go.sum
+source changes between that base and this proposal. This checks setup/compile
+compatibility, without claiming measured pairing or performance. Before promotion: independent exact-head review, explicit
+owner acceptance of the estimator/threshold and baseline, fresh admitted controlled evidence with unchanged noise and
+physical positive control, custody/release artifacts, budget proof, and the
+applicable exact-head hosted/CI gates remain required. Existing sealed launcher
+packets and their historical source identities do not cover this successor.
+
 ## Current production stability contract
 
 The capture script now measures
@@ -196,3 +278,118 @@ the next foreground candidate fails with `durable-root transaction lineage is
 not consecutive`. M1 must keep the coordinator enabled, cover collection-tail
 mutation separately, and compare its production implementation against this
 fixed-work legacy ceiling without weakening either workload.
+
+## Environment receipts and controlled-runner admission (#4519)
+
+Hosted captures keep their existing first-two-allowed-logical-CPU placement,
+`GOMAXPROCS=2`, `GOMEMLIMIT=8GiB`, ten interleaved sample pairs, timing boundaries
+and v3 numerical predicates. Admission checks that the selected CPUs are allowed
+and the scheduler count is positive and no larger than the selected set. This
+adds environment diagnostics; it does not repair or reclassify an existing CV
+failure, certify a controlled topology, or complete #4519.
+
+The capture now atomically claims a new, nonexistent `RUN_DIR` before creating
+packet content; any existing directory, including an empty one, is refused
+without modifying its files. Choose a new path for each attempt.
+
+Each benchmark has before/after environment receipts outside its process. They
+retain UTC and monotonic timestamps, actual affinity, CPU package/core/SMT
+identities, runner/run identity, kernel, CPU/steal counters, load, disk counters,
+pressure and resolved cgroup-v2 controls. Unavailable optional files carry a
+reason. These snapshots add host activity and change inter-sample pacing even
+though the timed workload, fixed operation counts and numerical predicates are
+preserved. The new harness is not byte-for-byte equivalent to historical
+captures; its changed scheduling requires prospective validation, and old RED
+results keep their original interpretation. Go environment/compiler receipts
+describe the resolved SDK. The EXIT
+receipt preserves the original failing exit code, last phase and hashes of all
+raw files, including partial output and stderr; there are no retries, discarded
+samples, load-based skips or telemetry-derived acceptance overrides. A failed
+sample has a before receipt and terminal failure, rather than a success receipt.
+
+The existing administrator-selected same-repository PR route additionally uses
+`TREEDB_M0_CPU_SET`, `TREEDB_M0_GOMAXPROCS` and `TREEDB_M0_LEASE_PATH` repository
+variables. Controlled qualification additionally requires the independent administrator
+setting `TREEDB_M0_CONTROLLED_ADMISSION_SHA` equal to the exact PR head SHA. Routing alone leaves the
+profile `hosted-semantic`; the admission setting enables `M0_CONTROLLED=1` and
+`controlled-performance` only on that same guarded PR route. All three placement
+and lease variables are required for controlled capture. Unselected PRs ignore
+them. The setting records administrator intent, not independent proof of host
+isolation or a substitute for prospective qualification. Select distinct physical cores explicitly: SMT siblings or unavailable
+core topology fail controlled admission. This is a prospective topology, and old
+captures keep their original interpretation. Forks and other PRs retain hosted
+routing. No runner is registered or reconfigured by the workflow.
+
+The infrastructure owner must provision a dedicated one-job runner under an
+exclusive whole-file **host** `flock` held by an ancestor of `Runner.Listener`,
+for example an administrator wrapper around the runner's one-job listener
+lifetime. The lock path must already exist and be an absolute regular file;
+the kernel lock table must be readable. Admission verifies the kernel WRITE
+FLOCK's device/inode, whole-file range, owner process and listener ancestry.
+Custody receipts retain only executable basename, PID and process start ticks;
+full process command lines are transient and their arguments are never emitted.
+Every boundary and the post-upload step reobserve the same custody identity;
+missing or changed custody fails closed, including after artifact upload. The
+post-upload receipt is retained in job logs and a second immutable custody
+artifact, because the main packet has already uploaded. The helper never acquires a capture-only lock or releases the host
+lease. The administrator wrapper must retain it until the one-job listener exits,
+including failures, cancellation cleanup and all artifact uploads, then release
+it through normal process/descriptor cleanup. Do not share this runner with a
+second listener, and do not treat Actions concurrency or `taskset` as host
+exclusivity. All cooperating local timed work must honor the same host lock.
+
+These are observations of a required external custody contract, not proof that
+uncooperative host activity was excluded or that a wrapper never unlocked
+between observations. Receipts explicitly make no continuous-custody or
+performance-acceptance claim. The owner must independently review the wrapper,
+runner isolation and host workload before controlled qualification. Do not arm
+this route until that provisioning is verified. The unchanged failed hosted
+capture stays RED; the controlled stability and five hosted-allocation exit
+criteria remain open.
+
+Workflow artifacts are named
+`treedb-vacuum-m0-<source-sha>-<run-id>-<run-attempt>`, with a separate
+`treedb-vacuum-m0-custody-<source-sha>-<run-id>-<run-attempt>` observation artifact.
+Successful uploads from authorized job attempts have distinct names and disable
+overwrite, preserving earlier uploaded artifacts. A failed upload does not
+guarantee packet retention. This naming permits retention of a separately
+authorized attempt; it does not authorize a retry or change any
+workload, threshold or prior result. Older captures retain their original names.
+
+
+### External post-release receipt
+
+After the one-job listener exits and the administrator wrapper releases its
+lease, an independent operator on the original host/boot must run a reviewed,
+frozen copy of `scripts/treedb_vacuum_m0_release.py`. Assemble copies of the main
+packet and its post-upload observation artifact in a separate evidence directory;
+never modify the originally downloaded archives. For example:
+
+```sh
+python3 /reviewed-source/scripts/treedb_vacuum_m0_release.py \
+  --packet /evidence/assembled-packet --output /evidence/post-release.json
+```
+
+The output must be a new path outside that assembly. Both success and failure
+receipts refuse overwrite. The helper requires successful admission/post-upload
+observations with identical source, run/attempt, boot and lease identity, and the
+controlled supervisor outcome. The supervisor independently binds its checkout
+HEAD and invocation run/attempt before child launch. Release requires all three
+identities to match the custody receipts, and rejects contradictory completion,
+exit status, termination reason or interruption outcomes. It verifies that the original listener PID/start
+identity has exited and that the original lease inode has no observed kernel
+locks or blocked requests. It records hashes of both custody receipts and the
+supervisor receipt, preserving the capture outcome even when it failed. It
+neither acquires nor releases the lease. A later lock holder can cause the
+observation to fail; do not treat that as evidence that the original job retained
+its lock. No automatic retry is provided.
+
+Publish the separate receipt with the original artifacts and reviewed external
+wrapper identity. Neither a job nor this post-release snapshot proves continuous
+lock custody between observations, excludes noncooperating host activity, or
+makes a performance-acceptance claim. Missing post-release evidence leaves the
+custody chain incomplete. Host reboot, machine loss, unavailable kernel data or
+an unobservable release also leave it incomplete. The external wrapper and
+runner lifecycle remain independently reviewed infrastructure, not PR code
+executed with host authority. Moderate host-activity authorization does not waive
+any existing quiet-host predicate, numerical threshold or retained RED evidence.
