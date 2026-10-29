@@ -67,6 +67,8 @@ class SourceCleanupContracts(unittest.TestCase):
   if label=='worktree-A' and self.failure=='partial-directory':
    (self.sources.paths['A']/'partial').write_text('inert')
    raise RuntimeError('injected add failure before registration')
+  if label=='remove-A' and self.failure=='moved-during-remove':
+   self.move_and_deregister('A');return ''
   result=self.git_run(argv,cwd)
   if label=='worktree-A' and self.failure=='observer':raise RuntimeError('injected observer failure after real registration')
   if label=='remove-A' and self.failure=='remove-observer':raise RuntimeError('injected observer failure after removal')
@@ -121,6 +123,21 @@ class SourceCleanupContracts(unittest.TestCase):
   self.sources.prepare();src=self.sources.add('A','HEAD');src.rename(self.sources.root/'original-A')
   foreign=self.root/'foreign';foreign.mkdir();(foreign/'keep').write_text('preserve');src.symlink_to(foreign,target_is_directory=True)
   self.assertFalse(self.sources.cleanup()['complete']);self.assertTrue(src.is_symlink());self.assertEqual((foreign/'keep').read_text(),'preserve')
+ def move_and_deregister(self,label):
+  src=self.sources.paths[label];metadata=pathlib.Path((src/'.git').read_text().removeprefix('gitdir: ').strip())
+  moved=self.root/('moved-outside-private-'+label);src.rename(moved)
+  import shutil
+  shutil.rmtree(metadata) # Remove only this synthetic test's exact registration.
+  return moved
+ def test_moved_outside_parent_and_deregistered_is_incomplete(self):
+  self.sources.prepare();self.sources.add('A','HEAD');moved=self.move_and_deregister('A')
+  result=self.sources.cleanup();self.assertFalse(result['complete']);self.assertTrue(moved.is_dir())
+  self.assertGreater(result['held_source_identities']['A']['nlink'],0)
+  self.assertNotIn(self.sources.paths['A'],self.sources.registrations('test-list'))
+ def test_moved_during_remove_and_deregistered_is_incomplete(self):
+  self.sources.prepare();self.sources.add('A','HEAD');self.failure='moved-during-remove'
+  result=self.sources.cleanup();self.assertFalse(result['complete'])
+  self.assertTrue((self.root/'moved-outside-private-A').is_dir());self.assertGreater(result['held_source_identities']['A']['nlink'],0)
  def test_residue_created_after_remove_is_preserved(self):
   self.sources.prepare();src=self.sources.add('A','HEAD');self.failure='post-remove-replacement'
   self.assertFalse(self.sources.cleanup()['complete']);self.assertEqual((src/'foreign').read_text(),'preserve')

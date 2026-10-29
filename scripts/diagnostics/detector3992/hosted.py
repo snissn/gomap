@@ -153,7 +153,7 @@ class OwnedSources:
   self.provenance[label]=self.registration_identity(label)
   return src
  def cleanup(self):
-  errors=[]
+  errors=[];held_sources={}
   for label,src in self.paths.items():
    try:
     registered=self.registrations('cleanup-list-'+label);exists=os.path.lexists(src)
@@ -167,6 +167,13 @@ class OwnedSources:
     # Never rmtree a path left or recreated by remove, even if formerly owned.
     if os.path.lexists(src):raise RuntimeError('source residue after removal preserved')
    except BaseException as exc:errors.append(repr(exc))
+  # Namespace absence cannot prove deletion: an open directory may have moved.
+  for label,fd in self.source_fds.items():
+   try:
+    st=os.fstat(fd);held_sources[label]={'device':st.st_dev,'inode':st.st_ino,'nlink':st.st_nlink,'uid':st.st_uid}
+    if st.st_nlink>0:errors.append('held source directory remains linked: '+label)
+   except BaseException as exc:
+    held_sources[label]={'error':repr(exc)};errors.append('held source identity unverified: '+label)
   try:
    registered=self.registrations('cleanup-final-registrations')
    remaining=[str(src) for src in self.paths.values() if os.path.lexists(src) or src in registered]
@@ -181,7 +188,7 @@ class OwnedSources:
    for fd in self.source_fds.values():os.close(fd)
    self.source_fds.clear()
    if self.root_fd is not None:os.close(self.root_fd);self.root_fd=None
-  return {'complete':not errors and not remaining,'errors':errors,'remaining':remaining,'intended':[str(p) for p in self.paths.values()],'attempted':sorted(self.started)}
+  return {'complete':not errors and not remaining,'errors':errors,'remaining':remaining,'intended':[str(p) for p in self.paths.values()],'attempted':sorted(self.started),'held_source_identities':held_sources}
 
 def main():
  authority=authorize(os.environ,json.loads(pathlib.Path(os.environ['GITHUB_EVENT_PATH']).read_text()));seal=verify_seal()

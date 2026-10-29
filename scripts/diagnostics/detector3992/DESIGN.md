@@ -115,6 +115,9 @@ provenance and are preserved as incomplete. Missing/replaced sources or parents,
 changed registration links, and residue recreated after removal are preserved;
 there is no fallback rmtree of source paths and no global Git prune. Both intended
 paths and registrations plus the private parent must be absent for completion.
+Before closing held source descriptors, cleanup also records their device, inode,
+uid and link count; any positive link count fails completion even when the
+original path and registration vanished, preserving moved-source evidence.
 The private namespace and held identities isolate ordinary task collisions; this
 is not protection against a malicious same-UID process racing inside the owner's
 private namespace or a platform administrator.
