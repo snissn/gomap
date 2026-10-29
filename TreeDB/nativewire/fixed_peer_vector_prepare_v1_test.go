@@ -415,7 +415,7 @@ func runFixedPeerVectorPrepareRealRaftV1(t *testing.T, loseResult, nonphysical, 
 		t.Helper()
 		for i := range configs {
 			var err error
-			nodes[i], err = fixedPeerOpenTestRuntimeV1(t, configs[i])
+			nodes[i], err = fixedPeerOpenTestRuntimeWithElectionLogV1(t, configs[i], round)
 			if err != nil {
 				t.Fatalf("open %s node %s: %v", round, configs[i].NodeID, err)
 			}
@@ -452,7 +452,8 @@ func runFixedPeerVectorPrepareRealRaftV1(t *testing.T, loseResult, nonphysical, 
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	client := nodes[0].client
-	observeStatus, reportStatus := fixedPeerFailureStatusRecorder(t, nodes)
+	observeStatus, reportStatus, statusPhase := fixedPeerFailureStatusRecorder(t, nodes)
+	statusPhase("initial-catalog-leader")
 	defer reportStatus()
 	var leader raftcluster.NodeID
 	fixedPeerWaitV1(t, ctx, func() bool {
@@ -473,10 +474,12 @@ func runFixedPeerVectorPrepareRealRaftV1(t *testing.T, loseResult, nonphysical, 
 	if err != nil {
 		t.Fatal(err)
 	}
+	statusPhase("initial-catalog-publication")
 	if _, err := client.PublishCatalog(ctx, leader, command); err != nil {
 		t.Fatal(err)
 	}
 	group := configs[0].Groups[0]
+	statusPhase("initial-catalog-and-data-readiness")
 	fixedPeerWaitV1(t, ctx, func() bool {
 		for _, node := range nodes {
 			status, err := observeStatus(ctx, node)

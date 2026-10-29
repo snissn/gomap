@@ -45,11 +45,20 @@ func fixedPeerReadyV1(t testing.TB, ctx context.Context, names []string) ([]Fixe
 		t.Fatal(err)
 	}
 	t.Cleanup(client.Close)
+	history := newFixedPeerElectionStatusHistoryV1()
+	defer history.report(t)
+	observeStatus := func(node raftcluster.NodeID) (FixedPeerTCPStatusV1, error) {
+		started := time.Now()
+		status, err := client.Status(ctx, node)
+		history.observe(node, started, status, err)
+		return status, err
+	}
 	wait := func(check func() bool) { fixedPeerWaitV1(t, ctx, check) }
+	history.setPhase("initial-catalog-leader")
 	var metaLeader raftcluster.NodeID
 	wait(func() bool {
 		for _, c := range configs {
-			s, e := client.Status(ctx, c.NodeID)
+			s, e := observeStatus(c.NodeID)
 			// Raft can elect a leader before that process finishes opening its
 			// data stores and HTTP listener. A follower's hint is not RPC readiness.
 			if e == nil && s.CatalogRaft.State == "Leader" && s.CatalogRaft.LeaderID == c.NodeID {
@@ -73,12 +82,14 @@ func fixedPeerReadyV1(t testing.TB, ctx context.Context, names []string) ([]Fixe
 	if err != nil {
 		t.Fatal(err)
 	}
+	history.setPhase("initial-catalog-publication")
 	if _, err := client.PublishCatalog(ctx, metaLeader, command); err != nil {
 		t.Fatal(err)
 	}
+	history.setPhase("initial-catalog-and-data-readiness")
 	wait(func() bool {
 		for _, c := range configs {
-			s, e := client.Status(ctx, c.NodeID)
+			s, e := observeStatus(c.NodeID)
 			if e != nil || s.Catalog.Epoch != 1 {
 				return false
 			}
@@ -938,7 +949,18 @@ func TestFixedPeerTCPRuntimeProcessV1(t *testing.T) {
 	for address, listener := range listeners {
 		t.Logf("listener ownership node=%s address=%s owner_pid=%d actual=%s", config.NodeID, address, os.Getpid(), listener.Addr())
 	}
-	runtime, err := openFixedPeerTCPRuntimeV1(config, listeners)
+	// Cost protocols retain their existing discarded logger and stdin handling.
+	costMode := os.Getenv("GOMAP_ACCEPTED_COMPARATIVE_COST_V1") == "1" || os.Getenv("GOMAP_FIXED_PEER_COST_SETUP_PREFLIGHT_V1") == "1"
+	var raftLog func(raftcluster.GroupID) io.Writer
+	if !costMode {
+		capture := newFixedPeerElectionLogCaptureV1()
+		raftLog = capture.groupWriter
+		// The parent emits this private child logfile only on failure/error.
+		// No new stdin reader or signal protocol is introduced. A forced kill
+		// can lose this in-memory tail; orderly exit includes close diagnostics.
+		defer capture.dump(os.Stderr, fmt.Sprintf("child node=%s pid=%d", config.NodeID, os.Getpid()))
+	}
+	runtime, err := openFixedPeerTCPRuntimeWithRaftLogV1(config, listeners, raftLog)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -949,7 +971,7 @@ func TestFixedPeerTCPRuntimeProcessV1(t *testing.T) {
 		t.Fatal(err)
 	}
 	fixedPeerActiveInvalidationChildV1(runtime)
-	if os.Getenv("GOMAP_ACCEPTED_COMPARATIVE_COST_V1") == "1" || os.Getenv("GOMAP_FIXED_PEER_COST_SETUP_PREFLIGHT_V1") == "1" {
+	if costMode {
 		fixedPeerCostChildV1(t, runtime)
 	} else {
 		_, _ = io.Copy(io.Discard, os.Stdin)

@@ -64,6 +64,10 @@ func newFixedPeerTCPTransportOwnedV1(listen string, advertised net.Addr, timeout
 }
 
 func newFixedPeerTCPTransportListenerV1(listener net.Listener, advertised net.Addr, timeout time.Duration, security *peerTransportSecurityV1, peers []raftcluster.Peer, admission *peerNodeAdmissionV1, scope string) (*hraft.NetworkTransport, *fixedPeerTCPStreamV1, error) {
+	return newFixedPeerTCPTransportListenerWithLogV1(listener, advertised, timeout, security, peers, admission, scope, io.Discard)
+}
+
+func newFixedPeerTCPTransportListenerWithLogV1(listener net.Listener, advertised net.Addr, timeout time.Duration, security *peerTransportSecurityV1, peers []raftcluster.Peer, admission *peerNodeAdmissionV1, scope string, logOutput io.Writer) (*hraft.NetworkTransport, *fixedPeerTCPStreamV1, error) {
 	var err error
 	if admission != nil {
 		listener, err = admission.listener(listener)
@@ -89,7 +93,10 @@ func newFixedPeerTCPTransportListenerV1(listener net.Listener, advertised net.Ad
 		}
 		stream.Listener = &peerSecureListenerV1{Listener: listener, security: security, allowed: allowed, admission: admission, scope: scope}
 	}
-	return hraft.NewNetworkTransport(stream, 4, timeout, io.Discard), stream, nil
+	if logOutput == nil {
+		logOutput = io.Discard
+	}
+	return hraft.NewNetworkTransport(stream, 4, timeout, logOutput), stream, nil
 }
 
 func (s *fixedPeerTCPStreamV1) Addr() net.Addr { return s.advertised }

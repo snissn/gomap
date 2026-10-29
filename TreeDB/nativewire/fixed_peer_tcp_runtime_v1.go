@@ -449,7 +449,14 @@ func OpenFixedPeerTCPRuntimeV1(config FixedPeerTCPConfigV1) (*FixedPeerTCPRuntim
 	return openFixedPeerTCPRuntimeV1(config, nil)
 }
 
-func openFixedPeerTCPRuntimeV1(config FixedPeerTCPConfigV1, listeners map[string]net.Listener) (runtime *FixedPeerTCPRuntimeV1, openErr error) {
+func openFixedPeerTCPRuntimeV1(config FixedPeerTCPConfigV1, listeners map[string]net.Listener) (*FixedPeerTCPRuntimeV1, error) {
+	return openFixedPeerTCPRuntimeWithRaftLogV1(config, listeners, nil)
+}
+
+// The optional sink is instance-owned and resolved once per hosted group. Normal
+// callers retain discarded logs; tests can retain bounded consensus diagnostics
+// without changing global logging, Raft configuration or transport behavior.
+func openFixedPeerTCPRuntimeWithRaftLogV1(config FixedPeerTCPConfigV1, listeners map[string]net.Listener, raftLog func(raftcluster.GroupID) io.Writer) (runtime *FixedPeerTCPRuntimeV1, openErr error) {
 	defer func() {
 		if openErr != nil {
 			for _, listener := range listeners {
@@ -550,7 +557,13 @@ func openFixedPeerTCPRuntimeV1(config FixedPeerTCPConfigV1, listeners map[string
 		if e != nil {
 			return fail(e)
 		}
-		transport, stream, e := newFixedPeerTCPTransportListenerV1(listener, addr, r.config.RequestTimeout, client.security, g.Peers, admission, "raft:"+string(g.ID))
+		var logOutput io.Writer = io.Discard
+		if raftLog != nil {
+			if sink := raftLog(g.ID); sink != nil {
+				logOutput = sink
+			}
+		}
+		transport, stream, e := newFixedPeerTCPTransportListenerWithLogV1(listener, addr, r.config.RequestTimeout, client.security, g.Peers, admission, "raft:"+string(g.ID), logOutput)
 		if e != nil {
 			return fail(e)
 		}
@@ -567,7 +580,7 @@ func openFixedPeerTCPRuntimeV1(config FixedPeerTCPConfigV1, listeners map[string
 		raftConfig.HeartbeatTimeout = r.config.RaftTimeout
 		raftConfig.ElectionTimeout = r.config.RaftTimeout
 		raftConfig.LeaderLeaseTimeout = r.config.RaftTimeout
-		raftConfig.LogOutput = io.Discard
+		raftConfig.LogOutput = logOutput
 		// Bound the existing Raft envelope to one already-bounded command.
 		// Pipelining remains HashiCorp's; snapshots retain streaming catch-up.
 		if admission != nil {
