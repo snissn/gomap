@@ -262,11 +262,17 @@ func TestDurableRootMetadataReuseProcessCut4627(t *testing.T) {
 	for _, mode := range []string{"before-seal", "after-ack"} {
 		t.Run(mode, func(t *testing.T) {
 			dir := t.TempDir()
-			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			// The child performs 64 synchronized metadata publications before the
+			// cut. Allow for slow storage on shared CI runners while keeping a
+			// bounded deadline for hangs.
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 			defer cancel()
 			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestDurableRootMetadataReuseProcessCut4627$")
 			cmd.Env = append(os.Environ(), "TREEDB_METADATA_REUSE_CUT4627="+mode, "TREEDB_METADATA_REUSE_DIR4627="+dir)
 			output, err := cmd.CombinedOutput()
+			if ctx.Err() != nil {
+				t.Fatalf("child did not hit cut before deadline: %v (process error: %v)\n%s", ctx.Err(), err, output)
+			}
 			if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 73 {
 				t.Fatalf("child did not hit cut: %v\n%s", err, output)
 			}
