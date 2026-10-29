@@ -47,6 +47,9 @@ func proposalOrderedACKImageChild(t *testing.T, scenario string) {
 	// Observe snapshots every file at each staging hook. Keep unused index
 	// capacity small while retaining every observation and the progress deadlines.
 	opts.ChunkSize = 64 << 10
+	// Bound the fixed WAL container copied by every full observation. The
+	// default starts near 4 MiB even when the index chunk is much smaller.
+	opts.CommandWALSegmentTargetBytes = 256 << 10
 	opts.BackgroundCheckpointIdleDuration = -1
 	opts.BackgroundIndexVacuumInterval = -1
 	opts.MaxWALBytes = -1
@@ -65,7 +68,22 @@ func proposalOrderedACKImageChild(t *testing.T, scenario string) {
 	if err := database.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
-	baselineLSN, err := strconv.ParseUint(database.Stats()["treedb.applied_command_lsn"], 10, 64)
+	baselineStats := database.Stats()
+	baselineWALPath := baselineStats["treedb.command_wal.writer.path"]
+	if baselineWALPath == "" {
+		t.Fatal("baseline command-WAL writer path unavailable")
+	}
+	walInfo, err := os.Stat(baselineWALPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Fixed-container header, witnesses and alignment fit within this 8 KiB
+	// allowance. Stream fallback may have an empty new active segment.
+	if !walInfo.Mode().IsRegular() || walInfo.Size() > opts.CommandWALSegmentTargetBytes+(8<<10) {
+		t.Fatalf("observer WAL fixture escaped budget: path=%q mode=%s bytes=%d target=%d", baselineWALPath, walInfo.Mode(), walInfo.Size(), opts.CommandWALSegmentTargetBytes)
+	}
+	t.Logf("observer WAL fixture: path=%q container=%s bytes=%d target=%d", baselineWALPath, baselineStats["treedb.command_wal.writer.container"], walInfo.Size(), opts.CommandWALSegmentTargetBytes)
+	baselineLSN, err := strconv.ParseUint(baselineStats["treedb.applied_command_lsn"], 10, 64)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,6 +205,11 @@ func proposalOrderedACKImageChild(t *testing.T, scenario string) {
 	stable := model.Clone()
 	observationMu.Unlock()
 	restore()
+	// Segment sequences only advance. A smaller target must not introduce a
+	// rotation while staging or completing this same FIFO reproduction.
+	if got := database.Stats()["treedb.command_wal.writer.path"]; got != baselineWALPath {
+		t.Fatalf("command WAL rotated during ACK fixture: path=%q baseline=%q", got, baselineWALPath)
+	}
 	physical := cowOrderedCapturePhysical(t, database, versions)
 	result, reopened, closeReopened, err := powerlossreopen.Stable(stable, opts, false)
 	if err != nil || result.Rejected || reopened == nil {
