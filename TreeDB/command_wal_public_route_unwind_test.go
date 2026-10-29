@@ -22,7 +22,7 @@ func TestPublicCommandWALRouteUnwind(t *testing.T) {
 		publicCommandWALRouteUnwindChild(t, spec)
 		return
 	}
-	for _, route := range []string{"point-flush", "point-sync", "batch-flush", "batch-postappend-hook", "batch-assigned-hook", "batch-assigned-drain", "batch-assigned-flush"} {
+	for _, route := range []string{"point-flush", "point-sync", "batch-flush", "batch-postappend-hook", "batch-assigned-hook", "batch-assigned-drain", "batch-assigned-flush", "range-flush", "range-postappend-hook", "mixed-flush"} {
 		for _, mode := range []string{"modern-nil", "legacy-nil", "goexit"} {
 			t.Run(route+"/"+mode, func(t *testing.T) {
 				ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -55,7 +55,7 @@ func publicCommandWALRouteUnwindChild(t *testing.T, spec string) {
 	if db.ResolvedProfile() != ProfileCommandWALDurable || db.cached.COWMode() {
 		t.Fatal("ordinary command WAL fixture inactive")
 	}
-	anchor, value := []byte("durable-anchor"), []byte("stable")
+	anchor, value := []byte("0-durable-anchor"), []byte("stable")
 	if err = db.SetSync(anchor, value); err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func publicCommandWALRouteUnwindChild(t *testing.T, spec string) {
 	calls := 0
 	unregister := db.backend.RegisterCommandWALRawPublishBarrier(func() error {
 		calls++
-		if route == "batch-postappend-hook" && calls == 2 {
+		if (route == "batch-postappend-hook" || route == "range-postappend-hook") && calls == 2 {
 			fault()
 		}
 		if strings.HasPrefix(route, "batch-assigned-") {
@@ -120,10 +120,19 @@ func publicCommandWALRouteUnwindChild(t *testing.T, spec string) {
 		} else {
 			b := db.NewBatch()
 			defer b.Close()
-			if e := b.Set([]byte("uncertain-batch"), []byte("pending")); e != nil {
-				err = e
-				returned = true
-				return
+			if strings.HasPrefix(route, "range-") || strings.HasPrefix(route, "mixed-") {
+				if e := b.DeleteRange([]byte("a"), []byte("z")); e != nil {
+					err = e
+					returned = true
+					return
+				}
+			}
+			if !strings.HasPrefix(route, "range-") {
+				if e := b.Set([]byte("uncertain-batch"), []byte("pending")); e != nil {
+					err = e
+					returned = true
+					return
+				}
 			}
 			err = b.WriteSync()
 		}
@@ -148,10 +157,19 @@ func publicCommandWALRouteUnwindChild(t *testing.T, spec string) {
 	}
 	proof := strings.Join(stack, "\n")
 	require := []string{"appendAndCaptureOrdinaryPublicCommandWAL"}
-	if strings.HasPrefix(route, "batch-") {
-		require = append(require, "appendRawKVBatchPayloadCommandWALPreparedCapture", "WriteSync")
+	if !strings.HasPrefix(route, "point-") {
+		require = append(require, "WriteSync")
+		if strings.HasPrefix(route, "batch-") {
+			require = append(require, "appendRawKVBatchPayloadCommandWALPreparedCapture")
+		}
 	} else {
 		require = append(require, "SetSync")
+	}
+	if strings.HasPrefix(route, "range-") {
+		require = append(require, "writeRangeSpanBatch")
+	}
+	if strings.HasPrefix(route, "mixed-") {
+		require = append(require, "writeRangeBatch", "writeRegularLocked")
 	}
 	if strings.HasPrefix(route, "batch-assigned-") {
 		require = append(require, "captureCommandWALPrefixAfterAppend")
@@ -222,5 +240,73 @@ func publicCommandWALRouteUnwindChild(t *testing.T, spec string) {
 	got, e := reopened.Get(anchor)
 	if e != nil || string(got) != string(value) {
 		t.Fatalf("durable anchor=%q err=%v", got, e)
+	}
+}
+
+// Return an actual append/flush error through the public writer, rather than
+// failing validation before the callback. Child processes bound lock regressions.
+func TestPublicCommandWALBatchAppendReturnedError(t *testing.T) {
+	if route := os.Getenv("GOMAP_PUBLIC_BATCH_ERROR_CHILD"); route != "" {
+		opts := commandWALDurabilityProofOptions(t.TempDir())
+		opts.MemtableMode = "btree"
+		db, err := Open(opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if db.cached.COWMode() {
+			t.Fatal("ordinary fixture inactive")
+		}
+		b := db.NewBatch()
+		defer b.Close()
+		if route != "point" {
+			if err := b.DeleteRange([]byte("a"), []byte("z")); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if route != "range" {
+			if err := b.Set([]byte("key"), []byte("value")); err != nil {
+				t.Fatal(err)
+			}
+		}
+		sentinel := errors.New("injected public append flush failure")
+		fired := false
+		restore := durabilitycut.Install(func(e durabilitycut.Event) error {
+			if e.Resource == durabilitycut.ResourceCommandWAL && e.Point == durabilitycut.BeforeUserspaceFlush {
+				fired = true
+				return sentinel
+			}
+			return nil
+		})
+		err = b.WriteSync()
+		restore()
+		if !fired || !errors.Is(err, sentinel) {
+			t.Fatalf("fired=%v error=%v; lost sentinel", fired, err)
+		}
+		if err := db.SetSync([]byte("later"), []byte("no")); !errors.Is(err, ErrRecoveryRequired) {
+			t.Fatalf("later write=%v", err)
+		}
+		done := make(chan error, 1)
+		go func() { done <- db.Close() }()
+		select {
+		case err := <-done:
+			if err != nil && !errors.Is(err, ErrRecoveryRequired) && !errors.Is(err, sentinel) {
+				t.Fatalf("Close=%v", err)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("returned append error retained cache custody")
+		}
+		return
+	}
+	for _, route := range []string{"point", "range", "mixed"} {
+		t.Run(route, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestPublicCommandWALBatchAppendReturnedError$", "-test.timeout=12s", "-test.v")
+			cmd.Env = append(os.Environ(), "GOMAP_PUBLIC_BATCH_ERROR_CHILD="+route)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("%v\n%s", err, out)
+			}
+		})
 	}
 }

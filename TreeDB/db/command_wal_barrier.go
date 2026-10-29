@@ -285,18 +285,16 @@ func (db *DB) acquireCommandWALPublishWithBarriersAfterAppend(owner *transaction
 	}
 	held := false
 	returned := false
-	if assignedLSN != 0 {
-		defer func() {
-			if !returned {
-				// This handles both a hook panic under the acquired leases and
-				// an unlocked Drain panic. Publish poison before any owned release.
-				poisonAssigned()
-				if held {
-					db.unlockCommandWALRawPublishWithAdmissionAndTeardown()
-				}
+	defer func() {
+		if !returned {
+			// Lease cleanup applies before assignment too. Poison only an
+			// already-assigned command; preserve preassignment rejection policy.
+			poisonAssigned()
+			if held {
+				db.unlockCommandWALRawPublishWithAdmissionAndTeardown()
 			}
-		}()
-	}
+		}
+	}()
 	if db != nil && db.nativeSemanticActive.Load() && (owner == nil || owner != db.privateCOWOwner) {
 		poisonAssigned()
 		returned = true

@@ -74,3 +74,60 @@ func TestCommandWALAssignedCaptureAbnormalUnwind(t *testing.T) {
 		})
 	}
 }
+
+// Unassigned acquisition has the same lease obligation without acquiring the
+// assigned-command poisoning obligation.
+func TestCommandWALUnassignedBarrierAbnormalUnwind(t *testing.T) {
+	for _, mode := range []string{"nil", "goexit"} {
+		t.Run(mode, func(t *testing.T) {
+			d, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			unregister := d.RegisterCommandWALRawPublishBarrier(func() error {
+				if mode == "goexit" {
+					runtime.Goexit()
+				}
+				panic(nil)
+			})
+			done := make(chan struct{})
+			returned := false
+			go func() {
+				defer close(done)
+				defer func() { _ = recover() }()
+				_, _ = d.LockCommandWALPublishWithBarriers()
+				returned = true
+			}()
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+				t.Fatal("unassigned unwind stuck")
+			}
+			unregister()
+			if returned {
+				t.Fatal("abnormal hook returned")
+			}
+			if !d.commandWALRawPublishMu.TryLock() {
+				t.Fatal("publication retained")
+			}
+			d.commandWALRawPublishMu.Unlock()
+			if !d.commandWALRawAdmissionMu.TryLock() {
+				t.Fatal("admission retained")
+			}
+			d.commandWALRawAdmissionMu.Unlock()
+			if !d.teardownMu.TryLock() {
+				t.Fatal("teardown retained")
+			}
+			d.teardownMu.Unlock()
+			if d.commandWALFlushPoisoned.Load() {
+				t.Fatal("unassigned unwind incorrectly poisoned append")
+			}
+			if _, err := d.AppendRawKVBatchPayloadCommandWALTrusted(continuousCapturePayload(t), false); err != nil {
+				t.Fatalf("later append=%v", err)
+			}
+			if err := d.Close(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}

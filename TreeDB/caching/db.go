@@ -38320,37 +38320,40 @@ func (b *Batch) writeRangeSpanBatch(sync bool, ranges []batch.DeleteRange) (err 
 	}
 	defer b.db.writeMu.Unlock()
 
-	b.db.mu.Lock()
-	rotate := b.db.mutableBytes.Load() > 0
-	if !rotate {
-		for i := range b.db.mutableShards {
-			mt := b.db.mutableShards[i].mem
-			if mt != nil && mt.Len() != 0 {
-				rotate = true
-				break
+	if err := func() error {
+		b.db.mu.Lock()
+		defer b.db.mu.Unlock()
+		rotate := b.db.mutableBytes.Load() > 0
+		if !rotate {
+			for i := range b.db.mutableShards {
+				mt := b.db.mutableShards[i].mem
+				if mt != nil && mt.Len() != 0 {
+					rotate = true
+					break
+				}
 			}
 		}
-	}
-	if rotate {
-		if err := b.db.rotateMutableShardsLocked(minMemtablePrealloc, false); err != nil {
-			b.db.mu.Unlock()
+		if rotate {
+			if err := b.db.rotateMutableShardsLocked(minMemtablePrealloc, false); err != nil {
+				return err
+			}
+		}
+		if b.commandWALAppend != nil {
+			if err := b.commandWALAppend(); err != nil {
+				return err
+			}
+			commandWALAppended = true
+		}
+		if err := b.db.enqueueRangeSpanLayerLocked(ranges); err != nil {
 			return err
 		}
-	}
-	if b.commandWALAppend != nil {
-		if err := b.commandWALAppend(); err != nil {
-			b.db.mu.Unlock()
-			return err
-		}
-		commandWALAppended = true
-	}
-	if err := b.db.enqueueRangeSpanLayerLocked(ranges); err != nil {
-		b.db.mu.Unlock()
+		b.db.conditionalRecordCommittedEntries(nil, ranges)
+		b.db.publishMemtablesLocked()
+
+		return nil
+	}(); err != nil {
 		return err
 	}
-	b.db.conditionalRecordCommittedEntries(nil, ranges)
-	b.db.publishMemtablesLocked()
-	b.db.mu.Unlock()
 
 	b.db.noteWrite()
 	b.db.maybeAssistFlush()
