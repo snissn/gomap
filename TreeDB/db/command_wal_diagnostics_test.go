@@ -169,3 +169,64 @@ func TestInspectClosedCommandWALRetainsExistingCloseErrors(t *testing.T) {
 		t.Fatalf("lost existing terminal errors: %+v", out)
 	}
 }
+
+func TestInspectClosedCommandWALPoisonPreventsReplayAuthority(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		fail        func(*DB) error
+		wantError   error
+		publication bool
+	}{
+		{"ambiguous metadata sync", func(db *DB) error {
+			db.testFailSyncMeta.Store(true)
+			defer db.testFailSyncMeta.Store(false)
+			return db.SetSync([]byte("uncertain"), []byte("second"))
+		}, errTestSyncMetaFailpoint, true},
+		{"post-append WAL flush", func(db *DB) error {
+			db.testFailCommandWALFlush.Store(true)
+			defer db.testFailCommandWALFlush.Store(false)
+			return db.SetSync([]byte("uncertain"), []byte("second"))
+		}, errTestCommandWALFlushFailpoint, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			enableCommandWALFormat(t, dir)
+			database := openCommandWALDB(t, dir)
+			defer database.Close()
+			if err := database.SetSync([]byte("covered"), []byte("first")); err != nil {
+				t.Fatal(err)
+			}
+			if err := tc.fail(database); !errors.Is(err, tc.wantError) {
+				t.Fatalf("fault did not execute: %v", err)
+			}
+			if tc.publication && !database.publicationPoisoned.Load() || !tc.publication && !database.commandWALFlushPoisoned.Load() {
+				t.Fatal("fault did not poison the intended path")
+			}
+			_ = database.Close()
+			if !database.closeTeardownCompleted {
+				t.Fatal("close did not complete teardown")
+			}
+			// This is the old, insufficient check. After teardown its internally
+			// consistent runtime slots can supply a proof despite persistent poison.
+			if _, err := captureDurableWALCleanupProofFromRuntimeV1(database.durableRoot, database.commandWALDurableLSN.Load()); err != nil {
+				t.Fatalf("control lacks an otherwise plausible runtime proof: %v", err)
+			}
+			out, err := database.InspectClosedCommandWALV1()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if out.ProofError == "" || !strings.Contains(out.ProofError, ErrRecoveryRequired.Error()) || out.ReplayLineageValidated ||
+				out.RootObservation != "closed_handle_runtime_not_persisted_slot_verification" || len(out.Segments) == 0 {
+				t.Fatalf("poisoned runtime claimed recovery authority or lost inventory: %+v", out)
+			}
+			if tc.publication && !out.PublicationPoisoned || !tc.publication && !out.CommandWALFlushPoisoned {
+				t.Fatalf("lost poison evidence: %+v", out)
+			}
+			for _, segment := range out.Segments {
+				if segment.CoveredByRoots {
+					t.Fatalf("poisoned roots claimed coverage: %+v", segment)
+				}
+			}
+		})
+	}
+}

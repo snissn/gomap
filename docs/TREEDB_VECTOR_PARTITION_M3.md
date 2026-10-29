@@ -392,7 +392,8 @@ later milestones.
 M3 reports include `source_footprint_diagnostic` and
 `final_footprint_diagnostic` at the existing closed-directory measurement
 boundaries. Each records relative file lengths, the total measured bytes,
-both durable root-slot identities and applied command LSNs, selected slot,
+both last observed runtime root-slot identities and applied command LSNs,
+last runtime-selected slot,
 durable WAL LSN, remaining segment frame/LSN intervals, cumulative cleanup
 reason counters, and the existing terminal close/cleanup errors. This capture
 does not retain the text of each earlier cleanup error. The post-close proof
@@ -403,7 +404,12 @@ cleanup attempt. An unavailable proof can be a legitimate conservative
 retention result. In that case inspection inventories remaining segment frames
 without asserting any replay lower bound or missing historical prefix.
 `replay_lineage_validated` is false; lineage validation runs only when the
-captured cleanup proof supplies valid replay bounds.
+captured cleanup proof supplies valid replay bounds. Root fields are explicitly
+labeled as closed-handle runtime observations, not persisted-slot readback or a
+new recovery selection. Publication or command-WAL flush poison makes the proof
+unavailable and all segment coverage/lineage assertions false, while the file and
+frame inventory remains available. Teardown clearing ambiguous candidates cannot
+turn a poisoned handle into recovery authority.
 
 Set `GOMAP_M3_DIAGNOSTICS_DIR` to a directory outside every measured database
 to retain each boundary snapshot and the complete report independently of
@@ -414,8 +420,11 @@ resolved destination. An alias into a measured database is rejected. Files have 
 observation; `database_directory`, generation, overlap ratio and source identity
 associate snapshots with report rows. Root CI uploads this directory after the
 test step, including failed jobs. A diagnostic or retention error fails the
-stage after the ordinary report is written and validated, preserving any
-original gate failure alongside it. The focused test also logs its completed
+stage with the original validation error. Ordinary report writing, external
+retention, and validation are all attempted independently: a failed ordinary
+report write still retains the complete external report when that destination
+works, and the returned error joins the write, validation, diagnostic, and
+retention failures. The focused test also logs its completed
 report before temporary-directory cleanup on failure.
 
 This instrumentation does not change the 1.35x gate, fixture, or accounting:

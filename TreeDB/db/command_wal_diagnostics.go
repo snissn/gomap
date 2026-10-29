@@ -17,17 +17,20 @@ import (
 // Close errors come from the existing terminal results; this does not retain a
 // history of individual cleanup errors or infer which attempt retained a file.
 type CommandWALClosedDiagnosticsV1 struct {
-	CloseError             string                          `json:"close_error,omitempty"`
-	CloseCleanupError      string                          `json:"close_cleanup_error,omitempty"`
-	SelectedSlot           uint64                          `json:"selected_slot"`
-	Roots                  [2]CommandWALDiagnosticRootV1   `json:"roots"`
-	DurableWALLSN          uint64                          `json:"durable_wal_lsn"`
-	CleanupThrough         uint64                          `json:"cleanup_through"`
-	ProofError             string                          `json:"proof_error,omitempty"`
-	ReplayLineageValidated bool                            `json:"replay_lineage_validated"`
-	ScanError              string                          `json:"scan_error,omitempty"`
-	CleanupCounters        map[string]string               `json:"cleanup_counters"`
-	Segments               []CommandWALDiagnosticSegmentV1 `json:"segments"`
+	RootObservation         string                          `json:"root_observation"`
+	PublicationPoisoned     bool                            `json:"publication_poisoned"`
+	CommandWALFlushPoisoned bool                            `json:"command_wal_flush_poisoned"`
+	CloseError              string                          `json:"close_error,omitempty"`
+	CloseCleanupError       string                          `json:"close_cleanup_error,omitempty"`
+	SelectedSlot            uint64                          `json:"selected_slot"`
+	Roots                   [2]CommandWALDiagnosticRootV1   `json:"roots"`
+	DurableWALLSN           uint64                          `json:"durable_wal_lsn"`
+	CleanupThrough          uint64                          `json:"cleanup_through"`
+	ProofError              string                          `json:"proof_error,omitempty"`
+	ReplayLineageValidated  bool                            `json:"replay_lineage_validated"`
+	ScanError               string                          `json:"scan_error,omitempty"`
+	CleanupCounters         map[string]string               `json:"cleanup_counters"`
+	Segments                []CommandWALDiagnosticSegmentV1 `json:"segments"`
 }
 
 type CommandWALDiagnosticRootV1 struct {
@@ -67,13 +70,28 @@ func (db *DB) InspectClosedCommandWALV1() (CommandWALClosedDiagnosticsV1, error)
 	if err := errors.Join(db.closeHooksErr, db.closeTeardownCleanupErr); err != nil {
 		out.CloseCleanupError = err.Error()
 	}
+	// These are the closed handle's last runtime observations, not a readback
+	// of the persisted slots or a fresh recovery selection. An ambiguous write
+	// may have changed a persisted slot without updating these observations.
+	out.RootObservation = "closed_handle_runtime_not_persisted_slot_verification"
+	out.PublicationPoisoned = db.publicationPoisoned.Load()
+	out.CommandWALFlushPoisoned = db.commandWALFlushPoisoned.Load()
 	runtime := db.durableRoot
 	out.SelectedSlot = runtime.slot
 	out.DurableWALLSN = db.commandWALDurableLSN.Load()
 	for slot := range out.Roots {
 		out.Roots[slot] = CommandWALDiagnosticRootV1{Slot: uint64(slot), CommitSeq: runtime.slotCommit[slot], AppliedCommandLSN: runtime.slotRecord[slot].AppliedCommandLSN, Meta: runtime.slotMeta[slot]}
 	}
-	proof, proofErr := captureDurableWALCleanupProofFromRuntimeV1(runtime, out.DurableWALLSN)
+	var proof durableWALCleanupProofV1
+	proofErr := db.commandWALPoisonedError()
+	if proofErr != nil {
+		// Teardown may have released and cleared ambiguous candidates. The
+		// persistent poison flags still prohibit treating stale runtime roots as
+		// recovery authority, even if their identities are internally consistent.
+		proofErr = fmt.Errorf("%w: closed handle is poisoned: %w", errDurableWALCleanupProofUnavailable, proofErr)
+	} else {
+		proof, proofErr = captureDurableWALCleanupProofFromRuntimeV1(runtime, out.DurableWALLSN)
+	}
 	if proofErr != nil {
 		out.ProofError = proofErr.Error()
 	} else {

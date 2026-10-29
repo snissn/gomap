@@ -1042,6 +1042,33 @@ func TestM3OverlapPartitionIndexBuildsReopensAndSearchesNativePacks(t *testing.T
 		if err := validateM3PartitionIndexReport(candidate); err == nil || err.Error() != "failed: 87.544638x exceeds 1.35x" {
 			t.Fatalf("forced footprint failure=%v", err)
 		}
+		t.Run("report write failure retains original gate and diagnostics", func(t *testing.T) {
+			retained := t.TempDir()
+			t.Setenv(m3DiagnosticsDirEnv, retained)
+			const diagnosticFailure = "injected boundary diagnostic failure"
+			candidate.Rows[1].FinalFootprintDiagnostic.Error = diagnosticFailure
+			raw, err := json.MarshalIndent(candidate, "", "  ")
+			if err != nil {
+				t.Fatal(err)
+			}
+			// A directory at the report filename deterministically rejects WriteFile
+			// even when the test process can bypass ordinary permission bits.
+			blockedReport := t.TempDir()
+			err = m3WriteAndRetainPartitionIndexReport(blockedReport, candidate, raw)
+			var writeError *os.PathError
+			if !errors.As(err, &writeError) || writeError.Op != "open" || writeError.Path != blockedReport ||
+				!strings.Contains(err.Error(), "failed: 87.544638x exceeds 1.35x") || !strings.Contains(err.Error(), diagnosticFailure) {
+				t.Fatalf("lost report write/gate/diagnostic error: %v", err)
+			}
+			files, err := filepath.Glob(filepath.Join(retained, "m3-report-*.json"))
+			if err != nil || len(files) != 1 {
+				t.Fatalf("retained reports=%v error=%v", files, err)
+			}
+			stored, err := os.ReadFile(files[0])
+			if err != nil || !bytes.Equal(stored, append(raw, '\n')) {
+				t.Fatalf("lost complete report: error=%v bytes=%s", err, stored)
+			}
+		})
 	})
 	for name, mutate := range map[string]func(*m3PartitionIndexRow){
 		"negative":       func(row *m3PartitionIndexRow) { row.PartitionLoads[0] = -1 },

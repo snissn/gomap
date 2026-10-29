@@ -228,15 +228,7 @@ func runM3PartitionIndexStage(cfg config, fixture fixtureManifest, artifact vect
 	}
 	raw = append(raw, '\n')
 	path := filepath.Join(cfg.out, "vector_partition_m3_"+suffix+".json")
-	if err := os.WriteFile(path, raw, 0644); err != nil {
-		return err
-	}
-	measuredDirs := make([]string, 0, len(report.Rows))
-	for _, row := range report.Rows {
-		measuredDirs = append(measuredDirs, row.SourceFootprintDiagnostic.DatabaseDirectory)
-	}
-	retainErr := m3RetainDiagnostic("report", raw, measuredDirs...)
-	if err := errors.Join(validateM3PartitionIndexReport(report), m3FootprintDiagnosticErrors(report), retainErr); err != nil {
+	if err := m3WriteAndRetainPartitionIndexReport(path, report, raw); err != nil {
 		return fmt.Errorf("M3 report %s: %w", path, err)
 	}
 	if cfg.format == "json" {
