@@ -98,7 +98,7 @@ func main() {
 		}
 		diagnosticsServer = &http.Server{Addr: *pprofAddr, Handler: handler, ReadHeaderTimeout: 5 * time.Second}
 		go func() {
-			log.Printf("TreeDB Document Service pprof listening on http://%s/debug/pprof/", *pprofAddr)
+			log.Printf("TreeDB Document Service pprof listening on http://%s/debug/pprof/", diagnosticsListener.Addr().String())
 			if err := diagnosticsServer.Serve(diagnosticsListener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				log.Printf("pprof server error: %v", err)
 			}
@@ -128,14 +128,14 @@ func main() {
 				stop()
 			}
 		}()
-		fmt.Printf("TreeDB Document Service native wire listening on %s\n", *nativeAddr)
+		fmt.Printf("TreeDB Document Service native wire listening on %s\n", nativeListener.Addr().String())
 	}
 	go func() {
 		<-ctx.Done()
 		shutdown()
 	}()
 
-	fmt.Printf("TreeDB Document Service listening on http://%s\n", *addr)
+	fmt.Printf("TreeDB Document Service listening on http://%s\n", listener.Addr().String())
 	fmt.Printf("TreeDB data directory: %s\n", *dataDir)
 	fmt.Printf("TreeDB profile: %s\n", normalizedProfile)
 	fmt.Printf("TreeDB storage: %s\n", owner.Storage)
