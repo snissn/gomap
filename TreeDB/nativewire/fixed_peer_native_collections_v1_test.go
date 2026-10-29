@@ -323,6 +323,7 @@ func fixedPeerPublishNativeUsersCatalogV1(t testing.TB, ctx context.Context, cli
 func TestFixedPeerTCPNativeCollectionCatalogGuardInterpositionV1(t *testing.T) {
 	for _, format := range []collections.DocumentFormat{collections.DocumentFormatJSON, collections.DocumentFormatBSON} {
 		t.Run(string(format), func(t *testing.T) {
+			diagnostic := installGuardPublicationDiagnostic(t)
 			c := fixedPeerTestConfigsV1(t)[0]
 			c.Nodes, c.Catalog.Peers, c.Groups = c.Nodes[:1], c.Catalog.Peers[:1], c.Groups[:1]
 			c.Groups[0].NativeCollections = true
@@ -390,6 +391,7 @@ func TestFixedPeerTCPNativeCollectionCatalogGuardInterpositionV1(t *testing.T) {
 			// attempt left no effects before allowing its fresh-guard submission.
 			applied := fixedPeerSubmitNativeCollectionV1(t, ctx, client, c.NodeID, iwire.CommandReplaceBatch, key, replacement, func(version uint64) {
 				attempts++
+				diagnostic.mark("attempt=%d sampled_guard=%d stale_guard=%d", attempts, version, staleVersion)
 				if attempts == 1 {
 					staleVersion = version
 					created = fixedPeerSubmitNativeCollectionV1(t, ctx, client, c.NodeID, iwire.CommandCreateCollection, "guard-create", []iwire.Section{{ID: iwire.SectionCollectionMeta, Bytes: mustEncodeCollectionMeta(meta)}})
@@ -407,6 +409,7 @@ func TestFixedPeerTCPNativeCollectionCatalogGuardInterpositionV1(t *testing.T) {
 						t.Fatalf("interposed commands did not advance sampled guard: sampled=%d current=%+v err=%v", staleVersion, status, err)
 					}
 					before = status.Groups[0]
+					diagnostic.mark("baseline root=%q guard=%d logical_seq=%d next_lsn=%d last_index=%d commit_index=%d applied_index=%d", db.Dir(), before.CatalogVersion, seq, nextLSN, before.LastIndex, before.CommitIndex, before.RaftAppliedIndex)
 					return
 				}
 				if attempts != 2 || version <= staleVersion {
@@ -417,6 +420,7 @@ func TestFixedPeerTCPNativeCollectionCatalogGuardInterpositionV1(t *testing.T) {
 					t.Fatal(err)
 				}
 				b, a := before, after.Groups[0]
+				diagnostic.mark("precheck attempt=%d guard=%d last_index=%d commit_index=%d applied_index=%d", attempts, a.CatalogVersion, a.LastIndex, a.CommitIndex, a.RaftAppliedIndex)
 				if b.LastIndex != a.LastIndex || b.CommitIndex != a.CommitIndex || b.RaftAppliedIndex != a.RaftAppliedIndex || !reflect.DeepEqual(b.Applied, a.Applied) || logicalSequence() != seq || db.CommandWALNextLSN() != nextLSN {
 					t.Fatalf("stale guard changed raft/logical state: before=%+v after=%+v", b, a)
 				}
@@ -432,6 +436,7 @@ func TestFixedPeerTCPNativeCollectionCatalogGuardInterpositionV1(t *testing.T) {
 				if ids, err := col.FindByIndexValue("by_city", "sea"); err != nil || len(ids) != 0 {
 					t.Fatalf("rejected replacement changed new index: %q %v", ids, err)
 				}
+				diagnostic.mark("checks passed attempt=%d sampled_guard=%d", attempts, version)
 				t.Logf("interposed create/insert advanced catalog guard %d -> %d; helper's stale replacement rejected without raft, WAL, logical, idempotency, row, or index effects", staleVersion, before.CatalogVersion)
 			})
 			if attempts != 2 || applied.ApplyResult.DeterministicErrorCode != "" || applied.ApplyResult.AffectedCount != 1 || logicalSequence() != seq+1 || db.CommandWALNextLSN() != nextLSN+1 {
