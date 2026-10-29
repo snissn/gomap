@@ -18,14 +18,12 @@ def supervise(command, run_dir, profile, budget, grace=30):
     reason = "capture-exit"
     status = 127
 
-    class Interrupted(Exception):
-        pass
-
     def interrupt(signum, _frame):
         nonlocal interrupted
-        interrupted = signum
-        if child is not None:
-            raise Interrupted()
+        # Record only: asynchronous exceptions can escape even the entry to
+        # finally, or Popen before its returned child is assigned.
+        if interrupted is None:
+            interrupted = signum
 
     previous = {sig: signal.signal(sig, interrupt) for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP)}
 
@@ -64,32 +62,26 @@ def supervise(command, run_dir, profile, budget, grace=30):
         raise RuntimeError("capture group did not terminate within cleanup budget")
 
     try:
-        # Before Popen returns, the signal handler only records interruption.
-        # Once the PID is assigned it can safely interrupt waits for this group.
+        # Signals only record pending cancellation, including during spawn.
         child = subprocess.Popen(command, start_new_session=True)
-        if interrupted is not None:
-            raise Interrupted()
-        try:
-            deadline = time.monotonic() + budget
-            while True:
-                result = observe()
-                if result is not None:
-                    status = result.si_status if result.si_code == os.CLD_EXITED else -result.si_status
-                    break
-                if time.monotonic() >= deadline:
-                    reason, status = "timeout", 124
-                    break
-                time.sleep(min(0.01, max(0, deadline - time.monotonic())))
-        except Interrupted:
-            reason, status = "interrupted", 128 + interrupted
-    except Interrupted:
-        reason, status = "interrupted", 128 + interrupted
+        deadline = time.monotonic() + budget
+        while True:
+            if interrupted is not None:
+                reason, status = "interrupted", 128 + interrupted
+                break
+            result = observe()
+            if result is not None:
+                status = result.si_status if result.si_code == os.CLD_EXITED else -result.si_status
+                break
+            if time.monotonic() >= deadline:
+                reason, status = "timeout", 124
+                break
+            time.sleep(min(0.01, max(0, deadline - time.monotonic())))
     except OSError:
         reason, status = "launch-failure", 127
     finally:
-        # Further termination requests cannot interrupt cleanup or receipt writing.
-        for sig in previous:
-            signal.signal(sig, signal.SIG_IGN)
+        # Keep record-only handlers throughout cleanup and receipt writing.
+        # There is no handler-transition window that can unwind ownership.
         if child is not None:
             try:
                 stop_group()
@@ -107,6 +99,8 @@ def supervise(command, run_dir, profile, budget, grace=30):
                     child.wait(timeout=grace)
                 except (OSError, subprocess.TimeoutExpired):
                     pass
+        if interrupted is not None and reason == "capture-exit":
+            reason, status = "interrupted", 128 + interrupted
         if status < 0:
             status = 128 - status
         receipt = {"qualification_profile": profile, "capture_budget_seconds": budget,

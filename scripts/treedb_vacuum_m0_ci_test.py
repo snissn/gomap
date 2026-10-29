@@ -170,6 +170,82 @@ class SupervisorTest(unittest.TestCase):
                                          'hosted-semantic', 5, grace=0.1), 125)
             self.assertFalse((packet / 'ci-budget.json').exists())
 
+    def test_repeated_real_signals_at_cleanup_entry_cannot_escape_ownership(self):
+        # Trace the first executable finally line, before cleanup has started.
+        # A raising handler used to escape here on the second SIGTERM.
+        source = SCRIPT.read_text().splitlines()
+        boundary = next(i + 1 for i, line in enumerate(source)
+                        if line == '        if child is not None:')
+        real_spawn = subprocess.Popen
+        owned = []
+        def spawn(*args, **kwargs):
+            child = real_spawn(*args, **kwargs)
+            owned.append(child)
+            os.kill(os.getpid(), signal.SIGTERM)
+            return child
+        reached = []
+        def trace(frame, event, arg):
+            if (event == 'line' and frame.f_code.co_filename == str(SCRIPT)
+                    and frame.f_lineno == boundary):
+                reached.append(True)
+                for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGTERM):
+                    os.kill(os.getpid(), sig)
+            return trace
+        with tempfile.TemporaryDirectory() as directory:
+            packet = Path(directory) / 'packet'
+            try:
+                sys.settrace(trace)
+                with mock.patch.object(m.subprocess, 'Popen', side_effect=spawn):
+                    status = m.supervise([sys.executable, '-c', 'import time; time.sleep(60)'],
+                                         packet, 'hosted-semantic', 5, grace=0.1)
+                self.assertIsNotNone(owned[0].returncode)
+                with self.assertRaises(ProcessLookupError):
+                    os.killpg(owned[0].pid, 0)
+            finally:
+                sys.settrace(None)
+                for child in owned:
+                    if child.returncode is None:
+                        os.killpg(child.pid, signal.SIGKILL)
+                        child.wait()
+            self.assertEqual(reached, [True])
+            self.assertEqual(status, 143)
+            self.assertIsNotNone(owned[0].returncode)
+            receipt = json.loads((packet / 'ci-budget.json').read_text())
+            self.assertEqual(receipt['termination_reason'], 'interrupted')
+            self.assertEqual(receipt['interrupted_signal'], signal.SIGTERM)
+            self.assertFalse(receipt['completed'])
+
+    def test_spawn_failure_receipt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            packet = Path(directory) / 'packet'
+            self.assertEqual(m.supervise(['/nonexistent/m0-capture'], packet,
+                                         'hosted-semantic', 5, grace=0.1), 127)
+            receipt = json.loads((packet / 'ci-budget.json').read_text())
+            self.assertEqual(receipt['termination_reason'], 'launch-failure')
+            self.assertFalse(receipt['completed'])
+
+    def test_enospc_receipt_cannot_return_success(self):
+        import errno
+        with tempfile.TemporaryDirectory() as directory, \
+             mock.patch.object(Path, 'write_text', side_effect=OSError(errno.ENOSPC, 'disk full')):
+            self.assertEqual(m.supervise([sys.executable, '-c', 'pass'], Path(directory) / 'packet',
+                                         'hosted-semantic', 5, grace=0.1), 125)
+
+    def test_inherited_pipe_descendant_is_drained(self):
+        with tempfile.TemporaryDirectory() as directory:
+            packet = Path(directory) / 'packet'
+            code = ("import importlib.util; "
+                    f"s=importlib.util.spec_from_file_location('m',{str(SCRIPT)!r}); "
+                    "m=importlib.util.module_from_spec(s); s.loader.exec_module(m); "
+                    "import sys; "
+                    f"sys.exit(m.supervise([sys.executable,'-c',"
+                    "'import subprocess,sys; subprocess.Popen([sys.executable, \"-c\", \"import time; time.sleep(60)\"])'],"
+                    f"{str(packet)!r},'hosted-semantic',5,grace=0.1))")
+            run = subprocess.run([sys.executable, '-c', code], stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE, timeout=5)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertTrue(json.loads((packet / 'ci-budget.json').read_text())['completed'])
+
     def test_workflow_does_not_infer_controlled_custody(self):
         workflow = SCRIPT.parent.parent / '.github/workflows/treedb-vacuum-m0.yml'
         text = workflow.read_text()
