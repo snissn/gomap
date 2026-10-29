@@ -59,10 +59,15 @@ passes historical v3 CV but fails v4-proposal; synthetic unchanged paired noise
 passes. Additional inert tests verify the real shell's alternating 30-sample
 schedule and exact-ancestor/current-harness build preparation. These are
 engineering contract tests, not measured unchanged-noise or injected-regression
-qualification. No physical benchmark or baseline Go compilation was performed
-for this proposal. Before promotion: independent exact-head review, explicit
-owner acceptance of the estimator/threshold and baseline, a compatible real
-baseline build, fresh admitted controlled evidence with unchanged noise and
+qualification. An untimed baseline preparation/build using Go1.26.10 and exact
+PR base `8e8c15938cb588fe22fd2f9afc46433ef70936a4` passed with the candidate test
+overlay. Its real fixture initially failed because required environment metadata
+was omitted; that engineering failure is retained, the capture now supplies all
+required metadata, and the corrected fixture passed. Its complete fixture
+matches the retained exact `24f6b3e` Go1.26.10 fixture. There are no Go/go.mod/go.sum
+source changes between that base and this proposal. This checks setup/compile
+compatibility, without claiming measured pairing or performance. Before promotion: independent exact-head review, explicit
+owner acceptance of the estimator/threshold and baseline, fresh admitted controlled evidence with unchanged noise and
 physical positive control, custody/release artifacts, budget proof, and the
 applicable exact-head hosted/CI gates remain required. Existing sealed launcher
 packets and their historical source identities do not cover this successor.

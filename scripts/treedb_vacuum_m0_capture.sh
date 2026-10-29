@@ -112,6 +112,11 @@ if [[ ${M0_CONTROLLED:-0} == 1 ]]; then
   python3 "$ROOT/scripts/treedb_vacuum_m0_baseline.py" --repo-root "$ROOT" --run-dir "$RUN_DIR" --source "$M0_BASELINE_SHA"
   TREEDB_VACUUM_M0_ARTIFACT="$RUN_DIR/baseline-fixture.json" \
   TREEDB_VACUUM_M0_GIT_SHA="$M0_BASELINE_SHA" \
+  TREEDB_VACUUM_M0_COMMAND="baseline-db.test -test.run '^TestVacuumM0WriteArtifact$' -test.count=1 -test.v" \
+  TREEDB_VACUUM_M0_DIRTY_STATE=baseline-with-candidate-test-overlay \
+  TREEDB_VACUUM_M0_FILESYSTEM="$FILESYSTEM" \
+  TREEDB_VACUUM_M0_DEVICE="$DEVICE" \
+  TREEDB_VACUUM_M0_TIMING_BOUNDARY="one fixed-work vacuum operation; setup excluded" \
   taskset -c "$CPU_SET" "$RUN_DIR/baseline-db.test" -test.run '^TestVacuumM0WriteArtifact$' -test.count=1 -test.v
   printf '%s\n' "baseline source=$M0_BASELINE_SHA; taskset -c $CPU_SET baseline-db.test -test.run '^$' -test.bench '$PRODUCTION_BENCH' -test.benchtime=1x -test.count=1 -test.benchmem" >>"$RUN_DIR/commands.txt"
 fi

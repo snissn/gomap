@@ -135,9 +135,13 @@ class CaptureScheduleTests(unittest.TestCase):
                 (scripts/name).write_text('')
             (scripts/'treedb_vacuum_m0_summarize.py').write_text(
                 "import os,pathlib,sys;pathlib.Path(os.environ['M0_TEST_ROOT'],'summary-args').write_text(' '.join(sys.argv))")
+            stub = ('#!/bin/sh\ncase "$*" in *-test.bench*) echo baseline >> "$M0_TEST_ROOT/order";; *)\n'
+                    ': "${TREEDB_VACUUM_M0_COMMAND:?}" "${TREEDB_VACUUM_M0_DIRTY_STATE:?}" '
+                    '"${TREEDB_VACUUM_M0_FILESYSTEM:?}" "${TREEDB_VACUUM_M0_DEVICE:?}" '
+                    '"${TREEDB_VACUUM_M0_TIMING_BOUNDARY:?}" "${TREEDB_VACUUM_M0_GIT_SHA:?}";; esac\necho PASS\n')
             (scripts/'treedb_vacuum_m0_baseline.py').write_text(
                 "import os,pathlib; p=pathlib.Path(os.environ['RUN_DIR'])/'baseline-db.test'; "
-                "p.write_text('#!/bin/sh\\ncase \"$*\" in *-test.bench*) echo baseline >> \"$M0_TEST_ROOT/order\";; esac\\necho PASS\\n'); p.chmod(0o755)")
+                + "p.write_text(" + repr(stub) + "); p.chmod(0o755)")
             tools={
                 'git': '#!/bin/sh\ncase "$1" in rev-parse) if [ "$2" = --show-toplevel ]; then echo "$M0_TEST_ROOT"; else echo source; fi;; esac\n',
                 'taskset': '#!/bin/sh\nshift 2\nexec "$@"\n',
