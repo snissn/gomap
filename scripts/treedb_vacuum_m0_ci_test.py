@@ -19,6 +19,16 @@ spec.loader.exec_module(m)
 
 
 class SupervisorTest(unittest.TestCase):
+    def test_controlled_profile_cannot_bypass_explicit_custody_mode(self):
+        for profile, mode in [('controlled-performance', '0'), ('controlled-performance', ''),
+                              ('hosted-semantic', '1'), ('hosted-semantic', 'invalid')]:
+            with self.subTest(profile=profile, mode=mode), mock.patch.dict(os.environ,
+                    M0_QUALIFICATION_PROFILE=profile, M0_CONTROLLED=mode), \
+                    mock.patch.object(m.subprocess, 'check_output') as command:
+                with self.assertRaisesRegex(ValueError, 'custody mode disagree'):
+                    m.main()
+                command.assert_not_called()
+
     def test_exit_and_existing_packet(self):
         for status in (0, 1):
             with tempfile.TemporaryDirectory() as directory:
@@ -310,7 +320,8 @@ class SupervisorTest(unittest.TestCase):
     def test_workflow_does_not_infer_controlled_custody(self):
         workflow = SCRIPT.parent.parent / '.github/workflows/treedb-vacuum-m0.yml'
         text = workflow.read_text()
-        self.assertIn('M0_QUALIFICATION_PROFILE: hosted-semantic', text)
+        self.assertIn("M0_QUALIFICATION_PROFILE: ${{ env.M0_CONTROLLED == '1' && 'controlled-performance' || 'hosted-semantic' }}", text)
+        self.assertIn("vars.TREEDB_M0_CONTROLLED_ADMISSION_SHA == github.event.pull_request.head.sha", text)
         self.assertNotIn("runner.environment == 'self-hosted'", text)
 
 

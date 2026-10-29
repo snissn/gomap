@@ -6,9 +6,16 @@ set -euo pipefail
 ROOT=$(git rev-parse --show-toplevel)
 RUN_DIR=${RUN_DIR:-"$ROOT/artifacts/treedb-vacuum-m0/$(date +%Y%m%d_%H%M%S)"}
 SHA=$(git rev-parse HEAD)
-mkdir -p "$RUN_DIR"
+export M0_SOURCE_SHA="$SHA"
+# Atomically claim a new packet directory before creating or replacing any
+# packet content. Existing directories (even empty) belong to their caller.
+mkdir -p "$(dirname "$RUN_DIR")"
+if ! mkdir "$RUN_DIR"; then
+  echo 'capture directory already exists; use a fresh RUN_DIR' >&2
+  exit 2
+fi
 RUN_DIR=$(cd "$RUN_DIR" && pwd -P)
-mkdir -p "$RUN_DIR/raw"
+mkdir "$RUN_DIR/raw"
 
 default_cpu_set() {
   local allowed range start end cpu
@@ -32,6 +39,30 @@ default_cpu_set() {
   (IFS=,; printf '%s\n' "${selected[*]}")
 }
 
+# The EXIT receipt runs on setup, admission, measurement and parser failure.
+# It never replaces the failing command's status with a telemetry success.
+export M0_QUALIFICATION_PROFILE=${M0_QUALIFICATION_PROFILE:-controlled-performance}
+export M0_LAST_PHASE=initializing
+terminal_receipt() {
+  local status=$?
+  trap - EXIT
+  python3 "$ROOT/scripts/treedb_vacuum_m0_environment.py" --run-dir "$RUN_DIR" \
+    --phase terminal --exit-code "$status" || { ((status != 0)) || status=2; }
+  exit "$status"
+}
+trap terminal_receipt EXIT
+
+case "$M0_QUALIFICATION_PROFILE:${M0_CONTROLLED:-0}" in
+  hosted-semantic:0|controlled-performance:1) ;;
+  *) echo 'qualification profile and explicit custody mode disagree' >&2; exit 2 ;;
+esac
+
+# Controlled placement must be explicitly configured; defaulting here would
+# conceal a missing administrator topology/lease declaration.
+if [[ ${M0_CONTROLLED:-0} == 1 && ( -z ${CPU_SET:-} || -z ${GOMAXPROCS:-} || -z ${M0_LEASE_PATH:-} ) ]]; then
+  echo 'controlled mode requires explicit CPU_SET, GOMAXPROCS and M0_LEASE_PATH' >&2
+  exit 2
+fi
 export CPU_SET=${CPU_SET:-$(default_cpu_set)}
 export GOMAXPROCS=${GOMAXPROCS:-2}
 export GOMEMLIMIT=${GOMEMLIMIT:-8GiB}
@@ -64,12 +95,23 @@ capture_fixture() {
 }
 
 cd "$ROOT"
+export M0_LAST_PHASE=admission
+python3 "$ROOT/scripts/treedb_vacuum_m0_environment.py" --run-dir "$RUN_DIR" --phase admission
+GOWORK=off go env -json GOVERSION GOROOT GOTOOLDIR GOOS GOARCH GOFLAGS GOTOOLCHAIN >"$RUN_DIR/go-environment.json"
+go tool compile -V >"$RUN_DIR/compiler-version.txt"
+export M0_LAST_PHASE=fixture
 run_go_test -run '^TestVacuumM0FixtureDeterministicDebtAndOfflineCeiling$' -count=1
 capture_fixture "scripts/treedb_vacuum_m0_capture.sh"
 
 for sample in $(seq 1 10); do
-  run_go_test -run '^$' -bench "$PRODUCTION_BENCH" -benchtime=1x -count=1 -benchmem >"$RUN_DIR/raw/production-${sample}.txt"
-  run_go_test -run '^$' -bench "$PUBLIC_BENCH" -benchtime=1x -count=1 -benchmem >"$RUN_DIR/raw/public-${sample}.txt"
+  export M0_LAST_PHASE="production-$sample"
+  python3 "$ROOT/scripts/treedb_vacuum_m0_environment.py" --run-dir "$RUN_DIR" --phase "production-$sample-before"
+  run_go_test -run '^$' -bench "$PRODUCTION_BENCH" -benchtime=1x -count=1 -benchmem >"$RUN_DIR/raw/production-${sample}.txt" 2>&1
+  python3 "$ROOT/scripts/treedb_vacuum_m0_environment.py" --run-dir "$RUN_DIR" --phase "production-$sample-after"
+  export M0_LAST_PHASE="public-$sample"
+  python3 "$ROOT/scripts/treedb_vacuum_m0_environment.py" --run-dir "$RUN_DIR" --phase "public-$sample-before"
+  run_go_test -run '^$' -bench "$PUBLIC_BENCH" -benchtime=1x -count=1 -benchmem >"$RUN_DIR/raw/public-${sample}.txt" 2>&1
+  python3 "$ROOT/scripts/treedb_vacuum_m0_environment.py" --run-dir "$RUN_DIR" --phase "public-$sample-after"
 done
 
 cat "$RUN_DIR"/raw/production-*.txt >"$RUN_DIR/production-benchstat-input.txt"
@@ -77,6 +119,7 @@ if command -v benchstat >/dev/null 2>&1; then
   benchstat "$RUN_DIR/production-benchstat-input.txt" >"$RUN_DIR/production-benchstat.txt"
 fi
 
+export M0_LAST_PHASE=summary
 python3 "$ROOT/scripts/treedb_vacuum_m0_summarize_test.py"
 python3 "$ROOT/scripts/treedb_vacuum_m0_ci_test.py"
 python3 "$ROOT/scripts/treedb_vacuum_m0_summarize.py" --repo-root "$ROOT" --run-dir "$RUN_DIR" --stability-arm production --acceptance-contract v3 --qualification-profile "${M0_QUALIFICATION_PROFILE:-controlled-performance}"

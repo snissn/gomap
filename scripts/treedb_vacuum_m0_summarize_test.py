@@ -255,6 +255,27 @@ class VacuumM0SummarizeTest(unittest.TestCase):
         self.assertTrue(diagnostic["owner_review_required"])
         self.assertIsNone(diagnostic["owner_review"])
 
+    def test_pr5270_original_total_cv_failure_remains_red(self):
+        # Original complete first-attempt artifact12769235519 at23a3b7a95.
+        # Preserve all ten measured values; this is parser replay, never a rerun.
+        values = [1514468486, 1186300422, 1256447210, 1358639595, 1606549816,
+                  1264589982, 1788559538, 1386407771, 1550251359, 1705774132]
+        production, public = self.production_observations()
+        with tempfile.TemporaryDirectory() as directory:
+            paths = []
+            for index, value in enumerate(values):
+                path = Path(directory) / f'production-{index + 1}.txt'
+                path.write_text(MODULE.STABILITY_BENCHMARKS['production'] +
+                                f'-2 1 {value} vacuum-total-ns/op\nPASS\n')
+                paths.append(path)
+            metric = MODULE.summarize(paths, MODULE.STABILITY_BENCHMARKS['production'])['vacuum-total-ns/op']
+        self.assertEqual(metric['samples'], values)
+        self.assertAlmostEqual(metric['cv'], 0.13891715465811041)
+        production['vacuum-total-ns/op'] = metric
+        gates = MODULE.evaluate_gates(production, public, 'production', 'v3')
+        self.assertFalse(gates['production_cv_at_most_10_percent'])
+        self.assertTrue(all(value for name, value in gates.items() if name != 'production_cv_at_most_10_percent'))
+
     def test_v3_preserves_total_and_foreground_cv_limits(self):
         for metric in MODULE.PRODUCT_V3_CV_METRICS:
             with self.subTest(metric=metric):

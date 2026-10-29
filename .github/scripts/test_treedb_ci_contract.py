@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import re
 import unittest
+from unittest import mock
 from pathlib import Path
 
 
@@ -18,6 +19,40 @@ def block(source: str, start: str, end: str | None = None) -> str:
         return source[begin:]
     finish = source.index(end, begin + len(start))
     return source[begin:finish]
+
+
+RUNNER_GUARD = (
+    "github.event_name == 'pull_request' && "
+    "github.event.pull_request.head.repo.full_name == github.repository && "
+    "vars.TREEDB_PERF_RUNNER_LABEL != '' && "
+    "vars.TREEDB_PERF_RUNNER_PR != '' && "
+    "vars.TREEDB_PERF_RUNNER_PR == format('{0}', github.event.pull_request.number)"
+)
+
+
+def require_m0_routing_contract(source: str) -> None:
+    # Check each security-sensitive expression, rather than counting variable
+    # mentions across comments, metadata, and unrelated workflow fields.
+    expected = {
+        'runs-on': RUNNER_GUARD + " && format('{0}-m0', vars.TREEDB_PERF_RUNNER_LABEL) || 'ubuntu-24.04'",
+        'M0_CONTROLLED': RUNNER_GUARD + " && vars.TREEDB_M0_CONTROLLED_ADMISSION_SHA == github.event.pull_request.head.sha && '1' || '0'",
+        'CPU_SET': RUNNER_GUARD + " && vars.TREEDB_M0_CPU_SET || ''",
+        'GOMAXPROCS': RUNNER_GUARD + " && vars.TREEDB_M0_GOMAXPROCS || ''",
+        'M0_LEASE_PATH': RUNNER_GUARD + " && vars.TREEDB_M0_LEASE_PATH || ''",
+    }
+    verified_lines = set()
+    for name, expression in expected.items():
+        matches = list(re.finditer(r"(?m)^ +" + re.escape(name) + r": \$\{\{ (.+) \}\}$", source))
+        if [match.group(1) for match in matches] != [expression]:
+            raise ValueError(f'M0 routing contract differs for {name}')
+        verified_lines.update(match.group(0) for match in matches)
+    for line in source.splitlines():
+        if line.lstrip().startswith('#'):
+            continue
+        if any(variable in line for variable in
+               ('TREEDB_PERF_RUNNER_LABEL', 'TREEDB_PERF_RUNNER_PR', 'TREEDB_M0_CONTROLLED_ADMISSION_SHA')):
+            if line not in verified_lines:
+                raise ValueError('administrator runner variable outside verified routing expressions')
 
 
 class TreeDBCIContractTests(unittest.TestCase):
@@ -99,24 +134,74 @@ class TreeDBCIContractTests(unittest.TestCase):
             "vars.TREEDB_PERF_RUNNER_PR == format('{0}', github.event.pull_request.number) && "
             "vars.TREEDB_PERF_RUNNER_LABEL || 'ubuntu-24.04'",
         )
+        # Separate required workflow: its administrator variables must occur
+        # only in this exact guarded route, never another job or environment.
         self.assertEqual(self.source.count("vars.TREEDB_PERF_RUNNER_LABEL"), 2)
         self.assertEqual(self.source.count("vars.TREEDB_PERF_RUNNER_PR"), 2)
+        for line in self.source.splitlines():
+            if line.lstrip().startswith('#'):
+                continue
+            if any(variable in line for variable in
+                   ('TREEDB_PERF_RUNNER_LABEL', 'TREEDB_PERF_RUNNER_PR', 'TREEDB_M0_CONTROLLED_ADMISSION_SHA')):
+                self.assertEqual(line, match.group(0),
+                                 'administrator runner variable outside verified MVCC routing expression')
+
+    def test_required_workflow_rejects_administrator_vars_in_unrelated_jobs(self) -> None:
+        for variable in ('TREEDB_PERF_RUNNER_LABEL', 'TREEDB_PERF_RUNNER_PR', 'TREEDB_M0_CONTROLLED_ADMISSION_SHA'):
+            for reference in ('vars.VARIABLE', "vars['VARIABLE']"):
+                expression = reference.replace('VARIABLE', variable)
+                injected = "\n  unrelated-job:\n    env:\n      UNGUARDED: ${{ " + expression + " }}\n"
+                with self.subTest(expression=expression), mock.patch.object(self, 'source', self.source + injected):
+                    with self.assertRaises(AssertionError):
+                        self.test_mvcc_runner_override_is_opt_in_and_exact_same_repository_pr_only()
+
+    def test_m0_rejects_administrator_vars_outside_verified_routing_fields(self) -> None:
+        for variable in ('TREEDB_PERF_RUNNER_LABEL', 'TREEDB_PERF_RUNNER_PR', 'TREEDB_M0_CONTROLLED_ADMISSION_SHA'):
+            for statement in ('      UNGUARDED: ${{ vars.VARIABLE }}',
+                              "      UNGUARDED: ${{ vars['VARIABLE'] }}",
+                              '        run: echo "${{ vars.VARIABLE }}"'):
+                injected = statement.replace('VARIABLE', variable)
+                with self.subTest(variable=variable, statement=statement):
+                    with self.assertRaisesRegex(ValueError, 'outside verified routing'):
+                        require_m0_routing_contract(self.m0 + '\n' + injected + '\n')
 
     def test_m0_runner_override_is_exact_pr_only_with_a_distinct_job_label(self) -> None:
-        match = re.search(r"(?m)^    runs-on: \$\{\{ (.+) \}\}$", self.m0)
-        self.assertIsNotNone(match)
-        expression = match.group(1)
-        self.assertEqual(
-            expression,
-            "github.event_name == 'pull_request' && "
-            "github.event.pull_request.head.repo.full_name == github.repository && "
-            "vars.TREEDB_PERF_RUNNER_LABEL != '' && "
-            "vars.TREEDB_PERF_RUNNER_PR != '' && "
-            "vars.TREEDB_PERF_RUNNER_PR == format('{0}', github.event.pull_request.number) && "
-            "format('{0}-m0', vars.TREEDB_PERF_RUNNER_LABEL) || 'ubuntu-24.04'",
+        require_m0_routing_contract(self.m0)
+
+    def test_m0_routing_contract_ignores_unrelated_variable_mentions(self) -> None:
+        require_m0_routing_contract(self.m0 + "\n# vars.TREEDB_PERF_RUNNER_LABEL vars.TREEDB_PERF_RUNNER_PR\n")
+
+    def test_m0_routing_rejects_each_missing_administrator_guard(self) -> None:
+        clauses = RUNNER_GUARD.split(' && ')
+        for field in ('runs-on', 'M0_CONTROLLED', 'CPU_SET', 'GOMAXPROCS', 'M0_LEASE_PATH'):
+            line = next(line for line in self.m0.splitlines() if line.strip().startswith(field + ':'))
+            for clause in clauses:
+                with self.subTest(field=field, removed=clause):
+                    weakened = line.replace(clause + ' && ', '', 1)
+                    self.assertNotEqual(line, weakened)
+                    with self.assertRaisesRegex(ValueError, field):
+                        require_m0_routing_contract(self.m0.replace(line, weakened, 1))
+
+    def test_m0_routing_rejects_label_theft_inputs_and_fallback_changes(self) -> None:
+        mutations = (
+            ("format('{0}-m0', vars.TREEDB_PERF_RUNNER_LABEL)", 'vars.TREEDB_PERF_RUNNER_LABEL'),
+            ("|| 'ubuntu-24.04'", "|| 'self-hosted'"),
+            ("&& vars.TREEDB_M0_CPU_SET || ''", "&& inputs.cpu_set || ''"),
+            ("&& vars.TREEDB_M0_GOMAXPROCS || ''", "&& '2' || '2'"),
+            ("&& vars.TREEDB_M0_LEASE_PATH || ''", "&& vars.TREEDB_M0_LEASE_PATH || '/host.lock'"),
+            ("&& '1' || '0'", "&& '1' || '1'"),
         )
-        self.assertEqual(self.m0.count("vars.TREEDB_PERF_RUNNER_LABEL"), 2)
-        self.assertEqual(self.m0.count("vars.TREEDB_PERF_RUNNER_PR"), 2)
+        for original, replacement in mutations:
+            with self.subTest(replacement=replacement):
+                self.assertIn(original, self.m0)
+                with self.assertRaises(ValueError):
+                    require_m0_routing_contract(self.m0.replace(original, replacement, 1))
+
+    def test_controlled_admission_cannot_be_inferred_from_runner_routing(self) -> None:
+        marker = " && vars.TREEDB_M0_CONTROLLED_ADMISSION_SHA == github.event.pull_request.head.sha"
+        self.assertIn(marker, self.m0)
+        with self.assertRaisesRegex(ValueError, 'M0_CONTROLLED'):
+            require_m0_routing_contract(self.m0.replace(marker, '', 1))
 
     def test_m0_routing_preserves_supervised_enforced_capture(self) -> None:
         self.assertIn("    timeout-minutes: 20\n", self.m0)
@@ -124,7 +209,7 @@ class TreeDBCIContractTests(unittest.TestCase):
         self.assertNotIn("fromJSON", self.m0)
         self.assertNotIn("inputs:", self.m0)
         self.assertIn("ref: ${{ github.event.pull_request.head.sha || github.sha }}", self.m0)
-        self.assertIn("M0_QUALIFICATION_PROFILE: hosted-semantic", self.m0)
+        self.assertIn("M0_QUALIFICATION_PROFILE: ${{ env.M0_CONTROLLED == '1' && 'controlled-performance' || 'hosted-semantic' }}", self.m0)
         self.assertIn(
             'run: RUN_DIR="$RUNNER_TEMP/treedb-vacuum-m0" scripts/treedb_vacuum_m0_ci.sh',
             self.m0,
@@ -136,6 +221,16 @@ class TreeDBCIContractTests(unittest.TestCase):
         self.assertIn('return supervise(', supervisor)
         self.assertIn("      - name: Upload complete evidence packet\n        if: always()", self.m0)
         self.assertIn("          if-no-files-found: error", self.m0)
+
+    def test_m0_upload_retains_each_attempt_without_overwriting_evidence(self) -> None:
+        upload = block(self.m0, "      - name: Upload complete evidence packet\n",
+                       "\n      - name: Observe controlled custody")
+        self.assertIn(
+            "name: treedb-vacuum-m0-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}",
+            upload,
+        )
+        self.assertIn("          overwrite: false\n", upload)
+        self.assertNotIn("overwrite: true", upload)
 
     def test_mvcc_attribution_uses_pull_request_base_and_head(self) -> None:
         mvcc = block(self.source, "  mvcc-raw-path-gate:\n", "\n  test:\n")

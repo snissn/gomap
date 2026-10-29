@@ -13,12 +13,20 @@ All timing observations and strict gate values, including failed CV, remain in
 no performance approval and cannot satisfy a controlled qualification obligation.
 
 The default CLI profile remains `controlled-performance`: every existing strict
-predicate must pass. All CI allocations, including self-hosted runners, use
-`hosted-semantic` until an explicitly admitted controlled path is integrated.
-Runner routing alone does not establish controlled conditions: the CPU admission,
-external one-job lease and custody protocol in PR #5281 must be integrated and
-prospectively qualified before controlled-environment claims. Existing pause
-owner review requirements remain. Strict CV is a stability check, not an A/B
+predicate must pass. CI allocations, including self-hosted runners, use
+`hosted-semantic` unless the
+same-repository administrator-selected PR route also has the independent
+`TREEDB_M0_CONTROLLED_ADMISSION_SHA` setting equal to the exact PR head SHA.
+Only that conjunction
+selects `controlled-performance`. Runner routing alone does not establish
+controlled conditions: CPU admission, the external whole-job lease, post-upload
+observation and separate external post-release receipt must all be retained and
+prospectively qualified before controlled-environment claims. See
+[the custody protocol](../TreeDB/docs/performance/index-vacuum-m0.md#external-post-release-receipt).
+The supervisor and direct capture reject a profile/custody-mode mismatch before
+product execution. Direct capture therefore requires explicit custody mode and
+placement/lease configuration for its default strict profile; local semantic
+diagnostics must explicitly select `hosted-semantic`. Existing pause owner review requirements remain. Strict CV is a stability check, not an A/B
 regression detector: a uniformly slower capture can still have low CV. Exact-head
 product comparisons and their workload-specific material regression thresholds
 remain separately required.
@@ -80,5 +88,6 @@ No timed benchmarks or
 controlled qualification were run for this change. #4519 remains open: five
 unchanged-head hosted invocations across allocations, whole-job budget evidence,
 controlled noise and injected material-regression controls, complete packets,
-exact-head review and current-head CI are still required. Integrate #5281's
-custody and upload safeguards without replacing its external lease checks.
+exact-head review and current-head CI are still required. This experimental
+integration retains #5281's external lease checks; no host
+qualification or infrastructure deployment is established by local tests.

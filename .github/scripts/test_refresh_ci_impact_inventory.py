@@ -141,12 +141,15 @@ class RefreshSnapshotContract(unittest.TestCase):
     def test_step_environment_cannot_be_rebound_as_job_environment(self):
         policy = self.refresh()
         job = policy['workflows']['treedb-vacuum-m0.yml']['jobs']['capture']
-        self.assertEqual(job['environment'], {})
-        self.assertEqual(job['commands'][0]['env'],
-                         {'M0_QUALIFICATION_PROFILE': 'hosted-semantic'})
+        self.assertIn('M0_CONTROLLED', job['environment'])
+        capture = next(command for command in job['commands']
+                       if command['name'] == 'Capture and enforce declared M0 qualification')
+        self.assertNotIn('M0_QUALIFICATION_PROFILE', job['environment'])
+        self.assertEqual(capture['env'], {'M0_QUALIFICATION_PROFILE':
+            "${{ env.M0_CONTROLLED == '1' && 'controlled-performance' || 'hosted-semantic' }}"})
         inputs, _ = ci_impact.tree_inventory(self.repo, self.git('rev-parse', 'HEAD'))
         refresh_ci_impact_inventory.check_source_contracts(self.repo, policy, inputs)
-        job['environment'] = job['commands'][0].pop('env')
+        job['environment'].update(capture.pop('env'))
         with self.assertRaisesRegex(ci_impact.ContractError, 'workflow-source-contract-mismatch'):
             refresh_ci_impact_inventory.check_source_contracts(self.repo, policy, inputs)
 

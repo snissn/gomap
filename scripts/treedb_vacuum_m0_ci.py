@@ -143,6 +143,8 @@ def main():
     profile = os.environ.get("M0_QUALIFICATION_PROFILE")
     if profile not in ("hosted-semantic", "controlled-performance"):
         raise ValueError("an explicit M0 qualification profile is required")
+    if (profile == "controlled-performance") != (os.environ.get("M0_CONTROLLED", "0") == "1") or os.environ.get("M0_CONTROLLED", "0") not in ("0", "1"):
+        raise ValueError("qualification profile and explicit custody mode disagree")
     root = subprocess.check_output(["git", "rev-parse", "--show-toplevel"], text=True).strip()
     return supervise(["bash", str(Path(root) / "scripts/treedb_vacuum_m0_capture.sh")],
                      os.environ["RUN_DIR"], profile, 720 if profile == "hosted-semantic" else 900)
