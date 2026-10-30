@@ -65,13 +65,17 @@ func TestNativeOrdinaryGraphAcceptedAcrossCapturedManifestBuild(t *testing.T) {
 					t.Fatalf("INVALID_WITNESS seed[%d:%d]: %v", start, end, err)
 				}
 			}
-			insert(0, 128)
+			// Keep the full 4096/128 geometry while leaving only the final
+			// batch pending at the held build. MaxSources is 32: retaining
+			// 31 pending batches plus a frozen cut would confound this
+			// root-handoff control with producer-pressure maintenance.
+			for start := 0; start < 3968; start += 128 {
+				insert(start, start+128)
+			}
 			if err := owner.Checkpoint(); err != nil {
 				t.Fatal(err)
 			}
-			for start := 128; start < 4096; start += 128 {
-				insert(start, start+128)
-			}
+			insert(3968, 4096)
 			if !overlap {
 				if err := owner.Checkpoint(); err != nil {
 					t.Fatal(err)
