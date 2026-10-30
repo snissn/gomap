@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "classification": "failed readiness evidence only; no workload/checkpoint/reopen qualification",
+  "fixture_sha256": {
+    "mongodb827-public-identity.extract.json": "fa1df78c8a2e9dfb886322cff78b9fe20935f3c3c2a033b75f492c4cb8d3e831",
+    "mongodb827-git-origin.json": "30af2009d3a0a2530473d63fb15c0dfd50ca85aa7372cc2377544296612af915"
+  }
+}

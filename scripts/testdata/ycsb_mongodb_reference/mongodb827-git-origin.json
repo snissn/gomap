@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "kind": "mongodb_public_commit_git_origin_mapping",
+  "public_repository": "mongodb/mongo",
+  "public_commit": "9fbea53313e85fbbf864a963ff17b0bd6dafa0be",
+  "public_commit_url": "https://github.com/mongodb/mongo/commit/9fbea53313e85fbbf864a963ff17b0bd6dafa0be",
+  "commit_message": "SERVER-108845 Fix failing rapidyaml (#50785)\n\nGitOrigin-RevId: 8f6785264a643d2eeb5e4046f7876a23e40e1a09",
+  "reported_git_version": "8f6785264a643d2eeb5e4046f7876a23e40e1a09",
+  "source_record": "/home/mikers/gomap-5335-close-consumer-build-20261029/reference-correctness-833b9b2-20261030/source-review/expected-commit.connector.json",
+  "source_record_sha256": "aa78cf596ccfbc700e1768bb12a1229d4ca2b75004b59c2d610140aec606c29d",
+  "caveat": "Public commit trailer declares GitOrigin-RevId. Direct lookup of the origin SHA in this public mirror returned422; no independently fetched origin tree is claimed."
+}
