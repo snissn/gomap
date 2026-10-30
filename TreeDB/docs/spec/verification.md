@@ -228,7 +228,11 @@ close errors and reopens all three production profiles. Its deterministic
 coverage, not a reduced public RED. No deterministic smaller public RED has
 been established. The retained 100,000-row public reproduction and the
 focused zipper RED/GREEN are separate evidence; see issue #5333 for their
-source bindings, recipes, and limitations.
+source bindings, recipes, and limitations. The opt-in
+`scripts/cow_json_load_regression.py` builds pinned sources and the retained
+client protocol overlay, checks public load counts and checked server close,
+then verifies every expected key on a fresh reopen; see its accompanying
+documentation for nondeterminism and the historical client-close limitation.
 `TestCOWNativewireJSONDurableACKRecovery` exits the owner process without close
 after synced ACKs and verifies the recovered documents.
 `TestCOWNativewireJSONDurableVisibleACKWALReplay` separately observes replay of
