@@ -114,11 +114,17 @@ def owner_checkpoint(directory,prefix,stem,receipt,bounds,opened,source_id,fixtu
     raw=c.read(evidence/"owner.checkpoint.json")
     request=c.read(evidence/"owner.checkpoint-request.json")
     c.require(isinstance(raw,dict) and c.schema(raw) and raw["kind"]=="explicit_live_owner_checkpoint", "missing raw explicit owner checkpoint")
-    c.require(raw==receipt["owner_checkpoint"] and raw["request"]==request, "checkpoint raw/client/request mismatch")
+    c.require(json.dumps(raw,sort_keys=True)==json.dumps(receipt["owner_checkpoint"],sort_keys=True) and json.dumps(raw["request"],sort_keys=True)==json.dumps(request,sort_keys=True), "checkpoint raw/client/request mismatch")
     c.require(isinstance(request,dict) and c.schema(request) and request["owner_id"]==opened["owner_id"] and isinstance(request["request_id"],str) and len(request["request_id"])==32 and all(char in "0123456789abcdef" for char in request["request_id"]), "checkpoint request owner mismatch")
     launch=c.read(directory/(stem+".launch.json"))
+    c.require(isinstance(request["client"],dict), "checkpoint request process missing")
+    c.process(request["client"])
     c.require(request["client"]==launch["process"] and request["source_id"]==source_id and request["fixture_id"]==fixture_id and request["snapshot_sha256"]==c.digest(directory/snapshot), "checkpoint request client/source/snapshot mismatch")
     observation=raw["owner"]
+    c.require(isinstance(observation,dict) and c.schema(observation) and observation["kind"]=="live_owner_observation", "checkpoint actual owner schema mismatch")
+    c.require(isinstance(observation["process"],dict), "checkpoint actual owner process missing")
+    c.process(observation["process"])
+    c.require(type(observation["data_device"]) is int and observation["data_device"]>=0 and type(observation["data_inode"]) is int and observation["data_inode"]>0, "checkpoint actual owner data identity types mismatch")
     for key in ("schema_version","kind","owner_id","process","data_dir","data_device","data_inode","profile","backend"):
         c.require(observation[key]==opened[key], "checkpoint actual owner identity mismatch")
     c.require(type(observation["observed_gomaxprocs"]) is int and observation["observed_gomaxprocs"]==opened["observed_gomaxprocs"] and observation["stats"]["treedb.profile.resolved"]==opened["profile"], "checkpoint live owner runtime/profile mismatch")

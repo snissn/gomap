@@ -579,6 +579,44 @@ int main(int argc,char **argv) {
             self.change("snapshot_preclose.close.json",lambda v:v.update(owner_checkpoint=proof))
             self.check(False)
 
+    def test_checkpoint_nested_identity_types_are_strict_even_when_values_compare_equal(self):
+        original=COMPARE.read(self.directory/"server.evidence/owner.checkpoint.json")
+        controls=[lambda v:v["owner"].update(schema_version=True),
+                  lambda v:v["owner"].update(data_inode=21.0),
+                  lambda v:v["owner"].update(data_device=10.0),
+                  lambda v:v["owner"].update(observed_gomaxprocs=16.0),
+                  lambda v:v["owner"]["process"].update(pid=1234.0),
+                  lambda v:v["owner"]["process"].update(start_ticks=500.0),
+                  lambda v:v["owner"]["process"].update(gomaxprocs_unset=1),
+                  lambda v:v["request"]["client"].update(pid=4321.0),
+                  lambda v:v["request"]["client"].update(start_ticks=500.0),
+                  lambda v:v["request"]["client"].update(gomaxprocs_unset=1)]
+        for mutate in controls:
+            proof=json.loads(json.dumps(original));mutate(proof)
+            self.save(self.directory/"server.evidence/owner.checkpoint.json",proof)
+            self.save(self.directory/"server.evidence/owner.checkpoint-request.json",proof["request"])
+            self.change("snapshot_preclose.close.json",lambda v:v.update(owner_checkpoint=proof))
+            self.check(False)
+
+    def test_checkpoint_copy_comparison_preserves_json_number_types(self):
+        self.change("snapshot_preclose.close.json",lambda v:v["owner_checkpoint"]["owner"].update(data_inode=21.0))
+        self.check(False,"raw/client/request mismatch")
+
+    def test_executable_hash_ignores_read_atime_but_rejects_stable_identity_changes(self):
+        from types import SimpleNamespace
+        from unittest import mock
+        fields=dict(st_dev=1,st_ino=2,st_size=3,st_mtime_ns=4,st_ctime_ns=5,st_atime_ns=6)
+        for change,accepted in ((dict(st_atime_ns=7),True),(dict(st_size=7),False),(dict(st_mtime_ns=7),False),(dict(st_ctime_ns=7),False),(dict(st_ino=7),False)):
+            COMPARE.EXE_HASH_CACHE.clear()
+            before=SimpleNamespace(**fields);after=SimpleNamespace(**dict(fields,**change))
+            with mock.patch.object(COMPARE.os,"stat",side_effect=[before,after]),mock.patch.object(COMPARE,"digest",return_value="f"*64):
+                if accepted:self.assertEqual(COMPARE.exe_digest("fixture"),"f"*64)
+                else:
+                    with self.assertRaisesRegex(ValueError,"executable changed"):
+                        COMPARE.exe_digest("fixture")
+                    self.assertEqual(COMPARE.EXE_HASH_CACHE,{})
+        COMPARE.EXE_HASH_CACHE.clear()
+
     def test_short_lived_large_elf_child_is_prehashed_before_observation(self):
         binary=self.out/"large-python"
         shutil.copyfile(sys.executable,binary)

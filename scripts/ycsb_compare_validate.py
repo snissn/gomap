@@ -270,8 +270,13 @@ def exe_digest(path):
     stat = os.stat(path)
     key = (stat.st_dev,stat.st_ino,stat.st_size,stat.st_mtime_ns,stat.st_ctime_ns)
     if key not in EXE_HASH_CACHE:
-        EXE_HASH_CACHE[key] = digest(path)
-        require(os.stat(path) == stat, "executable changed while hashing")
+        value = digest(path)
+        after = os.stat(path)
+        # Reading the executable may itself update atime; it is not content or
+        # identity. Keep every stable field in the cache key guarded instead.
+        after_key = (after.st_dev,after.st_ino,after.st_size,after.st_mtime_ns,after.st_ctime_ns)
+        require(after_key == key, "executable changed while hashing")
+        EXE_HASH_CACHE[key] = value
     return EXE_HASH_CACHE[key]
 
 

@@ -571,11 +571,11 @@ func run() (retErr error) {
 	var checkpointResult any
 	var ownerCheckpoint *ycsbevidence.CheckpointReceipt
 	privateCheckpoint := func() error {
-		checkpointAttempted = true
 		proof, err := ycsbevidence.RequestCheckpoint(ctx, *ownerCheckpointDir, *source, *fixture, *observed)
 		ownerCheckpoint = &proof
 		checkpointResult = proof.Result
-		checkpointSucceeded = err == nil && proof.Result.Success
+		checkpointAttempted = proof.Checkpoint.Attempted
+		checkpointSucceeded = err == nil && proof.Checkpoint.Success && proof.Result.Success
 		return err
 	}
 	defer func() {
