@@ -18,8 +18,10 @@ import (
 // Every setup miss is an explicit failure, not a skipped or weakened assertion.
 // The existing documentservice4096/128 cold-hybrid test remains unchanged.
 func TestNativeOrdinaryGraphAcceptedAcrossCapturedManifestBuild(t *testing.T) {
-	for _, overlap := range []bool{false, true} {
-		t.Run(fmt.Sprintf("overlap-%t", overlap), func(t *testing.T) {
+	for _, mode := range []string{"sequential", "changed-manifest", "unchanged-manifest"} {
+		t.Run(mode, func(t *testing.T) {
+			overlap := mode != "sequential"
+			unchanged := mode == "unchanged-manifest"
 			if !ordinaryColumnStableAuthorityEnabled() {
 				t.Skip("stable relative namespace unavailable")
 			}
@@ -51,6 +53,19 @@ func TestNativeOrdinaryGraphAcceptedAcrossCapturedManifestBuild(t *testing.T) {
 			col, err := manager.OpenCollection(meta.Name)
 			if err != nil {
 				t.Fatal(err)
+			}
+			var pause *Collection
+			if unchanged {
+				if _, err := manager.CreateCollection(&CollectionMeta{Name: "build_pause", Options: CollectionOptions{ColumnStore: &ColumnStoreConfig{
+					Enabled: true, Columns: []ColumnStoreColumn{{Name: "label", Path: "label", ValueType: ColumnStoreValueString, Owner: TypedStorageOwnerRowAsset}},
+					RetainedPayload: ColumnRetainedPayloadNonColumn, RetainedPayloadEncoding: ColumnRetainedPayloadEncodingJSON,
+				}}}); err != nil {
+					t.Fatal(err)
+				}
+				pause, err = manager.OpenCollection("build_pause")
+				if err != nil {
+					t.Fatal(err)
+				}
 			}
 			insert := func(start, end int) {
 				t.Helper()
@@ -85,6 +100,17 @@ func TestNativeOrdinaryGraphAcceptedAcrossCapturedManifestBuild(t *testing.T) {
 				}
 				return
 			}
+			if unchanged {
+				// Drain all target rows, then create real pending assets only
+				// in the independent collection. Its old build has no target
+				// manifest result to hand off; graph construction still overlaps.
+				if err := owner.Checkpoint(); err != nil {
+					t.Fatal(err)
+				}
+				if _, _, err := pause.InsertTypedBatchWithStats([][]byte{[]byte("pending")}, [][]byte{[]byte(`{"label":"pending"}`)}, []TypedColumnBatch{{Name: "label", Strings: []string{"pending"}}}); err != nil {
+					t.Fatal(err)
+				}
+			}
 			before, err := backend.ObserveNativeProducer()
 			if err != nil || before.UnderPressure {
 				t.Fatalf("INVALID_WITNESS producer would join held worker: %+v %v", before, err)
@@ -99,10 +125,31 @@ func TestNativeOrdinaryGraphAcceptedAcrossCapturedManifestBuild(t *testing.T) {
 			}
 			manifest, ok := old.collection.domains.Get("column/manifest")
 			primary, pok := old.collection.domains.Get("primary")
-			if !ok || !pok || manifest.baseRoot == 0 || primary.typed == nil {
+			if !ok || !pok || manifest.baseRoot == 0 || (!unchanged && primary.typed == nil) {
 				t.Fatal("INVALID_WITNESS no real manifest/pending typed boundary")
 			}
 			oldRoot, boundary := manifest.baseRoot, primary.typed
+			oldEngine, ok := old.capture.State().(*nativeEngineVersion)
+			if !ok {
+				t.Fatal("INVALID_WITNESS no original engine capture")
+			}
+			var pauseIdentity uint64
+			if unchanged {
+				if primary.typed != nil {
+					t.Fatal("INVALID_WITNESS no-root-change target still has typed suffix")
+				}
+				if _, pending := oldEngine.pending.Get(old.collection.incarnation); pending {
+					t.Fatal("INVALID_WITNESS no-root-change target in old pending inventory")
+				}
+				pauseState, found := oldEngine.names.Get("build_pause")
+				if !found {
+					t.Fatal("INVALID_WITNESS missing independent pause collection")
+				}
+				pauseIdentity = pauseState.incarnation
+				if _, pending := oldEngine.pending.Get(pauseIdentity); !pending {
+					t.Fatal("INVALID_WITNESS independent pause has no real pending inventory")
+				}
+			}
 			for d := boundary; d != nil; d = d.previous {
 				if d.data.graph != nil {
 					t.Fatal("INVALID_WITNESS old prefix already contains graph")
@@ -181,7 +228,7 @@ func TestNativeOrdinaryGraphAcceptedAcrossCapturedManifestBuild(t *testing.T) {
 			if graph == nil || graph.data.graph == nil || graph.appliedLSN != event.AssignedLSN || graph.data.graph.sourceRoot != oldRoot {
 				t.Fatalf("INVALID_WITNESS no exact original recipe root=%d lsn=%d", oldRoot, event.AssignedLSN)
 			}
-			found := false
+			found := unchanged && boundary == nil && graph.previous == nil
 			for d := graph.previous; d != nil; d = d.previous {
 				if d == boundary {
 					found = true
@@ -201,6 +248,33 @@ func TestNativeOrdinaryGraphAcceptedAcrossCapturedManifestBuild(t *testing.T) {
 			case <-time.After(15 * time.Second):
 				t.Fatal("INVALID_WITNESS old build did not complete")
 			}
+			if unchanged {
+				// The exact original captured engine owns this build ledger.
+				// Read it only after the old worker joined. Its complete real
+				// result inventory must exclude every target domain and typed
+				// work item; the handoff therefore cannot rewrite that manifest.
+				build := oldEngine.build
+				if build == nil || !build.complete || build.handoffs == 0 {
+					t.Fatal("INVALID_WITNESS no completed original no-root-change ledger")
+				}
+				pauseBuilt := false
+				for _, result := range build.built {
+					if result.collection == old.collection.incarnation {
+						t.Fatal("INVALID_WITNESS old build touched graph collection")
+					}
+					if result.collection == pauseIdentity && result.name == "column/manifest" && result.root != result.oldBaseRoot {
+						pauseBuilt = true
+					}
+				}
+				for _, work := range build.typed {
+					if work.collection == old.collection.incarnation {
+						t.Fatal("INVALID_WITNESS old build had graph typed work")
+					}
+				}
+				if !pauseBuilt {
+					t.Fatal("INVALID_WITNESS independent build did not advance its own manifest")
+				}
+			}
 			var graphErr error
 			select {
 			case graphErr = <-graphDone:
@@ -214,8 +288,11 @@ func TestNativeOrdinaryGraphAcceptedAcrossCapturedManifestBuild(t *testing.T) {
 			}
 			defer current.Close()
 			currentManifest, ok := current.collection.domains.Get("column/manifest")
-			if !ok || currentManifest.baseRoot == oldRoot {
+			if !ok || (!unchanged && currentManifest.baseRoot == oldRoot) {
 				t.Fatal("INVALID_WITNESS no actual manifest-root advance")
+			}
+			if graphErr != nil && unchanged {
+				t.Fatalf("no-root-change control: accepted_lsn=%d original_manifest=%d: %v", event.AssignedLSN, oldRoot, graphErr)
 			}
 			if graphErr != nil {
 				currentPrimary, ok := current.collection.domains.Get("primary")
