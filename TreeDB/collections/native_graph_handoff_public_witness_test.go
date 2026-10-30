@@ -2,7 +2,11 @@ package collections
 
 import (
 	"bytes"
+	"context"
 	"fmt"
+	"os"
+	"os/exec"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -14,6 +18,48 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
 
+const nativeGraphHandoffWitnessChildEnv = "TREEDB_NATIVE_GRAPH_HANDOFF_WITNESS_CHILD"
+const nativeGraphHandoffWitnessSuccess = "NATIVE_GRAPH_HANDOFF_WITNESS_COMPLETED"
+
+// Worker APIs have no cancellation contract. Keep the original public calls in
+// a child so a failed join cannot leak a worker into another test or race DB
+// teardown against that worker. Normal and race runs use the same test binary.
+func enterNativeGraphHandoffWitnessChild(t *testing.T) bool {
+	t.Helper()
+	if selected := os.Getenv(nativeGraphHandoffWitnessChildEnv); selected != "" {
+		if selected != t.Name() {
+			t.Fatalf("INVALID_WITNESS child selector=%q want=%q", selected, t.Name())
+		}
+		// Registered before fixture construction; runs after fixture defers and only
+		// certifies a normal, non-skipped completion of the whole child case.
+		t.Cleanup(func() {
+			if !t.Failed() && !t.Skipped() {
+				t.Log(nativeGraphHandoffWitnessSuccess)
+			}
+		})
+		return true
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 150*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^"+regexp.QuoteMeta(t.Name())+"$", "-test.count=1", "-test.timeout=2m", "-test.v")
+	cmd.WaitDelay = 5 * time.Second
+	prefix := nativeGraphHandoffWitnessChildEnv + "="
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(entry, prefix) {
+			cmd.Env = append(cmd.Env, entry)
+		}
+	}
+	cmd.Env = append(cmd.Env, prefix+t.Name())
+	// CombinedOutput waits/reaps the child even on context cancellation. Retain
+	// timeout stacks and assertion output instead of retrying an invalid setup.
+	output, err := cmd.CombinedOutput()
+	if err != nil || ctx.Err() != nil || !bytes.Contains(output, []byte(nativeGraphHandoffWitnessSuccess)) || bytes.Contains(output, []byte("INVALID_WITNESS")) || bytes.Contains(output, []byte("DATA RACE")) {
+		t.Fatalf("INVALID_WITNESS child completion err=%v deadline=%v:\n%s", err, ctx.Err(), output)
+	}
+	t.Logf("isolated witness completion:\n%s", output)
+	return false
+}
+
 // A controlled public-path witness, not attribution of the original race7 job.
 // Every setup miss is an explicit failure, not a skipped or weakened assertion.
 // The existing documentservice4096/128 cold-hybrid test remains unchanged.
@@ -24,6 +70,9 @@ func TestNativeOrdinaryGraphAcceptedAcrossCapturedManifestBuild(t *testing.T) {
 			unchanged := mode == "unchanged-manifest"
 			if !ordinaryColumnStableAuthorityEnabled() {
 				t.Skip("stable relative namespace unavailable")
+			}
+			if !enterNativeGraphHandoffWitnessChild(t) {
+				return
 			}
 			clearNativeOrdinaryPendingGraphCodecEnv(t)
 			opts := nativeTypedGroupOptions(t.TempDir()) // unchanged default finite admission limits
@@ -178,6 +227,11 @@ func TestNativeOrdinaryGraphAcceptedAcrossCapturedManifestBuild(t *testing.T) {
 						}
 					case <-time.After(15 * time.Second):
 						t.Errorf("INVALID_WITNESS %s did not join after release", job.name)
+						// Do not unwind into capture/manager/DB Close with a
+						// live worker. Only this isolated child waits; its Go
+						// timeout prints stacks and its parent kills/reaps it
+						// if necessary. No cancellation contract is invented.
+						<-job.done
 					}
 				}
 			}()
@@ -248,15 +302,35 @@ func TestNativeOrdinaryGraphAcceptedAcrossCapturedManifestBuild(t *testing.T) {
 			case <-time.After(15 * time.Second):
 				t.Fatal("INVALID_WITNESS old build did not complete")
 			}
+			// oldDone synchronizes the completed worker's writes. The held
+			// original capture keeps this exact engine and its ledger alive.
+			// Inspect it BEFORE joining graphDone: the graph's own later
+			// checkpoint must not supply the old-build root-change witness.
+			build := oldEngine.build
+			if build == nil || !build.complete || build.failure != nil || build.handoffs == 0 {
+				t.Fatal("INVALID_WITNESS no completed original handoff ledger")
+			}
+			var oldBuiltRoot uint64
+			if !unchanged {
+				matches := 0
+				for _, result := range build.built {
+					if result.collection == old.collection.incarnation && result.name == "column/manifest" {
+						matches++
+						if result.oldBaseRoot != oldRoot || result.root == 0 || result.root == oldRoot {
+							t.Fatalf("INVALID_WITNESS old target manifest basis=%d want=%d root=%d", result.oldBaseRoot, oldRoot, result.root)
+						}
+						oldBuiltRoot = result.root
+					}
+				}
+				if matches != 1 {
+					t.Fatalf("INVALID_WITNESS original target manifest results=%d want=1", matches)
+				}
+			}
 			if unchanged {
 				// The exact original captured engine owns this build ledger.
 				// Read it only after the old worker joined. Its complete real
 				// result inventory must exclude every target domain and typed
 				// work item; the handoff therefore cannot rewrite that manifest.
-				build := oldEngine.build
-				if build == nil || !build.complete || build.handoffs == 0 {
-					t.Fatal("INVALID_WITNESS no completed original no-root-change ledger")
-				}
 				pauseBuilt := false
 				for _, result := range build.built {
 					if result.collection == old.collection.incarnation {
@@ -309,7 +383,7 @@ func TestNativeOrdinaryGraphAcceptedAcrossCapturedManifestBuild(t *testing.T) {
 					t.Fatalf("INVALID_WITNESS original graph suffix not retained: %v", graphErr)
 				}
 				if strings.Contains(graphErr.Error(), "ordinary graph basis") {
-					t.Fatalf("ROOT_HANDOFF_WITNESS original_recipe=%d current_manifest=%d accepted_lsn=%d logical_seq=%d: %v", oldRoot, currentManifest.baseRoot, event.AssignedLSN, event.LogicalSequence, graphErr)
+					t.Fatalf("ROOT_HANDOFF_WITNESS original_recipe=%d old_build_manifest=%d current_manifest=%d accepted_lsn=%d logical_seq=%d: %v", oldRoot, oldBuiltRoot, currentManifest.baseRoot, event.AssignedLSN, event.LogicalSequence, graphErr)
 				}
 				t.Fatalf("distinct accepted graph failure (not attributed to root guard): %v", graphErr)
 			}
