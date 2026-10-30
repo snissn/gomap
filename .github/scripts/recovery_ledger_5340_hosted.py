@@ -161,7 +161,7 @@ try:
     if mode == "controls":
         for name, package, selector in selections:
             binary = packet / "bin" / (name + suffix)
-            command = ["go", "test", "-c", "-o", str(binary)]
+            command = ["go", "test", "-c", "-mod=readonly", "-o", str(binary)]
             if cell == "linux-race":
                 command.append("-race")
             command.append(package)
@@ -178,6 +178,7 @@ try:
         if not failed:
             for test in tests:
                 binary = packet / receipt["binaries"][test["binary"]]["path"]
+                assert git(product, "status", "--porcelain", "--untracked-files=all") == ""
                 code = call(test["label"], [str(binary), "-test.run=" + test["selector"], "-test.count=1", "-test.timeout=2m", "-test.v"])
                 if not test_result(test, code):
                     failed = True
@@ -207,6 +208,7 @@ try:
         if mode == "diagnostic":
             execution_env["GOMAP_RECOVERY_LEDGER"] = "1"
         test = tests[0]
+        assert git(product, "status", "--porcelain", "--untracked-files=all") == ""
         code = call(test["label"], [str(binary), "-test.run=" + test["selector"], "-test.count=1", "-test.timeout=2m", "-test.v"], execution_env)
         failed = not test_result(test, code)
     receipt["clean_product_after"] = git(product, "status", "--porcelain", "--untracked-files=all") == ""
