@@ -37,3 +37,19 @@ func TestFailedOutcomesRetainedWithoutOverwriting(t *testing.T) {
 		t.Fatal("attempt was overwritten")
 	}
 }
+
+func TestSnapshotDecodeRejectsDuplicateJSONAndWrongPhysicalTypes(t *testing.T) {
+	for _, raw := range []string{
+		`{"_ycsb_key":"id","field0":"YQ==","field0":"Yg=="}`,
+		`{"_ycsb_key":"id","field0":100}`,
+		`{"_ycsb_key":"id","field0":"YQ=="} {}`,
+		`[]`,
+	} {
+		if _, err := decodeJSON("id", []byte(raw)); err == nil {
+			t.Fatalf("accepted malformed document %s", raw)
+		}
+	}
+	if _, err := decodeJSON("id", []byte(`{"_ycsb_key":"id","field0":"YQ=="}`)); err != nil {
+		t.Fatal(err)
+	}
+}

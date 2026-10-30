@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$ROOT"
 VALIDATOR="$ROOT/scripts/ycsb_compare_validate.py"
+LIVE="$ROOT/scripts/ycsb_compare_live.py"
+FIXTURE_BIN="${FIXTURE_BIN:-$ROOT/bin/ycsb-correctness-fixture}"
 PYTHON="${PYTHON:-python3}"
 TMP_BASE="${TMPDIR:-/mnt/fast4tb}"
 OUT_DIR="${OUT_DIR:-$(mktemp -d "$TMP_BASE/treedb_ycsb_compare_XXXXXX")}"
@@ -40,7 +42,7 @@ TARGETS selects exactly the services and clients to run (space or comma separate
   treedb_native, treedb_mongo, mongodb). The default runs the two TreeDB targets.
 
 Supports supplied absolute TREEDB_NATIVE_SERVER_BIN/TREEDB_MONGO_GATEWAY_BIN,
-GOYCSB_BIN, TREEDB_NATIVE_DOCUMENT_FORMAT and TREEDB_MONGO_DOCUMENT_FORMAT
+GOYCSB_BIN, FIXTURE_BIN, TREEDB_NATIVE_DOCUMENT_FORMAT and TREEDB_MONGO_DOCUMENT_FORMAT
 (json|bson), TREEDB_PROFILE, RECORDCOUNT, OPERATIONCOUNT, THREADCOUNT,
 RUN_REPEATS, BUILD, BUILD_GOYCSB, OUT_DIR and TMPDIR.
 
@@ -55,8 +57,9 @@ PARSE_ONLY=true consumes the existing manifest.json and selected target artifact
 and rewrites summary.tsv, summary.md and validation.json. It does not start any
 service or mutate original input evidence; copy retained artifacts first.
 Missing/failed close, runtime/COW, checkpoint, close, reopen, observed-state or
-owned cleanup evidence causes a nonzero result. Server witness production is a
-separate integration responsibility. ALLOW_YCSB_ERRORS never makes errors valid.
+owned cleanup evidence causes a nonzero result. Contract2 requires original live owner observations and independent reopened
+process/owner plus canonical snapshots; Mongo checkpoint integration remains
+unsupported and fails closed. ALLOW_YCSB_ERRORS never makes errors valid.
 
 MONGODB_MODE=docker starts an owned service; external services currently require
 an explicit process/ownership integration and are refused. skip excludes MongoDB.
@@ -102,13 +105,15 @@ if [[ "$BUILD" == true ]]; then
   if [[ -n "${chosen[treedb_native]:-}" ]]; then go build -o "$TREEDB_NATIVE_SERVER_BIN" ./cmd/treedb-native-server; fi
   if [[ -n "${chosen[treedb_mongo]:-}" ]]; then go build -o "$TREEDB_MONGO_GATEWAY_BIN" ./TreeDB/mongo_gateway/server.go; fi
 fi
+if [[ "$BUILD" == true ]]; then go build -o "$FIXTURE_BIN" scripts/ycsb_correctness_fixture.go; fi
 if [[ "$BUILD_GOYCSB" == true ]]; then (cd "$GOYCSB_DIR" && make build); fi
+[[ "$FIXTURE_BIN" == /* && -x "$FIXTURE_BIN" ]] || fail "absolute supplied FIXTURE_BIN is required"
 [[ -x "$GOYCSB_BIN" ]] || fail "missing supplied client binary"
 for target in "${selected[@]}"; do mkdir "$OUT_DIR/$target"; done
 
-"$PYTHON" - "$OUT_DIR" "$CLIENT_BUILD_MANIFEST" "$GOYCSB_DIR" "$GOYCSB_BIN" "$TREEDB_PROFILE" "$RECORDCOUNT" "$OPERATIONCOUNT" "$THREADCOUNT" "$RUN_REPEATS" "$TREEDB_NATIVE_DOCUMENT_FORMAT" "$TREEDB_MONGO_DOCUMENT_FORMAT" "$SERVER_BUILD_MANIFEST" "$TREEDB_NATIVE_SERVER_BIN" "$TREEDB_MONGO_GATEWAY_BIN" "${selected[@]}" <<'PY'
+"$PYTHON" - "$OUT_DIR" "$CLIENT_BUILD_MANIFEST" "$GOYCSB_DIR" "$GOYCSB_BIN" "$TREEDB_PROFILE" "$RECORDCOUNT" "$OPERATIONCOUNT" "$THREADCOUNT" "$RUN_REPEATS" "$TREEDB_NATIVE_DOCUMENT_FORMAT" "$TREEDB_MONGO_DOCUMENT_FORMAT" "$SERVER_BUILD_MANIFEST" "$TREEDB_NATIVE_SERVER_BIN" "$TREEDB_MONGO_GATEWAY_BIN" "$FIXTURE_BIN" "$ROOT/scripts/ycsb_correctness_fixture.go" "${selected[@]}" <<'PY'
 import hashlib, json, pathlib, re, subprocess, sys, uuid
-out, build_path, repo, binary, profile, records, ops, threads, repeats, native_format, mongo_format, server_build_path, native_binary, mongo_binary, *targets = sys.argv[1:]
+out, build_path, repo, binary, profile, records, ops, threads, repeats, native_format, mongo_format, server_build_path, native_binary, mongo_binary, fixture_binary, fixture_source, *targets = sys.argv[1:]
 out = pathlib.Path(out)
 build = json.loads(pathlib.Path(build_path).read_text())
 def git(*args):
@@ -138,11 +143,22 @@ for target, record in server_builds.items():
     binary_path = {'treedb_native':native_binary,'treedb_mongo':mongo_binary}.get(target)
     if binary_path and record.get('exe_sha256') != sha(binary_path):
         raise SystemExit('supplied server ELF does not match version manifest')
+    if binary_path:
+        source_dir=record.get('source_dir','')
+        if not pathlib.Path(source_dir).is_absolute(): raise SystemExit('absolute actual server source_dir required')
+        actual_source=subprocess.check_output(['git','-C',source_dir,'rev-parse','HEAD']).decode().strip()
+        overlay=subprocess.check_output(['git','-C',source_dir,'diff','--binary','HEAD'])
+        if subprocess.check_output(['git','-C',source_dir,'ls-files','--others','--exclude-standard']).strip(): raise SystemExit('untracked server build input')
+        if actual_source != record['source_commit'] or hashlib.sha256(overlay).hexdigest()!=record.get('source_patch_sha256'): raise SystemExit('server source/overlay mismatch')
+        (out/target/'server-source.patch').write_bytes(overlay)
+        (out/target/'server-buildinfo.txt').write_bytes(subprocess.check_output(['go','version','-m',binary_path]))
 (out / 'server-build.json').write_text(json.dumps(server_manifest,indent=2)+'\n')
 (out / 'client.patch').write_bytes(patch)
 (out / 'client-build.json').write_text(json.dumps(build, indent=2)+'\n')
 (out / 'client-buildinfo.txt').write_bytes(subprocess.check_output(['go', 'version', '-m', binary]))
-manifest = dict(schema_version=1, campaign_id=uuid.uuid4().hex, targets=targets, profile=profile, formats={'treedb_native':native_format, 'treedb_mongo':mongo_format, 'mongodb':'bson'}, recordcount=int(records), operationcount=int(ops), threadcount=int(threads), run_repeats=int(repeats), client=build, server_builds=server_builds)
+(out/'fixture-source.go').write_bytes(pathlib.Path(fixture_source).read_bytes())
+fixture=dict(schema_version=1,binary=fixture_binary,exe_sha256=sha(fixture_binary),source_sha256=sha(fixture_source))
+manifest = dict(schema_version=1, lifecycle_contract=2, fixture=fixture, campaign_id=uuid.uuid4().hex, targets=targets, profile=profile, formats={'treedb_native':native_format, 'treedb_mongo':mongo_format, 'mongodb':'bson'}, recordcount=int(records), operationcount=int(ops), threadcount=int(threads), run_repeats=int(repeats), client=build, server_builds=server_builds)
 (out / 'manifest.json').write_text(json.dumps(manifest, indent=2)+'\n')
 PY
 
@@ -156,26 +172,27 @@ for name, path in [('cpuinfo','/proc/cpuinfo'),('meminfo','/proc/meminfo'),('clo
 (out/'host.json').write_text(json.dumps(context,indent=2)+'\n')
 PYHOST
 
-declare -a SERVER_PIDS=() SERVER_TARGETS=()
+declare -a SERVER_PIDS=() SERVER_TARGETS=() SERVER_PREFIXES=()
 MONGO_CONTAINER=""
 CLEANUP_DONE=false
 cleanup() {
-  local failed=0 pid target index code
+  local failed=0 pid target prefix index code
   [[ "$CLEANUP_DONE" == false ]] || return 0
   CLEANUP_DONE=true
   for index in "${!SERVER_PIDS[@]}"; do
-    pid=${SERVER_PIDS[$index]}; target=${SERVER_TARGETS[$index]}
-    if ! "$PYTHON" "$VALIDATOR" stop "$OUT_DIR/$target/server.launch.json"; then
+    pid=${SERVER_PIDS[$index]}; target=${SERVER_TARGETS[$index]}; prefix=${SERVER_PREFIXES[$index]}
+    if ! "$PYTHON" "$VALIDATOR" stop "$OUT_DIR/$target/$prefix.launch.json"; then
       failed=1
       # Identity mismatch is a hard refusal. Never signal or wait on that PID.
       continue
     fi
     code=0; wait "$pid" || code=$?
-    "$PYTHON" - "$OUT_DIR/$target" "$code" <<'PY'
+    "$PYTHON" - "$OUT_DIR/$target" "$code" "$prefix" <<'PY'
 import json, pathlib, sys
 out = pathlib.Path(sys.argv[1])
-launch = json.loads((out / 'server.launch.json').read_text())
-with (out / 'server.exit.json').open('x') as stream:
+prefix=sys.argv[3]
+launch = json.loads((out / (prefix+'.launch.json')).read_text())
+with (out / (prefix+'.exit.json')).open('x') as stream:
     json.dump(dict(process=launch['process'], exit_code=int(sys.argv[2])), stream)
 PY
     [[ "$code" == 0 ]] || failed=1
@@ -217,20 +234,22 @@ wait_tcp() {
 }
 log_command() { printf '%q ' "$@" >>"$OUT_DIR/commands.txt"; printf '\n' >>"$OUT_DIR/commands.txt"; }
 start_server() {
-  local target=$1 addr=$2 binary=$3 dir="$OUT_DIR/$1/db"
-  shift 3
-  mkdir "$dir"
-  local command=(env -u GOMAXPROCS "$binary" -dir "$dir" -profile "$TREEDB_PROFILE" -addr "$addr" "$@")
+  local target=$1 addr=$2 binary=$3 prefix=$4 dir="$OUT_DIR/$1/$5"
+  shift 5
+  mkdir -p "$dir"
+  mkdir "$OUT_DIR/$target/$prefix.evidence"
+  CLEANUP_DONE=false
+  local command=(env -u GOMAXPROCS "YCSB_SERVER_RECEIPT_DIR=$OUT_DIR/$target/$prefix.evidence" "$binary" -dir "$dir" -profile "$TREEDB_PROFILE" -addr "$addr" "$@")
   log_command "${command[@]}"
-  "${command[@]}" >"$OUT_DIR/$target/server.log" 2>&1 &
-  SERVER_PIDS+=("$!"); SERVER_TARGETS+=("$target")
-  "$PYTHON" "$VALIDATOR" observe "${SERVER_PIDS[-1]}" "$dir" "$OUT_DIR/$target/server.launch.json" --await-exec "$binary"
+  "${command[@]}" >"$OUT_DIR/$target/$prefix.log" 2>&1 &
+  SERVER_PIDS+=("$!"); SERVER_TARGETS+=("$target"); SERVER_PREFIXES+=("$prefix")
+  "$PYTHON" "$VALIDATOR" observe "${SERVER_PIDS[-1]}" "$dir" "$OUT_DIR/$target/$prefix.launch.json" --await-exec "$binary"
   wait_tcp "$addr"
 }
 for target in "${selected[@]}"; do
   case "$target" in
-    treedb_native) start_server "$target" "$NATIVE_ADDR" "$TREEDB_NATIVE_SERVER_BIN";;
-    treedb_mongo) start_server "$target" "$TREEDB_MONGO_ADDR" "$TREEDB_MONGO_GATEWAY_BIN" -document-format "$TREEDB_MONGO_DOCUMENT_FORMAT";;
+    treedb_native) start_server "$target" "$NATIVE_ADDR" "$TREEDB_NATIVE_SERVER_BIN" server db;;
+    treedb_mongo) start_server "$target" "$TREEDB_MONGO_ADDR" "$TREEDB_MONGO_GATEWAY_BIN" server db -document-format "$TREEDB_MONGO_DOCUMENT_FORMAT";;
     mongodb)
       command -v docker >/dev/null || fail "docker is required"
       MONGO_CONTAINER_NAME="treedb-ycsb-mongo-$$-$(date +%s)"
@@ -253,10 +272,37 @@ for target in "${selected[@]}"; do
   esac
   for ((i=0; i<=RUN_REPEATS; i++)); do
     phase=run; stem="run_$i"; [[ "$i" != 0 ]] || { phase=load; stem=load; }
-    command=("$GOYCSB_BIN" "$phase" "$binding" "${extra[@]}" -p "recordcount=$RECORDCOUNT" -p "operationcount=$OPERATIONCOUNT" -p "threadcount=$THREADCOUNT" -p fieldcount=10 -p fieldlength=100 -p readallfields=true -p writeallfields=false)
+    command=("$GOYCSB_BIN" "$phase" "$binding" "${extra[@]}" -p "recordcount=$RECORDCOUNT" -p "operationcount=$OPERATIONCOUNT" -p "threadcount=$THREADCOUNT" -p fieldcount=10 -p fieldlength=100 -p readallfields=true -p writeallfields=false -p insertorder=hashed -p keyprefix=user -p zeropadding=1 -p insertstart=0 -p readproportion=0.95 -p updateproportion=0.05 -p scanproportion=0 -p insertproportion=0 -p readmodifywriteproportion=0)
     log_command env -u GOMAXPROCS "${command[@]}"
     "$PYTHON" "$VALIDATOR" launch "$OUT_DIR/$target" "$stem" -- "${command[@]}"
+    if [[ "$phase" == load ]]; then
+      addr=$NATIVE_ADDR; [[ "$target" == treedb_native ]] || addr=$TREEDB_MONGO_ADDR
+      "$PYTHON" "$LIVE" snapshot "$OUT_DIR/$target" "$target" --addr "$addr" --stage loaded
+    fi
   done
 done
+for target in "${selected[@]}"; do
+  addr=$NATIVE_ADDR; [[ "$target" == treedb_native ]] || addr=$TREEDB_MONGO_ADDR
+  "$PYTHON" "$LIVE" snapshot "$OUT_DIR/$target" "$target" --addr "$addr" --stage preclose
+done
 cleanup
+SERVER_PIDS=(); SERVER_TARGETS=(); SERVER_PREFIXES=()
+for target in "${selected[@]}"; do
+  addr=$NATIVE_ADDR; binary=$TREEDB_NATIVE_SERVER_BIN; extra=()
+  if [[ "$target" == treedb_mongo ]]; then addr=$TREEDB_MONGO_ADDR; binary=$TREEDB_MONGO_GATEWAY_BIN; extra=(-document-format "$TREEDB_MONGO_DOCUMENT_FORMAT"); fi
+  [[ "$target" != mongodb ]] || fail "MongoDB lifecycle integration is unsupported"
+  start_server "$target" "$addr" "$binary" reopened db "${extra[@]}"
+  "$PYTHON" "$LIVE" snapshot "$OUT_DIR/$target" "$target" --addr "$addr" --stage reopened
+  cleanup
+  SERVER_PIDS=(); SERVER_TARGETS=(); SERVER_PREFIXES=()
+  start_server "$target" "$addr" "$binary" fixture-write fixture-db "${extra[@]}"
+  "$PYTHON" "$LIVE" write "$OUT_DIR/$target" "$target" --addr "$addr"
+  cleanup
+  SERVER_PIDS=(); SERVER_TARGETS=(); SERVER_PREFIXES=()
+  start_server "$target" "$addr" "$binary" fixture-reopened fixture-db "${extra[@]}"
+  "$PYTHON" "$LIVE" verify "$OUT_DIR/$target" "$target" --addr "$addr"
+  cleanup
+  SERVER_PIDS=(); SERVER_TARGETS=(); SERVER_PREFIXES=()
+  "$PYTHON" "$LIVE" assemble "$OUT_DIR/$target" "$target"
+done
 "$PYTHON" "$VALIDATOR" validate "$OUT_DIR"

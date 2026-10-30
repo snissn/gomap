@@ -6,13 +6,17 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"sync"
@@ -26,7 +30,8 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/writeconcern"
 )
 
-const collection = "ycsb_correctness"
+var collection = "ycsb_correctness"
+var database = "ycsb_correctness"
 
 type identity struct {
 	SchemaVersion int    `json:"schema_version"`
@@ -312,9 +317,35 @@ func (d *nativeDriver) update(ctx context.Context, u update) error {
 	return nil
 }
 func decodeJSON(id string, data []byte) (row, error) {
-	var doc map[string]any
-	if e := json.Unmarshal(data, &doc); e != nil {
-		return row{}, e
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	token, err := decoder.Token()
+	if err != nil || token != json.Delim('{') {
+		return row{}, errors.New("JSON document must be an object")
+	}
+	doc := map[string]any{}
+	for decoder.More() {
+		token, err = decoder.Token()
+		if err != nil {
+			return row{}, err
+		}
+		key, ok := token.(string)
+		if !ok {
+			return row{}, errors.New("invalid JSON field key")
+		}
+		if _, exists := doc[key]; exists {
+			return row{}, fmt.Errorf("duplicate JSON field %s", key)
+		}
+		var v any
+		if err = decoder.Decode(&v); err != nil {
+			return row{}, err
+		}
+		doc[key] = v
+	}
+	if _, err = decoder.Token(); err != nil {
+		return row{}, err
+	}
+	if err = decoder.Decode(new(any)); err != io.EOF {
+		return row{}, errors.New("trailing JSON document data")
 	}
 	if doc["_ycsb_key"] != id {
 		return row{}, errors.New("native ID mismatch")
@@ -415,7 +446,7 @@ func mongoOpen(addr string) (*mongoDriver, error) {
 	if e != nil {
 		return nil, e
 	}
-	return &mongoDriver{c, c.Database("ycsb_correctness").Collection(collection, options.Collection().SetWriteConcern(writeconcern.W1()))}, nil
+	return &mongoDriver{c, c.Database(database).Collection(collection, options.Collection().SetWriteConcern(writeconcern.W1()))}, nil
 }
 func (d *mongoDriver) insert(ctx context.Context, r row) error {
 	doc := bson.M{"_id": r.ID}
@@ -481,18 +512,32 @@ func run() (retErr error) {
 	addr := flag.String("addr", "", "server address")
 	format := flag.String("format", "", "json or bson")
 	profile := flag.String("profile", "", "storage profile")
-	mode := flag.String("mode", "", "write or verify")
+	mode := flag.String("mode", "", "write, verify, or read-only random snapshot")
 	expected := flag.String("expected", "", "exclusive expected manifest on write, existing manifest on verify")
 	observed := flag.String("observed", "", "exclusive updated/reopened snapshot")
 	receipt := flag.String("receipt", "", "exclusive fixture client cleanup receipt")
 	source := flag.String("source-id", "", "bound source identity")
 	fixture := flag.String("fixture-id", "", "fresh fixture identity")
+	stage := flag.String("stage", "", "random snapshot stage: loaded, preclose, or reopened")
+	checkpoint := flag.Bool("checkpoint", false, "explicit native checkpoint after random snapshot")
 	flag.Parse()
-	if *addr == "" || *source == "" || *fixture == "" || *expected == "" || *observed == "" || *receipt == "" || (*target != "native" && *target != "mongo") || (*format != "json" && *format != "bson") || (*mode != "write" && *mode != "verify") || (*profile != "command_wal_durable" && *profile != "command_wal_relaxed" && *profile != "no_wal_fast") {
+	if *addr == "" || *source == "" || *fixture == "" || *expected == "" || *observed == "" || *receipt == "" || (*target != "native" && *target != "mongo") || (*format != "json" && *format != "bson") || (*mode != "write" && *mode != "verify" && *mode != "snapshot") || (*profile != "command_wal_durable" && *profile != "command_wal_relaxed" && *profile != "no_wal_fast") {
 		return errors.New("all flags and valid target/format/profile/mode are required")
 	}
 	if *target == "mongo" && *format == "json" {
 		return errors.New("Mongo JSON storage with byte-valued fields is an unsupported fixture shape")
+	}
+	if *mode == "snapshot" {
+		if *stage != "loaded" && *stage != "preclose" && *stage != "reopened" {
+			return errors.New("invalid random snapshot stage")
+		}
+		if *checkpoint && *target != "native" {
+			return errors.New("no supported Mongo checkpoint API; refusing unproven checkpoint")
+		}
+		collection = "usertable"
+		database = "ycsb"
+	} else if *stage != "" || *checkpoint {
+		return errors.New("random snapshot options cannot alter deterministic fixture")
 	}
 	id := identity{1, *source, *fixture, *profile, *target, *format}
 	var m manifest
@@ -501,7 +546,7 @@ func run() (retErr error) {
 		if e := writeJSON(*expected, m); e != nil {
 			return e
 		}
-	} else {
+	} else if *mode == "verify" {
 		b, e := os.ReadFile(*expected)
 		if e != nil {
 			return e
@@ -518,6 +563,7 @@ func run() (retErr error) {
 	defer cancel()
 	var ds []driver
 	checkpointAttempted, checkpointSucceeded := false, false
+	var checkpointResult map[string]any
 	defer func() {
 		var cerr error
 		for _, d := range ds {
@@ -528,7 +574,27 @@ func run() (retErr error) {
 		if retErr != nil {
 			status = retErr.Error()
 		}
-		e := writeJSON(*receipt, map[string]any{"schema_version": 1, "kind": "deterministic_fixture_client_close", "fixture_id": *fixture, "source_id": *source, "mode": *mode, "pid": os.Getpid(), "started_utc": started.Format(time.RFC3339Nano), "ended_utc": time.Now().UTC().Format(time.RFC3339Nano), "checkpoint_attempted": checkpointAttempted, "checkpoint_succeeded": checkpointSucceeded, "close_error": func() string {
+		kind := "deterministic_fixture_client_close"
+		if *mode == "snapshot" {
+			kind = "random_snapshot_client_close"
+		}
+		artifacts := map[string]string{}
+		for _, path := range []string{*expected, *observed, *observed + ".load.json"} {
+			file, err := os.Open(path)
+			if err != nil {
+				continue
+			}
+			hash := sha256.New()
+			_, err = io.Copy(hash, file)
+			err = errors.Join(err, file.Close())
+			if err != nil {
+				retErr = errors.Join(retErr, err)
+				status = retErr.Error()
+				continue
+			}
+			artifacts[filepath.Base(path)] = hex.EncodeToString(hash.Sum(nil))
+		}
+		e := writeJSON(*receipt, map[string]any{"schema_version": 1, "artifacts_sha256": artifacts, "checkpoint": checkpointResult, "kind": kind, "fixture_id": *fixture, "source_id": *source, "mode": *mode, "pid": os.Getpid(), "started_utc": started.Format(time.RFC3339Nano), "ended_utc": time.Now().UTC().Format(time.RFC3339Nano), "checkpoint_attempted": checkpointAttempted, "checkpoint_succeeded": checkpointSucceeded, "close_error": func() string {
 			if cerr != nil {
 				return cerr.Error()
 			}
@@ -536,7 +602,11 @@ func run() (retErr error) {
 		}(), "result_error": status})
 		retErr = errors.Join(retErr, e)
 	}()
-	for i := 0; i < 4; i++ {
+	clients := 4
+	if *mode == "snapshot" {
+		clients = 1
+	}
+	for i := 0; i < clients; i++ {
 		if *target == "native" {
 			d, e := nativeOpen(ctx, *addr, *format)
 			if e != nil {
@@ -551,6 +621,33 @@ func run() (retErr error) {
 			ds = append(ds, d)
 		}
 	}
+	if *mode == "snapshot" {
+		actual, e := ds[0].scan(ctx)
+		if e != nil {
+			return e
+		}
+		sort.Slice(actual, func(i, j int) bool { return actual[i].ID < actual[j].ID })
+		if e = writeJSON(*observed, snapshot{id, "random_" + *stage, actual, []outcome{}}); e != nil {
+			return e
+		}
+		if *checkpoint {
+			checkpointAttempted = true
+			start := time.Now()
+			e = ds[0].(*nativeDriver).c.Checkpoint(ctx)
+			end := time.Now()
+			checkpointSucceeded = e == nil
+			message := ""
+			if e != nil {
+				message = e.Error()
+			}
+			checkpointResult = map[string]any{"attempted": true, "success": e == nil, "error": message, "start_utc": start.UTC().Format(time.RFC3339Nano), "end_utc": end.UTC().Format(time.RFC3339Nano), "elapsed_ns": end.Sub(start).Nanoseconds()}
+			if e != nil {
+				return e
+			}
+		}
+		return nil
+	}
+
 	if *mode == "verify" {
 		actual, e := ds[0].scan(ctx)
 		if e != nil {

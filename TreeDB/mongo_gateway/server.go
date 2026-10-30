@@ -19,6 +19,7 @@ import (
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
 	mongogateway "github.com/snissn/gomap/TreeDB/mongo_gateway"
+	"github.com/snissn/gomap/internal/ycsbevidence"
 )
 
 const defaultDataDir = "/tmp/treedb-mongo-gateway"
@@ -88,6 +89,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
+	evidence, err := ycsbevidence.OpenFromEnv(string(standalone.Options.Profile), standalone.Options.Dir, standalone.Backend, standalone.Stats)
+	if err != nil {
+		fmt.Fprintf(stderr, "mongo gateway server: owner evidence: %v\n", err)
+		_ = ln.Close()
+		_ = standalone.Close()
+		return 1
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -113,7 +122,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	serveErr := standalone.Serve(ctx, ln)
-	closeErr := standalone.Close()
+	closeErr := evidence.Close(standalone.Close)
 	if serveErr != nil {
 		fmt.Fprintf(stderr, "mongo gateway server: serve: %v\n", serveErr)
 		if closeErr != nil {

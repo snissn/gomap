@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Fail-closed consumer for go-ycsb close receipt v1 (snissn/go-ycsb#7).
 
-runtime.json and lifecycle.json are independent, externally produced observations;
-this tool never manufactures server COW, checkpoint or reopen evidence. See
+runtime.json and lifecycle.json aggregate original live observations and calls.
+Mandatory contract2 checks the original raw evidence and typed snapshots. See
 scripts/ycsb_compare_receipts.md for the observation contract.
 """
 import argparse
@@ -30,6 +30,10 @@ SHA = re.compile(r"[0-9a-f]{64}$")
 def require(condition, message):
     if not condition:
         raise ValueError(message)
+
+
+def schema(value):
+    return type(value.get("schema_version")) is int and value["schema_version"] == 1
 
 
 def digest(path):
@@ -128,7 +132,7 @@ def phase_evidence(directory, stem, target, manifest):
     require(launch["output_sha256"] == digest(directory / f"{stem}.out"), "stdout hash mismatch")
     require(launch["receipt_sha256"] == digest(receipt_path), "receipt hash mismatch")
     require(launch["campaign_id"] == manifest["campaign_id"], "stale launcher campaign")
-    require(receipt["schema_version"] == 1 and receipt["total_excludes_close"] is True, "unsupported close receipt")
+    require(schema(receipt) and receipt["total_excludes_close"] is True, "unsupported close receipt")
     require(receipt["phase_id"] == launch["phase_id"] and receipt["client_build_id"] == client["build_id"], "phase/build identity mismatch")
     phase = "load" if stem == "load" else "run"
     require(receipt["phase"] == phase and receipt["db"] == ("treedb-native" if target == "treedb_native" else "mongodb"), "DB/phase mismatch")
@@ -140,7 +144,7 @@ def phase_evidence(directory, stem, target, manifest):
     result(receipt["workload_close"], "workload Close", bounds=(db_bounds[1], bounds[1]))
     native = receipt["native_flush"]
     if target == "treedb_native":
-        require(native["applicable"] is True and native["flush_enabled"] is True and type(native["ack"]) is int and native["ack"] == 1, "required native flush/visible ACK missing")
+        require(native["applicable"] is True and native["flush_enabled"] is True and type(native["ack"]) is int and native["ack"] == 1, "required native flush/requested visible ACK missing")
         dial = result(native["dial"], "native dial", bounds=db_bounds)
         flush = result(native["flush"], "native FlushAll", bounds=(dial[1], db_bounds[1]))
         result(native["connection_close"], "native connection Close", bounds=(flush[1], db_bounds[1]))
@@ -156,14 +160,14 @@ def server_evidence(directory, target, manifest, phase_ids):
     process(launch["process"])
     build = manifest["server_builds"][target]
     server_manifest = read(directory.parent / "server-build.json")
-    require(server_manifest["schema_version"] == 1 and server_manifest["servers"][target] == build, "server build manifest mismatch")
-    require(build["schema_version"] == 1 and isinstance(build["version"], str) and build["version"], "missing server version binding")
+    require(schema(server_manifest) and server_manifest["servers"][target] == build, "server build manifest mismatch")
+    require(schema(build) and isinstance(build["version"], str) and build["version"], "missing server version binding")
     require(re.fullmatch(r"[0-9a-f]{40}", build["source_commit"]), "missing server source binding")
     require(SHA.fullmatch(build["exe_sha256"]) and launch["process"]["exe_sha256"] == build["exe_sha256"], "server ELF binding mismatch")
     require(build["expected_owner"] in ({"mongodb"} if target == "mongodb" else {"legacy", "cow"}), "invalid expected owner")
     for evidence in (runtime, lifecycle):
         require(evidence["version"] == build["version"] and evidence["source_commit"] == build["source_commit"], "server version/source mismatch")
-        require(evidence["schema_version"] == 1 and evidence["campaign_id"] == manifest["campaign_id"], "stale server evidence")
+        require(schema(evidence) and evidence["campaign_id"] == manifest["campaign_id"], "stale server evidence")
         require(evidence["target"] == target and evidence["profile"] == manifest["profile"] and evidence["format"] == manifest["formats"][target], "server settings mismatch")
         require(evidence["process"] == launch["process"], "server process identity mismatch")
         require(evidence["data_dir"] == launch["data_dir"] and pathlib.Path(evidence["data_dir"]).is_absolute(), "data directory mismatch")
@@ -174,7 +178,7 @@ def server_evidence(directory, target, manifest, phase_ids):
     require(isinstance(runtime["observation"], str) and runtime["observation"], "missing runtime witness provenance")
     require(lifecycle["phase_ids"] == phase_ids, "lifecycle phase identity mismatch")
     require(lifecycle["server_exit_code"] == 0, "server close exit failure")
-    settled = max(timestamp(read(path)["end_utc"]) for path in directory.glob("*.launch.json") if path.name != "server.launch.json")
+    settled = max(timestamp(read(directory/(stem+".launch.json"))["end_utc"]) for stem in ["load"]+[f"run_{i}" for i in range(1,manifest["run_repeats"]+1)])
     checkpoint = result(lifecycle["checkpoint"], "checkpoint", bounds=(settled, float("inf")))
     closed = result(lifecycle["server_close"], "server_close", bounds=(checkpoint[1], float("inf")))
     reopened = result(lifecycle["reopen"], "reopen", bounds=(closed[1], float("inf")))
@@ -186,11 +190,13 @@ def server_evidence(directory, target, manifest, phase_ids):
     require(lifecycle["random_state_scope"] == "observed-state-preservation-only", "random-state scope missing")
     stopped = read(directory / "server.exit.json")
     require(stopped["process"] == launch["process"] and stopped["exit_code"] == 0, "owned service cleanup failed")
+    import ycsb_compare_live
+    ycsb_compare_live.validate(directory,target,manifest,lifecycle)
 
 
 def validate(out):
     manifest = read(out / "manifest.json")
-    require(manifest["schema_version"] == 1 and manifest["campaign_id"], "missing manifest identity")
+    require(schema(manifest) and manifest["campaign_id"], "missing manifest identity")
     require(manifest["profile"] in {"command_wal_durable", "command_wal_relaxed", "no_wal_fast"}, "unsupported profile")
     for key in ("recordcount", "operationcount", "threadcount", "run_repeats"):
         require(type(manifest[key]) is int and manifest[key] > 0, f"invalid {key}")
@@ -226,7 +232,7 @@ def validate(out):
         except (ValueError, KeyError, TypeError, OSError) as error:
             errors.append(f"{target}/server: {error}")
     status = "invalid" if errors else "validated-consumer-evidence"
-    write_status = dict(schema_version=1, status=status, errors=errors, scope="Client logs/receipts and supplied server observations only; not full matrix or scientific qualification")
+    write_status = dict(schema_version=1, status=status, errors=errors, scope="Client receipts, original live owner calls, typed random preservation and separate deterministic fixture only; not full matrix or crash qualification")
     (out / "validation.json").write_text(json.dumps(write_status, indent=2)+"\n")
     headers = ["target", "phase", "repeat", "operation", "count", "ops_per_sec", "avg_us", "p50_us", "p95_us", "p99_us", "p999_us", "max_us", "operation_error_count", "valid"]
     for row in rows:
@@ -241,10 +247,25 @@ def validate(out):
     return 3 if errors else 0
 
 
+EXE_HASH_CACHE = {}
+
+
+def exe_digest(path):
+    # Hash the executable before launch; /proc/exe must resolve to that same
+    # actual inode and metadata. Avoid delaying observation by hashing a large
+    # ELF after a short-lived client has already completed.
+    stat = os.stat(path)
+    key = (stat.st_dev,stat.st_ino,stat.st_size,stat.st_mtime_ns,stat.st_ctime_ns)
+    if key not in EXE_HASH_CACHE:
+        EXE_HASH_CACHE[key] = digest(path)
+        require(os.stat(path) == stat, "executable changed while hashing")
+    return EXE_HASH_CACHE[key]
+
+
 def observe_core(pid):
     proc = pathlib.Path(f"/proc/{pid}")
     stat = (proc / "stat").read_text().rsplit(")", 1)[1].split()
-    return dict(pid=pid, start_ticks=int(stat[19]), exe_sha256=digest(proc / "exe"))
+    return dict(pid=pid, start_ticks=int(stat[19]), exe_sha256=exe_digest(proc / "exe"))
 
 
 def observe(pid):
@@ -307,6 +328,7 @@ def launch(args):
     env.pop("GOMAXPROCS", None)
     env.update(YCSB_CLOSE_RECEIPT_PATH=str(receipt), YCSB_PHASE_ID=phase_id, YCSB_CLIENT_BUILD_ID=manifest["client"]["build_id"], YCSB_PROFILE=manifest["profile"])
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
+    exe_digest(command[0])
     started = now()
     with (out / f"{stem}.out").open("x") as stdout, (out / f"{stem}.err").open("x") as stderr:
         child = subprocess.Popen(command, env=env, stdout=stdout, stderr=stderr, start_new_session=True)
@@ -315,6 +337,8 @@ def launch(args):
         signal.signal(signal.SIGTERM, interrupted)
         try:
             # Popen has completed exec; this reads the actual executable and environment.
+            identity = observe_core(child.pid)
+            write_new(out / f"{stem}.cleanup.json",dict(process=identity))
             identity = observe(child.pid)
             code = child.wait()
         except BaseException:

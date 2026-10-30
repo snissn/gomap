@@ -4,14 +4,20 @@ This provisional harness consumes client cleanup receipts from
 `snissn/go-ycsb` PR #7, merged commit
 `3c8148495b8d4490cf0ec30e9eb92d14a7a71bac`. Its validation status describes
 this consumer's evidence checks, not full #5335 matrix qualification. Server
-witness production and lifecycle orchestration remain integration obligations.
+observation and lifecycle integration is provisional and needs exact-head review.
 The consumer never fabricates those witnesses from command flags/startup text.
 
 Each invocation uses a fresh `OUT_DIR`. `SERVER_BUILD_MANIFEST` is mandatory
 and names a schema-v1 JSON object with `servers` mapping each selected target to
 `schema_version: 1`, `version` (for example `baseline`/`candidate`), exact
 `source_commit` (40 lowercase hexadecimal characters), `exe_sha256`, and
-`expected_owner` (`legacy` or `cow` for TreeDB; `mongodb` for the reference).
+`expected_owner` (`legacy` or `cow` for TreeDB; `mongodb` for the reference),
+absolute `source_dir`, and `source_patch_sha256`. The latter is SHA256 of
+`git diff --binary HEAD` in the actual compiled server tree; untracked inputs
+are refused. Retain `server-source.patch` and `server-buildinfo.txt` for each
+arm. Historical baselines require an explicitly disclosed instrumentation
+overlay compiled against their own exact source; this branch does not claim
+that any historical overlay has been compiled or accepted.
 Retain this independently accepted build binding in `server-build.json`. The
 supplied server executable must match its selected version's ELF hash. Runtime
 and lifecycle witnesses must repeat that version/source and actual process ELF;
@@ -37,16 +43,22 @@ exclusively; launch supplies fresh phase/build/profile IDs and retains actual
 child PID, Linux `/proc` start ticks, executable SHA256 and observed absence of
 `GOMAXPROCS`. It records checked exit status, start/end UTC, stdout and receipt
 hashes. Native receipts require original successful dial, FlushAll and connection
-close with `applicable=true`, `flush_enabled=true`, integer `ack=1` (visible).
+close with `applicable=true`, `flush_enabled=true`, integer `ack=1` (requested visible policy). This is the producer
+configuration/outgoing ACK, not a decoded server-returned ACK witness. The
+actual original FlushAll return must independently succeed.
 All backends require successful command, DB Close and workload Close. The
 producer's command result intentionally has zero timestamps; DB/native/workload
 close intervals are validated separately. Native TOTAL remains unmodified and
 excludes Close.
 
 Every selected target needs the following additional files. They are observations
-from the actual selected server/owner, not launcher defaults. Current production
-servers do not emit this schema; integration must supply trustworthy observation
-and orchestration before a cell can validate.
+from the actual selected server/owner, not launcher defaults. The opt-in
+`YCSB_SERVER_RECEIPT_DIR` observer is absent from request hot paths. It records
+`CaptureNativeSemanticState` success plus actual COW cache/sequence/profile
+stats, or the actual unsupported result for legacy, procfs identity, canonical
+data device/inode, and actual runtime GOMAXPROCS. It wraps the original owning
+Close exactly once and joins evidence I/O failures after that Close still runs.
+No option or startup label selects the observed backend.
 
 * `server.launch.json`: observed `process` object and absolute `data_dir`.
 * `server.exit.json`: same `process` and checked `exit_code: 0`, emitted only after
@@ -87,9 +99,42 @@ retained. External MongoDB is refused until explicit owner/process integration
 exists. Integration must retain a separate independently verifiable reopened process
 and owner identity and canonical typed random snapshots with structural validation;
 matching supplied digest strings do not establish those missing observations.
-The current consumer only checks the supplied digest equality and chronology.
-The current launcher does not run independent reopen/snapshot procedures;
-without their independently produced evidence the cell intentionally fails.
+`manifest.lifecycle_contract: 2` is mandatory, along with `fixture` binary/source
+SHA256 binding and retained `fixture-source.go`. `FIXTURE_BIN` names the compiled
+reviewed fixture plus snapshot adapter. Every helper child has an observed
+PID/start/ELF, unset GOMAXPROCS, checked exit, original client-close receipt and
+receipt-bound snapshot/expected-file hashes. The fixture is integrated from
+reviewed source 17a0d3d03829294fd984e9fdd3fe95fde8689ebc; its additional snapshot
+mode reads the actual random `ycsb.usertable` through the selected public driver.
+
+Required raw service observations live in `{server,reopened,fixture-write,
+fixture-reopened}.evidence/{owner.open,owner.before-close,owner.close}.json`.
+Each prefix has a separate `.launch.json` and checked `.exit.json`. Random and
+deterministic reopen require distinct owner tokens and observed process
+identities, same ELF and same canonical database device/inode. The deterministic
+database is fresh and separate from the random database. Aggregates are checked
+against original owning Close and explicit checkpoint receipts. The aggregate
+`reopen` interval bounds the original Close completion and newly observed live
+owner; it is an observation interval, not a new storage timing measurement.
+
+The consumer reads `snapshot_{loaded,preclose,reopened}.json` and validates the
+exact original hashed key set (go-ycsb FNV1a64, prefix `user`, start 0, padding 1),
+exact ten field names, canonical JSON base64 strings or BSON subtype-0 binaries,
+and 100 decoded bytes per field. It compares canonical typed preclose/reopened
+values directly. Matching digest strings cannot replace the raw snapshots.
+The separate deterministic fixture retains all ACK/readback outcomes and exact
+load/updated/reopened snapshots and is validated independently.
+
+The launcher performs these scans outside TOTAL, calls the real native
+Checkpoint after settled clients, closes the original service, independently
+reopens it, scans again, then runs the deterministic fixture in another fresh
+database with its own independent reopen. Mongo has no supported public explicit
+checkpoint API in this integration: its attempted preclose helper fails closed;
+its original owning Close/FlushAll is not relabeled an explicit checkpoint.
+Owned reference Mongo lifecycle/owner evidence is also outstanding. Profile crash
+recovery, baseline overlay compilation/review, full orchestration review and the
+frozen matrix remain separate acceptance gates. No product campaign has run as
+part of this implementation.
 
 Run offline controls with:
 
@@ -121,3 +166,19 @@ The run parser requires both READ and UPDATE rows with positive actual counts,
 and requires their exact sum and TOTAL to equal `operationcount`. It accepts the
 observed random split rather than inventing exact 95/5 counts. Missing/zero rows,
 malformed rows, operation errors, duplicate rows and count mismatches are invalid.
+
+Bounded implementation controls (not product campaign evidence) are retained at
+`/home/mikers/gomap-5335-close-consumer-build-20261029/owner-control-1793319825466985732/`.
+Its report binds source `c396a20f125ffefed7b4c5124d2076572dd36f7f` plus retained
+patch SHA256 `795ee8bb65547e7e80da20d7d04d04daa07822a15d5d651859fa675e26cba535`.
+Native COW/JSON, the same current source's explicit legacy/JSON route, and gateway
+COW/BSON each passed 64-record deterministic write/checkpoint-where-supported,
+original Close/checked exit, separate process/owner reopen, exact-value verify
+and original Close again. This is not historical-baseline acceptance. The
+native BSON attempt at sibling `owner-control-1793319781025408373` failed with
+`nativewire: remote error code 3: unsupported feature` on this base; its original
+close/exit was retained and no successful product cell was declared. Earlier
+invalid startup-observation/adapter attempts remain in sibling directories.
+The full random-snapshot shell pipeline has offline checks and requires an
+independent exact-head review plus supported dependent-feature integration;
+these tiny fixture controls do not claim that pipeline or matrix complete.
