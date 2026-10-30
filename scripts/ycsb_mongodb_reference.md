@@ -319,3 +319,14 @@ failed controls remain scoped source/identity/operation evidence and invalid
 attempts. Runtime metadata remains version
 metadata, with no runtime ELF attestation. This document supplies no performance
 qualification or complete matrix claim.
+
+## Retained actual-MongoDB comparison
+
+The [October 30 report](../docs/benchmarks/ycsb_mongodb_gomap_2026-10-30.md)
+retains the completed j-omitted relaxed pairs, separately labeled common-load
+j:true / scoped-durable-ACK pairs, and strict-j:true load failure, with original
+source/build/request/Close bindings and raw phase evidence. All measured GoMap
+rows bind to provisional 802f, not the later maintained integration head. The
+reference implementation's two concern classes do not retroactively qualify a
+sample or change its emitted request. Final-source applicability, dependency,
+review and acceptance gates remain open; this report is not a new dispatch plan.
