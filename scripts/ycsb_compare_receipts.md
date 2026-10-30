@@ -310,3 +310,9 @@ Its owner/storage records and Python client/helper stubs are explicitly syntheti
 no product service is launched. Additional shell controls publish owner evidence
 with actual create-before-write semantics, including delayed partial JSON,
 permanently malformed JSON, and complete invalid schema, and verify owned cleanup.
+
+The separate provisional [MongoDB reference lifecycle](ycsb_mongodb_reference.md)
+defines its own image/process/public-command/observed-exit contract. It does not
+borrow TreeDB owner, COW, profile or Close-return semantics. The maintained shell
+continues refusing `mongodb` execution until reference integration and authorized
+support controls are reviewed; parse-only consumption is independent.

@@ -49,7 +49,8 @@ def rows(value, fmt):
 def validate(expected, observations):
     if any(k not in expected for k in IDENTITY) or type(expected["schema_version"]) is not int or expected["schema_version"] != 1:
         fail("invalid expected identity")
-    if expected["target"] not in ("native", "mongo") or expected["profile"] not in ("command_wal_durable", "command_wal_relaxed", "no_wal_fast"):
+    reference = expected["target"] == "mongodb"
+    if (reference and (expected["profile"] != "mongodb_w1_default" or expected["format"] != "bson")) or (not reference and (expected["target"] not in ("native", "mongo") or expected["profile"] not in ("command_wal_durable", "command_wal_relaxed", "no_wal_fast"))):
         fail("invalid target or profile")
     if not all(isinstance(expected[k], str) and expected[k] for k in IDENTITY[1:]):
         fail("missing identity")

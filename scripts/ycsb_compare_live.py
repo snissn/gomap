@@ -31,7 +31,7 @@ def expected_keys(count):
 def canonical_snapshot(value, manifest, target, stage):
     c.require(c.schema(value) and value["source_id"] == manifest["server_builds"][target]["source_commit"], "random snapshot source mismatch")
     c.require(value["fixture_id"] == manifest["campaign_id"]+":"+target+":random", "random snapshot campaign mismatch")
-    c.require(value["profile"] == manifest["profile"] and value["format"] == manifest["formats"][target] and value["target"] == ("native" if target == "treedb_native" else "mongo"), "random snapshot settings mismatch")
+    c.require(value["profile"] == manifest["profile"] and value["format"] == manifest["formats"][target] and value["target"] == ({"treedb_native":"native","treedb_mongo":"mongo","mongodb":"mongodb"}[target]), "random snapshot settings mismatch")
     c.require(value["stage"] == "random_"+stage and value["operations"] == [], "invalid random snapshot stage")
     rows = exact.rows(value["rows"], value["format"])
     c.require(set(rows) == expected_keys(manifest["recordcount"]), "random snapshot key set mismatch")

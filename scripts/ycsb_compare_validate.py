@@ -244,6 +244,14 @@ def server_evidence(directory, target, manifest, phase_ids):
 
 def validate(out):
     manifest = read(out / "manifest.json")
+    if manifest.get("kind") == "mongodb-reference-checkpoint-close-reopen":
+        # A separate contract: MongoDB has Docker/public-command observations,
+        # never TreeDB runtime, COW or original-owner Close return receipts.
+        import ycsb_mongodb_reference
+        report = ycsb_mongodb_reference.validate(out)
+        (out / "validation.json").write_text(json.dumps(report,indent=2,allow_nan=False)+"\n")
+        (out / "summary.md").write_text("# MongoDB reference lifecycle\n\nStatus: "+report["status"]+"\n\nSeparate reference evidence; no TreeDB baseline, COW, observed Close return, crash recovery or performance matrix qualification.\n")
+        return 0
     require(schema(manifest) and manifest["campaign_id"], "missing manifest identity")
     require(manifest["profile"] in {"command_wal_durable", "command_wal_relaxed", "no_wal_fast"}, "unsupported profile")
     for key in ("recordcount", "operationcount", "threadcount", "run_repeats"):

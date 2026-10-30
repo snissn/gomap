@@ -642,7 +642,7 @@ func (d *mongoDriver) get(ctx context.Context, id string) (row, error) {
 func (d *mongoDriver) close(ctx context.Context) error { return d.c.Disconnect(ctx) }
 
 func run() (retErr error) {
-	target := flag.String("target", "", "native or mongo")
+	target := flag.String("target", "", "native, mongo (TreeDB gateway), or mongodb (separate reference)")
 	addr := flag.String("addr", "", "server address")
 	format := flag.String("format", "", "json or bson")
 	profile := flag.String("profile", "", "storage profile")
@@ -657,11 +657,19 @@ func run() (retErr error) {
 	ownerCheckpointDir := flag.String("owner-checkpoint-dir", "", "private opt-in gateway owner evidence directory; not a Mongo API")
 	flag.Parse()
 	crash := *mode == "crash-write" || *mode == "crash-verify"
-	if *addr == "" || *source == "" || *fixture == "" || *expected == "" || *observed == "" || *receipt == "" || (*target != "native" && *target != "mongo") || (*format != "json" && *format != "bson") || (*mode != "write" && *mode != "verify" && *mode != "snapshot" && !crash) || (*profile != "command_wal_durable" && *profile != "command_wal_relaxed" && *profile != "no_wal_fast") {
+	reference := *target == "mongodb"
+	profileOK := *profile == "command_wal_durable" || *profile == "command_wal_relaxed" || *profile == "no_wal_fast"
+	if reference {
+		profileOK = *profile == "mongodb_w1_default" && *format == "bson" && !crash
+	}
+	if *addr == "" || *source == "" || *fixture == "" || *expected == "" || *observed == "" || *receipt == "" || (*target != "native" && *target != "mongo" && !reference) || (*format != "json" && *format != "bson") || (*mode != "write" && *mode != "verify" && *mode != "snapshot" && !crash) || !profileOK {
 		return errors.New("all flags and valid target/format/profile/mode are required")
 	}
 	if *target == "mongo" && *format == "json" {
 		return errors.New("Mongo JSON storage with byte-valued fields is an unsupported fixture shape")
+	}
+	if reference && (*checkpoint || *ownerCheckpointDir != "") {
+		return errors.New("MongoDB reference checkpoint requires the separate checked public fsync control")
 	}
 	if *mode == "snapshot" {
 		if *stage != "loaded" && *stage != "preclose" && *stage != "reopened" {
