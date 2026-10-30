@@ -24953,23 +24953,45 @@ type checkpointFrontierUnit struct {
 }
 
 type checkpointFrontier struct {
-	ids            map[uint64]checkpointFrontierUnit
-	laneUnits      map[uint16]uint64
-	units          uint64
-	bytes          uint64
+	ids       map[uint64]checkpointFrontierUnit
+	laneUnits map[uint16]uint64
+	units     uint64
+	bytes     uint64
+	// A single queued unit has immutable scalar membership instead of two maps.
+	// Its captured size is bytes; singletonID is nonzero only for this form.
+	singletonID    uint64
+	singletonLane  uint16
 	captured       bool
 	missingQueueID bool
 }
 
-func (f checkpointFrontier) contains(id uint64) bool {
-	if len(f.ids) == 0 {
-		return false
+func (f checkpointFrontier) lookup(id uint64) (checkpointFrontierUnit, bool) {
+	if f.singletonID != 0 {
+		if id == f.singletonID {
+			return checkpointFrontierUnit{bytes: f.bytes, laneID: f.singletonLane}, true
+		}
+		return checkpointFrontierUnit{}, false
 	}
-	_, ok := f.ids[id]
+	unit, ok := f.ids[id]
+	return unit, ok
+}
+
+func (f checkpointFrontier) contains(id uint64) bool {
+	_, ok := f.lookup(id)
 	return ok
 }
 
+func (f checkpointFrontier) idCount() int {
+	if f.singletonID != 0 {
+		return 1
+	}
+	return len(f.ids)
+}
+
 func (f checkpointFrontier) laneCount() uint64 {
+	if f.singletonID != 0 {
+		return 1
+	}
 	return uint64(len(f.laneUnits))
 }
 
@@ -24996,8 +25018,8 @@ func (db *DB) activeCheckpointFrontier() (checkpointFrontier, bool) {
 		return checkpointFrontier{}, false
 	}
 	db.checkpointActiveFrontierMu.RLock()
-	// checkpointFrontier maps are immutable after capture; sharing their backing
-	// stores across copies is safe as long as frontier membership remains read-only.
+	// checkpointFrontier membership is immutable after capture. Scalars are copied
+	// by value, and map backing stores may be shared by read-only copies.
 	f := db.checkpointActiveFrontier
 	db.checkpointActiveFrontierMu.RUnlock()
 	return f, f.captured
@@ -25006,6 +25028,19 @@ func (db *DB) activeCheckpointFrontier() (checkpointFrontier, bool) {
 func (db *DB) captureCheckpointFrontierLocked() checkpointFrontier {
 	f := checkpointFrontier{captured: true}
 	if db == nil || len(db.queue) == 0 {
+		return f
+	}
+	if len(db.queue) == 1 && len(db.queueIDs) > 0 && db.queueIDs[0] != 0 {
+		f.singletonID = db.queueIDs[0]
+		if mem := db.queue[0]; mem != nil {
+			if size := mem.Size(); size > 0 {
+				f.bytes = uint64(size)
+			}
+		}
+		if len(db.queueLaneIDs) > 0 {
+			f.singletonLane = db.queueLaneIDs[0]
+		}
+		f.units = 1
 		return f
 	}
 	f.ids = make(map[uint64]checkpointFrontierUnit, len(db.queue))
@@ -25069,7 +25104,7 @@ func (db *DB) checkpointFrontierResidualStatsLocked(f checkpointFrontier) checkp
 			if i < len(db.queueLaneIDs) {
 				laneID = db.queueLaneIDs[i]
 			}
-			if unit, ok := f.ids[id]; ok {
+			if unit, ok := f.lookup(id); ok {
 				if size == 0 {
 					size = unit.bytes
 				}
@@ -25087,9 +25122,15 @@ func (db *DB) checkpointFrontierResidualStatsLocked(f checkpointFrontier) checkp
 	stats.postLanes = uint64(len(postLanes))
 	stats.drainedUnits = saturatingSubUint64(f.units, stats.frontierUnits)
 	stats.drainedBytes = saturatingSubUint64(f.bytes, stats.frontierBytes)
-	for laneID, units := range f.laneUnits {
-		if remainingByLane[laneID] < units {
+	if f.singletonID != 0 {
+		if remainingByLane[f.singletonLane] == 0 {
 			stats.drainedLanes++
+		}
+	} else {
+		for laneID, units := range f.laneUnits {
+			if remainingByLane[laneID] < units {
+				stats.drainedLanes++
+			}
 		}
 	}
 	return stats
@@ -26013,13 +26054,13 @@ func (db *DB) checkpointContext(ctx context.Context, automatic bool) error {
 	// Same-lane background claims serialize on flushLaneMu and only make the
 	// checkpoint wait for another owner. Share the active frontier only when the
 	// frontier spans multiple lanes that can make independent progress.
-	if commandWALPublishPiggyback != nil || len(frontier.ids) < 8 || frontier.bytes < 8<<20 || frontierActiveLanes <= 1 {
+	if commandWALPublishPiggyback != nil || frontier.idCount() < 8 || frontier.bytes < 8<<20 || frontierActiveLanes <= 1 {
 		ownedDrainStart := time.Now()
 		db.flushCheckpointFrontierLocked(true, commandWALPublishPiggyback, frontier)
 		ownedDrainDur = time.Since(ownedDrainStart)
 	} else {
 		db.setActiveCheckpointFrontier(frontier)
-		if len(frontier.ids) > 0 {
+		if frontier.idCount() > 0 {
 			db.TriggerFlush()
 		}
 		db.checkpointSharedDrainFlushMuReleases.Add(1)
@@ -29592,7 +29633,7 @@ func (db *DB) observeCheckpointBackgroundFlushPreempted() {
 }
 
 func filterFlushUnitsToCheckpointFrontier(units []flushUnit, ids []uint64, frontier checkpointFrontier) ([]flushUnit, []uint64, int64, int) {
-	if len(frontier.ids) == 0 || len(units) == 0 {
+	if frontier.idCount() == 0 || len(units) == 0 {
 		return nil, nil, 0, 0
 	}
 	outUnits := units[:0]
@@ -29625,7 +29666,7 @@ func (db *DB) checkpointFrontierActiveLanes(frontier checkpointFrontier, lanes i
 		active = active[:lanes]
 		clear(active)
 	}
-	if db == nil || len(frontier.ids) == 0 {
+	if db == nil || frontier.idCount() == 0 {
 		return active, 0
 	}
 	db.mu.RLock()
@@ -29677,7 +29718,7 @@ func (db *DB) flushCheckpointFrontierLocked(reqSync bool, commandPublish *checkp
 			return
 		}
 	}
-	if len(frontier.ids) == 0 {
+	if frontier.idCount() == 0 {
 		return
 	}
 	lanes := len(db.lanes)
