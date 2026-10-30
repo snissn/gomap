@@ -40,6 +40,14 @@ jobs:
       run:
         shell: bash
     steps:
+      - name: Configure literal checkout before fetching source
+        run: |
+          set -euo pipefail
+          git config --global core.longpaths true
+          git config --global core.autocrlf false
+          test "$(git config --global --get core.longpaths)" = true
+          test "$(git config --global --get core.autocrlf)" = false
+
       - name: Checkout immutable product source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -65,6 +73,8 @@ jobs:
             echo "run_id=$RUN_ID attempt=$RUN_ATTEMPT role=$ROLE runner_environment=$RUNNER_ENVIRONMENT_KIND"
             echo "GOWORK=$GOWORK GOMEMLIMIT=$GOMEMLIMIT GOMAXPROCS=$GOMAXPROCS"
           } | tee diagnostic-evidence/identity.txt
+          test "$(git config --get core.longpaths)" = true
+          test "$(git config --get core.autocrlf)" = false
           test "$(git rev-parse HEAD)" = "$PRODUCT_SHA"
           test "$(git rev-parse 'HEAD^{tree}')" = "$PRODUCT_TREE"
 
