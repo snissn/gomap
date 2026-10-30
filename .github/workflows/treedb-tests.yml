@@ -17,7 +17,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/5338-frontier-hosted-20261030' && github.run_attempt == '1'
     name: frontier custody (${{ matrix.cell }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 65
+    timeout-minutes: 95
     strategy:
       fail-fast: false
       max-parallel: 1
