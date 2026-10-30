@@ -183,3 +183,19 @@ subsequent requests cold; it remains enabled during public measurement.
 This is a provisional Keyword optimization. Its activation/lifetime controls and
 original public workload comparison are required before adoption; helper results
 or profile ceilings do not establish public performance acceptance.
+
+### Materialization failure observations
+
+The maintained `TestOrdinaryColumnGraphNativeColdHybrid4096` logs the original
+Optimize error and its service cause on failure. Native physical construction
+errors retain their existing sentinel through wrapping and identify catalog,
+ordinary-domain, typed-collection, root-descriptor or workspace stages. Typed
+construction additionally identifies delta ordering, source validation, row/span,
+graph, compaction and resource-freeze stages. Ordinary graph refusals report
+bounded numeric recipe/build roots and original LSN plus invariant booleans;
+these observations do not select a replacement basis or expose document rows.
+The first terminal failure remains on its original work ledger. These labels do
+not make partial materialization retryable, clear accepted-prefix poison or
+change publication/recovery authority. A stage report distinguishes future
+failures; it does not attribute the retained #5332 race7 failure, whose Optimize
+cause and precise refusing guard were not recorded.

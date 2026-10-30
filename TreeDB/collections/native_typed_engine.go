@@ -232,7 +232,7 @@ func (b *nativeEngineBuild) materializeTyped(group *backenddb.RootPublicationBui
 	for _, input := range b.typed {
 		work := input.work
 		if err := work.materialize(); err != nil {
-			return err
+			return fmt.Errorf("native typed collection=%d: %w", input.collection, err)
 		}
 		for i := range b.built {
 			result := &b.built[i]
