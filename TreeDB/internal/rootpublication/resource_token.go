@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/internal/recoverytrace"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/stableio"
 	"unsafe"
@@ -854,12 +855,33 @@ func (token *StableResourceToken) syncThroughWithFileSyncObserver(frontier Durab
 			}
 		}
 		physicalStarted := time.Now()
+		// Only the original physical producer emits this pair. Imported aliases
+		// recurse to that owner; no diagnostic path is reopened or retained.
+		var ledger *recoverytrace.Ledger
+		var operation uint64
+		if token.importedSource == nil {
+			ledger = recoverytrace.Active()
+			if ledger != nil {
+				operation = ledger.Record(recoverytrace.Event{
+					Stage: recoverytrace.PhysicalSync, Outcome: recoverytrace.Started,
+					Kind: recoverytrace.Text(string(token.kind)), ResourceID: recoverytrace.Text(token.resourceID),
+					Path: recoverytrace.Text(token.diagnosticPath), Generation: token.generation,
+					IdentityPlatform: recoverytrace.Text(token.identity.Platform), IdentityVolume: token.identity.VolumeID,
+					IdentityObject: token.identity.ObjectID, IdentityGeneration: token.identity.Generation,
+					Required: recoveryTraceFrontier(frontier), Certified: recoveryTraceFrontier(token.syncedFrontier),
+					HasCertified: token.hasSyncedFrontier, HandlePresent: token.pinned != nil, OwnedOperations: token.ownedOperations != nil,
+				})
+			}
+		}
 		if token.importedSource != nil {
 			err, physicalSucceeded = token.importedSource.syncThroughWithFileSyncObserver(frontier, before, after)
 		} else if token.ownedOperations != nil {
 			err = token.ownedOperations.SyncThrough(token.pinned, frontier)
 		} else {
 			err = token.sync(token.pinned, frontier)
+		}
+		if ledger != nil {
+			ledger.End(recoverytrace.PhysicalSync, operation, err != nil)
 		}
 		if err == nil || physicalSucceeded {
 			physicalSucceeded = true
@@ -2803,4 +2825,10 @@ func ValidateRecoveredResourceDescriptorV1(entry DependencyManifestEntryV1) erro
 		}
 	}
 	return nil
+}
+
+// recoveryTraceFrontier copies no private membership slices or physical owners.
+func recoveryTraceFrontier(frontier DurableFrontier) recoverytrace.Frontier {
+	return recoverytrace.Frontier{Bytes: frontier.Bytes, MaxLSN: frontier.MaxLSN, MaxRID: frontier.MaxRID,
+		RIDSetDigest: frontier.RIDSetDigest, RIDCount: frontier.RIDCount, RIDMin: frontier.RIDMin, RIDMax: frontier.RIDMax}
 }

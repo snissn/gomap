@@ -19,6 +19,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/powerlossoracle"
 	"github.com/snissn/gomap/TreeDB/internal/powerlossreopen"
+	"github.com/snissn/gomap/TreeDB/internal/recoverytrace"
 	"github.com/snissn/gomap/TreeDB/mvcc"
 )
 
@@ -37,12 +38,18 @@ func TestOrderedCompletionStableImageAtAcknowledgement(t *testing.T) {
 			cmd.Env = append(os.Environ(), "GOMAP_ORDERED_ACK_IMAGE_CHILD="+scenario)
 			if out, err := cmd.CombinedOutput(); err != nil {
 				t.Fatalf("%s: %v\n%s", scenario, err, out)
+			} else if os.Getenv("GOMAP_RECOVERY_LEDGER") == "1" {
+				t.Logf("%s diagnostic child output:\n%s", scenario, out)
 			}
 		})
 	}
 }
 
 func proposalOrderedACKImageChild(t *testing.T, scenario string) {
+	diagnostic := startACKRecoveryDiagnostic(t)
+	if diagnostic != nil {
+		defer diagnostic.stop()
+	}
 	opts := cowOrderedDurabilityOptions(treedb.ProfileCommandWALDurable, t.TempDir())
 	// Observe snapshots every file at each staging hook. Keep unused index
 	// capacity small while retaining every observation and the progress deadlines.
@@ -58,7 +65,11 @@ func proposalOrderedACKImageChild(t *testing.T, scenario string) {
 	drained := false
 	defer func() {
 		if drained {
-			_ = database.Close() // Only after the immutable ACK image was frozen.
+			if diagnostic != nil {
+				diagnostic.close(t, recoverytrace.SourceClose, database.Close)
+			} else {
+				_ = database.Close() // Only after the immutable ACK image was frozen.
+			}
 		}
 	}()
 	store := mvcc.New(database)
@@ -200,22 +211,35 @@ func proposalOrderedACKImageChild(t *testing.T, scenario string) {
 
 	// Freeze immediately after the final ACK, before physical inspection,
 	// Checkpoint, Close, GC, or any other potentially persistent operation.
+	freezeOperation := diagnostic.begin(recoverytrace.SnapshotFreeze)
 	observationMu.Lock()
 	active = false
 	stable := model.Clone()
 	observationMu.Unlock()
 	restore()
+	diagnostic.end(recoverytrace.SnapshotFreeze, freezeOperation, false)
 	// Segment sequences only advance. A smaller target must not introduce a
 	// rotation while staging or completing this same FIFO reproduction.
 	if got := database.Stats()["treedb.command_wal.writer.path"]; got != baselineWALPath {
 		t.Fatalf("command WAL rotated during ACK fixture: path=%q baseline=%q", got, baselineWALPath)
 	}
+	captureOperation := diagnostic.begin(recoverytrace.PhysicalCapture)
 	physical := cowOrderedCapturePhysical(t, database, versions)
+	diagnostic.end(recoverytrace.PhysicalCapture, captureOperation, false)
+	if diagnostic != nil {
+		diagnostic.install(t)
+	}
+	openOperation := diagnostic.begin(recoverytrace.StableOpen)
 	result, reopened, closeReopened, err := powerlossreopen.Stable(stable, opts, false)
+	diagnostic.end(recoverytrace.StableOpen, openOperation, err != nil)
 	if err != nil || result.Rejected || reopened == nil {
 		t.Fatalf("ACK stable image rejected: %+v %v", result, err)
 	}
-	defer closeReopened()
+	if diagnostic != nil {
+		defer diagnostic.close(t, recoverytrace.ReopenedClose, closeReopened)
+	} else {
+		defer closeReopened()
+	}
 	if result.AppliedLSN <= baselineLSN {
 		t.Fatalf("recovery did not advance beyond baseline: applied=%d baseline=%d", result.AppliedLSN, baselineLSN)
 	}
