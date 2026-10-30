@@ -358,6 +358,11 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/mongo_gateway/vector_retirement_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 4},
 	{path: "TreeDB/nativewire/create_unsupported_profile_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 4},
 	{path: "TreeDB/collections/native_ordinary_columngraph_publication_fault_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 5},
+	// Captured graph handoff and preassignment controls consume retained public
+	// schema types, declared columns, and durable manifest/profile fields.
+	{path: "TreeDB/collections/native_graph_handoff_public_witness_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 6},
+	{path: "TreeDB/collections/native_ordinary_columngraph_handoff_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
+	{path: "TreeDB/collections/native_ordinary_columngraph_preassignment_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/internal/raftapply/vector_strategy_retirement_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 4},
 	// Native ordinary graph/scan and raw-image fixtures consume retained public
 	// configuration/value names; derived assets remain non-authoritative.
@@ -376,6 +381,8 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/native_typed_construction_pressure_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 7},
 	{path: "TreeDB/collections/native_vector_graph_plan_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 4},
 	{path: "TreeDB/documentservice/ordinary_columngraph_native_crash_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
+	// The public lifecycle cost control observes retained manifest metadata.
+	{path: "TreeDB/documentservice/ordinary_columngraph_native_lifecycle_bench_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	// Full retention, ordinary typed UPDATE and captured physical queries reuse
 	// the retained public schema/scan APIs; their fixtures preserve those names.
 	{path: "TreeDB/collections/native_column_physical_query.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
@@ -845,7 +852,9 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/typed_column_string_scan.go", classification: typedStorageLegacyCompatibility, matchingLines: 13, occurrences: 18},
 	{path: "TreeDB/collections/typed_column_string_scan_bench_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 9, occurrences: 9},
 	{path: "TreeDB/collections/typed_column_string_scan_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 13, occurrences: 14},
-	{path: "TreeDB/collections/typed_column_publication.go", classification: typedStorageLegacyCompatibility, matchingLines: 26, occurrences: 28},
+	// Graph codec-policy provenance uses the retained public vector value-type
+	// constant; the existing configuration/column names remain compatibility API.
+	{path: "TreeDB/collections/typed_column_publication.go", classification: typedStorageLegacyCompatibility, matchingLines: 27, occurrences: 29},
 	{path: "TreeDB/collections/typed_column_publication_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 96, occurrences: 99},
 	{path: "TreeDB/collections/typed_column_semantics_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 28, occurrences: 30},
 	{path: "TreeDB/collections/typed_storage_layout.go", classification: typedStorageLegacyCompatibility, matchingLines: 26, occurrences: 52},
