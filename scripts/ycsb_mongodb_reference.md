@@ -110,8 +110,10 @@ The GoMap policy requires `command_wal_durable`. These names and review gates
 describe scoped requests/controls; they do not certify equivalent durability.
 
 With this policy, load uses `mongodb://ADDRESS/ycsb?w=1` with no journal URI
-option. After the load client, including its original Close checks, settles, a
-public loaded-state snapshot/census must complete. A separate raw public
+option. After the load client exits successfully following its original Close
+calls, a public loaded-state snapshot/census must complete. Full retained Close
+receipt and phase validation occurs during final qualification, rather than
+before the sentinel. A separate raw public
 OP_MSG insert then writes one marker document into a campaign-specific
 `prefix_sentinel_...` collection with `writeConcern:{w:1,j:true}`. It requires
 numeric `ok:1`, exact integer `n:1`, and no `writeConcernError` or `writeErrors`.
