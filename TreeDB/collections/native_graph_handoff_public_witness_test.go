@@ -210,6 +210,7 @@ func TestNativeOrdinaryGraphAcceptedAcrossCapturedManifestBuild(t *testing.T) {
 			defer restore()
 			graphDone := make(chan error, 1)
 			oldJoined, graphStarted, graphJoined := false, false, false
+			var laterCaptures []*NativeJSONRead
 			defer func() {
 				releaseOnce.Do(func() { close(release) })
 				for _, job := range []struct {
@@ -232,6 +233,13 @@ func TestNativeOrdinaryGraphAcceptedAcrossCapturedManifestBuild(t *testing.T) {
 						// timeout prints stacks and its parent kills/reaps it
 						// if necessary. No cancellation contract is invented.
 						<-job.done
+					}
+				}
+				// Captures acquired after worker launch must not register
+				// later defers: those would run BEFORE this join on failure.
+				for i := len(laterCaptures) - 1; i >= 0; i-- {
+					if err := laterCaptures[i].Close(); err != nil {
+						t.Error(err)
 					}
 				}
 			}()
@@ -272,7 +280,7 @@ func TestNativeOrdinaryGraphAcceptedAcrossCapturedManifestBuild(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer accepted.Close()
+			laterCaptures = append(laterCaptures, accepted)
 			acceptedManifest, mok := accepted.collection.domains.Get("column/manifest")
 			acceptedPrimary, aok := accepted.collection.domains.Get("primary")
 			if !mok || !aok || acceptedManifest.baseRoot != oldRoot || accepted.collection.incarnation != old.collection.incarnation {
@@ -360,7 +368,7 @@ func TestNativeOrdinaryGraphAcceptedAcrossCapturedManifestBuild(t *testing.T) {
 			if err != nil {
 				t.Fatalf("INVALID_WITNESS post-handoff capture=%v; original graph completion=%v", err, graphErr)
 			}
-			defer current.Close()
+			laterCaptures = append(laterCaptures, current)
 			currentManifest, ok := current.collection.domains.Get("column/manifest")
 			if !ok || (!unchanged && currentManifest.baseRoot == oldRoot) {
 				t.Fatal("INVALID_WITNESS no actual manifest-root advance")
