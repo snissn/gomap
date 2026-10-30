@@ -159,6 +159,8 @@ receipt["binaries"] = {}
 failed = False
 try:
     if mode == "controls":
+        for key in ("RUNNER_OS", "RUNNER_ARCH", "ImageOS", "ImageVersion"):
+            assert isinstance(env.get(key), str) and env[key].strip(), "missing builder image identity: " + key
         for name, package, selector in selections:
             binary = packet / "bin" / (name + suffix)
             command = ["go", "test", "-c", "-mod=readonly", "-o", str(binary)]
@@ -194,7 +196,9 @@ try:
         assert len(controls["tests"]) == 4 and all(test["status"] == "PASS" for test in controls["tests"])
         assert controls["clean_product_after"] is True
         for key in ("RUNNER_OS", "RUNNER_ARCH", "ImageOS", "ImageVersion"):
-            assert controls["event"].get(key) == env.get(key), "builder/runtime image drift: " + key
+            assert isinstance(controls["event"].get(key), str) and controls["event"][key].strip(), "missing retained builder image identity: " + key
+            assert isinstance(env.get(key), str) and env[key].strip(), "missing runtime image identity: " + key
+            assert controls["event"][key] == env[key], "builder/runtime image drift: " + key
         descriptor = controls["binaries"]["treedb"]
         assert descriptor["path"] == "bin/treedb" + suffix
         binary = inputs / descriptor["path"]
