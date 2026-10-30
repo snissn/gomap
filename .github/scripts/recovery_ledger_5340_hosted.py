@@ -177,7 +177,7 @@ try:
                 break
             with binary.open("rb") as stream:
                 assert stream.read(4).startswith(b"MZ" if suffix.endswith("exe") else b"\x7fELF")
-            receipt["binaries"][name] = {"path": str(binary.relative_to(packet)), "package": package, "race": cell == "linux-race", "format_expected": "PE" if suffix.endswith("exe") else "ELF", **digest(binary)}
+            receipt["binaries"][name] = {"path": binary.relative_to(packet).as_posix(), "package": package, "race": cell == "linux-race", "format_expected": "PE" if suffix.endswith("exe") else "ELF", **digest(binary)}
             save()
             if call("module-info-" + name, ["go", "version", "-m", str(binary)]) != 0 or call("build-id-" + name, ["go", "tool", "buildid", str(binary)]) != 0:
                 failed = True
