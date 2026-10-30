@@ -3,7 +3,9 @@
 This is a bounded readiness plan, not an executed qualification or permission to
 start a new campaign. The [retained October report](ycsb_mongodb_gomap_2026-10-30.md)
 remains measured-source evidence only. One separately authorized provisional gateway
-ELF was built from frozen c660; no service, workload or comparator has run on it.
+ELF was built from frozen c660; two authorized tiny gateway correctness guards
+have since run on it. No final performance arm has run. Their exact source and
+limits remain separate from retained802f timings.
 
 ## Exact source applicability
 
@@ -203,7 +205,8 @@ cache in place with exclusive graph-owner write custody; no cache was copied.
 Build flags were `-p=1 -trimpath -buildvcs=false`, Go1.26.10, CGO1/gcc11,
 build-only GOMAXPROCS1/GOMEMLIMIT1GiB/GOGC50. This does not set product runtime.
 The source guard and before/after source/dependency/module/toolchain inventories
-matched. No product executable was started.
+matched. The build stages started no product executable; the later authorized
+tiny guards are recorded below.
 
 Actual gateway ELF is
 `/home/mikers/gomap-5335-final-source-build-20261030/bin/gateway`, SHA256
@@ -272,3 +275,53 @@ the full primary typed bytes at their persistent local paths.
 No copy, upload, deletion, new benchmark or comparator restart is authorized by
 this inventory. Exact final output manifests/receipts join the same durable
 handoff after their actual execution.
+
+## Execution status and pending final repair binding
+
+[Readiness receipts](ycsb_2026_10_30_evidence/final-source-readiness.json) bind the
+actual build,214 small raw tiny-guard files, original negative supervision
+controls, accepted A/B controls and preliminary dispatch packet. Both c660/new
+610459 gateway guards passed once: durable READ122/UPDATE6, relaxed
+READ124/UPDATE4, each64load/128run/two workers plus the separate64-ID/four-disjoint-
+worker deterministic fixture. Maintained validation accepted actual COW/profile,
+GOMAXPROCS absent runtime observations, checked original producer/owner Close,
+private live checkpoint, distinct reopened owner and exact typed state. No errors
+or survivors were recorded. Random preservation remains distinct from exact
+acknowledged deterministic values, and tiny rates are excluded from comparison.
+
+Tiny limits were180s wall/90s aggregate CPU soft95s hard,2GiB RSS,512MiB task
+disk,64MiB file/min5GiB free, poll0.1s/grace10s/reap5s with inherited affinity/
+quota and nice0. Durable used5.607s wall/4.688s CPU/155852800B peak RSS;
+relaxed5.028s/4.643s/172011520B. Sampled observer cadence overshoots remain in
+terminal receipts and are recorded, not misrepresented as continuous monitoring.
+
+The [scoped A/B review](ycsb_2026_10_30_evidence/final-ab-review.md) and
+[actual file maps](ycsb_2026_10_30_evidence/final-ab-reviewed-controls.json) retain
+control build source79220385186080e77898fcb99c78a8ea15480241. Its non-document
+Git objects equal c660; the identities are not relabeled. Original three live
+invocations passed once: A both profiles64 exact binary documents and selected
+persistent pointer before/after abrupt exit, incomplete-load refusal; B held
+five physical WAL endpoints3..7, durable target15>applied2 before exit and
+recovered applied15 with exact bytes, and both injected sync errors surfaced.
+The original CPU0 correctness limitation and no power-loss claim remain explicit.
+
+The preliminary c660 twelve-arm packet at
+`/home/mikers/gomap-5335-final-qualification-20261030` has all12 requests, six
+reference manifests prepared offline, and a checked sealSHA256
+`dc2bc012f627e71c09549bdb7dd69d86e0cbe42bb08e4ef16a9065ce7957a3aa`.
+Adapter SHA256 is
+`71cadbcd9c42f77d37e0fe1833a9c1ae6284c18c9ef307a80399c2de7b08555b`.
+No performance arm has STARTED. Local packet locking and exclusive STARTED files
+prevent duplicate/retried arms. The maintained supervisor rejects resource,
+cleanup and nonzero-exit failures before returning, so clean stdout/lifecycle
+cannot turn those failures into accepted summaries. Original wall/CPU/custody/
+nonzero-exit negative receipts are linked in the readiness JSON; no duplicate
+implementation or test was added for that already-covered behavior.
+
+A subsequent reviewed repair batch may change production source. This preliminary
+seal and all executed identities stay fixed. The strict source comparison will
+reject that delta; one coherent final source/build binding remains pending after
+the batch settles. Review its actual scope before deciding which accepted controls
+are still applicable. No new build, repeated causal control or performance launch
+is implied. Predecessor merge, harness landing, exact-head CI/review, runtime
+authorization, the six final fresh pairs and final report acceptance remain open.

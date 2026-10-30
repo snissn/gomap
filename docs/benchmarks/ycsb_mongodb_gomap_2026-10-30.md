@@ -199,7 +199,11 @@ historical context and is never used in an October ratio.
 
 The [final-source plan](ycsb_5335_final_source_qualification.md) retains the
 required six fresh matched pairs/twelve arms after repair and integration gates.
-Its provisional build is source-bound to c660 and has no new product result.
+Its provisional build and two tiny correctness guards are source-bound to c660;
+[actual readiness receipts](ycsb_2026_10_30_evidence/final-source-readiness.json)
+record their owner/lifecycle/Close/runtime evidence and preserve the accepted792203
+A/B control identities. These are not new performance results. A subsequent
+production repair delta requires an explicit final build/source binding.
 The [local artifact inventory](ycsb_2026_10_30_evidence/retained-artifact-inventory.json.gz)
 records exact persistent host185 paths and sizes. A separate
 [content verification receipt](ycsb_2026_10_30_evidence/retained-primary-snapshots-sha256.json)
