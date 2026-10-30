@@ -2,6 +2,7 @@ package caching
 
 import (
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -305,5 +306,89 @@ func TestCOWSemanticOriginalCompletionScrubsBeforeContainingRefund(t *testing.T)
 	db.drainSemanticCleanup()
 	if refund.calls != 1 {
 		t.Fatal("completion replayed")
+	}
+}
+
+// Isolate the budget effect of an original queued cleanup refund. The same
+// request must refuse while that receipt is held and succeed after the worker
+// returns it. This is a controlled owner-level mechanism witness, not evidence
+// that cleanup ran during the retained macOS scalar-forward failure.
+func TestCOWSemanticRefundChangesAdmissionAfterFullSnapshot(t *testing.T) {
+	db, c := cowCutFixture(t)
+	db.ownedCloseGuard = db.backend.(*backenddb.DB).OwnedCallbackCloseGuard()
+	c.flushWake = make(chan struct{}, 1)
+	budget := c.budget
+	beforeReceipt := budget.Stats()
+	original, err := budget.AcquireExternal(8192)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer original.Close()
+	refundCharge := budget.Stats().ReservedBytes - beforeReceipt.ReservedBytes
+	request, err := budget.AcquireExternal(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer request.Close()
+	blocker, err := budget.AcquireExternal(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blocker.Close()
+
+	started, release, workerDone := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	state := newTestSemanticState(func() error { close(started); <-release; return nil })
+	state.refund = original
+	c.semanticMu.Lock()
+	c.enqueueSemanticLocked(state.Release())
+	c.semanticMu.Unlock()
+	go func() { db.drainSemanticCleanup(); close(workerDone) }()
+	var releaseOnce sync.Once
+	defer func() {
+		releaseOnce.Do(func() { close(release) })
+		select {
+		case <-workerDone:
+		case <-time.After(5 * time.Second):
+			t.Error("controlled cleanup worker did not terminate")
+		}
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("invalid witness: original cleanup did not enter held Finish")
+	}
+	if err = blocker.Resize(budget.Limits().MaxInFlightBytes - budget.Stats().ReservedBytes); err != nil {
+		t.Fatalf("invalid witness: parent saturation: %v", err)
+	}
+	full := budget.Stats()
+	if full.ReservedBytes != budget.Limits().MaxInFlightBytes {
+		t.Fatalf("invalid witness: parent not full: %+v", full)
+	}
+	if err = request.Resize(1024); !errors.Is(err, memtable.ErrCOWCapacity) {
+		t.Fatalf("held original refund must preserve parent refusal: %v", err)
+	}
+	if got := budget.Stats(); got != full {
+		t.Fatalf("refused request changed original budget: before=%+v after=%+v", full, got)
+	}
+	// No sleep or retry: release exactly the original queued work, then wait for
+	// its completion/refund. The timeout is solely a failed-witness bound.
+	releaseOnce.Do(func() { close(release) })
+	select {
+	case <-workerDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("invalid witness: released cleanup did not finish")
+	}
+	if err = db.joinSemanticCleanupFrontier(); err != nil {
+		t.Fatal(err)
+	}
+	after := budget.Stats()
+	if after.ReservedBytes+refundCharge != full.ReservedBytes || after.TotalBytes+refundCharge != full.TotalBytes || after.ExternalLeases+1 != full.ExternalLeases || state.calls != 1 || state.resource != nil || state.refund != nil {
+		t.Fatalf("original refund not exact/terminal: charge=%d before=%+v after=%+v calls=%d resource=%p", refundCharge, full, after, state.calls, state.resource)
+	}
+	if err = request.Resize(1024); err != nil {
+		t.Fatalf("same request must admit after original refund: %v", err)
+	}
+	if got := budget.Stats(); got.ReservedBytes != after.ReservedBytes+1024 || got.ExternalLeases != after.ExternalLeases || got.ReservedBytes > budget.Limits().MaxInFlightBytes {
+		t.Fatalf("post-refund admission charge/cap changed: before=%+v after=%+v", after, got)
 	}
 }
