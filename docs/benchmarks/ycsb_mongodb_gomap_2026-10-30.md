@@ -196,3 +196,16 @@ existing controls reused where their contracts still apply. Offline green and
 this report do not establish final merged-head throughput. There is no README
 speedup promotion; the June 3 MongoDB 26,494.1 ops/s row remains unmatched
 historical context and is never used in an October ratio.
+
+The [final-source plan](ycsb_5335_final_source_qualification.md) retains the
+required six fresh matched pairs/twelve arms after repair and integration gates.
+Its provisional build is source-bound to c660 and has no new product result.
+The [local artifact inventory](ycsb_2026_10_30_evidence/retained-artifact-inventory.json.gz)
+records exact persistent host185 paths and sizes. A separate
+[content verification receipt](ycsb_2026_10_30_evidence/retained-primary-snapshots-sha256.json)
+rehashed all93 full primary typed snapshots,14238680662 bytes, against their
+original Close artifact hashes. Originals remain in place and accessible locally;
+this selective Git packet does not contain them or claim external publication.
+[Packet verification](ycsb_2026_10_30_evidence/packet-verification.json) covers
+all320 raw archive members and11 copied original documents, including the six
+previously omitted relaxed GoMap load/run outputs and accompanying receipts.
