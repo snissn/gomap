@@ -5,15 +5,17 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	treedb "github.com/snissn/gomap/TreeDB"
-	"go.mongodb.org/mongo-driver/v2/mongo/options"
-
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
 // Deliberately uses the retained generic projection contract as the oracle.
@@ -267,4 +269,176 @@ func TestStandaloneFlatProjectionDriverPointAndCursor(t *testing.T) {
 			}
 		})
 	}
+}
+
+// BenchmarkStandalonePointProjection is a developmental public-driver read
+// comparison over a warmed 16-row fixture, not the mixed YCSB workload. Each
+// worker owns one pooled official client and repeatedly reads its own fixed ID.
+// The projected cases request all ten binary 100-byte fields and exclude _id.
+// Setup, connection warmup, full BSON checks and checked shutdown are untimed.
+// ReportAllocs includes the driver, gateway and concurrent Go background work in
+// this process; it does not isolate server allocations or measure retained heap.
+func BenchmarkStandalonePointProjection(b *testing.B) {
+	for _, profile := range []treedb.Profile{treedb.ProfileCommandWALRelaxed, treedb.ProfileCommandWALDurable} {
+		for _, clients := range []int{1, 16} {
+			for _, projected := range []bool{true, false} {
+				shape := "all-ten-fields"
+				if !projected {
+					shape = "unprojected"
+				}
+				b.Run(fmt.Sprintf("%s/clients=%d/%s", profile, clients, shape), func(b *testing.B) {
+					benchmarkStandalonePointProjection(b, profile, clients, projected)
+				})
+			}
+		}
+	}
+}
+
+func benchmarkStandalonePointProjection(b *testing.B, profile treedb.Profile, clientCount int, projected bool) {
+	s, err := OpenStandaloneServer(StandaloneOptions{Dir: b.TempDir(), Profile: profile})
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() {
+		if err := s.Close(); err != nil {
+			b.Errorf("standalone close: %v", err)
+		}
+	})
+	if !s.Backend.HasNativeSemanticBridge() {
+		b.Fatal("shared native owner inactive")
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		b.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- s.Serve(ctx, ln) }()
+	b.Cleanup(func() {
+		cancel()
+		_ = ln.Close()
+		select {
+		case err := <-done:
+			if err != nil {
+				b.Errorf("serve: %v", err)
+			}
+		case <-time.After(standaloneShutdownTimeout):
+			b.Error("serve did not stop")
+		}
+	})
+	clients := make([]*mongo.Client, clientCount)
+	for i := range clients {
+		client, err := mongo.Connect(options.Client().ApplyURI("mongodb://" + ln.Addr().String()).
+			SetDirect(true).SetMaxPoolSize(1).SetRetryReads(false).SetRetryWrites(false).
+			SetServerSelectionTimeout(3 * time.Second).SetTimeout(5 * time.Second))
+		if err != nil {
+			b.Fatal(err)
+		}
+		clients[i] = client
+		b.Cleanup(func() {
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), standaloneShutdownTimeout)
+			defer closeCancel()
+			if err := client.Disconnect(closeCtx); err != nil {
+				b.Errorf("driver disconnect: %v", err)
+			}
+		})
+	}
+	const fixtureRows = 16
+	rows := make([]any, fixtureRows)
+	want := make([]wire.Document, fixtureRows)
+	projection := bson.D{{Key: "_id", Value: 0}}
+	for i := range rows {
+		row := bson.D{{Key: "_id", Value: int32(i)}}
+		fields := bson.D{}
+		for field := 0; field < 10; field++ {
+			key := fmt.Sprintf("field%d", field)
+			element := bson.E{Key: key, Value: bson.Binary{Subtype: 0, Data: bytes.Repeat([]byte{byte(i), byte(field)}, 50)}}
+			row = append(row, element)
+			fields = append(fields, element)
+			if i == 0 {
+				projection = append(projection, bson.E{Key: key, Value: 1})
+			}
+		}
+		rows[i] = row
+		if projected {
+			want[i] = marshalProjectionFixture(b, fields)
+		} else {
+			want[i] = marshalProjectionFixture(b, row)
+		}
+	}
+	inserted, err := clients[0].Database("bench").Collection("items").InsertMany(ctx, rows)
+	if err != nil {
+		b.Fatal(err)
+	}
+	if len(inserted.InsertedIDs) != fixtureRows {
+		b.Fatalf("inserted rows=%d want %d", len(inserted.InsertedIDs), fixtureRows)
+	}
+	findOptions := options.FindOne()
+	if projected {
+		findOptions.SetProjection(projection)
+	}
+	collections := make([]*mongo.Collection, clientCount)
+	filters := make([]bson.D, clientCount)
+	for i, client := range clients {
+		collections[i] = client.Database("bench").Collection("items")
+		filters[i] = bson.D{{Key: "_id", Value: int32(i)}}
+		got, err := collections[i].FindOne(ctx, filters[i], findOptions).Raw()
+		if err != nil || !bytes.Equal(got, want[i]) {
+			b.Fatalf("client %d warmup: result=%x err=%v", i, got, err)
+		}
+	}
+	type result struct {
+		last      bson.Raw
+		completed int
+		err       error
+	}
+	results := make([]result, clientCount)
+	start := make(chan struct{})
+	var ready, finished sync.WaitGroup
+	ready.Add(clientCount)
+	finished.Add(clientCount)
+	for worker := range clients {
+		go func(i int) {
+			var read result
+			defer func() {
+				results[i] = read
+				finished.Done()
+			}()
+			ready.Done()
+			<-start
+			for operation := i; operation < b.N; operation += clientCount {
+				got, err := collections[i].FindOne(ctx, filters[i], findOptions).Raw()
+				if err != nil {
+					read.err = err
+					return
+				}
+				if len(got) != len(want[i]) {
+					read.err = fmt.Errorf("document bytes=%d want %d", len(got), len(want[i]))
+					return
+				}
+				read.last = got
+				read.completed++
+			}
+		}(worker)
+	}
+	ready.Wait()
+	b.ReportAllocs()
+	b.ResetTimer()
+	close(start)
+	finished.Wait()
+	b.StopTimer()
+	completed := 0
+	for i, result := range results {
+		if result.err != nil {
+			b.Fatalf("client %d read: %v", i, result.err)
+		}
+		if result.completed != 0 && !bytes.Equal(result.last, want[i]) {
+			b.Fatalf("client %d final result=%x", i, result.last)
+		}
+		completed += result.completed
+	}
+	if completed != b.N {
+		b.Fatalf("completed reads=%d want %d", completed, b.N)
+	}
+	b.ReportMetric(float64(completed)/b.Elapsed().Seconds(), "reads/s")
 }

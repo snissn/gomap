@@ -66,6 +66,20 @@ These helper measurements describe projection work only. Public-driver
 comparisons use the workload and evidence contract in
 [the MongoDB benchmark record](../../docs/benchmarks/ycsb_mongodb_treedb_current.md).
 
+For a short public point-read comparison, the maintained benchmark uses a
+warmed 16-row fixture with ten binary 100-byte fields, both standalone profiles,
+one or 16 official-driver clients, and projected/unprojected requests:
+
+```sh
+GOWORK=off go test ./TreeDB/mongo_gateway -run '^$' \
+  -bench '^BenchmarkStandalonePointProjection$' -benchmem -count=5
+```
+
+Setup, connection warmup, exact BSON checks and checked shutdown are outside
+timing. `B/op` and `allocs/op` cover the driver, gateway and background Go work
+in the same process. This read-only hot-fixture benchmark is separate from the
+100k-row mixed YCSB workload and final MongoDB-relative qualification.
+
 ## Storage memory admission
 
 The standalone opener owns the shared immutable COW database for its full
