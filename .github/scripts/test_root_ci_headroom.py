@@ -57,7 +57,7 @@ def redact_command_diagnostic(value: str) -> str:
         flags=re.IGNORECASE,
     )
     credential_name = re.compile(
-        r"(?:^|_)(?:TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|PRIVATE_KEY|ACCESS_KEY(?:_ID)?)(?:$|_)",
+        r"(?:^|_)(?:TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|PRIVATE_KEY|API_?KEY|ACCESS_KEY(?:_ID)?)(?:$|_)",
         re.IGNORECASE,
     )
     secrets = {secret for name, secret in os.environ.items()
@@ -220,6 +220,34 @@ class CommandLinesTests(unittest.TestCase):
                        'proxy.example/path', '#fragment', 'original dependency failure'):
             self.assertIn(useful, rendered)
         run.assert_called_once()
+
+    def test_failure_redacts_plain_api_key_values_with_name_boundaries(self) -> None:
+        environment = {
+            'API_KEY': 'plain-api-key-value',
+            'SERVICE_API_KEY': 'plain-service-api-key-value',
+            'APIKEY': 'plain-apikey-value',
+            'SERVICE_APIKEY': 'plain-service-apikey-value',
+            'API_KEYBOARD': 'useful-keyboard-status',
+            'NOTAPIKEY': 'useful-prefixed-status',
+        }
+        credential_names = ('API_KEY', 'SERVICE_API_KEY', 'APIKEY', 'SERVICE_APIKEY')
+        stderr = '\n'.join(environment.values()) + '\noriginal dependency failure\n'
+        error = subprocess.CalledProcessError(1, ['go', 'list', './...'],
+                                             output='partial package output\n', stderr=stderr)
+        with mock.patch.dict(os.environ, environment, clear=True), \
+             mock.patch('subprocess.run', side_effect=error) as run:
+            with self.assertRaises(RuntimeError) as raised:
+                command_lines('go', 'list', './...')
+        rendered = ''.join(traceback.format_exception(raised.exception))
+        for name in credential_names:
+            with self.subTest(name=name):
+                self.assertNotIn(environment[name], rendered)
+        self.assertEqual(str(raised.exception).count('[REDACTED]'), 4)
+        for useful in ('useful-keyboard-status', 'useful-prefixed-status',
+                       'partial package output', 'original dependency failure'):
+            self.assertIn(useful, rendered)
+        run.assert_called_once_with(['go', 'list', './...'], cwd=ROOT, check=True,
+                                    capture_output=True, text=True)
 
     def test_nonzero_exit_with_no_captured_output_still_fails_once(self) -> None:
         error = subprocess.CalledProcessError(1, ['go', 'list', './...'])
