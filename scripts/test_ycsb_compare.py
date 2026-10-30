@@ -415,7 +415,42 @@ int main(int argc,char **argv) {
 }""")
         server = tools / "native-server"
         subprocess.run(["cc", str(source), "-o", str(server), '-DMARKER='+json.dumps(str(marker)), "-DREADY="+str(int(ready))],check=True,capture_output=True)
-        client = executable("go-ycsb", "#!/usr/bin/env python3\nimport json,os,sys,time,signal\njson.dump(dict(argv=sys.argv[1:],env_unset='GOMAXPROCS' not in os.environ),open("+repr(str(client_marker))+",'w'))\n"+("signal.signal(signal.SIGTERM,signal.SIG_IGN); time.sleep(30)" if hang else "time.sleep(.1); sys.exit(37)")+"\n")
+        # A direct ELF keeps process observation deterministic: a shebang's
+        # /usr/bin/env -> Python exec can legitimately change exe mid-observe.
+        # Keep the production observer strict and avoid that unrelated race.
+        client_source=tools/"client.c"
+        client_source.write_text(r"""#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+int main(int argc,char **argv) {
+ FILE *f=fopen(CLIENT_MARKER,"wx");if(!f)return 2;
+ fputs("{\"argv\":[",f);
+ for(int i=1;i<argc;i++) {
+  if(i>1)fputc(',',f);fputc('"',f);
+  for(unsigned char *p=(unsigned char*)argv[i];*p;p++) {
+   if(*p=='"'||*p=='\\')fputc('\\',f);
+   if(*p<32)fprintf(f,"\\u%04x",*p);else fputc(*p,f);
+  }
+  fputc('"',f);
+ }
+ fprintf(f,"],\"env_unset\":%s}",getenv("GOMAXPROCS")?"false":"true");
+ if(fclose(f))return 3;
+ if(HANG){signal(SIGTERM,SIG_IGN);sleep(30);return 4;}
+ usleep(100000);return 37;
+}""")
+        client=tools/"go-ycsb"
+        client_build=[shutil.which("cc"),str(client_source),"-o",str(client),'-DCLIENT_MARKER='+json.dumps(str(client_marker)),"-DHANG="+str(int(hang))]
+        compiled=subprocess.run(client_build,check=True,capture_output=True)
+        retained=None
+        if os.environ.get("YCSB_TEST_EVIDENCE_DIR"):
+            retained=pathlib.Path(os.environ["YCSB_TEST_EVIDENCE_DIR"])/self._testMethodName
+            retained.mkdir(parents=True,exist_ok=False)
+            shutil.copyfile(client_source,retained/"synthetic-client.c")
+            shutil.copyfile(client,retained/"synthetic-client.elf")
+            (retained/"compile.stdout").write_bytes(compiled.stdout)
+            (retained/"compile.stderr").write_bytes(compiled.stderr)
+            self.save(retained/"provenance.json",dict(schema_version=1,kind="synthetic_offline_shell_client",source_sha256=COMPARE.digest(client_source),exe_sha256=COMPARE.digest(client),compiler=client_build[0],compiler_version=subprocess.check_output([client_build[0],"--version"],text=True),argv=client_build,hang=hang,expected_error_exit=37,product_evidence=False))
         import socket
         with socket.socket() as sock:
             sock.bind(("127.0.0.1",0))
@@ -465,6 +500,13 @@ int main(int argc,char **argv) {
         writer.start()
         try:outcome = subprocess.run(["bash", str(ROOT / "ycsb_compare_mongodb_treedb.sh")],env=environment,text=True,capture_output=True,timeout=20)
         finally:writer.join(timeout=6)
+        if retained is not None:
+            (retained/"shell.stdout").write_text(outcome.stdout)
+            (retained/"shell.stderr").write_text(outcome.stderr)
+            self.save(retained/"shell-exit.json",dict(exit_code=outcome.returncode))
+            shutil.copytree(execution,retained/"packet")
+            for path in (marker,client_marker):
+                if path.exists():shutil.copyfile(path,retained/path.name)
         self.assertFalse(writer.is_alive())
         self.assertEqual(writer_errors,[])
         expected=(124 if hang else 37) if ready else 1
@@ -487,6 +529,7 @@ int main(int argc,char **argv) {
         observation=COMPARE.read(execution/"treedb_native/server.evidence/owner.open.json")
         self.assertGreaterEqual(COMPARE.timestamp(readiness["ready_utc"]),COMPARE.timestamp(observation["observed_utc"]))
         client_launch=COMPARE.read(execution/"treedb_native/load.launch.json")
+        self.assertEqual(client_launch["process"]["exe_sha256"],COMPARE.digest(client))
         self.assertGreaterEqual(COMPARE.timestamp(client_launch["start_utc"]),COMPARE.timestamp(readiness["ready_utc"]))
         self.assertTrue(json.loads(marker.read_text())["env_unset"])
         child = json.loads(client_marker.read_text())
