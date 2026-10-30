@@ -83,7 +83,7 @@ receipt["environment"] = {key: env.get(key) for key in ("GOWORK", "GOMAXPROCS", 
 receipt["platform"] = platform.platform()
 workflow = harness / ".github/workflows/treedb-tests.yml"
 (packet / "workflow.yml").write_bytes(workflow.read_bytes())
-(packet / "runner.py").write_bytes(Path(__file__).read_bytes())
+(packet / "runner.py").write_bytes(pathlib.Path(__file__).read_bytes())
 (packet / "candidate.patch").write_text(git(product, "diff", "--binary", basis, candidate) + "\n", encoding="utf-8")
 (packet / "candidate-tree.txt").write_text(git(product, "ls-tree", "-r", "--full-tree", "HEAD") + "\n", encoding="utf-8")
 changed = git(product, "diff", "--name-only", basis, candidate).splitlines()
