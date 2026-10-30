@@ -110,7 +110,10 @@ def ext_integer(value,label):
     raw=next(iter(value.values()))
     c.require(isinstance(raw,str) and re.fullmatch(r"-?(0|[1-9][0-9]*)",raw),"invalid BSON integer "+label)
     number=int(raw)
-    c.require(-(1<<63)<=number<(1<<63),"out-of-range BSON integer "+label)
+    # Match the pinned public driver's canonical BSON decoder: $numberInt is
+    # signed int32; accepting its overflow as int64 would lose the type claim.
+    bits=32 if "$numberInt" in value else 64
+    c.require(-(1<<(bits-1))<=number<(1<<(bits-1)),"out-of-range BSON integer "+label)
     return number
 
 

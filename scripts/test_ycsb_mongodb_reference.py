@@ -29,6 +29,21 @@ from test_ycsb_correctness_fixture import fixture
 ROOT=pathlib.Path(__file__).parent
 
 
+class ReferenceBSONIntegers(unittest.TestCase):
+    def test_declared_integer_width_boundaries(self):
+        for kind,bits in (("$numberInt",32),("$numberLong",64)):
+            for value in (-(1<<(bits-1)),0,(1<<(bits-1))-1):
+                with self.subTest(kind=kind,value=value):
+                    self.assertEqual(reference.ext_integer({kind:str(value)},"boundary"),value)
+
+    def test_declared_integer_width_overflow_and_malformed_values(self):
+        for kind,bits in (("$numberInt",32),("$numberLong",64)):
+            invalid=(str(-(1<<(bits-1))-1),str(1<<(bits-1)),True,1,1.0,"01","1.0","NaN","Infinity")
+            for value in invalid:
+                with self.subTest(kind=kind,value=value):
+                    with self.assertRaises(ValueError):reference.ext_integer({kind:value},"boundary")
+
+
 class Docker29RetainedInspect(unittest.TestCase):
     """Real created-container input; every command/state transition is offline."""
     def setUp(self):
@@ -299,6 +314,31 @@ class ReferencePackets(unittest.TestCase):
         self.reject("random-checkpoint.json",lambda v:v["commands"]["after.getParameter"]["reply"].update(syncdelay={"$numberDouble":"61.0"}))
         self.reject("random-checkpoint.json",lambda v:[v["commands"][p+"getParameter"]["reply"].update(syncdelay={"$numberDouble":"61.0"}) for p in ("before.","after.")])
         self.reject("server-ready.json",lambda v:v["commands"].pop("before.getParameter"))
+
+    def test_matching_public_parameter_copies_enforce_declared_bson_width(self):
+        # Every public command copy and binding is updated together. Rejection
+        # must follow BSON width, rather than a stale digest or unequal copy.
+        original={p:p.read_bytes() for p in self.out.rglob("*") if p.is_file()}
+        cases=(("$numberInt","2147483647",True),("$numberLong","2147483648",True),
+               ("$numberInt","2147483648",False),("$numberLong","9223372036854775808",False))
+        for kind,value,valid in cases:
+            with self.subTest(kind=kind,value=value):
+                try:
+                    changed=0
+                    for path in self.directory.glob("*.json"):
+                        packet=c.read(path)
+                        if type(packet) is dict and packet.get("kind")=="mongodb_reference_public_commands":
+                            for command in packet["commands"].values():
+                                if "getParameter" in command["request"]:
+                                    command["reply"]["syncdelay"]={kind:value};changed+=1
+                            self.save(path,packet)
+                    self.assertGreater(changed,0)
+                    self.rehash()
+                    if valid:self.assertEqual(reference.validate(self.out)["status"],"validated-reference-lifecycle-evidence")
+                    else:
+                        with self.assertRaisesRegex(ValueError,"out-of-range BSON integer"):reference.validate(self.out)
+                finally:
+                    for path,data in original.items():path.write_bytes(data)
 
     def test_actual_close_logs_wait_exit_and_owned_removal_required(self):
         for name,fn in (("server.close.json",lambda v:v.update(close_return_observed=True)),("server.close.json",lambda v:v.update(forced_kill=True)),("server.close.json",lambda v:v.update(exit_code=False)),("server.terminal.json",lambda v:v["State"].update(ExitCode=137)),("server.terminal.json",lambda v:v["State"].update(OOMKilled=True)),("server.removed.json",lambda v:v.update(removed=False)),("server.close.json",lambda v:v["actions"].update(wait=v["actions"]["sigterm"])),("reopened.identity.json",lambda v:v.update(data_inode=999,mounted_data_inode=999)),("fixture-write.identity.json",lambda v:v.update(data_dir=self.owners["server"]["data_dir"]))):
