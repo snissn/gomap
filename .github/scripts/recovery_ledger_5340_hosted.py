@@ -103,10 +103,10 @@ for entry in entries:
     if not entry:
         continue
     descriptor, encoded_path = entry.split(b"\t", 1)
-    mode, kind, blob = descriptor.decode().split()
+    entry_mode, kind, blob = descriptor.decode().split()
     path = encoded_path.decode()
-    if path.endswith((".go", ".py", ".sh", ".s", ".S", ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh", ".m", ".mm", ".syso", ".mk", "go.mod", "go.sum")) or path.rsplit("/", 1)[-1].startswith("go.work") or path == "Makefile" or mode == "100755":
-        discovery.update(encoded_path + b"\0" + mode.encode() + b"\0" + blob.encode() + b"\0")
+    if path.endswith((".go", ".py", ".sh", ".s", ".S", ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh", ".m", ".mm", ".syso", ".mk", "go.mod", "go.sum")) or path.rsplit("/", 1)[-1].startswith("go.work") or path == "Makefile" or entry_mode == "100755":
+        discovery.update(encoded_path + b"\0" + entry_mode.encode() + b"\0" + blob.encode() + b"\0")
         classified += 1
 assert classified == 5028 and len(entries) - 1 == 12698
 assert discovery.hexdigest() == "5fc9dd30215f5bbce32fb0523cdbd57fd43ac75bce35c3d1c9f768cf8f93fa20"
