@@ -21,6 +21,34 @@ import (
 const nativeGraphHandoffWitnessChildEnv = "TREEDB_NATIVE_GRAPH_HANDOFF_WITNESS_CHILD"
 const nativeGraphHandoffWitnessSuccess = "NATIVE_GRAPH_HANDOFF_WITNESS_COMPLETED"
 
+// Go testing matches slash-separated components independently. Anchoring only
+// the whole name permits changed-manifest to match unchanged-manifest's suffix.
+func nativeGraphHandoffWitnessRunPattern(name string) string {
+	parts := strings.Split(name, "/")
+	for i := range parts {
+		parts[i] = "^" + regexp.QuoteMeta(parts[i]) + "$"
+	}
+	return strings.Join(parts, "/")
+}
+
+func TestNativeGraphHandoffWitnessRunPattern(t *testing.T) {
+	const parent = "TestNativeOrdinaryGraphAcceptedAcrossCapturedManifestBuild"
+	for _, selected := range []string{"sequential", "changed-manifest", "unchanged-manifest"} {
+		pattern := strings.Split(nativeGraphHandoffWitnessRunPattern(parent+"/"+selected), "/")
+		if len(pattern) != 2 || !regexp.MustCompile(pattern[0]).MatchString(parent) || regexp.MustCompile(pattern[0]).MatchString(parent+"Extra") {
+			t.Fatalf("invalid parent selector: %q", pattern)
+		}
+		for _, candidate := range []string{"sequential", "changed-manifest", "unchanged-manifest", selected+"Extra"} {
+			if got := regexp.MustCompile(pattern[1]).MatchString(candidate); got != (candidate == selected) {
+				t.Fatalf("selected=%q candidate=%q matched=%v", selected, candidate, got)
+			}
+		}
+	}
+	if got := nativeGraphHandoffWitnessRunPattern("Parent/a.b"); got != "^Parent$/^a\\.b$" {
+		t.Fatalf("literal component was not quoted: %q", got)
+	}
+}
+
 // Worker APIs have no cancellation contract. Keep the original public calls in
 // a child so a failed join cannot leak a worker into another test or race DB
 // teardown against that worker. Normal and race runs use the same test binary.
@@ -41,7 +69,7 @@ func enterNativeGraphHandoffWitnessChild(t *testing.T) bool {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 150*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^"+regexp.QuoteMeta(t.Name())+"$", "-test.count=1", "-test.timeout=2m", "-test.v")
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run="+nativeGraphHandoffWitnessRunPattern(t.Name()), "-test.count=1", "-test.timeout=2m", "-test.v")
 	cmd.WaitDelay = 5 * time.Second
 	prefix := nativeGraphHandoffWitnessChildEnv + "="
 	for _, entry := range os.Environ() {
@@ -137,17 +165,16 @@ func TestNativeOrdinaryGraphAcceptedAcrossCapturedManifestBuild(t *testing.T) {
 					t.Fatalf("INVALID_WITNESS seed[%d:%d]: %v", start, end, err)
 				}
 			}
-			// Keep the full 4096/128 geometry while leaving only the final
-			// batch pending at the held build. MaxSources is 32: retaining
-			// 31 pending batches plus a frozen cut would confound this
-			// root-handoff control with producer-pressure maintenance.
-			for start := 0; start < 3968; start += 128 {
-				insert(start, start+128)
-			}
+			// This controlled witness needs one physical prefix and one pending
+			// public batch, not the original failure's 4096-row capacity load.
+			// Keep the 128-row batch shape and default finite admission limits;
+			// acceptance below remains mandatory and fails closed. The original
+			// documentservice 4096/128 test remains independently unchanged.
+			insert(0, 128)
 			if err := owner.Checkpoint(); err != nil {
 				t.Fatal(err)
 			}
-			insert(3968, 4096)
+			insert(128, 256)
 			if !overlap {
 				if err := owner.Checkpoint(); err != nil {
 					t.Fatal(err)
@@ -164,7 +191,7 @@ func TestNativeOrdinaryGraphAcceptedAcrossCapturedManifestBuild(t *testing.T) {
 				if err := owner.Checkpoint(); err != nil {
 					t.Fatal(err)
 				}
-				if _, _, err := pause.InsertTypedBatchWithStats([][]byte{[]byte("pending")}, [][]byte{[]byte(`{"label":"pending"}`)}, []TypedColumnBatch{{Name: "label", Strings: []string{"pending"}}}); err != nil {
+				if _, _, err := pause.InsertTypedBatchWithStats([][]byte{[]byte("pending")}, [][]byte{[]byte(`{"id":"pending"}`)}, []TypedColumnBatch{{Name: "label", Strings: []string{"pending"}}}); err != nil {
 					t.Fatal(err)
 				}
 			}
