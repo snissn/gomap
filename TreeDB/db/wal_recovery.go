@@ -15,6 +15,7 @@ import (
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/recoverytrace"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/internal/workstats"
@@ -331,8 +332,16 @@ func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes 
 	db.mu.RLock()
 	applied := db.meta.AppliedCommandLSN
 	db.mu.RUnlock()
+	ledger := recoverytrace.Active()
+	var classifyOperation uint64
+	if ledger != nil {
+		classifyOperation = ledger.Record(recoverytrace.Event{Stage: recoverytrace.ReplayClassify, Outcome: recoverytrace.Started, Root: recoverytrace.Text(db.dir), LSN: applied})
+	}
 	physicalFrames, err := readCommandWALV2PhysicalFrames(segments, applied, maxSegmentBytes)
 	if err != nil {
+		if ledger != nil {
+			ledger.End(recoverytrace.ReplayClassify, classifyOperation, true)
+		}
 		return err
 	}
 	var ridMap map[uint64]page.ValuePtr
@@ -346,6 +355,9 @@ func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes 
 	if needsRIDMap {
 		ridMap, err = scanValueLogSegments(segments, dictLookup)
 		if err != nil {
+			if ledger != nil {
+				ledger.End(recoverytrace.ReplayClassify, classifyOperation, true)
+			}
 			return err
 		}
 	}
@@ -354,9 +366,23 @@ func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes 
 		return ok
 	})
 	if err != nil {
+		if ledger != nil {
+			ledger.End(recoverytrace.ReplayClassify, classifyOperation, true)
+		}
 		return err
 	}
-	if _, err := repairCommandWALV2Suffix(WALDirPath(db.dir), classification, db.readOnly); err != nil {
+	if ledger != nil {
+		ledger.End(recoverytrace.ReplayClassify, classifyOperation, false)
+	}
+	var repairOperation uint64
+	if ledger != nil {
+		repairOperation = ledger.Record(recoverytrace.Event{Stage: recoverytrace.ReplayRepair, Outcome: recoverytrace.Started, Root: recoverytrace.Text(db.dir), LSN: applied})
+	}
+	_, repairErr := repairCommandWALV2Suffix(WALDirPath(db.dir), classification, db.readOnly)
+	if ledger != nil {
+		ledger.End(recoverytrace.ReplayRepair, repairOperation, repairErr != nil)
+	}
+	if err := repairErr; err != nil {
 		return err
 	}
 	db.commandWALDurableLSN.Store(classification.DurableFrontier)
@@ -468,7 +494,15 @@ func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes 
 		if frame.env.LSN != applied+1 {
 			return fmt.Errorf("%w: current=%d next=%d", ErrCommandWALAppliedLSNNonContig, applied, frame.env.LSN)
 		}
-		if err := applyCommandWALFrame(db, frame.env, ridMap, inlineAppender, ensureReplayRIDMap, ensureReplayLogSupport); err != nil {
+		var frameOperation uint64
+		if ledger != nil {
+			frameOperation = ledger.Record(recoverytrace.Event{Stage: recoverytrace.ReplayFrame, Outcome: recoverytrace.Started, Root: recoverytrace.Text(db.dir), LSN: frame.env.LSN})
+		}
+		frameErr := applyCommandWALFrame(db, frame.env, ridMap, inlineAppender, ensureReplayRIDMap, ensureReplayLogSupport)
+		if ledger != nil {
+			ledger.End(recoverytrace.ReplayFrame, frameOperation, frameErr != nil)
+		}
+		if err := frameErr; err != nil {
 			return fmt.Errorf(
 				"treedb: replay command WAL frame lsn=%d kind=%d: %w",
 				frame.env.LSN,

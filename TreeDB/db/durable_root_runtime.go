@@ -25,6 +25,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/leafrefscan"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
+	"github.com/snissn/gomap/TreeDB/internal/recoverytrace"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -2126,12 +2127,28 @@ func executeDurableRootStorageTransactionV1(tx durableRootStorageTransactionV1) 
 	if tx.syncIndex == nil || (tx.installAuthority == nil && (tx.sink == nil || tx.target > 1 || tx.syncMeta == nil)) {
 		return false, errors.New("invalid durable-root storage transaction")
 	}
+	ledger := recoverytrace.Active()
 	if tx.resources != nil {
-		if err := tx.resources.FlushThrough(); err != nil {
+		var flushOperation uint64
+		if ledger != nil {
+			flushOperation = ledger.Record(recoverytrace.Event{Stage: recoverytrace.ExternalFlush, Outcome: recoverytrace.Started, Root: recoverytrace.Text(tx.dir)})
+		}
+		flushErr := tx.resources.FlushThrough()
+		if ledger != nil {
+			ledger.End(recoverytrace.ExternalFlush, flushOperation, flushErr != nil)
+		}
+		if err := flushErr; err != nil {
 			return false, fmt.Errorf("flush durable-root external dependencies: %w", err)
 		}
 		if !tx.dependenciesCovered {
+			var syncOperation uint64
+			if ledger != nil {
+				syncOperation = ledger.Record(recoverytrace.Event{Stage: recoverytrace.ExternalSync, Outcome: recoverytrace.Started, Root: recoverytrace.Text(tx.dir)})
+			}
 			phase, err := syncStableResourceDependenciesV1(tx.resources, tx.dir, tx.resources.SyncThrough, nil)
+			if ledger != nil {
+				ledger.End(recoverytrace.ExternalSync, syncOperation, err != nil)
+			}
 			if err != nil {
 				switch phase {
 				case stableResourceDependencyObserveV1:
@@ -2145,11 +2162,27 @@ func executeDurableRootStorageTransactionV1(tx durableRootStorageTransactionV1) 
 		}
 	}
 	if tx.materialize != nil {
-		if err := tx.materialize(); err != nil {
+		var materializeOperation uint64
+		if ledger != nil {
+			materializeOperation = ledger.Record(recoverytrace.Event{Stage: recoverytrace.Materialize, Outcome: recoverytrace.Started, Root: recoverytrace.Text(tx.dir)})
+		}
+		materializeErr := tx.materialize()
+		if ledger != nil {
+			ledger.End(recoverytrace.Materialize, materializeOperation, materializeErr != nil)
+		}
+		if err := materializeErr; err != nil {
 			return false, err
 		}
 	}
-	if err := tx.syncIndex(); err != nil {
+	var indexOperation uint64
+	if ledger != nil {
+		indexOperation = ledger.Record(recoverytrace.Event{Stage: recoverytrace.IndexSync, Outcome: recoverytrace.Started, Root: recoverytrace.Text(tx.dir)})
+	}
+	indexErr := tx.syncIndex()
+	if ledger != nil {
+		ledger.End(recoverytrace.IndexSync, indexOperation, indexErr != nil)
+	}
+	if err := indexErr; err != nil {
 		return false, fmt.Errorf("sync durable-root index: %w", err)
 	}
 

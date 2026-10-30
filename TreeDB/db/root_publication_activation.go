@@ -21,6 +21,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/mvccadmission"
 	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
+	"github.com/snissn/gomap/TreeDB/internal/recoverytrace"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -1386,7 +1387,16 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 		return post, nil
 	}
 	admissionStart := time.Now()
-	if err := runtime.coordinator.WaitForAdmission(context.Background(), receipt); err != nil {
+	ledger := recoverytrace.Active()
+	var admissionOperation uint64
+	if ledger != nil {
+		admissionOperation = ledger.Record(recoverytrace.Event{Stage: recoverytrace.Admission, Outcome: recoverytrace.Started, Root: recoverytrace.Text(db.dir), CommitSeq: next.CommitSeq})
+	}
+	admissionErr := runtime.coordinator.WaitForAdmission(context.Background(), receipt)
+	if ledger != nil {
+		ledger.End(recoverytrace.Admission, admissionOperation, admissionErr != nil)
+	}
+	if err := admissionErr; err != nil {
 		if opts.publishTiming != nil {
 			opts.publishTiming.FinalizeAdmissionWait += time.Since(admissionStart)
 		}
@@ -1402,7 +1412,15 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 	// command-WAL databases where ordinary commits may return after admission.
 	if runtime.coordinator.StartupSynchronous() || opts.preparedLimits != nil || (syncWrite && !db.commandWAL) {
 		durabilityStart := time.Now()
-		if err := runtime.coordinator.WaitThrough(context.Background(), next.CommitSeq); err != nil {
+		var fenceOperation uint64
+		if ledger != nil {
+			fenceOperation = ledger.Record(recoverytrace.Event{Stage: recoverytrace.DurableFence, Outcome: recoverytrace.Started, Root: recoverytrace.Text(db.dir), CommitSeq: next.CommitSeq})
+		}
+		fenceErr := runtime.coordinator.WaitThrough(context.Background(), next.CommitSeq)
+		if ledger != nil {
+			ledger.End(recoverytrace.DurableFence, fenceOperation, fenceErr != nil)
+		}
+		if err := fenceErr; err != nil {
 			if opts.publishTiming != nil {
 				opts.publishTiming.FinalizeDurabilityWait += time.Since(durabilityStart)
 			}

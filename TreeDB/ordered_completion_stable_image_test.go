@@ -19,6 +19,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/powerlossoracle"
 	"github.com/snissn/gomap/TreeDB/internal/powerlossreopen"
+	"github.com/snissn/gomap/TreeDB/internal/recoverytrace"
 	"github.com/snissn/gomap/TreeDB/mvcc"
 )
 
@@ -47,6 +48,10 @@ func TestOrderedCompletionStableImageAtAcknowledgement(t *testing.T) {
 }
 
 func proposalOrderedACKImageChild(t *testing.T, scenario string) {
+	diagnostic := startACKRecoveryDiagnostic(t)
+	if diagnostic != nil {
+		defer diagnostic.stop()
+	}
 	var witness *orderedACKPhaseWitness
 	if deadline, ok := t.Deadline(); ok {
 		witness = startOrderedACKPhaseWitness(scenario, deadline.Add(-3*time.Second), os.Stderr)
@@ -69,9 +74,7 @@ func proposalOrderedACKImageChild(t *testing.T, scenario string) {
 		if drained {
 			// Only after the immutable ACK image was frozen.
 			witness.mark("original-close")
-			if err := closeOrderedACKImage("original close", database.Close); err != nil {
-				t.Error(err)
-			}
+			diagnostic.close(t, recoverytrace.SourceClose, "original close", database.Close)
 		}
 	}()
 	store := mvcc.New(database)
@@ -217,28 +220,35 @@ func proposalOrderedACKImageChild(t *testing.T, scenario string) {
 	// Freeze immediately after the final ACK, before physical inspection,
 	// Checkpoint, Close, GC, or any other potentially persistent operation.
 	witness.mark("ACK-freeze")
+	freezeOperation := diagnostic.begin(recoverytrace.SnapshotFreeze)
 	observationMu.Lock()
 	active = false
 	stable := model.Clone()
 	observationMu.Unlock()
 	restore()
+	diagnostic.end(recoverytrace.SnapshotFreeze, freezeOperation, false)
 	// Segment sequences only advance. A smaller target must not introduce a
 	// rotation while staging or completing this same FIFO reproduction.
 	if got := database.Stats()["treedb.command_wal.writer.path"]; got != baselineWALPath {
 		t.Fatalf("command WAL rotated during ACK fixture: path=%q baseline=%q", got, baselineWALPath)
 	}
 	witness.mark("physical-capture")
+	captureOperation := diagnostic.begin(recoverytrace.PhysicalCapture)
 	physical := cowOrderedCapturePhysical(t, database, versions)
+	diagnostic.end(recoverytrace.PhysicalCapture, captureOperation, false)
+	if diagnostic != nil {
+		diagnostic.install(t)
+	}
 	witness.mark("writable-open")
+	openOperation := diagnostic.begin(recoverytrace.StableOpen)
 	result, reopened, closeReopened, err := powerlossreopen.Stable(stable, opts, false)
+	diagnostic.stableOpenReturned(openOperation, result, reopened, err)
 	if err != nil || result.Rejected || reopened == nil {
 		t.Fatalf("ACK stable image rejected: %+v %v", result, err)
 	}
 	defer func() {
 		witness.mark("reopened-close")
-		if err := closeOrderedACKImage("reopened close/cleanup", closeReopened); err != nil {
-			t.Error(err)
-		}
+		diagnostic.close(t, recoverytrace.ReopenedClose, "reopened close/cleanup", closeReopened)
 	}()
 	witness.mark("validation")
 	if result.AppliedLSN <= baselineLSN {
