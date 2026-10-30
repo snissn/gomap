@@ -458,6 +458,9 @@ func (db *DB) writeNativePublication(b *Batch, native *backenddb.NativePreparedP
 	result.AssignedLSN, result.LogicalSequence = receipt.AssignedLSN, receipt.LogicalSeq
 	result.Assigned, result.Uncertain, result.LogicalInstalled = receipt.Assigned, receipt.Uncertain, receipt.LogicalInstalled
 	result.WALCompleted, result.WALStable = receipt.WALCompleted, receipt.WALStable
+	if err == nil {
+		backend.ObserveNativeInstalledForTest(intent, result)
+	}
 	if err == nil && intent.RequestsExactSeal() {
 		err = db.Checkpoint() // all producer/raw/teardown progress gates have ended
 		if err == nil {

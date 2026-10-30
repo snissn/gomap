@@ -30,7 +30,11 @@ type nativeTypedDelta struct {
 	appliedLSN    uint64
 	memberOrdinal uint32
 	buildCapacity uint64
-	refund        *cowbtree.OwnedMapRefund
+	// graphSourceRoot is the graph marker's authenticated physical basis.
+	// Captured-prefix handoff advances only a private successor header; the
+	// original recipe and its admitted source/capacity remain immutable.
+	graphSourceRoot uint64
+	refund          *cowbtree.OwnedMapRefund
 }
 
 // Vector backing has its own original receipt, so dropping a captured prefix
@@ -223,7 +227,7 @@ func cloneNativeTypedSuffix(current, boundary *nativeTypedDelta, admit cowbtree.
 		}
 		refund := new(cowbtree.OwnedMapRefund)
 		refund.Init(lease)
-		next := &nativeTypedDelta{data: d.data, rows: d.rows, retained: d.retained, deleted: d.deleted, operation: d.operation, appliedLSN: d.appliedLSN, memberOrdinal: d.memberOrdinal, buildCapacity: d.buildCapacity, refund: refund}
+		next := &nativeTypedDelta{data: d.data, rows: d.rows, retained: d.retained, deleted: d.deleted, operation: d.operation, appliedLSN: d.appliedLSN, memberOrdinal: d.memberOrdinal, buildCapacity: d.buildCapacity, graphSourceRoot: d.graphSourceRoot, refund: refund}
 		next.refs.Store(1)
 		next.data.retain()
 		if tail == nil {

@@ -334,6 +334,9 @@ func (p *nativeJSONLogicalGroup) PrepareNativePublication(latest backenddb.Nativ
 		if !ok || !nok || named.incarnation != g.incarnation {
 			return backenddb.NativeFinalizedPublication{}, backenddb.ErrConcurrentModification
 		}
+		if err := validateNativeGraphPreparation(c, g.plan.typed); err != nil {
+			return backenddb.NativeFinalizedPublication{}, err
+		}
 		changes[count] = nativeJSONPrimaryChange{collection: c, entries: g.plan.mutations, additional: g.plan.additional, primaryPolicy: g.plan.primaryPolicy, typed: g.plan.typed}
 		count++
 	}

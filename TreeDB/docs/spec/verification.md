@@ -279,6 +279,48 @@ substitutes for that read. These controls establish lifecycle assertions only.
 Public performance, original finite admission, recovery and retained-resource
 qualification remain separate gates; retain source-bound failures and nulls.
 
+Ordinary ColumnGraph captured-prefix handoff controls (#5338):
+
+| Control | Required evidence |
+| --- | --- |
+| `TestNativeOrdinaryGraphAcceptedAcrossCapturedManifestBuild` | A real accepted graph suffix and assigned LSN while the original captured build is held; actual changed-manifest handoff; unchanged held cuts, recipe and receipt identity; all acknowledged rows; original graph completion, checked Close and fresh reopen. Sequential and unchanged-manifest cases are negative controls. The process-exit case verifies the exact acknowledged manifest and rows without an extra pre-exit checkpoint or Close. |
+| `TestNativeOrdinaryColumnGraphRecipeAcrossCapturedHandoff`, `TestNativeOrdinaryGraphHandoffKeepsOriginalPromiseAcrossSuccessors` and `TestNativeOrdinaryGraphHandoffFromEmptyManifest` | Private-header advancement authenticates the same original primary/manifest build, schema, basis and prepared producer codec policies; rejects foreign or stale proofs and unproven physical rewrites; retains the immutable recipe and original source-capacity promise through successive, graph-only-prefix and initially empty-manifest handoffs. These are guard controls, not substitutes for the public witness. |
+| `TestNativeGraphPreparationRejectsChangedCapturedSources` and `TestNativeGraphPreparationRefreshRetainsCleanupFailure` | The preparation guard distinguishes physical-basis drift from a logical document-generation conflict. The error classifier permits only exclusively stale leaves through wrapping and joins, preserving mixed cleanup errors. These component assertions do not establish a public interleaving during preparation or execution of its one-refresh branch. |
+| `TestNativeOrdinaryGraphPreassignmentSourceChangesHaveNoEffect` | Stages a graph with the original census/admission/canonical payload, then performs a real public checkpoint or logical row insertion before committing it. The original refusal has no assigned/uncertain/installed/accepted result, no WAL sequence advance and no changed recipe or logical publication. After original transaction cleanup, a fresh public rebuild must complete with all rows and checked owner/resource cleanup. This staged control does not directly schedule the automatic wrapper's second attempt; its maximum-two-attempt policy remains source-reviewed. |
+| `TestOrdinaryColumnGraphNativeColdHybrid4096` | Original durable 4096/128 geometry, original first Optimize and first cold Hybrid order, stable cold/warm ranks and pack reuse, plus complete retained input comparisons after Optimize, explicit checkpoint and fresh reopen. |
+| `TestOrdinaryColumnGraphNativeOptimizeCrashReopen` | Original process exit after successful public Optimize, with exact acknowledged manifest identity, full documents, scalar/text and vector/Hybrid serving from a fresh owner. This is separate from clean Close and from power-loss qualification. |
+| `TestOrdinaryColumnGraphNativeCloseRetainsCheckpointFailure` | A maintained fault after the actual final META write on a durable ordinary owner; the original first Close preserves the injected cause, recovery-required sentinel and notification without retry. A fresh process owner recovers every acknowledged ordinary document and the final raw marker. |
+| `TestNativeMaterializeDiagnosticRetainsOriginalCatalogFailure` and `TestNativeTypedDiagnosticMarksDeltaOrderAndKeepsFailure` | Original terminal error identity, `errors.Is`/`errors.As` causality, stage discriminator, borrowed-input release and no physical replay or retryable reclassification. |
+
+Run the component controls and the public subprocess/lifecycle controls normally
+and with the race detector. Keep each source-bound command, exit status and
+original failure output. Authored coverage is not an execution result, a passing
+guard control does not establish the public overlap, and a public overlap result
+does not retrospectively attribute the unobserved #5332 refusing guard. Preserve
+the original accepted-build failure-custody, publication-cut, finite-admission
+and recovery-required controls alongside this table.
+
+```sh
+go test -count=1 ./TreeDB/collections \
+  -run '^(TestNativeOrdinaryGraphAcceptedAcrossCapturedManifestBuild|TestNativeOrdinaryColumnGraphRecipeAcrossCapturedHandoff|TestNativeOrdinaryGraphHandoffKeepsOriginalPromiseAcrossSuccessors|TestNativeOrdinaryGraphHandoffFromEmptyManifest|TestNativeGraphPreparationRejectsChangedCapturedSources|TestNativeGraphPreparationRefreshRetainsCleanupFailure|TestNativeOrdinaryGraphPreassignmentSourceChangesHaveNoEffect|TestNativeMaterializeDiagnosticRetainsOriginalCatalogFailure|TestNativeTypedDiagnosticMarksDeltaOrderAndKeepsFailure|TestNativeOrdinaryGraphDiagnosticDistinguishesStaleBasis)$'
+go test -count=1 ./TreeDB/documentservice \
+  -run '^(TestOrdinaryColumnGraphNativeService4096|TestOrdinaryColumnGraphNativeColdHybrid4096|TestOrdinaryColumnGraphNativeOptimizeCrashReopen|TestOrdinaryColumnGraphNativeCloseRetainsCheckpointFailure)$'
+```
+
+`BenchmarkOrdinaryColumnGraphNativeLifecycle4096` is a separate public successful
+lifecycle cost control. It holds native durable mode, 4096 documents, 128 per
+request, one writer and original finite limits fixed. It records elapsed time,
+allocation bytes/counts and phase-boundary process heap samples for seed,
+Optimize and explicit Checkpoint, plus the existing COW publication/handoff,
+checkpoint and finite-accounting counters. Complete documents, serving, graph
+completion, original Close, physical-pin cleanup and fresh reopen are validated
+outside the timed phases. A post-Close GC sample includes the retained expected
+input and process/runtime caches; it is not a per-graph retained-heap estimate.
+Use a freshly compiled binary and process for each fixed `-benchtime=1x` sample;
+measure process peak RSS externally, compare the identical benchmark overlay
+against an exact source-bound baseline, and retain failed samples as failures.
+This control neither forces the captured overlap nor establishes a speedup.
+
 `TestCOWSuccessorBasisWorkspaceReuseAndCutOwnership` covers opportunistic
 successor scratch reuse across short-lived cuts, owned output, checkpoint
 handoff and final basis/DB teardown. `TestCOWSuccessorBasisWorkspaceFiniteAdmission`

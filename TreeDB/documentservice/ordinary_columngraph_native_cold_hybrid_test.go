@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
@@ -65,6 +66,7 @@ func TestOrdinaryColumnGraphNativeColdHybrid4096(t *testing.T) {
 	if info.VectorStrategy != collections.VectorIndexStrategyColumnGraph {
 		t.Fatalf("strategy=%s", info.VectorStrategy)
 	}
+	expected := make([]Document, 0, 4096)
 	for start := 0; start < 4096; start += 128 {
 		docs := make([]Document, 128)
 		for j := range docs {
@@ -75,6 +77,7 @@ func TestOrdinaryColumnGraphNativeColdHybrid4096(t *testing.T) {
 		if err != nil || out.Upserted != 128 {
 			t.Fatalf("seed[%d:%d) upserted=%d err=%v cause=%v", start, start+128, out.Upserted, err, errors.Unwrap(err))
 		}
+		expected = append(expected, docs...)
 	}
 	if _, err := svc.OptimizeIndex(ctx, name, OptimizeIndexRequest{}); err != nil {
 		t.Fatalf("Optimize: %v cause=%v", err, errors.Unwrap(err))
@@ -111,6 +114,26 @@ func TestOrdinaryColumnGraphNativeColdHybrid4096(t *testing.T) {
 		}
 	}
 	check(svc.SearchHybrid(ctx, name, request))
+	// Keep the original seed-to-Optimize path intact. Full content checks start
+	// only after its first successful mixed request, and compare against every
+	// acknowledged input rather than only the returned top-K projections.
+	checkContents := func(stage string) {
+		t.Helper()
+		full, err := svc.FilterDocuments(ctx, name, FilterDocumentsRequest{ReturnEmbedding: true})
+		if err != nil || full.Truncated || full.MatchedCount != len(expected) || len(full.Documents) != len(expected) {
+			t.Fatalf("%s full contents: returned=%d matched=%d truncated=%t err=%v", stage, len(full.Documents), full.MatchedCount, full.Truncated, err)
+		}
+		for i, want := range expected {
+			if got := full.Documents[i]; !reflect.DeepEqual(got, want) {
+				t.Fatalf("%s acknowledged document[%d]=%+v want=%+v", stage, i, got, want)
+			}
+		}
+	}
+	checkContents("optimized")
+	if err := owner.Checkpoint(); err != nil {
+		t.Fatalf("explicit checkpoint: %v", err)
+	}
+	checkContents("checkpointed")
 	closeOwner()
 	if t.Failed() {
 		return
@@ -150,5 +173,6 @@ func TestOrdinaryColumnGraphNativeColdHybrid4096(t *testing.T) {
 	if out, err := svc.SearchHybrid(ctx, name, filtered); ErrorCodeOf(err) != CodeUnsupported || len(out.Documents) != 0 {
 		t.Fatalf("filtered Hybrid must refuse: documents=%d err=%v", len(out.Documents), err)
 	}
+	checkContents("reopened")
 	closeOwner()
 }
