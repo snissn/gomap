@@ -72,6 +72,24 @@ this is not a measured public Go Close API return. Checked full-ID removal is
 separate. Forced cleanup permanently retains a failure marker and cannot
 produce qualifying close evidence; signals/removal require matching complete
 ownership/configuration, never an unrelated container name or reusable PID.
+Before its first Docker action, the runner exclusively publishes
+`reference-incomplete.json`. It removes this marker only after full validation
+and publication of a manifest-bound `reference-complete.json`; validation
+requires completion and rejects an incomplete marker even if other receipts
+look successful. Failed attempts keep the marker, including when later writes
+fail with ENOSPC. These are process/error-path controls, not power-loss claims.
+
+Failure publication and resource custody are independent. Emergency cleanup
+does not use the artifact-writing launcher: bounded Docker CLI children retain
+pidfd/direct-child custody, remove GOMAXPROCS, and collect at most 1 MiB of stdout
+in memory. Exact full-ID ownership/image/configuration/mount checks precede
+SIGKILL, checked wait, terminal inspect and removal. Unknown create results may
+be recovered only through the exact task name plus the complete ownership
+contract; signals and removal then use the recovered immutable full ID.
+Emergency actions are always nonqualifying. Their records and the original,
+publication and cleanup errors are published best effort after custody; if
+storage remains unavailable they remain in memory and errors reach stderr.
+Unresolved custody is an error, never a successful cleanup receipt.
 
 The validator independently checks raw CLI output copies and arguments,
 nonoverlapping settled-client chronology, public-command results and routing,

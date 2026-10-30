@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import pathlib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -105,6 +106,7 @@ class ReferencePackets(unittest.TestCase):
         for stem,start,role,snapshot in (("random-checkpoint",44,"server","snapshot_preclose.json"),("fixture-checkpoint",422,"fixture-write","fixture.updated.json")):
             self.control(stem,self.owners[role],"checkpoint",start,start+1)
             self.save(self.directory/(stem+".binding.json"),dict(schema_version=1,container_id=self.owners[role]["container_id"],snapshot_sha256=c.digest(self.directory/snapshot),control_sha256=c.digest(self.directory/(stem+".json"))))
+        self.save(self.out/"reference-complete.json",dict(schema_version=1,kind="mongodb_reference_completed_attempt",campaign_id=self.m["campaign_id"],manifest_sha256=c.digest(self.out/"manifest.json"),completed_utc=ts(1000)))
 
     @staticmethod
     def save(path,value):path.write_text(json.dumps(value,allow_nan=False)+"\n")
@@ -248,25 +250,114 @@ class ReferencePackets(unittest.TestCase):
         owner=self.owners["server"]
         driver.owned={"server":dict(cid=owner["container_id"],name="synthetic",data=pathlib.Path(owner["data_dir"]))}
         wrong=c.read(self.directory/"server.inspect.json");wrong["Config"]["Labels"]["gomap.ycsb.campaign"]="someone-else"
-        with mock.patch.object(driver,"inspect",return_value=wrong),mock.patch.object(driver,"command") as command:
+        with mock.patch.object(driver,"emergency_command",return_value=json.dumps([wrong])) as emergency,mock.patch.object(driver,"command") as command:
             with self.assertRaisesRegex(ValueError,"unresolved owned reference custody"):driver.cleanup()
             command.assert_not_called()
+            self.assertEqual(emergency.call_args_list,[mock.call("inspect",owner["container_id"])])
+
+    def test_emergency_identity_recovery_requires_exact_intent_and_full_contract(self):
+        owner=self.owners["server"];cid=owner["container_id"]
+        for known,change in ((True,lambda v:v.update(Id="0"*64)),(False,lambda v:v.update(Name="/unrelated")),(False,lambda v:v["Mounts"][0].update(Source="/unrelated"))):
+            driver=reference.Docker(self.out,self.m["docker_binary"])
+            driver.owned={"server":dict(cid=cid if known else None,name="synthetic",data=pathlib.Path(owner["data_dir"]))}
+            value=c.read(self.directory/"server.inspect.json");value["Name"]="/synthetic";change(value)
+            with self.subTest(known=known,change=change),mock.patch.object(driver,"emergency_command",return_value=json.dumps([value])) as command:
+                with self.assertRaisesRegex(ValueError,"unresolved owned reference custody"):driver.cleanup()
+                self.assertEqual(command.call_args_list,[mock.call("inspect",cid if known else "synthetic")])
+                self.assertIn("server",driver.owned)
 
     def test_forced_cleanup_is_owned_and_permanently_nonqualifying(self):
         driver=reference.Docker(self.out,self.m["docker_binary"])
         owner=self.owners["server"];cid=owner["container_id"]
         driver.owned={"server":dict(cid=cid,name="synthetic",data=pathlib.Path(owner["data_dir"]))}
-        inspected=c.read(self.directory/"server.inspect.json")
-        with mock.patch.object(driver,"inspect",return_value=inspected),mock.patch.object(driver,"command",side_effect=[cid,"137",cid]) as command:
+        inspected=c.read(self.directory/"server.inspect.json");terminal=c.read(self.directory/"server.terminal.json");terminal["State"]["ExitCode"]=137
+        with mock.patch.object(driver,"emergency_command",side_effect=[json.dumps([inspected]),cid,"137",json.dumps([terminal]),cid]) as command,mock.patch.object(driver,"command") as ordinary:
             driver.cleanup()
-        self.assertEqual(command.call_args_list,[mock.call("kill","--signal=SIGKILL",cid),mock.call("wait",cid),mock.call("rm",cid)])
+        self.assertEqual(command.call_args_list,[mock.call("inspect",cid),mock.call("kill","--signal=SIGKILL",cid),mock.call("wait",cid),mock.call("inspect",cid),mock.call("rm",cid)])
+        ordinary.assert_not_called()
         self.assertEqual(driver.owned,{})
+        self.save(self.directory/"server.cleanup.json",driver.cleanup_records["server"])
         self.assertIs(c.read(self.directory/"server.cleanup.json")["qualification_invalid"],True)
         with self.assertRaisesRegex(ValueError,"forced reference cleanup"):reference.validate(self.out)
         # The run's parent marker is retained before forced cleanup, and the
         # validator refuses it even after every owned container has been removed.
         self.save(self.out/"failure.json",dict(schema_version=1,error="injected reference failure"))
         with self.assertRaisesRegex(ValueError,"failed reference"):reference.validate(self.out)
+
+    def test_incomplete_and_missing_or_malformed_completion_never_qualify(self):
+        path=self.out/"reference-complete.json";original=path.read_bytes();path.unlink()
+        with self.assertRaises(OSError):reference.validate(self.out)
+        for value in (dict(schema_version=True),dict(schema_version=1,kind="mongodb_reference_completed_attempt",campaign_id=self.m["campaign_id"],manifest_sha256=c.digest(self.out/"manifest.json"),completed_utc=ts(1))):
+            self.save(path,value)
+            with self.assertRaises((ValueError,KeyError)):reference.validate(self.out)
+        path.write_bytes(original)
+        (self.out/"reference-incomplete.json").write_text("partial")
+        with self.assertRaisesRegex(ValueError,"incomplete"):reference.validate(self.out)
+
+    def injected_run_publication_failure(self,persistent):
+        # Real run() failure orchestration, synthetic Docker answers only.
+        out=self.out/("persistent-enospc" if persistent else "marker-enospc");out.mkdir();(out/"mongodb").mkdir()
+        for source in self.out.iterdir():
+            if source.is_file() and source.name!="reference-complete.json":shutil.copyfile(source,out/source.name)
+        driver=reference.Docker(out,self.m["docker_binary"])
+        owner=self.owners["server"];cid=owner["container_id"]
+        data=pathlib.Path(owner["data_dir"])
+        def original_failure(*args):
+            driver.owned["server"]=dict(cid=cid,name="synthetic",data=data)
+            raise ValueError("primary simulated operation failure")
+        initial=c.read(self.directory/"server.inspect.json");terminal=c.read(self.directory/"server.terminal.json");terminal["State"]["ExitCode"]=137
+        answers=[json.dumps([initial]),cid,"137",json.dumps([terminal]),cid]
+        write=c.write_new
+        def publication(path,value):
+            if path.name=="failure.json" or (persistent and path.name!="reference-incomplete.json"):raise OSError(28,"injected ENOSPC")
+            return write(path,value)
+        hashes={self.m["docker_binary"]:"d"*64,self.m["client_binary"]:"e"*64,self.m["fixture"]["binary"]:"9"*64,self.m["control"]["binary"]:"9"*64}
+        with mock.patch.object(reference,"Docker",return_value=driver),mock.patch.object(driver,"command",side_effect=original_failure),mock.patch.object(c,"exe_digest",side_effect=lambda p:hashes[p]),mock.patch.object(c,"write_new",side_effect=publication),mock.patch.object(c,"launch") as launch,mock.patch.object(reference,"emergency_cli",side_effect=answers) as emergency:
+            with self.assertRaisesRegex(RuntimeError,"primary simulated operation failure.*secondary failures:.*ENOSPC"):
+                reference.run(out,self.m["docker_binary"])
+        launch.assert_not_called()
+        self.assertEqual([call.args[1] for call in emergency.call_args_list],[["inspect",cid],["kill","--signal=SIGKILL",cid],["wait",cid],["inspect",cid],["rm",cid]])
+        self.assertEqual(driver.owned,{})
+        self.assertTrue((out/"reference-incomplete.json").exists())
+        self.assertFalse((out/"reference-complete.json").exists())
+        self.assertEqual(len(driver.emergency_actions),5)
+        self.assertTrue(all(x["success"] for x in driver.emergency_actions))
+        if not persistent:
+            self.assertIn("primary simulated",c.read(out/"cleanup.failure.json")["error"])
+            self.assertIn("ENOSPC"," ".join(c.read(out/"cleanup.failure.json")["secondary_errors"]))
+            self.assertIs(c.read(out/"mongodb/server.cleanup.json")["qualification_invalid"],True)
+        # Even a later complete packet copied into the output cannot erase the
+        # failed attempt marker once the simulated disk becomes writable.
+        for source in self.directory.iterdir():
+            if source.is_file() and not (out/"mongodb"/source.name).exists():shutil.copyfile(source,out/"mongodb"/source.name)
+        shutil.copyfile(self.out/"reference-complete.json",out/"reference-complete.json")
+        with self.assertRaisesRegex(ValueError,"failed reference|forced reference cleanup|incomplete"):reference.validate(out)
+
+    def test_parent_marker_publication_failure_still_cleans_owned_container(self):
+        self.injected_run_publication_failure(False)
+
+    def test_persistent_artifact_failure_uses_only_exact_owned_emergency_actions(self):
+        self.injected_run_publication_failure(True)
+
+    def test_emergency_child_is_bounded_pinned_and_reaped_without_artifacts(self):
+        m=copy.deepcopy(self.m);m["server_builds"]["mongodb"]["docker_cli_sha256"]=c.exe_digest(sys.executable);m["deadlines"]["cleanup_seconds"]=0.2
+        popen=subprocess.Popen
+        for mode in ("success","hang","pin-failure"):
+            children=[]
+            def spawn(*args,**kwargs):
+                child=popen(*args,**kwargs);children.append(child);return child
+            with self.subTest(mode=mode),mock.patch.object(reference.subprocess,"Popen",side_effect=spawn),mock.patch.object(c,"write_new",side_effect=OSError(28,"no artifacts")) as write:
+                code="import os,time;print('unset='+str('GOMAXPROCS' not in os.environ),flush=True)"+(";time.sleep(30)" if mode!="success" else "")
+                if mode=="pin-failure":
+                    with mock.patch.object(os,"pidfd_open",side_effect=OSError("injected pin failure")):
+                        with self.assertRaisesRegex(OSError,"injected pin failure"):reference.emergency_cli(sys.executable,["-c",code],m)
+                elif mode=="hang":
+                    with self.assertRaisesRegex(ValueError,"deadline"):reference.emergency_cli(sys.executable,["-c",code],m)
+                else:
+                    with mock.patch.dict(os.environ,{"GOMAXPROCS":"123"}):self.assertEqual(reference.emergency_cli(sys.executable,["-c",code],m),"unset=True\n")
+                write.assert_not_called()
+                self.assertEqual(len(children),1);self.assertIsNotNone(children[0].returncode)
+                with self.assertRaises(ChildProcessError):os.waitpid(children[0].pid,os.WNOHANG)
 
 
 if __name__=="__main__":unittest.main()

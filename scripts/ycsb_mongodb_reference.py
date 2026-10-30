@@ -11,7 +11,9 @@ import json
 import os
 import pathlib
 import re
+import select
 import signal
+import subprocess
 import sys
 import time
 
@@ -215,6 +217,55 @@ def failure_free(out):
     c.require(not any(os.path.lexists(out/"mongodb"/(role+".cleanup.json")) for role in ROLES),"forced reference cleanup cannot qualify")
 
 
+def emergency_cli(binary,args,m):
+    """Nonqualifying custody only: no artifact open/write is needed.
+
+    Pin the direct Docker CLI before waiting, collect at most 1 MiB in memory,
+    and retain exact child ownership through bounded TERM/KILL/reap even if pin
+    acquisition or pipe reading fails. The caller has deferred cancellation
+    throughout service cleanup; the CLI never authorizes a reusable host PID.
+    """
+    c.require(c.exe_digest(binary)==m["server_builds"]["mongodb"]["docker_cli_sha256"],"emergency Docker executable changed")
+    timeout=c.positive_timeout(m["deadlines"]["cleanup_seconds"],"emergency Docker timeout")
+    env=os.environ.copy();env.pop("GOMAXPROCS",None)
+    child=None;descriptor=None;output=bytearray();original=None
+    try:
+        with c.defer_startup_cancellation() as pending:
+            child=subprocess.Popen([binary,*args],env=env,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,start_new_session=True)
+            descriptor=os.pidfd_open(child.pid)
+        c.require(not pending,"emergency CLI interrupted during startup")
+        deadline=time.monotonic()+timeout
+        while True:
+            remaining=deadline-time.monotonic()
+            c.require(remaining>0,"emergency Docker output deadline exceeded")
+            c.require(select.select([child.stdout],[],[],remaining)[0],"emergency Docker output deadline exceeded")
+            chunk=os.read(child.stdout.fileno(),65536)
+            if not chunk:break
+            output.extend(chunk)
+            c.require(len(output)<=1024*1024,"emergency Docker output exceeds custody bound")
+        code=child.wait(timeout=max(0,deadline-time.monotonic()))
+        c.exit_success(code,"emergency Docker CLI failed")
+        return output.decode("utf-8")
+    except BaseException as error:
+        original=error
+        raise
+    finally:
+        previous=signal.pthread_sigmask(signal.SIG_BLOCK,c.CANCELLATION_SIGNALS)
+        try:
+            try:
+                if child is not None and child.returncode is None:
+                    if descriptor is None:c.terminate_unpinned_child(child,timeout)
+                    else:
+                        c.terminate_pinned_child(descriptor,timeout)
+                        child.wait(timeout=timeout)
+            except BaseException as cleanup_error:
+                raise RuntimeError("emergency child cleanup failed: "+str(cleanup_error)+("; original: "+type(original).__name__+": "+str(original) if original is not None else "")) from cleanup_error
+            finally:
+                if child is not None and child.stdout is not None:child.stdout.close()
+                if descriptor is not None:os.close(descriptor)
+        finally:signal.pthread_sigmask(signal.SIG_SETMASK,previous)
+
+
 def docker_action(directory,stem,m,args):
     c.require(isinstance(stem,str) and re.fullmatch(r"docker-[0-9]{4}",stem),"missing exact Docker action")
     command=c.read(directory/(stem+".command.json"))
@@ -291,9 +342,14 @@ def fixture_helper(directory,stem,m,mode,owner,public_id,lifetime_bounds):
     return receipt,bounds
 
 
-def validate(out):
+def validate(out,require_completion=True):
     m=c.read(out/"manifest.json");manifest(m)
     directory=out/"mongodb";failure_free(out)
+    if require_completion:
+        c.require(not os.path.lexists(out/"reference-incomplete.json"),"reference attempt is incomplete or failed")
+        completed=c.read(out/"reference-complete.json")
+        c.require(c.schema(completed) and completed["kind"]=="mongodb_reference_completed_attempt" and completed["campaign_id"]==m["campaign_id"] and completed["manifest_sha256"]==c.digest(out/"manifest.json"),"reference completion receipt mismatch")
+        c.timestamp(completed["completed_utc"])
     c.require(c.digest(out/"reference-source.py")==m["reference_source_sha256"],"reference launcher source copy differs")
     c.require(c.same(c.read(out/"reference-build.json"),m["server_builds"]["mongodb"]),"reference build copy differs")
     c.require(c.same(c.read(out/"client-build.json"),m["client"]),"reference client build copy differs")
@@ -312,6 +368,8 @@ def validate(out):
     for key,name in (("fixture","fixture-source.go"),("control","reference-control-source.go")):
         c.require(c.digest(out/name)==m[key]["source_sha256"],"reference helper source mismatch")
     owners={role:lifetime(directory,role,m) for role in ROLES}
+    if require_completion:
+        c.require(all(v[3][1]<=c.timestamp(completed["completed_utc"]) for v in owners.values()),"reference completion precedes checked shutdown")
     c.require(len({v[0]["container_id"] for v in owners.values()})==4 and len({(v[0]["process"]["pid"],v[0]["process"]["start_ticks"]) for v in owners.values()})==4 and len({v[1] for v in owners.values()})==4,"reference requires four independent process/container lifetimes")
     for first,second in (("server","reopened"),("fixture-write","fixture-reopened")):
         a,b=owners[first],owners[second]
@@ -405,6 +463,7 @@ class Docker:
         self.out=out;self.directory=out/"mongodb";self.m=c.read(out/"manifest.json")
         self.binary=binary;self.ordinal=0
         self.owned={}
+        self.cleanup_records={};self.emergency_actions=[]
         self.deadline=time.monotonic()+self.m["deadlines"]["outer_seconds"]
 
     def command(self,*args):
@@ -532,25 +591,77 @@ class Docker:
         # Permanent failure is retained before forced cleanup; this path cannot
         # generate qualifying close evidence. Container IDs never get reused.
         failures=[]
-        self.deadline=float("inf")  # Every cleanup CLI still has its own finite bounds.
         for role,item in list(self.owned.items()):
             try:
-                value=self.inspect(item["cid"] or item["name"])
+                values=loads(self.emergency_command("inspect",item["cid"] or item["name"]))
+                c.require(isinstance(values,list) and len(values)==1,"ambiguous emergency container inspect")
+                value=values[0]
                 cid=container_inspect(value,self.m,role,str(item["data"]))
-                if value["State"]["Running"]:
-                    self.command("kill","--signal=SIGKILL",cid)
-                    self.command("wait",cid)
-                self.checked(cid,role,item["data"])
-                c.require(self.command("rm",cid)==cid,"cleanup removal mismatch")
-                c.write_new(self.directory/(role+".cleanup.json"),dict(schema_version=1,container_id=cid,removed=True,qualification_invalid=True))
+                c.require((item["cid"] is not None and cid==item["cid"]) or (item["cid"] is None and value["Name"]=="/"+item["name"]),"emergency container identity differs from owned intent")
+                c.require(type(value["State"]["Running"]) is bool,"invalid emergency running state")
+                if value["State"]["Running"] is True:
+                    self.emergency_command("kill","--signal=SIGKILL",cid)
+                    waited=self.emergency_command("wait",cid).strip()
+                    c.require(re.fullmatch(r"[0-9]+",waited),"invalid emergency container wait status")
+                else:waited=None
+                values=loads(self.emergency_command("inspect",cid))
+                c.require(isinstance(values,list) and len(values)==1,"ambiguous emergency terminal inspect")
+                terminal=values[0]
+                c.require(container_inspect(terminal,self.m,role,str(item["data"]))==cid,"emergency terminal identity mismatch")
+                state=terminal["State"]
+                c.require(state["Running"] is False and type(state["Pid"]) is int and state["Pid"]==0 and type(state["ExitCode"]) is int,"emergency container not terminal")
+                c.require(waited is None or str(state["ExitCode"])==waited,"emergency wait/terminal exit mismatch")
+                c.require(self.emergency_command("rm",cid).strip()==cid,"cleanup removal mismatch")
+                self.cleanup_records[role]=dict(schema_version=1,container_id=cid,removed=True,qualification_invalid=True,exit_code=state["ExitCode"])
                 del self.owned[role]
             except BaseException as error:failures.append(role+": "+str(error))
         c.require(not failures,"unresolved owned reference custody: "+"; ".join(failures))
+
+    def emergency_command(self,*args):
+        # No ordinary command()/launch() artifact path is used here. Records
+        # live in memory until every exact-owned service has been dealt with.
+        record=dict(argv=[self.binary,*args],started_utc=c.now(),success=False)
+        self.emergency_actions.append(record)
+        try:
+            output=emergency_cli(self.binary,list(args),self.m)
+            record.update(success=True,stdout=output)
+            return output
+        except BaseException as error:
+            record.update(error_type=type(error).__name__,error=str(error))
+            raise
+        finally:record["ended_utc"]=c.now()
 
 
 def runtime_record(version,info):
     components={x["Name"]:x for x in version["Components"]}
     return dict(engine=version["Version"],engine_commit=version["GitCommit"],containerd=components["containerd"]["Version"],runc=components["runc"]["Version"],driver=info["Driver"],cgroup_version=info["CgroupVersion"],default_runtime=info["DefaultRuntime"])
+
+
+def failed_attempt(out,driver,error):
+    """Custody takes precedence over best-effort failure publication."""
+    previous=signal.pthread_sigmask(signal.SIG_BLOCK,c.CANCELLATION_SIGNALS)
+    issues=[]
+    original=type(error).__name__+": "+(str(error) or type(error).__name__)
+    def publish(path,value):
+        try:c.write_new(path,value)
+        except BaseException as failure:issues.append(str(path)+": "+type(failure).__name__+": "+str(failure))
+    try:
+        signal.setitimer(signal.ITIMER_REAL,0)
+        if not os.path.lexists(out/"failure.json"):
+            publish(out/"failure.json",dict(schema_version=1,kind="mongodb_reference_run_failure",error=original,end_utc=c.now()))
+        # Never put cleanup behind an artifact operation or artifact success.
+        try:driver.cleanup()
+        except BaseException as failure:issues.append("cleanup: "+type(failure).__name__+": "+str(failure))
+        for role,value in driver.cleanup_records.items():publish(driver.directory/(role+".cleanup.json"),value)
+        publish(out/"cleanup.failure.json",dict(schema_version=1,kind="mongodb_reference_failed_custody",error=original,secondary_errors=list(issues),actions=driver.emergency_actions,unresolved_roles=list(driver.owned),end_utc=c.now()))
+    finally:
+        # If cancellation is pending, retain the original and every secondary
+        # error on stderr before unblocking can deliver it.
+        message="reference attempt failed: "+original
+        if issues:message+="; secondary failures: "+"; ".join(issues)
+        print(message,file=sys.stderr)
+        signal.pthread_sigmask(signal.SIG_SETMASK,previous)
+    raise RuntimeError(message) from error
 
 
 def run(out,docker_binary):
@@ -564,6 +675,10 @@ def run(out,docker_binary):
     for key in ("fixture","control"):
         c.require(c.exe_digest(m[key]["binary"])==m[key]["exe_sha256"],"reference helper binary mismatch")
     for path in (m["fixture"]["binary"],m["control"]["binary"],docker_binary):c.require(pathlib.Path(path).is_absolute(),"absolute supplied tools required")
+    c.require(not any(os.path.lexists(out/name) for name in ("reference-incomplete.json","reference-complete.json")),"reference attempt already started")
+    # Published before any Docker action; remains after every failed attempt,
+    # including failures that prevent all later receipt writes.
+    c.write_new(out/"reference-incomplete.json",dict(schema_version=1,kind="mongodb_reference_incomplete_attempt",campaign_id=m["campaign_id"],started_utc=c.now()))
     driver=Docker(out,docker_binary)
     try:
         image=loads(driver.command("image","inspect",m["server_builds"]["mongodb"]["image_id"]))[0]
@@ -602,18 +717,12 @@ def run(out,docker_binary):
         owner=driver.start("fixture-reopened",directory/"fixture-db")
         driver.fixture("fixture_verify","verify")
         driver.stop("fixture-reopened",owner)
-        return validate(out)
+        report=validate(out,require_completion=False)
+        c.write_new(out/"reference-complete.json",dict(schema_version=1,kind="mongodb_reference_completed_attempt",campaign_id=m["campaign_id"],manifest_sha256=c.digest(out/"manifest.json"),completed_utc=c.now()))
+        (out/"reference-incomplete.json").unlink()
+        return report
     except BaseException as error:
-        # Retain top-level failure before cleanup or delivering any deferred
-        # cancellation. Never let later PARSE_ONLY qualify a failed attempt.
-        previous=signal.pthread_sigmask(signal.SIG_BLOCK,c.CANCELLATION_SIGNALS)
-        try:
-            signal.setitimer(signal.ITIMER_REAL,0)
-            if not os.path.lexists(out/"failure.json"):
-                c.write_new(out/"failure.json",dict(schema_version=1,kind="mongodb_reference_run_failure",error=str(error) or type(error).__name__,error_type=type(error).__name__,end_utc=c.now()))
-            driver.cleanup()
-        finally:signal.pthread_sigmask(signal.SIG_SETMASK,previous)
-        raise
+        failed_attempt(out,driver,error)
 
 
 def main():
@@ -635,7 +744,9 @@ def main():
     except (Exception,KeyboardInterrupt) as error:
         if args.mode=="run" and args.out.is_dir() and not os.path.lexists(args.out/"failure.json"):
             previous=signal.pthread_sigmask(signal.SIG_BLOCK,c.CANCELLATION_SIGNALS)
-            try:c.write_new(args.out/"failure.json",dict(schema_version=1,kind="mongodb_reference_terminal_failure",error=str(error) or type(error).__name__,error_type=type(error).__name__,end_utc=c.now()))
+            try:
+                try:c.write_new(args.out/"failure.json",dict(schema_version=1,kind="mongodb_reference_terminal_failure",error=str(error) or type(error).__name__,error_type=type(error).__name__,end_utc=c.now()))
+                except BaseException as publication:print("reference terminal receipt publication failed: "+type(publication).__name__+": "+str(publication),file=sys.stderr)
             finally:signal.pthread_sigmask(signal.SIG_SETMASK,previous)
         print("invalid MongoDB reference: "+(str(error) or type(error).__name__),file=sys.stderr)
         return 3
