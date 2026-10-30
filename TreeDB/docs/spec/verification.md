@@ -232,7 +232,8 @@ unapplied command WAL frames after ordinary durable-profile visible ACKs and an
 unclean exit. The wire and owner checkpoint error-propagation tests exercise
 real maintenance capacity refusal;
 the owner test also checks final-close failure and durable value recovery.
-These controls do not extend relaxed or no-WAL ordinary ACK guarantees.
+These controls do not extend ordinary ACK guarantees for the
+`command_wal_relaxed` or `no_wal_fast` profiles.
 
 ## Immutable COW cache qualification
 
