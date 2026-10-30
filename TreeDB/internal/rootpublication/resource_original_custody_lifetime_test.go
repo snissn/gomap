@@ -36,11 +36,12 @@ func TestOriginalCleanupCustodyKeepsSameRegistryUntilActualCompletion(t *testing
 				t.Fatal("preborn original action lost its SAME registry authority")
 			}
 			fault := errors.New("actual original action refused cleanup")
+			payload := &struct{ marker int }{marker: 42}
 			var actualErr error
 			if fail {
 				actualErr = fault
 			}
-			original.Complete(&action, actualErr)
+			original.Complete(payload, actualErr)
 			if registry.originalCleanupEdges != 0 {
 				t.Fatal("original completion guard not consumed")
 			}
@@ -50,7 +51,7 @@ func TestOriginalCleanupCustodyKeepsSameRegistryUntilActualCompletion(t *testing
 			}
 			enrollment.CloseAfterCleanup(actualErr)
 			if fail {
-				if registry.MetadataOwner().PhysicalClosed() || !errors.Is(registry.CleanupError(), fault) || registry.failedPinned != (*resourcePinnedBacking)(original) || budget.Stats().ExternalLeases < 2 {
+				if registry.MetadataOwner().PhysicalClosed() || !errors.Is(registry.CleanupError(), fault) || registry.failedPinned != (*resourcePinnedBacking)(original) || registry.failedPinned.custody != payload || budget.Stats().ExternalLeases < 2 {
 					t.Fatal("exact failed original custody or registry guard refunded")
 				}
 			} else {
