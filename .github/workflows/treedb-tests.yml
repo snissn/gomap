@@ -3,6 +3,11 @@ name: "TreeDB: #5340 bounded recovery ledger diagnostic"
 
 on:
   workflow_dispatch:
+    inputs:
+      expected_overlay_sha:
+        description: "Externally reviewed immutable H SHA; preflight must bind this value"
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -21,10 +26,11 @@ env:
   GOMAXPROCS: "2"
   GOMEMLIMIT: "4GiB"
   PYTHONDONTWRITEBYTECODE: "1"
+  EXPECTED_OVERLAY_SHA: ${{ inputs.expected_overlay_sha }}
 
 jobs:
   controls:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/prepared/5340-hosted-ledger-20261030' && github.run_attempt == '1'
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/prepared/5340-hosted-ledger-20261030' && github.run_attempt == '1' && github.sha == inputs.expected_overlay_sha && github.workflow_sha == inputs.expected_overlay_sha
     name: recovery ledger (${{ matrix.cell }}-controls)
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
@@ -93,7 +99,7 @@ jobs:
 
   observation:
     needs: controls
-    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/prepared/5340-hosted-ledger-20261030' && github.run_attempt == '1' }}
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/prepared/5340-hosted-ledger-20261030' && github.run_attempt == '1' && github.sha == inputs.expected_overlay_sha && github.workflow_sha == inputs.expected_overlay_sha }}
     name: recovery ledger (${{ matrix.cell }}-${{ matrix.mode }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15

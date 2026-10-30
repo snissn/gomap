@@ -29,7 +29,7 @@ env.pop("GOMAP_ORDERED_ACK_IMAGE_CHILD", None)
 env["TMPDIR"] = env["TMP"] = env["TEMP"] = str(temporary)
 receipt = {"mode": "DIAGNOSTIC_ONLY_NOT_PERFORMANCE_OR_REPAIR", "cell": cell, "invocation": mode,
            "candidate": candidate, "tree": expected_tree, "basis": basis,
-           "harness_event_sha": env["GITHUB_SHA"], "commands": [], "tests": []}
+           "harness_event_sha": env["GITHUB_SHA"], "expected_overlay_sha": env["EXPECTED_OVERLAY_SHA"], "commands": [], "tests": []}
 def now():
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
 def save():
@@ -66,6 +66,8 @@ save()
 assert git(product, "rev-parse", "HEAD") == candidate
 assert git(product, "rev-parse", "HEAD^{tree}") == expected_tree
 assert git(harness, "rev-parse", "HEAD") == env["GITHUB_SHA"]
+assert re.fullmatch(r"[0-9a-f]{40}", env["EXPECTED_OVERLAY_SHA"])
+assert env["EXPECTED_OVERLAY_SHA"] == env["GITHUB_SHA"] == env["GITHUB_WORKFLOW_SHA"]
 assert git(harness, "diff", "--name-only", candidate, "HEAD").splitlines() == [".github/ci/ci_impact.json", ".github/scripts/recovery_ledger_5340_hosted.py", ".github/workflows/treedb-tests.yml"]
 assert env["GITHUB_REF"] == "refs/heads/prepared/5340-hosted-ledger-20261030"
 assert env["GITHUB_RUN_ATTEMPT"] == "1"
