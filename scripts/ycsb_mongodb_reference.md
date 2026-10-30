@@ -8,13 +8,30 @@ packet may be consumed through the ordinary shell's `PARSE_ONLY=true` entry.
 That is parser coverage, not MongoDB readiness or product evidence.
 
 `ycsb_mongodb_reference.py` defines a separate singleton manifest kind
-`mongodb-reference-checkpoint-close-reopen`, lifecycle contract integer 1,
-profile `mongodb_w1_default`, BSON format, and write concern
-`{"w":1,"journal_requested":null}`. This ordinary w:1 request is not a claim
-of j:true, TreeDB durable-profile equivalence, uncheckpointed WAL replay, crash
-or power-loss certification. The public fixture uses the existing BSON driver
-with explicit W1; its Disconnect is checked and does not invoke a checkpoint.
-The timed client's existing checked DB/workload Close receipts stay separate.
+`mongodb-reference-checkpoint-close-reopen`, lifecycle contract integer 1 and
+BSON format. New prepared manifests bind `profile` and `acknowledgement_class`
+to the explicit measurement request:
+
+| Measurement write concern | Profile and acknowledgement class |
+| --- | --- |
+| `{"w":1,"journal_requested":null}` (j omitted) | `mongodb_w1_journal_unspecified` |
+| `{"w":1,"journal_requested":true}` (explicit j:true) | `mongodb_w1_journaled` |
+
+`journal_requested=false` is unsupported by the reference manifest/preparer.
+Journal unspecified does not mean j:false. These classes do not establish
+TreeDB durable-profile equivalence, uncheckpointed WAL replay, crash or
+power-loss certification.
+
+New manifests separately retain `fixture_profile="mongodb_w1_default"` for the
+frozen fixture ELF's compatibility contract. The public fixture still uses the
+existing BSON driver with explicit W1; that compatibility label does not select
+the measurement request. Its Disconnect is checked and does not invoke a
+checkpoint. Legacy manifests without `acknowledgement_class` remain accepted
+only with `profile="mongodb_w1_default"` and journal unspecified. The timed
+client's original checked DB/workload Close receipts stay separate: each phase
+must retain successful command/DB Close/workload Close results, matching
+campaign, phase, build and declared measurement profile, and settled launcher
+times. Original TOTAL still excludes Close.
 
 Preparation must retain an actual source/binary-bound client build manifest,
 client patch/buildinfo, fixture and public-control source copies and ELF hashes,
@@ -30,6 +47,15 @@ attest daemon/runtime executable ELF custody; `runtime_elf_attested` is false.
 There is no default inferred mongod ELF hash, tag resolution, image
 pull, external-address mode, credentials, or fallback to TREEDB_MONGO_ADDR.
 Only explicit `127.0.0.1:port` is accepted as the public address.
+
+The execution/custody implementation is Linux-specific: it observes `/proc`
+process identities and ELF hashes and uses pidfd child custody. The reviewed
+reference image contract is Linux/amd64. The client runtime observer requires
+an exact supported client hash/symbol binding and ELF64 little-endian x86_64
+`ET_EXEC`; an arbitrary rebuilt or PIE client is insufficient. This is not a
+portable macOS/Windows launcher or support for arbitrary executable formats,
+architectures or MongoDB versions. Retaining runtime version strings does not
+expand that scope.
 
 `run OUT --docker /absolute/docker` expects a prepared manifest and source/build
 copies in OUT and an empty OUT/mongodb directory. It is a separate explicit
@@ -62,6 +88,51 @@ disable option removed; that is a version/source contract, not an observed
 per-write journal ACK. See [journaling](https://www.mongodb.com/docs/manual/core/journaling/)
 and [runtime parameters](https://www.mongodb.com/docs/manual/reference/parameters/).
 Ordinary w:1 with j absent remains distinct from j:true.
+
+## Opt-in common load and public journal sentinel
+
+A reference preparation request may include `common_load`. The maintained
+TreeDB shell consumes the same policy through an explicit `COMMON_LOAD_POLICY`
+file and records `MONGODB_JOURNAL_REQUEST` for the BSON gateway measurement
+request. This opt-in path is scoped to the MongoDB-binding BSON command route;
+the recorder requires the `mongodb` binding and an exact URI. It does not supply
+a generic native-client or mixed-target common-load route, and does not lift
+the ordinary shell's refusal to execute `mongodb`.
+
+The policy requires common load concern `{"w":1,"journal_requested":null}` and
+hash-bound, reviewed control A artifacts scoped to
+`bson-binary-and-pointer-bearing-prefix`. Its explicit `comparison_class` is
+either `same-request-jtrue` or `durable-ack-differing-requests`. Both require
+MongoDB measurement j:true; the former also requires GoMap measurement j:true.
+The latter requires GoMap measurement j omitted and separately hash-bound,
+reviewed control B scoped to `public-bson-command-wal-ack-crash-replay`.
+The GoMap policy requires `command_wal_durable`. These names and review gates
+describe scoped requests/controls; they do not certify equivalent durability.
+
+With this policy, load uses `mongodb://ADDRESS/ycsb?w=1` with no journal URI
+option. After the load client, including its original Close checks, settles, a
+public loaded-state snapshot/census must complete. A separate raw public
+OP_MSG insert then writes one marker document into a campaign-specific
+`prefix_sentinel_...` collection with `writeConcern:{w:1,j:true}`. It requires
+numeric `ok:1`, exact integer `n:1`, and no `writeConcernError` or `writeErrors`.
+The sentinel checks the original owner before and after the request and binds
+the endpoint, process identity, campaign/manifest, raw request/response hashes
+and matching wire request IDs. It uses the public command equivalent to the
+reviewed official-driver sentinel; it is not a direct owner Close call.
+
+Validation requires settled load → completed loaded census → completed public
+sentinel → first run launch, with no overlap. Each phase's
+`*.actual-command.json` retains its argv and request concern; validators check
+the exact load/run binding and URI against the policy. Timed run URIs carry
+`&journal=true` when requested; the differing-request GoMap class omits it.
+Without `common_load`, the reference runner uses its selected measurement
+concern for both load and run and does not insert this sentinel.
+
+The sentinel and census remain outside timed run operations. They do not
+replace original client Close validation, explicit later fsync checkpoints,
+graceful server shutdown, random-state comparison or deterministic reopen
+checks. No sentinel receipt alone proves crash replay, power-loss survival,
+arbitrary BSON-route coverage or a complete performance matrix.
 
 After all clients settle, a separate helper invokes the real public admin
 `fsync:1, lock:false`, retaining canonical Extended JSON requests/replies,
@@ -182,6 +253,12 @@ the previous handler on exit. The explicit request has schema integer 1, kind
 - Exact positive integer `recordcount`, `operationcount`, `threadcount`,
   `run_repeats`, and the existing explicit `deadlines` object. Task UID/GID are
   observed locally and must match support. No build or tool download is implicit.
+- Optional `journal_requested`: omitted/null selects journal unspecified;
+  `true` selects journaled. A journaled preparation retains the actual support
+  packet's concern separately as `support_write_concern`; it does not relabel
+  that support packet's writes as j:true. Optional `common_load` must pass the
+  reviewed-control policy above. Optional `bounded_container` accepts only
+  `true`, adding the runner's explicit memory/swap, CPU and log bounds.
 
 Preparation copies only root and per-target regular evidence files, never
 service DB directories or symlinks (at most 2048 files, 16 MiB per file and
@@ -189,7 +266,7 @@ service DB directories or symlinks (at most 2048 files, 16 MiB per file and
 then binds its actual raw buildInfo, endpoint, process/container/public identities,
 settings and journal parameters in `reference-support.json`. Runtime records stay
 version metadata with `runtime_elf_attested=false`. Source dependencies
-(including the maintained shell entry), original
+(including the maintained shell entry and, when opted in, the public sentinel), original
 client patch/build manifest, helper sources and inspected executable buildinfo
 are copied and hash-bound in `reference-preparation.json`; the final manifest
 binds that receipt and exact fields. Preparation has an incomplete marker, and
@@ -232,10 +309,11 @@ uses `DateStringBuffer::iso8601`, whose
 emit an explicit offset and `Z`, respectively. This supports the observed
 zero-offset syntax without claiming a nonzero local clock is UTC.
 
-Still outstanding: a preparation binding from that accepted real reference
-packet, followed by review and end-to-end lifecycle activation in the maintained
-shell. The offline preparation route alone never enables a run. The retained
+Maintained-shell end-to-end reference activation remains outstanding. A
+preparation binding from accepted real support and its review remain required
+for each prepared candidate; the offline preparation route alone never enables
+or authorizes a run. The retained
 failed controls remain scoped source/identity/operation evidence and invalid
 attempts. Runtime metadata remains version
-metadata, with no runtime ELF attestation. MongoDB reference performance remains
-unattempted.
+metadata, with no runtime ELF attestation. This document supplies no performance
+qualification or complete matrix claim.
