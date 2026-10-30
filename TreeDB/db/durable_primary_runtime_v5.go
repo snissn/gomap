@@ -819,7 +819,15 @@ func (runtime *rootPublicationRuntimeV1) commitPrimarySealV5(seal *rootPublicati
 	if e = a.MetadataOwner().AddPending(retiredCharge); e != nil {
 		return 0, e
 	}
-	retired := make([]*rootPublicationSealV1, 0, len(runtime.seals))
+	// The serial durable path retires one seal. Its private caller frame can
+	// own that one pointer across unlock and cleanup; it must never borrow the
+	// runtime's reusable backing. Keep the same admission/refund even when no
+	// heap backing is needed, and preserve exact-capacity storage for batches.
+	var singletonRetired [1]*rootPublicationSealV1
+	retired := singletonRetired[:0]
+	if len(runtime.seals) != 1 {
+		retired = make([]*rootPublicationSealV1, 0, len(runtime.seals))
+	}
 	defer func() {
 		clear(retired)
 		retired = nil
