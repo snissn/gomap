@@ -1,0 +1,499 @@
+{
+  "schema_version": 1,
+  "kind": "retained_failed_reference_public_identity_extract",
+  "status": "failed-invalid-before-workload",
+  "source_head": "833b9b2febdbbc89c44e57cec7dc03f653aaacfc",
+  "address": "127.0.0.1:27018",
+  "historical_server_build": {
+    "schema_version": 1,
+    "kind": "mongodb_image_build",
+    "image_id": "sha256:690f1371c118a8389ecd6c82c9a7f0e37320732b1d56935a24b29dfca6933f54",
+    "repo_digest": "mongo@sha256:7abfba0d07c9330373f8173981ea4d09cd8a82cdf0e86ccaf7008848d1d24f62",
+    "os": "linux",
+    "architecture": "amd64",
+    "version": "8.2.7",
+    "source_commit": "9fbea53313e85fbbf864a963ff17b0bd6dafa0be",
+    "exe_sha256": "d767fb752139fbc8e0e667d7e0c6fe7cdf690e0aa94a51502a32bad8c54a3672",
+    "docker_cli_sha256": "87bb910f051879cdf2a4a38e01748cbebeb27f3de962122dfdcbd0a4fbeea4ff",
+    "runtime": {
+      "engine": "29.1.3",
+      "engine_commit": "29.1.3-0ubuntu3~22.04.2",
+      "containerd": "2.2.1",
+      "runc": "1.3.3-0ubuntu1~22.04.3",
+      "driver": "overlay2",
+      "cgroup_version": "2",
+      "default_runtime": "runc"
+    },
+    "image_labels": {
+      "org.opencontainers.image.version": "24.04"
+    }
+  },
+  "owner": {
+    "schema_version": 1,
+    "kind": "mongodb_container_process_observation",
+    "container_id": "e860cd4b8770faecdfed7423a86bc78bc8d52552d61da1b69dceafda12940367",
+    "process": {
+      "pid": 3528368,
+      "start_ticks": 491233787,
+      "exe_sha256": "d767fb752139fbc8e0e667d7e0c6fe7cdf690e0aa94a51502a32bad8c54a3672",
+      "gomaxprocs_unset": true
+    },
+    "namespace_pid": 1,
+    "hostname": "ycsb-c887dd5f7563-server",
+    "data_dir": "/home/mikers/gomap-5335-close-consumer-build-20261029/reference-correctness-833b9b2-20261030/support/mongodb/db",
+    "data_device": 66308,
+    "data_inode": 106302567,
+    "mounted_data_device": 66308,
+    "mounted_data_inode": 106302567,
+    "observed_utc": "2026-10-30T05:07:33.657501Z",
+    "pid_namespace": "pid:[4026532826]",
+    "mount_namespace": "mnt:[4026532822]",
+    "network_namespace": "net:[4026532828]"
+  },
+  "packet": {
+    "address": "127.0.0.1:27018",
+    "commands": {
+      "after.buildInfo": {
+        "request": {
+          "buildInfo": {
+            "$numberInt": "1"
+          }
+        },
+        "reply": {
+          "ok": {
+            "$numberDouble": "1.0"
+          },
+          "version": "8.2.7",
+          "gitVersion": "8f6785264a643d2eeb5e4046f7876a23e40e1a09"
+        },
+        "connection_id": "127.0.0.1:27018[-4]",
+        "result": {
+          "attempted": true,
+          "success": true,
+          "error": "",
+          "start_utc": "2026-10-30T05:07:34.204204681Z",
+          "end_utc": "2026-10-30T05:07:34.204320502Z",
+          "elapsed_ns": 115821
+        }
+      },
+      "after.getCmdLineOpts": {
+        "request": {
+          "getCmdLineOpts": {
+            "$numberInt": "1"
+          }
+        },
+        "reply": {
+          "argv": [
+            "/usr/bin/mongod",
+            "--dbpath",
+            "/data/db",
+            "--storageEngine",
+            "wiredTiger",
+            "--bind_ip_all",
+            "--port",
+            "27017"
+          ],
+          "parsed": {
+            "net": {
+              "bindIp": "*",
+              "port": {
+                "$numberInt": "27017"
+              }
+            },
+            "storage": {
+              "dbPath": "/data/db",
+              "engine": "wiredTiger"
+            }
+          },
+          "ok": {
+            "$numberDouble": "1.0"
+          }
+        },
+        "connection_id": "127.0.0.1:27018[-4]",
+        "result": {
+          "attempted": true,
+          "success": true,
+          "error": "",
+          "start_utc": "2026-10-30T05:07:34.207431157Z",
+          "end_utc": "2026-10-30T05:07:34.207719312Z",
+          "elapsed_ns": 288156
+        }
+      },
+      "after.getParameter": {
+        "request": {
+          "getParameter": {
+            "$numberInt": "1"
+          },
+          "journalCommitInterval": {
+            "$numberInt": "1"
+          },
+          "syncdelay": {
+            "$numberInt": "1"
+          }
+        },
+        "reply": {
+          "journalCommitInterval": {
+            "$numberInt": "100"
+          },
+          "syncdelay": {
+            "$numberDouble": "60.0"
+          },
+          "ok": {
+            "$numberDouble": "1.0"
+          }
+        },
+        "connection_id": "127.0.0.1:27018[-4]",
+        "result": {
+          "attempted": true,
+          "success": true,
+          "error": "",
+          "start_utc": "2026-10-30T05:07:34.207736389Z",
+          "end_utc": "2026-10-30T05:07:34.207919926Z",
+          "elapsed_ns": 183538
+        }
+      },
+      "after.hello": {
+        "request": {
+          "hello": {
+            "$numberInt": "1"
+          }
+        },
+        "reply": {
+          "isWritablePrimary": true,
+          "topologyVersion": {
+            "processId": {
+              "$oid": "6ae42615dddd4d1bc63682df"
+            },
+            "counter": {
+              "$numberLong": "0"
+            }
+          },
+          "maxBsonObjectSize": {
+            "$numberInt": "16777216"
+          },
+          "maxMessageSizeBytes": {
+            "$numberInt": "48000000"
+          },
+          "maxWriteBatchSize": {
+            "$numberInt": "100000"
+          },
+          "localTime": {
+            "$date": {
+              "$numberLong": "1793336854204"
+            }
+          },
+          "logicalSessionTimeoutMinutes": {
+            "$numberInt": "30"
+          },
+          "connectionId": {
+            "$numberInt": "2"
+          },
+          "minWireVersion": {
+            "$numberInt": "0"
+          },
+          "maxWireVersion": {
+            "$numberInt": "27"
+          },
+          "readOnly": false,
+          "ok": {
+            "$numberDouble": "1.0"
+          }
+        },
+        "connection_id": "127.0.0.1:27018[-4]",
+        "result": {
+          "attempted": true,
+          "success": true,
+          "error": "",
+          "start_utc": "2026-10-30T05:07:34.204056715Z",
+          "end_utc": "2026-10-30T05:07:34.204175453Z",
+          "elapsed_ns": 118743
+        }
+      },
+      "after.serverStatus": {
+        "request": {
+          "serverStatus": {
+            "$numberInt": "1"
+          }
+        },
+        "reply": {
+          "ok": {
+            "$numberDouble": "1.0"
+          },
+          "version": "8.2.7",
+          "process": "mongod",
+          "pid": {
+            "$numberLong": "1"
+          },
+          "host": "ycsb-c887dd5f7563-server",
+          "storageEngine": {
+            "name": "wiredTiger",
+            "supportsCommittedReads": true,
+            "oldestRequiredTimestampForCrashRecovery": {
+              "$timestamp": {
+                "t": 0,
+                "i": 0
+              }
+            },
+            "dropPendingIdents": {
+              "$numberLong": "0"
+            },
+            "supportsSnapshotReadConcern": true,
+            "readOnly": false,
+            "persistent": true,
+            "backupCursorOpen": false
+          }
+        },
+        "connection_id": "127.0.0.1:27018[-4]",
+        "result": {
+          "attempted": true,
+          "success": true,
+          "error": "",
+          "start_utc": "2026-10-30T05:07:34.204363925Z",
+          "end_utc": "2026-10-30T05:07:34.205696152Z",
+          "elapsed_ns": 1332226
+        }
+      },
+      "before.buildInfo": {
+        "request": {
+          "buildInfo": {
+            "$numberInt": "1"
+          }
+        },
+        "reply": {
+          "ok": {
+            "$numberDouble": "1.0"
+          },
+          "version": "8.2.7",
+          "gitVersion": "8f6785264a643d2eeb5e4046f7876a23e40e1a09"
+        },
+        "connection_id": "127.0.0.1:27018[-4]",
+        "result": {
+          "attempted": true,
+          "success": true,
+          "error": "",
+          "start_utc": "2026-10-30T05:07:34.199747923Z",
+          "end_utc": "2026-10-30T05:07:34.199899671Z",
+          "elapsed_ns": 151748
+        }
+      },
+      "before.getCmdLineOpts": {
+        "request": {
+          "getCmdLineOpts": {
+            "$numberInt": "1"
+          }
+        },
+        "reply": {
+          "argv": [
+            "/usr/bin/mongod",
+            "--dbpath",
+            "/data/db",
+            "--storageEngine",
+            "wiredTiger",
+            "--bind_ip_all",
+            "--port",
+            "27017"
+          ],
+          "parsed": {
+            "net": {
+              "bindIp": "*",
+              "port": {
+                "$numberInt": "27017"
+              }
+            },
+            "storage": {
+              "dbPath": "/data/db",
+              "engine": "wiredTiger"
+            }
+          },
+          "ok": {
+            "$numberDouble": "1.0"
+          }
+        },
+        "connection_id": "127.0.0.1:27018[-4]",
+        "result": {
+          "attempted": true,
+          "success": true,
+          "error": "",
+          "start_utc": "2026-10-30T05:07:34.203454859Z",
+          "end_utc": "2026-10-30T05:07:34.203831197Z",
+          "elapsed_ns": 376328
+        }
+      },
+      "before.getParameter": {
+        "request": {
+          "getParameter": {
+            "$numberInt": "1"
+          },
+          "journalCommitInterval": {
+            "$numberInt": "1"
+          },
+          "syncdelay": {
+            "$numberInt": "1"
+          }
+        },
+        "reply": {
+          "journalCommitInterval": {
+            "$numberInt": "100"
+          },
+          "syncdelay": {
+            "$numberDouble": "60.0"
+          },
+          "ok": {
+            "$numberDouble": "1.0"
+          }
+        },
+        "connection_id": "127.0.0.1:27018[-4]",
+        "result": {
+          "attempted": true,
+          "success": true,
+          "error": "",
+          "start_utc": "2026-10-30T05:07:34.203852378Z",
+          "end_utc": "2026-10-30T05:07:34.204042289Z",
+          "elapsed_ns": 189918
+        }
+      },
+      "before.hello": {
+        "request": {
+          "hello": {
+            "$numberInt": "1"
+          }
+        },
+        "reply": {
+          "isWritablePrimary": true,
+          "topologyVersion": {
+            "processId": {
+              "$oid": "6ae42615dddd4d1bc63682df"
+            },
+            "counter": {
+              "$numberLong": "0"
+            }
+          },
+          "maxBsonObjectSize": {
+            "$numberInt": "16777216"
+          },
+          "maxMessageSizeBytes": {
+            "$numberInt": "48000000"
+          },
+          "maxWriteBatchSize": {
+            "$numberInt": "100000"
+          },
+          "localTime": {
+            "$date": {
+              "$numberLong": "1793336854199"
+            }
+          },
+          "logicalSessionTimeoutMinutes": {
+            "$numberInt": "30"
+          },
+          "connectionId": {
+            "$numberInt": "2"
+          },
+          "minWireVersion": {
+            "$numberInt": "0"
+          },
+          "maxWireVersion": {
+            "$numberInt": "27"
+          },
+          "readOnly": false,
+          "ok": {
+            "$numberDouble": "1.0"
+          }
+        },
+        "connection_id": "127.0.0.1:27018[-4]",
+        "result": {
+          "attempted": true,
+          "success": true,
+          "error": "",
+          "start_utc": "2026-10-30T05:07:33.697467716Z",
+          "end_utc": "2026-10-30T05:07:34.199689586Z",
+          "elapsed_ns": 502221882
+        }
+      },
+      "before.serverStatus": {
+        "request": {
+          "serverStatus": {
+            "$numberInt": "1"
+          }
+        },
+        "reply": {
+          "ok": {
+            "$numberDouble": "1.0"
+          },
+          "version": "8.2.7",
+          "process": "mongod",
+          "pid": {
+            "$numberLong": "1"
+          },
+          "host": "ycsb-c887dd5f7563-server",
+          "storageEngine": {
+            "name": "wiredTiger",
+            "supportsCommittedReads": true,
+            "oldestRequiredTimestampForCrashRecovery": {
+              "$timestamp": {
+                "t": 0,
+                "i": 0
+              }
+            },
+            "dropPendingIdents": {
+              "$numberLong": "0"
+            },
+            "supportsSnapshotReadConcern": true,
+            "readOnly": false,
+            "persistent": true,
+            "backupCursorOpen": false
+          }
+        },
+        "connection_id": "127.0.0.1:27018[-4]",
+        "result": {
+          "attempted": true,
+          "success": true,
+          "error": "",
+          "start_utc": "2026-10-30T05:07:34.199960527Z",
+          "end_utc": "2026-10-30T05:07:34.201370449Z",
+          "elapsed_ns": 1409925
+        }
+      }
+    },
+    "fixture_id": "c887dd5f75634433a8f20268f96734fd:server-ready",
+    "kind": "mongodb_reference_public_commands",
+    "mode": "observe",
+    "schema_version": 1
+  },
+  "call_bounds": {
+    "disconnect": {
+      "attempted": true,
+      "success": true,
+      "error": "",
+      "start_utc": "2026-10-30T05:07:34.207930317Z",
+      "end_utc": "2026-10-30T05:07:34.208115966Z",
+      "elapsed_ns": 185654
+    },
+    "ended_utc": "2026-10-30T05:07:34.213423791Z",
+    "fixture_id": "c887dd5f75634433a8f20268f96734fd:server-ready",
+    "kind": "mongodb_reference_control_client_close",
+    "mode": "observe",
+    "observed_sha256": "d6c3cdb56fb1a9648379fbf41e16d83a386085fefbf2603c6bb2604001e3add7",
+    "pid": 3528470,
+    "result_error": "",
+    "schema_version": 1,
+    "started_utc": "2026-10-30T05:07:33.697404281Z"
+  },
+  "raw_sources": {
+    "support/mongodb/server-ready.json": {
+      "path": "/home/mikers/gomap-5335-close-consumer-build-20261029/reference-correctness-833b9b2-20261030/support/mongodb/server-ready.json",
+      "sha256": "d6c3cdb56fb1a9648379fbf41e16d83a386085fefbf2603c6bb2604001e3add7"
+    },
+    "support/mongodb/server.identity.json": {
+      "path": "/home/mikers/gomap-5335-close-consumer-build-20261029/reference-correctness-833b9b2-20261030/support/mongodb/server.identity.json",
+      "sha256": "bcf8faf06d93b7c450668b46277ef987ccd76519d9c4b4c70df1aa4e0e7f1856"
+    },
+    "support/mongodb/server-ready.close.json": {
+      "path": "/home/mikers/gomap-5335-close-consumer-build-20261029/reference-correctness-833b9b2-20261030/support/mongodb/server-ready.close.json",
+      "sha256": "1527d86f0d55f5d8c713caa87e449613f527111d24fd32148c6c49f02c4bcf56"
+    },
+    "support/manifest.json": {
+      "path": "/home/mikers/gomap-5335-close-consumer-build-20261029/reference-correctness-833b9b2-20261030/support/manifest.json",
+      "sha256": "eec568435d049f355be732543097b1144ba86a849d571736b706b25750729820"
+    }
+  }
+}
