@@ -40,7 +40,8 @@ type singleStablePublicReader interface {
 	Has([]byte) (bool, error)
 }
 
-func singleStablePublicValues(t *testing.T, reader singleStablePublicReader, keys [][]byte, want map[string][]byte) {
+// missingErr is nil for public DB.Get and ErrKeyNotFound for Snapshot.Get.
+func singleStablePublicValues(t *testing.T, reader singleStablePublicReader, keys [][]byte, want map[string][]byte, missingErr error) {
 	t.Helper()
 	for _, key := range keys {
 		value, exists := want[string(key)]
@@ -53,8 +54,8 @@ func singleStablePublicValues(t *testing.T, reader singleStablePublicReader, key
 			if err != nil || !bytes.Equal(got, value) {
 				t.Fatalf("Get(%q): equal=%v err=%v", key, bytes.Equal(got, value), err)
 			}
-		} else if !errors.Is(err, treedb.ErrKeyNotFound) {
-			t.Fatalf("deleted/absent Get(%q): %v", key, err)
+		} else if got != nil || !errors.Is(err, missingErr) {
+			t.Fatalf("deleted/absent Get(%q): value=%v err=%v want=nil,%v", key, got, err, missingErr)
 		}
 	}
 }
@@ -272,8 +273,8 @@ func TestSingleStablePublicAdaptiveCheckpointPointersAndReopen(t *testing.T) {
 		// These are existing source-run counters, not a new timing/branch hook.
 		// Exactly one nonempty point unit in resolved AppendOnly, with target
 		// planning off, must use the stable iterator caller and len(units)==1.
-		singleStablePublicValues(t, d, keys, round.want)
-		singleStablePublicValues(t, held, keys, seed)
+		singleStablePublicValues(t, d, keys, round.want, nil)
+		singleStablePublicValues(t, held, keys, seed, treedb.ErrKeyNotFound)
 		finalStats = after
 	}
 	observationMu.Lock()
@@ -305,7 +306,7 @@ func TestSingleStablePublicAdaptiveCheckpointPointersAndReopen(t *testing.T) {
 	if result.CommitSeq < checkpointSeq {
 		t.Fatalf("stable root regressed: %d < %d", result.CommitSeq, checkpointSeq)
 	}
-	singleStablePublicValues(t, reopened, keys, want)
+	singleStablePublicValues(t, reopened, keys, want, nil)
 	gotRevisions := singleStablePublicPhysical(t, reopened, want)
 	for key, revision := range revisions {
 		if gotRevisions[key] != revision {
@@ -328,7 +329,7 @@ func TestSingleStablePublicAdaptiveCheckpointPointersAndReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	singleStablePublicValues(t, d, keys, want)
+	singleStablePublicValues(t, d, keys, want, nil)
 	gotRevisions = singleStablePublicPhysical(t, d, want)
 	for key, revision := range revisions {
 		if gotRevisions[key] != revision {
