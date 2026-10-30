@@ -544,7 +544,7 @@ int main(int argc,char **argv) {
     def test_mongo_checkpoint_rejects_missing_endpoint_and_wrong_schema(self):
         path=self.directory/"server.evidence/owner.checkpoint-control.json"
         endpoint=COMPARE.read(path)
-        for mutate in (lambda v:v.update(schema_version=2),lambda v:v.update(owner_id="e"*32),lambda v:v.update(address="0.0.0.0:12345")):
+        for mutate in (lambda v:v.update(schema_version=2),lambda v:v.update(owner_id="e"*32),lambda v:v.update(address="0.0.0.0:12345"),lambda v:v.update(address=[])):
             value=dict(endpoint);mutate(value);self.save(path,value)
             self.check(False)
         path.unlink()
@@ -565,6 +565,8 @@ int main(int argc,char **argv) {
         original=COMPARE.read(self.directory/"server.evidence/owner.checkpoint.json")
         controls=[lambda v:v["owner"]["process"].update(start_ticks=999),
                   lambda v:v["owner"].update(data_inode=999),
+                  lambda v:v["owner"].update(observed_gomaxprocs=True),
+                  lambda v:v["owner"]["stats"].update({"treedb.cache.cow.txn.logical_seq":1}),
                   lambda v:v["request"].update(owner_id="e"*32),
                   lambda v:v["request"]["client"].update(pid=999),
                   lambda v:v["request"].update(snapshot_sha256="e"*64),
