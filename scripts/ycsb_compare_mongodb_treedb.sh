@@ -8,7 +8,7 @@ LIVE="$ROOT/scripts/ycsb_compare_live.py"
 FIXTURE_BIN="${FIXTURE_BIN:-$ROOT/bin/ycsb-correctness-fixture}"
 PYTHON="${PYTHON:-python3}"
 TMP_BASE="${TMPDIR:-/mnt/fast4tb}"
-OUT_DIR="${OUT_DIR:-$(mktemp -d "$TMP_BASE/treedb_ycsb_compare_XXXXXX")}"
+OUT_DIR="${OUT_DIR:-}"
 GOYCSB_DIR="${GOYCSB_DIR:-/home/mikers/dev/pingcap/go-ycsb}"
 GOYCSB_BIN="${GOYCSB_BIN:-$GOYCSB_DIR/bin/go-ycsb}"
 CLIENT_BUILD_MANIFEST="${CLIENT_BUILD_MANIFEST:-}"
@@ -42,7 +42,9 @@ usage() {
 Usage: scripts/ycsb_compare_mongodb_treedb.sh
 
 TARGETS selects exactly the services and clients to run (space or comma separated:
-  treedb_native, treedb_mongo, mongodb). The default runs the two TreeDB targets.
+  treedb_native, treedb_mongo). The default runs the two TreeDB targets.
+  mongodb is reserved and refused before execution side effects until its
+  independently owned reference lifecycle is implemented.
 
 Supports supplied absolute TREEDB_NATIVE_SERVER_BIN/TREEDB_MONGO_GATEWAY_BIN,
 GOYCSB_BIN, FIXTURE_BIN, TREEDB_NATIVE_DOCUMENT_FORMAT and TREEDB_MONGO_DOCUMENT_FORMAT
@@ -69,8 +71,9 @@ process/owner plus canonical snapshots. Gateway checkpoint uses the separate
 opt-in live-owner control; reference Mongo remains unsupported.
 ALLOW_YCSB_ERRORS never makes errors valid.
 
-MONGODB_MODE=docker starts an owned service; external services currently require
-an explicit process/ownership integration and are refused. skip excludes MongoDB.
+Reference MongoDB 8 lifecycle integration remains outstanding. Selecting mongodb
+is refused in every MONGODB_MODE, including mixed target lists, before output
+creation, builds or launches. PARSE_ONLY consumes its retained manifest as usual.
 EOF
 }
 if [[ "${1-}" == -h || "${1-}" == --help ]]; then usage; exit 0; fi
@@ -86,21 +89,25 @@ for format in "$TREEDB_NATIVE_DOCUMENT_FORMAT" "$TREEDB_MONGO_DOCUMENT_FORMAT"; 
   [[ "$format" == bson || "$format" == json ]] || fail "document format must be bson or json"
 done
 case "$MONGODB_MODE" in docker|external|skip) ;; *) fail "unknown MONGODB_MODE";; esac
+# Resolve execution targets before mktemp/mkdir, builds, helpers or services.
+# Reference lifecycle support is absent; a late rejection could already have
+# launched a container/client and routed snapshots to an unrelated TreeDB addr.
+if [[ "$PARSE_ONLY" == false ]]; then
+  read -r -a selected <<<"${TARGETS//,/ }"
+  [[ ${#selected[@]} -gt 0 ]] || fail "TARGETS cannot be empty"
+  declare -A chosen=()
+  for target in "${selected[@]}"; do
+    case "$target" in treedb_native|treedb_mongo|mongodb) ;; *) fail "unknown target $target";; esac
+    [[ -z "${chosen[$target]:-}" ]] || fail "duplicate target $target"
+    chosen[$target]=1
+  done
+  [[ -z "${chosen[mongodb]:-}" ]] || fail "reference MongoDB lifecycle is unsupported; refusing mongodb before execution"
+fi
+if [[ -z "$OUT_DIR" ]]; then OUT_DIR=$(mktemp -d "$TMP_BASE/treedb_ycsb_compare_XXXXXX"); fi
 mkdir -p "$OUT_DIR"
 OUT_DIR=$(cd "$OUT_DIR" && pwd)
 if [[ "$PARSE_ONLY" == true ]]; then
   exec "$PYTHON" "$VALIDATOR" validate "$OUT_DIR"
-fi
-read -r -a selected <<<"${TARGETS//,/ }"
-[[ ${#selected[@]} -gt 0 ]] || fail "TARGETS cannot be empty"
-declare -A chosen=()
-for target in "${selected[@]}"; do
-  case "$target" in treedb_native|treedb_mongo|mongodb) ;; *) fail "unknown target $target";; esac
-  [[ -z "${chosen[$target]:-}" ]] || fail "duplicate target $target"
-  chosen[$target]=1
-done
-if [[ -n "${chosen[mongodb]:-}" ]]; then
-  [[ "$MONGODB_MODE" == docker ]] || fail "MongoDB requires owned docker mode; external/skip cannot establish owned cleanup"
 fi
 # An invocation owns a new output directory. Never overwrite an earlier attempt.
 [[ -z "$(ls -A "$OUT_DIR")" ]] || fail "execution requires a fresh empty OUT_DIR"

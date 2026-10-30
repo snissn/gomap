@@ -308,6 +308,50 @@ class CompareTests(unittest.TestCase):
     def test_single_target_supplied_binaries_format_and_owned_error_cleanup(self):
         self.exercise_shell_cleanup(ready=True)
 
+    def test_reference_mongodb_rejected_before_any_execution_side_effect(self):
+        import select
+        import shlex
+        import socket
+        tools=self.out/"preflight-tools";tools.mkdir()
+        marker=tools/"unexpected-invocations"
+        # Include output creation and every build/container/client/helper route.
+        # Rejection must precede even default mktemp or supplied OUT_DIR mkdir.
+        for name in ("docker","go","make","python3","mktemp","mkdir","native-server","mongo-gateway","client","fixture"):
+            path=tools/name
+            path.write_text("#!/bin/sh\nprintf '%s\\n' \"$0 $*\" >> "+shlex.quote(str(marker))+"\nexit 97\n")
+            path.chmod(0o700)
+        with socket.socket() as native, socket.socket() as unrelated_gateway, socket.socket() as reference:
+            listeners=(native,unrelated_gateway,reference)
+            for listener in listeners:listener.bind(("127.0.0.1",0));listener.listen()
+            address=lambda listener:"127.0.0.1:"+str(listener.getsockname()[1])
+            for targets in ("mongodb","treedb_native mongodb","mongodb,treedb_mongo","treedb_native,treedb_mongo,mongodb"):
+                for mode in ("docker","external","skip"):
+                    for supplied_output in (False,True):
+                        with self.subTest(targets=targets,mode=mode,supplied_output=supplied_output):
+                            output=self.out/"must-not-create-output"
+                            environment=os.environ.copy();environment.pop("OUT_DIR",None)
+                            environment.update(PATH=str(tools)+os.pathsep+environment["PATH"],TMPDIR=str(tools),PARSE_ONLY="false",BUILD="true",BUILD_GOYCSB="true",TARGETS=targets,MONGODB_MODE=mode,PYTHON=str(tools/"python3"),TREEDB_NATIVE_SERVER_BIN=str(tools/"native-server"),TREEDB_MONGO_GATEWAY_BIN=str(tools/"mongo-gateway"),GOYCSB_BIN=str(tools/"client"),FIXTURE_BIN=str(tools/"fixture"),CLIENT_BUILD_MANIFEST=str(tools/"unavailable-client-manifest"),SERVER_BUILD_MANIFEST=str(tools/"unavailable-server-manifest"),NATIVE_ADDR=address(native),TREEDB_MONGO_ADDR=address(unrelated_gateway),MONGODB_ADDR=address(reference))
+                            if supplied_output:environment["OUT_DIR"]=str(output)
+                            outcome=subprocess.run(["bash",str(ROOT/"ycsb_compare_mongodb_treedb.sh")],env=environment,capture_output=True,text=True,timeout=5)
+                            self.assertEqual(outcome.returncode,2,outcome.stderr)
+                            self.assertIn("reference MongoDB lifecycle is unsupported",outcome.stderr)
+                            self.assertFalse(marker.exists(),"execution command ran before unsupported-target refusal")
+                            self.assertFalse(output.exists(),"unsupported target created output")
+                            self.assertFalse(select.select(listeners,[],[],0)[0],"unsupported target touched a service address")
+
+    def test_treedb_targets_and_retained_parse_route_remain_available(self):
+        for targets in ("treedb_native","treedb_mongo","treedb_native treedb_mongo"):
+            with self.subTest(targets=targets):
+                output=self.out/("preflight-"+targets.replace(" ","-"))
+                environment=os.environ.copy()
+                environment.update(PARSE_ONLY="false",BUILD="false",BUILD_GOYCSB="false",TARGETS=targets,OUT_DIR=str(output),CLIENT_BUILD_MANIFEST="",SERVER_BUILD_MANIFEST="")
+                outcome=subprocess.run(["bash",str(ROOT/"ycsb_compare_mongodb_treedb.sh")],env=environment,capture_output=True,text=True,timeout=5)
+                self.assertEqual(outcome.returncode,2,outcome.stderr)
+                self.assertIn("CLIENT_BUILD_MANIFEST is required",outcome.stderr)
+                self.assertTrue(output.is_dir())
+        # PARSE_ONLY is selected from its existing manifest, not TARGETS.
+        self.check(True,TARGETS="mongodb")
+
     def test_failed_readiness_retains_identity_and_cleans_actual_owned_process(self):
         self.exercise_shell_cleanup(ready=False)
 
