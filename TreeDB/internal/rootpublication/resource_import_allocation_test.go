@@ -6,6 +6,7 @@ import (
 	"os"
 	"reflect"
 	"testing"
+	"unsafe"
 )
 
 func TestOwnedImportedTokenPreservesForeignOperationsAndLastCustody(t *testing.T) {
@@ -68,69 +69,78 @@ func TestOwnedImportedTokenPreservesForeignOperationsAndLastCustody(t *testing.T
 }
 
 func TestOwnedImportedSetAliasAndRefusal(t *testing.T) {
-	dir := t.TempDir()
-	callbacks := 0
-	o := StableLogicalObligation{Class: "column", Kind: "chunk", Namespace: "main", Generation: 1, FileID: 1, Length: 4, Reachability: ReachabilityColumnManifest, Digest: [32]byte{1}}
-	token := stableTokenFixture(t, dir, "source", 1, 20, ReachabilityColumnManifest, "column", func(spec *StableResourceSpec) {
-		spec.Kind = ResourceColumnAsset
-		spec.LogicalObligations = []StableLogicalObligation{o}
-		spec.OnRelease = func() { callbacks++ }
-	})
-	b := NewStableResourceSetBuilder()
-	if err := b.Add(token); err != nil {
-		t.Fatal(err)
-	}
-	source, err := b.Freeze()
-	if err != nil {
-		t.Fatal(err)
-	}
-	owner := new(retainedalloc.Owner)
-	owner.Initialize(0)
-	imported, err := ImportStableResourceSetMetadata(owner, source)
-	if err != nil {
-		t.Fatal(err)
-	}
-	clone, err := CloneStableResourceSetExcludingKinds(imported)
-	if err != nil {
-		t.Fatal(err)
-	}
-	source.Release()
-	imported.Release()
-	if callbacks != 0 || owner.Bytes() == 0 {
-		t.Fatalf("lost surviving alias callbacks=%d bytes=%d", callbacks, owner.Bytes())
-	}
-	seen := 0
-	if err = clone.WalkLogicalObligations(func(_ StableResourcePhysicalDescriptor, got StableLogicalObligation) error {
-		seen++
-		if got != o {
-			t.Fatalf("obligation %#v", got)
-		}
-		return nil
-	}); err != nil || seen != 1 {
-		t.Fatalf("walk=%d err=%v", seen, err)
-	}
-	clone.Release()
-	if callbacks != 1 || owner.Bytes() != 0 {
-		t.Fatalf("last alias callbacks=%d bytes=%d", callbacks, owner.Bytes())
-	}
-	if _, err = ImportStableResourceSetMetadata(owner, source); !errors.Is(err, ErrResourceOwnership) {
-		t.Fatal("released source imported")
-	}
-	live := stableTokenFixture(t, dir, "live", 1, 20, ReachabilityColumnManifest, "column")
-	bb := NewStableResourceSetBuilder()
-	if err = bb.Add(live); err != nil {
-		t.Fatal(err)
-	}
-	ss, err := bb.Freeze()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ss.Release()
-	closed := new(retainedalloc.Owner)
-	closed.Initialize(0)
-	closed.Close()
-	if _, err = ImportStableResourceSetMetadata(closed, ss); !errors.Is(err, retainedalloc.ErrClosed) || closed.Bytes() != 0 || live.released.Load() {
-		t.Fatalf("refusal err=%v bytes=%d released=%v", err, closed.Bytes(), live.released.Load())
+	for _, direct := range []bool{false, true} {
+		t.Run(map[bool]string{false: "cloned", true: "direct"}[direct], func(t *testing.T) {
+			dir := t.TempDir()
+			callbacks := 0
+			o := StableLogicalObligation{Class: "column", Kind: "chunk", Namespace: "main", Generation: 1, FileID: 1, Length: 4, Reachability: ReachabilityColumnManifest, Digest: [32]byte{1}}
+			token := stableTokenFixture(t, dir, "source", 1, 20, ReachabilityColumnManifest, "column", func(spec *StableResourceSpec) {
+				spec.Kind = ResourceColumnAsset
+				spec.LogicalObligations = []StableLogicalObligation{o}
+				spec.OnRelease = func() { callbacks++ }
+			})
+			b := NewStableResourceSetBuilder()
+			if err := b.Add(token); err != nil {
+				t.Fatal(err)
+			}
+			source, err := b.Freeze()
+			if err != nil {
+				t.Fatal(err)
+			}
+			owner := new(retainedalloc.Owner)
+			owner.Initialize(0)
+			imported, err := ImportStableResourceSetMetadata(owner, source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			clone := imported
+			if !direct {
+				clone, err = CloneStableResourceSetExcludingKinds(imported)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			source.Release()
+			if !direct {
+				imported.Release()
+			}
+			if callbacks != 0 || owner.Bytes() == 0 {
+				t.Fatalf("lost surviving alias callbacks=%d bytes=%d", callbacks, owner.Bytes())
+			}
+			seen := 0
+			if err = clone.WalkLogicalObligations(func(_ StableResourcePhysicalDescriptor, got StableLogicalObligation) error {
+				seen++
+				if got != o {
+					t.Fatalf("obligation %#v", got)
+				}
+				return nil
+			}); err != nil || seen != 1 {
+				t.Fatalf("walk=%d err=%v", seen, err)
+			}
+			clone.Release()
+			if callbacks != 1 || owner.Bytes() != 0 {
+				t.Fatalf("last alias callbacks=%d bytes=%d", callbacks, owner.Bytes())
+			}
+			if _, err = ImportStableResourceSetMetadata(owner, source); !errors.Is(err, ErrResourceOwnership) {
+				t.Fatal("released source imported")
+			}
+			live := stableTokenFixture(t, dir, "live", 1, 20, ReachabilityColumnManifest, "column")
+			bb := NewStableResourceSetBuilder()
+			if err = bb.Add(live); err != nil {
+				t.Fatal(err)
+			}
+			ss, err := bb.Freeze()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer ss.Release()
+			closed := new(retainedalloc.Owner)
+			closed.Initialize(0)
+			closed.Close()
+			if _, err = ImportStableResourceSetMetadata(closed, ss); !errors.Is(err, retainedalloc.ErrClosed) || closed.Bytes() != 0 || live.released.Load() {
+				t.Fatalf("refusal err=%v bytes=%d released=%v", err, closed.Bytes(), live.released.Load())
+			}
+		})
 	}
 }
 
@@ -213,5 +223,126 @@ func TestOwnedImportedSetSharedIdentityCoalescingAndBoundedRefusal(t *testing.T)
 	result.Release()
 	if callbacks != 1 || owner.Bytes() != baseline {
 		t.Fatalf("completion callbacks=%d bytes=%d baseline=%d", callbacks, owner.Bytes(), baseline)
+	}
+}
+
+// PRIMARY proof custody can transfer the imported Builder-owned set directly.
+// Both selected-owner cases must retain the original foreign operations and
+// logical obligations after every predecessor descriptor has been released.
+func TestOwnedImportedProofDirectSelectedOwnerCustody(t *testing.T) {
+	for _, sameOwner := range []bool{false, true} {
+		t.Run(map[bool]string{false: "foreign-owner", true: "same-owner"}[sameOwner], func(t *testing.T) {
+			releases := 0
+			obligation := appendMutationTestObligation(1)
+			token := stableTokenFixture(t, t.TempDir(), "proof", 1, 20, ReachabilityColumnManifest, "column", func(spec *StableResourceSpec) {
+				spec.Kind = ResourceColumnAsset
+				spec.LogicalObligations = []StableLogicalObligation{obligation}
+				spec.OnRelease = func() { releases++ }
+			})
+			b := NewStableResourceSetBuilder()
+			if err := b.Add(token); err != nil {
+				t.Fatal(err)
+			}
+			generic, err := b.Freeze()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var originalOwner, foreignOwner retainedalloc.Owner
+			selected, err := ImportStableResourceSetMetadata(&originalOwner, generic)
+			if err != nil {
+				t.Fatal(err)
+			}
+			proofOwner := &foreignOwner
+			if sameOwner {
+				proofOwner = &originalOwner
+			}
+			proof, err := ImportStableResourceSetMetadata(proofOwner, selected)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if proof == selected || proof.Owner() != ResourceOwnerBuilder || proof.MetadataOwner() != proofOwner {
+				t.Fatal("import failed to acquire independent selected ownership")
+			}
+			if err = generic.ReleaseWithError(); err != nil {
+				t.Fatal(err)
+			}
+			if err = selected.ReleaseWithError(); err != nil {
+				t.Fatal(err)
+			}
+			if releases != 0 || proofOwner.Bytes() == 0 {
+				t.Fatal("predecessor release consumed proof custody")
+			}
+			seen := 0
+			if err = proof.WalkLogicalObligations(func(_ StableResourcePhysicalDescriptor, got StableLogicalObligation) error {
+				seen++
+				if got != obligation {
+					t.Fatalf("changed obligation %#v", got)
+				}
+				return nil
+			}); err != nil || seen != 1 {
+				t.Fatalf("proof walk count=%d err=%v", seen, err)
+			}
+			if err = proof.ReleaseWithError(); err != nil {
+				t.Fatal(err)
+			}
+			if releases != 1 || originalOwner.Bytes() != 0 || foreignOwner.Bytes() != 0 {
+				t.Fatalf("last proof release callbacks=%d original=%d foreign=%d", releases, originalOwner.Bytes(), foreignOwner.Bytes())
+			}
+			if err = proof.ReleaseWithError(); err != nil || releases != 1 {
+				t.Fatal("proof cleanup replayed")
+			}
+		})
+	}
+}
+
+func TestOwnedImportedProofFitsOneWrapperBudgetAndRefusesSecond(t *testing.T) {
+	token := stableTokenFixture(t, t.TempDir(), "budget-proof", 1, 20, ReachabilityIndexFile, "index")
+	b := NewStableResourceSetBuilder()
+	if err := b.Add(token); err != nil {
+		t.Fatal(err)
+	}
+	source, err := b.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Release()
+	var owner retainedalloc.Owner
+	budget := &registryBudget{cap: 1 << 24}
+	enrollment, err := owner.Enroll(budget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer enrollment.Close()
+	baseline := owner.Bytes()
+	selected, err := ImportStableResourceSetMetadata(&owner, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Only the independent set descriptor and its allocation header are new on
+	// same-owner import. Its immutable kind backing remains independently held.
+	wrapper := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(StableResourceSet{}))) + retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(resourceAllocation{})))
+	before := owner.Bytes()
+	budget.cap = budget.bytes + wrapper
+	proof, err := ImportStableResourceSetMetadata(&owner, selected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if owner.Bytes() != before+wrapper || budget.bytes > budget.cap {
+		t.Fatal("proof exceeded admitted containing storage")
+	}
+	if clone, err := CloneStableResourceSetExcludingKinds(proof); clone != nil || !errors.Is(err, retainedalloc.ErrCapacity) {
+		t.Fatalf("second wrapper escaped cap: clone=%p err=%v", clone, err)
+	}
+	if owner.Bytes() != before+wrapper || proof.Owner() != ResourceOwnerBuilder {
+		t.Fatal("refusal changed existing proof ownership/accounting")
+	}
+	if err = selected.ReleaseWithError(); err != nil {
+		t.Fatal(err)
+	}
+	if err = proof.ReleaseWithError(); err != nil {
+		t.Fatal(err)
+	}
+	if owner.Bytes() != baseline {
+		t.Fatalf("proof storage not refunded: got=%d baseline=%d", owner.Bytes(), baseline)
 	}
 }

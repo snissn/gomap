@@ -13,80 +13,89 @@ import (
 )
 
 func TestImportedOriginalObservationKeepsFailedLastPhysicalCustody(t *testing.T) {
-	file, err := os.Create(filepath.Join(t.TempDir(), "asset"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer file.Close()
-	if _, err = file.Write([]byte("asset")); err != nil {
-		t.Fatal(err)
-	}
-	registry := NewIdentityPinRegistry()
-	identity, err := StableIdentityFromFile(file)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = registry.Observe(identity); err != nil {
-		t.Fatal(err)
-	}
-	token, err := NewStableResourceToken(StableResourceSpec{
-		Kind: ResourceColumnAsset, LogicalLane: "assets", ResourceID: "1", Generation: 1,
-		DiagnosticPath: "asset", File: file, Frontier: DurableFrontier{Bytes: 5},
-		Reachability: ReachabilityColumnManifest, PinRegistry: registry,
-		OriginalObservation: registry,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	builder := NewStableResourceSetBuilder()
-	if err = builder.Add(token); err != nil {
-		t.Fatal(err)
-	}
-	source, err := builder.Freeze()
-	if err != nil {
-		t.Fatal(err)
-	}
-	var owner retainedalloc.Owner
-	owner.Initialize(0)
-	imported, err := ImportStableResourceSetMetadata(&owner, source)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sibling, err := CloneStableResourceSetExcludingKinds(imported)
-	if err != nil {
-		t.Fatal(err)
-	}
-	source.Release()
-	imported.Release()
-	if token.released.Load() {
-		t.Fatal("original released through held alias")
-	}
-	if err = unix.Close(int(token.pinned.Fd())); err != nil {
-		t.Fatal(err)
-	}
-	receipt := sibling.ReleaseWithError()
-	if !errors.Is(receipt, unix.EBADF) {
-		t.Fatalf("original source-root cleanup outcome lost: %v", receipt)
-	}
-	if !errors.Is(registry.CleanupError(), unix.EBADF) {
-		t.Fatalf("original close failure lost: %v", registry.CleanupError())
-	}
-	if registry.failedPinned == nil || registry.MetadataOwner().Bytes() == 0 {
-		t.Fatal("original failed backing lost")
-	}
-	// The adapter still refers to the SAME unresolved source root and its
-	// original receipt. Its containing/alias storage cannot refund on refusal.
-	if owner.Bytes() == 0 {
-		t.Fatal("unresolved original adapter/source-root debt refunded")
-	}
-	adapterBefore := owner.Bytes()
-	before := registry.MetadataOwner().Bytes()
-	sibling.Release()
-	source.Release()
-	token.Release()
-	registry.Close()
-	if owner.Bytes() != adapterBefore || registry.MetadataOwner().Bytes() != before || !errors.Is(registry.CleanupError(), unix.EBADF) {
-		t.Fatal("failure retried or refunded")
+	for _, direct := range []bool{false, true} {
+		t.Run(map[bool]string{false: "cloned", true: "direct"}[direct], func(t *testing.T) {
+			file, err := os.Create(filepath.Join(t.TempDir(), "asset"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer file.Close()
+			if _, err = file.Write([]byte("asset")); err != nil {
+				t.Fatal(err)
+			}
+			registry := NewIdentityPinRegistry()
+			identity, err := StableIdentityFromFile(file)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = registry.Observe(identity); err != nil {
+				t.Fatal(err)
+			}
+			token, err := NewStableResourceToken(StableResourceSpec{
+				Kind: ResourceColumnAsset, LogicalLane: "assets", ResourceID: "1", Generation: 1,
+				DiagnosticPath: "asset", File: file, Frontier: DurableFrontier{Bytes: 5},
+				Reachability: ReachabilityColumnManifest, PinRegistry: registry,
+				OriginalObservation: registry,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			builder := NewStableResourceSetBuilder()
+			if err = builder.Add(token); err != nil {
+				t.Fatal(err)
+			}
+			source, err := builder.Freeze()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var owner retainedalloc.Owner
+			owner.Initialize(0)
+			imported, err := ImportStableResourceSetMetadata(&owner, source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sibling := imported
+			if !direct {
+				sibling, err = CloneStableResourceSetExcludingKinds(imported)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			source.Release()
+			if !direct {
+				imported.Release()
+			}
+			if token.released.Load() {
+				t.Fatal("original released through held alias")
+			}
+			if err = unix.Close(int(token.pinned.Fd())); err != nil {
+				t.Fatal(err)
+			}
+			receipt := sibling.ReleaseWithError()
+			if !errors.Is(receipt, unix.EBADF) {
+				t.Fatalf("original source-root cleanup outcome lost: %v", receipt)
+			}
+			if !errors.Is(registry.CleanupError(), unix.EBADF) {
+				t.Fatalf("original close failure lost: %v", registry.CleanupError())
+			}
+			if registry.failedPinned == nil || registry.MetadataOwner().Bytes() == 0 {
+				t.Fatal("original failed backing lost")
+			}
+			// The adapter still refers to the SAME unresolved source root and its
+			// original receipt. Its containing/alias storage cannot refund on refusal.
+			if owner.Bytes() == 0 {
+				t.Fatal("unresolved original adapter/source-root debt refunded")
+			}
+			adapterBefore := owner.Bytes()
+			before := registry.MetadataOwner().Bytes()
+			sibling.Release()
+			source.Release()
+			token.Release()
+			registry.Close()
+			if owner.Bytes() != adapterBefore || registry.MetadataOwner().Bytes() != before || !errors.Is(registry.CleanupError(), unix.EBADF) {
+				t.Fatal("failure retried or refunded")
+			}
+		})
 	}
 }
 

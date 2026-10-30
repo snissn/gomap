@@ -246,60 +246,69 @@ func TestOwnedImportedSharedDirectoryAndExactRIDClosure(t *testing.T) {
 	}
 }
 func TestOwnedImportedEmptyDirectoryRetainsExactLease(t *testing.T) {
-	b := NewStableResourceSetBuilder()
-	defer b.Abandon()
-	source, err := b.Freeze()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer source.Release()
-	d := importedDirectoryFixture(t, source)
-	defer d.Release()
-	bound, err := BindDependencyDirectoryV2(source, d)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var owner retainedalloc.Owner
-	owner.Initialize(0)
-	imported, err := ImportStableResourceSetMetadata(&owner, bound)
-	if err != nil {
-		t.Fatal(err)
-	}
-	clone, err := CloneStableResourceSetExcludingKinds(imported)
-	if err != nil {
-		t.Fatal(err)
-	}
-	bound.Release()
-	imported.Release()
-	if actual, err := clone.DependencyDirectoryV2(); err != nil || actual != d || owner.Bytes() == 0 {
-		t.Fatalf("lost empty custody directory=%p err=%v charge=%d", actual, err, owner.Bytes())
-	}
-	physical, err := clone.AcquirePhysicalDiagnostics()
-	if err != nil || len(physical.Physical()) != 0 {
-		t.Fatalf("empty physical diagnostics %v", err)
-	}
-	stats, err := clone.AcquireStats(time.Now())
-	if err != nil || len(stats.Stats()) != 0 {
-		t.Fatalf("empty statistics %v", err)
-	}
-	builder, err := NewStableResourceSetBuilderWithMetadata(&owner)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer builder.Abandon()
-	if err = builder.Merge(clone); err != nil {
-		t.Fatal(err)
-	}
-	if clone.Owner() != ResourceOwnerTransferred {
-		t.Fatal("empty directory transfer was not consumed")
-	}
-	builder.Abandon()
-	if owner.Bytes() == 0 {
-		t.Fatal("diagnostic directory leases were refunded early")
-	}
-	physical.Close()
-	stats.Close()
-	if owner.Bytes() != 0 {
-		t.Fatalf("empty closure leak %d", owner.Bytes())
+	for _, direct := range []bool{false, true} {
+		t.Run(map[bool]string{false: "cloned", true: "direct"}[direct], func(t *testing.T) {
+			b := NewStableResourceSetBuilder()
+			defer b.Abandon()
+			source, err := b.Freeze()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer source.Release()
+			d := importedDirectoryFixture(t, source)
+			defer d.Release()
+			bound, err := BindDependencyDirectoryV2(source, d)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var owner retainedalloc.Owner
+			owner.Initialize(0)
+			imported, err := ImportStableResourceSetMetadata(&owner, bound)
+			if err != nil {
+				t.Fatal(err)
+			}
+			clone := imported
+			if !direct {
+				clone, err = CloneStableResourceSetExcludingKinds(imported)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			bound.Release()
+			if !direct {
+				imported.Release()
+			}
+			if actual, err := clone.DependencyDirectoryV2(); err != nil || actual != d || owner.Bytes() == 0 {
+				t.Fatalf("lost empty custody directory=%p err=%v charge=%d", actual, err, owner.Bytes())
+			}
+			physical, err := clone.AcquirePhysicalDiagnostics()
+			if err != nil || len(physical.Physical()) != 0 {
+				t.Fatalf("empty physical diagnostics %v", err)
+			}
+			stats, err := clone.AcquireStats(time.Now())
+			if err != nil || len(stats.Stats()) != 0 {
+				t.Fatalf("empty statistics %v", err)
+			}
+			builder, err := NewStableResourceSetBuilderWithMetadata(&owner)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer builder.Abandon()
+			if err = builder.Merge(clone); err != nil {
+				t.Fatal(err)
+			}
+			if clone.Owner() != ResourceOwnerTransferred {
+				t.Fatal("empty directory transfer was not consumed")
+			}
+			builder.Abandon()
+			if owner.Bytes() == 0 {
+				t.Fatal("diagnostic directory leases were refunded early")
+			}
+			physical.Close()
+			stats.Close()
+			if owner.Bytes() != 0 {
+				t.Fatalf("empty closure leak %d", owner.Bytes())
+			}
+		})
 	}
 }

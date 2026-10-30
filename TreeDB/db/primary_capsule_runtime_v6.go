@@ -183,15 +183,14 @@ func (runtime *rootPublicationRuntimeV1) prepareCapsuleSealV6(member *rootPublic
 		return rootpublication.ErrDurableRootOwnership
 	}
 	record.MetaProjectionDigest = page.DurableMetaProjectionDigestV1(record.CommitSeq, record.DurableSeq, rootpublication.PrimaryCapsulePageV6(target))
-	// Clone fallible predecessor custody before attaching any fresh promotion
-	// edges to the same transaction. A rejected clone must not strand a prepared
+	// Acquire fallible predecessor custody before attaching any fresh promotion
+	// edges to the same transaction. A rejected import must not strand a prepared
 	// promotion whose dependency banks are still caller-owned.
-	importedProof, e := rootpublication.ImportStableResourceSetMetadata(runtime.idx.primary.MetadataOwner(), base.slotResources[base.slot])
-	if e != nil {
-		return e
-	}
-	defer importedProof.Release()
-	proofResources, e := rootpublication.CloneStableResourceSetExcludingKinds(importedProof)
+	// Import acquires an independent Builder-owned closure with every
+	// predecessor kind intact. Transfer that exact owner to the seal instead of
+	// allocating and admitting a second temporary descriptor just to clone all
+	// of its kinds unchanged. Import still admits every retained allocation.
+	proofResources, e := rootpublication.ImportStableResourceSetMetadata(runtime.idx.primary.MetadataOwner(), base.slotResources[base.slot])
 	if e != nil {
 		return e
 	}
