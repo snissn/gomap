@@ -10228,6 +10228,7 @@ type DB struct {
 	testBeforeVlogUnlock                func(laneID int)
 	testBeforeCheckpointFrontierCapture func()
 	testAfterCheckpointFrontierCapture  func()
+	testCOWFrontierRegistration         *cowFrontierRegistrationProbe
 	testBeforeCheckpointFrontierDrain   func()
 	testRetainedPruneScanHook           func(context.Context, string) error
 	testRetainedPruneQuietWaitExitHook  func(retainedPruneQuietWaitResult)

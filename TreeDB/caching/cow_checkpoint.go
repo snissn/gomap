@@ -202,6 +202,16 @@ func (db *DB) rotateCOWFrontier(ctx context.Context, postFrontier bool, captured
 		}
 		if err == nil && captured != nil {
 			*captured = c.retainCut()
+			if probe := db.testCOWFrontierRegistration; probe != nil {
+				// Diagnostic only: refusal is not returned, but enabling the
+				// probe adds mutex acquisitions and pins a cut, which can affect
+				// timing and capacity. No callbacks or allocations under writerMu.
+				// writeMu still excludes admission until registration completes.
+				c.writerMu.Lock()
+				probe.token, probe.err = c.registerPhysicalLifecycleLocked(*captured)
+				probe.attempted = true
+				c.writerMu.Unlock()
+			}
 		}
 		db.writeMu.Unlock()
 		if cleanupErr := rollover.drain(); cleanupErr != nil {

@@ -8,6 +8,16 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
+// cowFrontierRegistrationProbe is a test-only, caller-owned diagnostic. The
+// caller exclusively installs it before checkpoint, then withdraws its owner
+// token and cut edge after checkpoint exits. It is not transferred into the
+// physical handoff, and this one slot does not enumerate older frontiers.
+type cowFrontierRegistrationProbe struct {
+	attempted bool
+	token     cowPhysicalLifecycleToken
+	err       error
+}
+
 // cowPhysicalCutCapture is an unconnected, caller-serialized experiment. It
 // owns one independently retained cut edge, not a build, lineage, publication,
 // graph or recovery receipt. The caller must clear all aliases before refund;
