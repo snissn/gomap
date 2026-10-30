@@ -639,6 +639,18 @@ func (registry *IdentityPinRegistry) NewStableNamespaceTokenForKnownLink(spec St
 	return registry.newStableNamespaceTokenForKnownLinkWithMetadata(spec, nil)
 }
 
+// NewStableNamespaceTokenForKnownLinkWithMetadata independently admits the
+// exact retained parent/child namespace proof to metadata. Like the generic
+// known-link constructor, it requires the caller to retain the exact child pin
+// while this namespace binding is used or until an independent resource token
+// takes over that custody. It does not admit a resource token or receipt.
+func (registry *IdentityPinRegistry) NewStableNamespaceTokenForKnownLinkWithMetadata(spec StableNamespaceSpec, metadata *retainedalloc.Owner) (*StableNamespaceToken, error) {
+	if metadata == nil {
+		return nil, ErrResourceOwnership
+	}
+	return registry.newStableNamespaceTokenForKnownLinkWithMetadata(spec, metadata)
+}
+
 func (registry *IdentityPinRegistry) newStableNamespaceTokenForKnownLinkWithMetadata(spec StableNamespaceSpec, metadata *retainedalloc.Owner) (*StableNamespaceToken, error) {
 	if registry == nil {
 		return nil, fmt.Errorf("%w: nil identity pin registry", ErrUnresolvedResource)
