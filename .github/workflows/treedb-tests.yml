@@ -48,6 +48,8 @@ jobs:
         run: |
           git config --global core.longpaths true
           test "$(git config --global --get core.longpaths)" = "true"
+          git config --global core.autocrlf false
+          test "$(git config --global --get core.autocrlf)" = "false"
       - name: Checkout exact event harness
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -121,6 +123,8 @@ jobs:
         run: |
           git config --global core.longpaths true
           test "$(git config --global --get core.longpaths)" = "true"
+          git config --global core.autocrlf false
+          test "$(git config --global --get core.autocrlf)" = "false"
       - name: Checkout exact event harness
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
