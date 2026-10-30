@@ -118,13 +118,44 @@ def run_observed(argv, *, env, stdout, stderr, timeout):
         code = proc.wait(timeout=timeout)
         return code, observation
     except BaseException:
-        if proc.poll() is None:
-            proc.kill()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired as exc:
-            raise CleanupFailure(f'child {proc.pid} did not exit after kill') from exc
+        code, errors, pending = close_server(proc)
+        if code is None:
+            raise CleanupFailure(f'child {proc.pid} did not exit after kill: {errors}')
+        if pending:
+            raise RunnerInterrupted(f'signal during child close: {pending}')
         raise
+
+
+def close_server(server):
+    # Defer cancellation while the owned server is being reaped; otherwise a
+    # second signal can interrupt shutdown and strand it in another session.
+    pending = []
+    previous = {sig: signal.signal(sig, lambda number, _frame: pending.append(number))
+                for sig in (signal.SIGINT, signal.SIGTERM)}
+    errors = []
+    code = None
+    try:
+        if server.poll() is None:
+            try:
+                server.send_signal(signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+        try:
+            code = server.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            errors.append('server failed to close within 15 seconds')
+            try:
+                server.kill()
+            except ProcessLookupError:
+                pass
+            try:
+                code = server.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                errors.append(f'server {server.pid} did not exit after kill')
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+    return code, errors, pending
 
 
 def run_profile(out, profile, server_bin, client_bin, verifier_bin, env):
@@ -182,21 +213,14 @@ def run_profile(out, profile, server_bin, client_bin, verifier_bin, env):
         receipt['errors'].append(f'{type(exc).__name__}: {exc}')
     finally:
         if server is not None:
-            if server.poll() is None:
-                try:
-                    server.send_signal(signal.SIGTERM)
-                except ProcessLookupError:
-                    pass  # It exited between poll and signal; wait below records its status.
-            try:
-                receipt['server_exit'] = server.wait(timeout=15)
-            except subprocess.TimeoutExpired:
-                server.kill()
-                receipt['errors'].append('server failed to close within 15 seconds')
-                try:
-                    receipt['server_exit'] = server.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    interrupted = CleanupFailure(f'server {server.pid} did not exit after kill')
-                    receipt['errors'].append(str(interrupted))
+            code, errors, pending = close_server(server)
+            receipt['server_exit'] = code
+            receipt['errors'].extend(errors)
+            if code is None:
+                interrupted = CleanupFailure(f'server {server.pid} did not exit after kill')
+            elif pending:
+                interrupted = RunnerInterrupted(f'signal during server close: {pending}')
+                receipt['errors'].append(str(interrupted))
             if receipt.get('server_exit') not in (None, 0):
                 receipt['errors'].append(f"checked server/owner close exit {receipt['server_exit']}")
     # This separate process opens the same DB, scans all keys and fields, explicitly

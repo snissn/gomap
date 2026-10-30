@@ -90,6 +90,31 @@ class LoadCountsTest(unittest.TestCase):
         self.assertEqual(len(started), 1)
         self.assertIsNotNone(started[0].returncode)
 
+    def test_signal_during_server_close_is_deferred_and_reaped(self):
+        code = ('import signal,sys,time\n'
+                'def close(sig, frame):\n time.sleep(.5); sys.exit(0)\n'
+                'signal.signal(signal.SIGTERM, close)\n'
+                'print("ready", flush=True)\n'
+                'while True: time.sleep(1)\n')
+        proc = subprocess.Popen([sys.executable, '-c', code], stdout=subprocess.PIPE, text=True,
+                                start_new_session=True)
+        self.assertEqual(proc.stdout.readline().strip(), 'ready')
+        timer = threading.Timer(.2, os.kill, args=(os.getpid(), signal.SIGTERM))
+        timer.start()
+        try:
+            exit_code, errors, pending = runner.close_server(proc)
+        finally:
+            timer.cancel()
+            timer.join()
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait(timeout=2)
+            proc.stdout.close()
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(errors, [])
+        self.assertEqual(pending, [signal.SIGTERM])
+        self.assertIsNotNone(proc.returncode)
+
 
 if __name__ == '__main__':
     unittest.main()
