@@ -176,7 +176,11 @@ func TestNativeOrdinaryGraphAcceptedAcrossCapturedManifestBuild(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer old.Close()
+			defer func() {
+				if err := old.Close(); err != nil {
+					t.Error(err)
+				}
+			}()
 			if old.capture.NativeAllocator().(*memtable.COWBudget).Limits() != memtable.DefaultCOWLimits() {
 				t.Fatal("INVALID_WITNESS changed finite limits")
 			}
