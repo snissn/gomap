@@ -259,8 +259,10 @@ source bindings, recipes, and limitations. The opt-in
 client protocol overlay, checks public load counts and checked server close,
 then verifies every expected key on a fresh reopen; see its accompanying
 documentation for nondeterminism and the historical client-close limitation.
-`TestCOWNativewireJSONDurableACKRecovery` exits the owner process without close
-after synced ACKs and verifies the recovered documents.
+`TestCOWNativewireJSONSyncedACKProcessExitRecovery` exits the owner process without
+close after synced ACKs and verifies the recovered documents. It covers process
+exit recovery; it does not independently witness the checkpoint sync completing
+before each reply.
 `TestCOWNativewireJSONDurableVisibleACKWALReplay` separately observes replay of
 unapplied command WAL frames after ordinary durable-profile visible ACKs and an
 unclean exit. The wire and owner checkpoint error-propagation tests exercise

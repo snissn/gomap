@@ -12079,6 +12079,9 @@ func (c *Collection) InsertBatchWithCommandWALIntent(ids, documents [][]byte, tr
 // InsertBatch or InsertBatchValidatedBSON.
 func (c *Collection) NativewireInsertBatchNoResultIDs(ids, documents [][]byte, trustedValidBSON bool) error {
 	if c != nil && c.nativeJSON != nil {
+		if trustedValidBSON && normalizedDocumentFormat(c.meta.Options.DocumentFormat) != DocumentFormatBSON {
+			return errors.New("collections: trusted BSON insert requires BSON document format")
+		}
 		_, err := c.nativeInsertBatchWithResultIDs(ids, documents, nil, nil, false)
 		return err
 	}
