@@ -121,7 +121,7 @@ class CompareTests(unittest.TestCase):
             self.save(self.directory/(prefix+".evidence")/"owner.checkpoint.json",proof)
             receipt["owner_checkpoint"]=proof
         self.save(self.directory/(stem+".close.json"),receipt)
-        self.save(self.directory/(stem+".launch.json"),dict(process=dict(self.process,pid=4321),campaign_id=self.manifest["campaign_id"],phase_id=stem,exit_code=0,timeout_seconds=180,cleanup_timeout_seconds=10,outer_timeout_seconds=220,timed_out=False,start_utc=receipt["started_utc"],end_utc=receipt["ended_utc"],receipt_sha256=COMPARE.digest(self.directory/(stem+".close.json"))))
+        self.save(self.directory/(stem+".launch.json"),dict(schema_version=1,process=dict(self.process,pid=4321),campaign_id=self.manifest["campaign_id"],phase_id=stem,exit_code=0,timeout_seconds=180,cleanup_timeout_seconds=10,outer_timeout_seconds=220,timed_out=False,start_utc=receipt["started_utc"],end_utc=receipt["ended_utc"],receipt_sha256=COMPARE.digest(self.directory/(stem+".close.json"))))
 
     @staticmethod
     def save(path, value):
@@ -314,7 +314,13 @@ class CompareTests(unittest.TestCase):
     def test_shell_hanging_phase_deadline_cleans_client_and_server(self):
         self.exercise_shell_cleanup(ready=True,hang=True)
 
-    def exercise_shell_cleanup(self, ready, hang=False):
+    def test_shell_requires_owner_observation_after_tcp_and_cleans_missing_owner(self):
+        self.exercise_shell_cleanup(ready=True,owner_ready="missing")
+
+    def test_shell_rejects_stale_owner_before_client_and_cleans_service(self):
+        self.exercise_shell_cleanup(ready=True,owner_ready="stale")
+
+    def exercise_shell_cleanup(self, ready, hang=False, owner_ready="matching"):
         # Offline dependency stubs exercise launcher dispatch without a product DB.
         tools = self.out / "offline-tools"
         tools.mkdir()
@@ -359,8 +365,38 @@ int main(int argc,char **argv) {
         execution = self.out / "execution"
         environment = os.environ.copy()
         environment.update(PATH=str(tools)+os.pathsep+environment["PATH"], GOMAXPROCS="1", PARSE_ONLY="false", BUILD="false", BUILD_GOYCSB="false", OUT_DIR=str(execution), TARGETS="treedb_native", MONGODB_MODE="skip", TREEDB_NATIVE_DOCUMENT_FORMAT="json", TREEDB_NATIVE_SERVER_BIN=str(server), TREEDB_MONGO_GATEWAY_BIN=str(tools/"must-not-launch"), NATIVE_ADDR=f"127.0.0.1:{port}", CLIENT_BUILD_MANIFEST=str(build_path), SERVER_BUILD_MANIFEST=str(server_build_path), GOYCSB_DIR=str(tools), GOYCSB_BIN=str(client), FIXTURE_BIN=str(client), READINESS_TIMEOUT="1", PHASE_TIMEOUT_SECONDS="1", CHILD_CLEANUP_TIMEOUT_SECONDS="1")
-        outcome = subprocess.run(["bash", str(ROOT / "ycsb_compare_mongodb_treedb.sh")],env=environment,text=True,capture_output=True,timeout=20)
-        self.assertEqual(outcome.returncode,(124 if hang else 37) if ready else 1,outcome.stderr)
+        # The offline service binds TCP first; a separate synthetic observer
+        # supplies actual proc/data identities later, without running a product DB.
+        import threading,time
+        writer_errors=[]
+        def publish_owner():
+            if not ready or owner_ready=="missing":return
+            try:
+                deadline=time.monotonic()+5
+                while True:
+                    try:
+                        observed_launch=COMPARE.read(execution/"treedb_native/server.launch.json")
+                        COMPARE.process(observed_launch["process"])
+                        break
+                    except (OSError,ValueError,KeyError,TypeError):
+                        if time.monotonic()>=deadline:raise TimeoutError("offline launch identity missing")
+                        time.sleep(.01)
+                time.sleep(.2)
+                data=pathlib.Path(observed_launch["data_dir"]).stat()
+                value=dict(schema_version=1,kind="live_owner_observation",owner_id="1"*32,process=observed_launch["process"],data_dir=observed_launch["data_dir"],data_device=data.st_dev,data_inode=data.st_ino,profile=self.manifest["profile"],backend="cow",capture_error="",observed_gomaxprocs=1,stats={"treedb.profile.resolved":self.manifest["profile"],"treedb.cache.memtable_mode":"cow_btree","treedb.cache.cow.txn.logical_seq":"0"},observed_utc=COMPARE.now())
+                if owner_ready=="stale":value["process"]["start_ticks"]+=1
+                evidence=execution/"treedb_native/server.evidence/owner.open.json"
+                temp=evidence.with_suffix(".pending");self.save(temp,value);os.replace(temp,evidence)
+            except BaseException as error:writer_errors.append(error)
+        writer=threading.Thread(target=publish_owner)
+        writer.start()
+        try:outcome = subprocess.run(["bash", str(ROOT / "ycsb_compare_mongodb_treedb.sh")],env=environment,text=True,capture_output=True,timeout=20)
+        finally:writer.join(timeout=6)
+        self.assertFalse(writer.is_alive())
+        self.assertEqual(writer_errors,[])
+        expected=(124 if hang else 37) if ready else 1
+        if ready and owner_ready!="matching":expected=3
+        self.assertEqual(outcome.returncode,expected,outcome.stderr)
         launch = json.loads((execution/"treedb_native/server.launch.json").read_text())
         self.assertFalse(pathlib.Path(f"/proc/{launch['process']['pid']}").exists())
         self.assertEqual(json.loads((execution/"treedb_native/server.exit.json").read_text())["exit_code"],0)
@@ -368,6 +404,17 @@ int main(int argc,char **argv) {
             self.assertIn("timed out waiting",outcome.stderr)
             self.assertFalse(client_marker.exists())
             return
+        if owner_ready!="matching":
+            self.assertFalse(client_marker.exists())
+            failure=COMPARE.read(execution/"treedb_native/server.readiness.failure.json")
+            self.assertEqual(failure["kind"],"owner_readiness_failure")
+            self.assertFalse((execution/"treedb_native/server.ready.json").exists())
+            return
+        readiness=COMPARE.read(execution/"treedb_native/server.ready.json")
+        observation=COMPARE.read(execution/"treedb_native/server.evidence/owner.open.json")
+        self.assertGreaterEqual(COMPARE.timestamp(readiness["ready_utc"]),COMPARE.timestamp(observation["observed_utc"]))
+        client_launch=COMPARE.read(execution/"treedb_native/load.launch.json")
+        self.assertGreaterEqual(COMPARE.timestamp(client_launch["start_utc"]),COMPARE.timestamp(readiness["ready_utc"]))
         self.assertTrue(json.loads(marker.read_text())["env_unset"])
         child = json.loads(client_marker.read_text())
         self.assertTrue(child["env_unset"])
@@ -600,7 +647,7 @@ int main(int argc,char **argv) {
 
     def test_checkpoint_copy_comparison_preserves_json_number_types(self):
         self.change("snapshot_preclose.close.json",lambda v:v["owner_checkpoint"]["owner"].update(data_inode=21.0))
-        self.check(False,"raw/client/request mismatch")
+        self.check(False,"data directory inode")
 
     def test_executable_hash_ignores_read_atime_but_rejects_stable_identity_changes(self):
         from types import SimpleNamespace
@@ -886,6 +933,197 @@ int main(int argc,char **argv) {
         self.assertEqual(failure["cleanup"]["method"],"no-child-created")
         self.assertIn("injected spawn failure",failure["error"])
         self.assertFalse((self.directory/"spawn-failure.close.json").exists())
+
+    def test_submicrosecond_measured_phase_overlap_rejected_with_valid_call_bounds(self):
+        # Both runs have valid receipt intervals, and their maximum end precedes
+        # checkpoint. Only their actual overlap makes this packet invalid.
+        half="2026-10-29T00:00:04.000000900Z"
+        self.change("run_1.launch.json",lambda v:v.update(end_utc=half))
+        checkpoint=call_result(4,5)
+        checkpoint.update(start_utc=half,elapsed_ns=999_999_100)
+        self.change("snapshot_preclose.close.json",lambda v:v.update(started_utc=half,checkpoint=checkpoint))
+        self.change("snapshot_preclose.launch.json",lambda v:v.update(start_utc=half))
+        self.change("lifecycle.json",lambda v:v.update(checkpoint=checkpoint))
+        proof=COMPARE.read(self.directory/"server.evidence/owner.checkpoint.json")
+        point=call_result(4,4);point.update(start_utc=half,end_utc=half)
+        proof.update(result=checkpoint,collections_flush_all=point,backend_checkpoint=checkpoint)
+        proof["owner"]["observed_utc"]=half
+        self.save(self.directory/"server.evidence/owner.checkpoint.json",proof)
+        self.change("snapshot_preclose.close.json",lambda v:v.update(owner_checkpoint=proof))
+        self.manifest["run_repeats"]=2
+        self.save(self.out/"manifest.json",self.manifest)
+        for suffix in (".out",".close.json",".launch.json"):
+            shutil.copyfile(self.directory/("run_1"+suffix),self.directory/("run_2"+suffix))
+        phase_id="offline-test-only:run_2"
+        self.change("run_2.launch.json",lambda v:v.update(phase_id=phase_id))
+        self.change("run_2.close.json",lambda v:v.update(phase_id=phase_id))
+        for name in ("runtime.json","lifecycle.json"):
+            self.change(name,lambda v:v["phase_ids"].append(phase_id))
+        self.check(False,"measured phases overlap/out of order")
+        point=call_result(4,4);point.update(start_utc=half,end_utc=half)
+        self.change("run_2.close.json",lambda v:v.update(db_close=point,workload_close=point))
+        self.change("run_2.launch.json",lambda v:v.update(start_utc=half))
+        self.check(True)
+
+    def reject_mutations(self, changes, message=None):
+        """Mutate retained copies and recompute real helper/phase receipt hashes."""
+        originals={}
+        try:
+            for path,mutate in changes:
+                path=pathlib.Path(path)
+                originals.setdefault(path,path.read_bytes())
+                value=json.loads(path.read_text());mutate(value);self.save(path,value)
+            for path in list(originals):
+                if path.parent==self.directory and path.name.endswith(".close.json"):
+                    launch=path.with_name(path.name[:-11]+".launch.json")
+                    originals.setdefault(launch,launch.read_bytes())
+                    value=json.loads(launch.read_text());value["receipt_sha256"]=COMPARE.digest(path);self.save(launch,value)
+            self.check(False,message)
+        finally:
+            for path,original in originals.items():path.write_bytes(original)
+
+    def test_every_process_replica_rejects_equal_float_and_numeric_bool(self):
+        replicas=[]
+        for prefix in ("server","reopened","fixture-write","fixture-reopened"):
+            replicas += [(self.directory/(prefix+suffix),("process",)) for suffix in (".launch.json",".exit.json")]
+            replicas += [(self.directory/(prefix+".evidence")/name,("process",)) for name in ("owner.open.json","owner.before-close.json","owner.close.json")]
+        replicas += [(self.directory/name,("process",)) for name in ("runtime.json","lifecycle.json","load.launch.json","run_1.launch.json","snapshot_loaded.launch.json","snapshot_preclose.launch.json","snapshot_reopened.launch.json","fixture_write.launch.json","fixture_verify.launch.json")]
+        replicas += [(self.directory/"lifecycle.json",("reopened_process",))]
+        for prefix,stem in (("server","snapshot_preclose"),("fixture-write","fixture_write")):
+            replicas += [(self.directory/(prefix+".evidence/owner.checkpoint.json"),("owner","process")),(self.directory/(prefix+".evidence/owner.checkpoint.json"),("request","client")),(self.directory/(prefix+".evidence/owner.checkpoint-request.json"),("client",)),(self.directory/(stem+".close.json"),("owner_checkpoint","owner","process")),(self.directory/(stem+".close.json"),("owner_checkpoint","request","client"))]
+        for path,keys in replicas:
+            for key in ("pid","start_ticks","gomaxprocs_unset"):
+                def mutate(value,keys=keys,key=key):
+                    for part in keys:value=value[part]
+                    value[key]=1 if key=="gomaxprocs_unset" else float(value[key])
+                with self.subTest(path=path.name,keys=keys,key=key):self.reject_mutations([(path,mutate)])
+        self.check(True)
+
+    def test_exit_pid_schema_and_contract_scalars_are_exact_integers(self):
+        fields=[(self.out/"manifest.json",("lifecycle_contract",)),(self.out/"manifest.json",("client","schema_version")),(self.out/"manifest.json",("fixture","schema_version")),(self.out/"manifest.json",("server_builds",self.target,"schema_version")),(self.out/"manifest.json",("schema_version",)),(self.out/"client-build.json",("schema_version",)),(self.out/"server-build.json",("schema_version",)),(self.out/"server-build.json",("servers",self.target,"schema_version")),(self.directory/"lifecycle.json",("server_exit_code",))]
+        for name in ("runtime.json","lifecycle.json"):fields.append((self.directory/name,("schema_version",)))
+        for stem in ("load","run_1","snapshot_loaded","snapshot_preclose","snapshot_reopened","fixture_write","fixture_verify"):
+            fields += [(self.directory/(stem+".launch.json"),("schema_version",)),(self.directory/(stem+".launch.json"),("exit_code",)),(self.directory/(stem+".close.json"),("schema_version",))]
+            if stem not in ("load","run_1"):fields.append((self.directory/(stem+".close.json"),("pid",)))
+        for prefix in ("server","reopened","fixture-write","fixture-reopened"):
+            fields.append((self.directory/(prefix+".exit.json"),("exit_code",)))
+            fields += [(self.directory/(prefix+".evidence")/name,("schema_version",)) for name in ("owner.open.json","owner.before-close.json","owner.close.json")]
+        for prefix,stem in (("server","snapshot_preclose"),("fixture-write","fixture_write")):
+            fields += [(self.directory/(prefix+".evidence")/name,("schema_version",)) for name in ("owner.checkpoint-control.json","owner.checkpoint-request.json","owner.checkpoint.json")]
+            fields += [(self.directory/(stem+".close.json"),("owner_checkpoint","schema_version")),(self.directory/(stem+".close.json"),("owner_checkpoint","owner","schema_version")),(self.directory/(stem+".close.json"),("owner_checkpoint","request","schema_version")),(self.directory/(prefix+".evidence/owner.checkpoint.json"),("owner","schema_version")),(self.directory/(prefix+".evidence/owner.checkpoint.json"),("request","schema_version"))]
+        for path,keys in fields:
+            for as_bool in (False,True):
+                def mutate(value,keys=keys,as_bool=as_bool):
+                    for part in keys[:-1]:value=value[part]
+                    value[keys[-1]]=bool(value[keys[-1]]) if as_bool else float(value[keys[-1]])
+                with self.subTest(path=path.name,keys=keys,as_bool=as_bool):self.reject_mutations([(path,mutate)])
+        self.check(True)
+
+    def test_shared_loader_and_serializers_reject_nonfinite_and_duplicate_json(self):
+        import ycsb_correctness_validate as exact
+        path=self.out/"strict-json-control.json"
+        for text in ('{"x":NaN}','{"x":Infinity}','{"x":-Infinity}','{"x":1e999}','{"x":1,"x":1}'):
+            path.write_text(text)
+            for reader in (COMPARE.read,exact.read):
+                with self.assertRaises(ValueError):reader(path)
+        for bad in (float("nan"),float("inf"),float("-inf")):
+            with self.assertRaises(ValueError):COMPARE.same({"x":bad},{"x":bad})
+        self.assertFalse(COMPARE.same({"x":True},{"x":1}))
+        self.assertFalse(COMPARE.same({"x":1},{"x":1.0}))
+        self.assertTrue(COMPARE.same({"a":1,"b":True},{"b":True,"a":1}))
+
+    def test_all_owner_observation_integer_types_are_strict(self):
+        replicas=[(self.directory/(prefix+".evidence")/name,()) for prefix in ("server","reopened","fixture-write","fixture-reopened") for name in ("owner.open.json","owner.before-close.json")]
+        for prefix,stem in (("server","snapshot_preclose"),("fixture-write","fixture_write")):
+            replicas += [(self.directory/(prefix+".evidence/owner.checkpoint.json"),("owner",)),(self.directory/(stem+".close.json"),("owner_checkpoint","owner"))]
+        for path,keys in replicas:
+            for field in ("data_device","data_inode","observed_gomaxprocs"):
+                def mutate(value,keys=keys,field=field):
+                    for key in keys:value=value[key]
+                    value[field]=float(value[field])
+                self.reject_mutations([(path,mutate)])
+        self.check(True)
+
+    def test_checkpoint_aggregate_results_and_matching_malformed_copies(self):
+        for prefix,stem in (("server","snapshot_preclose"),("fixture-write","fixture_write")):
+            receipt=self.directory/(stem+".close.json")
+            for field in ("attempted","success","elapsed_ns"):
+                def aggregate(value,field=field):value["checkpoint"][field]=float(value["checkpoint"][field]) if field=="elapsed_ns" else 1
+                self.reject_mutations([(receipt,aggregate)])
+                for result_name in ("result","collections_flush_all","backend_checkpoint"):
+                    def raw(value,field=field,name=result_name):value[name][field]=float(value[name][field]) if field=="elapsed_ns" else 1
+                    def embedded(value,mutate=raw):mutate(value["owner_checkpoint"])
+                    self.reject_mutations([(self.directory/(prefix+".evidence/owner.checkpoint.json"),raw),(receipt,embedded)])
+            # Every request copy agrees on malformed client integers: agreement
+            # must not substitute for independent schema validation.
+            for field in ("pid","start_ticks","gomaxprocs_unset"):
+                def request(value,field=field):value["client"][field]=1 if field=="gomaxprocs_unset" else float(value["client"][field])
+                self.reject_mutations([(self.directory/(prefix+".evidence/owner.checkpoint-request.json"),request),(self.directory/(prefix+".evidence/owner.checkpoint.json"),lambda v,f=request:f(v["request"])),(receipt,lambda v,f=request:f(v["owner_checkpoint"]["request"]))])
+        self.check(True)
+
+    def test_whole_build_and_result_copy_comparison_preserves_types(self):
+        # Unspecified build metadata is still part of the exact accepted copy.
+        for name in ("client-build.json","server-build.json"):
+            if name=="client-build.json":
+                files=[(self.out/"manifest.json",lambda v:v["client"].update(copy_marker=1)),(self.out/name,lambda v:v.update(copy_marker=1.0))]
+            else:
+                files=[(self.out/"manifest.json",lambda v:v["server_builds"][self.target].update(copy_marker=1)),(self.out/name,lambda v:v["servers"][self.target].update(copy_marker=1.0))]
+            self.reject_mutations(files,"build manifest mismatch")
+        # Matching malformed schemas must fail independently as well.
+        self.reject_mutations([(self.out/"manifest.json",lambda v:v["client"].update(schema_version=True)),(self.out/"client-build.json",lambda v:v.update(schema_version=True))])
+        self.reject_mutations([(self.out/"manifest.json",lambda v:v["server_builds"][self.target].update(schema_version=True)),(self.out/"server-build.json",lambda v:v["servers"][self.target].update(schema_version=True))])
+        for name,key in (("checkpoint","checkpoint"),("server_close","server_close")):
+            self.reject_mutations([(self.directory/"lifecycle.json",lambda v,k=key:v[k].update(success=1))])
+        self.check(True)
+
+    def test_nonfinite_json_and_numeric_owner_stats_are_rejected(self):
+        files=[(self.directory/(prefix+".evidence")/name,()) for prefix in ("server","reopened","fixture-write","fixture-reopened") for name in ("owner.open.json","owner.before-close.json")]
+        files += [(self.directory/"server.evidence/owner.checkpoint.json",("owner",)),(self.directory/"fixture-write.evidence/owner.checkpoint.json",("owner",)),(self.directory/"snapshot_preclose.close.json",("owner_checkpoint","owner")),(self.directory/"fixture_write.close.json",("owner_checkpoint","owner"))]
+        for path,keys in files:
+            for bad in (float("nan"),float("inf"),float("-inf"),1):
+                def mutate(value,keys=keys,bad=bad):
+                    for key in keys:value=value[key]
+                    value["stats"]["unused_counter"]=bad
+                self.reject_mutations([(path,mutate)])
+        for bad in (float("nan"),float("inf"),float("-inf")):
+            self.reject_mutations([(self.out/"client-build.json",lambda v,b=bad:v.update(extra=b))])
+        self.check(True)
+
+    def test_exact_nanoseconds_and_elapsed_tolerance(self):
+        first="2026-10-29T00:00:04.000000100Z";last="2026-10-29T00:00:04.000000900Z"
+        self.assertEqual(COMPARE.timestamp(last)-COMPARE.timestamp(first),800)
+        self.assertIs(type(COMPARE.timestamp(first)),int)
+        reversed_result=dict(attempted=True,success=True,error="",start_utc=last,end_utc=first,elapsed_ns=0)
+        with self.assertRaisesRegex(ValueError,"duration"):COMPARE.result(reversed_result,"reversed")
+        tolerated=dict(reversed_result,start_utc=first,end_utc=last,elapsed_ns=800+2_000_000)
+        COMPARE.result(tolerated,"documented wall-vs-monotonic tolerance")
+        with self.assertRaisesRegex(ValueError,"inconsistent"):
+            COMPARE.result(dict(tolerated,elapsed_ns=800+2_000_001),"outside tolerance")
+        for bad in ("2026-10-29T00:00:04.0000000001Z","2026-10-29T00:00:04+00:00"):
+            with self.assertRaises(ValueError):COMPARE.timestamp(bad)
+
+    def test_nanosecond_timestamp_copies_and_lifetimes_fail_closed(self):
+        for key,value in (("preclose_state_utc","2026-10-29T00:00:05.000000001Z"),("reopened_state_utc","2026-10-29T00:00:08.000000001Z"),("reopened_state_utc","2026-10-29T00:00:08.000000000Z")):
+            self.reject_mutations([(self.directory/"lifecycle.json",lambda v,k=key,t=value:v.update({k:t}))])
+        self.reject_mutations([(self.directory/"lifecycle.json",lambda v:v["reopen"].update(end_utc="2026-10-29T00:00:06.000000001Z"))],"reopen bounds")
+        self.reject_mutations([(self.directory/"server.evidence/owner.open.json",lambda v:v.update(observed_utc="2026-10-29T00:00:00.000000001Z"))],"outside complete observed owner lifetime")
+        self.reject_mutations([(self.directory/"server.evidence/owner.before-close.json",lambda v:v.update(observed_utc="2026-10-29T00:00:04.999999999Z"))],"outside complete observed owner lifetime")
+        self.check(True)
+
+    def test_checkpoint_submicrosecond_flush_ordering_is_not_rounded(self):
+        def mutate(value):
+            value["collections_flush_all"].update(end_utc="2026-10-29T00:00:04.000000900Z",elapsed_ns=900)
+            value["backend_checkpoint"].update(start_utc="2026-10-29T00:00:04.000000100Z",elapsed_ns=999_999_900)
+        for prefix,stem in (("server","snapshot_preclose"),("fixture-write","fixture_write")):
+            # Native fixture timestamps are 11..12; keep this packet's calls
+            # otherwise valid by shifting the same 800ns reversal to that second.
+            def at_owner(value,prefix=prefix):
+                mutate(value)
+                if prefix=="fixture-write":
+                    value["collections_flush_all"].update(end_utc="2026-10-29T00:00:11.000000900Z")
+                    value["backend_checkpoint"].update(start_utc="2026-10-29T00:00:11.000000100Z")
+            self.reject_mutations([(self.directory/(prefix+".evidence/owner.checkpoint.json"),at_owner),(self.directory/(stem+".close.json"),lambda v,f=at_owner:f(v["owner_checkpoint"]))],"ordering")
+        self.check(True)
 
     def test_launcher_rejects_reused_receipt_and_propagates_error(self):
         command = [sys.executable, str(ROOT / "ycsb_compare_validate.py"), "launch", str(self.directory), "load", "--", "/bin/true"]

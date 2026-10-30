@@ -22,6 +22,8 @@ import sys
 import time
 import uuid
 
+from ycsb_evidence_json import read, same
+
 PRODUCER = "3c8148495b8d4490cf0ec30e9eb92d14a7a71bac"
 TARGETS = ("treedb_native", "treedb_mongo", "mongodb")
 NUM = r"[0-9]+(?:\.[0-9]+)?"
@@ -35,7 +37,7 @@ def require(condition, message):
 
 
 def schema(value):
-    return type(value.get("schema_version")) is int and value["schema_version"] == 1
+    return isinstance(value,dict) and type(value.get("schema_version")) is int and value["schema_version"] == 1
 
 
 def digest(path):
@@ -46,29 +48,20 @@ def digest(path):
         return value.hexdigest()
 
 
-def unique_object(pairs):
-    result = {}
-    for key, value in pairs:
-        require(key not in result, f"duplicate JSON key {key}")
-        result[key] = value
-    return result
-
-
-def read(path):
-    with open(path, encoding="utf-8") as stream:
-        return json.load(stream, object_pairs_hook=unique_object)
-
-
 def write_new(path, value):
     with open(path, "x", encoding="utf-8") as stream:
-        json.dump(value, stream, indent=2)
+        json.dump(value, stream, indent=2, allow_nan=False)
         stream.write("\n")
 
 
 def timestamp(value):
-    require(isinstance(value, str) and value.endswith("Z") and not value.startswith("0001"), "invalid UTC timestamp")
-    value = re.sub(r"(\.\d{6})\d+(?=Z$)", r"\1", value)
-    return dt.datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    """Exact UTC nanoseconds; chronology never rounds through float seconds."""
+    require(isinstance(value,str), "invalid UTC timestamp")
+    match=re.fullmatch(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.([0-9]{1,9}))?Z",value)
+    require(match is not None and not value.startswith("0001"), "invalid UTC timestamp")
+    wall=dt.datetime.fromisoformat(match[1]).replace(tzinfo=dt.timezone.utc)
+    delta=wall-dt.datetime(1970,1,1,tzinfo=dt.timezone.utc)
+    return (delta.days*86400+delta.seconds)*1_000_000_000+int((match[2] or "").ljust(9,"0"))
 
 
 def now():
@@ -78,21 +71,64 @@ def now():
 def result(value, label, timed=True, bounds=None):
     require(isinstance(value, dict), f"missing {label}")
     require(value.get("attempted") is True and value.get("success") is True and value.get("error") == "", f"failed/skipped {label}")
+    elapsed = value["elapsed_ns"]
+    require(type(elapsed) is int and elapsed >= 0, f"invalid {label} duration")
+    if not timed:
+        require(value["start_utc"] == value["end_utc"] == "0001-01-01T00:00:00Z" and elapsed == 0, f"invalid untimed {label}")
     if timed:
         start, end = timestamp(value["start_utc"]), timestamp(value["end_utc"])
-        elapsed = value["elapsed_ns"]
-        require(type(elapsed) is int and elapsed >= 0 and start <= end, f"invalid {label} duration")
-        require(abs((end-start)*1e9-elapsed) <= 2_000_000, f"inconsistent {label} duration")
+        require(start <= end, f"invalid {label} duration")
+        require(abs(end-start-elapsed) <= 2_000_000, f"inconsistent {label} duration")
         if bounds:
             require(bounds[0] <= start <= end <= bounds[1], f"stale/out-of-order {label}")
         return start, end
 
 
 def process(value):
+    require(isinstance(value,dict), "missing process object")
     require(type(value.get("pid")) is int and value["pid"] > 0, "missing child PID")
     require(type(value.get("start_ticks")) is int and value["start_ticks"] > 0, "missing child start identity")
     require(SHA.fullmatch(value.get("exe_sha256", "")), "missing observed ELF hash")
     require(value.get("gomaxprocs_unset") is True, "child GOMAXPROCS was not unset")
+
+
+def exit_success(value,label):
+    require(type(value) is int and value == 0,label)
+
+
+def client_build(value):
+    require(schema(value), "unsupported client build schema")
+    require(value["producer_commit"] == PRODUCER and isinstance(value["source_commit"],str) and re.fullmatch(r"[0-9a-f]{40}",value["source_commit"]), "unbound producer source")
+    for key in ("exe_sha256","source_patch_sha256"):
+        require(isinstance(value[key],str) and SHA.fullmatch(value[key]),"missing client build hash")
+    require(all(isinstance(value[key],str) and value[key] for key in ("build_id","toolchain","compatibility_configuration")),"incomplete client build binding")
+
+
+def server_build(value,target):
+    require(schema(value) and isinstance(value["version"],str) and value["version"],"missing server version binding")
+    require(isinstance(value["source_commit"],str) and re.fullmatch(r"[0-9a-f]{40}",value["source_commit"]),"missing server source binding")
+    require(all(isinstance(value[key],str) and SHA.fullmatch(value[key]) for key in ("exe_sha256","source_patch_sha256")),"missing server source/ELF hash")
+    require(value["expected_owner"] in ({"mongodb"} if target=="mongodb" else {"legacy","cow"}),"invalid expected owner")
+
+
+def observation(value,build,profile):
+    require(schema(value) and value["kind"]=="live_owner_observation","missing raw live owner observation")
+    process(value["process"])
+    require(isinstance(value["data_dir"],str) and pathlib.Path(value["data_dir"]).is_absolute(),"missing canonical data directory")
+    require(type(value["data_device"]) is int and value["data_device"]>=0 and type(value["data_inode"]) is int and value["data_inode"]>0,"missing data directory inode")
+    require(isinstance(value["owner_id"],str) and re.fullmatch(r"[0-9a-f]{32}",value["owner_id"]),"missing actual owner token")
+    require(type(value["observed_gomaxprocs"]) is int and value["observed_gomaxprocs"]>0,"missing observed runtime GOMAXPROCS")
+    stats=value["stats"]
+    require(isinstance(stats,dict) and all(isinstance(k,str) and isinstance(v,str) for k,v in stats.items()),"owner stats must map strings to strings")
+    require(value["profile"]==profile and stats["treedb.profile.resolved"]==profile,"actual owner profile mismatch")
+    require(value["backend"]==build["expected_owner"],"actual raw backend mismatch")
+    if build["expected_owner"]=="cow":
+        require(value["capture_error"]=="" and stats["treedb.cache.memtable_mode"]=="cow_btree","missing actual COW capture/cache evidence")
+        seq=stats["treedb.cache.cow.txn.logical_seq"]
+        require(re.fullmatch(r"[0-9]+",seq) is not None and int(seq)<1<<64,"missing actual COW sequence")
+    else:
+        require(build["expected_owner"]=="legacy" and value["capture_error"]=="treedb: command kind has no native semantic preparation","missing actual legacy observation")
+    timestamp(value["observed_utc"])
 
 
 def parse_log(path):
@@ -127,12 +163,14 @@ def phase_evidence(directory, stem, target, manifest):
     launch = read(directory / f"{stem}.launch.json")
     receipt_path = directory / f"{stem}.close.json"
     receipt = read(receipt_path)
+    require(schema(launch), "unsupported phase launch schema")
     process(launch["process"])
     positive_timeout(launch["timeout_seconds"],"recorded phase timeout")
-    require(launch["timeout_seconds"] == manifest["deadlines"]["phase_seconds"] and launch["timed_out"] is False and launch["cleanup_timeout_seconds"] == manifest["deadlines"]["cleanup_seconds"] and launch["outer_timeout_seconds"] == manifest["deadlines"]["phase_outer_seconds"], "phase deadline binding mismatch")
+    require(same(launch["timeout_seconds"],manifest["deadlines"]["phase_seconds"]) and launch["timed_out"] is False and same(launch["cleanup_timeout_seconds"],manifest["deadlines"]["cleanup_seconds"]) and same(launch["outer_timeout_seconds"],manifest["deadlines"]["phase_outer_seconds"]), "phase deadline binding mismatch")
     client = manifest["client"]
     require(launch["process"]["exe_sha256"] == client["exe_sha256"], "client ELF mismatch")
-    require(launch["exit_code"] == 0 and launch.get("timed_out") is not True and not (directory/f"{stem}.failure.json").exists(), "client exit failure or launcher timeout/failure")
+    exit_success(launch["exit_code"],"client exit failure or launcher timeout/failure")
+    require(launch.get("timed_out") is not True and not (directory/f"{stem}.failure.json").exists(), "client exit failure or launcher timeout/failure")
     require(launch["output_sha256"] == digest(directory / f"{stem}.out"), "stdout hash mismatch")
     require(launch["receipt_sha256"] == digest(receipt_path), "receipt hash mismatch")
     require(launch["campaign_id"] == manifest["campaign_id"], "stale launcher campaign")
@@ -165,7 +203,10 @@ def server_evidence(directory, target, manifest, phase_ids):
     process(launch["process"])
     build = manifest["server_builds"][target]
     server_manifest = read(directory.parent / "server-build.json")
-    require(schema(server_manifest) and server_manifest["servers"][target] == build, "server build manifest mismatch")
+    require(schema(server_manifest), "server build manifest mismatch")
+    server_build(build,target)
+    server_build(server_manifest["servers"][target],target)
+    require(same(server_manifest["servers"][target],build), "server build manifest mismatch")
     require(schema(build) and isinstance(build["version"], str) and build["version"], "missing server version binding")
     require(re.fullmatch(r"[0-9a-f]{40}", build["source_commit"]), "missing server source binding")
     require(SHA.fullmatch(build["exe_sha256"]) and launch["process"]["exe_sha256"] == build["exe_sha256"], "server ELF binding mismatch")
@@ -174,15 +215,16 @@ def server_evidence(directory, target, manifest, phase_ids):
         require(evidence["version"] == build["version"] and evidence["source_commit"] == build["source_commit"], "server version/source mismatch")
         require(schema(evidence) and evidence["campaign_id"] == manifest["campaign_id"], "stale server evidence")
         require(evidence["target"] == target and evidence["profile"] == manifest["profile"] and evidence["format"] == manifest["formats"][target], "server settings mismatch")
-        require(evidence["process"] == launch["process"], "server process identity mismatch")
+        process(evidence["process"])
+        require(same(evidence["process"],launch["process"]), "server process identity mismatch")
         require(evidence["data_dir"] == launch["data_dir"] and pathlib.Path(evidence["data_dir"]).is_absolute(), "data directory mismatch")
         require(evidence["owner_id"] and evidence["owner_id"] == runtime["owner_id"], "owner mismatch")
-    require(runtime["phase_ids"] == phase_ids, "runtime phase identity mismatch")
+    require(same(runtime["phase_ids"],phase_ids), "runtime phase identity mismatch")
     require(type(runtime["observed_gomaxprocs"]) is int and runtime["observed_gomaxprocs"] > 0, "missing actual runtime GOMAXPROCS")
     require(runtime["backend"] == build["expected_owner"], "actual owner/backend does not match selected version")
     require(isinstance(runtime["observation"], str) and runtime["observation"], "missing runtime witness provenance")
-    require(lifecycle["phase_ids"] == phase_ids, "lifecycle phase identity mismatch")
-    require(lifecycle["server_exit_code"] == 0, "server close exit failure")
+    require(same(lifecycle["phase_ids"],phase_ids), "lifecycle phase identity mismatch")
+    exit_success(lifecycle["server_exit_code"], "server close exit failure")
     settled = max(timestamp(read(directory/(stem+".launch.json"))["end_utc"]) for stem in ["load"]+[f"run_{i}" for i in range(1,manifest["run_repeats"]+1)])
     checkpoint = result(lifecycle["checkpoint"], "checkpoint", bounds=(settled, float("inf")))
     closed = result(lifecycle["server_close"], "server_close", bounds=(checkpoint[1], float("inf")))
@@ -194,7 +236,9 @@ def server_evidence(directory, target, manifest, phase_ids):
     require(SHA.fullmatch(before) and before == after, "random state preservation mismatch")
     require(lifecycle["random_state_scope"] == "observed-state-preservation-only", "random-state scope missing")
     stopped = read(directory / "server.exit.json")
-    require(stopped["process"] == launch["process"] and stopped["exit_code"] == 0, "owned service cleanup failed")
+    process(stopped["process"])
+    exit_success(stopped["exit_code"],"owned service cleanup failed")
+    require(same(stopped["process"],launch["process"]), "owned service cleanup failed")
     import ycsb_compare_live
     ycsb_compare_live.validate(directory,target,manifest,lifecycle)
 
@@ -206,9 +250,10 @@ def validate(out):
     for key in ("recordcount", "operationcount", "threadcount", "run_repeats"):
         require(type(manifest[key]) is int and manifest[key] > 0, f"invalid {key}")
     client = manifest["client"]
-    require(client["producer_commit"] == PRODUCER and re.fullmatch(r"[0-9a-f]{40}", client["source_commit"]), "unbound producer source")
-    require(client["build_id"] and client["toolchain"] and client["compatibility_configuration"], "incomplete client build binding")
-    require(client == read(out / "client-build.json"), "client build manifest mismatch")
+    client_build(client)
+    copied_client=read(out/"client-build.json")
+    client_build(copied_client)
+    require(same(client,copied_client), "client build manifest mismatch")
     require(client["source_patch_sha256"] == digest(out / "client.patch"), "client patch mismatch")
     require((out / "client-buildinfo.txt").read_text().strip(), "missing actual client build info")
     require(SHA.fullmatch(manifest["client"]["exe_sha256"]), "missing client build hash")
@@ -246,7 +291,7 @@ def validate(out):
             errors.append(f"measured phases overlap/out of order: {previous[0]} and {current[0]}")
     status = "invalid" if errors else "validated-consumer-evidence"
     write_status = dict(schema_version=1, status=status, errors=errors, scope="Client receipts, original live owner calls, typed random preservation and separate deterministic fixture only; not full matrix or crash qualification")
-    (out / "validation.json").write_text(json.dumps(write_status, indent=2)+"\n")
+    (out / "validation.json").write_text(json.dumps(write_status, indent=2, allow_nan=False)+"\n")
     headers = ["target", "phase", "repeat", "operation", "count", "ops_per_sec", "avg_us", "p50_us", "p95_us", "p99_us", "p999_us", "max_us", "operation_error_count", "valid"]
     for row in rows:
         row["valid"] = "false" if errors else "true"
@@ -290,7 +335,7 @@ def observe(pid):
     identity = observe_core(pid)
     environment = pathlib.Path(f"/proc/{pid}/environ").read_bytes().split(b"\0")
     identity["gomaxprocs_unset"] = not any(item.startswith(b"GOMAXPROCS=") for item in environment)
-    require(observe_core(pid) == {key:identity[key] for key in ("pid","start_ticks","exe_sha256")}, "process changed during observation")
+    require(same(observe_core(pid),{key:identity[key] for key in ("pid","start_ticks","exe_sha256")}), "process changed during observation")
     return identity
 
 
@@ -302,10 +347,10 @@ def observe_owned(pid, data_dir, output, expected=None):
     while True:
         actual=observe_core(pid)
         require(actual["pid"] == pinned["pid"] and actual["start_ticks"] == pinned["start_ticks"], "owned launch start identity changed")
-        pathlib.Path(output).write_text(json.dumps(dict(process=actual,data_dir=data_dir))+"\n")
+        pathlib.Path(output).write_text(json.dumps(dict(process=actual,data_dir=data_dir),allow_nan=False)+"\n")
         if expected is None or actual["exe_sha256"] == expected:
             identity=observe(pid)
-            pathlib.Path(output).write_text(json.dumps(dict(process=identity,data_dir=data_dir))+"\n")
+            pathlib.Path(output).write_text(json.dumps(dict(process=identity,data_dir=data_dir),allow_nan=False)+"\n")
             return
         require(time.monotonic()<deadline,"owned executable never matched requested ELF; refusing clients")
         time.sleep(.01)
@@ -327,7 +372,7 @@ def terminate_owned(identity, timeout=10):
             if exited():
                 return
             actual = observe_core(identity["pid"])
-            require(actual == {key:identity[key] for key in ("pid","start_ticks","exe_sha256")}, "cleanup process identity mismatch; refusing signal")
+            require(same(actual,{key:identity[key] for key in ("pid","start_ticks","exe_sha256")}), "cleanup process identity mismatch; refusing signal")
             signal.pidfd_send_signal(descriptor, signum)
         checked_signal(signal.SIGTERM)
         if not select.select([descriptor], [], [], timeout)[0]:
@@ -452,7 +497,7 @@ def launch(args):
                 raise InterruptedError(f"launcher interrupted during startup by signals {startup_signals}")
             write_new(out / f"{stem}.cleanup.json",dict(pid=child.pid,pidfd_pinned=True))
             identity = observe_core(child.pid)
-            (out / f"{stem}.cleanup.json").write_text(json.dumps(dict(process=identity,pidfd_pinned=True))+"\n")
+            (out / f"{stem}.cleanup.json").write_text(json.dumps(dict(process=identity,pidfd_pinned=True),allow_nan=False)+"\n")
             identity = observe(child.pid)
             code = child.wait(timeout=max(0,deadline-time.monotonic()))
             if time.monotonic() > deadline:

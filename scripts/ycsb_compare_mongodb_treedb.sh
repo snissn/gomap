@@ -65,8 +65,9 @@ and rewrites summary.tsv, summary.md and validation.json. It does not start any
 service or mutate original input evidence; copy retained artifacts first.
 Missing/failed close, runtime/COW, checkpoint, close, reopen, observed-state or
 owned cleanup evidence causes a nonzero result. Contract2 requires original live owner observations and independent reopened
-process/owner plus canonical snapshots; Mongo checkpoint integration remains
-unsupported and fails closed. ALLOW_YCSB_ERRORS never makes errors valid.
+process/owner plus canonical snapshots. Gateway checkpoint uses the separate
+opt-in live-owner control; reference Mongo remains unsupported.
+ALLOW_YCSB_ERRORS never makes errors valid.
 
 MONGODB_MODE=docker starts an owned service; external services currently require
 an explicit process/ownership integration and are refused. skip excludes MongoDB.
@@ -122,7 +123,10 @@ for target in "${selected[@]}"; do mkdir "$OUT_DIR/$target"; done
 import hashlib, json, pathlib, re, subprocess, sys, uuid
 out, build_path, repo, binary, profile, records, ops, threads, repeats, native_format, mongo_format, server_build_path, native_binary, mongo_binary, fixture_binary, fixture_source, phase_timeout, helper_timeout, cleanup_timeout, *targets = sys.argv[1:]
 out = pathlib.Path(out)
-build = json.loads(pathlib.Path(build_path).read_text())
+sys.path.insert(0,str(pathlib.Path(fixture_source).parent))
+import ycsb_compare_validate as consumer
+build = consumer.read(build_path)
+consumer.client_build(build)
 def git(*args):
     return subprocess.check_output(['git', '-C', repo, *args])
 def sha(path):
@@ -138,14 +142,15 @@ patch = git('diff', '--binary', 'HEAD')
 if git('ls-files', '--others', '--exclude-standard').strip():
     raise SystemExit('client has untracked inputs; bind a clean/overlaid source tree first')
 source = git('rev-parse', 'HEAD').decode().strip()
-if not (build.get('schema_version') == 1 and build.get('producer_commit') == producer and build.get('source_commit') == source and build.get('source_patch_sha256') == hashlib.sha256(patch).hexdigest() and build.get('exe_sha256') == sha(binary) and build.get('build_id') and build.get('toolchain') and build.get('compatibility_configuration')):
+if not (consumer.schema(build) and build.get('producer_commit') == producer and build.get('source_commit') == source and build.get('source_patch_sha256') == hashlib.sha256(patch).hexdigest() and build.get('exe_sha256') == sha(binary) and build.get('build_id') and build.get('toolchain') and build.get('compatibility_configuration')):
     raise SystemExit('client source/overlay/ELF build manifest mismatch or incomplete binding')
-server_manifest = json.loads(pathlib.Path(server_build_path).read_text())
-if server_manifest.get('schema_version') != 1:
+server_manifest = consumer.read(server_build_path)
+if not consumer.schema(server_manifest):
     raise SystemExit('unsupported server build manifest')
 server_builds = {target: server_manifest['servers'][target] for target in targets}
 for target, record in server_builds.items():
-    if not (record.get('schema_version') == 1 and record.get('version') and re.fullmatch(r'[0-9a-f]{40}', record.get('source_commit','')) and record.get('expected_owner') in ({'mongodb'} if target == 'mongodb' else {'legacy','cow'})):
+    consumer.server_build(record,target)
+    if not (consumer.schema(record) and record.get('version') and re.fullmatch(r'[0-9a-f]{40}', record.get('source_commit','')) and record.get('expected_owner') in ({'mongodb'} if target == 'mongodb' else {'legacy','cow'})):
         raise SystemExit('incomplete version/source/owner server binding')
     binary_path = {'treedb_native':native_binary,'treedb_mongo':mongo_binary}.get(target)
     if binary_path and record.get('exe_sha256') != sha(binary_path):
@@ -159,14 +164,14 @@ for target, record in server_builds.items():
         if actual_source != record['source_commit'] or hashlib.sha256(overlay).hexdigest()!=record.get('source_patch_sha256'): raise SystemExit('server source/overlay mismatch')
         (out/target/'server-source.patch').write_bytes(overlay)
         (out/target/'server-buildinfo.txt').write_bytes(subprocess.check_output(['go','version','-m',binary_path]))
-(out / 'server-build.json').write_text(json.dumps(server_manifest,indent=2)+'\n')
+(out / 'server-build.json').write_text(json.dumps(server_manifest,indent=2,allow_nan=False)+'\n')
 (out / 'client.patch').write_bytes(patch)
-(out / 'client-build.json').write_text(json.dumps(build, indent=2)+'\n')
+(out / 'client-build.json').write_text(json.dumps(build, indent=2,allow_nan=False)+'\n')
 (out / 'client-buildinfo.txt').write_bytes(subprocess.check_output(['go', 'version', '-m', binary]))
 (out/'fixture-source.go').write_bytes(pathlib.Path(fixture_source).read_bytes())
 fixture=dict(schema_version=1,binary=fixture_binary,exe_sha256=sha(fixture_binary),source_sha256=sha(fixture_source))
 manifest = dict(schema_version=1, lifecycle_contract=2, deadlines=dict(phase_seconds=int(phase_timeout),helper_seconds=int(helper_timeout),cleanup_seconds=int(cleanup_timeout),phase_outer_seconds=int(phase_timeout)+3*int(cleanup_timeout)+10,helper_outer_seconds=int(helper_timeout)+3*int(cleanup_timeout)+10), fixture=fixture, campaign_id=uuid.uuid4().hex, targets=targets, profile=profile, formats={'treedb_native':native_format, 'treedb_mongo':mongo_format, 'mongodb':'bson'}, recordcount=int(records), operationcount=int(ops), threadcount=int(threads), run_repeats=int(repeats), client=build, server_builds=server_builds)
-(out / 'manifest.json').write_text(json.dumps(manifest, indent=2)+'\n')
+(out / 'manifest.json').write_text(json.dumps(manifest, indent=2,allow_nan=False)+'\n')
 PY
 
 # Retain host and launcher source context outside timed client invocations.
@@ -176,7 +181,7 @@ out = pathlib.Path(sys.argv[1])
 context = dict(date_utc=datetime.datetime.now(datetime.timezone.utc).isoformat(), uname=platform.uname()._asdict(), logical_cpus=os.cpu_count(), cpu_affinity=sorted(os.sched_getaffinity(0)), gomap_commit=subprocess.check_output(['git','rev-parse','HEAD']).decode().strip(), launcher_source_patch_sha256=hashlib.sha256(subprocess.check_output(['git','diff','--binary','HEAD'])).hexdigest(), go_version=subprocess.check_output(['go','version']).decode().strip())
 for name, path in [('cpuinfo','/proc/cpuinfo'),('meminfo','/proc/meminfo'),('clocksource','/sys/devices/system/clocksource/clocksource0/current_clocksource')]:
     context[name] = pathlib.Path(path).read_text()
-(out/'host.json').write_text(json.dumps(context,indent=2)+'\n')
+(out/'host.json').write_text(json.dumps(context,indent=2,allow_nan=False)+'\n')
 PYHOST
 
 declare -a SERVER_PIDS=() SERVER_TARGETS=() SERVER_PREFIXES=()
@@ -194,13 +199,15 @@ cleanup() {
       continue
     fi
     code=0; wait "$pid" || code=$?
-    "$PYTHON" - "$OUT_DIR/$target" "$code" "$prefix" <<'PY'
+    "$PYTHON" - "$OUT_DIR/$target" "$code" "$prefix" "$ROOT/scripts" <<'PY'
 import json, pathlib, sys
+sys.path.insert(0,sys.argv[4])
+from ycsb_evidence_json import read
 out = pathlib.Path(sys.argv[1])
 prefix=sys.argv[3]
-launch = json.loads((out / (prefix+'.launch.json')).read_text())
+launch = read(out / (prefix+'.launch.json'))
 with (out / (prefix+'.exit.json')).open('x') as stream:
-    json.dump(dict(process=launch['process'], exit_code=int(sys.argv[2])), stream)
+    json.dump(dict(process=launch['process'], exit_code=int(sys.argv[2])), stream,allow_nan=False)
 PY
     [[ "$code" == 0 ]] || failed=1
   done
@@ -208,11 +215,13 @@ PY
     docker logs "$MONGO_CONTAINER" >"$OUT_DIR/mongodb/server.log" 2>&1 || failed=1
     docker stop --time 10 "$MONGO_CONTAINER" >/dev/null || failed=1
     code=$(docker inspect --format '{{.State.ExitCode}}' "$MONGO_CONTAINER") || failed=1
-    "$PYTHON" - "$OUT_DIR/mongodb" "${code:-1}" <<'PY'
+    "$PYTHON" - "$OUT_DIR/mongodb" "${code:-1}" "$ROOT/scripts" <<'PY'
 import json, pathlib, sys
-out=pathlib.Path(sys.argv[1]); launch=json.loads((out/'server.launch.json').read_text())
+sys.path.insert(0,sys.argv[3])
+from ycsb_evidence_json import read
+out=pathlib.Path(sys.argv[1]); launch=read(out/'server.launch.json')
 with (out/'server.exit.json').open('x') as stream:
-    json.dump(dict(process=launch['process'], exit_code=int(sys.argv[2])),stream)
+    json.dump(dict(process=launch['process'], exit_code=int(sys.argv[2])),stream,allow_nan=False)
 PY
     [[ "${code:-1}" == 0 ]] || failed=1
     docker rm "$MONGO_CONTAINER" >/dev/null || failed=1
@@ -257,6 +266,7 @@ start_server() {
   SERVER_PIDS+=("$!"); SERVER_TARGETS+=("$target"); SERVER_PREFIXES+=("$prefix")
   "$PYTHON" "$VALIDATOR" observe "${SERVER_PIDS[-1]}" "$dir" "$OUT_DIR/$target/$prefix.launch.json" --await-exec "$binary"
   wait_tcp "$addr"
+  "$PYTHON" "$LIVE" ready "$OUT_DIR/$target" "$target" --prefix "$prefix" --timeout "$READINESS_TIMEOUT" --outer-timeout "$((READINESS_TIMEOUT+10))"
 }
 for target in "${selected[@]}"; do
   case "$target" in

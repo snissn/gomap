@@ -5,21 +5,12 @@ import base64
 import json
 import sys
 
+from ycsb_evidence_json import read
+
 IDENTITY = ("schema_version", "source_id", "fixture_id", "profile", "target", "format")
 
 def fail(message):
     raise ValueError(message)
-
-def read(path):
-    def unique(pairs):
-        result = {}
-        for key, val in pairs:
-            if key in result:
-                fail("duplicate JSON object key")
-            result[key] = val
-        return result
-    with open(path, encoding="utf-8") as f:
-        return json.load(f, object_pairs_hook=unique)
 
 def typed(v, fmt):
     if not isinstance(v, dict):

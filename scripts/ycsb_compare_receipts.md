@@ -7,6 +7,17 @@ this consumer's evidence checks, not full #5335 matrix qualification. Server
 observation and lifecycle integration is provisional and needs exact-head review.
 The consumer never fabricates those witnesses from command flags/startup text.
 
+All retained JSON readers reject duplicate object keys, NaN/Infinity, and numeric
+overflow to infinity. Supporting copies are compared with JSON types preserved;
+`true`, `1`, and `1.0` are distinct. Each Process, Observation, and Result copy
+is also checked independently before comparison. Schema versions, PIDs, process
+start ticks, exits, inode/device IDs, runtime counts, and elapsed nanoseconds use
+exact integer types; owner stats map strings to strings. UTC chronology uses
+integer nanoseconds (up to nine fractional digits), and copied timestamps must
+match their original strings exactly. The Result wall-time versus monotonic
+elapsed-time consistency check deliberately retains a 2 ms tolerance; interval
+ordering and owner-lifetime bounds have no such tolerance.
+
 Each invocation uses a fresh `OUT_DIR`. `SERVER_BUILD_MANIFEST` is mandatory
 and names a schema-v1 JSON object with `servers` mapping each selected target to
 `schema_version: 1`, `version` (for example `baseline`/`candidate`), exact
@@ -59,6 +70,14 @@ stats, or the actual unsupported result for legacy, procfs identity, canonical
 data device/inode, and actual runtime GOMAXPROCS. It wraps the original owning
 Close exactly once and joins evidence I/O failures after that Close still runs.
 No option or startup label selects the observed backend.
+
+Before launching any measured client or fixture/snapshot helper, startup waits
+boundedly for the actual `owner.open.json`, in addition to TCP readiness. It
+checks that observation against the selected backend/profile, launch PID/start/
+ELF/environment, current procfs identity, and actual data directory device/inode.
+Only then is `<prefix>.ready.json` retained and startup returns. Missing or
+mismatched owner evidence writes a readiness failure and invokes owned cleanup;
+TCP readiness alone cannot release clients.
 
 * `server.launch.json`: observed `process` object and absolute `data_dir`.
 * `server.exit.json`: same `process` and checked `exit_code: 0`, emitted only after
@@ -155,6 +174,15 @@ A request label or shutdown FlushAll alone cannot qualify a checkpoint. The
 backend call has no context cancellation API, so the existing bounded external
 owner supervisor remains responsible for a hung owner; no success is fabricated.
 
+Native deterministic write currently sets `checkpoint_attempted` immediately
+before calling the native client's actual `Checkpoint(ctx)` and sets
+`checkpoint_succeeded` only after that call returns nil. A returned error also
+fails the helper receipt/exit. Unlike native random preclose snapshots, that
+deterministic write receipt does not retain a timed checkpoint Result. These
+flags record actual call outcome, but the missing independently validated call
+Result remains a separate evidence-shape gap for the verified-checkpoint gate;
+no checkpoint duration or complete call evidence is inferred from them.
+
 Owned reference Mongo lifecycle/owner evidence is still outstanding. Profile crash
 recovery, baseline overlay compilation/review, full orchestration review and the
 frozen matrix remain separate acceptance gates. No product campaign has run as
@@ -247,3 +275,12 @@ writing finish, then restores the previous signal mask and delivers pending
 cancellation. Known pending signals are retained in the original failure
 receipt; a later cancellation does not overwrite the original failure reason.
 The child inherits its normal signal mask during startup.
+
+Read-only revalidation of the retained d189 tiny controls under the strict parser
+preserves their exact snapshot, actual checkpoint call, and original Close
+function evidence. Their gateway deterministic write/verify and random reopened
+helper launches preceded the raw owner.open observation, so those three added
+full launch-lifetime checks are rejected. They are not full orchestration
+qualification. The bounded owner-readiness gate is covered by offline delayed,
+missing, and stale-owner controls; no product/service rerun accompanies this
+parser/orchestration repair.

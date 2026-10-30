@@ -1,5 +1,7 @@
-// Package ycsbevidence observes the original, live command owner and Close.
-// It is enabled only by YCSB_SERVER_RECEIPT_DIR and is read-only unless the separate YCSB_OWNER_CHECKPOINT=1 control is enabled.
+// Package ycsbevidence observes the original live owner and checked Close.
+// Observation alone is read-only and enabled only by YCSB_SERVER_RECEIPT_DIR.
+// The separate opt-in YCSB_OWNER_CHECKPOINT=1 control explicitly calls the
+// owning collection manager FlushAll and backend Checkpoint before Close.
 package ycsbevidence
 
 import (

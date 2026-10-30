@@ -8,6 +8,7 @@ import base64
 import hashlib
 import json
 import pathlib
+import re
 import ycsb_compare_validate as c
 import ycsb_correctness_validate as exact
 
@@ -39,7 +40,7 @@ def canonical_snapshot(value, manifest, target, stage):
         for typed in fields.values():
             raw = typed["value"] if value["format"] == "json" else typed["base64"]
             c.require(len(base64.b64decode(raw, validate=True)) == 100, "random snapshot field length mismatch")
-    canonical = json.dumps(rows, sort_keys=True, separators=(",", ":")).encode()
+    canonical = json.dumps(rows, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
     return rows, hashlib.sha256(canonical).hexdigest()
 
 
@@ -48,27 +49,19 @@ def owner(directory, prefix, build, profile):
     stopped = c.read(directory/(prefix+".exit.json"))
     c.process(launch["process"])
     c.require(launch["process"]["exe_sha256"] == build["exe_sha256"], "live owner ELF mismatch")
-    c.require(stopped["process"] == launch["process"] and stopped["exit_code"] == 0, "live owner checked exit missing")
+    c.process(stopped["process"])
+    c.exit_success(stopped["exit_code"],"live owner checked exit missing")
+    c.require(c.same(stopped["process"],launch["process"]), "live owner checked exit missing")
     evidence = directory/(prefix+".evidence")
     opened, before, closed = [c.read(evidence/name) for name in ("owner.open.json", "owner.before-close.json", "owner.close.json")]
     for observation in (opened,before):
-        c.require(c.schema(observation) and observation["kind"] == "live_owner_observation", "missing raw live owner observation")
-        c.require(observation["process"] == launch["process"] and observation["data_dir"] == launch["data_dir"], "raw owner process/data mismatch")
-        c.require(pathlib.Path(observation["data_dir"]).is_absolute() and type(observation["data_device"]) is int and type(observation["data_inode"]) is int and observation["data_inode"] > 0, "missing data directory inode")
-        c.require(isinstance(observation["owner_id"],str) and len(observation["owner_id"]) == 32, "missing actual owner token")
-        c.require(type(observation["observed_gomaxprocs"]) is int and observation["observed_gomaxprocs"] > 0, "missing observed runtime GOMAXPROCS")
-        c.require(observation["profile"] == profile and observation["stats"]["treedb.profile.resolved"] == profile, "actual owner profile mismatch")
-        c.require(observation["backend"] == build["expected_owner"], "actual raw backend mismatch")
-        if build["expected_owner"] == "cow":
-            c.require(observation["capture_error"] == "" and observation["stats"]["treedb.cache.memtable_mode"] == "cow_btree", "missing actual COW capture/cache evidence")
-            seq = observation["stats"]["treedb.cache.cow.txn.logical_seq"]
-            c.require(isinstance(seq,str) and seq.isdecimal(), "missing actual COW sequence")
-        else:
-            c.require(build["expected_owner"] == "legacy" and observation["capture_error"] == "treedb: command kind has no native semantic preparation", "missing actual legacy observation")
-        c.timestamp(observation["observed_utc"])
+        c.observation(observation,build,profile)
+        c.require(c.same(observation["process"],launch["process"]) and observation["data_dir"] == launch["data_dir"], "raw owner process/data mismatch")
     for key in ("owner_id","process","data_dir","data_device","data_inode","profile","backend"):
-        c.require(before[key] == opened[key], "live owner identity changed")
-    c.require(c.schema(closed) and closed["kind"] == "original_server_owner_close" and closed["owner_id"] == opened["owner_id"] and closed["process"] == launch["process"], "original owner Close binding mismatch")
+        c.require(c.same(before[key],opened[key]), "live owner identity changed")
+    c.require(c.schema(closed) and closed["kind"] == "original_server_owner_close", "original owner Close binding mismatch")
+    c.process(closed["process"])
+    c.require(closed["owner_id"] == opened["owner_id"] and c.same(closed["process"],launch["process"]), "original owner Close binding mismatch")
     bounds = c.result(closed["close"], "original owner Close")
     c.require(c.timestamp(opened["observed_utc"]) <= c.timestamp(before["observed_utc"]) <= bounds[0], "raw owner ordering mismatch")
     return opened,closed
@@ -86,17 +79,26 @@ def require_interval(bounds,lifetime,label):
 
 def helper(directory, stem, manifest, target, mode, fixture_id):
     launch,receipt = [c.read(directory/(stem+suffix)) for suffix in (".launch.json",".close.json")]
+    c.require(c.schema(launch), "unsupported helper launch schema")
     c.process(launch["process"])
-    c.require(launch["campaign_id"] == manifest["campaign_id"] and launch["exit_code"] == 0 and launch.get("timed_out") is not True and not (directory/(stem+".failure.json")).exists(), "snapshot/fixture child failure or stale campaign")
+    c.exit_success(launch["exit_code"],"snapshot/fixture child failure or stale campaign")
+    c.require(launch["campaign_id"] == manifest["campaign_id"] and launch.get("timed_out") is not True and not (directory/(stem+".failure.json")).exists(), "snapshot/fixture child failure or stale campaign")
     c.require(launch["process"]["exe_sha256"] == manifest["fixture"]["exe_sha256"], "snapshot/fixture ELF mismatch")
     c.require(launch["receipt_sha256"] == c.digest(directory/(stem+".close.json")), "snapshot/fixture receipt hash mismatch")
     c.require(c.schema(receipt) and receipt["kind"] == ("random_snapshot_client_close" if mode == "snapshot" else "deterministic_fixture_client_close"), "wrong snapshot/fixture receipt kind")
+    c.require(type(receipt["pid"]) is int and receipt["pid"]>0, "snapshot/fixture PID must be an integer")
     c.require(receipt["source_id"] == manifest["server_builds"][target]["source_commit"] and receipt["fixture_id"] == fixture_id and receipt["mode"] == mode and receipt["pid"] == launch["process"]["pid"], "snapshot/fixture process/source mismatch")
     c.require(receipt["result_error"] == "" and receipt["close_error"] == "", "snapshot/fixture original client close failed")
     c.positive_timeout(launch["timeout_seconds"],"recorded helper timeout")
-    c.require(launch["timeout_seconds"] == manifest["deadlines"]["helper_seconds"] and launch["timed_out"] is False and launch["cleanup_timeout_seconds"] == manifest["deadlines"]["cleanup_seconds"] and launch["outer_timeout_seconds"] == manifest["deadlines"]["helper_outer_seconds"],"helper deadline binding mismatch")
+    c.require(c.same(launch["timeout_seconds"],manifest["deadlines"]["helper_seconds"]) and launch["timed_out"] is False and c.same(launch["cleanup_timeout_seconds"],manifest["deadlines"]["cleanup_seconds"]) and c.same(launch["outer_timeout_seconds"],manifest["deadlines"]["helper_outer_seconds"]),"helper deadline binding mismatch")
     bounds = c.timestamp(launch["start_utc"]),c.timestamp(launch["end_utc"])
     c.require(bounds[0] <= c.timestamp(receipt["started_utc"]) <= c.timestamp(receipt["ended_utc"]) <= bounds[1], "snapshot/fixture call interval mismatch")
+    c.require(type(receipt["checkpoint_attempted"]) is bool and type(receipt["checkpoint_succeeded"]) is bool,"invalid checkpoint flags")
+    if receipt.get("checkpoint") is not None:
+        c.result(receipt["checkpoint"],"helper checkpoint",bounds=(c.timestamp(receipt["started_utc"]),c.timestamp(receipt["ended_utc"])))
+    # Native deterministic write currently has flags only; it is an explicit
+    # separate evidence-shape gap, not a fabricated timed Result.
+
     for name,hash_value in receipt["artifacts_sha256"].items():
         c.require(pathlib.Path(name).name == name and hash_value == c.digest(directory/name), "snapshot/fixture artifact hash mismatch")
     required = {stem+".json"} if mode == "snapshot" else {"fixture.expected.json", "fixture.updated.json", "fixture.updated.json.load.json"} if mode == "write" else {"fixture.expected.json", "fixture.reopened.json"}
@@ -104,44 +106,52 @@ def helper(directory, stem, manifest, target, mode, fixture_id):
     return receipt,bounds
 
 
+def checkpoint_request(value):
+    c.require(c.schema(value),"checkpoint request schema mismatch")
+    c.require(isinstance(value["owner_id"],str) and re.fullmatch(r"[0-9a-f]{32}",value["owner_id"]),"checkpoint request owner mismatch")
+    c.require(isinstance(value["request_id"],str) and re.fullmatch(r"[0-9a-f]{32}",value["request_id"]),"checkpoint request owner mismatch")
+    c.process(value["client"])
+    c.require(all(isinstance(value[k],str) and value[k] for k in ("source_id","fixture_id")) and isinstance(value["snapshot_sha256"],str) and c.SHA.fullmatch(value["snapshot_sha256"]),"checkpoint request source/snapshot missing")
+
+
+def checkpoint_proof(value,opened,bounds):
+    c.require(c.schema(value) and value["kind"]=="explicit_live_owner_checkpoint","missing raw explicit owner checkpoint")
+    checkpoint_request(value["request"])
+    observed=value["owner"]
+    c.observation(observed,{"expected_owner":opened["backend"]},opened["profile"])
+    for key in ("schema_version","kind","owner_id","process","data_dir","data_device","data_inode","profile","backend"):
+        c.require(c.same(observed[key],opened[key]),"checkpoint actual owner identity mismatch")
+    c.require(c.same(observed["observed_gomaxprocs"],opened["observed_gomaxprocs"]),"checkpoint live owner runtime/profile mismatch")
+    overall=c.result(value["result"],"owner checkpoint result",bounds=bounds)
+    flush=c.result(value["collections_flush_all"],"owner collections FlushAll",bounds=overall)
+    checkpoint=c.result(value["backend_checkpoint"],"owner backend Checkpoint",bounds=overall)
+    c.require(overall[0] <= c.timestamp(observed["observed_utc"]) <= flush[0] <= flush[1] <= checkpoint[0] <= checkpoint[1] <= overall[1],"explicit owner checkpoint call ordering mismatch")
+    return overall
+
+
 def owner_checkpoint(directory,prefix,stem,receipt,bounds,opened,source_id,fixture_id,snapshot):
     evidence=directory/(prefix+".evidence")
     endpoint=c.read(evidence/"owner.checkpoint-control.json")
-    c.require(isinstance(endpoint,dict) and c.schema(endpoint) and endpoint["kind"]=="private_owner_checkpoint_control" and endpoint["owner_id"]==opened["owner_id"], "checkpoint control endpoint owner mismatch")
-    c.require(isinstance(endpoint["address"],str), "invalid private checkpoint control address")
+    c.require(c.schema(endpoint) and endpoint["kind"]=="private_owner_checkpoint_control" and endpoint["owner_id"]==opened["owner_id"],"checkpoint control endpoint owner mismatch")
+    c.require(isinstance(endpoint["address"],str),"invalid private checkpoint control address")
     address=endpoint["address"].split(":")
-    c.require(len(address)==2 and address[0]=="127.0.0.1" and address[1].isdecimal() and 0<int(address[1])<65536, "invalid private checkpoint control address")
+    c.require(len(address)==2 and address[0]=="127.0.0.1" and address[1].isascii() and address[1].isdecimal() and 0<int(address[1])<65536,"invalid private checkpoint control address")
     raw=c.read(evidence/"owner.checkpoint.json")
     request=c.read(evidence/"owner.checkpoint-request.json")
-    c.require(isinstance(raw,dict) and c.schema(raw) and raw["kind"]=="explicit_live_owner_checkpoint", "missing raw explicit owner checkpoint")
-    c.require(json.dumps(raw,sort_keys=True)==json.dumps(receipt["owner_checkpoint"],sort_keys=True) and json.dumps(raw["request"],sort_keys=True)==json.dumps(request,sort_keys=True), "checkpoint raw/client/request mismatch")
-    c.require(isinstance(request,dict) and c.schema(request) and request["owner_id"]==opened["owner_id"] and isinstance(request["request_id"],str) and len(request["request_id"])==32 and all(char in "0123456789abcdef" for char in request["request_id"]), "checkpoint request owner mismatch")
+    checkpoint_request(request)
+    for proof in (raw,receipt["owner_checkpoint"]):
+        result=checkpoint_proof(proof,opened,bounds)
+        require_interval(result,owner_bounds(directory,prefix),"explicit owner checkpoint")
+    c.require(c.same(raw,receipt["owner_checkpoint"]) and c.same(raw["request"],request),"checkpoint raw/client/request mismatch")
     launch=c.read(directory/(stem+".launch.json"))
-    c.require(isinstance(request["client"],dict), "checkpoint request process missing")
-    c.process(request["client"])
-    c.require(request["client"]==launch["process"] and request["source_id"]==source_id and request["fixture_id"]==fixture_id and request["snapshot_sha256"]==c.digest(directory/snapshot), "checkpoint request client/source/snapshot mismatch")
-    observation=raw["owner"]
-    c.require(isinstance(observation,dict) and c.schema(observation) and observation["kind"]=="live_owner_observation", "checkpoint actual owner schema mismatch")
-    c.require(isinstance(observation["process"],dict), "checkpoint actual owner process missing")
-    c.process(observation["process"])
-    c.require(type(observation["data_device"]) is int and observation["data_device"]>=0 and type(observation["data_inode"]) is int and observation["data_inode"]>0, "checkpoint actual owner data identity types mismatch")
-    for key in ("schema_version","kind","owner_id","process","data_dir","data_device","data_inode","profile","backend"):
-        c.require(observation[key]==opened[key], "checkpoint actual owner identity mismatch")
-    c.require(type(observation["observed_gomaxprocs"]) is int and observation["observed_gomaxprocs"]==opened["observed_gomaxprocs"] and observation["stats"]["treedb.profile.resolved"]==opened["profile"], "checkpoint live owner runtime/profile mismatch")
-    if opened["backend"]=="cow":
-        c.require(observation["capture_error"]=="" and observation["stats"]["treedb.cache.memtable_mode"]=="cow_btree" and isinstance(observation["stats"]["treedb.cache.cow.txn.logical_seq"],str) and observation["stats"]["treedb.cache.cow.txn.logical_seq"].isdecimal(), "checkpoint actual COW evidence missing")
-    else:
-        c.require(observation["capture_error"]==opened["capture_error"], "checkpoint actual legacy evidence missing")
-    result=c.result(raw["result"],"owner checkpoint result",bounds=bounds)
-    flush=c.result(raw["collections_flush_all"],"owner collections FlushAll",bounds=result)
-    checkpoint=c.result(raw["backend_checkpoint"],"owner backend Checkpoint",bounds=result)
-    c.require(result[0] <= c.timestamp(observation["observed_utc"]) <= flush[0] <= flush[1] <= checkpoint[0] <= checkpoint[1] <= result[1], "explicit owner checkpoint call ordering mismatch")
-    require_interval(result,owner_bounds(directory,prefix),"explicit owner checkpoint")
-    c.require(receipt["checkpoint"]==raw["result"] and receipt["checkpoint_attempted"] is True and receipt["checkpoint_succeeded"] is True, "checkpoint aggregate differs from actual owner calls")
+    c.process(launch["process"])
+    c.require(request["owner_id"]==opened["owner_id"] and c.same(request["client"],launch["process"]) and request["source_id"]==source_id and request["fixture_id"]==fixture_id and request["snapshot_sha256"]==c.digest(directory/snapshot),"checkpoint request client/source/snapshot mismatch")
+    c.result(receipt["checkpoint"],"helper checkpoint aggregate",bounds=bounds)
+    c.require(c.same(receipt["checkpoint"],raw["result"]) and receipt["checkpoint_attempted"] is True and receipt["checkpoint_succeeded"] is True,"checkpoint aggregate differs from actual owner calls")
 
 
 def validate(directory, target, manifest, lifecycle):
-    c.require(manifest.get("lifecycle_contract") == 2, "required live lifecycle contract 2 missing")
+    c.require(type(manifest.get("lifecycle_contract")) is int and manifest["lifecycle_contract"] == 2, "required live lifecycle contract 2 missing")
     c.require(target != "mongodb", "external Mongo live owner/checkpoint evidence is unsupported")
     fixture = manifest["fixture"]
     c.require(c.schema(fixture) and c.SHA.fullmatch(fixture["exe_sha256"]) and c.SHA.fullmatch(fixture["source_sha256"]), "unbound fixture source/ELF")
@@ -152,7 +162,12 @@ def validate(directory, target, manifest, lifecycle):
     original, closed = owner(directory,"server",build,manifest["profile"])
     reopened, reopened_close = owner(directory,"reopened",build,manifest["profile"])
     runtime=c.read(directory/"runtime.json")
-    c.require(runtime["observed_gomaxprocs"] == original["observed_gomaxprocs"], "aggregate runtime differs from actual observation")
+    for aggregate in (runtime,lifecycle):
+        c.require(c.schema(aggregate),"invalid aggregate schema")
+        c.process(aggregate["process"])
+        c.require(c.same(aggregate["process"],original["process"]),"aggregate owner process mismatch")
+    c.exit_success(lifecycle["server_exit_code"],"server close exit failure")
+    c.require(type(runtime["observed_gomaxprocs"]) is int and c.same(runtime["observed_gomaxprocs"],original["observed_gomaxprocs"]), "aggregate runtime differs from actual observation")
     c.require(original["owner_id"] != reopened["owner_id"] and original["process"] != reopened["process"], "reopen must have independent process/owner identity")
     c.require(all(original[k] == reopened[k] for k in ("data_dir","data_device","data_inode")), "reopen data directory identity mismatch")
     c.require(c.timestamp(closed["close"]["end_utc"]) <= c.timestamp(reopened["observed_utc"]), "reopen precedes original Close")
@@ -175,11 +190,11 @@ def validate(directory, target, manifest, lifecycle):
         previous_end=bounds[1]
     c.require(c.timestamp(load_launch["end_utc"]) <= receipts["loaded"][1][0] <= receipts["loaded"][1][1] <= c.timestamp(runs[0]["start_utc"]), "loaded snapshot is not between load and measured runs")
     c.require(max(c.timestamp(value["end_utc"]) for value in runs) <= receipts["preclose"][1][0], "preclose snapshot precedes settled measured clients")
-    c.require(snapshots["preclose"][0] == snapshots["reopened"][0], "canonical typed random state preservation mismatch")
+    c.require(c.same(snapshots["preclose"][0],snapshots["reopened"][0]), "canonical typed random state preservation mismatch")
     c.require(lifecycle["preclose_state_sha256"] == snapshots["preclose"][1] and lifecycle["reopened_state_sha256"] == snapshots["reopened"][1], "canonical random snapshot digest mismatch")
-    c.require(c.timestamp(lifecycle["preclose_state_utc"]) == c.timestamp(receipts["preclose"][0]["ended_utc"]) and c.timestamp(lifecycle["reopened_state_utc"]) == c.timestamp(receipts["reopened"][0]["ended_utc"]), "aggregate snapshot timestamps differ from actual calls")
+    c.require(lifecycle["preclose_state_utc"] == receipts["preclose"][0]["ended_utc"] and lifecycle["reopened_state_utc"] == receipts["reopened"][0]["ended_utc"], "aggregate snapshot timestamps differ from actual calls")
     reopen_bounds=c.result(lifecycle["reopen"],"reopen observation interval")
-    c.require(reopen_bounds == (c.timestamp(closed["close"]["end_utc"]),c.timestamp(reopened["observed_utc"])),"aggregate reopen bounds differ from observed owners")
+    c.require(lifecycle["reopen"]["start_utc"] == closed["close"]["end_utc"] and lifecycle["reopen"]["end_utc"] == reopened["observed_utc"],"aggregate reopen bounds differ from observed owners")
     preservation=c.result(lifecycle["random_state_preservation"],"random state preservation interval")
     c.require(receipts["reopened"][1][1] <= preservation[0],"state comparison precedes completed reopened snapshot")
     checkpoint = receipts["preclose"][0]
@@ -187,8 +202,9 @@ def validate(directory, target, manifest, lifecycle):
     c.result(checkpoint["checkpoint"],"actual explicit checkpoint",bounds=receipts["preclose"][1])
     if target=="treedb_mongo":
         owner_checkpoint(directory,"server","snapshot_preclose",checkpoint,receipts["preclose"][1],original,build["source_commit"],random_id,"snapshot_preclose.json")
-    c.require(lifecycle["checkpoint"] == checkpoint["checkpoint"] and lifecycle["server_close"] == closed["close"], "aggregate lifecycle differs from actual calls")
-    c.require(lifecycle["owner_id"] == original["owner_id"] and lifecycle["reopened_process"] == reopened["process"] and lifecycle["reopened_owner_id"] == reopened["owner_id"], "aggregate reopened owner mismatch")
+    c.require(c.same(lifecycle["checkpoint"],checkpoint["checkpoint"]) and c.same(lifecycle["server_close"],closed["close"]), "aggregate lifecycle differs from actual calls")
+    c.process(lifecycle["reopened_process"])
+    c.require(lifecycle["owner_id"] == original["owner_id"] and c.same(lifecycle["reopened_process"],reopened["process"]) and lifecycle["reopened_owner_id"] == reopened["owner_id"], "aggregate reopened owner mismatch")
     # Independently named deterministic fixture uses a fresh database and two
     # independently observed server owners; it cannot stand in for random state.
     first,first_close = owner(directory,"fixture-write",build,manifest["profile"])
@@ -212,6 +228,32 @@ def validate(directory, target, manifest, lifecycle):
     exact.validate(expected,[c.read(directory/name) for name in ("fixture.updated.json.load.json","fixture.updated.json","fixture.reopened.json")])
 
 
+
+def wait_owner(directory,target,prefix,timeout):
+    """Bound client launch on actual matching owner evidence, independently of TCP."""
+    import time
+    c.positive_timeout(timeout,"owner readiness timeout")
+    manifest=c.read(directory.parent/"manifest.json")
+    build=manifest["server_builds"][target]
+    c.server_build(build,target)
+    launch=c.read(directory/(prefix+".launch.json"))
+    c.process(launch["process"])
+    path=directory/(prefix+".evidence/owner.open.json")
+    deadline=time.monotonic()+timeout
+    while not path.exists():
+        c.require(c.same(c.observe(launch["process"]["pid"]),launch["process"]),"owner changed before readiness")
+        if time.monotonic()>=deadline:raise TimeoutError("timed out waiting for matching owner.open observation")
+        time.sleep(min(.05,max(0,deadline-time.monotonic())))
+    observed=c.read(path)
+    c.observation(observed,build,manifest["profile"])
+    c.require(c.same(observed["process"],launch["process"]) and c.same(c.observe(launch["process"]["pid"]),launch["process"]),"readiness owner process mismatch")
+    c.require(observed["process"]["exe_sha256"]==build["exe_sha256"] and observed["data_dir"]==launch["data_dir"],"readiness owner ELF/data mismatch")
+    data=pathlib.Path(launch["data_dir"]).stat()
+    c.require(observed["data_device"]==data.st_dev and observed["data_inode"]==data.st_ino,"readiness owner data inode mismatch")
+    c.require(c.timestamp(observed["observed_utc"])<=c.timestamp(c.now()),"readiness observation is in the future")
+    c.write_new(directory/(prefix+".ready.json"),dict(schema_version=1,process=observed["process"],owner_id=observed["owner_id"],observation_sha256=c.digest(path),ready_utc=c.now()))
+
+
 def run_helper(directory,target,addr,mode,stage=None,timeout=180,cleanup_timeout=10):
     import argparse
     manifest=c.read(directory.parent/"manifest.json")
@@ -229,7 +271,7 @@ def run_helper(directory,target,addr,mode,stage=None,timeout=180,cleanup_timeout
 
 
 def interval(start,end):
-    return dict(attempted=True,success=True,error="",start_utc=start,end_utc=end,elapsed_ns=round((c.timestamp(end)-c.timestamp(start))*1e9))
+    return dict(attempted=True,success=True,error="",start_utc=start,end_utc=end,elapsed_ns=c.timestamp(end)-c.timestamp(start))
 
 
 def assemble(directory,target):
@@ -245,7 +287,7 @@ def assemble(directory,target):
     started=c.now()
     before,before_digest=canonical_snapshot(c.read(directory/"snapshot_preclose.json"),manifest,target,"preclose")
     after,after_digest=canonical_snapshot(c.read(directory/"snapshot_reopened.json"),manifest,target,"reopened")
-    c.require(before==after,"canonical typed random state preservation mismatch")
+    c.require(c.same(before,after),"canonical typed random state preservation mismatch")
     ended=c.now()
     lifecycle=dict(**shared,server_exit_code=0,checkpoint=before_receipt["checkpoint"],server_close=closed["close"],reopen=interval(closed["close"]["end_utc"],reopened["observed_utc"]),random_state_preservation=interval(started,ended),preclose_state_utc=before_receipt["ended_utc"],reopened_state_utc=after_receipt["ended_utc"],preclose_state_sha256=before_digest,reopened_state_sha256=after_digest,random_state_scope="observed-state-preservation-only",reopened_process=reopened["process"],reopened_owner_id=reopened["owner_id"])
     c.write_new(directory/"lifecycle.json",lifecycle)
@@ -255,23 +297,26 @@ def assemble(directory,target):
 def main():
     import argparse
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode",choices=("snapshot","write","verify","assemble"))
+    parser.add_argument("mode",choices=("snapshot","write","verify","assemble","ready"))
     parser.add_argument("directory",type=pathlib.Path)
     parser.add_argument("target",choices=c.TARGETS)
     parser.add_argument("--timeout",type=float,default=180)
     parser.add_argument("--cleanup-timeout",type=float,default=10)
     parser.add_argument("--outer-timeout",type=float)
     parser.add_argument("--addr")
+    parser.add_argument("--prefix",choices=("server","reopened","fixture-write","fixture-reopened"),default="server")
     parser.add_argument("--stage",choices=("loaded","preclose","reopened"))
     args=parser.parse_args()
     try:
         with c.outer_deadline(args.outer_timeout if args.outer_timeout is not None else args.timeout+3*args.cleanup_timeout+10):
-            if args.mode=="assemble": assemble(args.directory,args.target)
+            if args.mode=="ready": wait_owner(args.directory,args.target,args.prefix,args.timeout)
+            elif args.mode=="assemble": assemble(args.directory,args.target)
             else: run_helper(args.directory,args.target,args.addr,args.mode,args.stage,args.timeout,args.cleanup_timeout)
         return 0
     except (ValueError,TypeError,KeyError,OSError) as error:
-        if isinstance(error,TimeoutError):
-            c.write_new(args.directory/("helper-"+args.mode+".failure.json"),dict(schema_version=1,kind="helper_outer_deadline_failure",error=str(error),end_utc=c.now()))
+        if args.mode=="ready" or isinstance(error,TimeoutError):
+            stem=args.prefix+".readiness" if args.mode=="ready" else "helper-"+args.mode
+            c.write_new(args.directory/(stem+".failure.json"),dict(schema_version=1,kind="owner_readiness_failure" if args.mode=="ready" else "helper_outer_deadline_failure",error=str(error),end_utc=c.now()))
         print("invalid live evidence: "+str(error),file=__import__("sys").stderr)
         return 3
 
