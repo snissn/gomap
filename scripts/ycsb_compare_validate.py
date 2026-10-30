@@ -7,9 +7,11 @@ scripts/ycsb_compare_receipts.md for the observation contract.
 """
 import argparse
 import csv
+import contextlib
 import datetime as dt
 import hashlib
 import json
+import math
 import os
 import pathlib
 import re
@@ -126,9 +128,11 @@ def phase_evidence(directory, stem, target, manifest):
     receipt_path = directory / f"{stem}.close.json"
     receipt = read(receipt_path)
     process(launch["process"])
+    positive_timeout(launch["timeout_seconds"],"recorded phase timeout")
+    require(launch["timeout_seconds"] == manifest["deadlines"]["phase_seconds"] and launch["timed_out"] is False and launch["cleanup_timeout_seconds"] == manifest["deadlines"]["cleanup_seconds"] and launch["outer_timeout_seconds"] == manifest["deadlines"]["phase_outer_seconds"], "phase deadline binding mismatch")
     client = manifest["client"]
     require(launch["process"]["exe_sha256"] == client["exe_sha256"], "client ELF mismatch")
-    require(launch["exit_code"] == 0, "client exit failure")
+    require(launch["exit_code"] == 0 and launch.get("timed_out") is not True and not (directory/f"{stem}.failure.json").exists(), "client exit failure or launcher timeout/failure")
     require(launch["output_sha256"] == digest(directory / f"{stem}.out"), "stdout hash mismatch")
     require(launch["receipt_sha256"] == digest(receipt_path), "receipt hash mismatch")
     require(launch["campaign_id"] == manifest["campaign_id"], "stale launcher campaign")
@@ -154,6 +158,7 @@ def phase_evidence(directory, stem, target, manifest):
 
 
 def server_evidence(directory, target, manifest, phase_ids):
+    require(not list(directory.glob("*.failure.json")), "retained launcher/helper failure invalidates target")
     runtime = read(directory / "runtime.json")
     lifecycle = read(directory / "lifecycle.json")
     launch = read(directory / "server.launch.json")
@@ -208,7 +213,10 @@ def validate(out):
     require((out / "client-buildinfo.txt").read_text().strip(), "missing actual client build info")
     require(SHA.fullmatch(manifest["client"]["exe_sha256"]), "missing client build hash")
     require(manifest["targets"] and len(set(manifest["targets"])) == len(manifest["targets"]) and set(manifest["targets"]) <= set(TARGETS), "invalid targets")
+    for key in ("phase_seconds","helper_seconds","cleanup_seconds","phase_outer_seconds","helper_outer_seconds"):
+        positive_timeout(manifest["deadlines"][key],f"manifest {key}")
     rows, errors, seen_ids = [], [], set()
+    measured_intervals=[]
     for target in manifest["targets"]:
         require(manifest["formats"][target] in {"json", "bson"}, "unsupported document format")
         directory = out / target
@@ -225,12 +233,17 @@ def validate(out):
                 require(phase_id not in seen_ids, "reused phase identity")
                 seen_ids.add(phase_id)
                 ids.append(phase_id)
+                measured=read(directory/(stem+".launch.json"))
+                measured_intervals.append((target+"/"+stem,timestamp(measured["start_utc"]),timestamp(measured["end_utc"])))
             except (ValueError, KeyError, TypeError, OSError) as error:
                 errors.append(f"{target}/{stem}: {error}")
         try:
             server_evidence(directory, target, manifest, ids)
         except (ValueError, KeyError, TypeError, OSError) as error:
             errors.append(f"{target}/server: {error}")
+    for previous,current in zip(measured_intervals,measured_intervals[1:]):
+        if previous[2] > current[1]:
+            errors.append(f"measured phases overlap/out of order: {previous[0]} and {current[0]}")
     status = "invalid" if errors else "validated-consumer-evidence"
     write_status = dict(schema_version=1, status=status, errors=errors, scope="Client receipts, original live owner calls, typed random preservation and separate deterministic fixture only; not full matrix or crash qualification")
     (out / "validation.json").write_text(json.dumps(write_status, indent=2)+"\n")
@@ -318,10 +331,56 @@ def terminate_owned(identity, timeout=10):
     finally:
         os.close(descriptor)
 
+def positive_timeout(value, label):
+    require(type(value) in (int,float) and math.isfinite(value) and value > 0, f"{label} must be finite and positive")
+    return value
+
+
+@contextlib.contextmanager
+def outer_deadline(seconds):
+    """Interrupt Python work once; nested child cleanup keeps its own budget."""
+    positive_timeout(seconds,"outer deadline")
+    previous_handler=signal.getsignal(signal.SIGALRM)
+    previous_timer=signal.getitimer(signal.ITIMER_REAL)
+    require(previous_timer == (0.0,0.0), "refusing to replace an active outer deadline")
+    def expired(signum,frame):
+        raise TimeoutError("outer phase/helper wall deadline exceeded")
+    expired.ycsb_outer_deadline=True
+    expired.ycsb_outer_seconds=seconds
+    signal.signal(signal.SIGALRM,expired)
+    signal.setitimer(signal.ITIMER_REAL,seconds)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL,0)
+        signal.signal(signal.SIGALRM,previous_handler)
+
+
+def terminate_pinned_child(descriptor, timeout):
+    """Fallback only for a direct Popen child pinned before any wait/poll.
+
+    The descriptor, rather than a reusable PID, authorizes signals to the exact
+    direct child even if it execs again or procfs observation fails. External
+    server cleanup still uses terminate_owned and refuses identity mismatches.
+    """
+    def exited(): return bool(select.select([descriptor],[],[],0)[0])
+    def send(signum):
+        try: signal.pidfd_send_signal(descriptor,signum)
+        except ProcessLookupError:
+            require(exited(),"pinned process disappeared without observed exit")
+    if not exited(): send(signal.SIGTERM)
+    if not select.select([descriptor],[],[],timeout)[0]:
+        send(signal.SIGKILL)
+        require(select.select([descriptor],[],[],timeout)[0],"pinned owned child did not terminate")
+
+
 def launch(args):
     out, stem = pathlib.Path(args.directory), args.stem
     receipt = out / f"{stem}.close.json"
     require(not receipt.exists(), "refusing reused close receipt")
+    timeout=positive_timeout(getattr(args,"timeout",600),"child timeout")
+    cleanup_timeout=positive_timeout(getattr(args,"cleanup_timeout",10),"child cleanup timeout")
+    outer_timeout=getattr(signal.getsignal(signal.SIGALRM),"ycsb_outer_seconds",None)
     manifest = read(out.parent / "manifest.json")
     phase_id = f'{manifest["campaign_id"]}:{out.name}:{stem}:{uuid.uuid4().hex}'
     env = os.environ.copy()
@@ -330,26 +389,48 @@ def launch(args):
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
     exe_digest(command[0])
     started = now()
+    deadline=time.monotonic()+timeout
+    identity=None
+    timed_out=False
     with (out / f"{stem}.out").open("x") as stdout, (out / f"{stem}.err").open("x") as stderr:
         child = subprocess.Popen(command, env=env, stdout=stdout, stderr=stderr, start_new_session=True)
+        # A direct child cannot have its PID reused before it is reaped. Pin it
+        # now, before any observation or wait, including observation failures.
+        descriptor=os.pidfd_open(child.pid)
+        previous_handler=signal.getsignal(signal.SIGTERM)
         def interrupted(signum, frame):
             raise InterruptedError(f"launcher interrupted by signal {signum}")
         signal.signal(signal.SIGTERM, interrupted)
         try:
-            # Popen has completed exec; this reads the actual executable and environment.
+            write_new(out / f"{stem}.cleanup.json",dict(pid=child.pid,pidfd_pinned=True))
             identity = observe_core(child.pid)
-            write_new(out / f"{stem}.cleanup.json",dict(process=identity))
+            (out / f"{stem}.cleanup.json").write_text(json.dumps(dict(process=identity,pidfd_pinned=True))+"\n")
             identity = observe(child.pid)
-            code = child.wait()
-        except BaseException:
-            # Cleanup only the observed child through a pinned process descriptor.
-            # If initial observation failed, no unknown process is signaled.
-            if "identity" in locals():
-                terminate_owned(identity)
-                child.wait()
-            raise
-    write_new(out / f"{stem}.launch.json", dict(schema_version=1, campaign_id=manifest["campaign_id"], phase_id=phase_id, process=identity, start_utc=started, end_utc=now(), exit_code=code, output_sha256=digest(out / f"{stem}.out"), receipt_sha256=digest(receipt) if receipt.exists() else None))
-    return code if code > 0 else 3 if code < 0 else 0
+            code = child.wait(timeout=max(0,deadline-time.monotonic()))
+            if time.monotonic() > deadline:
+                raise subprocess.TimeoutExpired(command,timeout)
+        except BaseException as error:
+            # Once cleanup begins, its own finite TERM/KILL/reap budgets own
+            # progress. A second outer interruption must not strand the child.
+            if getattr(signal.getsignal(signal.SIGALRM),"ycsb_outer_deadline",False):
+                signal.setitimer(signal.ITIMER_REAL,0)
+            timed_out=isinstance(error,(subprocess.TimeoutExpired,TimeoutError))
+            cleanup=dict(attempted=True,success=False,reaped=False,error="",exit_code=None,method="popen-child-pidfd-before-any-wait")
+            try:
+                terminate_pinned_child(descriptor,cleanup_timeout)
+                code=child.wait(timeout=cleanup_timeout)
+                cleanup.update(success=True,reaped=True,exit_code=code)
+            except BaseException as cleanup_error:
+                cleanup["error"]=str(cleanup_error)
+            write_new(out/f"{stem}.failure.json",dict(schema_version=1,kind="owned_child_launcher_failure",campaign_id=manifest["campaign_id"],phase_id=phase_id,process=identity,pid=child.pid,pidfd_pinned=True,start_utc=started,end_utc=now(),timeout_seconds=timeout,cleanup_timeout_seconds=cleanup_timeout,outer_timeout_seconds=outer_timeout,timed_out=timed_out,error="child wait deadline exceeded" if isinstance(error,subprocess.TimeoutExpired) else str(error),cleanup=cleanup))
+            require(cleanup["success"],"owned child cleanup failed: "+cleanup["error"])
+            if not isinstance(error,subprocess.TimeoutExpired):
+                raise
+        finally:
+            signal.signal(signal.SIGTERM,previous_handler)
+            os.close(descriptor)
+    write_new(out / f"{stem}.launch.json", dict(schema_version=1, campaign_id=manifest["campaign_id"], phase_id=phase_id, process=identity, start_utc=started, end_utc=now(), exit_code=code, timeout_seconds=timeout,cleanup_timeout_seconds=cleanup_timeout,outer_timeout_seconds=outer_timeout,timed_out=timed_out, output_sha256=digest(out / f"{stem}.out"), receipt_sha256=digest(receipt) if receipt.exists() else None))
+    return 124 if timed_out else code if code > 0 else 3 if code < 0 else 0
 
 
 def main():
@@ -358,6 +439,9 @@ def main():
     check = sub.add_parser("validate")
     check.add_argument("out", type=pathlib.Path)
     run = sub.add_parser("launch")
+    run.add_argument("--timeout",type=float,default=600)
+    run.add_argument("--cleanup-timeout",type=float,default=10)
+    run.add_argument("--outer-timeout",type=float)
     run.add_argument("directory")
     run.add_argument("stem")
     run.add_argument("command", nargs=argparse.REMAINDER)
@@ -378,13 +462,18 @@ def main():
             (args.out / "validation.json").write_text('{"status":"invalid","errors":["validation incomplete"]}\n')
             return validate(args.out)
         if args.mode == "launch":
-            return launch(args)
+            with outer_deadline(args.outer_timeout if args.outer_timeout is not None else args.timeout+3*args.cleanup_timeout+10):
+                return launch(args)
         if args.mode == "stop":
             terminate_owned(read(args.launch)["process"], args.timeout)
             return 0
         observe_owned(args.pid,args.data_dir,args.output,digest(args.await_exec) if args.await_exec else None)
         return 0
     except (ValueError, KeyError, TypeError, OSError) as error:
+        if isinstance(error,TimeoutError) and args.mode == "launch":
+            failure=pathlib.Path(args.directory)/(args.stem+".failure.json")
+            if not failure.exists():
+                write_new(failure,dict(schema_version=1,kind="phase_outer_deadline_failure",error=str(error),timed_out=True,end_utc=now()))
         print(f"invalid YCSB evidence: {error}", file=sys.stderr)
         return 3
 

@@ -34,7 +34,7 @@ class CompareTests(unittest.TestCase):
         self.directory = self.out / self.target
         self.directory.mkdir()
         self.process = dict(pid=1234, start_ticks=500, exe_sha256="a"*64, gomaxprocs_unset=True)
-        self.manifest = dict(schema_version=1, campaign_id="offline-test-only", targets=[self.target], profile="command_wal_relaxed", formats={self.target:"bson"}, recordcount=64, operationcount=10000, threadcount=16, run_repeats=1, client=dict(schema_version=1, producer_commit=COMPARE.PRODUCER, source_commit=COMPARE.PRODUCER, source_patch_sha256=hashlib.sha256(b"").hexdigest(), build_id="offline-fixture-build", exe_sha256="a"*64, toolchain="fixture", compatibility_configuration="fixture"))
+        self.manifest = dict(schema_version=1,deadlines=dict(phase_seconds=600,helper_seconds=180,cleanup_seconds=10,phase_outer_seconds=640,helper_outer_seconds=220), campaign_id="offline-test-only", targets=[self.target], profile="command_wal_relaxed", formats={self.target:"bson"}, recordcount=64, operationcount=10000, threadcount=16, run_repeats=1, client=dict(schema_version=1, producer_commit=COMPARE.PRODUCER, source_commit=COMPARE.PRODUCER, source_patch_sha256=hashlib.sha256(b"").hexdigest(), build_id="offline-fixture-build", exe_sha256="a"*64, toolchain="fixture", compatibility_configuration="fixture"))
         self.manifest["server_builds"] = {self.target:dict(schema_version=1, version="candidate", source_commit="d"*40, exe_sha256="a"*64, expected_owner="cow")}
         self.save(self.out / "server-build.json", dict(schema_version=1, servers=self.manifest["server_builds"]))
         self.save(self.out / "manifest.json", self.manifest)
@@ -53,7 +53,7 @@ class CompareTests(unittest.TestCase):
             if stem!="load": receipt.update(db_close=call_result(4,4),workload_close=call_result(4,4))
             self.receipts[stem] = receipt
             self.save(self.directory / f"{stem}.close.json", receipt)
-            self.save(self.directory / f"{stem}.launch.json", dict(schema_version=1, campaign_id="offline-test-only", phase_id=phase_id, process=self.process, start_utc="2026-10-29T00:00:00Z" if stem=="load" else "2026-10-29T00:00:04Z", end_utc="2026-10-29T00:00:04Z", exit_code=0, output_sha256=COMPARE.digest(self.directory / f"{stem}.out"), receipt_sha256=COMPARE.digest(self.directory / f"{stem}.close.json")))
+            self.save(self.directory / f"{stem}.launch.json", dict(schema_version=1, campaign_id="offline-test-only", phase_id=phase_id, timeout_seconds=600,cleanup_timeout_seconds=10,outer_timeout_seconds=640,timed_out=False,process=self.process, start_utc="2026-10-29T00:00:00Z" if stem=="load" else "2026-10-29T00:00:04Z", end_utc="2026-10-29T00:00:04Z", exit_code=0, output_sha256=COMPARE.digest(self.directory / f"{stem}.out"), receipt_sha256=COMPARE.digest(self.directory / f"{stem}.close.json")))
         data_dir = str(self.directory / "db")
         self.save(self.directory / "server.launch.json", dict(process=self.process, data_dir=data_dir))
         shared = dict(schema_version=1, version="candidate", source_commit="d"*40, campaign_id="offline-test-only", target=self.target, profile="command_wal_relaxed", format="bson", process=self.process, data_dir=data_dir, owner_id="1"*32, phase_ids=ids)
@@ -86,7 +86,7 @@ class CompareTests(unittest.TestCase):
             self.save(self.directory/(prefix+".launch.json"),dict(process=proc,data_dir=path))
             self.save(self.directory/(prefix+".exit.json"),dict(process=proc,exit_code=0))
             owners[prefix]=observation
-        self.change("lifecycle.json",lambda v:v.update(reopened_process=owners["reopened"]["process"],reopened_owner_id=owners["reopened"]["owner_id"]))
+        self.change("lifecycle.json",lambda v:v.update(reopened_process=owners["reopened"]["process"],reopened_owner_id=owners["reopened"]["owner_id"],preclose_state_utc="2026-10-29T00:00:05Z",reopened_state_utc="2026-10-29T00:00:08Z",reopen=call_result(6,6),random_state_preservation=call_result(8,9)))
         for name in ("runtime.json","lifecycle.json"):
             self.change(name,lambda v:v.update(data_dir=owners["server"]["data_dir"]))
         identity=dict(schema_version=1,source_id=build["source_commit"],fixture_id=self.manifest["campaign_id"]+":"+self.target+":random",profile=self.manifest["profile"],target="native" if self.target=="treedb_native" else "mongo",format="bson")
@@ -111,7 +111,7 @@ class CompareTests(unittest.TestCase):
     def helper_fixture(self,stem,mode,fixture_id,start,end,artifacts,checkpoint):
         receipt=dict(schema_version=1,kind="random_snapshot_client_close" if mode=="snapshot" else "deterministic_fixture_client_close",source_id=self.manifest["server_builds"][self.target]["source_commit"],fixture_id=fixture_id,mode=mode,pid=4321,started_utc=f"2026-10-29T00:00:{start:02d}Z",ended_utc=f"2026-10-29T00:00:{end:02d}Z",result_error="",close_error="",checkpoint_attempted=checkpoint,checkpoint_succeeded=checkpoint,checkpoint=call_result(start,end) if checkpoint else None,artifacts_sha256={name:COMPARE.digest(self.directory/name) for name in artifacts})
         self.save(self.directory/(stem+".close.json"),receipt)
-        self.save(self.directory/(stem+".launch.json"),dict(process=dict(self.process,pid=4321),campaign_id=self.manifest["campaign_id"],phase_id=stem,exit_code=0,start_utc=receipt["started_utc"],end_utc=receipt["ended_utc"],receipt_sha256=COMPARE.digest(self.directory/(stem+".close.json"))))
+        self.save(self.directory/(stem+".launch.json"),dict(process=dict(self.process,pid=4321),campaign_id=self.manifest["campaign_id"],phase_id=stem,exit_code=0,timeout_seconds=180,cleanup_timeout_seconds=10,outer_timeout_seconds=220,timed_out=False,start_utc=receipt["started_utc"],end_utc=receipt["ended_utc"],receipt_sha256=COMPARE.digest(self.directory/(stem+".close.json"))))
 
     @staticmethod
     def save(path, value):
@@ -301,7 +301,10 @@ class CompareTests(unittest.TestCase):
     def test_failed_readiness_retains_identity_and_cleans_actual_owned_process(self):
         self.exercise_shell_cleanup(ready=False)
 
-    def exercise_shell_cleanup(self, ready):
+    def test_shell_hanging_phase_deadline_cleans_client_and_server(self):
+        self.exercise_shell_cleanup(ready=True,hang=True)
+
+    def exercise_shell_cleanup(self, ready, hang=False):
         # Offline dependency stubs exercise launcher dispatch without a product DB.
         tools = self.out / "offline-tools"
         tools.mkdir()
@@ -333,7 +336,7 @@ int main(int argc,char **argv) {
 }""")
         server = tools / "native-server"
         subprocess.run(["cc", str(source), "-o", str(server), '-DMARKER='+json.dumps(str(marker)), "-DREADY="+str(int(ready))],check=True,capture_output=True)
-        client = executable("go-ycsb", "#!/usr/bin/env python3\nimport json,os,sys,time\njson.dump(dict(argv=sys.argv[1:],env_unset='GOMAXPROCS' not in os.environ),open("+repr(str(client_marker))+",'w'))\ntime.sleep(.1)\nsys.exit(37)\n")
+        client = executable("go-ycsb", "#!/usr/bin/env python3\nimport json,os,sys,time,signal\njson.dump(dict(argv=sys.argv[1:],env_unset='GOMAXPROCS' not in os.environ),open("+repr(str(client_marker))+",'w'))\n"+("signal.signal(signal.SIGTERM,signal.SIG_IGN); time.sleep(30)" if hang else "time.sleep(.1); sys.exit(37)")+"\n")
         import socket
         with socket.socket() as sock:
             sock.bind(("127.0.0.1",0))
@@ -345,9 +348,9 @@ int main(int argc,char **argv) {
         self.save(server_build_path, dict(schema_version=1, servers={"treedb_native":dict(schema_version=1,version="candidate",source_commit=COMPARE.PRODUCER,exe_sha256=COMPARE.digest(server),expected_owner="cow",source_dir=str(tools),source_patch_sha256=COMPARE.digest(self.out/"client.patch"))}))
         execution = self.out / "execution"
         environment = os.environ.copy()
-        environment.update(PATH=str(tools)+os.pathsep+environment["PATH"], GOMAXPROCS="1", PARSE_ONLY="false", BUILD="false", BUILD_GOYCSB="false", OUT_DIR=str(execution), TARGETS="treedb_native", MONGODB_MODE="skip", TREEDB_NATIVE_DOCUMENT_FORMAT="json", TREEDB_NATIVE_SERVER_BIN=str(server), TREEDB_MONGO_GATEWAY_BIN=str(tools/"must-not-launch"), NATIVE_ADDR=f"127.0.0.1:{port}", CLIENT_BUILD_MANIFEST=str(build_path), SERVER_BUILD_MANIFEST=str(server_build_path), GOYCSB_DIR=str(tools), GOYCSB_BIN=str(client), FIXTURE_BIN=str(client), READINESS_TIMEOUT="1")
+        environment.update(PATH=str(tools)+os.pathsep+environment["PATH"], GOMAXPROCS="1", PARSE_ONLY="false", BUILD="false", BUILD_GOYCSB="false", OUT_DIR=str(execution), TARGETS="treedb_native", MONGODB_MODE="skip", TREEDB_NATIVE_DOCUMENT_FORMAT="json", TREEDB_NATIVE_SERVER_BIN=str(server), TREEDB_MONGO_GATEWAY_BIN=str(tools/"must-not-launch"), NATIVE_ADDR=f"127.0.0.1:{port}", CLIENT_BUILD_MANIFEST=str(build_path), SERVER_BUILD_MANIFEST=str(server_build_path), GOYCSB_DIR=str(tools), GOYCSB_BIN=str(client), FIXTURE_BIN=str(client), READINESS_TIMEOUT="1", PHASE_TIMEOUT_SECONDS="1", CHILD_CLEANUP_TIMEOUT_SECONDS="1")
         outcome = subprocess.run(["bash", str(ROOT / "ycsb_compare_mongodb_treedb.sh")],env=environment,text=True,capture_output=True,timeout=20)
-        self.assertEqual(outcome.returncode,37 if ready else 1,outcome.stderr)
+        self.assertEqual(outcome.returncode,(124 if hang else 37) if ready else 1,outcome.stderr)
         launch = json.loads((execution/"treedb_native/server.launch.json").read_text())
         self.assertFalse(pathlib.Path(f"/proc/{launch['process']['pid']}").exists())
         self.assertEqual(json.loads((execution/"treedb_native/server.exit.json").read_text())["exit_code"],0)
@@ -358,6 +361,12 @@ int main(int argc,char **argv) {
         self.assertTrue(json.loads(marker.read_text())["env_unset"])
         child = json.loads(client_marker.read_text())
         self.assertTrue(child["env_unset"])
+        if hang:
+            failure=COMPARE.read(execution/"treedb_native/load.failure.json")
+            self.assertTrue(failure["timed_out"])
+            self.assertTrue(failure["cleanup"]["reaped"])
+            self.assertEqual(failure["cleanup"]["exit_code"],-9)
+            self.assertFalse(pathlib.Path(f"/proc/{failure['pid']}").exists())
         self.assertEqual(child["argv"][:2],["load","treedb-native"])
         self.assertIn("treedb.document_format=json",child["argv"])
         self.assertIn("treedb.ack=visible",child["argv"])
@@ -543,6 +552,145 @@ int main(int argc,char **argv) {
             self.assertFalse(pathlib.Path(f"/proc/{cleanup['process']['pid']}").exists())
             self.assertFalse((self.directory/"observation-failure.launch.json").exists())
         finally:signal.signal(signal.SIGTERM,previous)
+
+    def test_hanging_child_deadlines_retain_failure_kill_and_reap(self):
+        controls=(("child-timeout",.15,.05,.5,124),("outer-timeout",30,.05,.15,3),("outer-during-cleanup",.1,.2,.12,124))
+        for stem,timeout,cleanup,outer,expected in controls:
+            with self.subTest(stem=stem):
+                command=[sys.executable,str(ROOT/"ycsb_compare_validate.py"),"launch","--timeout",str(timeout),"--cleanup-timeout",str(cleanup),"--outer-timeout",str(outer),str(self.directory),stem,"--",sys.executable,"-c","import signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);time.sleep(30)"]
+                outcome=subprocess.run(command,text=True,capture_output=True,timeout=4)
+                self.assertEqual(outcome.returncode,expected,outcome.stderr)
+                failure=COMPARE.read(self.directory/(stem+".failure.json"))
+                self.assertTrue(failure["timed_out"])
+                self.assertTrue(failure["pidfd_pinned"])
+                self.assertTrue(failure["cleanup"]["success"])
+                self.assertTrue(failure["cleanup"]["reaped"])
+                self.assertEqual(failure["cleanup"]["exit_code"],-9)
+                self.assertFalse(pathlib.Path(f"/proc/{failure['pid']}").exists())
+                self.assertFalse((self.directory/(stem+".close.json")).exists(),"must never manufacture producer close receipt")
+        self.check(False,"retained launcher/helper failure")
+
+    def test_hanging_helper_child_is_bounded_and_reaped(self):
+        binary=self.out/"hanging-helper"
+        binary.write_text("#!/usr/bin/env python3\nimport signal,time\nsignal.signal(signal.SIGTERM,signal.SIG_IGN)\ntime.sleep(30)\n")
+        binary.chmod(0o755)
+        self.manifest["fixture"]["binary"]=str(binary)
+        self.save(self.out/"manifest.json",self.manifest)
+        command=[sys.executable,str(ROOT/"ycsb_compare_live.py"),"snapshot",str(self.directory),self.target,"--stage","loaded","--addr","127.0.0.1:1","--timeout",".15","--cleanup-timeout",".05","--outer-timeout",".5"]
+        # Use a fresh phase name: delete the synthetic phase artifacts only.
+        for suffix in (".out",".err",".launch.json",".close.json"):(self.directory/("snapshot_loaded"+suffix)).unlink(missing_ok=True)
+        outcome=subprocess.run(command,text=True,capture_output=True,timeout=4)
+        self.assertNotEqual(outcome.returncode,0)
+        failure=COMPARE.read(self.directory/"snapshot_loaded.failure.json")
+        self.assertTrue(failure["timed_out"])
+        self.assertTrue(failure["cleanup"]["reaped"])
+        self.assertFalse(pathlib.Path(f"/proc/{failure['pid']}").exists())
+
+    def test_first_core_observation_failure_uses_pinned_direct_child_for_cleanup(self):
+        import argparse
+        from unittest import mock
+        args=argparse.Namespace(directory=str(self.directory),stem="core-observation-failure",command=[sys.executable,"-c","import time;time.sleep(30)"],cleanup_timeout=.05)
+        with mock.patch.object(COMPARE,"observe_core",side_effect=PermissionError("injected first procfs failure")):
+            with self.assertRaises(PermissionError):COMPARE.launch(args)
+        failure=COMPARE.read(self.directory/"core-observation-failure.failure.json")
+        self.assertIsNone(failure["process"])
+        self.assertTrue(failure["pidfd_pinned"])
+        self.assertTrue(failure["cleanup"]["reaped"])
+        self.assertFalse(pathlib.Path(f"/proc/{failure['pid']}").exists())
+
+    def test_measured_phase_overlap_rejected_with_individually_valid_close_bounds(self):
+        # Both runs have valid receipt intervals, and their maximum end precedes
+        # checkpoint. Only their actual overlap makes this packet invalid.
+        half="2026-10-29T00:00:04.500000Z"
+        self.change("run_1.launch.json",lambda v:v.update(end_utc=half))
+        checkpoint=call_result(4,5)
+        checkpoint.update(start_utc=half,elapsed_ns=500_000_000)
+        self.change("snapshot_preclose.close.json",lambda v:v.update(started_utc=half,checkpoint=checkpoint))
+        self.change("snapshot_preclose.launch.json",lambda v:v.update(start_utc=half))
+        self.change("lifecycle.json",lambda v:v.update(checkpoint=checkpoint))
+        self.manifest["run_repeats"]=2
+        self.save(self.out/"manifest.json",self.manifest)
+        for suffix in (".out",".close.json",".launch.json"):
+            shutil.copyfile(self.directory/("run_1"+suffix),self.directory/("run_2"+suffix))
+        phase_id="offline-test-only:run_2"
+        self.change("run_2.launch.json",lambda v:v.update(phase_id=phase_id))
+        self.change("run_2.close.json",lambda v:v.update(phase_id=phase_id))
+        for name in ("runtime.json","lifecycle.json"):
+            self.change(name,lambda v:v["phase_ids"].append(phase_id))
+        self.check(False,"measured phases overlap/out of order")
+        point=call_result(4,4);point.update(start_utc=half,end_utc=half)
+        self.change("run_2.close.json",lambda v:v.update(db_close=point,workload_close=point))
+        self.change("run_2.launch.json",lambda v:v.update(start_utc=half))
+        self.check(True)
+
+    def test_each_measured_phase_start_must_follow_original_owner_open(self):
+        self.change("load.launch.json",lambda v:v.update(start_utc="2026-10-28T23:59:59Z"))
+        self.check(False,"measured phase outside complete observed owner lifetime")
+
+    def test_helpers_must_finish_before_actual_before_close_observation(self):
+        for prefix,utc in (("server","2026-10-29T00:00:04Z"),("reopened","2026-10-29T00:00:07Z"),("fixture-write","2026-10-29T00:00:11Z"),("fixture-reopened","2026-10-29T00:00:16Z")):
+            with self.subTest(prefix=prefix):
+                path=self.directory/(prefix+".evidence/owner.before-close.json")
+                original=COMPARE.read(path)
+                value=dict(original,observed_utc=utc);self.save(path,value)
+                self.check(False,"outside complete observed owner lifetime")
+                self.save(path,original)
+
+    def test_aggregate_bounds_must_match_original_calls_and_compare_after_snapshot(self):
+        original=COMPARE.read(self.directory/"lifecycle.json")
+        for mutate,message in ((lambda v:v.update(reopen=call_result(6,7)),"reopen bounds"),(lambda v:v.update(preclose_state_utc="2026-10-29T00:00:04.500000Z"),"snapshot timestamps"),(lambda v:v.update(random_state_preservation=call_result(7,9)),"comparison precedes")):
+            with self.subTest(message=message):
+                self.save(self.directory/"lifecycle.json",copy.deepcopy(original))
+                self.change("lifecycle.json",mutate)
+                self.check(False,message)
+
+    def test_success_exit_cannot_waive_timeout_or_failure_receipt(self):
+        self.change("load.launch.json",lambda v:v.update(timed_out=True))
+        self.check(False)
+        self.change("load.launch.json",lambda v:v.update(timed_out=False))
+        self.save(self.directory/"helper-assemble.failure.json",dict(schema_version=1,error="outer assembly deadline"))
+        self.check(False,"retained launcher/helper failure")
+
+    def test_nonfinite_or_nonpositive_deadlines_are_rejected_before_spawn(self):
+        for timeout in ("nan","inf","0","-1"):
+            with self.subTest(timeout=timeout):
+                command=[sys.executable,str(ROOT/"ycsb_compare_validate.py"),"launch","--timeout",timeout,str(self.directory),"invalid-deadline","--",sys.executable,"-c","raise SystemExit(0)"]
+                outcome=subprocess.run(command,text=True,capture_output=True)
+                self.assertNotEqual(outcome.returncode,0)
+                self.assertIn("finite and positive",outcome.stderr)
+                self.assertFalse((self.directory/"invalid-deadline.cleanup.json").exists())
+
+    def test_timeout_remains_failure_when_term_returns_success(self):
+        command=[sys.executable,str(ROOT/"ycsb_compare_validate.py"),"launch","--timeout",".15","--cleanup-timeout",".1",str(self.directory),"graceful-timeout","--",sys.executable,"-c","import signal,sys,time;signal.signal(signal.SIGTERM,lambda *_:sys.exit(0));time.sleep(30)"]
+        outcome=subprocess.run(command,text=True,capture_output=True,timeout=3)
+        self.assertEqual(outcome.returncode,124,outcome.stderr)
+        launch=COMPARE.read(self.directory/"graceful-timeout.launch.json")
+        self.assertEqual(launch["exit_code"],0)
+        self.assertTrue(launch["timed_out"])
+        failure=COMPARE.read(self.directory/"graceful-timeout.failure.json")
+        self.assertTrue(failure["cleanup"]["reaped"])
+        self.assertFalse(pathlib.Path(f"/proc/{failure['pid']}").exists())
+
+    def test_measured_phases_cannot_overlap_across_targets(self):
+        from unittest import mock
+        target="mongodb"
+        other=self.out/target
+        shutil.copytree(self.directory,other)
+        self.manifest["targets"].append(target)
+        self.manifest["formats"][target]="bson"
+        self.save(self.out/"manifest.json",self.manifest)
+        for stem in ("load","run_1"):
+            receipt=COMPARE.read(other/(stem+".close.json"))
+            receipt["phase_id"] += ":other-target"
+            self.save(other/(stem+".close.json"),receipt)
+            launch=COMPARE.read(other/(stem+".launch.json"))
+            launch.update(phase_id=receipt["phase_id"],receipt_sha256=COMPARE.digest(other/(stem+".close.json")))
+            self.save(other/(stem+".launch.json"),launch)
+        # Isolate the campaign-wide sequencing gate; no server claims are made.
+        with mock.patch.object(COMPARE,"server_evidence"), mock.patch("sys.stderr"):
+            self.assertEqual(COMPARE.validate(self.out),3)
+        errors=COMPARE.read(self.out/"validation.json")["errors"]
+        self.assertTrue(any("measured phases overlap/out of order" in error for error in errors))
 
     def test_launcher_rejects_reused_receipt_and_propagates_error(self):
         command = [sys.executable, str(ROOT / "ycsb_compare_validate.py"), "launch", str(self.directory), "load", "--", "/bin/true"]

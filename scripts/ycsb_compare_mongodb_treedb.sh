@@ -33,6 +33,9 @@ BUILD_GOYCSB="${BUILD_GOYCSB:-false}"
 PARSE_ONLY="${PARSE_ONLY:-false}"
 READINESS_TIMEOUT="${READINESS_TIMEOUT:-60}"
 ALLOW_YCSB_ERRORS="${ALLOW_YCSB_ERRORS:-false}"
+PHASE_TIMEOUT_SECONDS="${PHASE_TIMEOUT_SECONDS:-600}"
+HELPER_TIMEOUT_SECONDS="${HELPER_TIMEOUT_SECONDS:-180}"
+CHILD_CLEANUP_TIMEOUT_SECONDS="${CHILD_CLEANUP_TIMEOUT_SECONDS:-10}"
 
 usage() {
   cat <<'EOF'
@@ -45,6 +48,10 @@ Supports supplied absolute TREEDB_NATIVE_SERVER_BIN/TREEDB_MONGO_GATEWAY_BIN,
 GOYCSB_BIN, FIXTURE_BIN, TREEDB_NATIVE_DOCUMENT_FORMAT and TREEDB_MONGO_DOCUMENT_FORMAT
 (json|bson), TREEDB_PROFILE, RECORDCOUNT, OPERATIONCOUNT, THREADCOUNT,
 RUN_REPEATS, BUILD, BUILD_GOYCSB, OUT_DIR and TMPDIR.
+PHASE_TIMEOUT_SECONDS=600 and HELPER_TIMEOUT_SECONDS=180 bound each child.
+CHILD_CLEANUP_TIMEOUT_SECONDS=10 bounds each TERM/KILL/reap cleanup step.
+Each Python phase/helper also has an explicit outer wall deadline and records
+timeout failures; a timed-out child can never qualify, even if it exits zero.
 
 CLIENT_BUILD_MANIFEST and SERVER_BUILD_MANIFEST are required for execution.
 The latter pins each version's source, server ELF and expected legacy/COW owner.
@@ -70,7 +77,7 @@ fail() { echo "$*" >&2; exit 2; }
 for flag in BUILD BUILD_GOYCSB PARSE_ONLY ALLOW_YCSB_ERRORS; do
   [[ "${!flag}" == true || "${!flag}" == false ]] || fail "$flag must be true or false"
 done
-for count in RECORDCOUNT OPERATIONCOUNT THREADCOUNT RUN_REPEATS READINESS_TIMEOUT; do
+for count in RECORDCOUNT OPERATIONCOUNT THREADCOUNT RUN_REPEATS READINESS_TIMEOUT PHASE_TIMEOUT_SECONDS HELPER_TIMEOUT_SECONDS CHILD_CLEANUP_TIMEOUT_SECONDS; do
   [[ "${!count}" =~ ^[1-9][0-9]*$ ]] || fail "$count must be a positive integer"
 done
 case "$TREEDB_PROFILE" in command_wal_durable|command_wal_relaxed|no_wal_fast) ;; *) fail "unsupported TREEDB_PROFILE";; esac
@@ -111,9 +118,9 @@ if [[ "$BUILD_GOYCSB" == true ]]; then (cd "$GOYCSB_DIR" && make build); fi
 [[ -x "$GOYCSB_BIN" ]] || fail "missing supplied client binary"
 for target in "${selected[@]}"; do mkdir "$OUT_DIR/$target"; done
 
-"$PYTHON" - "$OUT_DIR" "$CLIENT_BUILD_MANIFEST" "$GOYCSB_DIR" "$GOYCSB_BIN" "$TREEDB_PROFILE" "$RECORDCOUNT" "$OPERATIONCOUNT" "$THREADCOUNT" "$RUN_REPEATS" "$TREEDB_NATIVE_DOCUMENT_FORMAT" "$TREEDB_MONGO_DOCUMENT_FORMAT" "$SERVER_BUILD_MANIFEST" "$TREEDB_NATIVE_SERVER_BIN" "$TREEDB_MONGO_GATEWAY_BIN" "$FIXTURE_BIN" "$ROOT/scripts/ycsb_correctness_fixture.go" "${selected[@]}" <<'PY'
+"$PYTHON" - "$OUT_DIR" "$CLIENT_BUILD_MANIFEST" "$GOYCSB_DIR" "$GOYCSB_BIN" "$TREEDB_PROFILE" "$RECORDCOUNT" "$OPERATIONCOUNT" "$THREADCOUNT" "$RUN_REPEATS" "$TREEDB_NATIVE_DOCUMENT_FORMAT" "$TREEDB_MONGO_DOCUMENT_FORMAT" "$SERVER_BUILD_MANIFEST" "$TREEDB_NATIVE_SERVER_BIN" "$TREEDB_MONGO_GATEWAY_BIN" "$FIXTURE_BIN" "$ROOT/scripts/ycsb_correctness_fixture.go" "$PHASE_TIMEOUT_SECONDS" "$HELPER_TIMEOUT_SECONDS" "$CHILD_CLEANUP_TIMEOUT_SECONDS" "${selected[@]}" <<'PY'
 import hashlib, json, pathlib, re, subprocess, sys, uuid
-out, build_path, repo, binary, profile, records, ops, threads, repeats, native_format, mongo_format, server_build_path, native_binary, mongo_binary, fixture_binary, fixture_source, *targets = sys.argv[1:]
+out, build_path, repo, binary, profile, records, ops, threads, repeats, native_format, mongo_format, server_build_path, native_binary, mongo_binary, fixture_binary, fixture_source, phase_timeout, helper_timeout, cleanup_timeout, *targets = sys.argv[1:]
 out = pathlib.Path(out)
 build = json.loads(pathlib.Path(build_path).read_text())
 def git(*args):
@@ -158,7 +165,7 @@ for target, record in server_builds.items():
 (out / 'client-buildinfo.txt').write_bytes(subprocess.check_output(['go', 'version', '-m', binary]))
 (out/'fixture-source.go').write_bytes(pathlib.Path(fixture_source).read_bytes())
 fixture=dict(schema_version=1,binary=fixture_binary,exe_sha256=sha(fixture_binary),source_sha256=sha(fixture_source))
-manifest = dict(schema_version=1, lifecycle_contract=2, fixture=fixture, campaign_id=uuid.uuid4().hex, targets=targets, profile=profile, formats={'treedb_native':native_format, 'treedb_mongo':mongo_format, 'mongodb':'bson'}, recordcount=int(records), operationcount=int(ops), threadcount=int(threads), run_repeats=int(repeats), client=build, server_builds=server_builds)
+manifest = dict(schema_version=1, lifecycle_contract=2, deadlines=dict(phase_seconds=int(phase_timeout),helper_seconds=int(helper_timeout),cleanup_seconds=int(cleanup_timeout),phase_outer_seconds=int(phase_timeout)+3*int(cleanup_timeout)+10,helper_outer_seconds=int(helper_timeout)+3*int(cleanup_timeout)+10), fixture=fixture, campaign_id=uuid.uuid4().hex, targets=targets, profile=profile, formats={'treedb_native':native_format, 'treedb_mongo':mongo_format, 'mongodb':'bson'}, recordcount=int(records), operationcount=int(ops), threadcount=int(threads), run_repeats=int(repeats), client=build, server_builds=server_builds)
 (out / 'manifest.json').write_text(json.dumps(manifest, indent=2)+'\n')
 PY
 
@@ -232,6 +239,9 @@ wait_tcp() {
   done
   echo "timed out waiting for $addr" >&2; return 1
 }
+live_helper() {
+  "$PYTHON" "$LIVE" "$@" --timeout "$HELPER_TIMEOUT_SECONDS" --cleanup-timeout "$CHILD_CLEANUP_TIMEOUT_SECONDS" --outer-timeout "$((HELPER_TIMEOUT_SECONDS+3*CHILD_CLEANUP_TIMEOUT_SECONDS+10))"
+}
 log_command() { printf '%q ' "$@" >>"$OUT_DIR/commands.txt"; printf '\n' >>"$OUT_DIR/commands.txt"; }
 start_server() {
   local target=$1 addr=$2 binary=$3 prefix=$4 dir="$OUT_DIR/$1/$5"
@@ -274,16 +284,16 @@ for target in "${selected[@]}"; do
     phase=run; stem="run_$i"; [[ "$i" != 0 ]] || { phase=load; stem=load; }
     command=("$GOYCSB_BIN" "$phase" "$binding" "${extra[@]}" -p "recordcount=$RECORDCOUNT" -p "operationcount=$OPERATIONCOUNT" -p "threadcount=$THREADCOUNT" -p fieldcount=10 -p fieldlength=100 -p readallfields=true -p writeallfields=false -p insertorder=hashed -p keyprefix=user -p zeropadding=1 -p insertstart=0 -p readproportion=0.95 -p updateproportion=0.05 -p scanproportion=0 -p insertproportion=0 -p readmodifywriteproportion=0)
     log_command env -u GOMAXPROCS "${command[@]}"
-    "$PYTHON" "$VALIDATOR" launch "$OUT_DIR/$target" "$stem" -- "${command[@]}"
+    "$PYTHON" "$VALIDATOR" launch --timeout "$PHASE_TIMEOUT_SECONDS" --cleanup-timeout "$CHILD_CLEANUP_TIMEOUT_SECONDS" --outer-timeout "$((PHASE_TIMEOUT_SECONDS+3*CHILD_CLEANUP_TIMEOUT_SECONDS+10))" "$OUT_DIR/$target" "$stem" -- "${command[@]}"
     if [[ "$phase" == load ]]; then
       addr=$NATIVE_ADDR; [[ "$target" == treedb_native ]] || addr=$TREEDB_MONGO_ADDR
-      "$PYTHON" "$LIVE" snapshot "$OUT_DIR/$target" "$target" --addr "$addr" --stage loaded
+      live_helper snapshot "$OUT_DIR/$target" "$target" --addr "$addr" --stage loaded
     fi
   done
 done
 for target in "${selected[@]}"; do
   addr=$NATIVE_ADDR; [[ "$target" == treedb_native ]] || addr=$TREEDB_MONGO_ADDR
-  "$PYTHON" "$LIVE" snapshot "$OUT_DIR/$target" "$target" --addr "$addr" --stage preclose
+  live_helper snapshot "$OUT_DIR/$target" "$target" --addr "$addr" --stage preclose
 done
 cleanup
 SERVER_PIDS=(); SERVER_TARGETS=(); SERVER_PREFIXES=()
@@ -292,17 +302,17 @@ for target in "${selected[@]}"; do
   if [[ "$target" == treedb_mongo ]]; then addr=$TREEDB_MONGO_ADDR; binary=$TREEDB_MONGO_GATEWAY_BIN; extra=(-document-format "$TREEDB_MONGO_DOCUMENT_FORMAT"); fi
   [[ "$target" != mongodb ]] || fail "MongoDB lifecycle integration is unsupported"
   start_server "$target" "$addr" "$binary" reopened db "${extra[@]}"
-  "$PYTHON" "$LIVE" snapshot "$OUT_DIR/$target" "$target" --addr "$addr" --stage reopened
+  live_helper snapshot "$OUT_DIR/$target" "$target" --addr "$addr" --stage reopened
   cleanup
   SERVER_PIDS=(); SERVER_TARGETS=(); SERVER_PREFIXES=()
   start_server "$target" "$addr" "$binary" fixture-write fixture-db "${extra[@]}"
-  "$PYTHON" "$LIVE" write "$OUT_DIR/$target" "$target" --addr "$addr"
+  live_helper write "$OUT_DIR/$target" "$target" --addr "$addr"
   cleanup
   SERVER_PIDS=(); SERVER_TARGETS=(); SERVER_PREFIXES=()
   start_server "$target" "$addr" "$binary" fixture-reopened fixture-db "${extra[@]}"
-  "$PYTHON" "$LIVE" verify "$OUT_DIR/$target" "$target" --addr "$addr"
+  live_helper verify "$OUT_DIR/$target" "$target" --addr "$addr"
   cleanup
   SERVER_PIDS=(); SERVER_TARGETS=(); SERVER_PREFIXES=()
-  "$PYTHON" "$LIVE" assemble "$OUT_DIR/$target" "$target"
+  live_helper assemble "$OUT_DIR/$target" "$target"
 done
 "$PYTHON" "$VALIDATOR" validate "$OUT_DIR"

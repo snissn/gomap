@@ -74,15 +74,27 @@ def owner(directory, prefix, build, profile):
     return opened,closed
 
 
+def owner_bounds(directory,prefix):
+    evidence=directory/(prefix+".evidence")
+    return (c.timestamp(c.read(evidence/"owner.open.json")["observed_utc"]),
+            c.timestamp(c.read(evidence/"owner.before-close.json")["observed_utc"]))
+
+
+def require_interval(bounds,lifetime,label):
+    c.require(lifetime[0] <= bounds[0] <= bounds[1] <= lifetime[1],label+" outside complete observed owner lifetime")
+
+
 def helper(directory, stem, manifest, target, mode, fixture_id):
     launch,receipt = [c.read(directory/(stem+suffix)) for suffix in (".launch.json",".close.json")]
     c.process(launch["process"])
-    c.require(launch["campaign_id"] == manifest["campaign_id"] and launch["exit_code"] == 0, "snapshot/fixture child failure or stale campaign")
+    c.require(launch["campaign_id"] == manifest["campaign_id"] and launch["exit_code"] == 0 and launch.get("timed_out") is not True and not (directory/(stem+".failure.json")).exists(), "snapshot/fixture child failure or stale campaign")
     c.require(launch["process"]["exe_sha256"] == manifest["fixture"]["exe_sha256"], "snapshot/fixture ELF mismatch")
     c.require(launch["receipt_sha256"] == c.digest(directory/(stem+".close.json")), "snapshot/fixture receipt hash mismatch")
     c.require(c.schema(receipt) and receipt["kind"] == ("random_snapshot_client_close" if mode == "snapshot" else "deterministic_fixture_client_close"), "wrong snapshot/fixture receipt kind")
     c.require(receipt["source_id"] == manifest["server_builds"][target]["source_commit"] and receipt["fixture_id"] == fixture_id and receipt["mode"] == mode and receipt["pid"] == launch["process"]["pid"], "snapshot/fixture process/source mismatch")
     c.require(receipt["result_error"] == "" and receipt["close_error"] == "", "snapshot/fixture original client close failed")
+    c.positive_timeout(launch["timeout_seconds"],"recorded helper timeout")
+    c.require(launch["timeout_seconds"] == manifest["deadlines"]["helper_seconds"] and launch["timed_out"] is False and launch["cleanup_timeout_seconds"] == manifest["deadlines"]["cleanup_seconds"] and launch["outer_timeout_seconds"] == manifest["deadlines"]["helper_outer_seconds"],"helper deadline binding mismatch")
     bounds = c.timestamp(launch["start_utc"]),c.timestamp(launch["end_utc"])
     c.require(bounds[0] <= c.timestamp(receipt["started_utc"]) <= c.timestamp(receipt["ended_utc"]) <= bounds[1], "snapshot/fixture call interval mismatch")
     for name,hash_value in receipt["artifacts_sha256"].items():
@@ -115,15 +127,25 @@ def validate(directory, target, manifest, lifecycle):
         receipt,bounds = helper(directory,"snapshot_"+stage,manifest,target,"snapshot",random_id)
         receipts[stage] = (receipt,bounds)
         snapshots[stage] = canonical_snapshot(c.read(directory/("snapshot_"+stage+".json")),manifest,target,stage)
-        opening = reopened if stage == "reopened" else original
-        closing = reopened_close if stage == "reopened" else closed
-        c.require(c.timestamp(opening["observed_utc"]) <= bounds[0] <= bounds[1] <= c.timestamp(closing["close"]["start_utc"]), "snapshot not in observed owner lifetime")
+        require_interval(bounds,owner_bounds(directory,"reopened" if stage=="reopened" else "server"),"snapshot")
     load_launch=c.read(directory/"load.launch.json")
     runs=[c.read(directory/("run_"+str(i)+".launch.json")) for i in range(1,manifest["run_repeats"]+1)]
+    measured=[load_launch]+runs
+    previous_end=None
+    for index,launch in enumerate(measured):
+        bounds=(c.timestamp(launch["start_utc"]),c.timestamp(launch["end_utc"]))
+        require_interval(bounds,owner_bounds(directory,"server"),"measured phase")
+        c.require(previous_end is None or previous_end <= bounds[0],"measured phases overlap/out of order")
+        previous_end=bounds[1]
     c.require(c.timestamp(load_launch["end_utc"]) <= receipts["loaded"][1][0] <= receipts["loaded"][1][1] <= c.timestamp(runs[0]["start_utc"]), "loaded snapshot is not between load and measured runs")
     c.require(max(c.timestamp(value["end_utc"]) for value in runs) <= receipts["preclose"][1][0], "preclose snapshot precedes settled measured clients")
     c.require(snapshots["preclose"][0] == snapshots["reopened"][0], "canonical typed random state preservation mismatch")
     c.require(lifecycle["preclose_state_sha256"] == snapshots["preclose"][1] and lifecycle["reopened_state_sha256"] == snapshots["reopened"][1], "canonical random snapshot digest mismatch")
+    c.require(c.timestamp(lifecycle["preclose_state_utc"]) == c.timestamp(receipts["preclose"][0]["ended_utc"]) and c.timestamp(lifecycle["reopened_state_utc"]) == c.timestamp(receipts["reopened"][0]["ended_utc"]), "aggregate snapshot timestamps differ from actual calls")
+    reopen_bounds=c.result(lifecycle["reopen"],"reopen observation interval")
+    c.require(reopen_bounds == (c.timestamp(closed["close"]["end_utc"]),c.timestamp(reopened["observed_utc"])),"aggregate reopen bounds differ from observed owners")
+    preservation=c.result(lifecycle["random_state_preservation"],"random state preservation interval")
+    c.require(receipts["reopened"][1][1] <= preservation[0],"state comparison precedes completed reopened snapshot")
     checkpoint = receipts["preclose"][0]
     c.require(checkpoint["checkpoint_attempted"] is True and checkpoint["checkpoint_succeeded"] is True, "missing real explicit checkpoint call")
     c.result(checkpoint["checkpoint"],"actual explicit checkpoint",bounds=receipts["preclose"][1])
@@ -133,13 +155,16 @@ def validate(directory, target, manifest, lifecycle):
     # independently observed server owners; it cannot stand in for random state.
     first,first_close = owner(directory,"fixture-write",build,manifest["profile"])
     second,second_close = owner(directory,"fixture-reopened",build,manifest["profile"])
+    c.require(c.timestamp(reopened_close["close"]["end_utc"]) <= c.timestamp(first["observed_utc"]),"fixture owner overlaps random reopened owner lifetime")
+    owners=(original,reopened,first,second)
+    c.require(len({item["owner_id"] for item in owners}) == 4 and len({(item["process"]["pid"],item["process"]["start_ticks"]) for item in owners}) == 4,"all service lifetimes require independent owners/processes")
     c.require(first["data_dir"] != original["data_dir"] and first["owner_id"] != second["owner_id"] and first["process"] != second["process"], "fixture requires fresh data and independent reopen")
     c.require(all(first[k] == second[k] for k in ("data_dir","data_device","data_inode")), "fixture reopened data mismatch")
     c.require(c.timestamp(first_close["close"]["end_utc"]) <= c.timestamp(second["observed_utc"]), "fixture reopen precedes original Close")
     fixture_id = manifest["campaign_id"]+":"+target+":deterministic"
     for stem,mode,opened,closing in (("fixture_write","write",first,first_close),("fixture_verify","verify",second,second_close)):
         receipt,bounds=helper(directory,stem,manifest,target,mode,fixture_id)
-        c.require(c.timestamp(opened["observed_utc"]) <= bounds[0] <= bounds[1] <= c.timestamp(closing["close"]["start_utc"]), "fixture call outside observed owner lifetime")
+        require_interval(bounds,owner_bounds(directory,"fixture-write" if mode=="write" else "fixture-reopened"),"fixture call")
         if target == "treedb_native" and mode == "write":
             c.require(receipt["checkpoint_attempted"] is True and receipt["checkpoint_succeeded"] is True,"fixture checkpoint failed/skipped")
     expected = c.read(directory/"fixture.expected.json")
@@ -147,7 +172,7 @@ def validate(directory, target, manifest, lifecycle):
     exact.validate(expected,[c.read(directory/name) for name in ("fixture.updated.json.load.json","fixture.updated.json","fixture.reopened.json")])
 
 
-def run_helper(directory,target,addr,mode,stage=None):
+def run_helper(directory,target,addr,mode,stage=None,timeout=180,cleanup_timeout=10):
     import argparse
     manifest=c.read(directory.parent/"manifest.json")
     stem="snapshot_"+stage if mode=="snapshot" else "fixture_"+("write" if mode=="write" else "verify")
@@ -157,7 +182,7 @@ def run_helper(directory,target,addr,mode,stage=None):
     if mode=="snapshot":
         command += ["-stage",stage]
         if stage=="preclose": command += ["-checkpoint"]
-    code=c.launch(argparse.Namespace(directory=str(directory),stem=stem,command=command))
+    code=c.launch(argparse.Namespace(directory=str(directory),stem=stem,command=command,timeout=timeout,cleanup_timeout=cleanup_timeout))
     c.require(code==0,"snapshot/fixture child failed with exit "+str(code))
 
 
@@ -191,14 +216,20 @@ def main():
     parser.add_argument("mode",choices=("snapshot","write","verify","assemble"))
     parser.add_argument("directory",type=pathlib.Path)
     parser.add_argument("target",choices=c.TARGETS)
+    parser.add_argument("--timeout",type=float,default=180)
+    parser.add_argument("--cleanup-timeout",type=float,default=10)
+    parser.add_argument("--outer-timeout",type=float)
     parser.add_argument("--addr")
     parser.add_argument("--stage",choices=("loaded","preclose","reopened"))
     args=parser.parse_args()
     try:
-        if args.mode=="assemble": assemble(args.directory,args.target)
-        else: run_helper(args.directory,args.target,args.addr,args.mode,args.stage)
+        with c.outer_deadline(args.outer_timeout if args.outer_timeout is not None else args.timeout+3*args.cleanup_timeout+10):
+            if args.mode=="assemble": assemble(args.directory,args.target)
+            else: run_helper(args.directory,args.target,args.addr,args.mode,args.stage,args.timeout,args.cleanup_timeout)
         return 0
     except (ValueError,TypeError,KeyError,OSError) as error:
+        if isinstance(error,TimeoutError):
+            c.write_new(args.directory/("helper-"+args.mode+".failure.json"),dict(schema_version=1,kind="helper_outer_deadline_failure",error=str(error),end_utc=c.now()))
         print("invalid live evidence: "+str(error),file=__import__("sys").stderr)
         return 3
 

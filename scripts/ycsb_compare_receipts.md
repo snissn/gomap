@@ -182,3 +182,32 @@ invalid startup-observation/adapter attempts remain in sibling directories.
 The full random-snapshot shell pipeline has offline checks and requires an
 independent exact-head review plus supported dependent-feature integration;
 these tiny fixture controls do not claim that pipeline or matrix complete.
+
+Each child is bounded by `PHASE_TIMEOUT_SECONDS` (default 600) or
+`HELPER_TIMEOUT_SECONDS` (default 180). `CHILD_CLEANUP_TIMEOUT_SECONDS` defaults
+to 10 per TERM/KILL/reap step. The shell passes an explicit outer wall-work
+budget of child timeout + three cleanup windows + 10 seconds to each Python
+phase/helper entry point, including assembly. A one-shot SIGALRM interrupts
+outer Python work through the same cleanup path. Once cleanup starts, that
+alarm is disabled so it cannot strand a child between TERM and KILL; cleanup
+has its own finite windows. All five budgets are retained in
+`manifest.deadlines`; actual child, cleanup and outer budgets are recorded and
+checked on successful phase/helper launch receipts. All must be finite/positive.
+
+A direct Popen child is pinned with a pidfd before any observation or wait.
+Timeout/interruption cleans precisely that descriptor and reaps that child,
+including when its first procfs observation fails or it execs another image.
+External service cleanup retains the separate start-ticks/ELF revalidation rule.
+`<stem>.failure.json` retains the timeout/error, original observed identity when
+available, pidfd ownership and checked cleanup/reap result. It never replaces or
+invents `<stem>.close.json`. A timeout remains invalid even if TERM yields exit
+zero; any retained launcher/helper failure invalidates the target on reparse.
+
+Validation requires the entire measured load/run sequence to be nonoverlapping
+and ordered, including across selected targets. Every measured start/end and
+helper interval must lie between its actual owner's open and before-close
+observations. Loaded scans lie after load and before the first run; all runs
+settle before the preclose scan. Aggregate snapshot/reopen timestamps must match
+raw calls/owner observations, and state comparison follows the completed
+reopened scan. The deterministic owner starts after the random reopened owner
+closes; all four service lifetimes have distinct process and owner identities.
