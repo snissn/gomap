@@ -23,6 +23,10 @@ packet.mkdir(exist_ok=False)
 (packet / "bin").mkdir()
 temporary = pathlib.Path(os.environ["RUNNER_TEMP"]) / ("recovery-ledger-tmp-" + cell)
 temporary.mkdir(exist_ok=False)
+# Read image identity through the platform-aware environment mapping. On
+# Windows its uppercase-key lookup is lost in a plain copied dictionary.
+identity_keys = ("RUNNER_OS", "RUNNER_ARCH", "ImageOS", "ImageVersion")
+runner_identity = {key: os.environ.get(key) for key in identity_keys}
 env = os.environ.copy()
 env.pop("GOMAP_RECOVERY_LEDGER", None)
 env.pop("GOMAP_ORDERED_ACK_IMAGE_CHILD", None)
@@ -79,6 +83,7 @@ assert git(product, "status", "--porcelain", "--untracked-files=all") == ""
 assert git(harness, "status", "--porcelain", "--untracked-files=all") == ""
 receipt["product_parents"] = git(product, "show", "-s", "--format=%P", "HEAD")
 receipt["event"] = {key: env.get(key) for key in ("GITHUB_EVENT_NAME", "GITHUB_REF", "GITHUB_WORKFLOW_REF", "GITHUB_WORKFLOW_SHA", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "GITHUB_JOB", "RUNNER_ENVIRONMENT", "RUNNER_OS", "RUNNER_ARCH", "ImageOS", "ImageVersion")}
+receipt["event"].update(runner_identity)
 receipt["environment"] = {key: env.get(key) for key in ("GOWORK", "GOMAXPROCS", "GOMEMLIMIT", "GODEBUG", "CGO_ENABLED", "GOOS", "GOARCH", "GOTOOLCHAIN", "GOMAP_RECOVERY_LEDGER", "GOMAP_ORDERED_ACK_IMAGE_CHILD")}
 receipt["platform"] = platform.platform()
 workflow = harness / ".github/workflows/treedb-tests.yml"
@@ -159,8 +164,8 @@ receipt["binaries"] = {}
 failed = False
 try:
     if mode == "controls":
-        for key in ("RUNNER_OS", "RUNNER_ARCH", "ImageOS", "ImageVersion"):
-            assert isinstance(env.get(key), str) and env[key].strip(), "missing builder image identity: " + key
+        for key in identity_keys:
+            assert isinstance(runner_identity.get(key), str) and runner_identity[key].strip(), "missing builder image identity: " + key
         for name, package, selector in selections:
             binary = packet / "bin" / (name + suffix)
             command = ["go", "test", "-c", "-mod=readonly", "-o", str(binary)]
@@ -195,10 +200,10 @@ try:
         assert controls["invocation"] == "controls" and controls["verdict"] == "FOCUSED_EXECUTION_PASS_NOT_CAUSAL_CLOSURE"
         assert len(controls["tests"]) == 4 and all(test["status"] == "PASS" for test in controls["tests"])
         assert controls["clean_product_after"] is True
-        for key in ("RUNNER_OS", "RUNNER_ARCH", "ImageOS", "ImageVersion"):
+        for key in identity_keys:
             assert isinstance(controls["event"].get(key), str) and controls["event"][key].strip(), "missing retained builder image identity: " + key
-            assert isinstance(env.get(key), str) and env[key].strip(), "missing runtime image identity: " + key
-            assert controls["event"][key] == env[key], "builder/runtime image drift: " + key
+            assert isinstance(runner_identity.get(key), str) and runner_identity[key].strip(), "missing runtime image identity: " + key
+            assert controls["event"][key] == runner_identity[key], "builder/runtime image drift: " + key
         descriptor = controls["binaries"]["treedb"]
         assert descriptor["path"] == "bin/treedb" + suffix
         binary = inputs / descriptor["path"]
