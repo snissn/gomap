@@ -66,6 +66,71 @@ func TestFP32ImageEncodedUpperBound(t *testing.T) {
 	}
 }
 
+// Snappy is a production ordinal and section policy. The bound is for the
+// encoded image only; it does not account for compression or decode scratch.
+func TestFP32ImageEncodedUpperBoundSnappy(t *testing.T) {
+	kept, fallback := false, false
+	for _, n := range []int{1, 255, 256, 257, 513} {
+		opts := fp32BoundOptions()
+		opts.PartPolicy.RowsPerGranule = 256
+		opts.Columns[0].Compression = CompressionSnappy
+		imageOpts := ColumnPartImageOptions{SectionCompression: CompressionSnappy}
+		ids, values := make([]int64, n), make([]float32, n*8)
+		for i := range ids {
+			ids[i] = int64(i)
+			values[i*8] = float32(i)
+		}
+		part, err := BuildColumnPart(math.MaxUint64, opts, Batch{Rows: n, Columns: map[string][]int64{"id": ids}, Float32Vectors: map[string][]float32{"embedding": values}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, block := range part.Columns["id"].Blocks {
+			kept = kept || block.Granule.Compression == CompressionSnappy
+			fallback = fallback || block.Granule.Compression == CompressionNone
+		}
+		image, err := BuildColumnPartImage(part, imageOpts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bound, err := FP32ImageEncodedUpperBound(opts, n, imageOpts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if int64(len(image.Bytes)) > bound {
+			t.Fatalf("rows=%d encoded=%d bound=%d", n, len(image.Bytes), bound)
+		}
+		var sectionBytes int64
+		for _, section := range image.Sections {
+			sectionBytes += int64(max(section.RawBytes, section.Length))
+		}
+		if sectionBytes > bound {
+			t.Fatalf("rows=%d raw-or-stored sections=%d bound=%d", n, sectionBytes, bound)
+		}
+	}
+	if !kept || !fallback {
+		t.Fatalf("ordinal Snappy coverage: kept=%t fallback=%t", kept, fallback)
+	}
+	for _, tc := range []struct {
+		data string
+		want Compression
+	}{{"x", CompressionNone}, {strings.Repeat("x", 512), CompressionSnappy}} {
+		section := ColumnPartImageSection{Kind: ColumnPartImageSectionRowLocators}
+		selected, err := selectImageSectionPayloadWithCodec(section, []byte(tc.data), CompressionSnappy, nil)
+		if err != nil || selected.section.Compression != tc.want || selected.section.Length > len(tc.data) {
+			t.Fatalf("section raw=%d selected=%+v err=%v", len(tc.data), selected.section, err)
+		}
+	}
+	opts := fp32BoundOptions()
+	opts.Columns[0].Compression = CompressionSnappy
+	if _, err := FP32ImageEncodedUpperBound(opts, math.MaxInt, ColumnPartImageOptions{SectionCompression: CompressionSnappy}); err == nil {
+		t.Fatal("Snappy overflowing row count accepted")
+	}
+	opts.Columns[0].Compression = CompressionZSTD
+	if _, err := FP32ImageEncodedUpperBound(opts, 1, ColumnPartImageOptions{SectionCompression: CompressionSnappy}); err == nil {
+		t.Fatal("unsupported ordinal ZSTD accepted")
+	}
+}
+
 func TestFP32ImageEncodedUpperBoundAdmission(t *testing.T) {
 	for _, mutate := range []func(*Options){
 		func(o *Options) { o.Columns[0].StatsDisabled = false },
