@@ -49,6 +49,11 @@ jobs:
             os: ubuntu-24.04
             race: "1"
     steps:
+      - name: Enable existing tracked long paths on hosted Windows
+        if: runner.os == 'Windows'
+        run: |
+          git config --global core.longpaths true
+          test "$(git config --global --get core.longpaths)" = "true"
       - name: Checkout exact event harness
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -133,6 +138,11 @@ jobs:
             race: "1"
             mode: diagnostic
     steps:
+      - name: Enable existing tracked long paths on hosted Windows
+        if: runner.os == 'Windows'
+        run: |
+          git config --global core.longpaths true
+          test "$(git config --global --get core.longpaths)" = "true"
       - name: Checkout exact event harness
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
