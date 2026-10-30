@@ -206,7 +206,7 @@ func TestNativeOrdinaryGraphAcceptedAcrossCapturedManifestBuild(t *testing.T) {
 			}
 			current, err := col.nativeJSON.Capture(meta.Name)
 			if err != nil {
-				t.Fatal(err)
+				t.Fatalf("INVALID_WITNESS post-handoff capture=%v; original graph completion=%v", err, graphErr)
 			}
 			defer current.Close()
 			currentManifest, ok := current.collection.domains.Get("column/manifest")
