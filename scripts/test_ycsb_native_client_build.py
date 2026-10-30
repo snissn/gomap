@@ -129,10 +129,18 @@ else:raise SystemExit(91)
             self.assertRaisesRegex(ValueError,'BUILD=false and BUILD_GOYCSB=false',B.preflight,self.out,manifest,self.repo,self.out/'go-ycsb',server,client)
     def test_shell_controlled_packet_refuses_server_build(self):
         self.build();server=self.root/'server.json';server.write_text('{}')
+        # Exercise the later BUILD guard after the earlier runtime-hash gate.
+        # This deliberately synthetic manifest is never used to launch a client:
+        # preflight rejects BUILD=true before it inspects or executes the ELF.
+        client_manifest=self.out/'client-build.json'
+        manifest=json.loads(client_manifest.read_text())
+        manifest['exe_sha256']='7dd046a58f9a3deb2560a55bf9f6b2cd5e167787aace0469e0fa671cade9a00e'
+        client_manifest.write_text(json.dumps(manifest))
         env=dict(os.environ,PARSE_ONLY='false',BUILD='true',BUILD_GOYCSB='false',TARGETS='treedb_native',MONGODB_MODE='skip',OUT_DIR=str(self.root/'controlled-shell-out'),CLIENT_BUILD_MANIFEST=str(self.out/'client-build.json'),SERVER_BUILD_MANIFEST=str(server),REQUIRE_CONTROLLED_NATIVE_CLIENT_BUILD='true',NATIVE_CLIENT_BUILD_PACKET=str(self.out),GOYCSB_DIR=str(self.repo),GOYCSB_BIN=str(self.out/'go-ycsb'),TREEDB_NATIVE_SERVER_BIN='/must-not-build-server',TREEDB_MONGO_GATEWAY_BIN='/must-not-build-gateway')
         result=subprocess.run(['bash',str(ROOT/'ycsb_compare_mongodb_treedb.sh')],env=env,capture_output=True,text=True)
         self.assertNotEqual(result.returncode,0)
         self.assertIn('BUILD=false and BUILD_GOYCSB=false',result.stderr)
+        self.assertEqual(list((self.root/'controlled-shell-out').iterdir()),[])
     def test_failed_compiler_retains_failure_no_manifest(self):
         self.go.write_text('#!/bin/sh\nexit 37\n')
         self.assertRaises(subprocess.CalledProcessError,self.build)
