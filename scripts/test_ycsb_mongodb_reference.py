@@ -233,7 +233,7 @@ class ReferencePackets(unittest.TestCase):
         self.temp=tempfile.TemporaryDirectory(prefix="synthetic-mongodb-reference-")
         self.addCleanup(self.temp.cleanup)
         self.out=pathlib.Path(self.temp.name);self.directory=self.out/"mongodb";self.directory.mkdir()
-        self.m=dict(schema_version=1,kind=reference.KIND,lifecycle_contract=1,campaign_id="f"*32,targets=["mongodb"],profile=reference.PROFILE,formats={"mongodb":"bson"},write_concern=dict(w=1,journal_requested=None),recordcount=64,operationcount=10000,threadcount=16,run_repeats=1,uid=1000,gid=1000,address="127.0.0.1:27018",docker_binary="/synthetic/docker",client_binary="/synthetic/ycsb",reference_source_sha256=c.digest(reference.__file__),deadlines=dict(phase_seconds=600,helper_seconds=180,cleanup_seconds=10,phase_outer_seconds=640,helper_outer_seconds=220,readiness_seconds=60,outer_seconds=7200))
+        self.m=dict(schema_version=1,kind=reference.KIND,lifecycle_contract=1,campaign_id="f"*32,targets=["mongodb"],profile=reference.PROFILE,formats={"mongodb":"bson"},write_concern=dict(w=1,journal_requested=None),recordcount=64,operationcount=10000,threadcount=16,run_repeats=1,uid=os.getuid(),gid=os.getgid(),address="127.0.0.1:27018",docker_binary="/synthetic/docker",client_binary="/synthetic/ycsb",reference_source_sha256=c.digest(reference.__file__),deadlines=dict(phase_seconds=600,helper_seconds=180,cleanup_seconds=10,phase_outer_seconds=640,helper_outer_seconds=220,readiness_seconds=60,outer_seconds=7200))
         b=dict(schema_version=1,kind="mongodb_image_build",image_id="sha256:"+"a"*64,repo_digest="mongo@sha256:"+"b"*64,os="linux",architecture="amd64",version="8.2.7",source_commit=reference.SUPPORTED_SOURCE["8.2.7"],git_version=reference.SUPPORTED_GIT_VERSION["8.2.7"],exe_sha256="c"*64,docker_cli_sha256="d"*64,runtime=dict(engine="synthetic",engine_commit="synthetic",containerd="synthetic",runc="synthetic",driver="overlay2",cgroup_version="2",default_runtime="runc"))
         self.m["server_builds"]={"mongodb":b}
         b["image_labels"]={"org.opencontainers.image.version":"24.04"}
@@ -313,7 +313,7 @@ class ReferencePackets(unittest.TestCase):
         path=self.directory/name;value=c.read(path);fn(value);self.save(path,value)
     def inspect(self,owner,role,start,terminal):
         b=self.m["server_builds"]["mongodb"]
-        return dict(Id=owner["container_id"],Image=b["image_id"],RestartCount=0,Config=dict(Image=b["image_id"],Labels=dict(b["image_labels"],**{"gomap.ycsb.campaign":self.m["campaign_id"],"gomap.ycsb.role":role,"gomap.ycsb.target":"mongodb"}),Hostname=owner["hostname"],User="1000:1000",Entrypoint=["/usr/bin/mongod"],Cmd=["--dbpath","/data/db","--storageEngine","wiredTiger","--bind_ip_all","--port","27017"],Env=["MONGO_VERSION=8.2.7"]),HostConfig=dict(Runtime="runc",RestartPolicy=dict(Name="no"),AutoRemove=False,Privileged=False,Init=None,NetworkMode="bridge",PortBindings={"27017/tcp":[dict(HostIp="127.0.0.1",HostPort="27018")]}),Mounts=[dict(Type="bind",Source=owner["data_dir"]+suffix,Destination=dest,RW=True) for suffix,dest in (("","/data/db"),(".configdb","/data/configdb"))],State=dict(Running=not terminal,Pid=0 if terminal else owner["process"]["pid"],ExitCode=0,OOMKilled=False,Dead=False,Error="",StartedAt=ts(start),FinishedAt=ts(start+92) if terminal else "0001-01-01T00:00:00Z"))
+        return dict(Id=owner["container_id"],Image=b["image_id"],RestartCount=0,Config=dict(Image=b["image_id"],Labels=dict(b["image_labels"],**{"gomap.ycsb.campaign":self.m["campaign_id"],"gomap.ycsb.role":role,"gomap.ycsb.target":"mongodb"}),Hostname=owner["hostname"],User=f'{self.m["uid"]}:{self.m["gid"]}',Entrypoint=["/usr/bin/mongod"],Cmd=["--dbpath","/data/db","--storageEngine","wiredTiger","--bind_ip_all","--port","27017"],Env=["MONGO_VERSION=8.2.7"]),HostConfig=dict(Runtime="runc",RestartPolicy=dict(Name="no"),AutoRemove=False,Privileged=False,Init=None,NetworkMode="bridge",PortBindings={"27017/tcp":[dict(HostIp="127.0.0.1",HostPort="27018")]}),Mounts=[dict(Type="bind",Source=owner["data_dir"]+suffix,Destination=dest,RW=True) for suffix,dest in (("","/data/db"),(".configdb","/data/configdb"))],State=dict(Running=not terminal,Pid=0 if terminal else owner["process"]["pid"],ExitCode=0,OOMKilled=False,Dead=False,Error="",StartedAt=ts(start),FinishedAt=ts(start+92) if terminal else "0001-01-01T00:00:00Z"))
     def launch(self,stem,start,end,exe="9"*64):
         out=self.directory/(stem+".out")
         if not out.exists():out.write_text("SYNTHETIC offline child\n")
@@ -792,6 +792,18 @@ class ReferencePackets(unittest.TestCase):
         link.unlink();frames.rmdir();frames.symlink_to(self.directory,target_is_directory=True)
         with self.assertRaisesRegex(ValueError,'linked support evidence'):
             preparation.evidence_files(self.out)
+
+    def test_preparation_preserves_nondefault_task_custody(self):
+        for uid,gid in ((0,0),(2001,3002)):
+            with self.subTest(uid=uid,gid=gid),mock.patch.object(os,'getuid',return_value=uid),mock.patch.object(os,'getgid',return_value=gid):
+                packet=ReferencePackets();self.addCleanup(packet.doCleanups);packet.setUp()
+                config,out,metadata=packet.preparation_inputs()
+                with mock.patch.object(preparation,'command',side_effect=metadata),mock.patch.object(reference,'emergency_cli') as docker,mock.patch.object(c,'runtime_client_preflight'):
+                    preparation.prepare(config,out)
+                    docker.assert_not_called()
+                m=c.read(out/'manifest.json')
+                self.assertEqual((m['uid'],m['gid']),(uid,gid))
+                preparation.verify_prepared(out,m,check_current_sources=True)
 
     def test_preparation_unknown_runtime_elf_fails_before_metadata_or_docker(self):
         config,out,metadata=self.preparation_inputs()
