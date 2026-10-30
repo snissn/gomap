@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "phase_id": "test-load",
+  "client_build_id": "test-build",
+  "db": "treedb-native",
+  "phase": "load",
+  "declared_profile": "test-profile",
+  "total_excludes_close": true,
+  "command": {
+    "attempted": true,
+    "success": true,
+    "error": "",
+    "start_utc": "0001-01-01T00:00:00Z",
+    "end_utc": "0001-01-01T00:00:00Z",
+    "elapsed_ns": 0
+  },
+  "db_close": {
+    "attempted": true,
+    "success": false,
+    "error": "EOF\nclose tcp 127.0.0.1:55340->127.0.0.1:36227: use of closed network connection",
+    "start_utc": "2026-10-29T22:13:54.970063289Z",
+    "end_utc": "2026-10-29T22:13:54.970358254Z",
+    "elapsed_ns": 294964
+  },
+  "workload_close": {
+    "attempted": true,
+    "success": true,
+    "error": "",
+    "start_utc": "2026-10-29T22:13:54.970360613Z",
+    "end_utc": "2026-10-29T22:13:54.970415617Z",
+    "elapsed_ns": 55004
+  },
+  "native_flush": {
+    "applicable": true,
+    "flush_enabled": true,
+    "ack": 1,
+    "dial": {
+      "attempted": true,
+      "success": true,
+      "error": "",
+      "start_utc": "2026-10-29T22:13:54.970064646Z",
+      "end_utc": "2026-10-29T22:13:54.970282617Z",
+      "elapsed_ns": 217981
+    },
+    "flush": {
+      "attempted": true,
+      "success": false,
+      "error": "EOF",
+      "start_utc": "2026-10-29T22:13:54.970282751Z",
+      "end_utc": "2026-10-29T22:13:54.970352463Z",
+      "elapsed_ns": 69712
+    },
+    "connection_close": {
+      "attempted": true,
+      "success": false,
+      "error": "close tcp 127.0.0.1:55340->127.0.0.1:36227: use of closed network connection",
+      "start_utc": "2026-10-29T22:13:54.970352643Z",
+      "end_utc": "2026-10-29T22:13:54.970355087Z",
+      "elapsed_ns": 2444
+    }
+  }
+}
