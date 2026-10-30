@@ -98,6 +98,23 @@ class CrashPackets(unittest.TestCase):
         self.assertEqual(process.returncode,0,process.stderr)
         self.assertFalse(json.loads(process.stdout)["power_loss_certified"])
 
+    def test_parent_failure_and_malformed_terminal_markers_cannot_be_requalified(self):
+        for location in (self.out,self.directory):
+            for name in ("failure.json","server.failure.json","reopened.failure.json","crash-write.failure.json","crash-verify.failure.json"):
+                path=location/name
+                for kind in ("json","malformed","directory","broken-symlink"):
+                    with self.subTest(path=path,kind=kind):
+                        if kind=="json":self.save(path,dict(schema_version=1,kind="public_crash_control_failure",error="deferred cancellation"))
+                        elif kind=="malformed":path.write_text("{partial failure receipt")
+                        elif kind=="directory":path.mkdir()
+                        else:path.symlink_to(location/"nonexistent-failure-target")
+                        try:
+                            with self.assertRaisesRegex(ValueError,"failed crash attempt"):crash.validate(self.directory)
+                        finally:
+                            if kind=="directory":path.rmdir()
+                            else:path.unlink()
+        self.assertEqual(crash.validate(self.directory)["recovered"],64)
+
     def test_all_supported_targets_formats_profiles_and_version_owner_bindings(self):
         for target,fmt in (("treedb_native","json"),("treedb_native","bson"),("treedb_mongo","bson")):
             for profile in crash.PROFILES:
@@ -162,6 +179,9 @@ class CrashPackets(unittest.TestCase):
         for name in ("owner.close.json","owner.checkpoint.json","owner.checkpoint-control.json","owner.before-close.json"):
             path=self.directory/"server.evidence"/name
             path.write_text("{}")
+            with self.assertRaises(ValueError):crash.validate(self.directory)
+            path.unlink()
+            path.symlink_to(path.parent/"missing-owner-receipt")
             with self.assertRaises(ValueError):crash.validate(self.directory)
             path.unlink()
 
@@ -334,6 +354,52 @@ class SyntheticRunCLI(unittest.TestCase):
                 try:actual=c.observe_core(exited["process"]["pid"])
                 except (FileNotFoundError,ProcessLookupError):continue
                 self.assertNotEqual(actual["start_ticks"],exited["process"]["start_ticks"],"owned stub survived final reap")
+
+            # Actual cancellation during normal successful reopened close, and
+            # after all cleanup but before final validation, must stay terminal.
+            wrapper=root/"deferred-normal-close.py"
+            wrapper.write_text('''import os,signal,sys
+import ycsb_crash_recovery as r
+import ycsb_compare_validate as c
+stage=os.environ["SYNTHETIC_CANCEL_STAGE"]
+signum=int(os.environ["SYNTHETIC_CANCEL_SIGNAL"])
+if stage=="normal-close":
+ original=c.terminate_pinned_child
+ def cleanup(fd,timeout):
+  original(fd,timeout)
+  os.kill(os.getpid(),signum)
+ c.terminate_pinned_child=cleanup
+else:
+ original=r.validate
+ def validate(directory):
+  os.kill(os.getpid(),signum)
+  return original(directory)
+ r.validate=validate
+raise SystemExit(r.main())
+''')
+            env["PYTHONPATH"]=str(pathlib.Path(crash.__file__).parent)
+            command[1]=str(wrapper)
+            for stage in ("normal-close","prevalidation"):
+                for signum,error_type in ((signal.SIGTERM,"InterruptedError"),(signal.SIGINT,"KeyboardInterrupt"),(signal.SIGALRM,"TimeoutError")):
+                    with self.subTest(stage=stage,signal=signum):
+                        failed_output=root/(stage+"-"+str(int(signum)))
+                        command[command.index("--output")+1]=str(failed_output)
+                        env.update(SYNTHETIC_CANCEL_STAGE=stage,SYNTHETIC_CANCEL_SIGNAL=str(int(signum)))
+                        outcome=subprocess.run(command,env=env,capture_output=True,text=True,timeout=40)
+                        self.assertEqual(outcome.returncode,3,outcome.stderr)
+                        failed_packet=failed_output/"treedb_native"
+                        failure=c.read(failed_output/"failure.json")
+                        self.assertEqual(failure["error_type"],error_type)
+                        self.assertTrue(failure["error"])
+                        self.assertFalse((failed_packet/"reopened.failure.json").exists())
+                        for prefix,wanted in (("server",-9),("reopened",0)):
+                            exited=c.read(failed_packet/(prefix+".exit.json"))
+                            self.assertEqual(exited["exit_code"],wanted)
+                            try:actual=c.observe_core(exited["process"]["pid"])
+                            except (FileNotFoundError,ProcessLookupError):continue
+                            self.assertNotEqual(actual["start_ticks"],exited["process"]["start_ticks"],"cancelled attempt left owned stub live")
+                        with self.assertRaisesRegex(ValueError,"failed crash attempt"):crash.validate(failed_packet)
+
 
 
 if __name__=="__main__":unittest.main()

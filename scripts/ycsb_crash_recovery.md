@@ -45,6 +45,12 @@ failure receipts and use bounded owned-child cleanup and reap. All actual child
 environments remove GOMAXPROCS. The private owner checkpoint environment is
 removed from both service launches.
 
+Any parent `failure.json` or parent/target `*.failure.json` marker makes the
+attempt permanently ineligible for validation, including malformed or incomplete
+markers. Deferred SIGINT, SIGTERM or timeout after normal reopened cleanup still
+retains a top-level failure, even when both owner exit/reap records succeeded.
+The parent failure must not be discarded to requalify a cancelled attempt.
+
 The validator uses exact JSON types, nanosecond chronology, original source
 contracts, actual operation Results and canonical typed snapshots. Durable
 ordinary ACK requires all 64 exact rows after process crash. Relaxed command WAL

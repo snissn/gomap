@@ -167,6 +167,12 @@ def validate_journal(directory, expected, receipt, manifest):
 
 def validate(directory):
     directory = pathlib.Path(directory)
+    # A deferred cancellation may arrive only after normal reopened cleanup
+    # reaped the child. Its parent failure is still terminal for this attempt;
+    # never resurrect that otherwise complete packet during later consumption.
+    # Presence is enough: malformed files/directories/broken symlinks also fail.
+    for location in (directory.parent,directory):
+        c.require(not os.path.lexists(location/"failure.json") and not any(location.glob("*.failure.json")), "failed crash attempt cannot qualify")
     m = c.read(directory.parent/"manifest.json")
     c.require(c.schema(m) and m["kind"] == SCOPE and m["replay_proof"] == LIMITATION, "invalid crash control scope")
     c.require(isinstance(m["campaign_id"],str) and m["campaign_id"] and isinstance(m["address"],str), "invalid crash identity/address")
@@ -190,7 +196,7 @@ def validate(directory):
     db = pathlib.Path(original["data_dir"])
     c.require(db.is_absolute() and db == directory/"db", "crash requires fresh separate task DB")
     for name in ("owner.before-close.json", "owner.close.json", "owner.checkpoint.json", "owner.checkpoint-control.json"):
-        c.require(not (directory/"server.evidence"/name).exists(), "original owner graceful close/checkpoint occurred")
+        c.require(not os.path.lexists(directory/"server.evidence"/name), "original owner graceful close/checkpoint occurred")
     expected = c.read(directory/"expected.json")
     c.require(c.same(expected, canonical_expected(identity(m))), "crash expected intents mismatch")
     write_receipt, write_bounds = helper(directory, "crash-write", m, original)
@@ -395,11 +401,18 @@ def main():
             with c.outer_deadline(args.outer_timeout): report = run(args)
         print(json.dumps(report, allow_nan=False))
         return 0
-    except (ValueError, TypeError, KeyError, OSError, subprocess.SubprocessError) as error:
-        if args.mode == "run" and getattr(args,"owned_output",None) is not None:
-            c.write_new(args.owned_output/"failure.json", dict(schema_version=1, kind="public_crash_control_failure", error=str(error), end_utc=c.now()))
-        print("INVALID public crash control: "+str(error), file=sys.stderr)
-        return 3
+    except (KeyboardInterrupt, ValueError, TypeError, KeyError, OSError, subprocess.SubprocessError) as error:
+        # Deferred SIGINT raises KeyboardInterrupt after normal cleanup, outside
+        # owned_server's exception branch. Retain that top-level failure too.
+        previous_mask=signal.pthread_sigmask(signal.SIG_BLOCK,c.CANCELLATION_SIGNALS)
+        try:
+            message=str(error) or type(error).__name__
+            if args.mode == "run" and getattr(args,"owned_output",None) is not None:
+                c.write_new(args.owned_output/"failure.json", dict(schema_version=1, kind="public_crash_control_failure", error=message, error_type=type(error).__name__, end_utc=c.now()))
+            print("INVALID public crash control: "+message, file=sys.stderr)
+            return 3
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK,previous_mask)
 
 
 if __name__ == "__main__": raise SystemExit(main())
