@@ -17,7 +17,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/5338-snappy-hosted-carrier-20261030' && github.run_attempt == '1'
     name: Snappy bound (${{ matrix.cell }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       max-parallel: 1
@@ -86,18 +86,24 @@ jobs:
           sha256sum "$receipt/carrier.yml" > "$receipt/carrier-sha256.txt"
           go version > "$receipt/go-version.txt"
           go env GOOS GOARCH GOVERSION GOWORK GOTOOLCHAIN CGO_ENABLED > "$receipt/go-env.txt"
+          test "$(go env GOVERSION)" = go1.26.10
+          test "$(go env GOOS)" = linux
+          test "$(go env GOARCH)" = amd64
           race_args=()
-          if [ "$RACE" = 1 ]; then race_args=(-race); fi
+          if [ "$RACE" = 1 ]; then
+            test "$(go env CGO_ENABLED)" = 1
+            race_args=(-race)
+          fi
           set +e
-          go test "${race_args[@]}" -count=1 -json ./TreeDB/internal/typedcolumn -run '^TestFP32ImageEncodedUpperBound' > "$receipt/typedcolumn.jsonl" 2> "$receipt/typedcolumn.stderr"
+          timeout --signal=TERM --kill-after=10s 12m go test "${race_args[@]}" -count=1 -json ./TreeDB/internal/typedcolumn -run '^(TestFP32ImageEncodedUpperBound|TestFP32ImageEncodedUpperBoundAdmission|TestFP32ImageEncodedUpperBoundSnappy)$' > "$receipt/typedcolumn.jsonl" 2> "$receipt/typedcolumn.stderr"
           echo $? > "$receipt/typedcolumn.exit"
-          go test "${race_args[@]}" -count=1 -json ./TreeDB/collections -run '^(TestColumnPhysicalAssetEncodedUpperBoundSelectedProducer|TestOrdinaryFP32ImageBoundCoalescedSamples|TestOrdinaryFP32ImageBoundProductionSnappy)$' > "$receipt/collections.jsonl" 2> "$receipt/collections.stderr"
+          timeout --signal=TERM --kill-after=10s 12m go test "${race_args[@]}" -count=1 -json ./TreeDB/collections -run '^(TestColumnPhysicalAssetEncodedUpperBoundSelectedProducer|TestOrdinaryFP32ImageBoundCoalescedSamples|TestOrdinaryFP32ImageBoundProductionSnappy)$' > "$receipt/collections.jsonl" 2> "$receipt/collections.stderr"
           echo $? > "$receipt/collections.exit"
           set -e
           sha256sum "$receipt/typedcolumn.jsonl" "$receipt/typedcolumn.stderr" "$receipt/collections.jsonl" "$receipt/collections.stderr" > "$receipt/log-sha256.txt"
           git status --porcelain > "$receipt/product-status-after.txt"
           python3 - "$receipt" <<'PY'
-          import json, pathlib, sys
+          import collections, json, pathlib, sys
           p = pathlib.Path(sys.argv[1])
           groups = {
               'typedcolumn': {'TestFP32ImageEncodedUpperBound', 'TestFP32ImageEncodedUpperBoundAdmission', 'TestFP32ImageEncodedUpperBoundSnappy'},
@@ -108,13 +114,16 @@ jobs:
               if (p / (name + '.exit')).read_text().strip() != '0':
                   problems.append(name + ': nonzero test exit')
               events = [json.loads(line) for line in (p / (name + '.jsonl')).read_text().splitlines()]
-              passed = {e['Test'] for e in events if e.get('Action') == 'pass' and 'Test' in e}
-              if wanted - passed:
-                  problems.append(name + ': missing tests ' + repr(sorted(wanted - passed)))
+              package = 'github.com/snissn/gomap/TreeDB/' + ('internal/typedcolumn' if name == 'typedcolumn' else 'collections')
+              if any(e.get('Package') != package for e in events):
+                  problems.append(name + ': unexpected package identity')
+              passed = collections.Counter(e['Test'] for e in events if e.get('Action') == 'pass' and 'Test' in e and '/' not in e['Test'])
+              if passed != collections.Counter({test: 1 for test in wanted}):
+                  problems.append(name + ': unexpected top-level pass events ' + repr(dict(passed)))
               if any(e.get('Action') in ('fail', 'skip') for e in events):
                   problems.append(name + ': failure or skip event')
-              if not any(e.get('Action') == 'pass' and 'Test' not in e for e in events):
-                  problems.append(name + ': missing package completion')
+              if sum(e.get('Action') == 'pass' and 'Test' not in e for e in events) != 1:
+                  problems.append(name + ': missing or duplicate package completion')
           if (p / 'product-status-after.txt').read_text():
               problems.append('product checkout changed')
           (p / 'verdict.json').write_text(json.dumps({'status': 'PASS' if not problems else 'FAIL', 'problems': problems}, indent=2) + '\n')
