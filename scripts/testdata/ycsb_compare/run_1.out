@@ -1,0 +1,16 @@
+Using request distribution 'uniform' a keyrange of [0 99999]
+Connected to MongoDB!
+***************** properties *****************
+"recordcount"="100000"
+"operationcount"="10000"
+"threadcount"="16"
+"dotransactions"="true"
+"command"="run"
+"table"="usertable"
+"mongodb.url"="mongodb://127.0.0.1:27150/ycsb?w=1"
+**********************************************
+**********************************************
+Run finished, takes 513.101869ms
+READ   - Takes(s): 0.5, Count: 9515, OPS: 18556.9, Avg(us): 787, Min(us): 56, Max(us): 3525, 50th(us): 919, 90th(us): 1351, 95th(us): 1480, 99th(us): 1857, 99.9th(us): 2695, 99.99th(us): 3499
+TOTAL  - Takes(s): 0.5, Count: 10000, OPS: 19501.1, Avg(us): 805, Min(us): 56, Max(us): 3525, 50th(us): 927, 90th(us): 1375, 95th(us): 1520, 99th(us): 1992, 99.9th(us): 3053, 99.99th(us): 3499
+UPDATE - Takes(s): 0.5, Count: 485, OPS: 949.3, Avg(us): 1158, Min(us): 142, Max(us): 3227, 50th(us): 1167, 90th(us): 1991, 95th(us): 2249, 99th(us): 2653, 99.9th(us): 3227, 99.99th(us): 3227
