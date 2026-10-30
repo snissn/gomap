@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -13,6 +14,12 @@ import (
 	treedb "github.com/snissn/gomap/TreeDB"
 	mongogateway "github.com/snissn/gomap/TreeDB/mongo_gateway"
 )
+
+// Kept separate so the persistence regression is identical across the callback
+// signature repair; this helper is the public gateway wiring under test.
+func startActualOwnerCheckpoint(observer *Observer, server *mongogateway.StandaloneServer) (*CheckpointControl, error) {
+	return observer.StartCheckpointControl(server.Collections.FlushAll, server.Collections.CheckpointStorage)
+}
 
 func checkpointOwner(t *testing.T) (*Observer, func() error, func() error, string) {
 	t.Helper()
@@ -33,24 +40,32 @@ func checkpointOwner(t *testing.T) (*Observer, func() error, func() error, strin
 			t.Error(err)
 		}
 	})
-	return observer, server.Collections.FlushAll, server.Backend.Checkpoint, evidence
+	return observer, server.Collections.FlushAll, server.Collections.CheckpointStorage, evidence
 }
 func TestCheckpointDisabledHasNoControlOrCallbacks(t *testing.T) {
 	t.Setenv("YCSB_OWNER_CHECKPOINT", "")
 	var observer *Observer
-	control, err := observer.StartCheckpointControl(func() error { t.Fatal("disabled callback"); return nil })
+	unexpected := func() error { t.Fatal("disabled or invalid callback"); return nil }
+	control, err := observer.StartCheckpointControl(unexpected, unexpected)
 	if err != nil || control != nil {
 		t.Fatal(control, err)
 	}
 	t.Setenv("YCSB_OWNER_CHECKPOINT", "1")
-	if _, err = observer.StartCheckpointControl(func() error { return nil }); err == nil {
+	if _, err = observer.StartCheckpointControl(unexpected, unexpected); err == nil {
 		t.Fatal("missing owner accepted")
+	}
+	observer = &Observer{}
+	for _, callbacks := range [][2]func() error{{nil, unexpected}, {unexpected, nil}} {
+		if control, err = observer.StartCheckpointControl(callbacks[0], callbacks[1]); err == nil || control != nil {
+			t.Fatal("missing owner callback accepted", control, err)
+		}
 	}
 }
 func TestPrivateCheckpointActualOwnerAndInjectedFailures(t *testing.T) {
 	for _, failure := range []string{"", "flush", "checkpoint"} {
 		t.Run(failure, func(t *testing.T) {
 			observer, actualFlush, actualCheckpoint, dir := checkpointOwner(t)
+			t.Setenv("YCSB_OWNER_CHECKPOINT", "1")
 			calls := []string{}
 			flush := func() error {
 				calls = append(calls, "flush")
@@ -66,7 +81,7 @@ func TestPrivateCheckpointActualOwnerAndInjectedFailures(t *testing.T) {
 				}
 				return actualCheckpoint()
 			}
-			control, err := observer.startCheckpointControl(flush, checkpoint)
+			control, err := observer.StartCheckpointControl(flush, checkpoint)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -80,6 +95,9 @@ func TestPrivateCheckpointActualOwnerAndInjectedFailures(t *testing.T) {
 			}
 			if receipt.Owner.OwnerID != observer.ownerID || receipt.Owner.Process.PID != os.Getpid() {
 				t.Fatal("wrong actual owner", receipt)
+			}
+			if receipt.SchemaVersion != 2 {
+				t.Fatal("not owner-complete receipt schema", receipt.SchemaVersion)
 			}
 			expected := []string{"flush", "checkpoint"}
 			if failure == "flush" {
@@ -142,5 +160,41 @@ func TestCheckpointStaleEndpointCannotInvokeOwner(t *testing.T) {
 	}
 	if _, err = RequestCheckpoint(context.Background(), dir, "source", "fixture", "unused"); err == nil || calls != 0 {
 		t.Fatal(calls, err)
+	}
+}
+
+func TestRequestCheckpointRejectsLegacyReceiptSchema(t *testing.T) {
+	observer, _, _, dir := checkpointOwner(t)
+	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	if err = writeNew(filepath.Join(dir, "owner.checkpoint-control.json"), checkpointEndpoint{1, "private_owner_checkpoint_control", observer.ownerID, ln.Addr().String()}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := filepath.Join(dir, "snapshot.json")
+	if err = os.WriteFile(snapshot, []byte(`{}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			done <- err
+			return
+		}
+		defer conn.Close()
+		var request CheckpointRequest
+		if err = json.NewDecoder(conn).Decode(&request); err == nil {
+			err = json.NewEncoder(conn).Encode(checkpointResponse{Receipt: CheckpointReceipt{SchemaVersion: 1, Kind: "explicit_live_owner_checkpoint", Request: request, Result: Result{Success: true}}})
+		}
+		done <- err
+	}()
+	if _, err = RequestCheckpoint(context.Background(), dir, "source", "fixture", snapshot); err == nil || !strings.Contains(err.Error(), "checkpoint response mismatch") {
+		t.Fatal("legacy receipt accepted", err)
+	}
+	if err = <-done; err != nil {
+		t.Fatal(err)
 	}
 }

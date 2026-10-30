@@ -132,6 +132,13 @@ bind the public captured-prefix sentinel/persisted-pointer check and ordinary AC
 physical-WAL-sync/replay checks to their exact source, ELF and accepted scope.
 They do not establish power-loss, GC-stress or all-pointer certification.
 
+That describes the retained historical receipts. The maintained control now calls
+the actual owning manager's `Collections.CheckpointStorage` after `FlushAll`,
+which seals the native COW accepted prefix. New owner-checkpoint receipts use
+schema v2 and `collections_checkpoint_storage`; schema-v1 borrowed-backend
+receipts remain historical and cannot qualify that corrected barrier. This
+repair does not relabel the earlier source, binaries, receipts or measurements.
+
 Actual A/B client startup samples had GOMAXPROCS absent, effective runtime 12,
 affinity CPUs 0–11 and sampled ancestor cpu.max=max 100000. Six live GoMap owners
 witnessed COW/durable/effective12. These are samples, not continuous observations

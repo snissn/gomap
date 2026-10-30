@@ -181,24 +181,28 @@ checkpoint API. For this task only, the additional explicit environment opt-in
 without that opt-in creates no control and executes no extra storage call. The
 control admits one request and invokes the actual owning
 `standalone.Collections.FlushAll`, followed on success by
-`standalone.Backend.Checkpoint`. A flush failure leaves backend checkpoint
+`standalone.Collections.CheckpointStorage`. A flush failure leaves collection storage checkpoint
 unattempted. Actual errors and separate call timings are retained; failed calls
 invalidate the cell. These are explicit preclose calls, separate from shutdown.
 The endpoint is closed and any accepted call settles before original owner Close.
 
 For Mongo gateway preclose snapshots and deterministic writes, retain
 `{server,fixture-write}.evidence/owner.checkpoint-{control,request}.json` and
-`owner.checkpoint.json`. The schema-v1 `explicit_live_owner_checkpoint` receipt
+`owner.checkpoint.json`. The schema-v2 `explicit_live_owner_checkpoint` receipt
 contains the actual live `owner` observation, the accepted `request`, separate
-`collections_flush_all` and `backend_checkpoint` results, and overall `result`.
+`collections_flush_all` and `collections_checkpoint_storage` results, and overall `result`.
 The request binds a fresh random request ID, observed client PID/start/ELF/env,
 actual owner token, source/fixture IDs, and the completed snapshot file SHA256.
 The supervised fixture embeds that exact raw server receipt as `owner_checkpoint`
 and binds its overall result as `checkpoint`; the consumer checks both retained
 copies, original request, complete live-owner lifetime, flush-before-checkpoint
 order, helper process/source/snapshot identities, and settled measured phases.
-A request label or shutdown FlushAll alone cannot qualify a checkpoint. The
-backend call has no context cancellation API, so the existing bounded external
+The manager callback seals the native COW accepted prefix; a borrowed backend
+Checkpoint does not. Historical schema-v1 receipts with `backend_checkpoint`
+remain historical and are rejected as new owner-complete checkpoint proof.
+Request, endpoint and owner-observation schemas remain v1. A request label or
+shutdown FlushAll alone cannot qualify a checkpoint. The
+owner checkpoint call has no context cancellation API, so the existing bounded external
 owner supervisor remains responsible for a hung owner; no success is fabricated.
 
 Native deterministic write now retains a strict timed `checkpoint` Result around

@@ -33,7 +33,7 @@ type CheckpointReceipt struct {
 	Request       CheckpointRequest `json:"request"`
 	Owner         Observation       `json:"owner"`
 	Flush         Result            `json:"collections_flush_all"`
-	Checkpoint    Result            `json:"backend_checkpoint"`
+	Checkpoint    Result            `json:"collections_checkpoint_storage"`
 	Result        Result            `json:"result"`
 }
 type checkpointEndpoint struct {
@@ -51,14 +51,16 @@ type CheckpointControl struct {
 	done     chan error
 }
 
-func (o *Observer) StartCheckpointControl(flush func() error) (*CheckpointControl, error) {
+// StartCheckpointControl requires callbacks from the actual owning collection
+// manager. A borrowed backend Checkpoint cannot seal native COW accepted state.
+func (o *Observer) StartCheckpointControl(flush, checkpoint func() error) (*CheckpointControl, error) {
 	if os.Getenv("YCSB_OWNER_CHECKPOINT") == "" {
 		return nil, nil
 	}
-	if os.Getenv("YCSB_OWNER_CHECKPOINT") != "1" || o == nil || flush == nil {
+	if os.Getenv("YCSB_OWNER_CHECKPOINT") != "1" || o == nil || flush == nil || checkpoint == nil {
 		return nil, errors.New("checkpoint control requires explicit opt-in and actual live owner")
 	}
-	return o.startCheckpointControl(flush, o.backend.Checkpoint)
+	return o.startCheckpointControl(flush, checkpoint)
 }
 func (o *Observer) startCheckpointControl(flush, checkpoint func() error) (*CheckpointControl, error) {
 	ln, err := net.Listen("tcp4", "127.0.0.1:0")
@@ -115,7 +117,7 @@ func (o *Observer) startCheckpointControl(flush, checkpoint func() error) (*Chec
 	return control, nil
 }
 func (o *Observer) checkpoint(request CheckpointRequest, flush, checkpoint func() error) (CheckpointReceipt, error) {
-	r := CheckpointReceipt{SchemaVersion: 1, Kind: "explicit_live_owner_checkpoint", Request: request}
+	r := CheckpointReceipt{SchemaVersion: 2, Kind: "explicit_live_owner_checkpoint", Request: request}
 	var actualErr error
 	r.Result = Call(func() error {
 		var err error
@@ -131,7 +133,7 @@ func (o *Observer) checkpoint(request CheckpointRequest, flush, checkpoint func(
 		}
 		r.Checkpoint = Call(checkpoint)
 		if !r.Checkpoint.Success {
-			actualErr = fmt.Errorf("backend Checkpoint: %s", r.Checkpoint.Error)
+			actualErr = fmt.Errorf("collections CheckpointStorage: %s", r.Checkpoint.Error)
 			return actualErr
 		}
 		return nil
@@ -209,7 +211,7 @@ func RequestCheckpoint(ctx context.Context, dir, sourceID, fixtureID, snapshotPa
 	if response.Error != "" {
 		return response.Receipt, errors.New(response.Error)
 	}
-	if response.Receipt.Request != request || response.Receipt.Kind != "explicit_live_owner_checkpoint" || !response.Receipt.Result.Success {
+	if response.Receipt.SchemaVersion != 2 || response.Receipt.Request != request || response.Receipt.Kind != "explicit_live_owner_checkpoint" || !response.Receipt.Result.Success {
 		return response.Receipt, errors.New("checkpoint response mismatch")
 	}
 	return response.Receipt, nil

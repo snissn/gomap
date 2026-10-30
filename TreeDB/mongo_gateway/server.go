@@ -97,7 +97,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	checkpointControl, err := evidence.StartCheckpointControl(standalone.Collections.FlushAll)
+	checkpointControl, err := evidence.StartCheckpointControl(standalone.Collections.FlushAll, standalone.Collections.CheckpointStorage)
 	if err != nil {
 		fmt.Fprintf(stderr, "mongo gateway server: checkpoint evidence: %v\n", err)
 		_ = ln.Close()

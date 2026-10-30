@@ -115,7 +115,7 @@ def checkpoint_request(value):
 
 
 def checkpoint_proof(value,opened,bounds):
-    c.require(c.schema(value) and value["kind"]=="explicit_live_owner_checkpoint","missing raw explicit owner checkpoint")
+    c.require(isinstance(value,dict) and type(value.get("schema_version")) is int and value["schema_version"]==2 and value["kind"]=="explicit_live_owner_checkpoint","missing raw explicit owner checkpoint")
     checkpoint_request(value["request"])
     observed=value["owner"]
     c.observation(observed,{"expected_owner":opened["backend"]},opened["profile"])
@@ -124,7 +124,7 @@ def checkpoint_proof(value,opened,bounds):
     c.require(c.same(observed["observed_gomaxprocs"],opened["observed_gomaxprocs"]),"checkpoint live owner runtime/profile mismatch")
     overall=c.result(value["result"],"owner checkpoint result",bounds=bounds)
     flush=c.result(value["collections_flush_all"],"owner collections FlushAll",bounds=overall)
-    checkpoint=c.result(value["backend_checkpoint"],"owner backend Checkpoint",bounds=overall)
+    checkpoint=c.result(value["collections_checkpoint_storage"],"owner collections CheckpointStorage",bounds=overall)
     c.require(overall[0] <= c.timestamp(observed["observed_utc"]) <= flush[0] <= flush[1] <= checkpoint[0] <= checkpoint[1] <= overall[1],"explicit owner checkpoint call ordering mismatch")
     return overall
 

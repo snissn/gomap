@@ -113,7 +113,7 @@ class CompareTests(unittest.TestCase):
             opened=COMPARE.read(self.directory/(prefix+".evidence")/"owner.open.json")
             snapshot=stem+".json" if mode=="snapshot" else "fixture.updated.json"
             request=dict(schema_version=1,owner_id=opened["owner_id"],request_id="f"*32,client=dict(self.process,pid=4321),source_id=receipt["source_id"],fixture_id=fixture_id,snapshot_sha256=COMPARE.digest(self.directory/snapshot))
-            proof=dict(schema_version=1,kind="explicit_live_owner_checkpoint",request=request,owner=dict(opened,observed_utc=receipt["started_utc"]),collections_flush_all=call_result(start,start),backend_checkpoint=call_result(start,end),result=receipt["checkpoint"])
+            proof=dict(schema_version=2,kind="explicit_live_owner_checkpoint",request=request,owner=dict(opened,observed_utc=receipt["started_utc"]),collections_flush_all=call_result(start,start),collections_checkpoint_storage=call_result(start,end),result=receipt["checkpoint"])
             self.save(self.directory/(prefix+".evidence")/"owner.checkpoint-control.json",dict(schema_version=1,kind="private_owner_checkpoint_control",owner_id=opened["owner_id"],address="127.0.0.1:12345"))
             self.save(self.directory/(prefix+".evidence")/"owner.checkpoint-request.json",request)
             self.save(self.directory/(prefix+".evidence")/"owner.checkpoint.json",proof)
@@ -789,6 +789,15 @@ else:runpy.run_path(sys.argv[0],run_name='__main__')
         (self.directory/"server.evidence/owner.checkpoint.json").unlink()
         self.check(False)
 
+    def test_mongo_checkpoint_rejects_legacy_borrowed_backend_proof(self):
+        for prefix,stem in (("server","snapshot_preclose"),("fixture-write","fixture_write")):
+            for schema in (1, True, 2.0):
+                def old_schema(value,schema=schema):value["schema_version"]=schema
+                self.reject_mutations([(self.directory/(prefix+".evidence/owner.checkpoint.json"),old_schema),(self.directory/(stem+".close.json"),lambda v,f=old_schema:f(v["owner_checkpoint"]))])
+            def old_callback(value):value["backend_checkpoint"]=value.pop("collections_checkpoint_storage")
+            self.reject_mutations([(self.directory/(prefix+".evidence/owner.checkpoint.json"),old_callback),(self.directory/(stem+".close.json"),lambda v:old_callback(v["owner_checkpoint"]))])
+        self.check(True)
+
     def test_mongo_checkpoint_rejects_missing_endpoint_and_wrong_schema(self):
         path=self.directory/"server.evidence/owner.checkpoint-control.json"
         endpoint=COMPARE.read(path)
@@ -801,8 +810,8 @@ else:runpy.run_path(sys.argv[0],run_name='__main__')
     def test_mongo_checkpoint_rejects_failed_calls_and_wrong_order(self):
         original=COMPARE.read(self.directory/"server.evidence/owner.checkpoint.json")
         controls=[(lambda v:v["collections_flush_all"].update(success=False,error="injected flush failure"),"FlushAll"),
-                  (lambda v:v["backend_checkpoint"].update(success=False,error="injected checkpoint failure"),"Checkpoint"),
-                  (lambda v:v.update(collections_flush_all=call_result(4,5),backend_checkpoint=call_result(4,4)),"ordering")]
+                  (lambda v:v["collections_checkpoint_storage"].update(success=False,error="injected checkpoint failure"),"Checkpoint"),
+                  (lambda v:v.update(collections_flush_all=call_result(4,5),collections_checkpoint_storage=call_result(4,4)),"ordering")]
         for mutate,message in controls:
             proof=json.loads(json.dumps(original));mutate(proof)
             self.save(self.directory/"server.evidence/owner.checkpoint.json",proof)
@@ -949,7 +958,7 @@ else:runpy.run_path(sys.argv[0],run_name='__main__')
         self.change("lifecycle.json",lambda v:v.update(checkpoint=checkpoint))
         proof=COMPARE.read(self.directory/"server.evidence/owner.checkpoint.json")
         point=call_result(4,4);point.update(start_utc=half,end_utc=half)
-        proof.update(result=checkpoint,collections_flush_all=point,backend_checkpoint=checkpoint)
+        proof.update(result=checkpoint,collections_flush_all=point,collections_checkpoint_storage=checkpoint)
         proof["owner"]["observed_utc"]=half
         self.save(self.directory/"server.evidence/owner.checkpoint.json",proof)
         self.change("snapshot_preclose.close.json",lambda v:v.update(owner_checkpoint=proof))
@@ -1147,7 +1156,7 @@ else:runpy.run_path(sys.argv[0],run_name='__main__')
         self.change("lifecycle.json",lambda v:v.update(checkpoint=checkpoint))
         proof=COMPARE.read(self.directory/"server.evidence/owner.checkpoint.json")
         point=call_result(4,4);point.update(start_utc=half,end_utc=half)
-        proof.update(result=checkpoint,collections_flush_all=point,backend_checkpoint=checkpoint)
+        proof.update(result=checkpoint,collections_flush_all=point,collections_checkpoint_storage=checkpoint)
         proof["owner"]["observed_utc"]=half
         self.save(self.directory/"server.evidence/owner.checkpoint.json",proof)
         self.change("snapshot_preclose.close.json",lambda v:v.update(owner_checkpoint=proof))
@@ -1343,7 +1352,7 @@ c.write_new(args['-receipt'],receipt)
             for field in ("attempted","success","elapsed_ns"):
                 def aggregate(value,field=field):value["checkpoint"][field]=float(value["checkpoint"][field]) if field=="elapsed_ns" else 1
                 self.reject_mutations([(receipt,aggregate)])
-                for result_name in ("result","collections_flush_all","backend_checkpoint"):
+                for result_name in ("result","collections_flush_all","collections_checkpoint_storage"):
                     def raw(value,field=field,name=result_name):value[name][field]=float(value[name][field]) if field=="elapsed_ns" else 1
                     def embedded(value,mutate=raw):mutate(value["owner_checkpoint"])
                     self.reject_mutations([(self.directory/(prefix+".evidence/owner.checkpoint.json"),raw),(receipt,embedded)])
@@ -1406,7 +1415,7 @@ c.write_new(args['-receipt'],receipt)
     def test_checkpoint_submicrosecond_flush_ordering_is_not_rounded(self):
         def mutate(value):
             value["collections_flush_all"].update(end_utc="2026-10-29T00:00:04.000000900Z",elapsed_ns=900)
-            value["backend_checkpoint"].update(start_utc="2026-10-29T00:00:04.000000100Z",elapsed_ns=999_999_900)
+            value["collections_checkpoint_storage"].update(start_utc="2026-10-29T00:00:04.000000100Z",elapsed_ns=999_999_900)
         for prefix,stem in (("server","snapshot_preclose"),("fixture-write","fixture_write")):
             # Native fixture timestamps are 11..12; keep this packet's calls
             # otherwise valid by shifting the same 800ns reversal to that second.
@@ -1414,7 +1423,7 @@ c.write_new(args['-receipt'],receipt)
                 mutate(value)
                 if prefix=="fixture-write":
                     value["collections_flush_all"].update(end_utc="2026-10-29T00:00:11.000000900Z")
-                    value["backend_checkpoint"].update(start_utc="2026-10-29T00:00:11.000000100Z")
+                    value["collections_checkpoint_storage"].update(start_utc="2026-10-29T00:00:11.000000100Z")
             self.reject_mutations([(self.directory/(prefix+".evidence/owner.checkpoint.json"),at_owner),(self.directory/(stem+".close.json"),lambda v,f=at_owner:f(v["owner_checkpoint"]))],"ordering")
         self.check(True)
 
