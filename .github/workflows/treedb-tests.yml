@@ -1,5 +1,5 @@
 # Staging-only replacement of an existing dispatchable path. Never merge.
-name: "TreeDB: #5340 bounded recovery ledger diagnostic"
+name: "TreeDB: #5340 Windows provenance diagnostic"
 
 on:
   workflow_dispatch:
@@ -39,15 +39,9 @@ jobs:
       max-parallel: 1
       matrix:
         include:
-          - cell: linux-normal
-            os: ubuntu-24.04
-            race: "0"
           - cell: windows-normal
             os: windows-latest
             race: "0"
-          - cell: linux-race
-            os: ubuntu-24.04
-            race: "1"
     steps:
       - name: Enable existing tracked long paths on hosted Windows
         if: runner.os == 'Windows'
@@ -113,14 +107,6 @@ jobs:
       max-parallel: 1
       matrix:
         include:
-          - cell: linux-normal
-            os: ubuntu-24.04
-            race: "0"
-            mode: default
-          - cell: linux-normal
-            os: ubuntu-24.04
-            race: "0"
-            mode: diagnostic
           - cell: windows-normal
             os: windows-latest
             race: "0"
@@ -128,14 +114,6 @@ jobs:
           - cell: windows-normal
             os: windows-latest
             race: "0"
-            mode: diagnostic
-          - cell: linux-race
-            os: ubuntu-24.04
-            race: "1"
-            mode: default
-          - cell: linux-race
-            os: ubuntu-24.04
-            race: "1"
             mode: diagnostic
     steps:
       - name: Enable existing tracked long paths on hosted Windows
