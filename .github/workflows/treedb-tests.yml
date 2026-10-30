@@ -47,6 +47,36 @@ jobs:
       CELL: ${{ matrix.cell }}
       RACE: ${{ matrix.race }}
     steps:
+      - name: Initialize evidence and enable hosted Windows Git long paths
+        shell: bash
+        run: |
+          python -u - <<'PY'
+          import datetime, json, os, pathlib, re, subprocess
+          packet = pathlib.Path(os.environ['RUNNER_TEMP'])/('catalog-leader-5341-'+os.environ['CELL'])
+          packet.mkdir(exist_ok=False)
+          setup = {'status':'STARTED','time':datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                   'event':{k:os.environ.get(k) for k in ('GITHUB_REPOSITORY','GITHUB_EVENT_NAME','GITHUB_REF','GITHUB_SHA','GITHUB_RUN_ID','GITHUB_RUN_ATTEMPT','RUNNER_ENVIRONMENT','RUNNER_OS')},
+                   'expected_overlay_sha':os.environ['EXPECTED_OVERLAY_SHA'],'workflow_context_sha':os.environ['WORKFLOW_CONTEXT_SHA']}
+          def save():
+              (packet/'setup.json').write_text(json.dumps(setup,indent=2)+'\n')
+          save()
+          assert os.environ['RUNNER_ENVIRONMENT']=='github-hosted'
+          assert os.environ['GITHUB_REPOSITORY']=='snissn/gomap'
+          assert os.environ['GITHUB_EVENT_NAME']=='workflow_dispatch' and os.environ['GITHUB_RUN_ATTEMPT']=='1'
+          assert os.environ['GITHUB_REF']=='refs/heads/codex/5341-hosted-diagnostic-20261030'
+          assert re.fullmatch('[0-9a-f]{40}',os.environ['EXPECTED_OVERLAY_SHA'])
+          assert os.environ['GITHUB_SHA']==os.environ['EXPECTED_OVERLAY_SHA']==os.environ['WORKFLOW_CONTEXT_SHA']
+          if os.environ['RUNNER_OS']=='Windows':
+              # This changes only this ephemeral hosted runner's Git setting,
+              # before BOTH checkout actions. No persistent/self-hosted host.
+              with (packet/'git-longpaths.log').open('wb') as output:
+                  subprocess.run(['git','config','--global','core.longpaths','true'],check=True,stdout=output,stderr=subprocess.STDOUT,timeout=30)
+                  result=subprocess.run(['git','config','--global','--get','core.longpaths'],check=True,stdout=subprocess.PIPE,stderr=output,timeout=30)
+                  output.write(result.stdout)
+              assert result.stdout.decode().strip()=='true'
+              setup['windows_git_core_longpaths']='true'
+          setup['status']='READY';save()
+          PY
       - name: Checkout exact event workflow
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -76,7 +106,7 @@ jobs:
           product, harness = root/'product', root/'harness'
           cell = os.environ['CELL']
           packet = pathlib.Path(os.environ['RUNNER_TEMP'])/('catalog-leader-5341-'+cell)
-          packet.mkdir(exist_ok=False)
+          assert packet.is_dir()
           candidate = '76208bfccc0650b8c3de959a6a7adfc81f555bc6'
           source_tree = '268ac288cd989a376c261398f23f59455d6504ff'
           receipt = {'scope':'DIAGNOSTIC_ONLY_NOT_REPAIR_OR_CI_QUALIFICATION','cell':cell,'source':candidate,'tree':source_tree,'commands':[]}
