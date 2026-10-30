@@ -469,6 +469,40 @@ func mergeCanonicalStableIteratorUnits(units []flushUnit, out *canonicalFlushRun
 	if out == nil {
 		return errors.New("cachingdb: missing canonical flush run")
 	}
+	if len(units) == 1 {
+		// The stable caller has already qualified slice lifetime. A single
+		// source needs neither cross-source shadowing nor heap storage.
+		var iter iterator.UnsafeIterator
+		defer func() {
+			if cerr := closeCanonicalStableIterator(iter); err == nil {
+				err = cerr
+			}
+		}()
+		iter = units[0].mem.NewIterator(nil, nil)
+		if iter == nil {
+			return errors.New("cachingdb: nil canonical stable iterator")
+		}
+		wrapped := stableUnsafeOpIter{UnsafeIterator: iter}
+		plannedPointOps, plannedDeletes := 0, 0
+		for valid := iter.Valid(); valid; valid = iter.Valid() {
+			// Preserve the one-item heap's Key pre-read and accessor order.
+			_ = wrapped.Key()
+			entry := wrapped.Entry()
+			if emit != nil {
+				if err := emit(entry); err != nil {
+					return err
+				}
+			}
+			plannedPointOps++
+			if entry.Type == batch.OpDelete {
+				plannedDeletes++
+			}
+			wrapped.Next()
+		}
+		out.plannedPointOps = plannedPointOps
+		out.deletePointOps = plannedDeletes
+		return nil
+	}
 	heap := make(stableOpMergeHeap, 0, len(units))
 
 	iters := make([]iterator.UnsafeIterator, len(units))
