@@ -321,6 +321,11 @@ measure process peak RSS externally, compare the identical benchmark overlay
 against an exact source-bound baseline, and retain failed samples as failures.
 This control neither forces the captured overlap nor establishes a speedup.
 
+The [#5338 execution and review record](../evidence/native-columngraph-handoff-5338/README.md)
+retains original command output, source bindings, cost observations and unresolved
+validation failures. Its local partial race output is distinguished from the
+completed hosted race checks; neither replaces required current-head CI.
+
 `TestCOWSuccessorBasisWorkspaceReuseAndCutOwnership` covers opportunistic
 successor scratch reuse across short-lived cuts, owned output, checkpoint
 handoff and final basis/DB teardown. `TestCOWSuccessorBasisWorkspaceFiniteAdmission`

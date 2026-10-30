@@ -1,0 +1,160 @@
+{
+  "scope": "Final assembled documentation checks; this is not a rerun of production suites or prior failures.",
+  "source_commit": "9cd7557fb705b07261b801a2f42aa90dee4ce171",
+  "source_tree": "dff272aeed265395770cb6eba7b17eeb6463618b",
+  "source_before_sha256": "bc21a3515ec26670d985497ea7121845450779349b96c556d3c8e13b8face3c8",
+  "source_after_sha256": "bc21a3515ec26670d985497ea7121845450779349b96c556d3c8e13b8face3c8",
+  "source_unchanged": true,
+  "payload_checked": [
+    {
+      "path": "TreeDB/docs/evidence/native-columngraph-handoff-5338/README.md",
+      "sha256": "0765172a4219c5f2897c3b0827eed20efaf1e887fae6b70a8bd048eedf5e3421"
+    },
+    {
+      "path": "TreeDB/docs/evidence/native-columngraph-handoff-5338/artifact-manifest.json",
+      "sha256": "c6941971d2c25a98e9d5b98522e967da4d59b5551d33d138c60e810d0a288bfc"
+    },
+    {
+      "path": "TreeDB/docs/evidence/native-columngraph-handoff-5338/benchmark-protocol.md",
+      "sha256": "fb7ebde75b4a7d9fd3855cfb9beb2bbce9349226f0beae2a2547d69570db5aeb"
+    },
+    {
+      "path": "TreeDB/docs/evidence/native-columngraph-handoff-5338/lifecycle-build-equivalence.json",
+      "sha256": "019ff4a71ad49b341308752af060d2e587e415317a6fef731e9b4e6fcfe488cf"
+    },
+    {
+      "path": "TreeDB/docs/evidence/native-columngraph-handoff-5338/measured-results.md",
+      "sha256": "4c18a0cc037157f2dbc298123ba011d05b7fcc8cddf85b6eeaeaaa145cf0eb30"
+    },
+    {
+      "path": "TreeDB/docs/evidence/native-columngraph-handoff-5338/measurement-summary.json",
+      "sha256": "28cca229432f9c3fbf8e24b4e743561c87cc2f6377f904ab9fcf8bedf7ef3761"
+    },
+    {
+      "path": "TreeDB/docs/evidence/native-columngraph-handoff-5338/production-review.md",
+      "sha256": "d72ca3c364c9a60565b1e24b44ef924bb73e1ad3a7b9c1ae5907f2503f38d337"
+    },
+    {
+      "path": "TreeDB/docs/evidence/native-columngraph-handoff-5338/raw-evidence.tar.gz",
+      "sha256": "cd81acfae1973f5c29d81547cb1b61bd04bb9edac7182b5e604f1393729e9e97"
+    },
+    {
+      "path": "TreeDB/docs/evidence/native-columngraph-handoff-5338/shared-caller-review.md",
+      "sha256": "f76da437383153cb7968521f034970aa281299d9fcfd292cdecf035eb079ce29"
+    },
+    {
+      "path": "TreeDB/docs/evidence/native-columngraph-handoff-5338/shared-caller-review.source.json",
+      "sha256": "ee9464255b69c143ff76eed28f268148f6b910bb2447f616c81cab102b959c41"
+    },
+    {
+      "path": "TreeDB/docs/evidence/native-columngraph-handoff-5338/validation-results.json",
+      "sha256": "1932dab0a61f01bc09a42a24d08ad283ccccbad50628231496303d44a991602f"
+    },
+    {
+      "path": "TreeDB/docs/spec/native-hybrid-read.md",
+      "sha256": "4716fc025dde847252bb9c5cbc58678f058137f1dec6f27be9b93238d708c05c"
+    },
+    {
+      "path": "TreeDB/docs/spec/verification.md",
+      "sha256": "8c7cfdf0c277fe929d8b37047b9afd0a57a52e1be207970d2420b8bc2d6e7258"
+    },
+    {
+      "path": "cmd/benchprof/README.md",
+      "sha256": "0047693200bad813950092bf05322ac567874a57669d21e211234ebc7de1dd90"
+    },
+    {
+      "path": "cmd/unified_bench/README.md",
+      "sha256": "1e1d3f93bbbb862ff39365b2766b027c822f9f2d42cc710e992892db84de6e86"
+    }
+  ],
+  "receipt_scope": "Generated check receipts and compressed output are additional records, not self-hashed checked payload.",
+  "environment": {
+    "GOCACHE": "/workspace/scratch/0d9ab3f5d72e/go-cache",
+    "GOPATH": "/workspace/scratch/0d9ab3f5d72e/go-path",
+    "GOWORK": "off",
+    "GOTOOLCHAIN": "local",
+    "GOMEMLIMIT": "4GiB",
+    "GOMAXPROCS": "2",
+    "TMPDIR": "/workspace/scratch/0d9ab3f5d72e/tmp",
+    "TZ": "Australia/Sydney",
+    "LANG": "C.UTF-8",
+    "LC_ALL": "C.UTF-8"
+  },
+  "results": [
+    {
+      "command": [
+        "python3",
+        ".github/scripts/refresh_ci_impact_inventory.py"
+      ],
+      "cwd": "/workspace/scratch/0d9ab3f5d72e/gomap-5338",
+      "started_utc": "2026-10-30T20:13:45.977925+00:00",
+      "exit_status": 0,
+      "finished_utc": "2026-10-30T20:13:47.194257+00:00",
+      "elapsed_seconds": 1.2162746189987956,
+      "stdout_sha256": "d998ca7b4cf362316781312680e32eac5d01273a63040130f386cbf0c42d024b",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "command": [
+        "python3",
+        ".github/scripts/refresh_ci_impact_inventory.py",
+        "--check"
+      ],
+      "cwd": "/workspace/scratch/0d9ab3f5d72e/gomap-5338",
+      "started_utc": "2026-10-30T20:13:47.194341+00:00",
+      "exit_status": 0,
+      "finished_utc": "2026-10-30T20:13:47.781132+00:00",
+      "elapsed_seconds": 0.5868003060004412,
+      "stdout_sha256": "4a90d77e83312d4e40674133586a5899aabb38a922cf1c63a5c628d4954a0baa",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "command": [
+        "/workspace/scratch/0d9ab3f5d72e/toolchain/go/bin/go",
+        "test",
+        "-json",
+        "-p",
+        "1",
+        "-timeout",
+        "12m",
+        "./TreeDB/collections",
+        "-run",
+        "^TestTypedStorageLegacy",
+        "-count=1"
+      ],
+      "cwd": "/workspace/scratch/0d9ab3f5d72e/gomap-5338",
+      "started_utc": "2026-10-30T20:13:47.781207+00:00",
+      "exit_status": 0,
+      "finished_utc": "2026-10-30T20:13:58.338131+00:00",
+      "elapsed_seconds": 10.557023105000553,
+      "stdout_sha256": "63c2be2fedec17d781548ebb2b9e2fc0f6c86208ea965d23a7da96ca1c2466b0",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "command": [
+        "/workspace/scratch/0d9ab3f5d72e/toolchain/go/bin/go",
+        "test",
+        "-json",
+        "-p",
+        "1",
+        "-timeout",
+        "12m",
+        "./TreeDB/docs",
+        "-count=1"
+      ],
+      "cwd": "/workspace/scratch/0d9ab3f5d72e/gomap-5338",
+      "started_utc": "2026-10-30T20:13:58.339243+00:00",
+      "exit_status": 0,
+      "finished_utc": "2026-10-30T20:14:07.152721+00:00",
+      "elapsed_seconds": 8.813457166999797,
+      "stdout_sha256": "1b2c18a7151a336577c44ea4b81ca78182e5aae80228b2aa729fa68074e246a9",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "raw_output": {
+    "path": "final-checks.raw.json.gz",
+    "bytes": 9172,
+    "sha256": "67cdb53242f9419277e4c02d795b5a33e5c0ec83c9c0477a595bfd2f6551eac5"
+  },
+  "passed": true
+}

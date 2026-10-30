@@ -76,6 +76,11 @@ The separate [captured-prefix verification controls](../../TreeDB/docs/spec/veri
 establish the overlapping graph-handoff mechanism; this benchmark does not force
 that schedule or establish a speedup threshold.
 
+The [retained #5338 comparison](../../TreeDB/docs/evidence/native-columngraph-handoff-5338/measured-results.md)
+contains the frozen protocol, source/build bindings and all six original samples.
+Its fresh-worker Python child-resource accounting provides the whole-process
+maximum RSS measurement where GNU time is unavailable; timing ranges overlap.
+
 For the #5338 comparison, use exact baseline
 `d7db5409e20412f4dac4e1a3f902484b05e014e1` plus only the identical
 `ordinary_columngraph_native_lifecycle_bench_test.go` overlay. Its existing

@@ -18,6 +18,10 @@ original Close and reopen checks run outside the standard timer and every sample
 must preserve their original failure status. These text/JSON log lines and
 process-time receipts are not benchprof inputs or a unified-bench schema change.
 
+The [retained #5338 measurements](../../TreeDB/docs/evidence/native-columngraph-handoff-5338/measured-results.md)
+use fresh Python child-resource accounting where GNU time is unavailable, with
+the same whole-process RSS boundary and original per-sample outputs.
+
 Mongo startup-default comparisons use the standalone
 `BenchmarkStandalonePublicIndexedUpdate` in `cmd/mongo_gateway_bench`, through
 the product opener and official driver. See its [run instructions and timing

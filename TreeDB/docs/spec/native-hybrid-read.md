@@ -339,3 +339,8 @@ power loss. The original 4096/128 service and cold-Hybrid controls remain
 independent requirements. Source-bound execution records must distinguish this
 captured-prefix mechanism from the retained exact7fab/#5332 incident, whose
 original refusing guard was not recorded and remains unattributed.
+
+The [#5338 evidence record](../evidence/native-columngraph-handoff-5338/README.md)
+binds the controlled RED/GREEN, independent reviews, lifecycle measurements and
+original validation failures to the tested source. It distinguishes the repaired
+handoff from the historical incident and retains incomplete or failing gates.

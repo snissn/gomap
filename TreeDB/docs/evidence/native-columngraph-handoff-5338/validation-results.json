@@ -1,0 +1,923 @@
+{
+  "generated_utc": "2026-10-30T20:12:40.387723+00:00",
+  "candidate_source_commit": "9cd7557fb705b07261b801a2f42aa90dee4ce171",
+  "candidate_source_tree": "dff272aeed265395770cb6eba7b17eeb6463618b",
+  "candidate_all_source_sha256": "bc21a3515ec26670d985497ea7121845450779349b96c556d3c8e13b8face3c8",
+  "source_freeze_sha256": "0e037265f65d222e4a353ccbc51d2c2fe7403b5a8474deb2c87869f962512476",
+  "count_scope": "Go JSON test/subtest completion events, not independent workloads. Original nonzero runs remain nonzero.",
+  "runs": [
+    {
+      "name": "baseline-witness",
+      "exit_status": 1,
+      "execution_status": "complete",
+      "test_event_counts": {
+        "pass": 2,
+        "fail": 2,
+        "skip": 0
+      },
+      "package_results": [
+        {
+          "Package": "github.com/snissn/gomap/TreeDB/collections",
+          "Action": "fail",
+          "Elapsed": 0.903
+        }
+      ],
+      "failed_tests": [
+        "TestNativeOrdinaryGraphAcceptedAcrossCapturedManifestBuild/changed-manifest",
+        "TestNativeOrdinaryGraphAcceptedAcrossCapturedManifestBuild"
+      ],
+      "artifacts": [
+        {
+          "path": "baseline-witness.jsonl",
+          "bytes": 14081,
+          "sha256": "2ad3cd5542a0a5b546bd141e5e35a2da518ab60dad9b8abda579af6ccd4abf25"
+        },
+        {
+          "path": "baseline-witness.stderr",
+          "bytes": 908,
+          "sha256": "d7fb894be2232bb4bfb429686e3d0b876a9af3dded2c0b0d0a70684731e0e593"
+        },
+        {
+          "path": "baseline-witness.exit",
+          "bytes": 2,
+          "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+        }
+      ],
+      "command_record": "See early-run-commands.json in the raw archive; early command flag spelling is normalized from same-session execution notes."
+    },
+    {
+      "name": "candidate-focused",
+      "exit_status": 0,
+      "execution_status": "complete",
+      "test_event_counts": {
+        "pass": 91,
+        "fail": 0,
+        "skip": 0
+      },
+      "package_results": [
+        {
+          "Package": "github.com/snissn/gomap/TreeDB/collections",
+          "Action": "pass",
+          "Elapsed": 2.795
+        }
+      ],
+      "failed_tests": [],
+      "artifacts": [
+        {
+          "path": "candidate-focused.jsonl",
+          "bytes": 101433,
+          "sha256": "edb7cd06d942d772575ee26829e15e135e98b2b252e5c218e853d1ff2eb20a22"
+        },
+        {
+          "path": "candidate-focused.stderr",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "candidate-focused.exit",
+          "bytes": 2,
+          "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        }
+      ],
+      "command_record": "See early-run-commands.json in the raw archive; early command flag spelling is normalized from same-session execution notes."
+    },
+    {
+      "name": "candidate-documentservice",
+      "exit_status": 0,
+      "execution_status": "complete",
+      "test_event_counts": {
+        "pass": 573,
+        "fail": 0,
+        "skip": 1
+      },
+      "package_results": [
+        {
+          "Package": "github.com/snissn/gomap/TreeDB/documentservice",
+          "Action": "pass",
+          "Elapsed": 28.117
+        }
+      ],
+      "failed_tests": [],
+      "artifacts": [
+        {
+          "path": "candidate-documentservice.jsonl",
+          "bytes": 604802,
+          "sha256": "87561b089172bfa7c021394e5cc7ba035a3675aa50372b1734caab176add586f"
+        },
+        {
+          "path": "candidate-documentservice.stderr",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "candidate-documentservice.exit",
+          "bytes": 2,
+          "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        }
+      ],
+      "command_record": "See early-run-commands.json in the raw archive; early command flag spelling is normalized from same-session execution notes."
+    },
+    {
+      "name": "candidate-affected",
+      "exit_status": 1,
+      "execution_status": "complete",
+      "test_event_counts": {
+        "pass": 14201,
+        "fail": 1,
+        "skip": 45
+      },
+      "package_results": [
+        {
+          "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+          "Action": "fail",
+          "Elapsed": 0,
+          "FailedBuild": "github.com/hashicorp/go-msgpack/v2/codec"
+        },
+        {
+          "Package": "github.com/snissn/gomap/TreeDB/collections",
+          "Action": "fail",
+          "Elapsed": 369.4
+        },
+        {
+          "Package": "github.com/snissn/gomap/TreeDB/caching",
+          "Action": "pass",
+          "Elapsed": 84.789
+        },
+        {
+          "Package": "github.com/snissn/gomap/TreeDB/db",
+          "Action": "pass",
+          "Elapsed": 156.697
+        },
+        {
+          "Package": "github.com/snissn/gomap/TreeDB",
+          "Action": "pass",
+          "Elapsed": 511.113
+        },
+        {
+          "Package": "github.com/snissn/gomap/TreeDB/docs",
+          "Action": "pass",
+          "Elapsed": 5.486
+        }
+      ],
+      "failed_tests": [
+        "TestTypedStorageLegacyNameAllowlistIsComplete"
+      ],
+      "artifacts": [
+        {
+          "path": "candidate-affected.jsonl",
+          "bytes": 15605053,
+          "sha256": "cafa54c90a8579b643fab32580d239f21dd7c6eb2a91b6696a37e07aff781e45"
+        },
+        {
+          "path": "candidate-affected.stderr",
+          "bytes": 225,
+          "sha256": "f930edc03b054b439a5ead595b7a67c548db4928a2a0d8ec9679fc0f8f9dbf47"
+        },
+        {
+          "path": "candidate-affected.exit",
+          "bytes": 2,
+          "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+        }
+      ],
+      "command_record": "See early-run-commands.json in the raw archive; early command flag spelling is normalized from same-session execution notes."
+    },
+    {
+      "name": "candidate-final-focused",
+      "exit_status": 0,
+      "execution_status": "complete",
+      "test_event_counts": {
+        "pass": 53,
+        "fail": 0,
+        "skip": 0
+      },
+      "package_results": [
+        {
+          "Package": "github.com/snissn/gomap/TreeDB/collections",
+          "Action": "pass",
+          "Elapsed": 6.838
+        }
+      ],
+      "failed_tests": [],
+      "artifacts": [
+        {
+          "path": "candidate-final-focused.jsonl",
+          "bytes": 62258,
+          "sha256": "fc24cf7f0396672f75548b8110171d86b5285feebdc452e2e58d76f39705009c"
+        },
+        {
+          "path": "candidate-final-focused.stderr",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "candidate-final-focused.exit",
+          "bytes": 2,
+          "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        }
+      ],
+      "receipt": {
+        "name": "candidate-final-focused",
+        "command": [
+          "/workspace/scratch/0d9ab3f5d72e/toolchain/go/bin/go",
+          "test",
+          "-json",
+          "-p",
+          "1",
+          "-timeout",
+          "12m",
+          "./TreeDB/collections",
+          "-run",
+          "^(TestTypedStorageLegacy.*|TestNativeOrdinaryGraphAcceptedAcrossCapturedManifestBuild|TestNativeOrdinaryColumnGraphRecipeAcrossCapturedHandoff|TestNativeOrdinaryGraphHandoff.*|TestNativeOrdinaryGraphPreassignmentSourceChangesHaveNoEffect|TestNativeGraphPreparation.*|TestNative.*Diagnostic.*)$",
+          "-count=1"
+        ],
+        "cwd": "/workspace/scratch/0d9ab3f5d72e/gomap-5338",
+        "started_utc": "2026-10-30T19:28:01.312123+00:00",
+        "source_freeze_sha256": "0e037265f65d222e4a353ccbc51d2c2fe7403b5a8474deb2c87869f962512476",
+        "source_sha256": "bc21a3515ec26670d985497ea7121845450779349b96c556d3c8e13b8face3c8",
+        "environment": {
+          "GOCACHE": "/workspace/scratch/0d9ab3f5d72e/go-cache",
+          "GOPATH": "/workspace/scratch/0d9ab3f5d72e/go-path",
+          "GOWORK": "off",
+          "GOTOOLCHAIN": "local",
+          "GOMEMLIMIT": "4GiB",
+          "GOMAXPROCS": "2",
+          "TMPDIR": "/workspace/scratch/0d9ab3f5d72e/tmp",
+          "GODEBUG": null,
+          "GOGC": null,
+          "TZ": "Australia/Sydney",
+          "LANG": "C.UTF-8",
+          "LC_ALL": "C.UTF-8"
+        },
+        "exit_status": 0,
+        "finished_utc": "2026-10-30T19:28:11.857609+00:00",
+        "elapsed_seconds": 10.543190051000238,
+        "stdout_sha256": "fc24cf7f0396672f75548b8110171d86b5285feebdc452e2e58d76f39705009c",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "name": "candidate-vet",
+      "exit_status": 0,
+      "execution_status": "complete",
+      "test_event_counts": {
+        "pass": 0,
+        "fail": 0,
+        "skip": 0
+      },
+      "package_results": [],
+      "failed_tests": [],
+      "artifacts": [
+        {
+          "path": "candidate-vet.jsonl",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "candidate-vet.stderr",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "candidate-vet.exit",
+          "bytes": 2,
+          "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        }
+      ],
+      "receipt": {
+        "name": "candidate-vet",
+        "command": [
+          "/workspace/scratch/0d9ab3f5d72e/toolchain/go/bin/go",
+          "vet",
+          "-p",
+          "1",
+          "./TreeDB/documentservice",
+          "./TreeDB/collections",
+          "./TreeDB/caching",
+          "./TreeDB/db",
+          "./TreeDB/nativewire",
+          "./TreeDB",
+          "./TreeDB/docs"
+        ],
+        "cwd": "/workspace/scratch/0d9ab3f5d72e/gomap-5338",
+        "started_utc": "2026-10-30T19:28:12.349481+00:00",
+        "source_freeze_sha256": "0e037265f65d222e4a353ccbc51d2c2fe7403b5a8474deb2c87869f962512476",
+        "source_sha256": "bc21a3515ec26670d985497ea7121845450779349b96c556d3c8e13b8face3c8",
+        "environment": {
+          "GOCACHE": "/workspace/scratch/0d9ab3f5d72e/go-cache",
+          "GOPATH": "/workspace/scratch/0d9ab3f5d72e/go-path",
+          "GOWORK": "off",
+          "GOTOOLCHAIN": "local",
+          "GOMEMLIMIT": "4GiB",
+          "GOMAXPROCS": "2",
+          "TMPDIR": "/workspace/scratch/0d9ab3f5d72e/tmp",
+          "GODEBUG": null,
+          "GOGC": null,
+          "TZ": "Australia/Sydney",
+          "LANG": "C.UTF-8",
+          "LC_ALL": "C.UTF-8"
+        },
+        "exit_status": 0,
+        "finished_utc": "2026-10-30T19:29:40.109983+00:00",
+        "elapsed_seconds": 87.75861324800007,
+        "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "name": "candidate-nativewire",
+      "exit_status": 1,
+      "execution_status": "complete",
+      "test_event_counts": {
+        "pass": 1930,
+        "fail": 1,
+        "skip": 3
+      },
+      "package_results": [
+        {
+          "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+          "Action": "fail",
+          "Elapsed": 656.264
+        }
+      ],
+      "failed_tests": [
+        "TestMultiOwnerTCPAcceptedModelScaledCorrectnessV1"
+      ],
+      "artifacts": [
+        {
+          "path": "candidate-nativewire.jsonl",
+          "bytes": 2328193,
+          "sha256": "c3134b5c23971717fc8bc1f577abae37ee5aed37501833f4e294f9332d03d0bb"
+        },
+        {
+          "path": "candidate-nativewire.stderr",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "candidate-nativewire.exit",
+          "bytes": 2,
+          "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+        }
+      ],
+      "receipt": {
+        "name": "candidate-nativewire",
+        "command": [
+          "/workspace/scratch/0d9ab3f5d72e/toolchain/go/bin/go",
+          "test",
+          "-json",
+          "-p",
+          "1",
+          "-timeout",
+          "30m",
+          "./TreeDB/nativewire",
+          "-count=1"
+        ],
+        "cwd": "/workspace/scratch/0d9ab3f5d72e/gomap-5338",
+        "started_utc": "2026-10-30T19:29:40.599063+00:00",
+        "source_freeze_sha256": "0e037265f65d222e4a353ccbc51d2c2fe7403b5a8474deb2c87869f962512476",
+        "source_sha256": "bc21a3515ec26670d985497ea7121845450779349b96c556d3c8e13b8face3c8",
+        "environment": {
+          "GOCACHE": "/workspace/scratch/0d9ab3f5d72e/go-cache",
+          "GOPATH": "/workspace/scratch/0d9ab3f5d72e/go-path",
+          "GOWORK": "off",
+          "GOTOOLCHAIN": "local",
+          "GOMEMLIMIT": "4GiB",
+          "GOMAXPROCS": "2",
+          "TMPDIR": "/workspace/scratch/0d9ab3f5d72e/tmp",
+          "GODEBUG": null,
+          "GOGC": null,
+          "TZ": "Australia/Sydney",
+          "LANG": "C.UTF-8",
+          "LC_ALL": "C.UTF-8"
+        },
+        "exit_status": 1,
+        "finished_utc": "2026-10-30T19:41:07.170397+00:00",
+        "elapsed_seconds": 686.569001367,
+        "stdout_sha256": "c3134b5c23971717fc8bc1f577abae37ee5aed37501833f4e294f9332d03d0bb",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "name": "candidate-race",
+      "exit_status": null,
+      "execution_status": "incomplete; original exit unknown",
+      "test_event_counts": {
+        "pass": 4133,
+        "fail": 0,
+        "skip": 33
+      },
+      "package_results": [
+        {
+          "Package": "github.com/snissn/gomap/TreeDB/documentservice",
+          "Action": "pass",
+          "Elapsed": 164.435
+        }
+      ],
+      "failed_tests": [],
+      "artifacts": [
+        {
+          "path": "candidate-race.jsonl",
+          "bytes": 4151241,
+          "sha256": "fd8caa2da75eea25575ac608d56a289344cc6b38a83277d07ba1c36973de46a7"
+        },
+        {
+          "path": "candidate-race.stderr",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ],
+      "interruption_receipt": {
+        "schema": "gomap.validation.incomplete-run.v1",
+        "name": "candidate-race",
+        "status": "incomplete",
+        "observed_utc": "2026-10-30T20:09:56.028325+00:00",
+        "exit_status": null,
+        "exit_status_known": false,
+        "package_suite_passed": false,
+        "reason": "The original execution session is unavailable; the retained stream ends without the collections package completion, process exit file, or final runner receipt. An original exit status was not recovered.",
+        "interruption_cause": "Unknown; no termination signal, runtime failure, timeout, or successful exit is inferred.",
+        "command": [
+          "/workspace/scratch/0d9ab3f5d72e/toolchain/go/bin/go",
+          "test",
+          "-json",
+          "-race",
+          "-p",
+          "1",
+          "-timeout",
+          "20m",
+          "./TreeDB/documentservice",
+          "./TreeDB/collections",
+          "-count=1"
+        ],
+        "command_provenance": "run_final_validation.py COMMANDS entry; not a reconstructed successful-exit receipt.",
+        "runner_sha256": "0117bd2b4131eb3902ec14aeea896d79888c4a1ef0e43aa3ba95e5232cbe637c",
+        "cwd": "/workspace/scratch/0d9ab3f5d72e/gomap-5338",
+        "declared_candidate_source_commit": "9cd7557fb705b07261b801a2f42aa90dee4ce171",
+        "declared_candidate_source_tree": "dff272aeed265395770cb6eba7b17eeb6463618b",
+        "declared_source_sha256": "bc21a3515ec26670d985497ea7121845450779349b96c556d3c8e13b8face3c8",
+        "source_binding_limit": "The final runner verifies this freeze before the command. Its after-command check and completion receipt are absent; this audit does not manufacture either.",
+        "artifacts": [
+          {
+            "path": "candidate-race.jsonl",
+            "bytes": 4151241,
+            "sha256": "fd8caa2da75eea25575ac608d56a289344cc6b38a83277d07ba1c36973de46a7"
+          },
+          {
+            "path": "candidate-race.stderr",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ],
+        "json_event_count": 16905,
+        "json_parse_errors": [],
+        "test_event_counts": {
+          "run": 4167,
+          "pass": 4133,
+          "fail": 0,
+          "skip": 33
+        },
+        "per_package_test_event_counts": {
+          "github.com/snissn/gomap/TreeDB/collections": {
+            "run": 3593,
+            "pass": 3560,
+            "fail": 0,
+            "skip": 32
+          },
+          "github.com/snissn/gomap/TreeDB/documentservice": {
+            "run": 574,
+            "pass": 573,
+            "fail": 0,
+            "skip": 1
+          }
+        },
+        "package_result_events": [
+          {
+            "Time": "2026-10-31T06:49:03.0095274+11:00",
+            "Action": "pass",
+            "Package": "github.com/snissn/gomap/TreeDB/documentservice",
+            "Elapsed": 164.435
+          }
+        ],
+        "tests_started_without_recorded_terminal_event": [
+          {
+            "Time": "2026-10-31T07:05:35.077003527+11:00",
+            "Action": "run",
+            "Package": "github.com/snissn/gomap/TreeDB/collections",
+            "Test": "TestR1TypedRowOrderedPartLookupHistory5065"
+          }
+        ],
+        "selected_completed_regression_events": [
+          {
+            "Time": "2026-10-31T06:46:32.154205646+11:00",
+            "Action": "pass",
+            "Package": "github.com/snissn/gomap/TreeDB/documentservice",
+            "Test": "TestOrdinaryColumnGraphNativeCloseRetainsCheckpointFailure",
+            "Elapsed": 1.5
+          },
+          {
+            "Time": "2026-10-31T06:46:38.930149027+11:00",
+            "Action": "pass",
+            "Package": "github.com/snissn/gomap/TreeDB/documentservice",
+            "Test": "TestOrdinaryColumnGraphNativeColdHybrid4096",
+            "Elapsed": 6.78
+          },
+          {
+            "Time": "2026-10-31T06:46:53.647288824+11:00",
+            "Action": "pass",
+            "Package": "github.com/snissn/gomap/TreeDB/documentservice",
+            "Test": "TestOrdinaryColumnGraphNativeConcurrentWrite4096",
+            "Elapsed": 14.71
+          },
+          {
+            "Time": "2026-10-31T06:46:55.21432275+11:00",
+            "Action": "pass",
+            "Package": "github.com/snissn/gomap/TreeDB/documentservice",
+            "Test": "TestOrdinaryColumnGraphNativeOptimizeCrashReopen",
+            "Elapsed": 1.57
+          },
+          {
+            "Time": "2026-10-31T07:01:42.509018772+11:00",
+            "Action": "pass",
+            "Package": "github.com/snissn/gomap/TreeDB/collections",
+            "Test": "TestNativeOrdinaryGraphAcceptedAcrossCapturedManifestBuild/sequential",
+            "Elapsed": 1.74
+          },
+          {
+            "Time": "2026-10-31T07:01:44.274374861+11:00",
+            "Action": "pass",
+            "Package": "github.com/snissn/gomap/TreeDB/collections",
+            "Test": "TestNativeOrdinaryGraphAcceptedAcrossCapturedManifestBuild/changed-manifest",
+            "Elapsed": 1.77
+          },
+          {
+            "Time": "2026-10-31T07:01:46.19613669+11:00",
+            "Action": "pass",
+            "Package": "github.com/snissn/gomap/TreeDB/collections",
+            "Test": "TestNativeOrdinaryGraphAcceptedAcrossCapturedManifestBuild/unchanged-manifest",
+            "Elapsed": 1.92
+          },
+          {
+            "Time": "2026-10-31T07:01:48.118195583+11:00",
+            "Action": "pass",
+            "Package": "github.com/snissn/gomap/TreeDB/collections",
+            "Test": "TestNativeOrdinaryGraphAcceptedAcrossCapturedManifestBuild/changed-manifest-crash",
+            "Elapsed": 1.92
+          },
+          {
+            "Time": "2026-10-31T07:01:48.118311429+11:00",
+            "Action": "pass",
+            "Package": "github.com/snissn/gomap/TreeDB/collections",
+            "Test": "TestNativeOrdinaryGraphAcceptedAcrossCapturedManifestBuild",
+            "Elapsed": 7.35
+          },
+          {
+            "Time": "2026-10-31T07:01:59.944667177+11:00",
+            "Action": "pass",
+            "Package": "github.com/snissn/gomap/TreeDB/collections",
+            "Test": "TestNativeOrdinaryGraphPreassignmentSourceChangesHaveNoEffect/physical-handoff",
+            "Elapsed": 0.52
+          },
+          {
+            "Time": "2026-10-31T07:02:00.429382196+11:00",
+            "Action": "pass",
+            "Package": "github.com/snissn/gomap/TreeDB/collections",
+            "Test": "TestNativeOrdinaryGraphPreassignmentSourceChangesHaveNoEffect/logical-row",
+            "Elapsed": 0.48
+          },
+          {
+            "Time": "2026-10-31T07:02:00.429475886+11:00",
+            "Action": "pass",
+            "Package": "github.com/snissn/gomap/TreeDB/collections",
+            "Test": "TestNativeOrdinaryGraphPreassignmentSourceChangesHaveNoEffect",
+            "Elapsed": 1.01
+          }
+        ],
+        "last_event": {
+          "Time": "2026-10-31T07:05:35.077007022+11:00",
+          "Action": "output",
+          "Package": "github.com/snissn/gomap/TreeDB/collections",
+          "Test": "TestR1TypedRowOrderedPartLookupHistory5065",
+          "Output": "=== RUN   TestR1TypedRowOrderedPartLookupHistory5065\n"
+        },
+        "last_event_utc": "2026-10-30T20:05:35.077007022Z",
+        "file_mtime_utc": "2026-10-30T20:05:35.073458+00:00",
+        "completion_files_absent": [
+          "candidate-race.exit",
+          "candidate-race.receipt.json"
+        ],
+        "process_observation": {
+          "observed_utc": "2026-10-30T20:09:06.273334+00:00",
+          "visible_numeric_pid_entries": 15,
+          "unreadable_entries": 0,
+          "matching_go_or_validation_processes": [],
+          "scope": "Independent read of this tool invocation /proc. Absence is not a recovered wait status. Parent also reported no Go/runner/test processes in an escalated ps observation at approximately20:10UTC; that report is not a retained wait result."
+        },
+        "hosted_race_evidence": {
+          "record": "hosted-source-status.json",
+          "workflow_run": 41113857081,
+          "source_commit": "9cd7557fb705b07261b801a2f42aa90dee4ce171",
+          "source_tree": "dff272aeed265395770cb6eba7b17eeb6463618b",
+          "synthetic_merge": "a2d2e8cf0de82852a61f916c91a6048d3f22b864",
+          "jobs": [
+            {
+              "id": 124262873872,
+              "name": "race-check (linux)-2",
+              "status": "completed",
+              "conclusion": "success",
+              "html_url": "https://github.com/snissn/gomap/actions/runs/41113857081/job/124262873872",
+              "started_at": "2026-10-30T19:16:16Z",
+              "completed_at": "2026-10-30T19:37:24Z"
+            },
+            {
+              "id": 124262874183,
+              "name": "race-check (linux)-7",
+              "status": "completed",
+              "conclusion": "success",
+              "html_url": "https://github.com/snissn/gomap/actions/runs/41113857081/job/124262874183",
+              "started_at": "2026-10-30T19:16:17Z",
+              "completed_at": "2026-10-30T19:31:24Z"
+            },
+            {
+              "id": 124262874190,
+              "name": "race-check (linux)-5",
+              "status": "completed",
+              "conclusion": "success",
+              "html_url": "https://github.com/snissn/gomap/actions/runs/41113857081/job/124262874190",
+              "started_at": "2026-10-30T19:19:07Z",
+              "completed_at": "2026-10-30T19:30:07Z"
+            },
+            {
+              "id": 124262874196,
+              "name": "race-check (linux)-8",
+              "status": "completed",
+              "conclusion": "success",
+              "html_url": "https://github.com/snissn/gomap/actions/runs/41113857081/job/124262874196",
+              "started_at": "2026-10-30T19:16:17Z",
+              "completed_at": "2026-10-30T19:30:38Z"
+            },
+            {
+              "id": 124262874214,
+              "name": "race-check (linux)-1",
+              "status": "completed",
+              "conclusion": "success",
+              "html_url": "https://github.com/snissn/gomap/actions/runs/41113857081/job/124262874214",
+              "started_at": "2026-10-30T19:16:17Z",
+              "completed_at": "2026-10-30T19:50:13Z"
+            },
+            {
+              "id": 124262874230,
+              "name": "race-check (linux)-4",
+              "status": "completed",
+              "conclusion": "success",
+              "html_url": "https://github.com/snissn/gomap/actions/runs/41113857081/job/124262874230",
+              "started_at": "2026-10-30T19:16:17Z",
+              "completed_at": "2026-10-30T19:29:09Z"
+            },
+            {
+              "id": 124262874249,
+              "name": "race-check (linux)-3",
+              "status": "completed",
+              "conclusion": "success",
+              "html_url": "https://github.com/snissn/gomap/actions/runs/41113857081/job/124262874249",
+              "started_at": "2026-10-30T19:16:17Z",
+              "completed_at": "2026-10-30T19:39:17Z"
+            },
+            {
+              "id": 124262874321,
+              "name": "race-check (linux)-6",
+              "status": "completed",
+              "conclusion": "success",
+              "html_url": "https://github.com/snissn/gomap/actions/runs/41113857081/job/124262874321",
+              "started_at": "2026-10-30T19:16:16Z",
+              "completed_at": "2026-10-30T19:31:39Z"
+            }
+          ],
+          "independent_adapter_recheck": "GET /repos/snissn/gomap/actions/runs/41113857081/jobs?per_page=100 at2026-10-30 approximately20:09UTC: all38complete;36success,2failure;all8race-check jobs success.",
+          "scope": "Independent hosted runs on the frozen source; they do not assign an exit status to this incomplete local command."
+        },
+        "preservation": "Original stdout/stderr bytes retained unchanged. No exit file was created, no failed result was replaced, and no retry was run by this audit."
+      }
+    },
+    {
+      "name": "baseline-nativewire-focused",
+      "exit_status": 0,
+      "execution_status": "complete",
+      "test_event_counts": {
+        "pass": 1,
+        "fail": 0,
+        "skip": 0
+      },
+      "package_results": [
+        {
+          "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+          "Action": "pass",
+          "Elapsed": 61.751
+        }
+      ],
+      "failed_tests": [],
+      "artifacts": [
+        {
+          "path": "baseline-nativewire-focused.jsonl",
+          "bytes": 16099,
+          "sha256": "24990b03558ea0cdce4210e0f96e432fb965939f2695d447cf7cd6997d88322a"
+        },
+        {
+          "path": "baseline-nativewire-focused.stderr",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "baseline-nativewire-focused.exit",
+          "bytes": 2,
+          "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        }
+      ],
+      "receipt": {
+        "name": "baseline-nativewire-focused",
+        "scope": "FOCUSED baseline control; not a recreation of full-package history.",
+        "interpretation_limit": "A pass does not explain or supersede the original candidate full-package failure; a failure does not transfer issue ownership.",
+        "command": [
+          "/workspace/scratch/0d9ab3f5d72e/toolchain/go/bin/go",
+          "test",
+          "-json",
+          "-p",
+          "1",
+          "-timeout",
+          "30m",
+          "./TreeDB/nativewire",
+          "-run",
+          "^TestMultiOwnerTCPAcceptedModelScaledCorrectnessV1$",
+          "-count=1"
+        ],
+        "cwd": "/workspace/scratch/0d9ab3f5d72e/gomap-5338-baseline",
+        "started_utc": "2026-10-30T20:10:12.063212+00:00",
+        "source_freeze_sha256": "0e037265f65d222e4a353ccbc51d2c2fe7403b5a8474deb2c87869f962512476",
+        "source_before": {
+          "root": "/workspace/scratch/0d9ab3f5d72e/gomap-5338-baseline",
+          "local_head": "d7db5409e20412f4dac4e1a3f902484b05e014e1",
+          "local_head_tree": "39a87e47f3740e4056f25196da54a9f4e35eb159",
+          "status_porcelain": [
+            "?? TreeDB/documentservice/ordinary_columngraph_native_lifecycle_bench_test.go",
+            "?? docs/evidence/r1-row-store-5061/public-replay-M-3325dfe/.32-source-blobs-3325dfe7-stdout.log.qPpSWE"
+          ],
+          "tracked_working_changes": [],
+          "tracked_staged_changes": [],
+          "untracked_source_files": [
+            "TreeDB/documentservice/ordinary_columngraph_native_lifecycle_bench_test.go"
+          ],
+          "all_source_sha256": "67b4fe2f492c8b0cea36202c0b9bd61b794f9dffcfa0514d4e44441289564b4f",
+          "production_source_sha256": "4523977b9eee6f23f1eaa5e4d184db696e212d2f7c6dc865c77f61df8fc66cbd",
+          "test_source_sha256": "0bfeb5b3169318a733c36e7f78685aaa8c2c98c08b1960b12dc2a8790a99bfce",
+          "benchmark_sha256": "5e9c0d2922e3a6bfd163e33ea5c924a72d801ec298f9d5abe2c40127d718d7b2",
+          "shared_helper_sha256": "45d2186bbc6ece189f56ee4fd44226250ed2a9e458d739d3dd4eb34ecaec6826"
+        },
+        "environment": {
+          "PATH": "/workspace/scratch/0d9ab3f5d72e/toolchain/go/bin:/root/.codex/tmp/arg0-linux/codex-arg0usvKYU:/opt/codex/codex-path:/opt/codex/runtimes/codex-primary-runtime/dependencies/bin/override:/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin:/opt/codex/runtimes/codex-primary-runtime/dependencies/node/bin:/opt/codex/runtimes/codex-primary-runtime/dependencies/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/codex/runtimes/codex-primary-runtime/dependencies/bin/fallback",
+          "GOCACHE": "/workspace/scratch/0d9ab3f5d72e/go-cache",
+          "GOPATH": "/workspace/scratch/0d9ab3f5d72e/go-path",
+          "GOWORK": "off",
+          "GOTOOLCHAIN": "local",
+          "GOMEMLIMIT": "4GiB",
+          "GOMAXPROCS": "2",
+          "TMPDIR": "/workspace/scratch/0d9ab3f5d72e/tmp",
+          "GODEBUG": null,
+          "GOGC": null,
+          "TZ": "Australia/Sydney",
+          "LANG": "C.UTF-8",
+          "LC_ALL": "C.UTF-8"
+        },
+        "environment_reference_receipt_sha256": "315c19674251d295086325c614c081cd57c84c33d9d560d09e72936f6469032a",
+        "go_executable_sha256": "9c2a37ae5b21ba1d5a004bb9ab4d0c64de6fc5778e9d30487adccea62678b8b5",
+        "go_version": "go version go1.26.10 linux/amd64",
+        "go_version_provenance": "/workspace/scratch/0d9ab3f5d72e/evidence/lifecycle-build-baseline/build-receipt.json",
+        "candidate_race_exit": null,
+        "candidate_race_completion": "Interrupted or lost before a final exit receipt; no full local race pass claimed.",
+        "candidate_race_interruption_receipt": "/workspace/scratch/0d9ab3f5d72e/evidence/local-race-interruption.json",
+        "candidate_race_interruption_receipt_sha256": "ac779075d075b045d996102169451af1563c1ce6ef96d91d13b810d1cebb408b",
+        "original_unexecuted_runner_sha256": "0e12f28ca342908b1d6e46e1189fde629158a295e19da2825e3731bcc8988310",
+        "prelaunch_process_guard": {
+          "checked_utc": "2026-10-30T20:10:12.066942+00:00",
+          "active_go_processes": []
+        },
+        "runner_sha256": "8943df2cadbfb5277517222ae2b4ee42b53cc54076c1c3d0412f24296eeed8d3",
+        "attempt_count": 1,
+        "retry_policy": "No retry; all original outputs retained.",
+        "exit_status": 0,
+        "finished_utc": "2026-10-30T20:12:04.226585+00:00",
+        "elapsed_seconds": 112.15975308799989,
+        "stdout_sha256": "24990b03558ea0cdce4210e0f96e432fb965939f2695d447cf7cd6997d88322a",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit_file_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+        "source_after": {
+          "root": "/workspace/scratch/0d9ab3f5d72e/gomap-5338-baseline",
+          "local_head": "d7db5409e20412f4dac4e1a3f902484b05e014e1",
+          "local_head_tree": "39a87e47f3740e4056f25196da54a9f4e35eb159",
+          "status_porcelain": [
+            "?? TreeDB/documentservice/ordinary_columngraph_native_lifecycle_bench_test.go",
+            "?? docs/evidence/r1-row-store-5061/public-replay-M-3325dfe/.32-source-blobs-3325dfe7-stdout.log.qPpSWE"
+          ],
+          "tracked_working_changes": [],
+          "tracked_staged_changes": [],
+          "untracked_source_files": [
+            "TreeDB/documentservice/ordinary_columngraph_native_lifecycle_bench_test.go"
+          ],
+          "all_source_sha256": "67b4fe2f492c8b0cea36202c0b9bd61b794f9dffcfa0514d4e44441289564b4f",
+          "production_source_sha256": "4523977b9eee6f23f1eaa5e4d184db696e212d2f7c6dc865c77f61df8fc66cbd",
+          "test_source_sha256": "0bfeb5b3169318a733c36e7f78685aaa8c2c98c08b1960b12dc2a8790a99bfce",
+          "benchmark_sha256": "5e9c0d2922e3a6bfd163e33ea5c924a72d801ec298f9d5abe2c40127d718d7b2",
+          "shared_helper_sha256": "45d2186bbc6ece189f56ee4fd44226250ed2a9e458d739d3dd4eb34ecaec6826"
+        },
+        "source_unchanged": true,
+        "test_result": {
+          "parse_errors": [],
+          "test_event_counts": {
+            "run": 1,
+            "pass": 1,
+            "skip": 0,
+            "fail": 0
+          },
+          "selected_run_count": 1,
+          "selected_pass_count": 1,
+          "failure_events": [],
+          "first_observed_error_event": null,
+          "first_cause_interpretation": "Original error text only; no hidden Raft state or historical attribution inferred.",
+          "failed_selected_test_output": null,
+          "package_result_events": [
+            {
+              "Time": "2026-10-31T07:12:04.158806445+11:00",
+              "Action": "pass",
+              "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+              "Elapsed": 61.751
+            }
+          ]
+        },
+        "control_passed": true
+      }
+    }
+  ],
+  "python_contract_results": [
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/refresh_ci_impact_inventory.py --check",
+      "cwd": "/workspace/scratch/0d9ab3f5d72e/gomap-5338",
+      "started_at": "2026-10-30T19:01:25+00:00",
+      "ended_at": "2026-10-30T19:01:26+00:00",
+      "elapsed_seconds": 0.866,
+      "head_at_start": "d7db5409e20412f4dac4e1a3f902484b05e014e1",
+      "exit_code": 0,
+      "source_sha256": "b2fecb8b93572a7d379bd33141ceb70f38192a7c803632491054587fed44e62f",
+      "stdout_file": "refresh_ci_impact_inventory_check.stdout.log",
+      "stderr_file": "refresh_ci_impact_inventory_check.stderr.log"
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/test_ci_impact.py",
+      "cwd": "/workspace/scratch/0d9ab3f5d72e/gomap-5338",
+      "started_at": "2026-10-30T19:01:25+00:00",
+      "ended_at": "2026-10-30T19:01:36+00:00",
+      "elapsed_seconds": 10.853,
+      "head_at_start": "d7db5409e20412f4dac4e1a3f902484b05e014e1",
+      "exit_code": 0,
+      "source_sha256": "949d66d053b34004a977c580a1bb5f7e50ea695039ef1b5207e1328eeacb9bd6",
+      "stdout_file": "test_ci_impact.stdout.log",
+      "stderr_file": "test_ci_impact.stderr.log"
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/test_refresh_ci_impact_inventory.py",
+      "cwd": "/workspace/scratch/0d9ab3f5d72e/gomap-5338",
+      "started_at": "2026-10-30T19:01:25+00:00",
+      "ended_at": "2026-10-30T19:01:51+00:00",
+      "elapsed_seconds": 25.592,
+      "head_at_start": "d7db5409e20412f4dac4e1a3f902484b05e014e1",
+      "exit_code": 0,
+      "source_sha256": "ea4eab39b9dc414287e069acdbb788e1e366ee70c734f1701a0dec33dbb010dc",
+      "stdout_file": "test_refresh_ci_impact_inventory.stdout.log",
+      "stderr_file": "test_refresh_ci_impact_inventory.stderr.log"
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/test_treedb_ci_contract.py",
+      "cwd": "/workspace/scratch/0d9ab3f5d72e/gomap-5338",
+      "started_at": "2026-10-30T19:01:25+00:00",
+      "ended_at": "2026-10-30T19:01:25+00:00",
+      "elapsed_seconds": 0.111,
+      "head_at_start": "d7db5409e20412f4dac4e1a3f902484b05e014e1",
+      "exit_code": 0,
+      "source_sha256": "f031655a15f6aff96857119826bee2411a3517cf592378aec88d9a5233fede87",
+      "stdout_file": "test_treedb_ci_contract.stdout.log",
+      "stderr_file": "test_treedb_ci_contract.stderr.log"
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/test_treedb_windows_core_headroom.py",
+      "cwd": "/workspace/scratch/0d9ab3f5d72e/gomap-5338",
+      "started_at": "2026-10-30T19:01:25+00:00",
+      "ended_at": "2026-10-30T19:01:28+00:00",
+      "elapsed_seconds": 2.696,
+      "head_at_start": "d7db5409e20412f4dac4e1a3f902484b05e014e1",
+      "exit_code": 0,
+      "source_sha256": "3d31f8ff636e97c2d235281a3a41a1e9a910ce150896364cf5dbbde368e0230e",
+      "stdout_file": "test_treedb_windows_core_headroom.stdout.log",
+      "stderr_file": "test_treedb_windows_core_headroom.stderr.log"
+    }
+  ],
+  "measurement_summary_sha256": "28cca229432f9c3fbf8e24b4e743561c87cc2f6377f904ab9fcf8bedf7ef3761",
+  "all_six_measurements_complete": true,
+  "historical_incident": "The original #5332 Optimize cause remains unattributed; the controlled handoff failure is separate evidence."
+}
