@@ -95,6 +95,9 @@ func TestCOWCheckpointErrorPropagation(t *testing.T) {
 				t.Fatalf("reopen: %v", err)
 			}
 			requireRawKVValue(t, reopened, key, value)
+			if !atClose {
+				requireRawKVValue(t, reopened, []byte("pending"), []byte("value"))
+			}
 			if err := reopened.Close(); err != nil {
 				t.Fatalf("reopened close: %v", err)
 			}

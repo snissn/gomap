@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import os
 import signal
 import subprocess
@@ -23,6 +24,49 @@ def summary(insert=100000, total=100000, errors=None):
 
 
 class LoadCountsTest(unittest.TestCase):
+    def test_run_profile_requires_verifier_and_exact_readback(self):
+        profile = 'command_wal_durable'
+        valid = dict(rows=100000, profile=profile, actual_mode='cow_btree', native=True,
+                     expected_hashed_keys_verified=True, verification_max_scan_documents=100001,
+                     verification_max_cursor_retained_bytes=256 << 20)
+        cases = [('success', 0, valid), ('verifier_exit', 1, valid), ('invalid_json', 0, '{')]
+        cases += [(key, 0, valid | {key: value}) for key, value in dict(
+            rows=99999, profile='wrong', actual_mode='skiplist', native=False,
+            expected_hashed_keys_verified=False, verification_max_scan_documents=100000,
+            verification_max_cursor_retained_bytes=1).items()]
+        for name, code, readback in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                server, client, verifier = (root / name for name in ('server', 'client', 'verifier'))
+                proc = mock.Mock(pid=123)
+                proc.poll.return_value = None
+
+                def start(*args, **kwargs):
+                    kwargs['stdout'].write(b'TreeDB Native Server listening on 127.0.0.1:12345\n'
+                                           b'TreeDB storage: shared_cow\n')
+                    kwargs['stdout'].flush()
+                    return proc
+
+                def observed(argv, **kwargs):
+                    if argv[0] == str(client):
+                        kwargs['stdout'].write(summary().encode())
+                        return 0, {'exe': str(client)}
+                    self.assertEqual(argv, [str(verifier), '-dir', str(root / profile / 'db'), '-profile', profile])
+                    kwargs['stdout'].write((json.dumps(readback) if isinstance(readback, dict) else readback).encode())
+                    return code, {'exe': str(verifier)}
+
+                with mock.patch.object(runner.subprocess, 'Popen', side_effect=start), \
+                     mock.patch.object(runner, 'observe_child', return_value={'exe': str(server)}), \
+                     mock.patch.object(runner, 'close_server', return_value=(0, [], [])), \
+                     mock.patch.object(runner, 'run_observed', side_effect=observed) as run:
+                    self.assertEqual(runner.run_profile(root, profile, server, client, verifier, {}), name == 'success')
+                self.assertEqual(run.call_count, 2)
+                receipt = json.loads((root / profile / 'terminal.json').read_text())
+                self.assertEqual(receipt['verifier_exit'], code)
+                self.assertEqual(receipt['classification'], 'green' if name == 'success' else 'inconclusive')
+                if name not in ('success', 'verifier_exit', 'invalid_json'):
+                    self.assertTrue(any('invalid reopen verifier result' in error for error in receipt['errors']))
+
     def test_classification_requires_actual_matching_failure(self):
         red = {'signature_observation_complete': True, 'client_exit': 0,
                'workload_completed': True, 'load_failed': True, 'other_failure': False,
@@ -121,24 +165,33 @@ class LoadCountsTest(unittest.TestCase):
         self.assertIsNotNone(started[0].returncode)
 
     def test_signal_during_server_close_is_deferred_and_reaped(self):
-        code = ('import signal,sys,time\n'
-                'def close(sig, frame):\n time.sleep(.5); sys.exit(0)\n'
+        code = ('import os,signal,sys,time\n'
+                'def close(sig, frame):\n os.write(1, b"closing\\n"); os.read(0, 1); sys.exit(0)\n'
                 'signal.signal(signal.SIGTERM, close)\n'
-                'print("ready", flush=True)\n'
+                'os.write(1, b"ready\\n")\n'
                 'while True: time.sleep(1)\n')
-        proc = subprocess.Popen([sys.executable, '-c', code], stdout=subprocess.PIPE, text=True,
+        proc = subprocess.Popen([sys.executable, '-c', code], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
                                 start_new_session=True)
         self.assertEqual(proc.stdout.readline().strip(), 'ready')
-        timer = threading.Timer(.2, os.kill, args=(os.getpid(), signal.SIGTERM))
-        timer.start()
+        wait = proc.wait
+
+        def signal_after_close_started(*args, **kwargs):
+            self.assertEqual(proc.stdout.readline().strip(), 'closing')
+            # close_server has installed its deferred handlers and the child
+            # cannot exit until this main-thread callback releases it.
+            os.kill(os.getpid(), signal.SIGTERM)
+            proc.stdin.write('release\n')
+            proc.stdin.flush()
+            return wait(*args, **kwargs)
+
         try:
-            exit_code, errors, pending = runner.close_server(proc)
+            with mock.patch.object(proc, 'wait', side_effect=signal_after_close_started):
+                exit_code, errors, pending = runner.close_server(proc)
         finally:
-            timer.cancel()
-            timer.join()
             if proc.poll() is None:
                 proc.kill()
                 proc.wait(timeout=2)
+            proc.stdin.close()
             proc.stdout.close()
         self.assertEqual(exit_code, 0)
         self.assertEqual(errors, [])

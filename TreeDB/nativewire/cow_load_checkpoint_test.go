@@ -292,7 +292,7 @@ func TestCOWNativewireCheckpointErrorPropagation(t *testing.T) {
 
 // The child exits after synced public acknowledgments without owner close. The
 // parent opens the same durable profile and checks the acknowledged documents.
-func TestCOWNativewireJSONDurableACKRecovery(t *testing.T) {
+func TestCOWNativewireJSONSyncedACKProcessExitRecovery(t *testing.T) {
 	const childDirEnv = "GOMAP_5333_COW_WIRE_CRASH_DIR"
 	if dir := os.Getenv(childDirEnv); dir != "" {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -316,7 +316,7 @@ func TestCOWNativewireJSONDurableACKRecovery(t *testing.T) {
 		os.Exit(0)
 	}
 	dir := t.TempDir()
-	cmd := exec.Command(os.Args[0], "-test.run=^TestCOWNativewireJSONDurableACKRecovery$", "-test.timeout=60s")
+	cmd := exec.Command(os.Args[0], "-test.run=^TestCOWNativewireJSONSyncedACKProcessExitRecovery$", "-test.timeout=60s")
 	cmd.Env = append(os.Environ(), childDirEnv+"="+dir)
 	out, err := cmd.CombinedOutput()
 	if err != nil || !bytes.Contains(out, []byte("all synced ACKs observed; exiting without close")) {

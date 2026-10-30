@@ -108,9 +108,6 @@ func runNativeBSONLifecycle(t *testing.T, profile Profile, dir string, crash boo
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := database.Stats()["treedb.cache.memtable_mode"]; got != "cow_btree" {
-		t.Fatalf("direct BSON owner mode=%q, want cow_btree", got)
-	}
 	var manager *collections.CollectionManager
 	var handle *backenddb.DB
 	var held *collections.CollectionReadView
@@ -143,6 +140,9 @@ func runNativeBSONLifecycle(t *testing.T, profile Profile, dir string, crash boo
 		}
 	}
 	t.Cleanup(closeOriginal)
+	if got := database.Stats()["treedb.cache.memtable_mode"]; got != "cow_btree" {
+		t.Fatalf("direct BSON owner mode=%q, want cow_btree", got)
+	}
 	handle, err = database.NativeSemanticBackend()
 	if err != nil {
 		t.Fatal(err)

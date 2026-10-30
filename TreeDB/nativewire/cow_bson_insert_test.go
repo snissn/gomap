@@ -263,6 +263,42 @@ func TestCOWNativewireBSONCombinerPrepublicationFallback(t *testing.T) {
 	}
 }
 
+func TestCOWNativewireBSONCombinerExistingConflictFallback(t *testing.T) {
+	for _, profile := range []treedb.Profile{treedb.ProfileCommandWALDurable, treedb.ProfileCommandWALRelaxed, treedb.ProfileNoWALFast} {
+		for _, unique := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/unique_%t", profile, unique), func(t *testing.T) {
+				dir := t.TempDir()
+				f := openCOWBSONFixture(t, profile, dir)
+				cowBSONCreateUsers(t, f)
+				if err := f.client.InsertBatchNoResult(t.Context(), "users", collections.DocumentFormatBSON,
+					[][]byte{[]byte("seed")}, [][]byte{insertBatchCombinerBSONDoc(t, "seed", "seed@example.com")}, AckVisible); err != nil {
+					t.Fatal(err)
+				}
+				id, email, wantCode := "seed", "conflict@example.com", iwire.ErrDocumentExists
+				if unique {
+					id, email, wantCode = "conflict", "seed@example.com", iwire.ErrUniqueIndexConflict
+				}
+				results := cowBSONApply(t, f, []string{id, "valid"}, []string{email, "valid@example.com"})
+				if errorCodeFor(results[0].err) != wantCode || results[0].actualAck != 0 || results[0].hasCatalogVersion ||
+					results[1].err != nil || results[1].actualAck != iwire.AckVisible {
+					t.Fatalf("existing conflict/sibling outcomes=%+v want first code=%d second success", results, wantCode)
+				}
+				if got := nativewireTestStatUint64(t, f.server, "insert_batch_combiner.fallback_requests_total"); got != 2 {
+					t.Fatalf("single fallback attempts=%d want=2", got)
+				}
+				ids, emails := []string{"seed", "valid"}, []string{"seed@example.com", "valid@example.com"}
+				cowBSONAssertRows(t, f, ids, emails)
+				if err := f.owner.Checkpoint(); err != nil {
+					t.Fatal(err)
+				}
+				f.close(t)
+				f = openCOWBSONFixture(t, profile, dir)
+				cowBSONAssertRows(t, f, ids, emails)
+			})
+		}
+	}
+}
+
 func TestCOWNativewireBSONCombinerUnprovenErrorNoRetry(t *testing.T) {
 	dir := t.TempDir()
 	f := openCOWBSONFixture(t, treedb.ProfileCommandWALDurable, dir)
