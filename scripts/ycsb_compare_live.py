@@ -89,8 +89,7 @@ def helper(directory, stem, manifest, target, mode, fixture_id):
     c.require(type(receipt["pid"]) is int and receipt["pid"]>0, "snapshot/fixture PID must be an integer")
     c.require(receipt["source_id"] == manifest["server_builds"][target]["source_commit"] and receipt["fixture_id"] == fixture_id and receipt["mode"] == mode and receipt["pid"] == launch["process"]["pid"], "snapshot/fixture process/source mismatch")
     c.require(receipt["result_error"] == "" and receipt["close_error"] == "", "snapshot/fixture original client close failed")
-    c.positive_timeout(launch["timeout_seconds"],"recorded helper timeout")
-    c.require(c.same(launch["timeout_seconds"],manifest["deadlines"]["helper_seconds"]) and launch["timed_out"] is False and c.same(launch["cleanup_timeout_seconds"],manifest["deadlines"]["cleanup_seconds"]) and c.same(launch["outer_timeout_seconds"],manifest["deadlines"]["helper_outer_seconds"]),"helper deadline binding mismatch")
+    c.require(c.same_timeout(launch["timeout_seconds"],manifest["deadlines"]["helper_seconds"]) and launch["timed_out"] is False and c.same_timeout(launch["cleanup_timeout_seconds"],manifest["deadlines"]["cleanup_seconds"]) and c.same_timeout(launch["outer_timeout_seconds"],manifest["deadlines"]["helper_outer_seconds"]),"helper deadline binding mismatch")
     bounds = c.timestamp(launch["start_utc"]),c.timestamp(launch["end_utc"])
     c.require(bounds[0] <= c.timestamp(receipt["started_utc"]) <= c.timestamp(receipt["ended_utc"]) <= bounds[1], "snapshot/fixture call interval mismatch")
     c.require(type(receipt["checkpoint_attempted"]) is bool and type(receipt["checkpoint_succeeded"]) is bool,"invalid checkpoint flags")
@@ -240,11 +239,17 @@ def wait_owner(directory,target,prefix,timeout):
     c.process(launch["process"])
     path=directory/(prefix+".evidence/owner.open.json")
     deadline=time.monotonic()+timeout
-    while not path.exists():
+    while True:
         c.require(c.same(c.observe(launch["process"]["pid"]),launch["process"]),"owner changed before readiness")
-        if time.monotonic()>=deadline:raise TimeoutError("timed out waiting for matching owner.open observation")
-        time.sleep(min(.05,max(0,deadline-time.monotonic())))
-    observed=c.read(path)
+        if time.monotonic()>=deadline:raise TimeoutError("timed out waiting for complete matching owner.open observation")
+        try:
+            observed=c.read(path)
+            break
+        except (FileNotFoundError,json.JSONDecodeError,UnicodeDecodeError):
+            # writeNew creates exclusively before writing. Existence alone is
+            # not publication; retry partial JSON within the same bounded live
+            # process identity. Complete but invalid schema/data fails below.
+            time.sleep(min(.05,max(0,deadline-time.monotonic())))
     c.observation(observed,build,manifest["profile"])
     c.require(c.same(observed["process"],launch["process"]) and c.same(c.observe(launch["process"]["pid"]),launch["process"]),"readiness owner process mismatch")
     c.require(observed["process"]["exe_sha256"]==build["exe_sha256"] and observed["data_dir"]==launch["data_dir"],"readiness owner ELF/data mismatch")

@@ -320,6 +320,15 @@ class CompareTests(unittest.TestCase):
     def test_shell_rejects_stale_owner_before_client_and_cleans_service(self):
         self.exercise_shell_cleanup(ready=True,owner_ready="stale")
 
+    def test_shell_waits_for_partial_owner_receipt_to_complete(self):
+        self.exercise_shell_cleanup(ready=True,owner_ready="partial")
+
+    def test_shell_times_out_malformed_owner_receipt_and_cleans_service(self):
+        self.exercise_shell_cleanup(ready=True,owner_ready="malformed")
+
+    def test_shell_rejects_complete_invalid_owner_schema_before_client(self):
+        self.exercise_shell_cleanup(ready=True,owner_ready="invalid-schema")
+
     def exercise_shell_cleanup(self, ready, hang=False, owner_ready="matching"):
         # Offline dependency stubs exercise launcher dispatch without a product DB.
         tools = self.out / "offline-tools"
@@ -385,8 +394,18 @@ int main(int argc,char **argv) {
                 data=pathlib.Path(observed_launch["data_dir"]).stat()
                 value=dict(schema_version=1,kind="live_owner_observation",owner_id="1"*32,process=observed_launch["process"],data_dir=observed_launch["data_dir"],data_device=data.st_dev,data_inode=data.st_ino,profile=self.manifest["profile"],backend="cow",capture_error="",observed_gomaxprocs=1,stats={"treedb.profile.resolved":self.manifest["profile"],"treedb.cache.memtable_mode":"cow_btree","treedb.cache.cow.txn.logical_seq":"0"},observed_utc=COMPARE.now())
                 if owner_ready=="stale":value["process"]["start_ticks"]+=1
+                if owner_ready=="invalid-schema":value["schema_version"]=True
                 evidence=execution/"treedb_native/server.evidence/owner.open.json"
-                temp=evidence.with_suffix(".pending");self.save(temp,value);os.replace(temp,evidence)
+                # Match Go's actual O_EXCL-create-then-write publication, not
+                # an atomic rename that would hide incomplete-receipt races.
+                with evidence.open("x") as stream:
+                    raw=json.dumps(value)
+                    if owner_ready in ("partial","malformed"):
+                        stream.write(raw[:18]);stream.flush()
+                        if owner_ready=="malformed":return
+                        time.sleep(.2)
+                        stream.write(raw[18:])
+                    else:stream.write(raw)
             except BaseException as error:writer_errors.append(error)
         writer=threading.Thread(target=publish_owner)
         writer.start()
@@ -395,7 +414,7 @@ int main(int argc,char **argv) {
         self.assertFalse(writer.is_alive())
         self.assertEqual(writer_errors,[])
         expected=(124 if hang else 37) if ready else 1
-        if ready and owner_ready!="matching":expected=3
+        if ready and owner_ready not in ("matching","partial"):expected=3
         self.assertEqual(outcome.returncode,expected,outcome.stderr)
         launch = json.loads((execution/"treedb_native/server.launch.json").read_text())
         self.assertFalse(pathlib.Path(f"/proc/{launch['process']['pid']}").exists())
@@ -404,7 +423,7 @@ int main(int argc,char **argv) {
             self.assertIn("timed out waiting",outcome.stderr)
             self.assertFalse(client_marker.exists())
             return
-        if owner_ready!="matching":
+        if owner_ready not in ("matching","partial"):
             self.assertFalse(client_marker.exists())
             failure=COMPARE.read(execution/"treedb_native/server.readiness.failure.json")
             self.assertEqual(failure["kind"],"owner_readiness_failure")
@@ -1031,6 +1050,98 @@ int main(int argc,char **argv) {
         self.assertFalse(COMPARE.same({"x":True},{"x":1}))
         self.assertFalse(COMPARE.same({"x":1},{"x":1.0}))
         self.assertTrue(COMPARE.same({"a":1,"b":True},{"b":True,"a":1}))
+
+    def test_actual_phase_and_live_helper_cli_packet_reaches_final_validation(self):
+        # Exercise the real argparse/launcher/receipt path, including its float
+        # deadline serialization. Owner/storage evidence remains synthetic;
+        # these Python stubs do not start a product service or qualify a cell.
+        import datetime as dt
+        delta=COMPARE.timestamp(COMPARE.now())-1_000_000_000-COMPARE.timestamp("2026-10-29T00:00:00Z")
+        interpreter_hash=COMPARE.digest(sys.executable)
+        def shift(value):
+            if isinstance(value,dict):
+                result={k:shift(v) for k,v in value.items()}
+                if result.get("pid")==4321:result["exe_sha256"]=interpreter_hash
+                return result
+            if isinstance(value,list):return [shift(v) for v in value]
+            if isinstance(value,str) and value.startswith("2026-10-29T"):
+                seconds,nanos=divmod(COMPARE.timestamp(value)+delta,1_000_000_000)
+                return dt.datetime.fromtimestamp(seconds,dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")+f".{nanos:09d}Z"
+            return value
+        for path in self.out.rglob("*.json"):self.save(path,shift(COMPARE.read(path)))
+        manifest=COMPARE.read(self.out/"manifest.json")
+        manifest["client"]["exe_sha256"]=interpreter_hash
+        manifest["fixture"]["exe_sha256"]=interpreter_hash
+        producer=self.out/"offline-success-client.py"
+        producer.write_text("""#!/usr/bin/env python3
+import os,pathlib,sys,time
+sys.path.insert(0,ROOT)
+import ycsb_compare_validate as c
+time.sleep(.05)
+point=c.now()
+receipt=dict(schema_version=1,phase_id=os.environ['YCSB_PHASE_ID'],client_build_id=os.environ['YCSB_CLIENT_BUILD_ID'],db='mongodb',phase='load',declared_profile=os.environ['YCSB_PROFILE'],total_excludes_close=True,command=dict(attempted=True,success=True,error='',start_utc='0001-01-01T00:00:00Z',end_utc='0001-01-01T00:00:00Z',elapsed_ns=0),db_close=dict(attempted=True,success=True,error='',start_utc=point,end_utc=point,elapsed_ns=0),workload_close=dict(attempted=True,success=True,error='',start_utc=point,end_utc=point,elapsed_ns=0),native_flush=dict(applicable=False,flush_enabled=False))
+c.write_new(os.environ['YCSB_CLOSE_RECEIPT_PATH'],receipt)
+print(pathlib.Path(LOG).read_text(),end='')
+""".replace("ROOT",repr(str(ROOT))).replace("LOG",repr(str(DATA/"load.out"))))
+        # Use the existing 64-record stdout fixture, not its 100k source count.
+        log=self.out/"offline-load.out"
+        log.write_bytes((self.directory/"load.out").read_bytes())
+        producer.write_text(producer.read_text().replace(repr(str(DATA/"load.out")),repr(str(log))))
+        producer.write_text(producer.read_text().replace("#!/usr/bin/env python3","#!"+sys.executable))
+        producer.chmod(0o755)
+        helper=self.out/"offline-success-helper.py"
+        template=COMPARE.read(self.directory/"snapshot_loaded.close.json")
+        template_path=self.out/"offline-helper-template.json";self.save(template_path,template)
+        helper.write_text("""#!/usr/bin/env python3
+import os,pathlib,sys,time
+sys.path.insert(0,ROOT)
+import ycsb_compare_validate as c
+args=dict(zip(sys.argv[1::2],sys.argv[2::2]))
+receipt=c.read(TEMPLATE)
+receipt.update(pid=os.getpid(),started_utc=c.now())
+time.sleep(.05)
+receipt['ended_utc']=c.now()
+receipt['artifacts_sha256']={pathlib.Path(args['-observed']).name:c.digest(args['-observed'])}
+c.write_new(args['-receipt'],receipt)
+""".replace("ROOT",repr(str(ROOT))).replace("TEMPLATE",repr(str(template_path))))
+        helper.write_text(helper.read_text().replace("#!/usr/bin/env python3","#!"+sys.executable))
+        helper.chmod(0o755)
+        manifest["fixture"]["binary"]=str(helper)
+        self.save(self.out/"manifest.json",manifest);self.save(self.out/"client-build.json",manifest["client"])
+        self.change("run_1.launch.json",lambda v:v["process"].update(exe_sha256=interpreter_hash))
+        for stem in ("load","snapshot_loaded"):
+            for suffix in (".out",".err",".launch.json",".close.json"):(self.directory/(stem+suffix)).unlink(missing_ok=True)
+        launch=[sys.executable,str(ROOT/"ycsb_compare_validate.py"),"launch","--timeout","600","--cleanup-timeout","10","--outer-timeout","640",str(self.directory),"load","--",str(producer)]
+        outcome=subprocess.run(launch,text=True,capture_output=True,timeout=5)
+        self.assertEqual(outcome.returncode,0,outcome.stderr)
+        phase=COMPARE.read(self.directory/"load.launch.json")
+        self.assertIs(type(phase["timeout_seconds"]),float)
+        for name in ("runtime.json","lifecycle.json"):
+            self.change(name,lambda v:v["phase_ids"].__setitem__(0,phase["phase_id"]))
+        command=[sys.executable,str(ROOT/"ycsb_compare_live.py"),"snapshot",str(self.directory),self.target,"--stage","loaded","--addr","127.0.0.1:1","--timeout","180","--cleanup-timeout","10","--outer-timeout","220"]
+        outcome=subprocess.run(command,text=True,capture_output=True,timeout=5)
+        self.assertEqual(outcome.returncode,0,outcome.stderr)
+        snapshot_launch=COMPARE.read(self.directory/"snapshot_loaded.launch.json")
+        self.assertIs(type(snapshot_launch["timeout_seconds"]),float)
+        # Recompute hashes for the shifted synthetic supporting helper copies.
+        self.change("run_1.close.json",lambda v:None)
+        for stem in ("snapshot_preclose","snapshot_reopened","fixture_write","fixture_verify"):
+            self.change(stem+".close.json",lambda v:v.update(artifacts_sha256={name:COMPARE.digest(self.directory/name) for name in v["artifacts_sha256"]}))
+        self.check(True)
+
+    def test_duration_seconds_are_finite_numeric_values_only(self):
+        self.assertTrue(COMPARE.same_timeout(600.0,600))
+        self.assertTrue(COMPARE.same_timeout(.125,.125))
+        self.assertFalse(COMPARE.same_timeout(600.001,600))
+        for bad in (True,False,"600",None,0,-1,float("nan"),float("inf"),float("-inf")):
+            for left,right in ((bad,600),(600,bad)):
+                with self.assertRaises(ValueError):COMPARE.same_timeout(left,right)
+        for stem,manifest_key in (("load","phase_seconds"),("snapshot_loaded","helper_seconds")):
+            for field,key in (("timeout_seconds",manifest_key),("cleanup_timeout_seconds","cleanup_seconds"),("outer_timeout_seconds","phase_outer_seconds" if stem=="load" else "helper_outer_seconds")):
+                for bad in (True,"600",0,-1,float("nan"),float("inf"),float("-inf")):
+                    self.reject_mutations([(self.directory/(stem+".launch.json"),lambda v,k=field,b=bad:v.update({k:b})),(self.out/"manifest.json",lambda v,k=key,b=bad:v["deadlines"].update({k:b}))])
+                self.reject_mutations([(self.directory/(stem+".launch.json"),lambda v,k=field:v.update({k:v[k]+.001}))],"deadline binding mismatch")
+        self.check(True)
 
     def test_all_owner_observation_integer_types_are_strict(self):
         replicas=[(self.directory/(prefix+".evidence")/name,()) for prefix in ("server","reopened","fixture-write","fixture-reopened") for name in ("owner.open.json","owner.before-close.json")]

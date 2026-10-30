@@ -17,6 +17,11 @@ integer nanoseconds (up to nine fractional digits), and copied timestamps must
 match their original strings exactly. The Result wall-time versus monotonic
 elapsed-time consistency check deliberately retains a 2 ms tolerance; interval
 ordering and owner-lifetime bounds have no such tolerance.
+The timeout/deadline `*_seconds` fields are the sole numeric comparison
+exception: each side must be a positive finite integer or float (never a bool
+or string), and equal numeric durations such as shell `600` and argparse
+`600.0` match. This exception does not apply to Result elapsed nanoseconds,
+identities, counts, schemas, exits, or whole supporting-copy comparisons.
 
 Each invocation uses a fresh `OUT_DIR`. `SERVER_BUILD_MANIFEST` is mandatory
 and names a schema-v1 JSON object with `servers` mapping each selected target to
@@ -78,6 +83,11 @@ ELF/environment, current procfs identity, and actual data directory device/inode
 Only then is `<prefix>.ready.json` retained and startup returns. Missing or
 mismatched owner evidence writes a readiness failure and invokes owned cleanup;
 TCP readiness alone cannot release clients.
+The Go writer exclusively creates the receipt before writing its JSON body.
+Readiness therefore retries missing or incomplete JSON within the same bounded
+live process identity, rather than treating file existence as complete
+publication. Persistent malformed/incomplete JSON times out; complete invalid
+schema or mismatched identity fails before client release.
 
 * `server.launch.json`: observed `process` object and absolute `data_dir`.
 * `server.exit.json`: same `process` and checked `exit_code: 0`, emitted only after
@@ -284,3 +294,10 @@ full launch-lifetime checks are rejected. They are not full orchestration
 qualification. The bounded owner-readiness gate is covered by offline delayed,
 missing, and stale-owner controls; no product/service rerun accompanies this
 parser/orchestration repair.
+
+The deadline/publication regression includes an actual successful phase launcher
+CLI and live-helper CLI packet reaching the final shell parse-only validator.
+Its owner/storage records and Python client/helper stubs are explicitly synthetic;
+no product service is launched. Additional shell controls publish owner evidence
+with actual create-before-write semantics, including delayed partial JSON,
+permanently malformed JSON, and complete invalid schema, and verify owned cleanup.

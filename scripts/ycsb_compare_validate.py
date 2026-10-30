@@ -165,8 +165,7 @@ def phase_evidence(directory, stem, target, manifest):
     receipt = read(receipt_path)
     require(schema(launch), "unsupported phase launch schema")
     process(launch["process"])
-    positive_timeout(launch["timeout_seconds"],"recorded phase timeout")
-    require(same(launch["timeout_seconds"],manifest["deadlines"]["phase_seconds"]) and launch["timed_out"] is False and same(launch["cleanup_timeout_seconds"],manifest["deadlines"]["cleanup_seconds"]) and same(launch["outer_timeout_seconds"],manifest["deadlines"]["phase_outer_seconds"]), "phase deadline binding mismatch")
+    require(same_timeout(launch["timeout_seconds"],manifest["deadlines"]["phase_seconds"]) and launch["timed_out"] is False and same_timeout(launch["cleanup_timeout_seconds"],manifest["deadlines"]["cleanup_seconds"]) and same_timeout(launch["outer_timeout_seconds"],manifest["deadlines"]["phase_outer_seconds"]), "phase deadline binding mismatch")
     client = manifest["client"]
     require(launch["process"]["exe_sha256"] == client["exe_sha256"], "client ELF mismatch")
     exit_success(launch["exit_code"],"client exit failure or launcher timeout/failure")
@@ -384,6 +383,14 @@ def terminate_owned(identity, timeout=10):
 def positive_timeout(value, label):
     require(type(value) in (int,float) and math.isfinite(value) and value > 0, f"{label} must be finite and positive")
     return value
+
+
+def same_timeout(actual,expected):
+    # Seconds are configurable finite durations, not identity/count fields.
+    # argparse emits 600.0 for shell input 600; both denote the same deadline.
+    positive_timeout(actual,"recorded deadline")
+    positive_timeout(expected,"manifest deadline")
+    return actual == expected
 
 
 @contextlib.contextmanager
