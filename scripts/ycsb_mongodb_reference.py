@@ -24,7 +24,13 @@ import ycsb_correctness_validate as exact
 from ycsb_evidence_json import loads
 
 KIND = "mongodb-reference-checkpoint-close-reopen"
-PROFILE = "mongodb_w1_default"
+PROFILE = "mongodb_w1_default"  # Frozen fixture ELF's compatibility label only.
+def ack_profile(journal_requested):
+    c.require(journal_requested is None or journal_requested is True,"only journaled or journal-unspecified ACK class supported")
+    return "mongodb_w1_journaled" if journal_requested is True else "mongodb_w1_journal_unspecified"
+def fixture_manifest(m):
+    return dict(m,profile=m.get("fixture_profile",m["profile"]))
+
 ROLES = ("server", "reopened", "fixture-write", "fixture-reopened")
 ID = re.compile(r"[0-9a-f]{64}$")
 OID = re.compile(r"[0-9a-f]{24}$")
@@ -85,10 +91,19 @@ def build(value):
 
 
 def manifest(value):
+    if "common_load" in value:
+        import ycsb_public_sentinel as sentinel
+        sentinel.policy(value)
+        c.require(value["common_load"]["address"]==value["address"],"reference common-load address mismatch")
+    c.require("require_client_runtime_observation" not in value or value["require_client_runtime_observation"] is True,"reference runtime requirement must be explicit true when present")
     c.require(c.schema(value) and value["kind"]==KIND and value["targets"]==["mongodb"] and type(value["lifecycle_contract"]) is int and value["lifecycle_contract"]==1,"separate singleton reference manifest required")
     c.require(isinstance(value["campaign_id"],str) and re.fullmatch(r"[0-9a-f]{32}",value["campaign_id"]),"invalid reference campaign")
-    c.require(value["profile"]==PROFILE and value["formats"]=={"mongodb":"bson"},"MongoDB settings must be separate from TreeDB profiles")
-    c.require(c.same(value["write_concern"],{"w":1,"journal_requested":None}),"reference ordinary w:1 with journal request absent required")
+    if "acknowledgement_class" in value:
+        c.require(value["profile"]==ack_profile(value["write_concern"]["journal_requested"]) and value["acknowledgement_class"]==value["profile"] and value["fixture_profile"]==PROFILE,"reference ACK profile/concern/fixture mismatch")
+    else:
+        c.require(value["profile"]==PROFILE and value["write_concern"]["journal_requested"] is None,"legacy reference profile only proves journal-unspecified ACK")
+    c.require(value["formats"]=={"mongodb":"bson"},"MongoDB BSON settings required")
+    c.require(set(value["write_concern"])=={"w","journal_requested"} and type(value["write_concern"]["w"]) is int and value["write_concern"]["w"]==1 and (value["write_concern"]["journal_requested"] is None or value["write_concern"]["journal_requested"] is True),"reference explicit w:1 journal contract required")
     for key in ("recordcount","operationcount","threadcount","run_repeats","uid","gid"):
         integer(value[key],key,0 if key in ("uid","gid") else 1)
     address(value["address"])
@@ -184,6 +199,11 @@ def container_inspect(value,m,role,data,terminal=False):
     init=host.get("Init")
     c.require(host["Runtime"]==b["runtime"]["default_runtime"] and host["RestartPolicy"]["Name"]=="no" and host["AutoRemove"] is False and host["Privileged"] is False and (init is None or init is False),"container runtime/custody mismatch")
     c.require(host["NetworkMode"]=="bridge" and c.same(host["PortBindings"],{"27017/tcp":[{"HostIp":"127.0.0.1","HostPort":str(address(m["address"])[1])}]}),"reference port mapping mismatch")
+    if m.get("bounded_container") is True:
+        c.require(host["Memory"]==12884901888 and host["MemorySwap"]==12884901888,"container memory bounds differ")
+        c.require(host["Ulimits"]==[{"Name":"cpu","Soft":449,"Hard":450}],"container CPU-time bounds differ")
+        c.require(host["LogConfig"]=={"Type":"local","Config":{"max-size":"16m","max-file":"2"}},"container log bounds differ")
+        c.require(all(not host.get(k) for k in ("NanoCpus","CpuQuota","CpuPeriod","CpusetCpus","CpusetMems")),"container CPU policy must inherit host")
     mounts=value["Mounts"]
     c.require(len(mounts)==2 and {x["Destination"] for x in mounts}=={"/data/db","/data/configdb"},"unexpected/anonymous reference volume")
     for item in mounts:
@@ -392,7 +412,7 @@ def lifetime(directory,role,m,evidence_directory=None):
 
 def fixture_helper(directory,stem,m,mode,owner,public_id,lifetime_bounds,evidence_directory=None):
     # Reuse existing strict helper/receipt/binary/artifact/deadline validation.
-    receipt,bounds=live.helper(directory,stem,m,"mongodb",mode,m["campaign_id"]+":mongodb:"+("random" if mode=="snapshot" else "deterministic"))
+    receipt,bounds=live.helper(directory,stem,fixture_manifest(m),"mongodb",mode,m["campaign_id"]+":mongodb:"+("random" if mode=="snapshot" else "deterministic"))
     command=c.read(directory/(stem+".command.json"))
     stage=stem.removeprefix("snapshot_") if mode=="snapshot" else None
     c.require(c.schema(command) and c.same(command["argv"],fixture_argv(evidence_directory or directory,stem,m,mode,stage)),"reference fixture argv/address mismatch")
@@ -402,6 +422,58 @@ def fixture_helper(directory,stem,m,mode,owner,public_id,lifetime_bounds,evidenc
     live.require_interval(route_bounds,lifetime_bounds,"reference fixture route")
     c.require(receipt["checkpoint_attempted"] is False and receipt["checkpoint_succeeded"] is False and receipt["checkpoint"] is None and receipt.get("owner_checkpoint") is None,"reference fixture close cannot stand in for explicit fsync")
     return receipt,bounds
+
+
+def observe_container_cpu_policy(pid,identity,group,container_id):
+    # Host view of an independently owned Docker PID. Never bypass the generic
+    # same-namespace native observer guard or resolve a container mount root.
+    proc=pathlib.Path("/proc",str(pid));root=pathlib.Path("/sys/fs/cgroup")
+    c.require(c.same(c.observe(pid),identity),"container changed before CPU policy")
+    init_lines=pathlib.Path("/proc/1/cgroup").read_text().splitlines()
+    init_paths=[x[3:] for x in init_lines if x.startswith("0::/")]
+    c.require(len(init_paths)==1 and ".." not in pathlib.Path(init_paths[0]).parts,"invalid visible PID1 cgroup path")
+    init_group=root/init_paths[0].lstrip("/");init_stat=init_group.stat();root_stat=root.stat()
+    c.require("1" in (init_group/"cgroup.procs").read_text().split(),"visible cgroup mount does not contain PID1")
+    mounts=[line.split(" - ",1)[0].split() for line in pathlib.Path("/proc/self/mountinfo").read_text().splitlines() if " - cgroup2 " in line]
+    c.require(len(mounts)==1 and mounts[0][3:5]==["/","/sys/fs/cgroup"],"full host cgroup mount required")
+    lines=(proc/"cgroup").read_text().splitlines();unified=[x[3:] for x in lines if x.startswith("0::/")]
+    c.require(len(unified)==1 and ".." not in pathlib.Path(unified[0]).parts,"invalid host-visible container cgroup")
+    c.require(root/unified[0].lstrip("/")==group and container_id in unified[0],"container CPU policy group identity mismatch")
+    before=group.stat();members=(group/"cgroup.procs").read_text().split()
+    c.require(members==[str(pid)],"container CPU policy has extra processes")
+    namespaces={name:os.readlink(proc/"ns"/name) for name in ("cgroup","mnt")}
+    affinity=sorted(os.sched_getaffinity(pid));rows=c.runtime_observer.ancestor_policy(root,group)
+    c.require(lines==(proc/"cgroup").read_text().splitlines() and affinity==sorted(os.sched_getaffinity(pid)),"container CPU policy changed")
+    c.require(namespaces=={name:os.readlink(proc/"ns"/name) for name in namespaces},"container namespaces changed")
+    after=group.stat();c.require((before.st_dev,before.st_ino)==(after.st_dev,after.st_ino) and members==(group/"cgroup.procs").read_text().split(),"container cgroup identity changed")
+    c.require(c.same(c.observe(pid),identity),"container changed during CPU policy")
+    c.require(init_lines==pathlib.Path("/proc/1/cgroup").read_text().splitlines() and "1" in (init_group/"cgroup.procs").read_text().split(),"visible PID1 membership changed")
+    c.require((root.stat().st_dev,root.stat().st_ino)==(root_stat.st_dev,root_stat.st_ino) and (init_group.stat().st_dev,init_group.stat().st_ino)==(init_stat.st_dev,init_stat.st_ino),"visible cgroup root identity changed")
+    policy=dict(process=identity,leader_affinity=affinity,cgroup=dict(membership=unified[0],ancestors=rows,host_mount_root="/",visible_mount_pid1_evidence=dict(path=init_paths[0],root_device=root_stat.st_dev,root_inode=root_stat.st_ino,pid1_group_device=init_stat.st_dev,pid1_group_inode=init_stat.st_ino,scope="visible full mount and PID1 membership; does not independently prove namespace equivalence"),container_namespaces=namespaces),scope="host full-cgroup view of exact owned container; leader affinity and exported ancestor CPU constraints; sampled only")
+    c.validate_cpu_policy(policy,identity);return policy
+
+
+def bounded_observations(directory,role,m,owner,lifetime_bounds):
+    import struct
+    import ycsb_reference_wire as wire
+    value=c.read(directory/(role+".resource-observation.json"))
+    default=c.read(directory/(role+".default-concern.json"))
+    for item in (value,default):
+        c.require(c.schema(item) and item["campaign_id"]==m["campaign_id"] and item["role"]==role and c.same(item["process"],owner["process"]),"bounded reference observation identity mismatch")
+    c.require(re.search(r"^Max cpu time\s+449\s+450\s+seconds[ \t]*$",value["limits"],re.M),"retained actual CPU limit mismatch")
+    c.require(value["members"]==[owner["process"]["pid"]] and owner["container_id"] in value["cgroup"],"retained actual container membership mismatch")
+    c.require(value["memory_max"]=="12884901888" and value["memory_swap_max"]=="0","retained actual memory bounds mismatch")
+    c.require(type(value["cgroup_device"]) is int and value["cgroup_device"]>0 and type(value["cgroup_inode"]) is int and value["cgroup_inode"]>0,"retained cgroup directory identity invalid")
+    c.validate_cpu_policy(value["cpu_policy"],owner["process"])
+    live.require_interval((c.timestamp(default["start_utc"]),c.timestamp(default["end_utc"])),lifetime_bounds,"actual default concern query")
+    frames=directory/(role+".default-concern-frames")
+    raw=(frames/"01-request.bin").read_bytes();body=b"\0"*5+wire.document({"getDefaultRWConcern":1,"$db":"admin"})
+    c.require(raw==struct.pack("<iiii",len(body)+16,1,0,2013)+body,"default concern actual request mismatch")
+    raw=(frames/"01-response.bin").read_bytes();length,rid,to,op=struct.unpack_from("<iiii",raw)
+    c.require(length==len(raw) and to==1 and op==2013 and raw[16:21]==b"\0"*5,"default concern raw response framing mismatch")
+    reply,end=wire.decode(raw,21)
+    c.require(end==len(raw) and c.same(reply,default["reply"]),"default concern raw reply mismatch")
+    c.require(reply.get("ok")==1 or (reply.get("ok")==0 and reply.get("code")==51300 and reply.get("codeName")=="Location51300" and reply.get("errmsg")=="'getDefaultRWConcern' is not supported on standalone nodes."),"unexpected default concern response")
 
 
 def validate(out,require_completion=True,evidence_root=None):
@@ -439,6 +511,8 @@ def validate(out,require_completion=True,evidence_root=None):
     for key,name in (("fixture","fixture-source.go"),("control","reference-control-source.go")):
         c.require(c.digest(out/name)==m[key]["source_sha256"],"reference helper source mismatch")
     owners={role:lifetime(directory,role,m,evidence_directory) for role in ROLES}
+    if m.get("bounded_container") is True:
+        for role in ROLES:bounded_observations(directory,role,m,owners[role][0],owners[role][2])
     settings=[c.read(directory/(role+"-ready.json"))["commands"] for role in ROLES]
     c.require(all(c.same(journal_parameters(x["before.getParameter"]["reply"]),journal_parameters(settings[0]["before.getParameter"]["reply"])) and c.same(x["before.getCmdLineOpts"]["reply"]["parsed"],settings[0]["before.getCmdLineOpts"]["reply"]["parsed"]) for x in settings),"reference settings differ across independent lifetimes")
     if require_completion:
@@ -473,7 +547,7 @@ def validate(out,require_completion=True,evidence_root=None):
         role="reopened" if stage=="reopened" else "server"
         receipt,bounds=fixture_helper(directory,"snapshot_"+stage,m,"snapshot",owners[role][0],owners[role][1],owners[role][2],evidence_directory)
         receipts[stage]=(receipt,bounds)
-        snapshots[stage]=live.canonical_snapshot(c.read(directory/("snapshot_"+stage+".json")),m,"mongodb",stage)
+        snapshots[stage]=live.canonical_snapshot(c.read(directory/("snapshot_"+stage+".json")),fixture_manifest(m),"mongodb",stage)
     c.require(c.timestamp(c.read(directory/"load.launch.json")["end_utc"])<=receipts["loaded"][1][0]<=receipts["loaded"][1][1]<=c.timestamp(c.read(directory/"run_1.launch.json")["start_utc"]),"reference loaded snapshot placement mismatch")
     c.require(previous<=receipts["preclose"][1][0],"reference snapshot precedes settled clients")
     c.require(c.same(snapshots["preclose"][0],snapshots["reopened"][0]),"reference canonical random state differs after reopen")
@@ -482,6 +556,9 @@ def validate(out,require_completion=True,evidence_root=None):
     expected=c.read(directory/"fixture.expected.json")
     c.require(expected["source_id"]==m["server_builds"]["mongodb"]["source_commit"] and expected["fixture_id"]==m["campaign_id"]+":mongodb:deterministic" and expected["profile"]==PROFILE and expected["target"]=="mongodb","reference expected fixture identity mismatch")
     exact.validate(expected,[c.read(directory/name) for name in ("fixture.updated.json.load.json","fixture.updated.json","fixture.reopened.json")])
+    if "common_load" in m:
+        import ycsb_public_sentinel as sentinel
+        sentinel.validate(directory,m,owners["server"][0]["process"],m["address"])
     for role,stem,snapshot,end in (("server","random-checkpoint","snapshot_preclose.json",receipts["preclose"][1][1]),("fixture-write","fixture-checkpoint","fixture.updated.json",c.timestamp(c.read(directory/"fixture_write.launch.json")["end_utc"]))):
         owner,public_id,lifetime_bounds,_=owners[role]
         observed,checkpoint,bounds=control(directory,stem,m,owner,"checkpoint",evidence_directory)
@@ -509,6 +586,8 @@ def create_argv(m,role,data):
     labels={"gomap.ycsb.campaign":m["campaign_id"],"gomap.ycsb.role":role,"gomap.ycsb.target":"mongodb"}
     args=["create","--pull=never","--name","ycsb-"+m["campaign_id"]+"-"+role,"--hostname","ycsb-"+m["campaign_id"][:12]+"-"+role,"--user",f'{m["uid"]}:{m["gid"]}',"--restart=no","--runtime",m["server_builds"]["mongodb"]["runtime"]["default_runtime"],"--network","bridge","--entrypoint","/usr/bin/mongod","-p",m["address"]+":27017","--mount",f"type=bind,src={data},dst=/data/db","--mount",f"type=bind,src={data}.configdb,dst=/data/configdb"]
     for key,value in labels.items():args += ["--label",key+"="+value]
+    if m.get("bounded_container") is True:
+        args += ["--memory","12884901888","--memory-swap","12884901888","--ulimit","cpu=449:450","--log-driver","local","--log-opt","max-size=16m","--log-opt","max-file=2"]
     return args+[m["server_builds"]["mongodb"]["image_id"],"--dbpath","/data/db","--storageEngine","wiredTiger","--bind_ip_all","--port","27017"]
 
 
@@ -524,7 +603,8 @@ def fixture_argv(directory,stem,m,mode,stage=None):
 
 
 def phase_argv(m,stem):
-    args=[m["client_binary"],"load" if stem=="load" else "run","mongodb","-p","mongodb.url=mongodb://"+m["address"]+"/ycsb?w=1"]
+    journal=None if "common_load" in m and stem=="load" else m["write_concern"]["journal_requested"]
+    args=[m["client_binary"],"load" if stem=="load" else "run","mongodb","-p","mongodb.url=mongodb://"+m["address"]+"/ycsb?w=1"+("" if journal is None else "&journal="+str(journal).lower())]
     settings=dict(recordcount=m["recordcount"],operationcount=m["operationcount"],threadcount=m["threadcount"],fieldcount=10,fieldlength=100,readallfields="true",writeallfields="false",insertorder="hashed",keyprefix="user",zeropadding=1,insertstart=0,readproportion="0.95",updateproportion="0.05",scanproportion=0,insertproportion=0,readmodifywriteproportion=0)
     for key,value in settings.items():args += ["-p",f"{key}={value}"]
     return args
@@ -547,7 +627,7 @@ class Docker:
         d=self.m["deadlines"]
         c.require(time.monotonic()+d["helper_outer_seconds"]<=self.deadline,"reference run budget exhausted before Docker action")
         with c.outer_deadline(d["helper_outer_seconds"]):
-            code=c.launch(argparse.Namespace(directory=str(self.directory),stem=stem,command=command,timeout=d["helper_seconds"],cleanup_timeout=d["cleanup_seconds"]))
+            code=c.launch(argparse.Namespace(directory=str(self.directory),stem=stem,command=command,timeout=d["helper_seconds"],cleanup_timeout=d["cleanup_seconds"],role="docker"))
         c.require(code==0,"owned Docker CLI failed: "+stem)
         self.last_stem=stem
         return (self.directory/(stem+".out")).read_text().strip()
@@ -607,6 +687,32 @@ class Docker:
                 c.require(time.monotonic()<deadline,"reference readiness timed out")
                 time.sleep(.05)
         self.control(role+"-ready",owner,"observe")
+        if self.m.get("bounded_container") is True:
+            pid=owner["process"]["pid"];proc=pathlib.Path("/proc",str(pid))
+            limits=(proc/"limits").read_text()
+            c.write_new(self.directory/(role+".actual-proc-limits.json"),dict(schema_version=1,campaign_id=self.m["campaign_id"],role=role,process=owner["process"],raw=limits,observed_utc=c.now()))
+            c.require(re.search(r"^Max cpu time\s+449\s+450\s+seconds[ \t]*$",limits,re.M),"actual mongod CPU limits differ")
+            groups=(proc/"cgroup").read_text().splitlines();unified=[x.split(":",2)[2] for x in groups if x.startswith("0::")]
+            c.require(len(unified)==1 and owner["container_id"] in unified[0],"actual mongod cgroup identity mismatch")
+            group=pathlib.Path("/sys/fs/cgroup")/unified[0].lstrip("/")
+            c.require((group/"memory.max").read_text().strip()=="12884901888","actual mongod memory bound differs")
+            c.require((group/"memory.swap.max").read_text().strip()=="0","actual mongod swap bound differs")
+            members=[int(x) for x in (group/"cgroup.procs").read_text().split()]
+            c.require(members==[pid],"bounded container must have one actual mongod process")
+            group_stat=group.stat()
+            policy=observe_container_cpu_policy(pid,owner["process"],group,owner["container_id"])
+            c.write_new(self.directory/(role+".resource-observation.json"),dict(schema_version=1,campaign_id=self.m["campaign_id"],role=role,process=owner["process"],limits=limits,cgroup=str(group),cgroup_device=group_stat.st_dev,cgroup_inode=group_stat.st_ino,memory_max=(group/"memory.max").read_text().strip(),memory_swap_max=(group/"memory.swap.max").read_text().strip(),members=members,cpu_policy=policy,scope="sampled single mongod identity; four sequential process CPU limits <=1800s; container memory includes cache; separate client limits"))
+            import ycsb_reference_wire as wire
+            frames=self.directory/(role+".default-concern-frames");frames.mkdir()
+            c.require(c.same(c.observe(pid),owner["process"]),"reference changed before default concern query")
+            query_started=c.now()
+            client=wire.Client(self.m["address"],frames)
+            try:reply=client.call({"getDefaultRWConcern":1,"$db":"admin"})
+            finally:client.close()
+            query_ended=c.now()
+            c.require(c.same(c.observe(pid),owner["process"]),"reference changed during default concern query")
+            c.require(reply.get("ok")==1 or (reply.get("ok")==0 and reply.get("code")==51300 and reply.get("codeName")=="Location51300" and reply.get("errmsg")=="'getDefaultRWConcern' is not supported on standalone nodes."),"actual reference default concern query failed unexpectedly")
+            c.write_new(self.directory/(role+".default-concern.json"),dict(schema_version=1,campaign_id=self.m["campaign_id"],role=role,process=owner["process"],start_utc=query_started,end_utc=query_ended,reply=reply,scope="actual server default; does not reinterpret omitted client j as false"))
         return owner
 
     def control(self,stem,owner,mode):
@@ -622,7 +728,8 @@ class Docker:
         c.require(time.monotonic()+d[kind+"_outer_seconds"]<=self.deadline,"reference run budget exhausted before helper action")
         c.write_new(self.directory/(stem+".command.json"),dict(schema_version=1,argv=command))
         with c.outer_deadline(d[kind+"_outer_seconds"]):
-            code=c.launch(argparse.Namespace(directory=str(self.directory),stem=stem,command=command,timeout=d[kind+"_seconds"],cleanup_timeout=d["cleanup_seconds"]))
+            role="client" if phase else ("fixture" if command[0]==self.m["fixture"]["binary"] else "control")
+            code=c.launch(argparse.Namespace(directory=str(self.directory),stem=stem,command=command,timeout=d[kind+"_seconds"],cleanup_timeout=d["cleanup_seconds"],role=role))
         c.require(code==0,"reference child failed: "+stem)
 
     def fixture(self,stem,mode,stage=None):
@@ -743,6 +850,7 @@ def run(out,docker_binary):
     if "preparation_sha256" in m:
         from ycsb_mongodb_reference_prepare import verify_prepared
         verify_prepared(out,m,check_current_sources=True)
+    if m.get("require_client_runtime_observation") is True:c.runtime_client_preflight(m["client"])
     directory=out/"mongodb"
     c.require(not list(directory.iterdir()),"fresh empty reference directory required")
     c.require(c.digest(__file__)==m["reference_source_sha256"] and c.digest(out/"reference-source.py")==m["reference_source_sha256"],"actual reference launcher source is not bound")
@@ -778,8 +886,13 @@ def run(out,docker_binary):
             driver.checked(owner["container_id"],"server",directory/"db")
             c.require(c.same(c.observe(owner["process"]["pid"]),owner["process"]),"reference changed before measured client")
             driver.control(stem+"-owner",owner,"observe")
+            if "common_load" in m:
+                import ycsb_public_sentinel as sentinel
+                sentinel.phase_command(directory,stem,m,phase_argv(m,stem))
             driver.helper(stem,phase_argv(m,stem),True)
-            if i==0:driver.fixture("snapshot_loaded","snapshot","loaded")
+            if i==0:
+                driver.fixture("snapshot_loaded","snapshot","loaded")
+                if "common_load" in m:sentinel.run(directory,m,owner["process"],m["address"])
         driver.fixture("snapshot_preclose","snapshot","preclose")
         driver.checkpoint("random-checkpoint",owner,"snapshot_preclose.json")
         driver.stop("server",owner)

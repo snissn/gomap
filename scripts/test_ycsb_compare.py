@@ -159,6 +159,44 @@ class CompareTests(unittest.TestCase):
         self.assertIn("READ\t9515\t18556.9", summary)
         self.assertEqual(json.loads((self.out / "validation.json").read_text())["status"], "validated-consumer-evidence")
 
+    def test_historical_known_elf_does_not_imply_new_runtime_or_policy_claim(self):
+        from unittest import mock
+        self.manifest['client']['exe_sha256'] = COMPARE.CONTROLLED_CLIENT_SHA
+        path = self.directory / 'load.launch.json'
+        launch = COMPARE.read(path)
+        launch['process']['exe_sha256'] = COMPARE.CONTROLLED_CLIENT_SHA
+        self.save(path, launch)
+        with mock.patch.object(COMPARE, 'validate_client_runtime') as runtime:
+            COMPARE.phase_evidence(self.directory, 'load', self.target, self.manifest)
+            runtime.assert_not_called()
+        with mock.patch.object(COMPARE, 'validate_server_policies') as policies:
+            COMPARE.server_evidence(self.directory, self.target, self.manifest, ['offline-test-only:load', 'offline-test-only:run_1'])
+            policies.assert_not_called()
+        self.manifest['require_client_runtime_observation'] = True
+        with self.assertRaises(ValueError):
+            COMPARE.phase_evidence(self.directory, 'load', self.target, self.manifest)
+        with self.assertRaises(ValueError):
+            COMPARE.server_evidence(self.directory, self.target, self.manifest, [])
+        del self.manifest['require_client_runtime_observation']
+        launch['runtime_observation'] = None
+        self.save(path, launch)
+        COMPARE.phase_evidence(self.directory, 'load', self.target, self.manifest)
+        for bad in ({}, 'invalid'):
+            launch['runtime_observation'] = bad
+            self.save(path, launch)
+            with self.subTest(runtime=bad), self.assertRaises(ValueError):
+                COMPARE.phase_evidence(self.directory, 'load', self.target, self.manifest)
+        for prefix in ('server', 'reopened', 'fixture-write', 'fixture-reopened'):
+            policy_path = self.directory / f'{prefix}.launch.json'
+            old = policy_path.read_bytes() if policy_path.exists() else None
+            record = COMPARE.read(policy_path) if old is not None else {'process': self.process}
+            record['cpu_policy'] = None
+            self.save(policy_path, record)
+            with self.subTest(policy=prefix), self.assertRaises(ValueError):
+                COMPARE.server_evidence(self.directory, self.target, self.manifest, [])
+            if old is None: policy_path.unlink()
+            else: policy_path.write_bytes(old)
+
     def test_missing_receipt(self):
         (self.directory / "load.close.json").unlink()
         self.check(False, "load.close.json")
@@ -311,6 +349,18 @@ class CompareTests(unittest.TestCase):
     def test_reference_mongodb_rejected_before_any_execution_side_effect(self):
         self.exercise_preflight_refusal([(targets,"reference MongoDB lifecycle is unsupported") for targets in ("mongodb","treedb_native mongodb","mongodb,treedb_mongo","treedb_native,treedb_mongo,mongodb")])
 
+    def test_unknown_runtime_elf_rejected_before_build_or_service(self):
+        tools=self.out/'unknown-runtime-tools';tools.mkdir();marker=tools/'unexpected'
+        for name in ('go','make','docker','server','client'):
+            p=tools/name;p.write_text('#!/bin/sh\necho called >> '+str(marker)+'\nexit 97\n');p.chmod(0o700)
+        build=self.out/'unknown-runtime-client.json';self.save(build,dict(self.manifest['client'],exe_sha256='0'*64))
+        self.save(tools/'unused.json',{})
+        env=os.environ.copy();env.update(PATH=str(tools)+os.pathsep+env['PATH'],PYTHON=sys.executable,OUT_DIR=str(self.out/'unknown-runtime-output'),TARGETS='treedb_native',MONGODB_MODE='skip',BUILD='true',BUILD_GOYCSB='true',CLIENT_BUILD_MANIFEST=str(build),SERVER_BUILD_MANIFEST=str(tools/'unused.json'),GOYCSB_BIN=str(tools/'client'),TREEDB_NATIVE_SERVER_BIN=str(tools/'server'))
+        outcome=subprocess.run(['bash',str(ROOT/'ycsb_compare_mongodb_treedb.sh')],env=env,text=True,capture_output=True,timeout=5)
+        self.assertNotEqual(outcome.returncode,0)
+        self.assertIn('client runtime',outcome.stderr)
+        self.assertFalse(marker.exists(),'unsupported ELF reached a build/service/client')
+
     def test_multiline_unknown_duplicate_targets_reject_before_any_execution_side_effect(self):
         multiline=("treedb_native\nmongodb","mongodb\n","\nmongodb","treedb_native,\r\nmongodb","treedb_mongo\rmongodb","treedb_native\nunknown","unknown\nmongodb","treedb_native\ntreedb_native","treedb_native \n treedb_native")
         cases=[(targets,"TARGETS must be a single line") for targets in multiline]
@@ -456,13 +506,36 @@ int main(int argc,char **argv) {
             sock.bind(("127.0.0.1",0))
             port = sock.getsockname()[1]
         build = dict(self.manifest["client"], exe_sha256=COMPARE.digest(client))
+        # This cleanup-only control uses a C stub, not a supported Go runtime.
+        # Scope the test double to its exact ELF; production preflight and
+        # runtime-observer controls remain strict and are tested separately.
+        python_stub=executable("synthetic-python", "#!"+sys.executable+"\n"+f'''
+import pathlib,runpy,sys
+sys.path.insert(0,{str(ROOT)!r})
+import ycsb_compare_validate as c
+synthetic={build['exe_sha256']!r}
+preflight=c.runtime_client_preflight
+resolve=c.resolve_launch_role
+def synthetic_preflight(build):
+ if build.get('exe_sha256')==synthetic:return
+ return preflight(build)
+def synthetic_role(manifest,command,sha,role):
+ if role=='client' and sha==synthetic and manifest['client']['exe_sha256']==synthetic:return False
+ return resolve(manifest,command,sha,role)
+c.runtime_client_preflight=synthetic_preflight
+c.resolve_launch_role=synthetic_role
+sys.argv=sys.argv[1:]
+if sys.argv[0]=='-':exec(compile(sys.stdin.read(),'<synthetic-shell-stdin>','exec'),dict(__name__='__main__'))
+elif pathlib.Path(sys.argv[0]).name=='ycsb_compare_validate.py':sys.exit(c.main())
+else:runpy.run_path(sys.argv[0],run_name='__main__')
+''')
         build_path = self.out / "offline-build.json"
         self.save(build_path, build)
         server_build_path = self.out / "offline-server-build.json"
         self.save(server_build_path, dict(schema_version=1, servers={"treedb_native":dict(schema_version=1,version="candidate",source_commit=COMPARE.PRODUCER,exe_sha256=COMPARE.digest(server),expected_owner="cow",source_dir=str(tools),source_patch_sha256=COMPARE.digest(self.out/"client.patch"))}))
         execution = self.out / "execution"
         environment = os.environ.copy()
-        environment.update(PATH=str(tools)+os.pathsep+environment["PATH"], GOMAXPROCS="1", PARSE_ONLY="false", BUILD="false", BUILD_GOYCSB="false", OUT_DIR=str(execution), TARGETS="treedb_native", MONGODB_MODE="skip", TREEDB_NATIVE_DOCUMENT_FORMAT="json", TREEDB_NATIVE_SERVER_BIN=str(server), TREEDB_MONGO_GATEWAY_BIN=str(tools/"must-not-launch"), NATIVE_ADDR=f"127.0.0.1:{port}", CLIENT_BUILD_MANIFEST=str(build_path), SERVER_BUILD_MANIFEST=str(server_build_path), GOYCSB_DIR=str(tools), GOYCSB_BIN=str(client), FIXTURE_BIN=str(client), READINESS_TIMEOUT="1", PHASE_TIMEOUT_SECONDS="1", CHILD_CLEANUP_TIMEOUT_SECONDS="1")
+        environment.update(PATH=str(tools)+os.pathsep+environment["PATH"], PYTHON=str(python_stub), GOMAXPROCS="1", PARSE_ONLY="false", BUILD="false", BUILD_GOYCSB="false", OUT_DIR=str(execution), TARGETS="treedb_native", MONGODB_MODE="skip", TREEDB_NATIVE_DOCUMENT_FORMAT="json", TREEDB_NATIVE_SERVER_BIN=str(server), TREEDB_MONGO_GATEWAY_BIN=str(tools/"must-not-launch"), NATIVE_ADDR=f"127.0.0.1:{port}", CLIENT_BUILD_MANIFEST=str(build_path), SERVER_BUILD_MANIFEST=str(server_build_path), GOYCSB_DIR=str(tools), GOYCSB_BIN=str(client), FIXTURE_BIN=str(client), READINESS_TIMEOUT="1", PHASE_TIMEOUT_SECONDS="1", CHILD_CLEANUP_TIMEOUT_SECONDS="1")
         # The offline service binds TCP first; a separate synthetic observer
         # supplies actual proc/data identities later, without running a product DB.
         import threading,time
@@ -509,15 +582,17 @@ int main(int argc,char **argv) {
                 if path.exists():shutil.copyfile(path,retained/path.name)
         self.assertFalse(writer.is_alive())
         self.assertEqual(writer_errors,[])
-        expected=(124 if hang else 37) if ready else 1
+        expected=(124 if hang else 37) if ready else 3
         if ready and owner_ready not in ("matching","partial"):expected=3
         self.assertEqual(outcome.returncode,expected,outcome.stderr)
         launch = json.loads((execution/"treedb_native/server.launch.json").read_text())
         self.assertFalse(pathlib.Path(f"/proc/{launch['process']['pid']}").exists())
         self.assertEqual(json.loads((execution/"treedb_native/server.exit.json").read_text())["exit_code"],0)
         if not ready:
-            self.assertIn("timed out waiting",outcome.stderr)
+            self.assertIn("invalid server listener: timed out waiting for owned listener",outcome.stderr)
+            self.assertFalse((execution/"treedb_native/server.listener.json").exists())
             self.assertFalse(client_marker.exists())
+            self.assertEqual(json.loads((execution/"validation.json").read_text())["status"],"invalid")
             return
         if owner_ready not in ("matching","partial"):
             self.assertFalse(client_marker.exists())

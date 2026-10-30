@@ -329,7 +329,7 @@ def run(args):
     for name, original in (("DURABILITY.md", source/"docs/contracts/DURABILITY.md"), ("COMPATIBILITY.md", source/"TreeDB/mongo_gateway/COMPATIBILITY.md")):
         (directory/name).write_bytes(original.read_bytes())
         contracts[name] = c.digest(directory/name)
-    manifest = dict(schema_version=1, kind=SCOPE, replay_proof=LIMITATION, campaign_id=uuid.uuid4().hex, target=args.target, profile=args.profile, format=args.format, address=args.address, build=build, server_builds={args.target:build}, fixture=fixture, contract_sha256=contracts, client=dict(build_id="public-process-crash-fixture"), deadlines=dict(timeout_seconds=args.helper_timeout, cleanup_timeout_seconds=args.cleanup_timeout, outer_timeout_seconds=args.outer_timeout, readiness_seconds=args.readiness_timeout))
+    manifest = dict(schema_version=1, kind=SCOPE, replay_proof=LIMITATION, campaign_id=uuid.uuid4().hex, target=args.target, profile=args.profile, format=args.format, address=args.address, build=build, server_builds={args.target:build}, fixture=fixture, contract_sha256=contracts, client=dict(build_id="public-process-crash-fixture",exe_sha256=fixture["exe_sha256"]), deadlines=dict(timeout_seconds=args.helper_timeout, cleanup_timeout_seconds=args.cleanup_timeout, outer_timeout_seconds=args.outer_timeout, readiness_seconds=args.readiness_timeout))
     c.write_new(out/"manifest.json", manifest)
     host, port = args.address.rsplit(":", 1)
     c.require(host == "127.0.0.1" and 0 < int(port) < 65536, "crash fixture requires explicit loopback address")

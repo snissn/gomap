@@ -680,11 +680,19 @@ class ReferencePackets(unittest.TestCase):
             return b"SYNTHETIC offline Go buildinfo; no executable invoked\n"
         return config,pathlib.Path(output.name)/"prepared",metadata
 
+    def test_preparation_unknown_runtime_elf_fails_before_metadata_or_docker(self):
+        config,out,metadata=self.preparation_inputs()
+        with mock.patch.object(preparation,'command',side_effect=metadata) as commands,mock.patch.object(reference,'emergency_cli') as docker:
+            with self.assertRaisesRegex(ValueError,'client runtime'):preparation.prepare(config,out)
+            commands.assert_not_called();docker.assert_not_called()
+        self.assertFalse(out.exists())
+
     def test_offline_preparation_binds_full_support_without_invoking_services(self):
         config,out,metadata=self.preparation_inputs()
-        with mock.patch.object(preparation,"command",side_effect=metadata) as commands,mock.patch.object(reference,"emergency_cli") as docker:
+        with mock.patch.object(preparation,"command",side_effect=metadata) as commands,mock.patch.object(reference,"emergency_cli") as docker,mock.patch.object(c,"runtime_client_preflight") as qualification:
             report=preparation.prepare(config,out)
             docker.assert_not_called()
+            qualification.assert_called_once_with(c.read(self.out/'client-build.json'))
         self.assertIs(report["activation_authorized"],False)
         self.assertTrue(all(call.args[0][0] in ("git",config["go_binary"]) for call in commands.call_args_list))
         self.assertTrue(all(call.args[0][1:3]==["version","-m"] for call in commands.call_args_list if call.args[0][0]!= "git"))
@@ -716,6 +724,10 @@ def metadata(argv):
     assert argv[:3]==['''+repr(config['go_binary'])+''','version','-m']
     return b'SYNTHETIC offline Go metadata only\\n'
 preparation.command=metadata
+# Explicit synthetic Python-ELF qualification double; never product evidence.
+def synthetic_runtime(build):
+    assert build['exe_sha256']==preparation.c.exe_digest(sys.executable)
+preparation.c.runtime_client_preflight=synthetic_runtime
 sys.argv=sys.argv[1:]
 raise SystemExit(preparation.main())
 ''');wrapper.chmod(0o700)
@@ -771,7 +783,7 @@ raise SystemExit(preparation.main())
 
     def test_prepared_artifact_and_manifest_changes_fail_before_launch(self):
         config,out,metadata=self.preparation_inputs()
-        with mock.patch.object(preparation,"command",side_effect=metadata):preparation.prepare(config,out)
+        with mock.patch.object(preparation,"command",side_effect=metadata),mock.patch.object(c,"runtime_client_preflight"):preparation.prepare(config,out)
         m=c.read(out/"manifest.json")
         for name in ("reference-support/mongodb/server-ready.json","reference-support.json","client.patch","preparation-sources/ycsb_compare_validate.py"):
             path=out/name;original=path.read_bytes();path.write_bytes(original+b" ")

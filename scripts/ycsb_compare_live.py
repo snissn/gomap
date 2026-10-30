@@ -272,7 +272,7 @@ def run_helper(directory,target,addr,mode,stage=None,timeout=180,cleanup_timeout
         if stage=="preclose": command += ["-checkpoint"]
     if target=="treedb_mongo" and (mode=="write" or (mode=="snapshot" and stage=="preclose")):
         command += ["-owner-checkpoint-dir",str(directory/("fixture-write.evidence" if mode=="write" else "server.evidence"))]
-    code=c.launch(argparse.Namespace(directory=str(directory),stem=stem,command=command,timeout=timeout,cleanup_timeout=cleanup_timeout))
+    code=c.launch(argparse.Namespace(directory=str(directory),stem=stem,command=command,timeout=timeout,cleanup_timeout=cleanup_timeout,role="fixture"))
     c.require(code==0,"snapshot/fixture child failed with exit "+str(code))
 
 

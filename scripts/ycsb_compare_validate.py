@@ -14,6 +14,7 @@ import json
 import math
 import os
 import pathlib
+import platform
 import re
 import signal
 import select
@@ -23,8 +24,17 @@ import time
 import uuid
 
 from ycsb_evidence_json import read, same
+RUNTIME_HELPER_SHA = "fab36e1396205c2cddff0c24fa0f5c6faaa4e0fd47f46fdb423ffe3dd4e31077"
+if hashlib.sha256((pathlib.Path(__file__).resolve().parent / "ycsb_runtime_observer.py").read_bytes()).hexdigest() != RUNTIME_HELPER_SHA:
+    raise RuntimeError("runtime observer source hash mismatch")
+import ycsb_runtime_observer as runtime_observer
 
 PRODUCER = "3c8148495b8d4490cf0ec30e9eb92d14a7a71bac"
+CONTROLLED_CLIENT_SHA = "7dd046a58f9a3deb2560a55bf9f6b2cd5e167787aace0469e0fa671cade9a00e"
+CONTROLLED_GOMAX_SYMBOL = 0x4723c10
+REFERENCE_CLIENT_SHA = "2237d8aeec309b9b4b335b348234d9829594c9101043144a944d9f2868fbc95b"
+OBSERVED_CLIENT_SYMBOLS = {CONTROLLED_CLIENT_SHA: CONTROLLED_GOMAX_SYMBOL, REFERENCE_CLIENT_SHA: 0x4715c10}
+RUNTIME_SAMPLE_SECONDS = 0.25
 TARGETS = ("treedb_native", "treedb_mongo", "mongodb")
 NUM = r"[0-9]+(?:\.[0-9]+)?"
 ROW = re.compile(r"^([A-Z_]+)\s+- Takes\(s\): (" + NUM + r"), Count: ([0-9]+), OPS: (" + NUM + r"), Avg\(us\): (" + NUM + r"), Min\(us\): (" + NUM + r"), Max\(us\): (" + NUM + r"), 50th\(us\): (" + NUM + r"), 90th\(us\): (" + NUM + r"), 95th\(us\): (" + NUM + r"), 99th\(us\): (" + NUM + r"), 99.9th\(us\): (" + NUM + r"), 99.99th\(us\): (" + NUM + r")$")
@@ -132,16 +142,38 @@ def observation(value,build,profile):
 
 
 def parse_log(path):
+    # The pinned go-ycsb emits cumulative progress summaries from a ticker.
+    # Its final summary is emitted only after the ticker goroutine has stopped,
+    # following the unique "Run finished" marker.  Progress is not another
+    # completed sample; do not choose a row by occurrence or overwrite it.
     rows = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
+    text = path.read_text(encoding="utf-8")
+    require(text.endswith("\n"), f"truncated output in {path.name}")
+    finished = False
+    progress = {}
+    for line in text.splitlines():
+        if line.lstrip().startswith("Run finished"):
+            require(re.fullmatch(r"Run finished, takes (?:[0-9]+(?:\.[0-9]+)?(?:h|ms|m|s|µs|us|ns))+", line) is not None, f"malformed final marker in {path.name}")
+            require(not finished, f"duplicate final marker in {path.name}")
+            finished = True
+            continue
         match = ROW.fullmatch(line)
         if not match:
-            require(not re.match(r"^[A-Z_]+\s+- Takes", line), f"malformed measurement row in {path.name}")
+            require(not re.match(r"^\s*[A-Z_]+\s+-", line) and " - Takes" not in line and "Takes(s):" not in line, f"malformed measurement row in {path.name}")
             continue
         op, takes, count, ops, avg, minimum, maximum, p50, p90, p95, p99, p999, p9999 = match.groups()
-        # Duplicate/intermediate blocks need explicit disposition, never last-row wins.
+        # A nonzero error seen during progress cannot be made valid by a
+        # later missing or inconsistent final error row.
+        if not finished:
+            require(not op.endswith("_ERROR") or int(count) == 0, f"operation errors in progress in {path.name}")
+            require(int(count) >= progress.get(op, 0), f"decreasing progress count in {path.name}")
+            progress[op] = int(count)
+            continue
+        require(all(math.isfinite(float(n)) for n in (takes,ops,avg,minimum,maximum,p50,p90,p95,p99,p999,p9999)), f"invalid nonfinite measurement in {path.name}")
         require(op not in rows, f"duplicate {op} row in {path.name}")
         rows[op] = dict(operation=op, count=int(count), ops_per_sec=float(ops), avg_us=float(avg), p50_us=float(p50), p95_us=float(p95), p99_us=float(p99), p999_us=float(p999), max_us=float(maximum))
+    require(finished, f"missing final marker in {path.name}")
+    require(all(op in rows and rows[op]["count"] >= count for op, count in progress.items()), f"final rows do not cover progress in {path.name}")
     return list(rows.values())
 
 
@@ -160,6 +192,9 @@ def check_counts(parsed, expected, phase, path):
 
 
 def phase_evidence(directory, stem, target, manifest):
+    if "common_load" in manifest:
+        import ycsb_public_sentinel as sentinel
+        sentinel.validate_phase(directory,stem,manifest)
     launch = read(directory / f"{stem}.launch.json")
     receipt_path = directory / f"{stem}.close.json"
     receipt = read(receipt_path)
@@ -168,6 +203,8 @@ def phase_evidence(directory, stem, target, manifest):
     require(same_timeout(launch["timeout_seconds"],manifest["deadlines"]["phase_seconds"]) and launch["timed_out"] is False and same_timeout(launch["cleanup_timeout_seconds"],manifest["deadlines"]["cleanup_seconds"]) and same_timeout(launch["outer_timeout_seconds"],manifest["deadlines"]["phase_outer_seconds"]), "phase deadline binding mismatch")
     client = manifest["client"]
     require(launch["process"]["exe_sha256"] == client["exe_sha256"], "client ELF mismatch")
+    if manifest.get("require_client_runtime_observation") is True or launch.get("runtime_observation") is not None:
+        validate_client_runtime(launch.get("runtime_observation"),launch["process"])
     exit_success(launch["exit_code"],"client exit failure or launcher timeout/failure")
     require(launch.get("timed_out") is not True and not (directory/f"{stem}.failure.json").exists(), "client exit failure or launcher timeout/failure")
     require(launch["output_sha256"] == digest(directory / f"{stem}.out"), "stdout hash mismatch")
@@ -195,11 +232,19 @@ def phase_evidence(directory, stem, target, manifest):
 
 
 def server_evidence(directory, target, manifest, phase_ids):
+    if "common_load" in manifest:
+        import ycsb_public_sentinel as sentinel
+        sentinel.validate(directory,manifest,read(directory/"server.launch.json")["process"],manifest["common_load"]["address"])
     require(not list(directory.glob("*.failure.json")), "retained launcher/helper failure invalidates target")
     runtime = read(directory / "runtime.json")
     lifecycle = read(directory / "lifecycle.json")
     launch = read(directory / "server.launch.json")
     process(launch["process"])
+    if manifest.get("require_client_runtime_observation") is True or any(
+        "cpu_policy" in read(path) for prefix in ("server", "reopened", "fixture-write", "fixture-reopened")
+        if (path := directory / f"{prefix}.launch.json").exists()
+    ):
+        validate_server_policies(directory)
     build = manifest["server_builds"][target]
     server_manifest = read(directory.parent / "server-build.json")
     require(schema(server_manifest), "server build manifest mismatch")
@@ -342,10 +387,52 @@ def observe_core(pid):
 
 def observe(pid):
     identity = observe_core(pid)
-    environment = pathlib.Path(f"/proc/{pid}/environ").read_bytes().split(b"\0")
-    identity["gomaxprocs_unset"] = not any(item.startswith(b"GOMAXPROCS=") for item in environment)
+    raw_environment = pathlib.Path(f"/proc/{pid}/environ").read_bytes()
     require(same(observe_core(pid),{key:identity[key] for key in ("pid","start_ticks","exe_sha256")}), "process changed during observation")
+    require(bool(raw_environment) and raw_environment.endswith(b"\0"), "empty or unterminated child environment")
+    environment = raw_environment[:-1].split(b"\0")
+    require(all(entry and b"=" in entry and entry.partition(b"=")[0] for entry in environment), "malformed child environment")
+    require(not any(item.partition(b"=")[0] == b"GOMAXPROCS" for item in environment), "child GOMAXPROCS was not unset")
+    identity["gomaxprocs_unset"] = True
     return identity
+
+
+def validate_cpu_policy(policy, identity):
+    require(isinstance(policy,dict) and same(policy.get("process"),identity), "missing or mismatched process CPU policy")
+    affinity=policy.get("leader_affinity")
+    require(isinstance(affinity,list) and len(affinity)>0 and all(type(x) is int and x>=0 for x in affinity) and affinity==sorted(set(affinity)), "invalid CPU affinity")
+    cgroup=policy.get("cgroup")
+    require(isinstance(cgroup,dict) and isinstance(cgroup.get("membership"),str) and isinstance(cgroup.get("ancestors"),list) and len(cgroup["ancestors"])>0, "missing ancestor CPU quota evidence")
+
+
+def validate_server_policies(directory):
+    for prefix in ("server", "reopened", "fixture-write", "fixture-reopened"):
+        observed=read(directory / f"{prefix}.launch.json")
+        validate_cpu_policy(observed.get("cpu_policy"),observed["process"])
+
+
+def observe_cpu_policy(pid, identity):
+    require(same(observe(pid),identity),"process changed before CPU policy observation")
+    affinity=sorted(os.sched_getaffinity(pid))
+    cgroup=runtime_observer.quota_snapshot(pid)
+    require(affinity==sorted(os.sched_getaffinity(pid)),"leader affinity changed during CPU policy observation")
+    require(same(observe(pid),identity),"process changed during CPU policy observation")
+    policy=dict(process=identity,leader_affinity=affinity,cgroup=cgroup,scope="leader affinity and exported ancestor CPU constraints; sampled only")
+    validate_cpu_policy(policy,identity)
+    return policy
+
+
+def validate_client_runtime(value,identity):
+    require(isinstance(value,dict) and value.get("status")=="actual-child-runtime-observed" and type(value.get("sample_count")) is int and value["sample_count"]>0, "missing actual client runtime observation")
+    require(value.get("observer_source_sha256")==RUNTIME_HELPER_SHA, "unbound runtime observer source")
+    require(value.get("whole_interval_verified") is False and value.get("unperturbed_timing_verified") is False, "invalid runtime sampling scope")
+    samples=value.get("samples")
+    require(isinstance(samples,list) and len(samples)==value["sample_count"] and same(samples[0],value.get("first")) and same(samples[-1],value.get("last")), "incomplete runtime samples")
+    for sample in samples:
+        require(isinstance(sample,dict) and sample.get("pid")==identity["pid"] and sample.get("start_ticks")==identity["start_ticks"] and sample.get("GOMAXPROCS_present") is False, "runtime process identity mismatch")
+        require(type(sample.get("runtime_gomaxprocs")) is int and sample["runtime_gomaxprocs"]>0 and sample.get("address")==hex(OBSERVED_CLIENT_SYMBOLS.get(identity.get("exe_sha256"),0)), "invalid actual client runtime")
+        validate_cpu_policy(dict(process=identity,leader_affinity=sample.get("leader_affinity"),cgroup=sample.get("cgroup")),identity)
+        require(all(same(sample.get(key),samples[0].get(key)) for key in ("runtime_gomaxprocs","leader_affinity","cgroup")),"runtime or CPU policy changed across samples")
 
 
 def observe_owned(pid, data_dir, output, expected=None):
@@ -359,7 +446,8 @@ def observe_owned(pid, data_dir, output, expected=None):
         pathlib.Path(output).write_text(json.dumps(dict(process=actual,data_dir=data_dir),allow_nan=False)+"\n")
         if expected is None or actual["exe_sha256"] == expected:
             identity=observe(pid)
-            pathlib.Path(output).write_text(json.dumps(dict(process=identity,data_dir=data_dir),allow_nan=False)+"\n")
+            policy=observe_cpu_policy(pid,identity)
+            pathlib.Path(output).write_text(json.dumps(dict(process=identity,data_dir=data_dir,cpu_policy=policy),allow_nan=False)+"\n")
             return
         require(time.monotonic()<deadline,"owned executable never matched requested ELF; refusing clients")
         time.sleep(.01)
@@ -477,6 +565,31 @@ def terminate_unpinned_child(child,timeout):
             if signum == signal.SIGKILL: raise
 
 
+def runtime_client_preflight(client):
+    """Execution support is limited to independently inspected Linux ELF pins."""
+    require(sys.platform == "linux" and platform.machine().lower() in ("x86_64","amd64") and hasattr(os,"pidfd_open") and pathlib.Path('/proc/self/stat').is_file(),"client runtime observation requires Linux x86_64, pidfd and /proc")
+    require(client.get("exe_sha256") in OBSERVED_CLIENT_SYMBOLS,"required client runtime has no exact ELF/symbol binding")
+
+
+def resolve_launch_role(manifest, command, executable_hash, role):
+    require(role in ("client","fixture","control","docker"), "unknown executable role")
+    if manifest.get("require_client_runtime_observation") is True:
+        runtime_client_preflight(manifest["client"])
+    if manifest["client"]["exe_sha256"] not in OBSERVED_CLIENT_SYMBOLS:
+        require(manifest.get("require_client_runtime_observation") is not True,"required client runtime has no exact ELF/symbol binding")
+        return False
+    if role == "client":
+        require(executable_hash == manifest["client"]["exe_sha256"],"controlled client executable mismatch")
+        return True
+    require(executable_hash not in OBSERVED_CLIENT_SYMBOLS,"controlled client cannot use helper role")
+    if role in ("fixture","control"):
+        binding=manifest[role]
+        require(command[0] == binding["binary"] and executable_hash == binding["exe_sha256"],role+" executable mismatch")
+    else:
+        require(command[0] == manifest["docker_binary"] and executable_hash == manifest["server_builds"]["mongodb"]["docker_cli_sha256"],"docker executable mismatch")
+    return False
+
+
 def launch(args):
     out, stem = pathlib.Path(args.directory), args.stem
     receipt = out / f"{stem}.close.json"
@@ -490,13 +603,17 @@ def launch(args):
     env.pop("GOMAXPROCS", None)
     env.update(YCSB_CLOSE_RECEIPT_PATH=str(receipt), YCSB_PHASE_ID=phase_id, YCSB_CLIENT_BUILD_ID=manifest["client"]["build_id"], YCSB_PROFILE=manifest["profile"])
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
-    exe_digest(command[0])
+    executable_hash=exe_digest(command[0])
+    role = getattr(args,"role","client")
+    observe_runtime = resolve_launch_role(manifest,command,executable_hash,role)
+    observer = runtime_observer.RuntimeObserver(command[0],executable_hash,OBSERVED_CLIENT_SYMBOLS[executable_hash]) if observe_runtime else None
     started = now()
     deadline=time.monotonic()+timeout
     identity=None
     timed_out=False
     child=None
     descriptor=None
+    runtime_evidence=None
     startup_signals=[]
     previous_handler=signal.getsignal(signal.SIGTERM)
     def interrupted(signum, frame):
@@ -516,7 +633,25 @@ def launch(args):
             identity = observe_core(child.pid)
             (out / f"{stem}.cleanup.json").write_text(json.dumps(dict(process=identity,pidfd_pinned=True),allow_nan=False)+"\n")
             identity = observe(child.pid)
-            code = child.wait(timeout=max(0,deadline-time.monotonic()))
+            if observer is None:
+                code = child.wait(timeout=max(0,deadline-time.monotonic()))
+            else:
+                class UnreapedChild:
+                    pid=child.pid
+                    def poll(self):
+                        return 0 if os.waitid(os.P_PID,self.pid,os.WEXITED|os.WNOHANG|os.WNOWAIT) is not None else None
+                view=UnreapedChild()
+                while True:
+                    if select.select([descriptor],[],[],0)[0]: break
+                    runtime_observer.sample_owned_or_exited(observer,view,lambda wait: bool(select.select([descriptor],[],[],wait)[0]),min(runtime_observer.EXIT_RECHECK_SECONDS,max(0,deadline-time.monotonic())))
+                    remaining=deadline-time.monotonic()
+                    if remaining<=0: raise subprocess.TimeoutExpired(command,timeout)
+                    interval=runtime_observer.sample_interval(observer,RUNTIME_SAMPLE_SECONDS)
+                    if select.select([descriptor],[],[],min(interval,remaining))[0]: break
+                runtime_evidence=observer.validate()
+                runtime_evidence.update(samples=observer.samples,sample_interval_seconds=RUNTIME_SAMPLE_SECONDS,startup_sample_interval_seconds=runtime_observer.STARTUP_POLL_SECONDS,observer_source_sha256=RUNTIME_HELPER_SHA,observer_scope="read-only live samples may overlap and perturb timed work; not a continuous measurement; startup cadence ends at first complete sample")
+                validate_client_runtime(runtime_evidence,identity)
+                code=child.wait(timeout=max(0,deadline-time.monotonic()))
             if time.monotonic() > deadline:
                 raise subprocess.TimeoutExpired(command,timeout)
         except BaseException as error:
@@ -542,7 +677,7 @@ def launch(args):
                 except BaseException as cleanup_error:
                     cleanup["error"]=str(cleanup_error)
                 cleanup["pending_cancellation_signals"]=sorted(signal.sigpending() & CANCELLATION_SIGNALS)
-                write_new(out/f"{stem}.failure.json",dict(schema_version=1,kind="owned_child_launcher_failure",campaign_id=manifest["campaign_id"],phase_id=phase_id,process=identity,pid=child.pid if child is not None else None,pidfd_pinned=descriptor is not None,startup_cancellation_signals=startup_signals,start_utc=started,end_utc=now(),timeout_seconds=timeout,cleanup_timeout_seconds=cleanup_timeout,outer_timeout_seconds=outer_timeout,timed_out=timed_out,error="child wait deadline exceeded" if isinstance(error,subprocess.TimeoutExpired) else str(error),cleanup=cleanup))
+                write_new(out/f"{stem}.failure.json",dict(schema_version=1,kind="owned_child_launcher_failure",campaign_id=manifest["campaign_id"],phase_id=phase_id,process=identity,pid=child.pid if child is not None else None,pidfd_pinned=descriptor is not None,startup_cancellation_signals=startup_signals,start_utc=started,end_utc=now(),timeout_seconds=timeout,cleanup_timeout_seconds=cleanup_timeout,outer_timeout_seconds=outer_timeout,timed_out=timed_out,error="child wait deadline exceeded" if isinstance(error,subprocess.TimeoutExpired) else str(error),runtime_diagnostics=observer.diagnostics() if observer is not None else None,runtime_samples=observer.samples if observer is not None else None,cleanup=cleanup))
                 require(cleanup["success"],"owned child cleanup failed: "+cleanup["error"])
                 if not isinstance(error,subprocess.TimeoutExpired):
                     raise
@@ -551,7 +686,7 @@ def launch(args):
         finally:
             signal.signal(signal.SIGTERM,previous_handler)
             if descriptor is not None: os.close(descriptor)
-    write_new(out / f"{stem}.launch.json", dict(schema_version=1, campaign_id=manifest["campaign_id"], phase_id=phase_id, process=identity, start_utc=started, end_utc=now(), exit_code=code, timeout_seconds=timeout,cleanup_timeout_seconds=cleanup_timeout,outer_timeout_seconds=outer_timeout,timed_out=timed_out, output_sha256=digest(out / f"{stem}.out"), receipt_sha256=digest(receipt) if receipt.exists() else None))
+    write_new(out / f"{stem}.launch.json", dict(schema_version=1, campaign_id=manifest["campaign_id"], phase_id=phase_id, process=identity, runtime_observation=runtime_evidence, start_utc=started, end_utc=now(), exit_code=code, timeout_seconds=timeout,cleanup_timeout_seconds=cleanup_timeout,outer_timeout_seconds=outer_timeout,timed_out=timed_out, output_sha256=digest(out / f"{stem}.out"), receipt_sha256=digest(receipt) if receipt.exists() else None))
     return 124 if timed_out else code if code > 0 else 3 if code < 0 else 0
 
 

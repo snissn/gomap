@@ -23,9 +23,12 @@ SOURCES = ("ycsb_mongodb_reference_prepare.py", "ycsb_mongodb_reference.py",
            "ycsb_mongodb_reference_client.go", "ycsb_correctness_fixture.go",
            "ycsb_compare_validate.py", "ycsb_compare_live.py",
            "ycsb_correctness_validate.py", "ycsb_evidence_json.py",
-           "ycsb_compare_mongodb_treedb.sh")
+           "ycsb_compare_mongodb_treedb.sh", "ycsb_runtime_observer.py", "ycsb_reference_wire.py")
 ROOT = pathlib.Path(__file__).resolve().parent
 KIND = "mongodb_reference_offline_preparation"
+
+def source_names(m):
+    return SOURCES+(("ycsb_public_sentinel.py",) if "common_load" in m else ())
 INPUT_COPIES = {"reference-support.json", "reference-source.py", "fixture-source.go",
                 "reference-control-source.go", "client.patch", "client-build.json",
                 "reference-build.json", "client-buildinfo.txt", "fixture-buildinfo.txt",
@@ -106,18 +109,18 @@ def verify_prepared(out,m,check_current_sources=False,_allow_incomplete=False):
     actual=support_record(support,evidence_root=value["support_evidence_root"])
     c.require(c.same(c.read(out/"reference-support.json"),actual),"retained support copies changed")
     b=m["server_builds"]["mongodb"]
-    c.require(c.same(actual["image_build"],b) and actual["address"]==m["address"] and c.same(actual["write_concern"],m["write_concern"]),"prepared reference identity/endpoint differs from support")
+    c.require(c.same(actual["image_build"],b) and actual["address"]==m["address"] and c.same(actual["write_concern"],m.get("support_write_concern",m["write_concern"])),"prepared reference identity/endpoint differs from support")
     c.require(c.same(actual["observations"]["server"]["journal_parameters"],m["journal_parameters"]),"prepared journal settings differ from actual support")
     supported=c.read(support/"manifest.json")
     for key in ("client","fixture","control"):
         c.require(c.same(m[key],supported[key]),"prepared client/helper differs from supported build")
     expected={"reference-support/"+name for name in evidence_files(support)}
-    c.require(set(files)==expected|INPUT_COPIES|{"preparation-sources/"+name for name in SOURCES},"missing or extra preparation artifact binding")
+    c.require(set(files)==expected|INPUT_COPIES|{"preparation-sources/"+name for name in source_names(m)},"missing or extra preparation artifact binding")
     c.require(c.same(c.read(out/"client-build.json"),m["client"]) and c.same(c.read(out/"reference-build.json"),b),"prepared build copies differ")
     for name,digest in (("client.patch",m["client"]["source_patch_sha256"]),("reference-source.py",m["reference_source_sha256"]),("fixture-source.go",m["fixture"]["source_sha256"]),("reference-control-source.go",m["control"]["source_sha256"])):
         c.require(files[name]==digest,"prepared source/overlay differs from manifest")
     c.require(all((out/(key+"-buildinfo.txt")).read_text().strip() for key in ("client","fixture","control")),"missing prepared executable buildinfo")
-    for name in SOURCES:
+    for name in source_names(m):
         copied="preparation-sources/"+name
         c.require(copied in files,"missing preparation source binding")
         if check_current_sources:c.require(c.digest(ROOT/name)==files[copied],"actual preparation/consumer source changed")
@@ -126,7 +129,7 @@ def verify_prepared(out,m,check_current_sources=False,_allow_incomplete=False):
 
 def prepare(config,out):
     c.require(c.schema(config) and config["kind"]=="mongodb_reference_preparation_request","explicit reference preparation request required")
-    c.require(set(config)==REQUEST_FIELDS,"missing or unknown reference preparation request fields")
+    c.require(REQUEST_FIELDS <= set(config) <= REQUEST_FIELDS|{"journal_requested","bounded_container","common_load"},"missing or unknown reference preparation request fields")
     c.require(out.is_absolute() and not os.path.lexists(out),"fresh absolute preparation output required")
     c.require(type(config["mongodb_addr"]) is str,"explicit MONGODB_ADDR required")
     reference.address(config["mongodb_addr"])
@@ -141,6 +144,7 @@ def prepare(config,out):
     client_binary=absolute(config["client_binary"],"producer executable")
     go=absolute(config["go_binary"],"Go buildinfo tool")
     client=c.read(absolute(config["client_build_manifest"],"producer build manifest"));c.client_build(client)
+    c.runtime_client_preflight(client)
     git=lambda *args:command(["git","-C",str(repo),*args])
     git("merge-base","--is-ancestor",c.PRODUCER,"HEAD")
     c.require(not git("ls-files","--others","--exclude-standard").strip(),"untracked producer input")
@@ -157,13 +161,19 @@ def prepare(config,out):
     c.require(str(docker)==sm["docker_binary"] and c.exe_digest(docker)==actual["image_build"]["docker_cli_sha256"],"Docker executable differs from supported CLI")
     c.require(all(info.strip() for info in buildinfos.values()),"missing actual Go executable buildinfo")
     m=dict(schema_version=1,kind=reference.KIND,lifecycle_contract=1,campaign_id=uuid.uuid4().hex,
-        targets=["mongodb"],profile=reference.PROFILE,formats={"mongodb":"bson"},
-        write_concern=dict(w=1,journal_requested=None),address=config["mongodb_addr"],
+        require_client_runtime_observation=True,targets=["mongodb"],profile=reference.ack_profile(config.get("journal_requested")),acknowledgement_class=reference.ack_profile(config.get("journal_requested")),fixture_profile=reference.PROFILE,formats={"mongodb":"bson"},
+        write_concern=dict(w=1,journal_requested=config.get("journal_requested")),address=config["mongodb_addr"],
         docker_binary=str(docker),client_binary=str(client_binary),reference_source_sha256=c.digest(ROOT/"ycsb_mongodb_reference.py"),
         server_builds={"mongodb":actual["image_build"]},client=client,fixture=sm["fixture"],control=sm["control"],
         journal_parameters=actual["observations"]["server"]["journal_parameters"],deadlines=config["deadlines"],
         uid=os.getuid(),gid=os.getgid())
+    if config.get("journal_requested") is not None:
+        c.require(config["journal_requested"] is True,"only true or omitted journal class supported")
+        m["support_write_concern"]=actual["write_concern"]
+    if config.get("bounded_container") is True:m["bounded_container"]=True
+    c.require("bounded_container" not in config or config["bounded_container"] is True,"container bound opt-in must be true")
     for key in ("recordcount","operationcount","threadcount","run_repeats"):m[key]=config[key]
+    if "common_load" in config:m["common_load"]=config["common_load"]
     reference.manifest(m)
     c.require(m["uid"]==sm["uid"] and m["gid"]==sm["gid"],"task user differs from supported custody")
     out.mkdir();(out/"mongodb").mkdir()
@@ -176,7 +186,7 @@ def prepare(config,out):
     # validation and publication. Service DB directories are never copied.
     actual=support_record(out/"reference-support",evidence_root=support)
     c.write_new(out/"reference-support.json",actual)
-    for name in SOURCES:copy_bytes("preparation-sources/"+name,(ROOT/name).read_bytes())
+    for name in source_names(m):copy_bytes("preparation-sources/"+name,(ROOT/name).read_bytes())
     copy_bytes("reference-source.py",(ROOT/"ycsb_mongodb_reference.py").read_bytes())
     copy_bytes("fixture-source.go",(ROOT/"ycsb_correctness_fixture.go").read_bytes())
     copy_bytes("reference-control-source.go",(ROOT/"ycsb_mongodb_reference_client.go").read_bytes())

@@ -7,6 +7,23 @@ this consumer's evidence checks, not full #5335 matrix qualification. Server
 observation and lifecycle integration is provisional and needs exact-head review.
 The consumer never fabricates those witnesses from command flags/startup text.
 
+Execution with required client runtime observation currently supports Linux
+x86_64 with `/proc` and pidfd only, and only these independently inspected
+client ELF SHA256/symbol pairs: `7dd046a58f9a3deb2560a55bf9f6b2cd5e167787aace0469e0fa671cade9a00e`
+at `0x4723c10`, and `2237d8aeec309b9b4b335b348234d9829594c9101043144a944d9f2868fbc95b`
+at `0x4715c10`. Rebuilt or other-platform clients need a separately verified
+ELF/symbol binding; source equivalence alone does not provide it. The shell
+preflights this requirement before builds or services; reference preparation and
+execution check it before Docker actions. Supply the corresponding exact client
+and source directory with `BUILD=false` and `BUILD_GOYCSB=false` for retained
+builds. Historical packet validation remains separate from execution support. The explicit
+`require_client_runtime_observation` flag requires complete client runtime and
+server CPU policy witnesses. Any claimed runtime observation or server CPU policy
+also triggers strict validation, including malformed claims. An unflagged null
+runtime field is the older launcher representation of no observation; flagged
+packets reject it. An ELF identity alone
+does not retroactively require those newer fields or upgrade historical evidence.
+
 All retained JSON readers reject duplicate object keys, NaN/Infinity, and numeric
 overflow to infinity. Supporting copies are compared with JSON types preserved;
 `true`, `1`, and `1.0` are distinct. Each Process, Observation, and Result copy

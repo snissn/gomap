@@ -5,6 +5,7 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$ROOT"
 VALIDATOR="$ROOT/scripts/ycsb_compare_validate.py"
 LIVE="$ROOT/scripts/ycsb_compare_live.py"
+LISTENER="$ROOT/scripts/ycsb_owned_listener.py"
 FIXTURE_BIN="${FIXTURE_BIN:-$ROOT/bin/ycsb-correctness-fixture}"
 PYTHON="${PYTHON:-python3}"
 TMP_BASE="${TMPDIR:-/mnt/fast4tb}"
@@ -29,6 +30,13 @@ TREEDB_MONGO_ADDR="${TREEDB_MONGO_ADDR:-127.0.0.1:27130}"
 MONGODB_MODE="${MONGODB_MODE:-docker}"
 MONGODB_ADDR="${MONGODB_ADDR:-127.0.0.1:27018}"
 MONGODB_IMAGE="${MONGODB_IMAGE:-mongo:8}"
+COMMON_LOAD_POLICY="${COMMON_LOAD_POLICY:-}"
+export COMMON_LOAD_POLICY
+MONGODB_JOURNAL_REQUEST="${MONGODB_JOURNAL_REQUEST:-unspecified}"
+case "$MONGODB_JOURNAL_REQUEST" in unspecified|true|false) ;; *) echo "invalid explicit journal request" >&2; exit 2;; esac
+export MONGODB_JOURNAL_REQUEST
+MONGODB_JOURNAL_SUFFIX=""
+[[ "$MONGODB_JOURNAL_REQUEST" == unspecified ]] || MONGODB_JOURNAL_SUFFIX="&journal=$MONGODB_JOURNAL_REQUEST"
 TARGETS="${TARGETS:-treedb_native treedb_mongo}"
 BUILD="${BUILD:-true}"
 BUILD_GOYCSB="${BUILD_GOYCSB:-false}"
@@ -140,7 +148,9 @@ fi
 import pathlib,sys
 sys.path.insert(0,sys.argv[1])
 import ycsb_native_client_build as provenance
+import ycsb_compare_validate as compare
 manifest=provenance.read(pathlib.Path(sys.argv[2]))
+compare.runtime_client_preflight(manifest)
 if sys.argv[4]=='true':provenance.require('controlled_build' in manifest,'controlled native client build required')
 if 'controlled_build' in manifest:
     provenance.require(pathlib.Path(sys.argv[3]).is_absolute(),'absolute NATIVE_CLIENT_BUILD_PACKET is required')
@@ -157,7 +167,7 @@ if [[ "$BUILD_GOYCSB" == true ]]; then (cd "$GOYCSB_DIR" && make build); fi
 for target in "${selected[@]}"; do mkdir "$OUT_DIR/$target"; done
 
 "$PYTHON" - "$OUT_DIR" "$CLIENT_BUILD_MANIFEST" "$GOYCSB_DIR" "$GOYCSB_BIN" "$TREEDB_PROFILE" "$RECORDCOUNT" "$OPERATIONCOUNT" "$THREADCOUNT" "$RUN_REPEATS" "$TREEDB_NATIVE_DOCUMENT_FORMAT" "$TREEDB_MONGO_DOCUMENT_FORMAT" "$SERVER_BUILD_MANIFEST" "$TREEDB_NATIVE_SERVER_BIN" "$TREEDB_MONGO_GATEWAY_BIN" "$FIXTURE_BIN" "$ROOT/scripts/ycsb_correctness_fixture.go" "$PHASE_TIMEOUT_SECONDS" "$HELPER_TIMEOUT_SECONDS" "$CHILD_CLEANUP_TIMEOUT_SECONDS" "$NATIVE_CLIENT_BUILD_PACKET" "$REQUIRE_CONTROLLED_NATIVE_CLIENT_BUILD" "${selected[@]}" <<'PY'
-import hashlib, json, pathlib, re, subprocess, sys, uuid
+import hashlib, json, pathlib, re, subprocess, sys, uuid, os
 out, build_path, repo, binary, profile, records, ops, threads, repeats, native_format, mongo_format, server_build_path, native_binary, mongo_binary, fixture_binary, fixture_source, phase_timeout, helper_timeout, cleanup_timeout, controlled_packet, controlled_required, *targets = sys.argv[1:]
 out = pathlib.Path(out)
 sys.path.insert(0,str(pathlib.Path(fixture_source).parent))
@@ -210,7 +220,11 @@ for target, record in server_builds.items():
 (out / 'client-buildinfo.txt').write_bytes(subprocess.check_output(['go', 'version', '-m', binary]))
 (out/'fixture-source.go').write_bytes(pathlib.Path(fixture_source).read_bytes())
 fixture=dict(schema_version=1,binary=fixture_binary,exe_sha256=sha(fixture_binary),source_sha256=sha(fixture_source))
-manifest = dict(schema_version=1, controlled_native_client_build_required=controlled_required=='true', lifecycle_contract=2, deadlines=dict(phase_seconds=int(phase_timeout),helper_seconds=int(helper_timeout),cleanup_seconds=int(cleanup_timeout),phase_outer_seconds=int(phase_timeout)+3*int(cleanup_timeout)+10,helper_outer_seconds=int(helper_timeout)+3*int(cleanup_timeout)+10), fixture=fixture, campaign_id=uuid.uuid4().hex, targets=targets, profile=profile, formats={'treedb_native':native_format, 'treedb_mongo':mongo_format, 'mongodb':'bson'}, recordcount=int(records), operationcount=int(ops), threadcount=int(threads), run_repeats=int(repeats), client=build, server_builds=server_builds)
+manifest = dict(schema_version=1, require_client_runtime_observation=True, write_concern=dict(w=1,journal_requested={"unspecified":None,"true":True,"false":False}[os.environ["MONGODB_JOURNAL_REQUEST"]]), controlled_native_client_build_required=controlled_required=='true', lifecycle_contract=2, deadlines=dict(phase_seconds=int(phase_timeout),helper_seconds=int(helper_timeout),cleanup_seconds=int(cleanup_timeout),phase_outer_seconds=int(phase_timeout)+3*int(cleanup_timeout)+10,helper_outer_seconds=int(helper_timeout)+3*int(cleanup_timeout)+10), fixture=fixture, campaign_id=uuid.uuid4().hex, targets=targets, profile=profile, formats={'treedb_native':native_format, 'treedb_mongo':mongo_format, 'mongodb':'bson'}, recordcount=int(records), operationcount=int(ops), threadcount=int(threads), run_repeats=int(repeats), client=build, server_builds=server_builds)
+if os.environ['COMMON_LOAD_POLICY']:
+    manifest['common_load']=consumer.read(pathlib.Path(os.environ['COMMON_LOAD_POLICY']))
+    import ycsb_public_sentinel as sentinel
+    sentinel.policy(manifest)
 (out / 'manifest.json').write_text(json.dumps(manifest, indent=2,allow_nan=False)+'\n')
 PY
 
@@ -300,12 +314,19 @@ start_server() {
   CLEANUP_DONE=false
   local checkpoint_env=()
   if [[ "$target" == treedb_mongo ]]; then checkpoint_env=(YCSB_OWNER_CHECKPOINT=1); fi
-  local command=(env -u GOMAXPROCS "${checkpoint_env[@]}" "YCSB_SERVER_RECEIPT_DIR=$OUT_DIR/$target/$prefix.evidence" "$binary" -dir "$dir" -profile "$TREEDB_PROFILE" -addr "$addr" "$@")
+  # Full 100k fixture census needs one extra slot to detect unexpected rows.
+  # Both versions use the same explicit finite limits; these affect the full
+  # verification scans and are declared alongside every measured invocation.
+  local census_limits=(-max-scan-documents 100001 -max-cursor-retained-bytes 536870912)
+  if [[ "$target" == treedb_mongo ]]; then
+    census_limits=(-max-find-scan-documents 100001 -max-cursor-retained-bytes 536870912)
+  fi
+  local command=(env -u GOMAXPROCS "${checkpoint_env[@]}" "YCSB_SERVER_RECEIPT_DIR=$OUT_DIR/$target/$prefix.evidence" "$binary" -dir "$dir" -profile "$TREEDB_PROFILE" -addr "$addr" "${census_limits[@]}" "$@")
   log_command "${command[@]}"
   "${command[@]}" >"$OUT_DIR/$target/$prefix.log" 2>&1 &
   SERVER_PIDS+=("$!"); SERVER_TARGETS+=("$target"); SERVER_PREFIXES+=("$prefix")
   "$PYTHON" "$VALIDATOR" observe "${SERVER_PIDS[-1]}" "$dir" "$OUT_DIR/$target/$prefix.launch.json" --await-exec "$binary"
-  wait_tcp "$addr"
+  "$PYTHON" "$LISTENER" "$OUT_DIR/$target/$prefix.launch.json" "$addr" "$OUT_DIR/$target/$prefix.listener.json" --timeout "$READINESS_TIMEOUT"
   "$PYTHON" "$LIVE" ready "$OUT_DIR/$target" "$target" --prefix "$prefix" --timeout "$READINESS_TIMEOUT" --outer-timeout "$((READINESS_TIMEOUT+10))"
 }
 for target in "${selected[@]}"; do
@@ -325,26 +346,44 @@ for target in "${selected[@]}"; do
       wait_tcp "$MONGODB_ADDR";;
   esac
 done
+verify_listener() {
+  local target=$1 prefix=$2 addr=$3
+  "$PYTHON" "$LISTENER" "$OUT_DIR/$target/$prefix.launch.json" "$addr" "$OUT_DIR/$target/$prefix.listener.json" --verify
+}
 for target in "${selected[@]}"; do
   extra=()
   case "$target" in
     treedb_native) binding=treedb-native; extra=(-p "treedb.addr=$NATIVE_ADDR" -p "treedb.document_format=$TREEDB_NATIVE_DOCUMENT_FORMAT" -p treedb.ack=visible -p treedb.flush_on_close=true);;
-    treedb_mongo) binding=mongodb; extra=(-p "mongodb.url=mongodb://$TREEDB_MONGO_ADDR/ycsb?w=1");;
+    treedb_mongo) binding=mongodb; extra=(-p "mongodb.url=mongodb://$TREEDB_MONGO_ADDR/ycsb?w=1$MONGODB_JOURNAL_SUFFIX");;
     mongodb) binding=mongodb; extra=(-p "mongodb.url=mongodb://$MONGODB_ADDR/ycsb?w=1");;
   esac
   for ((i=0; i<=RUN_REPEATS; i++)); do
     phase=run; stem="run_$i"; [[ "$i" != 0 ]] || { phase=load; stem=load; }
+    if [[ -n "$COMMON_LOAD_POLICY" && "$target" == treedb_mongo ]]; then
+      suffix=$MONGODB_JOURNAL_SUFFIX; [[ "$phase" != load ]] || suffix=""
+      extra=(-p "mongodb.url=mongodb://$TREEDB_MONGO_ADDR/ycsb?w=1$suffix")
+    fi
     command=("$GOYCSB_BIN" "$phase" "$binding" "${extra[@]}" -p "recordcount=$RECORDCOUNT" -p "operationcount=$OPERATIONCOUNT" -p "threadcount=$THREADCOUNT" -p fieldcount=10 -p fieldlength=100 -p readallfields=true -p writeallfields=false -p insertorder=hashed -p keyprefix=user -p zeropadding=1 -p insertstart=0 -p readproportion=0.95 -p updateproportion=0.05 -p scanproportion=0 -p insertproportion=0 -p readmodifywriteproportion=0)
+    if [[ -n "$COMMON_LOAD_POLICY" ]]; then
+      "$PYTHON" "$ROOT/scripts/ycsb_public_sentinel.py" record "$OUT_DIR/$target" "$stem" -- "${command[@]}"
+    fi
     log_command env -u GOMAXPROCS "${command[@]}"
+    addr=$NATIVE_ADDR; [[ "$target" == treedb_native ]] || addr=$TREEDB_MONGO_ADDR
+    verify_listener "$target" server "$addr"
     "$PYTHON" "$VALIDATOR" launch --timeout "$PHASE_TIMEOUT_SECONDS" --cleanup-timeout "$CHILD_CLEANUP_TIMEOUT_SECONDS" --outer-timeout "$((PHASE_TIMEOUT_SECONDS+3*CHILD_CLEANUP_TIMEOUT_SECONDS+10))" "$OUT_DIR/$target" "$stem" -- "${command[@]}"
     if [[ "$phase" == load ]]; then
       addr=$NATIVE_ADDR; [[ "$target" == treedb_native ]] || addr=$TREEDB_MONGO_ADDR
+      verify_listener "$target" server "$addr"
       live_helper snapshot "$OUT_DIR/$target" "$target" --addr "$addr" --stage loaded
+      if [[ -n "$COMMON_LOAD_POLICY" ]]; then
+        "$PYTHON" "$ROOT/scripts/ycsb_public_sentinel.py" run "$OUT_DIR/$target" "$target"
+      fi
     fi
   done
 done
 for target in "${selected[@]}"; do
   addr=$NATIVE_ADDR; [[ "$target" == treedb_native ]] || addr=$TREEDB_MONGO_ADDR
+  verify_listener "$target" server "$addr"
   live_helper snapshot "$OUT_DIR/$target" "$target" --addr "$addr" --stage preclose
 done
 cleanup
@@ -354,14 +393,17 @@ for target in "${selected[@]}"; do
   if [[ "$target" == treedb_mongo ]]; then addr=$TREEDB_MONGO_ADDR; binary=$TREEDB_MONGO_GATEWAY_BIN; extra=(-document-format "$TREEDB_MONGO_DOCUMENT_FORMAT"); fi
   [[ "$target" != mongodb ]] || fail "MongoDB lifecycle integration is unsupported"
   start_server "$target" "$addr" "$binary" reopened db "${extra[@]}"
+  verify_listener "$target" reopened "$addr"
   live_helper snapshot "$OUT_DIR/$target" "$target" --addr "$addr" --stage reopened
   cleanup
   SERVER_PIDS=(); SERVER_TARGETS=(); SERVER_PREFIXES=()
   start_server "$target" "$addr" "$binary" fixture-write fixture-db "${extra[@]}"
+  verify_listener "$target" fixture-write "$addr"
   live_helper write "$OUT_DIR/$target" "$target" --addr "$addr"
   cleanup
   SERVER_PIDS=(); SERVER_TARGETS=(); SERVER_PREFIXES=()
   start_server "$target" "$addr" "$binary" fixture-reopened fixture-db "${extra[@]}"
+  verify_listener "$target" fixture-reopened "$addr"
   live_helper verify "$OUT_DIR/$target" "$target" --addr "$addr"
   cleanup
   SERVER_PIDS=(); SERVER_TARGETS=(); SERVER_PREFIXES=()
