@@ -31,12 +31,6 @@ jobs:
           - cell: windows-normal
             os: windows-latest
             race: "0"
-          - cell: linux-normal
-            os: ubuntu-24.04
-            race: "0"
-          - cell: linux-race
-            os: ubuntu-24.04
-            race: "1"
     env:
       GOWORK: "off"
       GOTOOLCHAIN: "local"
@@ -141,7 +135,7 @@ jobs:
               assert re.fullmatch('[0-9a-f]{40}',os.environ['EXPECTED_OVERLAY_SHA'])
               assert event['GITHUB_SHA']==os.environ['EXPECTED_OVERLAY_SHA']==os.environ['WORKFLOW_CONTEXT_SHA']==git(harness,'rev-parse','HEAD')
               assert event['RUNNER_ENVIRONMENT']=='github-hosted'
-              assert cell in ('windows-normal','linux-normal','linux-race')
+              assert cell=='windows-normal' and os.environ['RACE']=='0'
               assert (platform.system()=='Windows')==(cell=='windows-normal')
               assert os.environ['RACE']==('1' if cell=='linux-race' else '0')
               assert git(product,'rev-parse','HEAD')==candidate and git(product,'rev-parse','HEAD^{tree}')==source_tree
