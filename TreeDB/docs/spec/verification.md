@@ -224,7 +224,11 @@ edge. `TestCOWNativewireJSONLoadCheckpointReopen` sends concurrent JSON inserts
 through public native-wire clients and a `cow_btree` native semantic owner,
 checks acknowledged values and complete enumeration, checkpoints, checks
 close errors and reopens all three production profiles. Its deterministic
-4,096-row shape is lifecycle coverage, not the original 100,000-row RED.
+4,096-row shape also passes with the unfixed production code: it is lifecycle
+coverage, not a reduced public RED. No deterministic smaller public RED has
+been established. The retained 100,000-row public reproduction and the
+focused zipper RED/GREEN are separate evidence; see issue #5333 for their
+source bindings, recipes, and limitations.
 `TestCOWNativewireJSONDurableACKRecovery` exits the owner process without close
 after synced ACKs and verifies the recovered documents.
 `TestCOWNativewireJSONDurableVisibleACKWALReplay` separately observes replay of

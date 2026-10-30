@@ -17,6 +17,7 @@ import (
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
 
@@ -272,8 +273,13 @@ func TestCOWNativewireCheckpointErrorPropagation(t *testing.T) {
 	}
 	defer pressure.Close()
 	var wireErr *WireError
-	if err := client.Checkpoint(ctx); !errors.As(err, &wireErr) || wireErr.Retryable {
-		t.Fatalf("checkpoint failure=%v, want a non-retryable wire error", err)
+	if err := client.Checkpoint(ctx); !errors.As(err, &wireErr) || wireErr.Code != iwire.ErrInternal || wireErr.Message != "internal error" || wireErr.Retryable {
+		t.Fatalf("checkpoint failure=%v, want non-retryable internal error", err)
+	}
+	// The wire intentionally hides internal causes. With the same owner and
+	// pressure still held, independently witness its actual capacity refusal.
+	if err := env.owner.Checkpoint(); !errors.Is(err, memtable.ErrCOWCapacity) {
+		t.Fatalf("owner checkpoint failure=%v, want COW capacity error", err)
 	}
 	pressure.Close()
 	if err := client.Checkpoint(ctx); err != nil {
