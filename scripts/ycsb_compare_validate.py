@@ -241,17 +241,41 @@ def validate(out):
     return 3 if errors else 0
 
 
-def observe(pid):
+def observe_core(pid):
     proc = pathlib.Path(f"/proc/{pid}")
     stat = (proc / "stat").read_text().rsplit(")", 1)[1].split()
-    environment = (proc / "environ").read_bytes().split(b"\0")
-    return dict(pid=pid, start_ticks=int(stat[19]), exe_sha256=digest(proc / "exe"), gomaxprocs_unset=not any(item.startswith(b"GOMAXPROCS=") for item in environment))
+    return dict(pid=pid, start_ticks=int(stat[19]), exe_sha256=digest(proc / "exe"))
+
+
+def observe(pid):
+    identity = observe_core(pid)
+    environment = pathlib.Path(f"/proc/{pid}/environ").read_bytes().split(b"\0")
+    identity["gomaxprocs_unset"] = not any(item.startswith(b"GOMAXPROCS=") for item in environment)
+    require(observe_core(pid) == {key:identity[key] for key in ("pid","start_ticks","exe_sha256")}, "process changed during observation")
+    return identity
+
+
+def observe_owned(pid, data_dir, output, expected=None):
+    # Preserve safe cleanup identity before reading optional qualification data.
+    pinned = observe_core(pid)
+    write_new(output,dict(process=pinned,data_dir=data_dir))
+    deadline=time.monotonic()+2
+    while True:
+        actual=observe_core(pid)
+        require(actual["pid"] == pinned["pid"] and actual["start_ticks"] == pinned["start_ticks"], "owned launch start identity changed")
+        pathlib.Path(output).write_text(json.dumps(dict(process=actual,data_dir=data_dir))+"\n")
+        if expected is None or actual["exe_sha256"] == expected:
+            identity=observe(pid)
+            pathlib.Path(output).write_text(json.dumps(dict(process=identity,data_dir=data_dir))+"\n")
+            return
+        require(time.monotonic()<deadline,"owned executable never matched requested ELF; refusing clients")
+        time.sleep(.01)
 
 
 
 def terminate_owned(identity, timeout=10):
     """Pin the process before checking identity; never signal by a reusable PID."""
-    process(identity)
+    require(type(identity.get("pid")) is int and identity["pid"] > 0 and type(identity.get("start_ticks")) is int and identity["start_ticks"] > 0 and SHA.fullmatch(identity.get("exe_sha256","")), "missing cleanup process identity")
     require(hasattr(os, "pidfd_open") and hasattr(signal, "pidfd_send_signal"), "safe pidfd cleanup unavailable")
     try:
         descriptor = os.pidfd_open(identity["pid"])
@@ -263,8 +287,8 @@ def terminate_owned(identity, timeout=10):
         def checked_signal(signum):
             if exited():
                 return
-            actual = observe(identity["pid"])
-            require(actual == identity, "cleanup process identity mismatch; refusing signal")
+            actual = observe_core(identity["pid"])
+            require(actual == {key:identity[key] for key in ("pid","start_ticks","exe_sha256")}, "cleanup process identity mismatch; refusing signal")
             signal.pidfd_send_signal(descriptor, signum)
         checked_signal(signal.SIGTERM)
         if not select.select([descriptor], [], [], timeout)[0]:
@@ -334,19 +358,7 @@ def main():
         if args.mode == "stop":
             terminate_owned(read(args.launch)["process"], args.timeout)
             return 0
-        identity = observe(args.pid)
-        if args.await_exec:
-            # Pin before readiness, allowing the env launcher to finish exec.
-            expected = digest(args.await_exec)
-            deadline = time.monotonic() + 2
-            while identity["exe_sha256"] != expected:
-                # Interpreted offline controls have an interpreter as /proc/exe.
-                # Their executable hash still must stabilize before cleanup binding.
-                if time.monotonic() >= deadline:
-                    break
-                time.sleep(.01)
-                identity = observe(args.pid)
-        write_new(args.output, dict(process=identity, data_dir=args.data_dir))
+        observe_owned(args.pid,args.data_dir,args.output,digest(args.await_exec) if args.await_exec else None)
         return 0
     except (ValueError, KeyError, TypeError, OSError) as error:
         print(f"invalid YCSB evidence: {error}", file=sys.stderr)

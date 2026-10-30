@@ -253,7 +253,25 @@ class CompareTests(unittest.TestCase):
         executable("go", "#!/bin/sh\necho offline-buildinfo\n")
         marker = self.out / "server-marker.json"
         client_marker = self.out / "client-marker.json"
-        server = executable("native-server", "#!/usr/bin/env python3\nimport json,os,signal,socket,sys,time\nargs=sys.argv[1:]; addr=args[args.index('-addr')+1]; host,port=addr.split(':')\njson.dump(dict(argv=args,env_unset='GOMAXPROCS' not in os.environ),open("+repr(str(marker))+",'w'))\ns=socket.socket(); s.bind((host,int(port))); "+("s.listen()" if ready else "s.close()")+"\nsignal.signal(signal.SIGTERM,lambda *_:sys.exit(0))\nwhile True: time.sleep(.05)\n")
+        source = tools / "server.c"
+        source.write_text(r"""#include <signal.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
+void done(int s) { _exit(0); }
+int main(int argc,char **argv) {
+ char *addr=NULL;for(int i=1;i+1<argc;i++)if(!strcmp(argv[i],"-addr"))addr=argv[i+1];
+ FILE *f=fopen(MARKER,"w");fprintf(f,"{\"env_unset\":%s}",getenv("GOMAXPROCS")?"false":"true");fclose(f);
+ int fd=socket(AF_INET,SOCK_STREAM,0);struct sockaddr_in a={0};a.sin_family=AF_INET;a.sin_addr.s_addr=htonl(INADDR_LOOPBACK);a.sin_port=htons(atoi(strrchr(addr,':')+1));
+ if(bind(fd,(struct sockaddr*)&a,sizeof(a)))return 4;
+ if(READY)listen(fd,5);else close(fd);
+ signal(SIGTERM,done);while(1)pause();
+}""")
+        server = tools / "native-server"
+        subprocess.run(["cc", str(source), "-o", str(server), '-DMARKER='+json.dumps(str(marker)), "-DREADY="+str(int(ready))],check=True,capture_output=True)
         client = executable("go-ycsb", "#!/usr/bin/env python3\nimport json,os,sys,time\njson.dump(dict(argv=sys.argv[1:],env_unset='GOMAXPROCS' not in os.environ),open("+repr(str(client_marker))+",'w'))\ntime.sleep(.1)\nsys.exit(37)\n")
         import socket
         with socket.socket() as sock:
@@ -342,10 +360,42 @@ class CompareTests(unittest.TestCase):
         from unittest import mock
         identity=dict(self.process)
         changed=dict(identity,exe_sha256="f"*64)
-        with mock.patch.object(COMPARE.os,"pidfd_open",return_value=55), mock.patch.object(COMPARE.os,"close"), mock.patch.object(COMPARE.select,"select",return_value=([],[],[])), mock.patch.object(COMPARE,"observe",side_effect=[identity,changed]), mock.patch.object(COMPARE.signal,"pidfd_send_signal") as send:
+        with mock.patch.object(COMPARE.os,"pidfd_open",return_value=55), mock.patch.object(COMPARE.os,"close"), mock.patch.object(COMPARE.select,"select",return_value=([],[],[])), mock.patch.object(COMPARE,"observe_core",side_effect=[{k:identity[k] for k in ("pid","start_ticks","exe_sha256")},{k:changed[k] for k in ("pid","start_ticks","exe_sha256")}]), mock.patch.object(COMPARE.signal,"pidfd_send_signal") as send:
             with self.assertRaisesRegex(ValueError,"refusing signal"):
                 COMPARE.terminate_owned(identity,timeout=0)
             send.assert_called_once_with(55,COMPARE.signal.SIGTERM)
+
+    def test_wrong_executable_refuses_clients_but_retains_safe_cleanup_identity(self):
+        env=os.environ.copy();env.pop("GOMAXPROCS",None)
+        child=subprocess.Popen([sys.executable,"-c","import time;time.sleep(30)"],env=env)
+        path=self.directory/"wrong-exe.launch.json"
+        try:
+            outcome=subprocess.run([sys.executable,str(ROOT/"ycsb_compare_validate.py"),"observe",str(child.pid),str(self.directory),str(path),"--await-exec","/bin/true"],text=True,capture_output=True)
+            self.assertNotEqual(outcome.returncode,0)
+            self.assertIn("never matched requested ELF",outcome.stderr)
+            identity=json.loads(path.read_text())["process"]
+            self.assertEqual(identity,COMPARE.observe_core(child.pid))
+            COMPARE.terminate_owned(identity,.05)
+            child.wait(timeout=2)
+        finally:
+            if child.poll() is None:
+                COMPARE.terminate_owned(COMPARE.observe_core(child.pid),.05);child.wait(timeout=2)
+
+    def test_observation_error_retains_cleanup_before_environment_read(self):
+        from unittest import mock
+        env=os.environ.copy();env.pop("GOMAXPROCS",None)
+        child=subprocess.Popen([sys.executable,"-c","import time;time.sleep(30)"],env=env)
+        path=self.directory/"failed-observation.launch.json"
+        try:
+            with mock.patch.object(COMPARE,"observe",side_effect=PermissionError("injected environ read failure")):
+                with self.assertRaises(PermissionError):
+                    COMPARE.observe_owned(child.pid,str(self.directory),path)
+            identity=json.loads(path.read_text())["process"]
+            self.assertEqual(identity,COMPARE.observe_core(child.pid))
+            COMPARE.terminate_owned(identity,.05);child.wait(timeout=2)
+        finally:
+            if child.poll() is None:
+                COMPARE.terminate_owned(COMPARE.observe_core(child.pid),.05);child.wait(timeout=2)
 
     def test_launcher_rejects_reused_receipt_and_propagates_error(self):
         command = [sys.executable, str(ROOT / "ycsb_compare_validate.py"), "launch", str(self.directory), "load", "--", "/bin/true"]
