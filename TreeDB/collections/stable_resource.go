@@ -337,11 +337,17 @@ func stableColumnSegmentDigest(ref ColumnAssetRef) [32]byte {
 	// The digest must be invariant for every ref sharing one append-only segment;
 	// per-ref offset/length/checksum remains authoritative in the manifest while
 	// the token supplies the greatest required durable byte frontier.
-	namespace := []byte(ref.Namespace)
-	raw := make([]byte, 4+len(namespace)+4)
-	binary.LittleEndian.PutUint32(raw[:4], uint32(len(namespace)))
-	copy(raw[4:], namespace)
-	binary.LittleEndian.PutUint32(raw[4+len(namespace):], ref.FileID)
+	n := len(ref.Namespace)
+	var stack [512]byte
+	var raw []byte
+	if n <= len(stack)-8 {
+		raw = stack[:n+8]
+	} else {
+		raw = make([]byte, n+8)
+	}
+	binary.LittleEndian.PutUint32(raw[:4], uint32(n))
+	copy(raw[4:], ref.Namespace)
+	binary.LittleEndian.PutUint32(raw[4+n:], ref.FileID)
 	return sha256.Sum256(raw)
 }
 
