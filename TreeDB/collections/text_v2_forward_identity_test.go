@@ -409,13 +409,65 @@ func TestNativeTextV2ForwardIdentityCorruptionContract(t *testing.T) {
 }
 
 func TestNativeTextV2ForwardIdentityAdmission(t *testing.T) {
-	_, _, c := openNativeTextPublic(t, t.TempDir(), treedb.ProfileNoWALFast, true)
+	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, t.TempDir())
+	opts.MemtableMode = "cow_btree"
+	opts.BackgroundCheckpointInterval = -1
+	opts.BackgroundCheckpointIdleDuration = -1
+	owner, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := owner.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	backend, err := owner.NativeSemanticBackend()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pins []backenddb.NativeSemanticCapture
+	defer func() {
+		for i := len(pins) - 1; i >= 0; i-- {
+			if err := pins[i].Close(); err != nil {
+				t.Error(err)
+			}
+		}
+	}()
+	pin := func() {
+		t.Helper()
+		cut, err := backend.CaptureNativeSemanticState()
+		if err != nil {
+			t.Fatal(err)
+		}
+		pins = append(pins, cut)
+	}
+	// Match the admission-cleanup fixture: retain every setup cut so earlier
+	// retirement cannot change global ownership during the refusal check.
+	pin()
+	manager := NewCollectionManager(backend)
+	t.Cleanup(func() {
+		if err := manager.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	meta := nativeTextPublicMeta()
+	meta.Options.DocumentFormat = DocumentFormatJSON
+	if _, err := manager.CreateCollection(meta); err != nil {
+		t.Fatal(err)
+	}
+	pin()
+	c, err := manager.OpenCollection("docs")
+	if err != nil {
+		t.Fatal(err)
+	}
 	// The callback refuses the first query allocation; a page-sized ID would
 	// fail publication before this admission control is reached.
 	id := strings.Repeat("long", 16)
 	if _, err := c.Insert([]byte(id), []byte(`{"content":"refund policy"}`)); err != nil {
 		t.Fatal(err)
 	}
+	pin()
 	read, err := c.nativeJSON.Capture(c.name)
 	if err != nil {
 		t.Fatal(err)
@@ -426,19 +478,26 @@ func TestNativeTextV2ForwardIdentityAdmission(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer lease.Close()
-	var charged uint64
+	var observed struct {
+		calls, refusals, resizeAttempts, accepted int
+		charged                                   uint64
+	}
 	refuse := false
 	catalog, err := newNativeTextCatalog(read, func(n uint64) error {
+		observed.calls++
 		if refuse {
+			observed.refusals++
 			return memtable.ErrCOWCapacity
 		}
-		if n > ^uint64(0)-charged {
+		if n > ^uint64(0)-observed.charged {
 			return memtable.ErrCOWCapacity
 		}
-		if err := lease.Resize(charged + n); err != nil {
+		observed.resizeAttempts++
+		if err := lease.Resize(observed.charged + n); err != nil {
 			return err
 		}
-		charged += n
+		observed.charged += n
+		observed.accepted++
 		return nil
 	})
 	if err != nil {
@@ -449,19 +508,31 @@ func TestNativeTextV2ForwardIdentityAdmission(t *testing.T) {
 		t.Fatal(err)
 	}
 	budget := read.capture.NativeAllocator().(nativeHNSWAdmissionBudget)
-	before := budget.Stats()
+	beforeBudget := budget.Stats()
+	before := observed
 	sequence := read.capture.LogicalSequence()
 	refuse = true
 	set, err := newTextV2SearchOrdinalAllowSet(read.capture.Snapshot(), catalog, ctx, legacyScalarIDs(hybridScalarAllowSet{id: {}}))
 	if !errors.Is(err, memtable.ErrCOWCapacity) || set != nil {
 		t.Fatal("unadmitted forward map", set, err)
 	}
-	after := budget.Stats()
-	if after.ReservedBytes != before.ReservedBytes || after.ExternalLeases != before.ExternalLeases || read.capture.LogicalSequence() != sequence {
-		t.Fatalf("refusal changed ownership before=%+v after=%+v", before, after)
+	// One refused preflight must return before any resize or accepted charge.
+	// All other operation-owned counters and the captured sequence stay exact.
+	want := before
+	want.calls++
+	want.refusals++
+	if observed != want || read.capture.LogicalSequence() != sequence {
+		t.Fatalf("refusal changed operation ownership before=%+v after=%+v want=%+v sequence=%d want=%d", before, observed, want, read.capture.LogicalSequence(), sequence)
+	}
+	afterBudget := budget.Stats()
+	if afterBudget.ReservedBytes != beforeBudget.ReservedBytes || afterBudget.ExternalLeases != beforeBudget.ExternalLeases {
+		t.Fatalf("refusal changed pinned ownership before=%+v after=%+v", beforeBudget, afterBudget)
 	}
 	refuse = false
 	if set, err = newTextV2SearchOrdinalAllowSet(read.capture.Snapshot(), catalog, ctx, legacyScalarIDs(hybridScalarAllowSet{id: {}})); err != nil || set.size() != 1 {
 		t.Fatal("reuse after refusal", set, err)
+	}
+	if observed.resizeAttempts <= before.resizeAttempts || observed.accepted <= before.accepted || observed.charged <= before.charged || observed.refusals != want.refusals {
+		t.Fatalf("retry did not admit through the original operation lease: before=%+v after=%+v", before, observed)
 	}
 }
