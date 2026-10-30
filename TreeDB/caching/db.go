@@ -12139,22 +12139,23 @@ func addMemtableResidencyStats(stats map[string]string, prefix string, summary m
 	if stats == nil || prefix == "" {
 		return
 	}
-	add := func(name string, s memtableResidencySummary) {
-		stats[prefix+"."+name+".count"] = strconv.FormatInt(int64(s.count), 10)
-		stats[prefix+"."+name+".entries"] = strconv.FormatInt(int64(s.len), 10)
-		stats[prefix+"."+name+".size_bytes"] = strconv.FormatInt(s.size, 10)
-		stats[prefix+"."+name+".entry_capacity"] = strconv.FormatInt(s.entryCapacity, 10)
-		stats[prefix+"."+name+".entry_backing_bytes"] = strconv.FormatInt(s.entryBackingBytes, 10)
-		stats[prefix+"."+name+".value_arena_active_chunks"] = strconv.FormatInt(s.valueArenaActiveChunks, 10)
-		stats[prefix+"."+name+".value_arena_active_bytes"] = strconv.FormatInt(s.valueArenaActiveBytes, 10)
-		stats[prefix+"."+name+".value_arena_retained_chunks"] = strconv.FormatInt(s.valueArenaRetainedChunks, 10)
-		stats[prefix+"."+name+".value_arena_retained_bytes"] = strconv.FormatInt(s.valueArenaRetainedBytes, 10)
+	keys := memtableResidencyMetricKeys(prefix)
+	add := func(k memtableResidencyKeys, s memtableResidencySummary) {
+		stats[k.count] = strconv.FormatInt(int64(s.count), 10)
+		stats[k.entries] = strconv.FormatInt(int64(s.len), 10)
+		stats[k.sizeBytes] = strconv.FormatInt(s.size, 10)
+		stats[k.entryCapacity] = strconv.FormatInt(s.entryCapacity, 10)
+		stats[k.entryBackingBytes] = strconv.FormatInt(s.entryBackingBytes, 10)
+		stats[k.valueArenaActiveChunks] = strconv.FormatInt(s.valueArenaActiveChunks, 10)
+		stats[k.valueArenaActiveBytes] = strconv.FormatInt(s.valueArenaActiveBytes, 10)
+		stats[k.valueArenaRetainedChunks] = strconv.FormatInt(s.valueArenaRetainedChunks, 10)
+		stats[k.valueArenaRetainedBytes] = strconv.FormatInt(s.valueArenaRetainedBytes, 10)
 	}
-	add("total", summary.total)
-	add("skiplist", summary.skiplist)
-	add("hash_sorted", summary.hashSorted)
-	add("btree", summary.btree)
-	add("append_only", summary.appendOnly)
+	add(keys[0], summary.total)
+	add(keys[1], summary.skiplist)
+	add(keys[2], summary.hashSorted)
+	add(keys[3], summary.btree)
+	add(keys[4], summary.appendOnly)
 }
 
 func cloneKeyRangePointKey(key []byte) []byte {
