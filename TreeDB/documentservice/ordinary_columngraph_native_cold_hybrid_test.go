@@ -77,7 +77,7 @@ func TestOrdinaryColumnGraphNativeColdHybrid4096(t *testing.T) {
 		}
 	}
 	if _, err := svc.OptimizeIndex(ctx, name, OptimizeIndexRequest{}); err != nil {
-		t.Fatal(err)
+		t.Fatalf("Optimize: %v cause=%v", err, errors.Unwrap(err))
 	}
 	request := HybridSearchRequest{Query: "content", QueryEmbedding: []float32{1, 1}, TopK: 10, TextCandidateLimit: 64, VectorCandidateLimit: 64, EfSearch: 100}
 	check := func(out HybridSearchResponse, err error) {

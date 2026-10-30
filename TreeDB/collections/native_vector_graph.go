@@ -1108,15 +1108,15 @@ func nativeOrdinaryVectorGraphConservativeCapacity(tx *NativeJSONTxn, g *nativeJ
 func (w *nativeTypedMaterialization) materializeOrdinaryVectorGraph(d *nativeTypedDelta) error {
 	recipe := d.data.graph
 	if !recipe.ordinary || !nativeOrdinaryColumnGraphMeta(w.meta) || recipe.sourceRoot != w.input.baseManifestRoot || d.appliedLSN == 0 {
-		return backenddb.ErrNativeSemanticUnsupported
+		return fmt.Errorf("ordinary graph basis ordinary=%t meta_ordinary=%t recipe_root=%d build_root=%d lsn=%d: %w", recipe.ordinary, nativeOrdinaryColumnGraphMeta(w.meta), recipe.sourceRoot, w.input.baseManifestRoot, d.appliedLSN, backenddb.ErrNativeSemanticUnsupported)
 	}
 	def, ok := findVectorIndex(w.meta.VectorIndexes, recipe.def.Name)
 	if !ok || !reflect.DeepEqual(def, recipe.def) {
-		return backenddb.ErrNativeSemanticUnsupported
+		return fmt.Errorf("ordinary graph vector declaration found=%t equal=%t: %w", ok, reflect.DeepEqual(def, recipe.def), backenddb.ErrNativeSemanticUnsupported)
 	}
 	cfg := *w.meta.Options.ColumnStore
 	if cfg.ActiveManifest == nil || cfg.RecoveryAuthoritativeManifest == nil || !columnManifestIdentityValueEqual(*cfg.ActiveManifest, *cfg.RecoveryAuthoritativeManifest) {
-		return backenddb.ErrNativeSemanticUnsupported
+		return fmt.Errorf("ordinary graph manifest identities active=%t recovery=%t: %w", cfg.ActiveManifest != nil, cfg.RecoveryAuthoritativeManifest != nil, backenddb.ErrNativeSemanticUnsupported)
 	}
 	manifest, err := decodeColumnManifestRecords(w.records)
 	if err != nil {
@@ -1141,7 +1141,7 @@ func (w *nativeTypedMaterialization) materializeOrdinaryVectorGraph(d *nativeTyp
 		w.graphSource = nil
 	}
 	if recipe.rows > uint64(int(^uint(0)>>1)) {
-		return backenddb.ErrNativeSemanticUnsupported
+		return fmt.Errorf("ordinary graph row bound rows=%d: %w", recipe.rows, backenddb.ErrNativeSemanticUnsupported)
 	}
 	var rows []columnVectorGraphAssetRow
 	var source *columnVectorGraphTypedColumnVectorSource
@@ -1181,7 +1181,7 @@ func (w *nativeTypedMaterialization) materializeOrdinaryVectorGraph(d *nativeTyp
 		return err
 	}
 	if !used || uint64(len(rows)) > recipe.rows {
-		return backenddb.ErrNativeSemanticUnsupported
+		return fmt.Errorf("ordinary graph source used=%t rows=%d bound=%d: %w", used, len(rows), recipe.rows, backenddb.ErrNativeSemanticUnsupported)
 	}
 	if recipe.constructionWorkers > 0 {
 		err = buildColumnVectorGraphAdjacencyWithWorkers(rows, def, recipe.constructionWorkers)
@@ -1208,7 +1208,7 @@ func (w *nativeTypedMaterialization) materializeOrdinaryVectorGraph(d *nativeTyp
 	w.resources = prepared.stableResources
 	prepared.stableResources = nil
 	if w.resources == nil {
-		return backenddb.ErrNativeSemanticUnsupported
+		return fmt.Errorf("ordinary graph missing stable resources: %w", backenddb.ErrNativeSemanticUnsupported)
 	}
 	if err = w.resourceBuilder.Merge(w.resources); err != nil {
 		return err
