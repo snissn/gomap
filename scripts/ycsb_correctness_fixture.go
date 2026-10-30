@@ -129,6 +129,9 @@ func writeJSON(path string, obj any) error {
 	}
 	return errors.Join(e, f.Close())
 }
+func persistOutcomes(path string, id identity, stage string, outcomes []outcome, cause error) error {
+	return errors.Join(cause, writeJSON(path, snapshot{id, stage, []row{}, outcomes}))
+}
 func sameRows(a, b []row) bool {
 	sort.Slice(a, func(i, j int) bool { return a[i].ID < a[j].ID })
 	sort.Slice(b, func(i, j int) bool { return b[i].ID < b[j].ID })
@@ -577,8 +580,8 @@ func run() (retErr error) {
 		}
 		return true, nil
 	})
-	if e != nil {
-		return e
+	if resultErr := persistOutcomes(*observed+".load-operations.json", id, "load_operations", load, e); resultErr != nil {
+		return resultErr
 	}
 	actual, e := ds[0].scan(ctx)
 	if e != nil {
@@ -619,8 +622,8 @@ func run() (retErr error) {
 		}
 		return true, nil
 	})
-	if e != nil {
-		return e
+	if resultErr := persistOutcomes(*observed+".update-operations.json", id, "update_operations", updated, e); resultErr != nil {
+		return resultErr
 	}
 	actual, e = ds[0].scan(ctx)
 	if e != nil {

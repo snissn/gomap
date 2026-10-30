@@ -57,11 +57,13 @@ class FixtureValidation(unittest.TestCase):
             with self.subTest(mutation=mutation): self.assertNotEqual(self.invoke(expected, snaps).returncode, 0)
 
     def test_reject_shared_key_or_out_of_order_updates_and_wrong_bson_type(self):
-        for mutation in ("shared", "order", "type"):
+        for mutation in ("shared", "order", "type", "boolsubtype", "boolidentity"):
             expected, snaps = fixture("bson")
             if mutation == "shared": expected["updates"][1]["worker"] = 1
             if mutation == "order": expected["updates"][0]["sequence"] = 2
             if mutation == "type": snaps[1]["rows"][0]["fields"]["field0"]["subtype"] = 1
+            if mutation == "boolsubtype": snaps[1]["rows"][0]["fields"]["field0"]["subtype"] = False
+            if mutation == "boolidentity": snaps[1]["schema_version"] = True
             with self.subTest(mutation=mutation): self.assertNotEqual(self.invoke(expected, snaps).returncode, 0)
 
 if __name__ == "__main__": unittest.main()

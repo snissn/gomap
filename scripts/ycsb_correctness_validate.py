@@ -31,7 +31,7 @@ def typed(v, fmt):
         if base64.b64encode(decoded).decode() != v["value"]:
             fail("noncanonical JSON base64 string")
     elif fmt == "bson":
-        if set(v) != {"type", "subtype", "base64"} or v["type"] != "binary" or v["subtype"] != 0:
+        if set(v) != {"type", "subtype", "base64"} or v["type"] != "binary" or type(v["subtype"]) is not int or v["subtype"] != 0:
             fail("BSON value must be subtype-0 binary")
         raw = base64.b64decode(v["base64"], validate=True)
         if base64.b64encode(raw).decode() != v["base64"]:
@@ -88,7 +88,7 @@ def validate(expected, observations):
         fail("workers must own 16 keys each")
     seen = set()
     for observed in observations:
-        if any(observed.get(k) != expected[k] for k in IDENTITY):
+        if type(observed.get("schema_version")) is not int or any(type(observed.get(k)) is not str for k in IDENTITY[1:]) or any(observed.get(k) != expected[k] for k in IDENTITY):
             fail("snapshot identity mismatch")
         stage = observed.get("stage")
         if stage not in ("load", "updated", "reopened") or stage in seen:
