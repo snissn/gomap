@@ -6114,6 +6114,12 @@ func (c *Collection) bufferIndexedInsertPlanLocked(snap *backenddb.Snapshot, cat
 	}
 
 	if err := c.rejectBufferedIndexedInsertConflictsLocked(domain, catalog.meta, plan); err != nil {
+		// This check only probes existing reservations (and may cache their
+		// lookup index). It precedes appendCommandWALBeforeStage and insertion
+		// of the new plan into the shared write domain.
+		if commandWALStageIntent == nil || commandWALStageIntent.AssignedLSN() == 0 {
+			return 0, mutationNotAcceptedError(err)
+		}
 		return 0, err
 	}
 	if domain.rootPolicies == nil {
@@ -12950,6 +12956,13 @@ func (c *Collection) insertBatchOnceWithLockState(
 		pin, currentCatalog, pinCommitSeq, pinSystemRoot, err := c.lockAndValidateInsertBatchPlan(mutationLocked, unlockMutation, snap, catalog, meta, rootNames, baseRootIDs, preflightPersistedConflicts, baseCommitSeq, baseSystemRoot, bufferedCommandWALIntent != nil, plan)
 		if err != nil {
 			resetCollectionRunTables(plan.runs)
+			// Validation only reads the catalog and plan. The new rows are
+			// still private: buffer installation and command assignment happen
+			// below. An externally assigned/replay intent retains its authority.
+			if (commandWALIntent == nil || commandWALIntent.AssignedLSN() == 0) &&
+				(bufferedCommandWALIntent == nil || bufferedCommandWALIntent.AssignedLSN() == 0) {
+				return nil, mutationNotAcceptedError(err)
+			}
 			return nil, err
 		}
 		var unlockCommandWALStage func()
@@ -13016,6 +13029,11 @@ func (c *Collection) insertBatchOnceWithLockState(
 	pin, currentCatalog, pinCommitSeq, pinSystemRoot, err := c.lockAndValidateInsertBatchPlan(mutationLocked, unlockMutation, snap, catalog, meta, rootNames, baseRootIDs, preflightPersistedConflicts, baseCommitSeq, baseSystemRoot, false, plan)
 	if err != nil {
 		resetCollectionRunTables(plan.runs)
+		// No plan roots have been published and the ordinary intent has not
+		// reached assignment. Recovery may supply an already assigned intent.
+		if commandWALIntent == nil || commandWALIntent.AssignedLSN() == 0 {
+			return nil, mutationNotAcceptedError(err)
+		}
 		return nil, err
 	}
 	baseCommitSeq = pinCommitSeq

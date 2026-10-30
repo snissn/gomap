@@ -17,6 +17,12 @@ This document maps specification invariants to existing tests and harnesses.
   independently checks private unique rejection: no journal append, logical
   sequence advance, checkpoint-authority change or rows/index effects; ordinary
   calls receive the not-accepted marker and apply owners do not.
+- `TestInsertBatchCombinerFallbackPreservesExistingConflict` retains independent
+  legacy member outcomes for existing ID/unique conflicts in buffered runs,
+  overlay roots and persisted roots. `TestBufferedInsertConflictOutcomeBoundary`
+  independently checks unchanged journal frames/assignment, roots and buffered
+  publication state with zero durability events; an already appended intent
+  never receives permission to replay.
 - `TestCOWNativewireBSONCombinerUnprovenErrorNoRetry` injects an unmarked real
   command-WAL preappend failure: no member replay or insertion occurs and the
   decoded wire error remains non-retryable internal error.
