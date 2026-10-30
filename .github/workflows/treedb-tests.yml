@@ -95,7 +95,7 @@ jobs:
             race_args=(-race)
           fi
           set +e
-          timeout --signal=TERM --kill-after=10s 12m go test "${race_args[@]}" -count=1 -json ./TreeDB/internal/typedcolumn -run '^(TestFP32ImageEncodedUpperBound|TestFP32ImageEncodedUpperBoundAdmission|TestFP32ImageEncodedUpperBoundSnappy)$' > "$receipt/typedcolumn.jsonl" 2> "$receipt/typedcolumn.stderr"
+          timeout --signal=TERM --kill-after=10s 12m go test "${race_args[@]}" -count=1 -json ./TreeDB/internal/typedcolumn -run '^(TestFP32ImageEncodedUpperBound|TestFP32ImageEncodedUpperBoundAdmission|TestFP32ImageEncodedUpperBoundSnappy|TestFP32ImageEncodedUpperBoundSnappySections)$' > "$receipt/typedcolumn.jsonl" 2> "$receipt/typedcolumn.stderr"
           echo $? > "$receipt/typedcolumn.exit"
           timeout --signal=TERM --kill-after=10s 12m go test "${race_args[@]}" -count=1 -json ./TreeDB/collections -run '^(TestColumnPhysicalAssetEncodedUpperBoundSelectedProducer|TestOrdinaryFP32ImageBoundCoalescedSamples|TestOrdinaryFP32ImageBoundProductionSnappy)$' > "$receipt/collections.jsonl" 2> "$receipt/collections.stderr"
           echo $? > "$receipt/collections.exit"
@@ -106,7 +106,7 @@ jobs:
           import collections, json, pathlib, sys
           p = pathlib.Path(sys.argv[1])
           groups = {
-              'typedcolumn': {'TestFP32ImageEncodedUpperBound', 'TestFP32ImageEncodedUpperBoundAdmission', 'TestFP32ImageEncodedUpperBoundSnappy'},
+              'typedcolumn': {'TestFP32ImageEncodedUpperBound', 'TestFP32ImageEncodedUpperBoundAdmission', 'TestFP32ImageEncodedUpperBoundSnappy', 'TestFP32ImageEncodedUpperBoundSnappySections'},
               'collections': {'TestColumnPhysicalAssetEncodedUpperBoundSelectedProducer', 'TestOrdinaryFP32ImageBoundCoalescedSamples', 'TestOrdinaryFP32ImageBoundProductionSnappy'},
           }
           problems = []
