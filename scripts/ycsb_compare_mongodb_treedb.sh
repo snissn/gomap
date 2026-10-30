@@ -67,6 +67,8 @@ Supports supplied absolute TREEDB_NATIVE_SERVER_BIN/TREEDB_MONGO_GATEWAY_BIN,
 GOYCSB_BIN, FIXTURE_BIN, TREEDB_NATIVE_DOCUMENT_FORMAT and TREEDB_MONGO_DOCUMENT_FORMAT
 (json|bson), TREEDB_PROFILE, RECORDCOUNT, OPERATIONCOUNT, THREADCOUNT,
 RUN_REPEATS, BUILD, BUILD_GOYCSB, OUT_DIR and TMPDIR.
+Gateway execution requires RECORDCOUNT <= 2147483646 so its census cap
+(RECORDCOUNT+1) fits a signed Go int on both 32-bit and 64-bit builds.
 PHASE_TIMEOUT_SECONDS=600 and HELPER_TIMEOUT_SECONDS=180 bound each child.
 CHILD_CLEANUP_TIMEOUT_SECONDS=10 bounds each TERM/KILL/reap cleanup step.
 Each Python phase/helper also has an explicit outer wall deadline and records
@@ -124,6 +126,16 @@ if [[ "$PARSE_ONLY" == false ]]; then
     chosen[$target]=1
   done
   [[ -z "${chosen[mongodb]:-}" ]] || fail "reference MongoDB lifecycle is unsupported; refusing mongodb before execution"
+  if [[ -n "$COMMON_LOAD_POLICY" ]]; then
+    [[ ${#selected[@]} == 1 && -n "${chosen[treedb_mongo]:-}" ]] || fail "COMMON_LOAD_POLICY requires only treedb_mongo"
+  fi
+  if [[ -n "${chosen[treedb_mongo]:-}" ]]; then
+    # Leave one extra row for census mismatch detection. The portable bound
+    # fits Go's signed int on both 32-bit and 64-bit gateway builds; compare
+    # decimal strings before arithmetic so oversized input cannot wrap.
+    [[ ${#RECORDCOUNT} -lt 10 || ( ${#RECORDCOUNT} -eq 10 && "$RECORDCOUNT" < 2147483647 ) ]] || fail "RECORDCOUNT must be <= 2147483646 for the gateway census (portable signed int bound)"
+    GATEWAY_CENSUS_LIMIT=$((RECORDCOUNT+1))
+  fi
 fi
 if [[ -z "$OUT_DIR" ]]; then OUT_DIR=$(mktemp -d "$TMP_BASE/treedb_ycsb_compare_XXXXXX"); fi
 mkdir -p "$OUT_DIR"
@@ -314,12 +326,12 @@ start_server() {
   CLEANUP_DONE=false
   local checkpoint_env=()
   if [[ "$target" == treedb_mongo ]]; then checkpoint_env=(YCSB_OWNER_CHECKPOINT=1); fi
-  # Full 100k fixture census needs one extra slot to detect unexpected rows.
+  # The requested fixture census needs one extra slot to detect unexpected rows.
   # The maintained native CLI has no scan-cap flags. Do not borrow flags
   # from historical source-bound native overlays. Gateway flags are public.
   local census_limits=()
   if [[ "$target" == treedb_mongo ]]; then
-    census_limits=(-max-find-scan-documents 100001 -max-cursor-retained-bytes 536870912)
+    census_limits=(-max-find-scan-documents "$GATEWAY_CENSUS_LIMIT" -max-cursor-retained-bytes 536870912)
   fi
   local command=(env -u GOMAXPROCS "${checkpoint_env[@]}" "YCSB_SERVER_RECEIPT_DIR=$OUT_DIR/$target/$prefix.evidence" "$binary" -dir "$dir" -profile "$TREEDB_PROFILE" -addr "$addr" "${census_limits[@]}" "$@")
   log_command "${command[@]}"

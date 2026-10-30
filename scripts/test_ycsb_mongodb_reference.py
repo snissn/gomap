@@ -696,6 +696,39 @@ class ReferencePackets(unittest.TestCase):
             return b"SYNTHETIC offline Go buildinfo; no executable invoked\n"
         return config,pathlib.Path(output.name)/"prepared",metadata
 
+    def producer_repository_inputs(self):
+        config,out,metadata=self.preparation_inputs()
+        repo=out.parent/'producer';repo.mkdir()
+        subprocess.run(['git','init','--quiet',str(repo)],check=True,capture_output=True)
+        (repo/'.gitignore').write_text('ignored.go\n')
+        (repo/'tracked.go').write_text('package synthetic\n')
+        subprocess.run(['git','-C',str(repo),'add','.gitignore','tracked.go'],check=True,capture_output=True)
+        config['client_source_dir']=str(repo)
+        def actual_inventory(argv):
+            if argv[0]=='git' and 'ls-files' in argv:
+                return subprocess.check_output(argv)
+            return metadata(argv)
+        return config,out,actual_inventory,repo
+
+    def test_preparation_rejects_actual_ignored_and_untracked_producer_inputs(self):
+        config,out,metadata,repo=self.producer_repository_inputs()
+        for name in ('ignored.go','untracked.go'):
+            with self.subTest(name=name):
+                path=repo/name;path.write_text('package extra\n')
+                with mock.patch.object(preparation,'command',side_effect=metadata),mock.patch.object(reference,'emergency_cli') as docker,mock.patch.object(c,'runtime_client_preflight'):
+                    with self.assertRaisesRegex(ValueError,'(?:ignored|untracked) producer input'):
+                        preparation.prepare(config,out.with_name('prepared-'+name))
+                docker.assert_not_called()
+                self.assertFalse(out.with_name('prepared-'+name).exists(),'producer refusal must precede output creation')
+                path.unlink()
+
+    def test_preparation_accepts_clean_actual_producer_inventory(self):
+        config,out,metadata,_=self.producer_repository_inputs()
+        with mock.patch.object(preparation,'command',side_effect=metadata),mock.patch.object(reference,'emergency_cli') as docker,mock.patch.object(c,'runtime_client_preflight'):
+            self.assertEqual(preparation.prepare(config,out)['status'],'prepared-reference-inputs-not-activated')
+        docker.assert_not_called()
+        preparation.verify_prepared(out,c.read(out/'manifest.json'),check_current_sources=True)
+
     def bounded_support(self,common_load=False):
         # Extend the synthetic lifecycle with the actual wire-validator contract.
         # No socket, Docker command, service or product executable is used.

@@ -1,6 +1,9 @@
 """Small bounded OP_MSG/BSON subset for explicit binary refusal controls."""
 import socket,struct
 
+def require(condition,message):
+    if not condition:raise ValueError(message)
+
 def document(value):
     out=b''
     for key,v in value.items():
@@ -17,30 +20,30 @@ def document(value):
 
 def decode(raw,offset=0,array=False):
     start=offset
-    assert len(raw)>=offset+5
+    require(len(raw)>=offset+5,'truncated BSON document')
     length=struct.unpack_from('<i',raw,offset)[0];end=offset+length
-    assert 5<=length<=1024*1024 and end<=len(raw) and raw[end-1]==0
+    require(5<=length<=1024*1024 and end<=len(raw) and raw[end-1]==0,'invalid BSON document framing')
     offset+=4;out={}
     while offset<end-1:
         typ=raw[offset];offset+=1;stop=raw.index(0,offset,end);key=raw[offset:stop].decode();offset=stop+1
-        assert key not in out
+        require(key not in out,'duplicate BSON key')
         if typ in (3,4):value,offset=decode(raw,offset,typ==4)
         elif typ==2:
-            size=struct.unpack_from('<i',raw,offset)[0];offset+=4;assert size>0 and offset+size<=end and raw[offset+size-1]==0;value=raw[offset:offset+size-1].decode();offset+=size
+            size=struct.unpack_from('<i',raw,offset)[0];offset+=4;require(size>0 and offset+size<=end and raw[offset+size-1]==0,'invalid BSON string');value=raw[offset:offset+size-1].decode();offset+=size
         elif typ==1:value=struct.unpack_from('<d',raw,offset)[0];offset+=8
         elif typ==16:value=struct.unpack_from('<i',raw,offset)[0];offset+=4
         elif typ in (9,17,18):value=struct.unpack_from('<q',raw,offset)[0];offset+=8
-        elif typ==8:assert raw[offset] in (0,1);value=bool(raw[offset]);offset+=1
+        elif typ==8:require(raw[offset] in (0,1),'invalid BSON boolean');value=bool(raw[offset]);offset+=1
         elif typ==10:value=None
         elif typ==5:
-            size=struct.unpack_from('<i',raw,offset)[0];offset+=4;assert size>=0 and offset+1+size<=end;value=dict(binary_hex=raw[offset+1:offset+1+size].hex(),subtype=raw[offset]);offset+=1+size
+            size=struct.unpack_from('<i',raw,offset)[0];offset+=4;require(size>=0 and offset+1+size<=end,'invalid BSON binary');value=dict(binary_hex=raw[offset+1:offset+1+size].hex(),subtype=raw[offset]);offset+=1+size
         elif typ in (7,19):
             size=12 if typ==7 else 16;value=dict(raw_type=typ,hex=raw[offset:offset+size].hex());offset+=size
         else:raise ValueError('unsupported response BSON type '+str(typ))
-        assert offset<=end-1;out[key]=value
-    assert offset==end-1
+        require(offset<=end-1,'BSON value exceeds document');out[key]=value
+    require(offset==end-1,'invalid BSON document end')
     if array:
-        assert list(out)==[str(i) for i in range(len(out))];out=list(out.values())
+        require(list(out)==[str(i) for i in range(len(out))],'noncanonical BSON array');out=list(out.values())
     return out,end
 
 class Client:
@@ -50,7 +53,7 @@ class Client:
     def read(self,n):
         out=b''
         while len(out)<n:
-            part=self.sock.recv(n-len(out));assert part,'unexpected EOF';out+=part
+            part=self.sock.recv(n-len(out));require(part,'unexpected EOF');out+=part
         return out
     def call(self,command):
         self.counter+=1;request=self.counter
@@ -59,9 +62,9 @@ class Client:
         with (self.out/('%02d-request.bin'%request)).open('xb') as stream:stream.write(raw)
         self.sock.sendall(raw)
         header=self.read(16);length,response_id,response_to,opcode=struct.unpack('<iiii',header)
-        assert 21<length<=1024*1024 and response_to==request and opcode==2013
+        require(21<length<=1024*1024 and response_to==request and opcode==2013,'invalid OP_MSG response framing')
         body=self.read(length-16)
         with (self.out/('%02d-response.bin'%request)).open('xb') as stream:stream.write(header+body)
-        assert struct.unpack_from('<I',body)[0]==0 and body[4]==0,'unsupported response flags/section'
-        response,end=decode(body,5);assert end==len(body)
+        require(struct.unpack_from('<I',body)[0]==0 and body[4]==0,'unsupported response flags/section')
+        response,end=decode(body,5);require(end==len(body),'trailing OP_MSG response bytes')
         return response

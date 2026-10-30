@@ -9,7 +9,9 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	mongogateway "github.com/snissn/gomap/TreeDB/mongo_gateway"
@@ -195,6 +197,113 @@ func TestRequestCheckpointRejectsLegacyReceiptSchema(t *testing.T) {
 		t.Fatal("legacy receipt accepted", err)
 	}
 	if err = <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCheckpointIdleConnectionBoundsClose(t *testing.T) {
+	observer, _, _, _ := checkpointOwner(t)
+	var calls atomic.Int32
+	unrequested := func() error { calls.Add(1); return nil }
+	control, err := observer.startCheckpointControl(unrequested, unrequested)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := net.Dial("tcp4", control.listener.Addr().String())
+	if err != nil {
+		control.Close()
+		t.Fatal(err)
+	}
+	closed := false
+	t.Cleanup(func() {
+		conn.Close()
+		if !closed {
+			control.Close()
+		}
+	})
+	// An incomplete JSON request exercises the actual listener's idle read.
+	if _, err = conn.Write([]byte("{")); err != nil {
+		t.Fatal(err)
+	}
+	conn.SetReadDeadline(time.Now().Add(250 * time.Millisecond))
+	var one [1]byte
+	if _, err = conn.Read(one[:]); err == nil {
+		t.Fatal("incomplete request unexpectedly produced a response")
+	} else if timeout, ok := err.(net.Error); !ok || !timeout.Timeout() {
+		t.Fatal("incomplete request did not remain idle", err)
+	}
+	conn.SetReadDeadline(time.Time{})
+	done := make(chan error, 1)
+	started := time.Now()
+	go func() { done <- control.Close() }()
+	select {
+	case err = <-done:
+		closed = true
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("idle connection Close completed in %s without callbacks", time.Since(started))
+	case <-time.After(7 * time.Second):
+		// Unblock and join the old two-minute reader before reporting RED.
+		conn.Close()
+		select {
+		case <-done:
+			closed = true
+		case <-time.After(2 * time.Second):
+			t.Fatal("idle reader did not settle after connection cleanup")
+		}
+		t.Fatal("idle connection held Close beyond seven seconds")
+	}
+	if calls.Load() != 0 {
+		t.Fatal("incomplete request invoked callbacks", calls.Load())
+	}
+}
+
+func TestCheckpointCloseWaitsForActualCallback(t *testing.T) {
+	observer, flush, checkpoint, dir := checkpointOwner(t)
+	entered, release := make(chan struct{}), make(chan struct{})
+	control, err := observer.startCheckpointControl(func() error {
+		close(entered)
+		<-release
+		return flush()
+	}, checkpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := filepath.Join(dir, "snapshot.json")
+	if err = os.WriteFile(snapshot, []byte(`{}`), 0600); err != nil {
+		control.Close()
+		t.Fatal(err)
+	}
+	requestDone := make(chan error, 1)
+	go func() {
+		_, err := RequestCheckpoint(context.Background(), dir, "source", "fixture", snapshot)
+		requestDone <- err
+	}()
+	select {
+	case <-entered:
+	case err = <-requestDone:
+		control.Close()
+		t.Fatal("request failed before callback", err)
+	case <-time.After(5 * time.Second):
+		close(release)
+		control.Close()
+		t.Fatal("callback did not begin")
+	}
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- control.Close() }()
+	select {
+	case err = <-closeDone:
+		close(release)
+		<-requestDone
+		t.Fatal("Close returned while actual callback was active", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	if err = <-requestDone; err != nil {
+		t.Fatal(err)
+	}
+	if err = <-closeDone; err != nil {
 		t.Fatal(err)
 	}
 }

@@ -431,7 +431,40 @@ class CompareTests(unittest.TestCase):
     def test_shell_rejects_complete_invalid_owner_schema_before_client(self):
         self.exercise_shell_cleanup(ready=True,owner_ready="invalid-schema")
 
-    def exercise_shell_cleanup(self, ready, hang=False, owner_ready="matching"):
+    def test_gateway_census_limit_follows_large_recordcount(self):
+        self.exercise_shell_cleanup(ready=True,target="treedb_mongo",recordcount="200000")
+
+    def test_gateway_census_limit_accepts_largest_portable_recordcount(self):
+        self.exercise_shell_cleanup(ready=True,target="treedb_mongo",recordcount="2147483646")
+
+    def test_gateway_census_limit_preserves_default(self):
+        self.exercise_shell_cleanup(ready=True,target="treedb_mongo",recordcount="100000")
+
+    def test_gateway_census_limit_refuses_invalid_or_overflow_before_output(self):
+        for count in ("0","-1","01","1.5","2147483647","9223372036854775807","18446744073709551616"):
+            with self.subTest(recordcount=count):
+                output=self.out/("invalid-count-"+count)
+                environment=os.environ.copy()
+                environment.update(PARSE_ONLY="false",BUILD="true",BUILD_GOYCSB="true",TARGETS="treedb_mongo",RECORDCOUNT=count,OUT_DIR=str(output),CLIENT_BUILD_MANIFEST="",SERVER_BUILD_MANIFEST="")
+                outcome=subprocess.run(["bash",str(ROOT/"ycsb_compare_mongodb_treedb.sh")],env=environment,capture_output=True,text=True,timeout=5)
+                self.assertEqual(outcome.returncode,2,outcome.stderr)
+                self.assertIn("RECORDCOUNT",outcome.stderr)
+                self.assertFalse(output.exists(),"invalid count reached output/build/load setup")
+
+    def test_common_load_policy_requires_only_gateway_before_output(self):
+        for targets in ("treedb_native","treedb_native treedb_mongo","treedb_mongo,treedb_native"):
+            with self.subTest(targets=targets):
+                output=self.out/("policy-targets-"+targets.replace(" ","-"))
+                environment=os.environ.copy()
+                environment.update(PARSE_ONLY="false",BUILD="true",BUILD_GOYCSB="true",TARGETS=targets,COMMON_LOAD_POLICY="not-opened-before-target-validation.json",OUT_DIR=str(output),CLIENT_BUILD_MANIFEST="",SERVER_BUILD_MANIFEST="")
+                outcome=subprocess.run(["bash",str(ROOT/"ycsb_compare_mongodb_treedb.sh")],env=environment,capture_output=True,text=True,timeout=5)
+                self.assertEqual(outcome.returncode,2,outcome.stderr)
+                self.assertIn("COMMON_LOAD_POLICY requires only treedb_mongo",outcome.stderr)
+                self.assertFalse(output.exists(),"invalid policy target reached output/build/load setup")
+        # Existing retained parse-only artifacts are selected by their manifest.
+        self.check(True,TARGETS="treedb_native treedb_mongo",COMMON_LOAD_POLICY="unused.json")
+
+    def exercise_shell_cleanup(self, ready, hang=False, owner_ready="matching", target="treedb_native", recordcount="100000"):
         # Offline dependency stubs exercise launcher dispatch without a product DB.
         tools = self.out / "offline-tools"
         tools.mkdir()
@@ -455,16 +488,17 @@ class CompareTests(unittest.TestCase):
 void done(int s) { _exit(0); }
 int main(int argc,char **argv) {
  // Model the maintained native parser: historical overlay flags are invalid.
- for(int i=1;i<argc;i++)if(!strcmp(argv[i],"-max-scan-documents")||!strcmp(argv[i],"-max-cursor-retained-bytes"))return 94;
+ for(int i=1;i<argc;i++)if(NATIVE && (!strcmp(argv[i],"-max-scan-documents")||!strcmp(argv[i],"-max-cursor-retained-bytes")))return 94;
  char *addr=NULL;for(int i=1;i+1<argc;i++)if(!strcmp(argv[i],"-addr"))addr=argv[i+1];
- FILE *f=fopen(MARKER,"w");fprintf(f,"{\"env_unset\":%s}",getenv("GOMAXPROCS")?"false":"true");fclose(f);
+ char *scan="null",*cursor="null";for(int i=1;i+1<argc;i++){if(!strcmp(argv[i],"-max-find-scan-documents"))scan=argv[i+1];if(!strcmp(argv[i],"-max-cursor-retained-bytes"))cursor=argv[i+1];}
+ FILE *f=fopen(MARKER,"w");fprintf(f,"{\"env_unset\":%s,\"scan_cap\":%s,\"cursor_cap\":%s}",getenv("GOMAXPROCS")?"false":"true",scan,cursor);fclose(f);
  int fd=socket(AF_INET,SOCK_STREAM,0);struct sockaddr_in a={0};a.sin_family=AF_INET;a.sin_addr.s_addr=htonl(INADDR_LOOPBACK);a.sin_port=htons(atoi(strrchr(addr,':')+1));
  if(bind(fd,(struct sockaddr*)&a,sizeof(a)))return 4;
  if(READY)listen(fd,5);else close(fd);
  signal(SIGTERM,done);while(1)pause();
 }""")
         server = tools / "native-server"
-        subprocess.run(["cc", str(source), "-o", str(server), '-DMARKER='+json.dumps(str(marker)), "-DREADY="+str(int(ready))],check=True,capture_output=True)
+        subprocess.run(["cc", str(source), "-o", str(server), '-DMARKER='+json.dumps(str(marker)), "-DREADY="+str(int(ready)),"-DNATIVE="+str(int(target=="treedb_native"))],check=True,capture_output=True)
         # A direct ELF keeps process observation deterministic: a shebang's
         # /usr/bin/env -> Python exec can legitimately change exe mid-observe.
         # Keep the production observer strict and avoid that unrelated race.
@@ -532,10 +566,10 @@ else:runpy.run_path(sys.argv[0],run_name='__main__')
         build_path = self.out / "offline-build.json"
         self.save(build_path, build)
         server_build_path = self.out / "offline-server-build.json"
-        self.save(server_build_path, dict(schema_version=1, servers={"treedb_native":dict(schema_version=1,version="candidate",source_commit=COMPARE.PRODUCER,exe_sha256=COMPARE.digest(server),expected_owner="cow",source_dir=str(tools),source_patch_sha256=COMPARE.digest(self.out/"client.patch"))}))
+        self.save(server_build_path, dict(schema_version=1, servers={target:dict(schema_version=1,version="candidate",source_commit=COMPARE.PRODUCER,exe_sha256=COMPARE.digest(server),expected_owner="cow",source_dir=str(tools),source_patch_sha256=COMPARE.digest(self.out/"client.patch"))}))
         execution = self.out / "execution"
         environment = os.environ.copy()
-        environment.update(PATH=str(tools)+os.pathsep+environment["PATH"], PYTHON=str(python_stub), GOMAXPROCS="1", PARSE_ONLY="false", BUILD="false", BUILD_GOYCSB="false", OUT_DIR=str(execution), TARGETS="treedb_native", MONGODB_MODE="skip", TREEDB_NATIVE_DOCUMENT_FORMAT="json", TREEDB_NATIVE_SERVER_BIN=str(server), TREEDB_MONGO_GATEWAY_BIN=str(tools/"must-not-launch"), NATIVE_ADDR=f"127.0.0.1:{port}", CLIENT_BUILD_MANIFEST=str(build_path), SERVER_BUILD_MANIFEST=str(server_build_path), GOYCSB_DIR=str(tools), GOYCSB_BIN=str(client), FIXTURE_BIN=str(client), READINESS_TIMEOUT="1", PHASE_TIMEOUT_SECONDS="1", CHILD_CLEANUP_TIMEOUT_SECONDS="1")
+        environment.update(PATH=str(tools)+os.pathsep+environment["PATH"], PYTHON=str(python_stub), GOMAXPROCS="1", PARSE_ONLY="false", BUILD="false", BUILD_GOYCSB="false", OUT_DIR=str(execution), TARGETS=target, RECORDCOUNT=recordcount, MONGODB_MODE="skip", TREEDB_NATIVE_DOCUMENT_FORMAT="json", TREEDB_NATIVE_SERVER_BIN=str(server), TREEDB_MONGO_GATEWAY_BIN=str(server) if target=="treedb_mongo" else str(tools/"must-not-launch"), NATIVE_ADDR=f"127.0.0.1:{port}", TREEDB_MONGO_ADDR=f"127.0.0.1:{port}", CLIENT_BUILD_MANIFEST=str(build_path), SERVER_BUILD_MANIFEST=str(server_build_path), GOYCSB_DIR=str(tools), GOYCSB_BIN=str(client), FIXTURE_BIN=str(client), READINESS_TIMEOUT="1", PHASE_TIMEOUT_SECONDS="1", CHILD_CLEANUP_TIMEOUT_SECONDS="1")
         # The offline service binds TCP first; a separate synthetic observer
         # supplies actual proc/data identities later, without running a product DB.
         import threading,time
@@ -546,7 +580,7 @@ else:runpy.run_path(sys.argv[0],run_name='__main__')
                 deadline=time.monotonic()+5
                 while True:
                     try:
-                        observed_launch=COMPARE.read(execution/"treedb_native/server.launch.json")
+                        observed_launch=COMPARE.read(execution/target/"server.launch.json")
                         COMPARE.process(observed_launch["process"])
                         break
                     except (OSError,ValueError,KeyError,TypeError):
@@ -557,7 +591,7 @@ else:runpy.run_path(sys.argv[0],run_name='__main__')
                 value=dict(schema_version=1,kind="live_owner_observation",owner_id="1"*32,process=observed_launch["process"],data_dir=observed_launch["data_dir"],data_device=data.st_dev,data_inode=data.st_ino,profile=self.manifest["profile"],backend="cow",capture_error="",observed_gomaxprocs=1,stats={"treedb.profile.resolved":self.manifest["profile"],"treedb.cache.memtable_mode":"cow_btree","treedb.cache.cow.txn.logical_seq":"0"},observed_utc=COMPARE.now())
                 if owner_ready=="stale":value["process"]["start_ticks"]+=1
                 if owner_ready=="invalid-schema":value["schema_version"]=True
-                evidence=execution/"treedb_native/server.evidence/owner.open.json"
+                evidence=execution/target/"server.evidence/owner.open.json"
                 # Match Go's actual O_EXCL-create-then-write publication, not
                 # an atomic rename that would hide incomplete-receipt races.
                 with evidence.open("x") as stream:
@@ -585,43 +619,50 @@ else:runpy.run_path(sys.argv[0],run_name='__main__')
         expected=(124 if hang else 37) if ready else 3
         if ready and owner_ready not in ("matching","partial"):expected=3
         self.assertEqual(outcome.returncode,expected,outcome.stderr)
-        launch = json.loads((execution/"treedb_native/server.launch.json").read_text())
+        launch = json.loads((execution/target/"server.launch.json").read_text())
         self.assertFalse(pathlib.Path(f"/proc/{launch['process']['pid']}").exists())
-        self.assertEqual(json.loads((execution/"treedb_native/server.exit.json").read_text())["exit_code"],0)
+        self.assertEqual(json.loads((execution/target/"server.exit.json").read_text())["exit_code"],0)
         if not ready:
             self.assertIn("invalid server listener: timed out waiting for owned listener",outcome.stderr)
-            self.assertFalse((execution/"treedb_native/server.listener.json").exists())
+            self.assertFalse((execution/target/"server.listener.json").exists())
             self.assertFalse(client_marker.exists())
             self.assertEqual(json.loads((execution/"validation.json").read_text())["status"],"invalid")
             return
         if owner_ready not in ("matching","partial"):
             self.assertFalse(client_marker.exists())
-            failure=COMPARE.read(execution/"treedb_native/server.readiness.failure.json")
+            failure=COMPARE.read(execution/target/"server.readiness.failure.json")
             self.assertEqual(failure["kind"],"owner_readiness_failure")
-            self.assertFalse((execution/"treedb_native/server.ready.json").exists())
+            self.assertFalse((execution/target/"server.ready.json").exists())
             return
-        readiness=COMPARE.read(execution/"treedb_native/server.ready.json")
-        observation=COMPARE.read(execution/"treedb_native/server.evidence/owner.open.json")
+        readiness=COMPARE.read(execution/target/"server.ready.json")
+        observation=COMPARE.read(execution/target/"server.evidence/owner.open.json")
         self.assertGreaterEqual(COMPARE.timestamp(readiness["ready_utc"]),COMPARE.timestamp(observation["observed_utc"]))
-        client_launch=COMPARE.read(execution/"treedb_native/load.launch.json")
+        client_launch=COMPARE.read(execution/target/"load.launch.json")
         self.assertEqual(client_launch["process"]["exe_sha256"],COMPARE.digest(client))
         self.assertGreaterEqual(COMPARE.timestamp(client_launch["start_utc"]),COMPARE.timestamp(readiness["ready_utc"]))
         self.assertTrue(json.loads(marker.read_text())["env_unset"])
         child = json.loads(client_marker.read_text())
         self.assertTrue(child["env_unset"])
         if hang:
-            failure=COMPARE.read(execution/"treedb_native/load.failure.json")
+            failure=COMPARE.read(execution/target/"load.failure.json")
             self.assertTrue(failure["timed_out"])
             self.assertTrue(failure["cleanup"]["reaped"])
             self.assertEqual(failure["cleanup"]["exit_code"],-9)
             self.assertFalse(pathlib.Path(f"/proc/{failure['pid']}").exists())
-        self.assertEqual(child["argv"][:2],["load","treedb-native"])
-        self.assertIn("treedb.document_format=json",child["argv"])
-        self.assertIn("treedb.ack=visible",child["argv"])
-        self.assertIn("treedb.flush_on_close=true",child["argv"])
-        self.assertFalse((execution/"treedb_mongo").exists())
+        if target=="treedb_native":
+            self.assertEqual(child["argv"][:2],["load","treedb-native"])
+            self.assertIn("treedb.document_format=json",child["argv"])
+            self.assertIn("treedb.ack=visible",child["argv"])
+            self.assertIn("treedb.flush_on_close=true",child["argv"])
+            self.assertFalse((execution/"treedb_mongo").exists())
+        else:
+            self.assertEqual(child["argv"][:2],["load","mongodb"])
+            server_args=json.loads(marker.read_text())
+            self.assertEqual(server_args["scan_cap"],int(recordcount)+1)
+            self.assertEqual(server_args["cursor_cap"],536870912)
+            self.assertFalse((execution/"treedb_native").exists())
         self.assertFalse((execution/"mongodb").exists())
-        self.assertEqual(json.loads((execution/"treedb_native/server.exit.json").read_text())["exit_code"],0)
+        self.assertEqual(json.loads((execution/target/"server.exit.json").read_text())["exit_code"],0)
         self.assertEqual(json.loads((execution/"validation.json").read_text())["status"],"invalid")
 
     def test_version_bound_legacy_and_candidate_owners(self):

@@ -86,11 +86,12 @@ func (o *Observer) startCheckpointControl(flush, checkpoint func() error) (*Chec
 			}
 			// Bounded framing; backend execution is bounded by the owner's external
 			// supervisor. Close waits for the actual callback, never races owner Close.
-			_ = conn.SetDeadline(time.Now().Add(2 * time.Minute))
+			_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 			var request CheckpointRequest
 			decoder := json.NewDecoder(io.LimitReader(conn, 8192))
 			decoder.DisallowUnknownFields()
 			err = decoder.Decode(&request)
+			_ = conn.SetDeadline(time.Now().Add(2 * time.Minute))
 			if err == nil && (request.SchemaVersion != 1 || request.OwnerID != o.ownerID || len(request.RequestID) != 32 || len(request.SnapshotSHA256) != 64 || request.SourceID == "" || request.FixtureID == "" || request.Client.PID <= 0 || request.Client.StartTicks == 0 || len(request.Client.EXESHA256) != 64) {
 				err = errors.New("checkpoint request identity mismatch")
 			}

@@ -156,6 +156,7 @@ def prepare(config,out):
     git=lambda *args:command(["git","-C",str(repo),*args])
     git("merge-base","--is-ancestor",c.PRODUCER,"HEAD")
     c.require(not git("ls-files","--others","--exclude-standard").strip(),"untracked producer input")
+    c.require(not git("ls-files","--others","--ignored","--exclude-standard").strip(),"ignored producer input")
     patch=git("diff","--binary","HEAD")
     c.require(git("rev-parse","HEAD").decode().strip()==client["source_commit"] and hashlib.sha256(patch).hexdigest()==client["source_patch_sha256"] and c.exe_digest(client_binary)==client["exe_sha256"],"producer source/overlay/ELF mismatch")
     c.require(c.same(client,sm["client"]),"producer differs from supported client")
