@@ -40,7 +40,7 @@ func TestNativeGraphHandoffWitnessRunPattern(t *testing.T) {
 		if len(pattern) != 2 || !regexp.MustCompile(pattern[0]).MatchString(parent) || regexp.MustCompile(pattern[0]).MatchString(parent+"Extra") {
 			t.Fatalf("invalid parent selector: %q", pattern)
 		}
-		for _, candidate := range []string{"sequential", "changed-manifest", "unchanged-manifest", selected+"Extra"} {
+		for _, candidate := range []string{"sequential", "changed-manifest", "unchanged-manifest", selected + "Extra"} {
 			if got := regexp.MustCompile(pattern[1]).MatchString(candidate); got != (candidate == selected) {
 				t.Fatalf("selected=%q candidate=%q matched=%v", selected, candidate, got)
 			}
