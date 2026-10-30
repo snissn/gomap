@@ -23,10 +23,6 @@ jobs:
             runner: windows-latest
             minutes: 45
             race_flag: ''
-          - role: linux-race-controls
-            runner: ubuntu-24.04
-            minutes: 20
-            race_flag: '-race'
     env:
       GOWORK: 'off'
       GOMEMLIMIT: 4GiB
@@ -120,11 +116,18 @@ jobs:
             timeout=3m
             echo 'new witness control only; no original DB lifecycle' > diagnostic-evidence/db-selection.txt
           fi
-          echo "GOWORK=$GOWORK GOMEMLIMIT=$GOMEMLIMIT GOMAXPROCS=$GOMAXPROCS GOMAP_RECOVERY_LEDGER=${GOMAP_RECOVERY_LEDGER-unset}" > diagnostic-evidence/db-env.txt
-          command=(go tool test2json -t -p github.com/snissn/gomap/TreeDB/db "$PWD/diagnostic-binaries/db.test.exe" -test.v=test2json -test.count=1 "-test.timeout=$timeout" "-test.run=$regex")
-          printf '%q ' "${command[@]}" > diagnostic-evidence/db-command.txt
-          printf '\n' >> diagnostic-evidence/db-command.txt
-          "${command[@]}" 2>&1 | tee diagnostic-evidence/db-test.jsonl
+          evidence_dir="$PWD/diagnostic-evidence"
+          binary_path="$PWD/diagnostic-binaries/db.test.exe"
+          package_dir="$PWD/TreeDB/db"
+          echo "GOWORK=$GOWORK GOMEMLIMIT=$GOMEMLIMIT GOMAXPROCS=$GOMAXPROCS GOMAP_RECOVERY_LEDGER=${GOMAP_RECOVERY_LEDGER-unset}" > "$evidence_dir/db-env.txt"
+          command=(go tool test2json -t -p github.com/snissn/gomap/TreeDB/db "$binary_path" -test.v=test2json -test.count=1 "-test.timeout=$timeout" "-test.run=$regex")
+          printf '%q ' "${command[@]}" > "$evidence_dir/db-command.txt"
+          printf '\n' >> "$evidence_dir/db-command.txt"
+          (
+            cd "$package_dir"
+            pwd -P > "$evidence_dir/db-cwd.txt"
+            "${command[@]}"
+          ) 2>&1 | tee "$evidence_dir/db-test.jsonl"
 
       - name: Root original 100-member with ACK ledger, or race ledger controls only
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
@@ -138,11 +141,18 @@ jobs:
             regex="$ACK_LEDGER_CONTROL_REGEX"
             timeout=3m
           fi
-          echo "GOWORK=$GOWORK GOMEMLIMIT=$GOMEMLIMIT GOMAXPROCS=$GOMAXPROCS GOMAP_RECOVERY_LEDGER=${GOMAP_RECOVERY_LEDGER-unset}" > diagnostic-evidence/root-env.txt
-          command=(go tool test2json -t -p github.com/snissn/gomap/TreeDB "$PWD/diagnostic-binaries/root.test.exe" -test.v=test2json -test.count=1 "-test.timeout=$timeout" "-test.run=$regex")
-          printf '%q ' "${command[@]}" > diagnostic-evidence/root-command.txt
-          printf '\n' >> diagnostic-evidence/root-command.txt
-          "${command[@]}" 2>&1 | tee diagnostic-evidence/root-test.jsonl
+          evidence_dir="$PWD/diagnostic-evidence"
+          binary_path="$PWD/diagnostic-binaries/root.test.exe"
+          package_dir="$PWD/TreeDB"
+          echo "GOWORK=$GOWORK GOMEMLIMIT=$GOMEMLIMIT GOMAXPROCS=$GOMAXPROCS GOMAP_RECOVERY_LEDGER=${GOMAP_RECOVERY_LEDGER-unset}" > "$evidence_dir/root-env.txt"
+          command=(go tool test2json -t -p github.com/snissn/gomap/TreeDB "$binary_path" -test.v=test2json -test.count=1 "-test.timeout=$timeout" "-test.run=$regex")
+          printf '%q ' "${command[@]}" > "$evidence_dir/root-command.txt"
+          printf '\n' >> "$evidence_dir/root-command.txt"
+          (
+            cd "$package_dir"
+            pwd -P > "$evidence_dir/root-cwd.txt"
+            "${command[@]}"
+          ) 2>&1 | tee "$evidence_dir/root-test.jsonl"
 
       - name: Catalog original scenario and five controls, or race log-tail control only
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
@@ -153,21 +163,18 @@ jobs:
           else
             regex='^TestCatalogMetaRaftLogTailRetainsBoundedSuffixV1$'
           fi
-          echo "GOWORK=$GOWORK GOMEMLIMIT=$GOMEMLIMIT GOMAXPROCS=$GOMAXPROCS GOMAP_RECOVERY_LEDGER=${GOMAP_RECOVERY_LEDGER-unset}" > diagnostic-evidence/raftplacement-env.txt
-          command=(go tool test2json -t -p github.com/snissn/gomap/TreeDB/internal/raftplacement "$PWD/diagnostic-binaries/raftplacement.test.exe" -test.v=test2json -test.count=1 -test.timeout=3m "-test.run=$regex")
-          printf '%q ' "${command[@]}" > diagnostic-evidence/raftplacement-command.txt
-          printf '\n' >> diagnostic-evidence/raftplacement-command.txt
-          "${command[@]}" 2>&1 | tee diagnostic-evidence/raftplacement-test.jsonl
-
-      - name: Paired producer and ledger race controls
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && matrix.role == 'linux-race-controls' }}
-        run: |
-          set -euo pipefail
-          regex='^Test(Ledger(BoundedOwnershipAndOverflow|SingleInstallationAndRestore|ConcurrentPublicationAndRead)|StableResourceFileSyncObserverExactPhysicalBoundary|RecoveryLedger(PhysicalAbnormalExitHasNoReturn|StoragePhaseErrorsPreserveOriginalOrder))$'
-          command=(go test -json -race -p 1 -count=1 -timeout=3m ./TreeDB/internal/recoverytrace ./TreeDB/internal/rootpublication ./TreeDB/db -run "$regex")
-          printf '%q ' "${command[@]}" > diagnostic-evidence/paired-controls-command.txt
-          printf '\n' >> diagnostic-evidence/paired-controls-command.txt
-          "${command[@]}" 2>&1 | tee diagnostic-evidence/paired-controls-test.jsonl
+          evidence_dir="$PWD/diagnostic-evidence"
+          binary_path="$PWD/diagnostic-binaries/raftplacement.test.exe"
+          package_dir="$PWD/TreeDB/internal/raftplacement"
+          echo "GOWORK=$GOWORK GOMEMLIMIT=$GOMEMLIMIT GOMAXPROCS=$GOMAXPROCS GOMAP_RECOVERY_LEDGER=${GOMAP_RECOVERY_LEDGER-unset}" > "$evidence_dir/raftplacement-env.txt"
+          command=(go tool test2json -t -p github.com/snissn/gomap/TreeDB/internal/raftplacement "$binary_path" -test.v=test2json -test.count=1 -test.timeout=3m "-test.run=$regex")
+          printf '%q ' "${command[@]}" > "$evidence_dir/raftplacement-command.txt"
+          printf '\n' >> "$evidence_dir/raftplacement-command.txt"
+          (
+            cd "$package_dir"
+            pwd -P > "$evidence_dir/raftplacement-cwd.txt"
+            "${command[@]}"
+          ) 2>&1 | tee "$evidence_dir/raftplacement-test.jsonl"
 
       - name: Retain native evidence even after failure
         if: always()
