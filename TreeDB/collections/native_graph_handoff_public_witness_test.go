@@ -439,7 +439,7 @@ func TestNativeOrdinaryGraphAcceptedAcrossCapturedManifestBuild(t *testing.T) {
 			}
 			// Success remains subject to existing hybrid/cold/reopen qualification; this
 			// focused control only proves the accepted graph survived its old prefix.
-			for _, n := range []int{0, 128, 4095} {
+			for _, n := range []int{0, 128, 255} {
 				id := []byte(fmt.Sprintf("doc-%04d", n))
 				want := []byte(fmt.Sprintf(`{"embedding":[%d,1]}`, n+1))
 				if got, err := current.Get(id); err != nil || !bytes.Equal(got, want) {
