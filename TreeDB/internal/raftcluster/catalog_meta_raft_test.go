@@ -37,7 +37,10 @@ func TestCatalogMetaRaftProviderCommitsOnlyAfterLeaderApplyAndSnapshots(t *testi
 		}
 		select {
 		case <-ctx.Done():
-			t.Fatal(ctx.Err())
+			t.Fatal(ctx.Err(), "phase=initial_leader",
+				"cached_leader=", status.Leader, "cached_unavailable=", status.Unavailable,
+				"raft_state=", uint32(p.raft.State()), "current_term=", p.raft.CurrentTerm(),
+				"commit_index=", p.raft.CommitIndex(), "applied_index=", p.raft.AppliedIndex())
 		case <-time.After(time.Millisecond):
 		}
 	}
