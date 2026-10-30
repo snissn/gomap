@@ -1533,6 +1533,26 @@ type columnPhysicalAssetBuildContext struct {
 	singleOutput bool
 	// Borrowed only for this synchronous preparation; never retained by assets.
 	typedColumnOptionsValidator typedColumnPartOptionsValidator
+	// Trusted, private synchronous observer. It must not mutate or release
+	// borrowed output, wait on another worker, reenter, panic, or change producer
+	// behavior. Any retained resources require independently owned custody.
+	// Nil in existing production calls. A callback describes only one
+	// prepareRows fragment. Production use requires a separate progress proof,
+	// including for any system calls the observer makes.
+	nativePreparedObserver nativePreparedFragmentObserver
+}
+
+type nativePreparedFragmentObserver interface {
+	observeNativePreparedFragment(ColumnPublishPreparedAssets)
+}
+
+// prepareNativeTypedAssets supplies an optional already-owned observer to one
+// native prepareAssets call. It confers no cut, build or graph authority.
+// Recursive mixed operations may produce multiple fragments; zero rows may
+// produce none, and the outer call can still fail after a fragment callback.
+func prepareNativeTypedAssets(context columnPhysicalAssetBuildContext, input columnWritePublishInput, hook ColumnPublishAssetPrepareInput, observer nativePreparedFragmentObserver) (ColumnPublishPreparedAssets, error) {
+	context.nativePreparedObserver = observer
+	return context.prepareAssets(input, hook)
 }
 
 func (c *Collection) prepareColumnPhysicalAssetRowsAtIdentityFromSources(prepared ColumnPublishPreparedAssets, input columnWritePublishInput, hookInput ColumnPublishAssetPrepareInput, rows []columnDeclaredRow, rowSource columnDeclaredRowSource, typedSource typedColumnAdapterRowSource, generation, rowPartID, typedPartID uint64) (ColumnPublishPreparedAssets, error) {
@@ -2186,6 +2206,9 @@ func (context columnPhysicalAssetBuildContext) prepareRows(prepared ColumnPublis
 	}
 	if err := flushPendingAssets(); err != nil {
 		return ColumnPublishPreparedAssets{}, err
+	}
+	if context.nativePreparedObserver != nil {
+		context.nativePreparedObserver.observeNativePreparedFragment(prepared)
 	}
 	if err := runColumnPhysicalAssetPreparationAfterPrepareHook(prepared); err != nil {
 		return ColumnPublishPreparedAssets{}, err

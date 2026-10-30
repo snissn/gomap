@@ -1065,7 +1065,7 @@ func (w *nativeTypedMaterialization) materializeRows(context columnPhysicalAsset
 	}
 	plan, err := BuildColumnPublishPlan(ColumnPublishPlanInput{Collection: w.meta.Name, ColumnStore: &cfg, ColumnStoreNormalized: true, ActiveVectorIndexesKnown: true, Operation: input.operation, CurrentManifest: cfg.ActiveManifest, CurrentManifestRecords: records, sourceDirectoryV2: source, AppliedCommandLSN: physical.appliedLSN, BaseManifestRootID: w.roots[1].root, Hooks: ColumnPublishPlanHooks{
 		PrepareAssets: func(hook ColumnPublishAssetPrepareInput) (ColumnPublishPreparedAssets, error) {
-			prepared, e := context.prepareAssets(input, hook)
+			prepared, e := prepareNativeTypedAssets(context, input, hook, nil)
 			if e != nil {
 				return prepared, fmt.Errorf("collections: native typed assets collection=%q lsn=%d member=%d: %w", w.meta.Name, physical.appliedLSN, physical.memberOrdinal, e)
 			}
