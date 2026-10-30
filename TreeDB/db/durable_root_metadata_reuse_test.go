@@ -223,8 +223,9 @@ func TestDurableRootMetadataReuseMultipageManifest4627(t *testing.T) {
 
 func TestDurableRootMetadataReuseProcessCut4627(t *testing.T) {
 	if mode := os.Getenv("TREEDB_METADATA_REUSE_CUT4627"); mode != "" {
+		started := time.Now()
 		reportPhase := func(phase string) {
-			fmt.Fprintf(os.Stderr, "metadata-reuse process-cut mode=%s phase=%s\n", mode, phase)
+			reportMetadataReuseCutPhase4627(os.Stderr, mode, phase, time.Since(started), 0)
 		}
 		reportPhase("setup-start")
 		database, err := Open(Options{Dir: os.Getenv("TREEDB_METADATA_REUSE_DIR4627"), DisableBackgroundPrune: true})
@@ -235,7 +236,10 @@ func TestDurableRootMetadataReuseProcessCut4627(t *testing.T) {
 			t.Fatal(err)
 		}
 		for i := 0; i < 64; i++ {
+			publicationStarted := time.Now()
+			reportMetadataReuseCutPhase4627(os.Stderr, mode, fmt.Sprintf("publication-%02d-start", i+1), time.Since(started), 0)
 			publishNeutralMetadata4627(t, database)
+			reportMetadataReuseCutPhase4627(os.Stderr, mode, fmt.Sprintf("publication-%02d-complete", i+1), time.Since(started), time.Since(publicationStarted))
 		}
 		if database.State().CommitSeq != 66 {
 			t.Fatalf("fixture commit=%d", database.State().CommitSeq)
@@ -273,9 +277,12 @@ func TestDurableRootMetadataReuseProcessCut4627(t *testing.T) {
 			defer cancel()
 			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestDurableRootMetadataReuseProcessCut4627$")
 			cmd.Env = append(os.Environ(), "TREEDB_METADATA_REUSE_CUT4627="+mode, "TREEDB_METADATA_REUSE_DIR4627="+dir)
+			started := time.Now()
+			var cancellation metadataReuseCutCancellation4627
+			cmd.Cancel = cancellation.observe(cmd.Cancel, func() time.Duration { return time.Since(started) })
 			output, err := cmd.CombinedOutput()
 			if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 73 {
-				t.Fatalf("child did not hit cut: process=%v context=%v\n%s", err, ctx.Err(), output)
+				t.Fatal(formatMetadataReuseCutFailure4627(err, ctx.Err(), time.Since(started), fmt.Sprint(cmd.ProcessState), cancellation.snapshot(), output))
 			}
 			reopened, err := Open(Options{Dir: dir, DisableBackgroundPrune: true})
 			if err != nil {
