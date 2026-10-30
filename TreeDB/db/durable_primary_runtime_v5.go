@@ -639,7 +639,9 @@ func (runtime *rootPublicationRuntimeV1) preparePrimarySealV5(ctx context.Contex
 		a.Drop(proof, nil)
 		return e
 	}
-	seal := &rootPublicationSealV1{metadataCharge: sealMetadata, latestSequence: member.sequence, groupLength: group.Len(), idx: runtime.idx, next: next, resources: resources, manifest: manifest, prefix: append([]*freelist.PreparedCOWCandidateV1(nil), runtime.debt...), token: token, record: record, meta: meta, target: target, base: rootPublicationSealBaseV1{slotCommit: base.slotCommit, slotResources: base.slotResources, slotMeta: base.slotMeta, slotRecord: base.slotRecord}, primary: &primaryPublicationSealV5{prepared: member.primary, projection: projection, manifestBanks: mrefs, token: pt, proof: proof, proofResources: proofResources}}
+	allocation := &primarySealAllocationV6{seal: rootPublicationSealV1{metadataCharge: sealMetadata, latestSequence: member.sequence, groupLength: group.Len(), idx: runtime.idx, next: next, resources: resources, manifest: manifest, prefix: append([]*freelist.PreparedCOWCandidateV1(nil), runtime.debt...), token: token, record: record, meta: meta, target: target, base: rootPublicationSealBaseV1{slotCommit: base.slotCommit, slotResources: base.slotResources, slotMeta: base.slotMeta, slotRecord: base.slotRecord}}, primary: primaryPublicationSealV5{prepared: member.primary, projection: projection, manifestBanks: mrefs, token: pt, proof: proof, proofResources: proofResources}}
+	seal := &allocation.seal
+	seal.primary = &allocation.primary
 	seal.metadata = a.MetadataOwner()
 	seal.disposalFailure.payload = seal
 	runtime.seals = append(runtime.seals, seal)
@@ -819,15 +821,7 @@ func (runtime *rootPublicationRuntimeV1) commitPrimarySealV5(seal *rootPublicati
 	if e = a.MetadataOwner().AddPending(retiredCharge); e != nil {
 		return 0, e
 	}
-	// The serial durable path retires one seal. Its private caller frame can
-	// own that one pointer across unlock and cleanup; it must never borrow the
-	// runtime's reusable backing. Keep the same admission/refund even when no
-	// heap backing is needed, and preserve exact-capacity storage for batches.
-	var singletonRetired [1]*rootPublicationSealV1
-	retired := singletonRetired[:0]
-	if len(runtime.seals) != 1 {
-		retired = make([]*rootPublicationSealV1, 0, len(runtime.seals))
-	}
+	retired := make([]*rootPublicationSealV1, 0, len(runtime.seals))
 	defer func() {
 		clear(retired)
 		retired = nil
