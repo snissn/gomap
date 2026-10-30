@@ -4,6 +4,32 @@ This document maps specification invariants to existing tests and harnesses.
 
 ## Standalone shared COW delivery
 
+- `TestCOWNativewireInsertResultIDParity` exercises Client -> Server -> public
+  shared COW insertion for JSON/BSON with returned and omitted IDs under all
+  three production profiles. It checks native BSON binary bytes, caller-buffer
+  reuse, malformed/mixed input rejection, duplicates, checkpoint, checked close
+  and fresh reopen. `TestCollectionNativewireInsertBatchNoResultIDsCopiesInputID`
+  retains collection-level COW BSON ID/document ownership and legacy controls.
+- `TestCOWNativewireBSONInsertCombiner` and
+  `TestCOWNativewireBSONCombinerPrepublicationFallback` preassemble deterministic
+  groups, check exact member outcomes, response omission, journal attempts and
+  retained rows/indexes. `TestNativeInsertFinalPreparationOutcomeBoundary`
+  independently checks private unique rejection: no journal append, logical
+  sequence advance, checkpoint-authority change or rows/index effects; ordinary
+  calls receive the not-accepted marker and apply owners do not.
+- `TestInsertBatchCombinerFallbackPreservesExistingConflict` retains independent
+  legacy member outcomes for existing ID/unique conflicts in buffered runs,
+  overlay roots and persisted roots. `TestBufferedInsertConflictOutcomeBoundary`
+  independently checks unchanged journal frames/assignment, roots and buffered
+  publication state with zero durability events; an already appended intent
+  never receives permission to replay.
+- `TestCOWNativewireBSONCombinerUnprovenErrorNoRetry` injects an unmarked real
+  command-WAL preappend failure: no member replay or insertion occurs and the
+  decoded wire error remains non-retryable internal error.
+  `TestCOWNativewireBSONCombinerAmbiguousNoRetry` cuts real durable command-WAL
+  completion after file sync in a child, retains one group assignment, ambiguous
+  member errors, the recovery-required write fence and prior frame contents,
+  then recovers both indexed rows exactly once without a rescuing child close.
 - `TestStandaloneSharedCOWCollectionLifecycle` and
   `TestStandaloneSharedCOWCrashReopen` exercise ordinary startup, indexed BSON
   mutation/read, authentication and explicit journal ACK across all three
@@ -215,6 +241,35 @@ checks do not establish a full public or repository suite pass. Fresh integratio
 checks bind the reconciled head. Public 500k raw-KV comparisons and managed
 historical-MVCC comparisons exercise different routes; both require actual-mode
 activation evidence and separate natural versus instrumented observations.
+
+## Native COW JSON load and checkpoint regression
+
+`TestSpanNativeApplyBaseDeltaLeftEdgePartialStitch` checks partial rewrites of
+scratch-backed base-delta internal separators, including a non-nil empty left
+edge. `TestCOWNativewireJSONLoadCheckpointReopen` sends concurrent JSON inserts
+through public native-wire clients and a `cow_btree` native semantic owner,
+checks acknowledged values and complete enumeration, checkpoints, checks
+close errors and reopens all three production profiles. Its deterministic
+4,096-row shape also passes with the unfixed production code: it is lifecycle
+coverage, not a reduced public RED. No deterministic smaller public RED has
+been established. The retained 100,000-row public reproduction and the
+focused zipper RED/GREEN are separate evidence; see issue #5333 for their
+source bindings, recipes, and limitations. The opt-in
+`scripts/cow_json_load_regression.py` builds pinned sources and the retained
+client protocol overlay, checks public load counts and checked server close,
+then verifies every expected key on a fresh reopen; see its accompanying
+documentation for nondeterminism and the historical client-close limitation.
+`TestCOWNativewireJSONSyncedACKProcessExitRecovery` exits the owner process without
+close after synced ACKs and verifies the recovered documents. It covers process
+exit recovery; it does not independently witness the checkpoint sync completing
+before each reply.
+`TestCOWNativewireJSONDurableVisibleACKWALReplay` separately observes replay of
+unapplied command WAL frames after ordinary durable-profile visible ACKs and an
+unclean exit. The wire and owner checkpoint error-propagation tests exercise
+real maintenance capacity refusal;
+the owner test also checks final-close failure and durable value recovery.
+These controls do not extend ordinary ACK guarantees for the
+`command_wal_relaxed` or `no_wal_fast` profiles.
 
 ## Immutable COW cache qualification
 

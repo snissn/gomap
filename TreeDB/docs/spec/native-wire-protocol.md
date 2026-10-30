@@ -467,6 +467,12 @@ when the command can otherwise report success through `response_meta`. Servers
 MAY still return result IDs to older clients or for commands that require them;
 clients that set this flag MUST NOT depend on IDs being present.
 
+Ordinary BSON `insert_batch` on the shared COW collection owner supports either
+value of `omit_result_ids`. Both routes retain native BSON bytes and share the
+same validation, mutation, acknowledgment and recovery authority. The flag only
+removes response IDs; it does not select a different storage owner or document
+codec. The v1 command and response encodings are unchanged.
+
 `omit_response_meta` asks successful responses to omit advisory response
 metadata when the client only needs success/error signaling. Servers MUST still
 satisfy the requested ack/consistency policy before returning success; this flag
@@ -686,6 +692,13 @@ request/response policy only and is not part of deterministic command identity.
 105 expected_catalog_version optional
 119 catalog_guard required for distributed mode
 ```
+
+The local BSON no-result combiner may retry individual group members only when
+the collection explicitly guarantees that private preparation rejected the
+entire group before canonical assignment or logical publication. A generic
+error without that guarantee MUST NOT trigger member replay. Ambiguous or
+recovery-required outcomes retain their existing non-retryable wire errors and
+carry no successful acknowledgment metadata.
 
 `replace_batch` sections:
 

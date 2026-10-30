@@ -1,6 +1,7 @@
 package nativewire
 
 import (
+	"bytes"
 	"errors"
 	"strconv"
 	"sync"
@@ -97,6 +98,60 @@ func TestInsertBatchCombinerFallbackPreservesUniqueConflictOutcome(t *testing.T)
 	}
 }
 
+func TestInsertBatchCombinerFallbackPreservesExistingConflict(t *testing.T) {
+	for _, storage := range []string{"buffered", "overlay", "persisted"} {
+		for _, unique := range []bool{false, true} {
+			t.Run(storage+"/unique_"+strconv.FormatBool(unique), func(t *testing.T) {
+				options := collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON, DisableBufferedIndexedAsyncFlush: true}
+				if storage == "overlay" {
+					options.BufferedIndexedWrites = true
+					options.BufferedIndexedOverlayRoots = true
+				}
+				server, col, cleanup := newInsertBatchCombinerTestServerWithOptions(t, options)
+				defer cleanup()
+				seed := insertBatchCombinerBSONDoc(t, "seed", "seed@example.com")
+				if _, err := col.InsertBatchValidatedBSON([][]byte{[]byte("seed")}, [][]byte{seed}); err != nil {
+					t.Fatal(err)
+				}
+				if storage != "buffered" {
+					if err := col.Flush(); err != nil {
+						t.Fatal(err)
+					}
+				}
+				errConflict := collections.ErrDocumentExists
+				errs := applyInsertBatchCombinerRequestsDirect(t, server, col, 2, func(i int) (string, []byte) {
+					if i == 1 {
+						return "valid", insertBatchCombinerBSONDoc(t, "valid", "valid@example.com")
+					}
+					if unique {
+						errConflict = collections.ErrUniqueIndexConflict
+						return "conflict", insertBatchCombinerBSONDoc(t, "conflict", "seed@example.com")
+					}
+					return "seed", insertBatchCombinerBSONDoc(t, "seed", "replacement@example.com")
+				})
+				if !errors.Is(errs[0], errConflict) || errs[1] != nil {
+					t.Fatalf("existing conflict blocked independent member: outcomes=%v want first=%v second=nil", errs, errConflict)
+				}
+				if got := nativewireTestStatUint64(t, server, "insert_batch_combiner.fallback_requests_total"); got != 2 {
+					t.Fatalf("fallback calls=%d want=2", got)
+				}
+				if got, err := col.Get([]byte("seed")); err != nil || !bytes.Equal(got, seed) {
+					t.Fatalf("existing row changed: got=%x err=%v", got, err)
+				}
+				if got, err := col.Get([]byte("valid")); err != nil || !bytes.Equal(got, insertBatchCombinerBSONDoc(t, "valid", "valid@example.com")) {
+					t.Fatalf("valid row lost: got=%x err=%v", got, err)
+				}
+				for _, pair := range [][2]string{{"seed", "seed@example.com"}, {"valid", "valid@example.com"}} {
+					got, err := col.FindByIndex("email_1", pair[1])
+					if err != nil || len(got) != 1 || string(got[0]) != pair[0] {
+						t.Fatalf("index %s=%q err=%v", pair[1], got, err)
+					}
+				}
+			})
+		}
+	}
+}
+
 func TestInsertBatchCombinerSkipsIncompatibleRequests(t *testing.T) {
 	server, col, cleanup := newInsertBatchCombinerTestServer(t)
 	defer cleanup()
@@ -188,6 +243,10 @@ func TestInsertBatchCombinerNonPositiveOptionsUseDefaults(t *testing.T) {
 }
 
 func newInsertBatchCombinerTestServer(t *testing.T) (*Server, *collections.Collection, func()) {
+	return newInsertBatchCombinerTestServerWithOptions(t, collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON})
+}
+
+func newInsertBatchCombinerTestServerWithOptions(t *testing.T, options collections.CollectionOptions) (*Server, *collections.Collection, func()) {
 	t.Helper()
 	db, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -195,10 +254,8 @@ func newInsertBatchCombinerTestServer(t *testing.T) (*Server, *collections.Colle
 	}
 	mgr := collections.NewCollectionManager(db)
 	if _, err := mgr.CreateCollection(&collections.CollectionMeta{
-		Name: "users",
-		Options: collections.CollectionOptions{
-			DocumentFormat: collections.DocumentFormatBSON,
-		},
+		Name:    "users",
+		Options: options,
 		Indexes: []collections.IndexDefinition{{
 			Name:      "email_1",
 			Field:     "email",

@@ -9,6 +9,20 @@ This page is the current entry point for external `go-ycsb` comparisons across:
 It explains which checked-in reports are current, which are historical, and
 which cells should be rerun next.
 
+## 2026-10 COW JSON correctness follow-up
+
+A later native-wire JSON load on `d879a302fd8dbb7617bd1d298a31488d1a6f30cd`
+failed across durable, relaxed and no-WAL COW profiles; those incomplete runs
+are not valid throughput evidence. The source-bound reproduction, individual
+error counts and retained outputs are tracked in [#5333](https://github.com/snissn/gomap/issues/5333).
+The original client can report a successful process exit despite operation or
+close errors, so acceptance must check operation counts and an independently
+observed close result. The shared left-edge separator repair is covered by a
+focused zipper regression and public COW lifecycle tests. The broader matched
+JSON/BSON and native-wire/Mongo comparison remains owned by
+[#5335](https://github.com/snissn/gomap/issues/5335); the historical reports
+below are not evidence of its outcome or of an isolated COW speedup.
+
 ## Current Canonical Report
 
 Use `docs/benchmarks/ycsb_latest_main_2026-06-03.md` as the current
