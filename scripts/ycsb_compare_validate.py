@@ -260,6 +260,8 @@ def validate(out):
     client_build(client)
     copied_client=read(out/"client-build.json")
     client_build(copied_client)
+    import ycsb_native_client_build
+    ycsb_native_client_build.comparison(out,manifest)
     require(same(client,copied_client), "client build manifest mismatch")
     require(client["source_patch_sha256"] == digest(out / "client.patch"), "client patch mismatch")
     require((out / "client-buildinfo.txt").read_text().strip(), "missing actual client build info")

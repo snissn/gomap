@@ -316,3 +316,48 @@ defines its own image/process/public-command/observed-exit contract. It does not
 borrow TreeDB owner, COW, profile or Close-return semantics. The maintained shell
 continues refusing `mongodb` execution until reference integration and authorized
 support controls are reviewed; parse-only consumption is independent.
+
+## Opt-in controlled native client build provenance
+
+`ycsb_native_client_build.py REQUEST.json /absolute/fresh/PACKET` is a future
+build constructor, not authority to build or run a comparison. It accepts exactly
+`schema_version: 1`, absolute `source_dir`, `go_binary`, `cc_binary`, nonempty
+`build_id`, and `source_patch_sha256`. Paths are resolved and retained. The source
+must be the exact producer merge with only the reviewed nativewire path changed;
+the resulting wire file must match SHA256
+`b09334ad0f53ea49ca553953b123a2617625c04a766dbed624e4058c2399f787`.
+Ignored and untracked inputs and symlink source files are rejected. It accepts
+no caller build arguments or environment extensions.
+
+The constructor supplies a fixed Go build command (`build -p 1 -tags libsqlite3`)
+and a complete allowlisted exec environment, including `GOENV=off`, empty
+`GOFLAGS`, `GOWORK=off`, `GOTOOLCHAIN=local`, explicit CC and fresh owned
+HOME/TMPDIR/GOCACHE/GOPATH. Parent compiler flags and compiler overlay settings
+are not inherited. It retains the exact invocation, Go version/environment,
+module/package JSON, compiler hashes/version, stdout/stderr and actual executable
+hash/buildinfo. It hashes tracked source, package-listed Go/C/assembly/embed
+inputs, module GoMod files and GOROOT before/after the build and refuses changed
+inputs. Failed constructors retain `FAILED.json` and cannot validate.
+
+The generated schema-v1 client manifest adds `controlled_build` with
+`schema_version: 1` and `receipt_sha256`. Existing Mongo-only manifests remain
+valid under their existing contract. For a future native comparison, opt in with
+`REQUIRE_CONTROLLED_NATIVE_CLIENT_BUILD=true`, absolute
+`NATIVE_CLIENT_BUILD_PACKET`, its generated `CLIENT_BUILD_MANIFEST`, and
+`BUILD_GOYCSB=false`. The shell validates the packet before builds and copies its
+fixed evidence inventory into `native-client-build/`; offline validation checks
+that copy and the manifest's explicit boolean requirement. Any client manifest
+carrying `controlled_build` also requires that packet even without the flag.
+This opt-in does not lift the Mongo execution guard, prove protocol/Close controls,
+or replace original checked-close, server lifecycle and correctness gates.
+
+This is a receipt from the controlled constructor with trusted Go/C compilers,
+not independent adversarial attestation. The environment is the exact mapping
+supplied to exec, not an independent procfs observation. Before/after hashes do
+not prove continuous immutability. Package inventories do not enumerate every
+transitive system C header/library or external linker input; the receipt retains
+that limitation explicitly. Thus it excludes compiler overlays from this fixed
+invocation and inherited environment within the stated trusted-tool scope, not
+arbitrary concealed behavior inside a replaced compiler. Full hermetic C/system
+input proof would require a separately specified build environment. No existing
+ELF or Mongo reference evidence can be relabeled as constructed by this wrapper.

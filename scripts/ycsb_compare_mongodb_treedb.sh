@@ -13,6 +13,8 @@ GOYCSB_DIR="${GOYCSB_DIR:-/home/mikers/dev/pingcap/go-ycsb}"
 GOYCSB_BIN="${GOYCSB_BIN:-$GOYCSB_DIR/bin/go-ycsb}"
 CLIENT_BUILD_MANIFEST="${CLIENT_BUILD_MANIFEST:-}"
 SERVER_BUILD_MANIFEST="${SERVER_BUILD_MANIFEST:-}"
+NATIVE_CLIENT_BUILD_PACKET="${NATIVE_CLIENT_BUILD_PACKET:-}"
+REQUIRE_CONTROLLED_NATIVE_CLIENT_BUILD="${REQUIRE_CONTROLLED_NATIVE_CLIENT_BUILD:-false}"
 RECORDCOUNT="${RECORDCOUNT:-100000}"
 OPERATIONCOUNT="${OPERATIONCOUNT:-10000}"
 THREADCOUNT="${THREADCOUNT:-16}"
@@ -89,7 +91,7 @@ if [[ "${1-}" == --prepare-mongodb-reference ]]; then
   [[ $# == 3 && "${3-}" == /* ]] || fail "--prepare-mongodb-reference requires REQUEST.json and fresh absolute OUT"
   exec env -u GOMAXPROCS "$PYTHON" "$ROOT/scripts/ycsb_mongodb_reference_prepare.py" "$2" "$3"
 fi
-for flag in BUILD BUILD_GOYCSB PARSE_ONLY ALLOW_YCSB_ERRORS; do
+for flag in BUILD BUILD_GOYCSB PARSE_ONLY ALLOW_YCSB_ERRORS REQUIRE_CONTROLLED_NATIVE_CLIENT_BUILD; do
   [[ "${!flag}" == true || "${!flag}" == false ]] || fail "$flag must be true or false"
 done
 for count in RECORDCOUNT OPERATIONCOUNT THREADCOUNT RUN_REPEATS READINESS_TIMEOUT PHASE_TIMEOUT_SECONDS HELPER_TIMEOUT_SECONDS CHILD_CLEANUP_TIMEOUT_SECONDS; do
@@ -128,6 +130,22 @@ fi
 for binary in "$GOYCSB_BIN" "$TREEDB_NATIVE_SERVER_BIN" "$TREEDB_MONGO_GATEWAY_BIN"; do
   [[ "$binary" == /* ]] || fail "binary paths must be absolute"
 done
+if [[ "$REQUIRE_CONTROLLED_NATIVE_CLIENT_BUILD" == true ]]; then
+  [[ -n "${chosen[treedb_native]:-}" ]] || fail "controlled native build requires treedb_native target"
+  [[ "$BUILD_GOYCSB" == false ]] || fail "controlled native build requires BUILD_GOYCSB=false"
+  [[ "$NATIVE_CLIENT_BUILD_PACKET" == /* && -d "$NATIVE_CLIENT_BUILD_PACKET" ]] || fail "absolute NATIVE_CLIENT_BUILD_PACKET is required"
+fi
+# Validate opted-in provenance before any build; this does not activate services.
+"$PYTHON" - "$ROOT/scripts" "$CLIENT_BUILD_MANIFEST" "$NATIVE_CLIENT_BUILD_PACKET" "$REQUIRE_CONTROLLED_NATIVE_CLIENT_BUILD" <<'PYBUILD'
+import pathlib,sys
+sys.path.insert(0,sys.argv[1])
+import ycsb_native_client_build as provenance
+manifest=provenance.read(pathlib.Path(sys.argv[2]))
+if sys.argv[4]=='true':provenance.require('controlled_build' in manifest,'controlled native client build required')
+if 'controlled_build' in manifest:
+    provenance.require(pathlib.Path(sys.argv[3]).is_absolute(),'absolute NATIVE_CLIENT_BUILD_PACKET is required')
+    provenance.validate(pathlib.Path(sys.argv[3]),manifest)
+PYBUILD
 if [[ "$BUILD" == true ]]; then
   if [[ -n "${chosen[treedb_native]:-}" ]]; then go build -o "$TREEDB_NATIVE_SERVER_BIN" ./cmd/treedb-native-server; fi
   if [[ -n "${chosen[treedb_mongo]:-}" ]]; then go build -o "$TREEDB_MONGO_GATEWAY_BIN" ./TreeDB/mongo_gateway/server.go; fi
@@ -138,14 +156,17 @@ if [[ "$BUILD_GOYCSB" == true ]]; then (cd "$GOYCSB_DIR" && make build); fi
 [[ -x "$GOYCSB_BIN" ]] || fail "missing supplied client binary"
 for target in "${selected[@]}"; do mkdir "$OUT_DIR/$target"; done
 
-"$PYTHON" - "$OUT_DIR" "$CLIENT_BUILD_MANIFEST" "$GOYCSB_DIR" "$GOYCSB_BIN" "$TREEDB_PROFILE" "$RECORDCOUNT" "$OPERATIONCOUNT" "$THREADCOUNT" "$RUN_REPEATS" "$TREEDB_NATIVE_DOCUMENT_FORMAT" "$TREEDB_MONGO_DOCUMENT_FORMAT" "$SERVER_BUILD_MANIFEST" "$TREEDB_NATIVE_SERVER_BIN" "$TREEDB_MONGO_GATEWAY_BIN" "$FIXTURE_BIN" "$ROOT/scripts/ycsb_correctness_fixture.go" "$PHASE_TIMEOUT_SECONDS" "$HELPER_TIMEOUT_SECONDS" "$CHILD_CLEANUP_TIMEOUT_SECONDS" "${selected[@]}" <<'PY'
+"$PYTHON" - "$OUT_DIR" "$CLIENT_BUILD_MANIFEST" "$GOYCSB_DIR" "$GOYCSB_BIN" "$TREEDB_PROFILE" "$RECORDCOUNT" "$OPERATIONCOUNT" "$THREADCOUNT" "$RUN_REPEATS" "$TREEDB_NATIVE_DOCUMENT_FORMAT" "$TREEDB_MONGO_DOCUMENT_FORMAT" "$SERVER_BUILD_MANIFEST" "$TREEDB_NATIVE_SERVER_BIN" "$TREEDB_MONGO_GATEWAY_BIN" "$FIXTURE_BIN" "$ROOT/scripts/ycsb_correctness_fixture.go" "$PHASE_TIMEOUT_SECONDS" "$HELPER_TIMEOUT_SECONDS" "$CHILD_CLEANUP_TIMEOUT_SECONDS" "$NATIVE_CLIENT_BUILD_PACKET" "$REQUIRE_CONTROLLED_NATIVE_CLIENT_BUILD" "${selected[@]}" <<'PY'
 import hashlib, json, pathlib, re, subprocess, sys, uuid
-out, build_path, repo, binary, profile, records, ops, threads, repeats, native_format, mongo_format, server_build_path, native_binary, mongo_binary, fixture_binary, fixture_source, phase_timeout, helper_timeout, cleanup_timeout, *targets = sys.argv[1:]
+out, build_path, repo, binary, profile, records, ops, threads, repeats, native_format, mongo_format, server_build_path, native_binary, mongo_binary, fixture_binary, fixture_source, phase_timeout, helper_timeout, cleanup_timeout, controlled_packet, controlled_required, *targets = sys.argv[1:]
 out = pathlib.Path(out)
 sys.path.insert(0,str(pathlib.Path(fixture_source).parent))
 import ycsb_compare_validate as consumer
 build = consumer.read(build_path)
 consumer.client_build(build)
+if 'controlled_build' in build:
+    import ycsb_native_client_build as provenance
+    provenance.retain(controlled_packet,out,build)
 def git(*args):
     return subprocess.check_output(['git', '-C', repo, *args])
 def sha(path):
@@ -189,7 +210,7 @@ for target, record in server_builds.items():
 (out / 'client-buildinfo.txt').write_bytes(subprocess.check_output(['go', 'version', '-m', binary]))
 (out/'fixture-source.go').write_bytes(pathlib.Path(fixture_source).read_bytes())
 fixture=dict(schema_version=1,binary=fixture_binary,exe_sha256=sha(fixture_binary),source_sha256=sha(fixture_source))
-manifest = dict(schema_version=1, lifecycle_contract=2, deadlines=dict(phase_seconds=int(phase_timeout),helper_seconds=int(helper_timeout),cleanup_seconds=int(cleanup_timeout),phase_outer_seconds=int(phase_timeout)+3*int(cleanup_timeout)+10,helper_outer_seconds=int(helper_timeout)+3*int(cleanup_timeout)+10), fixture=fixture, campaign_id=uuid.uuid4().hex, targets=targets, profile=profile, formats={'treedb_native':native_format, 'treedb_mongo':mongo_format, 'mongodb':'bson'}, recordcount=int(records), operationcount=int(ops), threadcount=int(threads), run_repeats=int(repeats), client=build, server_builds=server_builds)
+manifest = dict(schema_version=1, controlled_native_client_build_required=controlled_required=='true', lifecycle_contract=2, deadlines=dict(phase_seconds=int(phase_timeout),helper_seconds=int(helper_timeout),cleanup_seconds=int(cleanup_timeout),phase_outer_seconds=int(phase_timeout)+3*int(cleanup_timeout)+10,helper_outer_seconds=int(helper_timeout)+3*int(cleanup_timeout)+10), fixture=fixture, campaign_id=uuid.uuid4().hex, targets=targets, profile=profile, formats={'treedb_native':native_format, 'treedb_mongo':mongo_format, 'mongodb':'bson'}, recordcount=int(records), operationcount=int(ops), threadcount=int(threads), run_repeats=int(repeats), client=build, server_builds=server_builds)
 (out / 'manifest.json').write_text(json.dumps(manifest, indent=2,allow_nan=False)+'\n')
 PY
 
