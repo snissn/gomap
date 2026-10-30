@@ -90,7 +90,9 @@ clock order for concurrent producers. The stage values are:
 
 Outcomes are 1=entry, 2=returned nil, 3=returned error, 4=reserved marker.
 A return points to its entry sequence. No deferred return event is fabricated
-on panic, Goexit or a nonreturning operation. The observation has no error
+on panic, Goexit or a nonreturning operation. Stable Open return classification
+checks both the outer materialization error and `Result.Rejected` / missing DB;
+ordinary original Open rejection lives in `Result.Err`, even with outer error nil. The observation has no error
 return and changes no original error identity or cleanup precedence.
 
 Stage 12 is the original producer API invocation, not necessarily a single OS
@@ -120,11 +122,14 @@ Authored but unexecuted controls cover fixed-capacity rejection/overflow, label
 clipping, no-overwrite publication, installation overlap/reuse and stale restore,
 concurrent read/publication, imported physical owner and covered-frontier paths,
 before/sync/after sentinel identity and metrics, physical panic/Goexit without a
-fabricated return, and materialize/index/install error ordering.
+fabricated return, and materialize/index/install error ordering. A real public adaptive-COW
+refusal checks the separate rejected-result/outer-nil contract and unchanged
+original error identity.
 
 Future focused commands from the root module:
 
 ```sh
+GOWORK=off go test ./TreeDB -run '^TestACKRecoveryLedgerRejectsOriginalPublicOpenFailure$' -count=1
 GOWORK=off go test ./TreeDB/internal/recoverytrace -count=1
 GOWORK=off go test -race ./TreeDB/internal/recoverytrace -count=1
 GOWORK=off go test ./TreeDB/internal/rootpublication -run '^(TestStableResourceFileSyncObserverExactPhysicalBoundary|TestRecoveryLedgerPhysicalAbnormalExitHasNoReturn)$' -count=1

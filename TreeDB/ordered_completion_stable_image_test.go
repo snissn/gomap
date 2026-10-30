@@ -231,7 +231,7 @@ func proposalOrderedACKImageChild(t *testing.T, scenario string) {
 	}
 	openOperation := diagnostic.begin(recoverytrace.StableOpen)
 	result, reopened, closeReopened, err := powerlossreopen.Stable(stable, opts, false)
-	diagnostic.end(recoverytrace.StableOpen, openOperation, err != nil)
+	diagnostic.stableOpenReturned(openOperation, result, reopened, err)
 	if err != nil || result.Rejected || reopened == nil {
 		t.Fatalf("ACK stable image rejected: %+v %v", result, err)
 	}

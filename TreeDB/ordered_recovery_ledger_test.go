@@ -1,10 +1,16 @@
 package treedb_test
 
 import (
+	"errors"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
+	treedb "github.com/snissn/gomap/TreeDB"
+	"github.com/snissn/gomap/TreeDB/caching"
+	"github.com/snissn/gomap/TreeDB/internal/powerlossoracle"
+	"github.com/snissn/gomap/TreeDB/internal/powerlossreopen"
 	"github.com/snissn/gomap/TreeDB/internal/recoverytrace"
 )
 
@@ -99,4 +105,43 @@ func (diagnostic *ackRecoveryDiagnostic) stop() {
 	}
 	close(diagnostic.stopSignal)
 	<-diagnostic.stopped
+}
+
+// Stable's outer error reports materialization/setup failure. Ordinary public
+// Open rejection is preserved separately in Result.Err with outer error nil.
+func (diagnostic *ackRecoveryDiagnostic) stableOpenReturned(operation uint64, result powerlossreopen.Result, reopened *treedb.DB, err error) {
+	diagnostic.end(recoverytrace.StableOpen, operation, err != nil || result.Rejected || reopened == nil)
+}
+
+func TestACKRecoveryLedgerRejectsOriginalPublicOpenFailure(t *testing.T) {
+	model, err := powerlossoracle.Capture(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir())
+	// The original public validator refuses adaptive COW before mutable open.
+	opts.MemtableMode = "adaptive:cow_ordered"
+	diagnostic := &ackRecoveryDiagnostic{ledger: recoverytrace.New(4)}
+	operation := diagnostic.begin(recoverytrace.StableOpen)
+	destination, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, reopened, closeOriginal, outerErr := powerlossreopen.StableAt(destination, model, opts, false)
+	if closeOriginal != nil {
+		defer func() {
+			if err := closeOriginal(); err != nil {
+				t.Errorf("original rejected-open cleanup: %v", err)
+			}
+		}()
+	}
+	if outerErr != nil || !result.Rejected || reopened != nil || !errors.Is(result.Err, caching.ErrCOWUnsupported) || closeOriginal == nil {
+		t.Fatalf("original rejection contract changed: result=%+v db=%v outer=%v cleanup=%t", result, reopened, outerErr, closeOriginal != nil)
+	}
+	originalErr := result.Err
+	diagnostic.stableOpenReturned(operation, result, reopened, outerErr)
+	outcome, ready := diagnostic.ledger.Read(1)
+	if !ready || outcome.Parent != operation || outcome.Outcome != recoverytrace.ReturnedError || result.Err != originalErr {
+		t.Fatal("diagnostic concealed or replaced original Open rejection")
+	}
 }
