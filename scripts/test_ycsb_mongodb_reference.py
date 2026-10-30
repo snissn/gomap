@@ -44,6 +44,54 @@ class ReferenceBSONIntegers(unittest.TestCase):
                     with self.assertRaises(ValueError):reference.ext_integer({kind:value},"boundary")
 
 
+class RetainedMongo827PublicIdentity(unittest.TestCase):
+    """Selected actual replies from a failed attempt, not a valid lifecycle."""
+    def setUp(self):
+        fixtures=ROOT/"testdata/ycsb_mongodb_reference"
+        for name,digest in c.read(fixtures/"mongodb827-provenance.json")["fixture_sha256"].items():
+            self.assertEqual(c.digest(fixtures/name),digest)
+        self.evidence=c.read(fixtures/"mongodb827-public-identity.extract.json")
+        self.origin=c.read(fixtures/"mongodb827-git-origin.json")
+        self.build=copy.deepcopy(self.evidence["historical_server_build"])
+        self.build["git_version"]=self.origin["reported_git_version"]
+        self.m=dict(address=self.evidence["address"],server_builds=dict(mongodb=self.build))
+
+    def test_actual_before_and_after_match_separate_origin_and_default_port_host(self):
+        reference.build(self.build)
+        self.assertIn("GitOrigin-RevId: "+self.build["git_version"],self.origin["commit_message"])
+        self.assertEqual(self.build["source_commit"],self.origin["public_commit"])
+        self.assertNotEqual(self.build["source_commit"],self.build["git_version"])
+        receipt=self.evidence["call_bounds"]
+        bounds=c.timestamp(receipt["started_utc"]),c.timestamp(receipt["disconnect"]["start_utc"])
+        for prefix in ("before.","after."):
+            observed=reference.public_observation(self.evidence["packet"]["commands"],prefix,self.m,self.evidence["owner"],bounds)
+            self.assertEqual(observed["journal_parameters"],dict(journalCommitInterval={"$numberInt":"100"},syncdelay={"$numberDouble":"60.0"}))
+
+    def test_public_commit_and_reported_origin_are_not_interchangeable(self):
+        for field,value in (("git_version",self.origin["public_commit"]),("git_version","0"*40),("git_version",True),("source_commit",self.origin["reported_git_version"])):
+            build=copy.deepcopy(self.build);build[field]=value
+            with self.subTest(field=field,value=value):
+                with self.assertRaises(ValueError):reference.build(build)
+        build=copy.deepcopy(self.build);del build["git_version"]
+        with self.assertRaises((KeyError,ValueError)):reference.build(build)
+
+    def test_actual_reply_negative_identity_and_endpoint_controls(self):
+        receipt=self.evidence["call_bounds"]
+        bounds=c.timestamp(receipt["started_utc"]),c.timestamp(receipt["disconnect"]["start_utc"])
+        mutations=(("buildInfo","gitVersion",self.origin["public_commit"]),("buildInfo","gitVersion","0"*40),
+                   ("buildInfo","version","8.2.8"),("serverStatus","host",self.evidence["owner"]["hostname"]+":27017"),
+                   ("serverStatus","host","unrelated"),("serverStatus","pid",{"$numberLong":"2"}))
+        for prefix in ("before.","after."):
+            for command,field,value in mutations:
+                commands=copy.deepcopy(self.evidence["packet"]["commands"])
+                commands[prefix+command]["reply"][field]=value
+                with self.subTest(prefix=prefix,command=command,field=field,value=value):
+                    with self.assertRaises(ValueError):reference.public_observation(commands,prefix,self.m,self.evidence["owner"],bounds)
+            commands=copy.deepcopy(self.evidence["packet"]["commands"])
+            commands[prefix+"getCmdLineOpts"]["reply"]["parsed"]["net"]["port"]={"$numberInt":"27018"}
+            with self.assertRaisesRegex(ValueError,"internal endpoint mismatch"):reference.public_observation(commands,prefix,self.m,self.evidence["owner"],bounds)
+
+
 class Docker29RetainedInspect(unittest.TestCase):
     """Real created-container input; every command/state transition is offline."""
     def setUp(self):
@@ -142,7 +190,7 @@ class ReferencePackets(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.out=pathlib.Path(self.temp.name);self.directory=self.out/"mongodb";self.directory.mkdir()
         self.m=dict(schema_version=1,kind=reference.KIND,lifecycle_contract=1,campaign_id="f"*32,targets=["mongodb"],profile=reference.PROFILE,formats={"mongodb":"bson"},write_concern=dict(w=1,journal_requested=None),recordcount=64,operationcount=10000,threadcount=16,run_repeats=1,uid=1000,gid=1000,address="127.0.0.1:27018",docker_binary="/synthetic/docker",client_binary="/synthetic/ycsb",reference_source_sha256=c.digest(reference.__file__),deadlines=dict(phase_seconds=600,helper_seconds=180,cleanup_seconds=10,phase_outer_seconds=640,helper_outer_seconds=220,readiness_seconds=60,outer_seconds=7200))
-        b=dict(schema_version=1,kind="mongodb_image_build",image_id="sha256:"+"a"*64,repo_digest="mongo@sha256:"+"b"*64,os="linux",architecture="amd64",version="8.2.7",source_commit=reference.SUPPORTED_SOURCE["8.2.7"],exe_sha256="c"*64,docker_cli_sha256="d"*64,runtime=dict(engine="synthetic",engine_commit="synthetic",containerd="synthetic",runc="synthetic",driver="overlay2",cgroup_version="2",default_runtime="runc"))
+        b=dict(schema_version=1,kind="mongodb_image_build",image_id="sha256:"+"a"*64,repo_digest="mongo@sha256:"+"b"*64,os="linux",architecture="amd64",version="8.2.7",source_commit=reference.SUPPORTED_SOURCE["8.2.7"],git_version=reference.SUPPORTED_GIT_VERSION["8.2.7"],exe_sha256="c"*64,docker_cli_sha256="d"*64,runtime=dict(engine="synthetic",engine_commit="synthetic",containerd="synthetic",runc="synthetic",driver="overlay2",cgroup_version="2",default_runtime="runc"))
         self.m["server_builds"]={"mongodb":b}
         b["image_labels"]={"org.opencontainers.image.version":"24.04"}
         self.m["client"]=dict(schema_version=1,producer_commit=c.PRODUCER,source_commit=c.PRODUCER,source_patch_sha256=hashlib.sha256(b"").hexdigest(),build_id="synthetic-offline-client",exe_sha256="e"*64,toolchain="synthetic",compatibility_configuration="synthetic")
@@ -236,7 +284,7 @@ class ReferencePackets(unittest.TestCase):
         self.save(self.directory/(stem+".command.json"),dict(schema_version=1,argv=reference.control_argv(self.directory,stem,self.m,mode)))
         role=next(k for k,v in self.owners.items() if v==owner)
         b=self.m["server_builds"]["mongodb"]
-        replies=dict(hello=dict(isWritablePrimary=True,topologyVersion=dict(processId={"$oid":str(reference.ROLES.index(role)+1)*24})),buildInfo=dict(version=b["version"],gitVersion=b["source_commit"]),serverStatus=dict(version=b["version"],process="mongod",pid={"$numberLong":"1"},host=owner["hostname"]+":27017",storageEngine=dict(name="wiredTiger",persistent=True)),getCmdLineOpts=dict(parsed=dict(storage=dict(dbPath="/data/db",engine="wiredTiger"),net=dict(bindIpAll=True,port={"$numberInt":"27017"}))),getParameter=dict(journalCommitInterval={"$numberInt":"100"},syncdelay={"$numberDouble":"60.0"}))
+        replies=dict(hello=dict(isWritablePrimary=True,topologyVersion=dict(processId={"$oid":str(reference.ROLES.index(role)+1)*24})),buildInfo=dict(version=b["version"],gitVersion=b["git_version"]),serverStatus=dict(version=b["version"],process="mongod",pid={"$numberLong":"1"},host=owner["hostname"],storageEngine=dict(name="wiredTiger",persistent=True)),getCmdLineOpts=dict(parsed=dict(storage=dict(dbPath="/data/db",engine="wiredTiger"),net=dict(bindIpAll=True,port={"$numberInt":"27017"}))),getParameter=dict(journalCommitInterval={"$numberInt":"100"},syncdelay={"$numberDouble":"60.0"}))
         commands={p+n:dict(request=reference.observation_request(n),reply=dict(reply,ok={"$numberDouble":"1.0"}),connection_id=self.m["address"]+"[-1]",result=result(start,start)) for p in ("before.","after.") for n,reply in replies.items()}
         if mode=="checkpoint":commands["checkpoint"]=dict(request=dict(fsync={"$numberInt":"1"},lock=False),reply=dict(ok={"$numberDouble":"1.0"}),connection_id=self.m["address"]+"[-1]",result=result(start,start))
         packet=dict(schema_version=1,kind="mongodb_reference_public_commands",mode=mode,address=self.m["address"],fixture_id=self.m["campaign_id"]+":"+stem,commands=commands)
@@ -307,6 +355,23 @@ class ReferencePackets(unittest.TestCase):
         self.reject("random-checkpoint.launch.json",lambda v:v.update(start_utc=ts(41)))
         self.reject("random-checkpoint.json",lambda v:v["commands"]["checkpoint"]["result"].update(end_utc="2026-10-29T00:00:44.000000001Z",elapsed_ns=1))
         self.reject("fixture_verify.launch.json",lambda v:v.update(start_utc="2026-10-29T00:10:00.999999999Z"))
+
+    def test_matching_public_copies_cannot_swap_origin_or_append_default_port(self):
+        original={p:p.read_bytes() for p in self.out.rglob("*") if p.is_file()}
+        for mutation in ("mirror-as-origin","hostname-port-suffix"):
+            with self.subTest(mutation=mutation):
+                try:
+                    for path in self.directory.glob("*.json"):
+                        packet=c.read(path)
+                        if type(packet) is dict and packet.get("kind")=="mongodb_reference_public_commands":
+                            for name,command in packet["commands"].items():
+                                if mutation=="mirror-as-origin" and name.endswith("buildInfo"):command["reply"]["gitVersion"]=self.m["server_builds"]["mongodb"]["source_commit"]
+                                if mutation=="hostname-port-suffix" and name.endswith("serverStatus"):command["reply"]["host"]+=":27017"
+                            self.save(path,packet)
+                    self.rehash()
+                    with self.assertRaises(ValueError):reference.validate(self.out)
+                finally:
+                    for path,data in original.items():path.write_bytes(data)
 
     def test_resolved_journal_parameters_are_typed_observed_and_stable(self):
         for field,value in (("journalCommitInterval",True),("journalCommitInterval",{"$numberInt":"0"}),("journalCommitInterval",{"$numberDouble":"100.0"}),("syncdelay",{"$numberDouble":"NaN"}),("syncdelay",{"$numberDouble":"Infinity"}),("syncdelay",{"$numberDouble":"1e999"}),("syncdelay",{"$numberDouble":"-0.1"})):

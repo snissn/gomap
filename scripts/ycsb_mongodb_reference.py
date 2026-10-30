@@ -30,6 +30,10 @@ ID = re.compile(r"[0-9a-f]{64}$")
 OID = re.compile(r"[0-9a-f]{24}$")
 COMMIT = re.compile(r"[0-9a-f]{40}$")
 SUPPORTED_SOURCE = {"8.2.7":"9fbea53313e85fbbf864a963ff17b0bd6dafa0be"}
+# The public mirror commit above declares this GitOrigin-RevId. MongoDB's
+# buildInfo reports that origin ID, not the mirror's different commit hash.
+# Exact upstream commit metadata is retained in testdata/ycsb_mongodb_reference.
+SUPPORTED_GIT_VERSION = {"8.2.7":"8f6785264a643d2eeb5e4046f7876a23e40e1a09"}
 OBSERVATIONS = ("hello","buildInfo","serverStatus","getCmdLineOpts","getParameter")
 
 
@@ -70,8 +74,9 @@ def build(value):
     c.require(isinstance(value["repo_digest"],str) and re.fullmatch(r"mongo@sha256:[0-9a-f]{64}",value["repo_digest"]),"immutable MongoDB repository digest required")
     c.require(value["os"]=="linux" and value["architecture"]=="amd64","unsupported reference platform")
     c.require(isinstance(value["version"],str) and re.fullmatch(r"8\.[0-9]+\.[0-9]+",value["version"]),"exact observed MongoDB 8 version required")
-    c.require(isinstance(value["source_commit"],str) and COMMIT.fullmatch(value["source_commit"]),"actual MongoDB gitVersion required")
+    c.require(isinstance(value["source_commit"],str) and COMMIT.fullmatch(value["source_commit"]),"reviewed MongoDB public source commit required")
     c.require(SUPPORTED_SOURCE.get(value["version"])==value["source_commit"],"unreviewed MongoDB source checkpoint/close contract")
+    c.require(type(value["git_version"]) is str and COMMIT.fullmatch(value["git_version"]) and SUPPORTED_GIT_VERSION.get(value["version"])==value["git_version"],"unreviewed MongoDB reported GitOrigin version")
     for key in ("exe_sha256","docker_cli_sha256"):
         c.require(isinstance(value[key],str) and c.SHA.fullmatch(value[key]),"missing reference ELF/tool hash")
     c.require(isinstance(value["runtime"],dict) and set(value["runtime"])=={"engine","engine_commit","containerd","runc","driver","cgroup_version","default_runtime"},"explicit Docker runtime binding required")
@@ -145,9 +150,12 @@ def public_observation(commands,prefix,m,container,bounds):
     process_id=hello["topologyVersion"]["processId"]
     c.require(isinstance(process_id,dict) and set(process_id)=={"$oid"} and isinstance(process_id["$oid"],str) and OID.fullmatch(process_id["$oid"]),"missing server-generated reference process identity")
     b=m["server_builds"]["mongodb"]
-    c.require(info["version"]==b["version"] and info["gitVersion"]==b["source_commit"] and status["version"]==b["version"] and status["process"]=="mongod","actual MongoDB version/build/process mismatch")
+    c.require(info["version"]==b["version"] and info["gitVersion"]==b["git_version"] and status["version"]==b["version"] and status["process"]=="mongod","actual MongoDB version/build/process mismatch")
     c.require(ext_integer(status["pid"],"server PID")==container["namespace_pid"],"public/container PID mismatch")
-    c.require(status["host"]==container["hostname"]+":27017","public/container hostname mismatch")
+    # server_status_command.cpp uses prettyHostName(localPort), which omits
+    # the port at DefaultDBPort=27017. This runner fixes that internal port;
+    # require the exact source-defined hostname, with no permissive suffix.
+    c.require(status["host"]==container["hostname"],"public/container hostname mismatch")
     engine=status["storageEngine"]
     c.require(engine["name"]=="wiredTiger" and engine["persistent"] is True,"persistent WiredTiger required")
     parsed=opts["parsed"]

@@ -1,8 +1,9 @@
 # Provisional MongoDB reference lifecycle
 
 The maintained shell still refuses execution selecting `mongodb`, before output
-creation or commands. This separate implementation is provisional and has had
-no live container, product workload, or performance run. A complete synthetic
+creation or commands. This separate implementation remains provisional. Its
+retained live readiness failure below started no workload or performance sample.
+A complete synthetic
 packet may be consumed through the ordinary shell's `PARSE_ONLY=true` entry.
 That is parser coverage, not MongoDB readiness or product evidence.
 
@@ -19,7 +20,8 @@ Preparation must retain an actual source/binary-bound client build manifest,
 client patch/buildinfo, fixture and public-control source copies and ELF hashes,
 this launcher's source copy/hash, and a `mongodb_image_build` manifest. The latter
 requires an immutable local image ID and repository digest, exact observed
-version and gitVersion, Linux/amd64, actual mongod and Docker executable hashes,
+version and `git_version` (buildInfo.gitVersion), separately reviewed public
+`source_commit`, Linux/amd64, actual mongod and Docker executable hashes,
 and engine/engine-commit/containerd/runc/storage-driver/cgroup/default-runtime
 versions plus inherited immutable image labels. OCI image version labels are
 retained as image metadata; they are not the MongoDB buildInfo version.
@@ -70,10 +72,45 @@ Only MongoDB 8.2.7 source commit
 `9fbea53313e85fbbf864a963ff17b0bd6dafa0be` currently has a reviewed source
 contract: fsync calls storage-engine flushAllFiles, which selects the standalone
 WiredTiger checkpoint path. Other versions fail closed pending source review.
+That public mirror commit explicitly declares
+`GitOrigin-RevId: 8f6785264a643d2eeb5e4046f7876a23e40e1a09` in its
+[commit metadata](https://github.com/mongodb/mongo/commit/9fbea53313e85fbbf864a963ff17b0bd6dafa0be).
+The supported pair requires public `source_commit=9fbea533...` and reported
+`git_version=8f678526...`; they remain distinct identities, with no
+caller-selected mapping. Direct public-mirror lookup of the origin SHA was
+unavailable; no independently fetched origin tree is claimed.
 The commit-bound chain is
 [fsync.cpp](https://github.com/mongodb/mongo/blob/9fbea53313e85fbbf864a963ff17b0bd6dafa0be/src/mongo/db/commands/fsync.cpp#L125),
 [storage_engine_impl.cpp](https://github.com/mongodb/mongo/blob/9fbea53313e85fbbf864a963ff17b0bd6dafa0be/src/mongo/db/storage/storage_engine_impl.cpp#L506),
 and [wiredtiger_kv_engine.cpp](https://github.com/mongodb/mongo/blob/9fbea53313e85fbbf864a963ff17b0bd6dafa0be/src/mongo/db/storage/wiredtiger/wiredtiger_kv_engine.cpp#L961).
+
+The fixed internal port is 27017. At that default port,
+[serverStatus](https://github.com/mongodb/mongo/blob/9fbea53313e85fbbf864a963ff17b0bd6dafa0be/src/mongo/db/commands/server_status_command.cpp#L133)
+uses [prettyHostName](https://github.com/mongodb/mongo/blob/9fbea53313e85fbbf864a963ff17b0bd6dafa0be/src/mongo/util/net/socket_utils.cpp#L307),
+which returns the bare hostname. The validator requires that exact owned
+hostname; an appended port or another hostname is rejected. Actual parsed
+internal port27017, public connection endpoint, PID, ELF, namespaces and mounted
+directory remain independently checked.
+
+## Retained actual readiness failure
+
+The one-use `833b9b2` correctness packet expected public mirror commit9fbea533
+as buildInfo.gitVersion. Both actual replies returned version8.2.7 and origin
+gitVersion8f678526; the old assertion rejected them before any workload. Its
+serverStatus.host also used the source-defined bare hostname, while the old
+assertion demanded a `:27017` suffix. The actual image/ELF remained pinned.
+Forced exact-owned cleanup completed and independent absence/reap checks passed.
+The full packet remains failed/incomplete and cannot qualify through corrected
+identity assertions. The earlier959 Init failure also remains preserved.
+
+The selected actual replies and upstream origin mapping are retained in
+`testdata/ycsb_mongodb_reference/mongodb827-*`, with full original receipt paths
+and hashes. Offline tests reproduce both assertion failures, accept the actual
+identity shapes after correction, and reject wrong/missing origins, swapped
+mirror/origin IDs, appended ports, other hosts/PIDs/ports and consistently
+tampered full synthetic packet copies. This establishes parser behavior only;
+successful public fsync, exact-value/random reopen and graceful close remain
+required in a fresh independently reviewed packet.
 
 Graceful shutdown retains the actual full-ID Docker SIGTERM action, Docker wait
 exit status, terminal inspect and source-bound WiredTiger-close (4795901) then
@@ -160,8 +197,9 @@ Output status is `prepared-reference-inputs-not-activated` and
 `activation_authorized=false`. Hashes/revalidation bind evidence but do not
 authenticate fabricated files or authorize a campaign. No actual support record
 has been generated by this offline implementation. The explicit provisional
-runner's original bootstrap manifest remains independently available for a later
-**separately authorized** tiny support control; a bootstrap packet omits the new
+runner's consumed failed manifests remain immutable; a later tiny support
+control requires a fresh separately bound and reviewed packet, never reuse or
+automatic retry of those attempts. A bootstrap packet omits the new
 preparation binding and cannot substitute for shell activation/preparation.
 Synthetic preparation controls use clearly labeled fake tool metadata and raw
 packets; their success establishes parser/control behavior only.
@@ -169,7 +207,8 @@ packets; their success establishes parser/control behavior only.
 Still outstanding: independent source review of this provisional implementation,
 actual 8.2.7 buildInfo/ELF/settings/log-shape support controls under separately
 authorized host custody, exact-head review of the provisional preparation route,
-and integration enabling execution in the maintained shell. Same-UID
-procfs access and the public image's settings/log shape are not established by
-the synthetic tests. A separately reviewed runtime identity contract is also
+and integration enabling execution in the maintained shell. Same-UID procfs
+access and actual image/public settings were observed for one failed initial
+readiness lifetime; full checkpoint/reopen and successful shutdown log shape
+remain unproven. A separately reviewed runtime identity contract is also
 required before activation. MongoDB reference performance remains unattempted.

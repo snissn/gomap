@@ -32,3 +32,23 @@ Tests use the exact actual created inspect for checked identity and stopped
 emergency removal with known/recovered full IDs. Running/terminal transitions
 and all Docker commands in tests are explicitly synthetic mocks; they exercise
 the same exact-owned SIGKILL/wait/terminal/remove path without contacting Docker.
+
+## MongoDB 8.2.7 actual failed readiness identity
+
+`mongodb827-public-identity.extract.json` retains selected reply fields from
+both actual public observation sequences in the consumed `833b9b2` attempt.
+The full raw packet and close/owner/manifest paths and hashes are recorded in
+the extract. It omits unrelated buildInfo/serverStatus fields but preserves the
+actual requests, typed selected replies, connection IDs and checked results.
+It is an explicitly labeled extract from failed readiness, not a complete or
+qualifying lifecycle packet. No workload, explicit fsync or reopen occurred.
+
+`mongodb827-git-origin.json` retains primary upstream public commit metadata:
+public mirror commit9fbea533 declares GitOrigin-RevId8f678526, exactly the
+reported buildInfo.gitVersion in that pinned actual image/ELF. It does not
+claim a separately fetched origin tree. `mongodb827-provenance.json` binds both
+fixture hashes. Pinned serverStatus/prettyHostName/default-port source excerpts
+and full connector responses remain beside the original task's terminal audit.
+Tests cover the actual default-port bare hostname and origin ID, preserve the
+distinct public source identity, and reject substitutions without Docker or a
+new service invocation. Original failed receipts remain unchanged.
