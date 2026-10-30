@@ -41,7 +41,7 @@ jobs:
       CELL: ${{ matrix.cell }}
       RACE: ${{ matrix.race }}
     steps:
-      - name: Initialize evidence and enable hosted Windows Git long paths
+      - name: Initialize evidence and configure exact hosted Windows checkout
         shell: bash
         run: |
           python -u - <<'PY'
@@ -64,10 +64,15 @@ jobs:
               # This changes only this ephemeral hosted runner's Git setting,
               # before BOTH checkout actions. No persistent/self-hosted host.
               with (packet/'git-longpaths.log').open('wb') as output:
+                  subprocess.run(['git','config','--global','core.autocrlf','false'],check=True,stdout=output,stderr=subprocess.STDOUT,timeout=30)
+                  autocrlf=subprocess.run(['git','config','--global','--get','core.autocrlf'],check=True,stdout=subprocess.PIPE,stderr=output,timeout=30)
+                  output.write(autocrlf.stdout)
                   subprocess.run(['git','config','--global','core.longpaths','true'],check=True,stdout=output,stderr=subprocess.STDOUT,timeout=30)
                   result=subprocess.run(['git','config','--global','--get','core.longpaths'],check=True,stdout=subprocess.PIPE,stderr=output,timeout=30)
                   output.write(result.stdout)
+              assert autocrlf.stdout.decode().strip()=='false'
               assert result.stdout.decode().strip()=='true'
+              setup['windows_git_core_autocrlf']='false'
               setup['windows_git_core_longpaths']='true'
           setup['status']='READY';save()
           PY
