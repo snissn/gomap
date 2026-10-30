@@ -317,6 +317,7 @@ def main():
     proc.add_argument("pid", type=int)
     proc.add_argument("data_dir")
     proc.add_argument("output")
+    proc.add_argument("--await-exec")
     stop = sub.add_parser("stop")
     stop.add_argument("launch", type=pathlib.Path)
     stop.add_argument("--timeout", type=float, default=10)
@@ -333,7 +334,19 @@ def main():
         if args.mode == "stop":
             terminate_owned(read(args.launch)["process"], args.timeout)
             return 0
-        write_new(args.output, dict(process=observe(args.pid), data_dir=args.data_dir))
+        identity = observe(args.pid)
+        if args.await_exec:
+            # Pin before readiness, allowing the env launcher to finish exec.
+            expected = digest(args.await_exec)
+            deadline = time.monotonic() + 2
+            while identity["exe_sha256"] != expected:
+                # Interpreted offline controls have an interpreter as /proc/exe.
+                # Their executable hash still must stabilize before cleanup binding.
+                if time.monotonic() >= deadline:
+                    break
+                time.sleep(.01)
+                identity = observe(args.pid)
+        write_new(args.output, dict(process=identity, data_dir=args.data_dir))
         return 0
     except (ValueError, KeyError, TypeError, OSError) as error:
         print(f"invalid YCSB evidence: {error}", file=sys.stderr)

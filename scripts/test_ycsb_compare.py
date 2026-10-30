@@ -235,6 +235,12 @@ class CompareTests(unittest.TestCase):
         self.assertIsNone(record["receipt_sha256"])
 
     def test_single_target_supplied_binaries_format_and_owned_error_cleanup(self):
+        self.exercise_shell_cleanup(ready=True)
+
+    def test_failed_readiness_retains_identity_and_cleans_actual_owned_process(self):
+        self.exercise_shell_cleanup(ready=False)
+
+    def exercise_shell_cleanup(self, ready):
         # Offline dependency stubs exercise launcher dispatch without a product DB.
         tools = self.out / "offline-tools"
         tools.mkdir()
@@ -247,7 +253,7 @@ class CompareTests(unittest.TestCase):
         executable("go", "#!/bin/sh\necho offline-buildinfo\n")
         marker = self.out / "server-marker.json"
         client_marker = self.out / "client-marker.json"
-        server = executable("native-server", "#!/usr/bin/env python3\nimport json,os,signal,socket,sys,time\nargs=sys.argv[1:]; addr=args[args.index('-addr')+1]; host,port=addr.split(':')\njson.dump(dict(argv=args,env_unset='GOMAXPROCS' not in os.environ),open("+repr(str(marker))+",'w'))\ns=socket.socket(); s.bind((host,int(port))); s.listen()\nsignal.signal(signal.SIGTERM,lambda *_:sys.exit(0))\nwhile True: time.sleep(.05)\n")
+        server = executable("native-server", "#!/usr/bin/env python3\nimport json,os,signal,socket,sys,time\nargs=sys.argv[1:]; addr=args[args.index('-addr')+1]; host,port=addr.split(':')\njson.dump(dict(argv=args,env_unset='GOMAXPROCS' not in os.environ),open("+repr(str(marker))+",'w'))\ns=socket.socket(); s.bind((host,int(port))); "+("s.listen()" if ready else "s.close()")+"\nsignal.signal(signal.SIGTERM,lambda *_:sys.exit(0))\nwhile True: time.sleep(.05)\n")
         client = executable("go-ycsb", "#!/usr/bin/env python3\nimport json,os,sys,time\njson.dump(dict(argv=sys.argv[1:],env_unset='GOMAXPROCS' not in os.environ),open("+repr(str(client_marker))+",'w'))\ntime.sleep(.1)\nsys.exit(37)\n")
         import socket
         with socket.socket() as sock:
@@ -260,9 +266,16 @@ class CompareTests(unittest.TestCase):
         self.save(server_build_path, dict(schema_version=1, servers={"treedb_native":dict(schema_version=1,version="candidate",source_commit="d"*40,exe_sha256=COMPARE.digest(server),expected_owner="cow")}))
         execution = self.out / "execution"
         environment = os.environ.copy()
-        environment.update(PATH=str(tools)+os.pathsep+environment["PATH"], GOMAXPROCS="1", PARSE_ONLY="false", BUILD="false", BUILD_GOYCSB="false", OUT_DIR=str(execution), TARGETS="treedb_native", MONGODB_MODE="skip", TREEDB_NATIVE_DOCUMENT_FORMAT="json", TREEDB_NATIVE_SERVER_BIN=str(server), TREEDB_MONGO_GATEWAY_BIN=str(tools/"must-not-launch"), NATIVE_ADDR=f"127.0.0.1:{port}", CLIENT_BUILD_MANIFEST=str(build_path), SERVER_BUILD_MANIFEST=str(server_build_path), GOYCSB_DIR=str(tools), GOYCSB_BIN=str(client))
+        environment.update(PATH=str(tools)+os.pathsep+environment["PATH"], GOMAXPROCS="1", PARSE_ONLY="false", BUILD="false", BUILD_GOYCSB="false", OUT_DIR=str(execution), TARGETS="treedb_native", MONGODB_MODE="skip", TREEDB_NATIVE_DOCUMENT_FORMAT="json", TREEDB_NATIVE_SERVER_BIN=str(server), TREEDB_MONGO_GATEWAY_BIN=str(tools/"must-not-launch"), NATIVE_ADDR=f"127.0.0.1:{port}", CLIENT_BUILD_MANIFEST=str(build_path), SERVER_BUILD_MANIFEST=str(server_build_path), GOYCSB_DIR=str(tools), GOYCSB_BIN=str(client), READINESS_TIMEOUT="1")
         outcome = subprocess.run(["bash", str(ROOT / "ycsb_compare_mongodb_treedb.sh")],env=environment,text=True,capture_output=True,timeout=20)
-        self.assertEqual(outcome.returncode,37,outcome.stderr)
+        self.assertEqual(outcome.returncode,37 if ready else 1,outcome.stderr)
+        launch = json.loads((execution/"treedb_native/server.launch.json").read_text())
+        self.assertFalse(pathlib.Path(f"/proc/{launch['process']['pid']}").exists())
+        self.assertEqual(json.loads((execution/"treedb_native/server.exit.json").read_text())["exit_code"],0)
+        if not ready:
+            self.assertIn("timed out waiting",outcome.stderr)
+            self.assertFalse(client_marker.exists())
+            return
         self.assertTrue(json.loads(marker.read_text())["env_unset"])
         child = json.loads(client_marker.read_text())
         self.assertTrue(child["env_unset"])

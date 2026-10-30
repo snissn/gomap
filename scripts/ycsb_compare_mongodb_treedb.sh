@@ -29,6 +29,7 @@ TARGETS="${TARGETS:-treedb_native treedb_mongo}"
 BUILD="${BUILD:-true}"
 BUILD_GOYCSB="${BUILD_GOYCSB:-false}"
 PARSE_ONLY="${PARSE_ONLY:-false}"
+READINESS_TIMEOUT="${READINESS_TIMEOUT:-60}"
 ALLOW_YCSB_ERRORS="${ALLOW_YCSB_ERRORS:-false}"
 
 usage() {
@@ -66,7 +67,7 @@ fail() { echo "$*" >&2; exit 2; }
 for flag in BUILD BUILD_GOYCSB PARSE_ONLY ALLOW_YCSB_ERRORS; do
   [[ "${!flag}" == true || "${!flag}" == false ]] || fail "$flag must be true or false"
 done
-for count in RECORDCOUNT OPERATIONCOUNT THREADCOUNT RUN_REPEATS; do
+for count in RECORDCOUNT OPERATIONCOUNT THREADCOUNT RUN_REPEATS READINESS_TIMEOUT; do
   [[ "${!count}" =~ ^[1-9][0-9]*$ ]] || fail "$count must be a positive integer"
 done
 case "$TREEDB_PROFILE" in command_wal_durable|command_wal_relaxed|no_wal_fast) ;; *) fail "unsupported TREEDB_PROFILE";; esac
@@ -206,7 +207,7 @@ finish() {
 trap finish EXIT
 wait_tcp() {
   local addr=$1 host=${1%:*} port=${1##*:} i
-  for ((i=0; i<60; i++)); do
+  for ((i=0; i<READINESS_TIMEOUT; i++)); do
     # Positional parameters are intentionally expanded by the child shell.
     # shellcheck disable=SC2016
     if timeout 1 bash -c 'exec 3<>/dev/tcp/"$1"/"$2"' _ "$host" "$port" 2>/dev/null; then return 0; fi
@@ -223,8 +224,8 @@ start_server() {
   log_command "${command[@]}"
   "${command[@]}" >"$OUT_DIR/$target/server.log" 2>&1 &
   SERVER_PIDS+=("$!"); SERVER_TARGETS+=("$target")
+  "$PYTHON" "$VALIDATOR" observe "${SERVER_PIDS[-1]}" "$dir" "$OUT_DIR/$target/server.launch.json" --await-exec "$binary"
   wait_tcp "$addr"
-  "$PYTHON" "$VALIDATOR" observe "${SERVER_PIDS[-1]}" "$dir" "$OUT_DIR/$target/server.launch.json"
 }
 for target in "${selected[@]}"; do
   case "$target" in
