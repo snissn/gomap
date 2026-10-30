@@ -10,6 +10,7 @@ OUT_DIR="${OUT_DIR:-$(mktemp -d "$TMP_BASE/treedb_ycsb_compare_XXXXXX")}"
 GOYCSB_DIR="${GOYCSB_DIR:-/home/mikers/dev/pingcap/go-ycsb}"
 GOYCSB_BIN="${GOYCSB_BIN:-$GOYCSB_DIR/bin/go-ycsb}"
 CLIENT_BUILD_MANIFEST="${CLIENT_BUILD_MANIFEST:-}"
+SERVER_BUILD_MANIFEST="${SERVER_BUILD_MANIFEST:-}"
 RECORDCOUNT="${RECORDCOUNT:-100000}"
 OPERATIONCOUNT="${OPERATIONCOUNT:-10000}"
 THREADCOUNT="${THREADCOUNT:-16}"
@@ -42,7 +43,9 @@ GOYCSB_BIN, TREEDB_NATIVE_DOCUMENT_FORMAT and TREEDB_MONGO_DOCUMENT_FORMAT
 (json|bson), TREEDB_PROFILE, RECORDCOUNT, OPERATIONCOUNT, THREADCOUNT,
 RUN_REPEATS, BUILD, BUILD_GOYCSB, OUT_DIR and TMPDIR.
 
-CLIENT_BUILD_MANIFEST is required for execution and binds producer source,
+CLIENT_BUILD_MANIFEST and SERVER_BUILD_MANIFEST are required for execution.
+The latter pins each version's source, server ELF and expected legacy/COW owner.
+The former binds producer source,
 reviewed compatibility overlay, toolchain and binary. See ycsb_compare_receipts.md.
 Every actual child has GOMAXPROCS removed. Original TOTAL timing is unchanged;
 client close receipts and launcher identities are separate artifacts.
@@ -90,6 +93,7 @@ fi
 # An invocation owns a new output directory. Never overwrite an earlier attempt.
 [[ -z "$(ls -A "$OUT_DIR")" ]] || fail "execution requires a fresh empty OUT_DIR"
 [[ -n "$CLIENT_BUILD_MANIFEST" && -f "$CLIENT_BUILD_MANIFEST" ]] || fail "CLIENT_BUILD_MANIFEST is required"
+[[ -n "$SERVER_BUILD_MANIFEST" && -f "$SERVER_BUILD_MANIFEST" ]] || fail "SERVER_BUILD_MANIFEST is required"
 for binary in "$GOYCSB_BIN" "$TREEDB_NATIVE_SERVER_BIN" "$TREEDB_MONGO_GATEWAY_BIN"; do
   [[ "$binary" == /* ]] || fail "binary paths must be absolute"
 done
@@ -101,9 +105,9 @@ if [[ "$BUILD_GOYCSB" == true ]]; then (cd "$GOYCSB_DIR" && make build); fi
 [[ -x "$GOYCSB_BIN" ]] || fail "missing supplied client binary"
 for target in "${selected[@]}"; do mkdir "$OUT_DIR/$target"; done
 
-"$PYTHON" - "$OUT_DIR" "$CLIENT_BUILD_MANIFEST" "$GOYCSB_DIR" "$GOYCSB_BIN" "$TREEDB_PROFILE" "$RECORDCOUNT" "$OPERATIONCOUNT" "$THREADCOUNT" "$RUN_REPEATS" "$TREEDB_NATIVE_DOCUMENT_FORMAT" "$TREEDB_MONGO_DOCUMENT_FORMAT" "${selected[@]}" <<'PY'
-import hashlib, json, pathlib, subprocess, sys, uuid
-out, build_path, repo, binary, profile, records, ops, threads, repeats, native_format, mongo_format, *targets = sys.argv[1:]
+"$PYTHON" - "$OUT_DIR" "$CLIENT_BUILD_MANIFEST" "$GOYCSB_DIR" "$GOYCSB_BIN" "$TREEDB_PROFILE" "$RECORDCOUNT" "$OPERATIONCOUNT" "$THREADCOUNT" "$RUN_REPEATS" "$TREEDB_NATIVE_DOCUMENT_FORMAT" "$TREEDB_MONGO_DOCUMENT_FORMAT" "$SERVER_BUILD_MANIFEST" "$TREEDB_NATIVE_SERVER_BIN" "$TREEDB_MONGO_GATEWAY_BIN" "${selected[@]}" <<'PY'
+import hashlib, json, pathlib, re, subprocess, sys, uuid
+out, build_path, repo, binary, profile, records, ops, threads, repeats, native_format, mongo_format, server_build_path, native_binary, mongo_binary, *targets = sys.argv[1:]
 out = pathlib.Path(out)
 build = json.loads(pathlib.Path(build_path).read_text())
 def git(*args):
@@ -123,10 +127,21 @@ if git('ls-files', '--others', '--exclude-standard').strip():
 source = git('rev-parse', 'HEAD').decode().strip()
 if not (build.get('schema_version') == 1 and build.get('producer_commit') == producer and build.get('source_commit') == source and build.get('source_patch_sha256') == hashlib.sha256(patch).hexdigest() and build.get('exe_sha256') == sha(binary) and build.get('build_id') and build.get('toolchain') and build.get('compatibility_configuration')):
     raise SystemExit('client source/overlay/ELF build manifest mismatch or incomplete binding')
+server_manifest = json.loads(pathlib.Path(server_build_path).read_text())
+if server_manifest.get('schema_version') != 1:
+    raise SystemExit('unsupported server build manifest')
+server_builds = {target: server_manifest['servers'][target] for target in targets}
+for target, record in server_builds.items():
+    if not (record.get('schema_version') == 1 and record.get('version') and re.fullmatch(r'[0-9a-f]{40}', record.get('source_commit','')) and record.get('expected_owner') in ({'mongodb'} if target == 'mongodb' else {'legacy','cow'})):
+        raise SystemExit('incomplete version/source/owner server binding')
+    binary_path = {'treedb_native':native_binary,'treedb_mongo':mongo_binary}.get(target)
+    if binary_path and record.get('exe_sha256') != sha(binary_path):
+        raise SystemExit('supplied server ELF does not match version manifest')
+(out / 'server-build.json').write_text(json.dumps(server_manifest,indent=2)+'\n')
 (out / 'client.patch').write_bytes(patch)
 (out / 'client-build.json').write_text(json.dumps(build, indent=2)+'\n')
 (out / 'client-buildinfo.txt').write_bytes(subprocess.check_output(['go', 'version', '-m', binary]))
-manifest = dict(schema_version=1, campaign_id=uuid.uuid4().hex, targets=targets, profile=profile, formats={'treedb_native':native_format, 'treedb_mongo':mongo_format, 'mongodb':'bson'}, recordcount=int(records), operationcount=int(ops), threadcount=int(threads), run_repeats=int(repeats), client=build)
+manifest = dict(schema_version=1, campaign_id=uuid.uuid4().hex, targets=targets, profile=profile, formats={'treedb_native':native_format, 'treedb_mongo':mongo_format, 'mongodb':'bson'}, recordcount=int(records), operationcount=int(ops), threadcount=int(threads), run_repeats=int(repeats), client=build, server_builds=server_builds)
 (out / 'manifest.json').write_text(json.dumps(manifest, indent=2)+'\n')
 PY
 
@@ -144,17 +159,16 @@ declare -a SERVER_PIDS=() SERVER_TARGETS=()
 MONGO_CONTAINER=""
 CLEANUP_DONE=false
 cleanup() {
-  local failed=0 pid target index code i
+  local failed=0 pid target index code
   [[ "$CLEANUP_DONE" == false ]] || return 0
   CLEANUP_DONE=true
   for index in "${!SERVER_PIDS[@]}"; do
     pid=${SERVER_PIDS[$index]}; target=${SERVER_TARGETS[$index]}
-    kill -TERM "$pid" 2>/dev/null || true
-    for ((i=0; i<100; i++)); do
-      kill -0 "$pid" 2>/dev/null || break
-      sleep 0.1
-    done
-    if kill -0 "$pid" 2>/dev/null; then kill -KILL "$pid" 2>/dev/null || true; fi
+    if ! "$PYTHON" "$VALIDATOR" stop "$OUT_DIR/$target/server.launch.json"; then
+      failed=1
+      # Identity mismatch is a hard refusal. Never signal or wait on that PID.
+      continue
+    fi
     code=0; wait "$pid" || code=$?
     "$PYTHON" - "$OUT_DIR/$target" "$code" <<'PY'
 import json, pathlib, sys
@@ -218,9 +232,11 @@ for target in "${selected[@]}"; do
     treedb_mongo) start_server "$target" "$TREEDB_MONGO_ADDR" "$TREEDB_MONGO_GATEWAY_BIN" -document-format "$TREEDB_MONGO_DOCUMENT_FORMAT";;
     mongodb)
       command -v docker >/dev/null || fail "docker is required"
-      MONGO_CONTAINER="treedb-ycsb-mongo-$$-$(date +%s)"
+      MONGO_CONTAINER_NAME="treedb-ycsb-mongo-$$-$(date +%s)"
       mkdir "$OUT_DIR/mongodb/db"
-      docker run -d --name "$MONGO_CONTAINER" -p "$MONGODB_ADDR:27017" -v "$OUT_DIR/mongodb/db:/data/db" "$MONGODB_IMAGE" --bind_ip_all --quiet >"$OUT_DIR/mongodb/container.id"
+      docker run -d --name "$MONGO_CONTAINER_NAME" -p "$MONGODB_ADDR:27017" -v "$OUT_DIR/mongodb/db:/data/db" "$MONGODB_IMAGE" --bind_ip_all --quiet >"$OUT_DIR/mongodb/container.id"
+      MONGO_CONTAINER=$(cat "$OUT_DIR/mongodb/container.id")
+      [[ "$MONGO_CONTAINER" =~ ^[0-9a-f]{64}$ ]] || fail "invalid owned container identity"
       pid=$(docker inspect --format '{{.State.Pid}}' "$MONGO_CONTAINER")
       "$PYTHON" "$VALIDATOR" observe "$pid" "$OUT_DIR/mongodb/db" "$OUT_DIR/mongodb/server.launch.json"
       docker inspect "$MONGO_CONTAINER" >"$OUT_DIR/mongodb/container.inspect.json"

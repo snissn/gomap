@@ -7,7 +7,19 @@ this consumer's evidence checks, not full #5335 matrix qualification. Server
 witness production and lifecycle orchestration remain integration obligations.
 The consumer never fabricates those witnesses from command flags/startup text.
 
-Each invocation uses a fresh `OUT_DIR`. `manifest.json` records campaign identity,
+Each invocation uses a fresh `OUT_DIR`. `SERVER_BUILD_MANIFEST` is mandatory
+and names a schema-v1 JSON object with `servers` mapping each selected target to
+`schema_version: 1`, `version` (for example `baseline`/`candidate`), exact
+`source_commit` (40 lowercase hexadecimal characters), `exe_sha256`, and
+`expected_owner` (`legacy` or `cow` for TreeDB; `mongodb` for the reference).
+Retain this independently accepted build binding in `server-build.json`. The
+supplied server executable must match its selected version's ELF hash. Runtime
+and lifecycle witnesses must repeat that version/source and actual process ELF;
+the actual serving backend must match `expected_owner`. Historical baselines
+are not required or permitted to pretend they activated COW. A version label
+alone does not establish source or owner identity.
+
+`manifest.json` records campaign identity,
 selected targets, formats, profile, record/operation/thread counts, repeats and
 client build binding. `CLIENT_BUILD_MANIFEST` names an independently retained
 JSON build record with `schema_version: 1`, `producer_commit` (the merge above),
@@ -38,11 +50,16 @@ and orchestration before a cell can validate.
 
 * `server.launch.json`: observed `process` object and absolute `data_dir`.
 * `server.exit.json`: same `process` and checked `exit_code: 0`, emitted only after
-  the task-owned service stops. Cleanup failure prevents valid terminal status.
+  the task-owned service stops. Cleanup uses Linux pidfds, pins the process
+  before checking its observed start ticks/ELF, and revalidates before TERM and
+  any KILL. An identity mismatch refuses signaling and invalidates cleanup.
+  Missing pidfd support fails closed. Docker cleanup uses the full immutable
+  container ID, rather than a potentially reused name. Cleanup failure prevents
+  valid terminal status.
 * `runtime.json`: `schema_version: 1`, `campaign_id`, `target`, `profile`,
-  `format`, `process`, `data_dir`, nonempty `owner_id`, ordered `phase_ids`, actual
-  integer `observed_gomaxprocs > 0`, actual `backend` (`cow` for TreeDB or
-  `mongodb`) and nonempty `observation` identifying the retained instrumentation
+  `format`, `version`, `source_commit`, `process`, `data_dir`, nonempty `owner_id`, ordered `phase_ids`, actual
+  integer `observed_gomaxprocs > 0`, actual `backend` (`legacy`, `cow`, or
+  `mongodb`, matched to the version-bound expected owner) and nonempty `observation` identifying the retained instrumentation
   source. All identities/settings must match launch/manifest. Backend must come
   from the serving collection/owner path, not an option or helper name.
 * `lifecycle.json`: the same identity/settings/owner/phase fields plus
@@ -67,7 +84,11 @@ must identify the original owner/database they verify; reopening can create a
 new process, but must not replace the original process identity in the linkage.
 MongoDB uses an owned container, with actual container inspection/image metadata
 retained. External MongoDB is refused until explicit owner/process integration
-exists. The current launcher does not run independent reopen/snapshot procedures;
+exists. Integration must retain a separate independently verifiable reopened process
+and owner identity and canonical typed random snapshots with structural validation;
+matching supplied digest strings do not establish those missing observations.
+The current consumer only checks the supplied digest equality and chronology.
+The current launcher does not run independent reopen/snapshot procedures;
 without their independently produced evidence the cell intentionally fails.
 
 Run offline controls with:
@@ -95,3 +116,8 @@ from `/home/mikers/gomap-mongo-ycsb-20261029/`:
 observation/control objects in tests are explicitly offline fixtures; they do
 not certify any product cell or stand in for the upstream original-return fault
 injection test.
+
+The run parser requires both READ and UPDATE rows with positive actual counts,
+and requires their exact sum and TOTAL to equal `operationcount`. It accepts the
+observed random split rather than inventing exact 95/5 counts. Missing/zero rows,
+malformed rows, operation errors, duplicate rows and count mismatches are invalid.

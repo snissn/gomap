@@ -34,6 +34,8 @@ class CompareTests(unittest.TestCase):
         self.directory.mkdir()
         self.process = dict(pid=1234, start_ticks=500, exe_sha256="a"*64, gomaxprocs_unset=True)
         self.manifest = dict(schema_version=1, campaign_id="offline-test-only", targets=[self.target], profile="command_wal_relaxed", formats={self.target:"bson"}, recordcount=100000, operationcount=10000, threadcount=16, run_repeats=1, client=dict(schema_version=1, producer_commit=COMPARE.PRODUCER, source_commit=COMPARE.PRODUCER, source_patch_sha256=hashlib.sha256(b"").hexdigest(), build_id="offline-fixture-build", exe_sha256="a"*64, toolchain="fixture", compatibility_configuration="fixture"))
+        self.manifest["server_builds"] = {self.target:dict(schema_version=1, version="candidate", source_commit="d"*40, exe_sha256="a"*64, expected_owner="cow")}
+        self.save(self.out / "server-build.json", dict(schema_version=1, servers=self.manifest["server_builds"]))
         self.save(self.out / "manifest.json", self.manifest)
         self.save(self.out / "client-build.json", self.manifest["client"])
         (self.out / "client.patch").write_bytes(b"")
@@ -50,7 +52,7 @@ class CompareTests(unittest.TestCase):
             self.save(self.directory / f"{stem}.launch.json", dict(schema_version=1, campaign_id="offline-test-only", phase_id=phase_id, process=self.process, start_utc="2026-10-29T00:00:00Z", end_utc="2026-10-29T00:00:04Z", exit_code=0, output_sha256=COMPARE.digest(self.directory / f"{stem}.out"), receipt_sha256=COMPARE.digest(self.directory / f"{stem}.close.json")))
         data_dir = str(self.directory / "db")
         self.save(self.directory / "server.launch.json", dict(process=self.process, data_dir=data_dir))
-        shared = dict(schema_version=1, campaign_id="offline-test-only", target=self.target, profile="command_wal_relaxed", format="bson", process=self.process, data_dir=data_dir, owner_id="offline-owner", phase_ids=ids)
+        shared = dict(schema_version=1, version="candidate", source_commit="d"*40, campaign_id="offline-test-only", target=self.target, profile="command_wal_relaxed", format="bson", process=self.process, data_dir=data_dir, owner_id="offline-owner", phase_ids=ids)
         self.save(self.directory / "runtime.json", dict(**shared, observed_gomaxprocs=16, backend="cow", observation="synthetic offline test"))
         self.save(self.directory / "lifecycle.json", dict(**shared, server_exit_code=0, checkpoint=call_result(4,5), server_close=call_result(5,6), reopen=call_result(6,7), random_state_preservation=call_result(7,8), preclose_state_sha256="b"*64, reopened_state_sha256="b"*64, preclose_state_utc="2026-10-29T00:00:04Z", reopened_state_utc="2026-10-29T00:00:07Z", random_state_scope="observed-state-preservation-only"))
         self.save(self.directory / "server.exit.json", dict(process=self.process, exit_code=0))
@@ -174,8 +176,10 @@ class CompareTests(unittest.TestCase):
         new_dir = self.out / self.target
         self.directory.rename(new_dir)
         self.directory = new_dir
+        self.manifest["server_builds"][self.target] = self.manifest["server_builds"].pop("treedb_mongo")
         self.manifest["targets"] = [self.target]
         self.manifest["formats"] = {self.target:"bson"}
+        self.save(self.out / "server-build.json", dict(schema_version=1, servers=self.manifest["server_builds"]))
         self.save(self.out / "manifest.json", self.manifest)
         for name in ("runtime.json", "lifecycle.json"):
             self.change(name, lambda value:value.update(target=self.target))
@@ -252,9 +256,11 @@ class CompareTests(unittest.TestCase):
         build = dict(self.manifest["client"], exe_sha256=COMPARE.digest(client))
         build_path = self.out / "offline-build.json"
         self.save(build_path, build)
+        server_build_path = self.out / "offline-server-build.json"
+        self.save(server_build_path, dict(schema_version=1, servers={"treedb_native":dict(schema_version=1,version="candidate",source_commit="d"*40,exe_sha256=COMPARE.digest(server),expected_owner="cow")}))
         execution = self.out / "execution"
         environment = os.environ.copy()
-        environment.update(PATH=str(tools)+os.pathsep+environment["PATH"], GOMAXPROCS="1", PARSE_ONLY="false", BUILD="false", BUILD_GOYCSB="false", OUT_DIR=str(execution), TARGETS="treedb_native", MONGODB_MODE="skip", TREEDB_NATIVE_DOCUMENT_FORMAT="json", TREEDB_NATIVE_SERVER_BIN=str(server), TREEDB_MONGO_GATEWAY_BIN=str(tools/"must-not-launch"), NATIVE_ADDR=f"127.0.0.1:{port}", CLIENT_BUILD_MANIFEST=str(build_path), GOYCSB_DIR=str(tools), GOYCSB_BIN=str(client))
+        environment.update(PATH=str(tools)+os.pathsep+environment["PATH"], GOMAXPROCS="1", PARSE_ONLY="false", BUILD="false", BUILD_GOYCSB="false", OUT_DIR=str(execution), TARGETS="treedb_native", MONGODB_MODE="skip", TREEDB_NATIVE_DOCUMENT_FORMAT="json", TREEDB_NATIVE_SERVER_BIN=str(server), TREEDB_MONGO_GATEWAY_BIN=str(tools/"must-not-launch"), NATIVE_ADDR=f"127.0.0.1:{port}", CLIENT_BUILD_MANIFEST=str(build_path), SERVER_BUILD_MANIFEST=str(server_build_path), GOYCSB_DIR=str(tools), GOYCSB_BIN=str(client))
         outcome = subprocess.run(["bash", str(ROOT / "ycsb_compare_mongodb_treedb.sh")],env=environment,text=True,capture_output=True,timeout=20)
         self.assertEqual(outcome.returncode,37,outcome.stderr)
         self.assertTrue(json.loads(marker.read_text())["env_unset"])
@@ -268,6 +274,65 @@ class CompareTests(unittest.TestCase):
         self.assertFalse((execution/"mongodb").exists())
         self.assertEqual(json.loads((execution/"treedb_native/server.exit.json").read_text())["exit_code"],0)
         self.assertEqual(json.loads((execution/"validation.json").read_text())["status"],"invalid")
+
+    def test_version_bound_legacy_and_candidate_owners(self):
+        # The identical target API can be served by different historical owners.
+        build = self.manifest["server_builds"][self.target]
+        build.update(version="baseline",source_commit="e"*40,expected_owner="legacy")
+        self.save(self.out/"manifest.json",self.manifest)
+        self.save(self.out/"server-build.json",dict(schema_version=1,servers=self.manifest["server_builds"]))
+        for name in ("runtime.json","lifecycle.json"):
+            self.change(name,lambda value:value.update(version="baseline",source_commit="e"*40))
+        self.change("runtime.json",lambda value:value.update(backend="legacy"))
+        self.check(True)
+        self.change("runtime.json",lambda value:value.update(backend="cow"))
+        self.check(False,"actual owner/backend")
+        self.change("runtime.json",lambda value:value.update(backend="legacy",source_commit="f"*40))
+        self.check(False,"server version/source mismatch")
+
+    def test_wrong_version_server_elf_rejected(self):
+        self.change("server.launch.json",lambda value:value["process"].update(exe_sha256="f"*64))
+        self.check(False,"server ELF binding mismatch")
+
+    def test_run_requires_positive_read_and_update_and_exact_actual_sum(self):
+        path = self.directory/"run_1.out"
+        original = path.read_text()
+        without_update = "\n".join(line for line in original.splitlines() if not line.startswith("UPDATE"))+"\n"
+        controls = [without_update.replace("Count: 9515","Count: 10000"), original.replace("Count: 9515","Count: 10000").replace("Count: 485","Count: 0"), original.replace("Count: 485","Count: 484"), original.replace("UPDATE - Takes(s): 0.5, Count: 485", "UPDATE - Takes(s): 0.5, Count: malformed")]
+        for content in controls:
+            with self.subTest(content=content[-140:]):
+                path.write_text(content)
+                self.change("run_1.launch.json",lambda value:value.update(output_sha256=COMPARE.digest(path)))
+                self.check(False)
+        # A different random split is accepted, with no invented fixed 95/5 totals.
+        path.write_text(original.replace("Count: 9515","Count: 9487").replace("Count: 485","Count: 513"))
+        self.change("run_1.launch.json",lambda value:value.update(output_sha256=COMPARE.digest(path)))
+        self.check(True)
+
+    def test_pidfd_cleanup_refuses_stale_start_and_wrong_elf_without_signal(self):
+        env=os.environ.copy(); env.pop("GOMAXPROCS",None)
+        child=subprocess.Popen([sys.executable,"-c","import time; time.sleep(30)"],env=env)
+        identity=COMPARE.observe(child.pid)
+        try:
+            for mutate in (lambda value:value.update(start_ticks=value["start_ticks"]+1),lambda value:value.update(exe_sha256="f"*64)):
+                wrong=dict(identity); mutate(wrong)
+                self.save(self.directory/"cleanup-probe.json",dict(process=wrong))
+                outcome=subprocess.run([sys.executable,str(ROOT/"ycsb_compare_validate.py"),"stop",str(self.directory/"cleanup-probe.json"),"--timeout",".05"],capture_output=True,text=True)
+                self.assertNotEqual(outcome.returncode,0)
+                self.assertIn("refusing signal",outcome.stderr)
+                self.assertIsNone(child.poll(),"mismatched process must remain unsignaled")
+        finally:
+            COMPARE.terminate_owned(identity,timeout=.05)
+            child.wait(timeout=2)
+
+    def test_pidfd_cleanup_revalidates_before_kill(self):
+        from unittest import mock
+        identity=dict(self.process)
+        changed=dict(identity,exe_sha256="f"*64)
+        with mock.patch.object(COMPARE.os,"pidfd_open",return_value=55), mock.patch.object(COMPARE.os,"close"), mock.patch.object(COMPARE.select,"select",return_value=([],[],[])), mock.patch.object(COMPARE,"observe",side_effect=[identity,changed]), mock.patch.object(COMPARE.signal,"pidfd_send_signal") as send:
+            with self.assertRaisesRegex(ValueError,"refusing signal"):
+                COMPARE.terminate_owned(identity,timeout=0)
+            send.assert_called_once_with(55,COMPARE.signal.SIGTERM)
 
     def test_launcher_rejects_reused_receipt_and_propagates_error(self):
         command = [sys.executable, str(ROOT / "ycsb_compare_validate.py"), "launch", str(self.directory), "load", "--", "/bin/true"]

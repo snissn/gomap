@@ -14,6 +14,7 @@ import os
 import pathlib
 import re
 import signal
+import select
 import subprocess
 import sys
 import time
@@ -107,6 +108,9 @@ def check_counts(parsed, expected, phase, path):
     require("TOTAL" in rows, f"missing TOTAL in {path.name}")
     allowed = {"INSERT", "INSERT_ERROR", "TOTAL"} if phase == "load" else {"READ", "READ_ERROR", "UPDATE", "UPDATE_ERROR", "TOTAL"}
     require(set(rows) <= allowed, f"unexpected workload operations in {path.name}")
+    required = {"INSERT"} if phase == "load" else {"READ", "UPDATE"}
+    require(required <= rows.keys(), f"missing required measured operations in {path.name}")
+    require(all(rows[op]["count"] > 0 for op in required), f"empty required measured operation in {path.name}")
     require(rows["TOTAL"]["count"] == expected, f"TOTAL count mismatch in {path.name}")
     successful = [row for op, row in rows.items() if op != "TOTAL" and not op.endswith("_ERROR")]
     require(successful and sum(row["count"] for row in successful) == expected, f"operation count mismatch in {path.name}")
@@ -150,7 +154,15 @@ def server_evidence(directory, target, manifest, phase_ids):
     lifecycle = read(directory / "lifecycle.json")
     launch = read(directory / "server.launch.json")
     process(launch["process"])
+    build = manifest["server_builds"][target]
+    server_manifest = read(directory.parent / "server-build.json")
+    require(server_manifest["schema_version"] == 1 and server_manifest["servers"][target] == build, "server build manifest mismatch")
+    require(build["schema_version"] == 1 and isinstance(build["version"], str) and build["version"], "missing server version binding")
+    require(re.fullmatch(r"[0-9a-f]{40}", build["source_commit"]), "missing server source binding")
+    require(SHA.fullmatch(build["exe_sha256"]) and launch["process"]["exe_sha256"] == build["exe_sha256"], "server ELF binding mismatch")
+    require(build["expected_owner"] in ({"mongodb"} if target == "mongodb" else {"legacy", "cow"}), "invalid expected owner")
     for evidence in (runtime, lifecycle):
+        require(evidence["version"] == build["version"] and evidence["source_commit"] == build["source_commit"], "server version/source mismatch")
         require(evidence["schema_version"] == 1 and evidence["campaign_id"] == manifest["campaign_id"], "stale server evidence")
         require(evidence["target"] == target and evidence["profile"] == manifest["profile"] and evidence["format"] == manifest["formats"][target], "server settings mismatch")
         require(evidence["process"] == launch["process"], "server process identity mismatch")
@@ -158,7 +170,7 @@ def server_evidence(directory, target, manifest, phase_ids):
         require(evidence["owner_id"] and evidence["owner_id"] == runtime["owner_id"], "owner mismatch")
     require(runtime["phase_ids"] == phase_ids, "runtime phase identity mismatch")
     require(type(runtime["observed_gomaxprocs"]) is int and runtime["observed_gomaxprocs"] > 0, "missing actual runtime GOMAXPROCS")
-    require(runtime["backend"] == ("mongodb" if target == "mongodb" else "cow"), "missing actual COW/backend witness")
+    require(runtime["backend"] == build["expected_owner"], "actual owner/backend does not match selected version")
     require(isinstance(runtime["observation"], str) and runtime["observation"], "missing runtime witness provenance")
     require(lifecycle["phase_ids"] == phase_ids, "lifecycle phase identity mismatch")
     require(lifecycle["server_exit_code"] == 0, "server close exit failure")
@@ -236,6 +248,31 @@ def observe(pid):
     return dict(pid=pid, start_ticks=int(stat[19]), exe_sha256=digest(proc / "exe"), gomaxprocs_unset=not any(item.startswith(b"GOMAXPROCS=") for item in environment))
 
 
+
+def terminate_owned(identity, timeout=10):
+    """Pin the process before checking identity; never signal by a reusable PID."""
+    process(identity)
+    require(hasattr(os, "pidfd_open") and hasattr(signal, "pidfd_send_signal"), "safe pidfd cleanup unavailable")
+    try:
+        descriptor = os.pidfd_open(identity["pid"])
+    except ProcessLookupError:
+        return  # Already gone; the parent still checks its retained wait status.
+    try:
+        def exited():
+            return bool(select.select([descriptor], [], [], 0)[0])
+        def checked_signal(signum):
+            if exited():
+                return
+            actual = observe(identity["pid"])
+            require(actual == identity, "cleanup process identity mismatch; refusing signal")
+            signal.pidfd_send_signal(descriptor, signum)
+        checked_signal(signal.SIGTERM)
+        if not select.select([descriptor], [], [], timeout)[0]:
+            checked_signal(signal.SIGKILL)
+            require(select.select([descriptor], [], [], timeout)[0], "owned process did not terminate")
+    finally:
+        os.close(descriptor)
+
 def launch(args):
     out, stem = pathlib.Path(args.directory), args.stem
     receipt = out / f"{stem}.close.json"
@@ -257,14 +294,10 @@ def launch(args):
             identity = observe(child.pid)
             code = child.wait()
         except BaseException:
-            # Own the client's process group, including descendants, on interruption.
-            try:
-                os.killpg(child.pid, signal.SIGTERM)
-                child.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                os.killpg(child.pid, signal.SIGKILL)
-                child.wait()
-            except ProcessLookupError:
+            # Cleanup only the observed child through a pinned process descriptor.
+            # If initial observation failed, no unknown process is signaled.
+            if "identity" in locals():
+                terminate_owned(identity)
                 child.wait()
             raise
     write_new(out / f"{stem}.launch.json", dict(schema_version=1, campaign_id=manifest["campaign_id"], phase_id=phase_id, process=identity, start_utc=started, end_utc=now(), exit_code=code, output_sha256=digest(out / f"{stem}.out"), receipt_sha256=digest(receipt) if receipt.exists() else None))
@@ -284,6 +317,9 @@ def main():
     proc.add_argument("pid", type=int)
     proc.add_argument("data_dir")
     proc.add_argument("output")
+    stop = sub.add_parser("stop")
+    stop.add_argument("launch", type=pathlib.Path)
+    stop.add_argument("--timeout", type=float, default=10)
     args = parser.parse_args()
     try:
         if args.mode == "validate":
@@ -294,6 +330,9 @@ def main():
             return validate(args.out)
         if args.mode == "launch":
             return launch(args)
+        if args.mode == "stop":
+            terminate_owned(read(args.launch)["process"], args.timeout)
+            return 0
         write_new(args.output, dict(process=observe(args.pid), data_dir=args.data_dir))
         return 0
     except (ValueError, KeyError, TypeError, OSError) as error:
