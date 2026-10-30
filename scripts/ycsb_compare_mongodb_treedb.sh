@@ -249,7 +249,9 @@ start_server() {
   mkdir -p "$dir"
   mkdir "$OUT_DIR/$target/$prefix.evidence"
   CLEANUP_DONE=false
-  local command=(env -u GOMAXPROCS "YCSB_SERVER_RECEIPT_DIR=$OUT_DIR/$target/$prefix.evidence" "$binary" -dir "$dir" -profile "$TREEDB_PROFILE" -addr "$addr" "$@")
+  local checkpoint_env=()
+  if [[ "$target" == treedb_mongo ]]; then checkpoint_env=(YCSB_OWNER_CHECKPOINT=1); fi
+  local command=(env -u GOMAXPROCS "${checkpoint_env[@]}" "YCSB_SERVER_RECEIPT_DIR=$OUT_DIR/$target/$prefix.evidence" "$binary" -dir "$dir" -profile "$TREEDB_PROFILE" -addr "$addr" "$@")
   log_command "${command[@]}"
   "${command[@]}" >"$OUT_DIR/$target/$prefix.log" 2>&1 &
   SERVER_PIDS+=("$!"); SERVER_TARGETS+=("$target"); SERVER_PREFIXES+=("$prefix")

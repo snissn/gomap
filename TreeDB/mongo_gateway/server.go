@@ -97,6 +97,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
+	checkpointControl, err := evidence.StartCheckpointControl(standalone.Collections.FlushAll)
+	if err != nil {
+		fmt.Fprintf(stderr, "mongo gateway server: checkpoint evidence: %v\n", err)
+		_ = ln.Close()
+		_ = evidence.Close(standalone.Close)
+		return 1
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -122,7 +130,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	serveErr := standalone.Serve(ctx, ln)
-	closeErr := evidence.Close(standalone.Close)
+	controlErr := checkpointControl.Close()
+	closeErr := errors.Join(controlErr, evidence.Close(standalone.Close))
 	if serveErr != nil {
 		fmt.Fprintf(stderr, "mongo gateway server: serve: %v\n", serveErr)
 		if closeErr != nil {

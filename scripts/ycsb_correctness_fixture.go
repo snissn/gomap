@@ -24,6 +24,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/nativewire"
+	"github.com/snissn/gomap/internal/ycsbevidence"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
@@ -519,7 +520,8 @@ func run() (retErr error) {
 	source := flag.String("source-id", "", "bound source identity")
 	fixture := flag.String("fixture-id", "", "fresh fixture identity")
 	stage := flag.String("stage", "", "random snapshot stage: loaded, preclose, or reopened")
-	checkpoint := flag.Bool("checkpoint", false, "explicit native checkpoint after random snapshot")
+	checkpoint := flag.Bool("checkpoint", false, "explicit checkpoint after random snapshot")
+	ownerCheckpointDir := flag.String("owner-checkpoint-dir", "", "private opt-in gateway owner evidence directory; not a Mongo API")
 	flag.Parse()
 	if *addr == "" || *source == "" || *fixture == "" || *expected == "" || *observed == "" || *receipt == "" || (*target != "native" && *target != "mongo") || (*format != "json" && *format != "bson") || (*mode != "write" && *mode != "verify" && *mode != "snapshot") || (*profile != "command_wal_durable" && *profile != "command_wal_relaxed" && *profile != "no_wal_fast") {
 		return errors.New("all flags and valid target/format/profile/mode are required")
@@ -531,13 +533,16 @@ func run() (retErr error) {
 		if *stage != "loaded" && *stage != "preclose" && *stage != "reopened" {
 			return errors.New("invalid random snapshot stage")
 		}
-		if *checkpoint && *target != "native" {
+		if *checkpoint && *target != "native" && *ownerCheckpointDir == "" {
 			return errors.New("no supported Mongo checkpoint API; refusing unproven checkpoint")
 		}
 		collection = "usertable"
 		database = "ycsb"
 	} else if *stage != "" || *checkpoint {
 		return errors.New("random snapshot options cannot alter deterministic fixture")
+	}
+	if *ownerCheckpointDir != "" && (*target != "mongo" || (*mode != "write" && !(*mode == "snapshot" && *checkpoint && *stage == "preclose"))) {
+		return errors.New("private checkpoint control only applies to Mongo write or preclose snapshot")
 	}
 	id := identity{1, *source, *fixture, *profile, *target, *format}
 	var m manifest
@@ -563,7 +568,16 @@ func run() (retErr error) {
 	defer cancel()
 	var ds []driver
 	checkpointAttempted, checkpointSucceeded := false, false
-	var checkpointResult map[string]any
+	var checkpointResult any
+	var ownerCheckpoint *ycsbevidence.CheckpointReceipt
+	privateCheckpoint := func() error {
+		checkpointAttempted = true
+		proof, err := ycsbevidence.RequestCheckpoint(ctx, *ownerCheckpointDir, *source, *fixture, *observed)
+		ownerCheckpoint = &proof
+		checkpointResult = proof.Result
+		checkpointSucceeded = err == nil && proof.Result.Success
+		return err
+	}
 	defer func() {
 		var cerr error
 		for _, d := range ds {
@@ -594,7 +608,7 @@ func run() (retErr error) {
 			}
 			artifacts[filepath.Base(path)] = hex.EncodeToString(hash.Sum(nil))
 		}
-		e := writeJSON(*receipt, map[string]any{"schema_version": 1, "artifacts_sha256": artifacts, "checkpoint": checkpointResult, "kind": kind, "fixture_id": *fixture, "source_id": *source, "mode": *mode, "pid": os.Getpid(), "started_utc": started.Format(time.RFC3339Nano), "ended_utc": time.Now().UTC().Format(time.RFC3339Nano), "checkpoint_attempted": checkpointAttempted, "checkpoint_succeeded": checkpointSucceeded, "close_error": func() string {
+		e := writeJSON(*receipt, map[string]any{"schema_version": 1, "artifacts_sha256": artifacts, "checkpoint": checkpointResult, "owner_checkpoint": ownerCheckpoint, "kind": kind, "fixture_id": *fixture, "source_id": *source, "mode": *mode, "pid": os.Getpid(), "started_utc": started.Format(time.RFC3339Nano), "ended_utc": time.Now().UTC().Format(time.RFC3339Nano), "checkpoint_attempted": checkpointAttempted, "checkpoint_succeeded": checkpointSucceeded, "close_error": func() string {
 			if cerr != nil {
 				return cerr.Error()
 			}
@@ -631,6 +645,9 @@ func run() (retErr error) {
 			return e
 		}
 		if *checkpoint {
+			if *target == "mongo" {
+				return privateCheckpoint()
+			}
 			checkpointAttempted = true
 			start := time.Now()
 			e = ds[0].(*nativeDriver).c.Checkpoint(ctx)
@@ -738,6 +755,8 @@ func run() (retErr error) {
 			return e
 		}
 		checkpointSucceeded = true
+	} else if *ownerCheckpointDir != "" {
+		return privateCheckpoint()
 	}
 	return nil
 }

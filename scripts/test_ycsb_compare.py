@@ -110,6 +110,16 @@ class CompareTests(unittest.TestCase):
 
     def helper_fixture(self,stem,mode,fixture_id,start,end,artifacts,checkpoint):
         receipt=dict(schema_version=1,kind="random_snapshot_client_close" if mode=="snapshot" else "deterministic_fixture_client_close",source_id=self.manifest["server_builds"][self.target]["source_commit"],fixture_id=fixture_id,mode=mode,pid=4321,started_utc=f"2026-10-29T00:00:{start:02d}Z",ended_utc=f"2026-10-29T00:00:{end:02d}Z",result_error="",close_error="",checkpoint_attempted=checkpoint,checkpoint_succeeded=checkpoint,checkpoint=call_result(start,end) if checkpoint else None,artifacts_sha256={name:COMPARE.digest(self.directory/name) for name in artifacts})
+        if checkpoint and self.target=="treedb_mongo":
+            prefix="server" if mode=="snapshot" else "fixture-write"
+            opened=COMPARE.read(self.directory/(prefix+".evidence")/"owner.open.json")
+            snapshot=stem+".json" if mode=="snapshot" else "fixture.updated.json"
+            request=dict(schema_version=1,owner_id=opened["owner_id"],request_id="f"*32,client=dict(self.process,pid=4321),source_id=receipt["source_id"],fixture_id=fixture_id,snapshot_sha256=COMPARE.digest(self.directory/snapshot))
+            proof=dict(schema_version=1,kind="explicit_live_owner_checkpoint",request=request,owner=dict(opened,observed_utc=receipt["started_utc"]),collections_flush_all=call_result(start,start),backend_checkpoint=call_result(start,end),result=receipt["checkpoint"])
+            self.save(self.directory/(prefix+".evidence")/"owner.checkpoint-control.json",dict(schema_version=1,kind="private_owner_checkpoint_control",owner_id=opened["owner_id"],address="127.0.0.1:12345"))
+            self.save(self.directory/(prefix+".evidence")/"owner.checkpoint-request.json",request)
+            self.save(self.directory/(prefix+".evidence")/"owner.checkpoint.json",proof)
+            receipt["owner_checkpoint"]=proof
         self.save(self.directory/(stem+".close.json"),receipt)
         self.save(self.directory/(stem+".launch.json"),dict(process=dict(self.process,pid=4321),campaign_id=self.manifest["campaign_id"],phase_id=stem,exit_code=0,timeout_seconds=180,cleanup_timeout_seconds=10,outer_timeout_seconds=220,timed_out=False,start_utc=receipt["started_utc"],end_utc=receipt["ended_utc"],receipt_sha256=COMPARE.digest(self.directory/(stem+".close.json"))))
 
@@ -527,6 +537,46 @@ int main(int argc,char **argv) {
         self.change("snapshot_reopened.close.json",lambda v:v["artifacts_sha256"].update({path.name:COMPARE.digest(path)}))
         self.check(False,"random snapshot source mismatch")
 
+    def test_mongo_checkpoint_requires_raw_owner_control(self):
+        (self.directory/"server.evidence/owner.checkpoint.json").unlink()
+        self.check(False)
+
+    def test_mongo_checkpoint_rejects_missing_endpoint_and_wrong_schema(self):
+        path=self.directory/"server.evidence/owner.checkpoint-control.json"
+        endpoint=COMPARE.read(path)
+        for mutate in (lambda v:v.update(schema_version=2),lambda v:v.update(owner_id="e"*32),lambda v:v.update(address="0.0.0.0:12345")):
+            value=dict(endpoint);mutate(value);self.save(path,value)
+            self.check(False)
+        path.unlink()
+        self.check(False)
+
+    def test_mongo_checkpoint_rejects_failed_calls_and_wrong_order(self):
+        original=COMPARE.read(self.directory/"server.evidence/owner.checkpoint.json")
+        controls=[(lambda v:v["collections_flush_all"].update(success=False,error="injected flush failure"),"FlushAll"),
+                  (lambda v:v["backend_checkpoint"].update(success=False,error="injected checkpoint failure"),"Checkpoint"),
+                  (lambda v:v.update(collections_flush_all=call_result(4,5),backend_checkpoint=call_result(4,4)),"ordering")]
+        for mutate,message in controls:
+            proof=json.loads(json.dumps(original));mutate(proof)
+            self.save(self.directory/"server.evidence/owner.checkpoint.json",proof)
+            self.change("snapshot_preclose.close.json",lambda v:v.update(owner_checkpoint=proof))
+            self.check(False,message)
+
+    def test_mongo_checkpoint_rejects_forged_identity_and_snapshot(self):
+        original=COMPARE.read(self.directory/"server.evidence/owner.checkpoint.json")
+        controls=[lambda v:v["owner"]["process"].update(start_ticks=999),
+                  lambda v:v["owner"].update(data_inode=999),
+                  lambda v:v["request"].update(owner_id="e"*32),
+                  lambda v:v["request"]["client"].update(pid=999),
+                  lambda v:v["request"].update(snapshot_sha256="e"*64),
+                  lambda v:v["request"].update(source_id="e"*40),
+                  lambda v:v["request"].update(fixture_id="stale-campaign")]
+        for mutate in controls:
+            proof=json.loads(json.dumps(original));mutate(proof)
+            self.save(self.directory/"server.evidence/owner.checkpoint.json",proof)
+            self.save(self.directory/"server.evidence/owner.checkpoint-request.json",proof["request"])
+            self.change("snapshot_preclose.close.json",lambda v:v.update(owner_checkpoint=proof))
+            self.check(False)
+
     def test_short_lived_large_elf_child_is_prehashed_before_observation(self):
         binary=self.out/"large-python"
         shutil.copyfile(sys.executable,binary)
@@ -609,6 +659,12 @@ int main(int argc,char **argv) {
         self.change("snapshot_preclose.close.json",lambda v:v.update(started_utc=half,checkpoint=checkpoint))
         self.change("snapshot_preclose.launch.json",lambda v:v.update(start_utc=half))
         self.change("lifecycle.json",lambda v:v.update(checkpoint=checkpoint))
+        proof=COMPARE.read(self.directory/"server.evidence/owner.checkpoint.json")
+        point=call_result(4,4);point.update(start_utc=half,end_utc=half)
+        proof.update(result=checkpoint,collections_flush_all=point,backend_checkpoint=checkpoint)
+        proof["owner"]["observed_utc"]=half
+        self.save(self.directory/"server.evidence/owner.checkpoint.json",proof)
+        self.change("snapshot_preclose.close.json",lambda v:v.update(owner_checkpoint=proof))
         self.manifest["run_repeats"]=2
         self.save(self.out/"manifest.json",self.manifest)
         for suffix in (".out",".close.json",".launch.json"):

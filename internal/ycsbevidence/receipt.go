@@ -1,5 +1,5 @@
 // Package ycsbevidence observes the original, live command owner and Close.
-// It is enabled only by YCSB_SERVER_RECEIPT_DIR and performs no storage mutation.
+// It is enabled only by YCSB_SERVER_RECEIPT_DIR and is read-only unless the separate YCSB_OWNER_CHECKPOINT=1 control is enabled.
 package ycsbevidence
 
 import (

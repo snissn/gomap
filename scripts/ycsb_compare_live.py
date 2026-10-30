@@ -104,6 +104,35 @@ def helper(directory, stem, manifest, target, mode, fixture_id):
     return receipt,bounds
 
 
+def owner_checkpoint(directory,prefix,stem,receipt,bounds,opened,source_id,fixture_id,snapshot):
+    evidence=directory/(prefix+".evidence")
+    endpoint=c.read(evidence/"owner.checkpoint-control.json")
+    c.require(c.schema(endpoint) and endpoint["kind"]=="private_owner_checkpoint_control" and endpoint["owner_id"]==opened["owner_id"], "checkpoint control endpoint owner mismatch")
+    address=endpoint["address"].split(":")
+    c.require(len(address)==2 and address[0]=="127.0.0.1" and address[1].isdecimal() and 0<int(address[1])<65536, "invalid private checkpoint control address")
+    raw=c.read(evidence/"owner.checkpoint.json")
+    request=c.read(evidence/"owner.checkpoint-request.json")
+    c.require(c.schema(raw) and raw["kind"]=="explicit_live_owner_checkpoint", "missing raw explicit owner checkpoint")
+    c.require(raw==receipt["owner_checkpoint"] and raw["request"]==request, "checkpoint raw/client/request mismatch")
+    c.require(c.schema(request) and request["owner_id"]==opened["owner_id"] and isinstance(request["request_id"],str) and len(request["request_id"])==32 and all(char in "0123456789abcdef" for char in request["request_id"]), "checkpoint request owner mismatch")
+    launch=c.read(directory/(stem+".launch.json"))
+    c.require(request["client"]==launch["process"] and request["source_id"]==source_id and request["fixture_id"]==fixture_id and request["snapshot_sha256"]==c.digest(directory/snapshot), "checkpoint request client/source/snapshot mismatch")
+    observation=raw["owner"]
+    for key in ("schema_version","kind","owner_id","process","data_dir","data_device","data_inode","profile","backend"):
+        c.require(observation[key]==opened[key], "checkpoint actual owner identity mismatch")
+    c.require(observation["observed_gomaxprocs"]==opened["observed_gomaxprocs"] and observation["stats"]["treedb.profile.resolved"]==opened["profile"], "checkpoint live owner runtime/profile mismatch")
+    if opened["backend"]=="cow":
+        c.require(observation["capture_error"]=="" and observation["stats"]["treedb.cache.memtable_mode"]=="cow_btree" and observation["stats"]["treedb.cache.cow.txn.logical_seq"].isdecimal(), "checkpoint actual COW evidence missing")
+    else:
+        c.require(observation["capture_error"]==opened["capture_error"], "checkpoint actual legacy evidence missing")
+    result=c.result(raw["result"],"owner checkpoint result",bounds=bounds)
+    flush=c.result(raw["collections_flush_all"],"owner collections FlushAll",bounds=result)
+    checkpoint=c.result(raw["backend_checkpoint"],"owner backend Checkpoint",bounds=result)
+    c.require(result[0] <= c.timestamp(observation["observed_utc"]) <= flush[0] <= flush[1] <= checkpoint[0] <= checkpoint[1] <= result[1], "explicit owner checkpoint call ordering mismatch")
+    require_interval(result,owner_bounds(directory,prefix),"explicit owner checkpoint")
+    c.require(receipt["checkpoint"]==raw["result"] and receipt["checkpoint_attempted"] is True and receipt["checkpoint_succeeded"] is True, "checkpoint aggregate differs from actual owner calls")
+
+
 def validate(directory, target, manifest, lifecycle):
     c.require(manifest.get("lifecycle_contract") == 2, "required live lifecycle contract 2 missing")
     c.require(target != "mongodb", "external Mongo live owner/checkpoint evidence is unsupported")
@@ -149,6 +178,8 @@ def validate(directory, target, manifest, lifecycle):
     checkpoint = receipts["preclose"][0]
     c.require(checkpoint["checkpoint_attempted"] is True and checkpoint["checkpoint_succeeded"] is True, "missing real explicit checkpoint call")
     c.result(checkpoint["checkpoint"],"actual explicit checkpoint",bounds=receipts["preclose"][1])
+    if target=="treedb_mongo":
+        owner_checkpoint(directory,"server","snapshot_preclose",checkpoint,receipts["preclose"][1],original,build["source_commit"],random_id,"snapshot_preclose.json")
     c.require(lifecycle["checkpoint"] == checkpoint["checkpoint"] and lifecycle["server_close"] == closed["close"], "aggregate lifecycle differs from actual calls")
     c.require(lifecycle["owner_id"] == original["owner_id"] and lifecycle["reopened_process"] == reopened["process"] and lifecycle["reopened_owner_id"] == reopened["owner_id"], "aggregate reopened owner mismatch")
     # Independently named deterministic fixture uses a fresh database and two
@@ -165,6 +196,8 @@ def validate(directory, target, manifest, lifecycle):
     for stem,mode,opened,closing in (("fixture_write","write",first,first_close),("fixture_verify","verify",second,second_close)):
         receipt,bounds=helper(directory,stem,manifest,target,mode,fixture_id)
         require_interval(bounds,owner_bounds(directory,"fixture-write" if mode=="write" else "fixture-reopened"),"fixture call")
+        if target=="treedb_mongo" and mode=="write":
+            owner_checkpoint(directory,"fixture-write","fixture_write",receipt,bounds,first,build["source_commit"],fixture_id,"fixture.updated.json")
         if target == "treedb_native" and mode == "write":
             c.require(receipt["checkpoint_attempted"] is True and receipt["checkpoint_succeeded"] is True,"fixture checkpoint failed/skipped")
     expected = c.read(directory/"fixture.expected.json")
@@ -182,6 +215,8 @@ def run_helper(directory,target,addr,mode,stage=None,timeout=180,cleanup_timeout
     if mode=="snapshot":
         command += ["-stage",stage]
         if stage=="preclose": command += ["-checkpoint"]
+    if target=="treedb_mongo" and (mode=="write" or (mode=="snapshot" and stage=="preclose")):
+        command += ["-owner-checkpoint-dir",str(directory/("fixture-write.evidence" if mode=="write" else "server.evidence"))]
     code=c.launch(argparse.Namespace(directory=str(directory),stem=stem,command=command,timeout=timeout,cleanup_timeout=cleanup_timeout))
     c.require(code==0,"snapshot/fixture child failed with exit "+str(code))
 
