@@ -20,6 +20,8 @@ import (
 
 const nativeGraphHandoffWitnessChildEnv = "TREEDB_NATIVE_GRAPH_HANDOFF_WITNESS_CHILD"
 const nativeGraphHandoffWitnessSuccess = "NATIVE_GRAPH_HANDOFF_WITNESS_COMPLETED"
+const nativeGraphHandoffWitnessBatchRows = 128
+const nativeGraphHandoffWitnessRows = 2 * nativeGraphHandoffWitnessBatchRows
 
 // Go testing matches slash-separated components independently. Anchoring only
 // the whole name permits changed-manifest to match unchanged-manifest's suffix.
@@ -170,11 +172,11 @@ func TestNativeOrdinaryGraphAcceptedAcrossCapturedManifestBuild(t *testing.T) {
 			// Keep the 128-row batch shape and default finite admission limits;
 			// acceptance below remains mandatory and fails closed. The original
 			// documentservice 4096/128 test remains independently unchanged.
-			insert(0, 128)
+			insert(0, nativeGraphHandoffWitnessBatchRows)
 			if err := owner.Checkpoint(); err != nil {
 				t.Fatal(err)
 			}
-			insert(128, 256)
+			insert(nativeGraphHandoffWitnessBatchRows, nativeGraphHandoffWitnessRows)
 			if !overlap {
 				if err := owner.Checkpoint(); err != nil {
 					t.Fatal(err)
@@ -439,7 +441,7 @@ func TestNativeOrdinaryGraphAcceptedAcrossCapturedManifestBuild(t *testing.T) {
 			}
 			// Success remains subject to existing hybrid/cold/reopen qualification; this
 			// focused control only proves the accepted graph survived its old prefix.
-			for _, n := range []int{0, 128, 255} {
+			for _, n := range []int{0, nativeGraphHandoffWitnessBatchRows, nativeGraphHandoffWitnessRows - 1} {
 				id := []byte(fmt.Sprintf("doc-%04d", n))
 				want := []byte(fmt.Sprintf(`{"embedding":[%d,1]}`, n+1))
 				if got, err := current.Get(id); err != nil || !bytes.Equal(got, want) {
