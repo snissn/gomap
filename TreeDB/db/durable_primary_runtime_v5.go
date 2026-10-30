@@ -639,7 +639,9 @@ func (runtime *rootPublicationRuntimeV1) preparePrimarySealV5(ctx context.Contex
 		a.Drop(proof, nil)
 		return e
 	}
-	seal := &rootPublicationSealV1{metadataCharge: sealMetadata, latestSequence: member.sequence, groupLength: group.Len(), idx: runtime.idx, next: next, resources: resources, manifest: manifest, prefix: append([]*freelist.PreparedCOWCandidateV1(nil), runtime.debt...), token: token, record: record, meta: meta, target: target, base: rootPublicationSealBaseV1{slotCommit: base.slotCommit, slotResources: base.slotResources, slotMeta: base.slotMeta, slotRecord: base.slotRecord}, primary: &primaryPublicationSealV5{prepared: member.primary, projection: projection, manifestBanks: mrefs, token: pt, proof: proof, proofResources: proofResources}}
+	allocation := &primarySealAllocationV6{seal: rootPublicationSealV1{metadataCharge: sealMetadata, latestSequence: member.sequence, groupLength: group.Len(), idx: runtime.idx, next: next, resources: resources, manifest: manifest, prefix: append([]*freelist.PreparedCOWCandidateV1(nil), runtime.debt...), token: token, record: record, meta: meta, target: target, base: rootPublicationSealBaseV1{slotCommit: base.slotCommit, slotResources: base.slotResources, slotMeta: base.slotMeta, slotRecord: base.slotRecord}}, primary: primaryPublicationSealV5{prepared: member.primary, projection: projection, manifestBanks: mrefs, token: pt, proof: proof, proofResources: proofResources}}
+	seal := &allocation.seal
+	seal.primary = &allocation.primary
 	seal.metadata = a.MetadataOwner()
 	seal.disposalFailure.payload = seal
 	runtime.seals = append(runtime.seals, seal)
