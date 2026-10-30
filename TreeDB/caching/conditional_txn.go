@@ -529,7 +529,7 @@ func (tx *ConditionalTxn) commit(sync bool) (err error) {
 		return nil
 	}
 	tx.batch.streamBypassOff = true
-	return tx.batch.writeRegularLocked(sync, unlockWriteMu)
+	return tx.batch.writeRegularLocked(sync, unlockWriteMu, false)
 }
 
 func (tx *ConditionalTxn) validateReadSetAtPublish() error {

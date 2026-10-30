@@ -229,7 +229,15 @@ func TestDurabilityProfileOrderedSubmissionEntrypointInventory(t *testing.T) {
 		}},
 		{filepath.Join("mvcc", "ordered_completion.go"), map[string][]string{
 			"(*Store).SubmitCommitGroupAt": {"s.commitLogicalGroupsWithCompletion", "s.CommitGroupAt(groups, mode)"},
-			"(*CommitCompletion).Complete": {"c.engine.Complete()", "c.store.mu.RUnlock()"},
+			"(*CommitCompletion).Complete": {
+				"store := c.store",
+				"returned := false",
+				// Release the captured store and clear custody even if the engine
+				// panics, retaining the recovery-required poison for later calls.
+				"defer func() {\n\t\t\tstore.mu.RUnlock()\n\t\t\tc.store = nil\n\t\t\tif !returned {\n\t\t\t\tc.err = storageError(\"complete batch\", treedb.ErrRecoveryRequired)\n\t\t\t}\n\t\t}()",
+				"err := c.engine.Complete()",
+				"returned = true",
+			},
 		}},
 	} {
 		bodies := profileInventoryFunctionBodies(t, filepath.Join(treeDBDir, source.path))
