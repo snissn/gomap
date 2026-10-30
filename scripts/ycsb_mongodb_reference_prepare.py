@@ -22,7 +22,8 @@ import ycsb_mongodb_reference as reference
 SOURCES = ("ycsb_mongodb_reference_prepare.py", "ycsb_mongodb_reference.py",
            "ycsb_mongodb_reference_client.go", "ycsb_correctness_fixture.go",
            "ycsb_compare_validate.py", "ycsb_compare_live.py",
-           "ycsb_correctness_validate.py", "ycsb_evidence_json.py")
+           "ycsb_correctness_validate.py", "ycsb_evidence_json.py",
+           "ycsb_compare_mongodb_treedb.sh")
 ROOT = pathlib.Path(__file__).resolve().parent
 KIND = "mongodb_reference_offline_preparation"
 INPUT_COPIES = {"reference-support.json", "reference-source.py", "fixture-source.go",

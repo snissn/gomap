@@ -13,6 +13,7 @@ import re
 import select
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -698,6 +699,63 @@ class ReferencePackets(unittest.TestCase):
         self.assertEqual(m["address"],config["mongodb_addr"])
         self.assertFalse((out/"reference-support/mongodb/db").exists())
         self.assertEqual(list((out/"mongodb").iterdir()),[])
+
+    def test_maintained_shell_offline_preparation_binds_actual_entry_source(self):
+        config,out,_=self.preparation_inputs()
+        request=out.parent/'request.json';self.save(request,config)
+        metadata=out.parent/'metadata.jsonl';wrapper=out.parent/'offline-python'
+        # Real shell/CLI dispatch and preparation; only Git/Go metadata is
+        # synthetic. No Docker, public helper or product executable is run.
+        wrapper.write_text('#!'+sys.executable+'\n'+'''import json,os,pathlib,sys
+sys.path.insert(0,'''+repr(str(ROOT))+''')
+import ycsb_mongodb_reference_prepare as preparation
+assert 'GOMAXPROCS' not in os.environ
+def metadata(argv):
+    with pathlib.Path('''+repr(str(metadata))+''').open('a') as stream:stream.write(json.dumps(argv)+'\\n')
+    if argv[0]=='git':return ('''+repr(c.PRODUCER+'\n')+''').encode() if 'rev-parse' in argv else b''
+    assert argv[:3]==['''+repr(config['go_binary'])+''','version','-m']
+    return b'SYNTHETIC offline Go metadata only\\n'
+preparation.command=metadata
+sys.argv=sys.argv[1:]
+raise SystemExit(preparation.main())
+''');wrapper.chmod(0o700)
+        with socket.socket() as unrelated:
+            unrelated.bind(('127.0.0.1',0));unrelated.listen()
+            environment=dict(os.environ,PYTHON=str(wrapper),GOMAXPROCS='123',
+                OUT_DIR=str(out.parent/'must-not-create'),TARGETS='treedb_native\nmongodb',
+                BUILD='true',BUILD_GOYCSB='true',PARSE_ONLY='true',
+                TREEDB_MONGO_ADDR='127.0.0.1:'+str(unrelated.getsockname()[1]),MONGODB_ADDR='untrusted-environment')
+            result=subprocess.run(['bash',str(ROOT/'ycsb_compare_mongodb_treedb.sh'),'--prepare-mongodb-reference',str(request),str(out)],env=environment,capture_output=True,text=True,timeout=10)
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertFalse(select.select([unrelated],[],[],0)[0])
+        self.assertFalse(pathlib.Path(environment['OUT_DIR']).exists())
+        self.assertEqual(json.loads(result.stdout)['status'],'prepared-reference-inputs-not-activated')
+        self.assertIs(json.loads(result.stdout)['activation_authorized'],False)
+        calls=[json.loads(line) for line in metadata.read_text().splitlines()]
+        self.assertTrue(all(argv[0]=='git' or argv[:3]==[config['go_binary'],'version','-m'] for argv in calls))
+        manifest=c.read(out/'manifest.json');preparation.verify_prepared(out,manifest,check_current_sources=True)
+        source=out/'preparation-sources/ycsb_compare_mongodb_treedb.sh'
+        self.assertEqual(c.digest(source),c.digest(ROOT/source.name))
+        source.write_bytes(source.read_bytes()+b'\n# changed entry\n')
+        with mock.patch.object(reference,'Docker') as docker:
+            with self.assertRaisesRegex(ValueError,'preparation artifact changed'):reference.run(out,manifest['docker_binary'])
+            docker.assert_not_called()
+
+    def test_maintained_shell_preparation_refuses_bad_arguments_and_failed_proof(self):
+        config,out,_=self.preparation_inputs()
+        request=out.parent/'request.json';self.save(request,config)
+        marker=out.parent/'unexpected-python';wrapper=out.parent/'must-not-run'
+        wrapper.write_text('#!/bin/sh\ntouch '+str(marker)+'\nexit 97\n');wrapper.chmod(0o700)
+        for args in ([],[str(request)],[str(request),str(out),'extra'],[str(request),'relative-output']):
+            result=subprocess.run(['bash',str(ROOT/'ycsb_compare_mongodb_treedb.sh'),'--prepare-mongodb-reference',*args],env=dict(os.environ,PYTHON=str(wrapper)),capture_output=True,text=True,timeout=5)
+            self.assertEqual(result.returncode,2,result.stderr)
+            self.assertIn('requires REQUEST.json and fresh absolute OUT',result.stderr)
+            self.assertFalse(marker.exists());self.assertFalse(out.exists())
+        self.save(self.out/'failure.json',dict(error='retained failed support'))
+        result=subprocess.run(['bash',str(ROOT/'ycsb_compare_mongodb_treedb.sh'),'--prepare-mongodb-reference',str(request),str(out)],env=dict(os.environ,PYTHON=sys.executable),capture_output=True,text=True,timeout=5)
+        self.assertEqual(result.returncode,3,result.stderr)
+        self.assertIn('failed reference',result.stderr)
+        self.assertFalse(out.exists())
 
     def test_preparation_missing_support_wrong_endpoint_and_changed_raw_build_fail_closed(self):
         config,out,metadata=self.preparation_inputs()

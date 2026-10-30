@@ -40,6 +40,13 @@ CHILD_CLEANUP_TIMEOUT_SECONDS="${CHILD_CLEANUP_TIMEOUT_SECONDS:-10}"
 usage() {
   cat <<'EOF'
 Usage: scripts/ycsb_compare_mongodb_treedb.sh
+       scripts/ycsb_compare_mongodb_treedb.sh --prepare-mongodb-reference REQUEST.json /absolute/fresh/OUT
+
+--prepare-mongodb-reference validates and copies a complete retained tiny
+reference proof into fresh offline inputs. It runs only bounded Git/Go metadata
+inspection, never Docker, builds, workloads or services. The explicit request
+supplies the endpoint and builds; execution environment flags do not select this
+mode. Output is not activated and ordinary mongodb execution remains refused.
 
 TARGETS is one line selecting the services and clients to run (space or comma separated:
   treedb_native, treedb_mongo). The default runs the two TreeDB targets.
@@ -78,6 +85,10 @@ EOF
 }
 if [[ "${1-}" == -h || "${1-}" == --help ]]; then usage; exit 0; fi
 fail() { echo "$*" >&2; exit 2; }
+if [[ "${1-}" == --prepare-mongodb-reference ]]; then
+  [[ $# == 3 && "${3-}" == /* ]] || fail "--prepare-mongodb-reference requires REQUEST.json and fresh absolute OUT"
+  exec env -u GOMAXPROCS "$PYTHON" "$ROOT/scripts/ycsb_mongodb_reference_prepare.py" "$2" "$3"
+fi
 for flag in BUILD BUILD_GOYCSB PARSE_ONLY ALLOW_YCSB_ERRORS; do
   [[ "${!flag}" == true || "${!flag}" == false ]] || fail "$flag must be true or false"
 done
