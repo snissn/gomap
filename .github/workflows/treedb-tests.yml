@@ -107,6 +107,17 @@ jobs:
               (p/'workflow.yml').write_bytes(workflow)
               patch=git(product,'diff','--binary','34b54d70c8b7af201b25e84602d0856b76a682f7',source);(p/'product-from-main.patch').write_bytes(patch)
               manifest=git(product,'ls-tree','-r','HEAD');(p/'source-manifest.txt').write_bytes(manifest)
+              actual_sources={}
+              for entry in git(product,'ls-tree','-rz','HEAD').split(b'\0'):
+                  if not entry:continue
+                  metadata,name=entry.split(b'\t',1);path=name.decode();mode,kind,blob=metadata.decode().split()
+                  if not (path.endswith('.go') or path in ('go.mod','go.sum')):continue
+                  assert kind=='blob' and mode in ('100644','100755')
+                  data=(product/path).read_bytes()
+                  assert hashlib.sha1(b'blob '+str(len(data)).encode()+b'\0'+data).hexdigest()==blob, 'literal source differs: '+path
+                  actual_sources[path]=digest(data)
+              actual_manifest=(json.dumps(actual_sources,sort_keys=True,indent=2)+'\n').encode();(p/'actual-source-bytes.json').write_bytes(actual_manifest)
+              receipt['actual_source_bytes']=digest(actual_manifest)
               receipt.update(source=source,tree=tree,overlay=expected,cell=cell,workflow=digest(workflow),source_manifest=digest(manifest),patch=digest(patch),event={k:os.environ.get(k) for k in ('GITHUB_REPOSITORY','GITHUB_EVENT_NAME','GITHUB_REF','GITHUB_SHA','GITHUB_RUN_ID','GITHUB_RUN_ATTEMPT','GITHUB_WORKFLOW_REF','RUNNER_ENVIRONMENT','RUNNER_OS','RUNNER_ARCH','ImageOS','ImageVersion')},environment={k:os.environ.get(k) for k in ('GOWORK','GOTOOLCHAIN','GOMAXPROCS','GOMEMLIMIT','GOFLAGS','GODEBUG','CGO_ENABLED')});save()
               ok,version=call('go-version',['go','version'],product,30);assert ok and 'go1.26.10 linux/amd64' in version
               ok,_=call('go-env',['go','env','-json','GOOS','GOARCH','CGO_ENABLED','GOWORK','GOTOOLCHAIN','GOFLAGS'],product,30);assert ok
