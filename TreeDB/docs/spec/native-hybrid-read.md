@@ -199,3 +199,40 @@ not make partial materialization retryable, clear accepted-prefix poison or
 change publication/recovery authority. A stage report distinguishes future
 failures; it does not attribute the retained #5332 race7 failure, whose Optimize
 cause and precise refusing guard were not recorded.
+
+### Unresolved scalar-forward pressure assertion (2026-10-30)
+
+Exact `7fab8bacaae3142584ebdea8919297251465edcb`, TreeDB run
+`41033504030`, macOS job `123988627373`, failed
+`TestNativeScalarForwardOptionalRefusalAndBound` at the uncached-constructor
+refusal assertion. The original failure remains unresolved. No production
+admission bypass or cleanup timing cause is established by the retained log.
+
+The source-only diagnostic successor keeps the public fixture, limits, real
+parent-pressure setup, cached-success and uncached-refusal assertions, independent
+copy checks, fallback, and cache bounds. A test-local observer forwards the exact
+original admission call/result and prints budget, operation charge, admission
+calls/bytes/error, provenance and specialized-preflight discriminators only on
+failure. Extra test-local snapshots can change scheduling; they do not constitute
+a causal timing experiment or qualification of the original candidate.
+
+Full reserved bytes is a snapshot, not a continuing refusal guarantee: native
+admission may legally reclaim idle read scratch, and the original flush worker
+can refund semantic cleanup even with periodic checkpointing disabled. Preexisting
+idle scratch alone does not explain this exact assertion because the immediately
+preceding optional-key refusal also preserved parent counters. A later refund or
+transfer would need evidence. The private cleanup-frontier join is reached from
+the public producer preparation path only conditionally under pressure; neither
+that path nor a plain Checkpoint provides a demonstrated unconditional fixture
+barrier. This successor therefore adds no speculative setup barrier, wait, retry,
+cleanup suppression or production resource-policy change.
+
+The additional deterministic control supplies the same native ID representation,
+an owned published provenance entry, and a recording refusal callback. It requires
+validated reuse to avoid original admission and requires missing, unpublished,
+foreign-owner, wrong-index and wrong-status provenance to return the exact original
+capacity refusal before storage lookup. Wrong-index/status/publication cases use
+the owned slot, isolating those guards from the foreign-owner guard. This control
+supplements the public shared-budget lifecycle fixture; it cannot qualify real
+pressure or attribute the macOS failure. All new coverage is authored only until
+executed, and the original RED must remain retained through further investigation.

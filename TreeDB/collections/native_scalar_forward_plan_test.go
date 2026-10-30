@@ -10,6 +10,7 @@ import (
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -305,6 +306,23 @@ func TestNativeScalarForwardOptionalRefusalAndBound(t *testing.T) {
 	if !cached.ids.contains("a") || cached.forward.sorted[0] == 999 || len(cached.forward.ordinals) != 1 {
 		t.Fatal("retained composite aliases operation backing")
 	}
+	// Observe the original admission without changing its result or replacing
+	// real parent pressure. Full ReservedBytes is only a snapshot: the original
+	// worker can refund cleanup and admission can reclaim idle read scratch.
+	// The retained macOS RED did not capture these discriminators.
+	var admissionCalls, admissionBytes uint64
+	var admissionErr error
+	originalAdmit := view.catalog.nativeText.admit
+	view.catalog.nativeText.admit = func(n uint64) error {
+		admissionCalls++
+		admissionBytes += n
+		admissionErr = originalAdmit(n)
+		return admissionErr
+	}
+	forwardCharge, chargeErr := nativeTextForwardIdentityCharge(cached.ids, 1)
+	if chargeErr != nil || forwardCharge == 0 {
+		t.Fatalf("expected nonzero original forward charge: %d %v", forwardCharge, chargeErr)
+	}
 	// Under exhausted real parent, the borrowed forward plan succeeds while the
 	// original uncached constructor still refuses its full original allocation.
 	blocker, err = allocator.AdmitNativeBytes(0)
@@ -327,11 +345,20 @@ func TestNativeScalarForwardOptionalRefusalAndBound(t *testing.T) {
 	}
 	borrowed := cached.ids
 	borrowed.forwardPlan = cached
+	borrowBefore := budget.Stats()
+	borrowCharged := scratch.charged
+	borrowCalls := admissionCalls
 	if got, err := newTextV2SearchOrdinalAllowSet(view.nativeRead.capture.Snapshot(), view.catalog, ctx, borrowed); err != nil || got != &cached.forward {
-		t.Fatal("validated forward reuse missed", err)
+		t.Fatalf("validated forward reuse missed: err=%v parent=%+v charged=%d admission_calls=%d admission_bytes=%d admission_err=%v", err, budget.Stats(), scratch.charged, admissionCalls, admissionBytes, admissionErr)
 	}
-	if _, err := newTextV2SearchOrdinalAllowSet(view.nativeRead.capture.Snapshot(), view.catalog, ctx, cached.ids); err == nil {
-		t.Fatal("uncached forward constructor bypassed original parent refusal")
+	if admissionCalls != borrowCalls || scratch.charged != borrowCharged {
+		t.Fatalf("validated forward reuse attempted original admission: calls=%d->%d charged=%d->%d", borrowCalls, admissionCalls, borrowCharged, scratch.charged)
+	}
+	uncachedBefore := budget.Stats()
+	uncachedCharged := scratch.charged
+	uncachedCalls, uncachedBytes := admissionCalls, admissionBytes
+	if got, err := newTextV2SearchOrdinalAllowSet(view.nativeRead.capture.Snapshot(), view.catalog, ctx, cached.ids); err == nil {
+		t.Fatalf("uncached forward constructor bypassed original parent refusal: got_nil=%t ids=%d provenance=%t single_term_fields=%d forward_charge=%d borrow_parent=%+v before_parent=%+v after_parent=%+v charged=%d->%d admission_calls=%d->%d admission_bytes=%d->%d admission_err=%v", got == nil, cached.ids.len(), cached.ids.forwardPlan != nil, view.catalog.nativeText.singleTermFields, forwardCharge, borrowBefore, uncachedBefore, budget.Stats(), uncachedCharged, scratch.charged, uncachedCalls, admissionCalls, uncachedBytes, admissionBytes, admissionErr)
 	}
 	blocker.Close()
 	// The same original scalar miss remains available after optional key refusal.
@@ -410,5 +437,76 @@ func TestNativeScalarForwardPublicSchemaAndPhysicalRefresh(t *testing.T) {
 	}
 	if _, err = c.SearchHybrid(opts); !errors.Is(err, ErrHybridSearchIndexUnavailable) {
 		t.Fatal("dropped scalar declaration reused", err)
+	}
+}
+
+// This deterministic control isolates provenance validation and the original
+// admission boundary. It supplements, rather than replaces, the public shared
+// budget/pressure/lifecycle fixture above. A nil snapshot is deliberate: every
+// refusal must be returned before any storage lookup or forward allocation.
+func TestNativeScalarForwardOriginalAdmissionRefusal(t *testing.T) {
+	refusal := fmt.Errorf("deterministic forward admission: %w", memtable.ErrCOWCapacity)
+	local, err := newLocalIDIndex(1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	local.insert("a", 0)
+	ids := nativeScalarIDs(local)
+	status := textV2IndexStatusValue{FormatVersion: 2, RootGeneration: 7}
+	owner := &nativeCollectionState{scalarForwardPlans: new([nativeScalarPlanCacheMaxEntries]nativeScalarForwardPlan), scalarForwardCount: 1}
+	published := &owner.scalarForwardPlans[0]
+	*published = nativeScalarForwardPlan{textIndex: "content", status: status, ids: ids, published: true}
+	ctx := &textV2SearchContext{indexName: "content", status: status}
+	var calls uint64
+	var charged uint64
+	catalog := &collectionCatalog{nativeText: &nativeTextCatalog{
+		read: &NativeJSONRead{collection: owner},
+		admit: func(n uint64) error {
+			calls++
+			charged = n
+			return refusal
+		},
+	}}
+	borrowed := ids
+	borrowed.forwardPlan = published
+	if got, err := newTextV2SearchOrdinalAllowSet(nil, catalog, ctx, borrowed); err != nil || got != &published.forward || calls != 0 {
+		t.Fatalf("validated owned provenance must borrow without admission: got=%p want=%p err=%v calls=%d", got, &published.forward, err, calls)
+	}
+	foreign := *published
+	for _, name := range []string{"no-provenance", "unpublished", "foreign-owner", "wrong-index", "wrong-status"} {
+		t.Run(name, func(t *testing.T) {
+			calls, charged = 0, 0
+			original := ids
+			saved := *published
+			defer func() { *published = saved }()
+			// Mutate the actual owned slot so wrong index/status/publication
+			// cannot pass merely because a copied pointer has a foreign owner.
+			original.forwardPlan = published
+			switch name {
+			case "no-provenance":
+				original.forwardPlan = nil
+			case "unpublished":
+				published.published = false
+			case "foreign-owner":
+				original.forwardPlan = &foreign
+			case "wrong-index":
+				published.textIndex = "other"
+			case "wrong-status":
+				published.status.RootGeneration++
+			}
+			originalPlan := original.forwardPlan
+			originalPublished := *published
+			want, err := nativeTextForwardIdentityCharge(original, 1)
+			if err != nil || want == 0 {
+				t.Fatalf("invalid original admission charge: %d %v", want, err)
+			}
+			got, err := newTextV2SearchOrdinalAllowSet(nil, catalog, ctx, original)
+			if got != nil || err != refusal || !errors.Is(err, memtable.ErrCOWCapacity) || calls != 1 || charged != want {
+				t.Fatalf("original refusal must precede lookup: got=%p err=%v calls=%d charged=%d want=%d", got, err, calls, charged, want)
+			}
+			if !original.contains("a") || original.len() != 1 || original.forwardPlan != originalPlan || published.published != originalPublished.published || published.status != originalPublished.status || published.textIndex != originalPublished.textIndex {
+				t.Fatal("refusal changed caller identities, provenance or retained entry")
+			}
+		})
 	}
 }
