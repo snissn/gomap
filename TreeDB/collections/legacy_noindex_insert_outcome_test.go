@@ -12,9 +12,9 @@ import (
 )
 
 func TestNoIndexBufferedInsertConflictOutcomeBoundary(t *testing.T) {
-	for _, format := range []string{DocumentFormatJSON, DocumentFormatBSON} {
+	for _, format := range []DocumentFormat{DocumentFormatJSON, DocumentFormatBSON} {
 		for _, conflict := range []string{"same_new_id", "buffered_existing", "persisted_existing"} {
-			t.Run(format+"/"+conflict, func(t *testing.T) {
+			t.Run(string(format)+"/"+conflict, func(t *testing.T) {
 				d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), Durability: backenddb.DurabilityWALOffRelaxed})
 				if err != nil {
 					t.Fatal(err)
@@ -59,9 +59,9 @@ func TestNoIndexBufferedInsertConflictOutcomeBoundary(t *testing.T) {
 				if conflict == "buffered_existing" && count != 1 || conflict == "persisted_existing" && count != 0 {
 					t.Fatalf("wrong seed boundary: conflict=%s buffered=%d", conflict, count)
 				}
-				before, err := d.StateToken()
-				if err != nil {
-					t.Fatal(err)
+				before, ok := d.StateToken()
+				if !ok {
+					t.Fatal("missing state token")
 				}
 				ids := [][]byte{[]byte("seed"), []byte("valid")}
 				want := ErrDocumentExists
@@ -83,9 +83,9 @@ func TestNoIndexBufferedInsertConflictOutcomeBoundary(t *testing.T) {
 				if !errors.Is(err, want) || !errors.Is(err, ErrMutationNotAccepted) || errors.Is(err, ErrCommitAmbiguous) || errors.Is(err, ErrRecoveryRequired) || errors.Is(err, backenddb.ErrRecoveryRequired) || backenddb.CommitPublicationAccepted(err) {
 					t.Fatalf("conflict=%v want not-accepted %v without publication/ambiguity", err, want)
 				}
-				after, err := d.StateToken()
-				if err != nil || after != before || events.Load() != 0 {
-					t.Fatalf("group rejection crossed publication: state=%+v before=%+v events=%d err=%v", after, before, events.Load(), err)
+				after, ok := d.StateToken()
+				if !ok || after != before || events.Load() != 0 {
+					t.Fatalf("group rejection crossed publication: state=%+v before=%+v events=%d token=%t", after, before, events.Load(), ok)
 				}
 				domain.mu.RLock()
 				unchanged := domain.count == count && domain.writeGeneration == generation
