@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"reflect"
 	"sync"
 	"testing"
@@ -162,66 +161,6 @@ func TestBufferedInsertConflictOutcomeBoundary(t *testing.T) {
 					t.Fatalf("valid member became visible before fallback: %x err=%v", got, err)
 				}
 			})
-		}
-	}
-}
-
-type bufferedConflictEvent struct {
-	durabilitycut.Event
-	StablePathName, StableParentName string
-	Retirement                       bool
-}
-
-// Snapshot.Close can release the last borrow of an already retired segment.
-// Value-log segment removal reports that physical retirement as NamespaceUnlink,
-// without accepting a new mutation.
-// Every other descriptor remains a failure, including WAL deletion and sync.
-func bufferedConflictRetirementEvent(event durabilitycut.Event) bool {
-	dir := "value_vlog"
-	if event.Resource == durabilitycut.ResourceOuterLeaf {
-		dir = "leaf_vlog"
-	} else if event.Resource != durabilitycut.ResourceValueLog {
-		return false
-	}
-	return event.Namespace == durabilitycut.NamespaceUnlink && event.Point == "" &&
-		event.OldPath != "" && event.NewPath == "" && event.Root == filepath.Dir(event.OldPath) &&
-		filepath.Base(event.Root) == dir && event.Path == "" && len(event.Paths) == 0 &&
-		event.LSN == 0 && event.Offset == 0 && event.Length == 0 && event.CreatedDirectory == "" &&
-		event.StablePath == nil && event.StableParent == nil && event.StableOldName == "" && event.StableNewName == ""
-}
-
-func TestBufferedConflictRetirementEventBoundary(t *testing.T) {
-	base := durabilitycut.Event{Namespace: durabilitycut.NamespaceUnlink, Resource: durabilitycut.ResourceValueLog, Root: filepath.Join("db", "value_vlog"), OldPath: filepath.Join("db", "value_vlog", "value-l0-000001.log")}
-	for _, resource := range []durabilitycut.Resource{durabilitycut.ResourceValueLog, durabilitycut.ResourceOuterLeaf} {
-		event := base
-		event.Resource = resource
-		if resource == durabilitycut.ResourceOuterLeaf {
-			event.Root, event.OldPath = filepath.Join("db", "leaf_vlog"), filepath.Join("db", "leaf_vlog", "value-l0-000001.log")
-		}
-		if !bufferedConflictRetirementEvent(event) {
-			t.Fatalf("retired segment unlink rejected: %+v", event)
-		}
-	}
-	for _, mutate := range []func(*durabilitycut.Event){
-		func(e *durabilitycut.Event) { e.Resource = durabilitycut.ResourceCommandWAL },
-		func(e *durabilitycut.Event) { e.Resource = durabilitycut.ResourceMeta },
-		func(e *durabilitycut.Event) { e.Resource = durabilitycut.ResourceIndex },
-		func(e *durabilitycut.Event) { e.Resource = durabilitycut.ResourceSeal },
-		func(e *durabilitycut.Event) { e.Namespace = durabilitycut.NamespaceCreate },
-		func(e *durabilitycut.Event) { e.Namespace = durabilitycut.NamespaceRename },
-		func(e *durabilitycut.Event) { e.Point = durabilitycut.BeforeDependencyAppend },
-		func(e *durabilitycut.Event) { e.Point = durabilitycut.BeforeDependencyFileSync },
-		func(e *durabilitycut.Event) { e.Point = durabilitycut.BeforeDeletionDirectorySync },
-		func(e *durabilitycut.Event) { e.Point = durabilitycut.BeforeMetaWrite },
-		func(e *durabilitycut.Event) { e.LSN = 1 },
-		func(e *durabilitycut.Event) { e.Root = "unrecognized" },
-		func(e *durabilitycut.Event) { e.NewPath = "new" },
-		func(e *durabilitycut.Event) { e.Path = "unknown" },
-	} {
-		event := base
-		mutate(&event)
-		if bufferedConflictRetirementEvent(event) {
-			t.Errorf("publication or unknown event admitted: %+v", event)
 		}
 	}
 }
