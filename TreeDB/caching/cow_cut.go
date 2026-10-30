@@ -195,8 +195,9 @@ type cowCache struct {
 	rollovers                                                                                      atomic.Uint64
 	handoffs                                                                                       atomic.Uint64
 	closeRetired                                                                                   []memtable.COWRetirement
-	generationBase                                                                                 uint64           // exact identical empty-generation startup history charge
-	handoff                                                                                        *cowFlushHandoff // serialized by the existing flush coordinator
+	generationBase                                                                                 uint64               // exact identical empty-generation startup history charge
+	handoff                                                                                        *cowFlushHandoff     // serialized by the existing flush coordinator
+	physicalLifecycle                                                                              cowPhysicalLifecycle // guarded by writerMu; no new allocation per build
 	semanticMu                                                                                     sync.Mutex
 	semanticCond                                                                                   sync.Cond
 	semanticEnqueued, semanticCompleted                                                            uint64
