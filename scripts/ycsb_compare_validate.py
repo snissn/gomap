@@ -374,6 +374,42 @@ def terminate_pinned_child(descriptor, timeout):
         require(select.select([descriptor],[],[],timeout)[0],"pinned owned child did not terminate")
 
 
+CANCELLATION_SIGNALS = {signal.SIGINT,signal.SIGTERM,signal.SIGALRM}
+
+
+@contextlib.contextmanager
+def defer_startup_cancellation():
+    # Queue rather than block signals while spawning: the executed child must
+    # inherit its normal signal mask. No cancellation can interrupt Popen's
+    # return/assignment or the pin acquisition before ownership is recorded.
+    pending=[]
+    handlers={signum:signal.getsignal(signum) for signum in CANCELLATION_SIGNALS}
+    def remember(signum,frame): pending.append(signum)
+    try:
+        for signum in CANCELLATION_SIGNALS: signal.signal(signum,remember)
+        yield pending
+    finally:
+        for signum,handler in handlers.items(): signal.signal(signum,handler)
+
+
+def terminate_unpinned_child(child,timeout):
+    """Pin failure fallback: a direct, unreaped child retains its PID.
+
+    waitid(WNOWAIT) verifies parent ownership before any numeric-PID signal and
+    never releases that identity. Only this launcher's Popen object is accepted;
+    external servers continue to require observed identity/pidfd validation.
+    """
+    for signum in (signal.SIGTERM,signal.SIGKILL):
+        require(child.returncode is None,"refusing signal after direct child was reaped")
+        status=os.waitid(os.P_PID,child.pid,os.WEXITED|os.WNOHANG|os.WNOWAIT)
+        if status is not None: return child.wait(timeout=timeout)
+        try: os.kill(child.pid,signum)
+        except ProcessLookupError: pass  # Retain ownership until checked wait.
+        try: return child.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            if signum == signal.SIGKILL: raise
+
+
 def launch(args):
     out, stem = pathlib.Path(args.directory), args.stem
     receipt = out / f"{stem}.close.json"
@@ -392,16 +428,23 @@ def launch(args):
     deadline=time.monotonic()+timeout
     identity=None
     timed_out=False
+    child=None
+    descriptor=None
+    startup_signals=[]
+    previous_handler=signal.getsignal(signal.SIGTERM)
+    def interrupted(signum, frame):
+        raise InterruptedError(f"launcher interrupted by signal {signum}")
     with (out / f"{stem}.out").open("x") as stdout, (out / f"{stem}.err").open("x") as stderr:
-        child = subprocess.Popen(command, env=env, stdout=stdout, stderr=stderr, start_new_session=True)
-        # A direct child cannot have its PID reused before it is reaped. Pin it
-        # now, before any observation or wait, including observation failures.
-        descriptor=os.pidfd_open(child.pid)
-        previous_handler=signal.getsignal(signal.SIGTERM)
-        def interrupted(signum, frame):
-            raise InterruptedError(f"launcher interrupted by signal {signum}")
-        signal.signal(signal.SIGTERM, interrupted)
         try:
+            signal.signal(signal.SIGTERM, interrupted)
+            with defer_startup_cancellation() as startup_signals:
+                child = subprocess.Popen(command, env=env, stdout=stdout, stderr=stderr, start_new_session=True)
+                # No wait/poll can release this direct child's PID before pinning.
+                descriptor=os.pidfd_open(child.pid)
+            if startup_signals:
+                if signal.SIGALRM in startup_signals:
+                    raise TimeoutError("outer phase/helper wall deadline exceeded during startup")
+                raise InterruptedError(f"launcher interrupted during startup by signals {startup_signals}")
             write_new(out / f"{stem}.cleanup.json",dict(pid=child.pid,pidfd_pinned=True))
             identity = observe_core(child.pid)
             (out / f"{stem}.cleanup.json").write_text(json.dumps(dict(process=identity,pidfd_pinned=True))+"\n")
@@ -410,25 +453,37 @@ def launch(args):
             if time.monotonic() > deadline:
                 raise subprocess.TimeoutExpired(command,timeout)
         except BaseException as error:
-            # Once cleanup begins, its own finite TERM/KILL/reap budgets own
-            # progress. A second outer interruption must not strand the child.
-            if getattr(signal.getsignal(signal.SIGALRM),"ycsb_outer_deadline",False):
-                signal.setitimer(signal.ITIMER_REAL,0)
-            timed_out=isinstance(error,(subprocess.TimeoutExpired,TimeoutError))
-            cleanup=dict(attempted=True,success=False,reaped=False,error="",exit_code=None,method="popen-child-pidfd-before-any-wait")
+            # Defer every cancellation throughout TERM/KILL/reap AND failure
+            # receipt retention. Pending cancellation is delivered only once
+            # the child is reaped and that receipt has been written.
+            previous_mask=signal.pthread_sigmask(signal.SIG_BLOCK,CANCELLATION_SIGNALS)
             try:
-                terminate_pinned_child(descriptor,cleanup_timeout)
-                code=child.wait(timeout=cleanup_timeout)
-                cleanup.update(success=True,reaped=True,exit_code=code)
-            except BaseException as cleanup_error:
-                cleanup["error"]=str(cleanup_error)
-            write_new(out/f"{stem}.failure.json",dict(schema_version=1,kind="owned_child_launcher_failure",campaign_id=manifest["campaign_id"],phase_id=phase_id,process=identity,pid=child.pid,pidfd_pinned=True,start_utc=started,end_utc=now(),timeout_seconds=timeout,cleanup_timeout_seconds=cleanup_timeout,outer_timeout_seconds=outer_timeout,timed_out=timed_out,error="child wait deadline exceeded" if isinstance(error,subprocess.TimeoutExpired) else str(error),cleanup=cleanup))
-            require(cleanup["success"],"owned child cleanup failed: "+cleanup["error"])
-            if not isinstance(error,subprocess.TimeoutExpired):
-                raise
+                if getattr(signal.getsignal(signal.SIGALRM),"ycsb_outer_deadline",False):
+                    signal.setitimer(signal.ITIMER_REAL,0)
+                timed_out=isinstance(error,(subprocess.TimeoutExpired,TimeoutError)) or signal.SIGALRM in startup_signals
+                cleanup=dict(attempted=child is not None,success=False,reaped=False,error="",exit_code=None,method="popen-child-pidfd-before-any-wait" if descriptor is not None else "popen-direct-child-unreaped")
+                try:
+                    if child is None:
+                        cleanup.update(success=True,method="no-child-created")
+                    elif descriptor is None:
+                        code=terminate_unpinned_child(child,cleanup_timeout)
+                        cleanup.update(success=True,reaped=True,exit_code=code)
+                    else:
+                        terminate_pinned_child(descriptor,cleanup_timeout)
+                        code=child.wait(timeout=cleanup_timeout)
+                        cleanup.update(success=True,reaped=True,exit_code=code)
+                except BaseException as cleanup_error:
+                    cleanup["error"]=str(cleanup_error)
+                cleanup["pending_cancellation_signals"]=sorted(signal.sigpending() & CANCELLATION_SIGNALS)
+                write_new(out/f"{stem}.failure.json",dict(schema_version=1,kind="owned_child_launcher_failure",campaign_id=manifest["campaign_id"],phase_id=phase_id,process=identity,pid=child.pid if child is not None else None,pidfd_pinned=descriptor is not None,startup_cancellation_signals=startup_signals,start_utc=started,end_utc=now(),timeout_seconds=timeout,cleanup_timeout_seconds=cleanup_timeout,outer_timeout_seconds=outer_timeout,timed_out=timed_out,error="child wait deadline exceeded" if isinstance(error,subprocess.TimeoutExpired) else str(error),cleanup=cleanup))
+                require(cleanup["success"],"owned child cleanup failed: "+cleanup["error"])
+                if not isinstance(error,subprocess.TimeoutExpired):
+                    raise
+            finally:
+                signal.pthread_sigmask(signal.SIG_SETMASK,previous_mask)
         finally:
             signal.signal(signal.SIGTERM,previous_handler)
-            os.close(descriptor)
+            if descriptor is not None: os.close(descriptor)
     write_new(out / f"{stem}.launch.json", dict(schema_version=1, campaign_id=manifest["campaign_id"], phase_id=phase_id, process=identity, start_utc=started, end_utc=now(), exit_code=code, timeout_seconds=timeout,cleanup_timeout_seconds=cleanup_timeout,outer_timeout_seconds=outer_timeout,timed_out=timed_out, output_sha256=digest(out / f"{stem}.out"), receipt_sha256=digest(receipt) if receipt.exists() else None))
     return 124 if timed_out else code if code > 0 else 3 if code < 0 else 0
 

@@ -211,3 +211,15 @@ settle before the preclose scan. Aggregate snapshot/reopen timestamps must match
 raw calls/owner observations, and state comparison follows the completed
 reopened scan. The deterministic owner starts after the random reopened owner
 closes; all four service lifetimes have distinct process and owner identities.
+
+Startup cancellation is queued across Popen return and pidfd acquisition, inside
+the cleanup guard. If pin acquisition fails, the launcher verifies its direct
+child relationship using `waitid(WNOWAIT)` before any numeric-PID signal; the
+unreaped child retains its PID until this launcher performs its bounded wait.
+The failure receipt truthfully records `pidfd_pinned: false` and this fallback
+method. Failed spawn records no PID and does not claim a child was reaped.
+Cleanup blocks INT, TERM and ALRM until bounded TERM/KILL/reap and failure-receipt
+writing finish, then restores the previous signal mask and delivers pending
+cancellation. Known pending signals are retained in the original failure
+receipt; a later cancellation does not overwrite the original failure reason.
+The child inherits its normal signal mask during startup.

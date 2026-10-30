@@ -581,6 +581,7 @@ int main(int argc,char **argv) {
         for suffix in (".out",".err",".launch.json",".close.json"):(self.directory/("snapshot_loaded"+suffix)).unlink(missing_ok=True)
         outcome=subprocess.run(command,text=True,capture_output=True,timeout=4)
         self.assertNotEqual(outcome.returncode,0)
+        self.assertTrue((self.directory/"snapshot_loaded.failure.json").exists(),outcome.stderr)
         failure=COMPARE.read(self.directory/"snapshot_loaded.failure.json")
         self.assertTrue(failure["timed_out"])
         self.assertTrue(failure["cleanup"]["reaped"])
@@ -691,6 +692,104 @@ int main(int argc,char **argv) {
             self.assertEqual(COMPARE.validate(self.out),3)
         errors=COMPARE.read(self.out/"validation.json")["errors"]
         self.assertTrue(any("measured phases overlap/out of order" in error for error in errors))
+
+    def test_pidfd_acquisition_failure_reaps_exact_unreaped_direct_child(self):
+        import argparse
+        import time
+        from unittest import mock
+        ready=self.directory/"pin-failure.ready"
+        command=[sys.executable,"-c","import pathlib,signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);pathlib.Path("+repr(str(ready))+").write_text('ready');time.sleep(30)"]
+        observed=[]
+        def fail_pin(pid):
+            observed.append(pid)
+            deadline=time.monotonic()+2
+            while not ready.exists() and time.monotonic()<deadline:time.sleep(.005)
+            self.assertTrue(ready.exists())
+            raise OSError("injected pidfd acquisition failure")
+        args=argparse.Namespace(directory=str(self.directory),stem="pin-failure",command=command,cleanup_timeout=.05)
+        with mock.patch.object(COMPARE.os,"pidfd_open",side_effect=fail_pin):
+            with self.assertRaisesRegex(OSError,"injected pidfd acquisition failure"):COMPARE.launch(args)
+        failure=COMPARE.read(self.directory/"pin-failure.failure.json")
+        self.assertEqual(failure["pid"],observed[0])
+        self.assertFalse(failure["pidfd_pinned"])
+        self.assertEqual(failure["cleanup"]["method"],"popen-direct-child-unreaped")
+        self.assertTrue(failure["cleanup"]["reaped"])
+        self.assertEqual(failure["cleanup"]["exit_code"],-9)
+        self.assertIn("injected pidfd acquisition failure",failure["error"])
+        self.assertFalse(pathlib.Path(f"/proc/{failure['pid']}").exists())
+        self.assertFalse((self.directory/"pin-failure.close.json").exists())
+
+    def test_real_outer_alarm_during_pin_acquisition_is_deferred_until_guarded(self):
+        import argparse
+        import signal
+        import time
+        from unittest import mock
+        ready=self.directory/"slow-pin.ready"
+        original_pin=COMPARE.os.pidfd_open
+        def slow_pin(pid):
+            deadline=time.monotonic()+2
+            while not ready.exists() and time.monotonic()<deadline:time.sleep(.005)
+            self.assertTrue(ready.exists())
+            time.sleep(.08)
+            return original_pin(pid)
+        command=[sys.executable,"-c","import pathlib,signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);pathlib.Path("+repr(str(ready))+").write_text('ready');time.sleep(30)"]
+        args=argparse.Namespace(directory=str(self.directory),stem="slow-pin",command=command,cleanup_timeout=.05)
+        with mock.patch.object(COMPARE.os,"pidfd_open",side_effect=slow_pin):
+            with self.assertRaises(TimeoutError):
+                with COMPARE.outer_deadline(.04):COMPARE.launch(args)
+        failure=COMPARE.read(self.directory/"slow-pin.failure.json")
+        self.assertTrue(failure["timed_out"])
+        self.assertIn(signal.SIGALRM,failure["startup_cancellation_signals"])
+        self.assertTrue(failure["pidfd_pinned"])
+        self.assertTrue(failure["cleanup"]["reaped"])
+        self.assertFalse(pathlib.Path(f"/proc/{failure['pid']}").exists())
+
+    def test_real_cancellation_during_cleanup_waits_for_kill_reap_and_failure_receipt(self):
+        import signal
+        import time
+        for signum in (signal.SIGTERM,signal.SIGINT):
+            with self.subTest(signum=signum):
+                stem="cleanup-cancellation-"+str(signum)
+                marker=self.directory/(stem+".term-seen")
+                source="import pathlib,signal,time;signal.signal(signal.SIGTERM,lambda *_:pathlib.Path("+repr(str(marker))+").write_text('term'));time.sleep(30)"
+                command=[sys.executable,str(ROOT/"ycsb_compare_validate.py"),"launch","--timeout",".2","--cleanup-timeout",".4","--outer-timeout","3",str(self.directory),stem,"--",sys.executable,"-c",source]
+                launcher=subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+                pin=os.pidfd_open(launcher.pid)
+                try:
+                    deadline=time.monotonic()+2
+                    while not marker.exists() and time.monotonic()<deadline:time.sleep(.005)
+                    self.assertTrue(marker.exists(),"child must receive cleanup TERM before cancellation")
+                    signal.pidfd_send_signal(pin,signum)
+                    _,stderr=launcher.communicate(timeout=3)
+                    self.assertNotEqual(launcher.returncode,0,stderr)
+                    failure=COMPARE.read(self.directory/(stem+".failure.json"))
+                    self.assertTrue(failure["timed_out"])
+                    self.assertEqual(failure["error"],"child wait deadline exceeded")
+                    self.assertIn(signum,failure["cleanup"]["pending_cancellation_signals"])
+                    self.assertTrue(failure["cleanup"]["success"])
+                    self.assertTrue(failure["cleanup"]["reaped"])
+                    self.assertEqual(failure["cleanup"]["exit_code"],-9)
+                    self.assertFalse(pathlib.Path(f"/proc/{failure['pid']}").exists())
+                    self.assertFalse((self.directory/(stem+".close.json")).exists())
+                finally:
+                    if launcher.returncode is None:
+                        COMPARE.terminate_pinned_child(pin,2);launcher.communicate(timeout=3)
+                    os.close(pin)
+
+    def test_spawn_failure_retains_truthful_no_child_failure_receipt(self):
+        import argparse
+        from unittest import mock
+        args=argparse.Namespace(directory=str(self.directory),stem="spawn-failure",command=[sys.executable,"-c","import time;time.sleep(30)"])
+        with mock.patch.object(COMPARE.subprocess,"Popen",side_effect=OSError("injected spawn failure")):
+            with self.assertRaisesRegex(OSError,"injected spawn failure"):COMPARE.launch(args)
+        failure=COMPARE.read(self.directory/"spawn-failure.failure.json")
+        self.assertIsNone(failure["pid"])
+        self.assertFalse(failure["pidfd_pinned"])
+        self.assertFalse(failure["cleanup"]["attempted"])
+        self.assertFalse(failure["cleanup"]["reaped"])
+        self.assertEqual(failure["cleanup"]["method"],"no-child-created")
+        self.assertIn("injected spawn failure",failure["error"])
+        self.assertFalse((self.directory/"spawn-failure.close.json").exists())
 
     def test_launcher_rejects_reused_receipt_and_propagates_error(self):
         command = [sys.executable, str(ROOT / "ycsb_compare_validate.py"), "launch", str(self.directory), "load", "--", "/bin/true"]
