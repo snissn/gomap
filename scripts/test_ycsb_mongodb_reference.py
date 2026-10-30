@@ -1,4 +1,7 @@
-"""Synthetic offline MongoDB reference evidence; no container or product runs."""
+"""Offline MongoDB evidence: synthetic lifecycle and retained created inspect.
+
+Tests never invoke a container or product service.
+"""
 import base64
 import copy
 import datetime as dt
@@ -24,6 +27,90 @@ import ycsb_mongodb_reference_prepare as preparation
 from test_ycsb_correctness_fixture import fixture
 
 ROOT=pathlib.Path(__file__).parent
+
+
+class Docker29RetainedInspect(unittest.TestCase):
+    """Real created-container input; every command/state transition is offline."""
+    def setUp(self):
+        fixture=ROOT/"testdata/ycsb_mongodb_reference"
+        for name,digest in c.read(fixture/"provenance.json")["fixture_sha256"].items():
+            self.assertEqual(c.digest(fixture/name),digest)
+        self.m=c.read(fixture/"docker29-bootstrap.manifest.json")
+        self.value=c.read(fixture/"docker29-created.inspect.json")[0]
+        self.assertNotIn("Init",self.value["HostConfig"])
+        self.cid=self.value["Id"]
+        self.data=next(x["Source"] for x in self.value["Mounts"] if x["Destination"]=="/data/db")
+        temp=tempfile.TemporaryDirectory(prefix="offline-docker29-inspect-",dir=os.environ.get("TMPDIR","/home/mikers"))
+        self.addCleanup(temp.cleanup)
+        self.out=pathlib.Path(temp.name);(self.out/"mongodb").mkdir()
+        c.write_new(self.out/"manifest.json",self.m)
+
+    def driver(self,known=True):
+        driver=reference.Docker(self.out,self.m["docker_binary"])
+        driver.owned={"server":dict(cid=self.cid if known else None,name=self.value["Name"].removeprefix("/"),data=pathlib.Path(self.data))}
+        return driver
+
+    def test_real_inspect_accepts_optional_init_for_normal_and_stopped_cleanup(self):
+        for variant in ("omitted",None,False):
+            for known in (True,False):
+                value=copy.deepcopy(self.value)
+                if variant!="omitted":value["HostConfig"]["Init"]=variant
+                with self.subTest(init=variant,known=known):
+                    driver=self.driver(known)
+                    with mock.patch.object(driver,"inspect",return_value=value):
+                        self.assertEqual(driver.checked(self.cid,"server",pathlib.Path(self.data)),value)
+                    with mock.patch.object(driver,"emergency_command",side_effect=[json.dumps([value]),json.dumps([value]),self.cid]) as emergency,mock.patch.object(driver,"command") as ordinary:
+                        driver.cleanup()
+                    self.assertEqual(emergency.call_args_list,[mock.call("inspect",self.cid if known else value["Name"].removeprefix("/")),mock.call("inspect",self.cid),mock.call("rm",self.cid)])
+                    ordinary.assert_not_called()
+                    self.assertEqual(driver.owned,{})
+                    self.assertIs(driver.cleanup_records["server"]["qualification_invalid"],True)
+
+    def test_true_and_malformed_init_refuse_normal_and_emergency_actions(self):
+        for init in (True,0,0.0,1,1.0,"false","",[],{}):
+            value=copy.deepcopy(self.value);value["HostConfig"]["Init"]=init
+            with self.subTest(init=init):
+                driver=self.driver()
+                with mock.patch.object(driver,"inspect",return_value=value):
+                    with self.assertRaisesRegex(ValueError,"runtime/custody mismatch"):driver.checked(self.cid,"server",pathlib.Path(self.data))
+                with mock.patch.object(driver,"emergency_command",return_value=json.dumps([value])) as emergency:
+                    with self.assertRaisesRegex(ValueError,"unresolved owned reference custody"):driver.cleanup()
+                self.assertEqual(emergency.call_args_list,[mock.call("inspect",self.cid)])
+                self.assertIn("server",driver.owned)
+
+    def test_emergency_rechecks_init_before_removal(self):
+        for init in (True,0,0.0,"false",[],{}):
+            terminal=copy.deepcopy(self.value);terminal["HostConfig"]["Init"]=init
+            with self.subTest(init=init):
+                driver=self.driver()
+                with mock.patch.object(driver,"emergency_command",side_effect=[json.dumps([self.value]),json.dumps([terminal])]) as emergency:
+                    with self.assertRaisesRegex(ValueError,"unresolved owned reference custody"):driver.cleanup()
+                self.assertEqual(emergency.call_args_list,[mock.call("inspect",self.cid),mock.call("inspect",self.cid)])
+                self.assertIn("server",driver.owned)
+
+    def test_omitted_init_does_not_weaken_other_exact_owner_checks(self):
+        mutations=(lambda v:v.update(Id="0"*64),lambda v:v.update(Image="sha256:"+"0"*64),lambda v:v["Config"]["Labels"].update({"gomap.ycsb.campaign":"other"}),lambda v:v["Mounts"][0].update(Source="/unrelated"),lambda v:v["HostConfig"].update(Privileged=True),lambda v:v["HostConfig"].update(AutoRemove=True),lambda v:v["HostConfig"].update(Runtime="other"))
+        for mutate in mutations:
+            value=copy.deepcopy(self.value);mutate(value)
+            with self.subTest(mutation=mutate):
+                driver=self.driver()
+                with mock.patch.object(driver,"inspect",return_value=value):
+                    with self.assertRaises(ValueError):driver.checked(self.cid,"server",pathlib.Path(self.data))
+                with mock.patch.object(driver,"emergency_command",return_value=json.dumps([value])) as emergency:
+                    with self.assertRaisesRegex(ValueError,"unresolved owned reference custody"):driver.cleanup()
+                self.assertEqual(emergency.call_args_list,[mock.call("inspect",self.cid)])
+
+    def test_synthetic_running_derivative_keeps_exact_kill_wait_terminal_remove(self):
+        # The actual fixture never started. Only these mocked states are
+        # synthetic; no PID/container is contacted or signaled by this test.
+        running=copy.deepcopy(self.value);running["State"].update(Running=True,Pid=12345)
+        terminal=copy.deepcopy(self.value);terminal["State"]["ExitCode"]=137
+        driver=self.driver()
+        with mock.patch.object(driver,"emergency_command",side_effect=[json.dumps([running]),self.cid,"137",json.dumps([terminal]),self.cid]) as emergency:
+            driver.cleanup()
+        self.assertEqual(emergency.call_args_list,[mock.call("inspect",self.cid),mock.call("kill","--signal=SIGKILL",self.cid),mock.call("wait",self.cid),mock.call("inspect",self.cid),mock.call("rm",self.cid)])
+        self.assertEqual(driver.owned,{})
+        self.assertIs(driver.cleanup_records["server"]["qualification_invalid"],True)
 
 
 def ts(second):
@@ -181,6 +268,22 @@ class ReferencePackets(unittest.TestCase):
     def test_identity_mount_image_runtime_and_public_build_fail_closed(self):
         for name,fn in (("server.identity.json",lambda v:v["process"].update(start_ticks=500.0)),("server.identity.json",lambda v:v.update(data_inode=21.0)),("server.identity.json",lambda v:v.update(namespace_pid=True)),("server.inspect.json",lambda v:v.update(Image="sha256:"+"0"*64)),("server.inspect.json",lambda v:v["Config"]["Labels"].update({"gomap.ycsb.campaign":"unrelated"})),("server.inspect.json",lambda v:v["Mounts"][0].update(Source="/unrelated")),("server.inspect.json",lambda v:v["HostConfig"].update(Init=0)),("server-ready.json",lambda v:v["commands"]["before.buildInfo"]["reply"].update(version="8.0.0")),("server-ready.json",lambda v:v["commands"]["before.serverStatus"]["reply"].update(pid={"$numberDouble":"1.0"})),("server-ready.json",lambda v:v["commands"]["before.getCmdLineOpts"]["reply"]["parsed"]["storage"].update(journal={"enabled":False}))):
             with self.subTest(name=name,fn=fn):self.reject(name,fn)
+
+    def test_all_synthetic_lifecycle_inspect_copies_can_omit_init(self):
+        # Exercise the normal complete lifecycle validator, including raw
+        # Docker inspect action copies and checked graceful-close snapshots.
+        paths=list(self.directory.glob("*.inspect.json"))+list(self.directory.glob("*.terminal.json"))
+        paths += [p.with_name(p.name.removesuffix(".command.json")+".out") for p in self.directory.glob("docker-*.command.json") if c.read(p)["argv"][1]=="inspect"]
+        for path in paths:
+            value=c.read(path)
+            values=value if type(value) is list else [value]
+            changed=False
+            for item in values:
+                if type(item) is dict and "HostConfig" in item:
+                    item["HostConfig"].pop("Init",None);changed=True
+            if changed:self.save(path,value)
+        self.rehash()
+        self.assertEqual(reference.validate(self.out)["status"],"validated-reference-lifecycle-evidence")
 
     def test_checkpoint_failure_request_owner_route_and_order(self):
         for stem in ("random-checkpoint","fixture-checkpoint"):

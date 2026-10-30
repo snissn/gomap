@@ -166,7 +166,12 @@ def container_inspect(value,m,role,data,terminal=False):
     c.require(config["Hostname"]=="ycsb-"+m["campaign_id"][:12]+"-"+role and config["User"]==f'{m["uid"]}:{m["gid"]}',"container user/hostname mismatch")
     c.require(config["Entrypoint"]==["/usr/bin/mongod"] and config["Cmd"]==["--dbpath","/data/db","--storageEngine","wiredTiger","--bind_ip_all","--port","27017"],"actual mongod command mismatch")
     c.require(all(type(x) is str and not x.startswith("GOMAXPROCS=") for x in config["Env"]),"container GOMAXPROCS was set")
-    c.require(host["Runtime"]==b["runtime"]["default_runtime"] and host["RestartPolicy"]["Name"]=="no" and host["AutoRemove"] is False and host["Privileged"] is False and (host["Init"] is None or host["Init"] is False),"container runtime/custody mismatch")
+    # The nullable Init *bool uses JSON omitempty: Docker 29 omits the
+    # unspecified value. Omitted/null delegates to daemon configuration;
+    # neither proves init is disabled. Actual PID1/ELF/namespace observation
+    # below remains mandatory and rejects an unexpected init wrapper.
+    init=host.get("Init")
+    c.require(host["Runtime"]==b["runtime"]["default_runtime"] and host["RestartPolicy"]["Name"]=="no" and host["AutoRemove"] is False and host["Privileged"] is False and (init is None or init is False),"container runtime/custody mismatch")
     c.require(host["NetworkMode"]=="bridge" and c.same(host["PortBindings"],{"27017/tcp":[{"HostIp":"127.0.0.1","HostPort":str(address(m["address"])[1])}]}),"reference port mapping mismatch")
     mounts=value["Mounts"]
     c.require(len(mounts)==2 and {x["Destination"] for x in mounts}=={"/data/db","/data/configdb"},"unexpected/anonymous reference volume")
