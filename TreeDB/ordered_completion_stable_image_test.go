@@ -69,7 +69,7 @@ func proposalOrderedACKImageChild(t *testing.T, scenario string) {
 		if drained {
 			// Only after the immutable ACK image was frozen.
 			witness.mark("original-close")
-			if err := closeOrderedACKImage("original", database.Close); err != nil {
+			if err := closeOrderedACKImage("original close", database.Close); err != nil {
 				t.Error(err)
 			}
 		}
@@ -236,7 +236,7 @@ func proposalOrderedACKImageChild(t *testing.T, scenario string) {
 	}
 	defer func() {
 		witness.mark("reopened-close")
-		if err := closeOrderedACKImage("reopened", closeReopened); err != nil {
+		if err := closeOrderedACKImage("reopened close/cleanup", closeReopened); err != nil {
 			t.Error(err)
 		}
 	}()

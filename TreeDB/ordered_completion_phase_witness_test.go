@@ -72,9 +72,41 @@ func (w *orderedACKPhaseWitness) snapshot(stack func([]byte, bool) int) []byte {
 
 func closeOrderedACKImage(label string, closeImage func() error) error {
 	if err := closeImage(); err != nil {
-		return fmt.Errorf("%s close: %w", label, err)
+		return fmt.Errorf("%s: %w", label, err)
 	}
 	return nil
+}
+
+// A single-slot, nonblocking sink lets the timer control observe emission
+// without making the witness wait on the test goroutine or write to stderr.
+type orderedACKWitnessOutput struct {
+	receipts chan []byte
+	calls    atomic.Int32
+}
+
+func (out *orderedACKWitnessOutput) Write(buf []byte) (int, error) {
+	out.calls.Add(1)
+	select {
+	case out.receipts <- bytes.Clone(buf):
+	default:
+	}
+	return len(buf), nil
+}
+
+func TestOrderedACKPhaseWitnessTimerEmission(t *testing.T) {
+	out := &orderedACKWitnessOutput{receipts: make(chan []byte, 1)}
+	w := startOrderedACKPhaseWitness("timer-control", time.Now().Add(-time.Second), out)
+	defer w.stopAndJoin()
+	var receipt []byte
+	select {
+	case receipt = <-out.receipts:
+	case <-time.After(3 * time.Second):
+		t.Fatal("past-deadline timer did not emit")
+	}
+	w.stopAndJoin()
+	if out.calls.Load() != 1 || len(receipt) > orderedACKWitnessLimit || !bytes.Contains(receipt, []byte("scenario=timer-control phase=setup")) || !bytes.Contains(receipt, []byte("stack_truncated=")) || !bytes.Contains(receipt, []byte("\ngoroutine ")) {
+		t.Fatalf("invalid timer receipt: calls=%d bytes=%d", out.calls.Load(), len(receipt))
+	}
 }
 
 func TestOrderedACKPhaseWitnessStop(t *testing.T) {
@@ -115,8 +147,8 @@ func TestOrderedACKPhaseWitnessCloseReporting(t *testing.T) {
 	failure := errors.New("close control")
 	for _, want := range []error{nil, failure} {
 		calls := 0
-		err := closeOrderedACKImage("reopened", func() error { calls++; return want })
-		if calls != 1 || !errors.Is(err, want) || (err != nil && !strings.Contains(err.Error(), "reopened close: close control")) {
+		err := closeOrderedACKImage("reopened close/cleanup", func() error { calls++; return want })
+		if calls != 1 || !errors.Is(err, want) || (err != nil && !strings.Contains(err.Error(), "reopened close/cleanup: close control")) {
 			t.Fatalf("close result=%v calls=%d want=%v", err, calls, want)
 		}
 	}
