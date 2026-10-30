@@ -5401,7 +5401,7 @@ func (c *Collection) bufferNoIndexInsertBatch(
 	})
 	for i := 1; i < len(entries); i++ {
 		if bytes.Equal(entries[i-1].id, entries[i].id) {
-			return nil, true, ErrDuplicateDocumentID
+			return nil, true, mutationNotAcceptedError(ErrDuplicateDocumentID)
 		}
 	}
 
@@ -5443,7 +5443,7 @@ func (c *Collection) bufferNoIndexInsertBatch(
 	}
 	for _, entry := range entries {
 		if _, _, flags, found := domain.table.GetEntry(entry.id); found && flags&node.FlagTombstone == 0 {
-			return nil, true, ErrDocumentExists
+			return nil, true, mutationNotAcceptedError(ErrDocumentExists)
 		}
 	}
 	primaryRoot := currentCatalog.rootID(collectionPrimaryRootName(currentCatalog.meta.Name))
@@ -5457,7 +5457,7 @@ func (c *Collection) bufferNoIndexInsertBatch(
 			return nil, true, err
 		}
 		if exists {
-			return nil, true, ErrDocumentExists
+			return nil, true, mutationNotAcceptedError(ErrDocumentExists)
 		}
 	}
 	domain.storagePolicy = currentOptions.dataStoragePolicy
