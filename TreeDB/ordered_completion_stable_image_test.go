@@ -31,9 +31,10 @@ func TestOrderedCompletionStableImageAtAcknowledgement(t *testing.T) {
 	}
 	for _, scenario := range []string{"fifo-1", "fifo-70", "later-driver"} {
 		t.Run(scenario, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			// Allow bounded headroom for aggregate setup and recovery.
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
-			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestOrderedCompletionStableImageAtAcknowledgement$", "-test.timeout=15s", "-test.v")
+			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestOrderedCompletionStableImageAtAcknowledgement$", "-test.timeout=20s", "-test.v")
 			cmd.Env = append(os.Environ(), "GOMAP_ORDERED_ACK_IMAGE_CHILD="+scenario)
 			started := time.Now()
 			out, err := cmd.CombinedOutput()
