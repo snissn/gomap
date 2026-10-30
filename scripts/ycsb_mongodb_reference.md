@@ -2,7 +2,7 @@
 
 The maintained shell still refuses execution selecting `mongodb`, before output
 creation or commands. This separate implementation remains provisional. Its
-retained live readiness failure below started no workload or performance sample.
+earlier retained live readiness failure started no workload or performance sample.
 A complete synthetic
 packet may be consumed through the ordinary shell's `PARSE_ONLY=true` entry.
 That is parser coverage, not MongoDB readiness or product evidence.
@@ -204,11 +204,27 @@ preparation binding and cannot substitute for shell activation/preparation.
 Synthetic preparation controls use clearly labeled fake tool metadata and raw
 packets; their success establishes parser/control behavior only.
 
-Still outstanding: independent source review of this provisional implementation,
-actual 8.2.7 buildInfo/ELF/settings/log-shape support controls under separately
-authorized host custody, exact-head review of the provisional preparation route,
-and integration enabling execution in the maintained shell. Same-UID procfs
-access and actual image/public settings were observed for one failed initial
-readiness lifetime; full checkpoint/reopen and successful shutdown log shape
-remain unproven. A separately reviewed runtime identity contract is also
-required before activation. MongoDB reference performance remains unattempted.
+The separately authorized `0fb48d4` correctness attempt reached all four
+lifetimes, public fsync calls and graceful exits/removals, then failed final
+validation because actual MongoDB close-log timestamps used `+00:00` instead of
+`Z`. The packet retains its failure/incomplete markers and remains nonqualifying;
+the parser correction does not retroactively qualify it. Its independent
+terminal audit verified all four full IDs absent, original process identities
+absent and all recorded helper/parent children reaped.
+
+Only Mongo close-log timestamps accept either `Z` or explicit `+00:00`, with
+exact integer nanoseconds and unchanged signal/close/completion/exit ordering.
+Nonzero offsets, unknown `-00:00`, missing zones and malformed dates fail closed.
+Receipt and Docker timestamps remain strict `Z` only. The pinned
+[JSONFormatter](https://github.com/mongodb/mongo/blob/9fbea53313e85fbbf864a963ff17b0bd6dafa0be/src/mongo/logv2/json_formatter.cpp#L343)
+uses `DateStringBuffer::iso8601`, whose
+[local and UTC branches](https://github.com/mongodb/mongo/blob/9fbea53313e85fbbf864a963ff17b0bd6dafa0be/src/mongo/util/time_support.cpp#L184)
+emit an explicit offset and `Z`, respectively. This supports the observed
+zero-offset syntax without claiming a nonzero local clock is UTC.
+
+Still outstanding: an accepted complete real reference packet and preparation
+binding, followed by review and integration enabling execution in the maintained
+shell. The retained failed controls provide scoped source/identity/operation
+evidence, not full reference qualification. Runtime metadata remains version
+metadata, with no runtime ELF attestation. MongoDB reference performance remains
+unattempted.

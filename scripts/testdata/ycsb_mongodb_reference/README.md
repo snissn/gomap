@@ -52,3 +52,20 @@ and full connector responses remain beside the original task's terminal audit.
 Tests cover the actual default-port bare hostname and origin ID, preserve the
 distinct public source identity, and reject substitutions without Docker or a
 new service invocation. Original failed receipts remain unchanged.
+
+## Actual UTC close logs from failed final validation
+
+`mongodb827-close-log.extract.json` selects the unchanged actual close/completion
+entries (IDs4795901 and8423404) from all four lifetimes of the consumed `0fb48d4`
+attempt. Every actual date ends in `+00:00`. Original complete-log paths/hashes,
+manifest, failure and terminal audit hashes are recorded. The attempt completed
+its bounded public operations and owned cleanup but failed final validation;
+these entries are not a complete or qualifying packet.
+
+The extract also binds pinned upstream JSONFormatter and DateStringBuffer source
+responses retained beside the original packet. Tests accept zero-offset and Z
+syntax with exact nanoseconds, and reject malformed/unknown/nonzero offsets.
+Synthetic complete-packet controls change matching log/raw-Docker copies and
+hashes together; every lifetime still enforces signal→storage close→mongod
+completion→actual exit chronology, including 1ns violations. No test invokes a
+container or retroactively qualifies any failed attempt.

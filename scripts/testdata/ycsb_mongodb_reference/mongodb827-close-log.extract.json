@@ -1,0 +1,264 @@
+{
+  "schema_version": 1,
+  "classification": "selected actual close-log lines from failed nonqualifying 0fb attempt; not a complete lifecycle",
+  "original_head": "0fb48d462eaedf15bef8a684a43b267982cb6d9b",
+  "original_root": "/home/mikers/gomap-5335-close-consumer-build-20261029/reference-correctness-0fb48d4-20261030",
+  "campaign_id": "764de6f8f01b40ee9a912a9715e47b3b",
+  "files": {
+    "support/mongodb/server.log": "7466fb9db38b460626e3ea204b822d2612e4580e157c232caa97925a6c91ff72",
+    "support/mongodb/reopened.log": "011360ebd1dcfa0dcff24d3d163f0270fea95312d9297e5a814bdf6cd51fbcae",
+    "support/mongodb/fixture-write.log": "d4add78647905b36862a18cce062984a36d50a47f0d1f2607e301ce048c02cee",
+    "support/mongodb/fixture-reopened.log": "033142bb9912e823f37881041a41b1170af94040e2bc29f7c230e7d217b32b31",
+    "support/manifest.json": "52e3c5a500980960773c0a23e68c6c7e3030689f80ab16a5f94066af2baf84a9",
+    "support/failure.json": "a1f6ff76b85f59c76a5703894343a5c65e06f78f329a5b0733ee08cb605868d7",
+    "terminal-audit.json": "cebf0dc0df0540ede01d810bc8d856690a3cc05cdcfb360b25d74aa747fd2788"
+  },
+  "roles": {
+    "server": [
+      {
+        "t": {
+          "$date": "2026-10-30T05:16:33.589+00:00"
+        },
+        "s": "I",
+        "c": "STORAGE",
+        "id": 4795901,
+        "ctx": "SignalHandler",
+        "msg": "WiredTiger closed",
+        "attr": {
+          "durationMillis": 70
+        }
+      },
+      {
+        "t": {
+          "$date": "2026-10-30T05:16:33.592+00:00"
+        },
+        "s": "I",
+        "c": "CONTROL",
+        "id": 8423404,
+        "ctx": "SignalHandler",
+        "msg": "mongod shutdown complete",
+        "attr": {
+          "Summary of time elapsed": {
+            "Statistics": {
+              "enterTerminalShutdownMillis": 0,
+              "stepDownReplCoordMillis": 0,
+              "quiesceModeMillis": 0,
+              "stopFLECrudMillis": 0,
+              "shutDownMirrorMaestroMillis": 0,
+              "shutDownWaitForMajorityServiceMillis": 0,
+              "shutDownLogicalSessionCacheMillis": 0,
+              "shutDownGlobalConnectionPoolMillis": 0,
+              "shutDownSearchTaskExecutorsMillis": 0,
+              "shutDownFlowControlTicketHolderMillis": 0,
+              "shutDownAbortExpiredTransactionsThreadMillis": 0,
+              "shutDownRollbackUnderCachePressureThreadMillis": 0,
+              "killAllOperationsMillis": 0,
+              "shutDownOpenTransactionsMillis": 0,
+              "acquireRSTLMillis": 0,
+              "shutDownIndexBuildsCoordinatorMillis": 0,
+              "shutDownReplicaSetMonitorMillis": 0,
+              "shutDownTransportLayerMillis": 0,
+              "shutDownHealthLogMillis": 0,
+              "shutDownTTLMonitorMillis": 0,
+              "shutDownExpiredDocumentRemoverMillis": 0,
+              "shutDownStorageEngineMillis": 120,
+              "shutDownOtelMetricsMillis": 0,
+              "shutDownFTDCMillis": 0,
+              "shutDownReplicaSetNodeExecutorMillis": 3,
+              "shutDownOCSPMillis": 0,
+              "shutdownTaskTotalMillis": 124
+            }
+          }
+        }
+      }
+    ],
+    "reopened": [
+      {
+        "t": {
+          "$date": "2026-10-30T05:16:35.257+00:00"
+        },
+        "s": "I",
+        "c": "STORAGE",
+        "id": 4795901,
+        "ctx": "SignalHandler",
+        "msg": "WiredTiger closed",
+        "attr": {
+          "durationMillis": 106
+        }
+      },
+      {
+        "t": {
+          "$date": "2026-10-30T05:16:35.260+00:00"
+        },
+        "s": "I",
+        "c": "CONTROL",
+        "id": 8423404,
+        "ctx": "SignalHandler",
+        "msg": "mongod shutdown complete",
+        "attr": {
+          "Summary of time elapsed": {
+            "Statistics": {
+              "enterTerminalShutdownMillis": 0,
+              "stepDownReplCoordMillis": 0,
+              "quiesceModeMillis": 0,
+              "stopFLECrudMillis": 0,
+              "shutDownMirrorMaestroMillis": 0,
+              "shutDownWaitForMajorityServiceMillis": 0,
+              "shutDownLogicalSessionCacheMillis": 0,
+              "shutDownGlobalConnectionPoolMillis": 0,
+              "shutDownSearchTaskExecutorsMillis": 0,
+              "shutDownFlowControlTicketHolderMillis": 0,
+              "shutDownAbortExpiredTransactionsThreadMillis": 0,
+              "shutDownRollbackUnderCachePressureThreadMillis": 0,
+              "killAllOperationsMillis": 0,
+              "shutDownOpenTransactionsMillis": 0,
+              "acquireRSTLMillis": 0,
+              "shutDownIndexBuildsCoordinatorMillis": 0,
+              "shutDownReplicaSetMonitorMillis": 0,
+              "shutDownTransportLayerMillis": 0,
+              "shutDownHealthLogMillis": 0,
+              "shutDownTTLMonitorMillis": 0,
+              "shutDownExpiredDocumentRemoverMillis": 0,
+              "shutDownStorageEngineMillis": 164,
+              "shutDownOtelMetricsMillis": 0,
+              "shutDownFTDCMillis": 0,
+              "shutDownReplicaSetNodeExecutorMillis": 2,
+              "shutDownOCSPMillis": 0,
+              "shutdownTaskTotalMillis": 167
+            }
+          }
+        }
+      }
+    ],
+    "fixture-write": [
+      {
+        "t": {
+          "$date": "2026-10-30T05:16:37.369+00:00"
+        },
+        "s": "I",
+        "c": "STORAGE",
+        "id": 4795901,
+        "ctx": "SignalHandler",
+        "msg": "WiredTiger closed",
+        "attr": {
+          "durationMillis": 73
+        }
+      },
+      {
+        "t": {
+          "$date": "2026-10-30T05:16:37.372+00:00"
+        },
+        "s": "I",
+        "c": "CONTROL",
+        "id": 8423404,
+        "ctx": "SignalHandler",
+        "msg": "mongod shutdown complete",
+        "attr": {
+          "Summary of time elapsed": {
+            "Statistics": {
+              "enterTerminalShutdownMillis": 0,
+              "stepDownReplCoordMillis": 0,
+              "quiesceModeMillis": 0,
+              "stopFLECrudMillis": 1,
+              "shutDownMirrorMaestroMillis": 0,
+              "shutDownWaitForMajorityServiceMillis": 0,
+              "shutDownLogicalSessionCacheMillis": 0,
+              "shutDownGlobalConnectionPoolMillis": 0,
+              "shutDownSearchTaskExecutorsMillis": 0,
+              "shutDownFlowControlTicketHolderMillis": 0,
+              "shutDownAbortExpiredTransactionsThreadMillis": 0,
+              "shutDownRollbackUnderCachePressureThreadMillis": 0,
+              "killAllOperationsMillis": 0,
+              "shutDownOpenTransactionsMillis": 0,
+              "acquireRSTLMillis": 0,
+              "shutDownIndexBuildsCoordinatorMillis": 0,
+              "shutDownReplicaSetMonitorMillis": 0,
+              "shutDownTransportLayerMillis": 0,
+              "shutDownHealthLogMillis": 0,
+              "shutDownTTLMonitorMillis": 0,
+              "shutDownExpiredDocumentRemoverMillis": 0,
+              "shutDownStorageEngineMillis": 126,
+              "shutDownOtelMetricsMillis": 0,
+              "shutDownFTDCMillis": 0,
+              "shutDownReplicaSetNodeExecutorMillis": 3,
+              "shutDownOCSPMillis": 0,
+              "shutdownTaskTotalMillis": 130
+            }
+          }
+        }
+      }
+    ],
+    "fixture-reopened": [
+      {
+        "t": {
+          "$date": "2026-10-30T05:16:39.056+00:00"
+        },
+        "s": "I",
+        "c": "STORAGE",
+        "id": 4795901,
+        "ctx": "SignalHandler",
+        "msg": "WiredTiger closed",
+        "attr": {
+          "durationMillis": 106
+        }
+      },
+      {
+        "t": {
+          "$date": "2026-10-30T05:16:39.059+00:00"
+        },
+        "s": "I",
+        "c": "CONTROL",
+        "id": 8423404,
+        "ctx": "SignalHandler",
+        "msg": "mongod shutdown complete",
+        "attr": {
+          "Summary of time elapsed": {
+            "Statistics": {
+              "enterTerminalShutdownMillis": 0,
+              "stepDownReplCoordMillis": 0,
+              "quiesceModeMillis": 0,
+              "stopFLECrudMillis": 0,
+              "shutDownMirrorMaestroMillis": 0,
+              "shutDownWaitForMajorityServiceMillis": 0,
+              "shutDownLogicalSessionCacheMillis": 0,
+              "shutDownGlobalConnectionPoolMillis": 0,
+              "shutDownSearchTaskExecutorsMillis": 0,
+              "shutDownFlowControlTicketHolderMillis": 1,
+              "shutDownAbortExpiredTransactionsThreadMillis": 0,
+              "shutDownRollbackUnderCachePressureThreadMillis": 0,
+              "killAllOperationsMillis": 0,
+              "shutDownOpenTransactionsMillis": 0,
+              "acquireRSTLMillis": 0,
+              "shutDownIndexBuildsCoordinatorMillis": 0,
+              "shutDownReplicaSetMonitorMillis": 0,
+              "shutDownTransportLayerMillis": 0,
+              "shutDownHealthLogMillis": 0,
+              "shutDownTTLMonitorMillis": 0,
+              "shutDownExpiredDocumentRemoverMillis": 0,
+              "shutDownStorageEngineMillis": 162,
+              "shutDownOtelMetricsMillis": 0,
+              "shutDownFTDCMillis": 0,
+              "shutDownReplicaSetNodeExecutorMillis": 3,
+              "shutDownOCSPMillis": 0,
+              "shutdownTaskTotalMillis": 166
+            }
+          }
+        }
+      }
+    ]
+  },
+  "source": {
+    "json-formatter": {
+      "url": "https://github.com/mongodb/mongo/blob/9fbea53313e85fbbf864a963ff17b0bd6dafa0be/src/mongo/logv2/json_formatter.cpp",
+      "git_blob_sha": "6c073bce469699b2be49c974c4b9242647c99625",
+      "retained_source": "/home/mikers/gomap-5335-close-consumer-build-20261029/reference-correctness-0fb48d4-20261030/source-review/json-formatter.cpp",
+      "sha256": "580e03623fa1edabd26de12070728ff13b717bcd06b981991baac2ac8dc0c97e"
+    },
+    "time-support": {
+      "url": "https://github.com/mongodb/mongo/blob/9fbea53313e85fbbf864a963ff17b0bd6dafa0be/src/mongo/util/time_support.cpp",
+      "git_blob_sha": "ac3f1f7605769e270490b4f91bec65b09472632c",
+      "retained_source": "/home/mikers/gomap-5335-close-consumer-build-20261029/reference-correctness-0fb48d4-20261030/source-review/time-support.cpp",
+      "sha256": "5712c63c1a5cd2744356c8340ce513e4a99bc2cd58384c645fe708ef32f68f01"
+    }
+  }
+}

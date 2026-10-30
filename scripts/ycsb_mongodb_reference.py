@@ -331,6 +331,19 @@ def docker_action(directory,stem,m,args):
     return (directory/(stem+".out")).read_text(),bounds
 
 
+def log_timestamp(value):
+    """Mongo log UTC only: Z or explicit +00:00, exact integer nanoseconds.
+
+    The pinned JSONFormatter uses DateStringBuffer::iso8601. Its local form
+    includes an offset (the retained image emits +00:00); the UTC form uses Z.
+    Other offsets, unknown -00:00 and missing zones are outside this contract.
+    Receipt and Docker timestamps retain their separate strict Z-only parser.
+    """
+    c.require(isinstance(value,str),"invalid Mongo log UTC timestamp")
+    if value.endswith("+00:00"):value=value[:-6]+"Z"
+    return c.timestamp(value)
+
+
 def lifetime(directory,role,m,evidence_directory=None):
     observed=c.read(directory/(role+".identity.json"));identity(observed,m,role)
     initial=c.read(directory/(role+".inspect.json"));terminal=c.read(directory/(role+".terminal.json"))
@@ -369,7 +382,7 @@ def lifetime(directory,role,m,evidence_directory=None):
     storage=[(i,x) for i,x in enumerate(entries) if type(x.get("id")) is int and x["id"]==4795901]
     done=[(i,x) for i,x in enumerate(entries) if type(x.get("id")) is int and x["id"]==8423404]
     c.require(len(storage)==len(done)==1 and storage[0][0]<done[0][0],"actual source-bound WiredTiger close/mongod completion missing")
-    c.require(sent[0]<=c.timestamp(storage[0][1]["t"]["$date"])<=c.timestamp(done[0][1]["t"]["$date"])<=finished,"source close/completion logs outside actual shutdown lifetime")
+    c.require(sent[0]<=log_timestamp(storage[0][1]["t"]["$date"])<=log_timestamp(done[0][1]["t"]["$date"])<=finished,"source close/completion logs outside actual shutdown lifetime")
     removed=c.read(directory/(role+".removed.json"))
     c.require(c.schema(removed) and removed["container_id"]==cid and removed["removed"] is True,"owned reference container removal incomplete")
     output,removal=docker_action(directory,removed["action"],m,["rm",cid])

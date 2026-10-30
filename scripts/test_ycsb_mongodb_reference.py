@@ -29,6 +29,33 @@ from test_ycsb_correctness_fixture import fixture
 ROOT=pathlib.Path(__file__).parent
 
 
+class MongoLogUTC(unittest.TestCase):
+    def test_actual_retained_close_logs_accept_explicit_zero_offset(self):
+        evidence=c.read(ROOT/'testdata/ycsb_mongodb_reference/mongodb827-close-log.extract.json')
+        self.assertIn('failed nonqualifying',evidence['classification'])
+        for role,entries in evidence['roles'].items():
+            self.assertEqual([v['id'] for v in entries],[4795901,8423404])
+            for entry in entries:
+                actual=entry['t']['$date']
+                self.assertTrue(actual.endswith('+00:00'))
+                with self.subTest(role=role,id=entry['id']):
+                    self.assertEqual(reference.log_timestamp(actual),c.timestamp(actual[:-6]+'Z'))
+
+    def test_z_and_zero_offset_preserve_exact_nanoseconds(self):
+        for fraction in ('','.1','.123','.123456789'):
+            stamp='2026-10-30T05:16:33'+fraction
+            self.assertEqual(reference.log_timestamp(stamp+'Z'),c.timestamp(stamp+'Z'))
+            self.assertEqual(reference.log_timestamp(stamp+'+00:00'),c.timestamp(stamp+'Z'))
+        self.assertEqual(reference.log_timestamp('2026-10-30T05:16:33.000000001+00:00')-reference.log_timestamp('2026-10-30T05:16:33Z'),1)
+        with self.assertRaises(ValueError):c.timestamp('2026-10-30T05:16:33+00:00')
+
+    def test_nonzero_unknown_missing_or_malformed_zone_rejected(self):
+        values=(None,True,1,1.0,'2026-10-30T05:16:33','2026-10-30T05:16:33+01:00','2026-10-30T05:16:33-10:00','2026-10-30T05:16:33-00:00','2026-10-30T05:16:33+0000','2026-10-30T05:16:33+00:00Z','2026-10-30T05:16:33z','2026-10-30T05:16:33.1234567890+00:00','2026-02-30T05:16:33+00:00','2026-10-30T25:16:33+00:00','2026-10-30T05:16:33+00:00\n','0001-01-01T00:00:00+00:00')
+        for value in values:
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):reference.log_timestamp(value)
+
+
 class ReferenceBSONIntegers(unittest.TestCase):
     def test_declared_integer_width_boundaries(self):
         for kind,bits in (("$numberInt",32),("$numberLong",64)):
@@ -412,6 +439,48 @@ class ReferencePackets(unittest.TestCase):
         (self.directory/"server.log").write_text(original.replace('4795901','0'))
         self.rehash()
         with self.assertRaises(ValueError):reference.validate(self.out)
+
+    def test_matching_raw_close_log_timestamps_keep_utc_and_lifetime_bounds(self):
+        original={p:p.read_bytes() for p in self.out.rglob('*') if p.is_file()}
+        try:
+            for role in reference.ROLES:
+                close=c.read(self.directory/(role+'.close.json'))
+                log=self.directory/(role+'.log')
+                contents=log.read_text().replace('Z"','+00:00"')
+                log.write_text(contents)
+                (self.directory/(close['actions']['logs']+'.out')).write_text(contents)
+            self.rehash()
+            self.assertEqual(reference.validate(self.out)['status'],'validated-reference-lifecycle-evidence')
+            accepted={p:p.read_bytes() for p in self.out.rglob('*') if p.is_file()}
+            for role in reference.ROLES:
+                for timestamp in ('2026-01-01T00:00:00+01:00','2026-01-01T00:00:00','2026-01-01T00:00:00-00:00'):
+                    for path,data in accepted.items():path.write_bytes(data)
+                    log=self.directory/(role+'.log');entries=[reference.loads(line) for line in log.read_text().splitlines()]
+                    entries[0]['t']['$date']=timestamp
+                    contents=''.join(json.dumps(v)+'\n' for v in entries)
+                    log.write_text(contents)
+                    close=c.read(self.directory/(role+'.close.json'))
+                    (self.directory/(close['actions']['logs']+'.out')).write_text(contents)
+                    self.rehash()
+                    with self.subTest(role=role,timestamp=timestamp):
+                        with self.assertRaises(ValueError):reference.validate(self.out)
+                # Valid UTC format cannot hide a 1ns log before its signal or
+                # reverse close/completion ordering within one microsecond.
+                base=ts(reference.ROLES.index(role)*200+92)
+                before=ts(reference.ROLES.index(role)*200+91).replace('Z','.999999999+00:00')
+                for times in ((base.replace('Z','.000000001+00:00'),base.replace('Z','.000000000+00:00')),
+                              (before,base.replace('Z','+00:00')),
+                              (base.replace('Z','+00:00'),base.replace('Z','.000000001+00:00'))):
+                    for path,data in accepted.items():path.write_bytes(data)
+                    log=self.directory/(role+'.log');entries=[reference.loads(line) for line in log.read_text().splitlines()]
+                    for entry,value in zip(entries,times):entry['t']['$date']=value
+                    contents=''.join(json.dumps(v)+'\n' for v in entries);log.write_text(contents)
+                    close=c.read(self.directory/(role+'.close.json'))
+                    (self.directory/(close['actions']['logs']+'.out')).write_text(contents);self.rehash()
+                    with self.subTest(role=role,times=times):
+                        with self.assertRaises(ValueError):reference.validate(self.out)
+        finally:
+            for path,data in original.items():path.write_bytes(data)
 
     def test_parent_failure_and_strict_json_cannot_be_requalified(self):
         for directory in (self.out,self.directory):
