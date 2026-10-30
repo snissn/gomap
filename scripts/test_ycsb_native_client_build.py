@@ -5,6 +5,7 @@ import json
 import os
 import pathlib
 import subprocess
+import shutil
 import tempfile
 import unittest
 
@@ -112,6 +113,26 @@ else:raise SystemExit(91)
         result=subprocess.run(['bash',str(ROOT/'ycsb_compare_mongodb_treedb.sh')],env=env,capture_output=True,text=True)
         self.assertEqual(result.returncode,2)
         self.assertIn('absolute NATIVE_CLIENT_BUILD_PACKET is required',result.stderr)
+    def test_preflight_binds_explicit_source_and_client_paths(self):
+        self.build();manifest=B.read(self.out/'client-build.json')
+        B.preflight(self.out,manifest,self.repo,self.out/'go-ycsb','false','false')
+        self.assertRaisesRegex(ValueError,'source directory',B.preflight,self.out,manifest,self.root,self.out/'go-ycsb','false','false')
+        other=self.root/'unrelated-client';other.write_bytes((self.out/'go-ycsb').read_bytes())
+        B.preflight(self.out,manifest,self.repo,other,'false','false')
+        relocated=self.root/'relocated-source';shutil.copytree(self.repo,relocated)
+        B.preflight(self.out,manifest,relocated,other,'false','false')
+        other.write_bytes(b'wrong executable')
+        self.assertRaisesRegex(ValueError,'client executable',B.preflight,self.out,manifest,self.repo,other,'false','false')
+    def test_preflight_refuses_all_implicit_builds(self):
+        self.build();manifest=B.read(self.out/'client-build.json')
+        for server,client in [('true','false'),('false','true')]:
+            self.assertRaisesRegex(ValueError,'BUILD=false and BUILD_GOYCSB=false',B.preflight,self.out,manifest,self.repo,self.out/'go-ycsb',server,client)
+    def test_shell_controlled_packet_refuses_server_build(self):
+        self.build();server=self.root/'server.json';server.write_text('{}')
+        env=dict(os.environ,PARSE_ONLY='false',BUILD='true',BUILD_GOYCSB='false',TARGETS='treedb_native',MONGODB_MODE='skip',OUT_DIR=str(self.root/'controlled-shell-out'),CLIENT_BUILD_MANIFEST=str(self.out/'client-build.json'),SERVER_BUILD_MANIFEST=str(server),REQUIRE_CONTROLLED_NATIVE_CLIENT_BUILD='true',NATIVE_CLIENT_BUILD_PACKET=str(self.out),GOYCSB_DIR=str(self.repo),GOYCSB_BIN=str(self.out/'go-ycsb'),TREEDB_NATIVE_SERVER_BIN='/must-not-build-server',TREEDB_MONGO_GATEWAY_BIN='/must-not-build-gateway')
+        result=subprocess.run(['bash',str(ROOT/'ycsb_compare_mongodb_treedb.sh')],env=env,capture_output=True,text=True)
+        self.assertNotEqual(result.returncode,0)
+        self.assertIn('BUILD=false and BUILD_GOYCSB=false',result.stderr)
     def test_failed_compiler_retains_failure_no_manifest(self):
         self.go.write_text('#!/bin/sh\nexit 37\n')
         self.assertRaises(subprocess.CalledProcessError,self.build)

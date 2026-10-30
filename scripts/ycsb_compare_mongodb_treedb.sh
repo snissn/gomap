@@ -136,7 +136,7 @@ if [[ "$REQUIRE_CONTROLLED_NATIVE_CLIENT_BUILD" == true ]]; then
   [[ "$NATIVE_CLIENT_BUILD_PACKET" == /* && -d "$NATIVE_CLIENT_BUILD_PACKET" ]] || fail "absolute NATIVE_CLIENT_BUILD_PACKET is required"
 fi
 # Validate opted-in provenance before any build; this does not activate services.
-"$PYTHON" - "$ROOT/scripts" "$CLIENT_BUILD_MANIFEST" "$NATIVE_CLIENT_BUILD_PACKET" "$REQUIRE_CONTROLLED_NATIVE_CLIENT_BUILD" <<'PYBUILD'
+"$PYTHON" - "$ROOT/scripts" "$CLIENT_BUILD_MANIFEST" "$NATIVE_CLIENT_BUILD_PACKET" "$REQUIRE_CONTROLLED_NATIVE_CLIENT_BUILD" "$GOYCSB_DIR" "$GOYCSB_BIN" "$BUILD" "$BUILD_GOYCSB" <<'PYBUILD'
 import pathlib,sys
 sys.path.insert(0,sys.argv[1])
 import ycsb_native_client_build as provenance
@@ -144,7 +144,7 @@ manifest=provenance.read(pathlib.Path(sys.argv[2]))
 if sys.argv[4]=='true':provenance.require('controlled_build' in manifest,'controlled native client build required')
 if 'controlled_build' in manifest:
     provenance.require(pathlib.Path(sys.argv[3]).is_absolute(),'absolute NATIVE_CLIENT_BUILD_PACKET is required')
-    provenance.validate(pathlib.Path(sys.argv[3]),manifest)
+    provenance.preflight(pathlib.Path(sys.argv[3]),manifest,sys.argv[5],sys.argv[6],sys.argv[7],sys.argv[8])
 PYBUILD
 if [[ "$BUILD" == true ]]; then
   if [[ -n "${chosen[treedb_native]:-}" ]]; then go build -o "$TREEDB_NATIVE_SERVER_BIN" ./cmd/treedb-native-server; fi

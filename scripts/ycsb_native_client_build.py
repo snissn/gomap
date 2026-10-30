@@ -148,6 +148,18 @@ def validate(packet,manifest):
         require(same(read(packet/(name+'-before.json')),read(packet/(name+'-after.json'))),'controlled input snapshot mismatch')
     return receipt
 
+def preflight(packet,manifest,source_dir,binary,build,build_goycsb):
+    require(build=='false' and build_goycsb=='false','controlled packet requires BUILD=false and BUILD_GOYCSB=false')
+    receipt=validate(packet,manifest)
+    repo=pathlib.Path(source_dir)
+    require(repo.is_absolute() and (repo/'.git').exists(),'absolute controlled source directory required')
+    patch,actual=source(repo)
+    original=pathlib.Path(receipt['cwd'])
+    expected={str(pathlib.Path(path).relative_to(original)):value for path,value in read(pathlib.Path(packet)/'source-before.json').items()}
+    observed={str(pathlib.Path(path).relative_to(repo)):value for path,value in actual.items()}
+    require(same(expected,observed) and sha(patch)==manifest['source_patch_sha256'],'controlled source directory content mismatch')
+    require(pathlib.Path(binary).is_absolute() and digest(binary)==manifest['exe_sha256'],'controlled client executable mismatch')
+
 def retain(packet,out,manifest):
     validate(packet,manifest)
     destination=pathlib.Path(out)/'native-client-build';destination.mkdir()

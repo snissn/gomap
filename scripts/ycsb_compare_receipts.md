@@ -344,10 +344,40 @@ The generated schema-v1 client manifest adds `controlled_build` with
 valid under their existing contract. For a future native comparison, opt in with
 `REQUIRE_CONTROLLED_NATIVE_CLIENT_BUILD=true`, absolute
 `NATIVE_CLIENT_BUILD_PACKET`, its generated `CLIENT_BUILD_MANIFEST`, and
-`BUILD_GOYCSB=false`. The shell validates the packet before builds and copies its
+`BUILD=false`, `BUILD_GOYCSB=false`, `GOYCSB_DIR` selecting the request's
+source tree, and `GOYCSB_BIN=PACKET/go-ycsb`. Controlled packets refuse
+implicit client/server/fixture builds and mismatched source/patch/ELF content before
+any build. Binding is by content: relocated identical source trees and ELF copies
+are allowed; literal original paths are not required. For example, after independently authorized construction, with absolute
+paths substituted for every placeholder:
+
+```bash
+REQUIRE_CONTROLLED_NATIVE_CLIENT_BUILD=true \
+NATIVE_CLIENT_BUILD_PACKET=/absolute/PACKET \
+CLIENT_BUILD_MANIFEST=/absolute/PACKET/client-build.json \
+GOYCSB_DIR=/absolute/request-source-dir \
+GOYCSB_BIN=/absolute/PACKET/go-ycsb \
+BUILD=false BUILD_GOYCSB=false \
+SERVER_BUILD_MANIFEST=/absolute/reviewed/server-build.json \
+TREEDB_NATIVE_SERVER_BIN=/absolute/reviewed/native-server \
+FIXTURE_BIN=/absolute/reviewed/correctness-fixture \
+TARGETS=treedb_native MONGODB_MODE=skip PARSE_ONLY=false \
+OUT_DIR=/absolute/fresh/comparison-output \
+bash scripts/ycsb_compare_mongodb_treedb.sh
+```
+
+This invocation is an example, not execution authorization. Supply all other
+reviewed workload, endpoint and deadline settings explicitly for the campaign.
+The shell validates the packet and selected client before builds and copies its
 fixed evidence inventory into `native-client-build/`; offline validation checks
 that copy and the manifest's explicit boolean requirement. Any client manifest
 carrying `controlled_build` also requires that packet even without the flag.
+A successful legacy consumer validation means valid consumer evidence under its
+declared contract, not qualifying #5335 matrix evidence. Every future qualifying
+native cell must opt into controlled provenance; legacy evidence retains its
+original validation semantics. This harness does not yet implement the final
+#5335 matrix qualification decision.
+
 This opt-in does not lift the Mongo execution guard, prove protocol/Close controls,
 or replace original checked-close, server lifecycle and correctness gates.
 
