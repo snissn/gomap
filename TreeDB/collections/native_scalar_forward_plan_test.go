@@ -396,7 +396,6 @@ func TestNativeScalarForwardOptionalRefusalAndBound(t *testing.T) {
 	}
 	borrowed := cached.ids
 	borrowed.forwardPlan = cached
-	borrowBefore := budget.Stats()
 	borrowCharged := scratch.charged
 	borrowCalls := admissionCalls
 	if got, err := newTextV2SearchOrdinalAllowSet(view.nativeRead.capture.Snapshot(), view.catalog, ctx, borrowed); err != nil || got != &cached.forward {
