@@ -2455,6 +2455,7 @@ type compiledProjection struct {
 	fields      map[string]struct{}
 	includeID   bool
 	idSpecified bool
+	flat        bool
 }
 
 func compileProjection(projection wire.Document) (compiledProjection, error) {
@@ -2465,8 +2466,19 @@ func compileProjection(projection wire.Document) (compiledProjection, error) {
 	if err != nil {
 		return compiledProjection{}, err
 	}
-	if _, err := projectionTree(fields); err != nil {
-		return compiledProjection{}, err
+	flat := true
+	for field := range fields {
+		if strings.Contains(field, ".") {
+			flat = false
+			break
+		}
+	}
+	// parseProjection already rejects empty and dollar-prefixed flat names.
+	// Only dotted paths need the tree's segment/depth and overlap validation.
+	if !flat {
+		if _, err := projectionTree(fields); err != nil {
+			return compiledProjection{}, err
+		}
 	}
 	return compiledProjection{
 		present:     true,
@@ -2474,6 +2486,7 @@ func compileProjection(projection wire.Document) (compiledProjection, error) {
 		fields:      fields,
 		includeID:   includeID,
 		idSpecified: idSpecified,
+		flat:        flat,
 	}, nil
 }
 
@@ -2504,6 +2517,13 @@ func projectDocumentWithProjection(doc wire.Document, projection compiledProject
 }
 
 func projectDocumentWithEffectiveProjection(doc wire.Document, projection compiledProjection, mode projectionMode) (wire.Document, error) {
+	if projection.flat {
+		if out, err := projectFlatDocument(doc, projection, mode); err == nil {
+			return out, nil
+		}
+		// The bounded iterator validates more strictly than Raw.Elements.
+		// Preserve the generic decoder's result/error for malformed input.
+	}
 	tree, err := projectionTree(projection.fields)
 	if err != nil {
 		return nil, err
@@ -2513,6 +2533,32 @@ func projectDocumentWithEffectiveProjection(doc wire.Document, projection compil
 		return wire.Document(out), err
 	}
 	return projectExcludedDocument(bson.Raw(doc), tree, projection.includeID)
+}
+
+// projectFlatDocument uses the compiled field set directly, retaining the
+// original element bytes and order in an owned result that can outlive doc.
+func projectFlatDocument(doc wire.Document, projection compiledProjection, mode projectionMode) (wire.Document, error) {
+	idx, out := bsoncore.AppendDocumentStart(make([]byte, 0, len(doc)))
+	err := forEachBoundedBSONDocumentElement(bson.Raw(doc), math.MaxInt, nil, func(elem bson.RawElement) error {
+		key, err := elem.KeyErr()
+		if err != nil {
+			return err
+		}
+		_, selected := projection.fields[key]
+		keep := mode == projectionInclude && selected || mode == projectionExclude && !selected
+		if key == "_id" {
+			keep = projection.includeID
+		}
+		if keep {
+			out = append(out, elem...)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	out, err = bsoncore.AppendDocumentEnd(out, idx)
+	return wire.Document(out), err
 }
 
 // Projection intentionally supports only document traversal. A dotted path
