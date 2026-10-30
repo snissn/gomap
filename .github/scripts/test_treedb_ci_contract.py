@@ -28,6 +28,18 @@ class TreeDBCIContractTests(unittest.TestCase):
             encoding="utf-8"
         )
 
+    def test_vet_platform_budgets_and_macos_diagnostics(self) -> None:
+        vet = block(self.source, "  vet:\n", "  test:\n")
+        for platform, timeout in (("ubuntu", 15), ("macos", 30), ("windows", 15)):
+            self.assertRegex(vet, rf"name: {platform}\n\s+os: [^\n]+\n\s+timeout_minutes: {timeout}\n")
+        self.assertIn("timeout-minutes: ${{ matrix.timeout_minutes }}", vet)
+        self.assertIn("if: ${{ matrix.name != 'macos' }}", vet)
+        self.assertIn("if: ${{ matrix.name == 'macos' }}", vet)
+        self.assertIn("/usr/bin/time -l go vet ./...", vet)
+        self.assertIn("run: go vet ./...", vet)
+        self.assertIn("cache: false", vet)
+        self.assertNotIn("continue-on-error", vet)
+
     def test_events_cover_merge_results_manual_certification_and_main_push(self) -> None:
         events = block(self.source, "on:\n", "\npermissions:")
         self.assertRegex(events, r"(?m)^  pull_request:\s*$")

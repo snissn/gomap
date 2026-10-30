@@ -506,6 +506,21 @@ func replayNativeJSONComposite(db *backenddb.DB, env commitlog.CommandEnvelope) 
 		if err != nil {
 			return err
 		}
+		if len(target.meta.TextIndexes) != 0 {
+			catalog := &collectionCatalog{meta: target.meta, roots: make(map[string]uint64)}
+			for _, name := range collectionRootNames(target.meta) {
+				root, e := rootFor(name)
+				if e != nil {
+					return e
+				}
+				catalog.roots[name] = root
+			}
+			text, e := nativeTextMutationDomains(snapshot, catalog, target.rows.rows, target.planner.options.templateResolver, noAdmission)
+			if e != nil {
+				return e
+			}
+			additional = append(additional, text...)
+		}
 		for i := 0; i <= len(additional); i++ {
 			if typed && i == 0 {
 				continue // Original typed materializer alone owns physical primary locators.

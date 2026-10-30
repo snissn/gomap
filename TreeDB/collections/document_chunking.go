@@ -384,13 +384,8 @@ func (c *Collection) IngestChunkedDocuments(sources []SourceDocument, cfg chunki
 	defer lifecycleLocks.releaseAll()
 	unlockSchema := c.lockCollectionSchemaWrite()
 	defer unlockSchema()
-	unlockAdHocAdmission := c.lockAdHocVectorAdmissionRead()
-	defer unlockAdHocAdmission()
 	unlockNativeAdmission := c.lockNativeVectorAdmissionWrite()
 	defer unlockNativeAdmission()
-	if c.registeredAdHocVectorIndexCount() > 0 {
-		return nil, errBatchChunkIngestVectorIndexed
-	}
 	snap := c.db.AcquireSnapshot()
 	if snap == nil {
 		return nil, backenddb.ErrClosed

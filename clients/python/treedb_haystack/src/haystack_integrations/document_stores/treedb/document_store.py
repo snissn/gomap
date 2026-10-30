@@ -58,7 +58,7 @@ class TreeDBDocumentStore:
         :param base_url: Base URL for the TreeDB document service. Required unless `client` is supplied.
         :param index: TreeDB document-service index name.
         :param embedding_dimension: Dense embedding dimension for index creation/validation.
-        :param similarity: TreeDB vector metric: `cosine`, `l2`, or `inner_product` (`dot_product` alias).
+        :param similarity: TreeDB vector metric: only `cosine` is supported by the service's ColumnGraph indexes.
         :param scalar_fields: Declaration-time metadata scalar indexes to create with the service index.
         :param dense_route: Dense route for Haystack embedding retrieval; defaults to exact for legacy correctness, or use `ann` for a column_graph traversal.
         :param return_embedding: Whether filter/search responses should include stored embeddings by default.
@@ -67,7 +67,7 @@ class TreeDBDocumentStore:
         :param timeout: HTTP timeout in seconds for the default `TreeDBClient`.
         :param client: Optional preconfigured TreeDB client, useful for tests and custom transports.
         :raises DocumentStoreError: If `recreate_index` is requested or index setup fails.
-        :raises ValueError: If `base_url` is missing and no client is supplied.
+        :raises ValueError: If `base_url` is missing and no client is supplied, or similarity is unsupported.
         """
 
         if recreate_index:
@@ -575,17 +575,8 @@ def _normalize_dense_route(route: str) -> str:
     return normalized
 
 def _normalize_similarity(similarity: str) -> str:
-    normalized = similarity.strip().lower().replace("-", "_").replace(" ", "_")
-    aliases = {
-        "cosine": "cosine",
-        "l2": "l2",
-        "euclidean": "l2",
-        "inner_product": "inner_product",
-        "innerproduct": "inner_product",
-        "dot_product": "inner_product",
-        "dotproduct": "inner_product",
-    }
-    if normalized in aliases:
-        return aliases[normalized]
-    msg = "similarity must be one of 'cosine', 'l2', or 'inner_product'"
+    normalized = similarity.strip().lower()
+    if normalized == "cosine":
+        return normalized
+    msg = "TreeDB document service only supports 'cosine' similarity"
     raise ValueError(msg)

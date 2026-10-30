@@ -39,11 +39,11 @@ func TestTextV2PostingBatchBuilderTransfersCompletedFieldFrequencies4566(t *test
 	sharedTitle.Frequency = 99
 	sharedBody.Frequency = 99
 
-	shared := builder.byTerm["shared"]
+	shared := builder.byTerm.get("shared")
 	if len(shared) != 1 || shared[0].Ordinal != 7 || shared[0].Generation != 11 || shared[0].TermFrequency != 5 || !slices.Equal(shared[0].FieldFrequencies, []uint32{2, 3}) {
 		t.Fatalf("shared postings=%+v", shared)
 	}
-	bodyOnly := builder.byTerm["body-only"]
+	bodyOnly := builder.byTerm.get("body-only")
 	if len(bodyOnly) != 1 || bodyOnly[0].TermFrequency != 1 || !slices.Equal(bodyOnly[0].FieldFrequencies, []uint32{0, 1}) {
 		t.Fatalf("body-only postings=%+v", bodyOnly)
 	}

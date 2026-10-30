@@ -560,6 +560,10 @@ func (db *DB) flushCOWFrozenCutWithColumnCompaction(syncFlush bool, publish *che
 			operation.CompleteColumnStoreCompaction(token.SystemRootPageID)
 		}
 		h.accepted, h.seal = true, group.AcceptedSealReceipt()
+		if completed != nil {
+			// Only the original value receipt escapes this admitted control tranche.
+			completed.seal = h.seal
+		}
 		c.handoff = h
 		handoffOwned, h = false, nil
 		if err != nil {

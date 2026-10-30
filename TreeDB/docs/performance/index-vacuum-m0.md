@@ -47,6 +47,34 @@ removes the coordinator. It remains available as a characterization benchmark,
 while the current product gate exercises the production path. This maintenance
 fixture is distinct from Dgraph's cached COW commit-path qualification.
 
+## Phase diagnostics
+
+The production/legacy fixed-work benchmark also reports these diagnostic metrics:
+
+| Metric | Meaning |
+| --- | --- |
+| `diagnostic-precutover-hooks/op` | Number of foreground-drain barriers measured per vacuum. |
+| `diagnostic-foreground-wait-ns/op` | Wall time releasing the existing foreground writer and waiting for its fixed work to finish. |
+| `diagnostic-foreground-op-sum-ns/op` | Sum of the existing sequential foreground operation latency samples. |
+| `diagnostic-foreground-wait-gap-ns/op` | Signed barrier time minus the operation latency sum. |
+| `diagnostic-other-vacuum-ns/op` | Signed total vacuum time minus the barrier, preflush and final pager sync intervals. |
+
+The barrier, preflush and final pager sync intervals are disjoint within total
+vacuum time; the remainder preserves their arithmetic difference. Foreground
+operation latency is nested inside the barrier and must not be added again.
+Other cutover/publication counters can overlap and do not form extra additive
+phases. These wall intervals do not identify phase-local CPU, off-CPU or I/O
+causes. The hook timing adds two clock reads; the existing operation samples are
+summed after the benchmark timer stops, without additional per-operation clocks.
+
+All five metrics are retained in raw captures and `results.json`; the two signed
+differences retain surprising finite negative values. Their generic summary CV
+fields are diagnostic data, not stability predicates, and are not interpreted
+for signed differences. The original total/p99 CV gates, fixed work, pause review,
+public classifier and acceptance schemas are unchanged. Existing captures without
+these diagnostics retain their original interpretation. New phase observations
+do not explain or replace historical failed captures.
+
 The historical sections below document the previous capture contract and its
 scheduling revisions; their legacy artifact names describe those captures.
 
@@ -131,6 +159,12 @@ invocation requirements. Correctness/race checks and new hosted evidence remain
 required for the revised fixture; an old uncoordinated capture cannot validate it.
 
 ## Ownership
+
+These issue references record historical delivery scope. M0 capture follows the
+#3943 evidence lineage; #3944 covers M1 production vacuum and #3946 covers M3
+CompactStorage integration. The latter two issues are closed. Current PR authors
+retain responsibility for maintained capture changes and current-head CI; the
+historical workstream assignments below do not create new open-issue barriers.
 
 | Current callsite or assertion group | Owner | Required successor behavior |
 | --- | --- | --- |

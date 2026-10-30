@@ -473,6 +473,7 @@ func (s *Snapshot) cowDictionarySuccessorLocked(start, end []byte) (pointSuccess
 	if err != nil {
 		return pointSuccessorCandidate{}, err
 	}
+	w.poolable = false
 	point, err := w.pointScratch()
 	if err != nil {
 		return pointSuccessorCandidate{}, err
@@ -667,6 +668,7 @@ func (s *Snapshot) cowCutPhysicalSuccessorLocked(start, end []byte) (pointSucces
 	if err != nil {
 		return pointSuccessorCandidate{}, err
 	}
+	w.poolable = false
 	point, err := w.pointScratch()
 	if err != nil {
 		return pointSuccessorCandidate{}, err
@@ -675,5 +677,6 @@ func (s *Snapshot) cowCutPhysicalSuccessorLocked(start, end []byte) (pointSucces
 	if err != nil {
 		return pointSuccessorCandidate{}, err
 	}
+	w.poolable = true
 	return s.cowOwnedPointSuccessor(disk, found, start, end), nil
 }

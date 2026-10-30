@@ -280,3 +280,48 @@ func TestVectorIndexRebuildReleasesRawWhileMutationIsBusy(t *testing.T) {
 		})
 	}
 }
+
+// A queued schema writer must not turn final rebuild publication into a nested
+// schema-read acquisition. The immutable build keeps its original schema cut.
+func TestColumnGraphRebuildCompletesWithQueuedSchemaWriter5275(t *testing.T) {
+	_, db, col, def := openColumnGraphRebuildTestCollectionV2A(t, 2, 2, []columnGraphRebuildInputRowV2A{
+		{id: "a", vector: []float32{1, 0}}, {id: "b", vector: []float32{0, 1}},
+	})
+	defer db.Close()
+	building, resume := make(chan struct{}), make(chan struct{})
+	release := sync.OnceFunc(func() { close(resume) })
+	defer release()
+	restore := setColumnVectorGraphRebuildBeforeBuildTestHook(func() { close(building); <-resume })
+	defer restore()
+	rebuilt := make(chan error, 1)
+	go func() { _, err := col.RebuildVectorIndex(def.Name); rebuilt <- err }()
+	select {
+	case <-building:
+	case <-time.After(3 * time.Second):
+		t.Fatal("rebuild did not reach construction")
+	}
+	coord := col.collectionSchemaCoordinator()
+	writerDone := make(chan struct{})
+	go func() { coord.schemaMu.Lock(); coord.schemaMu.Unlock(); close(writerDone) }()
+	waitForLockState(t, func() bool {
+		if coord.schemaMu.TryRLock() {
+			coord.schemaMu.RUnlock()
+			return false
+		}
+		return true
+	}, "schema writer to queue behind rebuild")
+	release()
+	select {
+	case err := <-rebuilt:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("rebuild deadlocked with queued schema writer")
+	}
+	select {
+	case <-writerDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("schema writer did not acquire after rebuild")
+	}
+}

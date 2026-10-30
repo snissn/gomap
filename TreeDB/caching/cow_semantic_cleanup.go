@@ -45,7 +45,14 @@ func (cut *cowReadCut) releaseSemanticState() {
 	cut.cache = nil
 	// Native Release only detaches one original record. It cannot traverse
 	// catalogs, invoke destructors, block, or allocate.
-	var semantic, frozen *rootpublication.SemanticCleanup
+	var semantic, frozen, projection *rootpublication.SemanticCleanup
+	// No capture remains at last-cut retirement, so no initializer can hold
+	// this slot. Detach before Release; enqueue on the original cleanup owner.
+	if cut.catalogProjection.state != nil {
+		state := cut.catalogProjection.state
+		cut.catalogProjection.state = nil
+		projection = state.Release()
+	}
 	if cut.semanticRootSet != nil {
 		semantic = cut.semanticRootSet.Release()
 		cut.semanticRootSet = nil
@@ -58,6 +65,7 @@ func (cut *cowReadCut) releaseSemanticState() {
 	c.semanticMu.Lock()
 	c.enqueueSemanticLocked(semantic)
 	c.enqueueSemanticLocked(frozen)
+	c.enqueueSemanticLocked(projection)
 	// Enqueue MUST precede the last cut leaving the terminal predicate.
 	remaining := c.activeCuts.Add(-1)
 	if c.flushWake == nil && c.closeCleanupDone && c.readClosed.Load() && c.activeCuts.Load() == 0 && c.semanticHead == nil && c.semanticFailed == nil && !c.semanticRunning && (c.prefix == nil || !c.prefix.AcceptedCleanupFailed()) {
@@ -68,7 +76,7 @@ func (cut *cowReadCut) releaseSemanticState() {
 	// final closed cut must still wake the cleanup-only worker even without a
 	// record, so it can make the serialized terminal decision.
 	var wake chan struct{}
-	if semantic != nil || frozen != nil || (remaining == 0 && c.readClosed.Load()) {
+	if semantic != nil || frozen != nil || projection != nil || (remaining == 0 && c.readClosed.Load()) {
 		wake = c.flushWake
 	}
 	c.semanticMu.Unlock()

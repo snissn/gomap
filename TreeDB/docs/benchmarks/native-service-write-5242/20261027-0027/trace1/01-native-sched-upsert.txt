@@ -1,0 +1,48 @@
+File: documentservice.test
+Type: delay
+Active filters:
+   focus=UpsertDocuments
+Showing nodes accounting for 12.85ms, 61.71% of 20.83ms total
+Dropped 159 nodes (cum <= 0.10ms)
+Showing top 40 nodes out of 124
+      flat  flat%   sum%        cum   cum%
+    6.35ms 30.51% 30.51%     6.35ms 30.51%  runtime.selectnbsend
+    3.62ms 17.39% 47.90%     3.62ms 17.39%  sync.(*Mutex).Unlock-fm
+    1.55ms  7.42% 55.32%     1.55ms  7.42%  runtime.chansend1
+    0.76ms  3.65% 58.97%     0.76ms  3.65%  github.com/snissn/gomap/TreeDB/caching.(*DB).PrepareNativeProducerObservation.deferwrap1
+    0.21ms  1.00% 59.97%     0.21ms  1.00%  github.com/snissn/gomap/TreeDB/internal/rootpublication.(*resourceAllocation).cleanupResult
+    0.20ms  0.97% 60.93%     0.20ms  0.97%  github.com/snissn/gomap/TreeDB/db.(*Snapshot).bindRootIterator.deferwrap1
+    0.09ms  0.45% 61.38%     0.09ms  0.45%  github.com/snissn/gomap/TreeDB/collections.selectNativeTypedMaterializeMutations.func1
+    0.07ms  0.33% 61.71%     0.09ms  0.44%  runtime.newobject
+         0     0% 61.71%     2.22ms 10.64%  github.com/snissn/gomap/TreeDB.(*DB).registerPublicCommandWALCollected
+         0     0% 61.71%     2.22ms 10.64%  github.com/snissn/gomap/TreeDB.(*DB).registerPublicCommandWALCollected.func3
+         0     0% 61.71%     2.22ms 10.64%  github.com/snissn/gomap/TreeDB.(*DB).registerPublicCommandWALPolicy
+         0     0% 61.71%     2.22ms 10.64%  github.com/snissn/gomap/TreeDB.(*nativePublicCommandWALCompletion).RegisterNativeCommandWAL
+         0     0% 61.71%     2.22ms 10.64%  github.com/snissn/gomap/TreeDB/caching.(*Batch).WriteAfterCommandWALAppendWithPreparedRevision
+         0     0% 61.71%     2.22ms 10.64%  github.com/snissn/gomap/TreeDB/caching.(*Batch).writeCOWPublication
+         0     0% 61.71%     2.22ms 10.64%  github.com/snissn/gomap/TreeDB/caching.(*Batch).writeRegular
+         0     0% 61.71%     2.22ms 10.64%  github.com/snissn/gomap/TreeDB/caching.(*Batch).writeRegularLocked
+         0     0% 61.71%     1.76ms  8.44%  github.com/snissn/gomap/TreeDB/caching.(*ConditionalTxn).finish
+         0     0% 61.71%     0.16ms  0.77%  github.com/snissn/gomap/TreeDB/caching.(*DB).ObserveNativeProducer
+         0     0% 61.71%     5.23ms 25.10%  github.com/snissn/gomap/TreeDB/caching.(*DB).PrepareNativeProducerObservation
+         0     0% 61.71%     0.17ms  0.81%  github.com/snissn/gomap/TreeDB/caching.(*DB).appendValueLog
+         0     0% 61.71%     0.17ms  0.81%  github.com/snissn/gomap/TreeDB/caching.(*DB).appendValueLogInternalObserved
+         0     0% 61.71%     4.23ms 20.32%  github.com/snissn/gomap/TreeDB/caching.(*DB).checkpointCOWColumnCompaction
+         0     0% 61.71%     4.23ms 20.32%  github.com/snissn/gomap/TreeDB/caching.(*DB).checkpointContext
+         0     0% 61.71%     0.37ms  1.75%  github.com/snissn/gomap/TreeDB/caching.(*DB).completeCOWHandoff
+         0     0% 61.71%     3.73ms 17.93%  github.com/snissn/gomap/TreeDB/caching.(*DB).flushCOWFrozenCutWithColumnCompaction
+         0     0% 61.71%     0.19ms  0.93%  github.com/snissn/gomap/TreeDB/caching.(*DB).joinSemanticCleanupFrontier
+         0     0% 61.71%     0.47ms  2.25%  github.com/snissn/gomap/TreeDB/caching.(*DB).rotateCOWCheckpointFrontier
+         0     0% 61.71%     0.17ms  0.81%  github.com/snissn/gomap/TreeDB/caching.(*DB).valueLogDictCollectSamples
+         0     0% 61.71%     0.17ms  0.81%  github.com/snissn/gomap/TreeDB/caching.(*DB).valueLogDictCollectSamplesForClass
+         0     0% 61.71%     1.49ms  7.18%  github.com/snissn/gomap/TreeDB/caching.(*DB).writeCanonicalFlushRunOpsChunk
+         0     0% 61.71%     2.22ms 10.65%  github.com/snissn/gomap/TreeDB/caching.(*DB).writeNativePublication
+         0     0% 61.71%     1.76ms  8.44%  github.com/snissn/gomap/TreeDB/caching.(*Snapshot).Close
+         0     0% 61.71%     1.76ms  8.44%  github.com/snissn/gomap/TreeDB/caching.(*Snapshot).finalizeCloseIfUnreferenced
+         0     0% 61.71%     0.11ms  0.52%  github.com/snissn/gomap/TreeDB/caching.(*cachingLeafPageLog).appendLeafPages
+         0     0% 61.71%     0.11ms  0.52%  github.com/snissn/gomap/TreeDB/caching.(*cachingLeafPageLogGroup).AppendLeafPages
+         0     0% 61.71%     0.20ms  0.97%  github.com/snissn/gomap/TreeDB/caching.(*cowCache).nativeProducerPressureState
+         0     0% 61.71%     2.57ms 12.35%  github.com/snissn/gomap/TreeDB/caching.(*cowCache).releaseCut
+         0     0% 61.71%     0.36ms  1.74%  github.com/snissn/gomap/TreeDB/caching.(*cowFlushHandoff).release
+         0     0% 61.71%     2.22ms 10.64%  github.com/snissn/gomap/TreeDB/caching.(*cowNativeCommandWALRequest).append
+         0     0% 61.71%     2.22ms 10.64%  github.com/snissn/gomap/TreeDB/caching.(*cowNativeCommandWALRequest).register

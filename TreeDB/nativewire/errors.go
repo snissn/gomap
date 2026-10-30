@@ -295,7 +295,7 @@ func errorCodeFor(err error) iwire.ErrorCode {
 		return iwire.ErrReadOnly
 	case errors.Is(err, collections.ErrRecoveryRequired):
 		return iwire.ErrDurabilityUnavailable
-	case errors.Is(err, backenddb.ErrCommandWALRejected):
+	case errors.Is(err, backenddb.ErrCommandWALRejected), errors.Is(err, backenddb.ErrNativeSemanticUnsupported):
 		return iwire.ErrUnsupportedFeature
 	case errors.Is(err, backenddb.ErrClosed), errors.Is(err, ErrServerClosed), errors.Is(err, net.ErrClosed), errors.Is(err, io.ErrClosedPipe):
 		return iwire.ErrCanceled

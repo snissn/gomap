@@ -50,7 +50,9 @@ func TestIndexInsertSearchFixtureGuardrails2564(t *testing.T) {
 		t.Fatalf("vector candidate stats=%+v want no document fetch/fallback/fail-closed", vector.Stats)
 	}
 
-	hybrid, err := fixture.col.SearchHybrid(indexInsertSearchHybridOptions2564(fixture.def.Name, 8, true))
+	opts := indexInsertSearchHybridOptions2564(fixture.def.Name, 8, true)
+	opts.ScalarFilter = nil // Ordinary mixed fusion remains supported without metadata filtering.
+	hybrid, err := fixture.col.SearchHybrid(opts)
 	if err != nil {
 		t.Fatalf("SearchHybrid: %v", err)
 	}
@@ -219,42 +221,7 @@ func BenchmarkIndexInsertSearch2564(b *testing.B) {
 		b.Run(name, func(b *testing.B) {
 			opts := indexInsertSearchHybridOptions2564(searchFixture.def.Name, dims, includeDocs)
 			warm, err := searchFixture.col.SearchHybrid(opts)
-			if err != nil {
-				b.Fatalf("warm SearchHybrid: %v", err)
-			}
-			if warm.Stats.FailClosed != 0 || warm.Stats.FullDocumentScanFallbacks != 0 {
-				b.Fatalf("warm hybrid stats=%+v want fail-closed-free query", warm.Stats)
-			}
-			if warm.Stats.DocumentsFetched > uint64(opts.TopK) {
-				b.Fatalf("warm hybrid stats=%+v fetched more than topK=%d", warm.Stats, opts.TopK)
-			}
-			if !includeDocs && warm.Stats.DocumentsFetched != 0 {
-				b.Fatalf("warm hybrid stats=%+v fetched documents in no-doc mode", warm.Stats)
-			}
-			b.ReportAllocs()
-			b.ResetTimer()
-			var sink HybridSearchResponse
-			for i := 0; i < b.N; i++ {
-				got, err := searchFixture.col.SearchHybrid(opts)
-				if err != nil {
-					b.Fatalf("SearchHybrid: %v", err)
-				}
-				if got.Stats.FailClosed != 0 || got.Stats.FullDocumentScanFallbacks != 0 {
-					b.Fatalf("hybrid stats=%+v want fail-closed-free query", got.Stats)
-				}
-				if got.Stats.DocumentsFetched > uint64(opts.TopK) {
-					b.Fatalf("hybrid stats=%+v fetched more than topK=%d", got.Stats, opts.TopK)
-				}
-				if !includeDocs && got.Stats.DocumentsFetched != 0 {
-					b.Fatalf("hybrid stats=%+v fetched documents in no-doc mode", got.Stats)
-				}
-				sink = got
-			}
-			b.StopTimer()
-			indexInsertSearchReportFixtureMetrics2564(b, docs, dims, 64, opts.TopK)
-			b.ReportMetric(hybridCloseoutTenantSelectivity2506(searchFixture.rows, "tenant-rare-06pct"), "filter_selectivity_pct")
-			hybridCloseoutReportStats2506(b, sink)
-			indexInsertSearchHybridSink2564 = sink
+			skipUnsupportedFilteredVectorHybridBenchmark5275(b, warm, err)
 		})
 	}
 }

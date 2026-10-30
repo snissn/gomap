@@ -76,6 +76,8 @@ jobs:
           go list ./... | grep -Ev '^github.com/snissn/gomap/TreeDB($|/)' | xargs go vet
 
       - name: Test
+        env:
+          GOMAP_M3_DIAGNOSTICS_DIR: ${{ runner.temp }}/gomap-m3-diagnostics
         shell: bash
         run: |
           set -euo pipefail
@@ -89,3 +91,11 @@ jobs:
             GOMEMLIMIT=4GiB GOMAXPROCS=2 xargs go test -p 1 < "$package_file"
           fi
           rm -f "$package_file"
+
+      - name: Retain M3 footprint diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: m3-footprint-${{ matrix.name }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gomap-m3-diagnostics/
+          if-no-files-found: ignore

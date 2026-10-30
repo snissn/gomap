@@ -86,7 +86,7 @@ class IndexModelTests(unittest.TestCase):
             {
                 "index": _sample_index(),
                 "vector_index_name": "embedding",
-                "status": {"name": "embedding", "column_graph_build": {
+                "status": {"name": "embedding", "strategy": "column_graph", "column_graph_build": {
                     "total_nanos": 10, "file_sync_count": 2,
                     "construction_decisions": {"planning": phase, "reciprocal": phase},
                 }},
@@ -115,6 +115,7 @@ class IndexModelTests(unittest.TestCase):
                 "contract_version": "treedb-document-service/v1alpha2",
                 "embedding_field": "embedding",
                 "vector_index_name": "embedding",
+                "vector_strategy": "column_graph",
                 "text_field": "content",
                 "text_index_name": "content",
                 "document_type": "treedb_document_service_v1",
@@ -500,6 +501,7 @@ def _sample_index() -> dict[str, object]:
         "contract_version": "treedb-document-service/v1alpha2",
         "embedding_field": "embedding",
         "vector_index_name": "embedding",
+        "vector_strategy": "column_graph",
         "text_field": "content",
         "text_index_name": "content",
         "document_type": "treedb_document_service_v1",

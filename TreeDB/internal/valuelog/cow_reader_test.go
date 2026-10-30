@@ -152,6 +152,131 @@ func TestCOWRecordRawAndGroupedNoAllocation(t *testing.T) {
 	}
 }
 
+// The two inspectors and full-read revalidation must bind exactly the same
+// header/prefix bytes, including the maximum grouped offset table. Value bytes
+// and following records must not become part of the metadata authority.
+func TestCOWRecordMetadataDigestExactWindow(t *testing.T) {
+	for _, k := range []int{0, 1, MaxFrameK} {
+		t.Run(fmt.Sprint(k), func(t *testing.T) {
+			body := []byte("value")
+			prefixBytes := 0
+			if k != 0 {
+				values := make([][]byte, k)
+				for i := range values {
+					values[i] = []byte("value")
+				}
+				body = cowTestFrame(0, BlockCodecNone, values, nil)
+				prefixBytes = FrameHeaderSize + k*8 + (k+1)*4
+			}
+			f, ptr, record := cowTestRecord(t, body, k != 0, 0)
+			shape, err := InspectCOWRecord(f, ptr, cowTestLimits)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := sha256.Sum256(record[:HeaderSize+prefixBytes])
+			if shape.metadata != want {
+				t.Fatalf("metadata=%x want=%x", shape.metadata, want)
+			}
+			if got := cowTestRead(t, f, ptr, shape, nil); string(got) != "value" {
+				t.Fatalf("read=%q", got)
+			}
+		})
+	}
+	// Leaf inspection reuses a wider window which can contain value bytes.
+	f, ptr := cowTestLeafRecord(t, buildSparseLeafPageForPayloadTest(t), BlockCodecNone)
+	shape, err := InspectCOWLeafRecord(f, ptr, cowTestLimits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata := make([]byte, HeaderSize+shape.prefix)
+	if _, err := f.ReadAt(metadata, int64(ptr.Offset-4)); err != nil {
+		t.Fatal(err)
+	}
+	if want := sha256.Sum256(metadata); shape.metadata != want {
+		t.Fatalf("leaf metadata=%x want=%x", shape.metadata, want)
+	}
+}
+
+// Exercise the leaf inspector's contiguous window at both a short frame and
+// its maximum offset table. Bytes beyond the record must grant no authority;
+// payload changes still require the independent record CRC to reject a read.
+func TestCOWLeafMetadataWindowAndTrailingMutations(t *testing.T) {
+	pageBytes := buildSparseLeafPageForPayloadTest(t)
+	compact, ok, err := MaybeCompactLeafLogPayload(pageBytes)
+	if err != nil || !ok {
+		t.Fatalf("compact=%v err=%v", ok, err)
+	}
+	for _, k := range []int{1, MaxFrameK} {
+		t.Run(fmt.Sprint(k), func(t *testing.T) {
+			values := make([][]byte, k)
+			for i := range values {
+				values[i] = compact
+			}
+			_, ptr, record := cowTestRecord(t, cowTestFrame(0, BlockCodecNone, values, nil), true, uint8(k-1))
+			path := compactLeafPayloadTestPath(t, t.TempDir(), 1)
+			if err := os.WriteFile(path, append(record, bytes.Repeat([]byte{0x51}, 64)...), 0600); err != nil {
+				t.Fatal(err)
+			}
+			f, err := os.OpenFile(path, os.O_RDWR, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = f.Close() })
+			ptr.FileID, err = EncodeFileID(ReservedLeafLogLaneID, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			shape, err := InspectCOWLeafRecord(f, ptr, cowTestLimits)
+			if err != nil {
+				t.Fatal(err)
+			}
+			prefixBytes := FrameHeaderSize + k*8 + (k+1)*4
+			if want := sha256.Sum256(record[:HeaderSize+prefixBytes]); shape.metadata != want {
+				t.Fatalf("leaf metadata=%x want=%x", shape.metadata, want)
+			}
+			if k == 1 && len(record) >= HeaderSize+FrameHeaderSize+MaxFrameK*8+(MaxFrameK+1)*4 {
+				t.Fatal("short-frame fixture does not put trailing bytes in inspection window")
+			}
+
+			payload, raw, out := make([]byte, shape.PayloadBytes()), make([]byte, shape.RawBytes), make([]byte, page.PageSize)
+			read := func() ([]byte, error) {
+				return ReadCOWLeafPage(f, ptr, shape, true, payload, raw, out, nil)
+			}
+			got, err := read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			requireLeafPagesLogicallyEqual(t, pageBytes, got)
+			// In the short frame this following-record byte lies inside the
+			// fixed inspection window, but outside the checked record.
+			if _, err := f.WriteAt([]byte{0x52}, int64(len(record))); err != nil {
+				t.Fatal(err)
+			}
+			after, err := InspectCOWLeafRecord(f, ptr, cowTestLimits)
+			if err != nil || after != shape {
+				t.Fatalf("following bytes changed shape: err=%v", err)
+			}
+			got, err = read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			requireLeafPagesLogicallyEqual(t, pageBytes, got)
+			// Change only the final value byte, preserving the header and
+			// offset table. Metadata authority must stay separate from CRC.
+			if _, err := f.WriteAt([]byte{record[len(record)-1] ^ 1}, int64(len(record)-1)); err != nil {
+				t.Fatal(err)
+			}
+			after, err = InspectCOWLeafRecord(f, ptr, cowTestLimits)
+			if err != nil || after != shape {
+				t.Fatalf("value bytes changed metadata shape: err=%v", err)
+			}
+			if _, err := read(); !errors.Is(err, ErrCorrupt) {
+				t.Fatalf("changed payload CRC: got %v, want ErrCorrupt", err)
+			}
+		})
+	}
+}
+
 func TestCOWRecordRefusesLimitsMalformedAndEncodings(t *testing.T) {
 	f, ptr, _ := cowTestRecord(t, []byte("value"), false, 0)
 	for _, lim := range []COWReadLimits{{}, {HeaderSize + 4, 1 << 20, 1 << 20}, {1 << 20, 4, 1 << 20}, {1 << 20, 1 << 20, 4}} {

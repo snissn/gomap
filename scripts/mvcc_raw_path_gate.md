@@ -67,7 +67,9 @@ measurement, attribution, actual ELF resolution and drift/refusal controls.
 After the unchanged candidate public lifecycle and before any timed PRIMARY
 sample, the runner acquires the **first** qualifying five-second process-CPU
 window within a fixed 60-second setup allowance. Each window uses the existing
-`ProcessObservation`: a process at **2% CPU or above** is busy, with the original
+`ProcessObservation`: the current [external-cpu-v2 policy](../docs/diagnostics/quiet-host-policy.md)
+rejects **10% per process or 50% observed aggregate** of one logical CPU, warns
+at the historical 2% threshold, and retains the original
 0.25-second sampling, ancestry/descendant handling and exited-process accounting.
 There are no new process or kernel-thread exclusions. A failed window starts
 another observation only when at least five seconds remain; there is no separate

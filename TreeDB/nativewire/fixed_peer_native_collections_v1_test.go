@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"testing"
 	"time"
@@ -60,53 +61,11 @@ func TestFixedPeerTCPNativeCollectionsSnapshotLifecycleV1(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer client.Close()
-			catalog := raftplacement.CatalogV1{
-				Groups:     []raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{c.NodeID}}},
-				Placements: []raftplacement.CollectionPlacementV1{{Collection: raftplacement.CollectionRefV1{Database: "default", Catalog: "default", Collection: "users"}, GroupID: "group-a"}},
-			}
-			record, err := raftplacement.NewCatalogMetaRecordV1(1, catalog)
-			if err != nil {
-				t.Fatal(err)
-			}
-			command, err := raftplacement.EncodeCatalogMetaCommandV1(raftplacement.CatalogMetaCommandV1{Record: record})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err := client.PublishCatalog(ctx, c.NodeID, command); err != nil {
-				t.Fatal(err)
-			}
+			fixedPeerPublishNativeUsersCatalogV1(t, ctx, client, c.NodeID)
 			var last raftcluster.SubmitResultV1
 			submit := func(id iwire.CommandID, key string, sections []iwire.Section) {
 				t.Helper()
-				status, err := client.Status(ctx, c.NodeID)
-				if err != nil {
-					t.Fatal(err)
-				}
-				sections = append([]iwire.Section{
-					{ID: iwire.SectionCommandHeader, Bytes: iwire.AppendCommandHeader(nil, iwire.CommandHeader{ID: id, Version: 1})},
-					{ID: iwire.SectionIdempotencyKey, Bytes: []byte(key)},
-					{ID: iwire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, status.Groups[0].CatalogVersion)},
-				}, sections...)
-				sections = append(sections, ackSection(AckRaftCommitted))
-				validated, err := iwire.MustV1Registry().ValidateRequestSections(sections)
-				if err != nil {
-					t.Fatal(err)
-				}
-				raw, err := iwire.AppendDeterministicEntry(nil, validated)
-				if err != nil {
-					t.Fatal(err)
-				}
-				request := ClusterRouteRequest{Database: "default", Catalog: "default", Collection: "users", Shape: ClusterRouteShapeCollection}
-				route, err := client.Route(ctx, c.NodeID, request)
-				if err != nil {
-					t.Fatal(err)
-				}
-				metadata := ClusterRequestMetadata{AckPolicy: iwire.AckRaftCommitted}
-				ApplyClusterRouteMetadata(&metadata, request, route)
-				last, err = client.Submit(ctx, c.NodeID, raw, metadata)
-				if err != nil || !last.CommittedRecoverable || !last.CommittedApplied {
-					t.Fatalf("submit %s: %+v %v", key, last, err)
-				}
+				last = fixedPeerSubmitNativeCollectionV1(t, ctx, client, c.NodeID, id, key, sections)
 			}
 			meta := collections.CollectionMeta{Name: "users", Options: collections.CollectionOptions{DocumentFormat: format}, Indexes: []collections.IndexDefinition{{Name: "by_city", Field: "city", ValueType: collections.IndexValueString, Unique: true}}}
 			submit(iwire.CommandCreateCollection, "native-create", []iwire.Section{{ID: iwire.SectionCollectionMeta, Bytes: mustEncodeCollectionMeta(meta)}})
@@ -280,5 +239,217 @@ func TestFixedPeerTCPNativeCollectionRoleIdentityV1(t *testing.T) {
 	c.Catalog.NativeCollections = true
 	if _, _, err := validateFixedPeerConfigV1(c); err == nil {
 		t.Fatal("native catalog accepted")
+	}
+}
+
+// The status guard is the current backend CommitSeq, not a stable schema epoch.
+// Another publication can therefore invalidate a sampled guard. Only a definite
+// ordinary-collection precommit rejection is safe to re-encode:
+// a committed or ambiguous command must retain its original key/digest identity.
+func fixedPeerSubmitNativeCollectionV1(t testing.TB, ctx context.Context, client *FixedPeerTCPClientV1, node raftcluster.NodeID, id iwire.CommandID, key string, sections []iwire.Section, interpose ...func(uint64)) raftcluster.SubmitResultV1 {
+	t.Helper()
+	for attempt := 0; attempt < 3; attempt++ {
+		status, err := client.Status(ctx, node)
+		if err != nil || len(status.Groups) != 1 {
+			t.Fatalf("native collection status: %+v %v", status, err)
+		}
+		raw := fixedPeerNativeCollectionEntryV1(t, id, key, status.Groups[0].CatalogVersion, sections)
+		request := ClusterRouteRequest{Database: "default", Catalog: "default", Collection: "users", Shape: ClusterRouteShapeCollection}
+		route, err := client.Route(ctx, node, request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		metadata := ClusterRequestMetadata{AckPolicy: iwire.AckRaftCommitted}
+		ApplyClusterRouteMetadata(&metadata, request, route)
+		// The deterministic guard-race control interposes only in this test helper.
+		for _, beforeSubmit := range interpose {
+			beforeSubmit(status.Groups[0].CatalogVersion)
+		}
+		result, err := client.Submit(ctx, node, raw, metadata)
+		if errors.Is(err, raftcluster.ErrCatalogVersionMismatch) && !errors.Is(err, raftcluster.ErrCommitAmbiguous) && reflect.DeepEqual(result, raftcluster.SubmitResultV1{}) {
+			t.Logf("submit %s: definite precommit catalog mismatch, refreshing guard (attempt %d/3): %v", key, attempt+1, err)
+			continue
+		}
+		if err != nil || !result.CommittedRecoverable || !result.CommittedApplied {
+			t.Fatalf("submit %s: %+v %v", key, result, err)
+		}
+		return result
+	}
+	t.Fatalf("submit %s: catalog guard remained stale after 3 attempts", key)
+	return raftcluster.SubmitResultV1{}
+}
+
+func fixedPeerNativeCollectionEntryV1(t testing.TB, id iwire.CommandID, key string, version uint64, sections []iwire.Section) []byte {
+	t.Helper()
+	request := append([]iwire.Section{
+		{ID: iwire.SectionCommandHeader, Bytes: iwire.AppendCommandHeader(nil, iwire.CommandHeader{ID: id, Version: 1})},
+		{ID: iwire.SectionIdempotencyKey, Bytes: []byte(key)},
+		{ID: iwire.SectionExpectedCatalogVersion, Bytes: binary.AppendUvarint(nil, version)},
+	}, sections...)
+	request = append(request, ackSection(AckRaftCommitted))
+	validated, err := iwire.MustV1Registry().ValidateRequestSections(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := iwire.AppendDeterministicEntry(nil, validated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+func fixedPeerPublishNativeUsersCatalogV1(t testing.TB, ctx context.Context, client *FixedPeerTCPClientV1, node raftcluster.NodeID) {
+	t.Helper()
+	catalog := raftplacement.CatalogV1{
+		Groups:     []raftplacement.GroupV1{{ID: "group-a", Members: []raftcluster.NodeID{node}}},
+		Placements: []raftplacement.CollectionPlacementV1{{Collection: raftplacement.CollectionRefV1{Database: "default", Catalog: "default", Collection: "users"}, GroupID: "group-a"}},
+	}
+	record, err := raftplacement.NewCatalogMetaRecordV1(1, catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command, err := raftplacement.EncodeCatalogMetaCommandV1(raftplacement.CatalogMetaCommandV1{Record: record})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.PublishCatalog(ctx, node, command); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Force the status-to-submit race without relying on background timer timing.
+// Interpose actual TCP create/insert commands after sampling the guard. The
+// publisher behind the historical intermittent failure remains unproven.
+func TestFixedPeerTCPNativeCollectionCatalogGuardInterpositionV1(t *testing.T) {
+	for _, format := range []collections.DocumentFormat{collections.DocumentFormatJSON, collections.DocumentFormatBSON} {
+		t.Run(string(format), func(t *testing.T) {
+			c := fixedPeerTestConfigsV1(t)[0]
+			c.Nodes, c.Catalog.Peers, c.Groups = c.Nodes[:1], c.Catalog.Peers[:1], c.Groups[:1]
+			c.Groups[0].NativeCollections = true
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			r, err := fixedPeerOpenTestRuntimeV1(t, c)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if err := r.Close(); err != nil {
+					t.Error(err)
+				}
+			})
+			fixedPeerWaitV1(t, ctx, func() bool {
+				s, err := r.Status(ctx)
+				return err == nil && s.CatalogRaft.State == "Leader" && len(s.Groups) == 1 && s.Groups[0].State == "Leader"
+			})
+			client, err := NewFixedPeerTCPClientV1(c)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer client.Close()
+			fixedPeerPublishNativeUsersCatalogV1(t, ctx, client, c.NodeID)
+			meta := collections.CollectionMeta{Name: "users", Options: collections.CollectionOptions{DocumentFormat: format}, Indexes: []collections.IndexDefinition{{Name: "by_city", Field: "city", ValueType: collections.IndexValueString, Unique: true}}}
+			document := func(city string) []byte {
+				if format == collections.DocumentFormatJSON {
+					return []byte(`{"city":"` + city + `"}`)
+				}
+				doc, err := bson.Marshal(bson.D{{Key: "city", Value: city}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return doc
+			}
+			old, updated := document("hnl"), document("sea")
+			sections := func(doc []byte) []iwire.Section {
+				return []iwire.Section{collectionNameRef("users"), documentFormatSection(format),
+					{ID: iwire.SectionDocumentIDs, Bytes: iwire.AppendByteVector(nil, []byte("u1"))},
+					{ID: iwire.SectionDocuments, Bytes: iwire.AppendByteVector(nil, doc)}}
+			}
+			replacement := append(sections(updated), iwire.Section{ID: iwire.SectionReplacementMode, Bytes: []byte{1}})
+			const key = "guard-replace"
+			fsm := r.data["group-a"].fsm
+			var created raftcluster.SubmitResultV1
+			var col *collections.Collection
+			var db *backenddb.DB
+			var before FixedPeerTCPGroupStatusV1
+			var seq, nextLSN, staleVersion uint64
+			attempts := 0
+			logicalSequence := func() uint64 {
+				t.Helper()
+				capture, err := db.CaptureNativeSemanticState()
+				if err != nil {
+					t.Fatal(err)
+				}
+				seq := capture.LogicalSequence()
+				if err := capture.Close(); err != nil {
+					t.Fatal(err)
+				}
+				return seq
+			}
+			// On the first attempt, publish real commands between the helper's
+			// status/encoding/route and submit. On the second, prove that the stale
+			// attempt left no effects before allowing its fresh-guard submission.
+			applied := fixedPeerSubmitNativeCollectionV1(t, ctx, client, c.NodeID, iwire.CommandReplaceBatch, key, replacement, func(version uint64) {
+				attempts++
+				if attempts == 1 {
+					staleVersion = version
+					created = fixedPeerSubmitNativeCollectionV1(t, ctx, client, c.NodeID, iwire.CommandCreateCollection, "guard-create", []iwire.Section{{ID: iwire.SectionCollectionMeta, Bytes: mustEncodeCollectionMeta(meta)}})
+					inserted := fixedPeerSubmitNativeCollectionV1(t, ctx, client, c.NodeID, iwire.CommandInsertBatch, "guard-insert", sections(old))
+					col, db, err = fsm.OpenCollectionForRaftSourceFromCurrentDBV1(ctx, raftcluster.AppliedIndexReadBarrier{NodeID: c.NodeID, GroupID: "group-a", MinAppliedIndex: inserted.Evidence.Index}, "users")
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := db.SyncNativeSemanticPrefix(); err != nil {
+						t.Fatal(err)
+					}
+					seq, nextLSN = logicalSequence(), db.CommandWALNextLSN()
+					status, err := client.Status(ctx, c.NodeID)
+					if err != nil || status.Groups[0].CatalogVersion <= staleVersion {
+						t.Fatalf("interposed commands did not advance sampled guard: sampled=%d current=%+v err=%v", staleVersion, status, err)
+					}
+					before = status.Groups[0]
+					return
+				}
+				if attempts != 2 || version <= staleVersion {
+					t.Fatalf("expected one stale attempt then fresh guard: attempts=%d stale=%d current=%d", attempts, staleVersion, version)
+				}
+				after, err := client.Status(ctx, c.NodeID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				b, a := before, after.Groups[0]
+				if b.LastIndex != a.LastIndex || b.CommitIndex != a.CommitIndex || b.RaftAppliedIndex != a.RaftAppliedIndex || !reflect.DeepEqual(b.Applied, a.Applied) || logicalSequence() != seq || db.CommandWALNextLSN() != nextLSN {
+					t.Fatalf("stale guard changed raft/logical state: before=%+v after=%+v", b, a)
+				}
+				if _, _, found, err := fsm.AppliedIdempotencyGuardV1(ctx, []byte(key)); err != nil || found {
+					t.Fatalf("rejected command allocated idempotency identity: found=%v err=%v", found, err)
+				}
+				if got, err := col.Get([]byte("u1")); err != nil || !bytes.Equal(got, old) {
+					t.Fatalf("rejected replacement changed row: %x %v", got, err)
+				}
+				if ids, err := col.FindByIndexValue("by_city", "hnl"); err != nil || len(ids) != 1 || string(ids[0]) != "u1" {
+					t.Fatalf("rejected replacement changed old index: %q %v", ids, err)
+				}
+				if ids, err := col.FindByIndexValue("by_city", "sea"); err != nil || len(ids) != 0 {
+					t.Fatalf("rejected replacement changed new index: %q %v", ids, err)
+				}
+				t.Logf("interposed create/insert advanced catalog guard %d -> %d; helper's stale replacement rejected without raft, WAL, logical, idempotency, row, or index effects", staleVersion, before.CatalogVersion)
+			})
+			if attempts != 2 || applied.ApplyResult.DeterministicErrorCode != "" || applied.ApplyResult.AffectedCount != 1 || logicalSequence() != seq+1 || db.CommandWALNextLSN() != nextLSN+1 {
+				t.Fatalf("fresh replacement result: attempts=%d result=%+v", attempts, applied.ApplyResult)
+			}
+			if got, err := col.Get([]byte("u1")); err != nil || !bytes.Equal(got, updated) {
+				t.Fatalf("fresh replacement row: %x %v", got, err)
+			}
+			guard, digest, found, err := fsm.AppliedIdempotencyGuardV1(ctx, []byte(key))
+			if err != nil || !found || guard <= staleVersion || digest != applied.DecodedEntry.Digest || !bytes.Equal(applied.CommittedEntry.Bytes, fixedPeerNativeCollectionEntryV1(t, iwire.CommandReplaceBatch, key, guard, replacement)) {
+				t.Fatalf("fresh replacement changed operation/key: guard=%d digest=%x found=%v err=%v", guard, digest, found, err)
+			}
+			// Preserve the special exact-create replay contract: never re-encode a
+			// command that has already committed, even when its guard is now stale.
+			replayed, err := client.Submit(ctx, c.NodeID, created.CommittedEntry.Bytes, created.CommittedEntry.RequestMetadata)
+			if err != nil || !replayed.CommittedRecoverable || !replayed.CommittedApplied || replayed.ApplyResult.AffectedCount != 0 || replayed.ApplyResult.MatchedCount != 0 || replayed.ApplyResult.CommandDigest != created.ApplyResult.CommandDigest || replayed.ApplyResult.ResultDigest != created.ApplyResult.ResultDigest || logicalSequence() != seq+1 {
+				t.Fatalf("exact create replay changed identity or logical state: %+v %v", replayed, err)
+			}
+		})
 	}
 }

@@ -1,0 +1,48 @@
+{
+  "argv": [
+    "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/native-columngraph-public-direction1/documentservice.test",
+    "-test.v",
+    "-test.run=^$",
+    "-test.bench=^BenchmarkServiceSharedCOWConsumers/dense$",
+    "-test.benchmem",
+    "-test.benchtime=1000x",
+    "-test.count=1",
+    "-test.timeout=3m"
+  ],
+  "cwd": "/mnt/fast4tb/gomap-mongo-execution-20261024/consumer-canonical",
+  "environment_policy": "explicit whitelist plus frozen cell values; no full environment dump",
+  "start_utc": "2026-10-26T22:50:49.056318+00:00",
+  "wall_limit_seconds": 240,
+  "exit_code": 0,
+  "timed_out": false,
+  "error": null,
+  "cleanup": {
+    "pgid": 127143,
+    "alive_before_cleanup": false,
+    "signals": [],
+    "alive_after_cleanup": false
+  },
+  "pid": 127143,
+  "end_utc": "2026-10-26T22:51:15.263701+00:00",
+  "elapsed_seconds": 26.20739258173853,
+  "log": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/native-scan-cursor1/public-ab-04-before.log",
+  "log_sha256": "320f2195de4c95e05542ce67a011d03db0ce2a7a66f63fbc2c6d4151aa823958",
+  "process_ok": true,
+  "arm": "before",
+  "binary_sha256": "dfddbf95b1b4d9bbcb030e70bb1b939632720d447d51f821e908645150d1313a",
+  "source_unchanged": true,
+  "activation_verified": true,
+  "rows": [
+    {
+      "arm": "before",
+      "iterations": 1000,
+      "metrics": {
+        "ns/op": 24614024.0,
+        "B/op": 7306649.0,
+        "allocs/op": 107050.0
+      },
+      "raw": "BenchmarkServiceSharedCOWConsumers/dense-4         \t    1000\t  24614024 ns/op\t 7306649 B/op\t  107050 allocs/op"
+    }
+  ],
+  "valid": true
+}

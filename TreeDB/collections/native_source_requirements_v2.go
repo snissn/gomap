@@ -288,8 +288,19 @@ func (s *nativeSourceRequirementStreamV2) Lookup(query rootpublication.StableLog
 // codec envelope before admission, without decoding it or copying its assets.
 // A graph producer separately admits BOTH maximum replacement-state slots.
 func nativeSourceRequirementBasisCapacityV2(snapshot *backenddb.Snapshot, root uint64) (uint64, error) {
+	decoded, err := nativeSourceRequirementBasisDecodedLengthV2(snapshot, root)
+	if err != nil {
+		return 0, err
+	}
+	return nativeSourceRequirementCapacityForStateV2(decoded), nil
+}
+
+// The captured codec census is shared by full-record ordinary producers and
+// the cdir2 streaming requirements reader. Only the latter creates the two
+// leaf/record traversal slots; both preserve the same untrusted TVIS limits.
+func nativeSourceRequirementBasisDecodedLengthV2(snapshot *backenddb.Snapshot, root uint64) (uint64, error) {
 	if root == 0 {
-		return nativeSourceRequirementCapacityForStateV2(0), nil
+		return 0, nil
 	}
 	if snapshot == nil {
 		return 0, backenddb.ErrNativeSemanticUnsupported
@@ -317,7 +328,7 @@ func nativeSourceRequirementBasisCapacityV2(snapshot *backenddb.Snapshot, root u
 	if err := it.Error(); err != nil {
 		return 0, err
 	}
-	return nativeSourceRequirementCapacityForStateV2(decoded), nil
+	return decoded, nil
 }
 
 func nativeTypedBasisCapacity(meta CollectionMeta, snapshot *backenddb.Snapshot, root uint64) (uint64, error) {

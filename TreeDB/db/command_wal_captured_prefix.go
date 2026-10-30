@@ -72,9 +72,8 @@ func (db *DB) captureCommandWALPrefixAfterAppend(owner *transactionowner.Owner, 
 	}
 	retained := false
 	defer func() {
-		recovered := recover()
 		if !retained {
-			if assignedLSN != 0 && (err != nil || recovered != nil) {
+			if assignedLSN != 0 {
 				db.commandWALFlushPoisoned.Store(true)
 			}
 			db.commandWALRawPublishMu.Unlock()
@@ -82,9 +81,6 @@ func (db *DB) captureCommandWALPrefixAfterAppend(owner *transactionowner.Owner, 
 				db.commandWALRawAdmissionMu.Unlock()
 			}
 			db.teardownMu.RUnlock()
-		}
-		if recovered != nil {
-			panic(recovered)
 		}
 	}()
 	target, result, err = db.captureCommandWALPrefixLocked(owner, target)

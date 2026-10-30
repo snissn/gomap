@@ -3858,6 +3858,15 @@ type backendBatchRevisionOps struct {
 }
 
 func resolveBackendBatchRevisionOps(backendBatch batch.Interface) backendBatchRevisionOps {
+	// The native batch has a fixed capability set. Static conversions avoid
+	// repeatedly discovering it through runtime interface assertion caches.
+	// Decorators retain their own methods and capability discovery below.
+	if native, ok := backendBatch.(*backenddb.Batch); ok {
+		return backendBatchRevisionOps{
+			set: native, setView: native, del: native, delView: native,
+			ptr: native, ptrView: native,
+		}
+	}
 	ops := backendBatchRevisionOps{}
 	ops.set, _ = backendBatch.(backendBatchSetRevision)
 	ops.setView, _ = backendBatch.(backendBatchSetViewRevision)
@@ -3947,6 +3956,7 @@ func appendBackendBatchPointOp(
 }
 
 type checkpointCommandWALPublish struct {
+	seal       rootpublication.PhysicalSealReceipt
 	appliedLSN uint64
 	ranges     []backenddb.CommandWALLSNRange
 	consumed   bool
@@ -10190,12 +10200,15 @@ type DB struct {
 	autoCheckpointLastWALTrimmed           atomic.Int64
 	autoCheckpointLastWALBytes             atomic.Int64
 	autoCheckpointMaxWALBytes              atomic.Int64
-	commandWALCleanupPending               atomic.Bool
-	commandWALCleanupActive                atomic.Bool
-	commandWALCleanupRequests              atomic.Uint64
-	commandWALCleanupCoalesced             atomic.Uint64
-	commandWALCleanupCompletions           atomic.Uint64
-	commandWALCleanupRetries               atomic.Uint64
+	// Immutable threshold captured by the actually started worker, not a later
+	// StartAutoCheckpoint notification reconfiguration.
+	autoCheckpointWorkerMaxWALBytes atomic.Int64
+	commandWALCleanupPending        atomic.Bool
+	commandWALCleanupActive         atomic.Bool
+	commandWALCleanupRequests       atomic.Uint64
+	commandWALCleanupCoalesced      atomic.Uint64
+	commandWALCleanupCompletions    atomic.Uint64
+	commandWALCleanupRetries        atomic.Uint64
 
 	checkpointCutoverLastNanos    atomic.Int64
 	checkpointCutoverMaxNanos     atomic.Int64
@@ -12126,22 +12139,23 @@ func addMemtableResidencyStats(stats map[string]string, prefix string, summary m
 	if stats == nil || prefix == "" {
 		return
 	}
-	add := func(name string, s memtableResidencySummary) {
-		stats[prefix+"."+name+".count"] = strconv.FormatInt(int64(s.count), 10)
-		stats[prefix+"."+name+".entries"] = strconv.FormatInt(int64(s.len), 10)
-		stats[prefix+"."+name+".size_bytes"] = strconv.FormatInt(s.size, 10)
-		stats[prefix+"."+name+".entry_capacity"] = strconv.FormatInt(s.entryCapacity, 10)
-		stats[prefix+"."+name+".entry_backing_bytes"] = strconv.FormatInt(s.entryBackingBytes, 10)
-		stats[prefix+"."+name+".value_arena_active_chunks"] = strconv.FormatInt(s.valueArenaActiveChunks, 10)
-		stats[prefix+"."+name+".value_arena_active_bytes"] = strconv.FormatInt(s.valueArenaActiveBytes, 10)
-		stats[prefix+"."+name+".value_arena_retained_chunks"] = strconv.FormatInt(s.valueArenaRetainedChunks, 10)
-		stats[prefix+"."+name+".value_arena_retained_bytes"] = strconv.FormatInt(s.valueArenaRetainedBytes, 10)
+	keys := memtableResidencyMetricKeys(prefix)
+	add := func(k memtableResidencyKeys, s memtableResidencySummary) {
+		stats[k.count] = strconv.FormatInt(int64(s.count), 10)
+		stats[k.entries] = strconv.FormatInt(int64(s.len), 10)
+		stats[k.sizeBytes] = strconv.FormatInt(s.size, 10)
+		stats[k.entryCapacity] = strconv.FormatInt(s.entryCapacity, 10)
+		stats[k.entryBackingBytes] = strconv.FormatInt(s.entryBackingBytes, 10)
+		stats[k.valueArenaActiveChunks] = strconv.FormatInt(s.valueArenaActiveChunks, 10)
+		stats[k.valueArenaActiveBytes] = strconv.FormatInt(s.valueArenaActiveBytes, 10)
+		stats[k.valueArenaRetainedChunks] = strconv.FormatInt(s.valueArenaRetainedChunks, 10)
+		stats[k.valueArenaRetainedBytes] = strconv.FormatInt(s.valueArenaRetainedBytes, 10)
 	}
-	add("total", summary.total)
-	add("skiplist", summary.skiplist)
-	add("hash_sorted", summary.hashSorted)
-	add("btree", summary.btree)
-	add("append_only", summary.appendOnly)
+	add(keys[0], summary.total)
+	add(keys[1], summary.skiplist)
+	add(keys[2], summary.hashSorted)
+	add(keys[3], summary.btree)
+	add(keys[4], summary.appendOnly)
 }
 
 func cloneKeyRangePointKey(key []byte) []byte {
@@ -13848,9 +13862,10 @@ func (db *DB) startProcessMemorySampler() {
 // prefix; legacy or otherwise unwired modes use a full checkpoint. When
 // idleInterval > 0, the loop also runs after a period of write-idleness.
 //
-// interval > 0 enables periodic passes. maxWALBytes is a safety cap: if > 0,
-// the loop will attempt maintenance when the effective WAL bytes exceed this
-// cap. maxWALBytes <= 0 disables the size trigger.
+// interval > 0 enables periodic passes. maxWALBytes is a soft size trigger:
+// if > 0, the loop attempts maintenance after notified WAL growth exceeds the
+// threshold. It is not a hard byte limit. maxWALBytes <= 0 disables the size
+// trigger of a newly started worker; a running worker retains its first options.
 func (db *DB) StartAutoCheckpoint(interval time.Duration, maxWALBytes int64, idleInterval time.Duration) {
 	if db == nil {
 		return
@@ -13865,6 +13880,7 @@ func (db *DB) StartAutoCheckpoint(interval time.Duration, maxWALBytes int64, idl
 	if !db.autoCheckpointOn.CompareAndSwap(false, true) {
 		return
 	}
+	db.autoCheckpointWorkerMaxWALBytes.Store(maxWALBytes)
 	db.wg.Add(1)
 	go db.autoCheckpointLoop(interval, maxWALBytes, idleInterval)
 }
@@ -24938,23 +24954,45 @@ type checkpointFrontierUnit struct {
 }
 
 type checkpointFrontier struct {
-	ids            map[uint64]checkpointFrontierUnit
-	laneUnits      map[uint16]uint64
-	units          uint64
-	bytes          uint64
+	ids       map[uint64]checkpointFrontierUnit
+	laneUnits map[uint16]uint64
+	units     uint64
+	bytes     uint64
+	// A single queued unit has immutable scalar membership instead of two maps.
+	// Its captured size is bytes; singletonID is nonzero only for this form.
+	singletonID    uint64
+	singletonLane  uint16
 	captured       bool
 	missingQueueID bool
 }
 
-func (f checkpointFrontier) contains(id uint64) bool {
-	if len(f.ids) == 0 {
-		return false
+func (f checkpointFrontier) lookup(id uint64) (checkpointFrontierUnit, bool) {
+	if f.singletonID != 0 {
+		if id == f.singletonID {
+			return checkpointFrontierUnit{bytes: f.bytes, laneID: f.singletonLane}, true
+		}
+		return checkpointFrontierUnit{}, false
 	}
-	_, ok := f.ids[id]
+	unit, ok := f.ids[id]
+	return unit, ok
+}
+
+func (f checkpointFrontier) contains(id uint64) bool {
+	_, ok := f.lookup(id)
 	return ok
 }
 
+func (f checkpointFrontier) idCount() int {
+	if f.singletonID != 0 {
+		return 1
+	}
+	return len(f.ids)
+}
+
 func (f checkpointFrontier) laneCount() uint64 {
+	if f.singletonID != 0 {
+		return 1
+	}
 	return uint64(len(f.laneUnits))
 }
 
@@ -24981,8 +25019,8 @@ func (db *DB) activeCheckpointFrontier() (checkpointFrontier, bool) {
 		return checkpointFrontier{}, false
 	}
 	db.checkpointActiveFrontierMu.RLock()
-	// checkpointFrontier maps are immutable after capture; sharing their backing
-	// stores across copies is safe as long as frontier membership remains read-only.
+	// checkpointFrontier membership is immutable after capture. Scalars are copied
+	// by value, and map backing stores may be shared by read-only copies.
 	f := db.checkpointActiveFrontier
 	db.checkpointActiveFrontierMu.RUnlock()
 	return f, f.captured
@@ -24991,6 +25029,19 @@ func (db *DB) activeCheckpointFrontier() (checkpointFrontier, bool) {
 func (db *DB) captureCheckpointFrontierLocked() checkpointFrontier {
 	f := checkpointFrontier{captured: true}
 	if db == nil || len(db.queue) == 0 {
+		return f
+	}
+	if len(db.queue) == 1 && len(db.queueIDs) > 0 && db.queueIDs[0] != 0 {
+		f.singletonID = db.queueIDs[0]
+		if mem := db.queue[0]; mem != nil {
+			if size := mem.Size(); size > 0 {
+				f.bytes = uint64(size)
+			}
+		}
+		if len(db.queueLaneIDs) > 0 {
+			f.singletonLane = db.queueLaneIDs[0]
+		}
+		f.units = 1
 		return f
 	}
 	f.ids = make(map[uint64]checkpointFrontierUnit, len(db.queue))
@@ -25054,7 +25105,7 @@ func (db *DB) checkpointFrontierResidualStatsLocked(f checkpointFrontier) checkp
 			if i < len(db.queueLaneIDs) {
 				laneID = db.queueLaneIDs[i]
 			}
-			if unit, ok := f.ids[id]; ok {
+			if unit, ok := f.lookup(id); ok {
 				if size == 0 {
 					size = unit.bytes
 				}
@@ -25072,9 +25123,15 @@ func (db *DB) checkpointFrontierResidualStatsLocked(f checkpointFrontier) checkp
 	stats.postLanes = uint64(len(postLanes))
 	stats.drainedUnits = saturatingSubUint64(f.units, stats.frontierUnits)
 	stats.drainedBytes = saturatingSubUint64(f.bytes, stats.frontierBytes)
-	for laneID, units := range f.laneUnits {
-		if remainingByLane[laneID] < units {
+	if f.singletonID != 0 {
+		if remainingByLane[f.singletonLane] == 0 {
 			stats.drainedLanes++
+		}
+	} else {
+		for laneID, units := range f.laneUnits {
+			if remainingByLane[laneID] < units {
+				stats.drainedLanes++
+			}
 		}
 	}
 	return stats
@@ -25286,11 +25343,11 @@ func appendCheckpointStageStats(stats map[string]string, name string, s *checkpo
 	if stats == nil || s == nil || name == "" {
 		return
 	}
-	prefix := "treedb.cache.checkpoint.stage." + name
-	stats[prefix+".samples"] = fmt.Sprintf("%d", s.samples.Load())
-	stats[prefix+".last_ns"] = fmt.Sprintf("%d", s.lastNs.Load())
-	stats[prefix+".total_ns"] = fmt.Sprintf("%d", s.totalNs.Load())
-	stats[prefix+".max_ns"] = fmt.Sprintf("%d", s.maxNs.Load())
+	keys := checkpointStageMetricKeys(name)
+	stats[keys.samples] = fmt.Sprintf("%d", s.samples.Load())
+	stats[keys.lastNs] = fmt.Sprintf("%d", s.lastNs.Load())
+	stats[keys.totalNs] = fmt.Sprintf("%d", s.totalNs.Load())
+	stats[keys.maxNs] = fmt.Sprintf("%d", s.maxNs.Load())
 }
 
 func checkpointRatePerSecond(amount, ns uint64) float64 {
@@ -25793,7 +25850,7 @@ func (db *DB) checkpointContext(ctx context.Context, automatic bool) error {
 		}
 	}
 	if hasMutable {
-		if err := db.rotateMutableShardsLocked(db.checkpointRotateCapacity(), false); err != nil {
+		if err := db.rotateMutableShardsWithEmptyReuseLocked(db.checkpointRotateCapacity(), false, true); err != nil {
 			db.mu.Unlock()
 			releaseWriteMu()
 			endWriteCutover()
@@ -25985,7 +26042,8 @@ func (db *DB) checkpointContext(ctx context.Context, automatic bool) error {
 	if frontierLaneCount == 0 {
 		frontierLaneCount = 1
 	}
-	_, frontierActiveLanes := db.checkpointFrontierActiveLanes(frontier, frontierLaneCount)
+	var frontierLaneScratch [64]bool
+	_, frontierActiveLanes := db.checkpointFrontierActiveLanes(frontier, frontierLaneCount, frontierLaneScratch[:])
 	db.observeCheckpointFlushAllFrontierLanes(frontierActiveLanes)
 	checkpointDrainUnitsBefore := db.checkpointSharedDrainCheckpointUnits.Load()
 	checkpointDrainOpsBefore := db.checkpointSharedDrainCheckpointOps.Load()
@@ -25997,13 +26055,13 @@ func (db *DB) checkpointContext(ctx context.Context, automatic bool) error {
 	// Same-lane background claims serialize on flushLaneMu and only make the
 	// checkpoint wait for another owner. Share the active frontier only when the
 	// frontier spans multiple lanes that can make independent progress.
-	if commandWALPublishPiggyback != nil || len(frontier.ids) < 8 || frontier.bytes < 8<<20 || frontierActiveLanes <= 1 {
+	if commandWALPublishPiggyback != nil || frontier.idCount() < 8 || frontier.bytes < 8<<20 || frontierActiveLanes <= 1 {
 		ownedDrainStart := time.Now()
 		db.flushCheckpointFrontierLocked(true, commandWALPublishPiggyback, frontier)
 		ownedDrainDur = time.Since(ownedDrainStart)
 	} else {
 		db.setActiveCheckpointFrontier(frontier)
-		if len(frontier.ids) > 0 {
+		if frontier.idCount() > 0 {
 			db.TriggerFlush()
 		}
 		db.checkpointSharedDrainFlushMuReleases.Add(1)
@@ -27393,12 +27451,29 @@ func (db *DB) setDirectAfterCommandWALAppendWithMVCCInput(key, value []byte, inp
 		}
 		return revision
 	}
-	if err := appendCommand(assignRevision); err != nil {
+	// The caller owns writeMu across the external append callback. Returned
+	// errors release it below; panic(nil) and Goexit must release it too,
+	// without recovering or converting either unwind to a successful write.
+	var appendErr error
+	func() {
+		returned := false
+		defer func() {
+			if !returned {
+				if retainPath != "" {
+					db.markValueLogRetain(retainPath)
+				}
+				db.writeMu.RUnlock()
+			}
+		}()
+		appendErr = appendCommand(assignRevision)
+		returned = true
+	}()
+	if appendErr != nil {
 		if retainPath != "" {
 			db.markValueLogRetain(retainPath)
 		}
 		db.writeMu.RUnlock()
-		return err
+		return appendErr
 	}
 	if revision == page.LegacyEntryRevision {
 		if retainPath != "" {
@@ -28771,14 +28846,23 @@ func (db *DB) maybeRotateMemtable(triggerFlush bool) error {
 // for establishing durable boundaries and trimming old segments. This avoids
 // requiring a global writer barrier around WAL rotation.
 func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) error {
+	return db.rotateMutableShardsWithEmptyReuseLocked(newCapacity, triggerFlush, false)
+}
+
+// rotateMutableShardsWithEmptyReuseLocked optionally keeps empty append-only
+// tables at checkpoint cutover. Other rotation callers retain their existing
+// replacement policy, including ordered-MVCC and iterator mode transitions.
+func (db *DB) rotateMutableShardsWithEmptyReuseLocked(newCapacity int, triggerFlush, reuseEmptyAppendOnly bool) error {
 	debugRotate := debugMemtableRotateOn()
 	retiredMems := make([]memtable.Table, 0, len(db.mutableShards))
 	if newCapacity < 0 {
 		newCapacity = db.memtableCap
 	}
+	previousMode := db.currentMemtableMode()
 	if db.memtableAdaptive {
 		db.applyAdaptiveMemtableModeLocked()
 	}
+	reuseEmptyAppendOnly = reuseEmptyAppendOnly && previousMode == memtable.ModeAppendOnly && db.currentMemtableMode() == memtable.ModeAppendOnly
 	if db.memtableWarmupActive {
 		db.memtableWarmupActive = false
 		db.updateAdaptiveObservationLocked()
@@ -28824,6 +28908,23 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 			db.observeAppendOnlyMutableEntries(oldLen)
 		}
 		oldShardBytes := shard.bytes
+		if mt, ok := shard.mem.(*memtable.AppendOnly); reuseEmptyAppendOnly && ok && oldLen == 0 && mt.Size() == 0 && shard.bytes == 0 && !shard.rng.valid && len(shard.appendOnlyDirectValueArena.active) == 0 {
+			// Empty tables have no immutable source to publish. Keep their object
+			// identity, but apply the same capacity limit as a recycled replacement
+			// so checkpoint cutover still sheds oversized retained buffers. The
+			// normal post-checkpoint trim will also drop their idle entry backing.
+			capacity := db.appendOnlyMemtableCapacityHint(newCapacity, appendOnlyEstimatedBytesPerEntryDefault)
+			mt.ResetWithCapacityLimit(capacity, appendOnlyEstimatedBytesPerEntryDefault)
+			db.releaseBatchArenaLeasesForMemtable(mt)
+			db.promoteRootDomainMutableLocked(i, nil, mt)
+			if debugRotate {
+				db.debugMemtableRotatef(
+					"event=shard path=mutable_shards shard=%d lane=%d old_mode=%s old_len=0 old_size=0 old_bytes=0 new_mode=append_only new_capacity=%d reused_empty=true queue_len=%d queue_backlog_bytes=%d",
+					i, db.laneForShardIndex(i), oldMode, newCapacity, len(db.queue), db.queueBacklogBytes.Load(),
+				)
+			}
+			continue
+		}
 
 		// Remove this shard's contribution from the global byte counter before
 		// resetting it, since writers may still be updating other shards.
@@ -29454,13 +29555,22 @@ func (db *DB) flushLoop() {
 		select {
 		case <-db.closeCh:
 			db.flushAll(true)
-			db.drainSemanticCleanup()
-			db.wg.Done()
-			joined = true
 			for {
 				db.drainSemanticCleanup()
 				if db.semanticCleanupTerminal() {
 					return
+				}
+				if !joined {
+					// With no retained cut, join terminal physical-reader disposal
+					// and the cache refund before Close can return. A last cut may
+					// enqueue cleanup between the drain and terminal check above.
+					if db.cow.activeCuts.Load() == 0 {
+						continue
+					}
+					// User-held cuts retain their own resources after DB Close;
+					// this same worker remains their cleanup owner.
+					db.wg.Done()
+					joined = true
 				}
 				<-db.flushCh
 			}
@@ -29524,7 +29634,7 @@ func (db *DB) observeCheckpointBackgroundFlushPreempted() {
 }
 
 func filterFlushUnitsToCheckpointFrontier(units []flushUnit, ids []uint64, frontier checkpointFrontier) ([]flushUnit, []uint64, int64, int) {
-	if len(frontier.ids) == 0 || len(units) == 0 {
+	if frontier.idCount() == 0 || len(units) == 0 {
 		return nil, nil, 0, 0
 	}
 	outUnits := units[:0]
@@ -29547,9 +29657,17 @@ func filterFlushUnitsToCheckpointFrontier(units []flushUnit, ids []uint64, front
 	return outUnits, outIDs, totalBytes, totalLen
 }
 
-func (db *DB) checkpointFrontierActiveLanes(frontier checkpointFrontier, lanes int) ([]bool, int) {
-	active := make([]bool, lanes)
-	if db == nil || len(frontier.ids) == 0 {
+// scratch belongs to the calling checkpoint/flush invocation. The result may
+// alias it and must be consumed before the next call reuses that scratch.
+func (db *DB) checkpointFrontierActiveLanes(frontier checkpointFrontier, lanes int, scratch []bool) ([]bool, int) {
+	active := scratch
+	if cap(active) < lanes {
+		active = make([]bool, lanes)
+	} else {
+		active = active[:lanes]
+		clear(active)
+	}
+	if db == nil || frontier.idCount() == 0 {
 		return active, 0
 	}
 	db.mu.RLock()
@@ -29601,16 +29719,17 @@ func (db *DB) flushCheckpointFrontierLocked(reqSync bool, commandPublish *checkp
 			return
 		}
 	}
-	if len(frontier.ids) == 0 {
+	if frontier.idCount() == 0 {
 		return
 	}
 	lanes := len(db.lanes)
 	if lanes == 0 {
 		lanes = 1
 	}
+	var laneScratch [64]bool
 
 	for {
-		active, activeCount := db.checkpointFrontierActiveLanes(frontier, lanes)
+		active, activeCount := db.checkpointFrontierActiveLanes(frontier, lanes, laneScratch[:])
 		if activeCount == 0 {
 			return
 		}
@@ -29679,7 +29798,8 @@ func (db *DB) flushAllLocked(reqSync bool, commandPublish *checkpointCommandWALP
 	for {
 		if activeFrontier, ok := db.activeCheckpointFrontier(); ok {
 			frontierSyncFlag := db.flushSyncRequested(true)
-			active, activeCount := db.checkpointFrontierActiveLanes(activeFrontier, lanes)
+			var laneScratch [64]bool
+			active, activeCount := db.checkpointFrontierActiveLanes(activeFrontier, lanes, laneScratch[:])
 			if activeCount == 0 {
 				return
 			}
@@ -31975,7 +32095,17 @@ func (db *DB) maybeRunLeafGenerationPackMaintenance(runGC bool, quiet bool, admi
 }
 
 func (db *DB) Stats() map[string]string {
-	stats := db.backend.Stats()
+	var stats map[string]string
+	// The typical combined schema contains over four thousand fields. Reserve
+	// the output once at its owner rather than growing the backend map while
+	// appending cache telemetry. This is a capacity hint, not a field limit.
+	// Only the concrete native backend uses this capability: decorators keep
+	// their Stats overrides and generic backends retain the existing contract.
+	if native, ok := db.backend.(*backenddb.DB); ok {
+		stats = native.StatsWithCapacity(4608)
+	} else {
+		stats = db.backend.Stats()
+	}
 	if stats == nil {
 		stats = make(map[string]string)
 	}
@@ -33112,21 +33242,21 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.batch_pool.drop_under_pressure.int_slices_total"] = fmt.Sprintf("%d", batchIntPoolDropUnderPressureTotal.Load())
 	stats["treedb.process.batch_pool.drop_under_pressure.int64_slices_total"] = fmt.Sprintf("%d", batchInt64PoolDropUnderPressureTotal.Load())
 	stats["treedb.process.memory.pool_pressure_level"] = poolPressureLevelString(poolPressure.level)
-	stats["treedb.process.memory.pool_pressure_used_bytes"] = fmt.Sprintf("%d", poolPressure.usedBytes)
-	stats["treedb.process.memory.heap_alloc_bytes"] = fmt.Sprintf("%d", poolPressure.heapAllocBytes)
-	stats["treedb.process.memory.heap_inuse_bytes"] = fmt.Sprintf("%d", poolPressure.heapInuseBytes)
-	stats["treedb.process.memory.heap_sys_bytes"] = fmt.Sprintf("%d", poolPressure.heapSysBytes)
-	stats["treedb.process.memory.heap_idle_bytes"] = fmt.Sprintf("%d", poolPressure.heapIdleBytes)
-	stats["treedb.process.memory.heap_released_bytes"] = fmt.Sprintf("%d", poolPressure.heapReleasedBytes)
-	stats["treedb.process.memory.heap_idle_unreleased_bytes"] = fmt.Sprintf("%d", poolPressure.heapIdleUnreleased)
-	stats["treedb.process.memory.stack_inuse_bytes"] = fmt.Sprintf("%d", poolPressure.stackInuseBytes)
-	stats["treedb.process.memory.stack_sys_bytes"] = fmt.Sprintf("%d", poolPressure.stackSysBytes)
-	stats["treedb.process.memory.total_sys_bytes"] = fmt.Sprintf("%d", poolPressure.totalSysBytes)
-	stats["treedb.process.memory.non_heap_sys_bytes"] = fmt.Sprintf("%d", poolPressure.nonHeapSysBytes)
-	stats["treedb.process.memory.next_gc_bytes"] = fmt.Sprintf("%d", poolPressure.nextGCBytes)
-	stats["treedb.process.memory.num_gc"] = fmt.Sprintf("%d", poolPressure.numGC)
+	stats["treedb.process.memory.pool_pressure_used_bytes"] = strconv.FormatUint(poolPressure.usedBytes, 10)
+	stats["treedb.process.memory.heap_alloc_bytes"] = strconv.FormatUint(poolPressure.heapAllocBytes, 10)
+	stats["treedb.process.memory.heap_inuse_bytes"] = strconv.FormatUint(poolPressure.heapInuseBytes, 10)
+	stats["treedb.process.memory.heap_sys_bytes"] = strconv.FormatUint(poolPressure.heapSysBytes, 10)
+	stats["treedb.process.memory.heap_idle_bytes"] = strconv.FormatUint(poolPressure.heapIdleBytes, 10)
+	stats["treedb.process.memory.heap_released_bytes"] = strconv.FormatUint(poolPressure.heapReleasedBytes, 10)
+	stats["treedb.process.memory.heap_idle_unreleased_bytes"] = strconv.FormatUint(poolPressure.heapIdleUnreleased, 10)
+	stats["treedb.process.memory.stack_inuse_bytes"] = strconv.FormatUint(poolPressure.stackInuseBytes, 10)
+	stats["treedb.process.memory.stack_sys_bytes"] = strconv.FormatUint(poolPressure.stackSysBytes, 10)
+	stats["treedb.process.memory.total_sys_bytes"] = strconv.FormatUint(poolPressure.totalSysBytes, 10)
+	stats["treedb.process.memory.non_heap_sys_bytes"] = strconv.FormatUint(poolPressure.nonHeapSysBytes, 10)
+	stats["treedb.process.memory.next_gc_bytes"] = strconv.FormatUint(poolPressure.nextGCBytes, 10)
+	stats["treedb.process.memory.num_gc"] = strconv.FormatUint(uint64(poolPressure.numGC), 10)
 	stats["treedb.process.memory.gc_cpu_fraction"] = fmt.Sprintf("%.6f", poolPressure.gcCPUFraction)
-	stats["treedb.process.memory.gomemlimit_bytes"] = fmt.Sprintf("%d", poolPressure.memoryLimitBytes)
+	stats["treedb.process.memory.gomemlimit_bytes"] = strconv.FormatInt(poolPressure.memoryLimitBytes, 10)
 	stats["treedb.process.memory.mutable_bytes"] = fmt.Sprintf("%d", db.mutableBytes.Load())
 	stats["treedb.process.memory.memtable_view_deferred_bytes_current"] = fmt.Sprintf("%d", memViewDeferredBytesCurrent)
 	stats["treedb.process.memory.memtable_view_deferred_bytes_max"] = fmt.Sprintf("%d", memViewDeferredBytesMax)
@@ -33138,8 +33268,8 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.memory.pool_pressure_critical_samples_total"] = fmt.Sprintf("%d", poolPressureCriticalSamplesTotal.Load())
 	rssBytes := db.processRSSBytes.Load()
 	rssHWMBytes := db.processRSSHWMBytes.Load()
-	stats["treedb.process.memory.rss_bytes"] = fmt.Sprintf("%d", rssBytes)
-	stats["treedb.process.memory.rss_hwm_bytes"] = fmt.Sprintf("%d", rssHWMBytes)
+	stats["treedb.process.memory.rss_bytes"] = strconv.FormatUint(rssBytes, 10)
+	stats["treedb.process.memory.rss_hwm_bytes"] = strconv.FormatUint(rssHWMBytes, 10)
 	if rssBytes > poolPressure.heapInuseBytes {
 		stats["treedb.process.memory.rss_minus_heap_inuse_bytes"] = fmt.Sprintf("%d", rssBytes-poolPressure.heapInuseBytes)
 	} else {
@@ -33150,10 +33280,10 @@ func (db *DB) Stats() map[string]string {
 	} else {
 		stats["treedb.process.memory.rss_minus_total_sys_bytes"] = "0"
 	}
-	stats["treedb.process.memory.peak_rss_bytes"] = fmt.Sprintf("%d", db.processPeakRSSBytes.Load())
-	stats["treedb.process.memory.peak_heap_alloc_bytes"] = fmt.Sprintf("%d", db.processPeakHeapAllocBytes.Load())
-	stats["treedb.process.memory.peak_heap_inuse_bytes"] = fmt.Sprintf("%d", db.processPeakHeapInuseBytes.Load())
-	stats["treedb.process.memory.peak_total_sys_bytes"] = fmt.Sprintf("%d", db.processPeakTotalSysBytes.Load())
+	stats["treedb.process.memory.peak_rss_bytes"] = strconv.FormatUint(db.processPeakRSSBytes.Load(), 10)
+	stats["treedb.process.memory.peak_heap_alloc_bytes"] = strconv.FormatUint(db.processPeakHeapAllocBytes.Load(), 10)
+	stats["treedb.process.memory.peak_heap_inuse_bytes"] = strconv.FormatUint(db.processPeakHeapInuseBytes.Load(), 10)
+	stats["treedb.process.memory.peak_total_sys_bytes"] = strconv.FormatUint(db.processPeakTotalSysBytes.Load(), 10)
 	db.domainIngressMu.Lock()
 	ingressWorkers := len(db.domainIngressCh)
 	ingressQueueSize := db.domainIngressQueueSize
@@ -37799,6 +37929,21 @@ type CommandWALBatchWriteTiming struct {
 	MemtablePublicationReset time.Duration
 }
 
+// invokeCommandWALAppend retains ordinary point-path lease custody only while
+// the callback runs. Range and conditional callers own their unwind cleanup.
+// The returned flag preserves panic(nil) and Goexit without recovering either.
+func (b *Batch) invokeCommandWALAppend(releaseOnUnwind bool, unlockWriteMu func()) (err error) {
+	returned := false
+	defer func() {
+		if !returned && releaseOnUnwind {
+			unlockWriteMu()
+		}
+	}()
+	err = b.commandWALAppend()
+	returned = true
+	return err
+}
+
 // WriteAfterCommandWALAppend writes a cached batch by running appendCommand
 // after cached write preflight succeeds and before the mutation becomes
 // visible in the mutable table. This is intentionally limited to command-WAL
@@ -38219,7 +38364,7 @@ func (b *Batch) writeRangeBatch(sync bool) error {
 	// refer to the original entry indexes. Force the safe copy path for this write
 	// instead of retaining batch arenas by stale indexes.
 	b.hasViewOps = true
-	err := b.writeRegularLocked(sync, unlockWriteMu)
+	err := b.writeRegularLocked(sync, unlockWriteMu, false)
 	if err != nil {
 		b.entries = origEntries
 		b.hasDeleteRanges = origHasRanges
@@ -38258,37 +38403,40 @@ func (b *Batch) writeRangeSpanBatch(sync bool, ranges []batch.DeleteRange) (err 
 	}
 	defer b.db.writeMu.Unlock()
 
-	b.db.mu.Lock()
-	rotate := b.db.mutableBytes.Load() > 0
-	if !rotate {
-		for i := range b.db.mutableShards {
-			mt := b.db.mutableShards[i].mem
-			if mt != nil && mt.Len() != 0 {
-				rotate = true
-				break
+	if err := func() error {
+		b.db.mu.Lock()
+		defer b.db.mu.Unlock()
+		rotate := b.db.mutableBytes.Load() > 0
+		if !rotate {
+			for i := range b.db.mutableShards {
+				mt := b.db.mutableShards[i].mem
+				if mt != nil && mt.Len() != 0 {
+					rotate = true
+					break
+				}
 			}
 		}
-	}
-	if rotate {
-		if err := b.db.rotateMutableShardsLocked(minMemtablePrealloc, false); err != nil {
-			b.db.mu.Unlock()
+		if rotate {
+			if err := b.db.rotateMutableShardsLocked(minMemtablePrealloc, false); err != nil {
+				return err
+			}
+		}
+		if b.commandWALAppend != nil {
+			if err := b.commandWALAppend(); err != nil {
+				return err
+			}
+			commandWALAppended = true
+		}
+		if err := b.db.enqueueRangeSpanLayerLocked(ranges); err != nil {
 			return err
 		}
-	}
-	if b.commandWALAppend != nil {
-		if err := b.commandWALAppend(); err != nil {
-			b.db.mu.Unlock()
-			return err
-		}
-		commandWALAppended = true
-	}
-	if err := b.db.enqueueRangeSpanLayerLocked(ranges); err != nil {
-		b.db.mu.Unlock()
+		b.db.conditionalRecordCommittedEntries(nil, ranges)
+		b.db.publishMemtablesLocked()
+
+		return nil
+	}(); err != nil {
 		return err
 	}
-	b.db.conditionalRecordCommittedEntries(nil, ranges)
-	b.db.publishMemtablesLocked()
-	b.db.mu.Unlock()
 
 	b.db.noteWrite()
 	b.db.maybeAssistFlush()
@@ -38430,10 +38578,10 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 	if err := b.db.beginDirectWrite(); err != nil {
 		return err
 	}
-	return b.writeRegularLocked(syncWrite, b.db.writeMu.RUnlock)
+	return b.writeRegularLocked(syncWrite, b.db.writeMu.RUnlock, true)
 }
 
-func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
+func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func(), releaseCallbackLeaseOnUnwind bool) error {
 	if b.db.cow != nil {
 		if len(b.entries) == 0 && b.cowState.native == nil {
 			// Empty writes publish no cut. A WAL-off explicit sync still covers
@@ -39156,7 +39304,7 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 				}
 			}
 		}
-		if err := b.commandWALAppend(); err != nil {
+		if err := b.invokeCommandWALAppend(releaseCallbackLeaseOnUnwind, unlockWriteMu); err != nil {
 			unlockWriteMu()
 			return err
 		}

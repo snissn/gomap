@@ -1,0 +1,50 @@
+File: documentservice.test
+Build ID: 46f165d1cd4e65321e0b73e41c0d81b9784f3bf1
+Type: alloc_objects
+Time: 2026-10-26 14:13:13 HST
+Active filters:
+   focus=UpsertDocuments
+Showing nodes accounting for 185265, 22.94% of 807649 total
+Dropped 254 nodes (cum <= 4038)
+Showing top 40 nodes out of 65
+      flat  flat%   sum%        cum   cum%
+     16398  2.03%  2.03%      16398  2.03%  encoding/json.unquote (inline)
+     16384  2.03%  4.06%      73731  9.13%  encoding/json.(*decodeState).objectInterface
+     16373  2.03%  6.09%      32756  4.06%  encoding/json.(*decodeState).literalInterface
+     12292  1.52%  7.61%      12292  1.52%  encoding/json.(*scanner).pushParseState
+      8196  1.01%  8.62%       8196  1.01%  reflect.unsafe_New
+      8192  1.01%  9.64%      20469  2.53%  encoding/json.(*decodeState).arrayInterface
+      8192  1.01% 10.65%       8192  1.01%  encoding/json.(*decodeState).convertNumber
+      8192  1.01% 11.67%       8192  1.01%  github.com/snissn/gomap/TreeDB/collections.(*textTermAccumulator).termsMap (inline)
+      8192  1.01% 12.68%       8192  1.01%  github.com/snissn/gomap/TreeDB/collections.textDocumentStateValueFromAnalysis
+      8192  1.01% 13.69%       8192  1.01%  github.com/snissn/gomap/TreeDB/documentservice.cloneMeta
+      8192  1.01% 14.71%       8192  1.01%  unicode/utf8.AppendRune (inline)
+      6272  0.78% 15.49%      35043  4.34%  github.com/snissn/gomap/TreeDB/documentservice.prepareDocumentsForWrite
+      4096  0.51% 15.99%       4096  0.51%  bytes.NewReader (inline)
+      4096  0.51% 16.50%       4096  0.51%  encoding/json.(*Decoder).refill
+      4096  0.51% 17.01%      53237  6.59%  encoding/json.(*decodeState).valueInterface
+      4096  0.51% 17.51%      16481  2.04%  encoding/json.Marshal
+      4096  0.51% 18.02%       4096  0.51%  encoding/json.NewDecoder (inline)
+      4096  0.51% 18.53%      12288  1.52%  encoding/json.mapEncoder.encode
+      4096  0.51% 19.04%       4098  0.51%  fmt.Sprintf
+      4096  0.51% 19.54%      32769  4.06%  github.com/snissn/gomap/TreeDB/collections.analyzeTextIndexDocumentJSONRootFastPath
+      4096  0.51% 20.05%      24577  3.04%  github.com/snissn/gomap/TreeDB/collections.analyzeTextIndexField
+      4096  0.51% 20.56%       6272  0.78%  github.com/snissn/gomap/TreeDB/collections.applyTrustedFloat32Projection
+      4096  0.51% 21.06%       4096  0.51%  github.com/snissn/gomap/TreeDB/collections.newTextTermAccumulator (inline)
+      4096  0.51% 21.57%      98307 12.17%  github.com/snissn/gomap/TreeDB/collections.orderedIndexStateForDocumentWithArena
+      4096  0.51% 22.08%       4096  0.51%  github.com/snissn/gomap/TreeDB/collections.textIndexFieldTextFromJSONParser
+      2208  0.27% 22.35%     189568 23.47%  github.com/snissn/gomap/TreeDB/documentservice.(*Service).upsertDocuments
+      2176  0.27% 22.62%       2176  0.27%  github.com/snissn/gomap/TreeDB/collections.(*trustedFloat32Projection).legacyVectorRows
+      2112  0.26% 22.88%       2112  0.26%  github.com/snissn/gomap/TreeDB/collections.newTrustedFloat32Projection
+       128 0.016% 22.90%      98435 12.19%  github.com/snissn/gomap/TreeDB/collections.insertBatchPlanner.planIndexStateAndUniqueProbes
+        96 0.012% 22.91%       1090  0.13%  github.com/snissn/gomap/TreeDB/collections.pointerizeDirectBufferedPrimaryEntries
+        64 0.0079% 22.92%     152155 18.84%  github.com/snissn/gomap/TreeDB/collections.(*Collection).InsertBatchWithStatsValidatedFloat32Projection
+        64 0.0079% 22.93%      98915 12.25%  github.com/snissn/gomap/TreeDB/collections.insertBatchPlanner.planInsertBatchWithPreflight
+        64 0.0079% 22.93%      41025  5.08%  github.com/snissn/gomap/TreeDB/collections.prepareTextIndexInsertDocuments
+        33 0.0041% 22.94%     149564 18.52%  github.com/snissn/gomap/TreeDB/collections.(*Collection).insertBatchOnce
+         4 0.0005% 22.94%      73764  9.13%  encoding/json.(*decodeState).object
+         1 0.00012% 22.94%       8193  1.01%  github.com/snissn/gomap/TreeDB/collections.AnalyzeTextToSinkWithOptions
+         0     0% 22.94%      86019 10.65%  encoding/json.(*Decoder).Decode
+         0     0% 22.94%      12288  1.52%  encoding/json.(*Decoder).readValue
+         0     0% 22.94%       4096  0.51%  encoding/json.(*decodeState).scanWhile
+         0     0% 22.94%      73764  9.13%  encoding/json.(*decodeState).unmarshal

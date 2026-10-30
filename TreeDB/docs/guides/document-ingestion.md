@@ -35,6 +35,14 @@ are checked before that source is changed, so chunk, provider, or output errors
 fail closed. A successful result contains one `Ingested` outcome per source,
 including deterministic child IDs (`<sourceID>#<ordinal>`).
 
+Current vector declarations use cosine/float32 `column_graph`, the default and
+only serving strategy. Ingestion does not admit mutable typed graph serving or
+make ordinary filtered ANN/Hybrid available. Rebuild the declared graph when
+required before ANN queries; use explicit exact search or the separately admitted
+[typed lifecycle](vector-search-typed-column.md#explicit-mutable-serving-lifecycle)
+for supported filtered retrieval. The dated benchmark results below retain their
+original source and fixture boundaries.
+
 `SourceDocument.Meta` is encoded as the parent's top-level `meta` object, and
 the one shared chunk plan copies that exact object value into every generated
 child. It is a caller-safe snapshot: mutating the input map after

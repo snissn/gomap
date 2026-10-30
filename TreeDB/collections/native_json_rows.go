@@ -14,10 +14,16 @@ import (
 	"github.com/snissn/gomap/TreeDB/tree"
 )
 
-// A row owns only its first captured document and latest staged document. Nil
-// denotes absence. This same finite reduction is used by foreground and replay;
-// it owns no engine/root, publication authority or callback.
-type nativeJSONRow struct{ id, opening, current []byte }
+// A row owns its first captured document, latest staged document and optional
+// scalar state for that latest document. Nil documents denote absence. This
+// same finite reduction is used by foreground and replay; it owns no engine/root,
+// publication authority or callback.
+type nativeJSONRow struct {
+	id, opening, current []byte
+	// This immutable encoded scalar state belongs to current, under this row's
+	// captured schema and original stage receipt. Replay/array rows leave it nil.
+	currentState orderedDocumentIndexState
+}
 type nativeJSONRows struct{ rows []nativeJSONRow }
 
 func (p *nativeJSONRows) find(id []byte) *nativeJSONRow {
@@ -98,8 +104,8 @@ func nativeJSONFinalRowsResolved(name string, meta CollectionMeta, rows *nativeJ
 	// retained slices before the original parser allocates them.
 	var bytesCap, stateCount, maxDocument int
 	for _, row := range rows.rows {
-		for _, doc := range [][]byte{row.opening, row.current} {
-			if doc == nil {
+		for position, doc := range [][]byte{row.opening, row.current} {
+			if doc == nil || (position == 1 && row.currentState != nil) {
 				continue
 			}
 			capacity, err := nativeJSONDocumentEncodedCapacity(doc, meta)
@@ -156,6 +162,11 @@ func nativeJSONFinalRowsResolved(name string, meta CollectionMeta, rows *nativeJ
 			}
 		}
 		if row.current == nil {
+			markBatchUpdateIndexEffects(&item, runtimes, &stats)
+		} else if row.currentState != nil {
+			// Staging used this same captured schema and maintained parser. Its
+			// compact state owns its bytes independently of validation scratch.
+			item.newState = row.currentState
 			markBatchUpdateIndexEffects(&item, runtimes, &stats)
 		} else {
 			if prepareScratch != nil {
@@ -304,8 +315,8 @@ func nativeJSONDocumentEncodedCapacity(document []byte, meta CollectionMeta) (in
 
 // One original transaction-local scratch receipt owns the maintained arena and
 // the decoder fallback envelope. Only its maximum document demand is retained.
-// No encoded validation state escapes this scope; final states use a different,
-// retained arena. Growth admits old+new coexistence before replacement.
+// No validation-arena alias escapes; eligible rows copy the encoded scalar state
+// to their original stage receipt. Growth admits old+new before replacement.
 func (t *NativeJSONTxn) prepareValidation(g *nativeJSONTxnBinding, doc []byte) error {
 	if len(g.probe.meta.Indexes) == 0 {
 		return nil
@@ -342,18 +353,81 @@ func (t *NativeJSONTxn) prepareValidation(g *nativeJSONTxnBinding, doc []byte) e
 	g.validationCharge = n
 	return nil
 }
-func (t *NativeJSONTxn) validateDocument(g *nativeJSONTxnBinding, doc []byte, runtimes []indexRuntime, opts collectionOptions) error {
-	if err := t.prepareValidation(g, doc); err != nil {
-		return err
+
+// Copy only the already parsed, single-valued encoded state. The original
+// arena remains reusable; no decoder object or document alias enters the row.
+// Arrays keep the original extraction path and its normalized reference slices.
+func retainNativeJSONScalarState(state orderedDocumentIndexState, admit func(uint64) error) (orderedDocumentIndexState, error) {
+	if len(state) == 0 {
+		return nil, nil
 	}
-	_, err := orderedIndexStateForDocumentWithArena(doc, runtimes, opts, &g.validation)
+	var valueCount, bytesCount int
+	limit := int(^uint(0) >> 1)
+	for _, values := range state {
+		if len(values) > 1 {
+			return nil, nil
+		}
+		if len(values) == 0 {
+			continue
+		}
+		if len(values[0]) > limit-bytesCount {
+			return nil, memtable.ErrCOWCapacity
+		}
+		bytesCount += len(values[0])
+		valueCount++
+	}
+	for _, allocation := range []struct {
+		count int
+		size  uint64
+	}{
+		{bytesCount, 1},
+		{len(state), uint64(unsafe.Sizeof([][]byte{}))},
+		{valueCount, uint64(unsafe.Sizeof([]byte{}))},
+	} {
+		if err := admitNativeInsertArray(allocation.count, allocation.size, admit); err != nil {
+			return nil, err
+		}
+	}
+	// Reuse the maintained arena layout with exact immutable capacities. The
+	// three backings, including every reference header, were admitted above.
+	arena := indexEncodeArena{buf: make([]byte, 0, bytesCount), states: make([][][]byte, 0, len(state)), valueRefs: make([][]byte, 0, valueCount)}
+	owned := arena.appendState(len(state))
+	for i, values := range state {
+		if len(values) == 0 {
+			continue
+		}
+		start := len(arena.buf)
+		arena.buf = append(arena.buf, values[0]...)
+		owned[i] = arena.appendSingleValueRef(arena.buf[start:len(arena.buf):len(arena.buf)])
+	}
+	return owned, nil
+}
+
+func (t *NativeJSONTxn) validateDocument(g *nativeJSONTxnBinding, doc []byte, runtimes []indexRuntime, opts collectionOptions) (orderedDocumentIndexState, error) {
+	if err := t.prepareValidation(g, doc); err != nil {
+		return nil, err
+	}
+	state, err := orderedIndexStateForDocumentWithArena(doc, runtimes, opts, &g.validation)
+	var retained orderedDocumentIndexState
+	if err == nil && !opts.allowArrayValuesInIndex && opts.typedProjection == nil {
+		scalar := true
+		for _, runtime := range runtimes {
+			if runtime.def.multiKey {
+				scalar = false
+				break
+			}
+		}
+		if scalar {
+			retained, err = retainNativeJSONScalarState(state, func(n uint64) error { return t.admitStage(g, n) })
+		}
+	}
 	clear(g.validation.states)
 	clear(g.validation.valueRefs)
 	g.validation.buf = g.validation.buf[:0]
 	g.validation.scratch = g.validation.scratch[:0]
 	g.validation.states = g.validation.states[:0]
 	g.validation.valueRefs = g.validation.valueRefs[:0]
-	return err
+	return retained, err
 }
 
 func (t *NativeJSONTxn) admitMemberPayload(g *nativeJSONTxnBinding, docs []commitlog.CollectionDocument, ids [][]byte) error {
@@ -525,7 +599,8 @@ func (t *NativeJSONTxn) stageNativeInsert(g *nativeJSONTxnBinding, ids, document
 		if item.document == nil {
 			return backenddb.ErrNativeSemanticUnsupported
 		}
-		if err := t.validateDocument(g, item.document, runtimes, planner.options); err != nil {
+		state, err := t.validateDocument(g, item.document, runtimes, planner.options)
+		if err != nil {
 			return err
 		}
 		row, err := t.touchNativeRow(g, item.id)
@@ -536,6 +611,7 @@ func (t *NativeJSONTxn) stageNativeInsert(g *nativeJSONTxnBinding, ids, document
 			return ErrDocumentExists
 		}
 		row.current = bytes.Clone(item.document)
+		row.currentState = state
 		canonical := row.current
 		if normalizedDocumentFormat(planner.options.documentFormat) == DocumentFormatTemplateV1 {
 			canonical = documents[orderedItemIndex(order, i)]
@@ -578,7 +654,7 @@ func (t *NativeJSONTxn) UpdateBatchInto(name string, items []UpdateBatchItem) (r
 	if g == nil {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
-	if g.probe.meta.Options.ColumnStore != nil {
+	if g.probe.meta.Options.ColumnStore != nil && !nativeOrdinaryColumnGraphMeta(g.probe.meta) {
 		return t.stageNativeTypedUpdate(g, items)
 	}
 	if len(items) == 0 {
@@ -659,10 +735,12 @@ func (t *NativeJSONTxn) UpdateBatchInto(name string, items []UpdateBatchItem) (r
 		if err != nil {
 			return nil, updateBatchItemError(i, err)
 		}
-		if err := t.validateDocument(g, normalized[0], runtimes, planner.options); err != nil {
+		state, err := t.validateDocument(g, normalized[0], runtimes, planner.options)
+		if err != nil {
 			return nil, updateBatchItemError(i, err)
 		}
 		row.current = normalized[0]
+		row.currentState = state
 		result[i].Modified = true
 		docs = append(docs, commitlog.CollectionDocument{ID: row.id, Document: row.current})
 	}
@@ -682,7 +760,8 @@ func (t *NativeJSONTxn) UpdateBatchInto(name string, items []UpdateBatchItem) (r
 		}
 		planner.options = options
 		for i, document := range normalized {
-			if err = t.validateDocument(g, document, runtimes, planner.options); err != nil {
+			state, err := t.validateDocument(g, document, runtimes, planner.options)
+			if err != nil {
 				return nil, updateBatchItemError(changedIndices[i], err)
 			}
 			// Later touches may grow or shift the sorted row slice. Only the
@@ -692,6 +771,7 @@ func (t *NativeJSONTxn) UpdateBatchInto(name string, items []UpdateBatchItem) (r
 				return nil, backenddb.ErrNativeSemanticUnsupported
 			}
 			row.current = document
+			row.currentState = state
 			result[changedIndices[i]].Modified = true
 		}
 	}
@@ -723,7 +803,7 @@ func (t *NativeJSONTxn) DeleteBatchFrom(name string, ids [][]byte) (count int, r
 		}
 	}()
 	g := t.binding(name)
-	if g != nil && g.probe.meta.Options.ColumnStore != nil {
+	if g != nil && g.probe.meta.Options.ColumnStore != nil && !nativeOrdinaryColumnGraphMeta(g.probe.meta) {
 		_, count, err := t.stageNativeTypedBatch(g, nil, nil, nil, ids, commitlog.CommandKindCollectionDeleteBatchByID, false)
 		return count, err
 	}
@@ -751,6 +831,7 @@ func (t *NativeJSONTxn) DeleteBatchFrom(name string, ids [][]byte) (count int, r
 			continue
 		}
 		row.current = nil
+		row.currentState = nil
 		removed = append(removed, row.id)
 	}
 	if len(removed) == 0 {
@@ -767,6 +848,10 @@ func (t *NativeJSONTxn) DeleteBatchFrom(name string, ids [][]byte) (count int, r
 }
 
 func (t *NativeJSONTxn) finalizeNativeRows(graphSingleton bool) error {
+	return t.finalizeNativeRowsWithStats(graphSingleton, nil)
+}
+
+func (t *NativeJSONTxn) finalizeNativeRowsWithStats(graphSingleton bool, stats *CollectionInsertStats) error {
 	for i := range t.bindings {
 		g := &t.bindings[i]
 		if g.typed != nil {
@@ -833,9 +918,23 @@ func (t *NativeJSONTxn) finalizeNativeRows(graphSingleton bool) error {
 			return err
 		}
 		g.plan = &nativeJSONLogicalInsert{name: g.name, incarnation: g.incarnation, bootstrap: t.imported, custody: t.custody, primaryPolicy: nativeInsertRootPolicy(direct, direct.primaryRootName), mutations: make([]memtable.COWMutation, len(direct.primaryEntries))}
-		g.plan.additional, g.effects, err = extractNativeInsertEffects(g.name, g.incarnation, direct, g.plan.mutations, admit)
+		text, err := t.prepareNativeText(g)
 		if err != nil {
 			return err
+		}
+		g.plan.additional, g.effects, err = extractNativeInsertEffectsAndText(g.name, g.incarnation, direct, g.plan.mutations, admit, text, g.probe.meta)
+		if err != nil {
+			return err
+		}
+		if nativeOrdinaryColumnGraphMeta(g.probe.meta) {
+			if err = t.attachNativeOrdinaryColumnGraph(g); err != nil {
+				return fmt.Errorf("native ordinary ColumnGraph attachment: %w", err)
+			}
+		}
+		if stats != nil {
+			if err = t.collectNativeInsertStats(g, direct, stats); err != nil {
+				return err
+			}
 		}
 	}
 	// Graph rebuild finalizes a catalog effect and a typed recipe without CRUD

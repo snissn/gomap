@@ -13,6 +13,12 @@ retrieval, ranked keyword retrieval, and TreeDB-native hybrid text/vector
 retrieval through the TreeDB document service. It never scans documents
 client-side to emulate unsupported filters or search modes.
 
+The service creates cosine/float32 `column_graph` vector indexes. `similarity`
+defaults to `"cosine"`; other metrics, including `l2`/`euclidean` and
+`inner_product`/`dot_product` aliases, raise `ValueError` during construction
+before any service request, even with `ensure_index=False`. Serialized stores
+using these retired metrics also fail during deserialization.
+
 Service contract: [`docs/TREEDB_DOCUMENT_SERVICE_API.md`](../../../docs/TREEDB_DOCUMENT_SERVICE_API.md)
 
 ## Install for local development
@@ -138,8 +144,11 @@ closed through the base `treedb-client`; this package does not broaden them into
 local scans.
 
 The full AST is supported by document count/filter/delete and exact dense-vector
-retrieval. Keyword/hybrid retrieval accepts only equality and one/two-sided
-range leaves, alone or joined by nested `AND`, over fields declared in
+retrieval. Ordinary filtered vector-bearing hybrid retrieval and filtered ANN are
+unsupported. Admitted typed vector routes retain the filtering support reported
+by the service's index capabilities. Keyword and admitted hybrid filtering
+accept only equality and one/two-sided range leaves, alone or joined by nested
+`AND`, over fields declared in
 `TreeDBDocumentStore(..., scalar_fields=[...])` (or in the service create-index
 request). Same-field bounds merge and different fields use bounded indexed
 intersection before source work. `OR`, `NOT`, `!=`, `in`, and `not in` remain

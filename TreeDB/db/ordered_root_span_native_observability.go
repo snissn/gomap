@@ -600,6 +600,7 @@ func (db *DB) appendOrderedRootSpanNativeStats(stats map[string]string) {
 		return
 	}
 	prefix := "treedb.publish.ordered_root_delta_group.span_native."
+	names := orderedRootSpanNativeStatNames()
 	stats[prefix+"candidate_ops_total"] = fmt.Sprintf("%d", db.orderedRootSpanNativeCandidateOps.Load())
 	stats[prefix+"candidate_spans_total"] = fmt.Sprintf("%d", db.orderedRootSpanNativeCandidateSpans.Load())
 	stats[prefix+"eligible_ops_total"] = fmt.Sprintf("%d", db.orderedRootSpanNativeEligibleOps.Load())
@@ -610,47 +611,45 @@ func (db *DB) appendOrderedRootSpanNativeStats(stats map[string]string) {
 	stats[prefix+"ineligible_spans_total"] = fmt.Sprintf("%d", db.orderedRootSpanNativeIneligibleSpans.Load())
 	stats[prefix+"fallbacks_total"] = fmt.Sprintf("%d", db.orderedRootSpanNativeFallbacks.Load())
 	for _, reason := range FlushSpanRunFallbackReasons() {
-		name := reason.String()
-		stats[prefix+"fallback.reason."+name+".count_total"] = fmt.Sprintf("%d", db.orderedRootSpanNativeFallbackReasonCounts[reason].Load())
-		stats[prefix+"fallback.reason."+name+".ops_total"] = fmt.Sprintf("%d", db.orderedRootSpanNativeFallbackOps[reason].Load())
-		stats[prefix+"fallback.reason."+name+".spans_total"] = fmt.Sprintf("%d", db.orderedRootSpanNativeFallbackSpans[reason].Load())
+		stats[names.reasons[reason][0]] = fmt.Sprintf("%d", db.orderedRootSpanNativeFallbackReasonCounts[reason].Load())
+		stats[names.reasons[reason][1]] = fmt.Sprintf("%d", db.orderedRootSpanNativeFallbackOps[reason].Load())
+		stats[names.reasons[reason][2]] = fmt.Sprintf("%d", db.orderedRootSpanNativeFallbackSpans[reason].Load())
 	}
 	for _, route := range orderedRootSpanNativeRoutes() {
 		routeCounters := db.orderedRootSpanNativeRouteCountersFor(route)
 		if routeCounters == nil {
 			continue
 		}
-		routePrefix := prefix + "route." + string(route) + "."
-		stats[routePrefix+"observations_total"] = fmt.Sprintf("%d", routeCounters.observations.Load())
-		stats[routePrefix+"candidate_ops_total"] = fmt.Sprintf("%d", routeCounters.candidateOps.Load())
-		stats[routePrefix+"candidate_spans_total"] = fmt.Sprintf("%d", routeCounters.candidateSpans.Load())
-		stats[routePrefix+"eligible_ops_total"] = fmt.Sprintf("%d", routeCounters.eligibleOps.Load())
-		stats[routePrefix+"eligible_spans_total"] = fmt.Sprintf("%d", routeCounters.eligibleSpans.Load())
-		stats[routePrefix+"used_ops_total"] = fmt.Sprintf("%d", routeCounters.usedOps.Load())
-		stats[routePrefix+"used_spans_total"] = fmt.Sprintf("%d", routeCounters.usedSpans.Load())
-		stats[routePrefix+"ineligible_ops_total"] = fmt.Sprintf("%d", routeCounters.ineligibleOps.Load())
-		stats[routePrefix+"ineligible_spans_total"] = fmt.Sprintf("%d", routeCounters.ineligibleSpans.Load())
-		stats[routePrefix+"fallbacks_total"] = fmt.Sprintf("%d", routeCounters.fallbacks.Load())
+		routeKeys := names.route(prefix, string(route))
+		stats[routeKeys.totals[0]] = fmt.Sprintf("%d", routeCounters.observations.Load())
+		stats[routeKeys.totals[1]] = fmt.Sprintf("%d", routeCounters.candidateOps.Load())
+		stats[routeKeys.totals[2]] = fmt.Sprintf("%d", routeCounters.candidateSpans.Load())
+		stats[routeKeys.totals[3]] = fmt.Sprintf("%d", routeCounters.eligibleOps.Load())
+		stats[routeKeys.totals[4]] = fmt.Sprintf("%d", routeCounters.eligibleSpans.Load())
+		stats[routeKeys.totals[5]] = fmt.Sprintf("%d", routeCounters.usedOps.Load())
+		stats[routeKeys.totals[6]] = fmt.Sprintf("%d", routeCounters.usedSpans.Load())
+		stats[routeKeys.totals[7]] = fmt.Sprintf("%d", routeCounters.ineligibleOps.Load())
+		stats[routeKeys.totals[8]] = fmt.Sprintf("%d", routeCounters.ineligibleSpans.Load())
+		stats[routeKeys.totals[9]] = fmt.Sprintf("%d", routeCounters.fallbacks.Load())
 		for _, reason := range FlushSpanRunFallbackReasons() {
-			name := reason.String()
-			stats[routePrefix+"fallback.reason."+name+".count_total"] = fmt.Sprintf("%d", routeCounters.fallbackReasonCounts[reason].Load())
-			stats[routePrefix+"fallback.reason."+name+".ops_total"] = fmt.Sprintf("%d", routeCounters.fallbackOps[reason].Load())
-			stats[routePrefix+"fallback.reason."+name+".spans_total"] = fmt.Sprintf("%d", routeCounters.fallbackSpans[reason].Load())
+			stats[routeKeys.reasons[reason][0]] = fmt.Sprintf("%d", routeCounters.fallbackReasonCounts[reason].Load())
+			stats[routeKeys.reasons[reason][1]] = fmt.Sprintf("%d", routeCounters.fallbackOps[reason].Load())
+			stats[routeKeys.reasons[reason][2]] = fmt.Sprintf("%d", routeCounters.fallbackSpans[reason].Load())
 		}
 	}
 	for _, row := range db.OrderedRootSpanNativeTriageSnapshot() {
-		routePrefix := prefix + "triage.route." + string(row.Route) + "."
-		stats[routePrefix+"context"] = row.Context
-		stats[routePrefix+"status"] = string(row.Status)
-		stats[routePrefix+"candidate"] = fmt.Sprintf("%t", row.Candidate)
-		stats[routePrefix+"eligible"] = fmt.Sprintf("%t", row.Eligible)
-		stats[routePrefix+"used"] = fmt.Sprintf("%t", row.Used)
-		stats[routePrefix+"fallback_reason"] = row.FallbackReason
-		stats[routePrefix+"fallback_class"] = string(row.FallbackClass)
-		stats[routePrefix+"admission_policy"] = row.AdmissionPolicy
-		stats[routePrefix+"admission_admitted"] = fmt.Sprintf("%t", row.AdmissionAdmitted)
-		stats[routePrefix+"admission_reason"] = row.AdmissionReason
-		stats[routePrefix+"selected_workers"] = fmt.Sprintf("%d", row.SelectedWorkers)
-		stats[routePrefix+"detail"] = row.RouteSupportDetail
+		routeKeys := names.route(prefix, string(row.Route))
+		stats[routeKeys.triage[0]] = row.Context
+		stats[routeKeys.triage[1]] = string(row.Status)
+		stats[routeKeys.triage[2]] = fmt.Sprintf("%t", row.Candidate)
+		stats[routeKeys.triage[3]] = fmt.Sprintf("%t", row.Eligible)
+		stats[routeKeys.triage[4]] = fmt.Sprintf("%t", row.Used)
+		stats[routeKeys.triage[5]] = row.FallbackReason
+		stats[routeKeys.triage[6]] = string(row.FallbackClass)
+		stats[routeKeys.triage[7]] = row.AdmissionPolicy
+		stats[routeKeys.triage[8]] = fmt.Sprintf("%t", row.AdmissionAdmitted)
+		stats[routeKeys.triage[9]] = row.AdmissionReason
+		stats[routeKeys.triage[10]] = fmt.Sprintf("%d", row.SelectedWorkers)
+		stats[routeKeys.triage[11]] = row.RouteSupportDetail
 	}
 }

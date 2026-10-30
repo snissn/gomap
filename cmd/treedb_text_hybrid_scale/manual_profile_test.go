@@ -89,7 +89,10 @@ func TestManualTextHybridScaleProfile4546(t *testing.T) {
 		}
 	case "broad":
 		fixture := setup(true)
-		cfg.queryRows = map[string]bool{queryRowHybridTextVecScalar: true}
+		// The historical filtered vector workload is unsupported. This profile
+		// measures the supported, unfiltered text+vector row and labels that scope.
+		cfg.queryRows = map[string]bool{queryRowHybridTextVector: true}
+		t.Logf("phase=broad query_row=%s scalar_filter=false historical_filtered_workload_qualified=false", queryRowHybridTextVector)
 		action = func() error {
 			_, guards, err := runQueryMatrix(fixture.col, cfg)
 			if err != nil {

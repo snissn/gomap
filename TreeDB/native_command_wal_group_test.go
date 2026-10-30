@@ -82,13 +82,65 @@ func testNativeCommandWALGroupBSONUpdates(t *testing.T, sameCollection bool) {
 	database.commandWALGroupCommit.delay = time.Second
 	database.commandWALGroupCommit.maxCommits = waiters
 	database.commandWALGroupCommit.maxBytes = 1 << 30
+	// Registration precedes logical installation. Hold the final accepted cut
+	// before its swap so the group-size observation cannot imply installation.
+	lastInstall := make(chan struct{})
+	releaseLastInstall := make(chan struct{})
+	var releaseInstallOnce sync.Once
+	releaseInstall := func() { releaseInstallOnce.Do(func() { close(releaseLastInstall) }) }
+	defer releaseInstall()
+	var installations atomic.Int32
+	cacheRoot := filepath.Join(dir, "maindb", "wal")
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Point == durabilitycut.BeforeCOWCutSwap && event.Root == cacheRoot && installations.Add(1) == waiters {
+			close(lastInstall)
+			<-releaseLastInstall
+		}
+		return nil
+	})
+	defer restore()
+	// Registration precedes the semantic cut swap. A full WAL group alone
+	// does not prove that every native writer has finished installation.
+	// Hold completion after the producer gates release until all cuts install,
+	// then let the leader reach the shared durability barrier.
+	installed := make(chan struct{}, waiters)
+	releaseInstalled := make(chan struct{})
+	var installedOnce sync.Once
+	unblockInstalled := func() { installedOnce.Do(func() { close(releaseInstalled) }) }
+	database.commandWALGroupCommit.testBeforeNativeComplete = func() {
+		installed <- struct{}{}
+		<-releaseInstalled
+	}
 	atSync := make(chan int, 1)
 	release := make(chan struct{})
-	defer close(release)
-	database.commandWALGroupCommit.testBeforeSync = func(n int) { atSync <- n; <-release }
+	var releaseOnce sync.Once
+	unblockSync := func() { releaseOnce.Do(func() { close(release) }) }
+	database.commandWALGroupCommit.testBeforeSync = func(n int) {
+		select {
+		case atSync <- n:
+		case <-release:
+			return
+		}
+		<-release
+	}
 	errs := make(chan error, waiters)
+	joined := make(chan struct{}, waiters)
+	defer func() {
+		releaseInstall()
+		unblockInstalled()
+		unblockSync()
+		for range waiters {
+			select {
+			case <-joined:
+			case <-time.After(5 * time.Second):
+				t.Error("native writer did not join after fixture release")
+				return
+			}
+		}
+	}()
 	for i, c := range rows {
 		go func(i int, c *collections.Collection) {
+			defer func() { joined <- struct{}{} }()
 			id := []byte("a")
 			if sameCollection {
 				id = []byte(fmt.Sprintf("a%d", i))
@@ -98,17 +150,36 @@ func testNativeCommandWALGroupBSONUpdates(t *testing.T, sameCollection bool) {
 		}(i, c)
 	}
 	select {
-	case n := <-atSync:
-		if n != waiters {
-			t.Fatalf("group size=%d want%d", n, waiters)
-		}
-	case err := <-errs:
-		t.Fatalf("native ACK escaped shared durable barrier: %v", err)
+	case <-lastInstall:
 	case <-time.After(5 * time.Second):
-		t.Fatal("native group did not form")
+		t.Fatal("last native installation did not reach cut swap")
 	}
 	if got := backend.CommandWALNextLSN(); got != beforeLSN+waiters {
 		t.Fatalf("independent assigned prefix=%d want%d", got, beforeLSN+waiters)
+	}
+	capture, err = backend.CaptureNativeSemanticState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	registeredSequence := capture.LogicalSequence()
+	capture.Close()
+	if registeredSequence != beforeSequence+waiters-1 {
+		t.Fatalf("installations with final cut held=%d want%d", registeredSequence, beforeSequence+waiters-1)
+	}
+	select {
+	case err := <-errs:
+		t.Fatalf("ACK before final installation and sync: %v", err)
+	default:
+	}
+	releaseInstall()
+	for range waiters {
+		select {
+		case <-installed:
+		case err := <-errs:
+			t.Fatalf("native writer returned before installation rendezvous: %v", err)
+		case <-time.After(5 * time.Second):
+			t.Fatal("native writers did not finish installation")
+		}
 	}
 	capture, err = backend.CaptureNativeSemanticState()
 	if err != nil {
@@ -119,15 +190,31 @@ func testNativeCommandWALGroupBSONUpdates(t *testing.T, sameCollection bool) {
 	if sequence != beforeSequence+waiters {
 		t.Fatalf("independent installations=%d want%d", sequence, beforeSequence+waiters)
 	}
+	unblockInstalled()
+	select {
+	case n := <-atSync:
+		if n != waiters {
+			t.Fatalf("group size=%d want%d", n, waiters)
+		}
+	case err := <-errs:
+		t.Fatalf("native ACK escaped shared durable barrier: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("native group did not form")
+	}
 	select {
 	case err := <-errs:
 		t.Fatalf("ACK before sync: %v", err)
 	default:
 	}
-	release <- struct{}{}
+	unblockSync()
 	for range waiters {
-		if err := <-errs; err != nil {
-			t.Fatal(err)
+		select {
+		case err := <-errs:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("native ACK did not complete after sync")
 		}
 	}
 	after := database.Stats()

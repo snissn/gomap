@@ -107,6 +107,9 @@ func benchmarkVacuumIndexOnlineCollectionForegroundChurn(b *testing.B, legacy bo
 			var foregroundLatencies []time.Duration
 			var foregroundPoints, foregroundRanges uint64
 			var vacuumErrors uint64
+			// Diagnostic only: measure the existing foreground-drain barrier.
+			var precutoverForegroundWait time.Duration
+			var precutoverForegroundHooks uint64
 
 			b.ReportAllocs()
 			b.ResetTimer()
@@ -124,8 +127,11 @@ func benchmarkVacuumIndexOnlineCollectionForegroundChurn(b *testing.B, legacy bo
 						return
 					}
 					hookOnce.Do(func() {
+						waitStarted := time.Now()
 						startOnce.Do(func() { close(start) })
 						<-warmed
+						precutoverForegroundWait += time.Since(waitStarted)
+						precutoverForegroundHooks++
 					})
 				}
 				var vacuumErr error
@@ -175,6 +181,19 @@ func benchmarkVacuumIndexOnlineCollectionForegroundChurn(b *testing.B, legacy bo
 				total.ConcurrentMutationAborts += stats.ConcurrentMutationAborts
 			}
 			b.StopTimer()
+			// Reuse existing samples outside the timer; no new per-operation clocks.
+			var foregroundOperationSum time.Duration
+			for _, latency := range foregroundLatencies {
+				foregroundOperationSum += latency
+			}
+			// These three intervals are disjoint. Other reported phase counters
+			// can overlap and must not be summed into this arithmetic remainder.
+			otherVacuum := total.TotalDuration - precutoverForegroundWait - total.PreflushDuration - total.FinalPagerSyncDuration
+			b.ReportMetric(float64(precutoverForegroundHooks)/float64(b.N), "diagnostic-precutover-hooks/op")
+			b.ReportMetric(float64(precutoverForegroundWait.Nanoseconds())/float64(b.N), "diagnostic-foreground-wait-ns/op")
+			b.ReportMetric(float64(foregroundOperationSum.Nanoseconds())/float64(b.N), "diagnostic-foreground-op-sum-ns/op")
+			b.ReportMetric(float64((precutoverForegroundWait-foregroundOperationSum).Nanoseconds())/float64(b.N), "diagnostic-foreground-wait-gap-ns/op")
+			b.ReportMetric(float64(otherVacuum.Nanoseconds())/float64(b.N), "diagnostic-other-vacuum-ns/op")
 			exposureMisses := verifyVacuumCollectionForegroundPoints(b, db)
 
 			b.ReportMetric(float64(total.TotalDuration.Nanoseconds())/float64(b.N), "vacuum-total-ns/op")

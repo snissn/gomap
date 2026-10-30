@@ -963,9 +963,9 @@ func (db *DB) cleanupCommandWALCoveredSegmentsV1() (retErr error) {
 	db.commandWALCleanupOlderRoot.Store(proof.olderCommitSeq())
 	db.commandWALCleanupCaptureEpoch.Store(proof.journal.CleanupEpoch)
 	db.commandWALCleanupNamespaceGen.Store(proof.journal.NamespaceGeneration)
-	if proof.cleanupThrough == 0 {
-		return db.syncCommandWALCleanupNamespaceIfDirty()
-	}
+	// A valid zero frontier still permits positively validated empty fixed
+	// containers to be reclaimed. Scan the complete retained replay lineage
+	// and apply the same active-generation, identity and pin gates below.
 	scanStart := time.Now()
 	var decisions []commandWALSegmentCleanupDecision
 	// Listing and reader construction both validate fixed-container reserve.
@@ -2684,9 +2684,9 @@ func (db *DB) appendRawKVBatchPayloadCommandWALPreparedCapture(prepare func() ([
 		return 0, requestTiming, CommandWALBarrierResult{}, err
 	}
 	owned, assigned := true, false
+	returned := false
 	defer func() {
-		recovered := recover()
-		if recovered != nil && assigned && selectCapture != nil {
+		if !returned && assigned && selectCapture != nil {
 			// Publish poison before releasing admission: an assigned selector
 			// panic cannot let a successor accept an uncertified continuation.
 			db.commandWALFlushPoisoned.Store(true)
@@ -2694,20 +2694,20 @@ func (db *DB) appendRawKVBatchPayloadCommandWALPreparedCapture(prepare func() ([
 		if owned {
 			db.unlockCommandWALRawPublishWithAdmissionAndTeardown()
 		}
-		if recovered != nil {
-			panic(recovered)
-		}
 	}()
 	if measured {
 		requestTiming.PublishLockBarrierWait += time.Since(publishStart)
 	}
 	if db.closing.Load() {
+		returned = true
 		return 0, requestTiming, CommandWALBarrierResult{}, ErrClosed
 	}
 	if db.commandJournal == nil {
+		returned = true
 		return 0, requestTiming, CommandWALBarrierResult{}, db.commandWALJournalUnavailableError()
 	}
 	if db.commandWALFlushPoisoned.Load() {
+		returned = true
 		return 0, requestTiming, CommandWALBarrierResult{}, fmt.Errorf("%w: command wal post-append failure; reopen required", ErrRecoveryRequired)
 	}
 	backendStart := time.Time{}
@@ -2720,6 +2720,7 @@ func (db *DB) appendRawKVBatchPayloadCommandWALPreparedCapture(prepare func() ([
 		if measured {
 			requestTiming.BackendIntentPlanningSerialization += time.Since(backendStart)
 		}
+		returned = true
 		return 0, requestTiming, CommandWALBarrierResult{}, err
 	}
 	if measured {
@@ -2738,6 +2739,7 @@ func (db *DB) appendRawKVBatchPayloadCommandWALPreparedCapture(prepare func() ([
 	}())
 	assigned = lsn != 0
 	if err != nil || lsn == 0 || selectCapture == nil || !selectCapture(lsn) {
+		returned = true
 		return lsn, requestTiming, CommandWALBarrierResult{}, err
 	}
 	// Registration and higher-level preparation can change under raw admission.
@@ -2746,6 +2748,7 @@ func (db *DB) appendRawKVBatchPayloadCommandWALPreparedCapture(prepare func() ([
 	if err = db.runCommandWALRawPublishBarriers(); err != nil {
 		if commandWALPendingDrain(err) == nil {
 			db.commandWALFlushPoisoned.Store(true)
+			returned = true
 			return lsn, requestTiming, CommandWALBarrierResult{}, err
 		}
 		db.unlockCommandWALRawPublishWithAdmissionAndTeardown()
@@ -2753,11 +2756,13 @@ func (db *DB) appendRawKVBatchPayloadCommandWALPreparedCapture(prepare func() ([
 		// The existing acquisition loop performs the unlocked drain and reruns
 		// every hook. The assigned mutation is never appended again.
 		_, result, captureErr := db.captureCommandWALPrefixAfterAppend(nil, target, lsn)
+		returned = true
 		return lsn, requestTiming, result, captureErr
 	}
 	_, result, captureErr := db.captureCommandWALPrefixLocked(nil, target)
 	if captureErr != nil {
 		db.commandWALFlushPoisoned.Store(true)
+		returned = true
 		return lsn, requestTiming, result, captureErr
 	}
 	// The original teardown lease now belongs to target.Sync. Release raw
@@ -2765,6 +2770,7 @@ func (db *DB) appendRawKVBatchPayloadCommandWALPreparedCapture(prepare func() ([
 	db.commandWALRawPublishMu.Unlock()
 	db.commandWALRawAdmissionMu.Unlock()
 	owned = false
+	returned = true
 	return lsn, requestTiming, result, nil
 }
 

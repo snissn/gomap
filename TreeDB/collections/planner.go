@@ -56,16 +56,29 @@ const (
 )
 
 type collectionOptions struct {
-	db                      *backenddb.DB
-	typedProjection         *trustedFloat32Projection
-	allowArrayValuesInIndex bool
-	documentFormat          DocumentFormat
-	trustedBSONDocuments    bool
-	templateResolver        templateV1Resolver
-	learnTemplateIDs        bool
-	allowTemplateV1Stored   bool
-	dataStoragePolicy       backenddb.OrderedRootStoragePolicy
-	indexStateStoragePolicy backenddb.OrderedRootStoragePolicy
+	// Native text preparation uses operation-private unpooled tables. Legacy
+	// callers keep the maintained append-only representation.
+	textTableFactory func(int) memtable.Table
+	// Native text codec scratch shares its original operation receipt. Nil keeps
+	// the maintained legacy materialization route.
+	textMaterializationAdmit func(uint64) error
+	db                       *backenddb.DB
+	typedProjection          *trustedFloat32Projection
+	allowArrayValuesInIndex  bool
+	documentFormat           DocumentFormat
+	trustedBSONDocuments     bool
+	templateResolver         templateV1Resolver
+	learnTemplateIDs         bool
+	allowTemplateV1Stored    bool
+	dataStoragePolicy        backenddb.OrderedRootStoragePolicy
+	indexStateStoragePolicy  backenddb.OrderedRootStoragePolicy
+}
+
+func (o collectionOptions) newTextTable(entries int) memtable.Table {
+	if o.textTableFactory != nil {
+		return o.textTableFactory(entries)
+	}
+	return newCollectionRunTable(entries)
 }
 
 type indexDefinition struct {

@@ -234,31 +234,25 @@ Additional collection vector APIs and diagnostics live in `TreeDB/collections`:
 
 - `Collection.SearchVectorsExact` scans live rows and returns exact top-k
   results for cosine, squared L2, or inner-product distance.
-- `Collection.BuildVectorIndex` builds an in-memory HNSW-style secondary index
-  that returns candidates and exact-reranks final results.
-- `BenchmarkCollectionVectorIndexGraphOnlySearch` is a benchmark-only engine
-  comparison path that times TreeDB graph search without collection row fetches,
-  JSON vector extraction, metadata filtering, or exact rerank.
-- `BenchmarkCollectionVectorIndexBuild` and
-  `BenchmarkCollectionVectorUSearchBuild` isolate index build cost from query
-  latency for TreeDB and the optional USearch comparator.
+- Declare a cosine/float32 `column_graph` index in `CollectionMeta.VectorIndexes`,
+  then use `Collection.RebuildVectorIndex` to publish its physical graph assets.
+  Fresh eligible declarations default to `column_graph`; unsupported metrics,
+  primary int8 encoding and BSON vector-index declarations fail before mutation.
+- `Collection.SearchVectorIndex`, `OpenVectorIndexSearcher` and the buffered
+  APIs serve the declared ColumnGraph. Ordinary filtered ANN and vector-bearing
+  filtered Hybrid fail closed; use `Collection.SearchVectorsExact` for explicit
+  exact filtering. Admitted typed ColumnGraph filtering remains supported.
 - Declared quantized score planes use explicit `quantized_only` or
   `quantized_rerank` query modes with codec-generic `quantized_*` route,
   validation, and fail-closed counters. Scalar `scalar_u8` evidence is a
   behavior/storage baseline, not a current speedup claim; keep it separate from
   the exact no-document high-QPS path and demo. See
   [`TreeDB/docs/spec/quantized-vector-index.md`](docs/spec/quantized-vector-index.md).
-- `VectorIndex.SaveSnapshot` and `Collection.LoadVectorIndexSnapshot` persist
-  immutable index epochs under `vector_indexes/<collection>/<index>/` with a
-  manifest plus checksum-verified node, edge, tombstone, and docmap files.
-- `VectorIndexRangeFilter` restricts exact or ANN searches with an existing
-  scalar secondary-index range. Selective filters use an `exact_filtered`
-  strategy; broader filters use `ann_postfilter` and can fall back to exact
-  filtered search if ANN underfills.
-- `VectorIndex.Stats`, `VectorIndex.Search` traces, and `VectorIndex.CheckRecall`
-  expose live/deleted counts, memory and disk bytes, persisted epoch state,
-  snapshot dirtiness, candidate counts, selected strategy, exact fallback
-  reason, rebuild duration, and recall-at-k.
+- `Collection.VectorIndexStatus` reports the declaration and graph readiness;
+  `VectorIndexSearchResponse.Stats` reports the actual serving route and work.
+  Query execution never restores a removed runtime snapshot or silently retries
+  an exact scan. Persisted removed or ambiguous old vector declarations are
+  refused; use a fresh data directory and rebuild from source documents.
 
 Native `column_graph` benchmark tiers are documented in
 `docs/guides/vector-search-typed-column.md#vector-search-benchmark-tiers`.

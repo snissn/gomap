@@ -7,8 +7,10 @@ import (
 	"hash/crc32"
 	"math"
 	"slices"
+	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
 
 const (
@@ -100,6 +102,8 @@ type textV2PostingBlockBuildOptions struct {
 	BlockIDStart      uint64
 	FixedBlockID      bool
 	InlineTargetBytes int
+	// Optional original-operation admission; legacy callers leave it nil.
+	admit func(uint64) error
 }
 
 func textV2PostingBlockStoragePolicy(def TextIndexDefinition) (backenddb.OrderedRootStoragePolicy, error) {
@@ -275,6 +279,17 @@ func buildTextV2PostingBlockKVs(term string, entries []textV2PostingBlockEntry, 
 	if blockID == 0 {
 		blockID = 1
 	}
+	if opts.admit != nil {
+		// Header clone and all output-slice growth cohorts, even when byte
+		// limits force one posting per output rather than the requested target.
+		unit := 2*uint64(unsafe.Sizeof(textV2PostingBlockEntry{})) + 8*uint64(unsafe.Sizeof(textV2PostingBlockKV{}))
+		if uint64(len(entries)) > ^uint64(0)/unit {
+			return nil, memtable.ErrCOWCapacity
+		}
+		if err := opts.admit(memtable.COWAllocationCharge(uint64(len(entries)) * unit)); err != nil {
+			return nil, err
+		}
+	}
 	sorted := cloneTextV2PostingBlockEntryHeaders(entries)
 	slices.SortFunc(sorted, func(a, b textV2PostingBlockEntry) int { return compareUint64(a.Ordinal, b.Ordinal) })
 	if err := validateTextV2PostingBlockBuilderEntries(sorted, fieldCount); err != nil {
@@ -286,6 +301,14 @@ func buildTextV2PostingBlockKVs(term string, entries []textV2PostingBlockEntry, 
 		var block textV2PostingBlockValue
 		var encoded []byte
 		for {
+			if opts.admit != nil {
+				// Same upper-bound capacity as the maintained encoder below;
+				// every shrinking candidate remains charged until scope exit.
+				n := uint64(1+2+10*10+textV2PostingBlockChecksumBytes) + uint64(fieldCount)*11 + uint64(chunkLen)*(31+uint64(fieldCount)*10)
+				if err := opts.admit(memtable.COWAllocationCharge(n) + memtable.COWAllocationCharge(uint64(fieldCount)*4)); err != nil {
+					return nil, err
+				}
+			}
 			candidate, err := newTextV2PostingBlockValueFromSorted(kind, sorted[start:start+chunkLen], fieldCount, blockID)
 			if err != nil {
 				return nil, err
@@ -299,6 +322,19 @@ func buildTextV2PostingBlockKVs(term string, entries []textV2PostingBlockEntry, 
 				return nil, errMalformedTextStorage("text-v2 posting block encoded bytes %d exceed max %d", len(encoded), textV2PostingBlockMaxValueBytes)
 			}
 			chunkLen = max(1, chunkLen/2)
+		}
+		if opts.admit != nil {
+			// Prefix + suffix construction and the rewrite's retained key/value
+			// clones and new-key map entry. The term may be arbitrarily longer
+			// than each compressed posting; never derive this from input bytes.
+			k := uint64(len(term)) + 2 + binary.MaxVarintLen64 + 16
+			keyCharge, valueCharge := memtable.COWAllocationCharge(k), memtable.COWAllocationCharge(uint64(len(encoded)))
+			if valueCharge > ^uint64(0)-256 || keyCharge > (^uint64(0)-valueCharge-256)/4 {
+				return nil, memtable.ErrCOWCapacity
+			}
+			if err := opts.admit(4*keyCharge + valueCharge + 256); err != nil {
+				return nil, err
+			}
 		}
 		out = append(out, textV2PostingBlockKV{
 			Key:   encodeTextV2PostingBlockKey(term, block.BlockStart, block.BlockID),

@@ -7,6 +7,12 @@ separate. Benchmark snapshots and full counter workflow are documented by the
 [benchmark workflow](vector-search-benchmark-workflow.md) and the
 [#2483 closeout index](../spec/vector-search-closeout-2483.md).
 
+`column_graph` is the default and only serving strategy. Here, `exact` means
+FP32 scoring on the graph/search-pack route; exhaustive document-scan exact
+search is a separate API. Ordinary filtered ANN and vector-bearing filtered
+Hybrid are unavailable. The admitted typed filter and derived quantized routes
+below retain their separate bounds; primary int8 is unsupported.
+
 ## Choosing a vector search API
 
 | User goal | API | Result ownership | Document/materialization boundary | Notes |

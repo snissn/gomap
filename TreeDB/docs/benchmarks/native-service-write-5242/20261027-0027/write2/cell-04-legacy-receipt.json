@@ -1,0 +1,83 @@
+{
+  "argv": [
+    "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/current-feature-service-write-diagnostic2/documentservice.test",
+    "-test.v",
+    "-test.run=^$",
+    "-test.bench=^BenchmarkServiceSharedCOWWriteLoad$",
+    "-test.benchmem",
+    "-test.benchtime=1x",
+    "-test.count=1",
+    "-test.timeout=3m"
+  ],
+  "cwd": "/mnt/fast4tb/gomap-mongo-execution-20261024/consumer-canonical",
+  "environment_policy": "explicit whitelist plus frozen cell values; no full environment dump",
+  "start_utc": "2026-10-27T00:09:53.510591+00:00",
+  "wall_limit_seconds": 240,
+  "exit_code": 0,
+  "timed_out": false,
+  "error": null,
+  "cleanup": {
+    "pgid": 213510,
+    "alive_before_cleanup": false,
+    "signals": [],
+    "alive_after_cleanup": false
+  },
+  "pid": 213510,
+  "end_utc": "2026-10-27T00:09:54.876425+00:00",
+  "elapsed_seconds": 1.3658323911949992,
+  "log": "/mnt/fast4tb/gomap-mongo-execution-20261024/evidence/current-feature-service-write-diagnostic2/cell-04-legacy.log",
+  "log_sha256": "c668d902ebc5b065fd5cd330d693a34921693234b1a7d2005c38100b97e12c66",
+  "process_ok": true,
+  "arm": "legacy",
+  "elf_sha256": "a2a0b877c2658a83e34fa4dd31ed4c6a3036ac57ce46591564a253aee9c81d0f",
+  "source_unchanged": true,
+  "activation_verified": true,
+  "durable_request_completions_verified": true,
+  "rows": [
+    {
+      "cell": 4,
+      "arm": "legacy",
+      "writers": 1,
+      "iterations": 1,
+      "metrics": {
+        "ns/op": 115731452.0,
+        "ack_total_ns": 115731452.0,
+        "close_ns/load": 61275702.0,
+        "ns/record": 28255.0,
+        "ns/request": 3616608.0,
+        "optimize_ns/load": 126654020.0,
+        "records/op": 4096.0,
+        "records/s": 35392.0,
+        "reopen_ns/load": 46541139.0,
+        "reopened_close_ns/load": 2622983.0,
+        "requests/op": 32.0,
+        "B/op": 74825568.0,
+        "allocs/op": 235509.0
+      },
+      "raw": "BenchmarkServiceSharedCOWWriteLoad/writers1-4         \t       1\t 115731452 ns/op\t 115731452 ack_total_ns\t  61275702 close_ns/load\t     28255 ns/record\t   3616608 ns/request\t 126654020 optimize_ns/load\t      4096 records/op\t     35392 records/s\t  46541139 reopen_ns/load\t   2622983 reopened_close_ns/load\t        32.00 requests/op\t74825568 B/op\t  235509 allocs/op"
+    },
+    {
+      "cell": 4,
+      "arm": "legacy",
+      "writers": 4,
+      "iterations": 1,
+      "metrics": {
+        "ns/op": 91421142.0,
+        "ack_total_ns": 91421142.0,
+        "close_ns/load": 61390717.0,
+        "ns/record": 22320.0,
+        "ns/request": 2856911.0,
+        "optimize_ns/load": 119462481.0,
+        "records/op": 4096.0,
+        "records/s": 44804.0,
+        "reopen_ns/load": 50635268.0,
+        "reopened_close_ns/load": 2935077.0,
+        "requests/op": 32.0,
+        "B/op": 50788288.0,
+        "allocs/op": 236026.0
+      },
+      "raw": "BenchmarkServiceSharedCOWWriteLoad/writers4-4         \t       1\t  91421142 ns/op\t  91421142 ack_total_ns\t  61390717 close_ns/load\t     22320 ns/record\t   2856911 ns/request\t 119462481 optimize_ns/load\t      4096 records/op\t     44804 records/s\t  50635268 reopen_ns/load\t   2935077 reopened_close_ns/load\t        32.00 requests/op\t50788288 B/op\t  236026 allocs/op"
+    }
+  ],
+  "valid": true
+}

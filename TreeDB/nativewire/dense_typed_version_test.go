@@ -9,13 +9,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/snissn/gomap/TreeDB/documentservice"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 )
 
 func TestDenseTypedVersionCapability(t *testing.T) {
 	registry := iwire.MustV1Registry()
-	for _, version := range []uint64{1, 2, 3, 4} {
+	for _, version := range []uint64{2, 3, 4, 5} {
 		schema, ok := registry.LookupCommand(iwire.CommandDenseVectorSearch, version)
 		if !ok || !schema.LocalOnly || schema.Replicated || schema.Kind != iwire.CommandKindRead {
 			t.Fatalf("dense version %d must be registered as a local read: %+v", version, schema)
@@ -49,7 +48,7 @@ func TestDenseTypedVersionGoldenAndCrossVersionRejection(t *testing.T) {
 	ids := []byte{1, 1, 'a'}
 	docs := []byte{1, 2, '{', '}'}
 	out, _, _, _, err := decodeVersionedDenseVectorSearchResponse(2, ids, docs, meta, 1, iwire.DefaultLimits(), nil, nil, nil)
-	if err != nil || !out.TypedColumnGraph || out.NativeBasePlusLiveDelta || len(out.Results) != 1 || out.Results[0].Score != 1 {
+	if err != nil || !out.TypedColumnGraph || len(out.Results) != 1 || out.Results[0].Score != 1 {
 		t.Fatalf("typed golden: %+v %v", out, err)
 	}
 	for _, version := range []uint64{1, 2, 3} {
@@ -57,21 +56,13 @@ func TestDenseTypedVersionGoldenAndCrossVersionRejection(t *testing.T) {
 			candidate := bytes.Clone(meta)
 			candidate[0] = tag
 			_, _, _, _, err := decodeVersionedDenseVectorSearchResponse(version, ids, docs, candidate, 1, iwire.DefaultLimits(), nil, nil, nil)
-			want := (version == 1 && tag == 1) || (version == 2 && tag == 2) || (version == 3 && tag == 3)
+			want := (version == 2 && tag == 2) || (version == 3 && tag == 3)
 			if (err == nil) != want {
 				t.Fatalf("version=%d tag=%d err=%v", version, tag, err)
 			}
 		}
 	}
-	encoded := appendDenseVectorSearchResponse(nil, documentservice.RawDenseVectorSearchResponse{
-		NativeBasePlusLiveDelta: true, Candidates: 1,
-		Results: []documentservice.RawDenseVectorResult{{Score: 1}},
-	})
-	legacy := bytes.Clone(meta)
-	legacy[0] = 1
-	if !bytes.Equal(encoded, legacy) {
-		t.Fatalf("legacy bytes changed: %x", encoded)
-	}
+
 }
 
 func TestDenseTypedRequiresNegotiationBeforeSend(t *testing.T) {

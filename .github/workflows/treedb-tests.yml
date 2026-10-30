@@ -24,7 +24,7 @@ jobs:
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && vars.TREEDB_PERF_RUNNER_LABEL != '' && vars.TREEDB_PERF_RUNNER_PR != '' && vars.TREEDB_PERF_RUNNER_PR == format('{0}', github.event.pull_request.number) && vars.TREEDB_PERF_RUNNER_LABEL || 'ubuntu-24.04' }}
     timeout-minutes: 15
     env:
-      MVCC_GATE_PATH_RE: '^((TreeDB/)|scripts/mvcc_(raw_path_gate|adapter_overhead_gate|closeout_matrix|candidate_checkout_guard)\.sh$|scripts/(mvcc_primary_cost_gate|cow_successor_workspace_diagnostic|pool_pressure_stats_diagnostic)\.py$|\.github/scripts/(check_mvcc_(raw_path|adapter_overhead)_gate|summarize_mvcc_closeout|test_(mvcc_(raw_path_equivalence|benchmark_pairing|candidate_checkout_guard|primary_cost_gate)|summarize_mvcc_closeout)|test_cow_successor_workspace_diagnostic|test_pool_pressure_stats_diagnostic|test_treedb_ci_contract|test_treedb_windows_core_headroom)\.py$|\.github/workflows/treedb-tests\.yml$)'
+      MVCC_GATE_PATH_RE: '^((TreeDB/)|scripts/mvcc_(raw_path_gate|adapter_overhead_gate|closeout_matrix|candidate_checkout_guard)\.sh$|scripts/(mvcc_(raw_sync_context|storage_context)|mvcc_primary_cost_gate|cow_successor_workspace_diagnostic|pool_pressure_stats_diagnostic)\.py$|\.github/scripts/(check_mvcc_(raw_path|adapter_overhead)_gate|summarize_mvcc_closeout|test_(mvcc_(raw_sync_context|storage_context|raw_path_equivalence|benchmark_pairing|candidate_checkout_guard|primary_cost_gate)|summarize_mvcc_closeout)|test_cow_successor_workspace_diagnostic|test_pool_pressure_stats_diagnostic|test_treedb_ci_contract|test_treedb_windows_core_headroom)\.py$|\.github/workflows/treedb-tests\.yml$)'
       COW_SUCCESSOR_PATH_RE: '^(TreeDB/caching/(cow_(read(_workspace)?|cut|successor_workspace_test)|point_successor)\.go|TreeDB/mvcc/cow_successor_workspace_external_test\.go|scripts/(cow_successor_workspace_diagnostic|mvcc_primary_cost_gate)\.py|\.github/scripts/test_cow_successor_workspace_diagnostic\.py)$'
       PRESSURE_STATS_PATH_RE: '^(TreeDB/caching/(db\.go|pool_pressure[^/]*\.go)|scripts/(pool_pressure_stats_diagnostic|mvcc_primary_cost_gate)\.py|\.github/scripts/test_pool_pressure_stats_diagnostic\.py)$'
     steps:
@@ -132,7 +132,9 @@ jobs:
           python3 .github/scripts/check_mvcc_raw_path_gate.py --self-test
           python3 .github/scripts/check_mvcc_adapter_overhead_gate.py --self-test
           python3 .github/scripts/test_mvcc_raw_path_equivalence.py
+          python3 .github/scripts/test_mvcc_raw_sync_context.py
           python3 .github/scripts/test_mvcc_benchmark_pairing.py
+          python3 .github/scripts/test_mvcc_storage_context.py
           python3 .github/scripts/test_mvcc_primary_cost_gate.py
           if [[ "${{ steps.paths.outputs.cow_successor }}" == "true" ]]; then
             python3 .github/scripts/test_cow_successor_workspace_diagnostic.py
@@ -285,11 +287,14 @@ jobs:
         include:
           - name: ubuntu
             os: ubuntu-latest
+            timeout_minutes: 15
           - name: macos
             os: macos-latest
+            timeout_minutes: 30
           - name: windows
             os: windows-latest
-    timeout-minutes: 15
+            timeout_minutes: 15
+    timeout-minutes: ${{ matrix.timeout_minutes }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -316,8 +321,16 @@ jobs:
           python3 -B scripts/cow_c3_read/load_readiness_test.py
 
       - name: Vet
+        if: ${{ matrix.name != 'macos' }}
         working-directory: TreeDB
         run: go vet ./...
+
+      - name: Vet (macOS elapsed and resource diagnostics)
+        if: ${{ matrix.name == 'macos' }}
+        working-directory: TreeDB
+        run: |
+          date -u '+vet started %Y-%m-%dT%H:%M:%SZ'
+          /usr/bin/time -l go vet ./...
 
   test:
     name: ${{ matrix.name }}

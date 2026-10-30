@@ -76,6 +76,7 @@ func TestCOWReadWorkspaceMetadataAdmissionRefusalAndDrain(t *testing.T) {
 	if err := snapshot.Close(); err != nil {
 		t.Fatal(err)
 	}
+	cowPressureEvictIdleReadScratch(t, budget)
 	if got := budget.Stats(); got.ExternalBytes != before.ExternalBytes || got.ExternalLeases != before.ExternalLeases || got.ReservedBytes != before.ReservedBytes || got.Views != before.Views-1 {
 		t.Fatalf("metadata ownership did not return to the retained-cut baseline: before%+v after%+v", before, got)
 	}

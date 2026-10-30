@@ -27,6 +27,8 @@ type nativeDomainRead struct {
 type nativeDomainReadScratch struct {
 	key, leaf [page.PageSize]byte
 	successor tree.OwnedSuccessorScratch
+	leafRef   page.LeafLogPtr
+	leafValid bool
 }
 
 func newNativeDomainRead(domain *nativeDomainState, basis *backenddb.Snapshot) (nativeDomainRead, error) {
@@ -93,8 +95,20 @@ func (r *nativeDomainRead) seekGE(start, end []byte, scratch *nativeDomainReadSc
 // seek uses one admitted predecessor/successor probe per original source.
 // inspect runs BEFORE each probe, including empty and shadowed sources.
 func (r *nativeDomainRead) seek(start, end []byte, scratch *nativeDomainReadScratch, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error), reverse bool, inspect func() error) (node.LeafEntry, bool, error) {
+	return r.seekWithCursor(start, end, scratch, readLeaf, reverse, inspect, nil, false, nil)
+}
+
+// The optional cursor changes only physical traversal. The original finite
+// memory sources, newest-wins ordering and inspection of every probe are shared
+// by point successors and streaming consumers.
+func (r *nativeDomainRead) seekWithCursor(start, end []byte, scratch *nativeDomainReadScratch, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error), reverse bool, inspect func() error, cursor *nativeDomainCursor, forward bool, admit func(uint64) error) (node.LeafEntry, bool, error) {
 	if r == nil || r.domain == nil || scratch == nil {
 		return node.LeafEntry{}, false, backenddb.ErrNativeSemanticUnsupported
+	}
+	// An iterator's original lower bound constrains BOTH source families,
+	// including arbitrary backward Seek, just as the maintained tree cursor.
+	if cursor != nil && cursor.start != nil && bytes.Compare(start, cursor.start) < 0 {
+		start = cursor.start
 	}
 	if start != nil && end != nil && bytes.Compare(start, end) >= 0 {
 		return node.LeafEntry{}, false, nil
@@ -138,7 +152,9 @@ func (r *nativeDomainRead) seek(start, end []byte, scratch *nativeDomainReadScra
 		var entry node.LeafEntry
 		var ok bool
 		var err error
-		if reverse {
+		if cursor != nil {
+			entry, ok, err = cursor.physicalEntry(start, readLeaf, forward, admit, inspect)
+		} else if reverse {
 			entry, ok, err = r.base.SeekLTEntryWithFixedScratch(start, end, scratch.key[:], scratch.leaf[:], &scratch.successor, readLeaf)
 		} else {
 			entry, ok, err = r.base.SeekGEEntryWithFixedScratch(start, end, scratch.key[:], scratch.leaf[:], &scratch.successor, readLeaf)

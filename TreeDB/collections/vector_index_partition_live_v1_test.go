@@ -23,7 +23,7 @@ import (
 	internalrouter "github.com/snissn/gomap/TreeDB/internal/vectorpartition"
 )
 
-func partitionLivePersistV1ForTest(idx *VectorIndex) *vectorIndexPartitionLivePersistV1 {
+func partitionLivePersistV1ForTest(idx *columnGraphPartitionLiveCarrier) *vectorIndexPartitionLivePersistV1 {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 	live := idx.partitionLive
@@ -58,7 +58,7 @@ func partitionLivePersistV1ForTest(idx *VectorIndex) *vectorIndexPartitionLivePe
 }
 
 func TestVectorIndexPartitionLiveMutationMoveAndDeleteV1(t *testing.T) {
-	idx, err := newVectorIndex(nil, VectorIndexOptions{
+	idx, err := newColumnGraphPartitionLiveDomain(nil, columnGraphPartitionLiveOptions{
 		Name: "embedding", Field: "embedding", Metric: VectorMetricCosine,
 		Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8,
 	})
@@ -127,7 +127,7 @@ func TestVectorIndexPartitionLiveMutationMoveAndDeleteV1(t *testing.T) {
 }
 
 func TestVectorIndexPartitionLiveSearchPinContainsImmutableLiveIDV1(t *testing.T) {
-	idx, err := newVectorIndex(nil, VectorIndexOptions{
+	idx, err := newColumnGraphPartitionLiveDomain(nil, columnGraphPartitionLiveOptions{
 		Name: "embedding", Field: "embedding", Metric: VectorMetricCosine,
 		Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8,
 	})
@@ -178,7 +178,7 @@ func TestVectorIndexPartitionLiveSearchPinContainsImmutableLiveIDV1(t *testing.T
 }
 
 func TestVectorIndexPartitionLiveNativeDeltaTouchesOnlyChangedRecordsV2(t *testing.T) {
-	idx, err := newVectorIndex(nil, VectorIndexOptions{
+	idx, err := newColumnGraphPartitionLiveDomain(nil, columnGraphPartitionLiveOptions{
 		Name: "embedding", Field: "embedding", Metric: VectorMetricCosine,
 		Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8,
 	})
@@ -276,7 +276,7 @@ func TestVectorIndexPartitionLiveNativeDeltaTouchesOnlyChangedRecordsV2(t *testi
 }
 
 func TestVectorIndexPartitionLiveReplayCandidateSynchronizesSharedOwnersV2(t *testing.T) {
-	before, err := newVectorIndex(nil, VectorIndexOptions{
+	before, err := newColumnGraphPartitionLiveDomain(nil, columnGraphPartitionLiveOptions{
 		Name: "embedding", Field: "embedding", Metric: VectorMetricCosine,
 		Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8,
 	})
@@ -300,7 +300,7 @@ func TestVectorIndexPartitionLiveReplayCandidateSynchronizesSharedOwnersV2(t *te
 	before.mu.Unlock()
 	before.recordPersistedSnapshot(1, 0, before.nativeMutationSequence())
 
-	candidate, err := newVectorIndex(nil, VectorIndexOptions{
+	candidate, err := newColumnGraphPartitionLiveDomain(nil, columnGraphPartitionLiveOptions{
 		Name: "embedding", Field: "embedding", Metric: VectorMetricCosine,
 		Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8,
 	})
@@ -337,7 +337,7 @@ func TestVectorIndexPartitionLiveReplayCandidateSynchronizesSharedOwnersV2(t *te
 }
 
 func TestVectorIndexPartitionLiveReplayDomainTransactionRollbackRetryV2(t *testing.T) {
-	before, err := newVectorIndex(nil, VectorIndexOptions{
+	before, err := newColumnGraphPartitionLiveDomain(nil, columnGraphPartitionLiveOptions{
 		Name: "embedding", Field: "embedding", Metric: VectorMetricCosine,
 		Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8,
 	})
@@ -385,7 +385,7 @@ func TestVectorIndexPartitionLiveReplayDomainTransactionRollbackRetryV2(t *testi
 	}
 	build := func() builtAttempt {
 		t.Helper()
-		candidate, err := newVectorIndex(nil, VectorIndexOptions{
+		candidate, err := newColumnGraphPartitionLiveDomain(nil, columnGraphPartitionLiveOptions{
 			Name: "embedding", Field: "embedding", Metric: VectorMetricCosine,
 			Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8,
 		})
@@ -490,7 +490,7 @@ func TestVectorIndexPartitionLivePublicInsertWaitsForReplayRollbackV2(t *testing
 	if err := collection.EnsureVectorPartitionLiveBindingV1(t.Context(), manifest); err != nil {
 		t.Fatal(err)
 	}
-	current := collection.registeredVectorIndex(def.Name)
+	current := collection.registeredColumnGraphPartitionLiveCarrier(def.Name)
 	if current == nil {
 		t.Fatal("missing current carrier")
 	}
@@ -500,7 +500,7 @@ func TestVectorIndexPartitionLivePublicInsertWaitsForReplayRollbackV2(t *testing
 		t.Fatal(err)
 	}
 	current.mu.Unlock()
-	if status, err := current.SaveNativeDeltaSnapshot(); err != nil || !status.Loaded {
+	if status, err := current.saveColumnGraphPartitionLiveDelta(); err != nil || !status.Loaded {
 		t.Fatalf("persist initial carrier status=%+v err=%v", status, err)
 	}
 	rootID, err := collection.currentNativeVectorIndexRootID(def.Name)
@@ -508,7 +508,7 @@ func TestVectorIndexPartitionLivePublicInsertWaitsForReplayRollbackV2(t *testing
 		t.Fatal(err)
 	}
 	beforeSeq := current.nativeMutationSequence()
-	candidate, err := newVectorIndex(collection, vectorIndexOptionsFromDefinition(def))
+	candidate, err := newColumnGraphPartitionLiveDomain(collection, vectorIndexOptionsFromDefinition(def))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -538,7 +538,7 @@ func TestVectorIndexPartitionLivePublicInsertWaitsForReplayRollbackV2(t *testing
 	})
 	defer restoreHook()
 	insertDone := make(chan error, 1)
-	go func() { insertDone <- current.InsertDocument([]byte("a")) }()
+	go func() { insertDone <- current.repairPartitionLiveDocument([]byte("a")) }()
 	select {
 	case <-reachedPublication:
 	case <-time.After(5 * time.Second):
@@ -584,7 +584,7 @@ func TestVectorIndexPartitionLivePublicInsertWaitsForReplayRollbackV2(t *testing
 func BenchmarkVectorIndexPartitionLiveIncrementalPublicationV2(b *testing.B) {
 	for _, owners := range []int{1, 1024} {
 		b.Run(strconv.Itoa(owners)+"-owners-one-domain", func(b *testing.B) {
-			before, err := newVectorIndex(nil, VectorIndexOptions{
+			before, err := newColumnGraphPartitionLiveDomain(nil, columnGraphPartitionLiveOptions{
 				Name: "embedding", Field: "embedding", Metric: VectorMetricCosine,
 				Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8,
 			})
@@ -615,7 +615,7 @@ func BenchmarkVectorIndexPartitionLiveIncrementalPublicationV2(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				candidate, err := newVectorIndex(nil, VectorIndexOptions{
+				candidate, err := newColumnGraphPartitionLiveDomain(nil, columnGraphPartitionLiveOptions{
 					Name: "embedding", Field: "embedding", Metric: VectorMetricCosine,
 					Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8,
 				})
@@ -666,7 +666,7 @@ func BenchmarkVectorIndexPartitionLiveIncrementalPublicationV2(b *testing.B) {
 }
 
 func TestVectorIndexPartitionLiveDomainSearchBoundsV1(t *testing.T) {
-	idx, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
+	idx, err := newColumnGraphPartitionLiveDomain(nil, columnGraphPartitionLiveOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -724,26 +724,24 @@ func TestVectorIndexPartitionLiveDomainSearchScoreBudgetV1(t *testing.T) {
 		}
 	}
 	view := &vectorIndexSearchView{
-		nodes:                    []vectorIndexNode{node("base", []float32{1, 0})},
-		deltaNodes:               []vectorIndexNode{node("delta", []float32{0, 1})},
+		nodes:                    []vectorIndexNode{node("best", []float32{1, 0}), node("other", []float32{0, 1})},
 		metric:                   VectorMetricCosine,
 		dimensions:               2,
 		m:                        2,
 		efSearch:                 1,
 		entry:                    0,
 		maxLevel:                 1,
-		deltaEntry:               0,
-		deltaMaxLevel:            1,
 		liveDocs:                 2,
-		deltaLiveDocs:            1,
 		sourceDocumentRootsValid: true,
 	}
+	view.nodes[0].neighbors[0] = []vectorIndexNeighbor{{nodeID: 1}}
+	view.nodes[1].neighbors[0] = []vectorIndexNeighbor{{nodeID: 0}}
 	pin := &VectorIndexPartitionLiveSearchPinV1{domains: map[uint32]vectorIndexPartitionLiveDomainPinV1{
-		0: {view: view, maxStableIDBytes: len("delta")},
+		0: {view: view, maxStableIDBytes: len("other")},
 	}}
 	opts := VectorPartitionSearchOptionsV1{TopK: 1, EfSearch: 1, MaxStableIDBytes: 8}
 	uncapped, uncappedMetrics, err := pin.SearchDomainV1(t.Context(), 0, []float32{1, 0}, opts)
-	if err != nil || len(uncapped) != 1 || uncappedMetrics.ScoreCalls != 6 || uncappedMetrics.Candidates != 2 {
+	if err != nil || len(uncapped) != 1 || uncappedMetrics.ScoreCalls != 4 || uncappedMetrics.Candidates != 2 {
 		t.Fatalf("uncapped results=%+v metrics=%+v err=%v", uncapped, uncappedMetrics, err)
 	}
 	opts.MaxScoreCalls = int(uncappedMetrics.ScoreCalls)
@@ -771,13 +769,13 @@ func TestVectorIndexPartitionLiveReplayRejectsDifferentInstalledCarrierV1(t *tes
 	if err := collection.EnsureVectorPartitionLiveBindingV1(t.Context(), manifest); err != nil {
 		t.Fatal(err)
 	}
-	current := collection.registeredVectorIndex(def.Name)
+	current := collection.registeredColumnGraphPartitionLiveCarrier(def.Name)
 	rootID, err := collection.currentNativeVectorIndexRootID(def.Name)
 	if err != nil {
 		t.Fatal(err)
 	}
 	snapshot, beforeSeq := current.persistSnapshot()
-	candidate, err := newVectorIndex(collection, vectorIndexOptionsFromDefinition(def))
+	candidate, err := newColumnGraphPartitionLiveDomain(collection, vectorIndexOptionsFromDefinition(def))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -785,8 +783,8 @@ func TestVectorIndexPartitionLiveReplayRejectsDifferentInstalledCarrierV1(t *tes
 		t.Fatalf("candidate restore reason=%q", reason)
 	}
 	candidate.recordPersistentDefinition(def)
-	candidate.recordLoadedSnapshot(rootID, current.Stats().BytesDisk)
-	if err := current.InsertDocument([]byte("a")); err != nil {
+	candidate.recordLoadedSnapshot(rootID, partitionLivePersistedBytes5275(current))
+	if err := current.repairPartitionLiveDocument([]byte("a")); err != nil {
 		t.Fatal(err)
 	}
 	attempt := &vectorPartitionLiveReplayAttemptV1{entries: []vectorPartitionLiveReplayEntryV1{{
@@ -809,13 +807,13 @@ func TestVectorIndexPartitionLiveReplayRejectsCandidateMutationAfterSnapshotV1(t
 	if err := collection.EnsureVectorPartitionLiveBindingV1(t.Context(), manifest); err != nil {
 		t.Fatal(err)
 	}
-	current := collection.registeredVectorIndex(def.Name)
+	current := collection.registeredColumnGraphPartitionLiveCarrier(def.Name)
 	rootID, err := collection.currentNativeVectorIndexRootID(def.Name)
 	if err != nil {
 		t.Fatal(err)
 	}
 	snapshot, beforeSeq := current.persistSnapshot()
-	candidate, err := newVectorIndex(collection, vectorIndexOptionsFromDefinition(def))
+	candidate, err := newColumnGraphPartitionLiveDomain(collection, vectorIndexOptionsFromDefinition(def))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -823,7 +821,7 @@ func TestVectorIndexPartitionLiveReplayRejectsCandidateMutationAfterSnapshotV1(t
 		t.Fatalf("candidate restore reason=%q", reason)
 	}
 	candidate.recordPersistentDefinition(def)
-	candidate.recordLoadedSnapshot(rootID, current.Stats().BytesDisk)
+	candidate.recordLoadedSnapshot(rootID, partitionLivePersistedBytes5275(current))
 	snapshotSeq := candidate.nativeMutationSequence()
 	candidate.mu.Lock()
 	candidate.dirtyMeta = true
@@ -836,7 +834,7 @@ func TestVectorIndexPartitionLiveReplayRejectsCandidateMutationAfterSnapshotV1(t
 	if err := collection.installVectorPartitionLiveReplayAttemptV1(attempt, []string{attempt.entries[0].spec.rootName}, []uint64{rootID}); !errors.Is(err, ErrConcurrentMutation) {
 		t.Fatalf("install err=%v want concurrent mutation", err)
 	}
-	if collection.registeredVectorIndex(def.Name) != current || !candidate.needsNativeAutoPersist() {
+	if collection.registeredColumnGraphPartitionLiveCarrier(def.Name) != current || !candidate.needsNativeAutoPersist() {
 		t.Fatal("mutated candidate was installed or incorrectly marked persisted")
 	}
 }
@@ -893,7 +891,7 @@ func TestVectorIndexPartitionLiveReplayUsesPublicationSequenceV1(t *testing.T) {
 }
 
 func TestVectorIndexPartitionLiveSnapshotRecoveryAndMismatchV1(t *testing.T) {
-	idx, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
+	idx, err := newColumnGraphPartitionLiveDomain(nil, columnGraphPartitionLiveOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -913,7 +911,7 @@ func TestVectorIndexPartitionLiveSnapshotRecoveryAndMismatchV1(t *testing.T) {
 	idx.recordSourceDocumentStateLocked(9, backenddb.StateToken{})
 	idx.mu.Unlock()
 	snapshot, _ := idx.persistSnapshot()
-	restored, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
+	restored, err := newColumnGraphPartitionLiveDomain(nil, columnGraphPartitionLiveOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -938,7 +936,7 @@ func TestVectorIndexPartitionLiveSnapshotRecoveryAndMismatchV1(t *testing.T) {
 	tampered := snapshot
 	tampered.Meta.PartitionLive = partitionLivePersistV1ForTest(idx)
 	tampered.Meta.PartitionLive.Coverage++
-	mismatch, _ := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
+	mismatch, _ := newColumnGraphPartitionLiveDomain(nil, columnGraphPartitionLiveOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
 	if reason := mismatch.loadPersistSnapshot(tampered); reason != "invalid_partition_live_meta" {
 		t.Fatalf("mismatch reason=%q", reason)
 	}
@@ -947,7 +945,7 @@ func TestVectorIndexPartitionLiveSnapshotRecoveryAndMismatchV1(t *testing.T) {
 	liveV2.DomainEpochs = append([]vectorIndexPartitionLivePersistDomainEpochV2(nil), liveV2.DomainEpochs...)
 	liveV2.DomainEpochs[0].Epoch++
 	wrongEpoch.Meta.PartitionLive = &liveV2
-	wrongEpochIndex, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
+	wrongEpochIndex, err := newColumnGraphPartitionLiveDomain(nil, columnGraphPartitionLiveOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -978,7 +976,7 @@ func TestVectorIndexPartitionLiveSnapshotRecoveryAndMismatchV1(t *testing.T) {
 	unsafeV2Meta := *snapshot.Meta.PartitionLive
 	unsafeV2Meta.Version = 2
 	unsafeV2.Meta.PartitionLive = &unsafeV2Meta
-	unsafeV2Index, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
+	unsafeV2Index, err := newColumnGraphPartitionLiveDomain(nil, columnGraphPartitionLiveOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -988,7 +986,7 @@ func TestVectorIndexPartitionLiveSnapshotRecoveryAndMismatchV1(t *testing.T) {
 }
 
 func TestVectorIndexPartitionLiveRetiredDomainEpochSurvivesReopenV2(t *testing.T) {
-	idx, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
+	idx, err := newColumnGraphPartitionLiveDomain(nil, columnGraphPartitionLiveOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1024,7 +1022,7 @@ func TestVectorIndexPartitionLiveRetiredDomainEpochSurvivesReopenV2(t *testing.T
 	idx.mu.Unlock()
 
 	snapshot, _ := idx.persistSnapshot()
-	restored, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
+	restored, err := newColumnGraphPartitionLiveDomain(nil, columnGraphPartitionLiveOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1075,7 +1073,7 @@ func TestVectorIndexPartitionLiveRetiredDomainEpochSurvivesReopenV2(t *testing.T
 }
 
 func TestVectorIndexPartitionLiveDomainEpochOverflowFailsClosedV3(t *testing.T) {
-	idx, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
+	idx, err := newColumnGraphPartitionLiveDomain(nil, columnGraphPartitionLiveOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1113,7 +1111,7 @@ func TestVectorIndexPartitionLiveRetiredDomainNativeRootEpochIsolationV3(t *test
 		database.Close()
 		t.Fatal(err)
 	}
-	carrier := collection.registeredVectorIndex(def.Name)
+	carrier := collection.registeredColumnGraphPartitionLiveCarrier(def.Name)
 	if carrier == nil {
 		database.Close()
 		t.Fatal("missing registered carrier")
@@ -1126,7 +1124,7 @@ func TestVectorIndexPartitionLiveRetiredDomainNativeRootEpochIsolationV3(t *test
 	}
 	retiredEpoch := carrier.partitionLive.domainEpochs[0]
 	carrier.mu.Unlock()
-	if status, err := carrier.SaveNativeDeltaSnapshot(); err != nil || !status.Loaded {
+	if status, err := carrier.saveColumnGraphPartitionLiveDelta(); err != nil || !status.Loaded {
 		database.Close()
 		t.Fatalf("persist initial epoch status=%+v err=%v", status, err)
 	}
@@ -1147,7 +1145,7 @@ func TestVectorIndexPartitionLiveRetiredDomainNativeRootEpochIsolationV3(t *test
 		t.Fatalf("retired state domains=%v high-water=%d want=%d", carrier.partitionLive.domains, carrier.partitionLive.domainEpochHighWater, retiredEpoch)
 	}
 	carrier.mu.Unlock()
-	if status, err := carrier.SaveNativeDeltaSnapshot(); err != nil || !status.Loaded {
+	if status, err := carrier.saveColumnGraphPartitionLiveDelta(); err != nil || !status.Loaded {
 		database.Close()
 		t.Fatalf("persist retirement status=%+v err=%v", status, err)
 	}
@@ -1174,7 +1172,7 @@ func TestVectorIndexPartitionLiveRetiredDomainNativeRootEpochIsolationV3(t *test
 		database.Close()
 		t.Fatal(err)
 	}
-	carrier = collection.registeredVectorIndex(def.Name)
+	carrier = collection.registeredColumnGraphPartitionLiveCarrier(def.Name)
 	carrier.mu.RLock()
 	highWater := carrier.partitionLive.domainEpochHighWater
 	carrier.mu.RUnlock()
@@ -1182,7 +1180,7 @@ func TestVectorIndexPartitionLiveRetiredDomainNativeRootEpochIsolationV3(t *test
 		database.Close()
 		t.Fatalf("recovered high-water=%d want=%d", highWater, retiredEpoch)
 	}
-	if err := carrier.InsertDocument([]byte("a")); err != nil {
+	if err := carrier.repairPartitionLiveDocument([]byte("a")); err != nil {
 		database.Close()
 		t.Fatal(err)
 	}
@@ -1193,7 +1191,7 @@ func TestVectorIndexPartitionLiveRetiredDomainNativeRootEpochIsolationV3(t *test
 		database.Close()
 		t.Fatalf("reused epoch=%d must exceed retired epoch=%d", reusedEpoch, retiredEpoch)
 	}
-	if status, err := carrier.SaveNativeDeltaSnapshot(); err != nil || !status.Loaded {
+	if status, err := carrier.saveColumnGraphPartitionLiveDelta(); err != nil || !status.Loaded {
 		database.Close()
 		t.Fatalf("persist reused epoch status=%+v err=%v", status, err)
 	}
@@ -1261,7 +1259,7 @@ func TestVectorIndexPartitionLiveRetiredDomainNativeRootEpochIsolationV3(t *test
 }
 
 func TestVectorIndexPartitionLiveMissingTombstoneFailsClosedV3(t *testing.T) {
-	idx, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
+	idx, err := newColumnGraphPartitionLiveDomain(nil, columnGraphPartitionLiveOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1286,7 +1284,7 @@ func TestVectorIndexPartitionLiveMissingTombstoneFailsClosedV3(t *testing.T) {
 		t.Fatalf("persisted tombstone meta=%+v owners=%+v", snapshot.Meta.PartitionLive, snapshot.PartitionLiveOwners)
 	}
 	snapshot.PartitionLiveOwners = nil
-	restored, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
+	restored, err := newColumnGraphPartitionLiveDomain(nil, columnGraphPartitionLiveOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1296,8 +1294,8 @@ func TestVectorIndexPartitionLiveMissingTombstoneFailsClosedV3(t *testing.T) {
 }
 
 func TestVectorIndexPartitionLiveV1RestoreMaterializesCompleteV3(t *testing.T) {
-	options := VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8}
-	idx, err := newVectorIndex(nil, options)
+	options := columnGraphPartitionLiveOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8}
+	idx, err := newColumnGraphPartitionLiveDomain(nil, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1330,14 +1328,14 @@ func TestVectorIndexPartitionLiveV1RestoreMaterializesCompleteV3(t *testing.T) {
 	legacy.PartitionLiveOwners = nil
 	legacy.PartitionLiveDomains = nil
 
-	migrated, err := newVectorIndex(nil, options)
+	migrated, err := newColumnGraphPartitionLiveDomain(nil, options)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if reason := migrated.loadPersistSnapshot(legacy); reason != "" {
 		t.Fatalf("V1 restore reason=%q", reason)
 	}
-	candidate, err := newVectorIndex(nil, options)
+	candidate, err := newColumnGraphPartitionLiveDomain(nil, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1401,7 +1399,7 @@ func TestVectorIndexPartitionLiveV1RestoreMaterializesCompleteV3(t *testing.T) {
 	}
 	candidate.recordPersistedSnapshot(1, bytesDisk, seq)
 	finalSnapshot, _ := candidate.persistSnapshot()
-	reopened, err := newVectorIndex(nil, options)
+	reopened, err := newColumnGraphPartitionLiveDomain(nil, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1424,7 +1422,7 @@ func TestVectorIndexPartitionLiveV1RestoreMaterializesCompleteV3(t *testing.T) {
 
 func TestVectorIndexPartitionLiveByteCapacityRejectsBeforePublicationV1(t *testing.T) {
 	const dimensions = 4096
-	idx, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: dimensions, M: 4, EfConstruction: 16, EfSearch: 8})
+	idx, err := newColumnGraphPartitionLiveDomain(nil, columnGraphPartitionLiveOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: dimensions, M: 4, EfConstruction: 16, EfSearch: 8})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1449,7 +1447,7 @@ func TestVectorIndexPartitionLiveByteCapacityRejectsBeforePublicationV1(t *testi
 }
 
 func TestVectorIndexPartitionLivePinnedReaderAcrossRevisionV1(t *testing.T) {
-	idx, _ := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
+	idx, _ := newColumnGraphPartitionLiveDomain(nil, columnGraphPartitionLiveOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
 	manifest := VectorPartitionManifestV1{IndexName: "embedding", IndexDefinitionDigest: "definition", SourceGeneration: 3, SourceChecksum: 4, SourceSchemaHash: 5, SourceRowCount: 2, Generation: 7, DomainCount: 2, PartitionCount: 2, DomainPacks: []VectorPartitionDomainPackV1{{DomainID: 0, PackID: 0}, {DomainID: 1, PackID: 1}}}
 	if err := idx.bindVectorPartitionLiveV1(manifest, manifest.SourceGeneration, []vectorPartitionLiveRepresentativeV1{{domain: 0, vector: []float32{1, 0}}, {domain: 1, vector: []float32{0, 1}}}); err != nil {
 		t.Fatal(err)
@@ -1478,7 +1476,7 @@ func TestVectorIndexPartitionLivePinnedReaderAcrossRevisionV1(t *testing.T) {
 }
 
 func TestVectorIndexPartitionLiveGenerationCutoverKeepsOldPinV1(t *testing.T) {
-	idx, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
+	idx, err := newColumnGraphPartitionLiveDomain(nil, columnGraphPartitionLiveOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1680,42 +1678,46 @@ func TestVectorIndexPartitionLiveGenerationRebindWaitsForCoordinatorPinV1(t *tes
 }
 
 func TestVectorIndexPartitionLiveDropWaitsForCoordinatorPinV1(t *testing.T) {
+	// This lock-order fixture needs schema DROP, not command-WAL typed DDL.
+	// Use a declared modern carrier with a synthetic bounded live binding.
 	database, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer database.Close()
-	mgr := NewCollectionManager(database)
-	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, Strategy: VectorIndexStrategyNativeRuntime}
-	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON}, VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
+	manager := NewCollectionManager(database)
+	if _, err := manager.CreateCollection(&CollectionMeta{Name: "docs", VectorIndexes: []VectorIndexDefinition{{Name: "embedding", Field: "embedding", Dimensions: 2, Strategy: VectorIndexStrategyColumnGraph}}}); err != nil {
 		t.Fatal(err)
 	}
-	collection, err := mgr.OpenCollection("docs")
+	collection, err := manager.OpenCollection("docs")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := collection.InsertBatch([][]byte{[]byte("a")}, [][]byte{[]byte(`{"embedding":[1,0]}`)}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := collection.RebuildVectorIndex(def.Name); err != nil {
+	if err := collection.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	carrier := collection.registeredVectorIndex(def.Name)
-	carrier.mu.RLock()
-	coverage := carrier.sourceDocumentGeneration
-	carrier.mu.RUnlock()
-	manifest := VectorPartitionManifestV1{
-		IndexName: def.Name, IndexDefinitionDigest: VectorIndexDefinitionDigestV1(def), SourceGeneration: coverage,
-		SourceChecksum: 1, SourceSchemaHash: 1, Generation: coverage + 1, DomainCount: 1, PartitionCount: 1,
-		DomainPacks: []VectorPartitionDomainPackV1{{DomainID: 0, PackID: 0}},
+	def := collection.Meta().VectorIndexes[0]
+	carrier, err := newColumnGraphPartitionLiveDomain(collection, vectorIndexOptionsFromDefinition(def))
+	if err != nil {
+		t.Fatal(err)
 	}
+	coverage, state, err := collection.vectorPartitionLiveCurrentDocumentStateV1(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	carrier.recordSourceDocumentState(coverage, state)
 	carrier.setPartitionLiveCarrier(true)
+	manifest := VectorPartitionManifestV1{IndexName: def.Name, IndexDefinitionDigest: VectorIndexDefinitionDigestV1(def), SourceGeneration: coverage, SourceChecksum: 1, SourceSchemaHash: 1, Generation: coverage + 1, DomainCount: 1, PartitionCount: 1, DomainPacks: []VectorPartitionDomainPackV1{{DomainID: 0, PackID: 0}}}
 	if err := carrier.bindVectorPartitionLiveV1(manifest, coverage, []vectorPartitionLiveRepresentativeV1{{domain: 0, vector: []float32{1, 0}}}); err != nil {
 		t.Fatal(err)
 	}
 	carrier.mu.Lock()
 	carrier.partitionLive.bindingDurable = true
 	carrier.mu.Unlock()
+	collection.registerColumnGraphPartitionLiveCarrier(carrier)
 	coord := collection.collectionSchemaCoordinator()
 	coord.registerPartitionLiveCarrier(carrier)
 	if got := coord.partitionLiveCarrier(def.Name); got != carrier {
@@ -1746,7 +1748,7 @@ func TestVectorIndexPartitionLiveDropWaitsForCoordinatorPinV1(t *testing.T) {
 		}
 		runtime.Gosched()
 	}
-	if got := collection.registeredVectorIndex(def.Name); got != carrier {
+	if got := collection.registeredColumnGraphPartitionLiveCarrier(def.Name); got != carrier {
 		pin.Release()
 		t.Fatalf("pinned carrier=%p want=%p", got, carrier)
 	}
@@ -1765,7 +1767,7 @@ func TestVectorIndexPartitionLiveDropWaitsForCoordinatorPinV1(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("vector index drop remained blocked after coordinator release")
 	}
-	if got := collection.registeredVectorIndex(def.Name); got != nil {
+	if got := collection.registeredColumnGraphPartitionLiveCarrier(def.Name); got != nil {
 		t.Fatalf("carrier remained registered: %p", got)
 	}
 }
@@ -1777,7 +1779,7 @@ func TestVectorIndexPartitionLiveUnregisterWaitsForCoordinatorPinV1(t *testing.T
 	if err := collection.EnsureVectorPartitionLiveBindingV1(t.Context(), manifest); err != nil {
 		t.Fatal(err)
 	}
-	carrier := collection.registeredVectorIndex(def.Name)
+	carrier := collection.registeredColumnGraphPartitionLiveCarrier(def.Name)
 	pin, err := collection.AcquireVectorPartitionLiveCoordinatorSearchPinV1(manifest)
 	if err != nil {
 		t.Fatal(err)
@@ -1786,7 +1788,7 @@ func TestVectorIndexPartitionLiveUnregisterWaitsForCoordinatorPinV1(t *testing.T
 
 	done := make(chan struct{})
 	go func() {
-		collection.UnregisterVectorIndex(def.Name)
+		collection.removeColumnGraphPartitionLiveCarrier(def.Name)
 		close(done)
 	}()
 	coord := collection.collectionSchemaCoordinator()
@@ -1803,7 +1805,7 @@ func TestVectorIndexPartitionLiveUnregisterWaitsForCoordinatorPinV1(t *testing.T
 		}
 		runtime.Gosched()
 	}
-	if got := collection.registeredVectorIndex(def.Name); got != carrier {
+	if got := collection.registeredColumnGraphPartitionLiveCarrier(def.Name); got != carrier {
 		t.Fatalf("pinned carrier=%p want=%p", got, carrier)
 	}
 	shardPin, err := collection.AcquireVectorPartitionLiveSearchPinV1(manifest)
@@ -1817,7 +1819,7 @@ func TestVectorIndexPartitionLiveUnregisterWaitsForCoordinatorPinV1(t *testing.T
 	case <-time.After(5 * time.Second):
 		t.Fatal("vector index unregister remained blocked after coordinator release")
 	}
-	if got := collection.registeredVectorIndex(def.Name); got != nil {
+	if got := collection.registeredColumnGraphPartitionLiveCarrier(def.Name); got != nil {
 		t.Fatalf("carrier remained registered: %p", got)
 	}
 }
@@ -1829,7 +1831,7 @@ func TestVectorIndexPartitionLiveUnregisterWaitsWithoutRegisteredCarrierV1(t *te
 	}
 	defer database.Close()
 	mgr := NewCollectionManager(database)
-	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, Strategy: VectorIndexStrategyNativeRuntime}
+	def := VectorIndexDefinition{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, Strategy: VectorIndexStrategyColumnGraph}
 	if _, err := mgr.CreateCollection(&CollectionMeta{Name: "docs", Options: CollectionOptions{DocumentFormat: DocumentFormatJSON}, VectorIndexes: []VectorIndexDefinition{def}}); err != nil {
 		t.Fatal(err)
 	}
@@ -1838,9 +1840,6 @@ func TestVectorIndexPartitionLiveUnregisterWaitsWithoutRegisteredCarrierV1(t *te
 		t.Fatal(err)
 	}
 	if _, err := collection.Insert([]byte("a"), []byte(`{"embedding":[1,0]}`)); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := collection.RebuildVectorIndex(def.Name); err != nil {
 		t.Fatal(err)
 	}
 	coord := collection.collectionSchemaCoordinator()
@@ -1853,7 +1852,7 @@ func TestVectorIndexPartitionLiveUnregisterWaitsWithoutRegisteredCarrierV1(t *te
 	done := make(chan struct{})
 	go func() {
 		close(started)
-		collection.UnregisterVectorIndex(def.Name)
+		collection.removeColumnGraphPartitionLiveCarrier(def.Name)
 		close(done)
 	}()
 	<-started
@@ -1872,33 +1871,36 @@ func TestVectorIndexPartitionLiveUnregisterWaitsWithoutRegisteredCarrierV1(t *te
 		}
 		runtime.Gosched()
 	}
-	if collection.registeredVectorIndex(def.Name) == nil {
-		coord.partitionLivePublishMu.RUnlock()
-		t.Fatal("index unregistered before publication window closed")
-	}
 	coord.partitionLivePublishMu.RUnlock()
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("unregister remained blocked after publication window closed")
 	}
-	if got := collection.registeredVectorIndex(def.Name); got != nil {
+	if got := collection.registeredColumnGraphPartitionLiveCarrier(def.Name); got != nil {
 		t.Fatalf("index remained registered: %p", got)
 	}
 }
 
 func TestVectorIndexPartitionLiveUnchangedVectorDoesNotConsumeCapacityV1(t *testing.T) {
 	for _, tc := range []struct {
-		name     string
-		encoding VectorIndexEncoding
-		initial  []float32
-		repeat   []float32
+		name        string
+		encoding    VectorIndexEncoding
+		unsupported bool
+		initial     []float32
+		repeat      []float32
 	}{
 		{name: "fp32", encoding: VectorIndexEncodingFloat32, initial: []float32{1, .5}, repeat: []float32{1, .5}},
-		{name: "int8 quantization equivalent", encoding: VectorIndexEncodingInt8, initial: []float32{1, .5}, repeat: []float32{1, .5001}},
+		{name: "int8_refused", encoding: VectorIndexEncodingInt8, unsupported: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			idx, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Encoding: tc.encoding, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
+			idx, err := newColumnGraphPartitionLiveDomain(nil, columnGraphPartitionLiveOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Encoding: tc.encoding, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
+			if tc.unsupported {
+				if err == nil || idx != nil {
+					t.Fatalf("unsupported carrier=%v err=%v; want constructor refusal", idx, err)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1937,7 +1939,7 @@ func TestVectorIndexPartitionLiveUnchangedVectorDoesNotConsumeCapacityV1(t *test
 }
 
 func TestVectorIndexPartitionLiveBatchRepeatedIDCapacityV1(t *testing.T) {
-	idx, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
+	idx, err := newColumnGraphPartitionLiveDomain(nil, columnGraphPartitionLiveOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1989,7 +1991,7 @@ func TestVectorIndexPartitionLiveBatchRepeatedIDCapacityV1(t *testing.T) {
 }
 
 func TestVectorIndexPartitionLiveRepeatedUpdateCutoverKeepsPinnedViewV1(t *testing.T) {
-	idx, _ := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
+	idx, _ := newColumnGraphPartitionLiveDomain(nil, columnGraphPartitionLiveOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
 	manifest := VectorPartitionManifestV1{IndexName: "embedding", IndexDefinitionDigest: "definition", SourceGeneration: 3, SourceChecksum: 4, SourceSchemaHash: 5, SourceRowCount: 1, Generation: 7, DomainCount: 1, PartitionCount: 1, DomainPacks: []VectorPartitionDomainPackV1{{DomainID: 0, PackID: 0}}}
 	idx.sourceDocumentGeneration = manifest.SourceGeneration
 	idx.sourceDocumentRootsValid = true
@@ -2054,7 +2056,7 @@ func TestVectorIndexPartitionLiveRepeatedUpdateCutoverKeepsPinnedViewV1(t *testi
 		t.Fatalf("retained node ID bytes=%d want=%d", gotNodeIDBytes, wantNodeIDBytes)
 	}
 	snapshot, _ := idx.persistSnapshot()
-	restored, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
+	restored, err := newColumnGraphPartitionLiveDomain(nil, columnGraphPartitionLiveOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2067,9 +2069,9 @@ func TestVectorIndexPartitionLiveRepeatedUpdateCutoverKeepsPinnedViewV1(t *testi
 }
 
 func TestVectorIndexPartitionLiveByteCapacityCompactsBeforeRejectingV1(t *testing.T) {
-	newIndex := func(t *testing.T) (*VectorIndex, VectorPartitionManifestV1) {
+	newIndex := func(t *testing.T) (*columnGraphPartitionLiveCarrier, VectorPartitionManifestV1) {
 		t.Helper()
-		idx, err := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
+		idx, err := newColumnGraphPartitionLiveDomain(nil, columnGraphPartitionLiveOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2082,7 +2084,7 @@ func TestVectorIndexPartitionLiveByteCapacityCompactsBeforeRejectingV1(t *testin
 		idx.mu.Unlock()
 		return idx, manifest
 	}
-	apply := func(t *testing.T, idx *VectorIndex, id string, vector []float32) {
+	apply := func(t *testing.T, idx *columnGraphPartitionLiveCarrier, id string, vector []float32) {
 		t.Helper()
 		idx.mu.Lock()
 		defer idx.mu.Unlock()
@@ -2191,7 +2193,7 @@ func TestVectorIndexPartitionLiveByteCapacityCompactsBeforeRejectingV1(t *testin
 }
 
 func TestVectorIndexPartitionLiveCutoverPublishesOncePerDomainV1(t *testing.T) {
-	idx, _ := newVectorIndex(nil, VectorIndexOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
+	idx, _ := newColumnGraphPartitionLiveDomain(nil, columnGraphPartitionLiveOptions{Name: "embedding", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8})
 	manifest := VectorPartitionManifestV1{IndexName: "embedding", IndexDefinitionDigest: "definition", SourceGeneration: 3, SourceChecksum: 4, SourceSchemaHash: 5, SourceRowCount: 3, Generation: 7, DomainCount: 1, PartitionCount: 1, DomainPacks: []VectorPartitionDomainPackV1{{DomainID: 0, PackID: 0}}}
 	if err := idx.bindVectorPartitionLiveV1(manifest, manifest.SourceGeneration, []vectorPartitionLiveRepresentativeV1{{domain: 0, vector: []float32{1, 0}}}); err != nil {
 		t.Fatal(err)
@@ -2227,7 +2229,9 @@ func TestVectorIndexPartitionLiveCutoverPublishesOncePerDomainV1(t *testing.T) {
 
 func TestVectorPartitionLiveColumnGraphCarrierLoadsWithoutRebuildV1(t *testing.T) {
 	rows := []columnGraphRebuildInputRowV2A{{id: "a", vector: []float32{1, 0}}, {id: "b", vector: []float32{0, 1}}}
-	_, database, collection, def := openColumnGraphTypedColumnVectorTestCollection1782(t, 2, 2, rows)
+	otherDef := VectorIndexDefinition{Name: "other_embedding_graph", Field: "embedding", Metric: VectorMetricCosine, Dimensions: 2, M: 2, Strategy: VectorIndexStrategyColumnGraph}
+	_, database, collection, def := openColumnGraphTypedColumnVectorTestCollectionWithIndexes1782(t, 2, 2, rows, []VectorIndexDefinition{otherDef})
+	otherDef, _ = findVectorIndex(collection.Meta().VectorIndexes, otherDef.Name)
 	defer database.Close()
 	if _, err := collection.RebuildVectorIndex(def.Name); err != nil {
 		t.Fatal(err)
@@ -2250,7 +2254,7 @@ func TestVectorPartitionLiveColumnGraphCarrierLoadsWithoutRebuildV1(t *testing.T
 		Generation: source.Generation + 100, PartitionCount: 1, DomainCount: 1,
 		DomainPacks: []VectorPartitionDomainPackV1{{DomainID: 0, PackID: 0}},
 	}
-	carrier, err := newVectorIndex(collection, vectorIndexOptionsFromDefinition(def))
+	carrier, err := newColumnGraphPartitionLiveDomain(collection, vectorIndexOptionsFromDefinition(def))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2263,11 +2267,11 @@ func TestVectorPartitionLiveColumnGraphCarrierLoadsWithoutRebuildV1(t *testing.T
 	if err := carrier.bindVectorPartitionLiveV1(manifest, generation, []vectorPartitionLiveRepresentativeV1{{domain: 0, vector: []float32{1, 0}}}); err != nil {
 		t.Fatal(err)
 	}
-	collection.registerVectorIndexCurrentCatalog(carrier)
-	if status, err := carrier.SaveNativeDeltaSnapshot(); err != nil || !status.Loaded {
+	collection.registerColumnGraphPartitionLiveCarrier(carrier)
+	if status, err := carrier.saveColumnGraphPartitionLiveDelta(); err != nil || !status.Loaded {
 		t.Fatalf("persist carrier status=%+v err=%v", status, err)
 	}
-	collection.UnregisterVectorIndex(def.Name)
+	collection.removeColumnGraphPartitionLiveCarrier(def.Name)
 	loaded, status, err := collection.loadVectorPartitionLiveIndexForServingV1(def)
 	if err != nil || loaded == nil || !status.Loaded || !loaded.isPartitionLiveCarrier() || rebuilds != 0 {
 		t.Fatalf("loaded carrier=%v status=%+v rebuilds=%d err=%v", loaded != nil, status, rebuilds, err)
@@ -2276,7 +2280,7 @@ func TestVectorPartitionLiveColumnGraphCarrierLoadsWithoutRebuildV1(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := replayCollection.registeredVectorIndex(def.Name); got != loaded {
+	if got := replayCollection.registeredColumnGraphPartitionLiveCarrier(def.Name); got != loaded {
 		t.Fatalf("replay manager carrier=%p want shared carrier=%p", got, loaded)
 	}
 	pin, err := replayCollection.AcquireVectorPartitionLiveCoordinatorSearchPinV1(manifest)
@@ -2288,11 +2292,8 @@ func TestVectorPartitionLiveColumnGraphCarrierLoadsWithoutRebuildV1(t *testing.T
 	loaded.mu.RUnlock()
 	otherManifest := manifest
 	otherManifest.IndexName = "other_embedding_graph"
-	otherManifest.IndexDefinitionDigest = "other-definition"
-	other, err := newVectorIndex(replayCollection, VectorIndexOptions{
-		Name: otherManifest.IndexName, Field: def.Field, Metric: def.Metric, Dimensions: def.Dimensions,
-		M: def.M, EfConstruction: def.EfConstruction, EfSearch: def.EfSearch,
-	})
+	otherManifest.IndexDefinitionDigest = VectorIndexDefinitionDigestV1(otherDef)
+	other, err := newColumnGraphPartitionLiveDomain(replayCollection, vectorIndexOptionsFromDefinition(otherDef))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2303,7 +2304,7 @@ func TestVectorPartitionLiveColumnGraphCarrierLoadsWithoutRebuildV1(t *testing.T
 	other.mu.Lock()
 	other.partitionLive.bindingDurable = true
 	other.mu.Unlock()
-	replayCollection.registerVectorIndexCurrentCatalog(other)
+	replayCollection.registerColumnGraphPartitionLiveCarrier(other)
 	if replayCollection.vectorPartitionLiveCoordinatorBindingPinnedV1(otherManifest) {
 		t.Fatal("index A coordinator pin authorized index B binding")
 	}
@@ -2311,7 +2312,7 @@ func TestVectorPartitionLiveColumnGraphCarrierLoadsWithoutRebuildV1(t *testing.T
 		t.Fatalf("index A coordinator pin authorized index B authority: %v", err)
 	}
 	pin.Release()
-	replayCollection.UnregisterVectorIndex(otherManifest.IndexName)
+	replayCollection.removeColumnGraphPartitionLiveCarrier(otherManifest.IndexName)
 	pin, err = replayCollection.AcquireVectorPartitionLiveCoordinatorSearchPinV1(manifest)
 	if err != nil {
 		t.Fatal(err)
@@ -2373,7 +2374,7 @@ func TestVectorPartitionLiveColumnGraphCarrierLoadsWithoutRebuildV1(t *testing.T
 	if err := replayCollection.reconcileVectorPartitionLiveReplay(replayIDs); err != nil {
 		t.Fatal(err)
 	}
-	current := replayCollection.registeredVectorIndex(def.Name)
+	current := replayCollection.registeredColumnGraphPartitionLiveCarrier(def.Name)
 	if current == nil || current != loaded {
 		t.Fatalf("atomic carrier handoff current=%p loaded=%p", current, loaded)
 	}
@@ -2390,7 +2391,7 @@ func TestVectorPartitionLiveColumnGraphCarrierLoadsWithoutRebuildV1(t *testing.T
 	if _, err := collection.Insert([]byte("c"), []byte(`{"time_us":3,"kind":"vector","did":"c","embedding":[0.3,0.7]}`)); err != nil {
 		t.Fatal(err)
 	}
-	collection.UnregisterVectorIndex(def.Name)
+	collection.removeColumnGraphPartitionLiveCarrier(def.Name)
 	current, currentStatus, err := collection.loadVectorPartitionLiveIndexForServingV1(def)
 	if err != nil || current == nil || !currentStatus.Loaded || rebuilds != 0 {
 		t.Fatalf("current carrier loaded=%v status=%+v rebuilds=%d err=%v", current != nil, currentStatus, rebuilds, err)
@@ -2531,7 +2532,7 @@ func TestVectorIndexPartitionLiveRejectsNonAuthoritativeRoutingIdentityV1(t *tes
 	if err := collection.EnsureVectorPartitionLiveBindingV1(t.Context(), altered); !errors.Is(err, ErrVectorIndexPartitionLiveMismatchV1) {
 		t.Fatalf("cold altered binding err=%v want mismatch", err)
 	}
-	if idx := collection.registeredVectorIndex(def.Name); idx != nil {
+	if idx := collection.registeredColumnGraphPartitionLiveCarrier(def.Name); idx != nil {
 		t.Fatalf("altered routing identity registered carrier=%p", idx)
 	}
 
@@ -2548,7 +2549,7 @@ func TestVectorIndexPartitionLiveRejectsNonAuthoritativeRoutingIdentityV1(t *tes
 		t.Fatalf("altered pin err=%v want mismatch", err)
 	}
 
-	collection.UnregisterVectorIndex(def.Name)
+	collection.removeColumnGraphPartitionLiveCarrier(def.Name)
 	if err := collection.EnsureVectorPartitionLiveBindingV1(t.Context(), altered); !errors.Is(err, ErrVectorIndexPartitionLiveMismatchV1) {
 		t.Fatalf("restored altered binding err=%v want mismatch", err)
 	}
@@ -2589,7 +2590,7 @@ func TestVectorIndexPartitionLiveFailedBindingPublicationUnregistersCarrierV1(t 
 	if err := collection.EnsureVectorPartitionLiveBindingV1(t.Context(), manifest); !errors.Is(err, publishErr) {
 		t.Fatalf("binding err=%v want %v", err, publishErr)
 	}
-	if got := collection.registeredVectorIndex(def.Name); got != nil {
+	if got := collection.registeredColumnGraphPartitionLiveCarrier(def.Name); got != nil {
 		t.Fatalf("failed binding publication retained carrier=%p", got)
 	}
 }
@@ -3052,7 +3053,7 @@ func TestVectorIndexPartitionLiveForegroundDurableInstallsOnceV1(t *testing.T) {
 	if err := collection.EnsureVectorPartitionLiveBindingV1(t.Context(), manifest); err != nil {
 		t.Fatal(err)
 	}
-	carrier := collection.registeredVectorIndex(manifest.IndexName)
+	carrier := collection.registeredColumnGraphPartitionLiveCarrier(manifest.IndexName)
 	replacement, err := json.Marshal(map[string]any{
 		"time_us": int64(99), "kind": "vector", "did": "a", "embedding": []float32{0, 1},
 	})
@@ -3062,7 +3063,7 @@ func TestVectorIndexPartitionLiveForegroundDurableInstallsOnceV1(t *testing.T) {
 	if matched, err := collection.Replace([]byte("a"), replacement); err != nil || !matched {
 		t.Fatalf("replacement matched=%v err=%v", matched, err)
 	}
-	if current := collection.registeredVectorIndex(manifest.IndexName); current != carrier {
+	if current := collection.registeredColumnGraphPartitionLiveCarrier(manifest.IndexName); current != carrier {
 		t.Fatalf("accepted handoff replaced carrier: before=%p after=%p", carrier, current)
 	}
 	carrier.mu.RLock()
@@ -3194,7 +3195,7 @@ func TestVectorIndexPartitionLiveReplayAcceptedFailureInvalidatesV2(t *testing.T
 	if err := collection.EnsureVectorPartitionLiveBindingV1(t.Context(), manifest); err != nil {
 		t.Fatal(err)
 	}
-	carrier := collection.registeredVectorIndex(manifest.IndexName)
+	carrier := collection.registeredColumnGraphPartitionLiveCarrier(manifest.IndexName)
 	vectorPartitionLiveReplayAfterAcceptedHookV1.Lock()
 	vectorPartitionLiveReplayAfterAcceptedHookV1.fn = func() {
 		carrier.mu.Lock()
@@ -3233,12 +3234,12 @@ func TestVectorIndexPartitionLiveAlternatesCollectionManagerDomainsV1(t *testing
 		withOrdinary bool
 	}{
 		{name: "partition_live_only"},
-		{name: "partition_live_and_native", withOrdinary: true},
+		{name: "partition_live_and_declared_column_graph", withOrdinary: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ordinaryDef := VectorIndexDefinition{
-				Name: "embedding_native", Field: "embedding", Metric: VectorMetricCosine,
-				Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8, Strategy: VectorIndexStrategyNativeRuntime,
+				Name: "embedding_other", Field: "embedding", Metric: VectorMetricCosine,
+				Dimensions: 2, M: 4, EfConstruction: 16, EfSearch: 8, Strategy: VectorIndexStrategyColumnGraph,
 			}
 			var extra []VectorIndexDefinition
 			if tc.withOrdinary {
@@ -3246,31 +3247,12 @@ func TestVectorIndexPartitionLiveAlternatesCollectionManagerDomainsV1(t *testing
 			}
 			_, database, collectionA, _, manifest := newVectorPartitionLiveProductionFixtureWithIndexesV1(t, extra)
 			defer database.Close()
-			var ordinaryA *VectorIndex
-			if tc.withOrdinary {
-				ordinaryDef, _ = findVectorIndex(collectionA.Meta().VectorIndexes, ordinaryDef.Name)
-				if _, err := collectionA.RebuildVectorIndex(ordinaryDef.Name); err != nil {
-					t.Fatal(err)
-				}
-				ordinaryA = collectionA.registeredVectorIndex(ordinaryDef.Name)
-				if ordinaryA == nil {
-					t.Fatal("manager A ordinary native index is not loaded")
-				}
-			}
 			if err := collectionA.EnsureVectorPartitionLiveBindingV1(t.Context(), manifest); err != nil {
 				t.Fatal(err)
 			}
 			collectionB, err := NewCollectionManager(database).OpenCollection("docs")
 			if err != nil {
 				t.Fatal(err)
-			}
-			var ordinaryB *VectorIndex
-			if tc.withOrdinary {
-				var loadStatus VectorIndexLoadStatus
-				ordinaryB, loadStatus, err = collectionB.LoadNativeVectorIndexSnapshot(vectorIndexOptionsFromDefinition(ordinaryDef))
-				if err != nil || ordinaryB == nil || !loadStatus.Loaded {
-					t.Fatalf("manager B ordinary native load=%v status=%+v err=%v", ordinaryB != nil, loadStatus, err)
-				}
 			}
 			replace := func(collection *Collection, sequence int64, vector []float32) {
 				t.Helper()
@@ -3300,14 +3282,8 @@ func TestVectorIndexPartitionLiveAlternatesCollectionManagerDomainsV1(t *testing
 			replace(collectionB, 1, []float32{0.2, 1})
 			assertRevision(collectionB, 1, []float32{0.2, 1})
 			replace(collectionA, 2, []float32{1, 0.2})
-			if ordinaryA != nil && ordinaryA.hasValidSourceDocumentRoots() {
-				t.Fatal("manager A stale ordinary native index was not invalidated before rebuild")
-			}
 			assertRevision(collectionA, 2, []float32{1, 0.2})
 			replace(collectionB, 3, []float32{0.3, 1})
-			if ordinaryB != nil && ordinaryB.hasValidSourceDocumentRoots() {
-				t.Fatal("manager B stale ordinary native index was not invalidated before rebuild")
-			}
 			assertRevision(collectionB, 3, []float32{0.3, 1})
 			collectionA.invalidateOtherVectorIndexDocumentCoverage()
 			assertRevision(collectionB, 3, []float32{0.3, 1})
@@ -3531,7 +3507,7 @@ func TestVectorPartitionLiveColdPreparedMutationLoadsDurableOverlayV1(t *testing
 				t.Fatal(err)
 			}
 			checkCompletion("cold before tail")
-			if collection.registeredVectorIndex(def.Name) != nil {
+			if collection.registeredColumnGraphPartitionLiveCarrier(def.Name) != nil {
 				t.Fatal("ordinary open eagerly loaded the carrier; cold path was not exercised")
 			}
 		}
@@ -3545,7 +3521,7 @@ func TestVectorPartitionLiveColdPreparedMutationLoadsDurableOverlayV1(t *testing
 			t.Fatal(err)
 		}
 		err = collection.WithPreparedCommandWALMutation(func(owner *CommandWALAdmittedCollection) error {
-			loaded := collection.registeredVectorIndex(def.Name)
+			loaded := collection.registeredColumnGraphPartitionLiveCarrier(def.Name)
 			if loaded == nil || !loaded.isPartitionLiveCarrier() || !loaded.hasValidSourceDocumentRoots() {
 				return errors.New("durable live carrier missing before ordinary Append")
 			}
@@ -3588,7 +3564,7 @@ func TestVectorPartitionLiveColdPreparedMutationLoadsDurableOverlayV1(t *testing
 	}
 	checkCompletion("reopened after tail")
 	if err := collection.WithPreparedCommandWALMutation(func(*CommandWALAdmittedCollection) error {
-		loaded := collection.registeredVectorIndex(def.Name)
+		loaded := collection.registeredColumnGraphPartitionLiveCarrier(def.Name)
 		if loaded == nil || !loaded.hasValidSourceDocumentRoots() {
 			return errors.New("reopened carrier has invalid coverage")
 		}
@@ -3609,7 +3585,7 @@ func TestVectorPartitionLiveColdPreparedMutationLoadsDurableOverlayV1(t *testing
 	}
 	// An unnotified primary-only fixture deliberately makes the durable graph
 	// stale. Cold ownership must reject it before user code can assign a frame.
-	collection.UnregisterVectorIndex(def.Name)
+	collection.removeColumnGraphPartitionLiveCarrier(def.Name)
 	if _, err := collection.insertBatchWithCommandWALIntent([][]byte{[]byte("unnotified")}, [][]byte{[]byte(`{"time_us":4,"kind":"vector","did":"unnotified","embedding":[1,0]}`)}, false, nil, nil, insertBatchExecutionOptions{returnResultIDs: true}); err != nil {
 		t.Fatal(err)
 	}

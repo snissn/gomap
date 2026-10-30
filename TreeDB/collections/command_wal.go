@@ -1,9 +1,12 @@
 package collections
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"sync"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -239,6 +242,70 @@ func EncodeCatalogCreateCollectionCommandWALPayload(meta CollectionMeta) ([]byte
 		return nil, err
 	}
 	return commitlog.EncodeCatalogCreateCollectionPayload(normalized.Name, encoded)
+}
+
+// CatalogCreateCollectionWireMaxBytesV1 bounds untrusted full-metadata create
+// requests before JSON allocation. Metadata responses use their enclosing frame
+// limits so durable schemas are never silently truncated to request limits.
+const CatalogCreateCollectionWireMaxBytesV1 = 1 << 20
+
+// DecodeCatalogCreateCollectionCommandWALPayload is the strict wire inverse of
+// EncodeCatalogCreateCollectionCommandWALPayload. It deliberately does not replace
+// historical WAL replay decoding: V7 wire peers must supply current canonical
+// metadata, while old persisted records retain their existing compatibility.
+func DecodeCatalogCreateCollectionCommandWALPayload(raw []byte, create bool) (CollectionMeta, error) {
+	if create && len(raw) > CatalogCreateCollectionWireMaxBytesV1 {
+		return CollectionMeta{}, errors.New("collections: catalog create wire payload exceeds bounded byte limit")
+	}
+	payload, err := commitlog.DecodeCatalogCreateCollectionPayload(raw)
+	if err != nil {
+		return CollectionMeta{}, err
+	}
+	var disk collectionMetaDisk
+	dec := json.NewDecoder(bytes.NewReader(payload.Metadata))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&disk); err != nil {
+		return CollectionMeta{}, err
+	}
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
+		return CollectionMeta{}, errors.New("collections: catalog create wire metadata has trailing JSON")
+	}
+	if disk.Version != collectionMetaVersion {
+		return CollectionMeta{}, fmt.Errorf("collections: unsupported wire catalog metadata version %d", disk.Version)
+	}
+	if disk.Name != payload.Collection {
+		return CollectionMeta{}, errors.New("collections: catalog create wire collection name mismatch")
+	}
+	if len(disk.Indexes) > 1<<16 || len(disk.VectorIndexes) > 1<<16 || len(disk.TextIndexes) > 1<<16 {
+		return CollectionMeta{}, errors.New("collections: catalog create wire index count exceeds limit")
+	}
+	if !create {
+		for _, def := range disk.VectorIndexes {
+			if def.Strategy != VectorIndexStrategyColumnGraph {
+				return CollectionMeta{}, fmt.Errorf("%w: stored vector index %q has retired or ambiguous strategy %q", backenddb.ErrNativeSemanticUnsupported, def.Name, def.Strategy)
+			}
+		}
+	}
+	meta, err := normalizeCollectionMeta(CollectionMeta{Name: disk.Name, Options: disk.Options, Indexes: disk.Indexes, VectorIndexes: disk.VectorIndexes, TextIndexes: disk.TextIndexes})
+	if err != nil {
+		return CollectionMeta{}, err
+	}
+	canonical, err := encodeNormalizedCollectionMeta(meta)
+	if err != nil {
+		return CollectionMeta{}, err
+	}
+	// Canonical comparison also rejects duplicate JSON keys, case aliases and
+	// normalization-changing input without another JSON schema/parser layer.
+	if !bytes.Equal(canonical, payload.Metadata) {
+		return CollectionMeta{}, errors.New("collections: catalog create wire metadata is not canonical")
+	}
+	if meta.Options.ColumnStore != nil {
+		if _, err := EncodeColumnStoreWireConfigV1(meta.Name, meta.Options.ColumnStore, create); err != nil {
+			return CollectionMeta{}, err
+		}
+	}
+	return meta, nil
 }
 
 func collectionDocumentsFromNoIndexEntries(entries []noIndexBatchEntry) []commitlog.CollectionDocument {

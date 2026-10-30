@@ -12,6 +12,13 @@ current pre-alpha codebase, not as a stable public API promise.
 All shell commands below are copy/paste runnable from the repository root unless
 the section explicitly says **illustrative snippet**.
 
+For vector indexes, fresh eligible declarations default to cosine/float32
+`column_graph`, the only serving strategy. Ordinary filtered ANN and
+vector-bearing filtered Hybrid are unavailable. Explicit exact scanning and
+admitted typed filtering remain supported separately; see the
+[typed-vector guide](vector-search-typed-column.md). BSON CRUD and scalar
+indexes remain available, but BSON vector-index DDL is refused before mutation.
+
 ## Storage modes in one table
 
 | Workload/data shape | Recommended layout | Why |

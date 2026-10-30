@@ -23,7 +23,7 @@ func TestDurabilityProfilePublicEntrypointInventory(t *testing.T) {
 	methods := profileInventoryMethods(t, treeDBDir, "treedb", "DB")
 	want := []string{
 		"AcquireMVCCReadCut", "AcquireSnapshot", "BeginLogicalMVCC", "CaptureNativeSemanticState", "Checkpoint", "Close", "CommitLogicalMVCC", "CompactIndex", "CompactStorage",
-		"CompactStorageLeafPageLogOwnerClassification", "CompactStoragePlan", "Delete",
+		"CompactStorageLeafPageLogOwnerClassification", "CompactStoragePlan", "DeferredVectorBuildMaintenance", "Delete",
 		"DeleteRange", "DeleteSync", "DurabilityMode", "EstimateMVCCWriteWork", "FragmentationReport", "Get",
 		"GetAppend", "GetMany", "GetManyParallelPlan", "GetManyView", "GetUnsafe",
 		"GetVersioned", "GetVersionedAppend", "Has", "HasMany", "HasPrefixes",
@@ -68,6 +68,9 @@ func TestDurabilityProfilePublicEntrypointInventory(t *testing.T) {
 		profileInventoryRequireBody(t, publicBodies, "(*DB).SeekGEVersionRange", fragment)
 	}
 	nativeBodies := profileInventoryFunctionBodies(t, filepath.Join(treeDBDir, "native_semantic.go"))
+	maintenanceBodies := profileInventoryFunctionBodies(t, filepath.Join(treeDBDir, "bg_vacuum.go"))
+	profileInventoryRequireBody(t, maintenanceBodies, "(*DB).DeferredVectorBuildMaintenance", "&DeferredVectorBuildMaintenance{db: db}")
+	profileInventoryRequireBody(t, maintenanceBodies, "(*DeferredVectorBuildMaintenance).Scoped", "db: c.db")
 	for _, fragment := range []string{"db.captureReadOwners()", "backend.ActivateNativeSemanticOwner()"} {
 		profileInventoryRequireBody(t, nativeBodies, "(*DB).NativeSemanticBackend", fragment)
 	}
@@ -226,7 +229,15 @@ func TestDurabilityProfileOrderedSubmissionEntrypointInventory(t *testing.T) {
 		}},
 		{filepath.Join("mvcc", "ordered_completion.go"), map[string][]string{
 			"(*Store).SubmitCommitGroupAt": {"s.commitLogicalGroupsWithCompletion", "s.CommitGroupAt(groups, mode)"},
-			"(*CommitCompletion).Complete": {"c.engine.Complete()", "c.store.mu.RUnlock()"},
+			"(*CommitCompletion).Complete": {
+				"store := c.store",
+				"returned := false",
+				// Release the captured store and clear custody even if the engine
+				// panics, retaining the recovery-required poison for later calls.
+				"defer func() {\n\t\t\tstore.mu.RUnlock()\n\t\t\tc.store = nil\n\t\t\tif !returned {\n\t\t\t\tc.err = storageError(\"complete batch\", treedb.ErrRecoveryRequired)\n\t\t\t}\n\t\t}()",
+				"err := c.engine.Complete()",
+				"returned = true",
+			},
 		}},
 	} {
 		bodies := profileInventoryFunctionBodies(t, filepath.Join(treeDBDir, source.path))

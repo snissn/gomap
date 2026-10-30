@@ -2874,9 +2874,6 @@ class TreeDBClientTests(unittest.TestCase):
             "exact": False,
             "candidates": 10,
             "route": "ann",
-            "native_base_plus_live_delta": True,
-            "scalar_filter_membership_source": "bounded_candidate_refinement",
-            "scalar_filter_plan": "mixed_refined",
             "scalar_filter_probe_ids": 4096,
             "scalar_filter_probe_truncated": 1,
             "scalar_filter_candidates": 41,
@@ -2894,8 +2891,6 @@ class TreeDBClientTests(unittest.TestCase):
             "allowed_id_materialization_rows": 23,
             "primary_document_scans": 0,
             "document_materialization_rows": 5,
-            "visibility_mismatch_count": 1,
-            "visibility_retry_count": 1,
         }
         with FixtureServer({("POST", route): (200, response, 0)}) as server:
             client = TreeDBClient(server.base_url, timeout=1)
@@ -2905,9 +2900,6 @@ class TreeDBClientTests(unittest.TestCase):
             self.assertEqual(result.route, "ann")
             self.assertFalse(result.exact)
             self.assertEqual(result.candidates, 10)
-            self.assertTrue(result.native_base_plus_live_delta)
-            self.assertEqual(result.scalar_filter_membership_source, "bounded_candidate_refinement")
-            self.assertEqual(result.scalar_filter_plan, "mixed_refined")
             self.assertEqual(result.scalar_filter_probe_ids, 4096)
             self.assertEqual(result.scalar_filter_probe_truncated, 1)
             self.assertEqual(result.scalar_filter_candidates, 41)
@@ -2926,8 +2918,6 @@ class TreeDBClientTests(unittest.TestCase):
             self.assertEqual(result.allowed_id_materialization_rows, 23)
             self.assertEqual(result.primary_document_scans, 0)
             self.assertEqual(result.document_materialization_rows, 5)
-            self.assertEqual(result.visibility_mismatch_count, 1)
-            self.assertEqual(result.visibility_retry_count, 1)
             body = json_body(server.records[0])
             self.assertEqual(body["route"], "ann")
             self.assertEqual(body["ef_search"], 64)

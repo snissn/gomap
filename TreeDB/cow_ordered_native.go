@@ -88,7 +88,9 @@ type LogicalMVCCCompletion struct {
 
 // Complete drives the existing captured-prefix coordinator and releases the
 // batch/lifecycle custody exactly once. Repeated calls return the same result.
-func (c *LogicalMVCCCompletion) Complete() error {
+// A panic is propagated after fail-closed cleanup; later calls return the
+// recovery-required error, never a replacement successful acknowledgement.
+func (c *LogicalMVCCCompletion) Complete() (err error) {
 	if c == nil {
 		return nil
 	}
@@ -98,14 +100,64 @@ func (c *LogicalMVCCCompletion) Complete() error {
 		return c.err
 	}
 	b, db := c.batch, c.db
+	inner := b.inner.(*caching.Batch)
 	// The owned batch retains the effective profile-upgraded WAL ACK class.
 	// syncWrite separately records which public API the caller selected.
+	returned := false
+	defer func() {
+		defer func() {
+			c.batch, c.db = nil, nil
+			db.lifecycleMu.RUnlock()
+		}()
+		fail := func() {
+			// Secondary bookkeeping panics must not replace the original unwind.
+			defer func() { _ = recover() }()
+			c.err = errors.Join(c.err, ErrRecoveryRequired)
+			db.commandWALGroupCommit.failPanickedCompletion(db)
+			inner.CompleteCOWAcknowledgement(db.txnOwner, b.cowState.commandSync, c.err)
+		}
+		if !returned {
+			fail()
+		}
+		closed := false
+		defer func() {
+			// Goexit does not return from the cleanup frame. Keep its unwind
+			// distinct from panic(nil), while still retiring failed custody.
+			if !closed {
+				fail()
+			}
+		}()
+		cleanupPanic, panicked := runLogicalMVCCCompletionCleanup(func() {
+			c.err = errors.Join(c.err, b.Close())
+		})
+		closed = true
+		if panicked {
+			fail()
+			if returned {
+				panic(cleanupPanic)
+			}
+			// The original body panic continues naturally, including nil.
+		}
+		err = c.err
+	}()
 	c.err = b.completeCOWWrite(b.cowState.commandSync, nil)
 	db.observePublicBatchWrite(c.syncWrite, c.started, c.err)
-	c.err = errors.Join(c.err, b.Close())
-	c.batch, c.db = nil, nil
-	db.lifecycleMu.RUnlock()
+	returned = true
 	return c.err
+}
+
+// A recovered legacy panic(nil) returns from this frame without reaching the
+// normal-return marker. Goexit runs defers but never returns to the caller.
+func runLogicalMVCCCompletionCleanup(cleanup func()) (value any, panicked bool) {
+	returned := false
+	defer func() {
+		if !returned {
+			value, panicked = recover(), true
+		}
+	}()
+	cleanup()
+	returned = true
+	return nil, false
 }
 
 // SubmitLogicalMVCC performs the same canonical validation, preparation,

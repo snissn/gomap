@@ -248,6 +248,23 @@ materialization still uses the complete caller cut after traversal unlocks.
 A dictionary capacity refusal can hand a synchronous point back to that same
 cut, preserving fresh-owner refund outside the basis mutex.
 
+Successful owned point copy-out and cut-local traversal can return workspace
+metadata and optional point buffers through the original budget's idle scratch
+stack. It retains at most four
+entries and 128 KiB of charged payload. Snapshot, backend basis and all successor
+page aliases are cleared first. Cut-local codecs, dictionary capabilities,
+input/output buffers and allocation chains are discarded and fully refunded
+before parking; they are never pooled. Parking consumes the original one or two
+receipt capabilities and refunds their wrappers; a borrower receives fresh
+receipts. Pointer-only cached reads need no point arrays or second receipt.
+Borrowed value/iterator materialization stays conservative; owned append paths
+become eligible only after copying into the caller's destination. Stale close, resize, shrink or split cannot affect a new owner.
+Any otherwise refused in-flight, retirement or total byte admission discards
+idle payload and refunds its charge under the same budget mutex, without
+callbacks, I/O or cache locks. Active borrowers are never reclaimed. Budget
+Close drains all idle entries, and bounded retention work reserves the fixed
+maximum descriptor eviction work before it can have an effect.
+
 Each actual capacity is reserved before allocation. Cut-local capacity is
 refunded through the existing reader Close. Shared successor scratch remains
 charged to its exact backend basis until the last basis reference releases;
@@ -259,35 +276,66 @@ Physical iterator construction failures and Close drain workspace children
 before refunding the aggregate construction lease, including on verified-cache
 hits that need no decoder or buffer growth.
 Direct DB point reads and native physical readers retain the original shared
-workspace. Generic dictionary-free ZSTD decoding and pointer-value decoding
-also retain the original cache-owned decoder envelope, since duplicating generic
-state can exceed the default producer budget. Dictionary reads first reuse an
-already-admitted matching cut-local decoder. Otherwise they decode through the
-original cache physical workspace. Owned version-successor reads finish leaf
-copy-out or owned value append before releasing its mutex. Snapshot and iterator
-leaves decode into their original caller destination; borrowed pointer values
-are copied into the original reader's admitted output before unlocking. Generic
-decoder backing is shared while each reader's returned bytes, validity and
-movement/Close boundaries remain independent. A provider without independent
-definition admission retains the original complete-cut local route.
+workspace. ZSTD records in COW read workspaces use the maintained bounded decoder
+continuation. Dictionary reads first reuse an already-admitted matching cut-local
+decoder. Otherwise they decode through the original cache physical workspace.
+Owned version-successor reads finish leaf copy-out or owned value append before
+releasing its mutex. Snapshot and iterator leaves decode into their original
+caller destination; borrowed pointer values are copied into the original reader's
+admitted output before unlocking. Shared decoder backing does not change each
+reader's returned-byte ownership or movement/Close boundaries. A provider without
+independent definition admission retains the original complete-cut local route.
+Snappy/LZ4 block decoding and other users of the generic `COWDecoder` retain their
+existing implementation and admission contracts.
+
+The bounded ZSTD adapter admits its wrapper and complete input/raw buffer
+capacities on the containing codec's original receipt before allocation. The
+library's `Retain` grows that same receipt before allocating actual continuation,
+table or scratch backing; `Release` refunds only after the dependent aliases are
+detached. The containing codec's base reservation remains until its wrapper and
+buffers are detached and the original lease closes. No generic decoder envelope
+is substituted for these concrete allocations. Input and exact output capacity
+remain hard limits. The maximum decoded size is `max(rawCap, windowCap, 1024)`
+and the maximum window is `windowCap`; COW workspaces select
+`windowCap=max(rawCap, 2048)`. The decoded-size limit covers concatenated frames
+within one operation, and output remains bounded by the caller's exact `dst`.
+
+Finite replenished `OrdinalScanWork` quanta admit work before effects. A no-error
+continuation pause may obtain another quantum; capacity errors are propagated,
+not retried as work exhaustion. Cumulative actual work is checked for overflow,
+and a requested unit that cannot fit a fresh quantum refuses. This synchronous
+adapter adds no aggregate per-read work limit or latency guarantee. Terminal
+error cleanup uses finite quanta and closes the failed continuation before the
+read returns; any later read reconstructs through normal admission.
 Native physical value reads also decode the normal producer's trained dictionary
 records: the shared decoder
 owns independently admitted, SHA-verified definition bytes from the built-in pure
 read provider. A per-call provider capability never installs borrowed cut bytes
 in shared scratch or remains in the decoder. Partial preparation, replacement
 and final cache cleanup release the original definition owner and reservations.
-The shared workspace retains one generic producer decoder, reusing matching
+The shared workspace retains one ZSTD producer decoder, reusing matching
 definitions and retiring incompatible idle storage before replacement admission.
+The adapter checks the complete definition's SHA-derived GoMap producer identity
+before construction and validates its ZSTD dictionary grammar once. Successful
+reads rebind frames within that same validated immutable context and owner,
+retaining actual admitted tables and reusable buffers. Frame detach removes all
+previous caller input/output aliases before returning; it does not refund live
+reusable storage. Full reset or Close retires the context and its backing.
 Different content-addressed definitions can reuse an inner ZSTD dictionary ID;
-switching definitions can therefore reconstruct the decoder. Its roughly 19 MiB
-conservative reservation is not a measurement of physical allocation per switch.
-On a borrowed generic decoder's capacity refusal, one nonblocking physical-mutex
-attempt may refund only idle shared generic storage and retry the same admission
-once after a refund. Busy or borrowed owners are never evicted. The original
-finite limits and legitimate capacity refusals remain in force.
+switching definitions can therefore reconstruct the decoder. Identity is never
+established by that inner ID alone.
+On initial borrowed ZSTD codec admission refusal, one nonblocking physical-mutex
+attempt may refund only idle shared ZSTD storage and retry the same admission
+once after a refund. The original live native capture also exposes this operation
+to prepared-pack admission after its complete reservation refuses capacity. Only
+an actual release permits one retry of that same reservation. The operation
+removes decoder, definition and output references before refunding their original
+receipt; busy borrowers return immediately, and small raw Snappy/LZ4 block codecs
+remain. Allocators and retained receipts acquire no cache backpointer. The
+original finite limits and legitimate capacity refusals remain in force.
 Warm decoders survive producer Close while held captures remain; a cold read
-after Close refuses fresh admission. This does not enable dictionary-compressed
-native external leaves, whose producer still writes the existing block format.
+after Close refuses fresh admission. This does not change the native external-leaf
+producer's codec selection or the original record/CRC verification policy.
 
 Synchronous DB point reads (`Get`, `GetAppend` and versioned variants) append
 the fully shape-checked, CRC-verified and decoded winning value directly into
@@ -495,6 +543,72 @@ Value-log segments remain persistent storage: deletion uses existing
 reachability/pin/scanner authorities, never segment age or a second COW GC
 tracker. Retired owner cleanup occurs outside writer/admission/cut locks.
 
+Native COW online index vacuum borrows the original private backend's staging
+owner through `LockPrivateCOWStagingGuard(db.txnOwner)`, keeping the existing
+maintenance-writer, group and raw lock order. Native activation still rejects the
+unowned staging entrypoint. This changes neither accepted command identity nor
+WAL acknowledgement and does not authorize higher-level barrier callbacks on
+that private backend.
+
+Native producer pressure preparation joins at most one captured-prefix materialization
+and the original semantic cleanup frontier before consumer locks. It also inspects
+pending typed construction through an optional immutable-state inventory,
+borrowing the original retained cut and physical basis off the cut latch. That
+inspection cut is released before maintenance; it creates no snapshot or
+allocation authority. Its complete construction inventory T includes the maximum
+operation workspace F once, because typed collections materialize sequentially.
+For each finite maintenance byte limit L, advisory scheduling applies the same
+three-quarter watermark to variable construction T-F against remaining capacity
+L-F: pressure is T-F >= (L-F)-(L-F)/4. Subtraction retains upward rounding without
+multiplication overflow. F=0 retains the original watermark; invalid T<F or F>=L
+requests maintenance conservatively. Raw reserved-byte, source, generation and
+typed-member pressure remain independent. The full T is still reported and used
+by exact final admission and original build reservations; this scheduling policy
+grants no credit or authority for an incoming write. Additional capacity refusal
+on a required public workload is a failed scheduling candidate.
+
+With an external canonical command WAL, the original actually-started automatic
+maintenance worker may supply a positive size trigger, a total-WAL-byte hook,
+the original cutover hook and deferred covered-prefix cleanup capability. Only
+in that configuration, pressure preparation uses the same writer fence, finite
+rollover retry, captured raw+semantic cut, value-log sync, build group and basis
+handoff without forcing active-journal rotation or covered-file maintenance.
+It joins that publication's original physical seal receipt and accepted-prefix
+retirement, then the original semantic refund frontier. The root records the
+same original captured AppliedLSN; a successful request's original durable WAL
+ACK and recovery skipping remain unchanged. The active journal remains
+appendable, and original append-size rollover still applies.
+
+The running worker retains its first captured size threshold; later
+StartAutoCheckpoint calls do not change that worker's behavior. Capability
+selection uses that captured positive threshold, not merely a later notification
+setting. If this capability is absent, pressure retains the full checkpoint
+path. Explicit Checkpoint, Close, public Drain and automatic maintenance retain
+their existing boundaries. The default 2 GiB trigger is asynchronous and soft,
+not a hard bound on journal growth or a cleanup deadline: held roots, busy
+maintenance, errors and scheduling can retain files. Pressure does not install
+another worker or change any finite producer limit.
+
+If the same finite live accounting, semantic construction debt, physical basis
+and logical sequence remain after a successful drain, later producers skip
+another identical drain. Retained readers still cause ordinary admission
+refusal. Changes to outstanding ownership, physical basis or logical publication
+permit maintenance again; historical peak alone does not. A concurrent logical
+suffix prevents remembering that checkpoint as covering the new work. The
+remembered state holds no additional captures or allocation leases, and is
+covered by the original cache header admission.
+
+The four existing gated native CRUD paths revalidate a value-only current
+pressure observation after acquiring their collection mutation gate, before
+opening a transaction or invoking a document callback. Changed pressured state
+releases that gate before the same producer checkpoint and cleanup join, then
+revalidates again. An unchanged pressured post-preparation observation proceeds
+to exact admission/refusal; pinned owners cannot cause a maintenance spin. The
+non-draining observation retains no cut on return, never waits for the producer
+maintenance mutex and grants no reserved headroom. No application body is retried
+by this pre-opening loop, and different collections keep their original gates.
+Plain collections retain the original advisory preparation without a new gate.
+
 ## Complete-prefix and native ownership seam
 
 The existing lower publication owner keeps one finite accepted FIFO for the DB.
@@ -568,6 +682,24 @@ on failure. Only `NativeSemanticBuildRetryableRefusal` proves an untouched
 preadmission refusal; an ordinary capacity error after original asset creation
 cannot restart or overwrite that work. Accepted disk publication retries only
 its exact handoff and never rebuilds or reapplies its prefix.
+
+A cold native capture without published semantic state may expose an optional
+cut-owned catalog projection. One serialized initializer runs the unchanged
+catalog importer against that exact original capture, including schema,
+incarnation and physical-root validation. A successful import transfers its
+original engine reference and the same admitted immutable catalog maps to the
+cut; readers borrow them while retaining that cut. `State()`, logical sequence,
+snapshot and publication roots remain unchanged. Successor cuts start with an
+empty projection slot; held readers retain their original catalog and basis.
+No manager/global catalog cache or replacement capture is introduced.
+
+Failed partial imports are never shared and follow the original private-read
+cleanup after initialization locks are released. The embedded projection and
+capture controls use the existing containing-allocation admission formulas;
+catalog backing keeps the importer's original receipts. Coheld old and new
+catalogs remain subject to the same finite admission limits. Last-cut release
+detaches the projection reference and sends its original cleanup record through
+the existing semantic cleanup queue before withdrawing the active cut.
 
 Last semantic release detaches one preborn cleanup record in constant work and
 enqueues it before the last retained cut leaves the active-cut count. The
