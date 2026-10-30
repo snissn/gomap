@@ -19,6 +19,18 @@ PROFILES = ('command_wal_durable', 'command_wal_relaxed', 'no_wal_fast')
 ROOT = Path(__file__).resolve().parent.parent
 
 
+class RunnerInterrupted(BaseException):
+    pass
+
+
+class CleanupFailure(BaseException):
+    pass
+
+
+def interrupt(signum, _frame):
+    raise RunnerInterrupted(f'signal {signum}')
+
+
 def sha(data):
     return hashlib.sha256(data).hexdigest()
 
@@ -52,7 +64,13 @@ def load_counts(output):
         raise ValueError('missing or duplicate terminal summary')
     final = output.split('Run finished, takes ', 1)[1]
     counts = {}
-    for kind, count in re.findall(r'^([A-Z_]+)\s+- Takes\(s\): [^\n]*?Count: (\d+)', final, re.M):
+    for line in final.splitlines():
+        if not re.match(r'^[A-Z_]+\s+- Takes\(s\):', line):
+            continue
+        match = re.fullmatch(r'([A-Z_]+)\s+- Takes\(s\): [^\n]*?Count: ([0-9]+),.*', line)
+        if not match:
+            raise ValueError('malformed final operation summary: ' + line)
+        kind, count = match.groups()
         if kind in counts:
             raise ValueError('duplicate final operation summary: ' + kind)
         counts[kind] = int(count)
@@ -102,7 +120,10 @@ def run_observed(argv, *, env, stdout, stderr, timeout):
     except BaseException:
         if proc.poll() is None:
             proc.kill()
-        proc.wait()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired as exc:
+            raise CleanupFailure(f'child {proc.pid} did not exit after kill') from exc
         raise
 
 
@@ -116,6 +137,7 @@ def run_profile(out, profile, server_bin, client_bin, verifier_bin, env):
     child_env = dict(env, TMPDIR=str(tmp), TREEDB_YCSB_LOG_ERRORS='1')
     receipt = {'profile': profile, 'started_utc': now(), 'errors': [], 'db': str(db)}
     server = None
+    interrupted = None
     try:
         server_argv = [str(server_bin), '-dir', str(db), '-profile', profile, '-addr', '127.0.0.1:0']
         receipt['server_argv'] = server_argv
@@ -149,9 +171,13 @@ def run_profile(out, profile, server_bin, client_bin, verifier_bin, env):
             receipt['client_exit'], receipt['client_observation'] = code, obs
             if code:
                 raise RuntimeError(f'client exit {code}')
-            receipt['counts'] = load_counts((run / 'load.out').read_text(errors='replace'))
-            if 'operation err:' in (run / 'load.err').read_text(errors='replace'):
-                raise RuntimeError('client reported an operation error on stderr')
+            load_output = (run / 'load.out').read_text(errors='replace')
+            receipt['counts'] = load_counts(load_output)
+            if 'operation err:' in load_output or 'operation err:' in (run / 'load.err').read_text(errors='replace'):
+                raise RuntimeError('client reported an operation error')
+    except (RunnerInterrupted, CleanupFailure) as exc:
+        interrupted = exc
+        receipt['errors'].append(f'RunnerInterrupted: {exc}')
     except Exception as exc:
         receipt['errors'].append(f'{type(exc).__name__}: {exc}')
     finally:
@@ -165,13 +191,17 @@ def run_profile(out, profile, server_bin, client_bin, verifier_bin, env):
                 receipt['server_exit'] = server.wait(timeout=15)
             except subprocess.TimeoutExpired:
                 server.kill()
-                receipt['server_exit'] = server.wait()
                 receipt['errors'].append('server failed to close within 15 seconds')
-            if receipt['server_exit'] != 0:
+                try:
+                    receipt['server_exit'] = server.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    interrupted = CleanupFailure(f'server {server.pid} did not exit after kill')
+                    receipt['errors'].append(str(interrupted))
+            if receipt.get('server_exit') not in (None, 0):
                 receipt['errors'].append(f"checked server/owner close exit {receipt['server_exit']}")
     # This separate process opens the same DB, scans all keys and fields, explicitly
     # checkpoints, and propagates client/server/manager/owner Close errors.
-    if server is not None and receipt.get('server_exit') == 0:
+    if interrupted is None and server is not None and receipt.get('server_exit') == 0:
         verify_argv = [str(verifier_bin), '-dir', str(db), '-profile', profile]
         receipt['verifier_argv'] = verify_argv
         try:
@@ -187,13 +217,18 @@ def run_profile(out, profile, server_bin, client_bin, verifier_bin, env):
                     data.get('verification_max_scan_documents') != 100001 or
                     data.get('verification_max_cursor_retained_bytes') != 256 << 20):
                 raise RuntimeError('invalid reopen verifier result')
+        except (RunnerInterrupted, CleanupFailure) as exc:
+            interrupted = exc
+            receipt['errors'].append(f'RunnerInterrupted: {exc}')
         except Exception as exc:
             receipt['errors'].append(f'{type(exc).__name__}: {exc}')
-    else:
+    elif interrupted is None:
         receipt['errors'].append('reopen verifier skipped after server/owner close failure')
     receipt['finished_utc'] = now()
     receipt['passed'] = not receipt['errors']
     write_json(run / 'terminal.json', receipt)
+    if interrupted is not None:
+        raise interrupted
     return receipt['passed']
 
 
@@ -227,7 +262,8 @@ def main():
     manifest = {'gomap_revision': args.gomap_revision, 'gomap_repo': str(gomap_repo), 'client_revision': CLIENT_REV,
                 'client_original_sha256': CLIENT_ORIGINAL_SHA, 'client_overlay_sha256': CLIENT_OVERLAY_SHA,
                 'runner_sha256': sha(Path(__file__).read_bytes()), 'verifier_source_sha256': sha(verifier_source.read_bytes()),
-                'builds': [a for a, _ in builds], 'go_version': subprocess.check_output(['go', 'version'], env=env, text=True).strip(),
+                'builds': [{'argv': a, 'cwd': str(cwd), 'go_version': subprocess.check_output(
+                    ['go', 'version'], cwd=cwd, env=env, text=True).strip()} for a, cwd in builds],
                 'created_utc': now(), 'profiles': PROFILES, 'historical_client_close': 'original client discards Close return',
                 'scope': 'nondeterministic correctness regression; no expected random values or performance claim'}
     write_json(out / 'manifest.json', manifest)
@@ -235,14 +271,28 @@ def main():
         with (out / f'build-{index}.out').open('xb') as log:
             subprocess.run(argv, cwd=cwd, env=env, stdout=log, stderr=subprocess.STDOUT, check=True, timeout=600)
     write_json(out / 'binaries.json', {p.name: sha(p.read_bytes()) for p in (server, client, verifier)})
-    results = {profile: run_profile(out, profile, server, client, verifier, env) for profile in PROFILES}
+    write_json(out / 'binary-build-info.json', {p.name: subprocess.check_output(
+        ['go', 'version', '-m', str(p)], cwd=cwd, env=env, text=True)
+        for p, (_, cwd) in zip((server, verifier, client), builds)})
+    results = {}
+    try:
+        for profile in PROFILES:
+            results[profile] = run_profile(out, profile, server, client, verifier, env)
+    except (RunnerInterrupted, CleanupFailure):
+        write_json(out / 'terminal.json', {'finished_utc': now(), 'profiles': results, 'passed': False, 'interrupted': True})
+        raise
     write_json(out / 'terminal.json', {'finished_utc': now(), 'profiles': results, 'passed': all(results.values())})
     return 0 if all(results.values()) else 1
 
 
 if __name__ == '__main__':
+    signal.signal(signal.SIGTERM, interrupt)
+    signal.signal(signal.SIGINT, interrupt)
     try:
         sys.exit(main())
+    except (RunnerInterrupted, CleanupFailure) as exc:
+        print(f'cow JSON regression interrupted: {exc}', file=sys.stderr)
+        sys.exit(1)
     except Exception as exc:
         print(f'cow JSON regression failed: {type(exc).__name__}: {exc}', file=sys.stderr)
         sys.exit(1)

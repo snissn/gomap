@@ -1,8 +1,10 @@
 import importlib.util
 import os
+import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -34,7 +36,10 @@ class LoadCountsTest(unittest.TestCase):
         for value in ('INSERT - Takes(s): 1.0, Count: 100000\n',
                       summary() + 'TOTAL - Takes(s): 1, Count: 100000\n',
                       summary() + 'Run finished, takes 2s\n',
-                      summary().replace('INSERT - Takes(s): 20.0', 'UPDATE - Takes(s): 20.0')):
+                      summary().replace('INSERT - Takes(s): 20.0', 'UPDATE - Takes(s): 20.0'),
+                      summary(errors=0).replace('Count: 0,', 'Count: -1,'),
+                      summary(errors=0).replace('Count: 0,', 'Count: broken,'),
+                      summary().replace('Count: 100000,', 'Count: 100000garbage,')):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 runner.load_counts(value)
 
@@ -57,6 +62,31 @@ class LoadCountsTest(unittest.TestCase):
                 with self.assertRaises(OSError):
                     runner.run_observed([sys.executable, '-c', 'import time; time.sleep(30)'],
                                         env=dict(os.environ), stdout=out, stderr=err, timeout=2)
+        self.assertEqual(len(started), 1)
+        self.assertIsNotNone(started[0].returncode)
+
+    def test_signal_interrupt_reaps_owned_child(self):
+        started = []
+        popen = subprocess.Popen
+
+        def capture(*args, **kwargs):
+            proc = popen(*args, **kwargs)
+            started.append(proc)
+            return proc
+
+        previous = signal.signal(signal.SIGTERM, runner.interrupt)
+        timer = threading.Timer(.2, os.kill, args=(os.getpid(), signal.SIGTERM))
+        try:
+            with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
+                with mock.patch.object(runner.subprocess, 'Popen', side_effect=capture):
+                    timer.start()
+                    with self.assertRaises(runner.RunnerInterrupted):
+                        runner.run_observed([sys.executable, '-c', 'import time; time.sleep(30)'],
+                                            env=runner.env_without_override(), stdout=out, stderr=err, timeout=2)
+        finally:
+            timer.cancel()
+            timer.join()
+            signal.signal(signal.SIGTERM, previous)
         self.assertEqual(len(started), 1)
         self.assertIsNotNone(started[0].returncode)
 
