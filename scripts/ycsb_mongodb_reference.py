@@ -6,6 +6,7 @@ an explicitly authorized tiny live support control. This module has no implicit
 image pull, external-service mode, or timed product run on import/validation.
 """
 import argparse
+import decimal
 import ipaddress
 import json
 import os
@@ -29,6 +30,26 @@ ID = re.compile(r"[0-9a-f]{64}$")
 OID = re.compile(r"[0-9a-f]{24}$")
 COMMIT = re.compile(r"[0-9a-f]{40}$")
 SUPPORTED_SOURCE = {"8.2.7":"9fbea53313e85fbbf864a963ff17b0bd6dafa0be"}
+OBSERVATIONS = ("hello","buildInfo","serverStatus","getCmdLineOpts","getParameter")
+
+
+def observation_request(name):
+    value={name:{"$numberInt":"1"}}
+    if name=="getParameter":value.update(journalCommitInterval={"$numberInt":"1"},syncdelay={"$numberInt":"1"})
+    return value
+
+
+def journal_parameters(parameters):
+    c.require(isinstance(parameters,dict),"missing actual journal parameters")
+    c.require(1<=ext_integer(parameters["journalCommitInterval"],"journalCommitInterval")<=500,"unsupported journal commit interval")
+    delay=parameters["syncdelay"]
+    if isinstance(delay,dict) and set(delay)=={"$numberDouble"}:
+        raw=delay["$numberDouble"]
+        c.require(type(raw) is str and re.fullmatch(r"[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?",raw),"invalid syncdelay BSON double")
+        number=decimal.Decimal(raw)
+        c.require(number.is_finite() and 0<=number<=decimal.Decimal("1.7976931348623157e308"),"invalid syncdelay")
+    else:c.require(ext_integer(delay,"syncdelay")>=0,"invalid syncdelay")
+    return dict(journalCommitInterval=parameters["journalCommitInterval"],syncdelay=delay)
 
 
 def integer(value, label, minimum=0):
@@ -77,6 +98,9 @@ def manifest(value):
             c.require(isinstance(bound[field],str) and c.SHA.fullmatch(bound[field]),"unbound reference helper")
     for key in ("phase_seconds","helper_seconds","cleanup_seconds","phase_outer_seconds","helper_outer_seconds","readiness_seconds","outer_seconds"):
         c.positive_timeout(value["deadlines"][key],key)
+    if "journal_parameters" in value:
+        c.require(type(value["journal_parameters"]) is dict and set(value["journal_parameters"])=={"journalCommitInterval","syncdelay"},"invalid prepared journal parameter keys")
+        journal_parameters(value["journal_parameters"])
 
 
 def ext_integer(value,label):
@@ -108,8 +132,8 @@ def checked_command(command,request,addr,bounds):
 def public_observation(commands,prefix,m,container,bounds):
     replies={}
     last=bounds[0]
-    for name in ("hello","buildInfo","serverStatus","getCmdLineOpts"):
-        reply,interval=checked_command(commands[prefix+name],{name:{"$numberInt":"1"}},m["address"],bounds)
+    for name in OBSERVATIONS:
+        reply,interval=checked_command(commands[prefix+name],observation_request(name),m["address"],bounds)
         c.require(last<=interval[0],"public observation commands overlap/out of order")
         last=interval[1]
         replies[name]=reply
@@ -129,7 +153,7 @@ def public_observation(commands,prefix,m,container,bounds):
     # Persist exact actual parsed settings. No inference that w:1 is j:true,
     # that a default journal policy is TreeDB durable, or that WAL replay ran.
     c.require("journal" not in parsed["storage"],"reference journal override is outside default settings contract")
-    return dict(process_id=process_id["$oid"],settings=parsed,last_utc_ns=last)
+    return dict(process_id=process_id["$oid"],settings=parsed,journal_parameters=journal_parameters(replies["getParameter"]),last_utc_ns=last)
 
 
 def container_inspect(value,m,role,data,terminal=False):
@@ -175,12 +199,12 @@ def identity(value,m,role):
     c.timestamp(value["observed_utc"])
 
 
-def control(directory,stem,m,owner,mode):
+def control(directory,stem,m,owner,mode,evidence_directory=None):
     launch=c.read(directory/(stem+".launch.json"))
     receipt=c.read(directory/(stem+".close.json"))
     packet=c.read(directory/(stem+".json"))
     command=c.read(directory/(stem+".command.json"))
-    c.require(c.schema(command) and c.same(command["argv"],control_argv(directory,stem,m,mode)),"reference control argv/address mismatch")
+    c.require(c.schema(command) and c.same(command["argv"],control_argv(evidence_directory or directory,stem,m,mode)),"reference control argv/address mismatch")
     c.require(c.schema(launch) and c.schema(receipt) and c.schema(packet),"reference control schema mismatch")
     c.process(launch["process"])
     c.exit_success(launch["exit_code"],"reference control child failed")
@@ -195,12 +219,16 @@ def control(directory,stem,m,owner,mode):
     c.require(bounds[0]<=call_bounds[0]<=call_bounds[1]<=bounds[1],"reference control outside child lifetime")
     closed=c.result(receipt["disconnect"],"reference actual client Disconnect",bounds=call_bounds)
     commands=packet["commands"]
-    expected={p+n for p in ("before.","after.") for n in ("hello","buildInfo","serverStatus","getCmdLineOpts")}
+    expected={p+n for p in ("before.","after.") for n in OBSERVATIONS}
     if mode=="checkpoint":expected.add("checkpoint")
     c.require(set(commands)==expected,"missing/unexpected public reference commands")
     before=public_observation(commands,"before.",m,owner,(call_bounds[0],closed[0]))
     after=public_observation(commands,"after.",m,owner,(before["last_utc_ns"],closed[0]))
-    c.require(c.same(before["settings"],after["settings"]) and before["process_id"]==after["process_id"],"reference public process/settings changed")
+    c.require(c.same(before["settings"],after["settings"]) and c.same(before["journal_parameters"],after["journal_parameters"]) and before["process_id"]==after["process_id"],"reference public process/settings changed")
+    role=next(role for role in ROLES if owner["hostname"]=="ycsb-"+m["campaign_id"][:12]+"-"+role)
+    ready=c.read(directory/(role+"-ready.json"))["commands"]
+    c.require(c.same(before["settings"],ready["before.getCmdLineOpts"]["reply"]["parsed"]) and c.same(before["journal_parameters"],journal_parameters(ready["before.getParameter"]["reply"])),"reference settings changed since readiness")
+    if "journal_parameters" in m:c.require(c.same(before["journal_parameters"],journal_parameters(m["journal_parameters"])),"reference resolved journal settings differ from support")
     checkpoint=None
     if mode=="checkpoint":
         _,checkpoint=checked_command(commands["checkpoint"],{"fsync":{"$numberInt":"1"},"lock":False},m["address"],(before["last_utc_ns"],closed[0]))
@@ -225,26 +253,31 @@ def emergency_cli(binary,args,m):
     acquisition or pipe reading fails. The caller has deferred cancellation
     throughout service cleanup; the CLI never authorizes a reusable host PID.
     """
-    c.require(c.exe_digest(binary)==m["server_builds"]["mongodb"]["docker_cli_sha256"],"emergency Docker executable changed")
-    timeout=c.positive_timeout(m["deadlines"]["cleanup_seconds"],"emergency Docker timeout")
+    return bounded_cli(binary,args,m["server_builds"]["mongodb"]["docker_cli_sha256"],m["deadlines"]["cleanup_seconds"])
+
+
+def bounded_cli(binary,args,expected_sha256,timeout):
+    """Artifact-independent direct-child capture for custody or metadata only."""
+    c.require(c.exe_digest(binary)==expected_sha256,"bounded CLI executable changed")
+    timeout=c.positive_timeout(timeout,"bounded CLI timeout")
     env=os.environ.copy();env.pop("GOMAXPROCS",None)
     child=None;descriptor=None;output=bytearray();original=None
     try:
         with c.defer_startup_cancellation() as pending:
             child=subprocess.Popen([binary,*args],env=env,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,start_new_session=True)
             descriptor=os.pidfd_open(child.pid)
-        c.require(not pending,"emergency CLI interrupted during startup")
+        c.require(not pending,"bounded CLI interrupted during startup")
         deadline=time.monotonic()+timeout
         while True:
             remaining=deadline-time.monotonic()
-            c.require(remaining>0,"emergency Docker output deadline exceeded")
-            c.require(select.select([child.stdout],[],[],remaining)[0],"emergency Docker output deadline exceeded")
+            c.require(remaining>0,"bounded CLI output deadline exceeded")
+            c.require(select.select([child.stdout],[],[],remaining)[0],"bounded CLI output deadline exceeded")
             chunk=os.read(child.stdout.fileno(),65536)
             if not chunk:break
             output.extend(chunk)
-            c.require(len(output)<=1024*1024,"emergency Docker output exceeds custody bound")
+            c.require(len(output)<=1024*1024,"bounded CLI output exceeds custody bound")
         code=child.wait(timeout=max(0,deadline-time.monotonic()))
-        c.exit_success(code,"emergency Docker CLI failed")
+        c.exit_success(code,"bounded CLI failed")
         return output.decode("utf-8")
     except BaseException as error:
         original=error
@@ -282,7 +315,7 @@ def docker_action(directory,stem,m,args):
     return (directory/(stem+".out")).read_text(),bounds
 
 
-def lifetime(directory,role,m):
+def lifetime(directory,role,m,evidence_directory=None):
     observed=c.read(directory/(role+".identity.json"));identity(observed,m,role)
     initial=c.read(directory/(role+".inspect.json"));terminal=c.read(directory/(role+".terminal.json"))
     cid=container_inspect(initial,m,role,observed["data_dir"])
@@ -295,9 +328,9 @@ def lifetime(directory,role,m):
     c.require(created[1]<=started[0]<=started[1]<=inspected_initial[0]<=inspected_initial[1]<=c.timestamp(observed["observed_utc"]),"reference creation/start observation ordering mismatch")
     c.require(cid==observed["container_id"]==container_inspect(terminal,m,role,observed["data_dir"],True),"reference terminal/container identity mismatch")
     c.require(initial["State"]["Running"] is True and type(initial["State"]["Pid"]) is int and initial["State"]["Pid"]==observed["process"]["pid"],"reference running process mismatch")
-    opened,_,ready_bounds=control(directory,role+"-ready",m,observed,"observe")
-    before,_,before_bounds=control(directory,role+"-before-close",m,observed,"observe")
-    c.require(opened["process_id"]==before["process_id"] and c.same(opened["settings"],before["settings"]),"reference owner changed during lifetime")
+    opened,_,ready_bounds=control(directory,role+"-ready",m,observed,"observe",evidence_directory)
+    before,_,before_bounds=control(directory,role+"-before-close",m,observed,"observe",evidence_directory)
+    c.require(opened["process_id"]==before["process_id"] and c.same(opened["settings"],before["settings"]) and c.same(opened["journal_parameters"],before["journal_parameters"]),"reference owner changed during lifetime")
     stopped=c.read(directory/(role+".close.json"))
     c.require(c.schema(stopped) and stopped["kind"]=="mongodb_observed_graceful_process_exit" and stopped["container_id"]==cid and c.same(stopped["process"],observed["process"]),"missing reference observed process close")
     c.process(stopped["process"])
@@ -328,22 +361,31 @@ def lifetime(directory,role,m):
     return observed,opened["process_id"],(ready_bounds[1],before_bounds[0]),stop_bounds
 
 
-def fixture_helper(directory,stem,m,mode,owner,public_id,lifetime_bounds):
+def fixture_helper(directory,stem,m,mode,owner,public_id,lifetime_bounds,evidence_directory=None):
     # Reuse existing strict helper/receipt/binary/artifact/deadline validation.
     receipt,bounds=live.helper(directory,stem,m,"mongodb",mode,m["campaign_id"]+":mongodb:"+("random" if mode=="snapshot" else "deterministic"))
     command=c.read(directory/(stem+".command.json"))
     stage=stem.removeprefix("snapshot_") if mode=="snapshot" else None
-    c.require(c.schema(command) and c.same(command["argv"],fixture_argv(directory,stem,m,mode,stage)),"reference fixture argv/address mismatch")
+    c.require(c.schema(command) and c.same(command["argv"],fixture_argv(evidence_directory or directory,stem,m,mode,stage)),"reference fixture argv/address mismatch")
     live.require_interval(bounds,lifetime_bounds,"reference "+stem)
-    route,_,route_bounds=control(directory,stem+"-owner",m,owner,"observe")
+    route,_,route_bounds=control(directory,stem+"-owner",m,owner,"observe",evidence_directory)
     c.require(route["process_id"]==public_id and route_bounds[1]<=bounds[0],"reference fixture route/owner mismatch")
     live.require_interval(route_bounds,lifetime_bounds,"reference fixture route")
     c.require(receipt["checkpoint_attempted"] is False and receipt["checkpoint_succeeded"] is False and receipt["checkpoint"] is None and receipt.get("owner_checkpoint") is None,"reference fixture close cannot stand in for explicit fsync")
     return receipt,bounds
 
 
-def validate(out,require_completion=True):
+def validate(out,require_completion=True,evidence_root=None):
+    # Relocated support retains its original absolute output argv verbatim.
+    # The preparation receipt hash-binds this original root; only expected
+    # output paths use it. All evidence reads use out, all routes use m.address.
+    evidence_root=pathlib.Path(evidence_root) if evidence_root is not None else out
+    c.require(evidence_root.is_absolute(),"absolute original evidence root required")
+    evidence_directory=evidence_root/"mongodb"
     m=c.read(out/"manifest.json");manifest(m)
+    if "preparation_sha256" in m:
+        from ycsb_mongodb_reference_prepare import verify_prepared
+        verify_prepared(out,m)
     directory=out/"mongodb";failure_free(out)
     if require_completion:
         c.require(not os.path.lexists(out/"reference-incomplete.json"),"reference attempt is incomplete or failed")
@@ -367,7 +409,9 @@ def validate(out,require_completion=True):
     c.require(c.digest(out/"client.patch")==m["client"]["source_patch_sha256"] and (out/"client-buildinfo.txt").read_text().strip(),"reference client source/buildinfo missing")
     for key,name in (("fixture","fixture-source.go"),("control","reference-control-source.go")):
         c.require(c.digest(out/name)==m[key]["source_sha256"],"reference helper source mismatch")
-    owners={role:lifetime(directory,role,m) for role in ROLES}
+    owners={role:lifetime(directory,role,m,evidence_directory) for role in ROLES}
+    settings=[c.read(directory/(role+"-ready.json"))["commands"] for role in ROLES]
+    c.require(all(c.same(journal_parameters(x["before.getParameter"]["reply"]),journal_parameters(settings[0]["before.getParameter"]["reply"])) and c.same(x["before.getCmdLineOpts"]["reply"]["parsed"],settings[0]["before.getCmdLineOpts"]["reply"]["parsed"]) for x in settings),"reference settings differ across independent lifetimes")
     if require_completion:
         c.require(all(v[3][1]<=c.timestamp(completed["completed_utc"]) for v in owners.values()),"reference completion precedes checked shutdown")
     c.require(len({v[0]["container_id"] for v in owners.values()})==4 and len({(v[0]["process"]["pid"],v[0]["process"]["start_ticks"]) for v in owners.values()})==4 and len({v[1] for v in owners.values()})==4,"reference requires four independent process/container lifetimes")
@@ -390,7 +434,7 @@ def validate(out,require_completion=True):
         c.require(c.schema(command) and c.same(command["argv"],phase_argv(m,stem)),"reference YCSB argv/address/workload mismatch")
         bounds=c.timestamp(launch["start_utc"]),c.timestamp(launch["end_utc"])
         live.require_interval(bounds,owners["server"][2],"reference measured phase")
-        route,_,route_bounds=control(directory,stem+"-owner",m,owners["server"][0],"observe")
+        route,_,route_bounds=control(directory,stem+"-owner",m,owners["server"][0],"observe",evidence_directory)
         c.require(route["process_id"]==owners["server"][1] and route_bounds[1]<=bounds[0],"reference measured client route/owner mismatch")
         live.require_interval(route_bounds,owners["server"][2],"reference measured route")
         c.require(previous is None or previous<=bounds[0],"reference measured phases overlap")
@@ -398,20 +442,20 @@ def validate(out,require_completion=True):
     snapshots={};receipts={}
     for stage in ("loaded","preclose","reopened"):
         role="reopened" if stage=="reopened" else "server"
-        receipt,bounds=fixture_helper(directory,"snapshot_"+stage,m,"snapshot",owners[role][0],owners[role][1],owners[role][2])
+        receipt,bounds=fixture_helper(directory,"snapshot_"+stage,m,"snapshot",owners[role][0],owners[role][1],owners[role][2],evidence_directory)
         receipts[stage]=(receipt,bounds)
         snapshots[stage]=live.canonical_snapshot(c.read(directory/("snapshot_"+stage+".json")),m,"mongodb",stage)
     c.require(c.timestamp(c.read(directory/"load.launch.json")["end_utc"])<=receipts["loaded"][1][0]<=receipts["loaded"][1][1]<=c.timestamp(c.read(directory/"run_1.launch.json")["start_utc"]),"reference loaded snapshot placement mismatch")
     c.require(previous<=receipts["preclose"][1][0],"reference snapshot precedes settled clients")
     c.require(c.same(snapshots["preclose"][0],snapshots["reopened"][0]),"reference canonical random state differs after reopen")
     for stem,role in (("fixture_write","fixture-write"),("fixture_verify","fixture-reopened")):
-        fixture_helper(directory,stem,m,"write" if stem=="fixture_write" else "verify",owners[role][0],owners[role][1],owners[role][2])
+        fixture_helper(directory,stem,m,"write" if stem=="fixture_write" else "verify",owners[role][0],owners[role][1],owners[role][2],evidence_directory)
     expected=c.read(directory/"fixture.expected.json")
     c.require(expected["source_id"]==m["server_builds"]["mongodb"]["source_commit"] and expected["fixture_id"]==m["campaign_id"]+":mongodb:deterministic" and expected["profile"]==PROFILE and expected["target"]=="mongodb","reference expected fixture identity mismatch")
     exact.validate(expected,[c.read(directory/name) for name in ("fixture.updated.json.load.json","fixture.updated.json","fixture.reopened.json")])
     for role,stem,snapshot,end in (("server","random-checkpoint","snapshot_preclose.json",receipts["preclose"][1][1]),("fixture-write","fixture-checkpoint","fixture.updated.json",c.timestamp(c.read(directory/"fixture_write.launch.json")["end_utc"]))):
         owner,public_id,lifetime_bounds,_=owners[role]
-        observed,checkpoint,bounds=control(directory,stem,m,owner,"checkpoint")
+        observed,checkpoint,bounds=control(directory,stem,m,owner,"checkpoint",evidence_directory)
         live.require_interval(bounds,lifetime_bounds,"reference explicit fsync")
         c.require(end<=bounds[0] and observed["process_id"]==public_id,"reference checkpoint before settled clients/wrong owner")
         bound=c.read(directory/(stem+".binding.json"))
@@ -667,6 +711,9 @@ def failed_attempt(out,driver,error):
 def run(out,docker_binary):
     c.require(out.is_absolute(),"absolute reference output directory required before Docker actions")
     m=c.read(out/"manifest.json");manifest(m);failure_free(out)
+    if "preparation_sha256" in m:
+        from ycsb_mongodb_reference_prepare import verify_prepared
+        verify_prepared(out,m,check_current_sources=True)
     directory=out/"mongodb"
     c.require(not list(directory.iterdir()),"fresh empty reference directory required")
     c.require(c.digest(__file__)==m["reference_source_sha256"] and c.digest(out/"reference-source.py")==m["reference_source_sha256"],"actual reference launcher source is not bound")

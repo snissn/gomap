@@ -56,6 +56,11 @@ func referenceControls(mode string, call func(string, string, bson.D) error) err
 				return err
 			}
 		}
+		// Read the actual resolved runtime parameters. Neither image environment
+		// nor absent startup overrides establishes these values.
+		if err := call(prefix+"getParameter", "getParameter", bson.D{{Key: "getParameter", Value: int32(1)}, {Key: "journalCommitInterval", Value: int32(1)}, {Key: "syncdelay", Value: int32(1)}}); err != nil {
+			return err
+		}
 		return nil
 	}
 	if err := observe("before."); err != nil {

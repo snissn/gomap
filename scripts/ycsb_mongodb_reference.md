@@ -45,10 +45,21 @@ port publication, no restart and no automatic removal. Evidence binds the full
 immutable container ID, exact image/config/runtime, host PID/start ticks/ELF,
 PID/mount/network namespaces and actual mounted DB device/inode. Readiness
 requires both TCP and successful public hello/buildInfo/serverStatus/
-getCmdLineOpts observations matching that actual container/process. The same
+getCmdLineOpts/getParameter observations matching that actual container/process. The same
 public identity is checked before every measured/helper operation and before
 close. Reopen uses the same image, binary and mounted directory with independent
 container, process and server-generated topologyVersion processId.
+
+The read-only getParameter command requests actual `journalCommitInterval` and
+`syncdelay`, retaining canonical BSON numeric types. Both before/after replies,
+every subsequent control and all four lifetimes must agree. A prepared campaign
+must also match its retained support values. Missing fields, nonfinite values,
+type substitution or settings changes fail closed; no default value is inserted.
+MongoDB documents that journaling is always enabled from 6.1 onward, with the
+disable option removed; that is a version/source contract, not an observed
+per-write journal ACK. See [journaling](https://www.mongodb.com/docs/manual/core/journaling/)
+and [runtime parameters](https://www.mongodb.com/docs/manual/reference/parameters/).
+Ordinary w:1 with j absent remains distinct from j:true.
 
 After all clients settle, a separate helper invokes the real public admin
 `fsync:1, lock:false`, retaining canonical Extended JSON requests/replies,
@@ -100,10 +111,63 @@ attempt. Output is labeled `validated-reference-lifecycle-evidence`, separate
 from TreeDB baseline evidence, with COW inapplicable, no observed Close return,
 no WAL replay proof, no power-loss certification and no complete matrix claim.
 
+## Offline preparation, still gated
+
+`python3 scripts/ycsb_mongodb_reference_prepare.py REQUEST.json /absolute/fresh/OUT`
+constructs an input packet without invoking Docker, a helper, client workload or
+service. It invokes only bounded Git inspection and supplied `go version -m`,
+with GOMAXPROCS removed. The explicit request has schema integer 1, kind
+`mongodb_reference_preparation_request`, and these fields:
+
+- `support_dir`: absolute complete independently retained **tiny** reference
+  lifecycle packet (at most 1024 records/operations and one run). It must pass the
+  full current validator, including raw buildInfo/settings/journal commands,
+  image/runtime/config/process/mount identity, explicit fsync, checked observed
+  close/removal and independent same-volume reopen. A free-form summary, image
+  environment or version label is insufficient. A support packet cannot itself
+  depend on nested preparation.
+- `mongodb_addr`: explicit `127.0.0.1:port` corresponding to MONGODB_ADDR, exactly
+  matching the support endpoint. It never reads TREEDB_MONGO_ADDR or falls back to
+  any environment address. The normal shell guard still rejects reference runs.
+- Absolute `client_source_dir`, `client_build_manifest`, `client_binary`,
+  `fixture_binary`, `control_binary`, `docker_binary`, and `go_binary`. The source
+  must descend from the merged producer receipt commit; HEAD, complete overlay,
+  no untracked input, actual ELF and original build manifest are checked. The
+  client and helper records/ELFs/source and Docker CLI must match support.
+- Exact positive integer `recordcount`, `operationcount`, `threadcount`,
+  `run_repeats`, and the existing explicit `deadlines` object. Task UID/GID are
+  observed locally and must match support. No build or tool download is implicit.
+
+Preparation copies only root and per-target regular evidence files, never
+service DB directories or symlinks (at most 2048 files, 16 MiB per file and
+128 MiB total; metadata child output is capped at 1 MiB). It revalidates the copied complete packet,
+then binds its actual raw buildInfo, endpoint, process/container/public identities,
+settings and journal parameters in `reference-support.json`. Runtime records stay
+version metadata with `runtime_elf_attested=false`. Source dependencies, original
+client patch/build manifest, helper sources and inspected executable buildinfo
+are copied and hash-bound in `reference-preparation.json`; the final manifest
+binds that receipt and exact fields. Preparation has an incomplete marker, and
+both run preflight and final validation verify all prepared artifact copies.
+Run preflight additionally matches actual current source dependencies.
+Original absolute helper output argv are retained verbatim. A hash-bound original
+support evidence root supplies only those expected output paths when validating
+the relocated copy; evidence reads use the copy, and endpoint/identity/command
+checks remain exact. The original support directory need not remain available.
+
+Output status is `prepared-reference-inputs-not-activated` and
+`activation_authorized=false`. Hashes/revalidation bind evidence but do not
+authenticate fabricated files or authorize a campaign. No actual support record
+has been generated by this offline implementation. The explicit provisional
+runner's original bootstrap manifest remains independently available for a later
+**separately authorized** tiny support control; a bootstrap packet omits the new
+preparation binding and cannot substitute for shell activation/preparation.
+Synthetic preparation controls use clearly labeled fake tool metadata and raw
+packets; their success establishes parser/control behavior only.
+
 Still outstanding: independent source review of this provisional implementation,
 actual 8.2.7 buildInfo/ELF/settings/log-shape support controls under separately
-authorized host custody, a reviewed preparation route producing the pinned
-manifest, and integration enabling execution in the maintained shell. Same-UID
+authorized host custody, exact-head review of the provisional preparation route,
+and integration enabling execution in the maintained shell. Same-UID
 procfs access and the public image's settings/log shape are not established by
 the synthetic tests. A separately reviewed runtime identity contract is also
 required before activation. MongoDB reference performance remains unattempted.

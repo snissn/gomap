@@ -13,11 +13,11 @@ import (
 // These are synthetic command-construction/checked-error controls. They do not
 // connect to MongoDB or establish support for a particular image/build.
 func TestReferencePublicCommandOrderAndFailures(t *testing.T) {
-	observations := []string{"before.hello", "before.buildInfo", "before.serverStatus", "before.getCmdLineOpts", "after.hello", "after.buildInfo", "after.serverStatus", "after.getCmdLineOpts"}
+	observations := []string{"before.hello", "before.buildInfo", "before.serverStatus", "before.getCmdLineOpts", "before.getParameter", "after.hello", "after.buildInfo", "after.serverStatus", "after.getCmdLineOpts", "after.getParameter"}
 	for _, mode := range []string{"observe", "checkpoint"} {
 		want := append([]string(nil), observations...)
 		if mode == "checkpoint" {
-			want = append(append(append([]string(nil), observations[:4]...), "checkpoint"), observations[4:]...)
+			want = append(append(append([]string(nil), observations[:5]...), "checkpoint"), observations[5:]...)
 		}
 		for failure := -1; failure < len(want); failure++ {
 			var got []string
@@ -27,6 +27,10 @@ func TestReferencePublicCommandOrderAndFailures(t *testing.T) {
 				if key == "checkpoint" {
 					if name != "fsync" || !reflect.DeepEqual(request, bson.D{{Key: "fsync", Value: int32(1)}, {Key: "lock", Value: false}}) {
 						t.Fatalf("wrong explicit fsync request: %s %#v", name, request)
+					}
+				} else if name == "getParameter" {
+					if !reflect.DeepEqual(request, bson.D{{Key: name, Value: int32(1)}, {Key: "journalCommitInterval", Value: int32(1)}, {Key: "syncdelay", Value: int32(1)}}) {
+						t.Fatalf("wrong journal parameter observation request: %#v", request)
 					}
 				} else if !reflect.DeepEqual(request, bson.D{{Key: name, Value: int32(1)}}) {
 					t.Fatalf("wrong observation request: %#v", request)

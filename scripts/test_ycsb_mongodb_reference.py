@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -16,6 +17,7 @@ from unittest import mock
 import ycsb_compare_validate as c
 import ycsb_compare_live as live
 import ycsb_mongodb_reference as reference
+import ycsb_mongodb_reference_prepare as preparation
 from test_ycsb_correctness_fixture import fixture
 
 ROOT=pathlib.Path(__file__).parent
@@ -129,8 +131,8 @@ class ReferencePackets(unittest.TestCase):
         self.save(self.directory/(stem+".command.json"),dict(schema_version=1,argv=reference.control_argv(self.directory,stem,self.m,mode)))
         role=next(k for k,v in self.owners.items() if v==owner)
         b=self.m["server_builds"]["mongodb"]
-        replies=dict(hello=dict(isWritablePrimary=True,topologyVersion=dict(processId={"$oid":str(reference.ROLES.index(role)+1)*24})),buildInfo=dict(version=b["version"],gitVersion=b["source_commit"]),serverStatus=dict(version=b["version"],process="mongod",pid={"$numberLong":"1"},host=owner["hostname"]+":27017",storageEngine=dict(name="wiredTiger",persistent=True)),getCmdLineOpts=dict(parsed=dict(storage=dict(dbPath="/data/db",engine="wiredTiger"),net=dict(bindIpAll=True,port={"$numberInt":"27017"}))))
-        commands={p+n:dict(request={n:{"$numberInt":"1"}},reply=dict(reply,ok={"$numberDouble":"1.0"}),connection_id=self.m["address"]+"[-1]",result=result(start,start)) for p in ("before.","after.") for n,reply in replies.items()}
+        replies=dict(hello=dict(isWritablePrimary=True,topologyVersion=dict(processId={"$oid":str(reference.ROLES.index(role)+1)*24})),buildInfo=dict(version=b["version"],gitVersion=b["source_commit"]),serverStatus=dict(version=b["version"],process="mongod",pid={"$numberLong":"1"},host=owner["hostname"]+":27017",storageEngine=dict(name="wiredTiger",persistent=True)),getCmdLineOpts=dict(parsed=dict(storage=dict(dbPath="/data/db",engine="wiredTiger"),net=dict(bindIpAll=True,port={"$numberInt":"27017"}))),getParameter=dict(journalCommitInterval={"$numberInt":"100"},syncdelay={"$numberDouble":"60.0"}))
+        commands={p+n:dict(request=reference.observation_request(n),reply=dict(reply,ok={"$numberDouble":"1.0"}),connection_id=self.m["address"]+"[-1]",result=result(start,start)) for p in ("before.","after.") for n,reply in replies.items()}
         if mode=="checkpoint":commands["checkpoint"]=dict(request=dict(fsync={"$numberInt":"1"},lock=False),reply=dict(ok={"$numberDouble":"1.0"}),connection_id=self.m["address"]+"[-1]",result=result(start,start))
         packet=dict(schema_version=1,kind="mongodb_reference_public_commands",mode=mode,address=self.m["address"],fixture_id=self.m["campaign_id"]+":"+stem,commands=commands)
         self.save(self.directory/(stem+".json"),packet)
@@ -184,6 +186,13 @@ class ReferencePackets(unittest.TestCase):
         self.reject("random-checkpoint.launch.json",lambda v:v.update(start_utc=ts(41)))
         self.reject("random-checkpoint.json",lambda v:v["commands"]["checkpoint"]["result"].update(end_utc="2026-10-29T00:00:44.000000001Z",elapsed_ns=1))
         self.reject("fixture_verify.launch.json",lambda v:v.update(start_utc="2026-10-29T00:10:00.999999999Z"))
+
+    def test_resolved_journal_parameters_are_typed_observed_and_stable(self):
+        for field,value in (("journalCommitInterval",True),("journalCommitInterval",{"$numberInt":"0"}),("journalCommitInterval",{"$numberDouble":"100.0"}),("syncdelay",{"$numberDouble":"NaN"}),("syncdelay",{"$numberDouble":"Infinity"}),("syncdelay",{"$numberDouble":"1e999"}),("syncdelay",{"$numberDouble":"-0.1"})):
+            self.reject("server-ready.json",lambda v:v["commands"]["before.getParameter"]["reply"].update({field:value}))
+        self.reject("random-checkpoint.json",lambda v:v["commands"]["after.getParameter"]["reply"].update(syncdelay={"$numberDouble":"61.0"}))
+        self.reject("random-checkpoint.json",lambda v:[v["commands"][p+"getParameter"]["reply"].update(syncdelay={"$numberDouble":"61.0"}) for p in ("before.","after.")])
+        self.reject("server-ready.json",lambda v:v["commands"].pop("before.getParameter"))
 
     def test_actual_close_logs_wait_exit_and_owned_removal_required(self):
         for name,fn in (("server.close.json",lambda v:v.update(close_return_observed=True)),("server.close.json",lambda v:v.update(forced_kill=True)),("server.close.json",lambda v:v.update(exit_code=False)),("server.terminal.json",lambda v:v["State"].update(ExitCode=137)),("server.terminal.json",lambda v:v["State"].update(OOMKilled=True)),("server.removed.json",lambda v:v.update(removed=False)),("server.close.json",lambda v:v["actions"].update(wait=v["actions"]["sigterm"])),("reopened.identity.json",lambda v:v.update(data_inode=999,mounted_data_inode=999)),("fixture-write.identity.json",lambda v:v.update(data_dir=self.owners["server"]["data_dir"]))):
@@ -358,6 +367,86 @@ class ReferencePackets(unittest.TestCase):
                 write.assert_not_called()
                 self.assertEqual(len(children),1);self.assertIsNotNone(children[0].returncode)
                 with self.assertRaises(ChildProcessError):os.waitpid(children[0].pid,os.WNOHANG)
+
+    def preparation_inputs(self):
+        # Synthetic support packet and tool metadata; no executable below is
+        # invoked except the existing public validation Python CLI tests.
+        binary=str(pathlib.Path(sys.executable).resolve());actual=c.exe_digest(binary)
+        replacements={"/synthetic/docker":binary,"/synthetic/ycsb":binary,"/synthetic/fixture":binary,"/synthetic/control":binary,"d"*64:actual,"e"*64:actual,"9"*64:actual,"operationcount=10000":"operationcount=1000"}
+        def convert(value):
+            if type(value) is dict:return {key:convert(child) for key,child in value.items()}
+            if type(value) is list:return [convert(child) for child in value]
+            return replacements.get(value,value) if type(value) is str else value
+        for path in self.out.rglob("*.json"):self.save(path,convert(c.read(path)))
+        m=c.read(self.out/"manifest.json");m["operationcount"]=1000
+        for key,name,source in (("fixture","fixture-source.go","ycsb_correctness_fixture.go"),("control","reference-control-source.go","ycsb_mongodb_reference_client.go")):
+            (self.out/name).write_bytes((ROOT/source).read_bytes());m[key]["source_sha256"]=c.digest(self.out/name)
+        self.save(self.out/"manifest.json",m)
+        self.save(self.out/"client-build.json",m["client"]);self.save(self.out/"reference-build.json",m["server_builds"]["mongodb"])
+        path=self.directory/"run_1.out"
+        read_count=next(row["count"] for row in c.parse_log(path) if row["operation"]=="READ")//10
+        counts={"READ":read_count,"UPDATE":1000-read_count,"TOTAL":1000}
+        path.write_text("SYNTHETIC offline tiny support counts; no MongoDB workload executed\n"+re.sub(r"^(READ|UPDATE|TOTAL)(.*?Count: )([0-9]+)",lambda x:x[1]+x[2]+str(counts[x[1]]),path.read_text(),flags=re.MULTILINE))
+        self.rehash()
+        self.change("run_1.launch.json",lambda v:v.update(output_sha256=c.digest(path)))
+        completion=c.read(self.out/"reference-complete.json");completion["manifest_sha256"]=c.digest(self.out/"manifest.json");self.save(self.out/"reference-complete.json",completion)
+        output=tempfile.TemporaryDirectory(prefix="synthetic-reference-preparation-",dir=os.environ.get("TMPDIR","/home/mikers"));self.addCleanup(output.cleanup)
+        config=dict(schema_version=1,kind="mongodb_reference_preparation_request",support_dir=str(self.out),mongodb_addr=m["address"],client_source_dir=str(self.out),client_binary=binary,client_build_manifest=str(self.out/"client-build.json"),fixture_binary=binary,control_binary=binary,docker_binary=binary,go_binary=binary,recordcount=64,operationcount=10000,threadcount=16,run_repeats=1,deadlines=m["deadlines"])
+        def metadata(argv):
+            if argv[0]=="git":
+                return (c.PRODUCER+"\n").encode() if "rev-parse" in argv else b""
+            self.assertEqual(argv[:3],[binary,"version","-m"])
+            return b"SYNTHETIC offline Go buildinfo; no executable invoked\n"
+        return config,pathlib.Path(output.name)/"prepared",metadata
+
+    def test_offline_preparation_binds_full_support_without_invoking_services(self):
+        config,out,metadata=self.preparation_inputs()
+        with mock.patch.object(preparation,"command",side_effect=metadata) as commands,mock.patch.object(reference,"emergency_cli") as docker:
+            report=preparation.prepare(config,out)
+            docker.assert_not_called()
+        self.assertIs(report["activation_authorized"],False)
+        self.assertTrue(all(call.args[0][0] in ("git",config["go_binary"]) for call in commands.call_args_list))
+        self.assertTrue(all(call.args[0][1:3]==["version","-m"] for call in commands.call_args_list if call.args[0][0]!= "git"))
+        m=c.read(out/"manifest.json")
+        # Relocated evidence is independently usable after original artifacts
+        # disappear, without rewriting their actual absolute output argv.
+        shutil.rmtree(self.out)
+        preparation.verify_prepared(out,m,check_current_sources=True)
+        support=c.read(out/"reference-support.json")
+        self.assertEqual(support["observations"]["server"]["buildInfo"]["version"],"8.2.7")
+        self.assertIs(support["runtime_elf_attested"],False)
+        self.assertEqual(m["address"],config["mongodb_addr"])
+        self.assertFalse((out/"reference-support/mongodb/db").exists())
+        self.assertEqual(list((out/"mongodb").iterdir()),[])
+
+    def test_preparation_missing_support_wrong_endpoint_and_changed_raw_build_fail_closed(self):
+        config,out,metadata=self.preparation_inputs()
+        for change in (lambda v:v.update(support_dir=str(out)),lambda v:v.update(mongodb_addr="127.0.0.1:27130")):
+            bad=copy.deepcopy(config);change(bad)
+            with mock.patch.object(preparation,"command",side_effect=metadata) as commands:
+                with self.assertRaises((ValueError,OSError)):preparation.prepare(bad,out)
+                commands.assert_not_called();self.assertFalse(out.exists())
+        self.change("server-ready.json",lambda v:v["commands"]["before.buildInfo"]["reply"].update(gitVersion="0"*40));self.rehash()
+        with mock.patch.object(preparation,"command",side_effect=metadata) as commands:
+            with self.assertRaises(ValueError):preparation.prepare(config,out)
+            commands.assert_not_called();self.assertFalse(out.exists())
+
+    def test_prepared_artifact_and_manifest_changes_fail_before_launch(self):
+        config,out,metadata=self.preparation_inputs()
+        with mock.patch.object(preparation,"command",side_effect=metadata):preparation.prepare(config,out)
+        m=c.read(out/"manifest.json")
+        for name in ("reference-support/mongodb/server-ready.json","reference-support.json","client.patch","preparation-sources/ycsb_compare_validate.py"):
+            path=out/name;original=path.read_bytes();path.write_bytes(original+b" ")
+            with self.subTest(name=name),mock.patch.object(reference,"Docker") as docker:
+                with self.assertRaisesRegex(ValueError,"preparation artifact changed"):reference.run(out,m["docker_binary"])
+                docker.assert_not_called()
+            path.write_bytes(original)
+        changed=dict(m,address="127.0.0.1:27130")
+        with self.assertRaisesRegex(ValueError,"manifest fields changed"):preparation.verify_prepared(out,changed)
+        path=out/"reference-preparation.json";record=c.read(path);record["support_evidence_root"]="/unrelated-original-output"
+        self.save(path,record)
+        changed=dict(m,preparation_sha256=c.digest(path))
+        with self.assertRaisesRegex(ValueError,"argv/address mismatch"):preparation.verify_prepared(out,changed)
 
 
 if __name__=="__main__":unittest.main()
