@@ -1,85 +1,55 @@
-name: "TreeDB: M0 observation diagnostic (manual only)"
-
+name: 5342 private metadata controls (not M0)
 on:
   workflow_dispatch:
-
 permissions:
   contents: read
-
-env:
-  PYTHONDONTWRITEBYTECODE: '1'
-
 jobs:
-  observe:
+  controls:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 5
+    defaults:
+      run:
+        shell: bash
     steps:
-      - name: Start bounded packet
-        run: |
-          mkdir -p "$RUNNER_TEMP/m0-observation/packet"
-          date +%s > "$RUNNER_TEMP/m0-observation/job-started"
-          printf '%s\n' '{"diagnostic_only":true,"product":"2588cd26780fe9ffd8c33797fc6a2bfdf2c00d49"}' > "$RUNNER_TEMP/m0-observation/packet/start.json"
-
-      - name: Checkout reviewed harness
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Checkout controller
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          ref: ${{ github.sha }}
-          path: harness
+          fetch-depth: 0
           persist-credentials: false
-
-      - name: Checkout fixed pristine product
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          ref: 2588cd26780fe9ffd8c33797fc6a2bfdf2c00d49
-          path: product
-          persist-credentials: false
-
-      - name: Verify official complete Go SDK
+      - name: Execute controls and retain all outputs
         run: |
           set -euo pipefail
-          task_root="$RUNNER_TEMP/m0-observation"
-          exec > >(tee "$task_root/packet/sdk-bootstrap.txt") 2>&1
-          archive="$task_root/packet/go1.26.9.linux-amd64.tar.gz"
-          curl --fail --location --max-time 90 https://go.dev/dl/go1.26.9.linux-amd64.tar.gz -o "$archive"
-          echo "42d158b4d8f7b61ac0a830567c940a86098fb7aac52e467a5ebec03ef5cc2f8d  $archive" | sha256sum --check
-          tar -xzf "$archive" -C "$task_root"
-
-      - name: Pure harness validation
-        run: |
-          set -o pipefail
-          M0_TEST_PRODUCT="$GITHUB_WORKSPACE/product" python3 harness/.github/scripts/test_mvcc_m0_observation.py 2>&1 | tee "$RUNNER_TEMP/m0-observation/packet/harness-tests.txt"
-
-      - name: One original full observation schedule
-        run: |
-          python3 harness/.github/scripts/mvcc_m0_observation.py \
-            --product "$GITHUB_WORKSPACE/product" \
-            --output "$RUNNER_TEMP/m0-observation/packet" \
-            --goroot "$RUNNER_TEMP/m0-observation/go" \
-            --job-started "$(cat "$RUNNER_TEMP/m0-observation/job-started")"
-
-      - name: Retain setup and terminal state on every outcome
+          evidence="$RUNNER_TEMP/5342-evidence"
+          mkdir -p "$evidence/tmp"
+          export TMPDIR="$evidence/tmp"
+          printf 'kind=5342-cache-metadata-controls-not-m0\ncontroller=%s\nworkflow=%s\nrun=%s\nattempt=%s\n' "$GITHUB_SHA" "$GITHUB_WORKFLOW_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > "$evidence/identity.txt"
+          git rev-parse HEAD >> "$evidence/identity.txt"
+          git rev-parse d7db5409e20412f4dac4e1a3f902484b05e014e1^{tree} >> "$evidence/identity.txt"
+          git status --porcelain --untracked-files=all > "$evidence/status.txt"
+          cp -R .github/5342 "$evidence/sources"
+          cp .github/workflows/treedb-vacuum-m0-observation.yml "$evidence/carrier-workflow.yml"
+          sha256sum .github/5342/control-* .github/5342/candidate/scripts/observe_read_snapshot_cache.sh .github/5342/candidate/.github/workflows/read-snapshot-guardrails.yml .github/workflows/treedb-vacuum-m0-observation.yml > "$evidence/source-hashes.txt"
+          git --version > "$evidence/tools.txt"
+          bash --version >> "$evidence/tools.txt"
+          python3 --version >> "$evidence/tools.txt"
+          timeout --version >> "$evidence/tools.txt"
+          stat --version >> "$evidence/tools.txt"
+          result=0
+          for name in control-symlinks.sh control-stat-failure.sh control-timeout.sh control-basic.sh control-workflow.py; do
+            if [[ "$name" == *.py ]]; then
+              if python3 ".github/5342/$name" > "$evidence/$name.log" 2>&1; then rc=0; else rc=$?; fi
+            else
+              if bash ".github/5342/$name" > "$evidence/$name.log" 2>&1; then rc=0; else rc=$?; fi
+            fi
+            printf '%s=%s\n' "$name" "$rc" | tee -a "$evidence/exits.txt"
+            if [[ $rc -ne 0 ]] || ! grep -q '^PASS:' "$evidence/$name.log"; then result=1; fi
+          done
+          exit "$result"
+      - name: Retain complete evidence
         if: always()
-        run: |
-          python3 - <<'PY'
-          import json, os, pathlib, time
-          root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'm0-observation' / 'packet'
-          root.mkdir(parents=True, exist_ok=True)
-          (root / 'workflow-terminal.json').write_text(json.dumps({
-              'wall_ns': time.time_ns(), 'harness_sha': os.environ['GITHUB_SHA'],
-              'run_id': os.environ['GITHUB_RUN_ID'], 'attempt': os.environ['GITHUB_RUN_ATTEMPT'],
-              'note': 'See step logs for bootstrap failures; missing runner receipts mean no completed diagnostic.'
-          }, indent=2) + '\n')
-          PY
-
-      - name: Upload complete diagnostic packet
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: m0-observation-2588c-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            ${{ runner.temp }}/m0-observation/packet
-            !${{ runner.temp }}/m0-observation/packet/cache
-            !${{ runner.temp }}/m0-observation/packet/modcache
-            !${{ runner.temp }}/m0-observation/packet/tmp
+          name: 5342-controls-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/5342-evidence/
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 14
