@@ -184,19 +184,20 @@ A request label or shutdown FlushAll alone cannot qualify a checkpoint. The
 backend call has no context cancellation API, so the existing bounded external
 owner supervisor remains responsible for a hung owner; no success is fabricated.
 
-Native deterministic write currently sets `checkpoint_attempted` immediately
-before calling the native client's actual `Checkpoint(ctx)` and sets
-`checkpoint_succeeded` only after that call returns nil. A returned error also
-fails the helper receipt/exit. Unlike native random preclose snapshots, that
-deterministic write receipt does not retain a timed checkpoint Result. These
-flags record actual call outcome, but the missing independently validated call
-Result remains a separate evidence-shape gap for the verified-checkpoint gate;
-no checkpoint duration or complete call evidence is inferred from them.
+Native deterministic write now retains a strict timed `checkpoint` Result around
+its single original public `Checkpoint(ctx)` call. The actual checked return
+sets success/error, and attempted/succeeded flags derive from that same Result.
+The consumer requires it within the helper's actual interval. Flags-only retained
+receipts remain historical and cannot acquire missing Result evidence by
+relabeling. Client elapsed time is not a server-internal checkpoint duration.
 
-Owned reference Mongo lifecycle/owner evidence is still outstanding. Profile crash
-recovery, baseline overlay compilation/review, full orchestration review and the
-frozen matrix remain separate acceptance gates. No product campaign has run as
-part of this implementation.
+The separate [public process-crash control](ycsb_crash_recovery.md) has offline
+packet/CLI/custody controls for ordinary ACK and profile-specific loss guarantees.
+No live product crash run was performed. Automatic checkpoint exclusion and
+actual WAL replay remain unproven; this fixture does not certify power loss.
+Owned reference Mongo lifecycle/owner evidence, baseline overlay compilation/
+review, full orchestration review and the frozen matrix remain separate gates.
+No product campaign has run as part of this implementation.
 
 Run offline controls with:
 

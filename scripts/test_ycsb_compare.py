@@ -594,6 +594,16 @@ int main(int argc,char **argv) {
                 self.save(self.directory/name,original)
                 self.change(name,lambda v:None)
 
+    def test_native_deterministic_checkpoint_requires_actual_timed_result(self):
+        self.native()
+        self.check(True)
+        for value in (None, dict(call_result(11,12),attempted=False),
+                      dict(call_result(11,12),success=False,error="actual failure"),
+                      dict(call_result(11,12),elapsed_ns=1_000_000_000.0),
+                      dict(call_result(11,12),success=1),call_result(0,1)):
+            with self.subTest(value=value):
+                self.reject_mutations([(self.directory/"fixture_write.close.json",lambda v,x=value:v.update(checkpoint=x))])
+
     def test_boolean_schema_and_unbound_runtime_are_rejected(self):
         self.change("runtime.json",lambda v:v.update(observed_gomaxprocs=999))
         self.check(False,"aggregate runtime")

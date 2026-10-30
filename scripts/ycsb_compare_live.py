@@ -95,8 +95,9 @@ def helper(directory, stem, manifest, target, mode, fixture_id):
     c.require(type(receipt["checkpoint_attempted"]) is bool and type(receipt["checkpoint_succeeded"]) is bool,"invalid checkpoint flags")
     if receipt.get("checkpoint") is not None:
         c.result(receipt["checkpoint"],"helper checkpoint",bounds=(c.timestamp(receipt["started_utc"]),c.timestamp(receipt["ended_utc"])))
-    # Native deterministic write currently has flags only; it is an explicit
-    # separate evidence-shape gap, not a fabricated timed Result.
+    if target=="treedb_native" and mode=="write":
+        c.require(receipt["checkpoint_attempted"] is True and receipt["checkpoint_succeeded"] is True,"fixture checkpoint failed/skipped")
+        c.result(receipt["checkpoint"],"native deterministic checkpoint",bounds=(c.timestamp(receipt["started_utc"]),c.timestamp(receipt["ended_utc"])))
 
     for name,hash_value in receipt["artifacts_sha256"].items():
         c.require(pathlib.Path(name).name == name and hash_value == c.digest(directory/name), "snapshot/fixture artifact hash mismatch")

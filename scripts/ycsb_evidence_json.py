@@ -29,6 +29,11 @@ def read(path):
                          parse_constant=reject_constant, parse_float=finite_float)
 
 
+def loads(value):
+    return json.loads(value, object_pairs_hook=unique_object,
+                      parse_constant=reject_constant, parse_float=finite_float)
+
+
 def canonical(value):
     # Python == aliases True/1 and 1/1.0 recursively. JSON encoding retains
     # those distinctions while deliberately ignoring object member order.

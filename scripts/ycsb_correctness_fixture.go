@@ -135,6 +135,133 @@ func writeJSON(path string, obj any) error {
 	}
 	return errors.Join(e, f.Close())
 }
+
+// Sync only fixture artifacts, never the service database or a global sync.
+func syncArtifact(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	err = errors.Join(f.Sync(), f.Close())
+	d, openErr := os.Open(filepath.Dir(path))
+	if openErr != nil {
+		return errors.Join(err, openErr)
+	}
+	return errors.Join(err, d.Sync(), d.Close())
+}
+func durableJSON(path string, obj any) error {
+	if err := writeJSON(path, obj); err != nil {
+		return err
+	}
+	return syncArtifact(path)
+}
+func crashManifest(id identity) manifest {
+	m := makeManifest(id)
+	m.Updates = []update{}
+	return m
+}
+
+type crashOutcome struct {
+	SchemaVersion int                 `json:"schema_version"`
+	Ordinal       int                 `json:"ordinal"`
+	ID            string              `json:"id"`
+	Acknowledged  bool                `json:"acknowledged"`
+	RequestedACK  string              `json:"requested_ack"`
+	Write         ycsbevidence.Result `json:"write"`
+}
+
+// Sequential whole-document inserts give relaxed WAL an unambiguous ACK order.
+// Each actual returned outcome is fsynced before another request is issued.
+func crashWrites(ctx context.Context, d driver, m manifest, journal string) (retErr error) {
+	f, err := os.OpenFile(journal, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	defer func() { retErr = errors.Join(retErr, f.Close()) }()
+	if err = syncArtifact(journal); err != nil {
+		return err
+	}
+	ack := "AckVisible"
+	if m.Target == "mongo" {
+		ack = "w:1,j:absent"
+	}
+	for n, row := range m.Load {
+		var cause error
+		result := ycsbevidence.Call(func() error { cause = d.insert(ctx, row); return cause })
+		outcome := crashOutcome{1, n, row.ID, cause == nil, ack, result}
+		data, marshalErr := json.Marshal(outcome)
+		if marshalErr != nil {
+			return errors.Join(cause, marshalErr)
+		}
+		data = append(data, '\n')
+		count, writeErr := f.Write(data)
+		if count != len(data) && writeErr == nil {
+			writeErr = io.ErrShortWrite
+		}
+		if err = errors.Join(cause, writeErr, f.Sync()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func crashScan(ctx context.Context, d driver) ([]row, error) {
+	// A lost namespace is an allowed empty state only under the loss profiles;
+	// check public metadata explicitly rather than swallowing arbitrary errors.
+	found := false
+	switch d := d.(type) {
+	case *nativeDriver:
+		metas, err := d.c.ListCollections(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, meta := range metas {
+			if meta.Name == collection {
+				found = true
+			}
+		}
+	case *mongoDriver:
+		names, err := d.c.Database(database).ListCollectionNames(ctx, bson.D{})
+		if err != nil {
+			return nil, err
+		}
+		for _, name := range names {
+			if name == collection {
+				found = true
+			}
+		}
+	default:
+		return nil, errors.New("crash scan requires a public driver")
+	}
+	if !found {
+		return []row{}, nil
+	}
+	return d.scan(ctx)
+}
+func crashRowsValid(m manifest, actual []row) bool {
+	wanted := map[string]row{}
+	for _, r := range m.Load {
+		wanted[r.ID] = r
+	}
+	seen := map[string]bool{}
+	for _, r := range actual {
+		if seen[r.ID] || !reflect.DeepEqual(wanted[r.ID], r) {
+			return false
+		}
+		seen[r.ID] = true
+	}
+	if m.Profile == "command_wal_durable" {
+		return len(actual) == len(m.Load)
+	}
+	if m.Profile == "command_wal_relaxed" {
+		for n, r := range m.Load {
+			if seen[r.ID] != (n < len(actual)) {
+				return false
+			}
+		}
+	}
+	return true
+}
 func persistOutcomes(path string, id identity, stage string, outcomes []outcome, cause error) error {
 	return errors.Join(cause, writeJSON(path, snapshot{id, stage, []row{}, outcomes}))
 }
@@ -142,6 +269,12 @@ func sameRows(a, b []row) bool {
 	sort.Slice(a, func(i, j int) bool { return a[i].ID < a[j].ID })
 	sort.Slice(b, func(i, j int) bool { return b[i].ID < b[j].ID })
 	return reflect.DeepEqual(a, b)
+}
+
+func checkedCheckpoint(ctx context.Context, client interface{ Checkpoint(context.Context) error }) (ycsbevidence.Result, error) {
+	var err error
+	result := ycsbevidence.Call(func() error { err = client.Checkpoint(ctx); return err })
+	return result, err
 }
 func finalRows(m manifest) []row {
 	out := make([]row, len(m.Load))
@@ -513,7 +646,7 @@ func run() (retErr error) {
 	addr := flag.String("addr", "", "server address")
 	format := flag.String("format", "", "json or bson")
 	profile := flag.String("profile", "", "storage profile")
-	mode := flag.String("mode", "", "write, verify, or read-only random snapshot")
+	mode := flag.String("mode", "", "write, verify, snapshot, crash-write, or crash-verify")
 	expected := flag.String("expected", "", "exclusive expected manifest on write, existing manifest on verify")
 	observed := flag.String("observed", "", "exclusive updated/reopened snapshot")
 	receipt := flag.String("receipt", "", "exclusive fixture client cleanup receipt")
@@ -523,7 +656,8 @@ func run() (retErr error) {
 	checkpoint := flag.Bool("checkpoint", false, "explicit checkpoint after random snapshot")
 	ownerCheckpointDir := flag.String("owner-checkpoint-dir", "", "private opt-in gateway owner evidence directory; not a Mongo API")
 	flag.Parse()
-	if *addr == "" || *source == "" || *fixture == "" || *expected == "" || *observed == "" || *receipt == "" || (*target != "native" && *target != "mongo") || (*format != "json" && *format != "bson") || (*mode != "write" && *mode != "verify" && *mode != "snapshot") || (*profile != "command_wal_durable" && *profile != "command_wal_relaxed" && *profile != "no_wal_fast") {
+	crash := *mode == "crash-write" || *mode == "crash-verify"
+	if *addr == "" || *source == "" || *fixture == "" || *expected == "" || *observed == "" || *receipt == "" || (*target != "native" && *target != "mongo") || (*format != "json" && *format != "bson") || (*mode != "write" && *mode != "verify" && *mode != "snapshot" && !crash) || (*profile != "command_wal_durable" && *profile != "command_wal_relaxed" && *profile != "no_wal_fast") {
 		return errors.New("all flags and valid target/format/profile/mode are required")
 	}
 	if *target == "mongo" && *format == "json" {
@@ -544,14 +678,23 @@ func run() (retErr error) {
 	if *ownerCheckpointDir != "" && (*target != "mongo" || (*mode != "write" && !(*mode == "snapshot" && *checkpoint && *stage == "preclose"))) {
 		return errors.New("private checkpoint control only applies to Mongo write or preclose snapshot")
 	}
+	if crash {
+		collection = "ycsb_crash_recovery"
+		database = "ycsb_crash_recovery"
+	}
 	id := identity{1, *source, *fixture, *profile, *target, *format}
 	var m manifest
-	if *mode == "write" {
+	if *mode == "crash-write" {
+		m = crashManifest(id)
+		if e := durableJSON(*expected, m); e != nil {
+			return e
+		}
+	} else if *mode == "write" {
 		m = makeManifest(id)
 		if e := writeJSON(*expected, m); e != nil {
 			return e
 		}
-	} else if *mode == "verify" {
+	} else if *mode == "verify" || *mode == "crash-verify" {
 		b, e := os.ReadFile(*expected)
 		if e != nil {
 			return e
@@ -559,7 +702,11 @@ func run() (retErr error) {
 		if e = json.Unmarshal(b, &m); e != nil {
 			return e
 		}
-		if m.identity != id || !reflect.DeepEqual(m, makeManifest(id)) {
+		want := makeManifest(id)
+		if crash {
+			want = crashManifest(id)
+		}
+		if m.identity != id || !reflect.DeepEqual(m, want) {
 			return errors.New("expected manifest does not match deterministic fixture identity and intents")
 		}
 	}
@@ -578,6 +725,12 @@ func run() (retErr error) {
 		checkpointSucceeded = err == nil && proof.Checkpoint.Success && proof.Result.Success
 		return err
 	}
+	nativeCheckpoint := func() error {
+		result, err := checkedCheckpoint(ctx, ds[0].(*nativeDriver).c)
+		checkpointResult = result
+		checkpointAttempted, checkpointSucceeded = result.Attempted, result.Success
+		return err
+	}
 	defer func() {
 		var cerr error
 		for _, d := range ds {
@@ -592,8 +745,11 @@ func run() (retErr error) {
 		if *mode == "snapshot" {
 			kind = "random_snapshot_client_close"
 		}
+		if crash {
+			kind = "public_process_crash_client_close"
+		}
 		artifacts := map[string]string{}
-		for _, path := range []string{*expected, *observed, *observed + ".load.json"} {
+		for _, path := range []string{*expected, *observed, *observed + ".load.json", *observed + ".acknowledged.jsonl"} {
 			file, err := os.Open(path)
 			if err != nil {
 				continue
@@ -615,9 +771,12 @@ func run() (retErr error) {
 			return ""
 		}(), "result_error": status})
 		retErr = errors.Join(retErr, e)
+		if crash && e == nil {
+			retErr = errors.Join(retErr, syncArtifact(*receipt))
+		}
 	}()
 	clients := 4
-	if *mode == "snapshot" {
+	if *mode == "snapshot" || crash {
 		clients = 1
 	}
 	for i := 0; i < clients; i++ {
@@ -635,6 +794,28 @@ func run() (retErr error) {
 			ds = append(ds, d)
 		}
 	}
+	if crash {
+		if *mode == "crash-write" {
+			if *target == "native" {
+				_, err := ds[0].(*nativeDriver).c.CreateCollection(ctx, collections.CollectionMeta{Name: collection, Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormat(*format)}})
+				if err != nil {
+					return err
+				}
+			}
+			if err := crashWrites(ctx, ds[0], m, *observed+".acknowledged.jsonl"); err != nil {
+				return err
+			}
+		}
+		actual, err := crashScan(ctx, ds[0])
+		if err != nil {
+			return err
+		}
+		sort.Slice(actual, func(i, j int) bool { return actual[i].ID < actual[j].ID })
+		if (*mode == "crash-write" && !sameRows(actual, m.Load)) || !crashRowsValid(m, actual) {
+			return errors.New("public process crash state violates profile guarantee")
+		}
+		return durableJSON(*observed, snapshot{id, *mode, actual, []outcome{}})
+	}
 	if *mode == "snapshot" {
 		actual, e := ds[0].scan(ctx)
 		if e != nil {
@@ -648,19 +829,7 @@ func run() (retErr error) {
 			if *target == "mongo" {
 				return privateCheckpoint()
 			}
-			checkpointAttempted = true
-			start := time.Now()
-			e = ds[0].(*nativeDriver).c.Checkpoint(ctx)
-			end := time.Now()
-			checkpointSucceeded = e == nil
-			message := ""
-			if e != nil {
-				message = e.Error()
-			}
-			checkpointResult = map[string]any{"attempted": true, "success": e == nil, "error": message, "start_utc": start.UTC().Format(time.RFC3339Nano), "end_utc": end.UTC().Format(time.RFC3339Nano), "elapsed_ns": end.Sub(start).Nanoseconds()}
-			if e != nil {
-				return e
-			}
+			return nativeCheckpoint()
 		}
 		return nil
 	}
@@ -750,11 +919,7 @@ func run() (retErr error) {
 		return e
 	}
 	if *target == "native" {
-		checkpointAttempted = true
-		if e = ds[0].(*nativeDriver).c.Checkpoint(ctx); e != nil {
-			return e
-		}
-		checkpointSucceeded = true
+		return nativeCheckpoint()
 	} else if *ownerCheckpointDir != "" {
 		return privateCheckpoint()
 	}
