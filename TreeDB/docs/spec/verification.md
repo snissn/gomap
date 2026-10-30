@@ -242,6 +242,33 @@ checks bind the reconciled head. Public 500k raw-KV comparisons and managed
 historical-MVCC comparisons exercise different routes; both require actual-mode
 activation evidence and separate natural versus instrumented observations.
 
+## Native COW JSON load and checkpoint regression
+
+`TestSpanNativeApplyBaseDeltaLeftEdgePartialStitch` checks partial rewrites of
+scratch-backed base-delta internal separators, including a non-nil empty left
+edge. `TestCOWNativewireJSONLoadCheckpointReopen` sends concurrent JSON inserts
+through public native-wire clients and a `cow_btree` native semantic owner,
+checks acknowledged values and complete enumeration, checkpoints, checks
+close errors and reopens all three production profiles. Its deterministic
+4,096-row shape also passes with the unfixed production code: it is lifecycle
+coverage, not a reduced public RED. No deterministic smaller public RED has
+been established. The retained 100,000-row public reproduction and the
+focused zipper RED/GREEN are separate evidence; see issue #5333 for their
+source bindings, recipes, and limitations. The opt-in
+`scripts/cow_json_load_regression.py` builds pinned sources and the retained
+client protocol overlay, checks public load counts and checked server close,
+then verifies every expected key on a fresh reopen; see its accompanying
+documentation for nondeterminism and the historical client-close limitation.
+`TestCOWNativewireJSONDurableACKRecovery` exits the owner process without close
+after synced ACKs and verifies the recovered documents.
+`TestCOWNativewireJSONDurableVisibleACKWALReplay` separately observes replay of
+unapplied command WAL frames after ordinary durable-profile visible ACKs and an
+unclean exit. The wire and owner checkpoint error-propagation tests exercise
+real maintenance capacity refusal;
+the owner test also checks final-close failure and durable value recovery.
+These controls do not extend ordinary ACK guarantees for the
+`command_wal_relaxed` or `no_wal_fast` profiles.
+
 ## Immutable COW cache qualification
 
 Exact-cut cold native catalog controls:
