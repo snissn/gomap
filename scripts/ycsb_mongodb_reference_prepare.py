@@ -12,6 +12,7 @@ import json
 import os
 import pathlib
 import shutil
+import signal
 import sys
 import uuid
 
@@ -196,12 +197,18 @@ def main():
     parser.add_argument("config",type=pathlib.Path)
     parser.add_argument("out",type=pathlib.Path)
     args=parser.parse_args()
+    previous=signal.getsignal(signal.SIGTERM)
+    def interrupted(signum,frame):
+        raise InterruptedError("reference preparation interrupted by signal "+str(signum))
+    signal.signal(signal.SIGTERM,interrupted)
     try:
         print(json.dumps(prepare(c.read(args.config),args.out.resolve()),allow_nan=False))
         return 0
     except (Exception,KeyboardInterrupt) as error:
         print("invalid reference preparation: "+(str(error) or type(error).__name__),file=sys.stderr)
         return 3
+    finally:
+        signal.signal(signal.SIGTERM,previous)
 
 
 if __name__=="__main__":raise SystemExit(main())

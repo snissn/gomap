@@ -7,10 +7,13 @@ import json
 import os
 import pathlib
 import re
+import select
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -447,6 +450,80 @@ class ReferencePackets(unittest.TestCase):
         self.save(path,record)
         changed=dict(m,preparation_sha256=c.digest(path))
         with self.assertRaisesRegex(ValueError,"argv/address mismatch"):preparation.verify_prepared(out,changed)
+
+    def test_preparation_sigterm_reaps_actual_slow_metadata_child_and_restores_handler(self):
+        # Inject only the metadata stage into the real preparation main. Both
+        # controller and slow metadata child are actual Python ELF processes;
+        # no Docker, service, Go build or product executable is invoked.
+        config=self.out/"signal-config.json";self.save(config,{})
+        out=self.out/"interrupted-preparation";marker=self.out/"metadata-child.json";terminal=self.out/"controller-terminal.json"
+        program=r'''
+import importlib.util,json,os,pathlib,signal,sys
+sys.path.insert(0,sys.argv[1])
+import ycsb_mongodb_reference as reference
+import ycsb_mongodb_reference_prepare as preparation
+if os.environ.get("YCSB_PREPARATION_TEST_SOURCE"):
+    spec=importlib.util.spec_from_file_location("old_preparation",os.environ["YCSB_PREPARATION_TEST_SOURCE"])
+    preparation=importlib.util.module_from_spec(spec);spec.loader.exec_module(preparation)
+children=[];original=reference.subprocess.Popen
+def tracked(*args,**kwargs):
+    child=original(*args,**kwargs);children.append(child);return child
+reference.subprocess.Popen=tracked
+def metadata_stage(config,out):
+    code="import json,os,pathlib,time;pathlib.Path("+repr(sys.argv_marker)+").write_text(json.dumps(dict(pid=os.getpid(),sid=os.getsid(0),gomaxprocs_unset='GOMAXPROCS' not in os.environ)));time.sleep(30)"
+    return preparation.command([sys.executable,"-c",code])
+preparation.prepare=metadata_stage
+config,out,marker,terminal=sys.argv[2:]
+sys.argv_marker=marker
+sys.argv=[preparation.__file__,config,out]
+previous=signal.getsignal(signal.SIGTERM)
+code=preparation.main()
+reaped=False
+try:os.waitpid(children[0].pid,os.WNOHANG)
+except ChildProcessError:reaped=True
+pathlib.Path(terminal).write_text(json.dumps(dict(status=code,signal_restored=signal.getsignal(signal.SIGTERM)==previous,pid=children[0].pid,exit_code=children[0].returncode,reaped=reaped)))
+raise SystemExit(code)
+'''
+        env=dict(os.environ,GOMAXPROCS="123")
+        controller=subprocess.Popen([sys.executable,"-c",program,str(ROOT),str(config),str(out),str(marker),str(terminal)],env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+        descriptor=None;observed=None;stdout=stderr=""
+        try:
+            deadline=time.monotonic()+5
+            while not marker.exists() and controller.poll() is None and time.monotonic()<deadline:time.sleep(.01)
+            self.assertTrue(marker.exists(),"metadata child did not start")
+            child=c.read(marker);descriptor=os.pidfd_open(child["pid"])
+            observed=c.observe(child["pid"])
+            self.assertEqual(observed["exe_sha256"],c.exe_digest(sys.executable))
+            controller.send_signal(signal.SIGTERM)
+            stdout,stderr=controller.communicate(timeout=6)
+            self.assertEqual(controller.returncode,3,stderr)
+            result=c.read(terminal)
+            self.assertEqual(result,dict(status=3,signal_restored=True,pid=child["pid"],exit_code=-signal.SIGTERM,reaped=True))
+            self.assertEqual(child,dict(pid=result["pid"],sid=result["pid"],gomaxprocs_unset=True))
+            self.assertTrue(select.select([descriptor],[],[],0)[0])
+            self.assertFalse(out.exists())
+            with self.assertRaises(OSError):reference.validate(out)
+        finally:
+            if controller.poll() is None:
+                controller.send_signal(signal.SIGTERM)
+                try:stdout,stderr=controller.communicate(timeout=6)
+                except subprocess.TimeoutExpired:
+                    controller.kill();stdout,stderr=controller.communicate(timeout=3)
+            # Baseline RED must not strand its intentionally exposed child.
+            # The descriptor was pinned before controller cancellation; no
+            # numeric PID or unrelated process can authorize this cleanup.
+            if descriptor is not None:
+                if not select.select([descriptor],[],[],0)[0]:signal.pidfd_send_signal(descriptor,signal.SIGKILL)
+                self.assertTrue(select.select([descriptor],[],[],3)[0]);os.close(descriptor)
+            if os.environ.get("YCSB_PREPARATION_TEST_EVIDENCE_DIR"):
+                retained=pathlib.Path(os.environ["YCSB_PREPARATION_TEST_EVIDENCE_DIR"]);retained.mkdir(parents=True,exist_ok=False)
+                (retained/"controller.py").write_text(program)
+                (retained/"stdout").write_text(stdout);(retained/"stderr").write_text(stderr)
+                source=pathlib.Path(env.get("YCSB_PREPARATION_TEST_SOURCE",preparation.__file__))
+                shutil.copyfile(source,retained/"preparation-source.py")
+                for path in (marker,terminal):
+                    if path.exists():shutil.copyfile(path,retained/path.name)
+                self.save(retained/"status.json",dict(controller_exit=controller.returncode,metadata_process=observed,preparation_source_sha256=c.digest(source),synthetic_only=True,product_runs=0))
 
 
 if __name__=="__main__":unittest.main()

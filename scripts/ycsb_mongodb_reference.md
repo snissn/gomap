@@ -116,7 +116,9 @@ no WAL replay proof, no power-loss certification and no complete matrix claim.
 `python3 scripts/ycsb_mongodb_reference_prepare.py REQUEST.json /absolute/fresh/OUT`
 constructs an input packet without invoking Docker, a helper, client workload or
 service. It invokes only bounded Git inspection and supplied `go version -m`,
-with GOMAXPROCS removed. The explicit request has schema integer 1, kind
+with GOMAXPROCS removed. Its CLI installs a scoped SIGTERM-to-exception handler
+so cancellation reaches the metadata child's bounded cleanup/reap, and restores
+the previous handler on exit. The explicit request has schema integer 1, kind
 `mongodb_reference_preparation_request`, and these fields:
 
 - `support_dir`: absolute complete independently retained **tiny** reference
