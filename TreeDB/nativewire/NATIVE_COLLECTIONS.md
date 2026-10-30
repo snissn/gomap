@@ -14,6 +14,31 @@ producers/formats fail closed through native eligibility. No legacy producer or
 alternate publisher is created for an unsupported command. This explicit role
 does not migrate the default fixed-peer route or qualify all producer families.
 
+Ordinary BSON insertion on the public shared COW owner supports both returned
+IDs and `omit_result_ids`, including the `InsertBatchNoResult` client method.
+Both options use the same native validation, private preparation and command-WAL
+publication; BSON bytes and binary types stay native. Omitted responses allocate
+no response-only ID vector or ID byte arena. The existing v1 wire encoding and
+response flags are unchanged. BSON vector support remains governed by its
+separate eligibility rules.
+
+The BSON no-result combiner may split a rejected group only when
+`ErrMutationNotAccepted` proves no canonical assignment or logical publication.
+Generic errors carry no such permission. Ambiguous, accepted-publication and
+recovery-required outcomes are never replayed. Native final-row preparation
+(including unique ownership checks) runs before intent construction and
+`CommitNative`; replay/apply owners do not receive a not-accepted marker from
+that boundary.
+
+`TestCOWNativewireInsertResultIDParity` covers both ID options and JSON/BSON under
+durable WAL, relaxed WAL and no-WAL profiles, including caller-buffer reuse,
+checked checkpoint/close and fresh reopen. `TestCOWNativewireBSONInsertCombiner`
+and the `TestCOWNativewireBSONCombiner*` controls retain deterministic member
+outcomes, prepublication fallback, unmarked preappend refusal, and post-sync
+ambiguity with child-process recovery. These correctness controls are separate
+from successful-path throughput/allocation qualification; rejected pre-fix
+requests are not an insertion-throughput baseline.
+
 The public DB is the one database owner. The factory retains it until successful
 FSM construction, then the FSM owns it; the backend is borrowed and is never
 closed independently. Snapshot capture synchronizes the original semantic prefix

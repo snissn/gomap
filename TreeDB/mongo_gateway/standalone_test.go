@@ -496,6 +496,11 @@ func TestStandaloneServerOfficialDriverCRUDAndReopen(t *testing.T) {
 		t.Fatalf("OpenStandaloneServer: %v", err)
 	}
 
+	if got := standalone.Stats()["treedb.cache.memtable_mode"]; got != "cow_btree" || !standalone.Collections.UsesNativeCommandWALApply() {
+		_ = standalone.Close()
+		t.Fatalf("Mongo owner mode=%q native=%t, want shared COW", got, standalone.Collections.UsesNativeCommandWALApply())
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -599,7 +604,11 @@ func TestStandaloneServerOfficialDriverCRUDAndReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen standalone: %v", err)
 	}
-	defer func() { _ = reopened.Close() }()
+	defer func() {
+		if err := reopened.Close(); err != nil {
+			t.Errorf("reopened close: %v", err)
+		}
+	}()
 	reopenedCollection, err := reopened.Collections.OpenCollection("app.users")
 	if err != nil {
 		t.Fatalf("open collection after reopen: %v", err)

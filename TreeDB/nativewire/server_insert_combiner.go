@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 )
 
@@ -168,7 +169,13 @@ func applyInsertBatchCombineItems(s *Server, batch []*nativewireInsertBatchCombi
 		docs[i] = item.req.docs[0]
 	}
 	err := batch[0].req.collection.NativewireInsertBatchNoResultIDs(ids, docs, true)
-	if err != nil && !errors.Is(err, collections.ErrCommitAmbiguous) {
+	// Splitting is safe only when staging explicitly rejected the whole group.
+	// A generic error, even before append, supplies no permission to replay it.
+	if errors.Is(err, collections.ErrMutationNotAccepted) &&
+		!errors.Is(err, collections.ErrCommitAmbiguous) &&
+		!errors.Is(err, collections.ErrRecoveryRequired) &&
+		!errors.Is(err, backenddb.ErrRecoveryRequired) &&
+		!backenddb.CommitPublicationAccepted(err) {
 		for _, item := range batch {
 			applySingleInsertBatchCombineItem(s, item)
 		}

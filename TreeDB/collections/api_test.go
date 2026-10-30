@@ -3650,6 +3650,29 @@ func TestCollectionInsertBatchSingleDirectBufferedTemplateV1StagesExpectedRoots(
 }
 
 func TestCollectionNativewireInsertBatchNoResultIDsCopiesInputID(t *testing.T) {
+	t.Run("cow_bson_document_and_id", func(t *testing.T) {
+		_, manager, col := openNativeProducerAdmissionFixture(t, &CollectionMeta{Name: "docs", Options: CollectionOptions{DocumentFormat: DocumentFormatBSON}})
+		if !manager.UsesNativeCommandWALApply() {
+			t.Fatal("expected shared COW owner")
+		}
+		id := []byte("original")
+		doc, err := bson.Marshal(bson.D{{Key: "binary", Value: bson.Binary{Subtype: 0x80, Data: []byte{0, 1, 255}}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := bytes.Clone(doc)
+		if err := col.NativewireInsertBatchNoResultIDs([][]byte{id}, [][]byte{doc}, true); err != nil {
+			t.Fatal(err)
+		}
+		clear(id)
+		clear(doc)
+		if got, err := col.Get([]byte("original")); err != nil || !bytes.Equal(got, want) {
+			t.Fatalf("borrowed input retained: got=%x err=%v", got, err)
+		}
+		if got, err := col.Get(id); err != nil || got != nil {
+			t.Fatalf("mutated ID installed: got=%x err=%v", got, err)
+		}
+	})
 	d, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
