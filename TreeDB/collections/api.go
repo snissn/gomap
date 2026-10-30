@@ -12958,7 +12958,7 @@ func (c *Collection) insertBatchOnceWithLockState(
 			resetCollectionRunTables(plan.runs)
 			// Validation only reads the catalog and plan. The new rows are
 			// still private: buffer installation and command assignment happen
-			// below. An externally assigned/replay intent retains its authority.
+			// below. An externally assigned intent retains its authority.
 			if (commandWALIntent == nil || commandWALIntent.AssignedLSN() == 0) &&
 				(bufferedCommandWALIntent == nil || bufferedCommandWALIntent.AssignedLSN() == 0) {
 				return nil, mutationNotAcceptedError(err)
