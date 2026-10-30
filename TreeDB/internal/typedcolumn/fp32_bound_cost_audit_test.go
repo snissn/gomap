@@ -17,10 +17,13 @@ func TestFP32ImageEncodedUpperBoundSnappySections(t *testing.T) {
 				imageOpts.SectionCompression = CompressionSnappy
 			case "locator":
 				imageOpts.RowLocatorSectionCompression = CompressionSnappy
+				imageOpts.RowLocatorSectionCompressionSet = true
 			case "dictionary":
 				imageOpts.DictionarySectionCompression = CompressionSnappy
+				imageOpts.DictionarySectionCompressionSet = true
 			case "pruning":
 				imageOpts.PruningMetadataSectionCompression = CompressionSnappy
+				imageOpts.PruningMetadataSectionCompressionSet = true
 			}
 			bound, err := FP32ImageEncodedUpperBound(opts, 257, imageOpts)
 			if err != nil || bound <= 0 {
