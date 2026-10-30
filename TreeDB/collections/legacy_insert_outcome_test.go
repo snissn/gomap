@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"sync/atomic"
+	"sync"
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
@@ -94,8 +94,24 @@ func TestBufferedInsertConflictOutcomeBoundary(t *testing.T) {
 				domain.mu.RLock()
 				generation, count, first, last := domain.writeGeneration, domain.count, domain.pendingCommandWALFirst, domain.pendingCommandWALLast
 				domain.mu.RUnlock()
-				var events atomic.Int32
-				restore := durabilitycut.Install(func(durabilitycut.Event) error { events.Add(1); return nil })
+				var eventMu sync.Mutex
+				var events []bufferedConflictEvent
+				restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+					record := bufferedConflictEvent{Event: event, Retirement: bufferedConflictRetirementEvent(event)}
+					record.Paths = append([]string(nil), event.Paths...)
+					if event.StablePath != nil {
+						record.StablePathName = event.StablePath.Name()
+					}
+					if event.StableParent != nil {
+						record.StableParentName = event.StableParent.Name()
+					}
+					// Stable handles belong only to the synchronous callback.
+					record.StablePath, record.StableParent = nil, nil
+					eventMu.Lock()
+					events = append(events, record)
+					eventMu.Unlock()
+					return nil
+				})
 				var restored bool
 				defer func() {
 					if !restored {
@@ -107,12 +123,30 @@ func TestBufferedInsertConflictOutcomeBoundary(t *testing.T) {
 				unlock.Unlock()
 				restore()
 				restored = true
+				eventMu.Lock()
+				observed := append([]bufferedConflictEvent(nil), events...)
+				eventMu.Unlock()
+				for _, event := range observed {
+					t.Logf("durability event: %+v", event)
+					if !event.Retirement {
+						t.Errorf("rejection reached a publication or unknown durability event: %+v", event)
+					}
+				}
 				if !errors.Is(err, want) || errors.Is(err, ErrMutationNotAccepted) == assigned || errors.Is(err, ErrCommitAmbiguous) || backenddb.CommitPublicationAccepted(err) {
 					t.Fatalf("conflict=%v assigned=%t want=%v", err, assigned, want)
 				}
 				now, _ := d.StateToken()
-				if events.Load() != 0 || now != before || intent.AssignedLSN() != beforeLSN || d.CommandWALNextLSN() != next || !reflect.DeepEqual(frames, collectionCommandWALFrames(t, d.Dir())) {
-					t.Fatalf("rejection crossed publication boundary: events=%d state=%+v want=%+v assigned=%d next=%d", events.Load(), now, before, intent.AssignedLSN(), d.CommandWALNextLSN())
+				if now != before {
+					t.Errorf("rejection changed state: got=%+v want=%+v", now, before)
+				}
+				if got := intent.AssignedLSN(); got != beforeLSN {
+					t.Errorf("rejection changed assigned LSN: got=%d want=%d", got, beforeLSN)
+				}
+				if got := d.CommandWALNextLSN(); got != next {
+					t.Errorf("rejection changed next LSN: got=%d want=%d", got, next)
+				}
+				if got := collectionCommandWALFrames(t, d.Dir()); !reflect.DeepEqual(frames, got) {
+					t.Errorf("rejection changed WAL frames: got=%+v want=%+v", got, frames)
 				}
 				domain.mu.RLock()
 				unchanged := domain.writeGeneration == generation && domain.count == count && domain.pendingCommandWALFirst == first && domain.pendingCommandWALLast == last
