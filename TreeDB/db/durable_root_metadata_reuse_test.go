@@ -223,6 +223,10 @@ func TestDurableRootMetadataReuseMultipageManifest4627(t *testing.T) {
 
 func TestDurableRootMetadataReuseProcessCut4627(t *testing.T) {
 	if mode := os.Getenv("TREEDB_METADATA_REUSE_CUT4627"); mode != "" {
+		reportPhase := func(phase string) {
+			fmt.Fprintf(os.Stderr, "metadata-reuse process-cut mode=%s phase=%s\n", mode, phase)
+		}
+		reportPhase("setup-start")
 		database, err := Open(Options{Dir: os.Getenv("TREEDB_METADATA_REUSE_DIR4627"), DisableBackgroundPrune: true})
 		if err != nil {
 			t.Fatal(err)
@@ -236,6 +240,7 @@ func TestDurableRootMetadataReuseProcessCut4627(t *testing.T) {
 		if database.State().CommitSeq != 66 {
 			t.Fatalf("fixture commit=%d", database.State().CommitSeq)
 		}
+		reportPhase("setup-complete-commit66")
 		before := database.idx.Load().pager.PageCount()
 		low := false
 		restore := durabilitycut.Install(func(event durabilitycut.Event) error {
@@ -245,6 +250,7 @@ func TestDurableRootMetadataReuseProcessCut4627(t *testing.T) {
 					return fmt.Errorf("seal did not reuse low page: offset=%d before=%d", event.Offset, before)
 				}
 				if mode == "before-seal" {
+					reportPhase("cut-before-seal")
 					os.Exit(73)
 				}
 			}
@@ -257,24 +263,19 @@ func TestDurableRootMetadataReuseProcessCut4627(t *testing.T) {
 		if mode != "after-ack" || !low {
 			t.Fatal("cut not reached")
 		}
+		reportPhase("cut-after-ack")
 		os.Exit(73) // Deliberately no Close after acknowledged publication.
 	}
 	for _, mode := range []string{"before-seal", "after-ack"} {
 		t.Run(mode, func(t *testing.T) {
 			dir := t.TempDir()
-			// The child performs 64 synchronized metadata publications before the
-			// cut. Allow for slow storage on shared CI runners while keeping a
-			// bounded deadline for hangs.
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			defer cancel()
 			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestDurableRootMetadataReuseProcessCut4627$")
 			cmd.Env = append(os.Environ(), "TREEDB_METADATA_REUSE_CUT4627="+mode, "TREEDB_METADATA_REUSE_DIR4627="+dir)
 			output, err := cmd.CombinedOutput()
-			if ctx.Err() != nil {
-				t.Fatalf("child did not hit cut before deadline: %v (process error: %v)\n%s", ctx.Err(), err, output)
-			}
 			if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 73 {
-				t.Fatalf("child did not hit cut: %v\n%s", err, output)
+				t.Fatalf("child did not hit cut: process=%v context=%v\n%s", err, ctx.Err(), output)
 			}
 			reopened, err := Open(Options{Dir: dir, DisableBackgroundPrune: true})
 			if err != nil {

@@ -404,10 +404,53 @@ func (p *cowBatchPreparation) detachScratch() *memtable.COWExternalLease {
 }
 
 func (b *Batch) writeCOWPublication(syncWrite bool, unlock func()) error {
+	// Custody begins here: this guard covers publication and callback unwind,
+	// but does not cover abnormal exits in the caller before publication.
+	previousUnlock := unlock
+	released := false
+	unlock = func() {
+		if released {
+			return
+		}
+		released = true
+		previousUnlock()
+	}
+	defer unlock()
 	checkpoint := syncWrite && b.commandWALAppend == nil
 	var err error
 	if b.commandWALAppend != nil {
+		callbackReturned := false
+		defer func() {
+			if callbackReturned {
+				return
+			}
+			// The append may have reached storage before returning its receipt.
+			// A staged canonical publication is therefore uncertain on unwind;
+			// retire its private preparation but require recovery before reuse.
+			if b.cowState.prepared != nil || b.cowState.receipt.Assigned {
+				if poisoner, ok := b.db.backend.(interface{ MarkCommandWALRecoveryRequired() }); ok {
+					poisoner.MarkCommandWALRecoveryRequired()
+				}
+				b.db.cow.prefix.PoisonAccepted(backenddb.ErrRecoveryRequired)
+				b.cowState.receipt.Uncertain = true
+			}
+			if b.cowState.receipt.Assigned && b.cowState.native != nil {
+				p := b.cowState.prepared
+				owner, opening := b.parkAssignedNative(p, backenddb.ErrRecoveryRequired)
+				unlock()
+				_ = b.drainAssignedNative(owner, opening, p, backenddb.ErrRecoveryRequired)
+				return
+			}
+			p := b.cancelCOWPublication()
+			unlock()
+			if p != nil {
+				if cleanupErr := p.drainCancelled(); cleanupErr != nil {
+					b.db.reportError(cleanupErr)
+				}
+			}
+		}()
 		err = b.commandWALAppend()
+		callbackReturned = true
 	} else if b.db.cow.txnOwner == nil {
 		// Standalone caches use ordinary admission; nil is never private authority.
 		finalizer, ok := b.db.backend.(interface {
@@ -472,11 +515,44 @@ func (b *Batch) writeCOWPublication(syncWrite bool, unlock func()) error {
 	if b.cowState.prepared == nil || b.cowState.prepared.cut == nil {
 		panic("COW append succeeded without staged publication")
 	}
+	// Keep preparation custody until the observation seam returns. This guard
+	// deliberately ends before journal/install authority is consumed: cancelling
+	// a partially installed cut would invent rollback that publication cannot do.
+	func() {
+		observed := false
+		defer func() {
+			if observed {
+				return
+			}
+			if b.cowState.receipt.Assigned {
+				if poisoner, ok := b.db.backend.(interface{ MarkCommandWALRecoveryRequired() }); ok {
+					poisoner.MarkCommandWALRecoveryRequired()
+				}
+				b.cowState.receipt.Uncertain = true
+				b.db.cow.prefix.PoisonAccepted(backenddb.ErrRecoveryRequired)
+				if b.cowState.native != nil {
+					p := b.cowState.prepared
+					owner, opening := b.parkAssignedNative(p, backenddb.ErrRecoveryRequired)
+					unlock()
+					_ = b.drainAssignedNative(owner, opening, p, backenddb.ErrRecoveryRequired)
+					return
+				}
+			}
+			p := b.cancelCOWPublication()
+			unlock()
+			if p != nil {
+				if cleanupErr := p.drainCancelled(); cleanupErr != nil {
+					b.db.reportError(cleanupErr)
+				}
+			}
+		}()
+		// An observer error cannot revoke an accepted frame. Abnormal unwind,
+		// however, must retire its private state and preserve assigned WAL custody.
+		_ = durabilitycut.EmitBasic(durabilitycut.BeforeCOWCutSwap, durabilitycut.ResourceAuxiliary, b.db.dir)
+		observed = true
+	}()
 	p := b.cowState.prepared
 	b.cowState.prepared = nil
-	// Accepted publication is nonfallible. This existing internal observation
-	// seam may pause tests, but an observer cannot revoke an accepted frame.
-	_ = durabilitycut.EmitBasic(durabilitycut.BeforeCOWCutSwap, durabilitycut.ResourceAuxiliary, b.db.dir)
 	p.cut.next.logicalSeq = b.db.cow.cut.logicalSeq + 1
 	if p.mutation.Valid() {
 		b.db.cow.journal.Install(p.mutation, p.cut.next.logicalSeq)

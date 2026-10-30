@@ -232,7 +232,9 @@ func (runtime *rootPublicationRuntimeV1) prepareCapsuleSealV6(member *rootPublic
 	if e = runtime.idx.primary.MetadataOwner().AddPending(sealMetadata); e != nil {
 		return e
 	}
-	seal := &rootPublicationSealV1{metadataCharge: sealMetadata, latestSequence: member.sequence, groupLength: groupLength, idx: runtime.idx, next: member.next, resources: resources, manifest: manifest, prefix: append([]*freelist.PreparedCOWCandidateV1(nil), runtime.debt...), token: token, record: actual.Record, meta: meta, target: target, base: rootPublicationSealBaseV1{slotCommit: base.slotCommit, slotResources: base.slotResources, slotMeta: base.slotMeta, slotRecord: base.slotRecord}, primary: &primaryPublicationSealV5{prepared: member.primary, projection: actual.Primary, manifestBanks: mrefs, token: primaryToken, proofResources: proofResources, promotion: promotion}}
+	allocation := &primarySealAllocationV6{seal: rootPublicationSealV1{metadataCharge: sealMetadata, latestSequence: member.sequence, groupLength: groupLength, idx: runtime.idx, next: member.next, resources: resources, manifest: manifest, prefix: append([]*freelist.PreparedCOWCandidateV1(nil), runtime.debt...), token: token, record: actual.Record, meta: meta, target: target, base: rootPublicationSealBaseV1{slotCommit: base.slotCommit, slotResources: base.slotResources, slotMeta: base.slotMeta, slotRecord: base.slotRecord}}, primary: primaryPublicationSealV5{prepared: member.primary, projection: actual.Primary, manifestBanks: mrefs, token: primaryToken, proofResources: proofResources, promotion: promotion}}
+	seal := &allocation.seal
+	seal.primary = &allocation.primary
 	seal.primary.dataParentCoverage = runtime.primaryDataParentCoverageV6(seal, base)
 	seal.dependenciesCovered = dependenciesCovered
 	seal.metadata = runtime.idx.primary.MetadataOwner()

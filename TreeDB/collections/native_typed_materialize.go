@@ -837,14 +837,16 @@ func (w *nativeTypedMaterialization) materializeInsertSpan(context columnPhysica
 
 func (w *nativeTypedMaterialization) materialize() (resultErr error) {
 	if w == nil || w.started {
-		return backenddb.ErrNativeSemanticUnsupported
+		return fmt.Errorf("native typed admission nil_or_started: %w", backenddb.ErrNativeSemanticUnsupported)
 	}
 	w.started = true
+	stage := "delta-order"
 	defer func() {
 		w.codec.Close()
 		w.input = nativeTypedMaterializeInput{}
 		w.compactionRows = nil
 		if resultErr != nil {
+			resultErr = fmt.Errorf("native typed materialize stage=%s: %w", stage, resultErr)
 			w.failure = resultErr
 		} else {
 			w.complete = true
@@ -858,10 +860,12 @@ func (w *nativeTypedMaterialization) materialize() (resultErr error) {
 		}
 		previousLSN, previousMember = d.appliedLSN, d.memberOrdinal
 	}
+	stage = "asset-context"
 	rootDir, registry, err := w.input.group.NativeColumnAssetBuildContext()
 	if err != nil {
 		return err
 	}
+	stage = "pending-source-validator"
 	validateOptions, err := w.ordinaryGraphPendingSourceValidator()
 	if err != nil {
 		return err
@@ -875,15 +879,18 @@ func (w *nativeTypedMaterialization) materialize() (resultErr error) {
 			end++
 		}
 		if end > first {
+			stage = "row-selection"
 			mutations, e := selectNativeTypedMaterializeMutations(w.input.deltas[first:end])
 			if e != nil {
 				return e
 			}
+			stage = "insert-span-eligibility"
 			span, e := w.canMaterializeInsertSpan(w.input.deltas[first:end], mutations)
 			if e != nil {
 				return e
 			}
 			if span {
+				stage = "insert-span"
 				if err = w.materializeInsertSpan(context, w.input.deltas[first:end], mutations); err != nil {
 					return err
 				}
@@ -894,6 +901,7 @@ func (w *nativeTypedMaterialization) materialize() (resultErr error) {
 					stop++
 				}
 				d := w.input.deltas[first+mutations[start].delta]
+				stage = "row-delta"
 				if err = w.materializeDelta(context, d, mutations[start:stop]); err != nil {
 					return err
 				}
@@ -903,6 +911,7 @@ func (w *nativeTypedMaterialization) materialize() (resultErr error) {
 		if end == len(w.input.deltas) {
 			break
 		}
+		stage = "graph-delta-shape"
 		d := w.input.deltas[end]
 		if w.input.compaction != nil || len(d.rows)+len(d.retained)+len(d.deleted) != 0 {
 			return backenddb.ErrNativeSemanticUnsupported
@@ -911,18 +920,22 @@ func (w *nativeTypedMaterialization) materialize() (resultErr error) {
 			if len(w.input.deltas) != 1 {
 				return backenddb.ErrNativeSemanticUnsupported
 			}
+			stage = "import-vector-graph"
 			return w.materializeVectorGraph(d)
 		}
+		stage = "ordinary-vector-graph"
 		if err = w.materializeOrdinaryVectorGraph(d); err != nil {
 			return err
 		}
 		first = end + 1
 	}
 	if w.input.compaction != nil {
+		stage = "compaction"
 		if err = w.materializeCompaction(context); err != nil {
 			return err
 		}
 	}
+	stage = "resource-freeze"
 	w.resources, err = w.resourceBuilder.Freeze()
 	if err != nil {
 		return err

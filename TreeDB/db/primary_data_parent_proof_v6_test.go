@@ -64,9 +64,13 @@ func TestPrimaryDataParentCoverageV6ChargesActualContainingAllocations(t *testin
 	if got, want := primaryRuntimeDescriptorChargeV5(), retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primaryDurableRuntimeV5{}))); got != want {
 		t.Fatalf("runtime charge %d want %d", got, want)
 	}
-	want := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(rootPublicationSealV1{}))) + retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primaryPublicationSealV5{}))) + retainedalloc.AllocationCharge(0)
-	if got := primarySealMetadataV6(0); got != want {
-		t.Fatalf("seal charge %d want %d", got, want)
+	separate := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(rootPublicationSealV1{}))) + retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primaryPublicationSealV5{})))
+	combined := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primarySealAllocationV6{})))
+	for _, prefix := range []int{0, 1, 17} {
+		want := max(separate, combined) + retainedalloc.AllocationCharge(uint64(prefix)*uint64(unsafe.Sizeof(uintptr(0))))
+		if got := primarySealMetadataV6(prefix); got != want {
+			t.Fatalf("seal prefix %d charge %d want %d", prefix, got, want)
+		}
 	}
 }
 
