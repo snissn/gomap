@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"bytes"
 	"errors"
 	"strings"
 	"testing"
@@ -43,6 +44,7 @@ func TestNativePreparedOutputCustodyAtExistingHook(t *testing.T) {
 			injected := errors.New("prepared hook failure")
 			var clone *rootpublication.StableResourceSet
 			var captured []ColumnPreparedAsset
+			var atHook [][]byte
 			calls := 0
 			restore := setColumnPhysicalAssetPreparationAfterPrepareTestHook(func(actual ColumnPublishPreparedAssets) error {
 				calls++
@@ -76,6 +78,15 @@ func TestNativePreparedOutputCustodyAtExistingHook(t *testing.T) {
 				}
 				if err = validateStableColumnResourcesMatchPrepared(captured, clone); err != nil {
 					return err
+				}
+				// This records actual pathname reads for these sample refs. It is
+				// not an identity-bound read or a proof against path replacement.
+				for _, asset := range captured {
+					payload, e := readColumnPhysicalAssetFromManager(db.ColumnAssetRootDir(), asset.Ref)
+					if e != nil {
+						return e
+					}
+					atHook = append(atHook, payload)
 				}
 				if failHook {
 					return injected
@@ -113,10 +124,44 @@ func TestNativePreparedOutputCustodyAtExistingHook(t *testing.T) {
 			if err := validateStableColumnResourcesMatchPrepared(captured, clone); err != nil {
 				t.Fatalf("independent custody after producer unwind: %v", err)
 			}
+			if len(atHook) != len(captured) {
+				t.Fatal("missing actual reference reads at hook")
+			}
+			for i, asset := range captured {
+				payload, err := readColumnPhysicalAssetFromManager(db.ColumnAssetRootDir(), asset.Ref)
+				if err != nil || !bytes.Equal(payload, atHook[i]) {
+					t.Fatalf("sample ref %d after producer unwind differs: %v", i, err)
+				}
+			}
 			bad := append([]ColumnPreparedAsset(nil), captured...)
 			bad[0].Ref.Checksum ^= 1
 			if err := validateStableColumnResourcesMatchPrepared(bad, clone); err == nil {
 				t.Fatal("different asset identity accepted")
+			}
+		})
+	}
+}
+
+// This is a policy control using synthetic descriptors, not an actual
+// rebuildable producer or evidence that its cleanup is pinned.
+func TestNativePreparedOutputOrphanPolicyControls(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		kinds  []ColumnAssetKind
+		retain bool
+	}{
+		{"authoritative", []ColumnAssetKind{ColumnAssetKindTCS1PartImage}, true},
+		{"rebuildable_only", []ColumnAssetKind{ColumnAssetKindQueryReadyBase, ColumnAssetKindQueryReadyDelta}, false},
+		{"mixed", []ColumnAssetKind{ColumnAssetKindTCS1PartImage, ColumnAssetKindQueryReadyBase}, true},
+		{"unknown_fails_closed", []ColumnAssetKind{ColumnAssetKind("unknown")}, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			assets := make([]ColumnPreparedAsset, len(test.kinds))
+			for i, kind := range test.kinds {
+				assets[i].Ref.Kind = kind
+			}
+			if got := columnPreparedAssetsRequireOrphanRetention(assets); got != test.retain {
+				t.Fatalf("retain=%v want %v", got, test.retain)
 			}
 		})
 	}
