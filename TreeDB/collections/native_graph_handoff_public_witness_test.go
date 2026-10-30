@@ -53,8 +53,16 @@ func enterNativeGraphHandoffWitnessChild(t *testing.T) bool {
 	// CombinedOutput waits/reaps the child even on context cancellation. Retain
 	// timeout stacks and assertion output instead of retrying an invalid setup.
 	output, err := cmd.CombinedOutput()
-	if err != nil || ctx.Err() != nil || !bytes.Contains(output, []byte(nativeGraphHandoffWitnessSuccess)) || bytes.Contains(output, []byte("INVALID_WITNESS")) || bytes.Contains(output, []byte("DATA RACE")) {
-		t.Fatalf("INVALID_WITNESS child completion err=%v deadline=%v:\n%s", err, ctx.Err(), output)
+	if ctx.Err() != nil {
+		t.Fatalf("INVALID_WITNESS child process deadline err=%v deadline=%v:\n%s", err, ctx.Err(), output)
+	}
+	if err != nil {
+		// Preserve the child's discriminator: a valid ROOT_HANDOFF_WITNESS
+		// refusal is a failed assertion, not an invalid setup by definition.
+		t.Fatalf("isolated witness child failed: %v\n%s", err, output)
+	}
+	if !bytes.Contains(output, []byte(nativeGraphHandoffWitnessSuccess)) || bytes.Contains(output, []byte("INVALID_WITNESS")) || bytes.Contains(output, []byte("DATA RACE")) {
+		t.Fatalf("INVALID_WITNESS child missing clean completion:\n%s", output)
 	}
 	t.Logf("isolated witness completion:\n%s", output)
 	return false
