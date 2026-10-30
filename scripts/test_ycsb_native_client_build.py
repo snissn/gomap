@@ -16,7 +16,7 @@ SPEC.loader.exec_module(B)
 
 class BuildTests(unittest.TestCase):
     def setUp(self):
-        self.tmp=tempfile.TemporaryDirectory(dir=os.environ.get('TMPDIR','/home/mikers'),prefix='native-build-synthetic-')
+        self.tmp=tempfile.TemporaryDirectory(prefix='native-build-synthetic-')
         self.addCleanup(self.tmp.cleanup)
         self.root=pathlib.Path(self.tmp.name); self.repo=self.root/'repo';self.repo.mkdir()
         def git(*args):return subprocess.check_output(['git','-C',str(self.repo),*args])

@@ -55,11 +55,19 @@ def command(argv):
 def evidence_files(directory):
     """Regular evidence files only; never copy service DBs or follow symlinks."""
     files={}
+    frame_directories={role+".default-concern-frames" for role in reference.ROLES}|{"public-sentinel-frames"}
     for parent in (directory,directory/"mongodb"):
         c.require(parent.is_dir() and not parent.is_symlink(),"missing/linked support evidence directory")
         for path in parent.iterdir():
             c.require(not path.is_symlink(),"linked support evidence is unsupported")
             if path.is_file():files[str(path.relative_to(directory))]=path
+            elif parent==directory/"mongodb" and path.name in frame_directories:
+                c.require(path.is_dir(),"invalid support frame directory")
+                for frame in path.iterdir():
+                    c.require(not frame.is_symlink(),"linked support evidence is unsupported")
+                    if frame.name in ("01-request.bin","01-response.bin"):
+                        c.require(frame.is_file(),"invalid support frame file")
+                        files[str(frame.relative_to(directory))]=frame
     return files
 
 

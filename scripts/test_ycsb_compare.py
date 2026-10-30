@@ -25,9 +25,7 @@ def call_result(start=1, end=2):
 
 class CompareTests(unittest.TestCase):
     def setUp(self):
-        # Honor the host storage policy without relying on space on fast4tb.
-        base = os.environ.get("TMPDIR", "/home/mikers")
-        self.temp = tempfile.TemporaryDirectory(prefix="ycsb-compare-offline-", dir=base)
+        self.temp = tempfile.TemporaryDirectory(prefix="ycsb-compare-offline-")
         self.addCleanup(self.temp.cleanup)
         self.out = pathlib.Path(self.temp.name)
         self.target = "treedb_mongo"

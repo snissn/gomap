@@ -15,6 +15,7 @@ import shutil
 import signal
 import socket
 import subprocess
+import struct
 import sys
 import tempfile
 import time
@@ -131,7 +132,7 @@ class Docker29RetainedInspect(unittest.TestCase):
         self.assertNotIn("Init",self.value["HostConfig"])
         self.cid=self.value["Id"]
         self.data=next(x["Source"] for x in self.value["Mounts"] if x["Destination"]=="/data/db")
-        temp=tempfile.TemporaryDirectory(prefix="offline-docker29-inspect-",dir=os.environ.get("TMPDIR","/home/mikers"))
+        temp=tempfile.TemporaryDirectory(prefix="offline-docker29-inspect-")
         self.addCleanup(temp.cleanup)
         self.out=pathlib.Path(temp.name);(self.out/"mongodb").mkdir()
         c.write_new(self.out/"manifest.json",self.m)
@@ -229,7 +230,7 @@ def result(start,end):
 
 class ReferencePackets(unittest.TestCase):
     def setUp(self):
-        self.temp=tempfile.TemporaryDirectory(prefix="synthetic-mongodb-reference-",dir=os.environ.get("TMPDIR","/home/mikers"))
+        self.temp=tempfile.TemporaryDirectory(prefix="synthetic-mongodb-reference-")
         self.addCleanup(self.temp.cleanup)
         self.out=pathlib.Path(self.temp.name);self.directory=self.out/"mongodb";self.directory.mkdir()
         self.m=dict(schema_version=1,kind=reference.KIND,lifecycle_contract=1,campaign_id="f"*32,targets=["mongodb"],profile=reference.PROFILE,formats={"mongodb":"bson"},write_concern=dict(w=1,journal_requested=None),recordcount=64,operationcount=10000,threadcount=16,run_repeats=1,uid=1000,gid=1000,address="127.0.0.1:27018",docker_binary="/synthetic/docker",client_binary="/synthetic/ycsb",reference_source_sha256=c.digest(reference.__file__),deadlines=dict(phase_seconds=600,helper_seconds=180,cleanup_seconds=10,phase_outer_seconds=640,helper_outer_seconds=220,readiness_seconds=60,outer_seconds=7200))
@@ -686,7 +687,7 @@ class ReferencePackets(unittest.TestCase):
         self.rehash()
         self.change("run_1.launch.json",lambda v:v.update(output_sha256=c.digest(path)))
         completion=c.read(self.out/"reference-complete.json");completion["manifest_sha256"]=c.digest(self.out/"manifest.json");self.save(self.out/"reference-complete.json",completion)
-        output=tempfile.TemporaryDirectory(prefix="synthetic-reference-preparation-",dir=os.environ.get("TMPDIR","/home/mikers"));self.addCleanup(output.cleanup)
+        output=tempfile.TemporaryDirectory(prefix="synthetic-reference-preparation-");self.addCleanup(output.cleanup)
         config=dict(schema_version=1,kind="mongodb_reference_preparation_request",support_dir=str(self.out),mongodb_addr=m["address"],client_source_dir=str(self.out),client_binary=binary,client_build_manifest=str(self.out/"client-build.json"),fixture_binary=binary,control_binary=binary,docker_binary=binary,go_binary=binary,recordcount=64,operationcount=10000,threadcount=16,run_repeats=1,deadlines=m["deadlines"])
         def metadata(argv):
             if argv[0]=="git":
@@ -694,6 +695,103 @@ class ReferencePackets(unittest.TestCase):
             self.assertEqual(argv[:3],[binary,"version","-m"])
             return b"SYNTHETIC offline Go buildinfo; no executable invoked\n"
         return config,pathlib.Path(output.name)/"prepared",metadata
+
+    def bounded_support(self,common_load=False):
+        # Extend the synthetic lifecycle with the actual wire-validator contract.
+        # No socket, Docker command, service or product executable is used.
+        import ycsb_reference_wire as wire
+        import ycsb_public_sentinel as sentinel
+        m=c.read(self.out/'manifest.json');m['bounded_container']=True
+        def frames(name,request,reply):
+            directory=self.directory/name;directory.mkdir()
+            for kind,rid,to,doc in [('request',1,0,request),('response',2,1,reply)]:
+                body=b'\0'*5+wire.document(doc)
+                (directory/('01-'+kind+'.bin')).write_bytes(struct.pack('<iiii',len(body)+16,rid,to,2013)+body)
+        for n,role in enumerate(reference.ROLES):
+            owner=self.owners[role];start=n*200
+            for suffix in ('.inspect.json','.terminal.json'):
+                self.change(role+suffix,lambda v:v['HostConfig'].update(Memory=12884901888,MemorySwap=12884901888,Ulimits=[dict(Name='cpu',Soft=449,Hard=450)],LogConfig=dict(Type='local',Config={'max-size':'16m','max-file':'2'})))
+            opening=c.read(self.directory/(role+'.start.json'))['actions']
+            self.save(self.directory/(opening['create']+'.command.json'),dict(schema_version=1,argv=[m['docker_binary'],*reference.create_argv(m,role,owner['data_dir'])]))
+            for action,suffix in ((opening['inspect'],'.inspect.json'),(c.read(self.directory/(role+'.close.json'))['actions']['terminal'],'.terminal.json')):
+                (self.directory/(action+'.out')).write_text(json.dumps([c.read(self.directory/(role+suffix))])+'\n')
+            common=dict(schema_version=1,campaign_id=m['campaign_id'],role=role,process=owner['process'])
+            group='/sys/fs/cgroup/docker/'+owner['container_id']
+            policy=dict(process=owner['process'],leader_affinity=[0],cgroup=dict(membership='0::/docker/'+owner['container_id'],ancestors=[dict(path=group,cpu_max='max 100000')]))
+            self.save(self.directory/(role+'.resource-observation.json'),dict(common,limits='Max cpu time 449 450 seconds',members=[owner['process']['pid']],cgroup=group,cgroup_device=27,cgroup_inode=n+1,memory_max='12884901888',memory_swap_max='0',cpu_policy=policy))
+            self.save(self.directory/(role+'.default-concern.json'),dict(common,start_utc=ts(start+2),end_utc=ts(start+3),reply=dict(ok=1)))
+            frames(role+'.default-concern-frames',{'getDefaultRWConcern':1,'$db':'admin'},dict(ok=1))
+        if common_load:
+            proof={}
+            for name in ('synthetic-control-source','synthetic-control-result','synthetic-control-review'):
+                path=self.out/name;path.write_text('SYNTHETIC offline control binding');proof[str(path)]=c.digest(path)
+            m.update(profile='mongodb_w1_journaled',acknowledgement_class='mongodb_w1_journaled',fixture_profile=reference.PROFILE)
+            m['write_concern']['journal_requested']=True
+            m['common_load']=dict(comparison_class='same-request-jtrue',address=m['address'],write_concern=dict(w=1,journal_requested=None),reviewed_control_a=dict(scope='bson-binary-and-pointer-bearing-prefix',reviewed=True,files=proof))
+        self.save(self.out/'manifest.json',m)
+        if common_load:
+            for stem in ('load','run_1'):
+                argv=reference.phase_argv(m,stem)
+                self.save(self.directory/(stem+'.command.json'),dict(schema_version=1,argv=argv))
+                self.change(stem+'.close.json',lambda v:v.update(declared_profile=m['profile']))
+                sentinel.phase_command(self.directory,stem,m,argv)
+            frames('public-sentinel-frames',sentinel.command(m),dict(ok=1,n=1))
+            directory=self.directory/'public-sentinel-frames'
+            self.save(self.directory/'public-sentinel.json',dict(schema_version=1,campaign_id=m['campaign_id'],manifest_sha256=c.digest(self.out/'manifest.json'),process=self.owners['server']['process'],address=m['address'],start_utc=ts(24),end_utc=ts(25),request=sentinel.command(m),reply=dict(ok=1,n=1),request_sha256=c.digest(directory/'01-request.bin'),response_sha256=c.digest(directory/'01-response.bin')))
+        self.rehash()
+        completion=c.read(self.out/'reference-complete.json');completion['manifest_sha256']=c.digest(self.out/'manifest.json');self.save(self.out/'reference-complete.json',completion)
+        reference.validate(self.out)
+
+    def test_bounded_nested_frames_revalidate_after_preparation(self):
+        config,out,metadata=self.preparation_inputs();self.bounded_support()
+        with mock.patch.object(preparation,'command',side_effect=metadata),mock.patch.object(reference,'emergency_cli') as docker,mock.patch.object(c,'runtime_client_preflight'):
+            preparation.prepare(config,out)
+            docker.assert_not_called()
+        preparation.verify_prepared(out,c.read(out/'manifest.json'))
+
+    def test_common_load_nested_frames_revalidate_after_preparation(self):
+        config,out,metadata=self.preparation_inputs();self.bounded_support(common_load=True)
+        config.update(journal_requested=True,bounded_container=True,common_load=c.read(self.out/'manifest.json')['common_load'])
+        with mock.patch.object(preparation,'command',side_effect=metadata),mock.patch.object(reference,'emergency_cli') as docker,mock.patch.object(c,'runtime_client_preflight'):
+            preparation.prepare(config,out)
+            docker.assert_not_called()
+        preparation.verify_prepared(out,c.read(out/'manifest.json'))
+
+    def test_preparation_copies_nested_frames_hashes_and_excludes_databases(self):
+        config,out,metadata=self.preparation_inputs()
+        expected={}
+        for dirname in [role+'.default-concern-frames' for role in reference.ROLES]+['public-sentinel-frames']:
+            frames=self.directory/dirname;frames.mkdir()
+            for name,data in [('01-request.bin',b'SYNTHETIC raw request'),('01-response.bin',b'SYNTHETIC raw response')]:
+                path=frames/name;path.write_bytes(data)
+                expected['reference-support/mongodb/'+dirname+'/'+name]=data
+        for dirname in ('db','fixture-db','db.configdb','fixture-db.configdb','unrecognized-frames'):
+            directory=self.directory/dirname;directory.mkdir()
+            (directory/'01-request.bin').write_bytes(b'DO NOT COPY database or unrecognized directory')
+        with mock.patch.object(preparation,'command',side_effect=metadata),mock.patch.object(reference,'emergency_cli') as docker,mock.patch.object(c,'runtime_client_preflight'):
+            preparation.prepare(config,out)
+            docker.assert_not_called()
+        m=c.read(out/'manifest.json');receipt=preparation.verify_prepared(out,m)
+        for name,data in expected.items():
+            self.assertEqual((out/name).read_bytes(),data)
+            self.assertEqual(receipt['artifacts_sha256'][name],hashlib.sha256(data).hexdigest())
+            (out/name).write_bytes(data+b'changed')
+            with self.subTest(name=name),self.assertRaisesRegex(ValueError,'preparation artifact changed'):
+                preparation.verify_prepared(out,m)
+            (out/name).write_bytes(data)
+        for dirname in ('db','fixture-db','db.configdb','fixture-db.configdb','unrecognized-frames'):
+            self.assertFalse((out/'reference-support/mongodb'/dirname).exists())
+        shutil.rmtree(self.out)
+        preparation.verify_prepared(out,m,check_current_sources=True)
+
+    def test_nested_frame_symlinks_are_rejected(self):
+        frames=self.directory/'server.default-concern-frames';frames.mkdir()
+        link=frames/'01-request.bin';link.symlink_to(self.out/'manifest.json')
+        with self.assertRaisesRegex(ValueError,'linked support evidence'):
+            preparation.evidence_files(self.out)
+        link.unlink();frames.rmdir();frames.symlink_to(self.directory,target_is_directory=True)
+        with self.assertRaisesRegex(ValueError,'linked support evidence'):
+            preparation.evidence_files(self.out)
 
     def test_preparation_unknown_runtime_elf_fails_before_metadata_or_docker(self):
         config,out,metadata=self.preparation_inputs()

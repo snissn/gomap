@@ -24,7 +24,7 @@ def result(start, end):
 
 class CrashPackets(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="synthetic-crash-control-", dir=os.environ.get("TMPDIR", "/home/mikers"))
+        self.temp = tempfile.TemporaryDirectory(prefix="synthetic-crash-control-")
         self.addCleanup(self.temp.cleanup)
         self.out = pathlib.Path(self.temp.name)
         self.directory = self.out/"treedb_native"
@@ -219,7 +219,7 @@ class CrashPackets(unittest.TestCase):
 
 class OwnedStubControls(unittest.TestCase):
     def setUp(self):
-        self.temp=tempfile.TemporaryDirectory(prefix="synthetic-crash-child-",dir=os.environ.get("TMPDIR","/home/mikers"))
+        self.temp=tempfile.TemporaryDirectory(prefix="synthetic-crash-child-")
         self.addCleanup(self.temp.cleanup)
         self.directory=pathlib.Path(self.temp.name)
         self.m=dict(target="treedb_native",build=dict(exe_sha256=c.digest(sys.executable)),deadlines=dict(cleanup_timeout_seconds=.1,readiness_seconds=.1))
@@ -322,7 +322,7 @@ class SyntheticRunCLI(unittest.TestCase):
     def test_real_cli_stub_packet_reaches_final_validation_and_reaps_both_owners(self):
         go=os.environ.get("YCSB_TEST_GO") or shutil.which("go")
         if not go:self.skipTest("Go is needed to compile explicitly synthetic CLI stub")
-        with tempfile.TemporaryDirectory(prefix="synthetic-crash-cli-",dir=os.environ.get("TMPDIR","/home/mikers")) as root:
+        with tempfile.TemporaryDirectory(prefix="synthetic-crash-cli-") as root:
             root=pathlib.Path(root);source=root/"source";source.mkdir()
             stub=pathlib.Path(crash.__file__).parent/"testdata/ycsb_crash/synthetic_stub.go"
             shutil.copyfile(stub,source/"stub.go")
