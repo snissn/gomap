@@ -15,6 +15,7 @@ import time
 CLIENT_REV = 'c195a9bc777b6aeb1e2f5550db96d872338f2f40'
 CLIENT_ORIGINAL_SHA = '051f211d72ca0ba194ba1fcf4d50fe6bac9e6964a6e83ab933e0ac071e1a44d2'
 CLIENT_OVERLAY_SHA = 'b09334ad0f53ea49ca553953b123a2617625c04a766dbed624e4058c2399f787'
+REDUCER_SIGNATURE = 'span-native reducer validation failed: no replacement changed root'
 PROFILES = ('command_wal_durable', 'command_wal_relaxed', 'no_wal_fast')
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -24,6 +25,10 @@ class RunnerInterrupted(BaseException):
 
 
 class CleanupFailure(BaseException):
+    pass
+
+
+class LoadFailure(Exception):
     pass
 
 
@@ -58,7 +63,7 @@ def client_overlay(source):
     return changed
 
 
-def load_counts(output):
+def parse_load_summary(output):
     # Ignore progress reports; only the final summary after Run finished counts.
     if output.count('Run finished, takes ') != 1:
         raise ValueError('missing or duplicate terminal summary')
@@ -74,11 +79,38 @@ def load_counts(output):
         if kind in counts:
             raise ValueError('duplicate final operation summary: ' + kind)
         counts[kind] = int(count)
-    if counts.get('INSERT') != 100000 or counts.get('TOTAL') != 100000 or counts.get('INSERT_ERROR', 0) != 0:
-        raise ValueError('incorrect load totals: ' + repr(counts))
     if set(counts) - {'INSERT', 'INSERT_ERROR', 'TOTAL'}:
         raise ValueError('unexpected operation totals: ' + repr(counts))
     return counts
+
+
+def load_counts(output):
+    counts = parse_load_summary(output)
+    if counts.get('INSERT') != 100000 or counts.get('TOTAL') != 100000 or counts.get('INSERT_ERROR', 0) != 0:
+        raise ValueError('incorrect load totals: ' + repr(counts))
+    return counts
+
+
+def classify(receipt):
+    """A reproduced failure needs a completed load, operation errors and signature."""
+    counts = receipt.get('observed_counts', {})
+    accounted = ('INSERT' in counts and 'TOTAL' in counts and
+                 counts['TOTAL'] == counts['INSERT'] and
+                 counts['INSERT'] + counts.get('INSERT_ERROR', 0) == 100000)
+    if (receipt.get('signature_observation_complete') and receipt.get('client_exit') == 0 and
+            receipt.get('workload_completed') and accounted and receipt.get('load_failed') and
+            not receipt.get('other_failure') and receipt.get('server_exit') in (0, 1) and
+            receipt.get('observed_counts', {}).get('INSERT_ERROR', 0) > 0 and
+            receipt.get('reducer_signature_present')):
+        return 'baseline_reproduced'
+    if (receipt.get('signature_observation_complete') and receipt.get('workload_completed') and
+            receipt.get('client_exit') == 0 and receipt.get('server_exit') == 0 and
+            receipt.get('verifier_exit') == 0 and not receipt.get('load_failed') and
+            not receipt.get('other_failure') and not receipt['errors'] and
+            counts.get('INSERT') == 100000 and counts.get('TOTAL') == 100000 and
+            counts.get('INSERT_ERROR', 0) == 0 and not receipt.get('reducer_signature_present')):
+        return 'green'
+    return 'inconclusive'
 
 
 def write_json(path, value):
@@ -166,7 +198,8 @@ def run_profile(out, profile, server_bin, client_bin, verifier_bin, env):
     tmp = run / 'tmp'
     tmp.mkdir()
     child_env = dict(env, TMPDIR=str(tmp), TREEDB_YCSB_LOG_ERRORS='1')
-    receipt = {'profile': profile, 'started_utc': now(), 'errors': [], 'db': str(db)}
+    receipt = {'profile': profile, 'started_utc': now(), 'errors': [], 'db': str(db),
+               'workload_completed': False, 'load_failed': False, 'other_failure': False}
     server = None
     interrupted = None
     try:
@@ -203,13 +236,23 @@ def run_profile(out, profile, server_bin, client_bin, verifier_bin, env):
             if code:
                 raise RuntimeError(f'client exit {code}')
             load_output = (run / 'load.out').read_text(errors='replace')
-            receipt['counts'] = load_counts(load_output)
+            receipt['observed_counts'] = parse_load_summary(load_output)
+            receipt['workload_completed'] = True
+            try:
+                receipt['counts'] = load_counts(load_output)
+            except ValueError as exc:
+                raise LoadFailure(str(exc)) from exc
             if 'operation err:' in load_output or 'operation err:' in (run / 'load.err').read_text(errors='replace'):
-                raise RuntimeError('client reported an operation error')
+                raise LoadFailure('client reported an operation error')
     except (RunnerInterrupted, CleanupFailure) as exc:
         interrupted = exc
+        receipt['other_failure'] = True
         receipt['errors'].append(f'RunnerInterrupted: {exc}')
+    except LoadFailure as exc:
+        receipt['load_failed'] = True
+        receipt['errors'].append(f'LoadFailure: {exc}')
     except Exception as exc:
+        receipt['other_failure'] = True
         receipt['errors'].append(f'{type(exc).__name__}: {exc}')
     finally:
         if server is not None:
@@ -218,14 +261,28 @@ def run_profile(out, profile, server_bin, client_bin, verifier_bin, env):
             receipt['errors'].extend(errors)
             if code is None:
                 interrupted = CleanupFailure(f'server {server.pid} did not exit after kill')
+                receipt['other_failure'] = True
             elif pending:
                 interrupted = RunnerInterrupted(f'signal during server close: {pending}')
+                receipt['other_failure'] = True
                 receipt['errors'].append(str(interrupted))
+            if errors:
+                receipt['other_failure'] = True
             if receipt.get('server_exit') not in (None, 0):
                 receipt['errors'].append(f"checked server/owner close exit {receipt['server_exit']}")
+    try:
+        server_stderr = (run / 'server.err').read_text(errors='replace')
+        receipt['signature_observation_complete'] = True
+        receipt['reducer_signature_present'] = REDUCER_SIGNATURE in server_stderr
+    except OSError as exc:
+        receipt['signature_observation_complete'] = False
+        receipt['other_failure'] = True
+        receipt['errors'].append(f'server stderr unavailable: {exc}')
+    if receipt.get('reducer_signature_present'):
+        receipt['errors'].append('retained reducer failure signature appeared in server stderr')
     # This separate process opens the same DB, scans all keys and fields, explicitly
     # checkpoints, and propagates client/server/manager/owner Close errors.
-    if interrupted is None and server is not None and receipt.get('server_exit') == 0:
+    if interrupted is None and not receipt['errors'] and server is not None and receipt.get('server_exit') == 0:
         verify_argv = [str(verifier_bin), '-dir', str(db), '-profile', profile]
         receipt['verifier_argv'] = verify_argv
         try:
@@ -243,13 +300,16 @@ def run_profile(out, profile, server_bin, client_bin, verifier_bin, env):
                 raise RuntimeError('invalid reopen verifier result')
         except (RunnerInterrupted, CleanupFailure) as exc:
             interrupted = exc
+            receipt['other_failure'] = True
             receipt['errors'].append(f'RunnerInterrupted: {exc}')
         except Exception as exc:
+            receipt['other_failure'] = True
             receipt['errors'].append(f'{type(exc).__name__}: {exc}')
-    elif interrupted is None:
+    elif interrupted is None and not receipt['errors']:
         receipt['errors'].append('reopen verifier skipped after server/owner close failure')
     receipt['finished_utc'] = now()
-    receipt['passed'] = not receipt['errors']
+    receipt['classification'] = classify(receipt)
+    receipt['passed'] = receipt['classification'] == 'green'
     write_json(run / 'terminal.json', receipt)
     if interrupted is not None:
         raise interrupted

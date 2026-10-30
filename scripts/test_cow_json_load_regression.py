@@ -23,6 +23,36 @@ def summary(insert=100000, total=100000, errors=None):
 
 
 class LoadCountsTest(unittest.TestCase):
+    def test_classification_requires_actual_matching_failure(self):
+        red = {'signature_observation_complete': True, 'client_exit': 0,
+               'workload_completed': True, 'load_failed': True, 'other_failure': False,
+               'server_exit': 1, 'observed_counts': runner.parse_load_summary(
+                   summary(insert=1692, total=1692, errors=98308)),
+               'reducer_signature_present': True, 'errors': ['failed load', 'close exit 1']}
+        self.assertEqual(runner.classify(red), 'baseline_reproduced')
+        for changes in ({'reducer_signature_present': False}, {'other_failure': True},
+                        {'workload_completed': False}, {'client_exit': None},
+                        {'signature_observation_complete': False},
+                        {'observed_counts': {'INSERT_ERROR': 0}},
+                        {'observed_counts': {'INSERT_ERROR': 1}},
+                        {'observed_counts': {'INSERT': 1692, 'TOTAL': 1692, 'INSERT_ERROR': 1}},
+                        {'observed_counts': {'INSERT': 1692, 'TOTAL': 1691, 'INSERT_ERROR': 98308}}):
+            with self.subTest(changes=changes):
+                self.assertEqual(runner.classify(red | changes), 'inconclusive')
+
+    def test_green_with_signature_is_rejected(self):
+        green = {'signature_observation_complete': True, 'client_exit': 0,
+                 'workload_completed': True, 'load_failed': False, 'other_failure': False,
+                 'server_exit': 0, 'verifier_exit': 0,
+                 'observed_counts': runner.parse_load_summary(summary()),
+                 'reducer_signature_present': False, 'errors': []}
+        self.assertEqual(runner.classify(green), 'green')
+        for changes in ({'reducer_signature_present': True}, {'verifier_exit': None},
+                        {'signature_observation_complete': False}, {'workload_completed': False},
+                        {'other_failure': True}):
+            with self.subTest(changes=changes):
+                self.assertEqual(runner.classify(green | changes), 'inconclusive')
+
     def test_success_ignores_intermediate_summary(self):
         self.assertEqual(runner.load_counts(summary()), {'INSERT': 100000, 'TOTAL': 100000})
 

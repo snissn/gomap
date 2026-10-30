@@ -41,6 +41,15 @@ Close/FlushAll return is discarded; successful client exit is not proof of
 checked client close. Server/owner shutdown and the separate verifier's closes
 are checked. A failure in any profile makes the overall process fail.
 
+Each terminal receipt records whether server stderr was observed and whether it
+contained `span-native reducer validation failed: no replacement changed root`.
+`baseline_reproduced` requires a completed client load, INSERT and TOTAL
+counts that agree, all 100,000 operations accounted for, operation errors and
+that signature. A missing error series means zero errors; missing success or
+TOTAL series is inconclusive. Unrelated startup, timeout, or other failures are
+`inconclusive`. A signature rejects GREEN even when all counts and exits look
+successful. A GREEN also requires checked shutdown and successful reopen.
+
 The original three-profile public RED, corrected-source GREEN, executable
 bindings and original failures are retained in the [#5333 evidence
 record](https://github.com/snissn/gomap/issues/5333#issuecomment-6511168099)
