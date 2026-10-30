@@ -16,6 +16,7 @@ import (
 
 func checkpointOwner(t *testing.T) (*Observer, func() error, func() error, string) {
 	t.Helper()
+	requireLinuxProcessEvidence(t)
 	data, evidence := t.TempDir(), t.TempDir()
 	t.Setenv("YCSB_SERVER_RECEIPT_DIR", evidence)
 	server, err := mongogateway.OpenStandaloneServer(mongogateway.StandaloneOptions{Dir: data, Profile: treedb.ProfileCommandWALRelaxed})

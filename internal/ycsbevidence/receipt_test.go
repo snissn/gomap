@@ -5,10 +5,18 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
 )
+
+func requireLinuxProcessEvidence(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS != "linux" {
+		t.Skip("live owner process evidence requires Linux procfs")
+	}
+}
 
 func TestDisabledPreservesOriginalClose(t *testing.T) {
 	t.Setenv("YCSB_SERVER_RECEIPT_DIR", "")
@@ -24,6 +32,7 @@ func TestDisabledPreservesOriginalClose(t *testing.T) {
 }
 
 func TestActualLiveOwnerReceiptAndOriginalClose(t *testing.T) {
+	requireLinuxProcessEvidence(t)
 	for _, legacy := range []bool{false, true} {
 		t.Run(map[bool]string{false: "cow", true: "legacy"}[legacy], func(t *testing.T) {
 			dataDir, evidenceDir := t.TempDir(), t.TempDir()
@@ -85,6 +94,7 @@ func TestActualLiveOwnerReceiptAndOriginalClose(t *testing.T) {
 }
 
 func TestObservationFailureStillClosesOriginalOnce(t *testing.T) {
+	requireLinuxProcessEvidence(t)
 	dataDir, evidenceDir := t.TempDir(), t.TempDir()
 	t.Setenv("YCSB_SERVER_RECEIPT_DIR", evidenceDir)
 	database, err := treedb.Open(func() treedb.Options {
