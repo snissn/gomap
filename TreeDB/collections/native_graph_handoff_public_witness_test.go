@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"bytes"
 	"fmt"
 	"strings"
 	"sync"
@@ -75,8 +76,8 @@ func TestNativeOrdinaryGraphAcceptedAcrossCapturedManifestBuild(t *testing.T) {
 				if err := owner.Checkpoint(); err != nil {
 					t.Fatal(err)
 				}
-				if _, err := col.RebuildVectorIndex("vec"); err != nil {
-					t.Fatalf("sequential control: %v", err)
+				if status, err := col.RebuildVectorIndex("vec"); err != nil || !status.Loaded || status.RebuildNeeded {
+					t.Fatalf("sequential control: %+v %v", status, err)
 				}
 				return
 			}
@@ -236,10 +237,15 @@ func TestNativeOrdinaryGraphAcceptedAcrossCapturedManifestBuild(t *testing.T) {
 			}
 			// Success remains subject to existing hybrid/cold/reopen qualification; this
 			// focused control only proves the accepted graph survived its old prefix.
-			for _, id := range []string{"doc-0000", "doc-0128", "doc-4095"} {
-				if _, err := current.Get([]byte(id)); err != nil {
-					t.Fatalf("post-handoff row %q: %v", id, err)
+			for _, n := range []int{0, 128, 4095} {
+				id := []byte(fmt.Sprintf("doc-%04d", n))
+				want := []byte(fmt.Sprintf(`{"embedding":[%d,1]}`, n+1))
+				if got, err := current.Get(id); err != nil || !bytes.Equal(got, want) {
+					t.Fatalf("post-handoff row %q: %s %v", id, got, err)
 				}
+			}
+			if status, err := col.nativeVectorGraphStatus("vec"); err != nil || !status.Loaded || status.RebuildNeeded {
+				t.Fatalf("post-handoff graph status: %+v %v", status, err)
 			}
 			if err := owner.Checkpoint(); err != nil {
 				t.Fatal(err)
