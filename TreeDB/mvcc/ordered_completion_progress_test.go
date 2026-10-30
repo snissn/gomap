@@ -214,9 +214,9 @@ func TestOrderedCompletionLaterWaiterCannotOvertakePublication(t *testing.T) {
 	requireResult(t, store, []byte("k1"), 2, Present, 2, []byte("v"))
 }
 
-// All accepted handles must wake on a failed group sync, regardless of which
-// completion claimed the driver; failure also releases lifecycle custody.
-func TestOrderedCompletionLaterDriverSyncFailureWakesEarlier(t *testing.T) {
+// A failed sync driven by a later handle remains available to an earlier
+// handle completed afterward; both failures release lifecycle custody.
+func TestOrderedCompletionLaterDriverSyncFailureRetainedForEarlier(t *testing.T) {
 	db, err := treedb.Open(orderedCompletionOptions(t.TempDir()))
 	if err != nil {
 		t.Fatal(err)
@@ -235,6 +235,9 @@ func TestOrderedCompletionLaterDriverSyncFailureWakesEarlier(t *testing.T) {
 		}
 		return nil
 	})
+	var restoreOnce sync.Once
+	cleanup := func() { restoreOnce.Do(restore) }
+	defer cleanup()
 	bdone := make(chan error, 1)
 	go func() { bdone <- b.Complete() }()
 	select {
@@ -253,9 +256,9 @@ func TestOrderedCompletionLaterDriverSyncFailureWakesEarlier(t *testing.T) {
 			t.Fatalf("earlier completion: %v", err)
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("sync failure did not wake earlier completion")
+		t.Fatal("stored sync failure did not return to earlier completion")
 	}
-	restore()
+	cleanup()
 	closed := make(chan error, 1)
 	go func() { closed <- db.Close() }()
 	select {
