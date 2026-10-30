@@ -408,3 +408,23 @@ invocation and inherited environment within the stated trusted-tool scope, not
 arbitrary concealed behavior inside a replaced compiler. Full hermetic C/system
 input proof would require a separately specified build environment. No existing
 ELF or Mongo reference evidence can be relabeled as constructed by this wrapper.
+
+## Reference resource evidence scope
+
+The bounded Mongo reference records actual container memory/swap, per-process
+CPU limits, cgroup directory/device/inode, sampled single-PID membership and
+host-visible affinity/ancestor quotas. Resource observation JSON has no own
+timestamp: retained validation binds its identity and values, but does not
+independently establish when that sample occurred within the owner lifetime.
+It is a startup sample, not continuous fork exclusion or a combined aggregate
+watchdog. The container and supervised-child memory/CPU ceilings are split;
+they must not be described as one measured aggregate resource limit.
+The default-concern query separately retains its own interval and raw request/
+reply, validated within the owner lifetime; a standalone unsupported reply
+leaves the effective default concern unknown.
+
+The generic native server on this source base does not register the historical
+`-max-scan-documents` or `-max-cursor-retained-bytes` overlay flags. The shell
+passes neither to native servers; full-dataset native scan-cap overlays need
+a separate source/ELF-bound implementation and are not exposed by this generic
+launcher. Mongo gateway census limits use its registered public flags.

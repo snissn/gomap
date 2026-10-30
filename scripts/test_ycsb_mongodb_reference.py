@@ -141,6 +141,21 @@ class Docker29RetainedInspect(unittest.TestCase):
         driver.owned={"server":dict(cid=self.cid if known else None,name=self.value["Name"].removeprefix("/"),data=pathlib.Path(self.data))}
         return driver
 
+    def test_bounded_inspect_and_create_arguments_preserve_host_cpu_policy(self):
+        m=copy.deepcopy(self.m);m['bounded_container']=True
+        value=copy.deepcopy(self.value)
+        host=value['HostConfig']
+        host.update(Memory=12884901888,MemorySwap=12884901888,Ulimits=[dict(Name='cpu',Soft=449,Hard=450)],LogConfig=dict(Type='local',Config={'max-size':'16m','max-file':'2'}))
+        reference.container_inspect(value,m,'server',self.data)
+        argv=reference.create_argv(m,'server',self.data)
+        for item in ('cpu=449:450','12884901888','--memory','--memory-swap','--log-driver','local'):
+            self.assertIn(item,argv)
+        for item in ('--cpus','--cpuset-cpus','--cpu-quota','--cpu-period'):
+            self.assertNotIn(item,argv)
+        for key,bad in [('Memory',1),('MemorySwap',1),('Ulimits',[dict(Name='cpu',Soft=450,Hard=451)]),('LogConfig',dict(Type='json-file',Config={})),('NanoCpus',1),('CpuQuota',1),('CpuPeriod',100000),('CpusetCpus','0'),('CpusetMems','0')]:
+            altered=copy.deepcopy(value);altered['HostConfig'][key]=bad
+            with self.subTest(key=key),self.assertRaises(ValueError):reference.container_inspect(altered,m,'server',self.data)
+
     def test_real_inspect_accepts_optional_init_for_normal_and_stopped_cleanup(self):
         for variant in ("omitted",None,False):
             for known in (True,False):
@@ -686,6 +701,37 @@ class ReferencePackets(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'client runtime'):preparation.prepare(config,out)
             commands.assert_not_called();docker.assert_not_called()
         self.assertFalse(out.exists())
+
+    def test_journaled_preparation_projects_new_request_without_relabeling_old_support(self):
+        config,out,metadata=self.preparation_inputs()
+        config.update(journal_requested=True,bounded_container=True)
+        with mock.patch.object(preparation,'command',side_effect=metadata),mock.patch.object(reference,'emergency_cli') as docker,mock.patch.object(c,'runtime_client_preflight'):
+            preparation.prepare(config,out)
+            docker.assert_not_called()
+        m=c.read(out/'manifest.json')
+        self.assertEqual(m['profile'],'mongodb_w1_journaled')
+        self.assertEqual(m['acknowledgement_class'],m['profile'])
+        self.assertEqual(m['support_write_concern'],dict(w=1,journal_requested=None))
+        self.assertEqual(m['write_concern'],dict(w=1,journal_requested=True))
+        self.assertEqual(m['fixture_profile'],reference.PROFILE)
+        self.assertTrue(m['bounded_container'])
+        preparation.verify_prepared(out,m,check_current_sources=True)
+        self.assertIn('mongodb.url=mongodb://'+m['address']+'/ycsb?w=1&journal=true',reference.phase_argv(m,'run_1'))
+        for field,value in [('support_write_concern',dict(w=1,journal_requested=True)),('fixture_profile','fake'),('acknowledgement_class','other')]:
+            altered=copy.deepcopy(m);altered[field]=value
+            with self.subTest(field=field),self.assertRaises(ValueError):preparation.verify_prepared(out,altered)
+
+    def test_ack_class_projection_preserves_legacy_fixture_and_rejects_mismatch(self):
+        reference.manifest(self.m)
+        for journal in (None,True):
+            m=copy.deepcopy(self.m);m.update(profile=reference.ack_profile(journal),acknowledgement_class=reference.ack_profile(journal),fixture_profile=reference.PROFILE)
+            m['write_concern']['journal_requested']=journal
+            reference.manifest(m)
+            self.assertEqual(reference.fixture_manifest(m)['profile'],reference.PROFILE)
+            for key,value in [('profile',reference.PROFILE),('acknowledgement_class','other'),('fixture_profile','fake')]:
+                with self.subTest(journal=journal,key=key),self.assertRaises(ValueError):reference.manifest(dict(m,**{key:value}))
+        self.m['write_concern']['journal_requested']=True
+        with self.assertRaises(ValueError):reference.manifest(self.m)
 
     def test_offline_preparation_binds_full_support_without_invoking_services(self):
         config,out,metadata=self.preparation_inputs()

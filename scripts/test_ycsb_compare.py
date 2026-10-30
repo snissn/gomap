@@ -456,6 +456,8 @@ class CompareTests(unittest.TestCase):
 #include <arpa/inet.h>
 void done(int s) { _exit(0); }
 int main(int argc,char **argv) {
+ // Model the maintained native parser: historical overlay flags are invalid.
+ for(int i=1;i<argc;i++)if(!strcmp(argv[i],"-max-scan-documents")||!strcmp(argv[i],"-max-cursor-retained-bytes"))return 94;
  char *addr=NULL;for(int i=1;i+1<argc;i++)if(!strcmp(argv[i],"-addr"))addr=argv[i+1];
  FILE *f=fopen(MARKER,"w");fprintf(f,"{\"env_unset\":%s}",getenv("GOMAXPROCS")?"false":"true");fclose(f);
  int fd=socket(AF_INET,SOCK_STREAM,0);struct sockaddr_in a={0};a.sin_family=AF_INET;a.sin_addr.s_addr=htonl(INADDR_LOOPBACK);a.sin_port=htons(atoi(strrchr(addr,':')+1));

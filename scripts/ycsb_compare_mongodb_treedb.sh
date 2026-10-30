@@ -315,9 +315,9 @@ start_server() {
   local checkpoint_env=()
   if [[ "$target" == treedb_mongo ]]; then checkpoint_env=(YCSB_OWNER_CHECKPOINT=1); fi
   # Full 100k fixture census needs one extra slot to detect unexpected rows.
-  # Both versions use the same explicit finite limits; these affect the full
-  # verification scans and are declared alongside every measured invocation.
-  local census_limits=(-max-scan-documents 100001 -max-cursor-retained-bytes 536870912)
+  # The maintained native CLI has no scan-cap flags. Do not borrow flags
+  # from historical source-bound native overlays. Gateway flags are public.
+  local census_limits=()
   if [[ "$target" == treedb_mongo ]]; then
     census_limits=(-max-find-scan-documents 100001 -max-cursor-retained-bytes 536870912)
   fi
