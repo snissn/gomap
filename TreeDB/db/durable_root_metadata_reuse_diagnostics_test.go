@@ -4,13 +4,98 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
+
+// One predeadline receipt locates a stall in the original fixture. Phase and
+// completed-publication count are observations, not a durability frontier. This
+// observer never calls the DB or acquires its locks. The byte cap does not bound
+// runtime.Stack or writer latency, and termination can prevent any receipt.
+type metadataReuseCutWitness4627 struct {
+	phase     atomic.Pointer[string]
+	completed atomic.Int32
+}
+
+func (w *metadataReuseCutWitness4627) mark(phase string) { w.phase.Store(&phase) }
+
+func (w *metadataReuseCutWitness4627) start(mode string, at time.Time, out io.Writer) func() {
+	w.mark("child-start")
+	started := time.Now()
+	stop, done := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	go func() {
+		defer close(done)
+		timer := time.NewTimer(time.Until(at))
+		defer timer.Stop()
+		select {
+		case <-stop:
+			return
+		case <-timer.C:
+		}
+		select {
+		case <-stop:
+			return
+		default:
+		}
+		stack := make([]byte, (64<<10)-512)
+		n := runtime.Stack(stack, true)
+		header := fmt.Sprintf("metadata-reuse pre-deadline mode=%.32s phase=%.64s completed_publications=%d elapsed=%s stack_truncated=%t\n", mode, *w.phase.Load(), w.completed.Load(), time.Since(started), n == len(stack))
+		_, _ = out.Write(append([]byte(header), stack[:n]...))
+	}()
+	return func() {
+		once.Do(func() { close(stop) })
+		<-done
+	}
+}
+
+type metadataReuseCutReceipt4627 chan []byte
+
+func (out metadataReuseCutReceipt4627) Write(buf []byte) (int, error) {
+	out <- buf // The sole write owns this immutable receipt; the slot is buffered.
+	return len(buf), nil
+}
+
+func TestMetadataReuseCutWitness4627(t *testing.T) {
+	t.Run("stopped", func(t *testing.T) {
+		var w metadataReuseCutWitness4627
+		var out strings.Builder
+		stop := w.start("control", time.Now().Add(time.Hour), &out)
+		stop()
+		stop()
+		if out.Len() != 0 {
+			t.Fatalf("stopped witness emitted %d bytes", out.Len())
+		}
+	})
+	t.Run("emitted", func(t *testing.T) {
+		var w metadataReuseCutWitness4627
+		w.completed.Store(37)
+		out := make(metadataReuseCutReceipt4627, 1)
+		stop := w.start("control", time.Now().Add(-time.Second), out)
+		defer stop()
+		select {
+		case receipt := <-out:
+			if len(receipt) > 64<<10 || !strings.Contains(string(receipt), "phase=child-start completed_publications=37") || !strings.Contains(string(receipt), "stack_truncated=") || !strings.Contains(string(receipt), "\ngoroutine ") {
+				t.Fatalf("invalid receipt (%d bytes): %s", len(receipt), receipt)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("past timer did not emit")
+		}
+		stop()
+		select {
+		case <-out:
+			t.Fatal("witness emitted twice")
+		default:
+		}
+	})
+}
 
 func formatMetadataReuseCutFailure4627(processErr, contextErr error, elapsed time.Duration, state, cancellation string, output []byte) string {
 	return fmt.Sprintf("child did not hit cut: process=%v context=%v elapsed=%s state=%s cancellation={%s}\n%s", processErr, contextErr, elapsed, state, cancellation, output)

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"testing"
 	"time"
 
@@ -224,19 +225,32 @@ func TestDurableRootMetadataReuseMultipageManifest4627(t *testing.T) {
 func TestDurableRootMetadataReuseProcessCut4627(t *testing.T) {
 	if mode := os.Getenv("TREEDB_METADATA_REUSE_CUT4627"); mode != "" {
 		started := time.Now()
+		var witness metadataReuseCutWitness4627
+		if raw := os.Getenv("TREEDB_METADATA_REUSE_WITNESS_AT4627"); raw != "" {
+			at, err := strconv.ParseInt(raw, 10, 64)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer witness.start(mode, time.Unix(0, at), os.Stderr)()
+		}
 		reportPhase := func(phase string) {
+			witness.mark(phase)
 			fmt.Fprintf(os.Stderr, "metadata-reuse process-cut mode=%s phase=%s elapsed=%s\n", mode, phase, time.Since(started))
 		}
 		reportPhase("setup-start")
+		witness.mark("open")
 		database, err := Open(Options{Dir: os.Getenv("TREEDB_METADATA_REUSE_DIR4627"), DisableBackgroundPrune: true})
 		if err != nil {
 			t.Fatal(err)
 		}
+		witness.mark("seed-SetSync")
 		if err := database.SetSync([]byte("retained"), []byte("old")); err != nil {
 			t.Fatal(err)
 		}
+		witness.mark("setup-publications")
 		for i := 0; i < 64; i++ {
 			publishNeutralMetadata4627(t, database)
+			witness.completed.Store(int32(i + 1))
 		}
 		if database.State().CommitSeq != 66 {
 			t.Fatalf("fixture commit=%d", database.State().CommitSeq)
@@ -258,6 +272,7 @@ func TestDurableRootMetadataReuseProcessCut4627(t *testing.T) {
 			return nil
 		})
 		defer restore()
+		witness.mark("cut-SetSync")
 		if err := database.SetSync([]byte("retained"), []byte("new")); err != nil {
 			t.Fatal(err)
 		}
@@ -273,7 +288,9 @@ func TestDurableRootMetadataReuseProcessCut4627(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			defer cancel()
 			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestDurableRootMetadataReuseProcessCut4627$")
-			cmd.Env = append(os.Environ(), "TREEDB_METADATA_REUSE_CUT4627="+mode, "TREEDB_METADATA_REUSE_DIR4627="+dir)
+			deadline, _ := ctx.Deadline()
+			cmd.Env = append(os.Environ(), "TREEDB_METADATA_REUSE_CUT4627="+mode, "TREEDB_METADATA_REUSE_DIR4627="+dir,
+				"TREEDB_METADATA_REUSE_WITNESS_AT4627="+strconv.FormatInt(deadline.Add(-3*time.Second).UnixNano(), 10))
 			started := time.Now()
 			var cancellation metadataReuseCutCancellation4627
 			cmd.Cancel = cancellation.observe(cmd.Cancel, func() time.Duration { return time.Since(started) })
