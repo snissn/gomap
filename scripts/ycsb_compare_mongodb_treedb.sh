@@ -41,7 +41,7 @@ usage() {
   cat <<'EOF'
 Usage: scripts/ycsb_compare_mongodb_treedb.sh
 
-TARGETS selects exactly the services and clients to run (space or comma separated:
+TARGETS is one line selecting the services and clients to run (space or comma separated:
   treedb_native, treedb_mongo). The default runs the two TreeDB targets.
   mongodb is reserved and refused before execution side effects until its
   independently owned reference lifecycle is implemented.
@@ -93,6 +93,7 @@ case "$MONGODB_MODE" in docker|external|skip) ;; *) fail "unknown MONGODB_MODE";
 # Reference lifecycle support is absent; a late rejection could already have
 # launched a container/client and routed snapshots to an unrelated TreeDB addr.
 if [[ "$PARSE_ONLY" == false ]]; then
+  [[ "$TARGETS" != *$'\n'* && "$TARGETS" != *$'\r'* ]] || fail "TARGETS must be a single line (no LF or CR)"
   read -r -a selected <<<"${TARGETS//,/ }"
   [[ ${#selected[@]} -gt 0 ]] || fail "TARGETS cannot be empty"
   declare -A chosen=()

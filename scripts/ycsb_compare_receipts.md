@@ -203,6 +203,9 @@ Real MongoDB 8 reference lifecycle support remains outstanding. Execution with
 `TARGETS=mongodb` (also in mixed lists) is refused before output creation,
 builds, helper calls or service/client launch in every `MONGODB_MODE`. Retained
 `PARSE_ONLY` remains driven by its existing manifest and starts no service.
+Execution `TARGETS` must be a single line: LF/CR, unknown targets and duplicate
+targets are refused before side effects, so Bash cannot silently drop later
+lines containing an unsupported or invalid target.
 
 Run offline controls with:
 

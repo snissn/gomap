@@ -309,6 +309,15 @@ class CompareTests(unittest.TestCase):
         self.exercise_shell_cleanup(ready=True)
 
     def test_reference_mongodb_rejected_before_any_execution_side_effect(self):
+        self.exercise_preflight_refusal([(targets,"reference MongoDB lifecycle is unsupported") for targets in ("mongodb","treedb_native mongodb","mongodb,treedb_mongo","treedb_native,treedb_mongo,mongodb")])
+
+    def test_multiline_unknown_duplicate_targets_reject_before_any_execution_side_effect(self):
+        multiline=("treedb_native\nmongodb","mongodb\n","\nmongodb","treedb_native,\r\nmongodb","treedb_mongo\rmongodb","treedb_native\nunknown","unknown\nmongodb","treedb_native\ntreedb_native","treedb_native \n treedb_native")
+        cases=[(targets,"TARGETS must be a single line") for targets in multiline]
+        cases += [("treedb_native unknown","unknown target"),("unknown","unknown target"),("treedb_native treedb_native","duplicate target"),("treedb_mongo,treedb_mongo","duplicate target")]
+        self.exercise_preflight_refusal(cases)
+
+    def exercise_preflight_refusal(self,cases):
         import select
         import shlex
         import socket
@@ -324,7 +333,7 @@ class CompareTests(unittest.TestCase):
             listeners=(native,unrelated_gateway,reference)
             for listener in listeners:listener.bind(("127.0.0.1",0));listener.listen()
             address=lambda listener:"127.0.0.1:"+str(listener.getsockname()[1])
-            for targets in ("mongodb","treedb_native mongodb","mongodb,treedb_mongo","treedb_native,treedb_mongo,mongodb"):
+            for targets,message in cases:
                 for mode in ("docker","external","skip"):
                     for supplied_output in (False,True):
                         with self.subTest(targets=targets,mode=mode,supplied_output=supplied_output):
@@ -334,7 +343,7 @@ class CompareTests(unittest.TestCase):
                             if supplied_output:environment["OUT_DIR"]=str(output)
                             outcome=subprocess.run(["bash",str(ROOT/"ycsb_compare_mongodb_treedb.sh")],env=environment,capture_output=True,text=True,timeout=5)
                             self.assertEqual(outcome.returncode,2,outcome.stderr)
-                            self.assertIn("reference MongoDB lifecycle is unsupported",outcome.stderr)
+                            self.assertIn(message,outcome.stderr)
                             self.assertFalse(marker.exists(),"execution command ran before unsupported-target refusal")
                             self.assertFalse(output.exists(),"unsupported target created output")
                             self.assertFalse(select.select(listeners,[],[],0)[0],"unsupported target touched a service address")
@@ -351,6 +360,7 @@ class CompareTests(unittest.TestCase):
                 self.assertTrue(output.is_dir())
         # PARSE_ONLY is selected from its existing manifest, not TARGETS.
         self.check(True,TARGETS="mongodb")
+        self.check(True,TARGETS="treedb_native\nmongodb\nunknown\ntreedb_native")
 
     def test_failed_readiness_retains_identity_and_cleans_actual_owned_process(self):
         self.exercise_shell_cleanup(ready=False)
