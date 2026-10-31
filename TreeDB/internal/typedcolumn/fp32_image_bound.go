@@ -18,7 +18,7 @@ func FP32ImageEncodedUpperBound(opts Options, rows int, imageOpts ColumnPartImag
 	if p.Name == "" || v.Name == "" || p.Name == v.Name || uint64(len(p.Name)) > math.MaxUint32 || uint64(len(v.Name)) > math.MaxUint32 || v.FixedWidthElements <= 0 || uint64(v.FixedWidthElements) > math.MaxUint32 {
 		return 0, errFP32ImageBoundLayout
 	}
-	if (p.Compression != CompressionNone && p.Compression != CompressionLZ4) || p != (ColumnDefinition{Name: p.Name, Type: ColumnTypeInt64, Encoding: EncodingDeltaVarint, Compression: p.Compression, CompressionSet: p.CompressionSet, StatsDisabled: true}) || v != (ColumnDefinition{Name: v.Name, Type: ColumnTypeFloat32Vector, Encoding: EncodingRawFloat32Vector, CompressionSet: v.CompressionSet, FixedWidthElements: v.FixedWidthElements, StatsDisabled: v.StatsDisabled}) {
+	if (p.Compression != CompressionNone && p.Compression != CompressionLZ4 && p.Compression != CompressionSnappy) || p != (ColumnDefinition{Name: p.Name, Type: ColumnTypeInt64, Encoding: EncodingDeltaVarint, Compression: p.Compression, CompressionSet: p.CompressionSet, StatsDisabled: true}) || v != (ColumnDefinition{Name: v.Name, Type: ColumnTypeFloat32Vector, Encoding: EncodingRawFloat32Vector, CompressionSet: v.CompressionSet, FixedWidthElements: v.FixedWidthElements, StatsDisabled: v.StatsDisabled}) {
 		return 0, errFP32ImageBoundLayout
 	}
 	if len(opts.LogicalPrimaryKey.Columns) != 1 || opts.LogicalPrimaryKey.Columns[0] != p.Name || len(opts.SortKey.Columns) != 1 {
@@ -31,10 +31,10 @@ func FP32ImageEncodedUpperBound(opts Options, rows int, imageOpts ColumnPartImag
 	if len(imageOpts.Dictionaries) > 1 || len(imageOpts.DictionaryOrder) != 0 || len(imageOpts.DictionaryCollation) != 0 {
 		return 0, errFP32ImageBoundLayout
 	}
-	// admitCompressionInto retains LZ4/ZSTD only if smaller than raw, including the
+	// admitCompressionInto retains Snappy/LZ4/ZSTD only if smaller than raw, including the
 	// whole locator-section caller. Encoder scratch is not part of this bound.
 	for _, compression := range []Compression{imageOpts.SectionCompression, imageOpts.RowLocatorSectionCompression, imageOpts.DictionarySectionCompression, imageOpts.PruningMetadataSectionCompression} {
-		if compression != CompressionNone && compression != CompressionLZ4 && compression != CompressionZSTD {
+		if compression != CompressionNone && compression != CompressionSnappy && compression != CompressionLZ4 && compression != CompressionZSTD {
 			return 0, errFP32ImageBoundLayout
 		}
 	}
