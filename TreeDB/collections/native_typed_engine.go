@@ -243,6 +243,7 @@ func (b *nativeEngineBuild) materializeTyped(group *backenddb.RootPublicationBui
 			// secondary indexes can sort before primary. Every result carries
 			// the same immutable physical metadata, including ordinary indexes.
 			result.typedMeta = &work.meta
+			result.ordinaryGraphSourceCodecs = work.ordinaryGraphSourceCodecs
 			if !nativeTypedPhysicalDomain(result.name) {
 				continue
 			}

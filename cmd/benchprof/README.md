@@ -5,6 +5,23 @@ including its command and artifact names, see the [collection insert profiling
 recipe](../unified_bench/README.md#focused-collection-insert-compression-profile).
 Its Go test profiles are not benchprof inputs.
 
+The public ordinary ColumnGraph lifecycle comparison for #5338 uses standalone
+`BenchmarkOrdinaryColumnGraphNativeLifecycle4096`; see the
+[exact-source reproduction commands and interpretation](../unified_bench/README.md#ordinary-columngraph-lifecycle-control-5338).
+Compile the exact baseline plus identical benchmark overlay and the frozen
+candidate separately, then collect fixed `-test.benchtime=1x` samples in fresh
+processes with matched runtime settings. Its `LIFECYCLE_PHASE` logs contain
+phase time/allocation deltas, process heap samples and existing COW/checkpoint
+counters. `LIFECYCLE_CLOSED` and external GNU time maximum RSS have different
+retention boundaries; neither is a graph-only memory figure. Full document/query,
+original Close and reopen checks run outside the standard timer and every sample
+must preserve their original failure status. These text/JSON log lines and
+process-time receipts are not benchprof inputs or a unified-bench schema change.
+
+The [retained #5338 measurements](../../TreeDB/docs/evidence/native-columngraph-handoff-5338/measured-results.md)
+use fresh Python child-resource accounting where GNU time is unavailable, with
+the same whole-process RSS boundary and original per-sample outputs.
+
 Mongo startup-default comparisons use the standalone
 `BenchmarkStandalonePublicIndexedUpdate` in `cmd/mongo_gateway_bench`, through
 the product opener and official driver. See its [run instructions and timing
