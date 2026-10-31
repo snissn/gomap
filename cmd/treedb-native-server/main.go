@@ -17,6 +17,7 @@ import (
 	"github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/nativewire"
 	"github.com/snissn/gomap/cmd/internal/documentserviceowner"
+	"github.com/snissn/gomap/internal/ycsbevidence"
 )
 
 func main() {
@@ -57,7 +58,12 @@ func run() (resultErr error) {
 	if err != nil {
 		return fmt.Errorf("open TreeDB: %w", err)
 	}
-	defer func() { resultErr = errors.Join(resultErr, owner.Close()) }()
+	var evidence *ycsbevidence.Observer
+	defer func() { resultErr = errors.Join(resultErr, evidence.Close(owner.Close)) }()
+	evidence, err = ycsbevidence.OpenFromEnv(string(normalizedProfile), *dataDir, owner.Backend, owner.Stats)
+	if err != nil {
+		return fmt.Errorf("owner evidence: %w", err)
+	}
 	if *pprofAddr != "" {
 		diagnosticsListener, err := net.Listen("tcp", *pprofAddr)
 		if err != nil {
