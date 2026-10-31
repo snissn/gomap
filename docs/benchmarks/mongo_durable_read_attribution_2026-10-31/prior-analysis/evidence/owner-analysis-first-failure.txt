@@ -1,0 +1,4 @@
+Command: python3 prototypes/analyze_owner_observations.py
+Observed exit: 1
+Traceback: line 40, owner['process']['exe_sha256']; KeyError: 'process'
+This is an analysis-reader schema error, not a benchmark or storage failure. Original inputs unchanged.

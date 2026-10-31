@@ -1,0 +1,3560 @@
+{
+  "collected_utc": "2026-10-30T11:09:22.193952+00:00",
+  "comparison": "B",
+  "samples": [
+    {
+      "pair": 1,
+      "product": "mongodb",
+      "manifest_sha256": "aea3b7a92d80f90785dc7c98cb79138dd903f571c3230fd2e82ee452582a0a95",
+      "final_sha256": "0dfbd34340d3dc9b4574acdea1cfc907bc0e4aed499d94a78dfedae36db1673c",
+      "phases": {
+        "load": {
+          "rows": [
+            {
+              "operation": "INSERT",
+              "count": 100000,
+              "ops_per_sec": 39533.0,
+              "avg_us": 407.0,
+              "p50_us": 263.0,
+              "p95_us": 523.0,
+              "p99_us": 746.0,
+              "p999_us": 1261.0,
+              "max_us": 884223.0
+            },
+            {
+              "operation": "TOTAL",
+              "count": 100000,
+              "ops_per_sec": 39536.4,
+              "avg_us": 407.0,
+              "p50_us": 263.0,
+              "p95_us": 523.0,
+              "p99_us": 746.0,
+              "p999_us": 1261.0,
+              "max_us": 884223.0
+            }
+          ],
+          "reported_workload_duration": "2.840237411s",
+          "reported_workload_seconds": 2.840237411,
+          "launch_sha256": "243636b583bafff0af2e870245e7be8be98b3088160083394cabe5731f70ac3b",
+          "process": {
+            "pid": 4191444,
+            "start_ticks": 493350789,
+            "exe_sha256": "2237d8aeec309b9b4b335b348234d9829594c9101043144a944d9f2868fbc95b",
+            "gomaxprocs_unset": true
+          },
+          "start_utc": "2026-10-30T11:00:23.334063Z",
+          "end_utc": "2026-10-30T11:00:26.216063Z",
+          "original_client_close": {
+            "schema_version": 1,
+            "phase_id": "3b77afac81f44b9a912843a1979d8ea9:mongodb:load:3b72fed280204e06bd84dc957465c3b8",
+            "client_build_id": "merged-3c814849-reference-bootstrap-2237d8aeec30",
+            "db": "mongodb",
+            "phase": "load",
+            "declared_profile": "mongodb_w1_journaled",
+            "total_excludes_close": true,
+            "command": {
+              "attempted": true,
+              "success": true,
+              "error": "",
+              "start_utc": "0001-01-01T00:00:00Z",
+              "end_utc": "0001-01-01T00:00:00Z",
+              "elapsed_ns": 0
+            },
+            "db_close": {
+              "attempted": true,
+              "success": true,
+              "error": "",
+              "start_utc": "2026-10-30T11:00:26.212219853Z",
+              "end_utc": "2026-10-30T11:00:26.212635999Z",
+              "elapsed_ns": 416152
+            },
+            "workload_close": {
+              "attempted": true,
+              "success": true,
+              "error": "",
+              "start_utc": "2026-10-30T11:00:26.212638052Z",
+              "end_utc": "2026-10-30T11:00:26.212638174Z",
+              "elapsed_ns": 122
+            },
+            "native_flush": {
+              "applicable": false,
+              "flush_enabled": false,
+              "ack": 0,
+              "dial": {
+                "attempted": false,
+                "success": false,
+                "error": "",
+                "start_utc": "0001-01-01T00:00:00Z",
+                "end_utc": "0001-01-01T00:00:00Z",
+                "elapsed_ns": 0
+              },
+              "flush": {
+                "attempted": false,
+                "success": false,
+                "error": "",
+                "start_utc": "0001-01-01T00:00:00Z",
+                "end_utc": "0001-01-01T00:00:00Z",
+                "elapsed_ns": 0
+              },
+              "connection_close": {
+                "attempted": false,
+                "success": false,
+                "error": "",
+                "start_utc": "0001-01-01T00:00:00Z",
+                "end_utc": "0001-01-01T00:00:00Z",
+                "elapsed_ns": 0
+              }
+            }
+          },
+          "close_sha256": "614f1c0c79ce1962dc30b74b8e601b193e53d801915f3e161512f5362cf3e21b"
+        },
+        "run_1": {
+          "rows": [
+            {
+              "operation": "READ",
+              "count": 9516,
+              "ops_per_sec": 20553.5,
+              "avg_us": 201.0,
+              "p50_us": 175.0,
+              "p95_us": 364.0,
+              "p99_us": 602.0,
+              "p999_us": 1305.0,
+              "max_us": 1979.0
+            },
+            {
+              "operation": "TOTAL",
+              "count": 10000,
+              "ops_per_sec": 21601.3,
+              "avg_us": 616.0,
+              "p50_us": 178.0,
+              "p95_us": 1165.0,
+              "p99_us": 11135.0,
+              "p999_us": 12015.0,
+              "max_us": 12247.0
+            },
+            {
+              "operation": "UPDATE",
+              "count": 484,
+              "ops_per_sec": 1059.7,
+              "avg_us": 8774.0,
+              "p50_us": 9487.0,
+              "p95_us": 11855.0,
+              "p99_us": 12087.0,
+              "p999_us": 12247.0,
+              "max_us": 12247.0
+            }
+          ],
+          "reported_workload_duration": "463.28631ms",
+          "reported_workload_seconds": 0.46328631000000003,
+          "launch_sha256": "58dae5766103068732723e242a40d5f95c56d0bfa6d8053dd122c36b80b2f8ac",
+          "process": {
+            "pid": 4191963,
+            "start_ticks": 493351402,
+            "exe_sha256": "2237d8aeec309b9b4b335b348234d9829594c9101043144a944d9f2868fbc95b",
+            "gomaxprocs_unset": true
+          },
+          "start_utc": "2026-10-30T11:00:29.461413Z",
+          "end_utc": "2026-10-30T11:00:29.988526Z",
+          "original_client_close": {
+            "schema_version": 1,
+            "phase_id": "3b77afac81f44b9a912843a1979d8ea9:mongodb:run_1:b7d2e7ef917043f8a9c054d4f4190bbe",
+            "client_build_id": "merged-3c814849-reference-bootstrap-2237d8aeec30",
+            "db": "mongodb",
+            "phase": "run",
+            "declared_profile": "mongodb_w1_journaled",
+            "total_excludes_close": true,
+            "command": {
+              "attempted": true,
+              "success": true,
+              "error": "",
+              "start_utc": "0001-01-01T00:00:00Z",
+              "end_utc": "0001-01-01T00:00:00Z",
+              "elapsed_ns": 0
+            },
+            "db_close": {
+              "attempted": true,
+              "success": true,
+              "error": "",
+              "start_utc": "2026-10-30T11:00:29.985251102Z",
+              "end_utc": "2026-10-30T11:00:29.985777718Z",
+              "elapsed_ns": 526620
+            },
+            "workload_close": {
+              "attempted": true,
+              "success": true,
+              "error": "",
+              "start_utc": "2026-10-30T11:00:29.985779885Z",
+              "end_utc": "2026-10-30T11:00:29.985780088Z",
+              "elapsed_ns": 199
+            },
+            "native_flush": {
+              "applicable": false,
+              "flush_enabled": false,
+              "ack": 0,
+              "dial": {
+                "attempted": false,
+                "success": false,
+                "error": "",
+                "start_utc": "0001-01-01T00:00:00Z",
+                "end_utc": "0001-01-01T00:00:00Z",
+                "elapsed_ns": 0
+              },
+              "flush": {
+                "attempted": false,
+                "success": false,
+                "error": "",
+                "start_utc": "0001-01-01T00:00:00Z",
+                "end_utc": "0001-01-01T00:00:00Z",
+                "elapsed_ns": 0
+              },
+              "connection_close": {
+                "attempted": false,
+                "success": false,
+                "error": "",
+                "start_utc": "0001-01-01T00:00:00Z",
+                "end_utc": "0001-01-01T00:00:00Z",
+                "elapsed_ns": 0
+              }
+            }
+          },
+          "close_sha256": "6733072faeab8d60211cab827409fae9e6ae1867310d6b86b442cff44111a267"
+        }
+      },
+      "sentinel": {
+        "schema_version": 1,
+        "kind": "observed_public_journal_sentinel",
+        "campaign_id": "3b77afac81f44b9a912843a1979d8ea9",
+        "manifest_sha256": "aea3b7a92d80f90785dc7c98cb79138dd903f571c3230fd2e82ee452582a0a95",
+        "process": {
+          "pid": 4191246,
+          "start_ticks": 493350670,
+          "exe_sha256": "d767fb752139fbc8e0e667d7e0c6fe7cdf690e0aa94a51502a32bad8c54a3672",
+          "gomaxprocs_unset": true
+        },
+        "address": "127.0.0.1:27018",
+        "start_utc": "2026-10-30T11:00:29.149828Z",
+        "end_utc": "2026-10-30T11:00:29.203352Z",
+        "request": {
+          "insert": "prefix_sentinel_3b77afac81f44b9a912843a1979d8ea9",
+          "documents": [
+            {
+              "_id": "prefix-sentinel",
+              "marker": "durable-prefix"
+            }
+          ],
+          "writeConcern": {
+            "w": 1,
+            "j": true
+          },
+          "$db": "ycsb"
+        },
+        "reply": {
+          "n": 1,
+          "ok": 1.0
+        },
+        "request_sha256": "cf9bae9efc115cf3afe903a803c742eeddf50bb6fd6849e3029348b87b9785a7",
+        "response_sha256": "12e1638ce64dbdc07d0443450525e944008058d62fec3ff9d1d9fe8d0373e8c7",
+        "scope": "raw public command equivalent to reviewed official-driver sentinel; original owner checked before/after, outside timed run; no direct Close or power-loss claim"
+      },
+      "maintenance_launch_intervals": [
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0001.launch.json",
+          "sha256": "16e518a81fbfab5cca3e43fe02a426121aecf6aebcaea29df0b19f2af6605ea8",
+          "start_utc": "2026-10-30T11:00:21.823375Z",
+          "end_utc": "2026-10-30T11:00:21.839406Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0002.launch.json",
+          "sha256": "f187ef032268e0eab63a0733cd760337ab64d215aaa752c9bf803553ac9a67f2",
+          "start_utc": "2026-10-30T11:00:21.839980Z",
+          "end_utc": "2026-10-30T11:00:21.855981Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0003.launch.json",
+          "sha256": "85500ac72583eea049bb89c2ddf22cdbed1fe8f50f33c2a16a0845ddf95c0477",
+          "start_utc": "2026-10-30T11:00:21.856489Z",
+          "end_utc": "2026-10-30T11:00:21.888596Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0004.launch.json",
+          "sha256": "4112e12d18ac84bcdc7343c8139b6ec3e09b7a3c60512145f1fc1afcc6c013f0",
+          "start_utc": "2026-10-30T11:00:21.890358Z",
+          "end_utc": "2026-10-30T11:00:22.054862Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0005.launch.json",
+          "sha256": "4bab6231adb277ea891ce94a8b9620703a7cd814ea46e825bda7f3be2c22f0c7",
+          "start_utc": "2026-10-30T11:00:22.055373Z",
+          "end_utc": "2026-10-30T11:00:22.071375Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0006.launch.json",
+          "sha256": "ed23e2b7dee39a000a05159e9aa72fdc9738b90806efd81cafb9ca64e2b70e59",
+          "start_utc": "2026-10-30T11:00:22.072034Z",
+          "end_utc": "2026-10-30T11:00:22.286414Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0007.launch.json",
+          "sha256": "650b758bdf9edf73bf780ed8800222aaf61b250e0220ea5237ff031d7dd94f62",
+          "start_utc": "2026-10-30T11:00:22.287116Z",
+          "end_utc": "2026-10-30T11:00:22.303384Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0008.launch.json",
+          "sha256": "1fc83a258bc71d2aa4aa73338adb7f184aea43ffc3c0bf786e42d3f6d1812633",
+          "start_utc": "2026-10-30T11:00:22.459361Z",
+          "end_utc": "2026-10-30T11:00:22.475332Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0009.launch.json",
+          "sha256": "df71f96a775d7285bda9ca9f877920ecb51d47ed2c2005c93e9f5862e2ab0c8d",
+          "start_utc": "2026-10-30T11:00:22.477064Z",
+          "end_utc": "2026-10-30T11:00:22.493050Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0010.launch.json",
+          "sha256": "b2b2543e126e9306f9d283faa24ac7e16e039489bcc5882e727bf847e4f8b55e",
+          "start_utc": "2026-10-30T11:00:23.074444Z",
+          "end_utc": "2026-10-30T11:00:23.090643Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0011.launch.json",
+          "sha256": "8abfdf2fbd5275eff239c1629a80661d473a89a0bf6398de22ec49a8d4ccad3b",
+          "start_utc": "2026-10-30T11:00:23.091454Z",
+          "end_utc": "2026-10-30T11:00:23.107466Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0012.launch.json",
+          "sha256": "5bc256bf7d32311c2b7cd678390a352698569be798c01e5474c2d0b92304935b",
+          "start_utc": "2026-10-30T11:00:26.218317Z",
+          "end_utc": "2026-10-30T11:00:26.234349Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0013.launch.json",
+          "sha256": "635a42313413c5a9bcdac02e79ff350758f58e44d71866054194c138f164aba1",
+          "start_utc": "2026-10-30T11:00:29.203777Z",
+          "end_utc": "2026-10-30T11:00:29.219846Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0014.launch.json",
+          "sha256": "b7217876584f4e0bb1716ad5bbc7913ad1143659f586abd0bfdf1d9ab31974d7",
+          "start_utc": "2026-10-30T11:00:29.220690Z",
+          "end_utc": "2026-10-30T11:00:29.236722Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0015.launch.json",
+          "sha256": "346ae70a0ef91aee9ff18e1d30ff7b84b0a6365736b2fb99c87e7c56b0062712",
+          "start_utc": "2026-10-30T11:00:29.989592Z",
+          "end_utc": "2026-10-30T11:00:30.005620Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0016.launch.json",
+          "sha256": "1063e9506d06eaceacfae0a5322133f94b730302ac1ce65c4efc084267abc139",
+          "start_utc": "2026-10-30T11:00:32.768625Z",
+          "end_utc": "2026-10-30T11:00:32.784627Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0017.launch.json",
+          "sha256": "88dca57394585779866eaccf1fb464ec8e36d79a571640d308a79ba7e50841a9",
+          "start_utc": "2026-10-30T11:00:33.378196Z",
+          "end_utc": "2026-10-30T11:00:33.394290Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0018.launch.json",
+          "sha256": "85cf5386f101cd803942bf508f13f2c4a72669f2d53e56a936c26af3b695e0c4",
+          "start_utc": "2026-10-30T11:00:33.439352Z",
+          "end_utc": "2026-10-30T11:00:33.455700Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0019.launch.json",
+          "sha256": "7b4f193845f174b9e408f0399a8a53f3029ee7787247356d07fb9828ad5f36b7",
+          "start_utc": "2026-10-30T11:00:33.456510Z",
+          "end_utc": "2026-10-30T11:00:33.488597Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0020.launch.json",
+          "sha256": "86a3eeb6483dddcc9dfc1c951b2c514d22d1013df5a0243d1c755f6055a8bcf3",
+          "start_utc": "2026-10-30T11:00:33.489089Z",
+          "end_utc": "2026-10-30T11:00:34.104119Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0021.launch.json",
+          "sha256": "f41ff35de4b93952c2541a2459e9bb2b1c39027f5cab8dfe17039ab9b472e5d5",
+          "start_utc": "2026-10-30T11:00:34.104591Z",
+          "end_utc": "2026-10-30T11:00:34.120651Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0022.launch.json",
+          "sha256": "99299f09e6564d0258d31b8264c36494a6e5874bbc54b64273af3b75ebcd8dc4",
+          "start_utc": "2026-10-30T11:00:34.121581Z",
+          "end_utc": "2026-10-30T11:00:34.137541Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0023.launch.json",
+          "sha256": "1662337c4d732a332f8e6279ef71ab1cd31db7c9b06681b88fe85b40cb2779ba",
+          "start_utc": "2026-10-30T11:00:34.138529Z",
+          "end_utc": "2026-10-30T11:00:34.154589Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0024.launch.json",
+          "sha256": "9ab46ee690f1c0dc20788dcbb0f32c50d4da02b6f2e2fb48f15bd26ad9ada935",
+          "start_utc": "2026-10-30T11:00:34.155235Z",
+          "end_utc": "2026-10-30T11:00:34.187320Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0025.launch.json",
+          "sha256": "47aa4018602127644f15ca0ee7a70570b28270254d2f21e17033adf314811bec",
+          "start_utc": "2026-10-30T11:00:34.187917Z",
+          "end_utc": "2026-10-30T11:00:34.302077Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0026.launch.json",
+          "sha256": "666786d2aca8abb0cc69a9ac85f3810f7e2915e97e7bc89d63e6c066396650e3",
+          "start_utc": "2026-10-30T11:00:34.302571Z",
+          "end_utc": "2026-10-30T11:00:34.318562Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0027.launch.json",
+          "sha256": "bb0478fbd189bb4f6d73571cddfdf85e77b07362dc7dce3652053e48f67bf33a",
+          "start_utc": "2026-10-30T11:00:34.319222Z",
+          "end_utc": "2026-10-30T11:00:34.533642Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0028.launch.json",
+          "sha256": "85094a6eb31268a5ca11b9ed6aba53d74c4c9ae32394153ad8461ed39a24f9ea",
+          "start_utc": "2026-10-30T11:00:34.534115Z",
+          "end_utc": "2026-10-30T11:00:34.550096Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0029.launch.json",
+          "sha256": "55f874ac3ceed0aca3e10cb96ef7e16656042cff1cd1930b2b5a6822dfd9b90c",
+          "start_utc": "2026-10-30T11:00:34.551501Z",
+          "end_utc": "2026-10-30T11:00:34.567536Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0030.launch.json",
+          "sha256": "1c0ccefd63bcd66281984cb718f8c7dc24518d107c622308d70b185767a188e9",
+          "start_utc": "2026-10-30T11:00:34.568481Z",
+          "end_utc": "2026-10-30T11:00:34.584468Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0031.launch.json",
+          "sha256": "3ba6fc7606fdcd80ef01a7342b6f41733a17cb0688e060b431ceda8097b80b20",
+          "start_utc": "2026-10-30T11:00:35.163967Z",
+          "end_utc": "2026-10-30T11:00:35.179914Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0032.launch.json",
+          "sha256": "39b105fedc20ea8dcf9f67a232dc1d2a8b71572e1c63e1f7fac9a1ba8dbcafc6",
+          "start_utc": "2026-10-30T11:00:37.992609Z",
+          "end_utc": "2026-10-30T11:00:38.008824Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0033.launch.json",
+          "sha256": "7b086fe4f817467c3ddc4ccd02e6f5e6dce588cff9236e7ee288c292f8e976fd",
+          "start_utc": "2026-10-30T11:00:38.052028Z",
+          "end_utc": "2026-10-30T11:00:38.068082Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0034.launch.json",
+          "sha256": "f671ffef7964f279d4021f0398a5bd7bf35b06a69a1d3397ea6605db3667fff3",
+          "start_utc": "2026-10-30T11:00:38.068899Z",
+          "end_utc": "2026-10-30T11:00:38.100932Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0035.launch.json",
+          "sha256": "e315027fc2b98932618d2596b3d242bad9c7989ccc3c2de14b3ac9552b664fbd",
+          "start_utc": "2026-10-30T11:00:38.101426Z",
+          "end_utc": "2026-10-30T11:00:38.616300Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0036.launch.json",
+          "sha256": "278f7a23f0853dc519f04f836e193ac87b90f9b93c7f51bcf1ae3891e885a021",
+          "start_utc": "2026-10-30T11:00:38.616794Z",
+          "end_utc": "2026-10-30T11:00:38.632826Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0037.launch.json",
+          "sha256": "8ccf8faf5ef24ba6f7d81ed4e9e4ca06912d29a178c2a92d47a512426798e717",
+          "start_utc": "2026-10-30T11:00:38.634322Z",
+          "end_utc": "2026-10-30T11:00:38.650671Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0038.launch.json",
+          "sha256": "861d573e386b42d9814e018abc8599ec367c3221603a2f5d2397146b51f8a55e",
+          "start_utc": "2026-10-30T11:00:38.651886Z",
+          "end_utc": "2026-10-30T11:00:38.668815Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0039.launch.json",
+          "sha256": "015750cbfd02040ec0466485f535691e7383903279001c8e56fbb959119200b3",
+          "start_utc": "2026-10-30T11:00:38.669497Z",
+          "end_utc": "2026-10-30T11:00:38.702092Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0040.launch.json",
+          "sha256": "31ae5fdcd9a7a3565ceca4e7189c2cf596e7831440bc2ded7286b821742c79cd",
+          "start_utc": "2026-10-30T11:00:38.702747Z",
+          "end_utc": "2026-10-30T11:00:38.868141Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0041.launch.json",
+          "sha256": "3ad967beba88371a3d10e4afc084c5afbbd99307fb1ec7160f44f9aadd4f0cbd",
+          "start_utc": "2026-10-30T11:00:38.868670Z",
+          "end_utc": "2026-10-30T11:00:38.884719Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0042.launch.json",
+          "sha256": "c3420033557ddd432ef487244271546c47e241737695adc4347db484a9110334",
+          "start_utc": "2026-10-30T11:00:38.885372Z",
+          "end_utc": "2026-10-30T11:00:39.099889Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0043.launch.json",
+          "sha256": "a0ab7879c4f066cb4bf33a4c7d4269c405ff444b9ece48376c37c2d5f74c61b6",
+          "start_utc": "2026-10-30T11:00:39.100599Z",
+          "end_utc": "2026-10-30T11:00:39.116793Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0044.launch.json",
+          "sha256": "52c93b69a5c51889c0d6d46290f37089ffece1af8879c37011a68ddb71a46c45",
+          "start_utc": "2026-10-30T11:00:39.118174Z",
+          "end_utc": "2026-10-30T11:00:39.134109Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0045.launch.json",
+          "sha256": "a382437798c9dc7bb6a87dbbd18fcbf979979e28c6acf6e5f04447df49feb4e5",
+          "start_utc": "2026-10-30T11:00:39.135254Z",
+          "end_utc": "2026-10-30T11:00:39.151246Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0046.launch.json",
+          "sha256": "0d50f3d5329e1f2b6e6bf23d8276d3d0d4b81a4b43d9ab1959b59ba639e52385",
+          "start_utc": "2026-10-30T11:00:39.729867Z",
+          "end_utc": "2026-10-30T11:00:39.745787Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0047.launch.json",
+          "sha256": "46dd44782272ec55d31e73bf58851f8a96b86a212ba81f277dde41d5ce9331d4",
+          "start_utc": "2026-10-30T11:00:40.054039Z",
+          "end_utc": "2026-10-30T11:00:40.070030Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0048.launch.json",
+          "sha256": "74ef9e709deca43b695f840250064f9db9ed1ecd1fe25a6b84f0160d4e7e6156",
+          "start_utc": "2026-10-30T11:00:40.248416Z",
+          "end_utc": "2026-10-30T11:00:40.264490Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0049.launch.json",
+          "sha256": "a15a5cf975f2e7a7f0833e2ff8af364be11cc1de0057e6ce45806538322da079",
+          "start_utc": "2026-10-30T11:00:40.307726Z",
+          "end_utc": "2026-10-30T11:00:40.323758Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0050.launch.json",
+          "sha256": "41b674ac58ccd8154ad4595d6d6f710ac11e0f3ad57226a9f82955e1d8b0918a",
+          "start_utc": "2026-10-30T11:00:40.324560Z",
+          "end_utc": "2026-10-30T11:00:40.388698Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0051.launch.json",
+          "sha256": "9065f631b266ed1215ef29f4a06576d9ea0f7b3149818bec8f4b5da627b1a6e5",
+          "start_utc": "2026-10-30T11:00:40.389195Z",
+          "end_utc": "2026-10-30T11:00:40.703854Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0052.launch.json",
+          "sha256": "fe85c03db38556d5c5d796216abce8b628f98835f9d239688da478e63c9596b0",
+          "start_utc": "2026-10-30T11:00:40.704393Z",
+          "end_utc": "2026-10-30T11:00:40.720452Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0053.launch.json",
+          "sha256": "af454641fa9a5305aff3381b36e6e0aa8b0c9ac5d0bb49d50e5919855a29eb31",
+          "start_utc": "2026-10-30T11:00:40.721420Z",
+          "end_utc": "2026-10-30T11:00:40.737460Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0054.launch.json",
+          "sha256": "974bf8e9792c7347f6f7f2bd0b301f1e389df5de41f78fbaf513bcaec390dd31",
+          "start_utc": "2026-10-30T11:00:40.738406Z",
+          "end_utc": "2026-10-30T11:00:40.754479Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0055.launch.json",
+          "sha256": "95353e783197c91c692ca94d8d19c6d7f57e42888f30642ca7629ded0682d3b6",
+          "start_utc": "2026-10-30T11:00:40.755260Z",
+          "end_utc": "2026-10-30T11:00:40.787340Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0056.launch.json",
+          "sha256": "1d54711658b1b32558c842a2c74c0ceb29a6aac69323298c188def46a403939f",
+          "start_utc": "2026-10-30T11:00:40.787993Z",
+          "end_utc": "2026-10-30T11:00:40.902230Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0057.launch.json",
+          "sha256": "ee82b19ce9e40945301f87dab0b00f1af464f9a0456e11651cf50f18071339e8",
+          "start_utc": "2026-10-30T11:00:40.902721Z",
+          "end_utc": "2026-10-30T11:00:40.918704Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0058.launch.json",
+          "sha256": "3fab719d757f60143f31f40dde8127440a4b0d3427f50b21c621438e698a6349",
+          "start_utc": "2026-10-30T11:00:40.919343Z",
+          "end_utc": "2026-10-30T11:00:41.183867Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0059.launch.json",
+          "sha256": "b5058c5eb3712b70a1fb52bf840f5d46e9edd789c5d1559b34f50d64e7390cc6",
+          "start_utc": "2026-10-30T11:00:41.184593Z",
+          "end_utc": "2026-10-30T11:00:41.200854Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0060.launch.json",
+          "sha256": "6e12a78d283f6879ebec746d4b15fb1f81a5b1629f3b2b883117a7ee1beb7773",
+          "start_utc": "2026-10-30T11:00:41.202277Z",
+          "end_utc": "2026-10-30T11:00:41.218318Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0061.launch.json",
+          "sha256": "71a4ab62276067e68aeab59db9dbe94c431233a905e8e2c9e57ddd651fc72179",
+          "start_utc": "2026-10-30T11:00:41.219330Z",
+          "end_utc": "2026-10-30T11:00:41.235312Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0062.launch.json",
+          "sha256": "6d842b046c38f1f0cd5a35cb2f3a2df7690fd0f5e3d6510c8e2558fb1e59e898",
+          "start_utc": "2026-10-30T11:00:41.814778Z",
+          "end_utc": "2026-10-30T11:00:41.830833Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0063.launch.json",
+          "sha256": "021e46669cfdaff2bd63504d1129df59a192a73d1a991c5d8b5fc1734b6f569c",
+          "start_utc": "2026-10-30T11:00:41.890709Z",
+          "end_utc": "2026-10-30T11:00:41.906699Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0064.launch.json",
+          "sha256": "924713755f6552e05aa4782299aa516a2056133e34dba6260abb1ab8df423f3b",
+          "start_utc": "2026-10-30T11:00:41.949891Z",
+          "end_utc": "2026-10-30T11:00:41.965905Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0065.launch.json",
+          "sha256": "2955c049d9f35c4c1d4cbdde15648092b11b506b775bae33b6564d0fa21fbf74",
+          "start_utc": "2026-10-30T11:00:41.966710Z",
+          "end_utc": "2026-10-30T11:00:41.998874Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0066.launch.json",
+          "sha256": "b054962f6fdc0f39b1263b24ee38cb1bbc82b21c9de7341b60ea56d907ce2fce",
+          "start_utc": "2026-10-30T11:00:41.999358Z",
+          "end_utc": "2026-10-30T11:00:42.363949Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0067.launch.json",
+          "sha256": "44d909b6f49218753c92e11121d91e133a339b60fbbf0ba38d1312fa72d48b62",
+          "start_utc": "2026-10-30T11:00:42.364408Z",
+          "end_utc": "2026-10-30T11:00:42.380412Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0068.launch.json",
+          "sha256": "e42b8efa89f885bbcab1877c8dce7cc7809ad29a7807dd545e59a7f98579b7f0",
+          "start_utc": "2026-10-30T11:00:42.381359Z",
+          "end_utc": "2026-10-30T11:00:42.397398Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0069.launch.json",
+          "sha256": "91946e5751cef90b4decd24dc71383a305a82e3680484e20ed77d1c1520260f1",
+          "start_utc": "2026-10-30T11:00:42.398233Z",
+          "end_utc": "2026-10-30T11:00:42.414322Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/docker-0070.launch.json",
+          "sha256": "bd00bccf2f53003a53cdd59a58f54ae39f74100ad873e767753ff55b52a915c5",
+          "start_utc": "2026-10-30T11:00:42.414989Z",
+          "end_utc": "2026-10-30T11:00:42.447075Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/fixture-checkpoint.launch.json",
+          "sha256": "59a9bb0858442ee562df53fd2eed7927a392fb11308ae2f91969c787189e42db",
+          "start_utc": "2026-10-30T11:00:40.070827Z",
+          "end_utc": "2026-10-30T11:00:40.235102Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/fixture-reopened-before-close.launch.json",
+          "sha256": "e8f56a46bdae0d5c0df2b2b34f0f45ae459f6aefc314505573e17fb5427863bb",
+          "start_utc": "2026-10-30T11:00:41.907526Z",
+          "end_utc": "2026-10-30T11:00:41.939549Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/fixture-reopened-ready.launch.json",
+          "sha256": "44d0a0a3c8511c385f64bd57998adf2c34d6d2ca977c393e2d4d614a161283bf",
+          "start_utc": "2026-10-30T11:00:41.236248Z",
+          "end_utc": "2026-10-30T11:00:41.801520Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/fixture-write-before-close.launch.json",
+          "sha256": "508d22533799d022dbe6d4c8b8abbc682bbc91d823ceefb532050203c559f5eb",
+          "start_utc": "2026-10-30T11:00:40.265371Z",
+          "end_utc": "2026-10-30T11:00:40.297526Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/fixture-write-ready.launch.json",
+          "sha256": "a05c19e1240c249e570a093b4d218e48d6eaf038cdc233b638b94b9b1826b49d",
+          "start_utc": "2026-10-30T11:00:39.152144Z",
+          "end_utc": "2026-10-30T11:00:39.717072Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/fixture_verify-owner.launch.json",
+          "sha256": "a59a333685bf170270a0ba67542c148310187d2aa33d8ed4cc437163bbcfcbc2",
+          "start_utc": "2026-10-30T11:00:41.831620Z",
+          "end_utc": "2026-10-30T11:00:41.863630Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/fixture_verify.launch.json",
+          "sha256": "027cc8112e6861aa993a7726af9a25bc83bc2f7b9712c1dc82963ae656216a99",
+          "start_utc": "2026-10-30T11:00:41.874177Z",
+          "end_utc": "2026-10-30T11:00:41.890220Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/fixture_write-owner.launch.json",
+          "sha256": "1154adcb3223c3f950632b3fe9b3d55d257714a2e5a36bb896a319dc4b5b6041",
+          "start_utc": "2026-10-30T11:00:39.746637Z",
+          "end_utc": "2026-10-30T11:00:39.778777Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/fixture_write.launch.json",
+          "sha256": "023204bc80cf8b6ef2a6c1782432e511a0692457e4ac5cebe42a6aabdf42b3ae",
+          "start_utc": "2026-10-30T11:00:39.789058Z",
+          "end_utc": "2026-10-30T11:00:40.053550Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/load-owner.launch.json",
+          "sha256": "dd784a59e02fabd79a139a48964a0a792093e7822fe6730e6aa43598158f06d0",
+          "start_utc": "2026-10-30T11:00:23.108501Z",
+          "end_utc": "2026-10-30T11:00:23.140540Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/random-checkpoint.launch.json",
+          "sha256": "dc9ca4e59c3ca1a24c35a41115912eef330e5cdc9c1e98ebf632666b8cb3b140",
+          "start_utc": "2026-10-30T11:00:32.785443Z",
+          "end_utc": "2026-10-30T11:00:33.200112Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/reopened-before-close.launch.json",
+          "sha256": "b032502ab0a4c8899b55f54717a27cac06b7c952d6e8dbee474b177039ad5e85",
+          "start_utc": "2026-10-30T11:00:38.009811Z",
+          "end_utc": "2026-10-30T11:00:38.041876Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/reopened-ready.launch.json",
+          "sha256": "85a2fa96724963db9193f5231c2fde98c82494e4c5bf7965dcdb3a0db6cb3ee2",
+          "start_utc": "2026-10-30T11:00:34.585278Z",
+          "end_utc": "2026-10-30T11:00:35.150293Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/run_1-owner.launch.json",
+          "sha256": "316947991071affa514b506253bee80ade574eec1394faf63a8bc31154625b63",
+          "start_utc": "2026-10-30T11:00:29.237538Z",
+          "end_utc": "2026-10-30T11:00:29.269614Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/server-before-close.launch.json",
+          "sha256": "7fbea5b666e6c08fd7300743d49ee4785c05a15b0f3ef9db35fa4d74558d1c06",
+          "start_utc": "2026-10-30T11:00:33.395120Z",
+          "end_utc": "2026-10-30T11:00:33.427208Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/server-ready.launch.json",
+          "sha256": "29233dbe7ea24086ac57c54034c9e52454908c16f097f15c89f7652a14e5c3fd",
+          "start_utc": "2026-10-30T11:00:22.493875Z",
+          "end_utc": "2026-10-30T11:00:23.058660Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/snapshot_loaded-owner.launch.json",
+          "sha256": "3e1a5fe7cc8b46b529d8c41787ae568366162f2d92ad357fd8058d7df9be27a6",
+          "start_utc": "2026-10-30T11:00:26.235264Z",
+          "end_utc": "2026-10-30T11:00:26.267366Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/snapshot_loaded.launch.json",
+          "sha256": "5f7e393e166a28f698c3155774af7df0786710f5e0ce8e1d0e2f2194dbe90f3d",
+          "start_utc": "2026-10-30T11:00:26.282133Z",
+          "end_utc": "2026-10-30T11:00:29.100953Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/snapshot_preclose-owner.launch.json",
+          "sha256": "548021a15c5feb033f74d38700aab1caaa321ac38ff555da4b2664de38e85e3b",
+          "start_utc": "2026-10-30T11:00:30.006515Z",
+          "end_utc": "2026-10-30T11:00:30.038611Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/snapshot_preclose.launch.json",
+          "sha256": "46de141efd401592c08162a7263991bee50e45efa38e4b39c87c073d18d8ef58",
+          "start_utc": "2026-10-30T11:00:30.049642Z",
+          "end_utc": "2026-10-30T11:00:32.768099Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/snapshot_reopened-owner.launch.json",
+          "sha256": "3c0b6e8af8233d68aff0d69abf9104de4d6d1c413f74b8c2184cb5d1550d8ad3",
+          "start_utc": "2026-10-30T11:00:35.180734Z",
+          "end_utc": "2026-10-30T11:00:35.212827Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/snapshot_reopened.launch.json",
+          "sha256": "95d8b5f24582e03cd11d181b7f0cab50e295dd14aa9e9fe93b25fe6a4e998f0c",
+          "start_utc": "2026-10-30T11:00:35.223298Z",
+          "end_utc": "2026-10-30T11:00:37.992098Z"
+        }
+      ]
+    },
+    {
+      "pair": 1,
+      "product": "gomap",
+      "manifest_sha256": "7b0d8b1f4652f6737204b82de84863234fe38218ad54baa616a65d56055c720b",
+      "final_sha256": "ff2b510604375df58497ae7f33e70b0cc7cd7be3a4d9f1fd9ea26b3f820dddb1",
+      "phases": {
+        "load": {
+          "rows": [
+            {
+              "operation": "INSERT",
+              "count": 100000,
+              "ops_per_sec": 2207.7,
+              "avg_us": 7229.0,
+              "p50_us": 6551.0,
+              "p95_us": 7095.0,
+              "p99_us": 12087.0,
+              "p999_us": 154239.0,
+              "max_us": 595455.0
+            },
+            {
+              "operation": "TOTAL",
+              "count": 100000,
+              "ops_per_sec": 2207.7,
+              "avg_us": 7229.0,
+              "p50_us": 6551.0,
+              "p95_us": 7095.0,
+              "p99_us": 12087.0,
+              "p999_us": 154239.0,
+              "max_us": 595455.0
+            }
+          ],
+          "reported_workload_duration": "45.302389733s",
+          "reported_workload_seconds": 45.302389733,
+          "launch_sha256": "b8fa0922553ce2bb9515bd4b64910d6cd7f6f0ec95a96bf059968d2879409879",
+          "process": {
+            "pid": 899,
+            "start_ticks": 493355271,
+            "exe_sha256": "2237d8aeec309b9b4b335b348234d9829594c9101043144a944d9f2868fbc95b",
+            "gomaxprocs_unset": true
+          },
+          "start_utc": "2026-10-30T11:01:08.147650Z",
+          "end_utc": "2026-10-30T11:01:53.492865Z",
+          "original_client_close": {
+            "schema_version": 1,
+            "phase_id": "75c030ed86404160ae3da9a05f524289:treedb_mongo:load:cbb61115699c48388fb62947d0f89c8a",
+            "client_build_id": "merged-3c814849-reference-bootstrap-2237d8aeec30",
+            "db": "mongodb",
+            "phase": "load",
+            "declared_profile": "command_wal_durable",
+            "total_excludes_close": true,
+            "command": {
+              "attempted": true,
+              "success": true,
+              "error": "",
+              "start_utc": "0001-01-01T00:00:00Z",
+              "end_utc": "0001-01-01T00:00:00Z",
+              "elapsed_ns": 0
+            },
+            "db_close": {
+              "attempted": true,
+              "success": true,
+              "error": "",
+              "start_utc": "2026-10-30T11:01:53.481187014Z",
+              "end_utc": "2026-10-30T11:01:53.48153655Z",
+              "elapsed_ns": 349540
+            },
+            "workload_close": {
+              "attempted": true,
+              "success": true,
+              "error": "",
+              "start_utc": "2026-10-30T11:01:53.48153787Z",
+              "end_utc": "2026-10-30T11:01:53.48153799Z",
+              "elapsed_ns": 119
+            },
+            "native_flush": {
+              "applicable": false,
+              "flush_enabled": false,
+              "ack": 0,
+              "dial": {
+                "attempted": false,
+                "success": false,
+                "error": "",
+                "start_utc": "0001-01-01T00:00:00Z",
+                "end_utc": "0001-01-01T00:00:00Z",
+                "elapsed_ns": 0
+              },
+              "flush": {
+                "attempted": false,
+                "success": false,
+                "error": "",
+                "start_utc": "0001-01-01T00:00:00Z",
+                "end_utc": "0001-01-01T00:00:00Z",
+                "elapsed_ns": 0
+              },
+              "connection_close": {
+                "attempted": false,
+                "success": false,
+                "error": "",
+                "start_utc": "0001-01-01T00:00:00Z",
+                "end_utc": "0001-01-01T00:00:00Z",
+                "elapsed_ns": 0
+              }
+            }
+          },
+          "close_sha256": "3b1d35bb92d1dc87998386932bdf51345985369c7ee279719a61ec364b899bf4"
+        },
+        "run_1": {
+          "rows": [
+            {
+              "operation": "READ",
+              "count": 9534,
+              "ops_per_sec": 10905.3,
+              "avg_us": 1032.0,
+              "p50_us": 1108.0,
+              "p95_us": 1816.0,
+              "p99_us": 2191.0,
+              "p999_us": 2817.0,
+              "max_us": 3567.0
+            },
+            {
+              "operation": "TOTAL",
+              "count": 10000,
+              "ops_per_sec": 11436.8,
+              "avg_us": 1344.0,
+              "p50_us": 1131.0,
+              "p95_us": 2555.0,
+              "p99_us": 9135.0,
+              "p999_us": 12943.0,
+              "max_us": 18207.0
+            },
+            {
+              "operation": "UPDATE",
+              "count": 466,
+              "ops_per_sec": 537.4,
+              "avg_us": 7737.0,
+              "p50_us": 7559.0,
+              "p95_us": 11295.0,
+              "p99_us": 14343.0,
+              "p999_us": 18207.0,
+              "max_us": 18207.0
+            }
+          ],
+          "reported_workload_duration": "874.764926ms",
+          "reported_workload_seconds": 0.874764926,
+          "launch_sha256": "f6ed9352062d2362b628ca52d7f0a8aa1f603f3c42e021ba8d5026b55f83d8a6",
+          "process": {
+            "pid": 2204,
+            "start_ticks": 493360214,
+            "exe_sha256": "2237d8aeec309b9b4b335b348234d9829594c9101043144a944d9f2868fbc95b",
+            "gomaxprocs_unset": true
+          },
+          "start_utc": "2026-10-30T11:01:57.581199Z",
+          "end_utc": "2026-10-30T11:01:58.489785Z",
+          "original_client_close": {
+            "schema_version": 1,
+            "phase_id": "75c030ed86404160ae3da9a05f524289:treedb_mongo:run_1:03b26aba5e994452b3303c5a4665b97c",
+            "client_build_id": "merged-3c814849-reference-bootstrap-2237d8aeec30",
+            "db": "mongodb",
+            "phase": "run",
+            "declared_profile": "command_wal_durable",
+            "total_excludes_close": true,
+            "command": {
+              "attempted": true,
+              "success": true,
+              "error": "",
+              "start_utc": "0001-01-01T00:00:00Z",
+              "end_utc": "0001-01-01T00:00:00Z",
+              "elapsed_ns": 0
+            },
+            "db_close": {
+              "attempted": true,
+              "success": true,
+              "error": "",
+              "start_utc": "2026-10-30T11:01:58.486311475Z",
+              "end_utc": "2026-10-30T11:01:58.486631238Z",
+              "elapsed_ns": 319771
+            },
+            "workload_close": {
+              "attempted": true,
+              "success": true,
+              "error": "",
+              "start_utc": "2026-10-30T11:01:58.486633089Z",
+              "end_utc": "2026-10-30T11:01:58.48663322Z",
+              "elapsed_ns": 131
+            },
+            "native_flush": {
+              "applicable": false,
+              "flush_enabled": false,
+              "ack": 0,
+              "dial": {
+                "attempted": false,
+                "success": false,
+                "error": "",
+                "start_utc": "0001-01-01T00:00:00Z",
+                "end_utc": "0001-01-01T00:00:00Z",
+                "elapsed_ns": 0
+              },
+              "flush": {
+                "attempted": false,
+                "success": false,
+                "error": "",
+                "start_utc": "0001-01-01T00:00:00Z",
+                "end_utc": "0001-01-01T00:00:00Z",
+                "elapsed_ns": 0
+              },
+              "connection_close": {
+                "attempted": false,
+                "success": false,
+                "error": "",
+                "start_utc": "0001-01-01T00:00:00Z",
+                "end_utc": "0001-01-01T00:00:00Z",
+                "elapsed_ns": 0
+              }
+            }
+          },
+          "close_sha256": "585ef56311633304846f4a04d1f2f5b1efdfd865abeb91ce05fe5b2905131796"
+        }
+      },
+      "sentinel": {
+        "schema_version": 1,
+        "kind": "observed_public_journal_sentinel",
+        "campaign_id": "75c030ed86404160ae3da9a05f524289",
+        "manifest_sha256": "7b0d8b1f4652f6737204b82de84863234fe38218ad54baa616a65d56055c720b",
+        "process": {
+          "pid": 881,
+          "start_ticks": 493355203,
+          "exe_sha256": "d3475bdfc5796890c39b2c2bf2c9c27519ed94283939aa624f05ed1481233fe8",
+          "gomaxprocs_unset": true
+        },
+        "address": "127.0.0.1:27130",
+        "start_utc": "2026-10-30T11:01:57.024409Z",
+        "end_utc": "2026-10-30T11:01:57.173875Z",
+        "request": {
+          "insert": "prefix_sentinel_75c030ed86404160ae3da9a05f524289",
+          "documents": [
+            {
+              "_id": "prefix-sentinel",
+              "marker": "durable-prefix"
+            }
+          ],
+          "writeConcern": {
+            "w": 1,
+            "j": true
+          },
+          "$db": "ycsb"
+        },
+        "reply": {
+          "ok": 1.0,
+          "n": 1
+        },
+        "request_sha256": "e5fee51248000b18f57e6fe4fb015aa313fcc67dad66cad63679bd92eadf2299",
+        "response_sha256": "e5167d2fa5032cad79147ff7ac949261c5fdbb694c271e72e07f9712de540ff6",
+        "scope": "raw public command equivalent to reviewed official-driver sentinel; original owner checked before/after, outside timed run; no direct Close or power-loss claim"
+      },
+      "maintenance_launch_intervals": [
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-gomap/output/treedb_mongo/fixture_verify.launch.json",
+          "sha256": "dd7f0365071c08eb3c5c283a2a4078db57375fe50c3dfc6a8ffa5e9263c2ae64",
+          "start_utc": "2026-10-30T11:02:08.608579Z",
+          "end_utc": "2026-10-30T11:02:08.624801Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-gomap/output/treedb_mongo/fixture_write.launch.json",
+          "sha256": "70c80d5cba7d0a1b9f5d1bc0619d3e5f71271654346f1fd2047af70275c072dc",
+          "start_utc": "2026-10-30T11:02:07.201008Z",
+          "end_utc": "2026-10-30T11:02:07.766168Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-gomap/output/treedb_mongo/snapshot_loaded.launch.json",
+          "sha256": "76056cefa9b97c5447b660b749c82ca6d53b5ebbd404a94b77da403a92ef0c2d",
+          "start_utc": "2026-10-30T11:01:53.665554Z",
+          "end_utc": "2026-10-30T11:01:56.935395Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-gomap/output/treedb_mongo/snapshot_preclose.launch.json",
+          "sha256": "ceb08889ae1cc068624b8e17de1ca43e4ad84a100f549cd0164244d47b6e0ae4",
+          "start_utc": "2026-10-30T11:01:58.655039Z",
+          "end_utc": "2026-10-30T11:02:02.326248Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-gomap/output/treedb_mongo/snapshot_reopened.launch.json",
+          "sha256": "d080a8b856b37d46da48e197966740d5c4716e95b6e9896f50342f249c7c9d50",
+          "start_utc": "2026-10-30T11:02:03.272038Z",
+          "end_utc": "2026-10-30T11:02:06.593556Z"
+        }
+      ],
+      "private_gomap_lifecycle": {
+        "schema_version": 1,
+        "version": "candidate",
+        "source_commit": "802f7cfcf8b69eff1447a5f4833076d428e61e3f",
+        "campaign_id": "75c030ed86404160ae3da9a05f524289",
+        "target": "treedb_mongo",
+        "profile": "command_wal_durable",
+        "format": "bson",
+        "process": {
+          "pid": 881,
+          "start_ticks": 493355203,
+          "exe_sha256": "d3475bdfc5796890c39b2c2bf2c9c27519ed94283939aa624f05ed1481233fe8",
+          "gomaxprocs_unset": true
+        },
+        "data_dir": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-gomap/output/treedb_mongo/db",
+        "owner_id": "eec047cb04043083b28c16e76eea0f59",
+        "phase_ids": [
+          "75c030ed86404160ae3da9a05f524289:treedb_mongo:load:cbb61115699c48388fb62947d0f89c8a",
+          "75c030ed86404160ae3da9a05f524289:treedb_mongo:run_1:03b26aba5e994452b3303c5a4665b97c"
+        ],
+        "server_exit_code": 0,
+        "checkpoint": {
+          "attempted": true,
+          "success": true,
+          "error": "",
+          "start_utc": "2026-10-30T11:02:01.994860126Z",
+          "end_utc": "2026-10-30T11:02:02.073906758Z",
+          "elapsed_ns": 79046629
+        },
+        "server_close": {
+          "attempted": true,
+          "success": true,
+          "error": "",
+          "start_utc": "2026-10-30T11:02:02.446028431Z",
+          "end_utc": "2026-10-30T11:02:02.785263096Z",
+          "elapsed_ns": 339234667
+        },
+        "reopen": {
+          "attempted": true,
+          "success": true,
+          "error": "",
+          "start_utc": "2026-10-30T11:02:02.785263096Z",
+          "end_utc": "2026-10-30T11:02:03.055146079Z",
+          "elapsed_ns": 269882983
+        },
+        "random_state_preservation": {
+          "attempted": true,
+          "success": true,
+          "error": "",
+          "start_utc": "2026-10-30T11:02:08.841808Z",
+          "end_utc": "2026-10-30T11:02:24.566065Z",
+          "elapsed_ns": 15724257000
+        },
+        "preclose_state_utc": "2026-10-30T11:02:02.246938716Z",
+        "reopened_state_utc": "2026-10-30T11:02:06.544112759Z",
+        "preclose_state_sha256": "46da2c72760ed60bc0edd37c51a73e9dce79515acb245215266e1e1d4b58592c",
+        "reopened_state_sha256": "46da2c72760ed60bc0edd37c51a73e9dce79515acb245215266e1e1d4b58592c",
+        "random_state_scope": "observed-state-preservation-only",
+        "reopened_process": {
+          "pid": 2349,
+          "start_ticks": 493360740,
+          "exe_sha256": "d3475bdfc5796890c39b2c2bf2c9c27519ed94283939aa624f05ed1481233fe8",
+          "gomaxprocs_unset": true
+        },
+        "reopened_owner_id": "d61c357919789da96e1275160ec41e99"
+      }
+    },
+    {
+      "pair": 2,
+      "product": "mongodb",
+      "manifest_sha256": "da87f22756d71ee7952bf1d5b4fedca1b343b8e5e4d2611ec4a37668e80ae68d",
+      "final_sha256": "43486b76839d2ea0afaa6906e1f33a8dfa143965a6b0df688d2f0b042af444a1",
+      "phases": {
+        "load": {
+          "rows": [
+            {
+              "operation": "INSERT",
+              "count": 100000,
+              "ops_per_sec": 38641.1,
+              "avg_us": 416.0,
+              "p50_us": 272.0,
+              "p95_us": 528.0,
+              "p99_us": 750.0,
+              "p999_us": 1359.0,
+              "max_us": 895487.0
+            },
+            {
+              "operation": "TOTAL",
+              "count": 100000,
+              "ops_per_sec": 38639.1,
+              "avg_us": 416.0,
+              "p50_us": 272.0,
+              "p95_us": 528.0,
+              "p99_us": 750.0,
+              "p999_us": 1359.0,
+              "max_us": 895487.0
+            }
+          ],
+          "reported_workload_duration": "2.906149975s",
+          "reported_workload_seconds": 2.906149975,
+          "launch_sha256": "29c805c3872d31a9d8e588e369665e03e18cc27992d41c9468560d7e339c6d70",
+          "process": {
+            "pid": 9989,
+            "start_ticks": 493380628,
+            "exe_sha256": "2237d8aeec309b9b4b335b348234d9829594c9101043144a944d9f2868fbc95b",
+            "gomaxprocs_unset": true
+          },
+          "start_utc": "2026-10-30T11:05:21.726049Z",
+          "end_utc": "2026-10-30T11:05:24.674308Z",
+          "original_client_close": {
+            "schema_version": 1,
+            "phase_id": "54fd4f19c28041698bd720ddd7c3331f:mongodb:load:e476b4fab0cd4eaf91ceabee93619b0a",
+            "client_build_id": "merged-3c814849-reference-bootstrap-2237d8aeec30",
+            "db": "mongodb",
+            "phase": "load",
+            "declared_profile": "mongodb_w1_journaled",
+            "total_excludes_close": true,
+            "command": {
+              "attempted": true,
+              "success": true,
+              "error": "",
+              "start_utc": "0001-01-01T00:00:00Z",
+              "end_utc": "0001-01-01T00:00:00Z",
+              "elapsed_ns": 0
+            },
+            "db_close": {
+              "attempted": true,
+              "success": true,
+              "error": "",
+              "start_utc": "2026-10-30T11:05:24.670152894Z",
+              "end_utc": "2026-10-30T11:05:24.670602Z",
+              "elapsed_ns": 449110
+            },
+            "workload_close": {
+              "attempted": true,
+              "success": true,
+              "error": "",
+              "start_utc": "2026-10-30T11:05:24.670603499Z",
+              "end_utc": "2026-10-30T11:05:24.670603672Z",
+              "elapsed_ns": 168
+            },
+            "native_flush": {
+              "applicable": false,
+              "flush_enabled": false,
+              "ack": 0,
+              "dial": {
+                "attempted": false,
+                "success": false,
+                "error": "",
+                "start_utc": "0001-01-01T00:00:00Z",
+                "end_utc": "0001-01-01T00:00:00Z",
+                "elapsed_ns": 0
+              },
+              "flush": {
+                "attempted": false,
+                "success": false,
+                "error": "",
+                "start_utc": "0001-01-01T00:00:00Z",
+                "end_utc": "0001-01-01T00:00:00Z",
+                "elapsed_ns": 0
+              },
+              "connection_close": {
+                "attempted": false,
+                "success": false,
+                "error": "",
+                "start_utc": "0001-01-01T00:00:00Z",
+                "end_utc": "0001-01-01T00:00:00Z",
+                "elapsed_ns": 0
+              }
+            }
+          },
+          "close_sha256": "1e129a356be3e1b32f1541d4682ba9825bfdfaad3378ac788b72c51a5b400710"
+        },
+        "run_1": {
+          "rows": [
+            {
+              "operation": "READ",
+              "count": 9546,
+              "ops_per_sec": 21881.0,
+              "avg_us": 200.0,
+              "p50_us": 175.0,
+              "p95_us": 365.0,
+              "p99_us": 568.0,
+              "p999_us": 1297.0,
+              "max_us": 2567.0
+            },
+            {
+              "operation": "TOTAL",
+              "count": 10000,
+              "ops_per_sec": 22917.0,
+              "avg_us": 601.0,
+              "p50_us": 179.0,
+              "p95_us": 701.0,
+              "p99_us": 11415.0,
+              "p999_us": 12463.0,
+              "max_us": 13095.0
+            },
+            {
+              "operation": "UPDATE",
+              "count": 454,
+              "ops_per_sec": 1051.2,
+              "avg_us": 9020.0,
+              "p50_us": 9679.0,
+              "p95_us": 12319.0,
+              "p99_us": 12719.0,
+              "p999_us": 13095.0,
+              "max_us": 13095.0
+            }
+          ],
+          "reported_workload_duration": "436.697761ms",
+          "reported_workload_seconds": 0.436697761,
+          "launch_sha256": "66723378fceac66acf23262c74f0a5792f98e2a8dbb7e6d86582097bd4990a9c",
+          "process": {
+            "pid": 10287,
+            "start_ticks": 493381239,
+            "exe_sha256": "2237d8aeec309b9b4b335b348234d9829594c9101043144a944d9f2868fbc95b",
+            "gomaxprocs_unset": true
+          },
+          "start_utc": "2026-10-30T11:05:27.827916Z",
+          "end_utc": "2026-10-30T11:05:28.310233Z",
+          "original_client_close": {
+            "schema_version": 1,
+            "phase_id": "54fd4f19c28041698bd720ddd7c3331f:mongodb:run_1:e00000f83c214a05a4c200ba89c91cf8",
+            "client_build_id": "merged-3c814849-reference-bootstrap-2237d8aeec30",
+            "db": "mongodb",
+            "phase": "run",
+            "declared_profile": "mongodb_w1_journaled",
+            "total_excludes_close": true,
+            "command": {
+              "attempted": true,
+              "success": true,
+              "error": "",
+              "start_utc": "0001-01-01T00:00:00Z",
+              "end_utc": "0001-01-01T00:00:00Z",
+              "elapsed_ns": 0
+            },
+            "db_close": {
+              "attempted": true,
+              "success": true,
+              "error": "",
+              "start_utc": "2026-10-30T11:05:28.306607255Z",
+              "end_utc": "2026-10-30T11:05:28.307020726Z",
+              "elapsed_ns": 413479
+            },
+            "workload_close": {
+              "attempted": true,
+              "success": true,
+              "error": "",
+              "start_utc": "2026-10-30T11:05:28.307023302Z",
+              "end_utc": "2026-10-30T11:05:28.307023512Z",
+              "elapsed_ns": 211
+            },
+            "native_flush": {
+              "applicable": false,
+              "flush_enabled": false,
+              "ack": 0,
+              "dial": {
+                "attempted": false,
+                "success": false,
+                "error": "",
+                "start_utc": "0001-01-01T00:00:00Z",
+                "end_utc": "0001-01-01T00:00:00Z",
+                "elapsed_ns": 0
+              },
+              "flush": {
+                "attempted": false,
+                "success": false,
+                "error": "",
+                "start_utc": "0001-01-01T00:00:00Z",
+                "end_utc": "0001-01-01T00:00:00Z",
+                "elapsed_ns": 0
+              },
+              "connection_close": {
+                "attempted": false,
+                "success": false,
+                "error": "",
+                "start_utc": "0001-01-01T00:00:00Z",
+                "end_utc": "0001-01-01T00:00:00Z",
+                "elapsed_ns": 0
+              }
+            }
+          },
+          "close_sha256": "e0d2b2f8343b9c56bf8d83449a22cecd9ca6b9e381c053ed7c31bd8538491d80"
+        }
+      },
+      "sentinel": {
+        "schema_version": 1,
+        "kind": "observed_public_journal_sentinel",
+        "campaign_id": "54fd4f19c28041698bd720ddd7c3331f",
+        "manifest_sha256": "da87f22756d71ee7952bf1d5b4fedca1b343b8e5e4d2611ec4a37668e80ae68d",
+        "process": {
+          "pid": 9790,
+          "start_ticks": 493380508,
+          "exe_sha256": "d767fb752139fbc8e0e667d7e0c6fe7cdf690e0aa94a51502a32bad8c54a3672",
+          "gomaxprocs_unset": true
+        },
+        "address": "127.0.0.1:27018",
+        "start_utc": "2026-10-30T11:05:27.504439Z",
+        "end_utc": "2026-10-30T11:05:27.568007Z",
+        "request": {
+          "insert": "prefix_sentinel_54fd4f19c28041698bd720ddd7c3331f",
+          "documents": [
+            {
+              "_id": "prefix-sentinel",
+              "marker": "durable-prefix"
+            }
+          ],
+          "writeConcern": {
+            "w": 1,
+            "j": true
+          },
+          "$db": "ycsb"
+        },
+        "reply": {
+          "n": 1,
+          "ok": 1.0
+        },
+        "request_sha256": "a459d8f47f70ddaa4d0b8cd6194e9f4f4c180ff9f95794ee9aaeb53e5dd2793a",
+        "response_sha256": "12e1638ce64dbdc07d0443450525e944008058d62fec3ff9d1d9fe8d0373e8c7",
+        "scope": "raw public command equivalent to reviewed official-driver sentinel; original owner checked before/after, outside timed run; no direct Close or power-loss claim"
+      },
+      "maintenance_launch_intervals": [
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0001.launch.json",
+          "sha256": "b353c0114ac0c4ab72159911727de00a2fa9dd665cd96a0c16b89264c8b414e0",
+          "start_utc": "2026-10-30T11:05:20.210440Z",
+          "end_utc": "2026-10-30T11:05:20.226534Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0002.launch.json",
+          "sha256": "5ce11d0bb973de17cc5af1f5698740d51f2cf523c6e41f2ef9c8ae7aca558959",
+          "start_utc": "2026-10-30T11:05:20.227071Z",
+          "end_utc": "2026-10-30T11:05:20.242978Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0003.launch.json",
+          "sha256": "22b0daeefc8ed759c8ae0bd0fcb4bb19fc63bc67e83ec2a1e6a4a7aeccf42017",
+          "start_utc": "2026-10-30T11:05:20.243462Z",
+          "end_utc": "2026-10-30T11:05:20.275518Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0004.launch.json",
+          "sha256": "f020a4d229ebc948f9ce2b32e31de3bae20118ad43f67b08bdd3d5ce2e0cd3e6",
+          "start_utc": "2026-10-30T11:05:20.276718Z",
+          "end_utc": "2026-10-30T11:05:20.441040Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0005.launch.json",
+          "sha256": "bd0af5d28d70f9d5a945a4ef69b60f69080f7779ee5c4747472ada8183d2e358",
+          "start_utc": "2026-10-30T11:05:20.441561Z",
+          "end_utc": "2026-10-30T11:05:20.457682Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0006.launch.json",
+          "sha256": "6d2939064f7a2abdd1181506fb297f221c0361c12683ea120cd197ffd2a73171",
+          "start_utc": "2026-10-30T11:05:20.458319Z",
+          "end_utc": "2026-10-30T11:05:20.672723Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0007.launch.json",
+          "sha256": "8a2a5ab88a325f8cb8ab7cfde8225f3aa999eeb54342e6ed8d36971a7aba59f7",
+          "start_utc": "2026-10-30T11:05:20.673201Z",
+          "end_utc": "2026-10-30T11:05:20.689190Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0008.launch.json",
+          "sha256": "361cdd439b91466d077960f91217e172532d6e8e229f668fa1dbf4c9eed53183",
+          "start_utc": "2026-10-30T11:05:20.842798Z",
+          "end_utc": "2026-10-30T11:05:20.858775Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0009.launch.json",
+          "sha256": "48184a8238c22ace9909155e068ca894bce91e548150c9d9c2d5d7234cc439af",
+          "start_utc": "2026-10-30T11:05:20.860465Z",
+          "end_utc": "2026-10-30T11:05:20.876453Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0010.launch.json",
+          "sha256": "5ed37b950ab2cb16b254ca4af91327f9f3a9237113b3c04a6567d460057e671e",
+          "start_utc": "2026-10-30T11:05:21.457471Z",
+          "end_utc": "2026-10-30T11:05:21.473585Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0011.launch.json",
+          "sha256": "ecf2b3b36a0f5fd010b97cf99b86ee61cb54c6459bec1df0f241e5f713d52357",
+          "start_utc": "2026-10-30T11:05:21.474744Z",
+          "end_utc": "2026-10-30T11:05:21.490927Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0012.launch.json",
+          "sha256": "06eae98b7df90670bd3b452d940bfd50265962e996fe25a500fd344b7cec2437",
+          "start_utc": "2026-10-30T11:05:24.676374Z",
+          "end_utc": "2026-10-30T11:05:24.692425Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0013.launch.json",
+          "sha256": "5702a764748a9b011a213a0202132284388985b4e759c05662ac9cbd469bf899",
+          "start_utc": "2026-10-30T11:05:27.568397Z",
+          "end_utc": "2026-10-30T11:05:27.584450Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0014.launch.json",
+          "sha256": "87b028ed6cfcca237e6c87b853a2183ab74a340815810e75e097356a5214fba9",
+          "start_utc": "2026-10-30T11:05:27.585264Z",
+          "end_utc": "2026-10-30T11:05:27.601248Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0015.launch.json",
+          "sha256": "7c0de0bf9441ea3dee9b3bbeee30a8f58ab338017edb24229e4d25e16126a671",
+          "start_utc": "2026-10-30T11:05:28.311200Z",
+          "end_utc": "2026-10-30T11:05:28.327215Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0016.launch.json",
+          "sha256": "48273be8145629fa7f176871495252a160a079e3ba33faf5c845d8ec9bbb1fe6",
+          "start_utc": "2026-10-30T11:05:31.192393Z",
+          "end_utc": "2026-10-30T11:05:31.208473Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0017.launch.json",
+          "sha256": "21b5ab53465f128a2119aabfb59584d06edd04bfe000e321c45111ec143314a9",
+          "start_utc": "2026-10-30T11:05:31.802849Z",
+          "end_utc": "2026-10-30T11:05:31.818857Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0018.launch.json",
+          "sha256": "82b9f7299391103329bccf674f052c47a21a46170c7d03effac20c4a71849d8e",
+          "start_utc": "2026-10-30T11:05:31.864028Z",
+          "end_utc": "2026-10-30T11:05:31.880055Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0019.launch.json",
+          "sha256": "835682ac2928f2a4ca5f22b76fd67b841da643ee3e14ee6729302e6ec44a01a5",
+          "start_utc": "2026-10-30T11:05:31.880899Z",
+          "end_utc": "2026-10-30T11:05:31.912925Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0020.launch.json",
+          "sha256": "35c55bb719eaa3090595b38801717800b174df0acf68574481602859681c5bc3",
+          "start_utc": "2026-10-30T11:05:31.913417Z",
+          "end_utc": "2026-10-30T11:05:32.378145Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0021.launch.json",
+          "sha256": "79376a20685b27da67f8fb867ffcee69b0e706478c185214fe0bc4219d7ee182",
+          "start_utc": "2026-10-30T11:05:32.378644Z",
+          "end_utc": "2026-10-30T11:05:32.394719Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0022.launch.json",
+          "sha256": "e1c8abb31fd9eeef607780219a0d1355bfd4333c5eab7eb369711efdffe68a84",
+          "start_utc": "2026-10-30T11:05:32.395656Z",
+          "end_utc": "2026-10-30T11:05:32.411752Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0023.launch.json",
+          "sha256": "1921e45b574847694b5c13766e141a5ed352afab4e3fe9547935d9c4d0e2af89",
+          "start_utc": "2026-10-30T11:05:32.412754Z",
+          "end_utc": "2026-10-30T11:05:32.428862Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0024.launch.json",
+          "sha256": "34784eb49be082499489bdbdaa54842f146493ebc76b40e3dc752af5f2b0b527",
+          "start_utc": "2026-10-30T11:05:32.429508Z",
+          "end_utc": "2026-10-30T11:05:32.461588Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0025.launch.json",
+          "sha256": "b709e6907c1fa140df098f50f79872d8c0495cb4e5b0b5efa6109bdd58950ee8",
+          "start_utc": "2026-10-30T11:05:32.462198Z",
+          "end_utc": "2026-10-30T11:05:32.626511Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0026.launch.json",
+          "sha256": "99357f9b47cf292efb568072b28b737f0a6e4935ab9c98b2bdff3036124bf1b2",
+          "start_utc": "2026-10-30T11:05:32.627030Z",
+          "end_utc": "2026-10-30T11:05:32.642989Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0027.launch.json",
+          "sha256": "062c8b4c5627ef0475805609a58e2c20140ad43e041a3e77d67d7970619cf610",
+          "start_utc": "2026-10-30T11:05:32.643651Z",
+          "end_utc": "2026-10-30T11:05:32.858055Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0028.launch.json",
+          "sha256": "2b8c9197cc69ce957f05f44101135ddc0fa128d8d832824d4a3f54ade66ff583",
+          "start_utc": "2026-10-30T11:05:32.858566Z",
+          "end_utc": "2026-10-30T11:05:32.874603Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0029.launch.json",
+          "sha256": "cebaa6f0e95ac3fe34800b1ef4d053e8fffbba9046af8ac44a742d3210ab9226",
+          "start_utc": "2026-10-30T11:05:32.876054Z",
+          "end_utc": "2026-10-30T11:05:32.892134Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0030.launch.json",
+          "sha256": "eff3aa9d5997bd3ed66d4dbf46ba2a34a5241b8c725c8b8b5c7cd92527e677ec",
+          "start_utc": "2026-10-30T11:05:32.893196Z",
+          "end_utc": "2026-10-30T11:05:32.909231Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0031.launch.json",
+          "sha256": "23a4756217ab45af858d2711d8596542cc515e2583f0b3fe548cc334de511225",
+          "start_utc": "2026-10-30T11:05:33.488334Z",
+          "end_utc": "2026-10-30T11:05:33.504280Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0032.launch.json",
+          "sha256": "343eb49b8b4fe21beac6e27867044ea9de8d15e822d5a75535412ef51fe3856a",
+          "start_utc": "2026-10-30T11:05:36.417989Z",
+          "end_utc": "2026-10-30T11:05:36.433967Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0033.launch.json",
+          "sha256": "a09603db8410d1253a4864a88d91370910f4b176862a55cf9b2aff8dd860d1d1",
+          "start_utc": "2026-10-30T11:05:36.477050Z",
+          "end_utc": "2026-10-30T11:05:36.493072Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0034.launch.json",
+          "sha256": "bea4f85725fa4ac67839850d0716b2a0e8a3c2a3c51f183c032e4c7ceaf593e3",
+          "start_utc": "2026-10-30T11:05:36.493924Z",
+          "end_utc": "2026-10-30T11:05:36.526007Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0035.launch.json",
+          "sha256": "5966700b2f9c049aa7387c37634ffadfbc4f2ae97708997f8cb86b246511ef4c",
+          "start_utc": "2026-10-30T11:05:36.526499Z",
+          "end_utc": "2026-10-30T11:05:37.041308Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0036.launch.json",
+          "sha256": "1c313ef6e24c7cf466f8c7561f2f3805e929a1b391737122bc5617a4fd383fec",
+          "start_utc": "2026-10-30T11:05:37.041803Z",
+          "end_utc": "2026-10-30T11:05:37.057784Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0037.launch.json",
+          "sha256": "aa287bb36810091217e8d1c4150d4dd856482ba3dd346c046ad003c58f42a531",
+          "start_utc": "2026-10-30T11:05:37.058726Z",
+          "end_utc": "2026-10-30T11:05:37.074805Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0038.launch.json",
+          "sha256": "f93bd5fad18ed3617886963e199014992cb9caabf20e68859615a5f8c2486a5f",
+          "start_utc": "2026-10-30T11:05:37.075600Z",
+          "end_utc": "2026-10-30T11:05:37.091598Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0039.launch.json",
+          "sha256": "fa34edda17837460be4f84eb8c36714c1576fc6288ef3b950108b6d141a06384",
+          "start_utc": "2026-10-30T11:05:37.092262Z",
+          "end_utc": "2026-10-30T11:05:37.124384Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0040.launch.json",
+          "sha256": "b7faf629893930b6b093e471dc3530b736c37ded38869afac6a6b1d3a9be702a",
+          "start_utc": "2026-10-30T11:05:37.124998Z",
+          "end_utc": "2026-10-30T11:05:37.239218Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0041.launch.json",
+          "sha256": "8d289d8438c5e2131dd3ac6b6dce307441ba8456400a5f8cc6edf0d6659bd587",
+          "start_utc": "2026-10-30T11:05:37.239729Z",
+          "end_utc": "2026-10-30T11:05:37.255706Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0042.launch.json",
+          "sha256": "8c53f75b669a243d1044824b59ec099c6c15696413481a9e72b6bb66ed3951fb",
+          "start_utc": "2026-10-30T11:05:37.256359Z",
+          "end_utc": "2026-10-30T11:05:37.470798Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0043.launch.json",
+          "sha256": "2e8f2748c3d7962fe6db50c17005113f120c00cf34eece9b1fbd718fe9eb56c4",
+          "start_utc": "2026-10-30T11:05:37.471322Z",
+          "end_utc": "2026-10-30T11:05:37.487347Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0044.launch.json",
+          "sha256": "3b0c67b19f5a8ea50eef9c74520d0d2736d12c1322ed9be224bbc66b75036b3b",
+          "start_utc": "2026-10-30T11:05:37.488839Z",
+          "end_utc": "2026-10-30T11:05:37.504788Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0045.launch.json",
+          "sha256": "b4b1cb4fb36ad4f60f888fe5e36b6619ec69be47ebf90b62bb38efcb7dd0517b",
+          "start_utc": "2026-10-30T11:05:37.505719Z",
+          "end_utc": "2026-10-30T11:05:37.521676Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0046.launch.json",
+          "sha256": "9d0cbd51b24855473bab07829e2bc786942730ca766c48f67770c8e7ce9b8075",
+          "start_utc": "2026-10-30T11:05:38.100816Z",
+          "end_utc": "2026-10-30T11:05:38.116779Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0047.launch.json",
+          "sha256": "b6a3cd38f7568ebcfffbd9d8873dec7d06e40e7ea2c3edde035b8f92084b7f96",
+          "start_utc": "2026-10-30T11:05:38.425045Z",
+          "end_utc": "2026-10-30T11:05:38.441099Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0048.launch.json",
+          "sha256": "39e6b6997a3ecf6855855b99def4f851a8f8d6d5ca838183740181dce4dc87d5",
+          "start_utc": "2026-10-30T11:05:38.620889Z",
+          "end_utc": "2026-10-30T11:05:38.637174Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0049.launch.json",
+          "sha256": "6227cb5b6741928dd52b8225b1f88d544015a61e696f799f0b6abda6e0029491",
+          "start_utc": "2026-10-30T11:05:38.683104Z",
+          "end_utc": "2026-10-30T11:05:38.699777Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0050.launch.json",
+          "sha256": "39cc739326232c68d12c9567ca24010249060d4ee34b658df53fd19e80da2a47",
+          "start_utc": "2026-10-30T11:05:38.700750Z",
+          "end_utc": "2026-10-30T11:05:38.767228Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0051.launch.json",
+          "sha256": "3c09572a5afedafdd707d604b72b400abd3897f2a70ce126fba5cb94d8f4194e",
+          "start_utc": "2026-10-30T11:05:38.768124Z",
+          "end_utc": "2026-10-30T11:05:39.083185Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0052.launch.json",
+          "sha256": "4cfad189e518a321fb852272d73f8a12421e3e4b7100aa16b5b4b0193cac6f26",
+          "start_utc": "2026-10-30T11:05:39.083723Z",
+          "end_utc": "2026-10-30T11:05:39.099799Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0053.launch.json",
+          "sha256": "09ce30f0746272c50e5ed347a14b00de5e228ad0fd77d6c018b49a6bbea3a4ad",
+          "start_utc": "2026-10-30T11:05:39.100769Z",
+          "end_utc": "2026-10-30T11:05:39.116930Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0054.launch.json",
+          "sha256": "e65e85fc0786041f1f855573fb41cb3138f5e8b4c6914ff13730d4cefd00c4d7",
+          "start_utc": "2026-10-30T11:05:39.118327Z",
+          "end_utc": "2026-10-30T11:05:39.134715Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0055.launch.json",
+          "sha256": "e3333eff7b180a43cf00504c103f3ebbf201d5522b58767ade0c7d7e5f9b2da4",
+          "start_utc": "2026-10-30T11:05:39.135905Z",
+          "end_utc": "2026-10-30T11:05:39.168372Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0056.launch.json",
+          "sha256": "b0a24e0ab781eebc6320950cd82b0b05965ea7e6795552409b4387d1fa1a0f77",
+          "start_utc": "2026-10-30T11:05:39.169008Z",
+          "end_utc": "2026-10-30T11:05:39.283304Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0057.launch.json",
+          "sha256": "53c76965c5bd9dff36b27bcd8f39e5fe9a73a00717506ff5b8de1b37cbc95d58",
+          "start_utc": "2026-10-30T11:05:39.283823Z",
+          "end_utc": "2026-10-30T11:05:39.299778Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0058.launch.json",
+          "sha256": "2f72337de4186b3117103bcfd01d170bc5424ef64c20628f1011ff99757fcb89",
+          "start_utc": "2026-10-30T11:05:39.300422Z",
+          "end_utc": "2026-10-30T11:05:39.514845Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0059.launch.json",
+          "sha256": "853d5ef10971a4cb358d8911efe0d403e3c195aee06793227f33a112a4602241",
+          "start_utc": "2026-10-30T11:05:39.515340Z",
+          "end_utc": "2026-10-30T11:05:39.531428Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0060.launch.json",
+          "sha256": "09c0084e8308f454c90ebd08bd002a27f8f9e39e2c00e9dcfe0d4c95a25d6351",
+          "start_utc": "2026-10-30T11:05:39.532868Z",
+          "end_utc": "2026-10-30T11:05:39.548865Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0061.launch.json",
+          "sha256": "46a2b8f5f7afe45b4f2bd0529303d79bb66b2a5c1c83f36ef15a5f541db966f4",
+          "start_utc": "2026-10-30T11:05:39.549873Z",
+          "end_utc": "2026-10-30T11:05:39.565881Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0062.launch.json",
+          "sha256": "e4eeb438a2471bb7ec0813b4485e01ad2e6f9ad1e2653822001074f064c253dc",
+          "start_utc": "2026-10-30T11:05:40.144825Z",
+          "end_utc": "2026-10-30T11:05:40.160861Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0063.launch.json",
+          "sha256": "3f75147719fdc3e727ce90581255f0a21b9073227149fc3d4884bed6435270da",
+          "start_utc": "2026-10-30T11:05:40.220616Z",
+          "end_utc": "2026-10-30T11:05:40.236645Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0064.launch.json",
+          "sha256": "9ba16a7426a4f7e55950deeeb1ad7657c7d8845e011fdc7f60d0ccfa4bec2241",
+          "start_utc": "2026-10-30T11:05:40.280534Z",
+          "end_utc": "2026-10-30T11:05:40.296566Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0065.launch.json",
+          "sha256": "f6f2694666f55a7702185d0f895d7ece39bb46418901bba5af6f01893511f907",
+          "start_utc": "2026-10-30T11:05:40.297397Z",
+          "end_utc": "2026-10-30T11:05:40.330031Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0066.launch.json",
+          "sha256": "dbe40a4b70cda7e92219a1275dfd0e317d6a3aab9909fba34a70814840d00962",
+          "start_utc": "2026-10-30T11:05:40.330772Z",
+          "end_utc": "2026-10-30T11:05:40.695616Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0067.launch.json",
+          "sha256": "ed0e4fce44755696150c4aa8dc9ba78cb81ccd6f0b7d019593ea7a99083fe68f",
+          "start_utc": "2026-10-30T11:05:40.696112Z",
+          "end_utc": "2026-10-30T11:05:40.712076Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0068.launch.json",
+          "sha256": "afa22fdd77de4c193c82db86009b4f4c37874c13e800fe90f27b30a86f8c1369",
+          "start_utc": "2026-10-30T11:05:40.713011Z",
+          "end_utc": "2026-10-30T11:05:40.728963Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0069.launch.json",
+          "sha256": "e82df87abb41711614a8a52ab17aff9d54d4721f8f39103be2e76a0154d5bf52",
+          "start_utc": "2026-10-30T11:05:40.729821Z",
+          "end_utc": "2026-10-30T11:05:40.745808Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/docker-0070.launch.json",
+          "sha256": "af572ca38d73e8011cd88eecbbda69f547f91c6494d881018cf62f933f2a8c89",
+          "start_utc": "2026-10-30T11:05:40.746453Z",
+          "end_utc": "2026-10-30T11:05:40.778547Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/fixture-checkpoint.launch.json",
+          "sha256": "45d0455697a8d0cf49a356745f8b60e603eea26b76f1934d06c815712ce76d32",
+          "start_utc": "2026-10-30T11:05:38.441958Z",
+          "end_utc": "2026-10-30T11:05:38.606255Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/fixture-reopened-before-close.launch.json",
+          "sha256": "8bc4dc219421a6473b0e84b2c58304881a8e2b73060b6617bf89efb707fded6d",
+          "start_utc": "2026-10-30T11:05:40.237478Z",
+          "end_utc": "2026-10-30T11:05:40.269544Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/fixture-reopened-ready.launch.json",
+          "sha256": "e2e01489b632ee1f71fa070bcef9006e62661e7e8d06815c55a62721245f904d",
+          "start_utc": "2026-10-30T11:05:39.566824Z",
+          "end_utc": "2026-10-30T11:05:40.131842Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/fixture-write-before-close.launch.json",
+          "sha256": "340a990b7587dd638f60a95aeb48a849a041c95ea629d9e4cf7eac47191e277f",
+          "start_utc": "2026-10-30T11:05:38.638077Z",
+          "end_utc": "2026-10-30T11:05:38.670448Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/fixture-write-ready.launch.json",
+          "sha256": "fca11ee3d02c5f448246a431fe340aa775f5935485e93a54a4c1d05dc952c205",
+          "start_utc": "2026-10-30T11:05:37.522570Z",
+          "end_utc": "2026-10-30T11:05:38.087488Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/fixture_verify-owner.launch.json",
+          "sha256": "ee3daa3f85180593228c8498fb613e8a35962840c805467c28131a15f0408cf2",
+          "start_utc": "2026-10-30T11:05:40.161707Z",
+          "end_utc": "2026-10-30T11:05:40.193788Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/fixture_verify.launch.json",
+          "sha256": "be20dbf8e84ab0931951445e543468d2361970fba9ea832df3ecc335a2ec0b01",
+          "start_utc": "2026-10-30T11:05:40.204083Z",
+          "end_utc": "2026-10-30T11:05:40.220140Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/fixture_write-owner.launch.json",
+          "sha256": "ca71d9d08ab030e0b1e18daf7f3b4a97635a0b3a105cef84b1f70d8d94cda1a7",
+          "start_utc": "2026-10-30T11:05:38.117602Z",
+          "end_utc": "2026-10-30T11:05:38.149665Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/fixture_write.launch.json",
+          "sha256": "a4353f397c148beae0f76bfc52ae3d2024c872d7870267a3c8157c0ea54a6756",
+          "start_utc": "2026-10-30T11:05:38.159992Z",
+          "end_utc": "2026-10-30T11:05:38.424545Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/load-owner.launch.json",
+          "sha256": "37f884027561ba99609336b8328f4901c5223f46e977e723e97cb068c9db8329",
+          "start_utc": "2026-10-30T11:05:21.491748Z",
+          "end_utc": "2026-10-30T11:05:21.523810Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/random-checkpoint.launch.json",
+          "sha256": "be93343544b2bb55e7bc6f3c64ceb0429b9dff708eeebd7dc4848e842700b92e",
+          "start_utc": "2026-10-30T11:05:31.209320Z",
+          "end_utc": "2026-10-30T11:05:31.624007Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/reopened-before-close.launch.json",
+          "sha256": "0957b6bb23189d418ed00be5871f8840b891c86ad6dfa3e4f2a8159a8a4e8966",
+          "start_utc": "2026-10-30T11:05:36.434783Z",
+          "end_utc": "2026-10-30T11:05:36.466799Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/reopened-ready.launch.json",
+          "sha256": "023d2dc4a80e14f95bd622bdf9539f296e24297c59bcd9344ea6154a83dd355e",
+          "start_utc": "2026-10-30T11:05:32.910078Z",
+          "end_utc": "2026-10-30T11:05:33.475120Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/run_1-owner.launch.json",
+          "sha256": "18b432b49d9aa461366c3630a45dc567fc1515d3f926c6c91cd12657066a8fd1",
+          "start_utc": "2026-10-30T11:05:27.602067Z",
+          "end_utc": "2026-10-30T11:05:27.634111Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/server-before-close.launch.json",
+          "sha256": "bc3ef7d4148e7d35aa928208cfcf0a1a4d88f29ac6f7252d20404c2f4697f734",
+          "start_utc": "2026-10-30T11:05:31.819696Z",
+          "end_utc": "2026-10-30T11:05:31.851738Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/server-ready.launch.json",
+          "sha256": "41be56032e361f68b35ab569e466b6997f9f3cd27e180f88249d12b8676ba069",
+          "start_utc": "2026-10-30T11:05:20.877253Z",
+          "end_utc": "2026-10-30T11:05:21.442106Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/snapshot_loaded-owner.launch.json",
+          "sha256": "4bdfc4745a99af643837077929c68127de9abb0f4c6a326829e1b0975b36c3bd",
+          "start_utc": "2026-10-30T11:05:24.693237Z",
+          "end_utc": "2026-10-30T11:05:24.725360Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/snapshot_loaded.launch.json",
+          "sha256": "2ff5e9be4018398f9155437852bb4034a3f1dcef1fd496715e5d306c190be50a",
+          "start_utc": "2026-10-30T11:05:24.735856Z",
+          "end_utc": "2026-10-30T11:05:27.455321Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/snapshot_preclose-owner.launch.json",
+          "sha256": "c2b554ca6f204747da717a7cce9d6ed5088b0b804c1d7503987ac6d2828b0d6b",
+          "start_utc": "2026-10-30T11:05:28.328089Z",
+          "end_utc": "2026-10-30T11:05:28.360106Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/snapshot_preclose.launch.json",
+          "sha256": "08cc01cb7d9b87b3b44d565129f7c0dc3198e001e5387a83fe3ad62fb33a21c1",
+          "start_utc": "2026-10-30T11:05:28.370443Z",
+          "end_utc": "2026-10-30T11:05:31.191895Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/snapshot_reopened-owner.launch.json",
+          "sha256": "97f679d0275497df618f1b730954a83cd52ad6df24c946f55b8d0ae556803f28",
+          "start_utc": "2026-10-30T11:05:33.505103Z",
+          "end_utc": "2026-10-30T11:05:33.537143Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/snapshot_reopened.launch.json",
+          "sha256": "1ac26b4a45d84c5e33c525acf0e3f6d565fc208c1e6a60e71db93665d55fe03a",
+          "start_utc": "2026-10-30T11:05:33.547438Z",
+          "end_utc": "2026-10-30T11:05:36.417475Z"
+        }
+      ]
+    },
+    {
+      "pair": 2,
+      "product": "gomap",
+      "manifest_sha256": "0caae0117528a8db9461e59aafc7e69b2375453856c17136f9847c9db66b180d",
+      "final_sha256": "6286b42f940aa4eea7bfcbf94180c6e9568072d0b211690119ca8290ffc406cb",
+      "phases": {
+        "load": {
+          "rows": [
+            {
+              "operation": "INSERT",
+              "count": 100000,
+              "ops_per_sec": 2197.7,
+              "avg_us": 7261.0,
+              "p50_us": 6587.0,
+              "p95_us": 7171.0,
+              "p99_us": 12783.0,
+              "p999_us": 241151.0,
+              "max_us": 488959.0
+            },
+            {
+              "operation": "TOTAL",
+              "count": 100000,
+              "ops_per_sec": 2197.7,
+              "avg_us": 7261.0,
+              "p50_us": 6587.0,
+              "p95_us": 7171.0,
+              "p99_us": 12783.0,
+              "p999_us": 241151.0,
+              "max_us": 488959.0
+            }
+          ],
+          "reported_workload_duration": "45.509261732s",
+          "reported_workload_seconds": 45.509261732,
+          "launch_sha256": "b72792f38676886fdc240da7ee515e9351d98a685543eaee502b8f5a72fdc571",
+          "process": {
+            "pid": 3968,
+            "start_ticks": 493367892,
+            "exe_sha256": "2237d8aeec309b9b4b335b348234d9829594c9101043144a944d9f2868fbc95b",
+            "gomaxprocs_unset": true
+          },
+          "start_utc": "2026-10-30T11:03:14.359325Z",
+          "end_utc": "2026-10-30T11:03:59.934041Z",
+          "original_client_close": {
+            "schema_version": 1,
+            "phase_id": "2fa78a51d29447be8fa4ea8973f98180:treedb_mongo:load:25e9894ea067479bac251d22c69b7403",
+            "client_build_id": "merged-3c814849-reference-bootstrap-2237d8aeec30",
+            "db": "mongodb",
+            "phase": "load",
+            "declared_profile": "command_wal_durable",
+            "total_excludes_close": true,
+            "command": {
+              "attempted": true,
+              "success": true,
+              "error": "",
+              "start_utc": "0001-01-01T00:00:00Z",
+              "end_utc": "0001-01-01T00:00:00Z",
+              "elapsed_ns": 0
+            },
+            "db_close": {
+              "attempted": true,
+              "success": true,
+              "error": "",
+              "start_utc": "2026-10-30T11:03:59.92128975Z",
+              "end_utc": "2026-10-30T11:03:59.92161278Z",
+              "elapsed_ns": 323033
+            },
+            "workload_close": {
+              "attempted": true,
+              "success": true,
+              "error": "",
+              "start_utc": "2026-10-30T11:03:59.921615115Z",
+              "end_utc": "2026-10-30T11:03:59.92161524Z",
+              "elapsed_ns": 125
+            },
+            "native_flush": {
+              "applicable": false,
+              "flush_enabled": false,
+              "ack": 0,
+              "dial": {
+                "attempted": false,
+                "success": false,
+                "error": "",
+                "start_utc": "0001-01-01T00:00:00Z",
+                "end_utc": "0001-01-01T00:00:00Z",
+                "elapsed_ns": 0
+              },
+              "flush": {
+                "attempted": false,
+                "success": false,
+                "error": "",
+                "start_utc": "0001-01-01T00:00:00Z",
+                "end_utc": "0001-01-01T00:00:00Z",
+                "elapsed_ns": 0
+              },
+              "connection_close": {
+                "attempted": false,
+                "success": false,
+                "error": "",
+                "start_utc": "0001-01-01T00:00:00Z",
+                "end_utc": "0001-01-01T00:00:00Z",
+                "elapsed_ns": 0
+              }
+            }
+          },
+          "close_sha256": "0d33600e0763a67f27eb4203889ae6addbb71819662303ab35876a03a2964d89"
+        },
+        "run_1": {
+          "rows": [
+            {
+              "operation": "READ",
+              "count": 9465,
+              "ops_per_sec": 10841.8,
+              "avg_us": 899.0,
+              "p50_us": 952.0,
+              "p95_us": 1687.0,
+              "p99_us": 2051.0,
+              "p999_us": 2889.0,
+              "max_us": 3543.0
+            },
+            {
+              "operation": "TOTAL",
+              "count": 10000,
+              "ops_per_sec": 11453.2,
+              "avg_us": 1325.0,
+              "p50_us": 983.0,
+              "p95_us": 5291.0,
+              "p99_us": 10871.0,
+              "p999_us": 16831.0,
+              "max_us": 20239.0
+            },
+            {
+              "operation": "UPDATE",
+              "count": 535,
+              "ops_per_sec": 617.2,
+              "avg_us": 8863.0,
+              "p50_us": 8447.0,
+              "p95_us": 14847.0,
+              "p99_us": 18255.0,
+              "p999_us": 20063.0,
+              "max_us": 20239.0
+            }
+          ],
+          "reported_workload_duration": "873.143464ms",
+          "reported_workload_seconds": 0.873143464,
+          "launch_sha256": "8a4c1197734e7c02dfadb9159290630d308b52359306b1c2a3916360156533d6",
+          "process": {
+            "pid": 6568,
+            "start_ticks": 493372869,
+            "exe_sha256": "2237d8aeec309b9b4b335b348234d9829594c9101043144a944d9f2868fbc95b",
+            "gomaxprocs_unset": true
+          },
+          "start_utc": "2026-10-30T11:04:04.130579Z",
+          "end_utc": "2026-10-30T11:04:05.034848Z",
+          "original_client_close": {
+            "schema_version": 1,
+            "phase_id": "2fa78a51d29447be8fa4ea8973f98180:treedb_mongo:run_1:3cf3aeac812146238a346b9f5dbe5bb2",
+            "client_build_id": "merged-3c814849-reference-bootstrap-2237d8aeec30",
+            "db": "mongodb",
+            "phase": "run",
+            "declared_profile": "command_wal_durable",
+            "total_excludes_close": true,
+            "command": {
+              "attempted": true,
+              "success": true,
+              "error": "",
+              "start_utc": "0001-01-01T00:00:00Z",
+              "end_utc": "0001-01-01T00:00:00Z",
+              "elapsed_ns": 0
+            },
+            "db_close": {
+              "attempted": true,
+              "success": true,
+              "error": "",
+              "start_utc": "2026-10-30T11:04:05.03157478Z",
+              "end_utc": "2026-10-30T11:04:05.031899613Z",
+              "elapsed_ns": 324843
+            },
+            "workload_close": {
+              "attempted": true,
+              "success": true,
+              "error": "",
+              "start_utc": "2026-10-30T11:04:05.031901848Z",
+              "end_utc": "2026-10-30T11:04:05.031902001Z",
+              "elapsed_ns": 154
+            },
+            "native_flush": {
+              "applicable": false,
+              "flush_enabled": false,
+              "ack": 0,
+              "dial": {
+                "attempted": false,
+                "success": false,
+                "error": "",
+                "start_utc": "0001-01-01T00:00:00Z",
+                "end_utc": "0001-01-01T00:00:00Z",
+                "elapsed_ns": 0
+              },
+              "flush": {
+                "attempted": false,
+                "success": false,
+                "error": "",
+                "start_utc": "0001-01-01T00:00:00Z",
+                "end_utc": "0001-01-01T00:00:00Z",
+                "elapsed_ns": 0
+              },
+              "connection_close": {
+                "attempted": false,
+                "success": false,
+                "error": "",
+                "start_utc": "0001-01-01T00:00:00Z",
+                "end_utc": "0001-01-01T00:00:00Z",
+                "elapsed_ns": 0
+              }
+            }
+          },
+          "close_sha256": "07ae529f064abdbaa69f6248b77e50f686171aeb56f121150c02ce52a91cfcd9"
+        }
+      },
+      "sentinel": {
+        "schema_version": 1,
+        "kind": "observed_public_journal_sentinel",
+        "campaign_id": "2fa78a51d29447be8fa4ea8973f98180",
+        "manifest_sha256": "0caae0117528a8db9461e59aafc7e69b2375453856c17136f9847c9db66b180d",
+        "process": {
+          "pid": 3950,
+          "start_ticks": 493367810,
+          "exe_sha256": "d3475bdfc5796890c39b2c2bf2c9c27519ed94283939aa624f05ed1481233fe8",
+          "gomaxprocs_unset": true
+        },
+        "address": "127.0.0.1:27130",
+        "start_utc": "2026-10-30T11:04:03.568885Z",
+        "end_utc": "2026-10-30T11:04:03.717860Z",
+        "request": {
+          "insert": "prefix_sentinel_2fa78a51d29447be8fa4ea8973f98180",
+          "documents": [
+            {
+              "_id": "prefix-sentinel",
+              "marker": "durable-prefix"
+            }
+          ],
+          "writeConcern": {
+            "w": 1,
+            "j": true
+          },
+          "$db": "ycsb"
+        },
+        "reply": {
+          "ok": 1.0,
+          "n": 1
+        },
+        "request_sha256": "adb9f2cc8dd110cacbff2da5e0ff0105aad33efdf0cf13d4ea5bf43b89682555",
+        "response_sha256": "e5167d2fa5032cad79147ff7ac949261c5fdbb694c271e72e07f9712de540ff6",
+        "scope": "raw public command equivalent to reviewed official-driver sentinel; original owner checked before/after, outside timed run; no direct Close or power-loss claim"
+      },
+      "maintenance_launch_intervals": [
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-gomap/output/treedb_mongo/fixture_verify.launch.json",
+          "sha256": "59fbf40b14104f01dac8445e00a147fc3d067eb5f9f80683c526cb45e297d1c8",
+          "start_utc": "2026-10-30T11:04:15.114966Z",
+          "end_utc": "2026-10-30T11:04:15.131261Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-gomap/output/treedb_mongo/fixture_write.launch.json",
+          "sha256": "78df680160723427b15ba75bb930732223e7521591210ad2ef86793c4c80d616",
+          "start_utc": "2026-10-30T11:04:13.768609Z",
+          "end_utc": "2026-10-30T11:04:14.283610Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-gomap/output/treedb_mongo/snapshot_loaded.launch.json",
+          "sha256": "ffc852f63b27efa6bfa6f038b1f8e67a8a46373771f5f626bc3965677cd34098",
+          "start_utc": "2026-10-30T11:04:00.113305Z",
+          "end_utc": "2026-10-30T11:04:03.483046Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-gomap/output/treedb_mongo/snapshot_preclose.launch.json",
+          "sha256": "60ad0072c6a8156729a6f17599e70e3b2ad63828e41d15502011f538e41c4580",
+          "start_utc": "2026-10-30T11:04:05.188086Z",
+          "end_utc": "2026-10-30T11:04:08.863281Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-gomap/output/treedb_mongo/snapshot_reopened.launch.json",
+          "sha256": "e123ee1884e9b0f651d25a8bf70c08381bd252e378b128690d08acba289b008a",
+          "start_utc": "2026-10-30T11:04:09.816141Z",
+          "end_utc": "2026-10-30T11:04:13.186799Z"
+        }
+      ],
+      "private_gomap_lifecycle": {
+        "schema_version": 1,
+        "version": "candidate",
+        "source_commit": "802f7cfcf8b69eff1447a5f4833076d428e61e3f",
+        "campaign_id": "2fa78a51d29447be8fa4ea8973f98180",
+        "target": "treedb_mongo",
+        "profile": "command_wal_durable",
+        "format": "bson",
+        "process": {
+          "pid": 3950,
+          "start_ticks": 493367810,
+          "exe_sha256": "d3475bdfc5796890c39b2c2bf2c9c27519ed94283939aa624f05ed1481233fe8",
+          "gomaxprocs_unset": true
+        },
+        "data_dir": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-gomap/output/treedb_mongo/db",
+        "owner_id": "204451ff4225d5911d8cefda89d7e1ed",
+        "phase_ids": [
+          "2fa78a51d29447be8fa4ea8973f98180:treedb_mongo:load:25e9894ea067479bac251d22c69b7403",
+          "2fa78a51d29447be8fa4ea8973f98180:treedb_mongo:run_1:3cf3aeac812146238a346b9f5dbe5bb2"
+        ],
+        "server_exit_code": 0,
+        "checkpoint": {
+          "attempted": true,
+          "success": true,
+          "error": "",
+          "start_utc": "2026-10-30T11:04:08.488449095Z",
+          "end_utc": "2026-10-30T11:04:08.573441456Z",
+          "elapsed_ns": 84992360
+        },
+        "server_close": {
+          "attempted": true,
+          "success": true,
+          "error": "",
+          "start_utc": "2026-10-30T11:04:08.981846281Z",
+          "end_utc": "2026-10-30T11:04:09.332124195Z",
+          "elapsed_ns": 350277913
+        },
+        "reopen": {
+          "attempted": true,
+          "success": true,
+          "error": "",
+          "start_utc": "2026-10-30T11:04:09.332124195Z",
+          "end_utc": "2026-10-30T11:04:09.603392581Z",
+          "elapsed_ns": 271268386
+        },
+        "random_state_preservation": {
+          "attempted": true,
+          "success": true,
+          "error": "",
+          "start_utc": "2026-10-30T11:04:15.325833Z",
+          "end_utc": "2026-10-30T11:04:31.286791Z",
+          "elapsed_ns": 15960958000
+        },
+        "preclose_state_utc": "2026-10-30T11:04:08.764587576Z",
+        "reopened_state_utc": "2026-10-30T11:04:13.091256971Z",
+        "preclose_state_sha256": "64a3187642a7f0833673f1960c42bc37d3d1f49d3bc885569a2fcb0da0a1abad",
+        "reopened_state_sha256": "64a3187642a7f0833673f1960c42bc37d3d1f49d3bc885569a2fcb0da0a1abad",
+        "random_state_scope": "observed-state-preservation-only",
+        "reopened_process": {
+          "pid": 6716,
+          "start_ticks": 493373395,
+          "exe_sha256": "d3475bdfc5796890c39b2c2bf2c9c27519ed94283939aa624f05ed1481233fe8",
+          "gomaxprocs_unset": true
+        },
+        "reopened_owner_id": "b27da85cc8a446066f33eabcb71b59d5"
+      }
+    },
+    {
+      "pair": 3,
+      "product": "mongodb",
+      "manifest_sha256": "bbf6eaabb6f503f17127a8a8d25791373c27fc0bb09b8702fa7a3beeafaecff5",
+      "final_sha256": "ec5373b726fb0ef406e17250c3e33d592865328c2a9249d145332a3e43a41a80",
+      "phases": {
+        "load": {
+          "rows": [
+            {
+              "operation": "INSERT",
+              "count": 100000,
+              "ops_per_sec": 37471.4,
+              "avg_us": 424.0,
+              "p50_us": 268.0,
+              "p95_us": 560.0,
+              "p99_us": 889.0,
+              "p999_us": 2501.0,
+              "max_us": 906239.0
+            },
+            {
+              "operation": "TOTAL",
+              "count": 100000,
+              "ops_per_sec": 37474.5,
+              "avg_us": 424.0,
+              "p50_us": 268.0,
+              "p95_us": 560.0,
+              "p99_us": 889.0,
+              "p999_us": 2501.0,
+              "max_us": 906239.0
+            }
+          ],
+          "reported_workload_duration": "2.956419715s",
+          "reported_workload_seconds": 2.956419715,
+          "launch_sha256": "57c5fe060834b8f6e4ee5bdad2830eef4df7f5c64df91d3f1326fc25e17e568e",
+          "process": {
+            "pid": 13724,
+            "start_ticks": 493385225,
+            "exe_sha256": "2237d8aeec309b9b4b335b348234d9829594c9101043144a944d9f2868fbc95b",
+            "gomaxprocs_unset": true
+          },
+          "start_utc": "2026-10-30T11:06:07.692139Z",
+          "end_utc": "2026-10-30T11:06:10.683442Z",
+          "original_client_close": {
+            "schema_version": 1,
+            "phase_id": "bed62c25fcea4047b262067e2e7a6a86:mongodb:load:dce346759dec43b69d6b83123aa8da07",
+            "client_build_id": "merged-3c814849-reference-bootstrap-2237d8aeec30",
+            "db": "mongodb",
+            "phase": "load",
+            "declared_profile": "mongodb_w1_journaled",
+            "total_excludes_close": true,
+            "command": {
+              "attempted": true,
+              "success": true,
+              "error": "",
+              "start_utc": "0001-01-01T00:00:00Z",
+              "end_utc": "0001-01-01T00:00:00Z",
+              "elapsed_ns": 0
+            },
+            "db_close": {
+              "attempted": true,
+              "success": true,
+              "error": "",
+              "start_utc": "2026-10-30T11:06:10.67965511Z",
+              "end_utc": "2026-10-30T11:06:10.68008248Z",
+              "elapsed_ns": 427383
+            },
+            "workload_close": {
+              "attempted": true,
+              "success": true,
+              "error": "",
+              "start_utc": "2026-10-30T11:06:10.680084334Z",
+              "end_utc": "2026-10-30T11:06:10.680084474Z",
+              "elapsed_ns": 140
+            },
+            "native_flush": {
+              "applicable": false,
+              "flush_enabled": false,
+              "ack": 0,
+              "dial": {
+                "attempted": false,
+                "success": false,
+                "error": "",
+                "start_utc": "0001-01-01T00:00:00Z",
+                "end_utc": "0001-01-01T00:00:00Z",
+                "elapsed_ns": 0
+              },
+              "flush": {
+                "attempted": false,
+                "success": false,
+                "error": "",
+                "start_utc": "0001-01-01T00:00:00Z",
+                "end_utc": "0001-01-01T00:00:00Z",
+                "elapsed_ns": 0
+              },
+              "connection_close": {
+                "attempted": false,
+                "success": false,
+                "error": "",
+                "start_utc": "0001-01-01T00:00:00Z",
+                "end_utc": "0001-01-01T00:00:00Z",
+                "elapsed_ns": 0
+              }
+            }
+          },
+          "close_sha256": "55a7b0b0b69b87ebf9c0d21379167dfef99bf53ecdf421d1f10bc74b3632230e"
+        },
+        "run_1": {
+          "rows": [
+            {
+              "operation": "READ",
+              "count": 9487,
+              "ops_per_sec": 20906.2,
+              "avg_us": 200.0,
+              "p50_us": 176.0,
+              "p95_us": 365.0,
+              "p99_us": 574.0,
+              "p999_us": 1359.0,
+              "max_us": 1978.0
+            },
+            {
+              "operation": "TOTAL",
+              "count": 10000,
+              "ops_per_sec": 22025.3,
+              "avg_us": 653.0,
+              "p50_us": 180.0,
+              "p95_us": 3665.0,
+              "p99_us": 11175.0,
+              "p999_us": 11975.0,
+              "max_us": 12263.0
+            },
+            {
+              "operation": "UPDATE",
+              "count": 513,
+              "ops_per_sec": 1139.8,
+              "avg_us": 9021.0,
+              "p50_us": 9751.0,
+              "p95_us": 11791.0,
+              "p99_us": 12007.0,
+              "p999_us": 12223.0,
+              "max_us": 12263.0
+            }
+          ],
+          "reported_workload_duration": "454.28545ms",
+          "reported_workload_seconds": 0.45428545000000004,
+          "launch_sha256": "04801b49c368d2fe98b12c354ab886edb04109883e42270dfd12a7092c58769a",
+          "process": {
+            "pid": 14089,
+            "start_ticks": 493385845,
+            "exe_sha256": "2237d8aeec309b9b4b335b348234d9829594c9101043144a944d9f2868fbc95b",
+            "gomaxprocs_unset": true
+          },
+          "start_utc": "2026-10-30T11:06:13.886539Z",
+          "end_utc": "2026-10-30T11:06:14.376945Z",
+          "original_client_close": {
+            "schema_version": 1,
+            "phase_id": "bed62c25fcea4047b262067e2e7a6a86:mongodb:run_1:224c940ddbbc483d8dcc921ac01f89f0",
+            "client_build_id": "merged-3c814849-reference-bootstrap-2237d8aeec30",
+            "db": "mongodb",
+            "phase": "run",
+            "declared_profile": "mongodb_w1_journaled",
+            "total_excludes_close": true,
+            "command": {
+              "attempted": true,
+              "success": true,
+              "error": "",
+              "start_utc": "0001-01-01T00:00:00Z",
+              "end_utc": "0001-01-01T00:00:00Z",
+              "elapsed_ns": 0
+            },
+            "db_close": {
+              "attempted": true,
+              "success": true,
+              "error": "",
+              "start_utc": "2026-10-30T11:06:14.373549316Z",
+              "end_utc": "2026-10-30T11:06:14.374019038Z",
+              "elapsed_ns": 469730
+            },
+            "workload_close": {
+              "attempted": true,
+              "success": true,
+              "error": "",
+              "start_utc": "2026-10-30T11:06:14.374021166Z",
+              "end_utc": "2026-10-30T11:06:14.374021366Z",
+              "elapsed_ns": 191
+            },
+            "native_flush": {
+              "applicable": false,
+              "flush_enabled": false,
+              "ack": 0,
+              "dial": {
+                "attempted": false,
+                "success": false,
+                "error": "",
+                "start_utc": "0001-01-01T00:00:00Z",
+                "end_utc": "0001-01-01T00:00:00Z",
+                "elapsed_ns": 0
+              },
+              "flush": {
+                "attempted": false,
+                "success": false,
+                "error": "",
+                "start_utc": "0001-01-01T00:00:00Z",
+                "end_utc": "0001-01-01T00:00:00Z",
+                "elapsed_ns": 0
+              },
+              "connection_close": {
+                "attempted": false,
+                "success": false,
+                "error": "",
+                "start_utc": "0001-01-01T00:00:00Z",
+                "end_utc": "0001-01-01T00:00:00Z",
+                "elapsed_ns": 0
+              }
+            }
+          },
+          "close_sha256": "8565759c4c576e7104fde942701df7a86f51eea6539d13f375696f93ec74f631"
+        }
+      },
+      "sentinel": {
+        "schema_version": 1,
+        "kind": "observed_public_journal_sentinel",
+        "campaign_id": "bed62c25fcea4047b262067e2e7a6a86",
+        "manifest_sha256": "bbf6eaabb6f503f17127a8a8d25791373c27fc0bb09b8702fa7a3beeafaecff5",
+        "process": {
+          "pid": 13527,
+          "start_ticks": 493385106,
+          "exe_sha256": "d767fb752139fbc8e0e667d7e0c6fe7cdf690e0aa94a51502a32bad8c54a3672",
+          "gomaxprocs_unset": true
+        },
+        "address": "127.0.0.1:27018",
+        "start_utc": "2026-10-30T11:06:13.562802Z",
+        "end_utc": "2026-10-30T11:06:13.626724Z",
+        "request": {
+          "insert": "prefix_sentinel_bed62c25fcea4047b262067e2e7a6a86",
+          "documents": [
+            {
+              "_id": "prefix-sentinel",
+              "marker": "durable-prefix"
+            }
+          ],
+          "writeConcern": {
+            "w": 1,
+            "j": true
+          },
+          "$db": "ycsb"
+        },
+        "reply": {
+          "n": 1,
+          "ok": 1.0
+        },
+        "request_sha256": "8255d176c7b1c0cd2a33078b30758eb327112c130d2e042ab253930fbfb3debf",
+        "response_sha256": "12e1638ce64dbdc07d0443450525e944008058d62fec3ff9d1d9fe8d0373e8c7",
+        "scope": "raw public command equivalent to reviewed official-driver sentinel; original owner checked before/after, outside timed run; no direct Close or power-loss claim"
+      },
+      "maintenance_launch_intervals": [
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0001.launch.json",
+          "sha256": "0d63bb98af029075ad9077158dee83e2ae1d4f38c059943fe8dcf23f58094f6e",
+          "start_utc": "2026-10-30T11:06:06.185797Z",
+          "end_utc": "2026-10-30T11:06:06.201776Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0002.launch.json",
+          "sha256": "ec37a7fa87d5bdfe7ac3c42f45c6bd764f0ee546b20966beb60d442faa14069c",
+          "start_utc": "2026-10-30T11:06:06.202295Z",
+          "end_utc": "2026-10-30T11:06:06.218274Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0003.launch.json",
+          "sha256": "a8d92fc48d638e76f8bcafe0ddd12f46b9d314c36920e9b90b29e53b56f5bea0",
+          "start_utc": "2026-10-30T11:06:06.218767Z",
+          "end_utc": "2026-10-30T11:06:06.250800Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0004.launch.json",
+          "sha256": "57c935b2b42eedce9474f3784c5928a5769c186c456bf5d93c1aa2c79ae2bf40",
+          "start_utc": "2026-10-30T11:06:06.251968Z",
+          "end_utc": "2026-10-30T11:06:06.416256Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0005.launch.json",
+          "sha256": "a32965e80c2abc5c626d6a181c600d31515a9b6cfb9f5edb7792fd676be11b41",
+          "start_utc": "2026-10-30T11:06:06.416823Z",
+          "end_utc": "2026-10-30T11:06:06.432868Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0006.launch.json",
+          "sha256": "648acf7485139a2c4bbd7fa55c9fa24a472d2e3c73915cfc34073bda352ad982",
+          "start_utc": "2026-10-30T11:06:06.433501Z",
+          "end_utc": "2026-10-30T11:06:06.647937Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0007.launch.json",
+          "sha256": "e62ffe52065349cd28928860f53b48db43c6984ad0a58767d36324f8a158a999",
+          "start_utc": "2026-10-30T11:06:06.648412Z",
+          "end_utc": "2026-10-30T11:06:06.664441Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0008.launch.json",
+          "sha256": "8ceff54e2ae3743d4116e5a9daa7e36056e64d24d9fd23463d1a6a430a478d12",
+          "start_utc": "2026-10-30T11:06:06.818800Z",
+          "end_utc": "2026-10-30T11:06:06.834753Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0009.launch.json",
+          "sha256": "e6f69776a2abf8ab13312c5f303e8ee78da039c3cfec94b61fe5af318b79fa61",
+          "start_utc": "2026-10-30T11:06:06.836476Z",
+          "end_utc": "2026-10-30T11:06:06.852516Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0010.launch.json",
+          "sha256": "b3905d838bab4819ff47182efc2467d6b1b9022d188a8e58f0fb1411d7100cd2",
+          "start_utc": "2026-10-30T11:06:07.433579Z",
+          "end_utc": "2026-10-30T11:06:07.449637Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0011.launch.json",
+          "sha256": "b205139c81b5fc44d2904d8d6af328cac14e010ed4d92bcc36ffaa5fcd593150",
+          "start_utc": "2026-10-30T11:06:07.450454Z",
+          "end_utc": "2026-10-30T11:06:07.466442Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0012.launch.json",
+          "sha256": "38be85efa32a33d80f54072d9bb6883f65ef63b233bd6bdd481cb5100c33bf8e",
+          "start_utc": "2026-10-30T11:06:10.685598Z",
+          "end_utc": "2026-10-30T11:06:10.701717Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0013.launch.json",
+          "sha256": "bd825869434ba340435456795d9c5760e50c293cbd29f01956626a4e90593b36",
+          "start_utc": "2026-10-30T11:06:13.627129Z",
+          "end_utc": "2026-10-30T11:06:13.643118Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0014.launch.json",
+          "sha256": "97e0ac6c9364cd22321c2b3af52df02a4562752fcd22fb9ff9b875b0f61bd4dc",
+          "start_utc": "2026-10-30T11:06:13.643914Z",
+          "end_utc": "2026-10-30T11:06:13.659852Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0015.launch.json",
+          "sha256": "8a7ea044bc41049c0878e65717220452baa96a3e5b4b1692b1ba41fad34aff24",
+          "start_utc": "2026-10-30T11:06:14.377902Z",
+          "end_utc": "2026-10-30T11:06:14.393909Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0016.launch.json",
+          "sha256": "382a45eaeccb23c3f0a2a8d834a3f4ea8a74d63ca795f2af1a59997971529284",
+          "start_utc": "2026-10-30T11:06:17.206539Z",
+          "end_utc": "2026-10-30T11:06:17.222587Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0017.launch.json",
+          "sha256": "328f456ba962bf4d4a68d36bdd2e18c76f97dafe0a13f13b83a5e3b84e23b6dd",
+          "start_utc": "2026-10-30T11:06:17.816498Z",
+          "end_utc": "2026-10-30T11:06:17.832593Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0018.launch.json",
+          "sha256": "7b829baf3019f7018f9945a913e518dd9a121df82b7bcd6cc5db016655fc241c",
+          "start_utc": "2026-10-30T11:06:17.877805Z",
+          "end_utc": "2026-10-30T11:06:17.893835Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0019.launch.json",
+          "sha256": "bc60f3273040f0dc53306a22dd7b03d63fae5bcfa735c715a9fe097c8fcfcf80",
+          "start_utc": "2026-10-30T11:06:17.894656Z",
+          "end_utc": "2026-10-30T11:06:17.926702Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0020.launch.json",
+          "sha256": "62368705bed01b9ecfa27dee695eb22f666f5dd0b6ba15d7898af2a4da70b305",
+          "start_utc": "2026-10-30T11:06:17.927183Z",
+          "end_utc": "2026-10-30T11:06:18.592272Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0021.launch.json",
+          "sha256": "720944b5d617b8ba44a0a96f9d442b7e87e629b238c12910138175c5d691954d",
+          "start_utc": "2026-10-30T11:06:18.592840Z",
+          "end_utc": "2026-10-30T11:06:18.608859Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0022.launch.json",
+          "sha256": "69517b2620d8cea356ea59e726d421cc6c9887b739898b26e4c2a74957c4b909",
+          "start_utc": "2026-10-30T11:06:18.609777Z",
+          "end_utc": "2026-10-30T11:06:18.625787Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0023.launch.json",
+          "sha256": "ae90629dec151b16949848da5afd904540f1167417093881a078d0c252f2f275",
+          "start_utc": "2026-10-30T11:06:18.626786Z",
+          "end_utc": "2026-10-30T11:06:18.642904Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0024.launch.json",
+          "sha256": "b00ae31d302cc23fa4737cc03b175d121ebb8f026487a6cc44387d82c0ab3233",
+          "start_utc": "2026-10-30T11:06:18.643703Z",
+          "end_utc": "2026-10-30T11:06:18.675874Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0025.launch.json",
+          "sha256": "b710fee718b145e407a9190edcbb1661bd06d6ca87f9afe6e954544f75a706ab",
+          "start_utc": "2026-10-30T11:06:18.676516Z",
+          "end_utc": "2026-10-30T11:06:18.791033Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0026.launch.json",
+          "sha256": "e6595cb9120851bde431cb8239b258560206bbea1b913bb6c0b49d834fe10505",
+          "start_utc": "2026-10-30T11:06:18.791545Z",
+          "end_utc": "2026-10-30T11:06:18.809028Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0027.launch.json",
+          "sha256": "540e4105c8d3b0ccb53892023b7676a4341792f7c0175cc072d0b919a3832ff5",
+          "start_utc": "2026-10-30T11:06:18.809895Z",
+          "end_utc": "2026-10-30T11:06:19.024389Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0028.launch.json",
+          "sha256": "62ecd8e82218549c66a8546e739f19e01d0c6058359e9cde4c678b6c1794c800",
+          "start_utc": "2026-10-30T11:06:19.025095Z",
+          "end_utc": "2026-10-30T11:06:19.041412Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0029.launch.json",
+          "sha256": "46f99a257b26e70fc90ea32f72e8aedc25b5c77287765776891e1b356186feed",
+          "start_utc": "2026-10-30T11:06:19.043465Z",
+          "end_utc": "2026-10-30T11:06:19.059785Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0030.launch.json",
+          "sha256": "6dce0eda20bf9f79d2a0b6b663911e80a9e7aed90735790e0b900365295832b0",
+          "start_utc": "2026-10-30T11:06:19.060776Z",
+          "end_utc": "2026-10-30T11:06:19.076773Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0031.launch.json",
+          "sha256": "76efaf88992d74ec2148a6aa12e88c07fa7d8a042e4d2e29dfae61ccbfc7c176",
+          "start_utc": "2026-10-30T11:06:19.655807Z",
+          "end_utc": "2026-10-30T11:06:19.671790Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0032.launch.json",
+          "sha256": "894e66785be43739fac389ba6b2444ed928cdb97fcbcf003fab50766d4884e08",
+          "start_utc": "2026-10-30T11:06:22.536201Z",
+          "end_utc": "2026-10-30T11:06:22.552224Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0033.launch.json",
+          "sha256": "ea6fc4501be7b1f3905e8a112881c48bb9a32f7ee546576ed8ba7965eef884c4",
+          "start_utc": "2026-10-30T11:06:22.595240Z",
+          "end_utc": "2026-10-30T11:06:22.611288Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0034.launch.json",
+          "sha256": "612bb472e1588750fe5b7993fc810a091b106b0b543864d19aad5816feab606f",
+          "start_utc": "2026-10-30T11:06:22.612105Z",
+          "end_utc": "2026-10-30T11:06:22.676223Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0035.launch.json",
+          "sha256": "e854fac0d1d999bf91d041ea1055c4cc5a3c2ee42880179caf2b717c64ca32e3",
+          "start_utc": "2026-10-30T11:06:22.676693Z",
+          "end_utc": "2026-10-30T11:06:23.742416Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0036.launch.json",
+          "sha256": "e9c707995097f9e10f71dd1c38822a6aaca8a4506f7ce62ac7698c7424571209",
+          "start_utc": "2026-10-30T11:06:23.742895Z",
+          "end_utc": "2026-10-30T11:06:23.758858Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0037.launch.json",
+          "sha256": "42a034db99a589f387a305964d83b33a51eda1edd194e439da3919abd8fbb80d",
+          "start_utc": "2026-10-30T11:06:23.759783Z",
+          "end_utc": "2026-10-30T11:06:23.775777Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0038.launch.json",
+          "sha256": "d2b518b1b491d4d920e56dacd231a86cb704184ec5d73d2815c5502e8401f580",
+          "start_utc": "2026-10-30T11:06:23.776607Z",
+          "end_utc": "2026-10-30T11:06:23.792629Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0039.launch.json",
+          "sha256": "1deb93bb9c33d5373698825fe36ea89596956ce4ca6117333efda40591767c25",
+          "start_utc": "2026-10-30T11:06:23.793298Z",
+          "end_utc": "2026-10-30T11:06:23.825418Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0040.launch.json",
+          "sha256": "735d0f455dd70a9b4e4edffebf91b6485d8d6a802bfb2cec2fc37e5ad1e82258",
+          "start_utc": "2026-10-30T11:06:23.826027Z",
+          "end_utc": "2026-10-30T11:06:23.990298Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0041.launch.json",
+          "sha256": "3eb71932eb2a2268a44cac44b70a9831b813638f1bcbe2698205a0d9b39f0e44",
+          "start_utc": "2026-10-30T11:06:23.990790Z",
+          "end_utc": "2026-10-30T11:06:24.006841Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0042.launch.json",
+          "sha256": "627654005d657ae5dfc2b1c423f91a3909f8d0c643ad0b4eb10417b41be95498",
+          "start_utc": "2026-10-30T11:06:24.007481Z",
+          "end_utc": "2026-10-30T11:06:24.221881Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0043.launch.json",
+          "sha256": "5377a50d8798e7fc6c704ca44ea5da5c418a3043332ef49d4b23b1cd51966af4",
+          "start_utc": "2026-10-30T11:06:24.222412Z",
+          "end_utc": "2026-10-30T11:06:24.238443Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0044.launch.json",
+          "sha256": "2cef128d2658e28cd63d0743f2ed4877520a834f15b62bf6518b7b14d95c64f8",
+          "start_utc": "2026-10-30T11:06:24.239919Z",
+          "end_utc": "2026-10-30T11:06:24.255931Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0045.launch.json",
+          "sha256": "2b305b6b8da09f4dfd7029ce7c4b3f7050f16ab3487f4eab7c211bdadaaae923",
+          "start_utc": "2026-10-30T11:06:24.256959Z",
+          "end_utc": "2026-10-30T11:06:24.272912Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0046.launch.json",
+          "sha256": "691c0dcf22f9960fd88db7a44d9b46d6cd8693046ec7da901420ac415c9aaa29",
+          "start_utc": "2026-10-30T11:06:24.851777Z",
+          "end_utc": "2026-10-30T11:06:24.867786Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0047.launch.json",
+          "sha256": "3c4132a4b3a7318658ee38fa2c17bf4deacbaea62f6145e967366b281ea30442",
+          "start_utc": "2026-10-30T11:06:25.175888Z",
+          "end_utc": "2026-10-30T11:06:25.191934Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0048.launch.json",
+          "sha256": "f8a79b60ebe8bc1002a4ea01c27932f76ef9b6a4f01da6b19a64ba6d0f3a646a",
+          "start_utc": "2026-10-30T11:06:25.370340Z",
+          "end_utc": "2026-10-30T11:06:25.386412Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0049.launch.json",
+          "sha256": "b34addf9a1f405353d2cef4855fc4b67e0bcf58dc4ad4dfa3c0cdc233b92cbb4",
+          "start_utc": "2026-10-30T11:06:25.429744Z",
+          "end_utc": "2026-10-30T11:06:25.445857Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0050.launch.json",
+          "sha256": "89a40f2c1d445235eda59719b63baf7d302a465cff0a1525eedae4ca83f4f7bb",
+          "start_utc": "2026-10-30T11:06:25.446689Z",
+          "end_utc": "2026-10-30T11:06:25.478748Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0051.launch.json",
+          "sha256": "fc174d4f8da3319ce0ccc2c7bb3021e4e143894a23df21aeb0bd90f5aa3274c5",
+          "start_utc": "2026-10-30T11:06:25.479239Z",
+          "end_utc": "2026-10-30T11:06:25.843860Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0052.launch.json",
+          "sha256": "5dbb811db2242b7d589073ef448b726ee1ce79a8cf4f7930f759b422ae331cfb",
+          "start_utc": "2026-10-30T11:06:25.844372Z",
+          "end_utc": "2026-10-30T11:06:25.860423Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0053.launch.json",
+          "sha256": "5e5193b1205c991e4ce1bb31291293f41b57734b9eb357a8b1d260ca7899036a",
+          "start_utc": "2026-10-30T11:06:25.861411Z",
+          "end_utc": "2026-10-30T11:06:25.877407Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0054.launch.json",
+          "sha256": "62c05ba9a25e6acf94e938672ed30004400d356fd5f42bdd2e393e380e5dc990",
+          "start_utc": "2026-10-30T11:06:25.878329Z",
+          "end_utc": "2026-10-30T11:06:25.894311Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0055.launch.json",
+          "sha256": "be9bcade4767b9b30308c87f2d6ad9af0af38bf7b658ce6c79735ad07abbb20a",
+          "start_utc": "2026-10-30T11:06:25.895031Z",
+          "end_utc": "2026-10-30T11:06:25.927133Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0056.launch.json",
+          "sha256": "6f5fdb9766b3b920ff22e9b0181efdc7a06df68260f16c255835dc48d7a45b93",
+          "start_utc": "2026-10-30T11:06:25.927773Z",
+          "end_utc": "2026-10-30T11:06:26.092136Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0057.launch.json",
+          "sha256": "e034eca14bc754553880b057bd7e82baf7dfbb1f8df1dabc638e9210bd0ca083",
+          "start_utc": "2026-10-30T11:06:26.092639Z",
+          "end_utc": "2026-10-30T11:06:26.108725Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0058.launch.json",
+          "sha256": "983400c1808fae2983cf6703c3adb4b02ba6a79b05623ae38f6ae3b3cfe25600",
+          "start_utc": "2026-10-30T11:06:26.109367Z",
+          "end_utc": "2026-10-30T11:06:26.323789Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0059.launch.json",
+          "sha256": "8f6354e25d90fa3e83399f1717b19c38620bc481752d3c6f2032390b947bf167",
+          "start_utc": "2026-10-30T11:06:26.324277Z",
+          "end_utc": "2026-10-30T11:06:26.340333Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0060.launch.json",
+          "sha256": "78d9f9fff970901368989caaf2d9e8e5f20f4a49e2d7addda00039795242888c",
+          "start_utc": "2026-10-30T11:06:26.341806Z",
+          "end_utc": "2026-10-30T11:06:26.357937Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0061.launch.json",
+          "sha256": "afc8d8713aa587422188a764f2026458355bce8b143d3267483b7864f0c6df36",
+          "start_utc": "2026-10-30T11:06:26.358967Z",
+          "end_utc": "2026-10-30T11:06:26.375030Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0062.launch.json",
+          "sha256": "dddb66a5b451026964467a8697599d7d6b0a11c51ec6207f92708a6f6ee343d5",
+          "start_utc": "2026-10-30T11:06:26.954821Z",
+          "end_utc": "2026-10-30T11:06:26.970778Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0063.launch.json",
+          "sha256": "59ec0eba25fff74e398569b5f2f45cb5198875e9fdfdf5084a30a4c2910ee8dd",
+          "start_utc": "2026-10-30T11:06:27.030527Z",
+          "end_utc": "2026-10-30T11:06:27.046519Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0064.launch.json",
+          "sha256": "8975a34276e22fee4a91f306d7ef6bd49cca377ad202732db4fca3bb2bf6191a",
+          "start_utc": "2026-10-30T11:06:27.089633Z",
+          "end_utc": "2026-10-30T11:06:27.105593Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0065.launch.json",
+          "sha256": "1af90aa425cefd8d23b92903ffcd91ede62cfbd5a4f4fb3fca3c109c332fa7e6",
+          "start_utc": "2026-10-30T11:06:27.106411Z",
+          "end_utc": "2026-10-30T11:06:27.170534Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0066.launch.json",
+          "sha256": "06d9a0ea1849203330dd690bccf5812201ccf24a1870d07e337cd0a2134419b6",
+          "start_utc": "2026-10-30T11:06:27.171009Z",
+          "end_utc": "2026-10-30T11:06:27.535549Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0067.launch.json",
+          "sha256": "e136ed10e6ffef23a44157e183e4c18e013beb5efbcd369f0c0a732d8fd72f66",
+          "start_utc": "2026-10-30T11:06:27.536053Z",
+          "end_utc": "2026-10-30T11:06:27.552069Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0068.launch.json",
+          "sha256": "e754d4456f5edc565cdcdcf751904e8917fcb1f7a007cc16fa08252b3571d27c",
+          "start_utc": "2026-10-30T11:06:27.553041Z",
+          "end_utc": "2026-10-30T11:06:27.568979Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0069.launch.json",
+          "sha256": "cebede5d32cdf8a050e1d91ebcb131ee8e4b470bdca9dda1e7d53af282e71af6",
+          "start_utc": "2026-10-30T11:06:27.569849Z",
+          "end_utc": "2026-10-30T11:06:27.585850Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/docker-0070.launch.json",
+          "sha256": "61b5bc97d4232ba059a2a9cd2fc499cbab22dc948e0f2f8d2b3d92450d3389cf",
+          "start_utc": "2026-10-30T11:06:27.586501Z",
+          "end_utc": "2026-10-30T11:06:27.618721Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/fixture-checkpoint.launch.json",
+          "sha256": "4c703070d9bd4c714b843e62444912eb082fe40fe8f746ac32a538e722b1e76c",
+          "start_utc": "2026-10-30T11:06:25.192814Z",
+          "end_utc": "2026-10-30T11:06:25.357266Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/fixture-reopened-before-close.launch.json",
+          "sha256": "fbb8e17c6a1609be7bdbd08a06623670e2304c7a67c257afdee60c643756bca4",
+          "start_utc": "2026-10-30T11:06:27.047336Z",
+          "end_utc": "2026-10-30T11:06:27.079398Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/fixture-reopened-ready.launch.json",
+          "sha256": "8acf5267b81cdfd551dabc63dcc952015a4ab3cd5004d8d83b8e318db956ed1e",
+          "start_utc": "2026-10-30T11:06:26.376231Z",
+          "end_utc": "2026-10-30T11:06:26.941595Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/fixture-write-before-close.launch.json",
+          "sha256": "23228f881d5859daa2acc02d8f0b9db81a8269c4a75744f579f628c9cea7e672",
+          "start_utc": "2026-10-30T11:06:25.387270Z",
+          "end_utc": "2026-10-30T11:06:25.419417Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/fixture-write-ready.launch.json",
+          "sha256": "dfc5cc356157fd2ce003d1c8c7c1a35fceb9c798fd4d167d5ddc3d62a8fc6493",
+          "start_utc": "2026-10-30T11:06:24.273798Z",
+          "end_utc": "2026-10-30T11:06:24.838657Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/fixture_verify-owner.launch.json",
+          "sha256": "af7bee23c327d7f11c5a33d887514df3d7ef8d13e3e4a503b1cfd85ed9ba8fab",
+          "start_utc": "2026-10-30T11:06:26.971585Z",
+          "end_utc": "2026-10-30T11:06:27.003628Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/fixture_verify.launch.json",
+          "sha256": "6abf1e70200af6fa8cc1afc3c35986de454e5a16fef6c56ec3a8f4bf8ee0e2eb",
+          "start_utc": "2026-10-30T11:06:27.014032Z",
+          "end_utc": "2026-10-30T11:06:27.030059Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/fixture_write-owner.launch.json",
+          "sha256": "635af26b71de54e5f0355758ee29f32020191d421d8a1959ce81a6983490a244",
+          "start_utc": "2026-10-30T11:06:24.868609Z",
+          "end_utc": "2026-10-30T11:06:24.900699Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/fixture_write.launch.json",
+          "sha256": "523644c993ba2a8ff0b46f519302ad33144cc05b68abc3e5039a6f83b8f375a7",
+          "start_utc": "2026-10-30T11:06:24.910873Z",
+          "end_utc": "2026-10-30T11:06:25.175387Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/load-owner.launch.json",
+          "sha256": "db0b445536cfef9fbfebd727b3b5593a5bdb212e909c8b28c206cb9686f6db61",
+          "start_utc": "2026-10-30T11:06:07.467260Z",
+          "end_utc": "2026-10-30T11:06:07.499393Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/random-checkpoint.launch.json",
+          "sha256": "c5450abc0a602f36ea6ce756462f9b00a27505a3a9b1aae353a7e0b120202556",
+          "start_utc": "2026-10-30T11:06:17.223395Z",
+          "end_utc": "2026-10-30T11:06:17.638093Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/reopened-before-close.launch.json",
+          "sha256": "7eaf05ef80b767320b08b7a94b1aa3e28f8e663577fb5148bbf797567bbd3e77",
+          "start_utc": "2026-10-30T11:06:22.553057Z",
+          "end_utc": "2026-10-30T11:06:22.585072Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/reopened-ready.launch.json",
+          "sha256": "c985b290c536ca7c550420039209d818e276754d77e9920489ccdafb41f8dfde",
+          "start_utc": "2026-10-30T11:06:19.077644Z",
+          "end_utc": "2026-10-30T11:06:19.642778Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/run_1-owner.launch.json",
+          "sha256": "80a74a1f9b762f74665cb9bb88de27882a9d7c9f48af515320f1ad885158cf5f",
+          "start_utc": "2026-10-30T11:06:13.660715Z",
+          "end_utc": "2026-10-30T11:06:13.692786Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/server-before-close.launch.json",
+          "sha256": "fa3f816dde37bd2112b41e910cc69581d04da229b126845e11f33e0b3a2a53c4",
+          "start_utc": "2026-10-30T11:06:17.833431Z",
+          "end_utc": "2026-10-30T11:06:17.865554Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/server-ready.launch.json",
+          "sha256": "6ffb36121f6e561be726a9878f3de9ec6280474280a8c959c8f87c9a1b1f3f3c",
+          "start_utc": "2026-10-30T11:06:06.853354Z",
+          "end_utc": "2026-10-30T11:06:07.418283Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/snapshot_loaded-owner.launch.json",
+          "sha256": "b3baa112275657e05cf9f4c1d27b7a9e00b9b1fe8c8313419b6eca8116c43e02",
+          "start_utc": "2026-10-30T11:06:10.702542Z",
+          "end_utc": "2026-10-30T11:06:10.734590Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/snapshot_loaded.launch.json",
+          "sha256": "8cbe2c2e2932e3b2b5c693896386d361abc8ee200118d7eed03b7f6aa65ebf35",
+          "start_utc": "2026-10-30T11:06:10.745088Z",
+          "end_utc": "2026-10-30T11:06:13.513565Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/snapshot_preclose-owner.launch.json",
+          "sha256": "00b93ff1e88a6d6ea4018d26e87541709d77d88df12a4b98a45c0fa95b9babf1",
+          "start_utc": "2026-10-30T11:06:14.394792Z",
+          "end_utc": "2026-10-30T11:06:14.426860Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/snapshot_preclose.launch.json",
+          "sha256": "cdc4051a3991cf83c777257df09cd10d6e55a7e251b0528832c5fc7e55b7e3b3",
+          "start_utc": "2026-10-30T11:06:14.437226Z",
+          "end_utc": "2026-10-30T11:06:17.206059Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/snapshot_reopened-owner.launch.json",
+          "sha256": "9cb38ccaecef9b92dab4f5ca63f461d94bb2f49b0c56f38cc516a6bf7dc251ba",
+          "start_utc": "2026-10-30T11:06:19.672597Z",
+          "end_utc": "2026-10-30T11:06:19.704644Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/snapshot_reopened.launch.json",
+          "sha256": "0637c661bbd71d8837f460ac5d17c291d0b03cd8563d0f208077261c70442a07",
+          "start_utc": "2026-10-30T11:06:19.714867Z",
+          "end_utc": "2026-10-30T11:06:22.535725Z"
+        }
+      ]
+    },
+    {
+      "pair": 3,
+      "product": "gomap",
+      "manifest_sha256": "b77ce4184ceec2ac8d8accc7e2261d30ce55f3ddc1c02ad60790f4219a90c3cd",
+      "final_sha256": "d7c66cfa41d9bf4afd369b93fcf7b89be088549bb9bbfbff96f1394a6cf2fe32",
+      "phases": {
+        "load": {
+          "rows": [
+            {
+              "operation": "INSERT",
+              "count": 100000,
+              "ops_per_sec": 2207.2,
+              "avg_us": 7230.0,
+              "p50_us": 6555.0,
+              "p95_us": 7219.0,
+              "p99_us": 12415.0,
+              "p999_us": 158463.0,
+              "max_us": 493823.0
+            },
+            {
+              "operation": "TOTAL",
+              "count": 100000,
+              "ops_per_sec": 2207.2,
+              "avg_us": 7230.0,
+              "p50_us": 6555.0,
+              "p95_us": 7219.0,
+              "p99_us": 12415.0,
+              "p999_us": 158463.0,
+              "max_us": 493823.0
+            }
+          ],
+          "reported_workload_duration": "45.312693382s",
+          "reported_workload_seconds": 45.312693382,
+          "launch_sha256": "c273691001024142ae9a7619e9cadb9efbd1d30e3ee63674d2a764b49709bafa",
+          "process": {
+            "pid": 17156,
+            "start_ticks": 493389825,
+            "exe_sha256": "2237d8aeec309b9b4b335b348234d9829594c9101043144a944d9f2868fbc95b",
+            "gomaxprocs_unset": true
+          },
+          "start_utc": "2026-10-30T11:06:53.687478Z",
+          "end_utc": "2026-10-30T11:07:39.063111Z",
+          "original_client_close": {
+            "schema_version": 1,
+            "phase_id": "25965951d7f542208f3d91d7746c80d3:treedb_mongo:load:e324f7e5e318424db8d9321aae1f8114",
+            "client_build_id": "merged-3c814849-reference-bootstrap-2237d8aeec30",
+            "db": "mongodb",
+            "phase": "load",
+            "declared_profile": "command_wal_durable",
+            "total_excludes_close": true,
+            "command": {
+              "attempted": true,
+              "success": true,
+              "error": "",
+              "start_utc": "0001-01-01T00:00:00Z",
+              "end_utc": "0001-01-01T00:00:00Z",
+              "elapsed_ns": 0
+            },
+            "db_close": {
+              "attempted": true,
+              "success": true,
+              "error": "",
+              "start_utc": "2026-10-30T11:07:39.051392209Z",
+              "end_utc": "2026-10-30T11:07:39.051793989Z",
+              "elapsed_ns": 401785
+            },
+            "workload_close": {
+              "attempted": true,
+              "success": true,
+              "error": "",
+              "start_utc": "2026-10-30T11:07:39.051795154Z",
+              "end_utc": "2026-10-30T11:07:39.051795264Z",
+              "elapsed_ns": 109
+            },
+            "native_flush": {
+              "applicable": false,
+              "flush_enabled": false,
+              "ack": 0,
+              "dial": {
+                "attempted": false,
+                "success": false,
+                "error": "",
+                "start_utc": "0001-01-01T00:00:00Z",
+                "end_utc": "0001-01-01T00:00:00Z",
+                "elapsed_ns": 0
+              },
+              "flush": {
+                "attempted": false,
+                "success": false,
+                "error": "",
+                "start_utc": "0001-01-01T00:00:00Z",
+                "end_utc": "0001-01-01T00:00:00Z",
+                "elapsed_ns": 0
+              },
+              "connection_close": {
+                "attempted": false,
+                "success": false,
+                "error": "",
+                "start_utc": "0001-01-01T00:00:00Z",
+                "end_utc": "0001-01-01T00:00:00Z",
+                "elapsed_ns": 0
+              }
+            }
+          },
+          "close_sha256": "7c0077bef96417ec2d8a793698979d896e8945a58b885d9b7273445906acbcc5"
+        },
+        "run_1": {
+          "rows": [
+            {
+              "operation": "READ",
+              "count": 9516,
+              "ops_per_sec": 10189.4,
+              "avg_us": 1062.0,
+              "p50_us": 1109.0,
+              "p95_us": 1988.0,
+              "p99_us": 2545.0,
+              "p999_us": 3859.0,
+              "max_us": 5079.0
+            },
+            {
+              "operation": "TOTAL",
+              "count": 10000,
+              "ops_per_sec": 10705.2,
+              "avg_us": 1421.0,
+              "p50_us": 1137.0,
+              "p95_us": 3355.0,
+              "p99_us": 10511.0,
+              "p999_us": 14575.0,
+              "max_us": 16375.0
+            },
+            {
+              "operation": "UPDATE",
+              "count": 484,
+              "ops_per_sec": 521.7,
+              "avg_us": 8479.0,
+              "p50_us": 8171.0,
+              "p95_us": 13559.0,
+              "p99_us": 15687.0,
+              "p999_us": 16375.0,
+              "max_us": 16375.0
+            }
+          ],
+          "reported_workload_duration": "934.255113ms",
+          "reported_workload_seconds": 0.9342551130000001,
+          "launch_sha256": "c1d6a05ada2b6325c21d6b24718ee00d8b7cb3ee98bf22f58262cedf31dc9951",
+          "process": {
+            "pid": 18297,
+            "start_ticks": 493394776,
+            "exe_sha256": "2237d8aeec309b9b4b335b348234d9829594c9101043144a944d9f2868fbc95b",
+            "gomaxprocs_unset": true
+          },
+          "start_utc": "2026-10-30T11:07:43.206227Z",
+          "end_utc": "2026-10-30T11:07:44.177373Z",
+          "original_client_close": {
+            "schema_version": 1,
+            "phase_id": "25965951d7f542208f3d91d7746c80d3:treedb_mongo:run_1:0c24d405ac2a4f3ca14c2662605237a1",
+            "client_build_id": "merged-3c814849-reference-bootstrap-2237d8aeec30",
+            "db": "mongodb",
+            "phase": "run",
+            "declared_profile": "command_wal_durable",
+            "total_excludes_close": true,
+            "command": {
+              "attempted": true,
+              "success": true,
+              "error": "",
+              "start_utc": "0001-01-01T00:00:00Z",
+              "end_utc": "0001-01-01T00:00:00Z",
+              "elapsed_ns": 0
+            },
+            "db_close": {
+              "attempted": true,
+              "success": true,
+              "error": "",
+              "start_utc": "2026-10-30T11:07:44.172724412Z",
+              "end_utc": "2026-10-30T11:07:44.17302504Z",
+              "elapsed_ns": 300637
+            },
+            "workload_close": {
+              "attempted": true,
+              "success": true,
+              "error": "",
+              "start_utc": "2026-10-30T11:07:44.173026545Z",
+              "end_utc": "2026-10-30T11:07:44.173026675Z",
+              "elapsed_ns": 129
+            },
+            "native_flush": {
+              "applicable": false,
+              "flush_enabled": false,
+              "ack": 0,
+              "dial": {
+                "attempted": false,
+                "success": false,
+                "error": "",
+                "start_utc": "0001-01-01T00:00:00Z",
+                "end_utc": "0001-01-01T00:00:00Z",
+                "elapsed_ns": 0
+              },
+              "flush": {
+                "attempted": false,
+                "success": false,
+                "error": "",
+                "start_utc": "0001-01-01T00:00:00Z",
+                "end_utc": "0001-01-01T00:00:00Z",
+                "elapsed_ns": 0
+              },
+              "connection_close": {
+                "attempted": false,
+                "success": false,
+                "error": "",
+                "start_utc": "0001-01-01T00:00:00Z",
+                "end_utc": "0001-01-01T00:00:00Z",
+                "elapsed_ns": 0
+              }
+            }
+          },
+          "close_sha256": "29eb7d823c21f086e91a47086dccd4304544b5294c2d61374fadbf3edf017b77"
+        }
+      },
+      "sentinel": {
+        "schema_version": 1,
+        "kind": "observed_public_journal_sentinel",
+        "campaign_id": "25965951d7f542208f3d91d7746c80d3",
+        "manifest_sha256": "b77ce4184ceec2ac8d8accc7e2261d30ce55f3ddc1c02ad60790f4219a90c3cd",
+        "process": {
+          "pid": 17139,
+          "start_ticks": 493389757,
+          "exe_sha256": "d3475bdfc5796890c39b2c2bf2c9c27519ed94283939aa624f05ed1481233fe8",
+          "gomaxprocs_unset": true
+        },
+        "address": "127.0.0.1:27130",
+        "start_utc": "2026-10-30T11:07:42.651303Z",
+        "end_utc": "2026-10-30T11:07:42.796850Z",
+        "request": {
+          "insert": "prefix_sentinel_25965951d7f542208f3d91d7746c80d3",
+          "documents": [
+            {
+              "_id": "prefix-sentinel",
+              "marker": "durable-prefix"
+            }
+          ],
+          "writeConcern": {
+            "w": 1,
+            "j": true
+          },
+          "$db": "ycsb"
+        },
+        "reply": {
+          "ok": 1.0,
+          "n": 1
+        },
+        "request_sha256": "eaa9d85e0e46f85dfc53b88055c468fe004ac2d3969a6fd4b41a2fa3dd3871c2",
+        "response_sha256": "e5167d2fa5032cad79147ff7ac949261c5fdbb694c271e72e07f9712de540ff6",
+        "scope": "raw public command equivalent to reviewed official-driver sentinel; original owner checked before/after, outside timed run; no direct Close or power-loss claim"
+      },
+      "maintenance_launch_intervals": [
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-gomap/output/treedb_mongo/fixture_verify.launch.json",
+          "sha256": "8d5840d71b784514b91081881f4ebcd3ed00df148c7ec12e54407bac4e6b0801",
+          "start_utc": "2026-10-30T11:07:54.415219Z",
+          "end_utc": "2026-10-30T11:07:54.431467Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-gomap/output/treedb_mongo/fixture_write.launch.json",
+          "sha256": "f5c7c5c7f0bf756044ec154e890bd4176d02766632cbf8e2a48e6f23370c1629",
+          "start_utc": "2026-10-30T11:07:53.057601Z",
+          "end_utc": "2026-10-30T11:07:53.572768Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-gomap/output/treedb_mongo/snapshot_loaded.launch.json",
+          "sha256": "31d7443bf8ab4bfcaef61206d4d7ac51ce1ae01ea8ab57b7ee7a13d78773f2be",
+          "start_utc": "2026-10-30T11:07:39.235968Z",
+          "end_utc": "2026-10-30T11:07:42.555557Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-gomap/output/treedb_mongo/snapshot_preclose.launch.json",
+          "sha256": "defcd047055cf853609fea7e9df09f0f3a84346234ff4502e9b76f692c5287dc",
+          "start_utc": "2026-10-30T11:07:44.330812Z",
+          "end_utc": "2026-10-30T11:07:48.000747Z"
+        },
+        {
+          "artifact": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-gomap/output/treedb_mongo/snapshot_reopened.launch.json",
+          "sha256": "85a6dd8cbcfdd2e4fb32c2fe20af4c49dda2a133e3cf38c1944a5700056a3893",
+          "start_utc": "2026-10-30T11:07:49.101316Z",
+          "end_utc": "2026-10-30T11:07:52.421211Z"
+        }
+      ],
+      "private_gomap_lifecycle": {
+        "schema_version": 1,
+        "version": "candidate",
+        "source_commit": "802f7cfcf8b69eff1447a5f4833076d428e61e3f",
+        "campaign_id": "25965951d7f542208f3d91d7746c80d3",
+        "target": "treedb_mongo",
+        "profile": "command_wal_durable",
+        "format": "bson",
+        "process": {
+          "pid": 17139,
+          "start_ticks": 493389757,
+          "exe_sha256": "d3475bdfc5796890c39b2c2bf2c9c27519ed94283939aa624f05ed1481233fe8",
+          "gomaxprocs_unset": true
+        },
+        "data_dir": "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-gomap/output/treedb_mongo/db",
+        "owner_id": "143ce30bbfd8b5c7dc76e9ad7dfee227",
+        "phase_ids": [
+          "25965951d7f542208f3d91d7746c80d3:treedb_mongo:load:e324f7e5e318424db8d9321aae1f8114",
+          "25965951d7f542208f3d91d7746c80d3:treedb_mongo:run_1:0c24d405ac2a4f3ca14c2662605237a1"
+        ],
+        "server_exit_code": 0,
+        "checkpoint": {
+          "attempted": true,
+          "success": true,
+          "error": "",
+          "start_utc": "2026-10-30T11:07:47.651269171Z",
+          "end_utc": "2026-10-30T11:07:47.731219628Z",
+          "elapsed_ns": 79950458
+        },
+        "server_close": {
+          "attempted": true,
+          "success": true,
+          "error": "",
+          "start_utc": "2026-10-30T11:07:48.123595572Z",
+          "end_utc": "2026-10-30T11:07:48.556992158Z",
+          "elapsed_ns": 433396587
+        },
+        "reopen": {
+          "attempted": true,
+          "success": true,
+          "error": "",
+          "start_utc": "2026-10-30T11:07:48.556992158Z",
+          "end_utc": "2026-10-30T11:07:48.857276112Z",
+          "elapsed_ns": 300283954
+        },
+        "random_state_preservation": {
+          "attempted": true,
+          "success": true,
+          "error": "",
+          "start_utc": "2026-10-30T11:07:54.628666Z",
+          "end_utc": "2026-10-30T11:08:10.250495Z",
+          "elapsed_ns": 15621829000
+        },
+        "preclose_state_utc": "2026-10-30T11:07:47.90459035Z",
+        "reopened_state_utc": "2026-10-30T11:07:52.325634358Z",
+        "preclose_state_sha256": "f710d0ad653864013014db0a17781171ed844aeddea285bcc5a493347aee0a88",
+        "reopened_state_sha256": "f710d0ad653864013014db0a17781171ed844aeddea285bcc5a493347aee0a88",
+        "random_state_scope": "observed-state-preservation-only",
+        "reopened_process": {
+          "pid": 18389,
+          "start_ticks": 493395318,
+          "exe_sha256": "d3475bdfc5796890c39b2c2bf2c9c27519ed94283939aa624f05ed1481233fe8",
+          "gomaxprocs_unset": true
+        },
+        "reopened_owner_id": "536c21bc10c0413730634c49620b4bfc"
+      }
+    }
+  ],
+  "pairs": [
+    {
+      "pair": 1,
+      "mongodb": 21601.3,
+      "gomap": 11436.8,
+      "gomap_over_mongodb": 0.5294496164582687
+    },
+    {
+      "pair": 2,
+      "mongodb": 22917.0,
+      "gomap": 11453.2,
+      "gomap_over_mongodb": 0.49976873063664534
+    },
+    {
+      "pair": 3,
+      "mongodb": 22025.3,
+      "gomap": 10705.2,
+      "gomap_over_mongodb": 0.4860410527892924
+    }
+  ],
+  "variability": {
+    "mongodb": {
+      "values": [
+        21601.3,
+        22917.0,
+        22025.3
+      ],
+      "mean": 22181.2,
+      "median": 22025.3,
+      "minimum": 21601.3,
+      "maximum": 22917.0,
+      "population_cv_percent": 2.472038936947992
+    },
+    "gomap": {
+      "values": [
+        11436.8,
+        11453.2,
+        10705.2
+      ],
+      "mean": 11198.4,
+      "median": 11436.8,
+      "minimum": 10705.2,
+      "maximum": 11453.2,
+      "population_cv_percent": 3.114813965320219
+    }
+  },
+  "median_paired_ratio": 0.49976873063664534,
+  "raw_sha256": {
+    "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/load.out": "858cdd2596368c2a6cdcf646f5767a8e5fcf0063917e40ed7b864e7611b6cb33",
+    "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-mongodb/mongodb/run_1.out": "c802d9a3ec7cf36f6aa2c2b58455d32fddf4a7b851e6d2b7495000dbe52e784d",
+    "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-gomap/output/treedb_mongo/load.out": "da1cd01824940b0895f492a17731a9a5c9c9a888ea634b4866e189f93077aff5",
+    "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair1-gomap/output/treedb_mongo/run_1.out": "b7628d1a3365d988412071e9882ede0a82b3a2fc8b39afc0cff8575371c08feb",
+    "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/load.out": "4363f9a462ecc927b4ccd0611ab994b6d644c248d6fe4a1ddb5a00de86ba95fb",
+    "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-mongodb/mongodb/run_1.out": "6c72862ea22bbae95241d07708e49f26baa694d338b536b7bbefb5d8ed907c11",
+    "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-gomap/output/treedb_mongo/load.out": "1d2558bbaf40a264d0eebf987a32289ae1aaf720245f15b59cb6d0281ee28062",
+    "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair2-gomap/output/treedb_mongo/run_1.out": "6aa54ae2a61fd9601c3b22d0650eed2cb7cc5447b97f13126980f63984648907",
+    "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/load.out": "adda7076be5fff5304ff0223bc21f83d57854fa0d01aa6f0147d2ee7327fe830",
+    "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-mongodb/mongodb/run_1.out": "ba45b123f606d33e68ee4b600b400483bfe0d6116d22f6efed4d3b1afc2d38e3",
+    "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-gomap/output/treedb_mongo/load.out": "7b850d3721bd9a86b0e95e68984afd767a9bbd957742a3d95bb15f35a058c07e",
+    "/home/mikers/gomap-5335-common-load-matched-attempt-20261030/comparison-B/pair3-gomap/output/treedb_mongo/run_1.out": "afa146cc0ff6dfc9d3855c560949f910075934cc4e124da3f60667a35e3ef26e"
+  },
+  "owned_identities_checked": 221,
+  "remaining_owned": [],
+  "ports_observed_free": [
+    27018,
+    27130
+  ],
+  "scope": "offline receipt/parser collection, not independent product validation; container absence audited separately; A collection may overlap B and cannot claim shared ports free throughout"
+}

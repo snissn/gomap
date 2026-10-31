@@ -191,19 +191,37 @@ measurements, raw data, and evidence archive:
 
 ### YCSB Server Workload
 
-External `go-ycsb`, local loopback TCP, `recordcount=100000`,
-`operationcount=10000`, `threadcount=16`, BSON document format, and zero YCSB
-operation errors. Run rows use the median total-throughput repeat from the
-latest-main June 3 HST / June 4 UTC report.
+The October 30/31 comparison uses the public Mongo BSON API, the same external
+`go-ycsb` client, 100,000 records, 10,000 operations, 16 workers and 95% reads /
+5% updates. Three fresh fixtures per arm have zero operation errors. Run medians
+and the median of paired GoMap/MongoDB ratios are:
 
-| target | profile | load ops/sec | run ops/sec | run avg us | run p99 us |
+| ACK class | MongoDB 8.2.7 ops/s | GoMap Mongo gateway ops/s | Paired ratio |
+| --- | ---: | ---: | ---: |
+| Relaxed: both `w:1`, `j` absent | 42,753.6 | 59,245.2 | 1.372250 (+37.23%) |
+| Durable-B: requests differ | 19,879.2 | 11,766.6 | 0.591905 (−40.81%) |
+
+Durable-B uses MongoDB `w:1,j:true` versus GoMap's ordinary
+`command_wal_durable` ACK with `w:1`, `j` absent, supported by separate scoped
+sync/crash controls. Common load, census and a public journal sentinel are
+outside timing. These short, cache-warmed runs with asymmetric resource caps
+are not a sustained or isolated-COW speedup claim. Exact sources, all rates,
+latencies, failed attempts, lifecycle limitations and raw evidence:
+[October final-source YCSB report](docs/benchmarks/ycsb_mongodb_gomap_final_2026-10-30.md).
+
+Historical June results used different whole versions and fixture/runtime
+conditions. The MongoDB URI requested `w:1` with `j` absent; it is not a
+journal-before-ACK baseline. The three June repeats reused one loaded database.
+Keep those numbers separate from the fresh-fixture comparison above:
+
+| Historical June target | profile | load ops/sec | run ops/sec | run avg us | run p99 us |
 | --- | --- | ---: | ---: | ---: | ---: |
-| MongoDB 8 | baseline | 38,755.4 | 26,494.1 | 595.0 | 1,275.0 |
+| MongoDB 8 | `w:1`, `j` absent | 38,755.4 | 26,494.1 | 595.0 | 1,275.0 |
 | TreeDB nativewire | `command_wal_durable` | 83,217.0 | 135,318.6 | 113.0 | 367.0 |
 | TreeDB Mongo gateway | `command_wal_durable` | 68,218.2 | 80,628.4 | 199.0 | 649.0 |
 
-Full report, commands, host context, run repeats, and artifact paths:
-[June 3 latest-main YCSB report](docs/benchmarks/ycsb_latest_main_2026-06-03.md).
+[June 3 historical YCSB report](docs/benchmarks/ycsb_latest_main_2026-06-03.md)
+retains its original commands, repeats and limitations.
 
 ### Indexed Collection Insert Workload
 

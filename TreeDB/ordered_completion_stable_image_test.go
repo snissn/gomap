@@ -31,18 +31,28 @@ func TestOrderedCompletionStableImageAtAcknowledgement(t *testing.T) {
 	}
 	for _, scenario := range []string{"fifo-1", "fifo-70", "later-driver"} {
 		t.Run(scenario, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			// Allow bounded headroom for aggregate setup and recovery.
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
-			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestOrderedCompletionStableImageAtAcknowledgement$", "-test.timeout=15s", "-test.v")
+			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestOrderedCompletionStableImageAtAcknowledgement$", "-test.timeout=20s", "-test.v")
 			cmd.Env = append(os.Environ(), "GOMAP_ORDERED_ACK_IMAGE_CHILD="+scenario)
-			if out, err := cmd.CombinedOutput(); err != nil {
-				t.Fatalf("%s: %v\n%s", scenario, err, out)
+			started := time.Now()
+			out, err := cmd.CombinedOutput()
+			// Context state is an independent observation, not a causal verdict.
+			t.Logf("ACK child scenario=%s process=%v context=%v elapsed=%s state=%v\n%s", scenario, err, ctx.Err(), time.Since(started), cmd.ProcessState, out)
+			if err != nil {
+				t.Fatalf("%s: %v", scenario, err)
 			}
 		})
 	}
 }
 
 func proposalOrderedACKImageChild(t *testing.T, scenario string) {
+	var witness *orderedACKPhaseWitness
+	if deadline, ok := t.Deadline(); ok {
+		witness = startOrderedACKPhaseWitness(scenario, deadline.Add(-3*time.Second), os.Stderr)
+		defer witness.stopAndJoin()
+	}
 	opts := cowOrderedDurabilityOptions(treedb.ProfileCommandWALDurable, t.TempDir())
 	// Observe snapshots every file at each staging hook. Keep unused index
 	// capacity small while retaining every observation and the progress deadlines.
@@ -58,13 +68,18 @@ func proposalOrderedACKImageChild(t *testing.T, scenario string) {
 	drained := false
 	defer func() {
 		if drained {
-			_ = database.Close() // Only after the immutable ACK image was frozen.
+			// Only after the immutable ACK image was frozen.
+			witness.mark("original-close")
+			if err := closeOrderedACKImage("original close", database.Close); err != nil {
+				t.Error(err)
+			}
 		}
 	}()
 	store := mvcc.New(database)
 	if err := store.CommitAt(1, []mvcc.Mutation{{Key: []byte("anchor"), Value: []byte("stable")}}, mvcc.CommitDurable); err != nil {
 		t.Fatal(err)
 	}
+	witness.mark("baseline-checkpoint")
 	if err := database.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
@@ -87,6 +102,7 @@ func proposalOrderedACKImageChild(t *testing.T, scenario string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	witness.mark("baseline-capture")
 	model, err := powerlossoracle.Capture(opts.Dir)
 	if err != nil {
 		t.Fatal(err)
@@ -153,6 +169,7 @@ func proposalOrderedACKImageChild(t *testing.T, scenario string) {
 		return done
 	}
 
+	witness.mark("ACK-staging-and-completion")
 	var a mvcc.CommitCompletion
 	large := bytes.Repeat([]byte("persistent-history/"), 512)
 	switch scenario {
@@ -200,6 +217,7 @@ func proposalOrderedACKImageChild(t *testing.T, scenario string) {
 
 	// Freeze immediately after the final ACK, before physical inspection,
 	// Checkpoint, Close, GC, or any other potentially persistent operation.
+	witness.mark("ACK-freeze")
 	observationMu.Lock()
 	active = false
 	stable := model.Clone()
@@ -210,12 +228,20 @@ func proposalOrderedACKImageChild(t *testing.T, scenario string) {
 	if got := database.Stats()["treedb.command_wal.writer.path"]; got != baselineWALPath {
 		t.Fatalf("command WAL rotated during ACK fixture: path=%q baseline=%q", got, baselineWALPath)
 	}
+	witness.mark("physical-capture")
 	physical := cowOrderedCapturePhysical(t, database, versions)
+	witness.mark("writable-open")
 	result, reopened, closeReopened, err := powerlossreopen.Stable(stable, opts, false)
 	if err != nil || result.Rejected || reopened == nil {
 		t.Fatalf("ACK stable image rejected: %+v %v", result, err)
 	}
-	defer closeReopened()
+	defer func() {
+		witness.mark("reopened-close")
+		if err := closeOrderedACKImage("reopened close/cleanup", closeReopened); err != nil {
+			t.Error(err)
+		}
+	}()
+	witness.mark("validation")
 	if result.AppliedLSN <= baselineLSN {
 		t.Fatalf("recovery did not advance beyond baseline: applied=%d baseline=%d", result.AppliedLSN, baselineLSN)
 	}

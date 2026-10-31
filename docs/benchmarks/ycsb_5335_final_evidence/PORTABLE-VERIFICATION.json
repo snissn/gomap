@@ -1,0 +1,10 @@
+{
+  "status": "PASS_PORTABLE_ARCHIVE_BYTES_AND_PUBLICATION_CHECK",
+  "archive_sha256": "21081ee3d89a8ef2babb327ca338badbcd6d1e013d214b4f28cc674f6c31d0c3",
+  "members": 9093,
+  "expanded_bytes": 349153146,
+  "actual_attempts": 13,
+  "selected_samples": 12,
+  "credential_pattern_hits": [],
+  "limits": "Selected archive bytes only, no extraction or omitted DB/ELF/typed payload access. Simple publication pattern check is not a general secret certification. Public portable hash audit does not prove omitted payload content or replay correctness by itself."
+}

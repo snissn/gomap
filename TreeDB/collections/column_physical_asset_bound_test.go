@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -88,6 +89,87 @@ func TestColumnPhysicalAssetEncodedUpperBoundSelectedProducer(t *testing.T) {
 			image, parseErr := typedcolumn.ParseColumnPartImage(actual.Bytes)
 			t.Logf("actual image manifest=%d sections=%+v parse=%v", image.ManifestBytes, image.Sections, parseErr)
 			t.Fatalf("selected rows=%d actual=%d bound=%d", count, len(actual.Bytes), bound)
+		}
+		// The graph source census separately sums every section's larger raw
+		// or stored length. Exercise that potential use of the image bound
+		// against the real selected producer, including its metadata sections.
+		// This example alone is not a proof for other producer options/codecs.
+		image, err := typedcolumn.ParseColumnPartImage(actual.Bytes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var sectionBytes int64
+		for _, section := range image.Sections {
+			sectionBytes += int64(max(section.RawBytes, section.Length))
+		}
+		if sectionBytes > bound {
+			t.Fatalf("selected rows=%d raw-or-stored sections=%d bound=%d", count, sectionBytes, bound)
+		}
+	}
+}
+
+// A row-only handoff may combine several members into one physical part. This
+// checks representative granule boundaries for the narrow durable ordinary
+// layout; it is not an admission proof for other options or producer shapes.
+func TestOrdinaryFP32ImageBoundCoalescedSamples(t *testing.T) {
+	clearNativeOrdinaryPendingGraphCodecEnv(t)
+	meta, err := normalizeCollectionMeta(nativeOrdinaryPendingGraphMeta())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := meta.Options.ColumnStore
+	if cfg == nil || cfg.ProfileSupport != ColumnStoreProfileDurableOnly {
+		t.Fatal("ordinary fixture must use the durable-only column profile")
+	}
+	counts := []int{1, 17, typedcolumn.DefaultRowsPerGranule, typedcolumn.DefaultRowsPerGranule + 1}
+	for _, a := range counts {
+		for _, b := range counts {
+			left, err := typedColumnPublicationFP32EncodedBound(*cfg, a)
+			if err != nil {
+				t.Fatal(err)
+			}
+			right, err := typedColumnPublicationFP32EncodedBound(*cfg, b)
+			if err != nil {
+				t.Fatal(err)
+			}
+			joined, err := typedColumnPublicationFP32EncodedBound(*cfg, a+b)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if joined > left+right {
+				t.Fatalf("coalesced rows=%d+%d bound=%d exceeds member sum=%d", a, b, joined, left+right)
+			}
+		}
+	}
+}
+
+func TestOrdinaryFP32ImageBoundProductionSnappy(t *testing.T) {
+	clearNativeOrdinaryPendingGraphCodecEnv(t)
+	meta := nativeOrdinaryPendingGraphMeta()
+	meta.Options.ColumnStore.TypedColumnCompression = ColumnStoreTypedColumnCompressionSnappy
+	meta, err := normalizeCollectionMeta(meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := *meta.Options.ColumnStore
+	if cfg.ProfileSupport != ColumnStoreProfileDurableOnly || cfg.TypedColumnSectionCompression != ColumnStoreTypedColumnCompressionSnappy {
+		t.Fatalf("unexpected production profile: %+v", cfg)
+	}
+	for _, count := range []int{1, typedcolumn.DefaultRowsPerGranule, typedcolumn.DefaultRowsPerGranule + 1} {
+		rows := make([]columnDeclaredRow, count)
+		for i := range rows {
+			rows[i] = columnDeclaredRow{ID: []byte(fmt.Sprintf("id-%d", i)), Values: []columnDeclaredValue{{Type: ColumnStoreValueFloat32Vector, Present: true, Float32Vector: []float32{float32(i), 1}}}}
+		}
+		actual, err := buildTypedColumnPartImageForDeclaredRowsWithResult(cfg, math.MaxUint64, math.MaxUint64, rows)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bound, err := typedColumnPublicationFP32EncodedBound(cfg, count)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if int64(len(actual.Bytes)) > bound {
+			t.Fatalf("rows=%d encoded=%d bound=%d", count, len(actual.Bytes), bound)
 		}
 	}
 }

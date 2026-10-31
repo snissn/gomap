@@ -223,6 +223,11 @@ func TestDurableRootMetadataReuseMultipageManifest4627(t *testing.T) {
 
 func TestDurableRootMetadataReuseProcessCut4627(t *testing.T) {
 	if mode := os.Getenv("TREEDB_METADATA_REUSE_CUT4627"); mode != "" {
+		started := time.Now()
+		reportPhase := func(phase string) {
+			fmt.Fprintf(os.Stderr, "metadata-reuse process-cut mode=%s phase=%s elapsed=%s\n", mode, phase, time.Since(started))
+		}
+		reportPhase("setup-start")
 		database, err := Open(Options{Dir: os.Getenv("TREEDB_METADATA_REUSE_DIR4627"), DisableBackgroundPrune: true})
 		if err != nil {
 			t.Fatal(err)
@@ -236,6 +241,7 @@ func TestDurableRootMetadataReuseProcessCut4627(t *testing.T) {
 		if database.State().CommitSeq != 66 {
 			t.Fatalf("fixture commit=%d", database.State().CommitSeq)
 		}
+		reportPhase("setup-complete-commit66")
 		before := database.idx.Load().pager.PageCount()
 		low := false
 		restore := durabilitycut.Install(func(event durabilitycut.Event) error {
@@ -245,6 +251,7 @@ func TestDurableRootMetadataReuseProcessCut4627(t *testing.T) {
 					return fmt.Errorf("seal did not reuse low page: offset=%d before=%d", event.Offset, before)
 				}
 				if mode == "before-seal" {
+					reportPhase("cut-before-seal")
 					os.Exit(73)
 				}
 			}
@@ -257,19 +264,25 @@ func TestDurableRootMetadataReuseProcessCut4627(t *testing.T) {
 		if mode != "after-ack" || !low {
 			t.Fatal("cut not reached")
 		}
+		reportPhase("cut-after-ack")
 		os.Exit(73) // Deliberately no Close after acknowledged publication.
 	}
 	for _, mode := range []string{"before-seal", "after-ack"} {
 		t.Run(mode, func(t *testing.T) {
 			dir := t.TempDir()
-			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			// Allow bounded headroom for the observed aggregate setup work.
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestDurableRootMetadataReuseProcessCut4627$")
 			cmd.Env = append(os.Environ(), "TREEDB_METADATA_REUSE_CUT4627="+mode, "TREEDB_METADATA_REUSE_DIR4627="+dir)
+			started := time.Now()
+			var cancellation metadataReuseCutCancellation4627
+			cmd.Cancel = cancellation.observe(cmd.Cancel, func() time.Duration { return time.Since(started) })
 			output, err := cmd.CombinedOutput()
 			if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 73 {
-				t.Fatalf("child did not hit cut: %v\n%s", err, output)
+				t.Fatal(formatMetadataReuseCutFailure4627(err, ctx.Err(), time.Since(started), fmt.Sprint(cmd.ProcessState), cancellation.snapshot(), output))
 			}
+			t.Logf("child reached cut: elapsed=%s state=%s cancellation={%s}\n%s", time.Since(started), cmd.ProcessState, cancellation.snapshot(), output)
 			reopened, err := Open(Options{Dir: dir, DisableBackgroundPrune: true})
 			if err != nil {
 				t.Fatal(err)

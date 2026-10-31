@@ -1,0 +1,1620 @@
+{
+  "all_attempts": [
+    {
+      "arm": "mongodb",
+      "cell_path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair1-mongodb",
+      "class_name": "relaxed",
+      "name": "relaxed-pair1-mongodb",
+      "packet_root": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030",
+      "pair": 1,
+      "receipts": {
+        "COMPLETE.json": {
+          "bytes": 166131,
+          "path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair1-mongodb/COMPLETE.json",
+          "sha256": "671bcdc170c250efb55e13d19815655215dd6229baa504bccc4b78d7c8eff90c"
+        },
+        "FINAL.json": {
+          "bytes": 101049,
+          "path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair1-mongodb/FINAL.json",
+          "sha256": "cab3f0dd026414fecb0d272bac2ed416e44802997d14233d64d17cb888754f25"
+        },
+        "STARTED.json": {
+          "bytes": 341,
+          "path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair1-mongodb/STARTED.json",
+          "sha256": "d12bb23ef1cf1a7876f78068cb9f884bda5d2c4ba528b4b4317d7b38d6512db1"
+        },
+        "launcher/terminal.json": {
+          "bytes": 101049,
+          "path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair1-mongodb/launcher/terminal.json",
+          "sha256": "cab3f0dd026414fecb0d272bac2ed416e44802997d14233d64d17cb888754f25"
+        }
+      },
+      "role": "adopted_prior",
+      "status": "COMPLETION_RECEIPT_PRESENT",
+      "supervisor": {
+        "custody_uncertain": false,
+        "direct_child_reaped": true,
+        "errors": [],
+        "main": {
+          "cpu_seconds": 46.946963,
+          "exit": 0,
+          "status": 0,
+          "token": {
+            "pid": 1560947,
+            "start_ticks": 498345426
+          }
+        },
+        "ok": true,
+        "reason": "complete",
+        "survivors": []
+      }
+    },
+    {
+      "arm": "gomap",
+      "cell_path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair1-gomap",
+      "class_name": "relaxed",
+      "name": "relaxed-pair1-gomap",
+      "packet_root": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030",
+      "pair": 1,
+      "receipts": {
+        "COMPLETE.json": {
+          "bytes": 168684,
+          "path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair1-gomap/COMPLETE.json",
+          "sha256": "d6b787354ad33ce4fb4dc0dc549cef3e011ff6f44fc3a1705306462ae30f49ee"
+        },
+        "FINAL.json": {
+          "bytes": 100298,
+          "path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair1-gomap/FINAL.json",
+          "sha256": "90c2cb8848f9443cbe60699526a7299b7611dd17d94c4e5e7acd94dadcbd8875"
+        },
+        "STARTED.json": {
+          "bytes": 341,
+          "path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair1-gomap/STARTED.json",
+          "sha256": "3ad0838e6ac43863551106670f8d482fa86ab762898a9a21549fdb967a4a9f54"
+        },
+        "launcher/terminal.json": {
+          "bytes": 100298,
+          "path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair1-gomap/launcher/terminal.json",
+          "sha256": "90c2cb8848f9443cbe60699526a7299b7611dd17d94c4e5e7acd94dadcbd8875"
+        }
+      },
+      "role": "adopted_prior",
+      "status": "COMPLETION_RECEIPT_PRESENT",
+      "supervisor": {
+        "custody_uncertain": false,
+        "direct_child_reaped": true,
+        "errors": [],
+        "main": {
+          "cpu_seconds": 101.630122,
+          "exit": 0,
+          "status": 0,
+          "token": {
+            "pid": 1564844,
+            "start_ticks": 498352005
+          }
+        },
+        "ok": true,
+        "reason": "complete",
+        "survivors": []
+      }
+    },
+    {
+      "arm": "gomap",
+      "cell_path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair2-gomap",
+      "class_name": "relaxed",
+      "name": "relaxed-pair2-gomap",
+      "packet_root": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030",
+      "pair": 2,
+      "receipts": {
+        "STARTED.json": {
+          "bytes": 341,
+          "path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair2-gomap/STARTED.json",
+          "sha256": "e16afa7cdfe7517c997508b542f36c326aa9a8cd771b0a8ccf9a7deb7f8d18f4"
+        },
+        "launcher/terminal.json": {
+          "bytes": 94793,
+          "path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair2-gomap/launcher/terminal.json",
+          "sha256": "112ce6836197391a31ec93a74ee72197de8edf717b47f05e2cf8017e8126495d"
+        }
+      },
+      "role": "rejected_prior_not_sample",
+      "status": "STARTED_INCOMPLETE",
+      "supervisor": {
+        "custody_uncertain": false,
+        "direct_child_reaped": true,
+        "errors": [],
+        "main": {
+          "cpu_seconds": 100.856528,
+          "exit": 0,
+          "status": 0,
+          "token": {
+            "pid": 1567286,
+            "start_ticks": 498361624
+          }
+        },
+        "ok": false,
+        "reason": "unexpected_descendants_after_main",
+        "survivors": []
+      }
+    },
+    {
+      "arm": "gomap",
+      "cell_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair2-gomap",
+      "class_name": "relaxed",
+      "name": "relaxed-pair2-gomap",
+      "packet_root": "/home/mikers/gomap-5335-final-observer-continuation-20261031",
+      "pair": 2,
+      "receipts": {
+        "COMPLETE.json": {
+          "bytes": 163424,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair2-gomap/COMPLETE.json",
+          "sha256": "6a47d6be0efdaa4291178ce75912d3a9b8716b0a09ec26dc9184878e001389b2"
+        },
+        "FINAL.json": {
+          "bytes": 95449,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair2-gomap/FINAL.json",
+          "sha256": "1ec36ab1e354cadd3c6fb0b0620a1fb36bd18de4738333e5c7c5e0e21d064e1c"
+        },
+        "STARTED.json": {
+          "bytes": 341,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair2-gomap/STARTED.json",
+          "sha256": "1fd52c4198b3a786c86cf0b101e26fc1941be9a98a27ff60f9d64b9f1961a103"
+        },
+        "launcher/terminal.json": {
+          "bytes": 95449,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair2-gomap/launcher/terminal.json",
+          "sha256": "1ec36ab1e354cadd3c6fb0b0620a1fb36bd18de4738333e5c7c5e0e21d064e1c"
+        }
+      },
+      "role": "current",
+      "status": "COMPLETION_RECEIPT_PRESENT",
+      "supervisor": {
+        "custody_uncertain": false,
+        "direct_child_reaped": true,
+        "errors": [],
+        "main": {
+          "cpu_seconds": 101.23583400000001,
+          "exit": 0,
+          "status": 0,
+          "token": {
+            "pid": 1581812,
+            "start_ticks": 498426976
+          }
+        },
+        "ok": true,
+        "reason": "complete",
+        "survivors": []
+      }
+    },
+    {
+      "arm": "mongodb",
+      "cell_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair2-mongodb",
+      "class_name": "relaxed",
+      "name": "relaxed-pair2-mongodb",
+      "packet_root": "/home/mikers/gomap-5335-final-observer-continuation-20261031",
+      "pair": 2,
+      "receipts": {
+        "COMPLETE.json": {
+          "bytes": 166118,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair2-mongodb/COMPLETE.json",
+          "sha256": "9ffc4d2392cb4e4a517092dd0317d66df91e48c55e83e7efba977540a71abca9"
+        },
+        "FINAL.json": {
+          "bytes": 103997,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair2-mongodb/FINAL.json",
+          "sha256": "f58a86c2591ca831ed2093ee75bdf09f5d35630b7b3d0fcbc4c36fd75eba2d91"
+        },
+        "STARTED.json": {
+          "bytes": 340,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair2-mongodb/STARTED.json",
+          "sha256": "b0f24b32d7975b1275263a9042bf7040ef389bda48bfc36bb711f8e8e65b780c"
+        },
+        "launcher/terminal.json": {
+          "bytes": 103997,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair2-mongodb/launcher/terminal.json",
+          "sha256": "f58a86c2591ca831ed2093ee75bdf09f5d35630b7b3d0fcbc4c36fd75eba2d91"
+        }
+      },
+      "role": "current",
+      "status": "COMPLETION_RECEIPT_PRESENT",
+      "supervisor": {
+        "custody_uncertain": false,
+        "direct_child_reaped": true,
+        "errors": [],
+        "main": {
+          "cpu_seconds": 46.614915,
+          "exit": 0,
+          "status": 0,
+          "token": {
+            "pid": 1584038,
+            "start_ticks": 498437120
+          }
+        },
+        "ok": true,
+        "reason": "complete",
+        "survivors": []
+      }
+    },
+    {
+      "arm": "mongodb",
+      "cell_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair3-mongodb",
+      "class_name": "relaxed",
+      "name": "relaxed-pair3-mongodb",
+      "packet_root": "/home/mikers/gomap-5335-final-observer-continuation-20261031",
+      "pair": 3,
+      "receipts": {
+        "COMPLETE.json": {
+          "bytes": 166114,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair3-mongodb/COMPLETE.json",
+          "sha256": "05d75e2dea0dbc92a4ef3fd4eb8ba300472ecd48ca55cbd68303fc073d3cecfb"
+        },
+        "FINAL.json": {
+          "bytes": 99093,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair3-mongodb/FINAL.json",
+          "sha256": "7b14d01d309ef6ad5569d3a1d7a261ff002f410119ca94d55111aa2d28a16112"
+        },
+        "STARTED.json": {
+          "bytes": 341,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair3-mongodb/STARTED.json",
+          "sha256": "30e837d31de2ff6ca7d50159f15f72d7d8088ab66abf5576e3dab74bdecc24bf"
+        },
+        "launcher/terminal.json": {
+          "bytes": 99093,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair3-mongodb/launcher/terminal.json",
+          "sha256": "7b14d01d309ef6ad5569d3a1d7a261ff002f410119ca94d55111aa2d28a16112"
+        }
+      },
+      "role": "current",
+      "status": "COMPLETION_RECEIPT_PRESENT",
+      "supervisor": {
+        "custody_uncertain": false,
+        "direct_child_reaped": true,
+        "errors": [],
+        "main": {
+          "cpu_seconds": 47.017335,
+          "exit": 0,
+          "status": 0,
+          "token": {
+            "pid": 1587908,
+            "start_ticks": 498441814
+          }
+        },
+        "ok": true,
+        "reason": "complete",
+        "survivors": []
+      }
+    },
+    {
+      "arm": "gomap",
+      "cell_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair3-gomap",
+      "class_name": "relaxed",
+      "name": "relaxed-pair3-gomap",
+      "packet_root": "/home/mikers/gomap-5335-final-observer-continuation-20261031",
+      "pair": 3,
+      "receipts": {
+        "COMPLETE.json": {
+          "bytes": 163430,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair3-gomap/COMPLETE.json",
+          "sha256": "728751ec89c474812d56b4f74958da59df0665e8463f903936b591f78e6da65f"
+        },
+        "FINAL.json": {
+          "bytes": 95888,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair3-gomap/FINAL.json",
+          "sha256": "119cde0ae219eda08d2263cd31ee305234ef7a4bb3b9d33917f803fc42005a12"
+        },
+        "STARTED.json": {
+          "bytes": 340,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair3-gomap/STARTED.json",
+          "sha256": "434a7d89f932804c04c11bee40cd85fc245736be685eaba44ff1702198d4ad82"
+        },
+        "launcher/terminal.json": {
+          "bytes": 95888,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair3-gomap/launcher/terminal.json",
+          "sha256": "119cde0ae219eda08d2263cd31ee305234ef7a4bb3b9d33917f803fc42005a12"
+        }
+      },
+      "role": "current",
+      "status": "COMPLETION_RECEIPT_PRESENT",
+      "supervisor": {
+        "custody_uncertain": false,
+        "direct_child_reaped": true,
+        "errors": [],
+        "main": {
+          "cpu_seconds": 101.051259,
+          "exit": 0,
+          "status": 0,
+          "token": {
+            "pid": 1591817,
+            "start_ticks": 498446503
+          }
+        },
+        "ok": true,
+        "reason": "complete",
+        "survivors": []
+      }
+    },
+    {
+      "arm": "mongodb",
+      "cell_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair1-mongodb",
+      "class_name": "durable-B",
+      "name": "durable-B-pair1-mongodb",
+      "packet_root": "/home/mikers/gomap-5335-final-observer-continuation-20261031",
+      "pair": 1,
+      "receipts": {
+        "COMPLETE.json": {
+          "bytes": 172711,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair1-mongodb/COMPLETE.json",
+          "sha256": "f96de2a8c2efc52fb8f8089074ec35d4e179ab56f6dd6828f8e3232a3708bc0d"
+        },
+        "FINAL.json": {
+          "bytes": 104161,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair1-mongodb/FINAL.json",
+          "sha256": "b47f49d892d5e3ba5bfd129be6617685b13f82fa263a469d7977a4ae67836bda"
+        },
+        "STARTED.json": {
+          "bytes": 341,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair1-mongodb/STARTED.json",
+          "sha256": "a9a1f3372191a8a8027edd5b883166787ba3580704175203fa37ed7fcf0d80f9"
+        },
+        "launcher/terminal.json": {
+          "bytes": 104161,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair1-mongodb/launcher/terminal.json",
+          "sha256": "b47f49d892d5e3ba5bfd129be6617685b13f82fa263a469d7977a4ae67836bda"
+        }
+      },
+      "role": "current",
+      "status": "COMPLETION_RECEIPT_PRESENT",
+      "supervisor": {
+        "custody_uncertain": false,
+        "direct_child_reaped": true,
+        "errors": [],
+        "main": {
+          "cpu_seconds": 47.325278,
+          "exit": 0,
+          "status": 0,
+          "token": {
+            "pid": 1593722,
+            "start_ticks": 498455086
+          }
+        },
+        "ok": true,
+        "reason": "complete",
+        "survivors": []
+      }
+    },
+    {
+      "arm": "gomap",
+      "cell_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair1-gomap",
+      "class_name": "durable-B",
+      "name": "durable-B-pair1-gomap",
+      "packet_root": "/home/mikers/gomap-5335-final-observer-continuation-20261031",
+      "pair": 1,
+      "receipts": {
+        "COMPLETE.json": {
+          "bytes": 1018414,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair1-gomap/COMPLETE.json",
+          "sha256": "82542bdc8053c951934c6dd16a413d7ba65db6ee9e9be8d11eb59a2e7a43dd02"
+        },
+        "FINAL.json": {
+          "bytes": 104773,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair1-gomap/FINAL.json",
+          "sha256": "b11702ff541faa15aab10255e904c3274fb5f4e7b5980b174f2eb91aefe7ae81"
+        },
+        "STARTED.json": {
+          "bytes": 341,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair1-gomap/STARTED.json",
+          "sha256": "adba9156b1de90305dc6683bae0244947ea0f6a36e2bf63d583a321eb996bb2d"
+        },
+        "launcher/terminal.json": {
+          "bytes": 104773,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair1-gomap/launcher/terminal.json",
+          "sha256": "b11702ff541faa15aab10255e904c3274fb5f4e7b5980b174f2eb91aefe7ae81"
+        }
+      },
+      "role": "current",
+      "status": "COMPLETION_RECEIPT_PRESENT",
+      "supervisor": {
+        "custody_uncertain": false,
+        "direct_child_reaped": true,
+        "errors": [],
+        "main": {
+          "cpu_seconds": 105.047585,
+          "exit": 0,
+          "status": 0,
+          "token": {
+            "pid": 1597511,
+            "start_ticks": 498459806
+          }
+        },
+        "ok": true,
+        "reason": "complete",
+        "survivors": []
+      }
+    },
+    {
+      "arm": "gomap",
+      "cell_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair2-gomap",
+      "class_name": "durable-B",
+      "name": "durable-B-pair2-gomap",
+      "packet_root": "/home/mikers/gomap-5335-final-observer-continuation-20261031",
+      "pair": 2,
+      "receipts": {
+        "COMPLETE.json": {
+          "bytes": 1018428,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair2-gomap/COMPLETE.json",
+          "sha256": "99a3d218069539ae84b5447f7fe8bf1b75991f47b023b23e5771fd2a87a04b90"
+        },
+        "FINAL.json": {
+          "bytes": 102899,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair2-gomap/FINAL.json",
+          "sha256": "a83fdfd7b4527f97ed804f592faed6331b0ab327a8550cae187b3131f6d05aed"
+        },
+        "STARTED.json": {
+          "bytes": 340,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair2-gomap/STARTED.json",
+          "sha256": "795c48e3c2abdced52598082693c3ce0e898d57fca50da25f1ca67d939e665e7"
+        },
+        "launcher/terminal.json": {
+          "bytes": 102899,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair2-gomap/launcher/terminal.json",
+          "sha256": "a83fdfd7b4527f97ed804f592faed6331b0ab327a8550cae187b3131f6d05aed"
+        }
+      },
+      "role": "current",
+      "status": "COMPLETION_RECEIPT_PRESENT",
+      "supervisor": {
+        "custody_uncertain": false,
+        "direct_child_reaped": true,
+        "errors": [],
+        "main": {
+          "cpu_seconds": 104.29402,
+          "exit": 0,
+          "status": 0,
+          "token": {
+            "pid": 1600573,
+            "start_ticks": 498472625
+          }
+        },
+        "ok": true,
+        "reason": "complete",
+        "survivors": []
+      }
+    },
+    {
+      "arm": "mongodb",
+      "cell_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair2-mongodb",
+      "class_name": "durable-B",
+      "name": "durable-B-pair2-mongodb",
+      "packet_root": "/home/mikers/gomap-5335-final-observer-continuation-20261031",
+      "pair": 2,
+      "receipts": {
+        "COMPLETE.json": {
+          "bytes": 172707,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair2-mongodb/COMPLETE.json",
+          "sha256": "385fb756a298b54d99e4e0a0a7c8027a69a58a576d82cf4f4355fa95041364ce"
+        },
+        "FINAL.json": {
+          "bytes": 103308,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair2-mongodb/FINAL.json",
+          "sha256": "7f121513f2da12ac5d33d1d607cff76ff5c76dcc8c7f3b7cf09836d976eed00b"
+        },
+        "STARTED.json": {
+          "bytes": 341,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair2-mongodb/STARTED.json",
+          "sha256": "62541d910a2c5cc4cd534ee49e73a83fa906b98c6199d5c1b46d0cc304daa531"
+        },
+        "launcher/terminal.json": {
+          "bytes": 103308,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair2-mongodb/launcher/terminal.json",
+          "sha256": "7f121513f2da12ac5d33d1d607cff76ff5c76dcc8c7f3b7cf09836d976eed00b"
+        }
+      },
+      "role": "current",
+      "status": "COMPLETION_RECEIPT_PRESENT",
+      "supervisor": {
+        "custody_uncertain": false,
+        "direct_child_reaped": true,
+        "errors": [],
+        "main": {
+          "cpu_seconds": 47.514463,
+          "exit": 0,
+          "status": 0,
+          "token": {
+            "pid": 1603419,
+            "start_ticks": 498485350
+          }
+        },
+        "ok": true,
+        "reason": "complete",
+        "survivors": []
+      }
+    },
+    {
+      "arm": "mongodb",
+      "cell_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair3-mongodb",
+      "class_name": "durable-B",
+      "name": "durable-B-pair3-mongodb",
+      "packet_root": "/home/mikers/gomap-5335-final-observer-continuation-20261031",
+      "pair": 3,
+      "receipts": {
+        "COMPLETE.json": {
+          "bytes": 172711,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair3-mongodb/COMPLETE.json",
+          "sha256": "68a7a3d20ba6e16c1d6f38f6573b4c210a42162a0e911266f5a71f5cead0f9ba"
+        },
+        "FINAL.json": {
+          "bytes": 101245,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair3-mongodb/FINAL.json",
+          "sha256": "8a0ee4aafa0edd9b1ab8269feca111b40bc992f4468b84f7bcf92e893548bb88"
+        },
+        "STARTED.json": {
+          "bytes": 340,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair3-mongodb/STARTED.json",
+          "sha256": "1e44dd113ce0c1331570ada574230aad5d627828342a0eaa79d9708850a327d4"
+        },
+        "launcher/terminal.json": {
+          "bytes": 101245,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair3-mongodb/launcher/terminal.json",
+          "sha256": "8a0ee4aafa0edd9b1ab8269feca111b40bc992f4468b84f7bcf92e893548bb88"
+        }
+      },
+      "role": "current",
+      "status": "COMPLETION_RECEIPT_PRESENT",
+      "supervisor": {
+        "custody_uncertain": false,
+        "direct_child_reaped": true,
+        "errors": [],
+        "main": {
+          "cpu_seconds": 47.158819,
+          "exit": 0,
+          "status": 0,
+          "token": {
+            "pid": 1607176,
+            "start_ticks": 498490178
+          }
+        },
+        "ok": true,
+        "reason": "complete",
+        "survivors": []
+      }
+    },
+    {
+      "arm": "gomap",
+      "cell_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair3-gomap",
+      "class_name": "durable-B",
+      "name": "durable-B-pair3-gomap",
+      "packet_root": "/home/mikers/gomap-5335-final-observer-continuation-20261031",
+      "pair": 3,
+      "receipts": {
+        "COMPLETE.json": {
+          "bytes": 1007948,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair3-gomap/COMPLETE.json",
+          "sha256": "37ef93df4b56af2049f4f1b67bca1ca3e6c85a089ceb1a7c025ad46ed601f240"
+        },
+        "FINAL.json": {
+          "bytes": 104837,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair3-gomap/FINAL.json",
+          "sha256": "54ca5aa5b4346635ef2c74b9e679711b44d5d5ddef09f1f866e680c116421d9b"
+        },
+        "STARTED.json": {
+          "bytes": 341,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair3-gomap/STARTED.json",
+          "sha256": "bc7dfff782eaeb2faaa9b13494aff6a595d00539279afd3d16b0bea61a61c9fc"
+        },
+        "launcher/terminal.json": {
+          "bytes": 104837,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair3-gomap/launcher/terminal.json",
+          "sha256": "54ca5aa5b4346635ef2c74b9e679711b44d5d5ddef09f1f866e680c116421d9b"
+        }
+      },
+      "role": "current",
+      "status": "COMPLETION_RECEIPT_PRESENT",
+      "supervisor": {
+        "custody_uncertain": false,
+        "direct_child_reaped": true,
+        "errors": [],
+        "main": {
+          "cpu_seconds": 104.93349500000001,
+          "exit": 0,
+          "status": 0,
+          "token": {
+            "pid": 1611027,
+            "start_ticks": 498494910
+          }
+        },
+        "ok": true,
+        "reason": "complete",
+        "survivors": []
+      }
+    }
+  ],
+  "attempts": [
+    {
+      "arm": "mongodb",
+      "cell_path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair1-mongodb",
+      "class_name": "relaxed",
+      "name": "relaxed-pair1-mongodb",
+      "packet_root": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030",
+      "pair": 1,
+      "receipts": {
+        "COMPLETE.json": {
+          "bytes": 166131,
+          "path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair1-mongodb/COMPLETE.json",
+          "sha256": "671bcdc170c250efb55e13d19815655215dd6229baa504bccc4b78d7c8eff90c"
+        },
+        "FINAL.json": {
+          "bytes": 101049,
+          "path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair1-mongodb/FINAL.json",
+          "sha256": "cab3f0dd026414fecb0d272bac2ed416e44802997d14233d64d17cb888754f25"
+        },
+        "STARTED.json": {
+          "bytes": 341,
+          "path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair1-mongodb/STARTED.json",
+          "sha256": "d12bb23ef1cf1a7876f78068cb9f884bda5d2c4ba528b4b4317d7b38d6512db1"
+        },
+        "launcher/terminal.json": {
+          "bytes": 101049,
+          "path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair1-mongodb/launcher/terminal.json",
+          "sha256": "cab3f0dd026414fecb0d272bac2ed416e44802997d14233d64d17cb888754f25"
+        }
+      },
+      "role": "adopted_prior",
+      "status": "COMPLETION_RECEIPT_PRESENT",
+      "supervisor": {
+        "custody_uncertain": false,
+        "direct_child_reaped": true,
+        "errors": [],
+        "main": {
+          "cpu_seconds": 46.946963,
+          "exit": 0,
+          "status": 0,
+          "token": {
+            "pid": 1560947,
+            "start_ticks": 498345426
+          }
+        },
+        "ok": true,
+        "reason": "complete",
+        "survivors": []
+      }
+    },
+    {
+      "arm": "gomap",
+      "cell_path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair1-gomap",
+      "class_name": "relaxed",
+      "name": "relaxed-pair1-gomap",
+      "packet_root": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030",
+      "pair": 1,
+      "receipts": {
+        "COMPLETE.json": {
+          "bytes": 168684,
+          "path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair1-gomap/COMPLETE.json",
+          "sha256": "d6b787354ad33ce4fb4dc0dc549cef3e011ff6f44fc3a1705306462ae30f49ee"
+        },
+        "FINAL.json": {
+          "bytes": 100298,
+          "path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair1-gomap/FINAL.json",
+          "sha256": "90c2cb8848f9443cbe60699526a7299b7611dd17d94c4e5e7acd94dadcbd8875"
+        },
+        "STARTED.json": {
+          "bytes": 341,
+          "path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair1-gomap/STARTED.json",
+          "sha256": "3ad0838e6ac43863551106670f8d482fa86ab762898a9a21549fdb967a4a9f54"
+        },
+        "launcher/terminal.json": {
+          "bytes": 100298,
+          "path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair1-gomap/launcher/terminal.json",
+          "sha256": "90c2cb8848f9443cbe60699526a7299b7611dd17d94c4e5e7acd94dadcbd8875"
+        }
+      },
+      "role": "adopted_prior",
+      "status": "COMPLETION_RECEIPT_PRESENT",
+      "supervisor": {
+        "custody_uncertain": false,
+        "direct_child_reaped": true,
+        "errors": [],
+        "main": {
+          "cpu_seconds": 101.630122,
+          "exit": 0,
+          "status": 0,
+          "token": {
+            "pid": 1564844,
+            "start_ticks": 498352005
+          }
+        },
+        "ok": true,
+        "reason": "complete",
+        "survivors": []
+      }
+    },
+    {
+      "arm": "gomap",
+      "cell_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair2-gomap",
+      "class_name": "relaxed",
+      "name": "relaxed-pair2-gomap",
+      "packet_root": "/home/mikers/gomap-5335-final-observer-continuation-20261031",
+      "pair": 2,
+      "receipts": {
+        "COMPLETE.json": {
+          "bytes": 163424,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair2-gomap/COMPLETE.json",
+          "sha256": "6a47d6be0efdaa4291178ce75912d3a9b8716b0a09ec26dc9184878e001389b2"
+        },
+        "FINAL.json": {
+          "bytes": 95449,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair2-gomap/FINAL.json",
+          "sha256": "1ec36ab1e354cadd3c6fb0b0620a1fb36bd18de4738333e5c7c5e0e21d064e1c"
+        },
+        "STARTED.json": {
+          "bytes": 341,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair2-gomap/STARTED.json",
+          "sha256": "1fd52c4198b3a786c86cf0b101e26fc1941be9a98a27ff60f9d64b9f1961a103"
+        },
+        "launcher/terminal.json": {
+          "bytes": 95449,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair2-gomap/launcher/terminal.json",
+          "sha256": "1ec36ab1e354cadd3c6fb0b0620a1fb36bd18de4738333e5c7c5e0e21d064e1c"
+        }
+      },
+      "role": "current",
+      "status": "COMPLETION_RECEIPT_PRESENT",
+      "supervisor": {
+        "custody_uncertain": false,
+        "direct_child_reaped": true,
+        "errors": [],
+        "main": {
+          "cpu_seconds": 101.23583400000001,
+          "exit": 0,
+          "status": 0,
+          "token": {
+            "pid": 1581812,
+            "start_ticks": 498426976
+          }
+        },
+        "ok": true,
+        "reason": "complete",
+        "survivors": []
+      }
+    },
+    {
+      "arm": "mongodb",
+      "cell_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair2-mongodb",
+      "class_name": "relaxed",
+      "name": "relaxed-pair2-mongodb",
+      "packet_root": "/home/mikers/gomap-5335-final-observer-continuation-20261031",
+      "pair": 2,
+      "receipts": {
+        "COMPLETE.json": {
+          "bytes": 166118,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair2-mongodb/COMPLETE.json",
+          "sha256": "9ffc4d2392cb4e4a517092dd0317d66df91e48c55e83e7efba977540a71abca9"
+        },
+        "FINAL.json": {
+          "bytes": 103997,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair2-mongodb/FINAL.json",
+          "sha256": "f58a86c2591ca831ed2093ee75bdf09f5d35630b7b3d0fcbc4c36fd75eba2d91"
+        },
+        "STARTED.json": {
+          "bytes": 340,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair2-mongodb/STARTED.json",
+          "sha256": "b0f24b32d7975b1275263a9042bf7040ef389bda48bfc36bb711f8e8e65b780c"
+        },
+        "launcher/terminal.json": {
+          "bytes": 103997,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair2-mongodb/launcher/terminal.json",
+          "sha256": "f58a86c2591ca831ed2093ee75bdf09f5d35630b7b3d0fcbc4c36fd75eba2d91"
+        }
+      },
+      "role": "current",
+      "status": "COMPLETION_RECEIPT_PRESENT",
+      "supervisor": {
+        "custody_uncertain": false,
+        "direct_child_reaped": true,
+        "errors": [],
+        "main": {
+          "cpu_seconds": 46.614915,
+          "exit": 0,
+          "status": 0,
+          "token": {
+            "pid": 1584038,
+            "start_ticks": 498437120
+          }
+        },
+        "ok": true,
+        "reason": "complete",
+        "survivors": []
+      }
+    },
+    {
+      "arm": "mongodb",
+      "cell_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair3-mongodb",
+      "class_name": "relaxed",
+      "name": "relaxed-pair3-mongodb",
+      "packet_root": "/home/mikers/gomap-5335-final-observer-continuation-20261031",
+      "pair": 3,
+      "receipts": {
+        "COMPLETE.json": {
+          "bytes": 166114,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair3-mongodb/COMPLETE.json",
+          "sha256": "05d75e2dea0dbc92a4ef3fd4eb8ba300472ecd48ca55cbd68303fc073d3cecfb"
+        },
+        "FINAL.json": {
+          "bytes": 99093,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair3-mongodb/FINAL.json",
+          "sha256": "7b14d01d309ef6ad5569d3a1d7a261ff002f410119ca94d55111aa2d28a16112"
+        },
+        "STARTED.json": {
+          "bytes": 341,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair3-mongodb/STARTED.json",
+          "sha256": "30e837d31de2ff6ca7d50159f15f72d7d8088ab66abf5576e3dab74bdecc24bf"
+        },
+        "launcher/terminal.json": {
+          "bytes": 99093,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair3-mongodb/launcher/terminal.json",
+          "sha256": "7b14d01d309ef6ad5569d3a1d7a261ff002f410119ca94d55111aa2d28a16112"
+        }
+      },
+      "role": "current",
+      "status": "COMPLETION_RECEIPT_PRESENT",
+      "supervisor": {
+        "custody_uncertain": false,
+        "direct_child_reaped": true,
+        "errors": [],
+        "main": {
+          "cpu_seconds": 47.017335,
+          "exit": 0,
+          "status": 0,
+          "token": {
+            "pid": 1587908,
+            "start_ticks": 498441814
+          }
+        },
+        "ok": true,
+        "reason": "complete",
+        "survivors": []
+      }
+    },
+    {
+      "arm": "gomap",
+      "cell_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair3-gomap",
+      "class_name": "relaxed",
+      "name": "relaxed-pair3-gomap",
+      "packet_root": "/home/mikers/gomap-5335-final-observer-continuation-20261031",
+      "pair": 3,
+      "receipts": {
+        "COMPLETE.json": {
+          "bytes": 163430,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair3-gomap/COMPLETE.json",
+          "sha256": "728751ec89c474812d56b4f74958da59df0665e8463f903936b591f78e6da65f"
+        },
+        "FINAL.json": {
+          "bytes": 95888,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair3-gomap/FINAL.json",
+          "sha256": "119cde0ae219eda08d2263cd31ee305234ef7a4bb3b9d33917f803fc42005a12"
+        },
+        "STARTED.json": {
+          "bytes": 340,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair3-gomap/STARTED.json",
+          "sha256": "434a7d89f932804c04c11bee40cd85fc245736be685eaba44ff1702198d4ad82"
+        },
+        "launcher/terminal.json": {
+          "bytes": 95888,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair3-gomap/launcher/terminal.json",
+          "sha256": "119cde0ae219eda08d2263cd31ee305234ef7a4bb3b9d33917f803fc42005a12"
+        }
+      },
+      "role": "current",
+      "status": "COMPLETION_RECEIPT_PRESENT",
+      "supervisor": {
+        "custody_uncertain": false,
+        "direct_child_reaped": true,
+        "errors": [],
+        "main": {
+          "cpu_seconds": 101.051259,
+          "exit": 0,
+          "status": 0,
+          "token": {
+            "pid": 1591817,
+            "start_ticks": 498446503
+          }
+        },
+        "ok": true,
+        "reason": "complete",
+        "survivors": []
+      }
+    },
+    {
+      "arm": "mongodb",
+      "cell_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair1-mongodb",
+      "class_name": "durable-B",
+      "name": "durable-B-pair1-mongodb",
+      "packet_root": "/home/mikers/gomap-5335-final-observer-continuation-20261031",
+      "pair": 1,
+      "receipts": {
+        "COMPLETE.json": {
+          "bytes": 172711,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair1-mongodb/COMPLETE.json",
+          "sha256": "f96de2a8c2efc52fb8f8089074ec35d4e179ab56f6dd6828f8e3232a3708bc0d"
+        },
+        "FINAL.json": {
+          "bytes": 104161,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair1-mongodb/FINAL.json",
+          "sha256": "b47f49d892d5e3ba5bfd129be6617685b13f82fa263a469d7977a4ae67836bda"
+        },
+        "STARTED.json": {
+          "bytes": 341,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair1-mongodb/STARTED.json",
+          "sha256": "a9a1f3372191a8a8027edd5b883166787ba3580704175203fa37ed7fcf0d80f9"
+        },
+        "launcher/terminal.json": {
+          "bytes": 104161,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair1-mongodb/launcher/terminal.json",
+          "sha256": "b47f49d892d5e3ba5bfd129be6617685b13f82fa263a469d7977a4ae67836bda"
+        }
+      },
+      "role": "current",
+      "status": "COMPLETION_RECEIPT_PRESENT",
+      "supervisor": {
+        "custody_uncertain": false,
+        "direct_child_reaped": true,
+        "errors": [],
+        "main": {
+          "cpu_seconds": 47.325278,
+          "exit": 0,
+          "status": 0,
+          "token": {
+            "pid": 1593722,
+            "start_ticks": 498455086
+          }
+        },
+        "ok": true,
+        "reason": "complete",
+        "survivors": []
+      }
+    },
+    {
+      "arm": "gomap",
+      "cell_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair1-gomap",
+      "class_name": "durable-B",
+      "name": "durable-B-pair1-gomap",
+      "packet_root": "/home/mikers/gomap-5335-final-observer-continuation-20261031",
+      "pair": 1,
+      "receipts": {
+        "COMPLETE.json": {
+          "bytes": 1018414,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair1-gomap/COMPLETE.json",
+          "sha256": "82542bdc8053c951934c6dd16a413d7ba65db6ee9e9be8d11eb59a2e7a43dd02"
+        },
+        "FINAL.json": {
+          "bytes": 104773,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair1-gomap/FINAL.json",
+          "sha256": "b11702ff541faa15aab10255e904c3274fb5f4e7b5980b174f2eb91aefe7ae81"
+        },
+        "STARTED.json": {
+          "bytes": 341,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair1-gomap/STARTED.json",
+          "sha256": "adba9156b1de90305dc6683bae0244947ea0f6a36e2bf63d583a321eb996bb2d"
+        },
+        "launcher/terminal.json": {
+          "bytes": 104773,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair1-gomap/launcher/terminal.json",
+          "sha256": "b11702ff541faa15aab10255e904c3274fb5f4e7b5980b174f2eb91aefe7ae81"
+        }
+      },
+      "role": "current",
+      "status": "COMPLETION_RECEIPT_PRESENT",
+      "supervisor": {
+        "custody_uncertain": false,
+        "direct_child_reaped": true,
+        "errors": [],
+        "main": {
+          "cpu_seconds": 105.047585,
+          "exit": 0,
+          "status": 0,
+          "token": {
+            "pid": 1597511,
+            "start_ticks": 498459806
+          }
+        },
+        "ok": true,
+        "reason": "complete",
+        "survivors": []
+      }
+    },
+    {
+      "arm": "gomap",
+      "cell_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair2-gomap",
+      "class_name": "durable-B",
+      "name": "durable-B-pair2-gomap",
+      "packet_root": "/home/mikers/gomap-5335-final-observer-continuation-20261031",
+      "pair": 2,
+      "receipts": {
+        "COMPLETE.json": {
+          "bytes": 1018428,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair2-gomap/COMPLETE.json",
+          "sha256": "99a3d218069539ae84b5447f7fe8bf1b75991f47b023b23e5771fd2a87a04b90"
+        },
+        "FINAL.json": {
+          "bytes": 102899,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair2-gomap/FINAL.json",
+          "sha256": "a83fdfd7b4527f97ed804f592faed6331b0ab327a8550cae187b3131f6d05aed"
+        },
+        "STARTED.json": {
+          "bytes": 340,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair2-gomap/STARTED.json",
+          "sha256": "795c48e3c2abdced52598082693c3ce0e898d57fca50da25f1ca67d939e665e7"
+        },
+        "launcher/terminal.json": {
+          "bytes": 102899,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair2-gomap/launcher/terminal.json",
+          "sha256": "a83fdfd7b4527f97ed804f592faed6331b0ab327a8550cae187b3131f6d05aed"
+        }
+      },
+      "role": "current",
+      "status": "COMPLETION_RECEIPT_PRESENT",
+      "supervisor": {
+        "custody_uncertain": false,
+        "direct_child_reaped": true,
+        "errors": [],
+        "main": {
+          "cpu_seconds": 104.29402,
+          "exit": 0,
+          "status": 0,
+          "token": {
+            "pid": 1600573,
+            "start_ticks": 498472625
+          }
+        },
+        "ok": true,
+        "reason": "complete",
+        "survivors": []
+      }
+    },
+    {
+      "arm": "mongodb",
+      "cell_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair2-mongodb",
+      "class_name": "durable-B",
+      "name": "durable-B-pair2-mongodb",
+      "packet_root": "/home/mikers/gomap-5335-final-observer-continuation-20261031",
+      "pair": 2,
+      "receipts": {
+        "COMPLETE.json": {
+          "bytes": 172707,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair2-mongodb/COMPLETE.json",
+          "sha256": "385fb756a298b54d99e4e0a0a7c8027a69a58a576d82cf4f4355fa95041364ce"
+        },
+        "FINAL.json": {
+          "bytes": 103308,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair2-mongodb/FINAL.json",
+          "sha256": "7f121513f2da12ac5d33d1d607cff76ff5c76dcc8c7f3b7cf09836d976eed00b"
+        },
+        "STARTED.json": {
+          "bytes": 341,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair2-mongodb/STARTED.json",
+          "sha256": "62541d910a2c5cc4cd534ee49e73a83fa906b98c6199d5c1b46d0cc304daa531"
+        },
+        "launcher/terminal.json": {
+          "bytes": 103308,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair2-mongodb/launcher/terminal.json",
+          "sha256": "7f121513f2da12ac5d33d1d607cff76ff5c76dcc8c7f3b7cf09836d976eed00b"
+        }
+      },
+      "role": "current",
+      "status": "COMPLETION_RECEIPT_PRESENT",
+      "supervisor": {
+        "custody_uncertain": false,
+        "direct_child_reaped": true,
+        "errors": [],
+        "main": {
+          "cpu_seconds": 47.514463,
+          "exit": 0,
+          "status": 0,
+          "token": {
+            "pid": 1603419,
+            "start_ticks": 498485350
+          }
+        },
+        "ok": true,
+        "reason": "complete",
+        "survivors": []
+      }
+    },
+    {
+      "arm": "mongodb",
+      "cell_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair3-mongodb",
+      "class_name": "durable-B",
+      "name": "durable-B-pair3-mongodb",
+      "packet_root": "/home/mikers/gomap-5335-final-observer-continuation-20261031",
+      "pair": 3,
+      "receipts": {
+        "COMPLETE.json": {
+          "bytes": 172711,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair3-mongodb/COMPLETE.json",
+          "sha256": "68a7a3d20ba6e16c1d6f38f6573b4c210a42162a0e911266f5a71f5cead0f9ba"
+        },
+        "FINAL.json": {
+          "bytes": 101245,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair3-mongodb/FINAL.json",
+          "sha256": "8a0ee4aafa0edd9b1ab8269feca111b40bc992f4468b84f7bcf92e893548bb88"
+        },
+        "STARTED.json": {
+          "bytes": 340,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair3-mongodb/STARTED.json",
+          "sha256": "1e44dd113ce0c1331570ada574230aad5d627828342a0eaa79d9708850a327d4"
+        },
+        "launcher/terminal.json": {
+          "bytes": 101245,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair3-mongodb/launcher/terminal.json",
+          "sha256": "8a0ee4aafa0edd9b1ab8269feca111b40bc992f4468b84f7bcf92e893548bb88"
+        }
+      },
+      "role": "current",
+      "status": "COMPLETION_RECEIPT_PRESENT",
+      "supervisor": {
+        "custody_uncertain": false,
+        "direct_child_reaped": true,
+        "errors": [],
+        "main": {
+          "cpu_seconds": 47.158819,
+          "exit": 0,
+          "status": 0,
+          "token": {
+            "pid": 1607176,
+            "start_ticks": 498490178
+          }
+        },
+        "ok": true,
+        "reason": "complete",
+        "survivors": []
+      }
+    },
+    {
+      "arm": "gomap",
+      "cell_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair3-gomap",
+      "class_name": "durable-B",
+      "name": "durable-B-pair3-gomap",
+      "packet_root": "/home/mikers/gomap-5335-final-observer-continuation-20261031",
+      "pair": 3,
+      "receipts": {
+        "COMPLETE.json": {
+          "bytes": 1007948,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair3-gomap/COMPLETE.json",
+          "sha256": "37ef93df4b56af2049f4f1b67bca1ca3e6c85a089ceb1a7c025ad46ed601f240"
+        },
+        "FINAL.json": {
+          "bytes": 104837,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair3-gomap/FINAL.json",
+          "sha256": "54ca5aa5b4346635ef2c74b9e679711b44d5d5ddef09f1f866e680c116421d9b"
+        },
+        "STARTED.json": {
+          "bytes": 341,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair3-gomap/STARTED.json",
+          "sha256": "bc7dfff782eaeb2faaa9b13494aff6a595d00539279afd3d16b0bea61a61c9fc"
+        },
+        "launcher/terminal.json": {
+          "bytes": 104837,
+          "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair3-gomap/launcher/terminal.json",
+          "sha256": "54ca5aa5b4346635ef2c74b9e679711b44d5d5ddef09f1f866e680c116421d9b"
+        }
+      },
+      "role": "current",
+      "status": "COMPLETION_RECEIPT_PRESENT",
+      "supervisor": {
+        "custody_uncertain": false,
+        "direct_child_reaped": true,
+        "errors": [],
+        "main": {
+          "cpu_seconds": 104.93349500000001,
+          "exit": 0,
+          "status": 0,
+          "token": {
+            "pid": 1611027,
+            "start_ticks": 498494910
+          }
+        },
+        "ok": true,
+        "reason": "complete",
+        "survivors": []
+      }
+    }
+  ],
+  "prior_packet": {
+    "attempts": [
+      {
+        "arm": "mongodb",
+        "cell_path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair1-mongodb",
+        "class_name": "relaxed",
+        "name": "relaxed-pair1-mongodb",
+        "packet_root": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030",
+        "pair": 1,
+        "receipts": {
+          "COMPLETE.json": {
+            "bytes": 166131,
+            "path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair1-mongodb/COMPLETE.json",
+            "sha256": "671bcdc170c250efb55e13d19815655215dd6229baa504bccc4b78d7c8eff90c"
+          },
+          "FINAL.json": {
+            "bytes": 101049,
+            "path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair1-mongodb/FINAL.json",
+            "sha256": "cab3f0dd026414fecb0d272bac2ed416e44802997d14233d64d17cb888754f25"
+          },
+          "STARTED.json": {
+            "bytes": 341,
+            "path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair1-mongodb/STARTED.json",
+            "sha256": "d12bb23ef1cf1a7876f78068cb9f884bda5d2c4ba528b4b4317d7b38d6512db1"
+          },
+          "launcher/terminal.json": {
+            "bytes": 101049,
+            "path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair1-mongodb/launcher/terminal.json",
+            "sha256": "cab3f0dd026414fecb0d272bac2ed416e44802997d14233d64d17cb888754f25"
+          }
+        },
+        "role": "prior_history",
+        "status": "COMPLETION_RECEIPT_PRESENT",
+        "supervisor": {
+          "custody_uncertain": false,
+          "direct_child_reaped": true,
+          "errors": [],
+          "main": {
+            "cpu_seconds": 46.946963,
+            "exit": 0,
+            "status": 0,
+            "token": {
+              "pid": 1560947,
+              "start_ticks": 498345426
+            }
+          },
+          "ok": true,
+          "reason": "complete",
+          "survivors": []
+        }
+      },
+      {
+        "arm": "gomap",
+        "cell_path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair1-gomap",
+        "class_name": "relaxed",
+        "name": "relaxed-pair1-gomap",
+        "packet_root": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030",
+        "pair": 1,
+        "receipts": {
+          "COMPLETE.json": {
+            "bytes": 168684,
+            "path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair1-gomap/COMPLETE.json",
+            "sha256": "d6b787354ad33ce4fb4dc0dc549cef3e011ff6f44fc3a1705306462ae30f49ee"
+          },
+          "FINAL.json": {
+            "bytes": 100298,
+            "path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair1-gomap/FINAL.json",
+            "sha256": "90c2cb8848f9443cbe60699526a7299b7611dd17d94c4e5e7acd94dadcbd8875"
+          },
+          "STARTED.json": {
+            "bytes": 341,
+            "path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair1-gomap/STARTED.json",
+            "sha256": "3ad0838e6ac43863551106670f8d482fa86ab762898a9a21549fdb967a4a9f54"
+          },
+          "launcher/terminal.json": {
+            "bytes": 100298,
+            "path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair1-gomap/launcher/terminal.json",
+            "sha256": "90c2cb8848f9443cbe60699526a7299b7611dd17d94c4e5e7acd94dadcbd8875"
+          }
+        },
+        "role": "prior_history",
+        "status": "COMPLETION_RECEIPT_PRESENT",
+        "supervisor": {
+          "custody_uncertain": false,
+          "direct_child_reaped": true,
+          "errors": [],
+          "main": {
+            "cpu_seconds": 101.630122,
+            "exit": 0,
+            "status": 0,
+            "token": {
+              "pid": 1564844,
+              "start_ticks": 498352005
+            }
+          },
+          "ok": true,
+          "reason": "complete",
+          "survivors": []
+        }
+      },
+      {
+        "arm": "gomap",
+        "cell_path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair2-gomap",
+        "class_name": "relaxed",
+        "name": "relaxed-pair2-gomap",
+        "packet_root": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030",
+        "pair": 2,
+        "receipts": {
+          "STARTED.json": {
+            "bytes": 341,
+            "path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair2-gomap/STARTED.json",
+            "sha256": "e16afa7cdfe7517c997508b542f36c326aa9a8cd771b0a8ccf9a7deb7f8d18f4"
+          },
+          "launcher/terminal.json": {
+            "bytes": 94793,
+            "path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair2-gomap/launcher/terminal.json",
+            "sha256": "112ce6836197391a31ec93a74ee72197de8edf717b47f05e2cf8017e8126495d"
+          }
+        },
+        "role": "prior_history",
+        "status": "STARTED_INCOMPLETE",
+        "supervisor": {
+          "custody_uncertain": false,
+          "direct_child_reaped": true,
+          "errors": [],
+          "main": {
+            "cpu_seconds": 100.856528,
+            "exit": 0,
+            "status": 0,
+            "token": {
+              "pid": 1567286,
+              "start_ticks": 498361624
+            }
+          },
+          "ok": false,
+          "reason": "unexpected_descendants_after_main",
+          "survivors": []
+        }
+      },
+      {
+        "arm": "mongodb",
+        "cell_path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair2-mongodb",
+        "class_name": "relaxed",
+        "name": "relaxed-pair2-mongodb",
+        "packet_root": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030",
+        "pair": 2,
+        "receipts": {},
+        "role": "prior_history",
+        "status": "NOT_STARTED",
+        "supervisor": null
+      },
+      {
+        "arm": "mongodb",
+        "cell_path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair3-mongodb",
+        "class_name": "relaxed",
+        "name": "relaxed-pair3-mongodb",
+        "packet_root": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030",
+        "pair": 3,
+        "receipts": {},
+        "role": "prior_history",
+        "status": "NOT_STARTED",
+        "supervisor": null
+      },
+      {
+        "arm": "gomap",
+        "cell_path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair3-gomap",
+        "class_name": "relaxed",
+        "name": "relaxed-pair3-gomap",
+        "packet_root": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030",
+        "pair": 3,
+        "receipts": {},
+        "role": "prior_history",
+        "status": "NOT_STARTED",
+        "supervisor": null
+      },
+      {
+        "arm": "mongodb",
+        "cell_path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/durable-B-pair1-mongodb",
+        "class_name": "durable-B",
+        "name": "durable-B-pair1-mongodb",
+        "packet_root": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030",
+        "pair": 1,
+        "receipts": {},
+        "role": "prior_history",
+        "status": "NOT_STARTED",
+        "supervisor": null
+      },
+      {
+        "arm": "gomap",
+        "cell_path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/durable-B-pair1-gomap",
+        "class_name": "durable-B",
+        "name": "durable-B-pair1-gomap",
+        "packet_root": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030",
+        "pair": 1,
+        "receipts": {},
+        "role": "prior_history",
+        "status": "NOT_STARTED",
+        "supervisor": null
+      },
+      {
+        "arm": "gomap",
+        "cell_path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/durable-B-pair2-gomap",
+        "class_name": "durable-B",
+        "name": "durable-B-pair2-gomap",
+        "packet_root": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030",
+        "pair": 2,
+        "receipts": {},
+        "role": "prior_history",
+        "status": "NOT_STARTED",
+        "supervisor": null
+      },
+      {
+        "arm": "mongodb",
+        "cell_path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/durable-B-pair2-mongodb",
+        "class_name": "durable-B",
+        "name": "durable-B-pair2-mongodb",
+        "packet_root": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030",
+        "pair": 2,
+        "receipts": {},
+        "role": "prior_history",
+        "status": "NOT_STARTED",
+        "supervisor": null
+      },
+      {
+        "arm": "mongodb",
+        "cell_path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/durable-B-pair3-mongodb",
+        "class_name": "durable-B",
+        "name": "durable-B-pair3-mongodb",
+        "packet_root": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030",
+        "pair": 3,
+        "receipts": {},
+        "role": "prior_history",
+        "status": "NOT_STARTED",
+        "supervisor": null
+      },
+      {
+        "arm": "gomap",
+        "cell_path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/durable-B-pair3-gomap",
+        "class_name": "durable-B",
+        "name": "durable-B-pair3-gomap",
+        "packet_root": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030",
+        "pair": 3,
+        "receipts": {},
+        "role": "prior_history",
+        "status": "NOT_STARTED",
+        "supervisor": null
+      }
+    ],
+    "receipt": {
+      "bytes": 3229,
+      "path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/PRIOR-PACKET.json",
+      "sha256": "ad86e120696810cc57db67fd0cd5d0dd1fac8d23baba047d9e327db7a5120133"
+    },
+    "root": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030",
+    "stopped": {
+      "cell": "relaxed-pair2-gomap",
+      "error": "RuntimeError('bounded command failed: launcher: unexpected_descendants_after_main')",
+      "status": "FAILED_STOP_NO_RETRY"
+    },
+    "value": {
+      "adopted_valid_cells": [
+        {
+          "arm": "mongodb",
+          "class_name": "relaxed",
+          "name": "relaxed-pair1-mongodb",
+          "pair": 1
+        },
+        {
+          "arm": "gomap",
+          "class_name": "relaxed",
+          "name": "relaxed-pair1-gomap",
+          "pair": 1
+        }
+      ],
+      "authorities": {
+        "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/SEALED.json": "040ee8906c7ed25ab054d73218ccfa4c285a91334261956c46920b08f3c468f8",
+        "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/STOPPED.json": "fb7c36e6871ebba38b6b1bab7cc91cad26c220e5b047db6d2d00bd87a8247498",
+        "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/campaign-start.json": "f52bff6eb537eb6612a89e08572a2f2b72d3092e027e70366157953932c8fe22",
+        "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/campaign.json": "b50dcb2fe58cf1292efb6ee29d679a08b46b74128c16040b52295117bd0242f3",
+        "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair1-gomap/COMPLETE.json": "d6b787354ad33ce4fb4dc0dc549cef3e011ff6f44fc3a1705306462ae30f49ee",
+        "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair1-mongodb/COMPLETE.json": "671bcdc170c250efb55e13d19815655215dd6229baa504bccc4b78d7c8eff90c",
+        "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair2-gomap/launcher/terminal.json": "112ce6836197391a31ec93a74ee72197de8edf717b47f05e2cf8017e8126495d"
+      },
+      "original_origin": 4983454.245382293,
+      "prior_root": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030",
+      "rejected_preserved": {
+        "arm": "gomap",
+        "class_name": "relaxed",
+        "name": "relaxed-pair2-gomap",
+        "pair": 2
+      },
+      "remaining_order": [
+        {
+          "arm": "gomap",
+          "class_name": "relaxed",
+          "name": "relaxed-pair2-gomap",
+          "pair": 2
+        },
+        {
+          "arm": "mongodb",
+          "class_name": "relaxed",
+          "name": "relaxed-pair2-mongodb",
+          "pair": 2
+        },
+        {
+          "arm": "mongodb",
+          "class_name": "relaxed",
+          "name": "relaxed-pair3-mongodb",
+          "pair": 3
+        },
+        {
+          "arm": "gomap",
+          "class_name": "relaxed",
+          "name": "relaxed-pair3-gomap",
+          "pair": 3
+        },
+        {
+          "arm": "mongodb",
+          "class_name": "durable-B",
+          "name": "durable-B-pair1-mongodb",
+          "pair": 1
+        },
+        {
+          "arm": "gomap",
+          "class_name": "durable-B",
+          "name": "durable-B-pair1-gomap",
+          "pair": 1
+        },
+        {
+          "arm": "gomap",
+          "class_name": "durable-B",
+          "name": "durable-B-pair2-gomap",
+          "pair": 2
+        },
+        {
+          "arm": "mongodb",
+          "class_name": "durable-B",
+          "name": "durable-B-pair2-mongodb",
+          "pair": 2
+        },
+        {
+          "arm": "mongodb",
+          "class_name": "durable-B",
+          "name": "durable-B-pair3-mongodb",
+          "pair": 3
+        },
+        {
+          "arm": "gomap",
+          "class_name": "durable-B",
+          "name": "durable-B-pair3-gomap",
+          "pair": 3
+        }
+      ],
+      "scope": "Two prior accepted arms retain original identities. Rejected G2 is not qualified. One fresh G2 and nine previously unstarted arms use corrected observation only; no workload/product/runtime/cap changes or automatic retries."
+    }
+  },
+  "rejected_attempts": [
+    {
+      "arm": "gomap",
+      "cell_path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair2-gomap",
+      "class_name": "relaxed",
+      "name": "relaxed-pair2-gomap",
+      "packet_root": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030",
+      "pair": 2,
+      "receipts": {
+        "STARTED.json": {
+          "bytes": 341,
+          "path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair2-gomap/STARTED.json",
+          "sha256": "e16afa7cdfe7517c997508b542f36c326aa9a8cd771b0a8ccf9a7deb7f8d18f4"
+        },
+        "launcher/terminal.json": {
+          "bytes": 94793,
+          "path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair2-gomap/launcher/terminal.json",
+          "sha256": "112ce6836197391a31ec93a74ee72197de8edf717b47f05e2cf8017e8126495d"
+        }
+      },
+      "role": "rejected_prior_not_sample",
+      "status": "STARTED_INCOMPLETE",
+      "supervisor": {
+        "custody_uncertain": false,
+        "direct_child_reaped": true,
+        "errors": [],
+        "main": {
+          "cpu_seconds": 100.856528,
+          "exit": 0,
+          "status": 0,
+          "token": {
+            "pid": 1567286,
+            "start_ticks": 498361624
+          }
+        },
+        "ok": false,
+        "reason": "unexpected_descendants_after_main",
+        "survivors": []
+      }
+    }
+  ],
+  "stopped": null,
+  "undeclared_cells": []
+}

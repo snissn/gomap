@@ -1,0 +1,12 @@
+{
+  "released_unix": 1793428339.3397024,
+  "active_build_test_guard_processes": [],
+  "source_unchanged_since_build": true,
+  "released_to": "root coordinator",
+  "retained_cache": "cache/held-sync",
+  "retained_tmp": "tmp/held-sync",
+  "cache_consumers": 0,
+  "tmp_consumers": 0,
+  "evidence_binary": "evidence/held-sync/TreeDB.test",
+  "no_race_run": true
+}

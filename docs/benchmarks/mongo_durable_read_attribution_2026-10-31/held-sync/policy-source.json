@@ -1,0 +1,10 @@
+{
+  "AGENTS.md": {
+    "sha256": "89d419e93fd29ed779b600458945b928cd224773ab53db49702ea0358b5d63f6",
+    "git_blob": "f8ee8503a4ddd60e6dee233d032138ca77b631ab"
+  },
+  "TreeDB/AGENTS.md": {
+    "sha256": "49ad91d73c0bb4a8d3ab0c281478df5cb563319dd05b8bddd47fb43538977e2c",
+    "git_blob": "499f427b9229696496086dfa9a5959d33881fe91"
+  }
+}

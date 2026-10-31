@@ -464,6 +464,12 @@ func (t *NativeJSONTxn) commitNativePlanWithStats(sealed bool, apply *nativeComm
 	// catalog effect without any CRUD members.
 	graphSingleton := apply != nil && apply.frame.Kind == commitlog.CommandKindCollectionRebuildVectorIndex && !typedGroup && t.count == 1 && !t.rawStaged && len(t.members) == 0 && nativeTypedGraphOnly(t.bindings[0].typed)
 	if err := t.finalizeNativeRowsWithStats(graphSingleton, stats); err != nil {
+		// Final rows (including unique ownership) are private preparation;
+		// CommitNative has not assigned or installed this mutation. An apply
+		// owner may already have an assigned frame, so never mark that route.
+		if apply == nil {
+			return mutationNotAcceptedError(err)
+		}
 		return err
 	}
 	count, totalEffects := 0, 0

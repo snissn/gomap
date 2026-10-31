@@ -398,23 +398,58 @@ func nativeTypedConstructionCapacity(e *nativeEngineVersion, basis *backenddb.Sn
 	return inventory, nil
 }
 
-// NativeProducerPressure scans only this retained immutable state's pending
-// typed prefixes against its paired physical basis. The zero-typed fast path
-// avoids manifest iterators and the handoff/build inventory for ordinary raw
-// and non-typed native producers. No result reserves or discounts capacity.
+// nativeGenerationUnderPressure uses the existing three-quarter scheduling
+// policy without overflowing history+pending. This is not request admission.
+func nativeGenerationUnderPressure(usage memtable.COWGenerationUsage) bool {
+	watermark := usage.MaxGenerationBytes - usage.MaxGenerationBytes/4
+	return usage.HistoryBytes >= watermark || usage.PendingBytes >= watermark-usage.HistoryBytes
+}
+
+// nativePendingGenerationPressure borrows only active pending roots in this
+// retained engine. Captured old sources remain owned but aren't current tails.
+// The sparse pending directories avoid a catalog-wide or manifest scan.
+func (e *nativeEngineVersion) nativePendingGenerationPressure() (pressure bool, err error) {
+	observe := func(d *nativeDomainState) bool {
+		if d == nil || d.pending == nil {
+			return true
+		}
+		var usage memtable.COWGenerationUsage
+		usage, err = d.pending.GenerationUsage()
+		pressure = err == nil && nativeGenerationUnderPressure(usage)
+		return err == nil && !pressure
+	}
+	if !observe(e.catalog) {
+		return pressure, err
+	}
+	e.pending.Scan(func(_ uint64, c *nativeCollectionState) bool {
+		c.pending.Scan(func(_ string, d *nativeDomainState) bool { return observe(d) })
+		return err == nil && !pressure
+	})
+	return pressure, err
+}
+
+// NativeProducerPressure scans this retained state's active generation tails
+// and pending typed prefixes against its paired basis. The zero-typed fast path
+// still avoids manifest iterators and the typed handoff/build inventory.
+// No result reserves or discounts capacity.
 func (e *nativeEngineVersion) NativeProducerPressure(basis *backenddb.Snapshot) (backenddb.NativeSemanticProducerPressure, error) {
+	pressure, err := e.nativePendingGenerationPressure()
+	if err != nil {
+		return backenddb.NativeSemanticProducerPressure{}, err
+	}
 	inventory, err := nativeTypedConstructionCapacity(e, basis)
 	if err != nil || inventory.typed == 0 {
-		return backenddb.NativeSemanticProducerPressure{}, err
+		return backenddb.NativeSemanticProducerPressure{GenerationUnderPressure: pressure}, err
 	}
 	limits := e.maintenance.Limits()
 	return backenddb.NativeSemanticProducerPressure{
-		ConstructionBytes:      inventory.total,
-		FixedConstructionBytes: inventory.workspace,
-		MaxInFlightBytes:       limits.MaxInFlightBytes,
-		MaxTotalBytes:          limits.MaxTotalBytes,
-		Sources:                inventory.sources,
-		MaxSources:             e.allocator.Limits().MaxSources,
+		GenerationUnderPressure: pressure,
+		ConstructionBytes:       inventory.total,
+		FixedConstructionBytes:  inventory.workspace,
+		MaxInFlightBytes:        limits.MaxInFlightBytes,
+		MaxTotalBytes:           limits.MaxTotalBytes,
+		Sources:                 inventory.sources,
+		MaxSources:              e.allocator.Limits().MaxSources,
 	}, nil
 }
 

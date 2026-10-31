@@ -6,12 +6,69 @@ This page is the current entry point for external `go-ycsb` comparisons across:
 - `treedb-native` through the `go-ycsb treedb-native` binding.
 - TreeDB Mongo gateway through the `go-ycsb mongodb` binding.
 
-It explains which checked-in reports are current, which are historical, and
-which cells should be rerun next.
+It distinguishes the retained October comparison from historical reports and
+records the remaining qualification obligations.
 
-## Current Canonical Report
+## Final-source MongoDB comparison
 
-Use `docs/benchmarks/ycsb_latest_main_2026-06-03.md` as the current
+The [final-source report](ycsb_mongodb_gomap_final_2026-10-30.md) records twelve
+valid samples on GoMap `8bea490ad5a2d89a14f02f428b4283579a6dd864` (landed
+as the identical tree in #5348) versus MongoDB 8.2.7. All selected operation
+errors are zero. Three fresh pairs per class give these run medians:
+
+| ACK class | MongoDB ops/s | GoMap ops/s | Median paired GoMap/Mongo |
+| --- | ---: | ---: | ---: |
+| Relaxed, both `w:1`, `j` absent | 42,753.6 | 59,245.2 | 1.372250 (+37.23%) |
+| Durable-B, differing timed requests below | 19,879.2 | 11,766.6 | 0.591905 (−40.81%) |
+
+Durable-B times MongoDB `w:1,j:true` against GoMap `command_wal_durable`
+with `w:1`, `j` absent, using separate scoped ACK/sync/crash controls. A common
+load/census and public same-owner `j:true` sentinel are outside timing. This is
+not a same-request `j:true` ingestion result or complete MongoDB failure-semantics
+certification. The report retains the earlier strict-load timeout and every
+failed attempt. These short 10k runs, asymmetric resource caps and cache-warming
+census do not establish sustained performance or isolate COW's contribution.
+
+The [checked-in evidence](ycsb_5335_final_evidence/) supplies all rates, tails,
+Close/maintenance/runtime records and a verified compact raw archive/index.
+Thirteen actual attempts include one rejected observer-era sample; twelve valid
+samples are selected explicitly. The parent
+[#5225 performance objective](https://github.com/snissn/gomap/issues/5225)
+and separate #5238/#5241 outcomes remain open. Historical and provisional rows
+below remain separate evidence, never current denominators.
+
+## October 30 actual-MongoDB comparison: provisional, qualification open
+
+Use [the retained October 30 report](ycsb_mongodb_gomap_2026-10-30.md) for the
+actual MongoDB 8.2.7 versus repaired GoMap public Mongo BSON comparisons. It
+includes every completed relaxed and separately labeled durable pair, the failed
+strict-journaled load, per-operation latency, original checked Close and lifecycle
+scope, source/ELF identities, resource limits and indexed raw phase evidence.
+
+These measurements used provisional GoMap `802f7cfc...`; they are not final-head
+qualification. All nine complete pairs show lower GoMap throughput. The later
+final-source harness and repairs have landed; the report above supplies their
+separate measurements. Older failed gates and the parent performance
+objective remain retained. These provisional rows are not relabeled as final.
+The June figures below are historical context and are not an October denominator.
+
+## 2026-10 COW JSON correctness follow-up
+
+A later native-wire JSON load on `d879a302fd8dbb7617bd1d298a31488d1a6f30cd`
+failed across durable, relaxed and no-WAL COW profiles; those incomplete runs
+are not valid throughput evidence. The source-bound reproduction, individual
+error counts and retained outputs are tracked in [#5333](https://github.com/snissn/gomap/issues/5333).
+The original client can report a successful process exit despite operation or
+close errors, so acceptance must check operation counts and an independently
+observed close result. The shared left-edge separator repair is covered by a
+focused zipper regression and public COW lifecycle tests. The broader matched
+JSON/BSON and native-wire/Mongo comparison remains owned by
+[#5335](https://github.com/snissn/gomap/issues/5335); the historical reports
+below are not evidence of its outcome or of an isolated COW speedup.
+
+## Historical June Canonical Report
+
+Use `docs/benchmarks/ycsb_latest_main_2026-06-03.md` as the historical June
 checked-in external YCSB evidence for MongoDB, TreeDB nativewire, and TreeDB
 Mongo gateway.
 
@@ -44,7 +101,7 @@ sufficient to close #2026 as the local storage-publication/readability tracker.
 Distributed HA, Raft read-index/snapshots/rejoin, and routing/fanout remain out
 of scope for #2026 and are tracked by #3044, #3045, and #3046.
 
-## Current Headline
+## Historical June Headline
 
 Run rows use the median total-throughput repeat from the June 3 HST / June 4
 UTC latest-main report.
@@ -65,7 +122,7 @@ UTC latest-main report.
 | --- | --- | --- |
 | `docs/benchmarks/nativewire_ycsb_insert_error_classification_2026-06-30.md` | #3374 classification of the invalid intermediate nativewire `INSERT_ERROR` caveat; final for the #3385 local closeout. | Use for the current-head diagnostic run with `TREEDB_YCSB_LOG_ERRORS=1`, `-p silence=false`, raw scan counts, and the owner/risk classification for `/tmp/treedb_native_ycsb_current_head_20260629_202356`. |
 | `docs/benchmarks/nativewire_ycsb_closeout_2026-06-30.md` | #2026 nativewire load-only closeout evidence refreshed after later Raft merges; reconciled by #3385. | Use for the 100k and 1M external `go-ycsb treedb-native` load proof on commit `61910b8eac108c5f2c35f07a374879d1fb2dc5c8` with `collection_meta` v5 compatibility; use the #3374 classification report for the recorded invalid intermediate 1M run. |
-| `docs/benchmarks/ycsb_latest_main_2026-06-03.md` | Current external YCSB report. | Use for current headline MongoDB / TreeDB nativewire / TreeDB Mongo gateway results on latest `origin/main` after the June 3 rerun. |
+| `docs/benchmarks/ycsb_latest_main_2026-06-03.md` | Historical June external YCSB report. | Use for the historical MongoDB / TreeDB nativewire / TreeDB Mongo gateway results on then-current `origin/main` after the June 3 rerun. |
 | `docs/benchmarks/ycsb_post_update_stack_2026-06-02.md` | Superseded latest-current report. | Keep for post-update-path-stack evidence before the latest main rerun and for comparison deltas. |
 | `docs/benchmarks/ycsb_mongodb_treedb_2026-05-31.md` | Historical legacy-profile report. | Keep for the original MongoDB / TreeDB native / TreeDB Mongo comparison and the post-load Mongo-gateway cliff attribution. Do not use its `fast` rows as current public-profile guidance. |
 | `docs/benchmarks/ycsb_treedb_profile_sweep_2026-06-01.md` | Superseded initial command-WAL sweep. | Keep as prior-run evidence. Prefer the current report for headline performance and the closeout report only for profile-surface conclusions. |
@@ -109,10 +166,16 @@ that accepts `collection_meta` version 5. The June 30 closeout used
 `codex/2026-treedb-native-meta-v5`; use that branch or an upstream client with
 equivalent v5 support before rerunning current nativewire cells.
 
-## Standard Full Rerun Matrix
+## Historical full-rerun recipes
 
-Run this matrix to refresh the current headline evidence after performance,
-profile, nativewire, or Mongo gateway changes.
+The recipes below describe the historical runner and its same-fixture repeats.
+They are retained for interpreting those reports. The current maintained shell
+refuses ordinary `TARGETS=mongodb`; a default invocation is not a current MongoDB
+baseline or the final twelve-arm qualification. Use the source-bound reference
+preparation/run route in [the maintained reference contract](../../scripts/ycsb_mongodb_reference.md)
+and the selected final packet. Native execution also has its separately declared
+census-size limit. Final qualification uses fresh matched fixtures, not repeated
+runs over one loaded database.
 
 ### Baseline And Durable Cell
 

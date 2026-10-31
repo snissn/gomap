@@ -15,10 +15,16 @@ import (
 )
 
 func TestCatalogMetaBackupRestoresFreshThreeAuthorityClusterAndSurvivesReopenFailoverRejoin(t *testing.T) {
+	progress := catalogMetaLeaderWaitProgressV1{started: time.Now()}
 	ctx, cancel := context.WithTimeout(context.Background(), realCatalogMetaIntegrationTestTimeoutV1)
 	defer cancel()
+	// Emit the bounded receipts at test exit so a passing diagnostic also
+	// records phase budgets without logging between readiness observations.
+	defer func() {
+		t.Logf("catalog meta leader waits: total_elapsed=%s completed=%+v", time.Since(progress.started), progress.completed[:progress.count])
+	}()
 	source := newRealCatalogMetaClusterV1(t, "source")
-	sourceLeader := source.waitLeader(t, ctx)
+	sourceLeader := source.waitLeader(t, ctx, &progress, "source-initial")
 	command1 := mustCatalogMetaCommand(t, 0, 1, realCatalogMetaIntegrationCatalogV1("group-a"))
 	if _, _, err := source.providers[sourceLeader].SubmitCatalogMetaCommandV1(ctx, command1); err != nil {
 		t.Fatalf("source epoch 1: %v", err)
@@ -54,7 +60,7 @@ func TestCatalogMetaBackupRestoresFreshThreeAuthorityClusterAndSurvivesReopenFai
 	}
 
 	target := newRealCatalogMetaClusterV1(t, "target")
-	targetLeader := target.waitLeader(t, ctx)
+	targetLeader := target.waitLeader(t, ctx, &progress, "target-initial")
 	follower := target.anyFollower(targetLeader)
 	target.waitFollower(t, ctx, follower)
 	if err := target.providers[follower].RestoreCatalogMetaBackupV1(ctx, backup); !errors.Is(err, raftcluster.ErrNotLeader) {
@@ -74,7 +80,7 @@ func TestCatalogMetaBackupRestoresFreshThreeAuthorityClusterAndSurvivesReopenFai
 	// stable admission-ready leader before exercising the valid restore so a
 	// hosted-runner scheduling stall cannot turn harness readiness into the
 	// production ErrAdmissionUnavailable path under test.
-	targetLeader = target.waitLeader(t, ctx)
+	targetLeader = target.waitLeader(t, ctx, &progress, "target-before-restore")
 	follower = target.anyFollower(targetLeader)
 	target.waitFollower(t, ctx, follower)
 	if err := target.providers[targetLeader].RestoreCatalogMetaBackupV1(ctx, backup); err != nil {
@@ -106,7 +112,7 @@ func TestCatalogMetaBackupRestoresFreshThreeAuthorityClusterAndSurvivesReopenFai
 	// M4A has no migration workflow that could transfer the collection data,
 	// apply progress, and idempotency state before publishing the new route.
 	target.closeNode(t, targetLeader)
-	newLeader := target.waitLeader(t, ctx)
+	newLeader := target.waitLeader(t, ctx, &progress, "target-after-failover")
 	unsafeCommand2 := mustCatalogMetaCommand(t, 1, 2, realCatalogMetaIntegrationCatalogV1("group-b"))
 	if _, _, err := target.providers[newLeader].SubmitCatalogMetaCommandV1(ctx, unsafeCommand2); !errors.Is(err, ErrCatalogMetaTopologyChange) {
 		t.Fatalf("target owner move error=%v want ErrCatalogMetaTopologyChange", err)
@@ -115,7 +121,7 @@ func TestCatalogMetaBackupRestoresFreshThreeAuthorityClusterAndSurvivesReopenFai
 
 	// The refused log entry does not prevent a safe metadata generation from
 	// advancing monotonically, and the old backup still cannot roll it back.
-	newLeader = target.waitLeader(t, ctx)
+	newLeader = target.waitLeader(t, ctx, &progress, "target-after-topology-refusal")
 	command2 := mustCatalogMetaCommand(t, 1, 2, realCatalogMetaIntegrationCatalogV1("group-a"))
 	if _, _, err := target.providers[newLeader].SubmitCatalogMetaCommandV1(ctx, command2); err != nil {
 		t.Fatalf("target epoch 2 after failover: %v", err)
@@ -137,7 +143,9 @@ func TestCatalogMetaBackupRestoresFreshThreeAuthorityClusterAndSurvivesReopenFai
 
 const realCatalogMetaIntegrationCoordinationTimeoutV1 = 5 * time.Second
 const realCatalogMetaIntegrationLeaderDwellV1 = realCatalogMetaIntegrationCoordinationTimeoutV1
-const realCatalogMetaIntegrationTestTimeoutV1 = 4*realCatalogMetaIntegrationCoordinationTimeoutV1 + 60*time.Second
+
+// Allow bounded headroom for the aggregate restore/reopen/failover lifecycle.
+const realCatalogMetaIntegrationTestTimeoutV1 = 2 * time.Minute
 
 type realCatalogMetaClusterV1 struct {
 	peers       []raftcluster.Peer
@@ -247,34 +255,105 @@ func (c *realCatalogMetaClusterV1) connectAll() {
 	}
 }
 
-func (c *realCatalogMetaClusterV1) waitLeader(t *testing.T, ctx context.Context) raftcluster.NodeID {
+// Diagnostic receipts are bounded to the five existing waits. They do not
+// extend the shared context, retry commands or alter the dwell discriminator.
+// Status is the provider's local Raft-state observation, not a quorum proof.
+type catalogMetaLeaderWaitProgressV1 struct {
+	started   time.Time
+	completed [5]catalogMetaLeaderWaitReceiptV1
+	count     int
+}
+type catalogMetaLeaderProbeV1 struct {
+	ID     raftcluster.NodeID
+	Status raftcluster.AdmissionStatus
+	Err    error
+}
+type catalogMetaLeaderWaitReceiptV1 struct {
+	Phase                                                                                   string
+	Entered, BudgetAtEntry, Elapsed, MaxProbeGap                                            time.Duration
+	Polls, ProbeErrors, NoUniqueLeader, NoLeader, MultipleLeaders, GapResets, LeaderChanges uint64
+	LastComplete                                                                            bool
+	LastLeader                                                                              raftcluster.NodeID
+	DwellLeader                                                                             raftcluster.NodeID
+	DwellElapsed                                                                            time.Duration
+	LastProbes                                                                              [3]catalogMetaLeaderProbeV1
+	ProbeCount                                                                              int
+}
+
+func (c *realCatalogMetaClusterV1) waitLeader(t *testing.T, ctx context.Context, progress *catalogMetaLeaderWaitProgressV1, phase string) raftcluster.NodeID {
 	t.Helper()
 	var dwell catalogMetaLeaderDwellV1
+	entered := time.Now()
+	receipt := catalogMetaLeaderWaitReceiptV1{Phase: phase, Entered: entered.Sub(progress.started)}
+	if deadline, ok := ctx.Deadline(); ok {
+		receipt.BudgetAtEntry = deadline.Sub(entered)
+	}
 	tick := time.NewTicker(20 * time.Millisecond)
 	defer tick.Stop()
 	for {
 		var leader raftcluster.NodeID
+		multiple := false
 		complete := true
+		receipt.LastProbes = [3]catalogMetaLeaderProbeV1{}
+		receipt.ProbeCount = 0
 		for id, provider := range c.providers {
 			status, err := provider.ClusterAdmissionStatus(ctx)
+			if receipt.ProbeCount < len(receipt.LastProbes) {
+				receipt.LastProbes[receipt.ProbeCount] = catalogMetaLeaderProbeV1{ID: id, Status: status, Err: err}
+				receipt.ProbeCount++
+			}
 			if err != nil {
+				receipt.ProbeErrors++
 				complete = false
 				break
 			}
 			if status.Leader {
 				if leader != "" {
+					multiple = true
 					leader = ""
 					break
 				}
 				leader = id
 			}
 		}
-		if dwell.Observe(time.Now(), complete, leader, realCatalogMetaIntegrationLeaderDwellV1, catalogMetaLeaderObservationMaxGapV1) {
+		now := time.Now()
+		receipt.Polls++
+		receipt.Elapsed = now.Sub(entered)
+		receipt.LastComplete, receipt.LastLeader = complete, leader
+		if !complete || leader == "" {
+			receipt.NoUniqueLeader++
+		}
+		if multiple {
+			receipt.MultipleLeaders++
+		} else if complete && leader == "" {
+			receipt.NoLeader++
+		}
+		if !dwell.lastObservation.IsZero() {
+			gap := now.Sub(dwell.lastObservation)
+			receipt.MaxProbeGap = max(receipt.MaxProbeGap, gap)
+			if complete && leader != "" && gap > catalogMetaLeaderObservationMaxGapV1 {
+				receipt.GapResets++
+			}
+		}
+		if complete && leader != "" && leader != dwell.leader {
+			receipt.LeaderChanges++
+		}
+		ready := dwell.Observe(now, complete, leader, realCatalogMetaIntegrationLeaderDwellV1, catalogMetaLeaderObservationMaxGapV1)
+		receipt.DwellLeader = dwell.leader
+		receipt.DwellElapsed = 0
+		if !dwell.since.IsZero() {
+			receipt.DwellElapsed = now.Sub(dwell.since)
+		}
+		if ready {
+			if progress.count < len(progress.completed) {
+				progress.completed[progress.count] = receipt
+				progress.count++
+			}
 			return leader
 		}
 		select {
 		case <-ctx.Done():
-			t.Fatalf("catalog meta cluster has no admission-ready leader stable for %s: %v", realCatalogMetaIntegrationLeaderDwellV1, ctx.Err())
+			t.Fatalf("catalog meta cluster has no admission-ready leader stable for %s: %v; total_elapsed=%s current=%+v prior_completed=%+v", realCatalogMetaIntegrationLeaderDwellV1, ctx.Err(), time.Since(progress.started), receipt, progress.completed[:progress.count])
 		case <-tick.C:
 		}
 	}
