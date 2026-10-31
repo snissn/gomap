@@ -152,20 +152,24 @@ func TestNativeInsertHistoryExpiryFreshDuplicate(t *testing.T) {
 	before := backend.CommandWALNextLSN()
 	original := []byte(`{"winner":"accepted writer"}`)
 	var admissions atomic.Int32
+	var winnerNext atomic.Uint64
 	restore := durabilitycut.Install(func(e durabilitycut.Event) error {
 		if e.Point == durabilitycut.BeforeCOWAdmission && admissions.Add(1) == 1 {
 			// Shared scalar admission allows a real independent winning insertion.
 			if _, err := col.InsertBatch([][]byte{[]byte("id")}, [][]byte{original}); err != nil {
 				return err
 			}
+			// The overlapping durable intents may add a prefix barrier. Bind
+			// the actual winner frontier, not an assumed one-LSN request.
+			winnerNext.Store(backend.CommandWALNextLSN())
 			return backenddb.ErrTxnTooOld
 		}
 		return nil
 	})
 	ids, stats, err := col.InsertBatchWithStats([][]byte{[]byte("id")}, [][]byte{[]byte(`{"winner":"must not replace"}`)})
 	restore()
-	if !errors.Is(err, ErrDocumentExists) || len(ids) != 0 || backend.CommandWALNextLSN() != before+1 || !reflect.DeepEqual(stats, CollectionInsertStats{}) {
-		t.Fatalf("ids=%q LSN=%d err=%v", ids, backend.CommandWALNextLSN(), err)
+	if !errors.Is(err, ErrDocumentExists) || len(ids) != 0 || winnerNext.Load() <= before || backend.CommandWALNextLSN() != winnerNext.Load() || !reflect.DeepEqual(stats, CollectionInsertStats{}) {
+		t.Fatalf("ids=%q before=%d winner_next=%d next=%d stats=%+v err=%v", ids, before, winnerNext.Load(), backend.CommandWALNextLSN(), stats, err)
 	}
 	if got, e := col.Get([]byte("id")); e != nil || !bytes.Equal(got, original) {
 		t.Fatalf("winner=%s err=%v", got, e)
