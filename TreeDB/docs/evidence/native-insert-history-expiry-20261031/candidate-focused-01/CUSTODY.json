@@ -1,0 +1,14 @@
+{
+  "start_utc": "2026-10-31T22:35:26.598749Z",
+  "pid": 3251597,
+  "source": "694a6a8fcbbabf32e897b3d01da561aa9d3adb56",
+  "tree": "a798e15c4df459334d5481b033b4afc02f0a48b5",
+  "source_dir": "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/repo",
+  "lease_path": "/mnt/fast4tb/gomap-host185-perf-custody.lock",
+  "lease": [
+    66305,
+    54
+  ],
+  "status": "running",
+  "scope": "focused normal/race candidate correctness; not performance"
+}

@@ -688,7 +688,8 @@ func (work *ColumnPublishCandidateResourceWork) Add(other ColumnPublishCandidate
 // These diagnostics are caller/handle-owned outputs rather than native engine
 // state; LastInsertStats retains one array and WithStats copies it for the caller.
 type CollectionInsertStats struct {
-	// HistoryExpiryRetries counts fully cleaned ordinary insert reconstructions (0 or 1).
+	// HistoryExpiryRetries counts ordinary reconstructions after successful
+	// synchronous cancellation and Close checks (0 or 1).
 	HistoryExpiryRetries         int
 	Documents                    int
 	Indexes                      int

@@ -1,0 +1,76 @@
+{
+  "start_utc": "2026-10-31T22:29:33.469071Z",
+  "pid": 3243771,
+  "source": "a7f29678099ccfaa3f6889341d4a6d1cc8c47cae",
+  "tree": "b1798230458cb218683ef50a59757ad1eae67894",
+  "source_dir": "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/repo",
+  "lease_path": "/mnt/fast4tb/gomap-host185-perf-custody.lock",
+  "lease": [
+    66305,
+    54
+  ],
+  "status": "observed-genuine-history-expiry-RED",
+  "scope": "one ordinary insertion history expiry correctness RED; not performance",
+  "actual_exit": 1,
+  "end_utc": "2026-10-31T22:30:53.277589Z",
+  "commands": [
+    {
+      "name": "go-version",
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.10.linux-amd64/bin/go",
+        "version"
+      ],
+      "cwd": "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/repo",
+      "start_utc": "2026-10-31T22:29:33.483555Z",
+      "timeout_seconds": 15,
+      "log": "01-go-version.log",
+      "exit_code": 0,
+      "end_utc": "2026-10-31T22:29:33.684172Z",
+      "minimum_free_bytes_so_far": 1115911942144
+    },
+    {
+      "name": "go-env",
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.10.linux-amd64/bin/go",
+        "env",
+        "-json",
+        "GOROOT",
+        "GOVERSION",
+        "GOCACHE",
+        "GOMODCACHE",
+        "CGO_ENABLED",
+        "GOTOOLCHAIN"
+      ],
+      "cwd": "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/repo",
+      "start_utc": "2026-10-31T22:29:33.694155Z",
+      "timeout_seconds": 15,
+      "log": "02-go-env.log",
+      "exit_code": 0,
+      "end_utc": "2026-10-31T22:29:33.894806Z",
+      "minimum_free_bytes_so_far": 1115911933952
+    },
+    {
+      "name": "expiry-red",
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.10.linux-amd64/bin/go",
+        "test",
+        "-json",
+        "-p=1",
+        "-count=1",
+        "-timeout=180s",
+        "./TreeDB/collections",
+        "-run",
+        "^TestNativeOrdinaryInsertHistoryExpiry$"
+      ],
+      "cwd": "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/repo",
+      "start_utc": "2026-10-31T22:29:33.904809Z",
+      "timeout_seconds": 240,
+      "log": "03-expiry-red.log",
+      "exit_code": 1,
+      "end_utc": "2026-10-31T22:30:53.244578Z",
+      "minimum_free_bytes_so_far": 1115082653696
+    }
+  ],
+  "cleanup_safe": true,
+  "remaining_owned_processes": []
+}

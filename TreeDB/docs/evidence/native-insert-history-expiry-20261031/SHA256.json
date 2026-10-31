@@ -1,0 +1,19 @@
+{
+  "candidate-focused-02/RELEASE.json": "a86ef58c3d726dd722ce6399906be959e88e2fce052299c68a1536f0aba7c4e1",
+  "candidate-focused-02/TERMINAL.json": "446cabb52e2bb82f30ac90e688f321947d6b79869848ce62bc7058b18729d334",
+  "candidate-focused-02/CUSTODY.json": "bffa35ee0ec558d390a96f25f8cf7df18ed89445bd18ac1d4dc1250e0f1a1d27",
+  "candidate-focused-02/evidence/02-go-env.log": "1776e2944e3c6e014ab8778d6616645c987d051cdb942d01f86ba9484e45e898",
+  "candidate-focused-02/evidence/01-go-version.log": "4e0b213cba780f63b02f3ab9001ee61e4101d254e0af1a8205574c19dad0f93b",
+  "candidate-focused-02/evidence/04-race.log": "05287ebe22f92fe1e057b7d53fac2319b5af86957cf1c22b961ee94565ac582d",
+  "candidate-focused-02/evidence/03-normal.log": "4aadad22c30859685dbcb5fbd9e4c6ef46455451451787371a0a6b3913b101eb",
+  "candidate-focused-01/RELEASE.json": "90b4fa5fa4a63b18bab38d8150dbbee5313ce6459e26a952cd6a378b77aeda58",
+  "candidate-focused-01/TERMINAL.json": "29a49e793688323554a14792470fd3db1064bdd1ff17f4a35b007b69575d0030",
+  "candidate-focused-01/CUSTODY.json": "80231882819b2c395e08ba31494a9be4d45965e9dab3f2aca9e5f1f71d53eb8d",
+  "candidate-focused-01/evidence/03-normal.log": "3d19611bac1e0c46c8d652f751bcde65ba3fd2b22ab400478e4502e558fb5b34",
+  "red-normal-01/RELEASE.json": "153db8e12008e6411affccf3f37607059ed273cba6899b2b5cb822ca3bef3702",
+  "red-normal-01/TERMINAL.json": "b168623a93b1aab615acec2da547116f33e161bb8ebfd834d26ccd12ce7eddd9",
+  "red-normal-01/CUSTODY.json": "90e5fc24ec2104b60778e24ca7b21a10fc626a7320777a3bc6ad47d5aab83dbc",
+  "red-normal-01/evidence/02-go-env.log": "1776e2944e3c6e014ab8778d6616645c987d051cdb942d01f86ba9484e45e898",
+  "red-normal-01/evidence/03-expiry-red.log": "84e392cb7a3160b4adfbe2a53c4b64b3d6acb9dc57d5c9f62aec78cf18e3d225",
+  "red-normal-01/evidence/01-go-version.log": "4e0b213cba780f63b02f3ab9001ee61e4101d254e0af1a8205574c19dad0f93b"
+}
