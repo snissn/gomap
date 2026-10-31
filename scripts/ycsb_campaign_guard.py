@@ -35,8 +35,17 @@ def gone(error):
     return isinstance(error, OSError) and error.errno in (errno.ENOENT, errno.ESRCH)
 
 
-def exited(fd):
-    return bool(select.select([fd], [], [], 0)[0])
+def exited(fd, timeout=0):
+    # poll has no FD_SETSIZE ceiling. A closed/invalid descriptor is an
+    # observation failure, never evidence that a pinned task exited safely.
+    require(type(fd) is int and fd >= 0, 'invalid pidfd')
+    poller = select.poll()
+    poller.register(fd, select.POLLIN)
+    events = poller.poll(math.ceil(timeout * 1000))
+    for observed, flags in events:
+        require(observed == fd and not flags & select.POLLNVAL, 'invalid pidfd')
+        require(not flags & ~(select.POLLIN | select.POLLHUP), 'pidfd poll error')
+    return bool(events)
 
 
 def direct_children():
@@ -49,6 +58,7 @@ class Owned:
         self.rows = {}
         self.retired = []
         self.guard_pid = os.getpid()
+        self.root_pid = None  # Reserved for the original unreaped Popen owner.
 
     def pin(self, pid, parent=None):
         fd = os.pidfd_open(pid)
@@ -74,6 +84,7 @@ class Owned:
             raise
 
     def sample(self):
+        self.reap_adopted(self.root_pid)
         # Discover even children that call setsid; subreaper adoption closes the
         # missed-intermediate-parent window. Short-lived RSS peaks remain sampled.
         candidates = {}
@@ -90,9 +101,8 @@ class Owned:
                 old = self.rows.get(pid)
                 if old and row['start_ticks'] != old['start_ticks']:
                     require(exited(old['fd']), 'live pidfd start token changed')
-                    self.retired.append({k: v for k, v in old.items() if k != 'fd'})
-                    os.close(old['fd'])
-                    del self.rows[pid]
+                    self.reap_adopted(self.root_pid)
+                    require(pid not in self.rows, 'changed PID still reserved by pinned owner')
                 if pid in self.rows or pid == self.guard_pid:
                     continue
                 parent = row['ppid']
@@ -112,6 +122,7 @@ class Owned:
                     continue
             if not added:
                 break
+        self.reap_adopted(self.root_pid)
         rss, live = 0, []
         for pid, pinned in self.rows.items():
             if exited(pinned['fd']):
@@ -141,13 +152,18 @@ class Owned:
             return False
 
     def reap_adopted(self, root_pid):
-        for pid, row in self.rows.items():
-            if pid == root_pid or not exited(row['fd']):
+        for pid, row in list(self.rows.items()):
+            if pid in (root_pid, self.root_pid) or not exited(row['fd']):
                 continue
             try:
-                os.waitid(os.P_PIDFD, row['fd'], os.WEXITED | os.WNOHANG)
+                reaped = os.waitid(os.P_PIDFD, row['fd'], os.WEXITED | os.WNOHANG)
             except ChildProcessError:
-                pass  # Original parent reaped it; pidfd still identifies that task.
+                reaped = True  # Exact task exited; original parent owns/reaped it.
+            if reaped is None:
+                continue  # Not yet waitable: retain its exact pin for a later pass.
+            self.retired.append({k: v for k, v in row.items() if k != 'fd'})
+            os.close(row['fd'])
+            del self.rows[pid]
 
     def close(self):
         for row in self.rows.values():
@@ -264,6 +280,7 @@ def run(args, helper):
         with (out/'stdout.log').open('x') as stdout, (out/'stderr.log').open('x') as stderr:
             with helper.defer_startup_cancellation() as pending:
                 child = subprocess.Popen(args.command, cwd=args.cwd, stdout=stdout, stderr=stderr, start_new_session=True)
+                owned.root_pid = child.pid
                 # Direct unreaped child cannot recycle before its first pin.
                 owned.pin(child.pid, os.getpid())
                 root_fd = owned.rows[child.pid]['fd']
@@ -285,7 +302,7 @@ def run(args, helper):
                     require(result['exit_code'] == 0, 'wrapped command exited nonzero')
                     require(not direct_children(), 'adopted child after root wait')
                     break
-                select.select([root_fd], [], [], args.interval)
+                exited(root_fd, args.interval)
         if args.validation_json:
             accepted = helper.read(args.validation_json)
             require(accepted.get('status') == 'validated-consumer-evidence' and accepted.get('errors') == [], 'maintained campaign validation failed/missing')

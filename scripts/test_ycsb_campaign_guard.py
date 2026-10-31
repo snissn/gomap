@@ -108,17 +108,33 @@ class IdentityRaces(unittest.TestCase):
         owned.rows[33] = dict(fake_row(33, 331, 22), fd=330)
         with mock.patch.object(g, 'exited', return_value=True), \
              mock.patch.object(g.os, 'waitpid', side_effect=AssertionError('numeric wait forbidden')), \
-             mock.patch.object(g.os, 'waitid', side_effect=ChildProcessError) as wait:
+             mock.patch.object(g.os, 'waitid', side_effect=ChildProcessError) as wait, \
+             mock.patch.object(g.os, 'close') as close:
             owned.reap_adopted(None)
         wait.assert_called_once_with(os.P_PIDFD, 330, os.WEXITED | os.WNOHANG)
+        close.assert_called_once_with(330)
+        self.assertNotIn(33,owned.rows);self.assertNotIn('fd',owned.retired[0])
 
     def test_exact_adopted_zombie_reaps_by_pidfd(self):
         owned = g.Owned()
         owned.rows[33] = dict(fake_row(33, 331, owned.guard_pid), fd=330)
         with mock.patch.object(g, 'exited', return_value=True), \
-             mock.patch.object(g.os, 'waitid', return_value=object()) as wait:
+             mock.patch.object(g.os, 'waitid', return_value=object()) as wait, \
+             mock.patch.object(g.os, 'close') as close:
             owned.reap_adopted(None)
         wait.assert_called_once_with(os.P_PIDFD, 330, os.WEXITED | os.WNOHANG)
+        close.assert_called_once_with(330)
+        self.assertNotIn(33,owned.rows)
+
+    def test_retirement_preserves_root_live_and_not_yet_waitable_pins(self):
+        owned=g.Owned();owned.root_pid=33
+        for pid in (33,34,35):owned.rows[pid]=dict(fake_row(pid,pid*10,owned.guard_pid),fd=pid*10)
+        with mock.patch.object(g,'exited',side_effect=lambda fd:fd!=340), \
+             mock.patch.object(g.os,'waitid',return_value=None) as wait, \
+             mock.patch.object(g.os,'close') as close:
+            owned.reap_adopted(None)
+        wait.assert_called_once_with(os.P_PIDFD,350,os.WEXITED|os.WNOHANG)
+        close.assert_not_called();self.assertEqual(set(owned.rows),{33,34,35})
 
     def test_kernel_without_pidfd_waitid_fails_closed(self):
         with mock.patch.object(g.os, 'pidfd_open', return_value=330), \
@@ -127,6 +143,17 @@ class IdentityRaces(unittest.TestCase):
             with self.assertRaises(OSError):
                 g.check_pidfd_waitid()
         close.assert_called_once_with(330)
+
+    def test_closed_high_descriptor_fails_closed(self):
+        import fcntl
+        fd = os.pidfd_open(os.getpid())
+        try:
+            high = fcntl.fcntl(fd, fcntl.F_DUPFD_CLOEXEC, 2048)
+            os.close(high)
+            with self.assertRaisesRegex(RuntimeError, 'invalid pidfd'):
+                g.exited(high)
+        finally:
+            os.close(fd)
 
 
 FIXTURE = """
@@ -141,6 +168,10 @@ Path('fixture.tmp').write_text(json.dumps(identities));os.replace('fixture.tmp',
 while not Path('release').exists():time.sleep(.01)
 ACTION
 """
+
+# Include the actual root in test-owner authority for failure paths where the
+# broken guard can itself exit before cleaning its still-running root.
+ROOT_FIXTURE = FIXTURE.replace('identities=[]', "f=Path('/proc/self/stat').read_text().rsplit(')',1)[1].split()\nidentities=[{'pid':os.getpid(),'start_ticks':int(f[19])}]")
 
 
 @unittest.skipUnless(PIDFD_PLATFORM, 'Linux pidfd and P_PIDFD waitid support required')
@@ -203,6 +234,65 @@ class InjectedSafety(unittest.TestCase):
         code,result,_=self.invoke('pass')
         self.assertEqual(code,0);self.assertGreater(result['root_identity']['start_ticks'],0)
         self.assertFalse(result['whole_interval_verified'])
+
+    def test_real_high_descriptor_pidfd_readiness(self):
+        import fcntl
+        root = Path(tempfile.mkdtemp(dir=OUTPUT_ROOT, prefix=self._testMethodName+'-'))
+        proc = subprocess.Popen(['/bin/cat'], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL)
+        fd = os.pidfd_open(proc.pid)
+        high = None
+        try:
+            high = fcntl.fcntl(fd, fcntl.F_DUPFD_CLOEXEC, 2048)
+            (root/'descriptor.json').write_text(json.dumps({'pid':proc.pid,'fd':high,'start_ticks':g.stat(proc.pid)['start_ticks']})+'\n')
+            self.assertGreaterEqual(high,2048)
+            self.assertFalse(g.exited(high))
+            proc.stdin.close()
+            proc.wait(timeout=2)
+            self.assertTrue(g.exited(high))
+        finally:
+            stop_test_owned(fd,proc)
+            if proc.stdin and not proc.stdin.closed:proc.stdin.close()
+            if high is not None:os.close(high)
+            os.close(fd)
+
+    def test_high_descriptor_root_wait_and_owned_cleanup(self):
+        # The second cell replaces only readiness to expose the independent
+        # root wait call on the original guard, which also used select().
+        duplicate="import fcntl,time\nreal_open=g.os.pidfd_open\ndef opened(pid,*a):\n fd=real_open(pid,*a)\n try:return fcntl.fcntl(fd,fcntl.F_DUPFD_CLOEXEC,2048)\n finally:g.os.close(fd)\ng.os.pidfd_open=opened\nreal_pin=g.Owned.pin\ndef pin(self,pid,parent):\n value=real_pin(self,pid,parent)\n if parent==self.guard_pid:\n  deadline=time.monotonic()+4\n  while not g.Path('fixture.json').exists() and time.monotonic()<deadline:time.sleep(.001)\n return value\ng.Owned.pin=pin\n"
+        ready="def ready(fd,timeout=0):\n p=g.select.poll();p.register(fd,g.select.POLLIN);events=p.poll(int(timeout*1000))\n if any(mask & g.select.POLLNVAL for _,mask in events):raise RuntimeError('invalid pidfd')\n return bool(events)\ng.exited=ready\n"
+        for override in ('',ready):
+            with self.subTest(root_wait_override=bool(override)):
+                code,result,_=self.invoke(ROOT_FIXTURE.replace('ACTION','time.sleep(.3);raise SystemExit(0)'),duplicate+override,fixture=True)
+                self.assertNotEqual(code,0)  # Deliberate live setsid children.
+                self.assertTrue(any('child exited with live owned descendants' in e for e in result['errors']))
+                self.assertFalse(any('out of range' in e or 'invalid pidfd' in e for e in result['errors']))
+                self.assertTrue(result['cleanup_signals'])
+
+    def test_sequential_churn_retires_fds_preserves_root_and_cleans_orphans(self):
+        # Passive pin acknowledgements ensure all 1050 actual children are
+        # observed during ordinary sampled iterations, rather than missed peaks.
+        inject="real_pin=g.Owned.pin\nroot_identity=None\ndef pin(self,pid,parent):\n global root_identity\n value=real_pin(self,pid,parent)\n if parent==self.guard_pid and root_identity is None:root_identity=(pid,self.rows[pid]['fd'],self.rows[pid]['start_ticks'])\n elif parent==root_identity[0]:g.Path('pin-%d'%pid).touch()\n return value\ng.Owned.pin=pin\nreal_sample=g.Owned.sample\nmax_rows=0\nmax_fd=0\ndef sample(self):\n global max_rows,max_fd\n value=real_sample(self)\n if root_identity is not None:\n  pid,fd,tick=root_identity\n  assert self.rows[pid]['fd']==fd and self.rows[pid]['start_ticks']==tick,'root pin retired or changed'\n max_rows=max(max_rows,len(self.rows));max_fd=max(max_fd,max((r['fd'] for r in self.rows.values()),default=0))\n g.Path('churn.guard.json').write_text(__import__('json').dumps({'max_rows':max_rows,'max_fd':max_fd,'retired_count':len(self.retired),'root_identity':root_identity}))\n return value\ng.Owned.sample=sample\n"
+        action="""for i in range(1050):
+ p=subprocess.Popen(['/bin/cat'],stdin=subprocess.PIPE,stdout=subprocess.DEVNULL)
+ try:
+  deadline=time.monotonic()+2
+  while not Path('pin-%d'%p.pid).exists() and time.monotonic()<deadline:time.sleep(.001)
+  if not Path('pin-%d'%p.pid).exists():raise RuntimeError('guard failed to pin sequential child')
+ finally:
+  p.stdin.close();p.wait(timeout=2)
+Path('churn.complete.json').write_text(json.dumps({'children':1050}))
+raise SystemExit(0)"""
+        code,result,root=self.invoke(ROOT_FIXTURE.replace('time.sleep(12)','time.sleep(150)').replace('ACTION',action),inject,fixture=True,flags=('--interval','.001','--deadline','120'),driver_timeout=140)
+        self.assertNotEqual(code,0)  # Original root deliberately leaves setsid orphans.
+        self.assertEqual(json.loads((root/'churn.complete.json').read_text())['children'],1050)
+        audit=json.loads((root/'churn.guard.json').read_text())
+        self.assertLessEqual(audit['max_rows'],8);self.assertLess(audit['max_fd'],1024)
+        retired=result['retired_processes']
+        self.assertGreaterEqual(len(retired),1050)
+        self.assertTrue(all('fd' not in row for row in retired))
+        self.assertNotIn(result['root_identity']['pid'],[row['pid'] for row in retired])
+        self.assertTrue(any('child exited with live owned descendants' in e for e in result['errors']))
+        self.assertFalse(any('out of range' in e or 'invalid pidfd' in e for e in result['errors']))
 
     def test_nonzero_and_deadline_cannot_be_partial_acceptance(self):
         for source,flags in [('raise SystemExit(7)',()),('import time;time.sleep(12)',('--deadline','.1'))]:
