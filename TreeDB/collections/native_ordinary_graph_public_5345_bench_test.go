@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -10,6 +11,40 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 )
+
+// Inspect the actual active output after timing, rather than rebuilding a
+// synthetic image. Compression reports can be reconstructed from persisted
+// descriptors: they describe active output, not an all-history event counter.
+func report5345ActiveStorage(b *testing.B, col *Collection, rows int) {
+	b.Helper()
+	accounting, err := col.ColumnStorePhysicalAccounting(nil, ColumnStorePhysicalAccountingOptions{DetailedSections: true, ReadIntegrity: ColumnAssetReadIntegrityVerify})
+	if err != nil {
+		b.Fatalf("active physical accounting: %v", err)
+	}
+	if !accounting.Complete || accounting.TypedColumnPartRefs == 0 || accounting.TypedColumnPartRefs != len(accounting.TypedColumnParts) {
+		b.Fatalf("incomplete active typed-column census: complete=%v refs=%d parts=%d", accounting.Complete, accounting.TypedColumnPartRefs, len(accounting.TypedColumnParts))
+	}
+	activeRows := 0
+	for _, part := range accounting.TypedColumnParts {
+		if part.Image.Rows != part.Asset.Rows || len(part.Image.CompressionDetail) == 0 || len(part.Image.SerializedSections) == 0 {
+			b.Fatalf("incomplete active part accounting: %+v", part)
+		}
+		activeRows += part.Image.Rows
+	}
+	if activeRows != rows {
+		b.Fatalf("active typed-column rows=%d want %d", activeRows, rows)
+	}
+	receipt := struct {
+		Basis      string                        `json:"basis"`
+		Accounting ColumnStorePhysicalAccounting `json:"accounting"`
+	}{"active_persisted_descriptors_not_all_history_events", accounting}
+	encoded, err := json.Marshal(receipt)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Logf("5345_ACTIVE_STORAGE_CENSUS: %s", encoded)
+	b.ReportMetric(float64(len(accounting.TypedColumnParts)), "active-typed-parts/op")
+}
 
 func require5345NoCodecOverrides(b *testing.B) {
 	b.Helper()
@@ -37,8 +72,9 @@ func require5345NoCodecOverrides(b *testing.B) {
 // Fixture construction, opening, schema setup, and closing are untimed. The
 // timed interval includes all 128-row public inserts, the same standalone sync
 // used before Optimize, and the public graph rebuild. A failed operation is a
-// failed sample, never a successful low-cost result. No internal fallback or
-// bound-admission counter is available here; those outcomes are unmeasured.
+// failed sample, never a successful low-cost result. After timing, persisted
+// active parts expose codec retention/raw fallback. This is not a census of
+// every transient allocation, physical write or internal engine fallback.
 func BenchmarkOrdinaryGraphPublic5345(b *testing.B) {
 	policies := []struct {
 		name  string
@@ -129,6 +165,7 @@ func BenchmarkOrdinaryGraphPublic5345(b *testing.B) {
 				b.ReportMetric(float64(rows), "rows/op")
 				b.ReportMetric(float64(len(batches)), "accepted-insert-batches/op")
 				b.ReportMetric(1, "loaded-graphs/op")
+				report5345ActiveStorage(b, col, rows)
 			})
 		}
 	}
@@ -190,6 +227,10 @@ func BenchmarkTypedGraphEncodedPublic5345(b *testing.B) {
 				if beforeState == nil || beforeState.invalid || beforeState.physicalRows != 0 {
 					b.Fatalf("unexpected initial publication state: %+v", beforeState)
 				}
+				resolvedConfig := col.Meta().Options.ColumnStore
+				if resolvedConfig == nil || resolvedConfig.AssetManager == nil || resolvedConfig.TypedColumnCompression != policy.codec || resolvedConfig.TypedColumnSectionCompression != policy.codec {
+					b.Fatalf("missing or mismatched resolved column-store policy: %+v", resolvedConfig)
+				}
 				coord := col.collectionSchemaCoordinator()
 				coord.typedPublicationDebtMu.Lock()
 				beforeReserved := coord.typedPublicationEncodedBytes
@@ -214,7 +255,7 @@ func BenchmarkTypedGraphEncodedPublic5345(b *testing.B) {
 				b.StopTimer()
 				if err != nil {
 					if policy.codec == ColumnStoreTypedColumnCompressionSnappy {
-						_, boundErr := typedColumnPublicationFP32EncodedBound(*meta.Options.ColumnStore, rows)
+						_, boundErr := typedColumnPublicationFP32EncodedBound(*resolvedConfig, rows)
 						// The zero-row probe identifies the helper's private layout-error
 						// singleton without exporting it or matching error text. The
 						// adapter can return other errors before reaching that helper.
@@ -247,6 +288,7 @@ func BenchmarkTypedGraphEncodedPublic5345(b *testing.B) {
 				b.ReportMetric(float64(rows), "rows/op")
 				b.ReportMetric(1, "accepted-inserts/op")
 				b.ReportMetric(float64(reserved-beforeReserved), "reserved-encoded-B/op")
+				report5345ActiveStorage(b, col, rows)
 			})
 		}
 	}
