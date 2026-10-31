@@ -1,8 +1,0 @@
-{
-  "source_head": "0a8323f7ca6f6128d53dfca43a408c7e443d39ab",
-  "donor_sha256": "1ddfc5bb108f4e0a2dec5901eae5ef5c19acf2879479a450b29570f9d8f616a8",
-  "formatted_sha256": "478e57f2e84a09caafaff4c2149f40aacd76715adfc2196a268acf4f005963df",
-  "existing_read_harness_sha256": "cc27ffef2e22d1e9c5aa0dc34c79990e6d204d02b27d555b1b8b7ec1357822a7",
-  "only_go_change": "new write benchmark; no production modification",
-  "root_source_review": "actual APIs/response shapes/Filter unlimited/capturedquery+fullDocument/reopen invariants inspected; worker ready before timer, requests once, original durable ACK; normalb.Nperloadcleanup"
-}

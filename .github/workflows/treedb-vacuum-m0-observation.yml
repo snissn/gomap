@@ -1,85 +1,150 @@
-name: "TreeDB: M0 observation diagnostic (manual only)"
-
+name: "5342 candidate cache cold-to-warm qualification (not M0)"
 on:
   workflow_dispatch:
-
 permissions:
   contents: read
-
-env:
-  PYTHONDONTWRITEBYTECODE: '1'
-
 jobs:
-  observe:
+  populate:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    env:
+      ROLE: populate
     steps:
-      - name: Start bounded packet
+      - name: Start retained packet
         run: |
-          mkdir -p "$RUNNER_TEMP/m0-observation/packet"
-          date +%s > "$RUNNER_TEMP/m0-observation/job-started"
-          printf '%s\n' '{"diagnostic_only":true,"product":"2588cd26780fe9ffd8c33797fc6a2bfdf2c00d49"}' > "$RUNNER_TEMP/m0-observation/packet/start.json"
-
-      - name: Checkout reviewed harness
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+          mkdir -p "$RUNNER_TEMP/5342-populate/tmp"
+          printf 'controller=%s\nworkflow=%s\nrun=%s\nattempt=%s\nrole=populate\nproduct=5e1b999069a0e92d2eabb89fef6e1be0fae1c634\n' "$GITHUB_SHA" "$GITHUB_WORKFLOW_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > "$RUNNER_TEMP/5342-populate/identity.txt"
+      - name: Checkout reviewed controller
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           ref: ${{ github.sha }}
           path: harness
           persist-credentials: false
-
-      - name: Checkout fixed pristine product
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Checkout fixed candidate with its reviewed baseline
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          ref: 2588cd26780fe9ffd8c33797fc6a2bfdf2c00d49
+          ref: 5e1b999069a0e92d2eabb89fef6e1be0fae1c634
+          fetch-depth: 2
           path: product
           persist-credentials: false
-
-      - name: Verify official complete Go SDK
-        run: |
-          set -euo pipefail
-          task_root="$RUNNER_TEMP/m0-observation"
-          exec > >(tee "$task_root/packet/sdk-bootstrap.txt") 2>&1
-          archive="$task_root/packet/go1.26.9.linux-amd64.tar.gz"
-          curl --fail --location --max-time 90 https://go.dev/dl/go1.26.9.linux-amd64.tar.gz -o "$archive"
-          echo "42d158b4d8f7b61ac0a830567c940a86098fb7aac52e467a5ebec03ef5cc2f8d  $archive" | sha256sum --check
-          tar -xzf "$archive" -C "$task_root"
-
-      - name: Pure harness validation
-        run: |
-          set -o pipefail
-          M0_TEST_PRODUCT="$GITHUB_WORKSPACE/product" python3 harness/.github/scripts/test_mvcc_m0_observation.py 2>&1 | tee "$RUNNER_TEMP/m0-observation/packet/harness-tests.txt"
-
-      - name: One original full observation schedule
-        run: |
-          python3 harness/.github/scripts/mvcc_m0_observation.py \
-            --product "$GITHUB_WORKSPACE/product" \
-            --output "$RUNNER_TEMP/m0-observation/packet" \
-            --goroot "$RUNNER_TEMP/m0-observation/go" \
-            --job-started "$(cat "$RUNNER_TEMP/m0-observation/job-started")"
-
-      - name: Retain setup and terminal state on every outcome
-        if: always()
-        run: |
-          python3 - <<'PY'
-          import json, os, pathlib, time
-          root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'm0-observation' / 'packet'
-          root.mkdir(parents=True, exist_ok=True)
-          (root / 'workflow-terminal.json').write_text(json.dumps({
-              'wall_ns': time.time_ns(), 'harness_sha': os.environ['GITHUB_SHA'],
-              'run_id': os.environ['GITHUB_RUN_ID'], 'attempt': os.environ['GITHUB_RUN_ATTEMPT'],
-              'note': 'See step logs for bootstrap failures; missing runner receipts mean no completed diagnostic.'
-          }, indent=2) + '\n')
-          PY
-
-      - name: Upload complete diagnostic packet
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - name: Verify and retain actual source
+        working-directory: product
+        run: bash ../harness/.github/5342/bind-source.sh
+      - name: Run candidate source and wrapper controls once
+        working-directory: product
+        run: bash ../harness/.github/5342/run-source-controls.sh
+      - name: Restore exact candidate consumer cache
+        id: setup_go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
         with:
-          name: m0-observation-2588c-${{ github.run_id }}-${{ github.run_attempt }}
+          go-version-file: product/go.mod
+          cache: true
+          cache-dependency-path: |
+            product/go.sum
+            product/.github/workflows/unified-bench-tests.yml
+      - name: Retain bounded tool and runner identities
+        working-directory: product
+        run: |
+          evidence="$RUNNER_TEMP/5342-populate"
+          if timeout --kill-after=1s 5s go version > "$evidence/go-version.log" 2>&1; then rc=0; else rc=$?; fi
+          printf 'exit=%s\n' "$rc" > "$evidence/go-version.exit"
+          if timeout --kill-after=1s 5s env GOWORK=off go env GOVERSION GOOS GOARCH > "$evidence/go-env.log" 2>&1; then rc=0; else rc=$?; fi
+          printf 'exit=%s\n' "$rc" > "$evidence/go-env.exit"
+          printf 'ImageOS=%s\nImageVersion=%s\nrunner_os=%s\nrunner_arch=%s\n' "${ImageOS-unknown}" "${ImageVersion-unknown}" '${{ runner.os }}' '${{ runner.arch }}' > "$evidence/runner.txt"
+      - name: Verify populate coverage and run unchanged guardrail
+        working-directory: product
+        env:
+          SETUP_GO_CACHE_HIT: ${{ steps.setup_go.outputs.cache-hit }}
+        run: bash ../harness/.github/5342/run-cache-role.sh
+      - name: Archive complete packet on every outcome
+        if: always()
+        run: |
+          evidence="$RUNNER_TEMP/5342-populate"
+          mkdir -p "$evidence"
+          printf 'job_status=%s\n' '${{ job.status }}' > "$evidence/terminal.txt"
+          tar -czf "$RUNNER_TEMP/5342-populate.tar.gz" -C "$evidence" .
+          sha256sum "$RUNNER_TEMP/5342-populate.tar.gz" > "$RUNNER_TEMP/5342-populate.sha256"
+      - name: Upload retained populate packet
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: 5342-cache-populate-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            ${{ runner.temp }}/m0-observation/packet
-            !${{ runner.temp }}/m0-observation/packet/cache
-            !${{ runner.temp }}/m0-observation/packet/modcache
-            !${{ runner.temp }}/m0-observation/packet/tmp
+            ${{ runner.temp }}/5342-populate.tar.gz
+            ${{ runner.temp }}/5342-populate.sha256
+          if-no-files-found: error
+          retention-days: 30
+  restore:
+    needs: populate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    env:
+      ROLE: restore
+    steps:
+      - name: Start retained packet
+        run: |
+          mkdir -p "$RUNNER_TEMP/5342-restore/tmp"
+          printf 'controller=%s\nworkflow=%s\nrun=%s\nattempt=%s\nrole=restore\nproduct=5e1b999069a0e92d2eabb89fef6e1be0fae1c634\n' "$GITHUB_SHA" "$GITHUB_WORKFLOW_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > "$RUNNER_TEMP/5342-restore/identity.txt"
+      - name: Checkout reviewed controller
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          path: harness
+          persist-credentials: false
+      - name: Checkout fixed candidate with its reviewed baseline
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: 5e1b999069a0e92d2eabb89fef6e1be0fae1c634
+          fetch-depth: 2
+          path: product
+          persist-credentials: false
+      - name: Verify and retain actual source
+        working-directory: product
+        run: bash ../harness/.github/5342/bind-source.sh
+      - name: Restore exact candidate consumer cache
+        id: setup_go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version-file: product/go.mod
+          cache: true
+          cache-dependency-path: |
+            product/go.sum
+            product/.github/workflows/unified-bench-tests.yml
+      - name: Retain bounded tool and runner identities
+        working-directory: product
+        run: |
+          evidence="$RUNNER_TEMP/5342-restore"
+          if timeout --kill-after=1s 5s go version > "$evidence/go-version.log" 2>&1; then rc=0; else rc=$?; fi
+          printf 'exit=%s\n' "$rc" > "$evidence/go-version.exit"
+          if timeout --kill-after=1s 5s env GOWORK=off go env GOVERSION GOOS GOARCH > "$evidence/go-env.log" 2>&1; then rc=0; else rc=$?; fi
+          printf 'exit=%s\n' "$rc" > "$evidence/go-env.exit"
+          printf 'ImageOS=%s\nImageVersion=%s\nrunner_os=%s\nrunner_arch=%s\n' "${ImageOS-unknown}" "${ImageVersion-unknown}" '${{ runner.os }}' '${{ runner.arch }}' > "$evidence/runner.txt"
+      - name: Verify restore coverage and run unchanged guardrail
+        working-directory: product
+        env:
+          SETUP_GO_CACHE_HIT: ${{ steps.setup_go.outputs.cache-hit }}
+        run: bash ../harness/.github/5342/run-cache-role.sh
+      - name: Archive complete packet on every outcome
+        if: always()
+        run: |
+          evidence="$RUNNER_TEMP/5342-restore"
+          mkdir -p "$evidence"
+          printf 'job_status=%s\n' '${{ job.status }}' > "$evidence/terminal.txt"
+          tar -czf "$RUNNER_TEMP/5342-restore.tar.gz" -C "$evidence" .
+          sha256sum "$RUNNER_TEMP/5342-restore.tar.gz" > "$RUNNER_TEMP/5342-restore.sha256"
+      - name: Upload retained restore packet
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: 5342-cache-restore-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/5342-restore.tar.gz
+            ${{ runner.temp }}/5342-restore.sha256
           if-no-files-found: error
           retention-days: 30
