@@ -1,0 +1,38 @@
+name: "read-snapshot: guardrails"
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  append_only_snapshot_guardrail:
+    name: append-only snapshot guardrail (linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        id: setup_go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+
+      - name: Observe dependency cache metadata
+        env:
+          SETUP_GO_CACHE_HIT: ${{ steps.setup_go.outputs.cache-hit }}
+        run: |
+          if timeout --kill-after=1s 5s bash ./scripts/observe_read_snapshot_cache.sh; then
+            echo "[cache-observation] status=complete"
+          else
+            echo "[cache-observation] status=incomplete"
+          fi
+
+      - name: Run read-snapshot append-only guardrail
+        run: ./scripts/check_read_snapshot_guardrail.sh

@@ -1,0 +1,124 @@
+name: "5342 bounded dependency-cache inquiry (not M0)"
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  observe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Start retained packet
+        run: |
+          mkdir -p "$RUNNER_TEMP/5342-evidence/tmp"
+          printf 'controller=%s\nworkflow=%s\nrun=%s\nattempt=%s\nproduct=0538bf2dc25519bbeabe968d35b025c240f4d4f7\n' "$GITHUB_SHA" "$GITHUB_WORKFLOW_SHA" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > "$RUNNER_TEMP/5342-evidence/identity.txt"
+      - name: Checkout reviewed controller
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          path: harness
+          persist-credentials: false
+      - name: Checkout fixed pristine product
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: 0538bf2dc25519bbeabe968d35b025c240f4d4f7
+          path: product
+          persist-credentials: false
+      - name: Verify source and execute synthetic controls once
+        working-directory: product
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/5342-evidence"
+          controls="$GITHUB_WORKSPACE/harness/.github/5342"
+          [[ "$GITHUB_SHA" == "$GITHUB_WORKFLOW_SHA" ]]
+          [[ "$(git rev-parse HEAD)" == 0538bf2dc25519bbeabe968d35b025c240f4d4f7 ]]
+          [[ "$(git -C ../harness rev-parse HEAD)" == "$GITHUB_SHA" ]]
+          [[ -z "$(git status --porcelain --untracked-files=all)" ]]
+          git rev-parse HEAD HEAD^{tree} > "$evidence/product.txt"
+          git -C ../harness rev-parse HEAD HEAD^{tree} > "$evidence/controller.txt"
+          cp -R "$controls" "$evidence/sources"
+          cp ../harness/.github/workflows/treedb-vacuum-m0-observation.yml "$evidence/carrier-workflow.yml"
+          sha256sum scripts/check_read_snapshot_guardrail.sh .github/workflows/read-snapshot-guardrails.yml go.mod go.sum > "$evidence/product-source-hashes.txt"
+          sha256sum "$controls"/control-* "$controls"/candidate/scripts/observe_read_snapshot_cache.sh "$controls"/candidate/.github/workflows/read-snapshot-guardrails.yml > "$evidence/control-source-hashes.txt"
+          printf '%s\n' '21aaf7758b336619af3f761bc01a4033f82732363cabb8803173a233f06100d1  sources/candidate/scripts/observe_read_snapshot_cache.sh' > "$evidence/observer.sha256"
+          (cd "$evidence" && sha256sum --check observer.sha256)
+          git --version > "$evidence/tools.txt"
+          bash --version >> "$evidence/tools.txt"
+          python3 --version >> "$evidence/tools.txt"
+          export TMPDIR="$evidence/tmp"
+          result=0
+          for name in control-symlinks.sh control-stat-failure.sh control-timeout.sh control-basic.sh control-workflow.py control-guardrail.sh; do
+            if [[ "$name" == *.py ]]; then command=(python3 "$controls/$name");
+            elif [[ "$name" == control-guardrail.sh ]]; then command=(bash "$controls/$name" "$GITHUB_WORKSPACE/product/scripts/check_read_snapshot_guardrail.sh");
+            else command=(bash "$controls/$name"); fi
+            printf '%q ' "${command[@]}" > "$evidence/$name.command"
+            printf '\n' >> "$evidence/$name.command"
+            if "${command[@]}" > "$evidence/$name.log" 2>&1; then rc=0; else rc=$?; fi
+            printf '%s=%s\n' "$name" "$rc" | tee -a "$evidence/control-exits.txt"
+            if [[ $rc -ne 0 ]] || ! grep -q '^PASS:' "$evidence/$name.log"; then result=1; fi
+          done
+          exit "$result"
+      - name: Restore normal Go dependency cache
+        id: setup_go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version-file: product/go.mod
+          cache: true
+          cache-dependency-path: product/go.sum
+      - name: Observe actual restored cache before unchanged guardrail
+        env:
+          SETUP_GO_CACHE_HIT: ${{ steps.setup_go.outputs.cache-hit }}
+        working-directory: product
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/5342-evidence"
+          if timeout --kill-after=1s 5s go version > "$evidence/go-version.log" 2>&1; then rc=0; else rc=$?; fi
+          printf 'exit=%s\n' "$rc" > "$evidence/go-version.exit"
+          if timeout --kill-after=1s 5s env GOWORK=off go env GOVERSION GOOS GOARCH > "$evidence/go-env.log" 2>&1; then rc=0; else rc=$?; fi
+          printf 'exit=%s\n' "$rc" > "$evidence/go-env.exit"
+          printf '%s\n' 'timeout --kill-after=1s 5s bash <reviewed observer>; before unchanged guardrail' > "$evidence/observation-before.command"
+          if timeout --kill-after=1s 5s bash ../harness/.github/5342/candidate/scripts/observe_read_snapshot_cache.sh > "$evidence/observation-before.log" 2>&1; then rc=0; else rc=$?; fi
+          printf 'exit=%s\n' "$rc" > "$evidence/observation-before.exit"
+          cat "$evidence/observation-before.log"
+          if [[ $rc == 0 ]]; then echo '[cache-observation] status=complete'; else echo '[cache-observation] status=incomplete'; fi
+      - name: Run unchanged snapshot guardrail
+        working-directory: product
+        run: |
+          set +e
+          set -o pipefail
+          evidence="$RUNNER_TEMP/5342-evidence"
+          printf '%s\n' 'bash ./scripts/check_read_snapshot_guardrail.sh (byte-identical to main and original c897)' > "$evidence/guardrail.command"
+          bash ./scripts/check_read_snapshot_guardrail.sh 2>&1 | tee "$evidence/guardrail.log"
+          statuses=("${PIPESTATUS[@]}")
+          printf 'guardrail=%s\ntee=%s\n' "${statuses[0]}" "${statuses[1]}" > "$evidence/guardrail.exit"
+          if [[ ${statuses[1]} != 0 ]]; then exit 1; fi
+          exit "${statuses[0]}"
+      - name: Observe cache after guardrail on every started setup
+        if: always() && steps.setup_go.outcome == 'success'
+        env:
+          SETUP_GO_CACHE_HIT: ${{ steps.setup_go.outputs.cache-hit }}
+        working-directory: product
+        run: |
+          evidence="$RUNNER_TEMP/5342-evidence"
+          if timeout --kill-after=1s 5s bash ../harness/.github/5342/candidate/scripts/observe_read_snapshot_cache.sh > "$evidence/observation-after.log" 2>&1; then rc=0; else rc=$?; fi
+          printf 'exit=%s\n' "$rc" > "$evidence/observation-after.exit"
+          cat "$evidence/observation-after.log"
+      - name: Archive complete diagnostic packet on every outcome
+        if: always()
+        run: |
+          printf 'job_status=%s\n' '${{ job.status }}' > "$RUNNER_TEMP/5342-evidence/terminal.txt"
+          tar -czf "$RUNNER_TEMP/5342-packet.tar.gz" -C "$RUNNER_TEMP/5342-evidence" .
+          sha256sum "$RUNNER_TEMP/5342-packet.tar.gz" > "$RUNNER_TEMP/5342-packet.sha256"
+      - name: Upload retained packet
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: 5342-cache-inquiry-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/5342-packet.tar.gz
+            ${{ runner.temp }}/5342-packet.sha256
+          if-no-files-found: error
+          retention-days: 30
