@@ -4795,12 +4795,23 @@ The provisional ordinary no-vector V2 Keyword composite reuse is covered by
 concurrent borrowers, cancellation/foreground callbacks, mutation, held capture
 and final parent Close zero), `TestNativeScalarForwardPublicPhysicalReuse`
 (checkpointed storage-call reduction with unchanged result and distinct predicate),
-`TestNativeScalarForwardOptionalRefusalAndBound` (original independent parent
-exhaustion, unchanged original scratch/headroom on optional key refusal and original fallback, full retained backing, independent clones, forward reuse versus the
-uncached constructor's original refusal, and 64-slot non-eviction), and
+`TestNativeScalarForwardOptionalRefusalAndBound` (real shared-parent pressure,
+original admission/owned-receipt and accepted scratch-charge accounting, refusal
+propagation or independent validated construction according to actual admission,
+fallback, full retained backing, independent clones and 64-slot non-eviction), and
 `TestNativeScalarForwardPublicSchemaAndPhysicalRefresh` (DDL, held old state,
-physical replacement and dropped declaration). Existing
-`TestNativeTextV2ForwardIdentity*`, `TestNativeHybridPublicScalarPhysicalWork`,
+physical replacement and dropped declaration).
+`TestNativeScalarForwardHeldParentRefusal` separately holds a real finite parent
+full with controlled original receipts: optional and uncached work must refuse,
+valid provenance must borrow without admission, and releasing only the same
+blocker must restore the same original admission. The deterministic
+`TestNativeScalarForwardOriginalAdmissionRefusal` callback control isolates the
+five provenance guards. `TestCOWSemanticRefundChangesAdmissionAfterFullSnapshot`
+checks an exact original-owner cleanup refund in a controlled caching fixture;
+it does not reproduce the original public fixture's schedule. The source-bound
+execution evidence and unresolved #5339 historical cause are recorded in
+[native-hybrid-read.md](native-hybrid-read.md#scalar-forward-pressure-assertion-and-delivered-controls-2026-10-31).
+Existing `TestNativeTextV2ForwardIdentity*`, `TestNativeHybridPublicScalarPhysicalWork`,
 `TestNativeScalarPlanReuse*` and `TestNativeScalarPlanCache*` retain their original
 forward-corruption, source-work and HNSW cache oracles. The frozen baseline RED
 controls are separate from candidate-focused and unchanged original Keyword

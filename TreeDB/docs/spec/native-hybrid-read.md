@@ -200,42 +200,56 @@ change publication/recovery authority. A stage report distinguishes future
 failures; it does not attribute the retained #5332 race7 failure, whose Optimize
 cause and precise refusing guard were not recorded.
 
-### Unresolved scalar-forward pressure assertion (2026-10-30)
+### Scalar-forward pressure assertion and delivered controls (2026-10-31)
 
 Exact `7fab8bacaae3142584ebdea8919297251465edcb`, TreeDB run
 `41033504030`, macOS job `123988627373`, failed
 `TestNativeScalarForwardOptionalRefusalAndBound` at the uncached-constructor
-refusal assertion. The original failure remains unresolved. No production
-admission bypass or cleanup timing cause is established by the retained log.
+refusal assertion. The original failure remains causally unresolved in #5339.
+The retained log establishes neither a production admission bypass nor a cleanup
+timing cause.
 
-The source-only diagnostic successor keeps the public fixture, limits, real
-parent-pressure setup, cached-success and uncached-refusal assertions, independent
-copy checks, fallback, and cache bounds. A test-local observer forwards the exact
-original admission call/result and prints budget, operation charge, admission
-calls/bytes/error, provenance and specialized-preflight discriminators only on
-failure. Extra test-local snapshots can change scheduling; they do not constitute
-a causal timing experiment or qualification of the original candidate.
+The correction merged in [PR #5332](https://github.com/snissn/gomap/pull/5332)
+separates shared-parent observations from mandatory capacity denial. The public
+`TestNativeScalarForwardOptionalRefusalAndBound` keeps the real pressure setup,
+independent copies, fallback, retained borrower and cache bounds. Its test-local
+observer forwards the original allocation and admission unchanged. Optional
+misses check their own receipt's refusal or completed release; uncached
+construction must request the original nonzero charge. Actual refusals propagate
+the original error, and accepted charges must match operation scratch growth.
+Successful construction must produce independent validated identities matching
+the retained plan. Global parent counters are not an owned-receipt ledger.
 
-Full reserved bytes is a snapshot, not a continuing refusal guarantee: native
-admission may legally reclaim idle read scratch, and the original flush worker
-can refund semantic cleanup even with periodic checkpointing disabled. Preexisting
-idle scratch alone does not explain this exact assertion because the immediately
-preceding optional-key refusal also preserved parent counters. A later refund or
-transfer would need evidence. The private cleanup-frontier join is reached from
-the public producer preparation path only conditionally under pressure; neither
-that path nor a plain Checkpoint provides a demonstrated unconditional fixture
-barrier. This successor therefore adds no speculative setup barrier, wait, retry,
-cleanup suppression or production resource-policy change.
+Full reserved bytes is a snapshot, not a continuing refusal guarantee: admission
+may reclaim idle read scratch, and the original flush worker may refund semantic
+cleanup even with periodic checkpointing disabled. Preexisting idle scratch
+alone does not explain the retained assertion because the preceding optional-key
+refusal also preserved parent counters. A later refund or transfer would need
+actual evidence. No speculative cleanup barrier, wait, retry, cleanup suppression
+or production resource-policy change was added.
 
-The additional deterministic control supplies the same native ID representation,
-an owned published provenance entry, and a recording refusal callback. It requires
-validated reuse to avoid original admission and requires missing, unpublished,
-foreign-owner, wrong-index and wrong-status provenance to return the exact original
-capacity refusal before storage lookup. Wrong-index/status/publication cases use
-the owned slot, isolating those guards from the foreign-owner guard. This control
-supplements the public shared-budget lifecycle fixture; it cannot qualify real
-pressure or attribute the macOS failure. All new coverage is authored only until
-executed, and the original RED must remain retained through further investigation.
+`TestNativeScalarForwardHeldParentRefusal` supplies the mandatory real-budget
+control. Its finite parent has held original receipts, no concurrent owner,
+queued cleanup or idle scratch. With the parent exactly full, optional retention
+and uncached construction must refuse while valid owned provenance borrows the
+retained object without admission. Releasing only the same blocker must allow
+the same original admission again. This is a direct-constructor/budget control,
+not a reproduction of the original public DB schedule.
+
+`TestNativeScalarForwardOriginalAdmissionRefusal` separately uses a recording
+refusal callback: validated reuse avoids admission; missing, unpublished,
+foreign-owner, wrong-index and wrong-status provenance preserves the exact
+original nonzero admission refusal before storage lookup. The owned-slot cases
+isolate publication/index/status guards from the foreign-owner guard. This
+callback control supplements the public and real-budget fixtures.
+
+The actual PR [TreeDB run 41051075545](https://github.com/snissn/gomap/actions/runs/41051075545)
+at head `c8c44856c24374180416ff1dc8c7e237b8d61450` completed all 38 jobs
+successfully. Retained native PASS events for the public fixture, held-parent
+refusal and cleanup-refund mechanism control cover Linux, Windows, macOS and
+Linux race. These results qualify those controls on that candidate; they do not
+explain the historical failure or qualify later production changes. The original
+RED and the historical incident's causal closure obligation remain retained.
 
 ### Prospective cause-isolation controls for #5338 and #5339
 
