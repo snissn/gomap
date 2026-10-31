@@ -804,7 +804,9 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/typed_graph_locator_encoded_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 6, occurrences: 7},
 	{path: "TreeDB/collections/typed_graph_manifest_encoded.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/collections/column_physical_asset_bound.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
-	{path: "TreeDB/collections/column_physical_asset_bound_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 8, occurrences: 13},
+	{path: "TreeDB/collections/column_physical_asset_bound_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 14, occurrences: 21},
+	// Public-path cost fixtures use retained configuration, codec and accounting APIs.
+	{path: "TreeDB/collections/native_ordinary_graph_public_5345_bench_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 22, occurrences: 22},
 	{path: "TreeDB/collections/typed_graph_asset_encoded_bound.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/collections/typed_graph_buffered_encoded_bound.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 2},
 	{path: "TreeDB/collections/typed_graph_fold_prepare.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 4},
