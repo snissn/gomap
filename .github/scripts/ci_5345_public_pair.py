@@ -96,7 +96,7 @@ def census(text, revision):
             if any(metrics[k] < 0 for k in ('B/op', 'allocs/op')):
                 raise RuntimeError('negative allocation metric: ' + line)
             measured[name] = metrics
-        skip = re.match(r'^\s*--- SKIP: (\S+)\s+\(', line)
+        skip = re.fullmatch(r'\s*--- SKIP: (\S+)(?: \([0-9]+(?:\.[0-9]+)?s\))?\s*', line)
         if skip:
             name = skip[1]
             if (revision != 'base' or name not in CASES or '/snappy/' not in name
