@@ -433,7 +433,17 @@ func (t *NativeJSONTxn) commitNativePlan(sealed bool, apply *nativeCommandWALApp
 	return t.commitNativePlanWithStats(sealed, apply, typedGroup, nil)
 }
 
-func (t *NativeJSONTxn) commitNativePlanWithStats(sealed bool, apply *nativeCommandWALApplyCommit, typedGroup bool, stats *CollectionInsertStats) (resultErr error) {
+func (t *NativeJSONTxn) commitNativePlanWithStats(sealed bool, apply *nativeCommandWALApplyCommit, typedGroup bool, stats *CollectionInsertStats) error {
+	return t.commitNativePlanWithStatsObserved(sealed, apply, typedGroup, stats, nil)
+}
+
+// expired observes a preassignment history refusal after successful synchronous
+// cancellation and Close checks. Retirement may complete asynchronously. It is
+// private one-shot insertion authority, never an instruction to rebase a txn.
+func (t *NativeJSONTxn) commitNativePlanWithStatsObserved(sealed bool, apply *nativeCommandWALApplyCommit, typedGroup bool, stats *CollectionInsertStats, expired *bool) (resultErr error) {
+	if expired != nil {
+		*expired = false
+	}
 	if t == nil {
 		return backenddb.ErrClosed
 	}
@@ -444,6 +454,9 @@ func (t *NativeJSONTxn) commitNativePlanWithStats(sealed bool, apply *nativeComm
 	}
 	defer func() {
 		err, stages, lease := t.closeLocked()
+		if err != nil && expired != nil {
+			*expired = false
+		}
 		resultErr = errors.Join(resultErr, err)
 		t.mu.Unlock()
 		t = nil
@@ -651,6 +664,14 @@ func (t *NativeJSONTxn) commitNativePlanWithStats(sealed bool, apply *nativeComm
 		publishStarted = time.Now()
 	}
 	result, err := t.core.CommitNative(native, intent, sync)
+	if expired != nil {
+		// Exact identity also excludes a lower-layer cleanup error joined to
+		// the sentinel. Consumed alone only transfers descriptor ownership.
+		*expired = apply == nil && !typedGroup && err == backenddb.ErrTxnTooOld &&
+			!result.Assigned && result.AssignedLSN == 0 && !result.Uncertain &&
+			!result.LogicalInstalled && !backenddb.CommitPublicationAccepted(err) &&
+			!errors.Is(err, ErrCommitAmbiguous)
+	}
 	if stats != nil {
 		stats.Publish = time.Since(publishStarted)
 	}
@@ -666,7 +687,11 @@ func (t *NativeJSONTxn) commitNativePlanWithStats(sealed bool, apply *nativeComm
 	}
 	t.custody = nil
 	if !result.Consumed {
-		err = errors.Join(err, cancelPrivateNativePublication(native))
+		cleanupErr := cancelPrivateNativePublication(native)
+		if cleanupErr != nil && expired != nil {
+			*expired = false
+		}
+		err = errors.Join(err, cleanupErr)
 	}
 	native, intent, plan, payload, effects = nil, nil, nil, nil, nil
 	return err

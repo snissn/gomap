@@ -681,11 +681,15 @@ func (work *ColumnPublishCandidateResourceWork) Add(other ColumnPublishCandidate
 // Ordinary native facade inserts report counts from their original captured
 // schema and prepared logical domain runs. PrepareDocuments times row staging;
 // Publish times CommitNative, including its required acknowledgement wait.
+// If a preassignment history refusal is reconstructed, these two timings sum
+// both attempts; counts describe only the accepted final plan.
 // Other phase timings are unmeasured on that route and remain zero. Secondary
 // AlreadySorted describes the prepared run, not the caller's document order.
 // These diagnostics are caller/handle-owned outputs rather than native engine
 // state; LastInsertStats retains one array and WithStats copies it for the caller.
 type CollectionInsertStats struct {
+	// HistoryExpiryRetries counts fully cleaned ordinary insert reconstructions (0 or 1).
+	HistoryExpiryRetries         int
 	Documents                    int
 	Indexes                      int
 	Runs                         int
