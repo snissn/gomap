@@ -1,0 +1,31 @@
+{
+  "source_base": "95c6ff3de473786bd98b692375cfdb9cef951668",
+  "patch_applies_to_clean_base": true,
+  "production_diff_after_quarantine": "",
+  "arithmetic_and_owner_outputs_byte_identical": true,
+  "commands": [
+    {
+      "command": [
+        "python3",
+        "/home/mikers/gomap-mongo-performance-exec-20261031-5z3yyej9/tmp/analysis-reproduction/prototypes/analyze_final_latency.py"
+      ],
+      "exit": 0,
+      "stdout": "{\n  \"relaxed\": {\n    \"gomap\": {\n      \"read_avg_us\": 251.0,\n      \"update_avg_us\": 457.0,\n      \"read_fraction_of_summed_latency\": 0.9147722698180352,\n      \"run_ops_sec\": 59245.2,\n      \"load_ops_sec\": 17457.9,\n      \"mean_concurrent_timed_requests_estimate\": 15.427893045950137\n    },\n    \"mongodb\": {\n      \"read_avg_us\": 359.0,\n      \"update_avg_us\": 374.0,\n      \"read_fraction_of_summed_latency\": 0.946716270669016,\n      \"run_ops_sec\": 42753.6,\n      \"load_ops_sec\": 39516.3,\n      \"mean_concurrent_timed_requests_estimate\": 15.498860931243676\n    }\n  },\n  \"durable-B\": {\n    \"gomap\": {\n      \"read_avg_us\": 944.0,\n      \"update_avg_us\": 7624.0,\n      \"read_fraction_of_summed_latency\": 0.6987112016999153,\n      \"run_ops_sec\": 11766.6,\n      \"load_ops_sec\": 2185.0,\n      \"mean_concurrent_timed_requests_estimate\": 15.230530756137759\n    },\n    \"mongodb\": {\n      \"read_avg_us\": 197.0,\n      \"update_avg_us\": 9602.0,\n      \"read_fraction_of_summed_latency\": 0.26559283587272386,\n      \"run_ops_sec\": 19879.2,\n      \"load_ops_sec\": 40152.8,\n      \"mean_concurrent_timed_requests_estimate\": 13.728316509541628\n    }\n  }\n}\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "python3",
+        "/home/mikers/gomap-mongo-performance-exec-20261031-5z3yyej9/tmp/analysis-reproduction/prototypes/analyze_owner_observations.py"
+      ],
+      "exit": 0,
+      "stdout": "durable-B-pair1-gomap sync_calls= 12704 sync_seconds= 40.868 max_group= 1 groups= 12680 participants= 12680\ndurable-B-pair2-gomap sync_calls= 12694 sync_seconds= 41.006 max_group= 1 groups= 12670 participants= 12670\ndurable-B-pair3-gomap sync_calls= 12702 sync_seconds= 40.724 max_group= 1 groups= 12678 participants= 12678\nrelaxed-pair1-gomap sync_calls= 18 sync_seconds= 0.164 max_group= 0 groups= 0 participants= 0\nrelaxed-pair2-gomap sync_calls= 18 sync_seconds= 0.15 max_group= 0 groups= 0 participants= 0\nrelaxed-pair3-gomap sync_calls= 18 sync_seconds= 0.143 max_group= 0 groups= 0 participants= 0\n",
+      "stderr": ""
+    }
+  ],
+  "public_diagnostic_launched": false,
+  "public_free_floor_bytes": 10737418240,
+  "free_at_decision": 9055195136,
+  "preferred_mount_free": 0,
+  "time_unix": 1793428541.104544
+}

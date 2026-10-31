@@ -1,0 +1,9 @@
+{
+  "go_env": "{\n\t\"GOROOT\": \"/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.10.linux-amd64\",\n\t\"GOTOOLDIR\": \"/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.10.linux-amd64/pkg/tool/linux_amd64\",\n\t\"GOVERSION\": \"go1.26.10\"\n}\n",
+  "compiler_version": "compile version go1.26.10\n",
+  "sha256": {
+    "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.10.linux-amd64/bin/go": "9c2a37ae5b21ba1d5a004bb9ab4d0c64de6fc5778e9d30487adccea62678b8b5",
+    "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.10.linux-amd64/pkg/tool/linux_amd64/compile": "b426da26640e8069dc35162c9900496d9a03bea90bf771236067fb8cae86d285"
+  },
+  "inherited_goroot": "/home/mikers/.gvm/gos/go1.25"
+}
