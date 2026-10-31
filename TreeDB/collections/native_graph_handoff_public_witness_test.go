@@ -1,0 +1,687 @@
+package collections
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"os/exec"
+	"regexp"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	treedb "github.com/snissn/gomap/TreeDB"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
+)
+
+const nativeGraphHandoffWitnessChildEnv = "TREEDB_NATIVE_GRAPH_HANDOFF_WITNESS_CHILD"
+const nativeGraphHandoffWitnessSuccess = "NATIVE_GRAPH_HANDOFF_WITNESS_COMPLETED"
+const nativeGraphHandoffWitnessCrashDirEnv = "TREEDB_NATIVE_GRAPH_HANDOFF_CRASH_DIR"
+const nativeGraphHandoffWitnessCrashMarker = "NATIVE_GRAPH_HANDOFF_GRAPH_ACK "
+const nativeGraphHandoffWitnessBatchRows = 128
+const nativeGraphHandoffWitnessRows = 2 * nativeGraphHandoffWitnessBatchRows
+
+// Go testing matches slash-separated components independently. Anchoring only
+// the whole name permits changed-manifest to match unchanged-manifest's suffix.
+func nativeGraphHandoffWitnessRunPattern(name string) string {
+	parts := strings.Split(name, "/")
+	for i := range parts {
+		parts[i] = "^" + regexp.QuoteMeta(parts[i]) + "$"
+	}
+	return strings.Join(parts, "/")
+}
+
+func TestNativeGraphHandoffWitnessRunPattern(t *testing.T) {
+	const parent = "TestNativeOrdinaryGraphAcceptedAcrossCapturedManifestBuild"
+	for _, selected := range []string{"sequential", "changed-manifest", "unchanged-manifest", "changed-manifest-crash"} {
+		pattern := strings.Split(nativeGraphHandoffWitnessRunPattern(parent+"/"+selected), "/")
+		if len(pattern) != 2 || !regexp.MustCompile(pattern[0]).MatchString(parent) || regexp.MustCompile(pattern[0]).MatchString(parent+"Extra") {
+			t.Fatalf("invalid parent selector: %q", pattern)
+		}
+		for _, candidate := range []string{"sequential", "changed-manifest", "unchanged-manifest", "changed-manifest-crash", selected + "Extra"} {
+			if got := regexp.MustCompile(pattern[1]).MatchString(candidate); got != (candidate == selected) {
+				t.Fatalf("selected=%q candidate=%q matched=%v", selected, candidate, got)
+			}
+		}
+	}
+	if got := nativeGraphHandoffWitnessRunPattern("Parent/a.b"); got != "^Parent$/^a\\.b$" {
+		t.Fatalf("literal component was not quoted: %q", got)
+	}
+}
+
+// Worker APIs have no cancellation contract. Keep the original public calls in
+// a child so a failed join cannot leak a worker into another test or race DB
+// teardown against that worker. Normal and race runs use the same test binary.
+func enterNativeGraphHandoffWitnessChild(t *testing.T) bool {
+	t.Helper()
+	if selected := os.Getenv(nativeGraphHandoffWitnessChildEnv); selected != "" {
+		if selected != t.Name() {
+			t.Fatalf("INVALID_WITNESS child selector=%q want=%q", selected, t.Name())
+		}
+		// Registered before fixture construction; runs after fixture defers and only
+		// certifies a normal, non-skipped completion of the whole child case.
+		t.Cleanup(func() {
+			if !t.Failed() && !t.Skipped() {
+				t.Log(nativeGraphHandoffWitnessSuccess)
+			}
+		})
+		return true
+	}
+	crash := strings.HasSuffix(t.Name(), "/changed-manifest-crash")
+	var crashDir string
+	if crash {
+		crashDir = t.TempDir()
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 150*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run="+nativeGraphHandoffWitnessRunPattern(t.Name()), "-test.count=1", "-test.timeout=2m", "-test.v")
+	cmd.WaitDelay = 5 * time.Second
+	prefix := nativeGraphHandoffWitnessChildEnv + "="
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(entry, prefix) && !strings.HasPrefix(entry, nativeGraphHandoffWitnessCrashDirEnv+"=") {
+			cmd.Env = append(cmd.Env, entry)
+		}
+	}
+	cmd.Env = append(cmd.Env, prefix+t.Name())
+	if crash {
+		cmd.Env = append(cmd.Env, nativeGraphHandoffWitnessCrashDirEnv+"="+crashDir)
+	}
+	// CombinedOutput waits/reaps the child even on context cancellation. Retain
+	// timeout stacks and assertion output instead of retrying an invalid setup.
+	output, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		t.Fatalf("INVALID_WITNESS child process deadline err=%v deadline=%v:\n%s", err, ctx.Err(), output)
+	}
+	if err != nil {
+		// Preserve the child's discriminator: a valid ROOT_HANDOFF_WITNESS
+		// refusal is a failed assertion, not an invalid setup by definition.
+		t.Fatalf("isolated witness child failed: %v\n%s", err, output)
+	}
+	if crash {
+		var accepted nativeGraphHandoffWitnessManifest
+		markers := 0
+		for _, line := range strings.Split(string(output), "\n") {
+			if strings.HasPrefix(line, nativeGraphHandoffWitnessCrashMarker) {
+				markers++
+				if err := json.Unmarshal([]byte(strings.TrimPrefix(line, nativeGraphHandoffWitnessCrashMarker)), &accepted); err != nil {
+					t.Fatalf("invalid graph acknowledgment: %v\n%s", err, output)
+				}
+			}
+		}
+		if markers != 1 || accepted.Directory != crashDir || accepted.Active.Generation == 0 || accepted.Active.Checksum == 0 || accepted.Active != accepted.Recovery || accepted.AppliedCommandLSN == 0 || bytes.Contains(output, []byte("INVALID_WITNESS")) || bytes.Contains(output, []byte("DATA RACE")) || bytes.Contains(output, []byte(nativeGraphHandoffWitnessSuccess)) {
+			t.Fatalf("INVALID_WITNESS no original graph acknowledgment before process exit: markers=%d accepted=%+v\n%s", markers, accepted, output)
+		}
+		t.Logf("isolated graph acknowledgment before process exit:\n%s", output)
+		verifyNativeGraphHandoffWitnessReopen(t, nativeTypedGroupOptions(crashDir), accepted)
+		return false
+	}
+	if !bytes.Contains(output, []byte(nativeGraphHandoffWitnessSuccess)) || bytes.Contains(output, []byte("INVALID_WITNESS")) || bytes.Contains(output, []byte("DATA RACE")) {
+		t.Fatalf("INVALID_WITNESS child missing clean completion:\n%s", output)
+	}
+	t.Logf("isolated witness completion:\n%s", output)
+	return false
+}
+
+// A controlled public-path witness, not attribution of the original race7 job.
+// Every setup miss is an explicit failure, not a skipped or weakened assertion.
+// The service4096/128 fixture retains its original seed/Optimize geometry and
+// first cold Hybrid order as an independent control.
+func TestNativeOrdinaryGraphAcceptedAcrossCapturedManifestBuild(t *testing.T) {
+	for _, mode := range []string{"sequential", "changed-manifest", "unchanged-manifest", "changed-manifest-crash"} {
+		t.Run(mode, func(t *testing.T) {
+			overlap := mode != "sequential"
+			unchanged := mode == "unchanged-manifest"
+			crash := mode == "changed-manifest-crash"
+			if !ordinaryColumnStableAuthorityEnabled() {
+				t.Skip("stable relative namespace unavailable")
+			}
+			if !enterNativeGraphHandoffWitnessChild(t) {
+				return
+			}
+			clearNativeOrdinaryPendingGraphCodecEnv(t)
+			var dir string
+			if crash {
+				dir = os.Getenv(nativeGraphHandoffWitnessCrashDirEnv)
+				if dir == "" {
+					t.Fatal("INVALID_WITNESS missing parent-owned crash directory")
+				}
+			} else {
+				dir = t.TempDir()
+			}
+			opts := nativeTypedGroupOptions(dir) // unchanged default finite admission limits
+			owner, err := treedb.Open(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if owner != nil {
+					if err := owner.Close(); err != nil {
+						t.Error(err)
+					}
+				}
+			}()
+			backend, err := owner.NativeSemanticBackend()
+			if err != nil {
+				t.Fatal(err)
+			}
+			manager := NewCollectionManager(backend)
+			defer func() {
+				if manager != nil {
+					if err := manager.Close(); err != nil {
+						t.Error(err)
+					}
+				}
+			}()
+			meta := nativeOrdinaryPendingGraphMeta()
+			if _, err := manager.CreateCollection(&meta); err != nil {
+				t.Fatal(err)
+			}
+			col, err := manager.OpenCollection(meta.Name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			finishLifecycle := func() {
+				t.Helper()
+				accepted := nativeGraphHandoffWitnessIdentity(t, col, dir)
+				read, err := col.nativeJSON.Capture(meta.Name)
+				if err != nil {
+					t.Fatal(err)
+				}
+				budget := read.capture.NativeAllocator().(nativeHNSWAdmissionBudget)
+				defer func() {
+					if read != nil {
+						if err := read.Close(); err != nil {
+							t.Error(err)
+						}
+					}
+				}()
+				requireNativeGraphHandoffWitnessRows(t, read.Get)
+				if err := read.Close(); err != nil {
+					t.Fatal(err)
+				}
+				read = nil
+				if err := owner.Checkpoint(); err != nil {
+					t.Fatal(err)
+				}
+				if got := nativeGraphHandoffWitnessIdentity(t, col, dir); got != accepted {
+					t.Fatalf("checkpoint changed accepted graph manifest: got=%+v want=%+v", got, accepted)
+				}
+				closeErr := manager.Close()
+				manager = nil
+				if closeErr != nil {
+					t.Fatalf("original manager Close: %v", closeErr)
+				}
+				closeErr = owner.Close()
+				owner = nil
+				if closeErr != nil {
+					t.Fatalf("original owner Close: %v", closeErr)
+				}
+				if stats := budget.Stats(); stats.TotalBytes != 0 || stats.ExternalLeases != 0 {
+					t.Fatalf("original owner retained custody: %+v", stats)
+				}
+				if stats := backend.ValueLogIdentityPinRegistry().Stats(); stats.ActivePins != 0 || stats.ActiveIdentities != 0 || stats.ActiveStableNamespaceLinks != 0 {
+					t.Fatalf("original owner retained physical resources: %+v", stats)
+				}
+				verifyNativeGraphHandoffWitnessReopen(t, opts, accepted)
+			}
+			var pause *Collection
+			if unchanged {
+				if _, err := manager.CreateCollection(&CollectionMeta{Name: "build_pause", Options: CollectionOptions{ColumnStore: &ColumnStoreConfig{
+					Enabled: true, Columns: []ColumnStoreColumn{{Name: "label", Path: "label", ValueType: ColumnStoreValueString, Owner: TypedStorageOwnerRowAsset}},
+					RetainedPayload: ColumnRetainedPayloadNonColumn, RetainedPayloadEncoding: ColumnRetainedPayloadEncodingJSON,
+				}}}); err != nil {
+					t.Fatal(err)
+				}
+				pause, err = manager.OpenCollection("build_pause")
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			insert := func(start, end int) {
+				t.Helper()
+				ids := make([][]byte, end-start)
+				docs := make([][]byte, end-start)
+				for i := range ids {
+					n := start + i
+					ids[i] = []byte(fmt.Sprintf("doc-%04d", n))
+					docs[i] = []byte(fmt.Sprintf(`{"embedding":[%d,1]}`, n+1))
+				}
+				if _, err := col.InsertBatch(ids, docs); err != nil {
+					t.Fatalf("INVALID_WITNESS seed[%d:%d]: %v", start, end, err)
+				}
+			}
+			// This controlled witness needs one physical prefix and one pending
+			// public batch, not the original failure's 4096-row capacity load.
+			// Keep the 128-row batch shape and default finite admission limits;
+			// acceptance below remains mandatory and fails closed. The original
+			// documentservice 4096/128 seed/Optimize geometry remains independent.
+			insert(0, nativeGraphHandoffWitnessBatchRows)
+			if err := owner.Checkpoint(); err != nil {
+				t.Fatal(err)
+			}
+			insert(nativeGraphHandoffWitnessBatchRows, nativeGraphHandoffWitnessRows)
+			if !overlap {
+				if err := owner.Checkpoint(); err != nil {
+					t.Fatal(err)
+				}
+				if status, err := col.RebuildVectorIndex("vec"); err != nil || !status.Loaded || status.RebuildNeeded {
+					t.Fatalf("sequential control: %+v %v", status, err)
+				}
+				finishLifecycle()
+				return
+			}
+			if unchanged {
+				// Drain all target rows, then create real pending assets only
+				// in the independent collection. Its old build has no target
+				// manifest result to hand off; graph construction still overlaps.
+				if err := owner.Checkpoint(); err != nil {
+					t.Fatal(err)
+				}
+				if _, _, err := pause.InsertTypedBatchWithStats([][]byte{[]byte("pending")}, [][]byte{[]byte(`{"id":"pending"}`)}, []TypedColumnBatch{{Name: "label", Strings: []string{"pending"}}}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before, err := backend.ObserveNativeProducer()
+			if err != nil || before.UnderPressure {
+				t.Fatalf("INVALID_WITNESS producer would join held worker: %+v %v", before, err)
+			}
+			old, err := col.nativeJSON.Capture(meta.Name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if old != nil {
+					if err := old.Close(); err != nil {
+						t.Error(err)
+					}
+				}
+			}()
+			if old.capture.NativeAllocator().(*memtable.COWBudget).Limits() != memtable.DefaultCOWLimits() {
+				t.Fatal("INVALID_WITNESS changed finite limits")
+			}
+			manifest, ok := old.collection.domains.Get("column/manifest")
+			primary, pok := old.collection.domains.Get("primary")
+			if !ok || !pok || manifest.baseRoot == 0 || (!unchanged && primary.typed == nil) {
+				t.Fatal("INVALID_WITNESS no real manifest/pending typed boundary")
+			}
+			oldRoot, boundary := manifest.baseRoot, primary.typed
+			oldEngine, ok := old.capture.State().(*nativeEngineVersion)
+			if !ok {
+				t.Fatal("INVALID_WITNESS no original engine capture")
+			}
+			var pauseIdentity uint64
+			if unchanged {
+				if primary.typed != nil {
+					t.Fatal("INVALID_WITNESS no-root-change target still has typed suffix")
+				}
+				if _, pending := oldEngine.pending.Get(old.collection.incarnation); pending {
+					t.Fatal("INVALID_WITNESS no-root-change target in old pending inventory")
+				}
+				pauseState, found := oldEngine.names.Get("build_pause")
+				if !found {
+					t.Fatal("INVALID_WITNESS missing independent pause collection")
+				}
+				pauseIdentity = pauseState.incarnation
+				if _, pending := oldEngine.pending.Get(pauseIdentity); !pending {
+					t.Fatal("INVALID_WITNESS independent pause has no real pending inventory")
+				}
+			}
+			for d := boundary; d != nil; d = d.previous {
+				if d.data.graph != nil {
+					t.Fatal("INVALID_WITNESS old prefix already contains graph")
+				}
+			}
+			entered, release, oldDone := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+			var holdOnce, releaseOnce sync.Once
+			restore := setColumnPhysicalAssetPreparationAfterPrepareTestHook(func(ColumnPublishPreparedAssets) error { holdOnce.Do(func() { close(entered); <-release }); return nil })
+			defer restore()
+			graphDone := make(chan error, 1)
+			oldJoined, graphStarted, graphJoined := false, false, false
+			var laterCaptures []*NativeJSONRead
+			defer func() {
+				releaseOnce.Do(func() { close(release) })
+				for _, job := range []struct {
+					name   string
+					done   <-chan error
+					joined bool
+				}{{"old checkpoint", oldDone, oldJoined}, {"graph", graphDone, !graphStarted || graphJoined}} {
+					if job.joined {
+						continue
+					}
+					select {
+					case err := <-job.done:
+						if err != nil {
+							t.Errorf("%s completion: %v", job.name, err)
+						}
+					case <-time.After(15 * time.Second):
+						t.Errorf("INVALID_WITNESS %s did not join after release", job.name)
+						// Do not unwind into capture/manager/DB Close with a
+						// live worker. Only this isolated child waits; its Go
+						// timeout prints stacks and its parent kills/reaps it
+						// if necessary. No cancellation contract is invented.
+						<-job.done
+					}
+				}
+				// Captures acquired after worker launch must not register
+				// later defers: those would run BEFORE this join on failure.
+				for i := len(laterCaptures) - 1; i >= 0; i-- {
+					if err := laterCaptures[i].Close(); err != nil {
+						t.Error(err)
+					}
+				}
+			}()
+			go func() { oldDone <- owner.Checkpoint() }()
+			select {
+			case <-entered:
+			case err := <-oldDone:
+				oldJoined = true
+				t.Fatalf("INVALID_WITNESS old checkpoint missed typed hook: %v", err)
+			case <-time.After(15 * time.Second):
+				t.Fatal("INVALID_WITNESS old typed hook not reached")
+			}
+			pressure, err := backend.ObserveNativeProducer()
+			if err != nil || pressure.UnderPressure {
+				t.Fatalf("INVALID_WITNESS held-build producer pressure: %+v %v", pressure, err)
+			}
+			expectedLSN := backend.CommandWALNextLSN()
+			observer, err := backenddb.NewNativeInstallObserverForTest(backend, commitlog.CommandKindCollectionRebuildVectorIndex, expectedLSN)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer observer.Close()
+			graphStarted = true
+			go func() { _, err := col.RebuildVectorIndex("vec"); graphDone <- err }()
+			var event backenddb.NativeInstalledObservationForTest
+			select {
+			case event = <-observer.Events():
+			case err := <-graphDone:
+				graphJoined = true
+				t.Fatalf("INVALID_WITNESS graph did not reach accepted suffix: %v", err)
+			case <-time.After(15 * time.Second):
+				t.Fatal("INVALID_WITNESS graph acceptance blocked; release original build")
+			}
+			if observer.Dropped() || !event.WALCompleted || !event.WALStable || event.AssignedLSN != expectedLSN || event.LogicalSequence <= before.LogicalSequence {
+				t.Fatalf("INVALID_WITNESS unqualified acceptance: %+v dropped=%t", event, observer.Dropped())
+			}
+			accepted, err := col.nativeJSON.Capture(meta.Name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			laterCaptures = append(laterCaptures, accepted)
+			acceptedManifest, mok := accepted.collection.domains.Get("column/manifest")
+			acceptedPrimary, aok := accepted.collection.domains.Get("primary")
+			if !mok || !aok || acceptedManifest.baseRoot != oldRoot || accepted.collection.incarnation != old.collection.incarnation {
+				t.Fatal("INVALID_WITNESS graph capture changed basis/incarnation")
+			}
+			graph := acceptedPrimary.typed
+			if graph == nil || graph.data.graph == nil || graph.appliedLSN != event.AssignedLSN || graph.data.graph.sourceRoot != oldRoot {
+				t.Fatalf("INVALID_WITNESS no exact original recipe root=%d lsn=%d", oldRoot, event.AssignedLSN)
+			}
+			originalData, originalRecipe := graph.data, graph.data.graph
+			originalMember, originalCapacity := graph.memberOrdinal, graph.buildCapacity
+			originalSourceRoot := graph.graphSourceRoot
+			if originalSourceRoot != oldRoot {
+				t.Fatalf("INVALID_WITNESS accepted graph source=%d want=%d", originalSourceRoot, oldRoot)
+			}
+			found := unchanged && boundary == nil && graph.previous == nil
+			for d := graph.previous; d != nil; d = d.previous {
+				if d == boundary {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Fatal("INVALID_WITNESS graph is not newer than original captured boundary")
+			}
+			releaseOnce.Do(func() { close(release) })
+			select {
+			case err := <-oldDone:
+				oldJoined = true
+				if err != nil {
+					t.Fatalf("old captured build: %v", err)
+				}
+			case <-time.After(15 * time.Second):
+				t.Fatal("INVALID_WITNESS old build did not complete")
+			}
+			// oldDone synchronizes the completed worker's writes. The held
+			// original capture keeps this exact engine and its ledger alive.
+			// Inspect it BEFORE joining graphDone: the graph's own later
+			// checkpoint must not supply the old-build root-change witness.
+			build := oldEngine.build
+			if build == nil || !build.complete || build.failure != nil || build.handoffs == 0 {
+				t.Fatal("INVALID_WITNESS no completed original handoff ledger")
+			}
+			var oldBuiltRoot uint64
+			if !unchanged {
+				matches := 0
+				for _, result := range build.built {
+					if result.collection == old.collection.incarnation && result.name == "column/manifest" {
+						matches++
+						if result.oldBaseRoot != oldRoot || result.root == 0 || result.root == oldRoot {
+							t.Fatalf("INVALID_WITNESS old target manifest basis=%d want=%d root=%d", result.oldBaseRoot, oldRoot, result.root)
+						}
+						oldBuiltRoot = result.root
+					}
+				}
+				if matches != 1 {
+					t.Fatalf("INVALID_WITNESS original target manifest results=%d want=1", matches)
+				}
+			}
+			if unchanged {
+				// The exact original captured engine owns this build ledger.
+				// Read it only after the old worker joined. Its complete real
+				// result inventory must exclude every target domain and typed
+				// work item; the handoff therefore cannot rewrite that manifest.
+				pauseBuilt := false
+				for _, result := range build.built {
+					if result.collection == old.collection.incarnation {
+						t.Fatal("INVALID_WITNESS old build touched graph collection")
+					}
+					if result.collection == pauseIdentity && result.name == "column/manifest" && result.root != result.oldBaseRoot {
+						pauseBuilt = true
+					}
+				}
+				for _, work := range build.typed {
+					if work.collection == old.collection.incarnation {
+						t.Fatal("INVALID_WITNESS old build had graph typed work")
+					}
+				}
+				if !pauseBuilt {
+					t.Fatal("INVALID_WITNESS independent build did not advance its own manifest")
+				}
+			}
+			var graphErr error
+			select {
+			case graphErr = <-graphDone:
+				graphJoined = true
+			case <-time.After(15 * time.Second):
+				t.Fatal("INVALID_WITNESS graph did not complete after old handoff")
+			}
+			current, err := col.nativeJSON.Capture(meta.Name)
+			if err != nil {
+				t.Fatalf("INVALID_WITNESS post-handoff capture=%v; original graph completion=%v", err, graphErr)
+			}
+			laterCaptures = append(laterCaptures, current)
+			currentManifest, ok := current.collection.domains.Get("column/manifest")
+			if !ok || (!unchanged && currentManifest.baseRoot == oldRoot) {
+				t.Fatal("INVALID_WITNESS no actual manifest-root advance")
+			}
+			if graphErr != nil && unchanged {
+				t.Fatalf("no-root-change control: accepted_lsn=%d original_manifest=%d: %v", event.AssignedLSN, oldRoot, graphErr)
+			}
+			if graphErr != nil {
+				currentPrimary, ok := current.collection.domains.Get("primary")
+				preserved := false
+				if ok {
+					for d := currentPrimary.typed; d != nil; d = d.previous {
+						if d.data == graph.data && d.appliedLSN == event.AssignedLSN {
+							preserved = true
+							break
+						}
+					}
+				}
+				if !preserved {
+					t.Fatalf("INVALID_WITNESS original graph suffix not retained: %v", graphErr)
+				}
+				if strings.Contains(graphErr.Error(), "ordinary graph basis") {
+					t.Fatalf("ROOT_HANDOFF_WITNESS original_recipe=%d old_build_manifest=%d current_manifest=%d accepted_lsn=%d logical_seq=%d: %v", oldRoot, oldBuiltRoot, currentManifest.baseRoot, event.AssignedLSN, event.LogicalSequence, graphErr)
+				}
+				t.Fatalf("distinct accepted graph failure (not attributed to root guard): %v", graphErr)
+			}
+			if observer.Dropped() {
+				t.Fatal("INVALID_WITNESS duplicate/full observation")
+			}
+			// The handoff may construct private successor headers, but held cuts
+			// keep their original source, recipe, command and construction promise.
+			if manifest.baseRoot != oldRoot || primary.typed != boundary || acceptedManifest.baseRoot != oldRoot || acceptedPrimary.typed != graph ||
+				graph.data != originalData || graph.data.graph != originalRecipe || originalRecipe.sourceRoot != oldRoot ||
+				graph.graphSourceRoot != originalSourceRoot || graph.appliedLSN != event.AssignedLSN || graph.memberOrdinal != originalMember || graph.buildCapacity != originalCapacity {
+				t.Fatal("handoff mutated a held cut or original graph receipt")
+			}
+			for _, read := range []*NativeJSONRead{old, accepted, current} {
+				requireNativeGraphHandoffWitnessRows(t, read.Get)
+			}
+			ack := nativeGraphHandoffWitnessIdentity(t, col, dir)
+			if ack.AppliedCommandLSN != event.AssignedLSN {
+				t.Fatalf("graph manifest changed original command identity: got=%d want=%d", ack.AppliedCommandLSN, event.AssignedLSN)
+			}
+			t.Logf("handoff completed mode=%s original_recipe=%d old_build_manifest=%d current_manifest=%d accepted_lsn=%d logical_seq=%d", mode, oldRoot, oldBuiltRoot, currentManifest.baseRoot, event.AssignedLSN, event.LogicalSequence)
+			if crash {
+				encoded, err := json.Marshal(ack)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := fmt.Printf("%s%s\n", nativeGraphHandoffWitnessCrashMarker, encoded); err != nil {
+					t.Fatal(err)
+				}
+				// RebuildVectorIndex returned its original exact-seal completion.
+				// Exit before this fixture's Checkpoint or any deferred Close;
+				// the parent must recover that graph and every acknowledged row.
+				os.Exit(0)
+			}
+			for _, read := range laterCaptures {
+				if err := read.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			laterCaptures = nil
+			if err := old.Close(); err != nil {
+				t.Fatal(err)
+			}
+			old = nil
+			observer.Close()
+			restore()
+			finishLifecycle()
+		})
+	}
+}
+
+type nativeGraphHandoffWitnessManifest struct {
+	Directory         string
+	Active            ColumnManifestIdentity
+	Recovery          ColumnManifestIdentity
+	AppliedCommandLSN uint64
+	SchemaHash        uint64
+}
+
+func requireNativeGraphHandoffWitnessRows(t *testing.T, get func([]byte) ([]byte, error)) {
+	t.Helper()
+	for n := 0; n < nativeGraphHandoffWitnessRows; n++ {
+		id := []byte(fmt.Sprintf("doc-%04d", n))
+		want := []byte(fmt.Sprintf(`{"embedding":[%d,1]}`, n+1))
+		if got, err := get(id); err != nil || !bytes.Equal(got, want) {
+			t.Fatalf("acknowledged row %q: got=%s want=%s err=%v", id, got, want, err)
+		}
+	}
+}
+
+func nativeGraphHandoffWitnessIdentity(t *testing.T, col *Collection, dir string) nativeGraphHandoffWitnessManifest {
+	t.Helper()
+	status, err := col.VectorIndexStatus("vec")
+	if err != nil || !status.Loaded || status.RebuildNeeded || status.Stats.RebuildNeeded || status.Stats.SnapshotDirty || status.Stats.LiveDocs != nativeGraphHandoffWitnessRows {
+		t.Fatalf("accepted graph status: %+v %v", status, err)
+	}
+	cfg := col.Meta().Options.ColumnStore
+	if cfg == nil || cfg.ProfileSupport != ColumnStoreProfileDurableOnly || cfg.ActiveManifest == nil || cfg.RecoveryAuthoritativeManifest == nil ||
+		*cfg.ActiveManifest != *cfg.RecoveryAuthoritativeManifest || cfg.ActiveManifest.Generation == 0 || cfg.ActiveManifest.Checksum == 0 || cfg.RecoveryAuthoritativeAppliedCommandLSN == 0 {
+		t.Fatalf("accepted graph manifest: %+v", cfg)
+	}
+	return nativeGraphHandoffWitnessManifest{Directory: dir, Active: *cfg.ActiveManifest, Recovery: *cfg.RecoveryAuthoritativeManifest, AppliedCommandLSN: cfg.RecoveryAuthoritativeAppliedCommandLSN, SchemaHash: cfg.SchemaHash}
+}
+
+// A fresh public owner validates the exact graph acknowledgment before serving.
+// For the crash variant this is process-exit recovery, not a power-loss model.
+func verifyNativeGraphHandoffWitnessReopen(t *testing.T, opts treedb.Options, accepted nativeGraphHandoffWitnessManifest) {
+	t.Helper()
+	owner, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if owner != nil {
+			if err := owner.Close(); err != nil {
+				t.Error(err)
+			}
+		}
+	}()
+	backend, err := owner.NativeSemanticBackend()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := NewCollectionManager(backend)
+	defer func() {
+		if manager != nil {
+			if err := manager.Close(); err != nil {
+				t.Error(err)
+			}
+		}
+	}()
+	col, err := manager.OpenCollection("docs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := nativeGraphHandoffWitnessIdentity(t, col, opts.Dir); got != accepted {
+		t.Fatalf("fresh reopen graph manifest: got=%+v want=%+v", got, accepted)
+	}
+	read, err := col.nativeJSON.Capture("docs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if read != nil {
+			if err := read.Close(); err != nil {
+				t.Error(err)
+			}
+		}
+	}()
+	budget := read.capture.NativeAllocator().(nativeHNSWAdmissionBudget)
+	requireNativeGraphHandoffWitnessRows(t, read.Get)
+	if got := nativeGraphHandoffWitnessIdentity(t, col, opts.Dir); got != accepted {
+		t.Fatalf("serving changed accepted graph manifest: got=%+v want=%+v", got, accepted)
+	}
+	if err := read.Close(); err != nil {
+		t.Fatal(err)
+	}
+	read = nil
+	closeErr := manager.Close()
+	manager = nil
+	if closeErr != nil {
+		t.Fatalf("reopened manager Close: %v", closeErr)
+	}
+	closeErr = owner.Close()
+	owner = nil
+	if closeErr != nil {
+		t.Fatalf("reopened owner Close: %v", closeErr)
+	}
+	if stats := budget.Stats(); stats.TotalBytes != 0 || stats.ExternalLeases != 0 {
+		t.Fatalf("reopened owner retained custody: %+v", stats)
+	}
+	if stats := backend.ValueLogIdentityPinRegistry().Stats(); stats.ActivePins != 0 || stats.ActiveIdentities != 0 || stats.ActiveStableNamespaceLinks != 0 {
+		t.Fatalf("reopened owner retained physical resources: %+v", stats)
+	}
+}

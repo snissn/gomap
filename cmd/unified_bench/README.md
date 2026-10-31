@@ -63,6 +63,83 @@ are not `benchprof_results.json` inputs. No unified-bench artifact schema change
 
 Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), Pebble, Badger, and LevelDB.
 
+## Ordinary ColumnGraph lifecycle control (#5338)
+
+`BenchmarkOrdinaryColumnGraphNativeLifecycle4096` is a standalone public
+`TreeDB/documentservice` benchmark. It fixes native `command_wal_durable`,
+`cow_btree`, one writer, 4096 documents, 128 documents per request and the
+original finite limits. It times seed, Optimize and explicit Checkpoint as
+separate phases. Setup, observation, complete document/query verification,
+original Close and fresh reopen are outside the standard timer. Every sample
+must finish these correctness and resource checks before it counts as successful.
+The separate [captured-prefix verification controls](../../TreeDB/docs/spec/verification.md)
+establish the overlapping graph-handoff mechanism; this benchmark does not force
+that schedule or establish a speedup threshold.
+
+The [retained #5338 comparison](../../TreeDB/docs/evidence/native-columngraph-handoff-5338/measured-results.md)
+contains the frozen protocol, source/build bindings and all six original samples.
+Its fresh-worker Python child-resource accounting provides the whole-process
+maximum RSS measurement where GNU time is unavailable; timing ranges overlap.
+
+For the #5338 comparison, use exact baseline
+`d7db5409e20412f4dac4e1a3f902484b05e014e1` plus only the identical
+`ordinary_columngraph_native_lifecycle_bench_test.go` overlay. Its existing
+`shared_cow_write_bench_test.go` helper must match the candidate. Freeze each
+arm's complete source identity, intentional overlay and binary hash after
+initial validation and before retained measurements. Record the same toolchain,
+host, environment and chronological sample order for both arms. If the candidate
+is not committed yet, retain its full tracked patch and hashes of every
+untracked source file in addition to HEAD; HEAD alone does not bind that binary.
+
+Compile each frozen arm separately from measurement. For example, from that
+arm's checkout on Linux:
+
+```sh
+lifecycle_out=$(mktemp -d /tmp/gomap-ordinary-lifecycle.XXXXXX)
+git rev-parse HEAD > "$lifecycle_out/source-head.txt"
+git status --short > "$lifecycle_out/source-status.txt"
+git diff --binary > "$lifecycle_out/source.patch"
+sha256sum TreeDB/documentservice/ordinary_columngraph_native_lifecycle_bench_test.go \
+  TreeDB/documentservice/shared_cow_write_bench_test.go > "$lifecycle_out/harness.sha256"
+go version > "$lifecycle_out/go-version.txt"
+GOWORK=off GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -c -p 1 \
+  -o "$lifecycle_out/lifecycle.test" ./TreeDB/documentservice \
+  > "$lifecycle_out/build.stdout" 2> "$lifecycle_out/build.stderr"
+lifecycle_build_status=$?
+printf '%s\n' "$lifecycle_build_status" > "$lifecycle_out/build.exit-status"
+```
+
+Only a successful build can produce a measured sample. Hash that binary and run
+one complete load per fresh process, saving the original exit status and both
+output streams. Repeat with a fresh sample directory, not `-test.count=3`, for
+the predeclared matched samples (for example three pairs in AB/BA/AB order):
+
+```sh
+sha256sum "$lifecycle_out/lifecycle.test" > "$lifecycle_out/binary.sha256"
+lifecycle_sample=$(mktemp -d "$lifecycle_out/sample.XXXXXX")
+GOWORK=off GOMEMLIMIT=4GiB GOMAXPROCS=2 /usr/bin/time -v \
+  -o "$lifecycle_sample/process-time.txt" "$lifecycle_out/lifecycle.test" \
+  -test.run '^$' -test.bench '^BenchmarkOrdinaryColumnGraphNativeLifecycle4096$' \
+  -test.benchtime=1x -test.count=1 -test.benchmem -test.v \
+  > "$lifecycle_sample/benchmark.stdout" 2> "$lifecycle_sample/benchmark.stderr"
+lifecycle_status=$?
+printf '%s\n' "$lifecycle_status" > "$lifecycle_sample/exit-status.txt"
+```
+
+Standard `ns/op`, `B/op` and `allocs/op` cover the sum of the three timed phases.
+`LIFECYCLE_PHASE` records phase elapsed time, process-wide allocation deltas,
+unforced start/end heap samples and the existing COW publication/handoff,
+checkpoint and accounting counters. Graph completion is verified and its manifest
+is logged after the timed phases; there is no invented graph-build counter.
+`LIFECYCLE_CLOSED` reports process heap after both owners close and an untimed GC,
+including the retained expected input and shared/runtime caches. GNU time's
+maximum RSS covers the entire process, including untimed verification, and is
+not a graph-only retained-memory measure. Keep all failed and invalid samples;
+report complete successful measurements with their sample count and range.
+These Go benchmark logs and process-time receipts are standalone artifacts,
+not `benchprof_results.json` inputs. No unified-bench schema or benchprof parser
+changes are required.
+
 ## Run
 
 For the standalone public MVCC durable singleton point/batch comparison:

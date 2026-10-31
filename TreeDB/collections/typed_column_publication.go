@@ -310,6 +310,9 @@ type typedColumnPartImageBuildResult struct {
 	Rows                 int
 	TypedGranuleRowOrder []int
 	Metrics              typedColumnPartImageBuildMetrics
+	// Scalar provenance from this producer's actual immutable options. It
+	// borrows no prepared batch and does not consult configuration again.
+	ordinaryGraphSourceCodecs nativeOrdinaryGraphSourceCodecs
 }
 
 type typedColumnPartImageBuildMetrics struct {
@@ -398,6 +401,15 @@ func buildTypedColumnPartImageFromPreparedBatchWithCodec(prepared *typedColumnAd
 	local := *prepared
 	local.Options = prepared.Options
 	local.Options.BuildCodec = codec
+	var sourceCodecs nativeOrdinaryGraphSourceCodecs
+	if len(local.Columns) == 1 && local.Columns[0].Field.ValueType == ColumnStoreValueFloat32Vector {
+		bound, err := nativeOrdinaryGraphPendingSourceCodecForOptions(local.Options, local.Columns)
+		if err == nil {
+			sourceCodecs = bound.sourceCodecs()
+		}
+		// Other producer policies retain the original builder's behavior.
+		// The ordinary native consumer separately requires classified output.
+	}
 	part, err := buildTypedColumnAdapterPartFromPreparedBatch(&local, partID)
 	if err != nil {
 		return typedColumnPartImageBuildResult{}, err
@@ -417,7 +429,7 @@ func buildTypedColumnPartImageFromPreparedBatchWithCodec(prepared *typedColumnAd
 	if err != nil {
 		return typedColumnPartImageBuildResult{}, err
 	}
-	return typedColumnPartImageBuildResult{Bytes: image.Bytes, Rows: image.Rows, TypedGranuleRowOrder: rowOrder, Metrics: metrics}, nil
+	return typedColumnPartImageBuildResult{Bytes: image.Bytes, Rows: image.Rows, TypedGranuleRowOrder: rowOrder, Metrics: metrics, ordinaryGraphSourceCodecs: sourceCodecs}, nil
 }
 
 func typedColumnPublicationDictionaryModes(fields []TypedStorageField) map[string]typedColumnAdapterDictionaryMode {

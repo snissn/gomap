@@ -65,6 +65,9 @@ type nativeTypedMaterialization struct {
 	capacity          uint64
 	started, complete bool
 	failure           error
+	// Scalar provenance from the joined original physical producers. It stays
+	// with this work and its build results after borrowed inputs are scrubbed.
+	ordinaryGraphSourceCodecs nativeOrdinaryGraphSourceCodecs
 }
 
 func nativeTypedCheckedAdd(total *uint64, n uint64) error {
@@ -425,6 +428,12 @@ func nativeTypedCollectionRetainedCapacity(meta CollectionMeta, sourceBytes uint
 		if err = nativeTypedCheckedAdd(&total, memtable.COWAllocationCharge(n)); err != nil {
 			return 0, err
 		}
+	}
+	// One joined typed producer is live at a time. Reserve its complete fixed
+	// result again to cover the codec-provenance result/channel growth; no
+	// new factory, callback or source-sized backing is introduced.
+	if err = nativeTypedCheckedAdd(&total, memtable.COWAllocationCharge(uint64(unsafe.Sizeof(typedColumnPartImageBuildResult{})))); err != nil {
+		return 0, err
 	}
 	return total, nil
 }
@@ -1087,6 +1096,16 @@ func (w *nativeTypedMaterialization) materializeRows(context columnPhysicalAsset
 				prepared.stableResources.Release()
 				prepared.stableResources = nil
 				return prepared, fmt.Errorf("collections: native typed asset custody merge: %w", e)
+			}
+			if nativeOrdinaryColumnGraphMeta(w.meta) {
+				if prepared.AssetMetrics.TypedColumnPartCount != 0 && prepared.ordinaryGraphSourceCodecs == 0 {
+					// The original work already retains every created asset.
+					// An error return has no plan owner for the other reference.
+					prepared.stableResources.Release()
+					prepared.stableResources = nil
+					return prepared, backenddb.ErrNativeSemanticUnsupported
+				}
+				w.ordinaryGraphSourceCodecs |= prepared.ordinaryGraphSourceCodecs
 			}
 			return prepared, nil
 		}, EncodeManifest: encodeColumnManifestIdentityForWrite,

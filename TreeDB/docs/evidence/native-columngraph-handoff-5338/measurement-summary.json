@@ -1,0 +1,248 @@
+{
+  "all_six_complete": true,
+  "arms": {
+    "baseline": {
+      "all_three_complete": true,
+      "samples": 3,
+      "statistics": {
+        "B/op": {
+          "max": 134859736.0,
+          "median": 133508352.0,
+          "min": 133251656.0,
+          "n": 3
+        },
+        "allocs/op": {
+          "max": 690174.0,
+          "median": 690169.0,
+          "min": 690105.0,
+          "n": 3
+        },
+        "checkpoint_B/load": {
+          "max": 580888.0,
+          "median": 580824.0,
+          "min": 580480.0,
+          "n": 3
+        },
+        "checkpoint_allocs/load": {
+          "max": 1183.0,
+          "median": 1183.0,
+          "min": 1179.0,
+          "n": 3
+        },
+        "checkpoint_ns/load": {
+          "max": 20865853.0,
+          "median": 19806459.0,
+          "min": 15124400.0,
+          "n": 3
+        },
+        "cow_peak_B": {
+          "max": 51983120.0,
+          "median": 51983120.0,
+          "min": 51983120.0,
+          "n": 3
+        },
+        "elapsed_ns": {
+          "max": 1170689174,
+          "median": 1107126081,
+          "min": 968573250,
+          "n": 3
+        },
+        "ns/op": {
+          "max": 853199576.0,
+          "median": 818624460.0,
+          "min": 688160622.0,
+          "n": 3
+        },
+        "optimize_B/load": {
+          "max": 26572984.0,
+          "median": 25126320.0,
+          "min": 25118744.0,
+          "n": 3
+        },
+        "optimize_allocs/load": {
+          "max": 59780.0,
+          "median": 59769.0,
+          "min": 59691.0,
+          "n": 3
+        },
+        "optimize_ns/load": {
+          "max": 389120094.0,
+          "median": 285635647.0,
+          "min": 274062740.0,
+          "n": 3
+        },
+        "peak_rss_bytes": {
+          "max": 112164864,
+          "median": 111349760,
+          "min": 109813760,
+          "n": 3
+        },
+        "post_close_heap_alloc_after_gc": {
+          "max": 15502440,
+          "median": 15491312,
+          "min": 15483776,
+          "n": 3
+        },
+        "records/op": {
+          "max": 4096.0,
+          "median": 4096.0,
+          "min": 4096.0,
+          "n": 3
+        },
+        "seed_B/load": {
+          "max": 107808720.0,
+          "median": 107705928.0,
+          "min": 107544856.0,
+          "n": 3
+        },
+        "seed_allocs/load": {
+          "max": 629231.0,
+          "median": 629222.0,
+          "min": 629210.0,
+          "n": 3
+        },
+        "seed_ns/load": {
+          "max": 558268957.0,
+          "median": 414378507.0,
+          "min": 382716894.0,
+          "n": 3
+        },
+        "system_cpu_seconds": {
+          "max": 0.253537,
+          "median": 0.21506699999999998,
+          "min": 0.202378,
+          "n": 3
+        },
+        "user_cpu_seconds": {
+          "max": 0.8950929999999999,
+          "median": 0.8786419999999999,
+          "min": 0.734297,
+          "n": 3
+        }
+      },
+      "successful_samples": 3
+    },
+    "candidate": {
+      "all_three_complete": true,
+      "samples": 3,
+      "statistics": {
+        "B/op": {
+          "max": 134702544.0,
+          "median": 133435752.0,
+          "min": 133290072.0,
+          "n": 3
+        },
+        "allocs/op": {
+          "max": 690123.0,
+          "median": 690004.0,
+          "min": 689964.0,
+          "n": 3
+        },
+        "checkpoint_B/load": {
+          "max": 588992.0,
+          "median": 583776.0,
+          "min": 580368.0,
+          "n": 3
+        },
+        "checkpoint_allocs/load": {
+          "max": 1186.0,
+          "median": 1184.0,
+          "min": 1179.0,
+          "n": 3
+        },
+        "checkpoint_ns/load": {
+          "max": 19662021.0,
+          "median": 17044833.0,
+          "min": 16701272.0,
+          "n": 3
+        },
+        "cow_peak_B": {
+          "max": 51983120.0,
+          "median": 51983120.0,
+          "min": 51983120.0,
+          "n": 3
+        },
+        "elapsed_ns": {
+          "max": 1077131325,
+          "median": 1069154896,
+          "min": 1021129392,
+          "n": 3
+        },
+        "ns/op": {
+          "max": 782122122.0,
+          "median": 716910872.0,
+          "min": 697696199.0,
+          "n": 3
+        },
+        "optimize_B/load": {
+          "max": 26557040.0,
+          "median": 25137968.0,
+          "min": 25129048.0,
+          "n": 3
+        },
+        "optimize_allocs/load": {
+          "max": 59719.0,
+          "median": 59634.0,
+          "min": 59624.0,
+          "n": 3
+        },
+        "optimize_ns/load": {
+          "max": 347184616.0,
+          "median": 298371555.0,
+          "min": 241434819.0,
+          "n": 3
+        },
+        "peak_rss_bytes": {
+          "max": 113668096,
+          "median": 113250304,
+          "min": 110387200,
+          "n": 3
+        },
+        "post_close_heap_alloc_after_gc": {
+          "max": 15502152,
+          "median": 15497016,
+          "min": 15493536,
+          "n": 3
+        },
+        "records/op": {
+          "max": 4096.0,
+          "median": 4096.0,
+          "min": 4096.0,
+          "n": 3
+        },
+        "seed_B/load": {
+          "max": 107714008.0,
+          "median": 107572032.0,
+          "min": 107565136.0,
+          "n": 3
+        },
+        "seed_allocs/load": {
+          "max": 629220.0,
+          "median": 629194.0,
+          "min": 629151.0,
+          "n": 3
+        },
+        "seed_ns/load": {
+          "max": 458773204.0,
+          "median": 415273790.0,
+          "min": 382278063.0,
+          "n": 3
+        },
+        "system_cpu_seconds": {
+          "max": 0.291692,
+          "median": 0.22542099999999998,
+          "min": 0.212468,
+          "n": 3
+        },
+        "user_cpu_seconds": {
+          "max": 0.819844,
+          "median": 0.767921,
+          "min": 0.760215,
+          "n": 3
+        }
+      },
+      "successful_samples": 3
+    }
+  },
+  "interpretation": "No retry, exclusion of failed samples, or speedup acceptance claim. Aggregate statistics require all three planned samples for that arm to complete."
+}
