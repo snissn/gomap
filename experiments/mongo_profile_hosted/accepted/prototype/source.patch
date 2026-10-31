@@ -1,0 +1,434 @@
+--- a/TreeDB/mongo_gateway/server.go
++++ b/TreeDB/mongo_gateway/server.go
+@@ -4,15 +4,25 @@
+ 
+ import (
+ 	"context"
++	"crypto/sha256"
+ 	"crypto/tls"
++	"encoding/hex"
++	"encoding/json"
+ 	"errors"
+ 	"flag"
+ 	"fmt"
++	"hash"
+ 	"io"
+ 	"net"
++	"net/http"
++	"net/url"
+ 	"os"
+ 	"os/signal"
++	"path/filepath"
++	"runtime"
++	"runtime/pprof"
+ 	"strings"
++	"sync"
+ 	"syscall"
+ 	"time"
+ 
+@@ -105,6 +115,16 @@
+ 		return 1
+ 	}
+ 
++	diagnosticControl, err := startDiagnosticProfileControl()
++	if err != nil {
++		fmt.Fprintf(stderr, "mongo gateway server: diagnostic profile: %v\n", err)
++		closeErr := errors.Join(ln.Close(), checkpointControl.Close(), evidence.Close(standalone.Close))
++		if closeErr != nil {
++			fmt.Fprintf(stderr, "mongo gateway server: close: %v\n", closeErr)
++		}
++		return 1
++	}
++
+ 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+ 	defer stop()
+ 
+@@ -130,8 +150,9 @@
+ 	}
+ 
+ 	serveErr := standalone.Serve(ctx, ln)
++	diagnosticErr := diagnosticControl.Close()
+ 	controlErr := checkpointControl.Close()
+-	closeErr := errors.Join(controlErr, evidence.Close(standalone.Close))
++	closeErr := errors.Join(diagnosticErr, controlErr, evidence.Close(standalone.Close))
+ 	if serveErr != nil {
+ 		fmt.Fprintf(stderr, "mongo gateway server: serve: %v\n", serveErr)
+ 		if closeErr != nil {
+@@ -347,3 +368,377 @@
+ 	}
+ 	return defaultDataDir
+ }
++
++// UNBUILT diagnostic overlay helper. Appended to the original build-as-file main.
++const diagnosticProfileLimit int64 = 64 << 20
++
++type diagnosticProfileArtifact struct {
++	Name   string `json:"name"`
++	Bytes  int64  `json:"bytes"`
++	SHA256 string `json:"sha256"`
++}
++
++type diagnosticProfileBudget struct {
++	mu      sync.Mutex
++	written int64
++	err     error
++}
++
++type diagnosticProfileWriter struct {
++	file    *os.File
++	budget  *diagnosticProfileBudget
++	digest  hash.Hash
++	name    string
++	written int64
++}
++
++func (w *diagnosticProfileWriter) Write(p []byte) (int, error) {
++	w.budget.mu.Lock()
++	defer w.budget.mu.Unlock()
++	if w.budget.err != nil {
++		return 0, w.budget.err
++	}
++	if int64(len(p)) > diagnosticProfileLimit-w.budget.written {
++		w.budget.err = errors.New("diagnostic profile output exceeds 64 MiB limit")
++		return 0, w.budget.err
++	}
++	n, err := w.file.Write(p)
++	if n > 0 {
++		_, _ = w.digest.Write(p[:n]) // hash.Hash.Write always succeeds.
++		w.written += int64(n)
++		w.budget.written += int64(n)
++	}
++	if err == nil && n != len(p) {
++		err = io.ErrShortWrite
++	}
++	if err != nil {
++		w.budget.err = err
++	}
++	return n, err
++}
++
++func (w *diagnosticProfileWriter) finish() (diagnosticProfileArtifact, error) {
++	// CPU writer is stopped/joined by StopCPUProfile before this is called.
++	w.budget.mu.Lock()
++	defer w.budget.mu.Unlock()
++	err := errors.Join(w.budget.err, w.file.Sync(), w.file.Close())
++	return diagnosticProfileArtifact{w.name, w.written, hex.EncodeToString(w.digest.Sum(nil))}, err
++}
++
++type diagnosticProfileStart struct {
++	SchemaVersion int                      `json:"schema_version"`
++	Kind          string                   `json:"kind"`
++	Phase         string                   `json:"phase"`
++	Mode          string                   `json:"mode"`
++	Owner         ycsbevidence.Observation `json:"owner"`
++	BeginUTC      time.Time                `json:"begin_utc"`
++	ReadyUTC      time.Time                `json:"ready_utc"`
++}
++
++type diagnosticProfileStop struct {
++	SchemaVersion    int                         `json:"schema_version"`
++	Kind             string                      `json:"kind"`
++	Phase            string                      `json:"phase"`
++	Mode             string                      `json:"mode"`
++	Owner            ycsbevidence.Observation    `json:"owner"`
++	StartUTC         time.Time                   `json:"start_utc"`
++	StopRequestedUTC time.Time                   `json:"stop_requested_utc"`
++	FinishedUTC      time.Time                   `json:"finished_utc"`
++	Finalize         ycsbevidence.Result         `json:"finalize"`
++	Artifacts        []diagnosticProfileArtifact `json:"artifacts"`
++	LimitBytes       int64                       `json:"limit_bytes"`
++	BytesWritten     int64                       `json:"bytes_written"`
++}
++
++type diagnosticProfileControl struct {
++	mu                   sync.Mutex
++	handlers             sync.WaitGroup
++	dir                  string
++	owner                ycsbevidence.Observation
++	server               *http.Server
++	done                 chan struct{}
++	used, active, closed bool
++	cpuStarted, sampling bool
++	oldMutexFraction     int
++	mode                 string
++	ready                time.Time
++	cpu                  *diagnosticProfileWriter
++	budget               diagnosticProfileBudget
++	err                  error
++}
++
++func diagnosticWriteNew(path string, value any) error {
++	data, err := json.MarshalIndent(value, "", "  ")
++	if err != nil {
++		return err
++	}
++	data = append(data, '\n')
++	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
++	if err != nil {
++		return err
++	}
++	n, writeErr := f.Write(data)
++	if writeErr == nil && n != len(data) {
++		writeErr = io.ErrShortWrite
++	}
++	return errors.Join(writeErr, f.Sync(), f.Close())
++}
++
++func startDiagnosticProfileControl() (*diagnosticProfileControl, error) {
++	dir := os.Getenv("GOMAP_DIAGNOSTIC_PROFILE_DIR")
++	if dir == "" {
++		return nil, nil
++	}
++	if !filepath.IsAbs(dir) {
++		return nil, errors.New("diagnostic profile directory must be absolute")
++	}
++	ownerDir := os.Getenv("YCSB_SERVER_RECEIPT_DIR")
++	if !filepath.IsAbs(ownerDir) {
++		return nil, errors.New("diagnostic profile requires absolute original YCSB_SERVER_RECEIPT_DIR")
++	}
++	f, err := os.Open(filepath.Join(ownerDir, "owner.open.json"))
++	if err != nil {
++		return nil, err
++	}
++	var owner ycsbevidence.Observation
++	dec := json.NewDecoder(io.LimitReader(f, 1<<20))
++	decodeErr := dec.Decode(&owner)
++	var trailing any
++	if decodeErr == nil && dec.Decode(&trailing) != io.EOF {
++		decodeErr = errors.New("owner receipt has trailing or oversized JSON")
++	}
++	if err := errors.Join(decodeErr, f.Close()); err != nil {
++		return nil, err
++	}
++	if owner.SchemaVersion != 1 || owner.Kind != "live_owner_observation" || owner.OwnerID == "" || owner.Process.PID != os.Getpid() {
++		return nil, errors.New("diagnostic profile requires this process's original owner observation")
++	}
++	// Mkdir (not MkdirAll) requires a fresh directory and refuses existing paths.
++	if err := os.Mkdir(dir, 0700); err != nil {
++		return nil, err
++	}
++	if err := os.Chmod(dir, 0700); err != nil {
++		return nil, err
++	}
++	ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: filepath.Join(dir, "phase.sock"), Net: "unix"})
++	if err != nil {
++		return nil, err
++	}
++	if err := os.Chmod(filepath.Join(dir, "phase.sock"), 0600); err != nil {
++		return nil, errors.Join(err, ln.Close())
++	}
++	c := &diagnosticProfileControl{dir: dir, owner: owner, done: make(chan struct{})}
++	// Direct dispatch avoids ServeMux redirects; parsed OPTIONS * also reaches
++	// application validation. net/http may reject malformed framing beforehand.
++	c.server = &http.Server{Handler: http.HandlerFunc(c.admit), DisableGeneralOptionsHandler: true, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 5 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 5 * time.Second, MaxHeaderBytes: 4096}
++	go func() {
++		err := c.server.Serve(ln)
++		c.mu.Lock()
++		if !errors.Is(err, http.ErrServerClosed) {
++			c.err = errors.Join(c.err, fmt.Errorf("diagnostic control listener: %w", err))
++		}
++		c.mu.Unlock()
++		close(c.done)
++	}()
++	return c, nil
++}
++
++func (c *diagnosticProfileControl) openProfile(name string) (*diagnosticProfileWriter, error) {
++	f, err := os.OpenFile(filepath.Join(c.dir, name), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
++	if err != nil {
++		return nil, err
++	}
++	return &diagnosticProfileWriter{file: f, budget: &c.budget, digest: sha256.New(), name: name}, nil
++}
++
++func (c *diagnosticProfileControl) start(mode string) (diagnosticProfileStart, error) {
++	begin := time.Now().UTC()
++	c.used, c.mode = true, mode
++	if mode == "cpu_wait" {
++		var err error
++		c.cpu, err = c.openProfile("run_1.cpu.pprof")
++		if err != nil {
++			return diagnosticProfileStart{}, err
++		}
++		if err = pprof.StartCPUProfile(c.cpu); err != nil {
++			return diagnosticProfileStart{}, err
++		}
++		c.cpuStarted = true
++		c.oldMutexFraction = runtime.SetMutexProfileFraction(1)
++		runtime.SetBlockProfileRate(1)
++		c.sampling = true
++	}
++	c.active = true
++	c.ready = time.Now().UTC()
++	receipt := diagnosticProfileStart{1, "standalone_diagnostic_profile_start", "run_1", mode, c.owner, begin, c.ready}
++	return receipt, diagnosticWriteNew(filepath.Join(c.dir, "phase.start.json"), receipt)
++}
++
++func (c *diagnosticProfileControl) finalize(requested time.Time, cause error) (diagnosticProfileStop, error) {
++	artifacts := make([]diagnosticProfileArtifact, 0, 3)
++	result := ycsbevidence.Call(func() error {
++		err := errors.Join(c.err, cause)
++		if c.cpuStarted {
++			pprof.StopCPUProfile() // joins the CPU profile writer; sticky writer errors checked below.
++			c.cpuStarted = false
++		}
++		if c.sampling {
++			runtime.SetBlockProfileRate(0)
++			runtime.SetMutexProfileFraction(c.oldMutexFraction)
++			c.sampling = false
++		}
++		if c.cpu != nil {
++			artifact, finishErr := c.cpu.finish()
++			artifacts = append(artifacts, artifact)
++			err = errors.Join(err, finishErr)
++			c.cpu = nil
++		}
++		if c.active && c.mode == "cpu_wait" {
++			for _, kind := range []string{"block", "mutex"} {
++				writer, openErr := c.openProfile("run_1." + kind + ".pprof")
++				if openErr != nil {
++					err = errors.Join(err, openErr)
++					continue
++				}
++				profile := pprof.Lookup(kind)
++				var writeErr error
++				if profile == nil {
++					writeErr = fmt.Errorf("missing %s profile", kind)
++				} else {
++					writeErr = profile.WriteTo(writer, 0)
++				}
++				artifact, finishErr := writer.finish()
++				artifacts = append(artifacts, artifact)
++				err = errors.Join(err, writeErr, finishErr)
++			}
++		}
++		return err
++	})
++	c.active = false
++	receipt := diagnosticProfileStop{1, "standalone_diagnostic_profile_stop", "run_1", c.mode, c.owner, c.ready, requested, time.Now().UTC(), result, artifacts, diagnosticProfileLimit, c.budget.written}
++	var finalizeErr error
++	if !result.Success {
++		finalizeErr = errors.New(result.Error)
++	}
++	err := errors.Join(finalizeErr, diagnosticWriteNew(filepath.Join(c.dir, "phase.stop.json"), receipt))
++	c.err = errors.Join(c.err, err)
++	return receipt, err
++}
++
++func (c *diagnosticProfileControl) admit(w http.ResponseWriter, r *http.Request) {
++	c.mu.Lock()
++	if c.closed {
++		c.err = errors.Join(c.err, errors.New("diagnostic control closed"))
++		c.respond(w, http.StatusConflict, "text/plain; charset=utf-8", []byte("diagnostic control closed\n"))
++		c.mu.Unlock()
++		return
++	}
++	c.handlers.Add(1)
++	c.mu.Unlock()
++	defer c.handlers.Done()
++	c.handle(w, r)
++}
++
++// respond requires c.mu. Exact length avoids deferred chunk terminators;
++// checked Flush completes local framing while the admitted handler is held.
++// Local flush does not establish client receipt of the control response.
++func (c *diagnosticProfileControl) respond(w http.ResponseWriter, status int, contentType string, data []byte) {
++	w.Header().Set("Content-Type", contentType)
++	w.Header().Set("Content-Length", fmt.Sprint(len(data)))
++	w.WriteHeader(status)
++	n, writeErr := w.Write(data)
++	if writeErr == nil && n != len(data) {
++		writeErr = io.ErrShortWrite
++	}
++	flushErr := http.NewResponseController(w).Flush()
++	c.err = errors.Join(c.err, writeErr, flushErr)
++}
++
++func (c *diagnosticProfileControl) handle(w http.ResponseWriter, r *http.Request) {
++	// The lock covers framed response writes and their checked local flush too.
++	// Close cannot finish until admitted file/response operations finish.
++	c.mu.Lock()
++	defer c.mu.Unlock()
++	fail := func(status int, err error) {
++		c.err = errors.Join(c.err, err)
++		c.respond(w, status, "text/plain; charset=utf-8", []byte(err.Error()+"\n"))
++	}
++	if c.closed {
++		fail(http.StatusConflict, errors.New("diagnostic control closed"))
++		return
++	}
++	if r.Method != http.MethodPost || r.ContentLength != 0 || len(r.TransferEncoding) != 0 {
++		fail(http.StatusBadRequest, errors.New("diagnostic control requires POST with no body"))
++		return
++	}
++	query, err := url.ParseQuery(r.URL.RawQuery)
++	if err != nil {
++		fail(http.StatusBadRequest, err)
++		return
++	}
++	var receipt any
++	if r.URL.Path == "/start" {
++		modes, ok := query["mode"]
++		if len(query) != 1 || !ok || len(modes) != 1 || (modes[0] != "cpu_wait" && modes[0] != "off") {
++			fail(http.StatusBadRequest, errors.New("exactly mode=cpu_wait or mode=off required"))
++			return
++		}
++		if c.used || c.err != nil {
++			fail(http.StatusConflict, errors.New("diagnostic phase already used or failed"))
++			return
++		}
++		receipt, err = c.start(modes[0])
++		if err != nil {
++			c.err = errors.Join(c.err, err)
++			_, cleanupErr := c.finalize(time.Now().UTC(), errors.New("diagnostic start failed"))
++			fail(http.StatusInternalServerError, errors.Join(err, cleanupErr))
++			return
++		}
++	} else if r.URL.Path == "/stop" && len(query) == 0 {
++		if !c.active {
++			fail(http.StatusConflict, errors.New("diagnostic phase is not active"))
++			return
++		}
++		receipt, err = c.finalize(time.Now().UTC(), nil)
++		if err != nil {
++			fail(http.StatusInternalServerError, err)
++			return
++		}
++	} else {
++		fail(http.StatusBadRequest, errors.New("unknown diagnostic control"))
++		return
++	}
++	data, err := json.Marshal(receipt)
++	if err != nil {
++		fail(http.StatusInternalServerError, err)
++		return
++	}
++	c.respond(w, http.StatusOK, "application/json", append(data, '\n'))
++}
++
++func (c *diagnosticProfileControl) Close() error {
++	if c == nil {
++		return nil
++	}
++	c.mu.Lock()
++	if c.closed {
++		err := errors.Join(c.err, errors.New("diagnostic control Close repeated"))
++		c.mu.Unlock()
++		return err
++	}
++	c.closed = true
++	c.mu.Unlock()
++	// Server.Close stops accepts and closes idle/active sockets. Each handler's
++	// state and all profile operations are serialized by mu, including responses.
++	serverErr := c.server.Close()
++	<-c.done
++	c.handlers.Wait()
++	c.mu.Lock()
++	defer c.mu.Unlock()
++	c.err = errors.Join(c.err, serverErr)
++	if c.active || !c.used {
++		_, err := c.finalize(time.Now().UTC(), errors.New("diagnostic control closed without a completed phase"))
++		c.err = errors.Join(c.err, err)
++	}
++	return c.err
++}

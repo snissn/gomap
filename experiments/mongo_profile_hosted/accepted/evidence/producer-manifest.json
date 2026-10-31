@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "status": "UNBUILT",
+  "base": "95c6ff3de473786bd98b692375cfdb9cef951668",
+  "entry": "TreeDB/mongo_gateway/server.go",
+  "future_worktree": "/mnt/fast4tb/gomap-profile-producer-95c6ff3",
+  "source_sha256": "2b19dfec2741a5dfaacfdd50cf31cccf95e0228b565420c9992d9fe4e6a73490",
+  "source_manifest_sha256": "478a2b7e082fb58a5fda231c3e490faf0849c888dd5a285ccc9c1b54461787ec",
+  "files": {
+    "prototype/profile_control.go.txt": {
+      "sha256": "04e81ab5113745f937544081cbe9fe7805ec0f9b0df1aed7a56054eb27622bb1",
+      "bytes": 11904
+    },
+    "prototype/make_overlay.py": {
+      "sha256": "d8b27acfbacb1efe74a740460281986e855b229d60587ec2798930ef65c182dd",
+      "bytes": 5509
+    },
+    "prototype/diagnostic_server.go.txt": {
+      "sha256": "987cd212e24c2bd1d4c28ce65501a353aacca6289b48ae3548b7eae39fb14101",
+      "bytes": 27559
+    },
+    "prototype/overlay.json": {
+      "sha256": "17cd771d83cf6012888eb4c9b3112b856a5aa780a412cb63aca3b4aa4d5630e9",
+      "bytes": 231
+    },
+    "prototype/source.patch": {
+      "sha256": "a106c82aa05bc3868e49799fda0af789a265ba9a004cb9cba6d72ba5ce1c3de0",
+      "bytes": 14465
+    }
+  }
+}

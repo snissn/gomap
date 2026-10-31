@@ -1,0 +1,108 @@
+{
+  "status": "SOURCE_READY_FOR_RENEWED_INDEPENDENT_PRE_REVIEW",
+  "base": "95c6ff3de473786bd98b692375cfdb9cef951668",
+  "rejected_source_preserved": "/home/mikers/gomap-mongo-hosted-profile-20261031-j2cxm6g7/review/rejected-constructor-1",
+  "rejection_manifest_sha256": "d51c68395e0ca9859b4a179edee65af2daffcce0da47aec978b363a5ef05998f",
+  "checks": {
+    "status": "offline-source-contracts-passed",
+    "copied_packet_files": 10,
+    "helper_cases": 24,
+    "generated_sha256": "987cd212e24c2bd1d4c28ce65501a353aacca6289b48ae3548b7eae39fb14101",
+    "go_parse": false,
+    "go_build": false,
+    "go_runtime": false,
+    "pprof_decode": false
+  },
+  "source_regression_controls": {
+    "retired_profile_constant": {
+      "status": "rejected",
+      "error": "canonical gateway profile drift"
+    },
+    "retired_profile_launch": {
+      "status": "rejected",
+      "error": "retired durable CLI spelling must not return"
+    },
+    "missing_tool_directory_binding": {
+      "status": "rejected",
+      "error": "profile/toolchain agreement guard missing: \"GOTOOLDIR\", \"GOTOOLCHAIN\""
+    },
+    "compiler_version_disagreement_guard": {
+      "status": "rejected",
+      "error": "profile/toolchain agreement guard missing: compiler_version == selected_compiler_version == \"compile version \" + PINNED_GO"
+    },
+    "unretained_helper_elf": {
+      "status": "rejected",
+      "error": "helper profile ELF must be retained with matching hash"
+    }
+  },
+  "go_commands_executed": false,
+  "runtime_executed": false,
+  "github_writes": false,
+  "source_bytes": 158056,
+  "files": {
+    "experiments/mongo_profile_hosted/README.md": {
+      "bytes": 8952,
+      "sha256": "07a78325368b9c57d475759120b19df2db50e3bbddb7a4231d296f96c9e9f6b9"
+    },
+    "experiments/mongo_profile_hosted/accepted/README.md": {
+      "bytes": 5042,
+      "sha256": "cb81615a30327604dd172bde3faf489d4f1fb7f4b720f3caebfc3d0c8be04a2a"
+    },
+    "experiments/mongo_profile_hosted/accepted/evidence/producer-manifest.json": {
+      "bytes": 1158,
+      "sha256": "61792d75112154d2c9ad770b8ba212a9b81463ecbb9c7654773e688415b090e4"
+    },
+    "experiments/mongo_profile_hosted/accepted/evidence/rejected-candidate-1/manifest.json": {
+      "bytes": 1477,
+      "sha256": "88e03dfd1a02ae748171b1e9d1b5bc4ee491379ada2ab6f4919b366489ba09a2"
+    },
+    "experiments/mongo_profile_hosted/accepted/prototype/PRODUCER.md": {
+      "bytes": 12815,
+      "sha256": "43e7abbed2ff123e07c618f1cf2bc6ada90c50f761c5dc5d4191910ab422a81d"
+    },
+    "experiments/mongo_profile_hosted/accepted/prototype/diagnostic_server.go.txt": {
+      "bytes": 27559,
+      "sha256": "987cd212e24c2bd1d4c28ce65501a353aacca6289b48ae3548b7eae39fb14101"
+    },
+    "experiments/mongo_profile_hosted/accepted/prototype/profile_control.go.txt": {
+      "bytes": 11904,
+      "sha256": "04e81ab5113745f937544081cbe9fe7805ec0f9b0df1aed7a56054eb27622bb1"
+    },
+    "experiments/mongo_profile_hosted/accepted/prototype/source.patch": {
+      "bytes": 14465,
+      "sha256": "a106c82aa05bc3868e49799fda0af789a265ba9a004cb9cba6d72ba5ce1c3de0"
+    },
+    "experiments/mongo_profile_hosted/accepted/review/independent-review-final.md": {
+      "bytes": 7702,
+      "sha256": "e7de2fd3ddce3621eaa1b6319df293892421954d56b4155f68f732d79207f90f"
+    },
+    "experiments/mongo_profile_hosted/accepted/review/independent-review.md": {
+      "bytes": 9878,
+      "sha256": "689a324d6ee483c766cdb0ee9dca92ee3f72e4fbf21810649a2cc06bc0dc0653"
+    },
+    "experiments/mongo_profile_hosted/accepted/source/manifest.json": {
+      "bytes": 2764,
+      "sha256": "478a2b7e082fb58a5fda231c3e490faf0849c888dd5a285ccc9c1b54461787ec"
+    },
+    "experiments/mongo_profile_hosted/accepted-files.json": {
+      "bytes": 1740,
+      "sha256": "3b549d3ee28cf003b473c5e686fe9b69ca0c14fce5cb79d65bc17704852b65e0"
+    },
+    "experiments/mongo_profile_hosted/check_source.py": {
+      "bytes": 6554,
+      "sha256": "810182829781035d2a8ad1d814f3220dfc12b7fcfb59e8bf8cf832dcdfa6e7e7"
+    },
+    "experiments/mongo_profile_hosted/hosted_profile_test.go.txt": {
+      "bytes": 12410,
+      "sha256": "a49b78e9848a86974c70cbf9cd083224bd26855b8370d03f9368071ab37f3d38"
+    },
+    "experiments/mongo_profile_hosted/run.py": {
+      "bytes": 31967,
+      "sha256": "c205b89b96f629be5f5915942c24b080e723a2c924cfb8f0847af57cb7676582"
+    },
+    ".github/workflows/mongo-profile-prototype.yml": {
+      "bytes": 1669,
+      "sha256": "9dc6c79ebd194579eb680150c8a0089f4b731cdb761a261ae02118ae7ee2c1dd"
+    }
+  }
+}

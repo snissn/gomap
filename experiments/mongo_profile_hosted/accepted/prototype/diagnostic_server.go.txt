@@ -1,0 +1,744 @@
+//go:build ignore
+
+package main
+
+import (
+	"context"
+	"crypto/sha256"
+	"crypto/tls"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"hash"
+	"io"
+	"net"
+	"net/http"
+	"net/url"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"runtime"
+	"runtime/pprof"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+
+	treedb "github.com/snissn/gomap/TreeDB"
+	"github.com/snissn/gomap/TreeDB/collections"
+	mongogateway "github.com/snissn/gomap/TreeDB/mongo_gateway"
+	"github.com/snissn/gomap/internal/ycsbevidence"
+)
+
+const defaultDataDir = "/tmp/treedb-mongo-gateway"
+
+type cliConfig struct {
+	addr                     string
+	dir                      string
+	profile                  string
+	documentFormat           string
+	dataRootStorage          string
+	indexStateStorage        string
+	indexRootStorage         string
+	maxFindScanDocuments     int
+	maxMessageBytes          int
+	maxCursorRetainedBytes   int
+	maxOpenCursors           int
+	cursorIdleTimeout        time.Duration
+	updateCoalescingDelay    time.Duration
+	updateCoalescingBatch    int
+	updateCoalescingBatchSet bool
+	updateCoalescingIdleTTL  time.Duration
+	insertCoalescingDelay    time.Duration
+	insertCoalescingBatch    int
+	insertCoalescingBatchSet bool
+	insertCoalescingIdleTTL  time.Duration
+	tlsCertFile              string
+	tlsKeyFile               string
+	tlsCAFile                string
+	requireClientCert        bool
+	tlsMinVersion            string
+	tlsHandshakeTimeout      time.Duration
+	allowInsecureRemote      bool
+	authenticationEnabled    bool
+}
+
+func main() {
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+}
+
+func run(args []string, stdout, stderr io.Writer) int {
+	cfg, err := parseFlags(args, stderr)
+	if err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+		fmt.Fprintf(stderr, "mongo gateway server: %v\n", err)
+		return 2
+	}
+
+	ln, err := net.Listen("tcp", cfg.addr)
+	if err != nil {
+		fmt.Fprintf(stderr, "mongo gateway server: listen on %s: %v\n", cfg.addr, err)
+		return 1
+	}
+	standalone, err := mongogateway.OpenStandaloneServer(standaloneOptions(cfg))
+	if err != nil {
+		fmt.Fprintf(stderr, "mongo gateway server: configure standalone: %v\n", err)
+		if closeErr := ln.Close(); closeErr != nil {
+			fmt.Fprintf(stderr, "mongo gateway server: close listener: %v\n", closeErr)
+		}
+		return 1
+	}
+	if err := standalone.ValidateListener(ln); err != nil {
+		fmt.Fprintf(stderr, "mongo gateway server: transport policy: %v\n", err)
+		_ = ln.Close()
+		_ = standalone.Close()
+		return 1
+	}
+
+	evidence, err := ycsbevidence.OpenFromEnv(string(standalone.Options.Profile), standalone.Options.Dir, standalone.Backend, standalone.Stats)
+	if err != nil {
+		fmt.Fprintf(stderr, "mongo gateway server: owner evidence: %v\n", err)
+		_ = ln.Close()
+		_ = standalone.Close()
+		return 1
+	}
+
+	checkpointControl, err := evidence.StartCheckpointControl(standalone.Collections.FlushAll, standalone.Collections.CheckpointStorage)
+	if err != nil {
+		fmt.Fprintf(stderr, "mongo gateway server: checkpoint evidence: %v\n", err)
+		_ = ln.Close()
+		_ = evidence.Close(standalone.Close)
+		return 1
+	}
+
+	diagnosticControl, err := startDiagnosticProfileControl()
+	if err != nil {
+		fmt.Fprintf(stderr, "mongo gateway server: diagnostic profile: %v\n", err)
+		closeErr := errors.Join(ln.Close(), checkpointControl.Close(), evidence.Close(standalone.Close))
+		if closeErr != nil {
+			fmt.Fprintf(stderr, "mongo gateway server: close: %v\n", closeErr)
+		}
+		return 1
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	status := standalone.TransportStatus()
+	uri := "mongodb://" + ln.Addr().String() + "/?directConnection=true"
+	if status.Mode == "tls" {
+		uri += "&tls=true"
+	}
+	fmt.Fprintf(stdout, "TreeDB Mongo gateway listening on %s\n", uri)
+	fmt.Fprintf(stdout, "TreeDB dir: %s\n", standalone.Options.Dir)
+	fmt.Fprintf(stdout, "TreeDB profile: %s, collection document format: %s\n",
+		standalone.Options.Profile, standalone.Options.DefaultCollectionOptions.DocumentFormat)
+	fmt.Fprintf(stdout, "Transport: %s", status.Mode)
+	if status.Mode == "tls" {
+		fmt.Fprintf(stdout, ", minimum TLS %s, certificate expires %s", tlsVersionName(status.TLSMinimumVersion), status.TLSCertificateNotAfter.UTC().Format(time.RFC3339))
+	}
+	fmt.Fprintln(stdout)
+	if status.InsecureRemoteOverride {
+		fmt.Fprintln(stderr, "WARNING: plaintext remote listener explicitly enabled by -allow-insecure-remote")
+	}
+	if cfg.authenticationEnabled {
+		fmt.Fprintln(stdout, "Authentication: SCRAM-SHA-256 required; bootstrap users with Server.AuthCatalog.UpsertPassword before clients connect")
+	}
+
+	serveErr := standalone.Serve(ctx, ln)
+	diagnosticErr := diagnosticControl.Close()
+	controlErr := checkpointControl.Close()
+	closeErr := errors.Join(diagnosticErr, controlErr, evidence.Close(standalone.Close))
+	if serveErr != nil {
+		fmt.Fprintf(stderr, "mongo gateway server: serve: %v\n", serveErr)
+		if closeErr != nil {
+			fmt.Fprintf(stderr, "mongo gateway server: close: %v\n", closeErr)
+		}
+		return 1
+	}
+	if closeErr != nil {
+		fmt.Fprintf(stderr, "mongo gateway server: close: %v\n", closeErr)
+		return 1
+	}
+	return 0
+}
+
+func parseFlags(args []string, stderr io.Writer) (cliConfig, error) {
+	cfg := cliConfig{
+		addr:                    mongogateway.DefaultStandaloneAddr,
+		dir:                     defaultDirFromEnv(),
+		profile:                 string(treedb.ProfileCommandWALDurable),
+		documentFormat:          string(mongogateway.DefaultStandaloneDocumentFormat),
+		dataRootStorage:         rootStorageFlagValue(collections.RootStorageDefault),
+		indexStateStorage:       rootStorageFlagValue(collections.RootStorageDefault),
+		indexRootStorage:        rootStorageFlagValue(collections.RootStorageDefault),
+		updateCoalescingBatch:   256,
+		updateCoalescingIdleTTL: 30 * time.Second,
+		insertCoalescingBatch:   256,
+		insertCoalescingIdleTTL: 30 * time.Second,
+		tlsMinVersion:           "1.2",
+	}
+	fs := flag.NewFlagSet("treedb-mongo-gateway", flag.ContinueOnError)
+	fs.SetOutput(flagSetOutput(args, stderr))
+	fs.StringVar(&cfg.addr, "addr", cfg.addr, "TCP listen address for MongoDB clients")
+	fs.StringVar(&cfg.dir, "dir", cfg.dir, "TreeDB root directory")
+	fs.StringVar(&cfg.profile, "profile", cfg.profile, "TreeDB profile: "+treedb.ProfileFlagHelp)
+	fs.StringVar(&cfg.documentFormat, "document-format", cfg.documentFormat, "default collection document format: bson, json, or template-v1")
+	fs.StringVar(&cfg.dataRootStorage, "data-root-storage", cfg.dataRootStorage, "default collection data root storage: default, fast, or compressed")
+	fs.StringVar(&cfg.indexStateStorage, "index-state-storage", cfg.indexStateStorage, "default collection index-state storage: default, fast, or compressed")
+	fs.StringVar(&cfg.indexRootStorage, "index-root-storage", cfg.indexRootStorage, "default collection secondary-index root storage: default, fast, or compressed")
+	fs.IntVar(&cfg.maxFindScanDocuments, "max-find-scan-documents", cfg.maxFindScanDocuments, "maximum documents scanned by fallback find paths; 0 uses the gateway default")
+	fs.IntVar(&cfg.maxMessageBytes, "max-message-bytes", cfg.maxMessageBytes, "maximum MongoDB wire message size; 0 uses the gateway default")
+	fs.IntVar(&cfg.maxCursorRetainedBytes, "max-cursor-retained-bytes", cfg.maxCursorRetainedBytes, "maximum retained cursor batch bytes; 0 uses the gateway default")
+	fs.IntVar(&cfg.maxOpenCursors, "max-open-cursors", cfg.maxOpenCursors, "maximum open cursors; 0 uses the gateway default")
+	fs.DurationVar(&cfg.cursorIdleTimeout, "cursor-idle-timeout", cfg.cursorIdleTimeout, "cursor idle timeout; 0 uses the gateway default, negative disables timeout")
+	fs.DurationVar(&cfg.updateCoalescingDelay, "update-coalescing-delay", cfg.updateCoalescingDelay, "maximum delay for same-collection update coalescing; 0 coalesces only queued work, negative disables")
+	fs.IntVar(&cfg.updateCoalescingBatch, "update-coalescing-batch", cfg.updateCoalescingBatch, "maximum same-collection updates in one coalesced batch")
+	fs.DurationVar(&cfg.updateCoalescingIdleTTL, "update-coalescing-idle-ttl", cfg.updateCoalescingIdleTTL, "idle TTL for update coalescers; 0 uses gateway default, negative disables idle removal")
+	fs.DurationVar(&cfg.insertCoalescingDelay, "insert-coalescing-delay", cfg.insertCoalescingDelay, "maximum delay for same-collection single-document BSON insert coalescing; 0 coalesces only queued work, negative disables")
+	fs.IntVar(&cfg.insertCoalescingBatch, "insert-coalescing-batch", cfg.insertCoalescingBatch, "maximum same-collection single-document BSON inserts in one coalesced batch")
+	fs.DurationVar(&cfg.insertCoalescingIdleTTL, "insert-coalescing-idle-ttl", cfg.insertCoalescingIdleTTL, "idle TTL for insert coalescers; 0 uses gateway default, negative disables idle removal")
+	fs.StringVar(&cfg.tlsCertFile, "tls-cert-file", "", "PEM server certificate; requires -tls-key-file")
+	fs.StringVar(&cfg.tlsKeyFile, "tls-key-file", "", "PEM server private key; requires -tls-cert-file")
+	fs.StringVar(&cfg.tlsCAFile, "tls-ca-file", "", "optional PEM client CA bundle")
+	fs.BoolVar(&cfg.requireClientCert, "require-client-cert", false, "require and verify a TLS client certificate using -tls-ca-file")
+	fs.StringVar(&cfg.tlsMinVersion, "tls-min-version", cfg.tlsMinVersion, "minimum TLS version: 1.2 or 1.3")
+	fs.DurationVar(&cfg.tlsHandshakeTimeout, "tls-handshake-timeout", 0, "TLS handshake timeout; 0 uses 10s")
+	fs.BoolVar(&cfg.allowInsecureRemote, "allow-insecure-remote", false, "allow plaintext non-loopback listen (unsafe; emits warning)")
+	fs.BoolVar(&cfg.authenticationEnabled, "authentication", false, "enable SCRAM-SHA-256 authentication (bootstrap users through the library API before serving)")
+	if err := fs.Parse(args); err != nil {
+		return cfg, err
+	}
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "update-coalescing-batch" {
+			cfg.updateCoalescingBatchSet = true
+		}
+		if f.Name == "insert-coalescing-batch" {
+			cfg.insertCoalescingBatchSet = true
+		}
+	})
+	if cfg.dir == "" {
+		return cfg, errors.New("TreeDB root directory -dir is required")
+	}
+	profile, ok := treedb.ParsePublicProfile(cfg.profile, treedb.ProfileCommandWALDurable)
+	if !ok {
+		return cfg, fmt.Errorf("unsupported TreeDB profile %q; allowed: %s", cfg.profile, treedb.ProfileFlagHelp)
+	}
+	cfg.profile = string(profile)
+	if cfg.maxFindScanDocuments < 0 {
+		return cfg, errors.New("-max-find-scan-documents must be >= 0")
+	}
+	if cfg.maxMessageBytes < 0 {
+		return cfg, errors.New("-max-message-bytes must be >= 0")
+	}
+	if cfg.maxCursorRetainedBytes < 0 {
+		return cfg, errors.New("-max-cursor-retained-bytes must be >= 0")
+	}
+	if cfg.maxOpenCursors < 0 {
+		return cfg, errors.New("-max-open-cursors must be >= 0")
+	}
+	if cfg.updateCoalescingBatch < 0 {
+		return cfg, errors.New("-update-coalescing-batch must be >= 0")
+	}
+	if cfg.insertCoalescingBatch < 0 {
+		return cfg, errors.New("-insert-coalescing-batch must be >= 0")
+	}
+	if _, err := tlsVersionFromFlag(cfg.tlsMinVersion); err != nil {
+		return cfg, err
+	}
+	return cfg, nil
+}
+
+func flagSetOutput(args []string, stderr io.Writer) io.Writer {
+	for _, arg := range args {
+		if arg == "-h" || arg == "-help" || arg == "--help" {
+			return stderr
+		}
+	}
+	return io.Discard
+}
+
+func standaloneOptions(cfg cliConfig) mongogateway.StandaloneOptions {
+	// Only populate UpdateCoalescingMaxBatch when the flag was explicitly
+	// provided so that OpenStandaloneServer preserves the server default when
+	// the caller did not supply the flag.
+	coalescingBatch := 0
+	if cfg.updateCoalescingBatchSet {
+		coalescingBatch = cfg.updateCoalescingBatch
+	}
+	insertCoalescingBatch := 0
+	if cfg.insertCoalescingBatchSet {
+		insertCoalescingBatch = cfg.insertCoalescingBatch
+	}
+	return mongogateway.StandaloneOptions{
+		Dir:     cfg.dir,
+		Profile: treedb.Profile(cfg.profile),
+		DefaultCollectionOptions: collections.CollectionOptions{
+			DocumentFormat:          collections.DocumentFormat(cfg.documentFormat),
+			DataRootStoragePolicy:   rootStoragePolicyFromFlag(cfg.dataRootStorage),
+			IndexStateStoragePolicy: rootStoragePolicyFromFlag(cfg.indexStateStorage),
+		},
+		DefaultIndexStoragePolicy:   rootStoragePolicyFromFlag(cfg.indexRootStorage),
+		MaxMessageLength:            nonNegativeInt32(cfg.maxMessageBytes),
+		MaxFindScanDocuments:        cfg.maxFindScanDocuments,
+		MaxCursorRetainedBytes:      cfg.maxCursorRetainedBytes,
+		MaxOpenCursors:              cfg.maxOpenCursors,
+		CursorIdleTimeout:           cfg.cursorIdleTimeout,
+		UpdateCoalescingMaxDelay:    cfg.updateCoalescingDelay,
+		UpdateCoalescingMaxBatchSet: cfg.updateCoalescingBatchSet,
+		UpdateCoalescingMaxBatch:    coalescingBatch,
+		UpdateCoalescingIdleTTL:     cfg.updateCoalescingIdleTTL,
+		InsertCoalescingMaxDelay:    cfg.insertCoalescingDelay,
+		InsertCoalescingMaxBatchSet: cfg.insertCoalescingBatchSet,
+		InsertCoalescingMaxBatch:    insertCoalescingBatch,
+		InsertCoalescingIdleTTL:     cfg.insertCoalescingIdleTTL,
+		TLSCertFile:                 cfg.tlsCertFile,
+		TLSKeyFile:                  cfg.tlsKeyFile,
+		TLSCAFile:                   cfg.tlsCAFile,
+		RequireClientCert:           cfg.requireClientCert,
+		TLSMinVersion:               mustTLSVersionFromFlag(cfg.tlsMinVersion),
+		TLSHandshakeTimeout:         cfg.tlsHandshakeTimeout,
+		AllowInsecureRemote:         cfg.allowInsecureRemote,
+		AuthenticationEnabled:       cfg.authenticationEnabled,
+	}
+}
+
+func tlsVersionFromFlag(value string) (uint16, error) {
+	switch strings.TrimSpace(value) {
+	case "1.2", "tls1.2", "TLS1.2":
+		return tls.VersionTLS12, nil
+	case "1.3", "tls1.3", "TLS1.3":
+		return tls.VersionTLS13, nil
+	default:
+		return 0, fmt.Errorf("-tls-min-version must be 1.2 or 1.3, got %q", value)
+	}
+}
+func mustTLSVersionFromFlag(value string) uint16 {
+	version, _ := tlsVersionFromFlag(value)
+	return version
+}
+func tlsVersionName(version uint16) string {
+	if version == tls.VersionTLS13 {
+		return "1.3"
+	}
+	return "1.2"
+}
+
+func rootStoragePolicyFromFlag(value string) collections.RootStoragePolicy {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "default":
+		return collections.RootStorageDefault
+	case string(collections.RootStorageFast):
+		return collections.RootStorageFast
+	case string(collections.RootStorageCompressed):
+		return collections.RootStorageCompressed
+	default:
+		return collections.RootStoragePolicy(value)
+	}
+}
+
+func rootStorageFlagValue(policy collections.RootStoragePolicy) string {
+	if policy == collections.RootStorageDefault {
+		return "default"
+	}
+	return string(policy)
+}
+
+func nonNegativeInt32(n int) int32 {
+	if n <= 0 {
+		return 0
+	}
+	const maxInt32 = int(^uint32(0) >> 1)
+	if n > maxInt32 {
+		return int32(maxInt32)
+	}
+	return int32(n)
+}
+
+func defaultDirFromEnv() string {
+	if dir := os.Getenv("MONGO_GATEWAY_DIR"); dir != "" {
+		return dir
+	}
+	if dir := os.Getenv("TREEDB_MONGO_GATEWAY_DIR"); dir != "" {
+		return dir
+	}
+	return defaultDataDir
+}
+
+// UNBUILT diagnostic overlay helper. Appended to the original build-as-file main.
+const diagnosticProfileLimit int64 = 64 << 20
+
+type diagnosticProfileArtifact struct {
+	Name   string `json:"name"`
+	Bytes  int64  `json:"bytes"`
+	SHA256 string `json:"sha256"`
+}
+
+type diagnosticProfileBudget struct {
+	mu      sync.Mutex
+	written int64
+	err     error
+}
+
+type diagnosticProfileWriter struct {
+	file    *os.File
+	budget  *diagnosticProfileBudget
+	digest  hash.Hash
+	name    string
+	written int64
+}
+
+func (w *diagnosticProfileWriter) Write(p []byte) (int, error) {
+	w.budget.mu.Lock()
+	defer w.budget.mu.Unlock()
+	if w.budget.err != nil {
+		return 0, w.budget.err
+	}
+	if int64(len(p)) > diagnosticProfileLimit-w.budget.written {
+		w.budget.err = errors.New("diagnostic profile output exceeds 64 MiB limit")
+		return 0, w.budget.err
+	}
+	n, err := w.file.Write(p)
+	if n > 0 {
+		_, _ = w.digest.Write(p[:n]) // hash.Hash.Write always succeeds.
+		w.written += int64(n)
+		w.budget.written += int64(n)
+	}
+	if err == nil && n != len(p) {
+		err = io.ErrShortWrite
+	}
+	if err != nil {
+		w.budget.err = err
+	}
+	return n, err
+}
+
+func (w *diagnosticProfileWriter) finish() (diagnosticProfileArtifact, error) {
+	// CPU writer is stopped/joined by StopCPUProfile before this is called.
+	w.budget.mu.Lock()
+	defer w.budget.mu.Unlock()
+	err := errors.Join(w.budget.err, w.file.Sync(), w.file.Close())
+	return diagnosticProfileArtifact{w.name, w.written, hex.EncodeToString(w.digest.Sum(nil))}, err
+}
+
+type diagnosticProfileStart struct {
+	SchemaVersion int                      `json:"schema_version"`
+	Kind          string                   `json:"kind"`
+	Phase         string                   `json:"phase"`
+	Mode          string                   `json:"mode"`
+	Owner         ycsbevidence.Observation `json:"owner"`
+	BeginUTC      time.Time                `json:"begin_utc"`
+	ReadyUTC      time.Time                `json:"ready_utc"`
+}
+
+type diagnosticProfileStop struct {
+	SchemaVersion    int                         `json:"schema_version"`
+	Kind             string                      `json:"kind"`
+	Phase            string                      `json:"phase"`
+	Mode             string                      `json:"mode"`
+	Owner            ycsbevidence.Observation    `json:"owner"`
+	StartUTC         time.Time                   `json:"start_utc"`
+	StopRequestedUTC time.Time                   `json:"stop_requested_utc"`
+	FinishedUTC      time.Time                   `json:"finished_utc"`
+	Finalize         ycsbevidence.Result         `json:"finalize"`
+	Artifacts        []diagnosticProfileArtifact `json:"artifacts"`
+	LimitBytes       int64                       `json:"limit_bytes"`
+	BytesWritten     int64                       `json:"bytes_written"`
+}
+
+type diagnosticProfileControl struct {
+	mu                   sync.Mutex
+	handlers             sync.WaitGroup
+	dir                  string
+	owner                ycsbevidence.Observation
+	server               *http.Server
+	done                 chan struct{}
+	used, active, closed bool
+	cpuStarted, sampling bool
+	oldMutexFraction     int
+	mode                 string
+	ready                time.Time
+	cpu                  *diagnosticProfileWriter
+	budget               diagnosticProfileBudget
+	err                  error
+}
+
+func diagnosticWriteNew(path string, value any) error {
+	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return err
+	}
+	n, writeErr := f.Write(data)
+	if writeErr == nil && n != len(data) {
+		writeErr = io.ErrShortWrite
+	}
+	return errors.Join(writeErr, f.Sync(), f.Close())
+}
+
+func startDiagnosticProfileControl() (*diagnosticProfileControl, error) {
+	dir := os.Getenv("GOMAP_DIAGNOSTIC_PROFILE_DIR")
+	if dir == "" {
+		return nil, nil
+	}
+	if !filepath.IsAbs(dir) {
+		return nil, errors.New("diagnostic profile directory must be absolute")
+	}
+	ownerDir := os.Getenv("YCSB_SERVER_RECEIPT_DIR")
+	if !filepath.IsAbs(ownerDir) {
+		return nil, errors.New("diagnostic profile requires absolute original YCSB_SERVER_RECEIPT_DIR")
+	}
+	f, err := os.Open(filepath.Join(ownerDir, "owner.open.json"))
+	if err != nil {
+		return nil, err
+	}
+	var owner ycsbevidence.Observation
+	dec := json.NewDecoder(io.LimitReader(f, 1<<20))
+	decodeErr := dec.Decode(&owner)
+	var trailing any
+	if decodeErr == nil && dec.Decode(&trailing) != io.EOF {
+		decodeErr = errors.New("owner receipt has trailing or oversized JSON")
+	}
+	if err := errors.Join(decodeErr, f.Close()); err != nil {
+		return nil, err
+	}
+	if owner.SchemaVersion != 1 || owner.Kind != "live_owner_observation" || owner.OwnerID == "" || owner.Process.PID != os.Getpid() {
+		return nil, errors.New("diagnostic profile requires this process's original owner observation")
+	}
+	// Mkdir (not MkdirAll) requires a fresh directory and refuses existing paths.
+	if err := os.Mkdir(dir, 0700); err != nil {
+		return nil, err
+	}
+	if err := os.Chmod(dir, 0700); err != nil {
+		return nil, err
+	}
+	ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: filepath.Join(dir, "phase.sock"), Net: "unix"})
+	if err != nil {
+		return nil, err
+	}
+	if err := os.Chmod(filepath.Join(dir, "phase.sock"), 0600); err != nil {
+		return nil, errors.Join(err, ln.Close())
+	}
+	c := &diagnosticProfileControl{dir: dir, owner: owner, done: make(chan struct{})}
+	// Direct dispatch avoids ServeMux redirects; parsed OPTIONS * also reaches
+	// application validation. net/http may reject malformed framing beforehand.
+	c.server = &http.Server{Handler: http.HandlerFunc(c.admit), DisableGeneralOptionsHandler: true, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 5 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 5 * time.Second, MaxHeaderBytes: 4096}
+	go func() {
+		err := c.server.Serve(ln)
+		c.mu.Lock()
+		if !errors.Is(err, http.ErrServerClosed) {
+			c.err = errors.Join(c.err, fmt.Errorf("diagnostic control listener: %w", err))
+		}
+		c.mu.Unlock()
+		close(c.done)
+	}()
+	return c, nil
+}
+
+func (c *diagnosticProfileControl) openProfile(name string) (*diagnosticProfileWriter, error) {
+	f, err := os.OpenFile(filepath.Join(c.dir, name), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return nil, err
+	}
+	return &diagnosticProfileWriter{file: f, budget: &c.budget, digest: sha256.New(), name: name}, nil
+}
+
+func (c *diagnosticProfileControl) start(mode string) (diagnosticProfileStart, error) {
+	begin := time.Now().UTC()
+	c.used, c.mode = true, mode
+	if mode == "cpu_wait" {
+		var err error
+		c.cpu, err = c.openProfile("run_1.cpu.pprof")
+		if err != nil {
+			return diagnosticProfileStart{}, err
+		}
+		if err = pprof.StartCPUProfile(c.cpu); err != nil {
+			return diagnosticProfileStart{}, err
+		}
+		c.cpuStarted = true
+		c.oldMutexFraction = runtime.SetMutexProfileFraction(1)
+		runtime.SetBlockProfileRate(1)
+		c.sampling = true
+	}
+	c.active = true
+	c.ready = time.Now().UTC()
+	receipt := diagnosticProfileStart{1, "standalone_diagnostic_profile_start", "run_1", mode, c.owner, begin, c.ready}
+	return receipt, diagnosticWriteNew(filepath.Join(c.dir, "phase.start.json"), receipt)
+}
+
+func (c *diagnosticProfileControl) finalize(requested time.Time, cause error) (diagnosticProfileStop, error) {
+	artifacts := make([]diagnosticProfileArtifact, 0, 3)
+	result := ycsbevidence.Call(func() error {
+		err := errors.Join(c.err, cause)
+		if c.cpuStarted {
+			pprof.StopCPUProfile() // joins the CPU profile writer; sticky writer errors checked below.
+			c.cpuStarted = false
+		}
+		if c.sampling {
+			runtime.SetBlockProfileRate(0)
+			runtime.SetMutexProfileFraction(c.oldMutexFraction)
+			c.sampling = false
+		}
+		if c.cpu != nil {
+			artifact, finishErr := c.cpu.finish()
+			artifacts = append(artifacts, artifact)
+			err = errors.Join(err, finishErr)
+			c.cpu = nil
+		}
+		if c.active && c.mode == "cpu_wait" {
+			for _, kind := range []string{"block", "mutex"} {
+				writer, openErr := c.openProfile("run_1." + kind + ".pprof")
+				if openErr != nil {
+					err = errors.Join(err, openErr)
+					continue
+				}
+				profile := pprof.Lookup(kind)
+				var writeErr error
+				if profile == nil {
+					writeErr = fmt.Errorf("missing %s profile", kind)
+				} else {
+					writeErr = profile.WriteTo(writer, 0)
+				}
+				artifact, finishErr := writer.finish()
+				artifacts = append(artifacts, artifact)
+				err = errors.Join(err, writeErr, finishErr)
+			}
+		}
+		return err
+	})
+	c.active = false
+	receipt := diagnosticProfileStop{1, "standalone_diagnostic_profile_stop", "run_1", c.mode, c.owner, c.ready, requested, time.Now().UTC(), result, artifacts, diagnosticProfileLimit, c.budget.written}
+	var finalizeErr error
+	if !result.Success {
+		finalizeErr = errors.New(result.Error)
+	}
+	err := errors.Join(finalizeErr, diagnosticWriteNew(filepath.Join(c.dir, "phase.stop.json"), receipt))
+	c.err = errors.Join(c.err, err)
+	return receipt, err
+}
+
+func (c *diagnosticProfileControl) admit(w http.ResponseWriter, r *http.Request) {
+	c.mu.Lock()
+	if c.closed {
+		c.err = errors.Join(c.err, errors.New("diagnostic control closed"))
+		c.respond(w, http.StatusConflict, "text/plain; charset=utf-8", []byte("diagnostic control closed\n"))
+		c.mu.Unlock()
+		return
+	}
+	c.handlers.Add(1)
+	c.mu.Unlock()
+	defer c.handlers.Done()
+	c.handle(w, r)
+}
+
+// respond requires c.mu. Exact length avoids deferred chunk terminators;
+// checked Flush completes local framing while the admitted handler is held.
+// Local flush does not establish client receipt of the control response.
+func (c *diagnosticProfileControl) respond(w http.ResponseWriter, status int, contentType string, data []byte) {
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Length", fmt.Sprint(len(data)))
+	w.WriteHeader(status)
+	n, writeErr := w.Write(data)
+	if writeErr == nil && n != len(data) {
+		writeErr = io.ErrShortWrite
+	}
+	flushErr := http.NewResponseController(w).Flush()
+	c.err = errors.Join(c.err, writeErr, flushErr)
+}
+
+func (c *diagnosticProfileControl) handle(w http.ResponseWriter, r *http.Request) {
+	// The lock covers framed response writes and their checked local flush too.
+	// Close cannot finish until admitted file/response operations finish.
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	fail := func(status int, err error) {
+		c.err = errors.Join(c.err, err)
+		c.respond(w, status, "text/plain; charset=utf-8", []byte(err.Error()+"\n"))
+	}
+	if c.closed {
+		fail(http.StatusConflict, errors.New("diagnostic control closed"))
+		return
+	}
+	if r.Method != http.MethodPost || r.ContentLength != 0 || len(r.TransferEncoding) != 0 {
+		fail(http.StatusBadRequest, errors.New("diagnostic control requires POST with no body"))
+		return
+	}
+	query, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		fail(http.StatusBadRequest, err)
+		return
+	}
+	var receipt any
+	if r.URL.Path == "/start" {
+		modes, ok := query["mode"]
+		if len(query) != 1 || !ok || len(modes) != 1 || (modes[0] != "cpu_wait" && modes[0] != "off") {
+			fail(http.StatusBadRequest, errors.New("exactly mode=cpu_wait or mode=off required"))
+			return
+		}
+		if c.used || c.err != nil {
+			fail(http.StatusConflict, errors.New("diagnostic phase already used or failed"))
+			return
+		}
+		receipt, err = c.start(modes[0])
+		if err != nil {
+			c.err = errors.Join(c.err, err)
+			_, cleanupErr := c.finalize(time.Now().UTC(), errors.New("diagnostic start failed"))
+			fail(http.StatusInternalServerError, errors.Join(err, cleanupErr))
+			return
+		}
+	} else if r.URL.Path == "/stop" && len(query) == 0 {
+		if !c.active {
+			fail(http.StatusConflict, errors.New("diagnostic phase is not active"))
+			return
+		}
+		receipt, err = c.finalize(time.Now().UTC(), nil)
+		if err != nil {
+			fail(http.StatusInternalServerError, err)
+			return
+		}
+	} else {
+		fail(http.StatusBadRequest, errors.New("unknown diagnostic control"))
+		return
+	}
+	data, err := json.Marshal(receipt)
+	if err != nil {
+		fail(http.StatusInternalServerError, err)
+		return
+	}
+	c.respond(w, http.StatusOK, "application/json", append(data, '\n'))
+}
+
+func (c *diagnosticProfileControl) Close() error {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	if c.closed {
+		err := errors.Join(c.err, errors.New("diagnostic control Close repeated"))
+		c.mu.Unlock()
+		return err
+	}
+	c.closed = true
+	c.mu.Unlock()
+	// Server.Close stops accepts and closes idle/active sockets. Each handler's
+	// state and all profile operations are serialized by mu, including responses.
+	serverErr := c.server.Close()
+	<-c.done
+	c.handlers.Wait()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.err = errors.Join(c.err, serverErr)
+	if c.active || !c.used {
+		_, err := c.finalize(time.Now().UTC(), errors.New("diagnostic control closed without a completed phase"))
+		c.err = errors.Join(c.err, err)
+	}
+	return c.err
+}

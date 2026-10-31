@@ -1,0 +1,41 @@
+{
+  "reason": "retained rejected source-review candidate and original findings; reconstructible from pinned source + patch",
+  "files": {
+    "prototype/profile_control.go.txt": {
+      "sha256": "8ffa0a9e48a852ca76e44fb32029d4676d2db9971632e7c689fcb578567ab3aa",
+      "bytes": 11391
+    },
+    "prototype/make_overlay.py": {
+      "sha256": "0842546d262d85ef97ab7efd1266117f5e159f180e369e802fd001a75c7267dc",
+      "bytes": 5185
+    },
+    "prototype/diagnostic_server.go.txt": {
+      "sha256": "455b1b05d00acc25a1c325db8909dcf50ce91f1275620a2483411d8f148799d1",
+      "bytes": 27054
+    },
+    "prototype/source.patch": {
+      "sha256": "0d39f6bab97288869ae87bf8d0377c2caed51277f87b348175f4d5fee713210f",
+      "bytes": 13956
+    },
+    "prototype/overlay.json": {
+      "sha256": "17cd771d83cf6012888eb4c9b3112b856a5aa780a412cb63aca3b4aa4d5630e9",
+      "bytes": 231
+    },
+    "prototype/PRODUCER.md": {
+      "sha256": "70e1d600cc93882ba2bd9541fb23829f532c9a441bfb72742626c0a96a81c8eb",
+      "bytes": 9934
+    },
+    "evidence/producer-syntax.json": {
+      "sha256": "6b05cf2b3af8c7326a468bfcbbfd93f346c663c8175928ac5060a995f101aa0c",
+      "bytes": 439
+    },
+    "evidence/producer-manifest.json": {
+      "sha256": "3190ff9cc29d7b89cf4b25a1a0549e637a8127553055db2c26583fc4d01d5a82",
+      "bytes": 1158
+    },
+    "review/independent-review.md": {
+      "sha256": "70af3a627ccc5c8b5cefc54379502d203be40201b4c95cc4f986cc4affed345b",
+      "bytes": 9331
+    }
+  }
+}

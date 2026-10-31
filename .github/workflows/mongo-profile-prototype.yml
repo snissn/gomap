@@ -1,0 +1,49 @@
+name: Standalone Mongo profile prototype (bounded diagnostic)
+
+on:
+  push:
+    branches: [codex/mongo-profile-hosted-20261031]
+
+permissions:
+  contents: read
+
+jobs:
+  constructor:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/codex/mongo-profile-hosted-20261031'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - name: Checkout exact constructor checkpoint
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Verify hosted filesystem before toolchain setup
+        run: python3 -B experiments/mongo_profile_hosted/run.py --preflight
+
+      - name: Setup exact Go in task namespace
+        timeout-minutes: 5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.26.10"
+          check-latest: false
+          cache: false
+
+      - name: Build exact standalone entry and execute bounded controls
+        run: python3 -B experiments/mongo_profile_hosted/run.py
+
+      - name: Upload all constructor success and failure evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: mongo-profile-prototype-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.PROFILE_ROOT }}/evidence
+            ${{ runner.temp }}/mongo-profile-preflight-*.json
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 14

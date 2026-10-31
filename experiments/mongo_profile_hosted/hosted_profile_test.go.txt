@@ -1,0 +1,281 @@
+// Physical fixture lives outside the pristine source worktree. The runner maps
+// it beside the exact accepted standalone file only through a temporary overlay.
+package main
+
+import (
+	"bufio"
+	"crypto/sha256"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"os"
+	"path/filepath"
+	"reflect"
+	"runtime"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/snissn/gomap/internal/ycsbevidence"
+)
+
+func hostedFixture(t *testing.T) (string, ycsbevidence.Observation) {
+	t.Helper()
+	root := os.Getenv("HOSTED_EVIDENCE_DIR")
+	if !filepath.IsAbs(root) { t.Fatal("absolute retained evidence directory required") }
+	if err := os.Mkdir(root, 0700); err != nil { t.Fatal(err) }
+	ownerDir := filepath.Join(root, "owner")
+	if err := os.Mkdir(ownerDir, 0700); err != nil { t.Fatal(err) }
+	// SYNTHETIC helper-scope owner only. It cannot establish actual gateway
+	// ownership, backend activation, checkpoint behavior or original close.
+	owner := ycsbevidence.Observation{
+		SchemaVersion: 1, Kind: "live_owner_observation", OwnerID: strings.Repeat("a", 32),
+		Process: ycsbevidence.Process{PID: os.Getpid(), StartTicks: 1, EXESHA256: strings.Repeat("b", 64), GOMAXPROCSUnset: true},
+		DataDir: root, DataDevice: 1, DataInode: 1, Profile: "command_wal_durable",
+		ObservedGOMAXPROCS: runtime.GOMAXPROCS(0), Backend: "cow",
+		Stats: map[string]string{"treedb.profile.resolved": "command_wal_durable", "treedb.cache.memtable_mode": "cow_btree", "treedb.cache.cow.txn.logical_seq": "0"},
+		ObservedUTC: time.Now().UTC(),
+	}
+	data, err := json.Marshal(owner)
+	if err != nil { t.Fatal(err) }
+	if err := os.WriteFile(filepath.Join(ownerDir, "owner.open.json"), data, 0600); err != nil { t.Fatal(err) }
+	t.Setenv("YCSB_SERVER_RECEIPT_DIR", ownerDir)
+	t.Setenv("GOMAP_DIAGNOSTIC_PROFILE_DIR", filepath.Join(root, "profiles"))
+	return root, owner
+}
+
+func hostedRequest(c *diagnosticProfileControl, method, target string) (int, error) {
+	conn, err := net.DialTimeout("unix", filepath.Join(c.dir, "phase.sock"), 5*time.Second)
+	if err != nil { return 0, err }
+	defer conn.Close()
+	if err := conn.SetDeadline(time.Now().Add(10*time.Second)); err != nil { return 0, err }
+	// Write the original target verbatim: no URL normalizer or redirect client
+	// may erase the two source-review regression controls.
+	if _, err := fmt.Fprintf(conn, "%s %s HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", method, target); err != nil { return 0, err }
+	response, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil { return 0, err }
+	defer response.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+	if err != nil { return response.StatusCode, err }
+	if response.ContentLength != int64(len(body)) { return response.StatusCode, errors.New("checked response length mismatch") }
+	return response.StatusCode, nil
+}
+
+func hostedOK(t *testing.T, c *diagnosticProfileControl, target string) {
+	t.Helper()
+	status, err := hostedRequest(c, "POST", target)
+	if err != nil || status != 200 { t.Fatalf("%s: status=%d error=%v", target, status, err) }
+}
+
+var hostedCPUSink [32]byte
+
+func hostedStimulus() {
+	until := time.Now().Add(500*time.Millisecond)
+	seed := []byte("helper-scope CPU stimulus; not public workload")
+	for time.Now().Before(until) { hostedCPUSink = sha256.Sum256(seed); seed = hostedCPUSink[:] }
+	var lock sync.Mutex
+	lock.Lock()
+	done := make(chan struct{})
+	go func() { lock.Lock(); lock.Unlock(); close(done) }()
+	time.Sleep(10*time.Millisecond)
+	lock.Unlock()
+	<-done
+}
+
+type hostedResponse struct {
+	header http.Header
+	mode string
+	status, bytes int
+	flushed bool
+}
+
+func (w *hostedResponse) Header() http.Header { return w.header }
+func (w *hostedResponse) WriteHeader(status int) { w.status = status }
+func (w *hostedResponse) Write(data []byte) (int, error) {
+	if w.mode == "write" { return 0, errors.New("injected response Write failure") }
+	if w.mode == "shortwrite" { w.bytes = len(data)-1; return w.bytes, nil }
+	w.bytes = len(data)
+	return len(data), nil
+}
+func (w *hostedResponse) FlushError() error {
+	w.flushed = true
+	if w.mode == "flush" { return errors.New("injected response Flush failure") }
+	return nil
+}
+
+func hostedWriterControl(t *testing.T, root, which string) {
+	t.Helper()
+	f, err := os.OpenFile(filepath.Join(root, "writer.pprof"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil { t.Fatal(err) }
+	budget := &diagnosticProfileBudget{}
+	w := &diagnosticProfileWriter{file: f, budget: budget, digest: sha256.New(), name: "writer.pprof"}
+	if which == "writer-cap" {
+		// Fill accounting to one byte below the exact cap; reject a real write
+		// without allocating or writing a 64 MiB placeholder profile.
+		budget.written = diagnosticProfileLimit-1
+		if n, err := w.Write([]byte("xx")); n != 0 || err == nil { t.Fatalf("cap accepted n=%d err=%v", n, err) }
+		if n, err := w.Write([]byte("x")); n != 0 || err == nil { t.Fatal("overflow error was not sticky") }
+		if _, err := w.finish(); err == nil { t.Fatal("finish lost overflow error") }
+	} else {
+		if err := f.Close(); err != nil { t.Fatal(err) }
+		if _, err := f.Write([]byte("x")); err == nil { t.Fatal("closed OS file Write unexpectedly succeeded") }
+		if err := f.Sync(); err == nil { t.Fatal("closed OS file Sync unexpectedly succeeded") }
+		if err := f.Close(); err == nil { t.Fatal("closed OS file Close unexpectedly succeeded") }
+		if n, err := w.Write([]byte("x")); n != 0 || err == nil { t.Fatal("producer lost real closed-file Write error") }
+		if _, err := w.finish(); err == nil { t.Fatal("producer lost real closed-file Write/Sync/Close errors") }
+	}
+}
+
+func TestHostedCase(t *testing.T) {
+	which := os.Getenv("HOSTED_CASE")
+	root, owner := hostedFixture(t)
+	profileDir := filepath.Join(root, "profiles")
+	ownerFile := filepath.Join(root, "owner", "owner.open.json")
+	switch which {
+	case "owner-missing":
+		if err := os.Remove(ownerFile); err != nil { t.Fatal(err) }
+	case "owner-mismatch":
+		owner.Process.PID++
+		data, err := json.Marshal(owner)
+		if err != nil { t.Fatal(err) }
+		if err := os.WriteFile(ownerFile, data, 0600); err != nil { t.Fatal(err) }
+	case "relative":
+		t.Setenv("GOMAP_DIAGNOSTIC_PROFILE_DIR", "relative-profile-dir")
+	case "existing":
+		if err := os.Mkdir(profileDir, 0700); err != nil { t.Fatal(err) }
+	case "symlink":
+		if err := os.Symlink(filepath.Join(root, "owner"), profileDir); err != nil { t.Fatal(err) }
+	case "listener":
+		t.Setenv("GOMAP_DIAGNOSTIC_PROFILE_DIR", filepath.Join(root, strings.Repeat("s", 120)))
+	case "writer-cap", "closed-file":
+		hostedWriterControl(t, root, which)
+		return
+	}
+	c, err := startDiagnosticProfileControl()
+	startupFailure := which == "owner-missing" || which == "owner-mismatch" || which == "relative" || which == "existing" || which == "symlink" || which == "listener"
+	if startupFailure {
+		if err == nil || c != nil { t.Fatalf("startup did not fail closed: c=%v err=%v", c, err) }
+		return
+	}
+	if err != nil || c == nil { t.Fatalf("helper startup: %v", err) }
+	closed := false
+	defer func() { if !closed { _ = c.Close() } }()
+	if strings.HasPrefix(which, "response-") {
+		mode := strings.TrimPrefix(which, "response-")
+		writer := &hostedResponse{header: make(http.Header), mode: mode}
+		request, err := http.NewRequest("POST", "http://localhost/start?mode=off", nil)
+		if err != nil { t.Fatal(err) }
+		c.admit(writer, request)
+		if writer.status != 200 || writer.header.Get("Content-Length") == "" || !writer.flushed { t.Fatal("framed response/Flush path not exercised") }
+		c.mu.Lock(); sticky := c.err; c.mu.Unlock()
+		if sticky == nil { t.Fatal("admitted response failure not sticky") }
+		if err := c.Close(); err == nil { t.Fatal("Close lost admitted response failure") }
+		closed = true
+		return
+	}
+	switch which {
+	case "off", "cpu_wait":
+		hostedOK(t, c, "/start?mode="+which)
+		c.mu.Lock()
+		if !c.active || c.cpuStarted != (which == "cpu_wait") || c.sampling != (which == "cpu_wait") { t.Error("sampler/start state mismatch") }
+		c.mu.Unlock()
+		if which == "cpu_wait" {
+			if runtime.SetMutexProfileFraction(-1) != 1 { t.Error("mutex sampler not enabled") }
+			hostedStimulus()
+		}
+		hostedOK(t, c, "/stop")
+		c.mu.Lock()
+		if c.active || c.cpuStarted || c.sampling { t.Error("sampling did not finalize") }
+		c.mu.Unlock()
+		if err := c.Close(); err != nil { t.Fatal(err) }
+		closed = true
+		var start diagnosticProfileStart
+		var stop diagnosticProfileStop
+		for name, value := range map[string]any{"phase.start.json": &start, "phase.stop.json": &stop} {
+			data, err := os.ReadFile(filepath.Join(profileDir, name))
+			if err != nil { t.Fatal(err) }
+			if err := json.Unmarshal(data, value); err != nil { t.Fatal(err) }
+		}
+		if !reflect.DeepEqual(start.Owner, owner) || !reflect.DeepEqual(stop.Owner, owner) { t.Fatal("full original owner schema changed") }
+		if !stop.Finalize.Attempted || !stop.Finalize.Success || stop.Finalize.Error != "" { t.Fatal("failed finalization") }
+		if stop.LimitBytes != diagnosticProfileLimit || stop.BytesWritten > diagnosticProfileLimit { t.Fatal("cap changed") }
+		expected := 0
+		if which == "cpu_wait" { expected = 3 }
+		if len(stop.Artifacts) != expected { t.Fatal("profile artifact count mismatch") }
+		var total int64
+		for _, artifact := range stop.Artifacts {
+			data, err := os.ReadFile(filepath.Join(profileDir, artifact.Name))
+			if err != nil { t.Fatal(err) }
+			if int64(len(data)) != artifact.Bytes || fmt.Sprintf("%x", sha256.Sum256(data)) != artifact.SHA256 { t.Fatal("profile bytes/hash mismatch") }
+			total += artifact.Bytes
+		}
+		if total != stop.BytesWritten { t.Fatal("aggregate bytes mismatch") }
+		return
+	case "active-close":
+		hostedOK(t, c, "/start?mode=cpu_wait")
+	case "never-started-close":
+	case "invalid", "routing", "options", "stop-before-start":
+		method, target := "POST", "/start?mode=off&mode=cpu_wait"
+		if which == "routing" { target = "/x/../start?mode=off" }
+		if which == "options" { method, target = "OPTIONS", "*" }
+		if which == "stop-before-start" { target = "/stop" }
+		status, err := hostedRequest(c, method, target)
+		if err != nil || status < 400 { t.Fatalf("invalid control bypassed validation: status=%d err=%v", status, err) }
+	case "duplicate-start", "duplicate-stop":
+		hostedOK(t, c, "/start?mode=off")
+		target := "/start?mode=off"
+		if which == "duplicate-stop" { hostedOK(t, c, "/stop"); target = "/stop" }
+		status, err := hostedRequest(c, "POST", target)
+		if err != nil || status < 400 { t.Fatalf("duplicate control accepted: status=%d err=%v", status, err) }
+	case "profile-open", "receipt-open":
+		path := "run_1.cpu.pprof"
+		if which == "receipt-open" { path = "phase.start.json" }
+		if err := os.WriteFile(filepath.Join(profileDir, path), []byte("existing file must never be overwritten\n"), 0600); err != nil { t.Fatal(err) }
+		status, err := hostedRequest(c, "POST", "/start?mode=cpu_wait")
+		if err != nil || status != 500 { t.Fatalf("filesystem Open failure not returned: status=%d err=%v", status, err) }
+	case "concurrent-stop-close":
+		hostedOK(t, c, "/start?mode=off")
+		// Hold the admitted stop handler in a real custom response Flush while
+		// Close attempts its boundary. Completion must await the admitted flush.
+		entered, release := make(chan struct{}), make(chan struct{})
+		writer := &hostedBlockingResponse{hostedResponse: hostedResponse{header: make(http.Header)}, entered: entered, release: release}
+		request, err := http.NewRequest("POST", "http://localhost/stop", nil)
+		if err != nil { t.Fatal(err) }
+		handlerDone := make(chan struct{})
+		go func() { c.admit(writer, request); close(handlerDone) }()
+		<-entered
+		closeStarted := make(chan struct{})
+		closeDone := make(chan error, 1)
+		go func() { close(closeStarted); closeDone <- c.Close() }()
+		<-closeStarted
+		select {
+		case err := <-closeDone: t.Fatalf("Close escaped admitted Flush: %v", err)
+		case <-time.After(20*time.Millisecond):
+		}
+		close(release)
+		<-handlerDone
+		if err := <-closeDone; err != nil { t.Fatalf("completed concurrent stop/Close: %v", err) }
+		closed = true
+		return
+	default:
+		t.Fatalf("unknown bounded helper case %q", which)
+	}
+	if err := c.Close(); err == nil { t.Fatal("negative control did not veto Close") }
+	closed = true
+}
+
+type hostedBlockingResponse struct {
+	hostedResponse
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (w *hostedBlockingResponse) FlushError() error {
+	close(w.entered)
+	<-w.release
+	return w.hostedResponse.FlushError()
+}

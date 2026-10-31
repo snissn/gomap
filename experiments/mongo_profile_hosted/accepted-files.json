@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "status": "UNBUILT_ACCEPTED_SOURCE_COPY",
+  "packet_origin": "/home/mikers/gomap-mongo-performance-exec-20261031-5z3yyej9/profiling-prototype-followup",
+  "base": "95c6ff3de473786bd98b692375cfdb9cef951668",
+  "files": {
+    "README.md": {
+      "sha256": "cb81615a30327604dd172bde3faf489d4f1fb7f4b720f3caebfc3d0c8be04a2a",
+      "bytes": 5042
+    },
+    "prototype/PRODUCER.md": {
+      "sha256": "43e7abbed2ff123e07c618f1cf2bc6ada90c50f761c5dc5d4191910ab422a81d",
+      "bytes": 12815
+    },
+    "prototype/diagnostic_server.go.txt": {
+      "sha256": "987cd212e24c2bd1d4c28ce65501a353aacca6289b48ae3548b7eae39fb14101",
+      "bytes": 27559
+    },
+    "prototype/profile_control.go.txt": {
+      "sha256": "04e81ab5113745f937544081cbe9fe7805ec0f9b0df1aed7a56054eb27622bb1",
+      "bytes": 11904
+    },
+    "prototype/source.patch": {
+      "sha256": "a106c82aa05bc3868e49799fda0af789a265ba9a004cb9cba6d72ba5ce1c3de0",
+      "bytes": 14465
+    },
+    "source/manifest.json": {
+      "sha256": "478a2b7e082fb58a5fda231c3e490faf0849c888dd5a285ccc9c1b54461787ec",
+      "bytes": 2764
+    },
+    "evidence/producer-manifest.json": {
+      "sha256": "61792d75112154d2c9ad770b8ba212a9b81463ecbb9c7654773e688415b090e4",
+      "bytes": 1158
+    },
+    "review/independent-review.md": {
+      "sha256": "689a324d6ee483c766cdb0ee9dca92ee3f72e4fbf21810649a2cc06bc0dc0653",
+      "bytes": 9878
+    },
+    "review/independent-review-final.md": {
+      "sha256": "e7de2fd3ddce3621eaa1b6319df293892421954d56b4155f68f732d79207f90f",
+      "bytes": 7702
+    },
+    "evidence/rejected-candidate-1/manifest.json": {
+      "sha256": "88e03dfd1a02ae748171b1e9d1b5bc4ee491379ada2ab6f4919b366489ba09a2",
+      "bytes": 1477
+    }
+  }
+}
