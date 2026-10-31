@@ -236,7 +236,7 @@ retained object without admission. Releasing only the same blocker must allow
 the same original admission again. This is a direct-constructor/budget control,
 not a reproduction of the original public DB schedule.
 
-`TestNativeScalarForwardOriginalCleanupAdmission` adds a public-owner
+`TestNativeScalarForwardOriginalCleanupAdmission` adds a test for a public-owner
 counterexample to the old unconditional refusal oracle. It holds a capture of
 the exact engine superseded by the original insert, installs a test-local
 forwarding observer before that engine can enqueue cleanup, then closes the
