@@ -29,7 +29,7 @@ def main():
     for name, bound in manifest["files"].items():
         require(hashlib.sha256((REPO / name).read_bytes()).hexdigest() == bound["sha256"], "base source drift: " + name)
     workflow = (REPO / ".github/workflows/mongo-profile-prototype.yml").read_text()
-    for snippet in ("branches: [codex/mongo-profile-hosted-20261031]", "contents: read", "fetch-depth: 4",
+    for snippet in ("branches: [codex/mongo-profile-hosted-20261031]", "contents: read", "fetch-depth: 16",
                     "persist-credentials: false", 'go-version: "1.26.10"', "cache: false",
                     "runs-on: ubuntu-24.04", "timeout-minutes: 30", "if: always()"):
         require(snippet in workflow, "workflow contract missing: " + snippet)
@@ -40,14 +40,15 @@ def main():
     tree = ast.parse(driver)
     constants = {node.targets[0].id: ast.literal_eval(node.value) for node in tree.body
                  if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)
-                 and node.targets[0].id in {"BASE", "PREVIOUS_CHECKPOINT", "INITIAL_CHECKPOINT", "ENTRY", "HELPER_ENTRY", "HELPER_TEST", "ORIGINAL", "GENERATED", "HELPER_CASES", "PROFILE", "PINNED_GO"}}
+                 and node.targets[0].id in {"BASE", "ROOT_CHECKPOINT", "ENTRY", "HELPER_ENTRY", "HELPER_TEST", "ORIGINAL", "GENERATED", "HELPER_CASES", "PROFILE", "PINNED_GO"}}
     require(constants["BASE"] == accepted["base"], "driver base drift")
-    require(constants["PREVIOUS_CHECKPOINT"] == "d2259ce4f6c4f829f642fe4755e3516034cdc8dc" and
-            constants["INITIAL_CHECKPOINT"] == "dbc659dfee648c11ad105048aa7d007caf8cb097", "retained checkpoint drift")
-    require(all(snippet in driver for snippet in ('strip() == PREVIOUS_CHECKPOINT', 'strip() == INITIAL_CHECKPOINT',
-                'PREVIOUS_CHECKPOINT + "^"', 'INITIAL_CHECKPOINT + "^"', 'strip() == BASE',
-                'checkpoint_ancestry=[sha, PREVIOUS_CHECKPOINT, INITIAL_CHECKPOINT, BASE]')),
-            "append-only constructor source chain missing")
+    require(constants["ROOT_CHECKPOINT"] == "dbc659dfee648c11ad105048aa7d007caf8cb097", "retained root checkpoint drift")
+    require(all(snippet in driver for snippet in ('ROOT_CHECKPOINT + "^"', 'strip() == BASE',
+                '["git", "merge-base", "--is-ancestor", ROOT_CHECKPOINT, sha]',
+                'sha == os.environ["GITHUB_SHA"]',
+                'root_checkpoint=ROOT_CHECKPOINT, root_checkpoint_parent=BASE',
+                '["git", "diff", "--name-only", BASE, sha]')),
+            "root ancestry/exact candidate/net diff scope binding missing")
     require(constants["ENTRY"] == "TreeDB/mongo_gateway/server.go", "actual standalone overlay target drift")
     require('write(overlay, {"Replace": {str(runner.base / ENTRY): str(generated)}})' in driver,
             "actual standalone overlay must preserve the original entry mapping")
@@ -61,6 +62,27 @@ def main():
             "both ordinary and race helper file lists must use only the isolated virtual files")
     require('helper_virtual_entry=str(helper_entry_path), helper_virtual_test=str(fixture_path)' in driver,
             "helper virtual source paths must be explicit provenance")
+    require('with helper_probe_directory(runner, helper_entry_path.parent):' in driver,
+            "helper builds and controls need the checked empty physical cwd")
+    execute = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "execute")
+    probe_with = next(node for node in ast.walk(execute) if isinstance(node, ast.With) and
+                      isinstance(node.items[0].context_expr, ast.Call) and
+                      isinstance(node.items[0].context_expr.func, ast.Name) and
+                      node.items[0].context_expr.func.id == "helper_probe_directory")
+    probe_body = ast.get_source_segment(driver, probe_with)
+    require(all(snippet in probe_body for snippet in ('"build-file-list-tests"', 'for case in HELPER_CASES:',
+                '"build-concurrency-race-tests"', '"concurrent-stop-close-race"')),
+            "checked cwd must enclose ordinary/race builds and existing controls")
+    cleanup = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "helper_probe_directory")
+    cleanup_source = ast.get_source_segment(driver, cleanup)
+    for snippet in ('path.mkdir(mode=0o700)', 'not any(path.iterdir())', 'path.rmdir()',
+                    'current.st_dev, current.st_ino', 'not path.is_symlink()', 'runner.clean_base()',
+                    '"helper-probe-directory.json"', 'receipt["cleanup_error"]'):
+        require(snippet in cleanup_source, "checked empty cwd lifecycle missing: " + snippet)
+    require(len(next(node for node in cleanup.body if isinstance(node, ast.Try)).finalbody) > 0 and
+            'shutil.rmtree' not in cleanup_source and 'unlink(' not in cleanup_source,
+            "cwd cleanup must run in finally and never remove unexpected files")
+    require('-vet=off' not in driver and '"-vet"' not in driver, "default Go vet must remain enabled")
     require(constants["GENERATED"] == hashlib.sha256(data).hexdigest(), "driver generated hash drift")
     require(constants["ORIGINAL"] == manifest["files"]["TreeDB/mongo_gateway/server.go"]["sha256"], "driver original hash drift")
     require(constants["PROFILE"] == "command_wal_durable", "canonical gateway profile drift")

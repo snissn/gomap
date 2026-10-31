@@ -20,8 +20,7 @@ import traceback
 import uuid
 
 BASE = "95c6ff3de473786bd98b692375cfdb9cef951668"
-PREVIOUS_CHECKPOINT = "d2259ce4f6c4f829f642fe4755e3516034cdc8dc"
-INITIAL_CHECKPOINT = "dbc659dfee648c11ad105048aa7d007caf8cb097"
+ROOT_CHECKPOINT = "dbc659dfee648c11ad105048aa7d007caf8cb097"
 ENTRY = "TreeDB/mongo_gateway/server.go"
 HELPER_ENTRY = "TreeDB/mongo_profile_constructor_probe/server.go"
 HELPER_TEST = "TreeDB/mongo_profile_constructor_probe/hosted_profile_test.go"
@@ -461,6 +460,45 @@ def decode(runner, binary, directory, label):
                            [runner.go, "tool", "pprof", "-" + view, str(binary), str(profile)], timeout=120)
 
 
+@contextlib.contextmanager
+def helper_probe_directory(runner, path):
+    """Give vet an empty cwd; remove only our unchanged, still-empty directory."""
+    receipt = dict(path=str(path), start_utc=now(), created=False, removed=False,
+                   physical_source_files=False, vet="default enabled")
+    try:
+        path.mkdir(mode=0o700)
+        receipt["created"] = True
+        identity = path.lstat()
+        receipt.update(device=identity.st_dev, inode=identity.st_ino)
+        require(not any(path.iterdir()), "new helper probe directory is not empty")
+        receipt["empty_before_build"] = True
+        yield
+    except BaseException as error:
+        receipt["error"] = str(error)
+        raise
+    finally:
+        try:
+            if receipt["created"]:
+                current = path.lstat()
+                require(stat.S_ISDIR(current.st_mode) and not path.is_symlink() and
+                        (current.st_dev, current.st_ino) == (receipt["device"], receipt["inode"]),
+                        "helper probe directory identity changed; cleanup refused")
+                require(not any(path.iterdir()), "helper probe directory is nonempty; cleanup refused")
+                receipt["empty_before_remove"] = True
+                path.rmdir()
+                require(not path.exists() and not path.is_symlink(), "helper probe directory removal failed")
+                receipt["removed"] = True
+                runner.clean_base()
+                receipt["base_clean_after_remove"] = True
+        except BaseException as error:
+            receipt["cleanup_error"] = str(error)
+            raise
+        finally:
+            receipt["status"] = "failed" if "error" in receipt or "cleanup_error" in receipt else "removed-clean"
+            receipt["end_utc"] = now()
+            write(runner.out / "helper-probe-directory.json", receipt)
+
+
 def execute():
     hosted_only()
     root = Path(os.environ["PROFILE_ROOT"]).resolve(strict=True)
@@ -474,12 +512,9 @@ def execute():
         runner.guard()
         sha = runner.command("candidate", ["git", "rev-parse", "HEAD"], cwd=REPO).strip()
         require(sha == os.environ["GITHUB_SHA"], "checkout/candidate mismatch")
-        require(runner.command("candidate-parent", ["git", "rev-parse", "HEAD^"], cwd=REPO).strip() == PREVIOUS_CHECKPOINT,
-                "repair must append to the retained failed constructor checkpoint")
-        require(runner.command("checkpoint-parent", ["git", "rev-parse", PREVIOUS_CHECKPOINT + "^"], cwd=REPO).strip() == INITIAL_CHECKPOINT,
-                "previous checkpoint must retain the initial constructor checkpoint as parent")
-        require(runner.command("checkpoint-origin", ["git", "rev-parse", INITIAL_CHECKPOINT + "^"], cwd=REPO).strip() == BASE,
+        require(runner.command("checkpoint-origin", ["git", "rev-parse", ROOT_CHECKPOINT + "^"], cwd=REPO).strip() == BASE,
                 "retained constructor checkpoint must have the exact frozen base as parent")
+        runner.command("checkpoint-ancestor", ["git", "merge-base", "--is-ancestor", ROOT_CHECKPOINT, sha], cwd=REPO)
         changes = runner.command("candidate-paths", ["git", "diff", "--name-only", BASE, sha], cwd=REPO).splitlines()
         require(changes and all(p.startswith("experiments/mongo_profile_hosted/") or
                 p == ".github/workflows/mongo-profile-prototype.yml" for p in changes), "out-of-scope candidate changes")
@@ -541,7 +576,8 @@ def execute():
         require(compiler_version == selected_compiler_version == "compile version " + PINNED_GO,
                 "selected compiler version disagrees with pinned Go driver")
         provenance = dict(candidate=sha, base=BASE, generated_sha256=GENERATED, original_sha256=ORIGINAL,
-                          checkpoint_ancestry=[sha, PREVIOUS_CHECKPOINT, INITIAL_CHECKPOINT, BASE],
+                          root_checkpoint=ROOT_CHECKPOINT, root_checkpoint_parent=BASE,
+                          root_checkpoint_ancestor_verified=True,
                           helper_virtual_entry=str(helper_entry_path), helper_virtual_test=str(fixture_path),
                           expected_profile=PROFILE, resolved_go=str(resolved_go), driver_version=version,
                           goroot=str(goroot), gotooldir=str(tooldir), goversion=goenv["GOVERSION"],
@@ -591,38 +627,39 @@ def execute():
             if mode == "cpu_wait":
                 decode(runner, binary, directory / "profiles", "gateway-decode")
             summary["gateways"][mode] = "passed-empty-gateway-only"
-        tests = binaries / "profile-helper.test"
-        runner.command("build-file-list-tests", [runner.go, "test", "-c", "-mod=readonly", "-overlay", test_overlay,
-                       "-o", tests, str(helper_entry_path), str(fixture_path)], timeout=600)
-        write(runner.out / "helper-binary.json", dict(sha256=digest(tests), fixture_sha256=digest(fixture),
-                                                     virtual_entry=str(helper_entry_path), virtual_test=str(fixture_path),
-                                                     generated_sha256=GENERATED, retained_binary=True))
-        helper_out = runner.out / "helper"
-        helper_out.mkdir()
-        for case in HELPER_CASES:
-            env = runner.env.copy()
-            env.update(HOSTED_CASE=case, HOSTED_EVIDENCE_DIR=str(helper_out / case))
+        with helper_probe_directory(runner, helper_entry_path.parent):
+            tests = binaries / "profile-helper.test"
+            runner.command("build-file-list-tests", [runner.go, "test", "-c", "-mod=readonly", "-overlay", test_overlay,
+                           "-o", tests, str(helper_entry_path), str(fixture_path)], timeout=600)
+            write(runner.out / "helper-binary.json", dict(sha256=digest(tests), fixture_sha256=digest(fixture),
+                                                         virtual_entry=str(helper_entry_path), virtual_test=str(fixture_path),
+                                                         generated_sha256=GENERATED, retained_binary=True))
+            helper_out = runner.out / "helper"
+            helper_out.mkdir()
+            for case in HELPER_CASES:
+                env = runner.env.copy()
+                env.update(HOSTED_CASE=case, HOSTED_EVIDENCE_DIR=str(helper_out / case))
+                try:
+                    runner.command("helper-" + case, [tests, "-test.v", "-test.run=^TestHostedCase$", "-test.timeout=40s"], env=env, timeout=60)
+                    if case == "cpu_wait":
+                        decode(runner, tests, helper_out / case / "profiles", "helper-decode")
+                    summary["helper_cases"][case] = "passed"
+                except Exception as error:
+                    summary["helper_cases"][case] = "failed: " + str(error)
+            # Race instrumentation is separate and never applied to the normal binary.
+            race_tests = root / "bin/profile-helper-race.test"
             try:
-                runner.command("helper-" + case, [tests, "-test.v", "-test.run=^TestHostedCase$", "-test.timeout=40s"], env=env, timeout=60)
-                if case == "cpu_wait":
-                    decode(runner, tests, helper_out / case / "profiles", "helper-decode")
-                summary["helper_cases"][case] = "passed"
+                runner.command("build-concurrency-race-tests", [runner.go, "test", "-c", "-race", "-mod=readonly",
+                               "-overlay", test_overlay, "-o", race_tests, str(helper_entry_path), str(fixture_path)], timeout=600)
+                write(runner.out / "race-binary.json", dict(sha256=digest(race_tests), fixture_sha256=digest(fixture),
+                                                           generated_sha256=GENERATED, retained_binary=False))
+                env = runner.env.copy()
+                env.update(HOSTED_CASE="concurrent-stop-close", HOSTED_EVIDENCE_DIR=str(helper_out / "concurrent-stop-close-race"))
+                runner.command("concurrent-stop-close-race", [race_tests, "-test.v", "-test.run=^TestHostedCase$", "-test.timeout=40s"], env=env, timeout=60)
+                summary["race"] = "changed concurrency helper control passed; no gateway race qualification"
             except Exception as error:
-                summary["helper_cases"][case] = "failed: " + str(error)
-        # Race instrumentation is separate and never applied to the normal binary.
-        race_tests = root / "bin/profile-helper-race.test"
-        try:
-            runner.command("build-concurrency-race-tests", [runner.go, "test", "-c", "-race", "-mod=readonly",
-                           "-overlay", test_overlay, "-o", race_tests, str(helper_entry_path), str(fixture_path)], timeout=600)
-            write(runner.out / "race-binary.json", dict(sha256=digest(race_tests), fixture_sha256=digest(fixture),
-                                                       generated_sha256=GENERATED, retained_binary=False))
-            env = runner.env.copy()
-            env.update(HOSTED_CASE="concurrent-stop-close", HOSTED_EVIDENCE_DIR=str(helper_out / "concurrent-stop-close-race"))
-            runner.command("concurrent-stop-close-race", [race_tests, "-test.v", "-test.run=^TestHostedCase$", "-test.timeout=40s"], env=env, timeout=60)
-            summary["race"] = "changed concurrency helper control passed; no gateway race qualification"
-        except Exception as error:
-            summary["race"] = "not qualified: " + str(error)
-            summary["remaining_gates"].append("Changed concurrency race control did not complete successfully")
+                summary["race"] = "not qualified: " + str(error)
+                summary["remaining_gates"].append("Changed concurrency race control did not complete successfully")
         runner.clean_base()
         require(all(value == "passed" for value in summary["helper_cases"].values()), "one or more retained helper controls failed")
         summary["status"] = "bounded-constructor-controls-passed-pending-independent-acceptance"
