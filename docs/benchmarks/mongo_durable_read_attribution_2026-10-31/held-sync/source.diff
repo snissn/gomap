@@ -1,0 +1,245 @@
+diff --git a/TreeDB/native_command_wal_group_test.go b/TreeDB/native_command_wal_group_test.go
+index f68e316ca..ef74cbb6d 100644
+--- a/TreeDB/native_command_wal_group_test.go
++++ b/TreeDB/native_command_wal_group_test.go
+@@ -8,6 +8,7 @@ import (
+ 	"os"
+ 	"os/exec"
+ 	"path/filepath"
++	"reflect"
+ 	"strings"
+ 	"sync"
+ 	"sync/atomic"
+@@ -18,6 +19,232 @@ import (
+ 	"go.mongodb.org/mongo-driver/v2/bson"
+ )
+ 
++// This is a bounded progress control, not a latency or final12 reproduction.
++// Keep the ordinary group policy and hold the actual captured file-sync event.
++func TestNativeCommandWALHeldPhysicalSyncAllowsIndependentBSONRead(t *testing.T) {
++	opts := indexedSliceOptions(ProfileCommandWALDurable, t.TempDir())
++	database, err := Open(opts)
++	if err != nil {
++		t.Fatal(err)
++	}
++	var manager *collections.CollectionManager
++	defer func() {
++		if manager != nil {
++			if err := manager.Close(); err != nil {
++				t.Errorf("collection manager close: %v", err)
++			}
++		}
++		if database != nil {
++			if err := database.Close(); err != nil {
++				t.Errorf("database close: %v", err)
++			}
++		}
++	}()
++	backend, err := database.NativeSemanticBackend()
++	if err != nil {
++		t.Fatal(err)
++	}
++	manager = collections.NewCollectionManager(backend)
++	const name = "held_sync_rows"
++	if _, err := manager.CreateCollection(&collections.CollectionMeta{Name: name, Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}}); err != nil {
++		t.Fatal(err)
++	}
++	c, err := manager.OpenCollection(name)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if reflect.ValueOf(c).Elem().FieldByName("nativeJSON").IsNil() || len(c.Meta().Indexes) != 0 {
++		t.Fatal("invalid fixture: collection did not select native no-index route")
++	}
++	document := func(marker byte, changed bool) []byte {
++		doc := make(bson.D, 10)
++		for i := range doc {
++			value := marker
++			if changed && i == 0 {
++				value++
++			}
++			doc[i] = bson.E{Key: fmt.Sprintf("field%d", i), Value: bson.Binary{Subtype: 0, Data: bytes.Repeat([]byte{value}, 100)}}
++		}
++		encoded, err := bson.Marshal(doc)
++		if err != nil {
++			t.Fatal(err)
++		}
++		return encoded
++	}
++	id, otherID := []byte("unchanged"), []byte("updated")
++	seed, other, next := document('a', false), document('b', false), document('b', true)
++	if _, err := c.InsertBatch([][]byte{id, otherID}, [][]byte{seed, other}); err != nil {
++		t.Fatal(err)
++	}
++	if err := database.Checkpoint(); err != nil {
++		t.Fatal(err)
++	}
++	native, err := collections.NewNativeJSONManager(backend)
++	if err != nil {
++		t.Fatal(err)
++	}
++	// Inspect existing immutable capture metadata only. Reflection avoids adding
++	// a production observer/API solely for this two-row inquiry. Fail closed if
++	// the fixture's simple source shape changes. lookupEntry must use baseRoot
++	// when pending contains only otherID and captured/typed are absent.
++	physicalBaseline := func(afterUpdate bool) uint64 {
++		t.Helper()
++		read, err := native.Capture(name)
++		if err != nil {
++			t.Fatal(err)
++		}
++		defer func() {
++			if err := read.Close(); err != nil {
++				t.Errorf("baseline capture close: %v", err)
++			}
++		}()
++		r := reflect.ValueOf(read).Elem()
++		capture := r.FieldByName("capture").Elem()
++		if capture.Type().String() != "*caching.NativeSemanticCapture" {
++			t.Fatalf("invalid fixture: capture route %s", capture.Type())
++		}
++		domain := r.FieldByName("domain").FieldByName("domain").Elem()
++		root := domain.FieldByName("baseRoot").Uint()
++		if root == 0 || !domain.FieldByName("captured").IsNil() || !domain.FieldByName("typed").IsNil() {
++			t.Fatal("invalid fixture: expected retained physical root without captured/typed sources")
++		}
++		pending := domain.FieldByName("pending")
++		if !pending.IsNil() {
++			p := pending.Elem()
++			tree := p.FieldByName("tree").Elem()
++			count := tree.FieldByName("count").Int()
++			if !p.FieldByName("ordered").IsNil() || (!afterUpdate && count != 0) || (afterUpdate && count != 1) {
++				t.Fatalf("invalid fixture: unexpected pending source count=%d afterUpdate=%t", count, afterUpdate)
++			}
++			if count == 1 {
++				node := tree.FieldByName("root").Elem()
++				items := node.FieldByName("items")
++				if !node.FieldByName("children").IsNil() || items.Len() != 1 || items.Index(0).FieldByName("key").String() != string(otherID) {
++					t.Fatal("invalid fixture: pending source can shadow unchanged ID")
++				}
++			}
++		} else if afterUpdate {
++			t.Fatal("invalid fixture: native update did not install its pending source")
++		}
++		t.Logf("native retained physical baseline root=%d afterUpdate=%t unchanged=%q", root, afterUpdate, id)
++		return root
++	}
++	root := physicalBaseline(false)
++	type updateResult struct {
++		matched, modified bool
++		err               error
++	}
++	updates := make(chan updateResult, 1)
++	updateJoined, readJoined := make(chan struct{}), make(chan struct{})
++	entered, release := make(chan durabilitycut.Event, 1), make(chan struct{})
++	var once sync.Once
++	unblock := func() { once.Do(func() { close(release) }) }
++	var held sync.Once
++	restore := durabilitycut.Install(func(e durabilitycut.Event) error {
++		if e.Resource == durabilitycut.ResourceCommandWAL && e.Point == durabilitycut.BeforeDependencyFileSync && e.LSN != 0 {
++			held.Do(func() { entered <- e; <-release })
++		}
++		return nil
++	})
++	readStarted := false
++	// Release and join before hook removal, including assertion failure paths.
++	defer func() {
++		unblock()
++		<-updateJoined
++		if readStarted {
++			<-readJoined
++		}
++		restore()
++	}()
++	go func() {
++		defer close(updateJoined)
++		matched, modified, err := c.UpdateBSONSet(otherID, []collections.BSONSetField{{Key: "field0", Value: bson.Raw(next).Lookup("field0")}})
++		updates <- updateResult{matched, modified, err}
++	}()
++	select {
++	case e := <-entered:
++		t.Logf("held actual physical command-WAL sync LSN=%d path=%s", e.LSN, e.Path)
++	case result := <-updates:
++		t.Fatalf("invalid fixture: update completed before held physical sync: %+v", result)
++	case <-time.After(2 * time.Second):
++		t.Fatal("invalid fixture: update did not reach physical sync")
++	}
++	if got := physicalBaseline(true); got != root {
++		t.Fatalf("invalid fixture: physical baseline moved from %d to %d", root, got)
++	}
++	type readResult struct {
++		value []byte
++		err   error
++	}
++	reads := make(chan readResult, 1)
++	readStarted = true
++	go func() {
++		defer close(readJoined)
++		value, err := c.Get(id)
++		reads <- readResult{value, err}
++	}()
++	var owned []byte
++	select {
++	case result := <-reads:
++		if result.err != nil || !bytes.Equal(result.value, seed) || cap(result.value) != len(result.value) {
++			t.Fatalf("held-sync owned exact read=%x err=%v cap=%d", result.value, result.err, cap(result.value))
++		}
++		owned = result.value
++	case <-time.After(2 * time.Second):
++		t.Fatal("independent Collection.Get did not progress within 2 seconds of held physical sync")
++	}
++	select {
++	case result := <-updates:
++		t.Fatalf("update ACK overtook held physical sync: %+v", result)
++	default:
++	}
++	unblock()
++	<-updateJoined
++	result := <-updates
++	if result.err != nil || !result.matched || !result.modified {
++		t.Fatalf("released update ACK: %+v", result)
++	}
++	requireRows := func(collection *collections.Collection) {
++		t.Helper()
++		for _, row := range []struct{ id, want []byte }{{id, seed}, {otherID, next}} {
++			got, err := collection.Get(row.id)
++			if err != nil || !bytes.Equal(got, row.want) {
++				t.Fatalf("row %q=%x err=%v want=%x", row.id, got, err, row.want)
++			}
++		}
++	}
++	requireRows(c)
++	if err := database.Checkpoint(); err != nil {
++		t.Fatal(err)
++	}
++	if err := manager.Close(); err != nil {
++		t.Fatal(err)
++	}
++	manager = nil
++	if err := database.Close(); err != nil {
++		t.Fatal(err)
++	}
++	database = nil
++	if !bytes.Equal(owned, seed) {
++		t.Fatal("returned BSON bytes changed after read/update/checkpoint/close")
++	}
++	owned[0] ^= 0xff
++	database, err = Open(opts)
++	if err != nil {
++		t.Fatal(err)
++	}
++	backend, err = database.NativeSemanticBackend()
++	if err != nil {
++		t.Fatal(err)
++	}
++	manager = collections.NewCollectionManager(backend)
++	c, err = manager.OpenCollection(name)
++	if err != nil {
++		t.Fatal(err)
++	}
++	requireRows(c)
++}
++
+ func TestNativeCommandWALGroupIndependentBSONUpdates(t *testing.T) {
+ 	for _, sameCollection := range []bool{false, true} {
+ 		t.Run(fmt.Sprintf("sameCollection=%t", sameCollection), func(t *testing.T) { testNativeCommandWALGroupBSONUpdates(t, sameCollection) })

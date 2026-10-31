@@ -1,0 +1,37 @@
+{
+  "docs/benchmarks/ycsb_mongodb_gomap_final_2026-10-30.md": {
+    "sha256": "3a1c40d89f842aa370ccc777b56f04267c8044bc4bbd77a66e1fecc8617c795d",
+    "local": "context/ycsb_mongodb_gomap_final_2026-10-30.md",
+    "bytes": 19235
+  },
+  "docs/benchmarks/ycsb_5335_final_evidence/report.json": {
+    "sha256": "d40545a83b7d4b0b49aa3542a5ca6fa8393f04e4aed4ce5ee578a07ffd7efffa",
+    "local": "context/report.json",
+    "bytes": 9594539
+  },
+  "docs/benchmarks/ycsb_5335_final_evidence/REPORT.md": {
+    "sha256": "94a87fe93d396824ca096ef39ff94807c96d3eec4cfaf92194ef7c4342857679",
+    "local": "context/REPORT.md",
+    "bytes": 15820
+  },
+  "docs/benchmarks/ycsb_5335_final_evidence/index.json": {
+    "sha256": "213d1afa8c21aceb9f984f726d6dbc138dc1672024084801a41b82b0cc031aa6",
+    "local": "context/index.json",
+    "bytes": 4757466
+  },
+  "docs/benchmarks/ycsb_5335_final_evidence/README.md": {
+    "sha256": "926a6f2537b98137493a52826b93534c4cf31367a96c1e3dfea3348779580c06",
+    "local": "context/README.md",
+    "bytes": 7492
+  },
+  "docs/benchmarks/ycsb_5335_final_evidence/PUBLIC-CONTROL-SCOPE.md": {
+    "sha256": "7b577aab5f50cc4cbfc49f9de60c76279feeb1c0c6b1d17bc4dc340fd9ee1bfa",
+    "local": "context/PUBLIC-CONTROL-SCOPE.md",
+    "bytes": 7360
+  },
+  "docs/benchmarks/ycsb_5335_final_evidence/omissions.json": {
+    "sha256": "0373dfea277e58b72b7ebc40c6aedb78358dd5583c48d908ef6a1914596fe069",
+    "local": "context/omissions.json",
+    "bytes": 410251
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "executed": false,
+  "reason": "race build terminated by filesystem guard before ELF was produced",
+  "planned_command": [
+    "/home/mikers/gomap-mongo-performance-exec-20261031-5z3yyej9/evidence/held-sync/TreeDB.race.test",
+    "-test.v",
+    "-test.timeout=300s",
+    "-test.run=^TestNativeCommandWALHeldPhysicalSyncAllowsIndependentBSONRead$"
+  ]
+}
