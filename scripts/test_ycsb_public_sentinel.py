@@ -16,13 +16,30 @@ class Controls(unittest.TestCase):
   for name,a,b in [('load',0,1),('snapshot_loaded',1,2),('run_1',5,6)]:(self.d/(name+'.launch.json')).write_text(json.dumps(dict(start_utc=self.t(a),end_utc=self.t(b))))
  def fake(self):
   class Fake:
-   def __init__(obj,address,out):obj.out=out;obj.sock=mock.Mock()
+   def __init__(obj,address,out,*,timeout):
+    self.assertEqual(timeout,self.m['deadlines']['helper_seconds']);obj.out=out;obj.sock=mock.Mock()
    def close(obj):pass
    def call(obj,command):
     for kind,rid,to,value in [('request',1,0,command),('response',2,1,dict(ok=1,n=1))]:
      body=b'\0'*5+s.wire.document(value);(obj.out/('01-'+kind+'.bin')).write_bytes(struct.pack('<iiii',len(body)+16,rid,to,2013)+body)
     return dict(ok=1,n=1)
   with mock.patch.object(s.wire,'Client',Fake),mock.patch.object(s.c,'observe',return_value=self.owner),mock.patch.object(s.c,'now',side_effect=[self.t(3),self.t(4)]):s.run(self.d,self.m,self.owner,self.m['address'])
+ def test_explicit_helper_budget_preserves_long_response_wait(self):
+  body=b'\0'*5+s.wire.document(dict(ok=1,n=1));header=struct.pack('<iiii',len(body)+16,2,1,2013)
+  sock=mock.Mock();sock.recv.side_effect=[header,body];clock=[10.0]
+  def connect(*args,**kwargs):
+   self.assertEqual(kwargs['timeout'],3,'connection still has its original three-second bound')
+   clock[0]+=1;return sock
+  with tempfile.TemporaryDirectory() as directory,mock.patch.object(s.wire.socket,'create_connection',side_effect=connect),mock.patch.object(s.wire.time,'monotonic',side_effect=lambda:clock[0]):
+   client=s.wire.Client(self.m['address'],pathlib.Path(directory),timeout=self.m['deadlines']['helper_seconds'])
+   sock.settimeout.assert_called_once_with(179)
+   clock[0]=14 # A synchronous response may legitimately outlive the default3s.
+   self.assertEqual(client.call(dict(ping=1)),dict(ok=1,n=1))
+   self.assertEqual(sock.settimeout.call_args,mock.call(176))
+   clock[0]=190
+   with self.assertRaisesRegex(TimeoutError,'total deadline'):client.call(dict(ping=1))
+   sock.sendall.assert_called_once()
+   client.close();sock.close.assert_called_once()
  def test_positive_raw_owner_chronology(self):
   self.fake();x=s.validate(self.d,self.m,self.owner,self.m['address']);self.assertEqual(x['request']['writeConcern'],dict(w=1,j=True));self.assertNotEqual(x['request']['insert'],'usertable')
  def test_response_failures(self):

@@ -341,6 +341,48 @@ class CompareTests(unittest.TestCase):
         self.assertEqual((self.directory / "probe.out").read_text().strip(), "False")
         self.assertIsNone(record["receipt_sha256"])
 
+    def test_initial_server_observer_failure_cleans_owned_child_without_launch_receipt(self):
+        self.exercise_shell_cleanup(ready=True,initial_observer_failure=True)
+
+    def test_default_target_uses_gateway_public_arguments(self):
+        self.exercise_shell_cleanup(ready=True,target=None,recordcount="100000")
+
+    def test_native_census_limit_refuses_before_any_execution_side_effect(self):
+        self.exercise_preflight_refusal([(target,"RECORDCOUNT must be <= 9999 for the native census") for target in ("treedb_native","treedb_native treedb_mongo")],recordcount="10000")
+
+    def test_irrelevant_journal_setting_is_ignored_by_parse_and_offline_prepare(self):
+        self.check(True,MONGODB_JOURNAL_REQUEST="inherited-irrelevant")
+        marker=self.out/"offline-dispatch.json"
+        helper=self.out/"dispatch-python"
+        helper.write_text("#!"+sys.executable+"\nimport json,sys\nfrom pathlib import Path\nPath("+repr(str(marker))+").write_text(json.dumps(sys.argv[1:]))\n")
+        helper.chmod(0o700)
+        env=os.environ.copy();env.update(PYTHON=str(helper),MONGODB_JOURNAL_REQUEST="inherited-irrelevant")
+        request=self.out/"request.json";request.write_text("{}")
+        out=self.out/"offline-unused"
+        outcome=subprocess.run(["bash",str(ROOT/"ycsb_compare_mongodb_treedb.sh"),"--prepare-mongodb-reference",str(request),str(out)],env=env,text=True,capture_output=True,timeout=5)
+        self.assertEqual(outcome.returncode,0,outcome.stderr)
+        self.assertEqual(json.loads(marker.read_text()),[str(ROOT/"ycsb_mongodb_reference_prepare.py"),str(request),str(out)])
+        self.assertFalse(out.exists(),"dispatch-only test must not fabricate prepared evidence")
+
+    def test_execution_refuses_invalid_journal_before_output(self):
+        out=self.out/"invalid-journal"
+        env=os.environ.copy();env.update(PARSE_ONLY="false",OUT_DIR=str(out),MONGODB_JOURNAL_REQUEST="inherited-invalid")
+        outcome=subprocess.run(["bash",str(ROOT/"ycsb_compare_mongodb_treedb.sh")],env=env,text=True,capture_output=True,timeout=5)
+        self.assertEqual(outcome.returncode,2,outcome.stderr)
+        self.assertIn("invalid explicit journal request",outcome.stderr)
+        self.assertFalse(out.exists())
+
+    def test_default_temporary_base_is_portable_and_honors_override(self):
+        tools=self.out/"temp-tools";tools.mkdir();marker=tools/"args"
+        helper=tools/"mktemp";helper.write_text("#!/bin/sh\nprintf '%s' \"$2\" > "+str(marker)+"\nexit 97\n");helper.chmod(0o700)
+        for override in (None,str(self.out/"explicit-tmp")):
+            env=os.environ.copy();env.pop("TMPDIR",None);env.pop("OUT_DIR",None)
+            env.update(PATH=str(tools)+os.pathsep+env["PATH"],PARSE_ONLY="true")
+            if override is not None:env["TMPDIR"]=override
+            outcome=subprocess.run(["bash",str(ROOT/"ycsb_compare_mongodb_treedb.sh")],env=env,text=True,capture_output=True,timeout=5)
+            self.assertEqual(outcome.returncode,97,outcome.stderr)
+            self.assertEqual(marker.read_text(),(override or "/tmp")+"/treedb_ycsb_compare_XXXXXX")
+
     def test_single_target_supplied_binaries_format_and_owned_error_cleanup(self):
         self.exercise_shell_cleanup(ready=True)
 
@@ -353,7 +395,7 @@ class CompareTests(unittest.TestCase):
             p=tools/name;p.write_text('#!/bin/sh\necho called >> '+str(marker)+'\nexit 97\n');p.chmod(0o700)
         build=self.out/'unknown-runtime-client.json';self.save(build,dict(self.manifest['client'],exe_sha256='0'*64))
         self.save(tools/'unused.json',{})
-        env=os.environ.copy();env.update(PATH=str(tools)+os.pathsep+env['PATH'],PYTHON=sys.executable,OUT_DIR=str(self.out/'unknown-runtime-output'),TARGETS='treedb_native',MONGODB_MODE='skip',BUILD='true',BUILD_GOYCSB='true',CLIENT_BUILD_MANIFEST=str(build),SERVER_BUILD_MANIFEST=str(tools/'unused.json'),GOYCSB_BIN=str(tools/'client'),TREEDB_NATIVE_SERVER_BIN=str(tools/'server'))
+        env=os.environ.copy();env.update(PATH=str(tools)+os.pathsep+env['PATH'],PYTHON=sys.executable,OUT_DIR=str(self.out/'unknown-runtime-output'),TARGETS='treedb_native',RECORDCOUNT='64',MONGODB_MODE='skip',BUILD='true',BUILD_GOYCSB='true',CLIENT_BUILD_MANIFEST=str(build),SERVER_BUILD_MANIFEST=str(tools/'unused.json'),GOYCSB_BIN=str(tools/'client'),TREEDB_NATIVE_SERVER_BIN=str(tools/'server'))
         outcome=subprocess.run(['bash',str(ROOT/'ycsb_compare_mongodb_treedb.sh')],env=env,text=True,capture_output=True,timeout=5)
         self.assertNotEqual(outcome.returncode,0)
         self.assertIn('client runtime',outcome.stderr)
@@ -365,7 +407,7 @@ class CompareTests(unittest.TestCase):
         cases += [("treedb_native unknown","unknown target"),("unknown","unknown target"),("treedb_native treedb_native","duplicate target"),("treedb_mongo,treedb_mongo","duplicate target")]
         self.exercise_preflight_refusal(cases)
 
-    def exercise_preflight_refusal(self,cases):
+    def exercise_preflight_refusal(self,cases,recordcount=None):
         import select
         import shlex
         import socket
@@ -388,6 +430,7 @@ class CompareTests(unittest.TestCase):
                             output=self.out/"must-not-create-output"
                             environment=os.environ.copy();environment.pop("OUT_DIR",None)
                             environment.update(PATH=str(tools)+os.pathsep+environment["PATH"],TMPDIR=str(tools),PARSE_ONLY="false",BUILD="true",BUILD_GOYCSB="true",TARGETS=targets,MONGODB_MODE=mode,PYTHON=str(tools/"python3"),TREEDB_NATIVE_SERVER_BIN=str(tools/"native-server"),TREEDB_MONGO_GATEWAY_BIN=str(tools/"mongo-gateway"),GOYCSB_BIN=str(tools/"client"),FIXTURE_BIN=str(tools/"fixture"),CLIENT_BUILD_MANIFEST=str(tools/"unavailable-client-manifest"),SERVER_BUILD_MANIFEST=str(tools/"unavailable-server-manifest"),NATIVE_ADDR=address(native),TREEDB_MONGO_ADDR=address(unrelated_gateway),MONGODB_ADDR=address(reference))
+                            if recordcount is not None:environment["RECORDCOUNT"]=recordcount
                             if supplied_output:environment["OUT_DIR"]=str(output)
                             outcome=subprocess.run(["bash",str(ROOT/"ycsb_compare_mongodb_treedb.sh")],env=environment,capture_output=True,text=True,timeout=5)
                             self.assertEqual(outcome.returncode,2,outcome.stderr)
@@ -401,7 +444,7 @@ class CompareTests(unittest.TestCase):
             with self.subTest(targets=targets):
                 output=self.out/("preflight-"+targets.replace(" ","-"))
                 environment=os.environ.copy()
-                environment.update(PARSE_ONLY="false",BUILD="false",BUILD_GOYCSB="false",TARGETS=targets,OUT_DIR=str(output),CLIENT_BUILD_MANIFEST="",SERVER_BUILD_MANIFEST="")
+                environment.update(PARSE_ONLY="false",BUILD="false",BUILD_GOYCSB="false",TARGETS=targets,RECORDCOUNT="64",OUT_DIR=str(output),CLIENT_BUILD_MANIFEST="",SERVER_BUILD_MANIFEST="")
                 outcome=subprocess.run(["bash",str(ROOT/"ycsb_compare_mongodb_treedb.sh")],env=environment,capture_output=True,text=True,timeout=5)
                 self.assertEqual(outcome.returncode,2,outcome.stderr)
                 self.assertIn("CLIENT_BUILD_MANIFEST is required",outcome.stderr)
@@ -430,6 +473,9 @@ class CompareTests(unittest.TestCase):
 
     def test_shell_rejects_complete_invalid_owner_schema_before_client(self):
         self.exercise_shell_cleanup(ready=True,owner_ready="invalid-schema")
+
+    def test_native_census_limit_accepts_largest_supported_count(self):
+        self.exercise_shell_cleanup(ready=True,recordcount="9999")
 
     def test_gateway_census_limit_follows_large_recordcount(self):
         self.exercise_shell_cleanup(ready=True,target="treedb_mongo",recordcount="200000")
@@ -464,7 +510,9 @@ class CompareTests(unittest.TestCase):
         # Existing retained parse-only artifacts are selected by their manifest.
         self.check(True,TARGETS="treedb_native treedb_mongo",COMMON_LOAD_POLICY="unused.json")
 
-    def exercise_shell_cleanup(self, ready, hang=False, owner_ready="matching", target="treedb_native", recordcount="100000"):
+    def exercise_shell_cleanup(self, ready, hang=False, owner_ready="matching", target="treedb_native", recordcount="64", initial_observer_failure=False):
+        use_default_target=target is None
+        if use_default_target:target="treedb_mongo"
         # Offline dependency stubs exercise launcher dispatch without a product DB.
         tools = self.out / "offline-tools"
         tools.mkdir()
@@ -487,18 +535,20 @@ class CompareTests(unittest.TestCase):
 #include <arpa/inet.h>
 void done(int s) { _exit(0); }
 int main(int argc,char **argv) {
+ signal(SIGTERM,done);
  // Model the maintained native parser: historical overlay flags are invalid.
  for(int i=1;i<argc;i++)if(NATIVE && (!strcmp(argv[i],"-max-scan-documents")||!strcmp(argv[i],"-max-cursor-retained-bytes")))return 94;
  char *addr=NULL;for(int i=1;i+1<argc;i++)if(!strcmp(argv[i],"-addr"))addr=argv[i+1];
  char *scan="null",*cursor="null";for(int i=1;i+1<argc;i++){if(!strcmp(argv[i],"-max-find-scan-documents"))scan=argv[i+1];if(!strcmp(argv[i],"-max-cursor-retained-bytes"))cursor=argv[i+1];}
  FILE *f=fopen(MARKER,"w");fprintf(f,"{\"env_unset\":%s,\"scan_cap\":%s,\"cursor_cap\":%s}",getenv("GOMAXPROCS")?"false":"true",scan,cursor);fclose(f);
+ FILE *pidfile=fopen(PID_MARKER,"w");fprintf(pidfile,"%d",getpid());fclose(pidfile);
  int fd=socket(AF_INET,SOCK_STREAM,0);struct sockaddr_in a={0};a.sin_family=AF_INET;a.sin_addr.s_addr=htonl(INADDR_LOOPBACK);a.sin_port=htons(atoi(strrchr(addr,':')+1));
  if(bind(fd,(struct sockaddr*)&a,sizeof(a)))return 4;
  if(READY)listen(fd,5);else close(fd);
  signal(SIGTERM,done);while(1)pause();
 }""")
         server = tools / "native-server"
-        subprocess.run(["cc", str(source), "-o", str(server), '-DMARKER='+json.dumps(str(marker)), "-DREADY="+str(int(ready)),"-DNATIVE="+str(int(target=="treedb_native"))],check=True,capture_output=True)
+        subprocess.run(["cc", str(source), "-o", str(server), '-DMARKER='+json.dumps(str(marker)), '-DPID_MARKER='+json.dumps(str(tools/"server.pid")), "-DREADY="+str(int(ready)),"-DNATIVE="+str(int(target=="treedb_native"))],check=True,capture_output=True)
         # A direct ELF keeps process observation deterministic: a shebang's
         # /usr/bin/env -> Python exec can legitimately change exe mid-observe.
         # Keep the production observer strict and avoid that unrelated race.
@@ -558,6 +608,9 @@ def synthetic_role(manifest,command,sha,role):
  return resolve(manifest,command,sha,role)
 c.runtime_client_preflight=synthetic_preflight
 c.resolve_launch_role=synthetic_role
+if {initial_observer_failure!r}:
+ def fail_initial_observer(*args,**kwargs):raise PermissionError('injected initial server observer failure')
+ c.observe_owned=fail_initial_observer
 sys.argv=sys.argv[1:]
 if sys.argv[0]=='-':exec(compile(sys.stdin.read(),'<synthetic-shell-stdin>','exec'),dict(__name__='__main__'))
 elif pathlib.Path(sys.argv[0]).name=='ycsb_compare_validate.py':sys.exit(c.main())
@@ -570,12 +623,13 @@ else:runpy.run_path(sys.argv[0],run_name='__main__')
         execution = self.out / "execution"
         environment = os.environ.copy()
         environment.update(PATH=str(tools)+os.pathsep+environment["PATH"], PYTHON=str(python_stub), GOMAXPROCS="1", PARSE_ONLY="false", BUILD="false", BUILD_GOYCSB="false", OUT_DIR=str(execution), TARGETS=target, RECORDCOUNT=recordcount, MONGODB_MODE="skip", TREEDB_NATIVE_DOCUMENT_FORMAT="json", TREEDB_NATIVE_SERVER_BIN=str(server), TREEDB_MONGO_GATEWAY_BIN=str(server) if target=="treedb_mongo" else str(tools/"must-not-launch"), NATIVE_ADDR=f"127.0.0.1:{port}", TREEDB_MONGO_ADDR=f"127.0.0.1:{port}", CLIENT_BUILD_MANIFEST=str(build_path), SERVER_BUILD_MANIFEST=str(server_build_path), GOYCSB_DIR=str(tools), GOYCSB_BIN=str(client), FIXTURE_BIN=str(client), READINESS_TIMEOUT="1", PHASE_TIMEOUT_SECONDS="1", CHILD_CLEANUP_TIMEOUT_SECONDS="1")
+        if use_default_target:environment.pop("TARGETS",None)
         # The offline service binds TCP first; a separate synthetic observer
         # supplies actual proc/data identities later, without running a product DB.
         import threading,time
         writer_errors=[]
         def publish_owner():
-            if not ready or owner_ready=="missing":return
+            if not ready or owner_ready=="missing" or initial_observer_failure:return
             try:
                 deadline=time.monotonic()+5
                 while True:
@@ -616,6 +670,29 @@ else:runpy.run_path(sys.argv[0],run_name='__main__')
                 if path.exists():shutil.copyfile(path,retained/path.name)
         self.assertFalse(writer.is_alive())
         self.assertEqual(writer_errors,[])
+        if initial_observer_failure:
+            self.assertNotEqual(outcome.returncode,0,outcome.stderr)
+            self.assertIn("injected initial server observer failure",outcome.stderr)
+            self.assertFalse((execution/target/"server.launch.json").exists())
+            pid=int((tools/"server.pid").read_text())
+            def emergency_cleanup():
+                try:
+                    identity=COMPARE.observe_core(pid)
+                    self.assertEqual(identity["exe_sha256"],COMPARE.digest(server),"refusing emergency cleanup of a reused PID with unrelated ELF")
+                    COMPARE.terminate_owned(identity,.1)
+                except (ProcessLookupError,FileNotFoundError):pass
+            self.addCleanup(emergency_cleanup)
+            self.assertFalse(pathlib.Path(f"/proc/{pid}").exists(),"initial observer failure leaked owned child")
+            fallback=COMPARE.read(execution/target/"server.fallback-cleanup.json")
+            self.assertEqual(fallback["process"]["pid"],pid)
+            self.assertTrue(fallback["termination_complete"])
+            self.assertEqual(COMPARE.read(execution/target/"server.exit.json")["exit_code"],0)
+            self.assertFalse(client_marker.exists())
+            self.assertEqual(COMPARE.read(execution/"validation.json")["status"],"invalid")
+            import socket
+            with socket.socket() as probe:
+                self.assertNotEqual(probe.connect_ex(("127.0.0.1",port)),0,"owned listener survived failure")
+            return
         expected=(124 if hang else 37) if ready else 3
         if ready and owner_ready not in ("matching","partial"):expected=3
         self.assertEqual(outcome.returncode,expected,outcome.stderr)
@@ -715,6 +792,20 @@ else:runpy.run_path(sys.argv[0],run_name='__main__')
         finally:
             COMPARE.terminate_owned(identity,timeout=.05)
             child.wait(timeout=2)
+
+    def test_missing_launch_fallback_refuses_wrong_start_or_parent_without_signal(self):
+        env=os.environ.copy();env.pop("GOMAXPROCS",None)
+        child=subprocess.Popen([sys.executable,"-c","import time;time.sleep(30)"],env=env)
+        identity=COMPARE.observe_core(child.pid)
+        try:
+            for start,parent in ((identity["start_ticks"]+1,os.getpid()),(identity["start_ticks"],os.getpid()+1),(0,os.getpid())):
+                output=self.directory/("fallback-"+str(start)+"-"+str(parent)+".json")
+                outcome=subprocess.run([sys.executable,str(ROOT/"ycsb_compare_validate.py"),"stop-child",str(child.pid),str(start),str(parent),str(output),"--timeout",".05"],capture_output=True,text=True,timeout=5)
+                self.assertNotEqual(outcome.returncode,0)
+                self.assertIn("refusing signal",outcome.stderr)
+                self.assertIsNone(child.poll(),"mismatched direct child must remain unsignaled")
+        finally:
+            COMPARE.terminate_owned(identity,.05);child.wait(timeout=2)
 
     def test_pidfd_cleanup_revalidates_before_kill(self):
         from unittest import mock

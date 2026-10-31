@@ -48,7 +48,7 @@ def validate(d,m,owner,addr):
 
 def run(d,m,owner,addr):
     policy(m);frames=d/'public-sentinel-frames';frames.mkdir();start=c.now();c.require(c.same(c.observe(owner['pid']),owner),'sentinel original owner changed before request')
-    client=wire.Client(addr,frames);client.sock.settimeout(m['deadlines']['helper_seconds'])
+    client=wire.Client(addr,frames,timeout=m['deadlines']['helper_seconds'])
     try:reply=client.call(command(m));accepted(reply)
     finally:client.close()
     c.require(c.same(c.observe(owner['pid']),owner),'sentinel original owner changed after request')

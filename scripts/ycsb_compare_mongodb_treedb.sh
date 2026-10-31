@@ -8,7 +8,7 @@ LIVE="$ROOT/scripts/ycsb_compare_live.py"
 LISTENER="$ROOT/scripts/ycsb_owned_listener.py"
 FIXTURE_BIN="${FIXTURE_BIN:-$ROOT/bin/ycsb-correctness-fixture}"
 PYTHON="${PYTHON:-python3}"
-TMP_BASE="${TMPDIR:-/mnt/fast4tb}"
+TMP_BASE="${TMPDIR:-/tmp}"
 OUT_DIR="${OUT_DIR:-}"
 GOYCSB_DIR="${GOYCSB_DIR:-/home/mikers/dev/pingcap/go-ycsb}"
 GOYCSB_BIN="${GOYCSB_BIN:-$GOYCSB_DIR/bin/go-ycsb}"
@@ -33,11 +33,10 @@ MONGODB_IMAGE="${MONGODB_IMAGE:-mongo:8}"
 COMMON_LOAD_POLICY="${COMMON_LOAD_POLICY:-}"
 export COMMON_LOAD_POLICY
 MONGODB_JOURNAL_REQUEST="${MONGODB_JOURNAL_REQUEST:-unspecified}"
-case "$MONGODB_JOURNAL_REQUEST" in unspecified|true|false) ;; *) echo "invalid explicit journal request" >&2; exit 2;; esac
 export MONGODB_JOURNAL_REQUEST
 MONGODB_JOURNAL_SUFFIX=""
 [[ "$MONGODB_JOURNAL_REQUEST" == unspecified ]] || MONGODB_JOURNAL_SUFFIX="&journal=$MONGODB_JOURNAL_REQUEST"
-TARGETS="${TARGETS:-treedb_native treedb_mongo}"
+TARGETS="${TARGETS:-treedb_mongo}"
 BUILD="${BUILD:-true}"
 BUILD_GOYCSB="${BUILD_GOYCSB:-false}"
 PARSE_ONLY="${PARSE_ONLY:-false}"
@@ -59,7 +58,7 @@ supplies the endpoint and builds; execution environment flags do not select this
 mode. Output is not activated and ordinary mongodb execution remains refused.
 
 TARGETS is one line selecting the services and clients to run (space or comma separated:
-  treedb_native, treedb_mongo). The default runs the two TreeDB targets.
+  treedb_native, treedb_mongo). The default runs treedb_mongo.
   mongodb is reserved and refused before execution side effects until its
   independently owned reference lifecycle is implemented.
 
@@ -67,6 +66,8 @@ Supports supplied absolute TREEDB_NATIVE_SERVER_BIN/TREEDB_MONGO_GATEWAY_BIN,
 GOYCSB_BIN, FIXTURE_BIN, TREEDB_NATIVE_DOCUMENT_FORMAT and TREEDB_MONGO_DOCUMENT_FORMAT
 (json|bson), TREEDB_PROFILE, RECORDCOUNT, OPERATIONCOUNT, THREADCOUNT,
 RUN_REPEATS, BUILD, BUILD_GOYCSB, OUT_DIR and TMPDIR.
+Native execution requires RECORDCOUNT <= 9999: its public CLI has a fixed
+10000-row scan cap, including the extra row needed to detect census overflow.
 Gateway execution requires RECORDCOUNT <= 2147483646 so its census cap
 (RECORDCOUNT+1) fits a signed Go int on both 32-bit and 64-bit builds.
 PHASE_TIMEOUT_SECONDS=600 and HELPER_TIMEOUT_SECONDS=180 bound each child.
@@ -116,6 +117,7 @@ case "$MONGODB_MODE" in docker|external|skip) ;; *) fail "unknown MONGODB_MODE";
 # Reference lifecycle support is absent; a late rejection could already have
 # launched a container/client and routed snapshots to an unrelated TreeDB addr.
 if [[ "$PARSE_ONLY" == false ]]; then
+  case "$MONGODB_JOURNAL_REQUEST" in unspecified|true|false) ;; *) fail "invalid explicit journal request";; esac
   [[ "$TARGETS" != *$'\n'* && "$TARGETS" != *$'\r'* ]] || fail "TARGETS must be a single line (no LF or CR)"
   read -r -a selected <<<"${TARGETS//,/ }"
   [[ ${#selected[@]} -gt 0 ]] || fail "TARGETS cannot be empty"
@@ -128,6 +130,9 @@ if [[ "$PARSE_ONLY" == false ]]; then
   [[ -z "${chosen[mongodb]:-}" ]] || fail "reference MongoDB lifecycle is unsupported; refusing mongodb before execution"
   if [[ -n "$COMMON_LOAD_POLICY" ]]; then
     [[ ${#selected[@]} == 1 && -n "${chosen[treedb_mongo]:-}" ]] || fail "COMMON_LOAD_POLICY requires only treedb_mongo"
+  fi
+  if [[ -n "${chosen[treedb_native]:-}" ]]; then
+    [[ ${#RECORDCOUNT} -le 4 ]] || fail "RECORDCOUNT must be <= 9999 for the native census (fixed 10000-row scan cap)"
   fi
   if [[ -n "${chosen[treedb_mongo]:-}" ]]; then
     # Leave one extra row for census mismatch detection. The portable bound
@@ -250,28 +255,37 @@ for name, path in [('cpuinfo','/proc/cpuinfo'),('meminfo','/proc/meminfo'),('clo
 (out/'host.json').write_text(json.dumps(context,indent=2,allow_nan=False)+'\n')
 PYHOST
 
-declare -a SERVER_PIDS=() SERVER_TARGETS=() SERVER_PREFIXES=()
+declare -a SERVER_PIDS=() SERVER_TARGETS=() SERVER_PREFIXES=() SERVER_STARTS=()
 MONGO_CONTAINER=""
 CLEANUP_DONE=false
 cleanup() {
-  local failed=0 pid target prefix index code
+  local failed=0 pid target prefix index code receipt
   [[ "$CLEANUP_DONE" == false ]] || return 0
   CLEANUP_DONE=true
   for index in "${!SERVER_PIDS[@]}"; do
     pid=${SERVER_PIDS[$index]}; target=${SERVER_TARGETS[$index]}; prefix=${SERVER_PREFIXES[$index]}
-    if ! "$PYTHON" "$VALIDATOR" stop "$OUT_DIR/$target/$prefix.launch.json"; then
-      failed=1
-      # Identity mismatch is a hard refusal. Never signal or wait on that PID.
-      continue
+    receipt="$OUT_DIR/$target/$prefix.launch.json"
+    if [[ -e "$receipt" ]]; then
+      if ! "$PYTHON" "$VALIDATOR" stop "$receipt" --timeout "$CHILD_CLEANUP_TIMEOUT_SECONDS"; then
+        failed=1
+        # Identity mismatch is a hard refusal. Never signal or wait on that PID.
+        continue
+      fi
+    else
+      receipt="$OUT_DIR/$target/$prefix.fallback-cleanup.json"
+      if ! "$PYTHON" "$VALIDATOR" stop-child "$pid" "${SERVER_STARTS[$index]}" "$$" "$receipt" --timeout "$CHILD_CLEANUP_TIMEOUT_SECONDS"; then
+        failed=1
+        continue
+      fi
     fi
     code=0; wait "$pid" || code=$?
-    "$PYTHON" - "$OUT_DIR/$target" "$code" "$prefix" "$ROOT/scripts" <<'PY'
+    "$PYTHON" - "$OUT_DIR/$target" "$code" "$prefix" "$ROOT/scripts" "$receipt" <<'PY'
 import json, pathlib, sys
 sys.path.insert(0,sys.argv[4])
 from ycsb_evidence_json import read
 out = pathlib.Path(sys.argv[1])
 prefix=sys.argv[3]
-launch = read(out / (prefix+'.launch.json'))
+launch = read(pathlib.Path(sys.argv[5]))
 with (out / (prefix+'.exit.json')).open('x') as stream:
     json.dump(dict(process=launch['process'], exit_code=int(sys.argv[2])), stream,allow_nan=False)
 PY
@@ -337,6 +351,13 @@ start_server() {
   log_command "${command[@]}"
   "${command[@]}" >"$OUT_DIR/$target/$prefix.log" 2>&1 &
   SERVER_PIDS+=("$!"); SERVER_TARGETS+=("$target"); SERVER_PREFIXES+=("$prefix")
+  # Capture only the stable direct-child token before optional observation.
+  # A failed capture stays invalid: cleanup must never fall back to a bare PID.
+  local child_stat="" child_fields=()
+  if IFS= read -r child_stat <"/proc/${SERVER_PIDS[-1]}/stat"; then
+    read -r -a child_fields <<<"${child_stat##*) }"
+  fi
+  SERVER_STARTS+=("${child_fields[19]:-0}")
   "$PYTHON" "$VALIDATOR" observe "${SERVER_PIDS[-1]}" "$dir" "$OUT_DIR/$target/$prefix.launch.json" --await-exec "$binary"
   "$PYTHON" "$LISTENER" "$OUT_DIR/$target/$prefix.launch.json" "$addr" "$OUT_DIR/$target/$prefix.listener.json" --timeout "$READINESS_TIMEOUT"
   "$PYTHON" "$LIVE" ready "$OUT_DIR/$target" "$target" --prefix "$prefix" --timeout "$READINESS_TIMEOUT" --outer-timeout "$((READINESS_TIMEOUT+10))"
@@ -399,7 +420,7 @@ for target in "${selected[@]}"; do
   live_helper snapshot "$OUT_DIR/$target" "$target" --addr "$addr" --stage preclose
 done
 cleanup
-SERVER_PIDS=(); SERVER_TARGETS=(); SERVER_PREFIXES=()
+SERVER_PIDS=(); SERVER_TARGETS=(); SERVER_PREFIXES=(); SERVER_STARTS=()
 for target in "${selected[@]}"; do
   addr=$NATIVE_ADDR; binary=$TREEDB_NATIVE_SERVER_BIN; extra=()
   if [[ "$target" == treedb_mongo ]]; then addr=$TREEDB_MONGO_ADDR; binary=$TREEDB_MONGO_GATEWAY_BIN; extra=(-document-format "$TREEDB_MONGO_DOCUMENT_FORMAT"); fi
@@ -408,17 +429,17 @@ for target in "${selected[@]}"; do
   verify_listener "$target" reopened "$addr"
   live_helper snapshot "$OUT_DIR/$target" "$target" --addr "$addr" --stage reopened
   cleanup
-  SERVER_PIDS=(); SERVER_TARGETS=(); SERVER_PREFIXES=()
+  SERVER_PIDS=(); SERVER_TARGETS=(); SERVER_PREFIXES=(); SERVER_STARTS=()
   start_server "$target" "$addr" "$binary" fixture-write fixture-db "${extra[@]}"
   verify_listener "$target" fixture-write "$addr"
   live_helper write "$OUT_DIR/$target" "$target" --addr "$addr"
   cleanup
-  SERVER_PIDS=(); SERVER_TARGETS=(); SERVER_PREFIXES=()
+  SERVER_PIDS=(); SERVER_TARGETS=(); SERVER_PREFIXES=(); SERVER_STARTS=()
   start_server "$target" "$addr" "$binary" fixture-reopened fixture-db "${extra[@]}"
   verify_listener "$target" fixture-reopened "$addr"
   live_helper verify "$OUT_DIR/$target" "$target" --addr "$addr"
   cleanup
-  SERVER_PIDS=(); SERVER_TARGETS=(); SERVER_PREFIXES=()
+  SERVER_PIDS=(); SERVER_TARGETS=(); SERVER_PREFIXES=(); SERVER_STARTS=()
   live_helper assemble "$OUT_DIR/$target" "$target"
 done
 "$PYTHON" "$VALIDATOR" validate "$OUT_DIR"

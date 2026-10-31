@@ -478,6 +478,18 @@ def terminate_owned(identity, timeout=10):
     finally:
         os.close(descriptor)
 
+def terminate_direct_child(pid, start_ticks, parent_pid, output, timeout=10):
+    """Fallback only for the shell's unreaped child before a launch receipt exists."""
+    require(type(pid) is int and pid > 0 and type(start_ticks) is int and start_ticks > 0 and type(parent_pid) is int and parent_pid > 0, "missing direct-child identity; refusing signal")
+    identity=observe_core(pid)
+    stat=pathlib.Path(f"/proc/{pid}/stat").read_text().rsplit(")",1)[1].split()
+    require(identity["start_ticks"]==start_ticks and int(stat[19])==start_ticks and int(stat[1])==parent_pid, "direct-child identity mismatch; refusing signal")
+    # terminate_owned pins a pidfd and rechecks start/executable before each signal.
+    write_new(output,dict(schema_version=1,kind="pre_observation_owned_child_cleanup",process=identity,parent_pid=parent_pid,termination_complete=False))
+    terminate_owned(identity,timeout)
+    pathlib.Path(output).write_text(json.dumps(dict(schema_version=1,kind="pre_observation_owned_child_cleanup",process=identity,parent_pid=parent_pid,termination_complete=True),allow_nan=False)+"\n")
+
+
 def positive_timeout(value, label):
     require(type(value) in (int,float) and math.isfinite(value) and value > 0, f"{label} must be finite and positive")
     return value
@@ -710,6 +722,12 @@ def main():
     stop = sub.add_parser("stop")
     stop.add_argument("launch", type=pathlib.Path)
     stop.add_argument("--timeout", type=float, default=10)
+    direct = sub.add_parser("stop-child")
+    direct.add_argument("pid",type=int)
+    direct.add_argument("start_ticks",type=int)
+    direct.add_argument("parent_pid",type=int)
+    direct.add_argument("output",type=pathlib.Path)
+    direct.add_argument("--timeout",type=float,default=10)
     args = parser.parse_args()
     try:
         if args.mode == "validate":
@@ -721,6 +739,9 @@ def main():
         if args.mode == "launch":
             with outer_deadline(args.outer_timeout if args.outer_timeout is not None else args.timeout+3*args.cleanup_timeout+10):
                 return launch(args)
+        if args.mode == "stop-child":
+            terminate_direct_child(args.pid,args.start_ticks,args.parent_pid,args.output,positive_timeout(args.timeout,"child cleanup timeout"))
+            return 0
         if args.mode == "stop":
             terminate_owned(read(args.launch)["process"], args.timeout)
             return 0

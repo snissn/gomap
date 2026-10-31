@@ -382,7 +382,7 @@ BUILD=false BUILD_GOYCSB=false \
 SERVER_BUILD_MANIFEST=/absolute/reviewed/server-build.json \
 TREEDB_NATIVE_SERVER_BIN=/absolute/reviewed/native-server \
 FIXTURE_BIN=/absolute/reviewed/correctness-fixture \
-TARGETS=treedb_native MONGODB_MODE=skip PARSE_ONLY=false \
+TARGETS=treedb_native RECORDCOUNT=64 MONGODB_MODE=skip PARSE_ONLY=false \
 OUT_DIR=/absolute/fresh/comparison-output \
 bash scripts/ycsb_compare_mongodb_treedb.sh
 ```

@@ -1,5 +1,5 @@
 """Small bounded OP_MSG/BSON subset for explicit binary refusal controls."""
-import socket,struct
+import math,socket,struct,time
 
 def require(condition,message):
     if not condition:raise ValueError(message)
@@ -47,24 +47,39 @@ def decode(raw,offset=0,array=False):
     return out,end
 
 class Client:
-    def __init__(self,address,out):
-        self.sock=socket.create_connection(('127.0.0.1',int(address.rsplit(':',1)[1])),timeout=3);self.sock.settimeout(3);self.out=out;self.counter=0
+    def __init__(self,address,out,timeout=3):
+        require(isinstance(timeout,(int,float)) and math.isfinite(timeout) and timeout>0,'invalid wire total timeout')
+        # One budget covers connection, request send and the complete response;
+        # incoming bytes never restart it. The default remains three seconds;
+        # explicit caller budgets retain their longer synchronous response wait.
+        self.deadline=time.monotonic()+timeout;self.out=out;self.counter=0
+        self.sock=socket.create_connection(('127.0.0.1',int(address.rsplit(':',1)[1])),timeout=min(3,timeout))
+        try:self._timeout()
+        except BaseException:
+            self.sock.close();raise
+    def _timeout(self):
+        remaining=self.deadline-time.monotonic()
+        if remaining<=0:raise TimeoutError('wire total deadline exceeded')
+        self.sock.settimeout(remaining)
     def close(self):self.sock.close()
     def read(self,n):
         out=b''
         while len(out)<n:
+            self._timeout()
             part=self.sock.recv(n-len(out));require(part,'unexpected EOF');out+=part
         return out
     def call(self,command):
+        self._timeout()
         self.counter+=1;request=self.counter
         body=b'\0'*5+document(command);raw=struct.pack('<iiii',len(body)+16,request,0,2013)+body
 
         with (self.out/('%02d-request.bin'%request)).open('xb') as stream:stream.write(raw)
-        self.sock.sendall(raw)
+        self._timeout();self.sock.sendall(raw)
         header=self.read(16);length,response_id,response_to,opcode=struct.unpack('<iiii',header)
         require(21<length<=1024*1024 and response_to==request and opcode==2013,'invalid OP_MSG response framing')
         body=self.read(length-16)
         with (self.out/('%02d-response.bin'%request)).open('xb') as stream:stream.write(header+body)
         require(struct.unpack_from('<I',body)[0]==0 and body[4]==0,'unsupported response flags/section')
         response,end=decode(body,5);require(end==len(body),'trailing OP_MSG response bytes')
+        self._timeout()
         return response
