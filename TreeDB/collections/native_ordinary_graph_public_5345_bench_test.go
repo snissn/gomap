@@ -13,105 +13,96 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 )
 
-// Inspect the actual active output after timing, rather than rebuilding a
-// synthetic image. Compression reports can be reconstructed from persisted
-// descriptors: they describe active output, not an all-history event counter.
+// Inspect actual active output after timing. Descriptor-derived compression
+// accounting describes active output, not an all-history runtime event counter.
 func report5345ActiveStorage(b *testing.B, col *Collection, rows int) {
 	b.Helper()
-	accounting, err := activeStorage5345(col)
+	encoded, parts, err := activeStorage5345(col, rows)
 	if err != nil {
 		b.Fatalf("active physical accounting: %v", err)
 	}
+	b.Logf("5345_ACTIVE_STORAGE_CENSUS: %s", encoded)
+	b.ReportMetric(float64(parts), "active-typed-parts/op")
+}
+
+// This is an independent, untimed test consumer, not native row reconstruction.
+// Only the captured catalog/manifest view uses the engine's metadata receipt;
+// asset reads, image inspection and JSON output are test-owned allocations and
+// are not evidence of the engine's total memory bound. Return serialized bytes
+// so no borrowed catalog/config/asset-ref strings outlive the captured receipt.
+func activeStorage5345(col *Collection, rows int) (encoded []byte, parts int, resultErr error) {
+	opts := ColumnStorePhysicalAccountingOptions{DetailedSections: true, ReadIntegrity: ColumnAssetReadIntegrityVerify}
+	var accounting ColumnStorePhysicalAccounting
+	var err error
+	if col.nativeJSON == nil {
+		accounting, err = col.ColumnStorePhysicalAccounting(nil, opts)
+	} else {
+		// Native collections have no legacy db handle. Use exactly one original
+		// native capture, including its manifest root and resolved metadata.
+		read, err := col.nativeJSON.Capture(col.name)
+		if err != nil {
+			return nil, 0, fmt.Errorf("native census capture: %w", err)
+		}
+		defer func() { resultErr = errors.Join(resultErr, read.Close()) }()
+		if !nativeTypedMeta(read.meta) || read.collection == nil {
+			return nil, 0, backenddb.ErrNativeSemanticUnsupported
+		}
+		manifest, ok := read.collection.domains.Get("column/manifest")
+		if !ok {
+			return nil, 0, backenddb.ErrNativeSemanticUnsupported
+		}
+		metadata, err := nativeTypedReadManifestCapacity(read.capture.Snapshot(), manifest.baseRoot, nil)
+		if err != nil {
+			return nil, 0, fmt.Errorf("native census manifest capacity: %w", err)
+		}
+		header, err := read.nativeTypedReadViewCharge()
+		if err != nil {
+			return nil, 0, err
+		}
+		if err = nativeTypedCheckedAdd(&metadata, header); err != nil {
+			return nil, 0, err
+		}
+		lease, err := read.capture.NativeAllocator().AdmitNativeBytes(metadata)
+		if err != nil {
+			return nil, 0, fmt.Errorf("native census metadata admission bytes=%d: %w", metadata, err)
+		}
+		var wrapper *Collection
+		var view columnPhysicalScanSnapshotView
+		defer func() {
+			accounting = ColumnStorePhysicalAccounting{}
+			view = columnPhysicalScanSnapshotView{}
+			wrapper = nil
+			lease.Close()
+		}()
+		wrapper = read.nativeTypedReadCollection()
+		view, err = wrapper.prepareColumnPhysicalScanSnapshotViewAtSnapshotWithSidecars(read.capture.Snapshot(), wrapper.catalog, read.meta.Name, manifest.baseRoot, *read.meta.Options.ColumnStore, true, columnManifestScanAllSidecars())
+		if err != nil {
+			return nil, 0, fmt.Errorf("native census captured view: %w", err)
+		}
+		accounting, err = physicalAccountingFromScanView(context.Background(), view, opts)
+	}
+	if err != nil {
+		return nil, 0, err
+	}
 	if !accounting.Complete || accounting.TypedColumnPartRefs == 0 || accounting.TypedColumnPartRefs != len(accounting.TypedColumnParts) {
-		b.Fatalf("incomplete active typed-column census: complete=%v refs=%d parts=%d", accounting.Complete, accounting.TypedColumnPartRefs, len(accounting.TypedColumnParts))
+		return nil, 0, fmt.Errorf("incomplete active typed-column census: complete=%v refs=%d parts=%d", accounting.Complete, accounting.TypedColumnPartRefs, len(accounting.TypedColumnParts))
 	}
 	activeRows := 0
 	for _, part := range accounting.TypedColumnParts {
 		if part.Image.Rows != part.Asset.Rows || len(part.Image.CompressionDetail) == 0 || len(part.Image.SerializedSections) == 0 {
-			b.Fatalf("incomplete active part accounting: %+v", part)
+			return nil, 0, fmt.Errorf("incomplete active part accounting: %+v", part)
 		}
 		activeRows += part.Image.Rows
 	}
 	if activeRows != rows {
-		b.Fatalf("active typed-column rows=%d want %d", activeRows, rows)
+		return nil, 0, fmt.Errorf("active typed-column rows=%d want %d", activeRows, rows)
 	}
 	receipt := struct {
 		Basis      string                        `json:"basis"`
 		Accounting ColumnStorePhysicalAccounting `json:"accounting"`
 	}{"active_persisted_descriptors_not_all_history_events", accounting}
-	encoded, err := json.Marshal(receipt)
-	if err != nil {
-		b.Fatal(err)
-	}
-	b.Logf("5345_ACTIVE_STORAGE_CENSUS: %s", encoded)
-	b.ReportMetric(float64(len(accounting.TypedColumnParts)), "active-typed-parts/op")
-}
-
-// Native collections deliberately have no legacy db handle. Inspect one
-// original native capture using the maintained physical-read admission and
-// view constructors; never reacquire a newer legacy snapshot. This untimed
-// test census and its independent returned report are not engine allocations
-// measured by the benchmark or a proof of the engine's total memory bound.
-func activeStorage5345(col *Collection) (out ColumnStorePhysicalAccounting, resultErr error) {
-	opts := ColumnStorePhysicalAccountingOptions{DetailedSections: true, ReadIntegrity: ColumnAssetReadIntegrityVerify}
-	if col.nativeJSON == nil {
-		return col.ColumnStorePhysicalAccounting(nil, opts)
-	}
-	read, err := col.nativeJSON.Capture(col.name)
-	if err != nil {
-		return out, err
-	}
-	defer func() { resultErr = errors.Join(resultErr, read.Close()) }()
-	if !nativeTypedMeta(read.meta) || read.collection == nil {
-		return out, backenddb.ErrNativeSemanticUnsupported
-	}
-	manifest, ok := read.collection.domains.Get("column/manifest")
-	if !ok {
-		return out, backenddb.ErrNativeSemanticUnsupported
-	}
-	physical, err := nativeTypedReadCapacity(read.meta, read.capture.Snapshot(), manifest.baseRoot)
-	if err != nil {
-		return out, err
-	}
-	header, err := read.nativeTypedReadViewCharge()
-	if err != nil {
-		return out, err
-	}
-	if err = nativeTypedCheckedAdd(&physical, header); err != nil {
-		return out, err
-	}
-	lease, err := read.capture.NativeAllocator().AdmitNativeBytes(physical)
-	if err != nil {
-		return out, err
-	}
-	var wrapper *Collection
-	var view columnPhysicalScanSnapshotView
-	defer func() {
-		view = columnPhysicalScanSnapshotView{}
-		wrapper = nil
-		lease.Close()
-	}()
-	extra, _, err := nativeTypedFamilyReadCapacity(read.meta, read.capture.Snapshot(), manifest.baseRoot, read.database.ColumnAssetRootDir(), nil, func(n uint64) error {
-		if e := nativeTypedCheckedAdd(&n, header); e != nil {
-			return e
-		}
-		return lease.Resize(max(physical, n))
-	})
-	if err != nil {
-		return out, err
-	}
-	if err = nativeTypedCheckedAdd(&physical, extra); err != nil {
-		return out, err
-	}
-	if err = lease.Resize(physical); err != nil {
-		return out, err
-	}
-	wrapper = read.nativeTypedReadCollection()
-	view, err = wrapper.prepareColumnPhysicalScanSnapshotViewAtSnapshotWithSidecars(read.capture.Snapshot(), wrapper.catalog, read.meta.Name, manifest.baseRoot, *read.meta.Options.ColumnStore, true, columnManifestScanAllSidecars())
-	if err != nil {
-		return out, err
-	}
-	return physicalAccountingFromScanView(context.Background(), view, opts)
+	encoded, err = json.Marshal(receipt)
+	return encoded, len(accounting.TypedColumnParts), err
 }
 
 func require5345NoCodecOverrides(b *testing.B) {
