@@ -4808,7 +4808,14 @@ blocker must restore the same original admission. The deterministic
 `TestNativeScalarForwardOriginalAdmissionRefusal` callback control isolates the
 five provenance guards. `TestCOWSemanticRefundChangesAdmissionAfterFullSnapshot`
 checks an exact original-owner cleanup refund in a controlled caching fixture;
-it does not reproduce the original public fixture's schedule. The source-bound
+it does not reproduce the original public fixture's schedule.
+`TestNativeScalarForwardOriginalCleanupAdmission` instead reuses that public
+fixture with the exact superseded engine's original flush-worker destruction
+and refund. It preserves the full snapshot and optional-miss comparisons before
+release, requires a complete owner/admission ledger and independent successful
+construction, and checks original manager/owner Close and final budget zero.
+Its constructed schedule tests the old refusal oracle, not the unobserved
+historical macOS schedule. The source-bound
 execution evidence and unresolved #5339 historical cause are recorded in
 [native-hybrid-read.md](native-hybrid-read.md#scalar-forward-pressure-assertion-and-delivered-controls-2026-10-31).
 Existing `TestNativeTextV2ForwardIdentity*`, `TestNativeHybridPublicScalarPhysicalWork`,
