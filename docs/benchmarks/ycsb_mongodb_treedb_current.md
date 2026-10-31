@@ -6,8 +6,22 @@ This page is the current entry point for external `go-ycsb` comparisons across:
 - `treedb-native` through the `go-ycsb treedb-native` binding.
 - TreeDB Mongo gateway through the `go-ycsb mongodb` binding.
 
-It explains which checked-in reports are current, which are historical, and
-which cells should be rerun next.
+It distinguishes the retained October comparison from historical reports and
+records the remaining qualification obligations.
+
+## October 30 actual-MongoDB comparison: provisional, qualification open
+
+Use [the retained October 30 report](ycsb_mongodb_gomap_2026-10-30.md) for the
+actual MongoDB 8.2.7 versus repaired GoMap public Mongo BSON comparisons. It
+includes every completed relaxed and separately labeled durable pair, the failed
+strict-journaled load, per-operation latency, original checked Close and lifecycle
+scope, source/ELF identities, resource limits and indexed raw phase evidence.
+
+These measurements used provisional GoMap `802f7cfc...`; they are not final-head
+qualification. All nine complete pairs show lower GoMap throughput. Final repair
+integration, strict-cost dispositions, current-head checks/review, durable full
+artifact delivery and #5225 acceptance remain open. No README speedup is promoted.
+The June figures below are historical context and are not an October denominator.
 
 ## 2026-10 COW JSON correctness follow-up
 
@@ -23,9 +37,9 @@ JSON/BSON and native-wire/Mongo comparison remains owned by
 [#5335](https://github.com/snissn/gomap/issues/5335); the historical reports
 below are not evidence of its outcome or of an isolated COW speedup.
 
-## Current Canonical Report
+## Historical June Canonical Report
 
-Use `docs/benchmarks/ycsb_latest_main_2026-06-03.md` as the current
+Use `docs/benchmarks/ycsb_latest_main_2026-06-03.md` as the historical June
 checked-in external YCSB evidence for MongoDB, TreeDB nativewire, and TreeDB
 Mongo gateway.
 
@@ -58,7 +72,7 @@ sufficient to close #2026 as the local storage-publication/readability tracker.
 Distributed HA, Raft read-index/snapshots/rejoin, and routing/fanout remain out
 of scope for #2026 and are tracked by #3044, #3045, and #3046.
 
-## Current Headline
+## Historical June Headline
 
 Run rows use the median total-throughput repeat from the June 3 HST / June 4
 UTC latest-main report.
@@ -79,7 +93,7 @@ UTC latest-main report.
 | --- | --- | --- |
 | `docs/benchmarks/nativewire_ycsb_insert_error_classification_2026-06-30.md` | #3374 classification of the invalid intermediate nativewire `INSERT_ERROR` caveat; final for the #3385 local closeout. | Use for the current-head diagnostic run with `TREEDB_YCSB_LOG_ERRORS=1`, `-p silence=false`, raw scan counts, and the owner/risk classification for `/tmp/treedb_native_ycsb_current_head_20260629_202356`. |
 | `docs/benchmarks/nativewire_ycsb_closeout_2026-06-30.md` | #2026 nativewire load-only closeout evidence refreshed after later Raft merges; reconciled by #3385. | Use for the 100k and 1M external `go-ycsb treedb-native` load proof on commit `61910b8eac108c5f2c35f07a374879d1fb2dc5c8` with `collection_meta` v5 compatibility; use the #3374 classification report for the recorded invalid intermediate 1M run. |
-| `docs/benchmarks/ycsb_latest_main_2026-06-03.md` | Current external YCSB report. | Use for current headline MongoDB / TreeDB nativewire / TreeDB Mongo gateway results on latest `origin/main` after the June 3 rerun. |
+| `docs/benchmarks/ycsb_latest_main_2026-06-03.md` | Historical June external YCSB report. | Use for the historical MongoDB / TreeDB nativewire / TreeDB Mongo gateway results on then-current `origin/main` after the June 3 rerun. |
 | `docs/benchmarks/ycsb_post_update_stack_2026-06-02.md` | Superseded latest-current report. | Keep for post-update-path-stack evidence before the latest main rerun and for comparison deltas. |
 | `docs/benchmarks/ycsb_mongodb_treedb_2026-05-31.md` | Historical legacy-profile report. | Keep for the original MongoDB / TreeDB native / TreeDB Mongo comparison and the post-load Mongo-gateway cliff attribution. Do not use its `fast` rows as current public-profile guidance. |
 | `docs/benchmarks/ycsb_treedb_profile_sweep_2026-06-01.md` | Superseded initial command-WAL sweep. | Keep as prior-run evidence. Prefer the current report for headline performance and the closeout report only for profile-surface conclusions. |

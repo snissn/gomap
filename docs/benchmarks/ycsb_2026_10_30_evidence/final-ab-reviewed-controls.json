@@ -1,0 +1,49 @@
+{
+  "equivalence_scope": "all non-document objects identical; actual source remains792203",
+  "product_source_equivalent_to": "c660c3e34523a77f12da9b440c5b6b7def9359f1",
+  "reviewed_control_a": {
+    "files": {
+      "/home/mikers/gomap-5335-final-ab-controls-20261030/BUILD-COMPLETE.json": "0a21517ad2f5b1a3c92744bcc017baa5eea0faeaf1d0739f8a5acdc92d6d56f5",
+      "/home/mikers/gomap-5335-final-ab-controls-20261030/PROTOCOL.json": "adfe517f81bac8c24c3a5baffaa1c293f32fa989c018af0c64f2c7158766e1cd",
+      "/home/mikers/gomap-5335-final-ab-controls-20261030/RESULT-SUMMARY.json": "7b28c8057ee4b29606060490e8a0e650a09f8053e80300799c6f5114092f4a80",
+      "/home/mikers/gomap-5335-final-ab-controls-20261030/REVIEW-RECEIPT.md": "92a8322d5c12cd20509de0469958e518236f2459d5e85c9f022166e92259a3a8",
+      "/home/mikers/gomap-5335-final-ab-controls-20261030/ROOT-LIVE-RELEASE.txt": "9e8ceaef71285b5d70dff894a6d16c1d3af32c3ed21cb46796273c43703c9a79",
+      "/home/mikers/gomap-5335-final-ab-controls-20261030/RUN-COMPLETE.json": "fe734d31734eefbdc494bade24217a1775db158975634dc20fd6f135fdac6a37",
+      "/home/mikers/gomap-5335-final-ab-controls-20261030/build-output/bin/control-a": "5396263f2f52eea75109d243e433fbe06ad65025b12cbdcc3eee1a58425aaaf4",
+      "/home/mikers/gomap-5335-final-ab-controls-20261030/controls_once.py": "0cadbb93f550bc0e0a6fc9506a7bc0cb1631f58dcfdf44a6db68f28f51a14035",
+      "/home/mikers/gomap-5335-final-ab-controls-20261030/live-output/a-negative/stderr.txt": "9ed00e5dd1bc0b2c44a55fa04ee27b0d6e1efc6b01785951d73142fa3da43809",
+      "/home/mikers/gomap-5335-final-ab-controls-20261030/live-output/a-negative/stdout.txt": "bd16ffb644bc0c4f13f1f261bc85bf376f2b3f93065a9a480dc00a909246e91f",
+      "/home/mikers/gomap-5335-final-ab-controls-20261030/live-output/a-negative/terminal.json": "e5f8173a30554a9993330ce55d0cff6f36f6776def3b4815ae1b236068aab5eb",
+      "/home/mikers/gomap-5335-final-ab-controls-20261030/live-output/a-positive/stderr.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "/home/mikers/gomap-5335-final-ab-controls-20261030/live-output/a-positive/stdout.txt": "795542e998b5ea6d6537a424802877e8aa61a83ae3a8d0220720d58e9d168aba",
+      "/home/mikers/gomap-5335-final-ab-controls-20261030/live-output/a-positive/terminal.json": "d0817fe50feefecdb21b884ce3edcbe3869898f738cf20fa998f86a1fa9707a9",
+      "/home/mikers/gomap-5335-final-ab-controls-20261030/live-output/runtime-samples.json": "e89509c2d82b5bbb487148b51a4817e4170994b84cdc4bd5cac2c6a2e375d4fc",
+      "/home/mikers/gomap-5335-final-ab-controls-20261030/source-inventory.json": "73ea057f6df2ecfd30fa641654bd9f845beecb84b260d61e0f77882d876dc7df",
+      "/home/mikers/gomap-5335-final-ab-controls-20261030/sources/control-a.go": "103dc743b1a1fd25bf6f81c080960944ab34154f69feea2f8dbd3f4f59782263"
+    },
+    "reviewed": true,
+    "scope": "bson-binary-and-pointer-bearing-prefix"
+  },
+  "reviewed_control_b": {
+    "files": {
+      "/home/mikers/gomap-5335-final-ab-controls-20261030/BUILD-COMPLETE.json": "0a21517ad2f5b1a3c92744bcc017baa5eea0faeaf1d0739f8a5acdc92d6d56f5",
+      "/home/mikers/gomap-5335-final-ab-controls-20261030/PROTOCOL.json": "adfe517f81bac8c24c3a5baffaa1c293f32fa989c018af0c64f2c7158766e1cd",
+      "/home/mikers/gomap-5335-final-ab-controls-20261030/RESULT-SUMMARY.json": "7b28c8057ee4b29606060490e8a0e650a09f8053e80300799c6f5114092f4a80",
+      "/home/mikers/gomap-5335-final-ab-controls-20261030/REVIEW-RECEIPT.md": "92a8322d5c12cd20509de0469958e518236f2459d5e85c9f022166e92259a3a8",
+      "/home/mikers/gomap-5335-final-ab-controls-20261030/ROOT-LIVE-RELEASE.txt": "9e8ceaef71285b5d70dff894a6d16c1d3af32c3ed21cb46796273c43703c9a79",
+      "/home/mikers/gomap-5335-final-ab-controls-20261030/RUN-COMPLETE.json": "fe734d31734eefbdc494bade24217a1775db158975634dc20fd6f135fdac6a37",
+      "/home/mikers/gomap-5335-final-ab-controls-20261030/build-output/bin/control-b.test": "881f10a6cfabf7fdcb8006b0c0bea32721b718edd0c1f7d2a011f50a35d4cc01",
+      "/home/mikers/gomap-5335-final-ab-controls-20261030/controls_once.py": "0cadbb93f550bc0e0a6fc9506a7bc0cb1631f58dcfdf44a6db68f28f51a14035",
+      "/home/mikers/gomap-5335-final-ab-controls-20261030/live-output/b/stderr.txt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "/home/mikers/gomap-5335-final-ab-controls-20261030/live-output/b/stdout.txt": "b7a049edbc8a6582c94e312ff621797a4353f0960cb399abe0d85c91126d7f9d",
+      "/home/mikers/gomap-5335-final-ab-controls-20261030/live-output/b/terminal.json": "bd214464966ab6d9e6284dccb8a4e0943a33203f07f9c7c5002c99e0082b2633",
+      "/home/mikers/gomap-5335-final-ab-controls-20261030/live-output/runtime-samples.json": "e89509c2d82b5bbb487148b51a4817e4170994b84cdc4bd5cac2c6a2e375d4fc",
+      "/home/mikers/gomap-5335-final-ab-controls-20261030/source-inventory.json": "73ea057f6df2ecfd30fa641654bd9f845beecb84b260d61e0f77882d876dc7df",
+      "/home/mikers/gomap-5335-final-ab-controls-20261030/worktree/TreeDB/mongo_gateway/control_b_public_durable_test.go": "9d2dacb11e3f6fd4d99f3eb79a4986d46727c22ecfffa68ccfdca206d20535a0"
+    },
+    "reviewed": true,
+    "scope": "public-bson-command-wal-ack-crash-replay"
+  },
+  "source_commit": "79220385186080e77898fcb99c78a8ea15480241",
+  "source_tree": "ed39075798b6b5797854a6851ece3996d865a606"
+}

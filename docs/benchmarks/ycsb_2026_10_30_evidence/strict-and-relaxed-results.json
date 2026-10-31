@@ -1,0 +1,605 @@
+{
+  "completed_cells": 7,
+  "cells": [
+    {
+      "index": 1,
+      "ack_class": "durable",
+      "profile": "command_wal_durable",
+      "pair": 1,
+      "product": "mongodb",
+      "phases": {
+        "load": {
+          "attempted": 100000,
+          "successful": 100000,
+          "errors": 0,
+          "rows": [
+            {
+              "operation": "INSERT",
+              "count": 100000,
+              "ops_per_sec": 851.2,
+              "avg_us": 18797.0,
+              "p50_us": 17807.0,
+              "p95_us": 21887.0,
+              "p99_us": 38687.0,
+              "p999_us": 55999.0,
+              "max_us": 1138687.0
+            },
+            {
+              "operation": "TOTAL",
+              "count": 100000,
+              "ops_per_sec": 851.2,
+              "avg_us": 18797.0,
+              "p50_us": 17807.0,
+              "p95_us": 21887.0,
+              "p99_us": 38687.0,
+              "p999_us": 55999.0,
+              "max_us": 1138687.0
+            }
+          ]
+        },
+        "run_1": {
+          "attempted": 10000,
+          "successful": 10000,
+          "errors": 0,
+          "rows": [
+            {
+              "operation": "READ",
+              "count": 9509,
+              "ops_per_sec": 19595.7,
+              "avg_us": 228.0,
+              "p50_us": 195.0,
+              "p95_us": 440.0,
+              "p99_us": 661.0,
+              "p999_us": 1308.0,
+              "max_us": 2063.0
+            },
+            {
+              "operation": "TOTAL",
+              "count": 10000,
+              "ops_per_sec": 20611.4,
+              "avg_us": 654.0,
+              "p50_us": 200.0,
+              "p95_us": 1331.0,
+              "p99_us": 11279.0,
+              "p999_us": 13071.0,
+              "max_us": 14319.0
+            },
+            {
+              "operation": "UPDATE",
+              "count": 491,
+              "ops_per_sec": 1024.6,
+              "avg_us": 8913.0,
+              "p50_us": 9719.0,
+              "p95_us": 12071.0,
+              "p99_us": 13455.0,
+              "p999_us": 14319.0,
+              "max_us": 14319.0
+            }
+          ]
+        }
+      },
+      "validation": {
+        "schema_version": 1,
+        "kind": "mongodb_reference_completed_attempt",
+        "campaign_id": "4687b8559f7a4aee9e5a2fb1229d9ad4",
+        "manifest_sha256": "4b2b40de8422a22101aeca47cb9dfba4bbb72149cbe4e2baaf000a639b1dd48c",
+        "completed_utc": "2026-10-30T10:13:01.224580Z"
+      },
+      "packet": "/home/mikers/gomap-5335-mongodb-gomap-public-comparison-20261030/matched-v2/durable-pair1-mongodb"
+    },
+    {
+      "index": 7,
+      "ack_class": "relaxed",
+      "profile": "command_wal_relaxed",
+      "pair": 1,
+      "product": "mongodb",
+      "phases": {
+        "load": {
+          "attempted": 100000,
+          "successful": 100000,
+          "errors": 0,
+          "rows": [
+            {
+              "operation": "INSERT",
+              "count": 100000,
+              "ops_per_sec": 37996.1,
+              "avg_us": 422.0,
+              "p50_us": 278.0,
+              "p95_us": 565.0,
+              "p99_us": 908.0,
+              "p999_us": 2371.0,
+              "max_us": 835583.0
+            },
+            {
+              "operation": "TOTAL",
+              "count": 100000,
+              "ops_per_sec": 37996.0,
+              "avg_us": 422.0,
+              "p50_us": 278.0,
+              "p95_us": 565.0,
+              "p99_us": 908.0,
+              "p999_us": 2371.0,
+              "max_us": 835583.0
+            }
+          ]
+        },
+        "run_1": {
+          "attempted": 10000,
+          "successful": 10000,
+          "errors": 0,
+          "rows": [
+            {
+              "operation": "READ",
+              "count": 9497,
+              "ops_per_sec": 38884.2,
+              "avg_us": 378.0,
+              "p50_us": 336.0,
+              "p95_us": 681.0,
+              "p99_us": 1068.0,
+              "p999_us": 1889.0,
+              "max_us": 3673.0
+            },
+            {
+              "operation": "TOTAL",
+              "count": 10000,
+              "ops_per_sec": 40959.1,
+              "avg_us": 379.0,
+              "p50_us": 337.0,
+              "p95_us": 682.0,
+              "p99_us": 1066.0,
+              "p999_us": 1864.0,
+              "max_us": 3673.0
+            },
+            {
+              "operation": "UPDATE",
+              "count": 503,
+              "ops_per_sec": 2074.1,
+              "avg_us": 391.0,
+              "p50_us": 353.0,
+              "p95_us": 694.0,
+              "p99_us": 1023.0,
+              "p999_us": 1435.0,
+              "max_us": 1498.0
+            }
+          ]
+        }
+      },
+      "validation": {
+        "schema_version": 1,
+        "kind": "mongodb_reference_completed_attempt",
+        "campaign_id": "f461ce9f3b1e44de8a0ab4592c142998",
+        "manifest_sha256": "695ef127a535ecb1ca1997dbf8a52a631f8843ad2f4e0645a689fc1c9222b456",
+        "completed_utc": "2026-10-30T10:23:51.511836Z"
+      },
+      "packet": "/home/mikers/gomap-5335-mongodb-gomap-public-comparison-20261030/matched-v2/relaxed-pair1-mongodb"
+    },
+    {
+      "index": 8,
+      "ack_class": "relaxed",
+      "profile": "command_wal_relaxed",
+      "pair": 1,
+      "product": "gomap",
+      "phases": {
+        "load": {
+          "attempted": 100000,
+          "successful": 100000,
+          "errors": 0,
+          "rows": [
+            {
+              "operation": "INSERT",
+              "count": 100000,
+              "ops_per_sec": 16612.7,
+              "avg_us": 944.0,
+              "p50_us": 314.0,
+              "p95_us": 526.0,
+              "p99_us": 861.0,
+              "p999_us": 313855.0,
+              "max_us": 482047.0
+            },
+            {
+              "operation": "TOTAL",
+              "count": 100000,
+              "ops_per_sec": 16612.9,
+              "avg_us": 944.0,
+              "p50_us": 314.0,
+              "p95_us": 526.0,
+              "p99_us": 861.0,
+              "p999_us": 313855.0,
+              "max_us": 482047.0
+            }
+          ]
+        },
+        "run_1": {
+          "attempted": 10000,
+          "successful": 10000,
+          "errors": 0,
+          "rows": [
+            {
+              "operation": "READ",
+              "count": 9501,
+              "ops_per_sec": 12295.1,
+              "avg_us": 1184.0,
+              "p50_us": 1281.0,
+              "p95_us": 1883.0,
+              "p99_us": 2355.0,
+              "p999_us": 2953.0,
+              "max_us": 3483.0
+            },
+            {
+              "operation": "TOTAL",
+              "count": 10000,
+              "ops_per_sec": 12939.6,
+              "avg_us": 1221.0,
+              "p50_us": 1293.0,
+              "p95_us": 1990.0,
+              "p99_us": 2765.0,
+              "p999_us": 4183.0,
+              "max_us": 5391.0
+            },
+            {
+              "operation": "UPDATE",
+              "count": 499,
+              "ops_per_sec": 647.5,
+              "avg_us": 1935.0,
+              "p50_us": 1784.0,
+              "p95_us": 3615.0,
+              "p99_us": 4459.0,
+              "p999_us": 5391.0,
+              "max_us": 5391.0
+            }
+          ]
+        }
+      },
+      "validation": {
+        "schema_version": 1,
+        "status": "validated-consumer-evidence",
+        "errors": [],
+        "scope": "Client receipts, original live owner calls, typed random preservation and separate deterministic fixture only; not full matrix or crash qualification"
+      },
+      "packet": "/home/mikers/gomap-5335-mongodb-gomap-public-comparison-20261030/matched-v2/relaxed-pair1-gomap"
+    },
+    {
+      "index": 9,
+      "ack_class": "relaxed",
+      "profile": "command_wal_relaxed",
+      "pair": 2,
+      "product": "gomap",
+      "phases": {
+        "load": {
+          "attempted": 100000,
+          "successful": 100000,
+          "errors": 0,
+          "rows": [
+            {
+              "operation": "INSERT",
+              "count": 100000,
+              "ops_per_sec": 16501.3,
+              "avg_us": 951.0,
+              "p50_us": 312.0,
+              "p95_us": 523.0,
+              "p99_us": 850.0,
+              "p999_us": 344063.0,
+              "max_us": 558079.0
+            },
+            {
+              "operation": "TOTAL",
+              "count": 100000,
+              "ops_per_sec": 16500.8,
+              "avg_us": 951.0,
+              "p50_us": 312.0,
+              "p95_us": 523.0,
+              "p99_us": 850.0,
+              "p999_us": 344063.0,
+              "max_us": 558079.0
+            }
+          ]
+        },
+        "run_1": {
+          "attempted": 10000,
+          "successful": 10000,
+          "errors": 0,
+          "rows": [
+            {
+              "operation": "READ",
+              "count": 9504,
+              "ops_per_sec": 12199.8,
+              "avg_us": 1196.0,
+              "p50_us": 1283.0,
+              "p95_us": 1975.0,
+              "p99_us": 2529.0,
+              "p999_us": 3287.0,
+              "max_us": 3785.0
+            },
+            {
+              "operation": "TOTAL",
+              "count": 10000,
+              "ops_per_sec": 12838.4,
+              "avg_us": 1230.0,
+              "p50_us": 1296.0,
+              "p95_us": 2087.0,
+              "p99_us": 2939.0,
+              "p999_us": 3847.0,
+              "max_us": 4623.0
+            },
+            {
+              "operation": "UPDATE",
+              "count": 496,
+              "ops_per_sec": 637.2,
+              "avg_us": 1892.0,
+              "p50_us": 1716.0,
+              "p95_us": 3491.0,
+              "p99_us": 4107.0,
+              "p999_us": 4623.0,
+              "max_us": 4623.0
+            }
+          ]
+        }
+      },
+      "validation": {
+        "schema_version": 1,
+        "status": "validated-consumer-evidence",
+        "errors": [],
+        "scope": "Client receipts, original live owner calls, typed random preservation and separate deterministic fixture only; not full matrix or crash qualification"
+      },
+      "packet": "/home/mikers/gomap-5335-mongodb-gomap-public-comparison-20261030/matched-v2/relaxed-pair2-gomap"
+    },
+    {
+      "index": 10,
+      "ack_class": "relaxed",
+      "profile": "command_wal_relaxed",
+      "pair": 2,
+      "product": "mongodb",
+      "phases": {
+        "load": {
+          "attempted": 100000,
+          "successful": 100000,
+          "errors": 0,
+          "rows": [
+            {
+              "operation": "INSERT",
+              "count": 100000,
+              "ops_per_sec": 37564.0,
+              "avg_us": 425.0,
+              "p50_us": 271.0,
+              "p95_us": 579.0,
+              "p99_us": 894.0,
+              "p999_us": 2125.0,
+              "max_us": 887295.0
+            },
+            {
+              "operation": "TOTAL",
+              "count": 100000,
+              "ops_per_sec": 37566.9,
+              "avg_us": 425.0,
+              "p50_us": 271.0,
+              "p95_us": 579.0,
+              "p99_us": 894.0,
+              "p999_us": 2125.0,
+              "max_us": 887295.0
+            }
+          ]
+        },
+        "run_1": {
+          "attempted": 10000,
+          "successful": 10000,
+          "errors": 0,
+          "rows": [
+            {
+              "operation": "READ",
+              "count": 9504,
+              "ops_per_sec": 37825.0,
+              "avg_us": 388.0,
+              "p50_us": 343.0,
+              "p95_us": 722.0,
+              "p99_us": 1107.0,
+              "p999_us": 1790.0,
+              "max_us": 2551.0
+            },
+            {
+              "operation": "TOTAL",
+              "count": 10000,
+              "ops_per_sec": 39824.8,
+              "avg_us": 389.0,
+              "p50_us": 344.0,
+              "p95_us": 722.0,
+              "p99_us": 1113.0,
+              "p999_us": 1790.0,
+              "max_us": 2551.0
+            },
+            {
+              "operation": "UPDATE",
+              "count": 496,
+              "ops_per_sec": 1999.2,
+              "avg_us": 413.0,
+              "p50_us": 360.0,
+              "p95_us": 751.0,
+              "p99_us": 1342.0,
+              "p999_us": 1621.0,
+              "max_us": 1621.0
+            }
+          ]
+        }
+      },
+      "validation": {
+        "schema_version": 1,
+        "kind": "mongodb_reference_completed_attempt",
+        "campaign_id": "4ee40d8602024e9789165ac4f9964359",
+        "manifest_sha256": "903025897aff8bf3b093a1ea10962d5e6a553805d7f557799255e7c59de0402b",
+        "completed_utc": "2026-10-30T10:27:30.601051Z"
+      },
+      "packet": "/home/mikers/gomap-5335-mongodb-gomap-public-comparison-20261030/matched-v2/relaxed-pair2-mongodb"
+    },
+    {
+      "index": 11,
+      "ack_class": "relaxed",
+      "profile": "command_wal_relaxed",
+      "pair": 3,
+      "product": "mongodb",
+      "phases": {
+        "load": {
+          "attempted": 100000,
+          "successful": 100000,
+          "errors": 0,
+          "rows": [
+            {
+              "operation": "INSERT",
+              "count": 100000,
+              "ops_per_sec": 39149.1,
+              "avg_us": 415.0,
+              "p50_us": 267.0,
+              "p95_us": 527.0,
+              "p99_us": 753.0,
+              "p999_us": 1464.0,
+              "max_us": 892415.0
+            },
+            {
+              "operation": "TOTAL",
+              "count": 100000,
+              "ops_per_sec": 39152.4,
+              "avg_us": 415.0,
+              "p50_us": 267.0,
+              "p95_us": 527.0,
+              "p99_us": 753.0,
+              "p999_us": 1464.0,
+              "max_us": 892415.0
+            }
+          ]
+        },
+        "run_1": {
+          "attempted": 10000,
+          "successful": 10000,
+          "errors": 0,
+          "rows": [
+            {
+              "operation": "READ",
+              "count": 9493,
+              "ops_per_sec": 37014.5,
+              "avg_us": 398.0,
+              "p50_us": 353.0,
+              "p95_us": 725.0,
+              "p99_us": 1191.0,
+              "p999_us": 2449.0,
+              "max_us": 3051.0
+            },
+            {
+              "operation": "TOTAL",
+              "count": 10000,
+              "ops_per_sec": 38983.3,
+              "avg_us": 399.0,
+              "p50_us": 353.0,
+              "p95_us": 726.0,
+              "p99_us": 1193.0,
+              "p999_us": 2391.0,
+              "max_us": 3051.0
+            },
+            {
+              "operation": "UPDATE",
+              "count": 507,
+              "ops_per_sec": 1997.2,
+              "avg_us": 413.0,
+              "p50_us": 363.0,
+              "p95_us": 727.0,
+              "p99_us": 1193.0,
+              "p999_us": 2107.0,
+              "max_us": 2381.0
+            }
+          ]
+        }
+      },
+      "validation": {
+        "schema_version": 1,
+        "kind": "mongodb_reference_completed_attempt",
+        "campaign_id": "b9170ef59c0b4d879f77a65f1200b5aa",
+        "manifest_sha256": "e56337bdc1d27cd74e6e8203b96a5e52d19d3bfd2b59c9775102b1e24242bf0a",
+        "completed_utc": "2026-10-30T10:28:16.134989Z"
+      },
+      "packet": "/home/mikers/gomap-5335-mongodb-gomap-public-comparison-20261030/matched-v2/relaxed-pair3-mongodb"
+    },
+    {
+      "index": 12,
+      "ack_class": "relaxed",
+      "profile": "command_wal_relaxed",
+      "pair": 3,
+      "product": "gomap",
+      "phases": {
+        "load": {
+          "attempted": 100000,
+          "successful": 100000,
+          "errors": 0,
+          "rows": [
+            {
+              "operation": "INSERT",
+              "count": 100000,
+              "ops_per_sec": 15974.1,
+              "avg_us": 984.0,
+              "p50_us": 319.0,
+              "p95_us": 574.0,
+              "p99_us": 862.0,
+              "p999_us": 327423.0,
+              "max_us": 571391.0
+            },
+            {
+              "operation": "TOTAL",
+              "count": 100000,
+              "ops_per_sec": 15974.6,
+              "avg_us": 984.0,
+              "p50_us": 319.0,
+              "p95_us": 574.0,
+              "p99_us": 862.0,
+              "p999_us": 327423.0,
+              "max_us": 571391.0
+            }
+          ]
+        },
+        "run_1": {
+          "attempted": 10000,
+          "successful": 10000,
+          "errors": 0,
+          "rows": [
+            {
+              "operation": "READ",
+              "count": 9506,
+              "ops_per_sec": 12405.3,
+              "avg_us": 1175.0,
+              "p50_us": 1275.0,
+              "p95_us": 1884.0,
+              "p99_us": 2377.0,
+              "p999_us": 3083.0,
+              "max_us": 3511.0
+            },
+            {
+              "operation": "TOTAL",
+              "count": 10000,
+              "ops_per_sec": 13049.2,
+              "avg_us": 1209.0,
+              "p50_us": 1287.0,
+              "p95_us": 1982.0,
+              "p99_us": 2769.0,
+              "p999_us": 4091.0,
+              "max_us": 4907.0
+            },
+            {
+              "operation": "UPDATE",
+              "count": 494,
+              "ops_per_sec": 649.2,
+              "avg_us": 1871.0,
+              "p50_us": 1708.0,
+              "p95_us": 3553.0,
+              "p99_us": 4439.0,
+              "p999_us": 4907.0,
+              "max_us": 4907.0
+            }
+          ]
+        }
+      },
+      "validation": {
+        "schema_version": 1,
+        "status": "validated-consumer-evidence",
+        "errors": [],
+        "scope": "Client receipts, original live owner calls, typed random preservation and separate deterministic fixture only; not full matrix or crash qualification"
+      },
+      "packet": "/home/mikers/gomap-5335-mongodb-gomap-public-comparison-20261030/matched-v2/relaxed-pair3-gomap"
+    }
+  ],
+  "scope": "full pre-run typed census warms cache; jtrue vs omitted are separate classes; Mongo12GiB/no-swap container and splitCPU versus GoMap24GiB aggregate guard; no matched powerloss certification"
+}
