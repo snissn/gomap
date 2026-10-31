@@ -20,8 +20,11 @@ import traceback
 import uuid
 
 BASE = "95c6ff3de473786bd98b692375cfdb9cef951668"
-PREVIOUS_CHECKPOINT = "dbc659dfee648c11ad105048aa7d007caf8cb097"
+PREVIOUS_CHECKPOINT = "d2259ce4f6c4f829f642fe4755e3516034cdc8dc"
+INITIAL_CHECKPOINT = "dbc659dfee648c11ad105048aa7d007caf8cb097"
 ENTRY = "TreeDB/mongo_gateway/server.go"
+HELPER_ENTRY = "TreeDB/mongo_profile_constructor_probe/server.go"
+HELPER_TEST = "TreeDB/mongo_profile_constructor_probe/hosted_profile_test.go"
 ORIGINAL = "2b19dfec2741a5dfaacfdd50cf31cccf95e0228b565420c9992d9fe4e6a73490"
 GENERATED = "987cd212e24c2bd1d4c28ce65501a353aacca6289b48ae3548b7eae39fb14101"
 PROFILE = "command_wal_durable"
@@ -473,7 +476,9 @@ def execute():
         require(sha == os.environ["GITHUB_SHA"], "checkout/candidate mismatch")
         require(runner.command("candidate-parent", ["git", "rev-parse", "HEAD^"], cwd=REPO).strip() == PREVIOUS_CHECKPOINT,
                 "repair must append to the retained failed constructor checkpoint")
-        require(runner.command("checkpoint-origin", ["git", "rev-parse", PREVIOUS_CHECKPOINT + "^"], cwd=REPO).strip() == BASE,
+        require(runner.command("checkpoint-parent", ["git", "rev-parse", PREVIOUS_CHECKPOINT + "^"], cwd=REPO).strip() == INITIAL_CHECKPOINT,
+                "previous checkpoint must retain the initial constructor checkpoint as parent")
+        require(runner.command("checkpoint-origin", ["git", "rev-parse", INITIAL_CHECKPOINT + "^"], cwd=REPO).strip() == BASE,
                 "retained constructor checkpoint must have the exact frozen base as parent")
         changes = runner.command("candidate-paths", ["git", "diff", "--name-only", BASE, sha], cwd=REPO).splitlines()
         require(changes and all(p.startswith("experiments/mongo_profile_hosted/") or
@@ -501,11 +506,14 @@ def execute():
         overlay = runner.out / "overlay.json"
         write(overlay, {"Replace": {str(runner.base / ENTRY): str(generated)}})
         # Physical generated/test files stay outside the clean pinned module.
-        # Virtual file-list paths share the entry directory, retaining Go's
-        # internal-import/module boundary without adding a source worktree file.
-        fixture_path = runner.base / "TreeDB/mongo_gateway/hosted_profile_test.go"
+        # Both virtual files share a fresh probe directory inside the module.
+        # Never inject package main tests into the imported mongogateway package.
+        helper_entry_path = runner.base / HELPER_ENTRY
+        fixture_path = runner.base / HELPER_TEST
+        require(helper_entry_path.parent == fixture_path.parent and not helper_entry_path.parent.exists()
+                and not helper_entry_path.parent.is_symlink(), "helper virtual directory must be fresh and shared")
         test_overlay = runner.out / "test-overlay.json"
-        write(test_overlay, {"Replace": {str(runner.base / ENTRY): str(generated), str(fixture_path): str(fixture)}})
+        write(test_overlay, {"Replace": {str(helper_entry_path): str(generated), str(fixture_path): str(fixture)}})
         runner.stage_toolchain()
         version = runner.command("go-version", [runner.go, "version"]).strip()
         require(version == "go version " + PINNED_GO + " linux/amd64", "unexpected exact Go driver")
@@ -533,6 +541,8 @@ def execute():
         require(compiler_version == selected_compiler_version == "compile version " + PINNED_GO,
                 "selected compiler version disagrees with pinned Go driver")
         provenance = dict(candidate=sha, base=BASE, generated_sha256=GENERATED, original_sha256=ORIGINAL,
+                          checkpoint_ancestry=[sha, PREVIOUS_CHECKPOINT, INITIAL_CHECKPOINT, BASE],
+                          helper_virtual_entry=str(helper_entry_path), helper_virtual_test=str(fixture_path),
                           expected_profile=PROFILE, resolved_go=str(resolved_go), driver_version=version,
                           goroot=str(goroot), gotooldir=str(tooldir), goversion=goenv["GOVERSION"],
                           compiler_path=str(compiler), compiler_version=compiler_version,
@@ -583,8 +593,9 @@ def execute():
             summary["gateways"][mode] = "passed-empty-gateway-only"
         tests = binaries / "profile-helper.test"
         runner.command("build-file-list-tests", [runner.go, "test", "-c", "-mod=readonly", "-overlay", test_overlay,
-                       "-o", tests, str(runner.base / ENTRY), str(fixture_path)], timeout=600)
+                       "-o", tests, str(helper_entry_path), str(fixture_path)], timeout=600)
         write(runner.out / "helper-binary.json", dict(sha256=digest(tests), fixture_sha256=digest(fixture),
+                                                     virtual_entry=str(helper_entry_path), virtual_test=str(fixture_path),
                                                      generated_sha256=GENERATED, retained_binary=True))
         helper_out = runner.out / "helper"
         helper_out.mkdir()
@@ -602,7 +613,7 @@ def execute():
         race_tests = root / "bin/profile-helper-race.test"
         try:
             runner.command("build-concurrency-race-tests", [runner.go, "test", "-c", "-race", "-mod=readonly",
-                           "-overlay", test_overlay, "-o", race_tests, str(runner.base / ENTRY), str(fixture_path)], timeout=600)
+                           "-overlay", test_overlay, "-o", race_tests, str(helper_entry_path), str(fixture_path)], timeout=600)
             write(runner.out / "race-binary.json", dict(sha256=digest(race_tests), fixture_sha256=digest(fixture),
                                                        generated_sha256=GENERATED, retained_binary=False))
             env = runner.env.copy()

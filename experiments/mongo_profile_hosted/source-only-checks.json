@@ -1,10 +1,10 @@
 {
-  "status": "SOURCE_READY_FOR_SETUP_REPAIR_REVIEW",
+  "status": "SOURCE_READY_FOR_HELPER_OVERLAY_REPAIR_REVIEW",
   "base": "95c6ff3de473786bd98b692375cfdb9cef951668",
-  "construction_source_commit": "dbc659dfee648c11ad105048aa7d007caf8cb097",
-  "failed_hosted_run_preserved": "41183105430",
-  "rejected_source_preserved": "/home/mikers/gomap-mongo-hosted-profile-20261031-j2cxm6g7/review/rejected-hosted-1",
-  "rejection_manifest_sha256": "8840753d223acc7a1fce996e67840af9dfdfdb85f7c091c16a3dc32d8851c652",
+  "construction_source_commit": "d2259ce4f6c4f829f642fe4755e3516034cdc8dc",
+  "failed_hosted_run_preserved": "41184042878",
+  "rejected_source_preserved": "/home/mikers/gomap-mongo-hosted-profile-20261031-j2cxm6g7/review/rejected-hosted-2",
+  "rejection_manifest_sha256": "3438547071ad6c4c59c821f0c28c08ae8ca638e2d8a874b17f2227674fbf2b4f",
   "checks": {
     "status": "offline-source-contracts-passed",
     "copied_packet_files": 10,
@@ -15,14 +15,15 @@
     "go_runtime": false,
     "pprof_decode": false
   },
+  "git_diff_check": "passed",
   "go_commands_executed_locally": false,
   "local_runtime_executed": false,
   "github_writes": false,
-  "source_bytes": 167138,
+  "source_bytes": 171655,
   "files": {
     "experiments/mongo_profile_hosted/README.md": {
-      "bytes": 10636,
-      "sha256": "9ae065f16673635922e858cb228fd1bd59362c2f41187006a3254abce217f6b0"
+      "bytes": 12536,
+      "sha256": "00d5e20b7a079488d1244dd6a56b48a890ce9bbfdf86875d240f6f15cfb3d974"
     },
     "experiments/mongo_profile_hosted/accepted/README.md": {
       "bytes": 5042,
@@ -69,28 +70,90 @@
       "sha256": "3b549d3ee28cf003b473c5e686fe9b69ca0c14fce5cb79d65bc17704852b65e0"
     },
     "experiments/mongo_profile_hosted/check_source.py": {
-      "bytes": 7749,
-      "sha256": "62b64382fe232b5f73f1ab8178addc2d0fc496f08ced277dbbe24dc633d88ddc"
+      "bytes": 9348,
+      "sha256": "57032a2be2bba3e6e26d5393eea3c7139f890c48d7428641713cf5eed3280ef6"
     },
     "experiments/mongo_profile_hosted/hosted_profile_test.go.txt": {
       "bytes": 12410,
       "sha256": "a49b78e9848a86974c70cbf9cd083224bd26855b8370d03f9368071ab37f3d38"
     },
     "experiments/mongo_profile_hosted/run.py": {
-      "bytes": 38158,
-      "sha256": "d710d5a4c5364ea1f2c6560356958f5da9eb6e28e3499955b573cdaa5bb5d1f1"
+      "bytes": 39176,
+      "sha256": "0ee149ae24205126431e9e701a64c12b162dea6582f1314736af40d46dff2545"
     },
     ".github/workflows/mongo-profile-prototype.yml": {
       "bytes": 1681,
-      "sha256": "398ff8633be9b6a77dd886c41606a919169aa78c6fec4014ec16d6d55df34e51"
+      "sha256": "c48cc4c46c4b0b62aa6f9d52fc7ed09b6170997acf1adc2bc0011ccbd278470c"
     }
   },
   "append_only_history": {
-    "previous_checkpoint": "dbc659dfee648c11ad105048aa7d007caf8cb097",
-    "previous_parent": "95c6ff3de473786bd98b692375cfdb9cef951668",
-    "checkout_depth": 3,
-    "reason": "repository rejected force-push; ordinary append preserves failed source in history",
-    "checks": "offline source contracts passed after change",
-    "go_commands_executed_locally": false
-  }
+    "previous_checkpoint": "d2259ce4f6c4f829f642fe4755e3516034cdc8dc",
+    "previous_parent": "dbc659dfee648c11ad105048aa7d007caf8cb097",
+    "initial_parent": "95c6ff3de473786bd98b692375cfdb9cef951668",
+    "checkout_depth": 4,
+    "required_next_history": [
+      "candidate",
+      "d2259ce4f6c4f829f642fe4755e3516034cdc8dc",
+      "dbc659dfee648c11ad105048aa7d007caf8cb097",
+      "95c6ff3de473786bd98b692375cfdb9cef951668"
+    ],
+    "reason": "ordinary append preserves both observed failed attempts"
+  },
+  "helper_overlay": {
+    "entry": "TreeDB/mongo_profile_constructor_probe/server.go",
+    "test": "TreeDB/mongo_profile_constructor_probe/hosted_profile_test.go",
+    "normal_entry": "TreeDB/mongo_gateway/server.go",
+    "physical_generated_source_unchanged": true,
+    "physical_fixture_unchanged": true,
+    "fixture_sha256": "a49b78e9848a86974c70cbf9cd083224bd26855b8370d03f9368071ab37f3d38",
+    "source_audit": "Full existing fixture read; referenced owner fields and producer APIs inspected; no additional obvious type/API/unused-import finding. Not parsed or compiled with Go locally."
+  },
+  "prior_hosted_evidence": {
+    "origin": "/home/mikers/gomap-mongo-hosted-profile-20261031-j2cxm6g7/hosted/41184042878-1/mp-vf3jmg2s/evidence",
+    "source": "d2259ce4f6c4f829f642fe4755e3516034cdc8dc",
+    "status": "failed-or-incomplete",
+    "gateways": {
+      "env_unset": "baseline and overlay empty startup/checkpoint/checked shutdown passed",
+      "off": "passed-empty-gateway-only",
+      "cpu_wait": "passed-empty-gateway-only"
+    },
+    "cpu_count": 4,
+    "affinity": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "profile_decodes": "CPU/block/mutex raw and top command receipts each exit zero",
+    "helper": "build failed on imported package contamination; no helper or race execution reached",
+    "public_qualification": false,
+    "performance_claims": false,
+    "files": {
+      "summary.json": {
+        "bytes": 14485,
+        "sha256": "986ef8a6192cc5a75ad346f81141ff7d8341cc18f23d025bed0f0ef244b14b40"
+      },
+      "provenance.json": {
+        "bytes": 3907,
+        "sha256": "6bb88bac993e10cb71c42e146ee6f1c3773a76f67b810a86ca35df671d70296a"
+      },
+      "22-build-file-list-tests.log": {
+        "bytes": 267,
+        "sha256": "8a0b61cb98b224f62dab804a74b89ded26e746ac253c2f45e5a2c2a66b30031d"
+      }
+    }
+  },
+  "remaining_gates": [
+    "Independent exact-source repair review",
+    "Hosted exact-source helper compilation and existing fresh-process controls",
+    "Changed concurrency race control if successfully completed",
+    "Independent hosted artifact acceptance",
+    "Full pinned maintained campaign/profile validator acceptance (no campaign fabricated here)",
+    "Public fixed 100k workload, original host/runtime/affinity/resource/repetition eligibility",
+    "Representative attribution, performance improvement, crash/recovery qualification",
+    "Injected real profile/receipt short-write, Sync and Close errors beyond closed-file control",
+    "Real socket disconnect during start/stop and independent controller failed-exchange veto control",
+    "Actual gateway negative startup/control failure matrix with original cleanup on each path",
+    "Exact sampling activation/cessation beyond helper state checks and real pprof decode"
+  ]
 }

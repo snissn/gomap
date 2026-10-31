@@ -29,7 +29,7 @@ def main():
     for name, bound in manifest["files"].items():
         require(hashlib.sha256((REPO / name).read_bytes()).hexdigest() == bound["sha256"], "base source drift: " + name)
     workflow = (REPO / ".github/workflows/mongo-profile-prototype.yml").read_text()
-    for snippet in ("branches: [codex/mongo-profile-hosted-20261031]", "contents: read", "fetch-depth: 3",
+    for snippet in ("branches: [codex/mongo-profile-hosted-20261031]", "contents: read", "fetch-depth: 4",
                     "persist-credentials: false", 'go-version: "1.26.10"', "cache: false",
                     "runs-on: ubuntu-24.04", "timeout-minutes: 30", "if: always()"):
         require(snippet in workflow, "workflow contract missing: " + snippet)
@@ -40,11 +40,27 @@ def main():
     tree = ast.parse(driver)
     constants = {node.targets[0].id: ast.literal_eval(node.value) for node in tree.body
                  if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)
-                 and node.targets[0].id in {"BASE", "PREVIOUS_CHECKPOINT", "ORIGINAL", "GENERATED", "HELPER_CASES", "PROFILE", "PINNED_GO"}}
+                 and node.targets[0].id in {"BASE", "PREVIOUS_CHECKPOINT", "INITIAL_CHECKPOINT", "ENTRY", "HELPER_ENTRY", "HELPER_TEST", "ORIGINAL", "GENERATED", "HELPER_CASES", "PROFILE", "PINNED_GO"}}
     require(constants["BASE"] == accepted["base"], "driver base drift")
-    require(constants["PREVIOUS_CHECKPOINT"] == "dbc659dfee648c11ad105048aa7d007caf8cb097", "retained checkpoint drift")
-    require('strip() == PREVIOUS_CHECKPOINT' in driver and 'PREVIOUS_CHECKPOINT + "^"' in driver,
+    require(constants["PREVIOUS_CHECKPOINT"] == "d2259ce4f6c4f829f642fe4755e3516034cdc8dc" and
+            constants["INITIAL_CHECKPOINT"] == "dbc659dfee648c11ad105048aa7d007caf8cb097", "retained checkpoint drift")
+    require(all(snippet in driver for snippet in ('strip() == PREVIOUS_CHECKPOINT', 'strip() == INITIAL_CHECKPOINT',
+                'PREVIOUS_CHECKPOINT + "^"', 'INITIAL_CHECKPOINT + "^"', 'strip() == BASE',
+                'checkpoint_ancestry=[sha, PREVIOUS_CHECKPOINT, INITIAL_CHECKPOINT, BASE]')),
             "append-only constructor source chain missing")
+    require(constants["ENTRY"] == "TreeDB/mongo_gateway/server.go", "actual standalone overlay target drift")
+    require('write(overlay, {"Replace": {str(runner.base / ENTRY): str(generated)}})' in driver,
+            "actual standalone overlay must preserve the original entry mapping")
+    require(constants["HELPER_ENTRY"] == "TreeDB/mongo_profile_constructor_probe/server.go" and
+            constants["HELPER_TEST"] == "TreeDB/mongo_profile_constructor_probe/hosted_profile_test.go",
+            "helper virtual files must share the isolated module-local probe directory")
+    require('write(test_overlay, {"Replace": {str(helper_entry_path): str(generated), str(fixture_path): str(fixture)}})' in driver,
+            "helper overlay must not contaminate the imported production package")
+    require('str(runner.base / ENTRY), str(fixture_path)' not in driver and
+            driver.count('str(helper_entry_path), str(fixture_path)], timeout=600)') == 2,
+            "both ordinary and race helper file lists must use only the isolated virtual files")
+    require('helper_virtual_entry=str(helper_entry_path), helper_virtual_test=str(fixture_path)' in driver,
+            "helper virtual source paths must be explicit provenance")
     require(constants["GENERATED"] == hashlib.sha256(data).hexdigest(), "driver generated hash drift")
     require(constants["ORIGINAL"] == manifest["files"]["TreeDB/mongo_gateway/server.go"]["sha256"], "driver original hash drift")
     require(constants["PROFILE"] == "command_wal_durable", "canonical gateway profile drift")
