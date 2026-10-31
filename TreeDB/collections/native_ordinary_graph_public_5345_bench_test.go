@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"runtime/trace"
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
