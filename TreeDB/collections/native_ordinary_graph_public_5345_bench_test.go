@@ -146,6 +146,8 @@ func BenchmarkOrdinaryGraphPublic5345(b *testing.B) {
 // cheap success. This error class does not by itself identify its cause. The
 // encoded reservation delta and installed rows support path attribution; they
 // are not direct per-call helper or general internal fallback counters.
+// A Snappy bound refusal is identified separately by the same metadata-only
+// bound returning the identical error, with no assignment, state or debt change.
 func BenchmarkTypedGraphEncodedPublic5345(b *testing.B) {
 	for _, policy := range []struct {
 		name  string
@@ -210,6 +212,18 @@ func BenchmarkTypedGraphEncodedPublic5345(b *testing.B) {
 				got, stats, err := col.InsertTypedBatchWithStats(ids, retained, columns)
 				b.StopTimer()
 				if err != nil {
+					if policy.codec == ColumnStoreTypedColumnCompressionSnappy {
+						_, boundErr := typedColumnPublicationFP32EncodedBound(*meta.Options.ColumnStore, rows)
+						if boundErr != nil && !errors.Is(boundErr, ErrHybridSearchUnsupported) && errors.Is(err, boundErr) && !backenddb.CommitPublicationAccepted(err) && db.CommandWALNextLSN() == beforeLSN {
+							coord.typedPublicationDebtMu.Lock()
+							reserved := coord.typedPublicationEncodedBytes
+							coord.typedPublicationDebtMu.Unlock()
+							if col.typedGraphPublicationSnapshot() != beforeState || reserved != beforeReserved || len(got) != 0 {
+								b.Fatalf("bound refusal changed publication: reserved=%d->%d returned=%d", beforeReserved, reserved, len(got))
+							}
+							b.Skipf("EXPECTED_CAPABILITY_REFUSAL: Snappy FP32 image bound rejected before assignment without publication or debt change: %v", err)
+						}
+					}
 					if errors.Is(err, ErrHybridSearchUnsupported) && !backenddb.CommitPublicationAccepted(err) && db.CommandWALNextLSN() == beforeLSN {
 						b.Skipf("INCOMPLETE: public typed insert refused before command assignment: %v", err)
 					}
