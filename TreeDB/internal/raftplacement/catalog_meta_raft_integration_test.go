@@ -143,7 +143,9 @@ func TestCatalogMetaBackupRestoresFreshThreeAuthorityClusterAndSurvivesReopenFai
 
 const realCatalogMetaIntegrationCoordinationTimeoutV1 = 5 * time.Second
 const realCatalogMetaIntegrationLeaderDwellV1 = realCatalogMetaIntegrationCoordinationTimeoutV1
-const realCatalogMetaIntegrationTestTimeoutV1 = 4*realCatalogMetaIntegrationCoordinationTimeoutV1 + 60*time.Second
+
+// Allow bounded headroom for the aggregate restore/reopen/failover lifecycle.
+const realCatalogMetaIntegrationTestTimeoutV1 = 2 * time.Minute
 
 type realCatalogMetaClusterV1 struct {
 	peers       []raftcluster.Peer

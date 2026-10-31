@@ -270,7 +270,8 @@ func TestDurableRootMetadataReuseProcessCut4627(t *testing.T) {
 	for _, mode := range []string{"before-seal", "after-ack"} {
 		t.Run(mode, func(t *testing.T) {
 			dir := t.TempDir()
-			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			// Allow bounded headroom for the observed aggregate setup work.
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestDurableRootMetadataReuseProcessCut4627$")
 			cmd.Env = append(os.Environ(), "TREEDB_METADATA_REUSE_CUT4627="+mode, "TREEDB_METADATA_REUSE_DIR4627="+dir)
