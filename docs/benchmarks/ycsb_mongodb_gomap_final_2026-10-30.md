@@ -82,6 +82,54 @@ by those controls, without asserting identical implementations, maintenance work
 or MongoDB failure semantics. Actual load concern is recorded separately. `j` absent is not `j:false`. Relaxed results carry
 no durable-before-ACK crash guarantee and cannot be pooled with durable-B.
 
+### October 31 clarification: load ACK work is asymmetric
+
+The common **request** used for loading does not imply common durability work.
+Both load clients use `w:1` with `j` absent. GoMap remains on the selected engine
+profile during load: `command_wal_durable` completes the command's stable
+dependencies before acknowledging it. The retained standalone MongoDB settings
+do not require each such acknowledgment to wait for a stable journal write.
+MongoDB's observed 100 ms journal interval is background policy, not an
+individual write's latency or a per-write sync count. See the
+[write concern](https://www.mongodb.com/docs/manual/reference/write-concern/)
+and [journaling](https://www.mongodb.com/docs/manual/core/journaling/)
+contracts. Journaling being enabled does not by itself make these load ACKs
+equivalent.
+
+Consequently, the durable-B **load** medians of 2,185.0 GoMap and 40,152.8
+MongoDB operations/s do not establish an 18.4-fold gap under equivalent durable
+ACK requirements. The original measurements and their request labels below
+remain unchanged. The **timed run** is separate: MongoDB explicitly requests
+`j:true`, while GoMap uses its durable-profile ordinary completion. Its scoped
+durable-before-ACK comparison remains the one declared above, including the
+limits of the accepted controls. Explicit GoMap `j:true` additionally uses the
+gateway's exclusive boundary and same-owner native checkpoint; the earlier
+failed strict-ingestion class is not replaced by this durable-B load result.
+
+Relaxed load has no per-operation stable ACK promise on either product, but
+their buffering and process-crash suffix-loss behavior can differ. That class
+still shows an ingestion deficit and warrants separate attribution. Neither
+class establishes replication, failover or hardware power-loss equivalence.
+
+Evidence is in the retained raw archive's
+`cells/durable-B-pair{1,2,3}-{gomap,mongodb}/output/` actual load/run command
+receipts, MongoDB `server-ready.json` / `server-before-close.json`, and GoMap
+`server.evidence/owner.open.json` / `owner.before-close.json`. The original
+GoMap durable-B owner lifetimes record 12,680 / 12,670 / 12,678 coordinator
+commits, groups and syncs, with maximum group size one; command-WAL file-sync
+calls are 12,704 / 12,694 / 12,702. These totals include load, census/sentinel,
+timed run and checkpoint. They are **not** load-only, timed-only, or one sync
+per inserted document: the gateway already batches documents upstream. Relaxed
+lifetimes record no durable groups and 18 command-WAL file-sync calls each.
+Phase-specific batching, physical sync and preparation costs remain unresolved.
+
+Follow-up performance work uses the existing MongoDB result as a fixed reference
+within each declared ACK class while comparing equivalent GoMap baseline and
+candidate runs. MongoDB is refreshed for final qualification. Changing GoMap
+source, storage device, caps or runtime may produce a useful new baseline, but
+cannot attribute a speedup relative to these historical samples by itself.
+The next ingestion inquiry is tracked in [#5361](https://github.com/snissn/gomap/issues/5361).
+
 ## Final results
 
 Rates are the original final `TOTAL` rows emitted by the pinned common client,
