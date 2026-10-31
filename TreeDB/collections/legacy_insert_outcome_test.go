@@ -35,6 +35,11 @@ func TestBufferedInsertConflictOutcomeBoundary(t *testing.T) {
 				if _, err := mgr.CreateCollection(&CollectionMeta{Name: "users", Options: CollectionOptions{DocumentFormat: DocumentFormatBSON, DisableBufferedIndexedAsyncFlush: true}, Indexes: []IndexDefinition{{Name: "email", Field: "email", ValueType: IndexValueString, Unique: true}}}); err != nil {
 					t.Fatal(err)
 				}
+				// Catalog admission can precede its physical root seal. Complete
+				// that setup before creating the seed that must stay buffered.
+				if err := d.Checkpoint(); err != nil {
+					t.Fatalf("seal schema setup: %v", err)
+				}
 				col, err := mgr.OpenCollection("users")
 				if err != nil {
 					t.Fatal(err)
@@ -93,7 +98,11 @@ func TestBufferedInsertConflictOutcomeBoundary(t *testing.T) {
 				domain := col.writeDomain
 				domain.mu.RLock()
 				generation, count, first, last := domain.writeGeneration, domain.count, domain.pendingCommandWALFirst, domain.pendingCommandWALLast
+				bufferedRoots := hasBufferedIndexedRootRuns(domain)
 				domain.mu.RUnlock()
+				if count != 1 || !bufferedRoots || first == 0 || last < first {
+					t.Fatalf("seed must remain buffered: count=%d roots=%t pendingWAL=%d..%d", count, bufferedRoots, first, last)
+				}
 				var eventMu sync.Mutex
 				var events []bufferedConflictEvent
 				restore := durabilitycut.Install(func(event durabilitycut.Event) error {

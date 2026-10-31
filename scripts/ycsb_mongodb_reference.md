@@ -1,11 +1,14 @@
-# Provisional MongoDB reference lifecycle
+# MongoDB reference lifecycle
 
-The maintained shell still refuses execution selecting `mongodb`, before output
-creation or commands. This separate implementation remains provisional. Its
-earlier retained live readiness failure started no workload or performance sample.
-A complete synthetic
-packet may be consumed through the ordinary shell's `PARSE_ONLY=true` entry.
-That is parser coverage, not MongoDB readiness or product evidence.
+The maintained explicit `ycsb_mongodb_reference.py` route completed the
+[final twelve-arm comparison](../docs/benchmarks/ycsb_mongodb_gomap_final_2026-10-30.md)
+against the repaired GoMap Mongo BSON gateway. This route retains public
+correctness/readback, checked client Close, public fsync, graceful shutdown,
+fresh reopen and actual process/container/runtime bindings. Earlier failed
+preparations and readiness/validation attempts remain preserved; they are not
+retroactively qualified. The general TreeDB shell still refuses direct execution
+selecting `mongodb`; the reference uses its separate explicit launcher. Synthetic
+`PARSE_ONLY=true` coverage is parser evidence, not a product measurement.
 
 `ycsb_mongodb_reference.py` defines a separate singleton manifest kind
 `mongodb-reference-checkpoint-close-reopen`, lifecycle contract integer 1 and
@@ -311,14 +314,59 @@ uses `DateStringBuffer::iso8601`, whose
 emit an explicit offset and `Z`, respectively. This supports the observed
 zero-offset syntax without claiming a nonzero local clock is UTC.
 
-Maintained-shell end-to-end reference activation remains outstanding. A
-preparation binding from accepted real support and its review remain required
-for each prepared candidate; the offline preparation route alone never enables
-or authorizes a run. The retained
+The final comparison completed the separately prepared explicit reference
+route, with actual per-arm support/build/runtime bindings and review. Direct
+`TARGETS=mongodb` execution through the general TreeDB shell remains disabled.
+Offline preparation alone never enables or authorizes a product run. The retained
 failed controls remain scoped source/identity/operation evidence and invalid
 attempts. Runtime metadata remains version
-metadata, with no runtime ELF attestation. This document supplies no performance
-qualification or complete matrix claim.
+metadata, with no runtime ELF attestation. This contract alone supplies no
+performance qualification; actual complete measurements are identified below.
+
+## Final-source comparison delivery
+
+The [October 30 final report](../docs/benchmarks/ycsb_mongodb_gomap_final_2026-10-30.md)
+and [compact evidence directory](../docs/benchmarks/ycsb_5335_final_evidence/)
+bind twelve actual valid samples to source
+`8bea490ad5a2d89a14f02f428b4283579a6dd864`. Relaxed median run rates are
+MongoDB 42,753.6 and GoMap 59,245.2 ops/s; durable-B rates are 19,879.2 and
+11,766.6 respectively. This is mixed, short-run evidence, with the exact
+requests and resource asymmetry described below. Thirteen actual attempts include
+one explicitly rejected observer-era GoMap sample. Its failed terminal remains
+excluded and preserved alongside the reviewed same-budget continuation.
+
+Relaxed timed requests use `w:1` with `j` absent on both arms. In `durable-B`,
+MongoDB timed requests use `w:1,j:true`; GoMap timed requests omit `j` under
+`command_wal_durable`, relying on the separately reviewed ordinary ACK/WAL
+control. Both durable-B arms use the declared common load/census and public
+same-owner `j:true` sentinel. Preserve this differing-request label and the
+original actual control source; it does not replace the failed strict
+same-request `j:true` ingestion experiment.
+
+Current GoMap private checkpoint receipts use receipt schema 2 and the
+`collections_checkpoint_storage` result from the actual owning collection
+manager. Their request, endpoint and owner observation schemas remain 1.
+Historical schema 1 `backend_checkpoint` receipts are not owner-complete aliases.
+MongoDB continues to use its distinct public `fsync` and checked shutdown route.
+Original producer DB/workload Close and all checkpoint/shutdown/reopen durations
+remain separately reported outside the client's TOTAL throughput interval.
+
+The shared raw wire helper has a monotonic total budget. Default-concern lookup
+uses its existing three-second default; the public sentinel explicitly supplies
+the manifest's helper budget. Connect is capped at the smaller of three seconds
+and that total; later I/O uses the remaining total, preserving longer synchronous
+`j:true` response waits without allowing incoming bytes to restart the budget.
+Client Close remains in the existing `finally` paths. These tooling controls do
+not change the measured request concern or imply equivalent crash guarantees.
+
+Final publication retains all thirteen actual attempt statuses and twelve selected
+sample slots, raw phase/Close and
+runtime evidence, separate deterministic exact-value versus random observed-state
+preservation scope, and every earlier failed or incomplete attempt. The
+[existing provisional report](../docs/benchmarks/ycsb_mongodb_gomap_2026-10-30.md)
+keeps its actual source and request identities. Only actual complete rows and
+analysis accepted by ROOT/#5225 can close #5335; an unmet parent performance
+objective remains open.
 
 ## Retained actual-MongoDB comparison
 
@@ -329,4 +377,6 @@ source/build/request/Close bindings and raw phase evidence. All measured GoMap
 rows bind to provisional 802f, not the later maintained integration head. The
 reference implementation's two concern classes do not retroactively qualify a
 sample or change its emitted request. Final-source applicability, dependency,
-review and acceptance gates remain open; this report is not a new dispatch plan.
+review and acceptance are recorded in the later final-source report and its PR;
+these provisional samples retain their old identities. The parent performance objective remains open. This is not a new
+dispatch plan.

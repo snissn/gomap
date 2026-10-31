@@ -9,6 +9,34 @@ This page is the current entry point for external `go-ycsb` comparisons across:
 It distinguishes the retained October comparison from historical reports and
 records the remaining qualification obligations.
 
+## Final-source MongoDB comparison
+
+The [final-source report](ycsb_mongodb_gomap_final_2026-10-30.md) records twelve
+valid samples on GoMap `8bea490ad5a2d89a14f02f428b4283579a6dd864` (landed
+as the identical tree in #5348) versus MongoDB 8.2.7. All selected operation
+errors are zero. Three fresh pairs per class give these run medians:
+
+| ACK class | MongoDB ops/s | GoMap ops/s | Median paired GoMap/Mongo |
+| --- | ---: | ---: | ---: |
+| Relaxed, both `w:1`, `j` absent | 42,753.6 | 59,245.2 | 1.372250 (+37.23%) |
+| Durable-B, differing timed requests below | 19,879.2 | 11,766.6 | 0.591905 (−40.81%) |
+
+Durable-B times MongoDB `w:1,j:true` against GoMap `command_wal_durable`
+with `w:1`, `j` absent, using separate scoped ACK/sync/crash controls. A common
+load/census and public same-owner `j:true` sentinel are outside timing. This is
+not a same-request `j:true` ingestion result or complete MongoDB failure-semantics
+certification. The report retains the earlier strict-load timeout and every
+failed attempt. These short 10k runs, asymmetric resource caps and cache-warming
+census do not establish sustained performance or isolate COW's contribution.
+
+The [checked-in evidence](ycsb_5335_final_evidence/) supplies all rates, tails,
+Close/maintenance/runtime records and a verified compact raw archive/index.
+Thirteen actual attempts include one rejected observer-era sample; twelve valid
+samples are selected explicitly. The parent
+[#5225 performance objective](https://github.com/snissn/gomap/issues/5225)
+and separate #5238/#5241 outcomes remain open. Historical and provisional rows
+below remain separate evidence, never current denominators.
+
 ## October 30 actual-MongoDB comparison: provisional, qualification open
 
 Use [the retained October 30 report](ycsb_mongodb_gomap_2026-10-30.md) for the
@@ -18,9 +46,10 @@ strict-journaled load, per-operation latency, original checked Close and lifecyc
 scope, source/ELF identities, resource limits and indexed raw phase evidence.
 
 These measurements used provisional GoMap `802f7cfc...`; they are not final-head
-qualification. All nine complete pairs show lower GoMap throughput. Final repair
-integration, strict-cost dispositions, current-head checks/review, durable full
-artifact delivery and #5225 acceptance remain open. No README speedup is promoted.
+qualification. All nine complete pairs show lower GoMap throughput. The later
+final-source harness and repairs have landed; the report above supplies their
+separate measurements. Older failed gates and the parent performance
+objective remain retained. These provisional rows are not relabeled as final.
 The June figures below are historical context and are not an October denominator.
 
 ## 2026-10 COW JSON correctness follow-up
@@ -137,10 +166,16 @@ that accepts `collection_meta` version 5. The June 30 closeout used
 `codex/2026-treedb-native-meta-v5`; use that branch or an upstream client with
 equivalent v5 support before rerunning current nativewire cells.
 
-## Standard Full Rerun Matrix
+## Historical full-rerun recipes
 
-Run this matrix to refresh the current headline evidence after performance,
-profile, nativewire, or Mongo gateway changes.
+The recipes below describe the historical runner and its same-fixture repeats.
+They are retained for interpreting those reports. The current maintained shell
+refuses ordinary `TARGETS=mongodb`; a default invocation is not a current MongoDB
+baseline or the final twelve-arm qualification. Use the source-bound reference
+preparation/run route in [the maintained reference contract](../../scripts/ycsb_mongodb_reference.md)
+and the selected final packet. Native execution also has its separately declared
+census-size limit. Final qualification uses fresh matched fixtures, not repeated
+runs over one loaded database.
 
 ### Baseline And Durable Cell
 
