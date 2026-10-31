@@ -1,0 +1,6 @@
+{
+  "sha256": "9a5ffeb24c6dbc21522461aa4641985fa2bdcf14e7f35f15a89cb8e5bcb1e731",
+  "size": 67818023,
+  "file": "../evidence/held-sync/TreeDB.test: ELF 64-bit LSB executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, Go BuildID=zWnLS2U9Kbt_tGVhLVNA/v5ouZcmtrTXxT74Q22wn/kLMaAUZZ4uVLnKuQDSsi/pljO18_6isvaxcEN2T1U, BuildID[sha1]=2e79b79579f588005fcf8c26babe2fd889037e1e, with debug_info, not stripped",
+  "build_metadata": "../evidence/held-sync/TreeDB.test: go1.26.10\n\tpath\tgithub.com/snissn/gomap/TreeDB.test\n\tmod\tgithub.com/snissn/gomap\t(devel)\t\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\t-gcflags=all=-c=1\n\tbuild\t-trimpath=true\n\tbuild\tCGO_ENABLED=1\n\tbuild\tGOARCH=amd64\n\tbuild\tGOOS=linux\n\tbuild\tGOAMD64=v1\n"
+}

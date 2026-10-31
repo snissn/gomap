@@ -1,0 +1,30 @@
+=== RUN   TestPublicCommandWALIdleFusionHeldSyncAdmitsSuccessorAndBlocksClose
+--- PASS: TestPublicCommandWALIdleFusionHeldSyncAdmitsSuccessorAndBlocksClose (0.38s)
+=== RUN   TestNativeCommandWALHeldPhysicalSyncAllowsIndependentBSONRead
+    native_command_wal_group_test.go:132: native retained physical baseline root=10 afterUpdate=false unchanged="unchanged"
+    native_command_wal_group_test.go:166: held actual physical command-WAL sync LSN=3 path=/home/mikers/gomap-mongo-performance-exec-20261031-5z3yyej9/tmp/held-sync/TestNativeCommandWALHeldPhysicalSyncAllowsIndependentBSONRead777210349/001/maindb/wal/commit-l0-000002.log
+    native_command_wal_group_test.go:172: native retained physical baseline root=10 afterUpdate=true unchanged="unchanged"
+--- PASS: TestNativeCommandWALHeldPhysicalSyncAllowsIndependentBSONRead (0.60s)
+=== RUN   TestNativeCommandWALGroupIndependentBSONUpdates
+=== RUN   TestNativeCommandWALGroupIndependentBSONUpdates/sameCollection=false
+=== RUN   TestNativeCommandWALGroupIndependentBSONUpdates/sameCollection=true
+--- PASS: TestNativeCommandWALGroupIndependentBSONUpdates (0.91s)
+    --- PASS: TestNativeCommandWALGroupIndependentBSONUpdates/sameCollection=false (0.46s)
+    --- PASS: TestNativeCommandWALGroupIndependentBSONUpdates/sameCollection=true (0.44s)
+=== RUN   TestNativeCommandWALGroupFailurePoisonsInstalledWaiters
+=== RUN   TestNativeCommandWALGroupFailurePoisonsInstalledWaiters/dependency
+=== RUN   TestNativeCommandWALGroupFailurePoisonsInstalledWaiters/barrier-assigned
+--- PASS: TestNativeCommandWALGroupFailurePoisonsInstalledWaiters (1.05s)
+    --- PASS: TestNativeCommandWALGroupFailurePoisonsInstalledWaiters/dependency (0.56s)
+    --- PASS: TestNativeCommandWALGroupFailurePoisonsInstalledWaiters/barrier-assigned (0.49s)
+=== RUN   TestNativeCommandWALGroupSingletonAndMaintenance
+=== RUN   TestNativeCommandWALGroupSingletonAndMaintenance/singleton
+=== RUN   TestNativeCommandWALGroupSingletonAndMaintenance/checkpoint
+=== RUN   TestNativeCommandWALGroupSingletonAndMaintenance/close
+--- PASS: TestNativeCommandWALGroupSingletonAndMaintenance (1.43s)
+    --- PASS: TestNativeCommandWALGroupSingletonAndMaintenance/singleton (0.47s)
+    --- PASS: TestNativeCommandWALGroupSingletonAndMaintenance/checkpoint (0.49s)
+    --- PASS: TestNativeCommandWALGroupSingletonAndMaintenance/close (0.46s)
+=== RUN   TestNativeCommandWALGroupCrashRecovery
+--- PASS: TestNativeCommandWALGroupCrashRecovery (0.61s)
+PASS

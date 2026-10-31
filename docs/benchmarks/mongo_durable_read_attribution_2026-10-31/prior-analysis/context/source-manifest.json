@@ -1,0 +1,230 @@
+{
+  "base": "95c6ff3de473786bd98b692375cfdb9cef951668",
+  "measured": "8bea490ad5a2d89a14f02f428b4283579a6dd864",
+  "files": [
+    {
+      "path": "AGENTS.md",
+      "base_blob": "f8ee8503a4ddd60e6dee233d032138ca77b631ab",
+      "measured_blob": "f8ee8503a4ddd60e6dee233d032138ca77b631ab",
+      "unchanged_from_measured": true,
+      "sha256": "89d419e93fd29ed779b600458945b928cd224773ab53db49702ea0358b5d63f6",
+      "bytes": 2267
+    },
+    {
+      "path": "TreeDB/AGENTS.md",
+      "base_blob": "499f427b9229696496086dfa9a5959d33881fe91",
+      "measured_blob": "499f427b9229696496086dfa9a5959d33881fe91",
+      "unchanged_from_measured": true,
+      "sha256": "49ad91d73c0bb4a8d3ab0c281478df5cb563319dd05b8bddd47fb43538977e2c",
+      "bytes": 1003
+    },
+    {
+      "path": "TreeDB/docs/spec/README.md",
+      "base_blob": "12eb4097c5ab709a2d2855f51e43548d7557348b",
+      "measured_blob": "12eb4097c5ab709a2d2855f51e43548d7557348b",
+      "unchanged_from_measured": true,
+      "sha256": "0f93804ee9f347566bc04106affe30365913a62cc65ce48996849f63bd70ecab",
+      "bytes": 31115
+    },
+    {
+      "path": "TreeDB/docs/spec/write-path-and-durability.md",
+      "base_blob": "ae15549e00617b95a18e40884e2ad2c90f38b9eb",
+      "measured_blob": "ae15549e00617b95a18e40884e2ad2c90f38b9eb",
+      "unchanged_from_measured": true,
+      "sha256": "cd978c807e5c56109fe674fa3f55f943ced2c07fe4aef9f236fb9a98896c5f0f",
+      "bytes": 69884
+    },
+    {
+      "path": "TreeDB/docs/spec/command-wal-durable-write-contract.md",
+      "base_blob": "b16e9f9db6abd43d74eb69be5546f7952f93abca",
+      "measured_blob": "b16e9f9db6abd43d74eb69be5546f7952f93abca",
+      "unchanged_from_measured": true,
+      "sha256": "6fed4e0ff7760295a3d54009476e17f1e85fd0c6abdd41c344cc4829dc4a8cd2",
+      "bytes": 25341
+    },
+    {
+      "path": "TreeDB/native_command_wal_group_test.go",
+      "base_blob": "f68e316ca5a0b29be0318092b987f3a3faa6d245",
+      "measured_blob": "f68e316ca5a0b29be0318092b987f3a3faa6d245",
+      "unchanged_from_measured": true,
+      "sha256": "4bf4e434a5438c120b7708d0a135f3d051cd0741363aaaaff23539b93a2de5f3",
+      "bytes": 17731
+    },
+    {
+      "path": "TreeDB/command_wal_group_commit_fusion_test.go",
+      "base_blob": "dd2b572948c4ebb99e5297ca3bfdb44ffb6e0ec7",
+      "measured_blob": "dd2b572948c4ebb99e5297ca3bfdb44ffb6e0ec7",
+      "unchanged_from_measured": true,
+      "sha256": "af82734deddbfeedbd43224d56b6887e463d8b5120c21a8c97b5bdd667973d6e",
+      "bytes": 13488
+    },
+    {
+      "path": "TreeDB/command_wal_group_commit.go",
+      "base_blob": "301beb811a66d6ae3c7fbf951ccf6a9664ebe7ac",
+      "measured_blob": "301beb811a66d6ae3c7fbf951ccf6a9664ebe7ac",
+      "unchanged_from_measured": true,
+      "sha256": "e634a6eb5521a49dcac426a8a8bffd36a7390e5efc72045ac566df4c84538031",
+      "bytes": 36817
+    },
+    {
+      "path": "TreeDB/command_wal_public_cached.go",
+      "base_blob": "6c8500db851e7cd2c3908e3c1e64e1ca21130527",
+      "measured_blob": "6c8500db851e7cd2c3908e3c1e64e1ca21130527",
+      "unchanged_from_measured": true,
+      "sha256": "913b5da6f428ceee652eca7275d3f16817f60ebb3d058da3971331973ff4e3f9",
+      "bytes": 62760
+    },
+    {
+      "path": "TreeDB/caching/cow_batch.go",
+      "base_blob": "b1fa5a487e64c55f08948917d407f5d58d4b0c97",
+      "measured_blob": "b1fa5a487e64c55f08948917d407f5d58d4b0c97",
+      "unchanged_from_measured": true,
+      "sha256": "deeee5dd7bbaf1190ca59a9e193f97f6a1d8a65d8d4fbc17fcc8a871068c13a8",
+      "bytes": 27730
+    },
+    {
+      "path": "TreeDB/caching/cow_cut.go",
+      "base_blob": "a7d040596f5d4a8ccc0cf093b82b0cf3435c481a",
+      "measured_blob": "a7d040596f5d4a8ccc0cf093b82b0cf3435c481a",
+      "unchanged_from_measured": true,
+      "sha256": "6b7a5392195a4176f05aff8583609423b9a728c860da1871526951e06694f1a7",
+      "bytes": 34396
+    },
+    {
+      "path": "TreeDB/caching/cow_native_semantic.go",
+      "base_blob": "dfc75446de31b7635f653e51e9e06fadb8cfaa82",
+      "measured_blob": "dfc75446de31b7635f653e51e9e06fadb8cfaa82",
+      "unchanged_from_measured": true,
+      "sha256": "d1f8162b1539fecb14e09eb87cae6b5275d05b8f1ec04348642044afe56b4917",
+      "bytes": 20101
+    },
+    {
+      "path": "TreeDB/caching/cow_native_physical_read.go",
+      "base_blob": "cc84f564ca872a2cb67a69087374dd9215d0f0fc",
+      "measured_blob": "cc84f564ca872a2cb67a69087374dd9215d0f0fc",
+      "unchanged_from_measured": true,
+      "sha256": "db147fe54a0e7925b2321a0960b0e25ddbadd14156821fb86d08617e8ea285dc",
+      "bytes": 6593
+    },
+    {
+      "path": "TreeDB/collections/native_existing.go",
+      "base_blob": "3b729c3c0e29ce16822038a31a5614d72faba2ff",
+      "measured_blob": "3b729c3c0e29ce16822038a31a5614d72faba2ff",
+      "unchanged_from_measured": true,
+      "sha256": "47f61a4fc5f901938106d8ee71386da8a947a6eb9650f2757303402f702f3f4c",
+      "bytes": 8669
+    },
+    {
+      "path": "TreeDB/collections/native_json_read.go",
+      "base_blob": "0bfdd60d95437df0ed3152c9a1fcaa455f42ffe2",
+      "measured_blob": "0bfdd60d95437df0ed3152c9a1fcaa455f42ffe2",
+      "unchanged_from_measured": true,
+      "sha256": "3f07b931124f7137fff27d23727f9bbf815a8c4f66bd5b4b724f6a300e5dc8f9",
+      "bytes": 17697
+    },
+    {
+      "path": "TreeDB/collections/bson_set_update.go",
+      "base_blob": "8a66ff70cd3261c2909eed82fb53a373bd906d64",
+      "measured_blob": "8a66ff70cd3261c2909eed82fb53a373bd906d64",
+      "unchanged_from_measured": true,
+      "sha256": "e562a60227df32c8f062521079ec16fd9892d6905411d21d6e30a0d5f8d622d4",
+      "bytes": 26666
+    },
+    {
+      "path": "TreeDB/mongo_gateway/find_planner.go",
+      "base_blob": "bdedba0a06405ae3b4ce2b34b31dda4989346820",
+      "measured_blob": "bdedba0a06405ae3b4ce2b34b31dda4989346820",
+      "unchanged_from_measured": true,
+      "sha256": "fcf856f655d3c45015f1a0fa636dc1fb221615fc5f16d999e6431d536bdf56d2",
+      "bytes": 103302
+    },
+    {
+      "path": "TreeDB/mongo_gateway/commands.go",
+      "base_blob": "2783a412ac8d8836071db3b9b5f2ae70c8929d54",
+      "measured_blob": "2783a412ac8d8836071db3b9b5f2ae70c8929d54",
+      "unchanged_from_measured": true,
+      "sha256": "a26b0d639988124aab26d23f8b7a7e544dbc988d190b044bc8952aed1094fe7f",
+      "bytes": 240346
+    },
+    {
+      "path": "TreeDB/internal/commitlog/captured_sync.go",
+      "base_blob": "1fd0372d3fdc1aed7b4978a657e4555e5c00eb91",
+      "measured_blob": "1fd0372d3fdc1aed7b4978a657e4555e5c00eb91",
+      "unchanged_from_measured": true,
+      "sha256": "0b4ffba9ab0a4fc2c32576f0f201dda6c08927e9023692c063770e9432334e4f",
+      "bytes": 7347
+    },
+    {
+      "path": "TreeDB/db/native_command_wal_completion.go",
+      "base_blob": "e296ae6c3f9fec6b8274c751741c26eb4ec6c444",
+      "measured_blob": "e296ae6c3f9fec6b8274c751741c26eb4ec6c444",
+      "unchanged_from_measured": true,
+      "sha256": "5be6d2a6d5714e2db57bef1e06c61b8b9f6f84bcef4a73520870e270b60e75ea",
+      "bytes": 4048
+    },
+    {
+      "path": "scripts/ycsb_compare_mongodb_treedb.sh",
+      "base_blob": "d798ef9293cf01751737d503e6a2cfc710cd3321",
+      "measured_blob": "d798ef9293cf01751737d503e6a2cfc710cd3321",
+      "unchanged_from_measured": true,
+      "sha256": "1886b160269b761fd0849b4ecee15fb927f05a1e985887799452bf70010ec568",
+      "bytes": 28187
+    },
+    {
+      "path": "scripts/ycsb_compare_live.py",
+      "base_blob": "42113eced497efca0d4ef611f0ffbc66e2b51f20",
+      "measured_blob": "42113eced497efca0d4ef611f0ffbc66e2b51f20",
+      "unchanged_from_measured": true,
+      "sha256": "a55cda197b385c779219651ebaddfea83c75f76554a0bdf9d3f7e6b8a8d39f3e",
+      "bytes": 26943
+    },
+    {
+      "path": "scripts/ycsb_compare_validate.py",
+      "base_blob": "4e5d4a2ca842ac91d547a7135181c58a9a64cf27",
+      "measured_blob": "4e5d4a2ca842ac91d547a7135181c58a9a64cf27",
+      "unchanged_from_measured": true,
+      "sha256": "1b14289667212b44dc7257f9cd5221267c12239bc2e3f5bf58d7dcbda9fadd04",
+      "bytes": 47803
+    },
+    {
+      "path": "scripts/ycsb_runtime_observer.py",
+      "base_blob": "01222b804dbed55e2fefeffd4e47153f07764c53",
+      "measured_blob": "01222b804dbed55e2fefeffd4e47153f07764c53",
+      "unchanged_from_measured": true,
+      "sha256": "fab36e1396205c2cddff0c24fa0f5c6faaa4e0fd47f46fdb423ffe3dd4e31077",
+      "bytes": 19561
+    },
+    {
+      "path": "scripts/test_ycsb_runtime_observer.py",
+      "base_blob": "4526bb314459c4477135153fdcd144f5612e14d8",
+      "measured_blob": "4526bb314459c4477135153fdcd144f5612e14d8",
+      "unchanged_from_measured": true,
+      "sha256": "be03785f985c24e98841305471b982b4d48702dd04788ed854cab9be2a8a054f",
+      "bytes": 14119
+    },
+    {
+      "path": "scripts/ycsb_compare_receipts.md",
+      "base_blob": "e717c7f7bcea7080bbc61f0150ae1f1d5d99b549",
+      "measured_blob": "e717c7f7bcea7080bbc61f0150ae1f1d5d99b549",
+      "unchanged_from_measured": true,
+      "sha256": "2870451c1a0caa5b36892f748fa2630a895ca3f1d27ce990e6b86a250ab8284d",
+      "bytes": 29025
+    },
+    {
+      "path": "cmd/mongo_gateway_bench/profile.go",
+      "base_blob": "74c43657d640cf0acf4ebbd549482225accf9134",
+      "measured_blob": "74c43657d640cf0acf4ebbd549482225accf9134",
+      "unchanged_from_measured": true,
+      "sha256": "db9fd908fae7acdb9f9f454df0dd754ace8608c979def1dbd13c6a514ad17853",
+      "bytes": 12049
+    },
+    {
+      "path": "cmd/mongo_gateway_bench/README.md",
+      "base_blob": "1ebab8fc425b782f36678e7d68a8b38140d63588",
+      "measured_blob": "1ebab8fc425b782f36678e7d68a8b38140d63588",
+      "unchanged_from_measured": true,
+      "sha256": "1126294d255cfd5e5273daac53d0a7f8809d6fc698db0a7b989c09f6811b34de",
+      "bytes": 48275
+    }
+  ]
+}

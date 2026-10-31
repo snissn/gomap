@@ -1,0 +1,748 @@
+package treedb
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/snissn/gomap/TreeDB/collections"
+	"go.mongodb.org/mongo-driver/v2/bson"
+)
+
+// This is a bounded progress control, not a latency or final12 reproduction.
+// Keep the ordinary group policy and hold the actual captured file-sync event.
+func TestNativeCommandWALHeldPhysicalSyncAllowsIndependentBSONRead(t *testing.T) {
+	opts := indexedSliceOptions(ProfileCommandWALDurable, t.TempDir())
+	database, err := Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manager *collections.CollectionManager
+	defer func() {
+		if manager != nil {
+			if err := manager.Close(); err != nil {
+				t.Errorf("collection manager close: %v", err)
+			}
+		}
+		if database != nil {
+			if err := database.Close(); err != nil {
+				t.Errorf("database close: %v", err)
+			}
+		}
+	}()
+	backend, err := database.NativeSemanticBackend()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager = collections.NewCollectionManager(backend)
+	const name = "held_sync_rows"
+	if _, err := manager.CreateCollection(&collections.CollectionMeta{Name: name, Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}}); err != nil {
+		t.Fatal(err)
+	}
+	c, err := manager.OpenCollection(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reflect.ValueOf(c).Elem().FieldByName("nativeJSON").IsNil() || len(c.Meta().Indexes) != 0 {
+		t.Fatal("invalid fixture: collection did not select native no-index route")
+	}
+	document := func(marker byte, changed bool) []byte {
+		doc := make(bson.D, 10)
+		for i := range doc {
+			value := marker
+			if changed && i == 0 {
+				value++
+			}
+			doc[i] = bson.E{Key: fmt.Sprintf("field%d", i), Value: bson.Binary{Subtype: 0, Data: bytes.Repeat([]byte{value}, 100)}}
+		}
+		encoded, err := bson.Marshal(doc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return encoded
+	}
+	id, otherID := []byte("unchanged"), []byte("updated")
+	seed, other, next := document('a', false), document('b', false), document('b', true)
+	if _, err := c.InsertBatch([][]byte{id, otherID}, [][]byte{seed, other}); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	native, err := collections.NewNativeJSONManager(backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Inspect existing immutable capture metadata only. Reflection avoids adding
+	// a production observer/API solely for this two-row inquiry. Fail closed if
+	// the fixture's simple source shape changes. lookupEntry must use baseRoot
+	// when pending contains only otherID and captured/typed are absent.
+	physicalBaseline := func(afterUpdate bool) uint64 {
+		t.Helper()
+		read, err := native.Capture(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			if err := read.Close(); err != nil {
+				t.Errorf("baseline capture close: %v", err)
+			}
+		}()
+		r := reflect.ValueOf(read).Elem()
+		capture := r.FieldByName("capture").Elem()
+		if capture.Type().String() != "*caching.NativeSemanticCapture" {
+			t.Fatalf("invalid fixture: capture route %s", capture.Type())
+		}
+		domain := r.FieldByName("domain").FieldByName("domain").Elem()
+		root := domain.FieldByName("baseRoot").Uint()
+		if root == 0 || !domain.FieldByName("captured").IsNil() || !domain.FieldByName("typed").IsNil() {
+			t.Fatal("invalid fixture: expected retained physical root without captured/typed sources")
+		}
+		pending := domain.FieldByName("pending")
+		if !pending.IsNil() {
+			p := pending.Elem()
+			tree := p.FieldByName("tree").Elem()
+			count := tree.FieldByName("count").Int()
+			if !p.FieldByName("ordered").IsNil() || (!afterUpdate && count != 0) || (afterUpdate && count != 1) {
+				t.Fatalf("invalid fixture: unexpected pending source count=%d afterUpdate=%t", count, afterUpdate)
+			}
+			if count == 1 {
+				node := tree.FieldByName("root").Elem()
+				items := node.FieldByName("items")
+				if !node.FieldByName("children").IsNil() || items.Len() != 1 || items.Index(0).FieldByName("key").String() != string(otherID) {
+					t.Fatal("invalid fixture: pending source can shadow unchanged ID")
+				}
+			}
+		} else if afterUpdate {
+			t.Fatal("invalid fixture: native update did not install its pending source")
+		}
+		t.Logf("native retained physical baseline root=%d afterUpdate=%t unchanged=%q", root, afterUpdate, id)
+		return root
+	}
+	root := physicalBaseline(false)
+	type updateResult struct {
+		matched, modified bool
+		err               error
+	}
+	updates := make(chan updateResult, 1)
+	updateJoined, readJoined := make(chan struct{}), make(chan struct{})
+	entered, release := make(chan durabilitycut.Event, 1), make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	var held sync.Once
+	restore := durabilitycut.Install(func(e durabilitycut.Event) error {
+		if e.Resource == durabilitycut.ResourceCommandWAL && e.Point == durabilitycut.BeforeDependencyFileSync && e.LSN != 0 {
+			held.Do(func() { entered <- e; <-release })
+		}
+		return nil
+	})
+	readStarted := false
+	// Release and join before hook removal, including assertion failure paths.
+	defer func() {
+		unblock()
+		<-updateJoined
+		if readStarted {
+			<-readJoined
+		}
+		restore()
+	}()
+	go func() {
+		defer close(updateJoined)
+		matched, modified, err := c.UpdateBSONSet(otherID, []collections.BSONSetField{{Key: "field0", Value: bson.Raw(next).Lookup("field0")}})
+		updates <- updateResult{matched, modified, err}
+	}()
+	select {
+	case e := <-entered:
+		t.Logf("held actual physical command-WAL sync LSN=%d path=%s", e.LSN, e.Path)
+	case result := <-updates:
+		t.Fatalf("invalid fixture: update completed before held physical sync: %+v", result)
+	case <-time.After(2 * time.Second):
+		t.Fatal("invalid fixture: update did not reach physical sync")
+	}
+	if got := physicalBaseline(true); got != root {
+		t.Fatalf("invalid fixture: physical baseline moved from %d to %d", root, got)
+	}
+	type readResult struct {
+		value []byte
+		err   error
+	}
+	reads := make(chan readResult, 1)
+	readStarted = true
+	go func() {
+		defer close(readJoined)
+		value, err := c.Get(id)
+		reads <- readResult{value, err}
+	}()
+	var owned []byte
+	select {
+	case result := <-reads:
+		if result.err != nil || !bytes.Equal(result.value, seed) || cap(result.value) != len(result.value) {
+			t.Fatalf("held-sync owned exact read=%x err=%v cap=%d", result.value, result.err, cap(result.value))
+		}
+		owned = result.value
+	case <-time.After(2 * time.Second):
+		t.Fatal("independent Collection.Get did not progress within 2 seconds of held physical sync")
+	}
+	select {
+	case result := <-updates:
+		t.Fatalf("update ACK overtook held physical sync: %+v", result)
+	default:
+	}
+	unblock()
+	<-updateJoined
+	result := <-updates
+	if result.err != nil || !result.matched || !result.modified {
+		t.Fatalf("released update ACK: %+v", result)
+	}
+	requireRows := func(collection *collections.Collection) {
+		t.Helper()
+		for _, row := range []struct{ id, want []byte }{{id, seed}, {otherID, next}} {
+			got, err := collection.Get(row.id)
+			if err != nil || !bytes.Equal(got, row.want) {
+				t.Fatalf("row %q=%x err=%v want=%x", row.id, got, err, row.want)
+			}
+		}
+	}
+	requireRows(c)
+	if err := database.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Close(); err != nil {
+		t.Fatal(err)
+	}
+	manager = nil
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	database = nil
+	if !bytes.Equal(owned, seed) {
+		t.Fatal("returned BSON bytes changed after read/update/checkpoint/close")
+	}
+	owned[0] ^= 0xff
+	database, err = Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend, err = database.NativeSemanticBackend()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager = collections.NewCollectionManager(backend)
+	c, err = manager.OpenCollection(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireRows(c)
+}
+
+func TestNativeCommandWALGroupIndependentBSONUpdates(t *testing.T) {
+	for _, sameCollection := range []bool{false, true} {
+		t.Run(fmt.Sprintf("sameCollection=%t", sameCollection), func(t *testing.T) { testNativeCommandWALGroupBSONUpdates(t, sameCollection) })
+	}
+}
+
+func testNativeCommandWALGroupBSONUpdates(t *testing.T, sameCollection bool) {
+	t.Setenv("TREEDB_DISABLE_VLOG_GENERATION_LOOP", "1")
+	dir := os.Getenv("GOMAP_NATIVE_SHARED_GROUP_CRASH_DIR")
+	if dir == "" {
+		dir = t.TempDir()
+	}
+	database, err := Open(indexedSliceOptions(ProfileCommandWALDurable, dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	backend, err := database.NativeSemanticBackend()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := collections.NewCollectionManager(backend)
+	defer manager.Close()
+	const waiters = 4
+	rows := make([]*collections.Collection, waiters)
+	seed, _ := bson.Marshal(bson.D{{Key: "n", Value: int32(1)}})
+	next, _ := bson.Marshal(bson.D{{Key: "n", Value: int32(2)}})
+	for i := range rows {
+		name := fmt.Sprintf("rows%d", i)
+		if sameCollection && i > 0 {
+			rows[i] = rows[0]
+			continue
+		}
+		if _, err := manager.CreateCollection(&collections.CollectionMeta{Name: name, Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}, Indexes: []collections.IndexDefinition{{Name: "n", Field: "n", ValueType: collections.IndexValueBSONOrderedV2}}}); err != nil {
+			t.Fatal(err)
+		}
+		rows[i], err = manager.OpenCollection(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids := [][]byte{[]byte("a")}
+		docs := [][]byte{seed}
+		if sameCollection {
+			ids = [][]byte{[]byte("a0"), []byte("a1"), []byte("a2"), []byte("a3")}
+			docs = [][]byte{seed, seed, seed, seed}
+		}
+		if _, err := rows[i].InsertBatch(ids, docs); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := database.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	before := database.Stats()
+	beforeLSN := backend.CommandWALNextLSN()
+	capture, err := backend.CaptureNativeSemanticState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeSequence := capture.LogicalSequence()
+	capture.Close()
+	database.commandWALGroupCommit.delay = time.Second
+	database.commandWALGroupCommit.maxCommits = waiters
+	database.commandWALGroupCommit.maxBytes = 1 << 30
+	// Registration precedes logical installation. Hold the final accepted cut
+	// before its swap so the group-size observation cannot imply installation.
+	lastInstall := make(chan struct{})
+	releaseLastInstall := make(chan struct{})
+	var releaseInstallOnce sync.Once
+	releaseInstall := func() { releaseInstallOnce.Do(func() { close(releaseLastInstall) }) }
+	defer releaseInstall()
+	var installations atomic.Int32
+	cacheRoot := filepath.Join(dir, "maindb", "wal")
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Point == durabilitycut.BeforeCOWCutSwap && event.Root == cacheRoot && installations.Add(1) == waiters {
+			close(lastInstall)
+			<-releaseLastInstall
+		}
+		return nil
+	})
+	defer restore()
+	// Registration precedes the semantic cut swap. A full WAL group alone
+	// does not prove that every native writer has finished installation.
+	// Hold completion after the producer gates release until all cuts install,
+	// then let the leader reach the shared durability barrier.
+	installed := make(chan struct{}, waiters)
+	releaseInstalled := make(chan struct{})
+	var installedOnce sync.Once
+	unblockInstalled := func() { installedOnce.Do(func() { close(releaseInstalled) }) }
+	database.commandWALGroupCommit.testBeforeNativeComplete = func() {
+		installed <- struct{}{}
+		<-releaseInstalled
+	}
+	atSync := make(chan int, 1)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	unblockSync := func() { releaseOnce.Do(func() { close(release) }) }
+	database.commandWALGroupCommit.testBeforeSync = func(n int) {
+		select {
+		case atSync <- n:
+		case <-release:
+			return
+		}
+		<-release
+	}
+	errs := make(chan error, waiters)
+	joined := make(chan struct{}, waiters)
+	defer func() {
+		releaseInstall()
+		unblockInstalled()
+		unblockSync()
+		for range waiters {
+			select {
+			case <-joined:
+			case <-time.After(5 * time.Second):
+				t.Error("native writer did not join after fixture release")
+				return
+			}
+		}
+	}()
+	for i, c := range rows {
+		go func(i int, c *collections.Collection) {
+			defer func() { joined <- struct{}{} }()
+			id := []byte("a")
+			if sameCollection {
+				id = []byte(fmt.Sprintf("a%d", i))
+			}
+			_, _, err := c.Update(id, func([]byte) ([]byte, bool, error) { return next, true, nil })
+			errs <- err
+		}(i, c)
+	}
+	select {
+	case <-lastInstall:
+	case <-time.After(5 * time.Second):
+		t.Fatal("last native installation did not reach cut swap")
+	}
+	if got := backend.CommandWALNextLSN(); got != beforeLSN+waiters {
+		t.Fatalf("independent assigned prefix=%d want%d", got, beforeLSN+waiters)
+	}
+	capture, err = backend.CaptureNativeSemanticState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	registeredSequence := capture.LogicalSequence()
+	capture.Close()
+	if registeredSequence != beforeSequence+waiters-1 {
+		t.Fatalf("installations with final cut held=%d want%d", registeredSequence, beforeSequence+waiters-1)
+	}
+	select {
+	case err := <-errs:
+		t.Fatalf("ACK before final installation and sync: %v", err)
+	default:
+	}
+	releaseInstall()
+	for range waiters {
+		select {
+		case <-installed:
+		case err := <-errs:
+			t.Fatalf("native writer returned before installation rendezvous: %v", err)
+		case <-time.After(5 * time.Second):
+			t.Fatal("native writers did not finish installation")
+		}
+	}
+	capture, err = backend.CaptureNativeSemanticState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sequence := capture.LogicalSequence()
+	capture.Close()
+	if sequence != beforeSequence+waiters {
+		t.Fatalf("independent installations=%d want%d", sequence, beforeSequence+waiters)
+	}
+	unblockInstalled()
+	select {
+	case n := <-atSync:
+		if n != waiters {
+			t.Fatalf("group size=%d want%d", n, waiters)
+		}
+	case err := <-errs:
+		t.Fatalf("native ACK escaped shared durable barrier: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("native group did not form")
+	}
+	select {
+	case err := <-errs:
+		t.Fatalf("ACK before sync: %v", err)
+	default:
+	}
+	unblockSync()
+	for range waiters {
+		select {
+		case err := <-errs:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("native ACK did not complete after sync")
+		}
+	}
+	after := database.Stats()
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.file_sync.calls_total", 1)
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.syncs_total", 1)
+	requirePublicStatDelta(t, before, after, "treedb.command_wal.group_commit.commits_total", waiters)
+	if os.Getenv("GOMAP_NATIVE_SHARED_GROUP_CRASH_DIR") != "" {
+		fmt.Printf("NATIVE GROUP ACK barrier=%d applied=%d\n", backend.CommandWALNextLSN()-1, backend.State().AppliedCommandLSN)
+		os.Exit(97)
+	}
+}
+
+func nativeCommandWALGroupFixture(t *testing.T, rotate bool) (*DB, *collections.Collection) {
+	t.Helper()
+	t.Setenv("TREEDB_DISABLE_VLOG_GENERATION_LOOP", "1")
+	opts := indexedSliceOptions(ProfileCommandWALDurable, t.TempDir())
+	if rotate {
+		opts.CommandWALSegmentTargetBytes = 1
+	}
+	database, err := Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	backend, err := database.NativeSemanticBackend()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := collections.NewCollectionManager(backend)
+	t.Cleanup(func() { _ = manager.Close() })
+	if _, err := manager.CreateCollection(&collections.CollectionMeta{Name: "rows", Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}, Indexes: []collections.IndexDefinition{{Name: "n", Field: "n", ValueType: collections.IndexValueBSONOrderedV2}}}); err != nil {
+		t.Fatal(err)
+	}
+	c, err := manager.OpenCollection("rows")
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, _ := bson.Marshal(bson.D{{Key: "n", Value: int32(1)}})
+	if _, err := c.InsertBatch([][]byte{[]byte("a"), []byte("b")}, [][]byte{doc, doc}); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	return database, c
+}
+
+func TestNativeCommandWALGroupFailurePoisonsInstalledWaiters(t *testing.T) {
+	for _, point := range []string{"dependency", "barrier-assigned"} {
+		t.Run(point, func(t *testing.T) {
+			database, c := nativeCommandWALGroupFixture(t, true)
+			database.commandWALGroupCommit.delay = time.Second
+			database.commandWALGroupCommit.maxCommits = 2
+			database.commandWALGroupCommit.maxBytes = 1 << 30
+			before := database.Stats()
+			beforeNext := database.backend.CommandWALNextLSN()
+			mainRoot := filepath.Join(database.dir, "maindb")
+			// This hook runs after installation and release of the producer gates.
+			// Rendezvous before either waiter starts the shared durability barrier.
+			installedReady := make(chan struct{})
+			var installed atomic.Int32
+			var installTimeout atomic.Bool
+			database.commandWALGroupCommit.testBeforeNativeComplete = func() {
+				if installed.Add(1) == 2 {
+					close(installedReady)
+				}
+				select {
+				case <-installedReady:
+				case <-time.After(5 * time.Second):
+					installTimeout.Store(true)
+				}
+			}
+			cutErr := errors.New("native shared durable failure")
+			var appends, dependencyCuts atomic.Int32
+			restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+				if event.Resource != durabilitycut.ResourceCommandWAL || event.Root != mainRoot {
+					return nil
+				}
+				if event.Point == durabilitycut.AfterDependencyAppend {
+					if assigned := appends.Add(1); point == "barrier-assigned" && assigned == 3 {
+						return cutErr
+					}
+				}
+				// Private reserve initialization has WAL-directory root and can
+				// precede assignment. Cut the actual retained journal dependency
+				// only after both native participants have installed.
+				if point == "dependency" && event.Point == durabilitycut.BeforeDependencyFileSync && appends.Load() == 2 && installed.Load() == 2 {
+					if event.StablePath == nil {
+						return errors.New("native group dependency has no retained physical handle")
+					}
+					dependencyCuts.Add(1)
+					return cutErr
+				}
+				return nil
+			})
+			doc, _ := bson.Marshal(bson.D{{Key: "n", Value: int32(2)}})
+			errs := make(chan error, 2)
+			var callbacks atomic.Int32
+			for _, id := range []string{"a", "b"} {
+				go func(id string) {
+					_, _, err := c.Update([]byte(id), func([]byte) ([]byte, bool, error) { callbacks.Add(1); return doc, true, nil })
+					errs <- err
+				}(id)
+			}
+			for range 2 {
+				if err := <-errs; !errors.Is(err, cutErr) || !errors.Is(err, collections.ErrCommitAmbiguous) {
+					t.Errorf("waiter error=%v want%v", err, cutErr)
+				}
+			}
+			restore()
+			database.commandWALGroupCommit.testBeforeNativeComplete = nil
+			if installTimeout.Load() || installed.Load() != 2 {
+				t.Fatalf("installed participants=%d timeout=%t", installed.Load(), installTimeout.Load())
+			}
+			if point == "dependency" && dependencyCuts.Load() != 1 {
+				t.Fatalf("installed dependency cuts=%d want1", dependencyCuts.Load())
+			}
+			if callbacks.Load() != 2 {
+				t.Fatalf("callbacks=%d want2", callbacks.Load())
+			}
+			wantNext := beforeNext + 2
+			if point == "barrier-assigned" {
+				wantNext++
+			}
+			if got := database.backend.CommandWALNextLSN(); got != wantNext {
+				t.Fatalf("assigned next=%d want%d", got, wantNext)
+			}
+			if got := publicStatUint64(t, database, "treedb.command_wal.durable_wal_lsn"); got >= beforeNext {
+				t.Fatalf("failed barrier advanced stable frontier=%d nextbefore=%d", got, beforeNext)
+			}
+			for _, id := range []string{"a", "b"} {
+				got, err := c.Get([]byte(id))
+				if err != nil || !bytes.Equal(got, doc) {
+					t.Fatalf("installed %s=%x/%v", id, got, err)
+				}
+			}
+			if _, _, err := c.Update([]byte("a"), func([]byte) ([]byte, bool, error) { t.Error("callback after poison"); return doc, true, nil }); err == nil {
+				t.Fatal("mutation after poison succeeded")
+			}
+			requirePublicStatDelta(t, before, database.Stats(), "treedb.command_wal.group_commit.errors_total", 1)
+		})
+	}
+}
+
+func TestNativeCommandWALGroupSingletonAndMaintenance(t *testing.T) {
+	for _, maintenance := range []string{"singleton", "checkpoint", "close"} {
+		t.Run(maintenance, func(t *testing.T) {
+			database, c := nativeCommandWALGroupFixture(t, false)
+			if maintenance == "singleton" {
+				before := database.Stats()
+				doc, _ := bson.Marshal(bson.D{{Key: "n", Value: int32(2)}})
+				done := make(chan error, 1)
+				go func() {
+					_, _, err := c.Update([]byte("a"), func([]byte) ([]byte, bool, error) { return doc, true, nil })
+					done <- err
+				}()
+				select {
+				case err := <-done:
+					if err != nil {
+						t.Fatal(err)
+					}
+				case <-time.After(3 * time.Second):
+					t.Fatal("singleton group timeout")
+				}
+				requirePublicStatDelta(t, before, database.Stats(), "treedb.command_wal.file_sync.calls_total", 1)
+				return
+			}
+			database.commandWALGroupCommit.delay = time.Second
+			database.commandWALGroupCommit.maxCommits = 2
+			atSync, release := make(chan struct{}), make(chan struct{})
+			var once sync.Once
+			defer once.Do(func() { close(release) })
+			database.commandWALGroupCommit.testBeforeSync = func(int) { close(atSync); <-release }
+			writes := make(chan error, 2)
+			doc, _ := bson.Marshal(bson.D{{Key: "n", Value: int32(2)}})
+			for _, id := range []string{"a", "b"} {
+				go func(id string) {
+					_, _, err := c.Update([]byte(id), func([]byte) ([]byte, bool, error) { return doc, true, nil })
+					writes <- err
+				}(id)
+			}
+			select {
+			case <-atSync:
+			case <-time.After(3 * time.Second):
+				t.Fatal("group not forming")
+			}
+			done := make(chan error, 1)
+			go func() {
+				if maintenance == "checkpoint" {
+					done <- database.Checkpoint()
+				} else {
+					done <- database.Close()
+				}
+			}()
+			select {
+			case err := <-done:
+				t.Fatalf("%s escaped forming group:%v", maintenance, err)
+			case <-time.After(20 * time.Millisecond):
+			}
+			once.Do(func() { close(release) })
+			for range 2 {
+				select {
+				case err := <-writes:
+					if err != nil {
+						t.Fatal(err)
+					}
+				case <-time.After(3 * time.Second):
+					t.Fatal("write deadlocked")
+				}
+			}
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("maintenance deadlocked")
+			}
+		})
+	}
+}
+
+func TestNativeCommandWALGroupCrashRecovery(t *testing.T) {
+	if os.Getenv("GOMAP_NATIVE_SHARED_GROUP_CRASH_DIR") != "" {
+		testNativeCommandWALGroupBSONUpdates(t, true)
+		return
+	}
+	dir := t.TempDir()
+	cmd := exec.Command(os.Args[0], "-test.run=^TestNativeCommandWALGroupCrashRecovery$", "-test.v")
+	cmd.Env = append(os.Environ(), "GOMAP_NATIVE_SHARED_GROUP_CRASH_DIR="+dir)
+	output, err := cmd.CombinedOutput()
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 97 || bytes.Contains(output, []byte("DATA RACE")) {
+		t.Fatalf("crash child:%v\n%s", err, output)
+	}
+	var barrier, basis uint64
+	for _, line := range strings.Split(string(output), "\n") {
+		if strings.HasPrefix(line, "NATIVE GROUP ACK") {
+			if _, err := fmt.Sscanf(line, "NATIVE GROUP ACK barrier=%d applied=%d", &barrier, &basis); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if barrier <= basis {
+		t.Fatalf("child did not preserve unapplied acknowledged group: %s", output)
+	}
+	database, err := Open(indexedSliceOptions(ProfileCommandWALDurable, dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	backend, err := database.NativeSemanticBackend()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := collections.NewCollectionManager(backend)
+	defer manager.Close()
+	c, err := manager.OpenCollection("rows0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, _ := bson.Marshal(bson.D{{Key: "n", Value: int32(2)}})
+	ids, err := c.FindByIndexValue("n", bson.Raw(next).Lookup("n"))
+	if err != nil || len(ids) != 4 {
+		t.Fatalf("recovered exact index=%q/%v", ids, err)
+	}
+	for _, id := range ids {
+		got, err := c.Get(id)
+		if err != nil || !bytes.Equal(got, next) {
+			t.Fatalf("recovered %s=%x/%v", id, got, err)
+		}
+	}
+	if got := backend.State().AppliedCommandLSN; got != barrier {
+		t.Fatalf("recovered applied=%d wantbarrier%d", got, barrier)
+	}
+}
+
+func TestNativeCommandWALGroupAssignedInsertFailureIsAmbiguous(t *testing.T) {
+	database, c := nativeCommandWALGroupFixture(t, false)
+	beforeNext := database.backend.CommandWALNextLSN()
+	beforeSequence := database.Stats()["treedb.cache.cow.txn.logical_seq"]
+	failure := errors.New("native insert assigned before installation")
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Resource == durabilitycut.ResourceCommandWAL && event.Point == durabilitycut.AfterDependencyAppend {
+			return failure
+		}
+		return nil
+	})
+	doc, _ := bson.Marshal(bson.D{{Key: "n", Value: int32(3)}})
+	_, err := c.InsertBatch([][]byte{[]byte("assigned")}, [][]byte{doc})
+	restore()
+	if !errors.Is(err, failure) || !errors.Is(err, collections.ErrCommitAmbiguous) {
+		t.Fatalf("assigned insert error=%v", err)
+	}
+	if database.backend.CommandWALNextLSN() != beforeNext+1 || database.Stats()["treedb.cache.cow.txn.logical_seq"] != beforeSequence {
+		t.Fatal("assigned failure lost original identity or installed a logical successor")
+	}
+	if got, err := c.Get([]byte("assigned")); err != nil || got != nil {
+		t.Fatalf("failed uninstalled insert=%x/%v", got, err)
+	}
+	if _, err := c.InsertBatch([][]byte{[]byte("retry")}, [][]byte{doc}); err == nil {
+		t.Fatal("assigned failure left handle usable")
+	}
+}

@@ -1,0 +1,34 @@
+{
+  "command": [
+    "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.10.linux-amd64/bin/go",
+    "test",
+    "-c",
+    "-p=1",
+    "-gcflags=all=-c=1",
+    "-mod=readonly",
+    "-trimpath",
+    "-buildvcs=false",
+    "-o",
+    "../evidence/held-sync/TreeDB.test",
+    "./TreeDB"
+  ],
+  "cwd": "/home/mikers/gomap-mongo-performance-exec-20261031-5z3yyej9/repo",
+  "start_unix": 1793428134.284903,
+  "floor": 8589934592,
+  "packet_cap": 2147483648,
+  "guard_reserve": 67108864,
+  "environment": {
+    "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.10.linux-amd64",
+    "GOTOOLDIR": null,
+    "GOWORK": "off",
+    "GOENV": "off",
+    "GOPROXY": "off",
+    "GOSUMDB": "off",
+    "GOTOOLCHAIN": "local",
+    "GOCACHE": "/home/mikers/gomap-mongo-performance-exec-20261031-5z3yyej9/cache/held-sync",
+    "TMPDIR": "/home/mikers/gomap-mongo-performance-exec-20261031-5z3yyej9/tmp/held-sync",
+    "GOMAXPROCS": null
+  },
+  "free_start": 9806061568,
+  "packet_start": 132796416
+}

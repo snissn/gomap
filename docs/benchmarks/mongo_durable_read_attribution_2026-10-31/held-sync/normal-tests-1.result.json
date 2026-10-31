@@ -1,0 +1,35 @@
+{
+  "command": [
+    "/home/mikers/gomap-mongo-performance-exec-20261031-5z3yyej9/evidence/held-sync/TreeDB.test",
+    "-test.v",
+    "-test.timeout=120s",
+    "-test.run=^(TestNativeCommandWALHeldPhysicalSyncAllowsIndependentBSONRead|TestNativeCommandWALGroupIndependentBSONUpdates|TestNativeCommandWALGroupFailurePoisonsInstalledWaiters|TestNativeCommandWALGroupSingletonAndMaintenance|TestNativeCommandWALGroupCrashRecovery|TestPublicCommandWALIdleFusionHeldSyncAdmitsSuccessorAndBlocksClose)$"
+  ],
+  "cwd": "/home/mikers/gomap-mongo-performance-exec-20261031-5z3yyej9/repo",
+  "start_unix": 1793428264.052739,
+  "floor": 8589934592,
+  "packet_cap": 2147483648,
+  "guard_reserve": 67108864,
+  "environment": {
+    "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.10.linux-amd64",
+    "GOTOOLDIR": null,
+    "GOWORK": "off",
+    "GOENV": "off",
+    "GOPROXY": "off",
+    "GOSUMDB": "off",
+    "GOTOOLCHAIN": "local",
+    "GOCACHE": "/home/mikers/gomap-mongo-performance-exec-20261031-5z3yyej9/cache/held-sync",
+    "TMPDIR": "/home/mikers/gomap-mongo-performance-exec-20261031-5z3yyej9/tmp/held-sync",
+    "GOMAXPROCS": null
+  },
+  "free_start": 9264214016,
+  "packet_start": 636145664,
+  "pid": 2039619,
+  "exit": 0,
+  "stop_reason": null,
+  "elapsed": 5.045285701751709,
+  "free_low": 9246855168,
+  "packet_high": 653094912,
+  "free_end": 9263804416,
+  "packet_end": 636174336
+}

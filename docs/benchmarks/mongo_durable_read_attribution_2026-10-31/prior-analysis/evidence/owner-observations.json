@@ -1,0 +1,139 @@
+{
+  "source": "8bea490ad5a2d89a14f02f428b4283579a6dd864",
+  "elf_sha256": "35409b3e8a34e9af8cd578ac00ef72cb0d721abbcccfd9437eab67e050df4ee4",
+  "samples": [
+    {
+      "cell": "durable-B-pair1-gomap",
+      "profile": "command_wal_durable",
+      "scope": "whole original owner: setup, load, census, mixed run, and other untimed work; no timed-run delta available",
+      "observations": {
+        "open": {
+          "treedb.command_wal.file_sync.calls_total": 0,
+          "treedb.command_wal.file_sync.ns_total": 0,
+          "treedb.command_wal.group_commit.group_size_max": 0,
+          "treedb.command_wal.group_commit.groups_total": 0,
+          "treedb.command_wal.group_commit.participants_total": 0
+        },
+        "before-close": {
+          "treedb.command_wal.file_sync.calls_total": 12704,
+          "treedb.command_wal.file_sync.ns_total": 40868116268,
+          "treedb.command_wal.group_commit.group_size_max": 1,
+          "treedb.command_wal.group_commit.groups_total": 12680,
+          "treedb.command_wal.group_commit.participants_total": 12680
+        }
+      },
+      "observed_state_preserved": true
+    },
+    {
+      "cell": "durable-B-pair2-gomap",
+      "profile": "command_wal_durable",
+      "scope": "whole original owner: setup, load, census, mixed run, and other untimed work; no timed-run delta available",
+      "observations": {
+        "open": {
+          "treedb.command_wal.file_sync.calls_total": 0,
+          "treedb.command_wal.file_sync.ns_total": 0,
+          "treedb.command_wal.group_commit.group_size_max": 0,
+          "treedb.command_wal.group_commit.groups_total": 0,
+          "treedb.command_wal.group_commit.participants_total": 0
+        },
+        "before-close": {
+          "treedb.command_wal.file_sync.calls_total": 12694,
+          "treedb.command_wal.file_sync.ns_total": 41005701615,
+          "treedb.command_wal.group_commit.group_size_max": 1,
+          "treedb.command_wal.group_commit.groups_total": 12670,
+          "treedb.command_wal.group_commit.participants_total": 12670
+        }
+      },
+      "observed_state_preserved": true
+    },
+    {
+      "cell": "durable-B-pair3-gomap",
+      "profile": "command_wal_durable",
+      "scope": "whole original owner: setup, load, census, mixed run, and other untimed work; no timed-run delta available",
+      "observations": {
+        "open": {
+          "treedb.command_wal.file_sync.calls_total": 0,
+          "treedb.command_wal.file_sync.ns_total": 0,
+          "treedb.command_wal.group_commit.group_size_max": 0,
+          "treedb.command_wal.group_commit.groups_total": 0,
+          "treedb.command_wal.group_commit.participants_total": 0
+        },
+        "before-close": {
+          "treedb.command_wal.file_sync.calls_total": 12702,
+          "treedb.command_wal.file_sync.ns_total": 40723597607,
+          "treedb.command_wal.group_commit.group_size_max": 1,
+          "treedb.command_wal.group_commit.groups_total": 12678,
+          "treedb.command_wal.group_commit.participants_total": 12678
+        }
+      },
+      "observed_state_preserved": true
+    },
+    {
+      "cell": "relaxed-pair1-gomap",
+      "profile": "command_wal_relaxed",
+      "scope": "whole original owner: setup, load, census, mixed run, and other untimed work; no timed-run delta available",
+      "observations": {
+        "open": {
+          "treedb.command_wal.file_sync.calls_total": 0,
+          "treedb.command_wal.file_sync.ns_total": 0,
+          "treedb.command_wal.group_commit.group_size_max": 0,
+          "treedb.command_wal.group_commit.groups_total": 0,
+          "treedb.command_wal.group_commit.participants_total": 0
+        },
+        "before-close": {
+          "treedb.command_wal.file_sync.calls_total": 18,
+          "treedb.command_wal.file_sync.ns_total": 164439852,
+          "treedb.command_wal.group_commit.group_size_max": 0,
+          "treedb.command_wal.group_commit.groups_total": 0,
+          "treedb.command_wal.group_commit.participants_total": 0
+        }
+      },
+      "observed_state_preserved": true
+    },
+    {
+      "cell": "relaxed-pair2-gomap",
+      "profile": "command_wal_relaxed",
+      "scope": "whole original owner: setup, load, census, mixed run, and other untimed work; no timed-run delta available",
+      "observations": {
+        "open": {
+          "treedb.command_wal.file_sync.calls_total": 0,
+          "treedb.command_wal.file_sync.ns_total": 0,
+          "treedb.command_wal.group_commit.group_size_max": 0,
+          "treedb.command_wal.group_commit.groups_total": 0,
+          "treedb.command_wal.group_commit.participants_total": 0
+        },
+        "before-close": {
+          "treedb.command_wal.file_sync.calls_total": 18,
+          "treedb.command_wal.file_sync.ns_total": 150480560,
+          "treedb.command_wal.group_commit.group_size_max": 0,
+          "treedb.command_wal.group_commit.groups_total": 0,
+          "treedb.command_wal.group_commit.participants_total": 0
+        }
+      },
+      "observed_state_preserved": true
+    },
+    {
+      "cell": "relaxed-pair3-gomap",
+      "profile": "command_wal_relaxed",
+      "scope": "whole original owner: setup, load, census, mixed run, and other untimed work; no timed-run delta available",
+      "observations": {
+        "open": {
+          "treedb.command_wal.file_sync.calls_total": 0,
+          "treedb.command_wal.file_sync.ns_total": 0,
+          "treedb.command_wal.group_commit.group_size_max": 0,
+          "treedb.command_wal.group_commit.groups_total": 0,
+          "treedb.command_wal.group_commit.participants_total": 0
+        },
+        "before-close": {
+          "treedb.command_wal.file_sync.calls_total": 18,
+          "treedb.command_wal.file_sync.ns_total": 143311232,
+          "treedb.command_wal.group_commit.group_size_max": 0,
+          "treedb.command_wal.group_commit.groups_total": 0,
+          "treedb.command_wal.group_commit.participants_total": 0
+        }
+      },
+      "observed_state_preserved": true
+    }
+  ],
+  "claim_limit": "Counters are not per-phase. Sync time may overlap other work and is not additive wall time. Singleton observed groups do not prove that batching is safe, absent, or useful for the timed mixed workload. Reopen evidence is clean observed-state preservation, not crash certification."
+}

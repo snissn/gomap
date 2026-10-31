@@ -1,0 +1,19 @@
+{
+  "head": "95c6ff3de473786bd98b692375cfdb9cef951668",
+  "source_sha256": "e388a86d51df6339af6ce55e1170d7a44970ca125dfa75ed007b9fa558ac40bf",
+  "unchanged_since_normal": true,
+  "toolchain_env": {
+    "CC": "gcc",
+    "CGO_ENABLED": "1",
+    "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.10.linux-amd64",
+    "GOTOOLDIR": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.10.linux-amd64/pkg/tool/linux_amd64",
+    "GOVERSION": "go1.26.10"
+  },
+  "compiler": "compile version go1.26.10",
+  "go_sha256": "9c2a37ae5b21ba1d5a004bb9ab4d0c64de6fc5778e9d30487adccea62678b8b5",
+  "compile_sha256": "b426da26640e8069dc35162c9900496d9a03bea90bf771236067fb8cae86d285",
+  "guard_sha256": "24ccea135935db3156fdc8fe29292b4702f1c5139b910bad69c988f6ecf4d7ee",
+  "sealed_normal_manifest_sha256": "1bafddd64fea35800fcf489d3710eef7f1a29f6528021250472015af2596aa6e",
+  "free_start": 9579671552,
+  "no_source_edits": true
+}
