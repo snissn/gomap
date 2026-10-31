@@ -139,8 +139,12 @@ limits or public query options.
 `TestOrdinaryColumnGraphNativeColdHybrid4096` covers the maintained durable
 4096-document, fixed-128 request geometry and the first mixed request after clean
 reopen, without a preceding ANN warm-up. It also checks retained pack reuse and
-stable cold/warm ranks on the same unchanged cut. This correctness control does
-not qualify concurrent ingestion, performance or power-loss recovery.
+stable cold/warm ranks on the same unchanged cut. Every acknowledged document,
+including its vector and metadata, is compared with the retained public input
+after Optimize, an explicit checkpoint and fresh reopen. These full-content
+checks preserve the original first Optimize and first cold Hybrid request order.
+This correctness control does not qualify concurrent ingestion, performance or
+power-loss recovery.
 
 Ordinary native V2 Keyword requests with a finite primitive scalar prefilter and
 no vector source may reuse a composite derived entry on the existing immutable
@@ -267,10 +271,10 @@ Linux race. These results qualify those controls on that candidate; they do not
 explain the historical failure or qualify later production changes. The original
 RED and the historical incident's causal closure obligation remain retained.
 
-### Prospective cause-isolation controls for #5338 and #5339
+### Controlled owner cleanup for #5339
 
-Both retained exact7fab CI failures remain unattributed. The following controls
-are hypotheses to test, not repairs or permission to relax any original gate.
+The retained exact7fab scalar-forward CI failure remains unattributed. The
+following control tests one mechanism; it does not relax the original gate.
 
 For #5339, `TestCOWSemanticRefundChangesAdmissionAfterFullSnapshot` uses the
 maintained caching fixture, the actual budget, intrusive semantic cleanup queue,
@@ -286,59 +290,87 @@ mechanism control, not the public scalar fixture and not a reproduction of its
 unobserved cleanup timing. The controlled worker invokes the production drain
 routine in the existing unit fixture; it is not the public DB's flushLoop.
 
-For #5338, a valid stale-recipe witness must cross the real accepted publication
-and physical handoff, rather than instantiate arbitrary root numbers. The source
-chain to examine is:
+### Accepted ordinary graph across a captured prefix (#5338)
 
-1. `nativeRebuildVectorGraph` binds `recipe.sourceRoot` from the captured
-   `column/manifest.baseRoot` and publishes the ordinary graph recipe on the
-   original typed primary stream with a real assigned LSN.
-2. `prepareTypedForCompaction` captures its input manifest root and exact typed
-   delta set before materialization.
-3. `prepareNativeDomainHandoff` advances each touched base to the old captured
-   build result; `cloneNativeTypedSuffix` preserves newer delta `data` and its
-   original recipe/receipts.
-4. `materializeOrdinaryVectorGraph` requires recipe sourceRoot to match its
-   input manifest root before any graph output. This guard must remain intact.
+An ordinary graph may be accepted while an older captured typed prefix is still
+being materialized. Its recipe describes the complete logical input, including
+that pending prefix, and initially binds the captured `column/manifest` root.
+The original physical handoff advances that manifest and removes only its exact
+captured prefix. The graph remains in the newer typed suffix. Preserving only the
+recipe's original physical root across this handoff makes the later graph build
+reject a logically unchanged source. The accepted command must not be rebuilt or
+assigned again to hide that failure.
 
-The maintained asset-after-prepare hook can pause a real older physical build;
-existing DDL handoff tests demonstrate ordinary mutations during that hold. That
-alone does NOT prove the required newer graph suffix was accepted. The graph
-singleton requests an exact seal: CommitNative logically publishes before its
-post-progress-gate Checkpoint/Seal.Wait, so synchronously waiting for
-RebuildVectorIndex while holding the older build can deadlock the witness. The
-existing typed-upsert after-install hook is specific to grouped typed upserts;
-it does not observe this singleton graph publication. No existing singleton
-post-install notification was demonstrated during this source pass. Do not use
-that unrelated hook, arbitrary sleeps, repeated capture polling, a fabricated
-LSN/root or direct recipe mutation as evidence of an accepted overlapping graph.
+Each typed graph delta now has a private `graphSourceRoot` header, initially equal
+to the immutable recipe's original `sourceRoot`. The ordinary-prefix handoff may
+advance this header only on the already-owned cloned suffix. It authenticates
+the primary and manifest results from the same original build, the exact
+collection incarnation, manifest interpretation/catalog/base roots, recipe
+schema and source options, and the header's old basis. General physical
+compaction that rewrites previously physical sources is outside this proof and
+does not gain permission to advance the graph header.
 
-A prospective valid public control therefore needs a reviewed nonblocking
-notification at the singleton's existing accepted-publication boundary (outside
-locks needed by the held build), or another demonstrated existing equivalent.
-It must expose only observation, never replacement publication or cleanup
-control. Before releasing the old build, assert all witness prerequisites: exact
-collection incarnation/schema, old manifest root, immutable captured boundary,
-a real nonzero newer assigned LSN, recipe bound to that old root, and actual
-newer primary suffix absent the captured set. If acceptance cannot overlap or a
-prerequisite is missing, fail as INVALID_WITNESS, not as the suspected bug.
+The original typed producer records a fixed-size census of the ordinal and
+vector codec policies selected for its prepared images. The same original build
+carries this census to handoff. These are the actual prepared producer policies,
+not a claim that every stored section uses compression: a producer can emit an
+uncompressed fallback. A graph with an exact pending-source codec promise accepts
+only policies within that promise; mixed policies cannot collapse into a falsely
+compatible single value. A conservative original promise retains its existing
+decoder capacity. No document rows or assets are inspected again at handoff, and
+no replacement admission receipt, graph constructor or source backing is created.
+The recipe, typed row backing, assigned LSN/member ordering and build-capacity
+receipt stay unchanged. Held captures retain their original header and recipe.
 
-After releasing and joining the old original build, capture the actual handoff
-successor and record new manifest base, retained graph recipe root/LSN, original
-resource identities and held-cut immutability. Only a changed manifest base with
-that accepted retained recipe can witness the hypothesized stale basis. A
-subsequent original materialization should succeed without authority changes;
-a diagnosed stale-basis refusal then establishes that bounded causal sequence,
-not retrospectively the exact7fab incident. The negative control holds all data
-and APIs fixed but seals the old build before publishing the graph marker; it
-must not produce the stale relationship and must complete maintenance/Close.
-A no-root-change overlap is a second negative witness. All original graph,
-Optimize, cleanup and crash/resource assertions remain required.
+`materializeOrdinaryVectorGraph` still checks the authenticated effective source
+root against the build's input manifest root before graph output. Diagnostics
+report both original recipe and effective header roots. Successors must continue
+to preserve the original constructor promise until its graph finishes; advancing
+a header does not end the pending-source allowance when those sources become
+physical.
 
-No #5338 concurrency control or new production hook is implemented here because
-its accepted-publication observation/lock contract is not yet demonstrated. The
-existing synthetic stale-basis diagnostic test remains only guard coverage. Gate
-before authoring that control: independent source review of the exact callback
-location, lock/lease lifetime and bounded shutdown, then authored positive and
-negative witnesses without replacing public tests. Gate before a repair: execute
-the valid witness and separately retain the exact original failure evidence.
+A physical handoff can also happen during recipe preparation, before command
+assignment. Final publication preparation checks the original document
+generation and physical basis. A real logical change remains a conflict. An
+exclusive physical-basis stale result may refresh preparation once, after the
+first transaction has fully released its input, only when no LSN was assigned,
+no publication was accepted or installed, and the result is not uncertain or
+ambiguous. Joined cleanup failures remain visible and prohibit this refresh.
+Accepted-command and partially materialized failures retain the original
+terminal error and recovery-required behavior.
+
+`TestNativeOrdinaryGraphPreassignmentSourceChangesHaveNoEffect` stages through
+the original graph census, admission and canonical command payload, then uses a
+real public checkpoint or row insertion to change the captured source before
+commit. It checks the original refusal has no command assignment, uncertainty,
+logical installation, accepted marker or WAL-sequence advance, and preserves the
+original recipe and all rows. A fresh public rebuild follows complete release
+of the refused transaction. This control does not directly schedule the
+automatic wrapper's second attempt; that bounded retry policy is source-reviewed.
+
+`TestNativeOrdinaryGraphAcceptedAcrossCapturedManifestBuild` crosses these real
+public boundaries. The maintained asset-after-prepare hook holds the original
+older build; a nonblocking, root-filtered test observer records the singleton's
+existing accepted-publication event and real assigned LSN. The observer cannot
+replace publication, pause the engine or direct cleanup. The witness checks the
+exact schema/incarnation, captured boundary, original recipe basis and actual
+newer suffix before releasing the build. Missing prerequisites or timeouts fail
+as `INVALID_WITNESS`; sleeps, polling, fabricated roots and direct recipe
+mutation do not establish acceptance.
+
+The changed-manifest case requires an actual old-to-new base transition and
+checks unchanged held cuts, original resource identities, every acknowledged
+row, successful original graph completion, checked Close and fresh reopen. Its
+sequential and unchanged-manifest controls keep the same public data and APIs.
+The process-exit variant stops after the acknowledged graph seal, before an
+extra checkpoint or owner Close, then verifies the exact acknowledged manifest
+identity and all documents in a fresh owner. It covers process recovery, not
+power loss. The original 4096/128 service and cold-Hybrid controls remain
+independent requirements. Source-bound execution records must distinguish this
+captured-prefix mechanism from the retained exact7fab/#5332 incident, whose
+original refusing guard was not recorded and remains unattributed.
+
+The [#5338 evidence record](../evidence/native-columngraph-handoff-5338/README.md)
+binds the controlled RED/GREEN, independent reviews, lifecycle measurements and
+original validation failures to the tested source. It distinguishes the repaired
+handoff from the historical incident and retains incomplete or failing gates.
