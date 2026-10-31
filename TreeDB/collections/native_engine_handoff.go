@@ -18,6 +18,7 @@ type nativeBuiltDomain struct {
 	boundary                          *memtable.COWRoot
 	typedBoundary                     *nativeTypedDelta
 	typedMeta                         *CollectionMeta
+	ordinaryGraphSourceCodecs         nativeOrdinaryGraphSourceCodecs
 	// empty proves the captured descriptor had no pending physical source.
 	// Its unchanged root cannot consume any newer source in latest.
 	empty bool
@@ -152,6 +153,11 @@ func prepareNativeEngineHandoffWithCatalog(latest *nativeEngineVersion, built []
 			if e != nil {
 				return next, e
 			}
+			if result.name == "primary" && current.interpretation == result.interpretation {
+				if e = prepareNativeOrdinaryGraphHandoff(c, built[start:end], result, domain); e != nil {
+					return next, e
+				}
+			}
 			if err = p.domainBuilder.Set(result.name, domain); err != nil {
 				return next, err
 			}
@@ -243,6 +249,52 @@ func prepareNativeEngineHandoffWithCatalog(latest *nativeEngineVersion, built []
 	next.pending = p.pending.Seal()
 	p.pending = nil
 	return next, nil
+}
+
+// A graph admitted against a pending prefix keeps that prefix's full source
+// promise after it becomes physical. Authenticate the paired manifest result
+// from this SAME build before advancing the already-owned private headers.
+// No recipe, shared vector backing, logical identity or capacity is replaced.
+func prepareNativeOrdinaryGraphHandoff(c *nativeCollectionState, built []nativeBuiltDomain, primary *nativeBuiltDomain, successor *nativeDomainState) error {
+	var manifest *nativeBuiltDomain
+	for d := successor.typed; d != nil; d = d.previous {
+		if d.data == nil || d.data.graph == nil || !d.data.graph.ordinary {
+			continue
+		}
+		if manifest == nil {
+			for i := range built {
+				if built[i].name == "column/manifest" && built[i].collection == primary.collection {
+					manifest = &built[i]
+					break
+				}
+			}
+			if manifest == nil || primary.collection != c.incarnation || primary.typedMeta == nil || manifest.typedMeta != primary.typedMeta {
+				return backenddb.ErrRootPublicationBasisMismatch
+			}
+			current, ok := c.domains.Get("column/manifest")
+			if !ok || current.interpretation != manifest.interpretation || current.catalogRoot != manifest.oldCatalogRoot || current.baseRoot != manifest.oldBaseRoot {
+				return backenddb.ErrRootPublicationBasisMismatch
+			}
+		}
+		recipe := d.data.graph
+		if d.graphSourceRoot != manifest.oldBaseRoot || recipe.schema == nil || recipe.schema.meta == nil || !nativeOrdinaryGraphPendingSourceMetaEqual(*primary.typedMeta, *recipe.schema.meta) {
+			return backenddb.ErrRootPublicationBasisMismatch
+		}
+		// General physical maintenance may rewrite previously physical assets
+		// outside the recipe's pending-source allowance. It needs a separate
+		// capacity proof; this successor covers captured typed prefixes only.
+		if manifest.root != manifest.oldBaseRoot && (primary.physicalOnly || manifest.physicalOnly) {
+			return backenddb.ErrRootPublicationBasisMismatch
+		}
+		if recipe.pendingSourceCodec != 0 {
+			promised := recipe.pendingSourceCodec.sourceCodecs()
+			if promised == 0 || manifest.ordinaryGraphSourceCodecs & ^promised != 0 {
+				return backenddb.ErrRootPublicationBasisMismatch
+			}
+		}
+		d.graphSourceRoot = manifest.root
+	}
+	return nil
 }
 
 // prepareNativeDomainHandoff adopts every partial into its returned descriptor

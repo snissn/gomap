@@ -1,0 +1,157 @@
+{
+  "reviewed_at_utc": "2026-10-30T19:21:16+00:00",
+  "authenticated_source_commit": "9cd7557fb705b07261b801a2f42aa90dee4ce171",
+  "authenticated_source_tree": "dff272aeed265395770cb6eba7b17eeb6463618b",
+  "source_identity_provenance": "commit/tree supplied from the authenticated GitHub adapter; local staged tree checked for equality",
+  "local_head": "d7db5409e20412f4dac4e1a3f902484b05e014e1",
+  "local_head_tree": "39a87e47f3740e4056f25196da54a9f4e35eb159",
+  "freeze_path": "/workspace/scratch/0d9ab3f5d72e/evidence/lifecycle-source-freeze.json",
+  "freeze_sha256": "0e037265f65d222e4a353ccbc51d2c2fe7403b5a8474deb2c87869f962512476",
+  "all_files_match_source_freeze": true,
+  "files": [
+    {
+      "path": "TreeDB/bg_vacuum.go",
+      "sha256": "b6cc55f92db275cf82a3a056eb2cd717bd257bd1a610cbc1c9a96a54060f644a",
+      "git_blob": "8ffe30d703002610198f8ada872bc6485928e94b",
+      "role": "production"
+    },
+    {
+      "path": "TreeDB/caching/db.go",
+      "sha256": "ff6bd9f577406da97a0e5f58be2c0ebe678e322b6d1a007c4fc8e901ee58fc1e",
+      "git_blob": "c036e4f7e973421d4bbeb74773c0404945f3c8a4",
+      "role": "production"
+    },
+    {
+      "path": "TreeDB/collections/api.go",
+      "sha256": "a73d03da5c5fa89a9c1233ba208fd4f5525b72dd4d8049802040af2bdeb80488",
+      "git_blob": "bff9ede011fc27356764452c5cd13a554f4a21d8",
+      "role": "production"
+    },
+    {
+      "path": "TreeDB/collections/native_engine_handoff.go",
+      "sha256": "a5e12c54978ce61bb158977ef94c259d2948d9be6e81ba6a3fdc8c40c87e4e06",
+      "git_blob": "c9ca0251c372cdfcb706b6488dfb64584cc48ebc",
+      "role": "production"
+    },
+    {
+      "path": "TreeDB/collections/native_existing.go",
+      "sha256": "4666a091ef3aeecdaaa2a8c6ea09bfd264970245d6661f2fdae6af462ffebadc",
+      "git_blob": "652bc8c80dcc84cef875585ec50080b87c25d051",
+      "role": "production"
+    },
+    {
+      "path": "TreeDB/collections/native_json_insert.go",
+      "sha256": "d9e1a78a7e20a99a7c012317808c5620049e8eb7436a9814ea4a858392571cdb",
+      "git_blob": "9c2ee9c3bc5f439cc5ef60106d5d5702b49ac8b5",
+      "role": "production"
+    },
+    {
+      "path": "TreeDB/collections/native_json_txn.go",
+      "sha256": "2afe184c2499b89a513cd0195da063ba9ead4d450f811b6aef2236fd7577ffc1",
+      "git_blob": "1f2c7270f56537586b96800fb0d3ce5fb0c16e72",
+      "role": "production"
+    },
+    {
+      "path": "TreeDB/collections/native_vector_graph.go",
+      "sha256": "31d10fb38ac11f4da8bc4d0c92cf3afe9538c510a1048b5f7fbba3eb858d4e80",
+      "git_blob": "218cfb9fd82c66ab02550f1ce7a64eeb75f1da2b",
+      "role": "production"
+    },
+    {
+      "path": "TreeDB/collections/vector_index_ops.go",
+      "sha256": "d463c7cfa349d3f2d10d7397687cbdc28e2b392cf52f1879c6b00c2ef20759a0",
+      "git_blob": "fe97413648cb896940155f2cadde242689c359b5",
+      "role": "production"
+    },
+    {
+      "path": "TreeDB/db/db.go",
+      "sha256": "86af0719b00435b6161582fb7bb699b3955fdd4d0478267e9d437910e487f927",
+      "git_blob": "06f27d153fb60fb7d0841b9f18e2624c3b7f12f3",
+      "role": "production"
+    },
+    {
+      "path": "TreeDB/documentservice/errors.go",
+      "sha256": "8537703ab2d5025f210867a5bac2275128a0b142ee66046508ec3338add80836",
+      "git_blob": "aeea1a60373a37dd83badd0c2d03615de9b07a81",
+      "role": "production"
+    },
+    {
+      "path": "TreeDB/documentservice/http.go",
+      "sha256": "177f6ea3e0df94cef36612b8bdebcbae722847a740534d4e339ec81aacbe661d",
+      "git_blob": "875737442756c1afbcdefc179733b1e7efe2ef0a",
+      "role": "production"
+    },
+    {
+      "path": "TreeDB/documentservice/ordinary_columngraph_native_close_failure_test.go",
+      "sha256": "75b3679ee641450bfb686e3a0c2f4664286b0c343c938d27a3daf5c40c0e7e02",
+      "git_blob": "43694aed411dc6af33782570cd96f26a7063c1b0",
+      "role": "test-source-inspection-only"
+    },
+    {
+      "path": "TreeDB/documentservice/ordinary_columngraph_native_cold_hybrid_test.go",
+      "sha256": "ffe26bc32d180d35b8cdd54b5aaf2533cb1a8aa0c9186b3d164012b730198eb4",
+      "git_blob": "57760f150f8fd558e9e3436c2a55d61bbf584e54",
+      "role": "test-source-inspection-only"
+    },
+    {
+      "path": "TreeDB/documentservice/service.go",
+      "sha256": "901f5d8b0c44a12ad37540a9437adee5cda454e1da38c323176b4e3bda4d202b",
+      "git_blob": "69c67103f6a94158e4e74452cfdd04218966ffe0",
+      "role": "production"
+    },
+    {
+      "path": "TreeDB/documentservice/typed_input.go",
+      "sha256": "bbbc41f3cbf92b13d0d4585db577e70eafefd25c034694fb69be88aee33789dd",
+      "git_blob": "33ff89c11e347fc2012ccdcdeb142398b70efe41",
+      "role": "production"
+    },
+    {
+      "path": "TreeDB/nativewire/errors.go",
+      "sha256": "8fa8394a110ec2d98fed7769b395044536c01a34a389e4499b36befdb6f0d249",
+      "git_blob": "8944e9aec8c5a1b65aa75726daa37ea9e8f0bd9b",
+      "role": "production"
+    },
+    {
+      "path": "TreeDB/nativewire/fixed_peer_vector_runtime_v1.go",
+      "sha256": "ba090b5a40b2b8687301714689fa0542ea361a0289013fa10b6e4b9d162ccaa8",
+      "git_blob": "a3d55d6ed2e9698355e2a9f99f39168b07d1a868",
+      "role": "production"
+    },
+    {
+      "path": "TreeDB/nativewire/metadata.go",
+      "sha256": "f46bdb564a8d04ec6083eeaf799c5dfd5221528ad8b056c303067365b6e48baf",
+      "git_blob": "7c363730dad7d5962feddc1537673f2393cc89e1",
+      "role": "production"
+    },
+    {
+      "path": "TreeDB/nativewire/server.go",
+      "sha256": "2c6192768aea2357be504ad15a2b5f331fc4d1c4da5047f716df7283a55e69dd",
+      "git_blob": "9e4bc7012929512f68b5d40bcc96cc8ddb6d4cfe",
+      "role": "production"
+    },
+    {
+      "path": "TreeDB/nativewire/server_insert_combiner.go",
+      "sha256": "52aab207e0a44b346bd1f93c8147361f46261bf7a8e34e185117fac3480a2ed6",
+      "git_blob": "c93ee56b5304099269a9b26e2c4465454e8dde4e",
+      "role": "production"
+    },
+    {
+      "path": "TreeDB/nativewire/server_mutation.go",
+      "sha256": "cce549de17df94b2197c0e7945db52a5c60dcf47d92f98f99a8595b9c066fd53",
+      "git_blob": "0cc780568b8316844c4553c3dc5d30c77117e76e",
+      "role": "production"
+    },
+    {
+      "path": "TreeDB/nativewire/vector_partition_public_backend_v1.go",
+      "sha256": "0085c25ba4428250ab189115a255fd177b4df13e4e4e3c8366dcb39dc607b8c9",
+      "git_blob": "78b7300bfaacff1b1ced535010b5a747c673eeea",
+      "role": "production"
+    },
+    {
+      "path": "TreeDB/public.go",
+      "sha256": "237112a0a3807722db97edf547c8495801f4ee5e8d245a063b39c96d5e2691fb",
+      "git_blob": "6c28f354b96da19e3c21ed48dc2a5842e1ec90d5",
+      "role": "production"
+    }
+  ]
+}

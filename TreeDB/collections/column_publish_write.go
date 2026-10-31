@@ -1464,6 +1464,7 @@ func (context columnPhysicalAssetBuildContext) prepareAssets(input columnWritePu
 
 func mergeSourceColumnPreparedAssets(deleted, inserted ColumnPublishPreparedAssets) (ColumnPublishPreparedAssets, error) {
 	merged := inserted
+	merged.ordinaryGraphSourceCodecs |= deleted.ordinaryGraphSourceCodecs
 	if len(deleted.ownedSegmentFileIDs) != 0 {
 		if merged.ownedSegmentFileIDs == nil {
 			merged.ownedSegmentFileIDs = make(map[uint32]struct{}, len(deleted.ownedSegmentFileIDs))
@@ -2021,6 +2022,9 @@ func (context columnPhysicalAssetBuildContext) prepareRows(prepared ColumnPublis
 		typedColumnImage := typedColumn.build.Bytes
 		typedColumnRows := typedColumn.build.Rows
 		if len(typedColumnImage) != 0 {
+			// The producer goroutine has joined. Preserve every actual source
+			// codec on this same result without retaining its prepared inputs.
+			prepared.ordinaryGraphSourceCodecs |= typedColumn.build.ordinaryGraphSourceCodecs
 			typedColumnPostStart := time.Now()
 			typedColumnSortKey, err := typedColumnPartPublicationSortKey(hookInput.ColumnStore, columnStoreTypedColumnPartFields(hookInput.ColumnStore))
 			if err != nil {

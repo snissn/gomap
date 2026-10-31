@@ -164,7 +164,10 @@ type ColumnPublishPreparedAssets struct {
 	AssetMetrics            ColumnPublishAssetPreparationMetrics
 	stableResources         *rootpublication.StableResourceSet
 	stableResourcesRequired bool
-	ownedSegmentFileIDs     map[uint32]struct{}
+	// Actual ordinary source codecs join the original physical result; this
+	// scalar is not a manifest field or a second resource owner.
+	ordinaryGraphSourceCodecs nativeOrdinaryGraphSourceCodecs
+	ownedSegmentFileIDs       map[uint32]struct{}
 }
 
 // ColumnPublishManifestEncodeInput is passed to the manifest encoding stage.

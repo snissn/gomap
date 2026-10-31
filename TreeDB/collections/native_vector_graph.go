@@ -26,21 +26,86 @@ import (
 // engine. Source completion and the catalog point dependency bind its physical
 // basis before assignment. The original build executes it after assignment.
 type nativeVectorGraphRecipe struct {
-	schema              *nativeSchemaState
-	def                 VectorIndexDefinition
-	identity            ColumnManifestIdentity
-	digest              [32]byte
-	rows                uint64
-	ordinary            bool
-	sourceRoot          uint64
-	constructionWorkers int
-	pendingSourceCodec  nativeOrdinaryGraphPendingCodec
+	schema                   *nativeSchemaState
+	def                      VectorIndexDefinition
+	identity                 ColumnManifestIdentity
+	digest                   [32]byte
+	rows                     uint64
+	ordinary                 bool
+	sourceRoot               uint64
+	sourceDocumentGeneration uint64
+	constructionWorkers      int
+	pendingSourceCodec       nativeOrdinaryGraphPendingCodec
 }
 
 // Zero means the original conservative promise. A bound codec is the exact
 // maintained producer's ordinal and vector data codecs, each plus one. Metadata
 // codecs are absent because the graph projection does not decode those sections.
 type nativeOrdinaryGraphPendingCodec uint32
+
+// Each nibble records the selected producer codec policies for the ordinal/
+// vector data. Uncompressed fallback stays within that policy's promise.
+// Joining parts is a scalar OR, so mixed policies cannot look compatible.
+// In successful ordinary native work, zero means no typed source was emitted.
+type nativeOrdinaryGraphSourceCodecs uint16
+
+func (c nativeOrdinaryGraphPendingCodec) sourceCodecs() nativeOrdinaryGraphSourceCodecs {
+	ordinal, vector := c&255, c>>8&255
+	if ordinal < 1 || ordinal > 4 || vector < 1 || vector > 4 {
+		return 0
+	}
+	return 1<<(ordinal-1) | 1<<(vector-1+4)
+}
+
+var errNativeGraphPreparationStale = fmt.Errorf("collections: graph source handed off before assignment: %w", backenddb.ErrRootPublicationBasisMismatch)
+
+// Recipe census precedes canonical assignment. A later logical mutation is a
+// real source conflict; a physical-only handoff requires a fresh preflight,
+// before any command identity is assigned. Neither can install a stale recipe.
+func validateNativeGraphPreparation(c *nativeCollectionState, typed *nativeTypedDelta) error {
+	for d := typed; d != nil; d = d.previous {
+		if d.data == nil || d.data.graph == nil || !d.data.graph.ordinary {
+			continue
+		}
+		recipe := d.data.graph
+		if c.documentGeneration != recipe.sourceDocumentGeneration {
+			return backenddb.ErrConcurrentModification
+		}
+		manifest, ok := c.domains.Get("column/manifest")
+		if !ok || d.graphSourceRoot != recipe.sourceRoot {
+			return backenddb.ErrRootPublicationBasisMismatch
+		}
+		if manifest.baseRoot != recipe.sourceRoot {
+			return errNativeGraphPreparationStale
+		}
+	}
+	return nil
+}
+
+// Refresh is allowed only for this exclusive preassignment refusal. Joined
+// cleanup errors remain visible; errors.Is alone would incorrectly erase them.
+func nativeGraphPreparationOnlyStale(err error) bool {
+	if err == errNativeGraphPreparationStale {
+		return true
+	}
+	switch e := err.(type) {
+	case interface{ Unwrap() []error }:
+		children := e.Unwrap()
+		if len(children) == 0 {
+			return false
+		}
+		for _, child := range children {
+			if !nativeGraphPreparationOnlyStale(child) {
+				return false
+			}
+		}
+		return true
+	case interface{ Unwrap() error }:
+		return nativeGraphPreparationOnlyStale(e.Unwrap())
+	default:
+		return false
+	}
+}
 
 func (c nativeOrdinaryGraphPendingCodec) needsZSTD() bool {
 	zstd := nativeOrdinaryGraphPendingCodec(typedcolumn.CompressionZSTD) + 1
@@ -336,39 +401,55 @@ func nativeVectorGraphCapacity(meta CollectionMeta, snap *backenddb.Snapshot, ro
 	return total, nil
 }
 
-func (c *Collection) nativeRebuildVectorGraph(name string) (out VectorIndexStatus, resultErr error) {
+func (c *Collection) nativeRebuildVectorGraph(name string) (VectorIndexStatus, error) {
+	// One physical-only preassignment refresh is bounded and has no assigned
+	// command to replay. The first attempt fully releases its original input
+	// before the new census; accepted/ambiguous failures never enter this path.
+	out, reprepare, err := c.nativeRebuildVectorGraphOnce(name)
+	if reprepare {
+		out, _, err = c.nativeRebuildVectorGraphOnce(name)
+	}
+	return out, err
+}
+
+func (c *Collection) nativeRebuildVectorGraphOnce(name string) (out VectorIndexStatus, reprepare bool, resultErr error) {
 	if err := ValidateIndexName(name); err != nil {
-		return out, err
+		return out, false, err
 	}
 	tx, err := c.nativeJSON.Begin(c.name)
 	if err != nil {
-		return out, err
+		return out, false, err
 	}
-	defer func() { resultErr = errors.Join(resultErr, tx.Close()) }()
+	defer func() {
+		if closeErr := tx.Close(); closeErr != nil {
+			resultErr = errors.Join(resultErr, closeErr)
+			reprepare = false
+		}
+	}()
 	g := &tx.bindings[0]
 	ordinary := nativeOrdinaryColumnGraphMeta(g.probe.meta)
 	if (!nativeSourceImportMetaV2(g.probe.meta) && !ordinary) || tx.db.StableResourceMetadataOwner() == nil {
-		return out, backenddb.ErrNativeSemanticUnsupported
+		return out, false, backenddb.ErrNativeSemanticUnsupported
 	}
 	if err = nativeTypedProfile(tx.db, g.probe.meta); err != nil {
-		return out, err
+		return out, false, err
 	}
 	def, ok := findVectorIndex(g.probe.meta.VectorIndexes, name)
 	if !ok {
-		return out, ErrIndexNotFound
+		return out, false, ErrIndexNotFound
 	}
 	// The original normalized representation rebuild rewrites its base corpus;
 	// this cdir2-preserving producer does not implement that separate operation.
 	if vectorIndexUsesCosineNormalizedF32V1(def) {
-		return out, backenddb.ErrNativeSemanticUnsupported
+		return out, false, backenddb.ErrNativeSemanticUnsupported
 	}
 	primary, _ := g.probe.collection.domains.Get("primary")
 	if !ordinary && primary != nil && primary.typed != nil {
-		return out, backenddb.ErrNativeSemanticUnsupported
+		return out, false, backenddb.ErrNativeSemanticUnsupported
 	}
 	manifest, ok := g.probe.collection.domains.Get("column/manifest")
 	if !ok {
-		return out, backenddb.ErrNativeSemanticUnsupported
+		return out, false, backenddb.ErrNativeSemanticUnsupported
 	}
 	snap := tx.core.Snapshot()
 	var h columnSourceDirectoryHeaderV2
@@ -391,51 +472,53 @@ func (c *Collection) nativeRebuildVectorGraph(name string) (out VectorIndexStatu
 		}
 	}
 	if err != nil {
-		return out, fmt.Errorf("collections: native graph source preflight: %w", err)
+		return out, false, fmt.Errorf("collections: native graph source preflight: %w", err)
 	}
 	owned := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeVectorGraphRecipe{}))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeTypedRows{}))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowbtree.OwnedMapRefund{})))
 	lease, err := tx.core.NativeAllocator().AdmitNativeBytes(owned)
 	if err != nil {
-		return out, fmt.Errorf("collections: native graph retained recipe: %w", err)
+		return out, false, fmt.Errorf("collections: native graph retained recipe: %w", err)
 	}
 	if err = tx.adoptNativeTyped(g, nil, nil, nil, ColumnPublishOperationInsert, capacity, lease); err != nil {
 		lease.Close()
-		return out, fmt.Errorf("collections: native graph adopt recipe: %w", err)
+		return out, false, fmt.Errorf("collections: native graph adopt recipe: %w", err)
 	}
 	schema := g.probe.collection.schema
 	schema.retain()
-	recipe := &nativeVectorGraphRecipe{schema: schema, def: def, digest: h.Digest, rows: h.Rows, ordinary: ordinary, sourceRoot: manifest.baseRoot, constructionWorkers: constructionWorkers, pendingSourceCodec: pendingSourceCodec}
+	recipe := &nativeVectorGraphRecipe{schema: schema, def: def, digest: h.Digest, rows: h.Rows, ordinary: ordinary, sourceRoot: manifest.baseRoot, sourceDocumentGeneration: g.probe.collection.documentGeneration, constructionWorkers: constructionWorkers, pendingSourceCodec: pendingSourceCodec}
 	if identity := g.probe.meta.Options.ColumnStore.ActiveManifest; identity != nil {
 		recipe.identity = *identity
 	}
 	g.typed.data.graph = recipe
+	g.typed.graphSourceRoot = recipe.sourceRoot
 	// The original payload has a fixed ten-byte header and the two names.
 	payloadBytes := uint64(10)
 	if err = nativeTypedCheckedAdd(&payloadBytes, uint64(len(g.name))); err != nil {
-		return out, err
+		return out, false, err
 	}
 	if err = nativeTypedCheckedAdd(&payloadBytes, uint64(len(name))); err != nil {
-		return out, err
+		return out, false, err
 	}
 	if err = tx.admitStage(g, memtable.COWAllocationCharge(payloadBytes)); err != nil {
-		return out, err
+		return out, false, err
 	}
 	payload, err := commitlog.EncodeCollectionRebuildVectorIndexPayload(g.name, name)
 	if err != nil {
-		return out, err
+		return out, false, err
 	}
 	apply := nativeCommandWALApplyCommit{frame: commandwalapply.LoweredFrame{Kind: commitlog.CommandKindCollectionRebuildVectorIndex, Scope: commitlog.CommandScopeCollection, PayloadFormat: commitlog.PayloadFormatCollectionRebuildVectorIndexV1, Payload: payload}, sync: true}
 	if err = tx.commitNativeApply(true, &apply); err != nil {
 		if apply.result.LogicalInstalled {
 			err = commitAmbiguousError("graph rebuild sealed completion", err)
 		}
-		return out, fmt.Errorf("collections: native graph commit logical_installed=%t consumed=%t constructor_bytes=%d: %w", apply.result.LogicalInstalled, apply.result.Consumed, capacity, err)
+		reprepare = !apply.result.Assigned && apply.result.AssignedLSN == 0 && !apply.result.Uncertain && !apply.result.LogicalInstalled && !backenddb.CommitPublicationAccepted(err) && !errors.Is(err, ErrCommitAmbiguous) && nativeGraphPreparationOnlyStale(err)
+		return out, reprepare, fmt.Errorf("collections: native graph commit logical_installed=%t consumed=%t constructor_bytes=%d: %w", apply.result.LogicalInstalled, apply.result.Consumed, capacity, err)
 	}
 	out, err = c.nativeVectorGraphStatus(name)
 	if err != nil {
-		return out, commitAmbiguousError("graph rebuild completed; status unavailable", err)
+		return out, false, commitAmbiguousError("graph rebuild completed; status unavailable", err)
 	}
-	return out, nil
+	return out, false, nil
 }
 
 func nativeVectorGraphRecords(snap *backenddb.Snapshot, root uint64, ordinary bool) ([]columnManifestRecord, error) {
@@ -1107,8 +1190,8 @@ func nativeOrdinaryVectorGraphConservativeCapacity(tx *NativeJSONTxn, g *nativeJ
 // identity/locators come from the preceding successful row plans, not cdir2.
 func (w *nativeTypedMaterialization) materializeOrdinaryVectorGraph(d *nativeTypedDelta) error {
 	recipe := d.data.graph
-	if !recipe.ordinary || !nativeOrdinaryColumnGraphMeta(w.meta) || recipe.sourceRoot != w.input.baseManifestRoot || d.appliedLSN == 0 {
-		return fmt.Errorf("ordinary graph basis ordinary=%t meta_ordinary=%t recipe_root=%d build_root=%d lsn=%d: %w", recipe.ordinary, nativeOrdinaryColumnGraphMeta(w.meta), recipe.sourceRoot, w.input.baseManifestRoot, d.appliedLSN, backenddb.ErrNativeSemanticUnsupported)
+	if !recipe.ordinary || !nativeOrdinaryColumnGraphMeta(w.meta) || d.graphSourceRoot != w.input.baseManifestRoot || d.appliedLSN == 0 {
+		return fmt.Errorf("ordinary graph basis ordinary=%t meta_ordinary=%t recipe_root=%d effective_root=%d build_root=%d lsn=%d: %w", recipe.ordinary, nativeOrdinaryColumnGraphMeta(w.meta), recipe.sourceRoot, d.graphSourceRoot, w.input.baseManifestRoot, d.appliedLSN, backenddb.ErrNativeSemanticUnsupported)
 	}
 	def, ok := findVectorIndex(w.meta.VectorIndexes, recipe.def.Name)
 	if !ok || !reflect.DeepEqual(def, recipe.def) {
