@@ -1,8 +1,0 @@
-=== RUN   TestNativeHNSWPublicDocumentLifecycle
-=== RUN   TestNativeHNSWPublicDocumentLifecycle/command_wal_durable/bson/declared=false/unnamed=true
-    native_hnsw_public_test.go:110: created vector domains: normalized=false empty=true
---- FAIL: TestNativeHNSWPublicDocumentLifecycle (0.19s)
-    --- FAIL: TestNativeHNSWPublicDocumentLifecycle/command_wal_durable/bson/declared=false/unnamed=true (0.19s)
-FAIL
-FAIL	github.com/snissn/gomap/TreeDB/collections	0.190s
-FAIL

@@ -1,1 +1,0 @@
-collections.test -test.run=^TestR1SupportedProfileGrowthProbe$ -test.count=1 -test.timeout=2m -test.v

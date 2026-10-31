@@ -1,7 +1,0 @@
-{
-  "valid": true,
-  "source_unchanged": true,
-  "qualification": null,
-  "retries": 0,
-  "scope": "Wholeprocess Goexecutiontrace includesstoppedtimer/lifecycle/background. Derived syscall/sync/sched profiles are attributed stacks, durations canoverlapandmustnotbe summed aswall. SeparateUpsertstackfocusmissesasynchronousleaderwork. Instrumentedtimingisdiagnosticnotacceptance."
-}
