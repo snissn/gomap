@@ -66,12 +66,15 @@ type NativeSemanticState interface {
 	PrepareHandoff(latest NativeSemanticState, accepted *Snapshot) (NativeSemanticState, error)
 }
 
-// NativeSemanticProducerPressure is an advisory inventory of construction for
-// the current immutable state, not an admission promise for an incoming write.
-// A zero value means no pending typed construction. Nonzero construction uses
-// the original finite maintenance limits and producer source limit.
+// NativeSemanticProducerPressure is an advisory observation for the current
+// retained state, not an admission promise for an incoming write. A zero value
+// means no observed generation pressure or pending typed construction. Nonzero
+// construction uses the original maintenance limits and producer source limit.
 type NativeSemanticProducerPressure struct {
-	ConstructionBytes uint64
+	// GenerationUnderPressure applies advisory scheduling to active pending
+	// generations only. It reserves no headroom; final admission is unchanged.
+	GenerationUnderPressure bool
+	ConstructionBytes       uint64
 	// FixedConstructionBytes is the once-per-build maximum already included in
 	// ConstructionBytes. It changes only advisory scheduling: every hard check
 	// and reservation still uses the full ConstructionBytes. Zero preserves the

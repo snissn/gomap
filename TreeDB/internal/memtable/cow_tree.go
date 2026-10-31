@@ -973,6 +973,35 @@ func (r *COWRoot) RetainOwned() bool {
 	r.refs++
 	return true
 }
+
+// COWGenerationUsage is a point-in-time observation, not a reservation or an
+// admission decision. PendingBytes includes other preparations sharing the
+// original generation. HistoryBytes includes native source metadata.
+type COWGenerationUsage struct {
+	HistoryBytes, PendingBytes, MaxGenerationBytes uint64
+}
+
+// GenerationUsage borrows the caller's original root edge without retaining it
+// or changing capacity. Keep the same root -> budget lock order as Retain.
+func (r *COWRoot) GenerationUsage() (COWGenerationUsage, error) {
+	if r == nil {
+		return COWGenerationUsage{}, ErrCOWClosed
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.refs == 0 {
+		return COWGenerationUsage{}, ErrCOWClosed
+	}
+	g := r.generation
+	b := g.budget
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return COWGenerationUsage{}, ErrCOWClosed
+	}
+	return COWGenerationUsage{HistoryBytes: g.generationHistoryLocked(), PendingBytes: g.pending, MaxGenerationBytes: b.limits.MaxGenerationBytes}, nil
+}
+
 func (r *COWRoot) Release() COWRetirement {
 	r.mu.Lock()
 	defer r.mu.Unlock()
