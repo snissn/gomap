@@ -432,3 +432,100 @@ The generic native server on this source base does not register the historical
 passes neither to native servers; full-dataset native scan-cap overlays need
 a separate source/ELF-bound implementation and are not exposed by this generic
 launcher. Mongo gateway census limits use its registered public flags.
+
+## Sampled outer campaign guard
+
+`scripts/ycsb_campaign_guard.py` wraps one existing invocation of the maintained
+launcher. It reuses the sibling `ycsb_compare_validate.py` strict JSON reader,
+exclusive receipt writer, hashing, deadline, cancellation and direct-unreaped-child
+cleanup helpers. `--scripts-dir` defaults to the guard's sibling scripts directory;
+an explicit absolute override is part of the frozen helper closure. The guard
+does not implement another workload or replace any original lifecycle consumer.
+
+For public use, **`--validation-json` is mandatory** and must name the actual
+fresh campaign's `validation.json`. It remains optional only for generic/synthetic
+commands that have no campaign consumer. Guard output and campaign output must
+be separate fresh namespaces. The guard exclusively creates `--out`; it refuses
+an existing directory and refuses a pre-existing validation input. The launcher
+still requires its own fresh empty `OUT_DIR`. For example, after review and
+execution authorization, with the complete frozen workload/build environment
+already supplied and every path absolute:
+
+```bash
+OUT_DIR=/mnt/fast4tb/OWNED/FRESH-CAMPAIGN \
+python3 -B /absolute/source/scripts/ycsb_campaign_guard.py \
+  --out /mnt/fast4tb/OWNED/FRESH-GUARD \
+  --cwd /absolute/source --filesystem /mnt/fast4tb \
+  --validation-json /mnt/fast4tb/OWNED/FRESH-CAMPAIGN/validation.json \
+  --deadline 2400 --cleanup-seconds 10 --interval 0.2 \
+  --rss-cap-bytes 25769803776 --free-floor-bytes 10737418240 \
+  -- /bin/bash /absolute/source/scripts/ycsb_compare_mongodb_treedb.sh
+```
+
+Default limits are 24 GiB aggregate RSS of live owned descendants (excluding the
+guard's own RSS), 10 GiB account-available filesystem free space using
+`statvfs.f_bavail * f_frsize`, a 2400-second outer deadline and 10-second cleanup
+windows. The maximum interval is 200 ms plus observation/scheduling overhead.
+The launcher retains its phase/helper/cleanup bounds, normally 600/180/10 seconds;
+outer cleanup can add three cleanup windows plus syscall/scheduling overhead.
+These are sampled observations, not continuous peak/lifetime enforcement or
+unperturbed timing proof. Short-lived processes/peaks can be missed. Both
+`whole_interval_verified` and `unperturbed_timing_verified` remain false.
+
+Run the Linux guard in a dedicated fresh, initially childless supervisor. It
+enables subreaper adoption and pins the root before waiting/polling, retaining
+`root.identity.json` with PID/start ticks/parent/group/session even for quick
+exits. Verified descendant pidfds retain ownership after reparenting or setsid;
+descendant signaling uses those exact descriptors, and adopted reaping uses
+`waitid(P_PIDFD)`. Unsupported kernel/Python support fails before launch. Never
+substitute unverified PID/group/name signaling. Startup defers cancellation
+through root pinning/receipt publication. On failure, cleanup defers cancellation
+while retaining pending signals and receipts, first allowing the original shell's
+trap/checked Close, then bounded TERM/KILL of remaining pinned descendants.
+The maintained fallback for pin failure applies only to the direct unreaped
+child. Discovery failures retain errors and attempt known-owned cleanup; they
+cannot certify cleanup of an unobservable task.
+
+Require supervisor exit0, completed guard status, no interventions/leaks/errors
+and the original `validated-consumer-evidence` status with `errors: []`. A
+completed-looking receipt with nonzero supervisor exit is failure; final receipt
+I/O/cancellation may prevent a result from being written. Preserve every partial
+namespace and failed attempt, with no automatic retry or replacement. Guard
+completion still requires independent campaign/artifact review: it does not
+establish performance, crash recovery, or product acceptance. Original client
+timers, owner checkpoint, checked original Close, fresh-owner reopen, typed census
+and separate deterministic acknowledged-write fixture stay with the maintained
+producer/consumers and retain their existing boundaries.
+
+Before collection, independently freeze/review exact guard, launcher and imported
+helper blobs, complete command/environment, source/overlay and actual binary
+bindings, workload/durability/runtime/affinity contract and planned samples.
+Verify the quiet lane, actual writable persistent mount, free-space headroom,
+all data/temp/output paths and required CPU/cgroup/runtime observations separately.
+The guard checks GOMAXPROCS absence and output filesystem identity; it does not
+establish persistence, inspect every application path, enforce a particular
+runtime/affinity count or exclude competing work.
+
+Synthetic controls use `scripts/test_ycsb_campaign_guard.py` and no database.
+Helper paths default to sibling scripts; `GUARD_TEST_SCRIPTS_DIR` can explicitly
+select a pinned helper closure. Retained output uses `GUARD_TEST_OUTPUT_ROOT`,
+then `TMPDIR`, then the platform temporary directory. Set a fresh task-owned
+fast-mount root explicitly; namespaces, commands, logs, failures and test-owner
+cleanup receipts are never automatically deleted. Linux pidfd tests skip when
+Python/platform support is absent; integration controls additionally probe kernel
+pidfd/waitid support and skip only unsupported-operation errors. Skips do not
+establish supported-platform safety. After source review in a coordinator lane:
+
+```bash
+T=/mnt/fast4tb/OWNED/FRESH-GUARD-CONTROLS
+mkdir "$T"
+GUARD_TEST_OUTPUT_ROOT="$T" TMPDIR="$T" \
+python3 -B scripts/test_ycsb_campaign_guard.py -v
+```
+
+Adopted-source tests must be rerun and independently reviewed; the retained
+prototype's 26 passing controls are provenance, not new-head results. The source
+checkpoint is commit `047f17863bbd2fda3daa622b1d083ebfe14f6a6d` under
+`docs/benchmarks/prototypes/ycsb_resource_guard_2026_10_31/`: original guard SHA256
+`39369f135883731d94426cdf3616b0c80b120a3c2637bddf09c979b46aed75f3`, repaired tests
+`ac2c50d25320c67c191fda57a5503622d40a7d63160b618959851262be8152a4`.
