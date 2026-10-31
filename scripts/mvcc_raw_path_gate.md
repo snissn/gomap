@@ -23,36 +23,11 @@ sample, median, gate and `measurement_pass`. Raw timing remains limited to +5%
 median paired growth, and raw bytes/allocations permit no median growth. Timing
 and bytes acceptance may report `EQUIVALENT_NON_ATTRIBUTABLE` only for identical
 independently bound runtime and input identities. A different executable, loader,
-library or input retains the original strict timing and bytes gates, except for
-the explicitly scoped owner decision below. Attribution does not turn a raw failure into a measured
+library or input retains the original strict timing and bytes gates, with no
+numerical allowance. This attribution does not turn a raw failure into a measured
 PASS or establish a speedup. Allocation count, candidate PRIMARY activation, the
 public lifecycle control, quiet-host checks, ordered complete samples and all
 source/input/binary drift checks remain mandatory even for identical runtimes.
-
-### PR #5346 correctness tradeoff
-
-On 2026-10-31 the owner [accepted a PR #5346-only timing allowance capped at
-+6.58%](https://github.com/snissn/gomap/pull/5346#issuecomment-6548619056).
-The baseline must be `4dc879a15b9acaf5dd45444627c7e62b3f829a9d` and the
-candidate must descend from frozen production source
-`c5c25181898550e66139fb327f89ce79b7a454b2`. The entire intervening diff may
-change only this document, the PRIMARY gate and its tests, the TreeDB workflow
-and generated CI inventory. Production, dependencies and the benchmark harness
-must remain unchanged. The workflow binds the actual PR event number; all other
-PRs, bases and changed-path sets retain the default policy. An ancestry failure
-refuses qualification. The gate records the actual scope and Git commands in
-`timing-acceptance-policy.json`, bindings and summary.
-
-Only timing acceptance can become `ACCEPTED_CORRECTNESS_TRADEOFF`, and only
-within +6.58% with every other raw and acceptance gate passing, including quiet
-admission, bytes, allocations, activation, lifecycle and drift checks. Raw
-`gates.timing` and `measurement_pass` remain FAIL. No new threshold applies to
-the raw measurement. The original run `41235196330`, job `124637377629`,
-artifact `13055681212` (ZIP SHA-256
-`a4679d9b40299986ef8a1f4576cc6315fdb038b4d43ea1cbc4c9dc7d2cfad0f1`)
-remains a raw +6.579139381707332% failure against +5%; its cause remains
-inconclusive. This historical packet authorizes the bounded policy, and is
-never substituted for a new candidate's own measurements or other CI gates.
 
 Before and after measurement, `runtime-inputs-before.json` and
 `runtime-inputs-after.json` bind independently hashed actual executable contents

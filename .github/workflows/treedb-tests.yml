@@ -206,13 +206,11 @@ jobs:
         env:
           BASE_SHA: ${{ steps.scope.outputs.base_sha }}
           HEAD_SHA: ${{ steps.scope.outputs.head_sha }}
-          PR_NUMBER: ${{ steps.scope.outputs.pr_number }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           python3 scripts/mvcc_primary_cost_gate.py \
             --root "$GITHUB_WORKSPACE" \
             --baseline "$BASE_SHA" --candidate "$HEAD_SHA" \
-            --pull-request "$PR_NUMBER" \
             --output "$RUNNER_TEMP/mvcc-raw-path-gate/primary"
 
       - name: Compare frozen COW successor diagnostic

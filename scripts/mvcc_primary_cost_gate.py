@@ -33,48 +33,6 @@ QUIET_WINDOW_SECONDS = 5.0
 QUIET_ACQUISITION_SECONDS = 60.0
 ROW = re.compile(r"^" + BENCHMARK + r"(?:-\d+)?\s+(\d+)\s+(.*)$")
 METRICS = {"ns/op", "B/op", "allocs/op", "generation_advances/op"}
-CORRECTNESS_PR = 5346
-CORRECTNESS_BASE = "4dc879a15b9acaf5dd45444627c7e62b3f829a9d"
-CORRECTNESS_SOURCE = "c5c25181898550e66139fb327f89ce79b7a454b2"
-CORRECTNESS_TIME_LIMIT_PERCENT = 6.58
-CORRECTNESS_POLICY_PATHS = {
-    "scripts/mvcc_primary_cost_gate.py",
-    ".github/scripts/test_mvcc_primary_cost_gate.py",
-    ".github/workflows/treedb-tests.yml",
-    ".github/ci/ci_impact.json",
-    "scripts/mvcc_raw_path_gate.md",
-}
-
-
-def correctness_timing_scope(command, baseline: str, candidate: str, pull_request: int | None) -> dict | None:
-    """Bind the owner's one-PR decision to unchanged production and harness bytes."""
-    if pull_request != CORRECTNESS_PR or baseline != CORRECTNESS_BASE:
-        return None
-    command("timing-policy-ancestry", ["git", "merge-base", "--is-ancestor", CORRECTNESS_SOURCE, candidate])
-    paths = command("timing-policy-diff", ["git", "diff", "--name-only", CORRECTNESS_SOURCE, candidate]).splitlines()
-    if set(paths) - CORRECTNESS_POLICY_PATHS:
-        return None
-    return {"pull_request": pull_request, "baseline": baseline, "candidate": candidate,
-            "frozen_production_source": CORRECTNESS_SOURCE, "changed_paths": paths,
-            "max_paired_regression_percent": CORRECTNESS_TIME_LIMIT_PERCENT,
-            "decision": "https://github.com/snissn/gomap/pull/5346#issuecomment-6548619056",
-            "historical_raw_failure": {"run": 41235196330, "job": 124637377629,
-                "artifact": 13055681212,
-                "artifact_sha256": "a4679d9b40299986ef8a1f4576cc6315fdb038b4d43ea1cbc4c9dc7d2cfad0f1"}}
-
-
-def apply_correctness_timing_acceptance(result: dict, scope: dict | None) -> dict:
-    """Accept only the authorized timing cost; never alter raw evidence."""
-    result = dict(result, correctness_timing_policy=scope)
-    delta = result["median_paired_delta_percent"]
-    if (scope is not None and result["timing_disposition"] == "FAIL" and result["quiet"]
-            and math.isfinite(delta) and delta <= scope["max_paired_regression_percent"]
-            and all(value for name, value in result["gates"].items() if name != "timing")
-            and all(value for name, value in result["acceptance_gates"].items() if name != "timing")):
-        acceptance = dict(result["acceptance_gates"], timing=True)
-        result.update(acceptance_gates=acceptance, accepted=all(acceptance.values()),
-                      timing_disposition="ACCEPTED_CORRECTNESS_TRADEOFF")
-    return result
 
 
 def digest(path: Path) -> str:
@@ -351,7 +309,7 @@ def acquire_quiet_window(output: Path, *, clock=None, sleep=None, observer_facto
     raise RuntimeError("host quiet preflight acquisition exhausted; no timed samples started")
 
 
-def run_gate(root: Path, output: Path, baseline: str, candidate: str, pull_request: int | None = None) -> int:
+def run_gate(root: Path, output: Path, baseline: str, candidate: str) -> int:
     if not re.fullmatch(r"[0-9a-f]{40}", baseline) or not re.fullmatch(r"[0-9a-f]{40}", candidate):
         raise ValueError("full immutable source SHAs are required")
     if baseline == candidate or output.exists() or output == root or root in output.parents:
@@ -403,9 +361,6 @@ def run_gate(root: Path, output: Path, baseline: str, candidate: str, pull_reque
         return path.read_text()
 
     command("candidate-guard-before", ["bash", root / "scripts/mvcc_candidate_checkout_guard.sh", root, candidate])
-    timing_scope = correctness_timing_scope(command, baseline, candidate, pull_request)
-    save("timing-acceptance-policy.json", {"default_limit_percent": TIME_LIMIT_PERCENT,
-                                         "correctness_exception": timing_scope})
     for label, argv in (("go-version", ["go", "version"]), ("uname", ["uname", "-a"]),
                         ("lscpu", ["lscpu"]), ("processes", ["ps", "-eo", "pid,ppid,etime,pcpu,args"])):
         command(label, argv)
@@ -434,7 +389,6 @@ def run_gate(root: Path, output: Path, baseline: str, candidate: str, pull_reque
              "harness_sha256": digest(harness), "runner_sha256": digest(Path(__file__)),
              "samples": SAMPLES, "iterations": ITERATIONS, "cpu": 0, "gomaxprocs": 1,
              "max_paired_regression_percent": TIME_LIMIT_PERCENT,
-             "correctness_timing_policy": timing_scope,
              "quiet_preflight": {"window_s": QUIET_WINDOW_SECONDS, "setup_cap_s": QUIET_ACQUISITION_SECONDS,
                                  "cpu_threshold_percent": QUIET_LIMIT_PERCENT,
                                  "aggregate_cpu_threshold_percent": QUIET_AGGREGATE_LIMIT_PERCENT,
@@ -483,7 +437,6 @@ def run_gate(root: Path, output: Path, baseline: str, candidate: str, pull_reque
             raise RuntimeError("benchmark input drift")
         inputs_after = bind_inputs("after")
         result = qualify_runtime(evaluate(rows), inputs_before, inputs_after, quiet=not busy)
-        result = apply_correctness_timing_acceptance(result, timing_scope)
         result.update(baseline=baseline, candidate=candidate)
         save("summary.json", result)
         (output / "summary.md").write_text(
@@ -494,7 +447,6 @@ def run_gate(root: Path, output: Path, baseline: str, candidate: str, pull_reque
             f"- Median paired time delta: {result['median_paired_delta_percent']:+.3f}% (limit +5%).\n"
             f"- Raw gates: `{json.dumps(result['gates'], sort_keys=True)}`; measurement pass: {result['measurement_pass']}; quiet: {not busy}.\n"
             f"- Timing acceptance: `{result['timing_disposition']}`; bytes acceptance: `{result['bytes_disposition']}`; bound runtime/input equivalent: {result['runtime_input_equivalent']}.\n"
-            f"- Scoped correctness timing policy: `{json.dumps(timing_scope, sort_keys=True)}`. Raw gates remain unchanged.\n"
             "- Scope: this public replacement workload; not final graph qualification.\n")
         return 0 if result["accepted"] else 1
     except Exception as error:
@@ -515,9 +467,8 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--baseline", required=True)
     parser.add_argument("--candidate", required=True)
-    parser.add_argument("--pull-request", type=int)
     args = parser.parse_args()
-    return run_gate(args.root.resolve(), args.output.resolve(), args.baseline, args.candidate, args.pull_request)
+    return run_gate(args.root.resolve(), args.output.resolve(), args.baseline, args.candidate)
 
 
 if __name__ == "__main__":
