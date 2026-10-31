@@ -29,6 +29,101 @@ class PrimaryCostGateTests(unittest.TestCase):
                  "metrics": gate.parse_sample(self.sample(generations=2 if revision == "baseline" else 0))}
                 for pair in range(8) for revision in (("baseline", "candidate") if pair % 2 == 0 else ("candidate", "baseline"))]
 
+    def timing_failure(self, delta=6.579139381707332):
+        rows = self.rows()
+        for row in rows:
+            if row["revision"] == "candidate":
+                row["metrics"]["ns/op"] *= 1 + delta / 100
+        raw = gate.evaluate(rows)
+        return dict(raw, quiet=True, timing_disposition="FAIL", bytes_disposition="PASS",
+                    acceptance_gates=dict(raw["gates"]), accepted=False)
+
+    def test_correctness_tradeoff_preserves_raw_failure_and_input(self):
+        original = self.timing_failure()
+        retained = copy.deepcopy(original)
+        scope = {"max_paired_regression_percent": gate.CORRECTNESS_TIME_LIMIT_PERCENT}
+        result = gate.apply_correctness_timing_acceptance(original, scope)
+        self.assertTrue(result["accepted"])
+        self.assertEqual(result["timing_disposition"], "ACCEPTED_CORRECTNESS_TRADEOFF")
+        self.assertFalse(result["gates"]["timing"])
+        self.assertFalse(result["measurement_pass"])
+        self.assertEqual(original, retained)
+        self.assertEqual(result["median_paired_delta_percent"], original["median_paired_delta_percent"])
+
+    def test_correctness_tradeoff_cannot_waive_other_failures_or_exceed_cap(self):
+        scope = {"max_paired_regression_percent": gate.CORRECTNESS_TIME_LIMIT_PERCENT}
+        failures = [self.timing_failure(6.580001), self.timing_failure(float("inf"))]
+        for metric in ("bytes", "allocations", "candidate_primary_activation"):
+            for where in ("gates", "acceptance_gates"):
+                failing = self.timing_failure()
+                failing[where][metric] = False
+                failures.append(failing)
+        noisy = self.timing_failure()
+        noisy["quiet"] = False
+        failures.append(noisy)
+        for result in failures:
+            with self.subTest(result=result):
+                self.assertFalse(gate.apply_correctness_timing_acceptance(result, scope)["accepted"])
+        exact = self.timing_failure()
+        exact["median_paired_delta_percent"] = 6.58
+        self.assertTrue(gate.apply_correctness_timing_acceptance(exact, scope)["accepted"])
+        self.assertFalse(gate.apply_correctness_timing_acceptance(self.timing_failure(), None)["accepted"])
+
+    def test_correctness_scope_requires_actual_pr_base_ancestry_and_entire_diff(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            def git(*args):
+                return subprocess.check_output(["git", "-C", str(root), *args], stderr=subprocess.PIPE).decode().strip()
+
+            def command(label, argv):
+                return git(*argv[1:])
+
+            git("init", "-q")
+            git("config", "user.name", "fixture")
+            git("config", "user.email", "fixture@example.invalid")
+            source = root / "production.go"
+            source.write_text("frozen production\n")
+            git("add", ".")
+            git("commit", "-qm", "frozen")
+            frozen = git("rev-parse", "HEAD")
+            policy = root / "scripts/mvcc_primary_cost_gate.py"
+            policy.parent.mkdir()
+            policy.write_text("policy-only successor\n")
+            git("add", ".")
+            git("commit", "-qm", "policy")
+            candidate = git("rev-parse", "HEAD")
+            with mock.patch.object(gate, "CORRECTNESS_SOURCE", frozen):
+                scope = gate.correctness_timing_scope(command, gate.CORRECTNESS_BASE, candidate, 5346)
+                self.assertEqual(scope["changed_paths"], ["scripts/mvcc_primary_cost_gate.py"])
+                self.assertEqual(scope["candidate"], candidate)
+                for pr, base in ((None, gate.CORRECTNESS_BASE), (5356, gate.CORRECTNESS_BASE), (5346, "b" * 40)):
+                    with self.subTest(pr=pr, base=base):
+                        self.assertIsNone(gate.correctness_timing_scope(command, base, candidate, pr))
+                for path in ("production.go", gate.HARNESS, "scripts/unrelated_guard.py"):
+                    target = root / path
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text("changed outside the exact policy scope\n")
+                    git("add", ".")
+                    git("commit", "-qm", "out of scope")
+                    self.assertIsNone(gate.correctness_timing_scope(command, gate.CORRECTNESS_BASE, git("rev-parse", "HEAD"), 5346))
+                # The aggregate diff must still reject an earlier production edit,
+                # even when the last commit changes only the policy.
+                policy.write_text("another policy-only commit\n")
+                git("add", ".")
+                git("commit", "-qm", "later policy")
+                self.assertIsNone(gate.correctness_timing_scope(command, gate.CORRECTNESS_BASE, git("rev-parse", "HEAD"), 5346))
+                with mock.patch.object(gate, "CORRECTNESS_SOURCE", "a" * 40):
+                    with self.assertRaises(subprocess.CalledProcessError):
+                        gate.correctness_timing_scope(command, gate.CORRECTNESS_BASE, candidate, 5346)
+
+    def test_workflow_binds_actual_pr_number_for_primary_exception(self):
+        workflow = (Path(__file__).resolve().parents[1] / "workflows/treedb-tests.yml").read_text()
+        step = workflow.split("- name: Compare public PRIMARY replacement cost\n", 1)[1].split("\n      - name:", 1)[0]
+        self.assertIn("PR_NUMBER: ${{ steps.scope.outputs.pr_number }}", step)
+        self.assertIn('--pull-request "$PR_NUMBER"', step)
+        self.assertNotIn("continue-on-error", step)
+
     def test_retains_baseline_generation_churn_and_requires_candidate_activation(self):
         rows = self.rows()
         self.assertTrue(gate.evaluate(rows)["measurement_pass"])
