@@ -8,6 +8,7 @@ import (
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/typedcolumn"
 )
 
 func require5345NoCodecOverrides(b *testing.B) {
@@ -214,7 +215,11 @@ func BenchmarkTypedGraphEncodedPublic5345(b *testing.B) {
 				if err != nil {
 					if policy.codec == ColumnStoreTypedColumnCompressionSnappy {
 						_, boundErr := typedColumnPublicationFP32EncodedBound(*meta.Options.ColumnStore, rows)
-						if boundErr != nil && !errors.Is(boundErr, ErrHybridSearchUnsupported) && errors.Is(err, boundErr) && !backenddb.CommitPublicationAccepted(err) && db.CommandWALNextLSN() == beforeLSN {
+						// The zero-row probe identifies the helper's private layout-error
+						// singleton without exporting it or matching error text. The
+						// adapter can return other errors before reaching that helper.
+						_, layoutErr := typedcolumn.FP32ImageEncodedUpperBound(typedcolumn.Options{}, 0, typedcolumn.ColumnPartImageOptions{})
+						if layoutErr != nil && errors.Is(boundErr, layoutErr) && errors.Is(err, layoutErr) && !backenddb.CommitPublicationAccepted(err) && db.CommandWALNextLSN() == beforeLSN {
 							coord.typedPublicationDebtMu.Lock()
 							reserved := coord.typedPublicationEncodedBytes
 							coord.typedPublicationDebtMu.Unlock()
