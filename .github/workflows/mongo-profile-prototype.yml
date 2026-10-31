@@ -25,6 +25,18 @@ jobs:
       - name: Verify hosted filesystem before toolchain setup
         run: python3 -B experiments/mongo_profile_hosted/run.py --preflight
 
+      - name: Fetch authenticated exact accepted client inputs
+        timeout-minutes: 7
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROFILE_CLIENT_ASSET_ID: "694916289"
+          PROFILE_CLIENT_BUILD_ASSET_ID: "694917396"
+        run: python3 -B experiments/mongo_profile_hosted/fetch_client.py
+
+      - name: Prepare bounded hosted syscall injector
+        timeout-minutes: 7
+        run: python3 -B experiments/mongo_profile_hosted/prepare_tools.py
+
       - name: Select exact Go toolchain source
         timeout-minutes: 5
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -33,7 +45,7 @@ jobs:
           check-latest: false
           cache: false
 
-      - name: Stage owned toolchain, build exact entry and execute bounded controls
+      - name: Stage owned toolchain and execute required producer qualification
         run: python3 -B experiments/mongo_profile_hosted/run.py
 
       - name: Upload all constructor success and failure evidence
@@ -44,6 +56,8 @@ jobs:
           path: |
             ${{ env.PROFILE_ROOT }}/evidence
             ${{ runner.temp }}/mongo-profile-preflight-*.json
+            !${{ env.PROFILE_ROOT }}/evidence/campaign-*/treedb_mongo/db/**
+            !${{ env.PROFILE_ROOT }}/evidence/campaign-*/treedb_mongo/fixture-db/**
           if-no-files-found: error
           include-hidden-files: true
           retention-days: 14

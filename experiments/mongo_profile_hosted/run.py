@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Hosted-only, one-shot source constructor. Never a public YCSB campaign."""
+"""Hosted-only standalone producer qualification. Diagnostic campaigns are not public arms."""
 import argparse
 import contextlib
 import hashlib
@@ -21,6 +21,7 @@ import uuid
 
 BASE = "95c6ff3de473786bd98b692375cfdb9cef951668"
 ROOT_CHECKPOINT = "dbc659dfee648c11ad105048aa7d007caf8cb097"
+QUALIFIED_PREDECESSOR = "dec0ca848d6157ebd8a4d625bb2a14cdc0826ffa"
 ENTRY = "TreeDB/mongo_gateway/server.go"
 HELPER_ENTRY = "TreeDB/mongo_profile_constructor_probe/server.go"
 HELPER_TEST = "TreeDB/mongo_profile_constructor_probe/hosted_profile_test.go"
@@ -43,13 +44,8 @@ HELPER_CASES = (
     "profile-open", "receipt-open", "concurrent-stop-close",
 )
 REMAINING = [
-    "Full pinned maintained campaign/profile validator acceptance (no campaign fabricated here)",
-    "Public fixed 100k workload, original host/runtime/affinity/resource/repetition eligibility",
+    "Public fixed 100k/10k pair on original 12 CPU/affinity/storage/RSS eligibility",
     "Representative attribution, performance improvement, crash/recovery qualification",
-    "Injected real profile/receipt short-write, Sync and Close errors beyond closed-file control",
-    "Real socket disconnect during start/stop and independent controller failed-exchange veto control",
-    "Actual gateway negative startup/control failure matrix with original cleanup on each path",
-    "Exact sampling activation/cessation beyond helper state checks and real pprof decode",
 ]
 
 
@@ -76,6 +72,11 @@ def write(path, value):
     with path.open("x") as stream:
         json.dump(value, stream, indent=2, allow_nan=False)
         stream.write("\n")
+
+
+def excluded_database(path, out):
+    parts = path.relative_to(out).parts
+    return len(parts) >= 3 and parts[0].startswith("campaign-") and parts[1] == "treedb_mongo" and parts[2] in {"db", "fixture-db"}
 
 
 def hosted_only():
@@ -128,11 +129,13 @@ class Runner:
         self.commands = []
         self.deadline = time.monotonic() + 20 * 60
         self.min_free = shutil.disk_usage(root).free
+        self.disk_floor = FLOOR
+        self.last_resource_scan = 0.0
         self.env = os.environ.copy()
         # Never capture the ambient environment: it can contain credentials.
         for key in ("GOMAXPROCS", "GOEXPERIMENT", "GOFLAGS", "GODEBUG", "GOENV",
                     "GOROOT", "GOMAP_DIAGNOSTIC_PROFILE_DIR", "YCSB_SERVER_RECEIPT_DIR",
-                    "YCSB_OWNER_CHECKPOINT"):
+                    "YCSB_OWNER_CHECKPOINT", "GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN"):
             self.env.pop(key, None)
         goroot = root / "toolcache" / PINNED_GO
         self.go = str(goroot / "bin/go")
@@ -148,7 +151,39 @@ class Runner:
     def guard(self):
         free = shutil.disk_usage(self.root).free
         self.min_free = min(self.min_free, free)
-        require(free >= FLOOR, "hosted filesystem dropped below 8 GiB; child stopped")
+        require(free >= self.disk_floor, "hosted filesystem crossed selected unchanged reserve; child stopped")
+        require(time.monotonic() < self.deadline, "20 minute constructor budget exhausted; preserve evidence")
+        # Disk/deadline are checked on every copy chunk/file. Heavier process and
+        # retained-output inspection is bounded to five scans per second.
+        moment = time.monotonic()
+        if moment - self.last_resource_scan < 0.2: return
+        self.last_resource_scan = moment
+        # Monitor all descendants, including maintained helper process groups.
+        processes = {}
+        for item in Path('/proc').iterdir():
+            if not item.name.isdecimal():
+                continue
+            try:
+                raw = (item / 'stat').read_text()
+                fields = raw[raw.rfind(')') + 1:].split()
+                processes[int(item.name)] = (int(fields[1]), int(fields[21]) * os.sysconf('SC_PAGE_SIZE'))
+            except (OSError, ValueError, IndexError):
+                continue
+        descendants = {os.getpid()}
+        for _ in range(32):
+            grown = descendants | {pid for pid,(parent,_) in processes.items() if parent in descendants}
+            if grown == descendants: break
+            descendants = grown
+        require(sum(processes.get(pid,(0,0))[1] for pid in descendants) <= 24 * 1024**3,
+                '24 GiB descendant RSS bound crossed')
+        total = 0
+        for path in self.out.rglob('*'):
+            if path.is_file() and not path.is_symlink() and not excluded_database(path, self.out):
+                size = path.stat().st_size
+                if path.suffix in ('.log',) or path.name.startswith('trace.'):
+                    require(size <= 32 * 1024**2, 'individual log/trace exceeded 32 MiB cap')
+                total += size
+        require(total <= 1024**3, 'bounded evidence exceeded 1 GiB')
         require(time.monotonic() < self.deadline, "20 minute constructor budget exhausted; preserve evidence")
 
     def stage_toolchain(self):
@@ -232,6 +267,32 @@ class Runner:
             receipt["minimum_free_bytes"] = self.min_free
             write(self.out / "toolchain-stage.json", receipt)
 
+    def kill_descendants(self, leader):
+        # Maintained children can own separate sessions; bind each current
+        # descendant's start token before killing it, never signal bare reused PIDs.
+        rows = {}
+        for path in Path('/proc').iterdir():
+            if not path.name.isdecimal(): continue
+            try:
+                raw = (path / 'stat').read_text(); fields = raw[raw.rfind(')')+1:].split()
+                rows[int(path.name)] = (int(fields[1]), int(fields[19]))
+            except (OSError, ValueError, IndexError): continue
+        selected = {leader.pid}
+        for _ in range(32):
+            expanded = selected | {pid for pid,(parent,_) in rows.items() if parent in selected}
+            if expanded == selected: break
+            selected = expanded
+        for pid in sorted(selected, reverse=True):
+            if pid not in rows: continue
+            try:
+                raw = Path(f'/proc/{pid}/stat').read_text(); fields = raw[raw.rfind(')')+1:].split()
+                if int(fields[19]) == rows[pid][1]: os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError: pass
+            except FileNotFoundError: pass
+        if leader.poll() is None:
+            os.killpg(leader.pid, signal.SIGKILL)
+            leader.wait(timeout=10)
+
     def command(self, name, args, *, cwd=None, env=None, timeout=600, allow_failure=False):
         self.guard()
         self.counter += 1
@@ -256,8 +317,7 @@ class Runner:
         except BaseException as error:
             record["error"] = str(error)
             if proc is not None and proc.poll() is None:
-                os.killpg(proc.pid, signal.SIGKILL)
-                proc.wait()
+                self.kill_descendants(proc)
             record["exit_code"] = proc.returncode if proc else None
             raise
         finally:
@@ -505,16 +565,21 @@ def execute():
     require(root.parent == Path(os.environ["RUNNER_TEMP"]).resolve(strict=True), "unexpected task namespace")
     runner = Runner(root)
     summary = dict(schema_version=1, status="running", base=BASE, expected_profile=PROFILE, start_utc=now(),
-                   scope="host-independent constructor controls only; no public campaign",
+                   scope="standalone producer qualification; diagnostic campaigns only; no public arm",
                    public_qualification=False, performance_claims=False, remaining_gates=REMAINING,
                    helper_cases={}, gateways={})
     try:
         runner.guard()
+        injector = json.loads((runner.out / "injector-tool.json").read_text())
+        require(injector["status"] == "available", "early injector preparation failed")
+        runner.strace = str(Path(injector["path"]).resolve(strict=True))
+        require(digest(Path(runner.strace)) == injector["sha256"], "prepared injector executable changed")
         sha = runner.command("candidate", ["git", "rev-parse", "HEAD"], cwd=REPO).strip()
         require(sha == os.environ["GITHUB_SHA"], "checkout/candidate mismatch")
         require(runner.command("checkpoint-origin", ["git", "rev-parse", ROOT_CHECKPOINT + "^"], cwd=REPO).strip() == BASE,
                 "retained constructor checkpoint must have the exact frozen base as parent")
         runner.command("checkpoint-ancestor", ["git", "merge-base", "--is-ancestor", ROOT_CHECKPOINT, sha], cwd=REPO)
+        runner.command("qualified-predecessor-ancestor", ["git", "merge-base", "--is-ancestor", QUALIFIED_PREDECESSOR, sha], cwd=REPO)
         changes = runner.command("candidate-paths", ["git", "diff", "--name-only", BASE, sha], cwd=REPO).splitlines()
         require(changes and all(p.startswith("experiments/mongo_profile_hosted/") or
                 p == ".github/workflows/mongo-profile-prototype.yml" for p in changes), "out-of-scope candidate changes")
@@ -575,7 +640,10 @@ def execute():
         selected_compiler_version = runner.command("go-tool-compiler-version", [runner.go, "tool", "compile", "-V"]).strip()
         require(compiler_version == selected_compiler_version == "compile version " + PINNED_GO,
                 "selected compiler version disagrees with pinned Go driver")
-        provenance = dict(candidate=sha, base=BASE, generated_sha256=GENERATED, original_sha256=ORIGINAL,
+        poller_source = goroot / "src/internal/poll/fd_unix.go"
+        require(digest(poller_source) == "689fb78bb32b8e810fa1dd2ded475a79574f24a8f40260af2d4a3273392bc2cc",
+                "pinned zero-progress file-write semantics source changed")
+        provenance = dict(injector=injector, poller_source_sha256=digest(poller_source), candidate=sha, base=BASE, generated_sha256=GENERATED, original_sha256=ORIGINAL,
                           root_checkpoint=ROOT_CHECKPOINT, root_checkpoint_parent=BASE,
                           root_checkpoint_ancestor_verified=True,
                           helper_virtual_entry=str(helper_entry_path), helper_virtual_test=str(fixture_path),
@@ -594,6 +662,7 @@ def execute():
                           cpu_count=os.cpu_count(), platform=sys.platform,
                           run_id=os.environ["GITHUB_RUN_ID"], run_attempt=os.environ["GITHUB_RUN_ATTEMPT"])
         write(runner.out / "provenance.json", provenance)
+        runner.command("strace-preflight", [runner.strace, "--version"], cwd=root, timeout=10)
         # Resolve only dependencies reachable from this exact standalone entry.
         # go.sum and go.mod remain immutable; no toolchain auto-download in Go.
         online = runner.env.copy()
@@ -611,58 +680,33 @@ def execute():
                                                overlay_sha256=digest(overlay), ordinary_optimization=True,
                                                race=False, forced_gomaxprocs=False))
         runner.command("profile-buildinfo", [runner.go, "version", "-m", binary])
-        # Actual gateway proof precedes broad helper infrastructure.
-        sys.path.insert(0, str(runner.base / "scripts"))
-        baseline = root / "bin/treedb-mongo-original"
-        runner.command("build-original-standalone", [runner.go, "build", "-mod=readonly", "-o", baseline, ENTRY], timeout=600)
-        write(runner.out / "baseline-binary.json", dict(sha256=digest(baseline), source_sha256=ORIGINAL,
-                                                       retained_binary=False, source_base=BASE))
-        _, original_owner = gateway(runner, baseline, "original-env-unset")
-        _, unset_owner = gateway(runner, binary, "overlay-env-unset")
-        require(all(original_owner[k] == unset_owner[k] for k in ("profile", "backend", "capture_error", "observed_gomaxprocs")),
-                "env-unset startup owner/profile behavior differs")
-        summary["gateways"]["env_unset"] = "baseline and overlay empty startup/checkpoint/checked shutdown passed"
-        for mode in ("off", "cpu_wait"):
-            directory, _ = gateway(runner, binary, "gateway-" + mode, mode)
-            if mode == "cpu_wait":
-                decode(runner, binary, directory / "profiles", "gateway-decode")
-            summary["gateways"][mode] = "passed-empty-gateway-only"
+        # Reuse independently accepted predecessor controls. This batch owns the
+        # actual maintained caller/failure gates and one fresh cessation process.
+        import qualify
+        qualify.execute(runner, binary)
+        cessation = root / "sources/cessation_test.go"
+        shutil.copyfile(HERE / "cessation_test.go.txt", cessation)
+        cessation_path = helper_entry_path.parent / "cessation_test.go"
+        cessation_overlay = runner.out / "cessation-overlay.json"
+        write(cessation_overlay, {"Replace": {str(helper_entry_path): str(generated),
+              str(fixture_path): str(fixture), str(cessation_path): str(cessation)}})
         with helper_probe_directory(runner, helper_entry_path.parent):
-            tests = binaries / "profile-helper.test"
-            runner.command("build-file-list-tests", [runner.go, "test", "-c", "-mod=readonly", "-overlay", test_overlay,
-                           "-o", tests, str(helper_entry_path), str(fixture_path)], timeout=600)
-            write(runner.out / "helper-binary.json", dict(sha256=digest(tests), fixture_sha256=digest(fixture),
-                                                         virtual_entry=str(helper_entry_path), virtual_test=str(fixture_path),
-                                                         generated_sha256=GENERATED, retained_binary=True))
-            helper_out = runner.out / "helper"
-            helper_out.mkdir()
-            for case in HELPER_CASES:
-                env = runner.env.copy()
-                env.update(HOSTED_CASE=case, HOSTED_EVIDENCE_DIR=str(helper_out / case))
-                try:
-                    runner.command("helper-" + case, [tests, "-test.v", "-test.run=^TestHostedCase$", "-test.timeout=40s"], env=env, timeout=60)
-                    if case == "cpu_wait":
-                        decode(runner, tests, helper_out / case / "profiles", "helper-decode")
-                    summary["helper_cases"][case] = "passed"
-                except Exception as error:
-                    summary["helper_cases"][case] = "failed: " + str(error)
-            # Race instrumentation is separate and never applied to the normal binary.
-            race_tests = root / "bin/profile-helper-race.test"
-            try:
-                runner.command("build-concurrency-race-tests", [runner.go, "test", "-c", "-race", "-mod=readonly",
-                               "-overlay", test_overlay, "-o", race_tests, str(helper_entry_path), str(fixture_path)], timeout=600)
-                write(runner.out / "race-binary.json", dict(sha256=digest(race_tests), fixture_sha256=digest(fixture),
-                                                           generated_sha256=GENERATED, retained_binary=False))
-                env = runner.env.copy()
-                env.update(HOSTED_CASE="concurrent-stop-close", HOSTED_EVIDENCE_DIR=str(helper_out / "concurrent-stop-close-race"))
-                runner.command("concurrent-stop-close-race", [race_tests, "-test.v", "-test.run=^TestHostedCase$", "-test.timeout=40s"], env=env, timeout=60)
-                summary["race"] = "changed concurrency helper control passed; no gateway race qualification"
-            except Exception as error:
-                summary["race"] = "not qualified: " + str(error)
-                summary["remaining_gates"].append("Changed concurrency race control did not complete successfully")
+            tests = binaries / "profile-cessation.test"
+            runner.command("build-cessation-file-list", [runner.go, "test", "-c", "-mod=readonly",
+                           "-overlay", cessation_overlay, "-o", tests,
+                           str(helper_entry_path), str(fixture_path), str(cessation_path)], timeout=600)
+            write(runner.out / "cessation-binary.json", dict(sha256=digest(tests),
+                accepted_fixture_sha256=digest(fixture), qualification_test_sha256=digest(cessation),
+                generated_sha256=GENERATED, retained_binary=True,
+                virtual_entry=str(helper_entry_path), virtual_test=str(fixture_path),
+                virtual_cessation_test=str(cessation_path), overlay_sha256=digest(cessation_overlay)))
+            env = runner.env.copy()
+            env.update(HOSTED_EVIDENCE_DIR=str(runner.out / "cessation"))
+            runner.command("sampler-cessation", [tests, "-test.v", "-test.run=^TestHostedCessation$",
+                           "-test.timeout=40s"], env=env, timeout=60)
+            decode(runner, tests, runner.out / "cessation/profiles", "cessation-decode")
         runner.clean_base()
-        require(all(value == "passed" for value in summary["helper_cases"].values()), "one or more retained helper controls failed")
-        summary["status"] = "bounded-constructor-controls-passed-pending-independent-acceptance"
+        summary["status"] = "required-producer-qualification-passed-pending-independent-acceptance"
     except BaseException as error:
         summary["status"], summary["error"] = "failed-or-incomplete", str(error)
         (runner.out / "exception.log").write_text(traceback.format_exc())
@@ -674,9 +718,14 @@ def execute():
         write(runner.out / "summary.json", summary)
         # Receipts/logs/binaries/source/profiles are retained on both success and
         # failure. Bulk caches, toolchain and DB data are intentionally excluded.
+        write(runner.out / "artifact-exclusions.json", dict(
+            excluded_campaign_databases=["campaign-*/treedb_mongo/db/**", "campaign-*/treedb_mongo/fixture-db/**"],
+            reason="Raw DB directories are bounded temporary data; full typed snapshots, raw lifecycle, logs, profiles and exact ELFs are retained."))
         inventory = {}
         for path in sorted(runner.out.rglob("*")):
-            if path.is_file() and not path.is_symlink() and "data" not in path.relative_to(runner.out).parts:
+            parts = path.relative_to(runner.out).parts
+            database = excluded_database(path, runner.out)
+            if path.is_file() and not path.is_symlink() and "data" not in parts and not database:
                 inventory[str(path.relative_to(runner.out))] = dict(bytes=path.stat().st_size, sha256=digest(path))
         write(runner.out / "inventory.json", inventory)
 

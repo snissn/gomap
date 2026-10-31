@@ -1,0 +1,93 @@
+package main
+
+import (
+ "bytes"
+ "crypto/sha256"
+ "encoding/json"
+ "fmt"
+ "os"
+ "path/filepath"
+ "reflect"
+ "runtime"
+ "runtime/pprof"
+ "strings"
+ "testing"
+ "time"
+)
+
+// Distinct call sites separate delayed publication of pre-stop records from
+// genuinely post-stop blocking. Neither function is used by other controls.
+//go:noinline
+func cessationBefore() {
+ done:=make(chan struct{})
+ go func(){ time.Sleep(10*time.Millisecond); close(done) }()
+ <-done
+}
+//go:noinline
+func cessationAfter() {
+ done:=make(chan struct{})
+ go func(){ time.Sleep(10*time.Millisecond); close(done) }()
+ <-done
+}
+
+func cessationCounts() (int64,int64,[]string) {
+ n,_ := runtime.BlockProfile(nil)
+ records := make([]runtime.BlockProfileRecord,n+32)
+ n,ok := runtime.BlockProfile(records)
+ if !ok { panic("block profile grew beyond bounded snapshot") }
+ var before,after int64
+ var evidence []string
+ for _,record := range records[:n] {
+  frames:=runtime.CallersFrames(record.Stack())
+  label:=""
+  for {
+   frame,more:=frames.Next()
+   if strings.Contains(frame.Function,"cessationBefore") { before+=record.Count; label="before" }
+   if strings.Contains(frame.Function,"cessationAfter") { after+=record.Count; label="after" }
+   if !more { break }
+  }
+  if label!="" { evidence=append(evidence,fmt.Sprintf("%s count=%d cycles=%d stack=%v",label,record.Count,record.Cycles,record.Stack())) }
+ }
+ return before,after,evidence
+}
+
+func cessationHashes(t *testing.T, root string) map[string]string {
+ t.Helper()
+ artifacts:=map[string]string{}
+ for _,name:=range []string{"cpu","block","mutex"} {
+  data,err:=os.ReadFile(filepath.Join(root,"profiles","run_1."+name+".pprof")); if err!=nil { t.Fatal(err) }
+  artifacts[name]=fmt.Sprintf("%x",sha256.Sum256(data))
+ }
+ return artifacts
+}
+
+func TestHostedCessation(t *testing.T) {
+ root,_:=hostedFixture(t)
+ prior:=runtime.SetMutexProfileFraction(-1)
+ c,err:=startDiagnosticProfileControl()
+ if err!=nil || c==nil { t.Fatalf("start control: %v",err) }
+ closed:=false
+ defer func(){ if !closed { _=c.Close() } }()
+ hostedOK(t,c,"/start?mode=cpu_wait")
+ if runtime.SetMutexProfileFraction(-1)!=1 { t.Fatal("mutex activation absent") }
+ cessationBefore()
+ before,after,activation:=cessationCounts()
+ if before==0 || after!=0 { t.Fatalf("distinct activation not observed: before=%d after=%d",before,after) }
+ hostedOK(t,c,"/stop")
+ if runtime.SetMutexProfileFraction(-1)!=prior { t.Fatal("mutex sampler baseline not restored") }
+ originalHashes:=cessationHashes(t,root)
+ // Only the unique post-stop stack is tested; pre-stop samples can publish late.
+ cessationAfter()
+ finalBefore,finalAfter,finalRecords:=cessationCounts()
+ if finalAfter!=0 { t.Fatalf("post-stop blocking was sampled: %d",finalAfter) }
+ var second bytes.Buffer
+ if err:=pprof.StartCPUProfile(&second); err!=nil { t.Fatalf("CPU profiler not released: %v",err) }
+ pprof.StopCPUProfile()
+ if second.Len()==0 { t.Fatal("second CPU capture empty") }
+ artifacts:=cessationHashes(t,root)
+ if !reflect.DeepEqual(artifacts,originalHashes) { t.Fatal("finalized profiles changed after post-stop stimulus") }
+ if err:=c.Close();err!=nil { t.Fatal(err) }; closed=true
+ proof:=map[string]any{"scope":"exact producer helper lifecycle only; no public inference","prior_mutex_fraction":prior,"activation_before_count":before,"pre_stop_after_count":after,"final_before_count":finalBefore,"post_stop_unique_count":finalAfter,"activation_records":activation,"final_records":finalRecords,"second_cpu_capture_bytes":second.Len(),"original_artifact_sha256":artifacts}
+ data,err:=json.MarshalIndent(proof,"","  "); if err!=nil { t.Fatal(err) }
+ if err:=os.WriteFile(filepath.Join(root,"cessation.json"),append(data,'\n'),0600);err!=nil { t.Fatal(err) }
+}

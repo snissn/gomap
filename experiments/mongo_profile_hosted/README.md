@@ -1,211 +1,216 @@
-# Hosted standalone Mongo profile constructor
+# Standalone producer qualification extension
 
-This is a source-only constructor checkpoint for the accepted **UNBUILT**
-standalone overlay. No Go command, local build, local runtime control or local
-benchmark was executed while constructing this folder. The original storage
-refusal remains: `/mnt/fast4tb` has no free capacity and local root is below the
-unchanged 8 GiB build floor. Hosted runs `41184042878` and `41184755795` built the actual
-standalone entry and passed the empty gateway lifecycle controls described below;
-both stopped at the helper build. The selected next proof is the repaired helper
-build and its controls on verified hosted storage. This is not the fixed public
-100k campaign.
+This source-only extension continues independently accepted constructor
+`dec0ca848d6157ebd8a4d625bb2a14cdc0826ffa`, hosted run `41185498116` attempt 1.
+That predecessor established the real standalone entry build, original/overlay
+env-unset equivalence, fresh empty off/cpu_wait gateway lifetimes with original
+checkpoint/checked Close, decoded profiles, 24 helper controls and a separate
+concurrency race control. Those accepted results are reused with their exact
+producer/fixture bindings; this extension does not repeat the broad suite or
+relabel a helper's synthetic owner as a gateway owner.
 
-The new workflow triggers only on a push to
-`codex/mongo-profile-hosted-20261031`. There is no PR, manual, main, schedule or
-deployment trigger. Publication appends normally to retained checkpoint
-`165a22b614019eef373a81cbc31ded57b1bd92cf`. The driver binds the exact checkout
-HEAD to `GITHUB_SHA`, requires root checkpoint
-`dbc659dfee648c11ad105048aa7d007caf8cb097` to have frozen base
-`95c6ff3de473786bd98b692375cfdb9cef951668` as its parent, and checks that root is
-an ancestor of the candidate with `git merge-base --is-ancestor`. The full net
-diff from base to candidate may change only this folder and
-`.github/workflows/mongo-profile-prototype.yml` relative to that base. The
-repository rejected a force push; the failed checkpoint stays in branch history.
-It changes no existing
-workflow or CI selection. The coordinator owns publication, review, execution
-acceptance and any later public eligibility decision.
+The selected new proof is full maintained campaign/phase integration and the
+remaining required failure/sampler controls. No Go command, build, client/server
+execution, benchmark, network request, commit or GitHub write occurred during
+local construction. Local resource floors remain unmet. All runtime assertions
+below are unexecuted gates until independently reviewed hosted evidence exists.
 
-## Source custody
+## Frozen source and execution boundary
 
-`accepted/` preserves selected packet files byte-for-byte, including both the
-original rejected source findings and the final limited source acceptance.
-`accepted-files.json` binds each copied file and its packet origin. The accepted
-assembled entry remains SHA-256
+The base is `95c6ff3de473786bd98b692375cfdb9cef951668`. The accepted generated
+producer bytes remain SHA256
 `987cd212e24c2bd1d4c28ce65501a353aacca6289b48ae3548b7eae39fb14101`.
-The source manifest and producer manifest retain their original bytes and path
-meanings; they are provenance records, not instructions to execute their old
-absolute paths. Original manifest entries are checked against the frozen hosted
-worktree. The hardcoded-path generator is never run.
+The original entry remains `TreeDB/mongo_gateway/server.go`, SHA256
+`2b19dfec2741a5dfaacfdd50cf31cccf95e0228b565420c9992d9fe4e6a73490`.
+Accepted producer/reviews/manifests in `accepted/` and the original helper fixture
+(SHA256 `a49b78e9848a86974c70cbf9cd083224bd26855b8370d03f9368071ab37f3d38`)
+remain byte-identical. No production source or mutable producer hook is added.
 
-The workflow checks out the exact candidate with pinned actions, bounded fetch
-depth 16 and no persisted credentials. Missing root/base history fails closed;
-there is no unbounded history fetch. A fresh task namespace is created under
-`RUNNER_TEMP`, with a writable filesystem probe and at least 8 GiB available
-before setup-go. With dependency caching disabled, setup-go selects the pinned
-Go 1.26.10 source toolchain. Before executing Go, the driver copies that toolchain
-into its fresh task-owned `toolcache/go1.26.10` directory. Task outputs, temporary
-files, Go caches, the copied toolchain and data directories use this
-namespace. No unrelated runner cleanup runs. The resource guard checks available
-bytes every 200 ms while dependency/build commands execute and kills their process
-group on a floor breach or deadline. The constructor has a 20 minute internal
-budget and the workflow has a 30 minute job bound, leaving time to upload failures.
+The workflow still triggers only on push to
+`codex/mongo-profile-hosted-20261031`, uses read-only contents permissions and
+pinned checkout/setup-go/upload actions, and has a 30-minute job bound. It has no
+PR, manual, main, schedule, release or deployment step. Publication appends to
+the accepted predecessor. The driver checks exact HEAD/GITHUB_SHA, root checkpoint
+`dbc659dfee648c11ad105048aa7d007caf8cb097` parent equal to the base and ancestry
+in the candidate, and the complete base-to-candidate path scope. Fetch depth 16
+is bounded; missing ancestry fails without an unbounded fetch.
 
-The first hosted attempt, run `41183105430`, selected the existing toolchain at
-`/opt/hostedtoolcache/go/1.26.10/x64`; the requested environment-file toolcache
-setting did not control that selection. The namespace gate rejected the outside
-driver before dependencies or builds. That source/review snapshot and original
-failure evidence remain preserved. The repaired constructor removes the ineffective
-environment export and stages the selected source explicitly; it does not accept
-an outside driver/compiler as its build toolchain.
+Preflight creates a fresh task namespace in `RUNNER_TEMP`, requires 8 GiB before
+setup and retains failures. setup-go selects exact Go 1.26.10 without cache;
+before any Go execution, bounded task-owned staging preserves the 8 GiB reserve,
+1 GiB/100,000-file/300-second caps, original/staged driver/compiler hashes and
+VERSION agreement. Explicit GOROOT/GOTOOLDIR/GOVERSION, resolved driver and both
+compiler `-V` outputs must agree before dependency preparation/builds. All normal
+builds are offline after pinned go.sum preparation, `-mod=readonly`, normal
+optimization, GOWORK off/GOTOOLCHAIN local, and unforced GOMAXPROCS. Every original
+source-manifest hash and clean tracked/untracked/ignored base check remains.
 
-Staging first requires the selected root's `VERSION` first line to equal
-`go1.26.10`. Copying has a 1 GiB aggregate byte cap, 100,000 file cap and 300 second
-deadline within the existing constructor budget. Only regular files and
-non-symlink directories are copied. Per-file and per-chunk reserve checks preserve
-the unchanged 8 GiB floor. Origin and staged driver/compiler hashes must agree,
-and selected executables must still match after staging. The original root/path,
-versions, hashes, copy totals and limits are retained in `toolchain-stage.json`
-and successful build provenance. Any copy/version/hash failure emits its original
-failure receipt through a `finally` block; partial owned copies stay outside the
-uploaded evidence directory. No Go command runs during staging.
+An early `prepare_tools.py` step records the actual strace path/hash/version
+before setup-go or dependency work. An existing image executable is copied into
+the fresh task tools directory with equal origin/copied hashes. If strace is absent,
+unprivileged `apt-get download strace` uses normal existing signed image metadata,
+the actual runner user as APT sandbox user and private cache paths. No sudo, UID
+change, global update/install, authentication relaxation or install script runs.
+Unavailable metadata or dynamic dependencies is an early preserved RED. The single
+package is capped at 16 MiB; declared/observed extraction at 64 MiB; all task tool
+files at 96 MiB/10,000 entries. Download/metadata/extract/version deadlines are
+180/10/60/10 seconds under the original guardian. `dpkg-deb --extract` writes only
+the fresh owned extraction path; escaping symlinks or special files are refused.
+The selected executable must resolve inside owned tools and retain its hash across
+the version probe. The driver verifies the same injector hash before use.
+The internal deadline is 20 minutes, leaving upload time. Child monitoring checks
+selected disk floors, total descendant RSS <=24 GiB (including separate maintained
+helper sessions), each log/trace <=32 MiB, and evidence <=1 GiB. Command failure
+kills current descendants by checked start tokens, including separate process
+groups. Campaigns require the unchanged 10 GiB reserve continuously; build/other
+qualification phases retain 8 GiB. Guard failure is RED. No unrelated cleanup or
+resource-floor waiver is selected.
 
-The driver creates a clean detached worktree at the frozen base and checks the
-original entry hash, all exported source-manifest hashes and an empty tracked,
-untracked and ignored status. It copies the accepted generated bytes outside that
-worktree and records one ephemeral absolute overlay. Pinned go.sum dependencies
-reachable from the actual entry are prepared in the isolated module cache with
-`-mod=readonly`. Actual builds then use explicit GOROOT, `GOTOOLCHAIN=local`,
-`GOWORK=off`, `GOENV=off`, `GOPROXY=off`, `GOSUMDB=off`, ordinary optimization and
-no forced GOMAXPROCS. The normal binary has no race instrumentation or special
-tags. Before dependency preparation or builds, the resolved Go executable must
-belong to the task toolchain and agree with explicit GOROOT, `go env` GOVERSION
-and GOTOOLDIR, and both the selected compiler's `-V` and `go tool compile -V`
-outputs at exactly Go 1.26.10. Any disagreement fails closed. These actual paths
-and version outputs accompany the driver/compiler hashes in provenance.
-Toolchain/compiler, base/candidate, driver/workflow, source manifest,
-lockfiles, overlay, fixture and binary hashes are retained. Environment recording
-uses an explicit Go-variable allowlist and never dumps credentials or tokens.
+## Authenticated client custody
 
-The physical Go test fixture remains outside the pinned source. A second ephemeral
-overlay maps the exact accepted generated source and unchanged fixture to
-`TreeDB/mongo_profile_constructor_probe/server.go` and
-`TreeDB/mongo_profile_constructor_probe/hosted_profile_test.go`. Both ordinary and
-race file-list builds use these same-directory virtual paths. The fresh virtual
-sibling directory stays inside the module's internal-import scope while keeping
-`package main` tests out of the imported `mongogateway` package. The normal actual
-standalone overlay still targets `TreeDB/mongo_gateway/server.go`. Both helper
-virtual paths and the overlay hash are explicit provenance. Immediately before
-the helper build, the constructor creates only the empty physical probe directory
-so Go's default vet subprocess has a working directory. No generated or test
-source file is added to the frozen worktree. The directory encloses ordinary and
-race helper builds and their controls, then is checked and removed on success or
-failure. Cleanup verifies its recorded device/inode, rejects symlinks and
-unexpected contents, and uses only `rmdir`; it never deletes unexpected files.
-`helper-probe-directory.json` records creation, emptiness, removal, the subsequent
-tracked/untracked/ignored clean-base check, and any original or cleanup error.
-Default vet remains enabled. This repaired helper build still needs hosted
-qualification.
+Only the dedicated `fetch_client.py` workflow step receives GH_TOKEN. Its fixed
+read-only `gh api` requests download two raw assets from unpublished draft input
+release `429832319` (tag name
+`mongo-profile-qualification-input-2237-20261031`; no tag publication selected):
 
-## Bounded hosted proof
+| Asset | ID | Exact bytes | SHA256 |
+| --- | --- | --- | --- |
+| accepted go-ycsb ELF | 694916289 | 99134712 | `2237d8aeec309b9b4b335b348234d9829594c9101043144a944d9f2868fbc95b` |
+| original client-build.json | 694917396 | 599 | `90e51911687d97efdc00295462d518192fe8b15c6485f8611454bb4cdfcd5fc0` |
 
-The actual standalone build and original/overlay empty gateway runs precede the
-helper controls. Every gateway launch selects canonical
-`-profile command_wal_durable`, and the original owner's profile field and
-`treedb.profile.resolved` statistic must both match that selection. The pinned
-parser rejects the retired CLI token `durable`; the source checker guards against
-its reintroduction. Every gateway process uses a fresh empty database and original
-`YCSB_SERVER_RECEIPT_DIR` and `YCSB_OWNER_CHECKPOINT=1` hooks. The original binary
-and the overlay binary with the diagnostic environment unset both must reach
-readiness, perform a real owner checkpoint, receive SIGTERM and exit zero through
-the original checked close. Their observed profile/backend/runtime settings are
-compared. This is startup/checkpoint/shutdown equivalence for an empty gateway,
-not full behavioral equivalence.
+IDs, sizes and hashes are fixed in source. Fetches have fresh partial destinations,
+reserve/RSS/output guards and 180-second deadlines; rename occurs only after exact
+size/hash agreement. Logs and failure receipts are uploadable. No credential is
+printed, persisted by a login, passed as a command argument or forwarded through
+custom HTTP redirects. The qualification child environment explicitly removes
+GH_TOKEN/GITHUB_TOKEN/GH_ENTERPRISE_TOKEN. The driver fetches public source at exact
+producer `3c8148495b8d4490cf0ec30e9eb92d14a7a71bac`, depth 1, verifies tree
+`b64dd21261421d580ee72fe61711120a7f56c878`, detached HEAD and completely clean
+tracked/untracked/ignored state. Original build support is preserved: the first
+retained build-command receipt failed; the support record binds ELF/source/toolchain
+without inventing a successful build command. Static custody is not a runtime
+witness. The unchanged observer still requires the accepted ELF's inspected
+`runtime.gomaxprocs` symbol `0x4715c10`; arbitrary new client hashes are refused.
 
-Fresh processes then exercise actual `off` and `cpu_wait` phases via the private
-Unix socket, followed by the same original checkpoint and checked close. The
-controller does not retry exchanges and any failed exchange vetoes the run.
-The original pinned `ycsb_compare_live.owner` and `checkpoint_proof` consumers
-validate raw ownership and actual callback results. The checkpoint request uses
-the original schema with an explicitly named smoke marker; that marker is not a
-random snapshot or evidence of workload preservation. Profile receipt checks bind
-the full original owner, chronology, finalization, exact names, regular files,
-byte totals, hashes and 64 MiB cap. CPU/block/mutex artifacts must each decode and
-symbolize with the pinned `go tool pprof` and exact binary. Empty-gateway profiles
-can contain no useful samples; successful decoding alone establishes no causal
-attribution.
+## Maintained run_1 integration
 
-Every helper case runs in a fresh test process. Its full-schema owner fixture is
-explicitly synthetic and restricted to helper scope. Cases cover real `off` and
-`cpu_wait` control, CPU and wait stimulus, sampler state, full-owner preservation,
-pprof decode, missing/mismatched owner, relative/existing/symlink output paths,
-Unix listener path failure, duplicate query and phase controls, stop-before-start,
-original-target canonical-path and `OPTIONS *` requests, active/never-started
-Close, admitted response Write/short-write/Flush failures, shared writer cap,
-real closed-file Write/Sync/Close errors, profile/receipt Open failures, and an
-admitted stop held in Flush while Close waits. A separately built race binary
-runs only that changed concurrency control if capacity and time permit. An
-absent/failed race run records no race qualification. The ordinary binary stays
-unchanged.
+`qualify.launcher_text` creates a checked shadow of exact frozen launcher SHA256
+`1886b160269b761fd0849b4ecee15fb927f05a1e985887799452bf70010ec568` outside
+the clean source tree. Its three changes resolve ROOT to the pinned base, set the
+diagnostic environment only for the initial real owner, and bracket only the
+unchanged run_1 launch with strict start/stop exchanges. Reopened and deterministic
+fixture owners explicitly have the diagnostic variable removed. Actual owner
+checkpoint, full typed loaded/preclose/reopened census, checked original close,
+independent reopen, separate deterministic write/checkpoint/reopen/verify and final
+complete maintained campaign consumer remain intact. Original deadlines and
+workload properties (ten 100-byte fields, all-field reads, one-field updates,
+95/5 proportions, no inserts or cache/batching/GC changes) remain.
 
-## Retained evidence and remaining gates
+Two fresh **diagnostic-only** campaigns select off and cpu_wait, each 1000 rows,
+1000 operations, 16 clients and one repeat. Every diagnostic row is censused.
+An early-client-exit/runtime-observer failure is preserved as RED; there is no
+larger-count retry or observer waiver. These are not either arm of the original
+fixed public 100k/10k/16-client pair. No MongoDB rerun is selected.
 
-Run `41184042878` at source `d2259ce4f6c4f829f642fe4755e3516034cdc8dc`
-completed pinned toolchain staging, the original and accepted-overlay standalone
-builds, diagnostic-environment-unset startup/checkpoint/checked shutdown for both
-binaries, and fresh actual `off` and `cpu_wait` gateway phases. CPU, block and
-mutex profiles each decoded in raw and top views with the retained exact binary.
-The run then failed compiling the helper because its virtual `package main`
-test file contaminated the imported `TreeDB/mongo_gateway` package. Its summary,
-provenance, original failed build log, gateway receipts and profiles remain in
-the coordinator's `hosted/41184042878-1/mp-vf3jmg2s/evidence` artifact; this is
-external hosted evidence, not a local execution claim. The prior source/reviews
-are preserved in `review/rejected-hosted-2`. No helper case or race qualification
-was reached. The full existing fixture was source-audited for obvious API, type
-and unused-import errors; no additional finding was identified, and no local Go
-parser or compiler ran. The helper fixture and accepted generated bytes remain
-unchanged. The runner exposed four CPUs with affinity `[0, 1, 2, 3]`, which does
-not meet the original public 12-CPU contract. No public workload was launched and
-no performance inference follows from these empty gateway controls.
+`phase_controller.py` retains status, Content-Length/full raw body, parsed body,
+request target, timestamps and any failed outcome. Its shared acceptance predicate
+vetoes failed exchanges independently of physical profile receipts or gateway
+exit. Both successful bodies must match retained phase receipts before calling
+byte-identical original `qualification_validate_profile.py` (SHA256
+`48bd478a902db158994185b9a859daab2bcebf143494d76570685c9c1a7ba8bd`).
+That consumer first calls complete maintained validation; it is not replaced by
+matching aggregate strings. Complete frozen script closure hashes are retained.
+The clean source diff remains truthfully empty; separate acceptance bindings pin
+accepted generated bytes, absolute ephemeral overlay and actual ELF. The ordinary
+campaign validator alone does not authenticate a Go overlay.
 
-Run `41184755795` at source `165a22b614019eef373a81cbc31ded57b1bd92cf`
-again passed those actual gateway modes and six profile-decode commands. Its
-isolated virtual helper package avoided the previous package contamination, but
-the helper build then failed when default vet attempted to enter the nonexistent
-physical probe directory. The original `23-build-file-list-tests.log`, summary,
-provenance and gateway evidence remain in
-`hosted/41184755795-1/mp-_jeg3vfm/evidence`; its source/reviews snapshot is
-`review/rejected-hosted-3`. No helper controls or race qualification completed.
-The present repair supplies only that empty cwd and checked removal. Both failed
-attempts remain evidence of harness construction failures; neither supports a
-performance inference. No producer or fixture bytes were changed.
+## Actual negative controls and delivery evidence
 
-The always-upload step includes the exact normal standalone binary and ordinary
-helper test binary matching the retained helper profiles, source
-packet, workflow/driver/fixture, provenance, command receipts/logs, original
-owner/checkpoint/close receipts, controller results, profiles, failure tracebacks
-and an inventory. Bulk dependencies, source worktrees, toolchains, auxiliary test
-binaries without retained profiles and database directories are excluded by
-placing them outside the evidence directory. Baseline/race binaries retain hashes.
-Profile payloads have the
-accepted 64 MiB cap. The prototype is not selected for production or merging.
+Each negative uses a fresh actual ordinary gateway, original evidence/checkpoint
+hooks, fresh DB and identity-bound checked shutdown. The negative consumer reuses
+the original observation/result/schema/identity/chronology predicates while
+requiring the original diagnostic exit status 1 and that same actual tracee's
+`+++ exited with 1 +++`. It does not rewrite failed exits to satisfy the success
+consumer. Original owner Close must succeed and the original checkpoint endpoint
+must be closed. Where readiness exists, a real original checkpoint call is made
+before SIGTERM. Startup failure does not fabricate FlushAll/CheckpointStorage;
+its original endpoint closure and checked owner Close remain observable.
 
-A green hosted result remains pending independent exact-source/evidence
-acceptance. It cannot replace full maintained campaign/lifecycle/profile validator
-acceptance, public runtime/affinity/resource/repetition eligibility, or the original
-public workload. Remaining negative controls include actual gateway cleanup on
-each failure path; real socket disconnect and a deliberate controller failed
-exchange despite local flush success; fault-injected short-write/Sync/Close
-beyond the real closed-file control; broader invalid/body/query cases; and exact
-sampling activation/cessation beyond helper state and payload decoding. Every
-failed helper invocation is retained and vetoes bounded control acceptance.
-Performance improvement, durable-read attribution, crash/recovery qualification
-and the parent public outcome remain open. No hosted CPU count is substituted
-for the original host, and GOMAXPROCS is never forced to pass a runtime gate.
+Startup covers relative/existing/symlink output, Unix listener failure and original
+owner missing/mismatch. A negative symlink points only to a fresh owned empty
+directory; lstat/target/emptiness are retained, so artifact transport cannot expand
+it into unrelated temporary data. Owner mutation retains the authentic observation
+first, uses path-filtered delayed open, and requires a delayed O_RDONLY read trace
+plus ENOENT or the exact owner-mismatch error. Failure to establish delivery is RED.
+Actual control cases cover invalid parameters, active/never-started shutdown, and
+CPU/start-receipt/stop-receipt Open conflicts. Existing shared helper routing,
+OPTIONS, duplicate, response-write/short-write/flush, writer-cap and concurrency
+results remain reused from the accepted predecessor.
 
-Local source checks are limited to `python3 -B
-experiments/mongo_profile_hosted/check_source.py`: Python AST syntax, immutable
-packet/source hashes and workflow/constructor contracts. They are not a Go parse,
-build, runtime or pprof result. Applicable changed-path policy is the frozen root
-`AGENTS.md`; no nested `experiments` or `.github` policy exists at that base.
-The frozen TreeDB policy was also inspected because the overlay targets its
-entry, although no production source or disk format changes.
+Path-filtered `strace -ff -yy` injects Write EIO, **zero-progress short-write**,
+fsync EIO and close EIO into CPU output and stop-receipt sinks (eight cells). Each
+trace must bind the selected syscall, exact target path, expected errno/retval and
+actual nonzero tracee exit. Positive partial syscall writes can be retried inside
+Go's poller and are not mislabeled an API short write. Pinned Go1.26.10
+`src/internal/poll/fd_unix.go:360–406` (SHA256
+`689fb78bb32b8e810fa1dd2ded475a79574f24a8f40260af2d4a3273392bc2cc`)
+returns `io.ErrUnexpectedEOF` for zero-progress with bytes remaining; cells inject
+retval=0 and require a positive requested length. A skipped/injected close may
+leave a descriptor open until process exit; negative evidence never claims file
+close/durability success. The strace version and actual delivery are retained;
+unsupported or ineffective injection halts qualification.
+
+Real start/stop disconnects wait for complete admitted receipt bytes during a
+path-specific fsync delay, then reset the real AF_UNIX connection. Both require
+actual detected response failure, syscall-delivery evidence and original cleanup.
+A separate proxy fully consumes a successful upstream response but drops it to
+the strict downstream controller. Start failure cannot launch a timed client.
+The stop proxy intentionally retains successful physical stop and a zero gateway
+exit, yet the same outcome acceptance predicate must reject downstream EOF. This
+is controller infrastructure, with no producer protocol/source hook. Every
+proxy path is bound by socket type/device/inode. A finally block closes the listener,
+shuts down owned accepted sockets, and joins its thread within 20 seconds, including
+when the controller fails early. Only after listener closure and thread settlement
+may it unlink that same unchanged socket; replacement/missing paths cause a retained
+cleanup failure. `proxy-cleanup.json` records both original and cleanup failures;
+combined failures propagate together rather than replacing the original error.
+No evidence directory or unexpected path is broadly deleted.
+
+## Sampler cessation and evidence retention
+
+One new `cessation_test.go.txt` runs in a fresh exact-source helper process beside
+the unchanged accepted fixture. Distinct noinline pre-stop and post-stop blocking
+call sites prevent pending activation samples from being mistaken for post-stop
+activity. Activation must have a positive before count; the unique after count
+must stay zero after real stop. The prior mutex sampling fraction must be restored,
+a second CPU capture must start/stop successfully, and finalized original profile
+hashes must remain stable across post-stop stimulus. Ambiguous/missing activation
+is RED, without arbitrary sleeps/retries. This is bounded helper lifecycle evidence,
+not universal timing attribution or a public workload witness.
+
+The helper's physical source stays outside the pristine base; three virtual files
+share the isolated TreeDB sibling directory. Only that empty physical directory is
+created for default vet's cwd, checked by device/inode/emptiness and removed with
+rmdir in finally. No generated/test source is written there; unexpected contents
+are never deleted. The fresh matching helper ELF and ordinary gateway/fixture ELFs
+are retained, together with raw profiles, decoded raw/top views, controller outcomes,
+all syscall traces and failure receipts. Task caches, staged toolchain, source
+worktrees and raw campaign DB/fixture-DB files are excluded. The exact DB exclusion
+patterns agree between upload and inventory; typed data snapshots remain retained.
+
+## Acceptance and terminal boundary
+
+`check_source.py` performs only Python AST/hash/source contracts and Bash syntax
+inspection of the generated shadow; it does not parse/compile/run Go. The generated
+source hash is checked independently. `source-only-checks.json` records the exact
+source-ready batch. Runtime status remains pending full independent exact-source
+review, one hosted execution and independent complete artifact acceptance. Failed
+source/runtime evidence is preserved; no retry-to-pass is authorized.
+
+After qualification passes, the original representative pair still requires
+original effective GOMAXPROCS 12, affinity 0–11, eligible persistent storage >=10 GiB,
+24 GiB RSS, fixed 100k rows/10k operations/16 clients and original lifecycle/census.
+A four-CPU hosted result cannot replace either arm. If storage remains the sole
+impasse, stop at producer-qualified/public-pair-resource-blocked and retain the
+exact executable packet. No bottleneck, causal or performance conclusion follows
+from this extension.

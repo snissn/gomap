@@ -1,29 +1,105 @@
 {
-  "status": "SOURCE_READY_FOR_HELPER_VET_CWD_REPAIR_REVIEW",
-  "base": "95c6ff3de473786bd98b692375cfdb9cef951668",
-  "construction_source_commit": "165a22b614019eef373a81cbc31ded57b1bd92cf",
-  "failed_hosted_run_preserved": "41184755795",
-  "rejected_source_preserved": "/home/mikers/gomap-mongo-hosted-profile-20261031-j2cxm6g7/review/rejected-hosted-3",
-  "rejection_manifest_sha256": "44932b048a8c8ec291601a8a03be129d6791b82fdce23fb3b690ab0f13340a73",
-  "checks": {
-    "status": "offline-source-contracts-passed",
-    "copied_packet_files": 10,
-    "helper_cases": 24,
-    "generated_sha256": "987cd212e24c2bd1d4c28ce65501a353aacca6289b48ae3548b7eae39fb14101",
-    "go_parse": false,
-    "go_build": false,
-    "go_runtime": false,
-    "pprof_decode": false
+  "accepted_predecessor": {
+    "attempt": 1,
+    "hosted_run": "41185498116",
+    "report_sha256": "c0dacf85ad04753e6729ad2762d498152f6a40aa91f9836df4c5a2ad8ab93d1a",
+    "review_sha256": "2fe3a5686381c8697a981e82b29887fd7cf6c9d82fad79970a9365ee527ed9f8",
+    "source": "dec0ca848d6157ebd8a4d625bb2a14cdc0826ffa"
   },
-  "git_diff_check": "passed",
-  "go_commands_executed_locally": false,
-  "local_runtime_executed": false,
-  "github_writes": false,
-  "source_bytes": 176887,
-  "files": {
+  "base": "95c6ff3de473786bd98b692375cfdb9cef951668",
+  "changed_file_hashes": {
+    ".github/workflows/mongo-profile-prototype.yml": {
+      "bytes": 2311,
+      "sha256": "9e66b64f2ea5fa5abefd3c8aeec1abf4ae9e6b116f27e5feb90bebc2a35161b6"
+    },
     "experiments/mongo_profile_hosted/README.md": {
-      "bytes": 14218,
-      "sha256": "044ba3d3f7605f4e0cb2c836306c116f222422fc0d0675b394a7b8a26115b5c6"
+      "bytes": 14490,
+      "sha256": "7c6dc34ee83cb29631cea99fba43ead372ac6d0d20f8a05c8d6f76bbd7a90c8f"
+    },
+    "experiments/mongo_profile_hosted/cessation_test.go.txt": {
+      "bytes": 3719,
+      "sha256": "81a39d2e5ae40b6af20de999b685e1fbbeb227105a404f1b36fc921aeb4a7dcc"
+    },
+    "experiments/mongo_profile_hosted/check_source.py": {
+      "bytes": 11118,
+      "sha256": "bd14c5af8853036cd68fde876f0f12b46abe5725dc051ed34dd4594f2657e5c6"
+    },
+    "experiments/mongo_profile_hosted/fetch_client.py": {
+      "bytes": 3223,
+      "sha256": "da344f9d7e47c7e5a8e72a99501efb59dc354cc06eb7fb0c52bfa2fba87caf09"
+    },
+    "experiments/mongo_profile_hosted/phase_controller.py": {
+      "bytes": 2003,
+      "sha256": "b3b205e28ca9c5424df61f28f9ddced6d8fee16bcf2c7b18122131952de54ac0"
+    },
+    "experiments/mongo_profile_hosted/prepare_tools.py": {
+      "bytes": 5805,
+      "sha256": "6206b718d5f4aaecf335957764448c902c76e20c2e2659708dd632d948102ed9"
+    },
+    "experiments/mongo_profile_hosted/qualification_validate_profile.py": {
+      "bytes": 5362,
+      "sha256": "48bd478a902db158994185b9a859daab2bcebf143494d76570685c9c1a7ba8bd"
+    },
+    "experiments/mongo_profile_hosted/qualify.py": {
+      "bytes": 29428,
+      "sha256": "e947a7f9b955ab0ad8114cfdfcf0c26c63360ea3cd39c09683646d327c59490f"
+    },
+    "experiments/mongo_profile_hosted/run.py": {
+      "bytes": 42949,
+      "sha256": "6f122f8ed48343dc533de17344cfaa15d2c37b80ee6f3cac360c1c27b6b8c0ac"
+    }
+  },
+  "changed_paths": [
+    ".github/workflows/mongo-profile-prototype.yml",
+    "experiments/mongo_profile_hosted/README.md",
+    "experiments/mongo_profile_hosted/cessation_test.go.txt",
+    "experiments/mongo_profile_hosted/check_source.py",
+    "experiments/mongo_profile_hosted/fetch_client.py",
+    "experiments/mongo_profile_hosted/phase_controller.py",
+    "experiments/mongo_profile_hosted/prepare_tools.py",
+    "experiments/mongo_profile_hosted/qualification_validate_profile.py",
+    "experiments/mongo_profile_hosted/qualify.py",
+    "experiments/mongo_profile_hosted/run.py",
+    "experiments/mongo_profile_hosted/source-only-checks.json"
+  ],
+  "checks": {
+    "bash_shadow_syntax": true,
+    "copied_packet_files": 10,
+    "generated_sha256": "987cd212e24c2bd1d4c28ce65501a353aacca6289b48ae3548b7eae39fb14101",
+    "go_build": false,
+    "go_parse": false,
+    "go_runtime": false,
+    "local_workload": false,
+    "network": false,
+    "python_ast_files": 7,
+    "reused_helper_fixture_sha256": "a49b78e9848a86974c70cbf9cd083224bd26855b8370d03f9368071ab37f3d38",
+    "status": "offline-source-contracts-passed"
+  },
+  "client_input": {
+    "build_asset_id": 694917396,
+    "build_manifest_sha256": "90e51911687d97efdc00295462d518192fe8b15c6485f8611454bb4cdfcd5fc0",
+    "build_receipt_caveat": "original first command failed; original support binds ELF/source/toolchain, no successful command receipt invented",
+    "client_asset_id": 694916289,
+    "client_bytes": 99134712,
+    "client_sha256": "2237d8aeec309b9b4b335b348234d9829594c9101043144a944d9f2868fbc95b",
+    "release_id": 429832319,
+    "source_commit": "3c8148495b8d4490cf0ec30e9eb92d14a7a71bac",
+    "source_tree": "b64dd21261421d580ee72fe61711120a7f56c878"
+  },
+  "commits": false,
+  "construction_source_commit": "dec0ca848d6157ebd8a4d625bb2a14cdc0826ffa",
+  "files": {
+    ".github/workflows/mongo-profile-prototype.yml": {
+      "bytes": 2311,
+      "sha256": "9e66b64f2ea5fa5abefd3c8aeec1abf4ae9e6b116f27e5feb90bebc2a35161b6"
+    },
+    "experiments/mongo_profile_hosted/README.md": {
+      "bytes": 14490,
+      "sha256": "7c6dc34ee83cb29631cea99fba43ead372ac6d0d20f8a05c8d6f76bbd7a90c8f"
+    },
+    "experiments/mongo_profile_hosted/accepted-files.json": {
+      "bytes": 1740,
+      "sha256": "3b549d3ee28cf003b473c5e686fe9b69ca0c14fce5cb79d65bc17704852b65e0"
     },
     "experiments/mongo_profile_hosted/accepted/README.md": {
       "bytes": 5042,
@@ -65,94 +141,102 @@
       "bytes": 2764,
       "sha256": "478a2b7e082fb58a5fda231c3e490faf0849c888dd5a285ccc9c1b54461787ec"
     },
-    "experiments/mongo_profile_hosted/accepted-files.json": {
-      "bytes": 1740,
-      "sha256": "3b549d3ee28cf003b473c5e686fe9b69ca0c14fce5cb79d65bc17704852b65e0"
+    "experiments/mongo_profile_hosted/cessation_test.go.txt": {
+      "bytes": 3719,
+      "sha256": "81a39d2e5ae40b6af20de999b685e1fbbeb227105a404f1b36fc921aeb4a7dcc"
     },
     "experiments/mongo_profile_hosted/check_source.py": {
-      "bytes": 11182,
-      "sha256": "d386f8b3cca1d3a12772b1ab5a91243b96341459a389d3c8cfbe464ecccc840a"
+      "bytes": 11118,
+      "sha256": "bd14c5af8853036cd68fde876f0f12b46abe5725dc051ed34dd4594f2657e5c6"
+    },
+    "experiments/mongo_profile_hosted/fetch_client.py": {
+      "bytes": 3223,
+      "sha256": "da344f9d7e47c7e5a8e72a99501efb59dc354cc06eb7fb0c52bfa2fba87caf09"
     },
     "experiments/mongo_profile_hosted/hosted_profile_test.go.txt": {
       "bytes": 12410,
       "sha256": "a49b78e9848a86974c70cbf9cd083224bd26855b8370d03f9368071ab37f3d38"
     },
+    "experiments/mongo_profile_hosted/phase_controller.py": {
+      "bytes": 2003,
+      "sha256": "b3b205e28ca9c5424df61f28f9ddced6d8fee16bcf2c7b18122131952de54ac0"
+    },
+    "experiments/mongo_profile_hosted/prepare_tools.py": {
+      "bytes": 5805,
+      "sha256": "6206b718d5f4aaecf335957764448c902c76e20c2e2659708dd632d948102ed9"
+    },
+    "experiments/mongo_profile_hosted/qualification_validate_profile.py": {
+      "bytes": 5362,
+      "sha256": "48bd478a902db158994185b9a859daab2bcebf143494d76570685c9c1a7ba8bd"
+    },
+    "experiments/mongo_profile_hosted/qualify.py": {
+      "bytes": 29428,
+      "sha256": "e947a7f9b955ab0ad8114cfdfcf0c26c63360ea3cd39c09683646d327c59490f"
+    },
     "experiments/mongo_profile_hosted/run.py": {
-      "bytes": 40891,
-      "sha256": "53e8f58d42a6ff681ec4ab86788c2f4a9f79830b28d8f33df788221247ac515f"
-    },
-    ".github/workflows/mongo-profile-prototype.yml": {
-      "bytes": 1682,
-      "sha256": "4d019ab40c25e43cdade648312a0ddcc1d5e4f629b8a4c7f2e4e6c1d025ecca6"
+      "bytes": 42949,
+      "sha256": "6f122f8ed48343dc533de17344cfaa15d2c37b80ee6f3cac360c1c27b6b8c0ac"
     }
   },
-  "append_only_history": {
-    "root_checkpoint": "dbc659dfee648c11ad105048aa7d007caf8cb097",
-    "root_parent": "95c6ff3de473786bd98b692375cfdb9cef951668",
-    "root_is_candidate_ancestor_required": true,
-    "candidate_must_equal_github_sha": true,
-    "net_diff_scope_from_base": "experiments/mongo_profile_hosted/** and .github/workflows/mongo-profile-prototype.yml only",
-    "checkout_depth": 16,
-    "missing_root_or_base": "fail closed; no unbounded fetch"
-  },
-  "helper_overlay": {
-    "entry": "TreeDB/mongo_profile_constructor_probe/server.go",
-    "test": "TreeDB/mongo_profile_constructor_probe/hosted_profile_test.go",
-    "normal_entry": "TreeDB/mongo_gateway/server.go",
-    "physical_generated_source_unchanged": true,
-    "physical_fixture_unchanged": true,
-    "fixture_sha256": "a49b78e9848a86974c70cbf9cd083224bd26855b8370d03f9368071ab37f3d38",
-    "physical_probe_directory": "Empty physical directory created immediately before helper build; no source files; removed in finally after ordinary/race builds and controls or their failure",
-    "default_vet_enabled": true,
-    "cleanup": "Verify device/inode, directory/non-symlink and emptiness; rmdir only; refuse unexpected contents; check clean base; retain creation/removal/error receipt",
-    "source_audit": "Prior full fixture source audit unchanged; no new fixture controls or Go parse/build locally"
-  },
-  "prior_hosted_evidence": {
-    "origin": "/home/mikers/gomap-mongo-hosted-profile-20261031-j2cxm6g7/hosted/41184755795-1/mp-_jeg3vfm/evidence",
-    "source": "165a22b614019eef373a81cbc31ded57b1bd92cf",
-    "status": "failed-or-incomplete",
-    "gateways": {
-      "env_unset": "baseline and overlay empty startup/checkpoint/checked shutdown passed",
-      "off": "passed-empty-gateway-only",
-      "cpu_wait": "passed-empty-gateway-only"
-    },
-    "cpu_count": 4,
-    "affinity": [
-      0,
-      1,
-      2,
-      3
-    ],
-    "profile_decodes": "CPU/block/mutex raw and top command receipts each exit zero",
-    "helper": "Build failed because default vet cwd was absent; no helper controls or race qualification completed",
-    "public_qualification": false,
-    "performance_claims": false,
-    "files": {
-      "summary.json": {
-        "bytes": 14966,
-        "sha256": "4450068a545d2f948d369a6d74d953d2d88c61b24cbdbc2843930f77052939cb"
-      },
-      "provenance.json": {
-        "bytes": 4380,
-        "sha256": "9c1eb5ebc2749d94e886d8b9b0b26453c8fccb55fd18b8bf8172a28522313d49"
-      },
-      "23-build-file-list-tests.log": {
-        "bytes": 219,
-        "sha256": "78e95af2e8cdad4884d5e641b2fa53ca0527453aa75db982582ba048538ddf13"
-      }
-    }
+  "frozen_research_sha256": "c1ddf436a8fc7122b0d34c226d73b77917adafcad605ffaa820bb180186467e5",
+  "git_diff_check": "passed",
+  "github_writes": false,
+  "local_go_commands": false,
+  "local_server_client_execution": false,
+  "network": false,
+  "producer_unchanged": true,
+  "public_arms": false,
+  "rejected_candidate": {
+    "manifest_sha256": "02c55ac2feb3a880215b126b261bd1e414c930b4c676e2a762769e15c7ed7cf8",
+    "retained_source": "/home/mikers/gomap-mongo-phase-qualification-20261031/source-review-candidate-1",
+    "review": "/home/mikers/gomap-mongo-phase-qualification-20261031/review/qualification-source-review.md",
+    "review_sha256": "060e3a95a8e822014d3a2b3e84f0d72e2bb1abf02a92871208d7c4adc2bfa960"
   },
   "remaining_gates": [
-    "Independent exact-source repair review",
-    "Hosted helper build with default vet, existing fresh-process controls and checked empty-directory cleanup",
-    "Changed concurrency race control if successfully completed",
-    "Independent hosted artifact acceptance",
-    "Full pinned maintained campaign/profile validator acceptance (no campaign fabricated here)",
-    "Public fixed 100k workload, original host/runtime/affinity/resource/repetition eligibility",
-    "Representative attribution, performance improvement, crash/recovery qualification",
-    "Injected real profile/receipt short-write, Sync and Close errors beyond closed-file control",
-    "Real socket disconnect during start/stop and independent controller failed-exchange veto control",
-    "Actual gateway negative startup/control failure matrix with original cleanup on each path",
-    "Exact sampling activation/cessation beyond helper state checks and real pprof decode"
+    "Independent narrow exact-source rereview of the two P2 repairs",
+    "One bounded hosted execution of both complete diagnostic campaigns and all required failure/cessation gates",
+    "Independent exact-source/binary/artifact review",
+    "Original fixed representative off/cpu_wait pair remains blocked by original host storage/runtime eligibility"
+  ],
+  "repair_changed_file_hashes": {
+    "experiments/mongo_profile_hosted/README.md": {
+      "bytes": 14490,
+      "sha256": "7c6dc34ee83cb29631cea99fba43ead372ac6d0d20f8a05c8d6f76bbd7a90c8f"
+    },
+    "experiments/mongo_profile_hosted/check_source.py": {
+      "bytes": 11118,
+      "sha256": "bd14c5af8853036cd68fde876f0f12b46abe5725dc051ed34dd4594f2657e5c6"
+    },
+    "experiments/mongo_profile_hosted/prepare_tools.py": {
+      "bytes": 5805,
+      "sha256": "6206b718d5f4aaecf335957764448c902c76e20c2e2659708dd632d948102ed9"
+    },
+    "experiments/mongo_profile_hosted/qualify.py": {
+      "bytes": 29428,
+      "sha256": "e947a7f9b955ab0ad8114cfdfcf0c26c63360ea3cd39c09683646d327c59490f"
+    }
+  },
+  "repair_changed_paths": [
+    "experiments/mongo_profile_hosted/README.md",
+    "experiments/mongo_profile_hosted/check_source.py",
+    "experiments/mongo_profile_hosted/prepare_tools.py",
+    "experiments/mongo_profile_hosted/qualify.py",
+    "experiments/mongo_profile_hosted/source-only-checks.json"
+  ],
+  "repair_scope": [
+    "Unprivileged task-owned injector download/extraction with ordinary-user guardian",
+    "Checked finally proxy socket/thread cleanup preserving original and cleanup errors"
+  ],
+  "reused_fixture_unchanged": true,
+  "self_hash_excluded": true,
+  "source_bytes": 229322,
+  "status": "SOURCE_READY_FOR_TWO_P2_REPAIR_REVIEW",
+  "unresolved_runtime_risks": [
+    "1000/1000 diagnostic client may exit before mandatory observer; retain RED without retry",
+    "strace availability/authenticated assets/actual syscall and delayed O_RDONLY delivery require hosted proof",
+    "Real AF_UNIX disconnect must produce detected response failure, otherwise retain RED",
+    "Fresh cessation test must observe activation and unique post-stop stack exclusion; no Go parsing/build/runtime locally",
+    "Original checkpoint-control Close has endpoint/source evidence, no invented individual Close receipt or startup checkpoint callback",
+    "Absent injector requires ordinary authenticated image apt metadata and compatible dynamic dependencies; preparation fails early without metadata update/install or privileged children"
   ]
 }
