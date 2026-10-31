@@ -60,8 +60,38 @@ def stop_test_owned(fd, process=None):
     raise AssertionError('exact test-owned process survived bounded cleanup')
 
 
+def high_pidfd(fd):
+    import fcntl
+    import resource
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    if hard != resource.RLIM_INFINITY and hard <= 2048:
+        raise RuntimeError('high-pidfd controls require RLIMIT_NOFILE hard limit above 2048')
+    raised = soft != resource.RLIM_INFINITY and soft <= 2048
+    try:
+        if raised:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (2049, hard))
+        return fcntl.fcntl(fd, fcntl.F_DUPFD_CLOEXEC, 2048)
+    finally:
+        if raised:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (soft, hard))
+
+
+def require_pidfd_kernel():
+    try:
+        g.check_pidfd_waitid()
+    except OSError as error:
+        if error.errno not in (g.errno.ENOSYS, g.errno.EINVAL, g.errno.ENODEV,
+                               g.errno.EOPNOTSUPP):
+            raise
+        raise unittest.SkipTest(f'kernel pidfd/waitid support unavailable: {error}')
+
+
 @unittest.skipUnless(PIDFD_PLATFORM, 'Linux pidfd and P_PIDFD waitid support required')
 class IdentityRaces(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        require_pidfd_kernel()
+
     def test_unverified_fixture_never_registered_or_signaled(self):
         registry=[]
         with mock.patch.object(os,'pidfd_open',return_value=330), mock.patch.object(g,'stat',return_value={'start_ticks':999}), mock.patch.object(os,'close') as close, mock.patch.object(signal,'pidfd_send_signal') as send:
@@ -145,15 +175,39 @@ class IdentityRaces(unittest.TestCase):
         close.assert_called_once_with(330)
 
     def test_closed_high_descriptor_fails_closed(self):
-        import fcntl
         fd = os.pidfd_open(os.getpid())
         try:
-            high = fcntl.fcntl(fd, fcntl.F_DUPFD_CLOEXEC, 2048)
+            high = high_pidfd(fd)
             os.close(high)
             with self.assertRaisesRegex(RuntimeError, 'invalid pidfd'):
                 g.exited(high)
         finally:
             os.close(fd)
+
+    def test_high_descriptor_raises_and_restores_soft_limit(self):
+        import resource
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        if hard != resource.RLIM_INFINITY and hard <= 2048:
+            self.fail('high-pidfd controls require RLIMIT_NOFILE hard limit above 2048')
+        fd = os.pidfd_open(os.getpid())
+        high = None
+        try:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (1024, hard))
+            high = high_pidfd(fd)
+            self.assertGreaterEqual(high, 2048)
+            self.assertEqual(resource.getrlimit(resource.RLIMIT_NOFILE), (1024, hard))
+            self.assertFalse(g.exited(high))
+        finally:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (soft, hard))
+            if high is not None:
+                os.close(high)
+            os.close(fd)
+
+    def test_high_descriptor_insufficient_hard_limit_is_explicit(self):
+        import resource
+        with mock.patch.object(resource, 'getrlimit', return_value=(1024, 1024)):
+            with self.assertRaisesRegex(RuntimeError, 'hard limit above 2048'):
+                high_pidfd(0)
 
 
 FIXTURE = """
@@ -178,15 +232,9 @@ ROOT_FIXTURE = FIXTURE.replace('identities=[]', "f=Path('/proc/self/stat').read_
 class InjectedSafety(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        try:
-            g.check_pidfd_waitid()
-        except OSError as error:
-            if error.errno not in (g.errno.ENOSYS, g.errno.EINVAL, g.errno.ENODEV,
-                                   g.errno.EOPNOTSUPP):
-                raise
-            raise unittest.SkipTest(f'kernel pidfd/waitid support unavailable: {error}')
+        require_pidfd_kernel()
 
-    def invoke(self, source, inject='', *, validation=False, fixture=False, flags=(), shell=False, missing_result=False, driver_timeout=20):
+    def invoke(self, source, inject='', *, validation=False, synthetic=True, fixture=False, flags=(), shell=False, missing_result=False, driver_timeout=20):
         root = Path(tempfile.mkdtemp(dir=OUTPUT_ROOT, prefix=self._testMethodName+'-'))
         unrelated = subprocess.Popen([sys.executable, '-c', 'import time;time.sleep(60)'])
         unrelated_fd = os.pidfd_open(unrelated.pid)
@@ -195,6 +243,7 @@ class InjectedSafety(unittest.TestCase):
             wrapper = "import importlib.util,sys\ns=importlib.util.spec_from_file_location('guard',sys.argv[1]);g=importlib.util.module_from_spec(s);s.loader.exec_module(g)\nsys.argv=sys.argv[1:]\n" + inject + "\nraise SystemExit(g.main())"
             argv = [sys.executable, '-B', '-c', wrapper, str(GUARD), '--scripts-dir', str(SCRIPTS), '--out', str(root/'guard'), '--cwd', str(root), '--filesystem', str(root), '--free-floor-bytes', '1', '--deadline', '8', '--cleanup-seconds', '.3', *flags]
             if validation: argv += ['--validation-json', str(root/'validation.json')]
+            elif synthetic: argv += ['--synthetic']
             argv += ['--', '/bin/bash' if shell else sys.executable, '-c', source]
             (root/'command.json').write_text(json.dumps(argv,indent=2)+'\n')
             env = os.environ.copy();env.pop('GOMAXPROCS', None)
@@ -236,13 +285,12 @@ class InjectedSafety(unittest.TestCase):
         self.assertFalse(result['whole_interval_verified'])
 
     def test_real_high_descriptor_pidfd_readiness(self):
-        import fcntl
         root = Path(tempfile.mkdtemp(dir=OUTPUT_ROOT, prefix=self._testMethodName+'-'))
         proc = subprocess.Popen(['/bin/cat'], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL)
         fd = os.pidfd_open(proc.pid)
         high = None
         try:
-            high = fcntl.fcntl(fd, fcntl.F_DUPFD_CLOEXEC, 2048)
+            high = high_pidfd(fd)
             (root/'descriptor.json').write_text(json.dumps({'pid':proc.pid,'fd':high,'start_ticks':g.stat(proc.pid)['start_ticks']})+'\n')
             self.assertGreaterEqual(high,2048)
             self.assertFalse(g.exited(high))
@@ -258,7 +306,8 @@ class InjectedSafety(unittest.TestCase):
     def test_high_descriptor_root_wait_and_owned_cleanup(self):
         # The second cell replaces only readiness to expose the independent
         # root wait call on the original guard, which also used select().
-        duplicate="import fcntl,time\nreal_open=g.os.pidfd_open\ndef opened(pid,*a):\n fd=real_open(pid,*a)\n try:return fcntl.fcntl(fd,fcntl.F_DUPFD_CLOEXEC,2048)\n finally:g.os.close(fd)\ng.os.pidfd_open=opened\nreal_pin=g.Owned.pin\ndef pin(self,pid,parent):\n value=real_pin(self,pid,parent)\n if parent==self.guard_pid:\n  deadline=time.monotonic()+4\n  while not g.Path('fixture.json').exists() and time.monotonic()<deadline:time.sleep(.001)\n return value\ng.Owned.pin=pin\n"
+        import inspect
+        duplicate=inspect.getsource(high_pidfd)+"\nimport time\nreal_open=g.os.pidfd_open\ndef opened(pid,*a):\n fd=real_open(pid,*a)\n try:return high_pidfd(fd)\n finally:g.os.close(fd)\ng.os.pidfd_open=opened\nreal_pin=g.Owned.pin\ndef pin(self,pid,parent):\n value=real_pin(self,pid,parent)\n if parent==self.guard_pid:\n  deadline=time.monotonic()+4\n  while not g.Path('fixture.json').exists() and time.monotonic()<deadline:time.sleep(.001)\n return value\ng.Owned.pin=pin\n"
         ready="def ready(fd,timeout=0):\n p=g.select.poll();p.register(fd,g.select.POLLIN);events=p.poll(int(timeout*1000))\n if any(mask & g.select.POLLNVAL for _,mask in events):raise RuntimeError('invalid pidfd')\n return bool(events)\ng.exited=ready\n"
         for override in ('',ready):
             with self.subTest(root_wait_override=bool(override)):
@@ -327,12 +376,12 @@ raise SystemExit(0)"""
     def test_midrun_free_floor_and_resource_io_clean_owned(self):
         for action in ("return SimpleNamespace(f_bavail=0,f_frsize=1)","raise OSError('injected resource IO')"):
             inject="from types import SimpleNamespace\nreal=g.os.statvfs\ndef fs(path):\n if g.Path('release').exists():"+action+"\n return real(path)\ng.os.statvfs=fs"
-            code,result,_=self.invoke(FIXTURE.replace('ACTION','time.sleep(12)'),inject,fixture=True)
+            code,result,_=self.invoke(ROOT_FIXTURE.replace('ACTION','time.sleep(12)'),inject,fixture=True)
             self.assertNotEqual(code,0);self.assertEqual(result['status'],'failed');self.assertTrue(result['cleanup_signals'])
 
     def test_root_pin_failure_cleans_direct_child_and_adoptees(self):
         inject="import time\nreal=g.Owned.pin\nfailed=False\ndef pin(self,pid,parent):\n global failed\n if not failed and parent==self.guard_pid:\n  failed=True\n  while not g.Path('release').exists():time.sleep(.01)\n  raise OSError('injected root pin failure')\n return real(self,pid,parent)\ng.Owned.pin=pin"
-        code,result,_=self.invoke(FIXTURE.replace('ACTION','time.sleep(12)'),inject,fixture=True)
+        code,result,_=self.invoke(ROOT_FIXTURE.replace('ACTION','time.sleep(12)'),inject,fixture=True)
         self.assertNotEqual(code,0);self.assertTrue(any('root pin failure' in e for e in result['errors']))
 
     def test_cancellation_in_cleanup_shell_descendant_and_kill_stages(self):
@@ -375,6 +424,11 @@ raise SystemExit(0)"""
         code,_,_=self.invoke("from pathlib import Path;Path('validation.json').write_text('{\"status\":\"validated-consumer-evidence\",\"errors\":[]}')",validation=True)
         self.assertEqual(code,0)
 
+    def test_missing_campaign_mode_refuses_before_launch(self):
+        code,_,root=self.invoke("from pathlib import Path;Path('launched').touch()",synthetic=False,missing_result=True)
+        self.assertNotEqual(code,0)
+        self.assertFalse((root/'launched').exists())
+
     def test_live_setsid_owned_cleanup_and_unrelated_survival(self):
         code,result,_=self.invoke(FIXTURE.replace('ACTION','raise SystemExit(0)'),fixture=True)
         self.assertNotEqual(code,0);self.assertEqual(result['status'],'failed')
@@ -392,6 +446,16 @@ raise SystemExit(0)"""
         inject="real=g.Owned.sample\ndef broken(self):\n value=real(self)\n if g.Path('release').exists() and len(self.rows)>1:raise OSError('injected discovery failure')\n return value\ng.Owned.sample=broken\n"
         code,result,_=self.invoke(FIXTURE.replace('ACTION','time.sleep(12)'),inject,fixture=True)
         self.assertNotEqual(code,0);self.assertTrue(any('discovery failure' in e for e in result['errors']))
+
+    def test_discovery_failure_before_orphan_pin_cleans_adopted(self):
+        # Fail before descendant discovery, after the independent test owner
+        # has pinned the original root and children. Cleanup must discover the
+        # direct adoptees without a successful ordinary /proc scan.
+        inject="real_pin=g.Owned.pin\ndef pin(self,pid,parent):\n value=real_pin(self,pid,parent)\n if parent==self.guard_pid and pid==self.root_pid:\n  deadline=g.time.monotonic()+4\n  while not g.Path('release').exists() and g.time.monotonic()<deadline:g.time.sleep(.001)\n return value\ng.Owned.pin=pin\nreal_sample=g.Owned.sample\ndef sample(self):\n if g.Path('release').exists():raise OSError('injected pre-discovery failure')\n return real_sample(self)\ng.Owned.sample=sample\n"
+        code,result,_=self.invoke(ROOT_FIXTURE.replace('ACTION','time.sleep(12)'),inject,fixture=True)
+        self.assertNotEqual(code,0)
+        self.assertTrue(any('pre-discovery failure' in e for e in result['errors']))
+        self.assertTrue(result['cleanup_signals'])
 
     def test_sample_log_failure_cleans_known_owned(self):
         inject="real=g.Path.open\nclass Log:\n def __init__(self,f):self.f=f\n def write(self,data):\n  if g.Path('release').exists():raise OSError('injected sample log failure')\n  return self.f.write(data)\n def close(self):return self.f.close()\ndef opened(path,*a,**k):\n f=real(path,*a,**k);return Log(f) if path.name=='samples.jsonl' else f\ng.Path.open=opened\n"

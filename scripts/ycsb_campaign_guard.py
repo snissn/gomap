@@ -2,6 +2,7 @@
 """Sampled resource/ownership guard for one child; no campaign acceptance.
 
 Public campaigns must supply --validation-json for their fresh validation.json.
+Other commands must explicitly select --synthetic.
 """
 import argparse
 import ctypes
@@ -198,7 +199,7 @@ def run(args, helper):
     out.mkdir(mode=0o700)  # Exclusive namespace; never overwrite a failed run.
     child, owned, root_fd = None, Owned(), None
     result = dict(schema_version=1, status='failed', scope='sampled outer resource/ownership guard only; pending independent campaign review',
-                  command=args.command, cwd=str(args.cwd), limits=dict(rss_bytes=args.rss_cap_bytes, free_bytes=args.free_floor_bytes,
+                  command=args.command, cwd=str(args.cwd), synthetic=args.synthetic, limits=dict(rss_bytes=args.rss_cap_bytes, free_bytes=args.free_floor_bytes,
                   deadline_seconds=args.deadline, sample_seconds=args.interval, cleanup_seconds=args.cleanup_seconds),
                   start_utc=helper.now(), max_rss_bytes=0, min_free_bytes=None, cleanup_signals=[], errors=[],
                   whole_interval_verified=False, unperturbed_timing_verified=False)
@@ -231,6 +232,18 @@ def run(args, helper):
             except BaseException as error:
                 # Resource/log I/O failure must not prevent known-owned cleanup.
                 result['errors'].append(f'cleanup discovery: {error}')
+                # Direct children are unreaped under this dedicated subreaper.
+                # Pin newly adopted tasks even when the ordinary /proc scan
+                # keeps failing; retain pidfd authority for every signal.
+                try:
+                    for pid in unhandled_children() - owned.rows.keys():
+                        try:
+                            owned.pin(pid, owned.guard_pid)
+                        except OSError as pin_error:
+                            if not gone(pin_error):
+                                result['errors'].append(f'cleanup pin {pid}: {pin_error}')
+                except BaseException as adoption_error:
+                    result['errors'].append(f'cleanup adoption: {adoption_error}')
                 return [row for row in owned.rows.values() if not exited(row['fd'])]
         # First give the original shell trap time for its checked Close/reopen
         # cleanup. Forced intervention is always a failed campaign, never green.
@@ -346,7 +359,10 @@ def main():
     parser.add_argument('--out', type=Path, required=True)
     parser.add_argument('--cwd', type=Path, required=True)
     parser.add_argument('--filesystem', type=Path, required=True)
-    parser.add_argument('--validation-json', type=Path)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument('--validation-json', type=Path)
+    mode.add_argument('--synthetic', action='store_true',
+                      help='explicit command without a campaign validation consumer')
     parser.add_argument('--deadline', type=float, default=2400)
     parser.add_argument('--cleanup-seconds', type=float, default=10)
     parser.add_argument('--interval', type=float, default=.2)

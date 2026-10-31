@@ -443,8 +443,10 @@ an explicit absolute override is part of the frozen helper closure. The guard
 does not implement another workload or replace any original lifecycle consumer.
 
 For public use, **`--validation-json` is mandatory** and must name the actual
-fresh campaign's `validation.json`. It remains optional only for generic/synthetic
-commands that have no campaign consumer. Guard output and campaign output must
+fresh campaign's `validation.json`. Generic/synthetic commands without a campaign
+consumer must explicitly pass `--synthetic` instead. The two modes are mutually
+exclusive and one is required before launching the command; the receipt records
+the selected synthetic flag. Guard output and campaign output must
 be separate fresh namespaces. The guard exclusively creates `--out`; it refuses
 an existing directory and refuses a pre-existing validation input. The launcher
 still requires its own fresh empty `OUT_DIR`. For example, after review and
@@ -483,7 +485,8 @@ through root pinning/receipt publication. On failure, cleanup defers cancellatio
 while retaining pending signals and receipts, first allowing the original shell's
 trap/checked Close, then bounded TERM/KILL of remaining pinned descendants.
 The maintained fallback for pin failure applies only to the direct unreaped
-child. Discovery failures retain errors and attempt known-owned cleanup; they
+child. Discovery failures retain errors and attempt known-owned cleanup, including
+pidfd pinning of direct adoptees when the ordinary process scan fails. They
 cannot certify cleanup of an unobservable task.
 
 Require supervisor exit0, completed guard status, no interventions/leaks/errors
