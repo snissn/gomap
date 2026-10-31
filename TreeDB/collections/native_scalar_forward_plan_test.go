@@ -643,11 +643,6 @@ func runNativeScalarForwardOptionalRefusalAndBound(t *testing.T, observeCleanup 
 			t.Fatalf("original admission did not reconcile selected-owner success: first=%v err=%v accepted=%d parent=%+v want=%+v", uncachedFirstErr, uncachedErr, accepted, afterAdmission, want)
 		}
 		t.Logf("original uncached admission: first_bytes=%d calls=%d accepted_bytes=%d scratch=%d->%d parent=%+v", uncachedFirstBytes, admissionCalls-uncachedCalls, accepted, uncachedCharged, scratch.charged, budget.Stats())
-		// Characterization baseline: the old unconditional refusal oracle is
-		// invalid for this fully attributed permitted schedule.
-		if uncachedErr == nil {
-			t.Fatal("uncached forward constructor bypassed original parent refusal")
-		}
 	}
 	blocker.Close()
 	blocker = nil
