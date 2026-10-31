@@ -233,12 +233,12 @@ implementation.
 Retained snapshot point reads and bound iterators reuse their own admitted
 physical traversal scratch. A snapshot successor keeps using already admitted
 cut-local point storage when present. Otherwise it tries the retained backend
-basis's original traversal mutex without waiting. If available, it
-borrows that basis's admitted workspace and copies the winning key and inline
-value before unlocking. Dictionary-free Snappy/LZ4 leaf decoding retains the
+basis's original traversal mutex and then its three existing extra slots without
+waiting. If an owner is available, it borrows that basis's admitted workspace
+and copies the winning key and inline value before unlocking. Dictionary-free Snappy/LZ4 leaf decoding retains the
 successor's independent block-decoder policy in that workspace; this borrowing
-does not add a generic decoder mutex wait. A busy basis takes the original
-cut-local traversal and block-decoder path. Shared capacity refusal also releases
+does not add a generic decoder mutex wait. When all four owners are busy, the
+successor takes the original cut-local traversal and block-decoder path. Shared capacity refusal also releases
 the basis mutex before trying the cut-local owner. Thus independent retained readers
 can still proceed while another owner holds shared scratch. Capable dictionary
 leaves now complete that original traversal with a per-call independently owned
@@ -275,9 +275,24 @@ unadmitted storage. This reuse adds no pool, root publication or recovery owner.
 Physical iterator construction failures and Close drain workspace children
 before refunding the aggregate construction lease, including on verified-cache
 hits that need no decoder or buffer growth.
-Direct DB point reads and native physical readers retain the original shared
-workspace. ZSTD records in COW read workspaces use the maintained bounded decoder
-continuation. Dictionary reads first reuse an already-admitted matching cut-local
+Native exact-entry reads use the same primary-plus-three-owner selection, with
+explicit workspace traversal of the caller's exact captured root. Inline output
+is copied before the selected mutex unlocks; metadata-only, pointer and tombstone
+results retain no page bytes. Selection neither captures a new root nor retains
+a dictionary provider. If every owner is busy, the native read retains its legacy
+blocking primary fallback. A workspace or point-buffer admission refusal in an
+extra slot before traversal also releases that mutex before the primary fallback,
+refunding only a newly partial extra owner. Primary refusal retains its existing
+owner and error behavior. Existing warm owners remain live. Once traversal begins,
+I/O, integrity, codec, provider and read-capacity errors return without retry.
+Every admitted extra owner remains charged to the original budget and basis and
+is drained by the existing final-basis release. Native leaf-page reads remain on
+the primary mutex; native value-pointer reads retain the cache decoder mutex.
+This selection changes neither the native codec policy nor the shared physical
+decoder policy, pinned-file verification, inspection limits or provider authority.
+
+Direct DB point reads retain their original shared workspace. ZSTD records in
+COW read workspaces use the maintained bounded decoder continuation. Dictionary reads first reuse an already-admitted matching cut-local
 decoder. Otherwise they decode through the original cache physical workspace.
 Owned version-successor reads finish leaf copy-out or owned value append before
 releasing its mutex. Snapshot and iterator leaves decode into their original

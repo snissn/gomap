@@ -716,3 +716,239 @@ func TestCOWNativeLeafWorkspaceAdmissionAndLifetime(t *testing.T) {
 		t.Fatal("final original ownership", stats)
 	}
 }
+
+// This fixture exposes the real captured NativePhysicalReader capability, rather
+// than bypassing the capture's root and lifetime contract with a private call.
+func cowNativePointSlotFixture(t *testing.T) (*DB, *backenddb.DB, *NativeSemanticCapture, uint64) {
+	t.Helper()
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := transactionowner.New()
+	if err := backend.BindPrivateCOWOwner(owner); err != nil {
+		t.Fatal(err)
+	}
+	db, err := Open(dir, backend, Options{TransactionOwner: owner, DisableWAL: true, AllowUnsafe: true, MemtableMode: "cow_btree", FlushThreshold: 1 << 30, ValueLogPointerThreshold: 64, ValueLogCompression: uint8(vlogCompressionOff)})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if !db.closing.Load() {
+			if err := db.Close(); err != nil {
+				t.Error(err)
+			}
+		}
+	})
+	if err := backend.BindNativeSemanticBridge(owner, db); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Set([]byte("a"), []byte("old")); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.ActivateNativeSemanticOwner(); err != nil {
+		t.Fatal(err)
+	}
+	captured, err := backend.CaptureNativeSemanticState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	capture := captured.(*NativeSemanticCapture)
+	t.Cleanup(func() {
+		if err := capture.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	token, ok := capture.Snapshot().StateToken()
+	if !ok {
+		t.Fatal("missing physical token")
+	}
+	return db, backend, capture, token.RootPageID
+}
+
+func TestCOWNativeEntryParallelBasisSlotsProgress(t *testing.T) {
+	for free := 0; free < 3; free++ {
+		t.Run(fmt.Sprintf("only-slot-%d", free), func(t *testing.T) {
+			_, _, capture, root := cowNativePointSlotFixture(t)
+			basis := capture.cut.basis
+			basis.readMu.Lock()
+			for i := range basis.readSlots {
+				if i != free {
+					basis.readSlots[i].mu.Lock()
+				}
+			}
+			type result struct {
+				entry node.LeafEntry
+				err   error
+			}
+			done := make(chan result, 1)
+			started := make(chan struct{})
+			go func() {
+				close(started)
+				e, err := backenddb.NativePhysicalReader(capture).NativeEntryAtRoot(root, []byte("a"), true)
+				done <- result{e, err}
+			}()
+			<-started
+			var got result
+			progressed := false
+			select {
+			case got = <-done:
+				progressed = true
+			case <-time.After(2 * time.Second):
+			}
+			// Always release and join before failing, so RED never strands a goroutine.
+			basis.readMu.Unlock()
+			for i := range basis.readSlots {
+				if i != free {
+					basis.readSlots[i].mu.Unlock()
+				}
+			}
+			if !progressed {
+				got = <-done
+			}
+			if got.err != nil || string(got.entry.Value) != "old" || got.entry.Key != nil || cap(got.entry.Value) != len(got.entry.Value) {
+				t.Fatalf("exact-root output: %+v %v", got.entry, got.err)
+			}
+			if !progressed {
+				t.Fatal("public native exact-root lookup waited for held primary despite a free basis slot")
+			}
+			if basis.readSlots[free].reader == nil || basis.readSlots[free].reader.point == nil {
+				t.Fatal("public lookup did not activate the sole available slot")
+			}
+		})
+	}
+}
+
+// Saturation keeps the legacy primary wait. Releasing primary, while every
+// extra owner remains busy, must be sufficient to finish the public lookup.
+func TestCOWNativeEntrySaturatedPrimaryFallback(t *testing.T) {
+	_, _, capture, root := cowNativePointSlotFixture(t)
+	basis := capture.cut.basis
+	basis.readMu.Lock()
+	for i := range basis.readSlots {
+		basis.readSlots[i].mu.Lock()
+	}
+	done := make(chan error, 1)
+	go func() {
+		e, err := capture.NativeEntryAtRoot(root, []byte("a"), true)
+		if err == nil && string(e.Value) != "old" {
+			err = fmt.Errorf("wrong exact-root value: %q", e.Value)
+		}
+		done <- err
+	}()
+	var early error
+	completed := false
+	select {
+	case early = <-done:
+		completed = true
+	case <-time.After(50 * time.Millisecond):
+	}
+	basis.readMu.Unlock()
+	if !completed {
+		select {
+		case early = <-done:
+		case <-time.After(2 * time.Second):
+			// Always release all locks and join, including a broken slot fallback.
+			for i := range basis.readSlots {
+				basis.readSlots[i].mu.Unlock()
+			}
+			<-done
+			t.Fatal("primary release did not unblock saturated lookup")
+		}
+	}
+	for i := range basis.readSlots {
+		basis.readSlots[i].mu.Unlock()
+	}
+	if completed || early != nil {
+		t.Fatalf("saturated fallback: early=%t err=%v", completed, early)
+	}
+	if basis.reader == nil || basis.reader.point == nil {
+		t.Fatal("saturated fallback did not use original primary")
+	}
+	for i := range basis.readSlots {
+		if basis.readSlots[i].reader != nil {
+			t.Fatal("saturated fallback admitted a busy extra owner")
+		}
+	}
+}
+
+// Refuse a cold slot's workspace or its second point-buffer admission using the
+// real original budget. A warm primary must remain usable after that refusal.
+func TestCOWNativeEntrySlotAdmissionFallbackAndRefund(t *testing.T) {
+	for _, partial := range []bool{false, true} {
+		t.Run(fmt.Sprintf("partial-point=%t", partial), func(t *testing.T) {
+			db, _, capture, root := cowNativePointSlotFixture(t)
+			if _, err := capture.NativeEntryAtRoot(root, []byte("a"), true); err != nil {
+				t.Fatal(err)
+			}
+			basis, budget := capture.cut.basis, db.cow.budget
+			primary, primaryPoint := basis.reader, basis.reader.point
+			before := budget.Stats()
+			overhead := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
+			workspaceBytes := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowReadWorkspace{}))) + cowReadWorkspaceInspectionCharge()
+			var room uint64
+			if partial {
+				room = workspaceBytes + overhead
+			}
+			pressure, err := budget.AcquireExternal(budget.Limits().MaxInFlightBytes - before.ReservedBytes - overhead - room)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer pressure.Close()
+			pressured := budget.Stats()
+			// Verify the pressure's exact discrimination without installing a fake owner.
+			probe, err := admitCOWReadWorkspace(budget, db.cow.readLimits())
+			if partial {
+				if err != nil {
+					t.Fatal("pressure failed to allow partial workspace", err)
+				}
+				if _, err := probe.pointScratch(); !errors.Is(err, memtable.ErrCOWCapacity) {
+					t.Fatal("pressure failed to refuse point buffer", err)
+				}
+				probe.close()
+				probe = nil
+			} else if !errors.Is(err, memtable.ErrCOWCapacity) {
+				if probe != nil {
+					probe.close()
+				}
+				t.Fatal("pressure failed to refuse workspace", err)
+			}
+			basis.readMu.Lock()
+			done := make(chan error, 1)
+			go func() {
+				e, err := capture.NativeEntryAtRoot(root, []byte("a"), true)
+				if err == nil && string(e.Value) != "old" {
+					err = fmt.Errorf("fallback output: %q", e.Value)
+				}
+				done <- err
+			}()
+			// Admission refusal must release the selected extra mutex before waiting.
+			time.Sleep(50 * time.Millisecond)
+			slot := &basis.readSlots[0]
+			available := slot.mu.TryLock()
+			refunded := available && slot.reader == nil
+			if available {
+				slot.mu.Unlock()
+			}
+			basis.readMu.Unlock()
+			err = <-done
+			after := budget.Stats()
+			if err != nil || !refunded || basis.reader != primary || primary.point != primaryPoint || after.ReservedBytes != pressured.ReservedBytes || after.ExternalLeases != pressured.ExternalLeases {
+				t.Fatalf("pre-traversal fallback/refund: err=%v refunded=%t before=%+v after=%+v", err, refunded, pressured, after)
+			}
+			pressure.Close()
+			// Releasing pressure allows the same real slot to admit and retain scratch.
+			basis.readMu.Lock()
+			e, readErr := capture.NativeEntryAtRoot(root, []byte("a"), true)
+			basis.readMu.Unlock()
+			if readErr != nil || string(e.Value) != "old" || slot.reader == nil || slot.reader.point == nil {
+				t.Fatalf("slot retry after pressure: %+v %v", e, readErr)
+			}
+		})
+	}
+}
