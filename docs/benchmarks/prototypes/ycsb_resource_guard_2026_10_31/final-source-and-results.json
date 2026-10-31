@@ -1,0 +1,19 @@
+{
+  "suite_exit_code": 0,
+  "test_count": 26,
+  "reported_seconds": 16.966,
+  "integration_namespaces": 29,
+  "test_owner_cleanup_errors": [],
+  "expected_owner_timeout_receipts": 1,
+  "source_sha256": {
+    "public_guard.py": "39369f135883731d94426cdf3616b0c80b120a3c2637bddf09c979b46aed75f3",
+    "test_public_guard_draft.py": "ac2c50d25320c67c191fda57a5503622d40a7d63160b618959851262be8152a4",
+    "README.md": "f5482f85405b4175001a28c27466c852db4dcc5ce2196557e387495a99f9ce01"
+  },
+  "limitations": [
+    "sampled guard; no continuous or unperturbed proof",
+    "no DB/workload/build executed",
+    "independent review and maintained adoption remain"
+  ],
+  "launcher_preflight_failure": "retained separately; no tests launched"
+}

@@ -1,0 +1,18 @@
+{
+  "scope": "source-only research artifacts for independent retrieval; not maintained/landed runtime, not public benchmark acceptance",
+  "base": "4dc879a15b9acaf5dd45444627c7e62b3f829a9d",
+  "files": {
+    "public_guard.py": "39369f135883731d94426cdf3616b0c80b120a3c2637bddf09c979b46aed75f3",
+    "test_public_guard_draft.py": "ac2c50d25320c67c191fda57a5503622d40a7d63160b618959851262be8152a4",
+    "README.md": "f5482f85405b4175001a28c27466c852db4dcc5ce2196557e387495a99f9ce01",
+    "suite-result.json": "e9bb69bce0a8b042938e7c4a65d78068316cfd6dbc60f3a8c65daacb50d265c1",
+    "unittest.full.log": "8f562787d87ec9a7d9bba134764357f0b3991303181900d9c606b32cdb0af731",
+    "final-source-and-results.json": "da537c16144cd43f30f6f8d080bc28309be6187b67a90ed74307eef47f2c7965",
+    "source-review-v2.md": "1710b7fb13d108d1c4224308f8c640698b331355221659d864bdae9fdaaf0b07",
+    "controls-review-v3.md": "8f35b83dfe2234fb48ff918562782263a4eb743f69418b81e8dcd3038fe0b150",
+    "controls-review-v3.json": "f6af9f31a587a6be0045799cff84671b22a6a74db44d91503c24c16abd3e4071"
+  },
+  "source_and_control_review": "controls-review-v3.md",
+  "synthetic_result": "26PASS16.966s;29retained integration namespace cleanup receipts independently checked",
+  "retrieval": "git show COMMIT:docs/benchmarks/prototypes/ycsb_resource_guard_2026_10_31/FILE; run test source using GUARD_TEST_SCRIPTS_DIR from pinned main4dc scripts and explicit fresh fast-mount GUARD_TEST_OUTPUT_ROOT/TMPDIR"
+}

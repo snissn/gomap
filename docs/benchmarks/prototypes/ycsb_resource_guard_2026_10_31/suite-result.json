@@ -1,0 +1,25 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "-B",
+    "/mnt/fast4tb/gomap-mongo-perf-graph-6a9s7h58/prototypes/public_guard_source/test_public_guard_draft.py",
+    "-v"
+  ],
+  "environment": {
+    "GUARD_TEST_SCRIPTS_DIR": "/mnt/fast4tb/gomap-mongo-perf-graph-6a9s7h58/baseline-current/scripts",
+    "GUARD_TEST_OUTPUT_ROOT": "/mnt/fast4tb/gomap-mongo-perf-graph-6a9s7h58/evidence/public-guard-synthetic-v3",
+    "TMPDIR": "/mnt/fast4tb/gomap-mongo-perf-graph-6a9s7h58/evidence/public-guard-synthetic-v3"
+  },
+  "GOMAXPROCS": "absent",
+  "sha256": {
+    "/mnt/fast4tb/gomap-mongo-perf-graph-6a9s7h58/prototypes/public_guard_source/public_guard.py": "39369f135883731d94426cdf3616b0c80b120a3c2637bddf09c979b46aed75f3",
+    "/mnt/fast4tb/gomap-mongo-perf-graph-6a9s7h58/prototypes/public_guard_source/test_public_guard_draft.py": "ac2c50d25320c67c191fda57a5503622d40a7d63160b618959851262be8152a4",
+    "/mnt/fast4tb/gomap-mongo-perf-graph-6a9s7h58/prototypes/public_guard_source/README.md": "d05e2401d522537aeacc9e586865589d766397997663f64b0a1a4272c1781261",
+    "/mnt/fast4tb/gomap-mongo-perf-graph-6a9s7h58/baseline-current/scripts/ycsb_compare_validate.py": "1b14289667212b44dc7257f9cd5221267c12239bc2e3f5bf58d7dcbda9fadd04",
+    "/mnt/fast4tb/gomap-mongo-perf-graph-6a9s7h58/baseline-current/scripts/ycsb_evidence_json.py": "86989ebbfa14b8f9f3c20ebe470314a29fd28c7db2ab10734d9518e39d270ea6",
+    "/mnt/fast4tb/gomap-mongo-perf-graph-6a9s7h58/baseline-current/scripts/ycsb_runtime_observer.py": "fab36e1396205c2cddff0c24fa0f5c6faaa4e0fd47f46fdb423ffe3dd4e31077"
+  },
+  "start_unix": 1793478300.744476,
+  "exit_code": 0,
+  "end_unix": 1793478317.785186
+}

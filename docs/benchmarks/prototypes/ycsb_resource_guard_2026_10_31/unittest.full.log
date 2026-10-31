@@ -1,0 +1,31 @@
+test_direct_unreaped_quick_exit_zombie_is_supported (__main__.IdentityRaces) ... ok
+test_exact_adopted_zombie_reaps_by_pidfd (__main__.IdentityRaces) ... ok
+test_fd_a_proc_b_rejected_then_b_repin_accounts_rss (__main__.IdentityRaces) ... ok
+test_fixture_fd_a_proc_b_liveness_failure_never_signaled (__main__.IdentityRaces) ... ok
+test_kernel_without_pidfd_waitid_fails_closed (__main__.IdentityRaces) ... ok
+test_reaping_old_a_never_numeric_reaps_replacement_b (__main__.IdentityRaces) ... ok
+test_unverified_fixture_never_registered_or_signaled (__main__.IdentityRaces) ... ok
+test_aggregate_rss_multiple_individually_fitting_children (__main__.InjectedSafety) ... ok
+test_cancellation_during_popen_retains_exact_root (__main__.InjectedSafety) ... ok
+test_cancellation_in_cleanup_shell_descendant_and_kill_stages (__main__.InjectedSafety) ... ok
+test_discovery_failure_cleans_known_owned (__main__.InjectedSafety) ... ok
+test_existing_namespace_refuses_before_launch (__main__.InjectedSafety) ... ok
+test_final_receipt_io_and_finalization_cancellation_veto_exit (__main__.InjectedSafety) ... ok
+test_fork_during_cleanup (__main__.InjectedSafety) ... ok
+test_initial_free_floor_prevents_launch (__main__.InjectedSafety) ... ok
+test_live_setsid_owned_cleanup_and_unrelated_survival (__main__.InjectedSafety) ... ok
+test_midrun_free_floor_and_resource_io_clean_owned (__main__.InjectedSafety) ... ok
+test_missing_malformed_duplicate_and_invalid_validation (__main__.InjectedSafety) ... ok
+test_nonzero_and_deadline_cannot_be_partial_acceptance (__main__.InjectedSafety) ... ok
+test_quick_zero_exit_has_durable_identity (__main__.InjectedSafety) ... ok
+test_rapid_reap_and_adopted_children (__main__.InjectedSafety) ... ok
+test_root_pin_failure_cleans_direct_child_and_adoptees (__main__.InjectedSafety) ... ok
+test_sample_log_failure_cleans_known_owned (__main__.InjectedSafety) ... ok
+test_shell_foreground_trap_order_and_failed_original_cleanup (__main__.InjectedSafety) ... ok
+test_test_owner_timeout_cleans_exact_supervisor_and_fixtures (__main__.InjectedSafety) ... ok
+test_valid_validation (__main__.InjectedSafety) ... ok
+
+----------------------------------------------------------------------
+Ran 26 tests in 16.966s
+
+OK

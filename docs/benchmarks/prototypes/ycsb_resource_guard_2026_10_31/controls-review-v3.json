@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "verdict": "READY_FOR_IMMUTABLE_SOURCE_CONTROL_PUBLICATION_AND_MAINTAINED_ADOPTION_REVIEW",
+  "scope": "narrow source and retained artifact check; no rerun",
+  "production_adoption_approved": false,
+  "public_collection_approved": false,
+  "executed_tests_or_workloads_by_reviewer": false,
+  "source_sha256": {
+    "public_guard.py": "39369f135883731d94426cdf3616b0c80b120a3c2637bddf09c979b46aed75f3",
+    "test_public_guard_draft.py": "ac2c50d25320c67c191fda57a5503622d40a7d63160b618959851262be8152a4",
+    "README.md_final_reviewed": "f5482f85405b4175001a28c27466c852db4dcc5ce2196557e387495a99f9ce01",
+    "README.md_at_invocation": "d05e2401d522537aeacc9e586865589d766397997663f64b0a1a4272c1781261"
+  },
+  "prior_findings": {
+    "H1_unverified_fixture_cleanup_authority": "CLOSED: verify token and later fd liveness before registration; close and no signal on failure; two passing regressions",
+    "M2_test_owner_failure_cleanup": "CLOSED: exact direct supervisor fd; independent bounded per-fd cleanup; retained original/cleanup errors; passing expected timeout control"
+  },
+  "new_blockers_in_review_scope": [],
+  "retained_evidence": {
+    "root": "evidence/public-guard-synthetic-v3",
+    "test_methods_passed": 26,
+    "reported_seconds": 16.966,
+    "suite_exit_code": 0,
+    "integration_namespaces_independently_read": 29,
+    "namespaces_with_empty_test_owner_cleanup_errors": 29,
+    "expected_owner_timeout_receipts": 1,
+    "guard_result_counts": {
+      "failed": 24,
+      "missing_result_expected": 2,
+      "completed_looking": 3
+    },
+    "completed_looking_finalization_interruption_is_nonzero_and_vetoed": true,
+    "aggregate_rss_control": {
+      "cap_bytes": 52428800,
+      "observed_bytes": 82882560,
+      "live_tasks": 3,
+      "each_task_individually_under_cap": true
+    },
+    "artifact_sha256": {
+      "invocation.json": "08d5882d6888bbf097adfeac8306f537bddb87e33605d645da8e9b2c2322f61e",
+      "suite-result.json": "e9bb69bce0a8b042938e7c4a65d78068316cfd6dbc60f3a8c65daacb50d265c1",
+      "unittest.full.log": "8f562787d87ec9a7d9bba134764357f0b3991303181900d9c606b32cdb0af731",
+      "final-source-and-results.json": "da537c16144cd43f30f6f8d080bc28309be6187b67a90ed74307eef47f2c7965"
+    }
+  },
+  "bounded_missing_control_gates": {
+    "aggregate_rss_initial_and_midrun_floor": "SUPPORTED",
+    "root_pin_startup_and_cleanup_cancellation": "SUPPORTED",
+    "cooperative_shell_trap_order_and_cleanup_exit_veto": "SUPPORTED_FOR_SYNTHETIC_FIXTURE",
+    "observation_and_final_receipt_failure_veto": "SUPPORTED"
+  },
+  "limits": [
+    "sampled 24 GiB descendant RSS / 10 GiB account-available floor; no continuous or unperturbed proof",
+    "passing source-bound survivor assertions, not separately replayable full unrelated-process census",
+    "synthetic TERM/EXIT trap fixture does not prove actual maintained original-owner Close/reopen",
+    "maintained adoption, frozen source/helper/ELF/env, runtime12 and host/storage gates remain external",
+    "no public performance or correctness acceptance"
+  ]
+}
