@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"runtime/pprof"
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
@@ -311,11 +313,26 @@ func BenchmarkTypedGraphEncodedPublic5345(b *testing.B) {
 					columns[3].Strings = append(columns[3].Strings, "path")
 				}
 				beforeLSN := db.CommandWALNextLSN()
+				var profile *os.File
+				if dir := os.Getenv("GOMAP_5345_INSERT_CPU_PROFILE_DIR"); dir != "" {
+					if !filepath.IsAbs(dir) { b.Fatal("CPU profile directory must be absolute") }
+					var err error
+					profile, err = os.CreateTemp(dir, "typed-"+policy.name+"-*.pprof")
+					if err != nil { b.Fatalf("create CPU profile: %v", err) }
+					if err = pprof.StartCPUProfile(profile); err != nil {
+						if closeErr := profile.Close(); closeErr != nil { b.Errorf("close CPU profile: %v", closeErr) }
+						b.Fatalf("start CPU profile: %v", err)
+					}
+				}
 				b.ReportAllocs()
 				b.ResetTimer()
 				b.StartTimer()
 				got, stats, err := col.InsertTypedBatchWithStats(ids, retained, columns)
 				b.StopTimer()
+				if profile != nil {
+					pprof.StopCPUProfile()
+					if err := profile.Close(); err != nil { b.Fatalf("close CPU profile: %v", err) }
+				}
 				if err != nil {
 					if policy.codec == ColumnStoreTypedColumnCompressionSnappy {
 						_, boundErr := typedColumnPublicationFP32EncodedBound(*resolvedConfig, rows)
