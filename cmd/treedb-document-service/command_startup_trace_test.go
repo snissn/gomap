@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
@@ -223,16 +224,17 @@ func TestCommandStartupHelperProcess(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer listener.Close()
+	fmt.Printf("startup helper listener %s\n", listener.Addr())
 	var done = make(chan struct{})
 	switch mode {
-	case "http", "http-retry":
+	case "http", "http-retry", "http-unready", "http-close-failure":
 		var requests atomic.Int32
 		server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path != "/v1/health" {
 				http.NotFound(w, r)
 				return
 			}
-			if requests.Add(1) == 1 && mode == "http-retry" {
+			if requests.Add(1) == 1 && mode == "http-retry" || mode == "http-unready" {
 				w.WriteHeader(http.StatusServiceUnavailable)
 			}
 			fmt.Fprint(w, "readiness body")
@@ -264,6 +266,10 @@ func TestCommandStartupHelperProcess(t *testing.T) {
 		t.Fatalf("unknown helper mode %q", mode)
 	}
 	<-done
+	if mode == "http-close-failure" {
+		fmt.Println("injected original cleanup failure")
+		os.Exit(23)
+	}
 }
 
 func TestCommandStartupRealPreStartFailures(t *testing.T) {
@@ -322,7 +328,12 @@ func TestCommandStartupRealReadiness(t *testing.T) {
 		mode          string
 		enabled, fail bool
 	}{
-		{"http", false, false}, {"http-retry", true, false}, {"native", false, false}, {"native", true, false}, {"native-no-hello", true, true},
+		{"http", false, false}, {"http", true, false},
+		{"http-retry", false, false}, {"http-retry", true, false},
+		{"http-unready", false, true}, {"http-unready", true, true},
+		{"native", false, false}, {"native", true, false},
+		{"native-no-hello", false, true}, {"native-no-hello", true, true},
+		{"http-close-failure", false, false}, {"http-close-failure", true, false},
 	} {
 		t.Run(fmt.Sprintf("%s/trace=%v", test.mode, test.enabled), func(t *testing.T) {
 			t.Setenv("GOMAP_COMMAND_STARTUP_TEST_HELPER", test.mode)
@@ -343,23 +354,59 @@ func TestCommandStartupRealReadiness(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), timeout)
 			defer cancel()
 			process, err := startCommandPerf(ctx, filepath.Join(dir, "start.log"), wrapper, dir, strings.HasPrefix(test.mode, "http"), false, tr)
+			assertListenerClosed := func() {
+				t.Helper()
+				raw, readErr := os.ReadFile(filepath.Join(dir, "start.log"))
+				if readErr != nil {
+					t.Fatal(readErr)
+				}
+				for _, line := range strings.Split(string(raw), "\n") {
+					if addr, ok := strings.CutPrefix(line, "startup helper listener "); ok {
+						conn, dialErr := net.DialTimeout("tcp", addr, time.Second)
+						if dialErr == nil {
+							_ = conn.Close()
+							t.Fatal("helper listener survived process cleanup")
+						}
+						return
+					}
+				}
+				t.Fatalf("missing helper listener: %s", raw)
+			}
 			if test.fail {
-				if err == nil || process != nil || tr.Status != "failed" || tr.Totals["native_hello"].Failures == 0 {
-					t.Fatalf("TCP without Hello accepted: %v %+v", err, tr)
+				if err == nil || process != nil {
+					t.Fatalf("unready command accepted: %v %+v", err, tr)
+				}
+				kind := "native_hello"
+				if test.mode == "http-unready" {
+					kind = "http_health"
+				}
+				if test.enabled && (tr.Status != "failed" || tr.Totals[kind].Failures == 0) {
+					t.Fatalf("failed readiness trace lost: %+v", tr)
+				}
+				if !test.enabled && (tr != nil || report.StartupTrace != nil) {
+					t.Fatal("disabled failure trace created")
 				}
 				raw, readErr := os.ReadFile(filepath.Join(dir, "start.log"))
-				if readErr != nil || !strings.Contains(string(raw), "native-no-hello accepted connection") {
+				if readErr != nil || test.mode == "native-no-hello" && !strings.Contains(string(raw), "native-no-hello accepted connection") {
 					t.Fatalf("no accepted TCP connection: %v %s", readErr, raw)
 				}
+				assertListenerClosed()
 				return
 			}
 			if err != nil {
 				raw, _ := os.ReadFile(filepath.Join(dir, "start.log"))
 				t.Fatalf("start: %v\n%s", err, raw)
 			}
-			if err := process.stop(); err != nil {
-				t.Fatalf("helper cleanup: %v", err)
+			stopErr := process.stop()
+			if test.mode == "http-close-failure" {
+				var exitErr *exec.ExitError
+				if !errors.As(stopErr, &exitErr) || exitErr.ExitCode() != 23 {
+					t.Fatalf("successful readiness hid original cleanup failure: %v", stopErr)
+				}
+			} else if stopErr != nil {
+				t.Fatalf("helper cleanup: %v", stopErr)
 			}
+			assertListenerClosed()
 			if !test.enabled {
 				if tr != nil || report.StartupTrace != nil {
 					t.Fatal("disabled trace created")
