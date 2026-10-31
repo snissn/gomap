@@ -3,6 +3,7 @@ package caching
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"sync"
@@ -11,6 +12,7 @@ import (
 	"unsafe"
 
 	"github.com/snissn/compress/zstd"
+	"github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/dictdb"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
@@ -18,6 +20,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/tree"
 )
 
 // Distinct captures share one exact basis, not a retained current Collection
@@ -948,6 +951,284 @@ func TestCOWNativeEntrySlotAdmissionFallbackAndRefund(t *testing.T) {
 			basis.readMu.Unlock()
 			if readErr != nil || string(e.Value) != "old" || slot.reader == nil || slot.reader.point == nil {
 				t.Fatalf("slot retry after pressure: %+v %v", e, readErr)
+			}
+		})
+	}
+}
+
+func cowNativeEntryUsingExtra(t *testing.T, basis *cowBackendBasis, scope backenddb.NativePhysicalReader, root uint64, key []byte, copyValue bool) (node.LeafEntry, error) {
+	t.Helper()
+	basis.readMu.Lock()
+	type result struct {
+		entry node.LeafEntry
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() { e, err := scope.NativeEntryAtRoot(root, key, copyValue); done <- result{e, err} }()
+	var got result
+	progressed := false
+	select {
+	case got = <-done:
+		progressed = true
+	case <-time.After(2 * time.Second):
+	}
+	basis.readMu.Unlock()
+	if !progressed {
+		got = <-done
+		t.Fatal("native extra-slot read waited for primary")
+	}
+	return got.entry, got.err
+}
+
+func TestCOWNativeEntrySlotMetadataAndLifetime(t *testing.T) {
+	db, backend, old, oldRoot := cowNativePointSlotFixture(t)
+	keys := [][]byte{{}, {0}, {'a', 0, 'b'}, {255, 0}, []byte("pointer")}
+	values := [][]byte{{}, []byte("zero"), []byte("binary-inline"), []byte("high"), bytes.Repeat([]byte("pointer"), 256)}
+	batch := db.NewBatch()
+	for i, key := range keys {
+		if err := batch.SetWithRevision(key, values[i], page.EntryRevision(30+i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := batch.Write(); err != nil {
+		t.Fatal(err)
+	}
+	if err := batch.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	captured, err := backend.CaptureNativeSemanticState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	capture := captured.(*NativeSemanticCapture)
+	defer capture.Close()
+	tx, err := backend.BeginNativeConditionalTxn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Close()
+	token, ok := capture.Snapshot().StateToken()
+	if !ok {
+		t.Fatal("missing current root")
+	}
+	basis, budget := capture.cut.basis, db.cow.budget
+	if basis == old.cut.basis || tx.(*nativeConditionalTxn).snap.cowCut.basis != basis {
+		t.Fatal("scopes lost exact retained basis")
+	}
+	var owned [][]byte
+	for _, scope := range []backenddb.NativePhysicalReader{capture, tx.(backenddb.NativePhysicalReader)} {
+		for i, key := range keys {
+			input := append([]byte(nil), key...)
+			metadata, err := cowNativeEntryUsingExtra(t, basis, scope, token.RootPageID, input, false)
+			if err != nil || metadata.Key != nil || metadata.Value != nil || metadata.Revision != page.EntryRevision(30+i) {
+				t.Fatalf("metadata key=%x: %+v %v", key, metadata, err)
+			}
+			entry, err := cowNativeEntryUsingExtra(t, basis, scope, token.RootPageID, input, true)
+			if err != nil || entry.Key != nil || entry.Revision != metadata.Revision || entry.ValuePtr != metadata.ValuePtr || entry.Flags != metadata.Flags || !bytes.Equal(input, key) {
+				t.Fatalf("owned metadata key=%x: %+v %v", key, entry, err)
+			}
+			if i == len(keys)-1 {
+				if entry.Flags&node.FlagPointer == 0 || entry.Value != nil || entry.ValuePtr.FileID == 0 {
+					t.Fatal("pointer retained page bytes", entry)
+				}
+			} else {
+				if !bytes.Equal(entry.Value, values[i]) || len(entry.Value) != cap(entry.Value) || entry.Flags&node.FlagPointer != 0 {
+					t.Fatalf("inline copy key=%x: %+v", key, entry)
+				}
+				owned = append(owned, entry.Value)
+				if len(entry.Value) > 0 {
+					entry.Value[0] ^= 1
+				}
+			}
+		}
+	}
+	if _, err := cowNativeEntryUsingExtra(t, basis, capture, token.RootPageID, []byte("missing"), true); !errors.Is(err, tree.ErrKeyNotFound) {
+		t.Fatal("exact lookup substituted successor", err)
+	}
+	oldEntry, err := cowNativeEntryUsingExtra(t, old.cut.basis, old, oldRoot, []byte("a"), true)
+	if err != nil || string(oldEntry.Value) != "old" {
+		t.Fatal("old retained root changed", oldEntry, err)
+	}
+	if _, err := cowNativeEntryUsingExtra(t, old.cut.basis, old, oldRoot, keys[2], true); !errors.Is(err, tree.ErrKeyNotFound) {
+		t.Fatal("old root saw later publication", err)
+	}
+	// Close a distinct capture while its transaction continues to use the exact
+	// shared basis. Each returned byte slice remains independent of later reuse.
+	if err := capture.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 16; i++ {
+		e, err := cowNativeEntryUsingExtra(t, basis, tx.(backenddb.NativePhysicalReader), token.RootPageID, keys[2], true)
+		if err != nil || !bytes.Equal(e.Value, values[2]) {
+			t.Fatal("transaction lost closed peer's basis", e, err)
+		}
+	}
+	if len(owned) < 2 || string(owned[1]) == string(values[1]) {
+		t.Fatal("retained owned result was overwritten by reuse")
+	}
+	receipt := basis.readSlots[0].reader.lease
+	if err := db.Set([]byte("a"), []byte("new")); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	if db.cow.cut.basis == basis {
+		t.Fatal("checkpoint did not replace physical basis")
+	}
+	e, err := cowNativeEntryUsingExtra(t, basis, tx.(backenddb.NativePhysicalReader), token.RootPageID, keys[2], true)
+	if err != nil || !bytes.Equal(e.Value, values[2]) {
+		t.Fatal("checkpoint rebound retained root", e, err)
+	}
+	if err := tx.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if basis.readSlots[0].reader != nil || !errors.Is(receipt.Resize(1), memtable.ErrCOWClosed) {
+		t.Fatal("last retained basis did not drain extra slot")
+	}
+	basis, receipt = nil, nil
+	if err := old.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for budget.Stats().TotalBytes != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("original budget did not drain", budget.Stats())
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// A real published native ordered root preserves physical tombstones. It must
+// never be replaced by the raw USER root or successor merging during selection.
+func TestCOWNativeEntrySlotExactRootTombstone(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	group, err := backend.BeginRootPublicationBuildGroup()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer group.Close()
+	delta := batch.New(nil, 4096)
+	defer delta.Close()
+	if err := delta.SetWithRevision([]byte("a"), []byte("native"), 37); err != nil {
+		t.Fatal(err)
+	}
+	if err := delta.DeleteWithRevision([]byte("b"), 41); err != nil {
+		t.Fatal(err)
+	}
+	root, err := group.BuildNativeOrderedRoot(backenddb.OrderedRootDeltaBatchPublishInput{Delta: delta, IncludeDeletedOnColdBuild: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := batch.New(nil, 4096)
+	defer meta.Close()
+	var encoded [8]byte
+	binary.LittleEndian.PutUint64(encoded[:], root)
+	if err := meta.Set([]byte("collections/root/native-slot"), encoded[:]); err != nil {
+		t.Fatal(err)
+	}
+	if err := group.BuildNativeSystemDelta(meta); err != nil {
+		t.Fatal(err)
+	}
+	final := backend.NewPhysicalBatch().(*backenddb.Batch)
+	if err := final.SetRootPublicationBuildGroup(group, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := final.Write(); err != nil {
+		t.Fatal(err)
+	}
+	if err := final.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := group.Close(); err != nil {
+		t.Fatal(err)
+	}
+	owner := transactionowner.New()
+	if err := backend.BindPrivateCOWOwner(owner); err != nil {
+		t.Fatal(err)
+	}
+	db, err := Open(dir, backend, Options{TransactionOwner: owner, DisableWAL: true, AllowUnsafe: true, MemtableMode: "cow_btree", FlushThreshold: 1 << 30})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if !db.closing.Load() {
+			if err := db.Close(); err != nil {
+				t.Error(err)
+			}
+		}
+	})
+	if err := backend.BindNativeSemanticBridge(owner, db); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.ActivateNativeSemanticOwner(); err != nil {
+		t.Fatal(err)
+	}
+	captured, err := backend.CaptureNativeSemanticState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	capture := captured.(*NativeSemanticCapture)
+	defer capture.Close()
+	for _, copyValue := range []bool{false, true} {
+		e, err := cowNativeEntryUsingExtra(t, capture.cut.basis, capture, root, []byte("b"), copyValue)
+		if err != nil || e.Revision != 41 || e.Flags&node.FlagTombstone == 0 || e.Key != nil || e.Value != nil {
+			t.Fatal("native tombstone metadata", e, err)
+		}
+	}
+	e, err := cowNativeEntryUsingExtra(t, capture.cut.basis, capture, root, []byte("a"), true)
+	if err != nil || e.Revision != 37 || string(e.Value) != "native" {
+		t.Fatal("native ordered root", e, err)
+	}
+	if _, err := cowNativeEntryUsingExtra(t, capture.cut.basis, capture, root, []byte("aa"), true); !errors.Is(err, tree.ErrKeyNotFound) {
+		t.Fatal("native exact lookup substituted successor", err)
+	}
+}
+
+func TestCOWNativeEntryClosedBudgetWarmPrimaryFallback(t *testing.T) {
+	for _, warm := range []bool{false, true} {
+		t.Run(fmt.Sprintf("warm=%t", warm), func(t *testing.T) {
+			db, _, capture, root := cowNativePointSlotFixture(t)
+			basis, budget := capture.cut.basis, db.cow.budget
+			if warm {
+				if _, err := capture.NativeEntryAtRoot(root, []byte("a"), true); err != nil {
+					t.Fatal(err)
+				}
+			}
+			primary := basis.reader
+			budget.Close() // existing receipts remain valid; every fresh admission refuses
+			before := budget.Stats()
+			basis.readMu.Lock()
+			type result struct {
+				entry node.LeafEntry
+				err   error
+			}
+			done := make(chan result, 1)
+			go func() { e, err := capture.NativeEntryAtRoot(root, []byte("a"), true); done <- result{e, err} }()
+			time.Sleep(50 * time.Millisecond)
+			basis.readMu.Unlock()
+			got := <-done
+			if warm {
+				if got.err != nil || string(got.entry.Value) != "old" {
+					t.Fatal("closed-budget warm primary stranded", got.entry, got.err)
+				}
+			} else if !errors.Is(got.err, memtable.ErrCOWClosed) {
+				t.Fatal("cold closed-budget admission", got.err)
+			}
+			after := budget.Stats()
+			if basis.reader != primary || basis.readSlots[0].reader != nil || before.ReservedBytes != after.ReservedBytes || before.ExternalLeases != after.ExternalLeases {
+				t.Fatal("closed-budget fallback changed existing ownership", before, after)
 			}
 		})
 	}
