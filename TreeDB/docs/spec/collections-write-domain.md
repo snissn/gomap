@@ -133,8 +133,10 @@ a generic failure is not proof that application callbacks can safely retry.
 Assigned uncertain failures retain their identity and poison further writes
 until recovery.
 
-Native live producers run shared pressure preparation before transaction
-captures, private staging and callbacks. Ordinary collection insert/update/delete
+Native live producers run shared pressure preparation before their initial
+capture, private staging and callbacks. A queued producer may open a later
+transaction capture without repeating preparation; grouped typed upserts use
+this path after queue wait. Ordinary collection insert/update/delete
 facades also revalidate the prepared observation under their schema/mutation
 gate. Active pending catalog and collection domain generations also request
 preparation when their exact generation history

@@ -1,0 +1,37 @@
+{
+  "verified_utc": "2026-10-30T19:27:23.649418+00:00",
+  "status": "pass",
+  "scope": "Independent pre-measurement build equivalence check supplements frozen runner admission. Both original build receipts and their build-info artifacts checked; no enabled race flag including assignment forms.",
+  "go_executable_sha256": "9c2a37ae5b21ba1d5a004bb9ab4d0c64de6fc5778e9d30487adccea62678b8b5",
+  "equal_go_environment": {
+    "CGO_ENABLED": "1",
+    "GOARCH": "amd64",
+    "GOCACHE": "/workspace/scratch/0d9ab3f5d72e/go-cache",
+    "GOFLAGS": "",
+    "GOMODCACHE": "/workspace/scratch/0d9ab3f5d72e/go-path/pkg/mod",
+    "GOOS": "linux",
+    "GOTOOLCHAIN": "local",
+    "GOVERSION": "go1.26.10"
+  },
+  "equal_semantic_binary_build_settings": {
+    "-buildmode": "exe",
+    "-compiler": "gc",
+    "CGO_ENABLED": "1",
+    "CGO_CFLAGS": "",
+    "CGO_CPPFLAGS": "",
+    "CGO_CXXFLAGS": "",
+    "CGO_LDFLAGS": "",
+    "GOARCH": "amd64",
+    "GOOS": "linux",
+    "GOAMD64": "v1"
+  },
+  "inherited_GOEXPERIMENT": null,
+  "binary_sha256": {
+    "baseline": "6f22611b2cbcca15fdc4d3cda059b0dad1ed902b5f40bccabf95e041cea70443",
+    "candidate": "e822448cf6fb931766f9b278e175dbf6d254e97b18d803ea6e94ac38c4c9ece7"
+  },
+  "build_receipt_sha256": {
+    "baseline": "84993a85bfe9a66a83627dbbfec34b61b72b2d63616924ec9df83610b059f0da",
+    "candidate": "3cc3952da1d4bcbdd61d5c34117d067ad967f6865c65b5fa514bd2dfd4f25695"
+  }
+}
