@@ -311,11 +311,41 @@ func BenchmarkTypedGraphEncodedPublic5345(b *testing.B) {
 					columns[3].Strings = append(columns[3].Strings, "path")
 				}
 				beforeLSN := db.CommandWALNextLSN()
+				var traceFile *os.File
+				if dir := os.Getenv("GOMAP_5345_INSERT_TRACE_DIR"); dir != "" {
+					if !filepath.IsAbs(dir) {
+						b.Fatal("trace directory must be absolute")
+					}
+					var err error
+					traceFile, err = os.CreateTemp(dir, "typed-"+policy.name+"-*.trace")
+					if err != nil {
+						b.Fatalf("create trace: %v", err)
+					}
+					if err = trace.Start(traceFile); err != nil {
+						if closeErr := traceFile.Close(); closeErr != nil {
+							b.Errorf("close trace: %v", closeErr)
+						}
+						b.Fatalf("start trace: %v", err)
+					}
+				}
 				b.ReportAllocs()
 				b.ResetTimer()
 				b.StartTimer()
+				var region *trace.Region
+				if traceFile != nil {
+					region = trace.StartRegion(context.Background(), "5345-public-insert")
+				}
 				got, stats, err := col.InsertTypedBatchWithStats(ids, retained, columns)
+				if region != nil {
+					region.End()
+				}
 				b.StopTimer()
+				if traceFile != nil {
+					trace.Stop()
+					if err := traceFile.Close(); err != nil {
+						b.Fatalf("close trace: %v", err)
+					}
+				}
 				if err != nil {
 					if policy.codec == ColumnStoreTypedColumnCompressionSnappy {
 						_, boundErr := typedColumnPublicationFP32EncodedBound(*resolvedConfig, rows)
