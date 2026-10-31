@@ -236,6 +236,22 @@ retained object without admission. Releasing only the same blocker must allow
 the same original admission again. This is a direct-constructor/budget control,
 not a reproduction of the original public DB schedule.
 
+`TestNativeScalarForwardOriginalCleanupAdmission` adds a test for a public-owner
+counterexample to the old unconditional refusal oracle. It holds a capture of
+the exact engine superseded by the original insert, installs a test-local
+forwarding observer before that engine can enqueue cleanup, then closes the
+extra capture before saturation. The original flush worker is held before the
+real destructor. Both original pressure setups, the unchanged optional-miss
+parent counters, and zero-admission validated borrow precede release of this
+selected owner. The observer forwards the real destructor and its independent
+refund once, records both phases, and holds later worker advancement while the
+unchanged uncached constructor follows original admission. The test requires
+positive owner-attributed headroom, exact accepted scratch charges, independent
+identity parity and checked original manager/DB Close with final budget zero.
+There is no arbitrary lease refund, alternate admission, cap change or retry.
+This constructed supported schedule can establish the fixture-contract defect;
+it cannot recover which event occurred in the retained macOS failure.
+
 `TestNativeScalarForwardOriginalAdmissionRefusal` separately uses a recording
 refusal callback: validated reuse avoids admission; missing, unpublished,
 foreign-owner, wrong-index and wrong-status provenance preserves the exact
