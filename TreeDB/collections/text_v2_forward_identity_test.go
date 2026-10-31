@@ -428,8 +428,13 @@ func TestNativeTextV2ForwardIdentityAdmission(t *testing.T) {
 	defer lease.Close()
 	var charged uint64
 	refuse := false
+	var admissionCalls, refusedCalls int
+	var refusedCharge, firstAcceptedAfterRefusal uint64
 	catalog, err := newNativeTextCatalog(read, func(n uint64) error {
+		admissionCalls++
 		if refuse {
+			refusedCalls++
+			refusedCharge = n
 			return memtable.ErrCOWCapacity
 		}
 		if n > ^uint64(0)-charged {
@@ -437,6 +442,9 @@ func TestNativeTextV2ForwardIdentityAdmission(t *testing.T) {
 		}
 		if err := lease.Resize(charged + n); err != nil {
 			return err
+		}
+		if refusedCalls != 0 && firstAcceptedAfterRefusal == 0 {
+			firstAcceptedAfterRefusal = n
 		}
 		charged += n
 		return nil
@@ -448,20 +456,33 @@ func TestNativeTextV2ForwardIdentityAdmission(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	budget := read.capture.NativeAllocator().(nativeHNSWAdmissionBudget)
-	before := budget.Stats()
+	allowedIDs := legacyScalarIDs(hybridScalarAllowSet{id: {}})
+	wantCharge, err := nativeTextForwardIdentityCharge(allowedIDs, 1)
+	if err != nil || wantCharge == 0 {
+		t.Fatalf("forward identity charge=%d err=%v", wantCharge, err)
+	}
+	beforeCalls, beforeCharged := admissionCalls, charged
 	sequence := read.capture.LogicalSequence()
 	refuse = true
-	set, err := newTextV2SearchOrdinalAllowSet(read.capture.Snapshot(), catalog, ctx, legacyScalarIDs(hybridScalarAllowSet{id: {}}))
+	set, err := newTextV2SearchOrdinalAllowSet(read.capture.Snapshot(), catalog, ctx, allowedIDs)
 	if !errors.Is(err, memtable.ErrCOWCapacity) || set != nil {
 		t.Fatal("unadmitted forward map", set, err)
 	}
-	after := budget.Stats()
-	if after.ReservedBytes != before.ReservedBytes || after.ExternalLeases != before.ExternalLeases || read.capture.LogicalSequence() != sequence {
-		t.Fatalf("refusal changed ownership before=%+v after=%+v", before, after)
+	// Observe this request's original admission boundary. Global budget totals
+	// also include independent owners and cannot identify this request's charge.
+	// Refusal must precede every forward map/slice/key allocation and leave the
+	// accepted lease-resize ledger unchanged; it must not merely net to zero.
+	if admissionCalls != beforeCalls+1 || refusedCalls != 1 || refusedCharge != wantCharge || charged != beforeCharged || allowedIDs.forwardPlan != nil {
+		t.Fatalf("refusal ownership calls=%d want=%d refused=%d charge=%d want=%d accepted=%d want=%d plan=%p", admissionCalls, beforeCalls+1, refusedCalls, refusedCharge, wantCharge, charged, beforeCharged, allowedIDs.forwardPlan)
+	}
+	if read.capture.LogicalSequence() != sequence {
+		t.Fatal("refusal changed logical sequence")
 	}
 	refuse = false
-	if set, err = newTextV2SearchOrdinalAllowSet(read.capture.Snapshot(), catalog, ctx, legacyScalarIDs(hybridScalarAllowSet{id: {}})); err != nil || set.size() != 1 {
+	if set, err = newTextV2SearchOrdinalAllowSet(read.capture.Snapshot(), catalog, ctx, allowedIDs); err != nil || set.size() != 1 {
 		t.Fatal("reuse after refusal", set, err)
+	}
+	if admissionCalls < beforeCalls+2 || refusedCalls != 1 || firstAcceptedAfterRefusal != wantCharge || charged < beforeCharged+wantCharge || read.capture.LogicalSequence() != sequence {
+		t.Fatalf("reuse admission calls=%d refused=%d first=%d want=%d accepted=%d minimum=%d sequence=%d want=%d", admissionCalls, refusedCalls, firstAcceptedAfterRefusal, wantCharge, charged, beforeCharged+wantCharge, read.capture.LogicalSequence(), sequence)
 	}
 }

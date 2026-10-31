@@ -1,0 +1,13 @@
+{
+  "markdown": {
+    "bytes": 15820,
+    "path": "/home/mikers/gomap-5335-final12-actual-report-20261031/REPORT.md",
+    "sha256": "94a87fe93d396824ca096ef39ff94807c96d3eec4cfaf92194ef7c4342857679"
+  },
+  "report": {
+    "bytes": 9594539,
+    "path": "/home/mikers/gomap-5335-final12-actual-report-20261031/report.json",
+    "sha256": "d40545a83b7d4b0b49aa3542a5ca6fa8393f04e4aed4ce5ee578a07ffd7efffa"
+  },
+  "status": "COMPLETE OFFLINE PROJECTION \u2014 merge/review acceptance remains separate"
+}

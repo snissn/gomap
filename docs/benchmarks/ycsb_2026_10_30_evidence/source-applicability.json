@@ -1,0 +1,222 @@
+{
+  "measured_commit": "802f7cfcf8b69eff1447a5f4833076d428e61e3f",
+  "selected_source_commit": "c660c3e34523a77f12da9b440c5b6b7def9359f1",
+  "repair_only_commit": "1a899e959f282bf7d01eb07cfc2cfdf0d29bc39e",
+  "qualification": "File object identity only; changed shared ACK/checkpoint code defeats whole-product/performance/durability equivalence. Future merged candidate must be compared again.",
+  "named_blobs": [
+    {
+      "path": "go.mod",
+      "measured_blob": "32937836f5cce4e9e440bd971e83095c00d25d7a",
+      "selected_blob": "32937836f5cce4e9e440bd971e83095c00d25d7a",
+      "equal": true
+    },
+    {
+      "path": "go.sum",
+      "measured_blob": "cd1067910a7b6bd17a2507206cb23a8104696e85",
+      "selected_blob": "cd1067910a7b6bd17a2507206cb23a8104696e85",
+      "equal": true
+    },
+    {
+      "path": "TreeDB/mongo_gateway/server.go",
+      "measured_blob": "618427e2fbff396473b5948b025d1f1559a5aec4",
+      "selected_blob": "618427e2fbff396473b5948b025d1f1559a5aec4",
+      "equal": true
+    },
+    {
+      "path": "cmd/treedb-native-server/main.go",
+      "measured_blob": "2d286f0354167f422352e0403d53b493f2abd35d",
+      "selected_blob": "2d286f0354167f422352e0403d53b493f2abd35d",
+      "equal": true
+    },
+    {
+      "path": "TreeDB/db/command_wal_debt.go",
+      "measured_blob": "4d2238c198ceb71f7c97abb30affb0fff3b05340",
+      "selected_blob": "4d2238c198ceb71f7c97abb30affb0fff3b05340",
+      "equal": true
+    },
+    {
+      "path": "TreeDB/db/native_command_wal_completion.go",
+      "measured_blob": "e296ae6c3f9fec6b8274c751741c26eb4ec6c444",
+      "selected_blob": "e296ae6c3f9fec6b8274c751741c26eb4ec6c444",
+      "equal": true
+    },
+    {
+      "path": "TreeDB/caching/cow_native_semantic.go",
+      "measured_blob": "dfc75446de31b7635f653e51e9e06fadb8cfaa82",
+      "selected_blob": "dfc75446de31b7635f653e51e9e06fadb8cfaa82",
+      "equal": true
+    },
+    {
+      "path": "TreeDB/command_wal_public_cached.go",
+      "measured_blob": "6c8500db851e7cd2c3908e3c1e64e1ca21130527",
+      "selected_blob": "6c8500db851e7cd2c3908e3c1e64e1ca21130527",
+      "equal": true
+    },
+    {
+      "path": "scripts/ycsb_correctness_fixture.go",
+      "measured_blob": "ed340d9565a6ef892ca16816d809b44b498bdd2c",
+      "selected_blob": "ed340d9565a6ef892ca16816d809b44b498bdd2c",
+      "equal": true
+    },
+    {
+      "path": "scripts/ycsb_correctness_validate.py",
+      "measured_blob": "b2d9cea26d1025661943ee21ae817682dbf3ae44",
+      "selected_blob": "b2d9cea26d1025661943ee21ae817682dbf3ae44",
+      "equal": true
+    },
+    {
+      "path": "scripts/ycsb_mongodb_reference.py",
+      "measured_blob": "551e41c131a54076cf5ea19728701288e8882bc3",
+      "selected_blob": "33cd52e6781538cfaedfcdd255aace1a4f51ce78",
+      "equal": false
+    },
+    {
+      "path": "internal/ycsbevidence/checkpoint.go",
+      "measured_blob": "138d0ad7982ddaf445c689750f22e32a6cf45f7c",
+      "selected_blob": "138d0ad7982ddaf445c689750f22e32a6cf45f7c",
+      "equal": true
+    },
+    {
+      "path": "internal/ycsbevidence/checkpoint_test.go",
+      "measured_blob": "94bb8e04110825ea57bd9e8f2f74e3c49873b5cc",
+      "selected_blob": "94bb8e04110825ea57bd9e8f2f74e3c49873b5cc",
+      "equal": true
+    },
+    {
+      "path": "internal/ycsbevidence/process_linux.go",
+      "measured_blob": "03a6b1ebd4cae36712dc67beaa502745b224444f",
+      "selected_blob": "03a6b1ebd4cae36712dc67beaa502745b224444f",
+      "equal": true
+    },
+    {
+      "path": "internal/ycsbevidence/process_other.go",
+      "measured_blob": "d1e3e85e0abff01a6596d54b487670511e3e253a",
+      "selected_blob": "d1e3e85e0abff01a6596d54b487670511e3e253a",
+      "equal": true
+    },
+    {
+      "path": "internal/ycsbevidence/receipt.go",
+      "measured_blob": "b1809b34767aed598ce2df3d0c4bf12431818157",
+      "selected_blob": "b1809b34767aed598ce2df3d0c4bf12431818157",
+      "equal": true
+    },
+    {
+      "path": "internal/ycsbevidence/receipt_test.go",
+      "measured_blob": "06ee8ce0a6fe3fa8fbeff0a1ab1b27b35c7c7472",
+      "selected_blob": "06ee8ce0a6fe3fa8fbeff0a1ab1b27b35c7c7472",
+      "equal": true
+    }
+  ],
+  "changed_non_test_go": [
+    {
+      "path": "TreeDB/caching/conditional_txn.go",
+      "measured_blob": "d49b052c1cab4d1337af395d9e7446465190904a",
+      "selected_blob": "f7e4907d9daafca52dd2d038c9cad64335787294"
+    },
+    {
+      "path": "TreeDB/caching/cow_batch.go",
+      "measured_blob": "637f210e29a6584e61a6d64255801bd08b4d81f4",
+      "selected_blob": "b1fa5a487e64c55f08948917d407f5d58d4b0c97"
+    },
+    {
+      "path": "TreeDB/caching/db.go",
+      "measured_blob": "94ba85ed5aee577285693eeb5001af8db49e418f",
+      "selected_blob": "c036e4f7e973421d4bbeb74773c0404945f3c8a4"
+    },
+    {
+      "path": "TreeDB/caching/flush_run_planner.go",
+      "measured_blob": "73f075ad0ddfcfcc4698c90006d9e39357fecde2",
+      "selected_blob": "0fa8c0c43db010ffbf19f90666ae0f214e1a32c9"
+    },
+    {
+      "path": "TreeDB/caching/memtable_residency_stats_keys.go",
+      "measured_blob": null,
+      "selected_blob": "7f5e9fccb994c4fb8a523f9933f7ab5b96d98e62"
+    },
+    {
+      "path": "TreeDB/collections/api.go",
+      "measured_blob": "5682b0fb1448de37ad0d5cf52e06ec53c80b1ef2",
+      "selected_blob": "29a845e548c0ef03c807b40f89486b06061eb9f4"
+    },
+    {
+      "path": "TreeDB/collections/native_engine_build.go",
+      "measured_blob": "eca8f1ac2cee8e41b7e0ba9441750999a2a6d010",
+      "selected_blob": "6c6f4c4ab01f2bb0e00049c9881044d3cc7196fc"
+    },
+    {
+      "path": "TreeDB/collections/native_typed_engine.go",
+      "measured_blob": "aa3311296d191fc7547b522acb7a8e5acc3ed4aa",
+      "selected_blob": "8379a8de9c31024a83763b33fe0e92341d7c843d"
+    },
+    {
+      "path": "TreeDB/collections/native_typed_materialize.go",
+      "measured_blob": "2bd7590079469bdcd59194bfc3b052a7b20a3a80",
+      "selected_blob": "8da2584b2f063467bbb133983e8ff23e7c3efd9b"
+    },
+    {
+      "path": "TreeDB/collections/native_vector_graph.go",
+      "measured_blob": "f2f85fabe3a5bedb527d385e49ba1b00de3683a1",
+      "selected_blob": "acce7218e22e2d8be136e5530be1f26238f4bbd6"
+    },
+    {
+      "path": "TreeDB/command_wal_group_commit.go",
+      "measured_blob": "8cba73b6323c4e0da5fe1b4c13a4b972655d9023",
+      "selected_blob": "301beb811a66d6ae3c7fbf951ccf6a9664ebe7ac"
+    },
+    {
+      "path": "TreeDB/cow_ordered_native.go",
+      "measured_blob": "92ee648eb2039ab3817278fec35e0536b092030b",
+      "selected_blob": "c04f6bef7d2abbe1dddfe8a00efbc151a34d5066"
+    },
+    {
+      "path": "TreeDB/db/command_wal_barrier.go",
+      "measured_blob": "67734d2cd8c8eb54c32275d803de9658bb8b14c9",
+      "selected_blob": "3f9cbf3382a203562b6780153297e467fe212dfd"
+    },
+    {
+      "path": "TreeDB/db/command_wal_captured_prefix.go",
+      "measured_blob": "40965646c32cd06038697577f5f82cf1b72a18d4",
+      "selected_blob": "25cc049bc0dd03e9e1875ac8a51b0bb15c65be64"
+    },
+    {
+      "path": "TreeDB/db/command_wal_diagnostics.go",
+      "measured_blob": null,
+      "selected_blob": "bcca7572591dad5724b3919ab16f8558fc16e239"
+    },
+    {
+      "path": "TreeDB/db/command_wal_raw.go",
+      "measured_blob": "66dc6f98c40b79e5fcf6954c3fa56f052c6d0d2a",
+      "selected_blob": "06de54882bb75e868da2154728a7fe5f4e928e1b"
+    },
+    {
+      "path": "TreeDB/db/durable_primary_runtime_v5.go",
+      "measured_blob": "985a047f37d12e9d717cdbd244f541de181b3f55",
+      "selected_blob": "b3c07735fa6c99d05e08786f40a58ecbb7ade086"
+    },
+    {
+      "path": "TreeDB/db/primary_capsule_runtime_v6.go",
+      "measured_blob": "51c30f21224fb0e2f83afedd8e351625849dc446",
+      "selected_blob": "32435800eef3c7aa8cb3a2f0d73621a745a0ce5c"
+    },
+    {
+      "path": "TreeDB/db/primary_runtime_metadata.go",
+      "measured_blob": "433d1472eb3a9c2f5b84edc0bb2f599502670353",
+      "selected_blob": "d237de00438f9fe6ce44c504071b9d1df896f4dd"
+    },
+    {
+      "path": "TreeDB/mvcc/ordered_completion.go",
+      "measured_blob": "968201b71cbeb9d62a58cc881f2c7b0292ac1ccd",
+      "selected_blob": "d79885a0534925d2dd9a07e2ff6356573e1c55ed"
+    },
+    {
+      "path": "cmd/treedb_vector_partition_bench/m3_footprint_diagnostics.go",
+      "measured_blob": null,
+      "selected_blob": "3008a5eb4c0627118d8b922432756b4d748fda13"
+    },
+    {
+      "path": "cmd/treedb_vector_partition_bench/m3_partition_index.go",
+      "measured_blob": "977154960291da173bc815ea2a1abccf68f62301",
+      "selected_blob": "d7b425ff0684aeb11e20d0200f374851f9f7675a"
+    }
+  ]
+}

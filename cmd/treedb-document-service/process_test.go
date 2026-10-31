@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -32,17 +34,39 @@ func TestDocumentServiceCommandProcess(t *testing.T) {
 	os.Exit(0)
 }
 
-func commandAddress(t *testing.T) string {
-	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+// Read addresses selected by the child, which keeps all three listeners bound.
+// Reserving then closing ports in the parent permits both reuse and external theft.
+func commandListenerAddresses(raw []byte) (base, diagnostics, native string, err error) {
+	// Ignore a final partial line until the child finishes writing it.
+	raw = raw[:bytes.LastIndexByte(raw, '\n')+1]
+	for _, line := range strings.Split(string(raw), "\n") {
+		for _, endpoint := range []struct {
+			prefix, suffix string
+			target         *string
+		}{
+			{"TreeDB Document Service listening on http://", "", &base},
+			{"TreeDB Document Service pprof listening on http://", "/debug/pprof/", &diagnostics},
+			{"TreeDB Document Service native wire listening on ", "", &native},
+		} {
+			_, addr, found := strings.Cut(line, endpoint.prefix)
+			if !found {
+				continue
+			}
+			addr = strings.TrimSuffix(strings.TrimSpace(addr), endpoint.suffix)
+			host, port, splitErr := net.SplitHostPort(addr)
+			number, numberErr := strconv.Atoi(port)
+			if splitErr != nil || numberErr != nil || host != "127.0.0.1" || number <= 0 || number > 65535 {
+				return "", "", "", fmt.Errorf("invalid bound listener address %q", addr)
+			}
+			*endpoint.target = addr
+		}
 	}
-	addr := l.Addr().String()
-	if err := l.Close(); err != nil {
-		t.Fatal(err)
+	if base != "" && diagnostics != "" && native != "" {
+		if base == diagnostics || base == native || diagnostics == native {
+			return "", "", "", fmt.Errorf("duplicate bound listener addresses: %s %s %s", base, diagnostics, native)
+		}
 	}
-	return addr
+	return
 }
 
 type documentCommand struct {
@@ -54,11 +78,11 @@ type documentCommand struct {
 
 func startDocumentCommand(t *testing.T, dir, profile string, extra ...string) *documentCommand {
 	t.Helper()
-	p := &documentCommand{base: "http://" + commandAddress(t), diagnostics: "http://" + commandAddress(t), native: commandAddress(t), client: &http.Client{Timeout: 5 * time.Second}}
+	p := &documentCommand{client: &http.Client{Timeout: 5 * time.Second}}
 	ctx, cancel := context.WithTimeout(t.Context(), 45*time.Second)
 	t.Cleanup(cancel)
 	p.cmd = exec.CommandContext(ctx, os.Args[0], "-test.run=^TestDocumentServiceCommandProcess$")
-	args := append([]string{"-dir", dir, "-profile", profile, "-addr", strings.TrimPrefix(p.base, "http://"), "-pprof", strings.TrimPrefix(p.diagnostics, "http://"), "-native-addr", p.native}, extra...)
+	args := append([]string{"-dir", dir, "-profile", profile, "-addr", "127.0.0.1:0", "-pprof", "127.0.0.1:0", "-native-addr", "127.0.0.1:0"}, extra...)
 	p.cmd.Env = append(os.Environ(), "GOMAP_DOCUMENT_COMMAND_CHILD=1", "GOMAP_DOCUMENT_COMMAND_ARGS="+strings.Join(args, "\n"))
 	var err error
 	p.log, err = os.CreateTemp(t.TempDir(), "command-*.log")
@@ -78,13 +102,27 @@ func startDocumentCommand(t *testing.T, dir, profile string, extra ...string) *d
 	})
 	deadline := time.Now().Add(15 * time.Second)
 	for {
-		res, err := p.client.Get(p.diagnostics + "/debug/treedb/stats")
-		if err == nil {
-			_ = res.Body.Close()
-			return p
+		raw, err := os.ReadFile(p.log.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		base, diagnostics, native, err := commandListenerAddresses(raw)
+		if err != nil {
+			t.Fatalf("command addresses: %v\n%s", err, raw)
+		}
+		if base != "" && diagnostics != "" && native != "" {
+			p.base, p.diagnostics, p.native = "http://"+base, "http://"+diagnostics, native
+			res, requestErr := p.client.Get(p.diagnostics + "/debug/treedb/stats")
+			err = requestErr
+			if err == nil {
+				_ = res.Body.Close()
+				if res.StatusCode == http.StatusOK {
+					return p
+				}
+				err = fmt.Errorf("diagnostics status %d", res.StatusCode)
+			}
 		}
 		if time.Now().After(deadline) {
-			raw, _ := os.ReadFile(p.log.Name())
 			t.Fatalf("command unavailable: %v\n%s", err, raw)
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -169,6 +207,67 @@ func (p *documentCommand) stop(t *testing.T) {
 		raw, _ := os.ReadFile(p.log.Name())
 		t.Fatalf("shutdown: %v\n%s", err, raw)
 	}
+}
+
+func TestCommandListenerAddresses(t *testing.T) {
+	const app = "TreeDB Document Service listening on http://127.0.0.1:10001\n"
+	const diagnostics = "2026/10/29 00:00:00 TreeDB Document Service pprof listening on http://127.0.0.1:10002/debug/pprof/\n"
+	const native = "TreeDB Document Service native wire listening on 127.0.0.1:10003\n"
+	for _, tc := range []struct {
+		name, log  string
+		wantNative string
+		wantErr    bool
+	}{
+		{"all", app + diagnostics + native, "127.0.0.1:10003", false},
+		{"reordered", native + app + diagnostics, "127.0.0.1:10003", false},
+		{"partial", app + diagnostics + strings.TrimSuffix(native, "\n"), "", false},
+		{"requested-zero", strings.ReplaceAll(app+diagnostics+native, ":10001", ":0"), "", true},
+		{"same-address", strings.ReplaceAll(app+diagnostics+native, ":10003", ":10002"), "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base, diag, wire, err := commandListenerAddresses([]byte(tc.log))
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("error=%v wantErr=%v", err, tc.wantErr)
+			}
+			if !tc.wantErr && (base != "127.0.0.1:10001" || diag != "127.0.0.1:10002" || wire != tc.wantNative) {
+				t.Fatalf("addresses=%q,%q,%q", base, diag, wire)
+			}
+		})
+	}
+}
+
+func TestDocumentServiceCommandEphemeralListeners(t *testing.T) {
+	p := startDocumentCommand(t, t.TempDir(), "no_wal_fast")
+	addresses := []string{strings.TrimPrefix(p.base, "http://"), strings.TrimPrefix(p.diagnostics, "http://"), p.native}
+	seen := make(map[string]bool)
+	for _, addr := range addresses {
+		if seen[addr] {
+			t.Fatalf("listeners share address %s", addr)
+		}
+		seen[addr] = true
+		_, port, err := net.SplitHostPort(addr)
+		if err != nil || port == "0" {
+			t.Fatalf("unresolved listener address %q: %v", addr, err)
+		}
+	}
+	res, err := p.client.Get(p.base + "/v1/health")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("HTTP health status %d", res.StatusCode)
+	}
+	_ = p.snapshot(t)
+	wire, err := nativewire.DialContext(t.Context(), "tcp", p.native)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = wire.ListCollections(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	_ = wire.Close()
+	p.stop(t)
 }
 
 func TestDocumentServiceCommandDefaultActivatesCOW(t *testing.T) {
@@ -441,7 +540,7 @@ func TestDocumentServiceCommandListenFailureReleasesOwner(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 			defer cancel()
 			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestDocumentServiceCommandProcess$")
-			args := []string{"-dir", dir, "-addr", commandAddress(t), "-pprof", commandAddress(t), flagName, busy.Addr().String()}
+			args := []string{"-dir", dir, "-addr", "127.0.0.1:0", "-pprof", "127.0.0.1:0", flagName, busy.Addr().String()}
 			cmd.Env = append(os.Environ(), "GOMAP_DOCUMENT_COMMAND_CHILD=1", "GOMAP_DOCUMENT_COMMAND_ARGS="+strings.Join(args, "\n"))
 			raw, err := cmd.CombinedOutput()
 			if err == nil || !bytes.Contains(raw, []byte("Failed to listen")) {

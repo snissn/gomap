@@ -1,0 +1,268 @@
+[
+    {
+        "Id": "17a3034a0139632b854187c3b56dbafb7f1b0b6eadb381439a969ca29bf647e0",
+        "Created": "2026-10-30T03:02:34.912943796Z",
+        "Path": "/usr/bin/mongod",
+        "Args": [
+            "--dbpath",
+            "/data/db",
+            "--storageEngine",
+            "wiredTiger",
+            "--bind_ip_all",
+            "--port",
+            "27017"
+        ],
+        "State": {
+            "Status": "created",
+            "Running": false,
+            "Paused": false,
+            "Restarting": false,
+            "OOMKilled": false,
+            "Dead": false,
+            "Pid": 0,
+            "ExitCode": 0,
+            "Error": "",
+            "StartedAt": "0001-01-01T00:00:00Z",
+            "FinishedAt": "0001-01-01T00:00:00Z"
+        },
+        "Image": "sha256:690f1371c118a8389ecd6c82c9a7f0e37320732b1d56935a24b29dfca6933f54",
+        "ResolvConfPath": "",
+        "HostnamePath": "",
+        "HostsPath": "",
+        "LogPath": "",
+        "Name": "/ycsb-ab941945a6b94e8da9b9aaaaa00a409c-server",
+        "RestartCount": 0,
+        "Driver": "overlay2",
+        "Platform": "linux",
+        "MountLabel": "",
+        "ProcessLabel": "",
+        "AppArmorProfile": "",
+        "ExecIDs": null,
+        "HostConfig": {
+            "Binds": null,
+            "ContainerIDFile": "",
+            "LogConfig": {
+                "Type": "json-file",
+                "Config": {}
+            },
+            "NetworkMode": "bridge",
+            "PortBindings": {
+                "27017/tcp": [
+                    {
+                        "HostIp": "127.0.0.1",
+                        "HostPort": "27018"
+                    }
+                ]
+            },
+            "RestartPolicy": {
+                "Name": "no",
+                "MaximumRetryCount": 0
+            },
+            "AutoRemove": false,
+            "VolumeDriver": "",
+            "VolumesFrom": null,
+            "ConsoleSize": [
+                0,
+                0
+            ],
+            "CapAdd": null,
+            "CapDrop": null,
+            "CgroupnsMode": "private",
+            "Dns": null,
+            "DnsOptions": [],
+            "DnsSearch": [],
+            "ExtraHosts": null,
+            "GroupAdd": null,
+            "IpcMode": "private",
+            "Cgroup": "",
+            "Links": null,
+            "OomScoreAdj": 0,
+            "PidMode": "",
+            "Privileged": false,
+            "PublishAllPorts": false,
+            "ReadonlyRootfs": false,
+            "SecurityOpt": null,
+            "UTSMode": "",
+            "UsernsMode": "",
+            "ShmSize": 67108864,
+            "Runtime": "runc",
+            "Isolation": "",
+            "CpuShares": 0,
+            "Memory": 0,
+            "NanoCpus": 0,
+            "CgroupParent": "",
+            "BlkioWeight": 0,
+            "BlkioWeightDevice": [],
+            "BlkioDeviceReadBps": [],
+            "BlkioDeviceWriteBps": [],
+            "BlkioDeviceReadIOps": [],
+            "BlkioDeviceWriteIOps": [],
+            "CpuPeriod": 0,
+            "CpuQuota": 0,
+            "CpuRealtimePeriod": 0,
+            "CpuRealtimeRuntime": 0,
+            "CpusetCpus": "",
+            "CpusetMems": "",
+            "Devices": [],
+            "DeviceCgroupRules": null,
+            "DeviceRequests": null,
+            "MemoryReservation": 0,
+            "MemorySwap": 0,
+            "MemorySwappiness": null,
+            "OomKillDisable": false,
+            "PidsLimit": null,
+            "Ulimits": [],
+            "CpuCount": 0,
+            "CpuPercent": 0,
+            "IOMaximumIOps": 0,
+            "IOMaximumBandwidth": 0,
+            "Mounts": [
+                {
+                    "Type": "bind",
+                    "Source": "/home/mikers/gomap-5335-close-consumer-build-20261029/reference-bootstrap-959cc5c491-preparation/support/mongodb/db",
+                    "Target": "/data/db"
+                },
+                {
+                    "Type": "bind",
+                    "Source": "/home/mikers/gomap-5335-close-consumer-build-20261029/reference-bootstrap-959cc5c491-preparation/support/mongodb/db.configdb",
+                    "Target": "/data/configdb"
+                }
+            ],
+            "MaskedPaths": [
+                "/proc/acpi",
+                "/proc/asound",
+                "/proc/interrupts",
+                "/proc/kcore",
+                "/proc/keys",
+                "/proc/latency_stats",
+                "/proc/sched_debug",
+                "/proc/scsi",
+                "/proc/timer_list",
+                "/proc/timer_stats",
+                "/sys/devices/virtual/powercap",
+                "/sys/firmware",
+                "/sys/devices/system/cpu/cpu0/thermal_throttle",
+                "/sys/devices/system/cpu/cpu1/thermal_throttle",
+                "/sys/devices/system/cpu/cpu2/thermal_throttle",
+                "/sys/devices/system/cpu/cpu3/thermal_throttle",
+                "/sys/devices/system/cpu/cpu4/thermal_throttle",
+                "/sys/devices/system/cpu/cpu5/thermal_throttle",
+                "/sys/devices/system/cpu/cpu6/thermal_throttle",
+                "/sys/devices/system/cpu/cpu7/thermal_throttle",
+                "/sys/devices/system/cpu/cpu8/thermal_throttle",
+                "/sys/devices/system/cpu/cpu9/thermal_throttle",
+                "/sys/devices/system/cpu/cpu10/thermal_throttle",
+                "/sys/devices/system/cpu/cpu11/thermal_throttle"
+            ],
+            "ReadonlyPaths": [
+                "/proc/bus",
+                "/proc/fs",
+                "/proc/irq",
+                "/proc/sys",
+                "/proc/sysrq-trigger"
+            ]
+        },
+        "GraphDriver": {
+            "Data": {
+                "ID": "17a3034a0139632b854187c3b56dbafb7f1b0b6eadb381439a969ca29bf647e0",
+                "LowerDir": "/var/lib/docker/overlay2/af5af1ae94760951a0f2719514a9f6461087e65c925241413c462795a5a1f860-init/diff:/var/lib/docker/overlay2/bb41acc46109b44f0c8280cf0bdfb8eb6c47e35928a782c421d1cad76502d24f/diff:/var/lib/docker/overlay2/6b83ae0edafac09dedb8b9897da1dc0dda242b527425efab4bc7a3039ba69444/diff:/var/lib/docker/overlay2/8de353d32d7183a77c35ba9b906acd78b3eb65b8f29cd6ba5737be4d0d0803dd/diff:/var/lib/docker/overlay2/b636f804d51242f5994e7b1a6283e8573e35e811c082917d12f173103f5638f5/diff:/var/lib/docker/overlay2/fc7483cdb5cdb8ad1a1d10f110048323d84deec264a3efd367831ab981932591/diff:/var/lib/docker/overlay2/3ed8ce3f00d08d04e43c8a83bed69496553d870b55775ea23f18ce40e5c47437/diff:/var/lib/docker/overlay2/c556ecb9f885aef2be2a033ea5313c6f815ae3174e1cd1ad278d603a26561e15/diff:/var/lib/docker/overlay2/a1386c4edac2ca2c1394efc2d18faea3b81defbcd81ffbcb08da90867043613f/diff",
+                "MergedDir": "/var/lib/docker/overlay2/af5af1ae94760951a0f2719514a9f6461087e65c925241413c462795a5a1f860/merged",
+                "UpperDir": "/var/lib/docker/overlay2/af5af1ae94760951a0f2719514a9f6461087e65c925241413c462795a5a1f860/diff",
+                "WorkDir": "/var/lib/docker/overlay2/af5af1ae94760951a0f2719514a9f6461087e65c925241413c462795a5a1f860/work"
+            },
+            "Name": "overlay2"
+        },
+        "Mounts": [
+            {
+                "Type": "bind",
+                "Source": "/home/mikers/gomap-5335-close-consumer-build-20261029/reference-bootstrap-959cc5c491-preparation/support/mongodb/db",
+                "Destination": "/data/db",
+                "Mode": "",
+                "RW": true,
+                "Propagation": "rprivate"
+            },
+            {
+                "Type": "bind",
+                "Source": "/home/mikers/gomap-5335-close-consumer-build-20261029/reference-bootstrap-959cc5c491-preparation/support/mongodb/db.configdb",
+                "Destination": "/data/configdb",
+                "Mode": "",
+                "RW": true,
+                "Propagation": "rprivate"
+            }
+        ],
+        "Config": {
+            "Hostname": "ycsb-ab941945a6b9-server",
+            "Domainname": "",
+            "User": "1000:1000",
+            "AttachStdin": false,
+            "AttachStdout": true,
+            "AttachStderr": true,
+            "ExposedPorts": {
+                "27017/tcp": {}
+            },
+            "Tty": false,
+            "OpenStdin": false,
+            "StdinOnce": false,
+            "Env": [
+                "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                "GOSU_VERSION=1.19",
+                "JSYAML_VERSION=3.13.1",
+                "JSYAML_CHECKSUM=662e32319bdd378e91f67578e56a34954b0a2e33aca11d70ab9f4826af24b941",
+                "MONGO_PACKAGE=mongodb-org",
+                "MONGO_REPO=repo.mongodb.org",
+                "MONGO_MAJOR=8.2",
+                "MONGO_VERSION=8.2.7",
+                "HOME=/data/db",
+                "GLIBC_TUNABLES=glibc.pthread.rseq=0"
+            ],
+            "Cmd": [
+                "--dbpath",
+                "/data/db",
+                "--storageEngine",
+                "wiredTiger",
+                "--bind_ip_all",
+                "--port",
+                "27017"
+            ],
+            "Image": "sha256:690f1371c118a8389ecd6c82c9a7f0e37320732b1d56935a24b29dfca6933f54",
+            "Volumes": {
+                "/data/configdb": {},
+                "/data/db": {}
+            },
+            "WorkingDir": "",
+            "Entrypoint": [
+                "/usr/bin/mongod"
+            ],
+            "Labels": {
+                "gomap.ycsb.campaign": "ab941945a6b94e8da9b9aaaaa00a409c",
+                "gomap.ycsb.role": "server",
+                "gomap.ycsb.target": "mongodb",
+                "org.opencontainers.image.version": "24.04"
+            }
+        },
+        "NetworkSettings": {
+            "SandboxID": "",
+            "SandboxKey": "",
+            "Ports": {},
+            "Networks": {
+                "bridge": {
+                    "IPAMConfig": null,
+                    "Links": null,
+                    "Aliases": null,
+                    "DriverOpts": null,
+                    "GwPriority": 0,
+                    "NetworkID": "",
+                    "EndpointID": "",
+                    "Gateway": "",
+                    "IPAddress": "",
+                    "MacAddress": "",
+                    "IPPrefixLen": 0,
+                    "IPv6Gateway": "",
+                    "GlobalIPv6Address": "",
+                    "GlobalIPv6PrefixLen": 0,
+                    "DNSNames": null
+                }
+            }
+        }
+    }
+]

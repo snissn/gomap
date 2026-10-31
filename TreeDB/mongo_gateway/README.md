@@ -39,6 +39,47 @@ with direct/single-server mode when their driver supports it, for example:
 mongodb://127.0.0.1:27017/?directConnection=true
 ```
 
+## BSON projection
+
+Find projections support inclusion or exclusion, with the usual independent
+root `_id` selector. Dotted paths traverse nested documents and reconstruct
+their parents; array traversal, paths rooted at `_id.`, malformed paths and
+over-depth paths reject. See [the compatibility table](COMPATIBILITY.md) for
+the supported subset.
+
+Flat selectors reuse the compiled field set and walk BSON elements directly,
+avoiding temporary projection trees. Applied projections preserve field order
+and raw BSON values in an owned result. Dotted selectors retain the document
+traversal path; input rejected by the stricter flat iterator also uses that
+decoder to preserve existing malformed-input results and errors. Cursor field
+maps and command strings retain their existing admission charges.
+
+The compile-and-apply benchmark covers ten binary 100-byte fields, one-field
+inclusion, one-field exclusion and dotted fallback:
+
+```sh
+GOWORK=off go test ./TreeDB/mongo_gateway -run '^$' \
+  -bench '^BenchmarkProjectionCompileAndApply$' -benchmem -count=5
+```
+
+These helper measurements describe projection work only. Public-driver
+comparisons use the workload and evidence contract in
+[the MongoDB benchmark record](../../docs/benchmarks/ycsb_mongodb_treedb_current.md).
+
+For a short public point-read comparison, the maintained benchmark uses a
+warmed 16-row fixture with ten binary 100-byte fields, both standalone profiles,
+one or 16 official-driver clients, and projected/unprojected requests:
+
+```sh
+GOWORK=off go test ./TreeDB/mongo_gateway -run '^$' \
+  -bench '^BenchmarkStandalonePointProjection$' -benchmem -count=5
+```
+
+Setup, connection warmup, exact BSON checks and checked shutdown are outside
+timing. `B/op` and `allocs/op` cover the driver, gateway and background Go work
+in the same process. This read-only hot-fixture benchmark is separate from the
+100k-row mixed YCSB workload and final MongoDB-relative qualification.
+
 ## Storage memory admission
 
 The standalone opener owns the shared immutable COW database for its full

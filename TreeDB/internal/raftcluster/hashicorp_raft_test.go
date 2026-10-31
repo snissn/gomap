@@ -887,6 +887,7 @@ func TestFixedPeerTCPProviderPostEnqueueCancellationIsCommitAmbiguousV1(t *testi
 		t.Fatal(err)
 	}
 	defer transport.Close()
+	defer transport.CloseStreams() // Release the pooled startup-election connection.
 	entered, release, applied := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	applier := CommittedCommandApplierFunc(func(context.Context, CommittedCommandEntryV1) (raftentry.ApplyResultV1, error) {
 		close(entered)
@@ -896,9 +897,10 @@ func TestFixedPeerTCPProviderPostEnqueueCancellationIsCommitAmbiguousV1(t *testi
 	})
 	root := t.TempDir()
 	cfg := Config{Dir: filepath.Join(root, "data"), ClusterDir: filepath.Join(root, "raft"), NodeID: "node-a", GroupID: "group-a", Peers: []Peer{{ID: "node-a", Address: string(transport.LocalAddr())}}}
-	rc := hraft.DefaultConfig()
-	rc.HeartbeatTimeout, rc.ElectionTimeout, rc.LeaderLeaseTimeout = 50*time.Millisecond, 50*time.Millisecond, 50*time.Millisecond
-	rc.LogOutput = io.Discard
+	// This real TCP fixture needs the same scheduling headroom as the shared
+	// integration harness. The command cancellation is controlled by the
+	// blocking applier below, independently of Raft election timings.
+	rc := hashicorpRaftFastTestConfig()
 	p, err := OpenHashicorpRaftProvider(HashicorpRaftProviderOptions{Cluster: cfg, Applier: applier, Transport: transport, RaftConfig: rc, Bootstrap: true})
 	if err != nil {
 		t.Fatal(err)
@@ -907,25 +909,24 @@ func TestFixedPeerTCPProviderPostEnqueueCancellationIsCommitAmbiguousV1(t *testi
 	var releaseOnce sync.Once
 	unblock := func() { releaseOnce.Do(func() { close(release) }) }
 	defer unblock() // Release before shutdown, including every failed assertion.
-	setupCtx, cancelSetup := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancelSetup()
-	for {
-		status, err := p.RuntimeStatusV1(setupCtx)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if status.State == "Leader" {
-			if _, err := HashicorpRaftTestLeaderReady(setupCtx, p); err != nil {
-				t.Fatalf("leader readiness: %v", err)
-			}
-			break
-		}
-		select {
-		case <-setupCtx.Done():
-			t.Fatal(setupCtx.Err())
-		case <-time.After(10 * time.Millisecond):
-		}
+	// Reuse the bounded live-quorum/stable-term barrier before starting the
+	// command budget. This single-node fixture uses the normal TCP election
+	// path; readiness retries never submit the operation under test.
+	cluster := &hashicorpRaftTestCluster{nodes: map[NodeID]*hashicorpRaftTestNode{
+		cfg.NodeID: {id: cfg.NodeID, provider: p},
+	}}
+	// Trigger the normal election path through the actual TCP transport instead
+	// of waiting for the randomized heartbeat timeout. TimeoutNow acknowledges
+	// candidacy only; the barrier still has to prove leadership and live quorum.
+	if err := transport.TimeoutNow(hraft.ServerID(cfg.NodeID), transport.LocalAddr(),
+		&hraft.TimeoutNowRequest{RPCHeader: hraft.RPCHeader{
+			ProtocolVersion: hraft.ProtocolVersionMax,
+			ID:              []byte(cfg.NodeID),
+			Addr:            []byte(transport.LocalAddr()),
+		}}, &hraft.TimeoutNowResponse{}); err != nil {
+		t.Fatalf("start initial TCP test election: %v; frontier=%s", err, cluster.restartCatchUpFrontier())
 	}
+	cluster.waitForLeader(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	callCtx, cancelCall := context.WithCancel(ctx)
@@ -1451,7 +1452,7 @@ func (c *hashicorpRaftTestCluster) waitForLeader(tb testing.TB) *hashicorpRaftTe
 	if previous.valid {
 		stableFor = time.Since(previous.observedAt)
 	}
-	tb.Fatalf("timed out waiting for leader-ready stable term; last_readiness_err=%v last_stable_leader=%s last_stable_term=%d stable_for=%s required=%s states=%s", lastErr, previous.nodeID, previous.term, stableFor, settlingWindow, c.admissionSummary())
+	tb.Fatalf("timed out waiting for leader-ready stable term; last_readiness_err=%v last_stable_leader=%s last_stable_term=%d stable_for=%s required=%s states=%s frontier=%s", lastErr, previous.nodeID, previous.term, stableFor, settlingWindow, c.admissionSummary(), c.restartCatchUpFrontier())
 	return nil
 }
 

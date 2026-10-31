@@ -70,11 +70,24 @@ func (runtime *rootPublicationRuntimeV1) reserveVisibleCapacity(withDebt bool) e
 	return nil
 }
 
+// primarySealAllocationV6 gives the parent and its primary-only state one
+// containing allocation. Either interior pointer keeps the original disposal
+// receipt alive; generic non-primary seals keep their existing allocation size.
+// Construct once before publication and never copy initialized mutexes.
+type primarySealAllocationV6 struct {
+	seal    rootPublicationSealV1
+	primary primaryPublicationSealV5
+}
+
 // Pending descriptor and prefix charge survives physical arena shutdown until
 // the actual publisher release clears every projection alias.
 func primarySealMetadataV6(prefixCount int) uint64 {
-	return retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(rootPublicationSealV1{}))) +
-		retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primaryPublicationSealV5{}))) +
+	// Preserve the old admission floor even when combined storage rounds down.
+	// Also cover the complete containing allocation if allocator rounding grows.
+	separate := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(rootPublicationSealV1{}))) +
+		retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primaryPublicationSealV5{})))
+	combined := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primarySealAllocationV6{})))
+	return max(separate, combined) +
 		retainedalloc.AllocationCharge(uint64(prefixCount)*uint64(unsafe.Sizeof(uintptr(0))))
 }
 

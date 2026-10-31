@@ -271,7 +271,7 @@ func (b *nativeEngineBuild) materializeDomains(group nativeOrderedRootBuilder, n
 		return b.failure
 	}
 	if b.started || group == nil {
-		return backenddb.ErrNativeSemanticUnsupported
+		return fmt.Errorf("native materialize admission started=%t group_nil=%t: %w", b.started, group == nil, backenddb.ErrNativeSemanticUnsupported)
 	}
 	b.started = true
 	defer func() {
@@ -285,14 +285,14 @@ func (b *nativeEngineBuild) materializeDomains(group nativeOrderedRootBuilder, n
 	}()
 	if len(b.domains) != 0 {
 		if _, ok := group.(nativeSystemRootBuilder); !ok {
-			b.failure = backenddb.ErrNativeSemanticUnsupported
+			b.failure = fmt.Errorf("native materialize system-builder capability: %w", backenddb.ErrNativeSemanticUnsupported)
 			return b.failure
 		}
 	}
 	if b.catalog != nil {
 		if _, err := b.catalog.materializeWithCatalog(group, names); err != nil {
-			b.failure = err
-			return err
+			b.failure = fmt.Errorf("native materialize catalog: %w", err)
+			return b.failure
 		}
 	}
 	for i, work := range b.domains {
@@ -301,8 +301,8 @@ func (b *nativeEngineBuild) materializeDomains(group nativeOrderedRootBuilder, n
 		}
 		root, err := work.materialize(group)
 		if err != nil {
-			b.failure = err
-			return err
+			b.failure = fmt.Errorf("native materialize domain index=%d collection=%d: %w", i, b.built[i].collection, err)
+			return b.failure
 		}
 		b.built[i].root = root
 		binary.BigEndian.PutUint64(b.built[i].rootValue[:], root)
@@ -310,17 +310,17 @@ func (b *nativeEngineBuild) materializeDomains(group nativeOrderedRootBuilder, n
 	if len(b.typed) != 0 {
 		physical, ok := group.(*backenddb.RootPublicationBuildGroup)
 		if !ok {
-			b.failure = backenddb.ErrNativeSemanticUnsupported
+			b.failure = fmt.Errorf("native materialize typed-group capability: %w", backenddb.ErrNativeSemanticUnsupported)
 			return b.failure
 		}
 		if err := b.materializeTyped(physical); err != nil {
-			b.failure = err
-			return err
+			b.failure = fmt.Errorf("native materialize typed: %w", err)
+			return b.failure
 		}
 	}
 	if err := b.materializeRootDescriptors(group); err != nil {
-		b.failure = err
-		return err
+		b.failure = fmt.Errorf("native materialize root descriptors: %w", err)
+		return b.failure
 	}
 	if len(b.typed) != 0 {
 		// All synchronous materialization, codec Close, resource validation and
@@ -333,7 +333,7 @@ func (b *nativeEngineBuild) materializeDomains(group nativeOrderedRootBuilder, n
 			workspace = max(workspace, input.workspace)
 		}
 		if workspace > b.allocation.floor {
-			b.failure = memtable.ErrCOWCapacity
+			b.failure = fmt.Errorf("native materialize workspace exceeds floor: %w", memtable.ErrCOWCapacity)
 			return b.failure
 		}
 		for _, input := range b.typed {
@@ -341,8 +341,8 @@ func (b *nativeEngineBuild) materializeDomains(group nativeOrderedRootBuilder, n
 		}
 		floor := b.allocation.floor - workspace
 		if err := b.allocation.parent.ShrinkNativeBytes(workspace, floor); err != nil {
-			b.failure = err
-			return err
+			b.failure = fmt.Errorf("native materialize workspace shrink: %w", err)
+			return b.failure
 		}
 		b.allocation.floor = floor
 	}

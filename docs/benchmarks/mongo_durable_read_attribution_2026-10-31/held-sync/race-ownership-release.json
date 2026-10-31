@@ -1,0 +1,18 @@
+{
+  "released_unix": 1793428473.1156201,
+  "active_build_test_guard_processes": [],
+  "source_sha256": "e388a86d51df6339af6ce55e1170d7a44970ca125dfa75ed007b9fa558ac40bf",
+  "source_unchanged": true,
+  "normal_manifest_unchanged": true,
+  "race_binary_exists": false,
+  "race_test_executed": false,
+  "retry_count": 0,
+  "released_to": "root coordinator",
+  "released_paths": [
+    "cache/held-sync-race",
+    "tmp/held-sync-race"
+  ],
+  "cache_consumers": 0,
+  "tmp_consumers": 0,
+  "retained_evidence": "evidence/held-sync/race-* and RACE_REPORT.md; normal sealed manifest unchanged"
+}

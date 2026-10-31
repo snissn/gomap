@@ -1,0 +1,367 @@
+{
+  "scope": "Released outputs owned by this Mongo lane; full metadata/proc/retained-evidence hash receipts retained locally; no global or unrelated cleanup",
+  "batches": [
+    {
+      "local_full_receipt": "/home/mikers/gomap-mongo-performance-exec-20261031-5z3yyej9/evidence/cleanup-result.json",
+      "sha256": "598615d5d5455e0b9c2d5361f2b74b2044eaf4e0b28b1452357e93e668c78ef3",
+      "status": null,
+      "removed_allocated_bytes": 2151854080,
+      "free_space_before": {
+        "total": 1967317549056,
+        "used": 1860137615360,
+        "free": 7170113536
+      },
+      "free_space_after": {
+        "total": 1967317549056,
+        "used": 1857986945024,
+        "free": 9320783872
+      },
+      "targets": [
+        {
+          "path": "/home/mikers/gomap-mongo-planning-20261030-q31rvmxc/public/A1/db",
+          "status": "deleted",
+          "allocated_bytes": 313348096,
+          "absent_verified": true,
+          "checks": {
+            "identity_match": true,
+            "full_metadata_match": true,
+            "no_symlinks_or_special_files": true,
+            "no_mount_boundary": true,
+            "ancestors_no_symlinks": true,
+            "no_nested_git": true,
+            "no_worktree_overlap": true,
+            "preserved_evidence_readable_and_manifest_verified": true,
+            "no_lsof_consumers": true,
+            "no_relevant_processes": true
+          }
+        },
+        {
+          "path": "/home/mikers/gomap-mongo-planning-20261030-q31rvmxc/public/A2/db",
+          "status": "deleted",
+          "allocated_bytes": 306024448,
+          "absent_verified": true,
+          "checks": {
+            "identity_match": true,
+            "full_metadata_match": true,
+            "no_symlinks_or_special_files": true,
+            "no_mount_boundary": true,
+            "ancestors_no_symlinks": true,
+            "no_nested_git": true,
+            "no_worktree_overlap": true,
+            "preserved_evidence_readable_and_manifest_verified": true,
+            "no_lsof_consumers": true,
+            "no_relevant_processes": true
+          }
+        },
+        {
+          "path": "/home/mikers/gomap-mongo-planning-20261030-q31rvmxc/public/B1/db",
+          "status": "deleted",
+          "allocated_bytes": 313413632,
+          "absent_verified": true,
+          "checks": {
+            "identity_match": true,
+            "full_metadata_match": true,
+            "no_symlinks_or_special_files": true,
+            "no_mount_boundary": true,
+            "ancestors_no_symlinks": true,
+            "no_nested_git": true,
+            "no_worktree_overlap": true,
+            "preserved_evidence_readable_and_manifest_verified": true,
+            "no_lsof_consumers": true,
+            "no_relevant_processes": true
+          }
+        },
+        {
+          "path": "/home/mikers/gomap-mongo-planning-20261030-q31rvmxc/public/B2/db",
+          "status": "deleted",
+          "allocated_bytes": 305553408,
+          "absent_verified": true,
+          "checks": {
+            "identity_match": true,
+            "full_metadata_match": true,
+            "no_symlinks_or_special_files": true,
+            "no_mount_boundary": true,
+            "ancestors_no_symlinks": true,
+            "no_nested_git": true,
+            "no_worktree_overlap": true,
+            "preserved_evidence_readable_and_manifest_verified": true,
+            "no_lsof_consumers": true,
+            "no_relevant_processes": true
+          }
+        },
+        {
+          "path": "/home/mikers/gomap-mongo-planning-20261030-q31rvmxc/public/D-A2/db",
+          "status": "deleted",
+          "allocated_bytes": 303120384,
+          "absent_verified": true,
+          "checks": {
+            "identity_match": true,
+            "full_metadata_match": true,
+            "no_symlinks_or_special_files": true,
+            "no_mount_boundary": true,
+            "ancestors_no_symlinks": true,
+            "no_nested_git": true,
+            "no_worktree_overlap": true,
+            "preserved_evidence_readable_and_manifest_verified": true,
+            "no_lsof_consumers": true,
+            "no_relevant_processes": true
+          }
+        },
+        {
+          "path": "/home/mikers/gomap-mongo-planning-20261030-q31rvmxc/public/D-B2/db",
+          "status": "deleted",
+          "allocated_bytes": 303714304,
+          "absent_verified": true,
+          "checks": {
+            "identity_match": true,
+            "full_metadata_match": true,
+            "no_symlinks_or_special_files": true,
+            "no_mount_boundary": true,
+            "ancestors_no_symlinks": true,
+            "no_nested_git": true,
+            "no_worktree_overlap": true,
+            "preserved_evidence_readable_and_manifest_verified": true,
+            "no_lsof_consumers": true,
+            "no_relevant_processes": true
+          }
+        },
+        {
+          "path": "/home/mikers/gomap-mongo-planning-20261030-q31rvmxc/public/D-A/db",
+          "status": "deleted",
+          "allocated_bytes": 306679808,
+          "absent_verified": true,
+          "checks": {
+            "identity_match": true,
+            "full_metadata_match": true,
+            "no_symlinks_or_special_files": true,
+            "no_mount_boundary": true,
+            "ancestors_no_symlinks": true,
+            "no_nested_git": true,
+            "no_worktree_overlap": true,
+            "preserved_evidence_readable_and_manifest_verified": true,
+            "no_lsof_consumers": true,
+            "no_relevant_processes": true
+          }
+        }
+      ]
+    },
+    {
+      "local_full_receipt": "/home/mikers/gomap-mongo-performance-exec-20261031-5z3yyej9/evidence/cleanup-result2.json",
+      "sha256": "833bc908bfa0e4061dfd82fbc64a5d4863aba9bae6042e8d3f16b4e64084d879",
+      "status": null,
+      "removed_allocated_bytes": 448454656,
+      "free_space_before": {
+        "total": 1967317549056,
+        "used": 1857980416000,
+        "free": 9327312896
+      },
+      "free_space_after": {
+        "total": 1967317549056,
+        "used": 1857532194816,
+        "free": 9775534080
+      },
+      "targets": [
+        {
+          "path": "/home/mikers/gomap-mongo-planning-20261030-q31rvmxc/bin/baseline.test",
+          "status": "deleted",
+          "allocated_bytes": 67039232,
+          "absent_verified": true,
+          "checks": {
+            "identity_metadata_match": true,
+            "contents_metadata_match": true,
+            "no_symlinks_special_files": true,
+            "ancestors_no_symlinks": true,
+            "no_mount_boundaries": true,
+            "no_git_or_worktree_overlap": true,
+            "file_sha256_match": true,
+            "no_lsof_consumers": true,
+            "no_relevant_consumers": true
+          }
+        },
+        {
+          "path": "/home/mikers/gomap-mongo-planning-20261030-q31rvmxc/bin/projection.test",
+          "status": "deleted",
+          "allocated_bytes": 67047424,
+          "absent_verified": true,
+          "checks": {
+            "identity_metadata_match": true,
+            "contents_metadata_match": true,
+            "no_symlinks_special_files": true,
+            "ancestors_no_symlinks": true,
+            "no_mount_boundaries": true,
+            "no_git_or_worktree_overlap": true,
+            "file_sha256_match": true,
+            "no_lsof_consumers": true,
+            "no_relevant_consumers": true
+          }
+        },
+        {
+          "path": "/home/mikers/gomap-mongo-planning-20261030-q31rvmxc/bin/projection.race.test",
+          "status": "deleted",
+          "allocated_bytes": 89088000,
+          "absent_verified": true,
+          "checks": {
+            "identity_metadata_match": true,
+            "contents_metadata_match": true,
+            "no_symlinks_special_files": true,
+            "ancestors_no_symlinks": true,
+            "no_mount_boundaries": true,
+            "no_git_or_worktree_overlap": true,
+            "file_sha256_match": true,
+            "no_lsof_consumers": true,
+            "no_relevant_consumers": true
+          }
+        },
+        {
+          "path": "/home/mikers/gomap-mongo-planning-20261030-q31rvmxc/bin/journal-control",
+          "status": "deleted",
+          "allocated_bytes": 53846016,
+          "absent_verified": true,
+          "checks": {
+            "identity_metadata_match": true,
+            "contents_metadata_match": true,
+            "no_symlinks_special_files": true,
+            "ancestors_no_symlinks": true,
+            "no_mount_boundaries": true,
+            "no_git_or_worktree_overlap": true,
+            "file_sha256_match": true,
+            "no_lsof_consumers": true,
+            "no_relevant_consumers": true
+          }
+        },
+        {
+          "path": "/home/mikers/gomap-mongo-native-classifier-20261030-3bkez1vc/bin/native-lab",
+          "status": "deleted",
+          "allocated_bytes": 44666880,
+          "absent_verified": true,
+          "checks": {
+            "identity_metadata_match": true,
+            "contents_metadata_match": true,
+            "no_symlinks_special_files": true,
+            "ancestors_no_symlinks": true,
+            "no_mount_boundaries": true,
+            "no_git_or_worktree_overlap": true,
+            "file_sha256_match": true,
+            "no_lsof_consumers": true,
+            "no_relevant_consumers": true
+          }
+        },
+        {
+          "path": "/home/mikers/gomap-mongo-native-classifier-20261030-3bkez1vc/bin/native-lab-corrected",
+          "status": "deleted",
+          "allocated_bytes": 44666880,
+          "absent_verified": true,
+          "checks": {
+            "identity_metadata_match": true,
+            "contents_metadata_match": true,
+            "no_symlinks_special_files": true,
+            "ancestors_no_symlinks": true,
+            "no_mount_boundaries": true,
+            "no_git_or_worktree_overlap": true,
+            "file_sha256_match": true,
+            "no_lsof_consumers": true,
+            "no_relevant_consumers": true
+          }
+        },
+        {
+          "path": "/home/mikers/gomap-mongo-planning-20261030-q31rvmxc/journal-controls/n1024-batch1/db",
+          "status": "deleted",
+          "allocated_bytes": 10108928,
+          "absent_verified": true,
+          "checks": {
+            "identity_metadata_match": true,
+            "contents_metadata_match": true,
+            "no_symlinks_special_files": true,
+            "ancestors_no_symlinks": true,
+            "no_mount_boundaries": true,
+            "no_git_or_worktree_overlap": true,
+            "no_lsof_consumers": true,
+            "no_relevant_consumers": true
+          }
+        },
+        {
+          "path": "/home/mikers/gomap-mongo-planning-20261030-q31rvmxc/journal-controls/n8192-batch1/db",
+          "status": "deleted",
+          "allocated_bytes": 22392832,
+          "absent_verified": true,
+          "checks": {
+            "identity_metadata_match": true,
+            "contents_metadata_match": true,
+            "no_symlinks_special_files": true,
+            "ancestors_no_symlinks": true,
+            "no_mount_boundaries": true,
+            "no_git_or_worktree_overlap": true,
+            "no_lsof_consumers": true,
+            "no_relevant_consumers": true
+          }
+        },
+        {
+          "path": "/home/mikers/gomap-mongo-planning-20261030-q31rvmxc/journal-controls/n1024-batch16/db",
+          "status": "deleted",
+          "allocated_bytes": 9527296,
+          "absent_verified": true,
+          "checks": {
+            "identity_metadata_match": true,
+            "contents_metadata_match": true,
+            "no_symlinks_special_files": true,
+            "ancestors_no_symlinks": true,
+            "no_mount_boundaries": true,
+            "no_git_or_worktree_overlap": true,
+            "no_lsof_consumers": true,
+            "no_relevant_consumers": true
+          }
+        },
+        {
+          "path": "/home/mikers/gomap-mongo-planning-20261030-q31rvmxc/journal-controls/n8192-batch16/db",
+          "status": "deleted",
+          "allocated_bytes": 21819392,
+          "absent_verified": true,
+          "checks": {
+            "identity_metadata_match": true,
+            "contents_metadata_match": true,
+            "no_symlinks_special_files": true,
+            "ancestors_no_symlinks": true,
+            "no_mount_boundaries": true,
+            "no_git_or_worktree_overlap": true,
+            "no_lsof_consumers": true,
+            "no_relevant_consumers": true
+          }
+        },
+        {
+          "path": "/home/mikers/gomap-mongo-planning-20261030-q31rvmxc/journal-recipe-smoke/n256-batch16/db",
+          "status": "deleted",
+          "allocated_bytes": 9166848,
+          "absent_verified": true,
+          "checks": {
+            "identity_metadata_match": true,
+            "contents_metadata_match": true,
+            "no_symlinks_special_files": true,
+            "ancestors_no_symlinks": true,
+            "no_mount_boundaries": true,
+            "no_git_or_worktree_overlap": true,
+            "no_lsof_consumers": true,
+            "no_relevant_consumers": true
+          }
+        },
+        {
+          "path": "/home/mikers/gomap-mongo-planning-20261030-q31rvmxc/journal-recipe-smoke-v2/n256-batch16/db",
+          "status": "deleted",
+          "allocated_bytes": 9084928,
+          "absent_verified": true,
+          "checks": {
+            "identity_metadata_match": true,
+            "contents_metadata_match": true,
+            "no_symlinks_special_files": true,
+            "ancestors_no_symlinks": true,
+            "no_mount_boundaries": true,
+            "no_git_or_worktree_overlap": true,
+            "no_lsof_consumers": true,
+            "no_relevant_consumers": true
+          }
+        }
+      ]
+    }
+  ],
+  "normal_cache_receipt": "normal-cache-retirement.json",
+  "race_cache_receipt": "race-cache-retirement.json"
+}

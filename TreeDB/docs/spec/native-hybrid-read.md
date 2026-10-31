@@ -183,3 +183,162 @@ subsequent requests cold; it remains enabled during public measurement.
 This is a provisional Keyword optimization. Its activation/lifetime controls and
 original public workload comparison are required before adoption; helper results
 or profile ceilings do not establish public performance acceptance.
+
+### Materialization failure observations
+
+The maintained `TestOrdinaryColumnGraphNativeColdHybrid4096` logs the original
+Optimize error and its service cause on failure. Native physical construction
+errors retain their existing sentinel through wrapping and identify catalog,
+ordinary-domain, typed-collection, root-descriptor or workspace stages. Typed
+construction additionally identifies delta ordering, source validation, row/span,
+graph, compaction and resource-freeze stages. Ordinary graph refusals report
+bounded numeric recipe/build roots and original LSN plus invariant booleans;
+these observations do not select a replacement basis or expose document rows.
+The first terminal failure remains on its original work ledger. These labels do
+not make partial materialization retryable, clear accepted-prefix poison or
+change publication/recovery authority. A stage report distinguishes future
+failures; it does not attribute the retained #5332 race7 failure, whose Optimize
+cause and precise refusing guard were not recorded.
+
+### Scalar-forward pressure assertion and delivered controls (2026-10-31)
+
+Exact `7fab8bacaae3142584ebdea8919297251465edcb`, TreeDB run
+`41033504030`, macOS job `123988627373`, failed
+`TestNativeScalarForwardOptionalRefusalAndBound` at the uncached-constructor
+refusal assertion. The original failure remains causally unresolved in #5339.
+The retained log establishes neither a production admission bypass nor a cleanup
+timing cause.
+
+The correction merged in [PR #5332](https://github.com/snissn/gomap/pull/5332)
+separates shared-parent observations from mandatory capacity denial. The public
+`TestNativeScalarForwardOptionalRefusalAndBound` keeps the real pressure setup,
+independent copies, fallback, retained borrower and cache bounds. Its test-local
+observer forwards the original allocation and admission unchanged. Optional
+misses check their own receipt's refusal or completed release; uncached
+construction must request the original nonzero charge. Actual refusals propagate
+the original error, and accepted charges must match operation scratch growth.
+Successful construction must produce independent validated identities matching
+the retained plan. Global parent counters are not an owned-receipt ledger.
+
+Full reserved bytes is a snapshot, not a continuing refusal guarantee: admission
+may reclaim idle read scratch, and the original flush worker may refund semantic
+cleanup even with periodic checkpointing disabled. Preexisting idle scratch
+alone does not explain the retained assertion because the preceding optional-key
+refusal also preserved parent counters. A later refund or transfer would need
+actual evidence. No speculative cleanup barrier, wait, retry, cleanup suppression
+or production resource-policy change was added.
+
+`TestNativeScalarForwardHeldParentRefusal` supplies the mandatory real-budget
+control. Its finite parent has held original receipts, no concurrent owner,
+queued cleanup or idle scratch. With the parent exactly full, optional retention
+and uncached construction must refuse while valid owned provenance borrows the
+retained object without admission. Releasing only the same blocker must allow
+the same original admission again. This is a direct-constructor/budget control,
+not a reproduction of the original public DB schedule.
+
+`TestNativeScalarForwardOriginalCleanupAdmission` adds a test for a public-owner
+counterexample to the old unconditional refusal oracle. It holds a capture of
+the exact engine superseded by the original insert, installs a test-local
+forwarding observer before that engine can enqueue cleanup, then closes the
+extra capture before saturation. The original flush worker is held before the
+real destructor. Both original pressure setups, the unchanged optional-miss
+parent counters, and zero-admission validated borrow precede release of this
+selected owner. The observer forwards the real destructor and its independent
+refund once, records both phases, and holds later worker advancement while the
+unchanged uncached constructor follows original admission. The test requires
+positive owner-attributed headroom, exact accepted scratch charges, independent
+identity parity and checked original manager/DB Close with final budget zero.
+There is no arbitrary lease refund, alternate admission, cap change or retry.
+This constructed supported schedule can establish the fixture-contract defect;
+it cannot recover which event occurred in the retained macOS failure.
+
+`TestNativeScalarForwardOriginalAdmissionRefusal` separately uses a recording
+refusal callback: validated reuse avoids admission; missing, unpublished,
+foreign-owner, wrong-index and wrong-status provenance preserves the exact
+original nonzero admission refusal before storage lookup. The owned-slot cases
+isolate publication/index/status guards from the foreign-owner guard. This
+callback control supplements the public and real-budget fixtures.
+
+The actual PR [TreeDB run 41051075545](https://github.com/snissn/gomap/actions/runs/41051075545)
+at head `c8c44856c24374180416ff1dc8c7e237b8d61450` completed all 38 jobs
+successfully. Retained native PASS events for the public fixture, held-parent
+refusal and cleanup-refund mechanism control cover Linux, Windows, macOS and
+Linux race. These results qualify those controls on that candidate; they do not
+explain the historical failure or qualify later production changes. The original
+RED and the historical incident's causal closure obligation remain retained.
+
+### Prospective cause-isolation controls for #5338 and #5339
+
+Both retained exact7fab CI failures remain unattributed. The following controls
+are hypotheses to test, not repairs or permission to relax any original gate.
+
+For #5339, `TestCOWSemanticRefundChangesAdmissionAfterFullSnapshot` uses the
+maintained caching fixture, the actual budget, intrusive semantic cleanup queue,
+`drainSemanticCleanup` owner routine, completion refund, and frontier join. A
+channel holds one original Finish before its original external receipt is
+returned. After exact parent saturation, the fixed request must refuse without
+changing any budget counters. Releasing only that original cleanup must return
+exactly its recorded charge and one external receipt, after which the same fixed
+request must admit exactly its requested growth under the unchanged cap. There
+is no sleep/retry or alternate destructor/refund. Timeouts fail an invalid
+witness; they never establish success. This is a deterministic owner-level
+mechanism control, not the public scalar fixture and not a reproduction of its
+unobserved cleanup timing. The controlled worker invokes the production drain
+routine in the existing unit fixture; it is not the public DB's flushLoop.
+
+For #5338, a valid stale-recipe witness must cross the real accepted publication
+and physical handoff, rather than instantiate arbitrary root numbers. The source
+chain to examine is:
+
+1. `nativeRebuildVectorGraph` binds `recipe.sourceRoot` from the captured
+   `column/manifest.baseRoot` and publishes the ordinary graph recipe on the
+   original typed primary stream with a real assigned LSN.
+2. `prepareTypedForCompaction` captures its input manifest root and exact typed
+   delta set before materialization.
+3. `prepareNativeDomainHandoff` advances each touched base to the old captured
+   build result; `cloneNativeTypedSuffix` preserves newer delta `data` and its
+   original recipe/receipts.
+4. `materializeOrdinaryVectorGraph` requires recipe sourceRoot to match its
+   input manifest root before any graph output. This guard must remain intact.
+
+The maintained asset-after-prepare hook can pause a real older physical build;
+existing DDL handoff tests demonstrate ordinary mutations during that hold. That
+alone does NOT prove the required newer graph suffix was accepted. The graph
+singleton requests an exact seal: CommitNative logically publishes before its
+post-progress-gate Checkpoint/Seal.Wait, so synchronously waiting for
+RebuildVectorIndex while holding the older build can deadlock the witness. The
+existing typed-upsert after-install hook is specific to grouped typed upserts;
+it does not observe this singleton graph publication. No existing singleton
+post-install notification was demonstrated during this source pass. Do not use
+that unrelated hook, arbitrary sleeps, repeated capture polling, a fabricated
+LSN/root or direct recipe mutation as evidence of an accepted overlapping graph.
+
+A prospective valid public control therefore needs a reviewed nonblocking
+notification at the singleton's existing accepted-publication boundary (outside
+locks needed by the held build), or another demonstrated existing equivalent.
+It must expose only observation, never replacement publication or cleanup
+control. Before releasing the old build, assert all witness prerequisites: exact
+collection incarnation/schema, old manifest root, immutable captured boundary,
+a real nonzero newer assigned LSN, recipe bound to that old root, and actual
+newer primary suffix absent the captured set. If acceptance cannot overlap or a
+prerequisite is missing, fail as INVALID_WITNESS, not as the suspected bug.
+
+After releasing and joining the old original build, capture the actual handoff
+successor and record new manifest base, retained graph recipe root/LSN, original
+resource identities and held-cut immutability. Only a changed manifest base with
+that accepted retained recipe can witness the hypothesized stale basis. A
+subsequent original materialization should succeed without authority changes;
+a diagnosed stale-basis refusal then establishes that bounded causal sequence,
+not retrospectively the exact7fab incident. The negative control holds all data
+and APIs fixed but seals the old build before publishing the graph marker; it
+must not produce the stale relationship and must complete maintenance/Close.
+A no-root-change overlap is a second negative witness. All original graph,
+Optimize, cleanup and crash/resource assertions remain required.
+
+No #5338 concurrency control or new production hook is implemented here because
+its accepted-publication observation/lock contract is not yet demonstrated. The
+existing synthetic stale-basis diagnostic test remains only guard coverage. Gate
+before authoring that control: independent source review of the exact callback
+location, lock/lease lifetime and bounded shutdown, then authored positive and
+negative witnesses without replacing public tests. Gate before a repair: execute
+the valid witness and separately retain the exact original failure evidence.

@@ -25,6 +25,7 @@ jobs:
           cache: true
           cache-dependency-path: |
             go.sum
+            .github/workflows/unified-bench-tests.yml
 
       - name: Vet
         working-directory: cmd/unified_bench

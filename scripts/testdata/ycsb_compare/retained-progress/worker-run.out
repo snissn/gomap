@@ -1,0 +1,35 @@
+Using request distribution 'uniform' a keyrange of [0 63]
+***************** properties *****************
+"zeropadding"="1"
+"operationcount"="128"
+"readmodifywriteproportion"="0"
+"readproportion"="0.95"
+"insertstart"="0"
+"treedb.ack"="visible"
+"insertorder"="hashed"
+"dotransactions"="true"
+"command"="run"
+"treedb.flush_on_close"="true"
+"scanproportion"="0"
+"insertproportion"="0"
+"recordcount"="64"
+"debug.pprof"="disabled"
+"treedb.dial_timeout"="3s"
+"fieldcount"="10"
+"threadcount"="2"
+"updateproportion"="0.05"
+"treedb.operation_timeout"="3s"
+"writeallfields"="false"
+"table"="usertable"
+"treedb.autocreate"="true"
+"treedb.address"="127.0.0.1:51661"
+"treedb.document_format"="bson"
+"fieldlength"="100"
+"readallfields"="true"
+"keyprefix"="user"
+**********************************************
+**********************************************
+Run finished, takes 21.579596ms
+READ   - Takes(s): 0.0, Count: 124, OPS: 5838.8, Avg(us): 71, Min(us): 33, Max(us): 1445, 50th(us): 45, 90th(us): 84, 95th(us): 97, 99th(us): 664, 99.9th(us): 1445, 99.99th(us): 1445
+TOTAL  - Takes(s): 0.0, Count: 128, OPS: 6025.3, Avg(us): 247, Min(us): 33, Max(us): 6663, 50th(us): 45, 90th(us): 92, 95th(us): 305, 99th(us): 5931, 99.9th(us): 6663, 99.99th(us): 6663
+UPDATE - Takes(s): 0.0, Count: 4, OPS: 277.3, Avg(us): 5676, Min(us): 4676, Max(us): 6663, 50th(us): 5435, 90th(us): 6663, 95th(us): 6663, 99th(us): 6663, 99.9th(us): 6663, 99.99th(us): 6663

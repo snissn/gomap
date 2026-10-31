@@ -1,0 +1,7 @@
+{
+  "head": "95c6ff3de473786bd98b692375cfdb9cef951668",
+  "source_sha256": "e388a86d51df6339af6ce55e1170d7a44970ca125dfa75ed007b9fa558ac40bf",
+  "diff_sha256": "3b1cd3715022ea23871700450d650dcd47dc935d023b92e8d3bbdbfbb323e35d",
+  "packet_bytes_before_build": "122408792\t..",
+  "mount": "/mnt/fast4tb is mounted but has zero available bytes; using explicitly assigned execution root"
+}

@@ -64,6 +64,9 @@ type m3PartitionIndexReport struct {
 }
 
 type m3PartitionIndexRow struct {
+	SourceFootprintDiagnostic m3FootprintDiagnostic `json:"source_footprint_diagnostic"`
+	FinalFootprintDiagnostic  m3FootprintDiagnostic `json:"final_footprint_diagnostic"`
+
 	Ratio                        float64            `json:"ratio"`
 	Budget                       int                `json:"budget"`
 	Used                         int                `json:"used"`
@@ -225,10 +228,7 @@ func runM3PartitionIndexStage(cfg config, fixture fixtureManifest, artifact vect
 	}
 	raw = append(raw, '\n')
 	path := filepath.Join(cfg.out, "vector_partition_m3_"+suffix+".json")
-	if err := os.WriteFile(path, raw, 0644); err != nil {
-		return err
-	}
-	if err := validateM3PartitionIndexReport(report); err != nil {
+	if err := m3WriteAndRetainPartitionIndexReport(path, report, raw); err != nil {
 		return fmt.Errorf("M3 report %s: %w", path, err)
 	}
 	if cfg.format == "json" {
@@ -532,12 +532,13 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 	// before mapping the immutable source and materializing derived assets.
 	col = nil
 	manager = nil
-	db = nil
 	debug.FreeOSMemory()
 	sourcePhysicalBytes, err := m3DirectoryBytes(dir)
 	if err != nil || sourcePhysicalBytes <= 0 {
 		return m3PartitionIndexRow{}, fmt.Errorf("source physical footprint=%d: %w", sourcePhysicalBytes, err)
 	}
+	sourceDiagnostic, _ := m3CaptureClosedFootprint(cfg, db, dir, "source_after_close", ratio, generation, sourcePhysicalBytes)
+	db = nil
 	db, err = backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
 	if err != nil {
 		return m3PartitionIndexRow{}, err
@@ -689,6 +690,7 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 		return m3PartitionIndexRow{}, err
 	}
 	buildWall := time.Since(started).Nanoseconds()
+	finalDiagnostic, _ := m3CaptureClosedFootprint(cfg, db, dir, "final_after_close_before_search_reopen", ratio, generation, finalTotalPhysicalBytes)
 
 	db, err = backenddb.Open(backenddb.Options{Dir: dir, DisableBackgroundPrune: true})
 	if err != nil {
@@ -842,6 +844,8 @@ func benchmarkM3PartitionIndexRow(cfg config, fixture fixtureManifest, artifactD
 		cutReductionPerUseful = float64(overlap.EdgeCutBefore-overlap.EdgeCutAfter) / float64(overlap.Useful)
 	}
 	row := m3PartitionIndexRow{
+		SourceFootprintDiagnostic:    sourceDiagnostic,
+		FinalFootprintDiagnostic:     finalDiagnostic,
 		Budget:                       overlap.Budget,
 		Used:                         overlap.Used,
 		Unspent:                      overlap.Unspent,

@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "kind": "retained_actual_docker29_created_inspect",
+  "source_head": "959cc5c491f1a969ad4cb866d3da503d03b89598",
+  "consumed_campaign_id": "ab941945a6b94e8da9b9aaaaa00a409c",
+  "container_started": false,
+  "original_failure": "KeyError: 'Init'",
+  "fixture_sha256": {
+    "docker29-created.inspect.json": "817b7bf045dbb5a952ee858b98a72bde8a361fe726e4057cfff8a24d793d1cd8",
+    "docker29-bootstrap.manifest.json": "e95ea4227ab53b069db11512982e1687a57d2e12117c940d12f9beffb1e73f6f"
+  },
+  "retained_source_root": "/home/mikers/gomap-5335-close-consumer-build-20261029/reference-bootstrap-959cc5c491-preparation",
+  "retained_artifacts_sha256": {
+    "support/failure.json": "decb51d12a539640f3e6ef71bd9e3af0aad6de800bee5a738835e308d4fa9958",
+    "support/cleanup.failure.json": "6a7537a482a256eb21cdd873981bd9c742b28c05670f5ce4aedff6acf0bdfe91",
+    "parent.stdout": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "parent.stderr": "f055ca8e7ba57078f505f7bfac79c6170ca58354ddaa9b5ef264a71d31bbc667",
+    "manual-owned-cleanup.json": "94d5a1b541170581bc5dd23e9dadb573af7f48b83aaaa2b4d7d1d44803b8a443",
+    "manual-owned-cleanup-verification.json": "2a4b9e5c47bb7626b70ca11398c7dc4a81f58bcd8e84f16f2e0ff6aa17df8664"
+  },
+  "local_sdk_evidence": {
+    "version": "v28.5.2",
+    "hostconfig_sha256": "ea0e0d03bf9927b83400080cc58b3a842384ebf52d130577d22f92842e9d4f19",
+    "oci_linux_sha256": "9761f2351e3c03e861dab0d42c2f7d1b9c0ddad02612f7350cbabfd2291e5c75",
+    "declaration": "Init *bool `json:\",omitempty\"`",
+    "nullable_comment": "Run a custom init inside the container, if null, use the daemon's configured settings",
+    "daemon_condition": "(c.HostConfig.Init != nil && *c.HostConfig.Init) || (c.HostConfig.Init == nil && daemonCfg.Init)"
+  },
+  "exact_docker29_source_locally_available": false,
+  "product_qualification": false
+}

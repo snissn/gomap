@@ -288,6 +288,7 @@ func TestColumnVectorGraphPreparedSearchNonMmapWarmScratchZeroAllocs3996(t *test
 	if !enterIsolatedVectorAllocationGate(t, "non-mmap-native-search-warm-scratch") {
 		return
 	}
+	completeVectorAllocationSetup(t, d)
 	var searchErr error
 	allocs := testing.AllocsPerRun(1000, func() {
 		got, _, err := reader.SearchCosine(query, options, &scratch)

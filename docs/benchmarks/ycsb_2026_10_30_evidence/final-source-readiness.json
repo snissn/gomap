@@ -1,0 +1,1236 @@
+{
+  "schema_version": 1,
+  "status": "preliminary source-bound correctness/preparation; not final-head performance qualification",
+  "observed_utc": "2026-10-30T19:13:32.640883+00:00",
+  "gateway_build_source_commit": "c660c3e34523a77f12da9b440c5b6b7def9359f1",
+  "gateway_elf_sha256": "6104599a79e99e1dfbe2eb6a3d53aa834eac609ae360c5e078557581cdf283e9",
+  "control_build_source_commit": "79220385186080e77898fcb99c78a8ea15480241",
+  "source_applicability": "all non-document tracked Git objects equal c660=792203=3c9f; later production repair delta must fail current equivalence",
+  "build_bindings": [
+    {
+      "path": "/home/mikers/gomap-5335-final-source-build-20261030/COMPLETE.json",
+      "bytes": 569,
+      "sha256": "ff1a7915b320b07dc94f94c3cec88a90e09b46c448a5c47a074ea7fd201aeab3"
+    },
+    {
+      "path": "/home/mikers/gomap-5335-final-source-build-20261030/binding.json",
+      "bytes": 2967,
+      "sha256": "d49f6eeb59d916150b8327491b8e6b93dfb505a4a25afe0b66366308f415de35"
+    },
+    {
+      "path": "/home/mikers/gomap-5335-final-source-build-20261030/server-build.json",
+      "bytes": 495,
+      "sha256": "c9720fe03562fcaf5c0cde7817a52c908fed31808337bfd58762759306090e8f"
+    },
+    {
+      "path": "/home/mikers/gomap-5335-final-source-build-20261030/compiler-observed.json",
+      "bytes": 1826,
+      "sha256": "0235414fab3e35d1c6ba5a5c8d0a11798f7e84c3211ab11c889e26e7201adc8c"
+    }
+  ],
+  "tiny_cells": [
+    {
+      "profile": "durable",
+      "actual_counts": {
+        "READ": 122,
+        "TOTAL": 128,
+        "UPDATE": 6
+      },
+      "elapsed_seconds": 5.60746502596885,
+      "peak": {
+        "allocated": 27860992,
+        "cpu_seconds": 4.687506,
+        "logical": 27490747,
+        "rss_bytes": 155852800
+      },
+      "source_commit": "c660c3e34523a77f12da9b440c5b6b7def9359f1",
+      "gateway_sha256": "6104599a79e99e1dfbe2eb6a3d53aa834eac609ae360c5e078557581cdf283e9",
+      "scope": "random64load/128run2workers with nonzero R/U; separate deterministic64IDs4disjointworkers; actual runtime/owner/Close/checkpoint/reopen accepted, rates excluded",
+      "files": [
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/COMPLETE.json",
+          "bytes": 48250,
+          "sha256": "57d73bf903053849569e2e583d40ddee1320197b9a0dee58462c4240af2baeb8"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/request.json",
+          "bytes": 2666,
+          "sha256": "a25c6acee0e2592fe77e87cb5bb3b21e896e4fcc28ede8a44265657e5bfe8c69"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/FINAL.json",
+          "bytes": 80146,
+          "sha256": "5783ece16e7b4101f72b59e43c5b7aca2d32452c7905ba4f696426644bca96fe"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/client.patch",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/summary.md",
+          "bytes": 130,
+          "sha256": "5dc10c736cd40efcd7fc1ae127cc8ef7e54da2a5dc766fc9756876b6df34af5f"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/summary.tsv",
+          "bytes": 538,
+          "sha256": "82d462b821140e784d4554cfbd19652e5eaeb968f6560adcba489ca2495b351e"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/client-build.json",
+          "bytes": 599,
+          "sha256": "90e51911687d97efdc00295462d518192fe8b15c6485f8611454bb4cdfcd5fc0"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/fixture-source.go",
+          "bytes": 27458,
+          "sha256": "e0c7fe0d023335aefffc9b12f78e209a149d9aa4bb426d75a2d63563e22b9a14"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/client-buildinfo.txt",
+          "bytes": 13223,
+          "sha256": "997c8e09373b725b669d143802c90c5bd90d799cfedd06dce1e4f6945c9d2858"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/host.json",
+          "bytes": 24109,
+          "sha256": "f5d2524ad4a4f388c176b25347004ed7061dac53e65c33a15af527814f383d48"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/server-build.json",
+          "bytes": 495,
+          "sha256": "c9720fe03562fcaf5c0cde7817a52c908fed31808337bfd58762759306090e8f"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/validation.json",
+          "bytes": 249,
+          "sha256": "61bcbbe2e862f2d3202b0a08ad504556fb444f12a6b612f767127966404c1b1a"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/commands.txt",
+          "bytes": 3074,
+          "sha256": "1213d516cce9676c36fc320e746b6a8ef6f8b44b57c845792b8b293514e149bc"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/manifest.json",
+          "bytes": 2141,
+          "sha256": "7e85f652cccd3775fcac1249bf40f8f367a24cf455a5f644a7bfc047e1d47bfa"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/runtime.json",
+          "bytes": 945,
+          "sha256": "9aef37ca7acbb991116ee7c84fd1031769cd85e30facce5b33550640db510ca7"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/lifecycle.json",
+          "bytes": 2305,
+          "sha256": "2f455c7c3ed607c3b6d5878be4a6f6fa0a734f349792fdd6e5652a62ae5d6e17"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/run_1.err",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/fixture-reopened.listener.json",
+          "bytes": 266,
+          "sha256": "26dc00ababf1aa25c1b89665dc265308010cd42fae4de62f95f6314cd4cae40a"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/snapshot_preclose.close.json",
+          "bytes": 394053,
+          "sha256": "2bbb8693ef434cf3f1bc9eaf390dd538b75c3eb4de92a3fe5c7d8f198559b079"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/fixture-reopened.exit.json",
+          "bytes": 178,
+          "sha256": "f567243601f9d7828ec65acdcc83f363751749e18414a46d2300d3446a8cdb77"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/load.close.json",
+          "bytes": 1245,
+          "sha256": "e0d231d0d95c1b669a384db18e539bc338557ef126dee67a7726ef1fa0fc56c2"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/snapshot_preclose.launch.json",
+          "bytes": 808,
+          "sha256": "f0e6e358d1e6a33879a1a328ee9b3c46503c274436bed3d6fa01b455ce33819f"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/fixture_write.close.json",
+          "bytes": 394261,
+          "sha256": "26132f6ae71441a8bd3b6f7950a58c2160bdf26b551582fdb3ac35ce686cf3dd"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/fixture.updated.json.load.json",
+          "bytes": 167530,
+          "sha256": "3d6a0ea74717e9ee03d5cc57bb63bb8be3426d2addcd66b90f7eca70313a18dc"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/snapshot_reopened.err",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/fixture-write.listener.json",
+          "bytes": 266,
+          "sha256": "db981b9cd4f33c992ba32190231bcda69529b5b7b3d04b74c0a9662197e688ab"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/snapshot_loaded.json",
+          "bytes": 160106,
+          "sha256": "3afeb3aa3e75bba09386e953ced81764bdc71a4ddadea247b46bae172bc2a7c4"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/server.listener.json",
+          "bytes": 266,
+          "sha256": "5a8e0ccde6298453b6922f7f862dfdcebb335bc42f24fee490f430f4c04c9491"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/snapshot_reopened.cleanup.json",
+          "bytes": 159,
+          "sha256": "e7abf2ad08dddc00870bc4dc82efc91a873ae982d8379d8396d45e06a5c03135"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/fixture.updated.json.update-operations.json",
+          "bytes": 17077,
+          "sha256": "1dd8ad2c1f9869acad48018f3c2a5ecac6dc9d80a7a5834560988d2befb61715"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/snapshot_preclose.json",
+          "bytes": 160108,
+          "sha256": "3b67f56b51f43d5430cc675081c8ed65523ff09ef456b37221a745edf52b18e4"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/fixture.updated.json.load-operations.json",
+          "bytes": 8691,
+          "sha256": "270e65fa5a588d3ecd215b387c84be2e8af66375eb418f2aa099c68e30529b22"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/fixture_write.cleanup.json",
+          "bytes": 159,
+          "sha256": "53d6556c004cd8332ae758bafec98b9182cf77b4f360509025a1f6dab0f24ac6"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/server.ready.json",
+          "bytes": 398,
+          "sha256": "c395dab32c63a7c5ba340e6f4dd01b2132be7613c1667ddb087b847c63374497"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/server.log",
+          "bytes": 299,
+          "sha256": "60a0f921eb9f09cefb514cf28530ec732a03a84bb9e95413048b8556183705f8"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/snapshot_reopened.json",
+          "bytes": 160108,
+          "sha256": "4d8fb97cb6360e69c114c61404285ec318cee6d4b9aacd6109b01585b3755ae1"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/reopened.exit.json",
+          "bytes": 178,
+          "sha256": "7180ebe97d3bc2241fa0ba75615e90e162b6c2932456068c30eab22e1c86f271"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/fixture-write.exit.json",
+          "bytes": 178,
+          "sha256": "164649d703e755cbb4b576b2888c8a044c61506e75cad0a88b23873e2af3b783"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/server.exit.json",
+          "bytes": 178,
+          "sha256": "f7b999d580bcd0bf80ef0ace0942ea19c712cefad996b24999c794184d082bee"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/server-source.patch",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/snapshot_preclose.err",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/fixture_verify.cleanup.json",
+          "bytes": 159,
+          "sha256": "e4aa7674ad7739d09670fffa3ce0b36c640b441019dd39c9f8f528f3799e6801"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/fixture-reopened.ready.json",
+          "bytes": 398,
+          "sha256": "de91e4ec4f7ae47cfd1a1769aafb9630f373fb756fa67d31485c613854683ce9"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/fixture_write.launch.json",
+          "bytes": 804,
+          "sha256": "d1454be0789741079ac72c7865d1e15a92dba13fcaa874cfca5b5d4591c12d5c"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/fixture-write.log",
+          "bytes": 307,
+          "sha256": "f740300f7e440ff10896a8284ea76fc082649495790e1a17cb0461b72774717f"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/server-buildinfo.txt",
+          "bytes": 3062,
+          "sha256": "d84b08c2e60f1756c5da09e2a49e4093568f32160b9607a7a61cb19d0fdf7ec7"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/snapshot_preclose.cleanup.json",
+          "bytes": 159,
+          "sha256": "c88f5eb28d599d7c5653973600ce9737845b71c4913d8ea498afca12f74ee217"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/reopened.log",
+          "bytes": 299,
+          "sha256": "60a0f921eb9f09cefb514cf28530ec732a03a84bb9e95413048b8556183705f8"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/fixture.updated.json",
+          "bytes": 175917,
+          "sha256": "eb9e057962b535b7c1e9873f556b98b1515a6987584af77bb8e62f0935d1eae4"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/fixture_verify.err",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/run_1.out",
+          "bytes": 1274,
+          "sha256": "2f6b4d5e9cb779d1f66bbf22732780f62649eaf2f5de04ce2ecc5182fb92a257"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/fixture_write.err",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/run_1.cleanup.json",
+          "bytes": 159,
+          "sha256": "2e099d8c16c017077e0df4e4bcb177fe32f8c5c71ff7cd322c6e064ba380c716"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/snapshot_loaded.close.json",
+          "bytes": 621,
+          "sha256": "cf3487d95bb608cb2cfd843e54049257124c7579ef4333a07d2dd5feb056f9ed"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/server.launch.json",
+          "bytes": 2795,
+          "sha256": "3ebad23f42daeea7360b05ffa66de300a799f35e5f63a3289a2ae683c22e9e2a"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/load.out",
+          "bytes": 1107,
+          "sha256": "1e4bfbbdcf247123b8b16309634eec64d6f57480e2d3bc0bc9a1c97487d07f51"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/snapshot_loaded.launch.json",
+          "bytes": 806,
+          "sha256": "66570d22b8e7fef4c1464d88fbaad5cc201bb71fd6417adc4e833a7eef1b4975"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/fixture-reopened.log",
+          "bytes": 307,
+          "sha256": "f740300f7e440ff10896a8284ea76fc082649495790e1a17cb0461b72774717f"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/load.cleanup.json",
+          "bytes": 159,
+          "sha256": "b2deb5127a52938b616e435b0e11c449b3a49dac6dc5badd5cb85bbd7fc7c7a9"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/fixture.expected.json",
+          "bytes": 201620,
+          "sha256": "06db4b90459358167bb283b14a8982afc6de5783e70b7cd82008b0ec8d8edcf9"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/fixture-write.ready.json",
+          "bytes": 398,
+          "sha256": "b1cc277f73cf0723e44b0df5adcb68264d5a1354041ba0f2eb341bb3d55d324c"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/run_1.launch.json",
+          "bytes": 14351,
+          "sha256": "24be1897b04483ace8a9df6622c29df6291323780e7126f3177a0ad907f91954"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/load.launch.json",
+          "bytes": 14347,
+          "sha256": "441a755244fa0368eda9b3cd1e5c56f02cfb7db632dba4b7200bb7c539efb2ff"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/fixture_verify.close.json",
+          "bytes": 730,
+          "sha256": "d3e8a186b7cf861d3e1fffab4f8651e5dcf885182330782c5ad310a43d9adff4"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/load.err",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/snapshot_loaded.cleanup.json",
+          "bytes": 159,
+          "sha256": "06b56d3955d96ffb7192225080dab9a0ac38deb2a13553258889c5542f13474a"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/snapshot_loaded.out",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/fixture-write.launch.json",
+          "bytes": 2803,
+          "sha256": "42d36a4b7ea3b4d6a5de4b00faa911f3689173de5addad3650d3dafbc8cb273c"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/snapshot_loaded.err",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/reopened.ready.json",
+          "bytes": 398,
+          "sha256": "dc6898df8ed25145a760a414cb0a3f080b2d2c4ca7095bb7f1023ac5e04e061e"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/reopened.listener.json",
+          "bytes": 266,
+          "sha256": "2e4246d37e107dd7959adea9b47550d3815e5a1a965dc1a528a7b2765560356b"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/snapshot_reopened.launch.json",
+          "bytes": 808,
+          "sha256": "1ef1f76ef82700878eeff5f4849ef75cd0f4bd4cb86c4b71708bca8d973e85ed"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/fixture_write.out",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/snapshot_reopened.out",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/fixture_verify.launch.json",
+          "bytes": 805,
+          "sha256": "f83882a5ff73caa8031d4c28408f173f9c9004f2813c3b8c528df2dca0fdd783"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/fixture_verify.out",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/fixture-reopened.launch.json",
+          "bytes": 2803,
+          "sha256": "a81554017a0baaca9e2f503da189a187f219c944de9009af97d280dccd38d538"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/fixture.reopened.json",
+          "bytes": 159148,
+          "sha256": "a403e2fbd121cfcb8fa8997f09a284802768ba88cd31c9c569b1a7972af12486"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/reopened.launch.json",
+          "bytes": 2795,
+          "sha256": "095316508b3a0fd2fdbbd786e521a504f95001faa65044cd749434800e6c442b"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/run_1.close.json",
+          "bytes": 1244,
+          "sha256": "1d62d19809c87da8bd4c7ad2c74f5e9172869dd580c284cec9c366215f90d67c"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/snapshot_reopened.close.json",
+          "bytes": 623,
+          "sha256": "b427fef573e334fa69c13d59226e148aadf6737d602d7af3498c24103b1ad641"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/snapshot_preclose.out",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/reopened.evidence/owner.close.json",
+          "bytes": 506,
+          "sha256": "4c2367be13467f6ebb0229e1de2ebfc33c4fde7538b6cccfdf5683886b94baa3"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/reopened.evidence/owner.checkpoint-control.json",
+          "bytes": 154,
+          "sha256": "87e45610e10ab2874630c9db1a74234efb4de19fd0da99f5deb2e27164a75d0a"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/reopened.evidence/owner.open.json",
+          "bytes": 373710,
+          "sha256": "2d8c7bc1adf9e7db47716ab9c87163158bba2f2d421b400fd08fed988dbef4e9"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/reopened.evidence/owner.before-close.json",
+          "bytes": 373727,
+          "sha256": "c0ac5160a14db232ac4d083476e14f63acd1292ac5f5049562a14d684b93c76f"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/fixture-reopened.evidence/owner.close.json",
+          "bytes": 505,
+          "sha256": "d03b594c5ae135d25769f170d74c53c8ac0a9599e0c8966cd6f0ac236324832c"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/fixture-reopened.evidence/owner.checkpoint-control.json",
+          "bytes": 154,
+          "sha256": "e331b3d5609d9f50b9f43368e10e709262b1d713e8296b1029e12bc166ee8ca1"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/fixture-reopened.evidence/owner.open.json",
+          "bytes": 373738,
+          "sha256": "a736abbde3f28bd4edc85fa33209fdedd587e6f1b7bcac5d92ed45650bbd4542"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/fixture-reopened.evidence/owner.before-close.json",
+          "bytes": 373757,
+          "sha256": "f3b65cef06c7b59a5313bacb8d4ebe07943f9df6fe089ec93458e3266c52333d"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/fixture-write.evidence/owner.checkpoint.json",
+          "bytes": 384139,
+          "sha256": "0b2aee27956e9b44160ec77c9759db94aefacdd70cb12d7abe603d92d689e641"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/fixture-write.evidence/owner.close.json",
+          "bytes": 508,
+          "sha256": "ac380067073602ba95f370eb317065a6ab19cd4b39bc80d79dc34648fc6fed0f"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/fixture-write.evidence/owner.checkpoint-control.json",
+          "bytes": 154,
+          "sha256": "cf540395b9256d8843610cba5eeef818a6be926271856c8a43c474fa5d944e48"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/fixture-write.evidence/owner.checkpoint-request.json",
+          "bytes": 538,
+          "sha256": "0b7b4f8bc45957bc5127e039ff6c79b20341991cc2c92a0ff8cd68b2eb4f03ad"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/fixture-write.evidence/owner.open.json",
+          "bytes": 373640,
+          "sha256": "63f3275407d8f99d350fdb751565fb1c9c9f09deee85998164952dd9310697b1"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/fixture-write.evidence/owner.before-close.json",
+          "bytes": 373821,
+          "sha256": "2505f528896b88a9d457215fa6247526c877396313059355f743609760de14e2"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/server.evidence/owner.checkpoint.json",
+          "bytes": 384143,
+          "sha256": "a61d1f861d14d428ac170566f5b1d826d822e291765eccbbf1b653b110a78b99"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/server.evidence/owner.close.json",
+          "bytes": 508,
+          "sha256": "6f0eba074995d8d54411f0516fd1d3b1aece846c9babbc2f6274b3447419bd1a"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/server.evidence/owner.checkpoint-control.json",
+          "bytes": 154,
+          "sha256": "93be8bf0f67d1a088d956ff14912edc114a07f7bfb11497f79b2a3170f3e1083"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/server.evidence/owner.checkpoint-request.json",
+          "bytes": 531,
+          "sha256": "d161f8be7e6a1c8e8c05f4c61c0c8d5052f11d042ab36d4b634b5e97b22f24cb"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/server.evidence/owner.open.json",
+          "bytes": 373608,
+          "sha256": "6ac4621ee52d980ab4d3879fb19f831443e0132bf94501086fe864ace0aff6fd"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/output/treedb_mongo/server.evidence/owner.before-close.json",
+          "bytes": 373837,
+          "sha256": "261b51fd6f35b949539873292a1c73af354ad03fcc7474c74f0250379f7fd076"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/launcher/start.json",
+          "bytes": 9042,
+          "sha256": "193e83d0637ed88d145dc7541ed5c29ce84e91e0eec7907befa1a4e333c76b16"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/launcher/stderr.txt",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/launcher/external.jsonl",
+          "bytes": 1404036,
+          "sha256": "d4cc68c337b76dc42d0ff4f38cc4ee17fd3beee47dc5b0d8857dfa2640d0461c"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/launcher/stdout.txt",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/durable/launcher/terminal.json",
+          "bytes": 80146,
+          "sha256": "5783ece16e7b4101f72b59e43c5b7aca2d32452c7905ba4f696426644bca96fe"
+        }
+      ]
+    },
+    {
+      "profile": "relaxed",
+      "actual_counts": {
+        "READ": 124,
+        "TOTAL": 128,
+        "UPDATE": 4
+      },
+      "elapsed_seconds": 5.027502536773682,
+      "peak": {
+        "allocated": 27578368,
+        "cpu_seconds": 4.643207,
+        "logical": 27223266,
+        "rss_bytes": 172011520
+      },
+      "source_commit": "c660c3e34523a77f12da9b440c5b6b7def9359f1",
+      "gateway_sha256": "6104599a79e99e1dfbe2eb6a3d53aa834eac609ae360c5e078557581cdf283e9",
+      "scope": "random64load/128run2workers with nonzero R/U; separate deterministic64IDs4disjointworkers; actual runtime/owner/Close/checkpoint/reopen accepted, rates excluded",
+      "files": [
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/COMPLETE.json",
+          "bytes": 48254,
+          "sha256": "dfd2c16ec8f4f02a4e6ae86801a84ad4f13c74398c53ea2f2cc40fd3b9cf457a"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/request.json",
+          "bytes": 2666,
+          "sha256": "64cdbf26c64f748294749a3422e0e03259cbcc5b3a32579921263725a8c0fa36"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/FINAL.json",
+          "bytes": 84702,
+          "sha256": "08832c168852b409a15317ff1a766dfbcf422f3f38339b3babf75b813f9f4f92"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/client.patch",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/summary.md",
+          "bytes": 130,
+          "sha256": "5dc10c736cd40efcd7fc1ae127cc8ef7e54da2a5dc766fc9756876b6df34af5f"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/summary.tsv",
+          "bytes": 518,
+          "sha256": "5a8b7caf12ef1cadc45976ae8cfe630c66d45f191ce9877359b37bf3bad561ec"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/client-build.json",
+          "bytes": 599,
+          "sha256": "90e51911687d97efdc00295462d518192fe8b15c6485f8611454bb4cdfcd5fc0"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/fixture-source.go",
+          "bytes": 27458,
+          "sha256": "e0c7fe0d023335aefffc9b12f78e209a149d9aa4bb426d75a2d63563e22b9a14"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/client-buildinfo.txt",
+          "bytes": 13223,
+          "sha256": "997c8e09373b725b669d143802c90c5bd90d799cfedd06dce1e4f6945c9d2858"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/host.json",
+          "bytes": 24109,
+          "sha256": "2d94929dd48ecd502cec52b1e4009d964a34daa7f75ed85d13b7103e8ca29dd9"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/server-build.json",
+          "bytes": 495,
+          "sha256": "c9720fe03562fcaf5c0cde7817a52c908fed31808337bfd58762759306090e8f"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/validation.json",
+          "bytes": 249,
+          "sha256": "61bcbbe2e862f2d3202b0a08ad504556fb444f12a6b612f767127966404c1b1a"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/commands.txt",
+          "bytes": 3074,
+          "sha256": "a60fef8003a67714bf63bb6ca54b17f5173eb62badf6fef296b87040c5bd54ec"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/manifest.json",
+          "bytes": 2141,
+          "sha256": "92c0026ce8d375f623caeafe229b08023640166da3724f708606ccbffe5dcdb2"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/runtime.json",
+          "bytes": 945,
+          "sha256": "f77ddd40613cb1b1bdad59619d6783e09369e5831943c1e1e690a342ecefa629"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/lifecycle.json",
+          "bytes": 2306,
+          "sha256": "cd67ddf2d646214be9793ff29fe6df317c4fc83519d6e48ddc3e8b5b43a2a57e"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/run_1.err",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/fixture-reopened.listener.json",
+          "bytes": 266,
+          "sha256": "f95f656233217abf28dd8a168504853f1b715e8fe8e75791cb844f70f3576ccd"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/snapshot_preclose.close.json",
+          "bytes": 394009,
+          "sha256": "b6043cd446184de0b8c58e3240563f41c53736d19bbb1a462d846c975e3e64c2"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/fixture-reopened.exit.json",
+          "bytes": 178,
+          "sha256": "7f745b5d3934bf44c94542345bd93f7c4e643871ecb5a9d9e9d401439ca3cc07"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/load.close.json",
+          "bytes": 1245,
+          "sha256": "2e46a338d7f6de2cd5f49148c157d822f57c9831b604315da1e167f73c539b72"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/snapshot_preclose.launch.json",
+          "bytes": 808,
+          "sha256": "5ccf88dc7e17c78dce4bc9c85ff71110d2645c85bb6d38ba6fefe97a3eeefa6d"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/fixture_write.close.json",
+          "bytes": 394224,
+          "sha256": "1d9f8e0a376293426fe29a0a918f49e414f6a26ad1ddb85b75d3e0c2f0ca909d"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/fixture.updated.json.load.json",
+          "bytes": 167530,
+          "sha256": "868bc5559a24e292aca3a11f113eb6dc4f9537a3f66e102868f4a4fbf1eaf14d"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/snapshot_reopened.err",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/fixture-write.listener.json",
+          "bytes": 266,
+          "sha256": "cd1a6dd2e065e8906775219d987fe80b9168e40c78f51c2c52a192f2e56da2d2"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/snapshot_loaded.json",
+          "bytes": 160106,
+          "sha256": "f9a6ab3c92380aeb5e65af4ca30450330a9c7f84538ce047cb331f153a0f6818"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/server.listener.json",
+          "bytes": 266,
+          "sha256": "09303d9a129161a362652dac19ba789a522d41444d050deabdeff9882d64d054"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/snapshot_reopened.cleanup.json",
+          "bytes": 159,
+          "sha256": "f992e1a052fd2ea80efd0bf48c24bb0c23f12ead6499adfb9e5956a8f1177b71"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/fixture.updated.json.update-operations.json",
+          "bytes": 17077,
+          "sha256": "d7f9bfcb6012cf7aea6e0004011ec48e24b1d2d2ec4c486bb3eca0d95ecefacc"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/snapshot_preclose.json",
+          "bytes": 160108,
+          "sha256": "c67791c7cb1ef66460c240995cdc1691e615190a10767df27ee52153af8c7d8e"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/fixture.updated.json.load-operations.json",
+          "bytes": 8691,
+          "sha256": "14239f9f31598fa8c8d57667160754d81b025f88d1c66897c201ed90a76d5d71"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/fixture_write.cleanup.json",
+          "bytes": 159,
+          "sha256": "85f2fda94893dc425f464908283107d191078e2dd076bd3caa990c163b948592"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/server.ready.json",
+          "bytes": 398,
+          "sha256": "bff3ffe3dc2b1a8e638515246aeaa7a0f6cd718f3e0345a224a654c2695799af"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/server.log",
+          "bytes": 299,
+          "sha256": "060259c779df9b0be5d5b4855abdc9219f827d18e80ae8e1a09ab09190da6d40"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/snapshot_reopened.json",
+          "bytes": 160108,
+          "sha256": "c65e429ae9089b705ed4989d980004df8c84476495ce4bb3b82980022075bf2f"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/reopened.exit.json",
+          "bytes": 178,
+          "sha256": "2fdc6f7d8eb65ceb349612e445a9180428f70ada1dc2fe2eb82603e677db8eaf"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/fixture-write.exit.json",
+          "bytes": 178,
+          "sha256": "68edd2ca248164f3892c7e589dc37f05f592bb50b011aa30325f0ad5f0fe69e0"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/server.exit.json",
+          "bytes": 178,
+          "sha256": "db80761ffa964addf7c622b9ef9014ceda7c4676f9ca200619ea416e103633fe"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/server-source.patch",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/snapshot_preclose.err",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/fixture_verify.cleanup.json",
+          "bytes": 159,
+          "sha256": "8e5f598e9aad0ae0b6824b3936b77fe92b72912375b931edac0671223c578403"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/fixture-reopened.ready.json",
+          "bytes": 398,
+          "sha256": "78fa167b75421326b9312edfc8519218e0706d72db7c3a1802dffab3b8487d68"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/fixture_write.launch.json",
+          "bytes": 804,
+          "sha256": "77e9df761d34aa714cf6b7241949e150a6856654b22784a632dd6d74fa118613"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/fixture-write.log",
+          "bytes": 307,
+          "sha256": "bcc3909ed2439595c8f73bd49258d00f99b3d0095333079355891a698db20172"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/server-buildinfo.txt",
+          "bytes": 3062,
+          "sha256": "d84b08c2e60f1756c5da09e2a49e4093568f32160b9607a7a61cb19d0fdf7ec7"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/snapshot_preclose.cleanup.json",
+          "bytes": 159,
+          "sha256": "48025f47d42e3253a57395ce443024be582ebefca977774516d45509107ed5ff"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/reopened.log",
+          "bytes": 299,
+          "sha256": "060259c779df9b0be5d5b4855abdc9219f827d18e80ae8e1a09ab09190da6d40"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/fixture.updated.json",
+          "bytes": 175917,
+          "sha256": "6e5e9f0cbca80b25e5eae8f70933443fd490f3a250db4f7b2325fea440d7feb2"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/fixture_verify.err",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/run_1.out",
+          "bytes": 1261,
+          "sha256": "11de712761bea13da450e89d95727803b90abba94843360c1fd2e11dac45af20"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/fixture_write.err",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/run_1.cleanup.json",
+          "bytes": 159,
+          "sha256": "4b2ef5ffc8659f1c54042c5d408ff88bdd6a088f7f602bddcdb2167b1fe54ebd"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/snapshot_loaded.close.json",
+          "bytes": 621,
+          "sha256": "1a835880fc27082648ce313e53403b329aabce96c5a57a9a351e99cefbb3b9e2"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/server.launch.json",
+          "bytes": 2795,
+          "sha256": "62c45555665ec6128d5141fa4135788f2e74ac45ed46fd69046c570698ee44d9"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/load.out",
+          "bytes": 1085,
+          "sha256": "390706aa85854d026fe64b4fc20b308f28b63a1e28679fe565ab7ef73edbab51"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/snapshot_loaded.launch.json",
+          "bytes": 806,
+          "sha256": "540a6c9c9d37c2546a72517147ee9c024a9d8153b72c9f2bec48f3d5ebb7e5e1"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/fixture-reopened.log",
+          "bytes": 307,
+          "sha256": "bcc3909ed2439595c8f73bd49258d00f99b3d0095333079355891a698db20172"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/load.cleanup.json",
+          "bytes": 159,
+          "sha256": "1559be96f1b4b964dcaef365bc46124d0a257e4f22816f0799b7fb46cd52e88a"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/fixture.expected.json",
+          "bytes": 201620,
+          "sha256": "95df6e22150ce5e9b23a3e6fdd392e8ef639bed5ed6bdec78d0d9a1fdb29cac9"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/fixture-write.ready.json",
+          "bytes": 398,
+          "sha256": "bfa2ce23a35d74201174b74da0a762b781719f332291ac099c8f4fb86b82f426"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/run_1.launch.json",
+          "bytes": 14351,
+          "sha256": "51d2e46169eeffaa14d457ea43b58cabbb569b8bb390d52d6a333e507d366183"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/load.launch.json",
+          "bytes": 14350,
+          "sha256": "b0e7240a15216d09cf0d65fdb4dd83db92c9722fd2c83c9091532f2725ad66b2"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/fixture_verify.close.json",
+          "bytes": 729,
+          "sha256": "f9a1a7af2d956c28c0941ab4d9559d1a6deba94132349c09fe7d06614b992b18"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/load.err",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/snapshot_loaded.cleanup.json",
+          "bytes": 159,
+          "sha256": "f6642e6d51283b3ce3c5211a8d468803556ab151505a6abf72d3c894c1fb62b7"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/snapshot_loaded.out",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/fixture-write.launch.json",
+          "bytes": 2803,
+          "sha256": "cda063385c4e0905ceda1cc101a3181448b0d97acb90a0a92f9e8d25e14d2745"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/snapshot_loaded.err",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/reopened.ready.json",
+          "bytes": 398,
+          "sha256": "b4424ff4bf262e5c5b8a80103011f922c4c61db3ee58dbc13cb7ed880e5dec3e"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/reopened.listener.json",
+          "bytes": 266,
+          "sha256": "5df02a21b774ef637066ed1d686090f97ad24666fe7e403ace9c72d2c59f15a0"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/snapshot_reopened.launch.json",
+          "bytes": 808,
+          "sha256": "6f162565706b769674e9250089ffb7e569446582e974971c93ef2c55c69e999d"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/fixture_write.out",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/snapshot_reopened.out",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/fixture_verify.launch.json",
+          "bytes": 805,
+          "sha256": "bf41619869714f41e9f48f948faf2143a8f924b615a47a97c626fdcb20f7477d"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/fixture_verify.out",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/fixture-reopened.launch.json",
+          "bytes": 2803,
+          "sha256": "76ef2b983e48f8700b5077ba9e3f8bc1130697af46a7a662ff61ae16eda134af"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/fixture.reopened.json",
+          "bytes": 159148,
+          "sha256": "8359649535c7f2018ccba2b8ed79928b39963c8c67aa63db0a591e968a8ece89"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/reopened.launch.json",
+          "bytes": 2795,
+          "sha256": "b80ea05ae65c222de03e8a4f86932026a9855047fc905a949e9dc0c1c3b8bf97"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/run_1.close.json",
+          "bytes": 1244,
+          "sha256": "0d07e39e29fb48d033ce6dce5c461a3123d873070eccc12a57f3ae32414483a4"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/snapshot_reopened.close.json",
+          "bytes": 622,
+          "sha256": "68c55d34ab3ce3920303630fc15cb97d8f2a43a01295be274e7283f1e0ec620e"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/snapshot_preclose.out",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/reopened.evidence/owner.close.json",
+          "bytes": 506,
+          "sha256": "a6b2505d43b8f593e07048fce143eb4e05ae95e2ffa68e51092f1676f3de0b55"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/reopened.evidence/owner.checkpoint-control.json",
+          "bytes": 154,
+          "sha256": "b6b8d42bbcf08b2307be2c814de312a8664b70759c13588f7163b2c42e60b496"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/reopened.evidence/owner.open.json",
+          "bytes": 373708,
+          "sha256": "e3d4675143f45dae9e8d685762c9d4f9441ae5cf50a7cb8e5f9d18edbe6dd77d"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/reopened.evidence/owner.before-close.json",
+          "bytes": 373724,
+          "sha256": "91e64c08090f9931fb83aa707e10b31bed43324fd8e8c9292989f6542b673ee0"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/fixture-reopened.evidence/owner.close.json",
+          "bytes": 505,
+          "sha256": "a1c561ba5390bed98f97f10147cd4b23db5468687e1f68dafcc0edad2102153a"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/fixture-reopened.evidence/owner.checkpoint-control.json",
+          "bytes": 154,
+          "sha256": "3547ff64f793bb1824daaa2c897e3886a804afa7f12985b9cf4773845cf34f38"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/fixture-reopened.evidence/owner.open.json",
+          "bytes": 373742,
+          "sha256": "17a5ca8f3c053b631aea88a7e6ee9853ed4477db7742d6862c2681e3cfc401a1"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/fixture-reopened.evidence/owner.before-close.json",
+          "bytes": 373758,
+          "sha256": "5524dd99220f333740551689af7213ce3216f18835456eb39615069899d0413f"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/fixture-write.evidence/owner.checkpoint.json",
+          "bytes": 384102,
+          "sha256": "8b6f2336de20d63067bfa78bad7d787e83a191498f85015f2e83937d6fc31f4c"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/fixture-write.evidence/owner.close.json",
+          "bytes": 507,
+          "sha256": "d5d40cbfefb56410b2bd8994ecf5791c4ae1c7da1cd97f0048ed000800fb459b"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/fixture-write.evidence/owner.checkpoint-control.json",
+          "bytes": 154,
+          "sha256": "6505c7047e0bc1687694260da5a9abfb022c33f36ac2570d179459a6811a43a2"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/fixture-write.evidence/owner.checkpoint-request.json",
+          "bytes": 538,
+          "sha256": "9647d3b88154941bb7b4b9ce826fe0584108c19af9d1979807aaf340c30c9f6a"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/fixture-write.evidence/owner.open.json",
+          "bytes": 373629,
+          "sha256": "15db1ad193caf5ee4c183251ec99c2ac53adaf2d0a4433182935105dd537f15c"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/fixture-write.evidence/owner.before-close.json",
+          "bytes": 373786,
+          "sha256": "796b2f0030edc308dd93c5bdb86826a52103135601f4a2e0851e10c61aede006"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/server.evidence/owner.checkpoint.json",
+          "bytes": 384098,
+          "sha256": "83097850393b00406bfa0c3ece5c1b71ab7580a239547fd82d5fd624c95db872"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/server.evidence/owner.close.json",
+          "bytes": 508,
+          "sha256": "f7a8a896da8588f2eedc47ad4a9f7bb7691da4bda2443c3ee359a7eafcd79199"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/server.evidence/owner.checkpoint-control.json",
+          "bytes": 154,
+          "sha256": "05b5cb03013df4e213e2f8682215da17813f91611405aadd3829b3da9da79205"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/server.evidence/owner.checkpoint-request.json",
+          "bytes": 531,
+          "sha256": "1df0d104526aec901a3ed1d8f98661189a7d6f996589ff66e5d8119ae8a939e7"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/server.evidence/owner.open.json",
+          "bytes": 373605,
+          "sha256": "74b215f145d842fd1fce6fc540ecd82b1b234b648b4a886a58506473c12d3858"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/output/treedb_mongo/server.evidence/owner.before-close.json",
+          "bytes": 373784,
+          "sha256": "977d8678e49d28589df35b5edbd9ad8242578f331dfcede87dfaa6c23431893c"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/launcher/start.json",
+          "bytes": 9042,
+          "sha256": "a50fa0356525db535781e985f9c55b99fcae21cf2a309073520375f21555aa6e"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/launcher/stderr.txt",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/launcher/external.jsonl",
+          "bytes": 1248564,
+          "sha256": "12cdd9e0a3e87c4c37652c8952c0668d400b540505f6c720f3f26c1b35d81829"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/launcher/stdout.txt",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "/home/mikers/gomap-5335-final-qualification-20261030/tiny-gateway-guards/relaxed/launcher/terminal.json",
+          "bytes": 84702,
+          "sha256": "08832c168852b409a15317ff1a766dfbcf422f3f38339b3babf75b813f9f4f92"
+        }
+      ]
+    }
+  ],
+  "ab_bindings": [
+    {
+      "path": "/home/mikers/gomap-5335-final-ab-controls-20261030/reviewed-controls.json",
+      "bytes": 5320,
+      "sha256": "c88c4f3514ade98668325f18b0de7a31162985ccd00c6b684a8952e4aaa67633"
+    },
+    {
+      "path": "/home/mikers/gomap-5335-final-ab-controls-20261030/REVIEW-RECEIPT.md",
+      "bytes": 14573,
+      "sha256": "92a8322d5c12cd20509de0469958e518236f2459d5e85c9f022166e92259a3a8"
+    },
+    {
+      "path": "/home/mikers/gomap-5335-final-ab-controls-20261030/RESULT-SUMMARY.json",
+      "bytes": 11038,
+      "sha256": "7b28c8057ee4b29606060490e8a0e650a09f8053e80300799c6f5114092f4a80"
+    }
+  ],
+  "preliminary_dispatch": {
+    "source_commit": "c660c3e34523a77f12da9b440c5b6b7def9359f1",
+    "runtime_arms_started": 0,
+    "files": [
+      {
+        "path": "/home/mikers/gomap-5335-final-qualification-20261030/packet.py",
+        "bytes": 16591,
+        "sha256": "71cadbcd9c42f77d37e0fe1833a9c1ae6284c18c9ef307a80399c2de7b08555b"
+      },
+      {
+        "path": "/home/mikers/gomap-5335-final-qualification-20261030/SEALED.json",
+        "bytes": 716462,
+        "sha256": "dc2bc012f627e71c09549bdb7dd69d86e0cbe42bb08e4ef16a9065ce7957a3aa"
+      },
+      {
+        "path": "/home/mikers/gomap-5335-final-qualification-20261030/campaign.json",
+        "bytes": 4570,
+        "sha256": "84182bb4efa8e7cc99570700f98a98e3159e8fa5ee00db77a8efb39e5c97bec8"
+      },
+      {
+        "path": "/home/mikers/gomap-5335-final-qualification-20261030/OFFLINE-CONTROLS.json",
+        "bytes": 818,
+        "sha256": "3eac297e8608ac23be53fcc163f404f38bbd34653ac46e7650fd2c3a81e767cc"
+      }
+    ],
+    "scope": "all12cell requests; six reference manifests prepared offline; no final timing arm; runtime/merge gates remain"
+  },
+  "supervision_review": {
+    "path": "/home/mikers/gomap-5335-delivery-packet-20261030/ADAPTER-REVIEW.md",
+    "bytes": 2151,
+    "sha256": "17dc9dadf54515235186fc5e85e11490a65e1eb292f351dd016c7569e105739b"
+  },
+  "supervision_negative_controls": [
+    {
+      "path": "/home/mikers/gomap-5335-perf-campaign-20261030/cpu-v5-synthetic-l7wd_4ux/unexpected-one/command/terminal.json",
+      "bytes": 8060,
+      "sha256": "8d47250bb505ea83ece9c62a4cbbf8f9d7fd87b259df17ad1cc399715da86496",
+      "reason": "nonzero_exit",
+      "ok": false
+    },
+    {
+      "path": "/home/mikers/gomap-5335-perf-campaign-20261030/cpu-v5-synthetic-l7wd_4ux/wall/command/terminal.json",
+      "bytes": 8062,
+      "sha256": "ec5a14f4d4e0332a105c3372b8c63afa8e65b0dc00753a2ea722b866a843b083",
+      "reason": "wall_limit",
+      "ok": false
+    },
+    {
+      "path": "/home/mikers/gomap-5335-perf-campaign-20261030/cpu-v5-synthetic-l7wd_4ux/custody/command/terminal.json",
+      "bytes": 9101,
+      "sha256": "5dfdc0df807c735b7cad7fc109a7ef9378e8ba9ba69f8685729c58fb3de24f6a",
+      "reason": "custody_observation_error",
+      "ok": false
+    },
+    {
+      "path": "/home/mikers/gomap-5335-perf-campaign-20261030/cpu-v5-synthetic-l7wd_4ux/cpu/command/terminal.json",
+      "bytes": 82600,
+      "sha256": "c9ab5cea8cd088aecf892587c72989881952aff498a180d8480c29c992564f45",
+      "reason": "aggregate_cpu_limit",
+      "ok": false
+    }
+  ],
+  "copied_documents": [
+    {
+      "packet_path": "final-ab-reviewed-controls.json",
+      "original_path": "/home/mikers/gomap-5335-final-ab-controls-20261030/reviewed-controls.json",
+      "sha256": "c88c4f3514ade98668325f18b0de7a31162985ccd00c6b684a8952e4aaa67633",
+      "bytes": 5320
+    },
+    {
+      "packet_path": "final-ab-review.md",
+      "original_path": "/home/mikers/gomap-5335-final-ab-controls-20261030/REVIEW-RECEIPT.md",
+      "sha256": "92a8322d5c12cd20509de0469958e518236f2459d5e85c9f022166e92259a3a8",
+      "bytes": 14573
+    }
+  ]
+}

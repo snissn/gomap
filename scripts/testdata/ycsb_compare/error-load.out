@@ -1,0 +1,16 @@
+Using request distribution 'uniform' a keyrange of [0 99999]
+***************** properties *****************
+"treedb.document_format"="json"
+"dotransactions"="false"
+"command"="load"
+"table"="usertable"
+"treedb.addr"="127.0.0.1:17180"
+"recordcount"="100000"
+"operationcount"="10000"
+"threadcount"="16"
+**********************************************
+**********************************************
+Run finished, takes 6.448526616s
+INSERT - Takes(s): 6.4, Count: 4771, OPS: 740.3, Avg(us): 18194, Min(us): 94, Max(us): 224255, 50th(us): 985, 90th(us): 98751, 95th(us): 101311, 99th(us): 127871, 99.9th(us): 221695, 99.99th(us): 224255
+INSERT_ERROR - Takes(s): 1.0, Count: 95229, OPS: 93656.0, Avg(us): 152, Min(us): 36, Max(us): 4979, 50th(us): 139, 90th(us): 227, 95th(us): 265, 99th(us): 432, 99.9th(us): 985, 99.99th(us): 2249
+TOTAL  - Takes(s): 6.4, Count: 4771, OPS: 740.3, Avg(us): 18194, Min(us): 94, Max(us): 224255, 50th(us): 985, 90th(us): 98751, 95th(us): 101311, 99th(us): 127871, 99.9th(us): 221695, 99.99th(us): 224255

@@ -7,9 +7,12 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -218,18 +221,200 @@ func TestNativeScalarForwardPublicPhysicalReuse(t *testing.T) {
 	}
 }
 
+// Forward the exact original allocator call and receipt. This test-local adapter
+// observes optional work without replacing admission or editing a shared engine.
+// The borrowed read facade below is used only by the optional compile/publish
+// helpers, whose inputs are this original collection, metadata and allocator.
+type scalarForwardObservedAllocator struct {
+	backenddb.NativeSemanticAllocator
+	calls uint64
+	bytes uint64
+	lease *memtable.COWExternalLease
+	err   error
+}
+
+func (a *scalarForwardObservedAllocator) AdmitNativeBytes(n uint64) (*memtable.COWExternalLease, error) {
+	a.calls++
+	a.bytes = n
+	a.lease, a.err = a.NativeSemanticAllocator.AdmitNativeBytes(n)
+	return a.lease, a.err
+}
+
+// These forwarding observers schedule only the selected engine's original
+// preborn cleanup. The refund observer and its ledger own no engine/Work alias.
+// A failed original destructor stays on the original parked record unchanged.
+type scalarForwardCleanupGate struct {
+	once  sync.Once
+	ready chan struct{}
+}
+
+func (g *scalarForwardCleanupGate) release() { g.once.Do(func() { close(g.ready) }) }
+
+type scalarForwardCleanupResult struct {
+	beforeFinish, afterFinish memtable.COWStats
+	beforeRefund, afterRefund memtable.COWStats
+	finishCalls, refundCalls  int
+	err                       error
+}
+
+type scalarForwardCleanupLedger struct {
+	budget      nativeHNSWAdmissionBudget
+	result      scalarForwardCleanupResult
+	done        chan scalarForwardCleanupResult
+	afterRefund scalarForwardCleanupGate
+}
+
+type scalarForwardCleanupWork struct {
+	original     *nativeEngineVersion
+	ledger       *scalarForwardCleanupLedger
+	entered      chan struct{}
+	beforeFinish scalarForwardCleanupGate
+}
+
+func (w *scalarForwardCleanupWork) FinishSemanticCleanup() (rootpublication.SemanticCleanupCompletion, error) {
+	close(w.entered)
+	<-w.beforeFinish.ready
+	l := w.ledger
+	l.result.beforeFinish = l.budget.Stats()
+	l.result.finishCalls++
+	completion, err := w.original.FinishSemanticCleanup()
+	l.result.afterFinish = l.budget.Stats()
+	l.result.err = err
+	if err != nil {
+		// Keep the exact failed original reachable through the worker's Work.
+		l.done <- l.result
+		return completion, err
+	}
+	w.original = nil
+	if completion.Refund == nil {
+		l.result.err = errors.New("selected original cleanup returned no refund")
+		l.done <- l.result
+		return completion, nil
+	}
+	refund := &scalarForwardCleanupRefund{original: completion.Refund, ledger: l}
+	completion.Refund = nil
+	return rootpublication.SemanticCleanupCompletion{Refund: refund}, nil
+}
+
+type scalarForwardCleanupRefund struct {
+	original rootpublication.SemanticCleanupRefund
+	ledger   *scalarForwardCleanupLedger
+}
+
+func (r *scalarForwardCleanupRefund) Close() {
+	original, l := r.original, r.ledger
+	r.original, r.ledger = nil, nil
+	l.result.beforeRefund = l.budget.Stats()
+	l.result.refundCalls++
+	original.Close()
+	original = nil
+	l.result.afterRefund = l.budget.Stats()
+	l.done <- l.result
+	// The worker has detached the original Work before entering this receipt.
+	// Hold its next queued owner until the foreground assertions finish.
+	<-l.afterRefund.ready
+}
+
+func scalarForwardWaitCleanup(t *testing.T, ready <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-ready:
+	case <-time.After(10 * time.Second):
+		t.Fatal("selected original cleanup did not reach its finite gate")
+	}
+}
+
 // Build the real finite conjunction and validated forward identities under an
-// actual read receipt, then exhaust that SAME parent only for optional retention.
+// actual read receipt, then pressure that SAME shared parent. Mandatory refusal
+// is isolated below: shared-owner refunds and idle-scratch reclamation can create
+// legitimate headroom between a Stats snapshot and a later admission.
 func TestNativeScalarForwardOptionalRefusalAndBound(t *testing.T) {
-	_, _, c := openNativeScalarForwardPublic(t)
+	runNativeScalarForwardOptionalRefusalAndBound(t, false)
+}
+
+// This constructs one permitted original-owner schedule. It does not reproduce
+// or explain the missing historical macOS cleanup/admission schedule.
+func TestNativeScalarForwardOriginalCleanupAdmission(t *testing.T) {
+	runNativeScalarForwardOptionalRefusalAndBound(t, true)
+}
+
+func runNativeScalarForwardOptionalRefusalAndBound(t *testing.T, observeCleanup bool) {
+	t.Helper()
+	owner, manager, c := openNativeScalarForwardPublic(t)
+	var capture backenddb.NativeSemanticCapture
+	var view *CollectionReadView
+	var keyLease, blocker *memtable.COWExternalLease
+	var budget nativeHNSWAdmissionBudget
+	var work *scalarForwardCleanupWork
+	var selected *nativeEngineVersion
+	// Registered after the helper's idempotent fallback cleanups. Every early
+	// failure first opens both gates, then checks all original Close results.
+	t.Cleanup(func() {
+		if work != nil {
+			work.beforeFinish.release()
+			work.ledger.afterRefund.release()
+		}
+		if capture != nil {
+			if err := capture.Close(); err != nil {
+				t.Error("selected capture Close", err)
+			}
+		}
+		keyLease.Close()
+		blocker.Close()
+		if view != nil {
+			if err := view.Close(); err != nil {
+				t.Error("read view Close", err)
+			}
+		}
+		if err := manager.Close(); err != nil {
+			t.Error("manager Close", err)
+		}
+		if err := owner.Close(); err != nil {
+			t.Error("owner Close", err)
+		}
+		if budget != nil {
+			if stats := budget.Stats(); stats.TotalBytes != 0 || stats.ExternalLeases != 0 {
+				t.Errorf("full Close retained scalar-forward witness: %+v", stats)
+			}
+		}
+	})
+	if observeCleanup {
+		var err error
+		capture, err = c.nativeJSON.db.CaptureNativeSemanticState()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ok bool
+		selected, ok = capture.State().(*nativeEngineVersion)
+		if !ok || selected == nil || selected.cleanup.Work != selected || selected.refund == nil || selected.refs.Load() < 1 {
+			t.Fatal("selected capture does not hold the original preborn engine cleanup")
+		}
+		budget = capture.NativeAllocator().(nativeHNSWAdmissionBudget)
+		l := &scalarForwardCleanupLedger{budget: budget, done: make(chan scalarForwardCleanupResult, 1), afterRefund: scalarForwardCleanupGate{ready: make(chan struct{})}}
+		work = &scalarForwardCleanupWork{original: selected, ledger: l, entered: make(chan struct{}), beforeFinish: scalarForwardCleanupGate{ready: make(chan struct{})}}
+		// The live capture prevents last-reference enqueue/read of this record.
+		selected.cleanup.Work = work
+	}
 	if _, err := c.InsertBatch([][]byte{[]byte("a"), []byte("b")}, [][]byte{[]byte(`{"tenant":"a","content":"alpha"}`), []byte(`{"tenant":"b","content":"alpha"}`)}); err != nil {
 		t.Fatal(err)
 	}
-	view, err := c.OpenCollectionReadView()
+	var err error
+	view, err = c.OpenCollectionReadView()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer view.Close()
+	if work != nil {
+		if view.nativeRead.engine == selected {
+			t.Fatal("original InsertBatch did not supersede selected engine")
+		}
+		selected = nil
+		err := capture.Close()
+		capture = nil
+		if err != nil {
+			t.Fatal("selected capture Close before pressure", err)
+		}
+		scalarForwardWaitCleanup(t, work.entered)
+	}
 	scratch, err := newHybridNativeScratch(view)
 	if err != nil {
 		t.Fatal(err)
@@ -248,11 +433,11 @@ func TestNativeScalarForwardOptionalRefusalAndBound(t *testing.T) {
 		t.Fatalf("eligible finite source: %+v %v", ids, err)
 	}
 	build := ids.forwardPlan
-	q, keyLease := nativeScalarForwardCompile(view.nativeRead, build.textIndex, build.rawFilters, build.lookupLimit, build.aggregateLimit)
+	q, compiledKeyLease := nativeScalarForwardCompile(view.nativeRead, build.textIndex, build.rawFilters, build.lookupLimit, build.aggregateLimit)
+	keyLease = compiledKeyLease
 	if q == nil {
 		t.Fatal("optional key unexpectedly refused")
 	}
-	defer keyLease.Close()
 	q.ids = build.ids
 	// End construction provenance only on this query-local value; the original
 	// operation's full scalar and forward work/admission still happens here.
@@ -268,23 +453,34 @@ func TestNativeScalarForwardOptionalRefusalAndBound(t *testing.T) {
 	}
 	q.status, q.forward = ctx.status, *forward
 	allocator := view.nativeRead.engine.allocator
-	budget := allocator.(nativeHNSWAdmissionBudget)
-	blocker, err := allocator.AdmitNativeBytes(0)
+	budget = allocator.(nativeHNSWAdmissionBudget)
+	blocker, err = allocator.AdmitNativeBytes(0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer blocker.Close()
 	if err = blocker.Resize(budget.Limits().MaxInFlightBytes - budget.Stats().ReservedBytes); err != nil {
 		t.Fatal(err)
 	}
-	before := budget.Stats()
-	nativeScalarForwardPublish(view.nativeRead, q)
-	after := budget.Stats()
+	observedAllocator := &scalarForwardObservedAllocator{NativeSemanticAllocator: allocator}
+	optionalRead := &NativeJSONRead{meta: view.nativeRead.meta, collection: view.nativeRead.collection, engine: &nativeEngineVersion{allocator: observedAllocator}}
+	wantRetainedCharge, ok := nativeScalarForwardCharge(q, true)
+	if !ok || wantRetainedCharge == 0 {
+		t.Fatal("invalid optional retention charge", wantRetainedCharge)
+	}
+	nativeScalarForwardPublish(optionalRead, q)
 	state := view.nativeRead.collection
-	if state.scalarForwardCount != 0 || state.scalarForwardPlans != nil || before.ReservedBytes != after.ReservedBytes || before.ExternalLeases != after.ExternalLeases || !ids.contains("a") || forward.count != 1 {
-		t.Fatalf("optional refusal altered source/parent: %+v %+v", before, after)
+	if observedAllocator.calls != 1 || observedAllocator.bytes != wantRetainedCharge || !ids.contains("a") || forward.count != 1 {
+		t.Fatal("optional retention changed original admission or source", observedAllocator.calls, observedAllocator.bytes, wantRetainedCharge)
+	}
+	if observedAllocator.err != nil {
+		if !errors.Is(observedAllocator.err, memtable.ErrCOWCapacity) || observedAllocator.lease != nil || state.scalarForwardCount != 0 || state.scalarForwardPlans != nil || state.scalarForwardLease != nil || state.scalarForwardBytes != 0 {
+			t.Fatal("optional retention refusal changed retained ownership", observedAllocator.err)
+		}
+	} else if observedAllocator.lease == nil || state.scalarForwardLease != observedAllocator.lease || state.scalarForwardCount != 1 || state.scalarForwardBytes != wantRetainedCharge {
+		t.Fatal("successful original admission did not own retained backing")
 	}
 	blocker.Close()
+	blocker = nil
 	nativeScalarForwardPublish(view.nativeRead, q)
 	var stats HybridSearchStats
 	cached := state.scalarForwardGet(q, &stats)
@@ -305,36 +501,152 @@ func TestNativeScalarForwardOptionalRefusalAndBound(t *testing.T) {
 	if !cached.ids.contains("a") || cached.forward.sorted[0] == 999 || len(cached.forward.ordinals) != 1 {
 		t.Fatal("retained composite aliases operation backing")
 	}
-	// Under exhausted real parent, the borrowed forward plan succeeds while the
-	// original uncached constructor still refuses its full original allocation.
+	// Observe the original admission without changing its result or replacing
+	// real parent pressure. Full ReservedBytes is only a snapshot: the original
+	// worker can refund cleanup and admission can reclaim idle read scratch.
+	// The retained macOS RED did not capture these discriminators.
+	var admissionCalls, admissionBytes, admissionAcceptedBytes uint64
+	var admissionErr error
+	var watchUncached, uncachedFirstCall bool
+	var uncachedFirstBytes uint64
+	var uncachedFirstErr error
+	originalAdmit := view.catalog.nativeText.admit
+	defer func() { view.catalog.nativeText.admit = originalAdmit }()
+	view.catalog.nativeText.admit = func(n uint64) error {
+		admissionCalls++
+		admissionBytes += n
+		admissionErr = originalAdmit(n)
+		if admissionErr == nil {
+			admissionAcceptedBytes += n
+		}
+		if watchUncached && !uncachedFirstCall {
+			uncachedFirstCall, uncachedFirstBytes, uncachedFirstErr = true, n, admissionErr
+		}
+		return admissionErr
+	}
+	forwardCharge, chargeErr := nativeTextForwardIdentityCharge(cached.ids, 1)
+	if chargeErr != nil || forwardCharge == 0 {
+		t.Fatalf("expected nonzero original forward charge: %d %v", forwardCharge, chargeErr)
+	}
+	// Pressure the real parent again. Borrowing must skip original admission;
+	// an uncached request must follow its actual original admission result.
+	// A full snapshot cannot guarantee that a later request will be refused.
 	blocker, err = allocator.AdmitNativeBytes(0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer blocker.Close()
 	if err = blocker.Resize(budget.Limits().MaxInFlightBytes - budget.Stats().ReservedBytes); err != nil {
 		t.Fatal(err)
 	}
-	originalCharged := scratch.charged
-	parentBefore := budget.Stats()
-	var refusedStats HybridSearchStats
-	if p := nativeScalarForwardLookup(view.nativeRead, "content", []HybridScalarFilter{{IndexName: "tenant", Value: "b"}}, plan.scalarLookupLimit, plan.scalarAggregateLimit, &refusedStats); p != nil {
-		t.Fatal("exhausted optional key unexpectedly hit")
+	pressureLimits := budget.Limits()
+	parentBeforeMiss := budget.Stats()
+	if work != nil && parentBeforeMiss.ReservedBytes != pressureLimits.MaxInFlightBytes {
+		t.Fatalf("selected schedule did not retain exact full-parent pressure: %+v", parentBeforeMiss)
 	}
-	parentAfter := budget.Stats()
-	if scratch.charged != originalCharged || parentBefore.ReservedBytes != parentAfter.ReservedBytes || parentBefore.ExternalLeases != parentAfter.ExternalLeases {
-		t.Fatal("optional key refusal consumed original miss headroom", originalCharged, scratch.charged, parentBefore, parentAfter)
+	originalCharged := scratch.charged
+	optionalCalls := observedAllocator.calls
+	var refusedStats HybridSearchStats
+	if p := nativeScalarForwardLookup(optionalRead, "content", []HybridScalarFilter{{IndexName: "tenant", Value: "b"}}, plan.scalarLookupLimit, plan.scalarAggregateLimit, &refusedStats); p != nil {
+		t.Fatal("different optional key unexpectedly hit")
+	}
+	if observedAllocator.calls != optionalCalls+1 || observedAllocator.bytes == 0 || scratch.charged != originalCharged {
+		t.Fatal("optional key changed original admission or miss charge", observedAllocator.calls, optionalCalls, originalCharged, scratch.charged)
+	}
+	if observedAllocator.err != nil {
+		if !errors.Is(observedAllocator.err, memtable.ErrCOWCapacity) || observedAllocator.lease != nil {
+			t.Fatal("unexpected optional key admission result", observedAllocator.err)
+		}
+	} else if observedAllocator.lease == nil || !errors.Is(observedAllocator.lease.Resize(0), memtable.ErrCOWClosed) {
+		// A successful speculative key must scrub and close its own receipt
+		// before returning the miss; unrelated global refunds cannot prove this.
+		t.Fatal("optional key miss retained its independent receipt")
+	}
+	parentAfterMiss := budget.Stats()
+	if work != nil && (parentBeforeMiss.ReservedBytes != parentAfterMiss.ReservedBytes || parentBeforeMiss.ExternalLeases != parentAfterMiss.ExternalLeases || scratch.charged != originalCharged) {
+		t.Fatalf("optional miss changed held pressure before owner release: before=%+v after=%+v scratch=%d->%d", parentBeforeMiss, parentAfterMiss, originalCharged, scratch.charged)
 	}
 	borrowed := cached.ids
 	borrowed.forwardPlan = cached
+	borrowCharged := scratch.charged
+	borrowCalls := admissionCalls
 	if got, err := newTextV2SearchOrdinalAllowSet(view.nativeRead.capture.Snapshot(), view.catalog, ctx, borrowed); err != nil || got != &cached.forward {
-		t.Fatal("validated forward reuse missed", err)
+		t.Fatalf("validated forward reuse missed: err=%v parent=%+v charged=%d admission_calls=%d admission_bytes=%d admission_err=%v", err, budget.Stats(), scratch.charged, admissionCalls, admissionBytes, admissionErr)
 	}
-	if _, err := newTextV2SearchOrdinalAllowSet(view.nativeRead.capture.Snapshot(), view.catalog, ctx, cached.ids); err == nil {
-		t.Fatal("uncached forward constructor bypassed original parent refusal")
+	if admissionCalls != borrowCalls || scratch.charged != borrowCharged {
+		t.Fatalf("validated forward reuse attempted original admission: calls=%d->%d charged=%d->%d", borrowCalls, admissionCalls, borrowCharged, scratch.charged)
+	}
+	var ownerResult scalarForwardCleanupResult
+	var parentAfterOwner memtable.COWStats
+	if work != nil {
+		beforeRelease := budget.Stats()
+		if beforeRelease != parentAfterMiss || scratch.charged != borrowCharged {
+			t.Fatalf("validated borrow changed held parent before selected release: before=%+v after=%+v", parentAfterMiss, beforeRelease)
+		}
+		work.beforeFinish.release()
+		select {
+		case ownerResult = <-work.ledger.done:
+		case <-time.After(10 * time.Second):
+			t.Fatal("selected original cleanup/refund did not complete within its finite deadline")
+		}
+		parentAfterOwner = budget.Stats()
+		if ownerResult.err != nil || ownerResult.finishCalls != 1 || ownerResult.refundCalls != 1 || ownerResult.beforeFinish != beforeRelease || ownerResult.afterFinish != ownerResult.beforeRefund || ownerResult.afterRefund != parentAfterOwner || budget.Limits() != pressureLimits {
+			t.Fatalf("incomplete original-owner cleanup ledger: %+v before=%+v after=%+v", ownerResult, beforeRelease, parentAfterOwner)
+		}
+		if parentAfterOwner.ReservedBytes >= beforeRelease.ReservedBytes || parentAfterOwner.TotalBytes > beforeRelease.TotalBytes || parentAfterOwner.ExternalLeases >= beforeRelease.ExternalLeases || parentAfterOwner.ReservedBytes > pressureLimits.MaxInFlightBytes || pressureLimits.MaxInFlightBytes-parentAfterOwner.ReservedBytes < forwardCharge {
+			t.Fatalf("selected original owner did not supply sufficient positive headroom: %+v charge=%d", ownerResult, forwardCharge)
+		}
+		t.Logf("constructed original-owner schedule: finish=%+v -> %+v refund=%+v -> %+v", ownerResult.beforeFinish, ownerResult.afterFinish, ownerResult.beforeRefund, ownerResult.afterRefund)
+	}
+	uncachedCharged := scratch.charged
+	uncachedCalls, uncachedAccepted := admissionCalls, admissionAcceptedBytes
+	watchUncached = true
+	uncached, uncachedErr := newTextV2SearchOrdinalAllowSet(view.nativeRead.capture.Snapshot(), view.catalog, ctx, cached.ids)
+	watchUncached = false
+	if !uncachedFirstCall || uncachedFirstBytes != forwardCharge || scratch.charged-uncachedCharged != admissionAcceptedBytes-uncachedAccepted {
+		t.Fatalf("uncached forward skipped exact original admission or charge ledger: first=%t bytes=%d want=%d calls=%d->%d charged=%d->%d accepted=%d->%d", uncachedFirstCall, uncachedFirstBytes, forwardCharge, uncachedCalls, admissionCalls, uncachedCharged, scratch.charged, uncachedAccepted, admissionAcceptedBytes)
+	}
+	if uncachedFirstErr != nil {
+		if !errors.Is(uncachedFirstErr, memtable.ErrCOWCapacity) || uncachedErr != uncachedFirstErr || uncached != nil || admissionCalls != uncachedCalls+1 || scratch.charged != uncachedCharged {
+			t.Fatal("uncached forward changed original preallocation refusal", uncachedErr, uncachedFirstErr, uncachedCharged, scratch.charged)
+		}
+	} else if uncachedErr != nil {
+		// Once forward admission succeeds, original storage/record admission
+		// may still refuse. Retain accepted scratch charges; never net them
+		// against unrelated owners or claim a failed constructor was free.
+		if !errors.Is(uncachedErr, memtable.ErrCOWCapacity) || uncachedErr != admissionErr || uncached != nil {
+			t.Fatal("uncached forward changed later original refusal", uncachedErr, admissionErr)
+		}
+	} else {
+		if uncached == nil || uncached == &cached.forward || uncached.count != cached.forward.count || uncached.all != cached.forward.all || len(uncached.ordinals) != len(cached.forward.ordinals) || len(uncached.sorted) != len(cached.forward.sorted) {
+			t.Fatal("uncached forward changed successful original construction")
+		}
+		for i, ordinal := range cached.forward.sorted {
+			if uncached.sorted[i] != ordinal {
+				t.Fatal("uncached forward changed validated ordinal order", i)
+			}
+		}
+		for ordinal, identity := range cached.forward.ordinals {
+			if got, ok := uncached.ordinals[ordinal]; !ok || got != identity {
+				t.Fatal("uncached forward disagrees with retained validated identities", ordinal)
+			}
+		}
+	}
+	if work != nil {
+		accepted := admissionAcceptedBytes - uncachedAccepted
+		afterAdmission, want := budget.Stats(), parentAfterOwner
+		want.TotalBytes += accepted
+		want.ReservedBytes += accepted
+		want.ExternalBytes += accepted
+		// Peak is a high-water observation, not a live receipt.
+		afterAdmission.PeakBytes, want.PeakBytes = 0, 0
+		if uncachedFirstErr != nil || uncachedErr != nil || accepted < forwardCharge || afterAdmission != want || budget.Limits() != pressureLimits {
+			t.Fatalf("original admission did not reconcile selected-owner success: first=%v err=%v accepted=%d parent=%+v want=%+v", uncachedFirstErr, uncachedErr, accepted, afterAdmission, want)
+		}
+		t.Logf("original uncached admission: first_bytes=%d calls=%d accepted_bytes=%d scratch=%d->%d parent=%+v", uncachedFirstBytes, admissionCalls-uncachedCalls, accepted, uncachedCharged, scratch.charged, budget.Stats())
 	}
 	blocker.Close()
-	// The same original scalar miss remains available after optional key refusal.
+	blocker = nil
+	// The same original scalar miss remains available after optional key work.
 	lookup := hybridScalarLookupView{context: context.Background(), catalog: view.catalog}
 	fallback, input, truncated, err := lookup.leafProbeBeforeCopy(HybridScalarFilter{IndexName: "tenant", Value: "b"}, 8, 9, nil, nil)
 	if err != nil || truncated || input != 1 || !fallback.contains("b") {
@@ -410,5 +722,194 @@ func TestNativeScalarForwardPublicSchemaAndPhysicalRefresh(t *testing.T) {
 	}
 	if _, err = c.SearchHybrid(opts); !errors.Is(err, ErrHybridSearchIndexUnavailable) {
 		t.Fatal("dropped scalar declaration reused", err)
+	}
+}
+
+// This deterministic control isolates provenance validation and the original
+// admission boundary. It supplements, rather than replaces, the public shared
+// budget/pressure/lifecycle fixture above. A nil snapshot is deliberate: every
+// refusal must be returned before any storage lookup or forward allocation.
+func TestNativeScalarForwardOriginalAdmissionRefusal(t *testing.T) {
+	refusal := fmt.Errorf("deterministic forward admission: %w", memtable.ErrCOWCapacity)
+	local, err := newLocalIDIndex(1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	local.insert("a", 0)
+	ids := nativeScalarIDs(local)
+	status := textV2IndexStatusValue{FormatVersion: 2, RootGeneration: 7}
+	owner := &nativeCollectionState{scalarForwardPlans: new([nativeScalarPlanCacheMaxEntries]nativeScalarForwardPlan), scalarForwardCount: 1}
+	published := &owner.scalarForwardPlans[0]
+	*published = nativeScalarForwardPlan{textIndex: "content", status: status, ids: ids, published: true}
+	ctx := &textV2SearchContext{indexName: "content", status: status}
+	var calls uint64
+	var charged uint64
+	catalog := &collectionCatalog{nativeText: &nativeTextCatalog{
+		read: &NativeJSONRead{collection: owner},
+		admit: func(n uint64) error {
+			calls++
+			charged = n
+			return refusal
+		},
+	}}
+	borrowed := ids
+	borrowed.forwardPlan = published
+	if got, err := newTextV2SearchOrdinalAllowSet(nil, catalog, ctx, borrowed); err != nil || got != &published.forward || calls != 0 {
+		t.Fatalf("validated owned provenance must borrow without admission: got=%p want=%p err=%v calls=%d", got, &published.forward, err, calls)
+	}
+	foreign := *published
+	for _, name := range []string{"no-provenance", "unpublished", "foreign-owner", "wrong-index", "wrong-status"} {
+		t.Run(name, func(t *testing.T) {
+			calls, charged = 0, 0
+			original := ids
+			saved := *published
+			defer func() { *published = saved }()
+			// Mutate the actual owned slot so wrong index/status/publication
+			// cannot pass merely because a copied pointer has a foreign owner.
+			original.forwardPlan = published
+			switch name {
+			case "no-provenance":
+				original.forwardPlan = nil
+			case "unpublished":
+				published.published = false
+			case "foreign-owner":
+				original.forwardPlan = &foreign
+			case "wrong-index":
+				published.textIndex = "other"
+			case "wrong-status":
+				published.status.RootGeneration++
+			}
+			originalPlan := original.forwardPlan
+			originalPublished := *published
+			want, err := nativeTextForwardIdentityCharge(original, 1)
+			if err != nil || want == 0 {
+				t.Fatalf("invalid original admission charge: %d %v", want, err)
+			}
+			got, err := newTextV2SearchOrdinalAllowSet(nil, catalog, ctx, original)
+			if got != nil || err != refusal || !errors.Is(err, memtable.ErrCOWCapacity) || calls != 1 || charged != want {
+				t.Fatalf("original refusal must precede lookup: got=%p err=%v calls=%d charged=%d want=%d", got, err, calls, charged, want)
+			}
+			if !original.contains("a") || original.len() != 1 || original.forwardPlan != originalPlan || published.published != originalPublished.published || published.status != originalPublished.status || published.textIndex != originalPublished.textIndex {
+				t.Fatal("refusal changed caller identities, provenance or retained entry")
+			}
+		})
+	}
+}
+
+// Unlike the public shared parent above, this real budget has no background
+// owner, idle scratch, queued refund or concurrent caller. Its only external
+// receipts stay held through the denial assertions. It isolates a mandatory
+// capacity refusal, not the unobserved schedule of the original macOS failure.
+func TestNativeScalarForwardHeldParentRefusal(t *testing.T) {
+	budget, err := memtable.NewCOWBudget(memtable.DefaultCOWLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer budget.Close()
+	request, err := budget.AcquireExternal(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer request.Close()
+	blocker, err := budget.AcquireExternal(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blocker.Close()
+	local, err := newLocalIDIndex(1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	local.insert("a", 0)
+	status := textV2IndexStatusValue{FormatVersion: 2, RootGeneration: 7}
+	q := &nativeScalarForwardPlan{
+		textIndex: "content", ids: nativeScalarIDs(local), status: status,
+		forward: textV2SearchOrdinalAllowSet{
+			ordinals: map[uint64]textV2SearchForwardIdentity{0: {documentID: "a"}},
+			sorted:   []uint64{0}, count: 1,
+		},
+	}
+	owner := &nativeCollectionState{}
+	read := &NativeJSONRead{collection: owner, engine: &nativeEngineVersion{allocator: budget}}
+	defer func() {
+		// This isolated owner has no native generation or cleanup worker. Drop
+		// its retained fields before returning its original allocation receipt.
+		lease := owner.scalarForwardLease
+		owner.scalarForwardPlans, owner.scalarForwardLease, owner.scalarForwardRefund = nil, nil, nil
+		owner.scalarForwardCount, owner.scalarForwardBytes = 0, 0
+		lease.Close()
+	}()
+	if err = blocker.Resize(budget.Limits().MaxInFlightBytes - budget.Stats().ReservedBytes); err != nil {
+		t.Fatal(err)
+	}
+	full := budget.Stats()
+	if full.ReservedBytes != budget.Limits().MaxInFlightBytes {
+		t.Fatal("isolated parent not exactly full", full)
+	}
+	nativeScalarForwardPublish(read, q)
+	if owner.scalarForwardCount != 0 || owner.scalarForwardPlans != nil || owner.scalarForwardLease != nil || owner.scalarForwardBytes != 0 || budget.Stats() != full || !q.ids.contains("a") || q.forward.count != 1 {
+		t.Fatal("mandatory optional refusal changed source or original parent")
+	}
+	// Release only the held blocker charge, then retain the same original
+	// composite. No retry loop, replacement budget or alternate publication.
+	if err = blocker.Resize(0); err != nil {
+		t.Fatal(err)
+	}
+	nativeScalarForwardPublish(read, q)
+	if owner.scalarForwardCount != 1 || owner.scalarForwardPlans == nil || owner.scalarForwardLease == nil {
+		t.Fatal("same parent did not admit retained composite after blocker shrink")
+	}
+	published := &owner.scalarForwardPlans[0]
+	if !published.published || !published.ids.contains("a") || published.forward.count != 1 {
+		t.Fatal("invalid retained composite")
+	}
+	if err = blocker.Resize(budget.Limits().MaxInFlightBytes - budget.Stats().ReservedBytes); err != nil {
+		t.Fatal(err)
+	}
+	full = budget.Stats()
+	if full.ReservedBytes != budget.Limits().MaxInFlightBytes {
+		t.Fatal("isolated retained parent not exactly full", full)
+	}
+	var calls, charged, requested uint64
+	var originalErr error
+	catalog := &collectionCatalog{nativeText: &nativeTextCatalog{read: read, admit: func(n uint64) error {
+		calls++
+		requested = n
+		originalErr = request.Resize(charged + n)
+		if originalErr == nil {
+			charged += n
+		}
+		return originalErr
+	}}}
+	ctx := &textV2SearchContext{indexName: "content", status: status}
+	borrowed := published.ids
+	borrowed.forwardPlan = published
+	// Nil snapshot makes an unexpected storage lookup fail the witness. Valid
+	// owned provenance must return the exact retained object without admission.
+	if got, err := newTextV2SearchOrdinalAllowSet(nil, catalog, ctx, borrowed); err != nil || got != &published.forward || calls != 0 || budget.Stats() != full {
+		t.Fatal("borrowed forward did not bypass full original parent", got, err, calls)
+	}
+	want, err := nativeTextForwardIdentityCharge(published.ids, 1)
+	if err != nil || want == 0 {
+		t.Fatal("invalid uncached forward charge", want, err)
+	}
+	if got, err := newTextV2SearchOrdinalAllowSet(nil, catalog, ctx, published.ids); got != nil || err != originalErr || !errors.Is(err, memtable.ErrCOWCapacity) || calls != 1 || requested != want || charged != 0 || budget.Stats() != full {
+		t.Fatal("uncached forward did not preserve real original capacity refusal", got, err, originalErr, calls, requested, want, charged)
+	}
+	if !published.ids.contains("a") || published.forward.count != 1 || published.forward.sorted[0] != 0 {
+		t.Fatal("real parent refusal changed retained borrower")
+	}
+	// The original request receipt remains usable: after releasing exactly the
+	// blocker, the same real admission grows by the same amount under its cap.
+	if err = blocker.Resize(0); err != nil {
+		t.Fatal(err)
+	}
+	before := budget.Stats()
+	if err = catalog.nativeText.admit(want); err != nil || charged != want || calls != 2 || requested != want {
+		t.Fatal("same original admission did not recover after blocker shrink", err, charged, calls)
+	}
+	after := budget.Stats()
+	if after.ReservedBytes != before.ReservedBytes+want || after.TotalBytes != before.TotalBytes+want || after.ExternalLeases != before.ExternalLeases {
+		t.Fatal("successful original growth changed receipt ownership", before, after)
 	}
 }

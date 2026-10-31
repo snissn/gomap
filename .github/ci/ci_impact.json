@@ -12,7 +12,7 @@
     "M0 observation is manual diagnostic-only on a separately fixed product; no forecast starts it or replaces failed M0 acceptance.",
     "Bounded maintenance comparison is a manually granted diagnostic on fixed baseline/candidate products; no forecast starts it or establishes cost, M0 or native acceptance."
   ],
-  "discovery_source_sha256": "d3d4daa072d6266cd16bcda71953c7038d38d415b0284d193595437be2c5f5ba",
+  "discovery_source_sha256": "07bf9bd77235e20d012b6c9eb61f43e4d7860f2810ea685a40fa4261426c7ede",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
@@ -2056,7 +2056,7 @@
       "events": {
         "pull_request": null
       },
-      "git_blob": "a1b8db820fa1b0063590d411c7f659b88feb98a6",
+      "git_blob": "c90f9ec9c9ebe92defe997f0758fb0b29ab51a71",
       "jobs": {
         "append_only_snapshot_guardrail": {
           "checkout": [
@@ -2064,8 +2064,17 @@
           ],
           "commands": [
             {
+              "command_sha256": "6cbf7cda2e20c5e729d6fb5e8568f394239bdfc6d18d58fbb3fb336a946336db",
+              "entrypoint": ".github/workflows/read-snapshot-guardrails.yml:31",
+              "env": {
+                "SETUP_GO_CACHE_HIT": "${{ steps.setup_go.outputs.cache-hit }}"
+              },
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Observe dependency cache metadata"
+            },
+            {
               "command_sha256": "d39066d1fdcd198197abbedc9dfba2d822cc9d9a80fe6673a8755f2e801254aa",
-              "entrypoint": ".github/workflows/read-snapshot-guardrails.yml:27",
+              "entrypoint": ".github/workflows/read-snapshot-guardrails.yml:39",
               "invocation": "./scripts/check_read_snapshot_guardrail.sh",
               "name": "Run read-snapshot append-only guardrail"
             }
@@ -2077,7 +2086,7 @@
           "runs_on": "ubuntu-latest"
         }
       },
-      "sha256": "b63c4d34b536ed9220ff35b68e5bc0724799b644371816f199afabf479678ea1"
+      "sha256": "cd73f94a8b9d561fc9a528334124bc930e4d5131cccf7224b0ceffa938e4ec49"
     },
     "redis-bench.yml": {
       "coverage": "existing execution only; triggers/path filters are unchanged",
@@ -2126,7 +2135,7 @@
       "events": {
         "push": null
       },
-      "git_blob": "976fb10c965f0c228fabb623cc432e09ff2056f9",
+      "git_blob": "e189371c224be635358411d41a5f7439d8702e78",
       "jobs": {
         "test": {
           "checkout": [
@@ -2167,7 +2176,10 @@
             },
             {
               "command_sha256": "d081a3acced10dc6ae75746ccf59e0c902abd7974c7c1ba3ea8103c0fed87266",
-              "entrypoint": ".github/workflows/root-tests.yml:80",
+              "entrypoint": ".github/workflows/root-tests.yml:82",
+              "env": {
+                "GOMAP_M3_DIAGNOSTICS_DIR": "${{ runner.temp }}/gomap-m3-diagnostics"
+              },
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
               "name": "Test"
             }
@@ -2214,7 +2226,7 @@
           "runs_on": "${{ matrix.os }}"
         }
       },
-      "sha256": "49b2670b50e750a730582d1c84c408a7608c9327fa07c5dbfe58fda93795757e"
+      "sha256": "adfe014ab21e06388072f09df5a783b3c946950c324728673e1d55fd8139e60d"
     },
     "sparse-catalog-qualification.yml": {
       "coverage": "existing execution only; triggers/path filters are unchanged",
@@ -3168,7 +3180,7 @@
       "events": {
         "push": null
       },
-      "git_blob": "f60b2725f62aa963057a77f922a346526907d070",
+      "git_blob": "2f0dcad2713230dfdf937f5087e496d1c531dcde",
       "jobs": {
         "test": {
           "checkout": [
@@ -3177,14 +3189,14 @@
           "commands": [
             {
               "command_sha256": "3d4b424f6fcd11f530525ddea9a46aeaffec7c883b6c04b6baf7df36bf47800b",
-              "entrypoint": ".github/workflows/unified-bench-tests.yml:31",
+              "entrypoint": ".github/workflows/unified-bench-tests.yml:32",
               "invocation": "go vet ./...",
               "name": "Vet",
               "working-directory": "cmd/unified_bench"
             },
             {
               "command_sha256": "1bb497e3e13a1105cf24e3359fa3ef75de08b66ff8a2839cd7f9ea97824d9eb3",
-              "entrypoint": ".github/workflows/unified-bench-tests.yml:35",
+              "entrypoint": ".github/workflows/unified-bench-tests.yml:36",
               "invocation": "go test ./...",
               "name": "Test",
               "working-directory": "cmd/unified_bench"
@@ -3202,7 +3214,7 @@
           "runs_on": "${{ matrix.os }}"
         }
       },
-      "sha256": "27f858e382f7523a9d045580caba0a1dce27b10715ba3fbf744aba4f9f3104bd"
+      "sha256": "656dd3f08f5b481ab4b9a73de5d4d1f3dc365912a5e36601c74bd049d9693b5c"
     }
   }
 }

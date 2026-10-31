@@ -1,0 +1,709 @@
+{
+  "source": "95c6ff3de473786bd98b692375cfdb9cef951668",
+  "archive_sha256": "21081ee3d89a8ef2babb327ca338badbcd6d1e013d214b4f28cc674f6c31d0c3",
+  "selected": {
+    "cells/durable-B-pair1-gomap/output/treedb_mongo/lifecycle.json": {
+      "archive_path": "cells/durable-B-pair1-gomap/output/treedb_mongo/lifecycle.json",
+      "bytes": 2318,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair1-gomap/output/treedb_mongo/lifecycle.json",
+      "scope": "durable-B/1/gomap",
+      "sha256": "846af1060b4b148c64384db2fbc2860783567f242f308a5ca9090beacbda8a3e",
+      "local": "evidence/selected/cells/durable-B-pair1-gomap/output/treedb_mongo/lifecycle.json"
+    },
+    "cells/durable-B-pair1-gomap/output/treedb_mongo/load.actual-command.json": {
+      "archive_path": "cells/durable-B-pair1-gomap/output/treedb_mongo/load.actual-command.json",
+      "bytes": 931,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair1-gomap/output/treedb_mongo/load.actual-command.json",
+      "scope": "durable-B/1/gomap",
+      "sha256": "a440902895e88b0911c1a0d60faa3a8ec09bb07c076742fcee716573a9531106",
+      "local": "evidence/selected/cells/durable-B-pair1-gomap/output/treedb_mongo/load.actual-command.json"
+    },
+    "cells/durable-B-pair1-gomap/output/treedb_mongo/load.close.json": {
+      "archive_path": "cells/durable-B-pair1-gomap/output/treedb_mongo/load.close.json",
+      "bytes": 1244,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair1-gomap/output/treedb_mongo/load.close.json",
+      "scope": "durable-B/1/gomap",
+      "sha256": "bf9f83a260b03a89e1a433f36629fe1b20db6e563bcefe04af2d79e7f6f67e4e",
+      "local": "evidence/selected/cells/durable-B-pair1-gomap/output/treedb_mongo/load.close.json"
+    },
+    "cells/durable-B-pair1-gomap/output/treedb_mongo/load.launch.json": {
+      "archive_path": "cells/durable-B-pair1-gomap/output/treedb_mongo/load.launch.json",
+      "bytes": 821133,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair1-gomap/output/treedb_mongo/load.launch.json",
+      "scope": "durable-B/1/gomap",
+      "sha256": "82c7dd701fee54e410c150e03e78e8a01b3ba52100c275e465e99094b65166d8",
+      "local": "evidence/selected/cells/durable-B-pair1-gomap/output/treedb_mongo/load.launch.json"
+    },
+    "cells/durable-B-pair1-gomap/output/treedb_mongo/load.out": {
+      "archive_path": "cells/durable-B-pair1-gomap/output/treedb_mongo/load.out",
+      "bytes": 2768,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair1-gomap/output/treedb_mongo/load.out",
+      "scope": "durable-B/1/gomap",
+      "sha256": "b6104e9705e8990d8b7d2a44ed0a3ed044667c2e1578c35bb11966a4a3de08a5",
+      "local": "evidence/selected/cells/durable-B-pair1-gomap/output/treedb_mongo/load.out"
+    },
+    "cells/durable-B-pair1-gomap/output/treedb_mongo/run_1.actual-command.json": {
+      "archive_path": "cells/durable-B-pair1-gomap/output/treedb_mongo/run_1.actual-command.json",
+      "bytes": 930,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair1-gomap/output/treedb_mongo/run_1.actual-command.json",
+      "scope": "durable-B/1/gomap",
+      "sha256": "d3ccb0cb267b5b420452a248d36f9f7c7ee0b8a904679a428d4afe438c7bd908",
+      "local": "evidence/selected/cells/durable-B-pair1-gomap/output/treedb_mongo/run_1.actual-command.json"
+    },
+    "cells/durable-B-pair1-gomap/output/treedb_mongo/run_1.close.json": {
+      "archive_path": "cells/durable-B-pair1-gomap/output/treedb_mongo/run_1.close.json",
+      "bytes": 1244,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair1-gomap/output/treedb_mongo/run_1.close.json",
+      "scope": "durable-B/1/gomap",
+      "sha256": "6e8d216761a4ec4c9b7b6fb0105cad62aef34fa72ea444e0a76217091910773c",
+      "local": "evidence/selected/cells/durable-B-pair1-gomap/output/treedb_mongo/run_1.close.json"
+    },
+    "cells/durable-B-pair1-gomap/output/treedb_mongo/run_1.launch.json": {
+      "archive_path": "cells/durable-B-pair1-gomap/output/treedb_mongo/run_1.launch.json",
+      "bytes": 27655,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair1-gomap/output/treedb_mongo/run_1.launch.json",
+      "scope": "durable-B/1/gomap",
+      "sha256": "7a18e3208ec49adb33ee8b637ba6d1d7ff4a0a2425bcad47f89dc79dc9b44606",
+      "local": "evidence/selected/cells/durable-B-pair1-gomap/output/treedb_mongo/run_1.launch.json"
+    },
+    "cells/durable-B-pair1-gomap/output/treedb_mongo/run_1.out": {
+      "archive_path": "cells/durable-B-pair1-gomap/output/treedb_mongo/run_1.out",
+      "bytes": 1315,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair1-gomap/output/treedb_mongo/run_1.out",
+      "scope": "durable-B/1/gomap",
+      "sha256": "dd8d83c57093919d3b02556dfefe3761f72604527f1f19cbe0feb90501517d2a",
+      "local": "evidence/selected/cells/durable-B-pair1-gomap/output/treedb_mongo/run_1.out"
+    },
+    "cells/durable-B-pair1-gomap/output/treedb_mongo/runtime.json": {
+      "archive_path": "cells/durable-B-pair1-gomap/output/treedb_mongo/runtime.json",
+      "bytes": 954,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair1-gomap/output/treedb_mongo/runtime.json",
+      "scope": "durable-B/1/gomap",
+      "sha256": "371816f646f608c019501593d0d0b994239df9690628e3297b4acb405ab918d8",
+      "local": "evidence/selected/cells/durable-B-pair1-gomap/output/treedb_mongo/runtime.json"
+    },
+    "cells/durable-B-pair1-gomap/output/treedb_mongo/server.evidence/owner.before-close.json": {
+      "archive_path": "cells/durable-B-pair1-gomap/output/treedb_mongo/server.evidence/owner.before-close.json",
+      "bytes": 381199,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair1-gomap/output/treedb_mongo/server.evidence/owner.before-close.json",
+      "scope": "durable-B/1/gomap",
+      "sha256": "3cb71cb1334d0215472ee18134700c99180065fa36d96b18defe151f92d390e8",
+      "local": "evidence/selected/cells/durable-B-pair1-gomap/output/treedb_mongo/server.evidence/owner.before-close.json"
+    },
+    "cells/durable-B-pair1-gomap/output/treedb_mongo/server.evidence/owner.checkpoint.json": {
+      "archive_path": "cells/durable-B-pair1-gomap/output/treedb_mongo/server.evidence/owner.checkpoint.json",
+      "bytes": 389481,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair1-gomap/output/treedb_mongo/server.evidence/owner.checkpoint.json",
+      "scope": "durable-B/1/gomap",
+      "sha256": "70b2b79874cd7d1f47e374694f3026faed3248d03bac8f326ae72836f88bf13a",
+      "local": "evidence/selected/cells/durable-B-pair1-gomap/output/treedb_mongo/server.evidence/owner.checkpoint.json"
+    },
+    "cells/durable-B-pair1-gomap/output/treedb_mongo/server.evidence/owner.close.json": {
+      "archive_path": "cells/durable-B-pair1-gomap/output/treedb_mongo/server.evidence/owner.close.json",
+      "bytes": 507,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair1-gomap/output/treedb_mongo/server.evidence/owner.close.json",
+      "scope": "durable-B/1/gomap",
+      "sha256": "f22d785793b042bc26c704fdfd483711d1321af7a0d5893b43d80cef7e4c9a30",
+      "local": "evidence/selected/cells/durable-B-pair1-gomap/output/treedb_mongo/server.evidence/owner.close.json"
+    },
+    "cells/durable-B-pair1-gomap/output/treedb_mongo/server.evidence/owner.open.json": {
+      "archive_path": "cells/durable-B-pair1-gomap/output/treedb_mongo/server.evidence/owner.open.json",
+      "bytes": 373633,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair1-gomap/output/treedb_mongo/server.evidence/owner.open.json",
+      "scope": "durable-B/1/gomap",
+      "sha256": "5953404b51768b938cf7437c5c57771a1f27ad412662a4e567b459f5abdd8fc3",
+      "local": "evidence/selected/cells/durable-B-pair1-gomap/output/treedb_mongo/server.evidence/owner.open.json"
+    },
+    "cells/durable-B-pair2-gomap/output/treedb_mongo/lifecycle.json": {
+      "archive_path": "cells/durable-B-pair2-gomap/output/treedb_mongo/lifecycle.json",
+      "bytes": 2320,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair2-gomap/output/treedb_mongo/lifecycle.json",
+      "scope": "durable-B/2/gomap",
+      "sha256": "db5d6f574a25b2839cc5fe3786079ab3d5f2f3188819cbb28d99d2b515c7d83d",
+      "local": "evidence/selected/cells/durable-B-pair2-gomap/output/treedb_mongo/lifecycle.json"
+    },
+    "cells/durable-B-pair2-gomap/output/treedb_mongo/load.actual-command.json": {
+      "archive_path": "cells/durable-B-pair2-gomap/output/treedb_mongo/load.actual-command.json",
+      "bytes": 931,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair2-gomap/output/treedb_mongo/load.actual-command.json",
+      "scope": "durable-B/2/gomap",
+      "sha256": "8dedebab113790b9962636477b7a04554ab5f23a6b84cb3eada13f5ace6f9165",
+      "local": "evidence/selected/cells/durable-B-pair2-gomap/output/treedb_mongo/load.actual-command.json"
+    },
+    "cells/durable-B-pair2-gomap/output/treedb_mongo/load.close.json": {
+      "archive_path": "cells/durable-B-pair2-gomap/output/treedb_mongo/load.close.json",
+      "bytes": 1245,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair2-gomap/output/treedb_mongo/load.close.json",
+      "scope": "durable-B/2/gomap",
+      "sha256": "323d492cecac780646f08b30ad499eff9f6ad2b588d8d03c15e855d13c0655c2",
+      "local": "evidence/selected/cells/durable-B-pair2-gomap/output/treedb_mongo/load.close.json"
+    },
+    "cells/durable-B-pair2-gomap/output/treedb_mongo/load.launch.json": {
+      "archive_path": "cells/durable-B-pair2-gomap/output/treedb_mongo/load.launch.json",
+      "bytes": 821143,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair2-gomap/output/treedb_mongo/load.launch.json",
+      "scope": "durable-B/2/gomap",
+      "sha256": "d06071e887f163f4ec7ea9516fc39fdee04161a97089cd828a134743af71ff19",
+      "local": "evidence/selected/cells/durable-B-pair2-gomap/output/treedb_mongo/load.launch.json"
+    },
+    "cells/durable-B-pair2-gomap/output/treedb_mongo/load.out": {
+      "archive_path": "cells/durable-B-pair2-gomap/output/treedb_mongo/load.out",
+      "bytes": 2766,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair2-gomap/output/treedb_mongo/load.out",
+      "scope": "durable-B/2/gomap",
+      "sha256": "26e0c891652d1953ea7170535960bc9cfaa7a04bd403b03005dfba0fcc662da1",
+      "local": "evidence/selected/cells/durable-B-pair2-gomap/output/treedb_mongo/load.out"
+    },
+    "cells/durable-B-pair2-gomap/output/treedb_mongo/run_1.actual-command.json": {
+      "archive_path": "cells/durable-B-pair2-gomap/output/treedb_mongo/run_1.actual-command.json",
+      "bytes": 930,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair2-gomap/output/treedb_mongo/run_1.actual-command.json",
+      "scope": "durable-B/2/gomap",
+      "sha256": "c3dde4e06dee20c6ecd9780a828c99bc6d6bef14cbdfa9c99c358357894d18a6",
+      "local": "evidence/selected/cells/durable-B-pair2-gomap/output/treedb_mongo/run_1.actual-command.json"
+    },
+    "cells/durable-B-pair2-gomap/output/treedb_mongo/run_1.close.json": {
+      "archive_path": "cells/durable-B-pair2-gomap/output/treedb_mongo/run_1.close.json",
+      "bytes": 1245,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair2-gomap/output/treedb_mongo/run_1.close.json",
+      "scope": "durable-B/2/gomap",
+      "sha256": "d896c0037f3f6f0970f2f37f053cd8b620bb9e4dacff8f91badd7e52a873f839",
+      "local": "evidence/selected/cells/durable-B-pair2-gomap/output/treedb_mongo/run_1.close.json"
+    },
+    "cells/durable-B-pair2-gomap/output/treedb_mongo/run_1.launch.json": {
+      "archive_path": "cells/durable-B-pair2-gomap/output/treedb_mongo/run_1.launch.json",
+      "bytes": 27655,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair2-gomap/output/treedb_mongo/run_1.launch.json",
+      "scope": "durable-B/2/gomap",
+      "sha256": "a05af7e7aef2cc0dccf949cd2a32f5f2b97e27f9d12c29d33f04c45978ae8faf",
+      "local": "evidence/selected/cells/durable-B-pair2-gomap/output/treedb_mongo/run_1.launch.json"
+    },
+    "cells/durable-B-pair2-gomap/output/treedb_mongo/run_1.out": {
+      "archive_path": "cells/durable-B-pair2-gomap/output/treedb_mongo/run_1.out",
+      "bytes": 1314,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair2-gomap/output/treedb_mongo/run_1.out",
+      "scope": "durable-B/2/gomap",
+      "sha256": "68680bda68466421cdb833d336e901671092ba79150e3c1a798073b441f88a1c",
+      "local": "evidence/selected/cells/durable-B-pair2-gomap/output/treedb_mongo/run_1.out"
+    },
+    "cells/durable-B-pair2-gomap/output/treedb_mongo/runtime.json": {
+      "archive_path": "cells/durable-B-pair2-gomap/output/treedb_mongo/runtime.json",
+      "bytes": 954,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair2-gomap/output/treedb_mongo/runtime.json",
+      "scope": "durable-B/2/gomap",
+      "sha256": "5c4a20ee2e0352d7b3f140a781d71e7d51d603742efd968e255c39fbf896f226",
+      "local": "evidence/selected/cells/durable-B-pair2-gomap/output/treedb_mongo/runtime.json"
+    },
+    "cells/durable-B-pair2-gomap/output/treedb_mongo/server.evidence/owner.before-close.json": {
+      "archive_path": "cells/durable-B-pair2-gomap/output/treedb_mongo/server.evidence/owner.before-close.json",
+      "bytes": 381182,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair2-gomap/output/treedb_mongo/server.evidence/owner.before-close.json",
+      "scope": "durable-B/2/gomap",
+      "sha256": "999f9756eb2e7bfe55dc4e79db8e8f75d9aef2d38ff14ed4e57886ba55359c0a",
+      "local": "evidence/selected/cells/durable-B-pair2-gomap/output/treedb_mongo/server.evidence/owner.before-close.json"
+    },
+    "cells/durable-B-pair2-gomap/output/treedb_mongo/server.evidence/owner.checkpoint.json": {
+      "archive_path": "cells/durable-B-pair2-gomap/output/treedb_mongo/server.evidence/owner.checkpoint.json",
+      "bytes": 389480,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair2-gomap/output/treedb_mongo/server.evidence/owner.checkpoint.json",
+      "scope": "durable-B/2/gomap",
+      "sha256": "4d232717e144f5cc9b3f74c4cfb874815717dd2baf86763819b0f1b023529dff",
+      "local": "evidence/selected/cells/durable-B-pair2-gomap/output/treedb_mongo/server.evidence/owner.checkpoint.json"
+    },
+    "cells/durable-B-pair2-gomap/output/treedb_mongo/server.evidence/owner.close.json": {
+      "archive_path": "cells/durable-B-pair2-gomap/output/treedb_mongo/server.evidence/owner.close.json",
+      "bytes": 508,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair2-gomap/output/treedb_mongo/server.evidence/owner.close.json",
+      "scope": "durable-B/2/gomap",
+      "sha256": "66f60f1e660cbb0a7db2d4d469a174addeae9d00596e64706729b45508b7225d",
+      "local": "evidence/selected/cells/durable-B-pair2-gomap/output/treedb_mongo/server.evidence/owner.close.json"
+    },
+    "cells/durable-B-pair2-gomap/output/treedb_mongo/server.evidence/owner.open.json": {
+      "archive_path": "cells/durable-B-pair2-gomap/output/treedb_mongo/server.evidence/owner.open.json",
+      "bytes": 373633,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair2-gomap/output/treedb_mongo/server.evidence/owner.open.json",
+      "scope": "durable-B/2/gomap",
+      "sha256": "d39a4c2da54c137dd48c4072757ec45732663db0b7b282c5f4020096d7f38f47",
+      "local": "evidence/selected/cells/durable-B-pair2-gomap/output/treedb_mongo/server.evidence/owner.open.json"
+    },
+    "cells/durable-B-pair3-gomap/output/treedb_mongo/lifecycle.json": {
+      "archive_path": "cells/durable-B-pair3-gomap/output/treedb_mongo/lifecycle.json",
+      "bytes": 2320,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair3-gomap/output/treedb_mongo/lifecycle.json",
+      "scope": "durable-B/3/gomap",
+      "sha256": "c262cee63c95882ce2034183c50a6355811bb9879435f19d40d74dc3ca45a8ee",
+      "local": "evidence/selected/cells/durable-B-pair3-gomap/output/treedb_mongo/lifecycle.json"
+    },
+    "cells/durable-B-pair3-gomap/output/treedb_mongo/load.actual-command.json": {
+      "archive_path": "cells/durable-B-pair3-gomap/output/treedb_mongo/load.actual-command.json",
+      "bytes": 931,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair3-gomap/output/treedb_mongo/load.actual-command.json",
+      "scope": "durable-B/3/gomap",
+      "sha256": "a1c17a20133b9e17c34bc33d3f52639381927a20ae20a689c7727ced0e525cdf",
+      "local": "evidence/selected/cells/durable-B-pair3-gomap/output/treedb_mongo/load.actual-command.json"
+    },
+    "cells/durable-B-pair3-gomap/output/treedb_mongo/load.close.json": {
+      "archive_path": "cells/durable-B-pair3-gomap/output/treedb_mongo/load.close.json",
+      "bytes": 1244,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair3-gomap/output/treedb_mongo/load.close.json",
+      "scope": "durable-B/3/gomap",
+      "sha256": "e7df597c99967549ea47865ece6497184c8a0a0b3a49b26d8f5bfb151e8a4097",
+      "local": "evidence/selected/cells/durable-B-pair3-gomap/output/treedb_mongo/load.close.json"
+    },
+    "cells/durable-B-pair3-gomap/output/treedb_mongo/load.launch.json": {
+      "archive_path": "cells/durable-B-pair3-gomap/output/treedb_mongo/load.launch.json",
+      "bytes": 812272,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair3-gomap/output/treedb_mongo/load.launch.json",
+      "scope": "durable-B/3/gomap",
+      "sha256": "f92faefb7d2f4cd332e64f711e70162f459e15ec3f525ee8f292ddabc0e46556",
+      "local": "evidence/selected/cells/durable-B-pair3-gomap/output/treedb_mongo/load.launch.json"
+    },
+    "cells/durable-B-pair3-gomap/output/treedb_mongo/load.out": {
+      "archive_path": "cells/durable-B-pair3-gomap/output/treedb_mongo/load.out",
+      "bytes": 2768,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair3-gomap/output/treedb_mongo/load.out",
+      "scope": "durable-B/3/gomap",
+      "sha256": "d155e404431cd2e480aaa0aef8300c1576497cee7d2bd6b54e02d202dfa4559a",
+      "local": "evidence/selected/cells/durable-B-pair3-gomap/output/treedb_mongo/load.out"
+    },
+    "cells/durable-B-pair3-gomap/output/treedb_mongo/run_1.actual-command.json": {
+      "archive_path": "cells/durable-B-pair3-gomap/output/treedb_mongo/run_1.actual-command.json",
+      "bytes": 930,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair3-gomap/output/treedb_mongo/run_1.actual-command.json",
+      "scope": "durable-B/3/gomap",
+      "sha256": "07f629fad95f7dc4324bce9ddb38e9a49dcf6d1b5e9cbb94b163393fb2bf5bc5",
+      "local": "evidence/selected/cells/durable-B-pair3-gomap/output/treedb_mongo/run_1.actual-command.json"
+    },
+    "cells/durable-B-pair3-gomap/output/treedb_mongo/run_1.close.json": {
+      "archive_path": "cells/durable-B-pair3-gomap/output/treedb_mongo/run_1.close.json",
+      "bytes": 1245,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair3-gomap/output/treedb_mongo/run_1.close.json",
+      "scope": "durable-B/3/gomap",
+      "sha256": "58090afe1d5eb22dc17b3f76edeffbb0ea7e55c1e8402999357f06ebc58bd8f3",
+      "local": "evidence/selected/cells/durable-B-pair3-gomap/output/treedb_mongo/run_1.close.json"
+    },
+    "cells/durable-B-pair3-gomap/output/treedb_mongo/run_1.launch.json": {
+      "archive_path": "cells/durable-B-pair3-gomap/output/treedb_mongo/run_1.launch.json",
+      "bytes": 27655,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair3-gomap/output/treedb_mongo/run_1.launch.json",
+      "scope": "durable-B/3/gomap",
+      "sha256": "ed82570dd0e8720d5928170784607f6539800d59ea57a59eadbf08fd006241a8",
+      "local": "evidence/selected/cells/durable-B-pair3-gomap/output/treedb_mongo/run_1.launch.json"
+    },
+    "cells/durable-B-pair3-gomap/output/treedb_mongo/run_1.out": {
+      "archive_path": "cells/durable-B-pair3-gomap/output/treedb_mongo/run_1.out",
+      "bytes": 1312,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair3-gomap/output/treedb_mongo/run_1.out",
+      "scope": "durable-B/3/gomap",
+      "sha256": "f40fbd13f0a1cb0e2ecd3ba55d661e20effcba4a6460b18252d73d62bd36a41d",
+      "local": "evidence/selected/cells/durable-B-pair3-gomap/output/treedb_mongo/run_1.out"
+    },
+    "cells/durable-B-pair3-gomap/output/treedb_mongo/runtime.json": {
+      "archive_path": "cells/durable-B-pair3-gomap/output/treedb_mongo/runtime.json",
+      "bytes": 954,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair3-gomap/output/treedb_mongo/runtime.json",
+      "scope": "durable-B/3/gomap",
+      "sha256": "e7751595c72fe4ec4a53898c2923f12f7c4e2f3cbc9a34e160f7cc3d2119cdac",
+      "local": "evidence/selected/cells/durable-B-pair3-gomap/output/treedb_mongo/runtime.json"
+    },
+    "cells/durable-B-pair3-gomap/output/treedb_mongo/server.evidence/owner.before-close.json": {
+      "archive_path": "cells/durable-B-pair3-gomap/output/treedb_mongo/server.evidence/owner.before-close.json",
+      "bytes": 381252,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair3-gomap/output/treedb_mongo/server.evidence/owner.before-close.json",
+      "scope": "durable-B/3/gomap",
+      "sha256": "f7d43b47ad66a49ee973ba002e8541a797db6509bc8e7f3ef3635ce66bb6a319",
+      "local": "evidence/selected/cells/durable-B-pair3-gomap/output/treedb_mongo/server.evidence/owner.before-close.json"
+    },
+    "cells/durable-B-pair3-gomap/output/treedb_mongo/server.evidence/owner.checkpoint.json": {
+      "archive_path": "cells/durable-B-pair3-gomap/output/treedb_mongo/server.evidence/owner.checkpoint.json",
+      "bytes": 389543,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair3-gomap/output/treedb_mongo/server.evidence/owner.checkpoint.json",
+      "scope": "durable-B/3/gomap",
+      "sha256": "78c3f2b30d0cfae38bbe015e64e5c1af5c037fcd20baef69b4c1b0523bd0e263",
+      "local": "evidence/selected/cells/durable-B-pair3-gomap/output/treedb_mongo/server.evidence/owner.checkpoint.json"
+    },
+    "cells/durable-B-pair3-gomap/output/treedb_mongo/server.evidence/owner.close.json": {
+      "archive_path": "cells/durable-B-pair3-gomap/output/treedb_mongo/server.evidence/owner.close.json",
+      "bytes": 508,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair3-gomap/output/treedb_mongo/server.evidence/owner.close.json",
+      "scope": "durable-B/3/gomap",
+      "sha256": "b0d5fb700b9e0de6e067918d65bb661a4cc57f49fcf56e3ec031d95e16fecc59",
+      "local": "evidence/selected/cells/durable-B-pair3-gomap/output/treedb_mongo/server.evidence/owner.close.json"
+    },
+    "cells/durable-B-pair3-gomap/output/treedb_mongo/server.evidence/owner.open.json": {
+      "archive_path": "cells/durable-B-pair3-gomap/output/treedb_mongo/server.evidence/owner.open.json",
+      "bytes": 373633,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/durable-B-pair3-gomap/output/treedb_mongo/server.evidence/owner.open.json",
+      "scope": "durable-B/3/gomap",
+      "sha256": "3475244734c6a3b97bea016aba6e8da7391b2900afa28d0123d77253898b8e0b",
+      "local": "evidence/selected/cells/durable-B-pair3-gomap/output/treedb_mongo/server.evidence/owner.open.json"
+    },
+    "cells/relaxed-pair1-gomap/output/treedb_mongo/lifecycle.json": {
+      "archive_path": "cells/relaxed-pair1-gomap/output/treedb_mongo/lifecycle.json",
+      "bytes": 2321,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair1-gomap/output/treedb_mongo/lifecycle.json",
+      "scope": "relaxed/1/gomap",
+      "sha256": "819948d2fe224b202b49efced1614d3244a9027ac1a91e6282065b98b25a9de3",
+      "local": "evidence/selected/cells/relaxed-pair1-gomap/output/treedb_mongo/lifecycle.json"
+    },
+    "cells/relaxed-pair1-gomap/output/treedb_mongo/load.close.json": {
+      "archive_path": "cells/relaxed-pair1-gomap/output/treedb_mongo/load.close.json",
+      "bytes": 1245,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair1-gomap/output/treedb_mongo/load.close.json",
+      "scope": "relaxed/1/gomap",
+      "sha256": "3e6b1961693cb48effbd76c1b487f94c7d67be5ea8dc79ec42978b2aba3b2084",
+      "local": "evidence/selected/cells/relaxed-pair1-gomap/output/treedb_mongo/load.close.json"
+    },
+    "cells/relaxed-pair1-gomap/output/treedb_mongo/load.launch.json": {
+      "archive_path": "cells/relaxed-pair1-gomap/output/treedb_mongo/load.launch.json",
+      "bytes": 116308,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair1-gomap/output/treedb_mongo/load.launch.json",
+      "scope": "relaxed/1/gomap",
+      "sha256": "90fe46bfcf8474ba286f55973449b45bfe49fcf1a965d063d9820f644be0e09c",
+      "local": "evidence/selected/cells/relaxed-pair1-gomap/output/treedb_mongo/load.launch.json"
+    },
+    "cells/relaxed-pair1-gomap/output/treedb_mongo/load.out": {
+      "archive_path": "cells/relaxed-pair1-gomap/output/treedb_mongo/load.out",
+      "bytes": 1121,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair1-gomap/output/treedb_mongo/load.out",
+      "scope": "relaxed/1/gomap",
+      "sha256": "10fc137c5b490348887426884b726dd9bf706cf236b60d0f0fdb8a24e668a4c2",
+      "local": "evidence/selected/cells/relaxed-pair1-gomap/output/treedb_mongo/load.out"
+    },
+    "cells/relaxed-pair1-gomap/output/treedb_mongo/run_1.close.json": {
+      "archive_path": "cells/relaxed-pair1-gomap/output/treedb_mongo/run_1.close.json",
+      "bytes": 1245,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair1-gomap/output/treedb_mongo/run_1.close.json",
+      "scope": "relaxed/1/gomap",
+      "sha256": "163cf75dfe01c254131a7d19332eadf695ff65aa439252188a8bb3d297b5abcc",
+      "local": "evidence/selected/cells/relaxed-pair1-gomap/output/treedb_mongo/run_1.close.json"
+    },
+    "cells/relaxed-pair1-gomap/output/treedb_mongo/run_1.launch.json": {
+      "archive_path": "cells/relaxed-pair1-gomap/output/treedb_mongo/run_1.launch.json",
+      "bytes": 14356,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair1-gomap/output/treedb_mongo/run_1.launch.json",
+      "scope": "relaxed/1/gomap",
+      "sha256": "b8bd3812c783c0d771da28f9f9583d694b7313a2dddd63e4e57087b36fde6467",
+      "local": "evidence/selected/cells/relaxed-pair1-gomap/output/treedb_mongo/run_1.launch.json"
+    },
+    "cells/relaxed-pair1-gomap/output/treedb_mongo/run_1.out": {
+      "archive_path": "cells/relaxed-pair1-gomap/output/treedb_mongo/run_1.out",
+      "bytes": 1295,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair1-gomap/output/treedb_mongo/run_1.out",
+      "scope": "relaxed/1/gomap",
+      "sha256": "6c8728df26149d99e70b6e1f3f8d50bd506f4db029ee93bf3edfc39a24545535",
+      "local": "evidence/selected/cells/relaxed-pair1-gomap/output/treedb_mongo/run_1.out"
+    },
+    "cells/relaxed-pair1-gomap/output/treedb_mongo/runtime.json": {
+      "archive_path": "cells/relaxed-pair1-gomap/output/treedb_mongo/runtime.json",
+      "bytes": 957,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair1-gomap/output/treedb_mongo/runtime.json",
+      "scope": "relaxed/1/gomap",
+      "sha256": "8b753a24e2ee496c39d821dc4439c4fbe9c35b964f1bc4b6b7244f9fdb096693",
+      "local": "evidence/selected/cells/relaxed-pair1-gomap/output/treedb_mongo/runtime.json"
+    },
+    "cells/relaxed-pair1-gomap/output/treedb_mongo/server.evidence/owner.before-close.json": {
+      "archive_path": "cells/relaxed-pair1-gomap/output/treedb_mongo/server.evidence/owner.before-close.json",
+      "bytes": 380990,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair1-gomap/output/treedb_mongo/server.evidence/owner.before-close.json",
+      "scope": "relaxed/1/gomap",
+      "sha256": "da330fbf30402da2ccaade708eb04e262017369cb1fa15d16313bb458d172bbe",
+      "local": "evidence/selected/cells/relaxed-pair1-gomap/output/treedb_mongo/server.evidence/owner.before-close.json"
+    },
+    "cells/relaxed-pair1-gomap/output/treedb_mongo/server.evidence/owner.checkpoint.json": {
+      "archive_path": "cells/relaxed-pair1-gomap/output/treedb_mongo/server.evidence/owner.checkpoint.json",
+      "bytes": 389991,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair1-gomap/output/treedb_mongo/server.evidence/owner.checkpoint.json",
+      "scope": "relaxed/1/gomap",
+      "sha256": "5db28d46d7c21d1d1662ec38649bc01c70ccf13c909fe2ebcaf269e0f37705de",
+      "local": "evidence/selected/cells/relaxed-pair1-gomap/output/treedb_mongo/server.evidence/owner.checkpoint.json"
+    },
+    "cells/relaxed-pair1-gomap/output/treedb_mongo/server.evidence/owner.close.json": {
+      "archive_path": "cells/relaxed-pair1-gomap/output/treedb_mongo/server.evidence/owner.close.json",
+      "bytes": 508,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair1-gomap/output/treedb_mongo/server.evidence/owner.close.json",
+      "scope": "relaxed/1/gomap",
+      "sha256": "195132f0e180b35d721c81c97e0189a6f8f79842298efdaca2490a247e7f9a4d",
+      "local": "evidence/selected/cells/relaxed-pair1-gomap/output/treedb_mongo/server.evidence/owner.close.json"
+    },
+    "cells/relaxed-pair1-gomap/output/treedb_mongo/server.evidence/owner.open.json": {
+      "archive_path": "cells/relaxed-pair1-gomap/output/treedb_mongo/server.evidence/owner.open.json",
+      "bytes": 373636,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-shell-helper-final-qualification-20261030/cells/relaxed-pair1-gomap/output/treedb_mongo/server.evidence/owner.open.json",
+      "scope": "relaxed/1/gomap",
+      "sha256": "693ae29ae55e5a8c6093337b5beedcf5be2df5e5d3cb552f02b3c4b401975134",
+      "local": "evidence/selected/cells/relaxed-pair1-gomap/output/treedb_mongo/server.evidence/owner.open.json"
+    },
+    "cells/relaxed-pair2-gomap/output/treedb_mongo/lifecycle.json": {
+      "archive_path": "cells/relaxed-pair2-gomap/output/treedb_mongo/lifecycle.json",
+      "bytes": 2317,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair2-gomap/output/treedb_mongo/lifecycle.json",
+      "scope": "relaxed/2/gomap",
+      "sha256": "951d3c5e1ec7bd8e411063d825f9e9dec8f8f8abbd7fb1b5a4a9d7133c61558b",
+      "local": "evidence/selected/cells/relaxed-pair2-gomap/output/treedb_mongo/lifecycle.json"
+    },
+    "cells/relaxed-pair2-gomap/output/treedb_mongo/load.close.json": {
+      "archive_path": "cells/relaxed-pair2-gomap/output/treedb_mongo/load.close.json",
+      "bytes": 1244,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair2-gomap/output/treedb_mongo/load.close.json",
+      "scope": "relaxed/2/gomap",
+      "sha256": "79b5958284be27c80d3c3b5f7ebd44f114d2da6bf318d40380b25d5708763e1a",
+      "local": "evidence/selected/cells/relaxed-pair2-gomap/output/treedb_mongo/load.close.json"
+    },
+    "cells/relaxed-pair2-gomap/output/treedb_mongo/load.launch.json": {
+      "archive_path": "cells/relaxed-pair2-gomap/output/treedb_mongo/load.launch.json",
+      "bytes": 111878,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair2-gomap/output/treedb_mongo/load.launch.json",
+      "scope": "relaxed/2/gomap",
+      "sha256": "a873c15940a85696832f298bc9902372b01a2885d610ed60c92ebc3ee148fd1a",
+      "local": "evidence/selected/cells/relaxed-pair2-gomap/output/treedb_mongo/load.launch.json"
+    },
+    "cells/relaxed-pair2-gomap/output/treedb_mongo/load.out": {
+      "archive_path": "cells/relaxed-pair2-gomap/output/treedb_mongo/load.out",
+      "bytes": 1121,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair2-gomap/output/treedb_mongo/load.out",
+      "scope": "relaxed/2/gomap",
+      "sha256": "ede88553532e955a0dfe1cb7ccdfacee0b040e540b6e9736315adafb97b94ec0",
+      "local": "evidence/selected/cells/relaxed-pair2-gomap/output/treedb_mongo/load.out"
+    },
+    "cells/relaxed-pair2-gomap/output/treedb_mongo/run_1.close.json": {
+      "archive_path": "cells/relaxed-pair2-gomap/output/treedb_mongo/run_1.close.json",
+      "bytes": 1244,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair2-gomap/output/treedb_mongo/run_1.close.json",
+      "scope": "relaxed/2/gomap",
+      "sha256": "d15e1623194518a0350aba9eba706e503ca59d4e1e134f13725db4beced7b782",
+      "local": "evidence/selected/cells/relaxed-pair2-gomap/output/treedb_mongo/run_1.close.json"
+    },
+    "cells/relaxed-pair2-gomap/output/treedb_mongo/run_1.launch.json": {
+      "archive_path": "cells/relaxed-pair2-gomap/output/treedb_mongo/run_1.launch.json",
+      "bytes": 14356,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair2-gomap/output/treedb_mongo/run_1.launch.json",
+      "scope": "relaxed/2/gomap",
+      "sha256": "188dff190b06f4cee6d580c77319d39d1698545cccdf2a2d3fecb99f4f35e9d7",
+      "local": "evidence/selected/cells/relaxed-pair2-gomap/output/treedb_mongo/run_1.launch.json"
+    },
+    "cells/relaxed-pair2-gomap/output/treedb_mongo/run_1.out": {
+      "archive_path": "cells/relaxed-pair2-gomap/output/treedb_mongo/run_1.out",
+      "bytes": 1293,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair2-gomap/output/treedb_mongo/run_1.out",
+      "scope": "relaxed/2/gomap",
+      "sha256": "30e732af07037083276602572b8e3913245667301d10e566f11b256bad6fb222",
+      "local": "evidence/selected/cells/relaxed-pair2-gomap/output/treedb_mongo/run_1.out"
+    },
+    "cells/relaxed-pair2-gomap/output/treedb_mongo/runtime.json": {
+      "archive_path": "cells/relaxed-pair2-gomap/output/treedb_mongo/runtime.json",
+      "bytes": 952,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair2-gomap/output/treedb_mongo/runtime.json",
+      "scope": "relaxed/2/gomap",
+      "sha256": "00801f095e5c62953c49eb54864b5078ba510d48353ed69ee105b6c3c1497fed",
+      "local": "evidence/selected/cells/relaxed-pair2-gomap/output/treedb_mongo/runtime.json"
+    },
+    "cells/relaxed-pair2-gomap/output/treedb_mongo/server.evidence/owner.before-close.json": {
+      "archive_path": "cells/relaxed-pair2-gomap/output/treedb_mongo/server.evidence/owner.before-close.json",
+      "bytes": 380974,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair2-gomap/output/treedb_mongo/server.evidence/owner.before-close.json",
+      "scope": "relaxed/2/gomap",
+      "sha256": "de7f8f56494ef93ea3ae1504d6a00defe62654c1db213374a8fb680c1a904065",
+      "local": "evidence/selected/cells/relaxed-pair2-gomap/output/treedb_mongo/server.evidence/owner.before-close.json"
+    },
+    "cells/relaxed-pair2-gomap/output/treedb_mongo/server.evidence/owner.checkpoint.json": {
+      "archive_path": "cells/relaxed-pair2-gomap/output/treedb_mongo/server.evidence/owner.checkpoint.json",
+      "bytes": 389239,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair2-gomap/output/treedb_mongo/server.evidence/owner.checkpoint.json",
+      "scope": "relaxed/2/gomap",
+      "sha256": "b488364571faac7108381b3559268ef041f34ea85f14afea57580bc8648b3990",
+      "local": "evidence/selected/cells/relaxed-pair2-gomap/output/treedb_mongo/server.evidence/owner.checkpoint.json"
+    },
+    "cells/relaxed-pair2-gomap/output/treedb_mongo/server.evidence/owner.close.json": {
+      "archive_path": "cells/relaxed-pair2-gomap/output/treedb_mongo/server.evidence/owner.close.json",
+      "bytes": 508,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair2-gomap/output/treedb_mongo/server.evidence/owner.close.json",
+      "scope": "relaxed/2/gomap",
+      "sha256": "abd822d1091cb0b4a074fec26f49ba62582ce7f85e6b3eb8a4163ea9ce0bc570",
+      "local": "evidence/selected/cells/relaxed-pair2-gomap/output/treedb_mongo/server.evidence/owner.close.json"
+    },
+    "cells/relaxed-pair2-gomap/output/treedb_mongo/server.evidence/owner.open.json": {
+      "archive_path": "cells/relaxed-pair2-gomap/output/treedb_mongo/server.evidence/owner.open.json",
+      "bytes": 373623,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair2-gomap/output/treedb_mongo/server.evidence/owner.open.json",
+      "scope": "relaxed/2/gomap",
+      "sha256": "b6bd03032400eeb77710c42d3aeae66a7fea1704d8852569b1f2483ade5e7e53",
+      "local": "evidence/selected/cells/relaxed-pair2-gomap/output/treedb_mongo/server.evidence/owner.open.json"
+    },
+    "cells/relaxed-pair3-gomap/output/treedb_mongo/lifecycle.json": {
+      "archive_path": "cells/relaxed-pair3-gomap/output/treedb_mongo/lifecycle.json",
+      "bytes": 2318,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair3-gomap/output/treedb_mongo/lifecycle.json",
+      "scope": "relaxed/3/gomap",
+      "sha256": "c604f89e115fc47bbb5f85ad4600ad92d7a18eda22d397fa26bc487580e6e164",
+      "local": "evidence/selected/cells/relaxed-pair3-gomap/output/treedb_mongo/lifecycle.json"
+    },
+    "cells/relaxed-pair3-gomap/output/treedb_mongo/load.close.json": {
+      "archive_path": "cells/relaxed-pair3-gomap/output/treedb_mongo/load.close.json",
+      "bytes": 1244,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair3-gomap/output/treedb_mongo/load.close.json",
+      "scope": "relaxed/3/gomap",
+      "sha256": "9e8466f194a1345f20dca4c471ed64ddb4d9976d79d1774acfc41d731fdb7c19",
+      "local": "evidence/selected/cells/relaxed-pair3-gomap/output/treedb_mongo/load.close.json"
+    },
+    "cells/relaxed-pair3-gomap/output/treedb_mongo/load.launch.json": {
+      "archive_path": "cells/relaxed-pair3-gomap/output/treedb_mongo/load.launch.json",
+      "bytes": 111882,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair3-gomap/output/treedb_mongo/load.launch.json",
+      "scope": "relaxed/3/gomap",
+      "sha256": "36adc2edea1e0be64c87bb04e89c9f4b075c0fa407b58e5c0f21c57a4342660a",
+      "local": "evidence/selected/cells/relaxed-pair3-gomap/output/treedb_mongo/load.launch.json"
+    },
+    "cells/relaxed-pair3-gomap/output/treedb_mongo/load.out": {
+      "archive_path": "cells/relaxed-pair3-gomap/output/treedb_mongo/load.out",
+      "bytes": 1123,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair3-gomap/output/treedb_mongo/load.out",
+      "scope": "relaxed/3/gomap",
+      "sha256": "3a023e781624c51172157918e2377526d96761464e4e58804ccbefa0210390ba",
+      "local": "evidence/selected/cells/relaxed-pair3-gomap/output/treedb_mongo/load.out"
+    },
+    "cells/relaxed-pair3-gomap/output/treedb_mongo/run_1.close.json": {
+      "archive_path": "cells/relaxed-pair3-gomap/output/treedb_mongo/run_1.close.json",
+      "bytes": 1245,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair3-gomap/output/treedb_mongo/run_1.close.json",
+      "scope": "relaxed/3/gomap",
+      "sha256": "b7ac1d3bc3daa66240037837549486f844e6306e9f2c9e0103508e65d306e2ad",
+      "local": "evidence/selected/cells/relaxed-pair3-gomap/output/treedb_mongo/run_1.close.json"
+    },
+    "cells/relaxed-pair3-gomap/output/treedb_mongo/run_1.launch.json": {
+      "archive_path": "cells/relaxed-pair3-gomap/output/treedb_mongo/run_1.launch.json",
+      "bytes": 14356,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair3-gomap/output/treedb_mongo/run_1.launch.json",
+      "scope": "relaxed/3/gomap",
+      "sha256": "b0704f177989bd3181ff64b31540e6797c45b48ebfa16e998cecb016e88d5185",
+      "local": "evidence/selected/cells/relaxed-pair3-gomap/output/treedb_mongo/run_1.launch.json"
+    },
+    "cells/relaxed-pair3-gomap/output/treedb_mongo/run_1.out": {
+      "archive_path": "cells/relaxed-pair3-gomap/output/treedb_mongo/run_1.out",
+      "bytes": 1292,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair3-gomap/output/treedb_mongo/run_1.out",
+      "scope": "relaxed/3/gomap",
+      "sha256": "dbf1a36b2c0e5382f2c8feb3b9e6641512a3821b84b1e6bb8413e93f64d47259",
+      "local": "evidence/selected/cells/relaxed-pair3-gomap/output/treedb_mongo/run_1.out"
+    },
+    "cells/relaxed-pair3-gomap/output/treedb_mongo/runtime.json": {
+      "archive_path": "cells/relaxed-pair3-gomap/output/treedb_mongo/runtime.json",
+      "bytes": 952,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair3-gomap/output/treedb_mongo/runtime.json",
+      "scope": "relaxed/3/gomap",
+      "sha256": "3d311fa68413ec53518af65566aa113ecb646291b4fb9bf73228543487ed6ca0",
+      "local": "evidence/selected/cells/relaxed-pair3-gomap/output/treedb_mongo/runtime.json"
+    },
+    "cells/relaxed-pair3-gomap/output/treedb_mongo/server.evidence/owner.before-close.json": {
+      "archive_path": "cells/relaxed-pair3-gomap/output/treedb_mongo/server.evidence/owner.before-close.json",
+      "bytes": 380985,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair3-gomap/output/treedb_mongo/server.evidence/owner.before-close.json",
+      "scope": "relaxed/3/gomap",
+      "sha256": "039f9cb56e83ecb0a378d952180c05381cb4456b2f73974d03ddfe84bd80cc88",
+      "local": "evidence/selected/cells/relaxed-pair3-gomap/output/treedb_mongo/server.evidence/owner.before-close.json"
+    },
+    "cells/relaxed-pair3-gomap/output/treedb_mongo/server.evidence/owner.checkpoint.json": {
+      "archive_path": "cells/relaxed-pair3-gomap/output/treedb_mongo/server.evidence/owner.checkpoint.json",
+      "bytes": 389252,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair3-gomap/output/treedb_mongo/server.evidence/owner.checkpoint.json",
+      "scope": "relaxed/3/gomap",
+      "sha256": "16540e3c642aac28d8a3957a83dbdd42684603090d62947d4bc644e90b83b422",
+      "local": "evidence/selected/cells/relaxed-pair3-gomap/output/treedb_mongo/server.evidence/owner.checkpoint.json"
+    },
+    "cells/relaxed-pair3-gomap/output/treedb_mongo/server.evidence/owner.close.json": {
+      "archive_path": "cells/relaxed-pair3-gomap/output/treedb_mongo/server.evidence/owner.close.json",
+      "bytes": 508,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair3-gomap/output/treedb_mongo/server.evidence/owner.close.json",
+      "scope": "relaxed/3/gomap",
+      "sha256": "1c3465a611b5ccb0049a4d42313467cfa3078b0a517fba3fc73022818439a49e",
+      "local": "evidence/selected/cells/relaxed-pair3-gomap/output/treedb_mongo/server.evidence/owner.close.json"
+    },
+    "cells/relaxed-pair3-gomap/output/treedb_mongo/server.evidence/owner.open.json": {
+      "archive_path": "cells/relaxed-pair3-gomap/output/treedb_mongo/server.evidence/owner.open.json",
+      "bytes": 373624,
+      "encoding": "identity",
+      "original_path": "/home/mikers/gomap-5335-final-observer-continuation-20261031/cells/relaxed-pair3-gomap/output/treedb_mongo/server.evidence/owner.open.json",
+      "scope": "relaxed/3/gomap",
+      "sha256": "9154e88155a73ef5d6e64ecb28078c6481b10fca7ae5b9d98e0f1349acc31f85",
+      "local": "evidence/selected/cells/relaxed-pair3-gomap/output/treedb_mongo/server.evidence/owner.open.json"
+    }
+  },
+  "profile_members": []
+}

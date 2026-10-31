@@ -94,13 +94,35 @@ func TestAdaptiveMemtableMode_EarlyRotationKeepsSampling(t *testing.T) {
 					if got := db.memtableStats.writes.Load(); got != adaptiveMinWrites {
 						t.Fatalf("stopped sample grew to %d writes", got)
 					}
+					// Force the legal queue-drained ordering before selecting the clear path.
+					db.flushAll(false)
+					if err := db.backgroundError(); err != nil {
+						t.Fatal(err)
+					}
+					db.mu.RLock()
+					queued, mutableBytes := len(db.queue), db.mutableBytes.Load()
+					db.mu.RUnlock()
+					if queued != 0 || mutableBytes != 0 {
+						t.Fatalf("forced drain: queue=%d mutable_bytes=%d, want both zero", queued, mutableBytes)
+					}
+					t.Logf("forced drain: queue=%d mutable_bytes=%d observe=%t writes=%d", queued, mutableBytes, db.memtableAdaptiveObserve.Load(), db.memtableStats.writes.Load())
+					// A drained queue makes DeleteRange backend-only unless a live key
+					// remains. Seed the mutable reset path without restarting sampling.
+					write(adaptiveMinWrites*5, 1)
+					if db.memtableAdaptiveObserve.Load() || db.memtableStats.writes.Load() != adaptiveMinWrites {
+						t.Fatalf("fresh mutable write changed stopped sample: observe=%t writes=%d", db.memtableAdaptiveObserve.Load(), db.memtableStats.writes.Load())
+					}
+					if got := db.mutableBytes.Load(); got <= 0 {
+						t.Fatalf("fresh mutable write left %d bytes; DeleteRange reset path needs live state", got)
+					}
 					if err := db.DeleteRange(nil, nil); err != nil {
 						t.Fatal(err)
 					}
+					t.Logf("after DeleteRange: observe=%t writes=%d fast_clears=%d backend_direct_batches=%d", db.memtableAdaptiveObserve.Load(), db.memtableStats.writes.Load(), db.deleteRangeFastPathClears.Load(), db.deleteRangeBackendDirectBatches.Load())
 					if db.memtableAdaptiveObserve.Load() || db.memtableStats.writes.Load() != 0 {
 						t.Fatal("clearing live counters restarted selected append-only sampling")
 					}
-					write(adaptiveMinWrites*5, 1)
+					write(adaptiveMinWrites*5+1, 1)
 					rotate()
 					if db.memtableAdaptiveObserve.Load() {
 						t.Fatal("rotation after counter reset restarted selected append-only sampling")

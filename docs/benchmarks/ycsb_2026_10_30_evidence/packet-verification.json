@@ -1,0 +1,10 @@
+{
+  "status": "PASS",
+  "documents_hash_checked": 11,
+  "raw_members_hash_checked": 320,
+  "paired_complete_arms": 18,
+  "extra_strict_mongodb_arm": 1,
+  "preserved_strict_gomap_failure": true,
+  "relative_links_checked": true,
+  "checks": "source byte identity, decompression, archive inventory and member hashes, required raw phase receipts, original rates and complete/failure counts; no workload execution"
+}

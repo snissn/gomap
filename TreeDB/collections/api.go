@@ -5401,7 +5401,7 @@ func (c *Collection) bufferNoIndexInsertBatch(
 	})
 	for i := 1; i < len(entries); i++ {
 		if bytes.Equal(entries[i-1].id, entries[i].id) {
-			return nil, true, ErrDuplicateDocumentID
+			return nil, true, mutationNotAcceptedError(ErrDuplicateDocumentID)
 		}
 	}
 
@@ -5443,7 +5443,7 @@ func (c *Collection) bufferNoIndexInsertBatch(
 	}
 	for _, entry := range entries {
 		if _, _, flags, found := domain.table.GetEntry(entry.id); found && flags&node.FlagTombstone == 0 {
-			return nil, true, ErrDocumentExists
+			return nil, true, mutationNotAcceptedError(ErrDocumentExists)
 		}
 	}
 	primaryRoot := currentCatalog.rootID(collectionPrimaryRootName(currentCatalog.meta.Name))
@@ -5457,7 +5457,7 @@ func (c *Collection) bufferNoIndexInsertBatch(
 			return nil, true, err
 		}
 		if exists {
-			return nil, true, ErrDocumentExists
+			return nil, true, mutationNotAcceptedError(ErrDocumentExists)
 		}
 	}
 	domain.storagePolicy = currentOptions.dataStoragePolicy
@@ -6114,6 +6114,12 @@ func (c *Collection) bufferIndexedInsertPlanLocked(snap *backenddb.Snapshot, cat
 	}
 
 	if err := c.rejectBufferedIndexedInsertConflictsLocked(domain, catalog.meta, plan); err != nil {
+		// This check only probes existing reservations (and may cache their
+		// lookup index). It precedes appendCommandWALBeforeStage and insertion
+		// of the new plan into the shared write domain.
+		if commandWALStageIntent == nil || commandWALStageIntent.AssignedLSN() == 0 {
+			return 0, mutationNotAcceptedError(err)
+		}
 		return 0, err
 	}
 	if domain.rootPolicies == nil {
@@ -12073,10 +12079,10 @@ func (c *Collection) InsertBatchWithCommandWALIntent(ids, documents [][]byte, tr
 // InsertBatch or InsertBatchValidatedBSON.
 func (c *Collection) NativewireInsertBatchNoResultIDs(ids, documents [][]byte, trustedValidBSON bool) error {
 	if c != nil && c.nativeJSON != nil {
-		if trustedValidBSON {
-			return backenddb.ErrNativeSemanticUnsupported
+		if trustedValidBSON && normalizedDocumentFormat(c.meta.Options.DocumentFormat) != DocumentFormatBSON {
+			return errors.New("collections: trusted BSON insert requires BSON document format")
 		}
-		_, err := c.nativeInsertBatch(ids, documents)
+		_, err := c.nativeInsertBatchWithResultIDs(ids, documents, nil, nil, false)
 		return err
 	}
 	unlockSchema := c.lockCollectionSchemaRead()
@@ -12421,7 +12427,7 @@ func (c *Collection) insertBatchOnceWithOptimisticPlanning(ids, documents [][]by
 	plan, err := planner.planInsertBatchWithPreflight(ids, documents, persistedConflictPreflightForInsertBatchSnapshot(snap, catalog))
 	if err != nil {
 		closePlanningSnapshot()
-		return nil, err, true
+		return nil, mutationNotAcceptedError(err), true
 	}
 	plan.stats.BufferedIndexedBatches = 1
 	if !insertBatchPlanHasRootWork(plan) {
@@ -12788,6 +12794,11 @@ func (c *Collection) insertBatchOnceWithLockState(
 	}
 	if err != nil {
 		closePlanningSnapshot()
+		// Planning has installed no part of this mutation. Recovery callers
+		// may already own an assigned intent and must retain that distinction.
+		if commandWALIntent == nil || commandWALIntent.AssignedLSN() == 0 {
+			err = mutationNotAcceptedError(err)
+		}
 		return nil, err
 	}
 	if bufferIndexedInserts {
@@ -12948,6 +12959,13 @@ func (c *Collection) insertBatchOnceWithLockState(
 		pin, currentCatalog, pinCommitSeq, pinSystemRoot, err := c.lockAndValidateInsertBatchPlan(mutationLocked, unlockMutation, snap, catalog, meta, rootNames, baseRootIDs, preflightPersistedConflicts, baseCommitSeq, baseSystemRoot, bufferedCommandWALIntent != nil, plan)
 		if err != nil {
 			resetCollectionRunTables(plan.runs)
+			// Validation only reads the catalog and plan. The new rows are
+			// still private: buffer installation and command assignment happen
+			// below. An externally assigned intent retains its authority.
+			if (commandWALIntent == nil || commandWALIntent.AssignedLSN() == 0) &&
+				(bufferedCommandWALIntent == nil || bufferedCommandWALIntent.AssignedLSN() == 0) {
+				return nil, mutationNotAcceptedError(err)
+			}
 			return nil, err
 		}
 		var unlockCommandWALStage func()
@@ -13014,6 +13032,11 @@ func (c *Collection) insertBatchOnceWithLockState(
 	pin, currentCatalog, pinCommitSeq, pinSystemRoot, err := c.lockAndValidateInsertBatchPlan(mutationLocked, unlockMutation, snap, catalog, meta, rootNames, baseRootIDs, preflightPersistedConflicts, baseCommitSeq, baseSystemRoot, false, plan)
 	if err != nil {
 		resetCollectionRunTables(plan.runs)
+		// No plan roots have been published and the ordinary intent has not
+		// reached assignment. Recovery may supply an already assigned intent.
+		if commandWALIntent == nil || commandWALIntent.AssignedLSN() == 0 {
+			return nil, mutationNotAcceptedError(err)
+		}
 		return nil, err
 	}
 	baseCommitSeq = pinCommitSeq
