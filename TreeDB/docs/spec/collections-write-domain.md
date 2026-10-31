@@ -134,9 +134,19 @@ Assigned uncertain failures retain their identity and poison further writes
 until recovery.
 
 Native live producers run shared pressure preparation before collection locks,
-captures, private staging and callbacks. The existing three-quarter byte
-watermark or an exhausted finite source/generation counter requests at most one
-coalesced checkpoint. Pending typed construction uses the same watermark against
+captures, private staging and callbacks. Active pending catalog and collection
+domain generations also request preparation when their exact generation history
+(including native source metadata) plus outstanding preparation reservations
+reaches the three-quarter watermark. This scans sparse pending directories,
+not captured old generations or the full catalog. It reserves no headroom:
+an unusually large request or concurrent suffix can still receive the original
+authoritative capacity refusal. Held old reads remain owned and readable.
+The existing three-quarter byte watermark or an exhausted finite source/generation
+counter also requests maintenance. Each preparation joins at most one coalesced
+checkpoint or captured-prefix drain. Mutation admission permits at most one
+additional preparation for a changed pressured observation, then leaves the
+normal final admission authoritative instead of chasing concurrent suffixes.
+Pending typed construction uses the same watermark against
 both finite maintenance byte limits and the same source ceiling. Its inventory
 includes the original builder, handoff, typed workspace, root-key and catalog
 projection promises; exact final admission remains required. It then joins refunds already queued on the existing semantic
