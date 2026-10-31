@@ -67,7 +67,7 @@ func nativeConstructionUnderPressure(total, fixed, limit uint64) bool {
 
 func (s cowNativePressureState) underPressure(limits memtable.COWLimits) bool {
 	p := s.semantic
-	return s.stats.ReservedBytes >= limits.MaxInFlightBytes-limits.MaxInFlightBytes/4 ||
+	return p.GenerationUnderPressure || s.stats.ReservedBytes >= limits.MaxInFlightBytes-limits.MaxInFlightBytes/4 ||
 		s.stats.Sources >= limits.MaxSources || s.stats.Generations >= limits.MaxGenerations ||
 		(p.ConstructionBytes != 0 &&
 			(nativeConstructionUnderPressure(p.ConstructionBytes, p.FixedConstructionBytes, p.MaxInFlightBytes) ||
@@ -86,7 +86,7 @@ func (c *cowCache) nativeProducerPressureState() (state cowNativePressureState, 
 	state.logicalSeq = cut.logicalSeq
 	if observer, ok := cut.semanticRootSet.(backenddb.NativeSemanticProducerPressureState); ok {
 		state.semantic, err = observer.NativeProducerPressure(cut.basis.snapshot)
-		if err == nil && state.semantic.ConstructionBytes != 0 {
+		if err == nil && (state.semantic.GenerationUnderPressure || state.semantic.ConstructionBytes != 0) {
 			var valid bool
 			state.basis, valid = cut.basis.snapshot.StateToken()
 			if !valid {
