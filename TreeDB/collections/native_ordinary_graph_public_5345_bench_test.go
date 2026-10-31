@@ -1,0 +1,234 @@
+package collections
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"testing"
+
+	treedb "github.com/snissn/gomap/TreeDB"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
+)
+
+func require5345NoCodecOverrides(b *testing.B) {
+	b.Helper()
+	for _, name := range []string{
+		typedColumnBenchmarkCompressionEnv, typedColumnBenchmarkSectionCompressionEnv,
+		typedColumnBenchmarkLocatorCompressionEnv, typedColumnBenchmarkDictionaryCompressionEnv,
+		typedColumnBenchmarkPruningCompressionEnv, typedColumnBenchmarkInt64EncodingEnv,
+		typedColumnBenchmarkRowsPerGranuleEnv, typedColumnBenchmarkAdaptiveEnabledEnv,
+		typedColumnBenchmarkAdaptiveTargetBytesEnv, typedColumnBenchmarkAdaptiveMinRowsEnv,
+		typedColumnBenchmarkAdaptiveMaxRowsEnv,
+	} {
+		if _, ok := os.LookupEnv(name); ok {
+			b.Fatalf("benchmark requires absent codec override %s", name)
+		}
+	}
+}
+
+// BenchmarkOrdinaryGraphPublic5345 is a control for the collection-level
+// operations underlying documentservice's deferred Optimize. It is not a
+// documentservice or hybrid-search benchmark. In particular, the ordinary
+// native route does not call typedColumnPublicationFP32EncodedBound, so this
+// benchmark cannot establish activation or a performance benefit of that bound.
+//
+// Run with -benchtime=1x: each sample creates one fresh durable COW database.
+// Fixture construction, opening, schema setup, and closing are untimed. The
+// timed interval includes all 128-row public inserts, the same standalone sync
+// used before Optimize, and the public graph rebuild. A failed operation is a
+// failed sample, never a successful low-cost result. No internal fallback or
+// bound-admission counter is available here; those outcomes are unmeasured.
+func BenchmarkOrdinaryGraphPublic5345(b *testing.B) {
+	policies := []struct {
+		name  string
+		codec ColumnStoreTypedColumnCompression
+	}{
+		{"none", ColumnStoreTypedColumnCompressionNone},
+		{"lz4", ColumnStoreTypedColumnCompressionLZ4},
+		{"snappy", ColumnStoreTypedColumnCompressionSnappy},
+	}
+	for _, policy := range policies {
+		for _, rows := range []int{256, 257, 4096} {
+			b.Run(fmt.Sprintf("%s/rows%d", policy.name, rows), func(b *testing.B) {
+				if b.N != 1 {
+					b.Fatal("one fresh database per sample: use -benchtime=1x")
+				}
+				b.StopTimer()
+				require5345NoCodecOverrides(b)
+				opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, b.TempDir())
+				opts.MemtableMode = "cow_btree"
+				opts.BackgroundCheckpointInterval = -1
+				opts.BackgroundCheckpointIdleDuration = -1
+				owner, err := treedb.Open(opts)
+				if err != nil {
+					b.Fatal(err)
+				}
+				b.Cleanup(func() {
+					if err := owner.Close(); err != nil {
+						b.Error(err)
+					}
+				})
+				backend, err := owner.NativeSemanticBackend()
+				if err != nil {
+					b.Fatal(err)
+				}
+				manager := NewCollectionManager(backend)
+				b.Cleanup(func() {
+					if err := manager.Close(); err != nil {
+						b.Error(err)
+					}
+				})
+				meta := nativeOrdinaryPendingGraphMeta()
+				meta.Options.ColumnStore.TypedColumnCompression = policy.codec
+				meta.Options.ColumnStore.TypedColumnSectionCompression = policy.codec
+				if _, err := manager.CreateCollection(&meta); err != nil {
+					b.Fatal(err)
+				}
+				col, err := manager.OpenCollection("docs")
+				if err != nil {
+					b.Fatal(err)
+				}
+				if col.nativeJSON == nil {
+					b.Fatal("native collection route unavailable")
+				}
+				type batch struct {
+					ids, docs [][]byte
+					vectors   [][]float32
+				}
+				var batches []batch
+				for start := 0; start < rows; start += 128 {
+					end := min(start+128, rows)
+					var batch batch
+					for i := start; i < end; i++ {
+						batch.ids = append(batch.ids, []byte(fmt.Sprintf("doc-%04d", i)))
+						batch.docs = append(batch.docs, []byte(fmt.Sprintf(`{"content":"content-%04d","embedding":[%d,1],"meta":{"tenant":"tenant-%02d"}}`, i, i+1, i%16)))
+						batch.vectors = append(batch.vectors, []float32{float32(i + 1), 1})
+					}
+					batches = append(batches, batch)
+				}
+				b.ReportAllocs()
+				b.ResetTimer()
+				b.StartTimer()
+				for _, batch := range batches {
+					ids, stats, err := col.InsertBatchWithStatsValidatedFloat32Projection(batch.ids, batch.docs, "embedding", VectorMetricCosine, batch.vectors)
+					if err != nil || len(ids) != len(batch.ids) || stats.Documents != len(batch.ids) {
+						b.StopTimer()
+						b.Fatalf("public insert: returned=%d stats=%+v err=%v", len(ids), stats, err)
+					}
+				}
+				if _, err := manager.SyncForStandaloneWriteConcern(); err != nil {
+					b.StopTimer()
+					b.Fatalf("pre-Optimize sync: %v", err)
+				}
+				status, err := col.RebuildVectorIndex("vec")
+				b.StopTimer()
+				if err != nil || !status.Loaded || status.State != VectorIndexStateColumnGraphLoaded || status.RebuildNeeded || status.Stats.RebuildNeeded || status.Stats.LiveDocs != rows || status.Stats.BytesDisk <= 0 {
+					b.Fatalf("public rebuild: status=%+v err=%v", status, err)
+				}
+				b.ReportMetric(float64(rows), "rows/op")
+				b.ReportMetric(float64(len(batches)), "accepted-insert-batches/op")
+				b.ReportMetric(1, "loaded-graphs/op")
+			})
+		}
+	}
+}
+
+// BenchmarkTypedGraphEncodedPublic5345 measures a different path from the
+// ordinary native benchmark above: public typed inserts with the legacy
+// typed-graph encoded-publication admission enabled. That path calls the
+// changed FP32 image bound. Its existing Minima fixture has eight-dimensional
+// vectors and four declared columns, so its timings are not comparable to the
+// ordinary two-dimensional native workload. Initialization and reconciliation
+// are untimed; one whole typed insert is timed. Existing finite typed-overlay
+// limits are taken from BenchmarkTypedGraphFold, not the native COW limits.
+//
+// Unsupported pre-WAL errors are recorded as incomplete samples, never as
+// cheap success. This error class does not by itself identify its cause. The
+// encoded reservation delta and installed rows support path attribution; they
+// are not direct per-call helper or general internal fallback counters.
+func BenchmarkTypedGraphEncodedPublic5345(b *testing.B) {
+	for _, policy := range []struct {
+		name  string
+		codec ColumnStoreTypedColumnCompression
+	}{
+		{"none", ColumnStoreTypedColumnCompressionNone},
+		{"lz4", ColumnStoreTypedColumnCompressionLZ4},
+		{"snappy", ColumnStoreTypedColumnCompressionSnappy},
+	} {
+		for _, rows := range []int{256, 257, 4096} {
+			b.Run(fmt.Sprintf("%s/rows%d", policy.name, rows), func(b *testing.B) {
+				if b.N != 1 {
+					b.Fatal("one fresh database per sample: use -benchtime=1x")
+				}
+				b.StopTimer()
+				require5345NoCodecOverrides(b)
+				meta := typedMinimaCollectionMeta()
+				meta.TextIndexes = nil // Use the existing immediate publication route.
+				meta.Options.ColumnStore.TypedColumnCompression = policy.codec
+				meta.Options.ColumnStore.TypedColumnSectionCompression = policy.codec
+				_, db, col := openTypedMinimaCollectionMeta(b, meta)
+				b.Cleanup(func() {
+					if err := db.Close(); err != nil {
+						b.Error(err)
+					}
+				})
+				if _, err := col.RebuildVectorIndex("embedding_graph"); err != nil {
+					b.Fatalf("initial rebuild: %v", err)
+				}
+				limits := typedGraphPublicationLimits{Rows: 4096, Tombstones: 4096, ValueSlots: 16384, OwnedBytes: 32 << 20, EncodedOutputBytes: 256 << 20}
+				cold := typedGraphColdLimits{ManifestRecords: 4096, ManifestBytes: 4 << 20, AssetBytes: 128 << 20, DecodedTermBytes: 128 << 20}
+				if err := col.reconcileTypedGraphPublication(limits, cold); err != nil {
+					b.Fatalf("encoded admission bootstrap: %v", err)
+				}
+				if !col.typedGraphEncodedAdmissionEnabled() {
+					b.Fatal("encoded admission inactive")
+				}
+				beforeState := col.typedGraphPublicationSnapshot()
+				if beforeState == nil || beforeState.invalid || beforeState.physicalRows != 0 {
+					b.Fatalf("unexpected initial publication state: %+v", beforeState)
+				}
+				coord := col.collectionSchemaCoordinator()
+				coord.typedPublicationDebtMu.Lock()
+				beforeReserved := coord.typedPublicationEncodedBytes
+				coord.typedPublicationDebtMu.Unlock()
+				ids := make([][]byte, rows)
+				retained := make([][]byte, rows)
+				columns := []TypedColumnBatch{{Name: "embedding"}, {Name: "content"}, {Name: "user"}, {Name: "path"}}
+				for i := range ids {
+					id := fmt.Sprintf("row%04d", i)
+					ids[i] = []byte(id)
+					retained[i] = []byte(fmt.Sprintf(`{"id":%q}`, id))
+					columns[0].Float32Vectors = append(columns[0].Float32Vectors, []float32{1, 0, 0, 0, 0, 0, 0, 0})
+					columns[1].Strings = append(columns[1].Strings, "fixture")
+					columns[2].Strings = append(columns[2].Strings, "tenant")
+					columns[3].Strings = append(columns[3].Strings, "path")
+				}
+				beforeLSN := db.CommandWALNextLSN()
+				b.ReportAllocs()
+				b.ResetTimer()
+				b.StartTimer()
+				got, stats, err := col.InsertTypedBatchWithStats(ids, retained, columns)
+				b.StopTimer()
+				if err != nil {
+					if errors.Is(err, ErrHybridSearchUnsupported) && !backenddb.CommitPublicationAccepted(err) && db.CommandWALNextLSN() == beforeLSN {
+						b.Skipf("INCOMPLETE: public typed insert refused before command assignment: %v", err)
+					}
+					b.Fatalf("public typed insert: %v", err)
+				}
+				if len(got) != rows || stats.Documents != rows {
+					b.Fatalf("incomplete typed insert: returned=%d stats=%+v", len(got), stats)
+				}
+				state := col.typedGraphPublicationSnapshot()
+				coord.typedPublicationDebtMu.Lock()
+				reserved := coord.typedPublicationEncodedBytes
+				coord.typedPublicationDebtMu.Unlock()
+				if state == nil || state.invalid || state.physicalRows != rows || reserved <= beforeReserved {
+					b.Fatalf("encoded publication not installed: state=%+v reserved=%d->%d", state, beforeReserved, reserved)
+				}
+				b.ReportMetric(float64(rows), "rows/op")
+				b.ReportMetric(1, "accepted-inserts/op")
+				b.ReportMetric(float64(reserved-beforeReserved), "reserved-encoded-B/op")
+			})
+		}
+	}
+}
