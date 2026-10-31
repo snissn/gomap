@@ -9,6 +9,9 @@ permissions:
 
 jobs:
   constructor:
+    # Draft input assets require push access; no write API is used.
+    permissions:
+      contents: write
     if: github.event_name == 'push' && github.ref == 'refs/heads/codex/mongo-profile-hosted-20261031'
     runs-on: ubuntu-24.04
     timeout-minutes: 30

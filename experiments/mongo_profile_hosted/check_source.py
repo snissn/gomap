@@ -40,7 +40,7 @@ def main():
     require(sha(fixture)=='a49b78e9848a86974c70cbf9cd083224bd26855b8370d03f9368071ab37f3d38','accepted helper changed')
     require(sha((HERE/'qualification_validate_profile.py').read_bytes())=='48bd478a902db158994185b9a859daab2bcebf143494d76570685c9c1a7ba8bd','phase validator changed')
     workflow=(REPO/'.github/workflows/mongo-profile-prototype.yml').read_text()
-    contains(workflow,('branches: [codex/mongo-profile-hosted-20261031]','contents: read','fetch-depth: 16',
+    contains(workflow,('branches: [codex/mongo-profile-hosted-20261031]','contents: read','contents: write','fetch-depth: 16',
         'persist-credentials: false','go-version: "1.26.10"','cache: false','runs-on: ubuntu-24.04',
         'timeout-minutes: 30','if: always()','Prepare bounded hosted syscall injector','PROFILE_CLIENT_ASSET_ID: "694916289"',
         'PROFILE_CLIENT_BUILD_ASSET_ID: "694917396"'), 'workflow')

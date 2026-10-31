@@ -9,57 +9,22 @@
   "base": "95c6ff3de473786bd98b692375cfdb9cef951668",
   "changed_file_hashes": {
     ".github/workflows/mongo-profile-prototype.yml": {
-      "bytes": 2311,
-      "sha256": "9e66b64f2ea5fa5abefd3c8aeec1abf4ae9e6b116f27e5feb90bebc2a35161b6"
+      "bytes": 2418,
+      "sha256": "7be256ac5d7924a88a9bfd4fc134e2c15c6ca83b3f9ca150fb48b2cbc5e88c5d"
     },
     "experiments/mongo_profile_hosted/README.md": {
-      "bytes": 14490,
-      "sha256": "7c6dc34ee83cb29631cea99fba43ead372ac6d0d20f8a05c8d6f76bbd7a90c8f"
-    },
-    "experiments/mongo_profile_hosted/cessation_test.go.txt": {
-      "bytes": 3719,
-      "sha256": "81a39d2e5ae40b6af20de999b685e1fbbeb227105a404f1b36fc921aeb4a7dcc"
+      "bytes": 14954,
+      "sha256": "c672b87f663eb17d14ddf6f552503f6c81e20996486e0258e7dd60725ffe2eb3"
     },
     "experiments/mongo_profile_hosted/check_source.py": {
-      "bytes": 11118,
-      "sha256": "bd14c5af8853036cd68fde876f0f12b46abe5725dc051ed34dd4594f2657e5c6"
-    },
-    "experiments/mongo_profile_hosted/fetch_client.py": {
-      "bytes": 3223,
-      "sha256": "da344f9d7e47c7e5a8e72a99501efb59dc354cc06eb7fb0c52bfa2fba87caf09"
-    },
-    "experiments/mongo_profile_hosted/phase_controller.py": {
-      "bytes": 2003,
-      "sha256": "b3b205e28ca9c5424df61f28f9ddced6d8fee16bcf2c7b18122131952de54ac0"
-    },
-    "experiments/mongo_profile_hosted/prepare_tools.py": {
-      "bytes": 5805,
-      "sha256": "6206b718d5f4aaecf335957764448c902c76e20c2e2659708dd632d948102ed9"
-    },
-    "experiments/mongo_profile_hosted/qualification_validate_profile.py": {
-      "bytes": 5362,
-      "sha256": "48bd478a902db158994185b9a859daab2bcebf143494d76570685c9c1a7ba8bd"
-    },
-    "experiments/mongo_profile_hosted/qualify.py": {
-      "bytes": 29428,
-      "sha256": "e947a7f9b955ab0ad8114cfdfcf0c26c63360ea3cd39c09683646d327c59490f"
-    },
-    "experiments/mongo_profile_hosted/run.py": {
-      "bytes": 42949,
-      "sha256": "6f122f8ed48343dc533de17344cfaa15d2c37b80ee6f3cac360c1c27b6b8c0ac"
+      "bytes": 11136,
+      "sha256": "6f7ccc4042882d72c6528e95ba88895367a248195fd55ab3f3be3e06bc39903b"
     }
   },
   "changed_paths": [
     ".github/workflows/mongo-profile-prototype.yml",
     "experiments/mongo_profile_hosted/README.md",
-    "experiments/mongo_profile_hosted/cessation_test.go.txt",
     "experiments/mongo_profile_hosted/check_source.py",
-    "experiments/mongo_profile_hosted/fetch_client.py",
-    "experiments/mongo_profile_hosted/phase_controller.py",
-    "experiments/mongo_profile_hosted/prepare_tools.py",
-    "experiments/mongo_profile_hosted/qualification_validate_profile.py",
-    "experiments/mongo_profile_hosted/qualify.py",
-    "experiments/mongo_profile_hosted/run.py",
     "experiments/mongo_profile_hosted/source-only-checks.json"
   ],
   "checks": {
@@ -87,15 +52,15 @@
     "source_tree": "b64dd21261421d580ee72fe61711120a7f56c878"
   },
   "commits": false,
-  "construction_source_commit": "dec0ca848d6157ebd8a4d625bb2a14cdc0826ffa",
+  "construction_source_commit": "35e814cd283a290851aaa3a7344ec18046c15800",
   "files": {
     ".github/workflows/mongo-profile-prototype.yml": {
-      "bytes": 2311,
-      "sha256": "9e66b64f2ea5fa5abefd3c8aeec1abf4ae9e6b116f27e5feb90bebc2a35161b6"
+      "bytes": 2418,
+      "sha256": "7be256ac5d7924a88a9bfd4fc134e2c15c6ca83b3f9ca150fb48b2cbc5e88c5d"
     },
     "experiments/mongo_profile_hosted/README.md": {
-      "bytes": 14490,
-      "sha256": "7c6dc34ee83cb29631cea99fba43ead372ac6d0d20f8a05c8d6f76bbd7a90c8f"
+      "bytes": 14954,
+      "sha256": "c672b87f663eb17d14ddf6f552503f6c81e20996486e0258e7dd60725ffe2eb3"
     },
     "experiments/mongo_profile_hosted/accepted-files.json": {
       "bytes": 1740,
@@ -146,8 +111,8 @@
       "sha256": "81a39d2e5ae40b6af20de999b685e1fbbeb227105a404f1b36fc921aeb4a7dcc"
     },
     "experiments/mongo_profile_hosted/check_source.py": {
-      "bytes": 11118,
-      "sha256": "bd14c5af8853036cd68fde876f0f12b46abe5725dc051ed34dd4594f2657e5c6"
+      "bytes": 11136,
+      "sha256": "6f7ccc4042882d72c6528e95ba88895367a248195fd55ab3f3be3e06bc39903b"
     },
     "experiments/mongo_profile_hosted/fetch_client.py": {
       "bytes": 3223,
@@ -184,6 +149,14 @@
   "local_go_commands": false,
   "local_server_client_execution": false,
   "network": false,
+  "permission_repair": {
+    "change": "constructor job contents:write; top-levelread retained; job-wide capability explicitly documented",
+    "draft_publication": false,
+    "error": "HTTP403 Resource not accessible by integration",
+    "observed_red_run": 41190001342,
+    "workload_started_in_red": false,
+    "write_api": false
+  },
   "producer_unchanged": true,
   "public_arms": false,
   "rejected_candidate": {

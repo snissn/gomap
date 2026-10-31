@@ -27,8 +27,14 @@ Accepted producer/reviews/manifests in `accepted/` and the original helper fixtu
 remain byte-identical. No production source or mutable producer hook is added.
 
 The workflow still triggers only on push to
-`codex/mongo-profile-hosted-20261031`, uses read-only contents permissions and
-pinned checkout/setup-go/upload actions, and has a 30-minute job bound. It has no
+`codex/mongo-profile-hosted-20261031`, uses pinned checkout/setup-go/upload
+actions, and has a 30-minute job bound. Top-level contents access is read-only;
+the constructor job overrides it to `contents: write` because the exact draft
+input asset returned HTTP 403 to the read-only token in run `41190001342`.
+This capability applies to the whole trusted job, including implicit action
+token access. Only the input-fetch step exports `GH_TOKEN`; qualification child
+environments remove token variables. No write API is used, checkout does not
+persist credentials, and the input release remains an unpublished draft. It has no
 PR, manual, main, schedule, release or deployment step. Publication appends to
 the accepted predecessor. The driver checks exact HEAD/GITHUB_SHA, root checkpoint
 `dbc659dfee648c11ad105048aa7d007caf8cb097` parent equal to the base and ancestry
