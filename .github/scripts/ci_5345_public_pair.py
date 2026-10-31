@@ -12,10 +12,10 @@ import subprocess
 import sys
 import time
 
-BASE = 'a2d752e5e26f60bf1e6908c0d3be6515b8376755'
-HEAD = '25a6f09e43ca18220f9c032f92dc3c686240e226'
-TREES = {BASE: '219a6ca9613a20a648879bf5bd5de46ac3bc242f',
-         HEAD: '128a4debda6d46385d20b5470fad52c5f4872e4c'}
+BASE = 'b5ec6180623a8efa68bfa0f7d7f74a7eb4c3d4c7'
+HEAD = '7cdbb04f95d8fe94acada43dfe239e7b73316503'
+TREES = {BASE: '698fe540f0e72e08431c6ee7e71fe5a0ac443b39',
+         HEAD: 'f0b3b6ef8f5d4fcbddbb43b26665c5eb6a2fb8fb'}
 BENCH = 'TreeDB/collections/native_ordinary_graph_public_5345_bench_test.go'
 OBSERVER = 'scripts/mvcc_primary_cost_gate.py'
 HELPER_SOURCES = ('TreeDB/internal/typedcolumn/fp32_image_bound_test.go',

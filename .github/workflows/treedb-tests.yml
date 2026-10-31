@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   paired-diagnostic:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/5345-trace-hosted-20261031' && github.run_attempt == '1'
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/5345-trace-v2-hosted-20261031' && github.run_attempt == '1'
     runs-on: ubuntu-24.04
     # Prior setup steps are capped at 21m; the paired step is capped at 145m
     # (two 15m builds + ten bounded trace invocations + binding/quiet checks);
@@ -37,7 +37,7 @@ jobs:
           test "$GITHUB_REPOSITORY" = snissn/gomap
           test "$GITHUB_EVENT_NAME" = workflow_dispatch
           test "$GITHUB_RUN_ATTEMPT" = 1
-          test "$GITHUB_REF" = refs/heads/codex/5345-trace-hosted-20261031
+          test "$GITHUB_REF" = refs/heads/codex/5345-trace-v2-hosted-20261031
           test "$EXPECTED_OVERLAY_SHA" = "$WORKFLOW_CONTEXT_SHA"
           test "$EXPECTED_OVERLAY_SHA" = "$GITHUB_SHA"
       - name: Checkout reviewed diagnostic harness
@@ -52,7 +52,7 @@ jobs:
         timeout-minutes: 5
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: a2d752e5e26f60bf1e6908c0d3be6515b8376755
+          ref: b5ec6180623a8efa68bfa0f7d7f74a7eb4c3d4c7
           path: baseline
           fetch-depth: 1
           persist-credentials: false
@@ -60,7 +60,7 @@ jobs:
         timeout-minutes: 5
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: 25a6f09e43ca18220f9c032f92dc3c686240e226
+          ref: 7cdbb04f95d8fe94acada43dfe239e7b73316503
           path: candidate
           fetch-depth: 1
           persist-credentials: false
@@ -78,11 +78,11 @@ jobs:
           receipt="$RUNNER_TEMP/snappy-public-pair-receipt"
           test "$(git -C harness rev-parse HEAD)" = "$EXPECTED_OVERLAY_SHA"
           test -z "$(git -C harness status --porcelain --untracked-files=all --ignored)"
-          test "$(git -C baseline rev-parse HEAD)" = a2d752e5e26f60bf1e6908c0d3be6515b8376755
-          test "$(git -C baseline rev-parse HEAD^{tree})" = 219a6ca9613a20a648879bf5bd5de46ac3bc242f
-          test "$(git -C candidate rev-parse HEAD)" = 25a6f09e43ca18220f9c032f92dc3c686240e226
-          test "$(git -C candidate rev-parse HEAD^{tree})" = 128a4debda6d46385d20b5470fad52c5f4872e4c
-          git -C harness diff --name-only 25a6f09e43ca18220f9c032f92dc3c686240e226 "$EXPECTED_OVERLAY_SHA" > "$receipt/carrier-diff.txt"
+          test "$(git -C baseline rev-parse HEAD)" = b5ec6180623a8efa68bfa0f7d7f74a7eb4c3d4c7
+          test "$(git -C baseline rev-parse HEAD^{tree})" = 698fe540f0e72e08431c6ee7e71fe5a0ac443b39
+          test "$(git -C candidate rev-parse HEAD)" = 7cdbb04f95d8fe94acada43dfe239e7b73316503
+          test "$(git -C candidate rev-parse HEAD^{tree})" = f0b3b6ef8f5d4fcbddbb43b26665c5eb6a2fb8fb
+          git -C harness diff --name-only 7cdbb04f95d8fe94acada43dfe239e7b73316503 "$EXPECTED_OVERLAY_SHA" > "$receipt/carrier-diff.txt"
           python3 - "$receipt/carrier-diff.txt" <<'PY'
           import pathlib, sys
           actual = pathlib.Path(sys.argv[1]).read_text().splitlines()
