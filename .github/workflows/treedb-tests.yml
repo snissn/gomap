@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   paired-diagnostic:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/5345-paired-public-hosted-20261031' && github.run_attempt == '1'
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/5345-paired-public-v2-hosted-20261031' && github.run_attempt == '1'
     runs-on: ubuntu-24.04
     # Prior setup steps are capped at 21m; the paired step is capped at 145m
     # (two 15m revision-build budgets + ten 9m helper/public samples + binding/quiet checks), upload 10m.
@@ -36,7 +36,7 @@ jobs:
           test "$GITHUB_REPOSITORY" = snissn/gomap
           test "$GITHUB_EVENT_NAME" = workflow_dispatch
           test "$GITHUB_RUN_ATTEMPT" = 1
-          test "$GITHUB_REF" = refs/heads/codex/5345-paired-public-hosted-20261031
+          test "$GITHUB_REF" = refs/heads/codex/5345-paired-public-v2-hosted-20261031
           test "$EXPECTED_OVERLAY_SHA" = "$WORKFLOW_CONTEXT_SHA"
           test "$EXPECTED_OVERLAY_SHA" = "$GITHUB_SHA"
       - name: Checkout reviewed diagnostic harness
