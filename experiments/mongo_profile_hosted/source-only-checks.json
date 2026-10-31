@@ -1,8 +1,10 @@
 {
-  "status": "SOURCE_READY_FOR_RENEWED_INDEPENDENT_PRE_REVIEW",
+  "status": "SOURCE_READY_FOR_SETUP_REPAIR_REVIEW",
   "base": "95c6ff3de473786bd98b692375cfdb9cef951668",
-  "rejected_source_preserved": "/home/mikers/gomap-mongo-hosted-profile-20261031-j2cxm6g7/review/rejected-constructor-1",
-  "rejection_manifest_sha256": "d51c68395e0ca9859b4a179edee65af2daffcce0da47aec978b363a5ef05998f",
+  "construction_source_commit": "dbc659dfee648c11ad105048aa7d007caf8cb097",
+  "failed_hosted_run_preserved": "41183105430",
+  "rejected_source_preserved": "/home/mikers/gomap-mongo-hosted-profile-20261031-j2cxm6g7/review/rejected-hosted-1",
+  "rejection_manifest_sha256": "8840753d223acc7a1fce996e67840af9dfdfdb85f7c091c16a3dc32d8851c652",
   "checks": {
     "status": "offline-source-contracts-passed",
     "copied_packet_files": 10,
@@ -13,36 +15,14 @@
     "go_runtime": false,
     "pprof_decode": false
   },
-  "source_regression_controls": {
-    "retired_profile_constant": {
-      "status": "rejected",
-      "error": "canonical gateway profile drift"
-    },
-    "retired_profile_launch": {
-      "status": "rejected",
-      "error": "retired durable CLI spelling must not return"
-    },
-    "missing_tool_directory_binding": {
-      "status": "rejected",
-      "error": "profile/toolchain agreement guard missing: \"GOTOOLDIR\", \"GOTOOLCHAIN\""
-    },
-    "compiler_version_disagreement_guard": {
-      "status": "rejected",
-      "error": "profile/toolchain agreement guard missing: compiler_version == selected_compiler_version == \"compile version \" + PINNED_GO"
-    },
-    "unretained_helper_elf": {
-      "status": "rejected",
-      "error": "helper profile ELF must be retained with matching hash"
-    }
-  },
-  "go_commands_executed": false,
-  "runtime_executed": false,
+  "go_commands_executed_locally": false,
+  "local_runtime_executed": false,
   "github_writes": false,
-  "source_bytes": 158056,
+  "source_bytes": 167138,
   "files": {
     "experiments/mongo_profile_hosted/README.md": {
-      "bytes": 8952,
-      "sha256": "07a78325368b9c57d475759120b19df2db50e3bbddb7a4231d296f96c9e9f6b9"
+      "bytes": 10636,
+      "sha256": "9ae065f16673635922e858cb228fd1bd59362c2f41187006a3254abce217f6b0"
     },
     "experiments/mongo_profile_hosted/accepted/README.md": {
       "bytes": 5042,
@@ -89,20 +69,28 @@
       "sha256": "3b549d3ee28cf003b473c5e686fe9b69ca0c14fce5cb79d65bc17704852b65e0"
     },
     "experiments/mongo_profile_hosted/check_source.py": {
-      "bytes": 6554,
-      "sha256": "810182829781035d2a8ad1d814f3220dfc12b7fcfb59e8bf8cf832dcdfa6e7e7"
+      "bytes": 7749,
+      "sha256": "62b64382fe232b5f73f1ab8178addc2d0fc496f08ced277dbbe24dc633d88ddc"
     },
     "experiments/mongo_profile_hosted/hosted_profile_test.go.txt": {
       "bytes": 12410,
       "sha256": "a49b78e9848a86974c70cbf9cd083224bd26855b8370d03f9368071ab37f3d38"
     },
     "experiments/mongo_profile_hosted/run.py": {
-      "bytes": 31967,
-      "sha256": "c205b89b96f629be5f5915942c24b080e723a2c924cfb8f0847af57cb7676582"
+      "bytes": 38158,
+      "sha256": "d710d5a4c5364ea1f2c6560356958f5da9eb6e28e3499955b573cdaa5bb5d1f1"
     },
     ".github/workflows/mongo-profile-prototype.yml": {
-      "bytes": 1669,
-      "sha256": "9dc6c79ebd194579eb680150c8a0089f4b731cdb761a261ae02118ae7ee2c1dd"
+      "bytes": 1681,
+      "sha256": "398ff8633be9b6a77dd886c41606a919169aa78c6fec4014ec16d6d55df34e51"
     }
+  },
+  "append_only_history": {
+    "previous_checkpoint": "dbc659dfee648c11ad105048aa7d007caf8cb097",
+    "previous_parent": "95c6ff3de473786bd98b692375cfdb9cef951668",
+    "checkout_depth": 3,
+    "reason": "repository rejected force-push; ordinary append preserves failed source in history",
+    "checks": "offline source contracts passed after change",
+    "go_commands_executed_locally": false
   }
 }

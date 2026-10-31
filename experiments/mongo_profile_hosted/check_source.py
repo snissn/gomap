@@ -29,7 +29,7 @@ def main():
     for name, bound in manifest["files"].items():
         require(hashlib.sha256((REPO / name).read_bytes()).hexdigest() == bound["sha256"], "base source drift: " + name)
     workflow = (REPO / ".github/workflows/mongo-profile-prototype.yml").read_text()
-    for snippet in ("branches: [codex/mongo-profile-hosted-20261031]", "contents: read", "fetch-depth: 2",
+    for snippet in ("branches: [codex/mongo-profile-hosted-20261031]", "contents: read", "fetch-depth: 3",
                     "persist-credentials: false", 'go-version: "1.26.10"', "cache: false",
                     "runs-on: ubuntu-24.04", "timeout-minutes: 30", "if: always()"):
         require(snippet in workflow, "workflow contract missing: " + snippet)
@@ -40,8 +40,11 @@ def main():
     tree = ast.parse(driver)
     constants = {node.targets[0].id: ast.literal_eval(node.value) for node in tree.body
                  if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)
-                 and node.targets[0].id in {"BASE", "ORIGINAL", "GENERATED", "HELPER_CASES", "PROFILE", "PINNED_GO"}}
+                 and node.targets[0].id in {"BASE", "PREVIOUS_CHECKPOINT", "ORIGINAL", "GENERATED", "HELPER_CASES", "PROFILE", "PINNED_GO"}}
     require(constants["BASE"] == accepted["base"], "driver base drift")
+    require(constants["PREVIOUS_CHECKPOINT"] == "dbc659dfee648c11ad105048aa7d007caf8cb097", "retained checkpoint drift")
+    require('strip() == PREVIOUS_CHECKPOINT' in driver and 'PREVIOUS_CHECKPOINT + "^"' in driver,
+            "append-only constructor source chain missing")
     require(constants["GENERATED"] == hashlib.sha256(data).hexdigest(), "driver generated hash drift")
     require(constants["ORIGINAL"] == manifest["files"]["TreeDB/mongo_gateway/server.go"]["sha256"], "driver original hash drift")
     require(constants["PROFILE"] == "command_wal_durable", "canonical gateway profile drift")
@@ -63,6 +66,16 @@ def main():
     for check in ('runner.command("compiler-version"', 'runner.command("go-tool-compiler-version"'):
         require(driver.index(check) < driver.index('runner.command("prepare-pinned-dependencies"'),
                 "compiler agreement must precede dependency preparation/builds")
+    require("RUNNER_TOOL_CACHE" not in driver, "ineffective toolcache environment export returned")
+    require(driver.index("runner.stage_toolchain()") < driver.index('runner.command("go-version"'),
+            "owned staging must precede all Go execution")
+    for snippet in ('TOOLCHAIN_BYTE_CAP = 1024**3', 'TOOLCHAIN_STAGE_SECONDS = 300',
+                    'goroot = root / "toolcache" / PINNED_GO', 'stream.readline(256).strip() == PINNED_GO',
+                    'guard(info.st_size)', 'guard(len(block))', 'FLOOR + required_bytes',
+                    'receipt["copied_bytes"] + info.st_size <= TOOLCHAIN_BYTE_CAP',
+                    'staged_hashes == original_hashes', 'write(self.out / "toolchain-stage.json", receipt)',
+                    'toolchain_staging=runner.toolchain_stage'):
+        require(snippet in driver, "bounded toolchain staging contract missing: " + snippet)
     require('tests = binaries / "profile-helper.test"' in driver and
             'generated_sha256=GENERATED, retained_binary=True' in driver,
             "helper profile ELF must be retained with matching hash")

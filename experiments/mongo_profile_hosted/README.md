@@ -10,9 +10,13 @@ gateway phase lifecycle controls. This is not the fixed public 100k campaign.
 
 The new workflow triggers only on a push to
 `codex/mongo-profile-hosted-20261031`. There is no PR, manual, main, schedule or
-deployment trigger. Its one candidate commit must have frozen base
-`95c6ff3de473786bd98b692375cfdb9cef951668` as its parent and may change only this
-folder and `.github/workflows/mongo-profile-prototype.yml`. It changes no existing
+deployment trigger. The repair appends to retained failed checkpoint
+`dbc659dfee648c11ad105048aa7d007caf8cb097`, whose parent must be frozen base
+`95c6ff3de473786bd98b692375cfdb9cef951668`. Both ancestry links are checked;
+the candidate may change only this folder and
+`.github/workflows/mongo-profile-prototype.yml` relative to that base. The
+repository rejected a force push; the failed checkpoint stays in branch history.
+It changes no existing
 workflow or CI selection. The coordinator owns publication, review, execution
 acceptance and any later public eligibility decision.
 
@@ -28,15 +32,36 @@ meanings; they are provenance records, not instructions to execute their old
 absolute paths. Original manifest entries are checked against the frozen hosted
 worktree. The hardcoded-path generator is never run.
 
-The workflow checks out the exact candidate with pinned actions, fetch depth two
+The workflow checks out the exact candidate with pinned actions, fetch depth three
 and no persisted credentials. A fresh task namespace is created under
 `RUNNER_TEMP`, with a writable filesystem probe and at least 8 GiB available
-before setup-go. Go 1.26.10 is installed into that namespace with caching disabled.
-Task outputs, temporary files, Go caches, toolchain and data directories use this
+before setup-go. With dependency caching disabled, setup-go selects the pinned
+Go 1.26.10 source toolchain. Before executing Go, the driver copies that toolchain
+into its fresh task-owned `toolcache/go1.26.10` directory. Task outputs, temporary
+files, Go caches, the copied toolchain and data directories use this
 namespace. No unrelated runner cleanup runs. The resource guard checks available
 bytes every 200 ms while dependency/build commands execute and kills their process
 group on a floor breach or deadline. The constructor has a 20 minute internal
 budget and the workflow has a 30 minute job bound, leaving time to upload failures.
+
+The first hosted attempt, run `41183105430`, selected the existing toolchain at
+`/opt/hostedtoolcache/go/1.26.10/x64`; the requested environment-file toolcache
+setting did not control that selection. The namespace gate rejected the outside
+driver before dependencies or builds. That source/review snapshot and original
+failure evidence remain preserved. The repaired constructor removes the ineffective
+environment export and stages the selected source explicitly; it does not accept
+an outside driver/compiler as its build toolchain.
+
+Staging first requires the selected root's `VERSION` first line to equal
+`go1.26.10`. Copying has a 1 GiB aggregate byte cap, 100,000 file cap and 300 second
+deadline within the existing constructor budget. Only regular files and
+non-symlink directories are copied. Per-file and per-chunk reserve checks preserve
+the unchanged 8 GiB floor. Origin and staged driver/compiler hashes must agree,
+and selected executables must still match after staging. The original root/path,
+versions, hashes, copy totals and limits are retained in `toolchain-stage.json`
+and successful build provenance. Any copy/version/hash failure emits its original
+failure receipt through a `finally` block; partial owned copies stay outside the
+uploaded evidence directory. No Go command runs during staging.
 
 The driver creates a clean detached worktree at the frozen base and checks the
 original entry hash, all exported source-manifest hashes and an empty tracked,

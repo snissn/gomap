@@ -11,6 +11,7 @@ from pathlib import Path
 import shutil
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -19,12 +20,15 @@ import traceback
 import uuid
 
 BASE = "95c6ff3de473786bd98b692375cfdb9cef951668"
+PREVIOUS_CHECKPOINT = "dbc659dfee648c11ad105048aa7d007caf8cb097"
 ENTRY = "TreeDB/mongo_gateway/server.go"
 ORIGINAL = "2b19dfec2741a5dfaacfdd50cf31cccf95e0228b565420c9992d9fe4e6a73490"
 GENERATED = "987cd212e24c2bd1d4c28ce65501a353aacca6289b48ae3548b7eae39fb14101"
 PROFILE = "command_wal_durable"
 PINNED_GO = "go1.26.10"
 FLOOR = 8 * 1024**3
+TOOLCHAIN_BYTE_CAP = 1024**3
+TOOLCHAIN_STAGE_SECONDS = 300
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 BRANCH = "refs/heads/codex/mongo-profile-hosted-20261031"
@@ -106,9 +110,9 @@ def preflight():
         stream.write("task-owned hosted namespace\n")
         stream.flush()
         os.fsync(stream.fileno())
-    # setup-go also writes to this fresh namespace; no shared runner cleanup.
+    # setup-go selects a pinned source toolchain; the driver stages its own copy.
     with open(os.environ["GITHUB_ENV"], "a") as stream:
-        for key, value in dict(PROFILE_ROOT=root, RUNNER_TOOL_CACHE=root / "toolcache",
+        for key, value in dict(PROFILE_ROOT=root,
                                TMPDIR=root / "tmp", GOTMPDIR=root / "tmp",
                                GOCACHE=root / "gocache", GOMODCACHE=root / "modcache",
                                GOPATH=root / "gopath").items():
@@ -128,13 +132,15 @@ class Runner:
                     "GOROOT", "GOMAP_DIAGNOSTIC_PROFILE_DIR", "YCSB_SERVER_RECEIPT_DIR",
                     "YCSB_OWNER_CHECKPOINT"):
             self.env.pop(key, None)
-        goroot = Path(shutil.which("go")).resolve().parent.parent
+        goroot = root / "toolcache" / PINNED_GO
         self.go = str(goroot / "bin/go")
+        self.toolchain_stage = None
         self.env.update(GOROOT=str(goroot), GOTOOLCHAIN="local", GOWORK="off",
                         GOENV="off", GOFLAGS="", GOPROXY="off", GOSUMDB="off",
                         GOCACHE=str(root / "gocache"), GOMODCACHE=str(root / "modcache"),
                         GOPATH=str(root / "gopath"), TMPDIR=str(root / "tmp"),
                         GOTMPDIR=str(root / "tmp"), PYTHONDONTWRITEBYTECODE="1")
+        self.env["PATH"] = str(goroot / "bin") + os.pathsep + self.env.get("PATH", "")
         self.base = root / "base"
 
     def guard(self):
@@ -142,6 +148,87 @@ class Runner:
         self.min_free = min(self.min_free, free)
         require(free >= FLOOR, "hosted filesystem dropped below 8 GiB; child stopped")
         require(time.monotonic() < self.deadline, "20 minute constructor budget exhausted; preserve evidence")
+
+    def stage_toolchain(self):
+        # No Go executable runs until this bounded task-owned copy is complete.
+        receipt = dict(status="staging", start_utc=now(), byte_cap=TOOLCHAIN_BYTE_CAP,
+                       timeout_seconds=TOOLCHAIN_STAGE_SECONDS, copied_bytes=0, copied_files=0)
+        deadline = min(self.deadline, time.monotonic() + TOOLCHAIN_STAGE_SECONDS)
+
+        def guard(required_bytes=0):
+            self.guard()
+            require(time.monotonic() < deadline, "toolchain staging deadline exceeded")
+            require(shutil.disk_usage(self.root).free >= FLOOR + required_bytes,
+                    "toolchain staging would consume the unchanged 8 GiB reserve")
+
+        def walk_error(error):
+            raise error
+
+        try:
+            guard()
+            selected = shutil.which("go", path=os.environ.get("PATH", ""))
+            require(selected is not None, "setup-go did not select a Go executable")
+            original_go = Path(selected).resolve(strict=True)
+            origin = original_go.parent.parent
+            compiler_relative = Path("pkg/tool/linux_amd64/compile")
+            original_compiler = (origin / compiler_relative).resolve(strict=True)
+            receipt["origin"] = dict(goroot=str(origin), driver=str(original_go), compiler=str(original_compiler))
+            require(original_go == origin / "bin/go" and original_compiler.parent == origin / compiler_relative.parent,
+                    "selected source driver/compiler escaped source toolchain")
+            with (origin / "VERSION").open() as stream:
+                require(stream.readline(256).strip() == PINNED_GO, "source toolchain VERSION is not exact Go 1.26.10")
+            for path in (original_go, original_compiler):
+                require(path.stat().st_size <= TOOLCHAIN_BYTE_CAP, "source executable exceeds toolchain byte cap")
+            original_hashes = dict(driver_sha256=digest(original_go), compiler_sha256=digest(original_compiler))
+            receipt["origin"].update(version=PINNED_GO, **original_hashes)
+            target = Path(self.env["GOROOT"])
+            require(not target.exists(), "toolchain staging requires a fresh task-owned destination")
+            target.mkdir()
+            for directory, dirs, files in os.walk(origin, followlinks=False, onerror=walk_error):
+                guard()
+                source_dir = Path(directory)
+                destination = target / source_dir.relative_to(origin)
+                if source_dir != origin:
+                    destination.mkdir()
+                for name in dirs:
+                    require(not (source_dir / name).is_symlink(), "toolchain source directory symlink refused")
+                for name in sorted(files):
+                    source = source_dir / name
+                    info = source.lstat()
+                    require(stat.S_ISREG(info.st_mode), "toolchain source must contain regular files only")
+                    require(receipt["copied_files"] < 100000, "toolchain file-count cap exceeded")
+                    require(receipt["copied_bytes"] + info.st_size <= TOOLCHAIN_BYTE_CAP, "toolchain byte cap exceeded")
+                    guard(info.st_size)
+                    copied = 0
+                    with source.open("rb") as incoming, (destination / name).open("xb") as outgoing:
+                        while block := incoming.read(1024 * 1024):
+                            require(receipt["copied_bytes"] + len(block) <= TOOLCHAIN_BYTE_CAP, "toolchain byte cap exceeded")
+                            guard(len(block))
+                            require(outgoing.write(block) == len(block), "short toolchain staging write")
+                            copied += len(block)
+                            receipt["copied_bytes"] += len(block)
+                    require(copied == info.st_size and source.stat().st_mtime_ns == info.st_mtime_ns,
+                            "source toolchain file changed during staging")
+                    os.chmod(destination / name, stat.S_IMODE(info.st_mode) & 0o777)
+                    receipt["copied_files"] += 1
+                    guard()
+            with (target / "VERSION").open() as stream:
+                require(stream.readline(256).strip() == PINNED_GO, "staged toolchain VERSION mismatch")
+            staged_hashes = dict(driver_sha256=digest(target / "bin/go"), compiler_sha256=digest(target / compiler_relative))
+            require(staged_hashes == original_hashes ==
+                    dict(driver_sha256=digest(original_go), compiler_sha256=digest(original_compiler)),
+                    "original/staged driver or compiler hash disagreement")
+            receipt["staged"] = dict(goroot=str(target), driver=str(target / "bin/go"),
+                                     compiler=str(target / compiler_relative), version=PINNED_GO, **staged_hashes)
+            receipt["status"] = "staged-and-executable-hashes-agree"
+            self.toolchain_stage = receipt
+        except BaseException as error:
+            receipt["status"], receipt["error"] = "failed-or-incomplete", str(error)
+            raise
+        finally:
+            receipt["end_utc"] = now()
+            receipt["minimum_free_bytes"] = self.min_free
+            write(self.out / "toolchain-stage.json", receipt)
 
     def command(self, name, args, *, cwd=None, env=None, timeout=600, allow_failure=False):
         self.guard()
@@ -384,8 +471,10 @@ def execute():
         runner.guard()
         sha = runner.command("candidate", ["git", "rev-parse", "HEAD"], cwd=REPO).strip()
         require(sha == os.environ["GITHUB_SHA"], "checkout/candidate mismatch")
-        require(runner.command("candidate-parent", ["git", "rev-parse", "HEAD^"], cwd=REPO).strip() == BASE,
-                "constructor checkpoint must have exact frozen base as parent")
+        require(runner.command("candidate-parent", ["git", "rev-parse", "HEAD^"], cwd=REPO).strip() == PREVIOUS_CHECKPOINT,
+                "repair must append to the retained failed constructor checkpoint")
+        require(runner.command("checkpoint-origin", ["git", "rev-parse", PREVIOUS_CHECKPOINT + "^"], cwd=REPO).strip() == BASE,
+                "retained constructor checkpoint must have the exact frozen base as parent")
         changes = runner.command("candidate-paths", ["git", "diff", "--name-only", BASE, sha], cwd=REPO).splitlines()
         require(changes and all(p.startswith("experiments/mongo_profile_hosted/") or
                 p == ".github/workflows/mongo-profile-prototype.yml" for p in changes), "out-of-scope candidate changes")
@@ -417,6 +506,7 @@ def execute():
         fixture_path = runner.base / "TreeDB/mongo_gateway/hosted_profile_test.go"
         test_overlay = runner.out / "test-overlay.json"
         write(test_overlay, {"Replace": {str(runner.base / ENTRY): str(generated), str(fixture_path): str(fixture)}})
+        runner.stage_toolchain()
         version = runner.command("go-version", [runner.go, "version"]).strip()
         require(version == "go version " + PINNED_GO + " linux/amd64", "unexpected exact Go driver")
         goenv = json.loads(runner.command("go-env", [runner.go, "env", "-json", "GOROOT", "GOVERSION",
@@ -435,6 +525,9 @@ def execute():
                 "Go selected tool directory disagrees with bound GOROOT")
         compiler = (tooldir / "compile").resolve(strict=True)
         require(compiler.parent == tooldir, "compiler escaped selected tool directory")
+        require(digest(resolved_go) == runner.toolchain_stage["staged"]["driver_sha256"] and
+                digest(compiler) == runner.toolchain_stage["staged"]["compiler_sha256"],
+                "selected task-owned driver/compiler changed after staging")
         compiler_version = runner.command("compiler-version", [compiler, "-V"]).strip()
         selected_compiler_version = runner.command("go-tool-compiler-version", [runner.go, "tool", "compile", "-V"]).strip()
         require(compiler_version == selected_compiler_version == "compile version " + PINNED_GO,
@@ -443,6 +536,8 @@ def execute():
                           expected_profile=PROFILE, resolved_go=str(resolved_go), driver_version=version,
                           goroot=str(goroot), gotooldir=str(tooldir), goversion=goenv["GOVERSION"],
                           compiler_path=str(compiler), compiler_version=compiler_version,
+                          toolchain_staging=runner.toolchain_stage,
+                          toolchain_staging_receipt_sha256=digest(runner.out / "toolchain-stage.json"),
                           go_tool_compiler_version=selected_compiler_version,
                           workflow_sha256=digest(runner.out / "workflow.yml"), driver_sha256=digest(Path(__file__)),
                           go_sha256=digest(Path(runner.go)), compiler_sha256=digest(compiler), goenv=goenv,
