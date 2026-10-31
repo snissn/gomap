@@ -80,6 +80,9 @@ func activeStorage5345(col *Collection, rows int) (encoded []byte, parts int, re
 			return nil, 0, fmt.Errorf("native census captured view: %w", err)
 		}
 		accounting, err = physicalAccountingFromScanView(context.Background(), view, opts)
+		if err != nil {
+			return nil, 0, fmt.Errorf("native census asset inspection: %w", err)
+		}
 	}
 	if err != nil {
 		return nil, 0, err
@@ -102,6 +105,7 @@ func activeStorage5345(col *Collection, rows int) (encoded []byte, parts int, re
 		Accounting ColumnStorePhysicalAccounting `json:"accounting"`
 	}{"active_persisted_descriptors_not_all_history_events", accounting}
 	encoded, err = json.Marshal(receipt)
+	receipt.Accounting = ColumnStorePhysicalAccounting{}
 	return encoded, len(accounting.TypedColumnParts), err
 }
 
