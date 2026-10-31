@@ -390,6 +390,19 @@ ownership in this enabled route. Flush checks its finished native tables against
 the reserved bound before appending typed assets or pointerizing those tables.
 The existing receipt carries only scalar costs, not another document copy.
 
+For the narrow two-column FP32 publication layout,
+`FP32ImageEncodedUpperBound` accepts a stats-disabled delta-varint ordinal
+column with `none`, `lz4`, or `snappy` compression and one raw fixed-width FP32
+vector column. Eligible image sections may use `none`, `lz4`, `snappy`, or
+`zstd`; ordinal-block `zstd` and other layouts remain unsupported. The existing
+producer retains compressed payloads only when smaller than raw, so these codec
+choices share the conservative raw-image bound and checked-overflow rules.
+The bound reads metadata, without scanning rows or constructing encoded output.
+It covers encoded TCIM bytes only, excluding encoder/decoder scratch, asset
+containers, pages and process memory. This capability does not change the
+ordinary native ColumnGraph route, which does not call this helper, or certify
+the separate native graph-root handoff protocol.
+
 An attempted append keeps its encoded charge even if the append fails, its pins
 are released, publication is rejected, or logical reconciliation succeeds. A
 retry reserves another attempt; successful flush transfers logical pending debt
