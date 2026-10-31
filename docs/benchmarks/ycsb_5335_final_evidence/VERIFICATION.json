@@ -1,0 +1,12 @@
+{
+  "actual_attempts": 12,
+  "archive_sha256": "21081ee3d89a8ef2babb327ca338badbcd6d1e013d214b4f28cc674f6c31d0c3",
+  "delivery_status": "COMPLETE_SELECTIVE_RAW_DELIVERY",
+  "index_sha256": "213d1afa8c21aceb9f984f726d6dbc138dc1672024084801a41b82b0cc031aa6",
+  "limits": "compact source bytes/archive/index/cardinality/report arithmetic only; maintained lifecycle/CI/merge acceptance remains separate; stat-only DB custody is not content authentication",
+  "member_bytes": 349153146,
+  "member_count": 9093,
+  "omitted_payloads_rehashed": 0,
+  "original_source_byte_identity": true,
+  "status": "PASS_SELECTIVE_ARCHIVE_VERIFICATION"
+}
