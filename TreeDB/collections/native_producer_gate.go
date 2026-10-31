@@ -4,15 +4,13 @@ import backenddb "github.com/snissn/gomap/TreeDB/db"
 
 // Producer maintenance runs outside the shared schema/mutation gate. Recheck
 // pressure after acquiring it so concurrent writers and DDL use one current cut
-// without retaining a reservation while waiting for the gate. At most one
-// changed-observation maintenance recheck follows the initial preparation;
-// concurrent suffixes cannot turn advisory scheduling into an unbounded loop.
+// without retaining a reservation while waiting for the gate.
 func (c *Collection) prepareNativeProducerMutation() (func(), bool, error) {
 	prepared, err := c.nativeJSON.db.PrepareNativeProducerObservation()
 	if err != nil {
 		return nil, false, err
 	}
-	for rechecks := 0; ; rechecks++ {
+	for {
 		unlock, err := c.lockNativeProducerMutation()
 		if err != nil {
 			return nil, false, err
@@ -26,7 +24,7 @@ func (c *Collection) prepareNativeProducerMutation() (func(), bool, error) {
 			unlock()
 			return nil, false, err
 		}
-		if !fresh.UnderPressure || fresh == prepared || rechecks == 1 {
+		if !fresh.UnderPressure || fresh == prepared {
 			return unlock, true, nil
 		}
 		unlock()

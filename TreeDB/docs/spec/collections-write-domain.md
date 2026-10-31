@@ -133,9 +133,11 @@ a generic failure is not proof that application callbacks can safely retry.
 Assigned uncertain failures retain their identity and poison further writes
 until recovery.
 
-Native live producers run shared pressure preparation before collection locks,
-captures, private staging and callbacks. Active pending catalog and collection
-domain generations also request preparation when their exact generation history
+Native live producers run shared pressure preparation before transaction
+captures, private staging and callbacks. Ordinary collection insert/update/delete
+facades also revalidate the prepared observation under their schema/mutation
+gate. Active pending catalog and collection domain generations also request
+preparation when their exact generation history
 (including native source metadata) plus outstanding preparation reservations
 reaches the three-quarter watermark. This scans sparse pending directories,
 not captured old generations or the full catalog. It reserves no headroom:
@@ -143,9 +145,12 @@ an unusually large request or concurrent suffix can still receive the original
 authoritative capacity refusal. Held old reads remain owned and readable.
 The existing three-quarter byte watermark or an exhausted finite source/generation
 counter also requests maintenance. Each preparation joins at most one coalesced
-checkpoint or captured-prefix drain. Mutation admission permits at most one
-additional preparation for a changed pressured observation, then leaves the
-normal final admission authoritative instead of chasing concurrent suffixes.
+checkpoint or captured-prefix drain. In those facades, after acquiring the
+mutation gate, a changed pressured observation requires preparation of that
+new cut outside the gate. An unchanged pressured observation proceeds to authoritative final
+admission, so retained owners do not require repeated maintenance of the same
+cut. There is no fixed preparation-count guarantee while other producers keep
+changing the observed cut.
 Pending typed construction uses the same watermark against
 both finite maintenance byte limits and the same source ceiling. Its inventory
 includes the original builder, handoff, typed workspace, root-key and catalog
