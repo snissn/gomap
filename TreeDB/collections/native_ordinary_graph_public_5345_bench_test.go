@@ -1,6 +1,7 @@
 package collections
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,7 +18,7 @@ import (
 // descriptors: they describe active output, not an all-history event counter.
 func report5345ActiveStorage(b *testing.B, col *Collection, rows int) {
 	b.Helper()
-	accounting, err := col.ColumnStorePhysicalAccounting(nil, ColumnStorePhysicalAccountingOptions{DetailedSections: true, ReadIntegrity: ColumnAssetReadIntegrityVerify})
+	accounting, err := activeStorage5345(col)
 	if err != nil {
 		b.Fatalf("active physical accounting: %v", err)
 	}
@@ -44,6 +45,73 @@ func report5345ActiveStorage(b *testing.B, col *Collection, rows int) {
 	}
 	b.Logf("5345_ACTIVE_STORAGE_CENSUS: %s", encoded)
 	b.ReportMetric(float64(len(accounting.TypedColumnParts)), "active-typed-parts/op")
+}
+
+// Native collections deliberately have no legacy db handle. Inspect one
+// original native capture using the maintained physical-read admission and
+// view constructors; never reacquire a newer legacy snapshot. This untimed
+// test census and its independent returned report are not engine allocations
+// measured by the benchmark or a proof of the engine's total memory bound.
+func activeStorage5345(col *Collection) (out ColumnStorePhysicalAccounting, resultErr error) {
+	opts := ColumnStorePhysicalAccountingOptions{DetailedSections: true, ReadIntegrity: ColumnAssetReadIntegrityVerify}
+	if col.nativeJSON == nil {
+		return col.ColumnStorePhysicalAccounting(nil, opts)
+	}
+	read, err := col.nativeJSON.Capture(col.name)
+	if err != nil {
+		return out, err
+	}
+	defer func() { resultErr = errors.Join(resultErr, read.Close()) }()
+	if !nativeTypedMeta(read.meta) || read.collection == nil {
+		return out, backenddb.ErrNativeSemanticUnsupported
+	}
+	manifest, ok := read.collection.domains.Get("column/manifest")
+	if !ok {
+		return out, backenddb.ErrNativeSemanticUnsupported
+	}
+	physical, err := nativeTypedReadCapacity(read.meta, read.capture.Snapshot(), manifest.baseRoot)
+	if err != nil {
+		return out, err
+	}
+	header, err := read.nativeTypedReadViewCharge()
+	if err != nil {
+		return out, err
+	}
+	if err = nativeTypedCheckedAdd(&physical, header); err != nil {
+		return out, err
+	}
+	lease, err := read.capture.NativeAllocator().AdmitNativeBytes(physical)
+	if err != nil {
+		return out, err
+	}
+	var wrapper *Collection
+	var view columnPhysicalScanSnapshotView
+	defer func() {
+		view = columnPhysicalScanSnapshotView{}
+		wrapper = nil
+		lease.Close()
+	}()
+	extra, _, err := nativeTypedFamilyReadCapacity(read.meta, read.capture.Snapshot(), manifest.baseRoot, read.database.ColumnAssetRootDir(), nil, func(n uint64) error {
+		if e := nativeTypedCheckedAdd(&n, header); e != nil {
+			return e
+		}
+		return lease.Resize(max(physical, n))
+	})
+	if err != nil {
+		return out, err
+	}
+	if err = nativeTypedCheckedAdd(&physical, extra); err != nil {
+		return out, err
+	}
+	if err = lease.Resize(physical); err != nil {
+		return out, err
+	}
+	wrapper = read.nativeTypedReadCollection()
+	view, err = wrapper.prepareColumnPhysicalScanSnapshotViewAtSnapshotWithSidecars(read.capture.Snapshot(), wrapper.catalog, read.meta.Name, manifest.baseRoot, *read.meta.Options.ColumnStore, true, columnManifestScanAllSidecars())
+	if err != nil {
+		return out, err
+	}
+	return physicalAccountingFromScanView(context.Background(), view, opts)
 }
 
 func require5345NoCodecOverrides(b *testing.B) {
