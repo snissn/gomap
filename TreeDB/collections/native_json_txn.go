@@ -667,6 +667,15 @@ func (t *NativeJSONTxn) commitNativePlanWithJournal(sealed bool, apply *nativeCo
 	if stats != nil {
 		publishStarted = time.Now()
 	}
+	defer func() {
+		// The lower owner clears Custody when it consumes the publication,
+		// before any installation or physical completion callback can unwind.
+		// Drop this producer alias before closeLocked even if CommitNative
+		// panics or exits; only an unconsumed private plan remains ours to close.
+		if native != nil && native.Custody == nil {
+			t.custody = nil
+		}
+	}()
 	result, err := t.core.CommitNative(native, intent, sync)
 	if journal != nil && journal.requested {
 		journal.completion = result.Journal
