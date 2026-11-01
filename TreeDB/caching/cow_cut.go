@@ -83,6 +83,18 @@ func (b *cowBackendBasis) workspaceLocked(reader **cowReadWorkspace, budget *mem
 	return *reader, nil
 }
 
+// retireReadWorkspaceLocked is the native VALUE preparation-refusal policy,
+// not point traversal's fresh-only handoff. The caller holds the exact owner's
+// mutex, has ended all scratch borrows and retains the original basis. Detach
+// first; close clears every child/reference before refunding its receipts.
+func (b *cowBackendBasis) retireReadWorkspaceLocked(owner **cowReadWorkspace, expected *cowReadWorkspace) {
+	if expected == nil || *owner != expected {
+		return
+	}
+	*owner = nil
+	expected.close()
+}
+
 func (b *cowBackendBasis) retain() { b.refs.Add(1) }
 func (b *cowBackendBasis) release() error {
 	if b == nil || b.refs.Add(-1) != 0 {

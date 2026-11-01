@@ -5010,3 +5010,45 @@ checks exact original/fresh values outside timing. These are source controls;
 execution, allocation/public tails, race, crash, rotation and final qualification
 remain separate gates. Preserve the existing unordered planning-error continuation
 and pre-publication deadline controls unchanged.
+
+
+### Native basis block-value workspace witnesses
+
+`TestNativeValueBlockWorkspaceHeldPhysicalMutex` cold-bootstraps through actual
+captured reads, checks charged basis storage and progresses under the real held
+shared decoder mutex for writer-produced raw, Snappy and LZ4 K1/K2 records and
+both grouped subindices. `TestNativeValueBlockWorkspaceIntegrityAndOwnership`
+checks verified callback refusal and grouped CRC errors without shared replay.
+`TestNativeValueBlockWorkspaceAllSlotsBusy` retains the authoritative shared
+fallback. `TestNativeValueBlockWorkspacePreparationRefusal` prices actual
+metadata, codec-vector, codec and output constituent admissions, then refuses each
+under finite pressure for fresh/existing primary/extra owners; it checks full
+selected retirement and pending-token/replacement identity. Metadata refusal does
+not retire an unrelated owner. The valid ZSTD and retained post-Close fit/growth
+controls preserve unsupported shared decoding and scoped closed-budget policy.
+`TestNativeValueBlockWorkspaceRawPreparationBeforePayload` refuses fresh raw
+input/output growth or growth of the missing existing dimension for primary and
+extra owners; a corrupt CRC proves refusal occurs before payload verification or
+callback. `TestNativeValueBlockWorkspaceActualReadRefusalIsTerminal` injects a
+capacity sentinel from the actual decoder, proving it is terminal rather than a
+preparation replay signal. Concurrent retained captures, checkpoint replacement,
+checked original Close and
+final original-budget zeroing are covered by
+`TestNativeValueBlockWorkspaceConcurrentClose`.
+
+`TestNativeJSONBlockValueDefaultActivation` uses the journal-receipt fixture's
+actual OptionsFor durable/relaxed BSON collection manager, default compression,
+checkpoint and fresh-owner reopen. Its test-only capture wrapper delegates public
+Get to the real original physical value reader and records actual pointer shapes;
+it does not prepare value scratch. The caching witnesses provide private mutex
+and charge assertions without a shipping diagnostic API. Any independent leaf
+traversal warming is separate from value preparation. These source witnesses need
+normal and race execution and do not establish public workload performance,
+retained-memory acceptability, unsupported-fallback cost or delivery acceptance.
+
+`BenchmarkNativeBlockValueWorkspace` reports actual public BSON Get warm B/op and
+allocs/op, separate cold process allocation deltas/latency, retained/peak original
+budget charges, serial/parallel reads and an untimed physical-basis replacement.
+It checks original manager/owner Close and fresh-owner value preservation. These
+component metrics do not replace the fixed public workload or quantify valid
+unsupported-codec fallback reinspection; both remain separately required.

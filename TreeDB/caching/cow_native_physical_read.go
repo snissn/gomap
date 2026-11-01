@@ -137,10 +137,81 @@ func (b *cowBackendBasis) readNativePhysicalLeafWithWorkspace(cache *cowCache, p
 	return b.readPhysicalLeafWithDictionary(cache, w, ptr, dst, true, false, independent)
 }
 
-// nativeValueAtPointer borrows the exact retained basis file and the original
-// cache's independently owned decoder. No basis/file/caller scope is retained by
-// scratch. Copy-out and retained-output admission finish under physicalMu.
+// tryNativeBasisValue uses only the existing four basis owners. A selected
+// owner is held through inspection, preparation, verified read and owned copy.
+// false means no payload read occurred and the original shared route must run.
+func (b *cowBackendBasis) tryNativeBasisValue(cache *cowCache, ptr page.ValuePtr, admitOutput func(uint64) error) (handled bool, value []byte, err error) {
+	mu, owner, _ := b.tryReadWorkspace(0)
+	if mu == nil {
+		return false, nil, nil
+	}
+	defer mu.Unlock()
+	fresh := *owner == nil
+	limit := cache.budget.Limits().MaxInFlightBytes
+	w, err := b.workspaceLocked(owner, cache.budget, valuelog.COWReadLimits{MaxRecordBytes: limit, MaxRawBytes: limit, MaxValueBytes: limit})
+	if err != nil {
+		if errors.Is(err, memtable.ErrCOWCapacity) || errors.Is(err, memtable.ErrCOWClosed) {
+			return false, nil, nil
+		}
+		return true, nil, err
+	}
+	// An eligibility-only admission must not linger after an inspection error
+	// or valid unsupported shape. Existing healthy scratch stays reusable.
+	prepared := false
+	defer func() {
+		if fresh && !prepared && w != nil {
+			b.retireReadWorkspaceLocked(owner, w)
+		}
+	}()
+	f, _, err := b.snapshot.PinnedValueLogFile(ptr.FileID)
+	if err != nil {
+		return true, nil, err
+	}
+	shape, err := valuelog.InspectCOWRecord(f, ptr, w.limits)
+	if err != nil {
+		return true, nil, err
+	}
+	if shape.Compressed && (shape.DictID != 0 || (shape.Codec != valuelog.BlockCodecSnappy && shape.Codec != valuelog.BlockCodecLZ4)) {
+		return false, nil, nil
+	}
+	// This is the sole additional fallback boundary. Preparation admits only
+	// scratch: it reads no payload and cannot invoke the output callback. A
+	// refusal may have replaced codecs or grown arrays, so retire the complete
+	// exact selected owner, including any pre-existing point scratch.
+	if _, _, _, err = w.prepareRead(shape, shape.ValueBytes, nil); err != nil {
+		if errors.Is(err, memtable.ErrCOWCapacity) || errors.Is(err, memtable.ErrCOWClosed) {
+			failed := w
+			w = nil
+			b.retireReadWorkspaceLocked(owner, failed)
+			return false, nil, nil
+		}
+		return true, nil, err
+	}
+	prepared = true
+	// Preparation repeats only matching, fitting checks in readInspected. All
+	// errors from this actual checked read are terminal, regardless of sentinel.
+	borrowed, err := w.readInspected(f, ptr, shape, false, nil, nil)
+	if err != nil {
+		return true, nil, err
+	}
+	if admitOutput != nil {
+		if err := admitOutput(memtable.COWAllocationCharge(uint64(len(borrowed)))); err != nil {
+			return true, nil, err
+		}
+	}
+	owned := make([]byte, len(borrowed))
+	copy(owned, borrowed)
+	return true, owned, nil
+}
+
+// nativeValueAtPointer borrows the exact retained basis file. Eligible raw and
+// dictionary-free Snappy/LZ4 values can lazily admit an idle basis workspace;
+// the original shared decoder owns every remaining route. Each route finishes
+// verification, retained-output admission and independent copy under its mutex.
 func (b *cowBackendBasis) nativeValueAtPointer(cache *cowCache, provider cowDictionaryReadProvider, ptr page.ValuePtr, admitOutput func(uint64) error) ([]byte, error) {
+	if handled, value, err := b.tryNativeBasisValue(cache, ptr, admitOutput); handled {
+		return value, err
+	}
 	cache.physicalMu.Lock()
 	defer cache.physicalMu.Unlock()
 	limit := cache.budget.Limits().MaxInFlightBytes

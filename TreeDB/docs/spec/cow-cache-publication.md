@@ -287,9 +287,41 @@ owner and error behavior. Existing warm owners remain live. Once traversal begin
 I/O, integrity, codec, provider and read-capacity errors return without retry.
 Every admitted extra owner remains charged to the original budget and basis and
 is drained by the existing final-basis release. Native leaf-page reads remain on
-the primary mutex; native value-pointer reads retain the cache decoder mutex.
-This selection changes neither the native codec policy nor the shared physical
-decoder policy, pinned-file verification, inspection limits or provider authority.
+the primary mutex. This point-traversal selection changes neither its native
+codec policy nor pinned-file verification, inspection limits or provider authority.
+
+Native value-pointer copy-out opportunistically selects one of the same four
+basis owners without waiting. It lazily admits the existing inspection envelope
+and uses the original pinned basis file and limits. Raw records (including raw
+records with dictionary tags) and dictionary-free Snappy/LZ4 records prepare the
+existing bounded input/output and codec storage before reading payload. This cold
+preparation is required for ordinary default public reads to activate the route;
+manual prewarming is not its activation contract. Successful storage stays charged
+until selected retirement or final-basis release. No new pool, decoder, owner slot,
+configuration or retained capture/provider is introduced.
+
+Busy owners, metadata capacity/closed admission refusal and valid inspected
+dictionary, ZSTD or legacy compressed shapes release the basis mutex before the
+original cache decoder fallback, exactly once. A newly admitted eligibility-only
+owner is closed before an unsupported fallback; a healthy existing owner remains.
+Pinned-file and inspection errors are terminal. For eligible records only a
+preparatory memtable capacity/closed refusal detaches and closes the exact selected
+workspace under its own mutex, including pre-existing point scratch, all codecs,
+arrays, superseded buffers and metadata. References end before refunds; the
+original basis snapshot and file pins remain retained. Point-traversal handoff's
+fresh-only retirement policy remains unchanged, and stale handoff tokens cannot
+retire replacement identities.
+
+Unknown/format/codec preparation errors and every actual read, CRC, decode,
+metadata-revalidation or output-admission error are terminal with no shared replay.
+The output callback runs once after successful verification; refusal returns nil.
+The independently allocated len==cap result is copied before panic-safe unlock.
+This deliberately revises historical incidental admission/error ordering: fitting
+basis storage can serve a live retained capture with a closed producer budget;
+required growth retires that owner before the original fallback decides its result.
+Closed captures/transactions still reject first. No general public post-DB-Close
+read guarantee follows. Unsupported fallback retains its original reinspection,
+dictionary ownership, limits and decoder admission costs.
 
 Direct DB point reads retain their original shared workspace. ZSTD records in
 COW read workspaces use the maintained bounded decoder continuation. Dictionary reads first reuse an already-admitted matching cut-local

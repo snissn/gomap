@@ -408,3 +408,15 @@ The [#5338 evidence record](../evidence/native-columngraph-handoff-5338/README.m
 binds the controlled RED/GREEN, independent reviews, lifecycle measurements and
 original validation failures to the tested source. It distinguishes the repaired
 handoff from the historical incident and retains incomplete or failing gates.
+
+Native pointer fetches delegate to the original capture's physical value reader.
+Eligible raw and dictionary-free Snappy/LZ4 values may cold-admit bounded scratch
+in one of its four existing basis owners; dictionary/ZSTD/legacy and busy routes
+retain the original shared decoder. Only metadata admission or eligible
+preparation capacity/closed refusal permits pre-read fallback. The latter retires
+the exact complete selected scratch owner before unlock; file/capture authority
+remains on the retained basis. Inspection and all actual read/decode/output
+admission errors are terminal and never replayed. Verification precedes the
+synchronous original-budget output callback and independent copy-out. These
+scratch rules do not change the request's logical sequence, visibility, projection,
+or final response admission contracts; see `cow-cache-publication.md`.
