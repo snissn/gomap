@@ -105,9 +105,9 @@ func TestStandaloneNativeJournalCoalescedInsertPhysicalReceiptNoRefence(t *testi
 	beforeACK := s.Server.StandaloneWriteConcernStats()
 	type sample struct {
 		lsn, sequence, attempts uint64
-		root, path string
+		root, path              string
 	}
-	type pair struct { before, after sample }
+	type pair struct{ before, after sample }
 	var observationsMu sync.Mutex
 	var observations [8]pair
 	observed := 0
@@ -244,7 +244,9 @@ func TestStandaloneNativeJournalCoalescedInsertPhysicalReceiptNoRefence(t *testi
 		requireStandaloneNativeJournalDocument(t, raw, ids[i], i+1)
 	}
 	held := s.Stats()
-	delta := func(stats map[string]string, key string) uint64 { return writeConcernBenchmarkStat(t, stats, key) - writeConcernBenchmarkStat(t, before, key) }
+	delta := func(stats map[string]string, key string) uint64 {
+		return writeConcernBenchmarkStat(t, stats, key) - writeConcernBenchmarkStat(t, before, key)
+	}
 	if delta(held, "treedb.command_wal.group_commit.forced_total") != 0 {
 		t.Fatalf("target forced before ordinary physical completion: forced=%d", delta(held, "treedb.command_wal.group_commit.forced_total"))
 	}
