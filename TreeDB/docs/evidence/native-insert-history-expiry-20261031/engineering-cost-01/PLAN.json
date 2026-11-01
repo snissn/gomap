@@ -1,0 +1,289 @@
+{
+  "schema_version": 1,
+  "scope": "Engineering ordinary-insert repair guard: serial native durable request cost with scheduled maintenance disabled and enlarged flush threshold; not default engine behavior, public performance qualification or concurrent max1 proof",
+  "launch_ready": true,
+  "pending_freeze": [],
+  "output": "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/cost-pair-01",
+  "runner_sha256": "97b648d003394b351973cd68d3319611aea94b7e97130e5ca4dd09ce186d8467",
+  "order": [
+    "B1",
+    "C1",
+    "C2",
+    "B2",
+    "B3",
+    "C3",
+    "C4",
+    "B4",
+    "B5",
+    "C5"
+  ],
+  "blocks": [
+    [
+      "B1",
+      "C1"
+    ],
+    [
+      "C2",
+      "B2"
+    ],
+    [
+      "B3",
+      "C3"
+    ],
+    [
+      "C4",
+      "B4"
+    ],
+    [
+      "B5",
+      "C5"
+    ]
+  ],
+  "rationale": "Five matched fixed100-iteration blocks, alternating order; every sample retained. B first3/C first2 remains observational engineering evidence, not significance or public workload qualification.",
+  "guard": "/mnt/fast4tb/gomap-mongo-perf-graph-6a9s7h58/public-guard/scripts/ycsb_campaign_guard.py",
+  "scripts_dir": "/mnt/fast4tb/gomap-mongo-perf-graph-6a9s7h58/public-guard/scripts",
+  "harness": {
+    "source_directory": "/mnt/fast4tb/gomap-mongo-perf-graph-6a9s7h58/public-guard",
+    "commit": "79a545a1d745e848f2aa859896fb962e07204b73",
+    "tree": "a9bd76e24d2172afc8cd2d43548f4d71d8e9af20",
+    "landed": true
+  },
+  "landed_guard_receipt": "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/guard-landed.json",
+  "helper_closure": {
+    "scripts/ycsb_campaign_guard.py": {
+      "sha256": "b1f5308ce5de5bf1252a77694599f4be4fdf769803b4d7300c08b4901f8d9642",
+      "git_blob": "00ba3b23c49022bc295fc16eb6c39343f45c9170"
+    },
+    "scripts/ycsb_compare_validate.py": {
+      "sha256": "1b14289667212b44dc7257f9cd5221267c12239bc2e3f5bf58d7dcbda9fadd04",
+      "git_blob": "4e5d4a2ca842ac91d547a7135181c58a9a64cf27"
+    },
+    "scripts/ycsb_evidence_json.py": {
+      "sha256": "86989ebbfa14b8f9f3c20ebe470314a29fd28c7db2ab10734d9518e39d270ea6",
+      "git_blob": "e360c3760bbff85fd47d5af4e487b597b88aad24"
+    },
+    "scripts/ycsb_runtime_observer.py": {
+      "sha256": "fab36e1396205c2cddff0c24fa0f5c6faaa4e0fd47f46fdb423ffe3dd4e31077",
+      "git_blob": "01222b804dbed55e2fefeffd4e47153f07764c53"
+    },
+    "scripts/test_ycsb_campaign_guard.py": {
+      "sha256": "f0251e604cc4ecef5c81bf1bf8e09a9799c15547e955b467ed6045f214ac949b",
+      "git_blob": "164ced66ca32255c481c925615d1ab557882651e"
+    },
+    "scripts/ycsb_compare_receipts.md": {
+      "sha256": "a014c2e3187ad56ac3bff18907f840181664054bd86fbee3f4cc944633fad440",
+      "git_blob": "7670e5ba63e90715e70416b6f38cfcbadc69bff3"
+    }
+  },
+  "required_helpers": [
+    "scripts/ycsb_campaign_guard.py",
+    "scripts/ycsb_compare_validate.py",
+    "scripts/ycsb_evidence_json.py",
+    "scripts/ycsb_runtime_observer.py",
+    "scripts/test_ycsb_campaign_guard.py",
+    "scripts/ycsb_compare_receipts.md"
+  ],
+  "go": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.10.linux-amd64/bin/go",
+  "environment": {
+    "PATH": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.10.linux-amd64/bin:/usr/bin:/bin",
+    "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.10.linux-amd64",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "PYTHONPATH": "/mnt/fast4tb/gomap-mongo-perf-graph-6a9s7h58/public-guard/scripts"
+  },
+  "forbidden_environment": [
+    "GOMAXPROCS",
+    "GOGC",
+    "GOMEMLIMIT",
+    "GODEBUG",
+    "GOEXPERIMENT",
+    "GOFLAGS",
+    "GOMAP_DIAGNOSTIC_PROFILE_DIR",
+    "LD_LIBRARY_PATH",
+    "LD_PRELOAD",
+    "LD_AUDIT",
+    "BASH_ENV",
+    "ENV",
+    "PYTHONHOME",
+    "PYTHONOPTIMIZE",
+    "PYTHONINSPECT",
+    "PROFILE_MODE",
+    "PROFILE_PHASE_DIR",
+    "PYTHONPATH"
+  ],
+  "caps": {
+    "rss_bytes": 25769803776,
+    "free_bytes": 10737418240,
+    "guard_deadline_seconds": 120,
+    "cleanup_seconds": 10,
+    "sample_interval_seconds": 0.2,
+    "test_timeout_flag": "2m",
+    "test_timeout_scope": "Go non-benchmark test timeout only; alarm stops before runBenchmarks; sole benchmark wall deadline is maintained guard120s plus cleanup",
+    "max_new_phase_seconds": 1020,
+    "whole_window_seconds": 1200
+  },
+  "runtime": {
+    "GOMAXPROCS_environment": "absent",
+    "affinity": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11
+    ],
+    "explicit_cpu_flags": "forbidden: -test.cpu/-cpu",
+    "actual_GOMAXPROCS_observation": "both real benchmark metric names end-12; point observations at Go benchmark start, not continuous",
+    "continuous_verified": false
+  },
+  "profiles": false,
+  "guard_mode": "explicit --synthetic because component has no original public campaign validation.json",
+  "policy": "First setup, contract, resource, owned process, Go PASS/metric/runtime or actualtool failure stops later cells. No unchanged retries. All samples remain. Material request latency/throughput or per-request allocation regression requires fix or explicit scoped coordinator/user disposition.",
+  "metrics": "Exactly batch1 thenbatch256, count100, ns/op, MB/s, documents/s, B/op, allocs/op; all5 matched C/B blocks retained. Actual tool and guard exit0, no intervention/errors, single PASS, actual suffix12.",
+  "interpretation": "Public TreeDB ordinary BSON native COW durable insert request cost only. 1,000-byte binary payload, sequential unique8-byte IDs; serial fresh database per subbenchmark, default grouping. Inputs prepared outside timer. Durable ACK inside timer. First/last exact values before/after checkpoint, checked original manager/owner Close, fresh owner reopen/checked Close outside timer. Does not exercise concurrent eviction, max1, Mongo driver or original100k workload; process-wide Go allocation counts and sampled guard have stated limits. IMPORTANT: nativeTypedGroupOptions overrides FlushThreshold1GiB, background checkpoint interval/idle=-1, MaxWALBytes=-1 and value-log generational policyOff identically in both arms. These are not normal engine defaults; mandatory native pressure handling is not disabled. This is only a matched request-cost guard; original default public workload acceptance remains separate.",
+  "execution_control": "prepare REVIEW --quiet-lane-reserved; run REVIEW LABEL --quiet-lane-reserved exec replaces recipe with sole guard; finish REVIEW LABEL ACTUAL_EXIT ABS_TOOL_JSON --quiet-lane-reserved validates actual retained tool and guard output. Fresh grant independent of lease; no new cell after T+17m of prepare, max20m window. Coordinator checks each terminal and final no-owned-descendants/lease release before successor.",
+  "producer": "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/repo/TreeDB/collections/native_insert_history_expiry_bench_test.go",
+  "producer_sha256": "e34b36ea3edb399f8bf1ae439be2aa7ac1a27f201c57768076363bd8058a1e8b",
+  "producer_git_blob": "1a07a409f8fef8f0fe48f5e892b1acabad3b5275",
+  "arms": {
+    "B": {
+      "source_directory": "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/baseline",
+      "commit": "eb7e9a3e782ca1cf6d218e255d3f8b030678dfb4",
+      "tree": "a9df359aa3068222d720289ce53321e1ee47c7e6",
+      "binary": "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/cost-build-01/bin/native-insert-B",
+      "build_receipt": "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/cost-build-01/B-build.json",
+      "producer_argv": [
+        "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/cost-build-01/bin/native-insert-B",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkNativeOrdinaryInsertRequest$",
+        "-test.benchtime=100x",
+        "-test.count=1",
+        "-test.benchmem",
+        "-test.timeout=2m"
+      ]
+    },
+    "C": {
+      "source_directory": "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/repo",
+      "commit": "87edfacf617e6877b28be8ffba752ce2539f2cb9",
+      "tree": "e4282e90d0d30ac888be0ba290554214f6f35ce2",
+      "binary": "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/cost-build-01/bin/native-insert-C",
+      "build_receipt": "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/cost-build-01/C-build.json",
+      "producer_argv": [
+        "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/cost-build-01/bin/native-insert-C",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkNativeOrdinaryInsertRequest$",
+        "-test.benchtime=100x",
+        "-test.count=1",
+        "-test.benchmem",
+        "-test.timeout=2m"
+      ]
+    }
+  },
+  "bench_selector": "^BenchmarkNativeOrdinaryInsertRequest$",
+  "expected_metric_names": [
+    "BenchmarkNativeOrdinaryInsertRequest/batch1-12",
+    "BenchmarkNativeOrdinaryInsertRequest/batch256-12"
+  ],
+  "fixture": {
+    "payload_binary_bytes": 1000,
+    "id_bytes": 8,
+    "batch_sizes": [
+      1,
+      256
+    ],
+    "profile": "command_wal_durable",
+    "memtable": "cow_btree",
+    "concurrent_requests": 1,
+    "measured_requests_per_metric_row": 100,
+    "benchtime": "100x",
+    "count_per_cell": 1,
+    "cells_per_arm": 5,
+    "run": "^$",
+    "build": "normal go test -c -p=1; no race; identical benchmark bytes",
+    "timed_boundary": "public InsertBatchValidatedBSON including durable ACK; request-owned TreeDB staging/output allocations included",
+    "outside_timer": "input backing, setup, exact first/last readback, checkpoint, checked original Close, fresh owner/manager reopen and checked Close",
+    "activation": "col.nativeJSON nonnil, manager.UsesNativeCommandWALApply, actual NextLSN advance exactly100, LastInsertStats.Documents ==batch; actual no retry assertion unavailable on baseline; serial fixture not an expiry reproduction",
+    "options_overrides": {
+      "MemtableMode": "cow_btree",
+      "FlushThreshold": 1073741824,
+      "BackgroundCheckpointInterval": -1,
+      "BackgroundCheckpointIdleDuration": -1,
+      "MaxWALBytes": -1,
+      "ValueLog.Generational.Policy": "ValueLogGenerationOff"
+    },
+    "options_scope": "Exact shared nativeTypedGroupOptions helper in both arms. Scheduled background checkpoint, WAL-growth checkpoint and generational maintenance disabled; explicit lifecycle checkpoint remains outside timing. Existing native allocation/history limits and pressure handling remain unchanged. Default command-WAL grouping policy only; not normal engine defaults."
+  },
+  "input_sha256": {
+    "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/guard-landed.json": "4d48126eada30aaa354c43f551a823ba24913658129ea9791e331847f372d6db",
+    "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/repo/TreeDB/collections/native_insert_history_expiry_bench_test.go": "e34b36ea3edb399f8bf1ae439be2aa7ac1a27f201c57768076363bd8058a1e8b",
+    "/mnt/fast4tb/gomap-mongo-perf-graph-6a9s7h58/public-guard/scripts/ycsb_campaign_guard.py": "b1f5308ce5de5bf1252a77694599f4be4fdf769803b4d7300c08b4901f8d9642",
+    "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.10.linux-amd64/bin/go": "9c2a37ae5b21ba1d5a004bb9ab4d0c64de6fc5778e9d30487adccea62678b8b5",
+    "/usr/bin/python3": "a2f33a6e006989270f4340528eb61f8f97366e00a5d1b602ac8672ea44fc56ae",
+    "/bin/bash": "59474588a312b6b6e73e5a42a59bf71e62b55416b6c9d5e4a6e1c630c2a9ecd4",
+    "/usr/bin/env": "f13fae95a6f3fcba6c0ee8787c92747089eb81e550673f135bc4bc09bfc174d1",
+    "/usr/bin/git": "07997209f4513fdee3e1eb151b1c37d56cfe37f9915d331ec37d688c6b9d3ce9",
+    "/usr/bin/findmnt": "4e7efd3192ae621d45de767616ebcd7dfd8a405039f765c0c69642c9ec8b1385",
+    "/usr/bin/taskset": "8157dd0973743f6961557ab4d5f625e1fd668880b0912559a6d9edf08c0dd37e",
+    "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.10.linux-amd64/pkg/tool/linux_amd64/compile": "b426da26640e8069dc35162c9900496d9a03bea90bf771236067fb8cae86d285",
+    "/mnt/fast4tb/gomap-mongo-perf-graph-6a9s7h58/public-guard/scripts/ycsb_compare_validate.py": "1b14289667212b44dc7257f9cd5221267c12239bc2e3f5bf58d7dcbda9fadd04",
+    "/mnt/fast4tb/gomap-mongo-perf-graph-6a9s7h58/public-guard/scripts/ycsb_evidence_json.py": "86989ebbfa14b8f9f3c20ebe470314a29fd28c7db2ab10734d9518e39d270ea6",
+    "/mnt/fast4tb/gomap-mongo-perf-graph-6a9s7h58/public-guard/scripts/ycsb_runtime_observer.py": "fab36e1396205c2cddff0c24fa0f5c6faaa4e0fd47f46fdb423ffe3dd4e31077",
+    "/mnt/fast4tb/gomap-mongo-perf-graph-6a9s7h58/public-guard/scripts/test_ycsb_campaign_guard.py": "f0251e604cc4ecef5c81bf1bf8e09a9799c15547e955b467ed6045f214ac949b",
+    "/mnt/fast4tb/gomap-mongo-perf-graph-6a9s7h58/public-guard/scripts/ycsb_compare_receipts.md": "a014c2e3187ad56ac3bff18907f840181664054bd86fbee3f4cc944633fad440",
+    "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/baseline/go.mod": "2dcddbc32b8ff06dc73c6ed987b92988ed4a239e396d5a9e20119b2b97bf82c4",
+    "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/baseline/go.sum": "d6dd36ca5b03d24e6598a25ce1cc0014e24fbc311c0b65f57aefe5fd146e2a25",
+    "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/baseline/TreeDB/collections/native_insert_history_expiry_bench_test.go": "e34b36ea3edb399f8bf1ae439be2aa7ac1a27f201c57768076363bd8058a1e8b",
+    "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/baseline/TreeDB/collections/native_typed_upsert_group_test.go": "637592ab3511274d2f25db67dab94f27ece0fe77d98cd4a181f0a52fde6ea4ac",
+    "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/repo/go.mod": "2dcddbc32b8ff06dc73c6ed987b92988ed4a239e396d5a9e20119b2b97bf82c4",
+    "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/repo/go.sum": "d6dd36ca5b03d24e6598a25ce1cc0014e24fbc311c0b65f57aefe5fd146e2a25",
+    "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/repo/TreeDB/collections/native_typed_upsert_group_test.go": "637592ab3511274d2f25db67dab94f27ece0fe77d98cd4a181f0a52fde6ea4ac",
+    "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/cost-build-01/bin/native-insert-B": "05b54261fd1ebe3036e87fe1b090ad8bc35bafceee12a0e9768adab0039d30f7",
+    "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/cost-build-01/B-build.json": "9538df446b3b73abc72b6c6f68c2e5d9f57a4e401836075600bc299143ead2cf",
+    "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/cost-build-01/bin/native-insert-C": "7a3d4b4f705b6f096b41cc3314e2d418d7faa6c6062eda96aff906532d864800",
+    "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/cost-build-01/C-build.json": "566294e5bd277a19f1e3fae172d02fbffc16cd98f81b67476832551e7d18d27e",
+    "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/build_cost_pair.py": "cacec030754c1433ae8cca4ec0ff63e0e02d345a7ceea90340c1923556e1d7c8",
+    "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/BUILD-GRANT.json": "e69e408c330852ec26709c22bd7979b55ab997fbb15658d6c244dbd5d2c4d279",
+    "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/BUILD-PREVIEW-REVIEW.json": "4d18b9ce5042c00ec16dd652bd9cc1509fd073a727ff3e7375024d05cf5672c8",
+    "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/cost-build-01/TERMINAL.json": "5ec71b0de0138768b8790b8d7bb7f89a661a196a6c4d6c9a62a087cbac1e7563",
+    "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/cost-build-01/RELEASE.json": "47a5cd88e2c0d518bd3b800b0c9938a1d5acab48efffb227cba84ff5e8864094",
+    "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/summarize_cost_pair.py": "0eb5391444d9ec92b92033aaaebe5f3a08f70f849a706a379b06be50693118ec",
+    "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/cost-build-01/evidence/01-toolchain-env.log": "c6e5be0b124bb566ce3360a97909b7547196dad4529a05d380db6473a127022c",
+    "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/cost-build-01/evidence/02-go-version.log": "4e0b213cba780f63b02f3ab9001ee61e4101d254e0af1a8205574c19dad0f93b",
+    "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/cost-build-01/evidence/03-compiler-version.log": "2b791c37f2dbe04870e2777d72340270c5d637f5bb1fdb827e5d13c2dc656273",
+    "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/cost-build-01/evidence/04-B-build.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/cost-build-01/evidence/05-B-buildinfo.log": "3e029f3e85463080f7e124f913648fe23db17bca8eefe100e42502dfd112fcf8",
+    "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/cost-build-01/evidence/06-C-build.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/cost-build-01/evidence/07-C-buildinfo.log": "fba65143c890226baff3be9a70c560fb91a74acabbd3b4f95488f72f7c0978c8"
+  },
+  "quiet_lease": {
+    "path": "/mnt/fast4tb/gomap-host185-perf-custody.lock",
+    "device": 66305,
+    "inode": 54,
+    "scope": "fresh O_NOFOLLOW existing-file open and nonblocking exclusive flock in run only; inherited by exec guard until it exits; never create, replace or unlink; coordinator still verifies quiet host"
+  },
+  "runner_startup": "/usr/bin/python3 -I -B; reject inherited PYTHONPATH; frozen child PYTHONPATH only for maintained guard helper imports; absolute hashed git/findmnt/taskset",
+  "host": "mikers-B560-DS3H-AC-Y1",
+  "measurement": {
+    "per_arm_samples": 5,
+    "iterations": 100,
+    "batch_sizes": [
+      1,
+      256
+    ],
+    "timed_boundary": "public durable InsertBatchValidatedBSON including receipt wait; owned fixture bytes outside timer; lifecycle verification outside timer",
+    "all_output_retained": true,
+    "cpu": "runtime default GOMAXPROCS absent, actual benchmark suffix12 required; serial requests",
+    "guardrails": "No new per-request allocation count or material request latency/throughput regression unless explicit scoped coordinator/user disposition; no universal numeric noise tolerance invented",
+    "failure_action": "Stop on first setup/guard/fixture/output failure; retain original and diagnose; no retry toward favorable result",
+    "comparability_limits": "Fresh DB per subbenchmark; first/last exact BSON checked not full corpus; no concurrent expiry/100k/max1 or Badger claim Scheduled maintenance overrides and1GiB flush threshold mean no normal-default cost conclusion."
+  },
+  "producer_status": "New reviewed benchmark in this repair PR; identical source added without production changes to156 baseline. Unlanded producer engineering cost control; not publication/performance qualification.",
+  "admission": "Freeze complete for independent source review only. Actual run additionally requires exact-plan READY review, fresh performance-owner quiet runtime grant and fresh exact shared lease; launch_ready is not authority."
+}

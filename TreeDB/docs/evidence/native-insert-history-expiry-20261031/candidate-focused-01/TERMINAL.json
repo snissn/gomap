@@ -1,0 +1,77 @@
+{
+  "start_utc": "2026-10-31T22:35:26.598749Z",
+  "pid": 3251597,
+  "source": "694a6a8fcbbabf32e897b3d01da561aa9d3adb56",
+  "tree": "a798e15c4df459334d5481b033b4afc02f0a48b5",
+  "source_dir": "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/repo",
+  "lease_path": "/mnt/fast4tb/gomap-host185-perf-custody.lock",
+  "lease": [
+    66305,
+    54
+  ],
+  "status": "failed-or-incomplete",
+  "scope": "focused normal/race candidate correctness; not performance",
+  "error": "RuntimeError('command failed: normal')",
+  "end_utc": "2026-10-31T22:36:23.881308Z",
+  "commands": [
+    {
+      "name": "go-version",
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.10.linux-amd64/bin/go",
+        "version"
+      ],
+      "cwd": "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/repo",
+      "start_utc": "2026-10-31T22:35:26.613359Z",
+      "timeout_seconds": 15,
+      "log": "01-go-version.log",
+      "exit_code": 0,
+      "end_utc": "2026-10-31T22:35:26.814017Z",
+      "minimum_free_bytes_so_far": 1115237756928
+    },
+    {
+      "name": "go-env",
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.10.linux-amd64/bin/go",
+        "env",
+        "-json",
+        "GOROOT",
+        "GOVERSION",
+        "GOCACHE",
+        "GOMODCACHE",
+        "CGO_ENABLED",
+        "GOTOOLCHAIN"
+      ],
+      "cwd": "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/repo",
+      "start_utc": "2026-10-31T22:35:26.824145Z",
+      "timeout_seconds": 15,
+      "log": "02-go-env.log",
+      "exit_code": 0,
+      "end_utc": "2026-10-31T22:35:27.024816Z",
+      "minimum_free_bytes_so_far": 1115237748736
+    },
+    {
+      "name": "normal",
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.10.linux-amd64/bin/go",
+        "test",
+        "-json",
+        "-p=1",
+        "-count=1",
+        "-timeout=180s",
+        "./TreeDB/collections",
+        "-run",
+        "^TestNative(OrdinaryInsertHistoryExpiry|InsertHistoryExpiry.*)$"
+      ],
+      "cwd": "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/repo",
+      "start_utc": "2026-10-31T22:35:27.035050Z",
+      "timeout_seconds": 240,
+      "log": "03-normal.log",
+      "exit_code": 1,
+      "error": "command failed: normal",
+      "end_utc": "2026-10-31T22:36:23.873199Z",
+      "minimum_free_bytes_so_far": 1114710114304
+    }
+  ],
+  "cleanup_safe": true,
+  "remaining_owned_processes": []
+}

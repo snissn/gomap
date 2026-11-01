@@ -1,0 +1,33 @@
+{
+  "baseline": "79a545a1d745e848f2aa859896fb962e07204b73",
+  "binaries": {
+    "baseline": {
+      "bytes": 51090983,
+      "path": "baseline-primary.test",
+      "sha256": "97cb9ca12d444dcf597d9ee23da4612c76b117136581269b9b53f37b8571b90e",
+      "source_sha": "79a545a1d745e848f2aa859896fb962e07204b73"
+    },
+    "candidate": {
+      "bytes": 51094948,
+      "path": "candidate-primary.test",
+      "sha256": "0d8f90c4005d7ca2f28852899767e1c67adaf611a20614cd06c33264cfb8e851",
+      "source_sha": "87edfacf617e6877b28be8ffba752ce2539f2cb9"
+    }
+  },
+  "bytes_and_allocations": "no median growth",
+  "candidate": "87edfacf617e6877b28be8ffba752ce2539f2cb9",
+  "cpu": 0,
+  "gomaxprocs": 1,
+  "harness_sha256": "2642bedc0ed6edbea8d7a599c66642c1d2107d93f1faf03355fb8cb071c56ab9",
+  "iterations": 128,
+  "max_paired_regression_percent": 5.0,
+  "quiet_preflight": {
+    "aggregate_cpu_threshold_percent": 50.0,
+    "cpu_threshold_percent": 10.0,
+    "policy": "external-cpu-v2",
+    "setup_cap_s": 60.0,
+    "window_s": 5.0
+  },
+  "runner_sha256": "b57bc93ce46900357052b07a796158eaef71d931bcfb59990992cb97b4f706a3",
+  "samples": 8
+}

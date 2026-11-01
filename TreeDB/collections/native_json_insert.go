@@ -16,26 +16,41 @@ import (
 	"github.com/snissn/gomap/TreeDB/tree"
 )
 
+// One reconstruction bounds work under sustained history pressure. Explicit
+// transactions retain their original opening and are never retried here.
+const nativeInsertAttempts = 2
+
 // InsertBatch is the one-shot form of Begin, staged InsertBatch, and Commit.
 func (m *NativeJSONManager) InsertBatch(name string, ids, documents [][]byte) error {
-	tx, err := m.Begin(name)
-	_, err = finishNativeJSONInsert(tx, err, ids, documents, nil, false, nil)
-	return err
+	for attempt := 0; ; attempt++ {
+		tx, err := m.Begin(name)
+		_, retry, err := finishNativeJSONInsert(tx, err, ids, documents, nil, false, nil)
+		if !retry || attempt+1 == nativeInsertAttempts {
+			return err
+		}
+	}
 }
 
-func (m *NativeJSONManager) insertPrepared(name string, ids, documents [][]byte, stats *CollectionInsertStats, ordinaryOnly bool, projection *trustedFloat32Projection) (bool, error) {
+func (m *NativeJSONManager) insertPrepared(name string, ids, documents [][]byte, stats *CollectionInsertStats, ordinaryOnly bool, projection *trustedFloat32Projection) (bool, bool, error) {
 	tx, err := m.beginPrepared(name)
 	return finishNativeJSONInsert(tx, err, ids, documents, stats, ordinaryOnly, projection)
 }
 
-func finishNativeJSONInsert(tx *NativeJSONTxn, err error, ids, documents [][]byte, stats *CollectionInsertStats, ordinaryOnly bool, projection *trustedFloat32Projection) (recordStats bool, resultErr error) {
+func finishNativeJSONInsert(tx *NativeJSONTxn, err error, ids, documents [][]byte, stats *CollectionInsertStats, ordinaryOnly bool, projection *trustedFloat32Projection) (recordStats, retry bool, resultErr error) {
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
-	defer func() { resultErr = errors.Join(resultErr, tx.Close()) }()
-	if tx.bindings[0].probe.meta.Options.ColumnStore != nil && !nativeOrdinaryColumnGraphMeta(tx.bindings[0].probe.meta) {
+	defer func() {
+		cleanupErr := tx.Close()
+		if cleanupErr != nil {
+			retry = false
+		}
+		resultErr = errors.Join(resultErr, cleanupErr)
+	}()
+	ordinary := tx.bindings[0].probe.meta.Options.ColumnStore == nil || nativeOrdinaryColumnGraphMeta(tx.bindings[0].probe.meta)
+	if !ordinary {
 		if ordinaryOnly {
-			return false, backenddb.ErrNativeSemanticUnsupported
+			return false, false, backenddb.ErrNativeSemanticUnsupported
 		}
 		// Plain typed insertion keeps its existing route and Last behavior.
 		// Typed diagnostics use their distinct maintained API.
@@ -43,10 +58,10 @@ func finishNativeJSONInsert(tx *NativeJSONTxn, err error, ids, documents [][]byt
 	}
 	if projection != nil {
 		if !nativeOrdinaryColumnGraphMeta(tx.bindings[0].probe.meta) {
-			return false, backenddb.ErrNativeSemanticUnsupported
+			return false, false, backenddb.ErrNativeSemanticUnsupported
 		}
 		if err = validateTrustedFloat32ProjectionMeta(tx.bindings[0].probe.meta, projection); err != nil {
-			return false, err
+			return false, false, err
 		}
 		// Borrow only for this synchronous request. The binding is cleared on
 		// Close; retained typed values always belong to their original delta.
@@ -57,12 +72,13 @@ func finishNativeJSONInsert(tx *NativeJSONTxn, err error, ids, documents [][]byt
 		started = time.Now()
 	}
 	if err = tx.InsertBatch(ids, documents); err != nil {
-		return false, mutationNotAcceptedError(err)
+		return false, false, mutationNotAcceptedError(err)
 	}
 	if stats != nil {
 		stats.PrepareDocuments = time.Since(started)
 	}
-	return stats != nil, tx.commitNativePlanWithStats(false, nil, false, stats)
+	err = tx.commitNativePlanWithStatsObserved(false, nil, false, stats, &retry)
+	return stats != nil, retry && ordinary, err
 }
 
 // collectNativeInsertStats observes the original prepared work without another

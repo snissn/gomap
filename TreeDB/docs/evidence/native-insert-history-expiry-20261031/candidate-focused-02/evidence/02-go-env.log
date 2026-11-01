@@ -1,0 +1,8 @@
+{
+	"CGO_ENABLED": "1",
+	"GOCACHE": "/mnt/fast4tb/gomap-correctness-5356-5346-20261031T191051Z/focused-normal-race/gocache",
+	"GOMODCACHE": "/home/mikers/go/pkg/mod",
+	"GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.10.linux-amd64",
+	"GOTOOLCHAIN": "local",
+	"GOVERSION": "go1.26.10"
+}

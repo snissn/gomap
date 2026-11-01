@@ -2,6 +2,7 @@ package collections
 
 import (
 	"errors"
+	"time"
 	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -93,20 +94,36 @@ func (c *Collection) nativeInsertBatchWithResultIDs(ids, documents [][]byte, req
 			return nil, err
 		}
 	}
+	var refusedPrepare, refusedPublish time.Duration
+	for attempt := 0; ; attempt++ {
+		stats = CollectionInsertStats{}
+		recordStats, retry, err := c.nativeInsertPreparedOnce(ids, documents, &stats, requested != nil, projection)
+		if retry && attempt+1 < nativeInsertAttempts {
+			refusedPrepare, refusedPublish = stats.PrepareDocuments, stats.Publish
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if recordStats {
+			stats.HistoryExpiryRetries = attempt
+			stats.PrepareDocuments += refusedPrepare
+			stats.Publish += refusedPublish
+			c.recordInsertBatchStats(stats, insertBatchExecutionOptions{insertStats: requested})
+		}
+		return result, nil
+	}
+}
+
+// End the original producer admission before fresh maintenance/capture. The
+// deferred unlock also covers panic/error paths; no private attempt survives it.
+func (c *Collection) nativeInsertPreparedOnce(ids, documents [][]byte, stats *CollectionInsertStats, ordinaryOnly bool, projection *trustedFloat32Projection) (bool, bool, error) {
 	unlockVector, _, err := c.prepareNativeProducerMutation()
 	if err != nil {
-		return nil, err
+		return false, false, err
 	}
 	defer unlockVector()
-	recordStats, err := c.nativeJSON.insertPrepared(c.name, ids, documents, &stats, requested != nil, projection)
-	if err != nil {
-		return nil, err
-	}
-
-	if recordStats {
-		c.recordInsertBatchStats(stats, insertBatchExecutionOptions{insertStats: requested})
-	}
-	return result, nil
+	return c.nativeJSON.insertPrepared(c.name, ids, documents, stats, ordinaryOnly, projection)
 }
 
 func (c *Collection) nativeGetInto(id, dst []byte) ([]byte, bool, error) {

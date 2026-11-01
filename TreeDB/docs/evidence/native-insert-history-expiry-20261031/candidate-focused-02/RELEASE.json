@@ -1,0 +1,12 @@
+{
+  "observed_utc": "2026-10-31T22:42:05.866563+00:00",
+  "lease_path": "/mnt/fast4tb/gomap-host185-perf-custody.lock",
+  "identity": [
+    66305,
+    54
+  ],
+  "free_observed": true,
+  "cleanup_safe": true,
+  "owner_release": true,
+  "terminal": "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/candidate-focused-02/TERMINAL.json"
+}

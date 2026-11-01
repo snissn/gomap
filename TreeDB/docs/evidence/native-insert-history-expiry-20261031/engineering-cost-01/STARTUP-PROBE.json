@@ -1,0 +1,15 @@
+{
+  "utc": "2026-10-31T23:05:25.390032+00:00",
+  "scope": "Ancillary launch-environment admission probe only, before prepare/lease/guard/benchmark",
+  "actual_tool_exit_code": 1,
+  "present_forbidden_names": [
+    "LD_LIBRARY_PATH"
+  ],
+  "environment_values_retained": false,
+  "error": "AssertionError after forbidden-name presence check",
+  "benchmark_started": false,
+  "prepare_invoked": false,
+  "lease_opened": false,
+  "cell_namespace_exists": false,
+  "disposition": "Halt pending explicit launcher-environment correction with coordinator; no producer/performance result"
+}
