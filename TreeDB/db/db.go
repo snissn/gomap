@@ -4058,10 +4058,7 @@ func (db *DB) readMeta(pageID uint64) (page.MetaPageBody, bool) {
 }
 
 type finalizeCommitPost struct {
-	accepted bool
-	// Scalar endpoint of this installation, including accepted-error returns.
-	// Never reconstruct it from the backend's possibly newer current state.
-	acceptedStateToken                StateToken
+	accepted                          bool
 	physicalSeal                      rootpublication.PhysicalSealReceipt
 	oldState                          *DBState
 	metrics                           adaptive.Metrics
@@ -4403,7 +4400,9 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 		newState.LeafGenerationStateVersion = db.leafGenerationStateVersion
 	}
 	db.state.Store(newState)
-	post.acceptedStateToken, _ = stateTokenFromState(newState)
+	if out := opts.acceptedStateToken; out != nil {
+		*out, _ = stateTokenFromState(newState)
+	}
 	if opts.commandWALPublish {
 		previousApplied := uint64(0)
 		if post.oldState != nil {
@@ -4585,7 +4584,7 @@ func (db *DB) finalizeAcceptedCommitPostWorkOnError(post finalizeCommitPost) fin
 	db.finalizeCommitPostWork(post)
 	// Accepted COW groups still need this exact physical receipt to complete
 	// their original handoff when the durability wait reports an interruption.
-	return finalizeCommitPost{accepted: true, acceptedStateToken: post.acceptedStateToken, commitSeq: post.commitSeq, physicalSeal: post.physicalSeal}
+	return finalizeCommitPost{accepted: true, commitSeq: post.commitSeq, physicalSeal: post.physicalSeal}
 }
 
 // finalizeCommitReleasingRootSerialization transfers a completed root build to

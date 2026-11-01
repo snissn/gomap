@@ -615,7 +615,6 @@ func (install *rootPublicationVisibleInstallV1) activate(activateAllocator func(
 	}
 
 	db.state.Store(newState)
-	install.post.acceptedStateToken, _ = stateTokenFromState(newState)
 	if install.commandWALPublish {
 		previousApplied := uint64(0)
 		if install.post.oldState != nil {
@@ -1371,6 +1370,9 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 	reportErr := install.completeOrderedPostActivation()
 	post = install.post
 	post.accepted = true
+	if out := opts.acceptedStateToken; out != nil {
+		*out, _ = stateTokenFromState(install.preparedState)
+	}
 	// The candidate is coordinator-owned and all ordered bookkeeping is now
 	// complete. Release DB build locks before any user error callback or
 	// admission/durability wait can re-enter the coordinator.

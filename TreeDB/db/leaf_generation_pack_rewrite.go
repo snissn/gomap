@@ -1939,9 +1939,11 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	if runStats != nil {
 		equivalentOwner = runStats.privateCOWOwner
 	}
+	var acceptedStateToken StateToken
 	finalizeStarted := time.Now()
 	post, finalizeErr := db.finalizeCommitLockedWithOptions(publishedRoot, publishedSysRoot, publishRetired, true, adaptive.Metrics{}, createdIDs, len(publishCollectionReplacements) > 0, nil, leafManifest, leafManifestRawFileIDs, finalizeCommitOptions{
 		privateCOWEquivalentRewriteOwner: equivalentOwner,
+		acceptedStateToken:               &acceptedStateToken,
 		skipPrePublishFlush:              true,
 		syncMetaPageOnly:                 true,
 		durableIndex:                     idx,
@@ -1964,11 +1966,11 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 			// The copy basis was revalidated under the visibility gate above.
 			// rewriteLeafRef/Batch preserve decoded entries and asset references;
 			// descriptor publication substitutes only their physical root IDs.
-			// The finalizer returns its own installed scalar endpoint, including
+			// The finalizer fills this caller's exact installed scalar endpoint, including
 			// after accepted-error cleanup; sampling db.state here would race a
 			// newer publication after root serialization was released.
 			before, ok := stateTokenFromState(snap.state)
-			after := post.acceptedStateToken
+			after := acceptedStateToken
 			if ok && after.CommitSeq > before.CommitSeq && after.CommitSeq == before.CommitSeq+1 &&
 				after.LeafGenerationStateVersion > before.LeafGenerationStateVersion &&
 				after.LeafGenerationStateVersion == before.LeafGenerationStateVersion+1 &&
