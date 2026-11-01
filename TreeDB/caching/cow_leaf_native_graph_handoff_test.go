@@ -132,6 +132,101 @@ func privateCOWGraphPackCachedManifestRoot(t *testing.T, cache *DB, name string)
 	return privateCOWGraphPackManifestRoot(t, cut.basis.snapshot, name)
 }
 
+func privateCOWGraphPackFillerDocument(round int) []byte {
+	return []byte(fmt.Sprintf(`{"payload":"%s"}`, strings.Repeat(fmt.Sprintf("%d", round), 128)))
+}
+
+// Native collection activation rejects the raw conditional-transaction adapter
+// used by preparePrivateCOWPack. Keep its real 4096/2048 copy geometry using
+// supported public JSON insert/update calls, with no alternate write authority.
+func preparePrivateCOWGraphPackPublicFiller(t *testing.T, cache *DB, manager *collections.CollectionManager) *collections.Collection {
+	t.Helper()
+	const name = "leaf_pack_filler"
+	if _, err := manager.CreateCollection(&collections.CollectionMeta{Name: name}); err != nil {
+		t.Fatalf("INVALID_WITNESS create public filler: %v", err)
+	}
+	filler, err := manager.OpenCollection(name)
+	if err != nil {
+		t.Fatalf("INVALID_WITNESS open public filler: %v", err)
+	}
+	for round := 1; round <= 4; round++ {
+		count := 2048
+		if round == 1 {
+			count = 4096
+		}
+		ids := make([][]byte, count)
+		for i := range ids {
+			ids[i] = []byte(fmt.Sprintf("pack-%05d", i))
+		}
+		document := privateCOWGraphPackFillerDocument(round)
+		if round == 1 {
+			documents := make([][]byte, count)
+			for i := range documents {
+				documents[i] = document
+			}
+			got, err := filler.InsertBatch(ids, documents)
+			if err != nil || len(got) != count {
+				t.Fatalf("INVALID_WITNESS public filler insert count=%d err=%v", len(got), err)
+			}
+			for i := range got {
+				if !bytes.Equal(got[i], ids[i]) {
+					t.Fatalf("INVALID_WITNESS public filler insert ID%d=%q want=%q", i, got[i], ids[i])
+				}
+			}
+		} else {
+			previous := privateCOWGraphPackFillerDocument(round - 1)
+			items := make([]collections.UpdateBatchItem, count)
+			for i := range items {
+				items[i] = collections.UpdateBatchItem{DocumentID: ids[i], Update: func(current []byte) ([]byte, bool, error) {
+					if !bytes.Equal(current, previous) {
+						return nil, false, fmt.Errorf("unexpected previous public filler value: %s", current)
+					}
+					return document, true, nil
+				}}
+			}
+			got, err := filler.UpdateBatch(items)
+			if err != nil || len(got) != count {
+				t.Fatalf("INVALID_WITNESS public filler update round%d count=%d err=%v", round, len(got), err)
+			}
+			for i, result := range got {
+				if !result.Matched || !result.Modified {
+					t.Fatalf("INVALID_WITNESS public filler round%d ID%d result=%+v", round, i, result)
+				}
+			}
+		}
+		if err := cache.Checkpoint(); err != nil {
+			t.Fatalf("INVALID_WITNESS public filler round%d checkpoint: %v", round, err)
+		}
+		if round == 1 {
+			cache.leafLog.vlogMu.Lock()
+			rotateErr := cache.rotateValueLogMuHeld(&cache.leafLog)
+			cache.leafLog.vlogMu.Unlock()
+			if rotateErr != nil {
+				t.Fatalf("INVALID_WITNESS seal public filler generation: %v", rotateErr)
+			}
+		}
+	}
+	t.Setenv(envEnableLeafGenerationPackMaintenance, "1")
+	t.Setenv(envDisableVlogGenerationLoop, "0")
+	return filler
+}
+
+func checkPrivateCOWGraphPackPublicFiller(t *testing.T, phase string, filler *collections.Collection) {
+	t.Helper()
+	first, replaced := privateCOWGraphPackFillerDocument(1), privateCOWGraphPackFillerDocument(4)
+	for i := 0; i < 4096; i++ {
+		id := []byte(fmt.Sprintf("pack-%05d", i))
+		want := first
+		if i < 2048 {
+			want = replaced
+		}
+		got, err := filler.Get(id)
+		if err != nil || !bytes.Equal(got, want) {
+			t.Fatalf("%s public filler %q=%s want=%s err=%v", phase, id, got, want, err)
+		}
+	}
+}
+
 // A causal regression for physical leaf-basis adoption, not attribution of the
 // historical race7 failure. This low-level native fixture uses the original
 // inline-sync command ACK; it does not qualify public Open's completion group.
@@ -178,8 +273,9 @@ func TestPrivateCOWLeafPackPreservesAcceptedOrdinaryGraph(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Persist the target manifest before sealing the real partly-live generation.
-	// The maintained helper writes/checkpoints/rotates; no map or root is forged.
-	preparePrivateCOWPack(t, cache, backend.DB)
+	// Public native collection calls supply the filler; no map or root is forged.
+	filler := preparePrivateCOWGraphPackPublicFiller(t, cache, manager)
+	checkPrivateCOWGraphPackPublicFiller(t, "before pack", filler)
 	reader, err := collections.NewNativeJSONManager(backend.DB)
 	if err != nil {
 		t.Fatal(err)
@@ -324,6 +420,7 @@ func TestPrivateCOWLeafPackPreservesAcceptedOrdinaryGraph(t *testing.T) {
 	}
 	checkRows("held old read after adoption", old.Get)
 	checkRows("current after graph", col.Get)
+	checkPrivateCOWGraphPackPublicFiller(t, "after graph", filler)
 	if err := old.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -358,6 +455,11 @@ func TestPrivateCOWLeafPackPreservesAcceptedOrdinaryGraph(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkRows("reopened persisted rows", reopenedCol.Get)
+	reopenedFiller, err := reopenedManager.OpenCollection("leaf_pack_filler")
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkPrivateCOWGraphPackPublicFiller(t, "reopened persisted filler", reopenedFiller)
 	status, err := reopenedCol.VectorIndexStatus("vec")
 	if err != nil || !status.Loaded || status.RebuildNeeded {
 		t.Fatalf("reopened persisted graph=%+v err=%v", status, err)
