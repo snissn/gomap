@@ -230,9 +230,9 @@ func (db *DB) recoverDurablePrimaryV5(idx *indexGen) (retErr error) {
 	return nil
 }
 
-// The sink owns one admitted contiguous page span. Canonical encoding reuses
-// separately admitted page scratch; child-first bank sealing follows only
-// after all bytes are complete.
+// The sink owns one admitted contiguous page span. Canonical encoding borrows
+// its final page as scratch; child-first bank sealing follows only after all
+// bytes are complete.
 type primaryManifestImagesV5 struct {
 	first  uint64
 	images []byte
@@ -267,23 +267,25 @@ func materializePrimaryManifestV5(idx *indexGen, m *rootpublication.DependencyMa
 	if e := claims.ensureCapacity(count); e != nil {
 		return ref, nil, e
 	}
-	// Admit the complete simultaneously live sink object, page span and reusable
-	// encoder scratch before the first bank claim or allocation.
+	// Admit the complete simultaneously live sink object and page span before
+	// the first bank claim or allocation. The final page also holds encoder scratch.
 	imageBytes := uint64(count) * page.PageSize
 	if imageBytes > uint64(^uint(0)>>1) {
 		return ref, nil, retainedalloc.ErrCapacity
 	}
 	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(primaryManifestImagesV5{}))) +
-		retainedalloc.AllocationCharge(imageBytes) + retainedalloc.AllocationCharge(page.PageSize)
+		retainedalloc.AllocationCharge(imageBytes)
 	if e := claims.metadata.AddPending(charge); e != nil {
 		return ref, nil, e
 	}
 	sink := &primaryManifestImagesV5{images: make([]byte, int(imageBytes))}
-	scratch := make([]byte, page.PageSize)
+	// Encoding proceeds in ascending order: earlier destination pages are disjoint
+	// from scratch, and the final WritePage is an identity copy. Sealing starts
+	// only after encoding, and each bank retains its own copied pager image.
+	scratch := sink.images[len(sink.images)-page.PageSize:]
 	defer func() {
 		clear(sink.images)
 		sink.images = nil
-		clear(scratch)
 		scratch = nil
 		claims.metadata.RemovePending(charge)
 	}()
