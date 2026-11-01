@@ -1057,6 +1057,7 @@ func (db *DB) StatsWithCapacity(capacity int) map[string]string {
 	stats["treedb.process.read_path.outer_leaf.cache.write_admission_stores"] = fmt.Sprintf("%d", cacheStats.WriteAdmissionStores)
 	stats["treedb.process.read_path.outer_leaf.cache.write_admission_skips"] = fmt.Sprintf("%d", cacheStats.WriteAdmissionSkips)
 	stats["treedb.process.read_path.outer_leaf.cache.write_admission_lock_skips"] = fmt.Sprintf("%d", cacheStats.WriteAdmissionLockSkips)
+	stats["treedb.process.read_path.outer_leaf.cache.dictionary_verified_hits"] = fmt.Sprintf("%d", cacheStats.DictionaryVerifiedHits)
 	stats["treedb.process.read_path.outer_leaf.cache.record_checksum_verified_stores"] = fmt.Sprintf("%d", cacheStats.RecordChecksumVerifiedStores)
 	stats["treedb.process.read_path.outer_leaf.cache.page_checksum_verified_marks"] = fmt.Sprintf("%d", cacheStats.PageChecksumVerifiedMarks)
 	stats["treedb.process.read_path.outer_leaf.cache.page_checksum_verified_hits"] = fmt.Sprintf("%d", cacheStats.PageChecksumVerifiedHits)

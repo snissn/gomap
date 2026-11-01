@@ -475,6 +475,10 @@ func TestNativeJournalBoundaryOwnerCapability(t *testing.T) {
 			database, manager := nativeJournalPrefixFixture(t, profile)
 			backend := database.backend
 			before := database.Stats()
+			const dictionaryHits = "treedb.process.read_path.outer_leaf.cache.dictionary_verified_hits"
+			if value, ok := before[dictionaryHits]; !ok || value != backend.Stats()[dictionaryHits] {
+				t.Fatal("original public stats lost the backend dictionary hit counter")
+			}
 			next := backend.CommandWALNextLSN()
 			want := profile != ProfileNoWALFast
 			for i := 0; i < 32; i++ {

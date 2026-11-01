@@ -72,6 +72,7 @@ func TestCOWNativeDictionaryCacheGatewayLimits(t *testing.T) {
 			w.codecs[0].decoder = counter
 			db.cow.physicalMu.Unlock()
 			initialHits := cowLeafCacheCounter(t, backend, "hits")
+			initialDictionaryHits := cowLeafCacheCounter(t, backend, "dictionary_verified_hits")
 			for i := 0; i < 8; i++ {
 				got, err := read(provider)
 				if err != nil || !bytes.Equal(got, first) {
@@ -80,12 +81,20 @@ func TestCOWNativeDictionaryCacheGatewayLimits(t *testing.T) {
 				got[0] ^= 1
 			}
 			hits := cowLeafCacheCounter(t, backend, "hits") - initialHits
+			dictionaryHits := cowLeafCacheCounter(t, backend, "dictionary_verified_hits") - initialDictionaryHits
 			if entries > 0 && (hits == 0 || counter.calls >= 8) {
 				t.Fatalf("native verified dictionary cache did not avoid decode: hits=%d decodes=%d", hits, counter.calls)
+			}
+			if entries > 0 && dictionaryHits == 0 {
+				t.Fatalf("native verified dictionary path inactive: dictionary_hits=%d decodes=%d", dictionaryHits, counter.calls)
+			}
+			if entries < 0 && dictionaryHits != 0 {
+				t.Fatalf("disabled cache credited dictionary hits=%d", dictionaryHits)
 			}
 			if entries < 0 && (hits != 0 || counter.calls != 8) {
 				t.Fatalf("disabled cache hits=%d decodes=%d", hits, counter.calls)
 			}
+			beforeRefusals := cowLeafCacheCounter(t, backend, "dictionary_verified_hits")
 			if _, err := read(nil); !errors.Is(err, valuelog.ErrCOWReadUnsupported) {
 				t.Fatalf("missing native provider: %v", err)
 			}
@@ -111,6 +120,9 @@ func TestCOWNativeDictionaryCacheGatewayLimits(t *testing.T) {
 			db.cow.closePhysicalReader()
 			if _, err = read(cowNativeDefinitionRefusal{provider}); !errors.Is(err, errCOWNativeDefinitionRefused) {
 				t.Fatalf("fresh definition refusal: %v", err)
+			}
+			if got := cowLeafCacheCounter(t, backend, "dictionary_verified_hits"); got != beforeRefusals {
+				t.Fatalf("provider/corruption/refusal credited a hit: before=%d after=%d", beforeRefusals, got)
 			}
 		})
 	}

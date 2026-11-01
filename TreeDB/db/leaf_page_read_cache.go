@@ -213,6 +213,7 @@ type leafPageReadCache struct {
 	writeAdmissionSkips     atomic.Uint64
 	writeAdmissionLockSkips atomic.Uint64
 
+	dictionaryVerifiedHits       atomic.Uint64
 	recordChecksumVerifiedStores atomic.Uint64
 	pageChecksumVerifiedMarks    atomic.Uint64
 	pageChecksumVerifiedHits     atomic.Uint64
@@ -242,6 +243,7 @@ type leafPageReadCacheStats struct {
 	WriteAdmissionStores            uint64
 	WriteAdmissionSkips             uint64
 	WriteAdmissionLockSkips         uint64
+	DictionaryVerifiedHits          uint64
 	RecordChecksumVerifiedStores    uint64
 	PageChecksumVerifiedMarks       uint64
 	PageChecksumVerifiedHits        uint64
@@ -863,6 +865,9 @@ func (c *leafPageReadCache) dictionaryVerifiedPage(ptr page.LeafLogPtr, dst []by
 		if slot.valid && slot.key == key && !c.disabled.Load() && slot.recordChecksumVerified && slot.dictionaryDigestValid && slot.dictionaryEpoch == c.dictionaryEpoch.Load() && slot.dictionaryDigest == digest && len(slot.data) == page.PageSize {
 			out := dst[:page.PageSize]
 			copy(out, slot.data)
+			// Successful copied pages only: entry/mark/miss and ordinary page
+			// checksum hits do not establish dictionary-policy activation.
+			c.dictionaryVerifiedHits.Add(1)
 			slot.recent.Store(true)
 			state := leafPageReadCacheState{RecordChecksumVerified: true, CacheEntryPresent: true, PageChecksumVerified: slot.pageChecksumVerified.Load()}
 			slot.mu.RUnlock()
@@ -1033,6 +1038,7 @@ func (c *leafPageReadCache) stats() leafPageReadCacheStats {
 		WriteAdmissionStores:            c.writeAdmissionStores.Load(),
 		WriteAdmissionSkips:             c.writeAdmissionSkips.Load(),
 		WriteAdmissionLockSkips:         c.writeAdmissionLockSkips.Load(),
+		DictionaryVerifiedHits:          c.dictionaryVerifiedHits.Load(),
 		RecordChecksumVerifiedStores:    c.recordChecksumVerifiedStores.Load(),
 		PageChecksumVerifiedMarks:       c.pageChecksumVerifiedMarks.Load(),
 		PageChecksumVerifiedHits:        verifiedHits,

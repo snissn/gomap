@@ -399,6 +399,19 @@ noncanonical entries keep existing miss/decode/refusal behavior. No provider,
 dictionary handle, file or decoder is retained by a cache slot. Original finite
 slots/probation and same-basis/codec Close/refund continue to bound ownership.
 
+
+`treedb.process.read_path.outer_leaf.cache.dictionary_verified_hits` counts only
+successful copied pages on the full digest/epoch policy above. It is monotonic
+for one cache lifetime, including across eviction and maintenance; fresh
+Open/reopen starts a new counter at zero. Generic/page-checksum hits, marking,
+misses and refused/disabled reads do not receive this credit. Existing public
+owner stats and read-only phase receipts carry the value without changing their
+schema or the original49 required counter inventory. A positive phase delta
+proves activity in that owner's cache; attributing it to timed workload requests
+also requires excluding other readers. It is not proof of end-to-end read values,
+request latency or performance benefit. The extra hot cost is one atomic increment
+per successful dictionary hit; allocation and contention remain measured gates.
+
 After a full verified decode, repeated COW misses may populate the original
 backend leaf cache through explicit cache-owned admission. Each configured slot
 can lazily allocate one 4096-byte page, reused on eviction; no reader scratch or

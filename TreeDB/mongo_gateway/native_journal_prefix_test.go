@@ -1311,6 +1311,10 @@ func TestStandaloneNativeJournalBoundaryEligibility(t *testing.T) {
 			})
 			server := s.Server
 			before := s.Stats()
+			const dictionaryHits = "treedb.process.read_path.outer_leaf.cache.dictionary_verified_hits"
+			if value, ok := before[dictionaryHits]; !ok || value != s.Backend.Stats()[dictionaryHits] {
+				t.Fatal("standalone original owner stats lost dictionary hit counter")
+			}
 			next := s.Backend.CommandWALNextLSN()
 			for _, name := range []string{"create", "createIndexes", "delete", "dropIndexes", "findAndModify", "insert", "update"} {
 				if got, want := server.canShareStandaloneJournalBoundary(name), profile != treedb.ProfileNoWALFast; got != want {
