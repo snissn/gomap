@@ -421,7 +421,7 @@ for target in "${selected[@]}"; do
     log_command env -u GOMAXPROCS "${command[@]}"
     addr=$NATIVE_ADDR; [[ "$target" == treedb_native ]] || addr=$TREEDB_MONGO_ADDR
     verify_listener "$target" server "$addr"
-    "$PYTHON" "$VALIDATOR" launch --timeout "$PHASE_TIMEOUT_SECONDS" --cleanup-timeout "$CHILD_CLEANUP_TIMEOUT_SECONDS" --outer-timeout "$((PHASE_TIMEOUT_SECONDS+3*CHILD_CLEANUP_TIMEOUT_SECONDS+10))" "$OUT_DIR/$target" "$stem" -- "${command[@]}"
+    env -u GOMAXPROCS "$PYTHON" "$VALIDATOR" launch --timeout "$PHASE_TIMEOUT_SECONDS" --cleanup-timeout "$CHILD_CLEANUP_TIMEOUT_SECONDS" --outer-timeout "$((PHASE_TIMEOUT_SECONDS+3*CHILD_CLEANUP_TIMEOUT_SECONDS+10))" "$OUT_DIR/$target" "$stem" -- "${command[@]}"
     if [[ "$phase" == load ]]; then
       addr=$NATIVE_ADDR; [[ "$target" == treedb_native ]] || addr=$TREEDB_MONGO_ADDR
       verify_listener "$target" server "$addr"
