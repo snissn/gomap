@@ -339,6 +339,9 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	// through the retained public schema, without adding storage vocabulary.
 	{path: "TreeDB/collections/native_ordinary_columngraph_pending_capacity_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 21, occurrences: 25},
 	{path: "TreeDB/collections/native_producer_admission_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 4},
+	// History-expiry graph coverage uses the retained public configuration and
+	// value-type names to establish the ordinary typed-column insertion route.
+	{path: "TreeDB/collections/native_insert_history_expiry_controls_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 4},
 	// Syntax-precedence controls exercise retained schema names, including
 	// the disabled-schema test label, rather than a new storage umbrella.
 	{path: "TreeDB/collections/native_create_syntax_precedence_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 7},

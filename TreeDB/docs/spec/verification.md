@@ -4,6 +4,16 @@ This document maps specification invariants to existing tests and harnesses.
 
 ## Standalone shared COW delivery
 
+- `TestNativeOrdinaryInsertHistoryExpiry` pauses an ordinary public BSON insert
+  across real disjoint writes until its opening is below the retained history
+  floor. It requires one fresh reconstruction and one target WAL assignment,
+  exact returned ID/content, unchanged held old reads, checkpoint, checked
+  original Close and fresh-owner reopen. The companion
+  `TestNativeInsertHistoryExpiry*` controls cover direct manager/index/template/
+  ordinary graph routes, finite exhaustion, fresh duplicates, explicit transaction
+  and other typed exclusions, receipt/cleanup failures and actual postappend
+  ambiguity. Injected controls are distinct from the genuine-eviction witness.
+
 - `TestCOWNativewireInsertResultIDParity` exercises Client -> Server -> public
   shared COW insertion for JSON/BSON with returned and omitted IDs under all
   three production profiles. It checks native BSON binary bytes, caller-buffer

@@ -1,0 +1,30 @@
+{
+  "utc": "2026-10-31T23:06:05.169882+00:00",
+  "authority_thread": "01a18e7c-8c23-7fd2-8d55-b0486d938cd3",
+  "status": "ACCEPT scoped startup correction",
+  "literal_launcher_prefix": [
+    "/usr/bin/env",
+    "-u",
+    "LD_LIBRARY_PATH",
+    "/usr/bin/python3",
+    "-I",
+    "-B"
+  ],
+  "source_plan_sha256": "2ffc7913833de7c396107130ff970ddbef42f6ba0d2557e03abb4da13b8c5345",
+  "runner_sha256": "97b648d003394b351973cd68d3319611aea94b7e97130e5ca4dd09ce186d8467",
+  "same_grant_start_utc": "2026-10-31T23:04:19.010286Z",
+  "no_new_phase_after_utc": "2026-10-31T23:21:19.010286Z",
+  "release_deadline_utc": "2026-10-31T23:24:19.010286Z",
+  "preserved_failure": "COST-ADMISSION-PROBE-01.json",
+  "unchanged": [
+    "source",
+    "producer",
+    "ELFs",
+    "workload",
+    "caps",
+    "order",
+    "all original assertions"
+  ],
+  "other_environment_normalization_authorized": false,
+  "failure_policy": "First subsequent setup/product/resource/validation failure halts all cells"
+}

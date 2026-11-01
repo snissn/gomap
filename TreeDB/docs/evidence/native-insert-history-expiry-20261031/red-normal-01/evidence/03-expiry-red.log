@@ -1,0 +1,9 @@
+{"Time":"2026-10-31T12:30:52.802135462-10:00","Action":"start","Package":"github.com/snissn/gomap/TreeDB/collections"}
+{"Time":"2026-10-31T12:30:52.805146115-10:00","Action":"run","Package":"github.com/snissn/gomap/TreeDB/collections","Test":"TestNativeOrdinaryInsertHistoryExpiry"}
+{"Time":"2026-10-31T12:30:52.80516126-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/collections","Test":"TestNativeOrdinaryInsertHistoryExpiry","Output":"=== RUN   TestNativeOrdinaryInsertHistoryExpiry\n"}
+{"Time":"2026-10-31T12:30:52.95559639-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/collections","Test":"TestNativeOrdinaryInsertHistoryExpiry","Output":"    native_insert_history_expiry_test.go:164: ordinary insert failed after genuine history expiry: opening=2 floor=3 next_before=13 next_after=13 admissions=6 advancing_batches=5 err=treedb: transaction conflict history expired\n"}
+{"Time":"2026-10-31T12:30:53.039245726-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/collections","Test":"TestNativeOrdinaryInsertHistoryExpiry","Output":"--- FAIL: TestNativeOrdinaryInsertHistoryExpiry (0.23s)\n"}
+{"Time":"2026-10-31T12:30:53.039269567-10:00","Action":"fail","Package":"github.com/snissn/gomap/TreeDB/collections","Test":"TestNativeOrdinaryInsertHistoryExpiry","Elapsed":0.23}
+{"Time":"2026-10-31T12:30:53.03944576-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/collections","Output":"FAIL\n"}
+{"Time":"2026-10-31T12:30:53.040988522-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/collections","Output":"FAIL\tgithub.com/snissn/gomap/TreeDB/collections\t0.239s\n"}
+{"Time":"2026-10-31T12:30:53.041004961-10:00","Action":"fail","Package":"github.com/snissn/gomap/TreeDB/collections","Elapsed":0.239}

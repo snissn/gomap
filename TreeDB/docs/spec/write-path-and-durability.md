@@ -2,6 +2,17 @@
 
 This document defines write semantics for TreeDB cached mode and backend mode.
 
+An eligible ordinary one-shot native insert MAY reconstruct its complete private
+plan once after an exact history-expiry refusal whose actual publication result
+proves no assignment, uncertainty or logical installation. All synchronous
+cancellation and Close checks MUST succeed first. Reconstruction releases the
+old producer admission before fresh maintenance, capture, schema/duplicate
+validation and staging. It MUST NOT replay an assigned or possibly accepted
+request, rebase an explicit transaction, rerun a callback, or add a third attempt.
+Asynchronous semantic retirement retains its existing ownership. Bounded history,
+capacity and durable ACK requirements remain unchanged. Eligibility and diagnostic
+timing are described in [the native API contract](../../collections/native_json_public.md).
+
 The named public online value-log rewrite uses the original COW maintenance
 owner when native semantics are active. Its ordinary physical publications
 preserve entry revisions and applied command LSN; they do not represent a new

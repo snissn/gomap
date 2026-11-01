@@ -1,0 +1,520 @@
+{
+  "scope": "Engineering ordinary-insert repair guard: serial native durable request cost with scheduled maintenance disabled and enlarged flush threshold; not default engine behavior, public performance qualification or concurrent max1 proof",
+  "sources": {
+    "B": {
+      "source_directory": "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/baseline",
+      "commit": "eb7e9a3e782ca1cf6d218e255d3f8b030678dfb4",
+      "tree": "a9df359aa3068222d720289ce53321e1ee47c7e6",
+      "binary": "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/cost-build-01/bin/native-insert-B",
+      "build_receipt": "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/cost-build-01/B-build.json",
+      "producer_argv": [
+        "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/cost-build-01/bin/native-insert-B",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkNativeOrdinaryInsertRequest$",
+        "-test.benchtime=100x",
+        "-test.count=1",
+        "-test.benchmem",
+        "-test.timeout=2m"
+      ]
+    },
+    "C": {
+      "source_directory": "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/repo",
+      "commit": "87edfacf617e6877b28be8ffba752ce2539f2cb9",
+      "tree": "e4282e90d0d30ac888be0ba290554214f6f35ce2",
+      "binary": "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/cost-build-01/bin/native-insert-C",
+      "build_receipt": "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/cost-build-01/C-build.json",
+      "producer_argv": [
+        "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/cost-build-01/bin/native-insert-C",
+        "-test.run=^$",
+        "-test.bench=^BenchmarkNativeOrdinaryInsertRequest$",
+        "-test.benchtime=100x",
+        "-test.count=1",
+        "-test.benchmem",
+        "-test.timeout=2m"
+      ]
+    }
+  },
+  "order": [
+    "B1",
+    "C1",
+    "C2",
+    "B2",
+    "B3",
+    "C3",
+    "C4",
+    "B4",
+    "B5",
+    "C5"
+  ],
+  "samples": [
+    {
+      "cell": "B1",
+      "arm": "B",
+      "name": "BenchmarkNativeOrdinaryInsertRequest/batch1-12",
+      "count": 100,
+      "metrics": {
+        "ns/op": 1349592.0,
+        "MB/s": 0.76,
+        "documents/s": 741.0,
+        "B/op": 26036.0,
+        "allocs/op": 165.0
+      },
+      "raw": "BenchmarkNativeOrdinaryInsertRequest/batch1-12         \t     100\t   1349592 ns/op\t   0.76 MB/s\t       741.0 documents/s\t   26036 B/op\t     165 allocs/op"
+    },
+    {
+      "cell": "B1",
+      "arm": "B",
+      "name": "BenchmarkNativeOrdinaryInsertRequest/batch256-12",
+      "count": 100,
+      "metrics": {
+        "ns/op": 4013729.0,
+        "MB/s": 64.99,
+        "documents/s": 63781.0,
+        "B/op": 1726572.0,
+        "allocs/op": 3227.0
+      },
+      "raw": "BenchmarkNativeOrdinaryInsertRequest/batch256-12       \t     100\t   4013729 ns/op\t  64.99 MB/s\t     63781 documents/s\t 1726572 B/op\t    3227 allocs/op"
+    },
+    {
+      "cell": "C1",
+      "arm": "C",
+      "name": "BenchmarkNativeOrdinaryInsertRequest/batch1-12",
+      "count": 100,
+      "metrics": {
+        "ns/op": 1333664.0,
+        "MB/s": 0.76,
+        "documents/s": 749.8,
+        "B/op": 26036.0,
+        "allocs/op": 165.0
+      },
+      "raw": "BenchmarkNativeOrdinaryInsertRequest/batch1-12         \t     100\t   1333664 ns/op\t   0.76 MB/s\t       749.8 documents/s\t   26036 B/op\t     165 allocs/op"
+    },
+    {
+      "cell": "C1",
+      "arm": "C",
+      "name": "BenchmarkNativeOrdinaryInsertRequest/batch256-12",
+      "count": 100,
+      "metrics": {
+        "ns/op": 4074344.0,
+        "MB/s": 64.03,
+        "documents/s": 62832.0,
+        "B/op": 1488395.0,
+        "allocs/op": 3193.0
+      },
+      "raw": "BenchmarkNativeOrdinaryInsertRequest/batch256-12       \t     100\t   4074344 ns/op\t  64.03 MB/s\t     62832 documents/s\t 1488395 B/op\t    3193 allocs/op"
+    },
+    {
+      "cell": "C2",
+      "arm": "C",
+      "name": "BenchmarkNativeOrdinaryInsertRequest/batch1-12",
+      "count": 100,
+      "metrics": {
+        "ns/op": 1317126.0,
+        "MB/s": 0.77,
+        "documents/s": 759.2,
+        "B/op": 26036.0,
+        "allocs/op": 165.0
+      },
+      "raw": "BenchmarkNativeOrdinaryInsertRequest/batch1-12         \t     100\t   1317126 ns/op\t   0.77 MB/s\t       759.2 documents/s\t   26036 B/op\t     165 allocs/op"
+    },
+    {
+      "cell": "C2",
+      "arm": "C",
+      "name": "BenchmarkNativeOrdinaryInsertRequest/batch256-12",
+      "count": 100,
+      "metrics": {
+        "ns/op": 4225697.0,
+        "MB/s": 61.73,
+        "documents/s": 60582.0,
+        "B/op": 1501528.0,
+        "allocs/op": 3198.0
+      },
+      "raw": "BenchmarkNativeOrdinaryInsertRequest/batch256-12       \t     100\t   4225697 ns/op\t  61.73 MB/s\t     60582 documents/s\t 1501528 B/op\t    3198 allocs/op"
+    },
+    {
+      "cell": "B2",
+      "arm": "B",
+      "name": "BenchmarkNativeOrdinaryInsertRequest/batch1-12",
+      "count": 100,
+      "metrics": {
+        "ns/op": 1330190.0,
+        "MB/s": 0.77,
+        "documents/s": 751.8,
+        "B/op": 26036.0,
+        "allocs/op": 165.0
+      },
+      "raw": "BenchmarkNativeOrdinaryInsertRequest/batch1-12         \t     100\t   1330190 ns/op\t   0.77 MB/s\t       751.8 documents/s\t   26036 B/op\t     165 allocs/op"
+    },
+    {
+      "cell": "B2",
+      "arm": "B",
+      "name": "BenchmarkNativeOrdinaryInsertRequest/batch256-12",
+      "count": 100,
+      "metrics": {
+        "ns/op": 3975137.0,
+        "MB/s": 65.62,
+        "documents/s": 64400.0,
+        "B/op": 1489876.0,
+        "allocs/op": 3193.0
+      },
+      "raw": "BenchmarkNativeOrdinaryInsertRequest/batch256-12       \t     100\t   3975137 ns/op\t  65.62 MB/s\t     64400 documents/s\t 1489876 B/op\t    3193 allocs/op"
+    },
+    {
+      "cell": "B3",
+      "arm": "B",
+      "name": "BenchmarkNativeOrdinaryInsertRequest/batch1-12",
+      "count": 100,
+      "metrics": {
+        "ns/op": 1342246.0,
+        "MB/s": 0.76,
+        "documents/s": 745.0,
+        "B/op": 26036.0,
+        "allocs/op": 165.0
+      },
+      "raw": "BenchmarkNativeOrdinaryInsertRequest/batch1-12         \t     100\t   1342246 ns/op\t   0.76 MB/s\t       745.0 documents/s\t   26036 B/op\t     165 allocs/op"
+    },
+    {
+      "cell": "B3",
+      "arm": "B",
+      "name": "BenchmarkNativeOrdinaryInsertRequest/batch256-12",
+      "count": 100,
+      "metrics": {
+        "ns/op": 3964000.0,
+        "MB/s": 65.81,
+        "documents/s": 64581.0,
+        "B/op": 1561807.0,
+        "allocs/op": 3203.0
+      },
+      "raw": "BenchmarkNativeOrdinaryInsertRequest/batch256-12       \t     100\t   3964000 ns/op\t  65.81 MB/s\t     64581 documents/s\t 1561807 B/op\t    3203 allocs/op"
+    },
+    {
+      "cell": "C3",
+      "arm": "C",
+      "name": "BenchmarkNativeOrdinaryInsertRequest/batch1-12",
+      "count": 100,
+      "metrics": {
+        "ns/op": 1331125.0,
+        "MB/s": 0.77,
+        "documents/s": 751.2,
+        "B/op": 26036.0,
+        "allocs/op": 165.0
+      },
+      "raw": "BenchmarkNativeOrdinaryInsertRequest/batch1-12         \t     100\t   1331125 ns/op\t   0.77 MB/s\t       751.2 documents/s\t   26036 B/op\t     165 allocs/op"
+    },
+    {
+      "cell": "C3",
+      "arm": "C",
+      "name": "BenchmarkNativeOrdinaryInsertRequest/batch256-12",
+      "count": 100,
+      "metrics": {
+        "ns/op": 3978628.0,
+        "MB/s": 65.57,
+        "documents/s": 64344.0,
+        "B/op": 1489827.0,
+        "allocs/op": 3193.0
+      },
+      "raw": "BenchmarkNativeOrdinaryInsertRequest/batch256-12       \t     100\t   3978628 ns/op\t  65.57 MB/s\t     64344 documents/s\t 1489827 B/op\t    3193 allocs/op"
+    },
+    {
+      "cell": "C4",
+      "arm": "C",
+      "name": "BenchmarkNativeOrdinaryInsertRequest/batch1-12",
+      "count": 100,
+      "metrics": {
+        "ns/op": 1322535.0,
+        "MB/s": 0.77,
+        "documents/s": 756.1,
+        "B/op": 26036.0,
+        "allocs/op": 165.0
+      },
+      "raw": "BenchmarkNativeOrdinaryInsertRequest/batch1-12         \t     100\t   1322535 ns/op\t   0.77 MB/s\t       756.1 documents/s\t   26036 B/op\t     165 allocs/op"
+    },
+    {
+      "cell": "C4",
+      "arm": "C",
+      "name": "BenchmarkNativeOrdinaryInsertRequest/batch256-12",
+      "count": 100,
+      "metrics": {
+        "ns/op": 4005267.0,
+        "MB/s": 65.13,
+        "documents/s": 63916.0,
+        "B/op": 1490058.0,
+        "allocs/op": 3193.0
+      },
+      "raw": "BenchmarkNativeOrdinaryInsertRequest/batch256-12       \t     100\t   4005267 ns/op\t  65.13 MB/s\t     63916 documents/s\t 1490058 B/op\t    3193 allocs/op"
+    },
+    {
+      "cell": "B4",
+      "arm": "B",
+      "name": "BenchmarkNativeOrdinaryInsertRequest/batch1-12",
+      "count": 100,
+      "metrics": {
+        "ns/op": 1338414.0,
+        "MB/s": 0.76,
+        "documents/s": 747.2,
+        "B/op": 26035.0,
+        "allocs/op": 165.0
+      },
+      "raw": "BenchmarkNativeOrdinaryInsertRequest/batch1-12         \t     100\t   1338414 ns/op\t   0.76 MB/s\t       747.2 documents/s\t   26035 B/op\t     165 allocs/op"
+    },
+    {
+      "cell": "B4",
+      "arm": "B",
+      "name": "BenchmarkNativeOrdinaryInsertRequest/batch256-12",
+      "count": 100,
+      "metrics": {
+        "ns/op": 3961774.0,
+        "MB/s": 65.85,
+        "documents/s": 64618.0,
+        "B/op": 1561798.0,
+        "allocs/op": 3203.0
+      },
+      "raw": "BenchmarkNativeOrdinaryInsertRequest/batch256-12       \t     100\t   3961774 ns/op\t  65.85 MB/s\t     64618 documents/s\t 1561798 B/op\t    3203 allocs/op"
+    },
+    {
+      "cell": "B5",
+      "arm": "B",
+      "name": "BenchmarkNativeOrdinaryInsertRequest/batch1-12",
+      "count": 100,
+      "metrics": {
+        "ns/op": 1318735.0,
+        "MB/s": 0.77,
+        "documents/s": 758.3,
+        "B/op": 26036.0,
+        "allocs/op": 165.0
+      },
+      "raw": "BenchmarkNativeOrdinaryInsertRequest/batch1-12         \t     100\t   1318735 ns/op\t   0.77 MB/s\t       758.3 documents/s\t   26036 B/op\t     165 allocs/op"
+    },
+    {
+      "cell": "B5",
+      "arm": "B",
+      "name": "BenchmarkNativeOrdinaryInsertRequest/batch256-12",
+      "count": 100,
+      "metrics": {
+        "ns/op": 3988743.0,
+        "MB/s": 65.4,
+        "documents/s": 64181.0,
+        "B/op": 1490012.0,
+        "allocs/op": 3193.0
+      },
+      "raw": "BenchmarkNativeOrdinaryInsertRequest/batch256-12       \t     100\t   3988743 ns/op\t  65.40 MB/s\t     64181 documents/s\t 1490012 B/op\t    3193 allocs/op"
+    },
+    {
+      "cell": "C5",
+      "arm": "C",
+      "name": "BenchmarkNativeOrdinaryInsertRequest/batch1-12",
+      "count": 100,
+      "metrics": {
+        "ns/op": 1365548.0,
+        "MB/s": 0.75,
+        "documents/s": 732.3,
+        "B/op": 26036.0,
+        "allocs/op": 165.0
+      },
+      "raw": "BenchmarkNativeOrdinaryInsertRequest/batch1-12         \t     100\t   1365548 ns/op\t   0.75 MB/s\t       732.3 documents/s\t   26036 B/op\t     165 allocs/op"
+    },
+    {
+      "cell": "C5",
+      "arm": "C",
+      "name": "BenchmarkNativeOrdinaryInsertRequest/batch256-12",
+      "count": 100,
+      "metrics": {
+        "ns/op": 4013776.0,
+        "MB/s": 64.99,
+        "documents/s": 63780.0,
+        "B/op": 1488269.0,
+        "allocs/op": 3193.0
+      },
+      "raw": "BenchmarkNativeOrdinaryInsertRequest/batch256-12       \t     100\t   4013776 ns/op\t  64.99 MB/s\t     63780 documents/s\t 1488269 B/op\t    3193 allocs/op"
+    }
+  ],
+  "disposition": "pending explicit coordinator review; no automatic acceptance",
+  "comparisons": [
+    {
+      "shape": "batch1",
+      "median": {
+        "B": {
+          "ns/op": 1338414.0,
+          "MB/s": 0.76,
+          "documents/s": 747.2,
+          "B/op": 26036.0,
+          "allocs/op": 165.0
+        },
+        "C": {
+          "ns/op": 1331125.0,
+          "MB/s": 0.77,
+          "documents/s": 751.2,
+          "B/op": 26036.0,
+          "allocs/op": 165.0
+        }
+      },
+      "candidate_over_baseline": {
+        "ns/op": 0.9945540019754725,
+        "MB/s": 1.013157894736842,
+        "documents/s": 1.0053533190578159,
+        "B/op": 1.0,
+        "allocs/op": 1.0
+      },
+      "pairs": [
+        {
+          "block": [
+            "B1",
+            "C1"
+          ],
+          "candidate_over_baseline": {
+            "ns/op": 0.9881979146290139,
+            "MB/s": 1.0,
+            "documents/s": 1.0118758434547908,
+            "B/op": 1.0,
+            "allocs/op": 1.0
+          }
+        },
+        {
+          "block": [
+            "C2",
+            "B2"
+          ],
+          "candidate_over_baseline": {
+            "ns/op": 0.9901788466309325,
+            "MB/s": 1.0,
+            "documents/s": 1.0098430433625964,
+            "B/op": 1.0,
+            "allocs/op": 1.0
+          }
+        },
+        {
+          "block": [
+            "B3",
+            "C3"
+          ],
+          "candidate_over_baseline": {
+            "ns/op": 0.9917146335321543,
+            "MB/s": 1.013157894736842,
+            "documents/s": 1.0083221476510067,
+            "B/op": 1.0,
+            "allocs/op": 1.0
+          }
+        },
+        {
+          "block": [
+            "C4",
+            "B4"
+          ],
+          "candidate_over_baseline": {
+            "ns/op": 0.988135957932299,
+            "MB/s": 1.013157894736842,
+            "documents/s": 1.0119111349036403,
+            "B/op": 1.0000384098329171,
+            "allocs/op": 1.0
+          }
+        },
+        {
+          "block": [
+            "B5",
+            "C5"
+          ],
+          "candidate_over_baseline": {
+            "ns/op": 1.035498413252094,
+            "MB/s": 0.974025974025974,
+            "documents/s": 0.965712778583674,
+            "B/op": 1.0,
+            "allocs/op": 1.0
+          }
+        }
+      ]
+    },
+    {
+      "shape": "batch256",
+      "median": {
+        "B": {
+          "ns/op": 3975137.0,
+          "MB/s": 65.62,
+          "documents/s": 64400.0,
+          "B/op": 1561798.0,
+          "allocs/op": 3203.0
+        },
+        "C": {
+          "ns/op": 4013776.0,
+          "MB/s": 64.99,
+          "documents/s": 63780.0,
+          "B/op": 1489827.0,
+          "allocs/op": 3193.0
+        }
+      },
+      "candidate_over_baseline": {
+        "ns/op": 1.0097201681350856,
+        "MB/s": 0.9903992685156963,
+        "documents/s": 0.9903726708074534,
+        "B/op": 0.95391785621444,
+        "allocs/op": 0.9968779269434904
+      },
+      "pairs": [
+        {
+          "block": [
+            "B1",
+            "C1"
+          ],
+          "candidate_over_baseline": {
+            "ns/op": 1.0151019164472739,
+            "MB/s": 0.9852284966917988,
+            "documents/s": 0.9851209607876954,
+            "B/op": 0.86205208934235,
+            "allocs/op": 0.9894638983576077
+          }
+        },
+        {
+          "block": [
+            "C2",
+            "B2"
+          ],
+          "candidate_over_baseline": {
+            "ns/op": 1.0630317898477462,
+            "MB/s": 0.9407192928985064,
+            "documents/s": 0.9407142857142857,
+            "B/op": 1.0078207850854701,
+            "allocs/op": 1.001565925461948
+          }
+        },
+        {
+          "block": [
+            "B3",
+            "C3"
+          ],
+          "candidate_over_baseline": {
+            "ns/op": 1.0036902119071645,
+            "MB/s": 0.9963531378209997,
+            "documents/s": 0.9963301899939611,
+            "B/op": 0.9539123592095566,
+            "allocs/op": 0.9968779269434904
+          }
+        },
+        {
+          "block": [
+            "C4",
+            "B4"
+          ],
+          "candidate_over_baseline": {
+            "ns/op": 1.0109781628129217,
+            "MB/s": 0.9890660592255125,
+            "documents/s": 0.9891361540128137,
+            "B/op": 0.9540657626658505,
+            "allocs/op": 0.9968779269434904
+          }
+        },
+        {
+          "block": [
+            "B5",
+            "C5"
+          ],
+          "candidate_over_baseline": {
+            "ns/op": 1.0062759119853046,
+            "MB/s": 0.9937308868501528,
+            "documents/s": 0.9937520449977407,
+            "B/op": 0.9988302107634033,
+            "allocs/op": 1.0
+          }
+        }
+      ]
+    }
+  ]
+}

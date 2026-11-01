@@ -1,0 +1,52 @@
+{
+  "status": "ARTIFACT_ACCEPT",
+  "reviewer": "/root/combined_correctness_protocol",
+  "mode": "Independent retained-artifact read-only audit; no workloads, lease acquisition or source edits; sole write is this receipt",
+  "plan_sha256": "2ffc7913833de7c396107130ff970ddbef42f6ba0d2557e03abb4da13b8c5345",
+  "runner_sha256": "97b648d003394b351973cd68d3319611aea94b7e97130e5ca4dd09ce186d8467",
+  "summary_sha256": "16e46ff4ddafe4962001ec36df1045d49bdf57ed8a8a50ff11827448778cda05",
+  "scope": "Artifact integrity and faithful engineering evidence only; coordinator retains material-cost disposition, runtime handoff and merge acceptance",
+  "checks": {
+    "cells": 10,
+    "raw_metric_rows": 20,
+    "matched_pairs_per_shape": 5,
+    "all_actual_tool_guard_and_finish_exits": 0,
+    "raw_and_summary": "All raw rows exactly match completion and SUMMARY; both five-sample medians and every matched-pair ratio independently recomputed exactly; no sample excluded",
+    "bindings": "Frozen plan, start, source/ELF review bindings, tool completion hashes, exact producer argv/cwd/environment and guard limits agree",
+    "runtime": "Every row count100 with expected batch1/batch256 suffix12; one PASS per cell and no failure markers; GOMAXPROCS absent",
+    "guard": "All ten statuses completed, errors=[] and cleanup_signals=[]; no resource intervention",
+    "maximum_sampled_rss_bytes": 136306688,
+    "minimum_sampled_free_bytes": 1106388795392,
+    "prepare_to_final_guard_end_seconds": 49.981441,
+    "custody": "Each launch retained exact shared lease66305/54 inherited by its guard; all per-cell guards completed their maintained owned-process exit checks. Final independent phase census/lease-free release receipt was not inspected by this helper and remains the coordinator's required successor-admission check.",
+    "startup_probe": "Original exit1 LD_LIBRARY_PATH admission probe preserved; explicit scoped launcher amendment retains unchanged frozen workload and assertions"
+  },
+  "observations": {
+    "batch1": {
+      "baseline_median_ns_per_request": 1338414,
+      "candidate_median_ns_per_request": 1331125,
+      "baseline_and_candidate_median_allocs_per_request": 165,
+      "baseline_and_candidate_median_bytes_per_request": 26036,
+      "matched_latency_change_percent": [-1.180209, -0.982115, -0.828537, -1.186404, 3.549841]
+    },
+    "batch256": {
+      "baseline_median_ns_per_request": 3975137,
+      "candidate_median_ns_per_request": 4013776,
+      "median_latency_change_percent": 0.97201681350856,
+      "baseline_median_allocs_per_request": 3203,
+      "candidate_median_allocs_per_request": 3193,
+      "baseline_median_bytes_per_request": 1561798,
+      "candidate_median_bytes_per_request": 1489827,
+      "matched_latency_change_percent": [1.510192, 6.303179, 0.369021, 1.097816, 0.627591],
+      "concern": "Candidate slower in all five matched pairs. C2 also has five more allocs/op and11652 more B/op than B2. Other samples vary. These observations require honest coordinator disposition; neither timing noise nor a causal allocation improvement is established."
+    }
+  },
+  "limits": [
+    "New unlanded engineering producer; matched serial request cost with explicit1GiB flush threshold and scheduled maintenance overrides, not normal engine defaults or public performance qualification.",
+    "Grouping policy remains default; mandatory native pressure handling remains unchanged. Concurrent expiry/max1 and original100k behavior are outside this measurement.",
+    "Exact first/last readback, explicit checkpoint and checked original Close/fresh reopen are outside timing; full-corpus validation is not claimed.",
+    "Suffix12 is a point runtime observation and resource/ownership monitoring is sampled; continuous or unperturbed timing is not certified.",
+    "All five matched blocks are retained. ARTIFACT_ACCEPT supplies no numeric waiver, causal optimization claim or automatic cost/merge acceptance.",
+    "Helper artifact reads are finished; helper owns no lease or product process. Coordinator must complete final custody release before its successor campaign."
+  ]
+}

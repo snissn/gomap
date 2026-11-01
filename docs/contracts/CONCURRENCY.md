@@ -149,6 +149,15 @@ changed dependency. Open transaction iterators reject further mutation with
 `ErrTxnIteratorOpen`; commit/close invalidates children. See
 `TreeDB/docs/spec/raw-cow-transactions.md` for the supported ownership fence.
 
+Ordinary one-shot native collection inserts may reconstruct their private plan
+once after an exact preassignment history-expiry refusal. The actual result must
+exclude assignment, uncertain completion and logical installation, and synchronous
+cancellation and Close must succeed before producer admission is reacquired for
+fresh capture and validation. Explicit transactions, apply/replay, callbacks and
+other typed producers keep their existing behavior. A second refusal is returned;
+no history or memory limit is enlarged. See
+`TreeDB/collections/native_json_public.md` for eligibility and diagnostic timing.
+
 ### Backend-root and native constructor lifetimes
 
 `OpenBackendWithCachedLeafLog` and its stats/maintenance variants return backend

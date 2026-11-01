@@ -85,6 +85,20 @@ plan without reserving a local WAL or distributed apply identity. External packe
 never authorize collection-local numeric template IDs. Prepared template producers
 remain outside this ordinary family.
 
+Ordinary one-shot native inserts may reconstruct their complete private plan
+once when the finite conflict history expires before WAL assignment. The actual
+publication result must rule out assignment, uncertain completion and logical
+installation, and all synchronous cancellation and Close checks must succeed. Semantic
+retirement may complete asynchronously. Producer admission ends
+before fresh pressure maintenance, capture, schema validation and staging. This
+never rebases an explicit `Begin` transaction, reruns a caller callback, or retries
+an assigned/possibly accepted write. A second refusal is returned to the caller.
+Insertion diagnostics count only the accepted plan; `HistoryExpiryRetries` is
+zero or one, and `PrepareDocuments`/`Publish` include both attempts' measured
+staging/publication work. Other unmeasured request overhead remains outside those
+phase timers. Other typed insertion and prepared template producers retain their
+existing refusal behavior.
+
 Scalar JSON index reads support `FindByIndexRange`, `ScanIndexRange`,
 `FindDocumentsByIndexRange` and `ScanBorrowedDocumentsByIndexRange`. Ascending
 scans seek directly to the maintained scalar bounds and merge pending,

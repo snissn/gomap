@@ -1,0 +1,97 @@
+{
+  "start_utc": "2026-10-31T22:38:53.371099Z",
+  "pid": 3255230,
+  "source": "905d948c17e8108661fee503af49ff5c4f7f9005",
+  "tree": "b61f47c54eb9a1985aaf3b98bface5e249e05eb3",
+  "source_dir": "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/repo",
+  "lease_path": "/mnt/fast4tb/gomap-host185-perf-custody.lock",
+  "lease": [
+    66305,
+    54
+  ],
+  "status": "focused-normal-race-PASS",
+  "scope": "focused normal/race candidate correctness; not performance",
+  "end_utc": "2026-10-31T22:41:40.898741Z",
+  "commands": [
+    {
+      "name": "go-version",
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.10.linux-amd64/bin/go",
+        "version"
+      ],
+      "cwd": "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/repo",
+      "start_utc": "2026-10-31T22:38:53.385184Z",
+      "timeout_seconds": 15,
+      "log": "01-go-version.log",
+      "exit_code": 0,
+      "end_utc": "2026-10-31T22:38:53.585802Z",
+      "minimum_free_bytes_so_far": 1115018452992
+    },
+    {
+      "name": "go-env",
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.10.linux-amd64/bin/go",
+        "env",
+        "-json",
+        "GOROOT",
+        "GOVERSION",
+        "GOCACHE",
+        "GOMODCACHE",
+        "CGO_ENABLED",
+        "GOTOOLCHAIN"
+      ],
+      "cwd": "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/repo",
+      "start_utc": "2026-10-31T22:38:53.595578Z",
+      "timeout_seconds": 15,
+      "log": "02-go-env.log",
+      "exit_code": 0,
+      "end_utc": "2026-10-31T22:38:53.796299Z",
+      "minimum_free_bytes_so_far": 1115018444800
+    },
+    {
+      "name": "normal",
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.10.linux-amd64/bin/go",
+        "test",
+        "-json",
+        "-p=1",
+        "-count=1",
+        "-timeout=180s",
+        "./TreeDB/collections",
+        "-run",
+        "^TestNativeInsertHistoryExpiryFreshDuplicate$"
+      ],
+      "cwd": "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/repo",
+      "start_utc": "2026-10-31T22:38:53.806101Z",
+      "timeout_seconds": 240,
+      "log": "03-normal.log",
+      "exit_code": 0,
+      "end_utc": "2026-10-31T22:39:46.654607Z",
+      "minimum_free_bytes_so_far": 1114490568704
+    },
+    {
+      "name": "race",
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.10.linux-amd64/bin/go",
+        "test",
+        "-json",
+        "-p=1",
+        "-count=1",
+        "-timeout=180s",
+        "-race",
+        "./TreeDB/collections",
+        "-run",
+        "^TestNative(OrdinaryInsertHistoryExpiry|InsertHistoryExpiry.*)$"
+      ],
+      "cwd": "/mnt/fast4tb/gomap-history-expiry-20261031T2219Z/repo",
+      "start_utc": "2026-10-31T22:39:46.665193Z",
+      "timeout_seconds": 240,
+      "log": "04-race.log",
+      "exit_code": 0,
+      "end_utc": "2026-10-31T22:41:40.865119Z",
+      "minimum_free_bytes_so_far": 1113807310848
+    }
+  ],
+  "cleanup_safe": true,
+  "remaining_owned_processes": []
+}
