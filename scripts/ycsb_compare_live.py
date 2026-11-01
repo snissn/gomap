@@ -32,8 +32,7 @@ PHASE_INTEGER_COUNTERS = (
     *("treedb.command_wal."+name for name in (
         "flush.count_total", "flush.ns_total", "sync.count_total", "sync.ns_total",
         "file_sync.calls_total", "file_sync.ns_total", "file_sync.errors_total",
-        "directory_sync.calls_total", "directory_sync.ns_total", "directory_sync.errors_total",
-        "dependency_debt.retries_total")),
+        "directory_sync.calls_total", "directory_sync.ns_total", "directory_sync.errors_total")),
     *("treedb.command_wal.group_commit."+name for name in (
         "attempts_total", "groups_total", "commits_total", "participants_total",
         "dependency_entries_attempted_total", "dependency_entries_covered_total",

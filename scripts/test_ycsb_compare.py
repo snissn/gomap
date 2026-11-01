@@ -254,6 +254,33 @@ class CompareTests(unittest.TestCase):
             self.assertEqual(row["counters"][key], dict(available=True,
                 before=str(maximum-3+2*index), after=str(maximum-2+2*index), delta="1"))
 
+    def test_phase_stats_retired_dependency_retries_remain_raw_gauges(self):
+        self.phase_fixture()
+        self.check(True)
+        key = "treedb.command_wal.dependency_debt.retries_total"
+        values = ("2", "0", "3", "0")
+        for index, (stem, boundary) in enumerate((
+                ("load", "before"), ("load", "after"),
+                ("run_1", "before"), ("run_1", "after"))):
+            prefix = stem+".phase-stats-"+boundary
+            request = COMPARE.read(self.directory/(prefix+".request.json"))
+            response = COMPARE.read(self.directory/(prefix+".response.json"))
+            # Retiring dependency debt drops its retry history. Preserve the
+            # snapshots and every binding without treating that gauge as work.
+            response["receipt"]["owner"]["stats"][key] = values[index]
+            self.write_phase_packet(stem, boundary, request, response,
+                                    call_result(0,0) if index == 0 else call_result(4,4))
+        self.check(True)
+        report = COMPARE.read(self.out/"validation.json")["phase_stats"]["observations"][self.target]
+        self.assertEqual(len(report), 2)
+        for index, row in enumerate(report):
+            self.assertNotIn(key, row["counters"])
+            self.assertEqual(row["before"]["observation"]["stats"][key], values[2*index])
+            self.assertEqual(row["after"]["observation"]["stats"][key], values[2*index+1])
+        self.manifest["phase_stats_required_counters"] = [key]
+        self.save(self.out/"manifest.json", self.manifest)
+        self.check(False, "unknown required phase counter")
+
     def test_phase_stats_rejects_rebound_counter_identity_and_time_forgery(self):
         cases = {
             "reset": lambda request,response: response["receipt"]["owner"]["stats"].update({"treedb.cache.checkpoint.runs":"0"}),
@@ -1307,7 +1334,7 @@ else:runpy.run_path(sys.argv[0],run_name='__main__')
 
     def test_hanging_helper_child_is_bounded_and_reaped(self):
         binary=self.out/"hanging-helper"
-        binary.write_text("#!/usr/bin/env python3\nimport signal,time\nsignal.signal(signal.SIGTERM,signal.SIG_IGN)\ntime.sleep(30)\n")
+        binary.write_text("#!"+sys.executable+"\nimport signal,time\nsignal.signal(signal.SIGTERM,signal.SIG_IGN)\ntime.sleep(30)\n")
         binary.chmod(0o755)
         self.manifest["fixture"]["binary"]=str(binary)
         self.save(self.out/"manifest.json",self.manifest)

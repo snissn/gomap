@@ -266,12 +266,12 @@ gateway fields to its fresh observation map as unsigned decimal strings; public
 | `treedb.cache.cow.txn.` | `logical_seq` | unsigned integer |
 | `treedb.cache.checkpoint.` | `runs` | unsigned integer |
 | `treedb.cache.checkpoint.` | `total_ms` | finite nonnegative decimal |
-| `treedb.command_wal.` | `flush.count_total`, `flush.ns_total`, `sync.count_total`, `sync.ns_total`, `file_sync.calls_total`, `file_sync.ns_total`, `file_sync.errors_total`, `directory_sync.calls_total`, `directory_sync.ns_total`, `directory_sync.errors_total`, `dependency_debt.retries_total` | unsigned integer |
+| `treedb.command_wal.` | `flush.count_total`, `flush.ns_total`, `sync.count_total`, `sync.ns_total`, `file_sync.calls_total`, `file_sync.ns_total`, `file_sync.errors_total`, `directory_sync.calls_total`, `directory_sync.ns_total`, `directory_sync.errors_total` | unsigned integer |
 | `treedb.command_wal.group_commit.` | `attempts_total`, `groups_total`, `commits_total`, `participants_total`, `dependency_entries_attempted_total`, `dependency_entries_covered_total`, `leaders_total`, `followers_total`, `syncs_total`, `errors_total`, `forced_total`, `wait_ns_total`, `trigger.timeout_total`, `trigger.commit_limit_total`, `trigger.byte_limit_total`, `trigger.explicit_sync_total`, `trigger.sealed_collection_total`, `bypasses_total` | unsigned integer |
 | `ycsb.gateway.write_concern.` | `Requests`, `VisibleRequests`, `JournalRequests`, `LogicalWrites`, `VisibleAcknowledgements`, `JournalAcknowledgements`, `SyncAttempts`, `PhysicalSyncBoundaries`, `PreMutationRejections`, `MalformedRejections`, `UnsupportedRejections`, `TimeoutRejections`, `SyncFailures`, `DurabilityUnavailableFailures`, `SyncBoundaryFailures`, `UncertainOutcomes`, `AcknowledgementNanos`, `JournalSyncNanos` | unsigned integer |
 
 The source inventory is `TreeDB/caching/db.go` for checkpoint counters,
-`TreeDB/db/command_wal_stats.go` for WAL flush/sync/file/dependency counters,
+`TreeDB/db/command_wal_stats.go` for WAL flush/sync/file counters,
 `TreeDB/command_wal_group_commit.go` for group counters, and
 `TreeDB/mongo_gateway/write_concern.go` for gateway counters. Replay uses exact
 integers and finite decimals without float truncation and rejects malformed,
@@ -282,6 +282,11 @@ profile/backend/logical sequence are required on the enabled route. Other listed
 owner counters absent at either boundary are `available: false`, never zero;
 a frozen campaign may additionally require selected inventory keys through
 `phase_stats_required_counters`.
+
+The selected inventory contains49 counters:48 unsigned integers and1 decimal.
+`treedb.command_wal.dependency_debt.retries_total` remains in raw observations
+as a pending-debt gauge. Releasing covered debt drops its retry history, so this
+field is excluded from monotonic deltas and cannot be a required phase counter.
 
 These are read-only observations of monotonic counters, not an atomic snapshot
 across counters. Concurrent default maintenance can contribute to phase deltas;
