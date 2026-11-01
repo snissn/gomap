@@ -2,7 +2,6 @@ package caching
 
 import (
 	"errors"
-	"sync"
 	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -72,8 +71,6 @@ func (s *Snapshot) SeekGEVersionRanges(starts, ends [][]byte, results []mvcckey.
 	s.cowReadMu.Lock()
 	// Existing cut-local readers keep priority; otherwise borrow one original
 	// basis/slot nonblockingly. No new per-query read workspace is introduced.
-	var mu *sync.Mutex
-	var owner **cowReadWorkspace
 	basis := s.cowCut.basis
 	if s.cowReader != nil && s.cowReader.point != nil {
 		s.cowReadMu.Unlock()
@@ -81,17 +78,7 @@ func (s *Snapshot) SeekGEVersionRanges(starts, ends [][]byte, results []mvcckey.
 		s.cowReadBatchLocal(starts, ends, results)
 		return nil
 	}
-	if basis.readMu.TryLock() {
-		mu, owner = &basis.readMu, &basis.reader
-	} else {
-		for i := range basis.readSlots {
-			slot := &basis.readSlots[i]
-			if slot.mu.TryLock() {
-				mu, owner = &slot.mu, &slot.reader
-				break
-			}
-		}
-	}
+	mu, owner, _ := basis.tryReadWorkspace(0)
 	if mu == nil {
 		s.cowReadMu.Unlock()
 		lease.Close()

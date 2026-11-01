@@ -521,51 +521,36 @@ func (s *Snapshot) cowPhysicalSuccessorLocked(start, end []byte, inspected *cowS
 		return s.cowCutPhysicalSuccessorLocked(start, end)
 	}
 	basis := s.cowCut.basis
-	// Reuse the original physical owner's admitted traversal storage when idle.
-	// Never wait for another reader's scratch: retained readers keep their
-	// independent cut-local path when the basis is already in use.
-	if !basis.readMu.TryLock() {
-		// A fixed number of independently admitted owners amortizes scratch
-		// across short-lived parallel cuts. Never wait for a slot or grow the
-		// pool; an admitted cut-local reader retains priority above this path.
-		for i := range basis.readSlots {
-			slot := &basis.readSlots[i]
-			if !slot.mu.TryLock() {
-				continue
-			}
-			fresh := slot.reader == nil
-			w, err := basis.workspaceLocked(&slot.reader, s.cowCache.budget, s.cowCache.readLimits())
-			var best pointSuccessorCandidate
-			if err == nil {
-				best, err = s.cowWorkspacePhysicalSuccessorLocked(w, start, end, inspected)
-			}
-			*freshOwner = cowReadHandoffLocked(&slot.mu, &slot.reader, fresh, cowSuccessorNeedsCutLocalValue(best), err)
-			slot.mu.Unlock()
-			if errors.Is(err, memtable.ErrCOWCapacity) {
-				if inspected.file != nil {
-					// Traversal and inspection completed. The cut can reuse that
-					// metadata after a fresh slot refunds its refused value growth.
-					return best, nil
-				}
-				continue
-			}
-			return best, err
+	// Borrow only an idle existing owner. Local priority above and each caller's
+	// capacity/dictionary handoff remain independent of lock selection.
+	for next := 0; next <= len(basis.readSlots); {
+		mu, owner, following := basis.tryReadWorkspace(next)
+		if mu == nil {
+			break
 		}
-		return s.cowCutPhysicalSuccessorLocked(start, end)
-	}
-	fresh := basis.reader == nil
-	best, err := s.cowBasisPhysicalSuccessorLocked(start, end, inspected)
-	*freshOwner = cowReadHandoffLocked(&basis.readMu, &basis.reader, fresh, cowSuccessorNeedsCutLocalValue(best), err)
-	basis.readMu.Unlock()
-	if errors.Is(err, memtable.ErrCOWCapacity) {
-		if inspected.file != nil {
-			return best, nil
+		next = following
+		fresh := *owner == nil
+		w, err := basis.workspaceLocked(owner, s.cowCache.budget, s.cowCache.readLimits())
+		var best pointSuccessorCandidate
+		if err == nil {
+			best, err = s.cowWorkspacePhysicalSuccessorLocked(w, start, end, inspected)
 		}
-		// Shared scratch is an optimization. Its allocation or decoder growth
-		// must not invalidate a read that the cut-local owner can still admit.
-		return s.cowCutPhysicalSuccessorLocked(start, end)
+		*freshOwner = cowReadHandoffLocked(mu, owner, fresh, cowSuccessorNeedsCutLocalValue(best), err)
+		mu.Unlock()
+		if errors.Is(err, memtable.ErrCOWCapacity) {
+			if inspected.file != nil {
+				return best, nil
+			}
+			// Primary refusal retains the original immediate cut-local fallback.
+			// Extra-slot refusal may try the remaining idle slots before that fallback.
+			if next == 1 {
+				break
+			}
+			continue
+		}
+		return best, err
 	}
-	return best, err
+	return s.cowCutPhysicalSuccessorLocked(start, end)
 }
 
 func cowSuccessorNeedsCutLocalValue(best pointSuccessorCandidate) bool {
@@ -614,17 +599,6 @@ func (f *cowFreshReadOwner) refund() bool {
 	reader.close()
 	mu.Unlock()
 	return true
-}
-
-// The caller holds basis.readMu until winner bytes have become owned. Release
-// that lock before invoking a cut-local fallback, which can perform its own I/O.
-func (s *Snapshot) cowBasisPhysicalSuccessorLocked(start, end []byte, inspected *cowSuccessorInspection) (pointSuccessorCandidate, error) {
-	basis := s.cowCut.basis
-	w, err := basis.physicalWorkspaceLocked(s.cowCache.budget, s.cowCache.readLimits())
-	if err != nil {
-		return pointSuccessorCandidate{}, err
-	}
-	return s.cowWorkspacePhysicalSuccessorLocked(w, start, end, inspected)
 }
 
 // Caller owns this basis slot until all selected output bytes become owned.
