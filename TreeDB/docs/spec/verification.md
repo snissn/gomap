@@ -4935,3 +4935,22 @@ typed no-deferred optimize paths; it requires retained buffered debt, unchanged
 graph status, original error mapping and no physical root-seal activity.
 Process-exit recovery does not establish
 power-loss or replica durability.
+
+Native shared journal scheduling uses the same official-driver/physical-sync
+controls in `TestStandaloneNativeSharedBoundaryHeldSyncExactACK`,
+`TestStandaloneNativeSharedBoundaryHeldSyncFailurePoisons`,
+`TestStandaloneNativeSharedBoundaryCloseJoinsHeldSync` and
+`TestStandaloneNativeSharedBoundaryCrashReopen`, both CommandWAL profiles.
+The first control requires successor installation while the predecessor's real
+explicit sync is held, then observes the successor's separate explicit Before
+and successful After file-sync events before accepting its ACK. Durable ordinary
+completion and aggregate forced/sync counters alone do not satisfy that oracle.
+Failure preserves partial responses and poison without retry; Close joins the
+held lifetime; abrupt exit97 follows both actual ACKs without a repairing Close.
+`TestNativeJournalBoundaryOwnerCapability` checks exact owner/backend, NoWAL,
+purity and query/Close concurrency; `TestNativeJournalBoundaryCapabilityRefusesPendingClose`
+requires nonblocking refusal behind the actual pending lifecycle writer.
+`TestStandaloneNativeJournalBoundaryEligibility` inventories the seven collection
+commands, auth's unrelated store and custom override; the custom-boundary and real
+shared-sync-panic controls preserve exclusion and deferred unlock respectively.
+These are source contracts; execution and final public qualification are separate.

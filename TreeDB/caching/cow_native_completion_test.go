@@ -137,11 +137,27 @@ func TestCOWNativeJournalPrefixUnboundCapability(t *testing.T) {
 			if supported, err := backend.SyncNativeCommandWALPrefix(); supported || !errors.Is(err, backenddb.ErrNativeSemanticUnsupported) {
 				t.Fatalf("inactive native capability=%t/%v", supported, err)
 			}
+			if backend.CanShareNativeCommandWALPrefix() {
+				t.Fatal("query activated an inactive unbound owner")
+			}
 			if err := backend.ActivateNativeSemanticOwner(); err != nil {
 				t.Fatal(err)
 			}
+			if backend.CanShareNativeCommandWALPrefix() {
+				t.Fatal("active unbound owner granted sharing")
+			}
 			if supported, err := backend.SyncNativeCommandWALPrefix(); supported || err != nil {
 				t.Fatalf("healthy unbound capability=%t/%v", supported, err)
+			}
+			if wal {
+				// Existing custom completion has no optional pure owner callback.
+				// Its ordinary request API remains unchanged; unknown is exclusive.
+				if err := backend.BindNativeCommandWALCompletion(cache.cow.txnOwner, &nativeCompletionTestBridge{}); err != nil {
+					t.Fatal(err)
+				}
+				if backend.CanShareNativeCommandWALPrefix() {
+					t.Fatal("unknown optional owner callback granted sharing")
+				}
 			}
 			if err := cache.Close(); err != nil {
 				t.Fatal(err)

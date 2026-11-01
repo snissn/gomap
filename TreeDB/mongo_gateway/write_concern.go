@@ -124,6 +124,20 @@ func standaloneWriteCommand(name string) bool {
 	}
 }
 
+// Only collection commands can authenticate their actual completion owner via
+// Collections. AuthCatalog may use an unrelated store, so auth remains exclusive.
+func (s *Server) canShareStandaloneJournalBoundary(name string) bool {
+	if s == nil || s.standaloneWriteConcernSync != nil || s.Collections == nil {
+		return false
+	}
+	switch name {
+	case "create", "createIndexes", "delete", "dropIndexes", "findAndModify", "insert", "update":
+		return s.Collections.CanShareStandaloneJournalBoundary()
+	default:
+		return false
+	}
+}
+
 func (s *Server) recordStandaloneMoreToComeRejection() {
 	stats := &s.writeConcernStats
 	stats.requests.Add(1)
@@ -154,8 +168,13 @@ func (s *Server) standaloneWriteCommandResponse(ctx context.Context, name string
 	}
 	if concern.policy == standaloneWriteConcernJournal {
 		stats.journalRequests.Add(1)
-		s.standaloneWriteBoundaryMu.Lock()
-		defer s.standaloneWriteBoundaryMu.Unlock()
+		if s.canShareStandaloneJournalBoundary(name) {
+			s.standaloneWriteBoundaryMu.RLock()
+			defer s.standaloneWriteBoundaryMu.RUnlock()
+		} else {
+			s.standaloneWriteBoundaryMu.Lock()
+			defer s.standaloneWriteBoundaryMu.Unlock()
+		}
 	} else {
 		stats.visibleRequests.Add(1)
 		s.standaloneWriteBoundaryMu.RLock()

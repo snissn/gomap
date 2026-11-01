@@ -26,6 +26,22 @@ func (db *DB) BindNativeCommandWALCompletion(owner *transactionowner.Owner, brid
 	return nil
 }
 
+// CanShareNativeCommandWALPrefix is a side-effect-free scheduling snapshot of
+// the existing original public completion binding. Unknown implementations and
+// uncertain lifecycle admission stay exclusive. Actual mutation/fence admission
+// remains authoritative after this query returns; no backend lock spans the
+// public lifecycle callback, and no activation or sync is used as a probe.
+func (db *DB) CanShareNativeCommandWALPrefix() bool {
+	if db == nil || db.closing.Load() || db.publicationPoisoned.Load() || db.commandWALFlushPoisoned.Load() ||
+		db.privateCOWOwner == nil || !db.nativeSemanticActive.Load() || !db.HasNativeSemanticBridge() || !db.CommandWALEnabled() {
+		return false
+	}
+	bridge, ok := db.nativeCommandWALCompletion.(interface {
+		NativeCommandWALPrefixOwnerOpen(*DB, *transactionowner.Owner) bool
+	})
+	return ok && bridge.NativeCommandWALPrefixOwnerOpen(db, db.privateCOWOwner)
+}
+
 // CheckNativeCommandWALPrefixOwner admits only the already-active original
 // private COW owner. It neither activates a raw owner nor retains a backend
 // lock across public lifecycle acquisition. The public callback supplies the

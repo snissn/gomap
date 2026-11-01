@@ -30,7 +30,7 @@ func TestDurabilityProfilePublicEntrypointInventory(t *testing.T) {
 		"InitConditionalTxn", "InitConditionalTxnWithSnapshot", "Iterator", "LeafGenerationGC",
 		"LeafGenerationPack", "LeafGenerationPackFromPlan", "LeafGenerationPackRunOnce",
 		"LeafGenerationPlan", "MVCCWriteWorkLimit", "MaintenancePhase", "NewBatch", "NewBatchWithSize",
-		"NativeCommandWALCompletionBytes", "NativeSemanticBackend", "NewConditionalTxn", "NewConditionalTxnWithSnapshot", "NewMVCCAdmission", "NewMVCCWriteWorkEstimator", "PreflightMVCCPrune", "PrepareMVCCPrune", "PrepareNativeCommandWAL", "Print", "ResolvedProfile",
+		"NativeCommandWALCompletionBytes", "NativeCommandWALPrefixOwnerOpen", "NativeSemanticBackend", "NewConditionalTxn", "NewConditionalTxnWithSnapshot", "NewMVCCAdmission", "NewMVCCWriteWorkEstimator", "PreflightMVCCPrune", "PrepareMVCCPrune", "PrepareNativeCommandWAL", "Print", "ResolvedProfile",
 		"ReverseIterator", "SeekGE", "SeekGEVersionRange", "Set", "SetMaintenancePhase", "SetPointWithMVCCInput", "SetNativeSemanticPublication", "SetSync", "Stats", "SubmitLogicalMVCC", "SupportsLogicalMVCC", "SupportsLogicalMVCCStaging", "SupportsMVCCReadCut",
 		"SyncNativeCommandWALPrefix", "Update", "UpdateSync", "VacuumIndexOnline", "VacuumOnlineStats", "ValueLogGC", "ValueLogRewriteOnline",
 	}
@@ -62,6 +62,9 @@ func TestDurabilityProfilePublicEntrypointInventory(t *testing.T) {
 	profileInventoryRequireBody(t, batchBodies, "(*nativePublicCommandWALCompletion).CompleteNativeCommandWAL", "awaitPublicCommandWAL")
 	for _, fragment := range []string{"tdb.beginPublicOperation()", "defer tdb.lifecycleMu.RUnlock()", "!tdb.commandWALCached", "!tdb.cached.COWMode()", "CheckNativeCommandWALPrefixOwner(tdb.txnOwner)", "tdb.syncPublicCommandWAL()"} {
 		profileInventoryRequireBody(t, batchBodies, "(*DB).SyncNativeCommandWALPrefix", fragment)
+	}
+	for _, fragment := range []string{"tdb.lifecycleMu.TryRLock()", "defer tdb.lifecycleMu.RUnlock()", "tdb.backend == backend", "tdb.txnOwner == owner", "tdb.commandWALCached", "tdb.cached.COWMode()", "tdb.cached.CheckNativeSemanticOwnerOpen()"} {
+		profileInventoryRequireBody(t, batchBodies, "(*DB).NativeCommandWALPrefixOwnerOpen", fragment)
 	}
 	backendBodies := profileInventoryFunctionBodies(t, filepath.Join(treeDBDir, "db", "command_wal_raw.go"))
 	backendDBBodies := profileInventoryFunctionBodies(t, filepath.Join(treeDBDir, "db", "db.go"))

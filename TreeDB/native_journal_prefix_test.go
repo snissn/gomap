@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -187,6 +188,9 @@ func TestNativeJournalPrefixSyncFailurePoisonsWithoutFallback(t *testing.T) {
 				next := database.backend.CommandWALNextLSN()
 				if got, err := database.Get([]byte("installed")); err != nil || !bytes.Equal(got, []byte("original")) {
 					t.Fatalf("installed mutation lost: %q/%v", got, err)
+				}
+				if database.backend.CanShareNativeCommandWALPrefix() || manager.CanShareStandaloneJournalBoundary() {
+					t.Fatal("poisoned owner granted shared scheduling")
 				}
 				if err := database.SyncNativeCommandWALPrefix(); err == nil {
 					t.Fatal("poisoned direct fence succeeded")
@@ -455,5 +459,143 @@ func TestNativeJournalPrefixCrashReopenDependencies(t *testing.T) {
 				os.Exit(97)
 			}
 		})
+	}
+}
+
+// The capability is a pure scheduling snapshot of the actual original binding,
+// never a successful fence or a replacement admission/lifetime lease.
+func TestNativeJournalBoundaryOwnerCapability(t *testing.T) {
+	var missing *DB
+	var missingBackend *backenddb.DB
+	if missing.NativeCommandWALPrefixOwnerOpen(nil, nil) || missingBackend.CanShareNativeCommandWALPrefix() {
+		t.Fatal("nil owner granted sharing")
+	}
+	for _, profile := range []Profile{ProfileCommandWALRelaxed, ProfileCommandWALDurable, ProfileNoWALFast} {
+		t.Run(string(profile), func(t *testing.T) {
+			database, manager := nativeJournalPrefixFixture(t, profile)
+			backend := database.backend
+			before := database.Stats()
+			next := backend.CommandWALNextLSN()
+			want := profile != ProfileNoWALFast
+			for i := 0; i < 32; i++ {
+				if got := backend.CanShareNativeCommandWALPrefix(); got != want {
+					t.Fatalf("backend scheduling capability=%t want %t", got, want)
+				}
+				if got := manager.CanShareStandaloneJournalBoundary(); got != want {
+					t.Fatalf("manager scheduling capability=%t want %t", got, want)
+				}
+			}
+			if database.NativeCommandWALPrefixOwnerOpen(nil, database.txnOwner) ||
+				database.NativeCommandWALPrefixOwnerOpen(backend, nil) ||
+				database.NativeCommandWALPrefixOwnerOpen(new(backenddb.DB), database.txnOwner) ||
+				database.NativeCommandWALPrefixOwnerOpen(backend, transactionowner.New()) {
+				t.Fatal("foreign backend/private owner granted sharing")
+			}
+			database.lifecycleMu.Lock()
+			refused := !backend.CanShareNativeCommandWALPrefix()
+			database.lifecycleMu.Unlock()
+			if !refused {
+				t.Fatal("contended public lifecycle granted sharing")
+			}
+			after := database.Stats()
+			keys := []string{"treedb.cache.checkpoint.runs", "treedb.command_wal.file_sync.calls_total"}
+			if want {
+				keys = append(keys, "treedb.command_wal.group_commit.forced_total", "treedb.command_wal.group_commit.syncs_total")
+			}
+			for _, key := range keys {
+				requireNativeJournalStatDelta(t, before, after, key, 0)
+			}
+			if backend.CommandWALNextLSN() != next {
+				t.Fatal("capability query appended a command")
+			}
+			if err := manager.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if manager.CanShareStandaloneJournalBoundary() {
+				t.Fatal("closed manager granted sharing")
+			}
+			stop := make(chan struct{})
+			joined := make(chan struct{})
+			go func() {
+				defer close(joined)
+				for {
+					select {
+					case <-stop:
+						return
+					default:
+						_ = backend.CanShareNativeCommandWALPrefix()
+						runtime.Gosched()
+					}
+				}
+			}()
+			err := database.Close()
+			close(stop)
+			select {
+			case <-joined:
+			case <-time.After(5 * time.Second):
+				t.Fatal("capability/Close query did not join")
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if backend.CanShareNativeCommandWALPrefix() || database.NativeCommandWALPrefixOwnerOpen(backend, database.txnOwner) {
+				t.Fatal("closed original owner granted sharing")
+			}
+		})
+	}
+}
+
+func TestNativeJournalBoundaryCapabilityRefusesPendingClose(t *testing.T) {
+	database, manager := nativeJournalPrefixFixture(t, ProfileCommandWALRelaxed)
+	backend := database.backend
+	if !backend.CanShareNativeCommandWALPrefix() {
+		t.Fatal("fixture lacks original eligible owner")
+	}
+	if err := manager.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// A real pending Close writer must make the query refuse without waiting
+	// behind it. Keep one preexisting reader until the refusal is observed.
+	database.lifecycleMu.RLock()
+	var once sync.Once
+	release := func() { once.Do(database.lifecycleMu.RUnlock) }
+	closed := make(chan error, 1)
+	joined := false
+	t.Cleanup(func() {
+		release()
+		if !joined {
+			select {
+			case err := <-closed:
+				if err != nil {
+					t.Error(err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Error("pending original Close did not join")
+			}
+		}
+	})
+	go func() { closed <- database.Close() }()
+	deadline := time.Now().Add(5 * time.Second)
+	for backend.CanShareNativeCommandWALPrefix() {
+		if time.Now().After(deadline) {
+			t.Fatal("query did not refuse pending lifecycle writer")
+		}
+		runtime.Gosched()
+	}
+	select {
+	case err := <-closed:
+		joined = true
+		t.Fatalf("Close bypassed retained public reader: %v", err)
+	default:
+	}
+	release()
+	select {
+	case err := <-closed:
+		joined = true
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("original Close did not finish after lifecycle release")
 	}
 }

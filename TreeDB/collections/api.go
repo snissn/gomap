@@ -3501,6 +3501,15 @@ func (m *CollectionManager) CheckpointStorage() error {
 	return m.db.Checkpoint()
 }
 
+// CanShareStandaloneJournalBoundary reports a scheduling snapshot for this
+// manager's constructor-fixed native backend and its original public completion
+// owner. It performs no activation, publication or I/O. False preserves the
+// gateway's exclusive lock; it does not select a storage fallback or mask errors.
+func (m *CollectionManager) CanShareStandaloneJournalBoundary() bool {
+	return m != nil && m.initializationError == nil && !m.isClosing() && m.nativeJSON != nil &&
+		m.nativeJSON.db != nil && m.nativeJSON.db.CanShareNativeCommandWALPrefix()
+}
+
 // SyncForStandaloneWriteConcern completes the durable boundary used by a
 // standalone Mongo journal acknowledgement. Native CommandWAL managers reuse
 // the original public owner's forced completion group, without a root checkpoint.

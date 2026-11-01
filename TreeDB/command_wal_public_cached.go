@@ -451,6 +451,19 @@ func (tdb *DB) syncPublicCommandWAL() error {
 	return tdb.forcePublicCommandWALGroupCommit()
 }
 
+// NativeCommandWALPrefixOwnerOpen authenticates a scheduling query against this
+// original public receiver. TryRLock refuses a pending/active Close rather than
+// waiting for it. The lifecycle lease ends here; actual fence completion obtains
+// and retains its own lease through ACK. This query grants no storage authority.
+func (tdb *DB) NativeCommandWALPrefixOwnerOpen(backend *db.DB, owner *transactionowner.Owner) bool {
+	if tdb == nil || backend == nil || owner == nil || !tdb.lifecycleMu.TryRLock() {
+		return false
+	}
+	defer tdb.lifecycleMu.RUnlock()
+	return tdb.backend == backend && tdb.txnOwner == owner && tdb.commandWALCached &&
+		tdb.cached != nil && tdb.cached.COWMode() && tdb.cached.CheckNativeSemanticOwnerOpen() == nil
+}
+
 // SyncNativeCommandWALPrefix completes a real dependency-complete journal
 // boundary on this original public native owner. It deliberately does not seal
 // physical roots. The existing forced group releases operation/publication/raw

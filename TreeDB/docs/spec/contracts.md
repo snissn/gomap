@@ -1009,3 +1009,21 @@ the DB pointer after receiver CURRENT publication. A separate durable log must
 persist accepted install intent before that publication and resolve it before
 replay/health; see the
 [transfer lifecycle contract](external-recovery.md#authorized-portable-snapshot-transfer).
+
+### Native standalone journal scheduling
+
+The gateway may share a standalone explicit-journal dispatch only for collection
+commands whose configured manager authenticates the same original public native
+CommandWAL completion owner. The optional pure callback compares both backend and
+private owner under the public lifecycle `TryRLock`; unknown implementations or
+uncertain/open/poison admission return false. This query performs no activation,
+intent, publication, checkpoint or sync and retains no handle or capability cache.
+It releases lifecycle before gateway entry. The actual mutation and forced fence
+still obtain their own admission and lifetime; a selected fence error is terminal
+with no retry or physical fallback. False changes scheduling only.
+
+Eligible collection commands are create, createIndexes, delete, dropIndexes,
+findAndModify, insert and update. Authentication commands, classic/unbound/NoWAL
+owners and custom sync overrides keep the exclusive boundary. Auth storage is not
+identified by the collection manager. Visible/default and cluster policy, repeated
+real explicit forced fences and the existing default collector remain unchanged.

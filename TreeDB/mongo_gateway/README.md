@@ -366,8 +366,17 @@ and persistent dependency prefix without constructing a physical root checkpoint
 The configured profile's ordinary acknowledgement behavior is unchanged. Every
 accepted journal command is fenced, including partial mutations and `ok:0`
 responses; a failure preserves the original response and adds uncertain
-`writeConcernError` rather than retrying. The gateway retains its exclusive
-standalone write boundary through dispatch and sync. NoWAL and healthy unbound
+`writeConcernError` rather than retrying. The gateway shares its dispatch-through-
+sync boundary only for `create`, `createIndexes`, `delete`, `dropIndexes`,
+`findAndModify`, `insert` and `update` when the actual collection manager proves
+its same original bound public native completion owner and no custom sync is set.
+The pure capability uses the original public lifecycle's nonblocking `TryRLock`;
+unknown, inactive, closing, poisoned, foreign or contended owners stay exclusive.
+It neither activates nor syncs, and its snapshot never substitutes for the actual
+mutation/fence lifetime checks. `createUser`, `updateUser` and `dropUser` remain
+exclusive because the auth catalog can use an unrelated store. Classic and custom
+sync paths retain exclusion; visible/default and cluster policy are unchanged.
+NoWAL and healthy unbound
 native constructors retain physical checkpoint fallback; classic applied-prefix
 behavior is unchanged. Root/snapshot/graph maintenance and Close still require
 their physical seals, so some checkpoint work remains outside request latency.
