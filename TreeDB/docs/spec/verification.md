@@ -13,6 +13,15 @@ This document maps specification invariants to existing tests and harnesses.
   ordinary graph routes, finite exhaustion, fresh duplicates, explicit transaction
   and other typed exclusions, receipt/cleanup failures and actual postappend
   ambiguity. Injected controls are distinct from the genuine-eviction witness.
+  `TestNativeOrdinaryInsertHistoryExpiryValidatedFloat32Projection` combines
+  genuine eviction with the public trusted float32 projection route and checks
+  exact vector bits before checkpoint, from physical assets after checkpoint,
+  and after fresh reopen, including a signed-zero negative control.
+  `TestNativeInsertHistoryExpiryPrivateCancellation` checks direct private-state
+  cancellation failures independently of lower-layer and transaction-Close
+  failures: no retry, unchanged command-WAL frontier, exactly-once original custody release,
+  preserved error causes and a subsequent healthy public write/checkpoint.
+  Its synthetic descriptor failure does not simulate physical I/O failure.
 
 - `TestCOWNativewireInsertResultIDParity` exercises Client -> Server -> public
   shared COW insertion for JSON/BSON with returned and omitted IDs under all

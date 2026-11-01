@@ -13,6 +13,7 @@ import (
 	treedb "github.com/snissn/gomap/TreeDB"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
 
@@ -229,9 +230,13 @@ type historyExpiryResultTxn struct {
 	backenddb.NativeConditionalTxn
 	result                backenddb.NativePublicationResult
 	failure, closeFailure error
+	beforeReturn          func(*backenddb.NativePreparedPublication)
 }
 
-func (t *historyExpiryResultTxn) CommitNative(*backenddb.NativePreparedPublication, *backenddb.CommandWALIntent, bool) (backenddb.NativePublicationResult, error) {
+func (t *historyExpiryResultTxn) CommitNative(native *backenddb.NativePreparedPublication, _ *backenddb.CommandWALIntent, _ bool) (backenddb.NativePublicationResult, error) {
+	if t.beforeReturn != nil {
+		t.beforeReturn(native)
+	}
 	return t.result, t.failure
 }
 func (t *historyExpiryResultTxn) Close() error {
@@ -271,6 +276,113 @@ func TestNativeInsertHistoryExpiryReceiptAndCleanup(t *testing.T) {
 			}
 			if got, e := col.nativeJSON.Get("target", []byte("id")); !errors.Is(e, tree.ErrKeyNotFound) || got != nil {
 				t.Fatalf("private plan published: %s %v", got, e)
+			}
+		})
+	}
+}
+
+// Only Release is used by private cancellation. Embedding the unused interface
+// makes unexpected preparation/retention fail instead of silently succeeding.
+type historyExpiryPrivateCleanupState struct {
+	backenddb.NativeSemanticState
+	cleanup            rootpublication.SemanticCleanup
+	failure            error
+	releases, finishes int
+}
+
+func (s *historyExpiryPrivateCleanupState) Release() *rootpublication.SemanticCleanup {
+	s.releases++
+	return &s.cleanup
+}
+
+func (s *historyExpiryPrivateCleanupState) FinishSemanticCleanup() (rootpublication.SemanticCleanupCompletion, error) {
+	s.finishes++
+	// A failed cleanup must not transfer a final refund. This synthetic state
+	// owns no real retained allocation; the original custody is released below.
+	return rootpublication.SemanticCleanupCompletion{}, s.failure
+}
+
+type historyExpiryObservedCustody struct {
+	backenddb.NativeSemanticCustody
+	releases int
+}
+
+func (c *historyExpiryObservedCustody) ReleaseNativeCustody() *rootpublication.SemanticCleanup {
+	c.releases++
+	return c.NativeSemanticCustody.ReleaseNativeCustody()
+}
+
+// Exercise cancelPrivateNativePublication itself, independently of lower-layer
+// error joining and deferred transaction Close. This is a descriptor-boundary
+// control, not a simulated physical I/O failure or a public retry-driver test.
+func TestNativeInsertHistoryExpiryPrivateCancellation(t *testing.T) {
+	cleanupFailure := errors.New("private state cleanup failed")
+	closeFailure := errors.New("transaction close failed")
+	for _, tc := range []struct {
+		name                  string
+		failure, closeFailure error
+		wantRetry             bool
+	}{
+		{name: "clean-cancellation", wantRetry: true},
+		{name: "private-cleanup-failure", failure: cleanupFailure},
+		{name: "private-cleanup-wraps-history-expiry", failure: fmt.Errorf("private cleanup: %w", backenddb.ErrTxnTooOld)},
+		{name: "private-and-close-failure", failure: cleanupFailure, closeFailure: closeFailure},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			owner, backend, _, col := historyExpiryFixture(t, &CollectionMeta{Name: "target"})
+			tx, err := col.nativeJSON.Begin("target")
+			if err != nil {
+				t.Fatal(err)
+			}
+			state := &historyExpiryPrivateCleanupState{failure: tc.failure}
+			state.cleanup.Work = state
+			var prepared *backenddb.NativePreparedPublication
+			var custody *historyExpiryObservedCustody
+			calls := 0
+			tx.core = &historyExpiryResultTxn{
+				NativeConditionalTxn: tx.core, failure: backenddb.ErrTxnTooOld, closeFailure: tc.closeFailure,
+				beforeReturn: func(native *backenddb.NativePreparedPublication) {
+					calls++
+					prepared = native
+					if native.State != nil || native.Custody == nil {
+						t.Error("fixture requires an unprepared state and original private custody")
+						return // Preserve any original ownership on a changed fixture.
+					}
+					custody = &historyExpiryObservedCustody{NativeSemanticCustody: native.Custody}
+					native.State, native.Custody = state, custody
+				},
+			}
+			before := backend.CommandWALNextLSN()
+			_, retry, err := finishNativeJSONInsert(tx, nil, [][]byte{[]byte("id")}, [][]byte{[]byte(`{"value":1}`)}, nil, false, nil)
+			if retry != tc.wantRetry || !errors.Is(err, backenddb.ErrTxnTooOld) {
+				t.Fatalf("retry=%v want=%v err=%v", retry, tc.wantRetry, err)
+			}
+			if tc.failure != nil && !errors.Is(err, tc.failure) {
+				t.Fatalf("lost private cancellation error: %v", err)
+			}
+			if tc.closeFailure != nil && !errors.Is(err, tc.closeFailure) {
+				t.Fatalf("lost transaction Close error: %v", err)
+			}
+			if calls != 1 || state.releases != 1 || state.finishes != 1 || custody == nil || custody.releases != 1 {
+				t.Fatalf("cancellation ownership: calls=%d state releases=%d finishes=%d custody=%+v", calls, state.releases, state.finishes, custody)
+			}
+			if prepared.State != nil || prepared.Custody != nil || backend.CommandWALNextLSN() != before || backenddb.CommitPublicationAccepted(err) {
+				t.Fatalf("private refusal retained descriptors or assigned WAL: before=%d next=%d err=%v", before, backend.CommandWALNextLSN(), err)
+			}
+			if got, e := col.nativeJSON.Get("target", []byte("id")); !errors.Is(e, tree.ErrKeyNotFound) || got != nil {
+				t.Fatalf("private plan published: %s %v", got, e)
+			}
+			// The synthetic error must not prevent releasing the real custody or
+			// poison the owner. Use an independent, ordinary accepted write.
+			document := []byte(`{"value":"subsequent acknowledged write"}`)
+			if ids, err := col.InsertBatch([][]byte{[]byte("next")}, [][]byte{document}); err != nil || len(ids) != 1 {
+				t.Fatalf("subsequent public insert: ids=%q err=%v", ids, err)
+			}
+			if err := owner.Checkpoint(); err != nil {
+				t.Fatal(err)
+			}
+			if got, err := col.Get([]byte("next")); err != nil || !bytes.Equal(got, document) {
+				t.Fatalf("subsequent acknowledged contents: %s err=%v", got, err)
 			}
 		})
 	}
