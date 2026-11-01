@@ -15,18 +15,29 @@ def sample_interval(observer, steady_interval):
  """Do not sleep through startup when no complete runtime witness exists."""
  return steady_interval if observer.samples else min(STARTUP_POLL_SECONDS, steady_interval)
 
+class RuntimeMappingDisappeared(RuntimeError):
+ """A previously witnessed mapping is absent; only pinned exit may excuse it."""
+
 def sample_owned_or_exited(observer, child, exited, recheck_seconds=EXIT_RECHECK_SECONDS):
  """Permit an exit race only after a complete witness, pinned-child exit proof."""
  try:
   return observer.sample(child)
- except OSError as error:
+ except (OSError, RuntimeMappingDisappeared) as error:
   proc_prefix='/proc/'+str(child.pid)+'/'
-  disappeared=(error.errno==errno.ESRCH or
-               (error.errno==errno.ENOENT and isinstance(error.filename,str) and error.filename.startswith(proc_prefix)))
+  mapping_disappeared=isinstance(error,RuntimeMappingDisappeared)
+  last_attempt=getattr(observer,'last_attempt',None) or {}
+  mapping_identity_matches=bool(mapping_disappeared and observer.identity is not None
+      and last_attempt.get('pid')==child.pid
+      and (last_attempt.get('parent_pid'),last_attempt.get('start_ticks'))==observer.identity[1]
+      and last_attempt.get('exe_identity')==list(observer.elf_identity))
+  disappeared=((mapping_disappeared and mapping_identity_matches) or
+               (isinstance(error,OSError) and (error.errno==errno.ESRCH or
+                (error.errno==errno.ENOENT and isinstance(error.filename,str) and error.filename.startswith(proc_prefix)))))
   sample_count=len(observer.samples)
   identity_matches=observer.identity is not None and observer.identity[0]==child.pid
   eligible=bool(disappeared and sample_count and identity_matches)
-  check={'errno':error.errno,'filename':error.filename,'error_type':type(error).__name__,
+  check={'errno':getattr(error,'errno',None),'filename':getattr(error,'filename',None),'error_type':type(error).__name__,
+         'mapping_disappeared':mapping_disappeared,'mapping_identity_matches':mapping_identity_matches,
          'expected_pid':child.pid,'disappeared_predicate':disappeared,'sample_count':sample_count,
          'identity_matches':identity_matches,'eligible':eligible,'pidfd_ready_initial':None,
          'pidfd_ready_after_wait':None,'pidfd_check_error':None,'wait_bound_seconds':recheck_seconds,'wait_elapsed_seconds':0.0}
@@ -54,7 +65,7 @@ def require(ok,why):
  if not ok:raise RuntimeError(why)
 def mapping_pending(mapped, started, has_samples):
  if mapped:return False
- require(not has_samples,'runtime mapping disappeared after observation')
+ if has_samples:raise RuntimeMappingDisappeared('runtime mapping disappeared after observation')
  require(time.monotonic()-started<=STARTUP_READY_SECONDS,'runtime mapping startup deadline exceeded')
  return True
 def gomax_symbol(data, expected_sha, expected_address):

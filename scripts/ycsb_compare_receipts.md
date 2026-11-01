@@ -24,6 +24,18 @@ runtime field is the older launcher representation of no observation; flagged
 packets reject it. An ELF identity alone
 does not retroactively require those newer fields or upgrade historical evidence.
 
+A previously observed runtime mapping may disappear during child exit. Only
+`RuntimeMappingDisappeared`, a prior complete witness, matching failed-attempt
+PID/parent/start/ELF identity, and readiness of the already-pinned direct-child
+pidfd immediately or within the existing 50 ms bound may classify that
+interrupted sample as terminal exit. Preserve the failed partial sample as a
+diagnostic and retain prior samples as the only runtime witnesses; append no
+synthetic sample. Live or ambiguous mapping loss, missing witness, changed
+identity, unrelated runtime-policy errors and permission or non-`/proc` read
+errors remain invalid. Existing timeout, child outcome, checked cleanup and
+lifecycle validation are unchanged. Historical failed receipts remain invalid;
+a later source repair or eventual exit0 cannot upgrade them.
+
 All retained JSON readers reject duplicate object keys, NaN/Infinity, and numeric
 overflow to infinity. Supporting copies are compared with JSON types preserved;
 `true`, `1`, and `1.0` are distinct. Each Process, Observation, and Result copy

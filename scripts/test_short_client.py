@@ -139,5 +139,207 @@ class ShortChildControls(unittest.TestCase):
                 os.close(fd)
             self.assertFalse(os.path.exists(f'/proc/{child.pid}'))
 
+class MappingExitControls(unittest.TestCase):
+    def mapping_observer(self, has_witness=True):
+        bound = observer.RuntimeObserver.__new__(observer.RuntimeObserver)
+        bound.expected_gomaxprocs = None
+        # Synthetic prior records test routing only, never runtime qualification.
+        bound.samples = [{'synthetic': True}] if has_witness else []
+        bound.identity = (1234, (10, 20))
+        bound.elf_identity = (1, 2, 3, 4, 5)
+        bound.observation_error = None
+        bound.terminal_exit_race = None
+        bound.exit_race_check = None
+        return bound
+
+    def invoke_mapping_loss(self, bound, ready, *, attempt=None, missing=(),
+                            error=None, wait=.04, child=None):
+        child = child or SimpleNamespace(pid=1234)
+        def absent(owned):
+            bound.last_attempt.update(parent_pid=10, start_ticks=20,
+                                      exe_identity=list(bound.elf_identity))
+            bound.last_attempt.update(attempt or {})
+            for key in missing:
+                bound.last_attempt.pop(key, None)
+            if error is not None:
+                raise error
+            return observer.mapping_pending([], 0, True)
+        with mock.patch.object(bound, '_sample', side_effect=absent):
+            return observer.sample_owned_or_exited(bound, child, ready, wait)
+
+    def test_absent_witnessed_mapping_with_pinned_exit_keeps_only_prior_samples(self):
+        bound = self.mapping_observer()
+        prior = list(bound.samples)
+        ready = mock.Mock(return_value=True)
+        self.assertIsNone(self.invoke_mapping_loss(bound, ready))
+        ready.assert_called_once_with(0)
+        self.assertEqual(bound.samples, prior)
+        self.assertIsNone(bound.observation_error)
+        self.assertEqual(bound.terminal_exit_race,
+                         {'type': 'RuntimeMappingDisappeared',
+                          'message': 'runtime mapping disappeared after observation'})
+        self.assertEqual(bound.last_attempt['state'], 'failed')
+        self.assertTrue(bound.exit_race_check['mapping_identity_matches'])
+        self.assertTrue(bound.exit_race_check['pidfd_ready_initial'])
+
+    def test_bounded_exit_recheck_uses_existing_deadline(self):
+        bound = self.mapping_observer()
+        ready = mock.Mock(side_effect=[False, True])
+        self.assertIsNone(self.invoke_mapping_loss(bound, ready))
+        self.assertEqual(ready.call_args_list, [mock.call(0), mock.call(.04)])
+        self.assertTrue(bound.exit_race_check['pidfd_ready_after_wait'])
+        self.assertEqual(bound.exit_race_check['wait_bound_seconds'], .04)
+        self.assertEqual(len(bound.samples), 1)
+
+    def test_live_mapping_loss_stays_error(self):
+        bound = self.mapping_observer()
+        ready = mock.Mock(side_effect=[False, False])
+        with self.assertRaisesRegex(observer.RuntimeMappingDisappeared,
+                                    'runtime mapping disappeared'):
+            self.invoke_mapping_loss(bound, ready)
+        self.assertEqual(ready.call_args_list, [mock.call(0), mock.call(.04)])
+        self.assertIsNotNone(bound.observation_error)
+        self.assertIsNone(bound.terminal_exit_race)
+        self.assertEqual(bound.last_attempt['state'], 'failed')
+
+    def test_mapping_loss_requires_prior_complete_witness(self):
+        bound = self.mapping_observer(has_witness=False)
+        ready = mock.Mock(return_value=True)
+        with self.assertRaisesRegex(observer.RuntimeMappingDisappeared,
+                                    'runtime mapping disappeared'):
+            self.invoke_mapping_loss(bound, ready)
+        ready.assert_not_called()
+        self.assertFalse(bound.exit_race_check['eligible'])
+        self.assertEqual(bound.samples, [])
+        self.assertIsNotNone(bound.observation_error)
+        self.assertIsNone(bound.terminal_exit_race)
+
+    def test_mapping_failure_attempt_identity_must_match(self):
+        cases = [('failed PID', {}, {'pid': 1235}, ()),
+                 ('parent', {}, {'parent_pid': 11}, ()),
+                 ('start ticks', {}, {'start_ticks': 21}, ()),
+                 ('ELF', {}, {'exe_identity': [1, 2, 3, 4, 6]}, ()),
+                 ('bound PID', {'identity': (9999, (10, 20))}, {}, ()),
+                 ('unbound identity', {'identity': None}, {}, ())]
+        cases += [('missing '+key, {}, {}, (key,))
+                  for key in ('pid', 'parent_pid', 'start_ticks', 'exe_identity')]
+        for label, changed, attempt, missing in cases:
+            with self.subTest(case=label):
+                bound = self.mapping_observer()
+                for key, value in changed.items():
+                    setattr(bound, key, value)
+                ready = mock.Mock(return_value=True)
+                with self.assertRaisesRegex(observer.RuntimeMappingDisappeared,
+                                            'runtime mapping disappeared'):
+                    self.invoke_mapping_loss(bound, ready, attempt=attempt,
+                                             missing=missing)
+                ready.assert_not_called()
+                self.assertFalse(bound.exit_race_check['eligible'])
+                self.assertIsNotNone(bound.observation_error)
+                self.assertIsNone(bound.terminal_exit_race)
+
+    def test_unrelated_errors_are_never_mapping_exit(self):
+        errors = [RuntimeError('runtime/cpu policy changed'),
+                  RuntimeError('runtime mapping disappeared after observation'),
+                  PermissionError(errno.EACCES, 'denied', '/proc/1234/mem'),
+                  OSError(errno.EIO, 'read failed', '/proc/1234/maps'),
+                  FileNotFoundError(errno.ENOENT, 'gone', '/sys/fs/cgroup/cpu.max'),
+                  FileNotFoundError(errno.ENOENT, 'gone', '/proc/9999/exe')]
+        for error in errors:
+            with self.subTest(error=error):
+                bound = self.mapping_observer()
+                ready = mock.Mock(return_value=True)
+                with self.assertRaises(type(error)) as caught:
+                    self.invoke_mapping_loss(bound, ready, error=error)
+                self.assertIs(caught.exception, error)
+                ready.assert_not_called()
+                self.assertIsNotNone(bound.observation_error)
+                self.assertIsNone(bound.terminal_exit_race)
+
+    def test_mapping_exit_rejects_bad_pidfd_and_invalid_wait_bounds(self):
+        bound = self.mapping_observer()
+        failure = OSError(errno.EBADF, 'bad pidfd')
+        ready = mock.Mock(side_effect=failure)
+        with self.assertRaises(OSError) as caught:
+            self.invoke_mapping_loss(bound, ready)
+        self.assertIs(caught.exception, failure)
+        self.assertEqual(bound.exit_race_check['pidfd_check_error']['errno'], errno.EBADF)
+        self.assertIsNotNone(bound.observation_error)
+        self.assertIsNone(bound.terminal_exit_race)
+        for wait in (-.001, .051):
+            with self.subTest(wait=wait):
+                bound = self.mapping_observer()
+                ready = mock.Mock(return_value=True)
+                with self.assertRaisesRegex(RuntimeError, 'invalid exit recheck bound'):
+                    self.invoke_mapping_loss(bound, ready, wait=wait)
+                ready.assert_not_called()
+                self.assertIsNotNone(bound.observation_error)
+                self.assertIsNone(bound.terminal_exit_race)
+
+    def test_mapping_startup_pending_and_deadline_unchanged(self):
+        with mock.patch.object(observer.time, 'monotonic', return_value=11):
+            self.assertTrue(observer.mapping_pending([], 10, False))
+            self.assertFalse(observer.mapping_pending([['mapped']], 10, True))
+            with self.assertRaisesRegex(RuntimeError, 'startup deadline exceeded'):
+                observer.mapping_pending([], 8, False)
+
+    @unittest.skipUnless(sys.platform == 'linux' and hasattr(os, 'pidfd_open'),
+                         'Linux /proc and pidfd controls')
+    def test_mapping_loss_uses_real_pinned_direct_child_exit(self):
+        # The process, parent/start/ELF metadata and pidfd are real. The prior
+        # sample and missing mapping are synthetic, not a runtime witness.
+        for exited in (False, True):
+            for has_witness in (False, True):
+                with self.subTest(exited=exited, has_witness=has_witness):
+                    child = subprocess.Popen(
+                        [sys.executable, '-c', 'import sys; sys.stdin.buffer.read(1)'],
+                        stdin=subprocess.PIPE)
+                    fd = None
+                    try:
+                        fd = os.pidfd_open(child.pid)
+                        identity = observer.start_identity(child.pid)
+                        self.assertEqual(identity[0], os.getpid())
+                        stat = os.stat('/proc/'+str(child.pid)+'/exe')
+                        elf = (stat.st_dev, stat.st_ino, stat.st_size,
+                               stat.st_mtime_ns, stat.st_ctime_ns)
+                        bound = self.mapping_observer(has_witness=has_witness)
+                        bound.identity = (child.pid, identity)
+                        bound.elf_identity = elf
+                        attempt = dict(parent_pid=identity[0], start_ticks=identity[1])
+                        if exited:
+                            child.stdin.close()
+                            self.assertTrue(select.select([fd], [], [], 2)[0],
+                                            'owned child did not exit before mapping-loss check')
+                        ready = lambda timeout: bool(select.select([fd], [], [], timeout)[0])
+                        if exited and has_witness:
+                            self.assertIsNone(self.invoke_mapping_loss(
+                                bound, ready, attempt=attempt, child=child, wait=.01))
+                            self.assertTrue(bound.exit_race_check['pidfd_ready_initial'])
+                            self.assertTrue(bound.exit_race_check['mapping_identity_matches'])
+                        else:
+                            with self.assertRaises(observer.RuntimeMappingDisappeared):
+                                self.invoke_mapping_loss(bound, ready, attempt=attempt,
+                                                         child=child, wait=.01)
+                            self.assertIsNotNone(bound.observation_error)
+                            self.assertIsNone(bound.terminal_exit_race)
+                        self.assertEqual(len(bound.samples), int(has_witness))
+                        if not child.stdin.closed:
+                            child.stdin.close()
+                        self.assertEqual(child.wait(timeout=2), 0)
+                    finally:
+                        if not child.stdin.closed:
+                            child.stdin.close()
+                        try:
+                            child.wait(timeout=2)
+                        except subprocess.TimeoutExpired:
+                            child.kill()
+                            child.wait(timeout=2)
+                            self.fail('owned mapping-loss control required forced cleanup')
+                        finally:
+                            if fd is not None:
+                                os.close(fd)
+                    self.assertFalse(os.path.exists('/proc/'+str(child.pid)))
+
+
 if __name__ == '__main__':
     unittest.main()
