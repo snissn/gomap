@@ -38,8 +38,11 @@ func exerciseStandaloneNativeBSONSetReceiptNoRefence(t *testing.T, profile treed
 	// Both strict target members select a DURABLE update publication. Only the
 	// ordinary predecessor's physical epoch depends on the configured profile.
 	expectedEpochs := 1
+	// commits_total counts durable group registrations, not semantic appends or RPC ACKs.
+	expectedDurableCommits := uint64(1) // Only the shared strict target batch.
 	if profile == treedb.ProfileCommandWALDurable {
 		expectedEpochs = 2
+		expectedDurableCommits = 2 // The durable predecessor also joins a group.
 	}
 	const wait = 5 * time.Second
 	opts := StandaloneOptions{Dir: t.TempDir(), Profile: profile, DefaultCollectionOptions: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}}
@@ -455,7 +458,7 @@ func exerciseStandaloneNativeBSONSetReceiptNoRefence(t *testing.T, profile treed
 	t.Logf("BSON_SET_SHARED_PUBLICATION_PASS publications=2 target_members=2 target_lsn=%d captured_prefix_lsn=%d ordinary_epochs=%d physical_epochs=%d", targetAppend.lsn, batch.lsn, expectedEpochs, len(pairs))
 	after := s.Stats()
 	afterACK := s.Server.StandaloneWriteConcernStats()
-	if delta(after, "treedb.cache.checkpoint.runs") != 0 || delta(after, "treedb.command_wal.group_commit.commits_total") != 2 || delta(after, "treedb.command_wal.group_commit.syncs_total") != uint64(len(pairs)) || afterACK.JournalRequests-beforeACK.JournalRequests != 2 || afterACK.SyncAttempts-beforeACK.SyncAttempts != 2 || afterACK.JournalAcknowledgements-beforeACK.JournalAcknowledgements != 2 || afterACK.PhysicalSyncBoundaries-beforeACK.PhysicalSyncBoundaries != 2 || afterACK.SyncFailures != beforeACK.SyncFailures || afterACK.UncertainOutcomes != beforeACK.UncertainOutcomes {
+	if delta(after, "treedb.cache.checkpoint.runs") != 0 || delta(after, "treedb.command_wal.group_commit.commits_total") != expectedDurableCommits || delta(after, "treedb.command_wal.group_commit.syncs_total") != uint64(len(pairs)) || afterACK.JournalRequests-beforeACK.JournalRequests != 2 || afterACK.SyncAttempts-beforeACK.SyncAttempts != 2 || afterACK.JournalAcknowledgements-beforeACK.JournalAcknowledgements != 2 || afterACK.PhysicalSyncBoundaries-beforeACK.PhysicalSyncBoundaries != 2 || afterACK.SyncFailures != beforeACK.SyncFailures || afterACK.UncertainOutcomes != beforeACK.UncertainOutcomes {
 		t.Fatalf("unexpected owner counters: commits=%d groups=%d checkpoints=%d ACKs=%+v->%+v", delta(after, "treedb.command_wal.group_commit.commits_total"), delta(after, "treedb.command_wal.group_commit.syncs_total"), delta(after, "treedb.cache.checkpoint.runs"), beforeACK, afterACK)
 	}
 	check := func() {
