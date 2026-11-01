@@ -15,6 +15,7 @@ import (
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
@@ -946,19 +947,115 @@ func TestStandaloneNativeSharedBoundaryHeldSyncFailurePoisons(t *testing.T) {
 	}
 }
 
+// Seed one real changed update and one untouched typed control. All writes
+// complete before the original physical observer is installed.
+func seedNativeSharedSafetyUpdateRows(t *testing.T, f *nativeSharedSafetyFixture) {
+	t.Helper()
+	if !f.s.Server.canShareStandaloneJournalBoundary("update") || f.s.Server.UpdateCoalescingMaxBatch < 2 || f.s.Server.UpdateCoalescingMaxDelay < 0 {
+		t.Fatal("requires actual original update owner and default coalescer")
+	}
+	plain := f.clients[0].Database("app").Collection("shared_journal", options.Collection().SetWriteConcern(&writeconcern.WriteConcern{W: 1}))
+	for i, id := range []string{"predecessor", "successor"} {
+		generation := 0
+		if i == 1 {
+			generation = 2
+		}
+		out, err := plain.InsertOne(f.ctx, standaloneNativeJournalDocument(id, generation))
+		if err != nil || out == nil || out.InsertedID != id {
+			t.Fatalf("actual update seed id=%s result=%v err=%v", id, out, err)
+		}
+		var raw bson.Raw
+		if err := plain.FindOne(f.ctx, bson.D{{Key: "_id", Value: id}}).Decode(&raw); err != nil {
+			t.Fatal(err)
+		}
+		requireStandaloneNativeJournalDocument(t, raw, id, generation)
+	}
+}
+
+// Decode outside the observer while the actual captured active-file Before is
+// held. CaptureSyncInto has flushed this prefix under append authority already.
+// Do this before Close may checkpoint/remove the file. This bounded fixture has
+// one changed strict update and no rotation, maintenance or pathname replacement.
+// The selected strict path writes a DURABLE update in either profile; an empty
+// durable-prefix marker cannot stand in for its actual BSON update action.
+func requireNativeSelectedBSONUpdateFrame(t *testing.T, appendLSN, capturedLSN uint64, path string) {
+	t.Helper()
+	if appendLSN == 0 || appendLSN != capturedLSN || path == "" {
+		t.Fatalf("selected strict update must itself name captured prefix: append=%d captured=%d path=%q", appendLSN, capturedLSN, path)
+	}
+	reader, err := commitlog.NewReaderWithOptions(path, commitlog.Options{MaxSegmentSize: 1 << 20})
+	if err != nil {
+		t.Fatalf("open actual selected update prefix: %v", err)
+	}
+	defer func() {
+		if err := reader.Close(); err != nil {
+			t.Errorf("checked selected update reader Close: %v", err)
+		}
+	}()
+	for scanned := 0; scanned < 64; scanned++ {
+		frame, err := reader.ReadCommandFrameV2()
+		if err != nil {
+			t.Fatalf("decode selected update before captured frontier: %v", err)
+		}
+		if frame.LSN < appendLSN {
+			continue // Collection creation and both preloads precede observer.
+		}
+		if frame.Version != commitlog.CommandFrameVersionV2 || frame.LSN != appendLSN || frame.Kind != commitlog.CommandKindCollectionUpdateBatchByID || frame.Scope != commitlog.CommandScopeCollection || frame.PayloadFormat != commitlog.PayloadFormatCollectionUpdateBatchByIDV1 || frame.DurabilityClass != commitlog.CommandDurabilityDurable || len(frame.ExternalRefs) != 0 || len(frame.Preconditions) != 0 || len(frame.ResultAssertions) != 0 {
+			t.Fatalf("exact selected update frame required, not promotion marker: lsn=%d kind=%d scope=%d format=%d class=%d", frame.LSN, frame.Kind, frame.Scope, frame.PayloadFormat, frame.DurabilityClass)
+		}
+		payload, err := commitlog.DecodeCollectionUpdateBatchByIDPayload(frame.Payload)
+		if err != nil || payload.Collection != "app.shared_journal" || payload.Colocated != nil || len(payload.Documents) != 1 {
+			t.Fatalf("selected update action census: collection=%q members=%d err=%v", payload.Collection, len(payload.Documents), err)
+		}
+		document := payload.Documents[0]
+		raw := bson.Raw(document.Document)
+		if err := raw.Validate(); err != nil {
+			t.Fatalf("selected update BSON validity: %v", err)
+		}
+		id, ok := raw.Lookup("_id").StringValueOK()
+		key, err := encodePrimaryKey(raw.Lookup("_id"))
+		if !ok || id != "predecessor" || err != nil || !bytes.Equal(key, document.ID) {
+			t.Fatalf("selected update exact member/key: id=%q key_error=%v", id, err)
+		}
+		requireStandaloneNativeJournalDocument(t, raw, "predecessor", 1)
+		t.Logf("SELECTED_BSON_UPDATE_EXACT_FRAME_PASS lsn=%d captured_prefix_lsn=%d collection=app.shared_journal member=predecessor generation=1 durable=true promotion_markers=0", frame.LSN, capturedLSN)
+		return
+	}
+	t.Fatal("bounded selected update frame census exceeded")
+}
+
 func TestStandaloneNativeSharedBoundaryCloseJoinsHeldSync(t *testing.T) {
+	exerciseNativeSharedBoundaryCloseJoinsHeldSync(t, false)
+}
+
+func TestStandaloneNativeUpdateJournalCloseJoinsHeldSync(t *testing.T) {
+	exerciseNativeSharedBoundaryCloseJoinsHeldSync(t, true)
+}
+
+func exerciseNativeSharedBoundaryCloseJoinsHeldSync(t *testing.T, updateMode bool) {
 	for _, profile := range []treedb.Profile{treedb.ProfileCommandWALRelaxed, treedb.ProfileCommandWALDurable} {
 		t.Run(string(profile), func(t *testing.T) {
 			dir := t.TempDir()
-			f := newNativeSharedSafetyFixture(t, dir, profile)
+			f := newNativeSharedSafetyFixture(t, dir, profile, updateMode)
 			if err := f.clients[0].Database("app").CreateCollection(f.ctx, "shared_journal"); err != nil {
 				t.Fatal(err)
+			}
+			if updateMode {
+				seedNativeSharedSafetyUpdateRows(t, f)
 			}
 			registry := f.s.Backend.ValueLogIdentityPinRegistry()
 			if registry == nil {
 				t.Fatal("original registry absent")
 			}
 			entered, released := make(chan uint64, 1), make(chan struct{})
+			type heldUpdateSyncIdentity struct {
+				lsn        uint64
+				root, path string
+			}
+			var updateAppend atomic.Pointer[heldUpdateSyncIdentity]
+			var updateAppends atomic.Uint64
+			var updateBefore atomic.Pointer[heldUpdateSyncIdentity]
+			var updateAfter atomic.Bool
 			var selected atomic.Bool
 			var releaseOnce sync.Once
 			release := func() { releaseOnce.Do(func() { close(released) }) }
@@ -1017,9 +1114,24 @@ func TestStandaloneNativeSharedBoundaryCloseJoinsHeldSync(t *testing.T) {
 				}
 			})
 			undo := durabilitycut.Install(func(e durabilitycut.Event) error {
+				if updateMode && e.Resource == durabilitycut.ResourceCommandWAL && e.Point == durabilitycut.AfterDependencyAppend && e.LSN != 0 {
+					updateAppend.CompareAndSwap(nil, &heldUpdateSyncIdentity{lsn: e.LSN, root: e.Root, path: e.Path})
+					updateAppends.Add(1)
+				}
+				if updateMode && e.Resource == durabilitycut.ResourceCommandWAL && e.Point == durabilitycut.AfterDependencyFileSync {
+					if target := updateBefore.Load(); target != nil && e.LSN == target.lsn && e.Root == target.root && e.Path == target.path {
+						if e.StablePath == nil {
+							return errors.New("Close update After lost original file")
+						}
+						updateAfter.Store(true)
+					}
+				}
 				if e.Resource == durabilitycut.ResourceCommandWAL && e.Point == durabilitycut.BeforeDependencyFileSync && e.LSN != 0 && selected.CompareAndSwap(false, true) {
 					if e.StablePath == nil {
 						return errors.New("Close hold lost original file")
+					}
+					if updateMode {
+						updateBefore.Store(&heldUpdateSyncIdentity{lsn: e.LSN, root: e.Root, path: e.Path})
 					}
 					entered <- e.LSN
 					<-released
@@ -1032,9 +1144,24 @@ func TestStandaloneNativeSharedBoundaryCloseJoinsHeldSync(t *testing.T) {
 			start := func(i int) {
 				started[i] = true
 				go func() {
-					result, err := nativeSharedSafetyWriter(f, i).InsertOne(f.ctx, standaloneNativeJournalDocument(ids[i], i+1))
-					if err == nil && (result == nil || result.InsertedID != ids[i]) {
-						err = fmt.Errorf("wrong driver insert result: %v", result)
+					var err error
+					if updateMode {
+						out, updateErr := nativeSharedSafetyWriter(f, i).UpdateOne(f.ctx, bson.D{{Key: "_id", Value: ids[i]}}, bson.D{{Key: "$set", Value: standaloneNativeJournalDocument(ids[i], i+1)[1:]}})
+						err = updateErr
+						if err == nil && (out == nil || out.MatchedCount != 1 || out.ModifiedCount != 1 || out.UpsertedCount != 0 || out.UpsertedID != nil) {
+							t.Errorf("wrong driver update result: %v", out)
+							err = fmt.Errorf("wrong driver update result: %v", out)
+						}
+						if err == nil && !updateAfter.Load() {
+							t.Error("update ACK overtook matching original physical After")
+							err = errors.New("update ACK overtook matching original physical After")
+						}
+					} else {
+						result, insertErr := nativeSharedSafetyWriter(f, i).InsertOne(f.ctx, standaloneNativeJournalDocument(ids[i], i+1))
+						err = insertErr
+						if err == nil && (result == nil || result.InsertedID != ids[i]) {
+							err = fmt.Errorf("wrong driver insert result: %v", result)
+						}
 					}
 					results[i] <- err
 				}()
@@ -1046,10 +1173,28 @@ func TestStandaloneNativeSharedBoundaryCloseJoinsHeldSync(t *testing.T) {
 			case <-time.After(5 * time.Second):
 				t.Fatal("Close predecessor own-publication physical hold not reached")
 			}
-			start(1)
-			requireNativeSharedSafetyInstalled(t, f, "successor", 2)
+			if updateMode {
+				f.s.Server.updateMu.Lock()
+				worker := f.s.Server.updateCoalescers["app.shared_journal"]
+				f.s.Server.updateMu.Unlock()
+				if worker == nil {
+					t.Fatal("actual default update coalescer did not own held update")
+				}
+				requireNativeSharedSafetyInstalled(t, f, "predecessor", 1)
+				appendIdentity, target := updateAppend.Load(), updateBefore.Load()
+				if appendIdentity == nil || target == nil || updateAppends.Load() != 1 || appendIdentity.lsn != target.lsn || appendIdentity.root != target.root || appendIdentity.path != target.path {
+					t.Fatalf("held Close must bind actual single update append to captured prefix: append=%+v sync=%+v appends=%d", appendIdentity, target, updateAppends.Load())
+				}
+				requireNativeSelectedBSONUpdateFrame(t, appendIdentity.lsn, target.lsn, target.path)
+			} else {
+				start(1)
+				requireNativeSharedSafetyInstalled(t, f, "successor", 2)
+			}
 			requireNativeSharedSafetyCensus(t, f)
 			for i := range results {
+				if !started[i] {
+					continue
+				}
 				select {
 				case err := <-results[i]:
 					joined[i] = true
@@ -1077,6 +1222,9 @@ func TestStandaloneNativeSharedBoundaryCloseJoinsHeldSync(t *testing.T) {
 			}
 			release()
 			for i := range results {
+				if !started[i] {
+					continue
+				}
 				select {
 				case err := <-results[i]:
 					joined[i] = true
@@ -1094,12 +1242,15 @@ func TestStandaloneNativeSharedBoundaryCloseJoinsHeldSync(t *testing.T) {
 			case <-time.After(5 * time.Second):
 				t.Fatal("Close failed to join released original completion")
 			}
+			if updateMode && !updateAfter.Load() {
+				t.Fatal("Close returned without matching original update physical After")
+			}
 			restore()
 			if pins := registry.Stats(); pins.ActivePins != 0 || pins.ActiveIdentities != 0 {
 				t.Fatalf("Close retained original dependency pins: %+v", pins)
 			}
 			f.finish()
-			fresh := newNativeSharedSafetyFixture(t, dir, profile)
+			fresh := newNativeSharedSafetyFixture(t, dir, profile, updateMode)
 			requireNativeSharedSafetyCensus(t, fresh)
 			fresh.finish()
 			t.Logf("SHARED_CLOSE_JOIN_AND_FRESH_TYPED_PASS profile=%s held_lsn=%d pins=0 identities=0", profile, lsn)
@@ -1108,9 +1259,24 @@ func TestStandaloneNativeSharedBoundaryCloseJoinsHeldSync(t *testing.T) {
 }
 
 func TestStandaloneNativeSharedBoundaryCrashReopen(t *testing.T) {
-	const dirEnv = "GOMAP_SHARED_BOUNDARY_CRASH_DIR"
-	const profileEnv = "GOMAP_SHARED_BOUNDARY_CRASH_PROFILE"
-	const marker = "SHARED BOUNDARY BOTH EXPLICIT JOURNAL ACKS COMPLETE"
+	exerciseNativeSharedBoundaryCrashReopen(t, false)
+}
+
+func TestStandaloneNativeUpdateJournalCrashReopen(t *testing.T) {
+	exerciseNativeSharedBoundaryCrashReopen(t, true)
+}
+
+func exerciseNativeSharedBoundaryCrashReopen(t *testing.T, updateMode bool) {
+	dirEnv := "GOMAP_SHARED_BOUNDARY_CRASH_DIR"
+	profileEnv := "GOMAP_SHARED_BOUNDARY_CRASH_PROFILE"
+	marker := "SHARED BOUNDARY BOTH EXPLICIT JOURNAL ACKS COMPLETE"
+	testName := "TestStandaloneNativeSharedBoundaryCrashReopen"
+	if updateMode {
+		dirEnv = "GOMAP_SELECTED_UPDATE_CRASH_DIR"
+		profileEnv = "GOMAP_SELECTED_UPDATE_CRASH_PROFILE"
+		marker = "SELECTED BSON UPDATE EXPLICIT JOURNAL ACK COMPLETE"
+		testName = "TestStandaloneNativeUpdateJournalCrashReopen"
+	}
 	childDir := os.Getenv(dirEnv)
 	for _, profile := range []treedb.Profile{treedb.ProfileCommandWALRelaxed, treedb.ProfileCommandWALDurable} {
 		if childDir != "" && os.Getenv(profileEnv) != string(profile) {
@@ -1122,7 +1288,7 @@ func TestStandaloneNativeSharedBoundaryCrashReopen(t *testing.T) {
 				dir = t.TempDir()
 				childCtx, cancelChild := context.WithTimeout(context.Background(), 60*time.Second)
 				defer cancelChild()
-				cmd := exec.CommandContext(childCtx, os.Args[0], "-test.run=^TestStandaloneNativeSharedBoundaryCrashReopen$", "-test.v", "-test.timeout=45s")
+				cmd := exec.CommandContext(childCtx, os.Args[0], "-test.run=^"+testName+"$", "-test.v", "-test.timeout=45s")
 				// CommandContext's default cancellation kills the child; CombinedOutput
 				// waits/reaps it. Bound inherited-output-pipe draining as well.
 				cmd.WaitDelay = 5 * time.Second
@@ -1141,15 +1307,18 @@ func TestStandaloneNativeSharedBoundaryCrashReopen(t *testing.T) {
 				if !errors.As(err, &exited) || exited.ExitCode() != 97 || !bytes.Contains(output, []byte(marker)) || bytes.Contains(output, []byte("DATA RACE")) {
 					t.Fatalf("shared-boundary crash child: %v", err)
 				}
-				fresh := newNativeSharedSafetyFixture(t, dir, profile)
+				fresh := newNativeSharedSafetyFixture(t, dir, profile, updateMode)
 				requireNativeSharedSafetyCensus(t, fresh)
 				fresh.finish()
 				t.Logf("SHARED_CRASH_FRESH_TYPED_CHECKED_CLOSE_PASS profile=%s", profile)
 				return
 			}
-			f := newNativeSharedSafetyFixture(t, dir, profile)
+			f := newNativeSharedSafetyFixture(t, dir, profile, updateMode)
 			if err := f.clients[0].Database("app").CreateCollection(f.ctx, "shared_journal"); err != nil {
 				t.Fatal(err)
+			}
+			if updateMode {
+				seedNativeSharedSafetyUpdateRows(t, f)
 			}
 			before, beforeACK := f.s.Stats(), f.s.Server.StandaloneWriteConcernStats()
 			type syncIdentity struct {
@@ -1161,6 +1330,8 @@ func TestStandaloneNativeSharedBoundaryCrashReopen(t *testing.T) {
 			var heldLSN atomic.Uint64
 			var releaseOnce sync.Once
 			release := func() { releaseOnce.Do(func() { close(released) }) }
+			var updateAppend atomic.Pointer[syncIdentity]
+			var updateAppends atomic.Uint64
 			var publicationBefore atomic.Pointer[syncIdentity]
 			var publicationAfter atomic.Bool
 			type result struct {
@@ -1200,6 +1371,10 @@ func TestStandaloneNativeSharedBoundaryCrashReopen(t *testing.T) {
 				}
 			})
 			undo := durabilitycut.Install(func(e durabilitycut.Event) error {
+				if updateMode && e.Resource == durabilitycut.ResourceCommandWAL && e.Point == durabilitycut.AfterDependencyAppend && e.LSN != 0 {
+					updateAppend.CompareAndSwap(nil, &syncIdentity{lsn: e.LSN, root: e.Root, path: e.Path})
+					updateAppends.Add(1)
+				}
 				if e.Resource != durabilitycut.ResourceCommandWAL || e.LSN == 0 {
 					return nil
 				}
@@ -1215,12 +1390,12 @@ func TestStandaloneNativeSharedBoundaryCrashReopen(t *testing.T) {
 				if e.Point != durabilitycut.BeforeDependencyFileSync {
 					return nil
 				}
-				if heldLSN.Load() != 0 && e.LSN > heldLSN.Load() {
+				if updateMode || (heldLSN.Load() != 0 && e.LSN > heldLSN.Load()) {
 					if e.StablePath == nil {
 						return errors.New("crash publication Before lost original file")
 					}
 					target := &syncIdentity{lsn: e.LSN, root: e.Root, path: e.Path}
-					if !publicationBefore.CompareAndSwap(nil, target) {
+					if !publicationBefore.CompareAndSwap(nil, target) && !updateMode {
 						return errors.New("duplicate crash successor publication capture")
 					}
 				}
@@ -1240,9 +1415,19 @@ func TestStandaloneNativeSharedBoundaryCrashReopen(t *testing.T) {
 			start := func(i int) {
 				started[i] = true
 				go func() {
-					out, err := nativeSharedSafetyWriter(f, i).InsertOne(f.ctx, standaloneNativeJournalDocument(ids[i], i+1))
-					if err == nil && (out == nil || out.InsertedID != ids[i]) {
-						err = fmt.Errorf("wrong insert result: %v", out)
+					var err error
+					if updateMode {
+						out, updateErr := nativeSharedSafetyWriter(f, i).UpdateOne(f.ctx, bson.D{{Key: "_id", Value: ids[i]}}, bson.D{{Key: "$set", Value: standaloneNativeJournalDocument(ids[i], i+1)[1:]}})
+						err = updateErr
+						if err == nil && (out == nil || out.MatchedCount != 1 || out.ModifiedCount != 1 || out.UpsertedCount != 0 || out.UpsertedID != nil) {
+							err = fmt.Errorf("wrong update result: %v", out)
+						}
+					} else {
+						out, insertErr := nativeSharedSafetyWriter(f, i).InsertOne(f.ctx, standaloneNativeJournalDocument(ids[i], i+1))
+						err = insertErr
+						if err == nil && (out == nil || out.InsertedID != ids[i]) {
+							err = fmt.Errorf("wrong insert result: %v", out)
+						}
 					}
 					results[i] <- result{err: err, after: publicationAfter.Load()}
 				}()
@@ -1254,9 +1439,27 @@ func TestStandaloneNativeSharedBoundaryCrashReopen(t *testing.T) {
 			case <-time.After(5 * time.Second):
 				t.Fatal("crash predecessor own-publication physical hold not reached")
 			}
-			start(1)
-			requireNativeSharedSafetyInstalled(t, f, "successor", 2)
+			if updateMode {
+				f.s.Server.updateMu.Lock()
+				worker := f.s.Server.updateCoalescers["app.shared_journal"]
+				f.s.Server.updateMu.Unlock()
+				if worker == nil {
+					t.Fatal("actual default update coalescer did not own held update")
+				}
+				requireNativeSharedSafetyInstalled(t, f, "predecessor", 1)
+				appendIdentity, target := updateAppend.Load(), publicationBefore.Load()
+				if appendIdentity == nil || target == nil || updateAppends.Load() != 1 || appendIdentity.lsn != target.lsn || appendIdentity.root != target.root || appendIdentity.path != target.path {
+					t.Fatalf("held crash must bind actual single update append to captured prefix: append=%+v sync=%+v appends=%d", appendIdentity, target, updateAppends.Load())
+				}
+				requireNativeSelectedBSONUpdateFrame(t, appendIdentity.lsn, target.lsn, target.path)
+			} else {
+				start(1)
+				requireNativeSharedSafetyInstalled(t, f, "successor", 2)
+			}
 			for i := range results {
+				if !started[i] {
+					continue
+				}
 				select {
 				case r := <-results[i]:
 					joined[i] = true
@@ -1266,10 +1469,13 @@ func TestStandaloneNativeSharedBoundaryCrashReopen(t *testing.T) {
 			}
 			release()
 			for i := range results {
+				if !started[i] {
+					continue
+				}
 				select {
 				case r := <-results[i]:
 					joined[i] = true
-					if r.err != nil || (i == 1 && !r.after) {
+					if r.err != nil || ((i == 1 || updateMode) && !r.after) {
 						t.Fatalf("crash command%d ACK lacks successful own-publication sync: err=%v after=%t", i, r.err, r.after)
 					}
 				case <-time.After(5 * time.Second):
@@ -1277,11 +1483,23 @@ func TestStandaloneNativeSharedBoundaryCrashReopen(t *testing.T) {
 				}
 			}
 			target := publicationBefore.Load()
-			if target == nil || target.lsn <= firstLSN || !publicationAfter.Load() {
+			if target == nil || (!updateMode && target.lsn <= firstLSN) || (updateMode && target.lsn != firstLSN) || !publicationAfter.Load() {
 				t.Fatalf("crash successor publication target invalid: first=%d target=%+v after=%t", firstLSN, target, publicationAfter.Load())
 			}
+			expectedACKs := uint64(2)
+			if updateMode {
+				expectedACKs = 1
+				appendIdentity := updateAppend.Load()
+				if appendIdentity == nil || updateAppends.Load() != 1 || appendIdentity.lsn != target.lsn || appendIdentity.root != target.root || appendIdentity.path != target.path {
+					t.Fatalf("selected update append is outside actual synced prefix: append=%+v sync=%+v", appendIdentity, target)
+				}
+				requireNativeSharedSafetyCensus(t, f)
+			}
 			after, afterACK := f.s.Stats(), f.s.Server.StandaloneWriteConcernStats()
-			if writeConcernBenchmarkStat(t, after, "treedb.cache.checkpoint.runs") != writeConcernBenchmarkStat(t, before, "treedb.cache.checkpoint.runs") || writeConcernBenchmarkStat(t, after, "treedb.command_wal.group_commit.forced_total")-writeConcernBenchmarkStat(t, before, "treedb.command_wal.group_commit.forced_total") != 0 || afterACK.JournalAcknowledgements-beforeACK.JournalAcknowledgements != 2 || afterACK.PhysicalSyncBoundaries-beforeACK.PhysicalSyncBoundaries != 2 {
+			if updateMode && (afterACK.JournalRequests-beforeACK.JournalRequests != 1 || afterACK.SyncAttempts-beforeACK.SyncAttempts != 1 || afterACK.SyncFailures != beforeACK.SyncFailures || afterACK.UncertainOutcomes != beforeACK.UncertainOutcomes) {
+				t.Fatalf("selected update journal request/attempt/error census: before=%+v after=%+v", beforeACK, afterACK)
+			}
+			if writeConcernBenchmarkStat(t, after, "treedb.cache.checkpoint.runs") != writeConcernBenchmarkStat(t, before, "treedb.cache.checkpoint.runs") || writeConcernBenchmarkStat(t, after, "treedb.command_wal.group_commit.forced_total")-writeConcernBenchmarkStat(t, before, "treedb.command_wal.group_commit.forced_total") != 0 || afterACK.JournalAcknowledgements-beforeACK.JournalAcknowledgements != expectedACKs || afterACK.PhysicalSyncBoundaries-beforeACK.PhysicalSyncBoundaries != expectedACKs {
 				t.Fatalf("crash ACK/fence contract mismatch: before=%+v after=%+v", beforeACK, afterACK)
 			}
 			fmt.Printf("%s profile=%s first_lsn=%d publication_successor_lsn=%d checkpoint_delta=0\n", marker, profile, firstLSN, target.lsn)

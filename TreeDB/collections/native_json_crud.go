@@ -54,6 +54,13 @@ func (c *Collection) nativeUpdateBatchModeWithJournal(items []UpdateBatchItem, m
 	if err != nil {
 		return nil, false, err
 	}
+	return c.finishPreparedNativeUpdateBatchWithJournal(tx, items, mode, bsonItems, journal)
+}
+
+// The caller owns the producer admission; this finisher owns the original
+// prepared transaction through its checked Close and completion invalidation.
+func (c *Collection) finishPreparedNativeUpdateBatchWithJournal(tx *NativeJSONTxn, items []UpdateBatchItem, mode updateBatchMode, bsonItems []BSONSetUpdateBatchItem, journal *nativeOperationJournal) (results []UpdateBatchResult, complete bool, resultErr error) {
+	var err error
 	defer func() {
 		resultErr = errors.Join(resultErr, tx.Close())
 		if resultErr != nil && journal != nil {

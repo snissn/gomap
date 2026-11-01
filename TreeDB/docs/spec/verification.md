@@ -5052,3 +5052,29 @@ budget charges, serial/parallel reads and an untimed physical-basis replacement.
 It checks original manager/owner Close and fresh-owner value preservation. These
 component metrics do not replace the fixed public workload or quantify valid
 unsupported-codec fallback reinspection; both remain separately required.
+
+`TestNativeBSONSetJournalReceiptCheckedCleanupInvalidatesSuccess` exercises the
+prepared update finisher with the original real owner and the existing conditional
+transaction Close-error wrapper. It requires the original cleanup error, a selected
+and attempted but noncompleted same-owner receipt, a closed original transaction,
+and the exact accepted BSON update after releasing producer admission. This is a
+source control for joined cleanup failure, not a public ACK, crash or relaxed-profile
+qualification result. The finisher extraction retains the original update body and
+checked-Close order; its caller continues to own producer admission and panic cleanup.
+
+The combined-source update receipt fixture now serves the durable and
+`TestStandaloneNativeJournalRelaxedCoalescedBSONSetPhysicalReceiptNoRefence`
+entrypoints through one profile-parameterized helper. Both require exactly two
+semantic appends, a two-member DURABLE strict target, exact decoded actions and
+BSON, no early ACK, matching physical Before/After and two actual strict
+requests/attempts/completed boundaries. The ordinary predecessor follows its
+profile: two physical epochs total for durable, one for relaxed; neither accepts
+an empty promotion marker. The isolated admitted durable RED/GREEN source and
+its historical evidence remain unchanged. These consolidated controls are unrun.
+`TestStandaloneNativeUpdateJournalCloseJoinsHeldSync` and
+`TestStandaloneNativeUpdateJournalCrashReopen` reuse the existing held-sync and
+bounded exit-97 fixtures with selected real BSON updates in both profiles. They
+bind the exact selected update frame to its captured physical prefix and retain
+checked original/fresh lifecycles, original insert branches and failure bounds.
+The changed original insert entrypoints must also be rerun; source review alone
+is not public ACK/crash, race or global qualification.

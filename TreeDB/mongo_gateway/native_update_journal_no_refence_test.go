@@ -20,17 +20,27 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo/writeconcern"
 )
 
-// Durable-profile real-driver behavioral regression; relaxed profile is a mandatory follow-up.
-// Target strict updates require their own completed original-owner durable publication.
-// An existing AfterDependencyAppend hold occupies the DEFAULT update worker so
-// two real distinct-ID BSON-set requests are observably queued together.
+// The combined-source durable and relaxed entrypoints share this actual default
+// coalescer fixture. The isolated admitted durable RED/GREEN file is unchanged.
+// Strict targets require their own original-owner DURABLE update publication;
+// neither profile needs an extra promotion marker or post-dispatch force.
 func TestStandaloneNativeJournalCoalescedBSONSetPhysicalReceiptNoRefence(t *testing.T) {
 	for _, profile := range []treedb.Profile{treedb.ProfileCommandWALDurable} {
 		t.Run(string(profile), func(t *testing.T) { exerciseStandaloneNativeBSONSetReceiptNoRefence(t, profile) })
 	}
 }
 
+func TestStandaloneNativeJournalRelaxedCoalescedBSONSetPhysicalReceiptNoRefence(t *testing.T) {
+	exerciseStandaloneNativeBSONSetReceiptNoRefence(t, treedb.ProfileCommandWALRelaxed)
+}
+
 func exerciseStandaloneNativeBSONSetReceiptNoRefence(t *testing.T, profile treedb.Profile) {
+	// Both strict target members select a DURABLE update publication. Only the
+	// ordinary predecessor's physical epoch depends on the configured profile.
+	expectedEpochs := 1
+	if profile == treedb.ProfileCommandWALDurable {
+		expectedEpochs = 2
+	}
 	const wait = 5 * time.Second
 	opts := StandaloneOptions{Dir: t.TempDir(), Profile: profile, DefaultCollectionOptions: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}}
 	s, err := OpenStandaloneServer(opts)
@@ -128,7 +138,7 @@ func exerciseStandaloneNativeBSONSetReceiptNoRefence(t *testing.T, profile treed
 	observed := 0
 	var sequence, explicitAfter atomic.Uint64
 	var appendCount int
-	var appends [3]sample
+	var appends [2]sample
 	var targetPublicationLSN, capturedPrefixLSN atomic.Uint64
 	var targetHeld atomic.Bool
 	predecessorAppended := make(chan sample, 1)
@@ -142,13 +152,8 @@ func exerciseStandaloneNativeBSONSetReceiptNoRefence(t *testing.T, profile treed
 				observationsMu.Unlock()
 				return errors.New("unexpected additional update publication append")
 			}
-			// A relaxed tail requires exactly one root-neutral durable-prefix
-			// promotion append before capture. It is not an update publication.
-			// Decode and verify its actual V2 identity after requests join below.
-			if i == 2 && (profile != treedb.ProfileCommandWALRelaxed || v.attempts == 0 || v.attempts > 2 || v.lsn != appends[1].lsn+1 || v.root != appends[1].root || v.path != appends[1].path) {
-				observationsMu.Unlock()
-				return errors.New("unexpected update promotion append identity")
-			}
+			// Predecessor follows the profile; selected strict target is durable.
+			// There must be exactly these two semantic update publications.
 			appends[i] = v
 			appendCount++
 			observationsMu.Unlock()
@@ -159,12 +164,8 @@ func exerciseStandaloneNativeBSONSetReceiptNoRefence(t *testing.T, profile treed
 				case <-ctx.Done():
 					return fmt.Errorf("bounded predecessor append hold: %w", ctx.Err())
 				}
-			} else if i == 1 {
-				targetPublicationLSN.Store(v.lsn)
-				if profile == treedb.ProfileCommandWALDurable {
-					capturedPrefixLSN.Store(v.lsn)
-				}
 			} else {
+				targetPublicationLSN.Store(v.lsn)
 				capturedPrefixLSN.Store(v.lsn)
 			}
 			return nil
@@ -287,23 +288,18 @@ func exerciseStandaloneNativeBSONSetReceiptNoRefence(t *testing.T, profile treed
 	case <-time.After(wait):
 		t.Fatal("missing actual target physical sync")
 	}
-	if batch.lsn <= first.lsn || batch.lsn != capturedPrefixLSN.Load() || (profile == treedb.ProfileCommandWALRelaxed && (batch.attempts == 0 || batch.attempts > 2)) {
+	if batch.lsn <= first.lsn || batch.lsn != capturedPrefixLSN.Load() || batch.attempts != 0 {
 		t.Fatalf("profile-specific target physical identity: profile=%s first=%+v target=%+v", profile, first, batch)
 	}
 	observationsMu.Lock()
-	actualAppends, targetAppend, promotionAppend := appendCount, appends[1], appends[2]
+	actualAppends, targetAppend := appendCount, appends[1]
 	observationsMu.Unlock()
 	expectedAppends := 2
-	if profile == treedb.ProfileCommandWALRelaxed {
-		expectedAppends = 3
-		if promotionAppend.lsn != targetAppend.lsn+1 || promotionAppend.lsn != batch.lsn || promotionAppend.sequence <= targetAppend.sequence || promotionAppend.sequence >= batch.sequence || promotionAppend.attempts == 0 || promotionAppend.attempts > 2 || promotionAppend.root != targetAppend.root || promotionAppend.path != targetAppend.path {
-			t.Fatalf("relaxed prefix promotion chronology: target=%+v promotion=%+v sync=%+v", targetAppend, promotionAppend, batch)
-		}
-	} else if targetAppend.lsn != batch.lsn {
-		t.Fatalf("durable capture must name actual target publication: target=%+v sync=%+v", targetAppend, batch)
+	if targetAppend.lsn != batch.lsn {
+		t.Fatalf("selected strict target must name actual durable update, not promotion marker: target=%+v sync=%+v", targetAppend, batch)
 	}
 	if actualAppends != expectedAppends || targetAppend.lsn != targetPublicationLSN.Load() || targetAppend.lsn != first.lsn+1 || targetAppend.sequence >= batch.sequence || targetAppend.root != first.root || targetAppend.path != first.path || batch.root != targetAppend.root || batch.path != targetAppend.path {
-		t.Fatalf("exactly two native publications plus profile-specific promotion: appends=%d target=%+v sync=%+v", actualAppends, targetAppend, batch)
+		t.Fatalf("exactly two native publications without promotion: appends=%d target=%+v sync=%+v", actualAppends, targetAppend, batch)
 	}
 	for i := 1; i < len(ids); i++ {
 		noACK(i, "target physical sync")
@@ -316,7 +312,9 @@ func exerciseStandaloneNativeBSONSetReceiptNoRefence(t *testing.T, profile treed
 		}
 		requireStandaloneNativeJournalDocument(t, raw, ids[i], i+11)
 	}
-	delta := func(stats map[string]string, key string) uint64 { return writeConcernBenchmarkStat(t, stats, key) - writeConcernBenchmarkStat(t, before, key) }
+	delta := func(stats map[string]string, key string) uint64 {
+		return writeConcernBenchmarkStat(t, stats, key) - writeConcernBenchmarkStat(t, before, key)
+	}
 	if delta(s.Stats(), "treedb.command_wal.group_commit.forced_total") != 0 {
 		t.Fatal("target forced before ordinary physical completion")
 	}
@@ -341,10 +339,13 @@ func exerciseStandaloneNativeBSONSetReceiptNoRefence(t *testing.T, profile treed
 	observationsMu.Lock()
 	pairs := append([]pair(nil), observations[:observed]...)
 	observationsMu.Unlock()
-	if len(pairs) < 2 {
-		t.Fatalf("missing predecessor or target physical epoch: %d", len(pairs))
+	if len(pairs) < expectedEpochs {
+		t.Fatalf("missing profile-specific predecessor/target physical epochs: actual=%d want=%d", len(pairs), expectedEpochs)
 	}
-	ordinaryDone := pairs[1].after
+	if profile == treedb.ProfileCommandWALDurable && (pairs[0].before.lsn != first.lsn || pairs[0].after.lsn != first.lsn || pairs[0].after.sequence >= batch.sequence) {
+		t.Fatalf("durable predecessor must complete its own physical epoch before target capture: first=%+v epoch=%+v target=%+v", first, pairs[0], batch)
+	}
+	ordinaryDone := pairs[expectedEpochs-1].after
 	if ordinaryDone.lsn != batch.lsn || ordinaryDone.sequence <= batch.sequence {
 		t.Fatalf("target ordinary successful After identity: %+v", ordinaryDone)
 	}
@@ -355,7 +356,7 @@ func exerciseStandaloneNativeBSONSetReceiptNoRefence(t *testing.T, profile treed
 		}
 	}
 	for i, p := range pairs {
-		if p.after.sequence <= p.before.sequence || (i >= 2 && (p.before.lsn != batch.lsn || p.before.sequence <= ordinaryDone.sequence)) {
+		if p.after.sequence <= p.before.sequence || (i >= expectedEpochs && (p.before.lsn != batch.lsn || p.before.sequence <= ordinaryDone.sequence)) {
 			t.Fatalf("physical epoch%d chronology=%+v", i, p)
 		}
 		t.Logf("BSON_SET_PHYSICAL_EPOCH_PASS epoch=%d lsn=%d before=%d successful_after=%d", i, p.before.lsn, p.before.sequence, p.after.sequence)
@@ -366,13 +367,13 @@ func exerciseStandaloneNativeBSONSetReceiptNoRefence(t *testing.T, profile treed
 	appendSamples := appends
 	observationsMu.Unlock()
 	if finalAppends != expectedAppends {
-		t.Fatalf("expected two publications plus exact profile-specific promotion, actual=%d want=%d", finalAppends, expectedAppends)
+		t.Fatalf("expected exactly two publications and no promotion marker, actual=%d want=%d", finalAppends, expectedAppends)
 	}
 	// All RPCs have joined and the observer is restored. Inspect the exact
 	// active file named by Before/After; never perform storage IO in a hook.
 	// The bounded fresh fixture has no rotation or maintenance in this window.
-	// A decoder-verified empty durable marker immediately after the target,
-	// not merely an LSN >= target, proves which physical prefix covers it.
+	// Decode the profile-class predecessor and exact two-member DURABLE target.
+	// The captured frontier is the target itself, not an empty promotion marker.
 	reader, err := commitlog.NewReaderWithOptions(batch.path, commitlog.Options{MaxSegmentSize: 1 << 20})
 	if err != nil {
 		t.Fatalf("open exact observed command WAL: %v", err)
@@ -403,14 +404,9 @@ func exerciseStandaloneNativeBSONSetReceiptNoRefence(t *testing.T, profile treed
 		if frames == finalAppends || frame.Version != commitlog.CommandFrameVersionV2 || frame.LSN != appendSamples[frames].lsn {
 			t.Fatalf("exact observed frame/append census: index=%d lsn=%d kind=%d", frames, frame.LSN, frame.Kind)
 		}
-		if frames == 2 {
-			if profile != treedb.ProfileCommandWALRelaxed || frame.LSN != targetAppend.lsn+1 || frame.LSN != batch.lsn || frame.Kind != commitlog.CommandKindDurablePrefixBarrier || frame.Scope != commitlog.CommandScopeSystem || frame.PayloadFormat != commitlog.PayloadFormatDurablePrefixBarrierV1 || frame.DurabilityClass != commitlog.CommandDurabilityDurable || len(frame.Payload) != 0 || len(frame.ExternalRefs) != 0 || len(frame.Preconditions) != 0 || len(frame.ResultAssertions) != 0 {
-				t.Fatalf("actual relaxed promotion must be exact empty durable system barrier: lsn=%d kind=%d scope=%d format=%d class=%d", frame.LSN, frame.Kind, frame.Scope, frame.PayloadFormat, frame.DurabilityClass)
-			}
-			t.Logf("RELAXED_DURABLE_PREFIX_PROMOTION_PASS target_publication_lsn=%d captured_prefix_lsn=%d marker_kind=%d empty_payload=true", targetAppend.lsn, frame.LSN, frame.Kind)
-		} else {
+		{
 			class := commitlog.CommandDurabilityRelaxed
-			if profile == treedb.ProfileCommandWALDurable {
+			if frames == 1 || profile == treedb.ProfileCommandWALDurable {
 				class = commitlog.CommandDurabilityDurable
 			}
 			if frame.Kind != commitlog.CommandKindCollectionUpdateBatchByID || frame.Scope != commitlog.CommandScopeCollection || frame.PayloadFormat != commitlog.PayloadFormatCollectionUpdateBatchByIDV1 || frame.DurabilityClass != class {
@@ -455,11 +451,11 @@ func exerciseStandaloneNativeBSONSetReceiptNoRefence(t *testing.T, profile treed
 	if frames != finalAppends {
 		t.Fatalf("missing exact observed WAL frames: got=%d want=%d", frames, finalAppends)
 	}
-	t.Logf("BSON_SET_EXACT_WAL_ACTION_CENSUS_PASS frames=%d native_publications=2 update_actions=3 target_members=2 promotion_markers=%d", frames, frames-2)
-	t.Logf("BSON_SET_SHARED_PUBLICATION_PASS publications=2 target_members=2 target_lsn=%d captured_prefix_lsn=%d ordinary_epochs=%d physical_epochs=%d", targetAppend.lsn, batch.lsn, 2, len(pairs))
+	t.Logf("BSON_SET_EXACT_WAL_ACTION_CENSUS_PASS frames=%d native_publications=2 update_actions=3 target_members=2 promotion_markers=0", frames)
+	t.Logf("BSON_SET_SHARED_PUBLICATION_PASS publications=2 target_members=2 target_lsn=%d captured_prefix_lsn=%d ordinary_epochs=%d physical_epochs=%d", targetAppend.lsn, batch.lsn, expectedEpochs, len(pairs))
 	after := s.Stats()
 	afterACK := s.Server.StandaloneWriteConcernStats()
-	if delta(after, "treedb.cache.checkpoint.runs") != 0 || delta(after, "treedb.command_wal.group_commit.commits_total") != 2 || delta(after, "treedb.command_wal.group_commit.syncs_total") != uint64(len(pairs)) || afterACK.JournalAcknowledgements-beforeACK.JournalAcknowledgements != 2 || afterACK.SyncFailures != beforeACK.SyncFailures || afterACK.UncertainOutcomes != beforeACK.UncertainOutcomes {
+	if delta(after, "treedb.cache.checkpoint.runs") != 0 || delta(after, "treedb.command_wal.group_commit.commits_total") != 2 || delta(after, "treedb.command_wal.group_commit.syncs_total") != uint64(len(pairs)) || afterACK.JournalRequests-beforeACK.JournalRequests != 2 || afterACK.SyncAttempts-beforeACK.SyncAttempts != 2 || afterACK.JournalAcknowledgements-beforeACK.JournalAcknowledgements != 2 || afterACK.PhysicalSyncBoundaries-beforeACK.PhysicalSyncBoundaries != 2 || afterACK.SyncFailures != beforeACK.SyncFailures || afterACK.UncertainOutcomes != beforeACK.UncertainOutcomes {
 		t.Fatalf("unexpected owner counters: commits=%d groups=%d checkpoints=%d ACKs=%+v->%+v", delta(after, "treedb.command_wal.group_commit.commits_total"), delta(after, "treedb.command_wal.group_commit.syncs_total"), delta(after, "treedb.cache.checkpoint.runs"), beforeACK, afterACK)
 	}
 	check := func() {
@@ -516,7 +512,7 @@ func exerciseStandaloneNativeBSONSetReceiptNoRefence(t *testing.T, profile treed
 	stopStandaloneMongoClientForTest(t, client, cancel, listener, served, fresh)
 	t.Log("BSON_SET_FRESH_EXACT_BSON_READBACK_AND_CHECKED_CLOSE_PASS")
 	forced := delta(after, "treedb.command_wal.group_commit.forced_total")
-	if len(pairs) != 2 || forced != 0 {
-		t.Errorf("BSON_SET_REDUNDANT_POSTDISPATCH_FORCE: actual_epochs=%d want2 original_force_registrations=%d want0 target_lsn=%d", len(pairs), forced, batch.lsn)
+	if len(pairs) != expectedEpochs || forced != 0 {
+		t.Errorf("BSON_SET_REDUNDANT_POSTDISPATCH_FORCE: actual_epochs=%d want%d original_force_registrations=%d want0 target_lsn=%d", len(pairs), expectedEpochs, forced, batch.lsn)
 	}
 }
