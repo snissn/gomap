@@ -34,6 +34,8 @@ COMMON_LOAD_POLICY="${COMMON_LOAD_POLICY:-}"
 export COMMON_LOAD_POLICY
 MONGODB_JOURNAL_REQUEST="${MONGODB_JOURNAL_REQUEST:-unspecified}"
 export MONGODB_JOURNAL_REQUEST
+YCSB_PHASE_STATS="${YCSB_PHASE_STATS:-}"
+export YCSB_PHASE_STATS
 MONGODB_JOURNAL_SUFFIX=""
 [[ "$MONGODB_JOURNAL_REQUEST" == unspecified ]] || MONGODB_JOURNAL_SUFFIX="&journal=$MONGODB_JOURNAL_REQUEST"
 TARGETS="${TARGETS:-treedb_mongo}"
@@ -66,6 +68,11 @@ Supports supplied absolute TREEDB_NATIVE_SERVER_BIN/TREEDB_MONGO_GATEWAY_BIN,
 GOYCSB_BIN, FIXTURE_BIN, TREEDB_NATIVE_DOCUMENT_FORMAT and TREEDB_MONGO_DOCUMENT_FORMAT
 (json|bson), TREEDB_PROFILE, RECORDCOUNT, OPERATIONCOUNT, THREADCOUNT,
 RUN_REPEATS, BUILD, BUILD_GOYCSB, OUT_DIR and TMPDIR.
+YCSB_PHASE_STATS=1 enables read-only original-owner counter snapshots around
+each measured phase, only with sole TARGETS=treedb_mongo and RUN_REPEATS <= 31.
+Empty disables it; other values reject before execution side effects.
+Snapshots sit outside the existing client launch clocks and original TOTAL;
+each has a 5-second RPC budget within the unchanged outer launcher deadline.
 Native execution requires RECORDCOUNT <= 9999: its public CLI has a fixed
 10000-row scan cap, including the extra row needed to detect census overflow.
 Gateway execution requires RECORDCOUNT <= 2147483646 so its census cap
@@ -118,6 +125,7 @@ case "$MONGODB_MODE" in docker|external|skip) ;; *) fail "unknown MONGODB_MODE";
 # launched a container/client and routed snapshots to an unrelated TreeDB addr.
 if [[ "$PARSE_ONLY" == false ]]; then
   case "$MONGODB_JOURNAL_REQUEST" in unspecified|true|false) ;; *) fail "invalid explicit journal request";; esac
+  [[ -z "$YCSB_PHASE_STATS" || "$YCSB_PHASE_STATS" == 1 ]] || fail "YCSB_PHASE_STATS must be empty or 1"
   [[ "$TARGETS" != *$'\n'* && "$TARGETS" != *$'\r'* ]] || fail "TARGETS must be a single line (no LF or CR)"
   read -r -a selected <<<"${TARGETS//,/ }"
   [[ ${#selected[@]} -gt 0 ]] || fail "TARGETS cannot be empty"
@@ -128,6 +136,11 @@ if [[ "$PARSE_ONLY" == false ]]; then
     chosen[$target]=1
   done
   [[ -z "${chosen[mongodb]:-}" ]] || fail "reference MongoDB lifecycle is unsupported; refusing mongodb before execution"
+  if [[ "$YCSB_PHASE_STATS" == 1 ]]; then
+    [[ ${#selected[@]} == 1 && -n "${chosen[treedb_mongo]:-}" ]] || fail "YCSB_PHASE_STATS requires only treedb_mongo"
+    # Compare decimal strings before arithmetic so oversized input cannot wrap.
+    [[ ${#RUN_REPEATS} -lt 2 || ( ${#RUN_REPEATS} -eq 2 && "$RUN_REPEATS" < 32 ) ]] || fail "YCSB_PHASE_STATS requires RUN_REPEATS <= 31"
+  fi
   if [[ -n "$COMMON_LOAD_POLICY" ]]; then
     [[ ${#selected[@]} == 1 && -n "${chosen[treedb_mongo]:-}" ]] || fail "COMMON_LOAD_POLICY requires only treedb_mongo"
   fi
@@ -238,6 +251,8 @@ for target, record in server_builds.items():
 (out/'fixture-source.go').write_bytes(pathlib.Path(fixture_source).read_bytes())
 fixture=dict(schema_version=1,binary=fixture_binary,exe_sha256=sha(fixture_binary),source_sha256=sha(fixture_source))
 manifest = dict(schema_version=1, require_client_runtime_observation=True, write_concern=dict(w=1,journal_requested={"unspecified":None,"true":True,"false":False}[os.environ["MONGODB_JOURNAL_REQUEST"]]), controlled_native_client_build_required=controlled_required=='true', lifecycle_contract=2, deadlines=dict(phase_seconds=int(phase_timeout),helper_seconds=int(helper_timeout),cleanup_seconds=int(cleanup_timeout),phase_outer_seconds=int(phase_timeout)+3*int(cleanup_timeout)+10,helper_outer_seconds=int(helper_timeout)+3*int(cleanup_timeout)+10), fixture=fixture, campaign_id=uuid.uuid4().hex, targets=targets, profile=profile, formats={'treedb_native':native_format, 'treedb_mongo':mongo_format, 'mongodb':'bson'}, recordcount=int(records), operationcount=int(ops), threadcount=int(threads), run_repeats=int(repeats), client=build, server_builds=server_builds)
+if os.environ['YCSB_PHASE_STATS'] == '1':
+    manifest['phase_stats']=dict(schema_version=1,enabled=True,max_observations=64,rpc_timeout_seconds=5)
 if os.environ['COMMON_LOAD_POLICY']:
     manifest['common_load']=consumer.read(pathlib.Path(os.environ['COMMON_LOAD_POLICY']))
     import ycsb_public_sentinel as sentinel
@@ -340,6 +355,9 @@ start_server() {
   CLEANUP_DONE=false
   local checkpoint_env=()
   if [[ "$target" == treedb_mongo ]]; then checkpoint_env=(YCSB_OWNER_CHECKPOINT=1); fi
+  if [[ "$target" == treedb_mongo && "$prefix" == server && "$YCSB_PHASE_STATS" == 1 ]]; then
+    checkpoint_env+=(YCSB_OWNER_PHASE_STATS=1)
+  fi
   # The requested fixture census needs one extra slot to detect unexpected rows.
   # The maintained native CLI has no scan-cap flags. Do not borrow flags
   # from historical source-bound native overlays. Gateway flags are public.
@@ -347,7 +365,7 @@ start_server() {
   if [[ "$target" == treedb_mongo ]]; then
     census_limits=(-max-find-scan-documents "$GATEWAY_CENSUS_LIMIT" -max-cursor-retained-bytes 536870912)
   fi
-  local command=(env -u GOMAXPROCS "${checkpoint_env[@]}" "YCSB_SERVER_RECEIPT_DIR=$OUT_DIR/$target/$prefix.evidence" "$binary" -dir "$dir" -profile "$TREEDB_PROFILE" -addr "$addr" "${census_limits[@]}" "$@")
+  local command=(env -u GOMAXPROCS -u YCSB_OWNER_PHASE_STATS "${checkpoint_env[@]}" "YCSB_SERVER_RECEIPT_DIR=$OUT_DIR/$target/$prefix.evidence" "$binary" -dir "$dir" -profile "$TREEDB_PROFILE" -addr "$addr" "${census_limits[@]}" "$@")
   log_command "${command[@]}"
   "${command[@]}" >"$OUT_DIR/$target/$prefix.log" 2>&1 &
   SERVER_PIDS+=("$!"); SERVER_TARGETS+=("$target"); SERVER_PREFIXES+=("$prefix")
@@ -403,7 +421,7 @@ for target in "${selected[@]}"; do
     log_command env -u GOMAXPROCS "${command[@]}"
     addr=$NATIVE_ADDR; [[ "$target" == treedb_native ]] || addr=$TREEDB_MONGO_ADDR
     verify_listener "$target" server "$addr"
-    "$PYTHON" "$VALIDATOR" launch --timeout "$PHASE_TIMEOUT_SECONDS" --cleanup-timeout "$CHILD_CLEANUP_TIMEOUT_SECONDS" --outer-timeout "$((PHASE_TIMEOUT_SECONDS+3*CHILD_CLEANUP_TIMEOUT_SECONDS+10))" "$OUT_DIR/$target" "$stem" -- "${command[@]}"
+    env -u GOMAXPROCS "$PYTHON" "$VALIDATOR" launch --timeout "$PHASE_TIMEOUT_SECONDS" --cleanup-timeout "$CHILD_CLEANUP_TIMEOUT_SECONDS" --outer-timeout "$((PHASE_TIMEOUT_SECONDS+3*CHILD_CLEANUP_TIMEOUT_SECONDS+10))" "$OUT_DIR/$target" "$stem" -- "${command[@]}"
     if [[ "$phase" == load ]]; then
       addr=$NATIVE_ADDR; [[ "$target" == treedb_native ]] || addr=$TREEDB_MONGO_ADDR
       verify_listener "$target" server "$addr"

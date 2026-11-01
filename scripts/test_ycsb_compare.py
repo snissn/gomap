@@ -157,6 +157,269 @@ class CompareTests(unittest.TestCase):
         self.assertIn("READ\t9515\t18556.9", summary)
         self.assertEqual(json.loads((self.out / "validation.json").read_text())["status"], "validated-consumer-evidence")
 
+    def phase_fixture(self):
+        """Synthetic replay controls only; actual owner execution is separate."""
+        import ycsb_compare_live as live
+        self.manifest["phase_stats"] = dict(schema_version=1, enabled=True, max_observations=64, rpc_timeout_seconds=5)
+        self.save(self.out/"manifest.json", self.manifest)
+        opened = COMPARE.read(self.directory/"server.evidence/owner.open.json")
+        ids = []
+        for index, stem in enumerate(("load", "run_1")):
+            phase_id = self.manifest["campaign_id"]+":treedb_mongo:"+stem+":"+str(index)*32
+            ids.append(phase_id)
+            self.change(stem+".close.json", lambda value: value.update(phase_id=phase_id))
+            launch = COMPARE.read(self.directory/(stem+".launch.json"))
+            launch.update(phase_id=phase_id, phase_stats={})
+            for boundary in ("before", "after"):
+                sequence = 2*index+1+(boundary == "after")
+                point = 0 if sequence == 1 else 4
+                request = dict(schema_version=1, owner_id=opened["owner_id"], request_id=f"{sequence:032x}",
+                    client=dict(self.process, pid=5678+index, start_ticks=600+index, exe_sha256="b"*64),
+                    source_id=self.manifest["server_builds"][self.target]["source_commit"], operation="phase_stats",
+                    campaign_id=self.manifest["campaign_id"], phase_id=phase_id, stem=stem, boundary=boundary, sequence=sequence)
+                stats = dict(opened["stats"], **{key:str(sequence*10) for key in live.GATEWAY_COUNTERS})
+                stats.update({"treedb.cache.cow.txn.logical_seq":str(sequence*10),
+                              "treedb.cache.checkpoint.runs":str(sequence),
+                              "treedb.cache.checkpoint.total_ms":str(sequence)+".125"})
+                response = dict(error="", receipt=dict(schema_version=1, kind="read_only_live_owner_phase_stats",
+                    request=request, owner=dict(opened, stats=stats, observed_utc=call_result(point,point)["start_utc"]),
+                    result=call_result(point,point)))
+                self.write_phase_packet(stem, boundary, request, response, call_result(point,point), launch)
+            self.save(self.directory/(stem+".launch.json"), launch)
+        for filename in ("runtime.json", "lifecycle.json"):
+            self.change(filename, lambda value: value.update(phase_ids=ids))
+
+    def write_phase_packet(self, stem, boundary, request, response, result, launch=None):
+        prefix = stem+".phase-stats-"+boundary
+        sequence = request["sequence"]
+        artifacts = {}
+        for label, suffix, value in (("client_request", ".request", request), ("client_response", ".response", response),
+                                    ("server_request", ".server-request", request), ("server_receipt", ".server-receipt", response["receipt"])):
+            path = self.directory/(prefix+suffix+".json")
+            self.save(path, value)
+            artifacts[label] = dict(path=path.name, sha256=COMPARE.digest(path))
+        self.save(self.directory/f"server.evidence/owner.phase-stats-{sequence:02d}-request.json", request)
+        self.save(self.directory/f"server.evidence/owner.phase-stats-{sequence:02d}.json", response["receipt"])
+        metadata = dict(schema_version=1, kind="owner_phase_stats_client", campaign_id=self.manifest["campaign_id"],
+            target=self.target, server_build=self.manifest["server_builds"][self.target], client=request["client"],
+            phase_id=request["phase_id"], stem=stem, boundary=boundary, sequence=sequence, result=result, artifacts=artifacts)
+        path = self.directory/(prefix+".json")
+        self.save(path, metadata)
+        launch = launch if launch is not None else COMPARE.read(self.directory/(stem+".launch.json"))
+        launch["phase_stats"][boundary] = dict(path=path.name, sha256=COMPARE.digest(path), client=request["client"])
+        self.save(self.directory/(stem+".launch.json"), launch)
+
+    def test_phase_stats_full_replay_and_exact_counter_deltas(self):
+        self.phase_fixture()
+        self.check(True)
+        report = COMPARE.read(self.out/"validation.json")["phase_stats"]["observations"][self.target]
+        self.assertEqual(len(report), 2)
+        self.assertEqual(report[0]["counters"]["treedb.cache.checkpoint.runs"]["delta"], "1")
+        self.assertEqual(report[0]["counters"]["treedb.cache.checkpoint.total_ms"]["delta"], "1.000")
+        self.assertEqual(report[1]["counters"]["treedb.command_wal.file_sync.calls_total"], dict(available=False))
+
+    def test_phase_stats_rejects_uint64_overflow_after_full_rebinding(self):
+        self.phase_fixture()
+        self.check(True)
+        key = "ycsb.gateway.write_concern.Requests"
+        for index, (stem, boundary) in enumerate((
+                ("load", "before"), ("load", "after"),
+                ("run_1", "before"), ("run_1", "after"))):
+            prefix = stem+".phase-stats-"+boundary
+            request = COMPARE.read(self.directory/(prefix+".request.json"))
+            response = COMPARE.read(self.directory/(prefix+".response.json"))
+            # Rebind every original/copy/hash and preserve monotonicity within
+            # and between pairs; rejection must come from the producer domain.
+            response["receipt"]["owner"]["stats"][key] = str((1 << 64)+index)
+            self.write_phase_packet(stem, boundary, request, response,
+                                    call_result(0,0) if index == 0 else call_result(4,4))
+        self.check(False, "invalid unsigned phase counter: "+key)
+
+    def test_phase_stats_accepts_uint64_max_after_full_rebinding(self):
+        self.phase_fixture()
+        key = "ycsb.gateway.write_concern.Requests"
+        maximum = (1 << 64)-1
+        for index, (stem, boundary) in enumerate((
+                ("load", "before"), ("load", "after"),
+                ("run_1", "before"), ("run_1", "after"))):
+            prefix = stem+".phase-stats-"+boundary
+            request = COMPARE.read(self.directory/(prefix+".request.json"))
+            response = COMPARE.read(self.directory/(prefix+".response.json"))
+            response["receipt"]["owner"]["stats"][key] = str(maximum-3+index)
+            self.write_phase_packet(stem, boundary, request, response,
+                                    call_result(0,0) if index == 0 else call_result(4,4))
+        self.check(True)
+        report = COMPARE.read(self.out/"validation.json")["phase_stats"]["observations"][self.target]
+        for index, row in enumerate(report):
+            self.assertEqual(row["counters"][key], dict(available=True,
+                before=str(maximum-3+2*index), after=str(maximum-2+2*index), delta="1"))
+
+    def test_phase_stats_retired_dependency_retries_remain_raw_gauges(self):
+        self.phase_fixture()
+        self.check(True)
+        key = "treedb.command_wal.dependency_debt.retries_total"
+        values = ("2", "0", "3", "0")
+        for index, (stem, boundary) in enumerate((
+                ("load", "before"), ("load", "after"),
+                ("run_1", "before"), ("run_1", "after"))):
+            prefix = stem+".phase-stats-"+boundary
+            request = COMPARE.read(self.directory/(prefix+".request.json"))
+            response = COMPARE.read(self.directory/(prefix+".response.json"))
+            # Retiring dependency debt drops its retry history. Preserve the
+            # snapshots and every binding without treating that gauge as work.
+            response["receipt"]["owner"]["stats"][key] = values[index]
+            self.write_phase_packet(stem, boundary, request, response,
+                                    call_result(0,0) if index == 0 else call_result(4,4))
+        self.check(True)
+        report = COMPARE.read(self.out/"validation.json")["phase_stats"]["observations"][self.target]
+        self.assertEqual(len(report), 2)
+        for index, row in enumerate(report):
+            self.assertNotIn(key, row["counters"])
+            self.assertEqual(row["before"]["observation"]["stats"][key], values[2*index])
+            self.assertEqual(row["after"]["observation"]["stats"][key], values[2*index+1])
+        self.manifest["phase_stats_required_counters"] = [key]
+        self.save(self.out/"manifest.json", self.manifest)
+        self.check(False, "unknown required phase counter")
+
+    def test_phase_stats_rejects_rebound_counter_identity_and_time_forgery(self):
+        cases = {
+            "reset": lambda request,response: response["receipt"]["owner"]["stats"].update({"treedb.cache.checkpoint.runs":"0"}),
+            "nan": lambda request,response: response["receipt"]["owner"]["stats"].update({"treedb.cache.checkpoint.total_ms":"NaN"}),
+            "negative": lambda request,response: response["receipt"]["owner"]["stats"].update({"treedb.cache.checkpoint.total_ms":"-1"}),
+            "missing ACK": lambda request,response: response["receipt"]["owner"]["stats"].pop("ycsb.gateway.write_concern.Requests"),
+            "owner": lambda request,response: response["receipt"]["owner"].update(owner_id="e"*32),
+            "source": lambda request,response: request.update(source_id="e"*40),
+            "stale nonce": lambda request,response: request.update(request_id="1".zfill(32)),
+            "unknown": lambda request,response: request.update(fixture_id="fake"),
+            "overlap": lambda request,response: response["receipt"].update(result=call_result(3,4)),
+        }
+        for name, mutate in cases.items():
+            with self.subTest(case=name):
+                self.phase_fixture()
+                request = COMPARE.read(self.directory/"load.phase-stats-after.request.json")
+                response = COMPARE.read(self.directory/"load.phase-stats-after.response.json")
+                response["receipt"]["request"] = request
+                mutate(request,response)
+                self.write_phase_packet("load", "after", request, response,
+                    call_result(3,4) if name == "overlap" else call_result(4,4))
+                self.check(False)
+
+    def test_phase_stats_disabled_missing_duplicate_and_failed_claims_rejected(self):
+        self.phase_fixture()
+        del self.manifest["phase_stats"]
+        self.save(self.out/"manifest.json", self.manifest)
+        self.check(False)
+        self.phase_fixture()
+        path = self.directory/"run_1.phase-stats-after.response.json"
+        original = path.read_bytes()
+        path.unlink()
+        self.check(False)
+        path.write_bytes(original)
+        self.save(self.directory/"run_1.phase-stats-after.failure.json", dict(error="injected after-call failure"))
+        self.check(False)
+        (self.directory/"run_1.phase-stats-after.failure.json").unlink()
+        self.save(self.directory/"run_2.phase-stats-before.json", dict(stale=True))
+        self.check(False)
+
+    def test_phase_stats_rejects_reset_between_individually_monotonic_pairs(self):
+        self.phase_fixture()
+        for boundary, count in (("before", "1"), ("after", "2")):
+            prefix = "run_1.phase-stats-"+boundary
+            request = COMPARE.read(self.directory/(prefix+".request.json"))
+            response = COMPARE.read(self.directory/(prefix+".response.json"))
+            response["receipt"]["owner"]["stats"]["ycsb.gateway.write_concern.Requests"] = count
+            self.write_phase_packet("run_1", boundary, request, response, call_result(4,4))
+        self.check(False, "decreased/reset")
+
+    def test_phase_stats_rejects_secondary_owner_claims_when_enabled_or_disabled(self):
+        for enabled in (False, True):
+            if enabled:
+                self.phase_fixture()
+            self.check(True)
+            for owner in ("reopened", "fixture-write", "fixture-reopened"):
+                for suffix in ("", "-request"):
+                    with self.subTest(enabled=enabled, owner=owner, suffix=suffix):
+                        path = self.directory/(owner+".evidence")/("owner.phase-stats-01"+suffix+".json")
+                        self.save(path, dict(unexpected="secondary owner phase observation"))
+                        try:
+                            self.check(False, "secondary owners contain phase stats claims")
+                        finally:
+                            path.unlink()
+            self.check(True)
+
+    def test_phase_stats_optional_counters_and_decimal_precision(self):
+        import ycsb_compare_live as live
+        required = {key:"0" for key in live.GATEWAY_COUNTERS}
+        required["treedb.cache.cow.txn.logical_seq"] = "0"
+        key = "treedb.cache.checkpoint.total_ms"
+        before = dict(required, **{key:"123456789012345678901234567890.001"})
+        after = dict(required, **{key:"123456789012345678901234567890.002"})
+        self.assertEqual(live.phase_counter_deltas(before, after)[key]["delta"], "0.001")
+        self.assertEqual(live.phase_counter_deltas(required, required)[key], dict(available=False))
+        with self.assertRaises(ValueError):
+            live.phase_counter_deltas(required, required, [key])
+        with self.assertRaises(ValueError):
+            live.phase_counter_deltas(dict(required, **{key:"NaN"}), required)
+
+    def test_phase_stats_launcher_before_failure_prevents_spawn(self):
+        from types import SimpleNamespace
+        from unittest import mock
+        import ycsb_compare_live as live
+        self.phase_fixture()
+        for suffix in (".launch.json", ".close.json", ".out"):
+            (self.directory/("run_1"+suffix)).unlink()
+        args = SimpleNamespace(directory=str(self.directory), stem="run_1", command=[sys.executable, "-c", "pass"])
+        with mock.patch.object(live, "phase_stats_rpc", side_effect=ValueError("before observation failed")), \
+                mock.patch.object(COMPARE.subprocess, "Popen") as spawned:
+            with self.assertRaisesRegex(ValueError, "before observation failed"):
+                COMPARE.launch(args)
+            spawned.assert_not_called()
+        self.assertFalse((self.directory/"run_1.launch.json").exists())
+        self.assertFalse((self.directory/"run_1.out").exists())
+
+    def test_phase_stats_launcher_after_failure_retains_reaped_child_outcome(self):
+        from types import SimpleNamespace
+        from unittest import mock
+        import ycsb_compare_live as live
+        self.phase_fixture()
+        for suffix in (".launch.json", ".close.json", ".out"):
+            (self.directory/("run_1"+suffix)).unlink()
+        args = SimpleNamespace(directory=str(self.directory), stem="run_1",
+            command=[sys.executable, "-c", "import time; print('actual child completed'); time.sleep(.05)"])
+        calls = []
+        def observe(directory, stem, boundary, phase_id, manifest):
+            calls.append((boundary,COMPARE.now()))
+            if boundary == "after":
+                pid = COMPARE.read(directory/(stem+".cleanup.json"))["process"]["pid"]
+                with self.assertRaises(FileNotFoundError):
+                    COMPARE.observe_core(pid)
+                raise ValueError("after observation failed")
+            return dict(path="synthetic-before-only",sha256="c"*64,client=self.process)
+        with mock.patch.object(live, "phase_stats_rpc", side_effect=observe):
+            with self.assertRaisesRegex(ValueError, "after observation failed"):
+                COMPARE.launch(args)
+        record = COMPARE.read(self.directory/"run_1.launch.json")
+        self.assertEqual(record["exit_code"], 0)
+        self.assertFalse(record["timed_out"])
+        self.assertEqual(set(record["phase_stats"]), {"before"})
+        self.assertLessEqual(COMPARE.timestamp(calls[0][1]), COMPARE.timestamp(record["start_utc"]))
+        self.assertLessEqual(COMPARE.timestamp(record["end_utc"]), COMPARE.timestamp(calls[1][1]))
+        self.assertIn("actual child completed", (self.directory/"run_1.out").read_text())
+
+    def test_phase_stats_preflight_refuses_before_output_or_build(self):
+        refused = self.out/"must-not-exist"
+        for settings in (dict(YCSB_PHASE_STATS="0"), dict(YCSB_PHASE_STATS="true"),
+                         dict(YCSB_PHASE_STATS="1",TARGETS="treedb_native"),
+                         dict(YCSB_PHASE_STATS="1",TARGETS="treedb_mongo treedb_native"),
+                         dict(YCSB_PHASE_STATS="1",RUN_REPEATS="32"),
+                         dict(YCSB_PHASE_STATS="1",RUN_REPEATS="9"*80)):
+            with self.subTest(settings=settings):
+                env = dict(os.environ, OUT_DIR=str(refused), BUILD="true", PARSE_ONLY="false", **settings)
+                result = subprocess.run(["bash",str(ROOT/"ycsb_compare_mongodb_treedb.sh")], env=env, text=True,capture_output=True)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn("YCSB_PHASE_STATS",result.stderr)
+                self.assertFalse(refused.exists())
+
     def test_historical_known_elf_does_not_imply_new_runtime_or_policy_claim(self):
         from unittest import mock
         self.manifest['client']['exe_sha256'] = COMPARE.CONTROLLED_CLIENT_SHA
@@ -486,6 +749,9 @@ class CompareTests(unittest.TestCase):
     def test_gateway_census_limit_preserves_default(self):
         self.exercise_shell_cleanup(ready=True,target="treedb_mongo",recordcount="100000")
 
+    def test_phase_stats_shell_unsets_inherited_launcher_environment(self):
+        self.exercise_shell_cleanup(ready=True,target="treedb_mongo",phase_stats=True)
+
     def test_gateway_census_limit_refuses_invalid_or_overflow_before_output(self):
         for count in ("0","-1","01","1.5","2147483647","9223372036854775807","18446744073709551616"):
             with self.subTest(recordcount=count):
@@ -510,7 +776,7 @@ class CompareTests(unittest.TestCase):
         # Existing retained parse-only artifacts are selected by their manifest.
         self.check(True,TARGETS="treedb_native treedb_mongo",COMMON_LOAD_POLICY="unused.json")
 
-    def exercise_shell_cleanup(self, ready, hang=False, owner_ready="matching", target="treedb_native", recordcount="64", initial_observer_failure=False):
+    def exercise_shell_cleanup(self, ready, hang=False, owner_ready="matching", target="treedb_native", recordcount="64", initial_observer_failure=False, phase_stats=False):
         use_default_target=target is None
         if use_default_target:target="treedb_mongo"
         # Offline dependency stubs exercise launcher dispatch without a product DB.
@@ -594,7 +860,7 @@ int main(int argc,char **argv) {
         # Scope the test double to its exact ELF; production preflight and
         # runtime-observer controls remain strict and are tested separately.
         python_stub=executable("synthetic-python", "#!"+sys.executable+"\n"+f'''
-import pathlib,runpy,sys
+import os,pathlib,runpy,sys
 sys.path.insert(0,{str(ROOT)!r})
 import ycsb_compare_validate as c
 synthetic={build['exe_sha256']!r}
@@ -608,6 +874,13 @@ def synthetic_role(manifest,command,sha,role):
  return resolve(manifest,command,sha,role)
 c.runtime_client_preflight=synthetic_preflight
 c.resolve_launch_role=synthetic_role
+if {phase_stats!r}:
+ import ycsb_compare_live as live
+ def synthetic_phase_stats(directory,stem,boundary,phase_id,manifest):
+  observed=c.observe(os.getpid())
+  c.write_new(pathlib.Path({str(tools)!r})/('phase-launcher-'+boundary+'.json'),observed)
+  return dict(path='synthetic-'+boundary,sha256='c'*64,client=observed)
+ live.phase_stats_rpc=synthetic_phase_stats
 if {initial_observer_failure!r}:
  def fail_initial_observer(*args,**kwargs):raise PermissionError('injected initial server observer failure')
  c.observe_owned=fail_initial_observer
@@ -623,6 +896,7 @@ else:runpy.run_path(sys.argv[0],run_name='__main__')
         execution = self.out / "execution"
         environment = os.environ.copy()
         environment.update(PATH=str(tools)+os.pathsep+environment["PATH"], PYTHON=str(python_stub), GOMAXPROCS="1", PARSE_ONLY="false", BUILD="false", BUILD_GOYCSB="false", OUT_DIR=str(execution), TARGETS=target, RECORDCOUNT=recordcount, MONGODB_MODE="skip", TREEDB_NATIVE_DOCUMENT_FORMAT="json", TREEDB_NATIVE_SERVER_BIN=str(server), TREEDB_MONGO_GATEWAY_BIN=str(server) if target=="treedb_mongo" else str(tools/"must-not-launch"), NATIVE_ADDR=f"127.0.0.1:{port}", TREEDB_MONGO_ADDR=f"127.0.0.1:{port}", CLIENT_BUILD_MANIFEST=str(build_path), SERVER_BUILD_MANIFEST=str(server_build_path), GOYCSB_DIR=str(tools), GOYCSB_BIN=str(client), FIXTURE_BIN=str(client), READINESS_TIMEOUT="1", PHASE_TIMEOUT_SECONDS="1", CHILD_CLEANUP_TIMEOUT_SECONDS="1")
+        if phase_stats:environment["YCSB_PHASE_STATS"]="1"
         if use_default_target:environment.pop("TARGETS",None)
         # The offline service binds TCP first; a separate synthetic observer
         # supplies actual proc/data identities later, without running a product DB.
@@ -715,6 +989,12 @@ else:runpy.run_path(sys.argv[0],run_name='__main__')
         observation=COMPARE.read(execution/target/"server.evidence/owner.open.json")
         self.assertGreaterEqual(COMPARE.timestamp(readiness["ready_utc"]),COMPARE.timestamp(observation["observed_utc"]))
         client_launch=COMPARE.read(execution/target/"load.launch.json")
+        if phase_stats:
+            self.assertEqual(set(client_launch["phase_stats"]), {"before", "after"})
+            before=COMPARE.read(tools/"phase-launcher-before.json")
+            after=COMPARE.read(tools/"phase-launcher-after.json")
+            self.assertEqual(before,after)
+            self.assertTrue(before["gomaxprocs_unset"])
         self.assertEqual(client_launch["process"]["exe_sha256"],COMPARE.digest(client))
         self.assertGreaterEqual(COMPARE.timestamp(client_launch["start_utc"]),COMPARE.timestamp(readiness["ready_utc"]))
         self.assertTrue(json.loads(marker.read_text())["env_unset"])
@@ -1033,7 +1313,10 @@ else:runpy.run_path(sys.argv[0],run_name='__main__')
         finally:signal.signal(signal.SIGTERM,previous)
 
     def test_hanging_child_deadlines_retain_failure_kill_and_reap(self):
-        controls=(("child-timeout",.15,.05,.5,124),("outer-timeout",30,.05,.15,3),("outer-during-cleanup",.1,.2,.12,124))
+        # The outer clock starts before launch setup, so close wall deadlines
+        # cannot order an alarm during cleanup. That event is sent after the
+        # child's actual TERM marker in the cleanup-cancellation control below.
+        controls=(("child-timeout",.15,.05,.5,124),("outer-timeout",30,.05,.15,3))
         for stem,timeout,cleanup,outer,expected in controls:
             with self.subTest(stem=stem):
                 command=[sys.executable,str(ROOT/"ycsb_compare_validate.py"),"launch","--timeout",str(timeout),"--cleanup-timeout",str(cleanup),"--outer-timeout",str(outer),str(self.directory),stem,"--",sys.executable,"-c","import signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);time.sleep(30)"]
@@ -1051,7 +1334,7 @@ else:runpy.run_path(sys.argv[0],run_name='__main__')
 
     def test_hanging_helper_child_is_bounded_and_reaped(self):
         binary=self.out/"hanging-helper"
-        binary.write_text("#!/usr/bin/env python3\nimport signal,time\nsignal.signal(signal.SIGTERM,signal.SIG_IGN)\ntime.sleep(30)\n")
+        binary.write_text("#!"+sys.executable+"\nimport signal,time\nsignal.signal(signal.SIGTERM,signal.SIG_IGN)\ntime.sleep(30)\n")
         binary.chmod(0o755)
         self.manifest["fixture"]["binary"]=str(binary)
         self.save(self.out/"manifest.json",self.manifest)
@@ -1062,9 +1345,10 @@ else:runpy.run_path(sys.argv[0],run_name='__main__')
         self.assertNotEqual(outcome.returncode,0)
         self.assertTrue((self.directory/"snapshot_loaded.failure.json").exists(),outcome.stderr)
         failure=COMPARE.read(self.directory/"snapshot_loaded.failure.json")
-        self.assertTrue(failure["timed_out"])
-        self.assertTrue(failure["cleanup"]["reaped"])
-        self.assertFalse(pathlib.Path(f"/proc/{failure['pid']}").exists())
+        detail=outcome.stderr+"\n"+json.dumps(failure,sort_keys=True)
+        self.assertTrue(failure["timed_out"],detail)
+        self.assertTrue(failure["cleanup"]["reaped"],detail)
+        self.assertFalse(pathlib.Path(f"/proc/{failure['pid']}").exists(),detail)
 
     def test_first_core_observation_failure_uses_pinned_direct_child_for_cleanup(self):
         import argparse
@@ -1232,7 +1516,7 @@ else:runpy.run_path(sys.argv[0],run_name='__main__')
     def test_real_cancellation_during_cleanup_waits_for_kill_reap_and_failure_receipt(self):
         import signal
         import time
-        for signum in (signal.SIGTERM,signal.SIGINT):
+        for signum in (signal.SIGTERM,signal.SIGINT,signal.SIGALRM):
             with self.subTest(signum=signum):
                 stem="cleanup-cancellation-"+str(signum)
                 marker=self.directory/(stem+".term-seen")
@@ -1246,7 +1530,10 @@ else:runpy.run_path(sys.argv[0],run_name='__main__')
                     self.assertTrue(marker.exists(),"child must receive cleanup TERM before cancellation")
                     signal.pidfd_send_signal(pin,signum)
                     _,stderr=launcher.communicate(timeout=3)
-                    self.assertNotEqual(launcher.returncode,0,stderr)
+                    if signum==signal.SIGALRM:
+                        self.assertEqual(launcher.returncode,3,stderr)
+                    else:
+                        self.assertNotEqual(launcher.returncode,0,stderr)
                     failure=COMPARE.read(self.directory/(stem+".failure.json"))
                     self.assertTrue(failure["timed_out"])
                     self.assertEqual(failure["error"],"child wait deadline exceeded")
