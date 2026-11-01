@@ -282,6 +282,9 @@ def phase_stats_boundary(directory, stem, boundary, launch, manifest):
 def phase_stats_campaign(directory, manifest):
     enabled = phase_stats_enabled(manifest)
     stems = ["load"]+[f"run_{i}" for i in range(1, manifest["run_repeats"]+1)]
+    secondary_claims = [path for owner in ("reopened", "fixture-write", "fixture-reopened")
+                        for path in (directory/(owner+".evidence")).glob("owner.phase-stats-*.json")]
+    c.require(not secondary_claims, "secondary owners contain phase stats claims")
     claims = list(directory.glob("*.phase-stats-*.json"))+list((directory/"server.evidence").glob("owner.phase-stats-*.json"))
     if not enabled:
         c.require(not claims and not any("phase_stats" in c.read(directory/(stem+".launch.json")) for stem in stems),

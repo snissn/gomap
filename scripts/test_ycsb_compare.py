@@ -268,6 +268,22 @@ class CompareTests(unittest.TestCase):
             self.write_phase_packet("run_1", boundary, request, response, call_result(4,4))
         self.check(False, "decreased/reset")
 
+    def test_phase_stats_rejects_secondary_owner_claims_when_enabled_or_disabled(self):
+        for enabled in (False, True):
+            if enabled:
+                self.phase_fixture()
+            self.check(True)
+            for owner in ("reopened", "fixture-write", "fixture-reopened"):
+                for suffix in ("", "-request"):
+                    with self.subTest(enabled=enabled, owner=owner, suffix=suffix):
+                        path = self.directory/(owner+".evidence")/("owner.phase-stats-01"+suffix+".json")
+                        self.save(path, dict(unexpected="secondary owner phase observation"))
+                        try:
+                            self.check(False, "secondary owners contain phase stats claims")
+                        finally:
+                            path.unlink()
+            self.check(True)
+
     def test_phase_stats_optional_counters_and_decimal_precision(self):
         import ycsb_compare_live as live
         required = {key:"0" for key in live.GATEWAY_COUNTERS}
@@ -670,6 +686,9 @@ class CompareTests(unittest.TestCase):
     def test_gateway_census_limit_preserves_default(self):
         self.exercise_shell_cleanup(ready=True,target="treedb_mongo",recordcount="100000")
 
+    def test_phase_stats_shell_unsets_inherited_launcher_environment(self):
+        self.exercise_shell_cleanup(ready=True,target="treedb_mongo",phase_stats=True)
+
     def test_gateway_census_limit_refuses_invalid_or_overflow_before_output(self):
         for count in ("0","-1","01","1.5","2147483647","9223372036854775807","18446744073709551616"):
             with self.subTest(recordcount=count):
@@ -694,7 +713,7 @@ class CompareTests(unittest.TestCase):
         # Existing retained parse-only artifacts are selected by their manifest.
         self.check(True,TARGETS="treedb_native treedb_mongo",COMMON_LOAD_POLICY="unused.json")
 
-    def exercise_shell_cleanup(self, ready, hang=False, owner_ready="matching", target="treedb_native", recordcount="64", initial_observer_failure=False):
+    def exercise_shell_cleanup(self, ready, hang=False, owner_ready="matching", target="treedb_native", recordcount="64", initial_observer_failure=False, phase_stats=False):
         use_default_target=target is None
         if use_default_target:target="treedb_mongo"
         # Offline dependency stubs exercise launcher dispatch without a product DB.
@@ -778,7 +797,7 @@ int main(int argc,char **argv) {
         # Scope the test double to its exact ELF; production preflight and
         # runtime-observer controls remain strict and are tested separately.
         python_stub=executable("synthetic-python", "#!"+sys.executable+"\n"+f'''
-import pathlib,runpy,sys
+import os,pathlib,runpy,sys
 sys.path.insert(0,{str(ROOT)!r})
 import ycsb_compare_validate as c
 synthetic={build['exe_sha256']!r}
@@ -792,6 +811,13 @@ def synthetic_role(manifest,command,sha,role):
  return resolve(manifest,command,sha,role)
 c.runtime_client_preflight=synthetic_preflight
 c.resolve_launch_role=synthetic_role
+if {phase_stats!r}:
+ import ycsb_compare_live as live
+ def synthetic_phase_stats(directory,stem,boundary,phase_id,manifest):
+  observed=c.observe(os.getpid())
+  c.write_new(pathlib.Path({str(tools)!r})/('phase-launcher-'+boundary+'.json'),observed)
+  return dict(path='synthetic-'+boundary,sha256='c'*64,client=observed)
+ live.phase_stats_rpc=synthetic_phase_stats
 if {initial_observer_failure!r}:
  def fail_initial_observer(*args,**kwargs):raise PermissionError('injected initial server observer failure')
  c.observe_owned=fail_initial_observer
@@ -807,6 +833,7 @@ else:runpy.run_path(sys.argv[0],run_name='__main__')
         execution = self.out / "execution"
         environment = os.environ.copy()
         environment.update(PATH=str(tools)+os.pathsep+environment["PATH"], PYTHON=str(python_stub), GOMAXPROCS="1", PARSE_ONLY="false", BUILD="false", BUILD_GOYCSB="false", OUT_DIR=str(execution), TARGETS=target, RECORDCOUNT=recordcount, MONGODB_MODE="skip", TREEDB_NATIVE_DOCUMENT_FORMAT="json", TREEDB_NATIVE_SERVER_BIN=str(server), TREEDB_MONGO_GATEWAY_BIN=str(server) if target=="treedb_mongo" else str(tools/"must-not-launch"), NATIVE_ADDR=f"127.0.0.1:{port}", TREEDB_MONGO_ADDR=f"127.0.0.1:{port}", CLIENT_BUILD_MANIFEST=str(build_path), SERVER_BUILD_MANIFEST=str(server_build_path), GOYCSB_DIR=str(tools), GOYCSB_BIN=str(client), FIXTURE_BIN=str(client), READINESS_TIMEOUT="1", PHASE_TIMEOUT_SECONDS="1", CHILD_CLEANUP_TIMEOUT_SECONDS="1")
+        if phase_stats:environment["YCSB_PHASE_STATS"]="1"
         if use_default_target:environment.pop("TARGETS",None)
         # The offline service binds TCP first; a separate synthetic observer
         # supplies actual proc/data identities later, without running a product DB.
@@ -899,6 +926,12 @@ else:runpy.run_path(sys.argv[0],run_name='__main__')
         observation=COMPARE.read(execution/target/"server.evidence/owner.open.json")
         self.assertGreaterEqual(COMPARE.timestamp(readiness["ready_utc"]),COMPARE.timestamp(observation["observed_utc"]))
         client_launch=COMPARE.read(execution/target/"load.launch.json")
+        if phase_stats:
+            self.assertEqual(set(client_launch["phase_stats"]), {"before", "after"})
+            before=COMPARE.read(tools/"phase-launcher-before.json")
+            after=COMPARE.read(tools/"phase-launcher-after.json")
+            self.assertEqual(before,after)
+            self.assertTrue(before["gomaxprocs_unset"])
         self.assertEqual(client_launch["process"]["exe_sha256"],COMPARE.digest(client))
         self.assertGreaterEqual(COMPARE.timestamp(client_launch["start_utc"]),COMPARE.timestamp(readiness["ready_utc"]))
         self.assertTrue(json.loads(marker.read_text())["env_unset"])
