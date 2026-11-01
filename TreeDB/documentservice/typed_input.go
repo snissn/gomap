@@ -293,7 +293,10 @@ func (s *Service) optimizeTypedInput(ctx context.Context, col *collections.Colle
 	if s.deferredVectorBuildMaintenance != nil {
 		err = s.deferredVectorBuildMaintenance.Finalize(ctx, info.Name, info.Generation, s.manager.FlushAll, work)
 	} else {
-		_, err = s.manager.SyncForStandaloneWriteConcern()
+		err = s.manager.FlushAll()
+		if err == nil {
+			err = s.manager.CheckpointStorage()
+		}
 		if err == nil {
 			err = work()
 		}

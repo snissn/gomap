@@ -852,7 +852,14 @@ Automatic interval, idle, and size passes are maintenance triggers. In external
 command-WAL mode they rotate and clean only the recovery-covered command-WAL
 prefix; they do not publish the current visible root frontier. Legacy or
 otherwise unwired backends fall back to a full checkpoint. Explicit
-`Checkpoint`, sync, and close remain full durable barriers. The triggers bound
+`Checkpoint` and close remain full durable root barriers. An eligible native
+standalone explicit journal sync instead uses the original public forced
+completion group: it captures and synchronizes the complete command/dependency
+prefix without constructing or sealing the physical root. It retains public
+lifetime through completion and releases operation/publication/raw gates before
+physical I/O wait. NoWAL and healthy unbound native owners use their existing
+physical checkpoint fallback. Physical graph maintenance uses `FlushAll` then
+`CheckpointStorage`; `SyncNativeSemanticPrefix` remains a physical seal. The triggers bound
 reclaimable WAL pressure, but uncovered segments may remain until a later
 durable frontier covers them.
 

@@ -32,7 +32,7 @@ func TestDurabilityProfilePublicEntrypointInventory(t *testing.T) {
 		"LeafGenerationPlan", "MVCCWriteWorkLimit", "MaintenancePhase", "NewBatch", "NewBatchWithSize",
 		"NativeCommandWALCompletionBytes", "NativeSemanticBackend", "NewConditionalTxn", "NewConditionalTxnWithSnapshot", "NewMVCCAdmission", "NewMVCCWriteWorkEstimator", "PreflightMVCCPrune", "PrepareMVCCPrune", "PrepareNativeCommandWAL", "Print", "ResolvedProfile",
 		"ReverseIterator", "SeekGE", "SeekGEVersionRange", "Set", "SetMaintenancePhase", "SetPointWithMVCCInput", "SetNativeSemanticPublication", "SetSync", "Stats", "SubmitLogicalMVCC", "SupportsLogicalMVCC", "SupportsLogicalMVCCStaging", "SupportsMVCCReadCut",
-		"Update", "UpdateSync", "VacuumIndexOnline", "VacuumOnlineStats", "ValueLogGC", "ValueLogRewriteOnline",
+		"SyncNativeCommandWALPrefix", "Update", "UpdateSync", "VacuumIndexOnline", "VacuumOnlineStats", "ValueLogGC", "ValueLogRewriteOnline",
 	}
 	slices.Sort(want)
 	if !slices.Equal(methods, want) {
@@ -60,6 +60,9 @@ func TestDurabilityProfilePublicEntrypointInventory(t *testing.T) {
 	}
 	profileInventoryRequireBody(t, batchBodies, "(*nativePublicCommandWALCompletion).RegisterNativeCommandWAL", "registerPublicCommandWALPolicy")
 	profileInventoryRequireBody(t, batchBodies, "(*nativePublicCommandWALCompletion).CompleteNativeCommandWAL", "awaitPublicCommandWAL")
+	for _, fragment := range []string{"tdb.beginPublicOperation()", "defer tdb.lifecycleMu.RUnlock()", "!tdb.commandWALCached", "!tdb.cached.COWMode()", "CheckNativeCommandWALPrefixOwner(tdb.txnOwner)", "tdb.syncPublicCommandWAL()"} {
+		profileInventoryRequireBody(t, batchBodies, "(*DB).SyncNativeCommandWALPrefix", fragment)
+	}
 	backendBodies := profileInventoryFunctionBodies(t, filepath.Join(treeDBDir, "db", "command_wal_raw.go"))
 	backendDBBodies := profileInventoryFunctionBodies(t, filepath.Join(treeDBDir, "db", "db.go"))
 	orderedRootBodies := profileInventoryFunctionBodies(t, filepath.Join(treeDBDir, "db", "ordered_root_publish.go"))

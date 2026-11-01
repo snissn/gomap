@@ -1,0 +1,11 @@
+{
+  "archive": "developmental-inquiry.zip",
+  "sha256": "5e53a13932d639a4e97f9f80b2f69726ba38f9b698e7c6398538cdbe5be16e66",
+  "compressed_bytes": 1971831,
+  "raw_bytes": 22236117,
+  "file_count": 105,
+  "manifest": "manifest.json inside archive",
+  "independent_review_sha256": "52274803e48cb5d10bbc7fde19e7308cd8a6249fbbb46afd879e7e9a60f2840b",
+  "source_commit": "15601589437b3e41ede1f6cac73609dc331fba02",
+  "scope": "One four-cell developmental existing-API reachability inquiry; no changed-product ACK/crash or public YCSB performance acceptance"
+}

@@ -1,0 +1,9 @@
+# Native journal-prefix fence evidence
+
+This packet preserves the completed four-cell existing-API inquiry that selected the original public DB completion group for implementation in #5361. It is developmental evidence, not a public YCSB result or proof of the changed product journal ACK or crash boundary. The proposed production candidate and its qualification are separate.
+
+`developmental-inquiry.zip` contains all four raw producer reports, complete actual-tool start/poll/terminal and finish receipts, raw guard/resource samples and logs, source/build/plan/runner bindings, analysis, counter definitions and independent review. `manifest.json` inside the archive gives a SHA-256 and byte count for every archived file; `packet-provenance.json` binds the archive itself. Toolchain/product ELFs and database directories are not embedded; their original identities remain in the frozen plan and build bindings.
+
+Inspect safely with Python's `zipfile` reader or `python3 -m zipfile -l developmental-inquiry.zip`. The source producer and reproduction arguments are under `bindings/prototypes/native-journal-prefix/`; all original absolute paths and receipts remain unmodified. Reproduction needs a fresh eligible database/output directory and the recorded host/toolchain contract; do not overwrite the original cells or call a new result the original measurement.
+
+The native fence removed all 64 cache checkpoint constructions in each profile while retaining actual file sync. It still adds a forced sync boundary on an already durable profile. Original DB Close cost rose to about 211–220 ms in fence cells versus about 25 ms after checkpoint cells, so loop savings do not equal whole-lifecycle savings. One serial cell per shape does not establish a stable throughput gain. Graceful reopen does not establish crash-without-Close durability. See `developmental-analysis.md` and the preserved independent review for all values and limits.

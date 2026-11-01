@@ -359,3 +359,15 @@ each cell in a fresh process; failed/incomplete results remain failures with
 null quantiles. See the [public harness instructions](../../cmd/mongo_gateway_bench/README.md) for commands and
 measurement boundaries. `StandaloneServer.Stats` exposes its owning TreeDB's
 COW and maintenance diagnostics with existing lifecycle admission.
+
+For the native standalone COW owner, explicit `w:1,j:true` uses the original
+public command-WAL forced completion group. It completes the captured journal
+and persistent dependency prefix without constructing a physical root checkpoint.
+The configured profile's ordinary acknowledgement behavior is unchanged. Every
+accepted journal command is fenced, including partial mutations and `ok:0`
+responses; a failure preserves the original response and adds uncertain
+`writeConcernError` rather than retrying. The gateway retains its exclusive
+standalone write boundary through dispatch and sync. NoWAL and healthy unbound
+native constructors retain physical checkpoint fallback; classic applied-prefix
+behavior is unchanged. Root/snapshot/graph maintenance and Close still require
+their physical seals, so some checkpoint work remains outside request latency.

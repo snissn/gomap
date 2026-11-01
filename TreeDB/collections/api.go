@@ -3501,24 +3501,32 @@ func (m *CollectionManager) CheckpointStorage() error {
 	return m.db.Checkpoint()
 }
 
-// SyncForStandaloneWriteConcern closes the durable storage boundary used by a
-// standalone Mongo journal acknowledgement. Collection-local buffers are
-// published first. Command-WAL databases then persist a dependency-complete
-// command prefix; WAL-free databases seal a backend root with Checkpoint.
+// SyncForStandaloneWriteConcern completes the durable boundary used by a
+// standalone Mongo journal acknowledgement. Native CommandWAL managers reuse
+// the original public owner's forced completion group, without a root checkpoint.
+// Healthy direct/unbound native and NoWAL managers retain CheckpointStorage.
+// Classic managers keep FlushAll followed by the applied-prefix sync or checkpoint.
 //
-// This is intentionally stronger than FlushAll, which is only a visibility
-// and draining boundary. physicalSync is false only when a command-WAL prefix
-// was already durable (or no command prefix exists); the WAL-free checkpoint
-// path always performs a physical sync boundary. Native managers use the SAME
-// cache owner's complete captured-prefix checkpoint and report physicalSync=true.
+// physicalSync reports a completed physical boundary, not an exact syscall-attempt
+// count. Native success always returns true, including repeated calls; errors
+// return false and never fall back after an eligible journal callback fails.
+// A journal boundary does not replace FlushAll then CheckpointStorage for physical
+// maintenance, snapshots or root/AppliedCommandLSN seals.
 func (m *CollectionManager) SyncForStandaloneWriteConcern() (physicalSync bool, err error) {
 	if m != nil && m.initializationError != nil {
 		return false, m.initializationError
 	}
-	if m == nil {
+	if m == nil || m.isClosing() {
 		return false, backenddb.ErrClosed
 	}
 	if m.nativeJSON != nil {
+		supported, err := m.nativeJSON.db.SyncNativeCommandWALPrefix()
+		if err != nil {
+			return false, err
+		}
+		if supported {
+			return true, nil
+		}
 		if err := m.CheckpointStorage(); err != nil {
 			return false, err
 		}

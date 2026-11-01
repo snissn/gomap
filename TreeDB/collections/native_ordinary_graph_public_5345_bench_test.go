@@ -216,9 +216,13 @@ func BenchmarkOrdinaryGraphPublic5345(b *testing.B) {
 						b.Fatalf("public insert: returned=%d stats=%+v err=%v", len(ids), stats, err)
 					}
 				}
-				if _, err := manager.SyncForStandaloneWriteConcern(); err != nil {
+				if err := manager.FlushAll(); err != nil {
 					b.StopTimer()
-					b.Fatalf("pre-Optimize sync: %v", err)
+					b.Fatalf("pre-Optimize flush: %v", err)
+				}
+				if err := manager.CheckpointStorage(); err != nil {
+					b.StopTimer()
+					b.Fatalf("pre-Optimize checkpoint: %v", err)
 				}
 				status, err := col.RebuildVectorIndex("vec")
 				b.StopTimer()
