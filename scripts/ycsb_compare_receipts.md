@@ -205,6 +205,91 @@ shutdown FlushAll alone cannot qualify a checkpoint. The
 owner checkpoint call has no context cancellation API, so the existing bounded external
 owner supervisor remains responsible for a hung owner; no success is fabricated.
 
+`YCSB_PHASE_STATS=1` opts into read-only counter observations for the sole
+`treedb_mongo` target. Empty disables it. Execution rejects other values, mixed
+or other targets, and `RUN_REPEATS > 31` before output creation, builds, helpers
+or services. The existing positive repeat requirement still applies. Disabled
+runs retain their existing repeat support. `PARSE_ONLY` and offline reference
+preparation use their retained inputs rather than this execution setting, as
+they do for journal selection. Enabled manifests contain exactly:
+
+```json
+"phase_stats": {"schema_version": 1, "enabled": true, "max_observations": 64, "rpc_timeout_seconds": 5}
+```
+
+Only the original gateway service receives `YCSB_OWNER_PHASE_STATS=1`, alongside
+its existing checkpoint-control opt-in and actual observer. Every service launch
+clears any ambient owner phase setting first; reopened and deterministic-fixture
+owners collect no phase observations. This extends the existing private listener
+without a public Mongo command, another owner or another checkpoint operation.
+The empty-operation physical checkpoint request retains its populated legacy
+serialization and schema-v2 receipt. Phase requests omit checkpoint fixture and
+snapshot fields; they do not reserve that one-shot physical checkpoint.
+
+For each actual `load`/`run_N` client, the existing launcher requests one
+`before` and one `after` observation. Before completes before the original launch
+start/deadline and child spawn. After begins after the child is reaped and the
+original launch end is captured. Neither observation changes those launch clocks,
+the client argv, original go-ycsb TOTAL, client cleanup or existing deadlines.
+Each observation has a separate 5-second RPC budget within the unchanged outer
+launcher deadline. A failed before observation launches no client; a failed after
+observation preserves the client outcome and separate failure evidence and makes
+the campaign nonzero. No failed observation can qualify or be retried behind a
+failed admitted receipt. Stop/join the control before checked original owner Close.
+
+The schema-v1 phase receipt has kind `read_only_live_owner_phase_stats`, the
+accepted request, full actual owner observation and timed `result`; its wire
+response is `{receipt,error}`. Requests bind owner, nonce, live client PID/start/
+ELF, source, campaign, exact phase ID, stem, boundary and contiguous sequence1..64.
+Pairs are adjacent, starting with `load`, then `run_1` onward, with the same
+campaign/source and matching phase ID within each pair. The owner exclusively
+retains `server.evidence/owner.phase-stats-%02d-request.json` and
+`owner.phase-stats-%02d.json`. Each `<stem>.phase-stats-{before,after}.json`
+metadata file binds the server build and exact hashed client request/response and
+server request/receipt copies beside it. Full replay requires both boundaries for
+every declared phase, exact copies/identities, unique nonces, complete sequence
+inventory, successful results and original owner lifetime. It verifies
+`before-end <= launch-start <= launch-end <= after-start`. Helpers, loaded census
+and any common-load sentinel remain between measured phases, outside their
+before/after brackets. Disabled manifests
+reject stray phase observation claims. File existence alone never proves success.
+
+Raw stats are retained in each full observation. Replay reports before/after and
+delta values for the following explicit existing counter inventory. Prefix and
+suffix columns concatenate to form exact keys; the gateway row lists all18
+existing `StandaloneWriteConcernStats` field names. The executable adds these
+gateway fields to its fresh observation map as unsigned decimal strings; public
+`StandaloneServer.Stats()` and hot acknowledgement paths are unchanged.
+
+| Prefix | Suffixes | Representation |
+| --- | --- | --- |
+| `treedb.cache.cow.txn.` | `logical_seq` | unsigned integer |
+| `treedb.cache.checkpoint.` | `runs` | unsigned integer |
+| `treedb.cache.checkpoint.` | `total_ms` | finite nonnegative decimal |
+| `treedb.command_wal.` | `flush.count_total`, `flush.ns_total`, `sync.count_total`, `sync.ns_total`, `file_sync.calls_total`, `file_sync.ns_total`, `file_sync.errors_total`, `directory_sync.calls_total`, `directory_sync.ns_total`, `directory_sync.errors_total`, `dependency_debt.retries_total` | unsigned integer |
+| `treedb.command_wal.group_commit.` | `attempts_total`, `groups_total`, `commits_total`, `participants_total`, `dependency_entries_attempted_total`, `dependency_entries_covered_total`, `leaders_total`, `followers_total`, `syncs_total`, `errors_total`, `forced_total`, `wait_ns_total`, `trigger.timeout_total`, `trigger.commit_limit_total`, `trigger.byte_limit_total`, `trigger.explicit_sync_total`, `trigger.sealed_collection_total`, `bypasses_total` | unsigned integer |
+| `ycsb.gateway.write_concern.` | `Requests`, `VisibleRequests`, `JournalRequests`, `LogicalWrites`, `VisibleAcknowledgements`, `JournalAcknowledgements`, `SyncAttempts`, `PhysicalSyncBoundaries`, `PreMutationRejections`, `MalformedRejections`, `UnsupportedRejections`, `TimeoutRejections`, `SyncFailures`, `DurabilityUnavailableFailures`, `SyncBoundaryFailures`, `UncertainOutcomes`, `AcknowledgementNanos`, `JournalSyncNanos` | unsigned integer |
+
+The source inventory is `TreeDB/caching/db.go` for checkpoint counters,
+`TreeDB/db/command_wal_stats.go` for WAL flush/sync/file/dependency counters,
+`TreeDB/command_wal_group_commit.go` for group counters, and
+`TreeDB/mongo_gateway/write_concern.go` for gateway counters. Replay uses exact
+integers and finite decimals without float truncation and rejects malformed,
+negative, decreasing or reset present counters. All18 gateway fields and actual
+profile/backend/logical sequence are required on the enabled route. Other listed
+owner counters absent at either boundary are `available: false`, never zero;
+a frozen campaign may additionally require selected inventory keys through
+`phase_stats_required_counters`.
+
+These are read-only observations of monotonic counters, not an atomic snapshot
+across counters. Concurrent default maintenance can contribute to phase deltas;
+automatic checkpoint deltas need not be zero. Durations can overlap or sum across
+work and are not fractions of elapsed wall time. Lifetime totals include setup
+and other work outside the brackets and cannot substitute for phase deltas.
+Observation overhead is outside the client clocks but still consumes the outer
+budget and can affect system state; the instrumentation alone establishes no
+performance benefit, crash guarantee or product acceptance.
+
 Native deterministic write now retains a strict timed `checkpoint` Result around
 its single original public `Checkpoint(ctx)` call. The actual checked return
 sets success/error, and attempted/succeeded flags derive from that same Result.

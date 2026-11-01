@@ -2,8 +2,10 @@ package ycsbevidence
 
 // This private evidence control is deliberately separate from Mongo wire APIs.
 // It is enabled only by YCSB_OWNER_CHECKPOINT=1, needs the live observer, and
-// admits one request. No callback runs on a timed Mongo request path.
+// admits one checkpoint plus bounded read-only phase observations. No callback
+// runs on a timed Mongo request path.
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -24,8 +26,14 @@ type CheckpointRequest struct {
 	RequestID      string  `json:"request_id"`
 	Client         Process `json:"client"`
 	SourceID       string  `json:"source_id"`
-	FixtureID      string  `json:"fixture_id"`
-	SnapshotSHA256 string  `json:"snapshot_sha256"`
+	FixtureID      string  `json:"fixture_id,omitempty"`
+	SnapshotSHA256 string  `json:"snapshot_sha256,omitempty"`
+	Operation      string  `json:"operation,omitempty"`
+	CampaignID     string  `json:"campaign_id,omitempty"`
+	PhaseID        string  `json:"phase_id,omitempty"`
+	Stem           string  `json:"stem,omitempty"`
+	Boundary       string  `json:"boundary,omitempty"`
+	Sequence       int     `json:"sequence,omitempty"`
 }
 type CheckpointReceipt struct {
 	SchemaVersion int               `json:"schema_version"`
@@ -54,6 +62,10 @@ type CheckpointControl struct {
 // StartCheckpointControl requires callbacks from the actual owning collection
 // manager. A borrowed backend Checkpoint cannot seal native COW accepted state.
 func (o *Observer) StartCheckpointControl(flush, checkpoint func() error) (*CheckpointControl, error) {
+	phase := os.Getenv("YCSB_OWNER_PHASE_STATS")
+	if phase != "" && (phase != "1" || os.Getenv("YCSB_OWNER_CHECKPOINT") != "1" || o == nil || o.backend == nil || o.stats == nil || o.dir == "" || o.ownerID == "") {
+		return nil, errors.New("phase stats require explicit checkpoint control and actual live observer")
+	}
 	if os.Getenv("YCSB_OWNER_CHECKPOINT") == "" {
 		return nil, nil
 	}
@@ -63,6 +75,7 @@ func (o *Observer) StartCheckpointControl(flush, checkpoint func() error) (*Chec
 	return o.startCheckpointControl(flush, checkpoint)
 }
 func (o *Observer) startCheckpointControl(flush, checkpoint func() error) (*CheckpointControl, error) {
+	phaseEnabled := os.Getenv("YCSB_OWNER_PHASE_STATS") == "1"
 	ln, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		return nil, err
@@ -75,6 +88,8 @@ func (o *Observer) startCheckpointControl(flush, checkpoint func() error) (*Chec
 	control := &CheckpointControl{ln, make(chan error, 1)}
 	go func() {
 		var retainedErr error
+		var phaseFailure error
+		var phases phaseStatsOrder
 		defer func() { control.done <- retainedErr }()
 		for {
 			conn, err := ln.Accept()
@@ -88,15 +103,62 @@ func (o *Observer) startCheckpointControl(flush, checkpoint func() error) (*Chec
 			// supervisor. Close waits for the actual callback, never races owner Close.
 			_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 			var request CheckpointRequest
-			decoder := json.NewDecoder(io.LimitReader(conn, 8192))
+			var captured bytes.Buffer
+			bounded := io.LimitReader(conn, 8192)
+			decoder := json.NewDecoder(io.TeeReader(bounded, &captured))
 			decoder.DisallowUnknownFields()
 			err = decoder.Decode(&request)
-			_ = conn.SetDeadline(time.Now().Add(2 * time.Minute))
-			if err == nil && (request.SchemaVersion != 1 || request.OwnerID != o.ownerID || len(request.RequestID) != 32 || len(request.SnapshotSHA256) != 64 || request.SourceID == "" || request.FixtureID == "" || request.Client.PID <= 0 || request.Client.StartTicks == 0 || len(request.Client.EXESHA256) != 64) {
-				err = errors.New("checkpoint request identity mismatch")
-			}
-			response := checkpointResponse{}
 			if err == nil {
+				// Inspect every operation occurrence, including an earlier phase
+				// value hidden by a duplicate. Legacy checkpoint decoding stays
+				// unchanged; only phase requests require the strict JSON frame.
+				phase, frameErr := phaseStatsRequestJSON(captured.Bytes()[:decoder.InputOffset()])
+				if phase {
+					err = frameErr
+					if err == nil {
+						err = phaseStatsRequestTail(captured.Bytes()[decoder.InputOffset():], bounded)
+					}
+				}
+			}
+			_ = conn.SetDeadline(time.Now().Add(2 * time.Minute))
+			response := checkpointResponse{}
+			var wireResponse any = &response
+			phaseAdmitted := false
+			if err == nil && phaseFailure != nil {
+				err = fmt.Errorf("phase stats control is terminal: %w", phaseFailure)
+			}
+			if err == nil && request.Operation == "phase_stats" {
+				phaseResponse := phaseStatsResponse{}
+				if !phaseEnabled {
+					err = errors.New("phase stats are disabled")
+				} else {
+					err = phases.validate(o, request)
+				}
+				if err == nil {
+					phaseAdmitted = true
+					// Once admitted, an observation or evidence-write failure is
+					// terminal. Never retry an observation behind a failed receipt.
+					err = writeNew(filepath.Join(o.dir, fmt.Sprintf("owner.phase-stats-%02d-request.json", request.Sequence)), request)
+					if err == nil {
+						phaseResponse.Receipt, err = o.phaseStats(request)
+						err = errors.Join(err, writeNew(filepath.Join(o.dir, fmt.Sprintf("owner.phase-stats-%02d.json", request.Sequence)), phaseResponse.Receipt))
+					}
+					if err != nil {
+						phaseFailure = err
+						retainedErr = errors.Join(retainedErr, err)
+					} else {
+						phases.last = request
+					}
+				}
+				if err != nil {
+					phaseResponse.Error = err.Error()
+				}
+				wireResponse = &phaseResponse
+			} else if err == nil && request.Operation != "" {
+				err = errors.New("unknown owner control operation")
+			} else if err == nil && (request.SchemaVersion != 1 || request.OwnerID != o.ownerID || len(request.RequestID) != 32 || len(request.SnapshotSHA256) != 64 || request.SourceID == "" || request.FixtureID == "" || request.Client.PID <= 0 || request.Client.StartTicks == 0 || len(request.Client.EXESHA256) != 64 || request.CampaignID != "" || request.PhaseID != "" || request.Stem != "" || request.Boundary != "" || request.Sequence != 0) {
+				err = errors.New("checkpoint request identity mismatch")
+			} else if err == nil {
 				// Reserve the one allowed mutation before executing either callback.
 				err = writeNew(filepath.Join(o.dir, "owner.checkpoint-request.json"), request)
 				if err == nil {
@@ -109,8 +171,11 @@ func (o *Observer) startCheckpointControl(flush, checkpoint func() error) (*Chec
 			if err != nil {
 				response.Error = err.Error()
 			}
-			if err = json.NewEncoder(conn).Encode(response); err != nil {
+			if err = json.NewEncoder(conn).Encode(wireResponse); err != nil {
 				retainedErr = errors.Join(retainedErr, err)
+				if phaseAdmitted {
+					phaseFailure = errors.Join(phaseFailure, err)
+				}
 			}
 			_ = conn.Close()
 		}
@@ -191,7 +256,7 @@ func RequestCheckpoint(ctx context.Context, dir, sourceID, fixtureID, snapshotPa
 	if _, err = rand.Read(token); err != nil {
 		return CheckpointReceipt{}, err
 	}
-	request := CheckpointRequest{1, opened.OwnerID, hex.EncodeToString(token), client, sourceID, fixtureID, hex.EncodeToString(sum[:])}
+	request := CheckpointRequest{SchemaVersion: 1, OwnerID: opened.OwnerID, RequestID: hex.EncodeToString(token), Client: client, SourceID: sourceID, FixtureID: fixtureID, SnapshotSHA256: hex.EncodeToString(sum[:])}
 	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp4", endpoint.Address)
 	if err != nil {
 		return CheckpointReceipt{}, err
