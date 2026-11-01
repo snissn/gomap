@@ -2,7 +2,6 @@ package collections
 
 import (
 	"errors"
-	"reflect"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -28,6 +27,7 @@ func TestNativeLeafPackGraphRefreshPreservesCompleteSourceAndOldViews(t *testing
 		t.Fatalf("manifest-only move did not select primary: plan=%+v error=%v", g, err)
 	}
 	before := f.budget.Stats()
+	lastPeak := before.PeakBytes
 	for failAt := 0; failAt <= 2; failAt++ {
 		calls := 0
 		admit := func(n uint64) (cowbtree.OwnedMapLease, error) {
@@ -68,7 +68,16 @@ func TestNativeLeafPackGraphRefreshPreservesCompleteSourceAndOldViews(t *testing
 			second.release().Complete()
 		}
 		next.release().Complete()
-		if after := f.budget.Stats(); !reflect.DeepEqual(before, after) {
+		after := f.budget.Stats()
+		if after.PeakBytes < lastPeak {
+			t.Fatalf("allocation high-water mark decreased: previous=%d after=%+v", lastPeak, after)
+		}
+		lastPeak = after.PeakBytes
+		// A successful private clone raises the cumulative high-water mark;
+		// cleanup must refund every live byte and owner, not reset history.
+		afterLive := after
+		afterLive.PeakBytes = before.PeakBytes
+		if afterLive != before {
 			t.Fatalf("partial/success cleanup leaked: before=%+v after=%+v", before, after)
 		}
 		if newer.previous != f.original || f.original.previous != older || f.original.graphSourceRoot != 10 || f.original.data.graph.sourceRoot != 10 {
