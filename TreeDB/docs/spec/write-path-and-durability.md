@@ -1156,14 +1156,27 @@ its successful boundary is invalidated, retaining its actual attempt/wait facts.
 Assignment/physical ambiguity retains existing poison and no-replay rules.
 Preassignment refusal need not poison an otherwise healthy owner.
 
-Default insert/transaction APIs, updates, direct and repeated native Sync,
+Default insert/update/transaction APIs, direct and repeated native Sync,
 WriteSync and physical maintenance keep their existing fresh boundaries. Unknown,
 classic, unbound, NoWAL, unsupported metadata and empty operations cannot obtain
 an original-owner operation receipt; their caller retains its normal fence.
-The gateway initially opts in only existing-collection single-document BSON
-inserts. Auto-create and multi-document commands have wider effect coverage and
-retain the conservative fresh post-dispatch fence, as do partial DDL/auth/update
+The gateway opts in existing-collection single-document BSON inserts and
+single-spec exact-ID, non-upsert, non-multi top-level BSON `$set` updates. Auto-create and multi-document commands have wider effect coverage and
+retain the conservative fresh post-dispatch fence, as do partial DDL/auth/multi-update
 errors and any custom sync override. Coalescing requests durability if any actual
 eligible strict member needs it, then returns the same publication result only
 to those strict members after all batch cleanup. Byte splitting and duplicate
 fallback cannot transfer one sub-batch's receipt to another.
+
+The update sibling API is
+`Collection.UpdateBSONSetBatchIfNoSecondaryUniqueIndexChangesWithJournalReceipt`.
+Its captured BSON schema excludes column, vector and text effects. The existing
+transaction result carries the same original-owner completion as insertion;
+ordinary nil callers do not request a receipt. Only actually modified members
+receive shared publication coverage. Missing/no-op members, declined unique-index
+plans and unsupported owners retain their ordinary fresh-fence obligation.
+The gateway's command-local optional budget destination is written before the
+existing small completion-channel send; it does not enlarge queued items or
+result channels. Selected completion errors are checked before unbatched fallback,
+so no member replays an assigned failure. Checked transaction Close, producer
+unlock and accepted-mutation invalidation all precede successful outward coverage.

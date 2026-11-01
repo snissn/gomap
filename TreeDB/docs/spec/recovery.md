@@ -1031,7 +1031,7 @@ without checkpoint fallback or canonical-command retry. Immediate-exit tests
 distinguish journal recovery from graceful Close, which still completes physical
 checkpoint work.
 
-Operation-scoped BSON insert receipts reuse that same original public group and
+Operation-scoped BSON insert and eligible BSON-set update receipts reuse that same original public group and
 recovery suffix. Their own assigned publication must finish a real durable wait
 and checked cleanup before ACK; a separate fresh forced epoch is unnecessary for
 that opt-in contract. This is distinct from direct/repeated prefix Sync, whose

@@ -1027,3 +1027,11 @@ findAndModify, insert and update. Authentication commands, classic/unbound/NoWAL
 owners and custom sync overrides keep the exclusive boundary. Auth storage is not
 identified by the collection manager. Visible/default and cluster policy, repeated
 real explicit forced fences and the existing default collector remain unchanged.
+
+The opt-in BSON-set batch sibling
+`Collection.UpdateBSONSetBatchIfNoSecondaryUniqueIndexChangesWithJournalReceipt`
+returns original-owner physical completion only for a changed ordinary BSON
+publication after checked cleanup and producer unlock. `batched=false` does not
+authorize replay of a selected error. Default APIs retain nil receipt intent;
+missing/no-op, unsupported, auxiliary and wider commands retain fresh fences.
+See [operation completion](write-path-and-durability.md#operation-scoped-native-journal-completion).

@@ -227,7 +227,7 @@ func TestNativeBSONJournalReceiptCheckedCleanupInvalidatesSuccess(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := nativeInsertJournal{requested: true}
+	request := nativeOperationJournal{requested: true}
 	_, retry, err := finishNativeJSONInsertWithJournal(tx, nil, [][]byte{[]byte("cleanup")}, [][]byte{doc}, nil, false, nil, &request)
 	if !errors.Is(err, failure) || retry || !request.completion.Selected() || !request.completion.Attempted() || request.completion.Completed() {
 		t.Fatalf("cleanup lost selected error or exported success: completion=%+v retry=%t err=%v", request.completion, retry, err)

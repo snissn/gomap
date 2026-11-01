@@ -181,12 +181,16 @@ func (s *Server) standaloneWriteCommandResponse(ctx context.Context, name string
 		defer s.standaloneWriteBoundaryMu.RUnlock()
 	}
 
-	var insertJournal *standaloneInsertJournalOutcome
+	var operationJournal *standaloneOperationJournalOutcome
 	var response wire.Document
 	var dispatchErr error
-	if concern.policy == standaloneWriteConcernJournal && name == "insert" && s.canShareStandaloneJournalBoundary(name) {
-		insertJournal = &standaloneInsertJournalOutcome{}
-		response, dispatchErr = s.insertResponseWithJournal(ctx, command, sequences, insertJournal)
+	if concern.policy == standaloneWriteConcernJournal && (name == "insert" || name == "update") && s.canShareStandaloneJournalBoundary(name) {
+		operationJournal = &standaloneOperationJournalOutcome{}
+		if name == "insert" {
+			response, dispatchErr = s.insertResponseWithJournal(ctx, command, sequences, operationJournal)
+		} else {
+			response, dispatchErr = s.updateResponseWithJournal(ctx, command, sequences, operationJournal)
+		}
 	} else {
 		response, dispatchErr = s.dispatchCommandResponse(ctx, name, command, sequences, cursorOwner)
 	}
@@ -208,8 +212,8 @@ func (s *Server) standaloneWriteCommandResponse(ctx context.Context, name string
 	// before returning, including command-error responses.
 	var physicalSync bool
 	var syncErr error
-	if insertJournal != nil && insertJournal.completion.Selected() {
-		completion := insertJournal.completion
+	if operationJournal != nil && operationJournal.completion.Selected() {
+		completion := operationJournal.completion
 		// The same original owner's assigned publication already performed the
 		// actual native durability wait. Never replay or issue a masking force.
 		if completion.Attempted() {
@@ -217,7 +221,7 @@ func (s *Server) standaloneWriteCommandResponse(ctx context.Context, name string
 		}
 		stats.journalSyncNanos.Add(completion.WaitNanos())
 		physicalSync = completion.Completed()
-		syncErr = insertJournal.err
+		syncErr = operationJournal.err
 		if syncErr == nil && !physicalSync {
 			syncErr = errors.New("native operation journal completion did not complete")
 		}

@@ -532,3 +532,15 @@ truncation. Stable ties still require at most one unfixed component. Query
 key/group/result backing is admitted before copying or growing, and temporary
 aliases end before refund. Only independently owned result IDs escape. Default
 resource limits and the tuple/command formats are unchanged.
+
+## Opt-in BSON-set journal completion
+
+`UpdateBSONSetBatchIfNoSecondaryUniqueIndexChangesWithJournalReceipt` returns the
+ordinary results and batching decision plus an opaque original-owner physical
+completion. Captured ordinary BSON changes use the existing native publication
+and completion group; vector/text/column effects and unsupported owners remain
+unselected. A batch receipt covers its changed members, not missing or unchanged
+neighbors. Checked transaction cleanup and the producer unlock end before the
+public sibling returns. Selected failure is terminal even if `batched` is false;
+callers must not replay or issue a masking Sync. Default BSON-set APIs remain nil
+receipt callers, and direct/repeated Sync still requires fresh physical work.

@@ -362,15 +362,19 @@ COW and maintenance diagnostics with existing lifecycle admission.
 
 For the native standalone COW owner, explicit `w:1,j:true` uses the original
 public command-WAL completion group without constructing a physical root checkpoint.
-An existing-collection single-document BSON insert opts into its own assigned
+An existing-collection single-document BSON insert or exact-ID, non-upsert,
+non-multi top-level BSON `$set` update opts into its own assigned
 publication's physical completion. The opt-in collection sibling API returns an
 opaque same-owner receipt only after the real registered durable wait, checked
 transaction cleanup and outer producer unlock. Coalesced strict members can share
 that publication; plain members receive no journal receipt or journal counters.
 Byte-split and sequential fallback members retain their exact own outcomes.
+Update coalescing returns shared coverage only to changed strict members; no-op
+and missing members still close a fresh boundary. A selected update failure is
+terminal even when the collection reports an unbatched result.
 The receipt covers the operation's effects and persistent dependencies, without
 promising completion of an unrelated later prefix. Zero/unselected, auto-create,
-multi-document commands, auxiliary/typed follow-up work and updates keep the
+multi-document commands, auxiliary/typed follow-up work and other updates keep the
 fresh post-dispatch prefix fence. Direct and repeated Sync still do fresh physical
 work. No default collection API, profile, group delay or collector limit changes.
 The configured profile's ordinary acknowledgement behavior is unchanged. Every

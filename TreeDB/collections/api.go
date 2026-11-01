@@ -11958,7 +11958,7 @@ func (c *Collection) InsertBatchValidatedBSONWithJournalReceipt(ids, documents [
 		resultIDs, err = c.InsertBatchValidatedBSON(ids, documents)
 		return
 	}
-	journal := nativeInsertJournal{requested: true}
+	journal := nativeOperationJournal{requested: true}
 	resultIDs, err = c.nativeInsertBatchWithJournal(ids, documents, nil, nil, true, &journal)
 	// The original transaction Close and outer producer unlock have both ended.
 	completion = journal.completion

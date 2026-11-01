@@ -51,14 +51,23 @@ func (c *Collection) nativeInsertBatchWithResultIDs(ids, documents [][]byte, req
 	return c.nativeInsertBatchWithJournal(ids, documents, requested, projection, returnResultIDs, nil)
 }
 
-// nativeInsertJournal belongs to this one synchronous operation. It is never
+// nativeOperationJournal belongs to this one synchronous operation. It is never
 // stored on a Collection or read from a last-result/cache diagnostic.
-type nativeInsertJournal struct {
+type nativeOperationJournal struct {
 	requested  bool
 	completion backenddb.NativeJournalCompletion
 }
 
-func (c *Collection) nativeInsertBatchWithJournal(ids, documents [][]byte, requested *CollectionInsertStats, projection *trustedFloat32Projection, returnResultIDs bool, journal *nativeInsertJournal) ([][]byte, error) {
+// selectCapturedBSON authenticates the schema of the actual transaction. The
+// completion owner is authenticated independently by CommitNative's bridge.
+func (j *nativeOperationJournal) selectCapturedBSON(meta CollectionMeta) {
+	if j != nil {
+		j.requested = j.requested && normalizedDocumentFormat(meta.Options.DocumentFormat) == DocumentFormatBSON &&
+			meta.Options.ColumnStore == nil && len(meta.VectorIndexes) == 0 && len(meta.TextIndexes) == 0
+	}
+}
+
+func (c *Collection) nativeInsertBatchWithJournal(ids, documents [][]byte, requested *CollectionInsertStats, projection *trustedFloat32Projection, returnResultIDs bool, journal *nativeOperationJournal) ([][]byte, error) {
 	if c.manager.isClosing() {
 		return nil, backenddb.ErrClosed
 	}
@@ -135,7 +144,7 @@ func (c *Collection) nativeInsertPreparedOnce(ids, documents [][]byte, stats *Co
 	return c.nativeInsertPreparedOnceWithJournal(ids, documents, stats, ordinaryOnly, projection, nil)
 }
 
-func (c *Collection) nativeInsertPreparedOnceWithJournal(ids, documents [][]byte, stats *CollectionInsertStats, ordinaryOnly bool, projection *trustedFloat32Projection, journal *nativeInsertJournal) (bool, bool, error) {
+func (c *Collection) nativeInsertPreparedOnceWithJournal(ids, documents [][]byte, stats *CollectionInsertStats, ordinaryOnly bool, projection *trustedFloat32Projection, journal *nativeOperationJournal) (bool, bool, error) {
 	unlockVector, _, err := c.prepareNativeProducerMutation()
 	if err != nil {
 		return false, false, err

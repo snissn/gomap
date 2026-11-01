@@ -24,7 +24,19 @@ func (c *Collection) nativeUpdateBatch(items []UpdateBatchItem) ([]UpdateBatchRe
 // A conditional decline closes the original private transaction without claiming
 // an identity. The same captured metadata and encoded old/new scalar states are
 // used by ordinary callbacks and structured BSON updates.
-func (c *Collection) nativeUpdateBatchMode(items []UpdateBatchItem, mode updateBatchMode, bsonItems []BSONSetUpdateBatchItem) (results []UpdateBatchResult, complete bool, resultErr error) {
+func (c *Collection) nativeUpdateBatchMode(items []UpdateBatchItem, mode updateBatchMode, bsonItems []BSONSetUpdateBatchItem) ([]UpdateBatchResult, bool, error) {
+	return c.nativeUpdateBatchModeWithJournal(items, mode, bsonItems, nil)
+}
+
+func (c *Collection) nativeUpdateBatchModeWithJournal(items []UpdateBatchItem, mode updateBatchMode, bsonItems []BSONSetUpdateBatchItem, journal *nativeOperationJournal) (results []UpdateBatchResult, complete bool, resultErr error) {
+	if journal != nil {
+		defer func() {
+			if failure := recover(); failure != nil {
+				journal.completion = journal.completion.WithoutSuccess()
+				panic(failure)
+			}
+		}()
+	}
 	if c.manager.isClosing() {
 		return nil, false, backenddb.ErrClosed
 	}
@@ -42,12 +54,18 @@ func (c *Collection) nativeUpdateBatchMode(items []UpdateBatchItem, mode updateB
 	if err != nil {
 		return nil, false, err
 	}
-	defer func() { resultErr = errors.Join(resultErr, tx.Close()) }()
+	defer func() {
+		resultErr = errors.Join(resultErr, tx.Close())
+		if resultErr != nil && journal != nil {
+			journal.completion = journal.completion.WithoutSuccess()
+		}
+	}()
 	count := len(items)
 	if bsonItems != nil {
 		count = len(bsonItems)
 	}
 	g := tx.binding(c.name)
+	journal.selectCapturedBSON(g.probe.meta)
 	if bsonItems != nil {
 		items, err = tx.prepareNativeBSONSetItems(c.name, bsonItems)
 		if err != nil {
@@ -96,7 +114,7 @@ func (c *Collection) nativeUpdateBatchMode(items []UpdateBatchItem, mode updateB
 		}
 	}
 	if len(tx.members) != 0 {
-		if err = tx.Commit(); err != nil {
+		if err = tx.commitNativePlanWithJournal(false, nil, false, nil, nil, journal); err != nil {
 			return nil, false, err
 		}
 	}

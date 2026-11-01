@@ -45,7 +45,7 @@ func TestStandaloneNativeJournalReceiptCoalescerMembership(t *testing.T) {
 					}
 					batch[i] = mongoInsertCoalescerRequest{col: col, id: []byte(fmt.Sprint(i)), stored: stored, done: make(chan mongoInsertCoalescerResult, 1)}
 					if i != 1 {
-						batch[i].journal = &standaloneInsertJournalOutcome{}
+						batch[i].journal = &standaloneOperationJournalOutcome{}
 					}
 				}
 				if split {
@@ -80,9 +80,9 @@ func TestStandaloneNativeJournalReceiptCoalescerMembership(t *testing.T) {
 				// Duplicate fallback reuses only the independently successful member's
 				// own publication; the rejected member never inherits that receipt.
 				duplicate := batch[0]
-				duplicate.done, duplicate.journal = make(chan mongoInsertCoalescerResult, 1), &standaloneInsertJournalOutcome{}
+				duplicate.done, duplicate.journal = make(chan mongoInsertCoalescerResult, 1), &standaloneOperationJournalOutcome{}
 				fresh := batch[2]
-				fresh.id, fresh.done, fresh.journal = []byte("new"), make(chan mongoInsertCoalescerResult, 1), &standaloneInsertJournalOutcome{}
+				fresh.id, fresh.done, fresh.journal = []byte("new"), make(chan mongoInsertCoalescerResult, 1), &standaloneOperationJournalOutcome{}
 				worker.runInsertBatch([]mongoInsertCoalescerRequest{duplicate, fresh})
 				if r := <-duplicate.done; r.err == nil || duplicate.journal.completion.Selected() {
 					t.Fatalf("duplicate acquired receipt: %+v/%v", duplicate.journal.completion, r.err)

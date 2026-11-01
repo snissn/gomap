@@ -444,7 +444,7 @@ func (t *NativeJSONTxn) commitNativePlanWithStatsObserved(sealed bool, apply *na
 	return t.commitNativePlanWithJournal(sealed, apply, typedGroup, stats, expired, nil)
 }
 
-func (t *NativeJSONTxn) commitNativePlanWithJournal(sealed bool, apply *nativeCommandWALApplyCommit, typedGroup bool, stats *CollectionInsertStats, expired *bool, journal *nativeInsertJournal) (resultErr error) {
+func (t *NativeJSONTxn) commitNativePlanWithJournal(sealed bool, apply *nativeCommandWALApplyCommit, typedGroup bool, stats *CollectionInsertStats, expired *bool, journal *nativeOperationJournal) (resultErr error) {
 	if expired != nil {
 		*expired = false
 	}

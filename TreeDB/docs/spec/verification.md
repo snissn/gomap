@@ -4992,3 +4992,21 @@ fakes remain unable to manufacture original-owner receipts.
 inserts plus fresh Sync against opt-in completion, reporting allocations with
 checked original/fresh-owner readback and lifecycle outside request timing.
 Source assertions do not establish execution or performance qualification.
+
+BSON-set operation receipt source controls add
+`TestStandaloneNativeJournalCoalescedBSONSetPhysicalReceiptNoRefence` with the
+byte-exact admitted durable baseline regression: default queued batching, shared
+publication, real physical Before/After, exact BSON and checked original/fresh
+Close precede its final no-refence invariant. Both-profile
+`TestStandaloneNativeUpdateJournalReceiptMembership` checks strict/plain,
+changed/no-op/missing and duplicate sequential membership;
+`TestStandaloneNativeUpdateJournalReceiptFailureNoReplay` requires one real sync
+failure/uncertainty without a masking force. Collection controls
+`TestNativeBSONSetJournalReceiptOwnerNoopAndNoWAL` and
+`TestNativeBSONSetJournalReceiptTextFallback` retain owner/reopen and excluded-index
+effects. `BenchmarkCollectionBSONSetJournalReceipt` alternates real binary updates
+on the same owner, compares ordinary nil-plus-Sync with selected completion and
+checks exact original/fresh values outside timing. These are source controls;
+execution, allocation/public tails, race, crash, rotation and final qualification
+remain separate gates. Preserve the existing unordered planning-error continuation
+and pre-publication deadline controls unchanged.
