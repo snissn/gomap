@@ -241,6 +241,21 @@ func (l *leafGenerationPackTransitionHandoffLog) ReserveLeafPageLogSequence(floo
 	return l.seq.ReserveLeafPageLogSequence(floor)
 }
 
+// Embedding LeafPageLog alone hides the writer's optional segment inventories.
+// Preserve the same producer registration path used by the cached leaf owner;
+// otherwise a later WriteSync cannot register the rotated successor it appends.
+func (l *leafGenerationPackTransitionHandoffLog) CreatedLeafPageLogSegmentsSnapshot() ([]LeafPageLogSegment, error) {
+	return leafPageLogCreatedSegments(l.LeafPageLog)
+}
+
+func (l *leafGenerationPackTransitionHandoffLog) CurrentLeafPageLogSegmentsSnapshot() ([]LeafPageLogSegment, error) {
+	return leafPageLogCurrentSegments(l.LeafPageLog)
+}
+
+func (l *leafGenerationPackTransitionHandoffLog) MarkLeafPageLogSegmentsRegistered(segments []LeafPageLogSegment) {
+	markLeafPageLogSegmentsRegistered(l.LeafPageLog, segments)
+}
+
 func installLeafGenerationPackTransitionHandoff(t *testing.T, d *DB, leafLog *rewriteWriter, handoff func() error) {
 	t.Helper()
 	originalLog, originalSeq := d.leafPageLog, leafLog.leafSeqAllocator
