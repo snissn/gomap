@@ -43,8 +43,8 @@ func TestStandaloneNativeJournalCoalescedInsertPhysicalReceiptNoRefence(t *testi
 	defer cancelContext()
 	ids := [3]string{"occupy-worker", "batch-one", "batch-two"}
 	type result struct {
-		id any
-		err error
+		id              any
+		err             error
 		after, returned uint64
 	}
 	results := [3]chan result{make(chan result, 1), make(chan result, 1), make(chan result, 1)}

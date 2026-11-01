@@ -11943,7 +11943,7 @@ func (c *Collection) InsertBatchValidatedBSON(ids, documents [][]byte) ([][]byte
 // operation's assigned native publication. It never promises a later unrelated
 // prefix. Zero/unselected keeps the caller's ordinary fresh-fence obligation.
 // Default insert APIs and direct Sync retain their existing physical contract.
-// A selected error is terminal: callers must not replay or mask it with Sync.
+// A selected error is terminal: callers must not resubmit or mask it with Sync.
 func (c *Collection) InsertBatchValidatedBSONWithJournalReceipt(ids, documents [][]byte) (resultIDs [][]byte, completion backenddb.NativeJournalCompletion, err error) {
 	if c == nil {
 		return nil, completion, errCollectionNil
