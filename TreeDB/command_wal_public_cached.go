@@ -451,6 +451,24 @@ func (tdb *DB) syncPublicCommandWAL() error {
 	return tdb.forcePublicCommandWALGroupCommit()
 }
 
+// SyncNativeCommandWALPrefix completes a real dependency-complete journal
+// boundary on this original public native owner. It deliberately does not seal
+// physical roots. The existing forced group releases operation/publication/raw
+// gates before physical I/O and waiting; the lifecycle lease stays through ACK.
+func (tdb *DB) SyncNativeCommandWALPrefix() error {
+	if err := tdb.beginPublicOperation(); err != nil {
+		return err
+	}
+	defer tdb.lifecycleMu.RUnlock()
+	if !tdb.commandWALCached || tdb.cached == nil || !tdb.cached.COWMode() || tdb.backend == nil {
+		return db.ErrNativeSemanticUnsupported
+	}
+	if err := tdb.backend.CheckNativeCommandWALPrefixOwner(tdb.txnOwner); err != nil {
+		return err
+	}
+	return tdb.syncPublicCommandWAL()
+}
+
 // Refused constructors return an immutable carrier rather than allocating an
 // uncharged public wrapper. Every mutable entry point checks batchError first.
 var cowDeniedPublicBatch = commandWALPublicBatch{cowState: &commandWALPublicCOWState{batchError: memtable.ErrCOWCapacity}}

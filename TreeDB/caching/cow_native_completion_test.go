@@ -2,6 +2,7 @@ package caching
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 	"unsafe"
 
@@ -17,6 +18,12 @@ type nativeCompletionTestBridge struct {
 	appendCalls, completions int
 	assigned                 uint64
 	appendSync               bool
+}
+
+// This lower-level fake exercises ordinary request receipts only. Journal
+// fences must use the actual public owner/lifecycle tests, never fake success.
+func (*nativeCompletionTestBridge) SyncNativeCommandWALPrefix() error {
+	return backenddb.ErrNativeSemanticUnsupported
 }
 
 func (*nativeCompletionTestBridge) NativeCommandWALCompletionBytes() uint64 {
@@ -118,5 +125,30 @@ func testCOWNativeCompletionAssignedFailureKeepsIdentity(t *testing.T, capturedD
 	}
 	if plan.calls != 1 || bridge.appendCalls != 1 || bridge.completions != 1 {
 		t.Fatalf("reexecuted original plan=%d bridge=%+v", plan.calls, bridge)
+	}
+}
+
+// Direct native constructors have no original public completion bridge. Only
+// an already-active, healthy original owner can report this capability miss.
+func TestCOWNativeJournalPrefixUnboundCapability(t *testing.T) {
+	for _, wal := range []bool{false, true} {
+		t.Run(fmt.Sprintf("wal=%t", wal), func(t *testing.T) {
+			cache, backend := nativeBridgeFixture(t, wal)
+			if supported, err := backend.SyncNativeCommandWALPrefix(); supported || !errors.Is(err, backenddb.ErrNativeSemanticUnsupported) {
+				t.Fatalf("inactive native capability=%t/%v", supported, err)
+			}
+			if err := backend.ActivateNativeSemanticOwner(); err != nil {
+				t.Fatal(err)
+			}
+			if supported, err := backend.SyncNativeCommandWALPrefix(); supported || err != nil {
+				t.Fatalf("healthy unbound capability=%t/%v", supported, err)
+			}
+			if err := cache.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if supported, err := backend.SyncNativeCommandWALPrefix(); supported || !errors.Is(err, backenddb.ErrClosed) {
+				t.Fatalf("closed native capability=%t/%v", supported, err)
+			}
+		})
 	}
 }

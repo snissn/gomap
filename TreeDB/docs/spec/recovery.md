@@ -1010,3 +1010,23 @@ receives a mutation owner. Receiver applications must resolve their durable
 accepted-install intent and synchronize the external-log snapshot before normal
 validation/replay/health. See the
 [authorized transfer protocol](external-recovery.md#authorized-portable-snapshot-transfer).
+
+## Native explicit journal prefix recovery
+
+An eligible native standalone journal acknowledgement reuses the original public
+command-WAL completion group. Its captured canonical prefix retains the original
+command files, namespace/rotation debt and referenced value/dictionary
+dependencies through physical synchronization and waiter completion. It does not
+materialize a physical root or advance that root's `AppliedCommandLSN`; startup
+replays the synchronized canonical suffix from the existing physical seal. No
+new frame, intent or replay format is introduced. NoWAL retains a complete-root
+checkpoint fallback.
+
+A native fence failure after assignment or during ambiguous physical sync
+preserves installed effects and the original assigned command identities,
+propagates uncertainty and poisons subsequent mutation/fence admission.
+Preassignment force-only capture or admission refusal is terminal for that call
+and need not poison the owner. Once a callback is selected, every error returns
+without checkpoint fallback or canonical-command retry. Immediate-exit tests
+distinguish journal recovery from graceful Close, which still completes physical
+checkpoint work.

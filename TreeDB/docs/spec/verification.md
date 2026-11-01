@@ -4903,3 +4903,35 @@ Existing `TestNativeTextV2ForwardIdentity*`, `TestNativeHybridPublicScalarPhysic
 forward-corruption, source-work and HNSW cache oracles. The frozen baseline RED
 controls are separate from candidate-focused and unchanged original Keyword
 B/A/A/B public evidence; no helper result replaces performance qualification.
+
+The native explicit journal fence is covered by
+`TestStandaloneServerOfficialDriverJournalFenceWithoutCheckpoint`, using the
+actual standalone opener, both CommandWAL profiles and official-driver journal
+ACKs with exact readback and checked original/fresh-owner Close. Its first
+behavioral assertion requires zero cache-owner checkpoints; the candidate then
+requires forced-group activation. The retained baseline characterization is
+separate from this product regression.
+`TestNativeJournalPrefixOriginalOwnerAndFallback` and
+`TestCOWNativeJournalPrefixUnboundCapability` cover admission and healthy fallback;
+`TestNativeJournalPrefixSyncFailurePoisonsWithoutFallback` injects real retained
+command-file sync failure.
+`TestNativeJournalPrefixRetainsLifecycleReleasesGatesBeforeACK` holds that sync
+and checks lifetime, released gates, Close join and final pin/owner zero.
+`TestNativeJournalPrefixCrashReopenDependencies` exits without checkpoint/Close
+after raw batch and indexed JSON/template writes, with a NoWAL physical control.
+`TestStandaloneNativeJournalPartialDDLAndAuthCrashReopen` covers accepted error
+responses, partial DDL/update and shared auth writes;
+`TestStandaloneNativeJournalPartialErrorRealFenceFailureIsUncertain` preserves
+partial response/error and uncertainty on actual fence failure.
+`TestNativeExistingCollectionPhysicalCheckpointCrashReopen` retains the stronger
+physical `AppliedCommandLSN`, old-view and no-extra-command checks.
+`TestNativeJournalMaintenanceRequiresPhysicalCheckpoint` requires both ordinary
+optimize and typed build/ensure/fold/renew to stop before graph work when their
+actual physical checkpoint fails. Existing classic buffered/deferred lifecycle
+and crash controls remain separate.
+`TestNativeJournalMaintenanceClassicFlushFailureBeforeWork` starts with actual classic
+buffered publication and refuses its auxiliary asset sync in both ordinary and
+typed no-deferred optimize paths; it requires retained buffered debt, unchanged
+graph status, original error mapping and no physical root-seal activity.
+Process-exit recovery does not establish
+power-loss or replica durability.

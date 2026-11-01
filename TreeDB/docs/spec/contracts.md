@@ -822,11 +822,20 @@ Mongo gateway:
   profile. In particular, `command_wal_relaxed` and `no_wal_fast` do not gain a
   stronger promise from an ordinary acknowledgement.
 - A successful standalone `j: true` acknowledgement completes
-  `CollectionManager.SyncForStandaloneWriteConcern`. A native manager uses its
-  existing cache owner's checkpoint to seal and synchronize the complete
-  captured raw/collection prefix, including persistent value-log dependencies,
-  and reports a physical sync on every successful call. A legacy manager first
-  drains collection publishing, then completes `SyncCommandWALAppliedPrefix`
+  `CollectionManager.SyncForStandaloneWriteConcern`. An eligible native
+  CommandWAL manager invokes the same original public owner's forced journal
+  completion group, synchronizing its complete captured raw/collection prefix
+  and persistent dependencies without a physical root checkpoint. The original
+  public lifetime is retained through completion; publication/raw gates are
+  released before the file-sync wait. Repeated successful calls still force a
+  real boundary and return `physicalSync=true`; that boolean records completed
+  success rather than an exact syscall-attempt count. NoWAL and healthy direct
+  native constructors without the public bridge retain the same cache owner's
+  physical checkpoint fallback. Nil, closed, poisoned or inactive owners reject;
+  a selected callback error never retries or falls back. Physical maintenance
+  and snapshot/root/`AppliedCommandLSN` seals continue to use `FlushAll` then
+  `CheckpointStorage`, whose physical contract is unchanged. A legacy manager
+  first drains collection publishing, then completes `SyncCommandWALAppliedPrefix`
   when command WAL is enabled or `DB.Checkpoint` when it is disabled. The legacy
   command-WAL boundary syncs a relaxed suffix and publishes its durable-prefix
   barrier as a root-neutral contiguous applied command; an already-durable

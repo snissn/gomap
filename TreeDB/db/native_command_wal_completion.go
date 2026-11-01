@@ -15,6 +15,7 @@ type NativeCommandWALCompletion interface {
 type NativeCommandWALCompletionBridge interface {
 	NativeCommandWALCompletionBytes() uint64
 	PrepareNativeCommandWAL(int, bool) (NativeCommandWALCompletion, error)
+	SyncNativeCommandWALPrefix() error
 }
 
 func (db *DB) BindNativeCommandWALCompletion(owner *transactionowner.Owner, bridge NativeCommandWALCompletionBridge) error {
@@ -23,6 +24,39 @@ func (db *DB) BindNativeCommandWALCompletion(owner *transactionowner.Owner, brid
 	}
 	db.nativeCommandWALCompletion = bridge
 	return nil
+}
+
+// CheckNativeCommandWALPrefixOwner admits only the already-active original
+// private COW owner. It neither activates a raw owner nor retains a backend
+// lock across public lifecycle acquisition. The public callback supplies the
+// retained lifetime; activation's existing open/poison gates also cover NoWAL.
+func (db *DB) CheckNativeCommandWALPrefixOwner(owner *transactionowner.Owner) error {
+	if db == nil || db.closing.Load() {
+		return ErrClosed
+	}
+	if err := db.commandWALPoisonedError(); err != nil {
+		return err
+	}
+	if owner == nil || owner != db.privateCOWOwner || !db.nativeSemanticActive.Load() || !db.HasNativeSemanticBridge() {
+		return ErrNativeSemanticUnsupported
+	}
+	return db.ActivateNativeSemanticOwner()
+}
+
+// SyncNativeCommandWALPrefix dispatches through the once-bound original public
+// completion owner. A healthy capability miss permits a physical checkpoint;
+// after callback selection every error is final, without retry or fallback.
+func (db *DB) SyncNativeCommandWALPrefix() (supported bool, err error) {
+	if db == nil {
+		return false, ErrClosed
+	}
+	if err := db.CheckNativeCommandWALPrefixOwner(db.privateCOWOwner); err != nil {
+		return false, err
+	}
+	if !db.CommandWALEnabled() || db.nativeCommandWALCompletion == nil {
+		return false, nil
+	}
+	return true, db.nativeCommandWALCompletion.SyncNativeCommandWALPrefix()
 }
 
 // NativeCommandWALCompletionFor authenticates the original unassigned intent.

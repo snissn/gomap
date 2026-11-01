@@ -4629,3 +4629,14 @@ Both recoverable roots retain authority until convergence succeeds; reader,
 prepared-publication and current-writer pins continue to govern physical source
 unlink. See [write path and durability](write-path-and-durability.md) and
 [value-log lifecycle](value-log-lifecycle.md).
+
+## Native journal acknowledgement boundary
+
+The native explicit journal fence changes no on-disk encoding. It reuses the
+existing canonical command prefix, dependency capture and durable-prefix barrier
+formats. Its stable journal prefix can be newer than the physically sealed
+root's `AppliedCommandLSN`; recovery replays that suffix through the existing
+original-owner path. Physical checkpoint, snapshot and Close seals retain their
+existing formats and complete dependency requirements. Persistent value-log
+segments remain live until normal reachability and retained-owner rules permit
+reclamation.
