@@ -9,15 +9,53 @@ import "github.com/snissn/gomap/TreeDB/internal/transactionowner"
 // or column compaction, consume a logical source, or prove new build capacity.
 //
 // The fixed-size value owns no resources. Its private endpoints come from the
-// retained copy snapshot and the actual accepted visible-state installation,
-// never a later read of the backend's current state. Only the leaf-pack producer
-// can construct it. Callers keep both original snapshots alive while using it.
+// pre-handoff publication, retained copy snapshot and actual accepted visible-
+// state installation. Only the leaf-pack producer can construct it. Callers
+// keep both original snapshots alive while using it.
 type LeafGenerationPackTransition struct {
-	db     *DB
-	owner  *transactionowner.Owner
-	idx    *indexGen
-	before StateToken
-	after  StateToken
+	db        *DB
+	owner     *transactionowner.Owner
+	idx       *indexGen
+	before    StateToken
+	copyBasis StateToken
+	after     StateToken
+}
+
+// leafGenerationPackHandoffTransition is the producer's single successor-
+// registration edge, not authority for arbitrary generation-view changes. It
+// owns no snapshot, map or resource. A copy retry must join its exact endpoint.
+type leafGenerationPackHandoffTransition struct {
+	db            *DB
+	owner         *transactionowner.Owner
+	idx           *indexGen
+	before, after StateToken
+	changed       bool
+}
+
+func (t leafGenerationPackHandoffTransition) sourceForCopy(db *DB, owner *transactionowner.Owner, snap *Snapshot) (StateToken, error) {
+	if snap == nil || snap.db != db || snap.idx == nil {
+		return StateToken{}, ErrRootPublicationBasisMismatch
+	}
+	copyBasis, ok := stateTokenFromState(snap.state)
+	if !ok {
+		return StateToken{}, ErrRootPublicationBasisMismatch
+	}
+	if t == (leafGenerationPackHandoffTransition{}) {
+		// The backend-owned append fixture has no cached writer to hand off.
+		return copyBasis, nil
+	}
+	expected := t.before
+	if t.changed {
+		expected.LeafGenerationStateVersion++
+		if expected.LeafGenerationStateVersion == 0 {
+			return StateToken{}, ErrRootPublicationBasisMismatch
+		}
+	}
+	if t.db != db || t.owner != owner || owner == nil || owner != db.privateCOWOwner ||
+		t.idx != snap.idx || t.after != expected || copyBasis != t.after {
+		return StateToken{}, ErrRootPublicationBasisMismatch
+	}
+	return t.before, nil
 }
 
 // IsZero reports that no accepted private-COW leaf-pack transition was supplied.
@@ -29,7 +67,17 @@ func (t LeafGenerationPackTransition) IsZero() bool {
 // or allocating. Reversed, foreign, closed and intervening bases fail closed;
 // a later backend publication does not invalidate the two original snapshots.
 func (t LeafGenerationPackTransition) Validate(before, after *Snapshot) error {
+	expectedCopy := t.before
+	if t.copyBasis != t.before {
+		expectedCopy.LeafGenerationStateVersion++
+		if expectedCopy.LeafGenerationStateVersion == 0 {
+			return ErrRootPublicationBasisMismatch
+		}
+	}
 	if t.db == nil || t.owner == nil || t.idx == nil || t.owner != t.db.privateCOWOwner ||
+		t.copyBasis != expectedCopy ||
+		t.after.LeafGenerationStateVersion <= t.copyBasis.LeafGenerationStateVersion ||
+		t.after.LeafGenerationStateVersion != t.copyBasis.LeafGenerationStateVersion+1 ||
 		t.after.CommitSeq <= t.before.CommitSeq || t.after.CommitSeq != t.before.CommitSeq+1 ||
 		t.after.AppliedCommandLSN != t.before.AppliedCommandLSN ||
 		t.after.MaxEntryRevision != t.before.MaxEntryRevision {

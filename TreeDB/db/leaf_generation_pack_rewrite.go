@@ -250,6 +250,7 @@ func (a *leafRefRewritePageAppender) AppendLeafPage(leafPage []byte) (page.LeafL
 
 type leafRefRewriteRunStats struct {
 	privateCOWOwner                        *transactionowner.Owner
+	handoffTransition                      leafGenerationPackHandoffTransition
 	transition                             LeafGenerationPackTransition
 	maintenanceLimits                      LeafGenerationMaintenanceLimits
 	InternalPagesVisited                   int
@@ -1346,6 +1347,13 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	}
 
 	idx := snap.idx
+	transitionBefore, _ := stateTokenFromState(snap.state)
+	if runStats != nil && runStats.privateCOWOwner != nil {
+		transitionBefore, err = runStats.handoffTransition.sourceForCopy(db, runStats.privateCOWOwner, snap)
+		if err != nil {
+			return 0, 0, err
+		}
+	}
 	rootID := snap.state.RootPageID
 	sysRoot := snap.state.SystemRootPageID
 	basis := captureLeafGenerationPackCopyBasis(snap, sourceIDs, singleSourceID, hasSingleSourceID)
@@ -1962,11 +1970,13 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 			before, ok := stateTokenFromState(snap.state)
 			after := post.acceptedStateToken
 			if ok && after.CommitSeq > before.CommitSeq && after.CommitSeq == before.CommitSeq+1 &&
+				after.LeafGenerationStateVersion > before.LeafGenerationStateVersion &&
+				after.LeafGenerationStateVersion == before.LeafGenerationStateVersion+1 &&
 				after.RootPageID == publishedRoot && after.SystemRootPageID == publishedSysRoot &&
 				after.AppliedCommandLSN == before.AppliedCommandLSN && after.MaxEntryRevision == before.MaxEntryRevision {
 				runStats.transition = LeafGenerationPackTransition{
 					db: db, owner: equivalentOwner, idx: idx,
-					before: before, after: after,
+					before: transitionBefore, copyBasis: before, after: after,
 				}
 			}
 		}

@@ -366,6 +366,20 @@ Ordinary ColumnGraph captured-prefix handoff controls (#5338):
 | `TestOrdinaryColumnGraphNativeCloseRetainsCheckpointFailure` | A maintained fault after the actual final META write on a durable ordinary owner; the original first Close preserves the injected cause, recovery-required sentinel and notification without retry. A fresh process owner recovers every acknowledged ordinary document and the final raw marker. |
 | `TestNativeMaterializeDiagnosticRetainsOriginalCatalogFailure` and `TestNativeTypedDiagnosticMarksDeltaOrderAndKeepsFailure` | Original terminal error identity, `errors.Is`/`errors.As` causality, stage discriminator, borrowed-input release and no physical replay or retryable reclassification. |
 
+Private leaf-pack physical handoff controls cover the separate physical
+relocation path; they do not replace the captured-prefix controls above:
+
+| Control | Required evidence |
+| --- | --- |
+| `TestPrivateCOWLeafPackPreservesAcceptedOrdinaryGraph` | Original concrete native backend, public native target/filler writes, a real partly-live leaf pack and actual manifest relocation; assigned, installed, consumed and WAL-stable graph acceptance before cache adoption; original graph completion, exact acknowledged contents, held old reads, checked Close and reopen. Its controlled causal RED remains distinct from the historical CI interleaving. |
+| `TestLeafGenerationPackTransitionFollowsPrivateAcceptance` and `TestLeafGenerationPackTransitionUnownedPublicationHasNoAuthority` | Exact original backend/index/snapshot endpoints, actual accepted install and accepted-error outcome, allocation-free validation, retained old values, and rejection of closed/foreign/reversed/intervening bases. Unowned, declined and preacceptance outcomes cannot mint leaf-pack authority. |
+| `TestNativeLeafPackGraphRefreshPreservesCompleteSourceAndOldViews`, `TestNativeLeafPackGraphRefreshRejectsStaleSource` and `TestNativeLeafPackGraphRefreshKeepsReplacementAndRequiresProof` | Privately admitted header advancement preserves recipes, original capacity, every older source and old views; successive transitions and partial-admission refunds; stale/schema/unassigned/zero/unsupported source rejection and unchanged full-replacement zero base. These are component guards, not public overlap evidence. |
+
+Keep the existing private-pack concurrent-WAL/held-cut, accepted-error, GC
+convergence, fallback and deferred-fallback controls. Run affected controls in
+normal and race modes, retain every failed attempt and require actual named
+test execution with no skips. Source review alone is not passing execution.
+
 Run the component controls and the public subprocess/lifecycle controls normally
 and with the race detector. Keep each source-bound command, exit status and
 original failure output. Authored coverage is not an execution result, a passing

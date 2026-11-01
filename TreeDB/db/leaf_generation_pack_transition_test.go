@@ -13,8 +13,19 @@ import (
 )
 
 func TestLeafGenerationPackTransitionFollowsPrivateAcceptance(t *testing.T) {
-	for _, outcome := range []string{"success", "before_acceptance", "accepted_error"} {
-		t.Run(outcome, func(t *testing.T) {
+	for _, tc := range []struct {
+		name, outcome string
+		handoff       bool
+	}{
+		{"success", "success", false},
+		{"before_acceptance", "before_acceptance", false},
+		{"accepted_error", "accepted_error", false},
+		{"handoff_success", "success", true},
+		{"handoff_before_acceptance", "before_acceptance", true},
+		{"handoff_accepted_error", "accepted_error", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			outcome := tc.outcome
 			d, leafLog, _ := openLeafGenerationPackTestDB(t)
 			prepareLeafGenerationPackTestCandidate(t, d, leafLog, 1024)
 			// A real collection-root descriptor makes the existing relocation
@@ -37,6 +48,9 @@ func TestLeafGenerationPackTransitionFollowsPrivateAcceptance(t *testing.T) {
 			// ordinary backend write can test the exact-endpoint rejection.
 			if outcome != "success" {
 				d.nativeSemanticActive.Store(true)
+			}
+			if tc.handoff {
+				installLeafGenerationPackTransitionHandoff(t, d, leafLog, func() error { return leafLog.rotateLeaf() })
 			}
 			if _, err := d.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{Force: true}); err != nil {
 				t.Fatal(err)
@@ -113,7 +127,14 @@ func TestLeafGenerationPackTransitionFollowsPrivateAcceptance(t *testing.T) {
 			}
 			beforeToken, _ := before.StateToken()
 			afterToken, _ := after.StateToken()
-			t.Logf("outcome=%s before=%+v after=%+v producer_before=%+v producer_after=%+v", outcome, beforeToken, afterToken, stats.Transition.before, stats.Transition.after)
+			t.Logf("outcome=%s before=%+v after=%+v producer_before=%+v copy_basis=%+v producer_after=%+v", tc.name, beforeToken, afterToken, stats.Transition.before, stats.Transition.copyBasis, stats.Transition.after)
+			expectedCopy := beforeToken
+			if tc.handoff {
+				expectedCopy.LeafGenerationStateVersion++
+			}
+			if stats.Transition.copyBasis != expectedCopy {
+				t.Fatalf("wrong composed copy endpoint: got=%+v want=%+v", stats.Transition.copyBasis, expectedCopy)
+			}
 			if err := stats.Transition.Validate(before, after); err != nil {
 				t.Fatalf("actual accepted endpoints: %v", err)
 			}
@@ -160,6 +181,17 @@ func checkLeafGenerationPackTransitionInvalidBases(t *testing.T, d *DB, transiti
 	if err := wrongOwner.Validate(before, after); !errors.Is(err, ErrRootPublicationBasisMismatch) {
 		t.Fatalf("foreign owner accepted: %v", err)
 	}
+	for _, field := range []string{"generation", "logical"} {
+		forged := transition
+		if field == "generation" {
+			forged.copyBasis.LeafGenerationStateVersion++
+		} else {
+			forged.copyBasis.AppliedCommandLSN++
+		}
+		if err := forged.Validate(before, after); !errors.Is(err, ErrRootPublicationBasisMismatch) {
+			t.Fatalf("forged %s midpoint accepted: %v", field, err)
+		}
+	}
 	var validationErr error
 	if allocations := testing.AllocsPerRun(20, func() { validationErr = transition.Validate(before, after) }); allocations != 0 || validationErr != nil {
 		t.Fatalf("validation allocations=%v error=%v", allocations, validationErr)
@@ -194,5 +226,104 @@ func TestLeafGenerationPackTransitionUnownedPublicationHasNoAuthority(t *testing
 	stats, err := d.LeafGenerationPackRunOnce(context.Background(), LeafGenerationPackFromPlanOptions{MaxGenerations: 1, Force: true, Sync: true})
 	if err != nil || !stats.Ran || stats.Pack.BytesCopied == 0 || !stats.Transition.IsZero() {
 		t.Fatalf("unowned publication: stats=%+v error=%v", stats, err)
+	}
+}
+
+// Preserve the actual shared leaf namespace while a real handoff rotation and
+// the packed writer both reserve sequences. The ordinary rewrite fixture has
+// no cached owner or shared reservation capability unless explicitly supplied.
+type leafGenerationPackTransitionHandoffLog struct {
+	packHandoffObservedLog
+	seq LeafPageLogSequenceReserver
+}
+
+func (l *leafGenerationPackTransitionHandoffLog) ReserveLeafPageLogSequence(floor uint32) (uint32, error) {
+	return l.seq.ReserveLeafPageLogSequence(floor)
+}
+
+func installLeafGenerationPackTransitionHandoff(t *testing.T, d *DB, leafLog *rewriteWriter, handoff func() error) {
+	t.Helper()
+	originalLog, originalSeq := d.leafPageLog, leafLog.leafSeqAllocator
+	seq := newLeafLogSeqAllocator(leafLog.leafSeq)
+	leafLog.setLeafPageLogSeqAllocator(seq)
+	observed := &leafGenerationPackTransitionHandoffLog{
+		packHandoffObservedLog: packHandoffObservedLog{
+			packHandoffCachedLog: packHandoffCachedLog{LeafPageLog: originalLog},
+			handoff:              func(context.Context, *transactionowner.Owner, []LeafPageLogPackSource) error { return handoff() },
+		},
+		seq: seq,
+	}
+	d.leafPageLog = observed
+	t.Cleanup(func() {
+		d.leafPageLog = originalLog
+		leafLog.setLeafPageLogSeqAllocator(originalSeq)
+	})
+}
+
+func TestLeafGenerationPackTransitionRejectsUnownedHandoffEdges(t *testing.T) {
+	for _, interval := range []string{"callback_generation", "callback_logical", "copy_generation"} {
+		t.Run(interval, func(t *testing.T) {
+			d, leafLog, _ := openLeafGenerationPackTestDB(t)
+			prepareLeafGenerationPackTestCandidate(t, d, leafLog, 1024)
+			owner := transactionowner.New()
+			if err := d.BindPrivateCOWOwner(owner); err != nil {
+				t.Fatal(err)
+			}
+			// Deliberately use the inactive backend-owner fixture: its public
+			// backend write supplies a real unauthorized logical-edge control.
+			publishGeneration := func() error {
+				if err := leafLog.rotateLeaf(); err != nil {
+					return err
+				}
+				d.writeMu.Lock()
+				changed, err := d.reconcileLeafGenerationManifestWithDirLocked(d.state.Load().CommitSeq)
+				d.writeMu.Unlock()
+				if err == nil && !changed {
+					return errors.New("generation control did not publish")
+				}
+				return err
+			}
+			calls := 0
+			installLeafGenerationPackTransitionHandoff(t, d, leafLog, func() error {
+				calls++
+				switch interval {
+				case "callback_generation":
+					return publishGeneration()
+				case "callback_logical":
+					return d.SetSync([]byte("intervening-logical"), []byte("changed"))
+				default:
+					return leafLog.rotateLeaf()
+				}
+			})
+			originalStaging := makeLeafGenerationPackStagingDirFn
+			if interval == "copy_generation" {
+				makeLeafGenerationPackStagingDirFn = func(dir, prefix string) (string, error) {
+					if err := publishGeneration(); err != nil {
+						return "", err
+					}
+					return originalStaging(dir, prefix)
+				}
+				defer func() { makeLeafGenerationPackStagingDirFn = originalStaging }()
+			}
+			before := d.AcquireSnapshot()
+			if before == nil {
+				t.Fatal("missing original view")
+			}
+			t.Cleanup(func() { closeNoErr(t, before) })
+			stats, err := d.LeafGenerationPackRunOnceForPrivateCOW(owner, context.Background(), LeafGenerationPackFromPlanOptions{MaxGenerations: 1, Force: true, Sync: true})
+			if !errors.Is(err, ErrRootPublicationBasisMismatch) || stats.Ran || !stats.Transition.IsZero() || calls != 1 {
+				t.Fatalf("unauthorized %s edge: calls=%d stats=%+v error=%v", interval, calls, stats, err)
+			}
+			beforeToken, _ := before.StateToken()
+			afterToken, ok := d.StateToken()
+			if !ok || afterToken == beforeToken {
+				t.Fatal("control did not publish an intervening state")
+			}
+			t.Logf("rejected interval=%s before=%+v after=%+v", interval, beforeToken, afterToken)
+			got, err := before.Get(leafGenerationKey("pack-concurrent", 768))
+			if err != nil || !bytes.Equal(got, bytes.Repeat([]byte{'a'}, 32)) {
+				t.Fatalf("original view lost: value=%q error=%v", got, err)
+			}
+		})
 	}
 }
