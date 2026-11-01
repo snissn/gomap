@@ -1439,12 +1439,14 @@ func TestStandaloneNativeJournalSharedBoundaryUnlocksAfterSyncPanic(t *testing.T
 			}
 			attempt := s.Server.writeConcernStats.syncAttempts.Load() + 1
 			failure := errors.New("real shared-entry explicit sync panic")
-			restore := durabilitycut.Install(func(e durabilitycut.Event) error {
+			undo := durabilitycut.Install(func(e durabilitycut.Event) error {
 				if e.Resource == durabilitycut.ResourceCommandWAL && e.Point == durabilitycut.BeforeDependencyFileSync && s.Server.writeConcernStats.syncAttempts.Load() == attempt {
 					panic(failure)
 				}
 				return nil
 			})
+			var restoreOnce sync.Once
+			restore := func() { restoreOnce.Do(undo) }
 			t.Cleanup(restore)
 			command := mustDocument(t, bson.D{{Key: "insert", Value: "rows"}, {Key: "documents", Value: bson.A{bson.D{{Key: "_id", Value: "panic"}}}}, {Key: "writeConcern", Value: bson.D{{Key: "j", Value: true}}}, {Key: "$db", Value: "app"}})
 			var recovered any
