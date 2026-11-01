@@ -377,6 +377,28 @@ checks reuse the window when present and otherwise read their exact bytes.
 Registered file identity checks, full CRC verification before cache promotion,
 page validation, cache disablement and captured-cut lifetimes remain required.
 
+
+Native dictionary leaves at the canonical read limits (the original generation
+limit with the gateway's 512 MiB in-flight envelope) have a separate verified
+cache admission. They still inspect the exact pinned file and admit/reuse the
+original independently owned dictionary definition and bounded codec under
+`physicalMu` before a hit. SHA-256 of the full immutable definition is computed
+once per admitted codec, not per page read. This route keeps the shared physical
+mutex and the existing decoder and allocation policy; it does not borrow the
+ordinary noncanonical fast-hit eligibility.
+
+A successful full-record decode can mark only the still-present byte-identical
+page with that definition digest and an epoch observed before decode. A hit must
+match the original file identity, record verification, full digest and current
+epoch, and copies into caller-owned output under the existing slot lock. Page
+checksum credit remains independent. Maintenance disables the cache and advances
+the dictionary epoch; work spanning maintenance cannot grant stale credit, and
+already marked pages lose dictionary eligibility after maintenance. Replacement
+clears provenance. Disabled, missing, foreign-digest, evicted, contended and
+noncanonical entries keep existing miss/decode/refusal behavior. No provider,
+dictionary handle, file or decoder is retained by a cache slot. Original finite
+slots/probation and same-basis/codec Close/refund continue to bound ownership.
+
 After a full verified decode, repeated COW misses may populate the original
 backend leaf cache through explicit cache-owned admission. Each configured slot
 can lazily allocate one 4096-byte page, reused on eviction; no reader scratch or
