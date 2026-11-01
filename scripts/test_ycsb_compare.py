@@ -218,6 +218,42 @@ class CompareTests(unittest.TestCase):
         self.assertEqual(report[0]["counters"]["treedb.cache.checkpoint.total_ms"]["delta"], "1.000")
         self.assertEqual(report[1]["counters"]["treedb.command_wal.file_sync.calls_total"], dict(available=False))
 
+    def test_phase_stats_rejects_uint64_overflow_after_full_rebinding(self):
+        self.phase_fixture()
+        self.check(True)
+        key = "ycsb.gateway.write_concern.Requests"
+        for index, (stem, boundary) in enumerate((
+                ("load", "before"), ("load", "after"),
+                ("run_1", "before"), ("run_1", "after"))):
+            prefix = stem+".phase-stats-"+boundary
+            request = COMPARE.read(self.directory/(prefix+".request.json"))
+            response = COMPARE.read(self.directory/(prefix+".response.json"))
+            # Rebind every original/copy/hash and preserve monotonicity within
+            # and between pairs; rejection must come from the producer domain.
+            response["receipt"]["owner"]["stats"][key] = str((1 << 64)+index)
+            self.write_phase_packet(stem, boundary, request, response,
+                                    call_result(0,0) if index == 0 else call_result(4,4))
+        self.check(False, "invalid unsigned phase counter: "+key)
+
+    def test_phase_stats_accepts_uint64_max_after_full_rebinding(self):
+        self.phase_fixture()
+        key = "ycsb.gateway.write_concern.Requests"
+        maximum = (1 << 64)-1
+        for index, (stem, boundary) in enumerate((
+                ("load", "before"), ("load", "after"),
+                ("run_1", "before"), ("run_1", "after"))):
+            prefix = stem+".phase-stats-"+boundary
+            request = COMPARE.read(self.directory/(prefix+".request.json"))
+            response = COMPARE.read(self.directory/(prefix+".response.json"))
+            response["receipt"]["owner"]["stats"][key] = str(maximum-3+index)
+            self.write_phase_packet(stem, boundary, request, response,
+                                    call_result(0,0) if index == 0 else call_result(4,4))
+        self.check(True)
+        report = COMPARE.read(self.out/"validation.json")["phase_stats"]["observations"][self.target]
+        for index, row in enumerate(report):
+            self.assertEqual(row["counters"][key], dict(available=True,
+                before=str(maximum-3+2*index), after=str(maximum-2+2*index), delta="1"))
+
     def test_phase_stats_rejects_rebound_counter_identity_and_time_forgery(self):
         cases = {
             "reset": lambda request,response: response["receipt"]["owner"]["stats"].update({"treedb.cache.checkpoint.runs":"0"}),

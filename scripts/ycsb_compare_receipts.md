@@ -275,7 +275,9 @@ The source inventory is `TreeDB/caching/db.go` for checkpoint counters,
 `TreeDB/command_wal_group_commit.go` for group counters, and
 `TreeDB/mongo_gateway/write_concern.go` for gateway counters. Replay uses exact
 integers and finite decimals without float truncation and rejects malformed,
-negative, decreasing or reset present counters. All18 gateway fields and actual
+negative, decreasing or reset present counters. Integer phase counters must be
+within `0..2^64-1`, matching their existing uint64 producer fields; larger digit
+strings are invalid. All18 gateway fields and actual
 profile/backend/logical sequence are required on the enabled route. Other listed
 owner counters absent at either boundary are `available: false`, never zero;
 a frozen campaign may additionally require selected inventory keys through

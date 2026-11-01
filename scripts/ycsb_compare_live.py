@@ -195,7 +195,8 @@ def phase_counter_deltas(before, after, required=()):
             value = snapshot[name]
             c.require(isinstance(value, str), "non-string phase counter: "+name)
             if name in PHASE_INTEGER_COUNTERS:
-                c.require(re.fullmatch(r"[0-9]+", value) is not None, "invalid unsigned phase counter: "+name)
+                c.require(re.fullmatch(r"[0-9]+", value) is not None and int(value) <= (1 << 64)-1,
+                          "invalid unsigned phase counter: "+name)
                 parsed.append(int(value))
             else:
                 try:
