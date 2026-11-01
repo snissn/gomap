@@ -1250,7 +1250,10 @@ else:runpy.run_path(sys.argv[0],run_name='__main__')
         finally:signal.signal(signal.SIGTERM,previous)
 
     def test_hanging_child_deadlines_retain_failure_kill_and_reap(self):
-        controls=(("child-timeout",.15,.05,.5,124),("outer-timeout",30,.05,.15,3),("outer-during-cleanup",.1,.2,.12,124))
+        # The outer clock starts before launch setup, so close wall deadlines
+        # cannot order an alarm during cleanup. That event is sent after the
+        # child's actual TERM marker in the cleanup-cancellation control below.
+        controls=(("child-timeout",.15,.05,.5,124),("outer-timeout",30,.05,.15,3))
         for stem,timeout,cleanup,outer,expected in controls:
             with self.subTest(stem=stem):
                 command=[sys.executable,str(ROOT/"ycsb_compare_validate.py"),"launch","--timeout",str(timeout),"--cleanup-timeout",str(cleanup),"--outer-timeout",str(outer),str(self.directory),stem,"--",sys.executable,"-c","import signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);time.sleep(30)"]
@@ -1279,9 +1282,10 @@ else:runpy.run_path(sys.argv[0],run_name='__main__')
         self.assertNotEqual(outcome.returncode,0)
         self.assertTrue((self.directory/"snapshot_loaded.failure.json").exists(),outcome.stderr)
         failure=COMPARE.read(self.directory/"snapshot_loaded.failure.json")
-        self.assertTrue(failure["timed_out"])
-        self.assertTrue(failure["cleanup"]["reaped"])
-        self.assertFalse(pathlib.Path(f"/proc/{failure['pid']}").exists())
+        detail=outcome.stderr+"\n"+json.dumps(failure,sort_keys=True)
+        self.assertTrue(failure["timed_out"],detail)
+        self.assertTrue(failure["cleanup"]["reaped"],detail)
+        self.assertFalse(pathlib.Path(f"/proc/{failure['pid']}").exists(),detail)
 
     def test_first_core_observation_failure_uses_pinned_direct_child_for_cleanup(self):
         import argparse
@@ -1449,7 +1453,7 @@ else:runpy.run_path(sys.argv[0],run_name='__main__')
     def test_real_cancellation_during_cleanup_waits_for_kill_reap_and_failure_receipt(self):
         import signal
         import time
-        for signum in (signal.SIGTERM,signal.SIGINT):
+        for signum in (signal.SIGTERM,signal.SIGINT,signal.SIGALRM):
             with self.subTest(signum=signum):
                 stem="cleanup-cancellation-"+str(signum)
                 marker=self.directory/(stem+".term-seen")
@@ -1463,7 +1467,10 @@ else:runpy.run_path(sys.argv[0],run_name='__main__')
                     self.assertTrue(marker.exists(),"child must receive cleanup TERM before cancellation")
                     signal.pidfd_send_signal(pin,signum)
                     _,stderr=launcher.communicate(timeout=3)
-                    self.assertNotEqual(launcher.returncode,0,stderr)
+                    if signum==signal.SIGALRM:
+                        self.assertEqual(launcher.returncode,3,stderr)
+                    else:
+                        self.assertNotEqual(launcher.returncode,0,stderr)
                     failure=COMPARE.read(self.directory/(stem+".failure.json"))
                     self.assertTrue(failure["timed_out"])
                     self.assertEqual(failure["error"],"child wait deadline exceeded")
