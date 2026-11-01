@@ -14,6 +14,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/workstats"
 )
 
@@ -71,8 +72,11 @@ func TestNativeJournalMaintenanceRequiresPhysicalCheckpoint(t *testing.T) {
 				t.Fatal("missing built target cache owner")
 			}
 			beforeServing, servingAvailable := nativeJournalMaintenanceServing(col)
-			if (action == "ensure" && servingAvailable) || (action != "ordinary_native" && action != "ensure" && (!servingAvailable || !beforeServing.Ready)) {
-				t.Fatalf("wrong serving admission for %s: available=%t identity=%+v", action, servingAvailable, beforeServing)
+			if action != "ordinary_native" {
+				wantServing := action != "ensure" && rootpublication.StableRelativeNamespaceSupported()
+				if servingAvailable != wantServing || (wantServing && !beforeServing.Ready) {
+					t.Fatalf("wrong serving admission for %s: want=%t available=%t identity=%+v", action, wantServing, servingAvailable, beforeServing)
+				}
 			}
 			beforeDirty := backend.CommandWALNextLSN()
 			if err := dirty([]byte("maintenance-physical-marker"), []byte("same original storage owner")); err != nil {
@@ -187,8 +191,14 @@ func TestNativeJournalMaintenanceClassicFlushFailureBeforeWork(t *testing.T) {
 					}
 					beforeCache := nativeJournalMaintenanceCache(svc)
 					beforeServing, beforeAvailable := nativeJournalMaintenanceServing(col)
-					if beforeCache == nil || (typed && (!beforeAvailable || !beforeServing.Ready)) {
+					if beforeCache == nil {
 						t.Fatal("target graph/cache was not warmed before buffered failure")
+					}
+					if typed {
+						wantServing := rootpublication.StableRelativeNamespaceSupported()
+						if beforeAvailable != wantServing || (wantServing && !beforeServing.Ready) {
+							t.Fatalf("wrong typed serving admission before buffered failure: want=%t available=%t identity=%+v", wantServing, beforeAvailable, beforeServing)
+						}
 					}
 					beforeWork := workstats.Read().Fold
 					nextLSN := backend.CommandWALNextLSN()
@@ -272,6 +282,36 @@ func TestNativeJournalMaintenanceClassicFlushFailureBeforeWork(t *testing.T) {
 	}
 }
 
+// Verify the platform capability through the public service boundary as well
+// as exercising prerequisite failures. A successful physical prerequisite must
+// not turn an unsupported namespace into an admitted serving publication.
+func TestNativeJournalMaintenanceServingCapability(t *testing.T) {
+	for _, action := range []string{"build", "ensure"} {
+		t.Run(action, func(t *testing.T) {
+			failure := errors.New("unused serving capability cleanup sentinel")
+			svc, _, _ := newNativeJournalMaintenanceClassic(t, failure, nil)
+			col, info := prepareNativeJournalMaintenanceTarget(t, svc, true, false)
+			options := typedServiceTestOptions()
+			out, err := svc.OptimizeIndex(context.Background(), info.Name, OptimizeIndexRequest{ColumnGraphAction: action, ColumnGraphServing: &options})
+			serving, available := nativeJournalMaintenanceServing(col)
+			if rootpublication.StableRelativeNamespaceSupported() {
+				if err != nil || !out.Status.Loaded || out.Status.RebuildNeeded || !available || !serving.Ready {
+					t.Fatalf("supported %s admission: status=%+v serving=%+v/%t err=%v", action, out.Status, serving, available, err)
+				}
+				return
+			}
+			if !errors.Is(err, rootpublication.ErrNamespacePersistenceUnsupported) || ErrorCodeOf(err) != CodeInternal {
+				t.Fatalf("unsupported %s admission must retain namespace cause: code=%s err=%v", action, ErrorCodeOf(err), err)
+			}
+			// Ensure may retain an immutable policy before rejecting capability;
+			// availability alone does not mean a serving publication was admitted.
+			if serving.Ready {
+				t.Fatalf("unsupported %s admitted serving: available=%t identity=%+v", action, available, serving)
+			}
+		})
+	}
+}
+
 func newNativeJournalMaintenanceClassic(t *testing.T, failure error, beforeManager func(*backenddb.DB)) (*Service, *backenddb.DB, *collections.CollectionManager) {
 	t.Helper()
 	backend, err := backenddb.Open(testBackendOptions(t.TempDir()))
@@ -318,9 +358,15 @@ func prepareNativeJournalMaintenanceTarget(t *testing.T, svc *Service, typed, ad
 	if err != nil {
 		t.Fatal(err)
 	}
-	if typed && !admit {
+	// Unsupported namespace platforms still exercise the real prerequisite
+	// failure path from a built, unadmitted typed target. Never fabricate a
+	// serving owner or relax the production namespace admission boundary.
+	if typed && (!admit || !rootpublication.StableRelativeNamespaceSupported()) {
 		if status, err := col.RebuildVectorIndex(info.VectorIndexName); err != nil || !status.Loaded || status.RebuildNeeded {
 			t.Fatalf("unadmitted built target=%+v err=%v", status, err)
+		}
+		if serving, available := nativeJournalMaintenanceServing(col); available || serving.Ready {
+			t.Fatalf("built-only target unexpectedly admitted serving: available=%t identity=%+v", available, serving)
 		}
 	} else {
 		req := OptimizeIndexRequest{}
