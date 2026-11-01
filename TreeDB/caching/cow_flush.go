@@ -80,6 +80,10 @@ func (c *cowCache) prepareCOWBasisInstall() (*cowReadCut, error) {
 }
 
 func (db *DB) installCOWBasis(basis *cowBackendBasis, covered *cowReadCut) (*cowReadCut, error) {
+	return db.installCOWBasisWithLeafPack(basis, covered, backenddb.LeafGenerationPackTransition{})
+}
+
+func (db *DB) installCOWBasisWithLeafPack(basis *cowBackendBasis, covered *cowReadCut, transition backenddb.LeafGenerationPackTransition) (*cowReadCut, error) {
 	c := db.cow
 	next, err := c.prepareCOWBasisInstall()
 	if err != nil {
@@ -91,7 +95,7 @@ func (db *DB) installCOWBasis(basis *cowBackendBasis, covered *cowReadCut) (*cow
 		refund.Close()
 		return nil, err
 	}
-	old, _, err := db.installPreparedCOWBasis(basis, covered, next)
+	old, _, err := db.installPreparedCOWBasis(basis, covered, next, transition)
 	if err != nil {
 		refund := c.releasePrivateCOWBasisInstall(next)
 		next = nil
@@ -114,7 +118,7 @@ func (c *cowCache) releasePrivateCOWBasisInstall(next *cowReadCut) *memtable.COW
 	return refund
 }
 
-func (db *DB) installPreparedCOWBasis(basis *cowBackendBasis, covered, next *cowReadCut) (*cowReadCut, bool, error) {
+func (db *DB) installPreparedCOWBasis(basis *cowBackendBasis, covered, next *cowReadCut, transition backenddb.LeafGenerationPackTransition) (*cowReadCut, bool, error) {
 	c := db.cow
 	c.writerMu.Lock()
 	defer c.writerMu.Unlock()
@@ -136,6 +140,14 @@ func (db *DB) installPreparedCOWBasis(basis *cowBackendBasis, covered, next *cow
 	}
 	if next == nil || basis == nil || basis.snapshot == nil || len(old.frozen)-n > cap(next.frozen) || len(old.shards) != len(next.shards) {
 		return nil, false, backenddb.ErrRootPublicationBasisMismatch
+	}
+	if !transition.IsZero() {
+		if covered != nil {
+			return nil, false, backenddb.ErrRootPublicationBasisMismatch
+		}
+		if err := transition.Validate(old.basis.snapshot, basis.snapshot); err != nil {
+			return nil, false, err
+		}
 	}
 	if covered != nil {
 		basis.logicalSeq = covered.frozenLogicalSeq
@@ -160,7 +172,7 @@ func (db *DB) installPreparedCOWBasis(basis *cowBackendBasis, covered, next *cow
 		// Adopt each private partial before checking err; installCOWBasis releases
 		// it through original cleanup only after this writer gate is dropped.
 		var err error
-		next.semanticRootSet, err = refreshCOWSemanticBasis(old.semanticRootSet, old.basis.snapshot, basis.snapshot)
+		next.semanticRootSet, err = refreshCOWSemanticBasis(old.semanticRootSet, old.basis.snapshot, basis.snapshot, transition)
 		if err != nil {
 			db.poisonNativeHandoff(err)
 			return nil, true, err
@@ -171,7 +183,7 @@ func (db *DB) installPreparedCOWBasis(basis *cowBackendBasis, covered, next *cow
 				next.frozenSemanticRootSet.Retain()
 			}
 		} else {
-			next.frozenSemanticRootSet, err = refreshCOWSemanticBasis(old.frozenSemanticRootSet, old.basis.snapshot, basis.snapshot)
+			next.frozenSemanticRootSet, err = refreshCOWSemanticBasis(old.frozenSemanticRootSet, old.basis.snapshot, basis.snapshot, transition)
 			if err != nil {
 				db.poisonNativeHandoff(err)
 				return nil, true, err
@@ -245,15 +257,25 @@ func (db *DB) installPreparedCOWBasis(basis *cowBackendBasis, covered, next *cow
 // Nil is the original raw-only case. A semantic owner must explicitly prove
 // equivalent physical rebinding; retaining an unknown descriptor can leave its
 // scalar roots referring to the wrong Snapshot after rewrite/vacuum.
-func refreshCOWSemanticBasis(state backenddb.NativeSemanticState, before, after *backenddb.Snapshot) (backenddb.NativeSemanticState, error) {
+func refreshCOWSemanticBasis(state backenddb.NativeSemanticState, before, after *backenddb.Snapshot, transition backenddb.LeafGenerationPackTransition) (backenddb.NativeSemanticState, error) {
 	if state == nil {
 		return nil, nil
 	}
-	refresher, ok := state.(backenddb.NativeSemanticBasisRefresher)
-	if !ok {
-		return nil, backenddb.ErrNativeSemanticUnsupported
+	var next backenddb.NativeSemanticState
+	var err error
+	if !transition.IsZero() {
+		if refresher, ok := state.(backenddb.NativeSemanticLeafPackBasisRefresher); ok {
+			next, err = refresher.PrepareLeafPackBasisRefresh(before, after, transition)
+		} else {
+			return nil, backenddb.ErrNativeSemanticUnsupported
+		}
+	} else {
+		refresher, ok := state.(backenddb.NativeSemanticBasisRefresher)
+		if !ok {
+			return nil, backenddb.ErrNativeSemanticUnsupported
+		}
+		next, err = refresher.PrepareBasisRefresh(before, after)
 	}
-	next, err := refresher.PrepareBasisRefresh(before, after)
 	if err == nil && next == nil {
 		err = rootpublication.ErrPublisherProtocol
 	}
@@ -278,7 +300,7 @@ func (db *DB) completeCOWHandoff() error {
 	}
 	// The preaccept receipt owns this exact generation even when backend state
 	// has advanced or capture admission is now exhausted. Retry only this swap.
-	old, terminal, err := db.installPreparedCOWBasis(h.basis, h.cut, h.next)
+	old, terminal, err := db.installPreparedCOWBasis(h.basis, h.cut, h.next, backenddb.LeafGenerationPackTransition{})
 	if err != nil {
 		if terminal {
 			h.failure = err // same admitted handoff; never replay either preparation

@@ -250,6 +250,7 @@ func (a *leafRefRewritePageAppender) AppendLeafPage(leafPage []byte) (page.LeafL
 
 type leafRefRewriteRunStats struct {
 	privateCOWOwner                        *transactionowner.Owner
+	transition                             LeafGenerationPackTransition
 	maintenanceLimits                      LeafGenerationMaintenanceLimits
 	InternalPagesVisited                   int
 	SubtreesPruned                         int
@@ -1951,6 +1952,24 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	// subsequent admission/durability wait fails. Catalog relocation follows
 	// that visibility boundary, not the successful return of the finalizer.
 	if finalizeErr == nil || CommitPublicationAccepted(finalizeErr) {
+		if runStats != nil && equivalentOwner != nil {
+			// The copy basis was revalidated under the visibility gate above.
+			// rewriteLeafRef/Batch preserve decoded entries and asset references;
+			// descriptor publication substitutes only their physical root IDs.
+			// The finalizer returns its own installed scalar endpoint, including
+			// after accepted-error cleanup; sampling db.state here would race a
+			// newer publication after root serialization was released.
+			before, ok := stateTokenFromState(snap.state)
+			after := post.acceptedStateToken
+			if ok && after.CommitSeq > before.CommitSeq && after.CommitSeq == before.CommitSeq+1 &&
+				after.RootPageID == publishedRoot && after.SystemRootPageID == publishedSysRoot &&
+				after.AppliedCommandLSN == before.AppliedCommandLSN && after.MaxEntryRevision == before.MaxEntryRevision {
+				runStats.transition = LeafGenerationPackTransition{
+					db: db, owner: equivalentOwner, idx: idx,
+					before: before, after: after,
+				}
+			}
+		}
 		relocationFinish(true)
 		relocationCommitted = true
 	}

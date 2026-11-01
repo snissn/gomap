@@ -130,6 +130,7 @@ func (s *LeafGenerationPackApplyStageStats) add(other LeafGenerationPackApplySta
 }
 
 type LeafGenerationPackStats struct {
+	transition                      LeafGenerationPackTransition
 	GenerationsRequested            int
 	GenerationsMatched              int
 	SourceGenerationIDs             []uint64
@@ -386,6 +387,7 @@ func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationP
 		stats.PublishHoldNanos += rewriteStats.PublishHoldNanos
 		stats.PrivatePagesAllocated += rewriteStats.PrivatePages
 		stats.ApplyStages.add(rewriteStats.ApplyStages)
+		stats.transition = rewriteStats.transition
 		if carry != nil {
 			carry.sourceStateKey = rewriteStats.sourceStateKey
 			carry.publishedState = rewriteStats.publishedState

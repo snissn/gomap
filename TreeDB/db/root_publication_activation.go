@@ -615,6 +615,7 @@ func (install *rootPublicationVisibleInstallV1) activate(activateAllocator func(
 	}
 
 	db.state.Store(newState)
+	install.post.acceptedStateToken, _ = stateTokenFromState(newState)
 	if install.commandWALPublish {
 		previousApplied := uint64(0)
 		if install.post.oldState != nil {
