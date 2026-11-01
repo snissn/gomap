@@ -19,7 +19,7 @@ This document maps specification invariants to existing tests and harnesses.
   and after fresh reopen, including a signed-zero negative control.
   `TestNativeInsertHistoryExpiryPrivateCancellation` checks direct private-state
   cancellation failures independently of lower-layer and transaction-Close
-  failures: no retry, no WAL assignment, exactly-once original custody release,
+  failures: no retry, unchanged command-WAL frontier, exactly-once original custody release,
   preserved error causes and a subsequent healthy public write/checkpoint.
   Its synthetic descriptor failure does not simulate physical I/O failure.
 
