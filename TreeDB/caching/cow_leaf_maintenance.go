@@ -134,6 +134,11 @@ func (db *DB) runPrivateCOWLeafPackSlice() (attempted bool, retErr error) {
 		MaxGenerations:             privateCOWLeafPackGenerations, MaxBytesToCopy: privateCOWLeafPackCopyBytes,
 		ReserveRIDs: db.ReserveValueLogRIDs, ProtectedRootIDs: roots, ProtectedSystemRootIDs: systemRoots,
 	})
+	// Preserve the original native backend while observing its actual completed
+	// operation, before cache adoption. The per-cache test hook is nil normally.
+	if hook := db.testAfterPrivateCOWLeafPack; hook != nil {
+		packErr = errors.Join(packErr, hook(ctx, stats))
+	}
 	db.vlogGenerationLeafPackLastSelectionGenerations.Store(int64(len(stats.Selection.GenerationIDs)))
 	db.vlogGenerationLeafPackLastSelectionBytesToCopy.Store(stats.Selection.BytesToCopy)
 	db.vlogGenerationLeafPackLastSelectionBytesDead.Store(stats.Selection.BytesDead)

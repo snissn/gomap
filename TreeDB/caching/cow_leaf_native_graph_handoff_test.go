@@ -23,6 +23,12 @@ import (
 const privateCOWGraphPackChildEnv = "TREEDB_PRIVATE_COW_GRAPH_PACK_CHILD"
 const privateCOWGraphPackCompleted = "PRIVATE_COW_GRAPH_PACK_COMPLETED"
 
+type privateCOWGraphPackHold struct {
+	DB        *backenddb.DB
+	published chan backenddb.LeafGenerationPackRunOnceStats
+	release   chan struct{}
+}
+
 // Public graph calls have no cancellation contract. Isolate the original calls
 // so a failed join cannot race database teardown or leak into another test.
 func enterPrivateCOWGraphPackChild(t *testing.T) bool {
@@ -58,8 +64,8 @@ func enterPrivateCOWGraphPackChild(t *testing.T) bool {
 
 // The ordinary graph profile is immutable and must be supplied at Open.
 // privateCOWPackFixture's empty-profile relaxed backend cannot admit this graph.
-// Keep its actual held backend, native bridge, pack geometry and finite limits.
-func privateCOWGraphPackFixture(t *testing.T) (*DB, *privateCOWPackHeldBackend, backenddb.Options) {
+// Keep the original native backend, native bridge, pack geometry and finite limits.
+func privateCOWGraphPackFixture(t *testing.T) (*DB, *privateCOWGraphPackHold, backenddb.Options) {
 	t.Helper()
 	t.Setenv(envDisableVlogGenerationLoop, "1")
 	t.Setenv(envDisableVlogGenerationCheckpointKick, "1")
@@ -98,10 +104,26 @@ func privateCOWGraphPackFixture(t *testing.T) (*DB, *privateCOWPackHeldBackend, 
 	if err := native.BindNativeSemanticBridge(owner, cache); err != nil {
 		t.Fatal(err)
 	}
+	// Binding alone preserves raw-only eligibility. Activate while the cache
+	// still owns its original backend and before any legacy manager can escape.
+	if err := native.ActivateNativeSemanticOwner(); err != nil {
+		t.Fatalf("INVALID_WITNESS native owner activation: %v", err)
+	}
 	cache.testSkipVlogCheckpointKick = true
 	skipRetainedPrune(cache)
-	held := &privateCOWPackHeldBackend{DB: native}
-	cache.backend = held
+	held := &privateCOWGraphPackHold{DB: native,
+		published: make(chan backenddb.LeafGenerationPackRunOnceStats, 1), release: make(chan struct{})}
+	// Native publication requires the original concrete backend. Observe the
+	// same post-backend/pre-adoption boundary without installing an adapter.
+	cache.testAfterPrivateCOWLeafPack = func(ctx context.Context, stats backenddb.LeafGenerationPackRunOnceStats) error {
+		held.published <- stats
+		select {
+		case <-held.release:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	return cache, held, opts
 }
 
@@ -206,8 +228,6 @@ func preparePrivateCOWGraphPackPublicFiller(t *testing.T, cache *DB, manager *co
 			}
 		}
 	}
-	t.Setenv(envEnableLeafGenerationPackMaintenance, "1")
-	t.Setenv(envDisableVlogGenerationLoop, "0")
 	return filler
 }
 
@@ -306,8 +326,6 @@ func TestPrivateCOWLeafPackPreservesAcceptedOrdinaryGraph(t *testing.T) {
 	if err != nil || before.UnderPressure {
 		t.Fatalf("INVALID_WITNESS producer requires a drain: %+v err=%v", before, err)
 	}
-	backend.published = make(chan backenddb.LeafGenerationPackRunOnceStats, 1)
-	backend.release = make(chan struct{})
 	var releaseOnce sync.Once
 	release := func() { releaseOnce.Do(func() { close(backend.release) }) }
 	packDone, graphDone := make(chan error, 1), make(chan error, 1)
@@ -335,6 +353,8 @@ func TestPrivateCOWLeafPackPreservesAcceptedOrdinaryGraph(t *testing.T) {
 			}
 		}
 	}()
+	t.Setenv(envEnableLeafGenerationPackMaintenance, "1")
+	t.Setenv(envDisableVlogGenerationLoop, "0")
 	go func() { _, err := cache.runPrivateCOWLeafPackSlice(); packDone <- err }()
 	select {
 	case stats := <-backend.published:
