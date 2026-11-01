@@ -154,8 +154,8 @@ func (s *Server) standaloneWriteCommandResponse(ctx context.Context, name string
 	}
 	if concern.policy == standaloneWriteConcernJournal {
 		stats.journalRequests.Add(1)
-		s.standaloneWriteBoundaryMu.Lock()
-		defer s.standaloneWriteBoundaryMu.Unlock()
+		s.standaloneWriteBoundaryMu.RLock()
+		defer s.standaloneWriteBoundaryMu.RUnlock()
 	} else {
 		stats.visibleRequests.Add(1)
 		s.standaloneWriteBoundaryMu.RLock()
