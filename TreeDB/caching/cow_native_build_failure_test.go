@@ -256,7 +256,7 @@ func TestCOWNativeSecondHandoffRefusalPoisonsBeforeWriterResumes(t *testing.T) {
 	}
 	original := cache.cow.cut
 	before := suffix.refs.Load()
-	old, terminal, err := cache.installPreparedCOWBasis(basis, covered, next)
+	old, terminal, err := cache.installPreparedCOWBasis(basis, covered, next, backenddb.LeafGenerationPackTransition{})
 	if err != first.refusal || !terminal || old != nil || cache.cow.cut != original || first.handoffs != 2 || suffix.refs.Load() != before || next.semanticRootSet != nil {
 		t.Fatalf("second refusal changed/replayed ownership: terminal=%v calls=%d refs=%d/%d err=%v", terminal, first.handoffs, suffix.refs.Load(), before, err)
 	}

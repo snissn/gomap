@@ -4400,6 +4400,9 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 		newState.LeafGenerationStateVersion = db.leafGenerationStateVersion
 	}
 	db.state.Store(newState)
+	if out := opts.acceptedStateToken; out != nil {
+		*out, _ = stateTokenFromState(newState)
+	}
 	if opts.commandWALPublish {
 		previousApplied := uint64(0)
 		if post.oldState != nil {

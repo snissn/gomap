@@ -130,6 +130,7 @@ func (s *LeafGenerationPackApplyStageStats) add(other LeafGenerationPackApplySta
 }
 
 type LeafGenerationPackStats struct {
+	transition                      LeafGenerationPackTransition
 	GenerationsRequested            int
 	GenerationsMatched              int
 	SourceGenerationIDs             []uint64
@@ -333,8 +334,10 @@ func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationP
 	if err != nil {
 		return stats, err
 	}
+	var handoffTransition leafGenerationPackHandoffTransition
 	if opts.privateCOWOwner != nil {
-		if err := db.handoffPrivateCOWLeafPackSources(ctx, opts.privateCOWOwner, set, rawSourceIDs); err != nil {
+		handoffTransition, err = db.handoffPrivateCOWLeafPackSources(ctx, opts.privateCOWOwner, set, rawSourceIDs)
+		if err != nil {
 			return stats, err
 		}
 	}
@@ -366,6 +369,7 @@ func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationP
 		rewriteStats := leafRefRewriteRunStats{
 			maintenanceLimits:      opts.MaintenanceLimits,
 			privateCOWOwner:        opts.privateCOWOwner,
+			handoffTransition:      handoffTransition,
 			trackCarry:             carry != nil,
 			trackSourceLiveMoved:   carry != nil && (len(opts.ProtectedRootIDs) > 0 || len(opts.ProtectedSystemRootIDs) > 0),
 			protectedRootIDs:       opts.ProtectedRootIDs,
@@ -386,6 +390,7 @@ func (db *DB) leafGenerationPackLocked(ctx context.Context, opts LeafGenerationP
 		stats.PublishHoldNanos += rewriteStats.PublishHoldNanos
 		stats.PrivatePagesAllocated += rewriteStats.PrivatePages
 		stats.ApplyStages.add(rewriteStats.ApplyStages)
+		stats.transition = rewriteStats.transition
 		if carry != nil {
 			carry.sourceStateKey = rewriteStats.sourceStateKey
 			carry.publishedState = rewriteStats.publishedState
