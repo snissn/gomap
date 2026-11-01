@@ -20,6 +20,25 @@ import (
 // BeforeCOWAdmission is outside the writer/append gates, so the advancing
 // producer can finish while the target owns its original staged opening.
 func TestNativeOrdinaryInsertHistoryExpiry(t *testing.T) {
+	id := []byte("original-request")
+	document, err := bson.Marshal(bson.D{{Key: "marker", Value: "exact acknowledged contents"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	testNativeOrdinaryInsertHistoryExpiry(t,
+		&CollectionMeta{Name: "target", Options: CollectionOptions{DocumentFormat: DocumentFormatBSON}}, id, document,
+		func(target *Collection) ([][]byte, CollectionInsertStats, error) {
+			ids, err := target.InsertBatchValidatedBSON([][]byte{id}, [][]byte{document})
+			return ids, CollectionInsertStats{}, err
+		}, nil)
+}
+
+// Keep genuine eviction, acceptance, held reads, checkpoint, checked original
+// Close and fresh reopen identical for the BSON and trusted projection routes.
+func testNativeOrdinaryInsertHistoryExpiry(t *testing.T, meta *CollectionMeta, id, document []byte,
+	insert func(*Collection) ([][]byte, CollectionInsertStats, error), verifyTyped func(*Collection, bool),
+) CollectionInsertStats {
+	t.Helper()
 	dir := t.TempDir()
 	opts := nativeTypedGroupOptions(dir)
 	owner, err := treedb.Open(opts)
@@ -48,7 +67,7 @@ func TestNativeOrdinaryInsertHistoryExpiry(t *testing.T) {
 		}
 	})
 	for _, meta := range []*CollectionMeta{
-		{Name: "target", Options: CollectionOptions{DocumentFormat: DocumentFormatBSON}},
+		meta,
 		{Name: "advance"},
 	} {
 		if _, err := manager.CreateCollection(meta); err != nil {
@@ -78,11 +97,6 @@ func TestNativeOrdinaryInsertHistoryExpiry(t *testing.T) {
 		}
 	})
 	opening := held.capture.LogicalSequence()
-	id := []byte("original-request")
-	document, err := bson.Marshal(bson.D{{Key: "marker", Value: "exact acknowledged contents"}})
-	if err != nil {
-		t.Fatal(err)
-	}
 	entered, release := make(chan struct{}), make(chan struct{})
 	var releaseOnce sync.Once
 	unblock := func() { releaseOnce.Do(func() { close(release) }) }
@@ -103,8 +117,9 @@ func TestNativeOrdinaryInsertHistoryExpiry(t *testing.T) {
 	restore := func() { restoreOnce.Do(restoreHook) }
 	defer restore()
 	type outcome struct {
-		ids [][]byte
-		err error
+		ids   [][]byte
+		stats CollectionInsertStats
+		err   error
 	}
 	done := make(chan outcome, 1)
 	joined := false
@@ -119,8 +134,8 @@ func TestNativeOrdinaryInsertHistoryExpiry(t *testing.T) {
 		}
 	}()
 	go func() {
-		ids, err := target.InsertBatchValidatedBSON([][]byte{id}, [][]byte{document})
-		done <- outcome{ids, err}
+		ids, stats, err := insert(target)
+		done <- outcome{ids, stats, err}
 	}()
 	select {
 	case <-entered:
@@ -169,17 +184,20 @@ func TestNativeOrdinaryInsertHistoryExpiry(t *testing.T) {
 	if value, err := held.Get(id); err != tree.ErrKeyNotFound || value != nil {
 		t.Fatalf("held opening observed later target: value=%x err=%v", value, err)
 	}
-	verify := func(col *Collection) {
+	verify := func(col *Collection, physical bool) {
 		t.Helper()
 		if value, err := col.Get(id); err != nil || !bytes.Equal(value, document) {
 			t.Fatalf("acknowledged contents differ: value=%x err=%v", value, err)
 		}
+		if verifyTyped != nil {
+			verifyTyped(col, physical)
+		}
 	}
-	verify(target)
+	verify(target, false)
 	if err := owner.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
-	verify(target)
+	verify(target, true)
 	if value, err := held.Get(id); err != tree.ErrKeyNotFound || value != nil {
 		t.Fatalf("held opening changed after checkpoint: value=%x err=%v", value, err)
 	}
@@ -218,5 +236,6 @@ func TestNativeOrdinaryInsertHistoryExpiry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	verify(freshTarget)
+	verify(freshTarget, true)
+	return result.stats
 }

@@ -342,6 +342,9 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	// History-expiry graph coverage uses the retained public configuration and
 	// value-type names to establish the ordinary typed-column insertion route.
 	{path: "TreeDB/collections/native_insert_history_expiry_controls_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 4},
+	// Trusted-projection expiry coverage consumes the same public configuration,
+	// manifest metadata and vector value-type compatibility symbols.
+	{path: "TreeDB/collections/native_insert_history_expiry_projection_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 5, occurrences: 6},
 	// Syntax-precedence controls exercise retained schema names, including
 	// the disabled-schema test label, rather than a new storage umbrella.
 	{path: "TreeDB/collections/native_create_syntax_precedence_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 7},
