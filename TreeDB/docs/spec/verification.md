@@ -4925,14 +4925,24 @@ responses, partial DDL/update and shared auth writes;
 partial response/error and uncertainty on actual fence failure.
 `TestNativeExistingCollectionPhysicalCheckpointCrashReopen` retains the stronger
 physical `AppliedCommandLSN`, old-view and no-extra-command checks.
-`TestNativeJournalMaintenanceRequiresPhysicalCheckpoint` requires both ordinary
-optimize and typed build/ensure/fold/renew to stop before graph work when their
-actual physical checkpoint fails. Existing classic buffered/deferred lifecycle
+`TestNativeJournalMaintenanceRequiresPhysicalCheckpoint` requires original-owner
+native ordinary optimize and eligible classic typed build/ensure/fold/renew to
+stop before graph work when the actual physical index sync fails. Each target is
+built first; an independent mutation dirties the same storage owner. Cache
+identity, bounded serving metadata, work-attempt counters and canonical command
+LSN complement the actual physical fault. Typed service text declarations do not
+select the native semantic bridge. Existing classic buffered/deferred lifecycle
 and crash controls remain separate.
-`TestNativeJournalMaintenanceClassicFlushFailureBeforeWork` starts with actual classic
-buffered publication and refuses its auxiliary asset sync in both ordinary and
-typed no-deferred optimize paths; it requires retained buffered debt, unchanged
-graph status, original error mapping and no physical root-seal activity.
+`TestNativeJournalMaintenanceClassicFlushFailureBeforeWork` pairs direct FlushAll
+and Optimize controls on fresh matched classic buffered fixtures for both
+ordinary and typed no-deferred callers. It refuses an actual auxiliary asset
+sync, retains buffered debt and the original error, and requires unchanged
+target cache/serving identities and work-attempt counters. Ordered root events
+before the fault are compared with direct FlushAll; legitimate publication
+activity is not required to be zero. A distinct pre-manager raw-publish barrier
+rejects checkpoint entry before explicit FlushAll. After a publication failure
+poisons the backend, an attempted checkpoint may reject before that barrier;
+the literal success-only call sequence is also verified by source review.
 Process-exit recovery does not establish
 power-loss or replica durability.
 
