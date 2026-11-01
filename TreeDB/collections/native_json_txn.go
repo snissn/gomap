@@ -441,6 +441,10 @@ func (t *NativeJSONTxn) commitNativePlanWithStats(sealed bool, apply *nativeComm
 // cancellation and Close checks. Retirement may complete asynchronously. It is
 // private one-shot insertion authority, never an instruction to rebase a txn.
 func (t *NativeJSONTxn) commitNativePlanWithStatsObserved(sealed bool, apply *nativeCommandWALApplyCommit, typedGroup bool, stats *CollectionInsertStats, expired *bool) (resultErr error) {
+	return t.commitNativePlanWithJournal(sealed, apply, typedGroup, stats, expired, nil)
+}
+
+func (t *NativeJSONTxn) commitNativePlanWithJournal(sealed bool, apply *nativeCommandWALApplyCommit, typedGroup bool, stats *CollectionInsertStats, expired *bool, journal *nativeInsertJournal) (resultErr error) {
 	if expired != nil {
 		*expired = false
 	}
@@ -652,7 +656,7 @@ func (t *NativeJSONTxn) commitNativePlanWithStatsObserved(sealed bool, apply *na
 		}
 	}
 	members, rawEntries = nil, nil
-	sync := false
+	sync := journal != nil && journal.requested
 	if apply != nil {
 		sync = apply.sync
 	}
@@ -664,6 +668,9 @@ func (t *NativeJSONTxn) commitNativePlanWithStatsObserved(sealed bool, apply *na
 		publishStarted = time.Now()
 	}
 	result, err := t.core.CommitNative(native, intent, sync)
+	if journal != nil && journal.requested {
+		journal.completion = result.Journal
+	}
 	if expired != nil {
 		// Exact identity also excludes a lower-layer cleanup error joined to
 		// the sentinel. Consumed alone only transfers descriptor ownership.

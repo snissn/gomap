@@ -37,6 +37,10 @@ func (m *NativeJSONManager) insertPrepared(name string, ids, documents [][]byte,
 }
 
 func finishNativeJSONInsert(tx *NativeJSONTxn, err error, ids, documents [][]byte, stats *CollectionInsertStats, ordinaryOnly bool, projection *trustedFloat32Projection) (recordStats, retry bool, resultErr error) {
+	return finishNativeJSONInsertWithJournal(tx, err, ids, documents, stats, ordinaryOnly, projection, nil)
+}
+
+func finishNativeJSONInsertWithJournal(tx *NativeJSONTxn, err error, ids, documents [][]byte, stats *CollectionInsertStats, ordinaryOnly bool, projection *trustedFloat32Projection, journal *nativeInsertJournal) (recordStats, retry bool, resultErr error) {
 	if err != nil {
 		return false, false, err
 	}
@@ -46,7 +50,17 @@ func finishNativeJSONInsert(tx *NativeJSONTxn, err error, ids, documents [][]byt
 			retry = false
 		}
 		resultErr = errors.Join(resultErr, cleanupErr)
+		if resultErr != nil && journal != nil {
+			journal.completion = journal.completion.WithoutSuccess()
+		}
 	}()
+	// Eligibility is decided against the actual captured schema, before mutation.
+	// Auxiliary/typed follow-up effects retain the default API's full fence.
+	if journal != nil {
+		meta := tx.bindings[0].probe.meta
+		journal.requested = journal.requested && normalizedDocumentFormat(meta.Options.DocumentFormat) == DocumentFormatBSON &&
+			meta.Options.ColumnStore == nil && len(meta.VectorIndexes) == 0 && len(meta.TextIndexes) == 0
+	}
 	ordinary := tx.bindings[0].probe.meta.Options.ColumnStore == nil || nativeOrdinaryColumnGraphMeta(tx.bindings[0].probe.meta)
 	if !ordinary {
 		if ordinaryOnly {
@@ -77,7 +91,7 @@ func finishNativeJSONInsert(tx *NativeJSONTxn, err error, ids, documents [][]byt
 	if stats != nil {
 		stats.PrepareDocuments = time.Since(started)
 	}
-	err = tx.commitNativePlanWithStatsObserved(false, nil, false, stats, &retry)
+	err = tx.commitNativePlanWithJournal(false, nil, false, stats, &retry, journal)
 	return stats != nil, retry && ordinary, err
 }
 

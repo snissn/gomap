@@ -1136,3 +1136,34 @@ background initialization/cleanup failure is retained and poisons the next
 observing entry before LSN assignment; earlier independent prefix proofs remain
 valid. No worker creates a token, changes a frontier, removes namespace debt or
 permits an early ACK. See the [container resource and lifecycle contract](storage-format.md#initialized-command-wal-container-v3).
+
+## Operation-scoped native journal completion
+
+`Collection.InsertBatchValidatedBSONWithJournalReceipt` is an opt-in sibling of
+ordinary validated BSON insertion. On the original bound public native CommandWAL
+owner, supported BSON primary/ordinary index effects request durable completion
+before their canonical append. The existing public group registers, physically
+synchronizes the dependency-complete assigned publication, and returns its actual
+wait outcome. An opaque owner identity and assigned LSN qualify that result; a
+logical install or `WALStable` alone cannot certify it. No new queue, durable
+frame, global completion frontier, force ledger or storage format is introduced.
+
+Only after checked transaction cleanup and the outer producer gate's release may
+the caller use successful operation coverage. The receipt grants no database,
+cut or lease ownership and imposes no promise about an unrelated later prefix.
+An errored selected operation is terminal even when cleanup joins another error;
+its successful boundary is invalidated, retaining its actual attempt/wait facts.
+Assignment/physical ambiguity retains existing poison and no-replay rules.
+Preassignment refusal need not poison an otherwise healthy owner.
+
+Default insert/transaction APIs, updates, direct and repeated native Sync,
+WriteSync and physical maintenance keep their existing fresh boundaries. Unknown,
+classic, unbound, NoWAL, unsupported metadata and empty operations cannot obtain
+an original-owner operation receipt; their caller retains its normal fence.
+The gateway initially opts in only existing-collection single-document BSON
+inserts. Auto-create and multi-document commands have wider effect coverage and
+retain the conservative fresh post-dispatch fence, as do partial DDL/auth/update
+errors and any custom sync override. Coalescing requests durability if any actual
+eligible strict member needs it, then returns the same publication result only
+to those strict members after all batch cleanup. Byte splitting and duplicate
+fallback cannot transfer one sub-batch's receipt to another.

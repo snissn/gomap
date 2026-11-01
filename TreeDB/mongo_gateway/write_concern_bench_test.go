@@ -298,3 +298,74 @@ func BenchmarkStandaloneNativeJournalAcknowledgement(b *testing.B) {
 		})
 	}
 }
+
+// Exercise the actual default queue/done-channel seam for both plain and strict
+// single-document inserts. Each operation inserts a fresh key. Setup, full exact
+// typed readback, original Close and fresh-owner verification are untimed.
+func BenchmarkStandaloneNativeInsertReceiptAllocation(b *testing.B) {
+	for _, profile := range []treedb.Profile{treedb.ProfileCommandWALRelaxed, treedb.ProfileCommandWALDurable} {
+		for _, strict := range []bool{false, true} {
+			b.Run(fmt.Sprintf("%s/strict=%t", profile, strict), func(b *testing.B) {
+				b.StopTimer()
+				opts := StandaloneOptions{Dir: b.TempDir(), Profile: profile, DefaultCollectionOptions: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}}
+				open := func() *StandaloneServer {
+					s, err := OpenStandaloneServer(opts)
+					if err != nil {
+						b.Fatal(err)
+					}
+					b.Cleanup(func() {
+						if err := s.Close(); err != nil {
+							b.Error(err)
+						}
+					})
+					requireStandaloneNativeJournalOwner(b, s)
+					return s
+				}
+				s := open()
+				assertOK(b, serveCommand(b, s.Server, 1, bson.D{{Key: "create", Value: "receipt_alloc"}, {Key: "$db", Value: "app"}}))
+				if s.Server.InsertCoalescingMaxBatch < 2 {
+					b.Fatal("default queue inactive")
+				}
+				b.ReportAllocs()
+				b.ResetTimer()
+				b.StartTimer()
+				for i := 0; i < b.N; i++ {
+					command := bson.D{{Key: "insert", Value: "receipt_alloc"}, {Key: "documents", Value: bson.A{standaloneNativeJournalDocument(strconv.Itoa(i), 1)}}}
+					if strict {
+						command = append(command, bson.E{Key: "writeConcern", Value: bson.D{{Key: "w", Value: 1}, {Key: "j", Value: true}}})
+					}
+					command = append(command, bson.E{Key: "$db", Value: "app"})
+					response, err := s.Server.commandResponse(context.Background(), "insert", mustDocument(b, command), nil, 0)
+					if err != nil || !mongoCommandResponseOK(response) || bson.Raw(response).Lookup("writeConcernError").Type != 0 || bson.Raw(response).Lookup("writeErrors").Type != 0 {
+						b.Fatalf("insert%d response=%s err=%v", i, response, err)
+					}
+					benchmarkStandaloneWriteConcernSink = response
+				}
+				b.StopTimer()
+				check := func(owner *StandaloneServer) {
+					for _, i := range []int{0, b.N - 1} {
+						if i < 0 {
+							continue
+						}
+						response := serveCommand(b, owner.Server, 2, bson.D{{Key: "find", Value: "receipt_alloc"}, {Key: "filter", Value: bson.D{{Key: "_id", Value: strconv.Itoa(i)}}}, {Key: "$db", Value: "app"}})
+						assertOK(b, response)
+						docs := cursorFirstBatch(b, response)
+						if len(docs) != 1 {
+							b.Fatalf("readback%d count=%d", i, len(docs))
+						}
+						requireStandaloneNativeJournalDocument(b, docs[0], strconv.Itoa(i), 1)
+					}
+				}
+				check(s)
+				if err := s.Close(); err != nil {
+					b.Fatal(err)
+				}
+				fresh := open()
+				check(fresh)
+				if err := fresh.Close(); err != nil {
+					b.Fatal(err)
+				}
+			})
+		}
+	}
+}

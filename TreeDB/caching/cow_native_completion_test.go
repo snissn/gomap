@@ -47,14 +47,14 @@ func (r *nativeCompletionTestRequest) RegisterNativeCommandWAL(appendFrame func(
 }
 func (*nativeCompletionTestRequest) ReleaseNativeCommandWAL() {}
 
-func (r *nativeCompletionTestRequest) CompleteNativeCommandWAL(err error) error {
+func (r *nativeCompletionTestRequest) CompleteNativeCommandWAL(err error) (backenddb.NativeCommandWALCompletionResult, error) {
 	b := r.bridge
 	r.bridge = nil
 	b.completions++
 	if err != nil {
-		return err
+		return backenddb.NativeCommandWALCompletionResult{}, err
 	}
-	return b.failure
+	return backenddb.NativeCommandWALCompletionResult{}, b.failure
 }
 
 func TestCOWNativeDeferredCompletionPreservesInstalledReceipt(t *testing.T) {
@@ -83,6 +83,9 @@ func testCOWNativeDeferredCompletionPreservesInstalledReceipt(t *testing.T, capt
 	result, err := tx.CommitNative(publication, nativeTxnIntent(t, backend, true), true)
 	if !errors.Is(err, failure) || !result.Consumed || !result.Assigned || !result.LogicalInstalled || !result.Uncertain || result.WALStable || result.AssignedLSN == 0 || result.AssignedLSN != bridge.assigned {
 		t.Fatalf("installed deferred failure=%+v/%v bridge=%+v", result, err, bridge)
+	}
+	if result.Journal.Selected() || result.Journal.Completed() {
+		t.Fatal("unrecognized fake completion manufactured an original-owner physical receipt")
 	}
 	if plan.calls != 1 || bridge.appendCalls != 1 || bridge.completions != 1 {
 		t.Fatalf("reexecuted original plan=%d bridge=%+v", plan.calls, bridge)
@@ -146,6 +149,9 @@ func TestCOWNativeJournalPrefixUnboundCapability(t *testing.T) {
 			if backend.CanShareNativeCommandWALPrefix() {
 				t.Fatal("active unbound owner granted sharing")
 			}
+			if result := backend.PrepareNativeJournalCompletion(cache.cow.txnOwner); result.Selected() {
+				t.Fatal("active unbound owner issued an operation receipt")
+			}
 			if supported, err := backend.SyncNativeCommandWALPrefix(); supported || err != nil {
 				t.Fatalf("healthy unbound capability=%t/%v", supported, err)
 			}
@@ -157,6 +163,9 @@ func TestCOWNativeJournalPrefixUnboundCapability(t *testing.T) {
 				}
 				if backend.CanShareNativeCommandWALPrefix() {
 					t.Fatal("unknown optional owner callback granted sharing")
+				}
+				if result := backend.PrepareNativeJournalCompletion(cache.cow.txnOwner); result.Selected() {
+					t.Fatal("unknown custom completion issued an operation receipt")
 				}
 			}
 			if err := cache.Close(); err != nil {

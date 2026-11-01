@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/x/bsonx/bsoncore"
@@ -43,6 +44,17 @@ const primaryKeyPrefixBSONValue byte = 1
 var maxInt = int(^uint(0) >> 1)
 
 func (s *Server) insertResponse(ctx context.Context, command wire.Document, sequences []wire.DocumentSequence) (wire.Document, error) {
+	return s.insertResponseWithJournal(ctx, command, sequences, nil)
+}
+
+// This explicit result belongs to one accepted command; it is not a context
+// flag, cached frontier, or response inferred from another worker's last commit.
+type standaloneInsertJournalOutcome struct {
+	completion backenddb.NativeJournalCompletion
+	err        error
+}
+
+func (s *Server) insertResponseWithJournal(ctx context.Context, command wire.Document, sequences []wire.DocumentSequence, journal *standaloneInsertJournalOutcome) (wire.Document, error) {
 	if s.clusterSubmitterConfigured() {
 		return s.clusterInsertResponse(ctx, command, sequences)
 	}
@@ -109,6 +121,8 @@ func (s *Server) insertResponse(ctx context.Context, command wire.Document, sequ
 		}
 	}()
 	if col == nil {
+		// Auto-create has a catalog effect outside the insert publication.
+		journal = nil
 		if s.mongoWriteBeforeFirstCreateHook != nil {
 			s.mongoWriteBeforeFirstCreateHook(budget)
 		}
@@ -127,7 +141,7 @@ func (s *Server) insertResponse(ctx context.Context, command wire.Document, sequ
 			format = actualFormat
 		}
 	}
-	return s.runMongoInsertCommand(name, col, format, ids, stored, ordered, budget)
+	return s.runMongoInsertCommandWithJournal(name, col, format, ids, stored, ordered, budget, journal)
 }
 
 // runMongoInsertCommand applies a fully parsed insert command.  A native
@@ -136,6 +150,10 @@ func (s *Server) insertResponse(ctx context.Context, command wire.Document, sequ
 // fallback is item-at-a-time, so it reserves target capacity and rechecks the
 // deadline before every possible side effect.
 func (s *Server) runMongoInsertCommand(name string, col *collections.Collection, format collections.DocumentFormat, ids, stored [][]byte, ordered bool, budget *mongoWriteBudget) (wire.Document, error) {
+	return s.runMongoInsertCommandWithJournal(name, col, format, ids, stored, ordered, budget, nil)
+}
+
+func (s *Server) runMongoInsertCommandWithJournal(name string, col *collections.Collection, format collections.DocumentFormat, ids, stored [][]byte, ordered bool, budget *mongoWriteBudget, journal *standaloneInsertJournalOutcome) (wire.Document, error) {
 	// Preserve the native batch fast path for the normal success case.  Its
 	// planner rejects duplicate conflicts before publishing, so a duplicate can
 	// safely fall back to the per-item path that supplies Mongo's indexed
@@ -183,7 +201,7 @@ func (s *Server) runMongoInsertCommand(name string, col *collections.Collection,
 		var err error
 		if format == collections.DocumentFormatBSON {
 			if len(ids) == 1 {
-				err = s.runMongoInsertCoalesced(name, col, ids[i], stored[i], budget)
+				err = s.runMongoInsertCoalescedWithJournal(name, col, ids[i], stored[i], budget, journal)
 			} else {
 				err = runMongoInsertOne(col, ids[i], stored[i])
 			}
@@ -301,6 +319,7 @@ type mongoInsertCoalescerRequest struct {
 	id       []byte
 	stored   []byte
 	deadline time.Time
+	journal  *standaloneInsertJournalOutcome
 	done     chan mongoInsertCoalescerResult
 }
 
@@ -309,26 +328,44 @@ type mongoInsertCoalescerResult struct {
 }
 
 func (s *Server) runMongoInsertCoalesced(name string, col *collections.Collection, id, stored []byte, budget *mongoWriteBudget) error {
+	return s.runMongoInsertCoalescedWithJournal(name, col, id, stored, budget, nil)
+}
+
+func (s *Server) runMongoInsertCoalescedWithJournal(name string, col *collections.Collection, id, stored []byte, budget *mongoWriteBudget, journal *standaloneInsertJournalOutcome) error {
 	if err := budget.checkDeadline(); err != nil {
 		return err
 	}
 	if col == nil {
-		return runMongoInsertOne(col, id, stored)
+		return runMongoInsertOneWithJournal(col, id, stored, journal)
 	}
 	coalescer := s.mongoInsertCoalescer(name)
 	if coalescer == nil {
-		return runMongoInsertOne(col, id, stored)
+		return runMongoInsertOneWithJournal(col, id, stored, journal)
 	}
 	done := make(chan mongoInsertCoalescerResult, 1)
-	// The handler waits for completion before returning, so request-body-backed
-	// BSON remains live while the worker builds and applies the coalesced batch.
-	if !coalescer.enqueue(mongoInsertCoalescerRequest{col: col, id: id, stored: stored, deadline: budget.deadline, done: done}) {
+	// The waiting handler retains request BSON through publication and cleanup.
+	if !coalescer.enqueue(mongoInsertCoalescerRequest{col: col, id: id, stored: stored, deadline: budget.deadline, journal: journal, done: done}) {
 		if err := budget.checkDeadline(); err != nil {
 			return err
 		}
-		return runMongoInsertOne(col, id, stored)
+		return runMongoInsertOneWithJournal(col, id, stored, journal)
 	}
 	return coalescer.waitForInsertResult(done).err
+}
+
+// The optional destination belongs to this waiting command. The original small
+// completion channel establishes happens-before for its worker-written fields;
+// plain requests keep the original channel payload and allocate no destination.
+func runMongoInsertOneWithJournal(col *collections.Collection, id, stored []byte, journal *standaloneInsertJournalOutcome) error {
+	if journal == nil {
+		return runMongoInsertOne(col, id, stored)
+	}
+	if col == nil {
+		journal.err = errCollectionMissingForInsert()
+		return journal.err
+	}
+	_, journal.completion, journal.err = col.InsertBatchValidatedBSONWithJournalReceipt([][]byte{id}, [][]byte{stored})
+	return journal.err
 }
 
 func runMongoInsertOne(col *collections.Collection, id, stored []byte) error {
@@ -647,16 +684,26 @@ func (c *mongoInsertCoalescer) runInsertBatch(batch []mongoInsertCoalescerReques
 		ids[i] = req.id
 		stored[i] = req.stored
 	}
-	_, err := batch[0].col.InsertBatchValidatedBSON(ids, stored)
+	var completion backenddb.NativeJournalCompletion
+	var err error
+	journal := false
+	for _, req := range batch {
+		journal = journal || req.journal != nil
+	}
+	if journal {
+		_, completion, err = batch[0].col.InsertBatchValidatedBSONWithJournalReceipt(ids, stored)
+	} else {
+		_, err = batch[0].col.InsertBatchValidatedBSON(ids, stored)
+	}
 	if err != nil {
-		if (collections.IsDuplicateKeyError(err) || errors.Is(err, collections.ErrMutationNotAccepted)) && !errors.Is(err, collections.ErrCommitAmbiguous) {
+		if !completion.Selected() && (collections.IsDuplicateKeyError(err) || errors.Is(err, collections.ErrMutationNotAccepted)) && !errors.Is(err, collections.ErrCommitAmbiguous) {
 			runMongoInsertCoalescerSequential(batch)
 			return
 		}
-		completeMongoInsertCoalescerBatch(batch, mongoInsertCoalescerResult{err: err})
+		completeMongoInsertCoalescerBatch(batch, mongoInsertCoalescerResult{err: err}, completion)
 		return
 	}
-	completeMongoInsertCoalescerBatch(batch, mongoInsertCoalescerResult{})
+	completeMongoInsertCoalescerBatch(batch, mongoInsertCoalescerResult{}, completion)
 }
 
 // A coalescer can wait behind unrelated traffic.  Drop requests whose command
@@ -673,8 +720,11 @@ func filterExpiredMongoInsertCoalescerRequests(batch []mongoInsertCoalescerReque
 	return kept
 }
 
-func completeMongoInsertCoalescerBatch(batch []mongoInsertCoalescerRequest, result mongoInsertCoalescerResult) {
+func completeMongoInsertCoalescerBatch(batch []mongoInsertCoalescerRequest, result mongoInsertCoalescerResult, completion backenddb.NativeJournalCompletion) {
 	for _, req := range batch {
+		if req.journal != nil {
+			req.journal.completion, req.journal.err = completion, result.err
+		}
 		req.done <- result
 	}
 }
@@ -713,7 +763,7 @@ func runMongoInsertCoalescerSequential(batch []mongoInsertCoalescerRequest) {
 			req.done <- mongoInsertCoalescerResult{err: errors.New("Mongo gateway multi-write command exceeded its execution-time budget")}
 			continue
 		}
-		req.done <- mongoInsertCoalescerResult{err: runMongoInsertOne(req.col, req.id, req.stored)}
+		req.done <- mongoInsertCoalescerResult{err: runMongoInsertOneWithJournal(req.col, req.id, req.stored, req.journal)}
 	}
 }
 

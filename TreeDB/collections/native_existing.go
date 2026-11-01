@@ -48,6 +48,17 @@ func (c *Collection) nativeInsertBatchWithStatsProjection(ids, documents [][]byt
 // Omitted-ID gateways share preparation, validation and publication with the
 // ordinary API, without allocating a response-only ID vector and byte arena.
 func (c *Collection) nativeInsertBatchWithResultIDs(ids, documents [][]byte, requested *CollectionInsertStats, projection *trustedFloat32Projection, returnResultIDs bool) ([][]byte, error) {
+	return c.nativeInsertBatchWithJournal(ids, documents, requested, projection, returnResultIDs, nil)
+}
+
+// nativeInsertJournal belongs to this one synchronous operation. It is never
+// stored on a Collection or read from a last-result/cache diagnostic.
+type nativeInsertJournal struct {
+	requested  bool
+	completion backenddb.NativeJournalCompletion
+}
+
+func (c *Collection) nativeInsertBatchWithJournal(ids, documents [][]byte, requested *CollectionInsertStats, projection *trustedFloat32Projection, returnResultIDs bool, journal *nativeInsertJournal) ([][]byte, error) {
 	if c.manager.isClosing() {
 		return nil, backenddb.ErrClosed
 	}
@@ -97,9 +108,12 @@ func (c *Collection) nativeInsertBatchWithResultIDs(ids, documents [][]byte, req
 	var refusedPrepare, refusedPublish time.Duration
 	for attempt := 0; ; attempt++ {
 		stats = CollectionInsertStats{}
-		recordStats, retry, err := c.nativeInsertPreparedOnce(ids, documents, &stats, requested != nil, projection)
-		if retry && attempt+1 < nativeInsertAttempts {
+		recordStats, retry, err := c.nativeInsertPreparedOnceWithJournal(ids, documents, &stats, requested != nil, projection, journal)
+		if retry && attempt+1 < nativeInsertAttempts && (journal == nil || !journal.completion.Selected()) {
 			refusedPrepare, refusedPublish = stats.PrepareDocuments, stats.Publish
+			if journal != nil {
+				journal.completion = backenddb.NativeJournalCompletion{}
+			}
 			continue
 		}
 		if err != nil {
@@ -118,12 +132,17 @@ func (c *Collection) nativeInsertBatchWithResultIDs(ids, documents [][]byte, req
 // End the original producer admission before fresh maintenance/capture. The
 // deferred unlock also covers panic/error paths; no private attempt survives it.
 func (c *Collection) nativeInsertPreparedOnce(ids, documents [][]byte, stats *CollectionInsertStats, ordinaryOnly bool, projection *trustedFloat32Projection) (bool, bool, error) {
+	return c.nativeInsertPreparedOnceWithJournal(ids, documents, stats, ordinaryOnly, projection, nil)
+}
+
+func (c *Collection) nativeInsertPreparedOnceWithJournal(ids, documents [][]byte, stats *CollectionInsertStats, ordinaryOnly bool, projection *trustedFloat32Projection, journal *nativeInsertJournal) (bool, bool, error) {
 	unlockVector, _, err := c.prepareNativeProducerMutation()
 	if err != nil {
 		return false, false, err
 	}
 	defer unlockVector()
-	return c.nativeJSON.insertPrepared(c.name, ids, documents, stats, ordinaryOnly, projection)
+	tx, err := c.nativeJSON.beginPrepared(c.name)
+	return finishNativeJSONInsertWithJournal(tx, err, ids, documents, stats, ordinaryOnly, projection, journal)
 }
 
 func (c *Collection) nativeGetInto(id, dst []byte) ([]byte, bool, error) {

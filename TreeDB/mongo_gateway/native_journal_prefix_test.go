@@ -205,15 +205,15 @@ func TestStandaloneNativeJournalPartialErrorRealFenceFailureIsUncertain(t *testi
 	}
 }
 
-// This is a test-only first causal control for #5370. The test-only baseline
-// overlay keeps the gateway's exclusive lock; the candidate overlay changes
-// only that fixed native process's explicit-journal Lock/Unlock to RLock/RUnlock.
-// It is not general production eligibility or crash/poison/Close qualification.
+// Exercise general original-owner shared entry with two independently enrolled
+// native publications. Explicitly disable gateway coalescing: a default worker
+// waits for its own publication before dequeuing its same-collection successor.
+// Default queued batching and its held-receipt lifetime have separate controls.
 func TestStandaloneNativeSharedBoundaryHeldSyncExactACK(t *testing.T) {
 	for _, profile := range []treedb.Profile{treedb.ProfileCommandWALRelaxed, treedb.ProfileCommandWALDurable} {
 		t.Run(string(profile), func(t *testing.T) {
 			const wait = 5 * time.Second
-			opts := StandaloneOptions{Dir: t.TempDir(), Profile: profile, DefaultCollectionOptions: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}}
+			opts := StandaloneOptions{Dir: t.TempDir(), Profile: profile, InsertCoalescingMaxBatchSet: true, InsertCoalescingMaxBatch: 0, DefaultCollectionOptions: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}}
 			standalone, err := OpenStandaloneServer(opts)
 			if err != nil {
 				t.Fatalf("open original native owner: %v", err)
@@ -234,10 +234,10 @@ func TestStandaloneNativeSharedBoundaryHeldSyncExactACK(t *testing.T) {
 			defer cancelContext()
 			var secondClient *mongo.Client
 			type commandResult struct {
-				id                        any
-				err                       error
-				explicitAfterBeforeReturn bool
-				returnSequence            uint64
+				id                           any
+				err                          error
+				publicationAfterBeforeReturn bool
+				returnSequence               uint64
 			}
 			results := [2]chan commandResult{make(chan commandResult, 1), make(chan commandResult, 1)}
 			var started, joined [2]bool
@@ -321,60 +321,59 @@ func TestStandaloneNativeSharedBoundaryHeldSyncExactACK(t *testing.T) {
 				attempts uint64
 			}
 			entered := [2]chan heldSync{make(chan heldSync, 1), make(chan heldSync, 1)}
-			explicitBefore := make(chan heldSync, 1)
-			explicitAfter := make(chan heldSync, 1)
+			publicationBefore := make(chan heldSync, 1)
+			publicationAfter := make(chan heldSync, 1)
 			var firstLSN atomic.Uint64
 			var laterClaimed atomic.Bool
 			var eventSequence atomic.Uint64
-			var explicitTarget atomic.Pointer[heldSync]
-			var explicitAfterSequence atomic.Uint64
+			var publicationTarget atomic.Pointer[heldSync]
+			var publicationAfterSequence atomic.Uint64
 			undo := durabilitycut.Install(func(e durabilitycut.Event) error {
 				if e.Resource != durabilitycut.ResourceCommandWAL || e.LSN == 0 || (e.Point != durabilitycut.BeforeDependencyFileSync && e.Point != durabilitycut.AfterDependencyFileSync) {
 					return nil
 				}
 				// Scalar atomic access only: no Stats, storage calls or borrowed-handle
-				// retention. The explicit attempt increments only after durable dispatch's
-				// ordinary completion has returned, including its After event.
+				// retention. Per-RPC attempt accounting arrives after the native wait;
+				// identify the operation with its own actual captured LSN.
 				sample := heldSync{lsn: e.LSN, root: e.Root, path: e.Path, sequence: eventSequence.Add(1), attempts: standalone.Server.writeConcernStats.syncAttempts.Load()}
 				if e.Point == durabilitycut.AfterDependencyFileSync {
-					target := explicitTarget.Load()
+					target := publicationTarget.Load()
 					if target != nil && sample.lsn == target.lsn && sample.root == target.root && sample.path == target.path {
 						if e.StablePath == nil {
-							return errors.New("successor explicit After sync lacks retained original file")
+							return errors.New("successor publication After sync lacks retained original file")
 						}
-						if !explicitAfterSequence.CompareAndSwap(0, sample.sequence) {
-							return errors.New("duplicate successor explicit After sync")
+						if !publicationAfterSequence.CompareAndSwap(0, sample.sequence) {
+							return errors.New("duplicate successor publication After sync")
 						}
 						select {
-						case explicitAfter <- sample:
+						case publicationAfter <- sample:
 						default:
-							return errors.New("successor explicit After observation overflow")
+							return errors.New("successor publication After observation overflow")
 						}
 					}
 					return nil
 				}
-				// Observe the successor's explicit physical sync independently of the
-				// later held epoch: in durable mode that held epoch can be ordinary.
-				// The explicit capture may legitimately repeat the ordinary epoch's LSN.
-				if sample.attempts == beforeACK.SyncAttempts+2 && sample.lsn > firstLSN.Load() && firstLSN.Load() != 0 {
+				// Observe the successor's actual own-publication Before and After.
+				// Neither registration nor aggregate counts certify physical completion.
+				if sample.lsn > firstLSN.Load() && firstLSN.Load() != 0 {
 					if e.StablePath == nil {
-						return errors.New("successor explicit Before sync lacks retained original file")
+						return errors.New("successor publication Before sync lacks retained original file")
 					}
-					if !explicitTarget.CompareAndSwap(nil, &sample) {
-						return errors.New("duplicate successor explicit Before sync")
+					if !publicationTarget.CompareAndSwap(nil, &sample) {
+						return errors.New("duplicate successor publication Before sync")
 					}
 					select {
-					case explicitBefore <- sample:
+					case publicationBefore <- sample:
 					default:
-						return errors.New("successor explicit Before observation overflow")
+						return errors.New("successor publication Before observation overflow")
 					}
 				}
 				if firstLSN.Load() == 0 {
-					if sample.attempts <= beforeACK.SyncAttempts || !firstLSN.CompareAndSwap(0, e.LSN) {
+					if !firstLSN.CompareAndSwap(0, e.LSN) {
 						return nil
 					}
 					if e.StablePath == nil {
-						return errors.New("first explicit sync lacks retained original file")
+						return errors.New("first publication sync lacks retained original file")
 					}
 					entered[0] <- sample
 					<-released[0]
@@ -398,7 +397,7 @@ func TestStandaloneNativeSharedBoundaryHeldSyncExactACK(t *testing.T) {
 					if i == 1 {
 						// Sample immediately after the actual driver return, independently of
 						// when the main test receives its buffered result.
-						out.explicitAfterBeforeReturn = explicitAfterSequence.Load() != 0
+						out.publicationAfterBeforeReturn = publicationAfterSequence.Load() != 0
 						out.returnSequence = eventSequence.Add(1)
 					}
 					if result != nil {
@@ -425,8 +424,8 @@ func TestStandaloneNativeSharedBoundaryHeldSyncExactACK(t *testing.T) {
 					if result.err != nil || result.id != ids[i] {
 						t.Fatalf("command%d journal ACK id=%v want=%s err=%v", i, result.id, ids[i], result.err)
 					}
-					if i == 1 && (!result.explicitAfterBeforeReturn || result.returnSequence <= explicitAfterSequence.Load()) {
-						t.Fatalf("successor driver returned before successful explicit physical sync: observed=%t return_sequence=%d after_sequence=%d", result.explicitAfterBeforeReturn, result.returnSequence, explicitAfterSequence.Load())
+					if i == 1 && (!result.publicationAfterBeforeReturn || result.returnSequence <= publicationAfterSequence.Load()) {
+						t.Fatalf("successor driver returned before successful own-publication physical sync: observed=%t return_sequence=%d after_sequence=%d", result.publicationAfterBeforeReturn, result.returnSequence, publicationAfterSequence.Load())
 					}
 					if i == 1 {
 						successorReturnSequence = result.returnSequence
@@ -447,12 +446,12 @@ func TestStandaloneNativeSharedBoundaryHeldSyncExactACK(t *testing.T) {
 			select {
 			case first = <-entered[0]:
 			case <-time.After(wait):
-				t.Fatal("setup: first explicit native journal fence did not reach real active-file sync")
+				t.Fatal("setup: first native journal publication did not reach real active-file sync")
 			}
 			firstHeld := standalone.Stats()
 			forcedBefore := writeConcernBenchmarkStat(t, before, "treedb.command_wal.group_commit.forced_total")
-			if got := writeConcernBenchmarkStat(t, firstHeld, "treedb.command_wal.group_commit.forced_total"); got != forcedBefore+1 {
-				t.Fatalf("setup: held sync did not select original forced group: before=%d held=%d", forcedBefore, got)
+			if got := writeConcernBenchmarkStat(t, firstHeld, "treedb.command_wal.group_commit.forced_total"); got != forcedBefore {
+				t.Fatalf("setup: held sync did not select original ordinary group: before=%d held=%d", forcedBefore, got)
 			}
 			if raw, err := read(ids[0]); err != nil {
 				t.Fatalf("setup: predecessor not publicly readable before sync: %v", err)
@@ -460,7 +459,7 @@ func TestStandaloneNativeSharedBoundaryHeldSyncExactACK(t *testing.T) {
 				requireStandaloneNativeJournalDocument(t, raw, ids[0], 1)
 			}
 			requireNoACK(0, "predecessor physical sync")
-			t.Logf("SETUP_PASS profile=%s first_explicit_captured_lsn=%d retained_path=%s original_forced_delta=1", profile, first.lsn, first.path)
+			t.Logf("SETUP_PASS profile=%s first_publication_captured_lsn=%d retained_path=%s original_forced_delta=0", profile, first.lsn, first.path)
 			start(1)
 			// JournalRequests increments after concern validation but before the
 			// boundary lock. Observe the second actual accepted wire request so an
@@ -480,7 +479,7 @@ func TestStandaloneNativeSharedBoundaryHeldSyncExactACK(t *testing.T) {
 			}
 			acceptedTick.Stop()
 			acceptedDeadline.Stop()
-			t.Logf("SECOND_ACCEPTED_BOUNDARY_PASS journal_requests_delta=2 explicit_sync_attempts_delta=%d first_lsn=%d", standalone.Server.writeConcernStats.syncAttempts.Load()-beforeACK.SyncAttempts, first.lsn)
+			t.Logf("SECOND_ACCEPTED_BOUNDARY_PASS journal_requests_delta=2 publication_sync_attempts_delta=%d first_lsn=%d", standalone.Server.writeConcernStats.syncAttempts.Load()-beforeACK.SyncAttempts, first.lsn)
 			installed := false
 			poll := time.NewTicker(10 * time.Millisecond)
 			defer poll.Stop()
@@ -518,7 +517,7 @@ func TestStandaloneNativeSharedBoundaryHeldSyncExactACK(t *testing.T) {
 			if !installed {
 				// Keep running after the named baseline RED so original/fresh typed
 				// readback and checked shutdown are still observed on that same arm.
-				t.Error("NATIVE_SHARED_BOUNDARY_SUCCESSOR_INSTALL_BLOCKED: successor did not install while predecessor explicit physical sync was held")
+				t.Error("NATIVE_SHARED_BOUNDARY_SUCCESSOR_INSTALL_BLOCKED: successor did not install while predecessor own-publication physical sync was held")
 			} else {
 				t.Log("SUCCESSOR_INSTALLED_WITH_BOTH_ACKS_HELD")
 			}
@@ -541,24 +540,24 @@ func TestStandaloneNativeSharedBoundaryHeldSyncExactACK(t *testing.T) {
 			}
 			t.Logf("EXACT_PREFIX_ACK_PASS first_lsn=%d later_lsn=%d first_ACK=true successor_ACK=false", first.lsn, later.lsn)
 			release(1)
-			// Durable successor still needs its explicit forced fence after an ordinary
-			// held completion. Neither registration nor aggregate sync counts witness it.
-			var explicitStart, explicitDone heldSync
+			// The successor receipt requires the matching successful own-publication
+			// After event. Aggregate counts alone cannot certify that physical work.
+			var publicationStart, publicationDone heldSync
 			select {
-			case explicitStart = <-explicitBefore:
+			case publicationStart = <-publicationBefore:
 			case <-time.After(wait):
-				t.Fatal("successor explicit physical Before sync was not observed after second SyncAttempts")
+				t.Fatal("successor own-publication physical Before sync was not observed after second SyncAttempts")
 			}
 			select {
-			case explicitDone = <-explicitAfter:
+			case publicationDone = <-publicationAfter:
 			case <-time.After(wait):
-				t.Fatal("successor explicit physical sync lacks successful matching After event")
+				t.Fatal("successor own-publication physical sync lacks successful matching After event")
 			}
-			if explicitStart.attempts != beforeACK.SyncAttempts+2 || explicitDone.attempts != beforeACK.SyncAttempts+2 || explicitStart.lsn < later.lsn || explicitStart.sequence < later.sequence || explicitStart.lsn != explicitDone.lsn || explicitStart.root != explicitDone.root || explicitStart.path != explicitDone.path || explicitStart.sequence >= explicitDone.sequence {
-				t.Fatalf("successor explicit physical sync identity/chronology mismatch: later=%+v before=%+v after=%+v", later, explicitStart, explicitDone)
+			if publicationStart.lsn < later.lsn || publicationStart.sequence < later.sequence || publicationStart.lsn != publicationDone.lsn || publicationStart.root != publicationDone.root || publicationStart.path != publicationDone.path || publicationStart.sequence >= publicationDone.sequence {
+				t.Fatalf("successor own-publication physical sync identity/chronology mismatch: later=%+v before=%+v after=%+v", later, publicationStart, publicationDone)
 			}
 			joinACK(1)
-			t.Logf("SUCCESSOR_EXPLICIT_PHYSICAL_SYNC_BEFORE_ACK_PASS profile=%s later_lsn=%d later_attempts_delta=%d explicit_lsn=%d root=%s path=%s explicit_attempts_delta=2 before_sequence=%d successful_after_sequence=%d driver_return_sequence=%d", profile, later.lsn, later.attempts-beforeACK.SyncAttempts, explicitStart.lsn, explicitStart.root, explicitStart.path, explicitStart.sequence, explicitDone.sequence, successorReturnSequence)
+			t.Logf("SUCCESSOR_PUBLICATION_PHYSICAL_SYNC_BEFORE_ACK_PASS profile=%s later_lsn=%d later_attempts_delta=%d publication_lsn=%d root=%s path=%s per_operation_receipt=true before_sequence=%d successful_after_sequence=%d driver_return_sequence=%d", profile, later.lsn, later.attempts-beforeACK.SyncAttempts, publicationStart.lsn, publicationStart.root, publicationStart.path, publicationStart.sequence, publicationDone.sequence, successorReturnSequence)
 			restore()
 			after := standalone.Stats()
 			afterACK := standalone.Server.StandaloneWriteConcernStats()
@@ -570,7 +569,7 @@ func TestStandaloneNativeSharedBoundaryHeldSyncExactACK(t *testing.T) {
 			delta := func(key string) uint64 {
 				return writeConcernBenchmarkStat(t, after, key) - writeConcernBenchmarkStat(t, before, key)
 			}
-			if delta("treedb.cache.checkpoint.runs") != 0 || delta("treedb.command_wal.group_commit.forced_total") != 2 || delta("treedb.command_wal.sync.count_total") < 2 || delta("treedb.command_wal.file_sync.calls_total") < 2 {
+			if delta("treedb.cache.checkpoint.runs") != 0 || delta("treedb.command_wal.group_commit.forced_total") != 0 || delta("treedb.command_wal.sync.count_total") < 2 || delta("treedb.command_wal.file_sync.calls_total") < 2 {
 				t.Fatalf("native boundary deltas checkpoints=%d forced=%d sync=%d file_sync=%d", delta("treedb.cache.checkpoint.runs"), delta("treedb.command_wal.group_commit.forced_total"), delta("treedb.command_wal.sync.count_total"), delta("treedb.command_wal.file_sync.calls_total"))
 			}
 			if afterACK.SyncAttempts-beforeACK.SyncAttempts != 2 || afterACK.JournalAcknowledgements-beforeACK.JournalAcknowledgements != 2 || afterACK.PhysicalSyncBoundaries-beforeACK.PhysicalSyncBoundaries != 2 || afterACK.SyncFailures != beforeACK.SyncFailures || afterACK.UncertainOutcomes != beforeACK.UncertainOutcomes {
@@ -631,8 +630,13 @@ func TestStandaloneNativeSharedBoundaryHeldSyncExactACK(t *testing.T) {
 	}
 }
 
-// Shared-entry safety fixtures use the original standalone owner and transport.
-// They deliberately do not alter collector settings or substitute a sync callback.
+// Shared native-entry safety fixtures use the original owner and transport.
+// Disable only the gateway coalescer: a default same-collection worker must wait
+// for its own native completion before dequeuing its successor. Independent RPCs
+// here isolate shared native-group overlap, never default coalescer activation.
+// The physical group collector policy and real sync callback stay unchanged.
+// Product-default batching is covered separately by the exact receipt RED and
+// the default held-receipt/queued-successor lifecycle control.
 type nativeSharedSafetyFixture struct {
 	s          *StandaloneServer
 	clients    [2]*mongo.Client
@@ -641,9 +645,13 @@ type nativeSharedSafetyFixture struct {
 	finish     func()
 }
 
-func newNativeSharedSafetyFixture(t *testing.T, dir string, profile treedb.Profile) *nativeSharedSafetyFixture {
+func newNativeSharedSafetyFixture(t *testing.T, dir string, profile treedb.Profile, productDefault ...bool) *nativeSharedSafetyFixture {
 	t.Helper()
-	s, err := OpenStandaloneServer(StandaloneOptions{Dir: dir, Profile: profile, DefaultCollectionOptions: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}})
+	opts := StandaloneOptions{Dir: dir, Profile: profile, DefaultCollectionOptions: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}}
+	if len(productDefault) == 0 || !productDefault[0] {
+		opts.InsertCoalescingMaxBatchSet = true
+	}
+	s, err := OpenStandaloneServer(opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -946,7 +954,6 @@ func TestStandaloneNativeSharedBoundaryCloseJoinsHeldSync(t *testing.T) {
 			if err := f.clients[0].Database("app").CreateCollection(f.ctx, "shared_journal"); err != nil {
 				t.Fatal(err)
 			}
-			beforeACK := f.s.Server.StandaloneWriteConcernStats()
 			registry := f.s.Backend.ValueLogIdentityPinRegistry()
 			if registry == nil {
 				t.Fatal("original registry absent")
@@ -1010,7 +1017,7 @@ func TestStandaloneNativeSharedBoundaryCloseJoinsHeldSync(t *testing.T) {
 				}
 			})
 			undo := durabilitycut.Install(func(e durabilitycut.Event) error {
-				if e.Resource == durabilitycut.ResourceCommandWAL && e.Point == durabilitycut.BeforeDependencyFileSync && e.LSN != 0 && f.s.Server.writeConcernStats.syncAttempts.Load() == beforeACK.SyncAttempts+1 && selected.CompareAndSwap(false, true) {
+				if e.Resource == durabilitycut.ResourceCommandWAL && e.Point == durabilitycut.BeforeDependencyFileSync && e.LSN != 0 && selected.CompareAndSwap(false, true) {
 					if e.StablePath == nil {
 						return errors.New("Close hold lost original file")
 					}
@@ -1037,7 +1044,7 @@ func TestStandaloneNativeSharedBoundaryCloseJoinsHeldSync(t *testing.T) {
 			select {
 			case lsn = <-entered:
 			case <-time.After(5 * time.Second):
-				t.Fatal("Close predecessor explicit physical hold not reached")
+				t.Fatal("Close predecessor own-publication physical hold not reached")
 			}
 			start(1)
 			requireNativeSharedSafetyInstalled(t, f, "successor", 2)
@@ -1151,10 +1158,11 @@ func TestStandaloneNativeSharedBoundaryCrashReopen(t *testing.T) {
 			}
 			entered, released := make(chan uint64, 1), make(chan struct{})
 			var held atomic.Bool
+			var heldLSN atomic.Uint64
 			var releaseOnce sync.Once
 			release := func() { releaseOnce.Do(func() { close(released) }) }
-			var explicitBefore atomic.Pointer[syncIdentity]
-			var explicitAfter atomic.Bool
+			var publicationBefore atomic.Pointer[syncIdentity]
+			var publicationAfter atomic.Bool
 			type result struct {
 				err   error
 				after bool
@@ -1196,28 +1204,28 @@ func TestStandaloneNativeSharedBoundaryCrashReopen(t *testing.T) {
 					return nil
 				}
 				if e.Point == durabilitycut.AfterDependencyFileSync {
-					if target := explicitBefore.Load(); target != nil && e.LSN == target.lsn && e.Root == target.root && e.Path == target.path {
+					if target := publicationBefore.Load(); target != nil && e.LSN == target.lsn && e.Root == target.root && e.Path == target.path {
 						if e.StablePath == nil {
-							return errors.New("crash explicit After lost original file")
+							return errors.New("crash publication After lost original file")
 						}
-						explicitAfter.Store(true)
+						publicationAfter.Store(true)
 					}
 					return nil
 				}
 				if e.Point != durabilitycut.BeforeDependencyFileSync {
 					return nil
 				}
-				attempt := f.s.Server.writeConcernStats.syncAttempts.Load()
-				if attempt == beforeACK.SyncAttempts+2 {
+				if heldLSN.Load() != 0 && e.LSN > heldLSN.Load() {
 					if e.StablePath == nil {
-						return errors.New("crash explicit Before lost original file")
+						return errors.New("crash publication Before lost original file")
 					}
 					target := &syncIdentity{lsn: e.LSN, root: e.Root, path: e.Path}
-					if !explicitBefore.CompareAndSwap(nil, target) {
-						return errors.New("duplicate crash successor explicit capture")
+					if !publicationBefore.CompareAndSwap(nil, target) {
+						return errors.New("duplicate crash successor publication capture")
 					}
 				}
-				if attempt == beforeACK.SyncAttempts+1 && held.CompareAndSwap(false, true) {
+				if held.CompareAndSwap(false, true) {
+					heldLSN.Store(e.LSN)
 					if e.StablePath == nil {
 						return errors.New("crash predecessor hold lost original file")
 					}
@@ -1236,7 +1244,7 @@ func TestStandaloneNativeSharedBoundaryCrashReopen(t *testing.T) {
 					if err == nil && (out == nil || out.InsertedID != ids[i]) {
 						err = fmt.Errorf("wrong insert result: %v", out)
 					}
-					results[i] <- result{err: err, after: explicitAfter.Load()}
+					results[i] <- result{err: err, after: publicationAfter.Load()}
 				}()
 			}
 			start(0)
@@ -1244,7 +1252,7 @@ func TestStandaloneNativeSharedBoundaryCrashReopen(t *testing.T) {
 			select {
 			case firstLSN = <-entered:
 			case <-time.After(5 * time.Second):
-				t.Fatal("crash predecessor explicit physical hold not reached")
+				t.Fatal("crash predecessor own-publication physical hold not reached")
 			}
 			start(1)
 			requireNativeSharedSafetyInstalled(t, f, "successor", 2)
@@ -1262,21 +1270,21 @@ func TestStandaloneNativeSharedBoundaryCrashReopen(t *testing.T) {
 				case r := <-results[i]:
 					joined[i] = true
 					if r.err != nil || (i == 1 && !r.after) {
-						t.Fatalf("crash command%d ACK lacks successful explicit sync: err=%v after=%t", i, r.err, r.after)
+						t.Fatalf("crash command%d ACK lacks successful own-publication sync: err=%v after=%t", i, r.err, r.after)
 					}
 				case <-time.After(5 * time.Second):
 					t.Fatalf("crash command%d lacks ACK terminal", i)
 				}
 			}
-			target := explicitBefore.Load()
-			if target == nil || target.lsn <= firstLSN || !explicitAfter.Load() {
-				t.Fatalf("crash successor explicit target invalid: first=%d target=%+v after=%t", firstLSN, target, explicitAfter.Load())
+			target := publicationBefore.Load()
+			if target == nil || target.lsn <= firstLSN || !publicationAfter.Load() {
+				t.Fatalf("crash successor publication target invalid: first=%d target=%+v after=%t", firstLSN, target, publicationAfter.Load())
 			}
 			after, afterACK := f.s.Stats(), f.s.Server.StandaloneWriteConcernStats()
-			if writeConcernBenchmarkStat(t, after, "treedb.cache.checkpoint.runs") != writeConcernBenchmarkStat(t, before, "treedb.cache.checkpoint.runs") || writeConcernBenchmarkStat(t, after, "treedb.command_wal.group_commit.forced_total")-writeConcernBenchmarkStat(t, before, "treedb.command_wal.group_commit.forced_total") != 2 || afterACK.JournalAcknowledgements-beforeACK.JournalAcknowledgements != 2 || afterACK.PhysicalSyncBoundaries-beforeACK.PhysicalSyncBoundaries != 2 {
+			if writeConcernBenchmarkStat(t, after, "treedb.cache.checkpoint.runs") != writeConcernBenchmarkStat(t, before, "treedb.cache.checkpoint.runs") || writeConcernBenchmarkStat(t, after, "treedb.command_wal.group_commit.forced_total")-writeConcernBenchmarkStat(t, before, "treedb.command_wal.group_commit.forced_total") != 0 || afterACK.JournalAcknowledgements-beforeACK.JournalAcknowledgements != 2 || afterACK.PhysicalSyncBoundaries-beforeACK.PhysicalSyncBoundaries != 2 {
 				t.Fatalf("crash ACK/fence contract mismatch: before=%+v after=%+v", beforeACK, afterACK)
 			}
-			fmt.Printf("%s profile=%s first_lsn=%d explicit_successor_lsn=%d checkpoint_delta=0\n", marker, profile, firstLSN, target.lsn)
+			fmt.Printf("%s profile=%s first_lsn=%d publication_successor_lsn=%d checkpoint_delta=0\n", marker, profile, firstLSN, target.lsn)
 			os.Exit(97) // No Checkpoint, Close, Disconnect or cleanup rescues these ACKs.
 		})
 	}
@@ -1421,7 +1429,8 @@ func TestStandaloneNativeJournalCustomBoundaryRemainsExclusive(t *testing.T) {
 func TestStandaloneNativeJournalSharedBoundaryUnlocksAfterSyncPanic(t *testing.T) {
 	for _, profile := range []treedb.Profile{treedb.ProfileCommandWALRelaxed, treedb.ProfileCommandWALDurable} {
 		t.Run(string(profile), func(t *testing.T) {
-			s, err := OpenStandaloneServer(StandaloneOptions{Dir: t.TempDir(), Profile: profile, DefaultCollectionOptions: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}})
+			// Keep the injected panic in this caller, rather than the default worker.
+			s, err := OpenStandaloneServer(StandaloneOptions{Dir: t.TempDir(), Profile: profile, InsertCoalescingMaxBatchSet: true, InsertCoalescingMaxBatch: 0, DefaultCollectionOptions: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1437,10 +1446,9 @@ func TestStandaloneNativeJournalSharedBoundaryUnlocksAfterSyncPanic(t *testing.T
 			if response, err := s.Server.commandResponse(context.Background(), "create", seed, nil, 0); err != nil || !mongoCommandResponseOK(response) {
 				t.Fatalf("create before panic: %s/%v", response, err)
 			}
-			attempt := s.Server.writeConcernStats.syncAttempts.Load() + 1
-			failure := errors.New("real shared-entry explicit sync panic")
+			failure := errors.New("real shared-entry own-publication sync panic")
 			undo := durabilitycut.Install(func(e durabilitycut.Event) error {
-				if e.Resource == durabilitycut.ResourceCommandWAL && e.Point == durabilitycut.BeforeDependencyFileSync && s.Server.writeConcernStats.syncAttempts.Load() == attempt {
+				if e.Resource == durabilitycut.ResourceCommandWAL && e.Point == durabilitycut.BeforeDependencyFileSync {
 					panic(failure)
 				}
 				return nil
@@ -1456,7 +1464,7 @@ func TestStandaloneNativeJournalSharedBoundaryUnlocksAfterSyncPanic(t *testing.T
 			}()
 			restore()
 			if recovered != failure {
-				t.Fatalf("real explicit sync panic=%v", recovered)
+				t.Fatalf("real own-publication sync panic=%v", recovered)
 			}
 			if !s.Server.standaloneWriteBoundaryMu.TryLock() {
 				t.Fatal("panic retained shared boundary")

@@ -831,7 +831,7 @@ func TestServerOfficialGoDriverUnacknowledgedInsertMany(t *testing.T) {
 // TestStandaloneServerOfficialDriverJournalFenceWithoutCheckpoint first checks
 // the acknowledged native route and complete checked lifecycle. Checkpoints are
 // the selected baseline side effect: that assertion must precede candidate-only
-// forced-group activation checks so a missing new route cannot obscure the RED.
+// receipt force-count checks so a missing new route cannot obscure that RED.
 func TestStandaloneServerOfficialDriverJournalFenceWithoutCheckpoint(t *testing.T) {
 	for _, profile := range []treedb.Profile{treedb.ProfileCommandWALRelaxed, treedb.ProfileCommandWALDurable} {
 		t.Run(string(profile), func(t *testing.T) {
@@ -839,8 +839,8 @@ func TestStandaloneServerOfficialDriverJournalFenceWithoutCheckpoint(t *testing.
 			if result.checkpoints != 0 {
 				t.Fatalf("explicit journal ACK constructed cache-owner checkpoints: delta=%d, want 0", result.checkpoints)
 			}
-			if result.forcedGroups != result.acknowledged {
-				t.Fatalf("original forced groups=%d want one per explicit journal ACK=%d", result.forcedGroups, result.acknowledged)
+			if result.forcedGroups != 0 {
+				t.Fatalf("covered operation issued redundant forced groups=%d for journal ACK=%d", result.forcedGroups, result.acknowledged)
 			}
 		})
 	}

@@ -295,6 +295,17 @@ owner counters absent at either boundary are `available: false`, never zero;
 a frozen campaign may additionally require selected inventory keys through
 `phase_stats_required_counters`.
 
+For an opted-in existing-collection single-document native BSON journal insert,
+the gateway's `SyncAttempts` counts the member's actual entered native durable
+wait, `PhysicalSyncBoundaries` its successfully completed operation boundary, and
+`JournalSyncNanos` the actual wait. Coalesced members can share one physical
+publication. These per-RPC counters are not syscall counts and need not equal
+`forced_total`, group counts or file-sync calls. `forced_total` continues to count
+only actual forced registrations; covered success may add none. Uncovered/direct
+fresh-fence accounting is unchanged. Selected errors and checked cleanup failure
+retain uncertainty without a masking second force. This changes no counter key,
+49-key requirement, representation, availability, monotonicity or consumer gate.
+
 The selected inventory contains49 counters:48 unsigned integers and1 decimal.
 `treedb.command_wal.dependency_debt.retries_total` remains in raw observations
 as a pending-debt gauge. Releasing covered debt drops its retry history, so this

@@ -361,11 +361,21 @@ measurement boundaries. `StandaloneServer.Stats` exposes its owning TreeDB's
 COW and maintenance diagnostics with existing lifecycle admission.
 
 For the native standalone COW owner, explicit `w:1,j:true` uses the original
-public command-WAL forced completion group. It completes the captured journal
-and persistent dependency prefix without constructing a physical root checkpoint.
+public command-WAL completion group without constructing a physical root checkpoint.
+An existing-collection single-document BSON insert opts into its own assigned
+publication's physical completion. The opt-in collection sibling API returns an
+opaque same-owner receipt only after the real registered durable wait, checked
+transaction cleanup and outer producer unlock. Coalesced strict members can share
+that publication; plain members receive no journal receipt or journal counters.
+Byte-split and sequential fallback members retain their exact own outcomes.
+The receipt covers the operation's effects and persistent dependencies, without
+promising completion of an unrelated later prefix. Zero/unselected, auto-create,
+multi-document commands, auxiliary/typed follow-up work and updates keep the
+fresh post-dispatch prefix fence. Direct and repeated Sync still do fresh physical
+work. No default collection API, profile, group delay or collector limit changes.
 The configured profile's ordinary acknowledgement behavior is unchanged. Every
-accepted journal command is fenced, including partial mutations and `ok:0`
-responses; a failure preserves the original response and adds uncertain
+accepted journal command retains a durable completion boundary, including partial
+mutations and `ok:0` responses on their fresh-fence fallback; a failure preserves the original response and adds uncertain
 `writeConcernError` rather than retrying. The gateway shares its dispatch-through-
 sync boundary only for `create`, `createIndexes`, `delete`, `dropIndexes`,
 `findAndModify`, `insert` and `update` when the actual collection manager proves
@@ -380,3 +390,12 @@ NoWAL and healthy unbound
 native constructors retain physical checkpoint fallback; classic applied-prefix
 behavior is unchanged. Root/snapshot/graph maintenance and Close still require
 their physical seals, so some checkpoint work remains outside request latency.
+
+For receipt-selected operations, `SyncAttempts` records each original RPC's actual
+entered native durable wait and `PhysicalSyncBoundaries` its successful completed
+operation boundary. Multiple RPCs may share physical work. `JournalSyncNanos`
+records that actual wait per member, so overlapping waits are not elapsed wall
+fractions. Selected errors preserve original uncertainty once, without replay or
+a masking second force; cleanup failure invalidates success. Uncovered operations
+retain existing fresh-fence accounting. Native `forced_total` and group/file sync
+counters continue to count actual events: no force is fabricated for a receipt.

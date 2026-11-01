@@ -11939,6 +11939,38 @@ func (c *Collection) InsertBatchValidatedBSON(ids, documents [][]byte) ([][]byte
 	return resultIDs, c.invalidateVectorIndexCoverageOnAcceptedMutation(err)
 }
 
+// InsertBatchValidatedBSONWithJournalReceipt opts into completion of this
+// operation's assigned native publication. It never promises a later unrelated
+// prefix. Zero/unselected keeps the caller's ordinary fresh-fence obligation.
+// Default insert APIs and direct Sync retain their existing physical contract.
+// A selected error is terminal: callers must not replay or mask it with Sync.
+func (c *Collection) InsertBatchValidatedBSONWithJournalReceipt(ids, documents [][]byte) (resultIDs [][]byte, completion backenddb.NativeJournalCompletion, err error) {
+	if c == nil {
+		return nil, completion, errCollectionNil
+	}
+	defer func() {
+		err = c.invalidateVectorIndexCoverageOnAcceptedMutation(err)
+		if err != nil {
+			completion = completion.WithoutSuccess()
+		}
+	}()
+	if c.nativeJSON == nil || c.manager == nil || !c.manager.CanShareStandaloneJournalBoundary() || len(ids) == 0 {
+		resultIDs, err = c.InsertBatchValidatedBSON(ids, documents)
+		return
+	}
+	journal := nativeInsertJournal{requested: true}
+	resultIDs, err = c.nativeInsertBatchWithJournal(ids, documents, nil, nil, true, &journal)
+	// The original transaction Close and outer producer unlock have both ended.
+	completion = journal.completion
+	if !c.nativeJSON.db.OwnsNativeJournalCompletion(completion) {
+		completion = backenddb.NativeJournalCompletion{}
+	}
+	if err != nil {
+		completion = completion.WithoutSuccess()
+	}
+	return
+}
+
 // PreflightCommandWALMutation checks collection-local command-WAL support for
 // an already-classified deterministic apply mutation before R3a appends its
 // local command-WAL frame.

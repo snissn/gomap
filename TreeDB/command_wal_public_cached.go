@@ -1826,12 +1826,12 @@ func (c *nativePublicCommandWALCompletion) RegisterNativeCommandWAL(appendFrame 
 	c.registration = registration
 	return err
 }
-func (c *nativePublicCommandWALCompletion) CompleteNativeCommandWAL(installErr error) error {
+func (c *nativePublicCommandWALCompletion) CompleteNativeCommandWAL(installErr error) (result db.NativeCommandWALCompletionResult, resultErr error) {
 	c.ReleaseNativeCommandWAL()
 	tdb, registration := c.db, c.registration
 	c.db, c.registration = nil, publicCommandWALRegistration{}
 	if tdb == nil {
-		return ErrClosed
+		return result, ErrClosed
 	}
 	if hook := tdb.commandWALGroupCommit.testBeforeNativeComplete; hook != nil {
 		hook()
@@ -1839,10 +1839,14 @@ func (c *nativePublicCommandWALCompletion) CompleteNativeCommandWAL(installErr e
 	publication := registration.publicCommandWALPublication
 	err := installErr
 	if err == nil {
-		publication, err = tdb.awaitPublicCommandWAL(registration, nil, nil)
+		result.WaitAttempted = registration.awaiting && registration.durable
+		var wait time.Duration
+		publication, err = tdb.awaitPublicCommandWAL(registration, &wait, nil)
+		result.WaitNanos = uint64(wait)
+		result.PhysicalCompleted = result.WaitAttempted && err == nil
 	}
 	tdb.finishPublicCommandWALGroupPublication(publication, err)
 	// The original COW receipt poisons assigned failures, including failures
 	// before registration. A preassignment refusal leaves the handle usable.
-	return err
+	return result, err
 }

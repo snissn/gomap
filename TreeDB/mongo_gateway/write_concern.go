@@ -181,7 +181,15 @@ func (s *Server) standaloneWriteCommandResponse(ctx context.Context, name string
 		defer s.standaloneWriteBoundaryMu.RUnlock()
 	}
 
-	response, dispatchErr := s.dispatchCommandResponse(ctx, name, command, sequences, cursorOwner)
+	var insertJournal *standaloneInsertJournalOutcome
+	var response wire.Document
+	var dispatchErr error
+	if concern.policy == standaloneWriteConcernJournal && name == "insert" && s.canShareStandaloneJournalBoundary(name) {
+		insertJournal = &standaloneInsertJournalOutcome{}
+		response, dispatchErr = s.insertResponseWithJournal(ctx, command, sequences, insertJournal)
+	} else {
+		response, dispatchErr = s.dispatchCommandResponse(ctx, name, command, sequences, cursorOwner)
+	}
 	commandOK := dispatchErr == nil && mongoCommandResponseOK(response)
 	if commandOK {
 		stats.logicalWrites.Add(1)
@@ -195,13 +203,30 @@ func (s *Server) standaloneWriteCommandResponse(ctx context.Context, name string
 	}
 
 	// A handler can return ok:0 after partially applying a multi-definition DDL
-	// command. Without a mutation outcome signal from every handler, every
-	// accepted journal request conservatively closes the boundary before its
-	// response is returned, including command-error responses.
-	stats.syncAttempts.Add(1)
-	syncStart := time.Now()
-	physicalSync, syncErr := s.syncStandaloneWriteConcern()
-	stats.journalSyncNanos.Add(uint64(time.Since(syncStart)))
+	// command. An authenticated operation receipt covers only its own checked
+	// publication. All uncovered requests conservatively close a fresh boundary
+	// before returning, including command-error responses.
+	var physicalSync bool
+	var syncErr error
+	if insertJournal != nil && insertJournal.completion.Selected() {
+		completion := insertJournal.completion
+		// The same original owner's assigned publication already performed the
+		// actual native durability wait. Never replay or issue a masking force.
+		if completion.Attempted() {
+			stats.syncAttempts.Add(1)
+		}
+		stats.journalSyncNanos.Add(completion.WaitNanos())
+		physicalSync = completion.Completed()
+		syncErr = insertJournal.err
+		if syncErr == nil && !physicalSync {
+			syncErr = errors.New("native operation journal completion did not complete")
+		}
+	} else {
+		stats.syncAttempts.Add(1)
+		syncStart := time.Now()
+		physicalSync, syncErr = s.syncStandaloneWriteConcern()
+		stats.journalSyncNanos.Add(uint64(time.Since(syncStart)))
+	}
 	stats.acknowledgementNanos.Add(uint64(time.Since(start)))
 	if physicalSync {
 		stats.physicalSyncBoundaries.Add(1)

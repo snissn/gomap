@@ -6,8 +6,76 @@ import "github.com/snissn/gomap/TreeDB/internal/transactionowner"
 // public group's final ACK. It owns neither a command nor an engine version.
 type NativeCommandWALCompletion interface {
 	RegisterNativeCommandWAL(func(bool) (uint64, error)) error
-	CompleteNativeCommandWAL(error) error
+	CompleteNativeCommandWAL(error) (NativeCommandWALCompletionResult, error)
 	ReleaseNativeCommandWAL()
+}
+
+// NativeCommandWALCompletionResult describes the existing registered durable
+// wait, rather than a logical-install or WALStable inference. A wait may share
+// physical work with other requests; it is not a syscall count.
+type NativeCommandWALCompletionResult struct {
+	WaitAttempted, PhysicalCompleted bool
+	WaitNanos                        uint64
+}
+
+// NativeJournalCompletion is an operation-local scalar observation. It retains
+// only the original owner's identity, never a database, lease, command or cut.
+// Zero means unselected and requires the caller's usual durability boundary.
+type NativeJournalCompletion struct {
+	owner                         *transactionowner.Owner
+	assignedLSN                   uint64
+	waitNanos                     uint64
+	selected, attempted, physical bool
+}
+
+func (r NativeJournalCompletion) Selected() bool      { return r.selected }
+func (r NativeJournalCompletion) Attempted() bool     { return r.attempted }
+func (r NativeJournalCompletion) Completed() bool     { return r.physical && r.assignedLSN != 0 }
+func (r NativeJournalCompletion) AssignedLSN() uint64 { return r.assignedLSN }
+func (r NativeJournalCompletion) WaitNanos() uint64   { return r.waitNanos }
+
+// WithoutSuccess preserves selected failure/attempt observations when checked
+// cleanup fails after the original physical publication completed.
+func (r NativeJournalCompletion) WithoutSuccess() NativeJournalCompletion {
+	r.physical = false
+	return r
+}
+
+// PrepareNativeJournalCompletion authenticates the immutable ORIGINAL binding
+// during actual publication preparation. This reuses the original owner query,
+// including its nonblocking lifecycle admission, before any raw/publish lock.
+// That query alone certifies no completion: assignment/install plus the actual
+// registered durable wait below supply the operation-specific physical proof.
+// Unknown bridge implementations cannot issue an operation receipt.
+func (db *DB) PrepareNativeJournalCompletion(owner *transactionowner.Owner) NativeJournalCompletion {
+	if db == nil || owner == nil || db.privateCOWOwner != owner || db.closing.Load() ||
+		db.publicationPoisoned.Load() || db.commandWALFlushPoisoned.Load() ||
+		!db.nativeSemanticActive.Load() || !db.CommandWALEnabled() || !db.HasNativeSemanticBridge() {
+		return NativeJournalCompletion{}
+	}
+	bridge, ok := db.nativeCommandWALCompletion.(interface {
+		NativeCommandWALPrefixOwnerOpen(*DB, *transactionowner.Owner) bool
+	})
+	if !ok || !bridge.NativeCommandWALPrefixOwnerOpen(db, owner) {
+		return NativeJournalCompletion{}
+	}
+	return NativeJournalCompletion{owner: owner, selected: true}
+}
+
+// CompleteNativeJournalCompletion combines the authenticated original binding
+// with this publication's assignment/install and its actual durable wait.
+func (db *DB) CompleteNativeJournalCompletion(r NativeJournalCompletion, publication NativePublicationResult, completion NativeCommandWALCompletionResult) NativeJournalCompletion {
+	if db == nil || !r.selected || r.owner != db.privateCOWOwner {
+		return NativeJournalCompletion{}
+	}
+	r.assignedLSN = publication.AssignedLSN
+	r.attempted, r.waitNanos = completion.WaitAttempted, completion.WaitNanos
+	r.physical = completion.PhysicalCompleted && publication.Assigned && publication.LogicalInstalled && !publication.Uncertain
+	return r
+}
+
+func (db *DB) OwnsNativeJournalCompletion(r NativeJournalCompletion) bool {
+	return db != nil && r.selected && r.owner != nil && r.owner == db.privateCOWOwner
 }
 
 // NativeCommandWALCompletionBridge is bound once by public Open. Direct backend

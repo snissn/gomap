@@ -246,6 +246,7 @@ type NativeSemanticCapture interface {
 // installation, WAL completion and exact physical sealing. Consumed transfers
 // the original descriptor custody even when a later assigned phase fails.
 type NativePublicationResult struct {
+	Journal                                                                  NativeJournalCompletion
 	Consumed, Assigned, Uncertain, LogicalInstalled, WALCompleted, WALStable bool
 	AssignedLSN, LogicalSequence                                             uint64
 	Seal                                                                     rootpublication.PhysicalSealReceipt

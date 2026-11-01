@@ -4909,7 +4909,7 @@ The native explicit journal fence is covered by
 actual standalone opener, both CommandWAL profiles and official-driver journal
 ACKs with exact readback and checked original/fresh-owner Close. Its first
 behavioral assertion requires zero cache-owner checkpoints; the candidate then
-requires forced-group activation. The retained baseline characterization is
+requires no redundant forced registration for the opted-in insert operation. The retained baseline characterization is
 separate from this product regression.
 `TestNativeJournalPrefixOriginalOwnerAndFallback` and
 `TestCOWNativeJournalPrefixUnboundCapability` cover admission and healthy fallback;
@@ -4952,9 +4952,14 @@ controls in `TestStandaloneNativeSharedBoundaryHeldSyncExactACK`,
 `TestStandaloneNativeSharedBoundaryCloseJoinsHeldSync` and
 `TestStandaloneNativeSharedBoundaryCrashReopen`, both CommandWAL profiles.
 The first control requires successor installation while the predecessor's real
-explicit sync is held, then observes the successor's separate explicit Before
-and successful After file-sync events before accepting its ACK. Durable ordinary
-completion and aggregate forced/sync counters alone do not satisfy that oracle.
+own-publication sync is held, then observes the successor's actual matching Before
+and successful After file-sync events before accepting its ACK. Aggregate
+forced/sync counters alone do not satisfy that oracle. These shared-entry
+fixtures explicitly disable gateway coalescing: the default same-collection
+worker waits for its native completion before dequeuing another request.
+Product-default queued batching is proved by the unchanged behavioral receipt
+control, and `TestStandaloneNativeJournalDefaultHeldReceiptQueuesSuccessor`
+checks a queued successor, no early ACK, checked Close and fresh-owner readback.
 Failure preserves partial responses and poison without retry; Close joins the
 held lifetime; abrupt exit97 follows both actual ACKs without a repairing Close.
 `TestNativeJournalBoundaryOwnerCapability` checks exact owner/backend, NoWAL,
@@ -4964,3 +4969,26 @@ requires nonblocking refusal behind the actual pending lifecycle writer.
 commands, auth's unrelated store and custom override; the custom-boundary and real
 shared-sync-panic controls preserve exclusion and deferred unlock respectively.
 These are source contracts; execution and final public qualification are separate.
+
+Operation-scoped receipt coverage uses
+`TestStandaloneNativeJournalCoalescedInsertPhysicalReceiptNoRefence`: the exact
+retained baseline behavioral RED function requires two real queued strict RPCs,
+a deterministic single coalesced batch/LSN, real ordinary Before/After, no early
+ACK, actual completed accounting, exact duplicate-free BSON and checked original
+and fresh Close before its final no-refence assertion. Historical characterization
+and the baseline extra physical epochs remain retained under their original source.
+`TestStandaloneNativeJournalReceiptCoalescerMembership` covers strict/plain and
+byte-split membership plus independent duplicate fallback.
+`TestStandaloneNativeJournalReceiptFallbackAndFailure` retains auto-create and
+multi-document fresh fences and injects actual ordinary sync failure to require
+one uncertainty outcome without ACK or masking force. General collection controls
+`TestNativeBSONJournalReceiptOriginalOwnerAndFallback`,
+`TestNativeBSONJournalReceiptPhysicalFailureIsTerminal` and
+`TestNativeBSONJournalReceiptCheckedCleanupInvalidatesSuccess` cover wrong/fresh
+owners, NoWAL, empty/duplicate requests, direct repeated physical Sync, real I/O
+error/poison and joined checked cleanup errors. Unrecognized lower completion
+fakes remain unable to manufacture original-owner receipts.
+`BenchmarkNativeBSONJournalReceiptInsert` compares actual general collection
+inserts plus fresh Sync against opt-in completion, reporting allocations with
+checked original/fresh-owner readback and lifecycle outside request timing.
+Source assertions do not establish execution or performance qualification.
