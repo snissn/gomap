@@ -157,6 +157,190 @@ class CompareTests(unittest.TestCase):
         self.assertIn("READ\t9515\t18556.9", summary)
         self.assertEqual(json.loads((self.out / "validation.json").read_text())["status"], "validated-consumer-evidence")
 
+    def phase_fixture(self):
+        """Synthetic replay controls only; actual owner execution is separate."""
+        import ycsb_compare_live as live
+        self.manifest["phase_stats"] = dict(schema_version=1, enabled=True, max_observations=64, rpc_timeout_seconds=5)
+        self.save(self.out/"manifest.json", self.manifest)
+        opened = COMPARE.read(self.directory/"server.evidence/owner.open.json")
+        ids = []
+        for index, stem in enumerate(("load", "run_1")):
+            phase_id = self.manifest["campaign_id"]+":treedb_mongo:"+stem+":"+str(index)*32
+            ids.append(phase_id)
+            self.change(stem+".close.json", lambda value: value.update(phase_id=phase_id))
+            launch = COMPARE.read(self.directory/(stem+".launch.json"))
+            launch.update(phase_id=phase_id, phase_stats={})
+            for boundary in ("before", "after"):
+                sequence = 2*index+1+(boundary == "after")
+                point = 0 if sequence == 1 else 4
+                request = dict(schema_version=1, owner_id=opened["owner_id"], request_id=f"{sequence:032x}",
+                    client=dict(self.process, pid=5678+index, start_ticks=600+index, exe_sha256="b"*64),
+                    source_id=self.manifest["server_builds"][self.target]["source_commit"], operation="phase_stats",
+                    campaign_id=self.manifest["campaign_id"], phase_id=phase_id, stem=stem, boundary=boundary, sequence=sequence)
+                stats = dict(opened["stats"], **{key:str(sequence*10) for key in live.GATEWAY_COUNTERS})
+                stats.update({"treedb.cache.cow.txn.logical_seq":str(sequence*10),
+                              "treedb.cache.checkpoint.runs":str(sequence),
+                              "treedb.cache.checkpoint.total_ms":str(sequence)+".125"})
+                response = dict(error="", receipt=dict(schema_version=1, kind="read_only_live_owner_phase_stats",
+                    request=request, owner=dict(opened, stats=stats, observed_utc=call_result(point,point)["start_utc"]),
+                    result=call_result(point,point)))
+                self.write_phase_packet(stem, boundary, request, response, call_result(point,point), launch)
+            self.save(self.directory/(stem+".launch.json"), launch)
+        for filename in ("runtime.json", "lifecycle.json"):
+            self.change(filename, lambda value: value.update(phase_ids=ids))
+
+    def write_phase_packet(self, stem, boundary, request, response, result, launch=None):
+        prefix = stem+".phase-stats-"+boundary
+        sequence = request["sequence"]
+        artifacts = {}
+        for label, suffix, value in (("client_request", ".request", request), ("client_response", ".response", response),
+                                    ("server_request", ".server-request", request), ("server_receipt", ".server-receipt", response["receipt"])):
+            path = self.directory/(prefix+suffix+".json")
+            self.save(path, value)
+            artifacts[label] = dict(path=path.name, sha256=COMPARE.digest(path))
+        self.save(self.directory/f"server.evidence/owner.phase-stats-{sequence:02d}-request.json", request)
+        self.save(self.directory/f"server.evidence/owner.phase-stats-{sequence:02d}.json", response["receipt"])
+        metadata = dict(schema_version=1, kind="owner_phase_stats_client", campaign_id=self.manifest["campaign_id"],
+            target=self.target, server_build=self.manifest["server_builds"][self.target], client=request["client"],
+            phase_id=request["phase_id"], stem=stem, boundary=boundary, sequence=sequence, result=result, artifacts=artifacts)
+        path = self.directory/(prefix+".json")
+        self.save(path, metadata)
+        launch = launch if launch is not None else COMPARE.read(self.directory/(stem+".launch.json"))
+        launch["phase_stats"][boundary] = dict(path=path.name, sha256=COMPARE.digest(path), client=request["client"])
+        self.save(self.directory/(stem+".launch.json"), launch)
+
+    def test_phase_stats_full_replay_and_exact_counter_deltas(self):
+        self.phase_fixture()
+        self.check(True)
+        report = COMPARE.read(self.out/"validation.json")["phase_stats"]["observations"][self.target]
+        self.assertEqual(len(report), 2)
+        self.assertEqual(report[0]["counters"]["treedb.cache.checkpoint.runs"]["delta"], "1")
+        self.assertEqual(report[0]["counters"]["treedb.cache.checkpoint.total_ms"]["delta"], "1.000")
+        self.assertEqual(report[1]["counters"]["treedb.command_wal.file_sync.calls_total"], dict(available=False))
+
+    def test_phase_stats_rejects_rebound_counter_identity_and_time_forgery(self):
+        cases = {
+            "reset": lambda request,response: response["receipt"]["owner"]["stats"].update({"treedb.cache.checkpoint.runs":"0"}),
+            "nan": lambda request,response: response["receipt"]["owner"]["stats"].update({"treedb.cache.checkpoint.total_ms":"NaN"}),
+            "negative": lambda request,response: response["receipt"]["owner"]["stats"].update({"treedb.cache.checkpoint.total_ms":"-1"}),
+            "missing ACK": lambda request,response: response["receipt"]["owner"]["stats"].pop("ycsb.gateway.write_concern.Requests"),
+            "owner": lambda request,response: response["receipt"]["owner"].update(owner_id="e"*32),
+            "source": lambda request,response: request.update(source_id="e"*40),
+            "stale nonce": lambda request,response: request.update(request_id="1".zfill(32)),
+            "unknown": lambda request,response: request.update(fixture_id="fake"),
+            "overlap": lambda request,response: response["receipt"].update(result=call_result(3,4)),
+        }
+        for name, mutate in cases.items():
+            with self.subTest(case=name):
+                self.phase_fixture()
+                request = COMPARE.read(self.directory/"load.phase-stats-after.request.json")
+                response = COMPARE.read(self.directory/"load.phase-stats-after.response.json")
+                response["receipt"]["request"] = request
+                mutate(request,response)
+                self.write_phase_packet("load", "after", request, response,
+                    call_result(3,4) if name == "overlap" else call_result(4,4))
+                self.check(False)
+
+    def test_phase_stats_disabled_missing_duplicate_and_failed_claims_rejected(self):
+        self.phase_fixture()
+        del self.manifest["phase_stats"]
+        self.save(self.out/"manifest.json", self.manifest)
+        self.check(False)
+        self.phase_fixture()
+        path = self.directory/"run_1.phase-stats-after.response.json"
+        original = path.read_bytes()
+        path.unlink()
+        self.check(False)
+        path.write_bytes(original)
+        self.save(self.directory/"run_1.phase-stats-after.failure.json", dict(error="injected after-call failure"))
+        self.check(False)
+        (self.directory/"run_1.phase-stats-after.failure.json").unlink()
+        self.save(self.directory/"run_2.phase-stats-before.json", dict(stale=True))
+        self.check(False)
+
+    def test_phase_stats_rejects_reset_between_individually_monotonic_pairs(self):
+        self.phase_fixture()
+        for boundary, count in (("before", "1"), ("after", "2")):
+            prefix = "run_1.phase-stats-"+boundary
+            request = COMPARE.read(self.directory/(prefix+".request.json"))
+            response = COMPARE.read(self.directory/(prefix+".response.json"))
+            response["receipt"]["owner"]["stats"]["ycsb.gateway.write_concern.Requests"] = count
+            self.write_phase_packet("run_1", boundary, request, response, call_result(4,4))
+        self.check(False, "decreased/reset")
+
+    def test_phase_stats_optional_counters_and_decimal_precision(self):
+        import ycsb_compare_live as live
+        required = {key:"0" for key in live.GATEWAY_COUNTERS}
+        required["treedb.cache.cow.txn.logical_seq"] = "0"
+        key = "treedb.cache.checkpoint.total_ms"
+        before = dict(required, **{key:"123456789012345678901234567890.001"})
+        after = dict(required, **{key:"123456789012345678901234567890.002"})
+        self.assertEqual(live.phase_counter_deltas(before, after)[key]["delta"], "0.001")
+        self.assertEqual(live.phase_counter_deltas(required, required)[key], dict(available=False))
+        with self.assertRaises(ValueError):
+            live.phase_counter_deltas(required, required, [key])
+        with self.assertRaises(ValueError):
+            live.phase_counter_deltas(dict(required, **{key:"NaN"}), required)
+
+    def test_phase_stats_launcher_before_failure_prevents_spawn(self):
+        from types import SimpleNamespace
+        from unittest import mock
+        import ycsb_compare_live as live
+        self.phase_fixture()
+        for suffix in (".launch.json", ".close.json", ".out"):
+            (self.directory/("run_1"+suffix)).unlink()
+        args = SimpleNamespace(directory=str(self.directory), stem="run_1", command=[sys.executable, "-c", "pass"])
+        with mock.patch.object(live, "phase_stats_rpc", side_effect=ValueError("before observation failed")), \
+                mock.patch.object(COMPARE.subprocess, "Popen") as spawned:
+            with self.assertRaisesRegex(ValueError, "before observation failed"):
+                COMPARE.launch(args)
+            spawned.assert_not_called()
+        self.assertFalse((self.directory/"run_1.launch.json").exists())
+        self.assertFalse((self.directory/"run_1.out").exists())
+
+    def test_phase_stats_launcher_after_failure_retains_reaped_child_outcome(self):
+        from types import SimpleNamespace
+        from unittest import mock
+        import ycsb_compare_live as live
+        self.phase_fixture()
+        for suffix in (".launch.json", ".close.json", ".out"):
+            (self.directory/("run_1"+suffix)).unlink()
+        args = SimpleNamespace(directory=str(self.directory), stem="run_1",
+            command=[sys.executable, "-c", "import time; print('actual child completed'); time.sleep(.05)"])
+        calls = []
+        def observe(directory, stem, boundary, phase_id, manifest):
+            calls.append((boundary,COMPARE.now()))
+            if boundary == "after":
+                pid = COMPARE.read(directory/(stem+".cleanup.json"))["process"]["pid"]
+                with self.assertRaises(FileNotFoundError):
+                    COMPARE.observe_core(pid)
+                raise ValueError("after observation failed")
+            return dict(path="synthetic-before-only",sha256="c"*64,client=self.process)
+        with mock.patch.object(live, "phase_stats_rpc", side_effect=observe):
+            with self.assertRaisesRegex(ValueError, "after observation failed"):
+                COMPARE.launch(args)
+        record = COMPARE.read(self.directory/"run_1.launch.json")
+        self.assertEqual(record["exit_code"], 0)
+        self.assertFalse(record["timed_out"])
+        self.assertEqual(set(record["phase_stats"]), {"before"})
+        self.assertLessEqual(COMPARE.timestamp(calls[0][1]), COMPARE.timestamp(record["start_utc"]))
+        self.assertLessEqual(COMPARE.timestamp(record["end_utc"]), COMPARE.timestamp(calls[1][1]))
+        self.assertIn("actual child completed", (self.directory/"run_1.out").read_text())
+
+    def test_phase_stats_preflight_refuses_before_output_or_build(self):
+        refused = self.out/"must-not-exist"
+        for settings in (dict(YCSB_PHASE_STATS="0"), dict(YCSB_PHASE_STATS="true"),
+                         dict(YCSB_PHASE_STATS="1",TARGETS="treedb_native"),
+                         dict(YCSB_PHASE_STATS="1",TARGETS="treedb_mongo treedb_native"),
+                         dict(YCSB_PHASE_STATS="1",RUN_REPEATS="32"),
+                         dict(YCSB_PHASE_STATS="1",RUN_REPEATS="9"*80)):
+            with self.subTest(settings=settings):
+                env = dict(os.environ, OUT_DIR=str(refused), BUILD="true", PARSE_ONLY="false", **settings)
+                result = subprocess.run(["bash",str(ROOT/"ycsb_compare_mongodb_treedb.sh")], env=env, text=True,capture_output=True)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn("YCSB_PHASE_STATS",result.stderr)
+                self.assertFalse(refused.exists())
+
     def test_historical_known_elf_does_not_imply_new_runtime_or_policy_claim(self):
         from unittest import mock
         self.manifest['client']['exe_sha256'] = COMPARE.CONTROLLED_CLIENT_SHA

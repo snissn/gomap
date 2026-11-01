@@ -284,7 +284,7 @@ def server_evidence(directory, target, manifest, phase_ids):
     exit_success(stopped["exit_code"],"owned service cleanup failed")
     require(same(stopped["process"],launch["process"]), "owned service cleanup failed")
     import ycsb_compare_live
-    ycsb_compare_live.validate(directory,target,manifest,lifecycle)
+    return ycsb_compare_live.validate(directory,target,manifest,lifecycle)
 
 
 def validate(out):
@@ -312,9 +312,12 @@ def validate(out):
     require((out / "client-buildinfo.txt").read_text().strip(), "missing actual client build info")
     require(SHA.fullmatch(manifest["client"]["exe_sha256"]), "missing client build hash")
     require(manifest["targets"] and len(set(manifest["targets"])) == len(manifest["targets"]) and set(manifest["targets"]) <= set(TARGETS), "invalid targets")
+    import ycsb_compare_live
+    phase_stats = ycsb_compare_live.phase_stats_enabled(manifest)
     for key in ("phase_seconds","helper_seconds","cleanup_seconds","phase_outer_seconds","helper_outer_seconds"):
         positive_timeout(manifest["deadlines"][key],f"manifest {key}")
     rows, errors, seen_ids = [], [], set()
+    phase_counter_rows = {}
     measured_intervals=[]
     for target in manifest["targets"]:
         require(manifest["formats"][target] in {"json", "bson"}, "unsupported document format")
@@ -337,7 +340,9 @@ def validate(out):
             except (ValueError, KeyError, TypeError, OSError) as error:
                 errors.append(f"{target}/{stem}: {error}")
         try:
-            server_evidence(directory, target, manifest, ids)
+            observed_phases = server_evidence(directory, target, manifest, ids)
+            if phase_stats:
+                phase_counter_rows[target] = observed_phases
         except (ValueError, KeyError, TypeError, OSError) as error:
             errors.append(f"{target}/server: {error}")
     for previous,current in zip(measured_intervals,measured_intervals[1:]):
@@ -345,6 +350,9 @@ def validate(out):
             errors.append(f"measured phases overlap/out of order: {previous[0]} and {current[0]}")
     status = "invalid" if errors else "validated-consumer-evidence"
     write_status = dict(schema_version=1, status=status, errors=errors, scope="Client receipts, original live owner calls, typed random preservation and separate deterministic fixture only; not full matrix or crash qualification")
+    if phase_stats:
+        write_status["phase_stats"] = dict(schema_version=1, observations=phase_counter_rows,
+            scope="Read-only non-atomic original-owner cumulative counter differences across client phases; concurrent maintenance may overlap. Summed durations are not fractions of wall time.")
     (out / "validation.json").write_text(json.dumps(write_status, indent=2, allow_nan=False)+"\n")
     headers = ["target", "phase", "repeat", "operation", "count", "ops_per_sec", "avg_us", "p50_us", "p95_us", "p99_us", "p999_us", "max_us", "operation_error_count", "valid"]
     for row in rows:
@@ -619,6 +627,12 @@ def launch(args):
     role = getattr(args,"role","client")
     observe_runtime = resolve_launch_role(manifest,command,executable_hash,role)
     observer = runtime_observer.RuntimeObserver(command[0],executable_hash,OBSERVED_CLIENT_SYMBOLS[executable_hash]) if observe_runtime else None
+    import ycsb_compare_live
+    phase_stats = ycsb_compare_live.phase_stats_enabled(manifest) and role == "client" and (
+        stem == "load" or re.fullmatch(r"run_[1-9][0-9]*", stem) is not None)
+    phase_boundaries = {}
+    if phase_stats:
+        phase_boundaries["before"] = ycsb_compare_live.phase_stats_rpc(out, stem, "before", phase_id, manifest)
     started = now()
     deadline=time.monotonic()+timeout
     identity=None
@@ -698,7 +712,19 @@ def launch(args):
         finally:
             signal.signal(signal.SIGTERM,previous_handler)
             if descriptor is not None: os.close(descriptor)
-    write_new(out / f"{stem}.launch.json", dict(schema_version=1, campaign_id=manifest["campaign_id"], phase_id=phase_id, process=identity, runtime_observation=runtime_evidence, start_utc=started, end_utc=now(), exit_code=code, timeout_seconds=timeout,cleanup_timeout_seconds=cleanup_timeout,outer_timeout_seconds=outer_timeout,timed_out=timed_out, output_sha256=digest(out / f"{stem}.out"), receipt_sha256=digest(receipt) if receipt.exists() else None))
+    # Capture the unchanged child interval before observing its owner again.
+    ended = now()
+    record = dict(schema_version=1, campaign_id=manifest["campaign_id"], phase_id=phase_id, process=identity, runtime_observation=runtime_evidence, start_utc=started, end_utc=ended, exit_code=code, timeout_seconds=timeout,cleanup_timeout_seconds=cleanup_timeout,outer_timeout_seconds=outer_timeout,timed_out=timed_out, output_sha256=digest(out / f"{stem}.out"), receipt_sha256=digest(receipt) if receipt.exists() else None)
+    if phase_stats:
+        record["phase_stats"] = phase_boundaries
+        try:
+            phase_boundaries["after"] = ycsb_compare_live.phase_stats_rpc(out, stem, "after", phase_id, manifest)
+        finally:
+            # A failed after observation cannot discard the actual reaped
+            # child's original outcome or interval, even when it exited zero.
+            write_new(out / f"{stem}.launch.json", record)
+    else:
+        write_new(out / f"{stem}.launch.json", record)
     return 124 if timed_out else code if code > 0 else 3 if code < 0 else 0
 
 

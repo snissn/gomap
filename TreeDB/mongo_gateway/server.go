@@ -12,6 +12,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -89,7 +90,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	evidence, err := ycsbevidence.OpenFromEnv(string(standalone.Options.Profile), standalone.Options.Dir, standalone.Backend, standalone.Stats)
+	evidence, err := ycsbevidence.OpenFromEnv(string(standalone.Options.Profile), standalone.Options.Dir, standalone.Backend, func() map[string]string {
+		return ownerEvidenceStats(standalone)
+	})
 	if err != nil {
 		fmt.Fprintf(stderr, "mongo gateway server: owner evidence: %v\n", err)
 		_ = ln.Close()
@@ -144,6 +147,30 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+// This adapter belongs only to the opt-in executable observer. Stats supplies a
+// fresh map; neither public Stats nor the hot acknowledgement path is changed.
+func ownerEvidenceStats(standalone *mongogateway.StandaloneServer) map[string]string {
+	stats := standalone.Stats()
+	if stats == nil || os.Getenv("YCSB_OWNER_PHASE_STATS") != "1" {
+		return stats
+	}
+	ack := standalone.Server.StandaloneWriteConcernStats()
+	for name, value := range map[string]uint64{
+		"Requests": ack.Requests, "VisibleRequests": ack.VisibleRequests,
+		"JournalRequests": ack.JournalRequests, "LogicalWrites": ack.LogicalWrites,
+		"VisibleAcknowledgements": ack.VisibleAcknowledgements, "JournalAcknowledgements": ack.JournalAcknowledgements,
+		"SyncAttempts": ack.SyncAttempts, "PhysicalSyncBoundaries": ack.PhysicalSyncBoundaries,
+		"PreMutationRejections": ack.PreMutationRejections, "MalformedRejections": ack.MalformedRejections,
+		"UnsupportedRejections": ack.UnsupportedRejections, "TimeoutRejections": ack.TimeoutRejections,
+		"SyncFailures": ack.SyncFailures, "DurabilityUnavailableFailures": ack.DurabilityUnavailableFailures,
+		"SyncBoundaryFailures": ack.SyncBoundaryFailures, "UncertainOutcomes": ack.UncertainOutcomes,
+		"AcknowledgementNanos": ack.AcknowledgementNanos, "JournalSyncNanos": ack.JournalSyncNanos,
+	} {
+		stats["ycsb.gateway.write_concern."+name] = strconv.FormatUint(value, 10)
+	}
+	return stats
 }
 
 func parseFlags(args []string, stderr io.Writer) (cliConfig, error) {

@@ -7,10 +7,319 @@ pair of supplied digest strings or an activation label is never sufficient.
 import base64
 import hashlib
 import json
+import os
 import pathlib
 import re
+import signal
+import socket
+import time
+import uuid
+from decimal import Decimal, InvalidOperation, localcontext
 import ycsb_compare_validate as c
 import ycsb_correctness_validate as exact
+
+
+# Existing monotonic sources only. Pending-debt gauges and maxima are not sums.
+GATEWAY_COUNTERS = tuple("ycsb.gateway.write_concern."+name for name in (
+    "Requests", "VisibleRequests", "JournalRequests", "LogicalWrites",
+    "VisibleAcknowledgements", "JournalAcknowledgements", "SyncAttempts",
+    "PhysicalSyncBoundaries", "PreMutationRejections", "MalformedRejections",
+    "UnsupportedRejections", "TimeoutRejections", "SyncFailures",
+    "DurabilityUnavailableFailures", "SyncBoundaryFailures", "UncertainOutcomes",
+    "AcknowledgementNanos", "JournalSyncNanos"))
+PHASE_INTEGER_COUNTERS = (
+    "treedb.cache.cow.txn.logical_seq", "treedb.cache.checkpoint.runs",
+    *("treedb.command_wal."+name for name in (
+        "flush.count_total", "flush.ns_total", "sync.count_total", "sync.ns_total",
+        "file_sync.calls_total", "file_sync.ns_total", "file_sync.errors_total",
+        "directory_sync.calls_total", "directory_sync.ns_total", "directory_sync.errors_total",
+        "dependency_debt.retries_total")),
+    *("treedb.command_wal.group_commit."+name for name in (
+        "attempts_total", "groups_total", "commits_total", "participants_total",
+        "dependency_entries_attempted_total", "dependency_entries_covered_total",
+        "leaders_total", "followers_total", "syncs_total", "errors_total", "forced_total",
+        "wait_ns_total", "trigger.timeout_total", "trigger.commit_limit_total",
+        "trigger.byte_limit_total", "trigger.explicit_sync_total", "trigger.sealed_collection_total",
+        "bypasses_total")), *GATEWAY_COUNTERS)
+PHASE_DECIMAL_COUNTERS = ("treedb.cache.checkpoint.total_ms",)
+PHASE_RPC_SECONDS = 5
+
+
+def phase_stats_enabled(manifest):
+    settings = manifest.get("phase_stats")
+    if settings is None:
+        c.require("phase_stats" not in manifest and "phase_stats_required_counters" not in manifest,
+                  "disabled campaign contains phase stats settings")
+        return False
+    c.require(c.same(settings, dict(schema_version=1, enabled=True, max_observations=64,
+                                  rpc_timeout_seconds=PHASE_RPC_SECONDS)), "invalid phase stats contract")
+    c.require(manifest["targets"] == ["treedb_mongo"] and
+              type(manifest["run_repeats"]) is int and 1 <= manifest["run_repeats"] <= 31,
+              "phase stats requires sole gateway target and at most 31 repeats")
+    return True
+
+
+def phase_stats_sequence(stem, boundary):
+    c.require(boundary in ("before", "after"), "invalid phase stats boundary")
+    c.require(stem == "load" or re.fullmatch(r"run_([1-9]|[12][0-9]|3[01])", stem),
+              "invalid phase stats stem")
+    return 2*(0 if stem == "load" else int(stem[4:]))+1+(boundary == "after")
+
+
+def _phase_endpoint(value, opened):
+    c.require(c.schema(value) and value["kind"] == "private_owner_checkpoint_control" and
+              value["owner_id"] == opened["owner_id"], "phase stats endpoint owner mismatch")
+    c.require(isinstance(value["address"], str), "invalid phase stats loopback address")
+    address = value["address"].split(":")
+    c.require(len(address) == 2 and address[0] == "127.0.0.1" and
+              address[1].isascii() and address[1].isdecimal() and 0 < int(address[1]) < 65536,
+              "invalid phase stats loopback address")
+    return address[0], int(address[1])
+
+
+def _phase_observation(receipt, request, opened, build, profile, bounds):
+    c.require(c.schema(receipt) and receipt["kind"] == "read_only_live_owner_phase_stats" and
+              c.same(receipt["request"], request), "phase stats receipt/request mismatch")
+    observed = receipt["owner"]
+    c.observation(observed, build, profile)
+    c.require(observed["backend"] == "cow", "phase stats requires actual native owner")
+    for key in ("schema_version", "kind", "owner_id", "process", "data_dir", "data_device",
+                "data_inode", "profile", "backend", "observed_gomaxprocs"):
+        c.require(c.same(observed[key], opened[key]), "phase stats actual owner identity mismatch")
+    interval = c.result(receipt["result"], "read-only phase stats", bounds=bounds)
+    c.require(interval[0] <= c.timestamp(observed["observed_utc"]) <= interval[1],
+              "phase stats observation outside actual call")
+    c.require(not {"collections_flush_all", "collections_checkpoint_storage"} & receipt.keys(),
+              "phase stats claims a storage callback")
+    return observed
+
+
+def phase_stats_rpc(directory, stem, boundary, phase_id, manifest):
+    """One bounded private observation outside the original client launch clock."""
+    c.require(phase_stats_enabled(manifest) and directory.name == "treedb_mongo", "phase stats disabled")
+    started, clock = c.now(), time.monotonic_ns()
+    deadline = time.monotonic()+PHASE_RPC_SECONDS
+    prefix = stem+".phase-stats-"+boundary
+    evidence = directory/"server.evidence"
+    old_term = signal.getsignal(signal.SIGTERM)
+    def cancelled(signum, frame):
+        raise InterruptedError("phase stats interrupted by signal "+str(signum))
+    signal.signal(signal.SIGTERM, cancelled)
+    try:
+        build = manifest["server_builds"][directory.name]
+        opened = c.read(evidence/"owner.open.json")
+        c.observation(opened, build, manifest["profile"])
+        c.require(c.same(opened["process"], c.read(directory/"server.launch.json")["process"]) and
+                  c.same(opened["process"], c.observe(opened["process"]["pid"])), "stale phase stats owner")
+        st = os.stat(opened["data_dir"])
+        c.require((st.st_dev, st.st_ino) == (opened["data_device"], opened["data_inode"]),
+                  "phase stats data directory changed")
+        address = _phase_endpoint(c.read(evidence/"owner.checkpoint-control.json"), opened)
+        client = c.observe(os.getpid())
+        request = dict(schema_version=1, owner_id=opened["owner_id"], request_id=uuid.uuid4().hex,
+                       client=client, source_id=build["source_commit"], operation="phase_stats",
+                       campaign_id=manifest["campaign_id"], phase_id=phase_id, stem=stem,
+                       boundary=boundary, sequence=phase_stats_sequence(stem, boundary))
+        request_path = directory/(prefix+".request.json")
+        c.write_new(request_path, request)
+        wire = request_path.read_bytes()
+        c.require(len(wire) <= 8192, "phase stats request exceeds control framing")
+        def remaining():
+            seconds = deadline-time.monotonic()
+            c.require(seconds > 0, "phase stats 5s RPC budget exhausted")
+            return seconds
+        with socket.create_connection(address, timeout=remaining()) as connection:
+            connection.settimeout(remaining())
+            connection.sendall(wire)
+            response_bytes = bytearray()
+            while b"\n" not in response_bytes and len(response_bytes) <= 1 << 20:
+                connection.settimeout(remaining())
+                chunk = connection.recv(min(65536, (1 << 20)+1-len(response_bytes)))
+                if not chunk:
+                    break
+                response_bytes.extend(chunk)
+        c.require(response_bytes.endswith(b"\n") and len(response_bytes) <= 1 << 20,
+                  "phase stats response exceeds framing or is truncated")
+        response_path = directory/(prefix+".response.json")
+        with response_path.open("xb") as stream:
+            stream.write(response_bytes)
+        response = c.read(response_path)
+        c.require(set(response) == {"receipt", "error"} and response["error"] == "", "phase stats RPC failed: "+str(response.get("error")))
+        sequence = request["sequence"]
+        copies = {"client_request": request_path, "client_response": response_path}
+        for label, name in (("server_request", f"owner.phase-stats-{sequence:02d}-request.json"),
+                            ("server_receipt", f"owner.phase-stats-{sequence:02d}.json")):
+            copied = directory/(prefix+"."+label.replace("_", "-")+".json")
+            with copied.open("xb") as stream:
+                stream.write((evidence/name).read_bytes())
+            copies[label] = copied
+        c.require(c.same(c.read(copies["server_request"]), request) and
+                  c.same(c.read(copies["server_receipt"]), response["receipt"]), "phase stats raw/client copies differ")
+        c.require(c.same(opened["process"], c.observe(opened["process"]["pid"])), "phase stats owner changed during RPC")
+        remaining()
+        ended = c.now()
+        result = dict(attempted=True, success=True, error="", start_utc=started, end_utc=ended,
+                      elapsed_ns=time.monotonic_ns()-clock)
+        _phase_observation(response["receipt"], request, opened, build, manifest["profile"],
+                           c.result(result, "phase stats RPC"))
+        metadata = dict(schema_version=1, kind="owner_phase_stats_client", campaign_id=manifest["campaign_id"],
+                        target=directory.name, server_build=build, client=client, phase_id=phase_id,
+                        stem=stem, boundary=boundary, sequence=sequence, result=result,
+                        artifacts={label: dict(path=p.name, sha256=c.digest(p)) for label,p in copies.items()})
+        path = directory/(prefix+".json")
+        c.write_new(path, metadata)
+        return dict(path=path.name, sha256=c.digest(path), client=client)
+    except BaseException as error:
+        c.write_new(directory/(prefix+".failure.json"), dict(schema_version=1, kind="owner_phase_stats_failure",
+                    campaign_id=manifest["campaign_id"], phase_id=phase_id, stem=stem, boundary=boundary,
+                    start_utc=started, end_utc=c.now(), error=str(error)))
+        raise
+    finally:
+        signal.signal(signal.SIGTERM, old_term)
+
+
+def phase_counter_deltas(before, after, required=()):
+    inventory = set(PHASE_INTEGER_COUNTERS+PHASE_DECIMAL_COUNTERS)
+    c.require(isinstance(required, list) or required == (), "invalid required phase counter list")
+    c.require(all(isinstance(name, str) for name in required) and len(set(required)) == len(required),
+              "invalid/duplicate required phase counter")
+    c.require(set(required) <= inventory, "unknown required phase counter")
+    required = set(required) | set(GATEWAY_COUNTERS) | {"treedb.cache.cow.txn.logical_seq"}
+    values = {}
+    for name in PHASE_INTEGER_COUNTERS+PHASE_DECIMAL_COUNTERS:
+        parsed = []
+        for snapshot in (before, after):
+            if name not in snapshot:
+                parsed.append(None)
+                continue
+            value = snapshot[name]
+            c.require(isinstance(value, str), "non-string phase counter: "+name)
+            if name in PHASE_INTEGER_COUNTERS:
+                c.require(re.fullmatch(r"[0-9]+", value) is not None, "invalid unsigned phase counter: "+name)
+                parsed.append(int(value))
+            else:
+                try:
+                    number = Decimal(value)
+                except InvalidOperation:
+                    raise ValueError("invalid decimal phase counter: "+name)
+                c.require(number.is_finite() and number >= 0, "nonfinite/negative phase counter: "+name)
+                parsed.append(number)
+        c.require(name not in required or None not in parsed, "required phase counter unavailable: "+name)
+        if None in parsed:
+            values[name] = dict(available=False)
+        else:
+            c.require(parsed[1] >= parsed[0], "phase counter decreased/reset: "+name)
+            if name in PHASE_DECIMAL_COUNTERS:
+                # Preserve every decimal digit; the default 28-digit context
+                # would silently round large cumulative counters.
+                with localcontext() as context:
+                    exponent = min(value.as_tuple().exponent for value in parsed)
+                    context.prec = max(len(value.as_tuple().digits)+value.as_tuple().exponent-exponent for value in parsed)+1
+                    delta = str(parsed[1]-parsed[0])
+            else:
+                delta = str(parsed[1]-parsed[0])
+            values[name] = dict(available=True, before=before[name], after=after[name], delta=delta)
+    return values
+
+
+def phase_stats_boundary(directory, stem, boundary, launch, manifest):
+    build = manifest["server_builds"][directory.name]
+    evidence = directory/"server.evidence"
+    opened = c.read(evidence/"owner.open.json")
+    c.observation(opened, build, manifest["profile"])
+    _phase_endpoint(c.read(evidence/"owner.checkpoint-control.json"), opened)
+    prefix = stem+".phase-stats-"+boundary
+    binding = launch["phase_stats"][boundary]
+    c.require(set(binding) == {"path", "sha256", "client"} and binding["path"] == prefix+".json" and binding["sha256"] == c.digest(directory/binding["path"]),
+              "phase stats metadata binding mismatch")
+    metadata = c.read(directory/binding["path"])
+    sequence = phase_stats_sequence(stem, boundary)
+    c.require(c.schema(metadata) and metadata["kind"] == "owner_phase_stats_client" and
+              metadata["campaign_id"] == manifest["campaign_id"] and metadata["target"] == directory.name and
+              c.same(metadata["server_build"], build) and metadata["phase_id"] == launch["phase_id"] and
+              metadata["stem"] == stem and metadata["boundary"] == boundary and
+              type(metadata["sequence"]) is int and metadata["sequence"] == sequence,
+              "phase stats metadata identity mismatch")
+    c.process(metadata["client"])
+    c.require(c.same(binding["client"], metadata["client"]), "phase stats client binding mismatch")
+    c.require(not (directory/(prefix+".failure.json")).exists(), "failed phase stats observation")
+    copies = {}
+    c.require(set(metadata["artifacts"]) == {"client_request", "client_response", "server_request", "server_receipt"},
+              "phase stats artifact inventory mismatch")
+    for label, suffix in (("client_request", ".request.json"), ("client_response", ".response.json"),
+                          ("server_request", ".server-request.json"), ("server_receipt", ".server-receipt.json")):
+        item = metadata["artifacts"][label]
+        c.require(item["path"] == prefix+suffix and item["sha256"] == c.digest(directory/item["path"]),
+                  "phase stats artifact hash/path mismatch")
+        copies[label] = c.read(directory/item["path"])
+    request, response = copies["client_request"], copies["client_response"]
+    c.require(c.same(request, copies["server_request"]) and c.same(response["receipt"], copies["server_receipt"]) and
+              set(response) == {"receipt", "error"} and response["error"] == "", "phase stats raw/client mismatch")
+    for label, name in (("server_request", f"owner.phase-stats-{sequence:02d}-request.json"),
+                        ("server_receipt", f"owner.phase-stats-{sequence:02d}.json")):
+        original = evidence/name
+        copied = directory/metadata["artifacts"][label]["path"]
+        c.require(original.read_bytes() == copied.read_bytes(), "phase stats original/copy byte mismatch")
+    c.require(set(request) == {"schema_version", "owner_id", "request_id", "client", "source_id", "operation",
+                               "campaign_id", "phase_id", "stem", "boundary", "sequence"}, "unknown/missing phase stats request field")
+    c.require(isinstance(request["phase_id"], str) and re.fullmatch(
+        re.escape(manifest["campaign_id"]+":treedb_mongo:"+stem+":")+r"[0-9a-f]{32}", request["phase_id"]),
+        "invalid phase stats launcher phase identity")
+    c.require(c.schema(request) and request["operation"] == "phase_stats" and request["owner_id"] == opened["owner_id"] and
+              isinstance(request["request_id"], str) and re.fullmatch(r"[0-9a-f]{32}", request["request_id"]) and
+              c.same(request["client"], metadata["client"]) and request["source_id"] == build["source_commit"] and
+              request["campaign_id"] == manifest["campaign_id"] and request["phase_id"] == launch["phase_id"] and
+              request["stem"] == stem and request["boundary"] == boundary and
+              type(request["sequence"]) is int and request["sequence"] == sequence and
+              not request.get("fixture_id") and not request.get("snapshot_sha256"), "phase stats request identity mismatch")
+    bounds = c.result(metadata["result"], "phase stats RPC", bounds=owner_bounds(directory, "server"))
+    c.require(bounds[1]-bounds[0] <= PHASE_RPC_SECONDS*1_000_000_000 and metadata["result"]["elapsed_ns"] <= PHASE_RPC_SECONDS*1_000_000_000,
+              "phase stats RPC exceeded 5s")
+    observed = _phase_observation(response["receipt"], request, opened, build, manifest["profile"], bounds)
+    return dict(bounds=bounds, observation=observed, request=request)
+
+
+def phase_stats_campaign(directory, manifest):
+    enabled = phase_stats_enabled(manifest)
+    stems = ["load"]+[f"run_{i}" for i in range(1, manifest["run_repeats"]+1)]
+    claims = list(directory.glob("*.phase-stats-*.json"))+list((directory/"server.evidence").glob("owner.phase-stats-*.json"))
+    if not enabled:
+        c.require(not claims and not any("phase_stats" in c.read(directory/(stem+".launch.json")) for stem in stems),
+                  "disabled campaign contains phase stats claims")
+        return []
+    rows, nonces, previous = [], set(), None
+    previous_stats = None
+    for stem in stems:
+        launch = c.read(directory/(stem+".launch.json"))
+        c.require(set(launch["phase_stats"]) == {"before", "after"}, "incomplete phase stats pair")
+        before, after = [phase_stats_boundary(directory, stem, boundary, launch, manifest) for boundary in ("before", "after")]
+        c.require(c.same(before["request"]["client"], after["request"]["client"]), "phase stats launcher changed within phase")
+        c.require(before["bounds"][1] <= c.timestamp(launch["start_utc"]) <= c.timestamp(launch["end_utc"]) <= after["bounds"][0],
+                  "phase stats overlaps original client launch clock")
+        c.require(previous is None or previous <= before["bounds"][0], "phase stats observations overlap/out of order")
+        previous = after["bounds"][1]
+        required = manifest.get("phase_stats_required_counters", [])
+        if previous_stats is not None:
+            # Census, sentinel and maintenance can add work between phases;
+            # they cannot reset an original owner's cumulative counters.
+            phase_counter_deltas(previous_stats, before["observation"]["stats"], required)
+        previous_stats = after["observation"]["stats"]
+        for item in (before, after):
+            nonce = item["request"]["request_id"]
+            c.require(nonce not in nonces, "reused phase stats request nonce")
+            nonces.add(nonce)
+        rows.append(dict(stem=stem, before=before, after=after,
+                         counters=phase_counter_deltas(before["observation"]["stats"], after["observation"]["stats"],
+                                                       required)))
+    expected = {f"owner.phase-stats-{i:02d}{suffix}.json" for i in range(1, 2*len(stems)+1) for suffix in ("", "-request")}
+    c.require({p.name for p in (directory/"server.evidence").glob("owner.phase-stats-*.json")} == expected,
+              "phase stats sequence inventory mismatch")
+    expected_clients = {stem+".phase-stats-"+boundary+suffix+".json" for stem in stems
+                        for boundary in ("before", "after")
+                        for suffix in ("", ".request", ".response", ".server-request", ".server-receipt")}
+    c.require({p.name for p in directory.glob("*.phase-stats-*.json")} == expected_clients,
+              "phase stats client artifact inventory mismatch")
+    return rows
 
 
 def expected_keys(count):
@@ -190,6 +499,18 @@ def validate(directory, target, manifest, lifecycle):
         previous_end=bounds[1]
     c.require(c.timestamp(load_launch["end_utc"]) <= receipts["loaded"][1][0] <= receipts["loaded"][1][1] <= c.timestamp(runs[0]["start_utc"]), "loaded snapshot is not between load and measured runs")
     c.require(max(c.timestamp(value["end_utc"]) for value in runs) <= receipts["preclose"][1][0], "preclose snapshot precedes settled measured clients")
+    phase_rows = phase_stats_campaign(directory, manifest)
+    if phase_rows:
+        c.require(phase_rows[0]["after"]["bounds"][1] <= receipts["loaded"][1][0] <=
+                  receipts["loaded"][1][1] <= phase_rows[1]["before"]["bounds"][0],
+                  "loaded census overlaps phase stats brackets")
+        c.require(phase_rows[-1]["after"]["bounds"][1] <= receipts["preclose"][1][0],
+                  "preclose helper overlaps phase stats bracket")
+        if "common_load" in manifest:
+            sentinel = c.read(directory/"public-sentinel.json")
+            c.require(receipts["loaded"][1][1] <= c.timestamp(sentinel["start_utc"]) <=
+                      c.timestamp(sentinel["end_utc"]) <= phase_rows[1]["before"]["bounds"][0],
+                      "common-load sentinel overlaps phase stats bracket")
     c.require(c.same(snapshots["preclose"][0],snapshots["reopened"][0]), "canonical typed random state preservation mismatch")
     c.require(lifecycle["preclose_state_sha256"] == snapshots["preclose"][1] and lifecycle["reopened_state_sha256"] == snapshots["reopened"][1], "canonical random snapshot digest mismatch")
     c.require(lifecycle["preclose_state_utc"] == receipts["preclose"][0]["ended_utc"] and lifecycle["reopened_state_utc"] == receipts["reopened"][0]["ended_utc"], "aggregate snapshot timestamps differ from actual calls")
@@ -226,6 +547,7 @@ def validate(directory, target, manifest, lifecycle):
     expected = c.read(directory/"fixture.expected.json")
     c.require(expected["source_id"] == build["source_commit"] and expected["fixture_id"] == fixture_id and expected["format"] == manifest["formats"][target] and expected["profile"] == manifest["profile"], "deterministic fixture identity mismatch")
     exact.validate(expected,[c.read(directory/name) for name in ("fixture.updated.json.load.json","fixture.updated.json","fixture.reopened.json")])
+    return phase_rows
 
 
 

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -24,6 +25,13 @@ func startActualOwnerCheckpoint(observer *Observer, server *mongogateway.Standal
 }
 
 func checkpointOwner(t *testing.T) (*Observer, func() error, func() error, string) {
+	observer, server, _, evidence := checkpointOwnerWithServer(t)
+	return observer, server.Collections.FlushAll, server.Collections.CheckpointStorage, evidence
+}
+
+// The phase controls need explicit checked original Close followed by fresh
+// reopen/readback while the same test still owns its temporary directories.
+func checkpointOwnerWithServer(t *testing.T) (*Observer, *mongogateway.StandaloneServer, func() error, string) {
 	t.Helper()
 	requireLinuxProcessEvidence(t)
 	data, evidence := t.TempDir(), t.TempDir()
@@ -34,15 +42,23 @@ func checkpointOwner(t *testing.T) (*Observer, func() error, func() error, strin
 	}
 	observer, err := OpenFromEnv("command_wal_relaxed", data, server.Backend, server.Stats)
 	if err != nil {
-		server.Close()
+		if closeErr := server.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
 		t.Fatal(err)
 	}
+	var once sync.Once
+	var closeErr error
+	closeOwner := func() error {
+		once.Do(func() { closeErr = observer.Close(server.Close) })
+		return closeErr
+	}
 	t.Cleanup(func() {
-		if err := observer.Close(server.Close); err != nil {
+		if err := closeOwner(); err != nil {
 			t.Error(err)
 		}
 	})
-	return observer, server.Collections.FlushAll, server.Collections.CheckpointStorage, evidence
+	return observer, server, closeOwner, evidence
 }
 func TestCheckpointDisabledHasNoControlOrCallbacks(t *testing.T) {
 	t.Setenv("YCSB_OWNER_CHECKPOINT", "")

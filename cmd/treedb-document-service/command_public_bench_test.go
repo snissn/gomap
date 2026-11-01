@@ -33,6 +33,8 @@ import (
 const commandPerfProfile = "command_wal_durable"
 
 type commandPerfReport struct {
+	StartupTrace                                                      map[string]*commandPerfStartupTrace `json:"startup_trace,omitempty"`
+	startupTraceEnabled                                               bool
 	Version                                                           string `json:"version"`
 	HTTPBinary, NativeBinary, HTTPBinarySHA256, NativeBinarySHA256    string
 	Command, Operation, Label, Directory, Phase                       string
@@ -126,6 +128,7 @@ func TestCommandPublicPerformance(t *testing.T) {
 	}
 	defer output.Close()
 	report := commandPerfReport{Version: "actual-command-v2", Command: os.Getenv("GOMAP_COMMAND_PERF_COMMAND"), Operation: os.Getenv("GOMAP_COMMAND_PERF_OPERATION"), Label: os.Getenv("GOMAP_COMMAND_PERF_LABEL"), HTTPBinary: os.Getenv("GOMAP_COMMAND_PERF_HTTP_BINARY"), NativeBinary: os.Getenv("GOMAP_COMMAND_PERF_NATIVE_BINARY"), Directory: prefix + ".db", Requested: 1000, AllocationEvidence: "Server TotalAlloc/Mallocs are not exported by these command diagnostics. Driver Go B/op is inapplicable; use the separately reviewed in-process service benchmark for allocation attribution."}
+	report.startupTraceEnabled = os.Getenv("GOMAP_COMMAND_PERF_STARTUP_TRACE") == "1"
 	defer func() {
 		if err := json.NewEncoder(output).Encode(report); err != nil {
 			t.Error(err)
@@ -193,7 +196,7 @@ func runCommandPerf(parent context.Context, prefix string, r *commandPerfReport)
 	ctx, cancel := context.WithTimeout(parent, 10*time.Minute)
 	defer cancel()
 	r.Phase = "seed-start"
-	seed, err := startCommandPerf(ctx, prefix+".seed.log", r.HTTPBinary, r.Directory, true, r.LegacyFlag)
+	seed, err := startCommandPerf(ctx, prefix+".seed.log", r.HTTPBinary, r.Directory, true, r.LegacyFlag, r.newStartupTrace("seed"))
 	if err != nil {
 		return err
 	}
@@ -248,7 +251,7 @@ func runCommandPerf(parent context.Context, prefix string, r *commandPerfReport)
 	if r.Command == "native" {
 		bin = r.NativeBinary
 	}
-	p, err := startCommandPerf(ctx, prefix+".serve.log", bin, r.Directory, r.Command == "http", r.LegacyFlag)
+	p, err := startCommandPerf(ctx, prefix+".serve.log", bin, r.Directory, r.Command == "http", r.LegacyFlag, r.newStartupTrace("serve"))
 	if err != nil {
 		return err
 	}
@@ -332,8 +335,9 @@ func runCommandPerf(parent context.Context, prefix string, r *commandPerfReport)
 		return closeErr
 	}
 	r.Phase = "second-fresh-reopen"
+	reopenTrace := r.newStartupTrace("reopen")
 	reopenStart := time.Now()
-	reopened, err := startCommandPerf(ctx, prefix+".reopen.log", bin, r.Directory, r.Command == "http", r.LegacyFlag)
+	reopened, err := startCommandPerf(ctx, prefix+".reopen.log", bin, r.Directory, r.Command == "http", r.LegacyFlag, reopenTrace)
 	if err != nil {
 		return err
 	}
@@ -1073,7 +1077,14 @@ func TestCommandPerfResultValidation(t *testing.T) {
 	})
 }
 
-func startCommandPerf(ctx context.Context, logPath, bin, dir string, httpCommand, legacy bool) (*commandPerfProcess, error) {
+func startCommandPerf(ctx context.Context, logPath, bin, dir string, httpCommand, legacy bool, trace *commandPerfStartupTrace) (_ *commandPerfProcess, resultErr error) {
+	if trace != nil {
+		trace.ProbeBoundary = "native connection plus Hello; Close attempted with existing error handling"
+		if httpCommand {
+			trace.ProbeBoundary = "HTTP health status 200 after body drain/close attempts; separate native listener not probed"
+		}
+		defer func() { trace.finish(resultErr) }()
+	}
 	address := func() (string, error) {
 		l, err := net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
@@ -1106,14 +1117,23 @@ func startCommandPerf(ctx context.Context, logPath, bin, dir string, httpCommand
 	if err != nil {
 		return nil, err
 	}
+	trace.mark("prepared")
 	p.cmd = exec.CommandContext(ctx, bin, args...)
 	p.cmd.Stdout, p.cmd.Stderr = p.log, p.log
-	if err = p.cmd.Start(); err != nil {
+	spawnStart := trace.begin()
+	err = p.cmd.Start()
+	trace.end("spawn", spawnStart, err)
+	if err != nil {
 		p.log.Close()
 		return nil, err
 	}
 	deadline := time.Now().Add(20 * time.Second)
+	probeKind := "native_hello"
+	if httpCommand {
+		probeKind = "http_health"
+	}
 	for {
+		probeStart := trace.begin()
 		probe, cancel := context.WithTimeout(ctx, time.Second)
 		if httpCommand {
 			req, _ := http.NewRequestWithContext(probe, http.MethodGet, p.http+"/v1/health", nil)
@@ -1133,6 +1153,7 @@ func startCommandPerf(ctx context.Context, logPath, bin, dir string, httpCommand
 				c.Close()
 			}
 		}
+		trace.end(probeKind, probeStart, err)
 		cancel()
 		if err == nil {
 			return p, nil
@@ -1141,7 +1162,9 @@ func startCommandPerf(ctx context.Context, logPath, bin, dir string, httpCommand
 			stopErr := p.stop()
 			return nil, errors.Join(fmt.Errorf("command readiness: %w (log %s)", err, logPath), stopErr)
 		}
+		sleepStart := trace.begin()
 		time.Sleep(10 * time.Millisecond)
+		trace.end("poll_sleep", sleepStart, nil)
 	}
 }
 func (p *commandPerfProcess) post(ctx context.Context, path string, input, output any) error {
