@@ -329,6 +329,9 @@ func prepareNativeJournalMaintenanceTarget(t *testing.T, svc *Service, typed, ad
 			req.ColumnGraphServing = &options
 		}
 		if out, err := svc.OptimizeIndex(ctx, create.Name, req); err != nil || !out.Status.Loaded || out.Status.RebuildNeeded {
+			for cause := err; cause != nil; cause = errors.Unwrap(cause) {
+				t.Logf("initial target Optimize error chain: %T: %v", cause, cause)
+			}
 			t.Fatalf("initial successful target Optimize=%+v err=%v", out, err)
 		}
 	}
