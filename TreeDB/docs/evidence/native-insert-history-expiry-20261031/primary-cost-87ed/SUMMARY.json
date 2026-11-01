@@ -1,0 +1,47 @@
+{
+  "acceptance_gates": {
+    "allocations": true,
+    "bytes": true,
+    "candidate_primary_activation": true,
+    "timing": false
+  },
+  "accepted": false,
+  "baseline": "79a545a1d745e848f2aa859896fb962e07204b73",
+  "bytes_disposition": "PASS",
+  "candidate": "87edfacf617e6877b28be8ffba752ce2539f2cb9",
+  "gates": {
+    "allocations": true,
+    "bytes": true,
+    "candidate_primary_activation": true,
+    "timing": false
+  },
+  "measurement_pass": false,
+  "median_paired_delta_percent": 6.72088822665069,
+  "medians": {
+    "baseline": {
+      "B/op": 96219.5,
+      "allocs/op": 341.0,
+      "generation_advances/op": 0.0,
+      "ns/op": 2052265.0
+    },
+    "candidate": {
+      "B/op": 96219.0,
+      "allocs/op": 341.0,
+      "generation_advances/op": 0.0,
+      "ns/op": 2074599.0
+    }
+  },
+  "paired_deltas_percent": [
+    87.2804514300745,
+    -8.864630441336763,
+    4.749537626093803,
+    8.692238827207577,
+    10.071203553834906,
+    -19.816601199267268,
+    1.3762998039899887,
+    30.157263815765155
+  ],
+  "quiet": true,
+  "runtime_input_equivalent": false,
+  "timing_disposition": "FAIL"
+}

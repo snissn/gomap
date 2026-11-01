@@ -1,0 +1,32 @@
+{
+  "utc": "2026-10-31T23:10:35.500125+00:00",
+  "owner_thread": "01a15a41-5e6e-7f21-9052-99e7406d0861",
+  "state": "released",
+  "all_ten_tool_guard_finish_exits": 0,
+  "cleanup_safe": true,
+  "known_processes_checked": 10,
+  "guard_pids_checked": [
+    3284267,
+    3284439,
+    3284610,
+    3284843,
+    3285013,
+    3285184,
+    3285354,
+    3285587,
+    3285757,
+    3285928
+  ],
+  "known_live": [],
+  "matching_product_argv": [],
+  "lease_identity": [
+    66305,
+    54
+  ],
+  "lease_free_observed_and_released": true,
+  "artifact_reads_transfer_complete": true,
+  "download_tool_exit": 0,
+  "archive_sha256": "a9d373e2bef3b44b09e69e2360533d9105df40560ab83ee3bb7a0b26eb4362b6",
+  "prior_release_script_setup_error": "Python3.10 lacks hashlib.file_digest; failed before process census or lease; preserved tool output; corrected incremental SHA256 only",
+  "scope": "momentary lease observation; no quiet guarantee; no next runtime campaign before owner fresh coordination"
+}

@@ -1,0 +1,17 @@
+{
+  "utc": "2026-10-31T23:13:13.066858+00:00",
+  "acceptance_owner": "01a15a41-5e6e-7f21-9052-99e7406d0861",
+  "artifact_review": "ARTIFACT_ACCEPT",
+  "source": "87edfacf617e6877b28be8ffba752ce2539f2cb9",
+  "decision": "ACCEPT_SCOPED_ENGINEERING_GUARD",
+  "rationale": "The predeclared engineering guard asks no new per-request allocations and no material latency/throughput regression or explicit scoped coordinator disposition. Median allocations do not increase; batch1 latency-.545%,batch256+.972%. For this correctness repair I accept the observed small serial batch256 cost, retaining all five slower matched pairs and the +6.303%maximum. This is an explicit scoped disposition, not a noise explanation or performance improvement claim.",
+  "limits": [
+    "C2 increases5allocs/op and11652B/op againstB2; no per-sample allocation-free claim",
+    "Scheduled maintenance disabled and1GiBflush fixture; not engine defaults, concurrent ingestion, full corpus or Mongo acceptance",
+    "PRIMARY requiredCI+6.721% staysFAIL and is not waived by this decision",
+    "All original failedcampaigns retained; no publicperformance publication authority"
+  ],
+  "raw_summary": "cost-pair-01/SUMMARY.json",
+  "review": "COST-RESULT-REVIEW.json",
+  "release": "cost-pair-01/RELEASE.json"
+}

@@ -91,3 +91,41 @@ It is not a full-corpus correctness proof or the concurrent expiry discriminator
 Both before/after arms must use identical benchmark bytes and fixed sample/Go
 contracts; report ns/request, documents/s, B/op and allocs/op and all samples.
 No benchmark from this fixture had run when this source packet was prepared.
+
+
+## Subsequent matched serial engineering guard
+
+`engineering-cost-01/` retains all twenty metric rows from five alternating
+baseline/candidate pairs, their frozen source/ELF/command/fixture bindings,
+independent artifact review, scoped coordinator cost disposition and final host
+release. The original rejected startup probe and explicitly approved minimal
+launcher correction are retained separately; no timed sample was replaced.
+All ten actual producer/guard/finish exits were zero. This later evidence does
+not change the historical statement that no benchmark had run when the original
+correctness packet was prepared.
+
+The benchmark uses the shared helper's explicit overrides: a 1GiB flush
+threshold, scheduled checkpoint interval/idle=-1, MaxWALBytes=-1 and value-log
+generational policyOff. Mandatory native pressure/history handling remains
+active; only grouping policy is default. Durable request ACK is timed, whereas
+first/last exact readback and checked lifecycle are outside timing. This is
+serial engineering evidence, not normal-engine defaults, full-corpus proof,
+the concurrent expiry discriminator, or public Mongo qualification.
+
+Single-document median time changed -0.545% with 165 allocations/request on both
+arms. Batch256 median time changed +0.972%, with all five matched pairs slower
+(+0.369% to +6.303%). Median allocations were 3203/3193, but C2 increased 5 allocations
+and 11652 bytes against B2. The small observed serial cost is explicitly accepted
+for this correctness repair; no causal allocation improvement or noise
+explanation is claimed. Read `ACCEPTANCE.json` for the limited disposition.
+
+`primary-cost-87ed/` independently preserves the failed current-head CI PRIMARY
+gate: run 41250310355/job 124682340829, base 79a545a1 and head 87edfacf. Median
+paired time +6.721% exceeds its unchanged 5% limit. Allocations, bytes, activation
+and quiet admission pass. This failure remains distinct and unwaived; the
+five raw-path rows passed earlier in the same job. The complete CI archive is
+retained outside this source packet at SHA256
+`a9d373e2bef3b44b09e69e2360533d9105df40560ab83ee3bb7a0b26eb4362b6`.
+Source inspection finds no changed insertion call on the PRIMARY benchmark's
+append-only checkpoint route. That is not whole-binary performance equivalence
+or a cause for the failed timing; retained-ELF investigation is pending.
