@@ -24,7 +24,7 @@ import time
 import uuid
 
 from ycsb_evidence_json import read, same
-RUNTIME_HELPER_SHA = "fab36e1396205c2cddff0c24fa0f5c6faaa4e0fd47f46fdb423ffe3dd4e31077"
+RUNTIME_HELPER_SHA = "9ea6f525e0cf46df5301be3f903367816bdb032a3d0abb4c204bda60ee104d8f"
 if hashlib.sha256((pathlib.Path(__file__).resolve().parent / "ycsb_runtime_observer.py").read_bytes()).hexdigest() != RUNTIME_HELPER_SHA:
     raise RuntimeError("runtime observer source hash mismatch")
 import ycsb_runtime_observer as runtime_observer
