@@ -118,7 +118,15 @@ func (c *Collection) nativeInsertBatchWithJournal(ids, documents [][]byte, reque
 	for attempt := 0; ; attempt++ {
 		stats = CollectionInsertStats{}
 		recordStats, retry, err := c.nativeInsertPreparedOnceWithJournal(ids, documents, &stats, requested != nil, projection, journal)
-		if retry && attempt+1 < nativeInsertAttempts && (journal == nil || !journal.completion.Selected()) {
+		// retry already requires an exact pre-assignment history refusal and
+		// successful private cleanup/Close. Selection authenticates an owner
+		// before assignment; it is not publication or a physical wait. Keep any
+		// selected receipt on its original owner and reject completion evidence.
+		if retry && attempt+1 < nativeInsertAttempts &&
+			(journal == nil || (journal.completion.AssignedLSN() == 0 &&
+				!journal.completion.Attempted() && !journal.completion.Completed() &&
+				journal.completion.WaitNanos() == 0 &&
+				(!journal.completion.Selected() || c.nativeJSON.db.OwnsNativeJournalCompletion(journal.completion)))) {
 			refusedPrepare, refusedPublish = stats.PrepareDocuments, stats.Publish
 			if journal != nil {
 				journal.completion = backenddb.NativeJournalCompletion{}
