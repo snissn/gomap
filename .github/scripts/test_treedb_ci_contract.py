@@ -35,7 +35,7 @@ class TreeDBCIContractTests(unittest.TestCase):
         self.assertIn("timeout-minutes: ${{ matrix.timeout_minutes }}", vet)
         self.assertIn("if: ${{ matrix.name != 'macos' }}", vet)
         self.assertIn("if: ${{ matrix.name == 'macos' }}", vet)
-        self.assertIn("/usr/bin/time -l go vet ./...", vet)
+        self.assertIn("/usr/bin/time -l go vet -x ./...", vet)
         self.assertIn("run: go vet ./...", vet)
         self.assertIn("cache: false", vet)
         self.assertNotIn("continue-on-error", vet)
