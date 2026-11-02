@@ -3501,24 +3501,41 @@ func (m *CollectionManager) CheckpointStorage() error {
 	return m.db.Checkpoint()
 }
 
-// SyncForStandaloneWriteConcern closes the durable storage boundary used by a
-// standalone Mongo journal acknowledgement. Collection-local buffers are
-// published first. Command-WAL databases then persist a dependency-complete
-// command prefix; WAL-free databases seal a backend root with Checkpoint.
+// CanShareStandaloneJournalBoundary reports a scheduling snapshot for this
+// manager's constructor-fixed native backend and its original public completion
+// owner. It performs no activation, publication or I/O. False preserves the
+// gateway's exclusive lock; it does not select a storage fallback or mask errors.
+func (m *CollectionManager) CanShareStandaloneJournalBoundary() bool {
+	return m != nil && m.initializationError == nil && !m.isClosing() && m.nativeJSON != nil &&
+		m.nativeJSON.db != nil && m.nativeJSON.db.CanShareNativeCommandWALPrefix()
+}
+
+// SyncForStandaloneWriteConcern completes the durable boundary used by a
+// standalone Mongo journal acknowledgement. Native CommandWAL managers reuse
+// the original public owner's forced completion group, without a root checkpoint.
+// Healthy direct/unbound native and NoWAL managers retain CheckpointStorage.
+// Classic managers keep FlushAll followed by the applied-prefix sync or checkpoint.
 //
-// This is intentionally stronger than FlushAll, which is only a visibility
-// and draining boundary. physicalSync is false only when a command-WAL prefix
-// was already durable (or no command prefix exists); the WAL-free checkpoint
-// path always performs a physical sync boundary. Native managers use the SAME
-// cache owner's complete captured-prefix checkpoint and report physicalSync=true.
+// physicalSync reports a completed physical boundary, not an exact syscall-attempt
+// count. Native success always returns true, including repeated calls; errors
+// return false and never fall back after an eligible journal callback fails.
+// A journal boundary does not replace FlushAll then CheckpointStorage for physical
+// maintenance, snapshots or root/AppliedCommandLSN seals.
 func (m *CollectionManager) SyncForStandaloneWriteConcern() (physicalSync bool, err error) {
 	if m != nil && m.initializationError != nil {
 		return false, m.initializationError
 	}
-	if m == nil {
+	if m == nil || m.isClosing() {
 		return false, backenddb.ErrClosed
 	}
 	if m.nativeJSON != nil {
+		supported, err := m.nativeJSON.db.SyncNativeCommandWALPrefix()
+		if err != nil {
+			return false, err
+		}
+		if supported {
+			return true, nil
+		}
 		if err := m.CheckpointStorage(); err != nil {
 			return false, err
 		}
@@ -11920,6 +11937,38 @@ func (c *Collection) InsertBatchValidatedBSON(ids, documents [][]byte) ([][]byte
 		err = commitAmbiguousError("InsertBatchValidatedBSON vector index maintenance", c.notifyVectorIndexesUpsert(resultIDs))
 	}
 	return resultIDs, c.invalidateVectorIndexCoverageOnAcceptedMutation(err)
+}
+
+// InsertBatchValidatedBSONWithJournalReceipt opts into completion of this
+// operation's assigned native publication. It never promises a later unrelated
+// prefix. Zero/unselected keeps the caller's ordinary fresh-fence obligation.
+// Default insert APIs and direct Sync retain their existing physical contract.
+// A selected error is terminal: callers must not resubmit or mask it with Sync.
+func (c *Collection) InsertBatchValidatedBSONWithJournalReceipt(ids, documents [][]byte) (resultIDs [][]byte, completion backenddb.NativeJournalCompletion, err error) {
+	if c == nil {
+		return nil, completion, errCollectionNil
+	}
+	defer func() {
+		err = c.invalidateVectorIndexCoverageOnAcceptedMutation(err)
+		if err != nil {
+			completion = completion.WithoutSuccess()
+		}
+	}()
+	if c.nativeJSON == nil || c.manager == nil || !c.manager.CanShareStandaloneJournalBoundary() || len(ids) == 0 {
+		resultIDs, err = c.InsertBatchValidatedBSON(ids, documents)
+		return
+	}
+	journal := nativeOperationJournal{requested: true}
+	resultIDs, err = c.nativeInsertBatchWithJournal(ids, documents, nil, nil, true, &journal)
+	// The original transaction Close and outer producer unlock have both ended.
+	completion = journal.completion
+	if !c.nativeJSON.db.OwnsNativeJournalCompletion(completion) {
+		completion = backenddb.NativeJournalCompletion{}
+	}
+	if err != nil {
+		completion = completion.WithoutSuccess()
+	}
+	return
 }
 
 // PreflightCommandWALMutation checks collection-local command-WAL support for

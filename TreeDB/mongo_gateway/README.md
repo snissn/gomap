@@ -359,3 +359,47 @@ each cell in a fresh process; failed/incomplete results remain failures with
 null quantiles. See the [public harness instructions](../../cmd/mongo_gateway_bench/README.md) for commands and
 measurement boundaries. `StandaloneServer.Stats` exposes its owning TreeDB's
 COW and maintenance diagnostics with existing lifecycle admission.
+
+For the native standalone COW owner, explicit `w:1,j:true` uses the original
+public command-WAL completion group without constructing a physical root checkpoint.
+An existing-collection single-document BSON insert or exact-ID, non-upsert,
+non-multi top-level BSON `$set` update opts into its own assigned
+publication's physical completion. The opt-in collection sibling API returns an
+opaque same-owner receipt only after the real registered durable wait, checked
+transaction cleanup and outer producer unlock. Coalesced strict members can share
+that publication; plain members receive no journal receipt or journal counters.
+Byte-split and sequential fallback members retain their exact own outcomes.
+Update coalescing returns shared coverage only to changed strict members; no-op
+and missing members still close a fresh boundary. A selected update failure is
+terminal even when the collection reports an unbatched result.
+The receipt covers the operation's effects and persistent dependencies, without
+promising completion of an unrelated later prefix. Zero/unselected, auto-create,
+multi-document commands, auxiliary/typed follow-up work and other updates keep the
+fresh post-dispatch prefix fence. Direct and repeated Sync still do fresh physical
+work. No default collection API, profile, group delay or collector limit changes.
+The configured profile's ordinary acknowledgement behavior is unchanged. Every
+accepted journal command retains a durable completion boundary, including partial
+mutations and `ok:0` responses on their fresh-fence fallback; a failure preserves the original response and adds uncertain
+`writeConcernError` rather than retrying. The gateway shares its dispatch-through-
+sync boundary only for `create`, `createIndexes`, `delete`, `dropIndexes`,
+`findAndModify`, `insert` and `update` when the actual collection manager proves
+its same original bound public native completion owner and no custom sync is set.
+The pure capability uses the original public lifecycle's nonblocking `TryRLock`;
+unknown, inactive, closing, poisoned, foreign or contended owners stay exclusive.
+It neither activates nor syncs, and its snapshot never substitutes for the actual
+mutation/fence lifetime checks. `createUser`, `updateUser` and `dropUser` remain
+exclusive because the auth catalog can use an unrelated store. Classic and custom
+sync paths retain exclusion; visible/default and cluster policy are unchanged.
+NoWAL and healthy unbound
+native constructors retain physical checkpoint fallback; classic applied-prefix
+behavior is unchanged. Root/snapshot/graph maintenance and Close still require
+their physical seals, so some checkpoint work remains outside request latency.
+
+For receipt-selected operations, `SyncAttempts` records each original RPC's actual
+entered native durable wait and `PhysicalSyncBoundaries` its successful completed
+operation boundary. Multiple RPCs may share physical work. `JournalSyncNanos`
+records that actual wait per member, so overlapping waits are not elapsed wall
+fractions. Selected errors preserve original uncertainty once, without replay or
+a masking second force; cleanup failure invalidates success. Uncovered operations
+retain existing fresh-fence accounting. Native `forced_total` and group/file sync
+counters continue to count actual events: no force is fabricated for a receipt.

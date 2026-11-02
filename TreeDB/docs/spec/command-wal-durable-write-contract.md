@@ -429,3 +429,13 @@ format-explicit materialized-RID path above. Oversized or uncertain batches
 continue to use `SetRID`; command-WAL sync removal, async acknowledgement,
 relaxed durability, and per-write backend checkpointing remain outside the
 optimization boundary.
+
+## Native collection operation completion
+
+Opt-in ordinary BSON inserts and exact-ID structured BSON-set updates can return
+their own assigned native publication's original-owner completion after its real
+durable wait and checked cleanup. This reuses the existing native group; it adds
+no WAL format or durable frontier. It does not change raw KV/WriteSync or direct
+and repeated prefix Sync. Unselected/no-op/wider operations keep fresh boundaries;
+selected physical or cleanup failure is terminal without replay or masking force.
+See [operation-scoped completion](write-path-and-durability.md#operation-scoped-native-journal-completion).

@@ -451,6 +451,37 @@ func (tdb *DB) syncPublicCommandWAL() error {
 	return tdb.forcePublicCommandWALGroupCommit()
 }
 
+// NativeCommandWALPrefixOwnerOpen authenticates a scheduling query against this
+// original public receiver. TryRLock refuses a pending/active Close rather than
+// waiting for it. The lifecycle lease ends here; actual fence completion obtains
+// and retains its own lease through ACK. This query grants no storage authority.
+func (tdb *DB) NativeCommandWALPrefixOwnerOpen(backend *db.DB, owner *transactionowner.Owner) bool {
+	if tdb == nil || backend == nil || owner == nil || !tdb.lifecycleMu.TryRLock() {
+		return false
+	}
+	defer tdb.lifecycleMu.RUnlock()
+	return tdb.backend == backend && tdb.txnOwner == owner && tdb.commandWALCached &&
+		tdb.cached != nil && tdb.cached.COWMode() && tdb.cached.CheckNativeSemanticOwnerOpen() == nil
+}
+
+// SyncNativeCommandWALPrefix completes a real dependency-complete journal
+// boundary on this original public native owner. It deliberately does not seal
+// physical roots. The existing forced group releases operation/publication/raw
+// gates before physical I/O and waiting; the lifecycle lease stays through ACK.
+func (tdb *DB) SyncNativeCommandWALPrefix() error {
+	if err := tdb.beginPublicOperation(); err != nil {
+		return err
+	}
+	defer tdb.lifecycleMu.RUnlock()
+	if !tdb.commandWALCached || tdb.cached == nil || !tdb.cached.COWMode() || tdb.backend == nil {
+		return db.ErrNativeSemanticUnsupported
+	}
+	if err := tdb.backend.CheckNativeCommandWALPrefixOwner(tdb.txnOwner); err != nil {
+		return err
+	}
+	return tdb.syncPublicCommandWAL()
+}
+
 // Refused constructors return an immutable carrier rather than allocating an
 // uncharged public wrapper. Every mutable entry point checks batchError first.
 var cowDeniedPublicBatch = commandWALPublicBatch{cowState: &commandWALPublicCOWState{batchError: memtable.ErrCOWCapacity}}
@@ -1795,12 +1826,12 @@ func (c *nativePublicCommandWALCompletion) RegisterNativeCommandWAL(appendFrame 
 	c.registration = registration
 	return err
 }
-func (c *nativePublicCommandWALCompletion) CompleteNativeCommandWAL(installErr error) error {
+func (c *nativePublicCommandWALCompletion) CompleteNativeCommandWAL(installErr error) (result db.NativeCommandWALCompletionResult, resultErr error) {
 	c.ReleaseNativeCommandWAL()
 	tdb, registration := c.db, c.registration
 	c.db, c.registration = nil, publicCommandWALRegistration{}
 	if tdb == nil {
-		return ErrClosed
+		return result, ErrClosed
 	}
 	if hook := tdb.commandWALGroupCommit.testBeforeNativeComplete; hook != nil {
 		hook()
@@ -1808,10 +1839,14 @@ func (c *nativePublicCommandWALCompletion) CompleteNativeCommandWAL(installErr e
 	publication := registration.publicCommandWALPublication
 	err := installErr
 	if err == nil {
-		publication, err = tdb.awaitPublicCommandWAL(registration, nil, nil)
+		result.WaitAttempted = registration.awaiting && registration.durable
+		var wait time.Duration
+		publication, err = tdb.awaitPublicCommandWAL(registration, &wait, nil)
+		result.WaitNanos = uint64(wait)
+		result.PhysicalCompleted = result.WaitAttempted && err == nil
 	}
 	tdb.finishPublicCommandWALGroupPublication(publication, err)
 	// The original COW receipt poisons assigned failures, including failures
 	// before registration. A preassignment refusal leaves the handle usable.
-	return err
+	return result, err
 }

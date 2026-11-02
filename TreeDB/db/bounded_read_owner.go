@@ -76,6 +76,52 @@ func (s *Snapshot) CopyVerifiedCachedLeafPage(ptr page.LeafLogPtr, inspected *os
 	return data, hit, nil
 }
 
+// CopyDictionaryVerifiedCachedLeafPage requires the current decoder's independently
+// owned definition digest in addition to the normal pinned-file authority.
+func (s *Snapshot) CopyDictionaryVerifiedCachedLeafPage(ptr page.LeafLogPtr, inspected *os.File, identity rootpublication.StableIdentity, dst []byte, digest [32]byte) ([]byte, bool, error) {
+	if err := s.beginRead(); err != nil {
+		return nil, false, err
+	}
+	defer s.endRead()
+	if err := s.checkInspectedLeafFile(ptr, inspected, identity); err != nil {
+		return nil, false, err
+	}
+	data, hit := s.reader.leafPageCache.dictionaryVerifiedPage(ptr, dst, digest)
+	return data, hit, nil
+}
+
+// ObserveDictionaryCacheEpoch captures eligibility before the physical decode.
+// A disabled cache or concurrent maintenance cannot produce a usable token.
+func (s *Snapshot) ObserveDictionaryCacheEpoch() (uint64, bool, error) {
+	if err := s.beginRead(); err != nil {
+		return 0, false, err
+	}
+	defer s.endRead()
+	c := s.reader.leafPageCache
+	if c == nil || c.disabled.Load() {
+		return 0, false, nil
+	}
+	epoch := c.dictionaryEpoch.Load()
+	if c.disabled.Load() || c.dictionaryEpoch.Load() != epoch {
+		return 0, false, nil
+	}
+	return epoch, true, nil
+}
+
+// MarkDictionaryVerifiedCachedLeafPage follows successful actual full decode.
+// A concurrent eviction or non-identical page declines the upgrade.
+func (s *Snapshot) MarkDictionaryVerifiedCachedLeafPage(ptr page.LeafLogPtr, inspected *os.File, identity rootpublication.StableIdentity, data []byte, digest [32]byte, epoch uint64) error {
+	if err := s.beginRead(); err != nil {
+		return err
+	}
+	defer s.endRead()
+	if err := s.checkInspectedLeafFile(ptr, inspected, identity); err != nil {
+		return err
+	}
+	s.reader.leafPageCache.markDictionaryVerified(ptr, data, digest, epoch)
+	return nil
+}
+
 // MarkCachedLeafRecordVerified follows a successful full CRC-verified decode
 // through this snapshot's exact inspected file. It can upgrade only an existing
 // byte-identical decoded page; misses never allocate or populate the cache.

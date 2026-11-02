@@ -325,9 +325,10 @@ func requirePublicCOWFinalZero(t *testing.T, cache *caching.DB) {
 	}
 }
 
-// Sync is the only durability request before the child exits. In particular,
-// neither an explicit public Checkpoint nor Close can repair a missed boundary.
-func TestNativeExistingCollectionJournalSyncCrashReopen(t *testing.T) {
+// CheckpointStorage is the explicit physical seal before the child exits.
+// Preserve AppliedCommandLSN, old-view coherence and repeated physical seals
+// separately from the journal-only fence, which need not construct roots.
+func TestNativeExistingCollectionPhysicalCheckpointCrashReopen(t *testing.T) {
 	const sentinel = 97
 	const childDirEnv = "GOMAP_NATIVE_JOURNAL_SYNC_CRASH_DIR"
 	const childProfileEnv = "GOMAP_NATIVE_JOURNAL_SYNC_CRASH_PROFILE"
@@ -353,7 +354,7 @@ func TestNativeExistingCollectionJournalSyncCrashReopen(t *testing.T) {
 			dir := childDir
 			if dir == "" {
 				dir = t.TempDir()
-				cmd := exec.Command(os.Args[0], "-test.run=^TestNativeExistingCollectionJournalSyncCrashReopen$", "-test.v")
+				cmd := exec.Command(os.Args[0], "-test.run=^TestNativeExistingCollectionPhysicalCheckpointCrashReopen$", "-test.v")
 				cmd.Env = append(os.Environ(), childDirEnv+"="+dir, childProfileEnv+"="+string(profile))
 				output, err := cmd.CombinedOutput()
 				t.Logf("sync child: %s", output)
@@ -410,8 +411,8 @@ func TestNativeExistingCollectionJournalSyncCrashReopen(t *testing.T) {
 				}
 				accepted := backend.CommandWALNextLSN()
 				for i := 0; i < 2; i++ {
-					if physical, err := manager.SyncForStandaloneWriteConcern(); err != nil || !physical {
-						t.Fatalf("sync %d: physical=%v error=%v", i, physical, err)
+					if err := manager.CheckpointStorage(); err != nil {
+						t.Fatalf("physical checkpoint %d: %v", i, err)
 					}
 					if backend.CommandWALNextLSN() != accepted {
 						t.Fatal("sync assigned a new canonical command")

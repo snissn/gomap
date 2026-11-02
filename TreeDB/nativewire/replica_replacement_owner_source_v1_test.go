@@ -50,7 +50,10 @@ func testImmutableOwnerReplacementPrivateQualificationRecoveryV1(t *testing.T, e
 	}
 	membership, err := client.PrepareReplicaReplacementV1(ctx, "source-holder", command)
 	if err != nil {
-		t.Fatal(err)
+		for cause := err; cause != nil; cause = errors.Unwrap(cause) {
+			t.Logf("initial replacement preparation error: %T: %v", cause, cause)
+		}
+		t.Fatalf("initial replacement preparation (PrepareReplicaReplacementV1): %v", err)
 	}
 	assertImmutableOwnerNonvoterV1(t, membership, command)
 	raw, err := raftplacement.EncodeReplicaReplacementBeginV1(command)
@@ -436,7 +439,10 @@ func testImmutableOwnerReplacementPrivateQualificationRecoveryV1(t *testing.T, e
 	}
 	runtimes[targetIndex] = target
 	if _, err := client.call(ctx, command.NewPeer.ID, "replacement-prepare", fixedPeerRequestV1{Entry: raw}, false); err != nil {
-		t.Fatal(err)
+		for cause := err; cause != nil; cause = errors.Unwrap(cause) {
+			t.Logf("replacement preparation after target reopen error: %T: %v", cause, cause)
+		}
+		t.Fatalf("replacement preparation after target close/reopen (client.call): %v", err)
 	}
 	local = target.localDataV1(command.GroupID)
 	waitTail()

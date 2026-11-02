@@ -290,13 +290,30 @@ buffers until their last owner closes.
 
 ## WAL, physical construction and failure
 
-`CollectionManager.SyncForStandaloneWriteConcern` synchronizes the same cache
-owner's complete captured raw/collection prefix with its existing checkpoint.
-It reports `physicalSync=true` on success, including a repeated sync. Command-WAL
-profiles synchronize the covered command/dependency prefix; NoWAL synchronizes
-its physical checkpoint. This does not acquire a legacy publisher or change the
-profile-dependent acknowledgement returned by native `Commit`; physical
-checkpoint completion remains a separate boundary.
+`CollectionManager.SyncForStandaloneWriteConcern` completes a journal boundary.
+For an active native CommandWAL manager, it dispatches through the once-bound
+original public DB's `SyncNativeCommandWALPrefix` and existing forced completion
+group. That group synchronizes the dependency-complete captured raw/collection
+prefix without constructing a physical root checkpoint or advancing the
+physical `AppliedCommandLSN` seal. The public lifecycle remains held through
+completion; operation, publication and raw gates end before physical sync wait.
+Ordinary profile-dependent native `Commit` acknowledgements remain unchanged.
+
+A successful call reports `physicalSync=true`, including repeated calls. This
+means a physical boundary completed, not an exact syscall-attempt count. A
+selected journal callback failure returns false and propagates without fallback
+or retry. Only a healthy native capability miss (NoWAL or a direct/unbound native
+constructor) uses the existing same-cache-owner `CheckpointStorage` fallback.
+Nil, closing, poisoned, inactive or foreign owners are errors rather than misses.
+Classic managers retain `FlushAll` followed by their applied-prefix sync or
+NoWAL checkpoint.
+
+Physical maintenance, snapshot preparation and durable root/`AppliedCommandLSN`
+seals still require `FlushAll` then `CheckpointStorage` as appropriate;
+`SyncNativeSemanticPrefix` retains that stronger physical construction contract.
+The document service's ordinary optimize and typed graph build/ensure/fold/renew
+paths use this physical boundary before graph work. A journal fence is not a
+replacement for that boundary.
 
 A multi-member transaction appends one canonical bounded nonrecursive composite
 command and installs one complete logical successor. Its raw member binds the
@@ -515,3 +532,15 @@ truncation. Stable ties still require at most one unfixed component. Query
 key/group/result backing is admitted before copying or growing, and temporary
 aliases end before refund. Only independently owned result IDs escape. Default
 resource limits and the tuple/command formats are unchanged.
+
+## Opt-in BSON-set journal completion
+
+`UpdateBSONSetBatchIfNoSecondaryUniqueIndexChangesWithJournalReceipt` returns the
+ordinary results and batching decision plus an opaque original-owner physical
+completion. Captured ordinary BSON changes use the existing native publication
+and completion group; vector/text/column effects and unsupported owners remain
+unselected. A batch receipt covers its changed members, not missing or unchanged
+neighbors. Checked transaction cleanup and the producer unlock end before the
+public sibling returns. Selected failure is terminal even if `batched` is false;
+callers must not replay or issue a masking Sync. Default BSON-set APIs remain nil
+receipt callers, and direct/repeated Sync still requires fresh physical work.

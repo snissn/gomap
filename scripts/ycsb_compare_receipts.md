@@ -295,6 +295,17 @@ owner counters absent at either boundary are `available: false`, never zero;
 a frozen campaign may additionally require selected inventory keys through
 `phase_stats_required_counters`.
 
+For an opted-in existing-collection single-document native BSON journal insert,
+the gateway's `SyncAttempts` counts the member's actual entered native durable
+wait, `PhysicalSyncBoundaries` its successfully completed operation boundary, and
+`JournalSyncNanos` the actual wait. Coalesced members can share one physical
+publication. These per-RPC counters are not syscall counts and need not equal
+`forced_total`, group counts or file-sync calls. `forced_total` continues to count
+only actual forced registrations; covered success may add none. Uncovered/direct
+fresh-fence accounting is unchanged. Selected errors and checked cleanup failure
+retain uncertainty without a masking second force. This changes no counter key,
+49-key requirement, representation, availability, monotonicity or consumer gate.
+
 The selected inventory contains49 counters:48 unsigned integers and1 decimal.
 `treedb.command_wal.dependency_debt.retries_total` remains in raw observations
 as a pending-debt gauge. Releasing covered debt drops its retry history, so this
@@ -636,3 +647,17 @@ checkpoint is commit `047f17863bbd2fda3daa622b1d083ebfe14f6a6d` under
 `docs/benchmarks/prototypes/ycsb_resource_guard_2026_10_31/`: original guard SHA256
 `39369f135883731d94426cdf3616b0c80b120a3c2637bddf09c979b46aed75f3`, repaired tests
 `ac2c50d25320c67c191fda57a5503622d40a7d63160b618959851262be8152a4`.
+
+### Native operation completion counters
+
+Eligible existing-collection single-document BSON inserts and single exact-ID,
+non-upsert/non-multi structured BSON-set updates may use their assigned original
+publication's physical completion. A completed strict RPC still contributes one
+actual native wait to gateway SyncAttempts and one successful operation boundary
+to PhysicalSyncBoundaries, even when coalesced changed members share physical
+work. Native forced/group/file counters record actual events and need not equal
+strict RPC counts. JournalSyncNanos is the per-member wait, not additive wall time.
+Missing/no-op, unsupported and wider update commands retain fresh Sync. Selected
+failure is uncertain once, without command replay or a masking force. The original
+49-counter inventory, count/ACK checks and checked original/fresh lifecycles are
+unchanged; zero forced_total alone does not prove durability or receipt activation.

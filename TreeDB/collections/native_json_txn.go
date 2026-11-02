@@ -441,6 +441,10 @@ func (t *NativeJSONTxn) commitNativePlanWithStats(sealed bool, apply *nativeComm
 // cancellation and Close checks. Retirement may complete asynchronously. It is
 // private one-shot insertion authority, never an instruction to rebase a txn.
 func (t *NativeJSONTxn) commitNativePlanWithStatsObserved(sealed bool, apply *nativeCommandWALApplyCommit, typedGroup bool, stats *CollectionInsertStats, expired *bool) (resultErr error) {
+	return t.commitNativePlanWithJournal(sealed, apply, typedGroup, stats, expired, nil)
+}
+
+func (t *NativeJSONTxn) commitNativePlanWithJournal(sealed bool, apply *nativeCommandWALApplyCommit, typedGroup bool, stats *CollectionInsertStats, expired *bool, journal *nativeOperationJournal) (resultErr error) {
 	if expired != nil {
 		*expired = false
 	}
@@ -652,7 +656,7 @@ func (t *NativeJSONTxn) commitNativePlanWithStatsObserved(sealed bool, apply *na
 		}
 	}
 	members, rawEntries = nil, nil
-	sync := false
+	sync := journal != nil && journal.requested
 	if apply != nil {
 		sync = apply.sync
 	}
@@ -663,7 +667,19 @@ func (t *NativeJSONTxn) commitNativePlanWithStatsObserved(sealed bool, apply *na
 	if stats != nil {
 		publishStarted = time.Now()
 	}
+	defer func() {
+		// The lower owner clears Custody when it consumes the publication,
+		// before any installation or physical completion callback can unwind.
+		// Drop this producer alias before closeLocked even if CommitNative
+		// panics or exits; only an unconsumed private plan remains ours to close.
+		if native != nil && native.Custody == nil {
+			t.custody = nil
+		}
+	}()
 	result, err := t.core.CommitNative(native, intent, sync)
+	if journal != nil && journal.requested {
+		journal.completion = result.Journal
+	}
 	if expired != nil {
 		// Exact identity also excludes a lower-layer cleanup error joined to
 		// the sentinel. Consumed alone only transfers descriptor ownership.

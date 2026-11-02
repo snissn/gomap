@@ -1010,3 +1010,33 @@ receives a mutation owner. Receiver applications must resolve their durable
 accepted-install intent and synchronize the external-log snapshot before normal
 validation/replay/health. See the
 [authorized transfer protocol](external-recovery.md#authorized-portable-snapshot-transfer).
+
+## Native explicit journal prefix recovery
+
+An eligible native standalone journal acknowledgement reuses the original public
+command-WAL completion group. Its captured canonical prefix retains the original
+command files, namespace/rotation debt and referenced value/dictionary
+dependencies through physical synchronization and waiter completion. It does not
+materialize a physical root or advance that root's `AppliedCommandLSN`; startup
+replays the synchronized canonical suffix from the existing physical seal. No
+new frame, intent or replay format is introduced. NoWAL retains a complete-root
+checkpoint fallback.
+
+A native fence failure after assignment or during ambiguous physical sync
+preserves installed effects and the original assigned command identities,
+propagates uncertainty and poisons subsequent mutation/fence admission.
+Preassignment force-only capture or admission refusal is terminal for that call
+and need not poison the owner. Once a callback is selected, every error returns
+without checkpoint fallback or canonical-command retry. Immediate-exit tests
+distinguish journal recovery from graceful Close, which still completes physical
+checkpoint work.
+
+Operation-scoped BSON insert and eligible BSON-set update receipts reuse that same original public group and
+recovery suffix. Their own assigned publication must finish a real durable wait
+and checked cleanup before ACK; a separate fresh forced epoch is unnecessary for
+that opt-in contract. This is distinct from direct/repeated prefix Sync, whose
+fresh physical-I/O contract remains unchanged. A selected publication or cleanup
+error cannot be hidden by retrying the command or issuing a second force. The
+receipt introduces no frame/replay format and cannot replace a root seal,
+checkpoint, snapshot, GC/rotation dependency lifetime, or Close. An old owner's
+receipt does not authenticate a fresh reopened owner.

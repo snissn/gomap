@@ -1,0 +1,344 @@
+package db
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"testing"
+
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
+	"github.com/snissn/gomap/TreeDB/pager"
+)
+
+func TestLeafGenerationPackTransitionFollowsPrivateAcceptance(t *testing.T) {
+	for _, tc := range []struct {
+		name, outcome string
+		handoff       bool
+	}{
+		{"success", "success", false},
+		{"before_acceptance", "before_acceptance", false},
+		{"accepted_error", "accepted_error", false},
+		{"handoff_success", "success", true},
+		{"handoff_before_acceptance", "before_acceptance", true},
+		{"handoff_accepted_error", "accepted_error", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			outcome := tc.outcome
+			d, leafLog, _ := openLeafGenerationPackTestDB(t)
+			prepareLeafGenerationPackTestCandidate(t, d, leafLog, 1024)
+			// A real collection-root descriptor makes the existing relocation
+			// observer capture the accepted snapshot after the publication fence
+			// is released, including before an accepted error poisons admission.
+			_, _, err := d.PublishOrderedRootGroupWithSystemBuilder([]OrderedRootPublishInput{{
+				Iter: mustFrozenRawMemtable(t, "doc", []byte("unchanged")).NewIterator(nil, nil), StoragePolicy: OrderedRootStorageValueLogLeaves,
+			}}, func(roots []uint64) (iterator.UnsafeIterator, error) {
+				return mustFrozenRawMemtable(t, "collections/root/transition/users/primary", encodeMaintenanceRootID(roots[0])).NewIterator(nil, nil), nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			owner := transactionowner.New()
+			if err := d.BindPrivateCOWOwner(owner); err != nil {
+				t.Fatal(err)
+			}
+			// These are backend producer/guard controls, not public native
+			// activation evidence. Leave the success case inactive so a later
+			// ordinary backend write can test the exact-endpoint rejection.
+			if outcome != "success" {
+				d.nativeSemanticActive.Store(true)
+			}
+			if tc.handoff {
+				installLeafGenerationPackTransitionHandoff(t, d, leafLog, func() error { return leafLog.rotateLeaf() })
+			}
+			if _, err := d.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{Force: true}); err != nil {
+				t.Fatal(err)
+			}
+			before := d.AcquireSnapshot()
+			if before == nil {
+				t.Fatal("missing original snapshot")
+			}
+			t.Cleanup(func() { closeNoErr(t, before) })
+			var after *Snapshot
+			calls := 0
+			unregister := d.RegisterCollectionRootRelocation(func(_ *Snapshot, _ *pager.Pager, _ map[uint64]uint64) (func(bool), error) {
+				return func(accepted bool) {
+					calls++
+					if accepted {
+						after = d.AcquireSnapshot()
+					}
+				}, nil
+			})
+			defer unregister()
+			t.Cleanup(func() {
+				if after != nil {
+					closeNoErr(t, after)
+				}
+			})
+			injected := errors.New("transition before acceptance")
+			restore := registerLeafGenerationPackPublishHook(func(event leafGenerationPackPublishEvent) error {
+				if event.Phase == leafGenerationPackBeforeMetaWrite {
+					switch outcome {
+					case "before_acceptance":
+						return injected
+					case "accepted_error":
+						d.testRootPublicationDependencyBytes.Store(rootpublication.HardPendingBytes + 1)
+						d.testFailWriteMeta.Store(true)
+					}
+				}
+				return nil
+			})
+			defer restore()
+			defer d.testFailWriteMeta.Store(false)
+			opts := LeafGenerationPackFromPlanOptions{MaxGenerations: 1, Force: true, Sync: true}
+			// Neither a rejected owner nor a declined plan may mint authority.
+			rejected, rejectedErr := d.LeafGenerationPackRunOnceForPrivateCOW(transactionowner.New(), context.Background(), opts)
+			if !errors.Is(rejectedErr, ErrNativeSemanticUnsupported) || !rejected.Transition.IsZero() {
+				t.Fatalf("rejected owner: transition=%+v error=%v", rejected.Transition, rejectedErr)
+			}
+			declined := opts
+			declined.Force, declined.MinCandidateGenerations = false, 1000
+			if stats, err := d.LeafGenerationPackRunOnceForPrivateCOW(owner, context.Background(), declined); err != nil || stats.Ran || !stats.Transition.IsZero() {
+				t.Fatalf("declined plan: stats=%+v error=%v", stats, err)
+			}
+			stats, err := d.LeafGenerationPackRunOnceForPrivateCOW(owner, context.Background(), opts)
+			d.testFailWriteMeta.Store(false)
+			if calls != 1 {
+				t.Fatalf("relocation calls=%d want 1", calls)
+			}
+			switch outcome {
+			case "before_acceptance":
+				if !errors.Is(err, injected) || CommitPublicationAccepted(err) || stats.Ran || !stats.Transition.IsZero() || after != nil {
+					t.Fatalf("preacceptance: stats=%+v error=%v after=%p", stats, err, after)
+				}
+				return
+			case "accepted_error":
+				if !errors.Is(err, errTestWriteMetaFailpoint) || !CommitPublicationAccepted(err) || stats.Ran {
+					t.Fatalf("accepted error: stats=%+v error=%v", stats, err)
+				}
+			case "success":
+				if err != nil || !stats.Ran || stats.Pack.BytesCopied == 0 {
+					t.Fatalf("successful pack: stats=%+v error=%v", stats, err)
+				}
+			}
+			if after == nil || stats.Transition.IsZero() {
+				t.Fatalf("accepted pack lost endpoint: transition=%+v after=%p", stats.Transition, after)
+			}
+			beforeToken, _ := before.StateToken()
+			afterToken, _ := after.StateToken()
+			t.Logf("outcome=%s before=%+v after=%+v producer_before=%+v copy_basis=%+v producer_after=%+v", tc.name, beforeToken, afterToken, stats.Transition.before, stats.Transition.copyBasis, stats.Transition.after)
+			expectedCopy := beforeToken
+			if tc.handoff {
+				expectedCopy.LeafGenerationStateVersion++
+			}
+			if stats.Transition.copyBasis != expectedCopy {
+				t.Fatalf("wrong composed copy endpoint: got=%+v want=%+v", stats.Transition.copyBasis, expectedCopy)
+			}
+			if err := stats.Transition.Validate(before, after); err != nil {
+				t.Fatalf("actual accepted endpoints: %v", err)
+			}
+			for _, snap := range []*Snapshot{before, after} {
+				got, err := snap.Get(leafGenerationKey("pack-concurrent", 768))
+				if err != nil || !bytes.Equal(got, bytes.Repeat([]byte{'a'}, 32)) {
+					t.Fatalf("retained logical value=%q error=%v", got, err)
+				}
+			}
+			if outcome == "success" {
+				checkLeafGenerationPackTransitionInvalidBases(t, d, stats.Transition, before, after)
+			}
+		})
+	}
+}
+
+func checkLeafGenerationPackTransitionInvalidBases(t *testing.T, d *DB, transition LeafGenerationPackTransition, before, after *Snapshot) {
+	t.Helper()
+	foreignDB, _, _ := openLeafGenerationPackTestDB(t)
+	foreign := foreignDB.AcquireSnapshot()
+	if foreign == nil {
+		t.Fatal("missing foreign snapshot")
+	}
+	t.Cleanup(func() { closeNoErr(t, foreign) })
+	for _, tc := range []struct {
+		name          string
+		transition    LeafGenerationPackTransition
+		before, after *Snapshot
+	}{
+		{"zero", LeafGenerationPackTransition{}, before, after},
+		{"reversed", transition, after, before},
+		{"unchanged", transition, before, before},
+		{"foreign_before", transition, foreign, after},
+		{"foreign_after", transition, before, foreign},
+		{"nil_before", transition, nil, after},
+		{"nil_after", transition, before, nil},
+	} {
+		if err := tc.transition.Validate(tc.before, tc.after); !errors.Is(err, ErrRootPublicationBasisMismatch) {
+			t.Fatalf("%s accepted invalid endpoints: %v", tc.name, err)
+		}
+	}
+	wrongOwner := transition
+	wrongOwner.owner = transactionowner.New()
+	if err := wrongOwner.Validate(before, after); !errors.Is(err, ErrRootPublicationBasisMismatch) {
+		t.Fatalf("foreign owner accepted: %v", err)
+	}
+	for _, field := range []string{"generation", "logical"} {
+		forged := transition
+		if field == "generation" {
+			forged.copyBasis.LeafGenerationStateVersion++
+		} else {
+			forged.copyBasis.AppliedCommandLSN++
+		}
+		if err := forged.Validate(before, after); !errors.Is(err, ErrRootPublicationBasisMismatch) {
+			t.Fatalf("forged %s midpoint accepted: %v", field, err)
+		}
+	}
+	var validationErr error
+	if allocations := testing.AllocsPerRun(20, func() { validationErr = transition.Validate(before, after) }); allocations != 0 || validationErr != nil {
+		t.Fatalf("validation allocations=%v error=%v", allocations, validationErr)
+	}
+	// A real later publication is not covered, while the original two retained
+	// views remain authorized even though the backend has advanced.
+	writeLeafGenerationKeys(t, d, "transition-later", 1, 'z')
+	later := d.AcquireSnapshot()
+	if later == nil {
+		t.Fatal("missing later snapshot")
+	}
+	t.Cleanup(func() { closeNoErr(t, later) })
+	if err := transition.Validate(before, later); !errors.Is(err, ErrRootPublicationBasisMismatch) {
+		t.Fatalf("intervening publication accepted: %v", err)
+	}
+	if err := transition.Validate(before, after); err != nil {
+		t.Fatalf("later publication invalidated original views: %v", err)
+	}
+	closed := d.AcquireSnapshot()
+	if closed == nil {
+		t.Fatal("missing snapshot for closed control")
+	}
+	closeNoErr(t, closed)
+	if err := transition.Validate(before, closed); !errors.Is(err, ErrRootPublicationBasisMismatch) {
+		t.Fatalf("closed snapshot accepted: %v", err)
+	}
+}
+
+func TestLeafGenerationPackTransitionUnownedPublicationHasNoAuthority(t *testing.T) {
+	d, leafLog, _ := openLeafGenerationPackTestDB(t)
+	prepareLeafGenerationPackTestCandidate(t, d, leafLog, 1024)
+	stats, err := d.LeafGenerationPackRunOnce(context.Background(), LeafGenerationPackFromPlanOptions{MaxGenerations: 1, Force: true, Sync: true})
+	if err != nil || !stats.Ran || stats.Pack.BytesCopied == 0 || !stats.Transition.IsZero() {
+		t.Fatalf("unowned publication: stats=%+v error=%v", stats, err)
+	}
+}
+
+// Preserve the actual shared leaf namespace while a real handoff rotation and
+// the packed writer both reserve sequences. The ordinary rewrite fixture has
+// no cached owner or shared reservation capability unless explicitly supplied.
+type leafGenerationPackTransitionHandoffLog struct {
+	packHandoffObservedLog
+	seq LeafPageLogSequenceReserver
+}
+
+func (l *leafGenerationPackTransitionHandoffLog) ReserveLeafPageLogSequence(floor uint32) (uint32, error) {
+	return l.seq.ReserveLeafPageLogSequence(floor)
+}
+
+// Embedding LeafPageLog alone hides the writer's optional segment inventories.
+// Preserve the same producer registration path used by the cached leaf owner;
+// otherwise a later WriteSync cannot register the rotated successor it appends.
+func (l *leafGenerationPackTransitionHandoffLog) CreatedLeafPageLogSegmentsSnapshot() ([]LeafPageLogSegment, error) {
+	return leafPageLogCreatedSegments(l.LeafPageLog)
+}
+
+func (l *leafGenerationPackTransitionHandoffLog) CurrentLeafPageLogSegmentsSnapshot() ([]LeafPageLogSegment, error) {
+	return leafPageLogCurrentSegments(l.LeafPageLog)
+}
+
+func (l *leafGenerationPackTransitionHandoffLog) MarkLeafPageLogSegmentsRegistered(segments []LeafPageLogSegment) {
+	markLeafPageLogSegmentsRegistered(l.LeafPageLog, segments)
+}
+
+func installLeafGenerationPackTransitionHandoff(t *testing.T, d *DB, leafLog *rewriteWriter, handoff func() error) {
+	t.Helper()
+	originalLog, originalSeq := d.leafPageLog, leafLog.leafSeqAllocator
+	seq := newLeafLogSeqAllocator(leafLog.leafSeq)
+	leafLog.setLeafPageLogSeqAllocator(seq)
+	observed := &leafGenerationPackTransitionHandoffLog{
+		packHandoffObservedLog: packHandoffObservedLog{
+			packHandoffCachedLog: packHandoffCachedLog{LeafPageLog: originalLog},
+			handoff:              func(context.Context, *transactionowner.Owner, []LeafPageLogPackSource) error { return handoff() },
+		},
+		seq: seq,
+	}
+	d.leafPageLog = observed
+	t.Cleanup(func() {
+		d.leafPageLog = originalLog
+		leafLog.setLeafPageLogSeqAllocator(originalSeq)
+	})
+}
+
+func TestLeafGenerationPackTransitionRejectsUnownedHandoffEdges(t *testing.T) {
+	for _, interval := range []string{"callback_generation", "callback_logical", "copy_generation"} {
+		t.Run(interval, func(t *testing.T) {
+			d, leafLog, _ := openLeafGenerationPackTestDB(t)
+			prepareLeafGenerationPackTestCandidate(t, d, leafLog, 1024)
+			owner := transactionowner.New()
+			if err := d.BindPrivateCOWOwner(owner); err != nil {
+				t.Fatal(err)
+			}
+			// Deliberately use the inactive backend-owner fixture: its public
+			// backend write supplies a real unauthorized logical-edge control.
+			publishGeneration := func() error {
+				if err := leafLog.rotateLeaf(); err != nil {
+					return err
+				}
+				d.writeMu.Lock()
+				changed, err := d.reconcileLeafGenerationManifestWithDirLocked(d.state.Load().CommitSeq)
+				d.writeMu.Unlock()
+				if err == nil && !changed {
+					return errors.New("generation control did not publish")
+				}
+				return err
+			}
+			calls := 0
+			installLeafGenerationPackTransitionHandoff(t, d, leafLog, func() error {
+				calls++
+				switch interval {
+				case "callback_generation":
+					return publishGeneration()
+				case "callback_logical":
+					return d.SetSync([]byte("intervening-logical"), []byte("changed"))
+				default:
+					return leafLog.rotateLeaf()
+				}
+			})
+			originalStaging := makeLeafGenerationPackStagingDirFn
+			if interval == "copy_generation" {
+				makeLeafGenerationPackStagingDirFn = func(dir, prefix string) (string, error) {
+					if err := publishGeneration(); err != nil {
+						return "", err
+					}
+					return originalStaging(dir, prefix)
+				}
+				defer func() { makeLeafGenerationPackStagingDirFn = originalStaging }()
+			}
+			before := d.AcquireSnapshot()
+			if before == nil {
+				t.Fatal("missing original view")
+			}
+			t.Cleanup(func() { closeNoErr(t, before) })
+			stats, err := d.LeafGenerationPackRunOnceForPrivateCOW(owner, context.Background(), LeafGenerationPackFromPlanOptions{MaxGenerations: 1, Force: true, Sync: true})
+			if !errors.Is(err, ErrRootPublicationBasisMismatch) || stats.Ran || !stats.Transition.IsZero() || calls != 1 {
+				t.Fatalf("unauthorized %s edge: calls=%d stats=%+v error=%v", interval, calls, stats, err)
+			}
+			beforeToken, _ := before.StateToken()
+			afterToken, ok := d.StateToken()
+			if !ok || afterToken == beforeToken {
+				t.Fatal("control did not publish an intervening state")
+			}
+			t.Logf("rejected interval=%s before=%+v after=%+v", interval, beforeToken, afterToken)
+			got, err := before.Get(leafGenerationKey("pack-concurrent", 768))
+			if err != nil || !bytes.Equal(got, bytes.Repeat([]byte{'a'}, 32)) {
+				t.Fatalf("original view lost: value=%q error=%v", got, err)
+			}
+		})
+	}
+}
