@@ -852,7 +852,14 @@ Automatic interval, idle, and size passes are maintenance triggers. In external
 command-WAL mode they rotate and clean only the recovery-covered command-WAL
 prefix; they do not publish the current visible root frontier. Legacy or
 otherwise unwired backends fall back to a full checkpoint. Explicit
-`Checkpoint`, sync, and close remain full durable barriers. The triggers bound
+`Checkpoint` and close remain full durable root barriers. An eligible native
+standalone explicit journal sync instead uses the original public forced
+completion group: it captures and synchronizes the complete command/dependency
+prefix without constructing or sealing the physical root. It retains public
+lifetime through completion and releases operation/publication/raw gates before
+physical I/O wait. NoWAL and healthy unbound native owners use their existing
+physical checkpoint fallback. Physical graph maintenance uses `FlushAll` then
+`CheckpointStorage`; `SyncNativeSemanticPrefix` remains a physical seal. The triggers bound
 reclaimable WAL pressure, but uncovered segments may remain until a later
 durable frontier covers them.
 
@@ -1129,3 +1136,47 @@ background initialization/cleanup failure is retained and poisons the next
 observing entry before LSN assignment; earlier independent prefix proofs remain
 valid. No worker creates a token, changes a frontier, removes namespace debt or
 permits an early ACK. See the [container resource and lifecycle contract](storage-format.md#initialized-command-wal-container-v3).
+
+## Operation-scoped native journal completion
+
+`Collection.InsertBatchValidatedBSONWithJournalReceipt` is an opt-in sibling of
+ordinary validated BSON insertion. On the original bound public native CommandWAL
+owner, supported BSON primary/ordinary index effects request durable completion
+before their canonical append. The existing public group registers, physically
+synchronizes the dependency-complete assigned publication, and returns its actual
+wait outcome. An opaque owner identity and assigned LSN qualify that result; a
+logical install or `WALStable` alone cannot certify it. No new queue, durable
+frame, global completion frontier, force ledger or storage format is introduced.
+
+Only after checked transaction cleanup and the outer producer gate's release may
+the caller use successful operation coverage. The receipt grants no database,
+cut or lease ownership and imposes no promise about an unrelated later prefix.
+An errored selected operation is terminal even when cleanup joins another error;
+its successful boundary is invalidated, retaining its actual attempt/wait facts.
+Assignment/physical ambiguity retains existing poison and no-replay rules.
+Preassignment refusal need not poison an otherwise healthy owner.
+
+Default insert/update/transaction APIs, direct and repeated native Sync,
+WriteSync and physical maintenance keep their existing fresh boundaries. Unknown,
+classic, unbound, NoWAL, unsupported metadata and empty operations cannot obtain
+an original-owner operation receipt; their caller retains its normal fence.
+The gateway opts in existing-collection single-document BSON inserts and
+single-spec exact-ID, non-upsert, non-multi top-level BSON `$set` updates. Auto-create and multi-document commands have wider effect coverage and
+retain the conservative fresh post-dispatch fence, as do partial DDL/auth/multi-update
+errors and any custom sync override. Coalescing requests durability if any actual
+eligible strict member needs it, then returns the same publication result only
+to those strict members after all batch cleanup. Byte splitting and duplicate
+fallback cannot transfer one sub-batch's receipt to another.
+
+The update sibling API is
+`Collection.UpdateBSONSetBatchIfNoSecondaryUniqueIndexChangesWithJournalReceipt`.
+Its captured BSON schema excludes column, vector and text effects. The existing
+transaction result carries the same original-owner completion as insertion;
+ordinary nil callers do not request a receipt. Only actually modified members
+receive shared publication coverage. Missing/no-op members, declined unique-index
+plans and unsupported owners retain their ordinary fresh-fence obligation.
+The gateway's command-local optional budget destination is written before the
+existing small completion-channel send; it does not enlarge queued items or
+result channels. Selected completion errors are checked before unbatched fallback,
+so no member replays an assigned failure. Checked transaction Close, producer
+unlock and accepted-mutation invalidation all precede successful outward coverage.

@@ -18,6 +18,7 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/dictdb"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -25,6 +26,10 @@ import (
 // Reopen a real dictionary producer: no decoded cache page, verification credit,
 // decoder or dictionary definition is injected by the test.
 func cowLeafMissFixture(t testing.TB, entries, keys int) (*DB, *backenddb.DB, []byte, page.LeafLogPtr) {
+	return cowLeafMissFixtureWithLimits(t, entries, keys, memtable.COWLimits{})
+}
+
+func cowLeafMissFixtureWithLimits(t testing.TB, entries, keys int, limits memtable.COWLimits) (*DB, *backenddb.DB, []byte, page.LeafLogPtr) {
 	t.Helper()
 	original, want, ptr := cowSuccessorDictionaryLeafFixture(t)
 	for i := 64; i < keys; i++ {
@@ -50,7 +55,7 @@ func cowLeafMissFixture(t testing.TB, entries, keys int) (*DB, *backenddb.DB, []
 		_ = store.Close()
 		t.Fatal(err)
 	}
-	db, err := Open(dir, backend, Options{DisableWAL: true, AllowUnsafe: true, MemtableMode: "cow_ordered", FlushThreshold: 1 << 30, IndexOuterLeavesInValueLog: true, ValueLogPointerThreshold: 256})
+	db, err := Open(dir, backend, Options{DisableWAL: true, AllowUnsafe: true, MemtableMode: "cow_ordered", COWMemtableLimits: limits, FlushThreshold: 1 << 30, IndexOuterLeavesInValueLog: true, ValueLogPointerThreshold: 256})
 	if err != nil {
 		_ = backend.Close()
 		_ = store.Close()

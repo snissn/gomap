@@ -1,6 +1,7 @@
 package caching
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
@@ -34,12 +35,13 @@ type cowReadDecoder interface {
 }
 
 type cowReadCodec struct {
-	id         uint64
-	codec      valuelog.BlockCodec
-	decoder    cowReadDecoder
-	definition *dictdb.DictionaryReadDefinition // nil when borrowed from the cut
-	input, raw []byte
-	lease      *memtable.COWExternalLease
+	id               uint64
+	codec            valuelog.BlockCodec
+	decoder          cowReadDecoder
+	definition       *dictdb.DictionaryReadDefinition // nil when borrowed from the cut
+	dictionaryDigest [32]byte
+	input, raw       []byte
+	lease            *memtable.COWExternalLease
 }
 type cowPointScratch struct {
 	lease     *memtable.COWExternalLease
@@ -427,6 +429,9 @@ func (w *cowReadWorkspace) codecWithDictionary(shape valuelog.COWRecordShape, in
 		return nil, err
 	}
 	c := &cowReadCodec{id: shape.DictID, codec: shape.Codec, decoder: decoder, definition: owner, input: make([]byte, input), raw: make([]byte, raw), lease: lease}
+	if owner != nil {
+		c.dictionaryDigest = sha256.Sum256(owner.Bytes)
+	}
 	w.codecs[slot] = c
 	return c, nil
 }
@@ -831,6 +836,18 @@ func (b *cowBackendBasis) readPhysicalLeafWithDictionary(c *cowCache, w *cowRead
 	if err != nil {
 		return nil, fmt.Errorf("COW physical leaf inspect ptr=%+v file=%q identity=%+v: %w", ptr.ValuePtr(), f.Name(), identity, err)
 	}
+	// Bind provenance to an epoch observed before decoding this record.
+	// Maintenance after this observation invalidates credit.
+	var dictionaryEpoch uint64
+	var dictionaryEpochValid bool
+	canonicalLimit := c.budget.Limits().MaxInFlightBytes
+	canonical := valuelog.COWReadLimits{MaxRecordBytes: canonicalLimit, MaxRawBytes: canonicalLimit, MaxValueBytes: canonicalLimit}
+	if native && shape.DictID != 0 && independent != nil && w.limits == canonical {
+		dictionaryEpoch, dictionaryEpochValid, err = b.snapshot.ObserveDictionaryCacheEpoch()
+		if err != nil {
+			return nil, err
+		}
+	}
 	// Packing/rewrite may legitimately publish dictionary leaves even though
 	// the ordinary caching appender supplies dictionary zero. Native callers
 	// must bring their original independently retainable definition capability.
@@ -887,11 +904,31 @@ func (b *cowBackendBasis) readPhysicalLeafWithDictionary(c *cowCache, w *cowRead
 			}
 			return nil, workspaceErr
 		}
-		data, err = shared.readInspected(f, ptr.ValuePtr(), shape, true, dst, independent)
+		// Only the exact native canonical workspace gains policy-scoped credit.
+		// Admit/reuse the same independent definition and codec as real decode
+		// before looking for its matching producer bytes under physicalMu.
+		var dictionaryCodec *cowReadCodec
+		if native && shape.DictID != 0 && independent != nil && w.limits == canonical {
+			_, _, dictionaryCodec, err = shared.prepareRead(shape, 0, independent)
+			if err == nil && dictionaryCodec != nil && dictionaryCodec.definition != nil {
+				var hit bool
+				data, hit, err = b.snapshot.CopyDictionaryVerifiedCachedLeafPage(ptr, f, identity, dst, dictionaryCodec.dictionaryDigest)
+				if err == nil && hit {
+					c.physicalMu.Unlock()
+					return data, nil
+				}
+			}
+		}
 		if err == nil {
-			// Publish before the next queued decoder checks. Admission keeps
-			// the existing bounded cache, probation and nonblocking slot locks.
+			data, err = shared.readInspected(f, ptr.ValuePtr(), shape, true, dst, independent)
+		}
+		if err == nil {
+			// Admission and the later byte-identical upgrade both use slot locks.
+			// A concurrent eviction may lose credit but cannot transfer it.
 			err = b.snapshot.AdmitVerifiedCachedLeafPage(ptr, f, identity, data)
+			if err == nil && dictionaryEpochValid && dictionaryCodec != nil && dictionaryCodec.definition != nil {
+				err = b.snapshot.MarkDictionaryVerifiedCachedLeafPage(ptr, f, identity, data, dictionaryCodec.dictionaryDigest, dictionaryEpoch)
+			}
 		}
 		c.physicalMu.Unlock()
 		if err != nil {

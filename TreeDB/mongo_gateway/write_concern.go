@@ -124,6 +124,20 @@ func standaloneWriteCommand(name string) bool {
 	}
 }
 
+// Only collection commands can authenticate their actual completion owner via
+// Collections. AuthCatalog may use an unrelated store, so auth remains exclusive.
+func (s *Server) canShareStandaloneJournalBoundary(name string) bool {
+	if s == nil || s.standaloneWriteConcernSync != nil || s.Collections == nil {
+		return false
+	}
+	switch name {
+	case "create", "createIndexes", "delete", "dropIndexes", "findAndModify", "insert", "update":
+		return s.Collections.CanShareStandaloneJournalBoundary()
+	default:
+		return false
+	}
+}
+
 func (s *Server) recordStandaloneMoreToComeRejection() {
 	stats := &s.writeConcernStats
 	stats.requests.Add(1)
@@ -154,15 +168,32 @@ func (s *Server) standaloneWriteCommandResponse(ctx context.Context, name string
 	}
 	if concern.policy == standaloneWriteConcernJournal {
 		stats.journalRequests.Add(1)
-		s.standaloneWriteBoundaryMu.Lock()
-		defer s.standaloneWriteBoundaryMu.Unlock()
+		if s.canShareStandaloneJournalBoundary(name) {
+			s.standaloneWriteBoundaryMu.RLock()
+			defer s.standaloneWriteBoundaryMu.RUnlock()
+		} else {
+			s.standaloneWriteBoundaryMu.Lock()
+			defer s.standaloneWriteBoundaryMu.Unlock()
+		}
 	} else {
 		stats.visibleRequests.Add(1)
 		s.standaloneWriteBoundaryMu.RLock()
 		defer s.standaloneWriteBoundaryMu.RUnlock()
 	}
 
-	response, dispatchErr := s.dispatchCommandResponse(ctx, name, command, sequences, cursorOwner)
+	var operationJournal *standaloneOperationJournalOutcome
+	var response wire.Document
+	var dispatchErr error
+	if concern.policy == standaloneWriteConcernJournal && (name == "insert" || name == "update") && s.canShareStandaloneJournalBoundary(name) {
+		operationJournal = &standaloneOperationJournalOutcome{}
+		if name == "insert" {
+			response, dispatchErr = s.insertResponseWithJournal(ctx, command, sequences, operationJournal)
+		} else {
+			response, dispatchErr = s.updateResponseWithJournal(ctx, command, sequences, operationJournal)
+		}
+	} else {
+		response, dispatchErr = s.dispatchCommandResponse(ctx, name, command, sequences, cursorOwner)
+	}
 	commandOK := dispatchErr == nil && mongoCommandResponseOK(response)
 	if commandOK {
 		stats.logicalWrites.Add(1)
@@ -176,13 +207,30 @@ func (s *Server) standaloneWriteCommandResponse(ctx context.Context, name string
 	}
 
 	// A handler can return ok:0 after partially applying a multi-definition DDL
-	// command. Without a mutation outcome signal from every handler, every
-	// accepted journal request conservatively closes the boundary before its
-	// response is returned, including command-error responses.
-	stats.syncAttempts.Add(1)
-	syncStart := time.Now()
-	physicalSync, syncErr := s.syncStandaloneWriteConcern()
-	stats.journalSyncNanos.Add(uint64(time.Since(syncStart)))
+	// command. An authenticated operation receipt covers only its own checked
+	// publication. All uncovered requests conservatively close a fresh boundary
+	// before returning, including command-error responses.
+	var physicalSync bool
+	var syncErr error
+	if operationJournal != nil && operationJournal.completion.Selected() {
+		completion := operationJournal.completion
+		// The same original owner's assigned publication already performed the
+		// actual native durability wait. Never replay or issue a masking force.
+		if completion.Attempted() {
+			stats.syncAttempts.Add(1)
+		}
+		stats.journalSyncNanos.Add(completion.WaitNanos())
+		physicalSync = completion.Completed()
+		syncErr = operationJournal.err
+		if syncErr == nil && !physicalSync {
+			syncErr = errors.New("native operation journal completion did not complete")
+		}
+	} else {
+		stats.syncAttempts.Add(1)
+		syncStart := time.Now()
+		physicalSync, syncErr = s.syncStandaloneWriteConcern()
+		stats.journalSyncNanos.Add(uint64(time.Since(syncStart)))
+	}
 	stats.acknowledgementNanos.Add(uint64(time.Since(start)))
 	if physicalSync {
 		stats.physicalSyncBoundaries.Add(1)

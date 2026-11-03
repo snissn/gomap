@@ -189,7 +189,7 @@ func cowNativePackedDictionaryLeafFixture(t *testing.T) (*DB, *backenddb.DB, pag
 		MaxBytesToCopy: 32 << 20, ReserveRIDs: db.ReserveValueLogRIDs,
 	})
 	if packErr == nil {
-		packErr = db.adoptPrivateCOWLeafBasis(original)
+		packErr = db.adoptPrivateCOWLeafBasisWithTransition(original, stats.Transition)
 	}
 	db.flushMu.Unlock()
 	if packErr != nil || !stats.Ran || stats.Pack.BytesCopied == 0 {

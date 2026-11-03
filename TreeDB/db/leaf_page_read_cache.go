@@ -144,6 +144,9 @@ type leafPageReadCacheSlot struct {
 	data                   []byte
 	valid                  bool
 	recordChecksumVerified bool
+	dictionaryDigest       [32]byte
+	dictionaryDigestValid  bool
+	dictionaryEpoch        uint64
 	pageChecksumVerified   atomic.Bool
 	recent                 atomic.Bool
 }
@@ -185,7 +188,8 @@ type leafPageReadCache struct {
 	// disabled temporarily bypasses all cache reads and writes during storage
 	// maintenance/compaction so stale leaf-log pages are not served while value-log
 	// rewrite/GC and leaf-generation pack/GC mutate underlying storage.
-	disabled atomic.Bool
+	disabled        atomic.Bool
+	dictionaryEpoch atomic.Uint64
 
 	hits      atomic.Uint64
 	misses    atomic.Uint64
@@ -209,6 +213,7 @@ type leafPageReadCache struct {
 	writeAdmissionSkips     atomic.Uint64
 	writeAdmissionLockSkips atomic.Uint64
 
+	dictionaryVerifiedHits       atomic.Uint64
 	recordChecksumVerifiedStores atomic.Uint64
 	pageChecksumVerifiedMarks    atomic.Uint64
 	pageChecksumVerifiedHits     atomic.Uint64
@@ -238,6 +243,7 @@ type leafPageReadCacheStats struct {
 	WriteAdmissionStores            uint64
 	WriteAdmissionSkips             uint64
 	WriteAdmissionLockSkips         uint64
+	DictionaryVerifiedHits          uint64
 	RecordChecksumVerifiedStores    uint64
 	PageChecksumVerifiedMarks       uint64
 	PageChecksumVerifiedHits        uint64
@@ -575,6 +581,9 @@ func (s *leafPageReadCacheSlot) storeIntoBackingLocked(key leafPageReadCacheKey,
 	s.key = key
 	s.valid = true
 	s.recordChecksumVerified = recordChecksumVerified
+	s.dictionaryDigest = [32]byte{}
+	s.dictionaryDigestValid = false
+	s.dictionaryEpoch = 0
 	s.pageChecksumVerified.Store(false)
 	s.recent.Store(true)
 	s.keyFP.Store(leafPageReadCacheKeyFingerprint(key))
@@ -839,6 +848,64 @@ func (c *leafPageReadCache) getToWithRecordPolicy(ptr page.LeafLogPtr, dst []byt
 	return nil, false, leafPageReadCacheState{}, false
 }
 
+// dictionaryVerifiedPage copies only a page admitted with the same independently
+// owned dictionary bytes. The slot lock binds the digest to these exact bytes.
+func (c *leafPageReadCache) dictionaryVerifiedPage(ptr page.LeafLogPtr, dst []byte, digest [32]byte) ([]byte, bool) {
+	if c == nil || c.disabled.Load() || len(c.slots) == 0 || len(c.buckets) == 0 || cap(dst) < page.PageSize {
+		return nil, false
+	}
+	key := newLeafPageReadCacheKey(ptr)
+	keyFP := leafPageReadCacheKeyFingerprint(key)
+	start, end := c.bucketRange(c.bucketIndex(key))
+	for i := start; i < end; i++ {
+		slot := &c.slots[i]
+		if slot.keyFP.Load() != keyFP || !slot.mu.TryRLock() {
+			continue
+		}
+		if slot.valid && slot.key == key && !c.disabled.Load() && slot.recordChecksumVerified && slot.dictionaryDigestValid && slot.dictionaryEpoch == c.dictionaryEpoch.Load() && slot.dictionaryDigest == digest && len(slot.data) == page.PageSize {
+			out := dst[:page.PageSize]
+			copy(out, slot.data)
+			// Successful copied pages only: entry/mark/miss and ordinary page
+			// checksum hits do not establish dictionary-policy activation.
+			c.dictionaryVerifiedHits.Add(1)
+			slot.recent.Store(true)
+			state := leafPageReadCacheState{RecordChecksumVerified: true, CacheEntryPresent: true, PageChecksumVerified: slot.pageChecksumVerified.Load()}
+			slot.mu.RUnlock()
+			c.recordHitState(state)
+			return out, true
+		}
+		slot.mu.RUnlock()
+	}
+	c.misses.Add(1)
+	return nil, false
+}
+
+// markDictionaryVerified marks only the still-present, byte-identical page
+// after the caller's own full-record decode. Eviction or contention loses credit.
+func (c *leafPageReadCache) markDictionaryVerified(ptr page.LeafLogPtr, data []byte, digest [32]byte, epoch uint64) {
+	if c == nil || c.disabled.Load() || c.dictionaryEpoch.Load() != epoch || len(c.slots) == 0 || len(c.buckets) == 0 || len(data) != page.PageSize {
+		return
+	}
+	key := newLeafPageReadCacheKey(ptr)
+	keyFP := leafPageReadCacheKeyFingerprint(key)
+	start, end := c.bucketRange(c.bucketIndex(key))
+	for i := start; i < end; i++ {
+		slot := &c.slots[i]
+		if slot.keyFP.Load() != keyFP || !slot.mu.TryLock() {
+			continue
+		}
+		if slot.valid && slot.key == key && !c.disabled.Load() && c.dictionaryEpoch.Load() == epoch && bytes.Equal(slot.data, data) {
+			slot.recordChecksumVerified = true
+			slot.dictionaryDigest = digest
+			slot.dictionaryEpoch = epoch
+			slot.dictionaryDigestValid = true
+			slot.mu.Unlock()
+			return
+		}
+		slot.mu.Unlock()
+	}
+}
+
 // markRecordChecksumVerified upgrades only an existing byte-identical entry
 // after the original reader has fully verified and decoded the same record.
 // A concurrent eviction/rewrite or maintenance bypass simply loses the upgrade.
@@ -971,6 +1038,7 @@ func (c *leafPageReadCache) stats() leafPageReadCacheStats {
 		WriteAdmissionStores:            c.writeAdmissionStores.Load(),
 		WriteAdmissionSkips:             c.writeAdmissionSkips.Load(),
 		WriteAdmissionLockSkips:         c.writeAdmissionLockSkips.Load(),
+		DictionaryVerifiedHits:          c.dictionaryVerifiedHits.Load(),
 		RecordChecksumVerifiedStores:    c.recordChecksumVerifiedStores.Load(),
 		PageChecksumVerifiedMarks:       c.pageChecksumVerifiedMarks.Load(),
 		PageChecksumVerifiedHits:        verifiedHits,
@@ -1063,6 +1131,7 @@ func (db *DB) disableLeafPageReadCacheForMaintenance() func() {
 		return func() {}
 	}
 	prev := db.leafPageReadCache.disabled.Swap(true)
+	db.leafPageReadCache.dictionaryEpoch.Add(1)
 	return func() {
 		db.leafPageReadCache.disabled.Store(prev)
 	}

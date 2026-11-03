@@ -822,11 +822,20 @@ Mongo gateway:
   profile. In particular, `command_wal_relaxed` and `no_wal_fast` do not gain a
   stronger promise from an ordinary acknowledgement.
 - A successful standalone `j: true` acknowledgement completes
-  `CollectionManager.SyncForStandaloneWriteConcern`. A native manager uses its
-  existing cache owner's checkpoint to seal and synchronize the complete
-  captured raw/collection prefix, including persistent value-log dependencies,
-  and reports a physical sync on every successful call. A legacy manager first
-  drains collection publishing, then completes `SyncCommandWALAppliedPrefix`
+  `CollectionManager.SyncForStandaloneWriteConcern`. An eligible native
+  CommandWAL manager invokes the same original public owner's forced journal
+  completion group, synchronizing its complete captured raw/collection prefix
+  and persistent dependencies without a physical root checkpoint. The original
+  public lifetime is retained through completion; publication/raw gates are
+  released before the file-sync wait. Repeated successful calls still force a
+  real boundary and return `physicalSync=true`; that boolean records completed
+  success rather than an exact syscall-attempt count. NoWAL and healthy direct
+  native constructors without the public bridge retain the same cache owner's
+  physical checkpoint fallback. Nil, closed, poisoned or inactive owners reject;
+  a selected callback error never retries or falls back. Physical maintenance
+  and snapshot/root/`AppliedCommandLSN` seals continue to use `FlushAll` then
+  `CheckpointStorage`, whose physical contract is unchanged. A legacy manager
+  first drains collection publishing, then completes `SyncCommandWALAppliedPrefix`
   when command WAL is enabled or `DB.Checkpoint` when it is disabled. The legacy
   command-WAL boundary syncs a relaxed suffix and publishes its durable-prefix
   barrier as a root-neutral contiguous applied command; an already-durable
@@ -1000,3 +1009,29 @@ the DB pointer after receiver CURRENT publication. A separate durable log must
 persist accepted install intent before that publication and resolve it before
 replay/health; see the
 [transfer lifecycle contract](external-recovery.md#authorized-portable-snapshot-transfer).
+
+### Native standalone journal scheduling
+
+The gateway may share a standalone explicit-journal dispatch only for collection
+commands whose configured manager authenticates the same original public native
+CommandWAL completion owner. The optional pure callback compares both backend and
+private owner under the public lifecycle `TryRLock`; unknown implementations or
+uncertain/open/poison admission return false. This query performs no activation,
+intent, publication, checkpoint or sync and retains no handle or capability cache.
+It releases lifecycle before gateway entry. The actual mutation and forced fence
+still obtain their own admission and lifetime; a selected fence error is terminal
+with no retry or physical fallback. False changes scheduling only.
+
+Eligible collection commands are create, createIndexes, delete, dropIndexes,
+findAndModify, insert and update. Authentication commands, classic/unbound/NoWAL
+owners and custom sync overrides keep the exclusive boundary. Auth storage is not
+identified by the collection manager. Visible/default and cluster policy, repeated
+real explicit forced fences and the existing default collector remain unchanged.
+
+The opt-in BSON-set batch sibling
+`Collection.UpdateBSONSetBatchIfNoSecondaryUniqueIndexChangesWithJournalReceipt`
+returns original-owner physical completion only for a changed ordinary BSON
+publication after checked cleanup and producer unlock. `batched=false` does not
+authorize replay of a selected error. Default APIs retain nil receipt intent;
+missing/no-op, unsupported, auxiliary and wider commands retain fresh fences.
+See [operation completion](write-path-and-durability.md#operation-scoped-native-journal-completion).

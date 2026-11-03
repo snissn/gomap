@@ -51,9 +51,13 @@ type finalizeCommitOptions struct {
 	// pointer rewrite. It authorizes an ordinary physical candidate, never a
 	// canonical append, accepted cut, logical install, or frontier advancement.
 	privateCOWEquivalentRewriteOwner *transactionowner.Owner
-	commandWALSeal                   *commandWALSealReceipt
-	commandWALSealGroup              []*CommandWALIntent
-	negativeCoverage                 *negativeRootCoverage
+	// acceptedStateToken borrows a private maintenance caller's scalar output
+	// until finalization returns. Fill it from this installation after acceptance,
+	// before any accepted-error wait; never retain it in queued publication state.
+	acceptedStateToken  *StateToken
+	commandWALSeal      *commandWALSealReceipt
+	commandWALSealGroup []*CommandWALIntent
+	negativeCoverage    *negativeRootCoverage
 	// prepareSnapshotReceipt runs with candidate/teardown custody and rootReuseMu
 	abortSnapshotReceipt func() error
 	// before EnqueueBuilt. Failure is preaccept; original cleanup remains owned.

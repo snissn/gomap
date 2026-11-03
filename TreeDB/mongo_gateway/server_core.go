@@ -151,11 +151,11 @@ type Server struct {
 	updateCoalescers                map[string]*mongoUpdateCoalescer
 	insertMu                        sync.Mutex
 	insertCoalescers                map[string]*mongoInsertCoalescer
-	// standaloneWriteBoundaryMu lets ordinary standalone writes overlap while
-	// making a journal request exclusive from dispatch through its durable
-	// boundary. That exclusion prevents a concurrent collection mutation from
-	// holding a domain lock while waiting on the command-WAL publish lock that
-	// the journal boundary owns while draining collection barriers.
+	// standaloneWriteBoundaryMu lets visible writes and authenticated original-
+	// owner native collection journal requests overlap. Other journal requests,
+	// including auth and custom sync, stay exclusive through dispatch and sync:
+	// legacy barrier draining can otherwise deadlock with collection mutation.
+	// Collections and sync configuration are fixed before serving requests.
 	standaloneWriteBoundaryMu    sync.RWMutex
 	standaloneWriteConcernSync   func() (bool, error)
 	writeConcernStats            standaloneWriteConcernStats

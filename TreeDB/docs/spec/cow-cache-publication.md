@@ -233,12 +233,12 @@ implementation.
 Retained snapshot point reads and bound iterators reuse their own admitted
 physical traversal scratch. A snapshot successor keeps using already admitted
 cut-local point storage when present. Otherwise it tries the retained backend
-basis's original traversal mutex without waiting. If available, it
-borrows that basis's admitted workspace and copies the winning key and inline
-value before unlocking. Dictionary-free Snappy/LZ4 leaf decoding retains the
+basis's original traversal mutex and then its three existing extra slots without
+waiting. If an owner is available, it borrows that basis's admitted workspace
+and copies the winning key and inline value before unlocking. Dictionary-free Snappy/LZ4 leaf decoding retains the
 successor's independent block-decoder policy in that workspace; this borrowing
-does not add a generic decoder mutex wait. A busy basis takes the original
-cut-local traversal and block-decoder path. Shared capacity refusal also releases
+does not add a generic decoder mutex wait. When all four owners are busy, the
+successor takes the original cut-local traversal and block-decoder path. Shared capacity refusal also releases
 the basis mutex before trying the cut-local owner. Thus independent retained readers
 can still proceed while another owner holds shared scratch. Capable dictionary
 leaves now complete that original traversal with a per-call independently owned
@@ -275,9 +275,56 @@ unadmitted storage. This reuse adds no pool, root publication or recovery owner.
 Physical iterator construction failures and Close drain workspace children
 before refunding the aggregate construction lease, including on verified-cache
 hits that need no decoder or buffer growth.
-Direct DB point reads and native physical readers retain the original shared
-workspace. ZSTD records in COW read workspaces use the maintained bounded decoder
-continuation. Dictionary reads first reuse an already-admitted matching cut-local
+Native exact-entry reads use the same primary-plus-three-owner selection, with
+explicit workspace traversal of the caller's exact captured root. Inline output
+is copied before the selected mutex unlocks; metadata-only, pointer and tombstone
+results retain no page bytes. Selection neither captures a new root nor retains
+a dictionary provider. If every owner is busy, the native read retains its legacy
+blocking primary fallback. A workspace or point-buffer admission refusal in an
+extra slot before traversal also releases that mutex before the primary fallback,
+refunding only a newly partial extra owner. Primary refusal retains its existing
+owner and error behavior. Existing warm owners remain live. Once traversal begins,
+I/O, integrity, codec, provider and read-capacity errors return without retry.
+Every admitted extra owner remains charged to the original budget and basis and
+is drained by the existing final-basis release. Native leaf-page reads remain on
+the primary mutex. This point-traversal selection changes neither its native
+codec policy nor pinned-file verification, inspection limits or provider authority.
+
+Native value-pointer copy-out opportunistically selects one of the same four
+basis owners without waiting. It lazily admits the existing inspection envelope
+and uses the original pinned basis file and limits. Raw records (including raw
+records with dictionary tags) and dictionary-free Snappy/LZ4 records prepare the
+existing bounded input/output and codec storage before reading payload. This cold
+preparation is required for ordinary default public reads to activate the route;
+manual prewarming is not its activation contract. Successful storage stays charged
+until selected retirement or final-basis release. No new pool, decoder, owner slot,
+configuration or retained capture/provider is introduced.
+
+Busy owners, metadata capacity/closed admission refusal and valid inspected
+dictionary, ZSTD or legacy compressed shapes release the basis mutex before the
+original cache decoder fallback, exactly once. A newly admitted eligibility-only
+owner is closed before an unsupported fallback; a healthy existing owner remains.
+Pinned-file and inspection errors are terminal. For eligible records only a
+preparatory memtable capacity/closed refusal detaches and closes the exact selected
+workspace under its own mutex, including pre-existing point scratch, all codecs,
+arrays, superseded buffers and metadata. References end before refunds; the
+original basis snapshot and file pins remain retained. Point-traversal handoff's
+fresh-only retirement policy remains unchanged, and stale handoff tokens cannot
+retire replacement identities.
+
+Unknown/format/codec preparation errors and every actual read, CRC, decode,
+metadata-revalidation or output-admission error are terminal with no shared replay.
+The output callback runs once after successful verification; refusal returns nil.
+The independently allocated len==cap result is copied before panic-safe unlock.
+This deliberately revises historical incidental admission/error ordering: fitting
+basis storage can serve a live retained capture with a closed producer budget;
+required growth retires that owner before the original fallback decides its result.
+Closed captures/transactions still reject first. No general public post-DB-Close
+read guarantee follows. Unsupported fallback retains its original reinspection,
+dictionary ownership, limits and decoder admission costs.
+
+Direct DB point reads retain their original shared workspace. ZSTD records in
+COW read workspaces use the maintained bounded decoder continuation. Dictionary reads first reuse an already-admitted matching cut-local
 decoder. Otherwise they decode through the original cache physical workspace.
 Owned version-successor reads finish leaf copy-out or owned value append before
 releasing its mutex. Snapshot and iterator leaves decode into their original
@@ -361,6 +408,41 @@ metadata and corruption retain the original errors. Uncompressed value-prefix
 checks reuse the window when present and otherwise read their exact bytes.
 Registered file identity checks, full CRC verification before cache promotion,
 page validation, cache disablement and captured-cut lifetimes remain required.
+
+
+Native dictionary leaves at the canonical read limits (the original generation
+limit with the gateway's 512 MiB in-flight envelope) have a separate verified
+cache admission. They still inspect the exact pinned file and admit/reuse the
+original independently owned dictionary definition and bounded codec under
+`physicalMu` before a hit. SHA-256 of the full immutable definition is computed
+once per admitted codec, not per page read. This route keeps the shared physical
+mutex and the existing decoder and allocation policy; it does not borrow the
+ordinary noncanonical fast-hit eligibility.
+
+A successful full-record decode can mark only the still-present byte-identical
+page with that definition digest and an epoch observed before decode. A hit must
+match the original file identity, record verification, full digest and current
+epoch, and copies into caller-owned output under the existing slot lock. Page
+checksum credit remains independent. Maintenance disables the cache and advances
+the dictionary epoch; work spanning maintenance cannot grant stale credit, and
+already marked pages lose dictionary eligibility after maintenance. Replacement
+clears provenance. Disabled, missing, foreign-digest, evicted, contended and
+noncanonical entries keep existing miss/decode/refusal behavior. No provider,
+dictionary handle, file or decoder is retained by a cache slot. Original finite
+slots/probation and same-basis/codec Close/refund continue to bound ownership.
+
+
+`treedb.process.read_path.outer_leaf.cache.dictionary_verified_hits` counts only
+successful copied pages on the full digest/epoch policy above. It is monotonic
+for one cache lifetime, including across eviction and maintenance; fresh
+Open/reopen starts a new counter at zero. Generic/page-checksum hits, marking,
+misses and refused/disabled reads do not receive this credit. Existing public
+owner stats and read-only phase receipts carry the value without changing their
+schema or the original49 required counter inventory. A positive phase delta
+proves activity in that owner's cache; attributing it to timed workload requests
+also requires excluding other readers. It is not proof of end-to-end read values,
+request latency or performance benefit. The extra hot cost is one atomic increment
+per successful dictionary hit; allocation and contention remain measured gates.
 
 After a full verified decode, repeated COW misses may populate the original
 backend leaf cache through explicit cache-owned admission. Each configured slot

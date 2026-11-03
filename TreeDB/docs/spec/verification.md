@@ -366,6 +366,20 @@ Ordinary ColumnGraph captured-prefix handoff controls (#5338):
 | `TestOrdinaryColumnGraphNativeCloseRetainsCheckpointFailure` | A maintained fault after the actual final META write on a durable ordinary owner; the original first Close preserves the injected cause, recovery-required sentinel and notification without retry. A fresh process owner recovers every acknowledged ordinary document and the final raw marker. |
 | `TestNativeMaterializeDiagnosticRetainsOriginalCatalogFailure` and `TestNativeTypedDiagnosticMarksDeltaOrderAndKeepsFailure` | Original terminal error identity, `errors.Is`/`errors.As` causality, stage discriminator, borrowed-input release and no physical replay or retryable reclassification. |
 
+Private leaf-pack physical handoff controls cover the separate physical
+relocation path; they do not replace the captured-prefix controls above:
+
+| Control | Required evidence |
+| --- | --- |
+| `TestPrivateCOWLeafPackPreservesAcceptedOrdinaryGraph` | Original concrete native backend, public native target/filler writes, a real partly-live leaf pack and actual manifest relocation; assigned, installed, consumed and WAL-stable graph acceptance before cache adoption; original graph completion, exact acknowledged contents, held old reads, checked Close and reopen. Its controlled causal RED remains distinct from the historical CI interleaving. |
+| `TestLeafGenerationPackTransitionFollowsPrivateAcceptance` and `TestLeafGenerationPackTransitionUnownedPublicationHasNoAuthority` | Exact original backend/index/snapshot endpoints, actual accepted install and accepted-error outcome, allocation-free validation, retained old values, and rejection of closed/foreign/reversed/intervening bases. Unowned, declined and preacceptance outcomes cannot mint leaf-pack authority. |
+| `TestNativeLeafPackGraphRefreshPreservesCompleteSourceAndOldViews`, `TestNativeLeafPackGraphRefreshRejectsStaleSource` and `TestNativeLeafPackGraphRefreshKeepsReplacementAndRequiresProof` | Privately admitted header advancement preserves recipes, original capacity, every older source and old views; successive transitions and partial-admission refunds; stale/schema/unassigned/zero/unsupported source rejection and unchanged full-replacement zero base. These are component guards, not public overlap evidence. |
+
+Keep the existing private-pack concurrent-WAL/held-cut, accepted-error, GC
+convergence, fallback and deferred-fallback controls. Run affected controls in
+normal and race modes, retain every failed attempt and require actual named
+test execution with no skips. Source review alone is not passing execution.
+
 Run the component controls and the public subprocess/lifecycle controls normally
 and with the race detector. Keep each source-bound command, exit status and
 original failure output. Authored coverage is not an execution result, a passing
@@ -4889,3 +4903,178 @@ Existing `TestNativeTextV2ForwardIdentity*`, `TestNativeHybridPublicScalarPhysic
 forward-corruption, source-work and HNSW cache oracles. The frozen baseline RED
 controls are separate from candidate-focused and unchanged original Keyword
 B/A/A/B public evidence; no helper result replaces performance qualification.
+
+The native explicit journal fence is covered by
+`TestStandaloneServerOfficialDriverJournalFenceWithoutCheckpoint`, using the
+actual standalone opener, both CommandWAL profiles and official-driver journal
+ACKs with exact readback and checked original/fresh-owner Close. Its first
+behavioral assertion requires zero cache-owner checkpoints; the candidate then
+requires no redundant forced registration for the opted-in insert operation. The retained baseline characterization is
+separate from this product regression.
+`TestNativeJournalPrefixOriginalOwnerAndFallback` and
+`TestCOWNativeJournalPrefixUnboundCapability` cover admission and healthy fallback;
+`TestNativeJournalPrefixSyncFailurePoisonsWithoutFallback` injects real retained
+command-file sync failure.
+`TestNativeJournalPrefixRetainsLifecycleReleasesGatesBeforeACK` holds that sync
+and checks lifetime, released gates, Close join and final pin/owner zero.
+`TestNativeJournalPrefixCrashReopenDependencies` exits without checkpoint/Close
+after raw batch and indexed JSON/template writes, with a NoWAL physical control.
+`TestStandaloneNativeJournalPartialDDLAndAuthCrashReopen` covers accepted error
+responses, partial DDL/update and shared auth writes;
+`TestStandaloneNativeJournalPartialErrorRealFenceFailureIsUncertain` preserves
+partial response/error and uncertainty on actual fence failure.
+`TestNativeExistingCollectionPhysicalCheckpointCrashReopen` retains the stronger
+physical `AppliedCommandLSN`, old-view and no-extra-command checks.
+`TestNativeJournalMaintenanceRequiresPhysicalCheckpoint` requires original-owner
+native ordinary optimize and eligible classic typed build/ensure/fold/renew to
+stop before graph work when the actual physical index sync fails. Each target is
+built first; an independent mutation dirties the same storage owner. Cache
+identity, bounded serving metadata, work-attempt counters and canonical command
+LSN complement the actual physical fault. Typed service text declarations do not
+select the native semantic bridge. Existing classic buffered/deferred lifecycle
+and crash controls remain separate.
+`TestNativeJournalMaintenanceClassicFlushFailureBeforeWork` pairs direct FlushAll
+and Optimize controls on fresh matched classic buffered fixtures for both
+ordinary and typed no-deferred callers. It refuses an actual auxiliary asset
+sync, retains buffered debt and the original error, and requires unchanged
+target cache/serving identities and work-attempt counters. Ordered root events
+before the fault are compared with direct FlushAll; legitimate publication
+activity is not required to be zero. A distinct pre-manager raw-publish barrier
+rejects checkpoint entry before explicit FlushAll. After a publication failure
+poisons the backend, an attempted checkpoint may reject before that barrier;
+the literal success-only call sequence is also verified by source review.
+Process-exit recovery does not establish
+power-loss or replica durability.
+
+Native shared journal scheduling uses the same official-driver/physical-sync
+controls in `TestStandaloneNativeSharedBoundaryHeldSyncExactACK`,
+`TestStandaloneNativeSharedBoundaryHeldSyncFailurePoisons`,
+`TestStandaloneNativeSharedBoundaryCloseJoinsHeldSync` and
+`TestStandaloneNativeSharedBoundaryCrashReopen`, both CommandWAL profiles.
+The first control requires successor installation while the predecessor's real
+own-publication sync is held, then observes the successor's actual matching Before
+and successful After file-sync events before accepting its ACK. Aggregate
+forced/sync counters alone do not satisfy that oracle. These shared-entry
+fixtures explicitly disable gateway coalescing: the default same-collection
+worker waits for its native completion before dequeuing another request.
+Product-default queued batching is proved by the unchanged behavioral receipt
+control, and `TestStandaloneNativeJournalDefaultHeldReceiptQueuesSuccessor`
+checks a queued successor, no early ACK, checked Close and fresh-owner readback.
+Failure preserves partial responses and poison without retry; Close joins the
+held lifetime; abrupt exit97 follows both actual ACKs without a repairing Close.
+`TestNativeJournalBoundaryOwnerCapability` checks exact owner/backend, NoWAL,
+purity and query/Close concurrency; `TestNativeJournalBoundaryCapabilityRefusesPendingClose`
+requires nonblocking refusal behind the actual pending lifecycle writer.
+`TestStandaloneNativeJournalBoundaryEligibility` inventories the seven collection
+commands, auth's unrelated store and custom override; the custom-boundary and real
+shared-sync-panic controls preserve exclusion and deferred unlock respectively.
+These are source contracts; execution and final public qualification are separate.
+
+Operation-scoped receipt coverage uses
+`TestStandaloneNativeJournalCoalescedInsertPhysicalReceiptNoRefence`: the exact
+retained baseline behavioral RED function requires two real queued strict RPCs,
+a deterministic single coalesced batch/LSN, real ordinary Before/After, no early
+ACK, actual completed accounting, exact duplicate-free BSON and checked original
+and fresh Close before its final no-refence assertion. Historical characterization
+and the baseline extra physical epochs remain retained under their original source.
+`TestStandaloneNativeJournalReceiptCoalescerMembership` covers strict/plain and
+byte-split membership plus independent duplicate fallback.
+`TestStandaloneNativeJournalReceiptFallbackAndFailure` retains auto-create and
+multi-document fresh fences and injects actual ordinary sync failure to require
+one uncertainty outcome without ACK or masking force. General collection controls
+`TestNativeBSONJournalReceiptOriginalOwnerAndFallback`,
+`TestNativeBSONJournalReceiptPhysicalFailureIsTerminal` and
+`TestNativeBSONJournalReceiptCheckedCleanupInvalidatesSuccess` cover wrong/fresh
+owners, NoWAL, empty/duplicate requests, direct repeated physical Sync, real I/O
+error/poison and joined checked cleanup errors. Unrecognized lower completion
+fakes remain unable to manufacture original-owner receipts.
+`BenchmarkNativeBSONJournalReceiptInsert` compares actual general collection
+inserts plus fresh Sync against opt-in completion, reporting allocations with
+checked original/fresh-owner readback and lifecycle outside request timing.
+Source assertions do not establish execution or performance qualification.
+
+BSON-set operation receipt source controls add
+`TestStandaloneNativeJournalCoalescedBSONSetPhysicalReceiptNoRefence` with the
+byte-exact admitted durable baseline regression: default queued batching, shared
+publication, real physical Before/After, exact BSON and checked original/fresh
+Close precede its final no-refence invariant. Both-profile
+`TestStandaloneNativeUpdateJournalReceiptMembership` checks strict/plain,
+changed/no-op/missing and duplicate sequential membership;
+`TestStandaloneNativeUpdateJournalReceiptFailureNoReplay` requires one real sync
+failure/uncertainty without a masking force. Collection controls
+`TestNativeBSONSetJournalReceiptOwnerNoopAndNoWAL` and
+`TestNativeBSONSetJournalReceiptTextFallback` retain owner/reopen and excluded-index
+effects. `BenchmarkCollectionBSONSetJournalReceipt` alternates real binary updates
+on the same owner, compares ordinary nil-plus-Sync with selected completion and
+checks exact original/fresh values outside timing. These are source controls;
+execution, allocation/public tails, race, crash, rotation and final qualification
+remain separate gates. Preserve the existing unordered planning-error continuation
+and pre-publication deadline controls unchanged.
+
+
+### Native basis block-value workspace witnesses
+
+`TestNativeValueBlockWorkspaceHeldPhysicalMutex` cold-bootstraps through actual
+captured reads, checks charged basis storage and progresses under the real held
+shared decoder mutex for writer-produced raw, Snappy and LZ4 K1/K2 records and
+both grouped subindices. `TestNativeValueBlockWorkspaceIntegrityAndOwnership`
+checks verified callback refusal and grouped CRC errors without shared replay.
+`TestNativeValueBlockWorkspaceAllSlotsBusy` retains the authoritative shared
+fallback. `TestNativeValueBlockWorkspacePreparationRefusal` prices actual
+metadata, codec-vector, codec and output constituent admissions, then refuses each
+under finite pressure for fresh/existing primary/extra owners; it checks full
+selected retirement and pending-token/replacement identity. Metadata refusal does
+not retire an unrelated owner. The valid ZSTD and retained post-Close fit/growth
+controls preserve unsupported shared decoding and scoped closed-budget policy.
+`TestNativeValueBlockWorkspaceRawPreparationBeforePayload` refuses fresh raw
+input/output growth or growth of the missing existing dimension for primary and
+extra owners; a corrupt CRC proves refusal occurs before payload verification or
+callback. `TestNativeValueBlockWorkspaceActualReadRefusalIsTerminal` injects a
+capacity sentinel from the actual decoder, proving it is terminal rather than a
+preparation replay signal. Concurrent retained captures, checkpoint replacement,
+checked original Close and
+final original-budget zeroing are covered by
+`TestNativeValueBlockWorkspaceConcurrentClose`.
+
+`TestNativeJSONBlockValueDefaultActivation` uses the journal-receipt fixture's
+actual OptionsFor durable/relaxed BSON collection manager, default compression,
+checkpoint and fresh-owner reopen. Its test-only capture wrapper delegates public
+Get to the real original physical value reader and records actual pointer shapes;
+it does not prepare value scratch. The caching witnesses provide private mutex
+and charge assertions without a shipping diagnostic API. Any independent leaf
+traversal warming is separate from value preparation. These source witnesses need
+normal and race execution and do not establish public workload performance,
+retained-memory acceptability, unsupported-fallback cost or delivery acceptance.
+
+`BenchmarkNativeBlockValueWorkspace` reports actual public BSON Get warm B/op and
+allocs/op, separate cold process allocation deltas/latency, retained/peak original
+budget charges, serial/parallel reads and an untimed physical-basis replacement.
+It checks original manager/owner Close and fresh-owner value preservation. These
+component metrics do not replace the fixed public workload or quantify valid
+unsupported-codec fallback reinspection; both remain separately required.
+
+`TestNativeBSONSetJournalReceiptCheckedCleanupInvalidatesSuccess` exercises the
+prepared update finisher with the original real owner and the existing conditional
+transaction Close-error wrapper. It requires the original cleanup error, a selected
+and attempted but noncompleted same-owner receipt, a closed original transaction,
+and the exact accepted BSON update after releasing producer admission. This is a
+source control for joined cleanup failure, not a public ACK, crash or relaxed-profile
+qualification result. The finisher extraction retains the original update body and
+checked-Close order; its caller continues to own producer admission and panic cleanup.
+
+The combined-source update receipt fixture now serves the durable and
+`TestStandaloneNativeJournalRelaxedCoalescedBSONSetPhysicalReceiptNoRefence`
+entrypoints through one profile-parameterized helper. Both require exactly two
+semantic appends, a two-member DURABLE strict target, exact decoded actions and
+BSON, no early ACK, matching physical Before/After and two actual strict
+requests/attempts/completed boundaries. The ordinary predecessor follows its
+profile: two physical epochs total for durable, one for relaxed; neither accepts
+an empty promotion marker. The isolated admitted durable RED/GREEN source and
+its historical evidence remain unchanged. These consolidated controls are unrun.
+`TestStandaloneNativeUpdateJournalCloseJoinsHeldSync` and
+`TestStandaloneNativeUpdateJournalCrashReopen` reuse the existing held-sync and
+bounded exit-97 fixtures with selected real BSON updates in both profiles. They
+bind the exact selected update frame to its captured physical prefix and retain
+checked original/fresh lifecycles, original insert branches and failure bounds.
+The changed original insert entrypoints must also be rerun; source review alone
+is not public ACK/crash, race or global qualification.

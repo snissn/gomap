@@ -41,6 +41,25 @@ type cowBasisReadSlot struct {
 	reader *cowReadWorkspace
 }
 
+// tryReadWorkspace selects only an existing traversal owner, without waiting or
+// admitting scratch. Index zero is primary; the remaining indices are slots.
+// next lets a caller preserve its own retry policy after an admission refusal.
+// The caller must retain the basis and unlock the returned mutex after copy-out.
+func (b *cowBackendBasis) tryReadWorkspace(first int) (mu *sync.Mutex, owner **cowReadWorkspace, next int) {
+	for i := first; i <= len(b.readSlots); i++ {
+		if i == 0 {
+			mu, owner = &b.readMu, &b.reader
+		} else {
+			slot := &b.readSlots[i-1]
+			mu, owner = &slot.mu, &slot.reader
+		}
+		if mu.TryLock() {
+			return mu, owner, i + 1
+		}
+	}
+	return nil, nil, len(b.readSlots) + 1
+}
+
 // physicalWorkspaceLocked borrows only the immutable backend snapshot. Each
 // caller sets its original inspection limits under readMu. This workspace owns
 // traversal and, for successor reads, bounded Snappy/LZ4 leaf decoding. Generic
@@ -62,6 +81,18 @@ func (b *cowBackendBasis) workspaceLocked(reader **cowReadWorkspace, budget *mem
 	}
 	(*reader).limits = limits
 	return *reader, nil
+}
+
+// retireReadWorkspaceLocked is the native VALUE preparation-refusal policy,
+// not point traversal's fresh-only handoff. The caller holds the exact owner's
+// mutex, has ended all scratch borrows and retains the original basis. Detach
+// first; close clears every child/reference before refunding its receipts.
+func (b *cowBackendBasis) retireReadWorkspaceLocked(owner **cowReadWorkspace, expected *cowReadWorkspace) {
+	if expected == nil || *owner != expected {
+		return
+	}
+	*owner = nil
+	expected.close()
 }
 
 func (b *cowBackendBasis) retain() { b.refs.Add(1) }
@@ -164,7 +195,7 @@ func drainCOWTables(tables []cowTable) {
 // writeMu admission and the existing command barrier remain outside this owner.
 type cowCache struct {
 	ordered bool
-	// Lock order is scope/caller -> basis.readMu -> physicalMu -> budget.mu.
+	// Lock order is scope/caller -> selected basis owner -> physicalMu -> budget.mu.
 	// Pure decoder scratch never acquires a basis, scope or publication lock.
 	physicalMu                                                                                     sync.Mutex
 	physicalReader                                                                                 *cowReadWorkspace

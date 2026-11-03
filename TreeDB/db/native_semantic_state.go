@@ -123,6 +123,17 @@ type NativeSemanticBasisRefresher interface {
 	PrepareBasisRefresh(before, after *Snapshot) (NativeSemanticState, error)
 }
 
+// NativeSemanticLeafPackBasisRefresher additionally authenticates the exact
+// leaf-only publication. Unlike general rewrite/GC, this operation preserves
+// decoded entries and the original row-asset references and codecs. A participant
+// may therefore rebind private pending graph headers without replacing their
+// original source/capacity promise. It must validate transition against these
+// borrowed Snapshots. Ownership, partial-error cleanup and nil logical coverage
+// are identical to NativeSemanticBasisRefresher; neither Snapshot is retained.
+type NativeSemanticLeafPackBasisRefresher interface {
+	PrepareLeafPackBasisRefresh(before, after *Snapshot, transition LeafGenerationPackTransition) (NativeSemanticState, error)
+}
+
 // NativePreparedPublication is admitted and owned before canonical assignment.
 // The native producer holds Basis through the synchronous publication and
 // transfers State plus sparse original Custody only on installation. Entries
@@ -235,6 +246,7 @@ type NativeSemanticCapture interface {
 // installation, WAL completion and exact physical sealing. Consumed transfers
 // the original descriptor custody even when a later assigned phase fails.
 type NativePublicationResult struct {
+	Journal                                                                  NativeJournalCompletion
 	Consumed, Assigned, Uncertain, LogicalInstalled, WALCompleted, WALStable bool
 	AssignedLSN, LogicalSequence                                             uint64
 	Seal                                                                     rootpublication.PhysicalSealReceipt

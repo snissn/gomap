@@ -2680,10 +2680,15 @@ func TestSearchVectorIndexWithBufferOpenScopedAllocationContract2362(t *testing.
 		{id: "doc-e", vector: []float32{0.4, 0.6, 0}},
 	}
 	_, d, col, def := openColumnGraphRebuildTestCollectionV2A(t, 3, 3, rows)
-	defer func() { _ = d.Close() }()
+	defer func() {
+		if err := d.Close(); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	}()
 	if _, err := col.RebuildVectorIndex(def.Name); err != nil {
 		t.Fatalf("RebuildVectorIndex: %v", err)
 	}
+	completeVectorAllocationSetup(t, d)
 	opts := VectorIndexSearchOptions{IndexName: def.Name, Query: []float32{0.6, 0.4, 0}, QueryMode: VectorIndexQueryModeExact, TopK: 3, EfSearch: len(rows), MaxDecodedBlocks: 1, StatsMode: VectorIndexSearchStatsModeProduction}
 
 	var buffer VectorIndexSearchBuffer

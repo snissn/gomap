@@ -443,14 +443,18 @@ func (db *DB) writeNativePublication(b *Batch, native *backenddb.NativePreparedP
 		completionLease.Close()
 	}()
 	if bridge != nil {
+		if sync {
+			result.Journal = backend.PrepareNativeJournalCompletion(owner)
+		}
 		r.completion, err = bridge.PrepareNativeCommandWAL(intent.PayloadBytes(), effectiveDurable)
 		if err != nil {
 			return result, err
 		}
 	}
+	var completion backenddb.NativeCommandWALCompletionResult
 	err = b.WriteAfterCommandWALAppendWithPreparedRevision(effectiveDurable, r.register)
 	if r.completion != nil {
-		err = r.completion.CompleteNativeCommandWAL(err)
+		completion, err = r.completion.CompleteNativeCommandWAL(err)
 		r.completion = nil
 	}
 	b.CompleteCOWAcknowledgement(owner, effectiveDurable, err)
@@ -458,6 +462,7 @@ func (db *DB) writeNativePublication(b *Batch, native *backenddb.NativePreparedP
 	result.AssignedLSN, result.LogicalSequence = receipt.AssignedLSN, receipt.LogicalSeq
 	result.Assigned, result.Uncertain, result.LogicalInstalled = receipt.Assigned, receipt.Uncertain, receipt.LogicalInstalled
 	result.WALCompleted, result.WALStable = receipt.WALCompleted, receipt.WALStable
+	result.Journal = backend.CompleteNativeJournalCompletion(result.Journal, result, completion)
 	if err == nil {
 		backend.ObserveNativeInstalledForTest(intent, result)
 	}

@@ -622,3 +622,11 @@ previous target's complete Sync and deferred releases finish. Request tickets
 remain ordered through publication, including mixed relaxed/durable calls.
 External dependency stabilization before a V2 durable marker remains an earlier
 serialized phase; final-sync overlap does not certify dependency-wait progress.
+
+BSON-set operation receipt intent is command-local and opt-in. The update worker
+writes only each selected changed member's budget outcome before its existing
+small done-channel send. Plain/default result and queue layouts are unchanged.
+The original transaction cleanup and outer producer unlock end before successful
+coverage is returned. The default same-collection worker serializes its next
+publication while awaiting completion; shared-entry tests use their explicit
+coalescing-disabled fixture. Selected failures precede any unbatched replay test.
