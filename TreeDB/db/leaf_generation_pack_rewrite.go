@@ -1942,17 +1942,16 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	var acceptedStateToken StateToken
 	finalizeStarted := time.Now()
 	post, finalizeErr := db.finalizeCommitLockedWithOptions(publishedRoot, publishedSysRoot, publishRetired, true, adaptive.Metrics{}, createdIDs, len(publishCollectionReplacements) > 0, nil, leafManifest, leafManifestRawFileIDs, finalizeCommitOptions{
-		privateCOWEquivalentRewriteOwner: equivalentOwner,
-		acceptedStateToken:               &acceptedStateToken,
-		skipPrePublishFlush:              true,
-		syncMetaPageOnly:                 true,
-		durableIndex:                     idx,
-		expectedBaseCommitSeq:            basis.commitSeq,
-		hasExpectedBaseCommitSeq:         true,
-		releaseRootSerialization:         unlockPublish,
-		durableResources:                 durableResources,
-		leafManifestAlreadyPersistent:    true,
-		valueLogPublicationLocked:        true,
+		privateCOWRewrite:             newPrivateCOWRewriteFinalization(equivalentOwner, &acceptedStateToken),
+		skipPrePublishFlush:           true,
+		syncMetaPageOnly:              true,
+		durableIndex:                  idx,
+		expectedBaseCommitSeq:         basis.commitSeq,
+		hasExpectedBaseCommitSeq:      true,
+		releaseRootSerialization:      unlockPublish,
+		durableResources:              durableResources,
+		leafManifestAlreadyPersistent: true,
+		valueLogPublicationLocked:     true,
 	})
 	// The finalizer consumes producer closures on every path. A prepared retry
 	// candidate, when present, now owns their exact handles independently of the

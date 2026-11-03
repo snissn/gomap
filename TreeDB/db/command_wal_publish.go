@@ -46,15 +46,41 @@ func (mutation conditionalCommitMutation) record(db *DB, commitSeq uint64) {
 	db.conditionalRecordCommittedEntries(mutation.entries, mutation.ranges, commitSeq)
 }
 
+// privateCOWRewriteFinalization keeps maintenance-only inputs and outputs in one
+// borrowed envelope so ordinary commits do not copy an extra output pointer in
+// every finalizeCommitOptions value. Its lifetime ends when finalization returns;
+// it must never be retained in queued publication state.
+type privateCOWRewriteFinalization struct {
+	// owner authorizes an ordinary physical candidate, never a canonical append,
+	// accepted cut, logical install, or frontier advancement.
+	owner *transactionowner.Owner
+	// acceptedStateToken is filled from this installation after acceptance and
+	// before any accepted-error wait, rather than by resampling the current root.
+	acceptedStateToken *StateToken
+}
+
+func newPrivateCOWRewriteFinalization(owner *transactionowner.Owner, out *StateToken) *privateCOWRewriteFinalization {
+	if owner == nil && out == nil {
+		return nil
+	}
+	return &privateCOWRewriteFinalization{owner: owner, acceptedStateToken: out}
+}
+
+func (rewrite *privateCOWRewriteFinalization) rewriteOwner() *transactionowner.Owner {
+	if rewrite == nil {
+		return nil
+	}
+	return rewrite.owner
+}
+
+func (rewrite *privateCOWRewriteFinalization) captureAcceptedState(state *DBState) {
+	if rewrite != nil && rewrite.acceptedStateToken != nil {
+		*rewrite.acceptedStateToken, _ = stateTokenFromState(state)
+	}
+}
+
 type finalizeCommitOptions struct {
-	// privateCOWEquivalentRewriteOwner is borrowed only by the maintained online
-	// pointer rewrite. It authorizes an ordinary physical candidate, never a
-	// canonical append, accepted cut, logical install, or frontier advancement.
-	privateCOWEquivalentRewriteOwner *transactionowner.Owner
-	// acceptedStateToken borrows a private maintenance caller's scalar output
-	// until finalization returns. Fill it from this installation after acceptance,
-	// before any accepted-error wait; never retain it in queued publication state.
-	acceptedStateToken  *StateToken
+	privateCOWRewrite   *privateCOWRewriteFinalization
 	commandWALSeal      *commandWALSealReceipt
 	commandWALSealGroup []*CommandWALIntent
 	negativeCoverage    *negativeRootCoverage
