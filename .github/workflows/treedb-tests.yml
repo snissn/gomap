@@ -330,7 +330,7 @@ jobs:
         working-directory: TreeDB
         run: |
           date -u '+vet started %Y-%m-%dT%H:%M:%SZ'
-          /usr/bin/time -l go vet ./...
+          /usr/bin/time -l go vet -x ./...
 
   test:
     name: ${{ matrix.name }}
