@@ -478,7 +478,6 @@ func TestSplitInsertIdentityCapacityCountsTombstonesV1(t *testing.T) {
 	}
 }
 
-
 // These helpers run only after the actual DB/journal (and any suffix writer)
 // has checked Close. They never choose the production container or rewrite a
 // live writer. The private fixture directory has no concurrent file mutator.
