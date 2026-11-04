@@ -1109,3 +1109,14 @@ reported separately. Fixed-process artifacts live under
 `public-write-plan.json`, `source-binding.json`, `cell-*-receipt.json`,
 `cell-*.log`, and `result.json`. This diagnostic has no numerical acceptance
 threshold and does not replace final G1 or actual command/Mongo gates.
+
+### Isolated retained-executable diagnostic
+
+The manually dispatched diagnostic branch may use
+`.github/workflows/treedb-mvcc-maintenance-diagnostic.yml` and
+`.github/scripts/original_elf_guard_diagnostic.py` for one fixed original
+`BenchmarkGetVersioned` B1/C1/C2/B2 CPU capture, plus the separate Windows
+guard-interposition trace. It preserves raw profiles and standard text views;
+it does not change this command's profile interface or qualify a performance
+gate. The frozen branch plan, original artifact identities and ROOT admission
+are required before dispatch.

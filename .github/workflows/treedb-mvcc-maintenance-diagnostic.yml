@@ -1,60 +1,146 @@
-name: "TreeDB: bounded maintenance diagnostic (manual only)"
-
+name: "TreeDB: fixed original ELF and guard trace (manual diagnostic only)"
 on:
   workflow_dispatch:
-
+    inputs:
+      expected_head:
+        description: "Full independently reviewed diagnostic harness commit"
+        required: true
+        type: string
 permissions:
   contents: read
-
+  actions: read
 jobs:
-  diagnostic:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
-    name: fixed 5bca / a17fe fourteen-call diagnostic
+  original-elf:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/diagnostic/original-elf-and-guard-trace-01' && github.actor_id == '1981537' && github.run_attempt == 1
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 11
     env:
       PYTHONDONTWRITEBYTECODE: "1"
+      REVIEWED_HEAD: ${{ inputs.expected_head }}
+      WORKFLOW_COMMIT: ${{ github.workflow_sha }}
+      TMPDIR: ${{ github.workspace }}/tmp
+      XDG_CACHE_HOME: ${{ github.workspace }}/xdg-cache
+      XDG_CONFIG_HOME: ${{ github.workspace }}/xdg-config
     steps:
-      - name: Initialize retained attempt packet
+      - name: Authenticate one reviewed dispatch before inputs or tools
+        shell: bash
+        env:
+          EXPECTED: ${{ inputs.expected_head }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
-          mkdir "$RUNNER_TEMP/mvcc-maintenance-setup"
-          printf '%s\n' 'Only fixed separately reviewed bounded diagnostics are authorized.' "harness=$GITHUB_SHA" "run=$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT" > "$RUNNER_TEMP/mvcc-maintenance-setup/scope.txt"
-
-      - name: Checkout reviewed diagnostic harness
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+          set -euo pipefail
+          [[ "$EXPECTED" =~ ^[0-9a-f]{40}$ && "$EXPECTED" == "$GITHUB_SHA" && "$EXPECTED" == "$WORKFLOW_SHA" ]]
+          python -c "import time; print('DIAGNOSTIC_STARTED_MONOTONIC='+str(time.monotonic()))" >> "$GITHUB_ENV"
+          mkdir -p "$GITHUB_WORKSPACE/tmp"
+      - name: Sparse harness only
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
+          ref: ${{ inputs.expected_head }}
+          path: harness
           persist-credentials: false
-          ref: ${{ github.sha }}
-          fetch-depth: 0
-
-      - name: Setup exact Go 1.26.3
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
-        with:
-          go-version: "1.26.3"
-          check-latest: false
-          cache: false
-
-      - name: Check syntax, receipts and fixed workflow contract (no Go execution)
-        run: python3 -B .github/scripts/mvcc_maintenance_test.py > "$RUNNER_TEMP/mvcc-maintenance-setup/pure-tests.log" 2>&1
-
-      - name: Prepare exact inputs and collect once
-        run: python3 -B .github/scripts/mvcc_maintenance_bootstrap.py > "$RUNNER_TEMP/mvcc-maintenance-setup/bootstrap.log" 2>&1
-
-      - name: Upload complete attempt, including failure/refusal
+          fetch-depth: 1
+          filter: blob:none
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /.github/scripts/original_elf_guard_*
+            /scripts/ycsb_campaign_guard.py
+            /scripts/ycsb_compare_validate.py
+            /scripts/ycsb_evidence_json.py
+            /scripts/ycsb_runtime_observer.py
+      - name: Authenticate closure and bootstrap accounting
+        shell: bash
+        run: |
+          python3 -B "$GITHUB_WORKSPACE/harness/.github/scripts/original_elf_guard_contract.py" "$GITHUB_WORKSPACE/harness"
+          python3 -B "$GITHUB_WORKSPACE/harness/.github/scripts/original_elf_guard_diagnostic.py" census --root "$GITHUB_WORKSPACE" > "$GITHUB_WORKSPACE/bootstrap-census.json"
+      - name: One original retained-binary ABBA capture and standard views
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          remaining=$(python3 -c 'import os,time; v=600-(time.monotonic()-float(os.environ["DIAGNOSTIC_STARTED_MONOTONIC"])); assert v>0; print(v)')
+          set +e
+          python3 -B "$GITHUB_WORKSPACE/harness/scripts/ycsb_campaign_guard.py" --synthetic --scripts-dir "$GITHUB_WORKSPACE/harness/scripts" --out "$GITHUB_WORKSPACE/guard" --cwd "$GITHUB_WORKSPACE" --filesystem "$GITHUB_WORKSPACE" --deadline "$remaining" --cleanup-seconds 5 --interval .2 --rss-cap-bytes 1073741824 --free-floor-bytes 10737418240 -- python3 -B "$GITHUB_WORKSPACE/harness/.github/scripts/original_elf_guard_diagnostic.py" linux --root "$GITHUB_WORKSPACE"
+          code=$?
+          cat "$GITHUB_WORKSPACE/guard/stdout.log"
+          exit "$code"
+      - name: Retain all original failures, inputs and diagnostic outputs
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: bounded-maintenance-${{ github.run_id }}-${{ github.run_attempt }}
+          name: original-elf-cpu-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            ${{ runner.temp }}/mvcc-maintenance-a17fe/*.json
-            ${{ runner.temp }}/mvcc-maintenance-a17fe/*.log
-            ${{ runner.temp }}/mvcc-maintenance-a17fe/compiler
-            ${{ runner.temp }}/mvcc-maintenance-a17fe/archives
-            ${{ runner.temp }}/mvcc-maintenance-a17fe/go1.26.3-linux-amd64.tar.gz
-            ${{ runner.temp }}/mvcc-maintenance-a17fe/harness
-            ${{ runner.temp }}/mvcc-maintenance-a17fe/performance-185
-            !${{ runner.temp }}/mvcc-maintenance-a17fe/performance-185/**/tmp
-            ${{ runner.temp }}/mvcc-maintenance-setup
+            ${{ github.workspace }}/output
+            ${{ github.workspace }}/guard
+            ${{ github.workspace }}/original
+            ${{ github.workspace }}/bootstrap-census.json
           if-no-files-found: error
-          include-hidden-files: true
+          retention-days: 14
+  windows-guard:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/diagnostic/original-elf-and-guard-trace-01' && github.actor_id == '1981537' && github.run_attempt == 1
+    runs-on: windows-2025
+    timeout-minutes: 11
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      REVIEWED_HEAD: ${{ inputs.expected_head }}
+      WORKFLOW_COMMIT: ${{ github.workflow_sha }}
+      TEMP: ${{ github.workspace }}/tmp
+      TMP: ${{ github.workspace }}/tmp
+    steps:
+      - name: Authenticate one reviewed dispatch before inputs or tools
+        shell: bash
+        env:
+          EXPECTED: ${{ inputs.expected_head }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED" =~ ^[0-9a-f]{40}$ && "$EXPECTED" == "$GITHUB_SHA" && "$EXPECTED" == "$WORKFLOW_SHA" ]]
+          python -c "import time; print('DIAGNOSTIC_STARTED_MONOTONIC='+str(time.monotonic()))" >> "$GITHUB_ENV"
+          mkdir -p "$GITHUB_WORKSPACE/tmp"
+      - name: Sparse diagnostic harness
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.expected_head }}
+          path: harness
+          persist-credentials: false
+          fetch-depth: 1
+          filter: blob:none
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /.github/scripts/original_elf_guard_*
+      - name: Exact unchanged observer source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: 0b20264570092ba55a51bf0be047c41c877c7258
+          path: source
+          persist-credentials: false
+          fetch-depth: 1
+          filter: blob:none
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /*
+            !/docs/evidence/
+            !/docs/benchmarks/
+            !/TreeDB/docs/evidence/
+            !/TreeDB/docs/benchmarks/
+      - name: Authenticate source and bootstrap accounting
+        shell: pwsh
+        run: |
+          python -B "$env:GITHUB_WORKSPACE/harness/.github/scripts/original_elf_guard_contract.py" "$env:GITHUB_WORKSPACE/harness"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B "$env:GITHUB_WORKSPACE/harness/.github/scripts/original_elf_guard_diagnostic.py" census --root "$env:GITHUB_WORKSPACE" > "$env:GITHUB_WORKSPACE/bootstrap-census.json"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: One original json/bson guard test with standard execution trace
+        shell: pwsh
+        run: |
+          python -B "$env:GITHUB_WORKSPACE/harness/.github/scripts/original_elf_guard_diagnostic.py" windows --root "$env:GITHUB_WORKSPACE"
+          exit $LASTEXITCODE
+      - name: Retain original test exit, httptrace and execution trace
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-guard-trace-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ github.workspace }}/output
+            ${{ github.workspace }}/bootstrap-census.json
+          if-no-files-found: error
           retention-days: 14
