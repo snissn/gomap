@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """One fixed hosted diagnostic; never an acceptance gate or benchmark rebuild.
 
-The workflow owns bootstrap checkout/tool provisioning. This program accounts
-its complete job root, including those retained inputs, and samples new bytes
-through the selected payload. Windows has no claimed hard descendant RSS cap.
+The workflow authenticates six fixed bootstrap files. This program owns fixed
+Windows source Git acquisition and tool provisioning within its counted root,
+and samples new bytes through the selected payload. Windows has no claimed hard descendant RSS cap.
 """
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -420,6 +421,65 @@ def linux(attempt, root, token):
             need(code == 0, 'standard text decode failed')
 
 
+def acquire_windows_source(attempt, root, token):
+    # Fixed exact-source acquisition; no action/REST/archive fallback.
+    source = root/'source'
+    template = root/'git-template'
+    template.mkdir()
+    source.mkdir()
+    env = {k:v for k,v in os.environ.items() if not k.startswith('GIT_') and k not in
+           ('GH_TOKEN','GITHUB_TOKEN','GCM_TRACE','GIT_CURL_VERBOSE')}
+    env.update(GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull,
+               GIT_TERMINAL_PROMPT='0', GCM_INTERACTIVE='Never')
+    git = Path(shutil.which('git')).resolve(strict=True)
+    write(attempt.out/'source-git-input.json', {'path':str(git),'sha256':sha(git),'bytes':git.stat().st_size,
+          'snapshot_is_git_worktree':True,'harness_is_git_worktree':False})
+    commands = [('source-init',[str(git),'init','--template='+str(template),str(source)]),
+                ('source-sparse',[str(git),'-C',str(source),'config','--local','core.sparseCheckout','true']),
+                ('source-line-endings',[str(git),'-C',str(source),'config','--local','core.autocrlf','false']),
+                ('source-origin',[str(git),'-C',str(source),'remote','add','origin','https://github.com/snissn/gomap.git'])]
+    for label, argv in commands:
+        need(attempt.run(label, argv, 10, env=env) == 0, 'fixed source setup failed')
+    attempt.check()
+    (source/'.git/info/sparse-checkout').write_text('/*\n!/docs/evidence/\n!/docs/benchmarks/\n!/TreeDB/docs/evidence/\n!/TreeDB/docs/benchmarks/\n', encoding='utf-8')
+    fetch_env = dict(env)
+    if token:
+        fetch_env.update(GIT_CONFIG_COUNT='1', GIT_CONFIG_KEY_0='http.https://github.com/.extraheader',
+            GIT_CONFIG_VALUE_0='Authorization: Basic '+base64.b64encode(('x-access-token:'+token).encode()).decode())
+    need(attempt.run('source-fetch',[str(git),'-C',str(source),'-c','protocol.version=2','fetch',
+        '--depth=1','--filter=blob:none','--no-tags','--no-recurse-submodules','origin',OBSERVER],120,env=fetch_env)==0,
+        'fixed source fetch failed; no fallback')
+    fetch_env.clear()  # Authentication is never passed to checkout/build/test/tool commands.
+    fetch_log=(attempt.out/'source-fetch.stderr.log').read_text().lower()
+    need(not any(value in fetch_log for value in ('filtering not recognized','does not support filter','filter is not supported')),
+         'server does not support selected partial fetch; stop')
+    # Lazy checkout blob fetch needs the same ephemeral authorization, only while
+    # this owned source command runs. Nothing is stored in .git/config.
+    checkout_env = dict(env)
+    if token:
+        checkout_env.update(GIT_CONFIG_COUNT='1', GIT_CONFIG_KEY_0='http.https://github.com/.extraheader',
+            GIT_CONFIG_VALUE_0='Authorization: Basic '+base64.b64encode(('x-access-token:'+token).encode()).decode())
+    need(attempt.run('source-checkout',[str(git),'-C',str(source),'checkout','--detach',OBSERVER],120,env=checkout_env)==0,
+         'fixed source checkout failed; no fallback')
+    checkout_env.clear()
+    need(attempt.run('source-tree',[str(git),'-C',str(source),'rev-parse','HEAD^{tree}'],10,env=env)==0,'source tree unavailable')
+    need((attempt.out/'source-tree.stdout.log').read_text().strip()=='456878d8106f2225cb0593f8200b7ff2f34984a6','exact observer tree required')
+    need(attempt.run('source-clean',[str(git),'-C',str(source),'diff','--exit-code','HEAD','--'],30,env=env)==0,'source worktree differs')
+    source_bytes=0
+    for directory, dirs, files in os.walk(source):
+        attempt.check()
+        if Path(directory)==source:
+            dirs[:]=[name for name in dirs if name!='.git']
+        for name in files:
+            path=Path(directory)/name
+            need(path.is_file() and not path.is_symlink(),'nonregular observer source')
+            source_bytes+=path.stat().st_size
+    need(source_bytes==122385372,'exact selected source size mismatch')
+    write(attempt.out/'observer-source-receipt.json', {'head':OBSERVER,'tree':'456878d8106f2225cb0593f8200b7ff2f34984a6',
+        'selected_bytes':source_bytes,'excluded':['docs/evidence','docs/benchmarks','TreeDB/docs/evidence','TreeDB/docs/benchmarks'],
+        'source_is_git_worktree':True,'harness_is_git_worktree':False,'archive_fallback':False})
+
+
 def windows(attempt, root):
     source = root/'source'
     need(attempt.run('observer-head', ['git','rev-parse','HEAD'], 10, cwd=source) == 0, 'observer source metadata')
@@ -545,6 +605,8 @@ def main():
         write(attempt.out/'new-runtime.json', {'platform': platform.platform(), 'python': sys.version,
               'environment': {k: os.environ.get(k) for k in ('GOMAXPROCS','GOMEMLIMIT','GOCACHE','GOMODCACHE','GOTMPDIR')},
               'scope': 'new hosted diagnostic context, not original runtime equivalence'})
+        if args.mode == 'windows':
+            acquire_windows_source(attempt, root, token)
         provision_go(attempt, root)
         need(attempt.run('go-version', ['go','version'], 10) == 0, 'tool metadata')
         need((attempt.out/'go-version.stdout.log').read_text().startswith('go version go1.26.10 '), 'pinned Go tool required')

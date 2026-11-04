@@ -12,7 +12,7 @@
     "M0 observation is manual diagnostic-only on a separately fixed product; no forecast starts it or replaces failed M0 acceptance.",
     "Bounded maintenance comparison is a manually granted diagnostic on fixed baseline/candidate products; no forecast starts it or establishes cost, M0 or native acceptance."
   ],
-  "discovery_source_sha256": "1e2b6c4ca8cad12b99d992780a1f85045cf0aff7346e5e5f460ef9d56e4fe551",
+  "discovery_source_sha256": "7e7a32c3e6c802b1d5ff3065106c5a69eeb33a3edff566fc03faa1fda9c54eb9",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
@@ -2346,26 +2346,16 @@
           }
         }
       },
-      "git_blob": "b15a4a344c16e580959eb72e00197c22b8cc06a2",
+      "git_blob": "f8af23ca1c26aa84d88d86badfdb8dd6ce58d173",
       "jobs": {
         "original-elf": {
-          "checkout": [
-            {
-              "fetch-depth": 1,
-              "filter": "blob:none",
-              "path": "harness",
-              "persist-credentials": false,
-              "ref": "${{ inputs.expected_head }}",
-              "set-safe-directory": false,
-              "sparse-checkout": "/.github/scripts/original_elf_guard_*\n/scripts/ycsb_campaign_guard.py\n/scripts/ycsb_compare_validate.py\n/scripts/ycsb_evidence_json.py\n/scripts/ycsb_runtime_observer.py\n",
-              "sparse-checkout-cone-mode": false
-            }
-          ],
+          "checkout": [],
           "commands": [
             {
-              "command_sha256": "2559434c793719404acd4dbf78069e0bcff3fe411edaa8879ba5df763b09dae9",
-              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:30",
+              "command_sha256": "ec85337d39054b407267e2ec95d90dc7c41f3af7bad16abf760c0b26fb1944aa",
+              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:25",
               "env": {
+                "BOOTSTRAP_TOKEN": "${{ github.token }}",
                 "EXPECTED": "${{ inputs.expected_head }}",
                 "WORKFLOW_SHA": "${{ github.workflow_sha }}"
               },
@@ -2373,14 +2363,8 @@
               "name": "Authenticate one reviewed dispatch before inputs or tools"
             },
             {
-              "command_sha256": "508b7d88851d3107e4ad5e35e1d087f0b5ca5000ce78dec3351f355592367384",
-              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:53",
-              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
-              "name": "Authenticate closure and bootstrap accounting"
-            },
-            {
               "command_sha256": "ee94ae514555bf81601551592d476436b3bdbb377140fd48e847e241522c593f",
-              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:60",
+              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:82",
               "env": {
                 "GH_TOKEN": "${{ github.token }}"
               },
@@ -2402,33 +2386,13 @@
           "runs_on": "ubuntu-24.04"
         },
         "windows-guard": {
-          "checkout": [
-            {
-              "fetch-depth": 1,
-              "filter": "blob:none",
-              "path": "harness",
-              "persist-credentials": false,
-              "ref": "${{ inputs.expected_head }}",
-              "set-safe-directory": false,
-              "sparse-checkout": "/.github/scripts/original_elf_guard_*\n/scripts/ycsb_campaign_guard.py\n/scripts/ycsb_compare_validate.py\n/scripts/ycsb_evidence_json.py\n/scripts/ycsb_runtime_observer.py\n",
-              "sparse-checkout-cone-mode": false
-            },
-            {
-              "fetch-depth": 1,
-              "filter": "blob:none",
-              "path": "source",
-              "persist-credentials": false,
-              "ref": "0b20264570092ba55a51bf0be047c41c877c7258",
-              "set-safe-directory": false,
-              "sparse-checkout": "/*\n!/docs/evidence/\n!/docs/benchmarks/\n!/TreeDB/docs/evidence/\n!/TreeDB/docs/benchmarks/\n",
-              "sparse-checkout-cone-mode": false
-            }
-          ],
+          "checkout": [],
           "commands": [
             {
-              "command_sha256": "2559434c793719404acd4dbf78069e0bcff3fe411edaa8879ba5df763b09dae9",
-              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:95",
+              "command_sha256": "ec85337d39054b407267e2ec95d90dc7c41f3af7bad16abf760c0b26fb1944aa",
+              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:121",
               "env": {
+                "BOOTSTRAP_TOKEN": "${{ github.token }}",
                 "EXPECTED": "${{ inputs.expected_head }}",
                 "WORKFLOW_SHA": "${{ github.workflow_sha }}"
               },
@@ -2436,14 +2400,11 @@
               "name": "Authenticate one reviewed dispatch before inputs or tools"
             },
             {
-              "command_sha256": "56b6f77ad3c34255bb0ac25d25c06ff713aa76a770494d24b3a337e4119b3521",
-              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:134",
-              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
-              "name": "Authenticate source and bootstrap accounting"
-            },
-            {
               "command_sha256": "c866d87c20f0182ca70daf605b64a282fb010af772d9092919db3c5d418d5787",
-              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:141",
+              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:176",
+              "env": {
+                "GH_TOKEN": "${{ github.token }}"
+              },
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
               "name": "One original json/bson guard test with standard execution trace"
             }
@@ -2461,7 +2422,7 @@
           "runs_on": "windows-2025"
         }
       },
-      "sha256": "922fb0ceed50d99042a023620572b073fbf081eddc92d38b31a6d8cc6d6d9014"
+      "sha256": "f78a5efacb3592e582fc6928ed67fb6663d8519d38a41483083a0eb135c00960"
     },
     "treedb-tests.yml": {
       "coverage": "existing execution only; triggers/path filters are unchanged",

@@ -29,4 +29,10 @@ assert 'timeout=min(180, attempt.check(ZIP_BYTES))' in source
 assert 'package.extractall' not in source and 'shutil.copyfileobj' not in source
 assert "HOLD_DESCENDANT_DRAIN_UNPROVED" in source and "row.get('taskkill_exit', 0) == 0" in source
 assert "'static'" in source and "'There is no dynamic section in this file.'" in source
-print(json.dumps({'status' :'FIXED_HOSTED_SOURCE_CONTRACT_ONLY', 'checks':17, 'closure_files':len(manifest), 'Go_executions':0}))
+workflow = (root/'.github/workflows/treedb-mvcc-maintenance-diagnostic.yml').read_text()
+assert 'actions/checkout@' not in workflow
+assert "acquire_windows_source(attempt, root, token)" in source
+assert "'--depth=1','--filter=blob:none','--no-tags','--no-recurse-submodules'" in source
+assert "fetch_env.clear()" in source and "checkout_env.clear()" in source
+assert "harness_is_git_worktree':False" in source
+print(json.dumps({'status'  :'FIXED_HOSTED_SOURCE_CONTRACT_ONLY', 'checks':22, 'closure_files':len(manifest), 'Go_executions':0}))
