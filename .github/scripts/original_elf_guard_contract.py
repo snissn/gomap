@@ -24,4 +24,9 @@ assert "subprocess.run(['taskkill', '/PID', str(self.child.pid), '/T', '/F']" in
 assert 'setup-go' not in source and 'go1.26.10.windows-amd64.zip' in source
 assert "ROOT_CAP = GIB" in source and "LOG_CAP = 32*1024**2" in source
 assert "os.environ['HOME']" not in source
-print(json.dumps({'status':'FIXED_HOSTED_SOURCE_CONTRACT_ONLY', 'checks':12, 'closure_files':len(manifest), 'Go_executions':0}))
+assert "APPDATA=str(root/'appdata'), LOCALAPPDATA=str(root/'localappdata')" in source
+assert 'timeout=min(180, attempt.check(ZIP_BYTES))' in source
+assert 'package.extractall' not in source and 'shutil.copyfileobj' not in source
+assert "HOLD_DESCENDANT_DRAIN_UNPROVED" in source and "row.get('taskkill_exit', 0) == 0" in source
+assert "'static'" in source and "'There is no dynamic section in this file.'" in source
+print(json.dumps({'status' :'FIXED_HOSTED_SOURCE_CONTRACT_ONLY', 'checks':17, 'closure_files':len(manifest), 'Go_executions':0}))

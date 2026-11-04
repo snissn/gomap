@@ -38,6 +38,7 @@ jobs:
           ref: ${{ inputs.expected_head }}
           path: harness
           persist-credentials: false
+          set-safe-directory: false
           fetch-depth: 1
           filter: blob:none
           sparse-checkout-cone-mode: false
@@ -102,17 +103,23 @@ jobs:
           ref: ${{ inputs.expected_head }}
           path: harness
           persist-credentials: false
+          set-safe-directory: false
           fetch-depth: 1
           filter: blob:none
           sparse-checkout-cone-mode: false
           sparse-checkout: |
             /.github/scripts/original_elf_guard_*
+            /scripts/ycsb_campaign_guard.py
+            /scripts/ycsb_compare_validate.py
+            /scripts/ycsb_evidence_json.py
+            /scripts/ycsb_runtime_observer.py
       - name: Exact unchanged observer source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: 0b20264570092ba55a51bf0be047c41c877c7258
           path: source
           persist-credentials: false
+          set-safe-directory: false
           fetch-depth: 1
           filter: blob:none
           sparse-checkout-cone-mode: false

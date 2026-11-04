@@ -12,7 +12,7 @@
     "M0 observation is manual diagnostic-only on a separately fixed product; no forecast starts it or replaces failed M0 acceptance.",
     "Bounded maintenance comparison is a manually granted diagnostic on fixed baseline/candidate products; no forecast starts it or establishes cost, M0 or native acceptance."
   ],
-  "discovery_source_sha256": "cf496f30bbe95cd8db359a74d1d65da39dc85c532edc06037c89739f518b8869",
+  "discovery_source_sha256": "1e2b6c4ca8cad12b99d992780a1f85045cf0aff7346e5e5f460ef9d56e4fe551",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
@@ -2346,7 +2346,7 @@
           }
         }
       },
-      "git_blob": "4074a24ac303e38fb5774cfef84d801f686df279",
+      "git_blob": "b15a4a344c16e580959eb72e00197c22b8cc06a2",
       "jobs": {
         "original-elf": {
           "checkout": [
@@ -2356,6 +2356,7 @@
               "path": "harness",
               "persist-credentials": false,
               "ref": "${{ inputs.expected_head }}",
+              "set-safe-directory": false,
               "sparse-checkout": "/.github/scripts/original_elf_guard_*\n/scripts/ycsb_campaign_guard.py\n/scripts/ycsb_compare_validate.py\n/scripts/ycsb_evidence_json.py\n/scripts/ycsb_runtime_observer.py\n",
               "sparse-checkout-cone-mode": false
             }
@@ -2373,13 +2374,13 @@
             },
             {
               "command_sha256": "508b7d88851d3107e4ad5e35e1d087f0b5ca5000ce78dec3351f355592367384",
-              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:52",
+              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:53",
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
               "name": "Authenticate closure and bootstrap accounting"
             },
             {
               "command_sha256": "ee94ae514555bf81601551592d476436b3bdbb377140fd48e847e241522c593f",
-              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:59",
+              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:60",
               "env": {
                 "GH_TOKEN": "${{ github.token }}"
               },
@@ -2408,7 +2409,8 @@
               "path": "harness",
               "persist-credentials": false,
               "ref": "${{ inputs.expected_head }}",
-              "sparse-checkout": "/.github/scripts/original_elf_guard_*\n",
+              "set-safe-directory": false,
+              "sparse-checkout": "/.github/scripts/original_elf_guard_*\n/scripts/ycsb_campaign_guard.py\n/scripts/ycsb_compare_validate.py\n/scripts/ycsb_evidence_json.py\n/scripts/ycsb_runtime_observer.py\n",
               "sparse-checkout-cone-mode": false
             },
             {
@@ -2417,6 +2419,7 @@
               "path": "source",
               "persist-credentials": false,
               "ref": "0b20264570092ba55a51bf0be047c41c877c7258",
+              "set-safe-directory": false,
               "sparse-checkout": "/*\n!/docs/evidence/\n!/docs/benchmarks/\n!/TreeDB/docs/evidence/\n!/TreeDB/docs/benchmarks/\n",
               "sparse-checkout-cone-mode": false
             }
@@ -2424,7 +2427,7 @@
           "commands": [
             {
               "command_sha256": "2559434c793719404acd4dbf78069e0bcff3fe411edaa8879ba5df763b09dae9",
-              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:94",
+              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:95",
               "env": {
                 "EXPECTED": "${{ inputs.expected_head }}",
                 "WORKFLOW_SHA": "${{ github.workflow_sha }}"
@@ -2434,13 +2437,13 @@
             },
             {
               "command_sha256": "56b6f77ad3c34255bb0ac25d25c06ff713aa76a770494d24b3a337e4119b3521",
-              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:127",
+              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:134",
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
               "name": "Authenticate source and bootstrap accounting"
             },
             {
               "command_sha256": "c866d87c20f0182ca70daf605b64a282fb010af772d9092919db3c5d418d5787",
-              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:134",
+              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:141",
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
               "name": "One original json/bson guard test with standard execution trace"
             }
@@ -2458,7 +2461,7 @@
           "runs_on": "windows-2025"
         }
       },
-      "sha256": "ce48d22fda0a573d1cf420f33961f3549237d08f83175c5e5d6939cbf2a39722"
+      "sha256": "922fb0ceed50d99042a023620572b073fbf081eddc92d38b31a6d8cc6d6d9014"
     },
     "treedb-tests.yml": {
       "coverage": "existing execution only; triggers/path filters are unchanged",

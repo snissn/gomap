@@ -107,8 +107,17 @@ class Attempt:
             self.failure = repr(error)
             self.stop.set()
 
+    def check(self, additional_bytes=0):
+        # Direct materialization must observe the same sticky failure as children.
+        need(self.failure is None, 'resource failure during materialization: '+str(self.failure))
+        remaining = 600-(time.monotonic()-self.started)
+        need(remaining > 0, '600s whole deadline during materialization')
+        row = census(self.root)
+        need(row['whole_bytes']+additional_bytes <= ROOT_CAP, 'prospective write exceeds whole root')
+        return remaining
+
     def run(self, label, argv, seconds, cwd=None, env=None):
-        need(self.failure is None, 'resource failure before stage')
+        self.check()
         started = time.monotonic()
         row = {'label': label, 'argv': argv, 'timeout_seconds': seconds, 'started_epoch': time.time()}
         self.rows.append(row)
@@ -122,8 +131,12 @@ class Attempt:
                         row['intervention'] = self.failure or 'stage deadline'
                         if os.name == 'nt':
                             # Exact still-live owned Popen handle, not a discovered PID.
-                            subprocess.run(['taskkill', '/PID', str(self.child.pid), '/T', '/F'],
+                            killed = subprocess.run(['taskkill', '/PID', str(self.child.pid), '/T', '/F'],
                                            stdout=stderr, stderr=stderr, timeout=10, check=False)
+                            row['taskkill_exit'] = killed.returncode
+                            row['cleanup_status'] = 'HOLD_DESCENDANT_DRAIN_UNPROVED'
+                            self.failure = self.failure or 'Windows intervention: descendant drain unproved'
+                            # Receipt below preserves nonzero taskkill; never claim tree drain.
                         else:
                             os.killpg(self.child.pid, signal.SIGTERM)
                             try:
@@ -134,12 +147,17 @@ class Attempt:
                     time.sleep(.1)
                 row['exit_code'] = self.child.wait(timeout=10)
             finally:
-                need(self.child.poll() is not None, 'owned process not joined')
+                joined = self.child.poll() is not None
                 row['elapsed_seconds'] = time.monotonic()-started
                 row['ended_epoch'] = time.time()
-                row['original_handle_joined'] = True
-                self.child = None
+                row['original_handle_joined'] = joined
+                row.setdefault('cleanup_status', 'ORIGINAL_HANDLE_JOINED_NORMAL_RETURN' if joined else 'HOLD_ORIGINAL_HANDLE_NOT_JOINED')
+                if joined:
+                    self.child = None
                 write(self.out/(label+'.receipt.json'), row)
+        need(row['original_handle_joined'], 'owned process not joined; cleanup HOLD')
+        need(row.get('taskkill_exit', 0) == 0, 'taskkill failed; cleanup HOLD')
+        need('intervention' not in row, 'stage intervention; diagnostic HOLD')
         return row['exit_code']
 
     def close(self):
@@ -149,20 +167,30 @@ class Attempt:
               'scope': 'sampled complete root after workflow bootstrap; Windows Go memory target is soft; no hard Windows RSS guarantee'})
 
 
-def provision_go(root):
+def provision_go(attempt, root):
     system = platform.system()
     archive_name, expected_size, expected_sha = {
         'Linux': ('go1.26.10.linux-amd64.tar.gz', 66936659, 'ccfe7ae822d2c2f41f4fe7c956199967a4dac22d0ee0d2b2bfdb440aab3b20c5'),
         'Windows': ('go1.26.10.windows-amd64.zip', 75004774, '7ecd2d7260e82c59bcbd7f1077a07cee2dea607295b858df67195a1e4e09629b'),
     }[system]
     archive = root/archive_name
-    with urllib.request.urlopen('https://go.dev/dl/'+archive_name, timeout=120) as source, archive.open('xb') as stream:
+    with urllib.request.urlopen('https://go.dev/dl/'+archive_name, timeout=min(120, attempt.check(expected_size))) as source, archive.open('xb') as stream:
         size = 0
-        while block := source.read(1 << 20):
+        while True:
+            attempt.check()
+            if source.isclosed():
+                break
+            source.fp.raw._sock.settimeout(min(10, attempt.check()))
+            block = source.read(1 << 20)
+            if not block:
+                break
+            attempt.check(len(block))
             size += len(block)
             need(size <= expected_size, 'official Go archive oversize')
             stream.write(block)
+    attempt.check()
     need(size == expected_size and sha(archive) == expected_sha, 'pinned official tool archive identity')
+    attempt.check()
     # Header pass before any extraction: all expanded bytes must fit alongside
     # archive, checkout and receipts. No link, traversal or device extraction.
     if system == 'Linux':
@@ -184,10 +212,42 @@ def provision_go(root):
           'expanded_bytes': total, 'peak_upper_bound': before['whole_bytes']+total})
     if system == 'Linux':
         with tarfile.open(archive, 'r:gz') as package:
-            package.extractall(root, filter='data')
+            for member in package:
+                attempt.check()
+                output = root/member.name
+                if member.isdir():
+                    output.mkdir(parents=True, exist_ok=True)
+                    continue
+                output.parent.mkdir(parents=True, exist_ok=True)
+                with package.extractfile(member) as source, output.open('xb') as stream:
+                    while True:
+                        attempt.check()
+                        block = source.read(1 << 20)
+                        if not block:
+                            break
+                        attempt.check(len(block))
+                        stream.write(block)
+                need(output.stat().st_size == member.size, 'tool member size')
+                output.chmod(member.mode & 0o777)
     else:
         with zipfile.ZipFile(archive) as package:
-            package.extractall(root)
+            for member in package.infolist():
+                attempt.check()
+                output = root/member.filename
+                if member.is_dir():
+                    output.mkdir(parents=True, exist_ok=True)
+                    continue
+                output.parent.mkdir(parents=True, exist_ok=True)
+                with package.open(member) as source, output.open('xb') as stream:
+                    while True:
+                        attempt.check()
+                        block = source.read(1 << 20)
+                        if not block:
+                            break
+                        attempt.check(len(block))
+                        stream.write(block)
+                need(output.stat().st_size == member.file_size, 'tool member size')
+    attempt.check()
     # Remove only this authenticated owned staging archive, never preexisting inputs.
     archive.unlink()
     os.environ['GOROOT'] = str(root/'go')
@@ -197,7 +257,7 @@ def provision_go(root):
           'archive_staging_removed_after_authentication': True})
 
 
-def retrieve_original(root, token):
+def retrieve_original(attempt, root, token):
     archive = root/'original.zip'
     need(census(root)['whole_bytes']+ZIP_BYTES <= ROOT_CAP, 'original archive staging peak')
     request = urllib.request.Request('https://api.github.com/repos/snissn/gomap/actions/artifacts/'+str(ARTIFACT)+'/zip',
@@ -207,21 +267,31 @@ def retrieve_original(root, token):
         def redirect_request(self, req, fp, code, msg, headers, newurl):
             return None
     try:
-        urllib.request.build_opener(NoRedirect).open(request, timeout=30)
-        raise RuntimeError('expected original archive redirect')
+        with urllib.request.build_opener(NoRedirect).open(request, timeout=min(30, attempt.check())):
+            raise RuntimeError('expected original archive redirect')
     except urllib.error.HTTPError as redirect:
         need(redirect.code == 302, 'artifact download authorization/availability')
         location = redirect.headers['Location']
         need(location.startswith('https://'), 'non-HTTPS archive location')
         redirect.close()
     # Deliberately remove the GitHub credential before following signed storage URL.
-    with urllib.request.urlopen(location, timeout=180) as response, archive.open('xb') as stream:
+    with urllib.request.urlopen(location, timeout=min(180, attempt.check(ZIP_BYTES))) as response, archive.open('xb') as stream:
         count = 0
-        while block := response.read(1 << 20):
+        while True:
+            attempt.check()
+            if response.isclosed():
+                break
+            response.fp.raw._sock.settimeout(min(10, attempt.check()))
+            block = response.read(1 << 20)
+            if not block:
+                break
+            attempt.check(len(block))
             count += len(block)
             need(count <= ZIP_BYTES, 'artifact larger than original')
             stream.write(block)
+    attempt.check()
     need(count == ZIP_BYTES and sha(archive) == ZIP_SHA, 'original ZIP identity')
+    attempt.check()
     wanted = {'measured-binaries.json', 'environment.txt', 'binary-sha256.txt', 'summary.json',
               'measured-binaries/baseline-db.test', 'measured-binaries/candidate-db.test', 'baseline.txt', 'candidate.txt'}
     destination = root/'original'
@@ -231,6 +301,7 @@ def retrieve_original(root, token):
         names = set()
         rows = []
         for member in z.infolist():
+            attempt.check()
             name = member.filename
             need(name not in names and not name.startswith('/') and '\\' not in name and '..' not in Path(name).parts,
                  'unsafe/duplicate ZIP member')
@@ -242,7 +313,13 @@ def retrieve_original(root, token):
             output = destination/name
             output.parent.mkdir(parents=True, exist_ok=True)
             with z.open(member) as source, output.open('xb') as stream:
-                shutil.copyfileobj(source, stream, 1 << 20)  # zipfile checks selected-member CRC at EOF.
+                while True:
+                    attempt.check()
+                    block = source.read(1 << 20)
+                    if not block:
+                        break
+                    attempt.check(len(block))
+                    stream.write(block)  # zipfile checks selected-member CRC at EOF.
             need(output.stat().st_size == member.file_size, 'selected member size')
             rows.append({'path': name, 'bytes': member.file_size, 'crc32': member.CRC, 'sha256': sha(output)})
         need(wanted <= names, 'original measured receipts/members missing')
@@ -292,23 +369,36 @@ def execution_identity(attempt, root):
 
 
 def linux(attempt, root, token):
-    original = retrieve_original(root, token)
+    original = retrieve_original(attempt, root, token)
     env = dict(os.environ, GOMAXPROCS='1', PPROF_TMPDIR=str(root/'tmp'))
     env.pop('GH_TOKEN', None)
     binary = {arm: str(original/'measured-binaries'/name) for arm, name in
               [('B', 'baseline-db.test'), ('C', 'candidate-db.test')]}
     dependencies = {}
+    metadata = {}
     for arm in ('B','C'):
-        for label, argv in [('readelf',['readelf','-l','-d',binary[arm]]), ('ldd',['ldd',binary[arm]])]:
-            need(attempt.run(arm+'-'+label, argv, 10, env=env) == 0, 'standard original ELF metadata')
-        raw = (attempt.out/(arm+'-ldd.stdout.log')).read_text()
-        need('not found' not in raw, 'missing actual original ELF dependency')
-        for path in re.findall(r'(/[^\s()]+)', raw):
-            actual = Path(path).resolve(strict=True)
-            dependencies[str(actual)] = {'sha256':sha(actual), 'bytes':actual.stat().st_size}
+        need(attempt.run(arm+'-readelf', ['readelf','-l','-d',binary[arm]], 10, env=env) == 0, 'standard original ELF metadata')
+        headers = (attempt.out/(arm+'-readelf.stdout.log')).read_text()
+        interpreter = re.findall(r'Requesting program interpreter: ([^\]]+)', headers)
+        dynamic = 'NEEDED' in headers or 'INTERP' in headers
+        ldd_code = attempt.run(arm+'-ldd', ['ldd',binary[arm]], 10, env=env)
+        raw = (attempt.out/(arm+'-ldd.stdout.log')).read_text()+(attempt.out/(arm+'-ldd.stderr.log')).read_text()
+        if not dynamic:
+            need(not interpreter and 'There is no dynamic section in this file.' in headers,
+                 'static ELF must prove absent interpreter and dynamic section')
+            need(ldd_code in (0,1) and any(value in raw for value in ('not a dynamic executable','statically linked')),
+                 'unsupported static ldd signature')
+            metadata[arm] = {'linkage':'static','interpreter':None,'dependencies':[],'ldd_exit':ldd_code}
+        else:
+            need(ldd_code == 0 and len(interpreter) == 1 and 'not found' not in raw, 'unresolved dynamic ELF dependency')
+            paths = set(re.findall(r'(/[^\s()]+)', raw)) | set(interpreter)
+            need(bool(paths), 'dynamic ELF loader/dependency unavailable')
+            for path in paths:
+                actual = Path(path).resolve(strict=True)
+                dependencies[str(actual)] = {'sha256':sha(actual), 'bytes':actual.stat().st_size}
+            metadata[arm] = {'linkage':'dynamic','interpreter':interpreter[0],'dependencies':sorted(paths),'ldd_exit':ldd_code}
         need(attempt.run(arm+'-original-buildinfo', ['go','version','-m',binary[arm]], 10, env=env) == 0, 'original ELF buildinfo')
-    need(bool(dependencies), 'original loader/dependency identity unavailable')
-    write(attempt.out/'original-new-loader-identities.json', dependencies)
+    write(attempt.out/'original-new-loader-identities.json', {'elfs':metadata,'resolved_files':dependencies})
     for label, arm in [('B1','B'), ('C1','C'), ('C2','C'), ('B2','B')]:
         profile = str(attempt.out/(label+'.cpu.pprof'))
         argv = ['taskset','-c','0','timeout','--kill-after=5s','30s',binary[arm], '-test.run=^$',
@@ -440,6 +530,10 @@ def main():
                       GOTMPDIR=str(root/'tmp'), GOCACHE=str(root/'gocache'), GOMODCACHE=str(root/'modcache'),
                       GOWORK='off', GOTOOLCHAIN='local', PYTHONDONTWRITEBYTECODE='1',
                       PPROF_TMPDIR=str(root/'tmp'), XDG_CACHE_HOME=str(root/'xdg-cache'), XDG_CONFIG_HOME=str(root/'xdg-config'))
+    if args.mode == 'windows':
+        for name in ('appdata', 'localappdata'):
+            (root/name).mkdir(exist_ok=True)
+        os.environ.update(APPDATA=str(root/'appdata'), LOCALAPPDATA=str(root/'localappdata'))
     token = os.environ.pop('GH_TOKEN', None)
     os.environ.pop('GITHUB_TOKEN', None)
     need(args.mode != 'linux' or bool(token), 'original artifact read credential missing')
@@ -451,7 +545,7 @@ def main():
         write(attempt.out/'new-runtime.json', {'platform': platform.platform(), 'python': sys.version,
               'environment': {k: os.environ.get(k) for k in ('GOMAXPROCS','GOMEMLIMIT','GOCACHE','GOMODCACHE','GOTMPDIR')},
               'scope': 'new hosted diagnostic context, not original runtime equivalence'})
-        provision_go(root)
+        provision_go(attempt, root)
         need(attempt.run('go-version', ['go','version'], 10) == 0, 'tool metadata')
         need((attempt.out/'go-version.stdout.log').read_text().startswith('go version go1.26.10 '), 'pinned Go tool required')
         execution_identity(attempt, root)
