@@ -1,105 +1,8 @@
-name: 'TreeDB: fixed original ELF and guard trace (manual diagnostic only)'
+name: 'TreeDB: Windows compile fit and original guard trace (manual diagnostic only)'
 permissions:
   contents: read
   actions: read
 jobs:
-  original-elf:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/diagnostic/original-elf-and-guard-trace-01'
-      && github.actor_id == '1981537' && github.run_attempt == 1
-    runs-on: ubuntu-24.04
-    timeout-minutes: 11
-    env:
-      PYTHONDONTWRITEBYTECODE: '1'
-      REVIEWED_HEAD: ${{ inputs.expected_head }}
-      WORKFLOW_COMMIT: ${{ github.workflow_sha }}
-      TMPDIR: ${{ github.workspace }}/tmp
-      XDG_CACHE_HOME: ${{ github.workspace }}/xdg-cache
-      XDG_CONFIG_HOME: ${{ github.workspace }}/xdg-config
-    steps:
-    - name: Authenticate one reviewed dispatch before inputs or tools
-      shell: bash
-      env:
-        EXPECTED: ${{ inputs.expected_head }}
-        WORKFLOW_SHA: ${{ github.workflow_sha }}
-        BOOTSTRAP_TOKEN: ${{ github.token }}
-      run: |
-        set -euo pipefail
-        [[ "$EXPECTED" =~ ^[0-9a-f]{40}$ && "$EXPECTED" == "$GITHUB_SHA" && "$EXPECTED" == "$WORKFLOW_SHA" ]]
-        python - <<'PYBOOT'
-        import hashlib,json,os,pathlib,shutil,stat,time,urllib.request
-        root=pathlib.Path(os.environ['GITHUB_WORKSPACE']).resolve(strict=True)
-        started=time.monotonic()
-        with open(os.environ['GITHUB_ENV'],'a') as stream:
-            stream.write('DIAGNOSTIC_STARTED_MONOTONIC='+str(started)+'\n')
-        rows={'.github/scripts/original_elf_guard_diagnostic.py': {'bytes': 44814, 'sha256': '019f860c2f11d86fab0f8ef1f641c1b4f128868dd8fac1edefadebbdda5069e3'}, 'scripts/ycsb_campaign_guard.py': {'bytes': 19548, 'sha256': 'b1f5308ce5de5bf1252a77694599f4be4fdf769803b4d7300c08b4901f8d9642'}, 'scripts/ycsb_compare_validate.py': {'bytes': 49260, 'sha256': '85584d03f46e2f49be94d91b377b77e08494a846a30285bfb1300b932d57cb46'}, 'scripts/ycsb_evidence_json.py': {'bytes': 1240, 'sha256': '86989ebbfa14b8f9f3c20ebe470314a29fd28c7db2ab10734d9518e39d270ea6'}, 'scripts/ycsb_runtime_observer.py': {'bytes': 20408, 'sha256': '9ea6f525e0cf46df5301be3f903367816bdb032a3d0abb4c204bda60ee104d8f'}, '.github/scripts/original_elf_guard_inputs.json': {'bytes': 544, 'sha256': '311bdd88b83c8a56da5ecc10d9f2435e9b80199ac001a153be73a37a601141ef'}}
-        head=os.environ['EXPECTED']
-        def check(extra=0):
-            remaining=600-(time.monotonic()-started)
-            assert remaining>0,'600s bootstrap deadline'
-            total=logs=0
-            for directory,_,names in os.walk(root,followlinks=False):
-                for name in names:
-                    path=pathlib.Path(directory)/name;s=path.lstat()
-                    assert stat.S_ISREG(s.st_mode) and not path.is_symlink(),'nonregular task input'
-                    total+=s.st_size
-                    if path.relative_to(root).parts[0] in ('output','guard') or (path.parent==root and path.suffix in ('.json','.log','.txt','.jsonl','.trace')):
-                        logs+=s.st_size
-            assert total+extra<=1073741824,'whole-root1GiB'
-            assert logs<=33554432,'generated-logs32MiB'
-            assert shutil.disk_usage(root).free>=10737418240,'free10GiB'
-            return remaining
-        (root/'tmp').mkdir(exist_ok=True)
-        receipts=[]
-        for name,expected in rows.items():
-            check(expected['bytes'])
-            target=root/'harness'/name;target.parent.mkdir(parents=True,exist_ok=True)
-            request=urllib.request.Request('https://api.github.com/repos/snissn/gomap/contents/'+name+'?ref='+head,
-                headers={'Accept':'application/vnd.github.raw+json','Authorization':'Bearer '+os.environ['BOOTSTRAP_TOKEN'],'X-GitHub-Api-Version':'2022-11-28'})
-            digest=hashlib.sha256();count=0
-            with urllib.request.urlopen(request,timeout=min(20,check())) as response,target.open('xb') as stream:
-                while not response.isclosed():
-                    response.fp.raw._sock.settimeout(min(10,check()))
-                    block=response.read(65536)
-                    if not block:break
-                    assert count+len(block)<=expected['bytes'],'unexpected harness file size'
-                    check(len(block));stream.write(block);digest.update(block);count+=len(block)
-            assert count==expected['bytes'] and digest.hexdigest()==expected['sha256'],'harness file identity'
-            receipts.append(dict(path=name,bytes=count,sha256=digest.hexdigest()))
-        # No downloaded helper has been imported/executed above.
-        manifest=json.loads((root/'harness/.github/scripts/original_elf_guard_inputs.json').read_text())
-        assert set(manifest)==set(rows)-{'.github/scripts/original_elf_guard_inputs.json'}
-        assert all(manifest[name]==rows[name]['sha256'] for name in manifest),'helper closure mismatch'
-        check()
-        receipt={'status':'SIX_AUTHENTICATED_FILES_ONLY','head':head,'harness_is_git_worktree':False,'files':receipts,'python':{'path':os.path.realpath(os.sys.executable),'sha256':hashlib.sha256(pathlib.Path(os.sys.executable).read_bytes()).hexdigest()}}
-        with (root/'bootstrap-inputs.json').open('x') as stream:json.dump(receipt,stream,sort_keys=True)
-        check()
-        print(json.dumps(receipt,sort_keys=True))
-        PYBOOT
-    - name: One original retained-binary ABBA capture and standard views
-      shell: bash
-      env:
-        GH_TOKEN: ${{ github.token }}
-      run: |
-        remaining=$(python3 -c 'import os,time; v=600-(time.monotonic()-float(os.environ["DIAGNOSTIC_STARTED_MONOTONIC"])); assert v>0; print(v)')
-        set +e
-        python3 -B "$GITHUB_WORKSPACE/harness/scripts/ycsb_campaign_guard.py" --synthetic --scripts-dir "$GITHUB_WORKSPACE/harness/scripts" --out "$GITHUB_WORKSPACE/guard" --cwd "$GITHUB_WORKSPACE" --filesystem "$GITHUB_WORKSPACE" --deadline "$remaining" --cleanup-seconds 5 --interval .2 --rss-cap-bytes 1073741824 --free-floor-bytes 10737418240 -- python3 -B "$GITHUB_WORKSPACE/harness/.github/scripts/original_elf_guard_diagnostic.py" linux --root "$GITHUB_WORKSPACE"
-        code=$?
-        cat "$GITHUB_WORKSPACE/guard/stdout.log"
-        exit "$code"
-    - name: Retain all original failures, inputs and diagnostic outputs
-      if: always()
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-      with:
-        name: original-elf-cpu-${{ github.run_id }}-${{ github.run_attempt }}
-        path: |-
-          ${{ github.workspace }}/output
-          ${{ github.workspace }}/guard
-          ${{ github.workspace }}/original
-          ${{ github.workspace }}/bootstrap-census.json
-
-          ${{ github.workspace }}/bootstrap-inputs.json
-        if-no-files-found: error
-        retention-days: 14
   windows-guard:
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/diagnostic/original-elf-and-guard-trace-01'
       && github.actor_id == '1981537' && github.run_attempt == 1
@@ -127,7 +30,7 @@ jobs:
         started=time.monotonic()
         with open(os.environ['GITHUB_ENV'],'a') as stream:
             stream.write('DIAGNOSTIC_STARTED_MONOTONIC='+str(started)+'\n')
-        rows={'.github/scripts/original_elf_guard_diagnostic.py': {'bytes': 44814, 'sha256': '019f860c2f11d86fab0f8ef1f641c1b4f128868dd8fac1edefadebbdda5069e3'}, 'scripts/ycsb_campaign_guard.py': {'bytes': 19548, 'sha256': 'b1f5308ce5de5bf1252a77694599f4be4fdf769803b4d7300c08b4901f8d9642'}, 'scripts/ycsb_compare_validate.py': {'bytes': 49260, 'sha256': '85584d03f46e2f49be94d91b377b77e08494a846a30285bfb1300b932d57cb46'}, 'scripts/ycsb_evidence_json.py': {'bytes': 1240, 'sha256': '86989ebbfa14b8f9f3c20ebe470314a29fd28c7db2ab10734d9518e39d270ea6'}, 'scripts/ycsb_runtime_observer.py': {'bytes': 20408, 'sha256': '9ea6f525e0cf46df5301be3f903367816bdb032a3d0abb4c204bda60ee104d8f'}, '.github/scripts/original_elf_guard_inputs.json': {'bytes': 544, 'sha256': '311bdd88b83c8a56da5ecc10d9f2435e9b80199ac001a153be73a37a601141ef'}}
+        rows={'.github/scripts/original_elf_guard_diagnostic.py': {'bytes': 51138, 'sha256': '5c3189c13d3937ca547aa25e9d440248707d193828c2e9d68f89a20788ab5b10'}, 'scripts/ycsb_campaign_guard.py': {'bytes': 19548, 'sha256': 'b1f5308ce5de5bf1252a77694599f4be4fdf769803b4d7300c08b4901f8d9642'}, 'scripts/ycsb_compare_validate.py': {'bytes': 49260, 'sha256': '85584d03f46e2f49be94d91b377b77e08494a846a30285bfb1300b932d57cb46'}, 'scripts/ycsb_evidence_json.py': {'bytes': 1240, 'sha256': '86989ebbfa14b8f9f3c20ebe470314a29fd28c7db2ab10734d9518e39d270ea6'}, 'scripts/ycsb_runtime_observer.py': {'bytes': 20408, 'sha256': '9ea6f525e0cf46df5301be3f903367816bdb032a3d0abb4c204bda60ee104d8f'}, '.github/scripts/original_elf_guard_inputs.json': {'bytes': 544, 'sha256': '3a16da3170d4f56359cfa2dfa0fd8c0826f5ff5b11841fc174dfedc4011c9052'}}
         head=os.environ['EXPECTED']
         def check(extra=0):
             remaining=600-(time.monotonic()-started)
@@ -171,7 +74,7 @@ jobs:
         check()
         print(json.dumps(receipt,sort_keys=True))
         PYBOOT
-    - name: One original json/bson guard test with standard execution trace
+    - name: One compile-fit partition then original json/bson guard trace
       shell: pwsh
       run: |
         python -B "$env:GITHUB_WORKSPACE/harness/.github/scripts/original_elf_guard_diagnostic.py" windows --root "$env:GITHUB_WORKSPACE"

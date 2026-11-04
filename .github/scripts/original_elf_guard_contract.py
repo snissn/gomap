@@ -82,3 +82,70 @@ for label, members, expected in header_cases:
     observed = all(eval(expr, scope) for expr in header_checks.values())
     assert observed == expected, label
 print(json.dumps({'status':'FIXED_HOSTED_SOURCE_CONTRACT_ONLY', 'checks':34, 'header_predicate_cases':len(header_cases), 'closure_files':len(manifest), 'canonical_data_cases':6, 'Go_executions':0}))
+
+# Focused Windows compile-fit source and finite data controls, no subprocess/tool execution.
+assert '\n  original-elf:' not in workflow and '\n  windows-guard:' in workflow
+assert "['go','build','-p','1','-mod=readonly','./TreeDB/nativewire']" in source
+assert source.index("'compile-only',") < source.index("'build', ['go','test','-c'")
+assert "need(not after, 'compile-only WorkDir not removed" in source
+assert "compiler_env['GOFLAGS'] == ''" in source and "compiler_env['GOEXPERIMENT'] == ''" in source
+assert "env.get('GOFLAGS', '') == ''" in source and "env.get('GOEXPERIMENT', '') == ''" in source
+assert "write(attempt.out/'tool-input.json'" in source
+assert "write(attempt.out/'test-binary-identity.json'" in source
+assert "census(self.root, enforce=False)" in source and "census(root, enforce=False)" in source
+assert "self.fail('; '.join(row['errors']), row)" in source
+assert "self.failure = message" in source and "if self.failure is None:" in source
+assert "FINAL_RESOURCE_CENSUS" in source
+assert "need(not retained['errors'], 'final resource refusal retained after partial receipt emission')" in source
+# Execute only extracted pure category function, against paths/data, never the runner.
+category_node = next(n for n in ast.parse(source).body if isinstance(n, ast.FunctionDef) and n.name == 'census_category')
+category_scope = {}
+exec(compile(ast.Module(body=[category_node], type_ignores=[]), '<pure-category>', 'exec'), category_scope)
+cases = {'source/x.go':'source','source/.git/objects/pack/x':'git','modcache/cache/download/x':'modules',
+         'gocache/a/b':'go_cache','tmp/go-build1/x':'tmp','nativewire.test.exe':'binary',
+         'output/receipt.json':'output','appdata/go/telemetry/x':'rest'}
+observed = {name:category_scope['census_category'](Path(name)) for name in cases}
+assert observed == cases
+assert len(set(observed.values())) == 8
+# Pure in-memory Attempt.sample/fail controls: stub write/census only; no process/thread startup.
+import threading
+nodes = [n for n in ast.parse(source).body if isinstance(n, ast.ClassDef) and n.name == 'Attempt']
+methods = [n for n in nodes[0].body if isinstance(n, ast.FunctionDef) and n.name in ('fail','sample')]
+recorded = []
+row = {'whole_bytes':1073741825,'log_trace_json_bytes':7,'errors':['whole root exceeds 1GiB'],
+       'categories':{key:0 for key in set(cases.values())}}
+row['categories']['tmp']=row['whole_bytes']
+assert sum(row['categories'].values()) == row['whole_bytes']
+scope = {'write':lambda p,v:recorded.append((str(p),v)), 'census':lambda p,enforce:dict(row)}
+exec(compile(ast.fix_missing_locations(ast.Module(body=[ast.ClassDef(name='PureAttempt', bases=[], keywords=[], body=methods, decorator_list=[])], type_ignores=[])), '<pure-failure>', 'exec'),scope)
+owner = scope['PureAttempt']()
+owner.root=Path('/source-fixture-only');owner.out=owner.root/'output';owner.stage='compile-only'
+owner.failure=None;owner.first_failure=None;owner.state_lock=threading.Lock();owner.stop=threading.Event()
+owner.maximum={'whole_bytes':0,'log_trace_json_bytes':0}
+try:
+    owner.sample()
+    raise AssertionError('expected first failure')
+except RuntimeError:
+    pass
+assert len(recorded)==1 and recorded[0][1]['census']['whole_bytes']==1073741825
+assert owner.failure == 'whole root exceeds 1GiB'
+owner.fail('later cleanup error')
+assert len(recorded)==1 and owner.failure=='whole root exceeds 1GiB'
+assert owner.maximum['whole_bytes']==1073741825
+print(json.dumps({'status':'WINDOWS_COMPILE_FIT_SOURCE_AND_PURE_DATA_ONLY','category_cases':8,
+                  'first_failure_and_sticky_cases':2,'Go_executions':0,'controller_executions':0}))
+
+# A failed first-failure write still signals stop and preserves the in-memory first failure.
+owner.failure=None;owner.first_failure=None;owner.stop.clear()
+def failed_write(path, value):
+    raise OSError('synthetic receipt write error')
+scope['write']=failed_write
+try:
+    owner.fail('first failure with receipt I/O failure')
+    raise AssertionError('expected receipt I/O failure')
+except OSError:
+    pass
+assert owner.stop.is_set() and owner.failure=='first failure with receipt I/O failure'
+assert "'primary_error': primary_error" in source
+assert "if primary_error is None:" in source
+print(json.dumps({'status':'FIRST_FAILURE_WRITE_ERROR_STOP_CONTROL_PASS','cases':1,'Go_executions':0}))

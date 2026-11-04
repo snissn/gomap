@@ -12,7 +12,7 @@
     "M0 observation is manual diagnostic-only on a separately fixed product; no forecast starts it or replaces failed M0 acceptance.",
     "Bounded maintenance comparison is a manually granted diagnostic on fixed baseline/candidate products; no forecast starts it or establishes cost, M0 or native acceptance."
   ],
-  "discovery_source_sha256": "41490242795137e627bdd662902b54f8ebd67cc95390c3f7dfdec73f1f2ba3a5",
+  "discovery_source_sha256": "ef22d650f64aacbdb348c900871a23330d6ac1d72b1643136905a20b36795da6",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
@@ -445,19 +445,6 @@
         "tags": "entry command defaults/flags retained"
       },
       "workflow": "sparse-catalog-qualification.yml"
-    },
-    {
-      "id": "treedb-mvcc-maintenance-diagnostic/original-elf/single",
-      "job": "original-elf",
-      "owner": "CI maintainer with affected package/harness owner",
-      "variant": {
-        "cgo": "setup-go platform default; explicit command overrides retained",
-        "matrix": {},
-        "race": false,
-        "runs_on": "ubuntu-24.04",
-        "tags": "entry command defaults/flags retained"
-      },
-      "workflow": "treedb-mvcc-maintenance-diagnostic.yml"
     },
     {
       "id": "treedb-mvcc-maintenance-diagnostic/windows-guard/single",
@@ -2346,51 +2333,14 @@
           }
         }
       },
-      "git_blob": "8163f13b8be2bd5c7d123538c148b73dff6cfca6",
+      "git_blob": "a60bc45a1e53e6526530fa3fe3f1f869f1fb9a3e",
       "jobs": {
-        "original-elf": {
-          "checkout": [],
-          "commands": [
-            {
-              "command_sha256": "0d5f91127e5d9bfe7f62f1f920dfcea680ef01ddb03ec58219730925ceca8037",
-              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:25",
-              "env": {
-                "BOOTSTRAP_TOKEN": "${{ github.token }}",
-                "EXPECTED": "${{ inputs.expected_head }}",
-                "WORKFLOW_SHA": "${{ github.workflow_sha }}"
-              },
-              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
-              "name": "Authenticate one reviewed dispatch before inputs or tools"
-            },
-            {
-              "command_sha256": "ee94ae514555bf81601551592d476436b3bdbb377140fd48e847e241522c593f",
-              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:82",
-              "env": {
-                "GH_TOKEN": "${{ github.token }}"
-              },
-              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
-              "name": "One original retained-binary ABBA capture and standard views"
-            }
-          ],
-          "environment": {
-            "PYTHONDONTWRITEBYTECODE": "1",
-            "REVIEWED_HEAD": "${{ inputs.expected_head }}",
-            "TMPDIR": "${{ github.workspace }}/tmp",
-            "WORKFLOW_COMMIT": "${{ github.workflow_sha }}",
-            "XDG_CACHE_HOME": "${{ github.workspace }}/xdg-cache",
-            "XDG_CONFIG_HOME": "${{ github.workspace }}/xdg-config"
-          },
-          "matrix": null,
-          "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
-          "race": false,
-          "runs_on": "ubuntu-24.04"
-        },
         "windows-guard": {
           "checkout": [],
           "commands": [
             {
-              "command_sha256": "0d5f91127e5d9bfe7f62f1f920dfcea680ef01ddb03ec58219730925ceca8037",
-              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:121",
+              "command_sha256": "e97a04e91d88f74bd83c0f266780a1babd07d1d72b2d4f23c56f400d9a09c29d",
+              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:24",
               "env": {
                 "BOOTSTRAP_TOKEN": "${{ github.token }}",
                 "EXPECTED": "${{ inputs.expected_head }}",
@@ -2401,12 +2351,12 @@
             },
             {
               "command_sha256": "c866d87c20f0182ca70daf605b64a282fb010af772d9092919db3c5d418d5787",
-              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:176",
+              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:79",
               "env": {
                 "GH_TOKEN": "${{ github.token }}"
               },
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
-              "name": "One original json/bson guard test with standard execution trace"
+              "name": "One compile-fit partition then original json/bson guard trace"
             }
           ],
           "environment": {
@@ -2422,7 +2372,7 @@
           "runs_on": "windows-2025"
         }
       },
-      "sha256": "6613eabcbc617367f02c0dcec48e7162d3033df1103a4ee2649483245ff3aa87"
+      "sha256": "2a2f4fa3aa2dc9acff01b41c243012f483a3e609893531a9ff3c8c768b914c9e"
     },
     "treedb-tests.yml": {
       "coverage": "existing execution only; triggers/path filters are unchanged",

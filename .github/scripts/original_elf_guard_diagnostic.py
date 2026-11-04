@@ -58,8 +58,20 @@ def write(path, value):
         stream.write('\n')
 
 
-def census(root):
+def census_category(relative):
+    parts = relative.parts
+    if parts[0] == 'source':
+        return 'git' if len(parts) > 1 and parts[1] == '.git' else 'source'
+    if parts[0] in ('modcache', 'gocache', 'tmp'):
+        return {'modcache': 'modules', 'gocache': 'go_cache', 'tmp': 'tmp'}[parts[0]]
+    if str(relative) == 'nativewire.test.exe':
+        return 'binary'
+    return 'output' if parts[0] in ('output', 'guard') else 'rest'
+
+
+def census(root, enforce=True):
     total = logs = 0
+    categories = dict.fromkeys(('source', 'git', 'modules', 'go_cache', 'tmp', 'binary', 'output', 'rest'), 0)
     for directory, _, files in os.walk(root, followlinks=False):
         for name in files:
             path = Path(directory)/name
@@ -71,14 +83,24 @@ def census(root):
             need(stat.S_ISREG(s.st_mode), 'nonregular task file: '+str(path))
             total += s.st_size
             relative = path.relative_to(root)
-            # Authenticated source/SDK/module bytes stay in whole-root accounting.
-            # Generated outputs have only these fixed namespaces; inputs are not logs.
+            categories[census_category(relative)] += s.st_size
+            # Input files are counted in whole bytes, not generated logs.
             if relative.parts[0] in ('output', 'guard') or (len(relative.parts) == 1 and path.suffix in ('.log', '.json', '.jsonl', '.txt', '.trace')):
                 logs += s.st_size
-    need(total <= ROOT_CAP, 'whole root exceeds 1GiB')
-    need(logs <= LOG_CAP, 'aggregate log/trace/JSON exceeds 32MiB')
-    need(shutil.disk_usage(root).free >= 10*GIB, 'free floor below 10GiB')
-    return {'whole_bytes': total, 'log_trace_json_bytes': logs}
+    free = shutil.disk_usage(root).free
+    errors = []
+    if total > ROOT_CAP:
+        errors.append('whole root exceeds 1GiB')
+    if logs > LOG_CAP:
+        errors.append('aggregate log/trace/JSON exceeds 32MiB')
+    if free < 10*GIB:
+        errors.append('free floor below 10GiB')
+    row = {'whole_bytes': total, 'log_trace_json_bytes': logs, 'categories': categories,
+           'free_bytes': free, 'errors': errors, 'sampled_monotonic': time.monotonic(),
+           'scope': 'single sampled walk; first observed breach is not peak or atomic snapshot'}
+    if enforce:
+        need(not errors, '; '.join(errors))
+    return row
 
 
 class Attempt:
@@ -91,22 +113,45 @@ class Attempt:
         self.child = None
         self.stop = threading.Event()
         self.failure = None
+        self.first_failure = None
+        self.stage = 'setup'
+        self.state_lock = threading.Lock()
         self.maximum = {'whole_bytes': 0, 'log_trace_json_bytes': 0}
         self.thread = threading.Thread(target=self.watch, daemon=True)
         self.thread.start()
 
+    def fail(self, message, row=None):
+        # First failure is immutable; later cleanup/emit exceptions cannot replace it.
+        try:
+            with self.state_lock:
+                if self.failure is None:
+                    self.failure = message
+                    self.first_failure = {'error': message, 'stage': self.stage, 'census': row,
+                                          'first_observed_not_peak': True}
+                    write(self.out/'resource-first-failure.json', self.first_failure)
+        finally:
+            self.stop.set()  # Even receipt I/O failure must stop the original attempt.
+
+    def sample(self):
+        row = census(self.root, enforce=False)
+        row['stage'] = self.stage
+        with self.state_lock:
+            for k in self.maximum:
+                self.maximum[k] = max(self.maximum[k], row[k])
+        if row['errors']:
+            self.fail('; '.join(row['errors']), row)  # Persist before raising.
+            raise RuntimeError(self.failure)
+        return row
+
     def watch(self):
         try:
             while not self.stop.is_set():
-                row = census(self.root)
-                for k, v in row.items():
-                    self.maximum[k] = max(self.maximum[k], v)
+                self.sample()
                 if time.monotonic()-self.started > 600:
                     raise RuntimeError('600s payload deadline')
                 self.stop.wait(.2)
         except BaseException as error:
-            self.failure = repr(error)
-            self.stop.set()
+            self.fail(repr(error))
 
     def pulse(self):
         # Cheap within already precharged direct writes; no tree walk per chunk/member.
@@ -117,12 +162,17 @@ class Attempt:
 
     def check(self, additional_bytes=0):
         remaining = self.pulse()
-        row = census(self.root)
-        need(row['whole_bytes']+additional_bytes <= ROOT_CAP, 'prospective write exceeds whole root')
+        row = self.sample()
+        if row['whole_bytes']+additional_bytes > ROOT_CAP:
+            self.fail('prospective write exceeds whole root', dict(row, prospective_additional_bytes=additional_bytes))
+            raise RuntimeError(self.failure)
         return remaining
 
     def run(self, label, argv, seconds, cwd=None, env=None):
+        self.stage = label
         self.check()
+        before = self.sample()
+        write(self.out/(label+'.before-census.json'), before)
         if os.name == 'nt' and argv[0] == 'go':
             # Windows current-directory executable search must not defeat SDK identity.
             argv = [r'C:\hostedtoolcache\windows\go\1.26.10\x64\bin\go.exe', *argv[1:]]
@@ -143,7 +193,7 @@ class Attempt:
                                            stdout=stderr, stderr=stderr, timeout=10, check=False)
                             row['taskkill_exit'] = killed.returncode
                             row['cleanup_status'] = 'HOLD_DESCENDANT_DRAIN_UNPROVED'
-                            self.failure = self.failure or 'Windows intervention: descendant drain unproved'
+                            self.fail('Windows intervention: descendant drain unproved')
                             # Receipt below preserves nonzero taskkill; never claim tree drain.
                         else:
                             os.killpg(self.child.pid, signal.SIGTERM)
@@ -163,6 +213,11 @@ class Attempt:
                 if joined:
                     self.child = None
                 write(self.out/(label+'.receipt.json'), row)
+                after = census(self.root, enforce=False)
+                after['stage'] = label
+                write(self.out/(label+'.after-census.json'), after)
+                if after['errors']:
+                    self.fail('; '.join(after['errors']), after)
         need(row['original_handle_joined'], 'owned process not joined; cleanup HOLD')
         need(row.get('taskkill_exit', 0) == 0, 'taskkill failed; cleanup HOLD')
         need('intervention' not in row, 'stage intervention; diagnostic HOLD')
@@ -171,7 +226,7 @@ class Attempt:
     def close(self):
         self.stop.set()
         self.thread.join()
-        write(self.out/'resource-summary.json', {'maximum': self.maximum, 'error': self.failure,
+        write(self.out/'resource-summary.json', {'maximum': self.maximum, 'error': self.failure, 'first_failure': self.first_failure,
               'scope': 'sampled complete root after workflow bootstrap; Windows Go memory target is soft; no hard Windows RSS guarantee'})
 
 
@@ -373,7 +428,7 @@ def authenticate_cached_windows_go(attempt, root):
     attempt.check()
     os.environ['GOROOT'] = str(sdk)
     os.environ['PATH'] = str(sdk/'bin')+os.pathsep+os.environ['PATH']
-    write(root/'tool-input.json', dict(expected, go_path=str(executable), sha256=go_row['sha256'],
+    write(attempt.out/'tool-input.json', dict(expected, go_path=str(executable), sha256=go_row['sha256'],
           go_bytes=go_row['size'], directory_count=len(directories), image_os=os.environ['ImageOS'],
           image_version=os.environ['ImageVersion'], source='preexisting read-only cached SDK; canonical user Mac official ZIP metadata',
           schema_encoding='sorted path/size/sha256 rows; compact sort_keys ensure_ascii JSON ASCII no newline',
@@ -621,15 +676,49 @@ def windows(attempt, root):
     observed = (attempt.out/'observer-head.stdout.log').read_text().strip()
     need(observed == OBSERVER, 'exact observer source required')
     env = dict(os.environ, GOMAXPROCS='2', GOMEMLIMIT='4GiB', GOWORK='off')
-    need(attempt.run('go-environment', ['go','env','-json','CGO_ENABLED','CC','CXX','GOOS','GOARCH','GOVERSION','GOROOT','GOTOOLDIR'], 10, env=env) == 0, 'actual Windows compiler/runtime defaults')
+    context_fields = ['CGO_ENABLED','CC','CXX','GOOS','GOARCH','GOVERSION','GOROOT','GOTOOLDIR',
+                      'GOFLAGS','GOEXPERIMENT','GOAMD64','GOCACHE','GOMODCACHE','GOTMPDIR','GOWORK','GOENV',
+                      'CGO_CFLAGS','CGO_CPPFLAGS','CGO_CXXFLAGS','CGO_LDFLAGS']
+    need(attempt.run('go-environment', ['go','env','-json',*context_fields], 10, cwd=source, env=env) == 0,
+         'actual Windows compiler/runtime defaults')
     compiler_env = json.loads((attempt.out/'go-environment.stdout.log').read_text())
-    if compiler_env['CGO_ENABLED'] == '1':
-        compiler = shutil.which(compiler_env['CC'])
-        need(compiler is not None, 'actual maintained CGO compiler unavailable')
-        write(attempt.out/'cgo-compiler-identity.json', {'path':compiler,'sha256':sha(compiler),'bytes':Path(compiler).stat().st_size})
+    write(attempt.out/'compile-context.json', {'go_env': compiler_env,
+          'inherited_GOFLAGS': env.get('GOFLAGS'), 'inherited_GOEXPERIMENT': env.get('GOEXPERIMENT'),
+          'GOMAXPROCS': env['GOMAXPROCS'], 'GOMEMLIMIT': env['GOMEMLIMIT'], 'GOWORK': env['GOWORK'],
+          'scope': 'actual context before first compile; prior unknown GOFLAGS/GOEXPERIMENT not reconstructed'})
+    need(compiler_env['GOFLAGS'] == '' and compiler_env['GOEXPERIMENT'] == '' and
+         env.get('GOFLAGS', '') == '' and env.get('GOEXPERIMENT', '') == '',
+         'unsupported inherited build flags/experiments; never overridden')
+    need(compiler_env['CGO_ENABLED'] == '1' and compiler_env['CC'] == 'gcc' and compiler_env['CXX'] == 'g++' and
+         compiler_env['GOOS'] == 'windows' and compiler_env['GOARCH'] == 'amd64' and
+         compiler_env['GOVERSION'] == 'go1.26.10' and
+         Path(compiler_env['GOROOT']).resolve() == Path(os.environ['GOROOT']).resolve(),
+         'changed compile context from selected original Windows defaults')
+    compiler = shutil.which(compiler_env['CC'])
+    need(compiler is not None and Path(compiler).resolve() == Path('C:/mingw64/bin/gcc.EXE').resolve() and
+         Path(compiler).stat().st_size == 3020288 and sha(compiler) ==
+         '0aeaac2ec1ba2fb290ad3a4bbe7b76d5baedd3743530e5da6d64fb57a2d71850',
+         'actual selected CGO compiler identity')
+    cxx = shutil.which(compiler_env['CXX'])
+    need(cxx is not None, 'actual CXX compiler unavailable')
+    write(attempt.out/'cgo-compiler-identity.json', {'path':compiler,'sha256':sha(compiler),
+          'bytes':Path(compiler).stat().st_size, 'cxx':{'path':cxx,'sha256':sha(cxx),'bytes':Path(cxx).stat().st_size}})
+    def workdirs():
+        return sorted(path.name for path in (root/'tmp').iterdir() if path.name.startswith('go-build'))
+    before = workdirs()
+    write(attempt.out/'compile-only-workdirs-before.json', {'names':before,'GOTMPDIR':str(root/'tmp')})
+    need(not before, 'preexisting Go WorkDir; no cleanup or cache purge selected')
+    need(attempt.run('compile-only', ['go','build','-p','1','-mod=readonly','./TreeDB/nativewire'],
+                     240, cwd=source, env=env) == 0, 'compile-only failed; stop before test compilation')
+    after = workdirs()
+    write(attempt.out/'compile-only-workdirs-after.json', {'names':after,
+          'checked_normal_return':True, 'source_cleanup':'Go1.26.10 Builder.Close without -work',
+          'cache_retained':True, 'new_fit_claim':False})
+    need(not after, 'compile-only WorkDir not removed; stop before test compilation')
     binary = root/'nativewire.test.exe'
     need(attempt.run('build', ['go','test','-c','-p','1','-mod=readonly','-o',str(binary),'./TreeDB/nativewire'],
                      240, cwd=source, env=env) == 0, 'diagnostic Windows build')
+    write(attempt.out/'test-binary-identity.json', {'path':str(binary),'bytes':binary.stat().st_size,'sha256':sha(binary)})
     trace = attempt.out/'guard.trace'
     # Existing twenty-second per-subtest contexts and two-second request timers are untouched.
     code = attempt.run('guard', [str(binary),'-test.v','-test.run=^'+GUARD_TEST+'$',
@@ -665,13 +754,17 @@ def windows(attempt, root):
 
 def emit_receipts(root, mode):
     # Fixed plain output, never raw binary profiles, credential environment or URLs.
+    initial = census(root, enforce=False)
+    if initial['errors'] and not (root/'output/resource-first-failure.json').exists():
+        write(root/'output/resource-first-failure.json', {'error':'; '.join(initial['errors']),
+              'stage':'receipt-emission', 'census':initial, 'first_observed_not_peak':True})
     files = {}
     for path in sorted((root/'output').iterdir()):
         if path.is_file():
             files[path.name] = {'bytes': path.stat().st_size, 'sha256': sha(path)}
     write(root/'output/final-file-manifest.json', files)
     text = ['FIXED_DIAGNOSTIC_FILE_MANIFEST '+json.dumps(files, sort_keys=True)]
-    for path in [root/'tool-archive.json',root/'tool-input.json',root/'harness/.github/scripts/original_elf_guard_inputs.json']:
+    for path in [root/'tool-archive.json',root/'tool-input.json',root/'output/tool-input.json',root/'harness/.github/scripts/original_elf_guard_inputs.json']:
         if path.is_file():
             text.append('AUTHENTICATED_INPUT_RECEIPT '+path.name+' '+path.read_text())
     for path in (root/'output').glob('*identit*.json'):
@@ -698,10 +791,15 @@ def emit_receipts(root, mode):
     # Console duplicates are charged to the same aggregate log acceptance cap.
     console_bytes = sum(len(part.encode('utf-8'))+1 for part in text)
     need(console_bytes <= 8*1024**2, 'bounded hosted console budget exceeded; no truncation')
-    retained = census(root)
+    retained = census(root, enforce=False)
+    # Whole-root refusal remains adverse, but must not suppress small partial receipts.
+    text.append('FINAL_RESOURCE_CENSUS '+json.dumps(retained, sort_keys=True))
+    console_bytes = sum(len(part.encode('utf-8'))+1 for part in text)
+    need(console_bytes <= 8*1024**2, 'bounded hosted console budget exceeded; no truncation')
     need(retained['log_trace_json_bytes']+(2 if mode == 'linux' else 1)*console_bytes <= LOG_CAP, 'retained plus duplicated console logs exceed32MiB')
 
     print('\n'.join(text), flush=True)
+    need(not retained['errors'], 'final resource refusal retained after partial receipt emission')
 
 
 def main():
@@ -736,6 +834,7 @@ def main():
     attempt.started = float(os.environ['DIAGNOSTIC_STARTED_MONOTONIC'])
     need(0 <= time.monotonic()-attempt.started < 600, 'first-step whole deadline unavailable/expired')
     Attempt.__init__(attempt, root)
+    primary_error = None
     try:
         write(attempt.out/'new-runtime.json', {'platform': platform.platform(), 'python': sys.version,
               'environment': {k: os.environ.get(k) for k in ('GOMAXPROCS','GOMEMLIMIT','GOCACHE','GOMODCACHE','GOTMPDIR')},
@@ -752,11 +851,20 @@ def main():
             linux(attempt, root, token)
         else:
             windows(attempt, root)
+    except BaseException as error:
+        primary_error = repr(error)
+        raise
     finally:
         attempt.close()
-        write(attempt.out/'completion.json', {'stages': attempt.rows, 'resource_error': attempt.failure,
+        write(attempt.out/'completion.json', {'stages': attempt.rows, 'resource_error': attempt.failure, 'primary_error': primary_error,
               'acceptance': False, 'original_required_failures_preserved': True})
-        emit_receipts(root, args.mode)
+        try:
+            emit_receipts(root, args.mode)
+        except BaseException:
+            if primary_error is None:
+                raise  # A receipt/cap failure can never produce success.
+            # The existing primary exception, completion and first failure remain
+            # authoritative; do not replace it with a final census/emit refusal.
     need(attempt.failure is None, 'resource failure retained')
 
 

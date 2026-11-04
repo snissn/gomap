@@ -1921,3 +1921,12 @@ Go 1.26.10 SDK at one fixed image path before any Go command. No SDK is
 installed or copied; all new caches, telemetry, tools and outputs remain in
 the 1 GiB task root. Missing or mismatched cache identity stops without fallback.
 The original Linux setup failure and Windows resource/cleanup HOLD remain.
+
+The next isolated manual block is Windows-only: one stock non-test package
+`go build -p 1 -mod=readonly ./TreeDB/nativewire` precedes the unchanged full
+`go test -c` command. A normal joined return and absence of its `go-build*`
+WorkDir are required before test compilation; shared stock caches are retained.
+The same 1 GiB root, 32 MiB generated logs, 600 s whole and 660 s outer bounds
+apply. Single-walk resource categories and first-failure/stage receipts expose
+compile overlap; source cleanup semantics do not prove fit. No Linux recapture,
+cache purge, product warmup, cap increase or prior HOLD clearance is implied.
