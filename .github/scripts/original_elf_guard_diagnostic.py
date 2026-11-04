@@ -210,7 +210,7 @@ def provision_go(attempt, root):
             need(all(not stat.S_ISLNK(m.external_attr >> 16) for m in members), 'tool archive symlink')
             names = [m.filename for m in members]
             total = sum(m.file_size for m in members)
-    need(len(names) == len(set(names)) and all(n.startswith('go/') and '..' not in Path(n).parts and '\\' not in n for n in names), 'unsafe tool archive')
+    need(len(names) == len(set(names)) and all((n.startswith('go/') or (system == 'Linux' and n == 'go' and m.isdir() and m.size == 0)) and '..' not in Path(n).parts and '\\' not in n for n, m in zip(names, members)), 'unsafe tool archive')
     before = census(root)
     # Fixed receipt also fits within the precharge; archive is already counted.
     attempt.check(total+1024)

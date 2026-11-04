@@ -12,7 +12,7 @@
     "M0 observation is manual diagnostic-only on a separately fixed product; no forecast starts it or replaces failed M0 acceptance.",
     "Bounded maintenance comparison is a manually granted diagnostic on fixed baseline/candidate products; no forecast starts it or establishes cost, M0 or native acceptance."
   ],
-  "discovery_source_sha256": "5133192e9652c4b90490a71703a8496e1fca57c121e0f4fc941692334544e680",
+  "discovery_source_sha256": "f3881b1e9de6069304bd04aed1e38c8bf72a8e238ca23d4c2edaa240177d4a02",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
@@ -2346,13 +2346,13 @@
           }
         }
       },
-      "git_blob": "4a4a5437a0d8dd6423f80db5a3ba5f84e2a05f27",
+      "git_blob": "b0d15ae61654940cbed129a07a472f35e587bec7",
       "jobs": {
         "original-elf": {
           "checkout": [],
           "commands": [
             {
-              "command_sha256": "a720f8bc0bfa91f3f75a0a64c2962ebb999dc6b0115bb94185fc490c714d32e4",
+              "command_sha256": "5b5a4505bb3ac2f39480899c3a29a9187a5bf6ad6243adfa2f564e209af5aa55",
               "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:25",
               "env": {
                 "BOOTSTRAP_TOKEN": "${{ github.token }}",
@@ -2389,7 +2389,7 @@
           "checkout": [],
           "commands": [
             {
-              "command_sha256": "a720f8bc0bfa91f3f75a0a64c2962ebb999dc6b0115bb94185fc490c714d32e4",
+              "command_sha256": "5b5a4505bb3ac2f39480899c3a29a9187a5bf6ad6243adfa2f564e209af5aa55",
               "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:121",
               "env": {
                 "BOOTSTRAP_TOKEN": "${{ github.token }}",
@@ -2422,7 +2422,7 @@
           "runs_on": "windows-2025"
         }
       },
-      "sha256": "18317413e556d35003eb536c3dc7a15290e7485e524131323a1798b8a958a35d"
+      "sha256": "e5c99cff0bcc6551514c8de41ffc2e22c1dcc1d4eb8498d092d1e06033a2ba23"
     },
     "treedb-tests.yml": {
       "coverage": "existing execution only; triggers/path filters are unchanged",

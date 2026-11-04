@@ -39,4 +39,27 @@ assert "(source/'.git/info').mkdir(parents=True, exist_ok=True)" in source
 assert "def pulse(self):" in source and "attempt.check(total+1024)" in source
 assert "member_bytes <= declared and expanded <= total" in source
 assert "selected_written <= selected_total" in source
-print(json.dumps({'status'   :'FIXED_HOSTED_SOURCE_CONTRACT_ONLY', 'checks':26, 'closure_files':len(manifest), 'Go_executions':0}))
+assert "system == 'Linux' and n == 'go' and m.isdir() and m.size == 0" in source
+# Extract only the two original header predicates; never invoke provisioning.
+from types import SimpleNamespace
+header_checks = {node.args[1].value: compile(ast.Expression(node.args[0]), '<source-header-predicate>', 'eval')
+                 for node in ast.walk(ast.parse(source)) if isinstance(node, ast.Call)
+                 and isinstance(node.func, ast.Name) and node.func.id == 'need' and len(node.args) == 2
+                 and isinstance(node.args[1], ast.Constant) and node.args[1].value in ('tool archive nonregular member', 'unsafe tool archive')}
+def member(name, kind='file', size=0):
+    return SimpleNamespace(name=name, size=size, isdir=lambda: kind == 'dir', isfile=lambda: kind == 'file')
+header_cases = [
+    ('root_directory', [member('go', 'dir'), member('go/bin/go', size=4)], True),
+    ('root_file', [member('go')], False),
+    ('nonzero_root_directory', [member('go', 'dir', 1)], False),
+    ('duplicate', [member('go', 'dir'), member('go', 'dir')], False),
+    ('traversal', [member('go/../escape')], False),
+    ('link', [member('go/link', 'link')], False),
+    ('wrong_prefix', [member('good/bin/go')], False),
+]
+assert len(header_checks) == 2
+for label, members, expected in header_cases:
+    scope = dict(system='Linux', members=members, names=[m.name for m in members], Path=Path)
+    observed = all(eval(expr, scope) for expr in header_checks.values())
+    assert observed == expected, label
+print(json.dumps({'status':'FIXED_HOSTED_SOURCE_CONTRACT_ONLY', 'checks':27, 'header_predicate_cases':len(header_cases), 'closure_files':len(manifest), 'Go_executions':0}))
