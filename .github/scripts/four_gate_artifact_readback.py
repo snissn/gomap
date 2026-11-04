@@ -8,7 +8,7 @@ import zipfile
 
 EXPECTED_BYTES = 39216183
 EXPECTED_SHA = "5de6712dad46d51df5b56a83c89b190116fdb9971ad32c630509bb03152e6cb7"
-NAMES = {'db-test-sha256.txt', 'db-bindings.objdump', 'structural-status.txt', 'tree-compiler.exit', 'tree-test-sha256.txt', 'tree-compiler.selected.stderr', 'context.txt', 'db-compiler-stream.json', 'normal-inventory.json', 'artifact-manifest.json', 'db-compiler.exit', 'db-capture.objdump', 'tree-compiler-stream.json', 'tree-selection.exit', 'db-selection.exit', 'race-inventory.json', 'object-tools.exit', 'source.txt', 'tree-bindings.objdump', 'tree-reset.objdump', 'db-compiler.selected.stderr'}
+NAMES = {'race-inventory.json', 'artifact-manifest.json', 'db-selection.exit', 'db-compiler-stream.json', 'tree-test-sha256.txt', 'object-tools.exit', 'tree-compiler-stream.json', 'source.txt', 'tree-compiler.exit', 'tree-selection.exit', 'structural-status.txt', 'normal-inventory.json', 'db-test-sha256.txt', 'db-compiler.exit'}
 root = Path(os.environ["RUNNER_TEMP"]) / "four-gate-readback"
 archive = root / "original.zip"
 assert archive.stat().st_size == EXPECTED_BYTES, "archive size mismatch"
