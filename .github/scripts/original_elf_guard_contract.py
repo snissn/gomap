@@ -40,6 +40,25 @@ assert "def pulse(self):" in source and "attempt.check(total+1024)" in source
 assert "member_bytes <= declared and expanded <= total" in source
 assert "selected_written <= selected_total" in source
 assert "system == 'Linux' and n == 'go' and m.isdir() and m.size == 0" in source
+assert "authenticate_cached_windows_go(attempt, root)\n        else:\n            provision_go(attempt, root)" in source
+assert "'ImageOS') == 'win25-vs2026'" in source and "'ImageVersion') == '20261030.294.1'" in source
+assert "stat.FILE_ATTRIBUTE_REPARSE_POINT" in source
+assert "directories == implicit" in source and "observed_files == set(identities)" in source
+assert "sdk_writes_selected=False" in source
+assert "'size': count" in source and "ensure_ascii=True).encode('ascii')" in source
+assert "argv = [r'C:\\hostedtoolcache\\windows\\go\\1.26.10\\x64\\bin\\go.exe', *argv[1:]]" in source
+# Pure canonical data controls; no SDK walk or tool invocation.
+def identity(rows):
+    return hashlib.sha256(json.dumps(sorted(rows, key=lambda row: row['path']), sort_keys=True,
+        separators=(',', ':'), ensure_ascii=True).encode('ascii')).hexdigest()
+fixture = [{'path':'bin/go.exe','size':2,'sha256':'a'*64}, {'path':'src/x.go','size':3,'sha256':'b'*64}]
+expected_identity = identity(fixture)
+assert identity(list(reversed(fixture))) == expected_identity
+for changed in (fixture+[{'path':'extra','size':0,'sha256':'c'*64}], fixture[:-1],
+                [dict(fixture[0],size=3),fixture[1]], [dict(fixture[0],sha256='d'*64),fixture[1]],
+                [dict(fixture[0],path='bin/GO.exe'),fixture[1]]):
+    assert identity(changed) != expected_identity
+
 # Extract only the two original header predicates; never invoke provisioning.
 from types import SimpleNamespace
 header_checks = {node.args[1].value: compile(ast.Expression(node.args[0]), '<source-header-predicate>', 'eval')
@@ -62,4 +81,4 @@ for label, members, expected in header_cases:
     scope = dict(system='Linux', members=members, names=[m.name for m in members], Path=Path)
     observed = all(eval(expr, scope) for expr in header_checks.values())
     assert observed == expected, label
-print(json.dumps({'status':'FIXED_HOSTED_SOURCE_CONTRACT_ONLY', 'checks':27, 'header_predicate_cases':len(header_cases), 'closure_files':len(manifest), 'Go_executions':0}))
+print(json.dumps({'status':'FIXED_HOSTED_SOURCE_CONTRACT_ONLY', 'checks':34, 'header_predicate_cases':len(header_cases), 'closure_files':len(manifest), 'canonical_data_cases':6, 'Go_executions':0}))

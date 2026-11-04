@@ -123,6 +123,9 @@ class Attempt:
 
     def run(self, label, argv, seconds, cwd=None, env=None):
         self.check()
+        if os.name == 'nt' and argv[0] == 'go':
+            # Windows current-directory executable search must not defeat SDK identity.
+            argv = [r'C:\hostedtoolcache\windows\go\1.26.10\x64\bin\go.exe', *argv[1:]]
         started = time.monotonic()
         row = {'label': label, 'argv': argv, 'timeout_seconds': seconds, 'started_epoch': time.time()}
         self.rows.append(row)
@@ -275,6 +278,107 @@ def provision_go(attempt, root):
     executable = root/'go/bin'/('go.exe' if system == 'Windows' else 'go')
     write(root/'tool-input.json', {'go_path': str(executable), 'sha256': sha(executable),
           'archive_staging_removed_after_authentication': True})
+
+
+
+def authenticate_cached_windows_go(attempt, root):
+    # Preexisting image input only. Never install/copy/repair/fallback or write
+    # into this SDK; all new Go caches, telemetry and temporary bytes stay root.
+    need(os.environ.get('ImageOS') == 'win25-vs2026' and
+         os.environ.get('ImageVersion') == '20261030.294.1', 'exact cached SDK image required')
+    sdk = Path(r'C:\hostedtoolcache\windows\go\1.26.10\x64')
+    expected = {'schema': 'gomap-pinned-sdk-tree-v1-user-size-field',
+                'archive_sha256': '7ecd2d7260e82c59bcbd7f1077a07cee2dea607295b858df67195a1e4e09629b',
+                'file_count': 15045, 'total_bytes': 236025621,
+                'files_sha256': '1cf7b82ee4a123a2daa25d7791a0ab84f61de3419259623adc600caa8dda6225'}
+    def plain(path, directory):
+        value = path.lstat()
+        need(not value.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT and
+             not stat.S_ISLNK(value.st_mode) and
+             (stat.S_ISDIR(value.st_mode) if directory else stat.S_ISREG(value.st_mode)),
+             'cached SDK link/reparse/nonregular input')
+        return value
+    for ancestor in [*reversed(sdk.parents), sdk]:
+        plain(ancestor, True)
+    rows, directories, identities, folded = [], set(), {}, set()
+    total = 0
+    attempt.check()
+    for directory, dirs, files in os.walk(sdk, followlinks=False):
+        attempt.pulse()
+        parent = Path(directory)
+        plain(parent, True)
+        for name in sorted(dirs)+sorted(files):
+            need(name not in ('.', '..') and not name.endswith((' ', '.')) and
+                 not any(c in name for c in ('\\', '/', ':')), 'cached SDK path alias')
+            path = parent/name
+            relative = path.relative_to(sdk).as_posix()
+            need(relative.casefold() not in folded, 'cached SDK case alias')
+            folded.add(relative.casefold())
+            before = plain(path, name in dirs)
+            if name in dirs:
+                directories.add(relative)
+                continue
+            need(len(rows) < expected['file_count'] and total+before.st_size <= expected['total_bytes'],
+                 'cached SDK unexpected file/count/bytes')
+            digest = hashlib.sha256()
+            count = 0
+            with path.open('rb') as stream:
+                opened = os.fstat(stream.fileno())
+                need((opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns) ==
+                     (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns), 'cached SDK open identity')
+                while True:
+                    attempt.pulse()
+                    block = stream.read(1 << 20)
+                    if not block:
+                        break
+                    count += len(block)
+                    need(count <= before.st_size, 'cached SDK file grew during authentication')
+                    digest.update(block)
+            after = plain(path, False)
+            signature = lambda v: (v.st_dev, v.st_ino, v.st_size, v.st_mtime_ns, v.st_ctime_ns)
+            need(count == before.st_size and signature(before) == signature(after), 'cached SDK changed during authentication')
+            identities[relative] = signature(after)
+            rows.append({'path': relative, 'size': count, 'sha256': digest.hexdigest()})
+            total += count
+    rows.sort(key=lambda row: row['path'])
+    canonical = json.dumps(rows, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode('ascii')
+    need(len(rows) == expected['file_count'] and total == expected['total_bytes'] and
+         hashlib.sha256(canonical).hexdigest() == expected['files_sha256'], 'canonical complete cached SDK mismatch')
+    implicit = set()
+    for row in rows:
+        parts = row['path'].split('/')
+        implicit.update('/'.join(parts[:n]) for n in range(1, len(parts)))
+    need(directories == implicit, 'cached SDK unexpected/missing/empty directory')
+    # A final identity census catches mutation or newly added entries during the
+    # one full hash pass. No Go invocation has occurred; no SDK payload is copied.
+    observed_files, observed_dirs = set(), set()
+    for directory, dirs, files in os.walk(sdk, followlinks=False):
+        attempt.pulse()
+        plain(Path(directory), True)
+        for name in dirs:
+            path = Path(directory)/name
+            plain(path, True)
+            observed_dirs.add(path.relative_to(sdk).as_posix())
+        for name in files:
+            path = Path(directory)/name
+            relative = path.relative_to(sdk).as_posix()
+            observed_files.add(relative)
+            need(relative in identities and signature(plain(path, False)) == identities[relative],
+                 'cached SDK changed after authentication')
+    need(observed_files == set(identities) and observed_dirs == directories, 'cached SDK set changed after authentication')
+    executable = sdk/'bin/go.exe'
+    go_row = next(row for row in rows if row['path'] == 'bin/go.exe')
+    need(go_row['size'] == 15846400 and go_row['sha256'] ==
+         'de14a33fd6ab5937941f0573e5b6537f04d24979aaf1b0557de1005a28cb7add', 'cached go.exe identity')
+    attempt.check()
+    os.environ['GOROOT'] = str(sdk)
+    os.environ['PATH'] = str(sdk/'bin')+os.pathsep+os.environ['PATH']
+    write(root/'tool-input.json', dict(expected, go_path=str(executable), sha256=go_row['sha256'],
+          go_bytes=go_row['size'], directory_count=len(directories), image_os=os.environ['ImageOS'],
+          image_version=os.environ['ImageVersion'], source='preexisting read-only cached SDK; canonical user Mac official ZIP metadata',
+          schema_encoding='sorted path/size/sha256 rows; compact sort_keys ensure_ascii JSON ASCII no newline',
+          directories='exact implicit nonempty parents; official ZIP has no explicit directories',
+          copied_bytes=0, installed_bytes=0, sdk_writes_selected=False))
 
 
 def retrieve_original(attempt, root, token):
@@ -638,7 +742,9 @@ def main():
               'scope': 'new hosted diagnostic context, not original runtime equivalence'})
         if args.mode == 'windows':
             acquire_windows_source(attempt, root, token)
-        provision_go(attempt, root)
+            authenticate_cached_windows_go(attempt, root)
+        else:
+            provision_go(attempt, root)
         need(attempt.run('go-version', ['go','version'], 10) == 0, 'tool metadata')
         need((attempt.out/'go-version.stdout.log').read_text().startswith('go version go1.26.10 '), 'pinned Go tool required')
         execution_identity(attempt, root)

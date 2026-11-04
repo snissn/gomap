@@ -1120,3 +1120,9 @@ guard-interposition trace. It preserves raw profiles and standard text views;
 it does not change this command's profile interface or qualify a performance
 gate. The frozen branch plan, original artifact identities and ROOT admission
 are required before dispatch.
+
+The Windows setup correction authenticates the complete preexisting cached
+Go 1.26.10 SDK at one fixed image path before any Go command. No SDK is
+installed or copied; all new caches, telemetry, tools and outputs remain in
+the 1 GiB task root. Missing or mismatched cache identity stops without fallback.
+The original Linux setup failure and Windows resource/cleanup HOLD remain.
