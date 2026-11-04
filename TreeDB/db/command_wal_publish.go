@@ -74,9 +74,22 @@ func (rewrite *privateCOWRewriteFinalization) rewriteOwner() *transactionowner.O
 }
 
 func (rewrite *privateCOWRewriteFinalization) captureAcceptedState(state *DBState) {
-	if rewrite != nil && rewrite.acceptedStateToken != nil {
-		*rewrite.acceptedStateToken, _ = stateTokenFromState(state)
+	if rewrite == nil || rewrite.acceptedStateToken == nil {
+		return
 	}
+	out := rewrite.acceptedStateToken
+	if state == nil {
+		*out = StateToken{}
+		return
+	}
+	// Copy directly into the borrowed output. Returning a StateToken first can
+	// reserve its 48-byte temporary in every ordinary finalizer's stack frame.
+	out.CommitSeq = state.CommitSeq
+	out.RootPageID = state.RootPageID
+	out.SystemRootPageID = state.SystemRootPageID
+	out.AppliedCommandLSN = state.AppliedCommandLSN
+	out.MaxEntryRevision = state.MaxEntryRevision
+	out.LeafGenerationStateVersion = state.LeafGenerationStateVersion
 }
 
 type finalizeCommitOptions struct {
