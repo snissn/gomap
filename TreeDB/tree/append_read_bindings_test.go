@@ -10,6 +10,7 @@ import (
 type appendBindingsTestReader struct{ checksum bool }
 
 func (r *appendBindingsTestReader) Read(page.ValuePtr) ([]byte, error) { return nil, nil }
+
 func (r *appendBindingsTestReader) ReadUnsafe(page.ValuePtr) ([]byte, error) { return nil, nil }
 func (r *appendBindingsTestReader) ReadUnsafeAppend(_ page.ValuePtr, dst []byte) ([]byte, error) {
 	return dst, nil
@@ -33,6 +34,7 @@ func (r *appendBindingsTestReader) ReadLeafLogPageUnsafeViewWithState(page.LeafL
 	return nil, nil, false, LeafLogPageReadState{}, nil
 }
 func (r *appendBindingsTestReader) MarkLeafLogPageChecksumVerified(page.LeafLogPtr) {}
+
 func (r *appendBindingsTestReader) ReadChecksumEnabled() bool { return r.checksum }
 
 func appendBindingsForTest(r *appendBindingsTestReader) AppendReadBindings {
