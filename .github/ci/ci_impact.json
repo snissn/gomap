@@ -12,7 +12,7 @@
     "M0 observation is manual diagnostic-only on a separately fixed product; no forecast starts it or replaces failed M0 acceptance.",
     "Bounded maintenance comparison is a manually granted diagnostic on fixed baseline/candidate products; no forecast starts it or establishes cost, M0 or native acceptance."
   ],
-  "discovery_source_sha256": "5228e50703c5fa9c404b9a92dab87f3be60a5b1348b03fba5f24dd6402764646",
+  "discovery_source_sha256": "93941ad61f75d7c16f4d74df5d51297d311666f474a2379f91cf23f2954273b7",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
@@ -1246,7 +1246,7 @@
         "matrix": {
           "os": "ubuntu-latest"
         },
-        "race": false,
+        "race": true,
         "runs_on": "${{ matrix.os }}",
         "tags": "entry command defaults/flags retained"
       },
@@ -1261,7 +1261,7 @@
         "matrix": {
           "os": "macos-latest"
         },
-        "race": false,
+        "race": true,
         "runs_on": "${{ matrix.os }}",
         "tags": "entry command defaults/flags retained"
       },
@@ -3180,7 +3180,7 @@
       "events": {
         "push": null
       },
-      "git_blob": "2f0dcad2713230dfdf937f5087e496d1c531dcde",
+      "git_blob": "876e66581907abf240cffe967a50eac407e88815",
       "jobs": {
         "test": {
           "checkout": [
@@ -3200,6 +3200,44 @@
               "invocation": "go test ./...",
               "name": "Test",
               "working-directory": "cmd/unified_bench"
+            },
+            {
+              "command_sha256": "8801a61537a5e852a7db19dddc264b7a5fa391abe8d4938a6ee570149add4468",
+              "entrypoint": ".github/workflows/unified-bench-tests.yml:44",
+              "env": {
+                "GOMAXPROCS": "2",
+                "GOMEMLIMIT": "4GiB",
+                "GOWORK": "off"
+              },
+              "if": "runner.os == 'Linux'",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Record focused Linux qualification inputs"
+            },
+            {
+              "command_sha256": "4da367c0bf064cf8fb4d1e0856c223d4c5b03420dae945e6ceb35873cec05f5b",
+              "entrypoint": ".github/workflows/unified-bench-tests.yml:58",
+              "env": {
+                "GOMAXPROCS": "2",
+                "GOMEMLIMIT": "4GiB",
+                "GOWORK": "off",
+                "PYTHONDONTWRITEBYTECODE": "1"
+              },
+              "if": "runner.os == 'Linux'",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Focused steady-rusage controls normal (Linux)"
+            },
+            {
+              "command_sha256": "92bf0dbc35045cb724e0dfdc36224ef33c9d37db2439720a88a35c09cd888a95",
+              "entrypoint": ".github/workflows/unified-bench-tests.yml:76",
+              "env": {
+                "GOMAXPROCS": "2",
+                "GOMEMLIMIT": "4GiB",
+                "GOWORK": "off",
+                "PYTHONDONTWRITEBYTECODE": "1"
+              },
+              "if": "runner.os == 'Linux'",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Focused steady-rusage controls race (Linux)"
             }
           ],
           "environment": {},
@@ -3210,11 +3248,11 @@
             ]
           },
           "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
-          "race": false,
+          "race": true,
           "runs_on": "${{ matrix.os }}"
         }
       },
-      "sha256": "656dd3f08f5b481ab4b9a73de5d4d1f3dc365912a5e36601c74bd049d9693b5c"
+      "sha256": "0a8b9489343668929add4f0830bae6eec8fd1219225a4c3bb9b873dbd1e4405b"
     }
   }
 }
