@@ -1,91 +1,118 @@
-name: 'TreeDB: PRIMARY/M0 observer source controls (manual only)'
+name: 'TreeDB: exact PRIMARY observer format diff (manual only)'
 on:
   workflow_dispatch:
     inputs:
       expected_head:
-        description: Full independently reviewed controls-only harness commit
-        required: true
-        type: string
-      root_admission_b64:
-        description: ROOT controls-only admission JSON encoded with base64; no capture authority
+        description: Full independently reviewed format-diff-only commit
         required: true
         type: string
 permissions:
   contents: read
 jobs:
   diagnostic:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/diagnostic/primary-m0-controls-01' && github.actor_id == '1981537' && github.run_attempt == 1
-    name: exact4934 PRIMARY/M0 observer normal and race controls only
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/diagnostic/primary-m0-format-diff-01' && github.actor_id == '1981537' && github.run_attempt == 1
+    name: one exact Go1.26.10 observer format diff; no tests or source writes
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 7
     env:
-      PYTHONDONTWRITEBYTECODE: '1'
       REVIEWED_HEAD: ${{ inputs.expected_head }}
       WORKFLOW_COMMIT: ${{ github.workflow_sha }}
-      ROOT_ADMISSION_B64: ${{ inputs.root_admission_b64 }}
+      PYTHONDONTWRITEBYTECODE: '1'
+      GOTOOLCHAIN: local
+      GOENV: 'off'
     steps:
-      - name: Authenticate fresh controls-only dispatch
+      - name: Authenticate ROOT exact-head first-attempt format-only dispatch
         shell: bash
         run: |
           set -euo pipefail
           [[ "$REVIEWED_HEAD" =~ ^[0-9a-f]{40}$ && "$REVIEWED_HEAD" == "$GITHUB_SHA" && "$REVIEWED_HEAD" == "$WORKFLOW_COMMIT" ]]
-          python3 -B - <<'PY'
-          import base64,json,os,pathlib,time
-          assert os.environ['GITHUB_ACTOR_ID']=='1981537' and os.environ['GITHUB_RUN_ATTEMPT']=='1'
-          text=os.environ['ROOT_ADMISSION_B64'];assert len(text)<=16384
-          admission=json.loads(base64.b64decode(text,validate=True));assert isinstance(admission,dict)
-          expected={'schema':'primary-m0-hosted-controls-admission-v1','status':'ADMITTED_CONTROLS_ONLY',
-            'authority':'ROOT','actor_id':'1981537','expected_head':os.environ['GITHUB_SHA'],'run_attempt':'1',
-            'owner_manifest_sha256':'de927877f58f982516da5b9e766758233030b7027c8db51ee6bc341f18b7bcf4',
-            'owner_review_sha256':'20f479f9e01dd1b5f652e72ac8488c9f7a5f1b78ae574d9431604feaf372e85c',
-            'allow_product_capture':False}
-          assert all(admission.get(k)==v for k,v in expected.items())
-          root=pathlib.Path(os.environ['RUNNER_TEMP'])/'primary-m0-controls';root.mkdir()
-          (root/'dispatch-admission.json').write_text(json.dumps(admission,sort_keys=True)+'\n')
-          with open(os.environ['GITHUB_ENV'],'a') as stream:
-              stream.write('PRIMARY_M0_STARTED_MONOTONIC='+str(time.monotonic())+'\n')
-          PY
-      - name: Checkout exact reviewed binding harness
+          [[ "$GITHUB_EVENT_NAME" == workflow_dispatch && "$GITHUB_REF" == refs/heads/diagnostic/primary-m0-format-diff-01 && "$GITHUB_ACTOR_ID" == 1981537 && "$GITHUB_RUN_ATTEMPT" == 1 ]]
+          mkdir "$RUNNER_TEMP/primary-m0-format-diff"
+      - name: Checkout only exact reviewed workflow and original observer
         timeout-minutes: 1
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
+          set-safe-directory: false
           ref: ${{ github.sha }}
           fetch-depth: 1
           sparse-checkout-cone-mode: false
           sparse-checkout: |
-            /*
-            !/docs/evidence/
-            !/docs/benchmarks/
-            !/TreeDB/docs/evidence/
-            !/TreeDB/docs/benchmarks/
-      - name: Setup exact source-qualification SDK
+            /.github/workflows/treedb-mvcc-maintenance-diagnostic.yml
+            /.github/primary-m0-observers/candidate/TreeDB/mvcc/primary_allocation_observer_test.go
+      - name: Setup pinned formatter SDK only
         timeout-minutes: 2
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
         with:
           go-version: '1.26.10'
           check-latest: false
-          cache: true
-      - name: Run one fixed source and control qualification
+          cache: false
+      - name: One read-only formatter invocation with exact identities and bounded output
+        timeout-minutes: 1
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$REVIEWED_HEAD"
           test -z "$(git status --porcelain)"
-          python3 -B .github/scripts/primary_m0_hosted_controls.py guard --root "$RUNNER_TEMP/primary-m0-controls" > "$RUNNER_TEMP/primary-m0-controls/entry.stdout.log" 2> "$RUNNER_TEMP/primary-m0-controls/entry.stderr.log"
-      - name: Upload raw controls, failure and candidate source identities
+          python3 -B - <<'PY'
+          import hashlib,json,os,pathlib,resource,shutil,stat,subprocess,time
+          root=pathlib.Path(os.environ['RUNNER_TEMP'])/'primary-m0-format-diff'
+          receipt={'schema':'primary-observer-format-diff-v1','status':'INCOMPLETE','source_commit':'697e651b98b29fcefa669c7271c5c2d6dc5f7d65','harness_head':os.environ['GITHUB_SHA'],'workflow_sha':os.environ['WORKFLOW_COMMIT'],'actor_id':os.environ['GITHUB_ACTOR_ID'],'run_attempt':os.environ['GITHUB_RUN_ATTEMPT'],'diagnostic_only':True,'source_write':False,'compiler_or_test':False}
+          sha=lambda p:hashlib.sha256(p.read_bytes()).hexdigest()
+          diff=root/'gofmt.diff'; failure=None; original=None
+          try:
+              assert os.environ['REVIEWED_HEAD']==os.environ['GITHUB_SHA']==os.environ['WORKFLOW_COMMIT']
+              assert os.environ['GITHUB_ACTOR_ID']=='1981537' and os.environ['GITHUB_RUN_ATTEMPT']=='1'
+              assert os.environ['GITHUB_REF']=='refs/heads/diagnostic/primary-m0-format-diff-01'
+              original=pathlib.Path(os.environ['GITHUB_WORKSPACE'])/'.github/primary-m0-observers/candidate/TreeDB/mvcc/primary_allocation_observer_test.go'
+              assert original.is_absolute() and stat.S_ISREG(original.lstat().st_mode)
+              assert original.stat().st_size==10137 and sha(original)=='97091ef5ffbc791752e2e666b4c0f8251ac238964b2b2e164db64459217e2974'
+              go=pathlib.Path(shutil.which('go')).resolve(strict=True)
+              sdk=go.parent.parent
+              version=(sdk/'VERSION').read_text().splitlines()[0]
+              assert version=='go1.26.10'
+              tool=go.parent/'gofmt'
+              assert stat.S_ISREG(tool.lstat().st_mode) and tool.stat().st_size==3110743
+              assert sha(tool)=='3cdd3788a0a53f11d4b7552a601d4b81ed8705979313427f4a0103c3a5b0bfd9'
+              receipt.update(input={'path':str(original),'bytes':original.stat().st_size,'sha256':sha(original)},tool={'path':str(tool),'bytes':tool.stat().st_size,'sha256':sha(tool),'sdk_version':version,'version_file_sha256':sha(sdk/'VERSION')},argv=[str(tool),'-d',str(original)])
+              # One combined child file; reserve room for metadata and duplicate console text.
+              def output_bound():
+                  maximum=(32*1024*1024-65536)//2
+                  resource.setrlimit(resource.RLIMIT_FSIZE,(maximum,maximum))
+              env={k:v for k,v in os.environ.items() if k not in ('GH_TOKEN','GITHUB_TOKEN','GH_ENTERPRISE_TOKEN')}
+              receipt['start_unix_ns']=time.time_ns(); started=time.monotonic()
+              with diff.open('xb') as stream:
+                  try:
+                      child=subprocess.run(receipt['argv'],stdout=stream,stderr=subprocess.STDOUT,timeout=30,env=env,check=False,preexec_fn=output_bound)
+                      receipt.update(exit_code=child.returncode,joined=True,timed_out=False)
+                  except subprocess.TimeoutExpired:
+                      receipt.update(exit_code=None,joined=True,timed_out=True)
+                      raise RuntimeError('formatter exceeded30s; killed and joined by subprocess.run')
+              receipt.update(elapsed_seconds=time.monotonic()-started,end_unix_ns=time.time_ns(),diff={'bytes':diff.stat().st_size,'sha256':sha(diff)},input_after_sha256=sha(original))
+              assert receipt['input_after_sha256']==receipt['input']['sha256']
+              assert receipt['exit_code']==0 and not receipt['timed_out']
+              receipt['status']='FORMAT_DIFF_COMPLETE_NOT_SOURCE_QUALIFICATION'
+          except BaseException as error:
+              failure=error;receipt['error']=type(error).__name__+': '+str(error)
+          finally:
+              if original is not None and original.exists(): receipt['input_after_sha256']=sha(original)
+              if diff.exists(): receipt['diff']={'bytes':diff.stat().st_size,'sha256':sha(diff)}
+              data=(json.dumps(receipt,sort_keys=True,indent=2)+'\n').encode()
+              assert len(data)<=32768
+              (root/'receipt.json').write_bytes(data)
+              # Diff is source text only; no environment, token or request payload is printed.
+              print('FORMAT_DIFF_RECEIPT_BEGIN');print(data.decode(),end='');print('FORMAT_DIFF_RECEIPT_END')
+              if diff.exists():
+                  assert 2*diff.stat().st_size+2*len(data)<=32*1024*1024
+                  print('EXACT_GOFMT_DIFF_BEGIN');print(diff.read_text(errors='replace'),end='');print('EXACT_GOFMT_DIFF_END')
+          if failure is not None: raise SystemExit(1)
+          PY
+      - name: Retain exact source diff, formatter identity and literal exit
         if: always()
         timeout-minutes: 2
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: primary-m0-controls-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            ${{ runner.temp }}/primary-m0-controls/output
-            ${{ runner.temp }}/primary-m0-controls/guard
-            ${{ runner.temp }}/primary-m0-controls/*.json
-            ${{ runner.temp }}/primary-m0-controls/*.log
+          name: primary-m0-format-diff-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/primary-m0-format-diff
           if-no-files-found: error
-          include-hidden-files: true
           retention-days: 14

@@ -2326,19 +2326,14 @@
         "workflow_dispatch": {
           "inputs": {
             "expected_head": {
-              "description": "Full independently reviewed controls-only harness commit",
-              "required": true,
-              "type": "string"
-            },
-            "root_admission_b64": {
-              "description": "ROOT controls-only admission JSON encoded with base64; no capture authority",
+              "description": "Full independently reviewed format-diff-only commit",
               "required": true,
               "type": "string"
             }
           }
         }
       },
-      "git_blob": "7a87f18307cfcfde311bf7ccd77133ec52928d0d",
+      "git_blob": "2762b575688a324b45dc84b94118304a4978964a",
       "jobs": {
         "diagnostic": {
           "checkout": [
@@ -2346,31 +2341,30 @@
               "fetch-depth": 1,
               "persist-credentials": false,
               "ref": "${{ github.sha }}",
-              "sparse-checkout": "/*\n!/docs/evidence/\n!/docs/benchmarks/\n!/TreeDB/docs/evidence/\n!/TreeDB/docs/benchmarks/\n",
+              "set-safe-directory": false,
+              "sparse-checkout": "/.github/workflows/treedb-mvcc-maintenance-diagnostic.yml\n/.github/primary-m0-observers/candidate/TreeDB/mvcc/primary_allocation_observer_test.go\n",
               "sparse-checkout-cone-mode": false
             }
           ],
           "commands": [
             {
-              "command_sha256": "5af88c3ce192306e2ca4882e92bb785c470a10b3c158fe1cbea0bd65c578951b",
-              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:29",
+              "command_sha256": "033255b21f8c6ccb0f82abb686830ea45489ccef528c144b53b1ee05fbf7f946",
+              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:26",
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
-              "name": "Authenticate fresh controls-only dispatch"
+              "name": "Authenticate ROOT exact-head first-attempt format-only dispatch"
             },
             {
-              "command_sha256": "787449b9a34b3594d0df448e2dcb16ba19f12318ff4e6d2dec06291283aacf48",
-              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:73",
-              "env": {
-                "GH_TOKEN": "${{ github.token }}"
-              },
+              "command_sha256": "1bdf05cb5f8dacd0e436dad77d1ac695bd10cb23dac33f71eb831f214649796d",
+              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:53",
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
-              "name": "Run one fixed source and control qualification"
+              "name": "One read-only formatter invocation with exact identities and bounded output"
             }
           ],
           "environment": {
+            "GOENV": "off",
+            "GOTOOLCHAIN": "local",
             "PYTHONDONTWRITEBYTECODE": "1",
             "REVIEWED_HEAD": "${{ inputs.expected_head }}",
-            "ROOT_ADMISSION_B64": "${{ inputs.root_admission_b64 }}",
             "WORKFLOW_COMMIT": "${{ github.workflow_sha }}"
           },
           "matrix": null,
@@ -2379,7 +2373,7 @@
           "runs_on": "ubuntu-24.04"
         }
       },
-      "sha256": "a41b52a6a9b42f0ce150bc3c2f48a59e5a2c69d71fb3a077632ff8b0e3f1c74c"
+      "sha256": "5be92df1258075fb5c9772385bf2070dc822c0fb08d1be8c4f423f6cf5b03ab3"
     },
     "treedb-tests.yml": {
       "coverage": "existing execution only; triggers/path filters are unchanged",
