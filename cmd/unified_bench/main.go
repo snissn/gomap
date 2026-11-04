@@ -1115,6 +1115,8 @@ func startCheckpointCPUProfile(cfg BenchConfig, profileHooks benchmarkProfileHoo
 }
 
 type benchmarkProfileHooks struct {
+	readProcessUsage                func() (processUsageCounters, error)
+	writeProcessUsage               func(string, *processUsageReceipt) error
 	startCPUProfile                 func(io.Writer) error
 	stopCPUProfile                  func()
 	writeAllocsSnapshotTemp         func(string) (string, error)
@@ -1125,6 +1127,8 @@ type benchmarkProfileHooks struct {
 
 func defaultBenchmarkProfileHooks() benchmarkProfileHooks {
 	return benchmarkProfileHooks{
+		readProcessUsage:                readProcessUsage,
+		writeProcessUsage:               writeProcessUsageReceipt,
 		startCPUProfile:                 pprof.StartCPUProfile,
 		stopCPUProfile:                  pprof.StopCPUProfile,
 		writeAllocsSnapshotTemp:         writeAllocsSnapshotTemp,
@@ -1140,6 +1144,12 @@ func profileHooksFromConfig(cfg BenchConfig) benchmarkProfileHooks {
 		return hooks
 	}
 	override := *cfg.profileHooks
+	if override.readProcessUsage != nil {
+		hooks.readProcessUsage = override.readProcessUsage
+	}
+	if override.writeProcessUsage != nil {
+		hooks.writeProcessUsage = override.writeProcessUsage
+	}
 	if override.startCPUProfile != nil {
 		hooks.startCPUProfile = override.startCPUProfile
 	}
@@ -2497,6 +2507,10 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		return BenchRun{}, err
 	}
 	testsToRun := normalizeTests(parseList(cfg.TestsArg))
+	usage, err := selectedProcessUsage(cfg, dbNames, testsToRun, processUsageSupported, profileHooks.readProcessUsage)
+	if err != nil {
+		return BenchRun{}, err
+	}
 
 	// Initialize DBs
 	instances := make([]*DBInstance, 0)
@@ -2817,6 +2831,12 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			valPos = 0
 		}
 
+		// The optional receipt requires the original real final checkpoint.
+		if steady && usage != nil {
+			if _, ok := db.(checkpointer); !ok {
+				return 0, fmt.Errorf("process usage requires final checkpoint support")
+			}
+		}
 		var stopSteadyCPUProfile func()
 		if steady && batchWriteSteadyCPUProfileStart != nil {
 			if err := batchWriteSteadyCPUProfileStart(); err != nil {
@@ -2828,6 +2848,11 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					stopSteadyCPUProfile()
 				}
 			}()
+		}
+		if steady && usage != nil {
+			if err := usage.sample(); err != nil {
+				return 0, err
+			}
 		}
 		start := time.Now()
 		pc := newPeriodicCheckpoint(cfg)
@@ -2927,6 +2952,11 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			}
 		}
 		elapsed := time.Since(start)
+		if steady && usage != nil {
+			if err := usage.sample(); err != nil {
+				return 0, err
+			}
+		}
 		if stopSteadyCPUProfile != nil {
 			stopSteadyCPUProfile()
 			stopSteadyCPUProfile = nil
@@ -4956,6 +4986,12 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			batchWriteSteadyCPUProfileStart = nil
 			batchWriteSteadyCPUProfileStop = nil
 			finishCPUProfile()
+			if usage != nil {
+				runErr = usage.finish(runErr)
+				if receiptErr := profileHooks.writeProcessUsage(usage.path, &usage.receipt); receiptErr != nil {
+					runErr = errors.Join(runErr, fmt.Errorf("process usage receipt: %w", receiptErr))
+				}
+			}
 
 			blockAfterPath := ""
 			mutexAfterPath := ""

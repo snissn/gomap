@@ -1904,3 +1904,32 @@ reported separately. Fixed-process artifacts live under
 `public-write-plan.json`, `source-binding.json`, `cell-*-receipt.json`,
 `cell-*.log`, and `result.json`. This diagnostic has no numerical acceptance
 threshold and does not replace final G1 or actual command/Mongo gates.
+
+
+### Opt-in steady-work process usage receipt
+
+Linux-only diagnostics can set `GOMAP_DIAGNOSTIC_STEADY_RUSAGE` to an absolute,
+new JSON receipt path. Select exactly one DB, only `batch_write_steady`, and its
+existing `-cpuprofile`/`-cpuprofile-tests batch_write_steady` path. The DB must
+support the original final checkpoint. An empty variable performs zero usage
+reads or receipt writes; unsupported platforms refuse selected mode before DB
+initialization. This private opt-in adds no benchmark, profile filename, result
+schema, checker, threshold, workflow or production-default change.
+
+The two `RUSAGE_SELF` reads surround the original steady work and successful
+final checkpoint. They follow CPU-profile start and precede CPU-profile stop;
+the original throughput timer excludes their read windows. The receipt records
+actual wall bounds, monotonic read costs and interval bounds, user/system CPU,
+minor/major faults and voluntary/involuntary context switches. It covers all
+threads of this process, not child CPU, and is not pprof's sampled population.
+No observer cost is subtracted. The receipt is written after profiling stops.
+
+`Scope=WORK_INTERVAL` and `Completed=true` certify only the two-read interval,
+not post-run checkpoints, DB Close or lifecycle success. Missing/read-error/
+regressing counters fail the diagnostic; a failed original final checkpoint
+cannot produce a completed interval. Original errors remain first and secondary
+receipt write/Close/removal errors remain joined. Any nonzero benchmark or
+lifecycle result still fails the run. The destination must be absent; output is
+exclusive mode 0600 and bounded to 4096 bytes. These JSON receipts are separate
+diagnostic artifacts, not benchprof inputs or a replacement CPU gate. Preserve
+all original samples and gate failures when interpreting them.
