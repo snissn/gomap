@@ -814,12 +814,6 @@ func openColumnGraphTypedColumnVectorTestCollection1782(tb testing.TB, dims, m i
 
 func openColumnGraphTypedColumnVectorTestCollectionWithIndexes1782(tb testing.TB, dims, m int, rows []columnGraphRebuildInputRowV2A, extraVectorIndexes []VectorIndexDefinition, openOptions ...backenddb.Options) (string, *backenddb.DB, *Collection, VectorIndexDefinition) {
 	tb.Helper()
-	return openColumnGraphTypedColumnVectorTestCollectionWithSetup1782(tb, dims, m, rows, extraVectorIndexes, nil, openOptions...)
-}
-
-// beforeOpen may prepare fresh fixture files before any DB/journal owns them.
-func openColumnGraphTypedColumnVectorTestCollectionWithSetup1782(tb testing.TB, dims, m int, rows []columnGraphRebuildInputRowV2A, extraVectorIndexes []VectorIndexDefinition, beforeOpen func(testing.TB, string), openOptions ...backenddb.Options) (string, *backenddb.DB, *Collection, VectorIndexDefinition) {
-	tb.Helper()
 	if len(openOptions) > 1 {
 		tb.Fatal("openColumnGraphTypedColumnVectorTestCollectionWithIndexes1782 accepts at most one options value")
 	}
@@ -830,9 +824,6 @@ func openColumnGraphTypedColumnVectorTestCollectionWithSetup1782(tb testing.TB, 
 	}
 	if err := backenddb.SaveFormatConfig(dir, format); err != nil {
 		tb.Fatalf("SaveFormatConfig: %v", err)
-	}
-	if beforeOpen != nil {
-		beforeOpen(tb, dir)
 	}
 	var d *backenddb.DB
 	if len(openOptions) == 0 {

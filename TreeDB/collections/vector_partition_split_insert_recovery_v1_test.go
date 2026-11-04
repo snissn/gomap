@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -175,7 +176,7 @@ func TestSplitVectorInsertTerminalTailRecoveryV1(t *testing.T) {
 			name = "corrupt-applied-durable-frame"
 		}
 		t.Run(name, func(t *testing.T) {
-			dir, database, c, _, m := newVectorPartitionLiveProductionFixtureWithPartitionsAndSetupV1(t, nil, 1, splitCollectionRecoveryPrepareFixedWALV1, backenddb.Options{CommandWAL: true, ResolvedProfile: backenddb.ProfileCommandWALDurable})
+			dir, database, c, _, m := newVectorPartitionLiveProductionFixtureWithPartitionsV1(t, nil, 1, backenddb.Options{CommandWAL: true, ResolvedProfile: backenddb.ProfileCommandWALDurable})
 			if err := c.EnsureVectorPartitionLiveBindingV1(t.Context(), m); err != nil {
 				t.Fatal(err)
 			}
@@ -208,7 +209,17 @@ func TestSplitVectorInsertTerminalTailRecoveryV1(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if len(frames) > 0 && frames[len(frames)-1].LSN == applied {
+				for i, frame := range frames {
+					if frame.LSN != applied {
+						continue
+					}
+					if frame.Kind != commitlog.CommandKindCollectionSplitVectorInsertV1 || frame.Scope != commitlog.CommandScopeCollection ||
+						frame.PayloadFormat != commitlog.PayloadFormatCollectionSplitVectorInsertV1 || frame.DurabilityClass != commitlog.CommandDurabilityDurable {
+						t.Fatal("acknowledged source command frame has unexpected identity")
+					}
+					if path != "" || i != len(frames)-1 {
+						t.Fatal("acknowledged source command frame is ambiguous or nonterminal")
+					}
 					path = candidate
 				}
 			}
@@ -216,14 +227,7 @@ func TestSplitVectorInsertTerminalTailRecoveryV1(t *testing.T) {
 				t.Fatal("missing acknowledged source command frame")
 			}
 			if corruptPrefix {
-				image, err := os.ReadFile(path)
-				if err != nil {
-					t.Fatal(err)
-				}
-				start, length, _ := splitCollectionRecoveryFixedExtentV1(t, image, applied)
-				// Damage the acknowledged inner frame, rather than unused reserve.
-				image[start+96+length-1] ^= 0xff
-				if err := os.WriteFile(path, image, 0600); err != nil {
+				if err := splitCollectionRecoveryDamageClosedFrameV1(path, applied, true); err != nil {
 					t.Fatal(err)
 				}
 			} else {
@@ -249,20 +253,7 @@ func TestSplitVectorInsertTerminalTailRecoveryV1(t *testing.T) {
 				if err := writer.Close(); err != nil {
 					t.Fatal(err)
 				}
-				image, err := os.ReadFile(path)
-				if err != nil {
-					t.Fatal(err)
-				}
-				start, length, end := splitCollectionRecoveryFixedExtentV1(t, image, applied+1)
-				const witnessBytes, classifiablePrefixBytes = 96, 8 + 56
-				if length <= classifiablePrefixBytes {
-					t.Fatal("suffix has no incomplete body")
-				}
-				// Preserve valid start bounds and the complete V2 identity while
-				// interrupting body/footer writes into initialized zero reserve.
-				clear(image[start+witnessBytes+classifiablePrefixBytes : start+witnessBytes+length])
-				clear(image[end-witnessBytes : end])
-				if err := os.WriteFile(path, image, 0600); err != nil {
+				if err := splitCollectionRecoveryDamageClosedFrameV1(path, applied+1, false); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -487,61 +478,388 @@ func TestSplitInsertIdentityCapacityCountsTombstonesV1(t *testing.T) {
 	}
 }
 
-// This recovery fixture mutates fixed-container witnesses, so establish that
-// format before the first owning Open. Production may select stream containers
-// on memory filesystems; never convert a populated or live production segment.
-func splitCollectionRecoveryPrepareFixedWALV1(t testing.TB, dir string) {
+
+// These helpers run only after the actual DB/journal (and any suffix writer)
+// has checked Close. They never choose the production container or rewrite a
+// live writer. The private fixture directory has no concurrent file mutator.
+const splitCollectionRecoveryImageLimitV1 = 64 << 20 // existing fixed WAL physical budget
+
+// Read an exact bounded image, without os.ReadFile's growing backing array.
+func splitCollectionRecoveryReadImageV1(path string) (image []byte, err error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { err = errors.Join(err, f.Close()) }()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() || info.Size() < 8 || info.Size() > splitCollectionRecoveryImageLimitV1 {
+		return nil, errors.New("unsupported recovery fixture image bounds")
+	}
+	image = make([]byte, int(info.Size()))
+	if _, err := io.ReadFull(f, image); err != nil {
+		return nil, err
+	}
+	var extra [1]byte
+	if n, err := f.Read(extra[:]); n != 0 || err != io.EOF {
+		return nil, errors.New("recovery fixture image changed while reading")
+	}
+	return image, nil
+}
+
+type splitCollectionRecoveryFrameSpanV1 struct {
+	logicalStart, start, length, end int64
+	fixed                          bool
+	envelope                       commitlog.CommandEnvelope
+}
+
+// Obtain record boundaries and validate CRC/codec through the maintained strict
+// reader. Stream offsets are physical; fixed offsets are logical and must be
+// mapped through the existing single-frame extent witnesses below.
+func splitCollectionRecoveryLocateClosedFrameV1(path string, image []byte, lsn uint64) (span splitCollectionRecoveryFrameSpanV1, err error) {
+	if lsn == 0 || len(image) < 8 || len(image) > splitCollectionRecoveryImageLimitV1 {
+		return span, errors.New("invalid recovery fixture target or bounds")
+	}
+	reader, err := commitlog.NewReaderWithOptions(path, commitlog.Options{MaxSegmentSize: int64(len(image))})
+	if err != nil {
+		return span, err
+	}
+	defer func() { err = errors.Join(err, reader.Close()) }()
+	found := false
+	for {
+		start, err := reader.Offset()
+		if err != nil {
+			return span, err
+		}
+		envelope, err := reader.ReadCommandFrameV2()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return span, err
+		}
+		end, err := reader.Offset()
+		if err != nil {
+			return span, err
+		}
+		if end <= start || end-start <= 8+56 || end > int64(len(image)) {
+			return span, errors.New("unsupported recovery fixture frame bounds")
+		}
+		if found {
+			return span, errors.New("recovery fixture target is duplicate or nonterminal")
+		}
+		if envelope.LSN == lsn {
+			found = true
+			// Retain only scalar identity, never decoded payload aliases.
+			span = splitCollectionRecoveryFrameSpanV1{logicalStart: start, start: start, length: end - start, end: end,
+				envelope: commitlog.CommandEnvelope{Version: envelope.Version, LSN: envelope.LSN, Kind: envelope.Kind,
+					Scope: envelope.Scope, PayloadFormat: envelope.PayloadFormat, DurabilityClass: envelope.DurabilityClass}}
+		}
+	}
+	if !found {
+		return span, errors.New("missing recovery fixture frame LSN")
+	}
+	if string(image[:8]) == "TDBWAL\x03\x00" {
+		start, length, end, err := splitCollectionRecoveryFixedExtentV1(image, lsn)
+		if err != nil {
+			return span, err
+		}
+		if length != span.length {
+			return span, errors.New("recovery fixture extent is not exactly one frame")
+		}
+		span.fixed, span.start, span.end = true, start+96, end
+	} else if span.end != int64(len(image)) {
+		return span, errors.New("recovery fixture stream has trailing bytes")
+	}
+	return span, nil
+}
+
+// Preserve the original fixed-container geometry: a validated start witness,
+// the actual inner frame, and the end witness within initialized capacity.
+func splitCollectionRecoveryFixedExtentV1(image []byte, lsn uint64) (int64, int64, int64, error) {
+	if len(image) < 4096 || string(image[:8]) != "TDBWAL\x03\x00" {
+		return 0, 0, 0, errors.New("fixture requires fixed WAL v3")
+	}
+	for off := int64(4096); off+96 <= int64(len(image)) && string(image[off:off+8]) == "TDBEXT\x03\x00"; {
+		rawLength := binary.LittleEndian.Uint64(image[off+40 : off+48])
+		rawEnd := binary.LittleEndian.Uint64(image[off+48 : off+56])
+		// Check unsigned disk fields before conversion or offset arithmetic.
+		if rawLength == 0 || rawEnd > uint64(len(image)) || rawEnd <= uint64(off+192) || rawLength > rawEnd-uint64(off)-192 {
+			return 0, 0, 0, errors.New("invalid fixture extent bounds")
+		}
+		if binary.LittleEndian.Uint64(image[off+56:off+64]) == lsn && binary.LittleEndian.Uint64(image[off+64:off+72]) == lsn {
+			return off, int64(rawLength), int64(rawEnd), nil
+		}
+		off = int64(rawEnd)
+	}
+	return 0, 0, 0, fmt.Errorf("missing single-frame extent LSN %d", lsn)
+}
+
+func splitCollectionRecoveryDamageClosedFrameV1(path string, lsn uint64, corrupt bool) error {
+	image, err := splitCollectionRecoveryReadImageV1(path)
+	if err != nil {
+		return err
+	}
+	span, err := splitCollectionRecoveryLocateClosedFrameV1(path, image, lsn)
+	if err != nil {
+		return err
+	}
+	const classifiablePrefixBytes = 8 + 56 // segment header plus complete V2 identity
+	if !corrupt && span.envelope.DurabilityClass != commitlog.CommandDurabilityRelaxed {
+		return errors.New("incomplete recovery fixture frame must be relaxed")
+	}
+	if corrupt {
+		// Leave the stored CRC (and fixed witnesses) unchanged.
+		image[span.start+span.length-1] ^= 0xff
+	} else if span.fixed {
+		// Keep start bounds and identity; interrupt body/footer in zero reserve.
+		clear(image[span.start+classifiablePrefixBytes : span.start+span.length])
+		clear(image[span.end-96 : span.end])
+	}
+	if span.fixed || corrupt {
+		if err := os.WriteFile(path, image, 0600); err != nil {
+			return err
+		}
+	} else if err := os.Truncate(path, span.start+classifiablePrefixBytes); err != nil {
+		return err
+	}
+	if !corrupt {
+		tail, _, err := commitlog.InspectCommandFrameV2TerminalTail(path, span.logicalStart)
+		if err != nil {
+			return err
+		}
+		if tail.Version != span.envelope.Version || tail.LSN != lsn || tail.Kind != span.envelope.Kind ||
+			tail.Scope != span.envelope.Scope || tail.PayloadFormat != span.envelope.PayloadFormat ||
+			tail.DurabilityClass != commitlog.CommandDurabilityRelaxed {
+			return errors.New("incomplete recovery fixture lost actual frame identity")
+		}
+	}
+	return nil
+}
+
+// Direct controls use genuine maintained writers. These files are never owned
+// by a DB, and every writer is closed before locating or damaging its records.
+func splitCollectionRecoveryControlFileV1(t *testing.T, fixed bool, classes ...commitlog.CommandDurabilityClass) string {
 	t.Helper()
-	walDir := backenddb.WALDirPath(dir)
-	if err := os.MkdirAll(walDir, 0o755); err != nil {
-		t.Fatal(err)
+	path := filepath.Join(t.TempDir(), commitlog.CommandSegmentName(0, 1))
+	var writer *commitlog.Writer
+	var err error
+	if fixed {
+		writer, err = commitlog.NewFixedWriterWithCapacity(path, 4_199_424)
+	} else {
+		writer, err = commitlog.NewWriter(path)
 	}
-	path := filepath.Join(walDir, commitlog.CommandSegmentName(0, 1))
-	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("fixed recovery fixture requires a new unowned segment: %v", err)
-	}
-	// Match the journal's existing initial physical reservation (not its larger
-	// growth budget): fixedWALDefaultCapacity in internal/commitlog/fixed_wal.go.
-	const initialCapacity = 4_199_424
-	writer, err := commitlog.NewFixedWriterWithCapacity(path, initialCapacity)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := writer.Close(); err != nil {
-		t.Fatal(err)
-	}
-	reader, err := commitlog.NewReader(path)
+	closed := false
+	t.Cleanup(func() {
+		if !closed {
+			if err := writer.Close(); err != nil {
+				t.Errorf("control writer Close: %v", err)
+			}
+		}
+	})
+	payload, err := commitlog.EncodeRawKVBatchPayload([]commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: []byte("actual-control-key"), Value: []byte("actual-control-body")}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	emptyFixed := reader.IsEmptyFixedContainer()
-	if err := reader.Close(); err != nil {
+	for i, class := range classes {
+		if err := writer.AppendCommand(commitlog.CommandEnvelope{Version: commitlog.CommandFrameVersionV2, LSN: uint64(i + 1),
+			DurabilityClass: class, Kind: commitlog.CommandKindRawKVBatch, Scope: commitlog.CommandScopeRawKV,
+			PayloadFormat: commitlog.PayloadFormatRawKVBatchV1, Payload: payload}); err != nil {
+			t.Fatal(err)
+		}
+		// Model the accepted prefix and later append as distinct actual extents.
+		if err := writer.Flush(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	err = writer.Close()
+	closed = true
+	if err != nil {
 		t.Fatal(err)
 	}
-	if !emptyFixed {
-		t.Fatal("fixed recovery fixture did not create an empty fixed container")
+	return path
+}
+
+func TestSplitCollectionRecoveryActualContainerFaultsV1(t *testing.T) {
+	for _, fixed := range []bool{false, true} {
+		for _, corrupt := range []bool{false, true} {
+			name := fmt.Sprintf("stream=%t/corrupt=%t", !fixed, corrupt)
+			t.Run(name, func(t *testing.T) {
+				if fixed && !commitlog.FixedWALCreationSupported() {
+					// This platform's maintained factory explicitly refuses fixed
+					// creation. Verify refusal; do not skip or claim fixed execution.
+					path := filepath.Join(t.TempDir(), commitlog.CommandSegmentName(0, 1))
+					if w, err := commitlog.NewFixedWriterWithCapacity(path, 4_199_424); err == nil {
+						_ = w.Close()
+						t.Fatal("unsupported platform unexpectedly created fixed WAL")
+					}
+					if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+						t.Fatalf("unsupported fixed creation left a file: %v", err)
+					}
+					t.Log("fixed creation refusal only; no fixed-format positive qualification on this platform")
+					return
+				}
+				classes := []commitlog.CommandDurabilityClass{commitlog.CommandDurabilityDurable}
+				target := uint64(1)
+				if !corrupt {
+					classes = append(classes, commitlog.CommandDurabilityRelaxed)
+					target = 2
+				}
+				path := splitCollectionRecoveryControlFileV1(t, fixed, classes...)
+				before, err := splitCollectionRecoveryReadImageV1(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				span, err := splitCollectionRecoveryLocateClosedFrameV1(path, before, target)
+				if err != nil || span.fixed != fixed {
+					t.Fatalf("actual container fixed=%t want=%t err=%v", span.fixed, fixed, err)
+				}
+				if !fixed {
+					// Same real stream is rejected by the old fixed-only assumption.
+					if _, _, _, err := splitCollectionRecoveryFixedExtentV1(before, target); err == nil {
+						t.Fatal("old fixed-only locator accepted stream")
+					}
+				}
+				if err := splitCollectionRecoveryDamageClosedFrameV1(path, target, corrupt); err != nil {
+					t.Fatal(err)
+				}
+				after, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if corrupt {
+					want := append([]byte(nil), before...)
+					want[span.start+span.length-1] ^= 0xff
+					if !bytes.Equal(after, want) {
+						t.Fatal("corruption changed bytes outside actual frame body")
+					}
+				} else if fixed {
+					want := append([]byte(nil), before...)
+					clear(want[span.start+8+56 : span.start+span.length])
+					clear(want[span.end-96 : span.end])
+					if !bytes.Equal(after, want) {
+						t.Fatal("fixed tail mutation changed prefix/start witness/reservation")
+					}
+				} else if !bytes.Equal(after, before[:span.start+8+56]) {
+					t.Fatal("stream tail did not preserve exact complete identity prefix")
+				}
+				reader, err := commitlog.NewReader(path)
+				if corrupt && errors.Is(err, commitlog.ErrCorrupt) {
+					// Fixed containers validate the outer extent CRC at construction.
+					return
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !corrupt {
+					env, err := reader.ReadCommandFrameV2()
+					if err != nil || env.LSN != 1 || env.DurabilityClass != commitlog.CommandDurabilityDurable {
+						closeErr := reader.Close()
+						t.Fatalf("durable prefix changed: LSN=%d err=%v close=%v", env.LSN, err, closeErr)
+					}
+				}
+				_, readErr := reader.ReadCommandFrameV2()
+				closeErr := reader.Close()
+				if closeErr != nil {
+					t.Fatal(closeErr)
+				}
+				wantErr := commitlog.ErrCommandWALTerminalTail
+				if corrupt {
+					wantErr = commitlog.ErrCorrupt
+				}
+				if !errors.Is(readErr, wantErr) {
+					t.Fatalf("actual damaged frame error=%v want=%v", readErr, wantErr)
+				}
+			})
+		}
 	}
 }
 
-// Locate the single-frame extent written by this fixture. Format-specific fault
-// injection must preserve initialized capacity and never mistake physical EOF
-// for the end of the accepted command stream.
-func splitCollectionRecoveryFixedExtentV1(t *testing.T, image []byte, lsn uint64) (int64, int64, int64) {
-	t.Helper()
-	if len(image) < 4096 || string(image[:8]) != "TDBWAL\x03\x00" {
-		t.Fatal("fixture requires fixed WAL v3")
+func TestSplitCollectionRecoveryFaultRefusalsV1(t *testing.T) {
+	for _, name := range []string{"missing-lsn", "nonterminal-lsn", "durable-incomplete", "invalid-crc", "short-image", "unknown-format", "compressed", "image-capacity"} {
+		t.Run(name, func(t *testing.T) {
+			path := splitCollectionRecoveryControlFileV1(t, false, commitlog.CommandDurabilityDurable, commitlog.CommandDurabilityRelaxed)
+			target, corrupt := uint64(2), true
+			switch name {
+			case "missing-lsn":
+				target = 3
+			case "nonterminal-lsn":
+				target = 1
+			case "durable-incomplete":
+				path = splitCollectionRecoveryControlFileV1(t, false, commitlog.CommandDurabilityDurable)
+				target, corrupt = 1, false
+			case "invalid-crc", "compressed":
+				image, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if name == "compressed" {
+					// Unsupported-layout input only; never counted as a valid frame.
+					image[3] |= 0x80
+				} else {
+					image[len(image)-1] ^= 0xff
+				}
+				if err := os.WriteFile(path, image, 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "short-image", "unknown-format":
+				image := []byte("unknown!")
+				if name == "short-image" {
+					image = image[:3]
+				}
+				if err := os.WriteFile(path, image, 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "image-capacity":
+				// Sparse refusal input, not a valid container or claimed record.
+				if err := os.Truncate(path, splitCollectionRecoveryImageLimitV1+1); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var want []byte
+			if name != "image-capacity" {
+				want, err = os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := splitCollectionRecoveryDamageClosedFrameV1(path, target, corrupt); err == nil {
+				t.Fatal("invalid target/layout accepted")
+			}
+			after, err := os.Stat(path)
+			if err != nil || after.Size() != before.Size() {
+				t.Fatalf("refusal changed file size: %v", err)
+			}
+			if name != "image-capacity" {
+				got, err := os.ReadFile(path)
+				if err != nil || !bytes.Equal(got, want) {
+					t.Fatalf("refusal mutated file: %v", err)
+				}
+			}
+		})
 	}
-	for off := int64(4096); off+96 <= int64(len(image)) && string(image[off:off+8]) == "TDBEXT\x03\x00"; {
-		length := int64(binary.LittleEndian.Uint64(image[off+40 : off+48]))
-		end := int64(binary.LittleEndian.Uint64(image[off+48 : off+56]))
-		if length <= 0 || end <= off+192 || end > int64(len(image)) || length > end-off-192 {
-			t.Fatal("invalid fixture extent bounds")
-		}
-		if binary.LittleEndian.Uint64(image[off+56:off+64]) == lsn && binary.LittleEndian.Uint64(image[off+64:off+72]) == lsn {
-			return off, length, end
-		}
-		off = end
+	for _, name := range []string{"short-fixed-header", "extent-bounds"} {
+		t.Run(name, func(t *testing.T) {
+			image := []byte("TDBWAL\x03\x00")
+			if name == "extent-bounds" {
+				image = append(image, make([]byte, 4096+96-len(image))...)
+				copy(image[4096:], "TDBEXT\x03\x00")
+				binary.LittleEndian.PutUint64(image[4096+40:], ^uint64(0))
+				binary.LittleEndian.PutUint64(image[4096+48:], ^uint64(0))
+			}
+			before := append([]byte(nil), image...)
+			if _, _, _, err := splitCollectionRecoveryFixedExtentV1(image, 1); err == nil || !bytes.Equal(image, before) {
+				t.Fatal("invalid fixed extent bounds accepted or mutated")
+			}
+		})
 	}
-	t.Fatalf("missing single-frame extent LSN %d", lsn)
-	return 0, 0, 0
 }
