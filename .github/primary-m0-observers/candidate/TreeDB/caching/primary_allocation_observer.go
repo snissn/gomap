@@ -12,25 +12,25 @@ import (
 var primaryAllocationObservation atomic.Pointer[PrimaryAllocationObservation]
 
 type PrimaryAllocationObservation struct {
-	checkpoints atomic.Uint64
-	automatic atomic.Uint64
-	readDirs atomic.Uint64
+	checkpoints     atomic.Uint64
+	automatic       atomic.Uint64
+	readDirs        atomic.Uint64
 	readDirFinished atomic.Uint64
-	readDirErrors atomic.Uint64
-	pathBytes atomic.Uint64
-	minPathBytes atomic.Uint64
-	maxPathBytes atomic.Uint64
+	readDirErrors   atomic.Uint64
+	pathBytes       atomic.Uint64
+	minPathBytes    atomic.Uint64
+	maxPathBytes    atomic.Uint64
 }
 
 type PrimaryAllocationSeamCounters struct {
-	CheckpointCalls uint64
+	CheckpointCalls          uint64
 	AutomaticCheckpointCalls uint64
-	ReadDirCalls uint64
-	ReadDirFinished uint64
-	ReadDirErrors uint64
-	PathBytes uint64
-	MinPathBytes uint64
-	MaxPathBytes uint64
+	ReadDirCalls             uint64
+	ReadDirFinished          uint64
+	ReadDirErrors            uint64
+	PathBytes                uint64
+	MinPathBytes             uint64
+	MaxPathBytes             uint64
 }
 
 // BeginPrimaryAllocationObservation rejects overlapping owners. Counters are
@@ -54,14 +54,14 @@ func (o *PrimaryAllocationObservation) Close() error {
 
 func (o *PrimaryAllocationObservation) Snapshot() PrimaryAllocationSeamCounters {
 	return PrimaryAllocationSeamCounters{
-		CheckpointCalls: o.checkpoints.Load(),
+		CheckpointCalls:          o.checkpoints.Load(),
 		AutomaticCheckpointCalls: o.automatic.Load(),
-		ReadDirCalls: o.readDirs.Load(),
-		ReadDirFinished: o.readDirFinished.Load(),
-		ReadDirErrors: o.readDirErrors.Load(),
-		PathBytes: o.pathBytes.Load(),
-		MinPathBytes: o.minPathBytes.Load(),
-		MaxPathBytes: o.maxPathBytes.Load(),
+		ReadDirCalls:             o.readDirs.Load(),
+		ReadDirFinished:          o.readDirFinished.Load(),
+		ReadDirErrors:            o.readDirErrors.Load(),
+		PathBytes:                o.pathBytes.Load(),
+		MinPathBytes:             o.minPathBytes.Load(),
+		MaxPathBytes:             o.maxPathBytes.Load(),
 	}
 }
 

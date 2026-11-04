@@ -193,7 +193,10 @@ func BenchmarkCommitAtPrimaryOnlyAfterDataGeneration(b *testing.B) {
 	}
 	observer.afterLoop()
 	b.StopTimer()
-	if observer != nil { observer.timerStopped = true; observer.mark("original-timer-stopped") }
+	if observer != nil {
+		observer.timerStopped = true
+		observer.mark("original-timer-stopped")
+	}
 	after := generation()
 	if after < before {
 		b.Fatal("DATA generation regressed")

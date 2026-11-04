@@ -101,10 +101,15 @@ func benchmarkVacuumIndexOnlineCollectionForegroundChurn(b *testing.B, legacy bo
 			observer := newM0OrdinalObserver(b, legacy, tc.name)
 			db := openVacuumCollectionBenchmarkDB(b, tc.valueSize)
 			defer func() {
-				if observer == nil { _ = db.Close(); return }
+				if observer == nil {
+					_ = db.Close()
+					return
+				}
 				err := db.Close()
 				observer.finish(b, err)
-				if err != nil { b.Fatal(err) }
+				if err != nil {
+					b.Fatal(err)
+				}
 			}()
 			if legacy {
 				disableRootPublicationForLegacyVacuumBenchmark(b, db)
@@ -126,7 +131,7 @@ func benchmarkVacuumIndexOnlineCollectionForegroundChurn(b *testing.B, legacy bo
 				writerDone := make(chan vacuumCollectionForegroundResult, 1)
 				var startOnce sync.Once
 				if observer == nil {
-				go vacuumCollectionForegroundWriter(db, start, stop, warmed, writerDone)
+					go vacuumCollectionForegroundWriter(db, start, stop, warmed, writerDone)
 				} else {
 					go vacuumCollectionForegroundWriterWithOrdinals(db, start, stop, warmed, writerDone, observer)
 				}
@@ -169,7 +174,10 @@ func benchmarkVacuumIndexOnlineCollectionForegroundChurn(b *testing.B, legacy bo
 				foregroundRanges += foreground.ranges
 
 				stats := db.vacuumOnlineStatsSnapshot()
-				if observer != nil { observer.stats = stats; observer.statsObserved = true }
+				if observer != nil {
+					observer.stats = stats
+					observer.statsObserved = true
+				}
 				total.TotalDuration += stats.TotalDuration
 				total.UserTreeDuration += stats.UserTreeDuration
 				total.SystemReserveDuration += stats.SystemReserveDuration
@@ -193,7 +201,9 @@ func benchmarkVacuumIndexOnlineCollectionForegroundChurn(b *testing.B, legacy bo
 				total.ConcurrentMutationAborts += stats.ConcurrentMutationAborts
 			}
 			b.StopTimer()
-			if observer != nil { observer.timerStopped = true }
+			if observer != nil {
+				observer.timerStopped = true
+			}
 			// Reuse existing samples outside the timer; no new per-operation clocks.
 			var foregroundOperationSum time.Duration
 			for _, latency := range foregroundLatencies {
@@ -208,7 +218,10 @@ func benchmarkVacuumIndexOnlineCollectionForegroundChurn(b *testing.B, legacy bo
 			b.ReportMetric(float64((precutoverForegroundWait-foregroundOperationSum).Nanoseconds())/float64(b.N), "diagnostic-foreground-wait-gap-ns/op")
 			b.ReportMetric(float64(otherVacuum.Nanoseconds())/float64(b.N), "diagnostic-other-vacuum-ns/op")
 			exposureMisses := verifyVacuumCollectionForegroundPoints(b, db)
-			if observer != nil { observer.exposureMisses = exposureMisses; observer.exposureChecked = true }
+			if observer != nil {
+				observer.exposureMisses = exposureMisses
+				observer.exposureChecked = true
+			}
 
 			b.ReportMetric(float64(total.TotalDuration.Nanoseconds())/float64(b.N), "vacuum-total-ns/op")
 			b.ReportMetric(float64(total.UserTreeDuration.Nanoseconds())/float64(b.N), "user-tree-ns/op")

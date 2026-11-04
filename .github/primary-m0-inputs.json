@@ -1,12 +1,12 @@
 {
   "files": {
-    ".github/primary-m0-attempt-source-proof.json": {
-      "bytes": 1813,
-      "sha256": "97fa868d49725c9ecaeba007fc7d9fda285a1d0bc7af603022872e34d28789d7"
-    },
     ".github/primary-m0-controls-README.md": {
-      "bytes": 7382,
-      "sha256": "60ae7c9387a0a84dd7e9e9e3228d3c9c2711bda752ba5f54fa8b1473830deabf"
+      "bytes": 6604,
+      "sha256": "6cceed6996c515e5137c7e5ef30f81c077408e0c629edbe478b4414fccca84b0"
+    },
+    ".github/primary-m0-observers/FORMAT_SUCCESSOR.md": {
+      "bytes": 3822,
+      "sha256": "1413af5f7a300b49f18c61e8aaf358cf1e23620643bfee9c30192857f9d06b8a"
     },
     ".github/primary-m0-observers/base/TreeDB/caching/db.go": {
       "bytes": 1431787,
@@ -29,32 +29,36 @@
       "sha256": "f7f6b5b189eeccfa860896ebb82e32c4d2856116db86b5f32f42bdb6de96d5a4"
     },
     ".github/primary-m0-observers/candidate/TreeDB/caching/primary_allocation_observer.go": {
-      "bytes": 2942,
-      "sha256": "fbddd5e40bd5668a544a36ba0a2ad7bbc9828bc3402e0ee5a118ddecd26fa26f"
+      "bytes": 3133,
+      "sha256": "a83048b2060445fe15f45f772ceb2cba1849ea558246bc7c52d0fd1b8b5c724b"
     },
     ".github/primary-m0-observers/candidate/TreeDB/caching/primary_allocation_observer_test.go": {
-      "bytes": 1822,
-      "sha256": "2d9569aa0a3bbc62fb686b81b0802c15e005387f5ecf24ed15c04a68d12d2ecb"
+      "bytes": 1878,
+      "sha256": "23719907cd6232275ced29c33807eef346734ecc266857e47904a70b3818a4e7"
     },
     ".github/primary-m0-observers/candidate/TreeDB/db/vacuum_collection_bench_test.go": {
-      "bytes": 17476,
-      "sha256": "b3ade2cad976205bcd46291fc1626d565d840dd3bd38eac2770d7a87ce17732c"
+      "bytes": 17529,
+      "sha256": "09f8b0758018fd5e2fd0994aab18463ecdffa40add6796198b81bded69ac2d81"
     },
     ".github/primary-m0-observers/candidate/TreeDB/db/vacuum_m0_ordinal_observer_test.go": {
-      "bytes": 11439,
-      "sha256": "2c2295e4f0f71f5c0806153602b0cc1607fb798e86e7accc7dd63acc12cdd4eb"
+      "bytes": 12365,
+      "sha256": "648f61eeb148809e9a42cd087e979ce078574110142c7a944f61c274b4aacf49"
     },
     ".github/primary-m0-observers/candidate/TreeDB/mvcc/primary_allocation_observer_test.go": {
-      "bytes": 9211,
-      "sha256": "ed35851af6cc33a65be6028ebfa70ce494c48b0de33112e83e6fb7bb8d32cf18"
+      "bytes": 10137,
+      "sha256": "97091ef5ffbc791752e2e666b4c0f8251ac238964b2b2e164db64459217e2974"
     },
     ".github/primary-m0-observers/candidate/TreeDB/mvcc/primary_generation_routing_v6_test.go": {
-      "bytes": 6617,
-      "sha256": "4c893815df2822b4fa8069cdc54e707555886b4ac50aa9b200bf36fd65466ded"
+      "bytes": 6621,
+      "sha256": "cb096a12dfa2d05d26324e56d632ac4ebfbcacd59476605c10c2730d49b32b27"
+    },
+    ".github/primary-m0-observers/format-source-review.json": {
+      "bytes": 5036,
+      "sha256": "20f479f9e01dd1b5f652e72ac8488c9f7a5f1b78ae574d9431604feaf372e85c"
     },
     ".github/primary-m0-observers/manifest.json": {
-      "bytes": 4275,
-      "sha256": "5598e7d3aa39dec908740dad4d4b7264e449655b39fdae17210acf3c3835fe80"
+      "bytes": 7585,
+      "sha256": "de927877f58f982516da5b9e766758233030b7027c8db51ee6bc341f18b7bcf4"
     },
     ".github/primary-m0-observers/overlays.json": {
       "bytes": 2916,
@@ -76,21 +80,17 @@
       "bytes": 1465,
       "sha256": "cd21ae5248adc20fc7d8b94dc845f700b36120ebf0e15dffeb57abfe83f6e71f"
     },
-    ".github/scripts/primary_m0_attempt.py": {
-      "bytes": 9466,
-      "sha256": "b6964ce7a0590113d1d7ec1998fc517df5340e8d51401706b0c9a0916daedfad"
-    },
     ".github/scripts/primary_m0_control_events.py": {
       "bytes": 3639,
       "sha256": "42ce334b4df1bbe4e7ac2fb79d19f49cad803d29937a50ead2876e9e01ee4e3d"
     },
     ".github/scripts/primary_m0_hosted_controls.py": {
-      "bytes": 15215,
-      "sha256": "a90fa07552237bce5b9086e36f2dcd513ce4c39b791b37f62baba1854b6b2fc4"
+      "bytes": 13534,
+      "sha256": "6bd6a114466dc49872465fa45214d78fa27ab19580ba2142b560cc77864d2418"
     },
     ".github/scripts/test_primary_m0_hosted_controls.py": {
-      "bytes": 5301,
-      "sha256": "1fee1357a881e0bc73a8d46691223ab3f541e558a3420f75daaa0d550509b26d"
+      "bytes": 5705,
+      "sha256": "077f38897aae278b5d74ad1d1cc9e6bc9a257d50c0c924e497b0d75a42ccc7f3"
     },
     "scripts/ycsb_campaign_guard.py": {
       "bytes": 19548,
