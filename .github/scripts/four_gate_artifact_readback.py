@@ -6,9 +6,9 @@ from pathlib import Path
 import stat
 import zipfile
 
-EXPECTED_BYTES = 46004809
-EXPECTED_SHA = "5724bd2f67ef2eb35b30dc5c40a9b4192f2fb221b60bcf524b896464db224305"
-NAMES = {"artifact-manifest.json", "source.txt", "source-sha256.txt", "go-env.json", "go-version.log", "db-compiler.exit", "normal-inventory.json", "race-inventory.json", "normal.exit", "race.exit", "scope.txt"}
+EXPECTED_BYTES = 229302273
+EXPECTED_SHA = "eaac11b9de89d0d219a019fed5425955e1556333f8fa5b1014f5fd33850b642b"
+NAMES = {"primary/failure.json", "primary/summary.json", "primary/summary.md", "primary/commands.json", "primary/bindings.json", "primary/samples.json", "primary/preflight.json", "primary/preflight-acquisition.json"}
 root = Path(os.environ["RUNNER_TEMP"]) / "four-gate-readback"
 archive = root / "original.zip"
 assert archive.stat().st_size == EXPECTED_BYTES, "archive size mismatch"
@@ -17,7 +17,7 @@ with archive.open("rb") as f:
     for chunk in iter(lambda: f.read(1048576), b""):
         h.update(chunk)
 assert h.hexdigest() == EXPECTED_SHA, "archive digest mismatch"
-result = {"source_head": os.environ["GITHUB_SHA"], "artifact": 13372455917,
+result = {"source_head": os.environ["GITHUB_SHA"], "artifact": 13372187566,
           "archive_sha256": h.hexdigest(), "scope": "retained original text only; no gate alteration",
           "entries": [], "texts": {}, "missing": []}
 with zipfile.ZipFile(archive) as z:
