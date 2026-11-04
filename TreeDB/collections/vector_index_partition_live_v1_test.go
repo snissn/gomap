@@ -3356,6 +3356,11 @@ func newVectorPartitionLiveProductionFixtureWithIndexesV1(t *testing.T, extraVec
 
 func newVectorPartitionLiveProductionFixtureWithPartitionsV1(t *testing.T, extraVectorIndexes []VectorIndexDefinition, partitionCount uint32, openOptions ...backenddb.Options) (string, *backenddb.DB, *Collection, VectorIndexDefinition, VectorPartitionManifestV1) {
 	t.Helper()
+	return newVectorPartitionLiveProductionFixtureWithPartitionsAndSetupV1(t, extraVectorIndexes, partitionCount, nil, openOptions...)
+}
+
+func newVectorPartitionLiveProductionFixtureWithPartitionsAndSetupV1(t *testing.T, extraVectorIndexes []VectorIndexDefinition, partitionCount uint32, beforeOpen func(testing.TB, string), openOptions ...backenddb.Options) (string, *backenddb.DB, *Collection, VectorIndexDefinition, VectorPartitionManifestV1) {
+	t.Helper()
 	if partitionCount == 0 || partitionCount > 2 {
 		t.Fatalf("unsupported partition count %d", partitionCount)
 	}
@@ -3364,7 +3369,7 @@ func newVectorPartitionLiveProductionFixtureWithPartitionsV1(t *testing.T, extra
 		{id: "b", vector: []float32{.8, .2}},
 		{id: "c", vector: []float32{0, 1}},
 	}
-	dir, database, collection, def := openColumnGraphTypedColumnVectorTestCollectionWithIndexes1782(t, 2, 2, rows, extraVectorIndexes, openOptions...)
+	dir, database, collection, def := openColumnGraphTypedColumnVectorTestCollectionWithSetup1782(t, 2, 2, rows, extraVectorIndexes, beforeOpen, openOptions...)
 	if _, err := collection.RebuildVectorIndex(def.Name); err != nil {
 		database.Close()
 		t.Fatal(err)
