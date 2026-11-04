@@ -1,0 +1,57 @@
+{
+  "schema": "observer-control-source-inventory-v1",
+  "status": "ALL_UNRUN_EXPECTATIONS_ONLY",
+  "new_tops_by_package": {
+    "caching": [
+      "TestPrimaryAllocationObserverOwnershipAndSeam",
+      "TestPrimaryAllocationObserverLateFinishDoesNotChargeSuccessor"
+    ],
+    "mvcc": [
+      "TestPrimaryAllocationRawDeltaAndRefusals",
+      "TestPrimaryAllocationOutputIsExclusiveAndBounded"
+    ],
+    "db": [
+      "TestM0OrdinalObserverCompletenessControls",
+      "TestM0OrdinalObserverJoinKeepsOriginalDurations"
+    ]
+  },
+  "expected_per_mode": {
+    "tops": 6,
+    "child_outcomes": 20,
+    "total_named_outcomes": 26,
+    "leaves": 24
+  },
+  "children": {
+    "TestPrimaryAllocationRawDeltaAndRefusals": [
+      "0",
+      "1",
+      "2",
+      "3"
+    ],
+    "TestM0OrdinalObserverCompletenessControls": [
+      "missing",
+      "duplicate",
+      "overflow",
+      "ordinal",
+      "region",
+      "kind",
+      "duration",
+      "error",
+      "join",
+      "timer",
+      "stats",
+      "exposure",
+      "trace",
+      "counts",
+      "hook",
+      "mismatch"
+    ]
+  },
+  "future_modes": [
+    "normal JSON",
+    "race JSON"
+  ],
+  "no_skip_or_missing_outcome_substitution": true,
+  "existing_owning_controls": "Exact ROOT primary/m0 addenda, unchanged source; none claimed run.",
+  "qualification_limits": "ROOT binds existing applicable package/command limits before hosted source validation; no local execution or deadline change authorized."
+}

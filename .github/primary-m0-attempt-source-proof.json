@@ -1,0 +1,75 @@
+{
+  "closure_method": "Recursive Python symtable globals for every selected function/class/method; resolve against exact copied declarations/constants, explicit stdlib imports, and Python builtins. No helper import or execution.",
+  "new_module_sha256": "b6964ce7a0590113d1d7ec1998fc517df5340e8d51401706b0c9a0916daedfad",
+  "old_main_or_payload_copied": false,
+  "origin_path": "/mnt/fast4tb/gomap-mongo-perf-graph-6a9s7h58/review/hosted-original-elf-guard-trace-diagnostic-01-independent/revision-07/immutable-source/.github/scripts/original_elf_guard_diagnostic.py",
+  "origin_sha256": "5c3189c13d3937ca547aa25e9d440248707d193828c2e9d68f89a20788ab5b10",
+  "provided_constants": [
+    "GIB",
+    "ROOT_CAP",
+    "LOG_CAP"
+  ],
+  "provided_declarations": [
+    "Attempt",
+    "census",
+    "census_category",
+    "need",
+    "sha",
+    "write"
+  ],
+  "provided_imports": {
+    "Path": "pathlib.Path",
+    "hashlib": "hashlib",
+    "json": "json",
+    "os": "os",
+    "shutil": "shutil",
+    "signal": "signal",
+    "stat": "stat",
+    "subprocess": "subprocess",
+    "threading": "threading",
+    "time": "time"
+  },
+  "required_global_names": [
+    "BaseException",
+    "FileNotFoundError",
+    "GIB",
+    "LOG_CAP",
+    "Path",
+    "ROOT_CAP",
+    "RuntimeError",
+    "census",
+    "census_category",
+    "dict",
+    "hashlib",
+    "iter",
+    "json",
+    "len",
+    "max",
+    "need",
+    "os",
+    "repr",
+    "shutil",
+    "signal",
+    "stat",
+    "str",
+    "subprocess",
+    "threading",
+    "time",
+    "write"
+  ],
+  "selected_AST_identical": [
+    "need",
+    "sha",
+    "write",
+    "census_category",
+    "census",
+    "Attempt"
+  ],
+  "unchanged_constants": {
+    "LOG_CAP": 33554432,
+    "ROOT_CAP": 1073741824,
+    "sample_seconds": 0.2,
+    "whole_seconds": 600
+  },
+  "unresolved_globals": []
+}

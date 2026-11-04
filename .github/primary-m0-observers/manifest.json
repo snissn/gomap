@@ -1,0 +1,110 @@
+{
+  "schema": "primary-m0-observer-source-manifest-v1",
+  "status": "SOURCE_SEALED_EXACT_ROOT_REVIEW_PENDING_NO_RUNTIME",
+  "product_source": "4934bd6d51d9047ba0187d05c1d211cbe419811a",
+  "baseline_source": "29b879fbb4c4c6da2d7b18ff7c2a3a341e24e2b8",
+  "files": {
+    "HOSTED_ROUTE.md": {
+      "bytes": 7244,
+      "sha256": "e3a2a34d63714946ffbad3ff45a0b7397557823a5e00fd4668c413e0eaaaab17"
+    },
+    "README.md": {
+      "bytes": 5901,
+      "sha256": "cb7a550f2e0935fc9fb937ce00ecbc65951a5efde362edfbb78cafbc371a4082"
+    },
+    "base/TreeDB/caching/db.go": {
+      "bytes": 1431787,
+      "sha256": "c0866f7bb670cfc9de12286e435c9cab0dec517565d3a8fcaafe94bf35de4fcd"
+    },
+    "base/TreeDB/db/vacuum_collection_bench_test.go": {
+      "bytes": 16844,
+      "sha256": "c7c7404c076ec834579b1881aeefbb671faf04066dd7c80ae6199d4d1b506337"
+    },
+    "base/TreeDB/mvcc/primary_generation_routing_v6_test.go": {
+      "bytes": 6288,
+      "sha256": "2642bedc0ed6edbea8d7a599c66642c1d2107d93f1faf03355fb8cb071c56ab9"
+    },
+    "baseline-candidate/TreeDB/caching/db.go": {
+      "bytes": 1431859,
+      "sha256": "07794e28af44c9ad7fc34f0fbe97a5b7964643d321367507f3930c8163e662f6"
+    },
+    "baseline-seam.patch": {
+      "bytes": 551,
+      "sha256": "9dc20f9436df433d95035e75433a4dcc34ee0702ad7761b37edd8d9b0f67bccc"
+    },
+    "candidate/TreeDB/caching/db.go": {
+      "bytes": 1431966,
+      "sha256": "f7f6b5b189eeccfa860896ebb82e32c4d2856116db86b5f32f42bdb6de96d5a4"
+    },
+    "candidate/TreeDB/caching/primary_allocation_observer.go": {
+      "bytes": 2942,
+      "sha256": "fbddd5e40bd5668a544a36ba0a2ad7bbc9828bc3402e0ee5a118ddecd26fa26f"
+    },
+    "candidate/TreeDB/caching/primary_allocation_observer_test.go": {
+      "bytes": 1822,
+      "sha256": "2d9569aa0a3bbc62fb686b81b0802c15e005387f5ecf24ed15c04a68d12d2ecb"
+    },
+    "candidate/TreeDB/db/vacuum_collection_bench_test.go": {
+      "bytes": 17476,
+      "sha256": "b3ade2cad976205bcd46291fc1626d565d840dd3bd38eac2770d7a87ce17732c"
+    },
+    "candidate/TreeDB/db/vacuum_m0_ordinal_observer_test.go": {
+      "bytes": 11439,
+      "sha256": "2c2295e4f0f71f5c0806153602b0cc1607fb798e86e7accc7dd63acc12cdd4eb"
+    },
+    "candidate/TreeDB/mvcc/primary_allocation_observer_test.go": {
+      "bytes": 9211,
+      "sha256": "ed35851af6cc33a65be6028ebfa70ce494c48b0de33112e83e6fb7bb8d32cf18"
+    },
+    "candidate/TreeDB/mvcc/primary_generation_routing_v6_test.go": {
+      "bytes": 6617,
+      "sha256": "4c893815df2822b4fa8069cdc54e707555886b4ac50aa9b200bf36fd65466ded"
+    },
+    "completion.json": {
+      "bytes": 2123,
+      "sha256": "f1522e9d5364ad658de6c9d41bcef4e9e90f682cd7cc7a2616ef718d1868293a"
+    },
+    "getversioned-api-decision.md": {
+      "bytes": 2376,
+      "sha256": "e7676967f87246474bce1f476eaa49a279eba09fd78749e11876013df23b4914"
+    },
+    "input-bindings.json": {
+      "bytes": 5634,
+      "sha256": "0cf55690c5f018d04d9ace4fc2d44800aee9561462b5365509ac3878225f9039"
+    },
+    "overlays.json": {
+      "bytes": 2916,
+      "sha256": "4652442e079370e3cf203e7a8724e96b7841c760da7708981b6c5d61efc9246d"
+    },
+    "preimages/29b879fb/TreeDB/caching/db.go": {
+      "bytes": 1431680,
+      "sha256": "31e1cb84139790865556b15308897c30beb61160363110823c6cc27cf0372f02"
+    },
+    "preimages/29b879fb/TreeDB/db/vacuum_collection_bench_test.go": {
+      "bytes": 16844,
+      "sha256": "c7c7404c076ec834579b1881aeefbb671faf04066dd7c80ae6199d4d1b506337"
+    },
+    "preimages/29b879fb/TreeDB/mvcc/primary_generation_routing_v6_test.go": {
+      "bytes": 6288,
+      "sha256": "2642bedc0ed6edbea8d7a599c66642c1d2107d93f1faf03355fb8cb071c56ab9"
+    },
+    "runner-bindings.json": {
+      "bytes": 6001,
+      "sha256": "55ec48ef9d64608a4051ee75f2bf5c1b13f0367310d07cd38e87a23cdf58ac85"
+    },
+    "source.patch": {
+      "bytes": 31061,
+      "sha256": "8544c80d581e353e9481d3414d054690b83985dc5ab960b1746434c449ea6948"
+    },
+    "static-source-review.json": {
+      "bytes": 944,
+      "sha256": "3ed8ce74affcb5e99d33d1548c455322e129d173f6dccf136bd07dd93b3bc1ae"
+    },
+    "test-inventory.json": {
+      "bytes": 1465,
+      "sha256": "cd21ae5248adc20fc7d8b94dc845f700b36120ebf0e15dffeb57abfe83f6e71f"
+    }
+  },
+  "all_dynamic_checks": "UNRUN",
+  "publication_runtime_authority": false
+}
