@@ -708,7 +708,7 @@ def windows(attempt, root):
     before = workdirs()
     write(attempt.out/'compile-only-workdirs-before.json', {'names':before,'GOTMPDIR':str(root/'tmp')})
     need(not before, 'preexisting Go WorkDir; no cleanup or cache purge selected')
-    need(attempt.run('compile-only', ['go','build','-p','1','-mod=readonly','./TreeDB/nativewire'],
+    need(attempt.run('compile-only', ['go','build','-p','1','-mod=readonly','net/http'],
                      240, cwd=source, env=env) == 0, 'compile-only failed; stop before test compilation')
     after = workdirs()
     write(attempt.out/'compile-only-workdirs-after.json', {'names':after,

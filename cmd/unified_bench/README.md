@@ -1922,8 +1922,8 @@ installed or copied; all new caches, telemetry, tools and outputs remain in
 the 1 GiB task root. Missing or mismatched cache identity stops without fallback.
 The original Linux setup failure and Windows resource/cleanup HOLD remain.
 
-The next isolated manual block is Windows-only: one stock non-test package
-`go build -p 1 -mod=readonly ./TreeDB/nativewire` precedes the unchanged full
+The next isolated manual block is Windows-only: one stock non-test dependency
+`go build -p 1 -mod=readonly net/http` precedes the unchanged full
 `go test -c` command. A normal joined return and absence of its `go-build*`
 WorkDir are required before test compilation; shared stock caches are retained.
 The same 1 GiB root, 32 MiB generated logs, 600 s whole and 660 s outer bounds

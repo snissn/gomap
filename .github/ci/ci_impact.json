@@ -12,7 +12,7 @@
     "M0 observation is manual diagnostic-only on a separately fixed product; no forecast starts it or replaces failed M0 acceptance.",
     "Bounded maintenance comparison is a manually granted diagnostic on fixed baseline/candidate products; no forecast starts it or establishes cost, M0 or native acceptance."
   ],
-  "discovery_source_sha256": "ef22d650f64aacbdb348c900871a23330d6ac1d72b1643136905a20b36795da6",
+  "discovery_source_sha256": "75d82762119ab9b9c3d66e48e7ca476cb1e7bff687b8ca9bffed2fbc0799194e",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
@@ -2333,13 +2333,13 @@
           }
         }
       },
-      "git_blob": "a60bc45a1e53e6526530fa3fe3f1f869f1fb9a3e",
+      "git_blob": "82f69e946792a77033c854fe852e4ec6c17348ab",
       "jobs": {
         "windows-guard": {
           "checkout": [],
           "commands": [
             {
-              "command_sha256": "e97a04e91d88f74bd83c0f266780a1babd07d1d72b2d4f23c56f400d9a09c29d",
+              "command_sha256": "aea00f0bf83e68e44af48da61c3ca195ffd566f813947bec313ff77cf039d06a",
               "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:24",
               "env": {
                 "BOOTSTRAP_TOKEN": "${{ github.token }}",
@@ -2372,7 +2372,7 @@
           "runs_on": "windows-2025"
         }
       },
-      "sha256": "2a2f4fa3aa2dc9acff01b41c243012f483a3e609893531a9ff3c8c768b914c9e"
+      "sha256": "c42d6e3d7ce09aee295513d0dc863c39d4822601fdc60b6494c9c3b65ef0e65d"
     },
     "treedb-tests.yml": {
       "coverage": "existing execution only; triggers/path filters are unchanged",

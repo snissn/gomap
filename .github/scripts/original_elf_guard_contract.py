@@ -85,7 +85,7 @@ print(json.dumps({'status':'FIXED_HOSTED_SOURCE_CONTRACT_ONLY', 'checks':34, 'he
 
 # Focused Windows compile-fit source and finite data controls, no subprocess/tool execution.
 assert '\n  original-elf:' not in workflow and '\n  windows-guard:' in workflow
-assert "['go','build','-p','1','-mod=readonly','./TreeDB/nativewire']" in source
+assert "['go','build','-p','1','-mod=readonly','net/http']" in source
 assert source.index("'compile-only',") < source.index("'build', ['go','test','-c'")
 assert "need(not after, 'compile-only WorkDir not removed" in source
 assert "compiler_env['GOFLAGS'] == ''" in source and "compiler_env['GOEXPERIMENT'] == ''" in source
