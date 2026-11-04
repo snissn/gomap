@@ -23,30 +23,30 @@ type fixedPeerGuardCreateObservationKeyV1 struct{}
 // original definite-precommit retries are counted, never added or retried here.
 // No transport, response body, request bytes, or returned error is retained.
 type fixedPeerGuardCreateReceiptV1 struct {
-	ScopeStartUnixNanos, ScopeElapsedNanos		int64
-	ScopeDeadline, ScopeCanceled			bool
-	Schema						uint32
-	Attempts					uint32
-	RequestTimeoutNanos				int64
-	OuterDeadlineUnixNanos, OuterRemainingNanos	int64
-	SubmitStartUnixNanos, SubmitElapsedNanos	int64
-	WroteCallbacks, FirstByteCallbacks		uint32
-	WroteRequest, WroteRequestOK			bool
-	WroteRequestElapsedNanos			int64
-	FirstResponseByte, Returned			bool
-	FirstResponseByteElapsedNanos			int64
-	ResultAck					uint8
-	CommittedRecoverable, CommittedApplied		bool
-	Ambiguous, Deadline, Canceled, BodyDeadline	bool
-	OuterDeadline, OuterCanceled, ResultError	bool
-	WroteDeadline, WroteCanceled, WroteError	bool
+	ScopeStartUnixNanos, ScopeElapsedNanos      int64
+	ScopeDeadline, ScopeCanceled                bool
+	Schema                                      uint32
+	Attempts                                    uint32
+	RequestTimeoutNanos                         int64
+	OuterDeadlineUnixNanos, OuterRemainingNanos int64
+	SubmitStartUnixNanos, SubmitElapsedNanos    int64
+	WroteCallbacks, FirstByteCallbacks          uint32
+	WroteRequest, WroteRequestOK                bool
+	WroteRequestElapsedNanos                    int64
+	FirstResponseByte, Returned                 bool
+	FirstResponseByteElapsedNanos               int64
+	ResultAck                                   uint8
+	CommittedRecoverable, CommittedApplied      bool
+	Ambiguous, Deadline, Canceled, BodyDeadline bool
+	OuterDeadline, OuterCanceled, ResultError   bool
+	WroteDeadline, WroteCanceled, WroteError    bool
 }
 
 type fixedPeerGuardCreateObservationV1 struct {
-	mu	sync.Mutex
-	receipt	fixedPeerGuardCreateReceiptV1
-	start	time.Time
-	scope	time.Time
+	mu      sync.Mutex
+	receipt fixedPeerGuardCreateReceiptV1
+	start   time.Time
+	scope   time.Time
 }
 
 func newFixedPeerGuardCreateObservationV1(ctx context.Context, timeout time.Duration) *fixedPeerGuardCreateObservationV1 {
@@ -144,7 +144,7 @@ func TestFixedPeerGuardCreateObservationPassThroughV1(t *testing.T) {
 	ctx = context.WithValue(ctx, fixedPeerGuardCreateObservationKeyV1{}, o)
 	oldWrites, oldHeaders := 0, 0
 	ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
-		WroteRequest: func(httptrace.WroteRequestInfo) { oldWrites++ },
+		WroteRequest:         func(httptrace.WroteRequestInfo) { oldWrites++ },
 		GotFirstResponseByte: func() { oldHeaders++ },
 	})
 	observed, active := fixedPeerGuardCreateSubmitContextV1(ctx, iwire.CommandCreateCollection, "guard-create")
@@ -185,8 +185,8 @@ func TestFixedPeerGuardCreateObservationPassThroughV1(t *testing.T) {
 
 func TestFixedPeerGuardCreateObservationErrorsV1(t *testing.T) {
 	for _, tc := range []struct {
-		name                                  string
-		err                                   error
+		name                                    string
+		err                                     error
 		wrote, header, body, deadline, canceled bool
 	}{
 		{"pre-send", io.ErrClosedPipe, false, false, false, false, false},
