@@ -1,61 +1,33 @@
-# One manual formatting successor to observer packet 5598
+# Exact correction and source review
 
-This is the single source-only successor requested by
-`GOMAP-FOUR-GATE-OBSERVER-FORMAT-20261104-01`. The predecessor is retained at
-`../four-gate-observers-source-20261104-01`, manifest SHA256
-`5598e7d3aa39dec908740dad4d4b7264e449655b39fdae17210acf3c3835fe80`.
-It was authenticated against all 25 manifest entries before and after this work.
-The source owner remains thread `01a15a41-5e6e-7f21-9052-99e7406d0861`;
-ROOT thread `01a18e7c-8c23-7fd2-8d55-b0486d938cd3` owns exact review,
-hosted binding, publication and execution. No additional worker/controller.
+Authority: GOMAP-PRIMARY-EXACT-DIFF-20261104-03. Existing source owner
+01a15a41-5e6e-7f21-9052-99e7406d0861; ROOT execution/review owner
+01a18e7c-8c23-7fd2-8d55-b0486d938cd3. No new worker or controller.
 
-Six Go files were edited by hand: the four added helper/test files and the two
-instrumented fixture files. Changes expand compact control statements and align
-declarations. The seventh candidate Go file, the caching seam, is byte-identical
-to its predecessor; the separate baseline seam and both arms' original preimages
-are also unchanged. No product worktree was edited.
+Immutable parent manifest:
+de927877f58f982516da5b9e766758233030b7027c8db51ee6bc341f18b7bcf4.
+Original source file SHA256:
+97091ef5ffbc791752e2e666b4c0f8251ac238964b2b2e164db64459217e2974.
+Actual hosted diff SHA256:
+f1fda26a0d71b43a1d644b900ada14e3cffb3355bcaa03899b9041c04e4bf015.
+Corrected source file SHA256:
+bfd44088624e069f225b8280ff0beb73add7655ff4fa114e33d07bb16332de85.
 
-`preformat/candidate/` contains exact predecessor Go bytes. `formatting.patch`
-shows only the formatting delta. `formatting-inverse.json` retains the exact
-before/after text for each changed hunk and was used to reconstruct every
-predecessor file byte-for-byte. `source.patch` is the complete updated overlay
-against original 4934, not a product branch commit. Existing overlay mappings,
-test inventory, input bindings, Runner module paths/hashes and API decision
-remain byte-identical to packet 5598.
+The sole actual hunk adds spaces around / and % in the allocation-division
+composite literal. The preliminary declaration-alignment suspicion was not
+supported by the exact formatter diff; no declaration edit was made. The
+source text check authenticates actual old/new diff lines and the input hash,
+checks tokens for that nonliteral/noncomment expression, and verifies identical
+remaining bytes and an exact inverse. No Go parser, compiler or formatter ran
+locally. This is source preservation, not functional or performance qualification.
 
-`format-source-review.json` records the bounded text checks. All literal,
-identifier, operator and comment text is preserved. A Python lexical comparison
-models newline semicolon insertion and the optional semicolon before a closing
-brace/parenthesis; its canonical token sequences match. This supports source
-preservation and does not replace Go parsing, compilation, race checks or source
-review. The original PRIMARY loop/tests and M0 default writer are independently
-checked byte-identical. Six tops, 26 named outcomes and 24 leaves per mode remain
-the expected inventory, not observed test results.
+The retained run41936868837 receipt is INCOMPLETE/exit1. Its produced diff is
+usable exact text evidence, not successful qualification. No historical failure
+or sample is replaced. Hosted checking of these new exact bytes is still UNRUN.
+The immutable old packets and pending-input receipt remain preserved.
 
-**Formatting is manual and provisional.** No local Go, gofmt, replacement
-formatter, compiler, build, test, benchmark, module import, SSH, transfer, host
-probe, push or dispatch occurred. Hosted Go 1.26.10 must check the exact sealed
-Go bytes. Normal/race, format and compilation remain UNRUN. The stopped regex
-text-analysis attempt is preserved in `analysis-attempts.json`; it is neither a
-Go failure nor a qualification result.
-
-## Controls resource scope and retained capture limits
-
-The applicability review is retained by path/hash in `format-inputs.json`:
-`primary-m0-hosted-binding-review-01/review.md`. Controls-only qualification
-selects exact candidate 4934 and the six controls, using the maintained hosted
-normal/race CI, setup-go cache and compatible guard resource/cleanup contract.
-The unrelated Windows diagnostic's 1 GiB whole-construction cap must not be
-imported into these controls. No baseline tree or unnecessary retained combined
-control ELFs are required for that candidate-only checkpoint.
-
-The original PRIMARY diagnostic capture still requires both exact source arms,
-their own preimages/overlays, the original 1 GiB whole-root materialization limit
-and all original capture/runtime/admission limits. No control result changes
-that capture contract. The old Attempt module is retained source lineage and an
-interface reference, not a ready controls resource policy or execution grant.
-ROOT separately constructs/reviews the smallest compatible hosted binding.
-
-All product acceptance failures, historical samples and unknown causes remain
-unchanged. Host185 logical HOLD persists. There is no local runtime, new
-performance evidence, product repair, merge readiness or acceptance claim here.
+ROOT retains the maintained candidate-only hosted normal/race CI/guard route,
+original controls outcomes and cleanup/resource contract. All separate PRIMARY
+capture limits, including1GiB whole-root materialization, remain unchanged.
+Product4934 and host185 logicalHOLD remain untouched; no local/runtime/push or
+new campaign was performed or authorized.

@@ -105,6 +105,11 @@ class FixedHostedControls(unittest.TestCase):
         self.assertIn('diagnostic/primary-m0-controls-01',workflow)
         self.assertIn("go-version: '1.26.10'",workflow)
         self.assertIn("if: always()",workflow)
+        owner=json.loads((HERE.parent/'primary-m0-observers/format-source-review.json').read_text())
+        self.assertEqual(owner['after_sha256'],'bfd44088624e069f225b8280ff0beb73add7655ff4fa114e33d07bb16332de85')
+        self.assertEqual(owner['added_ascii_spaces'],8)
+        self.assertEqual((owner['historical_formatter_status'],owner['historical_formatter_exit']),('INCOMPLETE',1))
+        self.assertFalse(owner['qualification_credit'])
 
 
 if __name__=='__main__':

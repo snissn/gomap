@@ -36,8 +36,8 @@ jobs:
           admission=json.loads(base64.b64decode(text,validate=True));assert isinstance(admission,dict)
           expected={'schema':'primary-m0-hosted-controls-admission-v1','status':'ADMITTED_CONTROLS_ONLY',
             'authority':'ROOT','actor_id':'1981537','expected_head':os.environ['GITHUB_SHA'],'run_attempt':'1',
-            'owner_manifest_sha256':'de927877f58f982516da5b9e766758233030b7027c8db51ee6bc341f18b7bcf4',
-            'owner_review_sha256':'20f479f9e01dd1b5f652e72ac8488c9f7a5f1b78ae574d9431604feaf372e85c',
+            'owner_manifest_sha256':'86f4ee083aba9e2f2dbdb87abf9ec5be9eb13d416e1bafd25f7b61139e317aa3',
+            'owner_review_sha256':'863afc8d80a3f68f767b8be0f8f810f5ab646a5c1e256ea674b7894a97ef883a',
             'allow_product_capture':False}
           assert all(admission.get(k)==v for k,v in expected.items())
           root=pathlib.Path(os.environ['RUNNER_TEMP'])/'primary-m0-controls';root.mkdir()

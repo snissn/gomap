@@ -1,7 +1,7 @@
 # Candidate PRIMARY/M0 observer controls
 
 This is a candidate-only, controls-only manual hosted route. SOURCE READY FOR INDEPENDENT REVIEW ONLY;
-Go formatting, compilation, normal/race and dispatch are UNRUN. Final owner pins
+Successor Go formatting, compilation, normal/race and dispatch are UNRUN. Original controls697e651 failed at gofmt-l before tests; exact formatter41936868837 remains INCOMPLETE/exit1, with its912B diff retained as source evidence only. Final owner pins
 bind the externally owned formatting-only successor and its source review;
 separate exact executable-binding review and ROOT admission remain required. The previous c357 checkpoint and its NOT_READY
 review remain in history. No product benchmark/capture command is reachable.
@@ -27,9 +27,9 @@ lazy-checkout environment only and removed before Go executes.
 Only the focused C seven-file overlay is constructed. Three original C preimages
 must match; four newly introduced helpers must be absent from the original C.
 Owner source/manifest/mapping/inventory are authenticated. The owner formatting
-successor de927877 changes source presentation only; its44 declared members
-were authenticated offline. Selected runtime members are vendored and individually
-bound. Its format-source-review is20f479f9; this is not hosted Go formatting or
+successor86f4ee08 changes only eight spaces on the actual hosted line45; its62 declared members
+were authenticated offline. The other six selected Go files are identical. Only the needed runtime subset is vendored, not unused owner history or analysis scripts. Selected runtime members are vendored and individually
+bound. Its format-source-review is863afc8d; this is not hosted Go formatting or
 this binding's independent executable review. No local formatter ran.
 
 ## Commands and exact positive population

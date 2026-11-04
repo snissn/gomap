@@ -1,12 +1,12 @@
 {
   "files": {
     ".github/primary-m0-controls-README.md": {
-      "bytes": 6604,
-      "sha256": "6cceed6996c515e5137c7e5ef30f81c077408e0c629edbe478b4414fccca84b0"
+      "bytes": 6933,
+      "sha256": "3ce806f7172c494ad8347d0acdcedf1cf06278a2926fee0307318177e584e40c"
     },
     ".github/primary-m0-observers/FORMAT_SUCCESSOR.md": {
-      "bytes": 3822,
-      "sha256": "1413af5f7a300b49f18c61e8aaf358cf1e23620643bfee9c30192857f9d06b8a"
+      "bytes": 1827,
+      "sha256": "1970470d93564da78fc1495ee1e365750ca1ad524a054fe1a1efe988cd1b1411"
     },
     ".github/primary-m0-observers/base/TreeDB/caching/db.go": {
       "bytes": 1431787,
@@ -45,20 +45,20 @@
       "sha256": "648f61eeb148809e9a42cd087e979ce078574110142c7a944f61c274b4aacf49"
     },
     ".github/primary-m0-observers/candidate/TreeDB/mvcc/primary_allocation_observer_test.go": {
-      "bytes": 10137,
-      "sha256": "97091ef5ffbc791752e2e666b4c0f8251ac238964b2b2e164db64459217e2974"
+      "bytes": 10145,
+      "sha256": "bfd44088624e069f225b8280ff0beb73add7655ff4fa114e33d07bb16332de85"
     },
     ".github/primary-m0-observers/candidate/TreeDB/mvcc/primary_generation_routing_v6_test.go": {
       "bytes": 6621,
       "sha256": "cb096a12dfa2d05d26324e56d632ac4ebfbcacd59476605c10c2730d49b32b27"
     },
     ".github/primary-m0-observers/format-source-review.json": {
-      "bytes": 5036,
-      "sha256": "20f479f9e01dd1b5f652e72ac8488c9f7a5f1b78ae574d9431604feaf372e85c"
+      "bytes": 1144,
+      "sha256": "863afc8d80a3f68f767b8be0f8f810f5ab646a5c1e256ea674b7894a97ef883a"
     },
     ".github/primary-m0-observers/manifest.json": {
-      "bytes": 7585,
-      "sha256": "de927877f58f982516da5b9e766758233030b7027c8db51ee6bc341f18b7bcf4"
+      "bytes": 10332,
+      "sha256": "86f4ee083aba9e2f2dbdb87abf9ec5be9eb13d416e1bafd25f7b61139e317aa3"
     },
     ".github/primary-m0-observers/overlays.json": {
       "bytes": 2916,
@@ -86,11 +86,11 @@
     },
     ".github/scripts/primary_m0_hosted_controls.py": {
       "bytes": 13534,
-      "sha256": "6bd6a114466dc49872465fa45214d78fa27ab19580ba2142b560cc77864d2418"
+      "sha256": "5f1b4429d0f1abf0e272016c31984e7d0771e53f65a0e46a5b6dd60c6f69c354"
     },
     ".github/scripts/test_primary_m0_hosted_controls.py": {
-      "bytes": 5705,
-      "sha256": "077f38897aae278b5d74ad1d1cc9e6bc9a257d50c0c924e497b0d75a42ccc7f3"
+      "bytes": 6150,
+      "sha256": "a879b576402b465a6a7c3ff8f5d76027c7456d8524af64092db92854e1993a54"
     },
     "scripts/ycsb_campaign_guard.py": {
       "bytes": 19548,
