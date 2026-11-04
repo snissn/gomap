@@ -6,9 +6,9 @@ from pathlib import Path
 import stat
 import zipfile
 
-EXPECTED_BYTES = 18188
-EXPECTED_SHA = "2ba4c42b45def0cac360d3ec9ca655469b1e212dbbcc2913a3049f4493b06128"
-NAMES = {'entry.stdout.log', 'output/pure-controls.stderr.log', 'output/normal.stderr.log', 'output/gofmt.stderr.log', 'output/failure.json', 'guard/result.json', 'output/gofmt.stdout.log', 'output/source-fetch.stderr.log', 'output/compile-context.json', 'guard/stderr.log', 'output/source-C-identity.stdout.log', 'guard/stdout.log', 'output/final-file-manifest.json', 'entry.stderr.log', 'output/stages.json', 'output/source-C-checkout.stderr.log'}
+EXPECTED_BYTES = 39216183
+EXPECTED_SHA = "5de6712dad46d51df5b56a83c89b190116fdb9971ad32c630509bb03152e6cb7"
+NAMES = {'db-test-sha256.txt', 'db-bindings.objdump', 'structural-status.txt', 'tree-compiler.exit', 'tree-test-sha256.txt', 'tree-compiler.selected.stderr', 'context.txt', 'db-compiler-stream.json', 'normal-inventory.json', 'artifact-manifest.json', 'db-compiler.exit', 'db-capture.objdump', 'tree-compiler-stream.json', 'tree-selection.exit', 'db-selection.exit', 'race-inventory.json', 'object-tools.exit', 'source.txt', 'tree-bindings.objdump', 'tree-reset.objdump', 'db-compiler.selected.stderr'}
 root = Path(os.environ["RUNNER_TEMP"]) / "four-gate-readback"
 archive = root / "original.zip"
 assert archive.stat().st_size == EXPECTED_BYTES, "archive size mismatch"
@@ -17,7 +17,7 @@ with archive.open("rb") as f:
     for chunk in iter(lambda: f.read(1048576), b""):
         h.update(chunk)
 assert h.hexdigest() == EXPECTED_SHA, "archive digest mismatch"
-result = {"source_head": os.environ["GITHUB_SHA"], "artifact": 13373243640,
+result = {"source_head": os.environ["GITHUB_SHA"], "artifact": 13373044724,
           "archive_sha256": h.hexdigest(), "scope": "retained original text only; no gate alteration",
           "entries": [], "texts": {}, "missing": []}
 with zipfile.ZipFile(archive) as z:
