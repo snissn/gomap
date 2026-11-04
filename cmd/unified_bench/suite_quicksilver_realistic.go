@@ -14,6 +14,9 @@ import (
 )
 
 func (c quicksilverConfig) resolved() quicksilverConfig {
+	if c.ConcurrentMode == "" {
+		c.ConcurrentMode = "duration"
+	}
 	if c.CommitMode == "" {
 		c.CommitMode = "sync"
 		if c.Case == "realistic" {
@@ -354,12 +357,13 @@ func quicksilverLoadedDistribution(c quicksilverConfig) (d quicksilverDistributi
 	}
 	return
 }
-func quicksilverRealisticWrite(db kvstore.DB, c quicksilverConfig, offset, count, stride int, update bool) error {
+func quicksilverRealisticWrite(db kvstore.DB, c quicksilverConfig, offset, count, stride int, update bool, progress ...*quicksilverWriterProgress) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	var key [128]byte
 	value := make([]byte, 32768) // One group scratch; Batch.Set copies before reuse (no SetView).
 	write := func(overwriteGen uint64) (err error) {
+		sets, deletes := 0, 0
 		b, err := db.(kvstore.Batcher).NewBatch()
 		if err != nil {
 			return err
@@ -387,6 +391,7 @@ func quicksilverRealisticWrite(db kvstore.DB, c quicksilverConfig, offset, count
 				if err = b.Delete(k); err != nil {
 					return
 				}
+				deletes++
 				continue
 			}
 			v := value[:quicksilverRealisticSize(&c, id)]
@@ -394,8 +399,13 @@ func quicksilverRealisticWrite(db kvstore.DB, c quicksilverConfig, offset, count
 			if err = b.Set(k, v); err != nil {
 				return
 			}
+			sets++
 		}
-		return quicksilverCommitBatch(b, c)
+		err = quicksilverCommitBatch(b, c)
+		if err == nil && len(progress) > 0 {
+			progress[0].commit(sets, deletes)
+		}
+		return err
 	}
 	if err := write(0); err != nil {
 		return err
