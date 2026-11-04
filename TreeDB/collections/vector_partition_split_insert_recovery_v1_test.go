@@ -510,8 +510,8 @@ func splitCollectionRecoveryReadImageV1(path string) (image []byte, err error) {
 
 type splitCollectionRecoveryFrameSpanV1 struct {
 	logicalStart, start, length, end int64
-	fixed                          bool
-	envelope                       commitlog.CommandEnvelope
+	fixed                            bool
+	envelope                         commitlog.CommandEnvelope
 }
 
 // Obtain record boundaries and validate CRC/codec through the maintained strict
