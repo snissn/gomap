@@ -1,0 +1,72 @@
+{
+  "environment": "inherit original hosted context; no GOMAXPROCS/GOMEMLIMIT/CPU-affinity overrides; record actual context",
+  "guard": {
+    "cleanup_seconds": 10,
+    "deadline_seconds": 660,
+    "free_floor_bytes": 10737418240,
+    "interval_seconds": 0.2,
+    "rss_cap_bytes": 25769803776
+  },
+  "method": "original6 balanced off/auto pairs plus2 RUSAGE_SELF reads perrow and12 standard pprof top views; diagnostic only",
+  "old_failures": [
+    "original CPU efficiency0.9438303267 FAIL",
+    "decode literal logicalHOLD"
+  ],
+  "outer_budget": "20minjob; capture12min=660s guarded active + up to3x10s cleanup +30s startup/receipt margin; original workload unchanged; incomplete cancellation remains failure",
+  "outer_minutes": 20,
+  "qualified_control": {
+    "artifact_bytes": 10593,
+    "artifact_id": 13372144927,
+    "artifact_sha256": "10dab1dbffd5796d409227ed9d43d6598719e53c74a6a0015c708bb24c36572c",
+    "job": 126934524414,
+    "run": 41933051817
+  },
+  "qualified_product_head": "4dcf7d746bb3138458ad663e105a4c257787c1a3",
+  "rows": [
+    {
+      "order": [
+        "off",
+        "auto"
+      ],
+      "sample": 1
+    },
+    {
+      "order": [
+        "auto",
+        "off"
+      ],
+      "sample": 2
+    },
+    {
+      "order": [
+        "off",
+        "auto"
+      ],
+      "sample": 3
+    },
+    {
+      "order": [
+        "auto",
+        "off"
+      ],
+      "sample": 4
+    },
+    {
+      "order": [
+        "off",
+        "auto"
+      ],
+      "sample": 5
+    },
+    {
+      "order": [
+        "auto",
+        "off"
+      ],
+      "sample": 6
+    }
+  ],
+  "schema": "steady-rusage-fixed-hosted-capture-v1",
+  "status": "EXACT_SOURCE_READY_PENDING_INDEPENDENT_ROOT_REVIEW_AND_ONE_DISPATCH",
+  "storage": "no live whole-root or aggregate-log cap claimed; task output/tmp and checkout/tool/cache storage ledger; guard samples selected filesystem free space"
+}

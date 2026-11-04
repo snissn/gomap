@@ -1119,3 +1119,7 @@ Its WORK_INTERVAL JSON receipt is not a benchprof input, does not equal pprof's
 sampled CPU population, and cannot certify later DB Close or lifecycle success.
 An empty opt-in performs no usage reads/writes. Benchmark/profile names, parsers,
 checker and gate thresholds remain unchanged.
+
+The fixed [steady process-usage diagnostic](../../.github/scripts/steady_rusage_capture.md)
+retains raw CPU profiles, standard pprof text and WORK_INTERVAL JSON receipts.
+These standalone artifacts are not benchprof inputs or acceptance evidence.

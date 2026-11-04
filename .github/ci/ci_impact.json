@@ -12,7 +12,7 @@
     "M0 observation is manual diagnostic-only on a separately fixed product; no forecast starts it or replaces failed M0 acceptance.",
     "Bounded maintenance comparison is a manually granted diagnostic on fixed baseline/candidate products; no forecast starts it or establishes cost, M0 or native acceptance."
   ],
-  "discovery_source_sha256": "a4bf8b0de8f6ac871ba3e3ae46908af378e0466600f6ad1215046d68e9b5dc47",
+  "discovery_source_sha256": "31a363eaa4b0718c2d0051cc77e9a264778cdb9af9cbd0d8369b4193b7e8ccd8",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
@@ -449,12 +449,12 @@
     {
       "id": "treedb-mvcc-maintenance-diagnostic/diagnostic/single",
       "job": "diagnostic",
-      "owner": "CI maintainer with affected MVCC maintenance harness owner",
+      "owner": "CI maintainer with affected unified_bench package/harness owner",
       "variant": {
         "cgo": "setup-go platform default; explicit command overrides retained",
         "matrix": {},
         "race": false,
-        "runs_on": "ubuntu-24.04",
+        "runs_on": "ubuntu-latest",
         "tags": "entry command defaults/flags retained"
       },
       "workflow": "treedb-mvcc-maintenance-diagnostic.yml"
@@ -2323,48 +2323,68 @@
     "treedb-mvcc-maintenance-diagnostic.yml": {
       "coverage": "existing execution only; triggers/path filters are unchanged",
       "events": {
-        "workflow_dispatch": null
+        "workflow_dispatch": {
+          "inputs": {
+            "expected_head": {
+              "description": "Full immutable independently reviewed diagnostic harness commit",
+              "required": true,
+              "type": "string"
+            }
+          }
+        }
       },
-      "git_blob": "5db1627d00d523c4611092c2ba8aac5465b64506",
+      "git_blob": "67622e1f3b1fd9f0c0d3c28bbbc6051b066c88f5",
       "jobs": {
         "diagnostic": {
           "checkout": [
             {
-              "fetch-depth": 0,
+              "fetch-depth": 2,
               "persist-credentials": false,
-              "ref": "${{ github.sha }}"
+              "ref": "${{ inputs.expected_head }}"
             }
           ],
           "commands": [
             {
-              "command_sha256": "dc2d7506fa6e28a95565b0bd60299cfa8a1f345e73aa6997a4c6d954f73fab67",
-              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:19",
+              "command_sha256": "c6fac55a9e26f46bfa344ae55a3b729de96e063539121c4847c37fba64d60275",
+              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:33",
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
-              "name": "Initialize retained attempt packet"
+              "name": "Authenticate exact ROOT dispatch before task input acquisition"
             },
             {
-              "command_sha256": "3bbcd578a6db06320b9181f1fcbdfcdce89d8c99b0b433ef9e2aeab17bd27a64",
-              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:38",
-              "invocation": "python3 -B .github/scripts/mvcc_maintenance_test.py > \"$RUNNER_TEMP/mvcc-maintenance-setup/pure-tests.log\" 2>&1",
-              "name": "Check syntax, receipts and fixed workflow contract (no Go execution)"
+              "command_sha256": "0000d65a07c2ad58b9b6681cd209bbe14407a8a7d5601a677f65ad29e1b47780",
+              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:70",
+              "env": {
+                "GH_TOKEN": "${{ github.token }}"
+              },
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Authenticate source closure and actual focused prerequisite"
             },
             {
-              "command_sha256": "38d56548962e86f55dc4e1a22895ea3a0f33ff34d2b49ed50514f1359bcc6615",
-              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:41",
-              "invocation": "python3 -B .github/scripts/mvcc_maintenance_bootstrap.py > \"$RUNNER_TEMP/mvcc-maintenance-setup/bootstrap.log\" 2>&1",
-              "name": "Prepare exact inputs and collect once"
+              "command_sha256": "b6062304050e1e05f4eca4a49570ed79fcc5208c28a153368787fd2f860dfa4b",
+              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:99",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "One guarded original balanced block with opt-in interval receipts"
+            },
+            {
+              "command_sha256": "7aeabfc4afaeee01a08f03be70bfb433bc32d69559ebcee009a716e745f3cdb0",
+              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:122",
+              "if": "always()",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Retain complete attempt storage and raw identity ledger"
             }
           ],
           "environment": {
+            "EXPECTED_HARNESS_HEAD": "${{ inputs.expected_head }}",
+            "EXPECTED_WORKFLOW_HEAD": "${{ github.workflow_sha }}",
             "PYTHONDONTWRITEBYTECODE": "1"
           },
           "matrix": null,
           "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
           "race": false,
-          "runs_on": "ubuntu-24.04"
+          "runs_on": "ubuntu-latest"
         }
       },
-      "sha256": "2d682ddfe8416722c6408e033606700217b614858c78e7479d25caa294c126c8"
+      "sha256": "b38fc1daa85a40592ce3a23cac3259dab491eff9ae4736e0eb6f048a9c4754a1"
     },
     "treedb-tests.yml": {
       "coverage": "existing execution only; triggers/path filters are unchanged",

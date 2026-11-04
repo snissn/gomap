@@ -1,60 +1,171 @@
-name: "TreeDB: bounded maintenance diagnostic (manual only)"
+name: "TreeDB: steady rusage diagnostic (manual only)"
 
 on:
   workflow_dispatch:
+    inputs:
+      expected_head:
+        description: Full immutable independently reviewed diagnostic harness commit
+        required: true
+        type: string
 
 permissions:
   contents: read
+  actions: read
+
+concurrency:
+  group: steady-rusage-fixed-diagnostic
+  cancel-in-progress: false
 
 jobs:
   diagnostic:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
-    name: fixed 5bca / a17fe fourteen-call diagnostic
-    runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/diagnostic/steady-rusage-hosted-capture-01'
+    name: fixed six-pair steady process usage (non-gate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       PYTHONDONTWRITEBYTECODE: "1"
+      EXPECTED_HARNESS_HEAD: ${{ inputs.expected_head }}
+      EXPECTED_WORKFLOW_HEAD: ${{ github.workflow_sha }}
     steps:
-      - name: Initialize retained attempt packet
+      - name: Authenticate exact ROOT dispatch before task input acquisition
+        timeout-minutes: 1
+        shell: bash
         run: |
-          mkdir "$RUNNER_TEMP/mvcc-maintenance-setup"
-          printf '%s\n' 'Only fixed separately reviewed bounded diagnostics are authorized.' "harness=$GITHUB_SHA" "run=$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT" > "$RUNNER_TEMP/mvcc-maintenance-setup/scope.txt"
+          set -euo pipefail
+          test "$GITHUB_ACTOR_ID" = 1981537
+          test "$GITHUB_REPOSITORY" = snissn/gomap
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          test "$GITHUB_REF" = refs/heads/diagnostic/steady-rusage-hosted-capture-01
+          [[ "$EXPECTED_HARNESS_HEAD" =~ ^[0-9a-f]{40}$ ]]
+          test "$GITHUB_SHA" = "$EXPECTED_HARNESS_HEAD"
+          test "$EXPECTED_WORKFLOW_HEAD" = "$EXPECTED_HARNESS_HEAD"
+          root="$RUNNER_TEMP/steady-rusage-capture"
+          mkdir "$root" "$root/data" "$root/tmp"
+          printf 'CAPTURE_ROOT=%s\nCAPTURE_OUT=%s/data\n' "$root" "$root" >> "$GITHUB_ENV"
+          printf 'Diagnostic only. No acceptance, merge, prior CPU failure or logical HOLD clearance.\n' > "$root/scope.txt"
+          printf 'head=%s\nworkflow=%s\nactor=%s\nrun=%s/%s\n' "$GITHUB_SHA" "$EXPECTED_WORKFLOW_HEAD" "$GITHUB_ACTOR_ID" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > "$root/dispatch.txt"
 
-      - name: Checkout reviewed diagnostic harness
+      - name: Checkout exact reviewed diagnostic source
+        timeout-minutes: 1
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: ${{ inputs.expected_head }}
           persist-credentials: false
-          ref: ${{ github.sha }}
-          fetch-depth: 0
+          fetch-depth: 2
 
-      - name: Setup exact Go 1.26.3
+      - name: Setup stock pinned Go
+        timeout-minutes: 2
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: "1.26.3"
+          go-version: "1.26.10"
           check-latest: false
-          cache: false
+          cache: true
+          cache-dependency-path: go.sum
 
-      - name: Check syntax, receipts and fixed workflow contract (no Go execution)
-        run: python3 -B .github/scripts/mvcc_maintenance_test.py > "$RUNNER_TEMP/mvcc-maintenance-setup/pure-tests.log" 2>&1
+      - name: Authenticate source closure and actual focused prerequisite
+        timeout-minutes: 1
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HARNESS_HEAD"
+          test "$(git rev-parse HEAD^)" = 4dcf7d746bb3138458ad663e105a4c257787c1a3
+          test -z "$(git status --porcelain)"
+          git diff --exit-code 4dcf7d746bb3138458ad663e105a4c257787c1a3 HEAD -- cmd ':(exclude)cmd/unified_bench/README.md' ':(exclude)cmd/benchprof/README.md' TreeDB HashDB go.mod go.sum .github/workflows/treedb-tests.yml .github/workflows/unified-bench-tests.yml .github/scripts/check_vlog_auto_incompressible.go
+          sha256sum -c .github/scripts/steady_rusage_source.sha256 > "$CAPTURE_ROOT/input-hashes.txt"
+          git show -s --format='head=%H%ntree=%T%nparents=%P' HEAD > "$CAPTURE_ROOT/source.txt"
+          timeout --signal=TERM --kill-after=5s 15s gh api repos/snissn/gomap/actions/jobs/126934524414 > "$CAPTURE_ROOT/focused-job.json"
+          timeout --signal=TERM --kill-after=5s 15s gh api repos/snissn/gomap/actions/artifacts/13372144927 > "$CAPTURE_ROOT/focused-artifact.json"
+          python3 -B - <<'PY'
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ['CAPTURE_ROOT'])
+          job = json.loads((root/'focused-job.json').read_text())
+          artifact = json.loads((root/'focused-artifact.json').read_text())
+          assert job['id'] == 126934524414 and job['run_id'] == 41933051817
+          assert job['head_sha'] == '4dcf7d746bb3138458ad663e105a4c257787c1a3'
+          assert job['status'] == 'completed' and job['conclusion'] == 'success'
+          assert artifact['id'] == 13372144927 and artifact['size_in_bytes'] == 10593
+          assert not artifact['expired']
+          assert artifact['digest'] == 'sha256:10dab1dbffd5796d409227ed9d43d6598719e53c74a6a0015c708bb24c36572c'
+          assert artifact['workflow_run']['head_sha'] == '4dcf7d746bb3138458ad663e105a4c257787c1a3'
+          PY
 
-      - name: Prepare exact inputs and collect once
-        run: python3 -B .github/scripts/mvcc_maintenance_bootstrap.py > "$RUNNER_TEMP/mvcc-maintenance-setup/bootstrap.log" 2>&1
+      - name: One guarded original balanced block with opt-in interval receipts
+        id: capture
+        timeout-minutes: 12
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset GH_TOKEN GITHUB_TOKEN GOMAP_DIAGNOSTIC_STEADY_RUSAGE
+          export TMPDIR="$CAPTURE_ROOT/tmp"
+          export GOTMPDIR="$CAPTURE_ROOT/tmp"
+          set +e
+          python3 -B "$GITHUB_WORKSPACE/.github/scripts/steady_rusage_guard/ycsb_campaign_guard.py" \
+            --synthetic --scripts-dir "$GITHUB_WORKSPACE/.github/scripts/steady_rusage_guard" \
+            --out "$CAPTURE_ROOT/guard" --cwd "$GITHUB_WORKSPACE" --filesystem "$RUNNER_TEMP" \
+            --deadline 660 --cleanup-seconds 10 --interval .2 \
+            --rss-cap-bytes 25769803776 --free-floor-bytes 10737418240 \
+            -- bash "$GITHUB_WORKSPACE/.github/scripts/steady_rusage_capture.sh"
+          status=$?
+          set -e
+          printf '%s\n' "$status" > "$CAPTURE_ROOT/guard.exit"
+          cat "$CAPTURE_ROOT/guard/stdout.log" || true
+          cat "$CAPTURE_ROOT/guard/stderr.log" || true
+          test "$status" -eq 0
 
-      - name: Upload complete attempt, including failure/refusal
+      - name: Retain complete attempt storage and raw identity ledger
         if: always()
+        timeout-minutes: 1
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${CAPTURE_ROOT:-}"
+          python3 -B - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          root = Path(os.environ['CAPTURE_ROOT'])
+          files = {}
+          for path in sorted(root.rglob('*')):
+              if path.is_symlink():
+                  files[str(path.relative_to(root))] = {'symlink': True}
+                  continue
+              if path.is_file():
+                  digest = hashlib.sha256()
+                  with path.open('rb') as stream:
+                      for chunk in iter(lambda: stream.read(1048576), b''):
+                          digest.update(chunk)
+                  files[str(path.relative_to(root))] = {'bytes': path.stat().st_size, 'sha256': digest.hexdigest()}
+          context = root/'data/go-env.json'
+          goenv = json.loads(context.read_text()) if context.is_file() else {}
+          storage = {}
+          for label, raw in [('task_root', str(root)), ('checkout', os.environ['GITHUB_WORKSPACE']), ('GOROOT', goenv.get('GOROOT')), ('GOCACHE', goenv.get('GOCACHE')), ('GOMODCACHE', goenv.get('GOMODCACHE'))]:
+              if not raw:
+                  storage[label] = {'unavailable': True}
+                  continue
+              path = Path(raw)
+              total = count = 0
+              for item in path.rglob('*'):
+                  if item.is_file() and not item.is_symlink():
+                      total += item.stat().st_size
+                      count += 1
+              storage[label] = {'path': str(path), 'regular_files': count, 'logical_bytes': total}
+          receipt = {'scope': 'DIAGNOSTIC_ONLY_NOT_ACCEPTANCE', 'files': files, 'storage': storage,
+                     'storage_limit': 'No whole-root/aggregate-log cap claimed; sampled free-floor only. Overlapping ledger roots must not be summed.',
+                     'guard_limit': '24GiB sampled owned descendant RSS/10GiB free floor/.2s/660s/up to three10s cleanup passes; guard source owns actual completion semantics.',
+                     'setup_scope': 'checkout/setup-go action bytes outside taskroot are input/setup context; neither guarded child RSS nor taskroot-only accounting is claimed to cover them.'}
+          (root/'final-ledger.json').write_text(json.dumps(receipt,indent=2,sort_keys=True)+'\n')
+          print(json.dumps(receipt,sort_keys=True))
+          PY
+
+      - name: Upload original rows, receipts, profiles, views and all failure outputs
+        if: always()
+        timeout-minutes: 1
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: bounded-maintenance-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            ${{ runner.temp }}/mvcc-maintenance-a17fe/*.json
-            ${{ runner.temp }}/mvcc-maintenance-a17fe/*.log
-            ${{ runner.temp }}/mvcc-maintenance-a17fe/compiler
-            ${{ runner.temp }}/mvcc-maintenance-a17fe/archives
-            ${{ runner.temp }}/mvcc-maintenance-a17fe/go1.26.3-linux-amd64.tar.gz
-            ${{ runner.temp }}/mvcc-maintenance-a17fe/harness
-            ${{ runner.temp }}/mvcc-maintenance-a17fe/performance-185
-            !${{ runner.temp }}/mvcc-maintenance-a17fe/performance-185/**/tmp
-            ${{ runner.temp }}/mvcc-maintenance-setup
-          if-no-files-found: error
+          name: steady-rusage-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/steady-rusage-capture
           include-hidden-files: true
+          if-no-files-found: error
           retention-days: 14

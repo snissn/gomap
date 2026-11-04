@@ -1945,3 +1945,8 @@ joined. The default-off path retains its original shutdown behavior. Before DB
 initialization the receipt path must have an existing parent and must not alias
 configured CPU, allocation, checkpoint, block, mutex, trace or profile-directory
 report outputs (including generated per-test names and benchprof insights).
+
+The separate fixed hosted diagnostic recipe is documented in
+[steady_rusage_capture.md](../../.github/scripts/steady_rusage_capture.md). It
+retains original six-pair rows and adds opt-in interval receipts under the
+maintained sampled guard; it does not enable receipts in acceptance perf-smoke.
