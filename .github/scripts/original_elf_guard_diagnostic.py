@@ -108,11 +108,15 @@ class Attempt:
             self.failure = repr(error)
             self.stop.set()
 
-    def check(self, additional_bytes=0):
-        # Direct materialization must observe the same sticky failure as children.
+    def pulse(self):
+        # Cheap within already precharged direct writes; no tree walk per chunk/member.
         need(self.failure is None, 'resource failure during materialization: '+str(self.failure))
         remaining = 600-(time.monotonic()-self.started)
         need(remaining > 0, '600s whole deadline during materialization')
+        return remaining
+
+    def check(self, additional_bytes=0):
+        remaining = self.pulse()
         row = census(self.root)
         need(row['whole_bytes']+additional_bytes <= ROOT_CAP, 'prospective write exceeds whole root')
         return remaining
@@ -178,14 +182,14 @@ def provision_go(attempt, root):
     with urllib.request.urlopen('https://go.dev/dl/'+archive_name, timeout=min(120, attempt.check(expected_size))) as source, archive.open('xb') as stream:
         size = 0
         while True:
-            attempt.check()
+            attempt.pulse()
             if source.isclosed():
                 break
-            source.fp.raw._sock.settimeout(min(10, attempt.check()))
+            source.fp.raw._sock.settimeout(min(10, attempt.pulse()))
             block = source.read(1 << 20)
             if not block:
                 break
-            attempt.check(len(block))
+            attempt.pulse()
             size += len(block)
             need(size <= expected_size, 'official Go archive oversize')
             stream.write(block)
@@ -208,46 +212,61 @@ def provision_go(attempt, root):
             total = sum(m.file_size for m in members)
     need(len(names) == len(set(names)) and all(n.startswith('go/') and '..' not in Path(n).parts and '\\' not in n for n in names), 'unsafe tool archive')
     before = census(root)
-    need(before['whole_bytes']+total <= ROOT_CAP, 'tool extraction peak cannot fit')
+    # Fixed receipt also fits within the precharge; archive is already counted.
+    attempt.check(total+1024)
     write(root/'tool-archive.json', {'name': archive_name, 'sha256': expected_sha, 'bytes': size,
-          'expanded_bytes': total, 'peak_upper_bound': before['whole_bytes']+total})
+          'expanded_bytes': total, 'receipt_reservation_bytes':1024,
+          'peak_upper_bound': before['whole_bytes']+total+1024})
+    need((root/'tool-archive.json').stat().st_size <= 1024, 'tool receipt exceeds precharge')
+    expanded = 0
     if system == 'Linux':
         with tarfile.open(archive, 'r:gz') as package:
             for member in package:
-                attempt.check()
+                attempt.pulse()
                 output = root/member.name
                 if member.isdir():
                     output.mkdir(parents=True, exist_ok=True)
                     continue
                 output.parent.mkdir(parents=True, exist_ok=True)
+                member_bytes = 0
                 with package.extractfile(member) as source, output.open('xb') as stream:
                     while True:
-                        attempt.check()
+                        attempt.pulse()
                         block = source.read(1 << 20)
                         if not block:
                             break
-                        attempt.check(len(block))
+                        attempt.pulse()
+                        member_bytes += len(block)
+                        expanded += len(block)
+                        declared = member.size if system == 'Linux' else member.file_size
+                        need(member_bytes <= declared and expanded <= total, 'tool decoded bytes exceed precharge')
                         stream.write(block)
                 need(output.stat().st_size == member.size, 'tool member size')
                 output.chmod(member.mode & 0o777)
     else:
         with zipfile.ZipFile(archive) as package:
             for member in package.infolist():
-                attempt.check()
+                attempt.pulse()
                 output = root/member.filename
                 if member.is_dir():
                     output.mkdir(parents=True, exist_ok=True)
                     continue
                 output.parent.mkdir(parents=True, exist_ok=True)
+                member_bytes = 0
                 with package.open(member) as source, output.open('xb') as stream:
                     while True:
-                        attempt.check()
+                        attempt.pulse()
                         block = source.read(1 << 20)
                         if not block:
                             break
-                        attempt.check(len(block))
+                        attempt.pulse()
+                        member_bytes += len(block)
+                        expanded += len(block)
+                        declared = member.size if system == 'Linux' else member.file_size
+                        need(member_bytes <= declared and expanded <= total, 'tool decoded bytes exceed precharge')
                         stream.write(block)
                 need(output.stat().st_size == member.file_size, 'tool member size')
+    need(expanded == total, 'tool expanded byte total differs from headers')
     attempt.check()
     # Remove only this authenticated owned staging archive, never preexisting inputs.
     archive.unlink()
@@ -268,7 +287,7 @@ def retrieve_original(attempt, root, token):
         def redirect_request(self, req, fp, code, msg, headers, newurl):
             return None
     try:
-        with urllib.request.build_opener(NoRedirect).open(request, timeout=min(30, attempt.check())):
+        with urllib.request.build_opener(NoRedirect).open(request, timeout=min(30, attempt.pulse())):
             raise RuntimeError('expected original archive redirect')
     except urllib.error.HTTPError as redirect:
         need(redirect.code == 302, 'artifact download authorization/availability')
@@ -279,14 +298,14 @@ def retrieve_original(attempt, root, token):
     with urllib.request.urlopen(location, timeout=min(180, attempt.check(ZIP_BYTES))) as response, archive.open('xb') as stream:
         count = 0
         while True:
-            attempt.check()
+            attempt.pulse()
             if response.isclosed():
                 break
-            response.fp.raw._sock.settimeout(min(10, attempt.check()))
+            response.fp.raw._sock.settimeout(min(10, attempt.pulse()))
             block = response.read(1 << 20)
             if not block:
                 break
-            attempt.check(len(block))
+            attempt.pulse()
             count += len(block)
             need(count <= ZIP_BYTES, 'artifact larger than original')
             stream.write(block)
@@ -298,11 +317,13 @@ def retrieve_original(attempt, root, token):
     destination = root/'original'
     destination.mkdir()
     with zipfile.ZipFile(archive) as z:
-        need(census(root)['whole_bytes']+sum(m.file_size for m in z.infolist() if m.filename in wanted) <= ROOT_CAP, 'selected original extraction peak')
+        selected_total = sum(m.file_size for m in z.infolist() if m.filename in wanted)
+        attempt.check(selected_total+4096)  # Fixed eight-row selected-members receipt.
+        selected_written = 0
         names = set()
         rows = []
         for member in z.infolist():
-            attempt.check()
+            attempt.pulse()
             name = member.filename
             need(name not in names and not name.startswith('/') and '\\' not in name and '..' not in Path(name).parts,
                  'unsafe/duplicate ZIP member')
@@ -313,18 +334,25 @@ def retrieve_original(attempt, root, token):
             need(member.file_size <= 160*1024**2, 'selected member too large')
             output = destination/name
             output.parent.mkdir(parents=True, exist_ok=True)
+            member_bytes = 0
             with z.open(member) as source, output.open('xb') as stream:
                 while True:
-                    attempt.check()
+                    attempt.pulse()
                     block = source.read(1 << 20)
                     if not block:
                         break
-                    attempt.check(len(block))
+                    attempt.pulse()
+                    member_bytes += len(block)
+                    selected_written += len(block)
+                    need(member_bytes <= member.file_size and selected_written <= selected_total, 'selected decoded bytes exceed precharge')
                     stream.write(block)  # zipfile checks selected-member CRC at EOF.
             need(output.stat().st_size == member.file_size, 'selected member size')
             rows.append({'path': name, 'bytes': member.file_size, 'crc32': member.CRC, 'sha256': sha(output)})
         need(wanted <= names, 'original measured receipts/members missing')
+        need(selected_written == selected_total, 'selected decoded total differs from headers')
+    need(len(json.dumps(rows, indent=2, sort_keys=True, allow_nan=False).encode())+1 <= 4096, 'selected receipt exceeds precharge')
     write(destination/'selected-members.json', rows)
+    attempt.check()
     manifest = json.loads((destination/'measured-binaries.json').read_text())
     need(manifest['status'] == 'RETAINED_ACTUAL_MEASURED_EXECUTABLES', 'original producer status')
     for key, filename in (('environment_sha256', 'environment.txt'), ('initial_digests_sha256', 'binary-sha256.txt'),
@@ -441,6 +469,7 @@ def acquire_windows_source(attempt, root, token):
     for label, argv in commands:
         need(attempt.run(label, argv, 10, env=env) == 0, 'fixed source setup failed')
     attempt.check()
+    (source/'.git/info').mkdir(parents=True, exist_ok=True)
     (source/'.git/info/sparse-checkout').write_text('/*\n!/docs/evidence/\n!/docs/benchmarks/\n!/TreeDB/docs/evidence/\n!/TreeDB/docs/benchmarks/\n', encoding='utf-8')
     fetch_env = dict(env)
     if token:
@@ -466,8 +495,9 @@ def acquire_windows_source(attempt, root, token):
     need((attempt.out/'source-tree.stdout.log').read_text().strip()=='456878d8106f2225cb0593f8200b7ff2f34984a6','exact observer tree required')
     need(attempt.run('source-clean',[str(git),'-C',str(source),'diff','--exit-code','HEAD','--'],30,env=env)==0,'source worktree differs')
     source_bytes=0
+    attempt.check()
     for directory, dirs, files in os.walk(source):
-        attempt.check()
+        attempt.pulse()
         if Path(directory)==source:
             dirs[:]=[name for name in dirs if name!='.git']
         for name in files:
@@ -475,6 +505,7 @@ def acquire_windows_source(attempt, root, token):
             need(path.is_file() and not path.is_symlink(),'nonregular observer source')
             source_bytes+=path.stat().st_size
     need(source_bytes==122385372,'exact selected source size mismatch')
+    attempt.check()
     write(attempt.out/'observer-source-receipt.json', {'head':OBSERVER,'tree':'456878d8106f2225cb0593f8200b7ff2f34984a6',
         'selected_bytes':source_bytes,'excluded':['docs/evidence','docs/benchmarks','TreeDB/docs/evidence','TreeDB/docs/benchmarks'],
         'source_is_git_worktree':True,'harness_is_git_worktree':False,'archive_fallback':False})
