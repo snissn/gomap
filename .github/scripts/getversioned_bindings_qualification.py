@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import sys
 
@@ -23,6 +24,104 @@ NEW = {
            "TestTreeGenericResetRetainsDynamicKeyPolicy/disabled"},
 }
 NEW_TOPS = {n.split("/")[0] for names in NEW.values() for n in names}
+
+# Exact source scope for compiler diagnostics, not a verdict about escapes or
+# machine calls. All unknown/error text survives selection. The ordinary
+# optimized ELFs and their nm/objdump captures remain the structural evidence.
+COMPILER_SOURCES = {
+    "db": {
+        "TreeDB/db/value_reader.go": ("5e91f5d3f97f1a85f22a2f7995bb9663a75030c1f8d00ef64722ab7763d7db17", ((63, 75),)),
+        "TreeDB/db/db.go": ("53f43cd2ccd5611eae203b19046900c3f1e486d6dc0d65134f0b7857c0ae64d1", ((1787, 1968),)),
+    },
+    "tree": {
+        "TreeDB/tree/tree.go": ("94acd5911f9c8fce15f3ac382a36c36f6ef0202c665d946e70914e6aa720e411", ((369, 487),)),
+    },
+}
+POSITION = re.compile(r"^(.*\.go):(\d+):(\d+): ?(.*)$")
+# Go1.26.10 inline/inl.go and escape/{escape,solve,graph}.go emit these
+# optimization-only forms. In particular the runtime prohibition is an actual
+# compiler error, and warnings/unrecognized messages are never omitted.
+OPTIMIZATION = re.compile(
+    r"^(?:cannot inline .+|can inline .+|inlining call to .+|"
+    r".+ capturing by (?:value|ref): .+|moved to heap: .+|"
+    r".+ escapes to heap(?: in .+:)?|.+ does not escape|"
+    r"parameter .+ leaks to .+ for .+ with derefs=\d+:|"
+    r"leaking param(?: content)?: .+|zero-copy string->\[\]byte conversion|"
+    r"  flow: .+|    from .+)$"
+)
+
+
+def compiler_scope(arm, repository):
+    sources = COMPILER_SOURCES[arm]
+    for name, (expected, _) in sources.items():
+        if hashlib.sha256((repository / name).read_bytes()).hexdigest() != expected:
+            raise ValueError("compiler selection source identity changed")
+    return sources
+
+
+def omit_optimization(line, sources):
+    try:
+        match = POSITION.fullmatch(line.decode("utf-8").rstrip("\r\n"))
+    except UnicodeDecodeError:
+        return False
+    if not match:
+        return False
+    path, number, _, message = match.groups()
+    if "not allowed in runtime" in message or not OPTIMIZATION.fullmatch(message):
+        return False
+    path = path.replace("\\", "/")
+    for name, (_, ranges) in sources.items():
+        if path.rsplit("/", 1)[-1] == Path(name).name:
+            if any(first <= int(number) <= last for first, last in ranges):
+                return False
+    return True
+
+
+def compiler_stream(arm, root, incoming, repository):
+    """Consume the entire stderr stream, selecting only named optimizer scope.
+
+    Raw bytes are hashed/counted, never represented as an uploaded raw log.
+    Incomplete input or any limit/error refuses qualification. Bash separately
+    retains the original compiler/timeout exit, so selection cannot hide it.
+    """
+    sources = compiler_scope(arm, repository)
+    bounds(root)
+    record = {"schema": "getversioned-compiler-selection-v1", "arm": arm,
+              "scope": {n: {"sha256": h, "inclusive_lines": spans} for n, (h, spans) in sources.items()},
+              "status": "INCOMPLETE", "raw_eof": False, "raw_bytes": 0,
+              "raw_lines": 0, "retained_bytes": 0, "retained_lines": 0,
+              "omitted_optimization_bytes": 0, "omitted_optimization_lines": 0,
+              "raw_uploaded": False, "compiler_exit_required_separately": True}
+    digest = hashlib.sha256()
+    try:
+        with (root / (arm + "-compiler.selected.stderr")).open("xb") as selected:
+            while True:
+                line = incoming.readline(LOG_LIMIT + 1)
+                if not line:
+                    record["raw_eof"] = True
+                    record["status"] = "SCOPED_STREAM_COMPLETE_REVIEW_PENDING"
+                    break
+                digest.update(line)
+                record["raw_bytes"] += len(line)
+                record["raw_lines"] += 1
+                if len(line) > LOG_LIMIT:
+                    raise ValueError("compiler diagnostic line exceeds32MiB")
+                if omit_optimization(line, sources):
+                    record["omitted_optimization_bytes"] += len(line)
+                    record["omitted_optimization_lines"] += 1
+                else:
+                    if record["retained_bytes"] + len(line) > LOG_LIMIT:
+                        raise ValueError("selected compiler text exceeds32MiB")
+                    selected.write(line)
+                    record["retained_bytes"] += len(line)
+                    record["retained_lines"] += 1
+    finally:
+        record["raw_sha256" if record["raw_eof"] else "consumed_prefix_sha256"] = digest.hexdigest()
+        with (root / (arm + "-compiler-stream.json")).open("x", encoding="utf-8") as receipt:
+            json.dump(record, receipt, indent=2, sort_keys=True)
+            receipt.write("\n")
+    bounds(root)
+    return record
 
 
 def events(path):
@@ -100,7 +199,7 @@ def bounds(root):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("selector", "normal", "race", "bounds", "manifest"))
+    parser.add_argument("mode", choices=("selector", "normal", "race", "compiler-db", "compiler-tree", "bounds", "manifest"))
     parser.add_argument("directory", nargs="?", type=Path)
     a = parser.parse_args()
     if a.mode == "selector":
@@ -109,6 +208,10 @@ def main():
     if a.directory is None:
         parser.error("directory required")
     root = a.directory
+    if a.mode.startswith("compiler-"):
+        result = compiler_stream(a.mode.removeprefix("compiler-"), root, sys.stdin.buffer, Path(__file__).resolve().parents[2])
+        print(json.dumps(result, sort_keys=True))
+        return
     if a.mode in {"normal", "race"}:
         bounds(root)
         result = events(root / (a.mode + ".jsonl"))

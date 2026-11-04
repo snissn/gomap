@@ -113,12 +113,19 @@ jobs:
           set -euo pipefail
           out="$QUALIFICATION_OUT"
           set +e
-          timeout --signal=TERM --kill-after=10s 180s go test -c -tags=treedb_test -gcflags='github.com/snissn/gomap/TreeDB/...=-m=2' -o "$out/db.test" ./TreeDB/db > "$out/db-compiler.stdout" 2> "$out/db-compiler.stderr"
-          rc=$?
+          # Only this owning package emits -m=2. Stream selection retains the
+          # changed functions and ALL unknown/error lines, with full raw digest.
+          # Left-to-right redirection sends stderr to the pipe, stdout to file.
+          timeout --signal=TERM --kill-after=10s 180s go test -c -tags=treedb_test -gcflags='github.com/snissn/gomap/TreeDB/db=-m=2' -o "$out/db.test" ./TreeDB/db 2>&1 > "$out/db-compiler.stdout" |
+            timeout --signal=TERM --kill-after=10s 200s python3 -B .github/scripts/getversioned_bindings_qualification.py compiler-db "$out" > "$out/db-selection.stdout" 2> "$out/db-selection.stderr"
+          exits=("${PIPESTATUS[@]}")
           set -e
-          printf '%s\n' "$rc" > "$out/db-compiler.exit"
+          test "${#exits[@]}" -eq 2
+          printf '%s\n' "${exits[0]}" > "$out/db-compiler.exit"
+          printf '%s\n' "${exits[1]}" > "$out/db-selection.exit"
           python3 -B .github/scripts/getversioned_bindings_qualification.py bounds "$out"
-          test "$rc" -eq 0
+          test "${exits[0]}" -eq 0
+          test "${exits[1]}" -eq 0
           sha256sum "$out/db.test" > "$out/db-test-sha256.txt"
 
       - name: Compile optimized Tree test ELF and escape diagnostics
@@ -127,12 +134,19 @@ jobs:
           set -euo pipefail
           out="$QUALIFICATION_OUT"
           set +e
-          timeout --signal=TERM --kill-after=10s 180s go test -c -tags=treedb_test -gcflags='github.com/snissn/gomap/TreeDB/...=-m=2' -o "$out/tree.test" ./TreeDB/tree > "$out/tree-compiler.stdout" 2> "$out/tree-compiler.stderr"
-          rc=$?
+          # Only this owning package emits -m=2. Stream selection retains the
+          # changed functions and ALL unknown/error lines, with full raw digest.
+          # Left-to-right redirection sends stderr to the pipe, stdout to file.
+          timeout --signal=TERM --kill-after=10s 180s go test -c -tags=treedb_test -gcflags='github.com/snissn/gomap/TreeDB/tree=-m=2' -o "$out/tree.test" ./TreeDB/tree 2>&1 > "$out/tree-compiler.stdout" |
+            timeout --signal=TERM --kill-after=10s 200s python3 -B .github/scripts/getversioned_bindings_qualification.py compiler-tree "$out" > "$out/tree-selection.stdout" 2> "$out/tree-selection.stderr"
+          exits=("${PIPESTATUS[@]}")
           set -e
-          printf '%s\n' "$rc" > "$out/tree-compiler.exit"
+          test "${#exits[@]}" -eq 2
+          printf '%s\n' "${exits[0]}" > "$out/tree-compiler.exit"
+          printf '%s\n' "${exits[1]}" > "$out/tree-selection.exit"
           python3 -B .github/scripts/getversioned_bindings_qualification.py bounds "$out"
-          test "$rc" -eq 0
+          test "${exits[0]}" -eq 0
+          test "${exits[1]}" -eq 0
           sha256sum "$out/tree.test" > "$out/tree-test-sha256.txt"
 
       - name: Capture stock optimized symbols and exact structural text

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Pure fixed event/source controls for the #5396 hosted qualification."""
 import importlib.util
+import hashlib
+import io
 import json
 import os
 from unittest import mock
@@ -119,13 +121,70 @@ class FixedQualificationTests(unittest.TestCase):
         self.assertIn("timeout-minutes: 25", job)
         self.assertEqual(job.count("go test -json -tags=treedb_test -count=1"), 1)
         self.assertEqual(job.count("go test -race -json -tags=treedb_test -count=1"), 1)
-        self.assertEqual(job.count("-gcflags='github.com/snissn/gomap/TreeDB/...=-m=2'"), 2)
+        for arm in ("db", "tree"):
+            self.assertEqual(job.count("-gcflags='github.com/snissn/gomap/TreeDB/" + arm + "=-m=2'"), 1)
+            self.assertIn("compiler-" + arm + ' "$out"', job)
+            self.assertIn('"${exits[0]}" > "$out/' + arm + '-compiler.exit"', job)
+            self.assertIn('"${exits[1]}" > "$out/' + arm + '-selection.exit"', job)
+        self.assertEqual(job.count('exits=("${PIPESTATUS[@]}")'), 2)
+        self.assertEqual(job.count('test "${exits[0]}" -eq 0'), 2)
+        self.assertEqual(job.count('test "${exits[1]}" -eq 0'), 2)
+        self.assertNotIn("TreeDB/...=-m=2", job)
         self.assertNotIn("${QUALIFICATION_OUT}", job)
         self.assertNotIn("-gcflags='all=-l'", job)
         self.assertIn('mkdir "$out"', job)
         self.assertIn('manifest "$QUALIFICATION_OUT"', job)
         self.assertIn("INCONCLUSIVE: required optimized symbol text absent", job)
         self.assertEqual(len(set(Q.DB_TOPS + Q.TREE_TOPS)), 29)
+
+    def test_compiler_selection_preserves_scope_errors_and_unknowns(self):
+        sources = Q.COMPILER_SOURCES["db"]
+        kept = [b"TreeDB/db/value_reader.go:65:10: can inline selected\n",
+                b"./TreeDB/db/db.go:1940:4: inlining call to selected\n",
+                b"/checkout/TreeDB/db/db.go:1940:4:   flow: x = y:\n",
+                b"TreeDB/db/db.go:1940:4:     from x (return) at x.go:1:2\n",
+                b"TreeDB/db/other.go:1:2: x escapes to heap, not allowed in runtime\n",
+                b"TreeDB/db/other.go:1:2: undefined: missing\n",
+                b"TreeDB/db/other.go:1:2:   warning: truncated explanation\n",
+                b"# package heading\n", b"unknown future compiler transport\n", b"\xff\n"]
+        for line in kept:
+            self.assertFalse(Q.omit_optimization(line, sources), line)
+        for line in (b"TreeDB/db/other.go:1:2: can inline irrelevant with cost 3\n",
+                     b"TreeDB/db/db.go:2500:4: x escapes to heap in f:\n",
+                     b"TreeDB/db/db.go:2500:4:   flow: x = y:\n",
+                     b"TreeDB/db/db.go:2500:4:     from x (return) at x.go:1:2\n"):
+            self.assertTrue(Q.omit_optimization(line, sources), line)
+
+    def test_compiler_stream_identity_digest_and_failure_receipt(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {"RUNNER_TEMP": ""}):
+            os.environ["RUNNER_TEMP"] = d
+            root = Path(d) / "getversioned-bindings-qualification"
+            root.mkdir()
+            repository = HERE.parents[1]
+            raw = (b"TreeDB/db/other.go:1:2: can inline irrelevant\n"
+                   b"TreeDB/db/value_reader.go:65:2: r does not escape\n"
+                   b"TreeDB/db/other.go:1:2: undefined: missing\n")
+            result = Q.compiler_stream("db", root, io.BytesIO(raw), repository)
+            self.assertTrue(result["raw_eof"])
+            self.assertEqual(result["raw_bytes"], len(raw))
+            self.assertEqual(result["raw_sha256"], hashlib.sha256(raw).hexdigest())
+            self.assertEqual(result["omitted_optimization_lines"], 1)
+            self.assertEqual((root / "db-compiler.selected.stderr").read_bytes(), raw.split(b"\n", 1)[1])
+            # An EOF-complete stream still needs the independently retained
+            # compiler exit: preserving its error text is not compiler PASS.
+            self.assertTrue(result["compiler_exit_required_separately"])
+            for p in root.iterdir():
+                p.unlink()
+            with mock.patch.object(Q, "LOG_LIMIT", 8), self.assertRaises(ValueError):
+                Q.compiler_stream("db", root, io.BytesIO(b"unknown diagnostic too long\n"), repository)
+            failed = json.loads((root / "db-compiler-stream.json").read_text())
+            self.assertFalse(failed["raw_eof"])
+            self.assertEqual(failed["status"], "INCOMPLETE")
+            self.assertNotIn("raw_sha256", failed)
+            self.assertIn("consumed_prefix_sha256", failed)
+            mismatched = {"db": {"TreeDB/db/db.go": ("0" * 64, ((1787, 1968),))}}
+            with mock.patch.object(Q, "COMPILER_SOURCES", mismatched), self.assertRaises(ValueError):
+                Q.compiler_scope("db", repository)
 
 
 if __name__ == "__main__":
