@@ -8,7 +8,7 @@ import zipfile
 
 EXPECTED_BYTES = 39216183
 EXPECTED_SHA = "5de6712dad46d51df5b56a83c89b190116fdb9971ad32c630509bb03152e6cb7"
-NAMES = {'race-inventory.json', 'artifact-manifest.json', 'db-selection.exit', 'db-compiler-stream.json', 'tree-test-sha256.txt', 'object-tools.exit', 'tree-compiler-stream.json', 'source.txt', 'tree-compiler.exit', 'tree-selection.exit', 'structural-status.txt', 'normal-inventory.json', 'db-test-sha256.txt', 'db-compiler.exit'}
+NAMES = {'go-version.log', 'db-capture.objdump', 'db-compiler.selected.stderr', 'db-bindings.objdump', 'tree-bindings.objdump', 'go-env.json', 'tree-compiler.selected.stderr', 'tree-reset.objdump', 'source-sha256.txt'}
 root = Path(os.environ["RUNNER_TEMP"]) / "four-gate-readback"
 archive = root / "original.zip"
 assert archive.stat().st_size == EXPECTED_BYTES, "archive size mismatch"
@@ -34,10 +34,18 @@ with zipfile.ZipFile(archive) as z:
             result["missing"].append(name)
             continue
         info = z.getinfo(name)
-        assert info.file_size <= 131072, "selected metadata file too large"
+        # The preceding authenticated ledger proves this one retained compiler
+        # text is 530943B. Read it whole under the unchanged1MiB total budget;
+        # this is retained-data review, not a producer or acceptance-limit change.
+        if name == "db-compiler.selected.stderr":
+            assert info.file_size == 530943, "compiler member size changed"
+        else:
+            assert info.file_size <= 131072, "selected metadata file too large"
         total += info.file_size
         assert total <= 1048576, "selected metadata aggregate too large"
         data = z.read(name)
+        if name == "db-compiler.selected.stderr":
+            assert hashlib.sha256(data).hexdigest() == "0d183e3eba923d693ea0d21ea542f7609c771f2530571a1284d3ad191ad8e9d4", "compiler member digest changed"
         result["texts"][name] = {"size": len(data), "sha256": hashlib.sha256(data).hexdigest(),
                                  "text": data.decode("utf-8")}
 (root / "readback.json").write_text(json.dumps(result, indent=2) + "\n")
