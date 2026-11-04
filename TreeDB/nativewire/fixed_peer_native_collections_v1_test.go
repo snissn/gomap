@@ -265,7 +265,11 @@ func fixedPeerSubmitNativeCollectionV1(t testing.TB, ctx context.Context, client
 		for _, beforeSubmit := range interpose {
 			beforeSubmit(status.Groups[0].CatalogVersion)
 		}
-		result, err := client.Submit(ctx, node, raw, metadata)
+		submitCtx, observation := fixedPeerGuardCreateSubmitContextV1(ctx, id, key)
+		result, err := client.Submit(submitCtx, node, raw, metadata)
+		if observation != nil {
+			observation.returned(ctx, result, err)
+		}
 		if errors.Is(err, raftcluster.ErrCatalogVersionMismatch) && !errors.Is(err, raftcluster.ErrCommitAmbiguous) && reflect.DeepEqual(result, raftcluster.SubmitResultV1{}) {
 			t.Logf("submit %s: definite precommit catalog mismatch, refreshing guard (attempt %d/3): %v", key, attempt+1, err)
 			continue
@@ -392,7 +396,17 @@ func TestFixedPeerTCPNativeCollectionCatalogGuardInterpositionV1(t *testing.T) {
 				attempts++
 				if attempts == 1 {
 					staleVersion = version
-					created = fixedPeerSubmitNativeCollectionV1(t, ctx, client, c.NodeID, iwire.CommandCreateCollection, "guard-create", []iwire.Section{{ID: iwire.SectionCollectionMeta, Bytes: mustEncodeCollectionMeta(meta)}})
+					func() {
+						observation := newFixedPeerGuardCreateObservationV1(ctx, c.RequestTimeout)
+						defer func() {
+							observation.finish(ctx)
+							if t.Failed() {
+								t.Logf("guard-create-client-observation-v1: %+v", observation.snapshot())
+							}
+						}()
+						observedCtx := context.WithValue(ctx, fixedPeerGuardCreateObservationKeyV1{}, observation)
+						created = fixedPeerSubmitNativeCollectionV1(t, observedCtx, client, c.NodeID, iwire.CommandCreateCollection, "guard-create", []iwire.Section{{ID: iwire.SectionCollectionMeta, Bytes: mustEncodeCollectionMeta(meta)}})
+					}()
 					inserted := fixedPeerSubmitNativeCollectionV1(t, ctx, client, c.NodeID, iwire.CommandInsertBatch, "guard-insert", sections(old))
 					col, db, err = fsm.OpenCollectionForRaftSourceFromCurrentDBV1(ctx, raftcluster.AppliedIndexReadBarrier{NodeID: c.NodeID, GroupID: "group-a", MinAppliedIndex: inserted.Evidence.Index}, "users")
 					if err != nil {
