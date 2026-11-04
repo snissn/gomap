@@ -6,9 +6,9 @@ from pathlib import Path
 import stat
 import zipfile
 
-EXPECTED_BYTES = 229302273
-EXPECTED_SHA = "eaac11b9de89d0d219a019fed5425955e1556333f8fa5b1014f5fd33850b642b"
-NAMES = {"primary/failure.json", "primary/summary.json", "primary/summary.md", "primary/commands.json", "primary/bindings.json", "primary/samples.json", "primary/preflight.json", "primary/preflight-acquisition.json"}
+EXPECTED_BYTES = 18188
+EXPECTED_SHA = "2ba4c42b45def0cac360d3ec9ca655469b1e212dbbcc2913a3049f4493b06128"
+NAMES = {'entry.stdout.log', 'output/pure-controls.stderr.log', 'output/normal.stderr.log', 'output/gofmt.stderr.log', 'output/failure.json', 'guard/result.json', 'output/gofmt.stdout.log', 'output/source-fetch.stderr.log', 'output/compile-context.json', 'guard/stderr.log', 'output/source-C-identity.stdout.log', 'guard/stdout.log', 'output/final-file-manifest.json', 'entry.stderr.log', 'output/stages.json', 'output/source-C-checkout.stderr.log'}
 root = Path(os.environ["RUNNER_TEMP"]) / "four-gate-readback"
 archive = root / "original.zip"
 assert archive.stat().st_size == EXPECTED_BYTES, "archive size mismatch"
@@ -17,7 +17,7 @@ with archive.open("rb") as f:
     for chunk in iter(lambda: f.read(1048576), b""):
         h.update(chunk)
 assert h.hexdigest() == EXPECTED_SHA, "archive digest mismatch"
-result = {"source_head": os.environ["GITHUB_SHA"], "artifact": 13372187566,
+result = {"source_head": os.environ["GITHUB_SHA"], "artifact": 13373243640,
           "archive_sha256": h.hexdigest(), "scope": "retained original text only; no gate alteration",
           "entries": [], "texts": {}, "missing": []}
 with zipfile.ZipFile(archive) as z:
