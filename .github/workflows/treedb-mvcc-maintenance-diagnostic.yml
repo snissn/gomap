@@ -1,60 +1,42 @@
-name: "TreeDB: bounded maintenance diagnostic (manual only)"
-
+name: "TreeDB: fixed four-gate receipt readback (manual only)"
 on:
   workflow_dispatch:
-
 permissions:
   contents: read
-
+  actions: read
 jobs:
-  diagnostic:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
-    name: fixed 5bca / a17fe fourteen-call diagnostic
+  readback:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/diagnostic/four-gate-artifact-readback-01' && github.run_attempt == 1
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
-    env:
-      PYTHONDONTWRITEBYTECODE: "1"
+    timeout-minutes: 10
     steps:
-      - name: Initialize retained attempt packet
-        run: |
-          mkdir "$RUNNER_TEMP/mvcc-maintenance-setup"
-          printf '%s\n' 'Only fixed separately reviewed bounded diagnostics are authorized.' "harness=$GITHUB_SHA" "run=$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT" > "$RUNNER_TEMP/mvcc-maintenance-setup/scope.txt"
-
-      - name: Checkout reviewed diagnostic harness
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
-          fetch-depth: 0
-
-      - name: Setup exact Go 1.26.3
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
-        with:
-          go-version: "1.26.3"
-          check-latest: false
-          cache: false
-
-      - name: Check syntax, receipts and fixed workflow contract (no Go execution)
-        run: python3 -B .github/scripts/mvcc_maintenance_test.py > "$RUNNER_TEMP/mvcc-maintenance-setup/pure-tests.log" 2>&1
-
-      - name: Prepare exact inputs and collect once
-        run: python3 -B .github/scripts/mvcc_maintenance_bootstrap.py > "$RUNNER_TEMP/mvcc-maintenance-setup/bootstrap.log" 2>&1
-
-      - name: Upload complete attempt, including failure/refusal
+          sparse-checkout: .github/scripts/four_gate_artifact_readback.py
+          sparse-checkout-cone-mode: false
+      - name: Read original archive once and authenticate before parsing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_PAGER: cat
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/four-gate-readback"
+          git rev-parse HEAD 'HEAD^{tree}' > "$RUNNER_TEMP/four-gate-readback/source.txt"
+          python3 --version > "$RUNNER_TEMP/four-gate-readback/python.txt"
+          gh version > "$RUNNER_TEMP/four-gate-readback/gh.txt"
+          ulimit -f 262144
+          timeout --signal=TERM --kill-after=5s 90s gh api repos/snissn/gomap/actions/artifacts/13369754216/zip > "$RUNNER_TEMP/four-gate-readback/original.zip"
+          timeout --signal=TERM --kill-after=5s 30s python3 -B .github/scripts/four_gate_artifact_readback.py
+      - name: Retain readback only
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: bounded-maintenance-${{ github.run_id }}-${{ github.run_attempt }}
+          name: four-gate-readback-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            ${{ runner.temp }}/mvcc-maintenance-a17fe/*.json
-            ${{ runner.temp }}/mvcc-maintenance-a17fe/*.log
-            ${{ runner.temp }}/mvcc-maintenance-a17fe/compiler
-            ${{ runner.temp }}/mvcc-maintenance-a17fe/archives
-            ${{ runner.temp }}/mvcc-maintenance-a17fe/go1.26.3-linux-amd64.tar.gz
-            ${{ runner.temp }}/mvcc-maintenance-a17fe/harness
-            ${{ runner.temp }}/mvcc-maintenance-a17fe/performance-185
-            !${{ runner.temp }}/mvcc-maintenance-a17fe/performance-185/**/tmp
-            ${{ runner.temp }}/mvcc-maintenance-setup
+            ${{ runner.temp }}/four-gate-readback/*.json
+            ${{ runner.temp }}/four-gate-readback/*.txt
           if-no-files-found: error
-          include-hidden-files: true
           retention-days: 14
