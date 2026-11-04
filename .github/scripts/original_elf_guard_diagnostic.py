@@ -69,7 +69,10 @@ def census(root):
             need(not stat.S_ISLNK(s.st_mode), 'unaccounted symlink: '+str(path))
             need(stat.S_ISREG(s.st_mode), 'nonregular task file: '+str(path))
             total += s.st_size
-            if path.suffix in ('.log', '.json', '.jsonl', '.txt', '.trace'):
+            relative = path.relative_to(root)
+            # Authenticated source/SDK/module bytes stay in whole-root accounting.
+            # Generated outputs have only these fixed namespaces; inputs are not logs.
+            if relative.parts[0] in ('output', 'guard') or (len(relative.parts) == 1 and path.suffix in ('.log', '.json', '.jsonl', '.txt', '.trace')):
                 logs += s.st_size
     need(total <= ROOT_CAP, 'whole root exceeds 1GiB')
     need(logs <= LOG_CAP, 'aggregate log/trace/JSON exceeds 32MiB')
