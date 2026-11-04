@@ -1914,7 +1914,10 @@ existing `-cpuprofile`/`-cpuprofile-tests batch_write_steady` path. The DB must
 support the original final checkpoint. An empty variable performs zero usage
 reads or receipt writes; unsupported platforms refuse selected mode before DB
 initialization. This private opt-in adds no benchmark, profile filename, result
-schema, checker, threshold, workflow or production-default change.
+schema, threshold or production-default change. The existing `unified-bench-tests`
+workflow pins Go 1.26.10, retains the platform vet/package tests, and adds Linux
+normal/race JSON controls checked by `check_steady_rusage_events.py` plus raw
+event, literal-exit and receipt artifact uploads. Those qualification receipts do not replace any performance acceptance gate.
 
 The two `RUSAGE_SELF` reads surround the original steady work and successful
 final checkpoint. They follow CPU-profile start and precede CPU-profile stop;
@@ -1933,3 +1936,12 @@ lifecycle result still fails the run. The destination must be absent; output is
 exclusive mode 0600 and bounded to 4096 bytes. These JSON receipts are separate
 diagnostic artifacts, not benchprof inputs or a replacement CPU gate. Preserve
 all original samples and gate failures when interpreting them.
+
+Selected-mode failures still attempt each opened DB's original Close exactly
+once. A failed Close is retained and its directory is left in place; it is not
+retried. Successfully closed directories are removed with checked errors unless
+`-keep` is selected. Original work errors remain first when cleanup errors are
+joined. The default-off path retains its original shutdown behavior. Before DB
+initialization the receipt path must have an existing parent and must not alias
+configured CPU, allocation, checkpoint, block, mutex, trace or profile-directory
+report outputs (including generated per-test names and benchprof insights).

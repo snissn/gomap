@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"math"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -30,13 +31,17 @@ func (d *processUsageCheckpointDB) Close() error {
 	return errors.Join(d.batchDeleteRangeMemoryDB.Close(), d.closeErr)
 }
 
-func runProcessUsageFixture(t *testing.T, selected bool, failRead int, checkpointErr, writeErr, closeErr error) ([]string, *processUsageReceipt, int, error) {
+func runProcessUsageFixture(t *testing.T, selected bool, failRead int, checkpointErr, writeErr, closeErr error, keepDir ...bool) ([]string, *processUsageReceipt, int, error) {
 	t.Helper()
 	var events []string
 	var receipt *processUsageReceipt
 	reads := 0
+	var openedDir string
+	keep := len(keepDir) == 1 && keepDir[0]
+	t.Setenv("TMPDIR", t.TempDir())
 	name := "process_usage_" + strings.ToLower(strings.ReplaceAll(t.Name(), "/", "_"))
-	RegisterHiddenDB(name, func(_ string) (kvstore.DB, error) {
+	RegisterHiddenDB(name, func(dir string) (kvstore.DB, error) {
+		openedDir = dir
 		d := newBatchDeleteRangeMemoryDB(name)
 		d.events = &events
 		return &processUsageCheckpointDB{batchDeleteRangeMemoryDB: d, checkpointErr: checkpointErr, closeErr: closeErr}, nil
@@ -69,7 +74,26 @@ func runProcessUsageFixture(t *testing.T, selected bool, failRead int, checkpoin
 			return writeErr
 		},
 	}
-	_, err := runBenchmark(BenchConfig{Keys: 64, ValueSize: 8, BatchSize: 16, DBsArg: name, TestsArg: "batch_write_steady", SeedUsed: 1, CPUProfile: filepath.Join(t.TempDir(), "cpu"), profileHooks: hooks})
+	_, err := runBenchmark(BenchConfig{Keys: 64, ValueSize: 8, BatchSize: 16, DBsArg: name, TestsArg: "batch_write_steady", SeedUsed: 1, KeepDir: keep, CPUProfile: filepath.Join(t.TempDir(), "cpu"), profileHooks: hooks})
+	if selected {
+		closes := 0
+		for _, event := range events {
+			if event == "db_close" {
+				closes++
+			}
+		}
+		if closes != 1 {
+			t.Fatalf("selected mode must attempt original Close once: %v", events)
+		}
+		_, statErr := os.Stat(openedDir)
+		if keep || closeErr != nil {
+			if statErr != nil {
+				t.Fatalf("kept or failed-Close directory must remain: %v", statErr)
+			}
+		} else if !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("successfully closed directory leaked: %s: %v", openedDir, statErr)
+		}
+	}
 	return events, receipt, reads, err
 }
 
@@ -201,5 +225,88 @@ func TestRunBenchmarkProcessUsageCloseFailureIsNotLifecycleSuccess(t *testing.T)
 	}
 	if writeAt < 0 || closeAt <= writeAt {
 		t.Fatalf("receipt must not move or certify original DB Close: %v", events)
+	}
+}
+
+func TestRunBenchmarkProcessUsageCleanup(t *testing.T) {
+	for _, name := range []string{"write_failure", "write_and_close_failure", "read_and_close_failure", "keep_dir", "normal"} {
+		t.Run(name, func(t *testing.T) {
+			var writeErr, closeErr error
+			if name == "write_failure" || name == "write_and_close_failure" {
+				writeErr = errors.New("receipt write failure")
+			}
+			if name == "write_and_close_failure" || name == "read_and_close_failure" {
+				closeErr = errors.New("DB Close failure")
+			}
+			failRead := 0
+			primary := writeErr
+			if name == "read_and_close_failure" {
+				failRead = 1
+				primary = errProcessUsageFixtureRead
+			}
+			_, receipt, reads, err := runProcessUsageFixture(t, true, failRead, nil, writeErr, closeErr, name == "keep_dir")
+			if receipt == nil || (failRead == 0 && (!receipt.Completed || reads != 2)) || (failRead != 0 && (receipt.Completed || reads != 1)) {
+				t.Fatalf("unexpected interval: reads=%d receipt=%+v", reads, receipt)
+			}
+			if writeErr == nil && closeErr == nil && err != nil {
+				t.Fatal(err)
+			}
+			if primary != nil && !errors.Is(err, primary) {
+				t.Fatalf("lost original diagnostic failure: %v", err)
+			}
+			if closeErr != nil && (!errors.Is(err, closeErr) || strings.Index(err.Error(), primary.Error()) >= strings.Index(err.Error(), closeErr.Error())) {
+				t.Fatalf("original error must precede cleanup Close failure: %v", err)
+			}
+		})
+	}
+}
+
+func TestProcessUsageCleanupRemoveFailure(t *testing.T) {
+	var events []string
+	db := newBatchDeleteRangeMemoryDB("usage_remove")
+	db.events = &events
+	owner := &processUsageDBOwner{instance: &DBInstance{Name: "usage_remove", Wrapper: &processUsageCheckpointDB{batchDeleteRangeMemoryDB: db}, Dir: "\x00"}}
+	if err := owner.cleanup(false); err == nil || !owner.closeOK || !owner.removeAttempted {
+		t.Fatalf("actual invalid-path RemoveAll error lost: %v", err)
+	}
+	if err := owner.cleanup(false); err != nil {
+		t.Fatalf("cleanup operation was retried: %v", err)
+	}
+	closes := 0
+	for _, event := range events {
+		if event == "db_close" {
+			closes++
+		}
+	}
+	if closes != 1 {
+		t.Fatalf("Close attempts=%d", closes)
+	}
+}
+
+func TestRunBenchmarkProcessUsageCollisionBeforeOpen(t *testing.T) {
+	name := "usage_collision_before_open"
+	opens := 0
+	RegisterHiddenDB(name, func(string) (kvstore.DB, error) {
+		opens++
+		return nil, errors.New("factory must not be entered")
+	})
+	prefix := filepath.Join(t.TempDir(), "cpu")
+	t.Setenv(processUsageEnv, prefix+"_batch_write_steady_"+name+".pprof")
+	_, err := runBenchmark(BenchConfig{Keys: 64, ValueSize: 8, BatchSize: 16, DBsArg: name, TestsArg: "batch_write_steady", CPUProfile: prefix})
+	if err == nil || opens != 0 {
+		t.Fatalf("collision reached factory: opens=%d err=%v", opens, err)
+	}
+}
+
+func TestProcessUsageOutputAlias(t *testing.T) {
+	dir := t.TempDir()
+	alias := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(dir, alias); err != nil {
+		t.Fatal(err)
+	}
+	cfg := BenchConfig{CPUProfile: filepath.Join(alias, "cpu")}
+	t.Setenv(processUsageEnv, filepath.Join(dir, "cpu_batch_write_steady_one.pprof"))
+	if u, err := selectedProcessUsage(cfg, []string{"one"}, []string{"batch_write_steady"}, true, func() (processUsageCounters, error) { return processUsageCounters{}, nil }); err == nil || u != nil {
+		t.Fatalf("aliased future output accepted: %v %v", u, err)
 	}
 }

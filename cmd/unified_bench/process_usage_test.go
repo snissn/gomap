@@ -100,3 +100,44 @@ func TestProcessUsageSampleRegressionFailsClosed(t *testing.T) {
 		t.Fatalf("regression not retained/fail-closed: receipt=%+v reads=%d err=%v", u.receipt, reads, err)
 	}
 }
+
+func TestProcessUsageOutputCollision(t *testing.T) {
+	for _, name := range []string{"cpu", "allocs", "checkpoint", "block", "block_delta", "mutex", "mutex_delta", "trace", "results_json", "results_md", "insights_json", "insights_md", "insights_html", "output_parent", "distinct"} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			oldProfileDir := *profileDir
+			*profileDir = dir
+			t.Cleanup(func() { *profileDir = oldProfileDir })
+			cfg := BenchConfig{CPUProfile: filepath.Join(dir, "cpu"), AllocsProfile: filepath.Join(dir, "allocs"), CheckpointCPUProfile: filepath.Join(dir, "checkpoint_cpu"), BlockProfile: filepath.Join(dir, "block.pprof"), MutexProfile: filepath.Join(dir, "mutex.pprof"), TraceProfile: filepath.Join(dir, "trace.out")}
+			paths := map[string]string{
+				"cpu":           "cpu_batch_write_steady_one.pprof",
+				"allocs":        "allocs_batch_write_steady_one.pprof",
+				"checkpoint":    "checkpoint_cpu_checkpoint_post-run_different_wrapper.pprof",
+				"block":         "block.pprof",
+				"block_delta":   "block_batch_write_steady_one.pprof",
+				"mutex":         "mutex.pprof",
+				"mutex_delta":   "mutex_batch_write_steady_one.pprof",
+				"trace":         "trace.out",
+				"results_json":  "benchprof_results.json",
+				"results_md":    "benchprof_results.md",
+				"insights_json": "insights.json",
+				"insights_md":   "insights.md",
+				"insights_html": "insights.html",
+				"output_parent": "future",
+				"distinct":      "usage.json",
+			}
+			if name == "output_parent" {
+				cfg.CPUProfile = filepath.Join(dir, "future", "cpu")
+			}
+			t.Setenv(processUsageEnv, filepath.Join(dir, paths[name]))
+			reads := 0
+			u, err := selectedProcessUsage(cfg, []string{"one"}, []string{"batch_write_steady"}, true, func() (processUsageCounters, error) {
+				reads++
+				return processUsageCounters{}, nil
+			})
+			if reads != 0 || (name == "distinct" && (err != nil || u == nil)) || (name != "distinct" && (err == nil || u != nil)) {
+				t.Fatalf("collision %s: usage=%v err=%v reads=%d", name, u, err, reads)
+			}
+		})
+	}
+}

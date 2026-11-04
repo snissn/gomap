@@ -2469,7 +2469,7 @@ func (p *periodicCheckpoint) Add(db kvstore.DB, opsDelta int, bytesDelta int64) 
 	return cp.Checkpoint()
 }
 
-func runBenchmark(cfg BenchConfig) (BenchRun, error) {
+func runBenchmark(cfg BenchConfig) (result BenchRun, resultErr error) {
 	if cfg.Keys <= 0 {
 		return BenchRun{}, fmt.Errorf("invalid keys: %d", cfg.Keys)
 	}
@@ -2514,6 +2514,16 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 
 	// Initialize DBs
 	instances := make([]*DBInstance, 0)
+	// Only the selected diagnostic adds cleanup to original early-return paths.
+	// Owners track the actual instance, not an interface value or a global key.
+	var usageOwners []*processUsageDBOwner
+	if usage != nil {
+		defer func() {
+			for _, owner := range usageOwners {
+				resultErr = errors.Join(resultErr, owner.cleanup(cfg.KeepDir))
+			}
+		}()
+	}
 
 	for _, name := range dbNames {
 		factory, err := GetDBFactory(name)
@@ -2528,11 +2538,17 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 
 		db, err := factory(dir)
 		if err != nil {
+			if usage != nil {
+				return BenchRun{}, errors.Join(fmt.Errorf("init %s: %w", name, err), os.RemoveAll(dir))
+			}
 			_ = os.RemoveAll(dir)
 			return BenchRun{}, fmt.Errorf("init %s: %w", name, err)
 		}
 		vlogCompressionMode, vlogCompressionModeSet := selectedTreeDBVlogCompressionMode(name)
 		instances = append(instances, &DBInstance{Name: name, Wrapper: db, Dir: dir, TreeDBVlogCompressionMode: vlogCompressionMode, TreeDBVlogCompressionModeSet: vlogCompressionModeSet})
+		if usage != nil {
+			usageOwners = append(usageOwners, &processUsageDBOwner{instance: instances[len(instances)-1]})
+		}
 	}
 	if len(instances) == 0 {
 		return BenchRun{}, fmt.Errorf("no DBs selected")
@@ -5177,7 +5193,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	treedbRewrite := make(map[string]treeDBVlogRewriteReport)
 	treedbStats := make(map[string]map[string]string)
 	diskUsage := make(map[string]dirDiskUsage)
-	for _, inst := range instances {
+	for i, inst := range instances {
 		wrapperName := inst.Wrapper.Name()
 		sp, hasStatsProvider := inst.Wrapper.(kvstore.StatsProvider)
 		var statsSnapshot map[string]string
@@ -5189,7 +5205,11 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			}
 			statsSnapshot = sp.Stats()
 		}
-		if err := inst.Wrapper.Close(); err != nil {
+		if usage != nil {
+			if err := usageOwners[i].close(); err != nil {
+				return BenchRun{}, err
+			}
+		} else if err := inst.Wrapper.Close(); err != nil {
 			return BenchRun{}, fmt.Errorf("close %s: %w", inst.Name, err)
 		}
 		if hasStatsProvider && isTreeDBInstance(inst) {
@@ -5282,7 +5302,13 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			}
 		}
 		if !cfg.KeepDir {
-			_ = os.RemoveAll(inst.Dir)
+			if usage != nil {
+				if err := usageOwners[i].removeDir(); err != nil {
+					return BenchRun{}, err
+				}
+			} else {
+				_ = os.RemoveAll(inst.Dir)
+			}
 		}
 	}
 

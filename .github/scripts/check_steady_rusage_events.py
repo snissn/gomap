@@ -19,6 +19,11 @@ TOPS = (
     "TestProcessUsageSampleRegressionFailsClosed",
     "TestRunBenchmarkProcessUsageCloseFailureIsNotLifecycleSuccess",
     "TestRunBenchmarkBatchWriteSteadyCPUProfileMatchesTimedSpan",
+    "TestRunBenchmarkProcessUsageCleanup",
+    "TestProcessUsageCleanupRemoveFailure",
+    "TestRunBenchmarkProcessUsageCollisionBeforeOpen",
+    "TestProcessUsageOutputCollision",
+    "TestProcessUsageOutputAlias",
 )
 CHILDREN = {
     "TestProcessUsageSelectionRefusal": (
@@ -28,6 +33,14 @@ CHILDREN = {
         "user_cpu", "system_cpu", "minor_faults", "major_faults", "voluntary", "involuntary",
     ),
     "TestRunBenchmarkProcessUsageReaderError": ("first", "second"),
+    "TestRunBenchmarkProcessUsageCleanup": (
+        "write_failure", "write_and_close_failure", "read_and_close_failure", "keep_dir", "normal",
+    ),
+    "TestProcessUsageOutputCollision": (
+        "cpu", "allocs", "checkpoint", "block", "block_delta", "mutex", "mutex_delta",
+        "trace", "results_json", "results_md", "insights_json", "insights_md",
+        "insights_html", "output_parent", "distinct",
+    ),
 }
 EXPECTED = frozenset(TOPS) | frozenset(
     parent + "/" + child for parent, children in CHILDREN.items() for child in children
@@ -116,7 +129,7 @@ def check(mode):
     if not package_passed or set(states) != EXPECTED or any(v != "pass" for v in states.values()):
         raise ValueError("missing entered/passed tests or package terminal")
     receipt = {"status": "STEADY_RUSAGE_CONTROLS_PASS", "mode": mode,
-               "package": PACKAGE, "tops": 11, "outcomes": 25, "leaves": 22,
+               "package": PACKAGE, "tops": 16, "outcomes": 50, "leaves": 45,
                "passed": sorted(states), "go_exit": 0, "compiler_events": compiler_events,
                "output_bound": "32MiB post-run acceptance only; no live cap claimed"}
     encoded = json.dumps(receipt, sort_keys=True) + "\n"

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -65,6 +66,9 @@ func selectedProcessUsage(cfg BenchConfig, dbs, tests []string, supported bool, 
 	}
 	if _, err := os.Lstat(path); err == nil || !errors.Is(err, os.ErrNotExist) {
 		return nil, errors.New("process usage receipt must not already exist and its path must be accessible")
+	}
+	if err := validateProcessUsageOutputPath(path, cfg, dbs[0]); err != nil {
+		return nil, err
 	}
 	if read == nil {
 		return nil, errors.New("process usage reader unavailable")
@@ -179,4 +183,120 @@ func writeProcessUsageReceipt(path string, receipt *processUsageReceipt) error {
 		return errors.Join(writeErr, closeErr, os.Remove(path))
 	}
 	return nil
+}
+
+// Resolve existing parent aliases without creating any output. Later profile
+// directories may not exist yet, so resolve their nearest existing ancestor.
+func processUsageCanonicalPath(path string) (string, error) {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	var tail []string
+	for current := filepath.Clean(absolute); ; current = filepath.Dir(current) {
+		resolved, err := filepath.EvalSymlinks(current)
+		if err == nil {
+			for i := len(tail) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, tail[i])
+			}
+			return resolved, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) || filepath.Dir(current) == current {
+			return "", err
+		}
+		tail = append(tail, filepath.Base(current))
+	}
+}
+
+func validateProcessUsageOutputPath(path string, cfg BenchConfig, dbName string) error {
+	parent, err := os.Stat(filepath.Dir(path))
+	if err != nil || !parent.IsDir() {
+		return errors.New("process usage receipt requires an existing parent directory")
+	}
+	receipt, err := processUsageCanonicalPath(path)
+	if err != nil {
+		return fmt.Errorf("process usage receipt path: %w", err)
+	}
+	const testName = "batch_write_steady"
+	paths := []string{cfg.BlockProfile, cfg.MutexProfile, cfg.TraceProfile}
+	if shouldCPUProfile(cfg, testName) {
+		paths = append(paths, strings.TrimSpace(cfg.CPUProfile)+"_"+testName+"_"+dbName+".pprof")
+	}
+	if shouldAllocsProfile(cfg, testName) {
+		paths = append(paths, strings.TrimSpace(cfg.AllocsProfile)+"_"+testName+"_"+dbName+".pprof")
+	}
+	for _, pair := range [][2]string{{cfg.BlockProfile, "block"}, {cfg.MutexProfile, "mutex"}} {
+		if strings.TrimSpace(pair[0]) != "" {
+			paths = append(paths, contentionProfilePath(pair[0], pair[1], testName, dbName))
+		}
+	}
+	// Checkpoint profiles use the wrapper's runtime Name. Reserve the configured
+	// checkpoint namespace before opening it; do not guess that Name from dbName.
+	if prefix := strings.TrimSpace(cfg.CheckpointCPUProfile); prefix != "" {
+		canonical, err := processUsageCanonicalPath(prefix)
+		if err != nil {
+			return err
+		}
+		if (strings.HasPrefix(receipt, canonical+"_checkpoint_") && strings.HasSuffix(receipt, ".pprof")) || strings.HasPrefix(canonical, receipt+string(filepath.Separator)) {
+			return errors.New("process usage receipt collides with checkpoint profile namespace")
+		}
+	}
+	if dir := strings.TrimSpace(*profileDir); dir != "" {
+		for _, name := range []string{"benchprof_results.json", "benchprof_results.md", "insights.json", "insights.md", "insights.html"} {
+			paths = append(paths, filepath.Join(dir, name))
+		}
+	}
+	for _, output := range paths {
+		if strings.TrimSpace(output) == "" {
+			continue
+		}
+		canonical, err := processUsageCanonicalPath(output)
+		if err != nil {
+			return fmt.Errorf("process usage output path: %w", err)
+		}
+		if receipt == canonical || strings.HasPrefix(canonical, receipt+string(filepath.Separator)) {
+			return fmt.Errorf("process usage receipt collides with benchmark output %s", output)
+		}
+	}
+	return nil
+}
+
+// Selected-mode ownership only. A failed original Close is never retried and
+// its directory is retained because release of the DB's resources is unproved.
+type processUsageDBOwner struct {
+	instance        *DBInstance
+	closeAttempted  bool
+	closeOK         bool
+	removeAttempted bool
+}
+
+func (o *processUsageDBOwner) close() error {
+	if o.closeAttempted {
+		return nil
+	}
+	o.closeAttempted = true
+	if err := o.instance.Wrapper.Close(); err != nil {
+		return fmt.Errorf("close %s: %w", o.instance.Name, err)
+	}
+	o.closeOK = true
+	return nil
+}
+
+func (o *processUsageDBOwner) removeDir() error {
+	if !o.closeOK || o.removeAttempted {
+		return nil
+	}
+	o.removeAttempted = true
+	if err := os.RemoveAll(o.instance.Dir); err != nil {
+		return fmt.Errorf("remove %s directory: %w", o.instance.Name, err)
+	}
+	return nil
+}
+
+func (o *processUsageDBOwner) cleanup(keepDir bool) error {
+	closeErr := o.close()
+	if keepDir {
+		return closeErr
+	}
+	return errors.Join(closeErr, o.removeDir())
 }
