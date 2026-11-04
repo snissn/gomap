@@ -130,15 +130,75 @@ func TestCommandWALClosePropagatesPinJoinedWithCleanupFailure(t *testing.T) {
 			if err := database.commandJournal.RotateActiveSegment(false); err != nil {
 				t.Fatal(err)
 			}
+			if active := database.commandJournal.WriterBufferStats().ActivePath; active == empty {
+				t.Fatal("rotation did not close the predecessor")
+			}
+			// Production may select stream containers on memory filesystems.
+			// Establish this test's fixed-container input only after the original
+			// rotation has closed it, and after proving no identity pins remain.
+			file, err := os.Open(empty)
+			if err != nil {
+				t.Fatal(err)
+			}
+			info, statErr := file.Stat()
+			identity, identityErr := rootpublication.StableIdentityFromFile(file)
+			if err := errors.Join(statErr, identityErr, file.Close()); err != nil {
+				t.Fatal(err)
+			}
+			reader, err := commitlog.NewReader(empty)
+			if err != nil {
+				t.Fatal(err)
+			}
+			emptyFixed := reader.IsEmptyFixedContainer()
+			if err := reader.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if info.Size() != 0 && !emptyFixed {
+				t.Fatal("predecessor is neither an empty stream nor a verified empty fixed container")
+			}
+			proof, err := database.captureDurableWALCleanupProofV1()
+			if err != nil || proof.cleanupThrough != 0 || proof.durableWALLSN != 0 {
+				t.Fatalf("expected original zero-frontier cleanup proof: %+v err=%v", proof, err)
+			}
+			var pins uint64
+			if err := database.commandJournal.WithCleanupSnapshot(proof.journal, func(registry *rootpublication.IdentityPinRegistry, _ commitlog.CommandJournalCleanupSnapshot) (bool, error) {
+				pins = registry.PinCount(identity)
+				return false, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if pins != 0 {
+				t.Fatalf("closed predecessor still has %d identity pins", pins)
+			}
+			if !emptyFixed {
+				if proof.journal.SegmentSeq <= 1 || empty != filepath.Join(WALDirPath(dir), commitlog.CommandSegmentName(0, proof.journal.SegmentSeq-1)) {
+					t.Fatal("predecessor does not match the completed original rotation")
+				}
+				// Existing explicit fixed setup; all inspection handles are closed.
+				writeEmptyFixedCleanupSegment(t, dir, proof.journal.SegmentSeq-1, 8192)
+			}
+			decisions, err := scanCommandWALSegmentsForCleanupProof(dir, proof.cleanupThrough, proof.durableWALLSN, 0)
+			if err != nil {
+				closeCommandWALCleanupDecisions(decisions)
+				t.Fatal(err)
+			}
+			func() {
+				defer closeCommandWALCleanupDecisions(decisions)
+				candidate := emptyFixedCleanupDecision(t, decisions, empty)
+				if !candidate.Covered || candidate.Active || candidate.Frames != 0 || candidate.LogicalSize != 0 {
+					t.Fatalf("expected closed validated empty cleanup candidate: %+v", candidate)
+				}
+			}()
 			failure := errors.New("independent cleanup failure")
 			fired := false
-			restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+			restore := sync.OnceFunc(durabilitycut.Install(func(event durabilitycut.Event) error {
 				if event.Resource == durabilitycut.ResourceCommandWAL && event.Point == point {
 					fired = true
 					return errors.Join(rootpublication.ErrResourcePinned, failure)
 				}
 				return nil
-			})
+			}))
+			defer restore()
 			err = database.Close()
 			restore()
 			if !fired || !errors.Is(err, failure) || !errors.Is(err, rootpublication.ErrResourcePinned) {

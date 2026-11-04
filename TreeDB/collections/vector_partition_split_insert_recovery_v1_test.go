@@ -175,7 +175,7 @@ func TestSplitVectorInsertTerminalTailRecoveryV1(t *testing.T) {
 			name = "corrupt-applied-durable-frame"
 		}
 		t.Run(name, func(t *testing.T) {
-			dir, database, c, _, m := newVectorPartitionLiveProductionFixtureV1(t, backenddb.Options{CommandWAL: true, ResolvedProfile: backenddb.ProfileCommandWALDurable})
+			dir, database, c, _, m := newVectorPartitionLiveProductionFixtureWithPartitionsAndSetupV1(t, nil, 1, splitCollectionRecoveryPrepareFixedWALV1, backenddb.Options{CommandWAL: true, ResolvedProfile: backenddb.ProfileCommandWALDurable})
 			if err := c.EnsureVectorPartitionLiveBindingV1(t.Context(), m); err != nil {
 				t.Fatal(err)
 			}
@@ -484,6 +484,42 @@ func TestSplitInsertIdentityCapacityCountsTombstonesV1(t *testing.T) {
 	v.CatalogEpoch++
 	if err := c.preflightSplitInsertIdentityV1(snap, splitInsertStateKeyV1(v)); !errors.Is(err, ErrVectorPartitionSplitInsertCapacityV1) {
 		t.Fatalf("retained tombstones did not occupy identity slots: %v", err)
+	}
+}
+
+// This recovery fixture mutates fixed-container witnesses, so establish that
+// format before the first owning Open. Production may select stream containers
+// on memory filesystems; never convert a populated or live production segment.
+func splitCollectionRecoveryPrepareFixedWALV1(t testing.TB, dir string) {
+	t.Helper()
+	walDir := backenddb.WALDirPath(dir)
+	if err := os.MkdirAll(walDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(walDir, commitlog.CommandSegmentName(0, 1))
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("fixed recovery fixture requires a new unowned segment: %v", err)
+	}
+	// Match the journal's existing initial physical reservation (not its larger
+	// growth budget): fixedWALDefaultCapacity in internal/commitlog/fixed_wal.go.
+	const initialCapacity = 4_199_424
+	writer, err := commitlog.NewFixedWriterWithCapacity(path, initialCapacity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := commitlog.NewReader(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	emptyFixed := reader.IsEmptyFixedContainer()
+	if err := reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !emptyFixed {
+		t.Fatal("fixed recovery fixture did not create an empty fixed container")
 	}
 }
 
