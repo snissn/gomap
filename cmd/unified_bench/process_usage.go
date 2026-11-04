@@ -31,15 +31,15 @@ type processUsageSample struct {
 }
 
 type processUsageReceipt struct {
-	Schema              int                   `json:"schema"`
-	Scope               string                `json:"scope"`
-	Completed           bool                  `json:"completed"`
-	Status              string                `json:"status"`
-	Attempts            int                   `json:"read_attempts"`
+	Schema              int                    `json:"schema"`
+	Scope               string                 `json:"scope"`
+	Completed           bool                   `json:"completed"`
+	Status              string                 `json:"status"`
+	Attempts            int                    `json:"read_attempts"`
 	Samples             [2]*processUsageSample `json:"samples"`
-	Delta               *processUsageCounters `json:"delta"`
-	IntervalWallLowerNS *int64                `json:"interval_wall_lower_ns"`
-	IntervalWallUpperNS *int64                `json:"interval_wall_upper_ns"`
+	Delta               *processUsageCounters  `json:"delta"`
+	IntervalWallLowerNS *int64                 `json:"interval_wall_lower_ns"`
+	IntervalWallUpperNS *int64                 `json:"interval_wall_upper_ns"`
 }
 
 type steadyProcessUsage struct {
