@@ -10,9 +10,12 @@ import (
 // LeafGenerationPackRunOnceStats describes one bounded admission/evaluation pass
 // for leaf-generation packing.
 type LeafGenerationPackRunOnceStats struct {
-	Plan       LeafGenerationPlan
-	Selection  LeafGenerationPackSelection
-	Pack       LeafGenerationPackStats
+	Plan      LeafGenerationPlan
+	Selection LeafGenerationPackSelection
+	Pack      LeafGenerationPackStats
+	// Transition is present only for an accepted private-COW leaf pack. It also
+	// survives an accepted finalizer error; Ran retains its successful-run meaning.
+	Transition LeafGenerationPackTransition
 	Ran        bool
 	SkipReason string
 }
@@ -71,6 +74,7 @@ func (db *DB) leafGenerationPackRunOnceWithOwner(ctx context.Context, opts LeafG
 	packOpts := leafGenerationPackFromPlanPackOptions(opts, selection.GenerationIDs)
 	packOpts.privateCOWOwner = owner
 	packStats, err := db.leafGenerationPackSelected(ctx, packOpts, selectedLeafGenerationPackPlan(selection), lockMaintenance)
+	stats.Transition = packStats.transition
 	if err != nil {
 		return stats, err
 	}

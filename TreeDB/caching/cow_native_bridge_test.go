@@ -5,11 +5,11 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
 	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
@@ -159,14 +159,11 @@ func TestCOWNativeNoWALBridgeMinimalJournalAndExactSync(t *testing.T) {
 
 }
 
-var nativeBridgeReplayOnce sync.Once
-
+// These fixtures provide their own already-prepared native publications. Use the
+// production command registration for eligibility; registering a dummy handler
+// for the same command would collide with the public collection graph fixture.
 func registerNativeBridgeTestCommand() {
-	nativeBridgeReplayOnce.Do(func() {
-		backenddb.RegisterCommandWALReplayHandlerWithOptions(commitlog.CommandKindCollectionInsertBatchByID, func(*backenddb.DB, commitlog.CommandEnvelope) error { return nil }, backenddb.CommandWALReplayHandlerOptions{NativePrepare: func(*backenddb.DB, commitlog.CommandEnvelope, backenddb.NativeSemanticState, *backenddb.Snapshot, *backenddb.StableResourceCaptureLease) (*backenddb.NativePreparedPublication, error) {
-			return nil, backenddb.ErrNativeSemanticUnsupported
-		}})
-	})
+	collections.RegisterCommandWALReplayHandlers()
 }
 
 // This is the actual original admitted file/lease ledger used by the finalizer,

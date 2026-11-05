@@ -4095,14 +4095,15 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	defer opts.durableResources.Release()
 	prePublishErr := func(err error) error { return wrapFinalizeCommitError(err, true) }
 	var admissionErr error
-	if owner := opts.privateCOWEquivalentRewriteOwner; owner != nil {
+	owner := opts.privateCOWRewrite.rewriteOwner()
+	if owner != nil {
 		if owner != db.privateCOWOwner || opts.acceptedPrefixCut != nil || opts.commandWALPublish || opts.commandWALSeal != nil || len(opts.commandWALSealGroup) != 0 || opts.appliedCommandLSN != 0 || len(opts.appliedRanges) != 0 || opts.maxEntryRevision != 0 {
 			admissionErr = ErrNativeSemanticUnsupported
 		}
 	}
 	var tracked bool
 	if admissionErr == nil {
-		tracked, admissionErr = db.beginSemanticBackendOperation(opts.privateCOWEquivalentRewriteOwner, opts.acceptedPrefixCut != nil && opts.acceptedPrefixCut.Valid())
+		tracked, admissionErr = db.beginSemanticBackendOperation(owner, opts.acceptedPrefixCut != nil && opts.acceptedPrefixCut.Valid())
 	}
 	if admissionErr != nil {
 		if opts.rootPublicationBuilder != nil {
@@ -4400,6 +4401,7 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 		newState.LeafGenerationStateVersion = db.leafGenerationStateVersion
 	}
 	db.state.Store(newState)
+	opts.privateCOWRewrite.captureAcceptedState(newState)
 	if opts.commandWALPublish {
 		previousApplied := uint64(0)
 		if post.oldState != nil {

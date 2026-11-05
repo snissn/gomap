@@ -204,6 +204,40 @@ change publication/recovery authority. A stage report distinguishes future
 failures; it does not attribute the retained #5332 race7 failure, whose Optimize
 cause and precise refusing guard were not recorded.
 
+### Pending graphs across private leaf packing
+
+Private COW leaf packing can relocate a persisted column manifest while an
+already accepted ordinary graph command remains pending. Its immutable recipe
+and row-asset identities remain unchanged; its private typed header must follow
+the equivalent manifest root before physical construction. The materialization
+root guard remains mandatory.
+
+Only the original private leaf-pack producer can authorize this transition. Its
+fixed-size proof binds the original backend, transaction owner, index and exact
+state tokens. The preparation step may register empty successor generations:
+that producer must authenticate the exact state before its own registration,
+its exact generation-only endpoint and the retained copy snapshot. The accepted
+endpoint comes from the actual visible-state installation, including an
+accepted error; a later current-state observation supplies no authority. An
+intervening publication or an unexplained generation change fails closed.
+
+Cache adoption validates this proof against its original paired snapshots under
+the existing writer gate. It preserves all logical command identities, raw and
+semantic sources, and current/frozen cuts. Collections additionally authenticates
+the unchanged catalog identity and schema. It admits and clones only the typed
+header prefix through the oldest affected ordinary graph marker, reattaches the
+complete older tail, and shares immutable rows, recipes, asset references and
+the original construction promise. A manifest-only move also touches the
+primary header. Partial preparation uses the existing owned cleanup and refund
+path; an adoption failure retains recovery-required custody.
+
+This proof authorizes only the demonstrated leaf-copy operation. General value
+rewrites, column compaction, GC and captured-prefix consumption retain their
+separate guards. On-disk encodings, WAL assignment, durability and recovery
+ordering do not change. See the private leaf-pack controls in
+[verification.md](verification.md); authored coverage and a controlled causal
+failure do not establish the historical CI interleaving.
+
 ### Scalar-forward pressure assertion and delivered controls (2026-10-31)
 
 Exact `7fab8bacaae3142584ebdea8919297251465edcb`, TreeDB run

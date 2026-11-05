@@ -35,11 +35,11 @@ func TestPrivateCOWEquivalentRewriteRejectsWrongRoleAndFrontierChange(t *testing
 		}
 	}
 	for _, opts := range []finalizeCommitOptions{
-		{privateCOWEquivalentRewriteOwner: foreign},
-		{privateCOWEquivalentRewriteOwner: owner, commandWALPublish: true},
-		{privateCOWEquivalentRewriteOwner: owner, appliedCommandLSN: 1},
-		{privateCOWEquivalentRewriteOwner: owner, maxEntryRevision: 1},
-		{privateCOWEquivalentRewriteOwner: owner, appliedRanges: []CommandWALLSNRange{{First: 1, Last: 1}}},
+		{privateCOWRewrite: newPrivateCOWRewriteFinalization(foreign, nil)},
+		{privateCOWRewrite: newPrivateCOWRewriteFinalization(owner, nil), commandWALPublish: true},
+		{privateCOWRewrite: newPrivateCOWRewriteFinalization(owner, nil), appliedCommandLSN: 1},
+		{privateCOWRewrite: newPrivateCOWRewriteFinalization(owner, nil), maxEntryRevision: 1},
+		{privateCOWRewrite: newPrivateCOWRewriteFinalization(owner, nil), appliedRanges: []CommandWALLSNRange{{First: 1, Last: 1}}},
 	} {
 		_, err := d.finalizeCommitLockedWithOptions(0, 0, nil, false, adaptive.Metrics{}, nil, false, nil, nil, nil, opts)
 		if !errors.Is(err, ErrNativeSemanticUnsupported) || d.state.Load() != before {
