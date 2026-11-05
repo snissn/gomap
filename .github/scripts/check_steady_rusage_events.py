@@ -31,7 +31,8 @@ CHILDREN = {
         "trim_block", "trim_mutex", "trim_trace", "trim_block_delta",
         "parent_component", "receipt_parent_component", "checkpoint_literal_symlink",
         "dangling_output_symlink", "checkpoint_generated_symlink",
-        "checkpoint_nonmatching_symlink", "distinct",
+        "checkpoint_nonmatching_symlink", "checkpoint_trailing_collision",
+        "checkpoint_trailing_symlink", "checkpoint_trailing_distinct", "distinct",
     ),
     "TestProcessUsageSelectionRefusal": (
         "unsupported", "relative", "multi_db", "multi_test", "no_cpu", "existing",
@@ -136,7 +137,7 @@ def check(mode):
     if not package_passed or set(states) != EXPECTED or any(v != "pass" for v in states.values()):
         raise ValueError("missing entered/passed tests or package terminal")
     receipt = {"status": "STEADY_RUSAGE_CONTROLS_PASS", "mode": mode,
-               "package": PACKAGE, "tops": 17, "outcomes": 62, "leaves": 56,
+               "package": PACKAGE, "tops": 17, "outcomes": 65, "leaves": 59,
                "passed": sorted(states), "go_exit": 0, "compiler_events": compiler_events,
                "output_bound": "32MiB post-run acceptance only; no live cap claimed"}
     encoded = json.dumps(receipt, sort_keys=True) + "\n"
