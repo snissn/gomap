@@ -2,7 +2,10 @@ package main
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
+	"runtime"
+	"syscall"
 	"testing"
 )
 
@@ -137,6 +140,104 @@ func TestProcessUsageOutputCollision(t *testing.T) {
 			})
 			if reads != 0 || (name == "distinct" && (err != nil || u == nil)) || (name != "distinct" && (err == nil || u != nil)) {
 				t.Fatalf("collision %s: usage=%v err=%v reads=%d", name, u, err, reads)
+			}
+		})
+	}
+}
+
+func TestProcessUsageOutputPathAliases(t *testing.T) {
+	for _, name := range []string{"trim_block", "trim_mutex", "trim_trace", "trim_block_delta", "parent_component", "receipt_parent_component", "checkpoint_literal_symlink", "checkpoint_generated_symlink", "checkpoint_nonmatching_symlink", "checkpoint_trailing_collision", "checkpoint_trailing_symlink", "checkpoint_trailing_distinct", "dangling_output_symlink", "distinct"} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			oldProfileDir := *profileDir
+			*profileDir = ""
+			t.Cleanup(func() { *profileDir = oldProfileDir })
+			receipt := filepath.Join(dir, "usage.json")
+			cfg := BenchConfig{CPUProfile: filepath.Join(dir, "cpu")}
+			switch name {
+			case "trim_block":
+				cfg.BlockProfile = "  " + receipt + "  "
+			case "trim_mutex":
+				cfg.MutexProfile = "  " + receipt + "  "
+			case "trim_trace":
+				cfg.TraceProfile = "  " + receipt + "  "
+			case "trim_block_delta":
+				cfg.BlockProfile = "  " + filepath.Join(dir, "block.pprof") + "  "
+				receipt = filepath.Join(dir, "block_batch_write_steady_one.pprof")
+			case "parent_component":
+				real := filepath.Join(dir, "real")
+				sub := filepath.Join(real, "sub")
+				if err := os.MkdirAll(sub, 0700); err != nil {
+					t.Fatal(err)
+				}
+				link := filepath.Join(dir, "link")
+				if err := os.Symlink(sub, link); err != nil {
+					if runtime.GOOS == "windows" && (os.IsPermission(err) || errors.Is(err, syscall.Errno(1314))) {
+						t.Skipf("Windows symlink unavailable: %v", err)
+					}
+					t.Fatalf("create symlink: %v", err)
+				}
+				receipt = filepath.Join(real, "usage.json")
+				cfg.TraceProfile = link + string(filepath.Separator) + ".." + string(filepath.Separator) + "usage.json"
+			case "receipt_parent_component":
+				receipt = dir + "/sub/../usage.json"
+			case "checkpoint_literal_symlink":
+				prefix := filepath.Join(dir, "checkpoint")
+				target := filepath.Join(dir, "other")
+				if err := os.WriteFile(target, []byte("existing"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, prefix); err != nil {
+					if runtime.GOOS == "windows" && (os.IsPermission(err) || errors.Is(err, syscall.Errno(1314))) {
+						t.Skipf("Windows symlink unavailable: %v", err)
+					}
+					t.Fatalf("create symlink: %v", err)
+				}
+				cfg.CheckpointCPUProfile = prefix
+				receipt = prefix + "_checkpoint_post-run_wrapper.pprof"
+			case "checkpoint_generated_symlink", "checkpoint_nonmatching_symlink":
+				cfg.CheckpointCPUProfile = filepath.Join(dir, "checkpoint")
+				filename := "checkpoint_checkpoint_post-run_wrapper.pprof"
+				if name == "checkpoint_nonmatching_symlink" {
+					filename = "other_checkpoint_post-run_wrapper.pprof"
+				}
+				if err := os.Symlink(receipt, filepath.Join(dir, filename)); err != nil {
+					if runtime.GOOS == "windows" && (os.IsPermission(err) || errors.Is(err, syscall.Errno(1314))) {
+						t.Skipf("Windows symlink unavailable: %v", err)
+					}
+					t.Fatalf("create symlink: %v", err)
+				}
+			case "checkpoint_trailing_collision", "checkpoint_trailing_symlink", "checkpoint_trailing_distinct":
+				prefixDir := filepath.Join(dir, "profiles")
+				if err := os.Mkdir(prefixDir, 0700); err != nil {
+					t.Fatal(err)
+				}
+				cfg.CheckpointCPUProfile = prefixDir + string(filepath.Separator)
+				generated := filepath.Join(prefixDir, "_checkpoint_post-run_wrapper.pprof")
+				if name == "checkpoint_trailing_collision" {
+					receipt = generated
+				}
+				if name == "checkpoint_trailing_symlink" {
+					if err := os.Symlink(receipt, generated); err != nil {
+						if runtime.GOOS == "windows" && (os.IsPermission(err) || errors.Is(err, syscall.Errno(1314))) {
+							t.Skipf("Windows symlink unavailable: %v", err)
+						}
+						t.Fatalf("create symlink: %v", err)
+					}
+				}
+			case "dangling_output_symlink":
+				output := filepath.Join(dir, "trace")
+				if err := os.Symlink(receipt, output); err != nil {
+					if runtime.GOOS == "windows" && (os.IsPermission(err) || errors.Is(err, syscall.Errno(1314))) {
+						t.Skipf("Windows symlink unavailable: %v", err)
+					}
+					t.Fatalf("create symlink: %v", err)
+				}
+				cfg.TraceProfile = output
+			}
+			err := validateProcessUsageOutputPath(receipt, cfg, "one")
+			if (name == "distinct" || name == "checkpoint_nonmatching_symlink" || name == "checkpoint_trailing_distinct") != (err == nil) {
+				t.Fatalf("%s: err=%v", name, err)
 			}
 		})
 	}
