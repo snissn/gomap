@@ -69,6 +69,18 @@ class Controls(unittest.TestCase):
         self.assertIn('uploaded immutable member changed',publication)
         self.assertIn('excludes',publication)
         self.assertIn('post-publication-terminal.json',ast.get_source_segment(SOURCE,FUNCTIONS['launch']))
+    def test_runner_temp_paths_only_in_consuming_step_scopes(self):
+        workflow=(HERE.parent/'workflows/treedb-mvcc-maintenance-diagnostic.yml').read_text()
+        job,steps=workflow.split('    steps:\n',1)
+        self.assertNotIn('runner.temp',job)
+        controls=steps.split('        id: controls\n',1)[1].split('      - name:',1)[0]
+        action=steps.split('uses: ./.github/actions/m0-common-write\n',1)[1]
+        paths={'TMPDIR':'tmp','GH_CONFIG_DIR':'tmp/gh-config','XDG_CACHE_HOME':'tmp/cache','XDG_CONFIG_HOME':'tmp/config'}
+        for key,value in paths.items():
+            row='          '+key+': ${{ runner.temp }}/four-gate-readback/'+value+'\n'
+            self.assertEqual(workflow.count(row),2)
+            self.assertIn(row,controls);self.assertIn(row,action)
+        self.assertNotIn('runner.temp',steps.split('      - name: Bind imported source',1)[0])
     def test_one_foreground_local_action_no_separate_uploader(self):
         workflow=(HERE.parent/'workflows/treedb-mvcc-maintenance-diagnostic.yml').read_text()
         self.assertIn('uses: ./.github/actions/m0-common-write',workflow)

@@ -28,10 +28,6 @@ jobs:
       M0_DATA_ADMISSION_B64: ${{ inputs.admission_b64 }}
       M0_DATA_REVIEW_B64: ${{ inputs.review_b64 }}
       PYTHONDONTWRITEBYTECODE: "1"
-      TMPDIR: ${{ runner.temp }}/four-gate-readback/tmp
-      GH_CONFIG_DIR: ${{ runner.temp }}/four-gate-readback/tmp/gh-config
-      XDG_CACHE_HOME: ${{ runner.temp }}/four-gate-readback/tmp/cache
-      XDG_CONFIG_HOME: ${{ runner.temp }}/four-gate-readback/tmp/config
     steps:
       - name: Authenticate ROOT and immutable source before checkout/download/helper import
         shell: bash
@@ -87,6 +83,11 @@ jobs:
           sparse-checkout-cone-mode: false
       - name: Bind imported source and run fixed pure controls
         id: controls
+        env:
+          TMPDIR: ${{ runner.temp }}/four-gate-readback/tmp
+          GH_CONFIG_DIR: ${{ runner.temp }}/four-gate-readback/tmp/gh-config
+          XDG_CACHE_HOME: ${{ runner.temp }}/four-gate-readback/tmp/cache
+          XDG_CONFIG_HOME: ${{ runner.temp }}/four-gate-readback/tmp/config
         shell: bash
         run: |
           set -euo pipefail
@@ -111,6 +112,10 @@ jobs:
         if: always()
         uses: ./.github/actions/m0-common-write
         env:
+          TMPDIR: ${{ runner.temp }}/four-gate-readback/tmp
+          GH_CONFIG_DIR: ${{ runner.temp }}/four-gate-readback/tmp/gh-config
+          XDG_CACHE_HOME: ${{ runner.temp }}/four-gate-readback/tmp/cache
+          XDG_CONFIG_HOME: ${{ runner.temp }}/four-gate-readback/tmp/config
           GH_TOKEN: ${{ github.token }}
           GH_PAGER: cat
           M0_COUNTED_ROOT: /home/runner/work

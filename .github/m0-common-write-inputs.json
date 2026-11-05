@@ -41,16 +41,16 @@
       "sha256": "e77c7190db97e76f7d14172acff4c4ffc9d97dcb56fa200d46357c9be561971b"
     },
     ".github/scripts/test_m0_guarded_publication.py": {
-      "bytes": 4933,
-      "sha256": "723e591b14b55675df0abbc2f4902d068608b5e8e5f12aa937dd807b16f43316"
+      "bytes": 5818,
+      "sha256": "e35c9256fc122300eb10236fb32f30b5591f14c401c181441fd28f2393c33cc5"
     },
     ".github/scripts/test_m0_state_projection.py": {
       "bytes": 14616,
       "sha256": "a717a92b64158cf16a5e027d4ca4b62f1c6b6f0bb2d107ad82b44c3944771104"
     },
     ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml": {
-      "bytes": 6280,
-      "sha256": "a8b3581cd137167a8b71d12a4a589ddcffe262edb6e466606f7d32dd91295332"
+      "bytes": 6596,
+      "sha256": "e256643ec2009d2ae7d638744273387e849b75cd10b60a0e097fabebd676c271"
     },
     "scripts/ycsb_campaign_guard.py": {
       "bytes": 19548,
