@@ -1115,6 +1115,8 @@ func startCheckpointCPUProfile(cfg BenchConfig, profileHooks benchmarkProfileHoo
 }
 
 type benchmarkProfileHooks struct {
+	readProcessUsage                func() (processUsageCounters, error)
+	writeProcessUsage               func(string, *processUsageReceipt) error
 	startCPUProfile                 func(io.Writer) error
 	stopCPUProfile                  func()
 	writeAllocsSnapshotTemp         func(string) (string, error)
@@ -1125,6 +1127,8 @@ type benchmarkProfileHooks struct {
 
 func defaultBenchmarkProfileHooks() benchmarkProfileHooks {
 	return benchmarkProfileHooks{
+		readProcessUsage:                readProcessUsage,
+		writeProcessUsage:               writeProcessUsageReceipt,
 		startCPUProfile:                 pprof.StartCPUProfile,
 		stopCPUProfile:                  pprof.StopCPUProfile,
 		writeAllocsSnapshotTemp:         writeAllocsSnapshotTemp,
@@ -1140,6 +1144,12 @@ func profileHooksFromConfig(cfg BenchConfig) benchmarkProfileHooks {
 		return hooks
 	}
 	override := *cfg.profileHooks
+	if override.readProcessUsage != nil {
+		hooks.readProcessUsage = override.readProcessUsage
+	}
+	if override.writeProcessUsage != nil {
+		hooks.writeProcessUsage = override.writeProcessUsage
+	}
 	if override.startCPUProfile != nil {
 		hooks.startCPUProfile = override.startCPUProfile
 	}
@@ -2459,7 +2469,7 @@ func (p *periodicCheckpoint) Add(db kvstore.DB, opsDelta int, bytesDelta int64) 
 	return cp.Checkpoint()
 }
 
-func runBenchmark(cfg BenchConfig) (BenchRun, error) {
+func runBenchmark(cfg BenchConfig) (result BenchRun, resultErr error) {
 	if cfg.Keys <= 0 {
 		return BenchRun{}, fmt.Errorf("invalid keys: %d", cfg.Keys)
 	}
@@ -2497,9 +2507,23 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		return BenchRun{}, err
 	}
 	testsToRun := normalizeTests(parseList(cfg.TestsArg))
+	usage, err := selectedProcessUsage(cfg, dbNames, testsToRun, processUsageSupported, profileHooks.readProcessUsage)
+	if err != nil {
+		return BenchRun{}, err
+	}
 
 	// Initialize DBs
 	instances := make([]*DBInstance, 0)
+	// Only the selected diagnostic adds cleanup to original early-return paths.
+	// Owners track the actual instance, not an interface value or a global key.
+	var usageOwners []*processUsageDBOwner
+	if usage != nil {
+		defer func() {
+			for _, owner := range usageOwners {
+				resultErr = errors.Join(resultErr, owner.cleanup(cfg.KeepDir))
+			}
+		}()
+	}
 
 	for _, name := range dbNames {
 		factory, err := GetDBFactory(name)
@@ -2514,11 +2538,17 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 
 		db, err := factory(dir)
 		if err != nil {
+			if usage != nil {
+				return BenchRun{}, errors.Join(fmt.Errorf("init %s: %w", name, err), os.RemoveAll(dir))
+			}
 			_ = os.RemoveAll(dir)
 			return BenchRun{}, fmt.Errorf("init %s: %w", name, err)
 		}
 		vlogCompressionMode, vlogCompressionModeSet := selectedTreeDBVlogCompressionMode(name)
 		instances = append(instances, &DBInstance{Name: name, Wrapper: db, Dir: dir, TreeDBVlogCompressionMode: vlogCompressionMode, TreeDBVlogCompressionModeSet: vlogCompressionModeSet})
+		if usage != nil {
+			usageOwners = append(usageOwners, &processUsageDBOwner{instance: instances[len(instances)-1]})
+		}
 	}
 	if len(instances) == 0 {
 		return BenchRun{}, fmt.Errorf("no DBs selected")
@@ -2817,6 +2847,12 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			valPos = 0
 		}
 
+		// The optional receipt requires the original real final checkpoint.
+		if steady && usage != nil {
+			if _, ok := db.(checkpointer); !ok {
+				return 0, fmt.Errorf("process usage requires final checkpoint support")
+			}
+		}
 		var stopSteadyCPUProfile func()
 		if steady && batchWriteSteadyCPUProfileStart != nil {
 			if err := batchWriteSteadyCPUProfileStart(); err != nil {
@@ -2828,6 +2864,11 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					stopSteadyCPUProfile()
 				}
 			}()
+		}
+		if steady && usage != nil {
+			if err := usage.sample(); err != nil {
+				return 0, err
+			}
 		}
 		start := time.Now()
 		pc := newPeriodicCheckpoint(cfg)
@@ -2927,6 +2968,11 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			}
 		}
 		elapsed := time.Since(start)
+		if steady && usage != nil {
+			if err := usage.sample(); err != nil {
+				return 0, err
+			}
+		}
 		if stopSteadyCPUProfile != nil {
 			stopSteadyCPUProfile()
 			stopSteadyCPUProfile = nil
@@ -4956,6 +5002,12 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			batchWriteSteadyCPUProfileStart = nil
 			batchWriteSteadyCPUProfileStop = nil
 			finishCPUProfile()
+			if usage != nil {
+				runErr = usage.finish(runErr)
+				if receiptErr := profileHooks.writeProcessUsage(usage.path, &usage.receipt); receiptErr != nil {
+					runErr = errors.Join(runErr, fmt.Errorf("process usage receipt: %w", receiptErr))
+				}
+			}
 
 			blockAfterPath := ""
 			mutexAfterPath := ""
@@ -5141,7 +5193,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	treedbRewrite := make(map[string]treeDBVlogRewriteReport)
 	treedbStats := make(map[string]map[string]string)
 	diskUsage := make(map[string]dirDiskUsage)
-	for _, inst := range instances {
+	for i, inst := range instances {
 		wrapperName := inst.Wrapper.Name()
 		sp, hasStatsProvider := inst.Wrapper.(kvstore.StatsProvider)
 		var statsSnapshot map[string]string
@@ -5153,7 +5205,11 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			}
 			statsSnapshot = sp.Stats()
 		}
-		if err := inst.Wrapper.Close(); err != nil {
+		if usage != nil {
+			if err := usageOwners[i].close(); err != nil {
+				return BenchRun{}, err
+			}
+		} else if err := inst.Wrapper.Close(); err != nil {
 			return BenchRun{}, fmt.Errorf("close %s: %w", inst.Name, err)
 		}
 		if hasStatsProvider && isTreeDBInstance(inst) {
@@ -5246,7 +5302,13 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			}
 		}
 		if !cfg.KeepDir {
-			_ = os.RemoveAll(inst.Dir)
+			if usage != nil {
+				if err := usageOwners[i].removeDir(); err != nil {
+					return BenchRun{}, err
+				}
+			} else {
+				_ = os.RemoveAll(inst.Dir)
+			}
 		}
 	}
 

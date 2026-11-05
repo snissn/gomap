@@ -12,7 +12,7 @@
     "M0 observation is manual diagnostic-only on a separately fixed product; no forecast starts it or replaces failed M0 acceptance.",
     "Bounded maintenance comparison is a manually granted diagnostic on fixed baseline/candidate products; no forecast starts it or establishes cost, M0 or native acceptance."
   ],
-  "discovery_source_sha256": "5d66ce837d9cfd95323af554f7ec2fcfd0663ec35ad7732bed034d159ffd4830",
+  "discovery_source_sha256": "c3eb6d6d9892c8e5d22011031df157d8f857911736a9dddaec25d69b934f8159",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
@@ -149,7 +149,7 @@
       "mode": "100644"
     },
     ".github/scripts/test_treedb_ci_contract.py": {
-      "git_blob": "92223592df2a546b94b1c5ee031a4f24835a383c",
+      "git_blob": "b6948893d1fe1ff4aea26ef1ea682df86feb3c71",
       "mode": "100644"
     },
     ".github/scripts/test_treedb_windows_core_headroom.py": {
@@ -1246,7 +1246,7 @@
         "matrix": {
           "os": "ubuntu-latest"
         },
-        "race": false,
+        "race": true,
         "runs_on": "${{ matrix.os }}",
         "tags": "entry command defaults/flags retained"
       },
@@ -1261,7 +1261,7 @@
         "matrix": {
           "os": "macos-latest"
         },
-        "race": false,
+        "race": true,
         "runs_on": "${{ matrix.os }}",
         "tags": "entry command defaults/flags retained"
       },
@@ -2378,7 +2378,7 @@
         },
         "workflow_dispatch": null
       },
-      "git_blob": "a31cd588f91a2e73c3ea82a714f8885ddb549fa3",
+      "git_blob": "8ff1f50f98abcc4f6d5a53b1fecb51e3b45f2a66",
       "jobs": {
         "mvcc-raw-path-gate": {
           "checkout": [
@@ -2915,7 +2915,7 @@
               "working-directory": "TreeDB"
             },
             {
-              "command_sha256": "141c32553f2285da6eee4f2cdbb073ed09933be9aa77a0519166d5650e0d3f3c",
+              "command_sha256": "3215b20e6b2510580ee1b471ee6f6ba3d852d5178b3ff94db7b7cae6046ab50b",
               "entrypoint": ".github/workflows/treedb-tests.yml:331",
               "if": "${{ matrix.name == 'macos' }}",
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
@@ -2948,7 +2948,7 @@
           "runs_on": "${{ matrix.os }}"
         }
       },
-      "sha256": "42a61e9d0accd9dd6cb7091a5ad12ccef7dacd94ecf71d20adc0d74467efafbd"
+      "sha256": "b97b3a514453457ad46ef19deb69d45d005c68ea5e17c6d92511870490fe8276"
     },
     "treedb-vacuum-m0-observation.yml": {
       "coverage": "existing execution only; triggers/path filters are unchanged",
@@ -3180,7 +3180,7 @@
       "events": {
         "push": null
       },
-      "git_blob": "2f0dcad2713230dfdf937f5087e496d1c531dcde",
+      "git_blob": "7d96ce00b523183bf65fe2d808cdac2f62b1638f",
       "jobs": {
         "test": {
           "checkout": [
@@ -3189,17 +3189,55 @@
           "commands": [
             {
               "command_sha256": "3d4b424f6fcd11f530525ddea9a46aeaffec7c883b6c04b6baf7df36bf47800b",
-              "entrypoint": ".github/workflows/unified-bench-tests.yml:32",
+              "entrypoint": ".github/workflows/unified-bench-tests.yml:33",
               "invocation": "go vet ./...",
               "name": "Vet",
               "working-directory": "cmd/unified_bench"
             },
             {
               "command_sha256": "1bb497e3e13a1105cf24e3359fa3ef75de08b66ff8a2839cd7f9ea97824d9eb3",
-              "entrypoint": ".github/workflows/unified-bench-tests.yml:36",
+              "entrypoint": ".github/workflows/unified-bench-tests.yml:37",
               "invocation": "go test ./...",
               "name": "Test",
               "working-directory": "cmd/unified_bench"
+            },
+            {
+              "command_sha256": "8801a61537a5e852a7db19dddc264b7a5fa391abe8d4938a6ee570149add4468",
+              "entrypoint": ".github/workflows/unified-bench-tests.yml:45",
+              "env": {
+                "GOMAXPROCS": "2",
+                "GOMEMLIMIT": "4GiB",
+                "GOWORK": "off"
+              },
+              "if": "runner.os == 'Linux'",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Record focused Linux qualification inputs"
+            },
+            {
+              "command_sha256": "93f0463ca535af87ef177d00577440aae602595ff5f3eeb74a0cd90b9af0ad4c",
+              "entrypoint": ".github/workflows/unified-bench-tests.yml:59",
+              "env": {
+                "GOMAXPROCS": "2",
+                "GOMEMLIMIT": "4GiB",
+                "GOWORK": "off",
+                "PYTHONDONTWRITEBYTECODE": "1"
+              },
+              "if": "runner.os == 'Linux'",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Focused steady-rusage controls normal (Linux)"
+            },
+            {
+              "command_sha256": "819b63bbf6a588369a192410301e7531d799c614655bd81a6e938530f2588694",
+              "entrypoint": ".github/workflows/unified-bench-tests.yml:77",
+              "env": {
+                "GOMAXPROCS": "2",
+                "GOMEMLIMIT": "4GiB",
+                "GOWORK": "off",
+                "PYTHONDONTWRITEBYTECODE": "1"
+              },
+              "if": "runner.os == 'Linux'",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Focused steady-rusage controls race (Linux)"
             }
           ],
           "environment": {},
@@ -3210,11 +3248,11 @@
             ]
           },
           "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
-          "race": false,
+          "race": true,
           "runs_on": "${{ matrix.os }}"
         }
       },
-      "sha256": "656dd3f08f5b481ab4b9a73de5d4d1f3dc365912a5e36601c74bd049d9693b5c"
+      "sha256": "cab2853c111a1d6ef909e155f0abe42d131c5408bff72d9f27fe66b74609673c"
     }
   }
 }

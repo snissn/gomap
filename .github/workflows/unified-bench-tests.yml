@@ -21,7 +21,8 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version: "1.26.10"
+          check-latest: false
           cache: true
           cache-dependency-path: |
             go.sum
@@ -34,3 +35,61 @@ jobs:
       - name: Test
         working-directory: cmd/unified_bench
         run: go test ./...
+
+      - name: Record focused Linux qualification inputs
+        if: runner.os == 'Linux'
+        env:
+          GOMAXPROCS: "2"
+          GOMEMLIMIT: 4GiB
+          GOWORK: "off"
+        run: |
+          mkdir -p artifacts/steady-rusage
+          git rev-parse HEAD 'HEAD^{tree}' > artifacts/steady-rusage/source.txt
+          go version > artifacts/steady-rusage/go-version.txt
+          go env -json GOVERSION GOFLAGS GOEXPERIMENT GOOS GOARCH CGO_ENABLED CC CXX GOTOOLCHAIN GOWORK > artifacts/steady-rusage/go-env.json
+          test "$(go env GOVERSION)" = go1.26.10
+
+      - name: Focused steady-rusage controls normal (Linux)
+        if: runner.os == 'Linux'
+        env:
+          GOMAXPROCS: "2"
+          GOMEMLIMIT: 4GiB
+          GOWORK: "off"
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          unset GOMAP_DIAGNOSTIC_STEADY_RUSAGE
+          set +e
+          go test -json -count=1 -p 1 -timeout 3m \
+            -run '^(TestRunBenchmarkProcessUsageDefaultZero|TestRunBenchmarkProcessUsageTwoReadsCheckpointOrder|TestRunBenchmarkProcessUsageOriginalFailureWins|TestRunBenchmarkProcessUsageReaderError|TestProcessUsageTimevalBounds|TestProcessUsageSelectionRefusal|TestProcessUsageCounterRegression|TestProcessUsageIncompleteAndReadLimit|TestProcessUsageSampleRegressionFailsClosed|TestRunBenchmarkProcessUsageCloseFailureIsNotLifecycleSuccess|TestRunBenchmarkBatchWriteSteadyCPUProfileMatchesTimedSpan|TestRunBenchmarkProcessUsageCleanup|TestProcessUsageCleanupRemoveFailure|TestRunBenchmarkProcessUsageCollisionBeforeOpen|TestProcessUsageOutputCollision|TestProcessUsageOutputAlias)$' \
+            ./cmd/unified_bench > artifacts/steady-rusage/normal.jsonl 2> artifacts/steady-rusage/normal.stderr
+          go_exit=$?
+          set -e
+          printf '%s\n' "$go_exit" > artifacts/steady-rusage/normal.exit
+          python3 -B .github/scripts/check_steady_rusage_events.py normal > artifacts/steady-rusage/normal.receipt.json
+
+      - name: Focused steady-rusage controls race (Linux)
+        if: runner.os == 'Linux'
+        env:
+          GOMAXPROCS: "2"
+          GOMEMLIMIT: 4GiB
+          GOWORK: "off"
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          unset GOMAP_DIAGNOSTIC_STEADY_RUSAGE
+          set +e
+          go test -json -race -count=1 -p 1 -timeout 10m \
+            -run '^(TestRunBenchmarkProcessUsageDefaultZero|TestRunBenchmarkProcessUsageTwoReadsCheckpointOrder|TestRunBenchmarkProcessUsageOriginalFailureWins|TestRunBenchmarkProcessUsageReaderError|TestProcessUsageTimevalBounds|TestProcessUsageSelectionRefusal|TestProcessUsageCounterRegression|TestProcessUsageIncompleteAndReadLimit|TestProcessUsageSampleRegressionFailsClosed|TestRunBenchmarkProcessUsageCloseFailureIsNotLifecycleSuccess|TestRunBenchmarkBatchWriteSteadyCPUProfileMatchesTimedSpan|TestRunBenchmarkProcessUsageCleanup|TestProcessUsageCleanupRemoveFailure|TestRunBenchmarkProcessUsageCollisionBeforeOpen|TestProcessUsageOutputCollision|TestProcessUsageOutputAlias)$' \
+            ./cmd/unified_bench > artifacts/steady-rusage/race.jsonl 2> artifacts/steady-rusage/race.stderr
+          go_exit=$?
+          set -e
+          printf '%s\n' "$go_exit" > artifacts/steady-rusage/race.exit
+          python3 -B .github/scripts/check_steady_rusage_events.py race > artifacts/steady-rusage/race.receipt.json
+
+      - name: Retain focused Linux raw events and literal exits
+        if: always() && runner.os == 'Linux'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: steady-rusage-controls-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/steady-rusage
+          if-no-files-found: error
+          retention-days: 14
