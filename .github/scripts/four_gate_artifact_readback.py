@@ -6,9 +6,9 @@ from pathlib import Path
 import stat
 import zipfile
 
-EXPECTED_BYTES = 46884
-EXPECTED_SHA = "8ce619ae377de88c846e8c0a015e73081c3b7256ad7c4897798ebc0fe1e5e3fa"
-NAMES = {'output/stages.json', 'guard/stderr.log', 'output/final-file-manifest.json', 'output/failure.json', 'output/race.stdout.log', 'output/gofmt.stderr.log', 'entry.stderr.log', 'output/race.stderr.log', 'output/completion.json', 'guard/result.json', 'output/normal.stderr.log', 'output/race-inventory.json', 'entry.stdout.log', 'guard/stdout.log', 'output/pure-controls.stdout.log', 'output/compile-context.json', 'output/normal.stdout.log', 'output/pure-controls.stderr.log', 'output/normal-inventory.json', 'output/gofmt.stdout.log'}
+EXPECTED_BYTES = 310679
+EXPECTED_SHA = "69b9ba87c21f31cfe0beee4b7bb8afe2d55f1f764136ef7ffd5783a56fa86fcc"
+NAMES = {'guard/result.json', 'data/vlog_auto_incompressible_auto_sample1.rusage.json', 'data/process-usage-validation.json', 'data/row-exits.tsv', 'data/vlog_auto_incompressible_off_sample4.rusage.json', 'data/vlog_auto_incompressible_off_sample6.rusage.json', 'data/vlog_auto_incompressible_auto_sample3.rusage.json', 'scope.txt', 'data/go-env.json', 'data/runtime-context.json', 'guard/execution-start.json', 'data/vlog_auto_incompressible_off_sample5.rusage.json', 'data/go-version.txt', 'data/vlog_auto_incompressible_off_sample1.rusage.json', 'data/vlog_auto_incompressible_auto_sample6.rusage.json', 'data/pprof-tool-sha256.txt', 'data/vlog_auto_incompressible_auto_sample5.rusage.json', 'data/vlog_auto_incompressible_off_sample3.rusage.json', 'data/process-usage-validation.exit', 'input-hashes.txt', 'guard.exit', 'data/pprof-tool-buildinfo.txt', 'guard/root.identity.json', 'data/vlog_auto_incompressible_auto_sample2.rusage.json', 'data/vlog_auto_incompressible_off_sample2.rusage.json', 'dispatch.txt', 'source.txt', 'data/vlog_auto_incompressible_auto_sample4.rusage.json', 'data/build-tools.json'}
 root = Path(os.environ["RUNNER_TEMP"]) / "four-gate-readback"
 archive = root / "original.zip"
 assert archive.stat().st_size == EXPECTED_BYTES, "archive size mismatch"
@@ -17,7 +17,7 @@ with archive.open("rb") as f:
     for chunk in iter(lambda: f.read(1048576), b""):
         h.update(chunk)
 assert h.hexdigest() == EXPECTED_SHA, "archive digest mismatch"
-result = {"source_head": os.environ["GITHUB_SHA"], "artifact": 13374174271,
+result = {"source_head": os.environ["GITHUB_SHA"], "artifact": 13372929344,
           "archive_sha256": h.hexdigest(), "scope": "retained original text only; no gate alteration",
           "entries": [], "texts": {}, "missing": []}
 with zipfile.ZipFile(archive) as z:
