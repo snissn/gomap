@@ -75,7 +75,12 @@ func cowReadHeader(f *os.File, ptr page.ValuePtr, header []byte, limits COWReadL
 }
 
 func cowCheckReadSource(f *os.File, ptr page.ValuePtr, limits COWReadLimits, leaf bool) error {
+	return cowCheckReadSourceDiagnostic(f, ptr, limits, leaf, COWBasisCall{})
+}
+
+func cowCheckReadSourceDiagnostic(f *os.File, ptr page.ValuePtr, limits COWReadLimits, leaf bool, call COWBasisCall) error {
 	if f == nil || ptr.Offset < 4 || ptr.Offset-4 > math.MaxInt64 || isLeafLogFileID(ptr.FileID) != leaf || (leaf && !allowsCompactLeafLogPayload(ptr.FileID, f.Name())) {
+		call.Refuse(COWBasisInspect, COWBasisSourceContract, COWRecordShape{}, false)
 		return ErrCOWReadUnsupported
 	}
 	maxInt := uint64(^uint(0) >> 1)
@@ -102,6 +107,10 @@ func cowCheckReadHeader(ptr page.ValuePtr, header []byte, limits COWReadLimits) 
 }
 
 func cowShape(header, prefix, metadata []byte, n uint32, ptr page.ValuePtr, limits COWReadLimits) (COWRecordShape, error) {
+	return cowShapeDiagnostic(header, prefix, metadata, n, ptr, limits, COWBasisCall{})
+}
+
+func cowShapeDiagnostic(header, prefix, metadata []byte, n uint32, ptr page.ValuePtr, limits COWReadLimits, call COWBasisCall) (COWRecordShape, error) {
 	s := COWRecordShape{RecordBytes: uint64(n) + HeaderSize, ptr: ptr, limits: limits, valid: true}
 	grouped := header[5]&recordFlagGrouped != 0
 	if grouped != page.ValuePtrIsGrouped(ptr) {
@@ -126,6 +135,7 @@ func cowShape(header, prefix, metadata []byte, n uint32, ptr page.ValuePtr, limi
 		s.DictID, s.Compressed = s.frame.DictID, s.frame.Flags&FrameFlagCompressed != 0
 		if s.frame.Reserved != 0 {
 			if !s.Compressed || s.DictID != 0 || BlockCodec(s.frame.Reserved) > BlockCodecZSTD {
+				call.Refuse(COWBasisInspect, COWBasisFrameContract, COWRecordShape{}, false)
 				return COWRecordShape{}, ErrCOWReadUnsupported
 			}
 			s.Codec = BlockCodec(s.frame.Reserved)
@@ -191,10 +201,14 @@ func InspectCOWRecord(f *os.File, ptr page.ValuePtr, limits COWReadLimits) (COWR
 // checked here. Leaves are at most one page, grouped raw bytes at most 255
 // pages, and stored records at most 2MiB, in addition to the caller's limits.
 func InspectCOWLeafRecord(f *os.File, ptr page.ValuePtr, limits COWReadLimits) (COWRecordShape, error) {
+	return InspectCOWLeafRecordDiagnostic(f, ptr, limits, COWBasisCall{})
+}
+
+func InspectCOWLeafRecordDiagnostic(f *os.File, ptr page.ValuePtr, limits COWReadLimits, call COWBasisCall) (COWRecordShape, error) {
 	limits.MaxRecordBytes = min(limits.MaxRecordBytes, 2<<20)
 	limits.MaxRawBytes = min(limits.MaxRawBytes, MaxFrameK*page.PageSize)
 	limits.MaxValueBytes = min(limits.MaxValueBytes, page.PageSize)
-	return inspectCOWLeafRecord(f, ptr, limits)
+	return inspectCOWLeafRecordDiagnostic(f, ptr, limits, call)
 }
 
 // One fixed metadata window replaces the separate header/frame/offset reads.
@@ -203,7 +217,11 @@ func InspectCOWLeafRecord(f *os.File, ptr page.ValuePtr, limits COWReadLimits) (
 // other read errors retain the ordinary inspector's failure behavior. This
 // buffer fits within the existing separately rounded inspection envelope.
 func inspectCOWLeafRecord(f *os.File, ptr page.ValuePtr, limits COWReadLimits) (COWRecordShape, error) {
-	if err := cowCheckReadSource(f, ptr, limits, true); err != nil {
+	return inspectCOWLeafRecordDiagnostic(f, ptr, limits, COWBasisCall{})
+}
+
+func inspectCOWLeafRecordDiagnostic(f *os.File, ptr page.ValuePtr, limits COWReadLimits, call COWBasisCall) (COWRecordShape, error) {
+	if err := cowCheckReadSourceDiagnostic(f, ptr, limits, true, call); err != nil {
 		return COWRecordShape{}, err
 	}
 	var metadata [HeaderSize + cowMaxPrefix]byte
@@ -239,11 +257,11 @@ func inspectCOWLeafRecord(f *os.File, ptr page.ValuePtr, limits COWReadLimits) (
 			return COWRecordShape{}, io.EOF
 		}
 	}
-	s, err := cowShape(header, metadata[HeaderSize:HeaderSize+p], metadata[:HeaderSize+p], n, ptr, limits)
+	s, err := cowShapeDiagnostic(header, metadata[HeaderSize:HeaderSize+p], metadata[:HeaderSize+p], n, ptr, limits, call)
 	if err != nil {
 		return COWRecordShape{}, err
 	}
-	return inspectCOWValuePrefix(f, ptr, s, true, metadata[:available])
+	return inspectCOWValuePrefixDiagnostic(f, ptr, s, true, metadata[:available], call)
 }
 
 func inspectCOWRecord(f *os.File, ptr page.ValuePtr, limits COWReadLimits, leaf bool) (COWRecordShape, error) {
@@ -281,6 +299,10 @@ func inspectCOWRecord(f *os.File, ptr page.ValuePtr, limits COWReadLimits, leaf 
 }
 
 func inspectCOWValuePrefix(f *os.File, ptr page.ValuePtr, s COWRecordShape, leaf bool, metadata []byte) (COWRecordShape, error) {
+	return inspectCOWValuePrefixDiagnostic(f, ptr, s, leaf, metadata, COWBasisCall{})
+}
+
+func inspectCOWValuePrefixDiagnostic(f *os.File, ptr page.ValuePtr, s COWRecordShape, leaf bool, metadata []byte, call COWBasisCall) (COWRecordShape, error) {
 	if !s.Compressed {
 		var valuePrefix [compactLeafPagePayloadHeaderSize]byte
 		v := min(uint64(len(valuePrefix)), s.ValueBytes)
@@ -293,6 +315,7 @@ func inspectCOWValuePrefix(f *os.File, ptr page.ValuePtr, s COWRecordShape, leaf
 			}
 		}
 		if templ.IsEncodedPayload(valuePrefix[:int(v)]) || (!leaf && HasCompactLeafLogPayload(valuePrefix[:int(v)])) {
+			call.Refuse(COWBasisInspect, COWBasisPayloadContract, COWRecordShape{}, false)
 			return COWRecordShape{}, ErrCOWReadUnsupported
 		}
 		if leaf {
@@ -328,10 +351,15 @@ func ReadCOWRecord(f *os.File, ptr page.ValuePtr, shape COWRecordShape, verifyCR
 // global codec cache is used. The retained file has the canonical native path
 // required by InspectCOWLeafRecord.
 func ReadCOWLeafPage(f *os.File, ptr page.ValuePtr, shape COWRecordShape, verifyCRC bool, payloadScratch, rawScratch, pageDst []byte, decode COWDecodeFunc) ([]byte, error) {
+	return ReadCOWLeafPageDiagnostic(f, ptr, shape, verifyCRC, payloadScratch, rawScratch, pageDst, decode, COWBasisCall{})
+}
+
+func ReadCOWLeafPageDiagnostic(f *os.File, ptr page.ValuePtr, shape COWRecordShape, verifyCRC bool, payloadScratch, rawScratch, pageDst []byte, decode COWDecodeFunc, call COWBasisCall) ([]byte, error) {
+	call = call.LeafRead()
 	if cap(pageDst) < page.PageSize || shape.ValueBytes > page.PageSize || shape.RawBytes > MaxFrameK*page.PageSize || shape.RecordBytes > 2<<20 {
 		return nil, ErrCOWReadCapacity
 	}
-	value, err := readCOWRecord(f, ptr, shape, verifyCRC, payloadScratch, rawScratch, pageDst, decode, true)
+	value, err := readCOWRecordDiagnostic(f, ptr, shape, verifyCRC, payloadScratch, rawScratch, pageDst, decode, true, call)
 	if err != nil {
 		return nil, err
 	}
@@ -360,10 +388,14 @@ func AppendCOWRecord(f *os.File, ptr page.ValuePtr, shape COWRecordShape, verify
 }
 
 func readCOWRecord(f *os.File, ptr page.ValuePtr, shape COWRecordShape, verifyCRC bool, payloadScratch, rawScratch, outputScratch []byte, decode COWDecodeFunc, leaf bool) ([]byte, error) {
+	return readCOWRecordDiagnostic(f, ptr, shape, verifyCRC, payloadScratch, rawScratch, outputScratch, decode, leaf, COWBasisCall{})
+}
+
+func readCOWRecordDiagnostic(f *os.File, ptr page.ValuePtr, shape COWRecordShape, verifyCRC bool, payloadScratch, rawScratch, outputScratch []byte, decode COWDecodeFunc, leaf bool, call COWBasisCall) ([]byte, error) {
 	if uint64(cap(outputScratch)) < shape.ValueBytes {
 		return nil, ErrCOWReadCapacity
 	}
-	value, err := readCOWRecordValue(f, ptr, shape, verifyCRC, payloadScratch, rawScratch, decode, leaf)
+	value, err := readCOWRecordValueDiagnostic(f, ptr, shape, verifyCRC, payloadScratch, rawScratch, decode, leaf, call)
 	if err != nil {
 		return nil, err
 	}
@@ -376,6 +408,10 @@ func readCOWRecord(f *os.File, ptr page.ValuePtr, shape COWRecordShape, verifyCR
 // owner. Wrappers must finish copying before releasing that owner's mutex; this
 // private helper never publishes an alias to an API caller.
 func readCOWRecordValue(f *os.File, ptr page.ValuePtr, shape COWRecordShape, verifyCRC bool, payloadScratch, rawScratch []byte, decode COWDecodeFunc, leaf bool) ([]byte, error) {
+	return readCOWRecordValueDiagnostic(f, ptr, shape, verifyCRC, payloadScratch, rawScratch, decode, leaf, COWBasisCall{})
+}
+
+func readCOWRecordValueDiagnostic(f *os.File, ptr page.ValuePtr, shape COWRecordShape, verifyCRC bool, payloadScratch, rawScratch []byte, decode COWDecodeFunc, leaf bool, call COWBasisCall) ([]byte, error) {
 	if !shape.valid || shape.leaf != leaf || shape.ptr != ptr || shape.RecordBytes < HeaderSize ||
 		uint64(cap(payloadScratch)) < shape.PayloadBytes() ||
 		(shape.Compressed && uint64(cap(rawScratch)) < shape.RawBytes) {
@@ -384,7 +420,7 @@ func readCOWRecordValue(f *os.File, ptr page.ValuePtr, shape COWRecordShape, ver
 
 	input := payloadScratch[:int(shape.RecordBytes):int(shape.RecordBytes)]
 	header := input[:HeaderSize:HeaderSize]
-	if err := cowCheckReadSource(f, ptr, shape.limits, leaf); err != nil {
+	if err := cowCheckReadSourceDiagnostic(f, ptr, shape.limits, leaf, call); err != nil {
 		return nil, err
 	}
 	// Input already owns the entire admitted record. Preserve the old header
@@ -416,7 +452,7 @@ func readCOWRecordValue(f *os.File, ptr page.ValuePtr, shape COWRecordShape, ver
 			return nil, ErrCorrupt
 		}
 	}
-	actual, err := cowShape(header, payload[:p], input[:HeaderSize+p], n, ptr, shape.limits)
+	actual, err := cowShapeDiagnostic(header, payload[:p], input[:HeaderSize+p], n, ptr, shape.limits, call)
 	if err != nil {
 		return nil, err
 	}
@@ -443,6 +479,7 @@ func readCOWRecordValue(f *os.File, ptr page.ValuePtr, shape COWRecordShape, ver
 	}
 	value := raw[int(shape.valueStart):int(uint64(shape.valueStart)+shape.ValueBytes)]
 	if templ.IsEncodedPayload(value) || (!leaf && HasCompactLeafLogPayload(value)) {
+		call.Refuse(COWBasisLeafRead, COWBasisPayloadContract, shape, true)
 		return nil, ErrCOWReadUnsupported
 	}
 	return value, nil

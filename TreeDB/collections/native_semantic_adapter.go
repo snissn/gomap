@@ -5,6 +5,7 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
 
 var _ backenddb.NativeSemanticState = (*nativeEngineVersion)(nil)
@@ -63,7 +64,11 @@ func (e *nativeEngineVersion) PrepareHandoff(latest backenddb.NativeSemanticStat
 // PrepareBasisRefresh is independent of the single-use captured flush ledger.
 // Maintenance supplies the exact paired Snapshots and consumes no source prefix.
 func (e *nativeEngineVersion) PrepareBasisRefresh(before, after *backenddb.Snapshot) (backenddb.NativeSemanticState, error) {
-	next, err := prepareNativeEngineBasisRefresh(e, before, after)
+	return e.PrepareBasisRefreshDiagnostic(before, after, valuelog.COWBasisCall{})
+}
+
+func (e *nativeEngineVersion) PrepareBasisRefreshDiagnostic(before, after *backenddb.Snapshot, call valuelog.COWBasisCall) (backenddb.NativeSemanticState, error) {
+	next, err := prepareNativeEngineBasisRefreshDiagnostic(e, before, after, call)
 	if err != nil {
 		err = fmt.Errorf("collections: native basis refresh: %w", err)
 	}

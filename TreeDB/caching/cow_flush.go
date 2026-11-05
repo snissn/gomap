@@ -10,6 +10,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 )
 
@@ -160,7 +161,7 @@ func (db *DB) installPreparedCOWBasis(basis *cowBackendBasis, covered, next *cow
 		// Adopt each private partial before checking err; installCOWBasis releases
 		// it through original cleanup only after this writer gate is dropped.
 		var err error
-		next.semanticRootSet, err = refreshCOWSemanticBasis(old.semanticRootSet, old.basis.snapshot, basis.snapshot)
+		next.semanticRootSet, err = refreshCOWSemanticBasisDiagnostic(old.semanticRootSet, old.basis.snapshot, basis.snapshot, db.nativeBasisRefusalObserver.Load().Begin(c.txnOwner, false))
 		if err != nil {
 			db.poisonNativeHandoff(err)
 			return nil, true, err
@@ -171,7 +172,7 @@ func (db *DB) installPreparedCOWBasis(basis *cowBackendBasis, covered, next *cow
 				next.frozenSemanticRootSet.Retain()
 			}
 		} else {
-			next.frozenSemanticRootSet, err = refreshCOWSemanticBasis(old.frozenSemanticRootSet, old.basis.snapshot, basis.snapshot)
+			next.frozenSemanticRootSet, err = refreshCOWSemanticBasisDiagnostic(old.frozenSemanticRootSet, old.basis.snapshot, basis.snapshot, db.nativeBasisRefusalObserver.Load().Begin(c.txnOwner, true))
 			if err != nil {
 				db.poisonNativeHandoff(err)
 				return nil, true, err
@@ -246,17 +247,33 @@ func (db *DB) installPreparedCOWBasis(basis *cowBackendBasis, covered, next *cow
 // equivalent physical rebinding; retaining an unknown descriptor can leave its
 // scalar roots referring to the wrong Snapshot after rewrite/vacuum.
 func refreshCOWSemanticBasis(state backenddb.NativeSemanticState, before, after *backenddb.Snapshot) (backenddb.NativeSemanticState, error) {
+	return refreshCOWSemanticBasisDiagnostic(state, before, after, valuelog.COWBasisCall{})
+}
+
+func refreshCOWSemanticBasisDiagnostic(state backenddb.NativeSemanticState, before, after *backenddb.Snapshot, call valuelog.COWBasisCall) (backenddb.NativeSemanticState, error) {
+	defer call.Finish(valuelog.COWBasisRefresh)
 	if state == nil {
 		return nil, nil
 	}
 	refresher, ok := state.(backenddb.NativeSemanticBasisRefresher)
 	if !ok {
+		call.Refuse(valuelog.COWBasisRefresh, valuelog.COWBasisUnsupported, valuelog.COWRecordShape{}, false)
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
-	next, err := refresher.PrepareBasisRefresh(before, after)
+	var next backenddb.NativeSemanticState
+	var err error
+	if diagnostic, ok := state.(backenddb.NativeSemanticBasisRefusalDiagnostic); call.Enabled() && ok {
+		next, err = diagnostic.PrepareBasisRefreshDiagnostic(before, after, call)
+	} else {
+		if call.Enabled() {
+			call.Missing()
+		}
+		next, err = refresher.PrepareBasisRefresh(before, after)
+	}
 	if err == nil && next == nil {
 		err = rootpublication.ErrPublisherProtocol
 	}
+	call.Error(valuelog.COWBasisRefresh, err, valuelog.COWRecordShape{}, false)
 	return next, err
 }
 

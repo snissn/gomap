@@ -9063,6 +9063,8 @@ func (s *foregroundReaderState) end() uint32 {
 }
 
 type DB struct {
+	// Diagnostic overlay only; never charged COW scratch or a global observer.
+	nativeBasisRefusalObserver    atomic.Pointer[valuelog.COWBasisRefusalObserver]
 	flushRequested               atomic.Bool
 	ownedCloseGuard              *backenddb.OwnedCallbackCloseGuard
 	cow                          *cowCache

@@ -8,6 +8,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/cowbtree"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/tree"
@@ -32,27 +33,59 @@ func (s *nativeBasisRefreshScratch) readBeforeLeaf(ptr page.LeafLogPtr, dst []by
 func (s *nativeBasisRefreshScratch) readAfterLeaf(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
 	return readNativeSnapshotLeaf(s.after, s.allocator, ptr, dst)
 }
-func (s *nativeBasisRefreshScratch) get(key []byte, after bool) ([]byte, bool, error) {
+// This view borrows the original scratch synchronously. Its method value is
+// consumed only by the existing non-retaining point traversal. It is neither
+// stored in the observer nor added to the charged scratch allocation. Hosted
+// escape/allocation controls are required before diagnostic admission.
+type nativeBasisRefusalReadView struct {
+	scratch *nativeBasisRefreshScratch
+	call    valuelog.COWBasisCall
+}
+
+func (v *nativeBasisRefusalReadView) readBeforeLeaf(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
+	return readNativeSnapshotLeafDiagnostic(v.scratch.before, v.scratch.allocator, ptr, dst, v.call)
+}
+
+func (v *nativeBasisRefusalReadView) readAfterLeaf(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
+	return readNativeSnapshotLeafDiagnostic(v.scratch.after, v.scratch.allocator, ptr, dst, v.call)
+}
+
+func (s *nativeBasisRefreshScratch) get(key []byte, after bool, call valuelog.COWBasisCall) ([]byte, bool, error) {
+	call = call.Side(after)
+	view := nativeBasisRefusalReadView{scratch: s, call: call}
 	var entry node.LeafEntry
 	var err error
 	if after {
 		if !s.afterRoot {
 			return nil, false, nil
 		}
-		entry, err = s.afterReader.GetEntryExactWithFixedScratch(key, s.afterKey[:], s.afterLeaf[:], s.readAfterLeaf)
+		call.Enter(valuelog.COWBasisDescriptor)
+		if call.Enabled() {
+			entry, err = s.afterReader.GetEntryExactWithFixedScratch(key, s.afterKey[:], s.afterLeaf[:], view.readAfterLeaf)
+		} else {
+			entry, err = s.afterReader.GetEntryExactWithFixedScratch(key, s.afterKey[:], s.afterLeaf[:], s.readAfterLeaf)
+		}
 	} else {
 		if !s.beforeRoot {
 			return nil, false, nil
 		}
-		entry, err = s.beforeReader.GetEntryExactWithFixedScratch(key, s.beforeKey[:], s.beforeLeaf[:], s.readBeforeLeaf)
+		call.Enter(valuelog.COWBasisDescriptor)
+		if call.Enabled() {
+			entry, err = s.beforeReader.GetEntryExactWithFixedScratch(key, s.beforeKey[:], s.beforeLeaf[:], view.readBeforeLeaf)
+		} else {
+			entry, err = s.beforeReader.GetEntryExactWithFixedScratch(key, s.beforeKey[:], s.beforeLeaf[:], s.readBeforeLeaf)
+		}
 	}
+	call.Finish(valuelog.COWBasisDescriptor)
 	if errors.Is(err, tree.ErrKeyNotFound) || (err == nil && entry.Flags&node.FlagTombstone != 0) {
 		return nil, false, nil
 	}
 	if err != nil {
+		call.Error(valuelog.COWBasisDescriptor, err, valuelog.COWRecordShape{}, false)
 		return nil, false, err
 	}
 	if entry.Flags&node.FlagPointer != 0 {
+		call.Refuse(valuelog.COWBasisDescriptor, valuelog.COWBasisUnsupported, valuelog.COWRecordShape{}, false)
 		return nil, false, backenddb.ErrNativeSemanticUnsupported
 	}
 	return entry.Value, true, nil
@@ -80,16 +113,16 @@ func (s *nativeBasisRefreshScratch) makeKey(prefix, collection, domain string) (
 	}
 	return key, nil
 }
-func (s *nativeBasisRefreshScratch) unchanged(prefix, collection string) (raw []byte, found bool, err error) {
+func (s *nativeBasisRefreshScratch) unchanged(prefix, collection string, call valuelog.COWBasisCall) (raw []byte, found bool, err error) {
 	key, err := s.makeKey(prefix, collection, "")
 	if err != nil {
 		return nil, false, err
 	}
-	old, oldFound, err := s.get(key, false)
+	old, oldFound, err := s.get(key, false, call)
 	if err != nil {
 		return nil, false, err
 	}
-	current, currentFound, err := s.get(key, true)
+	current, currentFound, err := s.get(key, true, call)
 	if err != nil {
 		return nil, false, err
 	}
@@ -98,12 +131,12 @@ func (s *nativeBasisRefreshScratch) unchanged(prefix, collection string) (raw []
 	}
 	return current, currentFound, nil
 }
-func (s *nativeBasisRefreshScratch) collection(c *nativeCollectionState) error {
-	_, metadataFound, err := s.unchanged(systemCollectionMetaPrefix, c.schema.meta.Name)
+func (s *nativeBasisRefreshScratch) collection(c *nativeCollectionState, call valuelog.COWBasisCall) error {
+	_, metadataFound, err := s.unchanged(systemCollectionMetaPrefix, c.schema.meta.Name, call.Descriptor(valuelog.COWBasisMetadata))
 	if err != nil {
 		return err
 	}
-	raw, identityFound, err := s.unchanged(nativeCatalogIncarnationPrefix, c.schema.meta.Name)
+	raw, identityFound, err := s.unchanged(nativeCatalogIncarnationPrefix, c.schema.meta.Name, call.Descriptor(valuelog.COWBasisIncarnation))
 	if err != nil {
 		return err
 	}
@@ -121,13 +154,13 @@ func (s *nativeBasisRefreshScratch) collection(c *nativeCollectionState) error {
 	}
 	return nil
 }
-func (s *nativeBasisRefreshScratch) root(c *nativeCollectionState, d *nativeDomainState) (uint64, error) {
+func (s *nativeBasisRefreshScratch) root(c *nativeCollectionState, d *nativeDomainState, call valuelog.COWBasisCall) (uint64, error) {
 	key, err := s.makeKey(systemCollectionRootOverlayPrefix, c.schema.meta.Name, d.name)
 	if err != nil {
 		return 0, err
 	}
 	for _, after := range [2]bool{false, true} {
-		if _, found, err := s.get(key, after); err != nil {
+		if _, found, err := s.get(key, after, call.Descriptor(valuelog.COWBasisOverlay)); err != nil {
 			return 0, err
 		} else if found {
 			return 0, backenddb.ErrNativeSemanticUnsupported
@@ -137,7 +170,7 @@ func (s *nativeBasisRefreshScratch) root(c *nativeCollectionState, d *nativeDoma
 	if err != nil {
 		return 0, err
 	}
-	old, found, err := s.get(key, false)
+	old, found, err := s.get(key, false, call.Descriptor(valuelog.COWBasisRoot))
 	if err != nil {
 		return 0, err
 	}
@@ -151,7 +184,7 @@ func (s *nativeBasisRefreshScratch) root(c *nativeCollectionState, d *nativeDoma
 	if oldRoot != d.catalogRoot {
 		return 0, backenddb.ErrRootPublicationBasisMismatch
 	}
-	current, found, err := s.get(key, true)
+	current, found, err := s.get(key, true, call.Descriptor(valuelog.COWBasisRoot))
 	if err != nil {
 		return 0, err
 	}
@@ -177,6 +210,10 @@ func (s *nativeBasisRefreshScratch) root(c *nativeCollectionState, d *nativeDoma
 // the SAME immutable paired Snapshots; no historical rows or source chain are
 // scanned. Only changed domains/collections get new immutable headers.
 func prepareNativeEngineBasisRefresh(base *nativeEngineVersion, before, after *backenddb.Snapshot) (*nativeEngineVersion, error) {
+	return prepareNativeEngineBasisRefreshDiagnostic(base, before, after, valuelog.COWBasisCall{})
+}
+
+func prepareNativeEngineBasisRefreshDiagnostic(base *nativeEngineVersion, before, after *backenddb.Snapshot, call valuelog.COWBasisCall) (*nativeEngineVersion, error) {
 	if base == nil || base.collections == nil || before == nil || after == nil || base.maintenance == nil || base.inventory != nil {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
@@ -212,18 +249,18 @@ func prepareNativeEngineBasisRefresh(base *nativeEngineVersion, before, after *b
 		}
 		s.afterRoot = true
 	}
-	if _, _, err = s.unchanged(nativeCatalogNextIncarnationKey, ""); err != nil {
+	if _, _, err = s.unchanged(nativeCatalogNextIncarnationKey, "", call.Descriptor(valuelog.COWBasisNextIncarnation)); err != nil {
 		return nil, err
 	}
 	collections, domains := 0, 0
 	base.collections.Scan(func(_ uint64, c *nativeCollectionState) bool {
-		if err = s.collection(c); err != nil {
+		if err = s.collection(c, call); err != nil {
 			return false
 		}
 		touched := false
 		c.domains.Scan(func(_ string, d *nativeDomainState) bool {
 			var root uint64
-			root, err = s.root(c, d)
+			root, err = s.root(c, d, call)
 			if err != nil {
 				return false
 			}
@@ -275,7 +312,7 @@ func prepareNativeEngineBasisRefresh(base *nativeEngineVersion, before, after *b
 	base.collections.Scan(func(id uint64, c *nativeCollectionState) bool {
 		touched := 0
 		c.domains.Scan(func(_ string, d *nativeDomainState) bool {
-			root, e := s.root(c, d)
+			root, e := s.root(c, d, call)
 			if e != nil {
 				err = e
 				return false
@@ -297,7 +334,7 @@ func prepareNativeEngineBasisRefresh(base *nativeEngineVersion, before, after *b
 			return false
 		}
 		c.domains.Scan(func(name string, d *nativeDomainState) bool {
-			root, e := s.root(c, d)
+			root, e := s.root(c, d, call)
 			if e != nil {
 				err = e
 				return false

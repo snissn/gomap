@@ -11,6 +11,7 @@ import (
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
 
@@ -65,6 +66,11 @@ func runNativeOrdinaryConcurrentExactLifecycle(t *testing.T, rows int) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var refusal valuelog.COWBasisRefusalObserver
+	t.Cleanup(func() {
+		// Atomic scalar receipt only. Even Close error is not a borrower join.
+		t.Logf("basis-first-refusal: %+v", refusal.Snapshot())
+	})
 	ownerOpen := true
 	var manager *CollectionManager
 	managerOpen := false
@@ -91,6 +97,9 @@ func runNativeOrdinaryConcurrentExactLifecycle(t *testing.T, rows int) {
 			}
 		}
 	})
+	if !owner.EnableNativeBasisRefusalObserverForTest(&refusal) {
+		t.Fatal("original owner diagnostic binding refused")
+	}
 	backend, err := owner.NativeSemanticBackend()
 	if err != nil {
 		t.Fatal(err)

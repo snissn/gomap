@@ -396,33 +396,52 @@ func (r *NativeJSONRead) loadLeaf(ptr page.LeafLogPtr, dst []byte) ([]byte, erro
 // this synchronous read. Maintenance descriptor reads reuse the same decoder,
 // admission and integrity policy without constructing another capture authority.
 func readNativeSnapshotLeaf(snapshot *backenddb.Snapshot, allocator backenddb.NativeSemanticAllocator, ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
-	return readNativeSnapshotLeafWithAdmission(snapshot, allocator.Limits().MaxInFlightBytes, func(charge uint64) (func(), error) {
+	return readNativeSnapshotLeafDiagnostic(snapshot, allocator, ptr, dst, valuelog.COWBasisCall{})
+}
+
+func readNativeSnapshotLeafDiagnostic(snapshot *backenddb.Snapshot, allocator backenddb.NativeSemanticAllocator, ptr page.LeafLogPtr, dst []byte, call valuelog.COWBasisCall) ([]byte, error) {
+	return readNativeSnapshotLeafWithAdmissionDiagnostic(snapshot, allocator.Limits().MaxInFlightBytes, func(charge uint64) (func(), error) {
 		lease, err := allocator.AdmitNativeBytes(charge)
 		if err != nil {
 			return nil, err
 		}
 		return lease.Close, nil
-	}, ptr, dst)
+	}, ptr, dst, call)
 }
 
 // Internal synchronous admission may spend a containing preadmitted build
 // workspace. It cannot reenter application code or outlive this read.
 func readNativeSnapshotLeafWithAdmission(snapshot *backenddb.Snapshot, limit uint64, admit func(uint64) (func(), error), ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
+	return readNativeSnapshotLeafWithAdmissionDiagnostic(snapshot, limit, admit, ptr, dst, valuelog.COWBasisCall{})
+}
+
+func readNativeSnapshotLeafWithAdmissionDiagnostic(snapshot *backenddb.Snapshot, limit uint64, admit func(uint64) (func(), error), ptr page.LeafLogPtr, dst []byte, call valuelog.COWBasisCall) ([]byte, error) {
+	call.Enter(valuelog.COWBasisPin)
 	f, _, err := snapshot.PinnedValueLogFile(ptr.ValuePtr().FileID)
+	call.Finish(valuelog.COWBasisPin)
 	if err != nil {
+		call.Error(valuelog.COWBasisPin, err, valuelog.COWRecordShape{}, false)
 		return nil, err
 	}
-	shape, err := valuelog.InspectCOWLeafRecord(f, ptr.ValuePtr(), valuelog.COWReadLimits{MaxRecordBytes: limit, MaxRawBytes: limit, MaxValueBytes: limit})
+	call.Enter(valuelog.COWBasisInspect)
+	shape, err := valuelog.InspectCOWLeafRecordDiagnostic(f, ptr.ValuePtr(), valuelog.COWReadLimits{MaxRecordBytes: limit, MaxRawBytes: limit, MaxValueBytes: limit}, call)
+	call.Finish(valuelog.COWBasisInspect)
 	if err != nil {
+		// Every failed inspector returns an empty shape: flags stay UNKNOWN.
+		call.Error(valuelog.COWBasisInspect, err, valuelog.COWRecordShape{}, false)
 		return nil, err
 	}
 	var sizes valuelog.COWDecoderAllocationSizes
 	if shape.Compressed {
 		if shape.DictID != 0 {
+			call.Refuse(valuelog.COWBasisDecoderSizes, valuelog.COWBasisDictionary, shape, true)
 			return nil, valuelog.ErrCOWReadUnsupported
 		}
+		call.Enter(valuelog.COWBasisDecoderSizes)
 		sizes, err = valuelog.COWBlockDecoderRetentionSizes(shape.Codec, shape.RawBytes, shape.PayloadBytes())
+		call.Finish(valuelog.COWBasisDecoderSizes)
 		if err != nil {
+			call.Error(valuelog.COWBasisDecoderSizes, err, shape, true)
 			return nil, err
 		}
 	}
@@ -430,12 +449,16 @@ func readNativeSnapshotLeafWithAdmission(snapshot *backenddb.Snapshot, limit uin
 	for _, bytes := range []uint64{shape.RawBytes, sizes.OwnerWrapper} {
 		part := memtable.COWAllocationCharge(bytes)
 		if part > ^uint64(0)-charge {
+			call.Refuse(valuelog.COWBasisAdmission, valuelog.COWBasisCapacity, shape, true)
 			return nil, memtable.ErrCOWCapacity
 		}
 		charge += part
 	}
+	call.Enter(valuelog.COWBasisAdmission)
 	finish, err := admit(charge)
+	call.Finish(valuelog.COWBasisAdmission)
 	if err != nil {
+		call.Error(valuelog.COWBasisAdmission, err, shape, true)
 		return nil, err
 	}
 	input, raw := make([]byte, shape.PayloadBytes()), make([]byte, shape.RawBytes)
@@ -451,18 +474,25 @@ func readNativeSnapshotLeafWithAdmission(snapshot *backenddb.Snapshot, limit uin
 		finish()
 	}()
 	if shape.Compressed {
+		call.Enter(valuelog.COWBasisDecoder)
 		decoder, err = valuelog.NewCOWBlockDecoder(shape.Codec, shape.RawBytes, shape.PayloadBytes(), func(actual valuelog.COWDecoderAllocationSizes) error {
 			if actual != sizes {
 				return memtable.ErrCOWCapacity
 			}
 			return nil
 		})
+		call.Finish(valuelog.COWBasisDecoder)
 		if err != nil {
+			call.Error(valuelog.COWBasisDecoder, err, shape, true)
 			return nil, err
 		}
 		decode = decoder.Decode
 	}
-	return valuelog.ReadCOWLeafPage(f, ptr.ValuePtr(), shape, true, input, raw, dst, decode)
+	call.Enter(valuelog.COWBasisLeafRead)
+	out, err := valuelog.ReadCOWLeafPageDiagnostic(f, ptr.ValuePtr(), shape, true, input, raw, dst, decode, call)
+	call.Finish(valuelog.COWBasisLeafRead)
+	call.Error(valuelog.COWBasisLeafRead, err, shape, true)
+	return out, err
 }
 
 func (r *NativeJSONRead) Close() error {
