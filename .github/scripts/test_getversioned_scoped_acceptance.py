@@ -81,12 +81,18 @@ class ScopeTests(unittest.TestCase):
                 route.scope(event)
             event["pull_request"]["base"]["sha"] = route.BASE
             event["pull_request"]["head"]["sha"] = "a" * 40
-            with mock.patch.object(route.subprocess, "run") as run, mock.patch.object(route.subprocess, "check_output", return_value=".github/workflows/treedb-tests.yml\n"):
+            with mock.patch.object(route.datetime, "datetime") as clock, mock.patch.object(route.subprocess, "run") as run, mock.patch.object(route.subprocess, "check_output", return_value=".github/workflows/treedb-tests.yml\n"):
+                clock.now.return_value = route.EXPIRY - route.datetime.timedelta(microseconds=1)
                 self.assertTrue(route.scope(event))
                 self.assertEqual(run.call_args.args[0], ["git", "merge-base", "--is-ancestor", route.ORIGINAL, "a" * 40])
-            with mock.patch.dict(os.environ, {"GITHUB_RUN_ATTEMPT": "2"}):
-                with self.assertRaises(ValueError):
-                    route.scope(event)
+                for now in (route.EXPIRY, route.EXPIRY + route.datetime.timedelta(seconds=1)):
+                    clock.now.return_value = now
+                    with self.assertRaises(ValueError):
+                        route.scope(event)
+                clock.now.return_value = route.EXPIRY - route.datetime.timedelta(microseconds=1)
+                with mock.patch.dict(os.environ, {"GITHUB_RUN_ATTEMPT": "2"}):
+                    with self.assertRaises(ValueError):
+                        route.scope(event)
 
     def test_decision_author_edit_and_scope(self):
         identity = {"head": "a" * 40, "tree": "b" * 40, "base": route.BASE,
