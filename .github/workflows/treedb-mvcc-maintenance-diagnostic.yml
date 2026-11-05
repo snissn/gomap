@@ -28,7 +28,7 @@ jobs:
           python3 --version > "$RUNNER_TEMP/four-gate-readback/python.txt"
           gh version > "$RUNNER_TEMP/four-gate-readback/gh.txt"
           ulimit -f 262144
-          timeout --signal=TERM --kill-after=5s 90s gh api repos/snissn/gomap/actions/artifacts/13377165673/zip > "$RUNNER_TEMP/four-gate-readback/original.zip"
+          timeout --signal=TERM --kill-after=5s 90s gh api repos/snissn/gomap/actions/artifacts/13377421539/zip > "$RUNNER_TEMP/four-gate-readback/original.zip"
           timeout --signal=TERM --kill-after=5s 30s python3 -B .github/scripts/four_gate_artifact_readback.py
       - name: Retain readback only
         if: always()
