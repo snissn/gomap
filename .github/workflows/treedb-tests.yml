@@ -197,6 +197,14 @@ jobs:
     # Drain older runs before arming; clear the label then PR after the run.
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && vars.TREEDB_PERF_RUNNER_LABEL != '' && vars.TREEDB_PERF_RUNNER_PR != '' && vars.TREEDB_PERF_RUNNER_PR == format('{0}', github.event.pull_request.number) && vars.TREEDB_PERF_RUNNER_LABEL || 'ubuntu-24.04' }}
     timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+      pull-requests: read
+      issues: read
+    outputs:
+      scoped_acceptance: ${{ steps.acceptance_scope.outputs.scoped }}
     env:
       MVCC_GATE_PATH_RE: '^((TreeDB/)|scripts/mvcc_(raw_path_gate|adapter_overhead_gate|closeout_matrix|candidate_checkout_guard)\.sh$|scripts/(mvcc_(raw_sync_context|storage_context)|mvcc_primary_cost_gate|cow_successor_workspace_diagnostic|pool_pressure_stats_diagnostic)\.py$|\.github/scripts/(check_mvcc_(raw_path|adapter_overhead)_gate|summarize_mvcc_closeout|test_(mvcc_(raw_sync_context|storage_context|raw_path_equivalence|benchmark_pairing|candidate_checkout_guard|primary_cost_gate)|summarize_mvcc_closeout)|test_cow_successor_workspace_diagnostic|test_pool_pressure_stats_diagnostic|test_treedb_ci_contract|test_treedb_windows_core_headroom)\.py$|\.github/workflows/treedb-tests\.yml$)'
       COW_SUCCESSOR_PATH_RE: '^(TreeDB/caching/(cow_(read(_workspace)?|cut|successor_workspace_test)|point_successor)\.go|TreeDB/mvcc/cow_successor_workspace_external_test\.go|scripts/(cow_successor_workspace_diagnostic|mvcc_primary_cost_gate)\.py|\.github/scripts/test_cow_successor_workspace_diagnostic\.py)$'
@@ -283,6 +291,16 @@ jobs:
             echo "No MVCC/raw-gate relevant path changed; skipping."
           fi
 
+      - name: Select single-use reviewed timing scope
+        id: acceptance_scope
+        if: steps.paths.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          python3 .github/scripts/getversioned_scoped_acceptance.py scope \
+            --event "$GITHUB_EVENT_PATH" --output "$GITHUB_OUTPUT"
+
       - name: Setup Go
         if: steps.paths.outputs.run == 'true'
         uses: actions/setup-go@v5
@@ -319,6 +337,7 @@ jobs:
           python3 .github/scripts/test_summarize_mvcc_closeout.py
           python3 .github/scripts/test_mvcc_candidate_checkout_guard.py
           python3 .github/scripts/test_treedb_ci_contract.py
+          python3 .github/scripts/test_getversioned_scoped_acceptance.py
           python3 .github/scripts/test_treedb_windows_core_headroom.py
           for path in \
             TreeDB/snapshot_seek_iterator_bench_test.go \
@@ -352,7 +371,7 @@ jobs:
           done
 
       - name: Compare exact base and head
-        if: steps.paths.outputs.run == 'true'
+        if: steps.paths.outputs.run == 'true' && steps.acceptance_scope.outputs.scoped != 'true'
         continue-on-error: ${{ steps.scope.outputs.enforce != 'true' }}
         env:
           BASELINE_HASH: ${{ steps.scope.outputs.base_sha }}
@@ -376,7 +395,7 @@ jobs:
           ./scripts/mvcc_raw_path_gate.sh
 
       - name: Compare public PRIMARY replacement cost
-        if: ${{ !cancelled() && steps.paths.outputs.run == 'true' && steps.gate_self_checks.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.paths.outputs.run == 'true' && steps.gate_self_checks.outcome == 'success' && steps.acceptance_scope.outputs.scoped != 'true' }}
         env:
           BASE_SHA: ${{ steps.scope.outputs.base_sha }}
           HEAD_SHA: ${{ steps.scope.outputs.head_sha }}
@@ -386,6 +405,24 @@ jobs:
             --root "$GITHUB_WORKSPACE" \
             --baseline "$BASE_SHA" --candidate "$HEAD_SHA" \
             --output "$RUNNER_TEMP/mvcc-raw-path-gate/primary"
+
+      - name: Authenticate original evidence and compile identity-only executables
+        if: steps.acceptance_scope.outputs.scoped == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          python3 .github/scripts/getversioned_scoped_acceptance.py prepare \
+            --event "$GITHUB_EVENT_PATH" --output-dir "$RUNNER_TEMP/getversioned-acceptance"
+
+      - name: Upload single-use identity preparation
+        if: always() && steps.acceptance_scope.outputs.scoped == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: getversioned-scoped-prepared-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/getversioned-acceptance/receipt.json
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Compare frozen COW successor diagnostic
         if: ${{ !cancelled() && steps.paths.outputs.cow_successor == 'true' && steps.gate_self_checks.outcome == 'success' }}
@@ -438,14 +475,20 @@ jobs:
           if [[ -f "$RUNNER_TEMP/mvcc-raw-path-gate/primary/summary.md" ]]; then
             cat "$RUNNER_TEMP/mvcc-raw-path-gate/primary/summary.md" >> "$GITHUB_STEP_SUMMARY"
           fi
-          if [[ -f "$RUNNER_TEMP/mvcc-raw-path-gate/summary.md" ]]; then
+          if [[ "${{ steps.acceptance_scope.outputs.scoped }}" == "true" ]]; then
+            {
+              echo "### Scoped original timing evidence"
+              echo "Original run42102127901 measurements remain FAIL: tiny-WAL +20.815562384% and PRIMARY +39.535845813%, each against5%. All eight pairs remain retained."
+              echo "No timing experiment was repeated. This job only authenticates the original evidence and exact executable identities; the separate acceptance job still requires the exact-run owner decision and all non-timing jobs."
+            } >> "$GITHUB_STEP_SUMMARY"
+          elif [[ -f "$RUNNER_TEMP/mvcc-raw-path-gate/summary.md" ]]; then
             cat "$RUNNER_TEMP/mvcc-raw-path-gate/summary.md" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "MVCC raw-path gate did not produce a summary." >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Upload benchmark evidence
-        if: always() && steps.paths.outputs.run == 'true'
+        if: always() && steps.paths.outputs.run == 'true' && steps.acceptance_scope.outputs.scoped != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: mvcc-raw-path-gate-${{ steps.scope.outputs.head_sha }}
@@ -487,6 +530,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           python3 .github/scripts/test_treedb_ci_contract.py
+          python3 .github/scripts/test_getversioned_scoped_acceptance.py
           python3 .github/scripts/test_treedb_windows_core_headroom.py
           python3 .github/scripts/test_ci_impact.py
           python3 scripts/r1_collection_source_test.py
@@ -1408,11 +1452,86 @@ jobs:
           retention-days: 30
           if-no-files-found: warn
 
+  getversioned-timing-acceptance:
+    name: GetVersioned single-use timing acceptance
+    if: ${{ always() }}
+    needs:
+      - mvcc-raw-path-gate
+      - getversioned-bindings-qualification
+      - vet
+      - test
+      - race
+      - perf
+      - snapshot-iterator-perf
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+      pull-requests: read
+      issues: read
+    steps:
+      - name: Checkout exact acceptance source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+      - name: Require original non-timing jobs and authenticated exact-run decision
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PYTHONDONTWRITEBYTECODE: "1"
+          SCOPED_ACCEPTANCE: ${{ needs.mvcc-raw-path-gate.outputs.scoped_acceptance }}
+          MVCC_RESULT: ${{ needs.mvcc-raw-path-gate.result }}
+          GETVERSIONED_BINDINGS_RESULT: ${{ needs.getversioned-bindings-qualification.result }}
+          VET_RESULT: ${{ needs.vet.result }}
+          TEST_RESULT: ${{ needs.test.result }}
+          RACE_RESULT: ${{ needs.race.result }}
+          PERF_RESULT: ${{ needs.perf.result }}
+          SNAPSHOT_ITERATOR_PERF_RESULT: ${{ needs.snapshot-iterator-perf.result }}
+        run: |
+          set -euo pipefail
+          if [[ "$SCOPED_ACCEPTANCE" != "true" ]]; then
+            echo "Single-use timing acceptance NOT_APPLICABLE; original required results remain enforced."
+            exit 0
+          fi
+          for result in \
+            "$MVCC_RESULT" \
+            "$GETVERSIONED_BINDINGS_RESULT" \
+            "$VET_RESULT" \
+            "$TEST_RESULT" \
+            "$RACE_RESULT" \
+            "$PERF_RESULT" \
+            "$SNAPSHOT_ITERATOR_PERF_RESULT"; do
+            if [[ "$result" != "success" ]]; then
+              echo "Non-timing prerequisite is ${result}; no timing acceptance." >&2
+              exit 1
+            fi
+          done
+          python3 .github/scripts/getversioned_scoped_acceptance.py accept \
+            --event "$GITHUB_EVENT_PATH" \
+            --prepared-dir "$RUNNER_TEMP/getversioned-acceptance" \
+            --output "$RUNNER_TEMP/getversioned-acceptance-decision.json"
+          {
+            echo "### OWNER_ACCEPTED_TIMING_OBSERVATIONS"
+            echo "Original measurement verdict remains FAIL; no timing improvement or causal explanation is claimed."
+            cat "$RUNNER_TEMP/getversioned-acceptance-decision.json"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload distinct acceptance decision
+        if: always() && needs.mvcc-raw-path-gate.outputs.scoped_acceptance == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: getversioned-scoped-decision-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/getversioned-acceptance-decision.json
+          if-no-files-found: error
+          retention-days: 14
+
   required:
     name: TreeDB required gate
     if: ${{ always() }}
     needs:
       - mvcc-raw-path-gate
+      - getversioned-timing-acceptance
       - getversioned-bindings-qualification
       - vet
       - test
@@ -1426,6 +1545,7 @@ jobs:
         shell: bash
         env:
           MVCC_RESULT: ${{ needs.mvcc-raw-path-gate.result }}
+          GETVERSIONED_TIMING_ACCEPTANCE_RESULT: ${{ needs.getversioned-timing-acceptance.result }}
           GETVERSIONED_BINDINGS_RESULT: ${{ needs.getversioned-bindings-qualification.result }}
           VET_RESULT: ${{ needs.vet.result }}
           TEST_RESULT: ${{ needs.test.result }}
@@ -1437,6 +1557,7 @@ jobs:
           failed=false
           for result in \
             "$MVCC_RESULT" \
+            "$GETVERSIONED_TIMING_ACCEPTANCE_RESULT" \
             "$GETVERSIONED_BINDINGS_RESULT" \
             "$VET_RESULT" \
             "$TEST_RESULT" \

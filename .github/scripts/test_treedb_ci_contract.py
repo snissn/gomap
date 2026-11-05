@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import re
+import os
 import subprocess
+import tempfile
 import textwrap
 import unittest
 from pathlib import Path
@@ -164,6 +166,7 @@ class TreeDBCIContractTests(unittest.TestCase):
         for job in (
             "mvcc-raw-path-gate",
             "getversioned-bindings-qualification",
+            "getversioned-timing-acceptance",
             "vet",
             "test",
             "race",
@@ -175,7 +178,7 @@ class TreeDBCIContractTests(unittest.TestCase):
         self.assertIn('[[ "$result" == "success" ]]', required)
 
         bindings = dict(re.findall(r"(?m)^          ([A-Z_]+): \$\{\{ needs\.([\w-]+)\.result \}\}$", required))
-        expected = {"mvcc-raw-path-gate", "getversioned-bindings-qualification", "vet", "test", "race", "perf", "snapshot-iterator-perf"}
+        expected = {"mvcc-raw-path-gate", "getversioned-bindings-qualification", "getversioned-timing-acceptance", "vet", "test", "race", "perf", "snapshot-iterator-perf"}
         self.assertEqual(set(bindings.values()), expected)
         self.assertEqual(len(bindings), len(expected))
         script = textwrap.dedent(required.split("        run: |\n", 1)[1])
@@ -189,6 +192,61 @@ class TreeDBCIContractTests(unittest.TestCase):
                 values[name] = bad
                 with self.subTest(name=name, result=bad):
                     self.assertNotEqual(run(values), 0)
+
+
+    def test_scoped_timing_route_preserves_normal_comparisons(self) -> None:
+        mvcc = block(self.source, "  mvcc-raw-path-gate:\n", "\n  vet:\n")
+        raw = block(mvcc, "      - name: Compare exact base and head\n", "      - name: Compare public PRIMARY")
+        primary = block(mvcc, "      - name: Compare public PRIMARY", "      - name: Authenticate original evidence")
+        for branch in (raw, primary):
+            self.assertIn("steps.acceptance_scope.outputs.scoped != 'true'", branch)
+        self.assertIn('MAX_REGRESSION_PERCENT: "5"', raw)
+        self.assertIn('RUNS: "8"', raw)
+        self.assertIn('./scripts/mvcc_raw_path_gate.sh', raw)
+        self.assertIn('python3 scripts/mvcc_primary_cost_gate.py', primary)
+        preparation = block(mvcc, "      - name: Authenticate original evidence", "      - name: Compare frozen COW")
+        self.assertNotIn("continue-on-error", preparation)
+        self.assertIn("getversioned_scoped_acceptance.py prepare", preparation)
+        self.assertNotIn("-test.bench", preparation)
+        self.assertNotIn("checks: write", mvcc)
+        self.assertNotIn("statuses: write", mvcc)
+
+    def test_scoped_timing_cannot_accept_non_timing_failure(self) -> None:
+        job = block(self.source, "  getversioned-timing-acceptance:\n", "\n  required:\n")
+        self.assertIn("if: ${{ always() }}", job)
+        self.assertNotIn("continue-on-error", job)
+        for needed in ("mvcc-raw-path-gate", "getversioned-bindings-qualification", "vet", "test", "race", "perf", "snapshot-iterator-perf"):
+            self.assertIn("      - " + needed + "\n", job)
+        step = block(job, "      - name: Require original non-timing", "      - name: Upload distinct")
+        bindings = dict(re.findall(r"(?m)^          ([A-Z_]+): \$\{\{ needs\.([\w-]+)\.result \}\}$", step))
+        self.assertEqual(len(bindings), 7)
+        self.assertIn("test", bindings.values())  # Includes Windows core-6.
+        script = textwrap.dedent(step.split("        run: |\n", 1)[1])
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            calls = directory / "called.txt"
+            stub = directory / "python3"
+            stub.write_text("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$CALLS\"\nprintf '{}\\n' > \"$RUNNER_TEMP/getversioned-acceptance-decision.json\"\n")
+            stub.chmod(0o755)
+            success = {name: "success" for name in bindings}
+            success.update(SCOPED_ACCEPTANCE="true", PATH=temporary + os.pathsep + os.defpath,
+                           CALLS=str(calls), GITHUB_EVENT_PATH="event.json", RUNNER_TEMP=temporary,
+                           GITHUB_STEP_SUMMARY=str(directory / "summary.md"))
+            def run(values: dict[str, str]) -> tuple[int, bool]:
+                calls.unlink(missing_ok=True)
+                result = subprocess.run(["bash", "-c", script], env=values, capture_output=True, check=False)
+                return result.returncode, calls.exists()
+            self.assertEqual(run(success), (0, True))
+            self.assertIn("accept\n--event\nevent.json", calls.read_text())
+            for name in bindings:
+                for bad in ("failure", "cancelled", "skipped", ""):
+                    values = dict(success, **{name: bad})
+                    with self.subTest(name=name, value=bad):
+                        code, invoked = run(values)
+                        self.assertNotEqual(code, 0)
+                        self.assertFalse(invoked)
+            for unrelated in ("false", ""):
+                self.assertEqual(run(dict(success, SCOPED_ACCEPTANCE=unrelated)), (0, False))
 
 
 if __name__ == "__main__":
