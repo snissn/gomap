@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -137,6 +138,51 @@ func TestProcessUsageOutputCollision(t *testing.T) {
 			})
 			if reads != 0 || (name == "distinct" && (err != nil || u == nil)) || (name != "distinct" && (err == nil || u != nil)) {
 				t.Fatalf("collision %s: usage=%v err=%v reads=%d", name, u, err, reads)
+			}
+		})
+	}
+}
+
+func TestProcessUsageOutputPathAliases(t *testing.T) {
+	for _, name := range []string{"trim_block", "trim_mutex", "trim_trace", "trim_block_delta", "parent_component", "receipt_parent_component", "checkpoint_literal_symlink", "dangling_output_symlink", "distinct"} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			oldProfileDir := *profileDir
+			*profileDir = ""
+			t.Cleanup(func() { *profileDir = oldProfileDir })
+			receipt := filepath.Join(dir, "usage.json")
+			cfg := BenchConfig{CPUProfile: filepath.Join(dir, "cpu")}
+			switch name {
+			case "trim_block":
+				cfg.BlockProfile = "  " + receipt + "  "
+			case "trim_mutex":
+				cfg.MutexProfile = "  " + receipt + "  "
+			case "trim_trace":
+				cfg.TraceProfile = "  " + receipt + "  "
+			case "trim_block_delta":
+				cfg.BlockProfile = "  " + filepath.Join(dir, "block.pprof") + "  "
+				receipt = filepath.Join(dir, "block_batch_write_steady_one.pprof")
+			case "parent_component":
+				cfg.TraceProfile = dir + "/sub/../usage.json"
+			case "receipt_parent_component":
+				receipt = dir + "/sub/../usage.json"
+			case "checkpoint_literal_symlink":
+				prefix := filepath.Join(dir, "checkpoint")
+				if err := os.Symlink(filepath.Join(dir, "other"), prefix); err != nil {
+					t.Skipf("symlink unavailable: %v", err)
+				}
+				cfg.CheckpointCPUProfile = prefix
+				receipt = prefix + "_checkpoint_post-run_wrapper.pprof"
+			case "dangling_output_symlink":
+				output := filepath.Join(dir, "trace")
+				if err := os.Symlink(receipt, output); err != nil {
+					t.Skipf("symlink unavailable: %v", err)
+				}
+				cfg.TraceProfile = output
+			}
+			err := validateProcessUsageOutputPath(receipt, cfg, "one")
+			if (name == "distinct") != (err == nil) {
+				t.Fatalf("%s: err=%v", name, err)
 			}
 		})
 	}

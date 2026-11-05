@@ -188,6 +188,18 @@ func writeProcessUsageReceipt(path string, receipt *processUsageReceipt) error {
 // Resolve existing parent aliases without creating any output. Later profile
 // directories may not exist yet, so resolve their nearest existing ancestor.
 func processUsageCanonicalPath(path string) (string, error) {
+	return processUsageCanonicalPathDepth(path, 0)
+}
+
+func processUsageCanonicalPathDepth(path string, depth int) (string, error) {
+	if depth > 40 {
+		return "", errors.New("too many process usage path symlinks")
+	}
+	for _, component := range strings.Split(filepath.ToSlash(path), "/") {
+		if component == ".." {
+			return "", errors.New("process usage paths must not contain parent components")
+		}
+	}
 	absolute, err := filepath.Abs(path)
 	if err != nil {
 		return "", err
@@ -204,11 +216,44 @@ func processUsageCanonicalPath(path string) (string, error) {
 		if !errors.Is(err, os.ErrNotExist) || filepath.Dir(current) == current {
 			return "", err
 		}
+		info, statErr := os.Lstat(current)
+		if statErr == nil && info.Mode()&os.ModeSymlink != 0 {
+			target, readErr := os.Readlink(current)
+			if readErr != nil {
+				return "", readErr
+			}
+			for _, component := range strings.Split(filepath.ToSlash(target), "/") {
+				if component == ".." {
+					return "", errors.New("process usage symlink target contains parent components")
+				}
+			}
+			if !filepath.IsAbs(target) {
+				target = filepath.Join(filepath.Dir(current), target)
+			}
+			resolved, resolveErr := processUsageCanonicalPathDepth(target, depth+1)
+			if resolveErr != nil {
+				return "", resolveErr
+			}
+			for i := len(tail) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, tail[i])
+			}
+			return resolved, nil
+		}
+		if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+			return "", statErr
+		}
 		tail = append(tail, filepath.Base(current))
 	}
 }
 
 func validateProcessUsageOutputPath(path string, cfg BenchConfig, dbName string) error {
+	for _, raw := range []string{path, cfg.CPUProfile, cfg.AllocsProfile, cfg.CheckpointCPUProfile, cfg.BlockProfile, cfg.MutexProfile, cfg.TraceProfile, *profileDir} {
+		for _, component := range strings.Split(filepath.ToSlash(strings.TrimSpace(raw)), "/") {
+			if component == ".." {
+				return errors.New("process usage paths must not contain parent components")
+			}
+		}
+	}
 	parent, err := os.Stat(filepath.Dir(path))
 	if err != nil || !parent.IsDir() {
 		return errors.New("process usage receipt requires an existing parent directory")
@@ -218,7 +263,7 @@ func validateProcessUsageOutputPath(path string, cfg BenchConfig, dbName string)
 		return fmt.Errorf("process usage receipt path: %w", err)
 	}
 	const testName = "batch_write_steady"
-	paths := []string{cfg.BlockProfile, cfg.MutexProfile, cfg.TraceProfile}
+	paths := []string{strings.TrimSpace(cfg.BlockProfile), strings.TrimSpace(cfg.MutexProfile), strings.TrimSpace(cfg.TraceProfile)}
 	if shouldCPUProfile(cfg, testName) {
 		paths = append(paths, strings.TrimSpace(cfg.CPUProfile)+"_"+testName+"_"+dbName+".pprof")
 	}
@@ -227,16 +272,17 @@ func validateProcessUsageOutputPath(path string, cfg BenchConfig, dbName string)
 	}
 	for _, pair := range [][2]string{{cfg.BlockProfile, "block"}, {cfg.MutexProfile, "mutex"}} {
 		if strings.TrimSpace(pair[0]) != "" {
-			paths = append(paths, contentionProfilePath(pair[0], pair[1], testName, dbName))
+			paths = append(paths, contentionProfilePath(strings.TrimSpace(pair[0]), pair[1], testName, dbName))
 		}
 	}
 	// Checkpoint profiles use the wrapper's runtime Name. Reserve the configured
 	// checkpoint namespace before opening it; do not guess that Name from dbName.
 	if prefix := strings.TrimSpace(cfg.CheckpointCPUProfile); prefix != "" {
-		canonical, err := processUsageCanonicalPath(prefix)
+		parent, err := processUsageCanonicalPath(filepath.Dir(prefix))
 		if err != nil {
 			return err
 		}
+		canonical := filepath.Join(parent, filepath.Base(prefix))
 		if (strings.HasPrefix(receipt, canonical+"_checkpoint_") && strings.HasSuffix(receipt, ".pprof")) || strings.HasPrefix(canonical, receipt+string(filepath.Separator)) {
 			return errors.New("process usage receipt collides with checkpoint profile namespace")
 		}
