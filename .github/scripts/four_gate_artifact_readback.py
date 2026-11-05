@@ -6,9 +6,32 @@ from pathlib import Path
 import stat
 import zipfile
 
-EXPECTED_BYTES = 21356
-EXPECTED_SHA = "63bafc7532bea8bfa9652a88ce373ba984679b11ca310deafeb2c95b8a8eada5"
-NAMES = {'fixture.json', 'results.json', 'summary.md'}
+EXPECTED_BYTES = 2733520
+EXPECTED_SHA = "8bc1f60e2762200e52724b73eb1cf06284d59c7ad1c1936e3f06a7fcb2a275cf"
+NAMES = {
+    'dispatch-admission.json',
+    'entry.stdout.log',
+    'entry.stderr.log',
+    'guard/result.json',
+    'output/admission.json',
+    'output/controls-pass.json',
+    'output/binding-review.json',
+    'output/input-bindings.json',
+    'output/compile-context.json',
+    'output/cgo-tool-identities.json',
+    'output/hosted-tools.json',
+    'output/runtime.json',
+    'output/trace-tool.json',
+    'output/normal-ELF.json',
+    'output/stages.json',
+    'output/completion.json',
+    'output/final-file-manifest.json',
+    'output/trace-bijection.json',
+    'output/combiner-service-validation.json',
+    'output/arm/m0-ordinals.json',
+    'output/arm/m0-combiner-service.json',
+    'output/one-M0.stdout.log',
+}
 root = Path(os.environ["RUNNER_TEMP"]) / "four-gate-readback"
 archive = root / "original.zip"
 assert archive.stat().st_size == EXPECTED_BYTES, "archive size mismatch"
@@ -17,7 +40,7 @@ with archive.open("rb") as f:
     for chunk in iter(lambda: f.read(1048576), b""):
         h.update(chunk)
 assert h.hexdigest() == EXPECTED_SHA, "archive digest mismatch"
-result = {"source_head": os.environ["GITHUB_SHA"], "artifact": 13390650380,
+result = {"source_head": os.environ["GITHUB_SHA"], "artifact": 13390292576,
           "archive_sha256": h.hexdigest(), "scope": "retained original text only; no gate alteration",
           "entries": [], "texts": {}, "missing": []}
 with zipfile.ZipFile(archive) as z:
@@ -34,11 +57,13 @@ with zipfile.ZipFile(archive) as z:
             result["missing"].append(name)
             continue
         info = z.getinfo(name)
-        assert info.file_size <= 131072, "selected metadata file too large"
+        assert info.file_size <= 8 * 1024**2, "selected metadata file too large"
         total += info.file_size
-        assert total <= 1048576, "selected metadata aggregate too large"
+        assert total <= 24 * 1024**2, "selected metadata aggregate too large"
         data = z.read(name)
         result["texts"][name] = {"size": len(data), "sha256": hashlib.sha256(data).hexdigest(),
                                  "text": data.decode("utf-8")}
-(root / "readback.json").write_text(json.dumps(result, indent=2) + "\n")
-print(json.dumps(result, indent=2))
+data = (json.dumps(result, indent=2) + "\n").encode("utf-8")
+assert len(data) <= 32 * 1024**2, "complete readback JSON too large"
+(root / "readback.json").write_bytes(data)
+print(data.decode("utf-8"), end="")
