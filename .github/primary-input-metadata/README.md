@@ -36,3 +36,11 @@ published complete with sizes/hashes/base64 only after guard returns; publisher
 checks stable regular single-link descriptors, EOF and close. Query failure,
 cleanup intervention, missing receipt, output overbound or publication failure
 cannot become PASS. No rerun or new build is selected by this source.
+
+Focused source correction: the normal maintained guard schema omits pending
+cleanup-signal observations; publication records that absence without inventing
+an empty observed set. Recorded signals, guard errors, interventions and failed
+statuses still refuse success. Every checked path-descriptor close failure is
+terminal; sanitized operational errors precede cleanup errors in the retained
+first-failure row. Python source under /etc (including sitecustomize.py) remains
+code input, rather than configuration. No guard or resource predicate changed.

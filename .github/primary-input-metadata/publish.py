@@ -34,6 +34,15 @@ def read_closed(path):
         os.close(fd)
 
 
+def guard_succeeded(guard, exit_code):
+    # The normal maintained schema does not sample pending cancellation signals.
+    # Missing is reported as absent, not synthesized as an observed empty set.
+    return (exit_code == 0 and guard['exit_code'] == 0 and not guard['errors'] and
+            not guard['cleanup_signals'] and
+            ('pending_cleanup_signals' not in guard or guard['pending_cleanup_signals'] == []) and
+            guard['status'] == 'guard-completed-pending-independent-artifact-review')
+
+
 def main():
     root = Path(os.environ['RUNNER_TEMP']) / 'primary-construction-metadata'
     # Guard has returned and joined before any of these fixed files is read.
@@ -44,16 +53,16 @@ def main():
     exit_code = int(sys.argv[1])
     value = dict(schema='primary-metadata-joined-publication-v2', guard=guard,
                  guard_receipt=receipt, guard_exit=exit_code, guard_signal=None,
-                 collector_stdout=stdout, collector_stderr=stderr)
+                 collector_stdout=stdout, collector_stderr=stderr,
+                 pending_cleanup_signals_observation=('PRESENT_IN_GUARD_RECEIPT' if
+                     'pending_cleanup_signals' in guard else 'NOT_RECORDED_NORMAL_SCHEMA'))
     encoded = json.dumps(value, separators=(',', ':'), ensure_ascii=True).encode('ascii') + b'\n'
     if len(encoded) > LIMIT:
         raise RuntimeError('publication_complete_bound')
     if sys.stdout.buffer.write(encoded) != len(encoded):
         raise RuntimeError('publication_short_write')
     sys.stdout.buffer.flush()
-    return 0 if (exit_code == 0 and guard['exit_code'] == 0 and not guard['errors'] and
-                 not guard['cleanup_signals'] and not guard['pending_cleanup_signals'] and
-                 guard['status'] == 'guard-completed-pending-independent-artifact-review') else 1
+    return 0 if guard_succeeded(guard, exit_code) else 1
 
 
 if __name__ == '__main__':

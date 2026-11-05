@@ -38,6 +38,16 @@ def identity(s):
             s.st_mtime_ns, s.st_ctime_ns)
 
 
+class CheckedPathCloseError(RuntimeError):
+    """Terminal checked-close failure; sanitized original/cleanup order is retained."""
+    def __init__(self, operation, cleanup):
+        self.errors = [dict(role=role, error_class=type(error).__name__,
+                            errno=getattr(error, 'errno', None))
+                       for role, error in ([('operation', operation)] if operation else []) +
+                       [('checked_close', error) for error in cleanup]]
+        super().__init__('checked_path_close')
+
+
 def open_literal(path):
     """No resolution: every literal parent and leaf is opened without following links."""
     parts = path.split('/')
@@ -45,22 +55,38 @@ def open_literal(path):
             all(p not in ('', '.', '..') and '\\' not in p for p in parts[1:]), 'literal_path')
     fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW)
     leaf = None
+    operation = None
+    cleanup = []
     try:
         for part in parts[1:-1]:
             child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
                             dir_fd=fd)
             old, fd = fd, child
             # Transfer before checked close: never retry a failed close on old.
-            os.close(old)
+            try:
+                os.close(old)
+            except OSError as error:
+                cleanup.append(error)
+                raise
         leaf = os.open(parts[-1], os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK,
                        dir_fd=fd)
+    except BaseException as error:
+        if not any(error is prior for prior in cleanup):
+            operation = error
     finally:
         try:
             os.close(fd)
-        except BaseException:
-            if leaf is not None:
+        except OSError as error:
+            cleanup.append(error)
+    if operation is not None or cleanup:
+        if leaf is not None:
+            try:
                 os.close(leaf)
-            raise
+            except OSError as error:
+                cleanup.append(error)
+        if cleanup:
+            raise CheckedPathCloseError(operation, cleanup) from operation
+        raise operation
     return leaf
 
 
@@ -73,6 +99,7 @@ def observe(expected):
         kind = ('MISSING' if error.errno == errno.ENOENT else
                 'UNSAFE_PATH' if error.errno in (errno.ELOOP, errno.ENOTDIR) else 'UNREADABLE')
         return dict(status=kind, errno=error.errno, equals_original=False)
+    operation = None
     try:
         before = os.fstat(fd)
         if not stat.S_ISREG(before.st_mode):
@@ -99,10 +126,17 @@ def observe(expected):
                                     nlink=before.st_nlink, mode=before.st_mode),
                     equals_original=actual == expected)
     except OSError as error:
+        operation = error
         return dict(status='UNREADABLE', errno=error.errno, equals_original=False)
+    except BaseException as error:
+        operation = error
+        raise
     finally:
-        # Close failure is a query failure, never a completed observation.
-        os.close(fd)
+        # Close failure is terminal; retain an earlier operational error first.
+        try:
+            os.close(fd)
+        except OSError as error:
+            raise CheckedPathCloseError(operation, [error]) from operation
 
 
 def census(reserve=0):
@@ -164,10 +198,12 @@ def main():
                     label = None
                 first_failure = dict(index=index, error_class=type(error).__name__,
                                      fixed_reason=label)
+                if isinstance(error, CheckedPathCloseError):
+                    first_failure['ordered_errors'] = error.errors
                 observation = dict(status='OBSERVATION_FAILED', equals_original=False)
-        role = ('runtime_configuration' if original['path'].startswith('/etc/') else
+        role = ('python_code_or_cache' if '/python3' in original['path'] else
+                'runtime_configuration' if original['path'].startswith('/etc/') else
                 'sdk_code_or_source' if original['path'].startswith('/opt/hostedtoolcache/go/') else
-                'python_code_or_cache' if '/python3' in original['path'] else
                 'runtime_code_or_tool')
         rows.append(dict(index=index, role=role, expected=original, observation=observation))
     stage = 'final_census_and_serialization'
