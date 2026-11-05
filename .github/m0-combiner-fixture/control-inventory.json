@@ -1,0 +1,60 @@
+{
+  "status": "SOURCE_DERIVED_UNRUN",
+  "tops": 9,
+  "outcomes": 44,
+  "leaves": 39,
+  "tests": {
+    "TestM0CombinerOriginalProducerBranches": [
+      "no_channel",
+      "full",
+      "unbuffered",
+      "stopped",
+      "saturated_stop",
+      "read_only",
+      "missing_db"
+    ],
+    "TestM0CombinerObservedSetCheckedLifecycle": [],
+    "TestM0CombinerActualCollectApplyFinishDrain": [
+      "0",
+      "1",
+      "63",
+      "64",
+      "129"
+    ],
+    "TestM0CombinerStopReturnSlotLifetime": [],
+    "TestM0CombinerOverlapAndUnavailableControls": [
+      "caller_invalid",
+      "worker_invalid",
+      "missing_terminal",
+      "absent_clock",
+      "clock_regression",
+      "serial_overflow",
+      "batch_bound",
+      "unknown_dispatch",
+      "unknown_write",
+      "unknown_enqueue",
+      "unknown_error",
+      "ordinal_bound",
+      "odd_binding",
+      "duplicate_binding"
+    ],
+    "TestM0CombinerDoneClosureIsNotSuccess": [
+      "goexit_false",
+      "goexit_true"
+    ],
+    "TestM0CombinerPopulationAndSharedReceiptControls": [
+      "duplicate_position",
+      "conflicting_shared_time",
+      "missing_member",
+      "odd_service",
+      "mixed_owner",
+      "identity",
+      "original_kind"
+    ],
+    "TestM0CombinerZeroValidClockAndDoneBorrowControls": [],
+    "TestM0CombinerObservedOriginalSyncFailure": []
+  },
+  "normal": "UNRUN",
+  "race": "UNRUN",
+  "existing_qualified_six_26_24_not_reused": true
+}

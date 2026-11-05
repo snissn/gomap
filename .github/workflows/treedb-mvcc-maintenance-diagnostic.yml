@@ -1,4 +1,4 @@
-name: 'TreeDB: pending-rotation fixture source controls (manual only)'
+name: 'TreeDB: m0-combiner fixture source controls (manual only)'
 on:
   workflow_dispatch:
     inputs:
@@ -14,8 +14,8 @@ permissions:
   contents: read
 jobs:
   diagnostic:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/diagnostic/pending-rotation-controls-01' && github.actor_id == '1981537' && github.run_attempt == 1
-    name: exact4934 pending-rotation fixture normal and race controls only
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/diagnostic/m0-combiner-controls-01' && github.actor_id == '1981537' && github.run_attempt == 1
+    name: exact4934 m0-combiner fixture normal and race controls only
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
@@ -34,16 +34,16 @@ jobs:
           assert os.environ['GITHUB_ACTOR_ID']=='1981537' and os.environ['GITHUB_RUN_ATTEMPT']=='1'
           text=os.environ['ROOT_ADMISSION_B64'];assert len(text)<=16384
           admission=json.loads(base64.b64decode(text,validate=True));assert isinstance(admission,dict)
-          expected={'schema':'pending-rotation-hosted-controls-admission-v1','status':'ADMITTED_CONTROLS_ONLY',
+          expected={'schema':'m0-combiner-hosted-controls-admission-v1','status':'ADMITTED_CONTROLS_ONLY',
             'authority':'ROOT','authority_thread':'01a18e7c-8c23-7fd2-8d55-b0486d938cd3','actor_id':'1981537','expected_head':os.environ['GITHUB_SHA'],'run_attempt':'1',
-            'owner_manifest_sha256':'cda82babaf9afcc729558c440e96ce29f118dcc3a93854e1aece8f849accd251',
-            'owner_review_sha256':'8707b79fb72ccd0dc8e2e35c687ceddf704bf90892092365fce8a1bc381b30e2',
+            'owner_manifest_sha256':'ca51c90ae96fcb04ed5764e9acd3d79a01983d0bfe99d2107a9ee7912b5938b5',
+            'owner_review_sha256':'405124015cb24de0d4efcdd583f0c45e2ef3b51521efced31cdcc9c54cd757c0',
             'allow_product_capture':False}
           assert all(admission.get(k)==v for k,v in expected.items())
-          root=pathlib.Path(os.environ['RUNNER_TEMP'])/'pending-rotation-controls';root.mkdir()
+          root=pathlib.Path(os.environ['RUNNER_TEMP'])/'m0-combiner-controls';root.mkdir()
           (root/'dispatch-admission.json').write_text(json.dumps(admission,sort_keys=True)+'\n')
           with open(os.environ['GITHUB_ENV'],'a') as stream:
-              stream.write('PENDING_ROTATION_STARTED_MONOTONIC='+str(time.monotonic())+'\n')
+              stream.write('M0_COMBINER_STARTED_MONOTONIC='+str(time.monotonic())+'\n')
           PY
       - name: Checkout exact reviewed binding harness
         timeout-minutes: 1
@@ -74,18 +74,18 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$REVIEWED_HEAD"
           test -z "$(git status --porcelain)"
-          python3 -B .github/scripts/pending_rotation_hosted_controls.py guard --root "$RUNNER_TEMP/pending-rotation-controls" > "$RUNNER_TEMP/pending-rotation-controls/entry.stdout.log" 2> "$RUNNER_TEMP/pending-rotation-controls/entry.stderr.log"
+          python3 -B .github/scripts/m0_combiner_hosted_controls.py guard --root "$RUNNER_TEMP/m0-combiner-controls" > "$RUNNER_TEMP/m0-combiner-controls/entry.stdout.log" 2> "$RUNNER_TEMP/m0-combiner-controls/entry.stderr.log"
       - name: Upload raw controls, failure and candidate source identities
         if: always()
         timeout-minutes: 2
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: pending-rotation-controls-${{ github.run_id }}-${{ github.run_attempt }}
+          name: m0-combiner-controls-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            ${{ runner.temp }}/pending-rotation-controls/output
-            ${{ runner.temp }}/pending-rotation-controls/guard
-            ${{ runner.temp }}/pending-rotation-controls/*.json
-            ${{ runner.temp }}/pending-rotation-controls/*.log
+            ${{ runner.temp }}/m0-combiner-controls/output
+            ${{ runner.temp }}/m0-combiner-controls/guard
+            ${{ runner.temp }}/m0-combiner-controls/*.json
+            ${{ runner.temp }}/m0-combiner-controls/*.log
           if-no-files-found: error
           include-hidden-files: true
           retention-days: 14

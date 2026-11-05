@@ -1,0 +1,76 @@
+{
+  "status": "EXISTING_ROUTE_AUTHENTICATED_BY_SOURCE_HASH_NOT_EXECUTED",
+  "modules": [
+    {
+      "path": "/mnt/fast4tb/gomap-mongo-perf-graph-6a9s7h58/m0-operation-trace-hosted-01/.github/scripts/m0_operation_trace.py",
+      "bytes": 24619,
+      "sha256": "270dda917f38b517d1300593601ad6cf9f9493f8eeed6045e3c52b28425d9a38"
+    },
+    {
+      "path": "/mnt/fast4tb/gomap-mongo-perf-graph-6a9s7h58/m0-operation-trace-hosted-01/.github/scripts/m0_trace_consumer.py",
+      "bytes": 5481,
+      "sha256": "348b5a4d3d132e9038a543b52750caa8cea3e54f23d362d514aa6db8599b6ab6"
+    },
+    {
+      "path": "/mnt/fast4tb/gomap-mongo-perf-graph-6a9s7h58/m0-operation-trace-hosted-01/.github/scripts/test_m0_trace_consumer.py",
+      "bytes": 11562,
+      "sha256": "f9f79ef8360079861fea7050ec2a59cd7dc99eba35706101ec195d860d81ea73"
+    },
+    {
+      "path": "/mnt/fast4tb/gomap-mongo-perf-graph-6a9s7h58/m0-operation-trace-hosted-01/scripts/ycsb_campaign_guard.py",
+      "bytes": 19548,
+      "sha256": "b1f5308ce5de5bf1252a77694599f4be4fdf769803b4d7300c08b4901f8d9642"
+    },
+    {
+      "path": "/mnt/fast4tb/gomap-mongo-perf-graph-6a9s7h58/m0-operation-trace-hosted-01/scripts/ycsb_compare_validate.py",
+      "bytes": 49260,
+      "sha256": "85584d03f46e2f49be94d91b377b77e08494a846a30285bfb1300b932d57cb46"
+    },
+    {
+      "path": "/mnt/fast4tb/gomap-mongo-perf-graph-6a9s7h58/m0-operation-trace-hosted-01/scripts/ycsb_runtime_observer.py",
+      "bytes": 20408,
+      "sha256": "9ea6f525e0cf46df5301be3f903367816bdb032a3d0abb4c204bda60ee104d8f"
+    },
+    {
+      "path": "/mnt/fast4tb/gomap-mongo-perf-graph-6a9s7h58/m0-operation-trace-hosted-01/scripts/ycsb_evidence_json.py",
+      "bytes": 1240,
+      "sha256": "86989ebbfa14b8f9f3c20ebe470314a29fd28c7db2ab10734d9518e39d270ea6"
+    },
+    {
+      "path": "/mnt/fast4tb/gomap-mongo-perf-graph-6a9s7h58/m0-operation-trace-hosted-01/.github/workflows/treedb-mvcc-maintenance-diagnostic.yml",
+      "bytes": 9109,
+      "sha256": "1dbbfee98109ea86fa5f321c5b2a8867dc12d5a92fd8b66bd213f6007e4e37ec"
+    }
+  ],
+  "smallest_existing_interface": "m0_operation_trace.py guard|worker --root ABS; nested run(label, argv, seconds=30, cwd=None, selected_env=env) owns bounded child/pipe capture; outer ycsb_campaign_guard.py run(args, helper) owns pidfd descendant census/drain",
+  "runner_class": "No separately imported Runner class in this exact M0 adapter; do not invent one.",
+  "required_root_binding_changes": [
+    "new reviewed seven-entry relative overlay allowlist/source hashes; no product-source change",
+    "new9/44/39 normal/race controls receipt instead of old6/26/24",
+    "retain and strictly validate bounded m0-combiner-service.json in addition to existing ordinal/trace bijection; do not call old consumer a service validator",
+    "new exact source/ELF/workflow review/admission, preserving original bounds and all old adverse evidence"
+  ],
+  "unchanged_context": {
+    "product": "4934bd6d51d9047ba0187d05c1d211cbe419811a",
+    "iterations": 1,
+    "ordinals": 4096,
+    "points": 2048,
+    "ranges": 2048,
+    "GOMAXPROCS": 2,
+    "GOMEMLIMIT": "8GiB",
+    "affinity": "first two allowed CPUs",
+    "whole_seconds": 1020,
+    "job_minutes": 20,
+    "build_seconds": 300,
+    "M0_seconds": 240,
+    "raw_trace_bytes": 33554432,
+    "parsed_trace_bytes": 134217728,
+    "other_each_log_bytes": 33554432,
+    "aggregate_bytes": 268435456,
+    "guard_rss_bytes": 25769803776,
+    "guard_free_floor_bytes": 10737418240
+  },
+  "runtime": "NOT_GRANTED",
+  "capture": "NOT_ADMITTED",
+  "host185": "ROOT_LOGICAL_HOLD"
+}

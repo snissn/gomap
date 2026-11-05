@@ -1,0 +1,79 @@
+[
+  {
+    "path": "/mnt/fast4tb/gomap-mongo-perf-graph-6a9s7h58/review/four-gate-execution-20261104-01/m0-combiner-service-observer-design-01/design.md",
+    "bytes": 14712,
+    "sha256": "912cf705e2db388d1db7c8201ba19824d73cbb83d363959b7cda208a6c3277a7"
+  },
+  {
+    "path": "/mnt/fast4tb/gomap-mongo-perf-graph-6a9s7h58/review/four-gate-execution-20261104-01/m0-combiner-service-observer-design-01/controls.md",
+    "bytes": 4792,
+    "sha256": "02d5b9ea94a93180bcb3d61fc75be4e51753bf9fb223fe89363676a596bee3d0"
+  },
+  {
+    "path": "/mnt/fast4tb/gomap-mongo-perf-graph-6a9s7h58/review/four-gate-execution-20261104-01/m0-combiner-service-observer-design-01/schema.json",
+    "bytes": 1990,
+    "sha256": "77f85eadc063ffdc89dc3f7f8df51f2939591bdb804495775d65c3ad31e1769a"
+  },
+  {
+    "path": "/mnt/fast4tb/gomap-mongo-perf-graph-6a9s7h58/review/four-gate-execution-20261104-01/m0-combiner-service-observer-design-01/manifest.json",
+    "bytes": 2406,
+    "sha256": "4bb33bdb4f2f87ed127c4e21065718807b5219cde856f8244a974582c0ee8e70"
+  },
+  {
+    "path": "/mnt/fast4tb/gomap-mongo-perf-graph-6a9s7h58/review/four-gate-execution-20261104-01/m0-combiner-service-observer-design-review-01/review.md",
+    "bytes": 1309,
+    "sha256": "c32644c7a69a6f32cb85c0d38a2ab50bc31a867f5ca74b35a9e450b5d1f0c601"
+  },
+  {
+    "path": "/mnt/fast4tb/gomap-mongo-perf-graph-6a9s7h58/review/four-gate-execution-20261104-01/m0-combiner-service-observer-design-review-01/review.json",
+    "bytes": 5707,
+    "sha256": "31edc070cc673216833f2db72992f783ce586e1b2a2650fe5667ff8fd513c892"
+  },
+  {
+    "path": "/mnt/fast4tb/gomap-mongo-perf-graph-6a9s7h58/review/four-gate-execution-20261104-01/m0-combiner-service-observer-design-review-01/manifest.json",
+    "bytes": 627,
+    "sha256": "03372f406305203a99addeaf4b8ff8436cecfdb822d5cf712e20303e2cf4922a"
+  },
+  {
+    "path": "/mnt/fast4tb/gomap-graph-seal-c312-20261101T0603Z/correctness-readiness-20261103-01/source-4934bd6d/TreeDB/db/db.go",
+    "git_path": "TreeDB/db/db.go",
+    "bytes": 219735,
+    "sha256": "3d32556cee407c7fc06de30e8dae24d0826465685bd2d210857090b86eb9e610",
+    "git_blob": "f6223f38ecf5b32ff4843b3ae8e6f4f163a19cba"
+  },
+  {
+    "path": "/mnt/fast4tb/gomap-graph-seal-c312-20261101T0603Z/correctness-readiness-20261103-01/source-4934bd6d/TreeDB/db/raw_kv_compat.go",
+    "git_path": "TreeDB/db/raw_kv_compat.go",
+    "bytes": 621,
+    "sha256": "986dd35cb636d3167054ae2bb7ba69fe558103b18737288062dbbf0147ba2a44",
+    "git_blob": "c44fe3b1ba9ce18c8847bdd85796346812b7092b"
+  },
+  {
+    "path": "/mnt/fast4tb/gomap-graph-seal-c312-20261101T0603Z/correctness-readiness-20261103-01/source-4934bd6d/TreeDB/db/batch.go",
+    "git_path": "TreeDB/db/batch.go",
+    "bytes": 35064,
+    "sha256": "60289d78644f323a815ccad8811e95202f9acac4651ae8de0b4375ea8334e254",
+    "git_blob": "b1c1147ecb13f615af1eec4626c51f1fec51f013"
+  },
+  {
+    "path": "/mnt/fast4tb/gomap-graph-seal-c312-20261101T0603Z/correctness-readiness-20261103-01/source-4934bd6d/TreeDB/batch/batch.go",
+    "git_path": "TreeDB/batch/batch.go",
+    "bytes": 38630,
+    "sha256": "c2f875215512bb88a5d033db0e286e5f439d73b7ca4375721fb38d8afef96a30",
+    "git_blob": "05562d6f91617e8ee3602055f92099d05662a0e2"
+  },
+  {
+    "path": "/mnt/fast4tb/gomap-graph-seal-c312-20261101T0603Z/correctness-readiness-20261103-01/source-4934bd6d/TreeDB/db/commit_combiner_work_conserving_test.go",
+    "git_path": "TreeDB/db/commit_combiner_work_conserving_test.go",
+    "bytes": 11124,
+    "sha256": "887211208f78b46defaf8afb75952d32ba4099728c07d6840fe120d4c01886db",
+    "git_blob": "e258eced0a9bb4eefb3563e0a7b19cdda0e81657"
+  },
+  {
+    "path": "/mnt/fast4tb/gomap-graph-seal-c312-20261101T0603Z/correctness-readiness-20261103-01/source-4934bd6d/TreeDB/db/commit_combiner_fallback_test.go",
+    "git_path": "TreeDB/db/commit_combiner_fallback_test.go",
+    "bytes": 8062,
+    "sha256": "19745deeae68a2244277bec6ed57c9ec503326ffc90e54970ae9ba77ba821f85",
+    "git_blob": "2e3fa2bc23360baf586511761b7378ac3d47587b"
+  }
+]

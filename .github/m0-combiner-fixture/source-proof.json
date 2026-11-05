@@ -1,0 +1,130 @@
+{
+  "status": "BOUNDED_SOURCE_TEXT_CHECKS_ONLY",
+  "files": [
+    {
+      "path": "TreeDB/db/api.go",
+      "layer_preimage_sha256": "96c72af67c70479e7ec5c97623ad10a7667e12e65434d57ab79d118a791d431a",
+      "layer_preimage_blob": "58de7734b4e001a58bc372051b827353b9c419c0",
+      "overlay_sha256": "ca270eae5635bd43ae2bbba1f23e3c81c8df12e4326e91c104894ed2549c1b03",
+      "bytes": 58631,
+      "exact4934_preimage_sha256": "96c72af67c70479e7ec5c97623ad10a7667e12e65434d57ab79d118a791d431a",
+      "exact4934_path_absent": false,
+      "forward_text_equal": true,
+      "inverse_text_equal": true
+    },
+    {
+      "path": "TreeDB/db/commit_combiner.go",
+      "layer_preimage_sha256": "a58aeea6a1dead942f5f44e61725fcddb30572ef7eaea55f844b12635dd0343a",
+      "layer_preimage_blob": "d34289fc619c6ccbd2ec5264c1ba858e23d95a0c",
+      "overlay_sha256": "79f3830d4dfc1b2f8742e69e01ed557f63c39bc5a075eb8bfcfd9082ac7465e0",
+      "bytes": 7342,
+      "exact4934_preimage_sha256": "a58aeea6a1dead942f5f44e61725fcddb30572ef7eaea55f844b12635dd0343a",
+      "exact4934_path_absent": false,
+      "forward_text_equal": true,
+      "inverse_text_equal": true
+    },
+    {
+      "path": "TreeDB/db/m0_combiner_observation.go",
+      "layer_preimage_sha256": null,
+      "layer_preimage_blob": null,
+      "overlay_sha256": "0ed28991521aeaacc2e6b74a0e95b8e1902a2d48387daa248776b2dbe594af1f",
+      "bytes": 6733,
+      "exact4934_preimage_sha256": null,
+      "exact4934_path_absent": true,
+      "forward_text_equal": true,
+      "inverse_text_equal": true
+    },
+    {
+      "path": "TreeDB/db/m0_combiner_observation_controls_test.go",
+      "layer_preimage_sha256": null,
+      "layer_preimage_blob": null,
+      "overlay_sha256": "217b5764e42b991840dc75109ffc6ec54b0db2ca34a3a01a9b7e4e4aed375633",
+      "bytes": 17846,
+      "exact4934_preimage_sha256": null,
+      "exact4934_path_absent": true,
+      "forward_text_equal": true,
+      "inverse_text_equal": true
+    },
+    {
+      "path": "TreeDB/db/m0_combiner_observer_test.go",
+      "layer_preimage_sha256": null,
+      "layer_preimage_blob": null,
+      "overlay_sha256": "f3feac5016aa20cb74cff6e59032dfa794e365e7c09dd8ce6850c6a886b3e5dc",
+      "bytes": 9676,
+      "exact4934_preimage_sha256": null,
+      "exact4934_path_absent": true,
+      "forward_text_equal": true,
+      "inverse_text_equal": true
+    },
+    {
+      "path": "TreeDB/db/vacuum_collection_bench_test.go",
+      "layer_preimage_sha256": "09f8b0758018fd5e2fd0994aab18463ecdffa40add6796198b81bded69ac2d81",
+      "layer_preimage_blob": "d3885c3fde6b3a98680827f4cd19e61b993d2c2c",
+      "overlay_sha256": "09f8b0758018fd5e2fd0994aab18463ecdffa40add6796198b81bded69ac2d81",
+      "bytes": 17529,
+      "exact4934_preimage_sha256": "c7c7404c076ec834579b1881aeefbb671faf04066dd7c80ae6199d4d1b506337",
+      "exact4934_path_absent": false,
+      "forward_text_equal": true,
+      "inverse_text_equal": true
+    },
+    {
+      "path": "TreeDB/db/vacuum_m0_ordinal_observer_test.go",
+      "layer_preimage_sha256": "648f61eeb148809e9a42cd087e979ce078574110142c7a944f61c274b4aacf49",
+      "layer_preimage_blob": "c297f9b4908e0ff40b86c1d73671829baafff3ac",
+      "overlay_sha256": "1ffdaafbdb46dfbaae9f2e61d17f2a76cb9fb8e63b964569d0cfb631c88dcbed",
+      "bytes": 12958,
+      "exact4934_preimage_sha256": null,
+      "exact4934_path_absent": true,
+      "forward_text_equal": true,
+      "inverse_text_equal": true
+    }
+  ],
+  "statement_counts_not_semantic_proof": {
+    "selects": {
+      "before": 6,
+      "after": 6
+    },
+    "batch_close_calls": {
+      "before": 3,
+      "after": 3
+    },
+    "original_request_send": {
+      "before": 1,
+      "after": 1
+    },
+    "original_result_send": {
+      "before": 2,
+      "after": 2
+    },
+    "owned_key_copy": {
+      "before": 1,
+      "after": 1
+    },
+    "mvcc_bind": {
+      "before": 1,
+      "after": 1
+    },
+    "owned_value_copy": {
+      "before": 1,
+      "after": 1
+    },
+    "queue_cap": {
+      "before": 1,
+      "after": 1
+    },
+    "batch_cap": {
+      "before": 1,
+      "after": 1
+    }
+  },
+  "api_combiner_preimages_match_exact4934": true,
+  "benchmark_qualified_preimage_chain_retained": true,
+  "exact_product_restore_patch_supplied": true,
+  "new_common_file_has_no_channel_creation": true,
+  "go_format": "UNRUN_MANUAL_PROVISIONAL",
+  "compile": "UNRUN",
+  "normal": "UNRUN",
+  "race": "UNRUN",
+  "capture": "NOT_ADMITTED",
+  "performance_acceptance": false
+}

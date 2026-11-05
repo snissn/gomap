@@ -1,0 +1,15 @@
+{
+  "schema": "reviewable-relative-overlay-map-v1",
+  "product": "4934bd6d51d9047ba0187d05c1d211cbe419811a",
+  "tree": "7f30f92674110a4544a381468677183ab3133406",
+  "note": "ROOT must bind reviewed absolute paths in its existing hosted adapter. These seven entries are indivisible; no publication/runtime authority.",
+  "Replace": {
+    "TreeDB/db/api.go": "overlay/TreeDB/db/api.go",
+    "TreeDB/db/commit_combiner.go": "overlay/TreeDB/db/commit_combiner.go",
+    "TreeDB/db/m0_combiner_observation.go": "overlay/TreeDB/db/m0_combiner_observation.go",
+    "TreeDB/db/m0_combiner_observation_controls_test.go": "overlay/TreeDB/db/m0_combiner_observation_controls_test.go",
+    "TreeDB/db/m0_combiner_observer_test.go": "overlay/TreeDB/db/m0_combiner_observer_test.go",
+    "TreeDB/db/vacuum_collection_bench_test.go": "overlay/TreeDB/db/vacuum_collection_bench_test.go",
+    "TreeDB/db/vacuum_m0_ordinal_observer_test.go": "overlay/TreeDB/db/vacuum_m0_ordinal_observer_test.go"
+  }
+}

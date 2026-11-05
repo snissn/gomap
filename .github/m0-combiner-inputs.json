@@ -1,0 +1,149 @@
+{
+  "files": {
+    ".github/m0-combiner-controls-README.md": {
+      "bytes": 6626,
+      "sha256": "b4f524dffd1970c9d188ae21a295d22cd35e3e890e0824a1be5b4e3dc4ae5da8"
+    },
+    ".github/m0-combiner-fixture/base4934/TreeDB/db/vacuum_collection_bench_test.go": {
+      "bytes": 16844,
+      "sha256": "c7c7404c076ec834579b1881aeefbb671faf04066dd7c80ae6199d4d1b506337"
+    },
+    ".github/m0-combiner-fixture/combined-control-inventory.json": {
+      "bytes": 10530,
+      "sha256": "5d7a8a5967dd205464f3299c19b2afa83e3eb0976384339a43006564f2c6c40f"
+    },
+    ".github/m0-combiner-fixture/control-inventory.json": {
+      "bytes": 1438,
+      "sha256": "eb6c31a7b80c301fe6f656e401b553513ac1e1d08a50e6f67fae3332f46948ba"
+    },
+    ".github/m0-combiner-fixture/controls.md": {
+      "bytes": 5534,
+      "sha256": "f96206d0d81807fea30bea502fdd56d6a87d42f42251e1a7bb62b89118d4507f"
+    },
+    ".github/m0-combiner-fixture/decision.md": {
+      "bytes": 7700,
+      "sha256": "4feeecbb44e28caaff4b127b9b6dd64d4d1620db9e933c59378888a0a25ce468"
+    },
+    ".github/m0-combiner-fixture/dependencies.json": {
+      "bytes": 1097,
+      "sha256": "95953a012c1bc7a565627bf5aab837259e66b53126d104cf90ad68a3ee650fc8"
+    },
+    ".github/m0-combiner-fixture/design-and-dependencies.json": {
+      "bytes": 4013,
+      "sha256": "a2ec841f68f02c72ecdbec93cf87ba0e8d254eaff4b80a7fb39f99b4134f51e9"
+    },
+    ".github/m0-combiner-fixture/independent-review.md": {
+      "bytes": 2210,
+      "sha256": "405124015cb24de0d4efcdd583f0c45e2ef3b51521efced31cdcc9c54cd757c0"
+    },
+    ".github/m0-combiner-fixture/inverse-to-qualified-observer.patch": {
+      "bytes": 43562,
+      "sha256": "de1ed380e9f6b63c27d7789222f6138a4d44a08cd1f1d6bf954322e98b251dae"
+    },
+    ".github/m0-combiner-fixture/maintained-hosted-route.json": {
+      "bytes": 3582,
+      "sha256": "8483b125f81cdb4fa3ca357b8a679bab7402fecf21ccfaea995231ca6a6ea180"
+    },
+    ".github/m0-combiner-fixture/manifest.json": {
+      "bytes": 4217,
+      "sha256": "ca51c90ae96fcb04ed5764e9acd3d79a01983d0bfe99d2107a9ee7912b5938b5"
+    },
+    ".github/m0-combiner-fixture/overlay-map.json": {
+      "bytes": 984,
+      "sha256": "2a3bfb32908ed946e50abd284e3045f9bf95fe8e9d3c96d0339e4c5ba7beb321"
+    },
+    ".github/m0-combiner-fixture/overlay/TreeDB/db/api.go": {
+      "bytes": 58631,
+      "sha256": "ca270eae5635bd43ae2bbba1f23e3c81c8df12e4326e91c104894ed2549c1b03"
+    },
+    ".github/m0-combiner-fixture/overlay/TreeDB/db/commit_combiner.go": {
+      "bytes": 7342,
+      "sha256": "79f3830d4dfc1b2f8742e69e01ed557f63c39bc5a075eb8bfcfd9082ac7465e0"
+    },
+    ".github/m0-combiner-fixture/overlay/TreeDB/db/m0_combiner_observation.go": {
+      "bytes": 6733,
+      "sha256": "0ed28991521aeaacc2e6b74a0e95b8e1902a2d48387daa248776b2dbe594af1f"
+    },
+    ".github/m0-combiner-fixture/overlay/TreeDB/db/m0_combiner_observation_controls_test.go": {
+      "bytes": 17846,
+      "sha256": "217b5764e42b991840dc75109ffc6ec54b0db2ca34a3a01a9b7e4e4aed375633"
+    },
+    ".github/m0-combiner-fixture/overlay/TreeDB/db/m0_combiner_observer_test.go": {
+      "bytes": 9676,
+      "sha256": "f3feac5016aa20cb74cff6e59032dfa794e365e7c09dd8ce6850c6a886b3e5dc"
+    },
+    ".github/m0-combiner-fixture/overlay/TreeDB/db/vacuum_collection_bench_test.go": {
+      "bytes": 17529,
+      "sha256": "09f8b0758018fd5e2fd0994aab18463ecdffa40add6796198b81bded69ac2d81"
+    },
+    ".github/m0-combiner-fixture/overlay/TreeDB/db/vacuum_m0_ordinal_observer_test.go": {
+      "bytes": 12958,
+      "sha256": "1ffdaafbdb46dfbaae9f2e61d17f2a76cb9fb8e63b964569d0cfb631c88dcbed"
+    },
+    ".github/m0-combiner-fixture/preimage/TreeDB/db/api.go": {
+      "bytes": 57952,
+      "sha256": "96c72af67c70479e7ec5c97623ad10a7667e12e65434d57ab79d118a791d431a"
+    },
+    ".github/m0-combiner-fixture/preimage/TreeDB/db/commit_combiner.go": {
+      "bytes": 5685,
+      "sha256": "a58aeea6a1dead942f5f44e61725fcddb30572ef7eaea55f844b12635dd0343a"
+    },
+    ".github/m0-combiner-fixture/preimage/TreeDB/db/vacuum_collection_bench_test.go": {
+      "bytes": 17529,
+      "sha256": "09f8b0758018fd5e2fd0994aab18463ecdffa40add6796198b81bded69ac2d81"
+    },
+    ".github/m0-combiner-fixture/preimage/TreeDB/db/vacuum_m0_ordinal_observer_test.go": {
+      "bytes": 12365,
+      "sha256": "648f61eeb148809e9a42cd087e979ce078574110142c7a944f61c274b4aacf49"
+    },
+    ".github/m0-combiner-fixture/product-preimages.json": {
+      "bytes": 809,
+      "sha256": "60bd4115303243440bb1f316d2faa6b9fae9b0f20ad307bf389dd70aac005362"
+    },
+    ".github/m0-combiner-fixture/qualification-state.json": {
+      "bytes": 1405,
+      "sha256": "2f7f18f5849314808fb0dc0e25f078fbd4797f4aeaebfb513b8e861197cd50ef"
+    },
+    ".github/m0-combiner-fixture/restore-exact4934.patch": {
+      "bytes": 58038,
+      "sha256": "232e9b1f8ab83ca13b7cc2a1541915d70fada62797ad2dde54a73e2930407e92"
+    },
+    ".github/m0-combiner-fixture/source-proof.json": {
+      "bytes": 4459,
+      "sha256": "b2efea6a96207f0c45ecbe8a89ba8c65f83d204fa1ac23969092cad4fa77fd9e"
+    },
+    ".github/m0-combiner-fixture/source.patch": {
+      "bytes": 43562,
+      "sha256": "950edaf5826f99c96136e9d44bbe7a0e70e98614a062a5aa5120fdf5b2521280"
+    },
+    ".github/scripts/m0_combiner_control_events.py": {
+      "bytes": 5189,
+      "sha256": "765bb7658c7045f1bb16234b897323f697a58f48de13c287a992f9e40fd45ff3"
+    },
+    ".github/scripts/m0_combiner_hosted_controls.py": {
+      "bytes": 15791,
+      "sha256": "919b029c4373c1b82fae2d052379a9eef096d33800248b0a513f54d9bfc8df44"
+    },
+    ".github/scripts/test_m0_combiner_hosted_controls.py": {
+      "bytes": 8248,
+      "sha256": "3ae6129bcfbd57f0a53735f58da455765b727ed72103a8d37b48bdeeef11a9dc"
+    },
+    "scripts/ycsb_campaign_guard.py": {
+      "bytes": 19548,
+      "sha256": "b1f5308ce5de5bf1252a77694599f4be4fdf769803b4d7300c08b4901f8d9642"
+    },
+    "scripts/ycsb_compare_validate.py": {
+      "bytes": 49260,
+      "sha256": "85584d03f46e2f49be94d91b377b77e08494a846a30285bfb1300b932d57cb46"
+    },
+    "scripts/ycsb_evidence_json.py": {
+      "bytes": 1240,
+      "sha256": "86989ebbfa14b8f9f3c20ebe470314a29fd28c7db2ab10734d9518e39d270ea6"
+    },
+    "scripts/ycsb_runtime_observer.py": {
+      "bytes": 20408,
+      "sha256": "9ea6f525e0cf46df5301be3f903367816bdb032a3d0abb4c204bda60ee104d8f"
+    }
+  },
+  "scope": "candidate4934 M0 combiner controls only; no campaign/capture"
+}

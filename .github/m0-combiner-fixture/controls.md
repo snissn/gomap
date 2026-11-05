@@ -1,0 +1,27 @@
+# Focused controls and external qualification — ALL UNRUN here
+
+Freeze exact4934 plus ALL seven relative replacements in overlay-map.json. The layer preimages for api.go/commit_combiner.go are exact4934. The ordinal helper and benchmark preimages are the previously qualified diagnostic layer, not original product files; base4934 and restore-exact4934.patch preserve that distinction. Do not mix partial overlays or describe old qualification as new-source evidence.
+
+New source-derived inventory:9tops/44outcomes/39leaves. control-inventory.json contains exact source names and children. Qualification must observe actual test rows/no skipped or zero-selector substitution. All normal/race results and all failed setup attempts must be retained, with exact source/Go/command/ELF bindings and the existing maintained guarded hosted resource/cleanup contract.
+
+| New top | What it can establish if actually passed |
+| --- | --- |
+| TestM0CombinerOriginalProducerBranches | Original actual producer no-channel/full/unbuffered/stopped/saturated-stop/read-only/missing-DB branches, handled/error behavior, queue sentinel and explicit unavailable fields. It does not run direct fallback installation. |
+| TestM0CombinerObservedSetCheckedLifecycle | Actual selected shared Set, original acknowledged last value, nil-slot SetSync/Delete, original checked DB.Close and borrowed original done, new normal owner reopen/value/delete and checked Close. |
+| TestM0CombinerActualCollectApplyFinishDrain | Actual existing helpers at0/1/63/64/129 queued, exact FIFO/cap64 ready-only behavior, actual mixed Write/WriteSync apply, real finish/drain, membership/terminal fields, original scratch clearing. Test invokes helpers synchronously; this is not a worker scheduling measurement. |
+| TestM0CombinerStopReturnSlotLifetime | Original producer's successful enqueue then stop return at existing fake-worker boundary; copied key/value/result cap1/private slot survive caller return, no live worker inspection, then original drain and worker done publication. This control does not prove every real stop/DB-lifecycle interleaving. |
+| TestM0CombinerOverlapAndUnavailableControls | MODEL accepts E1>D/receive<S1; rejects invalid flags, missing terminal/stamp, regressing clock, serial wrap, oversized batch, unknown enums/errors, bound/odd/duplicate binding. No performance result follows. |
+| TestM0CombinerDoneClosureIsNotSuccess | Outer TEST panic/Goexit model closes done but cannot certify incomplete worker service; product panic recovery and inner injection are not added or qualified. |
+| TestM0CombinerPopulationAndSharedReceiptControls | MODEL4096/2048/2048 ordinal/duration/region mapping, shared selected-member receipts, duplicate/missing/foreign/identity failures. Not an executed4096-request campaign. |
+| TestM0CombinerZeroValidClockAndDoneBorrowControls | Valid zero clock distinct from absence; original foreground+worker joins required; different borrowed worker lifetime refuses export. |
+| TestM0CombinerObservedOriginalSyncFailure | Real existing physical meta-sync failpoint, actual original worker loop, same common error object fanout/poison; worker validation only after done; original checked Close after intentional poison retained separately. No clean-Close claim for this error-path control. |
+
+ROOT's focused bridge selector, only after exact source review:
+
+`go test ./TreeDB/db -run '^TestM0Combiner(OriginalProducerBranches|ObservedSetCheckedLifecycle|ActualCollectApplyFinishDrain|StopReturnSlotLifetime|OverlapAndUnavailableControls|DoneClosureIsNotSuccess|PopulationAndSharedReceiptControls|ZeroValidClockAndDoneBorrowControls|ObservedOriginalSyncFailure)$' -count=1`
+
+Then the same selector with `-race` through the existing hosted control machinery. No local invocation is authorized. Run the original owning TestCommitCombiner*, TestWriteViaCommitCombiner_* and qualified TestM0OrdinalObserver* controls as needed for changed shared producer/worker code; preserve their original per-test/time/error assertions. Existing stopped/direct fallback reopen, actual sync poison, original concurrent owned MVCC copy and backlog stop/drain/reopen coverage remain necessary. Do not replace them with the models above.
+
+Concrete coverage boundaries: batch.Close is always nil on this exact concrete4934 path; non-nil Close injection requires a new, currently unadmitted seam. Inner production panic/Goexit injection likewise lacks an admitted seam. Both are explicit, not fictional actual injection coverage; ROOT must disposition the exact unreachable/unsupported contract rather than accept models as those executions. The original setup-error ignored Close and normal Close precedence are preserved in source and visible in the restore patch. Go parser/AST/type/escape/codegen/format/functional claims are UNRUN.
+
+Before a prospective single diagnostic capture, require independent source review, actual pinned formatter/compile and9/44/39 normal/race control receipts, acknowledged-content/Close/reopen and existing owning controls, plus ROOT's exact updated maintained adapter binding/review. Retain original1iteration/4096/2048/2048 workload, single worker owner, original timer/warmed/join/Stats/exposure/Close, GMP2/GOMEM8GiB/first2allowedCPU and unchanged existing guard/whole/build/stage/output bounds. Old six-top control receipt or old two-file consumer cannot qualify the new service receipt. ROOT controls any prospective capture decision; no current product gate or performance acceptance is cleared here.
