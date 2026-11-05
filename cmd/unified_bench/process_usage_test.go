@@ -4,6 +4,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
+	"syscall"
 	"testing"
 )
 
@@ -168,15 +170,25 @@ func TestProcessUsageOutputPathAliases(t *testing.T) {
 				receipt = dir + "/sub/../usage.json"
 			case "checkpoint_literal_symlink":
 				prefix := filepath.Join(dir, "checkpoint")
-				if err := os.Symlink(filepath.Join(dir, "other"), prefix); err != nil {
-					t.Skipf("symlink unavailable: %v", err)
+				target := filepath.Join(dir, "other")
+				if err := os.WriteFile(target, []byte("existing"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, prefix); err != nil {
+					if runtime.GOOS == "windows" && (os.IsPermission(err) || errors.Is(err, syscall.Errno(1314))) {
+						t.Skipf("Windows symlink unavailable: %v", err)
+					}
+					t.Fatalf("create symlink: %v", err)
 				}
 				cfg.CheckpointCPUProfile = prefix
 				receipt = prefix + "_checkpoint_post-run_wrapper.pprof"
 			case "dangling_output_symlink":
 				output := filepath.Join(dir, "trace")
 				if err := os.Symlink(receipt, output); err != nil {
-					t.Skipf("symlink unavailable: %v", err)
+					if runtime.GOOS == "windows" && (os.IsPermission(err) || errors.Is(err, syscall.Errno(1314))) {
+						t.Skipf("Windows symlink unavailable: %v", err)
+					}
+					t.Fatalf("create symlink: %v", err)
 				}
 				cfg.TraceProfile = output
 			}
