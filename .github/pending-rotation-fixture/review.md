@@ -1,0 +1,19 @@
+# Independent fixture packet: source review requested
+
+Sole correctness owner: this #5338/#5373 session. Frozen product head 4934bd6d51d9047ba0187d05c1d211cbe419811a, tree 7f30f92674110a4544a381468677183ab3133406. No product branch edit/rebase/push, local Go/gofmt/build/test/runtime/host work occurred. This overlay is three TEST files only, with exact original preimages/inverse; new file was absent from source4934.
+
+The source proves an activation gap: the original historical fixed seq2 does not constrain the next active seq3. Production selection can choose stream; stream fixedFitsAppend is always true, and this fixture has no logical SegmentTargetBytes. The retained nil cleanup error therefore has a source-consistent non-pending route. The actual CI medium/active header was not retained; historical cause remains UNKNOWN. This is a conditional fixture correction, not a demonstrated production cleanup repair or historical RED/GREEN.
+
+## Smallest chosen route and ownership
+
+Factor the original installer's sequence/options calculation without changing its values or existing caller behavior. Only pending_rotation uses a new preparer. Its bare fixture DB has no owner/borrowers/goroutines; the caller exclusively owns its t.TempDir namespace. The exact computed next path must succeed O_EXCL with a zero-length regular file and stable link identity. Any existing empty/populated/live/fixed path is refused before opening a writer; no unlink/overwrite is attempted by this preparer on refusal or unwind.
+
+A new original writer starts on this fresh path (default stream entry, or explicit fixed entry control); ActiveBytes==0, checked Close and ScanCommandFramesV2==0 prove no accepted frame before conversion. Only then call existing NewFixedWriterWithCapacity and checked-Close it, verify zero frames/accepted bytes and exact physical capacity4199424. Its internal atomic publication may replace ONLY the exclusively owned unused file, never a populated or live writer. Reopen with the SAME original journal options, assign DB.commandJournal immediately and register its owning cleanup before any capture/append. New fixed-owner cleanup checks Close; old callers retain their existing ignored-Close behavior. Partial setup errors retain their files/evidence, preserve errors.Is and close only owned handles. Unsupported fixed creation remains an explicit skip/coverage limitation, never fixed-pressure PASS.
+
+The original after-scan hook still appends ONE original 5MiB durable RawKV frame. Before returning to original cleanup revalidation, require assigned LSN=durable+1, actual active maxLSN, seq+1, different active path, and actual PendingStableRotation>0. No manual pin, logical target, completed-rotation substitute, guard change, earlier drain, retry, timeout or cap increase. Original ErrSnapshotStale, retained empty-file and deletion accounting assertions remain. t.Cleanup releases real pending tokens before checked journal Close.
+
+## Source review conclusions and limits
+
+The chosen finite fixture correction is source-supported and eligible for independent ROOT review/hosted qualification. All original eight variants, namespace/no-op/sync-failure controls remain. Production API/storage/cleanup/rotation code bytes are outside the overlay. Source-only text/inverse checks are NOT parser/formatter/compiler/correctness evidence. Formatting is manual/provisional. No functional or performance gate is cleared.
+
+Remaining product readiness: strict PRIMARY +0.5B/op at4934; #4519 foreground-p99 CV0.14528317429>.10; this original race2 failure until its own witnessed qualification/disposition; distinct Windows third-submit ambiguous deadline; canceled macOS vet; aggregate/current-head review and integration/recovery obligations. Original old gates and all raw samples remain adverse. User-reported new GV M0 failure is owned by ROOT/other workstream, not diagnosed here.

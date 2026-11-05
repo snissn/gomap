@@ -1,0 +1,386 @@
+--- /dev/null
++++ b/TreeDB/db/command_wal_cleanup_fixed_active_test.go
+@@ -0,0 +1,271 @@
++package db
++
++import (
++	"errors"
++	"fmt"
++	"os"
++	"path/filepath"
++	"testing"
++
++	"github.com/snissn/gomap/TreeDB/internal/commitlog"
++)
++
++const cleanupPressureCapacityForTest = int64(4_199_424)
++
++// The caller owns this fresh t.TempDir namespace, with no concurrent actors or
++// DB/journal owner for path. O_EXCL rejects every preexisting path; neither a
++// live stream nor a populated historical segment may be converted here.
++func prepareFreshFixedCleanupActiveForTest(path string, fixedEntry bool) error {
++	reservation, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
++	if err != nil {
++		return err
++	}
++	info, statErr := reservation.Stat()
++	closeErr := reservation.Close()
++	if statErr != nil || closeErr != nil {
++		return errors.Join(statErr, closeErr)
++	}
++	if !info.Mode().IsRegular() || info.Size() != 0 {
++		return errors.New("cleanup fixture requires an exclusively created zero-length regular file")
++	}
++	linked, err := os.Lstat(path)
++	if err != nil {
++		return err
++	}
++	if !os.SameFile(info, linked) {
++		return errors.New("cleanup fixture fresh path identity changed before writer open")
++	}
++	// Both entry controls own a new, unaccepted writer. Default NewWriter is a
++	// legitimate stream entry; the other control starts explicitly fixed. All
++	// handles are checked-closed BEFORE fixed preparation and actual owner Open.
++	var original *commitlog.Writer
++	if fixedEntry {
++		original, err = commitlog.NewFixedWriterWithCapacity(path, cleanupPressureCapacityForTest)
++	} else {
++		original, err = commitlog.NewWriter(path)
++	}
++	if err != nil {
++		return err
++	}
++	logical := original.ActiveBytes()
++	closeErr = original.Close()
++	if logical != 0 || closeErr != nil {
++		return errors.Join(fmt.Errorf("original fresh writer logical bytes=%d; require zero", logical), closeErr)
++	}
++	frames, err := commitlog.ScanCommandFramesV2(path, commitlog.Options{})
++	if err != nil || len(frames) != 0 {
++		return errors.Join(fmt.Errorf("original fresh writer frames=%d; require zero", len(frames)), err)
++	}
++	fixed, err := commitlog.NewFixedWriterWithCapacity(path, cleanupPressureCapacityForTest)
++	if err != nil {
++		return err
++	}
++	logical = fixed.ActiveBytes()
++	closeErr = fixed.Close()
++	if logical != 0 || closeErr != nil {
++		return errors.Join(fmt.Errorf("prepared fixed writer logical bytes=%d; require zero", logical), closeErr)
++	}
++	frames, err = commitlog.ScanCommandFramesV2(path, commitlog.Options{})
++	if err != nil || len(frames) != 0 {
++		return errors.Join(fmt.Errorf("prepared fixed writer frames=%d; require zero", len(frames)), err)
++	}
++	info, err = os.Lstat(path)
++	if err != nil {
++		return err
++	}
++	if !info.Mode().IsRegular() || info.Size() != cleanupPressureCapacityForTest {
++		return fmt.Errorf("prepared fixed physical size=%d; want %d", info.Size(), cleanupPressureCapacityForTest)
++	}
++	return nil
++}
++
++func installFreshFixedCleanupJournalOwnerForTest(t *testing.T, database *DB, appliedLSN uint64) {
++	t.Helper()
++	installFreshFixedCleanupJournalEntryForTest(t, database, appliedLSN, false)
++}
++
++func installFreshFixedCleanupJournalEntryForTest(t *testing.T, database *DB, appliedLSN uint64, fixedEntry bool) {
++	t.Helper()
++	if !commitlog.FixedWALCreationSupported() {
++		t.Skip("requires fixed-container creation; not fixed pressure coverage")
++	}
++	if database.commandJournal != nil {
++		t.Fatal("fresh cleanup fixture cannot replace a live journal")
++	}
++	opts := commandWALCleanupJournalOptionsForTest(t, database, appliedLSN)
++	if opts.SegmentSeq == 0 {
++		t.Fatal("fresh cleanup fixture requires existing replay/history and a concrete next sequence")
++	}
++	path := filepath.Join(WALDirPath(database.dir), commitlog.CommandSegmentName(0, opts.SegmentSeq))
++	if err := prepareFreshFixedCleanupActiveForTest(path, fixedEntry); err != nil {
++		t.Fatalf("prepare fresh fixed cleanup active: %v", err)
++	}
++	// Same original options; install DB ownership and cleanup immediately after
++	// successful Open, before any capture or accepted append.
++	installCommandWALCleanupJournalOptionsForTest(t, database, opts, true)
++	snapshot, err := database.commandJournal.CaptureCleanupSnapshot()
++	if err != nil || snapshot.ActivePath != path || snapshot.SegmentSeq != opts.SegmentSeq || snapshot.ActiveBytes != 0 || snapshot.ActiveSegmentMaxLSN != 0 || snapshot.PendingStableRotation != 0 || snapshot.PendingSuccessor {
++		t.Fatalf("fresh installed actual writer: snapshot=%+v err=%v", snapshot, err)
++	}
++}
++
++func TestCommandWALCleanupFreshFixedActiveEntryControls(t *testing.T) {
++	for _, fixedEntry := range []bool{false, true} {
++		t.Run(fmt.Sprintf("fixed_entry_%t", fixedEntry), func(t *testing.T) {
++			dir := t.TempDir()
++			writeCommandWALFrame(t, dir, 1, 1)
++			empty := writeEmptyFixedCleanupSegment(t, dir, 2, 8192)
++			database := &DB{dir: dir, commandWAL: true, durability: DurabilityDurable}
++			installCommandWALCleanupTwoRootRuntimeForTest(database, 1, 1)
++			fallback := database.durableRoot.slot ^ 1
++			record := database.durableRoot.slotRecord[fallback]
++			record.AppliedCommandLSN = 0
++			database.durableRoot.slotRecord[fallback] = record
++			installFreshFixedCleanupJournalEntryForTest(t, database, 1, fixedEntry)
++			before, err := database.commandJournal.CaptureCleanupSnapshot()
++			if err != nil {
++				t.Fatal(err)
++			}
++			t.Cleanup(func() {
++				rotations, err := database.commandJournal.TakePendingStableRotations()
++				if err != nil {
++					t.Error(err)
++				}
++				for _, rotation := range rotations {
++					rotation.Release()
++				}
++			})
++			database.testCommandWALCleanupAfterScanHook = func() {
++				payload, err := commitlog.EncodeRawKVBatchPayload([]commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: []byte("pending"), Value: make([]byte, 5<<20)}})
++				if err != nil {
++					t.Fatal(err)
++				}
++				lsn, err := database.commandJournal.AppendCommand(commitlog.CommandEnvelope{
++					Version: commitlog.CommandFrameVersionV2, DurabilityClass: commitlog.CommandDurabilityDurable,
++					Kind: commitlog.CommandKindRawKVBatch, Scope: commitlog.CommandScopeRawKV,
++					PayloadFormat: commitlog.PayloadFormatRawKVBatchV1, Payload: payload,
++				})
++				after, snapshotErr := database.commandJournal.CaptureCleanupSnapshot()
++				if err != nil || snapshotErr != nil || lsn != 2 || after.ActiveSegmentMaxLSN != lsn || after.PendingStableRotation == 0 || after.SegmentSeq != before.SegmentSeq+1 || after.ActivePath == before.ActivePath {
++					t.Fatalf("pending pressure witness: before=%+v after=%+v lsn=%d append=%v snapshot=%v", before, after, lsn, err, snapshotErr)
++				}
++			}
++			if err := database.CleanupCommandWALCoveredSegments(true); !errors.Is(err, commitlog.ErrCommandWALCleanupSnapshotStale) {
++				t.Fatalf("cleanup error=%v; require actual pending-ownership refusal", err)
++			}
++			if _, err := os.Stat(empty); err != nil {
++				t.Fatalf("refusal removed retained file: %v", err)
++			}
++			if database.commandWALCleanupRemoved.Load() != 0 || database.commandWALCleanupNamespaceDirty.Load() {
++				t.Fatal("refusal changed deletion accounting")
++			}
++		})
++	}
++}
++
++func TestCommandWALCleanupFreshFixedActiveRefusesExisting(t *testing.T) {
++	for _, state := range []string{"empty", "populated", "live", "fixed"} {
++		t.Run(state, func(t *testing.T) {
++			dir := t.TempDir()
++			path := filepath.Join(dir, "active.log")
++			if state == "fixed" {
++				if !commitlog.FixedWALCreationSupported() {
++					t.Skip("requires fixed-container creation")
++				}
++				writer, err := commitlog.NewFixedWriterWithCapacity(path, cleanupPressureCapacityForTest)
++				if err != nil {
++					t.Fatal(err)
++				}
++				if err := writer.Close(); err != nil {
++					t.Fatal(err)
++				}
++			} else {
++				data := []byte(nil)
++				if state == "populated" {
++					data = []byte("accepted contents must not be replaced")
++				}
++				if err := os.WriteFile(path, data, 0o600); err != nil {
++					t.Fatal(err)
++				}
++			}
++			var live *os.File
++			if state == "live" {
++				var err error
++				live, err = os.OpenFile(path, os.O_RDWR, 0)
++				if err != nil {
++					t.Fatal(err)
++				}
++				defer func() {
++					if err := live.Close(); err != nil {
++						t.Error(err)
++					}
++				}()
++			}
++			before, err := os.ReadFile(path)
++			if err != nil {
++				t.Fatal(err)
++			}
++			info, err := os.Stat(path)
++			if err != nil {
++				t.Fatal(err)
++			}
++			if err := prepareFreshFixedCleanupActiveForTest(path, false); !errors.Is(err, os.ErrExist) {
++				t.Fatalf("existing %s was not refused at exclusive admission: %v", state, err)
++			}
++			after, err := os.ReadFile(path)
++			linked, statErr := os.Stat(path)
++			if err != nil || statErr != nil || string(after) != string(before) || !os.SameFile(info, linked) {
++				t.Fatalf("refused %s changed bytes/identity: read=%v stat=%v", state, err, statErr)
++			}
++		})
++	}
++}
++
++// An occupied stream keeps its format under production Open. The same large
++// append can therefore be monotonic and safe: absence of physical rotation is
++// not evidence that cleanup ignored pending ownership.
++func TestCommandWALCleanupStreamAppendWithoutPendingRotation(t *testing.T) {
++	dir := t.TempDir()
++	writeCommandWALFrame(t, dir, 1, 1)
++	empty := writeEmptyFixedCleanupSegment(t, dir, 2, 8192)
++	writeCommandWALFrame(t, dir, 3, 2)
++	database := &DB{dir: dir, commandWAL: true, durability: DurabilityDurable}
++	installCommandWALCleanupTwoRootRuntimeForTest(database, 1, 2)
++	fallback := database.durableRoot.slot ^ 1
++	record := database.durableRoot.slotRecord[fallback]
++	record.AppliedCommandLSN = 0
++	database.durableRoot.slotRecord[fallback] = record
++	// Explicitly reopen the already occupied stream, not the next fresh path.
++	installCommandWALCleanupJournalOptionsForTest(t, database, commitlog.CommandJournalOptions{
++		MaxSegmentSize: database.walMaxSegmentBytes, InitialLSN: 2,
++		SegmentSeq: 3, CaptureStableResources: true,
++	}, true)
++	before, err := database.commandJournal.CaptureCleanupSnapshot()
++	if err != nil || before.ActiveSegmentMaxLSN != 2 || before.ActiveBytes == 0 || before.PendingStableRotation != 0 || before.PendingSuccessor {
++		t.Fatalf("occupied stream before append: snapshot=%+v err=%v", before, err)
++	}
++	database.testCommandWALCleanupAfterScanHook = func() {
++		payload, err := commitlog.EncodeRawKVBatchPayload([]commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: []byte("pending"), Value: make([]byte, 5<<20)}})
++		if err != nil {
++			t.Fatal(err)
++		}
++		lsn, err := database.commandJournal.AppendCommand(commitlog.CommandEnvelope{
++			Version: commitlog.CommandFrameVersionV2, DurabilityClass: commitlog.CommandDurabilityDurable,
++			Kind: commitlog.CommandKindRawKVBatch, Scope: commitlog.CommandScopeRawKV,
++			PayloadFormat: commitlog.PayloadFormatRawKVBatchV1, Payload: payload,
++		})
++		after, snapshotErr := database.commandJournal.CaptureCleanupSnapshot()
++		if err != nil || snapshotErr != nil || lsn != 3 || after.ActiveSegmentMaxLSN != lsn || after.PendingStableRotation != 0 || after.PendingSuccessor || after.SegmentSeq != before.SegmentSeq || after.ActivePath != before.ActivePath || after.ActiveBytes <= before.ActiveBytes {
++			t.Fatalf("legitimate stream append: before=%+v after=%+v lsn=%d append=%v snapshot=%v", before, after, lsn, err, snapshotErr)
++		}
++	}
++	if err := database.CleanupCommandWALCoveredSegments(true); err != nil {
++		t.Fatalf("safe monotonic stream cleanup: %v", err)
++	}
++	if _, err := os.Stat(empty); !errors.Is(err, os.ErrNotExist) {
++		t.Fatalf("safe eligible empty segment was not removed: %v", err)
++	}
++	if database.commandWALCleanupRemoved.Load() != 1 || database.commandWALCleanupNamespaceDirty.Load() {
++		t.Fatal("safe stream cleanup lost checked namespace accounting")
++	}
++}
+--- a/TreeDB/db/command_wal_publish_test.go
++++ b/TreeDB/db/command_wal_publish_test.go
+@@ -1439,6 +1439,12 @@
+ 	if db.commandJournal != nil {
+ 		return
+ 	}
++	opts := commandWALCleanupJournalOptionsForTest(tb, db, appliedLSN)
++	installCommandWALCleanupJournalOptionsForTest(tb, db, opts, false)
++}
++
++func commandWALCleanupJournalOptionsForTest(tb testing.TB, db *DB, appliedLSN uint64) commitlog.CommandJournalOptions {
++	tb.Helper()
+ 	segments, err := listRecoverySegments(db.dir)
+ 	if err != nil {
+ 		tb.Fatalf("list cleanup journal segments: %v", err)
+@@ -1454,12 +1460,17 @@
+ 	if segmentSeq != 0 && !hasTerminalTail {
+ 		segmentSeq++
+ 	}
+-	journal, err := commitlog.OpenCommandJournal(WALDirPath(db.dir), commitlog.CommandJournalOptions{
++	return commitlog.CommandJournalOptions{
+ 		MaxSegmentSize:         db.walMaxSegmentBytes,
+ 		InitialLSN:             appliedLSN,
+ 		SegmentSeq:             segmentSeq,
+ 		CaptureStableResources: true,
+-	})
++	}
++}
++
++func installCommandWALCleanupJournalOptionsForTest(tb testing.TB, db *DB, opts commitlog.CommandJournalOptions, checkedClose bool) {
++	tb.Helper()
++	journal, err := commitlog.OpenCommandJournal(WALDirPath(db.dir), opts)
+ 	if err != nil {
+ 		tb.Fatalf("OpenCommandJournal cleanup owner: %v", err)
+ 	}
+@@ -1468,7 +1479,9 @@
+ 		if db.commandJournal == journal {
+ 			db.commandJournal = nil
+ 		}
+-		_ = journal.Close()
++		if err := journal.Close(); checkedClose && err != nil {
++			tb.Errorf("Close fixed cleanup journal owner: %v", err)
++		}
+ 	})
+ }
+ 
+--- a/TreeDB/db/command_wal_zero_frontier_safety_test.go
++++ b/TreeDB/db/command_wal_zero_frontier_safety_test.go
+@@ -13,6 +13,11 @@
+ )
+ 
+ func zeroFrontierCleanupDBForTest(t *testing.T, dir string, durableLSN uint64) *DB {
++	t.Helper()
++	return zeroFrontierCleanupDBWithActiveForTest(t, dir, durableLSN, false)
++}
++
++func zeroFrontierCleanupDBWithActiveForTest(t *testing.T, dir string, durableLSN uint64, fixedActive bool) *DB {
+ 	t.Helper()
+ 	database := &DB{dir: dir, commandWAL: true, durability: DurabilityDurable}
+ 	installCommandWALCleanupTwoRootRuntimeForTest(database, 1, durableLSN)
+@@ -20,7 +25,11 @@
+ 	record := database.durableRoot.slotRecord[fallback]
+ 	record.AppliedCommandLSN = 0
+ 	database.durableRoot.slotRecord[fallback] = record
+-	installCommandWALCleanupJournalOwnerForTest(t, database, durableLSN)
++	if fixedActive {
++		installFreshFixedCleanupJournalOwnerForTest(t, database, durableLSN)
++	} else {
++		installCommandWALCleanupJournalOwnerForTest(t, database, durableLSN)
++	}
+ 	return database
+ }
+ 
+@@ -46,7 +55,7 @@
+ 				emptySeq++
+ 			}
+ 			empty := writeEmptyFixedCleanupSegment(t, dir, emptySeq, 8192)
+-			database := zeroFrontierCleanupDBForTest(t, dir, durableLSN)
++			database := zeroFrontierCleanupDBWithActiveForTest(t, dir, durableLSN, variant == "pending_rotation")
+ 			wantErr := error(ErrCommandWALAppliedLSNNonContig)
+ 			switch variant {
+ 			case "duplicate_replay":
+@@ -113,6 +122,10 @@
+ 				}
+ 			case "pending_rotation":
+ 				wantErr = commitlog.ErrCommandWALCleanupSnapshotStale
++				before, err := database.commandJournal.CaptureCleanupSnapshot()
++				if err != nil || before.ActiveBytes != 0 || before.ActiveSegmentMaxLSN != 0 || before.PendingStableRotation != 0 || before.PendingSuccessor {
++					t.Fatalf("fresh actual cleanup owner: snapshot=%+v err=%v", before, err)
++				}
+ 				t.Cleanup(func() {
+ 					rotations, err := database.commandJournal.TakePendingStableRotations()
+ 					if err != nil {
+@@ -131,13 +144,17 @@
+ 					if err != nil {
+ 						t.Fatal(err)
+ 					}
+-					_, err = database.commandJournal.AppendCommand(commitlog.CommandEnvelope{
++					lsn, err := database.commandJournal.AppendCommand(commitlog.CommandEnvelope{
+ 						Version: commitlog.CommandFrameVersionV2, DurabilityClass: commitlog.CommandDurabilityDurable,
+ 						Kind: commitlog.CommandKindRawKVBatch, Scope: commitlog.CommandScopeRawKV,
+ 						PayloadFormat: commitlog.PayloadFormatRawKVBatchV1, Payload: payload,
+ 					})
+ 					if err != nil {
+ 						t.Fatal(err)
++					}
++					after, err := database.commandJournal.CaptureCleanupSnapshot()
++					if err != nil || lsn != durableLSN+1 || after.ActiveSegmentMaxLSN != lsn || after.PendingStableRotation == 0 || after.SegmentSeq != before.SegmentSeq+1 || after.ActivePath == before.ActivePath {
++						t.Fatalf("actual pressure append did not activate pending rotation: before=%+v after=%+v lsn=%d err=%v", before, after, lsn, err)
+ 					}
+ 				}
+ 			case "replaced_identity":

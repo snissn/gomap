@@ -1,0 +1,14 @@
+# Frozen future hosted controls — ALL UNRUN here
+
+ROOT owns independent source review and maintained hosted admission. No workflow dispatch, host lease or runtime authority is supplied by this packet. Do not import M0 overlay for fixture qualification. Apply source.patch to exact4934 only after preimage checks. Preserve all prior failed attempts and original limits; formatting/compile failure is setup failure, not product result.
+
+Focused new tops (actual source names):
+- TestCommandWALCleanupFreshFixedActiveEntryControls: fixed_entry_false / fixed_entry_true. Each uses an independently fresh sequence; original zero-frame writer checked-Close precedes actual owner Open, actual pressure at original after-scan hook, pending token/seq/assignedLSN, stale refusal, retained empty path, no deletion accounting. Explicit fixed entry is a fixture factory control, not a claim that a particular platform's production selection chose fixed.
+- TestCommandWALCleanupFreshFixedActiveRefusesExisting: empty / populated / live / fixed. O_EXCL ErrExist; original bytes and physical identity unchanged; live handle checked-Close. Populated contains malformed/occupied bytes, never scanned or converted by preparer.
+- TestCommandWALCleanupStreamAppendWithoutPendingRotation: legitimate already occupied stream reopened under production Open, same5MiB append, no logical target, unchanged seq/path and actual zero pending/successor, original cleanup safely reclaims eligible empty history with checked namespace accounting. This is a negative, not fixed-pressure coverage.
+
+Owning normal/race selector after independent review (do not silently treat zero tests as PASS):
+`go test ./TreeDB/db -run '^(TestCommandWALCleanupZeroFrontierSafety|TestCommandWALCleanupZeroFrontierNamespaceSync|TestCommandWALCleanupFreshFixedActiveEntryControls|TestCommandWALCleanupFreshFixedActiveRefusesExisting|TestCommandWALCleanupStreamAppendWithoutPendingRotation|TestCommandWALCleanupRejectsPendingJournalOwnershipAfterScan|TestCommandWALCleanupConvergesAfterActiveAppend|TestCommandWALCleanupEmptyFixedFirstFrameRotation)$' -count=1`
+Then same selector with `-race`, under existing maintained hosted bounds. Expected original eight zero-frontier variants and all new leaf outcomes must be retained; Windows replaced_identity and unsupported fixed creation remain explicit skips/coverage limits. Keep existing completed-monotonic rotation, pending-successor/no-unlink, no-op/deletion-sync failure, retained-reader reopen/value and affected crash/recovery suites; these were not rerun/requalified here.
+
+Before merge: actual formatting/compile/normal/race evidence, preserved original assertion/failure classification, exact current-head CI/review, relevant acknowledged-content/held-view/checkpoint/original checked Close/reopen/recovery and unchanged cost gates. No statement here qualifies the full4934 product.

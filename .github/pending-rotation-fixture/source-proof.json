@@ -1,0 +1,50 @@
+{
+  "status": "SOURCE_TEXT_CHECKS_ONLY",
+  "files": [
+    {
+      "path": "TreeDB/db/command_wal_cleanup_fixed_active_test.go",
+      "preimage_sha256": null,
+      "overlay_sha256": "2deeb2edf34e72fd7c68716d282ec16b9c78baae2449bbb1fd88a4824ea40f55",
+      "bytes": 11445,
+      "added_lines": 271
+    },
+    {
+      "path": "TreeDB/db/command_wal_publish_test.go",
+      "preimage_sha256": "4af7ce90d9119c148787ac41c68368bb9c8e50ef9d704be2abc9ac52a122f18d",
+      "overlay_sha256": "04f37b3e7d03b07940d48e9d78da4586dd919ef7f3835ec9db42bb16c4b8c800",
+      "bytes": 111355,
+      "added_lines": 13
+    },
+    {
+      "path": "TreeDB/db/command_wal_zero_frontier_safety_test.go",
+      "preimage_sha256": "95ad7feaa3aca2dde9712cd694e2ab9e77a9f69de71c5fcb1df28af8eb8c73bf",
+      "overlay_sha256": "d540863a76b5ad63b7c453fc177be7f73c2224ba59639dc29f85721937f4156a",
+      "bytes": 8868,
+      "added_lines": 17
+    }
+  ],
+  "inverse": [
+    {
+      "path": "TreeDB/db/command_wal_cleanup_fixed_active_test.go",
+      "forward_text_equal": true,
+      "inverse_text_equal": true
+    },
+    {
+      "path": "TreeDB/db/command_wal_publish_test.go",
+      "forward_text_equal": true,
+      "inverse_text_equal": true
+    },
+    {
+      "path": "TreeDB/db/command_wal_zero_frontier_safety_test.go",
+      "forward_text_equal": true,
+      "inverse_text_equal": true
+    }
+  ],
+  "original_eight_variants_and_pressure_and_refusal_assertions_retained": true,
+  "go_format": "UNRUN",
+  "compile": "UNRUN",
+  "normal": "UNRUN",
+  "race": "UNRUN",
+  "historical_ci_medium": "UNKNOWN",
+  "product_repair_established": false
+}
