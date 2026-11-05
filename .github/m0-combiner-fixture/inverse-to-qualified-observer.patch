@@ -1,0 +1,1258 @@
+--- a/TreeDB/db/api.go
++++ b/TreeDB/db/api.go
+@@ -9,7 +9,6 @@
+ 	"time"
+ 
+ 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+-	"github.com/snissn/gomap/TreeDB/internal/mvccadmission"
+ 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+ 	publiciterator "github.com/snissn/gomap/TreeDB/iterator"
+ 	"github.com/snissn/gomap/TreeDB/page"
+@@ -596,31 +595,19 @@
+ 
+ // Set sets the value for a key.
+ func (db *DB) Set(key, value []byte) error {
+-	return db.setWithM0CombinerObservation(key, value, nil)
+-}
+-
+-// Diagnostic overlay only: ordinary and selected callers share this body.
+-func (db *DB) setWithM0CombinerObservation(key, value []byte, observation *m0CombinerSlot) (err error) {
+-	observation = observation.enter()
+-	defer func() { observation.returned(err) }()
+ 	key = normalizeRawKVPointKey(key)
+ 	value = normalizeRawKVValue(value)
+ 	guard := db.lockUpdateKey(key)
+ 	defer guard.Unlock()
+-	return db.setPointWithM0CombinerObservation(key, value, false, observation)
++	return db.setPoint(key, value, false)
+ }
+ 
+ func (db *DB) setPoint(key, value []byte, sync bool) error {
+-	return db.setPointWithM0CombinerObservation(key, value, sync, nil)
+-}
+-
+-func (db *DB) setPointWithM0CombinerObservation(key, value []byte, sync bool, observation *m0CombinerSlot) error {
+ 	key = normalizeRawKVPointKey(key)
+ 	value = normalizeRawKVValue(value)
+-	if handled, err := db.writeViaCommitCombinerWithM0Observation(key, value, false, sync, mvccadmission.Input{}, observation); handled {
++	if handled, err := db.writeViaCommitCombiner(key, value, false, sync); handled {
+ 		return err
+ 	}
+-	observation.fallback()
+ 	return db.writeSingleKV(key, value, false, sync)
+ }
+ 
+--- a/TreeDB/db/commit_combiner.go
++++ b/TreeDB/db/commit_combiner.go
+@@ -20,7 +20,6 @@
+ 	del    bool
+ 	sync   bool
+ 	result chan error
+-	m0     *m0CombinerSlot
+ }
+ 
+ func (db *DB) startCommitCombiner() {
+@@ -65,10 +64,6 @@
+ 	return db.writeViaCommitCombinerWithMVCCInput(key, value, del, sync, mvccadmission.Input{})
+ }
+ func (db *DB) writeViaCommitCombinerWithMVCCInput(key, value []byte, del, sync bool, input mvccadmission.Input) (bool, error) {
+-	return db.writeViaCommitCombinerWithM0Observation(key, value, del, sync, input, nil)
+-}
+-
+-func (db *DB) writeViaCommitCombinerWithM0Observation(key, value []byte, del, sync bool, input mvccadmission.Input, observation *m0CombinerSlot) (bool, error) {
+ 	if db == nil {
+ 		return true, errors.New("missing db")
+ 	}
+@@ -82,13 +77,8 @@
+ 	db.combineMu.RLock()
+ 	reqCh := db.combineReqCh
+ 	stopCh := db.combineStopCh
+-	if observation != nil {
+-		// Borrow this exact original worker lifetime under the original lock.
+-		observation.borrowDone(db.combineDoneCh)
+-	}
+ 	db.combineMu.RUnlock()
+ 	if reqCh == nil || stopCh == nil {
+-		observation.enqueueOutcome("NO_CHANNEL")
+ 		return false, nil
+ 	}
+ 
+@@ -97,10 +87,8 @@
+ 	if cap(reqCh) > 0 && len(reqCh) == cap(reqCh) {
+ 		select {
+ 		case <-stopCh:
+-			observation.enqueueOutcome("SATURATED_STOP")
+ 			return true, errCommitCombinerClosed
+ 		default:
+-			observation.enqueueOutcome("SATURATED_FALLBACK")
+ 			return false, nil
+ 		}
+ 	}
+@@ -111,33 +99,25 @@
+ 		del:    del,
+ 		sync:   sync,
+ 		result: make(chan error, 1),
+-		m0:     observation,
+ 	}
+ 	req.input = input.BindOwnedKey(key, req.key)
+ 	if !del {
+ 		req.value = append([]byte(nil), value...)
+ 	}
+ 
+-	observation.enqueueBefore()
+ 	select {
+ 	case reqCh <- req:
+-		observation.enqueueOutcome("ENQUEUED")
+ 	case <-stopCh:
+-		observation.enqueueOutcome("SEND_STOP")
+ 		return true, errCommitCombinerClosed
+ 	default:
+ 		// Queue saturation fallback: let caller use direct write path.
+-		observation.enqueueOutcome("SEND_FALLBACK")
+ 		return false, nil
+ 	}
+ 
+-	observation.selectBefore()
+ 	select {
+ 	case err := <-req.result:
+-		observation.selected("RESULT")
+ 		return true, err
+ 	case <-stopCh:
+-		observation.selected("STOP")
+ 		return true, errCommitCombinerClosed
+ 	}
+ }
+@@ -170,8 +150,6 @@
+ 	if len(batch) == 0 {
+ 		return nil
+ 	}
+-	m0StampBatch(batch, "APPLY_BEFORE")
+-	defer m0StampBatch(batch, "APPLY_AFTER")
+ 	anySync := false
+ 	b := db.newBatchWithEntryReserve(len(batch)).(*Batch)
+ 	for _, req := range batch {
+@@ -186,10 +164,7 @@
+ 			err = b.batch.SetViewWithMVCCInput(req.key, req.value, req.input)
+ 		}
+ 		if err != nil {
+-			m0StampBatch(batch, "CLOSE_BEFORE")
+-			closeErr := b.Close() // Original setup-error Close remains ignored.
+-			m0StampBatch(batch, "CLOSE_AFTER")
+-			m0BatchErrors(batch, "SETUP", err, closeErr, true)
++			_ = b.Close()
+ 			return err
+ 		}
+ 		if req.sync {
+@@ -197,22 +172,12 @@
+ 		}
+ 	}
+ 	var err error
+-	m0StampBatch(batch, "WRITE_BEFORE")
+ 	if anySync {
+ 		err = b.WriteSync()
+ 	} else {
+ 		err = b.Write()
+ 	}
+-	m0StampBatch(batch, "WRITE_AFTER")
+-	m0StampBatch(batch, "CLOSE_BEFORE")
+-	closeErr := b.Close()
+-	m0StampBatch(batch, "CLOSE_AFTER")
+-	kind := "WRITE"
+-	if anySync {
+-		kind = "WRITE_SYNC"
+-	}
+-	m0BatchErrors(batch, kind, err, closeErr, false)
+-	if err == nil {
++	if closeErr := b.Close(); err == nil {
+ 		err = closeErr
+ 	}
+ 	return err
+@@ -223,9 +188,7 @@
+ 		if req == nil {
+ 			continue
+ 		}
+-		req.m0.sendBefore("APPLIED")
+ 		req.result <- err
+-		req.m0.sendAfter()
+ 		// Application and result delivery are the final consumers. Do not retain
+ 		// request-owned keys/values in the loop's reusable batch storage.
+ 		batch[i] = nil
+@@ -239,10 +202,7 @@
+ 			if req == nil {
+ 				return
+ 			}
+-			req.m0.dequeued()
+-			req.m0.sendBefore("DRAINED")
+ 			req.result <- err
+-			req.m0.sendAfter()
+ 		default:
+ 			return
+ 		}
+@@ -259,7 +219,6 @@
+ 			return batch, true
+ 		case req := <-reqCh:
+ 			if req != nil {
+-				req.m0.dequeued()
+ 				batch = append(batch, req)
+ 			}
+ 		default:
+@@ -272,7 +231,6 @@
+ func (db *DB) commitCombinerLoop(reqCh <-chan *commitCombineReq, stopCh <-chan struct{}, doneCh chan<- struct{}) {
+ 	defer close(doneCh)
+ 	var scratch [commitCombineMaxBatch]*commitCombineReq
+-	var m0BatchSerial uint64 // Opaque local ordinal, not a commit/LSN identity.
+ 	for {
+ 		select {
+ 		case <-stopCh:
+@@ -282,12 +240,9 @@
+ 			if first == nil {
+ 				continue
+ 			}
+-			first.m0.dequeued()
+ 			batch := scratch[:1]
+ 			batch[0] = first
+ 			batch, stopped := collectCombinedBatch(batch, reqCh, stopCh)
+-			m0BatchSerial++
+-			m0BindBatch(batch, m0BatchSerial)
+ 			err := db.applyCombinedBatch(batch)
+ 			db.finishCombined(batch, err)
+ 			if stopped {
+--- a/TreeDB/db/m0_combiner_observation.go
++++ /dev/null
+@@ -1,275 +0,0 @@
+-package db
+-
+-// DIAGNOSTIC OVERLAY ONLY. Remove this file AND the sealed source overlay to
+-// recover the original product. Even nil observations change this binary's
+-// code/layout; no same-ELF zero-cost or performance acceptance claim is made.
+-
+-import (
+-	"errors"
+-	"time"
+-)
+-
+-const m0CombinerOrdinalLimit = 4096
+-
+-type m0CombinerStamp struct {
+-	NS    int64
+-	Valid bool
+-}
+-
+-type m0CombinerCaller struct {
+-	Entry, EnqueueBefore, EnqueueAfter m0CombinerStamp
+-	SelectBefore, SelectAfter, Return  m0CombinerStamp
+-	EnqueueStatus, Branch, Error       string
+-	Entered, Invalid                   bool
+-}
+-
+-type m0CombinerWorker struct {
+-	Dequeue, ApplyBefore, ApplyAfter m0CombinerStamp
+-	WriteBefore, WriteAfter          m0CombinerStamp
+-	CloseBefore, CloseAfter          m0CombinerStamp
+-	SendBefore, SendAfter            m0CombinerStamp
+-	BatchSerial                      uint64
+-	BatchIndex, BatchSize, Selected  int
+-	Dispatch, WriteKind              string
+-	WriteError, CloseError           string
+-	IgnoredCloseError                bool
+-	Terminal, Invalid                bool
+-}
+-
+-type m0CombinerSlot struct {
+-	// Immutable before the original request send. The pointer is private and
+-	// never exported; no request/DB/key/value/error object is retained here.
+-	owner     *m0CombinerOwner
+-	Iteration int
+-	Ordinal   int
+-	Kind      string
+-	Caller    m0CombinerCaller // Foreground writer only, then original join.
+-	Worker    m0CombinerWorker // Original combiner only, then original done.
+-}
+-
+-type m0CombinerOwner struct {
+-	origin time.Time
+-	slots  [m0CombinerOrdinalLimit]m0CombinerSlot
+-	// Foreground writer only until its original join. Worker code NEVER reads
+-	// these mutable fields. done is borrowed under original combineMu.RLock.
+-	done        <-chan struct{}
+-	doneBound   bool
+-	doneInvalid bool
+-}
+-
+-func newM0CombinerOwner() *m0CombinerOwner {
+-	o := &m0CombinerOwner{origin: time.Now()}
+-	for i := range o.slots {
+-		kind := "set"
+-		if i%2 != 0 {
+-			kind = "delete-range"
+-		}
+-		o.slots[i] = m0CombinerSlot{owner: o, Iteration: 0, Ordinal: i, Kind: kind}
+-	}
+-	return o
+-}
+-
+-func (o *m0CombinerOwner) stamp() m0CombinerStamp {
+-	return m0CombinerStamp{NS: time.Since(o.origin).Nanoseconds(), Valid: true}
+-}
+-
+-func (s *m0CombinerSlot) enter() *m0CombinerSlot {
+-	if s == nil {
+-		return nil
+-	}
+-	if s.owner == nil || s.Iteration != 0 || s.Ordinal < 0 || s.Ordinal >= m0CombinerOrdinalLimit || s.Ordinal%2 != 0 || s.Kind != "set" || s.Caller.Entered {
+-		s.Caller.Invalid = true
+-		return nil // Diagnostic refusal NEVER refuses/retries the original Set.
+-	}
+-	if s != &s.owner.slots[s.Ordinal] {
+-		s.Caller.Invalid = true
+-		return nil
+-	}
+-	s.Caller.Entered = true
+-	s.Caller.Entry = s.owner.stamp()
+-	return s
+-}
+-
+-func (s *m0CombinerSlot) borrowDone(done <-chan struct{}) {
+-	if s == nil {
+-		return
+-	}
+-	o := s.owner
+-	if !o.doneBound {
+-		o.done, o.doneBound = done, true
+-	}
+-	if done == nil || done != o.done {
+-		o.doneInvalid = true
+-	}
+-}
+-
+-func (s *m0CombinerSlot) enqueueBefore() {
+-	if s != nil {
+-		s.Caller.EnqueueBefore = s.owner.stamp()
+-	}
+-}
+-
+-func (s *m0CombinerSlot) enqueueOutcome(status string) {
+-	if s != nil {
+-		s.Caller.EnqueueStatus = status
+-		if s.Caller.EnqueueBefore.Valid {
+-			s.Caller.EnqueueAfter = s.owner.stamp()
+-		}
+-	}
+-}
+-
+-func (s *m0CombinerSlot) selectBefore() {
+-	if s != nil {
+-		s.Caller.SelectBefore = s.owner.stamp()
+-	}
+-}
+-
+-func (s *m0CombinerSlot) selected(branch string) {
+-	if s != nil {
+-		s.Caller.SelectAfter = s.owner.stamp()
+-		s.Caller.Branch = branch
+-	}
+-}
+-
+-func (s *m0CombinerSlot) fallback() {
+-	if s != nil {
+-		s.Caller.Branch = "DIRECT_FALLBACK"
+-	}
+-}
+-
+-func m0CombinerErrorCategory(err error) string {
+-	if err == nil {
+-		return "NIL"
+-	}
+-	if errors.Is(err, errCommitCombinerClosed) {
+-		return "COMBINER_CLOSED"
+-	}
+-	if errors.Is(err, ErrReadOnly) {
+-		return "READ_ONLY"
+-	}
+-	return "OTHER" // No Error() call or payload/error object retention.
+-}
+-
+-func (s *m0CombinerSlot) returned(err error) {
+-	if s != nil {
+-		s.Caller.Return = s.owner.stamp()
+-		s.Caller.Error = m0CombinerErrorCategory(err)
+-		if s.Caller.Branch == "" {
+-			s.Caller.Branch = "EARLY_RETURN"
+-		}
+-	}
+-}
+-
+-func (s *m0CombinerSlot) dequeued() {
+-	if s != nil {
+-		if s.Worker.Dequeue.Valid {
+-			s.Worker.Invalid = true
+-		}
+-		s.Worker.Dequeue = s.owner.stamp()
+-	}
+-}
+-
+-func m0BindBatch(batch []*commitCombineReq, serial uint64) {
+-	selected := 0
+-	for _, req := range batch {
+-		if req != nil && req.m0 != nil {
+-			selected++
+-		}
+-	}
+-	for i, req := range batch {
+-		if req == nil || req.m0 == nil {
+-			continue
+-		}
+-		w := &req.m0.Worker
+-		if w.BatchSerial != 0 || serial == 0 || len(batch) > commitCombineMaxBatch {
+-			w.Invalid = true
+-		}
+-		w.BatchSerial, w.BatchIndex, w.BatchSize, w.Selected = serial, i, len(batch), selected
+-	}
+-}
+-
+-// One shared observation per batch boundary, copied to selected members only.
+-// Scans are cap64; unselected requests are never retained in a receipt.
+-func m0StampBatch(batch []*commitCombineReq, boundary string) {
+-	var owner *m0CombinerOwner
+-	var stamp m0CombinerStamp
+-	for _, req := range batch {
+-		if req == nil || req.m0 == nil {
+-			continue
+-		}
+-		s := req.m0
+-		if owner == nil {
+-			owner = s.owner
+-			stamp = owner.stamp()
+-		}
+-		w := &s.Worker
+-		if s.owner != owner {
+-			w.Invalid = true
+-		}
+-		var target *m0CombinerStamp
+-		switch boundary {
+-		case "APPLY_BEFORE":
+-			target = &w.ApplyBefore
+-		case "APPLY_AFTER":
+-			target = &w.ApplyAfter
+-		case "WRITE_BEFORE":
+-			target = &w.WriteBefore
+-		case "WRITE_AFTER":
+-			target = &w.WriteAfter
+-		case "CLOSE_BEFORE":
+-			target = &w.CloseBefore
+-		case "CLOSE_AFTER":
+-			target = &w.CloseAfter
+-		default:
+-			w.Invalid = true
+-		}
+-		if target != nil {
+-			if target.Valid {
+-				w.Invalid = true
+-			}
+-			*target = stamp
+-		}
+-	}
+-}
+-
+-func m0BatchErrors(batch []*commitCombineReq, kind string, writeErr, closeErr error, ignored bool) {
+-	for _, req := range batch {
+-		if req != nil && req.m0 != nil {
+-			w := &req.m0.Worker
+-			w.WriteKind = kind
+-			w.WriteError, w.CloseError = m0CombinerErrorCategory(writeErr), m0CombinerErrorCategory(closeErr)
+-			w.IgnoredCloseError = ignored
+-		}
+-	}
+-}
+-
+-func (s *m0CombinerSlot) sendBefore(dispatch string) {
+-	if s != nil {
+-		if s.Worker.SendBefore.Valid {
+-			s.Worker.Invalid = true
+-		}
+-		s.Worker.Dispatch = dispatch
+-		s.Worker.SendBefore = s.owner.stamp()
+-	}
+-}
+-
+-func (s *m0CombinerSlot) sendAfter() {
+-	if s != nil {
+-		s.Worker.SendAfter = s.owner.stamp()
+-		s.Worker.Terminal = true
+-	}
+-}
+-
+-// Call ONLY after the original foreground join. No worker field is read here.
+-// This nonblocking observation is NOT an observer-induced stop/join or retry.
+-func (o *m0CombinerOwner) originalDoneObserved(writerJoined bool) bool {
+-	if !writerJoined || !o.doneBound || o.doneInvalid || o.done == nil {
+-		return false
+-	}
+-	select {
+-	case <-o.done:
+-		return true
+-	default:
+-		return false
+-	}
+-}
+--- a/TreeDB/db/m0_combiner_observation_controls_test.go
++++ /dev/null
+@@ -1,495 +0,0 @@
+-package db
+-
+-import (
+-	"bytes"
+-	"errors"
+-	"fmt"
+-	"runtime"
+-	"testing"
+-
+-	"github.com/snissn/gomap/TreeDB/internal/mvccadmission"
+-)
+-
+-func TestM0CombinerOriginalProducerBranches(t *testing.T) {
+-	for _, name := range []string{"no_channel", "full", "unbuffered", "stopped", "saturated_stop", "read_only", "missing_db"} {
+-		t.Run(name, func(t *testing.T) {
+-			d := &DB{}
+-			switch name {
+-			case "full", "saturated_stop":
+-				d.combineReqCh = make(chan *commitCombineReq, 1)
+-				d.combineReqCh <- combinedTestReq("sentinel", "unchanged", false, false)
+-				d.combineStopCh = make(chan struct{})
+-			case "unbuffered", "stopped":
+-				d.combineReqCh = make(chan *commitCombineReq)
+-				d.combineStopCh = make(chan struct{})
+-			case "read_only":
+-				d.readOnly = true
+-			case "missing_db":
+-				d = nil
+-			}
+-			if name == "stopped" || name == "saturated_stop" {
+-				close(d.combineStopCh)
+-			}
+-			o := newM0CombinerOwner()
+-			s := o.slots[0].enter()
+-			handled, err := d.writeViaCommitCombinerWithM0Observation([]byte("key"), []byte("value"), false, false, mvccadmission.Input{}, s)
+-			if !handled {
+-				s.fallback() // Original API would now enter its direct write path.
+-			}
+-			s.returned(err)
+-			wantStatus, wantEnqueue := "DIRECT_FALLBACK", "NO_CHANNEL"
+-			switch name {
+-			case "full":
+-				wantEnqueue = "SATURATED_FALLBACK"
+-			case "unbuffered":
+-				wantEnqueue = "SEND_FALLBACK"
+-			case "stopped":
+-				wantStatus, wantEnqueue = "ORIGINAL_ERROR", "SEND_STOP"
+-			case "saturated_stop":
+-				wantStatus, wantEnqueue = "ORIGINAL_ERROR", "SATURATED_STOP"
+-			case "read_only", "missing_db":
+-				wantStatus, wantEnqueue = "ORIGINAL_ERROR", ""
+-			}
+-			status, validationErr := m0ValidateServiceSlot(s) // No worker exists.
+-			if validationErr != nil || status != wantStatus || s.Caller.EnqueueStatus != wantEnqueue || handled != (wantStatus == "ORIGINAL_ERROR") {
+-				t.Fatalf("handled=%v error=%v status=%s enqueue=%s validate=%v", handled, err, status, s.Caller.EnqueueStatus, validationErr)
+-			}
+-			if (name == "stopped" || name == "saturated_stop") && !errors.Is(err, errCommitCombinerClosed) {
+-				t.Fatalf("original closed error changed: %v", err)
+-			}
+-			if name == "read_only" && !errors.Is(err, ErrReadOnly) {
+-				t.Fatalf("original read-only error changed: %v", err)
+-			}
+-			if name == "full" || name == "saturated_stop" {
+-				if got := <-d.combineReqCh; string(got.key) != "sentinel" || len(d.combineReqCh) != 0 {
+-					t.Fatal("original queue sentinel changed")
+-				}
+-			}
+-		})
+-	}
+-}
+-
+-func TestM0CombinerObservedSetCheckedLifecycle(t *testing.T) {
+-	dir := t.TempDir()
+-	d, err := Open(Options{Dir: dir})
+-	if err != nil {
+-		t.Fatal(err)
+-	}
+-	closed := false
+-	defer func() {
+-		if !closed {
+-			if err := d.Close(); err != nil {
+-				t.Error(err)
+-			}
+-		}
+-	}()
+-	o := newM0CombinerOwner()
+-	for i, value := range []string{"first", "last"} {
+-		if err := d.setWithM0CombinerObservation([]byte("observed"), []byte(value), &o.slots[2*i]); err != nil {
+-			t.Fatal(err)
+-		}
+-	}
+-	if got, err := d.Get([]byte("observed")); err != nil || string(got) != "last" {
+-		t.Fatalf("acknowledged value=%q err=%v", got, err)
+-	}
+-	// Nil-slot SetSync and Delete retain their original shared producer paths.
+-	if err := d.SetSync([]byte("ordinary"), []byte("sync")); err != nil {
+-		t.Fatal(err)
+-	}
+-	if err := d.Delete([]byte("ordinary")); err != nil {
+-		t.Fatal(err)
+-	}
+-	if o.originalDoneObserved(false) {
+-		t.Fatal("missing original foreground join was accepted")
+-	}
+-	closed = true // Never retry an original Close error during cleanup.
+-	if err := d.Close(); err != nil {
+-		t.Fatal(err)
+-	}
+-	if !o.originalDoneObserved(true) {
+-		t.Fatal("original checked DB.Close did not publish borrowed worker done")
+-	}
+-	for _, ordinal := range []int{0, 2} {
+-		if status, err := m0ValidateServiceSlot(&o.slots[ordinal]); err != nil || status != "APPLIED_RESULT_RECEIVED" {
+-			t.Fatalf("ordinal=%d status=%s err=%v", ordinal, status, err)
+-		}
+-	}
+-	reopened, err := Open(Options{Dir: dir})
+-	if err != nil {
+-		t.Fatal(err)
+-	}
+-	defer func() {
+-		if err := reopened.Close(); err != nil {
+-			t.Error(err)
+-		}
+-	}()
+-	if got, err := reopened.Get([]byte("observed")); err != nil || string(got) != "last" {
+-		t.Fatalf("reopen acknowledged value=%q err=%v", got, err)
+-	}
+-	if got, err := reopened.Get([]byte("ordinary")); err != nil || got != nil {
+-		t.Fatalf("reopen ordinary delete value=%q err=%v", got, err)
+-	}
+-}
+-
+-func TestM0CombinerActualCollectApplyFinishDrain(t *testing.T) {
+-	for _, queued := range []int{0, 1, 63, 64, 129} {
+-		t.Run(fmt.Sprint(queued), func(t *testing.T) {
+-			d, err := Open(Options{Dir: t.TempDir()})
+-			if err != nil {
+-				t.Fatal(err)
+-			}
+-			d.stopCommitCombiner()
+-			defer func() {
+-				if err := d.Close(); err != nil {
+-					t.Error(err)
+-				}
+-			}()
+-			o := newM0CombinerOwner()
+-			queue := make(chan *commitCombineReq, queued+1)
+-			stop := make(chan struct{})
+-			requests := make([]*commitCombineReq, queued+1)
+-			for i := range requests {
+-				s := o.slots[i*2].enter()
+-				s.enqueueBefore()
+-				req := combinedTestReq(fmt.Sprint(i), "value", false, i == 1)
+-				req.m0 = s
+-				queue <- req
+-				s.enqueueOutcome("ENQUEUED")
+-				s.selectBefore()
+-				requests[i] = req
+-			}
+-			var scratch [commitCombineMaxBatch]*commitCombineReq
+-			first := <-queue
+-			first.m0.dequeued()
+-			scratch[0] = first
+-			batch, stopped := collectCombinedBatch(scratch[:1], queue, stop)
+-			n := min(len(requests), commitCombineMaxBatch)
+-			if stopped || len(batch) != n || len(queue) != len(requests)-n {
+-				t.Fatalf("actual ready-only collector len=%d stopped=%v queued=%d", len(batch), stopped, len(queue))
+-			}
+-			for i, req := range batch {
+-				if req != requests[i] {
+-					t.Fatalf("actual FIFO position %d changed", i)
+-				}
+-			}
+-			m0BindBatch(batch, 1)
+-			d.finishCombined(batch, d.applyCombinedBatch(batch))
+-			d.drainCombined(queue, errCommitCombinerClosed)
+-			// These helpers execute synchronously on this test owner, so no live
+-			// worker fields are read. Real worker publication is tested separately.
+-			for i, req := range requests {
+-				err := combinedTestResult(t, req)
+-				req.m0.selected("RESULT")
+-				req.m0.returned(err)
+-				status, validationErr := m0ValidateServiceSlot(req.m0)
+-				want := "APPLIED_RESULT_RECEIVED"
+-				if i >= n {
+-					want = "DRAINED_NOT_APPLIED"
+-					if !errors.Is(err, errCommitCombinerClosed) {
+-						t.Fatal("original drain error changed", err)
+-					}
+-				} else if err != nil {
+-					t.Fatal(err)
+-				}
+-				if validationErr != nil || status != want {
+-					t.Fatalf("request=%d status=%s validate=%v", i, status, validationErr)
+-				}
+-				if i < n && (req.m0.Worker.BatchIndex != i || req.m0.Worker.BatchSize != n || req.m0.Worker.Selected != n) {
+-					t.Fatal("actual batch membership not preserved")
+-				}
+-			}
+-			for i, req := range scratch {
+-				if req != nil {
+-					t.Fatalf("original finish retained scratch[%d]", i)
+-				}
+-			}
+-			if len(queue) != 0 {
+-				t.Fatal("original drain left queued requests")
+-			}
+-		})
+-	}
+-}
+-
+-func TestM0CombinerStopReturnSlotLifetime(t *testing.T) {
+-	queue := make(chan *commitCombineReq, 1)
+-	stop, done := make(chan struct{}), make(chan struct{})
+-	d := &DB{combineReqCh: queue, combineStopCh: stop, combineDoneCh: done}
+-	o := newM0CombinerOwner()
+-	s := o.slots[0].enter()
+-	allowDrain := make(chan struct{})
+-	workerErrors := make(chan error, 1)
+-	key, value := []byte("key"), []byte("value")
+-	go func() {
+-		defer close(done)
+-		// Existing fake-worker boundary: observe original owned request, stop
+-		// caller, then let the real drain helper own it. No production seam.
+-		req := <-queue
+-		close(stop)
+-		<-allowDrain
+-		if !bytes.Equal(req.key, []byte("key")) || !bytes.Equal(req.value, []byte("value")) || cap(req.result) != 1 || req.m0 != s {
+-			workerErrors <- errors.New("original owned copies/result buffer/slot binding changed")
+-		}
+-		queue <- req
+-		d.drainCombined(queue, errCommitCombinerClosed)
+-	}()
+-	handled, err := d.writeViaCommitCombinerWithM0Observation(key, value, false, false, mvccadmission.Input{}, s)
+-	s.returned(err)
+-	if !handled || !errors.Is(err, errCommitCombinerClosed) || s.Caller.Branch != "STOP" || o.originalDoneObserved(true) {
+-		// Always release the controlled worker before an assertion can unwind.
+-		close(allowDrain)
+-		<-done
+-		t.Fatalf("original stop behavior: handled=%v err=%v branch=%s", handled, err, s.Caller.Branch)
+-	}
+-	// Caller owns these originals again, while the worker still owns copies.
+-	key[0], value[0] = 'X', 'Y'
+-	close(allowDrain)
+-	<-done
+-	select {
+-	case err := <-workerErrors:
+-		t.Fatal(err)
+-	default:
+-	}
+-	if !o.originalDoneObserved(true) {
+-		t.Fatal("original done publication unavailable")
+-	}
+-	if status, err := m0ValidateServiceSlot(s); err != nil || status != "DRAINED_NOT_APPLIED" {
+-		t.Fatalf("post-stop service status=%s error=%v", status, err)
+-	}
+-}
+-
+-func m0ServiceModelSlot() *m0CombinerSlot {
+-	o := newM0CombinerOwner()
+-	s := &o.slots[0]
+-	stamp := func(ns int64) m0CombinerStamp { return m0CombinerStamp{NS: ns, Valid: true} }
+-	s.Caller = m0CombinerCaller{
+-		Entry: stamp(1), EnqueueBefore: stamp(2), EnqueueAfter: stamp(10),
+-		SelectBefore: stamp(11), SelectAfter: stamp(13), Return: stamp(14),
+-		EnqueueStatus: "ENQUEUED", Branch: "RESULT", Error: "NIL", Entered: true,
+-	}
+-	s.Worker = m0CombinerWorker{
+-		Dequeue: stamp(3), ApplyBefore: stamp(4), WriteBefore: stamp(5), WriteAfter: stamp(6),
+-		CloseBefore: stamp(7), CloseAfter: stamp(8), ApplyAfter: stamp(9),
+-		SendBefore: stamp(12), SendAfter: stamp(15), BatchSerial: 1,
+-		BatchSize: 1, Selected: 1, Dispatch: "APPLIED", WriteKind: "WRITE",
+-		WriteError: "NIL", CloseError: "NIL", Terminal: true,
+-	}
+-	return s
+-}
+-
+-func TestM0CombinerOverlapAndUnavailableControls(t *testing.T) {
+-	// Explicit MODEL of legal cross-owner ordering, not measured worker proof.
+-	if status, err := m0ValidateServiceSlot(m0ServiceModelSlot()); err != nil || status != "APPLIED_RESULT_RECEIVED" {
+-		t.Fatalf("legal E1>D / receive<S1 rejected: %s %v", status, err)
+-	}
+-	for _, tc := range []struct {
+-		name   string
+-		change func(*m0CombinerSlot)
+-	}{
+-		{"caller_invalid", func(s *m0CombinerSlot) { s.Caller.Invalid = true }},
+-		{"worker_invalid", func(s *m0CombinerSlot) { s.Worker.Invalid = true }},
+-		{"missing_terminal", func(s *m0CombinerSlot) { s.Worker.Terminal = false }},
+-		{"absent_clock", func(s *m0CombinerSlot) { s.Worker.Dequeue.Valid = false }},
+-		{"clock_regression", func(s *m0CombinerSlot) { s.Worker.WriteAfter.NS = 0 }},
+-		{"serial_overflow", func(s *m0CombinerSlot) { s.Worker.BatchSerial = 0 }},
+-		{"batch_bound", func(s *m0CombinerSlot) { s.Worker.BatchSize = 65 }},
+-		{"unknown_dispatch", func(s *m0CombinerSlot) { s.Worker.Dispatch = "unknown" }},
+-		{"unknown_write", func(s *m0CombinerSlot) { s.Worker.WriteKind = "unknown" }},
+-		{"unknown_enqueue", func(s *m0CombinerSlot) { s.Caller.EnqueueStatus = "unknown" }},
+-		{"unknown_error", func(s *m0CombinerSlot) { s.Caller.Error = "unknown" }},
+-		{"ordinal_bound", func(s *m0CombinerSlot) { s.Ordinal = 4096 }},
+-		{"odd_binding", func(s *m0CombinerSlot) { s.Ordinal = 1 }},
+-		{"duplicate_binding", func(s *m0CombinerSlot) { s.enter() }},
+-	} {
+-		t.Run(tc.name, func(t *testing.T) {
+-			s := m0ServiceModelSlot()
+-			tc.change(s)
+-			if _, err := m0ValidateServiceSlot(s); err == nil {
+-				t.Fatal("invalid diagnostic model accepted")
+-			}
+-		})
+-	}
+-}
+-
+-func TestM0CombinerDoneClosureIsNotSuccess(t *testing.T) {
+-	for _, goexit := range []bool{false, true} {
+-		t.Run(fmt.Sprintf("goexit_%t", goexit), func(t *testing.T) {
+-			s := m0ServiceModelSlot()
+-			s.Worker.Terminal = false
+-			done := make(chan struct{})
+-			s.owner.done, s.owner.doneBound = done, true
+-			go func() {
+-				defer close(done)
+-				// Outer TEST boundary only. Product combiner has no recovery or
+-				// fault hook; actual inner panic/Close injection is not qualified.
+-				defer func() { _ = recover() }()
+-				if goexit {
+-					runtime.Goexit()
+-				}
+-				panic("test boundary unwind")
+-			}()
+-			<-done
+-			if !s.owner.originalDoneObserved(true) {
+-				t.Fatal("test boundary closure not observed")
+-			}
+-			if _, err := m0ValidateServiceSlot(s); err == nil {
+-				t.Fatal("done closure fabricated terminal service success")
+-			}
+-		})
+-	}
+-}
+-
+-func m0ServicePopulationFixture() (*m0CombinerOwner, *m0OrdinalObserver) {
+-	o := newM0CombinerOwner()
+-	ordinals := m0CompleteOrdinalFixture()
+-	model := m0ServiceModelSlot()
+-	for i := range o.slots {
+-		if i%2 == 0 {
+-			o.slots[i].Caller = model.Caller
+-			o.slots[i].Worker = model.Worker
+-			o.slots[i].Worker.BatchSerial = uint64(i/4 + 1)
+-			o.slots[i].Worker.BatchIndex = (i / 2) % 2
+-			o.slots[i].Worker.BatchSize, o.slots[i].Worker.Selected = 2, 2
+-		}
+-	}
+-	return o, ordinals
+-}
+-
+-func TestM0CombinerPopulationAndSharedReceiptControls(t *testing.T) {
+-	o, ordinals := m0ServicePopulationFixture()
+-	rows, err := m0ServiceRows(o, ordinals)
+-	if err != nil || len(rows) != 4096 {
+-		t.Fatalf("full bounded population: rows=%d error=%v", len(rows), err)
+-	}
+-	points, ranges := 0, 0
+-	for i, row := range rows {
+-		if row.Ordinal != i || row.OriginalDurationNS != ordinals.records[i].DurationNS || row.OriginalRegion != ordinals.records[i].Region {
+-			t.Fatal("original ordinal/timing/region binding changed")
+-		}
+-		if i%2 == 0 && row.Status == "APPLIED_RESULT_RECEIVED" {
+-			points++
+-		} else if i%2 != 0 && row.Status == "NON_COMBINER" {
+-			ranges++
+-		} else {
+-			t.Fatalf("population status at %d=%s", i, row.Status)
+-		}
+-	}
+-	if points != 2048 || ranges != 2048 {
+-		t.Fatal("4096/2048/2048 population changed")
+-	}
+-	for _, tc := range []struct {
+-		name   string
+-		change func(*m0CombinerOwner, *m0OrdinalObserver)
+-	}{
+-		{"duplicate_position", func(o *m0CombinerOwner, _ *m0OrdinalObserver) { o.slots[2].Worker.BatchIndex = 0 }},
+-		{"conflicting_shared_time", func(o *m0CombinerOwner, _ *m0OrdinalObserver) { o.slots[2].Worker.ApplyBefore.NS++ }},
+-		{"missing_member", func(o *m0CombinerOwner, _ *m0OrdinalObserver) { o.slots[2].Worker.BatchSerial = 2049 }},
+-		{"odd_service", func(o *m0CombinerOwner, _ *m0OrdinalObserver) { o.slots[1].Caller.Entered = true }},
+-		{"mixed_owner", func(o *m0CombinerOwner, _ *m0OrdinalObserver) { o.slots[0].owner = newM0CombinerOwner() }},
+-		{"identity", func(o *m0CombinerOwner, _ *m0OrdinalObserver) { o.slots[0].Ordinal = 2 }},
+-		{"original_kind", func(_ *m0CombinerOwner, ordinals *m0OrdinalObserver) { ordinals.records[0].Kind = "delete-range" }},
+-	} {
+-		t.Run(tc.name, func(t *testing.T) {
+-			o, ordinals := m0ServicePopulationFixture()
+-			tc.change(o, ordinals)
+-			if _, err := m0ServiceRows(o, ordinals); err == nil {
+-				t.Fatal("invalid population/shared receipt accepted")
+-			}
+-		})
+-	}
+-}
+-
+-func TestM0CombinerZeroValidClockAndDoneBorrowControls(t *testing.T) {
+-	s := m0ServiceModelSlot()
+-	for _, stamp := range []*m0CombinerStamp{
+-		&s.Caller.Entry, &s.Caller.EnqueueBefore, &s.Caller.EnqueueAfter,
+-		&s.Caller.SelectBefore, &s.Caller.SelectAfter, &s.Caller.Return,
+-		&s.Worker.Dequeue, &s.Worker.ApplyBefore, &s.Worker.ApplyAfter,
+-		&s.Worker.WriteBefore, &s.Worker.WriteAfter, &s.Worker.CloseBefore,
+-		&s.Worker.CloseAfter, &s.Worker.SendBefore, &s.Worker.SendAfter,
+-	} {
+-		stamp.NS, stamp.Valid = 0, true
+-	}
+-	if _, err := m0ValidateServiceSlot(s); err != nil {
+-		t.Fatal("valid zero observation treated as unavailable", err)
+-	}
+-	done := make(chan struct{})
+-	s.borrowDone(done)
+-	if s.owner.originalDoneObserved(true) {
+-		t.Fatal("open borrowed done accepted")
+-	}
+-	close(done)
+-	if s.owner.originalDoneObserved(false) || !s.owner.originalDoneObserved(true) {
+-		t.Fatal("original foreground/worker join conjunction changed")
+-	}
+-	other := make(chan struct{})
+-	close(other)
+-	s.borrowDone(other)
+-	if s.owner.originalDoneObserved(true) {
+-		t.Fatal("mixed original worker lifetimes accepted")
+-	}
+-}
+-
+-func TestM0CombinerObservedOriginalSyncFailure(t *testing.T) {
+-	d, err := Open(Options{Dir: t.TempDir()})
+-	if err != nil {
+-		t.Fatal(err)
+-	}
+-	d.stopCommitCombiner()
+-	queue := make(chan *commitCombineReq, 3)
+-	stop, done := make(chan struct{}), make(chan struct{})
+-	o := newM0CombinerOwner()
+-	requests := make([]*commitCombineReq, 3)
+-	for i := range requests {
+-		s := o.slots[i*2].enter()
+-		s.borrowDone(done)
+-		s.enqueueBefore()
+-		req := combinedTestReq(fmt.Sprint(i), "value", false, i == 1)
+-		req.m0 = s
+-		queue <- req
+-		s.enqueueOutcome("ENQUEUED")
+-		s.selectBefore()
+-		requests[i] = req
+-	}
+-	d.testFailSyncMeta.Store(true) // Existing physical meta-sync failpoint only.
+-	go d.commitCombinerLoop(queue, stop, done)
+-	defer func() {
+-		close(stop)
+-		<-done
+-		d.testFailSyncMeta.Store(false)
+-		if !o.originalDoneObserved(true) {
+-			t.Error("original error-path worker join unavailable")
+-		}
+-		for _, req := range requests {
+-			if req.m0.Caller.Return.Valid {
+-				status, validationErr := m0ValidateServiceSlot(req.m0)
+-				if validationErr != nil || status != "APPLIED_RESULT_RECEIVED" || req.m0.Worker.WriteKind != "WRITE_SYNC" || req.m0.Worker.WriteError != "OTHER" || req.m0.Worker.CloseError != "NIL" {
+-					t.Errorf("actual error-path service: status=%s error=%v worker=%+v", status, validationErr, req.m0.Worker)
+-				}
+-			}
+-		}
+-		// Intentional postinstall poison may make Close fail. Retain its actual
+-		// return separately; this error-path control never claims clean Close.
+-		if closeErr := d.Close(); closeErr != nil {
+-			t.Logf("original checked Close after injected sync failure: %v", closeErr)
+-		}
+-	}()
+-	var firstErr error
+-	for _, req := range requests {
+-		err := combinedTestResult(t, req)
+-		req.m0.selected("RESULT")
+-		req.m0.returned(err)
+-		if !errors.Is(err, errTestSyncMetaFailpoint) {
+-			t.Fatalf("original physical sync failure changed: %v", err)
+-		}
+-		if firstErr == nil {
+-			firstErr = err
+-		} else if err != firstErr {
+-			t.Fatal("original batch error fanout changed")
+-		}
+-	}
+-	// Deferred validation observes the original worker join before any worker
+-	// fields, then records the original checked Close once. No live slot read.
+-	if !d.publicationPoisoned.Load() {
+-		t.Fatal("original postinstall publication poison missing")
+-	}
+-}
+--- a/TreeDB/db/m0_combiner_observer_test.go
++++ /dev/null
+@@ -1,215 +0,0 @@
+-package db
+-
+-import (
+-	"encoding/json"
+-	"errors"
+-	"fmt"
+-	"path/filepath"
+-	"runtime/trace"
+-	"testing"
+-)
+-
+-// The maintained runner admits exactly one selected benchmark/count/iteration.
+-// This single root is assigned before ResetTimer and never cleared, including
+-// failed join/Close. It performs no request matching or producer notification.
+-var m0ServiceProcessOwner *m0CombinerOwner
+-
+-type m0CombinerRow struct {
+-	Iteration          int
+-	Ordinal            int
+-	Kind               string
+-	OriginalRegion     string
+-	OriginalDurationNS int64
+-	Status             string
+-	Caller             m0CombinerCaller
+-	Worker             m0CombinerWorker
+-}
+-
+-func m0StampOrder(stamps ...m0CombinerStamp) bool {
+-	var previous int64
+-	for i, stamp := range stamps {
+-		if !stamp.Valid || stamp.NS < 0 || (i != 0 && stamp.NS < previous) {
+-			return false
+-		}
+-		previous = stamp.NS
+-	}
+-	return true
+-}
+-
+-func m0KnownError(category string) bool {
+-	return category == "NIL" || category == "COMBINER_CLOSED" || category == "READ_ONLY" || category == "OTHER"
+-}
+-
+-// ONLY called after the original foreground join AND original worker done.
+-// E1>D and caller receive<S1 are legal; no cross-owner bracket ordering test.
+-func m0ValidateServiceSlot(s *m0CombinerSlot) (string, error) {
+-	if s.Ordinal < 0 || s.Ordinal >= m0CombinerOrdinalLimit || s.Iteration != 0 {
+-		return "INCOMPLETE", errors.New("M0 service identity outside fixed population")
+-	}
+-	c, w := s.Caller, s.Worker
+-	if s.Ordinal%2 != 0 {
+-		if s.Kind != "delete-range" || c != (m0CombinerCaller{}) || w != (m0CombinerWorker{}) {
+-			return "INCOMPLETE", errors.New("M0 non-combiner ordinal acquired service fields")
+-		}
+-		return "NON_COMBINER", nil
+-	}
+-	if s.Kind != "set" || !c.Entered || c.Invalid || w.Invalid || !m0StampOrder(c.Entry, c.Return) || !m0KnownError(c.Error) {
+-		return "INCOMPLETE", errors.New("M0 service caller incomplete/invalid")
+-	}
+-	if c.EnqueueBefore.Valid && !m0StampOrder(c.Entry, c.EnqueueBefore, c.EnqueueAfter, c.Return) {
+-		return "INCOMPLETE", errors.New("M0 caller enqueue observations regress or are absent")
+-	}
+-	if c.EnqueueStatus != "ENQUEUED" {
+-		if w != (m0CombinerWorker{}) || c.SelectBefore.Valid || c.SelectAfter.Valid {
+-			return "INCOMPLETE", errors.New("M0 non-enqueued request acquired worker/select fields")
+-		}
+-		switch c.EnqueueStatus {
+-		case "NO_CHANNEL", "SATURATED_FALLBACK", "SEND_FALLBACK":
+-			if c.Branch == "DIRECT_FALLBACK" && c.EnqueueBefore.Valid == (c.EnqueueStatus == "SEND_FALLBACK") && c.EnqueueAfter.Valid == c.EnqueueBefore.Valid {
+-				return "DIRECT_FALLBACK", nil
+-			}
+-		case "SATURATED_STOP", "SEND_STOP":
+-			if c.Branch == "EARLY_RETURN" && c.Error == "COMBINER_CLOSED" && c.EnqueueBefore.Valid == (c.EnqueueStatus == "SEND_STOP") && c.EnqueueAfter.Valid == c.EnqueueBefore.Valid {
+-				return "ORIGINAL_ERROR", nil
+-			}
+-		case "":
+-			if c.Branch == "EARLY_RETURN" && c.Error != "NIL" && !c.EnqueueBefore.Valid && !c.EnqueueAfter.Valid {
+-				return "ORIGINAL_ERROR", nil
+-			}
+-		}
+-		return "INCOMPLETE", errors.New("M0 unknown/inconsistent non-enqueued branch")
+-	}
+-	if !m0StampOrder(c.Entry, c.EnqueueBefore, c.EnqueueAfter, c.SelectBefore, c.SelectAfter, c.Return) || (c.Branch != "RESULT" && c.Branch != "STOP") {
+-		return "INCOMPLETE", errors.New("M0 enqueued caller select incomplete/invalid")
+-	}
+-	if c.Branch == "STOP" && c.Error != "COMBINER_CLOSED" {
+-		return "INCOMPLETE", errors.New("M0 stop branch changed original error")
+-	}
+-	if !w.Terminal || !m0StampOrder(w.Dequeue, w.SendBefore, w.SendAfter) {
+-		return "INCOMPLETE", errors.New("M0 worker terminal/result delivery absent")
+-	}
+-	switch w.Dispatch {
+-	case "APPLIED":
+-		if w.BatchSerial == 0 || w.BatchSize < 1 || w.BatchSize > commitCombineMaxBatch || w.BatchIndex < 0 || w.BatchIndex >= w.BatchSize || w.Selected < 1 || w.Selected > w.BatchSize {
+-			return "INCOMPLETE", errors.New("M0 batch identity/bounds invalid")
+-		}
+-		if !m0StampOrder(w.Dequeue, w.ApplyBefore, w.CloseBefore, w.CloseAfter, w.ApplyAfter, w.SendBefore, w.SendAfter) || !m0KnownError(w.WriteError) || !m0KnownError(w.CloseError) {
+-			return "INCOMPLETE", errors.New("M0 apply/Close/error observations incomplete")
+-		}
+-		if w.WriteKind == "SETUP" {
+-			if !w.IgnoredCloseError || w.WriteBefore.Valid || w.WriteAfter.Valid || w.WriteError == "NIL" {
+-				return "INCOMPLETE", errors.New("M0 setup-error original ignored Close contract changed")
+-			}
+-		} else if (w.WriteKind != "WRITE" && w.WriteKind != "WRITE_SYNC") || w.IgnoredCloseError || !m0StampOrder(w.ApplyBefore, w.WriteBefore, w.WriteAfter, w.CloseBefore) {
+-			return "INCOMPLETE", errors.New("M0 original Write/WriteSync observations incomplete")
+-		}
+-		if c.Branch == "STOP" {
+-			return "STOP_RETURN_PENDING_SERVICE", nil
+-		}
+-		wantError := w.WriteError
+-		if wantError == "NIL" {
+-			wantError = w.CloseError
+-		}
+-		if c.Error != wantError {
+-			return "INCOMPLETE", errors.New("M0 original result error precedence/category changed")
+-		}
+-		return "APPLIED_RESULT_RECEIVED", nil
+-	case "DRAINED":
+-		if w.BatchSerial != 0 || w.BatchIndex != 0 || w.BatchSize != 0 || w.Selected != 0 || w.ApplyBefore.Valid || w.ApplyAfter.Valid || w.WriteBefore.Valid || w.WriteAfter.Valid || w.CloseBefore.Valid || w.CloseAfter.Valid || w.WriteKind != "" || w.WriteError != "" || w.CloseError != "" || w.IgnoredCloseError || c.Error != "COMBINER_CLOSED" {
+-			return "INCOMPLETE", errors.New("M0 drained request acquired application evidence")
+-		}
+-		return "DRAINED_NOT_APPLIED", nil
+-	default:
+-		return "INCOMPLETE", errors.New("M0 unknown dispatch")
+-	}
+-}
+-
+-func m0ServiceRows(o *m0CombinerOwner, ordinals *m0OrdinalObserver) ([]m0CombinerRow, error) {
+-	rows := make([]m0CombinerRow, m0CombinerOrdinalLimit)
+-	type batchEvidence struct {
+-		worker m0CombinerWorker
+-		seen   [commitCombineMaxBatch]bool
+-		count  int
+-	}
+-	batches := make(map[uint64]*batchEvidence)
+-	for i := range o.slots {
+-		s := &o.slots[i]
+-		if s.owner != o || s.Ordinal != i || ordinals.records[i].Ordinal != i || ordinals.records[i].Kind != s.Kind {
+-			return nil, fmt.Errorf("M0 ordinal/service binding mismatch at %d", i)
+-		}
+-		status, err := m0ValidateServiceSlot(s)
+-		if err != nil {
+-			return nil, fmt.Errorf("M0 service ordinal %d: %w", i, err)
+-		}
+-		if s.Worker.Dispatch == "APPLIED" {
+-			w := s.Worker
+-			evidence := batches[w.BatchSerial]
+-			if evidence == nil {
+-				evidence = &batchEvidence{worker: w}
+-				batches[w.BatchSerial] = evidence
+-			}
+-			same := evidence.worker
+-			if evidence.seen[w.BatchIndex] || same.BatchSize != w.BatchSize || same.Selected != w.Selected || same.ApplyBefore != w.ApplyBefore || same.ApplyAfter != w.ApplyAfter || same.WriteBefore != w.WriteBefore || same.WriteAfter != w.WriteAfter || same.CloseBefore != w.CloseBefore || same.CloseAfter != w.CloseAfter || same.WriteKind != w.WriteKind || same.WriteError != w.WriteError || same.CloseError != w.CloseError || same.IgnoredCloseError != w.IgnoredCloseError {
+-				return nil, errors.New("M0 duplicate batch position or conflicting shared service receipt")
+-			}
+-			evidence.seen[w.BatchIndex] = true
+-			evidence.count++
+-		}
+-		rows[i] = m0CombinerRow{s.Iteration, s.Ordinal, s.Kind, ordinals.records[i].Region, ordinals.records[i].DurationNS, status, s.Caller, s.Worker}
+-	}
+-	for _, evidence := range batches {
+-		if evidence.count != evidence.worker.Selected {
+-			return nil, errors.New("M0 batch selected-member population incomplete")
+-		}
+-	}
+-	return rows, nil
+-}
+-
+-func (o *m0OrdinalObserver) finishCombinerService(b *testing.B, closeErr error) {
+-	if o.service == nil {
+-		return
+-	}
+-	if !o.timerStopped {
+-		b.Error("M0 service receipt withheld: original timer stop unreached")
+-		return // No diagnostic serialization/I/O inside the original timer.
+-	}
+-	value := struct {
+-		Schema, Status, Reason string
+-		DiagnosticOnly         bool
+-		OriginalWriterJoined   bool
+-		OriginalDoneObserved   bool
+-		OriginalCloseReturned  bool
+-		OriginalCloseError     string
+-		Rows                   []m0CombinerRow
+-		Interpretation         string
+-	}{Schema: "m0-combiner-service-observer-v1", Status: "INCOMPLETE", DiagnosticOnly: true,
+-		OriginalWriterJoined: o.joined, OriginalCloseReturned: true, OriginalCloseError: m0CombinerErrorCategory(closeErr),
+-		Interpretation: "Instrumented diagnostic only. One Go monotonic origin; observation brackets are not primitive transition timestamps. E1 may exceed dequeue and receive may precede send-after. Dequeue delay has no positive lower-bound interpretation. Batch service includes scheduling; nested Write/Close intervals and shared batch rows must not be summed as exclusive per-request service. Original closed trace/source/ELF binding remains external. No M0 CV acceptance or CPU/lock-owner causal claim."}
+-	value.OriginalDoneObserved = o.service.originalDoneObserved(o.joined)
+-	var validationErr error
+-	if !value.OriginalDoneObserved {
+-		// Do NOT inspect or serialize ANY worker fields. Process retention root
+-		// remains live even if original Close returned an error or failed to join.
+-		validationErr = errors.New("M0 original writer/worker joins unavailable; rows withheld and owner retained")
+-	} else if err := o.validate(closeErr, b.Failed(), trace.IsEnabled()); err != nil {
+-		validationErr = err
+-	} else {
+-		value.Rows, validationErr = m0ServiceRows(o.service, o)
+-		if validationErr == nil {
+-			value.Status = "SERVICE_ROWS_COMPLETE_TRACE_ARTIFACT_VALIDATION_PENDING"
+-		}
+-	}
+-	if validationErr != nil {
+-		value.Reason = validationErr.Error()
+-	}
+-	data, err := json.MarshalIndent(value, "", "  ")
+-	if err == nil {
+-		err = m0OrdinalWrite(filepath.Join(o.dir, "m0-combiner-service.json"), data)
+-	}
+-	if err != nil {
+-		b.Error("M0 service receipt write failed", err)
+-	}
+-	if validationErr != nil {
+-		b.Error(validationErr)
+-	}
+-}
+--- a/TreeDB/db/vacuum_m0_ordinal_observer_test.go
++++ b/TreeDB/db/vacuum_m0_ordinal_observer_test.go
+@@ -34,7 +34,6 @@
+ }
+ 
+ type m0OrdinalObserver struct {
+-	service                                              *m0CombinerOwner
+ 	dir                                                  string
+ 	ctx                                                  context.Context
+ 	records                                              [m0OrdinalLimit]m0OrdinalRecord
+@@ -78,13 +77,6 @@
+ 		b.Fatal("M0 observer output directory missing", err)
+ 	}
+ 	o := newM0OrdinalRecords() // All 4096 records and labels precede ResetTimer.
+-	if m0ServiceProcessOwner != nil {
+-		b.Fatal("M0 service overlay admits one observer lifetime per process")
+-	}
+-	o.service = newM0CombinerOwner()
+-	// One process-lifetime retention root, not a request lookup/registry/hook.
+-	// Never clear it: even an incomplete original join may still own slots.
+-	m0ServiceProcessOwner = o.service
+ 	o.dir = *m0OrdinalObserverDir
+ 	o.traceEnabledAtStart = true
+ 	return o
+@@ -156,7 +148,6 @@
+ 	if o == nil {
+ 		return
+ 	}
+-	defer o.finishCombinerService(b, closeErr)
+ 	// An original early fatal is retained by raw logs, not turned into a
+ 	// successful zero-work packet. Never write while its timer is still active.
+ 	if !o.timerStopped {
+@@ -312,11 +303,7 @@
+ 		if operation%2 == 0 {
+ 			key := []byte(fmt.Sprintf("foreground/point/%06d", operation%256))
+ 			value := []byte(fmt.Sprintf("value/%06d", operation))
+-			if observer.service == nil {
+-				result.err = db.Set(key, value)
+-			} else {
+-				result.err = db.setWithM0CombinerObservation(key, value, &observer.service.slots[operation])
+-			}
++			result.err = db.Set(key, value)
+ 			result.points++
+ 		} else {
+ 			batch := db.NewBatch()

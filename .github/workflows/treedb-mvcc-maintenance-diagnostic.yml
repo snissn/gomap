@@ -1,4 +1,4 @@
-name: 'TreeDB: one M0 ordinal trace (manual diagnostic only)'
+name: 'TreeDB: one M0 combiner service/ordinal trace (manual diagnostic only)'
 on:
   workflow_dispatch:
     inputs:
@@ -22,8 +22,8 @@ permissions:
   contents: read
 jobs:
   diagnostic:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/diagnostic/m0-operation-trace-01' && github.actor_id == '1981537' && github.run_attempt == 1
-    name: exact4934 one production bytes_1x M0 ordinal trace
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/diagnostic/m0-combiner-operation-capture-01' && github.actor_id == '1981537' && github.run_attempt == 1
+    name: exact4934 one production bytes_1x M0 combiner/ordinal trace
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
@@ -50,9 +50,9 @@ jobs:
             'authority':'ROOT','authority_thread':'01a18e7c-8c23-7fd2-8d55-b0486d938cd3',
             'actor_id':'1981537','expected_head':os.environ['GITHUB_SHA'],'run_attempt':'1',
             'independent_binding_review_head':os.environ['GITHUB_SHA'],'independent_binding_review_status':'READY_SOURCE_ONLY',
-            'controls_pass_sha256':'5fbc92847359e709fe9ef7812786ff469f9892dedf9e4c81d27a3183e67245c5',
-            'owner_manifest_sha256':'86f4ee083aba9e2f2dbdb87abf9ec5be9eb13d416e1bafd25f7b61139e317aa3',
-            'owner_review_sha256':'863afc8d80a3f68f767b8be0f8f810f5ab646a5c1e256ea674b7894a97ef883a',
+            'controls_pass_sha256':'ed5c3761d40fb3319b8303eaf62a3546ab9d6c4e4c631464de23b0be6f0cfd2b',
+            'owner_manifest_sha256':'ca51c90ae96fcb04ed5764e9acd3d79a01983d0bfe99d2107a9ee7912b5938b5',
+            'owner_review_sha256':'405124015cb24de0d4efcdd583f0c45e2ef3b51521efced31cdcc9c54cd757c0',
             'allow_product_capture':True,'only_capture':'M0_bytes_1x_N1_4096'}
           assert all(admission.get(k)==v for k,v in expected.items())
           encoded_review=os.environ['M0_BINDING_REVIEW_B64'];assert len(encoded_review)<=24000
@@ -63,12 +63,14 @@ jobs:
           raw=base64.b64decode(encoded,validate=True);assert len(raw)<=16384
           controls=json.loads(raw);assert type(controls) is dict
           assert controls.get('authority_thread')=='01a18e7c-8c23-7fd2-8d55-b0486d938cd3','controls immutable ROOT authority thread'
-          assert hashlib.sha256(raw).hexdigest()==admission.get('controls_pass_sha256')=='5fbc92847359e709fe9ef7812786ff469f9892dedf9e4c81d27a3183e67245c5'
+          assert hashlib.sha256(raw).hexdigest()==admission.get('controls_pass_sha256')=='ed5c3761d40fb3319b8303eaf62a3546ab9d6c4e4c631464de23b0be6f0cfd2b'
           required={'schema':'root-primary-m0-controls-pass-v1','status':'ROOT_NORMAL_RACE_CONTROLS_ADMITTED',
-            'actor_id':'1981537','authority_thread':'01a18e7c-8c23-7fd2-8d55-b0486d938cd3','producer_head':'ee6c3880e1b0ec6d7e490232f3a3de45643a455e',
-            'producer_tree':'ffc790f080c04708d9363d375f9b380d7430350a',
-            'owner_manifest_sha256':'86f4ee083aba9e2f2dbdb87abf9ec5be9eb13d416e1bafd25f7b61139e317aa3',
-            'normal':{'tops':6,'outcomes':26,'leaves':24},'race':{'tops':6,'outcomes':26,'leaves':24},
+            'actor_id':'1981537','authority_thread':'01a18e7c-8c23-7fd2-8d55-b0486d938cd3','producer_head':'eaf4e6ad6688dcb1ddb0748243f1f1609c1c3764',
+            'producer_tree':'5fd41b42289a16d1391def5d3fdbc4780bdd17b4',
+            'owner_manifest_sha256':'ca51c90ae96fcb04ed5764e9acd3d79a01983d0bfe99d2107a9ee7912b5938b5',
+            'owner_source_review_sha256':'405124015cb24de0d4efcdd583f0c45e2ef3b51521efced31cdcc9c54cd757c0',
+            'independent_review_sha256':'958811fd4b5c0a25ada2595567b1c70f5fa2fbf90cff67c1e6b76da1dd39b9e4',
+            'normal':{'tops':24,'outcomes':82,'leaves':74},'race':{'tops':24,'outcomes':82,'leaves':74},
             'literal_normal_exit':0,'literal_race_exit':0,'positive_outer_guard_cleanup':True,'product_capture':False}
           assert type(controls) is dict and all(type(controls.get(k)) is type(v) and controls[k]==v for k,v in required.items())
           assert all(type(controls.get(k)) is int and controls[k]>0 for k in ('run_id','artifact_id'))

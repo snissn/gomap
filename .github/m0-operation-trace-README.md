@@ -2,7 +2,7 @@
 
 This branch replaces only the registered manual maintenance entrypoint. It is
 not a required CI predicate or an M0 CV acceptance run. Dispatch is restricted to
-`diagnostic/m0-operation-trace-01`, ROOT actor ID `1981537`, attempt 1, and an
+`diagnostic/m0-combiner-operation-capture-01`, ROOT actor ID `1981537`, attempt 1, and an
 independently reviewed full commit equal to both `GITHUB_SHA` and
 `github.workflow_sha`. ROOT alone publishes, admits and dispatches it. Both workflow pre-helper and
 worker admission require immutable ROOT authority thread
@@ -10,37 +10,19 @@ worker admission require immutable ROOT authority thread
 
 ## Source and prerequisite
 
-Product source is exactly `4934bd6d51d9047ba0187d05c1d211cbe419811a`, tree
-`7f30f92674110a4544a381468677183ab3133406`. Only the corrected owner's `m0.C`
-map applies: the original collection vacuum benchmark and its test-only ordinal
-observer. No PRIMARY, caching, DB production, race or test-fixture overlay is
-used. The source is a verified sparse Git checkout, with only the four established
-large evidence/benchmark documentation directories excluded, and no archive
-fallback. The original benchmark preimage is authenticated before overlaying it.
+Product4934bd6d51d9047ba0187d05c1d211cbe419811a/tree7f30f92674110a4544a381468677183ab3133406 remains fixed. The selected private diagnostic bridge is indivisible: exactly seven replacements in `.github/m0-combiner-fixture/overlay-map.json`, including api.go, commit_combiner.go, the private bridge, its controls, service exporter and the original ordinal benchmark/helper. The original4934 preimage/absence of every replacement and all seven preserved dependencies are checked before compiling the full package. No old two-overlay map, PRIMARY overlay, partial method transplant or product optimization is admitted.
 
-Owner manifest `86f4ee083aba9e2f2dbdb87abf9ec5be9eb13d416e1bafd25f7b61139e317aa3`
-and format review `863afc8d80a3f68f767b8be0f8f810f5ab646a5c1e256ea674b7894a97ef883a`
-are fixed inputs. Every active helper/overlay input in `m0-trace-inputs.json` is
-hashed before helper import. Its own identity is bound by the reviewed clean
-Git commit, without a circular self hash. Existing unused controls/PRIMARY files
-in that tree are not executed or applied.
+Owner manifest ca51c90ae96fcb04ed5764e9acd3d79a01983d0bfe99d2107a9ee7912b5938b5 and independent source review405124015cb24de0d4efcdd583f0c45e2ef3b51521efced31cdcc9c54cd757c0 are immutable. Every active helper/overlay/metadata input is size/SHA bound before imports through m0-trace-inputs.json and the reviewed exact Git commit. Dormant old observer files are not applied or imported.
 
-**Not launchable from source review alone.** A separate ROOT-admitted actual
-controls receipt must bind producer `ee6c3880e1b0ec6d7e490232f3a3de45643a455e`,
-tree `ffc790f080c04708d9363d375f9b380d7430350a`, both normal and race exact
-6 tops/26 outcomes/24 leaves, literal exits zero and positive outer guard
-cleanup. It must include actual run/artifact identities and independent review.
-The earlier 42b6 normal timeout, unentered DB/race controls, and outer guard
-failure remain adverse. Empty signal arrays were not a drain certificate.
-The workflow checks a SHA-bound base64 ROOT receipt before checkout/setup; the
-entrypoint rechecks it before imports, source acquisition or Go. The actual ROOT-admitted controls receipt is now fixed at SHA
-`5fbc92847359e709fe9ef7812786ff469f9892dedf9e4c81d27a3183e67245c5`
-(run 41940783159, job 126960744638, artifact 13377165673), with normal/race
-6/26/24 and positive maintained guard cleanup. Its bytes must match that exact
-SHA in workflow and worker, as well as ROOT admission. The receipt is supplied
-as an input, not copied into a circular source/review seal. It admits controls
-only; this source still requires its own final independent READY review and
-separate ROOT capture admission.
+The actual bridge controls producer eaf4e6ad6688dcb1ddb0748243f1f1609c1c3764 / tree5fd41b42289a16d1391def5d3fdbc4780bdd17b4 ran41969672803/job127054731875. Independent original-artifact review958811fd4b5c0a25ada2595567b1c70f5fa2fbf90cff67c1e6b76da1dd39b9e4 admitted normal AND race82names/24tops/74leaves, all15stages normal/joined/zero and positive maintained guard. Artifact13389282854/SHA19ec98a2106180a3ee38c9206153f8fe91ed1af66d585ed21cbb9e332865ec1d is controls-only, not a capture or timing certificate. ROOT canonical controls receipt ed5c3761d40fb3319b8303eaf62a3546ab9d6c4e4c631464de23b0be6f0cfd2b is mandatory in workflow and worker before any helper; ROOT must also bind the final independent binding review before a separate one-capture admission. Source review and matching self-declared strings do not provide runtime authority.
+
+## Private service receipt
+
+The existing benchmark's checked Close defer invokes export only after original foreground join, timer stop, Stats/exposure checks and nonblocking observation of the borrowed original worker done. Missing join/done/Close prevents complete rows; no new wait or worker is added. Caller/worker mutate disjoint slots and original channel/join/done edges publish them. The retained process-lifetime owner is never recycled. See the accepted owner's decision for exact source/lifetime limits.
+
+The original ordinal/trace bijection remains mandatory. `m0-combiner-service.json` additionally supplies all4096 matching original regions/durations:2048 even Set and2048 odd DeleteRange NON_COMBINER rows. The consumer validates caller/worker fields, explicit timestamp validity, original error/branch categories, selected batch positions/counts/shared-time equality and lifecycle. The complete per-operation output and deduplicated shared batches are retained in combiner-service-validation.json. Zero valid timestamps and cross-owner enqueue-after>dequeue / receive<send-after are legal. A successful ordinal receipt precludes errors, stopped/drained or setup-error service rows; actual fallback stays explicit, with no fabricated service.
+
+Caller select, worker apply, Write/WriteSync and checked batch Close are inclusive wall brackets with observer/scheduler overlap. Shared batch rows are not exclusive per-request service and nested spans must not be summed. WriteSync can include meta sync; this receipt cannot isolate meta-sync service. No positive queue-residence lower bound, CPU, lock holder, exact phase or causal-repair inference is available. The diagnostic ELF has extra fields/clocks/scans/retained state even when a selected request is nil; the original unoverlaid product remains unchanged, with no same-ELF/zero-cost claim. Panic/Goexit evidence remains an outer TEST MODEL; real nonnil concrete batch-Close injection remains UNAVAILABLE. OriginalM0 CV.164849 and every previous failure/HOLD remain unchanged.
 
 ## Fixed command and lifecycle
 
@@ -53,7 +35,7 @@ GOENV=off, GOTOOLCHAIN=local, GOWORK=off. No HOME is reassigned.
 A normal, optimized test ELF is constructed once with:
 
 ```
-<authenticated-go> test -c -p 1 -mod=readonly -overlay=<m0.C-map> -o <bin>/db.test ./TreeDB/db
+<authenticated-go> test -c -p 1 -mod=readonly -overlay=<seven-entry-map> -o <bin>/db.test ./TreeDB/db
 ```
 
 The ELF/source/tree/overlay/buildinfo and actual first two allowed CPUs are
@@ -104,11 +86,10 @@ a queue/execute decomposition, historical alignment or CV acceptance.
 
 The original fifteen finite Python control methods are preserved: one complete fixture, twelve
 adverse populations/grammar/lifecycle/decoder cases, checked I/O failure, and
-fixed-entry source contract. They run once hosted before product capture;
-locally they remain UNRUN. Six additional authority methods cover matching
+fixed-entry source contract. They run once hosted before product capture; pure synthetic methods were also checked during source preparation, without Go or original payloads. Six additional authority methods cover matching
 thread/review bytes, missing/foreign admission thread, missing/foreign controls
-thread, and altered review bytes/head. All twenty-one methods are UNRUN here.
-The original Go controls are a separate prerequisite.
+thread, and altered review bytes/head. The consumer source/data methods are pure fixtures; actual hosted capture remains UNRUN for this successor.
+Ten additional service methods cover complete shared batches/overlap, valid zero timestamps, lifecycle refusals, original identity/duration/population, odd-row refusal, invalid/regressing stamps, unknown categories/errors, shared-batch conflicts/duplicates/missing members, legal direct fallbacks and exact export/one-capture source contracts. All 31 pure source/data methods are required; actual Go/capture qualification is separate. The original Go controls are a separate prerequisite.
 
 ## Time, resources and output ledger
 

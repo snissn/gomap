@@ -12,7 +12,7 @@
     "M0 observation is manual diagnostic-only on a separately fixed product; no forecast starts it or replaces failed M0 acceptance.",
     "Bounded maintenance comparison is a manually granted diagnostic on fixed baseline/candidate products; no forecast starts it or establishes cost, M0 or native acceptance."
   ],
-  "discovery_source_sha256": "e93ab4f78063b4d1f74ae599ea7e809d0c4abde741f9fd73c3c51dd00ee0b305",
+  "discovery_source_sha256": "dee41c44c5352944b9fa5fa667792ee2e288937e540e1d45931b3e5a6b0a9530",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
@@ -2348,7 +2348,7 @@
           }
         }
       },
-      "git_blob": "68164a90bb7c55af804def32ff1098bd312ac28e",
+      "git_blob": "db382461ec482ebf5057204afb4a79a1de432743",
       "jobs": {
         "diagnostic": {
           "checkout": [
@@ -2362,14 +2362,14 @@
           ],
           "commands": [
             {
-              "command_sha256": "9358a86b1ddf22d69b3af47ca217b55133fa47e0dc502e7527adc0e7e9ad32cf",
+              "command_sha256": "655a0f48f99438c5acb97fe6d8bde9f1dc0499afe46c8b755a85c147034df54c",
               "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:39",
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
               "name": "Authenticate one M0 dispatch and actual controls prerequisite"
             },
             {
               "command_sha256": "0d634125b142464caeab40904be6d8ec0a45d2cbc2d7f0d5e5816b146aa77476",
-              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:106",
+              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:108",
               "env": {
                 "GH_TOKEN": "${{ github.token }}"
               },
@@ -2378,7 +2378,7 @@
             },
             {
               "command_sha256": "88115acc094b5f1a533620422e9104024be96ff9562918e92fae0492ef8716ff",
-              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:115",
+              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:117",
               "if": "always() && env.M0_TRACE_STARTED_MONOTONIC != ''",
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
               "name": "Check final output bounds after guard has closed its receipts"
@@ -2398,7 +2398,7 @@
           "runs_on": "ubuntu-24.04"
         }
       },
-      "sha256": "1dbbfee98109ea86fa5f321c5b2a8867dc12d5a92fd8b66bd213f6007e4e37ec"
+      "sha256": "af4ef756e4e2fdcfc612e5f8a747c175e52b815f1d8ada01d5f7e8ce4a85b610"
     },
     "treedb-tests.yml": {
       "coverage": "existing execution only; triggers/path filters are unchanged",

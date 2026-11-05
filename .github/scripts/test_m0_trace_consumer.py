@@ -62,13 +62,14 @@ def authority_fixture():
     controls={'schema':'root-primary-m0-controls-pass-v1','status':'ROOT_NORMAL_RACE_CONTROLS_ADMITTED',
       'actor_id':'1981537','authority_thread':thread,'producer_head':scope['CONTROLS_HEAD'],
       'producer_tree':scope['CONTROLS_TREE'],'owner_manifest_sha256':scope['OWNER_MANIFEST'],
-      'normal':{'tops':6,'outcomes':26,'leaves':24},'race':{'tops':6,'outcomes':26,'leaves':24},
+      'normal':{'tops':24,'outcomes':82,'leaves':74},'race':{'tops':24,'outcomes':82,'leaves':74},
       'literal_normal_exit':0,'literal_race_exit':0,'positive_outer_guard_cleanup':True,
       'product_capture':False,'run_id':1,'artifact_id':1,'artifact_sha256':'b'*64,
-      'independent_review_sha256':'c'*64}
+      'independent_review_sha256':'958811fd4b5c0a25ada2595567b1c70f5fa2fbf90cff67c1e6b76da1dd39b9e4',
+      'owner_source_review_sha256':scope['OWNER_REVIEW']}
     raw=json.dumps(controls,sort_keys=True).encode();review=b'Fixture independent source review; not a runtime receipt.\n'
     fixture_sha=hashlib.sha256(raw).hexdigest()
-    assert scope['CONTROLS_PASS_SHA']=='5fbc92847359e709fe9ef7812786ff469f9892dedf9e4c81d27a3183e67245c5'
+    assert scope['CONTROLS_PASS_SHA']=='ed5c3761d40fb3319b8303eaf62a3546ab9d6c4e4c631464de23b0be6f0cfd2b'
     scope['CONTROLS_PASS_SHA']=fixture_sha  # Only this isolated pure-fixture namespace.
     admission={'schema':'m0-operation-trace-admission-v1','status':'ADMITTED_ONE_M0_TRACE_ONLY',
       'authority':'ROOT','authority_thread':thread,'actor_id':'1981537','expected_head':head,'run_attempt':'1',
@@ -77,7 +78,7 @@ def authority_fixture():
       'independent_binding_review_sha256':hashlib.sha256(review).hexdigest(),
       'independent_binding_review_head':head,'independent_binding_review_status':'READY_SOURCE_ONLY'}
     env={'GITHUB_EVENT_NAME':'workflow_dispatch','GITHUB_REPOSITORY':'snissn/gomap',
-      'GITHUB_ACTOR_ID':'1981537','GITHUB_RUN_ATTEMPT':'1','GITHUB_REF':'refs/heads/diagnostic/m0-operation-trace-01',
+      'GITHUB_ACTOR_ID':'1981537','GITHUB_RUN_ATTEMPT':'1','GITHUB_REF':'refs/heads/diagnostic/m0-combiner-operation-capture-01',
       'REVIEWED_HEAD':head,'GITHUB_SHA':head,'WORKFLOW_COMMIT':head,
       'M0_CONTROLS_PASS_B64':base64.b64encode(raw).decode(),
       'M0_BINDING_REVIEW_B64':base64.b64encode(review).decode()}
@@ -154,7 +155,7 @@ class FixedM0Consumer(unittest.TestCase):
         self.assertIn('stream.flush();os.fsync(stream.fileno())',source)
         self.assertIn('WHOLE_SECONDS = 1020',source)
         self.assertIn("GOMEMLIMIT='8GiB',GOMAXPROCS='2'",source)
-        self.assertIn("spec=descriptions['m0']['C']",source)
+        self.assertIn("spec=descriptions",source)
         self.assertNotIn('descriptions[\'focused_controls\']',source)
         self.assertNotIn("'./TreeDB/mvcc'",source)
         self.assertNotIn('shell=True',source)
@@ -196,6 +197,84 @@ class FixedM0Consumer(unittest.TestCase):
         admission['independent_binding_review_head']='b'*40
         with self.assertRaisesRegex(RuntimeError,'ROOT one-M0 diagnostic admission'):
             self.call_authority(scope,admission,env)
+
+
+def service_fixture():
+    original=owner()
+    value={'Schema':'m0-combiner-service-observer-v1',
+        'Status':'SERVICE_ROWS_COMPLETE_TRACE_ARTIFACT_VALIDATION_PENDING','Reason':'',
+        'DiagnosticOnly':True,'OriginalWriterJoined':True,'OriginalDoneObserved':True,
+        'OriginalCloseReturned':True,'OriginalCloseError':'NIL','Interpretation':'fixture','Rows':[]}
+    for n in range(4096):
+        c={k:{'NS':0,'Valid':False} for k in ('Entry','EnqueueBefore','EnqueueAfter','SelectBefore','SelectAfter','Return')}
+        c.update(EnqueueStatus='',Branch='',Error='',Entered=False,Invalid=False)
+        w={k:{'NS':0,'Valid':False} for k in ('Dequeue','ApplyBefore','ApplyAfter','WriteBefore','WriteAfter','CloseBefore','CloseAfter','SendBefore','SendAfter')}
+        w.update(BatchSerial=0,BatchIndex=0,BatchSize=0,Selected=0,Dispatch='',WriteKind='',WriteError='',CloseError='',IgnoredCloseError=False,Terminal=False,Invalid=False)
+        if n%2==0:
+            c.update({k:{'NS':t,'Valid':True} for k,t in zip(('Entry','EnqueueBefore','EnqueueAfter','SelectBefore','SelectAfter','Return'),(0,1,5,6,10,11))})
+            c.update(EnqueueStatus='ENQUEUED',Branch='RESULT',Error='NIL',Entered=True)
+            w.update({k:{'NS':t,'Valid':True} for k,t in zip(('Dequeue','ApplyBefore','WriteBefore','WriteAfter','CloseBefore','CloseAfter','ApplyAfter','SendBefore','SendAfter'),(2,3,4,5,6,7,8,9,12))})
+            w.update(BatchSerial=n//4+1,BatchIndex=(n%4)//2,BatchSize=2,Selected=2,Dispatch='APPLIED',WriteKind='WRITE_SYNC',WriteError='NIL',CloseError='NIL',Terminal=True)
+        value['Rows'].append(dict(Iteration=0,Ordinal=n,Kind=original['Records'][n]['Kind'],OriginalRegion=C.identity(n),OriginalDurationNS=n+1,Status='NON_COMBINER' if n%2 else 'APPLIED_RESULT_RECEIVED',Caller=c,Worker=w))
+    return original,value
+
+
+class FixedServiceConsumer(unittest.TestCase):
+    def test_complete_shared_overlap_zero_origin(self):
+        o,s=service_fixture();r=C.consume_service(o,s)
+        self.assertEqual(r['populations'],{'APPLIED_RESULT_RECEIVED':2048,'NON_COMBINER':2048})
+        self.assertEqual(len(r['unique_batches']),1024)
+        self.assertEqual(r['rows'][0]['caller_select_ns'],4)
+        self.assertFalse(r['M0_CV_acceptance'])
+    def test_valid_all_zero_timestamps(self):
+        o,s=service_fixture()
+        for row in s['Rows']:
+            for obj in (row['Caller'],row['Worker']):
+                for stamp in obj.values():
+                    if type(stamp) is dict:stamp['NS']=0
+        C.consume_service(o,s)
+    def test_lifecycle_refusals(self):
+        for key,val in (('OriginalDoneObserved',False),('OriginalWriterJoined',False),
+                        ('OriginalCloseReturned',False),('OriginalCloseError','OTHER'),('Status','INCOMPLETE')):
+            o,s=service_fixture();s[key]=val
+            with self.assertRaises(ValueError):C.consume_service(o,s)
+    def test_original_identity_duration_population(self):
+        for key,val in (('Ordinal',2),('OriginalDurationNS',999),('OriginalRegion','wrong'),('Kind','delete-range')):
+            o,s=service_fixture();s['Rows'][0][key]=val
+            with self.assertRaises(ValueError):C.consume_service(o,s)
+        o,s=service_fixture();s['Rows'].pop()
+        with self.assertRaises(ValueError):C.consume_service(o,s)
+    def test_odd_worker_fields_refused(self):
+        o,s=service_fixture();s['Rows'][1]['Worker']['BatchSerial']=1
+        with self.assertRaises(ValueError):C.consume_service(o,s)
+    def test_absent_regressing_or_bad_timestamp(self):
+        for val in ({'NS':0,'Valid':False},{'NS':-1,'Valid':True},{'NS':True,'Valid':True},{'NS':100,'Valid':True}):
+            o,s=service_fixture();s['Rows'][0]['Caller']['SelectBefore']=val
+            with self.assertRaises(ValueError):C.consume_service(o,s)
+    def test_unknown_error_dispatch_or_category(self):
+        for key,val in (('Dispatch','UNKNOWN'),('WriteKind','SETUP'),('CloseError','OTHER'),('Terminal',False),('Invalid',True)):
+            o,s=service_fixture();s['Rows'][0]['Worker'][key]=val
+            with self.assertRaises(ValueError):C.consume_service(o,s)
+    def test_shared_conflict_duplicate_or_missing_selected(self):
+        for key,val in (('BatchIndex',0),('Selected',1),('ApplyAfter',{'NS':9,'Valid':True})):
+            o,s=service_fixture();s['Rows'][2]['Worker'][key]=val
+            with self.assertRaises(ValueError):C.consume_service(o,s)
+    def test_direct_fallback_legal_and_no_false_worker(self):
+        o,s=service_fixture()
+        for n in (0,2):
+            row=s['Rows'][n];row['Status']='DIRECT_FALLBACK'
+            row['Caller']['EnqueueStatus']='NO_CHANNEL';row['Caller']['Branch']='DIRECT_FALLBACK'
+            for k in ('EnqueueBefore','EnqueueAfter','SelectBefore','SelectAfter'):row['Caller'][k]={'NS':0,'Valid':False}
+            row['Worker']=copy.deepcopy(s['Rows'][1]['Worker'])
+        C.consume_service(o,s)
+        s['Rows'][0]['Worker']['Dispatch']='APPLIED'
+        with self.assertRaises(ValueError):C.consume_service(o,s)
+    def test_source_export_after_join_and_close_not_new_capture(self):
+        source=(HERE/'m0_operation_trace.py').read_text()
+        self.assertIn("consumer.consume_service(owner_receipt,service)",source)
+        self.assertIn("'overlay_entries':7",source)
+        self.assertIn("'dependencies.json'",source)
+        self.assertEqual(source.count("run('one-M0'"),1)
 
 
 if __name__=='__main__':unittest.main()

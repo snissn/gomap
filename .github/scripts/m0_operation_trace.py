@@ -18,14 +18,14 @@ import time
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent
 ROOT_THREAD = '01a18e7c-8c23-7fd2-8d55-b0486d938cd3'
-OWNER_MANIFEST = '86f4ee083aba9e2f2dbdb87abf9ec5be9eb13d416e1bafd25f7b61139e317aa3'
-OWNER_REVIEW = '863afc8d80a3f68f767b8be0f8f810f5ab646a5c1e256ea674b7894a97ef883a'
+OWNER_MANIFEST = 'ca51c90ae96fcb04ed5764e9acd3d79a01983d0bfe99d2107a9ee7912b5938b5'
+OWNER_REVIEW = '405124015cb24de0d4efcdd583f0c45e2ef3b51521efced31cdcc9c54cd757c0'
 C = '4934bd6d51d9047ba0187d05c1d211cbe419811a'
 C_TREE = '7f30f92674110a4544a381468677183ab3133406'
 WHOLE_SECONDS = 1020
-CONTROLS_PASS_SHA = '5fbc92847359e709fe9ef7812786ff469f9892dedf9e4c81d27a3183e67245c5'
-CONTROLS_HEAD = 'ee6c3880e1b0ec6d7e490232f3a3de45643a455e'
-CONTROLS_TREE = 'ffc790f080c04708d9363d375f9b380d7430350a'
+CONTROLS_PASS_SHA = 'ed5c3761d40fb3319b8303eaf62a3546ab9d6c4e4c631464de23b0be6f0cfd2b'
+CONTROLS_HEAD = 'eaf4e6ad6688dcb1ddb0748243f1f1609c1c3764'
+CONTROLS_TREE = '5fd41b42289a16d1391def5d3fdbc4780bdd17b4'
 MIB = 1024**2
 
 
@@ -47,7 +47,7 @@ def authority():
          os.environ.get('GITHUB_REPOSITORY')=='snissn/gomap' and
          os.environ.get('GITHUB_ACTOR_ID')=='1981537' and
          os.environ.get('GITHUB_RUN_ATTEMPT')=='1' and
-         os.environ.get('GITHUB_REF')=='refs/heads/diagnostic/m0-operation-trace-01', 'fixed hosted authority')
+         os.environ.get('GITHUB_REF')=='refs/heads/diagnostic/m0-combiner-operation-capture-01', 'fixed hosted authority')
     head=os.environ.get('REVIEWED_HEAD','')
     need(re.fullmatch('[0-9a-f]{40}',head) is not None and
          head==os.environ.get('GITHUB_SHA')==os.environ.get('WORKFLOW_COMMIT'), 'exact reviewed harness')
@@ -81,8 +81,10 @@ def authority():
          'actual canonical controls receipt admission binding')
     required_controls={'schema':'root-primary-m0-controls-pass-v1','status':'ROOT_NORMAL_RACE_CONTROLS_ADMITTED',
         'actor_id':'1981537','authority_thread':ROOT_THREAD,'producer_head':CONTROLS_HEAD,'producer_tree':CONTROLS_TREE,
-        'owner_manifest_sha256':OWNER_MANIFEST,'normal':{'tops':6,'outcomes':26,'leaves':24},
-        'race':{'tops':6,'outcomes':26,'leaves':24},'literal_normal_exit':0,'literal_race_exit':0,
+        'owner_manifest_sha256':OWNER_MANIFEST,'owner_source_review_sha256':OWNER_REVIEW,
+        'independent_review_sha256':'958811fd4b5c0a25ada2595567b1c70f5fa2fbf90cff67c1e6b76da1dd39b9e4',
+        'normal':{'tops':24,'outcomes':82,'leaves':74},
+        'race':{'tops':24,'outcomes':82,'leaves':74},'literal_normal_exit':0,'literal_race_exit':0,
         'positive_outer_guard_cleanup':True,'product_capture':False}
     need(all(type(controls.get(k)) is type(v) and controls[k]==v for k,v in required_controls.items()),
          'exact corrected controls actual PASS prerequisite')
@@ -100,8 +102,8 @@ def authenticate():
         s=path.lstat()
         need(stat.S_ISREG(s.st_mode) and s.st_nlink==1 and s.st_size==row['bytes'] and sha(path)==row['sha256'],
              'fixed source/helper identity mismatch: '+name)
-    need(sha(REPO/'.github/primary-m0-observers/manifest.json')==OWNER_MANIFEST,'formatted owner manifest')
-    need(sha(REPO/'.github/primary-m0-observers/format-source-review.json')==OWNER_REVIEW,'owner format-source review')
+    need(sha(REPO/'.github/m0-combiner-fixture/manifest.json')==OWNER_MANIFEST,'indivisible seven-overlay owner manifest')
+    need(sha(REPO/'.github/m0-combiner-fixture/independent-review.md')==OWNER_REVIEW,'owner source review')
     return manifest
 
 
@@ -267,7 +269,7 @@ def main():
             'sha256':hashlib.sha256(review_raw).hexdigest(),'reviewed_head':admission['independent_binding_review_head'],
             'ROOT_admitted_status':admission['independent_binding_review_status'],'script_proves_authorship':False})
         write(out/'input-bindings.json',manifest)
-        owner=REPO/'.github/primary-m0-observers'
+        owner=REPO/'.github/m0-combiner-fixture'
         tools={}
         for name in ('git','go','gofmt','taskset'):
             path=Path(shutil.which(name) or '').resolve(strict=True)
@@ -319,14 +321,23 @@ def main():
         observed=run('source-C-identity',[git,'-C',str(source),'show','-s','--format=%H%n%T','HEAD'],10).splitlines()
         need(observed==[C,C_TREE],'candidate source/tree mismatch')
         run('source-C-clean',[git,'-C',str(source),'diff','--exit-code','HEAD','--'],10)
-        preimage='TreeDB/db/vacuum_collection_bench_test.go'
-        need(sha(source/preimage)==sha(owner/'base'/preimage),'original M0 benchmark preimage')
-        descriptions=json.loads((owner/'overlays.json').read_text())
-        spec=descriptions['m0']['C']
-        need(spec['source']==C and set(spec['Replace'])=={
-            'TreeDB/db/vacuum_collection_bench_test.go','TreeDB/db/vacuum_m0_ordinal_observer_test.go'},
-            'ONLY fixed M0 overlay admitted')
-        need(not (source/'TreeDB/db/vacuum_m0_ordinal_observer_test.go').exists(),'new M0 helper preexists')
+        descriptions=json.loads((owner/'overlay-map.json').read_text())
+        preimages=json.loads((owner/'product-preimages.json').read_text())
+        expected={'TreeDB/db/api.go','TreeDB/db/commit_combiner.go',
+            'TreeDB/db/m0_combiner_observation.go','TreeDB/db/m0_combiner_observation_controls_test.go',
+            'TreeDB/db/m0_combiner_observer_test.go','TreeDB/db/vacuum_collection_bench_test.go',
+            'TreeDB/db/vacuum_m0_ordinal_observer_test.go'}
+        need(descriptions['product']==C and descriptions['tree']==C_TREE and
+             set(descriptions['Replace'])==set(preimages)==expected,'indivisible seven-entry M0 overlay')
+        for name,record in preimages.items():
+            path=source/name
+            need((not path.exists()) if record['absent'] else
+                 path.is_file() and sha(path)==record['sha256'],'exact4934 overlay preimage: '+name)
+        for record in json.loads((owner/'dependencies.json').read_text()):
+            path=source/record['path']
+            need(path.is_file() and path.stat().st_size==record['bytes'] and sha(path)==record['sha256'],
+                 'original bridge dependency: '+record['path'])
+        spec=descriptions
         replacements={str(source/n):str(owner/v) for n,v in spec['Replace'].items()}
         overlay=out/'m0-C.overlay.json';write(overlay,{'Replace':replacements})
         formatted=run('gofmt',[gofmt,'-l',*sorted(replacements.values())],30)
@@ -370,9 +381,11 @@ def main():
         with (out/'trace-parsed.stdout.log').open('rb') as stream:
             result=consumer.consume(owner_receipt,stream,rows[-1])
         write(out/'trace-bijection.json',result)
+        service=json.loads((arm/'m0-combiner-service.json').read_text())
+        write(out/'combiner-service-validation.json',consumer.consume_service(owner_receipt,service))
         census();remaining()
         write(out/'completion.json',{'status':'M0_DIAGNOSTIC_BIJECTION_PENDING_ROOT_OUTPUT_REVIEW',
-            'product':C,'source_tree':C_TREE,'only_M0_overlay':True,'iterations':1,'ordinals':4096,
+            'product':C,'source_tree':C_TREE,'only_M0_overlay':True,'overlay_entries':7,'service_rows':4096,'iterations':1,'ordinals':4096,
             'M0_CV_acceptance':False,'outer_guard_result_required':True})
     except BaseException as caught:
         error=caught

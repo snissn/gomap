@@ -1116,4 +1116,7 @@ The fixed standalone package recipe for
 `BenchmarkVacuumIndexOnlineCollectionProductionForegroundChurn/bytes_1x` is in
 [the manual M0 trace binding](../../.github/m0-operation-trace-README.md). It
 retains one standard Go test trace, full parsed text and bounded ordinal alignment
-receipts. These diagnostic artifacts are not benchprof inputs or M0 CV acceptance.
+receipts. The separately reviewed seven-overlay private combiner bridge also retains
+all4096 same-request service rows and deduplicated batch brackets after original
+join/checked Close/borrowed worker done. Inclusive wall brackets and instrumented
+ELF costs are diagnostic only. These artifacts are not benchprof inputs or M0 CV acceptance.

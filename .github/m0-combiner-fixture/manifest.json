@@ -1,0 +1,127 @@
+{
+  "schema": "gomap-m0-combiner-source-only-packet-v1",
+  "utc": "2026-11-05T04:27:49.170908+00:00",
+  "product_head": "4934bd6d51d9047ba0187d05c1d211cbe419811a",
+  "status": "SOURCE_ONLY_FOR_INDEPENDENT_ROOT_REVIEW",
+  "source_overlay_entries": 7,
+  "new_control_tops": 9,
+  "new_control_outcomes": 44,
+  "new_control_leaves": 39,
+  "files": [
+    {
+      "path": "base4934/TreeDB/db/vacuum_collection_bench_test.go",
+      "bytes": 16844,
+      "sha256": "c7c7404c076ec834579b1881aeefbb671faf04066dd7c80ae6199d4d1b506337"
+    },
+    {
+      "path": "control-inventory.json",
+      "bytes": 1438,
+      "sha256": "eb6c31a7b80c301fe6f656e401b553513ac1e1d08a50e6f67fae3332f46948ba"
+    },
+    {
+      "path": "controls.md",
+      "bytes": 5534,
+      "sha256": "f96206d0d81807fea30bea502fdd56d6a87d42f42251e1a7bb62b89118d4507f"
+    },
+    {
+      "path": "decision.md",
+      "bytes": 7700,
+      "sha256": "4feeecbb44e28caaff4b127b9b6dd64d4d1620db9e933c59378888a0a25ce468"
+    },
+    {
+      "path": "design-and-dependencies.json",
+      "bytes": 4013,
+      "sha256": "a2ec841f68f02c72ecdbec93cf87ba0e8d254eaff4b80a7fb39f99b4134f51e9"
+    },
+    {
+      "path": "inverse-to-qualified-observer.patch",
+      "bytes": 43562,
+      "sha256": "de1ed380e9f6b63c27d7789222f6138a4d44a08cd1f1d6bf954322e98b251dae"
+    },
+    {
+      "path": "maintained-hosted-route.json",
+      "bytes": 3582,
+      "sha256": "8483b125f81cdb4fa3ca357b8a679bab7402fecf21ccfaea995231ca6a6ea180"
+    },
+    {
+      "path": "overlay/TreeDB/db/api.go",
+      "bytes": 58631,
+      "sha256": "ca270eae5635bd43ae2bbba1f23e3c81c8df12e4326e91c104894ed2549c1b03"
+    },
+    {
+      "path": "overlay/TreeDB/db/commit_combiner.go",
+      "bytes": 7342,
+      "sha256": "79f3830d4dfc1b2f8742e69e01ed557f63c39bc5a075eb8bfcfd9082ac7465e0"
+    },
+    {
+      "path": "overlay/TreeDB/db/m0_combiner_observation.go",
+      "bytes": 6733,
+      "sha256": "0ed28991521aeaacc2e6b74a0e95b8e1902a2d48387daa248776b2dbe594af1f"
+    },
+    {
+      "path": "overlay/TreeDB/db/m0_combiner_observation_controls_test.go",
+      "bytes": 17846,
+      "sha256": "217b5764e42b991840dc75109ffc6ec54b0db2ca34a3a01a9b7e4e4aed375633"
+    },
+    {
+      "path": "overlay/TreeDB/db/m0_combiner_observer_test.go",
+      "bytes": 9676,
+      "sha256": "f3feac5016aa20cb74cff6e59032dfa794e365e7c09dd8ce6850c6a886b3e5dc"
+    },
+    {
+      "path": "overlay/TreeDB/db/vacuum_collection_bench_test.go",
+      "bytes": 17529,
+      "sha256": "09f8b0758018fd5e2fd0994aab18463ecdffa40add6796198b81bded69ac2d81"
+    },
+    {
+      "path": "overlay/TreeDB/db/vacuum_m0_ordinal_observer_test.go",
+      "bytes": 12958,
+      "sha256": "1ffdaafbdb46dfbaae9f2e61d17f2a76cb9fb8e63b964569d0cfb631c88dcbed"
+    },
+    {
+      "path": "overlay-map.json",
+      "bytes": 984,
+      "sha256": "2a3bfb32908ed946e50abd284e3045f9bf95fe8e9d3c96d0339e4c5ba7beb321"
+    },
+    {
+      "path": "preimage/TreeDB/db/api.go",
+      "bytes": 57952,
+      "sha256": "96c72af67c70479e7ec5c97623ad10a7667e12e65434d57ab79d118a791d431a"
+    },
+    {
+      "path": "preimage/TreeDB/db/commit_combiner.go",
+      "bytes": 5685,
+      "sha256": "a58aeea6a1dead942f5f44e61725fcddb30572ef7eaea55f844b12635dd0343a"
+    },
+    {
+      "path": "preimage/TreeDB/db/vacuum_collection_bench_test.go",
+      "bytes": 17529,
+      "sha256": "09f8b0758018fd5e2fd0994aab18463ecdffa40add6796198b81bded69ac2d81"
+    },
+    {
+      "path": "preimage/TreeDB/db/vacuum_m0_ordinal_observer_test.go",
+      "bytes": 12365,
+      "sha256": "648f61eeb148809e9a42cd087e979ce078574110142c7a944f61c274b4aacf49"
+    },
+    {
+      "path": "qualification-state.json",
+      "bytes": 1405,
+      "sha256": "2f7f18f5849314808fb0dc0e25f078fbd4797f4aeaebfb513b8e861197cd50ef"
+    },
+    {
+      "path": "restore-exact4934.patch",
+      "bytes": 58038,
+      "sha256": "232e9b1f8ab83ca13b7cc2a1541915d70fada62797ad2dde54a73e2930407e92"
+    },
+    {
+      "path": "source-proof.json",
+      "bytes": 4459,
+      "sha256": "b2efea6a96207f0c45ecbe8a89ba8c65f83d204fa1ac23969092cad4fa77fd9e"
+    },
+    {
+      "path": "source.patch",
+      "bytes": 43562,
+      "sha256": "950edaf5826f99c96136e9d44bbe7a0e70e98614a062a5aa5120fdf5b2521280"
+    }
+  ]
+}

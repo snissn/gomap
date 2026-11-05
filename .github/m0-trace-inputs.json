@@ -1,48 +1,132 @@
 {
   "files": {
-    ".github/m0-operation-trace-README.md": {
-      "bytes": 11107,
-      "sha256": "076ff7bc9c74780269f1d3488988057ff81b2ae5681d74edfb31e10d5c131a60"
-    },
-    ".github/primary-m0-observers/base/TreeDB/db/vacuum_collection_bench_test.go": {
+    ".github/m0-combiner-fixture/base4934/TreeDB/db/vacuum_collection_bench_test.go": {
       "bytes": 16844,
       "sha256": "c7c7404c076ec834579b1881aeefbb671faf04066dd7c80ae6199d4d1b506337"
     },
-    ".github/primary-m0-observers/candidate/TreeDB/db/vacuum_collection_bench_test.go": {
+    ".github/m0-combiner-fixture/control-inventory.json": {
+      "bytes": 1438,
+      "sha256": "eb6c31a7b80c301fe6f656e401b553513ac1e1d08a50e6f67fae3332f46948ba"
+    },
+    ".github/m0-combiner-fixture/controls.md": {
+      "bytes": 5534,
+      "sha256": "f96206d0d81807fea30bea502fdd56d6a87d42f42251e1a7bb62b89118d4507f"
+    },
+    ".github/m0-combiner-fixture/decision.md": {
+      "bytes": 7700,
+      "sha256": "4feeecbb44e28caaff4b127b9b6dd64d4d1620db9e933c59378888a0a25ce468"
+    },
+    ".github/m0-combiner-fixture/dependencies.json": {
+      "bytes": 1097,
+      "sha256": "95953a012c1bc7a565627bf5aab837259e66b53126d104cf90ad68a3ee650fc8"
+    },
+    ".github/m0-combiner-fixture/design-and-dependencies.json": {
+      "bytes": 4013,
+      "sha256": "a2ec841f68f02c72ecdbec93cf87ba0e8d254eaff4b80a7fb39f99b4134f51e9"
+    },
+    ".github/m0-combiner-fixture/independent-review.md": {
+      "bytes": 2210,
+      "sha256": "405124015cb24de0d4efcdd583f0c45e2ef3b51521efced31cdcc9c54cd757c0"
+    },
+    ".github/m0-combiner-fixture/inverse-to-qualified-observer.patch": {
+      "bytes": 43562,
+      "sha256": "de1ed380e9f6b63c27d7789222f6138a4d44a08cd1f1d6bf954322e98b251dae"
+    },
+    ".github/m0-combiner-fixture/maintained-hosted-route.json": {
+      "bytes": 3582,
+      "sha256": "8483b125f81cdb4fa3ca357b8a679bab7402fecf21ccfaea995231ca6a6ea180"
+    },
+    ".github/m0-combiner-fixture/manifest.json": {
+      "bytes": 4217,
+      "sha256": "ca51c90ae96fcb04ed5764e9acd3d79a01983d0bfe99d2107a9ee7912b5938b5"
+    },
+    ".github/m0-combiner-fixture/overlay-map.json": {
+      "bytes": 984,
+      "sha256": "2a3bfb32908ed946e50abd284e3045f9bf95fe8e9d3c96d0339e4c5ba7beb321"
+    },
+    ".github/m0-combiner-fixture/overlay/TreeDB/db/api.go": {
+      "bytes": 58631,
+      "sha256": "ca270eae5635bd43ae2bbba1f23e3c81c8df12e4326e91c104894ed2549c1b03"
+    },
+    ".github/m0-combiner-fixture/overlay/TreeDB/db/commit_combiner.go": {
+      "bytes": 7342,
+      "sha256": "79f3830d4dfc1b2f8742e69e01ed557f63c39bc5a075eb8bfcfd9082ac7465e0"
+    },
+    ".github/m0-combiner-fixture/overlay/TreeDB/db/m0_combiner_observation.go": {
+      "bytes": 6733,
+      "sha256": "0ed28991521aeaacc2e6b74a0e95b8e1902a2d48387daa248776b2dbe594af1f"
+    },
+    ".github/m0-combiner-fixture/overlay/TreeDB/db/m0_combiner_observation_controls_test.go": {
+      "bytes": 17846,
+      "sha256": "217b5764e42b991840dc75109ffc6ec54b0db2ca34a3a01a9b7e4e4aed375633"
+    },
+    ".github/m0-combiner-fixture/overlay/TreeDB/db/m0_combiner_observer_test.go": {
+      "bytes": 9676,
+      "sha256": "f3feac5016aa20cb74cff6e59032dfa794e365e7c09dd8ce6850c6a886b3e5dc"
+    },
+    ".github/m0-combiner-fixture/overlay/TreeDB/db/vacuum_collection_bench_test.go": {
       "bytes": 17529,
       "sha256": "09f8b0758018fd5e2fd0994aab18463ecdffa40add6796198b81bded69ac2d81"
     },
-    ".github/primary-m0-observers/candidate/TreeDB/db/vacuum_m0_ordinal_observer_test.go": {
+    ".github/m0-combiner-fixture/overlay/TreeDB/db/vacuum_m0_ordinal_observer_test.go": {
+      "bytes": 12958,
+      "sha256": "1ffdaafbdb46dfbaae9f2e61d17f2a76cb9fb8e63b964569d0cfb631c88dcbed"
+    },
+    ".github/m0-combiner-fixture/preimage/TreeDB/db/api.go": {
+      "bytes": 57952,
+      "sha256": "96c72af67c70479e7ec5c97623ad10a7667e12e65434d57ab79d118a791d431a"
+    },
+    ".github/m0-combiner-fixture/preimage/TreeDB/db/commit_combiner.go": {
+      "bytes": 5685,
+      "sha256": "a58aeea6a1dead942f5f44e61725fcddb30572ef7eaea55f844b12635dd0343a"
+    },
+    ".github/m0-combiner-fixture/preimage/TreeDB/db/vacuum_collection_bench_test.go": {
+      "bytes": 17529,
+      "sha256": "09f8b0758018fd5e2fd0994aab18463ecdffa40add6796198b81bded69ac2d81"
+    },
+    ".github/m0-combiner-fixture/preimage/TreeDB/db/vacuum_m0_ordinal_observer_test.go": {
       "bytes": 12365,
       "sha256": "648f61eeb148809e9a42cd087e979ce078574110142c7a944f61c274b4aacf49"
     },
-    ".github/primary-m0-observers/format-source-review.json": {
-      "bytes": 1144,
-      "sha256": "863afc8d80a3f68f767b8be0f8f810f5ab646a5c1e256ea674b7894a97ef883a"
+    ".github/m0-combiner-fixture/product-preimages.json": {
+      "bytes": 809,
+      "sha256": "60bd4115303243440bb1f316d2faa6b9fae9b0f20ad307bf389dd70aac005362"
     },
-    ".github/primary-m0-observers/manifest.json": {
-      "bytes": 10332,
-      "sha256": "86f4ee083aba9e2f2dbdb87abf9ec5be9eb13d416e1bafd25f7b61139e317aa3"
+    ".github/m0-combiner-fixture/qualification-state.json": {
+      "bytes": 1405,
+      "sha256": "2f7f18f5849314808fb0dc0e25f078fbd4797f4aeaebfb513b8e861197cd50ef"
     },
-    ".github/primary-m0-observers/overlays.json": {
-      "bytes": 2916,
-      "sha256": "4652442e079370e3cf203e7a8724e96b7841c760da7708981b6c5d61efc9246d"
+    ".github/m0-combiner-fixture/restore-exact4934.patch": {
+      "bytes": 58038,
+      "sha256": "232e9b1f8ab83ca13b7cc2a1541915d70fada62797ad2dde54a73e2930407e92"
+    },
+    ".github/m0-combiner-fixture/source-proof.json": {
+      "bytes": 4459,
+      "sha256": "b2efea6a96207f0c45ecbe8a89ba8c65f83d204fa1ac23969092cad4fa77fd9e"
+    },
+    ".github/m0-combiner-fixture/source.patch": {
+      "bytes": 43562,
+      "sha256": "950edaf5826f99c96136e9d44bbe7a0e70e98614a062a5aa5120fdf5b2521280"
+    },
+    ".github/m0-operation-trace-README.md": {
+      "bytes": 13363,
+      "sha256": "d2150a59caad92c0e0eece23f72ba90a8bc1362965d4f038cb30bf5aecfaa527"
     },
     ".github/scripts/m0_operation_trace.py": {
-      "bytes": 24619,
-      "sha256": "270dda917f38b517d1300593601ad6cf9f9493f8eeed6045e3c52b28425d9a38"
+      "bytes": 25632,
+      "sha256": "5d69f42a8ac111a34126baab5abc175d73f1781f11c39aef0aeb9e7ff99dcba8"
     },
     ".github/scripts/m0_trace_consumer.py": {
-      "bytes": 5481,
-      "sha256": "348b5a4d3d132e9038a543b52750caa8cea3e54f23d362d514aa6db8599b6ab6"
+      "bytes": 13457,
+      "sha256": "3f008b975380d7cd4dc3a68c9c85a999f4ebf048395f126c0d390df9593e670d"
     },
     ".github/scripts/test_m0_trace_consumer.py": {
-      "bytes": 11562,
-      "sha256": "f9f79ef8360079861fea7050ec2a59cd7dc99eba35706101ec195d860d81ea73"
+      "bytes": 17105,
+      "sha256": "a7886b32843f0de5564a41e895d7b9cbc428bf988e89934fc7255c9563c2e010"
     },
     ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml": {
-      "bytes": 9109,
-      "sha256": "1dbbfee98109ea86fa5f321c5b2a8867dc12d5a92fd8b66bd213f6007e4e37ec"
+      "bytes": 9365,
+      "sha256": "af4ef756e4e2fdcfc612e5f8a747c175e52b815f1d8ada01d5f7e8ce4a85b610"
     },
     "scripts/ycsb_campaign_guard.py": {
       "bytes": 19548,
@@ -63,5 +147,5 @@
   },
   "schema": "m0-fixed-trace-inputs-v1",
   "self_hash": "not included: exact reviewed Git commit plus clean checkout binds this manifest before entry",
-  "source_scope": "ONE_4934_M0_C_OVERLAY_BYTES_1X_N1_4096_DIAGNOSTIC_ONLY"
+  "source_scope": "ONE_4934_INDIVISIBLE_SEVEN_OVERLAY_COMBINER_M0_BYTES_1X_N1_4096_DIAGNOSTIC_ONLY"
 }

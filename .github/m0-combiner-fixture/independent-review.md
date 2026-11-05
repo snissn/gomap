@@ -1,0 +1,11 @@
+# Independent M0 combiner source review
+
+Disposition: READY_FOR_HOSTED_CONTROLS, source scope only. No capture is admitted. Packet manifest SHA-256 ca51c90ae96fcb04ed5764e9acd3d79a01983d0bfe99d2107a9ee7912b5938b5; source patch SHA-256 950edaf5826f99c96136e9d44bbe7a0e70e98614a062a5aa5120fdf5b2521280. All 23 manifest members match their recorded lengths and digests. The api.go and commit_combiner.go preimages and original benchmark base match product 4934bd6d51d9047ba0187d05c1d211cbe419811a; the qualified ordinal layer is explicitly distinct from product base.
+
+The selected producer retains the original request/result and stop machinery. Caller and worker records have disjoint writers; the original worker done is borrowed under its existing lock and worker data is withheld unless its closure and the foreground join establish publication. Export follows the benchmark's checked DB Close; failure or incomplete lifecycle prevents completeness. The single test-only process root retains bounded slots on incomplete join. No additional wait, retry, ACK or generalized observer is selected. The overlay adds observation work even in nil mode; it does not establish original-product codegen or cost equivalence.
+
+The source-derived inventory is nine tops, 44 outcomes and 39 leaves; actual format, compile, normal and race results are UNRUN. The existing owner controls and exact selected tests in controls.md remain required, including original stop/drain/reopen, ownership and sync-failure coverage. The real concrete batch Close always returns nil on this source path; inner production panic/Goexit and non-nil batch Close are not claimed to have been injected. Models and observed wall intervals do not prove queue residence, CPU cost or causality.
+
+The maintained route currently admits the older two-file layer, not this seven-entry overlay. A separately reviewed exact overlay binding, new normal/race receipts, bounded service-output validation and capture admission are necessary. Preserve one iteration, 4096 ordinals, 2048 points and 2048 ranges, existing resource guards and all historical adverse gates. This review supplies no runtime, performance or merge evidence.
+
+Readers/writers CLOSED.
