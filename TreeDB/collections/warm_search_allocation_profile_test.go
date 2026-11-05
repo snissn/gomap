@@ -38,9 +38,11 @@ func beginWarmSearchAllocationProfile(t *testing.T) func() {
 	oldRate := runtime.MemProfileRate
 	runtime.MemProfileRate = 1
 	runtime.GC()
+	runtime.GC()
 	write("before.pprof")
 	return func() {
 		defer func() { runtime.MemProfileRate = oldRate }()
+		runtime.GC()
 		runtime.GC()
 		write("after.pprof")
 	}
