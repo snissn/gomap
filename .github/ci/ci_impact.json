@@ -454,7 +454,7 @@
         "cgo": "setup-go platform default; explicit command overrides retained",
         "matrix": {},
         "race": false,
-        "runs_on": "ubuntu-24.04",
+        "runs_on": "windows-latest",
         "tags": "entry command defaults/flags retained"
       },
       "workflow": "treedb-mvcc-maintenance-diagnostic.yml"
@@ -1279,19 +1279,6 @@
         "tags": "entry command defaults/flags retained"
       },
       "workflow": "unified-bench-tests.yml"
-    },
-    {
-      "id": "windows-warm-search-alloc-diagnostic/diagnostic/single",
-      "job": "diagnostic",
-      "owner": "CI maintainer with affected collections performance owner",
-      "variant": {
-        "cgo": "setup-go platform default; explicit command overrides retained",
-        "matrix": {},
-        "race": false,
-        "runs_on": "windows-latest",
-        "tags": "entry command defaults/flags retained"
-      },
-      "workflow": "windows-warm-search-alloc-diagnostic.yml"
     }
   ],
   "mode": "advisory",
@@ -2349,48 +2336,94 @@
     "treedb-mvcc-maintenance-diagnostic.yml": {
       "coverage": "existing execution only; triggers/path filters are unchanged",
       "events": {
-        "workflow_dispatch": null
+        "workflow_dispatch": {
+          "inputs": {
+            "expected_head": {
+              "description": "Independently reviewed exact diagnostic head",
+              "required": true,
+              "type": "string"
+            }
+          }
+        }
       },
-      "git_blob": "5db1627d00d523c4611092c2ba8aac5465b64506",
+      "git_blob": "f537f37d3c7e2a63f1a7403a7b600931cdce2e69",
       "jobs": {
         "diagnostic": {
           "checkout": [
             {
-              "fetch-depth": 0,
               "persist-credentials": false,
               "ref": "${{ github.sha }}"
             }
           ],
           "commands": [
             {
-              "command_sha256": "dc2d7506fa6e28a95565b0bd60299cfa8a1f345e73aa6997a4c6d954f73fab67",
-              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:19",
+              "command_sha256": "4d80898e77a722e24ab671359e085a7dcfbe78a88dac0bbcd4bd8babf2aeb64a",
+              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:27",
+              "env": {
+                "EXPECTED": "${{ inputs.expected_head }}",
+                "WORKFLOW_COMMIT": "${{ github.workflow_sha }}"
+              },
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
-              "name": "Initialize retained attempt packet"
+              "name": "Verify dispatch binding"
             },
             {
-              "command_sha256": "3bbcd578a6db06320b9181f1fcbdfcdce89d8c99b0b433ef9e2aeab17bd27a64",
-              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:38",
-              "invocation": "python3 -B .github/scripts/mvcc_maintenance_test.py > \"$RUNNER_TEMP/mvcc-maintenance-setup/pure-tests.log\" 2>&1",
-              "name": "Check syntax, receipts and fixed workflow contract (no Go execution)"
+              "command_sha256": "cff5f800fd8ba99e31b6f08e9493d2ff0a76e0882c6ca2ce50d286b295cc184f",
+              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:44",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Check diagnostic Go formatting"
             },
             {
-              "command_sha256": "38d56548962e86f55dc4e1a22895ea3a0f33ff34d2b49ed50514f1359bcc6615",
-              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:41",
-              "invocation": "python3 -B .github/scripts/mvcc_maintenance_bootstrap.py > \"$RUNNER_TEMP/mvcc-maintenance-setup/bootstrap.log\" 2>&1",
-              "name": "Prepare exact inputs and collect once"
+              "command_sha256": "1f02218e21189ef3ecb31a986bd605128de6de1304132c8290f0ec867cbce910",
+              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:56",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Record input context and compile once",
+              "working-directory": "TreeDB"
+            },
+            {
+              "command_sha256": "d33f7679f58c60aec63fe5335a7eee888eeaff643abee09f6c6c2fbe545d84bc",
+              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:84",
+              "env": {
+                "TREEDB_COLLECTIONS_VECTOR_ALLOCATION_GATE": "native-search-warm-scratch",
+                "TREEDB_WARM_SEARCH_ALLOC_PROFILE_DIR": "${{ runner.temp }}/warm-search-alloc"
+              },
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Run original selected child once",
+              "working-directory": "TreeDB"
+            },
+            {
+              "command_sha256": "d1aeea965ddaa1e7eae52251851dd4afb95b484dd628377c74a29149bfb73f0e",
+              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:98",
+              "if": "always() && steps.build.outcome == 'success' && steps.test.outcome != 'skipped'",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Decode complete snapshots"
+            },
+            {
+              "command_sha256": "e181eafb9b0886d541e932642a1a96a1599760f609290bb814035de7c7307d84",
+              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:122",
+              "env": {
+                "BUILD_OUTCOME": "${{ steps.build.outcome }}",
+                "DECODE_OUTCOME": "${{ steps.decode.outcome }}",
+                "FORMAT_OUTCOME": "${{ steps.format.outcome }}",
+                "TEST_OUTCOME": "${{ steps.test.outcome }}"
+              },
+              "if": "always()",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Check closed output sizes and record step outcomes"
             }
           ],
           "environment": {
-            "PYTHONDONTWRITEBYTECODE": "1"
+            "GOMAXPROCS": "2",
+            "GOMEMLIMIT": "4GiB",
+            "GOTOOLCHAIN": "local",
+            "GOWORK": "off"
           },
           "matrix": null,
           "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
           "race": false,
-          "runs_on": "ubuntu-24.04"
+          "runs_on": "windows-latest"
         }
       },
-      "sha256": "2d682ddfe8416722c6408e033606700217b614858c78e7479d25caa294c126c8"
+      "sha256": "6508673073f6be2b9035000f3b21faf3625cceca685f3c3917eee891163492e8"
     },
     "treedb-tests.yml": {
       "coverage": "existing execution only; triggers/path filters are unchanged",
@@ -3366,91 +3399,6 @@
         }
       },
       "sha256": "99d0ab3d19d5d00513da45f42bd10fab6e0a02e908042cec68092bae44383264"
-    },
-    "windows-warm-search-alloc-diagnostic.yml": {
-      "coverage": "existing execution only; triggers/path filters are unchanged",
-      "events": {
-        "workflow_dispatch": {
-          "inputs": {
-            "expected_head": {
-              "description": "Independently reviewed exact diagnostic head",
-              "required": true,
-              "type": "string"
-            }
-          }
-        }
-      },
-      "git_blob": "2aff368438509e1d086e7f4ecd5860f481ca1237",
-      "jobs": {
-        "diagnostic": {
-          "checkout": [
-            {
-              "persist-credentials": false,
-              "ref": "${{ github.sha }}"
-            }
-          ],
-          "commands": [
-            {
-              "command_sha256": "4d80898e77a722e24ab671359e085a7dcfbe78a88dac0bbcd4bd8babf2aeb64a",
-              "entrypoint": ".github/workflows/windows-warm-search-alloc-diagnostic.yml:27",
-              "env": {
-                "EXPECTED": "${{ inputs.expected_head }}",
-                "WORKFLOW_COMMIT": "${{ github.workflow_sha }}"
-              },
-              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
-              "name": "Verify dispatch binding"
-            },
-            {
-              "command_sha256": "ab14fbd203cadf7f3513074db3d93d54dc44fc0a25844b1d5dc245f7feb08e2f",
-              "entrypoint": ".github/workflows/windows-warm-search-alloc-diagnostic.yml:45",
-              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
-              "name": "Record input context and compile once",
-              "working-directory": "TreeDB"
-            },
-            {
-              "command_sha256": "d33f7679f58c60aec63fe5335a7eee888eeaff643abee09f6c6c2fbe545d84bc",
-              "entrypoint": ".github/workflows/windows-warm-search-alloc-diagnostic.yml:73",
-              "env": {
-                "TREEDB_COLLECTIONS_VECTOR_ALLOCATION_GATE": "native-search-warm-scratch",
-                "TREEDB_WARM_SEARCH_ALLOC_PROFILE_DIR": "${{ runner.temp }}/warm-search-alloc"
-              },
-              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
-              "name": "Run original selected child once",
-              "working-directory": "TreeDB"
-            },
-            {
-              "command_sha256": "93a72239d406079ddf315f2212583f66f8b9f5d76d1d9cf7b3c0d8102c5acc11",
-              "entrypoint": ".github/workflows/windows-warm-search-alloc-diagnostic.yml:87",
-              "if": "always() && steps.build.outcome == 'success' && steps.test.outcome != 'skipped'",
-              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
-              "name": "Decode complete snapshots"
-            },
-            {
-              "command_sha256": "462cf36e97e00d85a5a4aad8e7ec7dba6e3233c6b6a9d51255b29711ffeadddb",
-              "entrypoint": ".github/workflows/windows-warm-search-alloc-diagnostic.yml:104",
-              "env": {
-                "BUILD_OUTCOME": "${{ steps.build.outcome }}",
-                "DECODE_OUTCOME": "${{ steps.decode.outcome }}",
-                "TEST_OUTCOME": "${{ steps.test.outcome }}"
-              },
-              "if": "always()",
-              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
-              "name": "Check closed output sizes and record step outcomes"
-            }
-          ],
-          "environment": {
-            "GOMAXPROCS": "2",
-            "GOMEMLIMIT": "4GiB",
-            "GOTOOLCHAIN": "local",
-            "GOWORK": "off"
-          },
-          "matrix": null,
-          "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
-          "race": false,
-          "runs_on": "windows-latest"
-        }
-      },
-      "sha256": "10d9253230ad58fe801df7898ba68ece7f4613dc621c4638394e68d045e3e822"
     }
   }
 }

@@ -1,60 +1,152 @@
-name: "TreeDB: bounded maintenance diagnostic (manual only)"
-
+name: Windows warm search allocation diagnostic
 on:
   workflow_dispatch:
-
+    inputs:
+      expected_head:
+        description: Independently reviewed exact diagnostic head
+        required: true
+        type: string
 permissions:
   contents: read
-
 jobs:
   diagnostic:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
-    name: fixed 5bca / a17fe fourteen-call diagnostic
-    runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/diagnostic/getversioned-windows-alloc-01' && github.actor_id == '1981537' && github.run_attempt == 1
+    runs-on: windows-latest
+    timeout-minutes: 40
     env:
-      PYTHONDONTWRITEBYTECODE: "1"
+      GOMAXPROCS: '2'
+      GOMEMLIMIT: 4GiB
+      GOWORK: 'off'
+      GOTOOLCHAIN: local
     steps:
-      - name: Initialize retained attempt packet
+      - name: Verify dispatch binding
+        shell: bash
+        env:
+          EXPECTED: ${{ inputs.expected_head }}
+          WORKFLOW_COMMIT: ${{ github.workflow_sha }}
         run: |
-          mkdir "$RUNNER_TEMP/mvcc-maintenance-setup"
-          printf '%s\n' 'Only fixed separately reviewed bounded diagnostics are authorized.' "harness=$GITHUB_SHA" "run=$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT" > "$RUNNER_TEMP/mvcc-maintenance-setup/scope.txt"
-
-      - name: Checkout reviewed diagnostic harness
+          set -euo pipefail
+          [[ "$EXPECTED" =~ ^[0-9a-f]{40}$ && "$EXPECTED" == "$GITHUB_SHA" && "$EXPECTED" == "$WORKFLOW_COMMIT" ]]
+      - name: Checkout exact diagnostic source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          persist-credentials: false
           ref: ${{ github.sha }}
-          fetch-depth: 0
-
-      - name: Setup exact Go 1.26.3
+          persist-credentials: false
+      - name: Install pinned Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: "1.26.3"
-          check-latest: false
+          go-version: '1.26.10'
           cache: false
-
-      - name: Check syntax, receipts and fixed workflow contract (no Go execution)
-        run: python3 -B .github/scripts/mvcc_maintenance_test.py > "$RUNNER_TEMP/mvcc-maintenance-setup/pure-tests.log" 2>&1
-
-      - name: Prepare exact inputs and collect once
-        run: python3 -B .github/scripts/mvcc_maintenance_bootstrap.py > "$RUNNER_TEMP/mvcc-maintenance-setup/bootstrap.log" 2>&1
-
-      - name: Upload complete attempt, including failure/refusal
+      - name: Check diagnostic Go formatting
+        id: format
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/warm-search-alloc"
+          mkdir "$out"
+          [[ "$(go version)" == 'go version go1.26.10 windows/amd64' ]]
+          gofmt -d TreeDB/collections/column_vector_graph_search_test.go TreeDB/collections/warm_search_allocation_profile_test.go > "$out/gofmt.diff"
+          [[ ! -s "$out/gofmt.diff" ]]
+      - name: Record input context and compile once
+        id: build
+        timeout-minutes: 20
+        shell: bash
+        working-directory: TreeDB
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/warm-search-alloc"
+          [[ -d "$out" ]]
+          git rev-parse HEAD HEAD^{tree} > "$out/source.txt"
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+          [[ -z "$(git status --porcelain)" ]]
+          go version | tee "$out/go-version.txt"
+          [[ "$(go version)" == 'go version go1.26.10 windows/amd64' ]]
+          go env -json GOOS GOARCH GOVERSION GOROOT CGO_ENABLED CC CXX GOFLAGS GOEXPERIMENT GOCACHE GOMODCACHE GOTMPDIR > "$out/go-env.json"
+          sha256sum "$(command -v go)" > "$out/go-tool.sha256"
+          if [[ "$(go env CGO_ENABLED)" == 1 ]]; then
+            compiler=$(command -v "$(go env CC)")
+            printf '%s\n' "$compiler" > "$out/compiler-path.txt"
+            sha256sum "$compiler" > "$out/compiler.sha256"
+          fi
+          go test -c -mod=readonly -p=1 -o "$out/collections.test.exe" ./collections 2>&1 | tee "$out/compile.log"
+          sha256sum "$out/collections.test.exe" > "$out/binary.sha256"
+          "$out/collections.test.exe" '-test.list=^TestColumnVectorGraphNativeSearchWarmScratchZeroAllocsV3$' > "$out/test-list.txt"
+          grep -Fx 'TestColumnVectorGraphNativeSearchWarmScratchZeroAllocsV3' "$out/test-list.txt"
+      - name: Run original selected child once
+        id: test
+        timeout-minutes: 3
+        shell: bash
+        working-directory: TreeDB
+        env:
+          TREEDB_COLLECTIONS_VECTOR_ALLOCATION_GATE: native-search-warm-scratch
+          TREEDB_WARM_SEARCH_ALLOC_PROFILE_DIR: ${{ runner.temp }}/warm-search-alloc
+        run: |
+          set -uo pipefail
+          out="$RUNNER_TEMP/warm-search-alloc"
+          "$out/collections.test.exe" '-test.run=^TestColumnVectorGraphNativeSearchWarmScratchZeroAllocsV3$' -test.count=1 -test.timeout=90s 2>&1 | tee "$out/test.log"
+          pipe=("${PIPESTATUS[@]}")
+          rc=${pipe[0]}
+          printf '%s\n' "$rc" > "$out/test-exit.txt"
+          [[ "${pipe[1]}" == 0 ]] || exit 1
+          exit "$rc"
+      - name: Decode complete snapshots
+        id: decode
+        if: always() && steps.build.outcome == 'success' && steps.test.outcome != 'skipped'
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/warm-search-alloc"
+          for file in before.pprof after.pprof; do
+            [[ -s "$out/$file" && $(wc -c < "$out/$file") -le 33554432 ]]
+          done
+          sha256sum "$out/before.pprof" "$out/after.pprof" > "$out/profiles.sha256"
+          for sample in alloc_objects alloc_space; do
+            for order in flat cum; do
+              args=(-top "-$sample" -nodecount=0 -nodefraction=0 -edgefraction=0)
+              if [[ "$order" == cum ]]; then args+=(-cum); fi
+              go tool pprof "${args[@]}" -base "$out/before.pprof" "$out/collections.test.exe" "$out/after.pprof" > "$out/$sample-$order.txt" 2> "$out/$sample-$order.stderr"
+            done
+          done
+      - name: Check closed output sizes and record step outcomes
+        id: ledger
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        timeout-minutes: 1
+        shell: bash
+        env:
+          FORMAT_OUTCOME: ${{ steps.format.outcome }}
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          TEST_OUTCOME: ${{ steps.test.outcome }}
+          DECODE_OUTCOME: ${{ steps.decode.outcome }}
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/warm-search-alloc"
+          [[ -d "$out" ]]
+          printf 'format=%s\nbuild=%s\ntest=%s\ndecode=%s\n' "$FORMAT_OUTCOME" "$BUILD_OUTCOME" "$TEST_OUTCOME" "$DECODE_OUTCOME" > "$out/outcomes.txt"
+          total=0
+          for file in "$out"/*; do
+            [[ -f "$file" && ! -L "$file" ]]
+            [[ "$file" == *.exe || "$file" == */closed-output-sha256.txt ]] && continue
+            size=$(wc -c < "$file"); (( size <= 33554432 )); total=$((total+size))
+            sha256sum "$file"
+          done > "$out/closed-output-sha256.txt"
+          ledger_size=$(wc -c < "$out/closed-output-sha256.txt")
+          (( ledger_size <= 33554432 )); total=$((total+ledger_size))
+          (( total <= 134217728 ))
+      - name: Retain diagnostic data only
+        if: always() && steps.ledger.outcome == 'success'
+        timeout-minutes: 2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: bounded-maintenance-${{ github.run_id }}-${{ github.run_attempt }}
+          name: windows-warm-search-alloc-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            ${{ runner.temp }}/mvcc-maintenance-a17fe/*.json
-            ${{ runner.temp }}/mvcc-maintenance-a17fe/*.log
-            ${{ runner.temp }}/mvcc-maintenance-a17fe/compiler
-            ${{ runner.temp }}/mvcc-maintenance-a17fe/archives
-            ${{ runner.temp }}/mvcc-maintenance-a17fe/go1.26.3-linux-amd64.tar.gz
-            ${{ runner.temp }}/mvcc-maintenance-a17fe/harness
-            ${{ runner.temp }}/mvcc-maintenance-a17fe/performance-185
-            !${{ runner.temp }}/mvcc-maintenance-a17fe/performance-185/**/tmp
-            ${{ runner.temp }}/mvcc-maintenance-setup
+            ${{ runner.temp }}/warm-search-alloc/*.txt
+            ${{ runner.temp }}/warm-search-alloc/*.json
+            ${{ runner.temp }}/warm-search-alloc/*.log
+            ${{ runner.temp }}/warm-search-alloc/*.pprof
+            ${{ runner.temp }}/warm-search-alloc/*.sha256
+            ${{ runner.temp }}/warm-search-alloc/*.stderr
+            ${{ runner.temp }}/warm-search-alloc/*.diff
           if-no-files-found: error
-          include-hidden-files: true
           retention-days: 14
