@@ -1,0 +1,50 @@
+{
+  "schema": "observer-source-relative-overlay-mappings-v1",
+  "status": "NOT_AN_EXECUTABLE_GO_OVERLAY_ROOT_MUST_BIND_ABSOLUTE_HOSTED_PATHS_AND_HASHES",
+  "primary": {
+    "B": {
+      "source": "29b879fbb4c4c6da2d7b18ff7c2a3a341e24e2b8",
+      "Replace": {
+        "TreeDB/mvcc/primary_generation_routing_v6_test.go": "candidate/TreeDB/mvcc/primary_generation_routing_v6_test.go",
+        "TreeDB/mvcc/primary_allocation_observer_test.go": "candidate/TreeDB/mvcc/primary_allocation_observer_test.go",
+        "TreeDB/caching/db.go": "baseline-candidate/TreeDB/caching/db.go",
+        "TreeDB/caching/primary_allocation_observer.go": "candidate/TreeDB/caching/primary_allocation_observer.go",
+        "TreeDB/caching/primary_allocation_observer_test.go": "candidate/TreeDB/caching/primary_allocation_observer_test.go"
+      }
+    },
+    "C": {
+      "source": "4934bd6d51d9047ba0187d05c1d211cbe419811a",
+      "Replace": {
+        "TreeDB/mvcc/primary_generation_routing_v6_test.go": "candidate/TreeDB/mvcc/primary_generation_routing_v6_test.go",
+        "TreeDB/mvcc/primary_allocation_observer_test.go": "candidate/TreeDB/mvcc/primary_allocation_observer_test.go",
+        "TreeDB/caching/db.go": "candidate/TreeDB/caching/db.go",
+        "TreeDB/caching/primary_allocation_observer.go": "candidate/TreeDB/caching/primary_allocation_observer.go",
+        "TreeDB/caching/primary_allocation_observer_test.go": "candidate/TreeDB/caching/primary_allocation_observer_test.go"
+      }
+    }
+  },
+  "m0": {
+    "C": {
+      "source": "4934bd6d51d9047ba0187d05c1d211cbe419811a",
+      "Replace": {
+        "TreeDB/db/vacuum_collection_bench_test.go": "candidate/TreeDB/db/vacuum_collection_bench_test.go",
+        "TreeDB/db/vacuum_m0_ordinal_observer_test.go": "candidate/TreeDB/db/vacuum_m0_ordinal_observer_test.go"
+      }
+    }
+  },
+  "focused_controls": {
+    "C": {
+      "source": "4934bd6d51d9047ba0187d05c1d211cbe419811a",
+      "Replace": {
+        "TreeDB/mvcc/primary_generation_routing_v6_test.go": "candidate/TreeDB/mvcc/primary_generation_routing_v6_test.go",
+        "TreeDB/mvcc/primary_allocation_observer_test.go": "candidate/TreeDB/mvcc/primary_allocation_observer_test.go",
+        "TreeDB/caching/db.go": "candidate/TreeDB/caching/db.go",
+        "TreeDB/caching/primary_allocation_observer.go": "candidate/TreeDB/caching/primary_allocation_observer.go",
+        "TreeDB/caching/primary_allocation_observer_test.go": "candidate/TreeDB/caching/primary_allocation_observer_test.go",
+        "TreeDB/db/vacuum_collection_bench_test.go": "candidate/TreeDB/db/vacuum_collection_bench_test.go",
+        "TreeDB/db/vacuum_m0_ordinal_observer_test.go": "candidate/TreeDB/db/vacuum_m0_ordinal_observer_test.go"
+      }
+    }
+  },
+  "rule": "Never use candidate/TreeDB/caching/db.go on baseline. Original fixtures are byte-identical; all new helper text is common. No product branch edit or publication."
+}

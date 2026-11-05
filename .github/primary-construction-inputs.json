@@ -1,0 +1,93 @@
+{
+  "files": {
+    ".github/primary-construction/B-source.json": {
+      "bytes": 800066,
+      "sha256": "6763a0a35f30ddc96e0c2363951d9c428faa067f7b37d7e895c14e4f3e800f09"
+    },
+    ".github/primary-construction/C-source.json": {
+      "bytes": 800797,
+      "sha256": "82678d32ca0489049811a032226f238ee6dc55408c5234f97455442bec7bc03a"
+    },
+    ".github/primary-construction/maintained-runner.py": {
+      "bytes": 42949,
+      "sha256": "6f122f8ed48343dc533de17344cfaa15d2c37b80ee6f3cac360c1c27b6b8c0ac"
+    },
+    ".github/primary-construction/owner/HOSTED_ROUTE.md": {
+      "bytes": 7861,
+      "sha256": "5dea51f3069095182003ee743fa9e850544f33488b050a85244505424cd7c7b8"
+    },
+    ".github/primary-construction/owner/baseline-candidate/TreeDB/caching/db.go": {
+      "bytes": 1431859,
+      "sha256": "07794e28af44c9ad7fc34f0fbe97a5b7964643d321367507f3930c8163e662f6"
+    },
+    ".github/primary-construction/owner/candidate/TreeDB/caching/db.go": {
+      "bytes": 1431966,
+      "sha256": "f7f6b5b189eeccfa860896ebb82e32c4d2856116db86b5f32f42bdb6de96d5a4"
+    },
+    ".github/primary-construction/owner/candidate/TreeDB/caching/primary_allocation_observer.go": {
+      "bytes": 3133,
+      "sha256": "a83048b2060445fe15f45f772ceb2cba1849ea558246bc7c52d0fd1b8b5c724b"
+    },
+    ".github/primary-construction/owner/candidate/TreeDB/caching/primary_allocation_observer_test.go": {
+      "bytes": 1878,
+      "sha256": "23719907cd6232275ced29c33807eef346734ecc266857e47904a70b3818a4e7"
+    },
+    ".github/primary-construction/owner/candidate/TreeDB/mvcc/primary_allocation_observer_test.go": {
+      "bytes": 10137,
+      "sha256": "97091ef5ffbc791752e2e666b4c0f8251ac238964b2b2e164db64459217e2974"
+    },
+    ".github/primary-construction/owner/candidate/TreeDB/mvcc/primary_generation_routing_v6_test.go": {
+      "bytes": 6621,
+      "sha256": "cb096a12dfa2d05d26324e56d632ac4ebfbcacd59476605c10c2730d49b32b27"
+    },
+    ".github/primary-construction/owner/format-source-review.json": {
+      "bytes": 5036,
+      "sha256": "20f479f9e01dd1b5f652e72ac8488c9f7a5f1b78ae574d9431604feaf372e85c"
+    },
+    ".github/primary-construction/owner/manifest.json": {
+      "bytes": 7585,
+      "sha256": "de927877f58f982516da5b9e766758233030b7027c8db51ee6bc341f18b7bcf4"
+    },
+    ".github/primary-construction/owner/overlays.json": {
+      "bytes": 2916,
+      "sha256": "4652442e079370e3cf203e7a8724e96b7841c760da7708981b6c5d61efc9246d"
+    },
+    ".github/primary-construction/preimages/B/TreeDB/caching/db.go": {
+      "bytes": 1431680,
+      "sha256": "31e1cb84139790865556b15308897c30beb61160363110823c6cc27cf0372f02"
+    },
+    ".github/primary-construction/preimages/B/TreeDB/mvcc/primary_generation_routing_v6_test.go": {
+      "bytes": 6288,
+      "sha256": "2642bedc0ed6edbea8d7a599c66642c1d2107d93f1faf03355fb8cb071c56ab9"
+    },
+    ".github/primary-construction/preimages/C/TreeDB/caching/db.go": {
+      "bytes": 1431787,
+      "sha256": "c0866f7bb670cfc9de12286e435c9cab0dec517565d3a8fcaafe94bf35de4fcd"
+    },
+    ".github/primary-construction/preimages/C/TreeDB/mvcc/primary_generation_routing_v6_test.go": {
+      "bytes": 6288,
+      "sha256": "2642bedc0ed6edbea8d7a599c66642c1d2107d93f1faf03355fb8cb071c56ab9"
+    },
+    ".github/scripts/primary_allocation_construction.py": {
+      "bytes": 23805,
+      "sha256": "7ac80396a106bf1f5d91019b4b179a29d7d362cb1da97834c9f7a19e112f8c08"
+    },
+    "scripts/ycsb_campaign_guard.py": {
+      "bytes": 19548,
+      "sha256": "b1f5308ce5de5bf1252a77694599f4be4fdf769803b4d7300c08b4901f8d9642"
+    },
+    "scripts/ycsb_compare_validate.py": {
+      "bytes": 49260,
+      "sha256": "85584d03f46e2f49be94d91b377b77e08494a846a30285bfb1300b932d57cb46"
+    },
+    "scripts/ycsb_evidence_json.py": {
+      "bytes": 1240,
+      "sha256": "86989ebbfa14b8f9f3c20ebe470314a29fd28c7db2ab10734d9518e39d270ea6"
+    },
+    "scripts/ycsb_runtime_observer.py": {
+      "bytes": 20408,
+      "sha256": "9ea6f525e0cf46df5301be3f903367816bdb032a3d0abb4c204bda60ee104d8f"
+    }
+  },
+  "schema": "primary-construction-inputs-v1"
+}

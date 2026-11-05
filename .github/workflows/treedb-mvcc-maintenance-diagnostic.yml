@@ -1,60 +1,119 @@
-name: "TreeDB: bounded maintenance diagnostic (manual only)"
+name: "TreeDB: bounded PRIMARY construction (manual only)"
 
 on:
   workflow_dispatch:
+    inputs:
+      expected_head:
+        description: Exact independently reviewed harness head
+        required: true
+        type: string
+      admission_b64:
+        description: Fresh ROOT construction-only admission; actual controls must be admitted
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 jobs:
   diagnostic:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
-    name: fixed 5bca / a17fe fourteen-call diagnostic
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/diagnostic/primary-allocation-construction-01' && github.actor_id == '1981537'
+    name: fixed PRIMARY source construction only
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 15
     env:
-      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONDONTWRITEBYTECODE: '1'
+      REVIEWED_HEAD: ${{ inputs.expected_head }}
+      ROOT_ADMISSION_B64: ${{ inputs.admission_b64 }}
+      WORKFLOW_COMMIT: ${{ github.workflow_sha }}
+      INPUT_MANIFEST_SHA256: 04e33ec1b5323c7419dc1db5e71f3f70c276a0ddf15b3e30f7c6e32ee926310d
     steps:
-      - name: Initialize retained attempt packet
+      - name: Authenticate fixed small harness before imports or source acquisition
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
-          mkdir "$RUNNER_TEMP/mvcc-maintenance-setup"
-          printf '%s\n' 'Only fixed separately reviewed bounded diagnostics are authorized.' "harness=$GITHUB_SHA" "run=$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT" > "$RUNNER_TEMP/mvcc-maintenance-setup/scope.txt"
-
-      - name: Checkout reviewed diagnostic harness
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          persist-credentials: false
-          ref: ${{ github.sha }}
-          fetch-depth: 0
-
-      - name: Setup exact Go 1.26.3
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
-        with:
-          go-version: "1.26.3"
-          check-latest: false
-          cache: false
-
-      - name: Check syntax, receipts and fixed workflow contract (no Go execution)
-        run: python3 -B .github/scripts/mvcc_maintenance_test.py > "$RUNNER_TEMP/mvcc-maintenance-setup/pure-tests.log" 2>&1
-
-      - name: Prepare exact inputs and collect once
-        run: python3 -B .github/scripts/mvcc_maintenance_bootstrap.py > "$RUNNER_TEMP/mvcc-maintenance-setup/bootstrap.log" 2>&1
-
-      - name: Upload complete attempt, including failure/refusal
+          python3 -I -B - <<'PY'
+          try:
+           import base64, hashlib, json, os, pathlib, shutil, stat, time, urllib.request
+           E = os.environ
+           assert E['GITHUB_REPOSITORY'] == 'snissn/gomap' and E['GITHUB_ACTOR_ID'] == '1981537'
+           assert E['GITHUB_REF'] == 'refs/heads/diagnostic/primary-allocation-construction-01'
+           assert E['GITHUB_EVENT_NAME'] == 'workflow_dispatch' and E['GITHUB_RUN_ATTEMPT'] == '1'
+           assert E['GITHUB_SHA'] == E['REVIEWED_HEAD'] == E['WORKFLOW_COMMIT']
+           a = json.loads(base64.b64decode(E['ROOT_ADMISSION_B64'], validate=True))
+           assert a['schema'] == 'primary-construction-admission-v1' and a['authority'] == 'ROOT'
+           assert a['status'] == 'ADMITTED_CONSTRUCTION_ONLY' and a['actor_id'] == '1981537'
+           assert a['head'] == E['GITHUB_SHA'] and a['allow_capture'] is False
+           assert a['controls']['status'] == 'ROOT_ADMITTED_FOCUSED_OBSERVER_CONTROLS'
+           assert all(a['controls'][m] == dict(tops=6,outcomes=26,leaves=24,exit=0,skips=0) for m in ('normal','race'))
+           common=pathlib.Path('/home/runner/work')
+           parent=pathlib.Path(E['RUNNER_TEMP']).resolve(strict=True)
+           assert parent == common/'_temp' and pathlib.Path(E['GITHUB_WORKSPACE']).resolve().is_relative_to(common)
+           root=parent/'primary-allocation-construction'
+           root.mkdir()  # Exclusive: never reuse an earlier attempt.
+           started=time.monotonic()
+           (root/'bootstrap-start.json').write_text(json.dumps(dict(monotonic=started,accounting_root=str(common))))
+           harness=root/'harness';harness.mkdir()
+           rows={'.github/scripts/primary_allocation_construction.py': {'bytes': 23805, 'sha256': '7ac80396a106bf1f5d91019b4b179a29d7d362cb1da97834c9f7a19e112f8c08'}, '.github/primary-construction/B-source.json': {'bytes': 800066, 'sha256': '6763a0a35f30ddc96e0c2363951d9c428faa067f7b37d7e895c14e4f3e800f09'}, '.github/primary-construction/C-source.json': {'bytes': 800797, 'sha256': '82678d32ca0489049811a032226f238ee6dc55408c5234f97455442bec7bc03a'}, '.github/primary-construction/maintained-runner.py': {'bytes': 42949, 'sha256': '6f122f8ed48343dc533de17344cfaa15d2c37b80ee6f3cac360c1c27b6b8c0ac'}, '.github/primary-construction/owner/HOSTED_ROUTE.md': {'bytes': 7861, 'sha256': '5dea51f3069095182003ee743fa9e850544f33488b050a85244505424cd7c7b8'}, '.github/primary-construction/owner/baseline-candidate/TreeDB/caching/db.go': {'bytes': 1431859, 'sha256': '07794e28af44c9ad7fc34f0fbe97a5b7964643d321367507f3930c8163e662f6'}, '.github/primary-construction/owner/candidate/TreeDB/caching/db.go': {'bytes': 1431966, 'sha256': 'f7f6b5b189eeccfa860896ebb82e32c4d2856116db86b5f32f42bdb6de96d5a4'}, '.github/primary-construction/owner/candidate/TreeDB/caching/primary_allocation_observer.go': {'bytes': 3133, 'sha256': 'a83048b2060445fe15f45f772ceb2cba1849ea558246bc7c52d0fd1b8b5c724b'}, '.github/primary-construction/owner/candidate/TreeDB/caching/primary_allocation_observer_test.go': {'bytes': 1878, 'sha256': '23719907cd6232275ced29c33807eef346734ecc266857e47904a70b3818a4e7'}, '.github/primary-construction/owner/candidate/TreeDB/mvcc/primary_allocation_observer_test.go': {'bytes': 10137, 'sha256': '97091ef5ffbc791752e2e666b4c0f8251ac238964b2b2e164db64459217e2974'}, '.github/primary-construction/owner/candidate/TreeDB/mvcc/primary_generation_routing_v6_test.go': {'bytes': 6621, 'sha256': 'cb096a12dfa2d05d26324e56d632ac4ebfbcacd59476605c10c2730d49b32b27'}, '.github/primary-construction/owner/format-source-review.json': {'bytes': 5036, 'sha256': '20f479f9e01dd1b5f652e72ac8488c9f7a5f1b78ae574d9431604feaf372e85c'}, '.github/primary-construction/owner/manifest.json': {'bytes': 7585, 'sha256': 'de927877f58f982516da5b9e766758233030b7027c8db51ee6bc341f18b7bcf4'}, '.github/primary-construction/owner/overlays.json': {'bytes': 2916, 'sha256': '4652442e079370e3cf203e7a8724e96b7841c760da7708981b6c5d61efc9246d'}, '.github/primary-construction/preimages/B/TreeDB/caching/db.go': {'bytes': 1431680, 'sha256': '31e1cb84139790865556b15308897c30beb61160363110823c6cc27cf0372f02'}, '.github/primary-construction/preimages/B/TreeDB/mvcc/primary_generation_routing_v6_test.go': {'bytes': 6288, 'sha256': '2642bedc0ed6edbea8d7a599c66642c1d2107d93f1faf03355fb8cb071c56ab9'}, '.github/primary-construction/preimages/C/TreeDB/caching/db.go': {'bytes': 1431787, 'sha256': 'c0866f7bb670cfc9de12286e435c9cab0dec517565d3a8fcaafe94bf35de4fcd'}, '.github/primary-construction/preimages/C/TreeDB/mvcc/primary_generation_routing_v6_test.go': {'bytes': 6288, 'sha256': '2642bedc0ed6edbea8d7a599c66642c1d2107d93f1faf03355fb8cb071c56ab9'}, 'scripts/ycsb_campaign_guard.py': {'bytes': 19548, 'sha256': 'b1f5308ce5de5bf1252a77694599f4be4fdf769803b4d7300c08b4901f8d9642'}, 'scripts/ycsb_compare_validate.py': {'bytes': 49260, 'sha256': '85584d03f46e2f49be94d91b377b77e08494a846a30285bfb1300b932d57cb46'}, 'scripts/ycsb_evidence_json.py': {'bytes': 1240, 'sha256': '86989ebbfa14b8f9f3c20ebe470314a29fd28c7db2ab10734d9518e39d270ea6'}, 'scripts/ycsb_runtime_observer.py': {'bytes': 20408, 'sha256': '9ea6f525e0cf46df5301be3f903367816bdb032a3d0abb4c204bda60ee104d8f'}, '.github/primary-construction-inputs.json': {'bytes': 4074, 'sha256': '04e33ec1b5323c7419dc1db5e71f3f70c276a0ddf15b3e30f7c6e32ee926310d'}}
+           class NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self,*args,**kwargs): raise RuntimeError('redirect refused')
+           opener=urllib.request.build_opener(NoRedirect)
+           def check(extra=0):
+            total=0
+            for directory,dirs,names in os.walk(common,followlinks=False):
+             assert all(not (pathlib.Path(directory)/n).is_symlink() for n in dirs)
+             for n in names:
+              p=pathlib.Path(directory)/n
+              try:s=p.lstat()
+              except FileNotFoundError:continue
+              assert stat.S_ISREG(s.st_mode) and not p.is_symlink()
+              total+=s.st_size
+            assert total+extra<=1073741824 and shutil.disk_usage(common).free>=10737418240
+            assert time.monotonic()-started<840
+            return total
+           initial=check(sum(r['bytes'] for r in rows.values()))
+           for name,r in rows.items():
+            assert not name.startswith('/') and '..' not in pathlib.PurePosixPath(name).parts
+            target=harness/name;target.parent.mkdir(parents=True,exist_ok=True)
+            digest=hashlib.sha256();received=0
+            request=urllib.request.Request('https://raw.githubusercontent.com/snissn/gomap/'+E['GITHUB_SHA']+'/'+name)
+            with opener.open(request,timeout=min(30,840-(time.monotonic()-started))) as source, target.open('xb') as out:
+             assert source.status==200
+             while True:
+              block=source.read(65536)
+              if not block:break
+              assert received+len(block)<=r['bytes'];check(len(block))
+              out.write(block);received+=len(block);digest.update(block)
+            assert received==r['bytes'] and digest.hexdigest()==r['sha256'];check()
+           (root/'bootstrap-receipt.json').write_text(json.dumps(dict(files=len(rows),bytes=sum(r['bytes'] for r in rows.values()),initial_observed_bytes_including_preexisting=initial,final_observed_bytes=check(),all_pins_verified=True,scope='from first authenticated step; not platform startup or instantaneous quota')))
+           check()
+           print(json.dumps(dict(bootstrap='ALL_FIXED_INPUT_PINS_VERIFIED',files=len(rows))))
+          except BaseException as error:
+           print(json.dumps(dict(status="BOOTSTRAP_FAILED",error_class=type(error).__name__)))
+           raise SystemExit(1)
+          PY
+      - name: One bounded setup and two normal builds; no capture
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          python3 -I -B "$RUNNER_TEMP/primary-allocation-construction/harness/.github/scripts/primary_allocation_construction.py" launch
+      - name: Retain original output, including failures
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        env:
+          TMPDIR: ${{ runner.temp }}/primary-allocation-construction/tmp
+          TMP: ${{ runner.temp }}/primary-allocation-construction/tmp
+          TEMP: ${{ runner.temp }}/primary-allocation-construction/tmp
         with:
-          name: bounded-maintenance-${{ github.run_id }}-${{ github.run_attempt }}
+          name: primary-construction-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            ${{ runner.temp }}/mvcc-maintenance-a17fe/*.json
-            ${{ runner.temp }}/mvcc-maintenance-a17fe/*.log
-            ${{ runner.temp }}/mvcc-maintenance-a17fe/compiler
-            ${{ runner.temp }}/mvcc-maintenance-a17fe/archives
-            ${{ runner.temp }}/mvcc-maintenance-a17fe/go1.26.3-linux-amd64.tar.gz
-            ${{ runner.temp }}/mvcc-maintenance-a17fe/harness
-            ${{ runner.temp }}/mvcc-maintenance-a17fe/performance-185
-            !${{ runner.temp }}/mvcc-maintenance-a17fe/performance-185/**/tmp
-            ${{ runner.temp }}/mvcc-maintenance-setup
+            ${{ runner.temp }}/primary-allocation-construction/bootstrap-*.json
+            ${{ runner.temp }}/primary-allocation-construction/construction-terminal.json
+            ${{ runner.temp }}/primary-allocation-construction/output
+            ${{ runner.temp }}/primary-allocation-construction/guard
+            ${{ runner.temp }}/primary-allocation-construction/bin
           if-no-files-found: error
           include-hidden-files: true
           retention-days: 14

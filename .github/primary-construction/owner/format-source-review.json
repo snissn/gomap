@@ -1,0 +1,95 @@
+{
+  "all_text_checks_pass": true,
+  "changed_go_files": 6,
+  "compile": "UNRUN",
+  "expected_per_mode": {
+    "child_outcomes": 20,
+    "leaves": 24,
+    "tops": 6,
+    "total_named_outcomes": 26
+  },
+  "files": {
+    "candidate/TreeDB/caching/db.go": {
+      "canonical_source_tokens_equal": true,
+      "canonical_token_sha256": null,
+      "changed": false,
+      "comment_sequence_sha256": null,
+      "comments_equal": true,
+      "exact_inverse_restores_preformat": true,
+      "formatted_sha256": "f7f6b5b189eeccfa860896ebb82e32c4d2856116db86b5f32f42bdb6de96d5a4",
+      "preformat_sha256": "f7f6b5b189eeccfa860896ebb82e32c4d2856116db86b5f32f42bdb6de96d5a4"
+    },
+    "candidate/TreeDB/caching/primary_allocation_observer.go": {
+      "canonical_source_tokens_equal": true,
+      "canonical_token_sha256": "7d765a92ad4ebe27b34382cd88e40e698bcecf9bad3683cb29155d83bdf73ce8",
+      "changed": true,
+      "comment_sequence_sha256": "183c4d4fd24ba81c7ac6bad71be37a98adfa5f4db77f05f3d89bc26468e6d5ce",
+      "comments_equal": true,
+      "exact_inverse_restores_preformat": true,
+      "formatted_sha256": "a83048b2060445fe15f45f772ceb2cba1849ea558246bc7c52d0fd1b8b5c724b",
+      "preformat_sha256": "fbddd5e40bd5668a544a36ba0a2ad7bbc9828bc3402e0ee5a118ddecd26fa26f"
+    },
+    "candidate/TreeDB/caching/primary_allocation_observer_test.go": {
+      "canonical_source_tokens_equal": true,
+      "canonical_token_sha256": "8674423bb6bb94d90bd6e001ab8766c219d7fdc797857472f6ed5d9eb12841e2",
+      "changed": true,
+      "comment_sequence_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "comments_equal": true,
+      "exact_inverse_restores_preformat": true,
+      "formatted_sha256": "23719907cd6232275ced29c33807eef346734ecc266857e47904a70b3818a4e7",
+      "preformat_sha256": "2d9569aa0a3bbc62fb686b81b0802c15e005387f5ecf24ed15c04a68d12d2ecb"
+    },
+    "candidate/TreeDB/db/vacuum_collection_bench_test.go": {
+      "canonical_source_tokens_equal": true,
+      "canonical_token_sha256": "378308165e465fef142ed6ff65fb4564ca0ec3bbe72ee141057a3abf523a3c4e",
+      "changed": true,
+      "comment_sequence_sha256": "07f240729dea9beb9f1085996b451e7f08da99d6048d83bcb12a4aff8fe65bc8",
+      "comments_equal": true,
+      "exact_inverse_restores_preformat": true,
+      "formatted_sha256": "09f8b0758018fd5e2fd0994aab18463ecdffa40add6796198b81bded69ac2d81",
+      "preformat_sha256": "b3ade2cad976205bcd46291fc1626d565d840dd3bd38eac2770d7a87ce17732c"
+    },
+    "candidate/TreeDB/db/vacuum_m0_ordinal_observer_test.go": {
+      "canonical_source_tokens_equal": true,
+      "canonical_token_sha256": "ca51c4549e2db529cae9549c9ca7a879a04df1ca388359a3a07ef9340d0ee1a6",
+      "changed": true,
+      "comment_sequence_sha256": "32290bb695e5966ff41df10b6ce30f8eeb6b8b7191b80afcf7c0544e0d5f7ad0",
+      "comments_equal": true,
+      "exact_inverse_restores_preformat": true,
+      "formatted_sha256": "648f61eeb148809e9a42cd087e979ce078574110142c7a944f61c274b4aacf49",
+      "preformat_sha256": "2c2295e4f0f71f5c0806153602b0cc1607fb798e86e7accc7dd63acc12cdd4eb"
+    },
+    "candidate/TreeDB/mvcc/primary_allocation_observer_test.go": {
+      "canonical_source_tokens_equal": true,
+      "canonical_token_sha256": "234295e774cbb9c2d59e2c6d686aa2881280a79d830e032ddee698ad24ba7b98",
+      "changed": true,
+      "comment_sequence_sha256": "b2d3449ef430f7b5134f6cc2bdf2d32c1f7c680d5ddea68dec42657f70baf7e5",
+      "comments_equal": true,
+      "exact_inverse_restores_preformat": true,
+      "formatted_sha256": "97091ef5ffbc791752e2e666b4c0f8251ac238964b2b2e164db64459217e2974",
+      "preformat_sha256": "ed35851af6cc33a65be6028ebfa70ce494c48b0de33112e83e6fb7bb8d32cf18"
+    },
+    "candidate/TreeDB/mvcc/primary_generation_routing_v6_test.go": {
+      "canonical_source_tokens_equal": true,
+      "canonical_token_sha256": "22da0a3a8666c7fdbf10dc273e90a9a285a960dc66b2a85e35178ccfd0f170af",
+      "changed": true,
+      "comment_sequence_sha256": "e2a51b07432fec5619d91c0efcbc355873b025a8b75fd83cdef5f241f56b8daf",
+      "comments_equal": true,
+      "exact_inverse_restores_preformat": true,
+      "formatted_sha256": "cb096a12dfa2d05d26324e56d632ac4ebfbcacd59476605c10c2730d49b32b27",
+      "preformat_sha256": "4c893815df2822b4fa8069cdc54e707555886b4ac50aa9b200bf36fd65466ded"
+    }
+  },
+  "format": "MANUAL_PROVISIONAL_HOSTED_GO1.26.10_CHECK_UNRUN",
+  "inventory_and_overlay_bindings_unchanged": true,
+  "normal": "UNRUN",
+  "original_arm_preimages_and_baseline_seam_unchanged": true,
+  "original_m0_default_writer_byte_identical": true,
+  "original_primary_loop_and_tests_byte_identical": true,
+  "predecessor_25_files_authenticated": true,
+  "predecessor_manifest_sha256": "5598e7d3aa39dec908740dad4d4b7264e449655b39fdae17210acf3c3835fe80",
+  "product_capture": "UNRUN",
+  "race": "UNRUN",
+  "schema": "manual-format-source-preservation-v1",
+  "scope": "Python source text/hash/lexical-semicolon and exact inverse analysis only; not Go parser, formatter, compiler, tests or functional qualification."
+}
