@@ -20,7 +20,7 @@ GIB = 1024**3
 WHOLE = 840
 ROOT_THREAD = '01a18e7c-8c23-7fd2-8d55-b0486d938cd3'
 CONTROLS_PASS_SHA256 = '5fbc92847359e709fe9ef7812786ff469f9892dedf9e4c81d27a3183e67245c5'
-BRANCH = 'refs/heads/diagnostic/primary-allocation-construction-01'
+BRANCH = 'refs/heads/diagnostic/primary-allocation-manifest-transport-01'
 SDK = Path('/opt/hostedtoolcache/go/1.26.10/x64')
 HERE = Path(__file__).resolve().parent
 HARNESS = HERE.parent.parent
@@ -120,6 +120,37 @@ def authenticate(a):
         need(accepted[mode] == dict(tops=6, outcomes=26, leaves=24)
              and accepted['literal_'+mode+'_exit'] == 0, 'actual controls incomplete')
     return m
+
+
+def runtime_inputs(a):
+    # Exact fixed source manifest transports all rows, not a universal closure.
+    binding = a.get('readonly_runtime_manifest', {})
+    need('readonly_runtime_inputs' not in a and isinstance(binding, dict)
+         and set(binding) == {'path', 'bytes', 'sha256', 'rows'}
+         and binding['path'] == '.github/primary-construction/readonly-runtime-inputs.json'
+         and type(binding['bytes']) is int and 0 < binding['bytes'] <= 1024**2
+         and type(binding['rows']) is int and 0 < binding['rows'] <= 4096
+         and re.fullmatch('[0-9a-f]{64}', binding['sha256']) is not None,
+         'exact runtime manifest admission required')
+    path = HARNESS/binding['path']
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        before = os.fstat(fd)
+        need(stat.S_ISREG(before.st_mode) and before.st_nlink == 1
+             and before.st_size == binding['bytes'], 'regular bounded runtime manifest')
+        with os.fdopen(fd, 'rb', closefd=False) as source:
+            raw = source.read(binding['bytes']+1)
+        after = os.fstat(fd)
+        need(len(raw) == binding['bytes']
+             and all(getattr(before, k) == getattr(after, k) for k in
+                     ('st_dev', 'st_ino', 'st_mode', 'st_nlink', 'st_size', 'st_mtime_ns', 'st_ctime_ns'))
+             and hashlib.sha256(raw).hexdigest() == binding['sha256'], 'runtime manifest identity differs')
+    finally:
+        os.close(fd)
+    rows = json.loads(raw)
+    need(isinstance(rows, list) and len(rows) == binding['rows']
+         and raw == canonical(rows)+b'\n', 'complete canonical runtime rows required')
+    return rows
 
 
 def root_path():
@@ -447,7 +478,7 @@ def worker(root, a, started):
         write(root/'output/sdk-identity.json', sdk_identity(r, a['sdk']))
         tools = {name: tool_identity(path, a['tools'][name]) for name, path in
                  (('git', '/usr/bin/git'), ('gcc', '/usr/bin/gcc'), ('g++', '/usr/bin/g++'))}
-        readonly = a['readonly_runtime_inputs']
+        readonly = runtime_inputs(a)
         need(isinstance(readonly, list) and 0 < len(readonly) <= 4096,
              'bounded original runtime/tool dependency binding required')
         for row in readonly:
@@ -556,7 +587,7 @@ def main():
     tool_identity(os.environ['PRIMARY_NODE_PATH'], a['tools']['node'])
     # Explicit ROOT-bound read-only runtime/tool closure authenticates before
     # the first downloaded helper import, not merely before Go execution.
-    readonly = a['readonly_runtime_inputs']
+    readonly = runtime_inputs(a)
     need(isinstance(readonly, list) and 0 < len(readonly) <= 4096, 'bounded runtime input closure')
     for row in readonly:
         need(Path(row['path']).is_absolute(), 'absolute runtime input path')

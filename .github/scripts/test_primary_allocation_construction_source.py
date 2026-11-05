@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import unittest
 from unittest.mock import patch
 import yaml
@@ -20,8 +21,8 @@ FUNCTIONS = {n.name: n for n in TREE.body if isinstance(n, ast.FunctionDef)}
 
 def isolated(names):
     nodes = [FUNCTIONS[name] for name in names]
-    namespace = dict(os=os, json=json, base64=base64, re=re,
-                     BRANCH='refs/heads/diagnostic/primary-allocation-construction-01',
+    namespace = dict(os=os, json=json, base64=base64, re=re, Path=Path, stat=stat, hashlib=hashlib, HARNESS=ROOT,
+                     BRANCH='refs/heads/diagnostic/primary-allocation-manifest-transport-01',
                      ROOT_THREAD='01a18e7c-8c23-7fd2-8d55-b0486d938cd3',
                      CONTROLS_PASS_SHA256='5fbc92847359e709fe9ef7812786ff469f9892dedf9e4c81d27a3183e67245c5')
     exec(compile(ast.Module(body=nodes, type_ignores=[]), '<pure-predicates-only>', 'exec'), namespace)
@@ -165,6 +166,32 @@ class PrimaryConstructionSource(unittest.TestCase):
         bundle=ROOT/'.github/primary-construction/upload-artifact/index.js'
         self.assertEqual(hashlib.sha256(bundle.read_bytes()).hexdigest(),
                          '0165b8a75330f3228f2c7a234b4ff8a107b9139c2b519147f4c8e9fe99b262d8')
+
+    def test_complete_runtime_manifest_and_refusal_cases(self):
+        ns = isolated(('need', 'canonical', 'runtime_inputs'))
+        relative = '.github/primary-construction/readonly-runtime-inputs.json'
+        raw = (ROOT/relative).read_bytes()
+        rows = json.loads(raw)
+        bound = dict(path=relative, bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest(), rows=268)
+        a = dict(readonly_runtime_manifest=bound)
+        self.assertEqual(ns['runtime_inputs'](a), rows)
+        self.assertEqual(raw, ns['canonical'](rows)+b'\n')
+        for key, value in [('path','/outside.json'),('bytes',len(raw)-1),('bytes',0),
+                           ('bytes',1024**2+1),('sha256','0'*64),('rows',267),('rows',4097)]:
+            with self.subTest(key=key,value=value), self.assertRaises(RuntimeError):
+                ns['runtime_inputs'](dict(readonly_runtime_manifest=dict(bound, **{key:value})))
+        with self.assertRaises(RuntimeError):
+            ns['runtime_inputs'](dict(a,readonly_runtime_inputs=rows))
+        with self.assertRaises(RuntimeError):
+            ns['runtime_inputs']({})
+        main = ast.get_source_segment(SOURCE, FUNCTIONS['main'])
+        self.assertLess(main.index('authenticate(a)'), main.index('readonly = runtime_inputs(a)'))
+        self.assertLess(main.index('for row in readonly:'), main.index("if args.mode == 'worker'"))
+        self.assertIn("tool_identity(row['path'], row)", main)
+        worker = ast.get_source_segment(SOURCE, FUNCTIONS['worker'])
+        self.assertIn('readonly = runtime_inputs(a)', worker)
+        self.assertIn("tool_identity(row['path'], row)", worker)
+        self.assertIn('os.O_NOFOLLOW', ast.get_source_segment(SOURCE, FUNCTIONS['runtime_inputs']))
 
     def test_precise_owner_sources_and_baseline_separation(self):
         data=ROOT/'.github/primary-construction'
