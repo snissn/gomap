@@ -18,6 +18,8 @@ import time
 
 GIB = 1024**3
 WHOLE = 840
+ROOT_THREAD = '01a18e7c-8c23-7fd2-8d55-b0486d938cd3'
+CONTROLS_PASS_SHA256 = '5fbc92847359e709fe9ef7812786ff469f9892dedf9e4c81d27a3183e67245c5'
 BRANCH = 'refs/heads/diagnostic/primary-allocation-construction-01'
 SDK = Path('/opt/hostedtoolcache/go/1.26.10/x64')
 HERE = Path(__file__).resolve().parent
@@ -72,7 +74,8 @@ def authority():
     a = json.loads(base64.b64decode(encoded, validate=True))
     need(a.get('schema') == 'primary-construction-admission-v1'
          and a.get('status') == 'ADMITTED_CONSTRUCTION_ONLY' and a.get('authority') == 'ROOT'
-         and a.get('actor_id') == '1981537' and a.get('head') == head
+         and a.get('actor_id') == '1981537' and a.get('authority_thread') == ROOT_THREAD
+         and a.get('head') == head
          and a.get('run_attempt') == '1' and a.get('allow_capture') is False,
          'fixed ROOT construction-only admission')
     for field in ('independent_source_review_sha256', 'owner_manifest_sha256'):
@@ -80,6 +83,7 @@ def authority():
     c = a.get('controls', {})
     need(c.get('status') == 'ROOT_ADMITTED_FOCUSED_OBSERVER_CONTROLS'
          and c.get('owner_manifest_sha256') == a['owner_manifest_sha256']
+         and c.get('root_receipt_sha256') == CONTROLS_PASS_SHA256
          and re.fullmatch('[0-9a-f]{64}', c.get('review_sha256', '')) is not None
          and type(c.get('run_id')) is int and c['run_id'] > 0
          and type(c.get('job_id')) is int and c['job_id'] > 0, 'actual owner controls admission required')
@@ -100,6 +104,21 @@ def authenticate(a):
         need(stat.S_ISREG(s.st_mode) and s.st_nlink == 1 and not path.is_symlink()
              and s.st_size == row['bytes'] and sha(path) == row['sha256'], 'fixed input drift')
     need(sha(DATA/'owner/manifest.json') == a['owner_manifest_sha256'], 'owner manifest differs')
+    proof = DATA/'root-controls-pass.json'
+    need(sha(proof) == CONTROLS_PASS_SHA256, 'immutable actual controls receipt differs')
+    accepted = read(proof)
+    need(accepted['authority'] == 'ROOT' and accepted['authority_thread'] == ROOT_THREAD
+         and accepted['actor_id'] == '1981537'
+         and accepted['status'] == 'ROOT_NORMAL_RACE_CONTROLS_ADMITTED'
+         and accepted['owner_manifest_sha256'] == a['owner_manifest_sha256']
+         and accepted['independent_review_sha256'] == a['controls']['review_sha256']
+         and accepted['run_id'] == a['controls']['run_id']
+         and accepted['job_id'] == a['controls']['job_id']
+         and accepted['positive_outer_guard_cleanup'] is True and accepted['skips'] == 0
+         and accepted['product_capture'] is False, 'actual controls admission mismatch')
+    for mode in ('normal', 'race'):
+        need(accepted[mode] == dict(tops=6, outcomes=26, leaves=24)
+             and accepted['literal_'+mode+'_exit'] == 0, 'actual controls incomplete')
     return m
 
 
@@ -284,6 +303,91 @@ def source_identity(source, spec):
     need(observed == set(expected), 'incomplete sparse source')
 
 
+
+def upload_outputs(text, repository, run_id):
+    # Fixed @actions/core OUTPUT protocol for precisely this unchanged upload entry.
+    need(len(text.encode('utf-8')) <= 4096, 'bounded upload outputs')
+    lines = text.splitlines()
+    result = {}
+    while lines:
+        key, marker = lines.pop(0).split('<<', 1)
+        need(key in ('artifact-id', 'artifact-digest', 'artifact-url') and key not in result
+             and re.fullmatch('ghadelimiter_[0-9a-f-]{36}', marker) is not None,
+             'unexpected upload output')
+        need(len(lines) >= 2 and lines[1] == marker, 'malformed upload output')
+        result[key] = lines.pop(0)
+        lines.pop(0)
+    need(set(result) == {'artifact-id', 'artifact-digest', 'artifact-url'}
+         and re.fullmatch('[1-9][0-9]*', result['artifact-id']) is not None
+         and re.fullmatch('[0-9a-f]{64}', result['artifact-digest']) is not None,
+         'missing or invalid upload identity')
+    expected = 'https://github.com/'+repository+'/actions/runs/'+run_id+'/artifacts/'+result['artifact-id']
+    need(result['artifact-url'] == expected, 'foreign artifact output')
+    return result
+
+
+def publish(root, a, r, run, env, runtime):
+    receipt = dict(status='PUBLICATION_FAILED', uploader_commit='ea165f8d65b6e75b540449e92b4886f43607fa02')
+    try:
+        r.guard()
+        node = tool_identity(os.environ['PRIMARY_NODE_PATH'], a['tools']['node'])
+        bundle = DATA/'upload-artifact/index.js'
+        write(root/'output/prepublication-commands.json', r.commands)
+        # Existing command files/logs are closed. Never include the live guard,
+        # the forthcoming upload log, or later terminal/custody receipts.
+        paths = sorted([*root.glob('bootstrap-*.json'), *list((root/'bin').iterdir()),
+                        *list((root/'output').iterdir())])
+        need(0 < len(paths) <= 4096, 'bounded immutable publication members')
+        rows = []
+        for path in paths:
+            item = path.lstat()
+            need(stat.S_ISREG(item.st_mode) and item.st_nlink == 1 and not path.is_symlink(),
+                 'immutable member must be regular single-link')
+            rows.append(dict(path=str(path.relative_to(root)), bytes=item.st_size, sha256=sha(path)))
+        manifest = root/'output/prepublication-manifest.json'
+        write(manifest, dict(schema='primary-prepublication-members-v1', files=rows,
+                             excludes='active upload/guard logs and all post-join receipts'))
+        receipt.update(member_manifest_sha256=sha(manifest), members=len(rows)+1,
+                       uploader_sha256=sha(bundle), node=a['tools']['node'])
+        # Only this child receives artifact runtime credentials. Go/Git env is separate.
+        output = Path(runtime['GITHUB_OUTPUT'])
+        info = output.lstat()
+        need(output.resolve(strict=True).is_relative_to(accounting_root(root))
+             and stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_size == 0,
+             'fresh counted standard action output required before upload')
+        selected = dict(env)
+        selected.update(runtime)
+        selected.update({'INPUT_NAME': 'primary-construction-'+runtime['GITHUB_RUN_ID']+'-'+runtime['GITHUB_RUN_ATTEMPT'],
+                         'INPUT_PATH': '\n'.join(str(path) for path in [*paths, manifest]),
+                         'INPUT_IF-NO-FILES-FOUND': 'error', 'INPUT_RETENTION-DAYS': '14',
+                         'INPUT_COMPRESSION-LEVEL': '6', 'INPUT_OVERWRITE': 'false',
+                         'INPUT_INCLUDE-HIDDEN-FILES': 'true'})
+        try:
+            run('publication', [node, str(bundle)], WHOLE, selected_env=selected)
+        finally:
+            selected.clear()
+        for row in rows:
+            path = root/row['path']
+            need(path.stat().st_size == row['bytes'] and sha(path) == row['sha256'],
+                 'uploaded immutable member changed')
+        output = Path(runtime['GITHUB_OUTPUT'])
+        info = output.lstat()
+        need(output.resolve(strict=True).is_relative_to(accounting_root(root))
+             and stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_size <= 4096,
+             'counted regular upload output required')
+        values = upload_outputs(output.read_text(), runtime['GITHUB_REPOSITORY'], runtime['GITHUB_RUN_ID'])
+        receipt.update(status='UPLOAD_JOINED_PENDING_OUTER_GUARD', outputs=values,
+                       output_sha256=sha(output), command=r.commands[-1])
+        r.guard()
+    except BaseException as caught:
+        receipt.update(status='PUBLICATION_FAILED', error_class=type(caught).__name__)
+        raise
+    finally:
+        # This receipt intentionally does not belong to the artifact it certifies.
+        write(root/'output/publication-receipt.json', receipt)
+        r.guard()
+
+
 def worker(root, a, started):
     # This point is reached only through the authenticated portable outer guard.
     for name in ('output', 'tmp', 'gocache', 'modcache', 'gopath', 'bin', 'xdg-cache', 'xdg-config'):
@@ -294,6 +398,22 @@ def worker(root, a, started):
     r.out = root/'output'
     error = None
     builds = {}
+    runtime = {}
+    for key in ('ACTIONS_RUNTIME_TOKEN', 'ACTIONS_RUNTIME_URL', 'ACTIONS_RESULTS_URL',
+                'GITHUB_OUTPUT', 'GITHUB_REPOSITORY', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT',
+                'GITHUB_SERVER_URL', 'GITHUB_WORKSPACE'):
+        need(os.environ.get(key), 'standard action runtime environment required')
+        runtime[key] = os.environ[key]
+    for key in ('GITHUB_API_URL', 'GITHUB_GRAPHQL_URL', 'GITHUB_ACTOR', 'GITHUB_REF',
+                'GITHUB_SHA', 'GITHUB_RUN_NUMBER', 'GITHUB_WORKFLOW', 'GITHUB_JOB',
+                'GITHUB_ACTION', 'GITHUB_RETENTION_DAYS', 'GITHUB_EVENT_NAME', 'GITHUB_EVENT_PATH',
+                'RUNNER_DEBUG', 'HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY',
+                'https_proxy', 'http_proxy', 'no_proxy'):
+        if key in os.environ:
+            runtime[key] = os.environ[key]
+    for key in list(os.environ):
+        if key.startswith('ACTIONS_'):
+            os.environ.pop(key)
     token = os.environ.pop('GH_TOKEN', None)
     os.environ.pop('ROOT_ADMISSION_B64', None)
     env = {k: v for k, v in os.environ.items() if k in ('HOME', 'LANG', 'LC_ALL')}
@@ -399,6 +519,16 @@ def worker(root, a, started):
         error = type(caught).__name__  # Never print credential-bearing exception repr/argv/env.
     finally:
         token = None
+        # Preserve the original always-retain intent for ordinary build failures,
+        # but never start publication after an observed breach or expired clock.
+        try:
+            if r.first_failure is None and time.monotonic() < r.deadline:
+                publish(root, a, r, run, env, runtime)
+            else:
+                error = error or 'PublicationResourceRefusal'
+        except BaseException as caught:
+            error = error or type(caught).__name__
+        runtime.clear()
         r.close()
         final = census(root)
         if final['errors'] or r.first_failure:
@@ -406,6 +536,7 @@ def worker(root, a, started):
         terminal = dict(status='CONSTRUCTION_FAILED_NO_CAPTURE' if error else 'TWO_NORMAL_BUILDS_PENDING_OUTER_REVIEW',
                         error_class=error, builds=builds, commands=r.commands, final_census=final,
                         first_failure=r.first_failure, max_sampled_whole_bytes=r.maximum,
+                        publication_sha256=sha(root/'output/publication-receipt.json') if (root/'output/publication-receipt.json').exists() else None,
                         capture=False, m0=False, release='ONLY_OUTER_GUARD_CAN_PROVE_DESCENDANT_DRAIN')
         write(root/'output/worker-terminal.json', terminal)
         # Final receipt bytes count too; this failure cannot be relabeled success.
@@ -422,6 +553,7 @@ def main():
     a = authority()
     authenticate(a)  # Before runner/helper import or any source/build acquisition.
     tool_identity(sys.executable, a['tools']['python'])
+    tool_identity(os.environ['PRIMARY_NODE_PATH'], a['tools']['node'])
     # Explicit ROOT-bound read-only runtime/tool closure authenticates before
     # the first downloaded helper import, not merely before Go execution.
     readonly = a['readonly_runtime_inputs']
@@ -458,16 +590,25 @@ def main():
     result = read(root/'guard/result.json')
     terminal = read(root/'output/worker-terminal.json')
     final = census(root)
-    passed = (code == 0 and result['errors'] == [] and result['cleanup_signals'] == []
+    publication = read(root/'output/publication-receipt.json') if (root/'output/publication-receipt.json').exists() else None
+    passed = (publication is not None and publication['status'] == 'UPLOAD_JOINED_PENDING_OUTER_GUARD'
+              and code == 0 and result['errors'] == [] and result['cleanup_signals'] == []
               and result['status'] == 'guard-completed-pending-independent-artifact-review'
               and terminal['status'] == 'TWO_NORMAL_BUILDS_PENDING_OUTER_REVIEW'
               and not final['errors'])
     write(root/'construction-terminal.json', dict(status='CONSTRUCTION_CLOSED_PENDING_ARTIFACT_REVIEW' if passed else 'CONSTRUCTION_FAILED_NO_CAPTURE',
           guard_exit=code, guard_sha256=sha(root/'guard/result.json'), worker_sha256=sha(root/'output/worker-terminal.json'),
+          publication_sha256=sha(root/'output/publication-receipt.json') if publication else None,
           final_census=final, capture=False, m0=False, whole_interval_verified=False, unperturbed_timing_verified=False))
     passed = passed and not census(root)['errors']
-    print(json.dumps(dict(status='PENDING_REVIEW' if passed else 'FAILED', capture=False,
-                         terminal_sha256=sha(root/'construction-terminal.json'))), flush=True)
+    # Complete final records are in the original job log, never a second upload.
+    closing = dict(schema='primary-post-publication-custody-v1', status='PENDING_REVIEW' if passed else 'FAILED',
+                   publication=publication, worker=terminal, guard=result,
+                   terminal=read(root/'construction-terminal.json'),
+                   terminal_sha256=sha(root/'construction-terminal.json'), capture=False, m0=False)
+    encoded = canonical(closing)
+    need(len(encoded) <= 8*1024**2, 'bounded complete final log receipt')
+    print(encoded.decode('ascii'), flush=True)
     return 0 if passed else 1
 
 

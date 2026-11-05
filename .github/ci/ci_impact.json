@@ -12,7 +12,7 @@
     "M0 observation is manual diagnostic-only on a separately fixed product; no forecast starts it or replaces failed M0 acceptance.",
     "Bounded maintenance comparison is a manually granted diagnostic on fixed baseline/candidate products; no forecast starts it or establishes cost, M0 or native acceptance."
   ],
-  "discovery_source_sha256": "b2303327c9cb3f0a47385af18e15e5e8d83854947d8bfc1258760ce4570709b3",
+  "discovery_source_sha256": "33fa2d41e262cf5ae502dc7fe69fea04c944f6a39cda55bc0c622fe93d4c63bd",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
@@ -2338,32 +2338,23 @@
           }
         }
       },
-      "git_blob": "0eec1abf5e961001637422305ad95f531d0df93a",
+      "git_blob": "96eaca168abc5dfb1eede8f652ea613e72fb9ac8",
       "jobs": {
         "diagnostic": {
           "checkout": [],
           "commands": [
             {
-              "command_sha256": "1d1142288837b54d2eb53bc2930badf2942b8d4d392e97c4eeb97f8552fcb1cd",
+              "command_sha256": "d02fa9355e4f82f6328a756f6a56b185b79a39c1ebede654f521de6fee8c70d4",
               "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:35",
               "env": {
                 "GH_TOKEN": "${{ github.token }}"
               },
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
               "name": "Authenticate fixed small harness before imports or source acquisition"
-            },
-            {
-              "command_sha256": "0ab6fb4f18ce56ba8b871466634575961e1fe02d03a75b3b3f4e3129aace46c0",
-              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:100",
-              "env": {
-                "GH_TOKEN": "${{ github.token }}"
-              },
-              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
-              "name": "One bounded setup and two normal builds; no capture"
             }
           ],
           "environment": {
-            "INPUT_MANIFEST_SHA256": "04e33ec1b5323c7419dc1db5e71f3f70c276a0ddf15b3e30f7c6e32ee926310d",
+            "INPUT_MANIFEST_SHA256": "fe42e7375fcd0e6959cac529a6787ac9d9d3c8bc7c6b12f4b5f0b456c4a03f87",
             "PYTHONDONTWRITEBYTECODE": "1",
             "REVIEWED_HEAD": "${{ inputs.expected_head }}",
             "ROOT_ADMISSION_B64": "${{ inputs.admission_b64 }}",
@@ -2375,7 +2366,7 @@
           "runs_on": "ubuntu-24.04"
         }
       },
-      "sha256": "0a2ebf7becb9ad9480f5383cba49c1736f35aec36d2cf7a644ef3606d0363cb3"
+      "sha256": "db7be4128396177c9d87ec07b8f4b6f9f4c2f76de51792d03abd05eb9d952997"
     },
     "treedb-tests.yml": {
       "coverage": "existing execution only; triggers/path filters are unchanged",

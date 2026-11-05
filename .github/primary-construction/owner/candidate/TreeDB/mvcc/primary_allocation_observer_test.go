@@ -42,7 +42,7 @@ func primaryDivideAllocation(before, after *runtime.MemStats, n int) (*primaryAl
 		}
 	}
 	bytes, mallocs := after.TotalAlloc-before.TotalAlloc, after.Mallocs-before.Mallocs
-	return &primaryAllocationDivision{bytes, mallocs, bytes/uint64(n), bytes%uint64(n), mallocs/uint64(n), mallocs%uint64(n)}, nil
+	return &primaryAllocationDivision{bytes, mallocs, bytes / uint64(n), bytes % uint64(n), mallocs / uint64(n), mallocs % uint64(n)}, nil
 }
 
 type primaryAllocationPhase struct {

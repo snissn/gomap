@@ -21,7 +21,9 @@ FUNCTIONS = {n.name: n for n in TREE.body if isinstance(n, ast.FunctionDef)}
 def isolated(names):
     nodes = [FUNCTIONS[name] for name in names]
     namespace = dict(os=os, json=json, base64=base64, re=re,
-                     BRANCH='refs/heads/diagnostic/primary-allocation-construction-01')
+                     BRANCH='refs/heads/diagnostic/primary-allocation-construction-01',
+                     ROOT_THREAD='01a18e7c-8c23-7fd2-8d55-b0486d938cd3',
+                     CONTROLS_PASS_SHA256='5fbc92847359e709fe9ef7812786ff469f9892dedf9e4c81d27a3183e67245c5')
     exec(compile(ast.Module(body=nodes, type_ignores=[]), '<pure-predicates-only>', 'exec'), namespace)
     return namespace
 
@@ -31,9 +33,10 @@ class PrimaryConstructionSource(unittest.TestCase):
         ns = isolated(('need', 'authority'))
         head = '1'*40
         a = dict(schema='primary-construction-admission-v1', status='ADMITTED_CONSTRUCTION_ONLY',
-                 authority='ROOT', actor_id='1981537', head=head, run_attempt='1', allow_capture=False,
+                 authority='ROOT', authority_thread=ns['ROOT_THREAD'], actor_id='1981537', head=head, run_attempt='1', allow_capture=False,
                  independent_source_review_sha256='2'*64, owner_manifest_sha256='3'*64,
                  controls=dict(status='ROOT_ADMITTED_FOCUSED_OBSERVER_CONTROLS', owner_manifest_sha256='3'*64,
+                               root_receipt_sha256=ns['CONTROLS_PASS_SHA256'],
                                review_sha256='4'*64, run_id=1, job_id=1,
                                normal=dict(tops=6,outcomes=26,leaves=24,exit=0,skips=0),
                                race=dict(tops=6,outcomes=26,leaves=24,exit=0,skips=0)))
@@ -47,7 +50,9 @@ class PrimaryConstructionSource(unittest.TestCase):
             with patch.dict(os.environ, selected, clear=True):
                 return ns['authority']()
         self.assertEqual(check(a), a)
-        for field,value in [('authority','FOREIGN'),('actor_id','0'),('allow_capture',True),('head','9'*40)]:
+        c=json.loads(json.dumps(a));c['controls']['root_receipt_sha256']='f'*64
+        with self.assertRaises(RuntimeError):check(c)
+        for field,value in [('authority','FOREIGN'),('authority_thread','FOREIGN'),('authority_thread',None),('actor_id','0'),('allow_capture',True),('head','9'*40)]:
             with self.subTest(field=field), self.assertRaises(RuntimeError):
                 check(dict(a, **{field:value}))
         for mode in ('normal','race'):
@@ -69,7 +74,9 @@ class PrimaryConstructionSource(unittest.TestCase):
         self.assertIn('initial_observed_bytes_including_preexisting', bootstrap)
         self.assertNotIn('actions/checkout',str(workflow))
         self.assertNotIn('actions/setup-go',str(workflow))
-        self.assertEqual(len(job['steps']),3)
+        self.assertEqual(len(job['steps']),2)
+        self.assertEqual(job['steps'][1]['uses'],'./.github/actions/primary-construction')
+        self.assertNotIn('actions/upload-artifact@',str(workflow))
 
     def test_only_two_normal_builds_and_original_resource_numbers(self):
         worker=ast.get_source_segment(SOURCE,FUNCTIONS['worker'])
@@ -98,6 +105,66 @@ class PrimaryConstructionSource(unittest.TestCase):
         self.assertIn("result['errors'] == []",main)
         self.assertIn("physical drain requires independent review",main)
         self.assertNotIn('stage_toolchain(',ast.get_source_segment(SOURCE,FUNCTIONS['worker']))
+
+    def test_fixed_standard_upload_output_protocol(self):
+        ns = isolated(('need', 'upload_outputs'))
+        marker='ghadelimiter_12345678-1234-1234-1234-123456789abc'
+        values={'artifact-id':'123','artifact-digest':'a'*64,
+                'artifact-url':'https://github.com/snissn/gomap/actions/runs/456/artifacts/123'}
+        text=''.join(key+'<<'+marker+'\n'+value+'\n'+marker+'\n' for key,value in values.items())
+        self.assertEqual(ns['upload_outputs'](text,'snissn/gomap','456'),values)
+        for name,changed in [('missing',text.split('artifact-digest')[0]),
+                             ('duplicate',text+text),('foreign',text.replace('/456/','/999/')),
+                             ('bad-id',text.replace('\n123\n','\n0\n')),
+                             ('bad-digest',text.replace('a'*64,'a'*63)),
+                             ('bad-marker',text.replace(marker,'foreign')),
+                             ('oversized','x'*4097)]:
+            with self.subTest(name=name), self.assertRaises((RuntimeError,ValueError)):
+                ns['upload_outputs'](changed,'snissn/gomap','456')
+
+    def test_publication_is_guarded_joined_and_not_self_certifying(self):
+        worker=ast.get_source_segment(SOURCE,FUNCTIONS['worker'])
+        publication=ast.get_source_segment(SOURCE,FUNCTIONS['publish'])
+        self.assertLess(worker.index('publish(root, a, r, run, env, runtime)'),worker.index('r.close()'))
+        self.assertIn("run('publication', [node, str(bundle)], WHOLE, selected_env=selected)",publication)
+        self.assertLess(publication.index('fresh counted standard action output'),publication.index("run('publication'"))
+        self.assertIn("*list((root/'bin').iterdir())",publication)
+        self.assertNotIn("root/'guard'",publication)
+        self.assertLess(publication.index('paths = sorted'),publication.index("run('publication'"))
+        self.assertLess(publication.index("run('publication'"),publication.index("write(root/'output/publication-receipt.json'"))
+        self.assertIn('selected.clear()',publication)
+        self.assertIn('runtime.clear()',worker)
+        auth=ast.get_source_segment(SOURCE,FUNCTIONS['authenticate'])
+        self.assertIn("sha(proof) == CONTROLS_PASS_SHA256",auth)
+        self.assertIn("accepted['authority_thread'] == ROOT_THREAD",auth)
+        self.assertIn("accepted['owner_manifest_sha256'] == a['owner_manifest_sha256']",auth)
+        self.assertIn('if r.first_failure is None and time.monotonic() < r.deadline:',worker)
+        self.assertLess(worker.index('except BaseException as caught:'),worker.index('publish(root, a, r, run, env, runtime)'))
+        for field in ('INPUT_IF-NO-FILES-FOUND','INPUT_RETENTION-DAYS','INPUT_COMPRESSION-LEVEL',
+                      'INPUT_OVERWRITE','INPUT_INCLUDE-HIDDEN-FILES'):
+            self.assertIn(field,publication)
+        main=ast.get_source_segment(SOURCE,FUNCTIONS['main'])
+        self.assertIn("publication['status'] == 'UPLOAD_JOINED_PENDING_OUTER_GUARD'",main)
+        self.assertIn("publication=publication, worker=terminal, guard=result",main)
+        self.assertIn('len(encoded) <= 8*1024**2',main)
+        self.assertNotIn('set-output',main)
+
+    def test_local_action_uses_standard_environment_and_foreground_close(self):
+        directory=ROOT/'.github/actions/primary-construction'
+        metadata=yaml.safe_load((directory/'action.yml').read_text())
+        self.assertEqual(metadata['runs'],{'using':'node20','main':'index.js'})
+        js=(directory/'index.js').read_text()
+        self.assertIn('identity(process.execPath, a.tools.node)',js)
+        self.assertIn("child.on('close'",js)
+        self.assertIn("child.kill('SIGINT')",js)
+        self.assertIn('PRIMARY_NODE_PATH: node',js)
+        self.assertNotIn('detached:',js)
+        self.assertNotIn('console.log',js)
+        self.assertNotIn('ACTIONS_RUNTIME_TOKEN:',js)
+        self.assertNotIn('setTimeout',js)
+        bundle=ROOT/'.github/primary-construction/upload-artifact/index.js'
+        self.assertEqual(hashlib.sha256(bundle.read_bytes()).hexdigest(),
+                         '0165b8a75330f3228f2c7a234b4ff8a107b9139c2b519147f4c8e9fe99b262d8')
 
     def test_precise_owner_sources_and_baseline_separation(self):
         data=ROOT/'.github/primary-construction'

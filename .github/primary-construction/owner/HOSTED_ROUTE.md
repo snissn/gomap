@@ -1,3 +1,14 @@
+# Exact-diff successor input binding
+
+This packet supersedes de927877 only by the supplied one-line manual whitespace
+correction. ROOT must authenticate its new manifest and file SHA256
+bfd44088624e069f225b8280ff0beb73add7655ff4fa114e33d07bb16332de85
+before subsequent hosted controls. Previous formatting-l rejection and exact-diff
+INCOMPLETE/exit1 remain retained, with no control qualification credit. New
+hosted format/compile/normal/race checks are UNRUN. The existing maintained
+candidate-only controls route, resource rules and original PRIMARY limits below
+are unchanged. This source handoff supplies no new execution authority.
+
 # Prospective hosted qualification route — not execution authority
 
 Formatting-successor scope correction: controls-only qualification uses exact

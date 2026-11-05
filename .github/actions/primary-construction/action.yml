@@ -1,0 +1,12 @@
+name: Fixed PRIMARY foreground construction and publication
+description: Standard action environment only; original guard owns the worker and upload child
+outputs:
+  artifact-id:
+    description: Standard unchanged upload action artifact ID
+  artifact-digest:
+    description: Standard unchanged upload action artifact digest
+  artifact-url:
+    description: Standard unchanged upload action artifact URL
+runs:
+  using: node20
+  main: index.js
