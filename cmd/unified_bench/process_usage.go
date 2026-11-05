@@ -316,15 +316,19 @@ func validateProcessUsageOutputPath(path string, cfg BenchConfig, dbName string)
 	// Checkpoint profiles use the wrapper's runtime Name. Reserve the configured
 	// checkpoint namespace before opening it; do not guess that Name from dbName.
 	if prefix := strings.TrimSpace(cfg.CheckpointCPUProfile); prefix != "" {
-		parent, err := processUsageCanonicalPath(filepath.Dir(prefix))
+		prefixDir, prefixBase := filepath.Split(prefix)
+		if prefixDir == "" {
+			prefixDir = "."
+		}
+		parent, err := processUsageCanonicalPath(prefixDir)
 		if err != nil {
 			return err
 		}
-		if err := rejectCheckpointProfileSymlinks(parent, filepath.Base(prefix)); err != nil {
+		if err := rejectCheckpointProfileSymlinks(parent, prefixBase); err != nil {
 			return fmt.Errorf("checkpoint profile namespace: %w", err)
 		}
-		canonical := filepath.Join(parent, filepath.Base(prefix))
-		if (strings.HasPrefix(receipt, canonical+"_checkpoint_") && strings.HasSuffix(receipt, ".pprof")) || strings.HasPrefix(canonical, receipt+string(filepath.Separator)) {
+		namespace := filepath.Join(parent, prefixBase+"_checkpoint_")
+		if (strings.HasPrefix(receipt, namespace) && strings.HasSuffix(receipt, ".pprof")) || strings.HasPrefix(namespace, receipt+string(filepath.Separator)) {
 			return errors.New("process usage receipt collides with checkpoint profile namespace")
 		}
 	}

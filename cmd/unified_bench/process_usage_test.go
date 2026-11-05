@@ -146,7 +146,7 @@ func TestProcessUsageOutputCollision(t *testing.T) {
 }
 
 func TestProcessUsageOutputPathAliases(t *testing.T) {
-	for _, name := range []string{"trim_block", "trim_mutex", "trim_trace", "trim_block_delta", "parent_component", "receipt_parent_component", "checkpoint_literal_symlink", "checkpoint_generated_symlink", "checkpoint_nonmatching_symlink", "dangling_output_symlink", "distinct"} {
+	for _, name := range []string{"trim_block", "trim_mutex", "trim_trace", "trim_block_delta", "parent_component", "receipt_parent_component", "checkpoint_literal_symlink", "checkpoint_generated_symlink", "checkpoint_nonmatching_symlink", "checkpoint_trailing_collision", "checkpoint_trailing_symlink", "checkpoint_trailing_distinct", "dangling_output_symlink", "distinct"} {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
 			oldProfileDir := *profileDir
@@ -207,6 +207,24 @@ func TestProcessUsageOutputPathAliases(t *testing.T) {
 					}
 					t.Fatalf("create symlink: %v", err)
 				}
+			case "checkpoint_trailing_collision", "checkpoint_trailing_symlink", "checkpoint_trailing_distinct":
+				prefixDir := filepath.Join(dir, "profiles")
+				if err := os.Mkdir(prefixDir, 0700); err != nil {
+					t.Fatal(err)
+				}
+				cfg.CheckpointCPUProfile = prefixDir + string(filepath.Separator)
+				generated := filepath.Join(prefixDir, "_checkpoint_post-run_wrapper.pprof")
+				if name == "checkpoint_trailing_collision" {
+					receipt = generated
+				}
+				if name == "checkpoint_trailing_symlink" {
+					if err := os.Symlink(receipt, generated); err != nil {
+						if runtime.GOOS == "windows" && (os.IsPermission(err) || errors.Is(err, syscall.Errno(1314))) {
+							t.Skipf("Windows symlink unavailable: %v", err)
+						}
+						t.Fatalf("create symlink: %v", err)
+					}
+				}
 			case "dangling_output_symlink":
 				output := filepath.Join(dir, "trace")
 				if err := os.Symlink(receipt, output); err != nil {
@@ -218,7 +236,7 @@ func TestProcessUsageOutputPathAliases(t *testing.T) {
 				cfg.TraceProfile = output
 			}
 			err := validateProcessUsageOutputPath(receipt, cfg, "one")
-			if (name == "distinct" || name == "checkpoint_nonmatching_symlink") != (err == nil) {
+			if (name == "distinct" || name == "checkpoint_nonmatching_symlink" || name == "checkpoint_trailing_distinct") != (err == nil) {
 				t.Fatalf("%s: err=%v", name, err)
 			}
 		})
