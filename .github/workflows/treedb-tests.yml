@@ -1053,6 +1053,18 @@ jobs:
             printf '{"Time":"%s","Action":"skip","Package":"github.com/snissn/gomap/TreeDB"}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > treedb-race.jsonl
           fi
 
+      - name: Test tagged PRIMARY lifecycle race
+        if: ${{ matrix.shard == 3 }}
+        timeout-minutes: 10
+        working-directory: TreeDB
+        shell: bash
+        env:
+          GOMEMLIMIT: 4GiB
+          GOMAXPROCS: 2
+        run: |
+          set -euo pipefail
+          go test -json -mod=readonly -tags=treedb_test -race -p 1 -count=1 -timeout=540s ./mvcc -run '^TestCommitAtPrimaryOnlyRetainsActualDataGeneration$' | tee -a treedb-race.jsonl
+
       - name: Summarize race timing
         if: always()
         working-directory: TreeDB
