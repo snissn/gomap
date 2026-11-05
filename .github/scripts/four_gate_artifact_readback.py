@@ -6,9 +6,9 @@ from pathlib import Path
 import stat
 import zipfile
 
-EXPECTED_BYTES = 21322
-EXPECTED_SHA = "f532955ba8954e420ced684fd71aa01be0c9e499ddbe04318b7b6730fb43700e"
-NAMES = {'fixture.json', 'results.json', 'summary.md'}
+EXPECTED_BYTES = 46884
+EXPECTED_SHA = "8ce619ae377de88c846e8c0a015e73081c3b7256ad7c4897798ebc0fe1e5e3fa"
+NAMES = {'output/stages.json', 'guard/stderr.log', 'output/final-file-manifest.json', 'output/failure.json', 'output/race.stdout.log', 'output/gofmt.stderr.log', 'entry.stderr.log', 'output/race.stderr.log', 'output/completion.json', 'guard/result.json', 'output/normal.stderr.log', 'output/race-inventory.json', 'entry.stdout.log', 'guard/stdout.log', 'output/pure-controls.stdout.log', 'output/compile-context.json', 'output/normal.stdout.log', 'output/pure-controls.stderr.log', 'output/normal-inventory.json', 'output/gofmt.stdout.log'}
 root = Path(os.environ["RUNNER_TEMP"]) / "four-gate-readback"
 archive = root / "original.zip"
 assert archive.stat().st_size == EXPECTED_BYTES, "archive size mismatch"
@@ -17,7 +17,7 @@ with archive.open("rb") as f:
     for chunk in iter(lambda: f.read(1048576), b""):
         h.update(chunk)
 assert h.hexdigest() == EXPECTED_SHA, "archive digest mismatch"
-result = {"source_head": os.environ["GITHUB_SHA"], "artifact": 13374260086,
+result = {"source_head": os.environ["GITHUB_SHA"], "artifact": 13374174271,
           "archive_sha256": h.hexdigest(), "scope": "retained original text only; no gate alteration",
           "entries": [], "texts": {}, "missing": []}
 with zipfile.ZipFile(archive) as z:
