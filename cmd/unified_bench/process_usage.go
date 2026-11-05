@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -246,6 +247,43 @@ func processUsageCanonicalPathDepth(path string, depth int) (string, error) {
 	}
 }
 
+// Reject existing symlinks in the checkpoint namespace without guessing the
+// wrapper name. The caller has resolved the parent and retained the literal prefix.
+func rejectCheckpointProfileSymlinks(parent, prefix string) error {
+	dir, err := os.Open(parent)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var scanErr error
+	for scanErr == nil {
+		entries, readErr := dir.ReadDir(128)
+		for _, entry := range entries {
+			if !strings.HasPrefix(entry.Name(), prefix+"_checkpoint_") || !strings.HasSuffix(entry.Name(), ".pprof") {
+				continue
+			}
+			info, err := entry.Info()
+			if err != nil {
+				scanErr = err
+				break
+			}
+			if info.Mode()&os.ModeSymlink != 0 {
+				scanErr = errors.New("checkpoint profile namespace contains a symlink")
+				break
+			}
+		}
+		if readErr != nil {
+			if !errors.Is(readErr, io.EOF) {
+				scanErr = errors.Join(scanErr, readErr)
+			}
+			break
+		}
+	}
+	return errors.Join(scanErr, dir.Close())
+}
+
 func validateProcessUsageOutputPath(path string, cfg BenchConfig, dbName string) error {
 	for _, raw := range []string{path, cfg.CPUProfile, cfg.AllocsProfile, cfg.CheckpointCPUProfile, cfg.BlockProfile, cfg.MutexProfile, cfg.TraceProfile, *profileDir} {
 		for _, component := range strings.Split(filepath.ToSlash(strings.TrimSpace(raw)), "/") {
@@ -281,6 +319,9 @@ func validateProcessUsageOutputPath(path string, cfg BenchConfig, dbName string)
 		parent, err := processUsageCanonicalPath(filepath.Dir(prefix))
 		if err != nil {
 			return err
+		}
+		if err := rejectCheckpointProfileSymlinks(parent, filepath.Base(prefix)); err != nil {
+			return fmt.Errorf("checkpoint profile namespace: %w", err)
 		}
 		canonical := filepath.Join(parent, filepath.Base(prefix))
 		if (strings.HasPrefix(receipt, canonical+"_checkpoint_") && strings.HasSuffix(receipt, ".pprof")) || strings.HasPrefix(canonical, receipt+string(filepath.Separator)) {

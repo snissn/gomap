@@ -146,7 +146,7 @@ func TestProcessUsageOutputCollision(t *testing.T) {
 }
 
 func TestProcessUsageOutputPathAliases(t *testing.T) {
-	for _, name := range []string{"trim_block", "trim_mutex", "trim_trace", "trim_block_delta", "parent_component", "receipt_parent_component", "checkpoint_literal_symlink", "dangling_output_symlink", "distinct"} {
+	for _, name := range []string{"trim_block", "trim_mutex", "trim_trace", "trim_block_delta", "parent_component", "receipt_parent_component", "checkpoint_literal_symlink", "checkpoint_generated_symlink", "checkpoint_nonmatching_symlink", "dangling_output_symlink", "distinct"} {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
 			oldProfileDir := *profileDir
@@ -195,6 +195,18 @@ func TestProcessUsageOutputPathAliases(t *testing.T) {
 				}
 				cfg.CheckpointCPUProfile = prefix
 				receipt = prefix + "_checkpoint_post-run_wrapper.pprof"
+			case "checkpoint_generated_symlink", "checkpoint_nonmatching_symlink":
+				cfg.CheckpointCPUProfile = filepath.Join(dir, "checkpoint")
+				filename := "checkpoint_checkpoint_post-run_wrapper.pprof"
+				if name == "checkpoint_nonmatching_symlink" {
+					filename = "other_checkpoint_post-run_wrapper.pprof"
+				}
+				if err := os.Symlink(receipt, filepath.Join(dir, filename)); err != nil {
+					if runtime.GOOS == "windows" && (os.IsPermission(err) || errors.Is(err, syscall.Errno(1314))) {
+						t.Skipf("Windows symlink unavailable: %v", err)
+					}
+					t.Fatalf("create symlink: %v", err)
+				}
 			case "dangling_output_symlink":
 				output := filepath.Join(dir, "trace")
 				if err := os.Symlink(receipt, output); err != nil {
@@ -206,7 +218,7 @@ func TestProcessUsageOutputPathAliases(t *testing.T) {
 				cfg.TraceProfile = output
 			}
 			err := validateProcessUsageOutputPath(receipt, cfg, "one")
-			if (name == "distinct") != (err == nil) {
+			if (name == "distinct" || name == "checkpoint_nonmatching_symlink") != (err == nil) {
 				t.Fatalf("%s: err=%v", name, err)
 			}
 		})
