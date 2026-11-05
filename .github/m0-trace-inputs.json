@@ -1,8 +1,8 @@
 {
   "files": {
     ".github/m0-operation-trace-README.md": {
-      "bytes": 9524,
-      "sha256": "5e8dd63d2c8751ec6c2079ca2b61e593b98f7798eaa17160a45b18c545733ad2"
+      "bytes": 11107,
+      "sha256": "076ff7bc9c74780269f1d3488988057ff81b2ae5681d74edfb31e10d5c131a60"
     },
     ".github/primary-m0-observers/base/TreeDB/db/vacuum_collection_bench_test.go": {
       "bytes": 16844,
@@ -29,20 +29,20 @@
       "sha256": "4652442e079370e3cf203e7a8724e96b7841c760da7708981b6c5d61efc9246d"
     },
     ".github/scripts/m0_operation_trace.py": {
-      "bytes": 23171,
-      "sha256": "95d8bd992d14d22c56566f3163859e70099f64ae827e7c0df25ed584d01cecac"
+      "bytes": 24619,
+      "sha256": "270dda917f38b517d1300593601ad6cf9f9493f8eeed6045e3c52b28425d9a38"
     },
     ".github/scripts/m0_trace_consumer.py": {
       "bytes": 5481,
       "sha256": "348b5a4d3d132e9038a543b52750caa8cea3e54f23d362d514aa6db8599b6ab6"
     },
     ".github/scripts/test_m0_trace_consumer.py": {
-      "bytes": 6199,
-      "sha256": "86217f2e7868bfb1ad7d378ab2faf1e1d905beaf380d0ab792af302d314c56a9"
+      "bytes": 11562,
+      "sha256": "f9f79ef8360079861fea7050ec2a59cd7dc99eba35706101ec195d860d81ea73"
     },
     ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml": {
-      "bytes": 7836,
-      "sha256": "f73017490d46892984a4e0f6edfa07a50d6b9cd9598e8dafb0db7e5a06ffac70"
+      "bytes": 9109,
+      "sha256": "1dbbfee98109ea86fa5f321c5b2a8867dc12d5a92fd8b66bd213f6007e4e37ec"
     },
     "scripts/ycsb_campaign_guard.py": {
       "bytes": 19548,

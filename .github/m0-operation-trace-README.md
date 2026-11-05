@@ -4,7 +4,9 @@ This branch replaces only the registered manual maintenance entrypoint. It is
 not a required CI predicate or an M0 CV acceptance run. Dispatch is restricted to
 `diagnostic/m0-operation-trace-01`, ROOT actor ID `1981537`, attempt 1, and an
 independently reviewed full commit equal to both `GITHUB_SHA` and
-`github.workflow_sha`. ROOT alone publishes, admits and dispatches it.
+`github.workflow_sha`. ROOT alone publishes, admits and dispatches it. Both workflow pre-helper and
+worker admission require immutable ROOT authority thread
+`01a18e7c-8c23-7fd2-8d55-b0486d938cd3`, also required in the controls receipt.
 
 ## Source and prerequisite
 
@@ -31,8 +33,14 @@ cleanup. It must include actual run/artifact identities and independent review.
 The earlier 42b6 normal timeout, unentered DB/race controls, and outer guard
 failure remain adverse. Empty signal arrays were not a drain certificate.
 The workflow checks a SHA-bound base64 ROOT receipt before checkout/setup; the
-entrypoint rechecks it before imports, source acquisition or Go. No such actual
-PASS or execution admission is manufactured by this source packet.
+entrypoint rechecks it before imports, source acquisition or Go. The actual ROOT-admitted controls receipt is now fixed at SHA
+`5fbc92847359e709fe9ef7812786ff469f9892dedf9e4c81d27a3183e67245c5`
+(run 41940783159, job 126960744638, artifact 13377165673), with normal/race
+6/26/24 and positive maintained guard cleanup. Its bytes must match that exact
+SHA in workflow and worker, as well as ROOT admission. The receipt is supplied
+as an input, not copied into a circular source/review seal. It admits controls
+only; this source still requires its own final independent READY review and
+separate ROOT capture admission.
 
 ## Fixed command and lifecycle
 
@@ -87,17 +95,20 @@ all 4,096 identity/duration rows. `OriginalDurationsMatch` is the owner's
 **in-process** comparison to its original latency array. That other array is
 not separately serialized, so the consumer cannot independently recompare it.
 It requires precisely one ordered begin/end pair per expected region, the
-same positive goroutine/task, no overlap or timestamp regression, no unknown
+same positive goroutine and same task (task 0 is valid for context.Background), no overlap or timestamp regression, no unknown
 selected form, no extra/missing/duplicate ordinal. Nonselected ordinary trace
 events remain in the full raw text. The bounded alignment receipt retains each
 ordinal's original owner duration and same-trace begin/end timestamps. Region
 duration includes observer work; it is not the original operation duration,
 a queue/execute decomposition, historical alignment or CV acceptance.
 
-Fifteen finite Python control methods are frozen: one complete fixture, twelve
+The original fifteen finite Python control methods are preserved: one complete fixture, twelve
 adverse populations/grammar/lifecycle/decoder cases, checked I/O failure, and
 fixed-entry source contract. They run once hosted before product capture;
-locally they remain UNRUN. The original Go controls are a separate prerequisite.
+locally they remain UNRUN. Six additional authority methods cover matching
+thread/review bytes, missing/foreign admission thread, missing/foreign controls
+thread, and altered review bytes/head. All twenty-one methods are UNRUN here.
+The original Go controls are a separate prerequisite.
 
 ## Time, resources and output ledger
 
@@ -149,6 +160,15 @@ contains runtime/source metadata; no new document/body/credential logging is
 added. Child environments remove fetch credentials and ROOT admission inputs.
 
 Reproduction requires ROOT's exact-head review plus the fixed manual dispatch
-inputs `expected_head`, `root_admission_b64`, `controls_pass_b64`; a source review
+inputs `expected_head`, `root_admission_b64`, `controls_pass_b64`, and
+`binding_review_b64`. The latter transports the actual final independent review
+bytes (bounded 16KiB decoded). Their SHA must equal the ROOT admission's
+`independent_binding_review_sha256`, with its matching
+`independent_binding_review_head` and `independent_binding_review_status` set to
+`READY_SOURCE_ONLY`. The exact supplied review bytes are retained reversibly in
+`binding-review.json`. ROOT must inspect and authenticate that actual frozen
+independent review before writing admission. The script verifies byte binding;
+a hash, self-declared receipt or matching strings do not prove review authorship
+or readiness. There is no signature/cryptographic-authority claim; a source review
 or completed ordinal receipt alone provides no dispatch/admission authority.
 All old CV/PRIMARY/CPU/GetVersioned failures and logical holds remain unchanged.

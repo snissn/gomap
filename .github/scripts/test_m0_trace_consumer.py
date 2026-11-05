@@ -2,6 +2,12 @@
 """Finite pure fixtures for the fixed parsed-debug-text consumer; no Go/tools."""
 import ast
 import copy
+import base64
+import hashlib
+import json
+import os
+import re
+from unittest import mock
 import importlib.util
 import io
 from pathlib import Path
@@ -35,6 +41,47 @@ def lines():
 
 def decoder():
     return {'exit':0,'normal_return':True,'stdout_eof':True,'stderr_eof':True,'retained_writes_closed':True}
+
+
+def extracted_authority():
+    # Execute only the pure admission predicate in hosted controls, never import
+    # the worker/main or launch helpers. Fixture digest override below is test
+    # isolation; the production literal is separately asserted unchanged.
+    tree=ast.parse((HERE/'m0_operation_trace.py').read_text())
+    names={'ROOT_THREAD','OWNER_MANIFEST','OWNER_REVIEW','CONTROLS_PASS_SHA','CONTROLS_HEAD','CONTROLS_TREE'}
+    nodes=[n for n in tree.body if isinstance(n,ast.Assign) and
+           any(isinstance(t,ast.Name) and t.id in names for t in n.targets) or
+           isinstance(n,ast.FunctionDef) and n.name in ('need','authority')]
+    scope={'os':os,'re':re,'base64':base64,'json':json,'hashlib':hashlib}
+    exec(compile(ast.Module(body=nodes,type_ignores=[]),'<extracted-admission-predicate>','exec'),scope)
+    return scope
+
+
+def authority_fixture():
+    scope=extracted_authority();head='a'*40;thread=scope['ROOT_THREAD']
+    controls={'schema':'root-primary-m0-controls-pass-v1','status':'ROOT_NORMAL_RACE_CONTROLS_ADMITTED',
+      'actor_id':'1981537','authority_thread':thread,'producer_head':scope['CONTROLS_HEAD'],
+      'producer_tree':scope['CONTROLS_TREE'],'owner_manifest_sha256':scope['OWNER_MANIFEST'],
+      'normal':{'tops':6,'outcomes':26,'leaves':24},'race':{'tops':6,'outcomes':26,'leaves':24},
+      'literal_normal_exit':0,'literal_race_exit':0,'positive_outer_guard_cleanup':True,
+      'product_capture':False,'run_id':1,'artifact_id':1,'artifact_sha256':'b'*64,
+      'independent_review_sha256':'c'*64}
+    raw=json.dumps(controls,sort_keys=True).encode();review=b'Fixture independent source review; not a runtime receipt.\n'
+    fixture_sha=hashlib.sha256(raw).hexdigest()
+    assert scope['CONTROLS_PASS_SHA']=='5fbc92847359e709fe9ef7812786ff469f9892dedf9e4c81d27a3183e67245c5'
+    scope['CONTROLS_PASS_SHA']=fixture_sha  # Only this isolated pure-fixture namespace.
+    admission={'schema':'m0-operation-trace-admission-v1','status':'ADMITTED_ONE_M0_TRACE_ONLY',
+      'authority':'ROOT','authority_thread':thread,'actor_id':'1981537','expected_head':head,'run_attempt':'1',
+      'owner_manifest_sha256':scope['OWNER_MANIFEST'],'owner_review_sha256':scope['OWNER_REVIEW'],
+      'allow_product_capture':True,'only_capture':'M0_bytes_1x_N1_4096','controls_pass_sha256':fixture_sha,
+      'independent_binding_review_sha256':hashlib.sha256(review).hexdigest(),
+      'independent_binding_review_head':head,'independent_binding_review_status':'READY_SOURCE_ONLY'}
+    env={'GITHUB_EVENT_NAME':'workflow_dispatch','GITHUB_REPOSITORY':'snissn/gomap',
+      'GITHUB_ACTOR_ID':'1981537','GITHUB_RUN_ATTEMPT':'1','GITHUB_REF':'refs/heads/diagnostic/m0-operation-trace-01',
+      'REVIEWED_HEAD':head,'GITHUB_SHA':head,'WORKFLOW_COMMIT':head,
+      'M0_CONTROLS_PASS_B64':base64.b64encode(raw).decode(),
+      'M0_BINDING_REVIEW_B64':base64.b64encode(review).decode()}
+    return scope,admission,controls,env,review
 
 
 class FixedM0Consumer(unittest.TestCase):
@@ -112,6 +159,43 @@ class FixedM0Consumer(unittest.TestCase):
         self.assertNotIn("'./TreeDB/mvcc'",source)
         self.assertNotIn('shell=True',source)
         self.assertNotIn('HOME=',source)
+        workflow=(HERE.parent/'workflows/treedb-mvcc-maintenance-diagnostic.yml').read_text()
+        thread='01a18e7c-8c23-7fd2-8d55-b0486d938cd3'
+        self.assertEqual(workflow.count("'authority_thread':'"+thread+"'"),2)
+        self.assertIn("hashlib.sha256(review_raw).hexdigest()==admission.get('independent_binding_review_sha256')",workflow)
+
+    def call_authority(self,scope,admission,env):
+        env=dict(env,ROOT_ADMISSION_B64=base64.b64encode(json.dumps(admission).encode()).decode())
+        with mock.patch.dict(os.environ,env,clear=True):return scope['authority']()
+
+    def test_matching_root_thread_and_actual_review_bytes(self):
+        scope,admission,controls,env,review=authority_fixture()
+        actual=self.call_authority(scope,admission,env)
+        self.assertEqual(actual,(admission,controls,review))
+
+    def thread_refusal(self,where,value):
+        scope,admission,controls,env,review=authority_fixture()
+        target=admission if where=='admission' else controls
+        if value is None:target.pop('authority_thread')
+        else:target['authority_thread']=value
+        if where=='controls':env['M0_CONTROLS_PASS_B64']=base64.b64encode(json.dumps(controls).encode()).decode()
+        with self.assertRaisesRegex(RuntimeError,where+' immutable ROOT authority thread'):
+            self.call_authority(scope,admission,env)
+
+    def test_missing_admission_thread(self):self.thread_refusal('admission',None)
+    def test_foreign_admission_thread(self):self.thread_refusal('admission','foreign-thread')
+    def test_missing_controls_thread(self):self.thread_refusal('controls',None)
+    def test_foreign_controls_thread(self):self.thread_refusal('controls','foreign-thread')
+
+    def test_review_bytes_or_head_mismatch(self):
+        scope,admission,controls,env,review=authority_fixture()
+        env['M0_BINDING_REVIEW_B64']=base64.b64encode(review+b'altered').decode()
+        with self.assertRaisesRegex(RuntimeError,'actual final independent review bytes'):
+            self.call_authority(scope,admission,env)
+        scope,admission,controls,env,review=authority_fixture()
+        admission['independent_binding_review_head']='b'*40
+        with self.assertRaisesRegex(RuntimeError,'ROOT one-M0 diagnostic admission'):
+            self.call_authority(scope,admission,env)
 
 
 if __name__=='__main__':unittest.main()

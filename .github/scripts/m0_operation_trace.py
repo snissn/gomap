@@ -17,11 +17,13 @@ import time
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent
+ROOT_THREAD = '01a18e7c-8c23-7fd2-8d55-b0486d938cd3'
 OWNER_MANIFEST = '86f4ee083aba9e2f2dbdb87abf9ec5be9eb13d416e1bafd25f7b61139e317aa3'
 OWNER_REVIEW = '863afc8d80a3f68f767b8be0f8f810f5ab646a5c1e256ea674b7894a97ef883a'
 C = '4934bd6d51d9047ba0187d05c1d211cbe419811a'
 C_TREE = '7f30f92674110a4544a381468677183ab3133406'
 WHOLE_SECONDS = 1020
+CONTROLS_PASS_SHA = '5fbc92847359e709fe9ef7812786ff469f9892dedf9e4c81d27a3183e67245c5'
 CONTROLS_HEAD = 'ee6c3880e1b0ec6d7e490232f3a3de45643a455e'
 CONTROLS_TREE = 'ffc790f080c04708d9363d375f9b380d7430350a'
 MIB = 1024**2
@@ -53,22 +55,32 @@ def authority():
     need(len(encoded)<=16384,'bounded admission input')
     admission=json.loads(base64.b64decode(encoded,validate=True))
     need(isinstance(admission,dict),'admission object required')
+    need(admission.get('authority_thread')==ROOT_THREAD,'admission immutable ROOT authority thread')
     required={'schema':'m0-operation-trace-admission-v1','status':'ADMITTED_ONE_M0_TRACE_ONLY',
-              'authority':'ROOT','actor_id':'1981537','expected_head':head,'run_attempt':'1',
+              'authority':'ROOT','authority_thread':ROOT_THREAD,'actor_id':'1981537','expected_head':head,'run_attempt':'1',
+              'independent_binding_review_head':head,'independent_binding_review_status':'READY_SOURCE_ONLY',
+              'controls_pass_sha256':CONTROLS_PASS_SHA,
               'owner_manifest_sha256':OWNER_MANIFEST,'owner_review_sha256':OWNER_REVIEW,
               'allow_product_capture':True,'only_capture':'M0_bytes_1x_N1_4096'}
     need(all(admission.get(k)==v for k,v in required.items()),'ROOT one-M0 diagnostic admission')
-    need(re.fullmatch('[0-9a-f]{64}',admission.get('independent_binding_review_sha256','')) is not None,
-         'independent binding review missing')
+    encoded_review=os.environ['M0_BINDING_REVIEW_B64']
+    need(len(encoded_review)<=24000,'bounded encoded actual independent review')
+    review_raw=base64.b64decode(encoded_review,validate=True)
+    need(0<len(review_raw)<=16384,'bounded actual independent review bytes')
+    need(hashlib.sha256(review_raw).hexdigest()==admission.get('independent_binding_review_sha256'),
+         'actual final independent review bytes must match ROOT admission')
+    # ROOT must authenticate these actual reviewer bytes and source-READY/head
+    # assertions before dispatch. Matching bytes is not authorship verification.
     need(len(os.environ['M0_CONTROLS_PASS_B64'])<=24000,'bounded encoded controls receipt')
     controls_raw=base64.b64decode(os.environ['M0_CONTROLS_PASS_B64'],validate=True)
     need(len(controls_raw)<=16384,'bounded ROOT controls receipt')
-    need(hashlib.sha256(controls_raw).hexdigest()==admission.get('controls_pass_sha256'),
-         'actual controls receipt admission binding')
     controls=json.loads(controls_raw)
     need(type(controls) is dict,'controls receipt object')
+    need(controls.get('authority_thread')==ROOT_THREAD,'controls immutable ROOT authority thread')
+    need(hashlib.sha256(controls_raw).hexdigest()==CONTROLS_PASS_SHA==admission.get('controls_pass_sha256'),
+         'actual canonical controls receipt admission binding')
     required_controls={'schema':'root-primary-m0-controls-pass-v1','status':'ROOT_NORMAL_RACE_CONTROLS_ADMITTED',
-        'actor_id':'1981537','producer_head':CONTROLS_HEAD,'producer_tree':CONTROLS_TREE,
+        'actor_id':'1981537','authority_thread':ROOT_THREAD,'producer_head':CONTROLS_HEAD,'producer_tree':CONTROLS_TREE,
         'owner_manifest_sha256':OWNER_MANIFEST,'normal':{'tops':6,'outcomes':26,'leaves':24},
         'race':{'tops':6,'outcomes':26,'leaves':24},'literal_normal_exit':0,'literal_race_exit':0,
         'positive_outer_guard_cleanup':True,'product_capture':False}
@@ -78,7 +90,7 @@ def authority():
         need(type(controls.get(field)) is int and controls[field]>0,'actual controls receipt missing '+field)
     for field in ('artifact_sha256','independent_review_sha256'):
         need(re.fullmatch('[0-9a-f]{64}',controls.get(field,'')) is not None,'actual controls hash missing')
-    return admission,controls
+    return admission,controls,review_raw
 
 
 def authenticate():
@@ -106,7 +118,7 @@ def main():
     parser.add_argument('mode',choices=('guard','worker'))
     parser.add_argument('--root',type=Path,required=True)
     a=parser.parse_args()
-    admission,controls=authority()  # Before any helper import, guard, Go or source acquisition.
+    admission,controls,review_raw=authority()  # Before any helper import, guard, Go or source acquisition.
     manifest=authenticate()
     need(not a.root.is_symlink(),'root symlink refused')
     root=a.root.resolve(strict=True)
@@ -124,7 +136,7 @@ def main():
         # Replace only this fixed entrypoint with the unchanged authenticated guard.
         os.execv(sys.executable,cmd)
     consumer=load('m0_trace_consumer',HERE/'m0_trace_consumer.py')
-    env={k:v for k,v in os.environ.items() if k not in ('GH_TOKEN','GITHUB_TOKEN','ROOT_ADMISSION_B64','M0_CONTROLS_PASS_B64') and not k.startswith('GIT_')}
+    env={k:v for k,v in os.environ.items() if k not in ('GH_TOKEN','GITHUB_TOKEN','ROOT_ADMISSION_B64','M0_CONTROLS_PASS_B64','M0_BINDING_REVIEW_B64') and not k.startswith('GIT_')}
     token=os.environ.pop('GH_TOKEN',None)
     os.environ.pop('GITHUB_TOKEN',None)
     for name in ('tmp','output'):
@@ -251,6 +263,9 @@ def main():
     try:
         write(out/'admission.json',admission)
         write(out/'controls-pass.json',controls)
+        write(out/'binding-review.json',{'raw_bytes_base64':base64.b64encode(review_raw).decode('ascii'),
+            'sha256':hashlib.sha256(review_raw).hexdigest(),'reviewed_head':admission['independent_binding_review_head'],
+            'ROOT_admitted_status':admission['independent_binding_review_status'],'script_proves_authorship':False})
         write(out/'input-bindings.json',manifest)
         owner=REPO/'.github/primary-m0-observers'
         tools={}

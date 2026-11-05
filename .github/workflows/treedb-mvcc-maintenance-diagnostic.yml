@@ -14,6 +14,10 @@ on:
         description: Exact ROOT-admitted normal and race controls receipt encoded with base64
         required: true
         type: string
+      binding_review_b64:
+        description: Actual final independent source review bytes; ROOT must verify before admission
+        required: true
+        type: string
 permissions:
   contents: read
 jobs:
@@ -28,6 +32,7 @@ jobs:
       WORKFLOW_COMMIT: ${{ github.workflow_sha }}
       ROOT_ADMISSION_B64: ${{ inputs.root_admission_b64 }}
       M0_CONTROLS_PASS_B64: ${{ inputs.controls_pass_b64 }}
+      M0_BINDING_REVIEW_B64: ${{ inputs.binding_review_b64 }}
     steps:
       - name: Authenticate one M0 dispatch and actual controls prerequisite
         shell: bash
@@ -40,19 +45,27 @@ jobs:
           assert os.environ['GITHUB_ACTOR_ID']=='1981537' and os.environ['GITHUB_RUN_ATTEMPT']=='1'
           text=os.environ['ROOT_ADMISSION_B64'];assert len(text)<=16384
           admission=json.loads(base64.b64decode(text,validate=True));assert isinstance(admission,dict)
+          assert admission.get('authority_thread')=='01a18e7c-8c23-7fd2-8d55-b0486d938cd3','admission immutable ROOT authority thread'
           expected={'schema':'m0-operation-trace-admission-v1','status':'ADMITTED_ONE_M0_TRACE_ONLY',
-            'authority':'ROOT','actor_id':'1981537','expected_head':os.environ['GITHUB_SHA'],'run_attempt':'1',
+            'authority':'ROOT','authority_thread':'01a18e7c-8c23-7fd2-8d55-b0486d938cd3',
+            'actor_id':'1981537','expected_head':os.environ['GITHUB_SHA'],'run_attempt':'1',
+            'independent_binding_review_head':os.environ['GITHUB_SHA'],'independent_binding_review_status':'READY_SOURCE_ONLY',
+            'controls_pass_sha256':'5fbc92847359e709fe9ef7812786ff469f9892dedf9e4c81d27a3183e67245c5',
             'owner_manifest_sha256':'86f4ee083aba9e2f2dbdb87abf9ec5be9eb13d416e1bafd25f7b61139e317aa3',
             'owner_review_sha256':'863afc8d80a3f68f767b8be0f8f810f5ab646a5c1e256ea674b7894a97ef883a',
             'allow_product_capture':True,'only_capture':'M0_bytes_1x_N1_4096'}
           assert all(admission.get(k)==v for k,v in expected.items())
-          assert re.fullmatch('[0-9a-f]{64}',admission.get('independent_binding_review_sha256',''))
+          encoded_review=os.environ['M0_BINDING_REVIEW_B64'];assert len(encoded_review)<=24000
+          review_raw=base64.b64decode(encoded_review,validate=True);assert 0<len(review_raw)<=16384
+          assert hashlib.sha256(review_raw).hexdigest()==admission.get('independent_binding_review_sha256')
+          # ROOT verifies actual review authorship/readiness before admission; this checks the admitted bytes.
           encoded=os.environ['M0_CONTROLS_PASS_B64'];assert len(encoded)<=24000
           raw=base64.b64decode(encoded,validate=True);assert len(raw)<=16384
-          assert hashlib.sha256(raw).hexdigest()==admission.get('controls_pass_sha256')
-          controls=json.loads(raw)
+          controls=json.loads(raw);assert type(controls) is dict
+          assert controls.get('authority_thread')=='01a18e7c-8c23-7fd2-8d55-b0486d938cd3','controls immutable ROOT authority thread'
+          assert hashlib.sha256(raw).hexdigest()==admission.get('controls_pass_sha256')=='5fbc92847359e709fe9ef7812786ff469f9892dedf9e4c81d27a3183e67245c5'
           required={'schema':'root-primary-m0-controls-pass-v1','status':'ROOT_NORMAL_RACE_CONTROLS_ADMITTED',
-            'actor_id':'1981537','producer_head':'ee6c3880e1b0ec6d7e490232f3a3de45643a455e',
+            'actor_id':'1981537','authority_thread':'01a18e7c-8c23-7fd2-8d55-b0486d938cd3','producer_head':'ee6c3880e1b0ec6d7e490232f3a3de45643a455e',
             'producer_tree':'ffc790f080c04708d9363d375f9b380d7430350a',
             'owner_manifest_sha256':'86f4ee083aba9e2f2dbdb87abf9ec5be9eb13d416e1bafd25f7b61139e317aa3',
             'normal':{'tops':6,'outcomes':26,'leaves':24},'race':{'tops':6,'outcomes':26,'leaves':24},
