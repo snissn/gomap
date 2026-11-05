@@ -6,9 +6,9 @@ from pathlib import Path
 import stat
 import zipfile
 
-EXPECTED_BYTES = 39216183
-EXPECTED_SHA = "5de6712dad46d51df5b56a83c89b190116fdb9971ad32c630509bb03152e6cb7"
-NAMES = {'go-version.log', 'db-capture.objdump', 'db-compiler.selected.stderr', 'db-bindings.objdump', 'tree-bindings.objdump', 'go-env.json', 'tree-compiler.selected.stderr', 'tree-reset.objdump', 'source-sha256.txt'}
+EXPECTED_BYTES = 229302210
+EXPECTED_SHA = "2720b74952f3f85d196bdbfb66062964577917b9473b2b797e62704bbfcb3950"
+NAMES = {'primary/bindings.json', 'primary/commands.json', 'primary/preflight-acquisition.json', 'primary/preflight.json', 'primary/samples.json', 'primary/summary.json', 'primary/summary.md'}
 root = Path(os.environ["RUNNER_TEMP"]) / "four-gate-readback"
 archive = root / "original.zip"
 assert archive.stat().st_size == EXPECTED_BYTES, "archive size mismatch"
@@ -17,7 +17,7 @@ with archive.open("rb") as f:
     for chunk in iter(lambda: f.read(1048576), b""):
         h.update(chunk)
 assert h.hexdigest() == EXPECTED_SHA, "archive digest mismatch"
-result = {"source_head": os.environ["GITHUB_SHA"], "artifact": 13373044724,
+result = {"source_head": os.environ["GITHUB_SHA"], "artifact": 13373354074,
           "archive_sha256": h.hexdigest(), "scope": "retained original text only; no gate alteration",
           "entries": [], "texts": {}, "missing": []}
 with zipfile.ZipFile(archive) as z:
@@ -34,18 +34,10 @@ with zipfile.ZipFile(archive) as z:
             result["missing"].append(name)
             continue
         info = z.getinfo(name)
-        # The preceding authenticated ledger proves this one retained compiler
-        # text is 530943B. Read it whole under the unchanged1MiB total budget;
-        # this is retained-data review, not a producer or acceptance-limit change.
-        if name == "db-compiler.selected.stderr":
-            assert info.file_size == 530943, "compiler member size changed"
-        else:
-            assert info.file_size <= 131072, "selected metadata file too large"
+        assert info.file_size <= 131072, "selected metadata file too large"
         total += info.file_size
         assert total <= 1048576, "selected metadata aggregate too large"
         data = z.read(name)
-        if name == "db-compiler.selected.stderr":
-            assert hashlib.sha256(data).hexdigest() == "0d183e3eba923d693ea0d21ea542f7609c771f2530571a1284d3ad191ad8e9d4", "compiler member digest changed"
         result["texts"][name] = {"size": len(data), "sha256": hashlib.sha256(data).hexdigest(),
                                  "text": data.decode("utf-8")}
 (root / "readback.json").write_text(json.dumps(result, indent=2) + "\n")
