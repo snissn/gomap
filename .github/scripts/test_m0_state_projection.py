@@ -163,7 +163,8 @@ class Controls(unittest.TestCase):
             with self.assertRaises(ValueError):writer.check(32*1024**2)
             writer.started-=31
             with self.assertRaises(ValueError):writer.write('normal.json',{})
-            writer.write('failure.json',{'status':'INCOMPLETE'},4096,adverse=True)
+            with patch.object(os,'statvfs',return_value=type('FS',(),{'f_bavail':3000000,'f_frsize':4096})()):
+                writer.write('failure.json',{'status':'INCOMPLETE'},4096,adverse=True)
             with self.assertRaises(ValueError):writer.emit('unknown',{})
             writer.close()
     def test_authority_missing_foreign_and_review_mismatch(self):

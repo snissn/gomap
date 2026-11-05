@@ -38,7 +38,7 @@ are manifest-authenticated before local helper execution/import. ROOT alone
 verifies source authorship/readiness and supplies the separate fresh admission.
 No ready admission is embedded.
 
-Bounds are the reviewed600s hosted outer,90s download,30s projection/5s kill,
+Bounds are the reviewed600s hosted outer,90s download,30s internal projection/5s kill,
 60s upload,1MiB lines/64KiB state blocks/256frames. Guarded archive+projection
 stage has180s with10s cleanup and.2s samples,1GiB sampled descendant RSS and
 10GiB free floor; original guard identity/pidfd/subreaper/drain logic is unchanged.
@@ -51,11 +51,16 @@ The counted common job root is RUNNER_TEMP's parent, which must also contain
 GITHUB_WORKSPACE. First census counts existing checkout/actions/temp bytes,
 reserves the full256MiB download ulimit+32MiB generated output, refuses over1GiB. The reader samples
 all that root during data processing, including ZIP/source/tmp/action files.
-No pre-platform instantaneous quota or hard RSS is claimed. Archive retrieval
+No pre-platform instantaneous quota is claimed; RSS is sampled. Archive retrieval
 has fixed256MiB file ulimit and exact expected archive size/hash; no source or
-archive download is performed locally. Whole-root checks are task-stage samples;
-no claim is made about an unread post-upload runner interval. Output publication
-and original guard's final receipt require independent actual-output review.
+archive download is performed locally. Whole-root checks are task-stage samples. A source-identical pinned standard
+upload-artifact bundle runs as the final child inside the unchanged outer guard.
+The launch parent samples the same common root/output+console cap through guard
+join and terminal drain, including upload/log/command-file bytes. Guard result,
+publication identity/digest/result and complete post-join terminal records are
+bounded in the original job log; they are deliberately outside the earlier
+immutable artifact. Actual-output review remains required. No self-certified
+whole-interval or instantaneous peak is claimed.
 Generated operation8MiB/segment16MiB/stack6MiB/link1MiB file limits are subordinate
 to32MiB total outputs+receipts+guard/control logs+console duplicates.2MiB is
 reserved for other receipts/logs. Console summary+closed receipt<=128KiB.
@@ -65,7 +70,18 @@ never a reason to omit populations, raise limits or repeat toward success.
 Checked ZIP streams/writers close once. First operational failure precedes
 close failures. An incomplete/timeout/cap refusal remains terminal with partial
 retained evidence; neither summary nor data-reader return certifies the guard,
-uploader or physical custody. Upload remains the unchanged standard action.
+uploader or physical custody. The fixed local Node action uses the existing PRIMARY foreground-handler seam
+only to receive standard injected action runtime credentials and join the guard.
+The unchanged pinned standard uploader runs once as its guarded child. M0 retains
+180s stage/10s cleanup,60s upload,1GiB sampled RSS,1GiB whole root,32MiB aggregate
+evidence; PRIMARY construction840s/24GiB/per-file policy is not imported.
+The entry keeps the original total90s download+30s projection+60s upload bound;
+its90s worker timeout encloses the30s projection and60s publication. The180s
+portable guard remains the tighter aggregate stage deadline. Failed pure controls
+permit only bounded failure-evidence publication, never archive retrieval/derivation.
+Uploader runtime credentials are never logged; GH_TOKEN is removed before the
+reader and uploader. A control/data/publication error stays failed even if the
+artifact was retained. Abnormal outer termination cannot certify drain.
 
 All source-only controls use synthetic data/AST, never the original parsed
 member. Actual hosted readback requires exact-source independent review and

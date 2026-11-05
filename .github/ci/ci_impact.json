@@ -12,7 +12,7 @@
     "M0 observation is manual diagnostic-only on a separately fixed product; no forecast starts it or replaces failed M0 acceptance.",
     "Bounded maintenance comparison is a manually granted diagnostic on fixed baseline/candidate products; no forecast starts it or establishes cost, M0 or native acceptance."
   ],
-  "discovery_source_sha256": "d1818cab2dd2fb98b5a76f4a3d17e520407948bdbc70aa3f45a8810ae09d793e",
+  "discovery_source_sha256": "d4a311d83cff981c5270b5fbd8373f8603e3b9ea22641e2fd3aa0bafdddd0f27",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
@@ -2343,14 +2343,14 @@
           }
         }
       },
-      "git_blob": "ea886bdc363fad31f155b3add47104eb2b032bb2",
+      "git_blob": "e28d18d2e0a4ccfada62472b6269bf123992b012",
       "jobs": {
         "readback": {
           "checkout": [
             {
               "persist-credentials": false,
               "ref": "${{ github.sha }}",
-              "sparse-checkout": ".github/scripts/four_gate_artifact_readback.py\n.github/scripts/m0_trace_consumer.py\n.github/scripts/m0_common_write_projection.py\n.github/scripts/test_m0_common_write_projection.py\n.github/scripts/m0_common_write_entry.sh\nscripts/ycsb_campaign_guard.py\nscripts/ycsb_compare_validate.py\nscripts/ycsb_evidence_json.py\nscripts/ycsb_runtime_observer.py\n.github/scripts/test_m0_state_projection.py\n.github/m0-common-write-inputs.json\n.github/m0-common-write-README.md\n.github/workflows/treedb-mvcc-maintenance-diagnostic.yml\n",
+              "sparse-checkout": ".github/scripts/four_gate_artifact_readback.py\n.github/scripts/m0_trace_consumer.py\n.github/scripts/m0_common_write_projection.py\n.github/scripts/test_m0_common_write_projection.py\n.github/scripts/m0_common_write_entry.sh\n.github/actions/m0-common-write/action.yml\n.github/actions/m0-common-write/index.js\n.github/m0-common-write-upload/index.js\n.github/m0-common-write-upload/LICENSE\n.github/scripts/test_m0_guarded_publication.py\nscripts/ycsb_campaign_guard.py\nscripts/ycsb_compare_validate.py\nscripts/ycsb_evidence_json.py\nscripts/ycsb_runtime_observer.py\n.github/scripts/test_m0_state_projection.py\n.github/m0-common-write-inputs.json\n.github/m0-common-write-README.md\n.github/workflows/treedb-mvcc-maintenance-diagnostic.yml\n",
               "sparse-checkout-cone-mode": false
             }
           ],
@@ -2362,20 +2362,10 @@
               "name": "Authenticate ROOT and immutable source before checkout/download/helper import"
             },
             {
-              "command_sha256": "2c875e671d9c03c007aacf886f070b450e2be3b65daf2b62bbed743ab0281f8e",
-              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:85",
+              "command_sha256": "1ac0c7464f798fe2f149e5a82e64d535d1b10e769ba5bbb67d5b39028f98120b",
+              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:91",
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
               "name": "Bind imported source and run fixed pure controls"
-            },
-            {
-              "command_sha256": "feddaae9f85b8807536db157f2f7d527f062188a14659a739dc833fc6668fb7c",
-              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:108",
-              "env": {
-                "GH_PAGER": "cat",
-                "GH_TOKEN": "${{ github.token }}"
-              },
-              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
-              "name": "Read exact original archive once and project authenticated data only"
             }
           ],
           "environment": {
@@ -2395,7 +2385,7 @@
           "runs_on": "ubuntu-24.04"
         }
       },
-      "sha256": "530241f5268757a560a9a559ea248c7bd2bfdab257b00e7a61c47b094893cca8"
+      "sha256": "a8b3581cd137167a8b71d12a4a589ddcffe262edb6e466606f7d32dd91295332"
     },
     "treedb-tests.yml": {
       "coverage": "existing execution only; triggers/path filters are unchanged",

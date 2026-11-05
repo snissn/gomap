@@ -1,16 +1,32 @@
 {
   "files": {
+    ".github/actions/m0-common-write/action.yml": {
+      "bytes": 184,
+      "sha256": "ce628eeb4de98b27fdf6ab67d32cb1a461cdddfb702c37f342d5932f3b2731a0"
+    },
+    ".github/actions/m0-common-write/index.js": {
+      "bytes": 2114,
+      "sha256": "7ddca38f351a499569255a89b5fe903e28fa23e70ce520a64d79f23868c7bb92"
+    },
     ".github/m0-common-write-README.md": {
-      "bytes": 4833,
-      "sha256": "321dba8d0bf6bde49ee813d47ab51df775241f62b41e7e316064cc52575eb4a0"
+      "bytes": 6150,
+      "sha256": "fa56d1bb5da04a684f640f2d72d6a598c6e20031ab74aca7e0de58b8d404c87f"
+    },
+    ".github/m0-common-write-upload/LICENSE": {
+      "bytes": 1097,
+      "sha256": "3e855ffa704114a51628ef8f0bf3aeb41728adf9d9070e263bf58aa5640b0eb5"
+    },
+    ".github/m0-common-write-upload/index.js": {
+      "bytes": 5051718,
+      "sha256": "0165b8a75330f3228f2c7a234b4ff8a107b9139c2b519147f4c8e9fe99b262d8"
     },
     ".github/scripts/four_gate_artifact_readback.py": {
-      "bytes": 16363,
-      "sha256": "58d9f975b69c29517a7ae8abeb600a6a1e9dfcfde7017330d26c8ec97dea566c"
+      "bytes": 28129,
+      "sha256": "b3b84a95a17afb016c2e616506a102de04626332f3b7e4cf314f468aa571d8d1"
     },
     ".github/scripts/m0_common_write_entry.sh": {
-      "bytes": 491,
-      "sha256": "f05745ada907b651643e9e8c410b104be34006c7495d8a974b02149285ef2a55"
+      "bytes": 624,
+      "sha256": "d9048b4cd48dac7fd93d3da663d20a86b5dbff3cf0e88c5535d7e37dcb81a7fd"
     },
     ".github/scripts/m0_common_write_projection.py": {
       "bytes": 11771,
@@ -24,13 +40,17 @@
       "bytes": 8450,
       "sha256": "e77c7190db97e76f7d14172acff4c4ffc9d97dcb56fa200d46357c9be561971b"
     },
+    ".github/scripts/test_m0_guarded_publication.py": {
+      "bytes": 4933,
+      "sha256": "723e591b14b55675df0abbc2f4902d068608b5e8e5f12aa937dd807b16f43316"
+    },
     ".github/scripts/test_m0_state_projection.py": {
-      "bytes": 14501,
-      "sha256": "8267399349aab53216dc4e104269dc58d74f4559f86b0ef1c31329934ceb3475"
+      "bytes": 14616,
+      "sha256": "a717a92b64158cf16a5e027d4ca4b62f1c6b6f0bb2d107ad82b44c3944771104"
     },
     ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml": {
-      "bytes": 7663,
-      "sha256": "b0d4424cf5911117cb88ebf24097174b9d21f7079c75f2c4f9db7accaaf5760f"
+      "bytes": 6280,
+      "sha256": "a8b3581cd137167a8b71d12a4a589ddcffe262edb6e466606f7d32dd91295332"
     },
     "scripts/ycsb_campaign_guard.py": {
       "bytes": 19548,

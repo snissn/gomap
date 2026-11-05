@@ -71,6 +71,11 @@ jobs:
             .github/scripts/m0_common_write_projection.py
             .github/scripts/test_m0_common_write_projection.py
             .github/scripts/m0_common_write_entry.sh
+            .github/actions/m0-common-write/action.yml
+            .github/actions/m0-common-write/index.js
+            .github/m0-common-write-upload/index.js
+            .github/m0-common-write-upload/LICENSE
+            .github/scripts/test_m0_guarded_publication.py
             scripts/ycsb_campaign_guard.py
             scripts/ycsb_compare_validate.py
             scripts/ycsb_evidence_json.py
@@ -81,6 +86,7 @@ jobs:
             .github/workflows/treedb-mvcc-maintenance-diagnostic.yml
           sparse-checkout-cone-mode: false
       - name: Bind imported source and run fixed pure controls
+        id: controls
         shell: bash
         run: |
           set -euo pipefail
@@ -100,43 +106,12 @@ jobs:
           ulimit -f 64
           timeout --signal=TERM --kill-after=5s 30s python3 -B .github/scripts/test_m0_state_projection.py > "$RUNNER_TEMP/four-gate-readback/controls.stdout.log" 2> "$RUNNER_TEMP/four-gate-readback/controls.stderr.log"
           timeout --signal=TERM --kill-after=5s 30s python3 -B .github/scripts/test_m0_common_write_projection.py > "$RUNNER_TEMP/four-gate-readback/companion-controls.stdout.log" 2> "$RUNNER_TEMP/four-gate-readback/companion-controls.stderr.log"
-      - name: Read exact original archive once and project authenticated data only
+          timeout --signal=TERM --kill-after=5s 30s python3 -B .github/scripts/test_m0_guarded_publication.py > "$RUNNER_TEMP/four-gate-readback/publication-controls.stdout.log" 2> "$RUNNER_TEMP/four-gate-readback/publication-controls.stderr.log"
+      - name: Guard original data through standard upload and checked terminal drain
+        if: always()
+        uses: ./.github/actions/m0-common-write
         env:
           GH_TOKEN: ${{ github.token }}
           GH_PAGER: cat
-        shell: bash
-        run: |
-          set -euo pipefail
-          # One ordinary hosted task root: checkout/actions/tmp/download/output
-          # are counted at admitted samples. No pre-platform instantaneous claim.
-          export M0_COUNTED_ROOT="$(dirname "$RUNNER_TEMP")"
-          python3 -B - <<'PYCODE'
-          import os,pathlib
-          root=pathlib.Path(os.environ['M0_COUNTED_ROOT']).resolve()
-          work=pathlib.Path(os.environ['GITHUB_WORKSPACE']).resolve()
-          assert work.is_relative_to(root) and pathlib.Path(os.environ['RUNNER_TEMP']).resolve().is_relative_to(root)
-          assert sum(p.lstat().st_size for p in root.rglob('*') if not p.is_dir())+268435456+33554432<=1073741824
-          allowed=os.sched_getaffinity(0);assert allowed
-          os.sched_setaffinity(0,{min(allowed)})
-          # exec preserves the one-CPU affinity for guard and every descendant.
-          argv=['python3','-B',str(work/'scripts/ycsb_campaign_guard.py'),'--scripts-dir',str(work/'scripts'),
-              '--synthetic','--out',os.environ['RUNNER_TEMP']+'/four-gate-readback/guard',
-              '--cwd',str(work),'--filesystem',str(root),'--deadline','180','--cleanup-seconds','10',
-              '--interval','.2','--rss-cap-bytes','1073741824','--free-floor-bytes','10737418240',
-              '--','bash',str(work/'.github/scripts/m0_common_write_entry.sh')]
-          os.execvp(argv[0],argv)
-          PYCODE
-      - name: Retain closed projection and partial refusal evidence only
-        if: always()
-        timeout-minutes: 1
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: m0-common-write-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            ${{ runner.temp }}/four-gate-readback/*.json
-            ${{ runner.temp }}/four-gate-readback/*.jsonl
-            ${{ runner.temp }}/four-gate-readback/*.txt
-            ${{ runner.temp }}/four-gate-readback/*.log
-            ${{ runner.temp }}/four-gate-readback/guard/
-          if-no-files-found: error
-          retention-days: 14
+          M0_COUNTED_ROOT: /home/runner/work
+          M0_CONTROLS_OUTCOME: ${{ steps.controls.outcome }}

@@ -1,0 +1,5 @@
+name: Guarded original M0 data publication
+description: Fixed standard action runtime plumbing; unchanged guard owns projection and upload child
+runs:
+  using: node20
+  main: index.js

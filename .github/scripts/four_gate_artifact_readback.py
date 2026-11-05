@@ -4,8 +4,11 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 import stat
+import signal
+import subprocess
 import sys
 import time
 import zipfile
@@ -71,6 +74,7 @@ class RetainedOutputs:
         whole=sum(p.lstat().st_size for p in work.rglob('*')if not p.is_dir())
         self.max_whole_sampled=max(self.max_whole_sampled,whole)
         need(whole+extra+4096<=1024*MIB,'1GiB counted source/task/tmp/action root')
+        fs=os.statvfs(work);need(fs.f_bavail*fs.f_frsize>=10*1024*MIB,'10GiB free floor through terminal census')
     def emit(self,name,row):
         raw=(json.dumps(row,sort_keys=True,separators=(',',':'))+'\n').encode()
         need(name in self.LIMITS,'fixed projection output')
@@ -114,6 +118,180 @@ def authenticate_members(z,writer):
             for chunk in iter(lambda:f.read(65536),b''):
                 writer.check();n+=len(chunk);need(n<=size,'decoded member byte bound');h.update(chunk)
         need(n==size and h.hexdigest()==expected,'fixed member digest/CRC')
+
+
+def upload_outputs(text, repository, run_id):
+    # Fixed @actions/core OUTPUT protocol for precisely this unchanged upload entry.
+    need(len(text.encode('utf-8')) <= 4096, 'bounded upload outputs')
+    lines = text.splitlines()
+    result = {}
+    while lines:
+        key, marker = lines.pop(0).split('<<', 1)
+        need(key in ('artifact-id', 'artifact-digest', 'artifact-url') and key not in result
+             and re.fullmatch('ghadelimiter_[0-9a-f-]{36}', marker) is not None,
+             'unexpected upload output')
+        need(len(lines) >= 2 and lines[1] == marker, 'malformed upload output')
+        result[key] = lines.pop(0)
+        lines.pop(0)
+    need(set(result) == {'artifact-id', 'artifact-digest', 'artifact-url'}
+         and re.fullmatch('[1-9][0-9]*', result['artifact-id']) is not None
+         and re.fullmatch('[0-9a-f]{64}', result['artifact-digest']) is not None,
+         'missing or invalid upload identity')
+    expected = 'https://github.com/'+repository+'/actions/runs/'+run_id+'/artifacts/'+result['artifact-id']
+    need(result['artifact-url'] == expected, 'foreign artifact output')
+    return result
+
+
+
+def publication(root):
+    """Same unchanged standard bundle as PRIMARY; M0 limits remain M0 limits."""
+    writer=RetainedOutputs(root);receipt={'status':'PUBLICATION_FAILED'};error=None
+    runtime={k:os.environ[k] for k in ('ACTIONS_RUNTIME_TOKEN','ACTIONS_RUNTIME_URL','ACTIONS_RESULTS_URL',
+        'GITHUB_OUTPUT','GITHUB_REPOSITORY','GITHUB_RUN_ID','GITHUB_RUN_ATTEMPT','GITHUB_SERVER_URL','GITHUB_WORKSPACE')}
+    try:
+        writer.check(adverse=True)
+        output=Path(runtime['GITHUB_OUTPUT']);scope=Path(os.environ['M0_COUNTED_ROOT']).resolve()
+        info=output.lstat()
+        need(output.resolve(strict=True).is_relative_to(scope) and stat.S_ISREG(info.st_mode)
+             and info.st_nlink==1 and info.st_size==0,'fresh counted standard action output')
+        paths=sorted(p for p in root.iterdir() if p.is_file() and p.suffix in ('.json','.jsonl','.txt','.log'))
+        need(0<len(paths)<=4096,'bounded immutable prepublication members')
+        rows=[]
+        for p in paths:
+            st=p.lstat();need(stat.S_ISREG(st.st_mode) and st.st_nlink==1 and not p.is_symlink(),'regular single-link publication member')
+            rows.append({'path':p.name,'bytes':st.st_size,'sha256':digest(p)})
+        manifest=root/'prepublication-manifest.json'
+        writer.write(manifest.name,{'files':rows,'excludes':'active guard/upload logs and all later terminal receipts'},adverse=True)
+        bundle=Path(__file__).resolve().parent.parent/'m0-common-write-upload/index.js'
+        node=Path(os.environ['M0_NODE_PATH']).resolve(strict=True)
+        need(node.is_file(),'standard action Node path')
+        receipt.update(uploader_commit='ea165f8d65b6e75b540449e92b4886f43607fa02',uploader_sha256=digest(bundle),
+            member_manifest_sha256=digest(manifest),node={'path':str(node),'bytes':node.stat().st_size,'sha256':digest(node)},members=len(rows)+1)
+        env=dict(os.environ);env.update(runtime)
+        env.pop('GH_TOKEN',None);env.pop('GITHUB_TOKEN',None)
+        env.update({'INPUT_NAME':'m0-common-write-'+runtime['GITHUB_RUN_ID']+'-'+runtime['GITHUB_RUN_ATTEMPT'],
+            'INPUT_PATH':'\n'.join(str(p)for p in [*paths,manifest]),'INPUT_IF-NO-FILES-FOUND':'error',
+            'INPUT_RETENTION-DAYS':'14','INPUT_COMPRESSION-LEVEL':'6','INPUT_OVERWRITE':'false','INPUT_INCLUDE-HIDDEN-FILES':'true'})
+        child=None;started=time.monotonic();failure=None;handles=[]
+        try:
+            out=(root/'publication.stdout.log').open('xb');handles.append(out)
+            err=(root/'publication.stderr.log').open('xb');handles.append(err)
+            child=subprocess.Popen([str(node),str(bundle)],stdout=out,stderr=err,env=env)
+            while True:
+                writer.check(adverse=True)
+                need(time.monotonic()-started<60,'original60s publication limit')
+                try:code=child.wait(timeout=.2);break
+                except subprocess.TimeoutExpired:pass
+            need(code==0,'standard uploader nonzero')
+        except BaseException as caught:
+            failure=caught
+        finally:
+            env.clear()
+            if child is not None and child.returncode is None:
+                try:
+                    child.terminate()
+                    try:child.wait(timeout=5)
+                    except subprocess.TimeoutExpired:child.kill();child.wait(timeout=5)
+                except BaseException as caught:
+                    failure=caught if failure is None else BaseExceptionGroup('original upload then child-join failure',[failure,caught])
+            for handle in handles:
+                try:handle.flush();os.fsync(handle.fileno())
+                except BaseException as caught:
+                    failure=caught if failure is None else BaseExceptionGroup('original upload then flush failure',[failure,caught])
+                try:handle.close()
+                except BaseException as caught:
+                    failure=caught if failure is None else BaseExceptionGroup('original upload then close failure',[failure,caught])
+        if failure is not None:raise failure
+        for row in rows:
+            p=root/row['path'];need(p.stat().st_size==row['bytes'] and digest(p)==row['sha256'],'uploaded immutable member changed')
+        info=output.lstat()
+        need(output.resolve(strict=True).is_relative_to(scope) and stat.S_ISREG(info.st_mode)
+             and info.st_nlink==1 and info.st_size<=4096,'counted bounded upload output')
+        values=upload_outputs(output.read_text(),runtime['GITHUB_REPOSITORY'],runtime['GITHUB_RUN_ID'])
+        receipt.update(status='UPLOAD_JOINED_PENDING_OUTER_GUARD',outputs=values,output_sha256=digest(output),
+            elapsed_seconds=time.monotonic()-started,exit=0,joined=True)
+        writer.check(adverse=True)
+    except BaseException as caught:
+        error=caught;receipt['error_class']=type(caught).__name__
+    finally:
+        runtime.clear()
+        try:writer.write('publication-receipt.json',receipt,131072,adverse=True)
+        except BaseException as caught:error=caught if error is None else BaseExceptionGroup('original publication then receipt failure',[error,caught])
+        writer.close()
+    if error is not None:raise error
+    return receipt
+
+
+def worker():
+    # Data projection/immutable files close before the exact standard upload child.
+    # First data failure remains primary; publication never converts it to green.
+    authority()
+    work=Path(__file__).resolve().parent.parent.parent
+    for name,row in json.loads((work/'.github/m0-common-write-inputs.json').read_text())['files'].items():
+        p=work/name;need(p.stat().st_size==row['bytes'] and digest(p)==row['sha256'],'worker source binding')
+    root=Path(os.environ['RUNNER_TEMP'])/'four-gate-readback';error=None
+    try:
+        need(os.environ.get('M0_CONTROLS_OUTCOME')=='success','fixed pure controls did not pass')
+        main()
+    except BaseException as caught:error=caught
+    try:publication(root)
+    except BaseException as caught:error=caught if error is None else BaseExceptionGroup('original data then publication failure',[error,caught])
+    writer=RetainedOutputs(root)
+    try:
+        writer.write('worker-terminal.json',{'status':'DATA_AND_PUBLICATION_CLOSED_PENDING_OUTER_GUARD' if error is None else 'DATA_OR_PUBLICATION_FAILED',
+            'error_class':type(error).__name__ if error else None,'physical_drain':'ONLY_ORIGINAL_OUTER_GUARD_CAN_ESTABLISH'},131072,adverse=True)
+        writer.check(adverse=True)
+    except BaseException as caught:error=caught if error is None else BaseExceptionGroup('original worker then terminal failure',[error,caught])
+    if error is not None:raise error
+
+
+def launch():
+    # Fixed PRIMARY foreground guard/wait/post-join pattern; no new supervisor.
+    authority();here=Path(__file__).resolve().parent;work=here.parent.parent
+    manifest=json.loads((work/'.github/m0-common-write-inputs.json').read_text())
+    for name,row in manifest['files'].items():
+        p=work/name;need(p.stat().st_size==row['bytes'] and digest(p)==row['sha256'],'launcher source binding')
+    root=Path(os.environ['RUNNER_TEMP'])/'four-gate-readback';scope=Path(os.environ['M0_COUNTED_ROOT']).resolve()
+    need(work.resolve().is_relative_to(scope) and root.resolve().is_relative_to(scope),'same common counted root')
+    writer=RetainedOutputs(root);writer.check(adverse=True)
+    need(writer.max_whole_sampled+256*MIB+32*MIB<=1024*MIB,'full download and output root reservation')
+    allowed=os.sched_getaffinity(0);need(bool(allowed),'CPU affinity unavailable');os.sched_setaffinity(0,{min(allowed)})
+    scripts=work/'scripts';started=time.monotonic()
+    argv=[sys.executable,'-B',str(scripts/'ycsb_campaign_guard.py'),'--scripts-dir',str(scripts),
+        '--synthetic','--out',str(root/'guard'),'--cwd',str(work),'--filesystem',str(scope),
+        '--deadline','180','--cleanup-seconds','10','--interval','.2','--rss-cap-bytes',str(MIB*1024),
+        '--free-floor-bytes',str(MIB*10240),'--','bash',str(here/'m0_common_write_entry.sh')]
+    child=subprocess.Popen(argv);error=None;code=None
+    try:
+        while True:
+            writer.check(adverse=True)
+            need(time.monotonic()-started<200,'guard180+cleanup10 bounded outer wait')
+            try:code=child.wait(timeout=.2);break
+            except subprocess.TimeoutExpired:pass
+    except BaseException as caught:
+        error=caught
+        child.send_signal(signal.SIGTERM)
+        try:child.wait(timeout=40)
+        except subprocess.TimeoutExpired:child.kill();child.wait(timeout=10)
+    # Normal join checks exact original guard; abnormal termination never certifies drain.
+    guard_path=root/'guard/result.json';guard=json.loads(guard_path.read_text()) if guard_path.exists() else None
+    pub_path=root/'publication-receipt.json';pub=json.loads(pub_path.read_text())if pub_path.exists()else None
+    terminal_path=root/'worker-terminal.json';terminal=json.loads(terminal_path.read_text())if terminal_path.exists()else None
+    ok=(error is None and code==0 and guard is not None and guard['errors']==[] and guard['cleanup_signals']==[]
+        and guard['status']=='guard-completed-pending-independent-artifact-review'
+        and pub is not None and pub['status']=='UPLOAD_JOINED_PENDING_OUTER_GUARD'
+        and terminal is not None and terminal['status']=='DATA_AND_PUBLICATION_CLOSED_PENDING_OUTER_GUARD')
+    closing={'schema':'m0-common-write-post-publication-v1','status':'CLOSED_PENDING_INDEPENDENT_REVIEW' if ok else 'FAILED_CUSTODY_NOT_CERTIFIED',
+        'guard_exit':code,'error_class':type(error).__name__ if error else None,'guard':guard,'publication':pub,'worker':terminal,
+        'guard_sha256':digest(guard_path)if guard else None,'publication_sha256':digest(pub_path)if pub else None,
+        'whole_interval_verified':False,'max_whole_sampled_bytes':writer.max_whole_sampled,'acceptance':False}
+    raw=writer.write('post-publication-terminal.json',closing,262144,adverse=True)
+    need(len(raw)<=262144,'bounded complete post-join log receipt')
+    # The immutable artifact deliberately excludes these later terminal records.
+    writer.console_bytes+=len(raw);writer.check(adverse=True)
+    need(os.write(1,raw)==len(raw),'post-join console short write')
+    if error is not None:raise error
+    need(ok,'original guard/publication did not complete normally')
 
 
 def main():
@@ -227,4 +405,7 @@ def main():
 
 
 if __name__=='__main__':
-    main()
+    if sys.argv[1:]==['launch']:launch()
+    else:
+        need(not sys.argv[1:],'fixed reader mode')
+        worker()
