@@ -9,7 +9,7 @@ import sys
 import time
 
 ROOT_THREAD = '01a18e7c-8c23-7fd2-8d55-b0486d938cd3'
-IMAGE = dict(ImageOS='ubuntu24', ImageVersion='20261025.353.1',
+IMAGE = dict(ImageOS='ubuntu24', ImageVersion='20261101.360.1',
              RUNNER_OS='Linux', RUNNER_ARCH='X64')
 READ_LIMIT = 1073741824
 OUTPUT_LIMIT = 2097152
@@ -163,7 +163,7 @@ def authority():
     require(e.get('GITHUB_REPOSITORY') == 'snissn/gomap' and
             e.get('GITHUB_ACTOR_ID') == '1981537' and e.get('GITHUB_RUN_ATTEMPT') == '1' and
             e.get('GITHUB_EVENT_NAME') == 'workflow_dispatch' and
-            e.get('GITHUB_REF') == 'refs/heads/diagnostic/primary-row217-metadata-01' and
+            e.get('GITHUB_REF') == 'refs/heads/diagnostic/primary-current-image-qualification-01' and
             e.get('GITHUB_SHA') == e.get('REVIEWED_HEAD') == e.get('WORKFLOW_COMMIT'), 'actor_head')
     require({k: e.get(k) for k in IMAGE} == IMAGE, 'fixed_image')
     admission = json.loads((ROOT / 'dispatch-admission.json').read_text())

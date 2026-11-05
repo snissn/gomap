@@ -1,10 +1,11 @@
 # Fixed PRIMARY literal runtime identity observation
 
-This diagnostic branch replaces the earlier discovery query with one fixed
-268-path metadata query. It requires ubuntu24, ImageVersion20261025.353.1,
-Linux/X64; this is the retained failed image, not a claim of current runner
-availability. A different image stops before source materialization, with no
-retry or fallback.
+This prospective diagnostic branch reuses the fixed 268-path metadata query
+against ubuntu24, ImageVersion20261101.360.1, Linux/X64: the image recorded
+in the unchanged original manifest. Availability and all current file bytes
+remain unobserved until a separately admitted query. A different image stops
+before source materialization, with no retry or fallback. The older-image
+constructor failure and zero-row follow-up remain failed and unresolved.
 
 The manual workflow authenticates ROOT actor1981537/thread
 01a18e7c-8c23-7fd2-8d55-b0486d938cd3, exact head/workflow SHA, first attempt,
@@ -44,3 +45,13 @@ statuses still refuse success. Every checked path-descriptor close failure is
 terminal; sanitized operational errors precede cleanup errors in the retained
 first-failure row. Python source under /etc (including sitecustomize.py) remains
 code input, rather than configuration. No guard or resource predicate changed.
+
+Prospective current-image scope: this fixed query records all268 immutable
+expected rows, not a refreshed inventory. Exit0 means observations completed,
+not that their identities equal the originals. ROOT must inspect every
+equals_original/status plus original manifest binding and complete checked
+publication before contemplating construction. Any mismatch, unavailable row,
+partial output or failed guard/close is not qualification. This does not
+authorize construction on the queried host or any future host. Use a fresh
+metadata-only admission binding this branch head and exact expected image;
+the dormant construction admission-template.json is not the query admission.
