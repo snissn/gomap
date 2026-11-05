@@ -12,7 +12,7 @@
     "M0 observation is manual diagnostic-only on a separately fixed product; no forecast starts it or replaces failed M0 acceptance.",
     "Bounded maintenance comparison is a manually granted diagnostic on fixed baseline/candidate products; no forecast starts it or establishes cost, M0 or native acceptance."
   ],
-  "discovery_source_sha256": "5d66ce837d9cfd95323af554f7ec2fcfd0663ec35ad7732bed034d159ffd4830",
+  "discovery_source_sha256": "7f0d0124c1e0ab0f0de0feed9c0c0682bb8e347ba76ba08ef18cb3214f5846d0",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
@@ -447,8 +447,8 @@
       "workflow": "sparse-catalog-qualification.yml"
     },
     {
-      "id": "treedb-mvcc-maintenance-diagnostic/diagnostic/single",
-      "job": "diagnostic",
+      "id": "treedb-mvcc-maintenance-diagnostic/readback/single",
+      "job": "readback",
       "owner": "CI maintainer with affected MVCC maintenance harness owner",
       "variant": {
         "cgo": "setup-go platform default; explicit command overrides retained",
@@ -2325,46 +2325,38 @@
       "events": {
         "workflow_dispatch": null
       },
-      "git_blob": "5db1627d00d523c4611092c2ba8aac5465b64506",
+      "git_blob": "4940fc6cf6b33e1c33a8aa61ecdcda98e5556cce",
       "jobs": {
-        "diagnostic": {
+        "readback": {
           "checkout": [
             {
-              "fetch-depth": 0,
               "persist-credentials": false,
-              "ref": "${{ github.sha }}"
+              "ref": "${{ github.sha }}",
+              "sparse-checkout": ".github/scripts/four_gate_artifact_readback.py",
+              "sparse-checkout-cone-mode": false
             }
           ],
           "commands": [
             {
-              "command_sha256": "dc2d7506fa6e28a95565b0bd60299cfa8a1f345e73aa6997a4c6d954f73fab67",
-              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:19",
+              "command_sha256": "d93cf68c590886aa80e761d9561ee31add5b82884fed34734467df08185fea35",
+              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:24",
+              "env": {
+                "GH_PAGER": "cat",
+                "GH_TOKEN": "${{ github.token }}",
+                "PYTHONDONTWRITEBYTECODE": "1"
+              },
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
-              "name": "Initialize retained attempt packet"
-            },
-            {
-              "command_sha256": "3bbcd578a6db06320b9181f1fcbdfcdce89d8c99b0b433ef9e2aeab17bd27a64",
-              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:38",
-              "invocation": "python3 -B .github/scripts/mvcc_maintenance_test.py > \"$RUNNER_TEMP/mvcc-maintenance-setup/pure-tests.log\" 2>&1",
-              "name": "Check syntax, receipts and fixed workflow contract (no Go execution)"
-            },
-            {
-              "command_sha256": "38d56548962e86f55dc4e1a22895ea3a0f33ff34d2b49ed50514f1359bcc6615",
-              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:41",
-              "invocation": "python3 -B .github/scripts/mvcc_maintenance_bootstrap.py > \"$RUNNER_TEMP/mvcc-maintenance-setup/bootstrap.log\" 2>&1",
-              "name": "Prepare exact inputs and collect once"
+              "name": "Read original archive once and authenticate before parsing"
             }
           ],
-          "environment": {
-            "PYTHONDONTWRITEBYTECODE": "1"
-          },
+          "environment": {},
           "matrix": null,
           "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
           "race": false,
           "runs_on": "ubuntu-24.04"
         }
       },
-      "sha256": "2d682ddfe8416722c6408e033606700217b614858c78e7479d25caa294c126c8"
+      "sha256": "f4f93c23a70fcde88480e80f531091ccd9377812b9e943adace831ea5e17e1fa"
     },
     "treedb-tests.yml": {
       "coverage": "existing execution only; triggers/path filters are unchanged",
