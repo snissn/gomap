@@ -75,6 +75,7 @@ jobs:
           set -e
           printf '%s\n' "$rc" > "$out/normal.exit"
           python3 -B .github/scripts/getversioned_activation_diagnostic.py finish "$out" > /dev/null
+          cat "$out/normal.jsonl" "$out/normal.stderr"
           test "$rc" -eq 0
 
       - name: Race check the same activation control once
@@ -89,6 +90,7 @@ jobs:
           set -e
           printf '%s\n' "$rc" > "$out/race.exit"
           python3 -B .github/scripts/getversioned_activation_diagnostic.py finish "$out" > /dev/null
+          cat "$out/race.jsonl" "$out/race.stderr"
           test "$rc" -eq 0
           python3 -B .github/scripts/getversioned_activation_diagnostic.py inventory "$out"
 

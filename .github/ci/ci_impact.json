@@ -1699,7 +1699,7 @@
           ]
         }
       },
-      "git_blob": "6adfa7e71f330dd26947a7a90144bf8e1d30dc96",
+      "git_blob": "56e725ba2dd60f3e063f3ba7af12e67554466177",
       "jobs": {
         "activation": {
           "checkout": [
@@ -1726,32 +1726,32 @@
               "name": "Record source and tool context; prepare fixed overlays"
             },
             {
-              "command_sha256": "3edc8aa5a343d80e49288fc953a9b02b44b45fd241ff15a658d18a8dfc03c7b2",
+              "command_sha256": "dc815bc647d9ae6deaae977437cf5a27c795c4bffa5b8e324d072e2febb4e8f1",
               "entrypoint": ".github/workflows/getversioned-activation-diagnostic.yml:69",
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
               "name": "Observe the durable write window and positive read control"
             },
             {
-              "command_sha256": "a8edb4dbba5d306e6a42317c44a18e4e3d90ef0984e5f2ba9cf7b2fd785a8d42",
-              "entrypoint": ".github/workflows/getversioned-activation-diagnostic.yml:83",
+              "command_sha256": "b21de248991e4f3ce530e858a52a84f0e16105bd16f11390d6691f46986a14eb",
+              "entrypoint": ".github/workflows/getversioned-activation-diagnostic.yml:84",
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
               "name": "Race check the same activation control once"
             },
             {
               "command_sha256": "d8eeac7cb31e96e2921934833175f0e64fa25b3656b57b21beb9f3a4218599b8",
-              "entrypoint": ".github/workflows/getversioned-activation-diagnostic.yml:98",
+              "entrypoint": ".github/workflows/getversioned-activation-diagnostic.yml:100",
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
               "name": "Compile ordinary optimized DB ELF without overlay"
             },
             {
               "command_sha256": "f4fe3aed0e029ddd24afae831c5ff5c8ca2b881fef6094adfef27a160028cbc6",
-              "entrypoint": ".github/workflows/getversioned-activation-diagnostic.yml:120",
+              "entrypoint": ".github/workflows/getversioned-activation-diagnostic.yml:122",
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
               "name": "Capture actual linked reset path from that same ELF"
             },
             {
               "command_sha256": "32ebd50aac399d07570eabc6d680c3a2201b1121ec7391674676e1923fdc6d20",
-              "entrypoint": ".github/workflows/getversioned-activation-diagnostic.yml:133",
+              "entrypoint": ".github/workflows/getversioned-activation-diagnostic.yml:135",
               "if": "always()",
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
               "name": "Preserve final output ledger on success or failure"
@@ -1770,7 +1770,7 @@
           "runs_on": "ubuntu-latest"
         }
       },
-      "sha256": "2c2bb8419d35166801190faebc63b348dab01acfc8c8f4b0aba42572d22993e5"
+      "sha256": "ed6068f6d7cc51fe1f1b7e11c0aeb1b5787ae4955f45694eec0c4038171e9a35"
     },
     "hashdb-tests.yml": {
       "coverage": "existing execution only; triggers/path filters are unchanged",
