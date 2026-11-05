@@ -1098,6 +1098,7 @@ func TestColumnVectorGraphNativeSearchWarmScratchZeroAllocsV3(t *testing.T) {
 	if !enterIsolatedVectorAllocationGate(t, "native-search-warm-scratch") {
 		return
 	}
+	finishAllocationProfile := beginWarmSearchAllocationProfile(t)
 	var hotErr error
 	allocs := testing.AllocsPerRun(1000, func() {
 		if hotErr != nil {
@@ -1114,6 +1115,7 @@ func TestColumnVectorGraphNativeSearchWarmScratchZeroAllocsV3(t *testing.T) {
 		}
 		columnPhysicalScanBenchSum += int64(got[0].Ordinal)
 	})
+	finishAllocationProfile()
 	if hotErr != nil {
 		t.Fatalf("SearchCosine: %v", hotErr)
 	}
