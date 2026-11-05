@@ -6,9 +6,23 @@ from pathlib import Path
 import stat
 import zipfile
 
-EXPECTED_BYTES = 21390
-EXPECTED_SHA = "f9983836a039d8b51b89ef0159ba413a245acee09ea67987fafd4a208c6c4763"
-NAMES = {'fixture.json', 'results.json', 'summary.md'}
+EXPECTED_BYTES = 59006
+EXPECTED_SHA = "39eb2f7da9c3b2d5e445102472a71e5ee95a5cdd1a7fdae85320582ad34131e8"
+NAMES = {
+    'dispatch-admission.json',
+    'entry.stderr.log',
+    'entry.stdout.log',
+    'guard/result.json',
+    'output/compile-context.json',
+    'output/completion.json',
+    'output/final-file-manifest.json',
+    'output/normal-inventory.json',
+    'output/normal-preparation.json',
+    'output/normal.stdout.log',
+    'output/race-inventory.json',
+    'output/race.stdout.log',
+    'output/stages.json',
+}
 root = Path(os.environ["RUNNER_TEMP"]) / "four-gate-readback"
 archive = root / "original.zip"
 assert archive.stat().st_size == EXPECTED_BYTES, "archive size mismatch"
@@ -17,7 +31,7 @@ with archive.open("rb") as f:
     for chunk in iter(lambda: f.read(1048576), b""):
         h.update(chunk)
 assert h.hexdigest() == EXPECTED_SHA, "archive digest mismatch"
-result = {"source_head": os.environ["GITHUB_SHA"], "artifact": 13387620264,
+result = {"source_head": os.environ["GITHUB_SHA"], "artifact": 13388063743,
           "archive_sha256": h.hexdigest(), "scope": "retained original text only; no gate alteration",
           "entries": [], "texts": {}, "missing": []}
 with zipfile.ZipFile(archive) as z:
