@@ -441,6 +441,50 @@ func (t *Tree) Reset(p *pager.Pager, sr SlabReader, root uint64) {
 	t.rootPageID = root
 }
 
+// AppendReadBindings supplies the complete non-key-aware append/leaf reader
+// binding for a caller that already owns the current reader. All nine fields
+// must refer to that same live reader. This is a trusted caller contract, not
+// authentication of arbitrary or mixed-owner interface values.
+//
+// Keep the bundle local to initialization. ResetAppendReadBindings copies its
+// fields and does not retain the bundle itself. Arbitrary readers and readers
+// with a dynamic key-aware capability must continue to use Reset.
+type AppendReadBindings struct {
+	Reader        SlabReader
+	Appender      slabUnsafeAppender
+	Batcher       slabUnsafeBatchAppender
+	ToReader      slabUnsafeToReader
+	LeafToReader  leafLogPageUnsafeToReader
+	LeafToState   leafLogPageUnsafeToStateReader
+	LeafView      leafLogPageUnsafeViewReader
+	LeafViewState leafLogPageUnsafeViewStateReader
+	VerifyMarker  leafLogPageChecksumVerifyMarker
+}
+
+// ResetAppendReadBindings rebinds a complete, same-owner append reader without
+// optional capability discovery. It clears every other Tree field, including
+// key-aware interfaces, negative-filter coverage and selected page bounds.
+// A nil bundle has the same empty-reader semantics as Reset(p, nil, root).
+func (t *Tree) ResetAppendReadBindings(p *pager.Pager, b *AppendReadBindings, root uint64) {
+	if b == nil {
+		t.Reset(p, nil, root)
+		return
+	}
+	*t = Tree{
+		pager:               p,
+		slabReader:          b.Reader,
+		slabAppender:        b.Appender,
+		slabBatcher:         b.Batcher,
+		slabToReader:        b.ToReader,
+		leafLogToReader:     b.LeafToReader,
+		leafLogToState:      b.LeafToState,
+		leafLogView:         b.LeafView,
+		leafLogViewState:    b.LeafViewState,
+		leafLogVerifyMarker: b.VerifyMarker,
+		rootPageID:          root,
+	}
+}
+
 // SetRoot updates the root page ID.
 func (t *Tree) SetRoot(root uint64) {
 	t.negativeFilter = nil
