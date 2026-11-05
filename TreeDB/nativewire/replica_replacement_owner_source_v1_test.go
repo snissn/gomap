@@ -219,7 +219,7 @@ func testImmutableOwnerReplacementPrivateQualificationRecoveryV1(t *testing.T, e
 			err = client.WarmReplicaReplacementOwnerV1(ctx, command)
 		}
 		if err != nil {
-			t.Fatal(err)
+			t.Fatal(replicaOwnerOperationErrorV1(ctx, client, target, command, "warm-"+label, err))
 		}
 		elapsed := time.Since(start)
 		runtime.ReadMemStats(&after)
@@ -360,7 +360,7 @@ func testImmutableOwnerReplacementPrivateQualificationRecoveryV1(t *testing.T, e
 	}
 	ownerClient, err := NewFixedPeerTCPClientV1(configs[1])
 	if err != nil {
-		t.Fatal(err)
+		t.Fatal(replicaOwnerOperationErrorV1(ctx, client, target, command, "owner-client-create", err))
 	}
 	t.Cleanup(ownerClient.Close)
 	if _, err := ownerClient.call(ctx, command.OldNodeID, "replacement-tail", fixedPeerRequestV1{Entry: raw}, false); !errors.Is(err, errPeerAuthenticationV1) {
@@ -375,7 +375,7 @@ func testImmutableOwnerReplacementPrivateQualificationRecoveryV1(t *testing.T, e
 		}
 		unmarkedRaw, err := raftplacement.EncodeReplicaReplacementBeginV1(unmarked)
 		if err != nil {
-			t.Fatal(err)
+			t.Fatal(replicaOwnerOperationErrorV1(ctx, client, target, command, "unmarked-endpoint-encode", err))
 		}
 		if _, err := client.call(ctx, command.NewPeer.ID, "replacement-owner-endpoint", fixedPeerRequestV1{Entry: unmarkedRaw}, false); !errors.Is(err, raftcluster.ErrUnsupportedFeature) {
 			t.Fatalf("unmarked endpoint=%v", err)
@@ -413,7 +413,7 @@ func testImmutableOwnerReplacementPrivateQualificationRecoveryV1(t *testing.T, e
 	}
 	// Restart retains receiver authority but no process-local ANN cache.
 	if err := target.Close(); err != nil {
-		t.Fatal(err)
+		t.Fatal(replicaOwnerOperationErrorV1(ctx, client, target, command, "target-close", err))
 	}
 	runtimes[targetIndex] = nil
 	select {
@@ -432,11 +432,11 @@ func testImmutableOwnerReplacementPrivateQualificationRecoveryV1(t *testing.T, e
 	}
 	target, err = fixedPeerOpenTestRuntimeV1(t, configs[targetIndex])
 	if err != nil {
-		t.Fatal(err)
+		t.Fatal(replicaOwnerOperationErrorV1(ctx, client, target, command, "target-reopen", err))
 	}
 	runtimes[targetIndex] = target
 	if _, err := client.call(ctx, command.NewPeer.ID, "replacement-prepare", fixedPeerRequestV1{Entry: raw}, false); err != nil {
-		t.Fatal(err)
+		t.Fatal(replicaOwnerOperationErrorV1(ctx, client, target, command, "restart-replacement-prepare", err))
 	}
 	local = target.localDataV1(command.GroupID)
 	waitTail()
@@ -449,10 +449,10 @@ func testImmutableOwnerReplacementPrivateQualificationRecoveryV1(t *testing.T, e
 		}
 		listener, err := net.Listen("tcp", configs[targetIndex].Vector.ShardAddresses[command.GroupID][command.NewPeer.ID])
 		if err != nil {
-			t.Fatal(err)
+			t.Fatal(replicaOwnerOperationErrorV1(ctx, client, target, command, "restart-endpoint-listen-refusal-control", err))
 		}
 		if err := listener.Close(); err != nil {
-			t.Fatal(err)
+			t.Fatal(replicaOwnerOperationErrorV1(ctx, client, target, command, "restart-endpoint-listener-close", err))
 		}
 	} else {
 		assertPrivate()
