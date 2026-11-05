@@ -12,7 +12,7 @@
     "M0 observation is manual diagnostic-only on a separately fixed product; no forecast starts it or replaces failed M0 acceptance.",
     "Bounded maintenance comparison is a manually granted diagnostic on fixed baseline/candidate products; no forecast starts it or establishes cost, M0 or native acceptance."
   ],
-  "discovery_source_sha256": "7c07b24a1a17736d4df81cdff8a703946d4cdfa36d0db02177d0002a4ea6601f",
+  "discovery_source_sha256": "57103e44df7f203c5a541bb2ac504d04212b7236a3733f7024f683c438a66511",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
@@ -2326,7 +2326,7 @@
         "workflow_dispatch": {
           "inputs": {
             "admission_b64": {
-              "description": "Fresh ROOT construction-only admission; actual controls must be admitted",
+              "description": "Fresh ROOT controls-only admission; no old controls credit",
               "required": true,
               "type": "string"
             },
@@ -2338,13 +2338,13 @@
           }
         }
       },
-      "git_blob": "cdcea35dd8bff1d8349815f83b1015b2dc3eea24",
+      "git_blob": "1ea1d63a79df917bf079fdb6ac6f3e65c0600bab",
       "jobs": {
         "diagnostic": {
           "checkout": [],
           "commands": [
             {
-              "command_sha256": "a65250bc44810ba7e10f4a5d59c35f2095aad1bfb7d38063e86bbbce139328f9",
+              "command_sha256": "d9e705f589ec0438b0456d195769af3999772dc7188bfd8e67eb4dabd47a1db3",
               "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:35",
               "env": {
                 "GH_TOKEN": "${{ github.token }}"
@@ -2354,7 +2354,7 @@
             }
           ],
           "environment": {
-            "INPUT_MANIFEST_SHA256": "1c6093d569a7f389757a30c9e21d7e710570dcc4513ce6a15ade4821135a2388",
+            "INPUT_MANIFEST_SHA256": "19761b1a3f0282c2adc3b8577913741f1da90005703e8fb4b17153c69ea3b60c",
             "PYTHONDONTWRITEBYTECODE": "1",
             "REVIEWED_HEAD": "${{ inputs.expected_head }}",
             "ROOT_ADMISSION_B64": "${{ inputs.admission_b64 }}",
@@ -2366,7 +2366,7 @@
           "runs_on": "ubuntu-24.04"
         }
       },
-      "sha256": "e4a762d373d380b0421b6956ef831461ba20fba5fe87ccb3ff165a9bc1a518fc"
+      "sha256": "22f381057c5af400d0696408f9fd779c50ed680e12c9d2492a6d8b677b0b0fc9"
     },
     "treedb-tests.yml": {
       "coverage": "existing execution only; triggers/path filters are unchanged",

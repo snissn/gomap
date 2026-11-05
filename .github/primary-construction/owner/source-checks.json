@@ -1,0 +1,63 @@
+{
+  "Go_formatter_build_tests_profiles_decoders_UNRUN": true,
+  "all_forward_inverse_patches_verified_in_memory": true,
+  "benchmark_loop_exact_original": true,
+  "byte_identical_shared_helpers": [
+    [
+      "TreeDB/mvcc/primary_generation_routing_v6_test.go",
+      "cb096a12dfa2d05d26324e56d632ac4ebfbcacd59476605c10c2730d49b32b27"
+    ],
+    [
+      "TreeDB/mvcc/primary_allocation_observer_test.go",
+      "bfd44088624e069f225b8280ff0beb73add7655ff4fa114e33d07bb16332de85"
+    ],
+    [
+      "TreeDB/caching/primary_allocation_observer.go",
+      "a83048b2060445fe15f45f772ceb2cba1849ea558246bc7c52d0fd1b8b5c724b"
+    ],
+    [
+      "TreeDB/caching/primary_allocation_observer_test.go",
+      "23719907cd6232275ced29c33807eef346734ecc266857e47904a70b3818a4e7"
+    ]
+  ],
+  "cache_seam_restore_exact": true,
+  "checks": [
+    {
+      "all_helpers_byte_identical_to_admitted_packet": true,
+      "arm": "B",
+      "exact_source_preimages": true,
+      "five_files_exact_forward_inverse": true,
+      "full_tree_inventory_entries": 12925,
+      "new_files_absent_in_arm": true,
+      "only_two_cache_seams": true,
+      "product_arm_replaced": false
+    },
+    {
+      "all_helpers_byte_identical_to_admitted_packet": true,
+      "arm": "C",
+      "exact_source_preimages": true,
+      "five_files_exact_forward_inverse": true,
+      "full_tree_inventory_entries": 12936,
+      "new_files_absent_in_arm": true,
+      "only_two_cache_seams": true,
+      "product_arm_replaced": false
+    }
+  ],
+  "frozen_worktree": {
+    "head": "4934bd6d51d9047ba0187d05c1d211cbe419811a",
+    "path": "/mnt/fast4tb/gomap-graph-seal-c312-20261101T0603Z/leafpack-repro",
+    "status_clean_before_and_after": true
+  },
+  "no_qualification_credit_from_static_checks": true,
+  "schema": "finite-source-checks-v1",
+  "sealed_preflight": {
+    "Go_format_compile_normal_race_capture": "UNRUN",
+    "all_overlay_hashes_preimages_and_new_absences_match": true,
+    "declared_four_tops_match_source": true,
+    "frozen4934_and_c0a8_projection_unchanged": true,
+    "independent_review": "PENDING_ROOT_EXISTING_REVIEWER",
+    "original_call_line184_overlay190": true,
+    "per_arm_forward_patches_identical_because_relevant_preimages_identical": true
+  },
+  "status": "PASS_STATIC_ONLY_BUILD_FORMAT_NORMAL_RACE_CAPTURE_UNRUN"
+}

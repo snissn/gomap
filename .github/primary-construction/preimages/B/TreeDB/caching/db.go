@@ -34580,6 +34580,10 @@ func (db *DB) Stats() map[string]string {
 			outerLeafCodecSnap.Frames[kind] += outerCodecSnap.Frames[kind]
 		}
 	}
+	var payloadBucketSuffixes [vlogPayloadBucketCount]string
+	for bucket := range payloadBucketSuffixes {
+		payloadBucketSuffixes[bucket] = vlogPayloadBucketSuffix(bucket)
+	}
 	for mode := 0; mode < vlogCompressionWriteModeCount; mode++ {
 		suffix := vlogWriteModeSuffix(vlogCompressionWriteMode(mode))
 		stats["treedb.cache.vlog_write_mode.raw_bytes."+suffix] = fmt.Sprintf("%d", writeSnap.RawBytes[mode])
@@ -34589,7 +34593,7 @@ func (db *DB) Stats() map[string]string {
 			stats["treedb.cache.vlog_write_mode.stored_ratio."+suffix] = fmt.Sprintf("%.6f", float64(writeSnap.StoredBytes[mode])/float64(writeSnap.RawBytes[mode]))
 		}
 		for bucket := 0; bucket < vlogPayloadBucketCount; bucket++ {
-			bucketSuffix := vlogPayloadBucketSuffix(bucket)
+			bucketSuffix := payloadBucketSuffixes[bucket]
 			stats["treedb.cache.vlog_write_mode.bucket.raw_bytes."+suffix+"."+bucketSuffix] = fmt.Sprintf("%d", writeSnap.BucketRawBytes[mode][bucket])
 			stats["treedb.cache.vlog_write_mode.bucket.stored_bytes."+suffix+"."+bucketSuffix] = fmt.Sprintf("%d", writeSnap.BucketStoredBytes[mode][bucket])
 			stats["treedb.cache.vlog_write_mode.bucket.frames."+suffix+"."+bucketSuffix] = fmt.Sprintf("%d", writeSnap.BucketFrames[mode][bucket])

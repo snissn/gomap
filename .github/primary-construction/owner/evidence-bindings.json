@@ -1,0 +1,23 @@
+{
+  "b24_failure_inquiry_manifest": {
+    "bytes": 757,
+    "path": "/mnt/fast4tb/gomap-mongo-perf-graph-6a9s7h58/review/four-gate-execution-20261104-01/primary-b24-output-and-source-inquiry-01/manifest.json",
+    "sha256": "206684256f1c68d8123254e36c099bb962ae6653bb6635bf435d4bda89555ce7"
+  },
+  "frozen_projection_manifest": {
+    "bytes": 14145,
+    "path": "/mnt/fast4tb/gomap-graph-seal-c312-20261101T0603Z/correctness-readiness-20261103-01/four-ci-source-20261105-01/4934-on-0b4506-provisional-assessment-01/manifest.json",
+    "sha256": "c0a8b1dd3232717d8487f3c84d86036029911d4c01df630b7c3a9c74ea0c9472"
+  },
+  "independent_projection_review": {
+    "bytes": 4241,
+    "path": "/mnt/fast4tb/gomap-mongo-perf-graph-6a9s7h58/review/four-gate-execution-20261104-01/5373-on-correctness-predecessor-integration-review-01/review.json",
+    "sha256": "31ea28378d90b8c69944e14a9f5b6f3d66ee9d5550378573e134ffdb786ad1d6"
+  },
+  "limits": "ROOT-reported PR5395 merged0434/tree5b55 and head/postmain qualification have not been independently queried here. No public/live-state claim from this packet. All original FAIL/NULL/HOLDs retained.",
+  "old_owner_manifest": {
+    "bytes": 10332,
+    "path": "/mnt/fast4tb/gomap-graph-seal-c312-20261101T0603Z/correctness-readiness-20261103-01/four-gate-observers-actual-format-successor-20261104-02/manifest.json",
+    "sha256": "86f4ee083aba9e2f2dbdb87abf9ec5be9eb13d416e1bafd25f7b61139e317aa3"
+  }
+}

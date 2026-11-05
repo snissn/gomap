@@ -1,0 +1,20 @@
+{
+  "attempts": [
+    {
+      "error": "closing parenthesis does not match opening brace in final print statement",
+      "product_or_packet_changes": false,
+      "status": "SYNTAX_ERROR_BEFORE_ANY_STATEMENT_OR_FILE_WRITE"
+    },
+    {
+      "status": "CORRECTED_SPLIT_SOURCE_CONSTRUCTION_EXIT0"
+    },
+    {
+      "actual_original_call_line": 184,
+      "disposition": "README corrected to actual184; existing source-derived activation map already184. Observer source unchanged. No Go/runtime execution or qualification.",
+      "expected_original_call_line": 185,
+      "status": "STATIC_PREFLIGHT_ASSERTION_REFUSED_BAD_DOCUMENTATION_LINE"
+    }
+  ],
+  "no_qualification_credit": true,
+  "scope": "Python source text/data construction only; not Go/helper/application/runtime execution"
+}

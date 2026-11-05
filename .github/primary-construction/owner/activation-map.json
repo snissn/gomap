@@ -1,0 +1,37 @@
+{
+  "actual_public_api": "(*mvcc.Store).CommitAt",
+  "benchmark_label": "BenchmarkCommitAtPrimaryOnlyAfterDataGeneration",
+  "dynamic_branch_limits": "Source presence does not prove SupportsLogicalMVCC selected. Retain full stacks with the exact direct measured call line and actual logical/fallback ancestry. If symbols/inlining prevent it, mark unresolved. Do not force a route.",
+  "external_required": [
+    "exact original source tree and overlays",
+    "fresh normal arm ELFs/buildinfo, compiler/modules/CGO/runtime identity",
+    "actual N1/N128 rows, raw/seam/profile receipts and generation metric",
+    "original checked Close exit, producer exit and ROOT positive cleanup/drain"
+  ],
+  "lifecycle": "Original Open, seed/defaults, Store New, DATA materialization, ResetTimer/StopTimer positions relative to original loop, generation check/report and original deferred d.Close invocation+checked return retained. Extra observer/profile failures may fail diagnosis; they cannot turn failed Close into success. Original early vacuum-enabled refusal branch unchanged.",
+  "measured_loop": {
+    "N": 128,
+    "error_path": "Original b.Fatal. Successful loopComplete can only follow all128 original calls returning nil; failure is never counted as128 acknowledgments.",
+    "key": "k031",
+    "mode": "CommitDurable",
+    "no_new_API_counter_or_forced_capability": true,
+    "observer_call_lines": [
+      190
+    ],
+    "original_call_lines": [
+      184
+    ],
+    "path": "TreeDB/mvcc/primary_generation_routing_v6_test.go",
+    "timestamp": 100,
+    "value": "after"
+  },
+  "original_options_source": "dir string) treedb.Options {\n\topts := treedb.OptionsFor(treedb.ProfileNoWALFast, dir)\n\topts.IndexPrimaryDirectory = true\n\topts.DisableSideStores = true\n\topts.BackgroundCheckpointInterval = -1\n\topts.BackgroundCheckpointIdleDuration = -1\n\topts.MaxWALBytes = -1\n\topts.BackgroundIndexVacuumInterval = -1\n\topts.ValueLog.PointerThreshold = 4096\n\treturn opts\n}",
+  "schema": "primary-public-entry-activation-source-map-v1",
+  "seed": "Original CommitAt(1,old), CommitAt(2,keep), CommitAt(100,31 before records), CommitAt(101,64 seed records); real DATA-generation assertion unchanged.",
+  "static_route": [
+    "mvcc.go170 CommitAt validates timestamp, then CommitGroupAt193; optional logical route only after actual capability check218-221; otherwise original physical codec/point/batch fallback",
+    "native_ordered.go25 preserves mutation validation, discard-floor RLock and synchronous producer/error propagation",
+    "TreeDB/cow_ordered_native.go29-77 preserves public lifecycle/input validation, original owned batch staging/sync write and checked Close"
+  ],
+  "status": "SOURCE_PROOF_ONLY_DYNAMIC_ACTIVATION_UNRUN"
+}

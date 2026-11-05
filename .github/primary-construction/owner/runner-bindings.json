@@ -1,0 +1,96 @@
+{
+  "additional_source_references": [
+    {
+      "bytes": 32317,
+      "path": "/mnt/fast4tb/gomap-mongo-perf-graph-6a9s7h58/review/four-gate-execution-20261104-01/primary-construction-source-02/frozen/.github/scripts/primary_allocation_construction.py",
+      "sha256": "8325a239d4cdf151fff19f0f42e7600787cb0bd29d6474a3a7cac72363687239"
+    },
+    {
+      "bytes": 4603,
+      "path": "/mnt/fast4tb/gomap-mongo-perf-graph-6a9s7h58/review/pr5374-primary-allocation-attribution-01/stack-analysis-01/analyze.py",
+      "sha256": "046d16640a621911949ba2b532c1eab141108fe93774748380a48768b495da7d"
+    }
+  ],
+  "additional_source_references_limits": "Source02 constructor is lineage only, not latest ROOT admission; old analyzer has stale214. No import/execution or new adapter implementation.",
+  "execution": {
+    "dispatch": false,
+    "host_probe": false,
+    "local_go": false,
+    "local_tests": false,
+    "module_imports": false,
+    "publication": false,
+    "ssh": false,
+    "transfer": false
+  },
+  "modules": [
+    {
+      "bytes": 16505,
+      "interface": "freeze(plan), benchmark_result(output), artifacts(recipe, required, runner=None), closed_output_size(out), worker(plan, recipe, custody, adapter, review, grant, active_start)",
+      "limits": "Reference only: old fixed ROOT/PREPARATION and schema1 cannot execute this schema2 packet; no import or main invocation.",
+      "path": "/mnt/fast4tb/gomap-mongo-perf-graph-6a9s7h58/review/pr5374-primary-allocation-attribution-01/runtime-pair-01/run-pair.py",
+      "role": "previous-primary-capture-adapter",
+      "sha256": "ec97f840bd033af0f1c6985fb6159d97b336ea87c7ddfbfa00545c5ad159b1ee"
+    },
+    {
+      "bytes": 10834,
+      "interface": "Runner imported from experiments/mongo_profile_hosted/run.py; no_owned_processes(marker)",
+      "limits": "Read-only lineage; absolute sys.path and host185 main/lease cannot be reused as hosted entrypoint.",
+      "path": "/mnt/fast4tb/gomap-correctness-5356-5346-20261031T191051Z/run_public_correctness.py",
+      "role": "Runner-reexport",
+      "sha256": "b2de4ec4ed7d714406ec9ec0ec01f104d92248fc5be8fef5d8bc80b9b0a09429"
+    },
+    {
+      "bytes": 42949,
+      "interface": "Runner(root); command(name,args,*,cwd=None,env=None,timeout=600,allow_failure=False); guard(); kill_descendants(leader)",
+      "limits": "Existing command/capture/timeout controller. guard samples descendants/output; no direct local construction or import here.",
+      "path": "/home/mikers/gomap-mongo-phase-qualification-20261031/source-review-candidate-3/experiments/mongo_profile_hosted/run.py",
+      "role": "Runner-definition",
+      "sha256": "6f122f8ed48343dc533de17344cfaa15d2c37b80ee6f3cac360c1c27b6b8c0ac"
+    },
+    {
+      "bytes": 16996,
+      "interface": "authority(plan,prep,runner,review,grant); launch(plan,prep,runner,review,grant,directories); worker_started(...); process_state(adapter,roots); finish(...)",
+      "limits": "Host185 policy/lease/affinity/mount-bound; launch/finish are NOT directly portable or authorized on hosted. Preserve source and original HOLD.",
+      "path": "/mnt/fast4tb/gomap-mongo-perf-graph-6a9s7h58/review/native_journal_qualification_custody.py",
+      "role": "previous-outer-custody",
+      "sha256": "5ce0a38c47f8f5a9b3715df8deb87bf6cb78fb402ef21d0ef2386bf5d6a1b7c3"
+    },
+    {
+      "bytes": 19548,
+      "interface": "Existing CLI --out/--cwd/--filesystem/--deadline/--cleanup-seconds/--interval/--rss-cap-bytes/--free-floor-bytes -- child argv",
+      "limits": "No new guard/controller. Future hosted selection must bind its actual contract; old --synthetic authority is not portable admission.",
+      "path": "/mnt/fast4tb/gomap-mongo-perf-graph-6a9s7h58/public-guard/scripts/ycsb_campaign_guard.py",
+      "role": "existing-outer-guard",
+      "sha256": "b1f5308ce5de5bf1252a77694599f4be4fdf769803b4d7300c08b4901f8d9642"
+    },
+    {
+      "bytes": 51138,
+      "interface": "Attempt(root); run(label,argv,seconds,cwd=None,env=None) -> literal child exit; check(additional_bytes=0); close(); provision_go(attempt,root); execution_identity(attempt,root); emit_receipts(root,mode)",
+      "limits": "Exact retained revision07 at5d4524e8; fixed main dispatch/source selection/schedule must NOT execute unchanged. Smallest existing hosted stage interface is Attempt.run with prebound argv/env/cwd/deadline; its close only joins resource monitor, not proof of all descendant cleanup. ROOT alone reviews necessary binding.",
+      "path": "/mnt/fast4tb/gomap-mongo-perf-graph-6a9s7h58/review/hosted-original-elf-guard-trace-diagnostic-01-independent/revision-07/immutable-source/.github/scripts/original_elf_guard_diagnostic.py",
+      "role": "existing-hosted-stage-capture-and-closure",
+      "sha256": "5c3189c13d3937ca547aa25e9d440248707d193828c2e9d68f89a20788ab5b10"
+    },
+    {
+      "bytes": 9792,
+      "interface": "Existing exact-source/result contract module beside hosted stage adapter",
+      "limits": "Retained input only, not new qualification or clearance of historical Windows uncertainty.",
+      "path": "/mnt/fast4tb/gomap-mongo-perf-graph-6a9s7h58/review/hosted-original-elf-guard-trace-diagnostic-01-independent/revision-07/immutable-source/.github/scripts/original_elf_guard_contract.py",
+      "role": "existing-hosted-source-and-result-contract",
+      "sha256": "647e6b48e8fd62ffcaf184723728bee8739c94b6190dbd85df102230d8735ab1"
+    }
+  ],
+  "necessary_binding_only": [
+    "Bind exact B8e113308/Cb24dea5e trees, complete source inventories, five-entry per-arm overlays and actual SDK/CGO/runtime/ELF identities.",
+    "Old constructor B/C allowlist/source inventories and historical controls cannot qualify new pair unchanged; ROOT reviews only necessary binding, no product-arm replacement.",
+    "Old run-pair.py schema1 expects SchemaVersion/Operations, incompatible with unchanged v2 Schema/N/RawDelta. ROOT must bind v2 calibration/raw/lifecycle validation; no direct old launch or schema weakening.",
+    "Existing default Runner.decode raw/top alone is not complete both-type all-sites+residual analysis. ROOT binds retained exact pprof recipe/current call line, all raw logs/exits and limits.",
+    "Historical analyzer hardcodes measured line214. Current overlay direct call line is [190]. Do not run its classification unchanged or relabel setup as measured.",
+    "Normal/race scoped controls and hosted gofmt/build on exact selected source before separate capture admission.",
+    "Preserve original clocks/quiet/affinity, full1GiB root accounting and positive cleanup. Missing compatible enforcement/identity => STOP."
+  ],
+  "remaining_owner": "ROOT constructs and reviews only necessary hosted binding; this packet contains no executable launch/controller.",
+  "schema": "primary-rebound-existing-interface-bindings-v1",
+  "selected_smallest_hosted_interface": "ROOT-reviewed finite source/build/normal/race/capture/decode steps via existing Attempt.run; retain its existing monitor/command receipts/closure. No new controller or general workload API. Runner lineage retained for prior PRIMARY bounds, not a transfer of host185 lease authority.",
+  "status": "SOURCE_REFERENCE_ONLY_ROOT_OWNED_BINDING_PENDING"
+}

@@ -1,0 +1,51 @@
+{
+  "children": {
+    "TestPrimaryAllocationRawDeltaAndRefusals": [
+      "0",
+      "1",
+      "2",
+      "3"
+    ]
+  },
+  "expected_per_mode": {
+    "leaves": 7,
+    "tops": 4,
+    "total_named_outcomes": 8
+  },
+  "historical_only": {
+    "artifact": 13377165673,
+    "artifact_sha256": "946c161c90d34cca91789683709819b65a4ba96e218f0f1a2ed6b5f1cd295556",
+    "combined_PRIMARY_and_separate_M0_totals": {
+      "leaves": 24,
+      "outcomes": 26,
+      "tops": 6
+    },
+    "job": 126960744638,
+    "new_arm_credit": false,
+    "producer": "ee6c3880e1b0ec6d7e490232f3a3de45643a455e",
+    "qualified_source": "Old4934/owner86f4ee08; not new B/C",
+    "review": {
+      "bytes": 2596,
+      "path": "/mnt/fast4tb/gomap-mongo-perf-graph-6a9s7h58/review/four-gate-execution-20261104-01/primary-m0-controls-output-review-03/review.md",
+      "sha256": "d1201861a09dabc40550c6ca9512cee70fad0fac8dc927346efe4c9563d6a1cf"
+    },
+    "run": 41940783159
+  },
+  "modes": [
+    "normal JSON",
+    "race JSON"
+  ],
+  "packages": {
+    "caching": [
+      "TestPrimaryAllocationObserverOwnershipAndSeam",
+      "TestPrimaryAllocationObserverLateFinishDoesNotChargeSuccessor"
+    ],
+    "mvcc": [
+      "TestPrimaryAllocationRawDeltaAndRefusals",
+      "TestPrimaryAllocationOutputIsExclusiveAndBounded"
+    ]
+  },
+  "required": "Every declared outcome must enter and PASS with actual command exit0, no skips/race reports. Hosted gofmt/build and original affected backend controls remain required; exact selected existing CI deadlines/resources are ROOT-owned.",
+  "schema": "primary-only-existing-controls-v1",
+  "status": "UNRUN_ON_NEW_B8E_CB24_ARMS"
+}

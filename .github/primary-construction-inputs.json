@@ -1,76 +1,169 @@
 {
+  "schema": "primary-construction-inputs-v1",
   "files": {
     ".github/actions/primary-construction/action.yml": {
       "bytes": 444,
       "sha256": "1d2d43ddeba723fbbdcefeeb752d3e651778150463a33d2770ee214006552cde"
     },
     ".github/actions/primary-construction/index.js": {
-      "bytes": 2911,
-      "sha256": "7532fdb7e1b17544e451c793b38db23dabccb2115f507e7052c7a67190ff80f8"
+      "bytes": 3088,
+      "sha256": "2cff50a777b3f2da8d44bb070a1f141f6cd8dcc43d4f14ef9d9275b1ecfa865d"
     },
     ".github/primary-construction/B-source.json": {
-      "bytes": 800066,
-      "sha256": "6763a0a35f30ddc96e0c2363951d9c428faa067f7b37d7e895c14e4f3e800f09"
+      "bytes": 1037618,
+      "sha256": "67ca914c0ab4ff39db625b8e3ee798960e6393ab3dcc9df2d03767e067017890"
     },
     ".github/primary-construction/C-source.json": {
-      "bytes": 800797,
-      "sha256": "82678d32ca0489049811a032226f238ee6dc55408c5234f97455442bec7bc03a"
+      "bytes": 1039618,
+      "sha256": "2f8dde18e52f1f0c7b6bc52748eecd4224c4cd0595638921192ea02d8b27d2d8"
     },
     ".github/primary-construction/maintained-runner.py": {
       "bytes": 42949,
       "sha256": "6f122f8ed48343dc533de17344cfaa15d2c37b80ee6f3cac360c1c27b6b8c0ac"
     },
-    ".github/primary-construction/owner/HOSTED_ROUTE.md": {
-      "bytes": 8499,
-      "sha256": "742c962af8266913f0e15518a1b3d1377518cdd4b7958553d455b7623ebc3a98"
+    ".github/primary-construction/owner-independent-review.md": {
+      "bytes": 2640,
+      "sha256": "ffd74ae5d95fd1d4647e2524b778e854f814707d1775ad46a7f585b678d498e6"
     },
-    ".github/primary-construction/owner/baseline-candidate/TreeDB/caching/db.go": {
-      "bytes": 1431859,
-      "sha256": "07794e28af44c9ad7fc34f0fbe97a5b7964643d321367507f3930c8163e662f6"
+    ".github/primary-construction/owner/B-source.json": {
+      "bytes": 2355800,
+      "sha256": "4143bc61ec2f2af552a2e0e9815cf73a414bcc9aa0d74f4e5afd089176ec635b"
     },
-    ".github/primary-construction/owner/candidate/TreeDB/caching/db.go": {
-      "bytes": 1431966,
-      "sha256": "f7f6b5b189eeccfa860896ebb82e32c4d2856116db86b5f32f42bdb6de96d5a4"
+    ".github/primary-construction/owner/C-source.json": {
+      "bytes": 2357338,
+      "sha256": "ddc4114806b8b299908c136869d094e5f7f0c4f8fe0e8fc1e81395434e82df38"
     },
-    ".github/primary-construction/owner/candidate/TreeDB/caching/primary_allocation_observer.go": {
+    ".github/primary-construction/owner/README.md": {
+      "bytes": 7364,
+      "sha256": "c236661575f4441e8e7d7f9ce909c442a454a823def1b0eabc51400fe1263d62"
+    },
+    ".github/primary-construction/owner/accounting-contract.json": {
+      "bytes": 4292,
+      "sha256": "af07639d190b668cea8291299ba2b7f11a5cd14e5d21419897e5a787c8f7dd68"
+    },
+    ".github/primary-construction/owner/activation-map.json": {
+      "bytes": 2750,
+      "sha256": "8a5dffee950b4b8eb73def16f6e808447b6b26503080e484d75e7940fa6c89fc"
+    },
+    ".github/primary-construction/owner/arms/B/TreeDB/caching/db.go": {
+      "bytes": 1432029,
+      "sha256": "380e2f6b1145e5ef7030e5896e4103bdd4a78dc47850ae8844ad665e13dbd6a1"
+    },
+    ".github/primary-construction/owner/arms/C/TreeDB/caching/db.go": {
+      "bytes": 1432029,
+      "sha256": "380e2f6b1145e5ef7030e5896e4103bdd4a78dc47850ae8844ad665e13dbd6a1"
+    },
+    ".github/primary-construction/owner/authority.json": {
+      "bytes": 542,
+      "sha256": "8fb0fa683b48433b15e2e63c9a37fdc5bc2eac4e160cc88aa8a58f9a2d970755"
+    },
+    ".github/primary-construction/owner/closure.json": {
+      "bytes": 735,
+      "sha256": "27145b3da420cfc4c1d9d05c61836ac846756d3313a32b195a6df80b897ffbbc"
+    },
+    ".github/primary-construction/owner/construction-attempts.json": {
+      "bytes": 791,
+      "sha256": "316e309082a5a767d8ef006ca657e9e86515f4af9b065183fc0bece3ac4fb9a1"
+    },
+    ".github/primary-construction/owner/controls-inventory.json": {
+      "bytes": 1640,
+      "sha256": "8bb8c2cfdd14ce50bab866817eb44bf99a2c24d737f7c9fd602a1d8b4eea2815"
+    },
+    ".github/primary-construction/owner/evidence-bindings.json": {
+      "bytes": 1440,
+      "sha256": "d4567ab83fa10e27fa646c541e132f9aa8da08892440df824ef46417d204d347"
+    },
+    ".github/primary-construction/owner/manifest.json": {
+      "bytes": 5764,
+      "sha256": "3ca00c97842855ec1c859d08371d17f13d89aa55fc1007be26fbec648684b618"
+    },
+    ".github/primary-construction/owner/overlays.json": {
+      "bytes": 8695,
+      "sha256": "bb1d93c54b61323c67fe8f650339e03a64642b3a9b8a11c202c5d4afa7323586"
+    },
+    ".github/primary-construction/owner/patches/B.inverse.patch": {
+      "bytes": 17888,
+      "sha256": "cf4e542a7be9a9fea6723059c88e57c1a324669055bbd749ee6f3edc49540318"
+    },
+    ".github/primary-construction/owner/patches/B.patch": {
+      "bytes": 17888,
+      "sha256": "a26f161da5b9f86c6ef712001df115f744a6851d8d0cdf100387e349cfa58a4c"
+    },
+    ".github/primary-construction/owner/patches/C.inverse.patch": {
+      "bytes": 17888,
+      "sha256": "cf4e542a7be9a9fea6723059c88e57c1a324669055bbd749ee6f3edc49540318"
+    },
+    ".github/primary-construction/owner/patches/C.patch": {
+      "bytes": 17888,
+      "sha256": "a26f161da5b9f86c6ef712001df115f744a6851d8d0cdf100387e349cfa58a4c"
+    },
+    ".github/primary-construction/owner/preimages/B/TreeDB/caching/db.go": {
+      "bytes": 1431850,
+      "sha256": "f9740bc2e1b9ac0eb668aa7d5a0d054211133e0f710065cb7710fd0ec8dad438"
+    },
+    ".github/primary-construction/owner/preimages/B/TreeDB/mvcc/primary_generation_routing_v6_test.go": {
+      "bytes": 6288,
+      "sha256": "2642bedc0ed6edbea8d7a599c66642c1d2107d93f1faf03355fb8cb071c56ab9"
+    },
+    ".github/primary-construction/owner/preimages/C/TreeDB/caching/db.go": {
+      "bytes": 1431850,
+      "sha256": "f9740bc2e1b9ac0eb668aa7d5a0d054211133e0f710065cb7710fd0ec8dad438"
+    },
+    ".github/primary-construction/owner/preimages/C/TreeDB/mvcc/primary_generation_routing_v6_test.go": {
+      "bytes": 6288,
+      "sha256": "2642bedc0ed6edbea8d7a599c66642c1d2107d93f1faf03355fb8cb071c56ab9"
+    },
+    ".github/primary-construction/owner/prerequisites.json": {
+      "bytes": 2410,
+      "sha256": "6bb0e0408286c5be6e760fa03478edfd08be597c3e5e7e02ab38e3640ea24b11"
+    },
+    ".github/primary-construction/owner/product-B-to-C.patch": {
+      "bytes": 161470,
+      "sha256": "09cb34c7379ed21feda0c6b168ffb2ca1c668c067801528d0ecf8a3b3a284d0d"
+    },
+    ".github/primary-construction/owner/product-B-to-C.stat.txt": {
+      "bytes": 1769,
+      "sha256": "4bb1331e35fd980878374efeae1aa39785b700d90f459f3d1f9e84617ed38c51"
+    },
+    ".github/primary-construction/owner/runner-bindings.json": {
+      "bytes": 7213,
+      "sha256": "644c71156e6282786103bd7f9095b79729bdf09e39e581e04df0b2069156df28"
+    },
+    ".github/primary-construction/owner/shared/TreeDB/caching/primary_allocation_observer.go": {
       "bytes": 3133,
       "sha256": "a83048b2060445fe15f45f772ceb2cba1849ea558246bc7c52d0fd1b8b5c724b"
     },
-    ".github/primary-construction/owner/candidate/TreeDB/caching/primary_allocation_observer_test.go": {
+    ".github/primary-construction/owner/shared/TreeDB/caching/primary_allocation_observer_test.go": {
       "bytes": 1878,
       "sha256": "23719907cd6232275ced29c33807eef346734ecc266857e47904a70b3818a4e7"
     },
-    ".github/primary-construction/owner/candidate/TreeDB/mvcc/primary_allocation_observer_test.go": {
+    ".github/primary-construction/owner/shared/TreeDB/mvcc/primary_allocation_observer_test.go": {
       "bytes": 10145,
       "sha256": "bfd44088624e069f225b8280ff0beb73add7655ff4fa114e33d07bb16332de85"
     },
-    ".github/primary-construction/owner/candidate/TreeDB/mvcc/primary_generation_routing_v6_test.go": {
+    ".github/primary-construction/owner/shared/TreeDB/mvcc/primary_generation_routing_v6_test.go": {
       "bytes": 6621,
       "sha256": "cb096a12dfa2d05d26324e56d632ac4ebfbcacd59476605c10c2730d49b32b27"
     },
-    ".github/primary-construction/owner/format-source-review.json": {
-      "bytes": 1144,
-      "sha256": "863afc8d80a3f68f767b8be0f8f810f5ab646a5c1e256ea674b7894a97ef883a"
+    ".github/primary-construction/owner/source-bindings.json": {
+      "bytes": 8532,
+      "sha256": "188edd66578d399ad697be096aae1e0c872c3619f8fb2218ecea8980302cacbe"
     },
-    ".github/primary-construction/owner/manifest.json": {
-      "bytes": 10332,
-      "sha256": "86f4ee083aba9e2f2dbdb87abf9ec5be9eb13d416e1bafd25f7b61139e317aa3"
-    },
-    ".github/primary-construction/owner/overlays.json": {
-      "bytes": 2916,
-      "sha256": "4652442e079370e3cf203e7a8724e96b7841c760da7708981b6c5d61efc9246d"
+    ".github/primary-construction/owner/source-checks.json": {
+      "bytes": 2304,
+      "sha256": "ed300db0b77125901c58e6c81e25399db3e45584dff3983816855367f11b76bf"
     },
     ".github/primary-construction/preimages/B/TreeDB/caching/db.go": {
-      "bytes": 1431680,
-      "sha256": "31e1cb84139790865556b15308897c30beb61160363110823c6cc27cf0372f02"
+      "bytes": 1431850,
+      "sha256": "f9740bc2e1b9ac0eb668aa7d5a0d054211133e0f710065cb7710fd0ec8dad438"
     },
     ".github/primary-construction/preimages/B/TreeDB/mvcc/primary_generation_routing_v6_test.go": {
       "bytes": 6288,
       "sha256": "2642bedc0ed6edbea8d7a599c66642c1d2107d93f1faf03355fb8cb071c56ab9"
     },
     ".github/primary-construction/preimages/C/TreeDB/caching/db.go": {
-      "bytes": 1431787,
-      "sha256": "c0866f7bb670cfc9de12286e435c9cab0dec517565d3a8fcaafe94bf35de4fcd"
+      "bytes": 1431850,
+      "sha256": "f9740bc2e1b9ac0eb668aa7d5a0d054211133e0f710065cb7710fd0ec8dad438"
     },
     ".github/primary-construction/preimages/C/TreeDB/mvcc/primary_generation_routing_v6_test.go": {
       "bytes": 6288,
@@ -79,10 +172,6 @@
     ".github/primary-construction/readonly-runtime-inputs.json": {
       "bytes": 39082,
       "sha256": "d429b8211e7ca4be2b45867691d23f7c4c4f3c7caf0cbe9c5d4ceff4edc87ef5"
-    },
-    ".github/primary-construction/root-controls-pass.json": {
-      "bytes": 1513,
-      "sha256": "5fbc92847359e709fe9ef7812786ff469f9892dedf9e4c81d27a3183e67245c5"
     },
     ".github/primary-construction/upload-artifact/LICENSE": {
       "bytes": 1097,
@@ -93,8 +182,12 @@
       "sha256": "0165b8a75330f3228f2c7a234b4ff8a107b9139c2b519147f4c8e9fe99b262d8"
     },
     ".github/scripts/primary_allocation_construction.py": {
-      "bytes": 33947,
-      "sha256": "de8d675dc87f7cf27a8de8e90179deb1e527e0a2bec72563b4055e365aa40b30"
+      "bytes": 35171,
+      "sha256": "d23ade0e61f5daf3a5462f65b84ed0351c597b674a2300fba5aeca232a179086"
+    },
+    ".github/scripts/primary_new_arm_control_events.py": {
+      "bytes": 3304,
+      "sha256": "a696e10a19a48f42d0fa6409c455cb9778f26a4d7aa1a05b36e683939e804ba5"
     },
     "scripts/ycsb_campaign_guard.py": {
       "bytes": 19548,
@@ -112,6 +205,5 @@
       "bytes": 20408,
       "sha256": "9ea6f525e0cf46df5301be3f903367816bdb032a3d0abb4c204bda60ee104d8f"
     }
-  },
-  "schema": "primary-construction-inputs-v1"
+  }
 }

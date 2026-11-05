@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One fixed Linux PRIMARY source/build prerequisite. No benchmark/capture route."""
+"""Fixed B8e/Cb24 PRIMARY controls only. No benchmark/capture route."""
 import argparse
 import base64
 import hashlib
@@ -19,8 +19,9 @@ import time
 GIB = 1024**3
 WHOLE = 840
 ROOT_THREAD = '01a18e7c-8c23-7fd2-8d55-b0486d938cd3'
-CONTROLS_PASS_SHA256 = '5fbc92847359e709fe9ef7812786ff469f9892dedf9e4c81d27a3183e67245c5'
-BRANCH = 'refs/heads/diagnostic/primary-allocation-manifest-transport-01'
+OWNER_MANIFEST_SHA256 = '3ca00c97842855ec1c859d08371d17f13d89aa55fc1007be26fbec648684b618'
+OWNER_REVIEW_SHA256 = 'ffd74ae5d95fd1d4647e2524b778e854f814707d1775ad46a7f585b678d498e6'
+BRANCH = 'refs/heads/diagnostic/primary-8e-b24-controls-binding-01'
 SDK = Path('/opt/hostedtoolcache/go/1.26.10/x64')
 HERE = Path(__file__).resolve().parent
 HARNESS = HERE.parent.parent
@@ -72,24 +73,21 @@ def authority():
     encoded = e.get('ROOT_ADMISSION_B64', '')
     need(0 < len(encoded) <= 32768, 'bounded ROOT admission required')
     a = json.loads(base64.b64decode(encoded, validate=True))
-    need(a.get('schema') == 'primary-construction-admission-v1'
-         and a.get('status') == 'ADMITTED_CONSTRUCTION_ONLY' and a.get('authority') == 'ROOT'
+    need(a.get('schema') == 'primary-new-arm-controls-admission-v1'
+         and a.get('status') == 'ADMITTED_NEW_ARM_CONTROLS_ONLY' and a.get('authority') == 'ROOT'
          and a.get('actor_id') == '1981537' and a.get('authority_thread') == ROOT_THREAD
          and a.get('head') == head
          and a.get('run_attempt') == '1' and a.get('allow_capture') is False,
          'fixed ROOT construction-only admission')
     for field in ('independent_source_review_sha256', 'owner_manifest_sha256'):
         need(re.fullmatch('[0-9a-f]{64}', a.get(field, '')) is not None, 'missing review/owner binding')
-    c = a.get('controls', {})
-    need(c.get('status') == 'ROOT_ADMITTED_FOCUSED_OBSERVER_CONTROLS'
-         and c.get('owner_manifest_sha256') == a['owner_manifest_sha256']
-         and c.get('root_receipt_sha256') == CONTROLS_PASS_SHA256
-         and re.fullmatch('[0-9a-f]{64}', c.get('review_sha256', '')) is not None
-         and type(c.get('run_id')) is int and c['run_id'] > 0
-         and type(c.get('job_id')) is int and c['job_id'] > 0, 'actual owner controls admission required')
-    for mode in ('normal', 'race'):
-        need(c.get(mode) == dict(tops=6, outcomes=26, leaves=24, exit=0, skips=0),
-             'complete normal/race owner controls required')
+    need(a.get('owner_manifest_sha256') == OWNER_MANIFEST_SHA256
+         and a.get('owner_source_review_sha256') == OWNER_REVIEW_SHA256
+         and a.get('arms') == {'B': '8e1133085b4052e344a73063f28c2ab142485c73',
+                              'C': 'b24dea5e339cf94d419346ac9b38a8c90d6d3f02'}
+         and a.get('controls') == dict(tops=4, outcomes=8, leaves=7, modes=['normal', 'race'])
+         and a.get('prior_controls_credit') is False,
+         'fixed new-arm controls production scope required')
     return a
 
 
@@ -104,21 +102,8 @@ def authenticate(a):
         need(stat.S_ISREG(s.st_mode) and s.st_nlink == 1 and not path.is_symlink()
              and s.st_size == row['bytes'] and sha(path) == row['sha256'], 'fixed input drift')
     need(sha(DATA/'owner/manifest.json') == a['owner_manifest_sha256'], 'owner manifest differs')
-    proof = DATA/'root-controls-pass.json'
-    need(sha(proof) == CONTROLS_PASS_SHA256, 'immutable actual controls receipt differs')
-    accepted = read(proof)
-    need(accepted['authority'] == 'ROOT' and accepted['authority_thread'] == ROOT_THREAD
-         and accepted['actor_id'] == '1981537'
-         and accepted['status'] == 'ROOT_NORMAL_RACE_CONTROLS_ADMITTED'
-         and accepted['owner_manifest_sha256'] == a['owner_manifest_sha256']
-         and accepted['independent_review_sha256'] == a['controls']['review_sha256']
-         and accepted['run_id'] == a['controls']['run_id']
-         and accepted['job_id'] == a['controls']['job_id']
-         and accepted['positive_outer_guard_cleanup'] is True and accepted['skips'] == 0
-         and accepted['product_capture'] is False, 'actual controls admission mismatch')
-    for mode in ('normal', 'race'):
-        need(accepted[mode] == dict(tops=6, outcomes=26, leaves=24)
-             and accepted['literal_'+mode+'_exit'] == 0, 'actual controls incomplete')
+    need(sha(DATA/'owner-independent-review.md') == OWNER_REVIEW_SHA256,
+         'independent owner source review differs')
     return m
 
 
@@ -202,6 +187,8 @@ def census(root):
     errors = []
     if total > GIB:
         errors.append('whole root exceeds 1GiB')
+    if files > 32*1024**2:
+        errors.append('aggregate generated evidence/logs exceeds 32MiB')
     if oversized:
         errors.append('individual evidence/log/profile exceeds 32MiB')
     if free < 10*GIB:
@@ -276,6 +263,14 @@ def whole_runner(base, root, started):
             self.thread.join()
 
     return WholeRootRunner()
+
+
+def control_events():
+    path = HERE/'primary_new_arm_control_events.py'
+    spec = importlib.util.spec_from_file_location('fixed_primary_control_events', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def sdk_identity(r, expected):
@@ -429,6 +424,7 @@ def worker(root, a, started):
     r.out = root/'output'
     error = None
     builds = {}
+    inventories = {}
     runtime = {}
     for key in ('ACTIONS_RUNTIME_TOKEN', 'ACTIONS_RUNTIME_URL', 'ACTIONS_RESULTS_URL',
                 'GITHUB_OUTPUT', 'GITHUB_REPOSITORY', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT',
@@ -493,6 +489,13 @@ def worker(root, a, started):
              and context['GOOS'] == 'linux' and context['GOARCH'] == 'amd64'
              and context['GOFLAGS'] == context['GOEXPERIMENT'] == ''
              and context['CC'] == 'gcc' and context['CXX'] == 'g++', 'unsupported normal build context')
+        events = control_events()  # Authenticated helper, after all runtime/tool checks.
+        # Full SDK authentication above also binds the exact formatter executable.
+        for arm in ARMS:
+            mapping = read(DATA/'owner/overlays.json')['primary'][arm]
+            targets = [str(DATA/'owner'/name) for name in mapping['Replace'].values()]
+            formatted = run(arm+'-format', [str(SDK/'bin/gofmt'), '-l', *targets], 30)
+            need(not formatted.strip(), 'owner overlay source is not formatted; no automatic rewrite')
         git = tools['git']
         descriptions = read(DATA/'owner/overlays.json')
         for arm in ARMS:
@@ -534,16 +537,34 @@ def worker(root, a, started):
                     need(not (source/name).exists(), 'new overlay path already exists')
             overlay = root/'output'/('overlay-'+arm+'.json')
             write(overlay, {'Replace': {str(source/k): str(DATA/'owner'/v) for k, v in mapping['Replace'].items()}})
-            binary = root/'bin'/(arm+'-primary.test')
-            run(arm+'-build', [go, 'test', '-tags=treedb_test', '-p=1', '-mod=readonly', '-c',
-                '-overlay='+str(overlay), '-o='+str(binary), './TreeDB/mvcc'], 360, cwd=source)
-            s = binary.lstat()
-            need(stat.S_ISREG(s.st_mode) and s.st_nlink == 1 and not binary.is_symlink(), 'normal ELF type')
-            buildinfo = run(arm+'-buildinfo', [go, 'version', '-m', str(binary)], 30)
-            need('go1.26.10' in buildinfo and '-race=true' not in buildinfo, 'normal buildinfo differs')
+            # Compile-only normal preparation; no test/warmup/benchmark executes here.
+            builds[arm] = {}
+            for package in ('caching', 'mvcc'):
+                binary = root/'bin'/(arm+'-'+package+'.test')
+                run(arm+'-'+package+'-build', [go, 'test', '-tags=treedb_test', '-p=1', '-mod=readonly', '-c',
+                    '-overlay='+str(overlay), '-o='+str(binary), './TreeDB/'+package], 360, cwd=source)
+                s = binary.lstat()
+                need(stat.S_ISREG(s.st_mode) and s.st_nlink == 1 and not binary.is_symlink(), 'normal ELF type')
+                buildinfo = run(arm+'-'+package+'-buildinfo', [go, 'version', '-m', str(binary)], 30)
+                need('go1.26.10' in buildinfo and '-race=true' not in buildinfo, 'normal buildinfo differs')
+                builds[arm][package] = dict(path=str(binary), bytes=s.st_size, sha256=sha(binary),
+                    source=spec['commit'], tree=spec['tree'], overlay_sha256=sha(overlay))
+            inventories[arm] = {}
+            for mode in ('normal', 'race'):
+                args = [go, 'test', '-json', '-tags=treedb_test', '-p=1', '-mod=readonly',
+                        '-overlay='+str(overlay), '-count=1', '-run='+events.SELECTOR,
+                        '-timeout='+('150s' if mode == 'normal' else '570s')]
+                if mode == 'race':
+                    args.append('-race')
+                args.extend(('./TreeDB/caching', './TreeDB/mvcc'))
+                run(arm+'-'+mode, args, 180 if mode == 'normal' else 600, cwd=source)
+                record = r.commands[-1]
+                inventory = events.validate(root/'output'/record['log'])
+                inventory.update(arm=arm, source=spec['commit'], tree=spec['tree'], mode=mode,
+                                 literal_exit=record['exit_code'], event_sha256=sha(root/'output'/record['log']))
+                write(root/'output'/(arm+'-'+mode+'-inventory.json'), inventory)
+                inventories[arm][mode] = inventory
             source_identity(source, spec)
-            builds[arm] = dict(path=str(binary), bytes=s.st_size, sha256=sha(binary), source=spec['commit'],
-                               tree=spec['tree'], overlay_sha256=sha(overlay))
         token = None
         r.guard()
     except BaseException as caught:
@@ -564,8 +585,8 @@ def worker(root, a, started):
         final = census(root)
         if final['errors'] or r.first_failure:
             error = error or 'ResourceFailure'
-        terminal = dict(status='CONSTRUCTION_FAILED_NO_CAPTURE' if error else 'TWO_NORMAL_BUILDS_PENDING_OUTER_REVIEW',
-                        error_class=error, builds=builds, commands=r.commands, final_census=final,
+        terminal = dict(status='CONTROLS_FAILED_NO_CAPTURE' if error else 'NEW_ARM_CONTROLS_PENDING_OUTER_REVIEW',
+                        error_class=error, builds=builds, inventories=inventories, commands=r.commands, final_census=final,
                         first_failure=r.first_failure, max_sampled_whole_bytes=r.maximum,
                         publication_sha256=sha(root/'output/publication-receipt.json') if (root/'output/publication-receipt.json').exists() else None,
                         capture=False, m0=False, release='ONLY_OUTER_GUARD_CAN_PROVE_DESCENDANT_DRAIN')
@@ -625,9 +646,9 @@ def main():
     passed = (publication is not None and publication['status'] == 'UPLOAD_JOINED_PENDING_OUTER_GUARD'
               and code == 0 and result['errors'] == [] and result['cleanup_signals'] == []
               and result['status'] == 'guard-completed-pending-independent-artifact-review'
-              and terminal['status'] == 'TWO_NORMAL_BUILDS_PENDING_OUTER_REVIEW'
+              and terminal['status'] == 'NEW_ARM_CONTROLS_PENDING_OUTER_REVIEW'
               and not final['errors'])
-    write(root/'construction-terminal.json', dict(status='CONSTRUCTION_CLOSED_PENDING_ARTIFACT_REVIEW' if passed else 'CONSTRUCTION_FAILED_NO_CAPTURE',
+    write(root/'construction-terminal.json', dict(status='NEW_ARM_CONTROLS_CLOSED_PENDING_ARTIFACT_REVIEW' if passed else 'CONSTRUCTION_FAILED_NO_CAPTURE',
           guard_exit=code, guard_sha256=sha(root/'guard/result.json'), worker_sha256=sha(root/'output/worker-terminal.json'),
           publication_sha256=sha(root/'output/publication-receipt.json') if publication else None,
           final_census=final, capture=False, m0=False, whole_interval_verified=False, unperturbed_timing_verified=False))

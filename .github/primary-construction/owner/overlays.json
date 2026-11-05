@@ -1,50 +1,212 @@
 {
-  "schema": "observer-source-relative-overlay-mappings-v1",
-  "status": "NOT_AN_EXECUTABLE_GO_OVERLAY_ROOT_MUST_BIND_ABSOLUTE_HOSTED_PATHS_AND_HASHES",
-  "primary": {
+  "focused_controls": {
     "B": {
-      "source": "29b879fbb4c4c6da2d7b18ff7c2a3a341e24e2b8",
       "Replace": {
-        "TreeDB/mvcc/primary_generation_routing_v6_test.go": "candidate/TreeDB/mvcc/primary_generation_routing_v6_test.go",
-        "TreeDB/mvcc/primary_allocation_observer_test.go": "candidate/TreeDB/mvcc/primary_allocation_observer_test.go",
-        "TreeDB/caching/db.go": "baseline-candidate/TreeDB/caching/db.go",
-        "TreeDB/caching/primary_allocation_observer.go": "candidate/TreeDB/caching/primary_allocation_observer.go",
-        "TreeDB/caching/primary_allocation_observer_test.go": "candidate/TreeDB/caching/primary_allocation_observer_test.go"
-      }
+        "TreeDB/caching/db.go": "arms/B/TreeDB/caching/db.go",
+        "TreeDB/caching/primary_allocation_observer.go": "shared/TreeDB/caching/primary_allocation_observer.go",
+        "TreeDB/caching/primary_allocation_observer_test.go": "shared/TreeDB/caching/primary_allocation_observer_test.go",
+        "TreeDB/mvcc/primary_allocation_observer_test.go": "shared/TreeDB/mvcc/primary_allocation_observer_test.go",
+        "TreeDB/mvcc/primary_generation_routing_v6_test.go": "shared/TreeDB/mvcc/primary_generation_routing_v6_test.go"
+      },
+      "source": "8e1133085b4052e344a73063f28c2ab142485c73"
     },
     "C": {
-      "source": "4934bd6d51d9047ba0187d05c1d211cbe419811a",
       "Replace": {
-        "TreeDB/mvcc/primary_generation_routing_v6_test.go": "candidate/TreeDB/mvcc/primary_generation_routing_v6_test.go",
-        "TreeDB/mvcc/primary_allocation_observer_test.go": "candidate/TreeDB/mvcc/primary_allocation_observer_test.go",
-        "TreeDB/caching/db.go": "candidate/TreeDB/caching/db.go",
-        "TreeDB/caching/primary_allocation_observer.go": "candidate/TreeDB/caching/primary_allocation_observer.go",
-        "TreeDB/caching/primary_allocation_observer_test.go": "candidate/TreeDB/caching/primary_allocation_observer_test.go"
-      }
+        "TreeDB/caching/db.go": "arms/C/TreeDB/caching/db.go",
+        "TreeDB/caching/primary_allocation_observer.go": "shared/TreeDB/caching/primary_allocation_observer.go",
+        "TreeDB/caching/primary_allocation_observer_test.go": "shared/TreeDB/caching/primary_allocation_observer_test.go",
+        "TreeDB/mvcc/primary_allocation_observer_test.go": "shared/TreeDB/mvcc/primary_allocation_observer_test.go",
+        "TreeDB/mvcc/primary_generation_routing_v6_test.go": "shared/TreeDB/mvcc/primary_generation_routing_v6_test.go"
+      },
+      "source": "b24dea5e339cf94d419346ac9b38a8c90d6d3f02"
     }
   },
-  "m0": {
+  "m0_included": false,
+  "other_overlays_forbidden": true,
+  "primary": {
+    "B": {
+      "Replace": {
+        "TreeDB/caching/db.go": "arms/B/TreeDB/caching/db.go",
+        "TreeDB/caching/primary_allocation_observer.go": "shared/TreeDB/caching/primary_allocation_observer.go",
+        "TreeDB/caching/primary_allocation_observer_test.go": "shared/TreeDB/caching/primary_allocation_observer_test.go",
+        "TreeDB/mvcc/primary_allocation_observer_test.go": "shared/TreeDB/mvcc/primary_allocation_observer_test.go",
+        "TreeDB/mvcc/primary_generation_routing_v6_test.go": "shared/TreeDB/mvcc/primary_generation_routing_v6_test.go"
+      },
+      "inverse": "patches/B.inverse.patch",
+      "patch": "patches/B.patch",
+      "preimages_and_overlays": [
+        {
+          "candidate": {
+            "bytes": 6621,
+            "sha256": "cb096a12dfa2d05d26324e56d632ac4ebfbcacd59476605c10c2730d49b32b27"
+          },
+          "forward_inverse_exact": true,
+          "overlay": "shared/TreeDB/mvcc/primary_generation_routing_v6_test.go",
+          "path": "TreeDB/mvcc/primary_generation_routing_v6_test.go",
+          "preimage": {
+            "bytes": 6288,
+            "git_blob": "fa214cd4a5dfde08d64acac977c61af980000998",
+            "present": true,
+            "sha256": "2642bedc0ed6edbea8d7a599c66642c1d2107d93f1faf03355fb8cb071c56ab9"
+          }
+        },
+        {
+          "candidate": {
+            "bytes": 10145,
+            "sha256": "bfd44088624e069f225b8280ff0beb73add7655ff4fa114e33d07bb16332de85"
+          },
+          "forward_inverse_exact": true,
+          "overlay": "shared/TreeDB/mvcc/primary_allocation_observer_test.go",
+          "path": "TreeDB/mvcc/primary_allocation_observer_test.go",
+          "preimage": {
+            "bytes": 0,
+            "git_blob": null,
+            "present": false,
+            "sha256": null
+          }
+        },
+        {
+          "candidate": {
+            "bytes": 3133,
+            "sha256": "a83048b2060445fe15f45f772ceb2cba1849ea558246bc7c52d0fd1b8b5c724b"
+          },
+          "forward_inverse_exact": true,
+          "overlay": "shared/TreeDB/caching/primary_allocation_observer.go",
+          "path": "TreeDB/caching/primary_allocation_observer.go",
+          "preimage": {
+            "bytes": 0,
+            "git_blob": null,
+            "present": false,
+            "sha256": null
+          }
+        },
+        {
+          "candidate": {
+            "bytes": 1878,
+            "sha256": "23719907cd6232275ced29c33807eef346734ecc266857e47904a70b3818a4e7"
+          },
+          "forward_inverse_exact": true,
+          "overlay": "shared/TreeDB/caching/primary_allocation_observer_test.go",
+          "path": "TreeDB/caching/primary_allocation_observer_test.go",
+          "preimage": {
+            "bytes": 0,
+            "git_blob": null,
+            "present": false,
+            "sha256": null
+          }
+        },
+        {
+          "candidate": {
+            "bytes": 1432029,
+            "sha256": "380e2f6b1145e5ef7030e5896e4103bdd4a78dc47850ae8844ad665e13dbd6a1"
+          },
+          "forward_inverse_exact": true,
+          "overlay": "arms/B/TreeDB/caching/db.go",
+          "path": "TreeDB/caching/db.go",
+          "preimage": {
+            "bytes": 1431850,
+            "git_blob": "89c32e3eec58ea6fd7e370d088247d590edbd62e",
+            "present": true,
+            "sha256": "f9740bc2e1b9ac0eb668aa7d5a0d054211133e0f710065cb7710fd0ec8dad438"
+          }
+        }
+      ],
+      "source": "8e1133085b4052e344a73063f28c2ab142485c73",
+      "source_inventory": "B-source.json",
+      "tree": "6b0fc6bd9f6a22621c85526342727509fc3bcafe"
+    },
     "C": {
-      "source": "4934bd6d51d9047ba0187d05c1d211cbe419811a",
       "Replace": {
-        "TreeDB/db/vacuum_collection_bench_test.go": "candidate/TreeDB/db/vacuum_collection_bench_test.go",
-        "TreeDB/db/vacuum_m0_ordinal_observer_test.go": "candidate/TreeDB/db/vacuum_m0_ordinal_observer_test.go"
-      }
+        "TreeDB/caching/db.go": "arms/C/TreeDB/caching/db.go",
+        "TreeDB/caching/primary_allocation_observer.go": "shared/TreeDB/caching/primary_allocation_observer.go",
+        "TreeDB/caching/primary_allocation_observer_test.go": "shared/TreeDB/caching/primary_allocation_observer_test.go",
+        "TreeDB/mvcc/primary_allocation_observer_test.go": "shared/TreeDB/mvcc/primary_allocation_observer_test.go",
+        "TreeDB/mvcc/primary_generation_routing_v6_test.go": "shared/TreeDB/mvcc/primary_generation_routing_v6_test.go"
+      },
+      "inverse": "patches/C.inverse.patch",
+      "patch": "patches/C.patch",
+      "preimages_and_overlays": [
+        {
+          "candidate": {
+            "bytes": 6621,
+            "sha256": "cb096a12dfa2d05d26324e56d632ac4ebfbcacd59476605c10c2730d49b32b27"
+          },
+          "forward_inverse_exact": true,
+          "overlay": "shared/TreeDB/mvcc/primary_generation_routing_v6_test.go",
+          "path": "TreeDB/mvcc/primary_generation_routing_v6_test.go",
+          "preimage": {
+            "bytes": 6288,
+            "git_blob": "fa214cd4a5dfde08d64acac977c61af980000998",
+            "present": true,
+            "sha256": "2642bedc0ed6edbea8d7a599c66642c1d2107d93f1faf03355fb8cb071c56ab9"
+          }
+        },
+        {
+          "candidate": {
+            "bytes": 10145,
+            "sha256": "bfd44088624e069f225b8280ff0beb73add7655ff4fa114e33d07bb16332de85"
+          },
+          "forward_inverse_exact": true,
+          "overlay": "shared/TreeDB/mvcc/primary_allocation_observer_test.go",
+          "path": "TreeDB/mvcc/primary_allocation_observer_test.go",
+          "preimage": {
+            "bytes": 0,
+            "git_blob": null,
+            "present": false,
+            "sha256": null
+          }
+        },
+        {
+          "candidate": {
+            "bytes": 3133,
+            "sha256": "a83048b2060445fe15f45f772ceb2cba1849ea558246bc7c52d0fd1b8b5c724b"
+          },
+          "forward_inverse_exact": true,
+          "overlay": "shared/TreeDB/caching/primary_allocation_observer.go",
+          "path": "TreeDB/caching/primary_allocation_observer.go",
+          "preimage": {
+            "bytes": 0,
+            "git_blob": null,
+            "present": false,
+            "sha256": null
+          }
+        },
+        {
+          "candidate": {
+            "bytes": 1878,
+            "sha256": "23719907cd6232275ced29c33807eef346734ecc266857e47904a70b3818a4e7"
+          },
+          "forward_inverse_exact": true,
+          "overlay": "shared/TreeDB/caching/primary_allocation_observer_test.go",
+          "path": "TreeDB/caching/primary_allocation_observer_test.go",
+          "preimage": {
+            "bytes": 0,
+            "git_blob": null,
+            "present": false,
+            "sha256": null
+          }
+        },
+        {
+          "candidate": {
+            "bytes": 1432029,
+            "sha256": "380e2f6b1145e5ef7030e5896e4103bdd4a78dc47850ae8844ad665e13dbd6a1"
+          },
+          "forward_inverse_exact": true,
+          "overlay": "arms/C/TreeDB/caching/db.go",
+          "path": "TreeDB/caching/db.go",
+          "preimage": {
+            "bytes": 1431850,
+            "git_blob": "89c32e3eec58ea6fd7e370d088247d590edbd62e",
+            "present": true,
+            "sha256": "f9740bc2e1b9ac0eb668aa7d5a0d054211133e0f710065cb7710fd0ec8dad438"
+          }
+        }
+      ],
+      "source": "b24dea5e339cf94d419346ac9b38a8c90d6d3f02",
+      "source_inventory": "C-source.json",
+      "tree": "04c0fdc0cddb2bf2d788a45532d19da3159c20f1"
     }
   },
-  "focused_controls": {
-    "C": {
-      "source": "4934bd6d51d9047ba0187d05c1d211cbe419811a",
-      "Replace": {
-        "TreeDB/mvcc/primary_generation_routing_v6_test.go": "candidate/TreeDB/mvcc/primary_generation_routing_v6_test.go",
-        "TreeDB/mvcc/primary_allocation_observer_test.go": "candidate/TreeDB/mvcc/primary_allocation_observer_test.go",
-        "TreeDB/caching/db.go": "candidate/TreeDB/caching/db.go",
-        "TreeDB/caching/primary_allocation_observer.go": "candidate/TreeDB/caching/primary_allocation_observer.go",
-        "TreeDB/caching/primary_allocation_observer_test.go": "candidate/TreeDB/caching/primary_allocation_observer_test.go",
-        "TreeDB/db/vacuum_collection_bench_test.go": "candidate/TreeDB/db/vacuum_collection_bench_test.go",
-        "TreeDB/db/vacuum_m0_ordinal_observer_test.go": "candidate/TreeDB/db/vacuum_m0_ordinal_observer_test.go"
-      }
-    }
-  },
-  "rule": "Never use candidate/TreeDB/caching/db.go on baseline. Original fixtures are byte-identical; all new helper text is common. No product branch edit or publication."
+  "schema": "observer-source-relative-overlay-mappings-v2",
+  "status": "SOURCE_ONLY_ROOT_MUST_BIND_ABSOLUTE_PATHS_SDK_ELFS_REVIEW_ADMISSION"
 }

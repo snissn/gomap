@@ -16,6 +16,7 @@ try {
   const root = path.join(process.env.RUNNER_TEMP, 'primary-allocation-construction');
   const harness = path.join(root, 'harness');
   const a = JSON.parse(Buffer.from(process.env.ROOT_ADMISSION_B64, 'base64').toString('utf8'));
+  need(a.schema === 'primary-new-arm-controls-admission-v1' && a.status === 'ADMITTED_NEW_ARM_CONTROLS_ONLY' && a.allow_capture === false && a.prior_controls_credit === false);
   need(a.authority === 'ROOT' && a.actor_id === '1981537' && a.authority_thread === '01a18e7c-8c23-7fd2-8d55-b0486d938cd3' && a.head === process.env.GITHUB_SHA);
   const node = identity(process.execPath, a.tools.node);
   const python = identity(a.tools.python.path, a.tools.python);

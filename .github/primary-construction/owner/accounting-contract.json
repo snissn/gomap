@@ -1,0 +1,70 @@
+{
+  "accounting_partition": {
+    "all_sites": "Retain every sample/site in each arm, including common and non-CommitAt sites. None discarded to force a target difference.",
+    "basis": "Disjoint raw allocation samples by full leaf+stack; never sum cumulative overlapping parent/child rows. Bytes and objects separate.",
+    "classes": [
+      "exact direct measured CommitAt line ancestry",
+      "setup commit closure/Open/seed",
+      "observer/pprof/GC/Stats",
+      "background/runtime",
+      "unknown/unclassified/truncated/ambiguous inline or negative samples"
+    ],
+    "normalization": "Raw division uses exact N/remainders. Never divide unfiltered whole-profile totals by128, round away remainder, or infer one256B allocation from a +2 median.",
+    "residual": "For each metric retain signed raw-loop total minus exact-loop-ancestry attributed profile delta as UNASSIGNED cross-window residual, with both operands and windows. Broader whole-profile total has a different denominator. Retain unmatched/unknown site totals and decoder/profile gaps separately. Nonzero/negative residual is not a removable product cost.",
+    "site_causality": "Observed exact-loop ancestry supports that observed site only. No demonstrated recurring avoidable dynamic site plus safe lifetime witness => STOP repair, no speculative product/layout/capability change."
+  },
+  "calibration": {
+    "N": 1,
+    "filename": "primary-calibration.json",
+    "no_loop_counter_or_profile_observation": true,
+    "status": "CALIBRATION_UNOBSERVED"
+  },
+  "profiles": {
+    "after": "Two GCs then after.allocs.pprof after original generation Stats/report, before original Close.",
+    "before": "Two GCs then before.allocs.pprof before original Open.",
+    "decode_interface": "Existing pinned go tool pprof through maintained Runner.command after producer closure. Retained recipe: -sample_index=alloc_space -base=before.allocs.pprof <exact arm ELF> after.allocs.pprof, corresponding alloc_objects; retain unfiltered -raw and original exits. No new decoder/controller here.",
+    "insufficient": [
+      "profile header/file presence",
+      "top-only/default sample-type output",
+      "a chosen subset of expected48B leaves"
+    ],
+    "maximum_bytes_each": 33554432,
+    "rate": 1,
+    "recipe": {
+      "bytes": 7857,
+      "path": "/mnt/fast4tb/gomap-mongo-perf-graph-6a9s7h58/review/pr5374-primary-allocation-attribution-01/RECIPE.md",
+      "sha256": "3c48db07c76e9716d4f54d794f22224613f97c3c72ddba0a443c5db4d2cb4584"
+    },
+    "required_views": [
+      "Complete unfiltered raw profiles and retained after-minus-before delta",
+      "alloc_space after-minus-before against exact arm ELF",
+      "alloc_objects after-minus-before against exact arm ELF",
+      "Every site and full stack identity including inline/unknown/negative samples; top/list supporting only"
+    ],
+    "scope": "Broader than raw loop; includes original Open/seed/setup, background, Stats, observer/profile work. Original Close outside both profiles."
+  },
+  "raw_schema": "primary-allocation-observer-v2",
+  "raw_window": "ReadMemStats immediately adjacent to original128-call loop, after ResetTimer and before StopTimer. Process-wide concurrent/background/runtime work can enter; two STW reads perturb timing. Testing B/op uses other snapshots, not asserted equal.",
+  "requested": {
+    "CheckedClose": true,
+    "DiagnosticOnly": true,
+    "Invocation": "requested",
+    "LoopComplete": true,
+    "N": 128,
+    "RequestedN": 128,
+    "Status": "DIAGNOSTIC_COMPLETE_EXTERNAL_PROFILE_VALIDATION_PENDING",
+    "filename": "primary-raw.json"
+  },
+  "required_raw": [
+    "Before/After TotalAlloc, Mallocs, Frees and all BySize buckets",
+    "RawDelta.TotalAlloc=After.TotalAlloc-Before.TotalAlloc",
+    "RawDelta.Mallocs=After.Mallocs-Before.Mallocs",
+    "bytes=128*BytesQuotient+BytesRemainder; 0<=remainder<128",
+    "mallocs=128*MallocsQuotient+MallocsRemainder; 0<=remainder<128",
+    "Counters monotonic and bucket sizes match; absent/regressing data is adverse",
+    "LoopSeamBefore/After and every phase are separate atomic snapshots",
+    "original calibration/benchmark exits, generation metric and checked Close"
+  ],
+  "schema": "primary-raw-sites-residual-contract-v1",
+  "status": "SOURCE_ONLY_NO_MEASUREMENTS"
+}

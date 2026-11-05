@@ -22,25 +22,25 @@ FUNCTIONS = {n.name: n for n in TREE.body if isinstance(n, ast.FunctionDef)}
 def isolated(names):
     nodes = [FUNCTIONS[name] for name in names]
     namespace = dict(os=os, json=json, base64=base64, re=re, Path=Path, stat=stat, hashlib=hashlib, HARNESS=ROOT,
-                     BRANCH='refs/heads/diagnostic/primary-allocation-manifest-transport-01',
+                     BRANCH='refs/heads/diagnostic/primary-8e-b24-controls-binding-01',
                      ROOT_THREAD='01a18e7c-8c23-7fd2-8d55-b0486d938cd3',
-                     CONTROLS_PASS_SHA256='5fbc92847359e709fe9ef7812786ff469f9892dedf9e4c81d27a3183e67245c5')
+                     OWNER_MANIFEST_SHA256='3ca00c97842855ec1c859d08371d17f13d89aa55fc1007be26fbec648684b618',
+                     OWNER_REVIEW_SHA256='ffd74ae5d95fd1d4647e2524b778e854f814707d1775ad46a7f585b678d498e6')
     exec(compile(ast.Module(body=nodes, type_ignores=[]), '<pure-predicates-only>', 'exec'), namespace)
     return namespace
 
 
 class PrimaryConstructionSource(unittest.TestCase):
-    def test_actual_controls_and_actor_are_required(self):
+    def test_new_controls_scope_and_actor_are_required(self):
         ns = isolated(('need', 'authority'))
         head = '1'*40
-        a = dict(schema='primary-construction-admission-v1', status='ADMITTED_CONSTRUCTION_ONLY',
-                 authority='ROOT', authority_thread=ns['ROOT_THREAD'], actor_id='1981537', head=head, run_attempt='1', allow_capture=False,
-                 independent_source_review_sha256='2'*64, owner_manifest_sha256='3'*64,
-                 controls=dict(status='ROOT_ADMITTED_FOCUSED_OBSERVER_CONTROLS', owner_manifest_sha256='3'*64,
-                               root_receipt_sha256=ns['CONTROLS_PASS_SHA256'],
-                               review_sha256='4'*64, run_id=1, job_id=1,
-                               normal=dict(tops=6,outcomes=26,leaves=24,exit=0,skips=0),
-                               race=dict(tops=6,outcomes=26,leaves=24,exit=0,skips=0)))
+        a = dict(schema='primary-new-arm-controls-admission-v1', status='ADMITTED_NEW_ARM_CONTROLS_ONLY',
+                 authority='ROOT', authority_thread=ns['ROOT_THREAD'], actor_id='1981537', head=head,
+                 run_attempt='1', allow_capture=False, prior_controls_credit=False,
+                 independent_source_review_sha256='2'*64, owner_manifest_sha256=ns['OWNER_MANIFEST_SHA256'],
+                 owner_source_review_sha256=ns['OWNER_REVIEW_SHA256'],
+                 arms=dict(B='8e1133085b4052e344a73063f28c2ab142485c73', C='b24dea5e339cf94d419346ac9b38a8c90d6d3f02'),
+                 controls=dict(tops=4,outcomes=8,leaves=7,modes=['normal','race']))
         env = dict(GITHUB_ACTIONS='true', RUNNER_ENVIRONMENT='github-hosted', RUNNER_OS='Linux',
                    GITHUB_EVENT_NAME='workflow_dispatch', GITHUB_REPOSITORY='snissn/gomap',
                    GITHUB_REF=ns['BRANCH'], GITHUB_ACTOR_ID='1981537', GITHUB_RUN_ATTEMPT='1',
@@ -51,15 +51,16 @@ class PrimaryConstructionSource(unittest.TestCase):
             with patch.dict(os.environ, selected, clear=True):
                 return ns['authority']()
         self.assertEqual(check(a), a)
-        c=json.loads(json.dumps(a));c['controls']['root_receipt_sha256']='f'*64
-        with self.assertRaises(RuntimeError):check(c)
-        for field,value in [('authority','FOREIGN'),('authority_thread','FOREIGN'),('authority_thread',None),('actor_id','0'),('allow_capture',True),('head','9'*40)]:
+        for field,value in [('authority','FOREIGN'),('authority_thread','FOREIGN'),('authority_thread',None),
+                            ('actor_id','0'),('allow_capture',True),('head','9'*40),('prior_controls_credit',True),
+                            ('owner_manifest_sha256','0'*64),('owner_source_review_sha256','0'*64),
+                            ('controls',dict(tops=6,outcomes=26,leaves=24,modes=['normal','race'])),('arms',{})]:
             with self.subTest(field=field), self.assertRaises(RuntimeError):
                 check(dict(a, **{field:value}))
-        for mode in ('normal','race'):
-            c = json.loads(json.dumps(a));c['controls'][mode]['exit']=1
-            with self.subTest(mode=mode), self.assertRaises(RuntimeError):check(c)
+        c=dict(a);c.pop('authority_thread')
+        with self.assertRaises(RuntimeError):check(c)
         with self.assertRaises(RuntimeError):check(a, {'GITHUB_RUN_ATTEMPT':'2'})
+        with self.assertRaises(RuntimeError):check(a, {'WORKFLOW_COMMIT':'9'*40})
 
     def test_complete_fixed_input_pins_and_bootstrap_syntax(self):
         manifest = ROOT/'.github/primary-construction-inputs.json'
@@ -79,13 +80,16 @@ class PrimaryConstructionSource(unittest.TestCase):
         self.assertEqual(job['steps'][1]['uses'],'./.github/actions/primary-construction')
         self.assertNotIn('actions/upload-artifact@',str(workflow))
 
-    def test_only_two_normal_builds_and_original_resource_numbers(self):
+    def test_fixed_normal_preparation_and_both_modes_original_resources(self):
         worker=ast.get_source_segment(SOURCE,FUNCTIONS['worker'])
         self.assertIn("for arm in ARMS:",worker)
         self.assertIn("'-tags=treedb_test', '-p=1', '-mod=readonly', '-c'",worker)
-        self.assertIn("'./TreeDB/mvcc'], 360",worker)
+        self.assertIn("for package in ('caching', 'mvcc'):",worker)
+        self.assertIn("for mode in ('normal', 'race'):",worker)
+        self.assertIn("180 if mode == 'normal' else 600",worker)
+        self.assertIn("formatted.strip()",worker)
         self.assertNotIn("'-bench",worker)
-        self.assertNotIn("'-race'",worker)
+        self.assertIn("args.append('-race')",worker)
         self.assertIn('WHOLE = 840',SOURCE)
         self.assertIn('900-(time.monotonic()-started)',SOURCE)
         self.assertIn('str(24*GIB)',SOURCE)
@@ -136,9 +140,8 @@ class PrimaryConstructionSource(unittest.TestCase):
         self.assertIn('selected.clear()',publication)
         self.assertIn('runtime.clear()',worker)
         auth=ast.get_source_segment(SOURCE,FUNCTIONS['authenticate'])
-        self.assertIn("sha(proof) == CONTROLS_PASS_SHA256",auth)
-        self.assertIn("accepted['authority_thread'] == ROOT_THREAD",auth)
-        self.assertIn("accepted['owner_manifest_sha256'] == a['owner_manifest_sha256']",auth)
+        self.assertNotIn("root-controls-pass.json",auth)
+        self.assertIn("OWNER_REVIEW_SHA256",auth)
         self.assertIn('if r.first_failure is None and time.monotonic() < r.deadline:',worker)
         self.assertLess(worker.index('except BaseException as caught:'),worker.index('publish(root, a, r, run, env, runtime)'))
         for field in ('INPUT_IF-NO-FILES-FOUND','INPUT_RETENTION-DAYS','INPUT_COMPRESSION-LEVEL',
@@ -196,16 +199,47 @@ class PrimaryConstructionSource(unittest.TestCase):
     def test_precise_owner_sources_and_baseline_separation(self):
         data=ROOT/'.github/primary-construction'
         m=json.loads((data/'owner/overlays.json').read_text())['primary']
-        expected={'B':'29b879fbb4c4c6da2d7b18ff7c2a3a341e24e2b8','C':'4934bd6d51d9047ba0187d05c1d211cbe419811a'}
+        expected={'B':'8e1133085b4052e344a73063f28c2ab142485c73','C':'b24dea5e339cf94d419346ac9b38a8c90d6d3f02'}
         for arm,head in expected.items():
             spec=json.loads((data/(arm+'-source.json')).read_text())
             self.assertEqual(m[arm]['source'],head);self.assertEqual(spec['commit'],head)
             self.assertEqual(len(m[arm]['Replace']),5)
             for path in m[arm]['Replace'].values():self.assertTrue((data/'owner'/path).is_file())
-        self.assertTrue(m['B']['Replace']['TreeDB/caching/db.go'].startswith('baseline-candidate/'))
-        self.assertTrue(m['C']['Replace']['TreeDB/caching/db.go'].startswith('candidate/'))
+        self.assertTrue(m['B']['Replace']['TreeDB/caching/db.go'].startswith('arms/B/'))
+        self.assertTrue(m['C']['Replace']['TreeDB/caching/db.go'].startswith('arms/C/'))
         self.assertIn("GOENV='off', GOWORK='off', GOTELEMETRY='off'",SOURCE)
         self.assertIn("GOCACHE=str(root/'gocache'), GOMODCACHE=str(root/'modcache')",SOURCE)
+
+    def test_event_checker_positive_and_adverse_data(self):
+        import tempfile
+        source=(ROOT/'.github/scripts/primary_new_arm_control_events.py').read_text()
+        tree=ast.parse(source)
+        namespace=dict(json=json,Path=Path)
+        nodes=[n for n in tree.body if isinstance(n,(ast.Assign,ast.AugAssign,ast.FunctionDef))]
+        exec(compile(ast.Module(body=nodes,type_ignores=[]),'<extracted-fixed-event-checker>','exec'),namespace)
+        rows=[]
+        for package,names in sorted(namespace['TOPS'].items()):
+            rows.append(dict(Action='start',Package=package))
+            for name in sorted(names):
+                for test in [name]+[name+'/'+c for c in namespace['CHILDREN'].get(name,())]:
+                    rows.extend([dict(Action='run',Package=package,Test=test),dict(Action='pass',Package=package,Test=test)])
+            rows.append(dict(Action='pass',Package=package))
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'events.jsonl'
+            def check(data):
+                path.write_text(''.join(json.dumps(row)+'\n' for row in data))
+                return namespace['validate'](path)
+            self.assertEqual(check(rows)['outcomes'],8)
+            cases=[rows[:-1],rows[1:-1],rows+rows,rows[1:],
+                   [dict(Action='skip',Package=rows[0]['Package'])],
+                   [dict(Action='fail',Package=rows[0]['Package'])],
+                   [dict(Action='output',Package=rows[0]['Package'],Output='WARNING: DATA RACE')],
+                   [dict(Action='run',Package=rows[0]['Package'],Test='foreign')]]
+            # Missing start is not a required semantic predicate; remove a RUN decisively instead.
+            cases[3]=[r for i,r in enumerate(rows) if i!=1]
+            for index,data in enumerate(cases):
+                with self.subTest(index=index),self.assertRaises(ValueError):check(data)
+
 
 
 if __name__ == '__main__':

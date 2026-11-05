@@ -1,0 +1,3639 @@
+diff --git a/.github/ci/ci_impact.json b/.github/ci/ci_impact.json
+index 14029c64c..afefb0472 100644
+--- a/.github/ci/ci_impact.json
++++ b/.github/ci/ci_impact.json
+@@ -12,7 +12,7 @@
+     "M0 observation is manual diagnostic-only on a separately fixed product; no forecast starts it or replaces failed M0 acceptance.",
+     "Bounded maintenance comparison is a manually granted diagnostic on fixed baseline/candidate products; no forecast starts it or establishes cost, M0 or native acceptance."
+   ],
+-  "discovery_source_sha256": "5d66ce837d9cfd95323af554f7ec2fcfd0663ec35ad7732bed034d159ffd4830",
++  "discovery_source_sha256": "514b165484b854452cf2e616422d12957b411318e2cd6f1de0828a978189e685",
+   "dynamic_consumers": [
+     {
+       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
+@@ -145,11 +145,11 @@
+       "mode": "100644"
+     },
+     ".github/scripts/test_ci_impact.py": {
+-      "git_blob": "802e084dbce247f2797c07d89c1220d117b5e846",
++      "git_blob": "f2c074b099766d8c5382b211cc08041d7c0e8289",
+       "mode": "100644"
+     },
+     ".github/scripts/test_treedb_ci_contract.py": {
+-      "git_blob": "92223592df2a546b94b1c5ee031a4f24835a383c",
++      "git_blob": "b6948893d1fe1ff4aea26ef1ea682df86feb3c71",
+       "mode": "100644"
+     },
+     ".github/scripts/test_treedb_windows_core_headroom.py": {
+@@ -459,6 +459,19 @@
+       },
+       "workflow": "treedb-mvcc-maintenance-diagnostic.yml"
+     },
++    {
++      "id": "treedb-tests/getversioned-bindings-qualification/single",
++      "job": "getversioned-bindings-qualification",
++      "owner": "CI maintainer with affected package/harness owner",
++      "variant": {
++        "cgo": "setup-go platform default; explicit command overrides retained",
++        "matrix": {},
++        "race": true,
++        "runs_on": "ubuntu-latest",
++        "tags": "entry command defaults/flags retained"
++      },
++      "workflow": "treedb-tests.yml"
++    },
+     {
+       "id": "treedb-tests/mvcc-raw-path-gate/single",
+       "job": "mvcc-raw-path-gate",
+@@ -1246,7 +1259,7 @@
+         "matrix": {
+           "os": "ubuntu-latest"
+         },
+-        "race": false,
++        "race": true,
+         "runs_on": "${{ matrix.os }}",
+         "tags": "entry command defaults/flags retained"
+       },
+@@ -1261,7 +1274,7 @@
+         "matrix": {
+           "os": "macos-latest"
+         },
+-        "race": false,
++        "race": true,
+         "runs_on": "${{ matrix.os }}",
+         "tags": "entry command defaults/flags retained"
+       },
+@@ -2378,8 +2391,82 @@
+         },
+         "workflow_dispatch": null
+       },
+-      "git_blob": "a31cd588f91a2e73c3ea82a714f8885ddb549fa3",
++      "git_blob": "2859ea8c3e220607a8dab7949f0f9768aa798309",
+       "jobs": {
++        "getversioned-bindings-qualification": {
++          "checkout": [
++            {
++              "fetch-depth": 1,
++              "persist-credentials": false,
++              "ref": "${{ github.event.pull_request.head.sha || github.sha }}"
++            }
++          ],
++          "commands": [
++            {
++              "command_sha256": "7cdea45b84a49f04cebec69ce7e4b3d005ca365ffe7b8d024fe8600a08db6a96",
++              "entrypoint": ".github/workflows/treedb-tests.yml:34",
++              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
++              "name": "Initialize fixed qualification output"
++            },
++            {
++              "command_sha256": "fc0d694c6c05961c64baaefdc43c985d8b4e1d8a28a8da00267ea72cb681e941",
++              "entrypoint": ".github/workflows/treedb-tests.yml:62",
++              "env": {
++                "EXPECTED_SOURCE_HEAD": "${{ github.event.pull_request.head.sha || github.sha }}"
++              },
++              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
++              "name": "Record source and tool context; check fixed consumer"
++            },
++            {
++              "command_sha256": "98abc7fccbef040b0ad37711314ea0c76e058a612e29cc817b318dfb63499275",
++              "entrypoint": ".github/workflows/treedb-tests.yml:82",
++              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
++              "name": "Exact focused normal inventory"
++            },
++            {
++              "command_sha256": "81f8f859d7e0dad0d3fdc989380332e8602bfffdce247ead38d0dc99de450c8e",
++              "entrypoint": ".github/workflows/treedb-tests.yml:97",
++              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
++              "name": "Exact focused race inventory"
++            },
++            {
++              "command_sha256": "61506b528d862c7d34752320ba41a4556e7c8884f3a9e04b610c5e104c4a59cb",
++              "entrypoint": ".github/workflows/treedb-tests.yml:112",
++              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
++              "name": "Compile optimized DB test ELF and escape diagnostics"
++            },
++            {
++              "command_sha256": "2778ec45e86efb411355c1b43bcaeeb318894c61d4f72d42cf37181b1981cd82",
++              "entrypoint": ".github/workflows/treedb-tests.yml:133",
++              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
++              "name": "Compile optimized Tree test ELF and escape diagnostics"
++            },
++            {
++              "command_sha256": "af3a6f637f71d01ab194f86c09b02559e7af93e74b46bd6ca42ce82c209d7e08",
++              "entrypoint": ".github/workflows/treedb-tests.yml:154",
++              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
++              "name": "Capture stock optimized symbols and exact structural text"
++            },
++            {
++              "command_sha256": "b11f2eb6974aac4773cbc4be8ccec4d5bce897f79585aded10b2ce4402aace89",
++              "entrypoint": ".github/workflows/treedb-tests.yml:181",
++              "if": "always() && steps.initialize.outcome == 'success' && steps.checkout.outcome == 'success'",
++              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
++              "name": "Retain final raw output ledger on success or failure"
++            }
++          ],
++          "environment": {
++            "GOMAXPROCS": 2,
++            "GOMEMLIMIT": "4GiB",
++            "GOTOOLCHAIN": "local",
++            "GOWORK": "off",
++            "PYTHONDONTWRITEBYTECODE": "1"
++          },
++          "matrix": null,
++          "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
++          "race": true,
++          "runs_on": "ubuntu-latest"
++        },
+         "mvcc-raw-path-gate": {
+           "checkout": [
+             {
+@@ -2390,7 +2477,7 @@
+           "commands": [
+             {
+               "command_sha256": "506d1615b51f5e4aa91bcfb69dff234ae175f1970eda17f8cd9db4af75464d09",
+-              "entrypoint": ".github/workflows/treedb-tests.yml:41",
++              "entrypoint": ".github/workflows/treedb-tests.yml:215",
+               "env": {
+                 "BASE_SHA": "${{ github.event.pull_request.base.sha || '' }}",
+                 "EVENT_NAME": "${{ github.event_name }}",
+@@ -2404,7 +2491,7 @@
+             },
+             {
+               "command_sha256": "0453b4bbe72ce16035f3576c325fe22aaa5349aae420ea051dc49aa4f218ab4a",
+-              "entrypoint": ".github/workflows/treedb-tests.yml:85",
++              "entrypoint": ".github/workflows/treedb-tests.yml:259",
+               "env": {
+                 "BASE_SHA": "${{ steps.scope.outputs.base_sha }}",
+                 "HEAD_SHA": "${{ steps.scope.outputs.head_sha }}",
+@@ -2416,7 +2503,7 @@
+             },
+             {
+               "command_sha256": "e0fd5883e97cbfe4321fac0227f221fc5cc6f1be7e51ac9a28868ae8226bb94a",
+-              "entrypoint": ".github/workflows/treedb-tests.yml:124",
++              "entrypoint": ".github/workflows/treedb-tests.yml:298",
+               "env": {
+                 "PYTHONDONTWRITEBYTECODE": "1"
+               },
+@@ -2426,7 +2513,7 @@
+             },
+             {
+               "command_sha256": "5e3ba7e5d60101df144119400fbe8ea9a817f84af3c92145282fc699431457a8",
+-              "entrypoint": ".github/workflows/treedb-tests.yml:195",
++              "entrypoint": ".github/workflows/treedb-tests.yml:369",
+               "env": {
+                 "BASELINE_HASH": "${{ steps.scope.outputs.base_sha }}",
+                 "BATCH_WRITE_BENCHTIME": "1000x",
+@@ -2446,7 +2533,7 @@
+             },
+             {
+               "command_sha256": "0bdc21ac966cc2f9fc3b6e1b89ef224e60886e3738ff00f891941f92823278cf",
+-              "entrypoint": ".github/workflows/treedb-tests.yml:210",
++              "entrypoint": ".github/workflows/treedb-tests.yml:384",
+               "env": {
+                 "BASE_SHA": "${{ steps.scope.outputs.base_sha }}",
+                 "HEAD_SHA": "${{ steps.scope.outputs.head_sha }}",
+@@ -2458,7 +2545,7 @@
+             },
+             {
+               "command_sha256": "bbb2441dc14727d56872a2758157c926ea2db7c57f4ada6c172f53f94a761fa7",
+-              "entrypoint": ".github/workflows/treedb-tests.yml:221",
++              "entrypoint": ".github/workflows/treedb-tests.yml:395",
+               "env": {
+                 "HEAD_SHA": "${{ steps.scope.outputs.head_sha }}",
+                 "PYTHONDONTWRITEBYTECODE": "1"
+@@ -2469,7 +2556,7 @@
+             },
+             {
+               "command_sha256": "04c52362558354128b6d3db9b0151ad314fb23703c054afd13b03ea3692605c6",
+-              "entrypoint": ".github/workflows/treedb-tests.yml:233",
++              "entrypoint": ".github/workflows/treedb-tests.yml:407",
+               "env": {
+                 "BASE_SHA": "${{ steps.scope.outputs.base_sha }}",
+                 "HEAD_SHA": "${{ steps.scope.outputs.head_sha }}",
+@@ -2481,7 +2568,7 @@
+             },
+             {
+               "command_sha256": "2c2c62c3f2a413043a02ae78600dc8b56cbeaa81e7c7643aa53a7092b1b137c3",
+-              "entrypoint": ".github/workflows/treedb-tests.yml:241",
++              "entrypoint": ".github/workflows/treedb-tests.yml:415",
+               "if": "always() && steps.paths.outputs.run == 'true'",
+               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+               "name": "Add benchmark summary"
+@@ -2504,7 +2591,7 @@
+           "commands": [
+             {
+               "command_sha256": "e4555e237d48e5423850ceb677994ca50fa2ec16e178b290035db7aba17aaa2b",
+-              "entrypoint": ".github/workflows/treedb-tests.yml:922",
++              "entrypoint": ".github/workflows/treedb-tests.yml:1096",
+               "env": {
+                 "PYTHONDONTWRITEBYTECODE": "1"
+               },
+@@ -2513,19 +2600,19 @@
+             },
+             {
+               "command_sha256": "6eaad4139a493d7bf43ab4bd35c9d00282f730a10997d1bccf49d0a97f9d90c0",
+-              "entrypoint": ".github/workflows/treedb-tests.yml:925",
++              "entrypoint": ".github/workflows/treedb-tests.yml:1099",
+               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+               "name": "ValueLog dict compressibility bench"
+             },
+             {
+               "command_sha256": "942302e855fb3d4155b52dde350d890ce819563b134fe7fa29256bfd6ecf46a5",
+-              "entrypoint": ".github/workflows/treedb-tests.yml:931",
++              "entrypoint": ".github/workflows/treedb-tests.yml:1105",
+               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+               "name": "Perf baseline checker (gate)"
+             },
+             {
+               "command_sha256": "4be9c5ace88c3806a1a4f3c23163f6c7c6d6e2ac7bde8fdbf057de060bef4d58",
+-              "entrypoint": ".github/workflows/treedb-tests.yml:938",
++              "entrypoint": ".github/workflows/treedb-tests.yml:1112",
+               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+               "name": "Incompressible auto-vs-off gate"
+             }
+@@ -2543,14 +2630,14 @@
+           "commands": [
+             {
+               "command_sha256": "bb77ab3e1acfbac4ac4e619b9476b1301bd3b59d345fc1b13323c961fd0af791",
+-              "entrypoint": ".github/workflows/treedb-tests.yml:782",
++              "entrypoint": ".github/workflows/treedb-tests.yml:956",
+               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+               "name": "Test Race",
+               "working-directory": "TreeDB"
+             },
+             {
+               "command_sha256": "308ebfc392637dfb982616681c455cac662de070c78e54b03ef8504f62a7eaa1",
+-              "entrypoint": ".github/workflows/treedb-tests.yml:886",
++              "entrypoint": ".github/workflows/treedb-tests.yml:1060",
+               "if": "always()",
+               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+               "name": "Summarize race timing",
+@@ -2619,7 +2706,7 @@
+           "commands": [
+             {
+               "command_sha256": "94cec6a27c199f6be25e2f67ae861299c3e51aebb121b041779a412b88e6a4b4",
+-              "entrypoint": ".github/workflows/treedb-tests.yml:1247",
++              "entrypoint": ".github/workflows/treedb-tests.yml:1421",
+               "env": {
+                 "MVCC_RESULT": "${{ needs.mvcc-raw-path-gate.result }}",
+                 "PERF_RESULT": "${{ needs.perf.result }}",
+@@ -2645,37 +2732,37 @@
+           "commands": [
+             {
+               "command_sha256": "d8e37e4db37f01eee33a78accc677a9dcbd5b04d9c14af7db221501d4bbf9f35",
+-              "entrypoint": ".github/workflows/treedb-tests.yml:1115",
++              "entrypoint": ".github/workflows/treedb-tests.yml:1289",
+               "invocation": "GOWORK=off go test ./.github/scripts/snapshot_iterator_bench",
+               "name": "Test snapshot iterator benchmark parser"
+             },
+             {
+               "command_sha256": "e729b689a28684cf4adc80555c9f84f8fd9b4e1d15f3fc5ad97d2aaad7aba0e2",
+-              "entrypoint": ".github/workflows/treedb-tests.yml:1118",
++              "entrypoint": ".github/workflows/treedb-tests.yml:1292",
+               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+               "name": "Capture exact-head runner metadata"
+             },
+             {
+               "command_sha256": "67ead8deae8d9c80846d59790461183529103209012ca6e27a84c2643b32c0b3",
+-              "entrypoint": ".github/workflows/treedb-tests.yml:1130",
++              "entrypoint": ".github/workflows/treedb-tests.yml:1304",
+               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+               "name": "Build one exact-head snapshot iterator benchmark binary"
+             },
+             {
+               "command_sha256": "f065dc4fb2daa8163f14cf2f340191d2a14c76bd7ffdb4e3b2394968471b27fc",
+-              "entrypoint": ".github/workflows/treedb-tests.yml:1135",
++              "entrypoint": ".github/workflows/treedb-tests.yml:1309",
+               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+               "name": "Collect CPU-pinned balanced same-binary snapshot iterator pairs"
+             },
+             {
+               "command_sha256": "8faad3a561efcb191870169c8792b3d459979ad0aee5df2e0272a6ad5160b407",
+-              "entrypoint": ".github/workflows/treedb-tests.yml:1144",
++              "entrypoint": ".github/workflows/treedb-tests.yml:1318",
+               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+               "name": "Check snapshot iterator performance gate"
+             },
+             {
+               "command_sha256": "07d55751ba6cf7e3709ec6586d057beda36481c55a5c39baddaa52d2f3629b10",
+-              "entrypoint": ".github/workflows/treedb-tests.yml:1160",
++              "entrypoint": ".github/workflows/treedb-tests.yml:1334",
+               "if": "always()",
+               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+               "name": "Publish snapshot iterator summary"
+@@ -2694,7 +2781,7 @@
+           "commands": [
+             {
+               "command_sha256": "83ac39828b95694200ca74a153ef2a506b19b7df4935cb726ea1056b455c2114",
+-              "entrypoint": ".github/workflows/treedb-tests.yml:487",
++              "entrypoint": ".github/workflows/treedb-tests.yml:661",
+               "env": {
+                 "GOMAXPROCS": 2,
+                 "GOMEMLIMIT": "4GiB"
+@@ -2705,7 +2792,7 @@
+             },
+             {
+               "command_sha256": "99406da07371361a32a3fbe57ef401766c1703a468748b40d1acfde6cbba9f04",
+-              "entrypoint": ".github/workflows/treedb-tests.yml:710",
++              "entrypoint": ".github/workflows/treedb-tests.yml:884",
+               "if": "always()",
+               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+               "name": "Summarize test timings",
+@@ -2898,7 +2985,7 @@
+           "commands": [
+             {
+               "command_sha256": "3142d426a361acee2e9a0098f3c8c8037cd45c52a43a4f6c93ec1c9bbc2ff0a1",
+-              "entrypoint": ".github/workflows/treedb-tests.yml:314",
++              "entrypoint": ".github/workflows/treedb-tests.yml:488",
+               "env": {
+                 "PYTHONDONTWRITEBYTECODE": "1"
+               },
+@@ -2908,15 +2995,15 @@
+             },
+             {
+               "command_sha256": "3d4b424f6fcd11f530525ddea9a46aeaffec7c883b6c04b6baf7df36bf47800b",
+-              "entrypoint": ".github/workflows/treedb-tests.yml:326",
++              "entrypoint": ".github/workflows/treedb-tests.yml:500",
+               "if": "${{ matrix.name != 'macos' }}",
+               "invocation": "go vet ./...",
+               "name": "Vet",
+               "working-directory": "TreeDB"
+             },
+             {
+-              "command_sha256": "141c32553f2285da6eee4f2cdbb073ed09933be9aa77a0519166d5650e0d3f3c",
+-              "entrypoint": ".github/workflows/treedb-tests.yml:331",
++              "command_sha256": "3215b20e6b2510580ee1b471ee6f6ba3d852d5178b3ff94db7b7cae6046ab50b",
++              "entrypoint": ".github/workflows/treedb-tests.yml:505",
+               "if": "${{ matrix.name == 'macos' }}",
+               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+               "name": "Vet (macOS elapsed and resource diagnostics)",
+@@ -2948,7 +3035,7 @@
+           "runs_on": "${{ matrix.os }}"
+         }
+       },
+-      "sha256": "42a61e9d0accd9dd6cb7091a5ad12ccef7dacd94ecf71d20adc0d74467efafbd"
++      "sha256": "450451b3c7e2ce93b3b717f0d8f8bab4798643ccb0bd13730a560f2db26c27ae"
+     },
+     "treedb-vacuum-m0-observation.yml": {
+       "coverage": "existing execution only; triggers/path filters are unchanged",
+@@ -3180,7 +3267,7 @@
+       "events": {
+         "push": null
+       },
+-      "git_blob": "2f0dcad2713230dfdf937f5087e496d1c531dcde",
++      "git_blob": "7d96ce00b523183bf65fe2d808cdac2f62b1638f",
+       "jobs": {
+         "test": {
+           "checkout": [
+@@ -3189,17 +3276,55 @@
+           "commands": [
+             {
+               "command_sha256": "3d4b424f6fcd11f530525ddea9a46aeaffec7c883b6c04b6baf7df36bf47800b",
+-              "entrypoint": ".github/workflows/unified-bench-tests.yml:32",
++              "entrypoint": ".github/workflows/unified-bench-tests.yml:33",
+               "invocation": "go vet ./...",
+               "name": "Vet",
+               "working-directory": "cmd/unified_bench"
+             },
+             {
+               "command_sha256": "1bb497e3e13a1105cf24e3359fa3ef75de08b66ff8a2839cd7f9ea97824d9eb3",
+-              "entrypoint": ".github/workflows/unified-bench-tests.yml:36",
++              "entrypoint": ".github/workflows/unified-bench-tests.yml:37",
+               "invocation": "go test ./...",
+               "name": "Test",
+               "working-directory": "cmd/unified_bench"
++            },
++            {
++              "command_sha256": "8801a61537a5e852a7db19dddc264b7a5fa391abe8d4938a6ee570149add4468",
++              "entrypoint": ".github/workflows/unified-bench-tests.yml:45",
++              "env": {
++                "GOMAXPROCS": "2",
++                "GOMEMLIMIT": "4GiB",
++                "GOWORK": "off"
++              },
++              "if": "runner.os == 'Linux'",
++              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
++              "name": "Record focused Linux qualification inputs"
++            },
++            {
++              "command_sha256": "93f0463ca535af87ef177d00577440aae602595ff5f3eeb74a0cd90b9af0ad4c",
++              "entrypoint": ".github/workflows/unified-bench-tests.yml:59",
++              "env": {
++                "GOMAXPROCS": "2",
++                "GOMEMLIMIT": "4GiB",
++                "GOWORK": "off",
++                "PYTHONDONTWRITEBYTECODE": "1"
++              },
++              "if": "runner.os == 'Linux'",
++              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
++              "name": "Focused steady-rusage controls normal (Linux)"
++            },
++            {
++              "command_sha256": "819b63bbf6a588369a192410301e7531d799c614655bd81a6e938530f2588694",
++              "entrypoint": ".github/workflows/unified-bench-tests.yml:77",
++              "env": {
++                "GOMAXPROCS": "2",
++                "GOMEMLIMIT": "4GiB",
++                "GOWORK": "off",
++                "PYTHONDONTWRITEBYTECODE": "1"
++              },
++              "if": "runner.os == 'Linux'",
++              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
++              "name": "Focused steady-rusage controls race (Linux)"
+             }
+           ],
+           "environment": {},
+@@ -3210,11 +3335,11 @@
+             ]
+           },
+           "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+-          "race": false,
++          "race": true,
+           "runs_on": "${{ matrix.os }}"
+         }
+       },
+-      "sha256": "656dd3f08f5b481ab4b9a73de5d4d1f3dc365912a5e36601c74bd049d9693b5c"
++      "sha256": "cab2853c111a1d6ef909e155f0abe42d131c5408bff72d9f27fe66b74609673c"
+     }
+   }
+ }
+diff --git a/.github/scripts/check_steady_rusage_events.py b/.github/scripts/check_steady_rusage_events.py
+new file mode 100644
+index 000000000..c6cbf86ef
+--- /dev/null
++++ b/.github/scripts/check_steady_rusage_events.py
+@@ -0,0 +1,150 @@
++#!/usr/bin/env python3
++"""Fixed Linux steady-rusage control inventory; raw events remain the authority."""
++import json
++from pathlib import Path
++import sys
++
++PACKAGE = "github.com/snissn/gomap/cmd/unified_bench"
++ROOT = Path("artifacts/steady-rusage")
++MAX_BYTES = 32 * 1024 * 1024  # Post-run acceptance/read bound, not a live cap.
++TOPS = (
++    "TestRunBenchmarkProcessUsageDefaultZero",
++    "TestRunBenchmarkProcessUsageTwoReadsCheckpointOrder",
++    "TestRunBenchmarkProcessUsageOriginalFailureWins",
++    "TestRunBenchmarkProcessUsageReaderError",
++    "TestProcessUsageTimevalBounds",
++    "TestProcessUsageSelectionRefusal",
++    "TestProcessUsageCounterRegression",
++    "TestProcessUsageIncompleteAndReadLimit",
++    "TestProcessUsageSampleRegressionFailsClosed",
++    "TestRunBenchmarkProcessUsageCloseFailureIsNotLifecycleSuccess",
++    "TestRunBenchmarkBatchWriteSteadyCPUProfileMatchesTimedSpan",
++    "TestRunBenchmarkProcessUsageCleanup",
++    "TestProcessUsageCleanupRemoveFailure",
++    "TestRunBenchmarkProcessUsageCollisionBeforeOpen",
++    "TestProcessUsageOutputCollision",
++    "TestProcessUsageOutputAlias",
++)
++CHILDREN = {
++    "TestProcessUsageSelectionRefusal": (
++        "unsupported", "relative", "multi_db", "multi_test", "no_cpu", "existing",
++    ),
++    "TestProcessUsageCounterRegression": (
++        "user_cpu", "system_cpu", "minor_faults", "major_faults", "voluntary", "involuntary",
++    ),
++    "TestRunBenchmarkProcessUsageReaderError": ("first", "second"),
++    "TestRunBenchmarkProcessUsageCleanup": (
++        "write_failure", "write_and_close_failure", "read_and_close_failure", "keep_dir", "normal",
++    ),
++    "TestProcessUsageOutputCollision": (
++        "cpu", "allocs", "checkpoint", "block", "block_delta", "mutex", "mutex_delta",
++        "trace", "results_json", "results_md", "insights_json", "insights_md",
++        "insights_html", "output_parent", "distinct",
++    ),
++}
++EXPECTED = frozenset(TOPS) | frozenset(
++    parent + "/" + child for parent, children in CHILDREN.items() for child in children
++)
++
++
++def unique_object(pairs):
++    result = {}
++    for key, value in pairs:
++        if key in result:
++            raise ValueError("duplicate JSON key")
++        result[key] = value
++    return result
++
++
++def reject_constant(value):
++    raise ValueError("nonfinite JSON constant: " + value)
++
++
++def check(mode):
++    if mode not in ("normal", "race"):
++        raise ValueError("expected fixed normal or race mode")
++    allowed = {"source.txt", "go-version.txt", "go-env.json"} | {
++        name + suffix for name in ("normal", "race")
++        for suffix in (".jsonl", ".stderr", ".exit", ".receipt.json")
++    }
++    total = 0
++    for path in ROOT.iterdir():
++        if path.name not in allowed or path.is_symlink() or not path.is_file():
++            raise ValueError("unexpected output member")
++        total += path.stat().st_size
++        if total > MAX_BYTES:
++            raise ValueError("aggregate output exceeds post-run 32MiB acceptance bound")
++    if (ROOT / (mode + ".exit")).read_text() != "0\n":
++        raise ValueError("literal Go command exit was not zero")
++    states = {}
++    package_started = False
++    package_passed = False
++    compiler_events = 0
++    compiler_imports = {PACKAGE + " [" + PACKAGE + ".test]",
++                        PACKAGE + "_test [" + PACKAGE + ".test]", PACKAGE + ".test"}
++    with (ROOT / (mode + ".jsonl")).open() as stream:
++        for number, line in enumerate(stream, 1):
++            event = json.loads(line, object_pairs_hook=unique_object,
++                               parse_constant=reject_constant)
++            if isinstance(event, dict) and "ImportPath" in event:
++                if (package_started or set(event) != {"Action", "ImportPath", "Output"}
++                        or event["Action"] != "build-output"
++                        or event["ImportPath"] not in compiler_imports
++                        or not isinstance(event["Output"], str) or not event["Output"]):
++                    raise ValueError("foreign/malformed/late compiler event")
++                compiler_events += 1
++                continue
++            if not isinstance(event, dict) or event.get("Package") != PACKAGE:
++                raise ValueError("unexpected package/event at line " + str(number))
++            action, test = event.get("Action"), event.get("Test")
++            output = event.get("Output", "")
++            if not isinstance(output, str) or any(text in output for text in (
++                    "panic:", "fatal error:", "DATA RACE", "test timed out", "[build failed]")):
++                raise ValueError("failure diagnostic or malformed output")
++            if action in ("fail", "skip"):
++                raise ValueError("failed or skipped event at line " + str(number))
++            if test is not None:
++                if test not in EXPECTED or package_passed:
++                    raise ValueError("unexpected or post-terminal test")
++                if action == "run":
++                    if not package_started or test in states:
++                        raise ValueError("duplicate or unstarted test run")
++                    states[test] = "run"
++                elif action == "pass":
++                    if states.get(test) != "run":
++                        raise ValueError("test pass without exactly one run")
++                    states[test] = "pass"
++                elif action not in ("output", "pause", "cont") or states.get(test) != "run":
++                    raise ValueError("unsupported or inactive test action")
++            elif action == "start":
++                if package_started:
++                    raise ValueError("duplicate package start")
++                package_started = True
++            elif action == "pass":
++                if not package_started or package_passed:
++                    raise ValueError("duplicate or unstarted package pass")
++                package_passed = True
++            elif action != "output":
++                raise ValueError("unsupported package action")
++    if not package_passed or set(states) != EXPECTED or any(v != "pass" for v in states.values()):
++        raise ValueError("missing entered/passed tests or package terminal")
++    receipt = {"status": "STEADY_RUSAGE_CONTROLS_PASS", "mode": mode,
++               "package": PACKAGE, "tops": 16, "outcomes": 50, "leaves": 45,
++               "passed": sorted(states), "go_exit": 0, "compiler_events": compiler_events,
++               "output_bound": "32MiB post-run acceptance only; no live cap claimed"}
++    encoded = json.dumps(receipt, sort_keys=True) + "\n"
++    if total + len(encoded.encode()) > MAX_BYTES:
++        raise ValueError("receipt would exceed post-run acceptance bound")
++    return encoded
++
++
++if __name__ == "__main__":
++    try:
++        if len(sys.argv) != 2:
++            raise ValueError("expected exactly one fixed mode")
++        result = check(sys.argv[1])
++    except (OSError, ValueError, TypeError, KeyError) as exc:
++        print(json.dumps({"status": "STEADY_RUSAGE_CONTROLS_FAIL",
++                          "reason": str(exc)[:512]}, sort_keys=True))
++        raise SystemExit(1)
++    print(result, end="")
+diff --git a/.github/scripts/getversioned_bindings_qualification.py b/.github/scripts/getversioned_bindings_qualification.py
+new file mode 100644
+index 000000000..46a85b59a
+--- /dev/null
++++ b/.github/scripts/getversioned_bindings_qualification.py
+@@ -0,0 +1,255 @@
++#!/usr/bin/env python3
++"""Fixed #5396 event inventory and qualification-output ledger; no Go execution."""
++import argparse
++import hashlib
++import json
++import os
++from pathlib import Path
++import re
++import stat
++import sys
++
++LOG_LIMIT = 32 * 1024 * 1024
++OUTPUT_LIMIT = 1024 * 1024 * 1024
++DB = "github.com/snissn/gomap/TreeDB/db"
++TREE = "github.com/snissn/gomap/TreeDB/tree"
++DB_TOPS = ('TestNegativeFilterIndexReplacementOldSnapshotAndGuardRelease', 'TestOneShotAppendBindingsRetainMutablePolicy', 'TestOneShotAppendBindingsUseCurrentOwner', 'TestOneShotEmptyReadRetainsOnlyLegacyStateWrapper', 'TestOneShotLiveValueLogReadSurvivesConcurrentDBClose', 'TestOneShotReadAllocationBudget', 'TestOneShotReadCapturePublicationAndRelease', 'TestOneShotReadCustodyMatchesCapturedResources', 'TestOneShotReadOwnedMissingEmptyAndNilKey', 'TestOneShotReadRejectedCaptureReleasesValueLogPin', 'TestOwnedBackendSuccessorCapturedRootLeafPointerAndReuse', 'TestOwnedBackendSuccessorPrimaryAndConcurrentCaptures', 'TestSnapshotAllocationAdmissionRefusesRefreshedExactView', 'TestSnapshotCleanupCompletionDoesNotWaitForIndependentPagerDescriptors', 'TestSnapshotCleanupCompletionJoinsRunningAndCompletedOriginal', 'TestSnapshotCleanupCompletionReportsActualPagerLastPhysicalError', 'TestSnapshotCleanupCompletionSharesOriginalFinalReader')
++TREE_TOPS = ('TestTreeAppendReadBindingsMatchReset', 'TestTreeGenericResetRetainsDynamicKeyPolicy', 'TestTreeGetAppend_AppendsAndUsesAppendReaderForPointers', 'TestTreeGetAppend_LeafRefChecksumPolicyHonored', 'TestTreeGetAppend_LeafRefPrefersReadUnsafeTo', 'TestTreeGetAppend_UsesAppendReaderForLeafRefPages', 'TestTreeGetAppend_UsesLeafLogPageReaderForLeafRefPages', 'TestTreeGetUnsafe_UsesUnsafeReaderForPointers', 'TestTreeGet_UsesAppendReaderForPointersAndReturnsSafeCopy', 'TestTreeLeafLogUnverifiedStateStillChecksChecksum', 'TestTreeLeafLogVerifiedCacheStateSkipsChecksum', 'TestTreePageLimitResetClearsSelectedExtent')
++TOPS = {DB: set(DB_TOPS), TREE: set(TREE_TOPS)}
++NEW = {
++    DB: {"TestOneShotAppendBindingsUseCurrentOwner", "TestOneShotAppendBindingsRetainMutablePolicy"},
++    TREE: {"TestTreeAppendReadBindingsMatchReset", "TestTreeAppendReadBindingsMatchReset/first",
++           "TestTreeAppendReadBindingsMatchReset/second", "TestTreeAppendReadBindingsMatchReset/nil",
++           "TestTreeGenericResetRetainsDynamicKeyPolicy", "TestTreeGenericResetRetainsDynamicKeyPolicy/enabled",
++           "TestTreeGenericResetRetainsDynamicKeyPolicy/disabled"},
++}
++NEW_TOPS = {n.split("/")[0] for names in NEW.values() for n in names}
++
++# Exact source scope for compiler diagnostics, not a verdict about escapes or
++# machine calls. All unknown/error text survives selection. The ordinary
++# optimized ELFs and their nm/objdump captures remain the structural evidence.
++COMPILER_SOURCES = {
++    "db": {
++        "TreeDB/db/value_reader.go": ("5e91f5d3f97f1a85f22a2f7995bb9663a75030c1f8d00ef64722ab7763d7db17", ((63, 75),)),
++        "TreeDB/db/db.go": ("53f43cd2ccd5611eae203b19046900c3f1e486d6dc0d65134f0b7857c0ae64d1", ((1787, 1968),)),
++    },
++    "tree": {
++        "TreeDB/tree/tree.go": ("94acd5911f9c8fce15f3ac382a36c36f6ef0202c665d946e70914e6aa720e411", ((369, 487),)),
++    },
++}
++POSITION = re.compile(r"^(.*\.go):(\d+):(\d+): ?(.*)$")
++# Go1.26.10 inline/inl.go and escape/{escape,solve,graph}.go emit these
++# optimization-only forms. In particular the runtime prohibition is an actual
++# compiler error, and warnings/unrecognized messages are never omitted.
++OPTIMIZATION = re.compile(
++    r"^(?:cannot inline .+|can inline .+|inlining call to .+|"
++    r".+ capturing by (?:value|ref): .+|moved to heap: .+|"
++    r".+ escapes to heap(?: in .+:)?|.+ does not escape|"
++    r"parameter .+ leaks to .+ for .+ with derefs=\d+:|"
++    r"leaking param(?: content)?: .+|zero-copy string->\[\]byte conversion|"
++    r"  flow: .+|    from .+)$"
++)
++
++
++def compiler_scope(arm, repository):
++    sources = COMPILER_SOURCES[arm]
++    for name, (expected, _) in sources.items():
++        if hashlib.sha256((repository / name).read_bytes()).hexdigest() != expected:
++            raise ValueError("compiler selection source identity changed")
++    return sources
++
++
++def omit_optimization(line, sources):
++    try:
++        match = POSITION.fullmatch(line.decode("utf-8").rstrip("\r\n"))
++    except UnicodeDecodeError:
++        return False
++    if not match:
++        return False
++    path, number, _, message = match.groups()
++    if "not allowed in runtime" in message or not OPTIMIZATION.fullmatch(message):
++        return False
++    path = path.replace("\\", "/")
++    for name, (_, ranges) in sources.items():
++        if path.rsplit("/", 1)[-1] == Path(name).name:
++            if any(first <= int(number) <= last for first, last in ranges):
++                return False
++    return True
++
++
++def compiler_stream(arm, root, incoming, repository):
++    """Consume the entire stderr stream, selecting only named optimizer scope.
++
++    Raw bytes are hashed/counted, never represented as an uploaded raw log.
++    Incomplete input or any limit/error refuses qualification. Bash separately
++    retains the original compiler/timeout exit, so selection cannot hide it.
++    """
++    sources = compiler_scope(arm, repository)
++    bounds(root)
++    record = {"schema": "getversioned-compiler-selection-v1", "arm": arm,
++              "scope": {n: {"sha256": h, "inclusive_lines": spans} for n, (h, spans) in sources.items()},
++              "status": "INCOMPLETE", "raw_eof": False, "raw_bytes": 0,
++              "raw_lines": 0, "retained_bytes": 0, "retained_lines": 0,
++              "omitted_optimization_bytes": 0, "omitted_optimization_lines": 0,
++              "raw_uploaded": False, "compiler_exit_required_separately": True}
++    digest = hashlib.sha256()
++    try:
++        with (root / (arm + "-compiler.selected.stderr")).open("xb") as selected:
++            while True:
++                line = incoming.readline(LOG_LIMIT + 1)
++                if not line:
++                    record["raw_eof"] = True
++                    record["status"] = "SCOPED_STREAM_COMPLETE_REVIEW_PENDING"
++                    break
++                digest.update(line)
++                record["raw_bytes"] += len(line)
++                record["raw_lines"] += 1
++                if len(line) > LOG_LIMIT:
++                    raise ValueError("compiler diagnostic line exceeds32MiB")
++                if omit_optimization(line, sources):
++                    record["omitted_optimization_bytes"] += len(line)
++                    record["omitted_optimization_lines"] += 1
++                else:
++                    if record["retained_bytes"] + len(line) > LOG_LIMIT:
++                        raise ValueError("selected compiler text exceeds32MiB")
++                    selected.write(line)
++                    record["retained_bytes"] += len(line)
++                    record["retained_lines"] += 1
++    finally:
++        record["raw_sha256" if record["raw_eof"] else "consumed_prefix_sha256"] = digest.hexdigest()
++        with (root / (arm + "-compiler-stream.json")).open("x", encoding="utf-8") as receipt:
++            json.dump(record, receipt, indent=2, sort_keys=True)
++            receipt.write("\n")
++    bounds(root)
++    return record
++
++
++def events(path):
++    if path.stat().st_size > LOG_LIMIT:
++        raise ValueError("event log exceeds32MiB")
++    ran, passed, packages = set(), set(), set()
++    build_paths = {p + suffix for p in TOPS for suffix in (" [" + p + ".test]", "_test [" + p + ".test]", ".test")}
++    for line in path.open(encoding="utf-8"):
++        e = json.loads(line)
++        if not isinstance(e, dict) or not isinstance(e.get("Action"), str):
++            raise ValueError("malformed Go event")
++        action = e["Action"]
++        if action == "build-output":
++            if e.get("ImportPath") not in build_paths or "Package" in e or not isinstance(e.get("Output"), str):
++                raise ValueError("foreign compiler event")
++            continue
++        pkg = e.get("Package")
++        if pkg not in TOPS or action not in {"start", "run", "pause", "cont", "output", "pass", "fail", "skip", "bench"}:
++            raise ValueError("foreign or unsupported Go event")
++        if action in {"fail", "skip", "bench"} or "WARNING: DATA RACE" in e.get("Output", ""):
++            raise ValueError("adverse Go event")
++        name = e.get("Test")
++        if name is None:
++            if action == "pass":
++                if pkg in packages:
++                    raise ValueError("duplicate package PASS")
++                packages.add(pkg)
++            elif action not in {"start", "output"}:
++                raise ValueError("unexpected package action")
++            continue
++        if not isinstance(name, str) or name.split("/")[0] not in TOPS[pkg] or pkg in packages:
++            raise ValueError("foreign or late test event")
++        if name.split("/")[0] in NEW_TOPS and name not in NEW[pkg]:
++            raise ValueError("unexpected new-test descendant")
++        key = (pkg, name)
++        if action == "run":
++            if key in ran:
++                raise ValueError("duplicate test RUN")
++            ran.add(key)
++        elif action == "pass":
++            if key not in ran or key in passed:
++                raise ValueError("unentered or duplicate test PASS")
++            passed.add(key)
++        elif action not in {"output", "pause", "cont"}:
++            raise ValueError("unexpected test action")
++    required = {(p, n) for p, names in TOPS.items() for n in names} | {(p, n) for p, names in NEW.items() for n in names}
++    if not required <= passed or ran != passed or packages != set(TOPS):
++        raise ValueError("missing or unfinished positive inventory")
++    return {"status": "EXACT_FOCUSED_INVENTORY_PASS", "tops": 29,
++            "new_outcomes": 9, "new_leaves": 7, "observed_outcomes": len(passed),
++            "normal_allocation_only": True}
++
++
++def output_files(root):
++    expected = Path(os.environ["RUNNER_TEMP"]).resolve() / "getversioned-bindings-qualification"
++    if root.resolve() != expected or root.is_symlink() or not root.is_dir():
++        raise ValueError("foreign output directory")
++    rows = []
++    for p in sorted(root.iterdir()):
++        st = p.lstat()
++        if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
++            raise ValueError("unexpected output kind")
++        rows.append((p, st.st_size))
++    return rows
++
++
++def bounds(root):
++    rows = output_files(root)
++    total = sum(size for _, size in rows)
++    logs = [(p.name, size) for p, size in rows if p.suffix != ".test"]
++    if total > OUTPUT_LIMIT or any(size > LOG_LIMIT for _, size in logs):
++        raise ValueError("qualification output bound exceeded")
++    return {"bytes": total, "scope": "qualification directory only; boundary checks, no live RSS guarantee"}
++
++
++def main():
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("mode", choices=("selector", "normal", "race", "compiler-db", "compiler-tree", "bounds", "manifest"))
++    parser.add_argument("directory", nargs="?", type=Path)
++    a = parser.parse_args()
++    if a.mode == "selector":
++        print("^(" + "|".join(sorted(DB_TOPS + TREE_TOPS)) + ")$")
++        return
++    if a.directory is None:
++        parser.error("directory required")
++    root = a.directory
++    if a.mode.startswith("compiler-"):
++        result = compiler_stream(a.mode.removeprefix("compiler-"), root, sys.stdin.buffer, Path(__file__).resolve().parents[2])
++        print(json.dumps(result, sort_keys=True))
++        return
++    if a.mode in {"normal", "race"}:
++        bounds(root)
++        result = events(root / (a.mode + ".jsonl"))
++        result["mode"] = a.mode
++        result["allocation_qualified_by_race"] = False
++        print(json.dumps(result, sort_keys=True))
++        return
++    if a.mode == "bounds":
++        print(json.dumps(bounds(root), sort_keys=True))
++        return
++    # Always-run final ledger: persist current failure before reporting it.
++    rows = output_files(root)
++    record = {"schema": "getversioned-qualification-output-v1", "files": {}, "bounds": "UNVERIFIED"}
++    for p, size in rows:
++        h = hashlib.sha256()
++        with p.open("rb") as f:
++            for chunk in iter(lambda: f.read(1024 * 1024), b""):
++                h.update(chunk)
++        record["files"][p.name] = {"bytes": size, "sha256": h.hexdigest()}
++    try:
++        record["bounds"] = bounds(root)
++    except ValueError as e:
++        record["bounds"] = str(e)
++    payload = (json.dumps(record, indent=2, sort_keys=True) + "\n").encode()
++    if sum(size for _, size in rows) + len(payload) > OUTPUT_LIMIT:
++        raise ValueError("no capacity for final ledger; existing raw outputs retained")
++    target = root / "artifact-manifest.json"
++    with target.open("xb") as f:
++        f.write(payload)
++    bounds(root)
++    if isinstance(record["bounds"], str):
++        raise ValueError(record["bounds"])
++    print("output ledger retained; compiled structural/escape verdict requires exact-output review")
++
++
++if __name__ == "__main__":
++    try:
++        main()
++    except (OSError, ValueError, KeyError) as e:
++        print("qualification consumer refused: " + str(e), file=sys.stderr)
++        sys.exit(1)
+diff --git a/.github/scripts/test_ci_impact.py b/.github/scripts/test_ci_impact.py
+index 802e084db..f2c074b09 100644
+--- a/.github/scripts/test_ci_impact.py
++++ b/.github/scripts/test_ci_impact.py
+@@ -100,7 +100,7 @@ class ImpactContract(unittest.TestCase):
+         receipt = self.plan(self.event())
+         self.assertTrue(receipt['forecast_qualified'], receipt['fallback'])
+         self.assertFalse(receipt['omission_authority'])
+-        self.assertEqual(len([m for m in receipt['members'] if m['workflow'] == 'treedb-tests.yml']), 37)
++        self.assertEqual(len([m for m in receipt['members'] if m['workflow'] == 'treedb-tests.yml']), 38)
+         for m in receipt['members']:
+             if (m['workflow'] == 'treedb-tests.yml' and m['job'] in ('test', 'race', 'required')) or m['workflow'] == 'root-tests.yml':
+                 self.assertEqual(m['decision'], 'would_run', m)
+@@ -238,7 +238,7 @@ class ImpactContract(unittest.TestCase):
+         self.base = self.commit()
+         receipt = self.plan(self.event())
+         self.assertFull(receipt, 'bootstrap-no-accepted-policy')
+-        self.assertEqual(len(receipt['members']), 63)
++        self.assertEqual(len(receipt['members']), 64)
+         self.assertTrue(any(m['workflow'] == 'treedb-tests.yml' and m['job'] == 'vet'
+                             for m in receipt['members']))
+         policy['workflows']['treedb-tests.yml']['jobs'] = {}
+@@ -270,7 +270,7 @@ class ImpactContract(unittest.TestCase):
+         self.base = self.commit()
+         receipt = self.plan(self.event())
+         self.assertFull(receipt, 'bootstrap-no-accepted-policy')
+-        self.assertEqual(len(receipt['members']), 63)
++        self.assertEqual(len(receipt['members']), 64)
+ 
+     def test_matrix_invalid_forms_and_label_collisions_fail_closed(self):
+         original = json.loads((self.repo / ci_impact.POLICY).read_text())
+@@ -433,11 +433,27 @@ class SourceInventoryContract(unittest.TestCase):
+         files = [p for p in (ROOT / '.github/workflows').iterdir() if p.suffix in ('.yml', '.yaml')]
+         self.assertEqual({p.name for p in files}, set(policy['workflows']))
+         self.assertEqual(len(files), 17)
+-        self.assertEqual(len(policy['members']), 63)
++        self.assertEqual(len(policy['members']), 64)
+         for p in files:
+             self.assertEqual(ci_impact.digest(p.read_bytes()), policy['workflows'][p.name]['sha256'], p)
+         tree_members = [m for m in policy['members'] if m['workflow'] == 'treedb-tests.yml']
+-        self.assertEqual(len(tree_members), 37)
++        self.assertEqual(len(tree_members), 38)
++        # The added fixed job runs both normal and race without adding a matrix.
++        # Keep its complete descriptor explicit; an arbitrary extra member is not
++        # interchangeable with this reviewed qualification job.
++        self.assertEqual([m for m in tree_members if m['job'] == 'getversioned-bindings-qualification'], [{
++            'id': 'treedb-tests/getversioned-bindings-qualification/single',
++            'workflow': 'treedb-tests.yml',
++            'job': 'getversioned-bindings-qualification',
++            'owner': 'CI maintainer with affected package/harness owner',
++            'variant': {
++                'cgo': 'setup-go platform default; explicit command overrides retained',
++                'matrix': {},
++                'race': True,
++                'runs_on': 'ubuntu-latest',
++                'tags': 'entry command defaults/flags retained',
++            },
++        }])
+         tests = [m for m in tree_members if m['job'] == 'test']
+         source = (ROOT / '.github/workflows/treedb-tests.yml').read_text()
+         import re
+diff --git a/.github/scripts/test_getversioned_bindings_qualification.py b/.github/scripts/test_getversioned_bindings_qualification.py
+new file mode 100644
+index 000000000..469b0a6da
+--- /dev/null
++++ b/.github/scripts/test_getversioned_bindings_qualification.py
+@@ -0,0 +1,191 @@
++#!/usr/bin/env python3
++"""Pure fixed event/source controls for the #5396 hosted qualification."""
++import importlib.util
++import hashlib
++import io
++import json
++import os
++from unittest import mock
++from pathlib import Path
++import tempfile
++import unittest
++
++HERE = Path(__file__).resolve().parent
++SPEC = importlib.util.spec_from_file_location("binding_qualification", HERE / "getversioned_bindings_qualification.py")
++Q = importlib.util.module_from_spec(SPEC)
++SPEC.loader.exec_module(Q)
++
++
++def complete():
++    records = []
++    for pkg, tops in Q.TOPS.items():
++        records.append({"Action": "start", "Package": pkg})
++        for name in sorted(tops | Q.NEW[pkg]):
++            records.extend([{"Action": "run", "Package": pkg, "Test": name},
++                            {"Action": "pass", "Package": pkg, "Test": name}])
++        records.append({"Action": "pass", "Package": pkg})
++    return records
++
++
++class FixedQualificationTests(unittest.TestCase):
++    def consume(self, records):
++        with tempfile.TemporaryDirectory() as d:
++            p = Path(d) / "events.jsonl"
++            p.write_text("".join(json.dumps(e) + "\n" for e in records))
++            return Q.events(p)
++
++    def test_exact_inventory(self):
++        r = self.consume(complete())
++        self.assertEqual((r["tops"], r["new_outcomes"], r["new_leaves"]), (29, 9, 7))
++
++    def test_missing_and_unfinished(self):
++        records = complete()
++        name = next(iter(Q.TOPS[Q.DB]))
++        with self.assertRaises(ValueError):
++            self.consume([e for e in records if e.get("Test") != name])
++        with self.assertRaises(ValueError):
++            self.consume([e for e in records if not (e.get("Test") == name and e["Action"] == "pass")])
++
++    def test_skip_fail_and_race(self):
++        for action in ("skip", "fail"):
++            r = complete()
++            r[2]["Action"] = action
++            with self.assertRaises(ValueError):
++                self.consume(r)
++        r = complete()
++        r.insert(1, {"Action": "output", "Package": Q.DB, "Output": "WARNING: DATA RACE"})
++        with self.assertRaises(ValueError):
++            self.consume(r)
++
++    def test_duplicate_and_foreign(self):
++        for extra in ({"Action": "pass", "Package": Q.DB},
++                      {"Action": "start", "Package": "foreign"},
++                      {"Action": "run", "Package": Q.DB, "Test": "TestForeign"}):
++            with self.assertRaises(ValueError):
++                self.consume(complete() + [extra])
++
++    def test_new_descendant_and_malformed(self):
++        r = complete()
++        r.insert(1, {"Action": "run", "Package": Q.DB, "Test": "TestOneShotAppendBindingsUseCurrentOwner/foreign"})
++        with self.assertRaises(ValueError):
++            self.consume(r)
++        with self.assertRaises(ValueError):
++            self.consume([{}])
++
++    def test_compiler_transport_population(self):
++        r = complete()
++        r.insert(0, {"Action": "build-output", "ImportPath": Q.DB + ".test", "Output": "compiler text"})
++        self.consume(r)
++        r[0]["ImportPath"] = "foreign.test"
++        with self.assertRaises(ValueError):
++            self.consume(r)
++        r[0] = {"Action": "build-fail", "ImportPath": Q.DB}
++        with self.assertRaises(ValueError):
++            self.consume(r)
++
++    def test_bounded_log(self):
++        with tempfile.TemporaryDirectory() as d:
++            p = Path(d) / "large.jsonl"
++            with p.open("wb") as f:
++                f.truncate(Q.LOG_LIMIT + 1)
++            with self.assertRaises(ValueError):
++                Q.events(p)
++
++    def test_directory_boundary_and_failure_ledger(self):
++        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {"RUNNER_TEMP": ""}):
++            os.environ["RUNNER_TEMP"] = d
++            root = Path(d) / "getversioned-bindings-qualification"
++            root.mkdir()
++            self.assertEqual(Q.bounds(root)["bytes"], 0)
++            p = root / "raw.log"
++            with p.open("wb") as f:
++                f.truncate(Q.LOG_LIMIT + 1)
++            with self.assertRaises(ValueError):
++                Q.bounds(root)
++            with mock.patch("sys.argv", ["consumer", "manifest", str(root)]), self.assertRaises(ValueError):
++                Q.main()
++            record = json.loads((root / "artifact-manifest.json").read_text())
++            self.assertEqual(record["bounds"], "qualification output bound exceeded")
++            self.assertIn("raw.log", record["files"])
++            p.unlink()
++            (root / "artifact-manifest.json").unlink()
++            binary = root / "db.test"
++            with binary.open("wb") as f:
++                f.truncate(Q.OUTPUT_LIMIT + 1)
++            with self.assertRaises(ValueError):
++                Q.bounds(root)
++
++    def test_fixed_workflow_source(self):
++        source = (HERE.parent / "workflows/treedb-tests.yml").read_text()
++        job = source.split("  getversioned-bindings-qualification:\n", 1)[1].split("  mvcc-raw-path-gate:\n", 1)[0]
++        self.assertIn("timeout-minutes: 25", job)
++        self.assertEqual(job.count("go test -json -tags=treedb_test -count=1"), 1)
++        self.assertEqual(job.count("go test -race -json -tags=treedb_test -count=1"), 1)
++        for arm in ("db", "tree"):
++            self.assertEqual(job.count("-gcflags='github.com/snissn/gomap/TreeDB/" + arm + "=-m=2'"), 1)
++            self.assertIn("compiler-" + arm + ' "$out"', job)
++            self.assertIn('"${exits[0]}" > "$out/' + arm + '-compiler.exit"', job)
++            self.assertIn('"${exits[1]}" > "$out/' + arm + '-selection.exit"', job)
++        self.assertEqual(job.count('exits=("${PIPESTATUS[@]}")'), 2)
++        self.assertEqual(job.count('test "${exits[0]}" -eq 0'), 2)
++        self.assertEqual(job.count('test "${exits[1]}" -eq 0'), 2)
++        self.assertNotIn("TreeDB/...=-m=2", job)
++        self.assertNotIn("${QUALIFICATION_OUT}", job)
++        self.assertNotIn("-gcflags='all=-l'", job)
++        self.assertIn('mkdir "$out"', job)
++        self.assertIn('manifest "$QUALIFICATION_OUT"', job)
++        self.assertIn("INCONCLUSIVE: required optimized symbol text absent", job)
++        self.assertEqual(len(set(Q.DB_TOPS + Q.TREE_TOPS)), 29)
++
++    def test_compiler_selection_preserves_scope_errors_and_unknowns(self):
++        sources = Q.COMPILER_SOURCES["db"]
++        kept = [b"TreeDB/db/value_reader.go:65:10: can inline selected\n",
++                b"./TreeDB/db/db.go:1940:4: inlining call to selected\n",
++                b"/checkout/TreeDB/db/db.go:1940:4:   flow: x = y:\n",
++                b"TreeDB/db/db.go:1940:4:     from x (return) at x.go:1:2\n",
++                b"TreeDB/db/other.go:1:2: x escapes to heap, not allowed in runtime\n",
++                b"TreeDB/db/other.go:1:2: undefined: missing\n",
++                b"TreeDB/db/other.go:1:2:   warning: truncated explanation\n",
++                b"# package heading\n", b"unknown future compiler transport\n", b"\xff\n"]
++        for line in kept:
++            self.assertFalse(Q.omit_optimization(line, sources), line)
++        for line in (b"TreeDB/db/other.go:1:2: can inline irrelevant with cost 3\n",
++                     b"TreeDB/db/db.go:2500:4: x escapes to heap in f:\n",
++                     b"TreeDB/db/db.go:2500:4:   flow: x = y:\n",
++                     b"TreeDB/db/db.go:2500:4:     from x (return) at x.go:1:2\n"):
++            self.assertTrue(Q.omit_optimization(line, sources), line)
++
++    def test_compiler_stream_identity_digest_and_failure_receipt(self):
++        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {"RUNNER_TEMP": ""}):
++            os.environ["RUNNER_TEMP"] = d
++            root = Path(d) / "getversioned-bindings-qualification"
++            root.mkdir()
++            repository = HERE.parents[1]
++            raw = (b"TreeDB/db/other.go:1:2: can inline irrelevant\n"
++                   b"TreeDB/db/value_reader.go:65:2: r does not escape\n"
++                   b"TreeDB/db/other.go:1:2: undefined: missing\n")
++            result = Q.compiler_stream("db", root, io.BytesIO(raw), repository)
++            self.assertTrue(result["raw_eof"])
++            self.assertEqual(result["raw_bytes"], len(raw))
++            self.assertEqual(result["raw_sha256"], hashlib.sha256(raw).hexdigest())
++            self.assertEqual(result["omitted_optimization_lines"], 1)
++            self.assertEqual((root / "db-compiler.selected.stderr").read_bytes(), raw.split(b"\n", 1)[1])
++            # An EOF-complete stream still needs the independently retained
++            # compiler exit: preserving its error text is not compiler PASS.
++            self.assertTrue(result["compiler_exit_required_separately"])
++            for p in root.iterdir():
++                p.unlink()
++            with mock.patch.object(Q, "LOG_LIMIT", 8), self.assertRaises(ValueError):
++                Q.compiler_stream("db", root, io.BytesIO(b"unknown diagnostic too long\n"), repository)
++            failed = json.loads((root / "db-compiler-stream.json").read_text())
++            self.assertFalse(failed["raw_eof"])
++            self.assertEqual(failed["status"], "INCOMPLETE")
++            self.assertNotIn("raw_sha256", failed)
++            self.assertIn("consumed_prefix_sha256", failed)
++            mismatched = {"db": {"TreeDB/db/db.go": ("0" * 64, ((1787, 1968),))}}
++            with mock.patch.object(Q, "COMPILER_SOURCES", mismatched), self.assertRaises(ValueError):
++                Q.compiler_scope("db", repository)
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/.github/scripts/test_treedb_ci_contract.py b/.github/scripts/test_treedb_ci_contract.py
+index 92223592d..b6948893d 100644
+--- a/.github/scripts/test_treedb_ci_contract.py
++++ b/.github/scripts/test_treedb_ci_contract.py
+@@ -35,7 +35,7 @@ class TreeDBCIContractTests(unittest.TestCase):
+         self.assertIn("timeout-minutes: ${{ matrix.timeout_minutes }}", vet)
+         self.assertIn("if: ${{ matrix.name != 'macos' }}", vet)
+         self.assertIn("if: ${{ matrix.name == 'macos' }}", vet)
+-        self.assertIn("/usr/bin/time -l go vet ./...", vet)
++        self.assertIn("/usr/bin/time -l go vet -x ./...", vet)
+         self.assertIn("run: go vet ./...", vet)
+         self.assertIn("cache: false", vet)
+         self.assertNotIn("continue-on-error", vet)
+diff --git a/.github/workflows/treedb-tests.yml b/.github/workflows/treedb-tests.yml
+index a31cd588f..2859ea8c3 100644
+--- a/.github/workflows/treedb-tests.yml
++++ b/.github/workflows/treedb-tests.yml
+@@ -17,6 +17,180 @@ permissions:
+   pull-requests: read
+ 
+ jobs:
++  getversioned-bindings-qualification:
++    name: getversioned bindings qualification (linux)
++    runs-on: ubuntu-latest
++    timeout-minutes: 25
++    env:
++      GOMEMLIMIT: 4GiB
++      GOMAXPROCS: 2
++      GOWORK: "off"
++      GOTOOLCHAIN: local
++      PYTHONDONTWRITEBYTECODE: "1"
++    steps:
++      - name: Initialize fixed qualification output
++        id: initialize
++        shell: bash
++        run: |
++          set -euo pipefail
++          out="$RUNNER_TEMP/getversioned-bindings-qualification"
++          mkdir "$out"
++          printf 'QUALIFICATION_OUT=%s\n' "$out" >> "$GITHUB_ENV"
++          printf 'Output directory only: 1GiB; each generated log: 32MiB; boundary checks.\nGOMEMLIMIT is soft, not a measured RSS bound.\n' > "$out/scope.txt"
++
++      - name: Checkout exact source head
++        id: checkout
++        timeout-minutes: 1
++        uses: actions/checkout@v4
++        with:
++          ref: ${{ github.event.pull_request.head.sha || github.sha }}
++          persist-credentials: false
++          fetch-depth: 1
++
++      - name: Setup exact qualification Go
++        timeout-minutes: 2
++        uses: actions/setup-go@v5
++        with:
++          go-version: "1.26.10"
++          check-latest: false
++          cache: false
++
++      - name: Record source and tool context; check fixed consumer
++        shell: bash
++        env:
++          EXPECTED_SOURCE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
++        run: |
++          set -euo pipefail
++          out="$QUALIFICATION_OUT"
++          test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_HEAD"
++          test -z "$(git status --porcelain)"
++          git show -s --format='head=%H%ntree=%T%nparents=%P' HEAD > "$out/source.txt"
++          sha256sum TreeDB/tree/tree.go TreeDB/db/value_reader.go TreeDB/db/db.go TreeDB/tree/append_read_bindings_test.go TreeDB/db/one_shot_append_bindings_test.go .github/scripts/getversioned_bindings_qualification.py .github/scripts/test_getversioned_bindings_qualification.py .github/workflows/treedb-tests.yml > "$out/source-sha256.txt"
++          timeout --signal=TERM --kill-after=10s 10s go version > "$out/go-version.log" 2>&1
++          test "$(timeout --signal=TERM --kill-after=10s 10s go env GOVERSION)" = go1.26.10
++          timeout --signal=TERM --kill-after=10s 10s go env -json GOVERSION GOOS GOARCH GOAMD64 CGO_ENABLED CC CXX CGO_CFLAGS CGO_CPPFLAGS CGO_CXXFLAGS CGO_LDFLAGS GOFLAGS GOEXPERIMENT GOROOT GOCACHE GOMODCACHE GOTOOLCHAIN GOWORK > "$out/go-env.json"
++          set +e
++          timeout --signal=TERM --kill-after=10s 30s python3 -B .github/scripts/test_getversioned_bindings_qualification.py > "$out/source-controls.log" 2>&1
++          rc=$?
++          set -e
++          printf '%s\n' "$rc" > "$out/source-controls.exit"
++          python3 -B .github/scripts/getversioned_bindings_qualification.py bounds "$out"
++          test "$rc" -eq 0
++
++      - name: Exact focused normal inventory
++        shell: bash
++        run: |
++          set -euo pipefail
++          out="$QUALIFICATION_OUT"
++          selector="$(python3 -B .github/scripts/getversioned_bindings_qualification.py selector)"
++          set +e
++          timeout --signal=TERM --kill-after=10s 270s go test -json -tags=treedb_test -count=1 -timeout=240s -run "$selector" ./TreeDB/db ./TreeDB/tree > "$out/normal.jsonl" 2> "$out/normal.stderr"
++          rc=$?
++          set -e
++          printf '%s\n' "$rc" > "$out/normal.exit"
++          python3 -B .github/scripts/getversioned_bindings_qualification.py bounds "$out"
++          test "$rc" -eq 0
++          python3 -B .github/scripts/getversioned_bindings_qualification.py normal "$out" > "$out/normal-inventory.json"
++
++      - name: Exact focused race inventory
++        shell: bash
++        run: |
++          set -euo pipefail
++          out="$QUALIFICATION_OUT"
++          selector="$(python3 -B .github/scripts/getversioned_bindings_qualification.py selector)"
++          set +e
++          timeout --signal=TERM --kill-after=10s 390s go test -race -json -tags=treedb_test -count=1 -timeout=360s -run "$selector" ./TreeDB/db ./TreeDB/tree > "$out/race.jsonl" 2> "$out/race.stderr"
++          rc=$?
++          set -e
++          printf '%s\n' "$rc" > "$out/race.exit"
++          python3 -B .github/scripts/getversioned_bindings_qualification.py bounds "$out"
++          test "$rc" -eq 0
++          python3 -B .github/scripts/getversioned_bindings_qualification.py race "$out" > "$out/race-inventory.json"
++
++      - name: Compile optimized DB test ELF and escape diagnostics
++        shell: bash
++        run: |
++          set -euo pipefail
++          out="$QUALIFICATION_OUT"
++          set +e
++          # Only this owning package emits -m=2. Stream selection retains the
++          # changed functions and ALL unknown/error lines, with full raw digest.
++          # Left-to-right redirection sends stderr to the pipe, stdout to file.
++          timeout --signal=TERM --kill-after=10s 180s go test -c -tags=treedb_test -gcflags='github.com/snissn/gomap/TreeDB/db=-m=2' -o "$out/db.test" ./TreeDB/db 2>&1 > "$out/db-compiler.stdout" |
++            timeout --signal=TERM --kill-after=10s 200s python3 -B .github/scripts/getversioned_bindings_qualification.py compiler-db "$out" > "$out/db-selection.stdout" 2> "$out/db-selection.stderr"
++          exits=("${PIPESTATUS[@]}")
++          set -e
++          test "${#exits[@]}" -eq 2
++          printf '%s\n' "${exits[0]}" > "$out/db-compiler.exit"
++          printf '%s\n' "${exits[1]}" > "$out/db-selection.exit"
++          python3 -B .github/scripts/getversioned_bindings_qualification.py bounds "$out"
++          test "${exits[0]}" -eq 0
++          test "${exits[1]}" -eq 0
++          sha256sum "$out/db.test" > "$out/db-test-sha256.txt"
++
++      - name: Compile optimized Tree test ELF and escape diagnostics
++        shell: bash
++        run: |
++          set -euo pipefail
++          out="$QUALIFICATION_OUT"
++          set +e
++          # Only this owning package emits -m=2. Stream selection retains the
++          # changed functions and ALL unknown/error lines, with full raw digest.
++          # Left-to-right redirection sends stderr to the pipe, stdout to file.
++          timeout --signal=TERM --kill-after=10s 180s go test -c -tags=treedb_test -gcflags='github.com/snissn/gomap/TreeDB/tree=-m=2' -o "$out/tree.test" ./TreeDB/tree 2>&1 > "$out/tree-compiler.stdout" |
++            timeout --signal=TERM --kill-after=10s 200s python3 -B .github/scripts/getversioned_bindings_qualification.py compiler-tree "$out" > "$out/tree-selection.stdout" 2> "$out/tree-selection.stderr"
++          exits=("${PIPESTATUS[@]}")
++          set -e
++          test "${#exits[@]}" -eq 2
++          printf '%s\n' "${exits[0]}" > "$out/tree-compiler.exit"
++          printf '%s\n' "${exits[1]}" > "$out/tree-selection.exit"
++          python3 -B .github/scripts/getversioned_bindings_qualification.py bounds "$out"
++          test "${exits[0]}" -eq 0
++          test "${exits[1]}" -eq 0
++          sha256sum "$out/tree.test" > "$out/tree-test-sha256.txt"
++
++      - name: Capture stock optimized symbols and exact structural text
++        shell: bash
++        run: |
++          set -euo pipefail
++          out="$QUALIFICATION_OUT"
++          set +e
++          timeout --signal=TERM --kill-after=10s 60s bash -euo pipefail -c '
++            out="$QUALIFICATION_OUT"
++            go tool nm -size "$out/db.test" > "$out/db.nm"
++            go tool nm -size "$out/tree.test" > "$out/tree.nm"
++            go tool objdump -s "^github.com/snissn/gomap/TreeDB/tree\.\(\*Tree\)\.Reset$" "$out/tree.test" > "$out/tree-reset.objdump"
++            go tool objdump -s "^github.com/snissn/gomap/TreeDB/tree\.\(\*Tree\)\.ResetAppendReadBindings$" "$out/tree.test" > "$out/tree-bindings.objdump"
++            go tool objdump -s "^github.com/snissn/gomap/TreeDB/db\.\(\*DB\)\.captureSnapshotForReadWithValueLogPublicationLockHeld$" "$out/db.test" > "$out/db-capture.objdump"
++            go tool objdump -s "^github.com/snissn/gomap/TreeDB/db\.\(\*valueReader\)\.appendReadBindings$" "$out/db.test" > "$out/db-bindings.objdump"
++            if ! test -s "$out/tree-reset.objdump" || ! test -s "$out/tree-bindings.objdump" || ! test -s "$out/db-capture.objdump"; then
++              printf "INCONCLUSIVE: required optimized symbol text absent; no -l fallback.\n" > "$out/structural-status.txt"
++              exit 1
++            fi
++            printf "COMPILED_TEXT_CAPTURED_REVIEW_PENDING\nPrivate constructor may be inlined. Inspect capture text/compiler diagnostics.\nTwelve source discovery assertions are not twelve machine calls. No escape/structural acceptance from command success.\n" > "$out/structural-status.txt"
++          ' > "$out/object-tools.stdout" 2> "$out/object-tools.stderr"
++          rc=$?
++          set -e
++          printf '%s\n' "$rc" > "$out/object-tools.exit"
++          python3 -B .github/scripts/getversioned_bindings_qualification.py bounds "$out"
++          test "$rc" -eq 0
++
++      - name: Retain final raw output ledger on success or failure
++        if: always() && steps.initialize.outcome == 'success' && steps.checkout.outcome == 'success'
++        shell: bash
++        run: |
++          timeout --signal=TERM --kill-after=10s 30s python3 -B .github/scripts/getversioned_bindings_qualification.py manifest "$QUALIFICATION_OUT"
++
++      - name: Upload fixed qualification raw outputs
++        if: always() && steps.initialize.outcome == 'success'
++        timeout-minutes: 2
++        uses: actions/upload-artifact@v4
++        with:
++          name: getversioned-bindings-${{ github.run_id }}-${{ github.run_attempt }}
++          path: ${{ runner.temp }}/getversioned-bindings-qualification
++          if-no-files-found: error
++          retention-days: 14
++
+   mvcc-raw-path-gate:
+     name: mvcc raw-path gate (linux)
+     # Admin-selected PR and single-job disposable runner; fork/other PRs stay hosted.
+@@ -330,7 +504,7 @@ jobs:
+         working-directory: TreeDB
+         run: |
+           date -u '+vet started %Y-%m-%dT%H:%M:%SZ'
+-          /usr/bin/time -l go vet ./...
++          /usr/bin/time -l go vet -x ./...
+ 
+   test:
+     name: ${{ matrix.name }}
+diff --git a/.github/workflows/unified-bench-tests.yml b/.github/workflows/unified-bench-tests.yml
+index 2f0dcad27..7d96ce00b 100644
+--- a/.github/workflows/unified-bench-tests.yml
++++ b/.github/workflows/unified-bench-tests.yml
+@@ -21,7 +21,8 @@ jobs:
+       - name: Setup Go
+         uses: actions/setup-go@v5
+         with:
+-          go-version-file: go.mod
++          go-version: "1.26.10"
++          check-latest: false
+           cache: true
+           cache-dependency-path: |
+             go.sum
+@@ -34,3 +35,61 @@ jobs:
+       - name: Test
+         working-directory: cmd/unified_bench
+         run: go test ./...
++
++      - name: Record focused Linux qualification inputs
++        if: runner.os == 'Linux'
++        env:
++          GOMAXPROCS: "2"
++          GOMEMLIMIT: 4GiB
++          GOWORK: "off"
++        run: |
++          mkdir -p artifacts/steady-rusage
++          git rev-parse HEAD 'HEAD^{tree}' > artifacts/steady-rusage/source.txt
++          go version > artifacts/steady-rusage/go-version.txt
++          go env -json GOVERSION GOFLAGS GOEXPERIMENT GOOS GOARCH CGO_ENABLED CC CXX GOTOOLCHAIN GOWORK > artifacts/steady-rusage/go-env.json
++          test "$(go env GOVERSION)" = go1.26.10
++
++      - name: Focused steady-rusage controls normal (Linux)
++        if: runner.os == 'Linux'
++        env:
++          GOMAXPROCS: "2"
++          GOMEMLIMIT: 4GiB
++          GOWORK: "off"
++          PYTHONDONTWRITEBYTECODE: "1"
++        run: |
++          unset GOMAP_DIAGNOSTIC_STEADY_RUSAGE
++          set +e
++          go test -json -count=1 -p 1 -timeout 3m \
++            -run '^(TestRunBenchmarkProcessUsageDefaultZero|TestRunBenchmarkProcessUsageTwoReadsCheckpointOrder|TestRunBenchmarkProcessUsageOriginalFailureWins|TestRunBenchmarkProcessUsageReaderError|TestProcessUsageTimevalBounds|TestProcessUsageSelectionRefusal|TestProcessUsageCounterRegression|TestProcessUsageIncompleteAndReadLimit|TestProcessUsageSampleRegressionFailsClosed|TestRunBenchmarkProcessUsageCloseFailureIsNotLifecycleSuccess|TestRunBenchmarkBatchWriteSteadyCPUProfileMatchesTimedSpan|TestRunBenchmarkProcessUsageCleanup|TestProcessUsageCleanupRemoveFailure|TestRunBenchmarkProcessUsageCollisionBeforeOpen|TestProcessUsageOutputCollision|TestProcessUsageOutputAlias)$' \
++            ./cmd/unified_bench > artifacts/steady-rusage/normal.jsonl 2> artifacts/steady-rusage/normal.stderr
++          go_exit=$?
++          set -e
++          printf '%s\n' "$go_exit" > artifacts/steady-rusage/normal.exit
++          python3 -B .github/scripts/check_steady_rusage_events.py normal > artifacts/steady-rusage/normal.receipt.json
++
++      - name: Focused steady-rusage controls race (Linux)
++        if: runner.os == 'Linux'
++        env:
++          GOMAXPROCS: "2"
++          GOMEMLIMIT: 4GiB
++          GOWORK: "off"
++          PYTHONDONTWRITEBYTECODE: "1"
++        run: |
++          unset GOMAP_DIAGNOSTIC_STEADY_RUSAGE
++          set +e
++          go test -json -race -count=1 -p 1 -timeout 10m \
++            -run '^(TestRunBenchmarkProcessUsageDefaultZero|TestRunBenchmarkProcessUsageTwoReadsCheckpointOrder|TestRunBenchmarkProcessUsageOriginalFailureWins|TestRunBenchmarkProcessUsageReaderError|TestProcessUsageTimevalBounds|TestProcessUsageSelectionRefusal|TestProcessUsageCounterRegression|TestProcessUsageIncompleteAndReadLimit|TestProcessUsageSampleRegressionFailsClosed|TestRunBenchmarkProcessUsageCloseFailureIsNotLifecycleSuccess|TestRunBenchmarkBatchWriteSteadyCPUProfileMatchesTimedSpan|TestRunBenchmarkProcessUsageCleanup|TestProcessUsageCleanupRemoveFailure|TestRunBenchmarkProcessUsageCollisionBeforeOpen|TestProcessUsageOutputCollision|TestProcessUsageOutputAlias)$' \
++            ./cmd/unified_bench > artifacts/steady-rusage/race.jsonl 2> artifacts/steady-rusage/race.stderr
++          go_exit=$?
++          set -e
++          printf '%s\n' "$go_exit" > artifacts/steady-rusage/race.exit
++          python3 -B .github/scripts/check_steady_rusage_events.py race > artifacts/steady-rusage/race.receipt.json
++
++      - name: Retain focused Linux raw events and literal exits
++        if: always() && runner.os == 'Linux'
++        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
++        with:
++          name: steady-rusage-controls-${{ github.run_id }}-${{ github.run_attempt }}
++          path: artifacts/steady-rusage
++          if-no-files-found: error
++          retention-days: 14
+diff --git a/TreeDB/db/command_wal_cleanup_fixed_active_test.go b/TreeDB/db/command_wal_cleanup_fixed_active_test.go
+new file mode 100644
+index 000000000..48c5e4dc6
+--- /dev/null
++++ b/TreeDB/db/command_wal_cleanup_fixed_active_test.go
+@@ -0,0 +1,271 @@
++package db
++
++import (
++	"errors"
++	"fmt"
++	"os"
++	"path/filepath"
++	"testing"
++
++	"github.com/snissn/gomap/TreeDB/internal/commitlog"
++)
++
++const cleanupPressureCapacityForTest = int64(4_199_424)
++
++// The caller owns this fresh t.TempDir namespace, with no concurrent actors or
++// DB/journal owner for path. O_EXCL rejects every preexisting path; neither a
++// live stream nor a populated historical segment may be converted here.
++func prepareFreshFixedCleanupActiveForTest(path string, fixedEntry bool) error {
++	reservation, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
++	if err != nil {
++		return err
++	}
++	info, statErr := reservation.Stat()
++	closeErr := reservation.Close()
++	if statErr != nil || closeErr != nil {
++		return errors.Join(statErr, closeErr)
++	}
++	if !info.Mode().IsRegular() || info.Size() != 0 {
++		return errors.New("cleanup fixture requires an exclusively created zero-length regular file")
++	}
++	linked, err := os.Lstat(path)
++	if err != nil {
++		return err
++	}
++	if !os.SameFile(info, linked) {
++		return errors.New("cleanup fixture fresh path identity changed before writer open")
++	}
++	// Both entry controls own a new, unaccepted writer. Default NewWriter is a
++	// legitimate stream entry; the other control starts explicitly fixed. All
++	// handles are checked-closed BEFORE fixed preparation and actual owner Open.
++	var original *commitlog.Writer
++	if fixedEntry {
++		original, err = commitlog.NewFixedWriterWithCapacity(path, cleanupPressureCapacityForTest)
++	} else {
++		original, err = commitlog.NewWriter(path)
++	}
++	if err != nil {
++		return err
++	}
++	logical := original.ActiveBytes()
++	closeErr = original.Close()
++	if logical != 0 || closeErr != nil {
++		return errors.Join(fmt.Errorf("original fresh writer logical bytes=%d; require zero", logical), closeErr)
++	}
++	frames, err := commitlog.ScanCommandFramesV2(path, commitlog.Options{})
++	if err != nil || len(frames) != 0 {
++		return errors.Join(fmt.Errorf("original fresh writer frames=%d; require zero", len(frames)), err)
++	}
++	fixed, err := commitlog.NewFixedWriterWithCapacity(path, cleanupPressureCapacityForTest)
++	if err != nil {
++		return err
++	}
++	logical = fixed.ActiveBytes()
++	closeErr = fixed.Close()
++	if logical != 0 || closeErr != nil {
++		return errors.Join(fmt.Errorf("prepared fixed writer logical bytes=%d; require zero", logical), closeErr)
++	}
++	frames, err = commitlog.ScanCommandFramesV2(path, commitlog.Options{})
++	if err != nil || len(frames) != 0 {
++		return errors.Join(fmt.Errorf("prepared fixed writer frames=%d; require zero", len(frames)), err)
++	}
++	info, err = os.Lstat(path)
++	if err != nil {
++		return err
++	}
++	if !info.Mode().IsRegular() || info.Size() != cleanupPressureCapacityForTest {
++		return fmt.Errorf("prepared fixed physical size=%d; want %d", info.Size(), cleanupPressureCapacityForTest)
++	}
++	return nil
++}
++
++func installFreshFixedCleanupJournalOwnerForTest(t *testing.T, database *DB, appliedLSN uint64) {
++	t.Helper()
++	installFreshFixedCleanupJournalEntryForTest(t, database, appliedLSN, false)
++}
++
++func installFreshFixedCleanupJournalEntryForTest(t *testing.T, database *DB, appliedLSN uint64, fixedEntry bool) {
++	t.Helper()
++	if !commitlog.FixedWALCreationSupported() {
++		t.Skip("requires fixed-container creation; not fixed pressure coverage")
++	}
++	if database.commandJournal != nil {
++		t.Fatal("fresh cleanup fixture cannot replace a live journal")
++	}
++	opts := commandWALCleanupJournalOptionsForTest(t, database, appliedLSN)
++	if opts.SegmentSeq == 0 {
++		t.Fatal("fresh cleanup fixture requires existing replay/history and a concrete next sequence")
++	}
++	path := filepath.Join(WALDirPath(database.dir), commitlog.CommandSegmentName(0, opts.SegmentSeq))
++	if err := prepareFreshFixedCleanupActiveForTest(path, fixedEntry); err != nil {
++		t.Fatalf("prepare fresh fixed cleanup active: %v", err)
++	}
++	// Same original options; install DB ownership and cleanup immediately after
++	// successful Open, before any capture or accepted append.
++	installCommandWALCleanupJournalOptionsForTest(t, database, opts, true)
++	snapshot, err := database.commandJournal.CaptureCleanupSnapshot()
++	if err != nil || snapshot.ActivePath != path || snapshot.SegmentSeq != opts.SegmentSeq || snapshot.ActiveBytes != 0 || snapshot.ActiveSegmentMaxLSN != 0 || snapshot.PendingStableRotation != 0 || snapshot.PendingSuccessor {
++		t.Fatalf("fresh installed actual writer: snapshot=%+v err=%v", snapshot, err)
++	}
++}
++
++func TestCommandWALCleanupFreshFixedActiveEntryControls(t *testing.T) {
++	for _, fixedEntry := range []bool{false, true} {
++		t.Run(fmt.Sprintf("fixed_entry_%t", fixedEntry), func(t *testing.T) {
++			dir := t.TempDir()
++			writeCommandWALFrame(t, dir, 1, 1)
++			empty := writeEmptyFixedCleanupSegment(t, dir, 2, 8192)
++			database := &DB{dir: dir, commandWAL: true, durability: DurabilityDurable}
++			installCommandWALCleanupTwoRootRuntimeForTest(database, 1, 1)
++			fallback := database.durableRoot.slot ^ 1
++			record := database.durableRoot.slotRecord[fallback]
++			record.AppliedCommandLSN = 0
++			database.durableRoot.slotRecord[fallback] = record
++			installFreshFixedCleanupJournalEntryForTest(t, database, 1, fixedEntry)
++			before, err := database.commandJournal.CaptureCleanupSnapshot()
++			if err != nil {
++				t.Fatal(err)
++			}
++			t.Cleanup(func() {
++				rotations, err := database.commandJournal.TakePendingStableRotations()
++				if err != nil {
++					t.Error(err)
++				}
++				for _, rotation := range rotations {
++					rotation.Release()
++				}
++			})
++			database.testCommandWALCleanupAfterScanHook = func() {
++				payload, err := commitlog.EncodeRawKVBatchPayload([]commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: []byte("pending"), Value: make([]byte, 5<<20)}})
++				if err != nil {
++					t.Fatal(err)
++				}
++				lsn, err := database.commandJournal.AppendCommand(commitlog.CommandEnvelope{
++					Version: commitlog.CommandFrameVersionV2, DurabilityClass: commitlog.CommandDurabilityDurable,
++					Kind: commitlog.CommandKindRawKVBatch, Scope: commitlog.CommandScopeRawKV,
++					PayloadFormat: commitlog.PayloadFormatRawKVBatchV1, Payload: payload,
++				})
++				after, snapshotErr := database.commandJournal.CaptureCleanupSnapshot()
++				if err != nil || snapshotErr != nil || lsn != 2 || after.ActiveSegmentMaxLSN != lsn || after.PendingStableRotation == 0 || after.SegmentSeq != before.SegmentSeq+1 || after.ActivePath == before.ActivePath {
++					t.Fatalf("pending pressure witness: before=%+v after=%+v lsn=%d append=%v snapshot=%v", before, after, lsn, err, snapshotErr)
++				}
++			}
++			if err := database.CleanupCommandWALCoveredSegments(true); !errors.Is(err, commitlog.ErrCommandWALCleanupSnapshotStale) {
++				t.Fatalf("cleanup error=%v; require actual pending-ownership refusal", err)
++			}
++			if _, err := os.Stat(empty); err != nil {
++				t.Fatalf("refusal removed retained file: %v", err)
++			}
++			if database.commandWALCleanupRemoved.Load() != 0 || database.commandWALCleanupNamespaceDirty.Load() {
++				t.Fatal("refusal changed deletion accounting")
++			}
++		})
++	}
++}
++
++func TestCommandWALCleanupFreshFixedActiveRefusesExisting(t *testing.T) {
++	for _, state := range []string{"empty", "populated", "live", "fixed"} {
++		t.Run(state, func(t *testing.T) {
++			dir := t.TempDir()
++			path := filepath.Join(dir, "active.log")
++			if state == "fixed" {
++				if !commitlog.FixedWALCreationSupported() {
++					t.Skip("requires fixed-container creation")
++				}
++				writer, err := commitlog.NewFixedWriterWithCapacity(path, cleanupPressureCapacityForTest)
++				if err != nil {
++					t.Fatal(err)
++				}
++				if err := writer.Close(); err != nil {
++					t.Fatal(err)
++				}
++			} else {
++				data := []byte(nil)
++				if state == "populated" {
++					data = []byte("accepted contents must not be replaced")
++				}
++				if err := os.WriteFile(path, data, 0o600); err != nil {
++					t.Fatal(err)
++				}
++			}
++			var live *os.File
++			if state == "live" {
++				var err error
++				live, err = os.OpenFile(path, os.O_RDWR, 0)
++				if err != nil {
++					t.Fatal(err)
++				}
++				defer func() {
++					if err := live.Close(); err != nil {
++						t.Error(err)
++					}
++				}()
++			}
++			before, err := os.ReadFile(path)
++			if err != nil {
++				t.Fatal(err)
++			}
++			info, err := os.Stat(path)
++			if err != nil {
++				t.Fatal(err)
++			}
++			if err := prepareFreshFixedCleanupActiveForTest(path, false); !errors.Is(err, os.ErrExist) {
++				t.Fatalf("existing %s was not refused at exclusive admission: %v", state, err)
++			}
++			after, err := os.ReadFile(path)
++			linked, statErr := os.Stat(path)
++			if err != nil || statErr != nil || string(after) != string(before) || !os.SameFile(info, linked) {
++				t.Fatalf("refused %s changed bytes/identity: read=%v stat=%v", state, err, statErr)
++			}
++		})
++	}
++}
++
++// An occupied stream keeps its format under production Open. The same large
++// append can therefore be monotonic and safe: absence of physical rotation is
++// not evidence that cleanup ignored pending ownership.
++func TestCommandWALCleanupStreamAppendWithoutPendingRotation(t *testing.T) {
++	dir := t.TempDir()
++	writeCommandWALFrame(t, dir, 1, 1)
++	empty := writeEmptyFixedCleanupSegment(t, dir, 2, 8192)
++	writeCommandWALFrame(t, dir, 3, 2)
++	database := &DB{dir: dir, commandWAL: true, durability: DurabilityDurable}
++	installCommandWALCleanupTwoRootRuntimeForTest(database, 1, 2)
++	fallback := database.durableRoot.slot ^ 1
++	record := database.durableRoot.slotRecord[fallback]
++	record.AppliedCommandLSN = 0
++	database.durableRoot.slotRecord[fallback] = record
++	// Explicitly reopen the already occupied stream, not the next fresh path.
++	installCommandWALCleanupJournalOptionsForTest(t, database, commitlog.CommandJournalOptions{
++		MaxSegmentSize: database.walMaxSegmentBytes, InitialLSN: 2,
++		SegmentSeq: 3, CaptureStableResources: true,
++	}, true)
++	before, err := database.commandJournal.CaptureCleanupSnapshot()
++	if err != nil || before.ActiveSegmentMaxLSN != 2 || before.ActiveBytes == 0 || before.PendingStableRotation != 0 || before.PendingSuccessor {
++		t.Fatalf("occupied stream before append: snapshot=%+v err=%v", before, err)
++	}
++	database.testCommandWALCleanupAfterScanHook = func() {
++		payload, err := commitlog.EncodeRawKVBatchPayload([]commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: []byte("pending"), Value: make([]byte, 5<<20)}})
++		if err != nil {
++			t.Fatal(err)
++		}
++		lsn, err := database.commandJournal.AppendCommand(commitlog.CommandEnvelope{
++			Version: commitlog.CommandFrameVersionV2, DurabilityClass: commitlog.CommandDurabilityDurable,
++			Kind: commitlog.CommandKindRawKVBatch, Scope: commitlog.CommandScopeRawKV,
++			PayloadFormat: commitlog.PayloadFormatRawKVBatchV1, Payload: payload,
++		})
++		after, snapshotErr := database.commandJournal.CaptureCleanupSnapshot()
++		if err != nil || snapshotErr != nil || lsn != 3 || after.ActiveSegmentMaxLSN != lsn || after.PendingStableRotation != 0 || after.PendingSuccessor || after.SegmentSeq != before.SegmentSeq || after.ActivePath != before.ActivePath || after.ActiveBytes <= before.ActiveBytes {
++			t.Fatalf("legitimate stream append: before=%+v after=%+v lsn=%d append=%v snapshot=%v", before, after, lsn, err, snapshotErr)
++		}
++	}
++	if err := database.CleanupCommandWALCoveredSegments(true); err != nil {
++		t.Fatalf("safe monotonic stream cleanup: %v", err)
++	}
++	if _, err := os.Stat(empty); !errors.Is(err, os.ErrNotExist) {
++		t.Fatalf("safe eligible empty segment was not removed: %v", err)
++	}
++	if database.commandWALCleanupRemoved.Load() != 1 || database.commandWALCleanupNamespaceDirty.Load() {
++		t.Fatal("safe stream cleanup lost checked namespace accounting")
++	}
++}
+diff --git a/TreeDB/db/command_wal_close_pinned_cleanup_test.go b/TreeDB/db/command_wal_close_pinned_cleanup_test.go
+index 8db31151f..58f725f4a 100644
+--- a/TreeDB/db/command_wal_close_pinned_cleanup_test.go
++++ b/TreeDB/db/command_wal_close_pinned_cleanup_test.go
+@@ -3,6 +3,7 @@ package db
+ import (
+ 	"bytes"
+ 	"errors"
++	"fmt"
+ 	"os"
+ 	"path/filepath"
+ 	"sync"
+@@ -23,6 +24,10 @@ func TestCommandWALCloseRetainsPinnedEmptyRotationAndReplays(t *testing.T) {
+ 		t.Fatal(err)
+ 	}
+ 	t.Cleanup(func() { _ = database.Close() })
++	if err := prepareClosePinnedInitialFixedJournal(database); err != nil {
++		t.Fatalf("establish fixed initial owner before accepted write: %v", err)
++	}
++	t.Logf("initial DB-owned writer: %+v", database.commandJournal.WriterBufferStats())
+ 	key := []byte("large-relaxed-replay")
+ 	value := bytes.Repeat([]byte("r"), commandWALDeferredPointBufferRetainSize+8192)
+ 	if lsn, err := database.AppendRawKVPointCommandWALTrusted(commitlog.RawKVOpSet, key, value, false); err != nil || lsn != 1 {
+@@ -106,7 +111,11 @@ func TestCommandWALCloseRetainsPinnedEmptyRotationAndReplays(t *testing.T) {
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+-	defer func() { _ = reopened.Close() }()
++	defer func() {
++		if err := reopened.Close(); err != nil {
++			t.Errorf("Close replay owner: %v", err)
++		}
++	}()
+ 	got, err := reopened.Get(key)
+ 	if err != nil || !bytes.Equal(got, value) || reopened.State().AppliedCommandLSN < 1 {
+ 		t.Fatalf("retained relaxed replay lost after reopen: bytes=%d err=%v", len(got), err)
+@@ -214,3 +223,354 @@ func TestCommandWALClosePropagatesPinJoinedWithCleanupFailure(t *testing.T) {
+ 		})
+ 	}
+ }
++
++// prepareClosePinnedInitialFixedJournal is only for a fresh, unshared fixture.
++// No command, capture, snapshot or external borrower may precede this call.
++// It establishes the actual DB-owned writer; seeding a different predecessor
++// would not establish the oversized append's empty-rotation precondition.
++func prepareClosePinnedInitialFixedJournal(database *DB) error {
++	if database == nil || !database.commandWAL || database.commandJournal == nil {
++		return errors.New("initial fixed owner requires a live command-WAL fixture")
++	}
++	noBorrowers := func() bool {
++		database.commandWALRawBarrierMu.Lock()
++		defer database.commandWALRawBarrierMu.Unlock()
++		return len(database.commandWALRawBarriers) == 0 && database.legacyCommandProducers == 0 && database.semanticUnownedInFlight == 0 && !database.nativeSemanticActive.Load()
++	}
++	if !noBorrowers() {
++		return errors.New("initial fixed owner requires no publisher or semantic borrowers")
++	}
++	unlock, err := database.LockCommandWALPublishWithBarriers()
++	if err != nil {
++		return err
++	}
++	defer unlock()
++	if !noBorrowers() {
++		return errors.New("initial fixed owner acquired a publisher or semantic borrower")
++	}
++	fresh := func() error {
++		database.mu.RLock()
++		applied := database.meta.AppliedCommandLSN
++		database.mu.RUnlock()
++		if applied != 0 || database.commandWALSessionAppliedLSN != 0 || database.commandWALDurableLSN.Load() != 0 || database.commandWALDurableMarkerLSN.Load() != 0 || database.commandWALFlushPoisoned.Load() {
++			return errors.New("initial fixed owner requires zero unpoisoned LSN frontiers")
++		}
++		database.commandWALDebt.mu.Lock()
++		emptyDebt := len(database.commandWALDebt.entries) == 0 && database.commandWALDebt.capturePins == 0 && database.commandWALDebt.deferredReleaseLSN == 0
++		database.commandWALDebt.mu.Unlock()
++		if !emptyDebt {
++			return errors.New("initial fixed owner requires no dependency debt or captures")
++		}
++		if database.commandWALCleanupRemoved.Load() != 0 || database.commandWALCleanupNamespaceDirty.Load() || database.commandWALCleanupUnlinkedPending.Load() != 0 || database.commandWALClosedBytes.Load() != 0 {
++			return errors.New("initial fixed owner requires an unchanged cleanup namespace")
++		}
++		if runtime := database.rootPublication; runtime != nil {
++			runtime.mu.Lock()
++			empty := len(runtime.visibleMembers) == 0 && runtime.visibleHead == 0 && len(runtime.debt) == 0 && len(runtime.seals) == 0 && runtime.activeSeal == nil && runtime.poison == nil
++			runtime.mu.Unlock()
++			if !empty {
++				return errors.New("initial fixed owner requires no root-publication work")
++			}
++		}
++		// This proof also rejects pending/ambiguous durable-root publication.
++		// Its borrowed journal owner does not escape this validation call.
++		proof, err := database.captureDurableWALCleanupProofV1()
++		if err != nil {
++			return err
++		}
++		if proof.cleanupThrough != 0 || proof.durableWALLSN != 0 {
++			return errors.New("initial fixed owner requires a zero-frontier cleanup proof")
++		}
++		return nil
++	}
++	if err := fresh(); err != nil {
++		return err
++	}
++	old := database.commandJournal
++	snapshot, err := old.CaptureCleanupSnapshot()
++	if err != nil {
++		return err
++	}
++	path := filepath.Join(WALDirPath(database.dir), commitlog.CommandSegmentName(0, 1))
++	validate := func(journal *commitlog.CommandJournal, snapshot commitlog.CommandJournalCleanupSnapshot) error {
++		if snapshot.Lane != 0 || snapshot.SegmentSeq != 1 || snapshot.ActivePath != path || snapshot.ActiveBytes != 0 || snapshot.ActiveSegmentMaxLSN != 0 || snapshot.PendingStableRotation != 0 || snapshot.PendingSuccessor || journal.AppendedLSN() != 0 || journal.NextLSN() != 1 {
++			return errors.New("initial fixed owner requires the original empty lane0/seq1")
++		}
++		return journal.WithCleanupSnapshot(snapshot, func(registry *rootpublication.IdentityPinRegistry, _ commitlog.CommandJournalCleanupSnapshot) (bool, error) {
++			if registry.PinCount(snapshot.ActiveIdentity) != 0 {
++				return false, errors.New("initial fixed owner requires an unpinned identity")
++			}
++			return false, nil
++		})
++	}
++	if err := validate(old, snapshot); err != nil {
++		return err
++	}
++	if err := old.WithCleanupScan(snapshot, func() error {
++		return validateClosePinnedEmptyInitialSegment(database.dir, path, snapshot.ActiveIdentity)
++	}); err != nil {
++		return err
++	}
++	if err := old.Close(); err != nil {
++		return fmt.Errorf("close original empty journal: %w", err)
++	}
++	database.commandJournal = nil
++	if _, err := old.CaptureCleanupSnapshot(); err == nil {
++		return errors.New("original empty journal remained live after Close")
++	}
++	if err := validateClosePinnedEmptyInitialSegment(database.dir, path, snapshot.ActiveIdentity); err != nil {
++		return err
++	}
++	// The original owner is closed, all scan handles are closed, and its actual
++	// empty/unpinned identity was proved before this existing factory is used.
++	if err := seedClosePinnedEmptyFixedSegment(path); err != nil {
++		return err
++	}
++	journal, err := commitlog.OpenCommandJournal(WALDirPath(database.dir), commitlog.CommandJournalOptions{
++		MaxSegmentSize:                  database.walMaxSegmentBytes,
++		SegmentTargetBytes:              database.commandWALSegmentTargetBytes,
++		BufferSize:                      commandWALWriterBufferSize,
++		DeferredCommandBufferSize:       commandWALDeferredPointBufferSize,
++		DeferredCommandBufferRetainSize: commandWALDeferredPointBufferRetainSize,
++		Compress:                        false,
++		OnSegmentRotated:                database.observeCommandWALSegmentRotated,
++		InitialLSN:                      0,
++		SegmentSeq:                      1,
++		CaptureStableResources:          true,
++	})
++	if err != nil {
++		return err
++	}
++	// Immediate ownership installation leaves no fallible work or callback
++	// between acquisition and the original DB cleanup becoming responsible.
++	database.commandJournal = journal
++	current, err := journal.CaptureCleanupSnapshot()
++	if err != nil {
++		return err
++	}
++	if journal == old {
++		return errors.New("initial fixed owner did not change the closed owner")
++	}
++	if err := validate(journal, current); err != nil {
++		return err
++	}
++	stats := journal.WriterBufferStats()
++	if stats.Container != "fixed" || stats.BufferedWriterSize != commandWALWriterBufferSize || stats.CommandBufferLimit != commandWALDeferredPointBufferSize || stats.CommandBufferRetainLimit != commandWALDeferredPointBufferRetainSize {
++		return fmt.Errorf("unexpected initial fixed writer configuration: %+v", stats)
++	}
++	return fresh()
++}
++
++// The aggregate cleanup-deletion scan intentionally omits empty streams. Use
++// its exact-handle scanner directly to prove either a zero-byte stream or a
++// positively validated empty fixed reserve, never an EOF-only nonempty file.
++func validateClosePinnedEmptyInitialSegment(dir, path string, expected rootpublication.StableIdentity) (err error) {
++	segments, err := listWALSegments(dir)
++	if err != nil {
++		return err
++	}
++	commands := 0
++	for _, segment := range segments {
++		if segment.valueLog || !isCommandWALLaneSegment(segment) {
++			continue
++		}
++		commands++
++		if segment.path != path || segment.lane != 0 || segment.seq != 1 {
++			return errors.New("initial fixed owner has another command segment")
++		}
++	}
++	if commands != 1 {
++		return fmt.Errorf("initial fixed owner requires one command segment, got %d", commands)
++	}
++	file, err := os.Open(path)
++	if err != nil {
++		return err
++	}
++	defer func() { err = errors.Join(err, file.Close()) }()
++	identity, err := rootpublication.StableIdentityFromFile(file)
++	if err != nil {
++		return err
++	}
++	if !rootpublication.SamePhysicalIdentity(identity, expected) {
++		return errors.New("initial fixed owner identity changed before seed")
++	}
++	info, err := file.Stat()
++	if err != nil {
++		return err
++	}
++	scan, err := scanCommandWALSegmentFileWithOptions(file, 0, true, commandWALSegmentScanOptions{})
++	if err != nil {
++		return err
++	}
++	if scan.frames != 0 || scan.minLSN != 0 || scan.maxLSN != 0 || (info.Size() != 0 && !scan.emptyFixed) {
++		return errors.New("initial fixed owner segment is not validated empty")
++	}
++	return nil
++}
++
++func seedClosePinnedEmptyFixedSegment(path string) (err error) {
++	seed, err := commitlog.NewFixedWriterWithCapacity(path, 4_199_424)
++	if err != nil {
++		return err
++	}
++	defer func() { err = errors.Join(err, seed.Close()) }()
++	if seed.BufferStats().Container != "fixed" {
++		return errors.New("explicit empty fixed seed did not establish a fixed container")
++	}
++	return nil
++}
++
++func TestCommandWALCloseInitialFixedOwnerSetup(t *testing.T) {
++	if !commitlog.FixedWALCreationSupported() {
++		t.Skip("requires fixed-container creation")
++	}
++	database, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true})
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer func() {
++		if err := database.Close(); err != nil {
++			t.Errorf("Close setup owner: %v", err)
++		}
++	}()
++	old := database.commandJournal
++	if err := prepareClosePinnedInitialFixedJournal(database); err != nil {
++		t.Fatal(err)
++	}
++	if database.commandJournal == old {
++		t.Fatal("setup retained the original closed journal owner")
++	}
++	first, err := database.commandJournal.CaptureCleanupSnapshot()
++	if err != nil {
++		t.Fatal(err)
++	}
++	// A second fresh setup covers an already-fixed empty input. The existing
++	// factory must retain its exact physical identity instead of replacing it.
++	if err := prepareClosePinnedInitialFixedJournal(database); err != nil {
++		t.Fatal(err)
++	}
++	second, err := database.commandJournal.CaptureCleanupSnapshot()
++	if err != nil || !rootpublication.SamePhysicalIdentity(first.ActiveIdentity, second.ActiveIdentity) {
++		t.Fatalf("already-fixed empty identity changed: err=%v", err)
++	}
++	if database.commandJournal.WriterBufferStats().Container != "fixed" {
++		t.Fatal("actual installed owner is not fixed")
++	}
++}
++
++func TestCommandWALCloseInitialFixedOwnerRefusesAcceptedWrite(t *testing.T) {
++	if !commitlog.FixedWALCreationSupported() {
++		t.Skip("requires fixed-container creation")
++	}
++	database, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true})
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer func() {
++		if err := database.Close(); err != nil {
++			t.Errorf("Close accepted owner: %v", err)
++		}
++	}()
++	if _, err := database.AppendRawKVPointCommandWALTrusted(commitlog.RawKVOpSet, []byte("accepted"), []byte("value"), false); err != nil {
++		t.Fatal(err)
++	}
++	original := database.commandJournal
++	before, err := original.CaptureCleanupSnapshot()
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := prepareClosePinnedInitialFixedJournal(database); err == nil {
++		t.Fatal("setup accepted a nonempty journal")
++	}
++	after, err := original.CaptureCleanupSnapshot()
++	if err != nil || database.commandJournal != original || !rootpublication.SamePhysicalIdentity(before.ActiveIdentity, after.ActiveIdentity) || original.AppendedLSN() != 1 {
++		t.Fatalf("refusal changed accepted owner or identity: err=%v", err)
++	}
++}
++
++func TestCommandWALCloseInitialFixedOwnerRefusesCapture(t *testing.T) {
++	if !commitlog.FixedWALCreationSupported() {
++		t.Skip("requires fixed-container creation")
++	}
++	for _, method := range []string{"prefix", "journal"} {
++		t.Run(method, func(t *testing.T) {
++			database, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true})
++			if err != nil {
++				t.Fatal(err)
++			}
++			defer func() {
++				if err := database.Close(); err != nil {
++					t.Errorf("Close captured owner: %v", err)
++				}
++			}()
++			if method == "prefix" {
++				capture, _, err := database.CaptureCommandWALPrefix()
++				if err != nil {
++					t.Fatal(err)
++				}
++				// Consume the real debt/file and teardown pins before DB cleanup,
++				// including after a fatal assertion on the refusal path.
++				defer func() {
++					if _, err := capture.Sync(); err != nil {
++						t.Errorf("Sync captured empty prefix: %v", err)
++					}
++				}()
++			} else {
++				capture, err := database.commandJournal.CaptureSync(nil)
++				if err != nil {
++					t.Fatal(err)
++				}
++				// This genuine journal-only capture exercises the identity pin
++				// refusal independently of the DB dependency-debt capture count.
++				defer capture.Release()
++			}
++			original := database.commandJournal
++			if err := prepareClosePinnedInitialFixedJournal(database); err == nil {
++				t.Fatal("setup accepted a captured original journal")
++			}
++			if _, err := original.CaptureCleanupSnapshot(); err != nil || database.commandJournal != original {
++				t.Fatalf("capture refusal closed or rebound original owner: %v", err)
++			}
++		})
++	}
++}
++
++func TestCommandWALCloseInitialFixedSeed(t *testing.T) {
++	if !commitlog.FixedWALCreationSupported() {
++		t.Skip("requires fixed-container creation")
++	}
++	t.Run("empty-stream", func(t *testing.T) {
++		path := filepath.Join(t.TempDir(), "empty.log")
++		file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
++		if err != nil {
++			t.Fatal(err)
++		}
++		if err := file.Close(); err != nil {
++			t.Fatal(err)
++		}
++		if err := seedClosePinnedEmptyFixedSegment(path); err != nil {
++			t.Fatal(err)
++		}
++		reader, err := commitlog.NewReader(path)
++		if err != nil {
++			t.Fatal(err)
++		}
++		defer func() {
++			if err := reader.Close(); err != nil {
++				t.Errorf("Close seeded reader: %v", err)
++			}
++		}()
++		if !reader.IsEmptyFixedContainer() {
++			t.Fatal("closed empty stream was not initialized as a validated empty fixed reserve")
++		}
++	})
++	t.Run("missing-parent", func(t *testing.T) {
++		path := filepath.Join(t.TempDir(), "absent", "empty.log")
++		if err := seedClosePinnedEmptyFixedSegment(path); err == nil {
++			t.Fatal("factory failure did not propagate")
++		}
++		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
++			t.Fatalf("failed factory left an output file: %v", err)
++		}
++	})
++}
+diff --git a/TreeDB/db/command_wal_publish_test.go b/TreeDB/db/command_wal_publish_test.go
+index ba5d647ef..a19e409a3 100644
+--- a/TreeDB/db/command_wal_publish_test.go
++++ b/TreeDB/db/command_wal_publish_test.go
+@@ -1439,6 +1439,12 @@ func installCommandWALCleanupJournalOwnerForTest(tb testing.TB, db *DB, appliedL
+ 	if db.commandJournal != nil {
+ 		return
+ 	}
++	opts := commandWALCleanupJournalOptionsForTest(tb, db, appliedLSN)
++	installCommandWALCleanupJournalOptionsForTest(tb, db, opts, false)
++}
++
++func commandWALCleanupJournalOptionsForTest(tb testing.TB, db *DB, appliedLSN uint64) commitlog.CommandJournalOptions {
++	tb.Helper()
+ 	segments, err := listRecoverySegments(db.dir)
+ 	if err != nil {
+ 		tb.Fatalf("list cleanup journal segments: %v", err)
+@@ -1454,12 +1460,17 @@ func installCommandWALCleanupJournalOwnerForTest(tb testing.TB, db *DB, appliedL
+ 	if segmentSeq != 0 && !hasTerminalTail {
+ 		segmentSeq++
+ 	}
+-	journal, err := commitlog.OpenCommandJournal(WALDirPath(db.dir), commitlog.CommandJournalOptions{
++	return commitlog.CommandJournalOptions{
+ 		MaxSegmentSize:         db.walMaxSegmentBytes,
+ 		InitialLSN:             appliedLSN,
+ 		SegmentSeq:             segmentSeq,
+ 		CaptureStableResources: true,
+-	})
++	}
++}
++
++func installCommandWALCleanupJournalOptionsForTest(tb testing.TB, db *DB, opts commitlog.CommandJournalOptions, checkedClose bool) {
++	tb.Helper()
++	journal, err := commitlog.OpenCommandJournal(WALDirPath(db.dir), opts)
+ 	if err != nil {
+ 		tb.Fatalf("OpenCommandJournal cleanup owner: %v", err)
+ 	}
+@@ -1468,7 +1479,9 @@ func installCommandWALCleanupJournalOwnerForTest(tb testing.TB, db *DB, appliedL
+ 		if db.commandJournal == journal {
+ 			db.commandJournal = nil
+ 		}
+-		_ = journal.Close()
++		if err := journal.Close(); checkedClose && err != nil {
++			tb.Errorf("Close fixed cleanup journal owner: %v", err)
++		}
+ 	})
+ }
+ 
+diff --git a/TreeDB/db/command_wal_zero_frontier_safety_test.go b/TreeDB/db/command_wal_zero_frontier_safety_test.go
+index ec0e07cdb..039f04d87 100644
+--- a/TreeDB/db/command_wal_zero_frontier_safety_test.go
++++ b/TreeDB/db/command_wal_zero_frontier_safety_test.go
+@@ -13,6 +13,11 @@ import (
+ )
+ 
+ func zeroFrontierCleanupDBForTest(t *testing.T, dir string, durableLSN uint64) *DB {
++	t.Helper()
++	return zeroFrontierCleanupDBWithActiveForTest(t, dir, durableLSN, false)
++}
++
++func zeroFrontierCleanupDBWithActiveForTest(t *testing.T, dir string, durableLSN uint64, fixedActive bool) *DB {
+ 	t.Helper()
+ 	database := &DB{dir: dir, commandWAL: true, durability: DurabilityDurable}
+ 	installCommandWALCleanupTwoRootRuntimeForTest(database, 1, durableLSN)
+@@ -20,7 +25,11 @@ func zeroFrontierCleanupDBForTest(t *testing.T, dir string, durableLSN uint64) *
+ 	record := database.durableRoot.slotRecord[fallback]
+ 	record.AppliedCommandLSN = 0
+ 	database.durableRoot.slotRecord[fallback] = record
+-	installCommandWALCleanupJournalOwnerForTest(t, database, durableLSN)
++	if fixedActive {
++		installFreshFixedCleanupJournalOwnerForTest(t, database, durableLSN)
++	} else {
++		installCommandWALCleanupJournalOwnerForTest(t, database, durableLSN)
++	}
+ 	return database
+ }
+ 
+@@ -46,7 +55,7 @@ func TestCommandWALCleanupZeroFrontierSafety(t *testing.T) {
+ 				emptySeq++
+ 			}
+ 			empty := writeEmptyFixedCleanupSegment(t, dir, emptySeq, 8192)
+-			database := zeroFrontierCleanupDBForTest(t, dir, durableLSN)
++			database := zeroFrontierCleanupDBWithActiveForTest(t, dir, durableLSN, variant == "pending_rotation")
+ 			wantErr := error(ErrCommandWALAppliedLSNNonContig)
+ 			switch variant {
+ 			case "duplicate_replay":
+@@ -113,6 +122,10 @@ func TestCommandWALCleanupZeroFrontierSafety(t *testing.T) {
+ 				}
+ 			case "pending_rotation":
+ 				wantErr = commitlog.ErrCommandWALCleanupSnapshotStale
++				before, err := database.commandJournal.CaptureCleanupSnapshot()
++				if err != nil || before.ActiveBytes != 0 || before.ActiveSegmentMaxLSN != 0 || before.PendingStableRotation != 0 || before.PendingSuccessor {
++					t.Fatalf("fresh actual cleanup owner: snapshot=%+v err=%v", before, err)
++				}
+ 				t.Cleanup(func() {
+ 					rotations, err := database.commandJournal.TakePendingStableRotations()
+ 					if err != nil {
+@@ -131,7 +144,7 @@ func TestCommandWALCleanupZeroFrontierSafety(t *testing.T) {
+ 					if err != nil {
+ 						t.Fatal(err)
+ 					}
+-					_, err = database.commandJournal.AppendCommand(commitlog.CommandEnvelope{
++					lsn, err := database.commandJournal.AppendCommand(commitlog.CommandEnvelope{
+ 						Version: commitlog.CommandFrameVersionV2, DurabilityClass: commitlog.CommandDurabilityDurable,
+ 						Kind: commitlog.CommandKindRawKVBatch, Scope: commitlog.CommandScopeRawKV,
+ 						PayloadFormat: commitlog.PayloadFormatRawKVBatchV1, Payload: payload,
+@@ -139,6 +152,10 @@ func TestCommandWALCleanupZeroFrontierSafety(t *testing.T) {
+ 					if err != nil {
+ 						t.Fatal(err)
+ 					}
++					after, err := database.commandJournal.CaptureCleanupSnapshot()
++					if err != nil || lsn != durableLSN+1 || after.ActiveSegmentMaxLSN != lsn || after.PendingStableRotation == 0 || after.SegmentSeq != before.SegmentSeq+1 || after.ActivePath == before.ActivePath {
++						t.Fatalf("actual pressure append did not activate pending rotation: before=%+v after=%+v lsn=%d err=%v", before, after, lsn, err)
++					}
+ 				}
+ 			case "replaced_identity":
+ 				wantErr = ErrRecoveryRequired
+diff --git a/TreeDB/db/db.go b/TreeDB/db/db.go
+index 06f27d153..16a396b38 100644
+--- a/TreeDB/db/db.go
++++ b/TreeDB/db/db.go
+@@ -1936,7 +1936,12 @@ func (db *DB) captureSnapshotForReadWithValueLogPublicationLockHeld(snap *Snapsh
+ 		sameTree := snap.treePager == idx.pager &&
+ 			snap.treeRoot == state.RootPageID
+ 		if !sameTree {
+-			snap.tree.Reset(idx.pager, &snap.reader, state.RootPageID)
++			if oneShot {
++				bindings := snap.reader.appendReadBindings()
++				snap.tree.ResetAppendReadBindings(idx.pager, &bindings, state.RootPageID)
++			} else {
++				snap.tree.Reset(idx.pager, &snap.reader, state.RootPageID)
++			}
+ 			snap.treePager = idx.pager
+ 			snap.treeRoot = state.RootPageID
+ 		}
+diff --git a/TreeDB/db/one_shot_append_bindings_test.go b/TreeDB/db/one_shot_append_bindings_test.go
+new file mode 100644
+index 000000000..9915bb48f
+--- /dev/null
++++ b/TreeDB/db/one_shot_append_bindings_test.go
+@@ -0,0 +1,80 @@
++package db
++
++import (
++	"bytes"
++	"errors"
++	"testing"
++
++	"github.com/snissn/gomap/TreeDB/page"
++)
++
++type appendBindingsBackingReader struct {
++	value    []byte
++	checksum bool
++	err      error
++	reads    int
++}
++
++func (r *appendBindingsBackingReader) Read(page.ValuePtr) ([]byte, error) {
++	r.reads++
++	return r.value, r.err
++}
++func (r *appendBindingsBackingReader) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
++	return r.Read(ptr)
++}
++func (r *appendBindingsBackingReader) ReadChecksumEnabled() bool { return r.checksum }
++
++func TestOneShotAppendBindingsUseCurrentOwner(t *testing.T) {
++	first, second := &valueReader{}, &valueReader{}
++	for _, r := range []*valueReader{first, second} {
++		b := r.appendReadBindings()
++		if b.Reader != r || b.Appender != r || b.Batcher != r || b.ToReader != r ||
++			b.LeafToReader != r || b.LeafToState != r || b.LeafView != r ||
++			b.LeafViewState != r || b.VerifyMarker != r {
++			t.Fatal("private constructor mixed or retained another reader")
++		}
++	}
++	// This is a limitation witness, not an authentication/refusal control.
++	// Only the private constructor supplies production bundles. The Tree API
++	// cannot prove arbitrary public-field bundles have one owner.
++	mixed := first.appendReadBindings()
++	mixed.Appender = second
++	if mixed.Reader != first || mixed.Appender != second {
++		t.Fatal("mixed-owner limitation witness did not retain distinct readers")
++	}
++}
++
++func TestOneShotAppendBindingsRetainMutablePolicy(t *testing.T) {
++	first := &appendBindingsBackingReader{value: []byte("first"), checksum: true}
++	second := &appendBindingsBackingReader{value: []byte("second"), checksum: false}
++	r := &valueReader{}
++	r.reconfigure(first, nil)
++	b := r.appendReadBindings()
++	policy := b.Reader.(readChecksumCapability)
++	dst := make([]byte, 0, 32)
++	if !policy.ReadChecksumEnabled() {
++		t.Fatal("initial backing checksum policy lost")
++	}
++	got, err := b.Appender.ReadUnsafeAppend(page.ValuePtr{}, dst)
++	if err != nil || !bytes.Equal(got, first.value) || first.reads != 1 {
++		t.Fatalf("first current backing read: %q %v calls=%d", got, err, first.reads)
++	}
++	r.reconfigure(second, nil)
++	if policy.ReadChecksumEnabled() {
++		t.Fatal("same concrete reader cached old backing policy")
++	}
++	got, err = b.Appender.ReadUnsafeAppend(page.ValuePtr{}, dst)
++	if err != nil || !bytes.Equal(got, second.value) || second.reads != 1 || first.reads != 1 {
++		t.Fatalf("reconfigured backing read: %q %v first=%d second=%d", got, err, first.reads, second.reads)
++	}
++	failure := errors.New("actual current backing failure")
++	second.err = failure
++	if _, err = b.Appender.ReadUnsafeAppend(page.ValuePtr{}, dst); !errors.Is(err, failure) {
++		t.Fatal("current backing error changed")
++	}
++	before := second.reads
++	r.reconfigure(nil, nil)
++	if _, err = b.Reader.Read(page.ValuePtr{}); err == nil || second.reads != before {
++		t.Fatal("detached reader retained old backing access")
++	}
++}
+diff --git a/TreeDB/db/value_reader.go b/TreeDB/db/value_reader.go
+index 1084acd74..b6ad73753 100644
+--- a/TreeDB/db/value_reader.go
++++ b/TreeDB/db/value_reader.go
+@@ -57,6 +57,23 @@ func (r *valueReader) reconfigure(vlogs tree.SlabReader, leafPageCache *leafPage
+ 	r.leafPageCache = leafPageCache
+ }
+ 
++// appendReadBindings is used only while a private one-shot capture owns r's
++// current backing. Every field comes directly from the same concrete pointer;
++// no old reader, backing policy or interface-discovery result is cached.
++func (r *valueReader) appendReadBindings() tree.AppendReadBindings {
++	return tree.AppendReadBindings{
++		Reader:        r,
++		Appender:      r,
++		Batcher:       r,
++		ToReader:      r,
++		LeafToReader:  r,
++		LeafToState:   r,
++		LeafView:      r,
++		LeafViewState: r,
++		VerifyMarker:  r,
++	}
++}
++
+ func (r valueReader) Read(ptr page.ValuePtr) ([]byte, error) {
+ 	if r.vlogs == nil {
+ 		return nil, errors.New("treedb: missing value-log reader")
+diff --git a/TreeDB/db/vlog_rewrite_test.go b/TreeDB/db/vlog_rewrite_test.go
+index 8bc1afd6f..705117c5b 100644
+--- a/TreeDB/db/vlog_rewrite_test.go
++++ b/TreeDB/db/vlog_rewrite_test.go
+@@ -2167,6 +2167,16 @@ func TestValueLogRewriteOnline_ProtectedPathsDoNotKeepHistoricalRewriteLanes(t *
+ 		filepath.Join(dir, "value_vlog", "value-l250-000002.log"),
+ 	} {
+ 		if _, err := os.Stat(path); !os.IsNotExist(err) {
++			// Observe only after the original absence check failed. These are
++			// sequential snapshots, not one atomic retirement/identity view.
++			t.Logf("rewrite cleanup failure-only observation: path=%s stat_error=%v rewrite=%+v", filepath.Base(path), err, stats)
++			segments, zombieBytes, pinned, pinnedBytes, unpinned, unpinnedBytes := db.valueLogManager.ZombieStats()
++			t.Logf("rewrite cleanup failure-only zombies: manager_present=%t segments=%d bytes=%d pinned_segments=%d pinned_bytes=%d unpinned_segments=%d unpinned_bytes=%d", db.valueLogManager != nil, segments, zombieBytes, pinned, pinnedBytes, unpinned, unpinnedBytes)
++			for _, seq := range []uint32{1, 2} {
++				id, encodeErr := valuelog.EncodeFileID(250, seq)
++				t.Logf("rewrite cleanup failure-only historical ID: lane=250 seq=%d id=%d encode_error=%v tracked_zombie=%t", seq, id, encodeErr, db.valueLogManager.IsTrackedZombie(id))
++			}
++			t.Logf("rewrite cleanup failure-only identity registry: present=%t stats=%+v", db.valueLogIdentityPins != nil, db.valueLogIdentityPins.Stats())
+ 			t.Fatalf("expected %s to be deleted after rewrite cleanup, err=%v", filepath.Base(path), err)
+ 		}
+ 	}
+diff --git a/TreeDB/tree/append_read_bindings_test.go b/TreeDB/tree/append_read_bindings_test.go
+new file mode 100644
+index 000000000..075943885
+--- /dev/null
++++ b/TreeDB/tree/append_read_bindings_test.go
+@@ -0,0 +1,140 @@
++package tree
++
++import (
++	"testing"
++
++	"github.com/snissn/gomap/TreeDB/page"
++	"github.com/snissn/gomap/TreeDB/pager"
++)
++
++type appendBindingsTestReader struct{ checksum bool }
++
++func (r *appendBindingsTestReader) Read(page.ValuePtr) ([]byte, error) { return nil, nil }
++
++func (r *appendBindingsTestReader) ReadUnsafe(page.ValuePtr) ([]byte, error) { return nil, nil }
++func (r *appendBindingsTestReader) ReadUnsafeAppend(_ page.ValuePtr, dst []byte) ([]byte, error) {
++	return dst, nil
++}
++func (r *appendBindingsTestReader) ReadUnsafeAppendBatch(_ []page.ValuePtr, dst [][]byte) ([][]byte, error) {
++	return dst, nil
++}
++func (r *appendBindingsTestReader) ReadUnsafeTo(_ page.ValuePtr, dst []byte) ([]byte, bool, error) {
++	return dst, true, nil
++}
++func (r *appendBindingsTestReader) ReadLeafLogPageUnsafeTo(_ page.LeafLogPtr, dst []byte) ([]byte, bool, error) {
++	return dst, true, nil
++}
++func (r *appendBindingsTestReader) ReadLeafLogPageUnsafeToWithState(_ page.LeafLogPtr, dst []byte) ([]byte, bool, LeafLogPageReadState, error) {
++	return dst, true, LeafLogPageReadState{}, nil
++}
++func (r *appendBindingsTestReader) ReadLeafLogPageUnsafeView(page.LeafLogPtr) ([]byte, LeafLogPageViewLease, bool, error) {
++	return nil, nil, false, nil
++}
++func (r *appendBindingsTestReader) ReadLeafLogPageUnsafeViewWithState(page.LeafLogPtr) ([]byte, LeafLogPageViewLease, bool, LeafLogPageReadState, error) {
++	return nil, nil, false, LeafLogPageReadState{}, nil
++}
++func (r *appendBindingsTestReader) MarkLeafLogPageChecksumVerified(page.LeafLogPtr) {}
++
++func (r *appendBindingsTestReader) ReadChecksumEnabled() bool { return r.checksum }
++
++func appendBindingsForTest(r *appendBindingsTestReader) AppendReadBindings {
++	return AppendReadBindings{
++		Reader: r, Appender: r, Batcher: r, ToReader: r,
++		LeafToReader: r, LeafToState: r, LeafView: r, LeafViewState: r, VerifyMarker: r,
++	}
++}
++
++type appendBindingsKeyReader struct {
++	*appendBindingsTestReader
++	enabled bool
++	calls   int
++}
++
++func (r *appendBindingsKeyReader) KeyAwareEnabled() bool { r.calls++; return r.enabled }
++func (r *appendBindingsKeyReader) ReadUnsafeForKey(page.ValuePtr, []byte) ([]byte, error) {
++	return nil, nil
++}
++func (r *appendBindingsKeyReader) ReadUnsafeAppendForKey(_ page.ValuePtr, _ []byte, dst []byte) ([]byte, error) {
++	return dst, nil
++}
++func (r *appendBindingsKeyReader) ReadUnsafeAppendBatchForKeys(_ []page.ValuePtr, _ [][]byte, dst [][]byte) ([][]byte, error) {
++	return dst, nil
++}
++
++func TestTreeAppendReadBindingsMatchReset(t *testing.T) {
++	first := &appendBindingsTestReader{checksum: true}
++	second := &appendBindingsTestReader{checksum: false}
++	dirty := &appendBindingsKeyReader{appendBindingsTestReader: first, enabled: true}
++	original := Tree{}
++	original.Reset(&pager.Pager{}, dirty, 41)
++	original.negativeFilter = &NegativeFilter{}
++	original.pageLimit = 17
++	original.pageNamespace = 23
++	original.primaryLocal = true
++	for _, tc := range []struct {
++		name   string
++		reader *appendBindingsTestReader
++		root   uint64
++	}{
++		{"first", first, 51},
++		{"second", second, 52},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			p := &pager.Pager{}
++			generic, bound := original, original
++			generic.Reset(p, tc.reader, tc.root)
++			bindings := appendBindingsForTest(tc.reader)
++			bound.ResetAppendReadBindings(p, &bindings, tc.root)
++			if bound != generic {
++				t.Fatalf("complete Tree state differs: bound=%+v generic=%+v", bound, generic)
++			}
++			if bound.shouldVerifyLeafRefChecksum() != tc.reader.checksum {
++				t.Fatal("current checksum policy lost")
++			}
++			tc.reader.checksum = !tc.reader.checksum
++			if bound.shouldVerifyLeafRefChecksum() != tc.reader.checksum {
++				t.Fatal("checksum policy frozen at bind")
++			}
++			// The actual release-side operation stays the ordinary nil Reset.
++			bound.Reset(nil, nil, 0)
++			if bound != (Tree{}) {
++				t.Fatal("nil Reset retained binding aliases")
++			}
++		})
++	}
++	t.Run("nil", func(t *testing.T) {
++		p := &pager.Pager{}
++		generic, bound := original, original
++		generic.Reset(p, nil, 61)
++		bound.ResetAppendReadBindings(p, nil, 61)
++		if bound != generic {
++			t.Fatal("nil bundle differs from ordinary empty-reader Reset")
++		}
++	})
++}
++
++func TestTreeGenericResetRetainsDynamicKeyPolicy(t *testing.T) {
++	r := &appendBindingsKeyReader{appendBindingsTestReader: &appendBindingsTestReader{}}
++	tr := Tree{}
++	for _, tc := range []struct {
++		name    string
++		enabled bool
++	}{
++		{"enabled", true},
++		{"disabled", false},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			r.enabled = tc.enabled
++			before := r.calls
++			tr.Reset(nil, r, 1)
++			if r.calls != before+1 {
++				t.Fatal("ordinary Reset omitted current key policy call")
++			}
++			if (tr.slabKeyReader != nil) != tc.enabled ||
++				(tr.slabKeyAppender != nil) != tc.enabled ||
++				(tr.slabKeyBatcher != nil) != tc.enabled {
++				t.Fatal("ordinary Reset ignored changed policy on same reader")
++			}
++		})
++	}
++}
+diff --git a/TreeDB/tree/tree.go b/TreeDB/tree/tree.go
+index 3e7694838..b60c7153f 100644
+--- a/TreeDB/tree/tree.go
++++ b/TreeDB/tree/tree.go
+@@ -441,6 +441,50 @@ func (t *Tree) Reset(p *pager.Pager, sr SlabReader, root uint64) {
+ 	t.rootPageID = root
+ }
+ 
++// AppendReadBindings supplies the complete non-key-aware append/leaf reader
++// binding for a caller that already owns the current reader. All nine fields
++// must refer to that same live reader. This is a trusted caller contract, not
++// authentication of arbitrary or mixed-owner interface values.
++//
++// Keep the bundle local to initialization. ResetAppendReadBindings copies its
++// fields and does not retain the bundle itself. Arbitrary readers and readers
++// with a dynamic key-aware capability must continue to use Reset.
++type AppendReadBindings struct {
++	Reader        SlabReader
++	Appender      slabUnsafeAppender
++	Batcher       slabUnsafeBatchAppender
++	ToReader      slabUnsafeToReader
++	LeafToReader  leafLogPageUnsafeToReader
++	LeafToState   leafLogPageUnsafeToStateReader
++	LeafView      leafLogPageUnsafeViewReader
++	LeafViewState leafLogPageUnsafeViewStateReader
++	VerifyMarker  leafLogPageChecksumVerifyMarker
++}
++
++// ResetAppendReadBindings rebinds a complete, same-owner append reader without
++// optional capability discovery. It clears every other Tree field, including
++// key-aware interfaces, negative-filter coverage and selected page bounds.
++// A nil bundle has the same empty-reader semantics as Reset(p, nil, root).
++func (t *Tree) ResetAppendReadBindings(p *pager.Pager, b *AppendReadBindings, root uint64) {
++	if b == nil {
++		t.Reset(p, nil, root)
++		return
++	}
++	*t = Tree{
++		pager:               p,
++		slabReader:          b.Reader,
++		slabAppender:        b.Appender,
++		slabBatcher:         b.Batcher,
++		slabToReader:        b.ToReader,
++		leafLogToReader:     b.LeafToReader,
++		leafLogToState:      b.LeafToState,
++		leafLogView:         b.LeafView,
++		leafLogViewState:    b.LeafViewState,
++		leafLogVerifyMarker: b.VerifyMarker,
++		rootPageID:          root,
++	}
++}
++
+ // SetRoot updates the root page ID.
+ func (t *Tree) SetRoot(root uint64) {
+ 	t.negativeFilter = nil
+diff --git a/cmd/benchprof/README.md b/cmd/benchprof/README.md
+index 1bdaecf7f..da69bcfc0 100644
+--- a/cmd/benchprof/README.md
++++ b/cmd/benchprof/README.md
+@@ -1109,3 +1109,13 @@ reported separately. Fixed-process artifacts live under
+ `public-write-plan.json`, `source-binding.json`, `cell-*-receipt.json`,
+ `cell-*.log`, and `result.json`. This diagnostic has no numerical acceptance
+ threshold and does not replace final G1 or actual command/Mongo gates.
++
++
++The private Linux `GOMAP_DIAGNOSTIC_STEADY_RUSAGE` opt-in records two bounded
++process-usage reads around unified-bench's original `batch_write_steady` work
++through its successful final checkpoint. See the [receipt boundaries and failure
++contract](../unified_bench/README.md#opt-in-steady-work-process-usage-receipt).
++Its WORK_INTERVAL JSON receipt is not a benchprof input, does not equal pprof's
++sampled CPU population, and cannot certify later DB Close or lifecycle success.
++An empty opt-in performs no usage reads/writes. Benchmark/profile names, parsers,
++checker and gate thresholds remain unchanged.
+diff --git a/cmd/unified_bench/README.md b/cmd/unified_bench/README.md
+index 790bacfd7..a900dd62d 100644
+--- a/cmd/unified_bench/README.md
++++ b/cmd/unified_bench/README.md
+@@ -1904,3 +1904,44 @@ reported separately. Fixed-process artifacts live under
+ `public-write-plan.json`, `source-binding.json`, `cell-*-receipt.json`,
+ `cell-*.log`, and `result.json`. This diagnostic has no numerical acceptance
+ threshold and does not replace final G1 or actual command/Mongo gates.
++
++
++### Opt-in steady-work process usage receipt
++
++Linux-only diagnostics can set `GOMAP_DIAGNOSTIC_STEADY_RUSAGE` to an absolute,
++new JSON receipt path. Select exactly one DB, only `batch_write_steady`, and its
++existing `-cpuprofile`/`-cpuprofile-tests batch_write_steady` path. The DB must
++support the original final checkpoint. An empty variable performs zero usage
++reads or receipt writes; unsupported platforms refuse selected mode before DB
++initialization. This private opt-in adds no benchmark, profile filename, result
++schema, threshold or production-default change. The existing `unified-bench-tests`
++workflow pins Go 1.26.10, retains the platform vet/package tests, and adds Linux
++normal/race JSON controls checked by `check_steady_rusage_events.py` plus raw
++event, literal-exit and receipt artifact uploads. Those qualification receipts do not replace any performance acceptance gate.
++
++The two `RUSAGE_SELF` reads surround the original steady work and successful
++final checkpoint. They follow CPU-profile start and precede CPU-profile stop;
++the original throughput timer excludes their read windows. The receipt records
++actual wall bounds, monotonic read costs and interval bounds, user/system CPU,
++minor/major faults and voluntary/involuntary context switches. It covers all
++threads of this process, not child CPU, and is not pprof's sampled population.
++No observer cost is subtracted. The receipt is written after profiling stops.
++
++`Scope=WORK_INTERVAL` and `Completed=true` certify only the two-read interval,
++not post-run checkpoints, DB Close or lifecycle success. Missing/read-error/
++regressing counters fail the diagnostic; a failed original final checkpoint
++cannot produce a completed interval. Original errors remain first and secondary
++receipt write/Close/removal errors remain joined. Any nonzero benchmark or
++lifecycle result still fails the run. The destination must be absent; output is
++exclusive mode 0600 and bounded to 4096 bytes. These JSON receipts are separate
++diagnostic artifacts, not benchprof inputs or a replacement CPU gate. Preserve
++all original samples and gate failures when interpreting them.
++
++Selected-mode failures still attempt each opened DB's original Close exactly
++once. A failed Close is retained and its directory is left in place; it is not
++retried. Successfully closed directories are removed with checked errors unless
++`-keep` is selected. Original work errors remain first when cleanup errors are
++joined. The default-off path retains its original shutdown behavior. Before DB
++initialization the receipt path must have an existing parent and must not alias
++configured CPU, allocation, checkpoint, block, mutex, trace or profile-directory
++report outputs (including generated per-test names and benchprof insights).
+diff --git a/cmd/unified_bench/main.go b/cmd/unified_bench/main.go
+index e64fc9cd3..311102d24 100644
+--- a/cmd/unified_bench/main.go
++++ b/cmd/unified_bench/main.go
+@@ -1115,6 +1115,8 @@ func startCheckpointCPUProfile(cfg BenchConfig, profileHooks benchmarkProfileHoo
+ }
+ 
+ type benchmarkProfileHooks struct {
++	readProcessUsage                func() (processUsageCounters, error)
++	writeProcessUsage               func(string, *processUsageReceipt) error
+ 	startCPUProfile                 func(io.Writer) error
+ 	stopCPUProfile                  func()
+ 	writeAllocsSnapshotTemp         func(string) (string, error)
+@@ -1125,6 +1127,8 @@ type benchmarkProfileHooks struct {
+ 
+ func defaultBenchmarkProfileHooks() benchmarkProfileHooks {
+ 	return benchmarkProfileHooks{
++		readProcessUsage:                readProcessUsage,
++		writeProcessUsage:               writeProcessUsageReceipt,
+ 		startCPUProfile:                 pprof.StartCPUProfile,
+ 		stopCPUProfile:                  pprof.StopCPUProfile,
+ 		writeAllocsSnapshotTemp:         writeAllocsSnapshotTemp,
+@@ -1140,6 +1144,12 @@ func profileHooksFromConfig(cfg BenchConfig) benchmarkProfileHooks {
+ 		return hooks
+ 	}
+ 	override := *cfg.profileHooks
++	if override.readProcessUsage != nil {
++		hooks.readProcessUsage = override.readProcessUsage
++	}
++	if override.writeProcessUsage != nil {
++		hooks.writeProcessUsage = override.writeProcessUsage
++	}
+ 	if override.startCPUProfile != nil {
+ 		hooks.startCPUProfile = override.startCPUProfile
+ 	}
+@@ -2459,7 +2469,7 @@ func (p *periodicCheckpoint) Add(db kvstore.DB, opsDelta int, bytesDelta int64)
+ 	return cp.Checkpoint()
+ }
+ 
+-func runBenchmark(cfg BenchConfig) (BenchRun, error) {
++func runBenchmark(cfg BenchConfig) (result BenchRun, resultErr error) {
+ 	if cfg.Keys <= 0 {
+ 		return BenchRun{}, fmt.Errorf("invalid keys: %d", cfg.Keys)
+ 	}
+@@ -2497,9 +2507,23 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
+ 		return BenchRun{}, err
+ 	}
+ 	testsToRun := normalizeTests(parseList(cfg.TestsArg))
++	usage, err := selectedProcessUsage(cfg, dbNames, testsToRun, processUsageSupported, profileHooks.readProcessUsage)
++	if err != nil {
++		return BenchRun{}, err
++	}
+ 
+ 	// Initialize DBs
+ 	instances := make([]*DBInstance, 0)
++	// Only the selected diagnostic adds cleanup to original early-return paths.
++	// Owners track the actual instance, not an interface value or a global key.
++	var usageOwners []*processUsageDBOwner
++	if usage != nil {
++		defer func() {
++			for _, owner := range usageOwners {
++				resultErr = errors.Join(resultErr, owner.cleanup(cfg.KeepDir))
++			}
++		}()
++	}
+ 
+ 	for _, name := range dbNames {
+ 		factory, err := GetDBFactory(name)
+@@ -2514,11 +2538,17 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
+ 
+ 		db, err := factory(dir)
+ 		if err != nil {
++			if usage != nil {
++				return BenchRun{}, errors.Join(fmt.Errorf("init %s: %w", name, err), os.RemoveAll(dir))
++			}
+ 			_ = os.RemoveAll(dir)
+ 			return BenchRun{}, fmt.Errorf("init %s: %w", name, err)
+ 		}
+ 		vlogCompressionMode, vlogCompressionModeSet := selectedTreeDBVlogCompressionMode(name)
+ 		instances = append(instances, &DBInstance{Name: name, Wrapper: db, Dir: dir, TreeDBVlogCompressionMode: vlogCompressionMode, TreeDBVlogCompressionModeSet: vlogCompressionModeSet})
++		if usage != nil {
++			usageOwners = append(usageOwners, &processUsageDBOwner{instance: instances[len(instances)-1]})
++		}
+ 	}
+ 	if len(instances) == 0 {
+ 		return BenchRun{}, fmt.Errorf("no DBs selected")
+@@ -2817,6 +2847,12 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
+ 			valPos = 0
+ 		}
+ 
++		// The optional receipt requires the original real final checkpoint.
++		if steady && usage != nil {
++			if _, ok := db.(checkpointer); !ok {
++				return 0, fmt.Errorf("process usage requires final checkpoint support")
++			}
++		}
+ 		var stopSteadyCPUProfile func()
+ 		if steady && batchWriteSteadyCPUProfileStart != nil {
+ 			if err := batchWriteSteadyCPUProfileStart(); err != nil {
+@@ -2829,6 +2865,11 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
+ 				}
+ 			}()
+ 		}
++		if steady && usage != nil {
++			if err := usage.sample(); err != nil {
++				return 0, err
++			}
++		}
+ 		start := time.Now()
+ 		pc := newPeriodicCheckpoint(cfg)
+ 		if steady && pc == nil && cfg.BatchWriteSteadyCheckpointBytes > 0 {
+@@ -2927,6 +2968,11 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
+ 			}
+ 		}
+ 		elapsed := time.Since(start)
++		if steady && usage != nil {
++			if err := usage.sample(); err != nil {
++				return 0, err
++			}
++		}
+ 		if stopSteadyCPUProfile != nil {
+ 			stopSteadyCPUProfile()
+ 			stopSteadyCPUProfile = nil
+@@ -4956,6 +5002,12 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
+ 			batchWriteSteadyCPUProfileStart = nil
+ 			batchWriteSteadyCPUProfileStop = nil
+ 			finishCPUProfile()
++			if usage != nil {
++				runErr = usage.finish(runErr)
++				if receiptErr := profileHooks.writeProcessUsage(usage.path, &usage.receipt); receiptErr != nil {
++					runErr = errors.Join(runErr, fmt.Errorf("process usage receipt: %w", receiptErr))
++				}
++			}
+ 
+ 			blockAfterPath := ""
+ 			mutexAfterPath := ""
+@@ -5141,7 +5193,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
+ 	treedbRewrite := make(map[string]treeDBVlogRewriteReport)
+ 	treedbStats := make(map[string]map[string]string)
+ 	diskUsage := make(map[string]dirDiskUsage)
+-	for _, inst := range instances {
++	for i, inst := range instances {
+ 		wrapperName := inst.Wrapper.Name()
+ 		sp, hasStatsProvider := inst.Wrapper.(kvstore.StatsProvider)
+ 		var statsSnapshot map[string]string
+@@ -5153,7 +5205,11 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
+ 			}
+ 			statsSnapshot = sp.Stats()
+ 		}
+-		if err := inst.Wrapper.Close(); err != nil {
++		if usage != nil {
++			if err := usageOwners[i].close(); err != nil {
++				return BenchRun{}, err
++			}
++		} else if err := inst.Wrapper.Close(); err != nil {
+ 			return BenchRun{}, fmt.Errorf("close %s: %w", inst.Name, err)
+ 		}
+ 		if hasStatsProvider && isTreeDBInstance(inst) {
+@@ -5246,7 +5302,13 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
+ 			}
+ 		}
+ 		if !cfg.KeepDir {
+-			_ = os.RemoveAll(inst.Dir)
++			if usage != nil {
++				if err := usageOwners[i].removeDir(); err != nil {
++					return BenchRun{}, err
++				}
++			} else {
++				_ = os.RemoveAll(inst.Dir)
++			}
+ 		}
+ 	}
+ 
+diff --git a/cmd/unified_bench/process_usage.go b/cmd/unified_bench/process_usage.go
+new file mode 100644
+index 000000000..7801d024e
+--- /dev/null
++++ b/cmd/unified_bench/process_usage.go
+@@ -0,0 +1,302 @@
++package main
++
++import (
++	"encoding/json"
++	"errors"
++	"fmt"
++	"os"
++	"path/filepath"
++	"strings"
++	"time"
++)
++
++// Private diagnostic opt-in. It adds no benchmark/gate schema or CLI option.
++const processUsageEnv = "GOMAP_DIAGNOSTIC_STEADY_RUSAGE"
++
++// RUSAGE_SELF covers this process's threads, not its children or pprof samples.
++type processUsageCounters struct {
++	UserCPUNS                  int64 `json:"user_cpu_ns"`
++	SystemCPUNS                int64 `json:"system_cpu_ns"`
++	MinorFaults                int64 `json:"minor_faults"`
++	MajorFaults                int64 `json:"major_faults"`
++	VoluntaryContextSwitches   int64 `json:"voluntary_context_switches"`
++	InvoluntaryContextSwitches int64 `json:"involuntary_context_switches"`
++}
++
++type processUsageSample struct {
++	ReadStartedUnixNS  int64                 `json:"read_started_unix_ns"`
++	ReadFinishedUnixNS int64                 `json:"read_finished_unix_ns"`
++	ReadWallNS         int64                 `json:"read_wall_ns"`
++	ReadFailed         bool                  `json:"read_failed"`
++	Counters           *processUsageCounters `json:"counters"`
++}
++
++type processUsageReceipt struct {
++	Schema              int                    `json:"schema"`
++	Scope               string                 `json:"scope"`
++	Completed           bool                   `json:"completed"`
++	Status              string                 `json:"status"`
++	Attempts            int                    `json:"read_attempts"`
++	Samples             [2]*processUsageSample `json:"samples"`
++	Delta               *processUsageCounters  `json:"delta"`
++	IntervalWallLowerNS *int64                 `json:"interval_wall_lower_ns"`
++	IntervalWallUpperNS *int64                 `json:"interval_wall_upper_ns"`
++}
++
++type steadyProcessUsage struct {
++	path string
++	read func() (processUsageCounters, error)
++
++	receipt         processUsageReceipt
++	failure         error
++	firstReadStart  time.Time
++	firstReadFinish time.Time
++}
++
++func selectedProcessUsage(cfg BenchConfig, dbs, tests []string, supported bool, read func() (processUsageCounters, error)) (*steadyProcessUsage, error) {
++	path := os.Getenv(processUsageEnv)
++	if path == "" {
++		return nil, nil
++	}
++	if !supported {
++		return nil, errors.New("process usage diagnostic is supported only on Linux")
++	}
++	if !filepath.IsAbs(path) || len(dbs) != 1 || len(tests) != 1 || tests[0] != "batch_write_steady" || !shouldCPUProfile(cfg, "batch_write_steady") {
++		return nil, errors.New("process usage diagnostic requires an absolute new receipt path, one DB, only batch_write_steady, and its CPU profile")
++	}
++	if _, err := os.Lstat(path); err == nil || !errors.Is(err, os.ErrNotExist) {
++		return nil, errors.New("process usage receipt must not already exist and its path must be accessible")
++	}
++	if err := validateProcessUsageOutputPath(path, cfg, dbs[0]); err != nil {
++		return nil, err
++	}
++	if read == nil {
++		return nil, errors.New("process usage reader unavailable")
++	}
++	return &steadyProcessUsage{
++		path:    path,
++		read:    read,
++		receipt: processUsageReceipt{Schema: 1, Scope: "WORK_INTERVAL", Status: "INCOMPLETE"},
++	}, nil
++}
++
++func (c processUsageCounters) valid() bool {
++	return c.UserCPUNS >= 0 && c.SystemCPUNS >= 0 && c.MinorFaults >= 0 && c.MajorFaults >= 0 && c.VoluntaryContextSwitches >= 0 && c.InvoluntaryContextSwitches >= 0
++}
++
++func processUsageDelta(a, b processUsageCounters) (processUsageCounters, error) {
++	if !a.valid() || !b.valid() || b.UserCPUNS < a.UserCPUNS || b.SystemCPUNS < a.SystemCPUNS || b.MinorFaults < a.MinorFaults || b.MajorFaults < a.MajorFaults || b.VoluntaryContextSwitches < a.VoluntaryContextSwitches || b.InvoluntaryContextSwitches < a.InvoluntaryContextSwitches {
++		return processUsageCounters{}, errors.New("invalid or regressing process usage counters")
++	}
++	return processUsageCounters{
++		UserCPUNS:                  b.UserCPUNS - a.UserCPUNS,
++		SystemCPUNS:                b.SystemCPUNS - a.SystemCPUNS,
++		MinorFaults:                b.MinorFaults - a.MinorFaults,
++		MajorFaults:                b.MajorFaults - a.MajorFaults,
++		VoluntaryContextSwitches:   b.VoluntaryContextSwitches - a.VoluntaryContextSwitches,
++		InvoluntaryContextSwitches: b.InvoluntaryContextSwitches - a.InvoluntaryContextSwitches,
++	}, nil
++}
++
++func (u *steadyProcessUsage) sample() error {
++	if u.failure != nil {
++		return u.failure
++	}
++	if u.receipt.Attempts >= len(u.receipt.Samples) {
++		u.failure = errors.New("process usage diagnostic permits at most two reads")
++		return u.failure
++	}
++	i := u.receipt.Attempts
++	u.receipt.Attempts++
++	before := time.Now()
++	counters, err := u.read()
++	after := time.Now()
++	s := &processUsageSample{ReadStartedUnixNS: before.UnixNano(), ReadFinishedUnixNS: after.UnixNano(), ReadWallNS: after.Sub(before).Nanoseconds()}
++	u.receipt.Samples[i] = s
++	if i == 0 {
++		u.firstReadStart, u.firstReadFinish = before, after
++	}
++	if err != nil {
++		s.ReadFailed = true
++		u.failure = fmt.Errorf("process usage read %d: %w", i+1, err)
++		return u.failure
++	}
++	s.Counters = &counters
++	if !counters.valid() || s.ReadWallNS < 0 || s.ReadFinishedUnixNS < s.ReadStartedUnixNS || (i == 1 && s.ReadStartedUnixNS < u.receipt.Samples[0].ReadFinishedUnixNS) {
++		u.failure = errors.New("invalid process usage counters or wall bounds")
++		return u.failure
++	}
++	if i == 1 {
++		lower := before.Sub(u.firstReadFinish).Nanoseconds()
++		upper := after.Sub(u.firstReadStart).Nanoseconds()
++		if lower < 0 || upper < lower {
++			u.failure = errors.New("invalid process usage interval wall bounds")
++			return u.failure
++		}
++		u.receipt.IntervalWallLowerNS, u.receipt.IntervalWallUpperNS = &lower, &upper
++		delta, deltaErr := processUsageDelta(*u.receipt.Samples[0].Counters, counters)
++		if deltaErr != nil {
++			u.failure = deltaErr
++			return u.failure
++		}
++		u.receipt.Delta = &delta
++	}
++	return nil
++}
++
++// Called after finishCPUProfile. The original operation/checkpoint error wins.
++func (u *steadyProcessUsage) finish(workErr error) error {
++	u.receipt.Completed = false
++	u.receipt.Status = "INCOMPLETE"
++	if workErr != nil {
++		u.receipt.Status = "ORIGINAL_WORK_OR_DIAGNOSTIC_FAILED"
++		u.receipt.Delta = nil
++		return workErr
++	}
++	if u.failure != nil {
++		u.receipt.Delta = nil
++		return u.failure
++	}
++	if u.receipt.Attempts != 2 || u.receipt.Samples[0] == nil || u.receipt.Samples[1] == nil || u.receipt.Delta == nil {
++		return errors.New("incomplete process usage diagnostic")
++	}
++	u.receipt.Completed = true
++	u.receipt.Status = "COMPLETE_WORK_INTERVAL_DIAGNOSTIC_ONLY"
++	return nil
++}
++
++func writeProcessUsageReceipt(path string, receipt *processUsageReceipt) error {
++	data, err := json.Marshal(receipt)
++	if err != nil {
++		return err
++	}
++	if len(data) > 4096 {
++		return errors.New("process usage receipt exceeds fixed 4096-byte bound")
++	}
++	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
++	if err != nil {
++		return err
++	}
++	_, writeErr := f.Write(data)
++	closeErr := f.Close()
++	if writeErr != nil || closeErr != nil {
++		return errors.Join(writeErr, closeErr, os.Remove(path))
++	}
++	return nil
++}
++
++// Resolve existing parent aliases without creating any output. Later profile
++// directories may not exist yet, so resolve their nearest existing ancestor.
++func processUsageCanonicalPath(path string) (string, error) {
++	absolute, err := filepath.Abs(path)
++	if err != nil {
++		return "", err
++	}
++	var tail []string
++	for current := filepath.Clean(absolute); ; current = filepath.Dir(current) {
++		resolved, err := filepath.EvalSymlinks(current)
++		if err == nil {
++			for i := len(tail) - 1; i >= 0; i-- {
++				resolved = filepath.Join(resolved, tail[i])
++			}
++			return resolved, nil
++		}
++		if !errors.Is(err, os.ErrNotExist) || filepath.Dir(current) == current {
++			return "", err
++		}
++		tail = append(tail, filepath.Base(current))
++	}
++}
++
++func validateProcessUsageOutputPath(path string, cfg BenchConfig, dbName string) error {
++	parent, err := os.Stat(filepath.Dir(path))
++	if err != nil || !parent.IsDir() {
++		return errors.New("process usage receipt requires an existing parent directory")
++	}
++	receipt, err := processUsageCanonicalPath(path)
++	if err != nil {
++		return fmt.Errorf("process usage receipt path: %w", err)
++	}
++	const testName = "batch_write_steady"
++	paths := []string{cfg.BlockProfile, cfg.MutexProfile, cfg.TraceProfile}
++	if shouldCPUProfile(cfg, testName) {
++		paths = append(paths, strings.TrimSpace(cfg.CPUProfile)+"_"+testName+"_"+dbName+".pprof")
++	}
++	if shouldAllocsProfile(cfg, testName) {
++		paths = append(paths, strings.TrimSpace(cfg.AllocsProfile)+"_"+testName+"_"+dbName+".pprof")
++	}
++	for _, pair := range [][2]string{{cfg.BlockProfile, "block"}, {cfg.MutexProfile, "mutex"}} {
++		if strings.TrimSpace(pair[0]) != "" {
++			paths = append(paths, contentionProfilePath(pair[0], pair[1], testName, dbName))
++		}
++	}
++	// Checkpoint profiles use the wrapper's runtime Name. Reserve the configured
++	// checkpoint namespace before opening it; do not guess that Name from dbName.
++	if prefix := strings.TrimSpace(cfg.CheckpointCPUProfile); prefix != "" {
++		canonical, err := processUsageCanonicalPath(prefix)
++		if err != nil {
++			return err
++		}
++		if (strings.HasPrefix(receipt, canonical+"_checkpoint_") && strings.HasSuffix(receipt, ".pprof")) || strings.HasPrefix(canonical, receipt+string(filepath.Separator)) {
++			return errors.New("process usage receipt collides with checkpoint profile namespace")
++		}
++	}
++	if dir := strings.TrimSpace(*profileDir); dir != "" {
++		for _, name := range []string{"benchprof_results.json", "benchprof_results.md", "insights.json", "insights.md", "insights.html"} {
++			paths = append(paths, filepath.Join(dir, name))
++		}
++	}
++	for _, output := range paths {
++		if strings.TrimSpace(output) == "" {
++			continue
++		}
++		canonical, err := processUsageCanonicalPath(output)
++		if err != nil {
++			return fmt.Errorf("process usage output path: %w", err)
++		}
++		if receipt == canonical || strings.HasPrefix(canonical, receipt+string(filepath.Separator)) {
++			return fmt.Errorf("process usage receipt collides with benchmark output %s", output)
++		}
++	}
++	return nil
++}
++
++// Selected-mode ownership only. A failed original Close is never retried and
++// its directory is retained because release of the DB's resources is unproved.
++type processUsageDBOwner struct {
++	instance        *DBInstance
++	closeAttempted  bool
++	closeOK         bool
++	removeAttempted bool
++}
++
++func (o *processUsageDBOwner) close() error {
++	if o.closeAttempted {
++		return nil
++	}
++	o.closeAttempted = true
++	if err := o.instance.Wrapper.Close(); err != nil {
++		return fmt.Errorf("close %s: %w", o.instance.Name, err)
++	}
++	o.closeOK = true
++	return nil
++}
++
++func (o *processUsageDBOwner) removeDir() error {
++	if !o.closeOK || o.removeAttempted {
++		return nil
++	}
++	o.removeAttempted = true
++	if err := os.RemoveAll(o.instance.Dir); err != nil {
++		return fmt.Errorf("remove %s directory: %w", o.instance.Name, err)
++	}
++	return nil
++}
++
++func (o *processUsageDBOwner) cleanup(keepDir bool) error {
++	closeErr := o.close()
++	if keepDir {
++		return closeErr
++	}
++	return errors.Join(closeErr, o.removeDir())
++}
+diff --git a/cmd/unified_bench/process_usage_linux.go b/cmd/unified_bench/process_usage_linux.go
+new file mode 100644
+index 000000000..c2d3b9da2
+--- /dev/null
++++ b/cmd/unified_bench/process_usage_linux.go
+@@ -0,0 +1,45 @@
++//go:build linux
++
++package main
++
++import (
++	"errors"
++	"math"
++	"syscall"
++)
++
++const processUsageSupported = true
++
++func processUsageTimevalNS(sec, usec int64) (int64, error) {
++	if sec < 0 || usec < 0 || usec >= 1000000 || sec > (math.MaxInt64-usec*1000)/1000000000 {
++		return 0, errors.New("invalid or overflowing rusage timeval")
++	}
++	return sec*1000000000 + usec*1000, nil
++}
++
++func readProcessUsage() (processUsageCounters, error) {
++	var r syscall.Rusage
++	if err := syscall.Getrusage(syscall.RUSAGE_SELF, &r); err != nil {
++		return processUsageCounters{}, err
++	}
++	user, err := processUsageTimevalNS(int64(r.Utime.Sec), int64(r.Utime.Usec))
++	if err != nil {
++		return processUsageCounters{}, err
++	}
++	system, err := processUsageTimevalNS(int64(r.Stime.Sec), int64(r.Stime.Usec))
++	if err != nil {
++		return processUsageCounters{}, err
++	}
++	counters := processUsageCounters{
++		UserCPUNS:                  user,
++		SystemCPUNS:                system,
++		MinorFaults:                int64(r.Minflt),
++		MajorFaults:                int64(r.Majflt),
++		VoluntaryContextSwitches:   int64(r.Nvcsw),
++		InvoluntaryContextSwitches: int64(r.Nivcsw),
++	}
++	if !counters.valid() {
++		return processUsageCounters{}, errors.New("negative rusage counter")
++	}
++	return counters, nil
++}
+diff --git a/cmd/unified_bench/process_usage_linux_test.go b/cmd/unified_bench/process_usage_linux_test.go
+new file mode 100644
+index 000000000..80d306fb5
+--- /dev/null
++++ b/cmd/unified_bench/process_usage_linux_test.go
+@@ -0,0 +1,312 @@
++//go:build linux
++
++package main
++
++import (
++	"errors"
++	"io"
++	"math"
++	"os"
++	"path/filepath"
++	"reflect"
++	"strings"
++	"testing"
++
++	"github.com/snissn/gomap/kvstore"
++)
++
++type processUsageCheckpointDB struct {
++	*batchDeleteRangeMemoryDB
++	checkpointErr error
++	closeErr      error
++}
++
++func (d *processUsageCheckpointDB) Checkpoint() error {
++	*d.events = append(*d.events, "checkpoint")
++	return d.checkpointErr
++}
++
++func (d *processUsageCheckpointDB) Close() error {
++	*d.events = append(*d.events, "db_close")
++	return errors.Join(d.batchDeleteRangeMemoryDB.Close(), d.closeErr)
++}
++
++func runProcessUsageFixture(t *testing.T, selected bool, failRead int, checkpointErr, writeErr, closeErr error, keepDir ...bool) ([]string, *processUsageReceipt, int, error) {
++	t.Helper()
++	var events []string
++	var receipt *processUsageReceipt
++	reads := 0
++	var openedDir string
++	keep := len(keepDir) == 1 && keepDir[0]
++	t.Setenv("TMPDIR", t.TempDir())
++	name := "process_usage_" + strings.ToLower(strings.ReplaceAll(t.Name(), "/", "_"))
++	RegisterHiddenDB(name, func(dir string) (kvstore.DB, error) {
++		openedDir = dir
++		d := newBatchDeleteRangeMemoryDB(name)
++		d.events = &events
++		return &processUsageCheckpointDB{batchDeleteRangeMemoryDB: d, checkpointErr: checkpointErr, closeErr: closeErr}, nil
++	})
++	path := ""
++	if selected {
++		path = filepath.Join(t.TempDir(), "usage.json")
++	}
++	t.Setenv(processUsageEnv, path)
++	hooks := &benchmarkProfileHooks{
++		startCPUProfile: func(io.Writer) error {
++			events = append(events, "cpu_start")
++			return nil
++		},
++		stopCPUProfile: func() {
++			events = append(events, "cpu_stop")
++		},
++		readProcessUsage: func() (processUsageCounters, error) {
++			reads++
++			events = append(events, "usage_read")
++			if reads == failRead {
++				return processUsageCounters{}, errProcessUsageFixtureRead
++			}
++			return processUsageCounters{UserCPUNS: int64(reads), SystemCPUNS: int64(reads)}, nil
++		},
++		writeProcessUsage: func(_ string, r *processUsageReceipt) error {
++			events = append(events, "usage_write")
++			copy := *r
++			receipt = &copy
++			return writeErr
++		},
++	}
++	_, err := runBenchmark(BenchConfig{Keys: 64, ValueSize: 8, BatchSize: 16, DBsArg: name, TestsArg: "batch_write_steady", SeedUsed: 1, KeepDir: keep, CPUProfile: filepath.Join(t.TempDir(), "cpu"), profileHooks: hooks})
++	if selected {
++		closes := 0
++		for _, event := range events {
++			if event == "db_close" {
++				closes++
++			}
++		}
++		if closes != 1 {
++			t.Fatalf("selected mode must attempt original Close once: %v", events)
++		}
++		_, statErr := os.Stat(openedDir)
++		if keep || closeErr != nil {
++			if statErr != nil {
++				t.Fatalf("kept or failed-Close directory must remain: %v", statErr)
++			}
++		} else if !errors.Is(statErr, os.ErrNotExist) {
++			t.Fatalf("successfully closed directory leaked: %s: %v", openedDir, statErr)
++		}
++	}
++	return events, receipt, reads, err
++}
++
++var errProcessUsageFixtureRead = errors.New("injected usage reader error")
++
++func TestRunBenchmarkProcessUsageDefaultZero(t *testing.T) {
++	events, receipt, reads, err := runProcessUsageFixture(t, false, 1, nil, nil, nil)
++	if err != nil || reads != 0 || receipt != nil {
++		t.Fatalf("default reads=%d receipt=%+v err=%v", reads, receipt, err)
++	}
++	if len(events) == 0 {
++		t.Fatal("original work did not run")
++	}
++}
++
++func TestRunBenchmarkProcessUsageTwoReadsCheckpointOrder(t *testing.T) {
++	events, receipt, reads, err := runProcessUsageFixture(t, true, 0, nil, nil, nil)
++	if err != nil || reads != 2 || receipt == nil || !receipt.Completed || receipt.Delta == nil || receipt.Delta.UserCPUNS != 1 || receipt.IntervalWallLowerNS == nil || receipt.IntervalWallUpperNS == nil || *receipt.IntervalWallUpperNS < *receipt.IntervalWallLowerNS {
++		t.Fatalf("reads=%d receipt=%+v err=%v", reads, receipt, err)
++	}
++	var selected []string
++	sets := 0
++	for _, event := range events {
++		if event == "set" {
++			sets++
++			continue
++		}
++		selected = append(selected, event)
++		if event == "usage_write" {
++			break // Original post-run maintenance is outside this receipt.
++		}
++	}
++	want := []string{"cpu_start", "usage_read", "checkpoint", "usage_read", "cpu_stop", "usage_write"}
++	if sets != 64 || !reflect.DeepEqual(selected, want) {
++		t.Fatalf("original sets=%d order=%v, want=%v", sets, selected, want)
++	}
++	for _, sample := range receipt.Samples {
++		if sample == nil || sample.Counters == nil || sample.ReadFailed || sample.ReadWallNS < 0 || sample.ReadFinishedUnixNS < sample.ReadStartedUnixNS {
++			t.Fatalf("unbounded/missing successful read: %+v", sample)
++		}
++	}
++}
++
++func TestRunBenchmarkProcessUsageOriginalFailureWins(t *testing.T) {
++	original := errors.New("original final checkpoint failure")
++	writeFailure := errors.New("secondary receipt write failure")
++	closeFailure := errors.New("secondary receipt close failure")
++	removeFailure := errors.New("secondary receipt remove failure")
++	writer := errors.Join(writeFailure, closeFailure, removeFailure)
++	events, receipt, reads, err := runProcessUsageFixture(t, true, 0, original, writer, nil)
++	if !errors.Is(err, original) || !errors.Is(err, writer) || reads != 1 || receipt == nil || receipt.Completed || receipt.Delta != nil || receipt.Samples[1] != nil {
++		t.Fatalf("reads=%d receipt=%+v err=%v", reads, receipt, err)
++	}
++	// This tests propagation of cleanup errors from the existing hook, not OS failure injection.
++	for _, secondary := range []error{writeFailure, closeFailure, removeFailure} {
++		if !errors.Is(err, secondary) || strings.Index(err.Error(), original.Error()) >= strings.Index(err.Error(), secondary.Error()) {
++			t.Fatalf("original error must be first and each secondary retained: %v", err)
++		}
++	}
++	var stop, write int
++	for i, event := range events {
++		if event == "cpu_stop" {
++			stop = i
++		}
++		if event == "usage_write" {
++			write = i
++		}
++	}
++	if stop == 0 || write <= stop {
++		t.Fatalf("original CPU stop/write order=%v", events)
++	}
++}
++
++func TestRunBenchmarkProcessUsageReaderError(t *testing.T) {
++	for _, attempt := range []int{1, 2} {
++		name := "first"
++		if attempt == 2 {
++			name = "second"
++		}
++		t.Run(name, func(t *testing.T) {
++			events, receipt, reads, err := runProcessUsageFixture(t, true, attempt, nil, nil, nil)
++			if !errors.Is(err, errProcessUsageFixtureRead) || reads != attempt || receipt == nil || receipt.Completed || receipt.Delta != nil || !receipt.Samples[attempt-1].ReadFailed || receipt.Samples[attempt-1].Counters != nil {
++				t.Fatalf("reads=%d receipt=%+v err=%v", reads, receipt, err)
++			}
++			stops, sets, checkpoints := 0, 0, 0
++			for _, event := range events {
++				if event == "cpu_stop" {
++					stops++
++				}
++				if event == "set" {
++					sets++
++				}
++				if event == "checkpoint" {
++					checkpoints++
++				}
++			}
++			if stops != 1 || (attempt == 1 && sets != 0) || (attempt == 2 && (sets != 64 || checkpoints != 1)) {
++				t.Fatalf("read failure changed original order: %v", events)
++			}
++		})
++	}
++}
++
++func TestProcessUsageTimevalBounds(t *testing.T) {
++	if got, err := processUsageTimevalNS(1, 2); err != nil || got != 1000002000 {
++		t.Fatalf("timeval=(%d,%v)", got, err)
++	}
++	for _, pair := range [][2]int64{{-1, 0}, {0, -1}, {0, 1000000}, {math.MaxInt64, 0}} {
++		if _, err := processUsageTimevalNS(pair[0], pair[1]); err == nil {
++			t.Fatalf("invalid timeval accepted: %v", pair)
++		}
++	}
++}
++
++func TestRunBenchmarkProcessUsageCloseFailureIsNotLifecycleSuccess(t *testing.T) {
++	originalClose := errors.New("original DB Close failure")
++	events, receipt, reads, err := runProcessUsageFixture(t, true, 0, nil, nil, originalClose)
++	if !errors.Is(err, originalClose) || reads != 2 || receipt == nil || !receipt.Completed || receipt.Scope != "WORK_INTERVAL" || receipt.Status != "COMPLETE_WORK_INTERVAL_DIAGNOSTIC_ONLY" || receipt.Delta == nil {
++		t.Fatalf("interval completion must coexist with failed original Close: reads=%d receipt=%+v err=%v", reads, receipt, err)
++	}
++	writeAt, closeAt := -1, -1
++	for i, event := range events {
++		if event == "usage_write" {
++			writeAt = i
++		}
++		if event == "db_close" {
++			closeAt = i
++		}
++	}
++	if writeAt < 0 || closeAt <= writeAt {
++		t.Fatalf("receipt must not move or certify original DB Close: %v", events)
++	}
++}
++
++func TestRunBenchmarkProcessUsageCleanup(t *testing.T) {
++	for _, name := range []string{"write_failure", "write_and_close_failure", "read_and_close_failure", "keep_dir", "normal"} {
++		t.Run(name, func(t *testing.T) {
++			var writeErr, closeErr error
++			if name == "write_failure" || name == "write_and_close_failure" {
++				writeErr = errors.New("receipt write failure")
++			}
++			if name == "write_and_close_failure" || name == "read_and_close_failure" {
++				closeErr = errors.New("DB Close failure")
++			}
++			failRead := 0
++			primary := writeErr
++			if name == "read_and_close_failure" {
++				failRead = 1
++				primary = errProcessUsageFixtureRead
++			}
++			_, receipt, reads, err := runProcessUsageFixture(t, true, failRead, nil, writeErr, closeErr, name == "keep_dir")
++			if receipt == nil || (failRead == 0 && (!receipt.Completed || reads != 2)) || (failRead != 0 && (receipt.Completed || reads != 1)) {
++				t.Fatalf("unexpected interval: reads=%d receipt=%+v", reads, receipt)
++			}
++			if writeErr == nil && closeErr == nil && err != nil {
++				t.Fatal(err)
++			}
++			if primary != nil && !errors.Is(err, primary) {
++				t.Fatalf("lost original diagnostic failure: %v", err)
++			}
++			if closeErr != nil && (!errors.Is(err, closeErr) || strings.Index(err.Error(), primary.Error()) >= strings.Index(err.Error(), closeErr.Error())) {
++				t.Fatalf("original error must precede cleanup Close failure: %v", err)
++			}
++		})
++	}
++}
++
++func TestProcessUsageCleanupRemoveFailure(t *testing.T) {
++	var events []string
++	db := newBatchDeleteRangeMemoryDB("usage_remove")
++	db.events = &events
++	owner := &processUsageDBOwner{instance: &DBInstance{Name: "usage_remove", Wrapper: &processUsageCheckpointDB{batchDeleteRangeMemoryDB: db}, Dir: "\x00"}}
++	if err := owner.cleanup(false); err == nil || !owner.closeOK || !owner.removeAttempted {
++		t.Fatalf("actual invalid-path RemoveAll error lost: %v", err)
++	}
++	if err := owner.cleanup(false); err != nil {
++		t.Fatalf("cleanup operation was retried: %v", err)
++	}
++	closes := 0
++	for _, event := range events {
++		if event == "db_close" {
++			closes++
++		}
++	}
++	if closes != 1 {
++		t.Fatalf("Close attempts=%d", closes)
++	}
++}
++
++func TestRunBenchmarkProcessUsageCollisionBeforeOpen(t *testing.T) {
++	name := "usage_collision_before_open"
++	opens := 0
++	RegisterHiddenDB(name, func(string) (kvstore.DB, error) {
++		opens++
++		return nil, errors.New("factory must not be entered")
++	})
++	prefix := filepath.Join(t.TempDir(), "cpu")
++	t.Setenv(processUsageEnv, prefix+"_batch_write_steady_"+name+".pprof")
++	_, err := runBenchmark(BenchConfig{Keys: 64, ValueSize: 8, BatchSize: 16, DBsArg: name, TestsArg: "batch_write_steady", CPUProfile: prefix})
++	if err == nil || opens != 0 {
++		t.Fatalf("collision reached factory: opens=%d err=%v", opens, err)
++	}
++}
++
++func TestProcessUsageOutputAlias(t *testing.T) {
++	dir := t.TempDir()
++	alias := filepath.Join(t.TempDir(), "alias")
++	if err := os.Symlink(dir, alias); err != nil {
++		t.Fatal(err)
++	}
++	cfg := BenchConfig{CPUProfile: filepath.Join(alias, "cpu")}
++	t.Setenv(processUsageEnv, filepath.Join(dir, "cpu_batch_write_steady_one.pprof"))
++	if u, err := selectedProcessUsage(cfg, []string{"one"}, []string{"batch_write_steady"}, true, func() (processUsageCounters, error) { return processUsageCounters{}, nil }); err == nil || u != nil {
++		t.Fatalf("aliased future output accepted: %v %v", u, err)
++	}
++}
+diff --git a/cmd/unified_bench/process_usage_other.go b/cmd/unified_bench/process_usage_other.go
+new file mode 100644
+index 000000000..6b34dc0e9
+--- /dev/null
++++ b/cmd/unified_bench/process_usage_other.go
+@@ -0,0 +1,11 @@
++//go:build !linux
++
++package main
++
++import "errors"
++
++const processUsageSupported = false
++
++func readProcessUsage() (processUsageCounters, error) {
++	return processUsageCounters{}, errors.New("process usage diagnostic is supported only on Linux")
++}
+diff --git a/cmd/unified_bench/process_usage_test.go b/cmd/unified_bench/process_usage_test.go
+new file mode 100644
+index 000000000..37d3e3cdf
+--- /dev/null
++++ b/cmd/unified_bench/process_usage_test.go
+@@ -0,0 +1,143 @@
++package main
++
++import (
++	"errors"
++	"path/filepath"
++	"testing"
++)
++
++func TestProcessUsageSelectionRefusal(t *testing.T) {
++	for _, name := range []string{"unsupported", "relative", "multi_db", "multi_test", "no_cpu", "existing"} {
++		t.Run(name, func(t *testing.T) {
++			path := filepath.Join(t.TempDir(), "receipt.json")
++			cfg := BenchConfig{CPUProfile: filepath.Join(t.TempDir(), "cpu")}
++			dbs, tests, supported := []string{"one"}, []string{"batch_write_steady"}, true
++			switch name {
++			case "unsupported":
++				supported = false
++			case "relative":
++				path = "relative.json"
++			case "multi_db":
++				dbs = append(dbs, "two")
++			case "multi_test":
++				tests = append(tests, "batch_write")
++			case "no_cpu":
++				cfg.CPUProfile = ""
++			case "existing":
++				if err := writeProcessUsageReceipt(path, &processUsageReceipt{}); err != nil {
++					t.Fatal(err)
++				}
++			}
++			t.Setenv(processUsageEnv, path)
++			reads := 0
++			u, err := selectedProcessUsage(cfg, dbs, tests, supported, func() (processUsageCounters, error) {
++				reads++
++				return processUsageCounters{}, nil
++			})
++			if err == nil || u != nil || reads != 0 {
++				t.Fatalf("selection=(%v,%v) reads=%d", u, err, reads)
++			}
++		})
++	}
++}
++
++func TestProcessUsageCounterRegression(t *testing.T) {
++	base := processUsageCounters{10, 10, 10, 10, 10, 10}
++	for i, name := range []string{"user_cpu", "system_cpu", "minor_faults", "major_faults", "voluntary", "involuntary"} {
++		t.Run(name, func(t *testing.T) {
++			after := base
++			fields := []*int64{&after.UserCPUNS, &after.SystemCPUNS, &after.MinorFaults, &after.MajorFaults, &after.VoluntaryContextSwitches, &after.InvoluntaryContextSwitches}
++			*fields[i] = 9
++			if _, err := processUsageDelta(base, after); err == nil {
++				t.Fatal("regression accepted")
++			}
++		})
++	}
++	if _, err := processUsageDelta(processUsageCounters{UserCPUNS: -1}, base); err == nil {
++		t.Fatal("negative counter accepted")
++	}
++	if delta, err := processUsageDelta(base, base); err != nil || delta != (processUsageCounters{}) {
++		t.Fatalf("honest zero delta=(%+v,%v)", delta, err)
++	}
++}
++
++func TestProcessUsageIncompleteAndReadLimit(t *testing.T) {
++	reads := 0
++	u := &steadyProcessUsage{read: func() (processUsageCounters, error) {
++		reads++
++		return processUsageCounters{}, nil
++	}}
++	if err := u.finish(nil); err == nil || u.receipt.Completed || u.receipt.Delta != nil {
++		t.Fatal("missing reads presented as complete")
++	}
++	for i := 0; i < 2; i++ {
++		if err := u.sample(); err != nil {
++			t.Fatal(err)
++		}
++	}
++	if err := u.sample(); err == nil || reads != 2 {
++		t.Fatalf("third read not refused: reads=%d err=%v", reads, err)
++	}
++	original := errors.New("original failure")
++	if err := u.finish(original); err != original || u.receipt.Completed || u.receipt.Delta != nil {
++		t.Fatal("diagnostic failure replaced original error or produced complete delta")
++	}
++}
++
++func TestProcessUsageSampleRegressionFailsClosed(t *testing.T) {
++	reads := 0
++	u := &steadyProcessUsage{read: func() (processUsageCounters, error) {
++		reads++
++		return processUsageCounters{UserCPUNS: int64(3 - reads)}, nil
++	}}
++	if err := u.sample(); err != nil {
++		t.Fatal(err)
++	}
++	if err := u.sample(); err == nil {
++		t.Fatal("regressing reader accepted")
++	}
++	if err := u.finish(nil); err == nil || u.receipt.Completed || u.receipt.Delta != nil || reads != 2 || u.receipt.Samples[1].Counters == nil {
++		t.Fatalf("regression not retained/fail-closed: receipt=%+v reads=%d err=%v", u.receipt, reads, err)
++	}
++}
++
++func TestProcessUsageOutputCollision(t *testing.T) {
++	for _, name := range []string{"cpu", "allocs", "checkpoint", "block", "block_delta", "mutex", "mutex_delta", "trace", "results_json", "results_md", "insights_json", "insights_md", "insights_html", "output_parent", "distinct"} {
++		t.Run(name, func(t *testing.T) {
++			dir := t.TempDir()
++			oldProfileDir := *profileDir
++			*profileDir = dir
++			t.Cleanup(func() { *profileDir = oldProfileDir })
++			cfg := BenchConfig{CPUProfile: filepath.Join(dir, "cpu"), AllocsProfile: filepath.Join(dir, "allocs"), CheckpointCPUProfile: filepath.Join(dir, "checkpoint_cpu"), BlockProfile: filepath.Join(dir, "block.pprof"), MutexProfile: filepath.Join(dir, "mutex.pprof"), TraceProfile: filepath.Join(dir, "trace.out")}
++			paths := map[string]string{
++				"cpu":           "cpu_batch_write_steady_one.pprof",
++				"allocs":        "allocs_batch_write_steady_one.pprof",
++				"checkpoint":    "checkpoint_cpu_checkpoint_post-run_different_wrapper.pprof",
++				"block":         "block.pprof",
++				"block_delta":   "block_batch_write_steady_one.pprof",
++				"mutex":         "mutex.pprof",
++				"mutex_delta":   "mutex_batch_write_steady_one.pprof",
++				"trace":         "trace.out",
++				"results_json":  "benchprof_results.json",
++				"results_md":    "benchprof_results.md",
++				"insights_json": "insights.json",
++				"insights_md":   "insights.md",
++				"insights_html": "insights.html",
++				"output_parent": "future",
++				"distinct":      "usage.json",
++			}
++			if name == "output_parent" {
++				cfg.CPUProfile = filepath.Join(dir, "future", "cpu")
++			}
++			t.Setenv(processUsageEnv, filepath.Join(dir, paths[name]))
++			reads := 0
++			u, err := selectedProcessUsage(cfg, []string{"one"}, []string{"batch_write_steady"}, true, func() (processUsageCounters, error) {
++				reads++
++				return processUsageCounters{}, nil
++			})
++			if reads != 0 || (name == "distinct" && (err != nil || u == nil)) || (name != "distinct" && (err == nil || u != nil)) {
++				t.Fatalf("collision %s: usage=%v err=%v reads=%d", name, u, err, reads)
++			}
++		})
++	}
++}

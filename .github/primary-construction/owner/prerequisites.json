@@ -1,0 +1,43 @@
+{
+  "SDK_runtime_identity": "BLOCKING_NOT_OBSERVED_FOR_NEW_EXACT_PAIR",
+  "constructor_admission": null,
+  "executable_ready": false,
+  "latest_retained_metadata_terminal": {
+    "bytes": 691,
+    "path": "/mnt/fast4tb/gomap-mongo-perf-graph-6a9s7h58/review/four-gate-execution-20261104-01/primary-runtime-row217-metadata-execution-01/terminal.json",
+    "sha256": "e94214a848bd62c0538fc0225a37536ab63425bcb02d09b5e127167cdcae6c93"
+  },
+  "metadata_terminal": {
+    "Go_or_product_started": false,
+    "actual_bootstrap": "METADATA_BOOTSTRAP_FAILED AssertionError",
+    "expected_image": "20261025.353.1",
+    "guard_started": false,
+    "head": "253de3538945668ed545432f9704e277fc54f523",
+    "job": 127061739175,
+    "no_automatic_retry_or_retarget": true,
+    "observed_image": "20261101.360.1",
+    "original_missing_fact": "Historical row217 actual content/identity on20261025 failure remains unretained. Current-image query not authorized by this exact fixed-image packet.",
+    "query_started": false,
+    "recorded_at": "2026-11-05T05:09:09.784630+00:00",
+    "run": 41971863344,
+    "runtime_rows_observed": 0,
+    "status": "STOP_FIXED_IMAGE_MISMATCH_BEFORE_PAYLOAD"
+  },
+  "missing": [
+    "Independent review of this exact source packet",
+    "ROOT constructor/source/overlay binding to exact B8e/Cb24; old29b/4934 specs invalid for this pair",
+    "Actual pinned Go1.26.10 SDK/compiler/linker/module/CGO and image/runtime row identities; no image or changed-row drift waiver",
+    "Existing hosted resource/quiet/affinity/output/lifetime enforcement compatible with original bounds",
+    "New exact hosted gofmt/compiler/normal/race controls with actual exits/no skip and original affected safety controls",
+    "Fresh normal arm ELFs/buildinfo/hashes under reviewed constructor, including all materialized source/Git/cache/tmp/binary/output under1GiB root",
+    "Separate ELF pair/capture/decode/cleanup review and one-use ROOT grant, actual paths/env/commands/tool hashes/outer guard binding",
+    "Actual producer terminals and positive descendant retirement/drain; complete raw/calibration/profiles and both-type all-sites decode + residual before interpretation"
+  ],
+  "no_auto_retry_or_image_retarget": true,
+  "normal_elf_B": null,
+  "normal_elf_C": null,
+  "null_is_blocking": true,
+  "runtime_admission": null,
+  "schema": "primary-rebind-prerequisites-v1",
+  "selected_runtime": null
+}

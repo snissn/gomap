@@ -1,0 +1,231 @@
+{
+  "arms": {
+    "B": {
+      "source": "8e1133085b4052e344a73063f28c2ab142485c73",
+      "source_inventory": "B-source.json",
+      "tree": "6b0fc6bd9f6a22621c85526342727509fc3bcafe"
+    },
+    "C": {
+      "source": "b24dea5e339cf94d419346ac9b38a8c90d6d3f02",
+      "source_inventory": "C-source.json",
+      "tree": "04c0fdc0cddb2bf2d788a45532d19da3159c20f1"
+    }
+  },
+  "delta_is_not_an_adoption_patch": true,
+  "entire_original_delta": "product-B-to-C.patch",
+  "old_frozen_product": "4934bd6d51d9047ba0187d05c1d211cbe419811a",
+  "original_benchmark_and_cache_identical_between_arms": true,
+  "product_source_trees_untouched": true,
+  "schema": "exact-arm-source-identities-v1",
+  "source_files": [
+    {
+      "arm": "B",
+      "bytes": 2267,
+      "commit": "8e1133085b4052e344a73063f28c2ab142485c73",
+      "git_blob": "f8ee8503a4ddd60e6dee233d032138ca77b631ab",
+      "path": "AGENTS.md",
+      "sha256": "89d419e93fd29ed779b600458945b928cd224773ab53db49702ea0358b5d63f6"
+    },
+    {
+      "arm": "B",
+      "bytes": 1003,
+      "commit": "8e1133085b4052e344a73063f28c2ab142485c73",
+      "git_blob": "499f427b9229696496086dfa9a5959d33881fe91",
+      "path": "TreeDB/AGENTS.md",
+      "sha256": "49ad91d73c0bb4a8d3ab0c281478df5cb563319dd05b8bddd47fb43538977e2c"
+    },
+    {
+      "arm": "B",
+      "bytes": 5176,
+      "commit": "8e1133085b4052e344a73063f28c2ab142485c73",
+      "git_blob": "32937836f5cce4e9e440bd971e83095c00d25d7a",
+      "path": "go.mod",
+      "sha256": "2dcddbc32b8ff06dc73c6ed987b92988ed4a239e396d5a9e20119b2b97bf82c4"
+    },
+    {
+      "arm": "B",
+      "bytes": 45013,
+      "commit": "8e1133085b4052e344a73063f28c2ab142485c73",
+      "git_blob": "cd1067910a7b6bd17a2507206cb23a8104696e85",
+      "path": "go.sum",
+      "sha256": "d6dd36ca5b03d24e6598a25ce1cc0014e24fbc311c0b65f57aefe5fd146e2a25"
+    },
+    {
+      "arm": "B",
+      "bytes": 24567,
+      "commit": "8e1133085b4052e344a73063f28c2ab142485c73",
+      "git_blob": "9c4c8cb4192a02487dda6c31ec7ed9aeeca8877a",
+      "path": "scripts/mvcc_primary_cost_gate.py",
+      "sha256": "b57bc93ce46900357052b07a796158eaef71d931bcfb59990992cb97b4f706a3"
+    },
+    {
+      "arm": "B",
+      "bytes": 6288,
+      "commit": "8e1133085b4052e344a73063f28c2ab142485c73",
+      "git_blob": "fa214cd4a5dfde08d64acac977c61af980000998",
+      "path": "TreeDB/mvcc/primary_generation_routing_v6_test.go",
+      "sha256": "2642bedc0ed6edbea8d7a599c66642c1d2107d93f1faf03355fb8cb071c56ab9"
+    },
+    {
+      "arm": "B",
+      "bytes": 1431850,
+      "commit": "8e1133085b4052e344a73063f28c2ab142485c73",
+      "git_blob": "89c32e3eec58ea6fd7e370d088247d590edbd62e",
+      "path": "TreeDB/caching/db.go",
+      "sha256": "f9740bc2e1b9ac0eb668aa7d5a0d054211133e0f710065cb7710fd0ec8dad438"
+    },
+    {
+      "arm": "B",
+      "bytes": 17967,
+      "commit": "8e1133085b4052e344a73063f28c2ab142485c73",
+      "git_blob": "49f342d579e62a10ef644bf50eb13ff7eba938e2",
+      "path": "TreeDB/mvcc/mvcc.go",
+      "sha256": "17f4a4ed8f1a8b539028440f04af47203891c00e959d8b93d832a20bc038f63c"
+    },
+    {
+      "arm": "B",
+      "bytes": 3242,
+      "commit": "8e1133085b4052e344a73063f28c2ab142485c73",
+      "git_blob": "10403b177c53d3254f5be740607b8c374b4dad99",
+      "path": "TreeDB/mvcc/native_ordered.go",
+      "sha256": "dad3bf0ab70673f4342e8b18e174c224c2c5f47e2cbc9e1d72ff9e2d64a6381a"
+    },
+    {
+      "arm": "B",
+      "bytes": 7877,
+      "commit": "8e1133085b4052e344a73063f28c2ab142485c73",
+      "git_blob": "c04f6bef7d2abbe1dddfe8a00efbc151a34d5066",
+      "path": "TreeDB/cow_ordered_native.go",
+      "sha256": "50a70ca4f7d5c9a3580779415edcdc5320746d946d2e926932f42f1e66e2754c"
+    },
+    {
+      "arm": "B",
+      "bytes": 219712,
+      "commit": "8e1133085b4052e344a73063f28c2ab142485c73",
+      "git_blob": "06f27d153fb60fb7d0841b9f18e2624c3b7f12f3",
+      "path": "TreeDB/db/db.go",
+      "sha256": "86af0719b00435b6161582fb7bb699b3955fdd4d0478267e9d437910e487f927"
+    },
+    {
+      "arm": "B",
+      "bytes": 7372,
+      "commit": "8e1133085b4052e344a73063f28c2ab142485c73",
+      "git_blob": "1084acd74e1072c646b72a00479f1ab700fa2457",
+      "path": "TreeDB/db/value_reader.go",
+      "sha256": "55d66aa2a2ace14a7356b1699ef1be119c70a2b92bae5f7b14e8280c4072c29b"
+    },
+    {
+      "arm": "B",
+      "bytes": 55956,
+      "commit": "8e1133085b4052e344a73063f28c2ab142485c73",
+      "git_blob": "3e76948384b0da40c27e0da4f50f604744845fe5",
+      "path": "TreeDB/tree/tree.go",
+      "sha256": "1ddafdc83e6a4f8037593faeaf897ae039675187d78ab4168fd3c45b654f3564"
+    },
+    {
+      "arm": "C",
+      "bytes": 2267,
+      "commit": "b24dea5e339cf94d419346ac9b38a8c90d6d3f02",
+      "git_blob": "f8ee8503a4ddd60e6dee233d032138ca77b631ab",
+      "path": "AGENTS.md",
+      "sha256": "89d419e93fd29ed779b600458945b928cd224773ab53db49702ea0358b5d63f6"
+    },
+    {
+      "arm": "C",
+      "bytes": 1003,
+      "commit": "b24dea5e339cf94d419346ac9b38a8c90d6d3f02",
+      "git_blob": "499f427b9229696496086dfa9a5959d33881fe91",
+      "path": "TreeDB/AGENTS.md",
+      "sha256": "49ad91d73c0bb4a8d3ab0c281478df5cb563319dd05b8bddd47fb43538977e2c"
+    },
+    {
+      "arm": "C",
+      "bytes": 5176,
+      "commit": "b24dea5e339cf94d419346ac9b38a8c90d6d3f02",
+      "git_blob": "32937836f5cce4e9e440bd971e83095c00d25d7a",
+      "path": "go.mod",
+      "sha256": "2dcddbc32b8ff06dc73c6ed987b92988ed4a239e396d5a9e20119b2b97bf82c4"
+    },
+    {
+      "arm": "C",
+      "bytes": 45013,
+      "commit": "b24dea5e339cf94d419346ac9b38a8c90d6d3f02",
+      "git_blob": "cd1067910a7b6bd17a2507206cb23a8104696e85",
+      "path": "go.sum",
+      "sha256": "d6dd36ca5b03d24e6598a25ce1cc0014e24fbc311c0b65f57aefe5fd146e2a25"
+    },
+    {
+      "arm": "C",
+      "bytes": 24567,
+      "commit": "b24dea5e339cf94d419346ac9b38a8c90d6d3f02",
+      "git_blob": "9c4c8cb4192a02487dda6c31ec7ed9aeeca8877a",
+      "path": "scripts/mvcc_primary_cost_gate.py",
+      "sha256": "b57bc93ce46900357052b07a796158eaef71d931bcfb59990992cb97b4f706a3"
+    },
+    {
+      "arm": "C",
+      "bytes": 6288,
+      "commit": "b24dea5e339cf94d419346ac9b38a8c90d6d3f02",
+      "git_blob": "fa214cd4a5dfde08d64acac977c61af980000998",
+      "path": "TreeDB/mvcc/primary_generation_routing_v6_test.go",
+      "sha256": "2642bedc0ed6edbea8d7a599c66642c1d2107d93f1faf03355fb8cb071c56ab9"
+    },
+    {
+      "arm": "C",
+      "bytes": 1431850,
+      "commit": "b24dea5e339cf94d419346ac9b38a8c90d6d3f02",
+      "git_blob": "89c32e3eec58ea6fd7e370d088247d590edbd62e",
+      "path": "TreeDB/caching/db.go",
+      "sha256": "f9740bc2e1b9ac0eb668aa7d5a0d054211133e0f710065cb7710fd0ec8dad438"
+    },
+    {
+      "arm": "C",
+      "bytes": 17967,
+      "commit": "b24dea5e339cf94d419346ac9b38a8c90d6d3f02",
+      "git_blob": "49f342d579e62a10ef644bf50eb13ff7eba938e2",
+      "path": "TreeDB/mvcc/mvcc.go",
+      "sha256": "17f4a4ed8f1a8b539028440f04af47203891c00e959d8b93d832a20bc038f63c"
+    },
+    {
+      "arm": "C",
+      "bytes": 3242,
+      "commit": "b24dea5e339cf94d419346ac9b38a8c90d6d3f02",
+      "git_blob": "10403b177c53d3254f5be740607b8c374b4dad99",
+      "path": "TreeDB/mvcc/native_ordered.go",
+      "sha256": "dad3bf0ab70673f4342e8b18e174c224c2c5f47e2cbc9e1d72ff9e2d64a6381a"
+    },
+    {
+      "arm": "C",
+      "bytes": 7877,
+      "commit": "b24dea5e339cf94d419346ac9b38a8c90d6d3f02",
+      "git_blob": "c04f6bef7d2abbe1dddfe8a00efbc151a34d5066",
+      "path": "TreeDB/cow_ordered_native.go",
+      "sha256": "50a70ca4f7d5c9a3580779415edcdc5320746d946d2e926932f42f1e66e2754c"
+    },
+    {
+      "arm": "C",
+      "bytes": 219873,
+      "commit": "b24dea5e339cf94d419346ac9b38a8c90d6d3f02",
+      "git_blob": "16a396b3800137bf0ec39d1c30a0f537fb914ed6",
+      "path": "TreeDB/db/db.go",
+      "sha256": "53f43cd2ccd5611eae203b19046900c3f1e486d6dc0d65134f0b7857c0ae64d1"
+    },
+    {
+      "arm": "C",
+      "bytes": 7890,
+      "commit": "b24dea5e339cf94d419346ac9b38a8c90d6d3f02",
+      "git_blob": "b6ad73753406a6627bce2b768d0bfae93420d3f9",
+      "path": "TreeDB/db/value_reader.go",
+      "sha256": "5e91f5d3f97f1a85f22a2f7995bb9663a75030c1f8d00ef64722ab7763d7db17"
+    },
+    {
+      "arm": "C",
+      "bytes": 57731,
+      "commit": "b24dea5e339cf94d419346ac9b38a8c90d6d3f02",
+      "git_blob": "b60c7153f19c13c51684bf72755e8f2ae80544fd",
+      "path": "TreeDB/tree/tree.go",
+      "sha256": "94acd5911f9c8fce15f3ac382a36c36f6ef0202c665d946e70914e6aa720e411"
+    }
+  ],
+  "unchanged_benchmark_loop_sha256": "a1a6826a9364b32ab7f5126ba260c2186aeff43b42622e642391f18e371c056c"
+}
