@@ -180,7 +180,8 @@ def census(root):
             total += s.st_size
             count += 1
             # Authenticated source/SDK metadata is input, not a generated log.
-            if top in ('output', 'guard'):
+            if top in ('output', 'guard', 'bootstrap-start.json', 'bootstrap-receipt.json',
+                       'construction-terminal.json'):
                 files += s.st_size
                 oversized = oversized or s.st_size > 32*1024**2
     free = shutil.disk_usage(root).free

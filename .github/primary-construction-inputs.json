@@ -182,8 +182,8 @@
       "sha256": "0165b8a75330f3228f2c7a234b4ff8a107b9139c2b519147f4c8e9fe99b262d8"
     },
     ".github/scripts/primary_allocation_construction.py": {
-      "bytes": 35171,
-      "sha256": "d23ade0e61f5daf3a5462f65b84ed0351c597b674a2300fba5aeca232a179086"
+      "bytes": 35274,
+      "sha256": "38baed24dd3f93dbf052857eb8135dfbdc7e90b8ca442c8e7104007b12e16aad"
     },
     ".github/scripts/primary_new_arm_control_events.py": {
       "bytes": 3304,
