@@ -12,7 +12,7 @@
     "M0 observation is manual diagnostic-only on a separately fixed product; no forecast starts it or replaces failed M0 acceptance.",
     "Bounded maintenance comparison is a manually granted diagnostic on fixed baseline/candidate products; no forecast starts it or establishes cost, M0 or native acceptance."
   ],
-  "discovery_source_sha256": "f650f9ac8c271ba4f889e469d4e81118737e696294f7601ab0f82e79122aa311",
+  "discovery_source_sha256": "66eaccb425890d03bbcd67a63f181d842b9a349cf71670aae81b243e075cbb71",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
@@ -1279,6 +1279,19 @@
         "tags": "entry command defaults/flags retained"
       },
       "workflow": "unified-bench-tests.yml"
+    },
+    {
+      "id": "windows-warm-search-alloc-diagnostic/diagnostic/single",
+      "job": "diagnostic",
+      "owner": "CI maintainer with affected collections performance owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {},
+        "race": false,
+        "runs_on": "windows-latest",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "windows-warm-search-alloc-diagnostic.yml"
     }
   ],
   "mode": "advisory",
@@ -3353,6 +3366,91 @@
         }
       },
       "sha256": "99d0ab3d19d5d00513da45f42bd10fab6e0a02e908042cec68092bae44383264"
+    },
+    "windows-warm-search-alloc-diagnostic.yml": {
+      "coverage": "existing execution only; triggers/path filters are unchanged",
+      "events": {
+        "workflow_dispatch": {
+          "inputs": {
+            "expected_head": {
+              "description": "Independently reviewed exact diagnostic head",
+              "required": true,
+              "type": "string"
+            }
+          }
+        }
+      },
+      "git_blob": "2aff368438509e1d086e7f4ecd5860f481ca1237",
+      "jobs": {
+        "diagnostic": {
+          "checkout": [
+            {
+              "persist-credentials": false,
+              "ref": "${{ github.sha }}"
+            }
+          ],
+          "commands": [
+            {
+              "command_sha256": "4d80898e77a722e24ab671359e085a7dcfbe78a88dac0bbcd4bd8babf2aeb64a",
+              "entrypoint": ".github/workflows/windows-warm-search-alloc-diagnostic.yml:27",
+              "env": {
+                "EXPECTED": "${{ inputs.expected_head }}",
+                "WORKFLOW_COMMIT": "${{ github.workflow_sha }}"
+              },
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Verify dispatch binding"
+            },
+            {
+              "command_sha256": "ab14fbd203cadf7f3513074db3d93d54dc44fc0a25844b1d5dc245f7feb08e2f",
+              "entrypoint": ".github/workflows/windows-warm-search-alloc-diagnostic.yml:45",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Record input context and compile once",
+              "working-directory": "TreeDB"
+            },
+            {
+              "command_sha256": "d33f7679f58c60aec63fe5335a7eee888eeaff643abee09f6c6c2fbe545d84bc",
+              "entrypoint": ".github/workflows/windows-warm-search-alloc-diagnostic.yml:73",
+              "env": {
+                "TREEDB_COLLECTIONS_VECTOR_ALLOCATION_GATE": "native-search-warm-scratch",
+                "TREEDB_WARM_SEARCH_ALLOC_PROFILE_DIR": "${{ runner.temp }}/warm-search-alloc"
+              },
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Run original selected child once",
+              "working-directory": "TreeDB"
+            },
+            {
+              "command_sha256": "93a72239d406079ddf315f2212583f66f8b9f5d76d1d9cf7b3c0d8102c5acc11",
+              "entrypoint": ".github/workflows/windows-warm-search-alloc-diagnostic.yml:87",
+              "if": "always() && steps.build.outcome == 'success' && steps.test.outcome != 'skipped'",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Decode complete snapshots"
+            },
+            {
+              "command_sha256": "462cf36e97e00d85a5a4aad8e7ec7dba6e3233c6b6a9d51255b29711ffeadddb",
+              "entrypoint": ".github/workflows/windows-warm-search-alloc-diagnostic.yml:104",
+              "env": {
+                "BUILD_OUTCOME": "${{ steps.build.outcome }}",
+                "DECODE_OUTCOME": "${{ steps.decode.outcome }}",
+                "TEST_OUTCOME": "${{ steps.test.outcome }}"
+              },
+              "if": "always()",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Check closed output sizes and record step outcomes"
+            }
+          ],
+          "environment": {
+            "GOMAXPROCS": "2",
+            "GOMEMLIMIT": "4GiB",
+            "GOTOOLCHAIN": "local",
+            "GOWORK": "off"
+          },
+          "matrix": null,
+          "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": false,
+          "runs_on": "windows-latest"
+        }
+      },
+      "sha256": "10d9253230ad58fe801df7898ba68ece7f4613dc621c4638394e68d045e3e822"
     }
   }
 }
