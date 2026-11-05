@@ -364,6 +364,10 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/mongo_gateway/vector_retirement_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 4},
 	{path: "TreeDB/nativewire/create_unsupported_profile_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 4},
 	{path: "TreeDB/collections/native_ordinary_columngraph_publication_fault_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 5},
+	// Leaf-pack handoff fixtures use retained public schema names and manifest
+	// metadata; they do not introduce a new storage owner.
+	{path: "TreeDB/caching/cow_leaf_native_graph_handoff_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 4},
+	{path: "TreeDB/collections/native_leaf_pack_graph_refresh_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	// Captured graph handoff and preassignment controls consume retained public
 	// schema types, declared columns, and durable manifest/profile fields.
 	{path: "TreeDB/collections/native_graph_handoff_public_witness_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 6},

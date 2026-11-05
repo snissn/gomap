@@ -2587,7 +2587,7 @@ func (db *DB) applyRewriteSwapBatchToSystemRootWithOwner(swaps []rewriteSwap, sy
 	}()
 	post, err := db.finalizeCommitReleasingRootSerialization(
 		userRoot, newSystemRoot, retired, sync, metrics, touched,
-		systemOpts.outerLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{privateCOWEquivalentRewriteOwner: owner},
+		systemOpts.outerLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{privateCOWRewrite: newPrivateCOWRewriteFinalization(owner, nil)},
 		baseSeq,
 		func() {
 			db.writeMu.Unlock()
@@ -2691,7 +2691,7 @@ func (db *DB) applyRewriteSwapBatchToCollectionRootWithOwner(target *collectionR
 	if newCollectionRoot == collectionRoot {
 		post, err := db.finalizeCommitReleasingRootSerialization(
 			userRoot, systemRoot, retired, sync, metrics, touched,
-			rootOpts.outerLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{privateCOWEquivalentRewriteOwner: owner},
+			rootOpts.outerLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{privateCOWRewrite: newPrivateCOWRewriteFinalization(owner, nil)},
 			baseSeq,
 			func() {
 				db.writeMu.Unlock()
@@ -2726,7 +2726,7 @@ func (db *DB) applyRewriteSwapBatchToCollectionRootWithOwner(target *collectionR
 	forceValueLogRefresh := rootOpts.outerLeavesInValueLog || systemOpts.outerLeavesInValueLog
 	post, err := db.finalizeCommitReleasingRootSerialization(
 		userRoot, newSystemRoot, retired, sync, metrics, touched,
-		forceValueLogRefresh, vlogRefDelta, nil, nil, finalizeCommitOptions{privateCOWEquivalentRewriteOwner: owner},
+		forceValueLogRefresh, vlogRefDelta, nil, nil, finalizeCommitOptions{privateCOWRewrite: newPrivateCOWRewriteFinalization(owner, nil)},
 		baseSeq,
 		func() {
 			db.writeMu.Unlock()
@@ -2956,10 +2956,10 @@ func (db *DB) applyRewriteSwapBatchOptimisticWithOwner(swaps []rewriteSwap, sync
 		newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments,
 		db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil,
 		finalizeCommitOptions{
-			privateCOWEquivalentRewriteOwner: owner,
-			skipPrePublishFlush:              true,
-			expectedBaseCommitSeq:            baseSeq,
-			hasExpectedBaseCommitSeq:         true,
+			privateCOWRewrite:        newPrivateCOWRewriteFinalization(owner, nil),
+			skipPrePublishFlush:      true,
+			expectedBaseCommitSeq:    baseSeq,
+			hasExpectedBaseCommitSeq: true,
 			recordVacuumMutation: func() {
 				db.vacuum.RecordEntries(entries)
 			},
@@ -3067,7 +3067,7 @@ func (db *DB) applyRewriteSwapBatchSerializedWithOwner(swaps []rewriteSwap, sync
 	post, err := db.finalizeCommitReleasingRootSerialization(
 		newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments,
 		db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, finalizeCommitOptions{
-			privateCOWEquivalentRewriteOwner: owner,
+			privateCOWRewrite: newPrivateCOWRewriteFinalization(owner, nil),
 			recordVacuumMutation: func() {
 				db.vacuum.RecordEntries(entries)
 			},

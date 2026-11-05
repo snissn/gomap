@@ -10233,6 +10233,7 @@ type DB struct {
 	testRetainedPruneQuietWaitExitHook  func(retainedPruneQuietWaitResult)
 	testSkipRetainedPrune               bool
 	testSkipVlogCheckpointKick          bool
+	testAfterPrivateCOWLeafPack         func(context.Context, backenddb.LeafGenerationPackRunOnceStats) error
 	testSkipCheckpointAutoVacuum        bool
 	testAgeBlockedStateReadHook         func()
 	testStageConfirmStateReadHook       func()

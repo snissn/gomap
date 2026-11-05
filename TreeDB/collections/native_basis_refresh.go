@@ -174,9 +174,14 @@ func (s *nativeBasisRefreshScratch) root(c *nativeCollectionState, d *nativeDoma
 // prepareNativeEngineBasisRefresh preserves the logical engine, including all
 // active/captured sources and catalog deltas, while rebinding moved physical
 // roots using their original qualified descriptors. Count and construction use
-// the SAME immutable paired Snapshots; no historical rows or source chain are
-// scanned. Only changed domains/collections get new immutable headers.
+// the SAME immutable paired Snapshots; no historical rows are scanned. The
+// qualified leaf-pack path also walks pending typed headers to preserve their
+// exact graph basis. Only changed domains/collections get new immutable headers.
 func prepareNativeEngineBasisRefresh(base *nativeEngineVersion, before, after *backenddb.Snapshot) (*nativeEngineVersion, error) {
+	return prepareNativeEnginePhysicalBasisRefresh(base, before, after, false)
+}
+
+func prepareNativeEnginePhysicalBasisRefresh(base *nativeEngineVersion, before, after *backenddb.Snapshot, leafPack bool) (*nativeEngineVersion, error) {
 	if base == nil || base.collections == nil || before == nil || after == nil || base.maintenance == nil || base.inventory != nil {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
@@ -185,7 +190,7 @@ func prepareNativeEngineBasisRefresh(base *nativeEngineVersion, before, after *b
 	if !oldOK || !newOK {
 		return nil, backenddb.ErrClosed
 	}
-	if oldToken.AppliedCommandLSN != newToken.AppliedCommandLSN {
+	if oldToken.AppliedCommandLSN != newToken.AppliedCommandLSN || oldToken.MaxEntryRevision != newToken.MaxEntryRevision {
 		return nil, backenddb.ErrRootPublicationBasisMismatch
 	}
 	lease, err := base.maintenance.AdmitNativeBytes(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeBasisRefreshScratch{}))))
@@ -220,6 +225,11 @@ func prepareNativeEngineBasisRefresh(base *nativeEngineVersion, before, after *b
 		if err = s.collection(c); err != nil {
 			return false
 		}
+		graph, e := s.leafPackGraphRefresh(c, leafPack)
+		if e != nil {
+			err = e
+			return false
+		}
 		touched := false
 		c.domains.Scan(func(_ string, d *nativeDomainState) bool {
 			var root uint64
@@ -227,7 +237,7 @@ func prepareNativeEngineBasisRefresh(base *nativeEngineVersion, before, after *b
 			if err != nil {
 				return false
 			}
-			if root != d.catalogRoot {
+			if root != d.catalogRoot || graph.touches(d) {
 				if domains == int(^uint(0)>>1) {
 					err = memtable.ErrCOWCapacity
 					return false
@@ -273,6 +283,11 @@ func prepareNativeEngineBasisRefresh(base *nativeEngineVersion, before, after *b
 		return next, err
 	}
 	base.collections.Scan(func(id uint64, c *nativeCollectionState) bool {
+		graph, e := s.leafPackGraphRefresh(c, leafPack)
+		if e != nil {
+			err = e
+			return false
+		}
 		touched := 0
 		c.domains.Scan(func(_ string, d *nativeDomainState) bool {
 			root, e := s.root(c, d)
@@ -280,7 +295,7 @@ func prepareNativeEngineBasisRefresh(base *nativeEngineVersion, before, after *b
 				err = e
 				return false
 			}
-			if root != d.catalogRoot {
+			if root != d.catalogRoot || graph.touches(d) {
 				touched++
 			}
 			return true
@@ -302,7 +317,7 @@ func prepareNativeEngineBasisRefresh(base *nativeEngineVersion, before, after *b
 				err = e
 				return false
 			}
-			if root == d.catalogRoot {
+			if root == d.catalogRoot && !graph.touches(d) {
 				return true
 			}
 			var domain *nativeDomainState
@@ -328,9 +343,18 @@ func prepareNativeEngineBasisRefresh(base *nativeEngineVersion, before, after *b
 				}
 				domain.pending = d.pending
 			}
-			d.typed.retain()
-			domain.typed = d.typed
+			if graph.touches(d) {
+				domain.typed, err = graph.clone(d.typed, admit)
+				if err != nil {
+					return false // the original private domain owns partial headers
+				}
+			} else {
+				d.typed.retain()
+				domain.typed = d.typed
+			}
 			d.captured.retain()
+			// Captured sources contain immutable raw COW entries, not graph
+			// headers. Their entire list stays shared; no prefix is consumed.
 			domain.captured = d.captured
 			if err = p.domainBuilder.Set(name, domain); err != nil {
 				return false

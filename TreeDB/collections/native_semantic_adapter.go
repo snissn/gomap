@@ -74,3 +74,22 @@ func (e *nativeEngineVersion) PrepareBasisRefresh(before, after *backenddb.Snaps
 }
 
 var _ backenddb.NativeSemanticBasisRefresher = (*nativeEngineVersion)(nil)
+
+// Leaf packing preserves decoded entries and the exact original asset refs and
+// codecs. Only its producer-qualified before/after receipt authorizes rebinding
+// accepted graph markers; equal LSNs or a generic physical refresh do not.
+func (e *nativeEngineVersion) PrepareLeafPackBasisRefresh(before, after *backenddb.Snapshot, transition backenddb.LeafGenerationPackTransition) (backenddb.NativeSemanticState, error) {
+	if err := transition.Validate(before, after); err != nil {
+		return nil, err
+	}
+	next, err := prepareNativeEnginePhysicalBasisRefresh(e, before, after, true)
+	if err != nil {
+		err = fmt.Errorf("collections: native leaf-pack basis refresh: %w", err)
+	}
+	if next == nil {
+		return nil, err
+	}
+	return next, err
+}
+
+var _ backenddb.NativeSemanticLeafPackBasisRefresher = (*nativeEngineVersion)(nil)
