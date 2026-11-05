@@ -6,8 +6,8 @@ from pathlib import Path
 import stat
 import zipfile
 
-EXPECTED_BYTES = 229343142
-EXPECTED_SHA = "d0807984e49f8c2eb73a11ee72f684832f4499bfaf472408b464f408ed7b257f"
+EXPECTED_BYTES = 229331016
+EXPECTED_SHA = "75733058765414d164dffef98363a2bbe96f046bfb519646c0e870dd582af647"
 NAMES = {'primary/summary.json', 'primary/summary.md', 'primary/failure.json',
          'primary/bindings.json', 'primary/samples.json', 'primary/commands.json',
          'primary/preflight.json', 'primary/preflight-acquisition.json'}
@@ -19,7 +19,7 @@ with archive.open("rb") as f:
     for chunk in iter(lambda: f.read(1048576), b""):
         h.update(chunk)
 assert h.hexdigest() == EXPECTED_SHA, "archive digest mismatch"
-result = {"source_head": os.environ["GITHUB_SHA"], "artifact": 13389648188,
+result = {"source_head": os.environ["GITHUB_SHA"], "artifact": 13392425638,
           "archive_sha256": h.hexdigest(), "scope": "retained original text only; no gate alteration",
           "entries": [], "texts": {}, "missing": []}
 with zipfile.ZipFile(archive) as z:
