@@ -6,9 +6,11 @@ from pathlib import Path
 import stat
 import zipfile
 
-EXPECTED_BYTES = 21356
-EXPECTED_SHA = "63bafc7532bea8bfa9652a88ce373ba984679b11ca310deafeb2c95b8a8eada5"
-NAMES = {'fixture.json', 'results.json', 'summary.md'}
+EXPECTED_BYTES = 229343142
+EXPECTED_SHA = "d0807984e49f8c2eb73a11ee72f684832f4499bfaf472408b464f408ed7b257f"
+NAMES = {'primary/summary.json', 'primary/summary.md', 'primary/failure.json',
+         'primary/bindings.json', 'primary/samples.json', 'primary/commands.json',
+         'primary/preflight.json', 'primary/preflight-acquisition.json'}
 root = Path(os.environ["RUNNER_TEMP"]) / "four-gate-readback"
 archive = root / "original.zip"
 assert archive.stat().st_size == EXPECTED_BYTES, "archive size mismatch"
@@ -17,7 +19,7 @@ with archive.open("rb") as f:
     for chunk in iter(lambda: f.read(1048576), b""):
         h.update(chunk)
 assert h.hexdigest() == EXPECTED_SHA, "archive digest mismatch"
-result = {"source_head": os.environ["GITHUB_SHA"], "artifact": 13390650380,
+result = {"source_head": os.environ["GITHUB_SHA"], "artifact": 13389648188,
           "archive_sha256": h.hexdigest(), "scope": "retained original text only; no gate alteration",
           "entries": [], "texts": {}, "missing": []}
 with zipfile.ZipFile(archive) as z:
