@@ -2336,20 +2336,20 @@
           }
         }
       },
-      "git_blob": "5c861646dc393f177f457e86453aa53eaa31c58a",
+      "git_blob": "5e488b8309dda0baa9769f03a496bd9adc9f9647",
       "jobs": {
         "diagnostic": {
           "checkout": [],
           "commands": [
             {
-              "command_sha256": "b6c49a01ef74fdfe9ac3060ff474612e26e5e8003ecd97de9f1c975c3199814b",
+              "command_sha256": "afe547a7e6cba5958edca36325eca1a9f5f32231b7ca677f39f742dfa66cc9a4",
               "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:26",
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
               "name": "Authenticate fixed metadata harness only"
             },
             {
               "command_sha256": "a65b6c7a49a27e8ba5d8e391dc46550fd8459296da5c0904792de6f408362c1b",
-              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:87",
+              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:97",
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
               "name": "One literal-only query and complete checked publication"
             }
@@ -2366,7 +2366,7 @@
           "runs_on": "ubuntu-24.04"
         }
       },
-      "sha256": "b5db070d80bda1b0a9d6523dc5981f479ee69091117bd55370281f652c7abe45"
+      "sha256": "c41f37e7160cb029341c53138863a6d8aee15718b23b00274e811ee3bbd752c2"
     },
     "treedb-tests.yml": {
       "coverage": "existing execution only; triggers/path filters are unchanged",

@@ -28,39 +28,39 @@ jobs:
           try:
            import base64,hashlib,json,os,pathlib,re,shutil,stat,time,urllib.request
            e=os.environ
-           assert e['GITHUB_REPOSITORY']=='snissn/gomap' and e['GITHUB_ACTOR_ID']=='1981537'
-           assert e['GITHUB_REF']=='refs/heads/diagnostic/primary-two-known-images-metadata-01'
-           assert e['GITHUB_EVENT_NAME']=='workflow_dispatch' and e['GITHUB_RUN_ATTEMPT']=='1'
-           assert e['GITHUB_SHA']==e['REVIEWED_HEAD']==e['WORKFLOW_COMMIT']
+           assert e['GITHUB_REPOSITORY']=='snissn/gomap' and e['GITHUB_ACTOR_ID']=='1981537', 'repository_actor'
+           assert e['GITHUB_REF']=='refs/heads/diagnostic/primary-two-known-images-metadata-01', 'fixed_branch'
+           assert e['GITHUB_EVENT_NAME']=='workflow_dispatch' and e['GITHUB_RUN_ATTEMPT']=='1', 'event_first_attempt'
+           assert e['GITHUB_SHA']==e['REVIEWED_HEAD']==e['WORKFLOW_COMMIT'], 'head_equality'
            images=[dict(ImageOS='ubuntu24',ImageVersion='20261025.353.1',RUNNER_OS='Linux',RUNNER_ARCH='X64'),
                    dict(ImageOS='ubuntu24',ImageVersion='20261101.360.1',RUNNER_OS='Linux',RUNNER_ARCH='X64')]
            image={k:e.get(k) for k in images[0]}
-           assert image in images
-           assert len(e['ROOT_METADATA_ADMISSION_B64'])<=8192
+           assert image in images, 'known_image'
+           assert len(e['ROOT_METADATA_ADMISSION_B64'])<=8192, 'admission_bound'
            a=json.loads(base64.b64decode(e['ROOT_METADATA_ADMISSION_B64'],validate=True))
-           assert a['schema']=='root-primary-row217-metadata-only-v1' and a['status']=='ADMITTED_METADATA_ONLY'
-           assert a['authority']=='ROOT' and a['authority_thread']=='01a18e7c-8c23-7fd2-8d55-b0486d938cd3'
-           assert a['actor_id']=='1981537' and a['head']==e['GITHUB_SHA'] and a['allow_build'] is False
-           assert a['expected_images']==images
-           assert re.fullmatch('[0-9a-f]{64}',a['independent_source_review_sha256'])
-           assert not any(e.get(k) for k in ('NODE_OPTIONS','NODE_PATH','NODE_V8_COVERAGE','NODE_COMPILE_CACHE','GOMAXPROCS'))
+           assert a['schema']=='root-primary-row217-metadata-only-v1' and a['status']=='ADMITTED_METADATA_ONLY', 'admission_schema_status'
+           assert a['authority']=='ROOT' and a['authority_thread']=='01a18e7c-8c23-7fd2-8d55-b0486d938cd3', 'immutable_root_actor'
+           assert a['actor_id']=='1981537' and a['head']==e['GITHUB_SHA'] and a['allow_build'] is False, 'admission_actor_head_no_build'
+           assert a['expected_images']==images, 'immutable_image_list'
+           assert re.fullmatch('[0-9a-f]{64}',a['independent_source_review_sha256']), 'review_hash_syntax'
+           assert not any(e.get(k) for k in ('NODE_OPTIONS','NODE_PATH','NODE_V8_COVERAGE','NODE_COMPILE_CACHE','GOMAXPROCS')), 'forbidden_ambient_flags'
            common=pathlib.Path('/home/runner/work');parent=pathlib.Path(e['RUNNER_TEMP']).resolve(strict=True)
-           assert parent==common/'_temp' and pathlib.Path(e['GITHUB_WORKSPACE']).resolve().is_relative_to(common)
+           assert parent==common/'_temp' and pathlib.Path(e['GITHUB_WORKSPACE']).resolve().is_relative_to(common), 'counted_root_paths'
            root=parent/'primary-construction-metadata';root.mkdir();harness=root/'harness';harness.mkdir()
            start=time.monotonic()
            rows={'metadata.py': {'bytes': 10771, 'sha256': '5ba18f4a301cd90dae40156341dcaa3d9e4579b135bf478832635a8b329657dd'}, 'original-runtime-inputs.json': {'bytes': 39304, 'sha256': '3845114ed8f70cfaf2c6456a3017e132ac26810647f77eb94d05f1e1c434954b'}, 'publish.py': {'bytes': 3303, 'sha256': '2971a490f855164848ea37aed83e02d5d54e80a8c64961f7dd814a9d82ae5fce'}, 'scripts/ycsb_campaign_guard.py': {'bytes': 19548, 'sha256': 'b1f5308ce5de5bf1252a77694599f4be4fdf769803b4d7300c08b4901f8d9642'}, 'scripts/ycsb_compare_validate.py': {'bytes': 49260, 'sha256': '85584d03f46e2f49be94d91b377b77e08494a846a30285bfb1300b932d57cb46'}, 'scripts/ycsb_evidence_json.py': {'bytes': 1240, 'sha256': '86989ebbfa14b8f9f3c20ebe470314a29fd28c7db2ab10734d9518e39d270ea6'}, 'scripts/ycsb_runtime_observer.py': {'bytes': 20408, 'sha256': '9ea6f525e0cf46df5301be3f903367816bdb032a3d0abb4c204bda60ee104d8f'}, 'inputs.json': {'bytes': 837, 'sha256': 'f3ff98e5857570fdcc9271680aca04d442a71a08d90541d4a1923688da07eb9e'}}
            def check(extra=0):
             total=0
             for directory,dirs,names in os.walk(common,followlinks=False):
-             assert all(not (pathlib.Path(directory)/n).is_symlink() for n in dirs)
+             assert all(not (pathlib.Path(directory)/n).is_symlink() for n in dirs), 'root_directory_not_symlink'
              for n in names:
               p=pathlib.Path(directory)/n
               try: item=p.lstat()
               except FileNotFoundError: continue
-              assert stat.S_ISREG(item.st_mode)
+              assert stat.S_ISREG(item.st_mode), 'root_regular_files'
               total+=item.st_size
-            assert total+extra<=1073741824 and shutil.disk_usage(common).free>=10737418240
-            assert time.monotonic()-start<60
+            assert total+extra<=1073741824 and shutil.disk_usage(common).free>=10737418240, 'root_bytes_and_free_floor'
+            assert time.monotonic()-start<60, 'bootstrap_elapsed'
             return total
            check(sum(r['bytes'] for r in rows.values())+8388608)
            class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -70,17 +70,27 @@ jobs:
             p=harness/name;p.parent.mkdir(parents=True,exist_ok=True)
             digest=hashlib.sha256();received=0
             with opener.open('https://raw.githubusercontent.com/snissn/gomap/'+e['GITHUB_SHA']+'/.github/primary-input-metadata/'+name,timeout=10) as response,p.open('xb') as out:
-             assert response.status==200
+             assert response.status==200, 'response_status'
              while True:
               block=response.read(65536)
               if not block: break
-              assert received+len(block)<=r['bytes'];check(len(block));out.write(block);received+=len(block);digest.update(block)
-            assert received==r['bytes'] and digest.hexdigest()==r['sha256'];check()
+              assert received+len(block)<=r['bytes'], 'received_byte_bound';check(len(block));out.write(block);received+=len(block);digest.update(block)
+            assert received==r['bytes'] and digest.hexdigest()==r['sha256'], 'received_length_and_sha';check()
            data=json.dumps(a,sort_keys=True,separators=(',',':')).encode('ascii')+b'\n';check(len(data))
            with (root/'dispatch-admission.json').open('xb') as target:target.write(data)
            print(json.dumps(dict(schema='primary-metadata-bootstrap-v1',files=len(rows),all_pins_verified=True,whole_bytes=check(),scope='first authenticated sampled step; not platform-startup quota')))
           except BaseException as error:
-           print(json.dumps(dict(status='METADATA_BOOTSTRAP_FAILED',error_class=type(error).__name__)));raise SystemExit(1)
+           predicate=error.args[0] if type(error) is AssertionError and error.args and error.args[0] in ('repository_actor','fixed_branch','event_first_attempt','head_equality','known_image','admission_bound','admission_schema_status','immutable_root_actor','admission_actor_head_no_build','immutable_image_list','review_hash_syntax','forbidden_ambient_flags','counted_root_paths','root_directory_not_symlink','root_regular_files','root_bytes_and_free_floor','bootstrap_elapsed','response_status','received_byte_bound','received_length_and_sha') else 'non_assertion_or_unlabelled'
+           safe_env=locals().get('e',{})
+           safe_image=dict(ImageOS='ubuntu24' if safe_env.get('ImageOS')=='ubuntu24' else 'missing_or_other',
+                           ImageVersion=safe_env.get('ImageVersion') if safe_env.get('ImageVersion') in ('20261025.353.1','20261101.360.1') else 'missing_or_other',
+                           RUNNER_OS='Linux' if safe_env.get('RUNNER_OS')=='Linux' else 'missing_or_other',
+                           RUNNER_ARCH='X64' if safe_env.get('RUNNER_ARCH')=='X64' else 'missing_or_other')
+           receipt=dict(status='METADATA_BOOTSTRAP_FAILED',error_class=type(error).__name__,predicate=predicate,image=safe_image)
+           if predicate=='forbidden_ambient_flags':
+            receipt['forbidden_env_present']=dict(NODE_OPTIONS=bool(safe_env.get('NODE_OPTIONS')),NODE_PATH=bool(safe_env.get('NODE_PATH')),
+                                                  NODE_V8_COVERAGE=bool(safe_env.get('NODE_V8_COVERAGE')),NODE_COMPILE_CACHE=bool(safe_env.get('NODE_COMPILE_CACHE')),GOMAXPROCS=bool(safe_env.get('GOMAXPROCS')))
+           print(json.dumps(receipt));raise SystemExit(1)
           PY
       - name: One literal-only query and complete checked publication
         shell: bash

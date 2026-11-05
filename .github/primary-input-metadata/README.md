@@ -67,3 +67,17 @@ facts; it does not bless bootstrap drift or a complete current runtime closure.
 No original interpreter/SDK/library identity is replaced, constructor predicate
 relaxed, prior admission reused, or Go/tool/product executed. Constructor input
 binding and any future execution need separate exact-source review/admission.
+
+Failure-only bootstrap diagnosis adds constant IDs to the same assertions,
+including nested census and fetch guards; their Boolean expressions and order
+remain unchanged. The failure receipt includes class, one constant predicate,
+and a four-field image tuple containing only known image/OS/architecture
+literals or missing_or_other. Only the forbidden_ambient_flags failure includes
+five presence booleans; it never includes their values. No arbitrary exception
+text, traceback locals, cwd or private environment content is printed. Unknown
+or nonassertion errors use non_assertion_or_unlabelled. Combined conditions
+remain combined; a label identifies the original guard, not an unrecorded
+subcause. This successor does not prove the prior ff9644 failure's predicate.
+There is no added visit/probe/loop or automatic repeat; fresh review and ROOT
+admission remain required. The fixed dispatch branch remains
+diagnostic/primary-two-known-images-metadata-01.
