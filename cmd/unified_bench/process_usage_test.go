@@ -165,7 +165,20 @@ func TestProcessUsageOutputPathAliases(t *testing.T) {
 				cfg.BlockProfile = "  " + filepath.Join(dir, "block.pprof") + "  "
 				receipt = filepath.Join(dir, "block_batch_write_steady_one.pprof")
 			case "parent_component":
-				cfg.TraceProfile = dir + "/sub/../usage.json"
+				real := filepath.Join(dir, "real")
+				sub := filepath.Join(real, "sub")
+				if err := os.MkdirAll(sub, 0700); err != nil {
+					t.Fatal(err)
+				}
+				link := filepath.Join(dir, "link")
+				if err := os.Symlink(sub, link); err != nil {
+					if runtime.GOOS == "windows" && (os.IsPermission(err) || errors.Is(err, syscall.Errno(1314))) {
+						t.Skipf("Windows symlink unavailable: %v", err)
+					}
+					t.Fatalf("create symlink: %v", err)
+				}
+				receipt = filepath.Join(real, "usage.json")
+				cfg.TraceProfile = link + string(filepath.Separator) + ".." + string(filepath.Separator) + "usage.json"
 			case "receipt_parent_component":
 				receipt = dir + "/sub/../usage.json"
 			case "checkpoint_literal_symlink":
