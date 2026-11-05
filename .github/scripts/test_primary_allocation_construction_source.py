@@ -21,13 +21,13 @@ FUNCTIONS = {n.name: n for n in TREE.body if isinstance(n, ast.FunctionDef)}
 
 
 def isolated(names):
-    context = [n for n in TREE.body if isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id.startswith(('FAILURE_', 'FIRST_FAILURE_')) for t in n.targets)]
+    context = [n for n in TREE.body if isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id.startswith(('FAILURE_', 'FIRST_FAILURE_', 'RESOLVER_')) for t in n.targets)]
     names = tuple(dict.fromkeys(('observation', 'failure_context', *names)))
     nodes = context + [FUNCTIONS[name] for name in names]
     namespace = dict(threading=threading, os=os, json=json, base64=base64, re=re, Path=Path, stat=stat, hashlib=hashlib, HARNESS=ROOT,
                      BRANCH='refs/heads/diagnostic/primary-allocation-manifest-transport-01',
                      ROOT_THREAD='01a18e7c-8c23-7fd2-8d55-b0486d938cd3',
-                     CONTROLS_PASS_SHA256='5fbc92847359e709fe9ef7812786ff469f9892dedf9e4c81d27a3183e67245c5')
+                     CONTROLS_PASS_SHA256='5fbc92847359e709fe9ef7812786ff469f9892dedf9e4c81d27a3183e67245c5', DATA=ROOT/'.github/primary-construction')
     exec(compile(ast.Module(body=nodes, type_ignores=[]), '<pure-predicates-only>', 'exec'), namespace)
     return namespace
 
@@ -87,7 +87,8 @@ class PrimaryConstructionSource(unittest.TestCase):
         main = ast.get_source_segment(SOURCE, FUNCTIONS['main'])
         self.assertLess(main.index("observation('authority'"), main.index('a = authority()'))
         self.assertLess(main.index("observation('authenticate'"), main.index('authenticate(a)'))
-        self.assertLess(main.index("observation('runtime_rows'"), main.index("tool_identity(row['path'], row)"))
+        qualified = ast.get_source_segment(SOURCE, FUNCTIONS['qualified_runtime_inputs'])
+        self.assertLess(qualified.index("observation('runtime_rows'"), qualified.index("tool_identity(row['path'], row)"))
         self.assertLess(main.index('child = subprocess.Popen(cmd)'), main.index("FAILURE_CONTEXT['guard_spawned'] = True"))
         self.assertLess(main.index('code = child.wait'), main.index("FAILURE_CONTEXT['guard_returned'] = True"))
         worker = ast.get_source_segment(SOURCE, FUNCTIONS['worker'])
@@ -116,6 +117,7 @@ class PrimaryConstructionSource(unittest.TestCase):
         head = '1'*40
         a = dict(schema='primary-construction-admission-v1', status='ADMITTED_CONSTRUCTION_ONLY',
                  authority='ROOT', authority_thread=ns['ROOT_THREAD'], actor_id='1981537', head=head, run_attempt='1', allow_capture=False,
+                 resolver_configuration_policy=ns['RESOLVER_POLICY_BINDING'],
                  independent_source_review_sha256='2'*64, owner_manifest_sha256='3'*64,
                  controls=dict(status='ROOT_ADMITTED_FOCUSED_OBSERVER_CONTROLS', owner_manifest_sha256='3'*64,
                                root_receipt_sha256=ns['CONTROLS_PASS_SHA256'],
@@ -132,6 +134,8 @@ class PrimaryConstructionSource(unittest.TestCase):
             with patch.dict(os.environ, selected, clear=True):
                 return ns['authority']()
         self.assertEqual(check(a), a)
+        old=dict(a);old.pop('resolver_configuration_policy')
+        with self.assertRaises(RuntimeError):check(old)
         c=json.loads(json.dumps(a));c['controls']['root_receipt_sha256']='f'*64
         with self.assertRaises(RuntimeError):check(c)
         for field,value in [('authority','FOREIGN'),('authority_thread','FOREIGN'),('authority_thread',None),('actor_id','0'),('allow_capture',True),('head','9'*40)]:
@@ -267,12 +271,179 @@ class PrimaryConstructionSource(unittest.TestCase):
             ns['runtime_inputs']({})
         main = ast.get_source_segment(SOURCE, FUNCTIONS['main'])
         self.assertLess(main.index('authenticate(a)'), main.index('readonly = runtime_inputs(a)'))
-        self.assertLess(main.index('for row_index, row in enumerate(readonly):'), main.index("if args.mode == 'worker'"))
-        self.assertIn("tool_identity(row['path'], row)", main)
+        self.assertLess(main.index('readonly = qualified_runtime_inputs('), main.index("if args.mode == 'worker'"))
+        self.assertIn("tool_identity(row['path'], row)", ast.get_source_segment(SOURCE, FUNCTIONS['qualified_runtime_inputs']))
         worker = ast.get_source_segment(SOURCE, FUNCTIONS['worker'])
-        self.assertIn('readonly = runtime_inputs(a)', worker)
+        self.assertNotIn('readonly = runtime_inputs(a)', worker)
+        self.assertIn('resolver_record() == readonly[11]', worker)
+        self.assertIn('return worker(root, a, started, readonly)', main)
         self.assertIn("tool_identity(row['path'], row)", worker)
         self.assertIn('os.O_NOFOLLOW', ast.get_source_segment(SOURCE, FUNCTIONS['runtime_inputs']))
+
+
+    def test_resolver_role_needs_new_exact_root_policy(self):
+        ns = isolated(('need', 'sha', 'read', 'resolver_policy'))
+        binding = ns['RESOLVER_POLICY_BINDING']
+        self.assertIsNone(ns['resolver_policy']({'resolver_configuration_policy': binding}))
+        for value in ({}, {'resolver_configuration_policy': {}},
+                      {'resolver_configuration_policy': dict(binding, sha256='0'*64)},
+                      {'resolver_configuration_policy': dict(binding, decision_sha256='0'*64)}):
+            with self.subTest(value=value), self.assertRaises(RuntimeError):
+                ns['resolver_policy'](value)
+        policy = json.loads((ROOT/binding['path']).read_text())
+        self.assertEqual(policy['logical_path'], '/etc/resolv.conf')
+        self.assertEqual(policy['resolved_target'], ns['RESOLVER_EXPECTED']['path'])
+        self.assertEqual(policy['authority_thread'], ns['ROOT_THREAD'])
+
+    def test_complete_qualified_rows_keep_every_other_record(self):
+        ns = isolated(('need', 'validate_qualified_rows'))
+        original = json.loads((ROOT/'.github/primary-construction/readonly-runtime-inputs.json').read_text())
+        qualified = json.loads(json.dumps(original))
+        qualified[11].update(bytes=1024, sha256='a'*64)
+        self.assertIsNone(ns['validate_qualified_rows'](original, qualified))
+        for index in (0, 10, 12, 267):
+            value = json.loads(json.dumps(qualified)); value[index]['sha256'] = '0'*64
+            with self.subTest(index=index), self.assertRaises(RuntimeError):
+                ns['validate_qualified_rows'](original, value)
+        changes = [qualified[:-1], qualified+qualified[:1]]
+        for key,value in [('path','/different'), ('bytes',65537), ('bytes',-1),
+                          ('bytes',True), ('sha256','bad')]:
+            changed = json.loads(json.dumps(qualified)); changed[11][key] = value; changes.append(changed)
+        changed = json.loads(json.dumps(qualified)); changed[11]['extra'] = 'no'; changes.append(changed)
+        changed = json.loads(json.dumps(qualified)); changed[12] = changed[11]; changes.append(changed)
+        for value in changes:
+            with self.subTest(value=value[11] if len(value)>11 else None), self.assertRaises(RuntimeError):
+                ns['validate_qualified_rows'](original, value)
+
+    def test_stable_resolver_record_and_refusals_without_host_reads(self):
+        import io
+        from types import SimpleNamespace
+        ns = isolated(('need', 'resolver_record'))
+        target = ns['RESOLVER_EXPECTED']['path']
+        data = b'nameserver 127.0.0.53\n'
+        metadata = dict(st_dev=1, st_ino=2, st_mode=stat.S_IFREG|0o644, st_nlink=1,
+                        st_size=len(data), st_mtime_ns=3, st_ctime_ns=4)
+        closed = []
+        fixture = dict(metadata=metadata, after=None, current=None, data=data, target=target)
+        class FakePath:
+            def __init__(self, value): self.value = value
+            def resolve(self, strict=True): return FakePath(fixture['target'])
+            def lstat(self): return SimpleNamespace(**(fixture['current'] or fixture['metadata']))
+            def __eq__(self, other): return isinstance(other, FakePath) and self.value == other.value
+            def __str__(self): return self.value
+        def fstat(fd):
+            count[0] += 1
+            return SimpleNamespace(**((fixture['after'] or fixture['metadata']) if count[0]>1 else fixture['metadata']))
+        class Reader(io.BytesIO):
+            def __exit__(self, *args): self.close()
+        ns.update(Path=FakePath, os=SimpleNamespace(O_RDONLY=0,O_NOFOLLOW=1,O_NONBLOCK=2,
+            open=lambda *args:7, fstat=fstat, close=lambda fd:closed.append(fd),
+            fdopen=lambda *args,**kwargs:Reader(fixture['data'])))
+        def invoke():
+            count[0]=0
+            return ns['resolver_record']()
+        count=[0]
+        self.assertEqual(invoke(), dict(path=target,bytes=len(data),sha256=hashlib.sha256(data).hexdigest()))
+        for key,value in [('st_mode',stat.S_IFREG|0o755),('st_mode',stat.S_IFDIR|0o644),
+                          ('st_nlink',2),('st_size',65537)]:
+            fixture['metadata'] = dict(metadata, **{key:value})
+            with self.subTest(key=key), self.assertRaises(RuntimeError): invoke()
+        fixture['metadata']=metadata
+        for change in ('after','current'):
+            fixture[change] = dict(metadata,st_ino=9)
+            with self.subTest(change=change), self.assertRaises(RuntimeError): invoke()
+            fixture[change]=None
+        fixture['target']='/different'
+        with self.assertRaises(RuntimeError): invoke()
+        fixture['target']=target;fixture['data']=data+b'extra'
+        with self.assertRaises(RuntimeError): invoke()
+        self.assertTrue(closed)
+
+    def test_qualified_receipt_order_and_no_worker_refresh(self):
+        qualified = ast.get_source_segment(SOURCE, FUNCTIONS['qualified_runtime_inputs'])
+        main = ast.get_source_segment(SOURCE, FUNCTIONS['main'])
+        worker = ast.get_source_segment(SOURCE, FUNCTIONS['worker'])
+        self.assertLess(qualified.index('resolver_policy(a)'),qualified.index('resolver_record()'))
+        self.assertLess(qualified.index('tool_identity('),qualified.index('resolver_record()'))
+        self.assertLess(qualified.index("snapshot['whole_bytes']+len(encoded) <= GIB"), qualified.index('write(path, receipt)'))
+        self.assertLess(qualified.index('write(path, receipt)'), qualified.index("need(resolver_record() == qualified[11]"))
+        self.assertIn("if mode == 'launch':",qualified)
+        self.assertEqual(qualified.count('write(path, receipt)'),1)
+        self.assertIn("receipt['job'] == job",qualified)
+        self.assertIn("receipt['inventory'] == dict(bytes=len(inventory), rows=268",qualified)
+        self.assertIn('os.O_NOFOLLOW | os.O_NONBLOCK',qualified)
+        self.assertLess(main.index('authenticate(a)'),main.index('qualified_runtime_inputs('))
+        self.assertLess(main.index('qualified_runtime_inputs('),main.index("if args.mode == 'worker':"))
+        self.assertLess(worker.index('load_runner()'),worker.index('resolver_record() == readonly[11]'))
+        self.assertLess(worker.index('resolver_record() == readonly[11]'),worker.index("run('go-context'"))
+        self.assertNotIn('failure_context',worker)
+        self.assertNotIn('failure_context',ast.get_source_segment(SOURCE,FUNCTIONS['publish']))
+
+
+    def test_pure_same_job_capture_worker_revalidation_and_failure_bounds(self):
+        import io
+        from types import SimpleNamespace
+        ns = isolated(('need', 'canonical', 'validate_qualified_rows', 'qualified_runtime_inputs'))
+        original = json.loads((ROOT/'.github/primary-construction/readonly-runtime-inputs.json').read_text())
+        selected = dict(original[11],bytes=1000,sha256='b'*64)
+        state = dict(record=selected,receipt=None,whole_bytes=0,errors=[],writes=0)
+        job=dict(GITHUB_SHA='1'*40,GITHUB_RUN_ID='123',GITHUB_RUN_ATTEMPT='1',GITHUB_JOB='diagnostic')
+        binding=dict(path='.github/primary-construction/readonly-runtime-inputs.json',bytes=39082,sha256='c'*64,rows=268)
+        admission=dict(readonly_runtime_manifest=binding,resolver_configuration_policy=ns['RESOLVER_POLICY_BINDING'])
+        authenticated=[]
+        class Reader(io.BytesIO):
+            def __exit__(self,*args): self.close()
+        def encoded(): return ns['canonical'](state['receipt'])+b'\n'
+        def info(fd):
+            return SimpleNamespace(st_mode=stat.S_IFREG|0o644,st_nlink=1,st_size=len(encoded()),
+                                   st_dev=1,st_ino=2,st_mtime_ns=3,st_ctime_ns=4)
+        def capture(path,value):
+            state['writes']+=1
+            state['receipt']=json.loads(json.dumps(value))
+        ns.update(resolver_policy=lambda a:None,resolver_record=lambda:dict(state['record']),
+                  tool_identity=lambda p,row:authenticated.append((p,dict(row))),
+                  census=lambda root:dict(whole_bytes=state['whole_bytes'],errors=state['errors']),
+                  write=capture,time=SimpleNamespace(monotonic=lambda:100),GIB=1024**3,WHOLE=840,
+                  os=SimpleNamespace(environ=job,O_RDONLY=0,O_NOFOLLOW=1,O_NONBLOCK=2,
+                      open=lambda *a:7,fstat=info,fdopen=lambda *a,**kw:Reader(encoded()),close=lambda fd:None))
+        root=Path('/fixed-test-task')
+        qualified=ns['qualified_runtime_inputs'](root,admission,original,'launch',0)
+        self.assertEqual(qualified[11],selected)
+        self.assertEqual(len(authenticated),267)
+        self.assertEqual([row for p,row in authenticated],[row for i,row in enumerate(original) if i!=11])
+        self.assertEqual(state['writes'],1)
+        saved=json.loads(json.dumps(state['receipt']))
+        self.assertEqual(saved['inventory']['bytes'],len(ns['canonical'](qualified))+1)
+        self.assertEqual(saved['inventory']['sha256'],hashlib.sha256(ns['canonical'](qualified)+b'\n').hexdigest())
+        self.assertEqual(ns['qualified_runtime_inputs'](root,admission,original,'worker',0),qualified)
+        self.assertEqual(state['writes'],1)  # Worker never refreshes its bound snapshot.
+        state['record']=dict(selected,sha256='d'*64)
+        with self.assertRaisesRegex(RuntimeError,'qualified resolver identity differs'):
+            ns['qualified_runtime_inputs'](root,admission,original,'worker',0)
+        state['record']=selected
+        for key,value in [('job',dict(job,GITHUB_RUN_ID='999')),('policy',{}),
+                          ('inventory',dict(saved['inventory'],sha256='0'*64))]:
+            state['receipt']=dict(saved,**{key:value})
+            with self.subTest(key=key),self.assertRaises(RuntimeError):
+                ns['qualified_runtime_inputs'](root,admission,original,'worker',0)
+        changed=json.loads(json.dumps(saved));changed['rows'][267]['sha256']='0'*64
+        state['receipt']=changed
+        with self.assertRaisesRegex(RuntimeError,'all original runtime roles required'):
+            ns['qualified_runtime_inputs'](root,admission,original,'worker',0)
+        state['receipt']=saved;state['whole_bytes']=1024**3
+        before=state['writes']
+        with self.assertRaisesRegex(RuntimeError,'qualified runtime receipt reservation failed'):
+            ns['qualified_runtime_inputs'](root,admission,original,'launch',0)
+        self.assertEqual(state['writes'],before)
+        state['whole_bytes']=0;state['errors']=['sticky failure']
+        with self.assertRaises(RuntimeError):
+            ns['qualified_runtime_inputs'](root,admission,original,'launch',0)
+        self.assertEqual(state['writes'],before)
+        state['errors']=[]
+        snapshots=iter((selected,dict(selected,sha256='e'*64)))
+        ns['resolver_record']=lambda:dict(next(snapshots))
+        with self.assertRaisesRegex(RuntimeError,'qualified resolver identity differs'):
+            ns['qualified_runtime_inputs'](root,admission,original,'launch',0)
 
     def test_precise_owner_sources_and_baseline_separation(self):
         data=ROOT/'.github/primary-construction'

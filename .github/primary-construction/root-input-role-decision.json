@@ -1,0 +1,22 @@
+{
+  "authority_thread": "01a18e7c-8c23-7fd2-8d55-b0486d938cd3",
+  "actor_id": 1981537,
+  "status": "ROOT_SELECT_PROSPECTIVE_SOURCE_INPUT_ROLE_CORRECTION_ONLY",
+  "scope": "One maintained PRIMARY constructor successor; no runtime/dispatch admitted by this decision",
+  "source_base": "6de122831f9c589dc66bb9ef2c89ccf302760207",
+  "proposal_manifest_sha256": "bf7e161c96e9f494bd7d645c05b7b3d464625ebfb132510f634dcaa09be0838e",
+  "independent_review_sha256": "05f83570796eebcb188cb4b2483e3a9f97f3c65ae419490b5d6665ca0585849b",
+  "selected_role": {
+    "index": 11,
+    "logical_path": "/etc/resolv.conf",
+    "resolved_target": "/run/systemd/resolve/stub-resolv.conf",
+    "role": "non-executable same-job resolver configuration data",
+    "policy": "Explicit ROOT admission required; old exact-manifest admission cannot enable capture; same-job bounded stable identity capture, complete268-row receipt and immediate+worker revalidation"
+  },
+  "unchanged": "267 other runtime records, fixed executable/helper/SDK pins, authority/head/owner/controls, original840/900 clock/1GiBroot/32MiB evidence+logs/24GiB RSS/free10GiB/cleanup and no-capture route",
+  "bootstrap_limit": "Existing fixed bootstrap network acquisition precedes this observation. No pre-bootstrap resolver authentication or DNS behavior/whole-interval immutability claim. Preserve current bootstrap trust boundary.",
+  "actual_new_identity": "UNKNOWN_UNTIL_FRESH_ADMITTED_JOB",
+  "original_failures": "RETAINED_NO_REINTERPRETATION",
+  "next": "Exact source/negative controls, independent successor review, separate fresh construction admission; no automatic repeat",
+  "time": "2026-11-05T04:20:06.896603+00:00"
+}
