@@ -1,0 +1,49 @@
+{
+  "actor_id": "1981537",
+  "allow_capture": false,
+  "authority": "ROOT",
+  "authority_thread": "01a18e7c-8c23-7fd2-8d55-b0486d938cd3",
+  "context": null,
+  "controls": {
+    "job_id": 126960744638,
+    "normal": {
+      "exit": 0,
+      "leaves": 24,
+      "outcomes": 26,
+      "skips": 0,
+      "tops": 6
+    },
+    "owner_manifest_sha256": "86f4ee083aba9e2f2dbdb87abf9ec5be9eb13d416e1bafd25f7b61139e317aa3",
+    "race": {
+      "exit": 0,
+      "leaves": 24,
+      "outcomes": 26,
+      "skips": 0,
+      "tops": 6
+    },
+    "review_sha256": "d1201861a09dabc40550c6ca9512cee70fad0fac8dc927346efe4c9563d6a1cf",
+    "root_receipt_sha256": "5fbc92847359e709fe9ef7812786ff469f9892dedf9e4c81d27a3183e67245c5",
+    "run_id": 41940783159,
+    "status": "ROOT_ADMITTED_FOCUSED_OBSERVER_CONTROLS"
+  },
+  "head": "e4735e5f95f8278b46ceb49100218877fe30e8bf",
+  "independent_source_review_sha256": null,
+  "owner_manifest_sha256": "86f4ee083aba9e2f2dbdb87abf9ec5be9eb13d416e1bafd25f7b61139e317aa3",
+  "readonly_runtime_inputs": null,
+  "run_attempt": "1",
+  "schema": "primary-construction-admission-v1",
+  "sdk": {
+    "bytes": null,
+    "files": null,
+    "path": "/opt/hostedtoolcache/go/1.26.10/x64",
+    "sha256": null
+  },
+  "status": "NOT_GRANTED",
+  "tools": {
+    "g++": null,
+    "gcc": null,
+    "git": null,
+    "node": null,
+    "python": null
+  }
+}

@@ -1,0 +1,5 @@
+name: Fixed PRIMARY admission metadata
+description: Read-only tool/source identity query; no product/build/admission
+runs:
+  using: node20
+  main: index.js

@@ -1,60 +1,83 @@
-name: "TreeDB: bounded maintenance diagnostic (manual only)"
-
+name: "TreeDB: fixed PRIMARY admission metadata (manual only)"
 on:
   workflow_dispatch:
-
+    inputs:
+      expected_head:
+        required: true
+        type: string
+      admission_b64:
+        required: true
+        type: string
 permissions:
   contents: read
-
 jobs:
   diagnostic:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
-    name: fixed 5bca / a17fe fourteen-call diagnostic
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/diagnostic/primary-construction-metadata-01' && github.actor_id == '1981537'
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 5
     env:
-      PYTHONDONTWRITEBYTECODE: "1"
+      REVIEWED_HEAD: ${{ inputs.expected_head }}
+      WORKFLOW_COMMIT: ${{ github.workflow_sha }}
+      ROOT_METADATA_ADMISSION_B64: ${{ inputs.admission_b64 }}
+      PYTHONDONTWRITEBYTECODE: '1'
     steps:
-      - name: Initialize retained attempt packet
+      - name: Authenticate fixed metadata harness only
+        shell: bash
         run: |
-          mkdir "$RUNNER_TEMP/mvcc-maintenance-setup"
-          printf '%s\n' 'Only fixed separately reviewed bounded diagnostics are authorized.' "harness=$GITHUB_SHA" "run=$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT" > "$RUNNER_TEMP/mvcc-maintenance-setup/scope.txt"
-
-      - name: Checkout reviewed diagnostic harness
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          persist-credentials: false
-          ref: ${{ github.sha }}
-          fetch-depth: 0
-
-      - name: Setup exact Go 1.26.3
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
-        with:
-          go-version: "1.26.3"
-          check-latest: false
-          cache: false
-
-      - name: Check syntax, receipts and fixed workflow contract (no Go execution)
-        run: python3 -B .github/scripts/mvcc_maintenance_test.py > "$RUNNER_TEMP/mvcc-maintenance-setup/pure-tests.log" 2>&1
-
-      - name: Prepare exact inputs and collect once
-        run: python3 -B .github/scripts/mvcc_maintenance_bootstrap.py > "$RUNNER_TEMP/mvcc-maintenance-setup/bootstrap.log" 2>&1
-
-      - name: Upload complete attempt, including failure/refusal
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: bounded-maintenance-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            ${{ runner.temp }}/mvcc-maintenance-a17fe/*.json
-            ${{ runner.temp }}/mvcc-maintenance-a17fe/*.log
-            ${{ runner.temp }}/mvcc-maintenance-a17fe/compiler
-            ${{ runner.temp }}/mvcc-maintenance-a17fe/archives
-            ${{ runner.temp }}/mvcc-maintenance-a17fe/go1.26.3-linux-amd64.tar.gz
-            ${{ runner.temp }}/mvcc-maintenance-a17fe/harness
-            ${{ runner.temp }}/mvcc-maintenance-a17fe/performance-185
-            !${{ runner.temp }}/mvcc-maintenance-a17fe/performance-185/**/tmp
-            ${{ runner.temp }}/mvcc-maintenance-setup
-          if-no-files-found: error
-          include-hidden-files: true
-          retention-days: 14
+          /usr/bin/python3.12 -I -B - <<'PY'
+          try:
+           import base64,hashlib,json,os,pathlib,re,shutil,stat,time,urllib.request
+           e=os.environ
+           assert e['GITHUB_REPOSITORY']=='snissn/gomap' and e['GITHUB_ACTOR_ID']=='1981537'
+           assert e['GITHUB_REF']=='refs/heads/diagnostic/primary-construction-metadata-01'
+           assert e['GITHUB_EVENT_NAME']=='workflow_dispatch' and e['GITHUB_RUN_ATTEMPT']=='1'
+           assert e['GITHUB_SHA']==e['REVIEWED_HEAD']==e['WORKFLOW_COMMIT']
+           assert len(e['ROOT_METADATA_ADMISSION_B64'])<=8192
+           a=json.loads(base64.b64decode(e['ROOT_METADATA_ADMISSION_B64'],validate=True))
+           assert a['schema']=='root-primary-metadata-only-v1' and a['status']=='ADMITTED_METADATA_ONLY'
+           assert a['authority']=='ROOT' and a['authority_thread']=='01a18e7c-8c23-7fd2-8d55-b0486d938cd3'
+           assert a['actor_id']=='1981537' and a['head']==e['GITHUB_SHA'] and a['allow_build'] is False
+           assert re.fullmatch('[0-9a-f]{64}',a['independent_source_review_sha256'])
+           assert not any(e.get(k) for k in ('NODE_OPTIONS','NODE_PATH','NODE_V8_COVERAGE','NODE_COMPILE_CACHE','GOMAXPROCS'))
+           common=pathlib.Path('/home/runner/work');parent=pathlib.Path(e['RUNNER_TEMP']).resolve(strict=True)
+           assert parent==common/'_temp' and pathlib.Path(e['GITHUB_WORKSPACE']).resolve().is_relative_to(common)
+           root=parent/'primary-construction-metadata';root.mkdir();harness=root/'harness';harness.mkdir()
+           start=time.monotonic()
+           rows={'action.yml': {'bytes': 156, 'sha256': '1108c7042b0b5a29dc4a0622c2e19b76a90cbc75484bc9519792dcba140d024a'}, 'admission-template.json': {'bytes': 1357, 'sha256': '3c89b705435bd94d5aa32234f75d1d929e8c1bc6204823e61b1d765ea175d395'}, 'index.js': {'bytes': 4603, 'sha256': '38c4b77aa3bc0fd0c5d618fd3a5dc09181d49eebf98fb2744f6f9b9d118197a3'}, 'maintained-runner.py': {'bytes': 42949, 'sha256': '6f122f8ed48343dc533de17344cfaa15d2c37b80ee6f3cac360c1c27b6b8c0ac'}, 'metadata.py': {'bytes': 13902, 'sha256': 'bfa691401cc950410ee61ae626be4e01fb1e5eecac81a51be3cd3825e81861cc'}, 'scripts/ycsb_campaign_guard.py': {'bytes': 19548, 'sha256': 'b1f5308ce5de5bf1252a77694599f4be4fdf769803b4d7300c08b4901f8d9642'}, 'scripts/ycsb_compare_validate.py': {'bytes': 49260, 'sha256': '85584d03f46e2f49be94d91b377b77e08494a846a30285bfb1300b932d57cb46'}, 'scripts/ycsb_evidence_json.py': {'bytes': 1240, 'sha256': '86989ebbfa14b8f9f3c20ebe470314a29fd28c7db2ab10734d9518e39d270ea6'}, 'scripts/ycsb_runtime_observer.py': {'bytes': 20408, 'sha256': '9ea6f525e0cf46df5301be3f903367816bdb032a3d0abb4c204bda60ee104d8f'}, 'inputs.json': {'bytes': 1047, 'sha256': '466ca4fb47a63f0b48ae24852e0771ef16577b7497232c7a6d3eba2d2d15da5c'}}
+           def check(extra=0):
+            total=0
+            for directory,dirs,names in os.walk(common,followlinks=False):
+             assert all(not (pathlib.Path(directory)/n).is_symlink() for n in dirs)
+             for n in names:
+              p=pathlib.Path(directory)/n
+              try: item=p.lstat()
+              except FileNotFoundError: continue
+              assert stat.S_ISREG(item.st_mode)
+              total+=item.st_size
+            assert total+extra<=1073741824 and shutil.disk_usage(common).free>=10737418240
+            assert time.monotonic()-start<60
+            return total
+           check(sum(r['bytes'] for r in rows.values())+270532608)
+           class NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self,*args,**kwargs): raise RuntimeError('redirect refused')
+           opener=urllib.request.build_opener(NoRedirect)
+           for name,r in rows.items():
+            p=harness/name;p.parent.mkdir(parents=True,exist_ok=True)
+            digest=hashlib.sha256();received=0
+            with opener.open('https://raw.githubusercontent.com/snissn/gomap/'+e['GITHUB_SHA']+'/.github/primary-input-metadata/'+name,timeout=10) as response,p.open('xb') as out:
+             assert response.status==200
+             while True:
+              block=response.read(65536)
+              if not block: break
+              assert received+len(block)<=r['bytes'];check(len(block));out.write(block);received+=len(block);digest.update(block)
+            assert received==r['bytes'] and digest.hexdigest()==r['sha256'];check()
+           local=pathlib.Path(e['GITHUB_WORKSPACE'])/'.github/actions/primary-input-metadata';local.mkdir(parents=True)
+           for name in ('index.js','action.yml'):
+            data=(harness/name).read_bytes();check(len(data))
+            with (local/name).open('xb') as target:target.write(data)
+           print(json.dumps(dict(schema='primary-metadata-bootstrap-v1',files=len(rows),all_pins_verified=True,whole_bytes=check(),scope='first authenticated sampled step; not platform-startup quota')))
+          except BaseException as error:
+           print(json.dumps(dict(status='METADATA_BOOTSTRAP_FAILED',error_class=type(error).__name__)));raise SystemExit(1)
+          PY
+      - name: One read-only metadata query under maintained guard
+        uses: ./.github/actions/primary-input-metadata
