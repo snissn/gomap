@@ -1,0 +1,26 @@
+{
+  "files": {
+    ".github/m0-state-projection-README.md": {
+      "bytes": 6440,
+      "sha256": "95d0f37f0f9d339b011bd40a22234f3cd01828e1d6465c88ad16c75b99059274"
+    },
+    ".github/scripts/four_gate_artifact_readback.py": {
+      "bytes": 12846,
+      "sha256": "72ea14c0d96004b1e217b9aa1987b849a7e123633ac6869fbdee0ab35e52095b"
+    },
+    ".github/scripts/m0_trace_consumer.py": {
+      "bytes": 17361,
+      "sha256": "c882089dcfaf0a0ec9f5ef262904c583eecd4a7724e3abf0b25e351b7d3af0a8"
+    },
+    ".github/scripts/test_m0_state_projection.py": {
+      "bytes": 12409,
+      "sha256": "29d5bac9828988b986d16b9873f5bb3cc1f12e1a63b3f0eb96b713567d0db149"
+    },
+    ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml": {
+      "bytes": 5665,
+      "sha256": "bf700f7e5151f044420f4734f7e7d2549cae5b49468b4aedb6acc04820950ca5"
+    }
+  },
+  "manifest_binding": "Exact reviewed clean Git commit binds this manifest; no self hash or authored-review proof.",
+  "schema": "m0-fixed-original-state-projection-inputs-v1"
+}

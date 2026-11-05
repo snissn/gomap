@@ -12,7 +12,7 @@
     "M0 observation is manual diagnostic-only on a separately fixed product; no forecast starts it or replaces failed M0 acceptance.",
     "Bounded maintenance comparison is a manually granted diagnostic on fixed baseline/candidate products; no forecast starts it or establishes cost, M0 or native acceptance."
   ],
-  "discovery_source_sha256": "5d66ce837d9cfd95323af554f7ec2fcfd0663ec35ad7732bed034d159ffd4830",
+  "discovery_source_sha256": "a078e0ed121ba694adfb7fa996c8bef087850d2db4857200f86f49a1d001f00b",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
@@ -447,8 +447,8 @@
       "workflow": "sparse-catalog-qualification.yml"
     },
     {
-      "id": "treedb-mvcc-maintenance-diagnostic/diagnostic/single",
-      "job": "diagnostic",
+      "id": "treedb-mvcc-maintenance-diagnostic/readback/single",
+      "job": "readback",
       "owner": "CI maintainer with affected MVCC maintenance harness owner",
       "variant": {
         "cgo": "setup-go platform default; explicit command overrides retained",
@@ -2323,40 +2323,67 @@
     "treedb-mvcc-maintenance-diagnostic.yml": {
       "coverage": "existing execution only; triggers/path filters are unchanged",
       "events": {
-        "workflow_dispatch": null
+        "workflow_dispatch": {
+          "inputs": {
+            "admission_b64": {
+              "description": "ROOT fixed original-data admission bytes",
+              "required": true,
+              "type": "string"
+            },
+            "expected_head": {
+              "description": "Exact independently reviewed reader commit",
+              "required": true,
+              "type": "string"
+            },
+            "review_b64": {
+              "description": "Actual independent source-review bytes bound by ROOT admission",
+              "required": true,
+              "type": "string"
+            }
+          }
+        }
       },
-      "git_blob": "5db1627d00d523c4611092c2ba8aac5465b64506",
+      "git_blob": "ed8b37f538042ed6222da47e499263cc08c0b439",
       "jobs": {
-        "diagnostic": {
+        "readback": {
           "checkout": [
             {
-              "fetch-depth": 0,
               "persist-credentials": false,
-              "ref": "${{ github.sha }}"
+              "ref": "${{ github.sha }}",
+              "sparse-checkout": ".github/scripts/four_gate_artifact_readback.py\n.github/scripts/m0_trace_consumer.py\n.github/scripts/test_m0_state_projection.py\n.github/m0-state-projection-inputs.json\n.github/m0-state-projection-README.md\n.github/workflows/treedb-mvcc-maintenance-diagnostic.yml\n",
+              "sparse-checkout-cone-mode": false
             }
           ],
           "commands": [
             {
-              "command_sha256": "dc2d7506fa6e28a95565b0bd60299cfa8a1f345e73aa6997a4c6d954f73fab67",
-              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:19",
+              "command_sha256": "56e40f3762350a0eef76cf94c4c9c74167d7069c7d38a9f701a11bc448cf97a2",
+              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:34",
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
-              "name": "Initialize retained attempt packet"
+              "name": "Authenticate ROOT and immutable source before checkout/download/helper import"
             },
             {
-              "command_sha256": "3bbcd578a6db06320b9181f1fcbdfcdce89d8c99b0b433ef9e2aeab17bd27a64",
-              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:38",
-              "invocation": "python3 -B .github/scripts/mvcc_maintenance_test.py > \"$RUNNER_TEMP/mvcc-maintenance-setup/pure-tests.log\" 2>&1",
-              "name": "Check syntax, receipts and fixed workflow contract (no Go execution)"
+              "command_sha256": "c9ea18ce6cb9f2417eb04972727bb6fbd9fa830c0be40a39aaea4c11ef16bf19",
+              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:74",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Bind imported source and run fixed pure controls"
             },
             {
-              "command_sha256": "38d56548962e86f55dc4e1a22895ea3a0f33ff34d2b49ed50514f1359bcc6615",
-              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:41",
-              "invocation": "python3 -B .github/scripts/mvcc_maintenance_bootstrap.py > \"$RUNNER_TEMP/mvcc-maintenance-setup/bootstrap.log\" 2>&1",
-              "name": "Prepare exact inputs and collect once"
+              "command_sha256": "2cab81ba2c4cbe3888b3710e40279b3226a335042bdd36b54dfd37bbdeb61e6d",
+              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:95",
+              "env": {
+                "GH_PAGER": "cat",
+                "GH_TOKEN": "${{ github.token }}"
+              },
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Read exact original archive once and project authenticated data only"
             }
           ],
           "environment": {
-            "PYTHONDONTWRITEBYTECODE": "1"
+            "EXPECTED_HEAD": "${{ inputs.expected_head }}",
+            "M0_DATA_ADMISSION_B64": "${{ inputs.admission_b64 }}",
+            "M0_DATA_REVIEW_B64": "${{ inputs.review_b64 }}",
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "WORKFLOW_SHA": "${{ github.workflow_sha }}"
           },
           "matrix": null,
           "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
@@ -2364,7 +2391,7 @@
           "runs_on": "ubuntu-24.04"
         }
       },
-      "sha256": "2d682ddfe8416722c6408e033606700217b614858c78e7479d25caa294c126c8"
+      "sha256": "bf700f7e5151f044420f4734f7e7d2549cae5b49468b4aedb6acc04820950ca5"
     },
     "treedb-tests.yml": {
       "coverage": "existing execution only; triggers/path filters are unchanged",

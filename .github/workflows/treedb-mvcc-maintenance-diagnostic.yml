@@ -1,42 +1,112 @@
-name: "TreeDB: fixed four-gate receipt readback (manual only)"
+name: "TreeDB: original M0 state-wall data projection (manual only)"
 on:
   workflow_dispatch:
+    inputs:
+      expected_head:
+        description: Exact independently reviewed reader commit
+        required: true
+        type: string
+      admission_b64:
+        description: ROOT fixed original-data admission bytes
+        required: true
+        type: string
+      review_b64:
+        description: Actual independent source-review bytes bound by ROOT admission
+        required: true
+        type: string
 permissions:
   contents: read
   actions: read
 jobs:
   readback:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/diagnostic/four-gate-artifact-readback-01' && github.run_attempt == 1
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/diagnostic/m0-state-wall-projection-01' && github.run_attempt == 1
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    env:
+      EXPECTED_HEAD: ${{ inputs.expected_head }}
+      WORKFLOW_SHA: ${{ github.workflow_sha }}
+      M0_DATA_ADMISSION_B64: ${{ inputs.admission_b64 }}
+      M0_DATA_REVIEW_B64: ${{ inputs.review_b64 }}
+      PYTHONDONTWRITEBYTECODE: "1"
     steps:
+      - name: Authenticate ROOT and immutable source before checkout/download/helper import
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -B - <<'PY'
+          import base64,hashlib,json,os
+          assert os.environ['GITHUB_ACTOR_ID']=='1981537'
+          assert os.environ['GITHUB_REF']=='refs/heads/diagnostic/m0-state-wall-projection-01'
+          assert os.environ['GITHUB_RUN_ATTEMPT']=='1'
+          head=os.environ['GITHUB_SHA']
+          assert head==os.environ['EXPECTED_HEAD']==os.environ['WORKFLOW_SHA']
+          assert len(head)==40 and all(c in '0123456789abcdef' for c in head)
+          encoded=os.environ['M0_DATA_ADMISSION_B64'];assert len(encoded)<=24000
+          raw=base64.b64decode(encoded,validate=True);assert len(raw)<=16384
+          admission=json.loads(raw)
+          for key,value in {'authority':'ROOT','authority_thread':'01a18e7c-8c23-7fd2-8d55-b0486d938cd3',
+              'actor_id':'1981537','schema':'root-m0-state-wall-projection-v1','status':'ROOT_DATA_PROJECTION_ADMITTED',
+              'reader_head':head,'artifact':13377421539,
+              'artifact_sha256':'f5db8af8fd294fb9bef55344586a7fc68d0520061c7e6d6838d1f9d28ac7669b',
+              'original_output_admission_sha256':'1d575edcdf372d7d3c2bd8e6a57a7b97ee1bd9200c2c7743785ec92c2023c029',
+              'no_recapture':True}.items():
+              assert type(admission.get(key)) is type(value) and admission[key]==value,key
+          encoded=os.environ['M0_DATA_REVIEW_B64'];assert len(encoded)<=24000
+          review=base64.b64decode(encoded,validate=True);assert 0<len(review)<=16384
+          assert hashlib.sha256(review).hexdigest()==admission['independent_review_sha256']
+          # ROOT authenticates reviewed authorship/readiness before dispatch;
+          # byte hash equality alone does not prove authorship.
+          PY
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
-          sparse-checkout: .github/scripts/four_gate_artifact_readback.py
+          sparse-checkout: |
+            .github/scripts/four_gate_artifact_readback.py
+            .github/scripts/m0_trace_consumer.py
+            .github/scripts/test_m0_state_projection.py
+            .github/m0-state-projection-inputs.json
+            .github/m0-state-projection-README.md
+            .github/workflows/treedb-mvcc-maintenance-diagnostic.yml
           sparse-checkout-cone-mode: false
-      - name: Read original archive once and authenticate before parsing
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_PAGER: cat
-          PYTHONDONTWRITEBYTECODE: "1"
+      - name: Bind imported source and run fixed pure controls
+        shell: bash
         run: |
           set -euo pipefail
           mkdir "$RUNNER_TEMP/four-gate-readback"
           git rev-parse HEAD 'HEAD^{tree}' > "$RUNNER_TEMP/four-gate-readback/source.txt"
           python3 --version > "$RUNNER_TEMP/four-gate-readback/python.txt"
           gh version > "$RUNNER_TEMP/four-gate-readback/gh.txt"
+          python3 -B - <<'PY'
+          import hashlib,json,pathlib
+          root=pathlib.Path('.')
+          manifest=json.loads((root/'.github/m0-state-projection-inputs.json').read_text())
+          for name,row in manifest['files'].items():
+              data=(root/name).read_bytes()
+              assert len(data)==row['bytes'] and hashlib.sha256(data).hexdigest()==row['sha256'],name
+          PY
+          ulimit -f 64
+          timeout --signal=TERM --kill-after=5s 30s python3 -B .github/scripts/test_m0_state_projection.py > "$RUNNER_TEMP/four-gate-readback/controls.stdout.log" 2> "$RUNNER_TEMP/four-gate-readback/controls.stderr.log"
+      - name: Read exact original archive once and project authenticated data only
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_PAGER: cat
+        shell: bash
+        run: |
+          set -euo pipefail
           ulimit -f 262144
           timeout --signal=TERM --kill-after=5s 90s gh api repos/snissn/gomap/actions/artifacts/13377421539/zip > "$RUNNER_TEMP/four-gate-readback/original.zip"
-          timeout --signal=TERM --kill-after=5s 30s python3 -B .github/scripts/four_gate_artifact_readback.py
-      - name: Retain readback only
+          env -u GH_TOKEN -u GITHUB_TOKEN timeout --signal=TERM --kill-after=5s 30s python3 -B .github/scripts/four_gate_artifact_readback.py
+      - name: Retain closed projection and partial refusal evidence only
         if: always()
+        timeout-minutes: 1
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: four-gate-readback-${{ github.run_id }}-${{ github.run_attempt }}
+          name: m0-state-wall-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/four-gate-readback/*.json
+            ${{ runner.temp }}/four-gate-readback/*.jsonl
             ${{ runner.temp }}/four-gate-readback/*.txt
+            ${{ runner.temp }}/four-gate-readback/*.log
           if-no-files-found: error
           retention-days: 14
