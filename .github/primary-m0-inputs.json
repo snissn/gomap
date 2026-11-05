@@ -1,8 +1,8 @@
 {
   "files": {
     ".github/primary-m0-controls-README.md": {
-      "bytes": 6933,
-      "sha256": "3ce806f7172c494ad8347d0acdcedf1cf06278a2926fee0307318177e584e40c"
+      "bytes": 8992,
+      "sha256": "d81e88b43596ca76ea376391f55d155fdd4348e10c951d795464d551bccebfb7"
     },
     ".github/primary-m0-observers/FORMAT_SUCCESSOR.md": {
       "bytes": 1827,
@@ -85,12 +85,12 @@
       "sha256": "42ce334b4df1bbe4e7ac2fb79d19f49cad803d29937a50ead2876e9e01ee4e3d"
     },
     ".github/scripts/primary_m0_hosted_controls.py": {
-      "bytes": 13534,
-      "sha256": "5f1b4429d0f1abf0e272016c31984e7d0771e53f65a0e46a5b6dd60c6f69c354"
+      "bytes": 15231,
+      "sha256": "e508262f751fc4378c753484b80f44f4439906cee9099357e98fc0e898e89fa7"
     },
     ".github/scripts/test_primary_m0_hosted_controls.py": {
-      "bytes": 6150,
-      "sha256": "a879b576402b465a6a7c3ff8f5d76027c7456d8524af64092db92854e1993a54"
+      "bytes": 10442,
+      "sha256": "75c272dd16b364e7f2a9ac678ba3a341118091322058e5ea57d2bf0b209f7253"
     },
     "scripts/ycsb_campaign_guard.py": {
       "bytes": 19548,

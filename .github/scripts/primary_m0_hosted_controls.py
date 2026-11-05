@@ -79,6 +79,36 @@ def load(name,path):
     return module
 
 
+def prepare_normal_controls(go, overlay, source, root, run, write):
+    """Compile the three selected packages; never execute the resulting ELFs."""
+    started=time.monotonic()
+    deadline=started+240
+    directory=root/'tmp'/'prepared-normal'
+    directory.mkdir()
+    receipt={'status':'NORMAL_PREPARATION_INCOMPLETE','aggregate_limit_seconds':240,
+             'started_monotonic':started,'test_execution':False,'binaries':[]}
+    target=root/'output'/'normal-preparation.json'
+    write(target,receipt)
+    for package in ('caching','mvcc','db'):
+        seconds=deadline-time.monotonic()
+        need(seconds>0,'aggregate normal preparation deadline exhausted')
+        binary=directory/(package+'.test')
+        run('prepare-normal-'+package,[go,'test','-c','-tags=treedb_test','-overlay='+str(overlay),
+            '-p=1','-mod=readonly','-o',str(binary),'./TreeDB/'+package],seconds,cwd=source)
+        info=binary.lstat()
+        need(stat.S_ISREG(info.st_mode) and info.st_nlink==1 and info.st_size>0,
+             'normal preparation ELF identity refused: '+package)
+        receipt['binaries'].append({'package':'./TreeDB/'+package,'path':str(binary),
+            'bytes':info.st_size,'sha256':sha(binary)})
+        receipt['observed_monotonic']=time.monotonic()
+        write(target,receipt)
+        need(receipt['observed_monotonic']<=deadline,'aggregate normal preparation deadline exhausted')
+    receipt['status']='NORMAL_PREPARATION_COMPILED_ONLY'
+    receipt['ended_monotonic']=time.monotonic()
+    write(target,receipt)
+    need(time.monotonic()<=deadline,'aggregate normal preparation deadline exhausted')
+
+
 def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('mode',choices=('guard','worker'))
@@ -213,6 +243,7 @@ def main():
         formatted=run('gofmt',[gofmt,'-l',*sorted(replacements.values())],30)
         need(not formatted.strip(),'observer source formatting failed; do not continue')
         run('pure-controls',[sys.executable,'-B',str(HERE/'test_primary_m0_hosted_controls.py')],30)
+        prepare_normal_controls(go,overlay,source,root,run,write)
         common=[go,'test','-json','-tags=treedb_test','-overlay='+str(overlay),'-count=1','-p=1','-mod=readonly',
                 '-run',events.SELECTOR]
         for mode,seconds,flags,deadline in (('normal',180,[], '150s'),('race',600,['-race'],'570s')):

@@ -1,6 +1,6 @@
 # Candidate PRIMARY/M0 observer controls
 
-This is a candidate-only, controls-only manual hosted route. SOURCE READY FOR INDEPENDENT REVIEW ONLY;
+This is a candidate-only, controls-only manual hosted route. SOURCE READY FOR INDEPENDENT REVIEW ONLY. The new compile-only preparation and its normal/race continuation are UNRUN. Exact42b6 run41938367803 passed formatting and pure controls, entered/passed caching and mvcc controls, then its180s normal command timed out before db entered; race did not enter. This remains adverse, including original guard/result statusfailed/exit1 `RuntimeError: child exited with live owned descendants`. Empty cleanup and pending-signal arrays are not a positive drain receipt; whole_interval_verified and unperturbed_timing_verified were false. Original sampled maxRSS3,613,134,848B/minfree89,950,187,520B remain descriptive, not successful cleanup.
 Successor Go formatting, compilation, normal/race and dispatch are UNRUN. Original controls697e651 failed at gofmt-l before tests; exact formatter41936868837 remains INCOMPLETE/exit1, with its912B diff retained as source evidence only. Final owner pins
 bind the externally owned formatting-only successor and its source review;
 separate exact executable-binding review and ROOT admission remain required. The previous c357 checkpoint and its NOT_READY
@@ -11,8 +11,7 @@ review remain in history. No product benchmark/capture command is reachable.
 The sole product checkout is C4934bd6d51d9047ba0187d05c1d211cbe419811a,
 tree7f30f92674110a4544a381468677183ab3133406. A shallow blob-filtered Git fetch
 and sparse checkout omit only the four historical evidence/benchmark directories.
-No archive fallback, B checkout, future isolated capture overlays or unused
-control ELF builds are used. Historical B/preimage files retained in this
+No archive fallback, B checkout or future isolated capture overlays are used. Three fixed normal control ELFs are compiled only as preparation, retained in task-owned tmp through job teardown and never invoked directly. Historical B/preimage files retained in this
 branch are provenance inputs, not another product checkout or capture authority.
 
 The branch copy of the existing registered manual workflow is fixed to
@@ -42,8 +41,8 @@ memory setting is a soft target, not an RSS guarantee. There is no CPU0 binding,
 original benchmark environment claim, or fixture/workload modification.
 
 After exact candidate source/tree/preimage checks, gofmt -l checks only the seven
-focused replacement files and must emit nothing. Six bounded Python event /
-authority/source contract controls follow. Normal then race use the same exact
+focused replacement files and must emit nothing. Eight bounded Python event /
+authority/source contract controls follow. One aggregate240s monotonic preparation allowance then compiles exactly caching, mvcc and db, once each, using `go test -c -tags=treedb_test -overlay=<same-focused-overlay> -p=1 -mod=readonly -o <task-tmp>/prepared-normal/<package>.test ./TreeDB/<package>`. The authenticated Go, source, overlay, environment, shared trusted cache and flags match subsequent normal compilation. No `-run=^$` warmup or test execution occurs in preparation. Each checked normal return is followed by regular-file/size/SHA256 identity in a retained partial/complete preparation receipt; the ELFs remain until job teardown. Failure, timeout, missing output or aggregate-budget exhaustion stops before normal; no retry. Normal then race use the same exact
 six-top selector, full three-package compilation, -json -tags=treedb_test
 -count=1 -p=1 -mod=readonly and the focused overlay. Normal Go timeout150s with
 180s stage limit; race Go timeout570s with600s stage limit. Commands run over
@@ -67,7 +66,7 @@ original1GiB total-materialization contract.
 The whole1,020s deadline begins in the first authenticated workflow step,
 including checkout/setup-go elapsed time. The portable guard receives only its
 remaining balance. Every later stage is clamped to the same remaining deadline;
-first adverse outcome stops dependent stages. Up to three10s guard cleanup
+first adverse outcome stops dependent stages. Preparation has one240s balance across all three commands and hashes; it does not get240s per package. The240/180/600 stage maxima are not additive time entitlements: source/setup elapsed and every stage consume the same1,020s clock, so later stages may be clamped or refused. No normal, race, test timeout or total-job limit increased. Preparation can reuse normal build artifacts in the existing GOCACHE; it does not promise cache hits, race-cache reuse or fit. Up to three10s guard cleanup
 passes, the2min always-upload step and30s margin fit the unchanged20min job.
 A CI outer cancellation or incomplete guard cleanup cannot qualify this route.
 
@@ -86,8 +85,7 @@ Each stage records exact argv, timestamps, timeout, actual exit and direct child
 join. A timed-out direct child is killed/joined with no later stage; that alone
 does not prove descendant drain. Only the outer guard's positive owned cleanup
 can qualify it. All normal/race JSON and partial failure logs are always uploaded.
-No test ELF or benchmark is emitted; Go's ordinary compiler cache is not a
-qualified future capture ELF. Output/source controls never clear historical
+Three normal control ELFs are retained in task tmp (not uploaded as product artifacts); their identities are uploaded. No benchmark executes. Neither those preparation ELFs nor Go's ordinary compiler cache are qualified future product capture ELFs. Output/source controls never clear historical
 PRIMARY, M0, timing, CPU, functional failures or logical HOLDs.
 
 ## Separate future product qualification

@@ -82,6 +82,57 @@ class FixedHostedControls(unittest.TestCase):
                 else:
                     with self.assertRaises(RuntimeError):entry.authority()
 
+    def test_compile_preparation_is_three_commands_one_budget(self):
+        spec=importlib.util.spec_from_file_location('primary_m0_hosted_controls',HERE/'primary_m0_hosted_controls.py')
+        entry=importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(entry)
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d)
+            (root/'tmp').mkdir();(root/'output').mkdir()
+            now=[10.0];calls=[];receipts=[]
+            def run(label,argv,seconds,cwd):
+                calls.append((label,argv,seconds,cwd))
+                now[0]+=70
+                Path(argv[argv.index('-o')+1]).write_bytes(label.encode())
+            def write(path,value):
+                receipts.append(json.loads(json.dumps(value)))
+            with mock.patch.object(entry.time,'monotonic',side_effect=lambda:now[0]):
+                entry.prepare_normal_controls('/fixed/go',root/'overlay.json',root/'source',root,run,write)
+            self.assertEqual([r[0] for r in calls],['prepare-normal-caching','prepare-normal-mvcc','prepare-normal-db'])
+            self.assertEqual([r[2] for r in calls],[240,170,100])
+            for package,(_,argv,_,cwd) in zip(('caching','mvcc','db'),calls):
+                self.assertEqual(argv,['/fixed/go','test','-c','-tags=treedb_test',
+                    '-overlay='+str(root/'overlay.json'),'-p=1','-mod=readonly','-o',
+                    str(root/'tmp'/'prepared-normal'/(package+'.test')),'./TreeDB/'+package])
+                self.assertEqual(cwd,root/'source')
+            self.assertEqual(receipts[-1]['status'],'NORMAL_PREPARATION_COMPILED_ONLY')
+            self.assertFalse(receipts[-1]['test_execution'])
+            self.assertEqual(len(receipts[-1]['binaries']),3)
+            self.assertTrue(all(Path(r['path']).is_file() and len(r['sha256'])==64
+                                for r in receipts[-1]['binaries']))
+
+    def test_compile_preparation_failure_retains_partial_and_stops(self):
+        spec=importlib.util.spec_from_file_location('primary_m0_hosted_controls',HERE/'primary_m0_hosted_controls.py')
+        entry=importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(entry)
+        for failure in ('child','budget'):
+            with tempfile.TemporaryDirectory() as d:
+                root=Path(d);(root/'tmp').mkdir();(root/'output').mkdir()
+                now=[0.0];calls=[];receipts=[]
+                def run(label,argv,seconds,cwd):
+                    calls.append(label)
+                    if failure=='child' and len(calls)==2:raise RuntimeError('original child failure')
+                    now[0]+=125
+                    Path(argv[argv.index('-o')+1]).write_bytes(label.encode())
+                def write(path,value):receipts.append(json.loads(json.dumps(value)))
+                with mock.patch.object(entry.time,'monotonic',side_effect=lambda:now[0]):
+                    with self.assertRaisesRegex(RuntimeError,'original child failure|aggregate normal preparation deadline'):
+                        entry.prepare_normal_controls('/fixed/go',root/'overlay.json',root/'source',root,run,write)
+                self.assertEqual(calls,['prepare-normal-caching','prepare-normal-mvcc'])
+                self.assertEqual(receipts[-1]['status'],'NORMAL_PREPARATION_INCOMPLETE')
+                self.assertEqual(len(receipts[-1]['binaries']),1 if failure=='child' else 2)
+                self.assertTrue(all(Path(r['path']).exists() for r in receipts[-1]['binaries']))
+
     def test_exact_source_entry_contract(self):
         source=(HERE/'primary_m0_hosted_controls.py').read_text()
         tree=ast.parse(source)
@@ -95,9 +146,21 @@ class FixedHostedControls(unittest.TestCase):
         self.assertNotIn('args.mode',source)
         self.assertNotIn('primary_m0_attempt',source)
         self.assertNotIn('source-B',source)
-        self.assertNotIn("'test','-c'",source)
+        self.assertIn("[go,'test','-c','-tags=treedb_test'",source)
         self.assertNotIn('GOCACHE=str(',source)
         self.assertIn('WHOLE_SECONDS = 1020',source)
+        self.assertIn('deadline=started+240',source)
+        self.assertIn("for package in ('caching','mvcc','db'):",source)
+        self.assertIn("'NORMAL_PREPARATION_COMPILED_ONLY'",source)
+        self.assertLess(main.index('prepare_normal_controls(go,overlay,source,root,run,write)'),
+                        main.index("for mode,seconds,flags,deadline in"))
+        preparation=ast.get_source_segment(source,functions['prepare_normal_controls'])
+        self.assertIn("seconds=deadline-time.monotonic()",preparation)
+        self.assertIn("'-p=1','-mod=readonly','-o',str(binary)",preparation)
+        self.assertNotIn("'-run",preparation)
+        self.assertNotIn("'-race'",preparation)
+        self.assertNotIn('unlink(',preparation)
+        self.assertNotIn('rmtree(',preparation)
         self.assertIn("('race',600,['-race'],'570s')",source)
         self.assertIn('child.kill()',source)
         self.assertIn("row['exit']=child.wait()",source)
