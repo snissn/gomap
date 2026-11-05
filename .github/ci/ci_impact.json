@@ -12,7 +12,7 @@
     "M0 observation is manual diagnostic-only on a separately fixed product; no forecast starts it or replaces failed M0 acceptance.",
     "Bounded maintenance comparison is a manually granted diagnostic on fixed baseline/candidate products; no forecast starts it or establishes cost, M0 or native acceptance."
   ],
-  "discovery_source_sha256": "01fb32d238cefe73b21291e9079a8357358644077018338102edf013759d0ac4",
+  "discovery_source_sha256": "d1818cab2dd2fb98b5a76f4a3d17e520407948bdbc70aa3f45a8810ae09d793e",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
@@ -2323,40 +2323,79 @@
     "treedb-mvcc-maintenance-diagnostic.yml": {
       "coverage": "existing execution only; triggers/path filters are unchanged",
       "events": {
-        "workflow_dispatch": null
+        "workflow_dispatch": {
+          "inputs": {
+            "admission_b64": {
+              "description": "ROOT fixed original-data admission bytes",
+              "required": true,
+              "type": "string"
+            },
+            "expected_head": {
+              "description": "Exact independently reviewed reader commit",
+              "required": true,
+              "type": "string"
+            },
+            "review_b64": {
+              "description": "Actual independent source-review bytes bound by ROOT admission",
+              "required": true,
+              "type": "string"
+            }
+          }
+        }
       },
-      "git_blob": "400779a682a5b64e24e6f9dbbd72e8703dcaa9e7",
+      "git_blob": "ea886bdc363fad31f155b3add47104eb2b032bb2",
       "jobs": {
         "readback": {
           "checkout": [
             {
               "persist-credentials": false,
               "ref": "${{ github.sha }}",
-              "sparse-checkout": ".github/scripts/four_gate_artifact_readback.py",
+              "sparse-checkout": ".github/scripts/four_gate_artifact_readback.py\n.github/scripts/m0_trace_consumer.py\n.github/scripts/m0_common_write_projection.py\n.github/scripts/test_m0_common_write_projection.py\n.github/scripts/m0_common_write_entry.sh\nscripts/ycsb_campaign_guard.py\nscripts/ycsb_compare_validate.py\nscripts/ycsb_evidence_json.py\nscripts/ycsb_runtime_observer.py\n.github/scripts/test_m0_state_projection.py\n.github/m0-common-write-inputs.json\n.github/m0-common-write-README.md\n.github/workflows/treedb-mvcc-maintenance-diagnostic.yml\n",
               "sparse-checkout-cone-mode": false
             }
           ],
           "commands": [
             {
-              "command_sha256": "caef9283777525127116e59eee4f89dbb3168cb1e5e09f4404bd7359e7455c80",
-              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:24",
+              "command_sha256": "7a1aaa23719a0deb7e9d4a0b1e9ad38338f4ccd4b49047a5794ebfe69aef22a8",
+              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:38",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Authenticate ROOT and immutable source before checkout/download/helper import"
+            },
+            {
+              "command_sha256": "2c875e671d9c03c007aacf886f070b450e2be3b65daf2b62bbed743ab0281f8e",
+              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:85",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Bind imported source and run fixed pure controls"
+            },
+            {
+              "command_sha256": "feddaae9f85b8807536db157f2f7d527f062188a14659a739dc833fc6668fb7c",
+              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:108",
               "env": {
                 "GH_PAGER": "cat",
-                "GH_TOKEN": "${{ github.token }}",
-                "PYTHONDONTWRITEBYTECODE": "1"
+                "GH_TOKEN": "${{ github.token }}"
               },
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
-              "name": "Read original archive once and authenticate before parsing"
+              "name": "Read exact original archive once and project authenticated data only"
             }
           ],
-          "environment": {},
+          "environment": {
+            "EXPECTED_HEAD": "${{ inputs.expected_head }}",
+            "GH_CONFIG_DIR": "${{ runner.temp }}/four-gate-readback/tmp/gh-config",
+            "M0_DATA_ADMISSION_B64": "${{ inputs.admission_b64 }}",
+            "M0_DATA_REVIEW_B64": "${{ inputs.review_b64 }}",
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "TMPDIR": "${{ runner.temp }}/four-gate-readback/tmp",
+            "WORKFLOW_SHA": "${{ github.workflow_sha }}",
+            "XDG_CACHE_HOME": "${{ runner.temp }}/four-gate-readback/tmp/cache",
+            "XDG_CONFIG_HOME": "${{ runner.temp }}/four-gate-readback/tmp/config"
+          },
           "matrix": null,
           "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
           "race": false,
           "runs_on": "ubuntu-24.04"
         }
       },
-      "sha256": "e72a0fc86f17907e8cee771af968ee9247035a8e71a4260b75c989cfefd04e9c"
+      "sha256": "530241f5268757a560a9a559ea248c7bd2bfdab257b00e7a61c47b094893cca8"
     },
     "treedb-tests.yml": {
       "coverage": "existing execution only; triggers/path filters are unchanged",

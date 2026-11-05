@@ -1,0 +1,53 @@
+{
+  "files": {
+    ".github/m0-common-write-README.md": {
+      "bytes": 4812,
+      "sha256": "2f0c7c31f16f59ee22aba0f5a45a19e1253eb22232ff1a066c451b706641864a"
+    },
+    ".github/scripts/four_gate_artifact_readback.py": {
+      "bytes": 16363,
+      "sha256": "58d9f975b69c29517a7ae8abeb600a6a1e9dfcfde7017330d26c8ec97dea566c"
+    },
+    ".github/scripts/m0_common_write_entry.sh": {
+      "bytes": 491,
+      "sha256": "f05745ada907b651643e9e8c410b104be34006c7495d8a974b02149285ef2a55"
+    },
+    ".github/scripts/m0_common_write_projection.py": {
+      "bytes": 11771,
+      "sha256": "6888c288486375699f65b58dc2e0fe13a1f62e568864830ccede2fd2cd309d86"
+    },
+    ".github/scripts/m0_trace_consumer.py": {
+      "bytes": 17918,
+      "sha256": "0edd678878c11d675f0df2e8b1e461576b4182e27b734194375c8b02095bbcd3"
+    },
+    ".github/scripts/test_m0_common_write_projection.py": {
+      "bytes": 8450,
+      "sha256": "e77c7190db97e76f7d14172acff4c4ffc9d97dcb56fa200d46357c9be561971b"
+    },
+    ".github/scripts/test_m0_state_projection.py": {
+      "bytes": 14501,
+      "sha256": "8267399349aab53216dc4e104269dc58d74f4559f86b0ef1c31329934ceb3475"
+    },
+    ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml": {
+      "bytes": 7661,
+      "sha256": "530241f5268757a560a9a559ea248c7bd2bfdab257b00e7a61c47b094893cca8"
+    },
+    "scripts/ycsb_campaign_guard.py": {
+      "bytes": 19548,
+      "sha256": "b1f5308ce5de5bf1252a77694599f4be4fdf769803b4d7300c08b4901f8d9642"
+    },
+    "scripts/ycsb_compare_validate.py": {
+      "bytes": 49260,
+      "sha256": "85584d03f46e2f49be94d91b377b77e08494a846a30285bfb1300b932d57cb46"
+    },
+    "scripts/ycsb_evidence_json.py": {
+      "bytes": 1240,
+      "sha256": "86989ebbfa14b8f9f3c20ebe470314a29fd28c7db2ab10734d9518e39d270ea6"
+    },
+    "scripts/ycsb_runtime_observer.py": {
+      "bytes": 20408,
+      "sha256": "9ea6f525e0cf46df5301be3f903367816bdb032a3d0abb4c204bda60ee104d8f"
+    }
+  },
+  "schema": "fixed-m0-common-write-inputs-v1"
+}
