@@ -58,6 +58,21 @@ class ArchiveTests(unittest.TestCase):
 
 
 class ScopeTests(unittest.TestCase):
+    def test_acceptance_output_rechecks_exclusive_expiry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "acceptance.json"
+            before = route.EXPIRY - route.datetime.timedelta(microseconds=1)
+            for now in (route.EXPIRY, route.EXPIRY + route.datetime.timedelta(seconds=1)):
+                with mock.patch.object(route.datetime, "datetime") as clock:
+                    clock.now.return_value = now
+                    with self.assertRaises(ValueError):
+                        route.write_acceptance(output, {"original_measurement": "FAIL"})
+                    self.assertFalse(output.exists())
+            with mock.patch.object(route.datetime, "datetime") as clock:
+                clock.now.return_value = before
+                route.write_acceptance(output, {"original_measurement": "FAIL"})
+                self.assertEqual(json.loads(output.read_text()), {"original_measurement": "FAIL"})
+
     def test_unrelated_and_selected_drift(self):
         with mock.patch.dict(os.environ, {"GITHUB_REPOSITORY": "snissn/gomap", "GITHUB_EVENT_NAME": "pull_request", "GITHUB_RUN_ATTEMPT": "1"}):
             self.assertFalse(route.scope({"number": 1}))

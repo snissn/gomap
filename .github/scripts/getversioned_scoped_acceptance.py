@@ -242,6 +242,13 @@ def scope(event):
     return True
 
 
+def write_acceptance(path, result):
+    data = json.dumps(result, sort_keys=True) + "\n"
+    if datetime.datetime.now(datetime.timezone.utc) >= EXPIRY:
+        raise ValueError("selected scope expired before acceptance output")
+    Path(path).write_text(data, encoding="utf-8")
+
+
 def main():
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="stage", required=True)
@@ -290,9 +297,9 @@ def main():
     if receipt.get("manifest_sha256") != manifest_sha:
         raise ValueError("prepared manifest differs from current manifest")
     decision_id = authenticate_decision(identity, manifest_sha)
-    Path(args.output).write_text(json.dumps({"status": "OWNER_ACCEPTED_TIMING_OBSERVATIONS",
+    write_acceptance(args.output, {"status": "OWNER_ACCEPTED_TIMING_OBSERVATIONS",
         "original_measurement": "FAIL", "identity": identity, "decision_id": decision_id,
-        "prepared_artifact_id": artifact_id, "prepared_receipt_sha256": receipt_sha}, sort_keys=True) + "\n")
+        "prepared_artifact_id": artifact_id, "prepared_receipt_sha256": receipt_sha})
 
 
 if __name__ == "__main__":
