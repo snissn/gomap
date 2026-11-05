@@ -12,7 +12,7 @@ permissions:
   contents: read
 jobs:
   diagnostic:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/diagnostic/primary-current-image-qualification-01' && github.actor_id == '1981537'
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/diagnostic/primary-two-known-images-metadata-01' && github.actor_id == '1981537'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     env:
@@ -29,24 +29,26 @@ jobs:
            import base64,hashlib,json,os,pathlib,re,shutil,stat,time,urllib.request
            e=os.environ
            assert e['GITHUB_REPOSITORY']=='snissn/gomap' and e['GITHUB_ACTOR_ID']=='1981537'
-           assert e['GITHUB_REF']=='refs/heads/diagnostic/primary-current-image-qualification-01'
+           assert e['GITHUB_REF']=='refs/heads/diagnostic/primary-two-known-images-metadata-01'
            assert e['GITHUB_EVENT_NAME']=='workflow_dispatch' and e['GITHUB_RUN_ATTEMPT']=='1'
            assert e['GITHUB_SHA']==e['REVIEWED_HEAD']==e['WORKFLOW_COMMIT']
-           image=dict(ImageOS='ubuntu24',ImageVersion='20261101.360.1',RUNNER_OS='Linux',RUNNER_ARCH='X64')
-           assert {k:e.get(k) for k in image}==image
+           images=[dict(ImageOS='ubuntu24',ImageVersion='20261025.353.1',RUNNER_OS='Linux',RUNNER_ARCH='X64'),
+                   dict(ImageOS='ubuntu24',ImageVersion='20261101.360.1',RUNNER_OS='Linux',RUNNER_ARCH='X64')]
+           image={k:e.get(k) for k in images[0]}
+           assert image in images
            assert len(e['ROOT_METADATA_ADMISSION_B64'])<=8192
            a=json.loads(base64.b64decode(e['ROOT_METADATA_ADMISSION_B64'],validate=True))
            assert a['schema']=='root-primary-row217-metadata-only-v1' and a['status']=='ADMITTED_METADATA_ONLY'
            assert a['authority']=='ROOT' and a['authority_thread']=='01a18e7c-8c23-7fd2-8d55-b0486d938cd3'
            assert a['actor_id']=='1981537' and a['head']==e['GITHUB_SHA'] and a['allow_build'] is False
-           assert a['expected_image']==image
+           assert a['expected_images']==images
            assert re.fullmatch('[0-9a-f]{64}',a['independent_source_review_sha256'])
            assert not any(e.get(k) for k in ('NODE_OPTIONS','NODE_PATH','NODE_V8_COVERAGE','NODE_COMPILE_CACHE','GOMAXPROCS'))
            common=pathlib.Path('/home/runner/work');parent=pathlib.Path(e['RUNNER_TEMP']).resolve(strict=True)
            assert parent==common/'_temp' and pathlib.Path(e['GITHUB_WORKSPACE']).resolve().is_relative_to(common)
            root=parent/'primary-construction-metadata';root.mkdir();harness=root/'harness';harness.mkdir()
            start=time.monotonic()
-           rows={'metadata.py': {'bytes': 10606, 'sha256': 'cbdaa54c1ecac3f5cc5953faafbaee20873daaf9e011a00323967f73059a3c86'}, 'original-runtime-inputs.json': {'bytes': 39304, 'sha256': '3845114ed8f70cfaf2c6456a3017e132ac26810647f77eb94d05f1e1c434954b'}, 'publish.py': {'bytes': 3303, 'sha256': '2971a490f855164848ea37aed83e02d5d54e80a8c64961f7dd814a9d82ae5fce'}, 'scripts/ycsb_campaign_guard.py': {'bytes': 19548, 'sha256': 'b1f5308ce5de5bf1252a77694599f4be4fdf769803b4d7300c08b4901f8d9642'}, 'scripts/ycsb_compare_validate.py': {'bytes': 49260, 'sha256': '85584d03f46e2f49be94d91b377b77e08494a846a30285bfb1300b932d57cb46'}, 'scripts/ycsb_evidence_json.py': {'bytes': 1240, 'sha256': '86989ebbfa14b8f9f3c20ebe470314a29fd28c7db2ab10734d9518e39d270ea6'}, 'scripts/ycsb_runtime_observer.py': {'bytes': 20408, 'sha256': '9ea6f525e0cf46df5301be3f903367816bdb032a3d0abb4c204bda60ee104d8f'}, 'inputs.json': {'bytes': 837, 'sha256': '877d81536d18439d6b7b996a8203b427642009a927690b57817b94338cd6a830'}}
+           rows={'metadata.py': {'bytes': 10771, 'sha256': '5ba18f4a301cd90dae40156341dcaa3d9e4579b135bf478832635a8b329657dd'}, 'original-runtime-inputs.json': {'bytes': 39304, 'sha256': '3845114ed8f70cfaf2c6456a3017e132ac26810647f77eb94d05f1e1c434954b'}, 'publish.py': {'bytes': 3303, 'sha256': '2971a490f855164848ea37aed83e02d5d54e80a8c64961f7dd814a9d82ae5fce'}, 'scripts/ycsb_campaign_guard.py': {'bytes': 19548, 'sha256': 'b1f5308ce5de5bf1252a77694599f4be4fdf769803b4d7300c08b4901f8d9642'}, 'scripts/ycsb_compare_validate.py': {'bytes': 49260, 'sha256': '85584d03f46e2f49be94d91b377b77e08494a846a30285bfb1300b932d57cb46'}, 'scripts/ycsb_evidence_json.py': {'bytes': 1240, 'sha256': '86989ebbfa14b8f9f3c20ebe470314a29fd28c7db2ab10734d9518e39d270ea6'}, 'scripts/ycsb_runtime_observer.py': {'bytes': 20408, 'sha256': '9ea6f525e0cf46df5301be3f903367816bdb032a3d0abb4c204bda60ee104d8f'}, 'inputs.json': {'bytes': 837, 'sha256': 'f3ff98e5857570fdcc9271680aca04d442a71a08d90541d4a1923688da07eb9e'}}
            def check(extra=0):
             total=0
             for directory,dirs,names in os.walk(common,followlinks=False):

@@ -1,11 +1,11 @@
 # Fixed PRIMARY literal runtime identity observation
 
-This prospective diagnostic branch reuses the fixed 268-path metadata query
-against ubuntu24, ImageVersion20261101.360.1, Linux/X64: the image recorded
-in the unchanged original manifest. Availability and all current file bytes
-remain unobserved until a separately admitted query. A different image stops
-before source materialization, with no retry or fallback. The older-image
-constructor failure and zero-row follow-up remain failed and unresolved.
+This prospective successor observes the unchanged fixed268 literal paths on
+EITHER exact known ubuntu24/Linux/X64 image20261025.353.1 or20261101.360.1.
+The actual selected image is recorded, not substituted for original metadata.
+Every other image/OS/architecture stops before source materialization; there
+is no retry, fallback or automatic runner selection. The old single-image
+queries and image-mismatch failures remain immutable and unqualified.
 
 The manual workflow authenticates ROOT actor1981537/thread
 01a18e7c-8c23-7fd2-8d55-b0486d938cd3, exact head/workflow SHA, first attempt,
@@ -53,5 +53,17 @@ equals_original/status plus original manifest binding and complete checked
 publication before contemplating construction. Any mismatch, unavailable row,
 partial output or failed guard/close is not qualification. This does not
 authorize construction on the queried host or any future host. Use a fresh
-metadata-only admission binding this branch head and exact expected image;
+metadata-only admission binding this branch head and expected_images equal to
+the exact ordered two-image allowlist;
 the dormant construction admission-template.json is not the query admission.
+
+Bootstrap trust is unchanged: fixed hosted /usr/bin/python3.12 -I -B and its
+platform standard library run before query-source materialization. They are
+hosted-image trust inputs, not newly preauthenticated file bytes. Exact ROOT
+actor/thread/head/workflow/first-attempt admission and the immutable allowlist
+are checked before fetching hash/length-pinned query/guard helpers. The visit
+records the original268 expected file identities versus actual/missing/unsafe
+facts; it does not bless bootstrap drift or a complete current runtime closure.
+No original interpreter/SDK/library identity is replaced, constructor predicate
+relaxed, prior admission reused, or Go/tool/product executed. Constructor input
+binding and any future execution need separate exact-source review/admission.

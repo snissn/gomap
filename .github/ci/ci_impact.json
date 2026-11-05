@@ -12,7 +12,7 @@
     "M0 observation is manual diagnostic-only on a separately fixed product; no forecast starts it or replaces failed M0 acceptance.",
     "Bounded maintenance comparison is a manually granted diagnostic on fixed baseline/candidate products; no forecast starts it or establishes cost, M0 or native acceptance."
   ],
-  "discovery_source_sha256": "3d1a4c531caf7d50a1a247b1ceda7f9ba0d7951259f51030812de65981965316",
+  "discovery_source_sha256": "2465bb0f5fc1c6712ce7d3d9181d55cfd6c2c99759bb83259b390a7e0f05f904",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
@@ -2336,20 +2336,20 @@
           }
         }
       },
-      "git_blob": "8ab0e51db1d4db26e0361748dd09e0f0d216f4a8",
+      "git_blob": "5c861646dc393f177f457e86453aa53eaa31c58a",
       "jobs": {
         "diagnostic": {
           "checkout": [],
           "commands": [
             {
-              "command_sha256": "5e20d73b5cccd0e25db27accff4a45d13d775db6e675cf97285ac4c523201fe1",
+              "command_sha256": "b6c49a01ef74fdfe9ac3060ff474612e26e5e8003ecd97de9f1c975c3199814b",
               "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:26",
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
               "name": "Authenticate fixed metadata harness only"
             },
             {
               "command_sha256": "a65b6c7a49a27e8ba5d8e391dc46550fd8459296da5c0904792de6f408362c1b",
-              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:85",
+              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:87",
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
               "name": "One literal-only query and complete checked publication"
             }
@@ -2366,7 +2366,7 @@
           "runs_on": "ubuntu-24.04"
         }
       },
-      "sha256": "c6d557ec3105a2fb1bdca8cc723ce14affd83b295283464b5696de1b6edd4344"
+      "sha256": "b5db070d80bda1b0a9d6523dc5981f479ee69091117bd55370281f652c7abe45"
     },
     "treedb-tests.yml": {
       "coverage": "existing execution only; triggers/path filters are unchanged",
