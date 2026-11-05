@@ -60,7 +60,7 @@ jobs:
           unset GOMAP_DIAGNOSTIC_STEADY_RUSAGE
           set +e
           go test -json -count=1 -p 1 -timeout 3m \
-            -run '^(TestRunBenchmarkProcessUsageDefaultZero|TestRunBenchmarkProcessUsageTwoReadsCheckpointOrder|TestRunBenchmarkProcessUsageOriginalFailureWins|TestRunBenchmarkProcessUsageReaderError|TestProcessUsageTimevalBounds|TestProcessUsageSelectionRefusal|TestProcessUsageCounterRegression|TestProcessUsageIncompleteAndReadLimit|TestProcessUsageSampleRegressionFailsClosed|TestRunBenchmarkProcessUsageCloseFailureIsNotLifecycleSuccess|TestRunBenchmarkBatchWriteSteadyCPUProfileMatchesTimedSpan|TestRunBenchmarkProcessUsageCleanup|TestProcessUsageCleanupRemoveFailure|TestRunBenchmarkProcessUsageCollisionBeforeOpen|TestProcessUsageOutputCollision|TestProcessUsageOutputAlias)$' \
+            -run '^(TestRunBenchmarkProcessUsageDefaultZero|TestRunBenchmarkProcessUsageTwoReadsCheckpointOrder|TestRunBenchmarkProcessUsageOriginalFailureWins|TestRunBenchmarkProcessUsageReaderError|TestProcessUsageTimevalBounds|TestProcessUsageSelectionRefusal|TestProcessUsageCounterRegression|TestProcessUsageIncompleteAndReadLimit|TestProcessUsageSampleRegressionFailsClosed|TestRunBenchmarkProcessUsageCloseFailureIsNotLifecycleSuccess|TestRunBenchmarkBatchWriteSteadyCPUProfileMatchesTimedSpan|TestRunBenchmarkProcessUsageCleanup|TestProcessUsageCleanupRemoveFailure|TestRunBenchmarkProcessUsageCollisionBeforeOpen|TestProcessUsageOutputCollision|TestProcessUsageOutputAlias|TestProcessUsageOutputPathAliases)$' \
             ./cmd/unified_bench > artifacts/steady-rusage/normal.jsonl 2> artifacts/steady-rusage/normal.stderr
           go_exit=$?
           set -e
@@ -78,7 +78,7 @@ jobs:
           unset GOMAP_DIAGNOSTIC_STEADY_RUSAGE
           set +e
           go test -json -race -count=1 -p 1 -timeout 10m \
-            -run '^(TestRunBenchmarkProcessUsageDefaultZero|TestRunBenchmarkProcessUsageTwoReadsCheckpointOrder|TestRunBenchmarkProcessUsageOriginalFailureWins|TestRunBenchmarkProcessUsageReaderError|TestProcessUsageTimevalBounds|TestProcessUsageSelectionRefusal|TestProcessUsageCounterRegression|TestProcessUsageIncompleteAndReadLimit|TestProcessUsageSampleRegressionFailsClosed|TestRunBenchmarkProcessUsageCloseFailureIsNotLifecycleSuccess|TestRunBenchmarkBatchWriteSteadyCPUProfileMatchesTimedSpan|TestRunBenchmarkProcessUsageCleanup|TestProcessUsageCleanupRemoveFailure|TestRunBenchmarkProcessUsageCollisionBeforeOpen|TestProcessUsageOutputCollision|TestProcessUsageOutputAlias)$' \
+            -run '^(TestRunBenchmarkProcessUsageDefaultZero|TestRunBenchmarkProcessUsageTwoReadsCheckpointOrder|TestRunBenchmarkProcessUsageOriginalFailureWins|TestRunBenchmarkProcessUsageReaderError|TestProcessUsageTimevalBounds|TestProcessUsageSelectionRefusal|TestProcessUsageCounterRegression|TestProcessUsageIncompleteAndReadLimit|TestProcessUsageSampleRegressionFailsClosed|TestRunBenchmarkProcessUsageCloseFailureIsNotLifecycleSuccess|TestRunBenchmarkBatchWriteSteadyCPUProfileMatchesTimedSpan|TestRunBenchmarkProcessUsageCleanup|TestProcessUsageCleanupRemoveFailure|TestRunBenchmarkProcessUsageCollisionBeforeOpen|TestProcessUsageOutputCollision|TestProcessUsageOutputAlias|TestProcessUsageOutputPathAliases)$' \
             ./cmd/unified_bench > artifacts/steady-rusage/race.jsonl 2> artifacts/steady-rusage/race.stderr
           go_exit=$?
           set -e
