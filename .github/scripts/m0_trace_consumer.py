@@ -107,28 +107,31 @@ STATES=('Running','Runnable','Waiting','Syscall')
 
 def event_blocks(lines):
     """Preserve original debug event order and bounded selected block bytes."""
-    header=None;tail=[];offset=0;start=0;length=0;skip=False
+    import hashlib
+    header=None;tail=[];offset=0;start=0;length=0;skip=False;block_hash=None
     for raw in lines:
         require(type(raw) is bytes and raw.endswith(b'\n') and len(raw)<=1024**2,
                 'truncated or excessive parsed line')
         text=raw[:-1].decode('utf-8',errors='strict')
         if text.startswith('M='):
             if header is not None:
-                yield header,tail,start
+                yield header,tail,start,block_hash.hexdigest() if block_hash is not None else None
             header=HEADER.fullmatch(text)
             require(header is not None,'unknown parsed event header')
             tail=[];start=offset;length=len(raw)
             # Only StateTransition blocks need their stack payload retained.
             skip=header[4]!='StateTransition'
+            block_hash=None if skip else hashlib.sha256(raw)
         else:
             require(header is not None,'continuation before first parsed event')
             if not skip:
                 length+=len(raw)
                 require(length<=65536,'state event block exceeds64KiB')
                 tail.append(text)
+                block_hash.update(raw)
         offset+=len(raw)
     if header is not None:
-        yield header,tail,start
+        yield header,tail,start,block_hash.hexdigest() if block_hash is not None else None
 
 
 def transition_stack(tail):
@@ -218,7 +221,7 @@ def project_states(owner, alignment, lines, emit):
             index+=1
         gap_ns+=right-left-overlap;last=stop
 
-    for h,tail,offset in event_blocks(lines):
+    for h,tail,offset,raw_block_sha256 in event_blocks(lines):
         kind=h[4];timestamp=int(h[5])
         if kind=='StateTransition':
             transition=TRANSITION.fullmatch(h[6])
@@ -251,7 +254,8 @@ def project_states(owner, alignment, lines, emit):
                     stack_frames[stack]=target_frames
             entry={'time_ns':timestamp,'parsed_byte_offset':offset,'executing_goroutine':int(h[3]),
                    'target_goroutine':worker,'old':old,'new':new,'reason':reason,
-                   'raw_header_sha256':hashlib.sha256(h[0].encode('utf-8')).hexdigest()}
+                   'raw_header_sha256':hashlib.sha256(h[0].encode('utf-8')).hexdigest(),
+                   'raw_block_sha256':raw_block_sha256}
         elif kind in ('RegionBegin','RegionEnd'):
             match=REGION.fullmatch(h[0])
             if match is None:
@@ -276,6 +280,8 @@ def project_states(owner, alignment, lines, emit):
     require(between_ns==end[-1]-begin[0],'operation envelope state coverage gap')
     descending=sorted(range(BOUND),key=lambda i:(-rows[i]['owner_duration_ns'],i))
     ranks={ordinal:rank+1 for rank,ordinal in enumerate(descending)}
+    ascending=sorted(range(BOUND),key=lambda i:(rows[i]['owner_duration_ns'],i))
+    ascending_indices={ordinal:index for index,ordinal in enumerate(ascending)}
     durations=sorted(r['owner_duration_ns'] for r in rows)
     p99=durations[(BOUND*99+99)//100-1];p95=durations[(BOUND*95+99)//100-1]
     totals=dict.fromkeys(STATES,0);kind_totals={k:dict.fromkeys(STATES,0)for k in ('set','delete-range')}
@@ -283,7 +289,8 @@ def project_states(owner, alignment, lines, emit):
     for row in rows:
         width=row['end_trace_ns']-row['begin_trace_ns']
         require(sum(row['state_ns'].values())==width,'per-operation coverage gap/overlap')
-        row.update(rank_descending=ranks[row['ordinal']],at_or_above_p99=row['owner_duration_ns']>=p99,
+        row.update(rank_descending=ranks[row['ordinal']],index_ascending=ascending_indices[row['ordinal']],
+                   at_or_above_p99=row['owner_duration_ns']>=p99,
                    trace_wall_ns=width,trace_minus_owner_ns=width-row['owner_duration_ns'],coverage='COMPLETE')
         for s in STATES:
             value=row['state_ns'][s];totals[s]+=value;kind_totals[row['kind']][s]+=value

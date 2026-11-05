@@ -31,9 +31,13 @@ transition reasons or unknown selected syntax refuse, without a fallback parser.
 
 TransitionStack and Event Stack remain distinct. A missing target stack is
 UNAVAILABLE, not an absent wait or a replacement waker stack. Exact PCs,
-functions, source paths/lines and event offsets are preserved. Original owner
+functions, source paths/lines and event offsets are preserved. Every retained
+transition entry additionally hashes its complete original raw block, including
+header newline, both stack sections and blank lines through the next header or
+EOF. The existing header-only hash remains separately labeled. Original owner
 latencies determine all4096 deterministic ranks (descending duration, ordinal
-breaks ties), original nearest-rank p95/p99 and all ties. Trace-region wall
+breaks ties), plus zero-based `index_ascending` sorted by (owner duration,
+ordinal), original nearest-rank p95/p99 and all ties. Trace-region wall
 includes observer boundaries and differs from the original operation timer.
 The original `OriginalDurationsMatch` is its in-process check; there is no
 independent original latency array. The projection additionally checks original
@@ -87,7 +91,7 @@ ROOT authenticates reviewer authorship/readiness before dispatch; byte equality
 is not cryptographic proof of authorship. All imported local helper bytes are
 hash/size bound before import. Worker repeats authority checks.
 
-Locally permitted qualification:21 pure Python source/synthetic-data controls
+Locally permitted qualification:23 pure Python source/synthetic-data controls
 and AST/hash/inventory checks only. These do not read the original artifact or
 prove its grammar suitability, performance or fit. Hosted execution needs exact
 independent source READY and separate ROOT admission. All old FAIL/HOLD/CV and

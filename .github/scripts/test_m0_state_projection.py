@@ -80,6 +80,34 @@ class Controls(unittest.TestCase):
         r=self.run_projection();rows=self.outputs['operations']
         self.assertEqual(r['p99_ns'],2027);self.assertEqual(rows[4094]['rank_descending'],1)
         self.assertEqual(rows[4095]['rank_descending'],2);self.assertEqual(r['at_or_above_p99_operations'],42)
+    def test_exact_transition_block_hash_offset_and_stack_changes(self):
+        first=self.lines.index(b'M=1 P=0 G=7 StateTransition Time=240 GoID=7 Running->Waiting Reason="select"\n')
+        last=first+1
+        while last<len(self.lines) and not self.lines[last].startswith(b'M='):
+            last+=1
+        raw=b''.join(self.lines[first:last]);offset=sum(map(len,self.lines[:first]))
+        self.run_projection()
+        entry=next(r['entry'] for r in self.outputs['segments'] if r['state']=='Waiting')
+        self.assertEqual(entry['parsed_byte_offset'],offset)
+        self.assertEqual(entry['raw_block_sha256'],hashlib.sha256(raw).hexdigest())
+        self.assertNotEqual(entry['raw_block_sha256'],hashlib.sha256(self.lines[first]).hexdigest())
+        for old,new in ((b'resource.wait @ 0xab',b'resource.wait @ 0xaf'),
+                        (b'waker.other @ 0xcd',b'waker.other @ 0xce')):
+            changed=[r.replace(old,new) for r in self.lines]
+            block=next(b for b in c.event_blocks(changed) if b[2]==offset)
+            self.assertEqual(block[0][0],self.lines[first][:-1].decode())
+            self.assertEqual(block[3],hashlib.sha256(raw.replace(old,new)).hexdigest())
+            self.assertNotEqual(block[3],entry['raw_block_sha256'])
+        final=b'M=1 P=0 G=7 StateTransition Time=9999999 GoID=7 Running->Running Reason="status"\n\n'
+        block=list(c.event_blocks(final.splitlines(keepends=True)))[0]
+        self.assertEqual(block[3],hashlib.sha256(final).hexdigest())
+    def test_ascending_indices_complete_and_ordinal_ties(self):
+        self.run_projection();rows=self.outputs['operations']
+        expected=sorted(range(4096),key=lambda i:(self.owner['Records'][i]['DurationNS'],i))
+        self.assertEqual(sorted(r['index_ascending'] for r in rows),list(range(4096)))
+        self.assertEqual([rows[i]['index_ascending'] for i in expected],list(range(4096)))
+        self.assertEqual((rows[0]['index_ascending'],rows[1]['index_ascending']),(0,1))
+        self.assertEqual((rows[4094]['index_ascending'],rows[4095]['index_ascending']),(4094,4095))
     def test_negative_interpretation(self):
         r=self.run_projection()
         for key in ('running_is_cpu','select_is_queue_service_split','phase_assignment','M0_CV_acceptance','historical_cause'):
@@ -187,6 +215,6 @@ class Controls(unittest.TestCase):
 if __name__=='__main__':
     suite=unittest.defaultTestLoader.loadTestsFromTestCase(Controls)
     result=unittest.TextTestRunner(verbosity=2).run(suite)
-    if not result.wasSuccessful() or result.skipped or suite.countTestCases()!=21:
+    if not result.wasSuccessful() or result.skipped or suite.countTestCases()!=23:
         raise SystemExit(1)
-    print(json.dumps({'status':'M0_STATE_PROJECTION_PURE_CONTROLS_PASS','methods':21},sort_keys=True))
+    print(json.dumps({'status':'M0_STATE_PROJECTION_PURE_CONTROLS_PASS','methods':23},sort_keys=True))

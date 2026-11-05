@@ -1,20 +1,20 @@
 {
   "files": {
     ".github/m0-state-projection-README.md": {
-      "bytes": 6440,
-      "sha256": "95d0f37f0f9d339b011bd40a22234f3cd01828e1d6465c88ad16c75b99059274"
+      "bytes": 6748,
+      "sha256": "4c7fbddd618fab4a3e61d0ef746e5e62f4cd77f8c01874331dcdbcb93e46fe48"
     },
     ".github/scripts/four_gate_artifact_readback.py": {
       "bytes": 12846,
       "sha256": "72ea14c0d96004b1e217b9aa1987b849a7e123633ac6869fbdee0ab35e52095b"
     },
     ".github/scripts/m0_trace_consumer.py": {
-      "bytes": 17361,
-      "sha256": "c882089dcfaf0a0ec9f5ef262904c583eecd4a7724e3abf0b25e351b7d3af0a8"
+      "bytes": 17918,
+      "sha256": "0edd678878c11d675f0df2e8b1e461576b4182e27b734194375c8b02095bbcd3"
     },
     ".github/scripts/test_m0_state_projection.py": {
-      "bytes": 12409,
-      "sha256": "29d5bac9828988b986d16b9873f5bb3cc1f12e1a63b3f0eb96b713567d0db149"
+      "bytes": 14507,
+      "sha256": "5670a1272a04f22c5b4d9fd1f834d8da9989b33e297a9bb4d556501d98653b45"
     },
     ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml": {
       "bytes": 5665,
