@@ -1,0 +1,149 @@
+name: "GetVersioned: fixed activation diagnostic"
+
+on:
+  push:
+    branches:
+      - diagnostic/getversioned-700-activation-01
+
+permissions:
+  contents: read
+
+jobs:
+  activation:
+    name: exact700 activation and linked reset evidence
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      GOMEMLIMIT: 4GiB
+      GOMAXPROCS: 2
+      GOWORK: "off"
+      GOTOOLCHAIN: local
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - name: Initialize diagnostic output
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/getversioned-bindings-qualification"
+          mkdir "$out"
+          printf 'ACTIVATION_OUT=%s\n' "$out" >> "$GITHUB_ENV"
+          printf '%s\n' 'Diagnostic only; no benchmark or acceptance timing.' '1GiB output directory and 32MiB per non-ELF file, checked at boundaries; caches/tmp/checkout excluded.' 'GOMEMLIMIT4GiB is soft, not a hard RSS limit. Hosted job timeout25min, individual commands bounded.' 'Atomic overlays change code/layout. Counters include background work within each observed window; no original-ELF nonactivation or timing inference.' > "$out/scope.txt"
+
+      - name: Checkout exact diagnostic source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Setup pinned diagnostic Go
+        timeout-minutes: 2
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.10"
+          check-latest: false
+          cache: false
+
+      - name: Record source and tool context; prepare fixed overlays
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          out="$ACTIVATION_OUT"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -z "$(git status --porcelain)"
+          git show -s --format='head=%H%ntree=%T%nparents=%P' HEAD > "$out/source.txt"
+          sha256sum .github/workflows/getversioned-activation-diagnostic.yml .github/scripts/getversioned_activation_diagnostic.py .github/scripts/getversioned_bindings_qualification.py TreeDB/getversioned_write_activation_diagnostic_test.go TreeDB/db/db.go TreeDB/db/pools.go TreeDB/db/value_reader.go TreeDB/tree/tree.go TreeDB/command_wal_public_test.go > "$out/source-sha256.txt"
+          test "$(timeout --signal=TERM --kill-after=10s 10s go env GOVERSION)" = go1.26.10
+          timeout --signal=TERM --kill-after=10s 10s go version > "$out/go-version.log" 2>&1
+          sha256sum "$(command -v go)" > "$out/go-driver-sha256.txt"
+          timeout --signal=TERM --kill-after=10s 10s go env -json GOVERSION GOOS GOARCH GOAMD64 CGO_ENABLED CC CXX GOFLAGS GOEXPERIMENT GOROOT GOCACHE GOMODCACHE GOTOOLCHAIN GOWORK > "$out/go-env.json"
+          timeout --signal=TERM --kill-after=10s 15s python3 -B .github/scripts/getversioned_activation_diagnostic.py selftest > "$out/controls.log" 2>&1
+          timeout --signal=TERM --kill-after=10s 15s python3 -B .github/scripts/getversioned_activation_diagnostic.py prepare "$out"
+          python3 -B .github/scripts/getversioned_activation_diagnostic.py finish "$out" > /dev/null
+
+      - name: Observe the durable write window and positive read control
+        timeout-minutes: 6
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$ACTIVATION_OUT"
+          set +e
+          timeout --signal=TERM --kill-after=10s 300s go test -json -p 1 -mod=readonly -overlay="$out/overlay.json" -tags=treedb_test,treedb_activation_diagnostic -count=1 -timeout=240s -run '^TestGetVersionedWriteActivationDiagnostic$' ./TreeDB > "$out/normal.jsonl" 2> "$out/normal.stderr"
+          rc=$?
+          set -e
+          printf '%s\n' "$rc" > "$out/normal.exit"
+          python3 -B .github/scripts/getversioned_activation_diagnostic.py finish "$out" > /dev/null
+          test "$rc" -eq 0
+
+      - name: Race check the same activation control once
+        timeout-minutes: 8
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$ACTIVATION_OUT"
+          set +e
+          timeout --signal=TERM --kill-after=10s 420s go test -race -json -p 1 -mod=readonly -overlay="$out/overlay.json" -tags=treedb_test,treedb_activation_diagnostic -count=1 -timeout=360s -run '^TestGetVersionedWriteActivationDiagnostic$' ./TreeDB > "$out/race.jsonl" 2> "$out/race.stderr"
+          rc=$?
+          set -e
+          printf '%s\n' "$rc" > "$out/race.exit"
+          python3 -B .github/scripts/getversioned_activation_diagnostic.py finish "$out" > /dev/null
+          test "$rc" -eq 0
+          python3 -B .github/scripts/getversioned_activation_diagnostic.py inventory "$out"
+
+      - name: Compile ordinary optimized DB ELF without overlay
+        timeout-minutes: 4
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$ACTIVATION_OUT"
+          set +e
+          # Diagnostic -m=2 does not disable optimization. The existing fixed
+          # consumer retains selected changed scope and all unknown/errors,
+          # and separately hashes/counts the complete compiler stderr stream.
+          timeout --signal=TERM --kill-after=10s 180s go test -c -p 1 -mod=readonly -tags=treedb_test -gcflags='github.com/snissn/gomap/TreeDB/db=-m=2' -o "$out/db.test" ./TreeDB/db 2>&1 > "$out/db-compiler.stdout" |
+            timeout --signal=TERM --kill-after=10s 200s python3 -B .github/scripts/getversioned_bindings_qualification.py compiler-db "$out" > "$out/db-selection.stdout" 2> "$out/db-selection.stderr"
+          exits=("${PIPESTATUS[@]}")
+          set -e
+          test "${#exits[@]}" -eq 2
+          printf '%s\n' "${exits[0]}" > "$out/db-compiler.exit"
+          printf '%s\n' "${exits[1]}" > "$out/db-selection.exit"
+          python3 -B .github/scripts/getversioned_activation_diagnostic.py finish "$out" > /dev/null
+          test "${exits[0]}" -eq 0
+          test "${exits[1]}" -eq 0
+          sha256sum "$out/db.test" > "$out/db-test-sha256.txt"
+
+      - name: Capture actual linked reset path from that same ELF
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$ACTIVATION_OUT"
+          timeout --signal=TERM --kill-after=10s 15s go tool objdump -s '^github.com/snissn/gomap/TreeDB/db\.\(\*DB\)\.captureSnapshotForReadWithValueLogPublicationLockHeld$' "$out/db.test" > "$out/capture.objdump.txt" 2> "$out/capture.objdump.stderr"
+          timeout --signal=TERM --kill-after=10s 15s go tool objdump -s '^github.com/snissn/gomap/TreeDB/tree\.\(\*Tree\)\.ResetAppendReadBindings$' "$out/db.test" > "$out/bound.objdump.txt" 2> "$out/bound.objdump.stderr"
+          timeout --signal=TERM --kill-after=10s 15s go tool objdump -s '^github.com/snissn/gomap/TreeDB/tree\.\(\*Tree\)\.Reset$' "$out/db.test" > "$out/generic.objdump.txt" 2> "$out/generic.objdump.stderr"
+          python3 -B .github/scripts/getversioned_activation_diagnostic.py structural "$out"
+          python3 -B .github/scripts/getversioned_activation_diagnostic.py finish "$out" > /dev/null
+
+      - name: Preserve final output ledger on success or failure
+        if: always()
+        timeout-minutes: 1
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/getversioned-bindings-qualification"
+          if test -f .github/scripts/getversioned_activation_diagnostic.py; then
+            python3 -B .github/scripts/getversioned_activation_diagnostic.py finish "$out"
+          else
+            printf 'No helper checkout; diagnostic not entered.\n'
+          fi
+
+      - name: Upload all diagnostic output including adverse results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: getversioned-700-activation-${{ github.sha }}
+          path: ${{ runner.temp }}/getversioned-bindings-qualification
+          retention-days: 14
+          if-no-files-found: error

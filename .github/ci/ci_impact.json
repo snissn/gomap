@@ -12,7 +12,7 @@
     "M0 observation is manual diagnostic-only on a separately fixed product; no forecast starts it or replaces failed M0 acceptance.",
     "Bounded maintenance comparison is a manually granted diagnostic on fixed baseline/candidate products; no forecast starts it or establishes cost, M0 or native acceptance."
   ],
-  "discovery_source_sha256": "eb4a931e34f5228cc142702bc8ed82f2b6aecaa0cb000cff5259b09d63678483",
+  "discovery_source_sha256": "0ee6d82b2529d8f694bb07c91c8b42ef8cbfbc0c9a6cc9e7327321d4d344f46b",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
@@ -145,7 +145,7 @@
       "mode": "100644"
     },
     ".github/scripts/test_ci_impact.py": {
-      "git_blob": "f2c074b099766d8c5382b211cc08041d7c0e8289",
+      "git_blob": "be8f7c6421b7c041aa4c267544011bc3368281c8",
       "mode": "100644"
     },
     ".github/scripts/test_treedb_ci_contract.py": {
@@ -235,6 +235,19 @@
         "tags": "entry command defaults/flags retained"
       },
       "workflow": "format.yml"
+    },
+    {
+      "id": "getversioned-activation-diagnostic/activation/single",
+      "job": "activation",
+      "owner": "TreeDB read path diagnostic coordinator (#5396); fixed exact700 source, branch-only diagnostic, no acceptance or omissions authority",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {},
+        "race": true,
+        "runs_on": "ubuntu-latest",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "getversioned-activation-diagnostic.yml"
     },
     {
       "id": "hashdb-tests/test/single",
@@ -1676,6 +1689,88 @@
         }
       },
       "sha256": "ebd68ccc334734d7904240311e98124a3827feb8cd2defd1c9f3dd14c2749ec6"
+    },
+    "getversioned-activation-diagnostic.yml": {
+      "coverage": "existing execution only; triggers/path filters are unchanged",
+      "events": {
+        "push": {
+          "branches": [
+            "diagnostic/getversioned-700-activation-01"
+          ]
+        }
+      },
+      "git_blob": "6adfa7e71f330dd26947a7a90144bf8e1d30dc96",
+      "jobs": {
+        "activation": {
+          "checkout": [
+            {
+              "fetch-depth": 1,
+              "persist-credentials": false,
+              "ref": "${{ github.sha }}"
+            }
+          ],
+          "commands": [
+            {
+              "command_sha256": "c0a86cee9c62063f7375bc80d1eefce240eedb767925e4129d5a07a9590f6eb8",
+              "entrypoint": ".github/workflows/getversioned-activation-diagnostic.yml:25",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Initialize diagnostic output"
+            },
+            {
+              "command_sha256": "00c3b03d2274c0bfeb404b5272ae9e53c810ad44d0f8eff5f98307e5b5484339",
+              "entrypoint": ".github/workflows/getversioned-activation-diagnostic.yml:51",
+              "env": {
+                "EXPECTED_HEAD": "${{ github.sha }}"
+              },
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Record source and tool context; prepare fixed overlays"
+            },
+            {
+              "command_sha256": "3edc8aa5a343d80e49288fc953a9b02b44b45fd241ff15a658d18a8dfc03c7b2",
+              "entrypoint": ".github/workflows/getversioned-activation-diagnostic.yml:69",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Observe the durable write window and positive read control"
+            },
+            {
+              "command_sha256": "a8edb4dbba5d306e6a42317c44a18e4e3d90ef0984e5f2ba9cf7b2fd785a8d42",
+              "entrypoint": ".github/workflows/getversioned-activation-diagnostic.yml:83",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Race check the same activation control once"
+            },
+            {
+              "command_sha256": "d8eeac7cb31e96e2921934833175f0e64fa25b3656b57b21beb9f3a4218599b8",
+              "entrypoint": ".github/workflows/getversioned-activation-diagnostic.yml:98",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Compile ordinary optimized DB ELF without overlay"
+            },
+            {
+              "command_sha256": "f4fe3aed0e029ddd24afae831c5ff5c8ca2b881fef6094adfef27a160028cbc6",
+              "entrypoint": ".github/workflows/getversioned-activation-diagnostic.yml:120",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Capture actual linked reset path from that same ELF"
+            },
+            {
+              "command_sha256": "32ebd50aac399d07570eabc6d680c3a2201b1121ec7391674676e1923fdc6d20",
+              "entrypoint": ".github/workflows/getversioned-activation-diagnostic.yml:133",
+              "if": "always()",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Preserve final output ledger on success or failure"
+            }
+          ],
+          "environment": {
+            "GOMAXPROCS": 2,
+            "GOMEMLIMIT": "4GiB",
+            "GOTOOLCHAIN": "local",
+            "GOWORK": "off",
+            "PYTHONDONTWRITEBYTECODE": "1"
+          },
+          "matrix": null,
+          "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": true,
+          "runs_on": "ubuntu-latest"
+        }
+      },
+      "sha256": "2c2bb8419d35166801190faebc63b348dab01acfc8c8f4b0aba42572d22993e5"
     },
     "hashdb-tests.yml": {
       "coverage": "existing execution only; triggers/path filters are unchanged",
