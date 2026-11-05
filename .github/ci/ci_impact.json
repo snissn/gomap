@@ -12,7 +12,7 @@
     "M0 observation is manual diagnostic-only on a separately fixed product; no forecast starts it or replaces failed M0 acceptance.",
     "Bounded maintenance comparison is a manually granted diagnostic on fixed baseline/candidate products; no forecast starts it or establishes cost, M0 or native acceptance."
   ],
-  "discovery_source_sha256": "e4c3532e85d97d1b535b55b955d76ea51d4834bef7ce72fce217dc6eeb0194f0",
+  "discovery_source_sha256": "01101dfbe881100060f16a8c32bf63dc497b2b356904f0e342e1dce9f7974c08",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
@@ -2325,20 +2325,25 @@
       "events": {
         "workflow_dispatch": {
           "inputs": {
+            "controls_pass_b64": {
+              "description": "Exact ROOT-admitted normal and race controls receipt encoded with base64",
+              "required": true,
+              "type": "string"
+            },
             "expected_head": {
-              "description": "Full independently reviewed controls-only harness commit",
+              "description": "Full independently reviewed M0 trace harness commit",
               "required": true,
               "type": "string"
             },
             "root_admission_b64": {
-              "description": "ROOT controls-only admission JSON encoded with base64; no capture authority",
+              "description": "ROOT one-M0 admission JSON encoded with base64",
               "required": true,
               "type": "string"
             }
           }
         }
       },
-      "git_blob": "922ff3af4dd1dc781e74598c4657875260137097",
+      "git_blob": "98785631ba9af41149cf3b505c0be444bbbbbeaf",
       "jobs": {
         "diagnostic": {
           "checkout": [
@@ -2352,22 +2357,30 @@
           ],
           "commands": [
             {
-              "command_sha256": "d65271f30bebb472a6ddca2426a51d935114122b7c354e28309dbd0e1eee446f",
-              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:29",
+              "command_sha256": "c12f736a81c93dd57c9bd1a6a948388a3796372b9a0ad9eaa9b8473ce80c9506",
+              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:34",
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
-              "name": "Authenticate fresh controls-only dispatch"
+              "name": "Authenticate one M0 dispatch and actual controls prerequisite"
             },
             {
-              "command_sha256": "787449b9a34b3594d0df448e2dcb16ba19f12318ff4e6d2dec06291283aacf48",
-              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:73",
+              "command_sha256": "0d634125b142464caeab40904be6d8ec0a45d2cbc2d7f0d5e5816b146aa77476",
+              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:93",
               "env": {
                 "GH_TOKEN": "${{ github.token }}"
               },
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
-              "name": "Run one fixed source and control qualification"
+              "name": "Build and capture one fixed M0 iteration, then validate its closed trace"
+            },
+            {
+              "command_sha256": "88115acc094b5f1a533620422e9104024be96ff9562918e92fae0492ef8716ff",
+              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:102",
+              "if": "always() && env.M0_TRACE_STARTED_MONOTONIC != ''",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Check final output bounds after guard has closed its receipts"
             }
           ],
           "environment": {
+            "M0_CONTROLS_PASS_B64": "${{ inputs.controls_pass_b64 }}",
             "PYTHONDONTWRITEBYTECODE": "1",
             "REVIEWED_HEAD": "${{ inputs.expected_head }}",
             "ROOT_ADMISSION_B64": "${{ inputs.root_admission_b64 }}",
@@ -2379,7 +2392,7 @@
           "runs_on": "ubuntu-24.04"
         }
       },
-      "sha256": "9d56b786848e451221f8c6d9aeace519b4a61555979536095d0aa80897e13511"
+      "sha256": "f73017490d46892984a4e0f6edfa07a50d6b9cd9598e8dafb0db7e5a06ffac70"
     },
     "treedb-tests.yml": {
       "coverage": "existing execution only; triggers/path filters are unchanged",

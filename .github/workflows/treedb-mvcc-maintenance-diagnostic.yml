@@ -1,21 +1,25 @@
-name: 'TreeDB: PRIMARY/M0 observer source controls (manual only)'
+name: 'TreeDB: one M0 ordinal trace (manual diagnostic only)'
 on:
   workflow_dispatch:
     inputs:
       expected_head:
-        description: Full independently reviewed controls-only harness commit
+        description: Full independently reviewed M0 trace harness commit
         required: true
         type: string
       root_admission_b64:
-        description: ROOT controls-only admission JSON encoded with base64; no capture authority
+        description: ROOT one-M0 admission JSON encoded with base64
+        required: true
+        type: string
+      controls_pass_b64:
+        description: Exact ROOT-admitted normal and race controls receipt encoded with base64
         required: true
         type: string
 permissions:
   contents: read
 jobs:
   diagnostic:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/diagnostic/primary-m0-controls-01' && github.actor_id == '1981537' && github.run_attempt == 1
-    name: exact4934 PRIMARY/M0 observer normal and race controls only
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/diagnostic/m0-operation-trace-01' && github.actor_id == '1981537' && github.run_attempt == 1
+    name: exact4934 one production bytes_1x M0 ordinal trace
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
@@ -23,27 +27,43 @@ jobs:
       REVIEWED_HEAD: ${{ inputs.expected_head }}
       WORKFLOW_COMMIT: ${{ github.workflow_sha }}
       ROOT_ADMISSION_B64: ${{ inputs.root_admission_b64 }}
+      M0_CONTROLS_PASS_B64: ${{ inputs.controls_pass_b64 }}
     steps:
-      - name: Authenticate fresh controls-only dispatch
+      - name: Authenticate one M0 dispatch and actual controls prerequisite
         shell: bash
         run: |
           set -euo pipefail
           [[ "$REVIEWED_HEAD" =~ ^[0-9a-f]{40}$ && "$REVIEWED_HEAD" == "$GITHUB_SHA" && "$REVIEWED_HEAD" == "$WORKFLOW_COMMIT" ]]
           python3 -B - <<'PY'
-          import base64,json,os,pathlib,time
+          import base64,hashlib,json,os,pathlib,re,time
+          started=time.monotonic()
           assert os.environ['GITHUB_ACTOR_ID']=='1981537' and os.environ['GITHUB_RUN_ATTEMPT']=='1'
           text=os.environ['ROOT_ADMISSION_B64'];assert len(text)<=16384
           admission=json.loads(base64.b64decode(text,validate=True));assert isinstance(admission,dict)
-          expected={'schema':'primary-m0-hosted-controls-admission-v1','status':'ADMITTED_CONTROLS_ONLY',
+          expected={'schema':'m0-operation-trace-admission-v1','status':'ADMITTED_ONE_M0_TRACE_ONLY',
             'authority':'ROOT','actor_id':'1981537','expected_head':os.environ['GITHUB_SHA'],'run_attempt':'1',
             'owner_manifest_sha256':'86f4ee083aba9e2f2dbdb87abf9ec5be9eb13d416e1bafd25f7b61139e317aa3',
             'owner_review_sha256':'863afc8d80a3f68f767b8be0f8f810f5ab646a5c1e256ea674b7894a97ef883a',
-            'allow_product_capture':False}
+            'allow_product_capture':True,'only_capture':'M0_bytes_1x_N1_4096'}
           assert all(admission.get(k)==v for k,v in expected.items())
-          root=pathlib.Path(os.environ['RUNNER_TEMP'])/'primary-m0-controls';root.mkdir()
+          assert re.fullmatch('[0-9a-f]{64}',admission.get('independent_binding_review_sha256',''))
+          encoded=os.environ['M0_CONTROLS_PASS_B64'];assert len(encoded)<=24000
+          raw=base64.b64decode(encoded,validate=True);assert len(raw)<=16384
+          assert hashlib.sha256(raw).hexdigest()==admission.get('controls_pass_sha256')
+          controls=json.loads(raw)
+          required={'schema':'root-primary-m0-controls-pass-v1','status':'ROOT_NORMAL_RACE_CONTROLS_ADMITTED',
+            'actor_id':'1981537','producer_head':'ee6c3880e1b0ec6d7e490232f3a3de45643a455e',
+            'producer_tree':'ffc790f080c04708d9363d375f9b380d7430350a',
+            'owner_manifest_sha256':'86f4ee083aba9e2f2dbdb87abf9ec5be9eb13d416e1bafd25f7b61139e317aa3',
+            'normal':{'tops':6,'outcomes':26,'leaves':24},'race':{'tops':6,'outcomes':26,'leaves':24},
+            'literal_normal_exit':0,'literal_race_exit':0,'positive_outer_guard_cleanup':True,'product_capture':False}
+          assert type(controls) is dict and all(type(controls.get(k)) is type(v) and controls[k]==v for k,v in required.items())
+          assert all(type(controls.get(k)) is int and controls[k]>0 for k in ('run_id','artifact_id'))
+          assert all(re.fullmatch('[0-9a-f]{64}',controls.get(k,'')) for k in ('artifact_sha256','independent_review_sha256'))
+          root=pathlib.Path(os.environ['RUNNER_TEMP'])/'m0-operation-trace';root.mkdir()
           (root/'dispatch-admission.json').write_text(json.dumps(admission,sort_keys=True)+'\n')
           with open(os.environ['GITHUB_ENV'],'a') as stream:
-              stream.write('PRIMARY_M0_STARTED_MONOTONIC='+str(time.monotonic())+'\n')
+              stream.write('M0_TRACE_STARTED_MONOTONIC='+str(started)+'\n')
           PY
       - name: Checkout exact reviewed binding harness
         timeout-minutes: 1
@@ -66,7 +86,7 @@ jobs:
           go-version: '1.26.10'
           check-latest: false
           cache: true
-      - name: Run one fixed source and control qualification
+      - name: Build and capture one fixed M0 iteration, then validate its closed trace
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -74,18 +94,44 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$REVIEWED_HEAD"
           test -z "$(git status --porcelain)"
-          python3 -B .github/scripts/primary_m0_hosted_controls.py guard --root "$RUNNER_TEMP/primary-m0-controls" > "$RUNNER_TEMP/primary-m0-controls/entry.stdout.log" 2> "$RUNNER_TEMP/primary-m0-controls/entry.stderr.log"
-      - name: Upload raw controls, failure and candidate source identities
+          python3 -B .github/scripts/m0_operation_trace.py guard --root "$RUNNER_TEMP/m0-operation-trace" > "$RUNNER_TEMP/m0-operation-trace/entry.stdout.log" 2> "$RUNNER_TEMP/m0-operation-trace/entry.stderr.log"
+      - name: Check final output bounds after guard has closed its receipts
+        if: always() && env.M0_TRACE_STARTED_MONOTONIC != ''
+        timeout-minutes: 1
+        shell: bash
+        run: |
+          python3 -B - <<'PYFINAL'
+          import json,os,pathlib,time
+          root=pathlib.Path(os.environ['RUNNER_TEMP'])/'m0-operation-trace'
+          paths=[p for d in (root/'output',root/'guard') if d.exists() for p in d.rglob('*') if p.is_file()]
+          paths.extend(p for p in root.iterdir() if p.is_file() and p.suffix in ('.json','.log'))
+          files={str(p.relative_to(root)):p.stat().st_size for p in paths}
+          excess={n:v for n,v in files.items() if v>(128 if n=='output/trace-parsed.stdout.log' else 32)*1024**2}
+          value={'schema':'m0-final-output-bound-v1','file_bytes':files,'bytes_before_receipt':sum(files.values()),
+            'first_observed_not_peak':True,'monotonic':time.monotonic(),
+            'whole_seconds':time.monotonic()-float(os.environ['M0_TRACE_STARTED_MONOTONIC'])}
+          data=(json.dumps(value,sort_keys=True)+'\n').encode()
+          violation=bool(excess) or sum(files.values())+len(data)>256*1024**2 or len(data)>32*1024**2
+          first=root/'output/resource-first-failure.json'
+          if violation and not first.exists():
+              with first.open('xb',buffering=0) as f:
+                  assert f.write(data)==len(data);f.flush();os.fsync(f.fileno())
+          with (root/'post-guard-output.json').open('xb',buffering=0) as f:
+              assert f.write(data)==len(data);f.flush();os.fsync(f.fileno())
+          assert not violation and not first.exists(),'diagnostic output bound refusal; partial evidence retained'
+          assert time.monotonic()-float(os.environ['M0_TRACE_STARTED_MONOTONIC'])<1020,'shared whole deadline exhausted before final output validation'
+          PYFINAL
+      - name: Upload original trace, full parsed text, ordinal receipt and partial failures
         if: always()
         timeout-minutes: 2
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: primary-m0-controls-${{ github.run_id }}-${{ github.run_attempt }}
+          name: m0-operation-trace-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            ${{ runner.temp }}/primary-m0-controls/output
-            ${{ runner.temp }}/primary-m0-controls/guard
-            ${{ runner.temp }}/primary-m0-controls/*.json
-            ${{ runner.temp }}/primary-m0-controls/*.log
+            ${{ runner.temp }}/m0-operation-trace/output
+            ${{ runner.temp }}/m0-operation-trace/guard
+            ${{ runner.temp }}/m0-operation-trace/*.json
+            ${{ runner.temp }}/m0-operation-trace/*.log
           if-no-files-found: error
           include-hidden-files: true
           retention-days: 14

@@ -1109,3 +1109,11 @@ reported separately. Fixed-process artifacts live under
 `public-write-plan.json`, `source-binding.json`, `cell-*-receipt.json`,
 `cell-*.log`, and `result.json`. This diagnostic has no numerical acceptance
 threshold and does not replace final G1 or actual command/Mongo gates.
+
+### Manual M0 ordinal trace diagnostic
+
+The fixed standalone package recipe for
+`BenchmarkVacuumIndexOnlineCollectionProductionForegroundChurn/bytes_1x` is in
+[the manual M0 trace binding](../../.github/m0-operation-trace-README.md). It
+retains one standard Go test trace, full parsed text and bounded ordinal alignment
+receipts. These diagnostic artifacts are not benchprof inputs or M0 CV acceptance.

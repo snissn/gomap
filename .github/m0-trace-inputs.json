@@ -1,0 +1,67 @@
+{
+  "files": {
+    ".github/m0-operation-trace-README.md": {
+      "bytes": 9524,
+      "sha256": "5e8dd63d2c8751ec6c2079ca2b61e593b98f7798eaa17160a45b18c545733ad2"
+    },
+    ".github/primary-m0-observers/base/TreeDB/db/vacuum_collection_bench_test.go": {
+      "bytes": 16844,
+      "sha256": "c7c7404c076ec834579b1881aeefbb671faf04066dd7c80ae6199d4d1b506337"
+    },
+    ".github/primary-m0-observers/candidate/TreeDB/db/vacuum_collection_bench_test.go": {
+      "bytes": 17529,
+      "sha256": "09f8b0758018fd5e2fd0994aab18463ecdffa40add6796198b81bded69ac2d81"
+    },
+    ".github/primary-m0-observers/candidate/TreeDB/db/vacuum_m0_ordinal_observer_test.go": {
+      "bytes": 12365,
+      "sha256": "648f61eeb148809e9a42cd087e979ce078574110142c7a944f61c274b4aacf49"
+    },
+    ".github/primary-m0-observers/format-source-review.json": {
+      "bytes": 1144,
+      "sha256": "863afc8d80a3f68f767b8be0f8f810f5ab646a5c1e256ea674b7894a97ef883a"
+    },
+    ".github/primary-m0-observers/manifest.json": {
+      "bytes": 10332,
+      "sha256": "86f4ee083aba9e2f2dbdb87abf9ec5be9eb13d416e1bafd25f7b61139e317aa3"
+    },
+    ".github/primary-m0-observers/overlays.json": {
+      "bytes": 2916,
+      "sha256": "4652442e079370e3cf203e7a8724e96b7841c760da7708981b6c5d61efc9246d"
+    },
+    ".github/scripts/m0_operation_trace.py": {
+      "bytes": 23171,
+      "sha256": "95d8bd992d14d22c56566f3163859e70099f64ae827e7c0df25ed584d01cecac"
+    },
+    ".github/scripts/m0_trace_consumer.py": {
+      "bytes": 5481,
+      "sha256": "348b5a4d3d132e9038a543b52750caa8cea3e54f23d362d514aa6db8599b6ab6"
+    },
+    ".github/scripts/test_m0_trace_consumer.py": {
+      "bytes": 6199,
+      "sha256": "86217f2e7868bfb1ad7d378ab2faf1e1d905beaf380d0ab792af302d314c56a9"
+    },
+    ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml": {
+      "bytes": 7836,
+      "sha256": "f73017490d46892984a4e0f6edfa07a50d6b9cd9598e8dafb0db7e5a06ffac70"
+    },
+    "scripts/ycsb_campaign_guard.py": {
+      "bytes": 19548,
+      "sha256": "b1f5308ce5de5bf1252a77694599f4be4fdf769803b4d7300c08b4901f8d9642"
+    },
+    "scripts/ycsb_compare_validate.py": {
+      "bytes": 49260,
+      "sha256": "85584d03f46e2f49be94d91b377b77e08494a846a30285bfb1300b932d57cb46"
+    },
+    "scripts/ycsb_evidence_json.py": {
+      "bytes": 1240,
+      "sha256": "86989ebbfa14b8f9f3c20ebe470314a29fd28c7db2ab10734d9518e39d270ea6"
+    },
+    "scripts/ycsb_runtime_observer.py": {
+      "bytes": 20408,
+      "sha256": "9ea6f525e0cf46df5301be3f903367816bdb032a3d0abb4c204bda60ee104d8f"
+    }
+  },
+  "schema": "m0-fixed-trace-inputs-v1",
+  "self_hash": "not included: exact reviewed Git commit plus clean checkout binds this manifest before entry",
+  "source_scope": "ONE_4934_M0_C_OVERLAY_BYTES_1X_N1_4096_DIAGNOSTIC_ONLY"
+}
