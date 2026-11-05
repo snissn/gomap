@@ -2346,7 +2346,7 @@
           }
         }
       },
-      "git_blob": "f537f37d3c7e2a63f1a7403a7b600931cdce2e69",
+      "git_blob": "5a3e46a49a8383b0a22341e4616bc2bb20a7e4b5",
       "jobs": {
         "diagnostic": {
           "checkout": [
@@ -2367,21 +2367,27 @@
               "name": "Verify dispatch binding"
             },
             {
-              "command_sha256": "cff5f800fd8ba99e31b6f08e9493d2ff0a76e0882c6ca2ce50d286b295cc184f",
-              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:44",
+              "command_sha256": "afdf5ba380142568530808ba5668710a8e534a74de259476fafd83a1224bf748",
+              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:32",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Configure LF checkout"
+            },
+            {
+              "command_sha256": "2c9e52849783e9ad6e083596694b418ce747e1d04f3e28dcacd3821d6a214c5b",
+              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:50",
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
               "name": "Check diagnostic Go formatting"
             },
             {
               "command_sha256": "1f02218e21189ef3ecb31a986bd605128de6de1304132c8290f0ec867cbce910",
-              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:56",
+              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:64",
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
               "name": "Record input context and compile once",
               "working-directory": "TreeDB"
             },
             {
               "command_sha256": "d33f7679f58c60aec63fe5335a7eee888eeaff643abee09f6c6c2fbe545d84bc",
-              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:84",
+              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:92",
               "env": {
                 "TREEDB_COLLECTIONS_VECTOR_ALLOCATION_GATE": "native-search-warm-scratch",
                 "TREEDB_WARM_SEARCH_ALLOC_PROFILE_DIR": "${{ runner.temp }}/warm-search-alloc"
@@ -2392,14 +2398,14 @@
             },
             {
               "command_sha256": "d1aeea965ddaa1e7eae52251851dd4afb95b484dd628377c74a29149bfb73f0e",
-              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:98",
+              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:106",
               "if": "always() && steps.build.outcome == 'success' && steps.test.outcome != 'skipped'",
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
               "name": "Decode complete snapshots"
             },
             {
               "command_sha256": "e181eafb9b0886d541e932642a1a96a1599760f609290bb814035de7c7307d84",
-              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:122",
+              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:130",
               "env": {
                 "BUILD_OUTCOME": "${{ steps.build.outcome }}",
                 "DECODE_OUTCOME": "${{ steps.decode.outcome }}",
@@ -2423,7 +2429,7 @@
           "runs_on": "windows-latest"
         }
       },
-      "sha256": "6508673073f6be2b9035000f3b21faf3625cceca685f3c3917eee891163492e8"
+      "sha256": "217772dabdefa9ab1298c0fee93fe8bd9d05ac6742c46fe8b55ebfd7e5e07734"
     },
     "treedb-tests.yml": {
       "coverage": "existing execution only; triggers/path filters are unchanged",

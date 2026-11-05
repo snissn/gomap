@@ -27,6 +27,12 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$EXPECTED" =~ ^[0-9a-f]{40}$ && "$EXPECTED" == "$GITHUB_SHA" && "$EXPECTED" == "$WORKFLOW_COMMIT" ]]
+      - name: Configure LF checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config --global core.autocrlf false
+          git config --global core.eol lf
       - name: Checkout exact diagnostic source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -46,6 +52,8 @@ jobs:
           out="$RUNNER_TEMP/warm-search-alloc"
           mkdir "$out"
           [[ "$(go version)" == 'go version go1.26.10 windows/amd64' ]]
+          git config --show-origin --get-regexp '^core\.(autocrlf|eol)$' > "$out/checkout-config.txt"
+          git ls-files --eol -- TreeDB/collections/column_vector_graph_search_test.go TreeDB/collections/warm_search_allocation_profile_test.go > "$out/checkout-eol.txt"
           gofmt -d TreeDB/collections/column_vector_graph_search_test.go TreeDB/collections/warm_search_allocation_profile_test.go > "$out/gofmt.diff"
           [[ ! -s "$out/gofmt.diff" ]]
       - name: Record input context and compile once
