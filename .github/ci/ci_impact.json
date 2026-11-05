@@ -12,7 +12,7 @@
     "M0 observation is manual diagnostic-only on a separately fixed product; no forecast starts it or replaces failed M0 acceptance.",
     "Bounded maintenance comparison is a manually granted diagnostic on fixed baseline/candidate products; no forecast starts it or establishes cost, M0 or native acceptance."
   ],
-  "discovery_source_sha256": "f56997efb376f8f2ce331cc3b0bbd44578aa1ac24772433fe539cfba7e242342",
+  "discovery_source_sha256": "97b471921b7247d56c786ab956bd432dc461d4f4e5d29722858ae892eaa5e785",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
@@ -2336,13 +2336,13 @@
           }
         }
       },
-      "git_blob": "8b64dc8bbb061d9bbf048b9e2d2e8b6b0260633a",
+      "git_blob": "d561017e3ad54c764cc517698f16c2808138d334",
       "jobs": {
         "diagnostic": {
           "checkout": [],
           "commands": [
             {
-              "command_sha256": "158f9d30ac39e6b63c2c2b48e82ed9a5b20a8e1d8e851a802a7d431236cc5da8",
+              "command_sha256": "62c6b9c450e9ab5d8d68d35c04cffae541c13ac511d76087925eac13171c91e8",
               "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:26",
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
               "name": "Authenticate fixed metadata harness only"
@@ -2360,7 +2360,7 @@
           "runs_on": "ubuntu-24.04"
         }
       },
-      "sha256": "9a91fa27ca2da1feced4c05d77e4c1af3b1683eac3d84e45b784d39ecc24df36"
+      "sha256": "d9a5ace31dd5d05bbcdeaca540bc48e8f31bf6cf0380e9dbc63359b328998944"
     },
     "treedb-tests.yml": {
       "coverage": "existing execution only; triggers/path filters are unchanged",

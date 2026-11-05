@@ -65,6 +65,18 @@ def canonical(value):
     return json.dumps(value,sort_keys=True,separators=(',',':'),ensure_ascii=True).encode('ascii')
 
 
+def dependency_free_python_dso(loaded_python_extension, headers, header_error, code, text, error):
+    # A loaded Python extension may borrow interpreter symbols without DT_NEEDED.
+    # This is standard tool text classification, not an ELF/dependency parser.
+    return (loaded_python_extension and not header_error
+            and 'NEEDED' not in headers and 'INTERP' not in headers
+            and not re.search(r'Requesting program interpreter:', headers)
+            and re.search(r'^Elf file type is DYN \(Shared object file\)$', headers, re.M) is not None
+            and re.search(r'^Dynamic section at offset 0x[0-9a-fA-F]+ contains [1-9][0-9]* entries:\s*$', headers, re.M) is not None
+            and re.search(r'^\s*0x0+\s+\(NULL\)\s+0x0\s*\Z', headers, re.M) is not None
+            and code == 0 and text == '\tstatically linked\n' and not error)
+
+
 def row(path):
     global read_bytes
     p = Path(path).resolve(strict=True)
@@ -248,15 +260,17 @@ def main():
     linkage = {}
     for i,path in enumerate(sorted(executables|shared)):
         remember(path)
-        code,headers,_ = run('loader-header-'+str(i),['/usr/bin/readelf','-l','-d',path],env)
+        code,headers,header_error = run('loader-header-'+str(i),['/usr/bin/readelf','-l','-d',path],env)
         need(code == 0, 'standard ELF metadata')
         interpreter = re.findall(r'Requesting program interpreter: ([^\]]+)',headers)
         dynamic = 'NEEDED' in headers or 'INTERP' in headers
         code,text,error = run('loader-path-'+str(i),['/usr/bin/ldd',path],env)
         raw = text+error
         if not dynamic:
-            need(not interpreter and 'There is no dynamic section in this file.' in headers
-                 and code in (0,1) and any(s in raw for s in ('not a dynamic executable','statically linked')),
+            original_static = (not interpreter and 'There is no dynamic section in this file.' in headers
+                               and code in (0,1) and any(s in raw for s in ('not a dynamic executable','statically linked')))
+            need(original_static or dependency_free_python_dso(path in shared, headers, header_error,
+                                                              code, text, error),
                  'unsupported static metadata')
             dependencies = []
         else:
