@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import stat
+import threading
 import unittest
 from unittest.mock import patch
 import yaml
@@ -20,8 +21,10 @@ FUNCTIONS = {n.name: n for n in TREE.body if isinstance(n, ast.FunctionDef)}
 
 
 def isolated(names):
-    nodes = [FUNCTIONS[name] for name in names]
-    namespace = dict(os=os, json=json, base64=base64, re=re, Path=Path, stat=stat, hashlib=hashlib, HARNESS=ROOT,
+    context = [n for n in TREE.body if isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id.startswith(('FAILURE_', 'FIRST_FAILURE_')) for t in n.targets)]
+    names = tuple(dict.fromkeys(('observation', 'failure_context', *names)))
+    nodes = context + [FUNCTIONS[name] for name in names]
+    namespace = dict(threading=threading, os=os, json=json, base64=base64, re=re, Path=Path, stat=stat, hashlib=hashlib, HARNESS=ROOT,
                      BRANCH='refs/heads/diagnostic/primary-allocation-manifest-transport-01',
                      ROOT_THREAD='01a18e7c-8c23-7fd2-8d55-b0486d938cd3',
                      CONTROLS_PASS_SHA256='5fbc92847359e709fe9ef7812786ff469f9892dedf9e4c81d27a3183e67245c5')
@@ -30,6 +33,67 @@ def isolated(names):
 
 
 class PrimaryConstructionSource(unittest.TestCase):
+    def test_failure_refusal_is_first_literal_and_redacted(self):
+        ns = isolated(('need',))
+        ns['observation']('runtime_rows', mode='launch', runtime_row=267)
+        with self.assertRaises(RuntimeError):
+            ns['need'](False, 'fixed tool identity differs')
+        first = ns['failure_context']()
+        ns['observation']('publication')
+        with self.assertRaises(RuntimeError):
+            ns['need'](False, 'missing or invalid upload identity')
+        self.assertEqual(ns['failure_context'](), first)
+        self.assertEqual(first['runtime_row'], 267)
+        self.assertEqual(first['first_need_refusal'], 'fixed tool identity differs')
+        self.assertEqual(first['stage'], 'runtime_rows')
+        self.assertFalse(first['guard_spawned'])
+        self.assertFalse(first['guard_returned'])
+        ns = isolated(('need',))
+        with self.assertRaises(RuntimeError):
+            ns['need'](False, 'SECRET URL TOKEN PATH')
+        self.assertNotIn('SECRET', json.dumps(ns['failure_context']()))
+        self.assertIsNone(ns['failure_context']()['first_need_refusal'])
+
+    def test_unexpected_error_retains_class_not_message(self):
+        ns = isolated(('need',))
+        ns['observation']('authenticate', mode='worker')
+        value = ns['failure_context'](OSError('SECRET URL TOKEN PATH'))
+        self.assertEqual(value['error_class'], 'OSError')
+        self.assertEqual(value['stage'], 'authenticate')
+        self.assertNotIn('SECRET', json.dumps(value))
+        self.assertIsNone(value['first_need_refusal'])
+        ns = isolated(('need',))
+        foreign = type('SECRET/URL', (Exception,), {})('SECRET')
+        self.assertEqual(ns['failure_context'](foreign)['error_class'], 'UnexpectedException')
+
+    def test_fixed_stage_mode_and_row_bounds(self):
+        ns = isolated(('need',))
+        for row in (-1, 0, 267, 4095):
+            ns['observation']('runtime_rows', mode='launch', runtime_row=row)
+            self.assertEqual(ns['failure_context']()['runtime_row'], row)
+        for row in (-2, 4096, True, '0'):
+            with self.subTest(row=row), self.assertRaises(ValueError):
+                ns['observation']('runtime_rows', runtime_row=row)
+        for stage, mode in [('SECRET', None), ('entry', 'SECRET')]:
+            with self.assertRaises(ValueError):
+                ns['observation'](stage, mode=mode)
+
+    def test_failure_allowlist_and_fixed_source_entry_order(self):
+        ns = isolated(('need',))
+        calls = [n for n in ast.walk(TREE) if isinstance(n, ast.Call)
+                 and isinstance(n.func, ast.Name) and n.func.id == 'need']
+        self.assertTrue(all(isinstance(n.args[1], ast.Constant) for n in calls))
+        self.assertEqual(ns['FAILURE_REASONS'], frozenset(n.args[1].value for n in calls))
+        main = ast.get_source_segment(SOURCE, FUNCTIONS['main'])
+        self.assertLess(main.index("observation('authority'"), main.index('a = authority()'))
+        self.assertLess(main.index("observation('authenticate'"), main.index('authenticate(a)'))
+        self.assertLess(main.index("observation('runtime_rows'"), main.index("tool_identity(row['path'], row)"))
+        self.assertLess(main.index('child = subprocess.Popen(cmd)'), main.index("FAILURE_CONTEXT['guard_spawned'] = True"))
+        self.assertLess(main.index('code = child.wait'), main.index("FAILURE_CONTEXT['guard_returned'] = True"))
+        worker = ast.get_source_segment(SOURCE, FUNCTIONS['worker'])
+        self.assertLess(worker.index("write(root/'output/failure-context.json'"), worker.index('publish(root, a, r, run, env, runtime)'))
+        self.assertIn('failure_context=failure_context()', worker)
+
     def test_actual_controls_and_actor_are_required(self):
         ns = isolated(('need', 'authority'))
         head = '1'*40
@@ -186,7 +250,7 @@ class PrimaryConstructionSource(unittest.TestCase):
             ns['runtime_inputs']({})
         main = ast.get_source_segment(SOURCE, FUNCTIONS['main'])
         self.assertLess(main.index('authenticate(a)'), main.index('readonly = runtime_inputs(a)'))
-        self.assertLess(main.index('for row in readonly:'), main.index("if args.mode == 'worker'"))
+        self.assertLess(main.index('for row_index, row in enumerate(readonly):'), main.index("if args.mode == 'worker'"))
         self.assertIn("tool_identity(row['path'], row)", main)
         worker = ast.get_source_segment(SOURCE, FUNCTIONS['worker'])
         self.assertIn('readonly = runtime_inputs(a)', worker)

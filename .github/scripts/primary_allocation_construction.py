@@ -31,8 +31,41 @@ CONTEXT = ('GOVERSION', 'GOOS', 'GOARCH', 'GOAMD64', 'CGO_ENABLED', 'CC', 'CXX',
            'GOFLAGS', 'GOEXPERIMENT', 'GOROOT')
 
 
+FAILURE_STAGES = ('entry', 'arguments', 'authority', 'authenticate', 'direct_tools', 'runtime_manifest', 'runtime_rows', 'root', 'worker_setup', 'worker_inputs', 'worker_runtime_rows', 'worker_context', 'worker_arm', 'worker_build', 'publication', 'worker_close', 'guard_spawn', 'guard_wait', 'guard_results', 'final_receipts')
+FAILURE_REASONS = frozenset(('SDK VERSION differs', 'SDK regular files required', 'SDK symlink directory refused', 'absolute read-only runtime input', 'absolute runtime input path', 'actual controls admission mismatch', 'actual controls incomplete', 'actual owner controls admission required', 'arm mapping source mismatch', 'bounded ROOT admission required', 'bounded SDK identity inspection', 'bounded complete final log receipt', 'bounded immutable publication members', 'bounded original runtime/tool dependency binding required', 'bounded runtime input closure', 'bounded upload outputs', 'complete canonical runtime rows required', 'complete normal/race owner controls required', 'construction aggregate deadline', 'construction clock exhausted', 'construction deadline', 'counted regular upload output required', 'exact harness head required', 'exact runtime manifest admission required', 'filter unsupported; no fallback', 'fixed ROOT construction-only admission', 'fixed common hosted workroot required', 'fixed existing SDK required', 'fixed hosted authority required', 'fixed input drift', 'fixed root filesystem/identity', 'fixed tool identity differs', 'foreign artifact output', 'fresh counted standard action output required before upload', 'full existing SDK identity differs', 'immutable actual controls receipt differs', 'immutable member must be regular single-link', 'incomplete sparse source', 'invalid fixed input path', 'malformed upload output', 'manifest literal differs', 'missing or invalid upload identity', 'missing review/owner binding', 'new overlay path already exists', 'normal ELF type', 'normal buildinfo differs', 'outer guard requires absent GOMAXPROCS', 'overlay preimage differs', 'owner manifest differs', 'python3 -I -B required', 'receipt size limit', 'regular bounded runtime manifest', 'runtime manifest identity differs', 'source blob differs', 'source commit/tree differs', 'source directory symlink', 'source mode differs', 'source size differs', 'standard action runtime environment required', 'sticky construction failure', 'task directory symlink refused', 'task nonregular file refused', 'unexpected source file', 'unexpected upload output', 'unsupported normal build context', 'uploaded immutable member changed'))
+FAILURE_CONTEXT = dict(mode='unknown', stage='entry', runtime_row=-1,
+                       guard_spawned=False, guard_returned=False)
+FIRST_FAILURE_CONTEXT = None
+FAILURE_LOCK = threading.Lock()
+
+
+def observation(stage, *, mode=None, runtime_row=-1):
+    # Only fixed scalar labels; never retain paths, argv, environments or exceptions.
+    if stage not in FAILURE_STAGES or mode not in (None, 'launch', 'worker'):
+        raise ValueError('invalid fixed observation label')
+    if type(runtime_row) is not int or not -1 <= runtime_row < 4096:
+        raise ValueError('invalid fixed observation row')
+    with FAILURE_LOCK:
+        FAILURE_CONTEXT.update(stage=stage, runtime_row=runtime_row)
+        if mode is not None:
+            FAILURE_CONTEXT['mode'] = mode
+
+
+def failure_context(error=None, refusal=None):
+    global FIRST_FAILURE_CONTEXT
+    with FAILURE_LOCK:
+        if FIRST_FAILURE_CONTEXT is None and (error is not None or refusal is not None):
+            name = type(error).__name__ if error is not None else 'RuntimeError'
+            if re.fullmatch('[A-Za-z][A-Za-z0-9_]{0,63}', name) is None:
+                name = 'UnexpectedException'
+            FIRST_FAILURE_CONTEXT = dict(FAILURE_CONTEXT, error_class=name,
+                first_need_refusal=refusal if refusal in FAILURE_REASONS else None)
+        return dict(FIRST_FAILURE_CONTEXT or FAILURE_CONTEXT)
+
+
 def need(ok, reason):
     if not ok:
+        failure_context(refusal=reason)
         raise RuntimeError(reason)
 
 
@@ -358,6 +391,7 @@ def upload_outputs(text, repository, run_id):
 
 
 def publish(root, a, r, run, env, runtime):
+    observation('publication')
     receipt = dict(status='PUBLICATION_FAILED', uploader_commit='ea165f8d65b6e75b540449e92b4886f43607fa02')
     try:
         r.guard()
@@ -411,7 +445,8 @@ def publish(root, a, r, run, env, runtime):
                        output_sha256=sha(output), command=r.commands[-1])
         r.guard()
     except BaseException as caught:
-        receipt.update(status='PUBLICATION_FAILED', error_class=type(caught).__name__)
+        receipt.update(status='PUBLICATION_FAILED', error_class=type(caught).__name__,
+                       failure_context=failure_context(caught))
         raise
     finally:
         # This receipt intentionally does not belong to the artifact it certifies.
@@ -420,6 +455,7 @@ def publish(root, a, r, run, env, runtime):
 
 
 def worker(root, a, started):
+    observation('worker_setup')
     # This point is reached only through the authenticated portable outer guard.
     for name in ('output', 'tmp', 'gocache', 'modcache', 'gopath', 'bin', 'xdg-cache', 'xdg-config'):
         (root/name).mkdir()
@@ -474,6 +510,7 @@ def worker(root, a, started):
         return raw
 
     try:
+        observation('worker_inputs')
         write(root/'output/admission.json', a)
         write(root/'output/sdk-identity.json', sdk_identity(r, a['sdk']))
         tools = {name: tool_identity(path, a['tools'][name]) for name, path in
@@ -481,9 +518,11 @@ def worker(root, a, started):
         readonly = runtime_inputs(a)
         need(isinstance(readonly, list) and 0 < len(readonly) <= 4096,
              'bounded original runtime/tool dependency binding required')
-        for row in readonly:
+        for row_index, row in enumerate(readonly):
+            observation('worker_runtime_rows', runtime_row=row_index)
             need(Path(row['path']).is_absolute(), 'absolute read-only runtime input')
             tool_identity(row['path'], row)
+        observation('worker_context')
         write(root/'output/readonly-runtime-inputs.json', readonly)
         write(root/'output/tools.json', tools)
         go = str(SDK/'bin/go')
@@ -496,6 +535,7 @@ def worker(root, a, started):
         git = tools['git']
         descriptions = read(DATA/'owner/overlays.json')
         for arm in ARMS:
+            observation('worker_arm')
             source = root/('source-'+arm)
             spec = read(DATA/(arm+'-source.json'))
             template = root/('git-template-'+arm)
@@ -535,6 +575,7 @@ def worker(root, a, started):
             overlay = root/'output'/('overlay-'+arm+'.json')
             write(overlay, {'Replace': {str(source/k): str(DATA/'owner'/v) for k, v in mapping['Replace'].items()}})
             binary = root/'bin'/(arm+'-primary.test')
+            observation('worker_build')
             run(arm+'-build', [go, 'test', '-tags=treedb_test', '-p=1', '-mod=readonly', '-c',
                 '-overlay='+str(overlay), '-o='+str(binary), './TreeDB/mvcc'], 360, cwd=source)
             s = binary.lstat()
@@ -548,6 +589,7 @@ def worker(root, a, started):
         r.guard()
     except BaseException as caught:
         error = type(caught).__name__  # Never print credential-bearing exception repr/argv/env.
+        write(root/'output/failure-context.json', failure_context(caught))
     finally:
         token = None
         # Preserve the original always-retain intent for ordinary build failures,
@@ -558,14 +600,16 @@ def worker(root, a, started):
             else:
                 error = error or 'PublicationResourceRefusal'
         except BaseException as caught:
+            failure_context(caught)
             error = error or type(caught).__name__
+        observation('worker_close')
         runtime.clear()
         r.close()
         final = census(root)
         if final['errors'] or r.first_failure:
             error = error or 'ResourceFailure'
         terminal = dict(status='CONSTRUCTION_FAILED_NO_CAPTURE' if error else 'TWO_NORMAL_BUILDS_PENDING_OUTER_REVIEW',
-                        error_class=error, builds=builds, commands=r.commands, final_census=final,
+                        error_class=error, failure_context=failure_context(), builds=builds, commands=r.commands, final_census=final,
                         first_failure=r.first_failure, max_sampled_whole_bytes=r.maximum,
                         publication_sha256=sha(root/'output/publication-receipt.json') if (root/'output/publication-receipt.json').exists() else None,
                         capture=False, m0=False, release='ONLY_OUTER_GUARD_CAN_PROVE_DESCENDANT_DRAIN')
@@ -577,23 +621,32 @@ def worker(root, a, started):
 
 
 def main():
+    observation('entry')
     need(sys.flags.isolated and sys.dont_write_bytecode, 'python3 -I -B required')
+    observation('arguments')
     p = argparse.ArgumentParser()
     p.add_argument('mode', choices=('launch', 'worker'))
     args = p.parse_args()
+    observation('authority', mode=args.mode)
     a = authority()
+    observation('authenticate')
     authenticate(a)  # Before runner/helper import or any source/build acquisition.
+    observation('direct_tools')
     tool_identity(sys.executable, a['tools']['python'])
     tool_identity(os.environ['PRIMARY_NODE_PATH'], a['tools']['node'])
     # Explicit ROOT-bound read-only runtime/tool closure authenticates before
     # the first downloaded helper import, not merely before Go execution.
+    observation('runtime_manifest')
     readonly = runtime_inputs(a)
     need(isinstance(readonly, list) and 0 < len(readonly) <= 4096, 'bounded runtime input closure')
-    for row in readonly:
+    for row_index, row in enumerate(readonly):
+        observation('runtime_rows', runtime_row=row_index)
         need(Path(row['path']).is_absolute(), 'absolute runtime input path')
         tool_identity(row['path'], row)
+    observation('direct_tools')
     for name, path in (('git', '/usr/bin/git'), ('gcc', '/usr/bin/gcc'), ('g++', '/usr/bin/g++')):
         tool_identity(path, a['tools'][name])
+    observation('root')
     root = root_path()
     started = read(root/'bootstrap-start.json')['monotonic']
     need(time.monotonic()-started < WHOLE, 'construction clock exhausted')
@@ -607,10 +660,14 @@ def main():
            '--deadline', str(remaining), '--cleanup-seconds', '10', '--interval', '.2',
            '--rss-cap-bytes', str(24*GIB), '--free-floor-bytes', str(10*GIB), '--',
            sys.executable, '-I', '-B', str(Path(__file__).resolve()), 'worker']
+    observation('guard_spawn')
     child = subprocess.Popen(cmd)
+    FAILURE_CONTEXT['guard_spawned'] = True
+    observation('guard_wait')
     try:
         code = child.wait(timeout=max(1, 900-(time.monotonic()-started)))
-    except BaseException:
+    except BaseException as caught:
+        failure_context(caught)
         child.send_signal(signal.SIGTERM)
         try:
             child.wait(timeout=40)
@@ -618,6 +675,8 @@ def main():
             child.kill()
             child.wait(timeout=10)
         raise RuntimeError('outer abnormal exit; physical drain requires independent review')
+    FAILURE_CONTEXT['guard_returned'] = True
+    observation('guard_results')
     result = read(root/'guard/result.json')
     terminal = read(root/'output/worker-terminal.json')
     final = census(root)
@@ -627,6 +686,7 @@ def main():
               and result['status'] == 'guard-completed-pending-independent-artifact-review'
               and terminal['status'] == 'TWO_NORMAL_BUILDS_PENDING_OUTER_REVIEW'
               and not final['errors'])
+    observation('final_receipts')
     write(root/'construction-terminal.json', dict(status='CONSTRUCTION_CLOSED_PENDING_ARTIFACT_REVIEW' if passed else 'CONSTRUCTION_FAILED_NO_CAPTURE',
           guard_exit=code, guard_sha256=sha(root/'guard/result.json'), worker_sha256=sha(root/'output/worker-terminal.json'),
           publication_sha256=sha(root/'output/publication-receipt.json') if publication else None,
@@ -647,5 +707,6 @@ if __name__ == '__main__':
     try:
         sys.exit(main())
     except Exception as error:
-        print(json.dumps({'status': 'FAILED_NO_CAPTURE', 'error_class': type(error).__name__}), flush=True)
+        print(json.dumps({'status': 'FAILED_NO_CAPTURE', 'error_class': type(error).__name__,
+                          'failure_context': failure_context(error)}), flush=True)
         sys.exit(1)
