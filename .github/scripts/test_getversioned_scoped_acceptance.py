@@ -142,6 +142,42 @@ class ScopeTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 route.authenticate_decision(identity, "f" * 64)
 
+    def test_run_bound_historical_marker(self):
+        identity = {"head": "a" * 40, "tree": "b" * 40, "base": route.BASE,
+                    "merge": "c" * 40, "merge_tree": "b" * 40, "run": 7, "attempt": 1}
+        marker = "gomap-5397-timing-risk-v1\n"
+        def comment(number, body):
+            return {"id": number, "body": marker + body, "user": {"id": 1981537},
+                    "created_at": "2026-11-05T10:00:01Z", "updated_at": "2026-11-05T10:00:01Z"}
+        current = comment(4, json.dumps(route.expected_decision(identity, "f" * 64)))
+        old = comment(6670774389, json.dumps({"run": 42118463071, "attempt": 1}))
+        old_sha = hashlib.sha256(old["body"].encode()).hexdigest()
+        comments = [old, current]
+        def fake_api(path):
+            if path.startswith("/issues/"):
+                return comments
+            if path.endswith("/jobs?per_page=100"):
+                return {"total_count": 1, "jobs": [{"name": "GetVersioned single-use timing acceptance", "started_at": "2026-11-05T10:01:00Z"}]}
+            return {"created_at": "2026-11-05T10:00:00Z"}
+        with mock.patch.object(route, "api", side_effect=fake_api), mock.patch.object(route, "HISTORICAL_BODY_SHA256", old_sha):
+            self.assertEqual(route.authenticate_decision(identity, "f" * 64), 4)
+            for items in ([old], [old, current, current], [current, comment(5, '{"run": 7, "attempt": 1}')],
+                          [current, comment(8, '{"run": 8, "attempt": 1}')],
+                          [current, comment(8, '{"run": true, "attempt": 1}')],
+                          [current, comment(8, '{"run": 8, "run": 8, "attempt": 1}')],
+                          [current, comment(8, '[]')]):
+                comments[:] = items
+                with self.assertRaises(ValueError):
+                    route.authenticate_decision(identity, "f" * 64)
+            for key, value in (("id", 1), ("user", {"id": 2}), ("updated_at", "2026-11-05T10:00:02Z"),
+                               ("body", old["body"] + " ")):
+                comments[:] = [old, current]
+                saved = old[key]
+                old[key] = value
+                with self.assertRaises(ValueError):
+                    route.authenticate_decision(identity, "f" * 64)
+                old[key] = saved
+
     def test_cross_host_redirect_strips_token(self):
         handler = route.SafeArtifactRedirect()
         request = urllib.request.Request("https://api.github.com/a", headers={"Authorization": "Bearer secret"})

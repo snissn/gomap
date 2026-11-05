@@ -20,6 +20,7 @@ BASE = "fb700d07b4cc99f3f0a470d5b36cd0cd45f7aca6"
 ORIGINAL = "99d53c9f2b759ddaf213fa5ea39ab5f88b39c46e"
 EXPIRY = datetime.datetime(2026, 11, 12, tzinfo=datetime.timezone.utc)
 REPO = "snissn/gomap"
+HISTORICAL_BODY_SHA256 = "980b8b54ce0655ffe63171abfb5349d9a23a2bafb1f07735aa62850df47ae760"
 MANIFEST = Path(".github/ci/getversioned-scoped-acceptance/original-evidence.json")
 ALLOWED_CHANGES = {"TreeDB/collections/column_vector_graph_search_test.go", ".github/workflows/treedb-tests.yml",
                    ".github/ci/ci_impact.json", str(MANIFEST),
@@ -199,10 +200,22 @@ def authenticate_decision(identity, manifest_sha):
             break
     else:
         raise ValueError("comment pagination limit exceeded")
-    if len(comments) != 1:
+    current = []
+    for comment in comments:
+        body = json.loads(comment["body"].split("\n", 1)[1], object_pairs_hook=unique_object)
+        if (not isinstance(body, dict) or type(body.get("run")) is not int or body["run"] <= 0
+                or type(body.get("attempt")) is not int or body["attempt"] != 1):
+            raise ValueError("invalid decision run or attempt")
+        if body["run"] == identity["run"]:
+            current.append((comment, body))
+        elif (body["run"] != 42118463071 or comment.get("id") != 6670774389
+              or comment["user"]["id"] != 1981537 or comment["created_at"] != comment["updated_at"]
+              or hashlib.sha256(comment["body"].encode("utf-8")).hexdigest()
+              != HISTORICAL_BODY_SHA256):
+            raise ValueError("unknown or modified historical decision")
+    if len(current) != 1:
         raise ValueError("decision missing or ambiguous")
-    comment = comments[0]
-    body = json.loads(comment["body"].split("\n", 1)[1], object_pairs_hook=unique_object)
+    comment, body = current[0]
     canonical = lambda value: json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
     if (comment["user"]["id"] != 1981537 or comment["created_at"] != comment["updated_at"]
             or canonical(body) != canonical(expected)):
