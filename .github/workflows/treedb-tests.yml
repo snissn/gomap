@@ -1413,6 +1413,7 @@ jobs:
     if: ${{ always() }}
     needs:
       - mvcc-raw-path-gate
+      - getversioned-bindings-qualification
       - vet
       - test
       - race
@@ -1425,6 +1426,7 @@ jobs:
         shell: bash
         env:
           MVCC_RESULT: ${{ needs.mvcc-raw-path-gate.result }}
+          GETVERSIONED_BINDINGS_RESULT: ${{ needs.getversioned-bindings-qualification.result }}
           VET_RESULT: ${{ needs.vet.result }}
           TEST_RESULT: ${{ needs.test.result }}
           RACE_RESULT: ${{ needs.race.result }}
@@ -1435,6 +1437,7 @@ jobs:
           failed=false
           for result in \
             "$MVCC_RESULT" \
+            "$GETVERSIONED_BINDINGS_RESULT" \
             "$VET_RESULT" \
             "$TEST_RESULT" \
             "$RACE_RESULT" \

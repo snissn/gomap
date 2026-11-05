@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import re
+import subprocess
+import textwrap
 import unittest
 from pathlib import Path
 
@@ -161,6 +163,7 @@ class TreeDBCIContractTests(unittest.TestCase):
         self.assertIn("if: ${{ always() }}", required)
         for job in (
             "mvcc-raw-path-gate",
+            "getversioned-bindings-qualification",
             "vet",
             "test",
             "race",
@@ -170,6 +173,22 @@ class TreeDBCIContractTests(unittest.TestCase):
             self.assertRegex(required, rf"(?m)^      - {re.escape(job)}\s*$")
             self.assertIn(f"needs.{job}.result", required)
         self.assertIn('[[ "$result" == "success" ]]', required)
+
+        bindings = dict(re.findall(r"(?m)^          ([A-Z_]+): \$\{\{ needs\.([\w-]+)\.result \}\}$", required))
+        expected = {"mvcc-raw-path-gate", "getversioned-bindings-qualification", "vet", "test", "race", "perf", "snapshot-iterator-perf"}
+        self.assertEqual(set(bindings.values()), expected)
+        self.assertEqual(len(bindings), len(expected))
+        script = textwrap.dedent(required.split("        run: |\n", 1)[1])
+        env = {name: "success" for name in bindings}
+        def run(values: dict[str, str]) -> int:
+            return subprocess.run(["bash", "-c", script], env=values, capture_output=True, check=False).returncode
+        self.assertEqual(run(env), 0)
+        for name in bindings:
+            for bad in ("failure", "cancelled", "skipped", ""):
+                values = dict(env)
+                values[name] = bad
+                with self.subTest(name=name, result=bad):
+                    self.assertNotEqual(run(values), 0)
 
 
 if __name__ == "__main__":
