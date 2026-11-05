@@ -19,9 +19,12 @@ import time
 GIB = 1024**3
 WHOLE = 840
 ROOT_THREAD = '01a18e7c-8c23-7fd2-8d55-b0486d938cd3'
+RESOLVER_POLICY_BINDING = {'path': '.github/primary-construction/resolver-input-policy.json', 'bytes': 656, 'sha256': 'd087f191d9a1d3073bdb0b0cdc7bad11aedca7aafa03695d68bccf3b9bda0da0', 'decision_sha256': '152945251f6dce775b43111aa20711d2603d15998f9417fab93c1a1e0bddecc4'}
+RESOLVER_EXPECTED = {'bytes': 972, 'path': '/run/systemd/resolve/stub-resolv.conf', 'sha256': '892c76027c36524dad6a845b53e62a3fd6f7bf4d1fb4bc641217994ed2e87d13'}
+RESOLVER_LIMIT = 65536
 OWNER_MANIFEST_SHA256 = '3ca00c97842855ec1c859d08371d17f13d89aa55fc1007be26fbec648684b618'
 OWNER_REVIEW_SHA256 = 'ffd74ae5d95fd1d4647e2524b778e854f814707d1775ad46a7f585b678d498e6'
-BRANCH = 'refs/heads/diagnostic/primary-8e-b24-controls-binding-01'
+BRANCH = 'refs/heads/diagnostic/primary-8e-b24-resolver-role-01'
 SDK = Path('/opt/hostedtoolcache/go/1.26.10/x64')
 HERE = Path(__file__).resolve().parent
 HARNESS = HERE.parent.parent
@@ -81,6 +84,8 @@ def authority():
          'fixed ROOT construction-only admission')
     for field in ('independent_source_review_sha256', 'owner_manifest_sha256'):
         need(re.fullmatch('[0-9a-f]{64}', a.get(field, '')) is not None, 'missing review/owner binding')
+    need(a.get('resolver_configuration_policy') == RESOLVER_POLICY_BINDING,
+         'explicit ROOT resolver role admission required')
     need(a.get('owner_manifest_sha256') == OWNER_MANIFEST_SHA256
          and a.get('owner_source_review_sha256') == OWNER_REVIEW_SHA256
          and a.get('arms') == {'B': '8e1133085b4052e344a73063f28c2ab142485c73',
@@ -138,6 +143,120 @@ def runtime_inputs(a):
     return rows
 
 
+def resolver_policy(a):
+    # Immutable source policy and ROOT decision, not a self-declared exemption.
+    binding = RESOLVER_POLICY_BINDING
+    need(a.get('resolver_configuration_policy') == binding
+         and sha(HARNESS/binding['path']) == binding['sha256']
+         and (HARNESS/binding['path']).stat().st_size == binding['bytes']
+         and sha(DATA/'root-input-role-decision.json') == binding['decision_sha256'],
+         'immutable resolver role policy differs')
+    policy = read(HARNESS/binding['path'])
+    need(policy['authority'] == 'ROOT' and policy['authority_thread'] == ROOT_THREAD
+         and policy['actor_id'] == '1981537' and policy['index'] == 11
+         and policy['logical_path'] == '/etc/resolv.conf'
+         and policy['resolved_target'] == RESOLVER_EXPECTED['path']
+         and policy['max_bytes'] == RESOLVER_LIMIT and policy['rows'] == 268,
+         'fixed resolver role policy required')
+
+def resolver_record():
+    # The logical symlink is allowed only to this one approved existing target.
+    logical = Path('/etc/resolv.conf')
+    target = Path(RESOLVER_EXPECTED['path'])
+    need(logical.resolve(strict=True) == target, 'fixed resolver target differs')
+    fd = os.open(target, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        before = os.fstat(fd)
+        need(stat.S_ISREG(before.st_mode) and before.st_nlink == 1
+             and before.st_mode & 0o111 == 0 and 0 <= before.st_size <= RESOLVER_LIMIT,
+             'bounded non-executable resolver data required')
+        with os.fdopen(fd, 'rb', closefd=False) as source:
+            raw = source.read(RESOLVER_LIMIT+1)
+        after = os.fstat(fd)
+        current = target.lstat()
+        keys = ('st_dev', 'st_ino', 'st_mode', 'st_nlink', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
+        need(len(raw) == before.st_size and len(raw) <= RESOLVER_LIMIT
+             and all(getattr(before, k) == getattr(after, k) == getattr(current, k) for k in keys)
+             and logical.resolve(strict=True) == target, 'resolver data changed during read')
+        return dict(path=str(target), bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest())
+    finally:
+        os.close(fd)
+
+def validate_qualified_rows(original, qualified):
+    need(len(original) == 268 and original[11] == RESOLVER_EXPECTED
+         and len({row['path'] for row in original}) == 268
+         and isinstance(qualified, list) and len(qualified) == 268
+         and all(row == original[index] for index, row in enumerate(qualified) if index != 11),
+         'all original runtime roles required')
+    row = qualified[11]
+    need(isinstance(row, dict) and set(row) == {'path', 'bytes', 'sha256'}
+         and row['path'] == RESOLVER_EXPECTED['path']
+         and type(row['bytes']) is int and 0 <= row['bytes'] <= RESOLVER_LIMIT
+         and isinstance(row['sha256'], str) and re.fullmatch('[0-9a-f]{64}', row['sha256']) is not None,
+         'bounded qualified resolver record required')
+
+def qualified_runtime_inputs(root, a, original, mode, started):
+    resolver_policy(a)
+    validate_qualified_rows(original, original)
+    # Every other record retains the original equality predicate, before imports.
+    for index, row in enumerate(original):
+        if index != 11:
+            need(Path(row['path']).is_absolute(), 'absolute runtime input path')
+            tool_identity(row['path'], row)
+    need(time.monotonic()-started < WHOLE, 'construction clock exhausted')
+    path = root/'bootstrap-runtime-role.json'
+    job = {key: os.environ[key] for key in ('GITHUB_SHA', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'GITHUB_JOB')}
+    if mode == 'launch':
+        qualified = list(original)
+        qualified[11] = resolver_record()
+        validate_qualified_rows(original, qualified)
+        inventory = canonical(qualified)+b'\n'
+        receipt = dict(schema='primary-qualified-runtime-inputs-v1', job=job,
+                       policy=RESOLVER_POLICY_BINDING, original_manifest=a['readonly_runtime_manifest'],
+                       rows=qualified, inventory=dict(bytes=len(inventory), rows=268,
+                           sha256=hashlib.sha256(inventory).hexdigest()),
+                       original_resolver=original[11],
+                       scope='same-job configuration observation after bootstrap; not DNS/whole-interval equivalence')
+        encoded = canonical(receipt)+b'\n'
+        snapshot = census(root)
+        need(len(encoded) <= 1024**2 and not snapshot['errors']
+             and snapshot['whole_bytes']+len(encoded) <= GIB,
+             'qualified runtime receipt reservation failed')
+        write(path, receipt)  # Exclusive; generated bytes count under the same root.
+    else:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            before = os.fstat(fd)
+            need(stat.S_ISREG(before.st_mode) and before.st_nlink == 1
+                 and 0 < before.st_size <= 1024**2, 'bounded qualified runtime receipt required')
+            with os.fdopen(fd, 'rb', closefd=False) as source:
+                encoded = source.read(1024**2+1)
+            after = os.fstat(fd)
+            need(len(encoded) == before.st_size
+                 and all(getattr(before, k) == getattr(after, k) for k in
+                         ('st_dev', 'st_ino', 'st_mode', 'st_nlink', 'st_size', 'st_mtime_ns', 'st_ctime_ns')),
+                 'qualified runtime receipt changed')
+        finally:
+            os.close(fd)
+        receipt = json.loads(encoded)
+        need(encoded == canonical(receipt)+b'\n', 'canonical qualified runtime receipt required')
+        qualified = receipt['rows']
+    validate_qualified_rows(original, qualified)
+    inventory = canonical(qualified)+b'\n'
+    need(receipt['schema'] == 'primary-qualified-runtime-inputs-v1' and receipt['job'] == job
+         and receipt['policy'] == RESOLVER_POLICY_BINDING
+         and receipt['original_manifest'] == a['readonly_runtime_manifest']
+         and receipt['original_resolver'] == original[11]
+         and receipt['inventory'] == dict(bytes=len(inventory), rows=268,
+             sha256=hashlib.sha256(inventory).hexdigest()), 'qualified runtime binding differs')
+    # Launcher after writing and worker before first helper import both re-read
+    # the actual configuration. Never recapture/refresh a changed worker record.
+    need(resolver_record() == qualified[11], 'qualified resolver identity differs')
+    need(time.monotonic()-started < WHOLE and not census(root)['errors'],
+         'qualified runtime boundary failed')
+    return qualified
+
+
 def root_path():
     parent = Path(os.environ['RUNNER_TEMP']).resolve(strict=True)
     root = parent/'primary-allocation-construction'
@@ -181,7 +300,7 @@ def census(root):
             count += 1
             # Authenticated source/SDK metadata is input, not a generated log.
             if top in ('output', 'guard', 'bootstrap-start.json', 'bootstrap-receipt.json',
-                       'construction-terminal.json'):
+                       'construction-terminal.json', 'bootstrap-runtime-role.json'):
                 files += s.st_size
                 oversized = oversized or s.st_size > 32*1024**2
     free = shutil.disk_usage(root).free
@@ -415,7 +534,7 @@ def publish(root, a, r, run, env, runtime):
         r.guard()
 
 
-def worker(root, a, started):
+def worker(root, a, started, readonly):
     # This point is reached only through the authenticated portable outer guard.
     for name in ('output', 'tmp', 'gocache', 'modcache', 'gopath', 'bin', 'xdg-cache', 'xdg-config'):
         (root/name).mkdir()
@@ -475,7 +594,7 @@ def worker(root, a, started):
         write(root/'output/sdk-identity.json', sdk_identity(r, a['sdk']))
         tools = {name: tool_identity(path, a['tools'][name]) for name, path in
                  (('git', '/usr/bin/git'), ('gcc', '/usr/bin/gcc'), ('g++', '/usr/bin/g++'))}
-        readonly = runtime_inputs(a)
+        need(resolver_record() == readonly[11], 'qualified resolver identity differs')
         need(isinstance(readonly, list) and 0 < len(readonly) <= 4096,
              'bounded original runtime/tool dependency binding required')
         for row in readonly:
@@ -611,16 +730,14 @@ def main():
     # the first downloaded helper import, not merely before Go execution.
     readonly = runtime_inputs(a)
     need(isinstance(readonly, list) and 0 < len(readonly) <= 4096, 'bounded runtime input closure')
-    for row in readonly:
-        need(Path(row['path']).is_absolute(), 'absolute runtime input path')
-        tool_identity(row['path'], row)
     for name, path in (('git', '/usr/bin/git'), ('gcc', '/usr/bin/gcc'), ('g++', '/usr/bin/g++')):
         tool_identity(path, a['tools'][name])
     root = root_path()
     started = read(root/'bootstrap-start.json')['monotonic']
     need(time.monotonic()-started < WHOLE, 'construction clock exhausted')
+    readonly = qualified_runtime_inputs(root, a, readonly, args.mode, started)
     if args.mode == 'worker':
-        return worker(root, a, started)
+        return worker(root, a, started, readonly)
     need('GOMAXPROCS' not in os.environ, 'outer guard requires absent GOMAXPROCS')
     scripts = HARNESS/'scripts'
     remaining = WHOLE-(time.monotonic()-started)

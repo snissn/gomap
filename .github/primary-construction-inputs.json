@@ -1,5 +1,4 @@
 {
-  "schema": "primary-construction-inputs-v1",
   "files": {
     ".github/actions/primary-construction/action.yml": {
       "bytes": 444,
@@ -173,6 +172,14 @@
       "bytes": 39082,
       "sha256": "d429b8211e7ca4be2b45867691d23f7c4c4f3c7caf0cbe9c5d4ceff4edc87ef5"
     },
+    ".github/primary-construction/resolver-input-policy.json": {
+      "bytes": 656,
+      "sha256": "d087f191d9a1d3073bdb0b0cdc7bad11aedca7aafa03695d68bccf3b9bda0da0"
+    },
+    ".github/primary-construction/root-input-role-decision.json": {
+      "bytes": 1678,
+      "sha256": "152945251f6dce775b43111aa20711d2603d15998f9417fab93c1a1e0bddecc4"
+    },
     ".github/primary-construction/upload-artifact/LICENSE": {
       "bytes": 1097,
       "sha256": "3e855ffa704114a51628ef8f0bf3aeb41728adf9d9070e263bf58aa5640b0eb5"
@@ -182,8 +189,8 @@
       "sha256": "0165b8a75330f3228f2c7a234b4ff8a107b9139c2b519147f4c8e9fe99b262d8"
     },
     ".github/scripts/primary_allocation_construction.py": {
-      "bytes": 35274,
-      "sha256": "38baed24dd3f93dbf052857eb8135dfbdc7e90b8ca442c8e7104007b12e16aad"
+      "bytes": 42458,
+      "sha256": "fe779f52ae3eab3ee33041719ec7daf6ced60f23d06296635750588b69b72a3b"
     },
     ".github/scripts/primary_new_arm_control_events.py": {
       "bytes": 3304,
@@ -205,5 +212,6 @@
       "bytes": 20408,
       "sha256": "9ea6f525e0cf46df5301be3f903367816bdb032a3d0abb4c204bda60ee104d8f"
     }
-  }
+  },
+  "schema": "primary-construction-inputs-v1"
 }
