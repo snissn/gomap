@@ -1,0 +1,217 @@
+{
+  "acceptance_owner_thread": "01a18e7c-8c23-7fd2-8d55-b0486d938cd3",
+  "base": "15f1bcbdf13b9feacaffa6f635688b464c1208a5",
+  "base_tree": "cab3eff3c3ab6a75aa30b60f6bc5cfbe84d82e22",
+  "delta_paths": [
+    "TreeDB/internal/valuelog/cow_basis_refusal_observer.go",
+    "TreeDB/internal/valuelog/cow_basis_refusal_observer_test.go",
+    "TreeDB/internal/valuelog/cow_reader.go"
+  ],
+  "files": [
+    {
+      "delta_preimage_sha256": null,
+      "new_file": true,
+      "path": "TreeDB/caching/cow_basis_refusal_diagnostic.go",
+      "postimage_bytes": 823,
+      "postimage_git_blob": "e53e3f18a9dfee2ce35d45a5bfc887a63deb3809",
+      "postimage_sha256": "397f1e6fa45488dff7e2d3ce323a5bcfffdc54230782ab1c3f760f9a604db58a",
+      "preimage_bytes": null,
+      "preimage_sha256": null
+    },
+    {
+      "delta_preimage_sha256": null,
+      "new_file": true,
+      "path": "TreeDB/caching/cow_basis_refusal_diagnostic_test.go",
+      "postimage_bytes": 4140,
+      "postimage_git_blob": "c6e5e0c95a406ceb9bd2402bc4ca6a97928f68ae",
+      "postimage_sha256": "4712d8664cdf6f5212dce5f689a191f00f5336f01a4b63d47b914187589d1737",
+      "preimage_bytes": null,
+      "preimage_sha256": null
+    },
+    {
+      "delta_preimage_sha256": null,
+      "new_file": false,
+      "path": "TreeDB/caching/cow_flush.go",
+      "postimage_bytes": 22211,
+      "postimage_git_blob": "f8da3a23f8a04264b9d0aa4049cf5450b9077412",
+      "postimage_sha256": "58b9a83165f22611f031f30eb07a920aba47a677864f9edfc7728665063278fe",
+      "preimage_bytes": 21227,
+      "preimage_sha256": "97f3c3930a75ca731613f89892a56d6331ac7c8032ab1e71415ea895daf4308f"
+    },
+    {
+      "delta_preimage_sha256": null,
+      "new_file": false,
+      "path": "TreeDB/caching/db.go",
+      "postimage_bytes": 1432007,
+      "postimage_git_blob": "1de5bc7d599738cb5d568fd52b2c17f1ce2d8451",
+      "postimage_sha256": "05176a2842480f5d65f3d377a3b973219fc4be6da7fe72a84971562726c89d38",
+      "preimage_bytes": 1431850,
+      "preimage_sha256": "f9740bc2e1b9ac0eb668aa7d5a0d054211133e0f710065cb7710fd0ec8dad438"
+    },
+    {
+      "delta_preimage_sha256": null,
+      "new_file": false,
+      "path": "TreeDB/collections/native_basis_refresh.go",
+      "postimage_bytes": 13592,
+      "postimage_git_blob": "58defec731eb301d1bff6c654277e2dd2235f94b",
+      "postimage_sha256": "c48d40648933fc46db6606bb1592541ab86d5283d097aa850a4eb0c65e67547e",
+      "preimage_bytes": 11326,
+      "preimage_sha256": "b6e64236b568d48fa87a68a6cebf30d1aa9c32dfa492209fa3b9d449fbed4ba1"
+    },
+    {
+      "delta_preimage_sha256": null,
+      "new_file": true,
+      "path": "TreeDB/collections/native_basis_refusal_diagnostic_test.go",
+      "postimage_bytes": 4334,
+      "postimage_git_blob": "1921b485f87cbb236c2aafe51495ea9eb9814c26",
+      "postimage_sha256": "cab416aba723a692a738baca352e456cc9d061d5b65f817e09cdc029fbd724d6",
+      "preimage_bytes": null,
+      "preimage_sha256": null
+    },
+    {
+      "delta_preimage_sha256": null,
+      "new_file": false,
+      "path": "TreeDB/collections/native_json_read.go",
+      "postimage_bytes": 19491,
+      "postimage_git_blob": "5effc65a001239cd4ebf0ed195abdc6ef0117da8",
+      "postimage_sha256": "d9efdcfe81b71319358b2d3deac425cde622b14f1e63ee05703cfb11280e1508",
+      "preimage_bytes": 17697,
+      "preimage_sha256": "3f07b931124f7137fff27d23727f9bbf815a8c4f66bd5b4b724f6a300e5dc8f9"
+    },
+    {
+      "delta_preimage_sha256": null,
+      "new_file": false,
+      "path": "TreeDB/collections/native_ordinary_concurrent_correctness_test.go",
+      "postimage_bytes": 10528,
+      "postimage_git_blob": "b46b6d588a9b4c5d46ab8e33abdbd0496d45111d",
+      "postimage_sha256": "4b22d3a7017067bf019db93d840193010a24968e366dc19deefe9c4bbe3f6ad4",
+      "preimage_bytes": 10154,
+      "preimage_sha256": "1074c1d9d86b51f2742412f50764c8558b2ec3b16dc972a22380c880f25d3014"
+    },
+    {
+      "delta_preimage_sha256": null,
+      "new_file": false,
+      "path": "TreeDB/collections/native_semantic_adapter.go",
+      "postimage_bytes": 3336,
+      "postimage_git_blob": "81ebb75cec17280ca148aad73f71522eeb39bd4d",
+      "postimage_sha256": "919696fc60c168d035ff2ad03ad3b121d858e9e380448e30b7fd477b1337d951",
+      "preimage_bytes": 3021,
+      "preimage_sha256": "c67c5b27e1ceb1a2bcf98ea565fcc7764c66de15aba667d22faef767b4331224"
+    },
+    {
+      "delta_preimage_sha256": null,
+      "new_file": true,
+      "path": "TreeDB/db/native_basis_refusal_diagnostic.go",
+      "postimage_bytes": 482,
+      "postimage_git_blob": "19a23833c5f8f1cd991add619978a7841b34ef34",
+      "postimage_sha256": "194e2e462663f5294948248b3aef963d3cf34cb8fadb4a7f4918b4d52310be2b",
+      "preimage_bytes": null,
+      "preimage_sha256": null
+    },
+    {
+      "delta_preimage_sha256": "6f72e05fe42909ae8f06236fd1a8e71bd2a3cf522498064936b0d7ab04207054",
+      "new_file": true,
+      "path": "TreeDB/internal/valuelog/cow_basis_refusal_observer.go",
+      "postimage_bytes": 6632,
+      "postimage_git_blob": "1ea65706ff09c6ba2fe6a6b2c6864fd931459767",
+      "postimage_sha256": "a19a8901ae4563bb2b5066e15a9bd7f120c76f503a9f9f6290d2b34f08b7f8e7",
+      "preimage_bytes": null,
+      "preimage_sha256": null
+    },
+    {
+      "delta_preimage_sha256": "896808d60dbf7f3ec6933b788a046ee7271c6561a6c6b056c63aee65fc78ac45",
+      "new_file": true,
+      "path": "TreeDB/internal/valuelog/cow_basis_refusal_observer_test.go",
+      "postimage_bytes": 9571,
+      "postimage_git_blob": "0458da8797f0e904130f513d5a2a3a5a184aa3b6",
+      "postimage_sha256": "5cae1c5fa4fd6691df8740372d0c588a15a84012806e78214059dce0747e06ad",
+      "preimage_bytes": null,
+      "preimage_sha256": null
+    },
+    {
+      "delta_preimage_sha256": "2fd7256c53ca2223a36e9281916d2e8302249a42a5cb5c0eb4fc13a06dd26b6f",
+      "new_file": false,
+      "path": "TreeDB/internal/valuelog/cow_reader.go",
+      "postimage_bytes": 28357,
+      "postimage_git_blob": "b7130cbea91d0dc04e801fc412415a9b974bdb31",
+      "postimage_sha256": "90c226d33056aea9044a7231c39e3c493c695f510e8bee661711d597fbbf3d0d",
+      "preimage_bytes": 25694,
+      "preimage_sha256": "f2156e0fe5cde5cee3c6f3c4719b5c54d9ab97ba1db5f5fdba22f27a960d8778"
+    },
+    {
+      "delta_preimage_sha256": null,
+      "new_file": true,
+      "path": "TreeDB/native_basis_refusal_diagnostic.go",
+      "postimage_bytes": 616,
+      "postimage_git_blob": "facc1b26bcfd147f2537c74512260cfc3e909b34",
+      "postimage_sha256": "608f5ea4c6e6bef50f7e66ed8c6c71657e76ee954cd28f3393a952cd294c4de5",
+      "preimage_bytes": null,
+      "preimage_sha256": null
+    }
+  ],
+  "head": "3db7d8a0e308e668a59f95791253336673fee794",
+  "kind": "SOURCE_ONLY_METADATA_PRECISION_DIAGNOSTIC_NOT_PRODUCT",
+  "maintained_route": [
+    {
+      "bytes": 4482,
+      "git_blob": "d741f62147a3916528fa281c8223eafa766c0e14",
+      "path": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml",
+      "sha256": "be01669b34fca4676fe6a2362c97361a657286dcf1775be87fddca17cd767fab",
+      "source_head": "1a14b37b616709da10e2ffff0ea050e16991a06b"
+    },
+    {
+      "bytes": 15642,
+      "git_blob": "63e4e8fa3d6db784af64dfd28344224978bfa29c",
+      "path": ".github/scripts/pending_rotation_hosted_controls.py",
+      "sha256": "c65e0007cf2fac08482a089d037b80cddd319ecae4171db98953a4800433da6d",
+      "source_head": "1a14b37b616709da10e2ffff0ea050e16991a06b"
+    },
+    {
+      "bytes": 4595,
+      "git_blob": "dfd5fd584d1e1724b44c91f8ca6ffbe701451165",
+      "path": ".github/scripts/pending_rotation_control_events.py",
+      "sha256": "2fc529d1298f5ca69fdedfc2b6b00e1a1fd37f47d4da1cc8bf846befc804743c",
+      "source_head": "1a14b37b616709da10e2ffff0ea050e16991a06b"
+    },
+    {
+      "bytes": 7488,
+      "git_blob": "0ee2e8a30f5c18953b9652b6b59ef4be35ab565b",
+      "path": ".github/scripts/test_pending_rotation_hosted_controls.py",
+      "sha256": "b2f7541cbe9c2bacabeedfb692d8f8af681e90ee27424a2dd8c2a302eca29610",
+      "source_head": "1a14b37b616709da10e2ffff0ea050e16991a06b"
+    },
+    {
+      "bytes": 19548,
+      "git_blob": "00ba3b23c49022bc295fc16eb6c39343f45c9170",
+      "path": "scripts/ycsb_campaign_guard.py",
+      "sha256": "b1f5308ce5de5bf1252a77694599f4be4fdf769803b4d7300c08b4901f8d9642",
+      "source_head": "1a14b37b616709da10e2ffff0ea050e16991a06b"
+    },
+    {
+      "bytes": 49260,
+      "git_blob": "10b9e9e5308c19f1a8b3c103c744e46e7ec8faf8",
+      "path": "scripts/ycsb_compare_validate.py",
+      "sha256": "85584d03f46e2f49be94d91b377b77e08494a846a30285bfb1300b932d57cb46",
+      "source_head": "1a14b37b616709da10e2ffff0ea050e16991a06b"
+    },
+    {
+      "bytes": 1240,
+      "git_blob": "e360c3760bbff85fd47d5af4e487b597b88aad24",
+      "path": "scripts/ycsb_evidence_json.py",
+      "sha256": "86989ebbfa14b8f9f3c20ebe470314a29fd28c7db2ab10734d9518e39d270ea6",
+      "source_head": "1a14b37b616709da10e2ffff0ea050e16991a06b"
+    },
+    {
+      "bytes": 20408,
+      "git_blob": "de7213af39cdad6509d1e110a09f3ba71fb063d8",
+      "path": "scripts/ycsb_runtime_observer.py",
+      "sha256": "9ea6f525e0cf46df5301be3f903367816bdb032a3d0abb4c204bda60ee104d8f",
+      "source_head": "1a14b37b616709da10e2ffff0ea050e16991a06b"
+    }
+  ],
+  "parent": "959962e009a6912899885ffa3bf6aa2875f22897",
+  "parent_tree": "4c25a9aa0db0381884459bdbd5a5f8570f7c9d7c",
+  "source_owner_thread": "01a15a41-5e6e-7f21-9052-99e7406d0861",
+  "tree": "1220c8bc313a62312069fbed674d87b01a34c131",
+  "worktree": "/mnt/fast4tb/gomap-graph-seal-c312-20261101T0603Z/race8-metadata-precision-15f1-20261105-01"
+}

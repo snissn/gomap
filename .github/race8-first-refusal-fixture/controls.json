@@ -1,0 +1,138 @@
+{
+  "acceptance": [
+    "all exact named outcomes, no skip/unexpected test/race report/panic",
+    "allocation controls must show no added allocation; existing raw/leaf absolute allocation assertions remain unchanged",
+    "readback first tuple must be indivisible; other counters are not an atomic cut",
+    "any original witness FAIL remains FAIL; retain its scalar receipt and original errors",
+    "missing, overflow, no entry or no refusal means UNKNOWN, never a reason to waive failure"
+  ],
+  "each_mode_totals": {
+    "leaves": 36,
+    "outcomes": 44,
+    "tops": 13
+  },
+  "metadata_precision_successor": {
+    "head": "3db7d8a0e308e668a59f95791253336673fee794",
+    "internal_metadata_known_bits": "48:50",
+    "internal_metadata_values": "51:60; dictionary PRESENCE only; raw frame Reserved not decoded s.Codec",
+    "outer_failed_inspector_zero_shape": "UNKNOWN; must not overwrite first internal receipt",
+    "parent": "959962e009a6912899885ffa3bf6aa2875f22897",
+    "pre_metadata_source_refusal": "UNKNOWN",
+    "validated_returned_shape_bits": "37:47 unchanged; zero on internal refusal"
+  },
+  "modes": [
+    "normal",
+    "race"
+  ],
+  "new_controls_only": {
+    "leaves": 19,
+    "outcomes": 22,
+    "tops": 6
+  },
+  "not_covered": [
+    "historical first cause",
+    "all error/cleanup paths",
+    "100k historical-input qualification",
+    "product repair",
+    "full CI/current-main acceptance",
+    "M0/PRIMARY/performance or literal8 ELF acceptance"
+  ],
+  "original_affected_controls": {
+    "leaves": 17,
+    "outcomes": 22,
+    "tops": 7
+  },
+  "packages": {
+    "github.com/snissn/gomap/TreeDB/caching": {
+      "leaves": 10,
+      "outcomes": 13,
+      "selector": "^(TestCOWBasisRefusalExactInvocationAndPartial|TestCOWBasisRefusalExclusiveCacheBinding|TestCOWBasisRefusalMissingSeamPreservesOriginal|TestCOWBasisRefreshRefusalKeepsOriginalAndOwnsPartialCleanup|TestCOWPhysicalBasisRefreshPreservesAppliedLogicalIdentity)$",
+      "tests": {
+        "TestCOWBasisRefreshRefusalKeepsOriginalAndOwnsPartialCleanup": [
+          "unsupported_owner",
+          "owned_partial"
+        ],
+        "TestCOWBasisRefusalExactInvocationAndPartial": [
+          "active",
+          "frozen"
+        ],
+        "TestCOWBasisRefusalExclusiveCacheBinding": [],
+        "TestCOWBasisRefusalMissingSeamPreservesOriginal": [],
+        "TestCOWPhysicalBasisRefreshPreservesAppliedLogicalIdentity": [
+          "cow_btree/frozen=false",
+          "cow_btree/frozen=true",
+          "cow_ordered/frozen=false",
+          "cow_ordered/frozen=true"
+        ]
+      },
+      "tops": 5
+    },
+    "github.com/snissn/gomap/TreeDB/collections": {
+      "leaves": 3,
+      "outcomes": 3,
+      "selector": "^(TestNativeBasisRefusalDescriptorPropagationAndAllocation|TestNativeNamedDomainReplacement|TestNativeScalarReplacementDuringCapturedBuild)$",
+      "tests": {
+        "TestNativeBasisRefusalDescriptorPropagationAndAllocation": [],
+        "TestNativeNamedDomainReplacement": [],
+        "TestNativeScalarReplacementDuringCapturedBuild": []
+      },
+      "tops": 3
+    },
+    "github.com/snissn/gomap/TreeDB/internal/valuelog": {
+      "leaves": 23,
+      "outcomes": 28,
+      "selector": "^(TestCOWBasisRefusalScalarControls|TestCOWBasisRefusalActualInspectorControls|TestCOWLeafInspectionWindowMatchesRecordInspector|TestCOWLeafRecordBoundedRawCompactAndCompressed|TestCOWRecordRawAndGroupedNoAllocation)$",
+      "tests": {
+        "TestCOWBasisRefusalActualInspectorControls": [
+          "successful_inspector_equal_and_allocation",
+          "actual_source_refusal",
+          "actual_frame_uncompressed_refusal",
+          "actual_frame_dictionary_refusal",
+          "actual_frame_codec_refusal",
+          "actual_payload_refusal",
+          "actual_payload_no_frame_subset"
+        ],
+        "TestCOWBasisRefusalScalarControls": [
+          "owner_and_no_entry",
+          "first_tuple_and_unknown_shape",
+          "known_shape_and_read_stage",
+          "no_error_methods_or_allocation",
+          "metadata_known_subset",
+          "readback_while_borrower_active",
+          "ordinal_overflow_refuses_attribution"
+        ],
+        "TestCOWLeafInspectionWindowMatchesRecordInspector": [
+          "page",
+          "compact",
+          "snappy",
+          "lz4"
+        ],
+        "TestCOWLeafRecordBoundedRawCompactAndCompressed": [
+          "raw",
+          "compact",
+          "compressed-compact"
+        ],
+        "TestCOWRecordRawAndGroupedNoAllocation": [
+          "raw",
+          "grouped"
+        ]
+      },
+      "tops": 5
+    }
+  },
+  "status": "SOURCE_PREPARED_EXECUTION_UNRUN",
+  "witness": {
+    "PASS_meaning": "NON_REPRODUCTION_ONLY; no historical cause or repair qualification",
+    "invocations": 1,
+    "leaves": 1,
+    "mode": "race",
+    "original_checked_Close_ACK_held_checkpoint_reopen_assertions": "UNCHANGED",
+    "outcomes": 1,
+    "package": "github.com/snissn/gomap/TreeDB/collections",
+    "profile": "original CommandWALDurable/cow_btree/default finite caps",
+    "rows": "256 with original 100k opt-in unset; historical environment UNKNOWN",
+    "selector": "^TestNativeOrdinaryConcurrentExactLifecycle$",
+    "test": "TestNativeOrdinaryConcurrentExactLifecycle",
+    "tops": 1
+  }
+}

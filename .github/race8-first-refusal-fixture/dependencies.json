@@ -1,0 +1,41 @@
+{
+  "provenance": "Selected unchanged owning control sources and module inputs; not universal compiler closure",
+  "base": "15f1bcbdf13b9feacaffa6f635688b464c1208a5",
+  "files": [
+    {
+      "path": "go.mod",
+      "bytes": 5176,
+      "sha256": "2dcddbc32b8ff06dc73c6ed987b92988ed4a239e396d5a9e20119b2b97bf82c4"
+    },
+    {
+      "path": "go.sum",
+      "bytes": 45013,
+      "sha256": "d6dd36ca5b03d24e6598a25ce1cc0014e24fbc311c0b65f57aefe5fd146e2a25"
+    },
+    {
+      "path": "TreeDB/caching/cow_basis_refresh_test.go",
+      "bytes": 5190,
+      "sha256": "fdcb41cdb19b74ba3792ef4221d050a80be846fb73f921d885031a0ead484982"
+    },
+    {
+      "path": "TreeDB/collections/native_named_domain_replacement_test.go",
+      "bytes": 13486,
+      "sha256": "14719e4cafe991e55480f036fdf2efaaf48bc9c7b8effc65714f51b29cf8d341"
+    },
+    {
+      "path": "TreeDB/collections/native_named_domain_handoff_test.go",
+      "bytes": 8624,
+      "sha256": "5ed411f741fc9d634c582b1ea8776a13e29bea4030f11292c1affe91ddc8d6c7"
+    },
+    {
+      "path": "TreeDB/internal/valuelog/cow_reader_test.go",
+      "bytes": 25387,
+      "sha256": "5df1f6702592a32758ceec5f12f33de493aeb75307a4f4f43b6606767569e5fe"
+    },
+    {
+      "path": "TreeDB/internal/valuelog/cow_leaf_inspection_window_test.go",
+      "bytes": 2653,
+      "sha256": "96dbf44b1c88d28198f47947232fabbbf8392255f7c6779be013ea9f5b53db6f"
+    }
+  ]
+}
