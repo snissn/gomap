@@ -12,7 +12,7 @@
     "M0 observation is manual diagnostic-only on a separately fixed product; no forecast starts it or replaces failed M0 acceptance.",
     "Bounded maintenance comparison is a manually granted diagnostic on fixed baseline/candidate products; no forecast starts it or establishes cost, M0 or native acceptance."
   ],
-  "discovery_source_sha256": "514b165484b854452cf2e616422d12957b411318e2cd6f1de0828a978189e685",
+  "discovery_source_sha256": "eb4a931e34f5228cc142702bc8ed82f2b6aecaa0cb000cff5259b09d63678483",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
@@ -3267,7 +3267,7 @@
       "events": {
         "push": null
       },
-      "git_blob": "7d96ce00b523183bf65fe2d808cdac2f62b1638f",
+      "git_blob": "9fe052c5f0c2e1b7af525514ecd2325b0550a0c0",
       "jobs": {
         "test": {
           "checkout": [
@@ -3301,7 +3301,7 @@
               "name": "Record focused Linux qualification inputs"
             },
             {
-              "command_sha256": "93f0463ca535af87ef177d00577440aae602595ff5f3eeb74a0cd90b9af0ad4c",
+              "command_sha256": "1e737b4459bdb77d0ac53c93e5712b7c4edd4646cc99bc7ccaa457c5c98e6df2",
               "entrypoint": ".github/workflows/unified-bench-tests.yml:59",
               "env": {
                 "GOMAXPROCS": "2",
@@ -3314,7 +3314,7 @@
               "name": "Focused steady-rusage controls normal (Linux)"
             },
             {
-              "command_sha256": "819b63bbf6a588369a192410301e7531d799c614655bd81a6e938530f2588694",
+              "command_sha256": "deebb4bc1a1571898f67fe8b5585de469873e88a00afe1c60ccc152fc9393118",
               "entrypoint": ".github/workflows/unified-bench-tests.yml:77",
               "env": {
                 "GOMAXPROCS": "2",
@@ -3339,7 +3339,7 @@
           "runs_on": "${{ matrix.os }}"
         }
       },
-      "sha256": "cab2853c111a1d6ef909e155f0abe42d131c5408bff72d9f27fe66b74609673c"
+      "sha256": "99d0ab3d19d5d00513da45f42bd10fab6e0a02e908042cec68092bae44383264"
     }
   }
 }
