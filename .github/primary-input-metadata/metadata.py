@@ -23,6 +23,9 @@ started = time.monotonic()
 read_bytes = 0
 commands = []
 inputs = {}
+stage = 'startup'
+first_failed_need = None
+active_command = None
 output = Path(os.environ['RUNNER_TEMP'])/'primary-construction-metadata'
 COMMON = Path('/home/runner/work')
 
@@ -47,9 +50,14 @@ def census(reserve=0):
 
 
 def need(ok, reason):
+    global first_failed_need
     if not ok:
+        if first_failed_need is None:
+            first_failed_need = reason
         raise RuntimeError(reason)
     if time.monotonic()-started >= 180:
+        if first_failed_need is None:
+            first_failed_need = 'metadata deadline'
         raise RuntimeError('metadata deadline')
 
 
@@ -82,21 +90,49 @@ def remember(path):
 
 
 def run(label, argv, env):
+    global active_command
     # Fixed standard metadata commands only. No Go build/list/test or product.
+    active_command = dict(label=label,argv=list(argv),phase='before_start',exit=None)
     need(len(commands) < 128, 'bounded metadata commands')
     out = output/(label+'.stdout.log')
     err = output/(label+'.stderr.log')
     with out.open('xb') as a, err.open('xb') as b:
+        active_command['phase'] = 'waiting_for_checked_return'
         result = subprocess.run(argv,env=env,cwd=output,stdout=a,stderr=b,
                                 timeout=min(10,180-(time.monotonic()-started)))
+    active_command.update(phase='returned',exit=result.returncode)
     need(out.stat().st_size <= 1024**2 and err.stat().st_size <= 1024**2,
          'metadata log bound')
     commands.append(dict(label=label,argv=argv,exit=result.returncode,
                          stdout=row(out),stderr=row(err)))
+    active_command = None
     return result.returncode,out.read_text(),err.read_text()
 
 
+def failure_receipt(error):
+    # Only fixed source labels and the existing command identity receipts.
+    # Never stringify an exception, environment, token, stdout or stderr.
+    error_class = type(error).__name__
+    if re.fullmatch('[A-Za-z_][A-Za-z_0-9]{0,79}',error_class) is None:
+        error_class = 'UnclassifiedException'
+    value = dict(schema='primary-metadata-failure-v1',status='METADATA_FAILED_NO_ADMISSION',
+                 error_class=error_class,stage=stage,first_failed_need=first_failed_need,
+                 completed_commands=commands,active_command=active_command,
+                 command_output_content_included=False)
+    encoded = canonical(value)
+    if len(encoded)+1 > 2*1024**2:
+        # Refuse oversized diagnostic retention honestly; no row selection and
+        # no invented command success. This remains an adverse, nonadmitting exit.
+        encoded = canonical(dict(schema='primary-metadata-failure-v1',
+            status='METADATA_FAILED_NO_ADMISSION',error_class=error_class,
+            stage=stage,first_failed_need=first_failed_need,
+            completed_command_count=len(commands),command_metadata_omitted_due_bound=True))
+    return encoded.decode('ascii')
+
+
 def main():
+    global stage
+    stage = 'authority'
     e = os.environ
     need(sys.flags.isolated and sys.dont_write_bytecode, 'isolated read-only query')
     need(e.get('GITHUB_ACTIONS') == 'true' and e.get('RUNNER_OS') == 'Linux'
@@ -107,7 +143,9 @@ def main():
          and e.get('GITHUB_SHA') == e.get('REVIEWED_HEAD') == e.get('WORKFLOW_COMMIT'),
          'fixed hosted metadata authority')
     need(output.resolve(strict=True) == output and e['ImageOS'] == 'ubuntu24', 'fixed metadata root')
+    stage = 'initial_workroot_census'
     initial_whole_bytes = census(270532608)
+    stage = 'fixed_metadata_environment'
     env = {k:v for k,v in e.items() if k in ('HOME','LANG','LC_ALL')}
     for name in ('tmp','gocache','modcache','gopath','xdg-cache','xdg-config'):
         (output/name).mkdir()
@@ -125,8 +163,10 @@ def main():
     paths = {'python':sys.executable,'node':e['METADATA_NODE_PATH'],
              'git':'/usr/bin/git','gcc':'/usr/bin/gcc','g++':'/usr/bin/g++',
              'readelf':'/usr/bin/readelf','ldd':'/usr/bin/ldd','bash':'/bin/bash'}
+    stage = 'direct_tool_identities'
     tools = {name:row(path) for name,path in paths.items()}
     # Official archive-derived Mac receipt, not another runner's cache assertion.
+    stage = 'sdk_identity'
     need(SDK.resolve(strict=True) == SDK, 'no SDK route fallback')
     sdkrows = []
     for directory,dirs,names in os.walk(SDK,followlinks=False):
@@ -149,6 +189,7 @@ def main():
                     sha256='6aeaa7e94d3598c8d8b2215cd2e24bec855df3e491bcfd4dbe55a11052dcc314'),
          'cached SDK differs from official exact archive')
     need((SDK/'VERSION').read_text().splitlines()[0] == 'go1.26.10', 'SDK version metadata')
+    stage = 'go_context_metadata'
     code,text,_ = run('go-context',[str(SDK/'bin/go'),'env','-json',*CONTEXT],env)
     need(code == 0, 'Go context metadata query')
     context = json.loads(text)
@@ -158,6 +199,7 @@ def main():
          and context['CC'] == 'gcc' and context['CXX'] == 'g++', 'unsupported normal context')
     executables = {str(Path(p).resolve(strict=True)) for p in paths.values() if p != '/usr/bin/ldd'}
     # Query stock compiler subordinate locations without compiling anything.
+    stage = 'compiler_subordinate_metadata'
     for name in ('cc1','cc1plus','collect2','as','ld'):
         code,text,_ = run('gcc-path-'+name,['/usr/bin/gcc','-print-prog-name='+name],env)
         need(code == 0, 'compiler path metadata')
@@ -167,10 +209,12 @@ def main():
             value = '/usr/bin/'+value
         executables.add(remember(value))
     # The existing selected Git HTTPS acquisition path, not other Git modes.
+    stage = 'git_https_identity'
     executables.add(remember('/usr/lib/git-core/git-remote-https'))
     # Authenticated existing helpers are imported inertly, not run. Their
     # original selected methods have one deferred stdlib import: datetime in
     # Runner.now; it is imported above. Dormant campaign imports are not used.
+    stage = 'helper_authentication_and_inert_imports'
     harness = output/'harness'
     pins = json.loads((harness/'inputs.json').read_text())
     for name, expected in pins.items():
@@ -184,6 +228,7 @@ def main():
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
     import ycsb_compare_validate
+    stage = 'selected_python_origins'
     shared = set()
     startup = []
     for name,module in sorted(sys.modules.items()):
@@ -199,6 +244,7 @@ def main():
                 shared.add(actual)
     # Same maintained readelf/ldd path extraction, now applied only to stock
     # platform executables/stdlib extensions. No ELF code/disassembly parser.
+    stage = 'selected_loader_metadata'
     linkage = {}
     for i,path in enumerate(sorted(executables|shared)):
         remember(path)
@@ -221,6 +267,7 @@ def main():
             for p in dependencies:
                 remember(p)
         linkage[path] = dict(interpreter=interpreter,dependencies=dependencies)
+    stage = 'fixed_loader_config_identities'
     for p in ('/etc/ld.so.cache','/etc/ld.so.conf','/etc/nsswitch.conf','/etc/resolv.conf',
               '/etc/ssl/certs/ca-certificates.crt','/etc/ssl/openssl.cnf'):
         remember(p)
@@ -230,6 +277,7 @@ def main():
         remember(p)
     for p in paths.values():
         remember(p)
+    stage = 'admission_serialization'
     candidate = json.loads((harness/'admission-template.json').read_text())
     candidate.update(status='ADMITTED_CONSTRUCTION_ONLY',independent_source_review_sha256='0'*64,
                      tools={k:tools[k] for k in ('node','python','git','gcc','g++')},sdk=sdk,context=context,
@@ -239,6 +287,7 @@ def main():
     decoded = len(canonical(candidate))
     encoded_admission = 4*((decoded+2)//3)
     compatible = encoded_admission <= 32768
+    stage = 'final_workroot_census_and_result'
     result = dict(schema='primary-construction-hosted-inputs-v1',scope='METADATA_ONLY_NOT_ADMISSION',
                   status='METADATA_COLLECTED' if compatible else 'ADMISSION_INPUT_TOO_LARGE',
                   head=e['GITHUB_SHA'],run_id=e['GITHUB_RUN_ID'],job_id=e['GITHUB_JOB'],
@@ -256,6 +305,7 @@ def main():
                   conditional_runtime_closure_complete=False)
     encoded = canonical(result)
     need(len(encoded) <= 2*1024**2, 'bounded complete metadata stdout')
+    stage = 'complete_result_publication'
     print(encoded.decode('ascii'),flush=True)
     return 0 if compatible else 1
 
@@ -266,5 +316,5 @@ if __name__ == '__main__':
     except SystemExit:
         raise
     except BaseException as error:
-        print(json.dumps(dict(status='METADATA_FAILED_NO_ADMISSION',error_class=type(error).__name__)),flush=True)
+        print(failure_receipt(error),flush=True)
         raise SystemExit(1)
