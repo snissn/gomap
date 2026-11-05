@@ -49,7 +49,7 @@ download under separate30s timeouts. GOMEMLIMIT/CPU equivalence is not claimed.
 
 The counted common job root is RUNNER_TEMP's parent, which must also contain
 GITHUB_WORKSPACE. First census counts existing checkout/actions/temp bytes,
-reserves fixed ZIP+32MiB generated output, refuses over1GiB. The reader samples
+reserves the full256MiB download ulimit+32MiB generated output, refuses over1GiB. The reader samples
 all that root during data processing, including ZIP/source/tmp/action files.
 No pre-platform instantaneous quota or hard RSS is claimed. Archive retrieval
 has fixed256MiB file ulimit and exact expected archive size/hash; no source or

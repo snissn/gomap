@@ -115,7 +115,7 @@ jobs:
           root=pathlib.Path(os.environ['M0_COUNTED_ROOT']).resolve()
           work=pathlib.Path(os.environ['GITHUB_WORKSPACE']).resolve()
           assert work.is_relative_to(root) and pathlib.Path(os.environ['RUNNER_TEMP']).resolve().is_relative_to(root)
-          assert sum(p.lstat().st_size for p in root.rglob('*') if not p.is_dir())+2733520+33554432<=1073741824
+          assert sum(p.lstat().st_size for p in root.rglob('*') if not p.is_dir())+268435456+33554432<=1073741824
           allowed=os.sched_getaffinity(0);assert allowed
           os.sched_setaffinity(0,{min(allowed)})
           # exec preserves the one-CPU affinity for guard and every descendant.
