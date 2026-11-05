@@ -101,13 +101,17 @@ class ScopeTests(unittest.TestCase):
         comment = {"id": 4, "body": "gomap-5397-timing-risk-v1\n" + json.dumps(expected),
                    "created_at": "2026-11-05T10:00:01Z", "updated_at": "2026-11-05T10:00:01Z",
                    "user": {"id": 1981537}}
+        old_body = "gomap-5397-timing-risk-v1\n" + json.dumps({"run": 42118463071, "attempt": 1})
+        old = {"id": 6670774389, "body": old_body, "created_at": "2026-11-05T10:00:00Z",
+               "updated_at": "2026-11-05T10:00:00Z", "user": {"id": 1981537}}
         def fake_api(path):
             if path.startswith("/issues/"):
-                return [comment]
+                return [old, comment]
             if path.endswith("/jobs?per_page=100"):
                 return {"total_count": 1, "jobs": [{"name": "GetVersioned single-use timing acceptance", "started_at": "2026-11-05T10:01:00Z"}]}
             return {"created_at": "2026-11-05T10:00:00Z"}
-        with mock.patch.object(route, "api", side_effect=fake_api):
+        with mock.patch.object(route, "api", side_effect=fake_api), mock.patch.object(
+                route, "HISTORICAL_BODY_SHA256", hashlib.sha256(old_body.encode()).hexdigest()):
             self.assertEqual(route.authenticate_decision(identity, "f" * 64), 4)
             for key, value in (("user", {"id": 2}), ("updated_at", "2026-11-05T10:01:00Z"),
                                ("body", comment["body"].replace("primary", "other"))):
@@ -132,7 +136,7 @@ class ScopeTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     route.authenticate_decision(identity, "f" * 64)
             comment["body"] = original_body
-            with mock.patch.object(route, "api", side_effect=lambda p: [comment, comment] if p.startswith("/issues/") else fake_api(p)):
+            with mock.patch.object(route, "api", side_effect=lambda p: [old, comment, comment] if p.startswith("/issues/") else fake_api(p)):
                 with self.assertRaises(ValueError):
                     route.authenticate_decision(identity, "f" * 64)
             with mock.patch.object(route, "api", side_effect=lambda p: [] if p.startswith("/issues/") else fake_api(p)):
@@ -161,7 +165,7 @@ class ScopeTests(unittest.TestCase):
             return {"created_at": "2026-11-05T10:00:00Z"}
         with mock.patch.object(route, "api", side_effect=fake_api), mock.patch.object(route, "HISTORICAL_BODY_SHA256", old_sha):
             self.assertEqual(route.authenticate_decision(identity, "f" * 64), 4)
-            for items in ([old], [old, current, current], [current, comment(5, '{"run": 7, "attempt": 1}')],
+            for items in ([old], [current], [old, old, current], [old, current, current], [current, comment(5, '{"run": 7, "attempt": 1}')],
                           [current, comment(8, '{"run": 8, "attempt": 1}')],
                           [current, comment(8, '{"run": true, "attempt": 1}')],
                           [current, comment(8, '{"run": 8, "run": 8, "attempt": 1}')],

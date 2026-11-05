@@ -201,19 +201,23 @@ def authenticate_decision(identity, manifest_sha):
     else:
         raise ValueError("comment pagination limit exceeded")
     current = []
+    historical = 0
     for comment in comments:
         body = json.loads(comment["body"].split("\n", 1)[1], object_pairs_hook=unique_object)
         if (not isinstance(body, dict) or type(body.get("run")) is not int or body["run"] <= 0
                 or type(body.get("attempt")) is not int or body["attempt"] != 1):
             raise ValueError("invalid decision run or attempt")
-        if body["run"] == identity["run"]:
+        if body["run"] == 42118463071:
+            if (comment.get("id") != 6670774389 or comment["user"]["id"] != 1981537
+                    or comment["created_at"] != comment["updated_at"]
+                    or hashlib.sha256(comment["body"].encode("utf-8")).hexdigest() != HISTORICAL_BODY_SHA256):
+                raise ValueError("unknown or modified historical decision")
+            historical += 1
+        elif body["run"] == identity["run"]:
             current.append((comment, body))
-        elif (body["run"] != 42118463071 or comment.get("id") != 6670774389
-              or comment["user"]["id"] != 1981537 or comment["created_at"] != comment["updated_at"]
-              or hashlib.sha256(comment["body"].encode("utf-8")).hexdigest()
-              != HISTORICAL_BODY_SHA256):
-            raise ValueError("unknown or modified historical decision")
-    if len(current) != 1:
+        else:
+            raise ValueError("unknown historical decision")
+    if historical != 1 or len(current) != 1:
         raise ValueError("decision missing or ambiguous")
     comment, body = current[0]
     canonical = lambda value: json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)

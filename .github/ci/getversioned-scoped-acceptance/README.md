@@ -6,4 +6,4 @@ The scoped job authenticates the original archive and re-evaluates its observati
 
 The verifier and identity builds require hosted execution to qualify the exact successor. Source checks and synthetic controls do not prove that the original archive or builds pass in that environment.
 
-For this successor, the specifically pinned, unedited owner comment for run 42118463071 is recognized as historical evidence only. A fresh, unique decision for the actual run remains mandatory; unknown or altered historical markers refuse acceptance. This refines the successor contract and does not change the earlier 7b6 run.
+For this successor, the specifically pinned, unedited owner comment for run 42118463071 must appear exactly once and is recognized as historical evidence only. A fresh, unique decision for the actual run remains mandatory; unknown or altered historical markers refuse acceptance. This refines the successor contract and does not change the earlier 7b6 run.

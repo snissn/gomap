@@ -14,7 +14,7 @@
     "Bounded maintenance comparison is a manually granted diagnostic on fixed baseline/candidate products; no forecast starts it or establishes cost, M0 or native acceptance.",
     "The single-use PR5397 timing decision preserves original FAILs and accepts only two exact bound timing predicates; separate current-head M0, security/review and real platform/normal/race qualification remain merge obligations. No inherited exception or general threshold change."
   ],
-  "discovery_source_sha256": "2558e7376667f2e4e4356631183f9281d33123442314650ffa8f515793f1bb39",
+  "discovery_source_sha256": "a7314d1d14ad2aebff12e7b70e27ecbf89c7520199ec01d07626878fa222386e",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
@@ -166,7 +166,7 @@
       "mode": "100644"
     },
     ".github/scripts/getversioned_scoped_acceptance.py": {
-      "git_blob": "f91fb181c0a2b8e97c270582b462cd9b43053a3c",
+      "git_blob": "b6f47a2bf2df59ec14deb6121fc627fe01df2734",
       "mode": "100644"
     },
     ".github/scripts/test_ci_impact.py": {
@@ -174,7 +174,7 @@
       "mode": "100644"
     },
     ".github/scripts/test_getversioned_scoped_acceptance.py": {
-      "git_blob": "aa84df32bdc3631728c92e59a1bb9a1dd05b96df",
+      "git_blob": "c86a861a9d2beda616e9014299266cb8629b53e7",
       "mode": "100644"
     },
     ".github/scripts/test_treedb_ci_contract.py": {
