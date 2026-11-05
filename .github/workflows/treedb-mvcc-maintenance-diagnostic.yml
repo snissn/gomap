@@ -82,11 +82,12 @@ jobs:
           except BaseException as error:
            predicate=error.args[0] if type(error) is AssertionError and error.args and error.args[0] in ('repository_actor','fixed_branch','event_first_attempt','head_equality','known_image','admission_bound','admission_schema_status','immutable_root_actor','admission_actor_head_no_build','immutable_image_list','review_hash_syntax','forbidden_ambient_flags','counted_root_paths','root_directory_not_symlink','root_regular_files','root_bytes_and_free_floor','bootstrap_elapsed','response_status','received_byte_bound','received_length_and_sha') else 'non_assertion_or_unlabelled'
            safe_env=locals().get('e',{})
+           version=safe_env.get('ImageVersion')
            safe_image=dict(ImageOS='ubuntu24' if safe_env.get('ImageOS')=='ubuntu24' else 'missing_or_other',
-                           ImageVersion=safe_env.get('ImageVersion') if safe_env.get('ImageVersion') in ('20261025.353.1','20261101.360.1') else 'missing_or_other',
+                           ImageVersion=version if isinstance(version,str) and 0<len(version)<=40 and version.isascii() and version.replace('.','').isdigit() else 'missing_or_other',
                            RUNNER_OS='Linux' if safe_env.get('RUNNER_OS')=='Linux' else 'missing_or_other',
                            RUNNER_ARCH='X64' if safe_env.get('RUNNER_ARCH')=='X64' else 'missing_or_other')
-           receipt=dict(status='METADATA_BOOTSTRAP_FAILED',error_class=type(error).__name__,predicate=predicate,image=safe_image)
+           receipt=dict(status='METADATA_BOOTSTRAP_FAILED',error_class=type(error).__name__,predicate=predicate,image=safe_image,ImageVersion_present='ImageVersion' in safe_env)
            if predicate=='forbidden_ambient_flags':
             receipt['forbidden_env_present']=dict(NODE_OPTIONS=bool(safe_env.get('NODE_OPTIONS')),NODE_PATH=bool(safe_env.get('NODE_PATH')),
                                                   NODE_V8_COVERAGE=bool(safe_env.get('NODE_V8_COVERAGE')),NODE_COMPILE_CACHE=bool(safe_env.get('NODE_COMPILE_CACHE')),GOMAXPROCS=bool(safe_env.get('GOMAXPROCS')))

@@ -71,8 +71,8 @@ binding and any future execution need separate exact-source review/admission.
 Failure-only bootstrap diagnosis adds constant IDs to the same assertions,
 including nested census and fetch guards; their Boolean expressions and order
 remain unchanged. The failure receipt includes class, one constant predicate,
-and a four-field image tuple containing only known image/OS/architecture
-literals or missing_or_other. Only the forbidden_ambient_flags failure includes
+and a bounded four-field image tuple. OS/architecture use only known literals
+or missing_or_other; the public version rule is described below. Only the forbidden_ambient_flags failure includes
 five presence booleans; it never includes their values. No arbitrary exception
 text, traceback locals, cwd or private environment content is printed. Unknown
 or nonassertion errors use non_assertion_or_unlabelled. Combined conditions
@@ -81,3 +81,11 @@ subcause. This successor does not prove the prior ff9644 failure's predicate.
 There is no added visit/probe/loop or automatic repeat; fresh review and ROOT
 admission remain required. The fixed dispatch branch remains
 diagnostic/primary-two-known-images-metadata-01.
+
+The b83 failure identified `known_image` but its sanitization hid whether the
+process version was absent or differed from the setup-log label. The failure
+receipt now records presence and permits the existing public ImageVersion field
+only when it is ASCII digits/dots, contains a digit and is at most 40 bytes.
+Other values remain `missing_or_other`. This changes failure reporting only:
+the two exact accepted image tuples and every authority/resource/input check
+remain unchanged. It neither assumes a suffix nor admits an unlisted image.
