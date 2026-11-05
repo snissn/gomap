@@ -31,7 +31,7 @@ CONTEXT = ('GOVERSION', 'GOOS', 'GOARCH', 'GOAMD64', 'CGO_ENABLED', 'CC', 'CXX',
            'GOFLAGS', 'GOEXPERIMENT', 'GOROOT')
 
 
-FAILURE_STAGES = ('entry', 'arguments', 'authority', 'authenticate', 'direct_tools', 'runtime_manifest', 'runtime_rows', 'root', 'worker_setup', 'worker_inputs', 'worker_runtime_rows', 'worker_context', 'worker_arm', 'worker_build', 'publication', 'worker_close', 'guard_spawn', 'guard_wait', 'guard_results', 'final_receipts')
+FAILURE_STAGES = ('entry', 'arguments', 'authority', 'authenticate', 'direct_tools', 'runtime_manifest', 'runtime_rows', 'root', 'worker_unobserved', 'guard_spawn', 'guard_wait', 'guard_results', 'final_receipts')
 FAILURE_REASONS = frozenset(('SDK VERSION differs', 'SDK regular files required', 'SDK symlink directory refused', 'absolute read-only runtime input', 'absolute runtime input path', 'actual controls admission mismatch', 'actual controls incomplete', 'actual owner controls admission required', 'arm mapping source mismatch', 'bounded ROOT admission required', 'bounded SDK identity inspection', 'bounded complete final log receipt', 'bounded immutable publication members', 'bounded original runtime/tool dependency binding required', 'bounded runtime input closure', 'bounded upload outputs', 'complete canonical runtime rows required', 'complete normal/race owner controls required', 'construction aggregate deadline', 'construction clock exhausted', 'construction deadline', 'counted regular upload output required', 'exact harness head required', 'exact runtime manifest admission required', 'filter unsupported; no fallback', 'fixed ROOT construction-only admission', 'fixed common hosted workroot required', 'fixed existing SDK required', 'fixed hosted authority required', 'fixed input drift', 'fixed root filesystem/identity', 'fixed tool identity differs', 'foreign artifact output', 'fresh counted standard action output required before upload', 'full existing SDK identity differs', 'immutable actual controls receipt differs', 'immutable member must be regular single-link', 'incomplete sparse source', 'invalid fixed input path', 'malformed upload output', 'manifest literal differs', 'missing or invalid upload identity', 'missing review/owner binding', 'new overlay path already exists', 'normal ELF type', 'normal buildinfo differs', 'outer guard requires absent GOMAXPROCS', 'overlay preimage differs', 'owner manifest differs', 'python3 -I -B required', 'receipt size limit', 'regular bounded runtime manifest', 'runtime manifest identity differs', 'source blob differs', 'source commit/tree differs', 'source directory symlink', 'source mode differs', 'source size differs', 'standard action runtime environment required', 'sticky construction failure', 'task directory symlink refused', 'task nonregular file refused', 'unexpected source file', 'unexpected upload output', 'unsupported normal build context', 'uploaded immutable member changed'))
 FAILURE_CONTEXT = dict(mode='unknown', stage='entry', runtime_row=-1,
                        guard_spawned=False, guard_returned=False)
@@ -65,7 +65,8 @@ def failure_context(error=None, refusal=None):
 
 def need(ok, reason):
     if not ok:
-        failure_context(refusal=reason)
+        if FAILURE_CONTEXT['stage'] != 'worker_unobserved':
+            failure_context(refusal=reason)
         raise RuntimeError(reason)
 
 
@@ -391,7 +392,6 @@ def upload_outputs(text, repository, run_id):
 
 
 def publish(root, a, r, run, env, runtime):
-    observation('publication')
     receipt = dict(status='PUBLICATION_FAILED', uploader_commit='ea165f8d65b6e75b540449e92b4886f43607fa02')
     try:
         r.guard()
@@ -445,8 +445,7 @@ def publish(root, a, r, run, env, runtime):
                        output_sha256=sha(output), command=r.commands[-1])
         r.guard()
     except BaseException as caught:
-        receipt.update(status='PUBLICATION_FAILED', error_class=type(caught).__name__,
-                       failure_context=failure_context(caught))
+        receipt.update(status='PUBLICATION_FAILED', error_class=type(caught).__name__)
         raise
     finally:
         # This receipt intentionally does not belong to the artifact it certifies.
@@ -455,7 +454,6 @@ def publish(root, a, r, run, env, runtime):
 
 
 def worker(root, a, started):
-    observation('worker_setup')
     # This point is reached only through the authenticated portable outer guard.
     for name in ('output', 'tmp', 'gocache', 'modcache', 'gopath', 'bin', 'xdg-cache', 'xdg-config'):
         (root/name).mkdir()
@@ -510,7 +508,6 @@ def worker(root, a, started):
         return raw
 
     try:
-        observation('worker_inputs')
         write(root/'output/admission.json', a)
         write(root/'output/sdk-identity.json', sdk_identity(r, a['sdk']))
         tools = {name: tool_identity(path, a['tools'][name]) for name, path in
@@ -518,11 +515,9 @@ def worker(root, a, started):
         readonly = runtime_inputs(a)
         need(isinstance(readonly, list) and 0 < len(readonly) <= 4096,
              'bounded original runtime/tool dependency binding required')
-        for row_index, row in enumerate(readonly):
-            observation('worker_runtime_rows', runtime_row=row_index)
+        for row in readonly:
             need(Path(row['path']).is_absolute(), 'absolute read-only runtime input')
             tool_identity(row['path'], row)
-        observation('worker_context')
         write(root/'output/readonly-runtime-inputs.json', readonly)
         write(root/'output/tools.json', tools)
         go = str(SDK/'bin/go')
@@ -535,7 +530,6 @@ def worker(root, a, started):
         git = tools['git']
         descriptions = read(DATA/'owner/overlays.json')
         for arm in ARMS:
-            observation('worker_arm')
             source = root/('source-'+arm)
             spec = read(DATA/(arm+'-source.json'))
             template = root/('git-template-'+arm)
@@ -575,7 +569,6 @@ def worker(root, a, started):
             overlay = root/'output'/('overlay-'+arm+'.json')
             write(overlay, {'Replace': {str(source/k): str(DATA/'owner'/v) for k, v in mapping['Replace'].items()}})
             binary = root/'bin'/(arm+'-primary.test')
-            observation('worker_build')
             run(arm+'-build', [go, 'test', '-tags=treedb_test', '-p=1', '-mod=readonly', '-c',
                 '-overlay='+str(overlay), '-o='+str(binary), './TreeDB/mvcc'], 360, cwd=source)
             s = binary.lstat()
@@ -589,7 +582,6 @@ def worker(root, a, started):
         r.guard()
     except BaseException as caught:
         error = type(caught).__name__  # Never print credential-bearing exception repr/argv/env.
-        write(root/'output/failure-context.json', failure_context(caught))
     finally:
         token = None
         # Preserve the original always-retain intent for ordinary build failures,
@@ -600,16 +592,14 @@ def worker(root, a, started):
             else:
                 error = error or 'PublicationResourceRefusal'
         except BaseException as caught:
-            failure_context(caught)
             error = error or type(caught).__name__
-        observation('worker_close')
         runtime.clear()
         r.close()
         final = census(root)
         if final['errors'] or r.first_failure:
             error = error or 'ResourceFailure'
         terminal = dict(status='CONSTRUCTION_FAILED_NO_CAPTURE' if error else 'TWO_NORMAL_BUILDS_PENDING_OUTER_REVIEW',
-                        error_class=error, failure_context=failure_context(), builds=builds, commands=r.commands, final_census=final,
+                        error_class=error, builds=builds, commands=r.commands, final_census=final,
                         first_failure=r.first_failure, max_sampled_whole_bytes=r.maximum,
                         publication_sha256=sha(root/'output/publication-receipt.json') if (root/'output/publication-receipt.json').exists() else None,
                         capture=False, m0=False, release='ONLY_OUTER_GUARD_CAN_PROVE_DESCENDANT_DRAIN')
@@ -651,6 +641,7 @@ def main():
     started = read(root/'bootstrap-start.json')['monotonic']
     need(time.monotonic()-started < WHOLE, 'construction clock exhausted')
     if args.mode == 'worker':
+        observation('worker_unobserved')
         return worker(root, a, started)
     need('GOMAXPROCS' not in os.environ, 'outer guard requires absent GOMAXPROCS')
     scripts = HARNESS/'scripts'
@@ -694,6 +685,7 @@ def main():
     passed = passed and not census(root)['errors']
     # Complete final records are in the original job log, never a second upload.
     closing = dict(schema='primary-post-publication-custody-v1', status='PENDING_REVIEW' if passed else 'FAILED',
+                   worker_operational_context='UNOBSERVED',
                    publication=publication, worker=terminal, guard=result,
                    terminal=read(root/'construction-terminal.json'),
                    terminal_sha256=sha(root/'construction-terminal.json'), capture=False, m0=False)
@@ -708,5 +700,6 @@ if __name__ == '__main__':
         sys.exit(main())
     except Exception as error:
         print(json.dumps({'status': 'FAILED_NO_CAPTURE', 'error_class': type(error).__name__,
+                          'worker_operational_context': 'UNOBSERVED',
                           'failure_context': failure_context(error)}), flush=True)
         sys.exit(1)

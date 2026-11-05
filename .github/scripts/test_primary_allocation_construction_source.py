@@ -39,7 +39,7 @@ class PrimaryConstructionSource(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             ns['need'](False, 'fixed tool identity differs')
         first = ns['failure_context']()
-        ns['observation']('publication')
+        ns['observation']('guard_results')
         with self.assertRaises(RuntimeError):
             ns['need'](False, 'missing or invalid upload identity')
         self.assertEqual(ns['failure_context'](), first)
@@ -91,8 +91,25 @@ class PrimaryConstructionSource(unittest.TestCase):
         self.assertLess(main.index('child = subprocess.Popen(cmd)'), main.index("FAILURE_CONTEXT['guard_spawned'] = True"))
         self.assertLess(main.index('code = child.wait'), main.index("FAILURE_CONTEXT['guard_returned'] = True"))
         worker = ast.get_source_segment(SOURCE, FUNCTIONS['worker'])
-        self.assertLess(worker.index("write(root/'output/failure-context.json'"), worker.index('publish(root, a, r, run, env, runtime)'))
-        self.assertIn('failure_context=failure_context()', worker)
+        publication = ast.get_source_segment(SOURCE, FUNCTIONS['publish'])
+        self.assertNotIn('failure_context', worker)
+        self.assertNotIn('failure_context', publication)
+        self.assertNotIn('failure-context.json', SOURCE)
+        self.assertIn("observation('worker_unobserved')", main)
+
+    def test_worker_operational_context_is_explicitly_unobserved(self):
+        ns = isolated(('need',))
+        ns['observation']('worker_unobserved', mode='worker')
+        # A worker-internal refusal caught by its unchanged handler is not
+        # reported as an observed operational cause by this top-level-only probe.
+        with self.assertRaises(RuntimeError):
+            ns['need'](False, 'fixed tool identity differs')
+        self.assertIsNone(ns['FIRST_FAILURE_CONTEXT'])
+        value = ns['failure_context'](FileNotFoundError('SECRET'))
+        self.assertEqual(value['stage'], 'worker_unobserved')
+        self.assertIsNone(value['first_need_refusal'])
+        self.assertEqual(value['error_class'], 'FileNotFoundError')
+        self.assertNotIn('SECRET', json.dumps(value))
 
     def test_actual_controls_and_actor_are_required(self):
         ns = isolated(('need', 'authority'))

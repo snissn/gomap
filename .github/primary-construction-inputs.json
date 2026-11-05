@@ -93,8 +93,8 @@
       "sha256": "0165b8a75330f3228f2c7a234b4ff8a107b9139c2b519147f4c8e9fe99b262d8"
     },
     ".github/scripts/primary_allocation_construction.py": {
-      "bytes": 39185,
-      "sha256": "720d2ec0d84018d50a41a5f804bbadca0c376764fb55a12cf6c6a02d4a8ef197"
+      "bytes": 38752,
+      "sha256": "ab9cd3f8fa61bedd2de0139bdf18fe23fc4b7ccb031e43f223f60e073ff059af"
     },
     "scripts/ycsb_campaign_guard.py": {
       "bytes": 19548,
