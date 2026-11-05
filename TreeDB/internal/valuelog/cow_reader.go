@@ -135,7 +135,7 @@ func cowShapeDiagnostic(header, prefix, metadata []byte, n uint32, ptr page.Valu
 		s.DictID, s.Compressed = s.frame.DictID, s.frame.Flags&FrameFlagCompressed != 0
 		if s.frame.Reserved != 0 {
 			if !s.Compressed || s.DictID != 0 || BlockCodec(s.frame.Reserved) > BlockCodecZSTD {
-				call.Refuse(COWBasisInspect, COWBasisFrameContract, COWRecordShape{}, false)
+				call.RefuseMetadata(COWBasisInspect, COWBasisFrameContract, s.Compressed, s.DictID != 0, s.frame.Reserved, true)
 				return COWRecordShape{}, ErrCOWReadUnsupported
 			}
 			s.Codec = BlockCodec(s.frame.Reserved)
@@ -315,7 +315,7 @@ func inspectCOWValuePrefixDiagnostic(f *os.File, ptr page.ValuePtr, s COWRecordS
 			}
 		}
 		if templ.IsEncodedPayload(valuePrefix[:int(v)]) || (!leaf && HasCompactLeafLogPayload(valuePrefix[:int(v)])) {
-			call.Refuse(COWBasisInspect, COWBasisPayloadContract, COWRecordShape{}, false)
+			call.RefuseMetadata(COWBasisInspect, COWBasisPayloadContract, s.Compressed, s.DictID != 0, s.frame.Reserved, s.frame.K != 0)
 			return COWRecordShape{}, ErrCOWReadUnsupported
 		}
 		if leaf {

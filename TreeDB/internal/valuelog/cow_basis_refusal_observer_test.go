@@ -1,6 +1,7 @@
 package valuelog
 
 import (
+	"encoding/binary"
 	"os"
 	"sync"
 	"testing"
@@ -57,11 +58,23 @@ func TestCOWBasisRefusalScalarControls(t *testing.T) {
 		observer, call := basisDiagnosticCall(t, false)
 		if n := testing.AllocsPerRun(32, func() {
 			call.Enter(COWBasisInspect)
+			call.RefuseMetadata(COWBasisInspect, COWBasisFrameContract, true, true, 255, true)
+			COWBasisCall{}.RefuseMetadata(COWBasisInspect, COWBasisFrameContract, true, true, 255, true)
 			call.Error(COWBasisInspect, basisDiagnosticHostileError{}, COWRecordShape{}, false)
 			call.Finish(COWBasisInspect)
 			_ = observer.Snapshot()
 		}); n != 0 {
 			t.Fatalf("scalar-path allocations=%g", n)
+		}
+	})
+	t.Run("metadata_known_subset", func(t *testing.T) {
+		observer, call := basisDiagnosticCall(t, false)
+		// Unknown frame fields must be suppressed even if a caller supplied bits.
+		call.RefuseMetadata(COWBasisInspect, COWBasisPayloadContract, false, true, 255, false)
+		first := observer.Snapshot().First
+		call.Error(COWBasisInspect, ErrCOWReadUnsupported, COWRecordShape{}, false)
+		if (first>>37)&0x7ff != 0 || (first>>48)&7 != 1 || first>>51 != 0 || observer.Snapshot().First != first {
+			t.Fatalf("metadata subset=%x later=%x", first, observer.Snapshot().First)
 		}
 	})
 	t.Run("readback_while_borrower_active", func(t *testing.T) {
@@ -72,14 +85,14 @@ func TestCOWBasisRefusalScalarControls(t *testing.T) {
 			defer joined.Done()
 			for i := 0; i < 64; i++ {
 				call.Enter(COWBasisInspect)
-				call.Refuse(COWBasisInspect, COWBasisSourceContract, COWRecordShape{}, false)
+				call.RefuseMetadata(COWBasisInspect, COWBasisFrameContract, true, false, 255, true)
 				call.Finish(COWBasisInspect)
 			}
 			call.Finish(COWBasisRefresh)
 		}()
 		for i := 0; i < 64; i++ {
 			word := observer.Snapshot().First
-			if word != 0 && ((word>>33)&15 != uint64(COWBasisSourceContract) || word>>37 != 0) {
+			if word != 0 && ((word>>33)&15 != uint64(COWBasisFrameContract) || (word>>37)&0x7ff != 0 || (word>>48)&7 != 7 || (word>>51)&3 != 1 || (word>>53)&255 != 255) {
 				t.Errorf("torn scalar tuple=%x", word)
 			}
 		}
@@ -133,31 +146,66 @@ func TestCOWBasisRefusalActualInspectorControls(t *testing.T) {
 			t.Fatalf("source refusal=%x error=%v", word, err)
 		}
 	})
-	t.Run("actual_frame_refusal", func(t *testing.T) {
-		f, ptr := cowTestLeafRecord(t, buildSparseLeafPageForPayloadTest(t), BlockCodecSnappy)
-		bytes, err := os.ReadFile(f.Name())
-		if err != nil {
-			t.Fatal(err)
-		}
-		bytes[HeaderSize+3] = 255
-		if err := os.WriteFile(f.Name(), bytes, 0600); err != nil {
-			t.Fatal(err)
-		}
-		observer, call := basisDiagnosticCall(t, true)
-		shape, err := InspectCOWLeafRecordDiagnostic(f, ptr, cowTestLimits, call)
-		_, originalErr := InspectCOWLeafRecord(f, ptr, cowTestLimits)
-		word := observer.Snapshot().First
-		if err != originalErr || err != ErrCOWReadUnsupported || shape != (COWRecordShape{}) || (word>>33)&15 != uint64(COWBasisFrameContract) || word>>37 != 0 {
-			t.Fatalf("frame refusal=%x error=%v/%v", word, err, originalErr)
-		}
-	})
+	for _, fixture := range []struct {
+		name       string
+		compressed bool
+		dictionary bool
+		rawCodec   uint8
+	}{
+		{"actual_frame_uncompressed_refusal", false, false, uint8(BlockCodecSnappy)},
+		{"actual_frame_dictionary_refusal", true, true, uint8(BlockCodecSnappy)},
+		{"actual_frame_codec_refusal", true, false, 255},
+	} {
+		t.Run(fixture.name, func(t *testing.T) {
+			codec := BlockCodecNone
+			if fixture.compressed {
+				codec = BlockCodecSnappy
+			}
+			f, ptr := cowTestLeafRecord(t, buildSparseLeafPageForPayloadTest(t), codec)
+			bytes, err := os.ReadFile(f.Name())
+			if err != nil {
+				t.Fatal(err)
+			}
+			bytes[HeaderSize+3] = fixture.rawCodec
+			if fixture.dictionary {
+				binary.LittleEndian.PutUint64(bytes[HeaderSize+4:HeaderSize+12], 91)
+			}
+			if err := os.WriteFile(f.Name(), bytes, 0600); err != nil {
+				t.Fatal(err)
+			}
+			observer, call := basisDiagnosticCall(t, true)
+			shape, err := InspectCOWLeafRecordDiagnostic(f, ptr, cowTestLimits, call)
+			originalShape, originalErr := InspectCOWLeafRecord(f, ptr, cowTestLimits)
+			word := observer.Snapshot().First
+			// Match the actual caller's later empty-shape error observation.
+			call.Error(COWBasisInspect, err, shape, false)
+			if err != originalErr || err != ErrCOWReadUnsupported || shape != (COWRecordShape{}) || originalShape != shape || (word>>33)&15 != uint64(COWBasisFrameContract) || (word>>37)&0x7ff != 0 || (word>>48)&7 != 7 || ((word>>51)&1 != 0) != fixture.compressed || ((word>>52)&1 != 0) != fixture.dictionary || (word>>53)&255 != uint64(fixture.rawCodec) || observer.Snapshot().First != word {
+				t.Fatalf("frame refusal=%x later=%x error=%v/%v", word, observer.Snapshot().First, err, originalErr)
+			}
+		})
+	}
 	t.Run("actual_payload_refusal", func(t *testing.T) {
 		f, ptr := cowTestLeafRecord(t, []byte{'T', 'M', 1, 1, 1, 1}, BlockCodecNone)
 		observer, call := basisDiagnosticCall(t, false)
 		shape, err := InspectCOWLeafRecordDiagnostic(f, ptr, cowTestLimits, call)
 		word := observer.Snapshot().First
-		if err != ErrCOWReadUnsupported || shape != (COWRecordShape{}) || (word>>33)&15 != uint64(COWBasisPayloadContract) || word>>37 != 0 {
+		if err != ErrCOWReadUnsupported || shape != (COWRecordShape{}) || (word>>33)&15 != uint64(COWBasisPayloadContract) || (word>>37)&0x7ff != 0 || (word>>48)&7 != 7 || word>>51 != 0 {
 			t.Fatalf("payload refusal=%x error=%v", word, err)
+		}
+	})
+	t.Run("actual_payload_no_frame_subset", func(t *testing.T) {
+		value := []byte{'T', 'M', 1, 1, 1, 1}
+		f, ptr, record := cowTestRecord(t, value, false, 0)
+		local, err := cowShape(record[:HeaderSize], nil, record[:HeaderSize], uint32(len(value)), ptr, cowTestLimits)
+		if err != nil {
+			t.Fatal(err)
+		}
+		observer, call := basisDiagnosticCall(t, false)
+		shape, err := inspectCOWValuePrefixDiagnostic(f, ptr, local, false, record, call)
+		originalShape, originalErr := inspectCOWValuePrefix(f, ptr, local, false, record)
+		word := observer.Snapshot().First
+		if err != originalErr || err != ErrCOWReadUnsupported || shape != (COWRecordShape{}) || originalShape != shape || (word>>33)&15 != uint64(COWBasisPayloadContract) || (word>>37)&0x7ff != 0 || (word>>48)&7 != 1 || word>>51 != 0 {
+			t.Fatalf("non-frame payload=%x error=%v/%v", word, err, originalErr)
 		}
 	})
 }

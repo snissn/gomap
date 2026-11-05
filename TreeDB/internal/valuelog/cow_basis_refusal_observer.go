@@ -76,8 +76,12 @@ type COWBasisCall struct {
 // COWBasisRefusalSnapshot.First is one indivisible first-refusal tuple:
 // [0:23] ordinal, [24] frozen, [25:27] descriptor, [28] after,
 // [29:32] stage, [33:36] refusal, [37] shape-known, [38] compressed,
-// [39] dictionary-present, [40:47] codec. Zero means NO OBSERVED REFUSAL,
-// not success. Completed/counts are independent diagnostics, not a join proof.
+// [39] dictionary-present, [40:47] codec refer ONLY to successfully inspected
+// shape knowledge. Internal refusal metadata is separate: [48] compression-known,
+// [49] dictionary-presence-known, [50] raw-codec-known; [51] compressed,
+// [52] dictionary-present, [53:60] raw frame Reserved. Internal knowledge never
+// sets shape-known. Zero means NO OBSERVED REFUSAL, not success. Completed/counts
+// are independent diagnostics, not a join proof.
 type COWBasisRefusalSnapshot struct {
 	Calls, Completed, First uint64
 	Overflow, Missing       bool
@@ -143,13 +147,35 @@ func (c COWBasisCall) Missing() {
 }
 
 func (c COWBasisCall) Refuse(stage COWBasisStage, why COWBasisRefusal, shape COWRecordShape, known bool) {
+	c.refuse(stage, why, shape, known, 0)
+}
+
+// RefuseMetadata captures only scalars already read by the original inspector.
+// Compression is known here. Dictionary presence and RAW Reserved are known
+// only when that original local frame exists; no dictionary ID is retained.
+// These bits describe an internal refusal, never a successfully returned shape.
+func (c COWBasisCall) RefuseMetadata(stage COWBasisStage, why COWBasisRefusal, compressed, dictionaryPresent bool, rawCodec uint8, frameKnown bool) {
+	metadata := uint64(1) << 48
+	if compressed {
+		metadata |= 1 << 51
+	}
+	if frameKnown {
+		metadata |= 1<<49 | 1<<50 | uint64(rawCodec)<<53
+		if dictionaryPresent {
+			metadata |= 1 << 52
+		}
+	}
+	c.refuse(stage, why, COWRecordShape{}, false, metadata)
+}
+
+func (c COWBasisCall) refuse(stage COWBasisStage, why COWBasisRefusal, shape COWRecordShape, known bool, metadata uint64) {
 	if !c.Enabled() || stage >= COWBasisStageCount || why == 0 || why > 15 {
 		return
 	}
 	if c.leafRead && stage == COWBasisInspect {
 		stage = COWBasisLeafRead
 	}
-	word := uint64(c.ordinal) | uint64(c.descriptor)<<25 | uint64(stage)<<29 | uint64(why)<<33
+	word := uint64(c.ordinal) | uint64(c.descriptor)<<25 | uint64(stage)<<29 | uint64(why)<<33 | metadata
 	if c.frozen {
 		word |= 1 << 24
 	}
