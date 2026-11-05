@@ -37,7 +37,10 @@ func ReadGetVersionedActivationDiagnostic() (uint64, uint64) {
 """
 MAX_TEXT = 32 * 1024 * 1024
 MAX_OUTPUT = 1024 * 1024 * 1024
-CALL = re.compile(r"\bCALL\b\s+([^\s]+)")
+CALL = re.compile(r"(?m)^[ \t]*\S+\.go:\d+[ \t]+0x[0-9a-fA-F]+[ \t]+[0-9a-fA-F]+[ \t]+CALL[ \t]+(\S+)(?:[ \t].*)?$")
+CAPTURE_SYMBOL = "github.com/snissn/gomap/TreeDB/db.(*DB).captureSnapshotForReadWithValueLogPublicationLockHeld"
+BOUND_SYMBOL = "github.com/snissn/gomap/TreeDB/tree.(*Tree).ResetAppendReadBindings"
+GENERIC_SYMBOL = "github.com/snissn/gomap/TreeDB/tree.(*Tree).Reset"
 
 
 def digest(data):
@@ -87,21 +90,19 @@ def prepare(out):
 def structural_text(capture, bound, generic):
     if any(not text.strip() or len(text.encode()) > MAX_TEXT for text in (capture, bound, generic)):
         raise ValueError("missing or oversized objdump text")
-    if not re.search(r"(?m)^TEXT .*captureSnapshotForReadWithValueLogPublicationLockHeld", capture):
-        raise ValueError("capture objdump symbol missing")
-    if not re.search(r"(?m)^TEXT .*ResetAppendReadBindings", bound):
-        raise ValueError("bound reset objdump symbol missing")
-    if not re.search(r"(?m)^TEXT .*\.Reset\(", generic):
-        raise ValueError("generic reset objdump symbol missing")
+    for text, symbol in ((capture, CAPTURE_SYMBOL), (bound, BOUND_SYMBOL), (generic, GENERIC_SYMBOL)):
+        headers = re.findall(r"(?m)^TEXT (\S+)\(SB\)(?:\s+.*)?$", text)
+        if headers != [symbol]:
+            raise ValueError("wrong or missing objdump symbol: " + symbol)
     capture_calls = CALL.findall(capture)
     bound_calls = CALL.findall(bound)
     generic_calls = CALL.findall(generic)
-    if not any("ResetAppendReadBindings" in c for c in capture_calls):
+    if BOUND_SYMBOL + "(SB)" not in capture_calls:
         raise ValueError("capture lacks bound-reset CALL")
-    if any(re.search(r"runtime\.(?:typeAssert|assertE2I|assertI2I)", c) for c in bound_calls):
+    if any(re.search(r"(?:^|/)runtime\.(?:typeAssert|assertE2I|assertI2I|panicdottypeE|panicdottypeI|panicnildottype)", c) for c in bound_calls):
         raise ValueError("bound reset calls runtime interface assertion")
     return {"capture_calls": capture_calls, "bound_calls": bound_calls,
-            "generic_calls": generic_calls, "interpretation": "source/linked CALL evidence only; no escape or equivalence claim"}
+            "generic_calls": generic_calls, "interpretation": "direct CALL evidence only; no indirect-call, escape or equivalence claim"}
 
 
 def structural(out):
@@ -138,14 +139,21 @@ def finish(out):
             rows.append({"name": path.name, "bytes": size, "sha256": h.hexdigest()})
         except OSError as exc:
             errors.append("cannot read output: " + path.name + ": " + type(exc).__name__)
-    if total > MAX_OUTPUT:
-        errors.append("output directory exceeds bound")
     result = {"files": rows, "bytes": total, "errors": errors,
-              "scope": "post-run output directory only; excludes this ledger"}
-    (out / "output-ledger.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+              "scope": "post-run output directory; ledger excluded from file hashes but included in ceiling"}
+    payload = ledger_payload(result, total)
+    (out / "output-ledger.json").write_bytes(payload)
     print(json.dumps(result, sort_keys=True))
     if errors:
         raise ValueError("output ledger bounds failed")
+
+
+def ledger_payload(result, other_bytes):
+    payload = (json.dumps(result, indent=2, sort_keys=True) + "\n").encode()
+    if other_bytes + len(payload) > MAX_OUTPUT:
+        result["errors"].append("output directory including ledger exceeds bound")
+        payload = (json.dumps(result, indent=2, sort_keys=True) + "\n").encode()
+    return payload
 
 
 def inventory_text(text):
@@ -192,18 +200,30 @@ def inventory(out):
 
 
 def selftest():
+    sample = {"errors": []}
+    initial_size = len((json.dumps(sample, indent=2, sort_keys=True) + "\n").encode())
+    ledger_payload(sample, MAX_OUTPUT - initial_size)
+    if sample["errors"]:
+        raise AssertionError("exact ledger boundary rejected")
+    sample = {"errors": []}
+    ledger_payload(sample, MAX_OUTPUT - initial_size + 1)
+    if not sample["errors"]:
+        raise AssertionError("ledger boundary overflow accepted")
     try:
         pinned_source(b"foreign", digest(b"expected"))
     except ValueError:
         pass
     else:
         raise AssertionError("foreign source accepted")
-    capture = "TEXT x.captureSnapshotForReadWithValueLogPublicationLockHeld(SB)\n CALL x.ResetAppendReadBindings(SB)\n"
-    bound = "TEXT x.ResetAppendReadBindings(SB)\n CALL x.Reset(SB)\n"
-    generic = "TEXT x.Reset(SB)\n RET\n"
+    capture = "TEXT " + CAPTURE_SYMBOL + "(SB) /src/db.go\n  db.go:12 0x1234 e800000000 CALL " + BOUND_SYMBOL + "(SB)\n"
+    bound = "TEXT " + BOUND_SYMBOL + "(SB) /src/tree.go\n  tree.go:13 0x1239 e800000000 CALL " + GENERIC_SYMBOL + "(SB)\n"
+    generic = "TEXT " + GENERIC_SYMBOL + "(SB) /src/tree.go\n  tree.go:14 0x1240 c3 RET\n"
     structural_text(capture, bound, generic)
-    for args in [(capture.replace("ResetAppendReadBindings(SB)", "other(SB)"), bound, generic),
-                 (capture, bound + " CALL runtime.typeAssert(SB)\n", generic),
+    for args in [(capture.replace("ResetAppendReadBindings(SB)", "NotResetAppendReadBindings(SB)"), bound, generic),
+                 (capture.replace("  db.go:12", "# db.go:12"), bound, generic),
+                 (capture, bound + "  tree.go:15 0x1241 e800000000 CALL runtime.typeAssert(SB)\n", generic),
+                 (capture, bound + "  tree.go:15 0x1241 e800000000 CALL runtime.panicdottypeE(SB)\n", generic),
+                 (capture.replace(CAPTURE_SYMBOL, CAPTURE_SYMBOL + "Wrong"), bound, generic),
                  (capture, bound, "nonempty")]:
         try:
             structural_text(*args)
