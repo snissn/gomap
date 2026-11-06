@@ -171,13 +171,20 @@ func TestNativeNamedDomainReplacement(t *testing.T) {
 		refreshed, err := prepareNativeEngineBasisRefresh(base, read.capture.Snapshot(), read.capture.Snapshot())
 		if refreshed != nil {
 			defer func() {
-				if err := finishPrivateNative(refreshed.Release()); err != nil {
-					t.Error(err)
+				if refreshed != nil {
+					owned := refreshed
+					refreshed = nil
+					if err := finishPrivateNative(owned.Release()); err != nil {
+						t.Error(err)
+					}
 				}
 			}()
 		}
 		if err != nil {
 			t.Fatalf("equivalent basis with pending graph replacement: %v", err)
+		}
+		if refreshed != base {
+			t.Fatal("equivalent snapshots did not return the owned retained engine")
 		}
 		current, ok := refreshed.names.Get("events")
 		if !ok {
@@ -190,6 +197,14 @@ func TestNativeNamedDomainReplacement(t *testing.T) {
 		}
 		borrowed := &NativeJSONRead{capture: read.capture, collection: current, scratch: read.scratch, database: read.database}
 		check(borrowed, want...)
+		// Consume exactly the returned edge before reading through the original
+		// held capture. Its engine and replacement must remain live and unchanged.
+		owned := refreshed
+		refreshed = nil
+		if err := finishPrivateNative(owned.Release()); err != nil {
+			t.Fatal(err)
+		}
+		check(read, want...)
 	}
 	initial := capture()
 	if initial.collection.documentGeneration != 1 {

@@ -19,6 +19,7 @@ import (
 type nativeBasisRefreshScratch struct {
 	before, after             *backenddb.Snapshot
 	allocator                 backenddb.NativeSemanticAllocator
+	leaves                    backenddb.NativeMaintenanceLeafReader
 	beforeReader, afterReader backenddb.SnapshotRootReader
 	beforeRoot, afterRoot     bool
 	key                       [page.PageSize]byte
@@ -27,10 +28,10 @@ type nativeBasisRefreshScratch struct {
 }
 
 func (s *nativeBasisRefreshScratch) readBeforeLeaf(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
-	return readNativeSnapshotLeaf(s.before, s.allocator, ptr, dst)
+	return readNativeMaintenanceSnapshotLeaf(s.before, s.allocator, ptr, dst, s.leaves)
 }
 func (s *nativeBasisRefreshScratch) readAfterLeaf(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
-	return readNativeSnapshotLeaf(s.after, s.allocator, ptr, dst)
+	return readNativeMaintenanceSnapshotLeaf(s.after, s.allocator, ptr, dst, s.leaves)
 }
 func (s *nativeBasisRefreshScratch) get(key []byte, after bool) ([]byte, bool, error) {
 	var entry node.LeafEntry
@@ -177,6 +178,13 @@ func (s *nativeBasisRefreshScratch) root(c *nativeCollectionState, d *nativeDoma
 // the SAME immutable paired Snapshots; no historical rows or source chain are
 // scanned. Only changed domains/collections get new immutable headers.
 func prepareNativeEngineBasisRefresh(base *nativeEngineVersion, before, after *backenddb.Snapshot) (*nativeEngineVersion, error) {
+	return prepareNativeEngineBasisRefreshWithMaintenanceLeaves(base, before, after, nil)
+}
+
+func prepareNativeEngineBasisRefreshWithMaintenanceLeaves(base *nativeEngineVersion, before, after *backenddb.Snapshot, leaves backenddb.NativeMaintenanceLeafReader) (*nativeEngineVersion, error) {
+	if leaves != nil && !leaves.MatchesNativeMaintenanceSnapshots(before, after) {
+		return nil, backenddb.ErrRootPublicationBasisMismatch
+	}
 	if base == nil || base.collections == nil || before == nil || after == nil || base.maintenance == nil || base.inventory != nil {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
@@ -192,7 +200,7 @@ func prepareNativeEngineBasisRefresh(base *nativeEngineVersion, before, after *b
 	if err != nil {
 		return nil, err
 	}
-	s := &nativeBasisRefreshScratch{before: before, after: after, allocator: base.maintenance}
+	s := &nativeBasisRefreshScratch{before: before, after: after, allocator: base.maintenance, leaves: leaves}
 	defer func() {
 		*s = nativeBasisRefreshScratch{}
 		s = nil
