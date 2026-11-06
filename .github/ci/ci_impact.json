@@ -14,7 +14,7 @@
     "Bounded maintenance comparison is a manually granted diagnostic on fixed baseline/candidate products; no forecast starts it or establishes cost, M0 or native acceptance.",
     "The single-use PR5397 timing decision preserves original FAILs and accepts only two exact bound timing predicates; separate current-head M0, security/review and real platform/normal/race qualification remain merge obligations. No inherited exception or general threshold change."
   ],
-  "discovery_source_sha256": "0f19c427feb71bea41ea295d5fc6d0cafcf7976fdd1a05e637d5a00f7cc5ee0b",
+  "discovery_source_sha256": "f15485907e6e945bd937d2bcdc09ec48b78b4143a0f416f31089eab63d8517a1",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
@@ -2393,7 +2393,7 @@
           }
         }
       },
-      "git_blob": "1c01459b52da3735cc1e82693e6c3895bf5650a6",
+      "git_blob": "7d868e2447cf9dceaef1c0d9d8541bbb20e2b0dd",
       "jobs": {
         "diagnostic": {
           "checkout": [
@@ -2407,14 +2407,14 @@
           ],
           "commands": [
             {
-              "command_sha256": "25eaa60b7b1f20b058c6252bb89d3e4e44f56f54473ed3be45f00773e062b2b2",
+              "command_sha256": "5fe008a70292e4baa2c2fa10ed3445fdca5114621c8e1b37ff7da5ca6657feca",
               "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:29",
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
               "name": "Authenticate fresh controls-only dispatch"
             },
             {
               "command_sha256": "af670692a6e69675016c2baac7a6c1d8e061822856dc94a1586eaf6f8e30ff11",
-              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:73",
+              "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:74",
               "env": {
                 "GH_TOKEN": "${{ github.token }}"
               },
@@ -2434,7 +2434,7 @@
           "runs_on": "ubuntu-24.04"
         }
       },
-      "sha256": "389f7c7e247bff3b226138fa0e976dd9ab9405ef850df1eda8599f5262d96dac"
+      "sha256": "b6d4337c5f53f0114c04738b853f7f398f75be367a07c3f239f272b17a4544c3"
     },
     "treedb-tests.yml": {
       "coverage": "existing execution only; triggers/path filters are unchanged",

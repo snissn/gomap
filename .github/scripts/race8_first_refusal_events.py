@@ -17,7 +17,7 @@ CONTROLS = {PREFIX + pkg: {name for top, children in tests.items()
              for name in [top, *(top + '/' + child for child in children)]}
             for pkg, tests in CONTROL_CHILDREN.items()}
 WITNESS = {PREFIX + 'collections': {TOP}}
-ACTIVATION_TOP = 'TestNativeBasisPublicVacuumActivationV1'
+ACTIVATION_TOP = 'TestNativeBasisPublicVacuumOriginalCorpusV1'
 ACTIVATION_SELECTOR = '^' + ACTIVATION_TOP + '$'
 ACTIVATION = {PREFIX + 'collections': {ACTIVATION_TOP}}
 CHILDREN = {TOP}  # The original witness has one top and no subtests.

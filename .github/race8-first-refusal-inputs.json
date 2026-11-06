@@ -3,24 +3,24 @@
   "base_tree": "cab3eff3c3ab6a75aa30b60f6bc5cfbe84d82e22",
   "files": {
     ".github/race8-first-refusal-fixture/bindings.json": {
-      "bytes": 8601,
-      "sha256": "af5ab20e647592eef673e51381bc8295f5239a3eff7f75cba0749985e8efcfbe"
+      "bytes": 9553,
+      "sha256": "e560afa244bd7ed76c76e76fac1ad00dc9899a693c6d89d3e9db9da67d663b14"
     },
     ".github/race8-first-refusal-fixture/controls.json": {
-      "bytes": 854,
-      "sha256": "fe214713455d28481c12e01ba5a60fe2cf47367b0053361021a244bab3444eed"
+      "bytes": 874,
+      "sha256": "34a0596b69b9c4364a02572aa00ceef35d762dcf25d1770ce087ac732ed4fcf7"
     },
     ".github/race8-first-refusal-fixture/dependencies.json": {
       "bytes": 2168,
       "sha256": "8a76fdc74431c6ca393d99cf3fb37dafa8fff2de7eb1826fcb31cf8a4a31deba"
     },
     ".github/race8-first-refusal-fixture/independent-review.md": {
-      "bytes": 2011,
-      "sha256": "ee439978aa27ec5bcce5a36c44d589d37c7e4039af265342f9f62d8a64f40fef"
+      "bytes": 2026,
+      "sha256": "cb0ef16d1ec370a578aa117d78eaf85382ba0962839f47c368ac96e9129b008e"
     },
     ".github/race8-first-refusal-fixture/manifest.json": {
-      "bytes": 7047,
-      "sha256": "fd55f142c1503b1338621d4198a30f617ab96265f5411e3bd8b6e1b69d1b32c1"
+      "bytes": 7289,
+      "sha256": "60c3b7b3ca50fc5351ac0ed3ae6a1939e8448d88379cb08b46b151459eaaa112"
     },
     ".github/race8-first-refusal-fixture/overlay/TreeDB/caching/cow_basis_refusal_diagnostic.go": {
       "bytes": 823,
@@ -41,6 +41,10 @@
     ".github/race8-first-refusal-fixture/overlay/TreeDB/collections/native_basis_public_vacuum_activation_test.go": {
       "bytes": 13696,
       "sha256": "edfb01dd9fef7a58f640f76cf23de695baf38594434aaa735d372954b15eb83b"
+    },
+    ".github/race8-first-refusal-fixture/overlay/TreeDB/collections/native_basis_public_vacuum_original_corpus_test.go": {
+      "bytes": 18660,
+      "sha256": "5ce983e254bf8cb7781341258c8522c244d34a5c1943fb3273b6cb5d8866e151"
     },
     ".github/race8-first-refusal-fixture/overlay/TreeDB/collections/native_basis_refresh.go": {
       "bytes": 13593,
@@ -111,12 +115,12 @@
       "sha256": "f2156e0fe5cde5cee3c6f3c4719b5c54d9ab97ba1db5f5fdba22f27a960d8778"
     },
     ".github/scripts/race8_first_refusal_events.py": {
-      "bytes": 24245,
-      "sha256": "d7f7b4344d2a21bb62a4cce4cd30a94c05ead48e57215e5f6d07af621ce245c8"
+      "bytes": 24249,
+      "sha256": "578e32eb33aebd8e4a69c0585c799ec288ce8e5ed04f35a0600b435548b6867c"
     },
     ".github/scripts/race8_first_refusal_hosted_controls.py": {
-      "bytes": 18307,
-      "sha256": "6e20f651053c89b28db81b91d3f3eb4ffceb08da0d32d6d0acbac04fc37d6690"
+      "bytes": 18483,
+      "sha256": "47f66296c4a9f0f989aef81b93197067d2e31f525cd92961ee1f02e67665b8ca"
     },
     ".github/scripts/test_race8_first_refusal_events.py": {
       "bytes": 17963,
@@ -127,8 +131,8 @@
       "sha256": "fea02a4bd2f54d85c98241ec650c14aa6f6cb3bdeb5acadf3355b2c9cf88b953"
     },
     ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml": {
-      "bytes": 4525,
-      "sha256": "389f7c7e247bff3b226138fa0e976dd9ab9405ef850df1eda8599f5262d96dac"
+      "bytes": 4631,
+      "sha256": "b6d4337c5f53f0114c04738b853f7f398f75be367a07c3f239f272b17a4544c3"
     },
     "scripts/ycsb_campaign_guard.py": {
       "bytes": 19548,
@@ -148,8 +152,8 @@
     }
   },
   "schema": "race8-first-refusal-fixed-inputs-v1",
-  "semantic_head": "641a721077d71499eed545ef52caa1f0b81a384a",
-  "semantic_parent": "402319455310dd8040e98903717da1d8144c7262",
-  "semantic_tree": "254b4ec1b1996824274a9734e70796640bf9fe6d",
+  "semantic_head": "57a5dec783d4e71fe4c1e33e361ada319728a79e",
+  "semantic_parent": "641a721077d71499eed545ef52caa1f0b81a384a",
+  "semantic_tree": "badd632961b02f2f7e75a910f9f659bf321eec11",
   "status": "SOURCE_ONLY_FINAL_INTEGRATION_REVIEW_AND_ROOT_ADMISSION_REQUIRED"
 }

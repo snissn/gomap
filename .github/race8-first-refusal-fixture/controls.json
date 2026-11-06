@@ -1,6 +1,6 @@
 {
   "actual_public_vacuum_invocations_each": 1,
-  "compile_scope": "existing maintained collections compile route; ROOT selects exact binding",
+  "compile_scope": "existing collections compile route, ROOT-owned exact binding",
   "count_each": 1,
   "each_mode": {
     "leaves": 1,
@@ -9,21 +9,21 @@
     "tops": 1
   },
   "existing_controls_or_original_witness_invocations": 0,
-  "file": "TreeDB/collections/native_basis_public_vacuum_activation_test.go",
+  "file": "TreeDB/collections/native_basis_public_vacuum_original_corpus_test.go",
   "modes": [
     "normal",
     "race"
   ],
-  "no_skip_policy": "unsupported/ineligible/no-op/missing activity is FAIL, never skip",
+  "no_skip_policy": "ineligible/unsupported/no-op/zero interval/no replacement is FAIL, never skip/pass",
   "package": "github.com/snissn/gomap/TreeDB/collections",
-  "rows": 8,
+  "rows": 256,
   "runtime_gates": {
     "compile": "UNRUN",
     "gofmt_Go1_26_10": "UNRUN",
     "normal": "UNRUN",
     "race": "UNRUN"
   },
-  "selector": "^TestNativeBasisPublicVacuumActivationV1$",
-  "test": "TestNativeBasisPublicVacuumActivationV1",
-  "writers": 1
+  "selector": "^TestNativeBasisPublicVacuumOriginalCorpusV1$",
+  "test": "TestNativeBasisPublicVacuumOriginalCorpusV1",
+  "writers": 16
 }

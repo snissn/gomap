@@ -1,54 +1,51 @@
 {
+  "base": "15f1bcbdf13b9feacaffa6f635688b464c1208a5",
   "delta_paths": [
-    "TreeDB/collections/native_basis_public_vacuum_activation_test.go"
+    "TreeDB/collections/native_basis_public_vacuum_original_corpus_test.go"
   ],
-  "full_overlay_paths": 15,
-  "head": "641a721077d71499eed545ef52caa1f0b81a384a",
+  "full_overlay_paths": 16,
+  "head": "57a5dec783d4e71fe4c1e33e361ada319728a79e",
+  "manifest_excludes_itself": true,
   "members": [
     {
-      "bytes": 1551,
+      "bytes": 1685,
       "path": "HOSTED-ROUTE.md",
-      "sha256": "d7094b448607797e9f3f1fa48899907ae64f914eb81d46f00aae0cceb7d36335"
+      "sha256": "114f6be1b3b78db823c87ddd8cad19be49e311257318cb75e718f033bf820bfd"
     },
     {
-      "bytes": 5764,
+      "bytes": 3653,
       "path": "README.md",
-      "sha256": "7cc69e101707573e1ff35375dd828c396c9c993bb5f5a58ddbc660d973438de2"
+      "sha256": "dfdeb3b7c3d5947087d5b75604f9febba8e07cf035dbcb71580c44a33a763617"
     },
     {
-      "bytes": 8601,
+      "bytes": 9553,
       "path": "bindings.json",
-      "sha256": "af5ab20e647592eef673e51381bc8295f5239a3eff7f75cba0749985e8efcfbe"
+      "sha256": "e560afa244bd7ed76c76e76fac1ad00dc9899a693c6d89d3e9db9da67d663b14"
     },
     {
-      "bytes": 25031,
-      "path": "construct-and-seal.py",
-      "sha256": "8c7389ecede04d8c450e889ad9b2b546c53b3266cead3aa1f1be7b392d2e9d0e"
-    },
-    {
-      "bytes": 14376,
+      "bytes": 19488,
       "path": "delta-inverse.patch",
-      "sha256": "0ecf83d6ad48d5d706fc61572fff27ed1cbaa82600c0810a8244f7614fb8ba50"
+      "sha256": "7f866ebc4c29fa5d635f8238292037e89cf3616469774b956a98b59c4bba4195"
     },
     {
-      "bytes": 14372,
+      "bytes": 19484,
       "path": "delta.patch",
-      "sha256": "67d86b4ba3e3b1618756acc825082ab3684ea51268d2258b63be75665058b72b"
+      "sha256": "f166e1bf8016f7a31be5380fd7c01f65783f19a89aeb6282409e5bfc48fe6382"
     },
     {
-      "bytes": 10661,
-      "path": "inputs-and-anchors.json",
-      "sha256": "03776914a7c3ccb6af899a341e10f398dcfc73721de8706db550037a029fef49"
+      "bytes": 2026,
+      "path": "independent-review.md",
+      "sha256": "cb0ef16d1ec370a578aa117d78eaf85382ba0962839f47c368ac96e9129b008e"
     },
     {
-      "bytes": 854,
+      "bytes": 874,
       "path": "inventory.json",
-      "sha256": "fe214713455d28481c12e01ba5a60fe2cf47367b0053361021a244bab3444eed"
+      "sha256": "34a0596b69b9c4364a02572aa00ceef35d762dcf25d1770ce087ac732ed4fcf7"
     },
     {
-      "bytes": 602,
+      "bytes": 744,
       "path": "inverse-proof.json",
-      "sha256": "b1f0128f28d55e1a68fab281ee2ba31415b621fffd8a177ce518b8adf0ede6d7"
+      "sha256": "9edc670bc82f6b8348550f79e28bce956763bb81f62a94cf9757343b1625f2f1"
     },
     {
       "bytes": 823,
@@ -74,6 +71,11 @@
       "bytes": 13696,
       "path": "overlay/TreeDB/collections/native_basis_public_vacuum_activation_test.go",
       "sha256": "edfb01dd9fef7a58f640f76cf23de695baf38594434aaa735d372954b15eb83b"
+    },
+    {
+      "bytes": 18660,
+      "path": "overlay/TreeDB/collections/native_basis_public_vacuum_original_corpus_test.go",
+      "sha256": "5ce983e254bf8cb7781341258c8522c244d34a5c1943fb3273b6cb5d8866e151"
     },
     {
       "bytes": 13593,
@@ -126,9 +128,9 @@
       "sha256": "608f5ea4c6e6bef50f7e66ed8c6c71657e76ee954cd28f3393a952cd294c4de5"
     },
     {
-      "bytes": 1432,
+      "bytes": 1007,
       "path": "ownership-final.json",
-      "sha256": "70814ac05509850ed6658a6f102d5b9969f83a73c249edd1bcd0a8217a4943ae"
+      "sha256": "c5ed083501a9a0f49729aa6c706723577985e0a8a3f8bfb95562b88b3418925e"
     },
     {
       "bytes": 21227,
@@ -166,39 +168,41 @@
       "sha256": "f2156e0fe5cde5cee3c6f3c4719b5c54d9ab97ba1db5f5fdba22f27a960d8778"
     },
     {
-      "bytes": 3182,
-      "path": "preservation.json",
-      "sha256": "cf1295194868b580366d754be0b66c2e3412c3970077490e9aea1e270f6cf5ae"
+      "bytes": 2128,
+      "path": "qualified-route-reference.json",
+      "sha256": "95acab2e46fe57a6e6db463c5c06ef7242e31177610bb195e661b05c54256967"
     },
     {
-      "bytes": 4268,
+      "bytes": 3209,
       "path": "receipt-contract.json",
-      "sha256": "2409781e867261ec64bbbddccf338516a6967e20ee56f05a1d562a183b3af53c"
+      "sha256": "bf03961d120f5d5120eaad0ecaf1fec3cc1ab31a62c7ea8ac97d2c15f26bbcc9"
     },
     {
-      "bytes": 637,
-      "path": "source-guards.json",
-      "sha256": "1497f3110f74530ad67fff89be014d7f4d2f3772121f9c63b3f53f2fa385fb1c"
+      "bytes": 4521,
+      "path": "source-controls.json",
+      "sha256": "060a6e0eddf648b8b6452fa0caf9c5024f7a3db8ed167fa54668f366d98777a1"
     },
     {
-      "bytes": 75022,
+      "bytes": 94510,
       "path": "source-inverse.patch",
-      "sha256": "389f4dbee8d2898cf94c42ce6ef730e8dc0ea751d7c78f9b4da0f19effbf419a"
+      "sha256": "21b58c3e88c387624b5dbf5d105c1bb03b11ffa9a7be1824c7e632e4457cbeb3"
     },
     {
-      "bytes": 2043394,
+      "bytes": 2043522,
       "path": "source-proof.index",
-      "sha256": "d5a2d81802fa47fb44d28a9a458de8ff9ccbbb33bafa516559a3a688f570f06f"
+      "sha256": "057eb2f67093e9bcd2d0cd6e648be8c904c3cf99eb5f727eb39cfdbfa2666ece"
     },
     {
-      "bytes": 74990,
+      "bytes": 94474,
       "path": "source.patch",
-      "sha256": "f8eead4e714850824c44a67d27f8b42017496d239ee743a2ecdca2ce5017bb26"
+      "sha256": "809ab32da81b63047d3db9a296af4f4f7a22d58e459e9f1c5a69e7dddafb3555"
     }
   ],
-  "new_test": "TestNativeBasisPublicVacuumActivationV1",
-  "parent": "402319455310dd8040e98903717da1d8144c7262",
-  "schema": "race8-public-vacuum-activation-source-packet-v1",
-  "status": "CLOSED_SOURCE_ONLY_REVIEW_PENDING",
-  "tree": "254b4ec1b1996824274a9734e70796640bf9fe6d"
+  "new_test": "TestNativeBasisPublicVacuumOriginalCorpusV1",
+  "parent": "641a721077d71499eed545ef52caa1f0b81a384a",
+  "schema": "race8-public-vacuum-original-corpus-source-packet-v1",
+  "source_controls": 24,
+  "status": "CLOSED_SOURCE_ONLY_REVIEW_READY_RUNTIME_UNRUN",
+  "tree": "badd632961b02f2f7e75a910f9f659bf321eec11",
+  "unchanged641a_overlays": 15
 }

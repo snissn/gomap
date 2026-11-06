@@ -1,4 +1,4 @@
-name: 'TreeDB: public native vacuum activation control (manual only)'
+name: 'TreeDB: original corpus public native vacuum control (manual only)'
 on:
   workflow_dispatch:
     inputs:
@@ -14,8 +14,8 @@ permissions:
   contents: read
 jobs:
   diagnostic:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/diagnostic/race8-public-vacuum-activation-01' && github.actor_id == '1981537' && github.run_attempt == 1
-    name: exact15f1 public native vacuum activation normal and race control
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/diagnostic/race8-original-corpus-vacuum-01' && github.actor_id == '1981537' && github.run_attempt == 1
+    name: exact15f1 original256 public vacuum normal and race control
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
@@ -36,9 +36,10 @@ jobs:
           admission=json.loads(base64.b64decode(text,validate=True));assert isinstance(admission,dict)
           expected={'schema':'race8-first-refusal-hosted-controls-admission-v1','status':'ADMITTED_CONTROLS_ONLY',
             'authority':'ROOT','authority_thread':'01a18e7c-8c23-7fd2-8d55-b0486d938cd3','actor_id':'1981537','expected_head':os.environ['GITHUB_SHA'],'run_attempt':'1',
-            'owner_manifest_sha256':'fd55f142c1503b1338621d4198a30f617ab96265f5411e3bd8b6e1b69d1b32c1',
-            'owner_review_sha256':'ee439978aa27ec5bcce5a36c44d589d37c7e4039af265342f9f62d8a64f40fef',
+            'owner_manifest_sha256':'60c3b7b3ca50fc5351ac0ed3ae6a1939e8448d88379cb08b46b151459eaaa112',
+            'owner_review_sha256':'cb0ef16d1ec370a578aa117d78eaf85382ba0962839f47c368ac96e9129b008e',
             'allow_product_capture':False}
+          assert expected['owner_manifest_sha256'] is not None and expected['owner_review_sha256'] is not None
           assert all(admission.get(k)==v for k,v in expected.items())
           root=pathlib.Path(os.environ['RUNNER_TEMP'])/'race8-first-refusal-controls';root.mkdir()
           (root/'dispatch-admission.json').write_text(json.dumps(admission,sort_keys=True)+'\n')
@@ -80,7 +81,7 @@ jobs:
         timeout-minutes: 2
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: race8-public-vacuum-activation-${{ github.run_id }}-${{ github.run_attempt }}
+          name: race8-original-corpus-vacuum-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/race8-first-refusal-controls/output
             ${{ runner.temp }}/race8-first-refusal-controls/guard
