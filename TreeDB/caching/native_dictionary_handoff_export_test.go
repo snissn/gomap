@@ -48,7 +48,28 @@ func PackNativeDictionaryHandoffTestFixture(db *DB) (backenddb.LeafGenerationPac
 			Sync: true, Force: true, MinPublishedAgeCommits: 1, MinCandidateGenerations: 1,
 			MaxBytesToCopy: 32 << 20, ReserveRIDs: db.ReserveValueLogRIDs,
 		})
-		return err
+		if err != nil || !stats.Ran {
+			return err
+		}
+		// Plan the actual published catalog cut under this same maintenance
+		// fence. This is no extra pack/checkpoint/retry and must not hide a
+		// missing generation behind a later dictionary-reader assertion.
+		backend := db.backend.(*backenddb.DB)
+		published, ok := backend.StateToken()
+		if !ok || published.SystemRootPageID == 0 {
+			return errors.New("packed native catalog has no published SYSTEM root")
+		}
+		plan, err := backend.LeafGenerationPlan(context.Background(), backenddb.LeafGenerationPlanOptions{
+			Force: true, MinPublishedAgeCommits: 1, MinCandidateGenerations: 1,
+		})
+		if err != nil {
+			return fmt.Errorf("plan actual packed native catalog: %w", err)
+		}
+		afterPlan, ok := backend.StateToken()
+		if !ok || afterPlan != published || plan.CurrentCommitSeq != published.CommitSeq {
+			return backenddb.ErrRootPublicationBasisMismatch
+		}
+		return nil
 	})
 	return stats, err
 }

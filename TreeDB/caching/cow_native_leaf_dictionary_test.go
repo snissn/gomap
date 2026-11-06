@@ -148,15 +148,17 @@ func cowNativePackedDictionaryLeafFixtureWithEncoding(t *testing.T, dictionaryAp
 		t.Fatal(err)
 	}
 	db.SetDictStore(store)
+	var dictionaryLog *cowDictionaryLeafLog
 	if dictionaryAppender {
 		// Initialization only: the original owner has not written any fixture
 		// data or activated native semantics. Keep the real stable-resource,
 		// RID allocation, segment registration and publication lifecycle across
 		// every append lane, as newCachingLeafPageLog does for outer leaves.
 		// The restricted interface still excludes prepared append methods.
-		backend.SetLeafPageLog(&cowDictionaryLeafLog{
+		dictionaryLog = &cowDictionaryLeafLog{
 			cowDictionaryLeafLifecycle: &cachingLeafPageLogGroup{db: db}, db: db, dictID: dictID, dictionary: dictionary,
-		})
+		}
+		backend.SetLeafPageLog(dictionaryLog)
 	}
 	privateCOWPackWrite(t, db, backend, 1, 4096)
 	if err := db.Checkpoint(); err != nil {
@@ -206,24 +208,38 @@ func cowNativePackedDictionaryLeafFixtureWithEncoding(t *testing.T, dictionaryAp
 	}
 	// Use the real owner-bound pack/adoption seam, with deterministic selection
 	// rather than a scheduler tick. The read itself never recaptures or retries.
-	db.flushMu.Lock()
-	original, ok := db.cow.cut.basis.snapshot.StateToken()
-	if !ok {
-		db.flushMu.Unlock()
-		t.Fatal("missing original basis")
-	}
-	stats, packErr := backend.LeafGenerationPackRunOnceForPrivateCOW(owner, context.Background(), backenddb.LeafGenerationPackFromPlanOptions{
-		Sync: true, Force: true, MinPublishedAgeCommits: 1, MinCandidateGenerations: 1,
-		// Select all eligible generations within the unchanged copy bound. A
-		// two-generation reclaim optimum may omit the fixed source entirely.
-		MaxBytesToCopy: 32 << 20, ReserveRIDs: db.ReserveValueLogRIDs,
-	})
-	if packErr == nil {
-		packErr = db.adoptPrivateCOWLeafBasis(original)
-	}
-	db.flushMu.Unlock()
+	var stats backenddb.LeafGenerationPackRunOnceStats
+	var handoffsBefore uint64
+	packErr := func() error {
+		db.flushMu.Lock()
+		defer db.flushMu.Unlock()
+		if dictionaryLog != nil {
+			cowRequireDictionaryLeafOwnerContract(t, dictionaryLog)
+			handoffsBefore = dictionaryLog.handoffs.Load()
+		}
+		original, ok := db.cow.cut.basis.snapshot.StateToken()
+		if !ok {
+			return errors.New("missing original basis")
+		}
+		var err error
+		stats, err = backend.LeafGenerationPackRunOnceForPrivateCOW(owner, context.Background(), backenddb.LeafGenerationPackFromPlanOptions{
+			Sync: true, Force: true, MinPublishedAgeCommits: 1, MinCandidateGenerations: 1,
+			// Select all eligible generations within the unchanged copy bound. A
+			// two-generation reclaim optimum may omit the fixed source entirely.
+			MaxBytesToCopy: 32 << 20, ReserveRIDs: db.ReserveValueLogRIDs,
+		})
+		if err != nil {
+			return err
+		}
+		return db.adoptPrivateCOWLeafBasis(original)
+	}()
 	if packErr != nil || !stats.Ran || stats.Pack.BytesCopied == 0 {
 		t.Fatalf("real dictionary pack: ran=%t copied=%d error=%v", stats.Ran, stats.Pack.BytesCopied, packErr)
+	}
+	if dictionaryLog != nil && (dictionaryLog.handoffs.Load() <= handoffsBefore || stats.Pack.CopyAttempts == 0) {
+		// The backend calls the original handoff before incrementing CopyAttempts
+		// or creating staging. A hidden cached-owner wrapper must fail this test.
+		t.Fatal("installed dictionary appender did not reach original handoff before private copy")
 	}
 	sourceSelected := false
 	for _, rawID := range stats.Pack.SourceFileIDs {
