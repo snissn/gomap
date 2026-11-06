@@ -253,10 +253,13 @@ func TestCOWMaintenanceDictionaryAfterOnlyFile(t *testing.T) {
 		t.Fatal("after-only file lost the persisted dictionary identity")
 	}
 	var dst [page.PageSize]byte
-	c.writerMu.Lock()
-	_, beforeErr := s.ReadNativeMaintenanceDictionaryLeaf(before.snapshot, ptr, afterShape, dst[:])
-	got, afterErr := s.ReadNativeMaintenanceDictionaryLeaf(after.snapshot, ptr, afterShape, dst[:])
-	c.writerMu.Unlock()
+	got, beforeErr, afterErr := func() ([]byte, error, error) {
+		c.writerMu.Lock()
+		defer c.writerMu.Unlock()
+		_, beforeErr := s.ReadNativeMaintenanceDictionaryLeaf(before.snapshot, ptr, afterShape, dst[:])
+		got, afterErr := s.ReadNativeMaintenanceDictionaryLeaf(after.snapshot, ptr, afterShape, dst[:])
+		return got, beforeErr, afterErr
+	}()
 	if !errors.Is(beforeErr, rootpublication.ErrUnresolvedResource) || afterErr != nil || !bytes.Equal(got, original[:]) || len(got) != page.PageSize || &got[0] != &dst[0] || p.calls != 1 || s.used != 1 {
 		t.Fatalf("exact after Snapshot must supply the real new file: before=%v after=%v dispatches=%d definitions=%d", beforeErr, afterErr, p.calls, s.used)
 	}
