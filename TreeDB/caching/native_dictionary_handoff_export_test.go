@@ -23,7 +23,7 @@ import (
 // the existing exact-handle pack promotion platform; there is no runtime skip.
 func NewNativeDictionaryHandoffTestFixture(t *testing.T) (*DB, *backenddb.DB, uint64) {
 	t.Helper()
-	db, backend, _, dictID, _ := cowNativePackedDictionaryLeafFixture(t)
+	db, backend, _, dictID, _ := cowNativePackedDictionaryLeafFixtureWithEncoding(t, true)
 	return db, backend, dictID
 }
 
@@ -244,13 +244,32 @@ func CheckNativeDictionaryHandoffForTest(db *DB, capture backenddb.NativeSemanti
 		if receipt.BeforeLeaf == receipt.AfterLeaf || !receipt.SourceSelected || !receipt.DestinationCreated {
 			return errors.New("actual native SYSTEM dictionary operand was not relocated")
 		}
-		_, receipt.BeforeFile, err = capture.Snapshot().PinnedValueLogFile(receipt.BeforeLeaf.ValueLogFileID())
+		beforeFile, beforeIdentity, err := capture.Snapshot().PinnedValueLogFile(receipt.BeforeLeaf.ValueLogFileID())
+		receipt.BeforeFile = beforeIdentity
 		if err != nil {
 			return err
 		}
-		_, receipt.AfterFile, err = after.snapshot.PinnedValueLogFile(receipt.AfterLeaf.ValueLogFileID())
+		afterFile, afterIdentity, err := after.snapshot.PinnedValueLogFile(receipt.AfterLeaf.ValueLogFileID())
+		receipt.AfterFile = afterIdentity
 		if err != nil || receipt.BeforeFile.ObjectID == ([16]byte{}) || receipt.AfterFile.ObjectID == ([16]byte{}) || receipt.BeforeFile == receipt.AfterFile {
 			return errors.Join(errors.New("actual SYSTEM source/destination identities unavailable or unchanged"), err)
+		}
+		// Relocation alone does not prove dictionary encoding: publication can
+		// append a new SYSTEM leaf. Inspect BOTH exact captured records under
+		// their own snapshot authority before invoking any real engine refresh.
+		beforeShape, err := valuelog.InspectCOWLeafRecord(beforeFile, receipt.BeforeLeaf.ValuePtr(), c.readLimits())
+		if err != nil {
+			return fmt.Errorf("inspect actual BEFORE SYSTEM operand: %w", err)
+		}
+		if !beforeShape.Compressed || beforeShape.DictID != dictID || beforeShape.Codec != valuelog.BlockCodecNone {
+			return fmt.Errorf("actual BEFORE SYSTEM dictionary shape: compressed=%t dictionaryMatches=%t codec=%d", beforeShape.Compressed, beforeShape.DictID == dictID, beforeShape.Codec)
+		}
+		afterShape, err := valuelog.InspectCOWLeafRecord(afterFile, receipt.AfterLeaf.ValuePtr(), c.readLimits())
+		if err != nil {
+			return fmt.Errorf("inspect actual AFTER SYSTEM operand: %w", err)
+		}
+		if !afterShape.Compressed || afterShape.DictID != dictID || afterShape.Codec != valuelog.BlockCodecNone {
+			return fmt.Errorf("actual AFTER SYSTEM dictionary shape: compressed=%t dictionaryMatches=%t codec=%d", afterShape.Compressed, afterShape.DictID == dictID, afterShape.Codec)
 		}
 		store := db.dictStore.(*dictdb.Store)
 		definition, err := store.GetDictBytes(context.Background(), dictID)

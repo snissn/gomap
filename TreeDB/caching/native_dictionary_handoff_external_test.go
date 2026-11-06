@@ -16,9 +16,10 @@ import (
 
 // This is a real collections engine, not testSemanticState or a sentinel
 // refresher. Only the existing dictionary pack fixture/export bridge is private.
-// Its explicit, owner-bound physical pack selects the persisted dictionary;
-// ordinary writers, codec policy, original native lifecycle and public corpus
-// are unchanged. Linux supplies the required exact-handle pack primitive.
+// This dictionary-only fixture selects its maintained dictionary appender and
+// encoding options at owner creation so BOTH actual SYSTEM operands are eligible.
+// Common Block fixtures, the original native lifecycle and public corpus are
+// unchanged. Linux supplies the required exact-handle pack primitive.
 func TestNativeEngineDictionaryPairedBasisHandoff(t *testing.T) {
 	cache, backend, dictID := caching.NewNativeDictionaryHandoffTestFixture(t)
 	manager := collections.NewCollectionManager(backend)
