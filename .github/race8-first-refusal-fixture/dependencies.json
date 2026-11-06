@@ -1,41 +1,66 @@
 {
-  "provenance": "Selected unchanged owning control sources and module inputs; not universal compiler closure",
   "base": "15f1bcbdf13b9feacaffa6f635688b464c1208a5",
   "files": [
     {
-      "path": "go.mod",
       "bytes": 5176,
+      "path": "go.mod",
       "sha256": "2dcddbc32b8ff06dc73c6ed987b92988ed4a239e396d5a9e20119b2b97bf82c4"
     },
     {
-      "path": "go.sum",
       "bytes": 45013,
+      "path": "go.sum",
       "sha256": "d6dd36ca5b03d24e6598a25ce1cc0014e24fbc311c0b65f57aefe5fd146e2a25"
     },
     {
-      "path": "TreeDB/caching/cow_basis_refresh_test.go",
-      "bytes": 5190,
-      "sha256": "fdcb41cdb19b74ba3792ef4221d050a80be846fb73f921d885031a0ead484982"
+      "bytes": 110269,
+      "path": "TreeDB/public.go",
+      "sha256": "237112a0a3807722db97edf547c8495801f4ee5e8d245a063b39c96d5e2691fb"
     },
     {
-      "path": "TreeDB/collections/native_named_domain_replacement_test.go",
-      "bytes": 13486,
-      "sha256": "14719e4cafe991e55480f036fdf2efaaf48bc9c7b8effc65714f51b29cf8d341"
+      "bytes": 580,
+      "path": "TreeDB/cached_backend_maintenance.go",
+      "sha256": "8308c2dde12742bb6a865dd59dc7dc872ee42f40690fc9aa12406380dd5233e2"
     },
     {
-      "path": "TreeDB/collections/native_named_domain_handoff_test.go",
-      "bytes": 8624,
-      "sha256": "5ed411f741fc9d634c582b1ea8776a13e29bea4030f11292c1affe91ddc8d6c7"
+      "bytes": 3457,
+      "path": "TreeDB/caching/cow_maintenance.go",
+      "sha256": "1c89fbd8b76a1e7d34f73b73bb14c079301a6e21db24176c189adbbe7302391f"
     },
     {
-      "path": "TreeDB/internal/valuelog/cow_reader_test.go",
-      "bytes": 25387,
-      "sha256": "5df1f6702592a32758ceec5f12f33de493aeb75307a4f4f43b6606767569e5fe"
+      "bytes": 4296,
+      "path": "TreeDB/collections/native_domain_state.go",
+      "sha256": "c21a8b7ef3d0c5b086d971f36f9f38791b1e408adf274199cae0f54ff5fa4161"
     },
     {
-      "path": "TreeDB/internal/valuelog/cow_leaf_inspection_window_test.go",
-      "bytes": 2653,
-      "sha256": "96dbf44b1c88d28198f47947232fabbbf8392255f7c6779be013ea9f5b53db6f"
+      "bytes": 988398,
+      "path": "TreeDB/collections/api.go",
+      "sha256": "081a9032dba17bdaefc50678cd4e6f7f1967a7d8702424c12b4e2b2839a9fad6"
+    },
+    {
+      "bytes": 1748,
+      "path": "TreeDB/collections/native_catalog_identity.go",
+      "sha256": "76ec0bd78f4de39ee702ebc95400cfdd4071a26676a7160d6466e4014677f65b"
+    },
+    {
+      "bytes": 91880,
+      "path": "TreeDB/db/vacuum_online.go",
+      "sha256": "c4786f463487065e5fd5190941240c60c5d733a3bbd6e0df5d705865247bf50d"
+    },
+    {
+      "bytes": 219873,
+      "path": "TreeDB/db/db.go",
+      "sha256": "53f43cd2ccd5611eae203b19046900c3f1e486d6dc0d65134f0b7857c0ae64d1"
+    },
+    {
+      "bytes": 69450,
+      "path": "TreeDB/node/leaf.go",
+      "sha256": "93ea9c61dd932c632c115c1038e268935b5f3190bdf3e10455a73505478185a1"
+    },
+    {
+      "bytes": 16706,
+      "path": "TreeDB/profiles.go",
+      "sha256": "60e637ca9ad0493f5ebac36bf49ed18bbc2b4fe04c93aadbca25004e675c9742"
     }
-  ]
+  ],
+  "provenance": "Selected unchanged public vacuum, native catalog/capture and module inputs; exact pinned whole Git source is fetched separately, not universal compiler closure"
 }

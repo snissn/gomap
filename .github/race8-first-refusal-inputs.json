@@ -3,24 +3,24 @@
   "base_tree": "cab3eff3c3ab6a75aa30b60f6bc5cfbe84d82e22",
   "files": {
     ".github/race8-first-refusal-fixture/bindings.json": {
-      "bytes": 10398,
-      "sha256": "a77ca02d94b130481b4cec64e444a832e151d22bacf9ccf35cacd354065f3de8"
+      "bytes": 8601,
+      "sha256": "af5ab20e647592eef673e51381bc8295f5239a3eff7f75cba0749985e8efcfbe"
     },
     ".github/race8-first-refusal-fixture/controls.json": {
-      "bytes": 5250,
-      "sha256": "2b777425b94aee8ad4546f02f5663981c002ccce758db89437f1ae01ddbed477"
+      "bytes": 854,
+      "sha256": "fe214713455d28481c12e01ba5a60fe2cf47367b0053361021a244bab3444eed"
     },
     ".github/race8-first-refusal-fixture/dependencies.json": {
-      "bytes": 1399,
-      "sha256": "e8d8cb144e26069fc93e4346e51b7b8b9feccb998896040b7e5eaf8d88023623"
+      "bytes": 2168,
+      "sha256": "8a76fdc74431c6ca393d99cf3fb37dafa8fff2de7eb1826fcb31cf8a4a31deba"
     },
     ".github/race8-first-refusal-fixture/independent-review.md": {
-      "bytes": 1276,
-      "sha256": "30d9c2dfe8040c3873f988e305e64219bc3d614ca5b57f2f9f5daf27fbd01ec6"
+      "bytes": 2011,
+      "sha256": "ee439978aa27ec5bcce5a36c44d589d37c7e4039af265342f9f62d8a64f40fef"
     },
     ".github/race8-first-refusal-fixture/manifest.json": {
-      "bytes": 7892,
-      "sha256": "374251abecc89664553b213d14734118420f6b445372cb47a4df30409bedab6e"
+      "bytes": 7047,
+      "sha256": "fd55f142c1503b1338621d4198a30f617ab96265f5411e3bd8b6e1b69d1b32c1"
     },
     ".github/race8-first-refusal-fixture/overlay/TreeDB/caching/cow_basis_refusal_diagnostic.go": {
       "bytes": 823,
@@ -37,6 +37,10 @@
     ".github/race8-first-refusal-fixture/overlay/TreeDB/caching/db.go": {
       "bytes": 1432006,
       "sha256": "e40e325a39da1d3a85a17a10971adc7e1e530cc48eb076bb0ca2d44ebcd328f4"
+    },
+    ".github/race8-first-refusal-fixture/overlay/TreeDB/collections/native_basis_public_vacuum_activation_test.go": {
+      "bytes": 13696,
+      "sha256": "edfb01dd9fef7a58f640f76cf23de695baf38594434aaa735d372954b15eb83b"
     },
     ".github/race8-first-refusal-fixture/overlay/TreeDB/collections/native_basis_refresh.go": {
       "bytes": 13593,
@@ -107,20 +111,24 @@
       "sha256": "f2156e0fe5cde5cee3c6f3c4719b5c54d9ab97ba1db5f5fdba22f27a960d8778"
     },
     ".github/scripts/race8_first_refusal_events.py": {
-      "bytes": 20196,
-      "sha256": "067a78c9b81975aef0b39a79f59dcbd4667b94f75106b9e9d356974209cd66df"
+      "bytes": 24245,
+      "sha256": "d7f7b4344d2a21bb62a4cce4cd30a94c05ead48e57215e5f6d07af621ce245c8"
     },
     ".github/scripts/race8_first_refusal_hosted_controls.py": {
-      "bytes": 18902,
-      "sha256": "92138be8a0192238aeda499bb64d10231b1b01996942fc32577bfda71c7c3cf4"
+      "bytes": 18307,
+      "sha256": "6e20f651053c89b28db81b91d3f3eb4ffceb08da0d32d6d0acbac04fc37d6690"
     },
     ".github/scripts/test_race8_first_refusal_events.py": {
       "bytes": 17963,
       "sha256": "1af2c622c573d160d0dc746581d3c71cc25701ef3e1ad3736b25f4cd15521d6a"
     },
+    ".github/scripts/test_race8_public_vacuum_activation_events.py": {
+      "bytes": 7804,
+      "sha256": "fea02a4bd2f54d85c98241ec650c14aa6f6cb3bdeb5acadf3355b2c9cf88b953"
+    },
     ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml": {
-      "bytes": 4527,
-      "sha256": "0f65bda0db180e2a2a974777a1d0040f660ee920a0e5df9a2cd932b17ea3cd41"
+      "bytes": 4525,
+      "sha256": "389f7c7e247bff3b226138fa0e976dd9ab9405ef850df1eda8599f5262d96dac"
     },
     "scripts/ycsb_campaign_guard.py": {
       "bytes": 19548,
@@ -140,8 +148,8 @@
     }
   },
   "schema": "race8-first-refusal-fixed-inputs-v1",
-  "semantic_head": "402319455310dd8040e98903717da1d8144c7262",
-  "semantic_parent": "3db7d8a0e308e668a59f95791253336673fee794",
-  "semantic_tree": "ed46cd3173b8f841e14dc998474e3d1b0caafab4",
+  "semantic_head": "641a721077d71499eed545ef52caa1f0b81a384a",
+  "semantic_parent": "402319455310dd8040e98903717da1d8144c7262",
+  "semantic_tree": "254b4ec1b1996824274a9734e70796640bf9fe6d",
   "status": "SOURCE_ONLY_FINAL_INTEGRATION_REVIEW_AND_ROOT_ADMISSION_REQUIRED"
 }

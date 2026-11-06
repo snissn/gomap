@@ -16,16 +16,16 @@ import time
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent
-OWNER_MANIFEST = '374251abecc89664553b213d14734118420f6b445372cb47a4df30409bedab6e'
-OWNER_REVIEW = '30d9c2dfe8040c3873f988e305e64219bc3d614ca5b57f2f9f5daf27fbd01ec6'
+OWNER_MANIFEST = 'fd55f142c1503b1338621d4198a30f617ab96265f5411e3bd8b6e1b69d1b32c1'
+OWNER_REVIEW = 'ee439978aa27ec5bcce5a36c44d589d37c7e4039af265342f9f62d8a64f40fef'
 C = '15f1bcbdf13b9feacaffa6f635688b464c1208a5'
 C_TREE = 'cab3eff3c3ab6a75aa30b60f6bc5cfbe84d82e22'
-DIAGNOSTIC_HEAD = '402319455310dd8040e98903717da1d8144c7262'
-DIAGNOSTIC_TREE = 'ed46cd3173b8f841e14dc998474e3d1b0caafab4'
+DIAGNOSTIC_HEAD = '641a721077d71499eed545ef52caa1f0b81a384a'
+DIAGNOSTIC_TREE = '254b4ec1b1996824274a9734e70796640bf9fe6d'
 WHOLE_SECONDS = 1020
 
 
-EXPECTED_OVERLAYS = ('TreeDB/caching/cow_basis_refusal_diagnostic.go', 'TreeDB/caching/cow_basis_refusal_diagnostic_test.go', 'TreeDB/caching/cow_flush.go', 'TreeDB/caching/db.go', 'TreeDB/collections/native_basis_refresh.go', 'TreeDB/collections/native_basis_refusal_diagnostic_test.go', 'TreeDB/collections/native_json_read.go', 'TreeDB/collections/native_ordinary_concurrent_correctness_test.go', 'TreeDB/collections/native_semantic_adapter.go', 'TreeDB/db/native_basis_refusal_diagnostic.go', 'TreeDB/internal/valuelog/cow_basis_refusal_observer.go', 'TreeDB/internal/valuelog/cow_basis_refusal_observer_test.go', 'TreeDB/internal/valuelog/cow_reader.go', 'TreeDB/native_basis_refusal_diagnostic.go')
+EXPECTED_OVERLAYS = ('TreeDB/caching/cow_basis_refusal_diagnostic.go', 'TreeDB/caching/cow_basis_refusal_diagnostic_test.go', 'TreeDB/caching/cow_flush.go', 'TreeDB/caching/db.go', 'TreeDB/collections/native_basis_refresh.go', 'TreeDB/collections/native_basis_refusal_diagnostic_test.go', 'TreeDB/collections/native_basis_public_vacuum_activation_test.go', 'TreeDB/collections/native_json_read.go', 'TreeDB/collections/native_ordinary_concurrent_correctness_test.go', 'TreeDB/collections/native_semantic_adapter.go', 'TreeDB/db/native_basis_refusal_diagnostic.go', 'TreeDB/internal/valuelog/cow_basis_refusal_observer.go', 'TreeDB/internal/valuelog/cow_basis_refusal_observer_test.go', 'TreeDB/internal/valuelog/cow_reader.go', 'TreeDB/native_basis_refusal_diagnostic.go')
 
 def need(ok, message):
     if not ok:
@@ -45,7 +45,7 @@ def authority():
          os.environ.get('GITHUB_REPOSITORY')=='snissn/gomap' and
          os.environ.get('GITHUB_ACTOR_ID')=='1981537' and
          os.environ.get('GITHUB_RUN_ATTEMPT')=='1' and
-         os.environ.get('GITHUB_REF')=='refs/heads/diagnostic/race8-first-refusal-controls-01', 'fixed hosted authority')
+         os.environ.get('GITHUB_REF')=='refs/heads/diagnostic/race8-public-vacuum-activation-01', 'fixed hosted authority')
     head=os.environ.get('REVIEWED_HEAD','')
     need(re.fullmatch('[0-9a-f]{40}',head) is not None and
          head==os.environ.get('GITHUB_SHA')==os.environ.get('WORKFLOW_COMMIT'), 'exact reviewed harness')
@@ -60,7 +60,9 @@ def authority():
     need(all(admission.get(k)==v for k,v in required.items()),'ROOT controls-only admission')
     need(re.fullmatch('[0-9a-f]{64}',admission.get('independent_binding_review_sha256','')) is not None,
          'independent binding review missing')
-    need(OWNER_MANIFEST is not None and OWNER_REVIEW is not None, 'NOT_READY: exact precision successor seal/review pending')
+    need(OWNER_MANIFEST is not None and OWNER_REVIEW is not None and
+         DIAGNOSTIC_HEAD is not None and DIAGNOSTIC_TREE is not None,
+         'NOT_READY: exact activation source seal/review pending')
     return admission
 
 
@@ -74,7 +76,7 @@ def authenticate():
     need(sha(REPO/'.github/race8-first-refusal-fixture/manifest.json')==OWNER_MANIFEST,'owner fixture manifest')
     need(sha(REPO/'.github/race8-first-refusal-fixture/independent-review.md')==OWNER_REVIEW,'owner independent source review')
     bindings=json.loads((REPO/'.github/race8-first-refusal-fixture/bindings.json').read_text())
-    need(bindings['head']==DIAGNOSTIC_HEAD and bindings['tree']==DIAGNOSTIC_TREE and bindings['base']==C, 'exact semantic diagnostic/base binding')
+    need(bindings['head']==DIAGNOSTIC_HEAD and bindings['tree']==DIAGNOSTIC_TREE and bindings['historical_base']==C, 'exact semantic diagnostic/base binding')
     return manifest
 
 
@@ -87,7 +89,7 @@ def load(name,path):
 
 
 def prepare_normal_controls(go, overlay, source, root, run, write):
-    """Compile all three fixed packages within one shared preparation budget; never execute the resulting ELFs."""
+    """Compile the fixed activation package within the existing preparation budget; never execute this ELF."""
     started=time.monotonic()
     deadline=started+240
     directory=root/'tmp'/'prepared-normal'
@@ -96,7 +98,7 @@ def prepare_normal_controls(go, overlay, source, root, run, write):
              'started_monotonic':started,'test_execution':False,'binaries':[]}
     target=root/'output'/'normal-preparation.json'
     write(target,receipt)
-    for package in ('internal/valuelog','caching','collections'):
+    for package in ('collections',):
         seconds=deadline-time.monotonic()
         need(seconds>0,'aggregate normal preparation deadline exhausted')
         binary=directory/(package.replace('/','-')+'.test')
@@ -252,44 +254,34 @@ def main():
             else:
                 need(not original.exists(),'new fixture helper already exists: '+str(name))
             replacements[str(original)]=str(path)
-        need(len(replacements)==14 and set(str(Path(p).relative_to(source)) for p in replacements)==set(EXPECTED_OVERLAYS),'exact fourteen replacements required')
+        need(len(replacements)==15 and set(str(Path(p).relative_to(source)) for p in replacements)==set(EXPECTED_OVERLAYS),'exact fifteen replacements required')
         overlay=out/'focused-C.overlay.json'
         write(overlay,{'Replace':replacements})
         formatted=run('gofmt',[gofmt,'-l',*sorted(replacements.values())],30)
         need(not formatted.strip(),'observer source formatting failed; do not continue')
-        run('pure-controls',[sys.executable,'-B',str(HERE/'test_race8_first_refusal_events.py')],30)
+        run('pure-controls',[sys.executable,'-B','-m','unittest',
+            'test_race8_first_refusal_events','test_race8_public_vacuum_activation_events'],30,cwd=HERE)
         prepare_normal_controls(go,overlay,source,root,run,write)
         need('TREEDB_NATIVE_CORRECTNESS_100K' not in env, '100k opt-in must be unset; no override')
-        write(out/'witness-context.json',{'schema':'race8-original-witness-context-v1',
+        write(out/'activation-context.json',{'schema':'race8-public-vacuum-activation-context-v1',
              'observed_opt_in_present':'TREEDB_NATIVE_CORRECTNESS_100K' in env,
-             'rows':256,'mode':'race','selector':events.WITNESS_SELECTOR,'count':1,
+             'api':'VacuumIndexOnline','modes':['normal','race'],'selector':events.ACTIVATION_SELECTOR,'count':1,
              'profiles':False,'context_scope':'fixed child environment after explicit opt-in absence refusal'})
         common=[go,'test','-json','-tags=treedb_test','-overlay='+str(overlay),'-count=1','-p=1','-mod=readonly',
-                '-run',events.CONTROLS_SELECTOR]
+                '-run',events.ACTIVATION_SELECTOR]
         for mode,seconds,flags,deadline in (('normal',180,[], '150s'),('race',600,['-race'],'570s')):
-            run(mode,common+flags+['-timeout='+deadline,'./TreeDB/internal/valuelog','./TreeDB/caching','./TreeDB/collections'],seconds,cwd=source,allow_nonzero=True)
+            run(mode,common+flags+['-timeout='+deadline,'./TreeDB/collections'],seconds,cwd=source,allow_nonzero=True)
             control_exit=rows[-1]['exit']
-            inventory=events.validate(out/(mode+'.stdout.log'),mode='controls',go_exit=control_exit)
+            inventory=events.validate(out/(mode+'.stdout.log'),mode='activation',go_exit=control_exit)
             write(out/(mode+'-inventory.json'),inventory)
             if control_exit != 0:
                 raise SystemExit(control_exit)
-            need(inventory['status']=='PASS','platform skips are retained but do not qualify full fixture coverage')
-        run('witness',common[:common.index('-run')]+['-race','-run',events.WITNESS_SELECTOR,'-timeout=570s','./TreeDB/collections'],600,cwd=source,allow_nonzero=True)
-        witness_exit=rows[-1]['exit']
-        try:
-            witness=events.validate(out/'witness.stdout.log',mode='witness',go_exit=witness_exit)
-        except Exception as parser_error:
-            write(out/'witness-inventory.json',{'status':'PARSER_FAILURE','error_class':type(parser_error).__name__,'original_exit':witness_exit})
-            if witness_exit != 0:
-                raise SystemExit(witness_exit) from parser_error
-            raise
-        write(out/'witness-inventory.json',witness)
-        if witness_exit != 0:
-            raise SystemExit(witness_exit)  # Preserve the original witness exit after receipt write.
-        need(witness['status']=='PASS','original witness incomplete')
-        write(out/'completion.json',{'status':'SOURCE_CONTROLS_PASS_CAPTURE_NOT_ADMITTED',
-             'normal':{'tops':13,'outcomes':44,'leaves':36},'race':{'tops':13,'outcomes':44,'leaves':36},
-             'witness':{'mode':'race','tops':1,'outcomes':1,'leaves':1,'invocations':1,'rows':256,'meaning':'NON_REPRODUCTION_ONLY'},
+            need(inventory['status']=='PASS' and inventory.get('activation_verified') is True,
+                 'public native-owner activation incomplete; no-op and skips do not qualify')
+        write(out/'completion.json',{'status':'PUBLIC_VACUUM_ACTIVATION_CONTROLS_PASS_NOT_PRODUCT_ACCEPTANCE',
+             'normal':{'tops':1,'outcomes':1,'leaves':1},'race':{'tops':1,'outcomes':1,'leaves':1},
+             'original_witness_repeated':False,
+             'meaning':'PUBLIC_CALLSITE_COVERAGE_ONLY_NOT_HISTORICAL_CAUSE_OR_REPAIR',
              'candidate_only':True,'product_capture':False,'outer_guard_result_required':True})
     except BaseException as caught:
         error=caught

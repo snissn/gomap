@@ -14,7 +14,7 @@
     "Bounded maintenance comparison is a manually granted diagnostic on fixed baseline/candidate products; no forecast starts it or establishes cost, M0 or native acceptance.",
     "The single-use PR5397 timing decision preserves original FAILs and accepts only two exact bound timing predicates; separate current-head M0, security/review and real platform/normal/race qualification remain merge obligations. No inherited exception or general threshold change."
   ],
-  "discovery_source_sha256": "8833c086fa21ab1fd56b5ffbcceb06106984a6efeae8f96e7478a8ec1ab05903",
+  "discovery_source_sha256": "0f19c427feb71bea41ea295d5fc6d0cafcf7976fdd1a05e637d5a00f7cc5ee0b",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
@@ -2393,7 +2393,7 @@
           }
         }
       },
-      "git_blob": "e11137e2b0e8c72e1bfab66e0ae731520705f2ca",
+      "git_blob": "1c01459b52da3735cc1e82693e6c3895bf5650a6",
       "jobs": {
         "diagnostic": {
           "checkout": [
@@ -2407,7 +2407,7 @@
           ],
           "commands": [
             {
-              "command_sha256": "a08600a138c86b1d5062fb94e5cca5b5bfd701ecff43432fa66b18bf6527d9f6",
+              "command_sha256": "25eaa60b7b1f20b058c6252bb89d3e4e44f56f54473ed3be45f00773e062b2b2",
               "entrypoint": ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml:29",
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
               "name": "Authenticate fresh controls-only dispatch"
@@ -2434,7 +2434,7 @@
           "runs_on": "ubuntu-24.04"
         }
       },
-      "sha256": "0f65bda0db180e2a2a974777a1d0040f660ee920a0e5df9a2cd932b17ea3cd41"
+      "sha256": "389f7c7e247bff3b226138fa0e976dd9ab9405ef850df1eda8599f5262d96dac"
     },
     "treedb-tests.yml": {
       "coverage": "existing execution only; triggers/path filters are unchanged",

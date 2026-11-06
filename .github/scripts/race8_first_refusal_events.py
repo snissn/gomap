@@ -17,8 +17,13 @@ CONTROLS = {PREFIX + pkg: {name for top, children in tests.items()
              for name in [top, *(top + '/' + child for child in children)]}
             for pkg, tests in CONTROL_CHILDREN.items()}
 WITNESS = {PREFIX + 'collections': {TOP}}
+ACTIVATION_TOP = 'TestNativeBasisPublicVacuumActivationV1'
+ACTIVATION_SELECTOR = '^' + ACTIVATION_TOP + '$'
+ACTIVATION = {PREFIX + 'collections': {ACTIVATION_TOP}}
 CHILDREN = {TOP}  # The original witness has one top and no subtests.
 MARKER = 'basis-first-refusal: '
+ACTIVATION_BEFORE_MARKER = 'basis-vacuum-before: '
+ACTIVATION_AFTER_MARKER = 'basis-vacuum-after: '
 MAX_INPUT_BYTES = 32 * 1024 * 1024
 TEST_EVENT_KEYS = {'Time', 'Action', 'Package', 'Test', 'Elapsed', 'Output', 'FailedBuild'}
 BUILD_EVENT_KEYS = {'Action', 'ImportPath', 'Output'}
@@ -134,14 +139,17 @@ def validate(path, mode, go_exit):
               'accepted': False, 'issues': [], 'events': {}, 'packages': {}, 'receipts': {},
               'diagnostic_output': [], 'non_event_lines': [], 'literal_failures': [],
               'source_scope': '3db7d8-fixed-original-fixture'}
-    if mode not in ('controls', 'witness') or type(go_exit) is not int or not -255 <= go_exit <= 255:
+    if mode not in ('controls', 'witness', 'activation') or type(go_exit) is not int or not -255 <= go_exit <= 255:
         result['issues'].append({'label': 'invalid_fixed_mode_or_go_exit'})
         return result
-    expected = CONTROLS if mode == 'controls' else WITNESS
+    expected = CONTROLS if mode == 'controls' else ACTIVATION if mode == 'activation' else WITNESS
+    receipt_names = {ACTIVATION_TOP} if mode == 'activation' else CHILDREN
     counts = {pkg: {name: {'run': 0, 'pass': 0, 'fail': 0, 'skip': 0} for name in sorted(names)}
               for pkg, names in expected.items()}
     packages = {pkg: {'start': 0, 'pass': 0, 'fail': 0, 'skip': 0} for pkg in expected}
     result['events'], result['packages'] = counts, packages
+    if mode == 'activation':
+        result['activation_interval'] = {}
     event_errors, receipt_errors, incomplete = [], [], []
     compile_failure = False
     race_warning = False
@@ -226,8 +234,31 @@ def validate(path, mode, go_exit):
                 packages[pkg][action] += 1
             if action == 'fail':
                 result['literal_failures'].append({'line': number, 'Package': pkg, 'Test': test})
+            interval_markers = [(name, marker) for name, marker in
+                                (('before', ACTIVATION_BEFORE_MARKER), ('after', ACTIVATION_AFTER_MARKER))
+                                if marker in output]
+            if interval_markers:
+                _need(mode == 'activation' and action == 'output'
+                      and pkg == PREFIX + 'collections' and test == ACTIVATION_TOP
+                      and len(interval_markers) == 1 and MARKER not in output,
+                      'interval_receipt_outside_fixed_activation')
+                name, marker = interval_markers[0]
+                interval = result['activation_interval']
+                _need(output.count(marker) == 1 and name not in interval,
+                      'duplicate_interval_receipt')
+                _need((name == 'before' and not interval)
+                      or (name == 'after' and set(interval) == {'before'}),
+                      'interval_receipt_order')
+                text = output.split(marker, 1)[1].strip()
+                item = {'line': number, 'raw': text, 'valid': False}
+                interval[name] = item
+                try:
+                    item.update(receipt(text))
+                    item['valid'] = True
+                except (ValueError, TypeError, KeyError, RecursionError):
+                    receipt_errors.append({'line': number, 'label': 'invalid_fixed_interval_receipt'})
             if MARKER in output:
-                _need(mode == 'witness' and pkg == PREFIX + 'collections' and test in CHILDREN and output.count(MARKER) == 1,
+                _need(mode in ('witness', 'activation') and pkg == PREFIX + 'collections' and test in receipt_names and output.count(MARKER) == 1,
                       'receipt_outside_original_witness')
                 _need(test not in result['receipts'], 'duplicate_original_receipt')
                 text = output.split(MARKER, 1)[1].strip()
@@ -251,8 +282,10 @@ def validate(path, mode, go_exit):
                           for group in counts.values() for v in group.values())
     complete_packages = all(v['start'] == 1 and v['pass'] + v['fail'] == 1 and v['skip'] == 0 for v in packages.values())
     all_pass = complete_events and complete_packages and all(v['fail'] == 0 for group in counts.values() for v in group.values()) and all(v['pass'] == 1 for v in packages.values())
-    if mode == 'witness' and set(result['receipts']) != CHILDREN:
+    if mode in ('witness', 'activation') and set(result['receipts']) != receipt_names:
         incomplete.append('missing_original_scalar_receipt')
+    if mode == 'activation' and set(result['activation_interval']) != {'before', 'after'}:
+        incomplete.append('missing_public_call_interval_receipt')
     has_skips = any(v['skip'] for group in counts.values() for v in group.values()) or any(v['skip'] for v in packages.values())
     if not complete_events or not complete_packages:
         incomplete.append('missing_or_nonterminal_named_events')
@@ -286,7 +319,7 @@ def validate(path, mode, go_exit):
         result['status'] = 'TIMEOUT_OR_INTERRUPTED'
     elif compile_failure:
         result['status'] = 'COMPILE_FAILURE'
-    elif mode == 'controls' and (go_exit != 0 or not all_pass or has_skips):
+    elif mode in ('controls', 'activation') and (go_exit != 0 or not all_pass or has_skips):
         result['status'] = 'CONTROL_FAILURE'
     elif incomplete or has_skips:
         result['status'] = 'INCOMPLETE_DIAGNOSTIC_EVIDENCE'
@@ -299,6 +332,34 @@ def validate(path, mode, go_exit):
         result['status'] = 'FAILED_DIAGNOSTIC_EVIDENCE'
     else:
         result['status'] = 'INCONSISTENT_EXIT_OR_EVENT_EVIDENCE'
+    if mode == 'activation':
+        item = result['receipts'].get(ACTIVATION_TOP, {})
+        snap = item.get('receipt', {})
+        interval = result['activation_interval']
+        before = interval.get('before', {}).get('receipt', {})
+        after = interval.get('after', {}).get('receipt', {})
+        stages = (0, 1, 7)  # Actual refresh, descriptor and leaf-read entry/completion.
+        valid_samples = (item.get('valid') is True
+                         and all(interval.get(name, {}).get('valid') is True for name in ('before', 'after')))
+        clean_samples = (valid_samples and all(sample.get('First') == 0
+                         and sample.get('Missing') is False and sample.get('Overflow') is False
+                         for sample in (snap, before, after)))
+        deltas = {}
+        if valid_samples:
+            deltas = {key: after[key] - before[key] for key in ('Calls', 'Completed')}
+            deltas.update({key: [after[key][i] - before[key][i] for i in range(8)]
+                           for key in ('Entered', 'Finished')})
+        result['activation_scalar_deltas'] = deltas
+        positive = (clean_samples and deltas['Calls'] > 0 and deltas['Completed'] > 0
+                    and all(deltas[key][i] > 0 for key in ('Entered', 'Finished') for i in stages))
+        result['activation_verified'] = positive and result['status'] == 'PASS'
+        result['meaning'] = 'PUBLIC_CALLSITE_COVERAGE_ONLY_NOT_HISTORICAL_CAUSE_OR_REPAIR'
+        # Only bracketing deltas qualify; final cumulative values can reflect setup/Close.
+        # These are independent scalar samples, not a count-equality or drain proof.
+        # Actual physical work/held reads/lifecycle must additionally pass in Go.
+        if result['status'] == 'PASS' and not positive:
+            result['status'] = 'INCOMPLETE_ACTIVATION'
+            result['issues'].append({'label': 'missing_positive_public_callsite_activation'})
     result['accepted'] = result['status'] == 'PASS'
     return result
 
@@ -306,7 +367,7 @@ def validate(path, mode, go_exit):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--path', required=True)
-    parser.add_argument('--mode', choices=('controls', 'witness'), required=True)
+    parser.add_argument('--mode', choices=('controls', 'witness', 'activation'), required=True)
     parser.add_argument('--go-exit', type=int, required=True)
     parser.add_argument('--summary', required=True)
     args = parser.parse_args()
