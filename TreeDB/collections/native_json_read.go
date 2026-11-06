@@ -396,18 +396,26 @@ func (r *NativeJSONRead) loadLeaf(ptr page.LeafLogPtr, dst []byte) ([]byte, erro
 // this synchronous read. Maintenance descriptor reads reuse the same decoder,
 // admission and integrity policy without constructing another capture authority.
 func readNativeSnapshotLeaf(snapshot *backenddb.Snapshot, allocator backenddb.NativeSemanticAllocator, ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
-	return readNativeSnapshotLeafWithAdmission(snapshot, allocator.Limits().MaxInFlightBytes, func(charge uint64) (func(), error) {
+	return readNativeMaintenanceSnapshotLeaf(snapshot, allocator, ptr, dst, nil)
+}
+
+func readNativeMaintenanceSnapshotLeaf(snapshot *backenddb.Snapshot, allocator backenddb.NativeSemanticAllocator, ptr page.LeafLogPtr, dst []byte, leaves backenddb.NativeMaintenanceLeafReader) ([]byte, error) {
+	return readNativeSnapshotLeafWithMaintenanceAdmission(snapshot, allocator.Limits().MaxInFlightBytes, func(charge uint64) (func(), error) {
 		lease, err := allocator.AdmitNativeBytes(charge)
 		if err != nil {
 			return nil, err
 		}
 		return lease.Close, nil
-	}, ptr, dst)
+	}, ptr, dst, leaves)
 }
 
 // Internal synchronous admission may spend a containing preadmitted build
 // workspace. It cannot reenter application code or outlive this read.
 func readNativeSnapshotLeafWithAdmission(snapshot *backenddb.Snapshot, limit uint64, admit func(uint64) (func(), error), ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
+	return readNativeSnapshotLeafWithMaintenanceAdmission(snapshot, limit, admit, ptr, dst, nil)
+}
+
+func readNativeSnapshotLeafWithMaintenanceAdmission(snapshot *backenddb.Snapshot, limit uint64, admit func(uint64) (func(), error), ptr page.LeafLogPtr, dst []byte, leaves backenddb.NativeMaintenanceLeafReader) ([]byte, error) {
 	f, _, err := snapshot.PinnedValueLogFile(ptr.ValuePtr().FileID)
 	if err != nil {
 		return nil, err
@@ -419,6 +427,9 @@ func readNativeSnapshotLeafWithAdmission(snapshot *backenddb.Snapshot, limit uin
 	var sizes valuelog.COWDecoderAllocationSizes
 	if shape.Compressed {
 		if shape.DictID != 0 {
+			if leaves != nil {
+				return leaves.ReadNativeMaintenanceDictionaryLeaf(snapshot, ptr, shape, dst)
+			}
 			return nil, valuelog.ErrCOWReadUnsupported
 		}
 		sizes, err = valuelog.COWBlockDecoderRetentionSizes(shape.Codec, shape.RawBytes, shape.PayloadBytes())

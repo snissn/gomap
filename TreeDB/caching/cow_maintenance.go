@@ -36,8 +36,10 @@ func (db *DB) refreshCOWBackendBasis() error {
 	if err != nil {
 		return backendMaintenanceError("capture COW basis", err)
 	}
+	defer db.releaseCOWBasisOnUnwind(&basis)
 	old, err := db.installCOWBasis(basis, nil)
 	err = joinCOWCleanupError(err, basis.release())
+	basis = nil
 	if err != nil {
 		return backendMaintenanceError("install COW basis", err)
 	}
@@ -46,6 +48,20 @@ func (db *DB) refreshCOWBackendBasis() error {
 	}
 	db.cow.refreshRequired.Store(false)
 	return backendMaintenanceError("drain previous COW basis", err)
+}
+
+// Original capture ownership also survives a provider panic/Goexit. The
+// containing basis admission covers these fixed deferred-call cells. Normal
+// paths consume and clear the slot explicitly, preserving their error order.
+func (db *DB) releaseCOWBasisOnUnwind(slot **cowBackendBasis) {
+	basis := *slot
+	*slot = nil
+	if basis != nil {
+		if err := basis.release(); err != nil {
+			db.poisonNativeHandoff(err)
+			db.retainOriginalCleanupError(err)
+		}
+	}
 }
 
 func (db *DB) finishCOWBackendMaintenance(fnErr error) error {

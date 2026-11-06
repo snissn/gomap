@@ -73,4 +73,17 @@ func (e *nativeEngineVersion) PrepareBasisRefresh(before, after *backenddb.Snaps
 	return next, err
 }
 
+func (e *nativeEngineVersion) PrepareBasisRefreshWithMaintenanceLeaves(before, after *backenddb.Snapshot, leaves backenddb.NativeMaintenanceLeafReader) (backenddb.NativeSemanticState, error) {
+	next, err := prepareNativeEngineBasisRefreshWithMaintenanceLeaves(e, before, after, leaves)
+	if err != nil {
+		err = fmt.Errorf("collections: native basis refresh: %w", err)
+	}
+	if next == nil {
+		return nil, err
+	}
+	return next, err
+}
+
+var _ backenddb.NativeSemanticMaintenanceBasisRefresher = (*nativeEngineVersion)(nil)
+
 var _ backenddb.NativeSemanticBasisRefresher = (*nativeEngineVersion)(nil)

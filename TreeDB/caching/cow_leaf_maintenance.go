@@ -258,6 +258,7 @@ func (db *DB) adoptPrivateCOWLeafBasis(original backenddb.StateToken) error {
 	}
 	basis, err := db.cow.captureBackendBasis(db.backend.(backendSnapshotProvider))
 	if err == nil {
+		defer db.releaseCOWBasisOnUnwind(&basis)
 		next, ok := basis.snapshot.StateToken()
 		if !ok || next.AppliedCommandLSN != original.AppliedCommandLSN || next.MaxEntryRevision != original.MaxEntryRevision {
 			err = fmt.Errorf("private COW leaf maintenance changed logical frontier: %w", backenddb.ErrRootPublicationBasisMismatch)
@@ -270,6 +271,7 @@ func (db *DB) adoptPrivateCOWLeafBasis(original backenddb.StateToken) error {
 			}
 		}
 		err = joinCOWCleanupError(err, basis.release())
+		basis = nil
 	}
 	if err == nil && db.valueLogReader != nil {
 		err = db.valueLogReader.Refresh()

@@ -69,7 +69,7 @@ func (c *cowCache) captureBackendBasis(provider backendSnapshotProvider) (*cowBa
 // Allocation is admitted before construction; cutMu only performs the swap.
 func (c *cowCache) prepareCOWBasisInstall() (*cowReadCut, error) {
 	shards, frozen := len(c.writers), c.budget.Limits().MaxSources
-	lease, err := c.maintenance.AcquireExternal(cowCutCharge(shards, frozen))
+	lease, err := c.maintenance.AcquireExternal(cowCutCharge(shards, frozen) + memtable.COWAllocationCharge(6*uint64(unsafe.Sizeof(uintptr(0)))))
 	if err != nil {
 		return nil, err
 	}
@@ -85,10 +85,19 @@ func (db *DB) installCOWBasis(basis *cowBackendBasis, covered *cowReadCut) (*cow
 	if err != nil {
 		return nil, err
 	}
+	finished := false
+	defer func() {
+		if !finished {
+			refund := c.releasePrivateCOWBasisInstall(next)
+			next = nil
+			refund.Close()
+		}
+	}()
 	if err = basis.snapshot.ActivatePrimaryMetadataProducer(); err != nil {
 		refund := c.releasePrivateCOWBasisInstall(next)
 		next = nil
 		refund.Close()
+		finished = true
 		return nil, err
 	}
 	old, _, err := db.installPreparedCOWBasis(basis, covered, next)
@@ -97,6 +106,7 @@ func (db *DB) installCOWBasis(basis *cowBackendBasis, covered *cowReadCut) (*cow
 		next = nil
 		refund.Close()
 	}
+	finished = true
 	return old, err
 }
 
@@ -116,6 +126,17 @@ func (c *cowCache) releasePrivateCOWBasisInstall(next *cowReadCut) *memtable.COW
 
 func (db *DB) installPreparedCOWBasis(basis *cowBackendBasis, covered, next *cowReadCut) (*cowReadCut, bool, error) {
 	c := db.cow
+	var leaves *cowMaintenanceLeafScope
+	if covered == nil {
+		var err error
+		leaves, err = db.prepareCOWMaintenanceLeaves()
+		if err != nil {
+			return nil, false, err
+		}
+		// Registered before Unlock: queue transfer follows gate release even
+		// on panic/Goexit. The existing worker owns checked physical cleanup.
+		defer c.retireCOWMaintenanceLeaves(&leaves)
+	}
 	c.writerMu.Lock()
 	defer c.writerMu.Unlock()
 	old := c.cut
@@ -155,12 +176,13 @@ func (db *DB) installPreparedCOWBasis(basis *cowBackendBasis, covered, next *cow
 		captured = covered.frozenSemanticRootSet
 	}
 	if covered == nil {
+		leaves.before, leaves.after = old.basis.snapshot, basis.snapshot
 		// Maintenance changed only the physical basis. It has no captured build
 		// ledger and cannot consume a logical source or manufacture coverage.
 		// Adopt each private partial before checking err; installCOWBasis releases
 		// it through original cleanup only after this writer gate is dropped.
 		var err error
-		next.semanticRootSet, err = refreshCOWSemanticBasis(old.semanticRootSet, old.basis.snapshot, basis.snapshot)
+		next.semanticRootSet, err = refreshCOWSemanticBasisWithMaintenanceLeaves(old.semanticRootSet, old.basis.snapshot, basis.snapshot, leaves)
 		if err != nil {
 			db.poisonNativeHandoff(err)
 			return nil, true, err
@@ -171,7 +193,7 @@ func (db *DB) installPreparedCOWBasis(basis *cowBackendBasis, covered, next *cow
 				next.frozenSemanticRootSet.Retain()
 			}
 		} else {
-			next.frozenSemanticRootSet, err = refreshCOWSemanticBasis(old.frozenSemanticRootSet, old.basis.snapshot, basis.snapshot)
+			next.frozenSemanticRootSet, err = refreshCOWSemanticBasisWithMaintenanceLeaves(old.frozenSemanticRootSet, old.basis.snapshot, basis.snapshot, leaves)
 			if err != nil {
 				db.poisonNativeHandoff(err)
 				return nil, true, err
@@ -246,6 +268,10 @@ func (db *DB) installPreparedCOWBasis(basis *cowBackendBasis, covered, next *cow
 // equivalent physical rebinding; retaining an unknown descriptor can leave its
 // scalar roots referring to the wrong Snapshot after rewrite/vacuum.
 func refreshCOWSemanticBasis(state backenddb.NativeSemanticState, before, after *backenddb.Snapshot) (backenddb.NativeSemanticState, error) {
+	return refreshCOWSemanticBasisWithMaintenanceLeaves(state, before, after, nil)
+}
+
+func refreshCOWSemanticBasisWithMaintenanceLeaves(state backenddb.NativeSemanticState, before, after *backenddb.Snapshot, leaves backenddb.NativeMaintenanceLeafReader) (backenddb.NativeSemanticState, error) {
 	if state == nil {
 		return nil, nil
 	}
@@ -253,7 +279,13 @@ func refreshCOWSemanticBasis(state backenddb.NativeSemanticState, before, after 
 	if !ok {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
-	next, err := refresher.PrepareBasisRefresh(before, after)
+	var next backenddb.NativeSemanticState
+	var err error
+	if scoped, ok := state.(backenddb.NativeSemanticMaintenanceBasisRefresher); leaves != nil && ok {
+		next, err = scoped.PrepareBasisRefreshWithMaintenanceLeaves(before, after, leaves)
+	} else {
+		next, err = refresher.PrepareBasisRefresh(before, after)
+	}
 	if err == nil && next == nil {
 		err = rootpublication.ErrPublisherProtocol
 	}
