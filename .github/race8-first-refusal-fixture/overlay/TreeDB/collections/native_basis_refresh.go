@@ -33,6 +33,7 @@ func (s *nativeBasisRefreshScratch) readBeforeLeaf(ptr page.LeafLogPtr, dst []by
 func (s *nativeBasisRefreshScratch) readAfterLeaf(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
 	return readNativeSnapshotLeaf(s.after, s.allocator, ptr, dst)
 }
+
 // This view borrows the original scratch synchronously. Its method value is
 // consumed only by the existing non-retaining point traversal. It is neither
 // stored in the observer nor added to the charged scratch allocation. Hosted

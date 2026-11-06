@@ -1,156 +1,156 @@
 {
-  "acceptance_owner_thread": "01a18e7c-8c23-7fd2-8d55-b0486d938cd3",
   "base": "15f1bcbdf13b9feacaffa6f635688b464c1208a5",
   "base_tree": "cab3eff3c3ab6a75aa30b60f6bc5cfbe84d82e22",
   "delta_paths": [
-    "TreeDB/internal/valuelog/cow_basis_refusal_observer.go",
-    "TreeDB/internal/valuelog/cow_basis_refusal_observer_test.go",
-    "TreeDB/internal/valuelog/cow_reader.go"
+    "TreeDB/caching/db.go",
+    "TreeDB/collections/native_basis_refresh.go"
   ],
   "files": [
     {
-      "delta_preimage_sha256": null,
+      "changed_from_parent": false,
       "new_file": true,
+      "parent_preimage_sha256": "397f1e6fa45488dff7e2d3ce323a5bcfffdc54230782ab1c3f760f9a604db58a",
       "path": "TreeDB/caching/cow_basis_refusal_diagnostic.go",
       "postimage_bytes": 823,
       "postimage_git_blob": "e53e3f18a9dfee2ce35d45a5bfc887a63deb3809",
       "postimage_sha256": "397f1e6fa45488dff7e2d3ce323a5bcfffdc54230782ab1c3f760f9a604db58a",
-      "preimage_bytes": null,
       "preimage_sha256": null
     },
     {
-      "delta_preimage_sha256": null,
+      "changed_from_parent": false,
       "new_file": true,
+      "parent_preimage_sha256": "4712d8664cdf6f5212dce5f689a191f00f5336f01a4b63d47b914187589d1737",
       "path": "TreeDB/caching/cow_basis_refusal_diagnostic_test.go",
       "postimage_bytes": 4140,
       "postimage_git_blob": "c6e5e0c95a406ceb9bd2402bc4ca6a97928f68ae",
       "postimage_sha256": "4712d8664cdf6f5212dce5f689a191f00f5336f01a4b63d47b914187589d1737",
-      "preimage_bytes": null,
       "preimage_sha256": null
     },
     {
-      "delta_preimage_sha256": null,
+      "changed_from_parent": false,
       "new_file": false,
+      "parent_preimage_sha256": "58b9a83165f22611f031f30eb07a920aba47a677864f9edfc7728665063278fe",
       "path": "TreeDB/caching/cow_flush.go",
       "postimage_bytes": 22211,
       "postimage_git_blob": "f8da3a23f8a04264b9d0aa4049cf5450b9077412",
       "postimage_sha256": "58b9a83165f22611f031f30eb07a920aba47a677864f9edfc7728665063278fe",
-      "preimage_bytes": 21227,
       "preimage_sha256": "97f3c3930a75ca731613f89892a56d6331ac7c8032ab1e71415ea895daf4308f"
     },
     {
-      "delta_preimage_sha256": null,
+      "changed_from_parent": true,
       "new_file": false,
+      "parent_preimage_sha256": "05176a2842480f5d65f3d377a3b973219fc4be6da7fe72a84971562726c89d38",
       "path": "TreeDB/caching/db.go",
-      "postimage_bytes": 1432007,
-      "postimage_git_blob": "1de5bc7d599738cb5d568fd52b2c17f1ce2d8451",
-      "postimage_sha256": "05176a2842480f5d65f3d377a3b973219fc4be6da7fe72a84971562726c89d38",
-      "preimage_bytes": 1431850,
+      "postimage_bytes": 1432006,
+      "postimage_git_blob": "39ffd04606e306d0425f78cc18d05ed1e6aa0cb4",
+      "postimage_sha256": "e40e325a39da1d3a85a17a10971adc7e1e530cc48eb076bb0ca2d44ebcd328f4",
       "preimage_sha256": "f9740bc2e1b9ac0eb668aa7d5a0d054211133e0f710065cb7710fd0ec8dad438"
     },
     {
-      "delta_preimage_sha256": null,
+      "changed_from_parent": true,
       "new_file": false,
+      "parent_preimage_sha256": "c48d40648933fc46db6606bb1592541ab86d5283d097aa850a4eb0c65e67547e",
       "path": "TreeDB/collections/native_basis_refresh.go",
-      "postimage_bytes": 13592,
-      "postimage_git_blob": "58defec731eb301d1bff6c654277e2dd2235f94b",
-      "postimage_sha256": "c48d40648933fc46db6606bb1592541ab86d5283d097aa850a4eb0c65e67547e",
-      "preimage_bytes": 11326,
+      "postimage_bytes": 13593,
+      "postimage_git_blob": "a5fd6ef6b6b2b7bd3e974239195d33b416303f65",
+      "postimage_sha256": "85fd212eb16dea3c594d8be45dbabd4e26e2fb4639343f9625d7b36f138b6a3f",
       "preimage_sha256": "b6e64236b568d48fa87a68a6cebf30d1aa9c32dfa492209fa3b9d449fbed4ba1"
     },
     {
-      "delta_preimage_sha256": null,
+      "changed_from_parent": false,
       "new_file": true,
+      "parent_preimage_sha256": "cab416aba723a692a738baca352e456cc9d061d5b65f817e09cdc029fbd724d6",
       "path": "TreeDB/collections/native_basis_refusal_diagnostic_test.go",
       "postimage_bytes": 4334,
       "postimage_git_blob": "1921b485f87cbb236c2aafe51495ea9eb9814c26",
       "postimage_sha256": "cab416aba723a692a738baca352e456cc9d061d5b65f817e09cdc029fbd724d6",
-      "preimage_bytes": null,
       "preimage_sha256": null
     },
     {
-      "delta_preimage_sha256": null,
+      "changed_from_parent": false,
       "new_file": false,
+      "parent_preimage_sha256": "d9efdcfe81b71319358b2d3deac425cde622b14f1e63ee05703cfb11280e1508",
       "path": "TreeDB/collections/native_json_read.go",
       "postimage_bytes": 19491,
       "postimage_git_blob": "5effc65a001239cd4ebf0ed195abdc6ef0117da8",
       "postimage_sha256": "d9efdcfe81b71319358b2d3deac425cde622b14f1e63ee05703cfb11280e1508",
-      "preimage_bytes": 17697,
       "preimage_sha256": "3f07b931124f7137fff27d23727f9bbf815a8c4f66bd5b4b724f6a300e5dc8f9"
     },
     {
-      "delta_preimage_sha256": null,
+      "changed_from_parent": false,
       "new_file": false,
+      "parent_preimage_sha256": "4b22d3a7017067bf019db93d840193010a24968e366dc19deefe9c4bbe3f6ad4",
       "path": "TreeDB/collections/native_ordinary_concurrent_correctness_test.go",
       "postimage_bytes": 10528,
       "postimage_git_blob": "b46b6d588a9b4c5d46ab8e33abdbd0496d45111d",
       "postimage_sha256": "4b22d3a7017067bf019db93d840193010a24968e366dc19deefe9c4bbe3f6ad4",
-      "preimage_bytes": 10154,
       "preimage_sha256": "1074c1d9d86b51f2742412f50764c8558b2ec3b16dc972a22380c880f25d3014"
     },
     {
-      "delta_preimage_sha256": null,
+      "changed_from_parent": false,
       "new_file": false,
+      "parent_preimage_sha256": "919696fc60c168d035ff2ad03ad3b121d858e9e380448e30b7fd477b1337d951",
       "path": "TreeDB/collections/native_semantic_adapter.go",
       "postimage_bytes": 3336,
       "postimage_git_blob": "81ebb75cec17280ca148aad73f71522eeb39bd4d",
       "postimage_sha256": "919696fc60c168d035ff2ad03ad3b121d858e9e380448e30b7fd477b1337d951",
-      "preimage_bytes": 3021,
       "preimage_sha256": "c67c5b27e1ceb1a2bcf98ea565fcc7764c66de15aba667d22faef767b4331224"
     },
     {
-      "delta_preimage_sha256": null,
+      "changed_from_parent": false,
       "new_file": true,
+      "parent_preimage_sha256": "194e2e462663f5294948248b3aef963d3cf34cb8fadb4a7f4918b4d52310be2b",
       "path": "TreeDB/db/native_basis_refusal_diagnostic.go",
       "postimage_bytes": 482,
       "postimage_git_blob": "19a23833c5f8f1cd991add619978a7841b34ef34",
       "postimage_sha256": "194e2e462663f5294948248b3aef963d3cf34cb8fadb4a7f4918b4d52310be2b",
-      "preimage_bytes": null,
       "preimage_sha256": null
     },
     {
-      "delta_preimage_sha256": "6f72e05fe42909ae8f06236fd1a8e71bd2a3cf522498064936b0d7ab04207054",
+      "changed_from_parent": false,
       "new_file": true,
+      "parent_preimage_sha256": "a19a8901ae4563bb2b5066e15a9bd7f120c76f503a9f9f6290d2b34f08b7f8e7",
       "path": "TreeDB/internal/valuelog/cow_basis_refusal_observer.go",
       "postimage_bytes": 6632,
       "postimage_git_blob": "1ea65706ff09c6ba2fe6a6b2c6864fd931459767",
       "postimage_sha256": "a19a8901ae4563bb2b5066e15a9bd7f120c76f503a9f9f6290d2b34f08b7f8e7",
-      "preimage_bytes": null,
       "preimage_sha256": null
     },
     {
-      "delta_preimage_sha256": "896808d60dbf7f3ec6933b788a046ee7271c6561a6c6b056c63aee65fc78ac45",
+      "changed_from_parent": false,
       "new_file": true,
+      "parent_preimage_sha256": "5cae1c5fa4fd6691df8740372d0c588a15a84012806e78214059dce0747e06ad",
       "path": "TreeDB/internal/valuelog/cow_basis_refusal_observer_test.go",
       "postimage_bytes": 9571,
       "postimage_git_blob": "0458da8797f0e904130f513d5a2a3a5a184aa3b6",
       "postimage_sha256": "5cae1c5fa4fd6691df8740372d0c588a15a84012806e78214059dce0747e06ad",
-      "preimage_bytes": null,
       "preimage_sha256": null
     },
     {
-      "delta_preimage_sha256": "2fd7256c53ca2223a36e9281916d2e8302249a42a5cb5c0eb4fc13a06dd26b6f",
+      "changed_from_parent": false,
       "new_file": false,
+      "parent_preimage_sha256": "90c226d33056aea9044a7231c39e3c493c695f510e8bee661711d597fbbf3d0d",
       "path": "TreeDB/internal/valuelog/cow_reader.go",
       "postimage_bytes": 28357,
       "postimage_git_blob": "b7130cbea91d0dc04e801fc412415a9b974bdb31",
       "postimage_sha256": "90c226d33056aea9044a7231c39e3c493c695f510e8bee661711d597fbbf3d0d",
-      "preimage_bytes": 25694,
       "preimage_sha256": "f2156e0fe5cde5cee3c6f3c4719b5c54d9ab97ba1db5f5fdba22f27a960d8778"
     },
     {
-      "delta_preimage_sha256": null,
+      "changed_from_parent": false,
       "new_file": true,
+      "parent_preimage_sha256": "608f5ea4c6e6bef50f7e66ed8c6c71657e76ee954cd28f3393a952cd294c4de5",
       "path": "TreeDB/native_basis_refusal_diagnostic.go",
       "postimage_bytes": 616,
       "postimage_git_blob": "facc1b26bcfd147f2537c74512260cfc3e909b34",
       "postimage_sha256": "608f5ea4c6e6bef50f7e66ed8c6c71657e76ee954cd28f3393a952cd294c4de5",
-      "preimage_bytes": null,
       "preimage_sha256": null
     }
   ],
-  "head": "3db7d8a0e308e668a59f95791253336673fee794",
-  "kind": "SOURCE_ONLY_METADATA_PRECISION_DIAGNOSTIC_NOT_PRODUCT",
+  "head": "402319455310dd8040e98903717da1d8144c7262",
+  "hosted_original_run": 42132550034,
+  "hosted_original_source_head": "0446e51a4de750eb5c5c09419b166ab8fe3b1226",
+  "kind": "WHITESPACE_ONLY_DIAGNOSTIC_SUCCESSOR_NOT_PRODUCT_REPAIR",
   "maintained_route": [
     {
       "bytes": 4482,
@@ -209,9 +209,11 @@
       "source_head": "1a14b37b616709da10e2ffff0ea050e16991a06b"
     }
   ],
-  "parent": "959962e009a6912899885ffa3bf6aa2875f22897",
-  "parent_tree": "4c25a9aa0db0381884459bdbd5a5f8570f7c9d7c",
+  "original_failure": "ENGINEERING_FAIL_BEFORE_COMPILE; gofmt-l listed exactly two paths; no normal/race controls or witness",
+  "parent": "3db7d8a0e308e668a59f95791253336673fee794",
+  "parent_tree": "1220c8bc313a62312069fbed674d87b01a34c131",
+  "review_hosted_owner_thread": "01a18e7c-8c23-7fd2-8d55-b0486d938cd3",
   "source_owner_thread": "01a15a41-5e6e-7f21-9052-99e7406d0861",
-  "tree": "1220c8bc313a62312069fbed674d87b01a34c131",
-  "worktree": "/mnt/fast4tb/gomap-graph-seal-c312-20261101T0603Z/race8-metadata-precision-15f1-20261105-01"
+  "tree": "ed46cd3173b8f841e14dc998474e3d1b0caafab4",
+  "worktree": "/mnt/fast4tb/gomap-graph-seal-c312-20261101T0603Z/race8-format-repair-3db-20261106-01"
 }

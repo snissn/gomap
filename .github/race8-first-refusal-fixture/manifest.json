@@ -1,31 +1,37 @@
 {
-  "Go_formatter_compile_normal_race_witness": "UNRUN",
+  "actual_pinned_1_26_10_formatter": "UNRUN",
   "base": "15f1bcbdf13b9feacaffa6f635688b464c1208a5",
-  "delta_paths": 3,
+  "compile_normal_race_witness": "UNRUN",
+  "delta_paths": 2,
   "full_overlay_paths": 14,
-  "functional_waiver": false,
-  "head": "3db7d8a0e308e668a59f95791253336673fee794",
-  "historical_first_cause": "UNKNOWN",
+  "head": "402319455310dd8040e98903717da1d8144c7262",
+  "historical_cause": "UNKNOWN",
+  "inventory_sha256": "2b777425b94aee8ad4546f02f5663981c002ccce758db89437f1ae01ddbed477",
   "items": [
     {
-      "bytes": 3682,
-      "path": "DESIGN.md",
-      "sha256": "2f8b31c16b13036684e560cf0dff362b3ae2b06dbbefe63b811460efa2c4520e"
-    },
-    {
-      "bytes": 5711,
+      "bytes": 1597,
       "path": "HOSTED-ROUTE.md",
-      "sha256": "170cec12095155205826d00caa7d8bdc8ed1d7be92dc6306c7353512ba928cf6"
+      "sha256": "63f855ffed4fed18956c342c2efca4f031d7646ed61833f730ee4ebbde310e44"
     },
     {
-      "bytes": 9484,
+      "bytes": 1658,
+      "path": "README.md",
+      "sha256": "1faff0229c093f2a12cd2c806c09cf8076ed9e7cfa959bfc484cf4d4505368e2"
+    },
+    {
+      "bytes": 10398,
       "path": "bindings.json",
-      "sha256": "dc60d27902115f2075ad378c214c45ad94d7775c44bf8963b99f6ac2481c1b73"
+      "sha256": "a77ca02d94b130481b4cec64e444a832e151d22bacf9ccf35cacd354065f3de8"
     },
     {
-      "bytes": 8144,
-      "path": "construct.py",
-      "sha256": "33d7af73687133eb0114e5517ff2ad53e1975aa09a622525058b0afb93fc5420"
+      "bytes": 13903,
+      "path": "construct-and-seal.py",
+      "sha256": "878cef470b4016159e91510a02411ad938990858b59cab0f9c88a125e24ad7c5"
+    },
+    {
+      "bytes": 667,
+      "path": "controls-binding.json",
+      "sha256": "fcecd651956658ac551391bbe5009180e0d481b2c585411a1a51e96ec99aea3c"
     },
     {
       "bytes": 5250,
@@ -33,49 +39,39 @@
       "sha256": "2b777425b94aee8ad4546f02f5663981c002ccce758db89437f1ae01ddbed477"
     },
     {
-      "bytes": 10912,
+      "bytes": 1362,
       "path": "delta-inverse.patch",
-      "sha256": "fdf47d856cd14289db4107a68c4ea03e6a15152014e06094cc26482e6280499d"
+      "sha256": "762c654dc05d741648f18329831f77e96086bbc319b0afb3978e0794c467b35f"
     },
     {
-      "bytes": 5441,
-      "path": "delta-preimage/TreeDB/internal/valuelog/cow_basis_refusal_observer.go",
-      "sha256": "6f72e05fe42909ae8f06236fd1a8e71bd2a3cf522498064936b0d7ab04207054"
+      "bytes": 1432007,
+      "path": "delta-preimage/TreeDB/caching/db.go",
+      "sha256": "05176a2842480f5d65f3d377a3b973219fc4be6da7fe72a84971562726c89d38"
     },
     {
-      "bytes": 6868,
-      "path": "delta-preimage/TreeDB/internal/valuelog/cow_basis_refusal_observer_test.go",
-      "sha256": "896808d60dbf7f3ec6933b788a046ee7271c6561a6c6b056c63aee65fc78ac45"
-    },
-    {
-      "bytes": 28275,
-      "path": "delta-preimage/TreeDB/internal/valuelog/cow_reader.go",
-      "sha256": "2fd7256c53ca2223a36e9281916d2e8302249a42a5cb5c0eb4fc13a06dd26b6f"
+      "bytes": 13592,
+      "path": "delta-preimage/TreeDB/collections/native_basis_refresh.go",
+      "sha256": "c48d40648933fc46db6606bb1592541ab86d5283d097aa850a4eb0c65e67547e"
     },
     {
       "bytes": 2043394,
       "path": "delta-roundtrip.index",
-      "sha256": "2c5efdae876c35ac6ca7cfa1d75089584b702621d7ed345d66796f90160c5837"
+      "sha256": "fcee3885eab7eb9b4d73ce6cdc3a8575287d4cef146a64057d1fbb5321e1dbcd"
     },
     {
-      "bytes": 10912,
+      "bytes": 1362,
       "path": "delta.patch",
-      "sha256": "44f62d1053121a2659ce8bd05db37a41735928834eba45c233f68896a0398402"
+      "sha256": "eb2a5fb0292eefddca937887dff910bae6d990146a477431e87f52a8139a6c8a"
     },
     {
-      "bytes": 16708,
-      "path": "finish.py",
-      "sha256": "85b7c5af8fdd59cccdac72762114af6bf6a0a8b695840496f94ed1d58f540d9a"
-    },
-    {
-      "bytes": 1369,
+      "bytes": 2697,
       "path": "inputs.json",
-      "sha256": "d21f3d907c387e1e1db441b33d57f98fe95acaa1de924a3ca4ac345e77663e3b"
+      "sha256": "54b477a1eb505d5ffa8448a01863009cf61875fce2081a1ad6146caa686148a1"
     },
     {
       "bytes": 468,
       "path": "inverse-proof.json",
-      "sha256": "5ef1c906d17a55e247a664c057ed8b681f519a5387b125991c94b9d8fe4e23c3"
+      "sha256": "3d1c52577499cb6c49d48c40d5ff05578c017dd66383c016da98703329c5cd22"
     },
     {
       "bytes": 823,
@@ -93,14 +89,14 @@
       "sha256": "58b9a83165f22611f031f30eb07a920aba47a677864f9edfc7728665063278fe"
     },
     {
-      "bytes": 1432007,
+      "bytes": 1432006,
       "path": "overlay/TreeDB/caching/db.go",
-      "sha256": "05176a2842480f5d65f3d377a3b973219fc4be6da7fe72a84971562726c89d38"
+      "sha256": "e40e325a39da1d3a85a17a10971adc7e1e530cc48eb076bb0ca2d44ebcd328f4"
     },
     {
-      "bytes": 13592,
+      "bytes": 13593,
       "path": "overlay/TreeDB/collections/native_basis_refresh.go",
-      "sha256": "c48d40648933fc46db6606bb1592541ab86d5283d097aa850a4eb0c65e67547e"
+      "sha256": "85fd212eb16dea3c594d8be45dbabd4e26e2fb4639343f9625d7b36f138b6a3f"
     },
     {
       "bytes": 4334,
@@ -148,9 +144,9 @@
       "sha256": "608f5ea4c6e6bef50f7e66ed8c6c71657e76ee954cd28f3393a952cd294c4de5"
     },
     {
-      "bytes": 1501,
+      "bytes": 1775,
       "path": "ownership-final.json",
-      "sha256": "ccf1419d7a68778fd921763439ba2a17a629ed4a2f81935c96f6ecc5178a562c"
+      "sha256": "7c74edac0d3d9616fd641572f825d1578e3031ce676773237e1b95cfffc6d994"
     },
     {
       "bytes": 21227,
@@ -188,9 +184,9 @@
       "sha256": "f2156e0fe5cde5cee3c6f3c4719b5c54d9ab97ba1db5f5fdba22f27a960d8778"
     },
     {
-      "bytes": 59777,
+      "bytes": 59778,
       "path": "source-inverse.patch",
-      "sha256": "a5c75f82cdf338adbb66132692bf739d78db84dc8a771ec56a63af217a45648b"
+      "sha256": "9786f17cdb03a735bd8389e9e86eebbb96223641393e2e97d1e12c554fec3a40"
     },
     {
       "bytes": 2042570,
@@ -198,33 +194,37 @@
       "sha256": "24301b56b38ece81dd2edce2c0dff4223ce07091a8e12fff5f0e136107faa539"
     },
     {
-      "bytes": 59749,
+      "bytes": 59750,
       "path": "source.patch",
-      "sha256": "6bfe21009768710b5a1fed824f62ce21cdb3046fa1963e2fb8f39bfb235cc768"
+      "sha256": "712b45b4b4ff869f938c95c705f5c4fe1ce52dda6503ea9e21e9474b6d769616"
     },
     {
-      "bytes": 7773,
-      "path": "static-source-checks.json",
-      "sha256": "c213452d0c6b261b6bdb3edf82e0be8e373a8dd16df60901ebae97396cc48a81"
+      "bytes": 2021,
+      "path": "token-parity.json",
+      "sha256": "dc6bb15bdc3dc0d73fbd5baa34997a2a58166605c610150fc9ce2c5861c665d2"
     }
   ],
-  "normal_race_controls_each": {
+  "local_runtime_push_dispatch": "CLOSED",
+  "normal_race_each": {
     "leaves": 36,
     "outcomes": 44,
     "tops": 13
   },
-  "original_witness": {
+  "original_failed_head": "0446e51a4de750eb5c5c09419b166ab8fe3b1226",
+  "original_failed_run": 42132550034,
+  "original_failure": "PRESERVED_BEFORE_COMPILE_NO_CONTROLS_OR_WITNESS",
+  "parent": "3db7d8a0e308e668a59f95791253336673fee794",
+  "semantic_repair": false,
+  "source_readers_writers": "CLOSED",
+  "status": "CLOSED_WHITESPACE_ONLY_SOURCE_SUCCESSOR_FOR_ROOT_REVIEW",
+  "token_parity": "PASS_EXACT_TRIVIA_SPLICES_AND_INVERSES_STATIC_ONLY",
+  "tree": "ed46cd3173b8f841e14dc998474e3d1b0caafab4",
+  "utc": "2026-11-05T23:59:58.450978+00:00",
+  "witness": {
     "invocations": 1,
     "leaves": 1,
     "mode": "race",
     "outcomes": 1,
     "tops": 1
-  },
-  "parent": "959962e009a6912899885ffa3bf6aa2875f22897",
-  "semantic_repair": "NOT_CONSTRUCTED",
-  "source_readers_writers": "CLOSED",
-  "static_checks": 73,
-  "status": "CLOSED_SOURCE_ONLY_SUCCESSOR_FOR_INDEPENDENT_ROOT_REVIEW",
-  "tree": "1220c8bc313a62312069fbed674d87b01a34c131",
-  "utc": "2026-11-05T23:37:23.393229+00:00"
+  }
 }

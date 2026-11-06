@@ -3,8 +3,8 @@
   "base_tree": "cab3eff3c3ab6a75aa30b60f6bc5cfbe84d82e22",
   "files": {
     ".github/race8-first-refusal-fixture/bindings.json": {
-      "bytes": 9484,
-      "sha256": "dc60d27902115f2075ad378c214c45ad94d7775c44bf8963b99f6ac2481c1b73"
+      "bytes": 10398,
+      "sha256": "a77ca02d94b130481b4cec64e444a832e151d22bacf9ccf35cacd354065f3de8"
     },
     ".github/race8-first-refusal-fixture/controls.json": {
       "bytes": 5250,
@@ -15,12 +15,12 @@
       "sha256": "e8d8cb144e26069fc93e4346e51b7b8b9feccb998896040b7e5eaf8d88023623"
     },
     ".github/race8-first-refusal-fixture/independent-review.md": {
-      "bytes": 1721,
-      "sha256": "0f39666db0d90b9994c0e3206d647d0693d37e870ce5e5f8219183145f0d08fe"
+      "bytes": 1276,
+      "sha256": "30d9c2dfe8040c3873f988e305e64219bc3d614ca5b57f2f9f5daf27fbd01ec6"
     },
     ".github/race8-first-refusal-fixture/manifest.json": {
-      "bytes": 7788,
-      "sha256": "8db37e962f85e97059430991dfd276b687ecb2fe2e39ad71e413014773bc46ef"
+      "bytes": 7892,
+      "sha256": "374251abecc89664553b213d14734118420f6b445372cb47a4df30409bedab6e"
     },
     ".github/race8-first-refusal-fixture/overlay/TreeDB/caching/cow_basis_refusal_diagnostic.go": {
       "bytes": 823,
@@ -35,12 +35,12 @@
       "sha256": "58b9a83165f22611f031f30eb07a920aba47a677864f9edfc7728665063278fe"
     },
     ".github/race8-first-refusal-fixture/overlay/TreeDB/caching/db.go": {
-      "bytes": 1432007,
-      "sha256": "05176a2842480f5d65f3d377a3b973219fc4be6da7fe72a84971562726c89d38"
+      "bytes": 1432006,
+      "sha256": "e40e325a39da1d3a85a17a10971adc7e1e530cc48eb076bb0ca2d44ebcd328f4"
     },
     ".github/race8-first-refusal-fixture/overlay/TreeDB/collections/native_basis_refresh.go": {
-      "bytes": 13592,
-      "sha256": "c48d40648933fc46db6606bb1592541ab86d5283d097aa850a4eb0c65e67547e"
+      "bytes": 13593,
+      "sha256": "85fd212eb16dea3c594d8be45dbabd4e26e2fb4639343f9625d7b36f138b6a3f"
     },
     ".github/race8-first-refusal-fixture/overlay/TreeDB/collections/native_basis_refusal_diagnostic_test.go": {
       "bytes": 4334,
@@ -112,7 +112,7 @@
     },
     ".github/scripts/race8_first_refusal_hosted_controls.py": {
       "bytes": 18902,
-      "sha256": "62d85d802bbdecdee0786011898d7af0536ac52554f8712830c8eca640f0b2af"
+      "sha256": "92138be8a0192238aeda499bb64d10231b1b01996942fc32577bfda71c7c3cf4"
     },
     ".github/scripts/test_race8_first_refusal_events.py": {
       "bytes": 17963,
@@ -120,7 +120,7 @@
     },
     ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml": {
       "bytes": 4527,
-      "sha256": "823c2c97280b277a05f6302a19ae4b30ff17381bb8599d9901e2d7fedc7ef9b2"
+      "sha256": "0f65bda0db180e2a2a974777a1d0040f660ee920a0e5df9a2cd932b17ea3cd41"
     },
     "scripts/ycsb_campaign_guard.py": {
       "bytes": 19548,
@@ -140,8 +140,8 @@
     }
   },
   "schema": "race8-first-refusal-fixed-inputs-v1",
-  "semantic_head": "3db7d8a0e308e668a59f95791253336673fee794",
-  "semantic_parent": "959962e009a6912899885ffa3bf6aa2875f22897",
-  "semantic_tree": "1220c8bc313a62312069fbed674d87b01a34c131",
+  "semantic_head": "402319455310dd8040e98903717da1d8144c7262",
+  "semantic_parent": "3db7d8a0e308e668a59f95791253336673fee794",
+  "semantic_tree": "ed46cd3173b8f841e14dc998474e3d1b0caafab4",
   "status": "SOURCE_ONLY_FINAL_INTEGRATION_REVIEW_AND_ROOT_ADMISSION_REQUIRED"
 }
