@@ -41,8 +41,14 @@ func cowNativePackedDictionaryLeafFixtureWithEncoding(t *testing.T, dictionaryAp
 	t.Setenv(envDisableVlogGenerationCheckpointKick, "1")
 	dir := t.TempDir()
 	var store *dictdb.Store
+	backendDir := filepath.Join(dir, "backend")
+	if dictionaryAppender {
+		// Durable recovery resolves sibling dictionary dependencies from the
+		// public root/{maindb,dictdb} layout used by the paired reopen control.
+		backendDir = filepath.Join(dir, "maindb")
+	}
 	backend, err := backenddb.Open(backenddb.Options{
-		Dir: filepath.Join(dir, "backend"), CommandWAL: true,
+		Dir: backendDir, CommandWAL: true,
 		Durability: backenddb.DurabilityWALOnRelaxed, DisableBackgroundPrune: true,
 		IndexOuterLeavesInValueLog: true, LeafPageReadCacheEntries: -1,
 		ValueLog: backenddb.ValueLogOptions{

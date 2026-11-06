@@ -383,7 +383,8 @@ func CloseNativeDictionaryHandoffTestFixture(db *DB) error {
 	return nil
 }
 
-// Reopen only the persisted fixture; no corpus is regenerated and no pack runs.
+// Reopen the dictionary-appender fixture's original public sibling layout;
+// no corpus is regenerated and no pack runs.
 func ReopenNativeDictionaryHandoffTestFixture(t *testing.T, original *DB) (*DB, *backenddb.DB) {
 	t.Helper()
 	dir := filepath.Dir(original.dir)
@@ -392,7 +393,7 @@ func ReopenNativeDictionaryHandoffTestFixture(t *testing.T, original *DB) (*DB, 
 		t.Fatal(err)
 	}
 	backend, err := backenddb.Open(backenddb.Options{
-		Dir: filepath.Join(dir, "backend"), CommandWAL: true,
+		Dir: filepath.Join(dir, "maindb"), CommandWAL: true,
 		Durability: backenddb.DurabilityWALOnRelaxed, DisableBackgroundPrune: true,
 		IndexOuterLeavesInValueLog: true, LeafPageReadCacheEntries: -1,
 		ValueLog: backenddb.ValueLogOptions{
