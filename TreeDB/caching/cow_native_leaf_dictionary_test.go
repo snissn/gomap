@@ -151,9 +151,11 @@ func cowNativePackedDictionaryLeafFixtureWithEncoding(t *testing.T, dictionaryAp
 	if dictionaryAppender {
 		// Initialization only: the original owner has not written any fixture
 		// data or activated native semantics. Keep the real stable-resource,
-		// RID allocation, segment registration and publication lifecycle.
+		// RID allocation, segment registration and publication lifecycle across
+		// every append lane, as newCachingLeafPageLog does for outer leaves.
+		// The restricted interface still excludes prepared append methods.
 		backend.SetLeafPageLog(&cowDictionaryLeafLog{
-			cowDictionaryLeafLifecycle: &cachingLeafPageLog{db: db, lane: &db.leafLog}, db: db, dictID: dictID, dictionary: dictionary,
+			cowDictionaryLeafLifecycle: &cachingLeafPageLogGroup{db: db}, db: db, dictID: dictID, dictionary: dictionary,
 		})
 	}
 	privateCOWPackWrite(t, db, backend, 1, 4096)
