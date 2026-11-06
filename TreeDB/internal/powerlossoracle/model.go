@@ -438,7 +438,7 @@ func (m *Model) Overlay(root string) error {
 		}
 		data, identity, err := m.captureRegularPathSnapshot(path)
 		if err != nil {
-			return fmt.Errorf("powerlossoracle: overlay-open %q: %w", rel, err)
+			return fmt.Errorf("powerlossoracle: overlay-regular-capture %q: %w", rel, err)
 		}
 		seenFiles[rel] = struct{}{}
 		if id, ok := m.volatile[rel]; ok {

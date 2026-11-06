@@ -44,7 +44,7 @@ func TestOverlayOpenFailurePreservesPathError(t *testing.T) {
 		t.Fatalf("enumerated-name failure lost: removed=%t err=%v", didRemove, err)
 	}
 	if errors.Unwrap(err) != pathErr || pathErr.Op != "open" || pathErr.Path != removed ||
-		!strings.HasPrefix(err.Error(), "powerlossoracle: overlay-open \"z-removed\": ") {
+		!strings.HasPrefix(err.Error(), "powerlossoracle: overlay-regular-capture \"z-removed\": ") {
 		t.Fatalf("overlay stage or original error identity lost: %v", err)
 	}
 	if model.StableFingerprint() != fingerprint {
@@ -71,7 +71,7 @@ func TestOverlayOpenFailurePreservesIdentityError(t *testing.T) {
 		return identityFromFile(file)
 	}
 	if err := model.Overlay(root); !errors.Is(err, want) || errors.Unwrap(err) != want ||
-		!strings.HasPrefix(err.Error(), "powerlossoracle: overlay-open \"value\": ") {
+		!strings.HasPrefix(err.Error(), "powerlossoracle: overlay-regular-capture \"value\": ") {
 		t.Fatalf("original identity error replaced: %v", err)
 	}
 }
