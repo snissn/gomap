@@ -1,0 +1,25 @@
+{
+  "Go_gofmt_compile_normal_race_runtime": "UNRUN",
+  "all_pass": true,
+  "checks": {
+    "all_13_failure_calls_three_args": true,
+    "basis_validation_body_identical_except_scoped_scratch": true,
+    "byte_identical_func (d *DictionaryReadDefinition) Close()": true,
+    "byte_identical_func (d *DictionaryReadDefinition) ReleaseCapture()": true,
+    "byte_identical_func failDictionaryReadDefinition(": true,
+    "failure_helper_original_three_args": true,
+    "forward_applies_to_exact_base_preimages": true,
+    "git_diff_check": true,
+    "into_forces_deferred_true": true,
+    "inverse_applies_to_exact_head": true,
+    "original_control_byte_identical_TreeDB/collections/native_basis_public_vacuum_activation_test.go": true,
+    "original_control_byte_identical_TreeDB/collections/native_basis_public_vacuum_original_corpus_test.go": true,
+    "original_control_byte_identical_TreeDB/collections/native_ordinary_concurrent_correctness_test.go": true,
+    "owned_before_capture": true,
+    "raw_block_read_tail_byte_identical": true
+  },
+  "forward_check_stderr": "",
+  "git_diff_check_stderr": "",
+  "inverse_check_stderr": "",
+  "kind": "source/text/hash/Git only; not syntax/type/format/runtime qualification"
+}

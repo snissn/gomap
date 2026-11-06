@@ -1,0 +1,3479 @@
+diff --git a/TreeDB/caching/cow_basis_refusal_diagnostic.go b/TreeDB/caching/cow_basis_refusal_diagnostic.go
+new file mode 100644
+index 000000000..e53e3f18a
+--- /dev/null
++++ b/TreeDB/caching/cow_basis_refusal_diagnostic.go
+@@ -0,0 +1,20 @@
++package caching
++
++import (
++	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
++	"github.com/snissn/gomap/TreeDB/internal/valuelog"
++)
++
++// EnableNativeBasisRefusalObserverForTest is a one-shot diagnostic binding.
++// The public owner's private identity must equal this cache's exact identity.
++// Installation precedes the fixture's native collection work. The observer is
++// never reset or removed; atomic scalar readback needs no borrower-drain guess.
++func (db *DB) EnableNativeBasisRefusalObserverForTest(owner *transactionowner.Owner, observer *valuelog.COWBasisRefusalObserver) bool {
++	if db == nil || db.cow == nil || owner == nil || db.cow.txnOwner != owner || observer == nil {
++		return false
++	}
++	if !observer.Bind(owner) {
++		return false
++	}
++	return db.nativeBasisRefusalObserver.CompareAndSwap(nil, observer)
++}
+diff --git a/TreeDB/caching/cow_basis_refusal_diagnostic_test.go b/TreeDB/caching/cow_basis_refusal_diagnostic_test.go
+new file mode 100644
+index 000000000..c6e5e0c95
+--- /dev/null
++++ b/TreeDB/caching/cow_basis_refusal_diagnostic_test.go
+@@ -0,0 +1,103 @@
++package caching
++
++import (
++	"errors"
++	"testing"
++
++	backenddb "github.com/snissn/gomap/TreeDB/db"
++	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
++	"github.com/snissn/gomap/TreeDB/internal/valuelog"
++)
++
++type testBasisDiagnosticState struct {
++	*testBasisRefreshState
++	observed uint64
++	call     valuelog.COWBasisCall
++}
++
++func (s *testBasisDiagnosticState) PrepareBasisRefreshDiagnostic(before, after *backenddb.Snapshot, call valuelog.COWBasisCall) (backenddb.NativeSemanticState, error) {
++	s.observed++
++	s.call = call
++	return s.PrepareBasisRefresh(before, after)
++}
++
++func TestCOWBasisRefusalExactInvocationAndPartial(t *testing.T) {
++	for _, frozen := range []bool{false, true} {
++		t.Run(map[bool]string{false: "active", true: "frozen"}[frozen], func(t *testing.T) {
++			var observer valuelog.COWBasisRefusalObserver
++			owner := transactionowner.New()
++			if !observer.Bind(owner) {
++				t.Fatal("bind")
++			}
++			opening := newTestSemanticState(nil)
++			partial := newTestSemanticState(nil)
++			failure := errors.New("original refusal")
++			state := &testBasisDiagnosticState{testBasisRefreshState: &testBasisRefreshState{testSemanticState: opening, partial: partial, failure: failure}}
++			before, after := &backenddb.Snapshot{}, &backenddb.Snapshot{}
++			result, err := refreshCOWSemanticBasisDiagnostic(state, before, after, observer.Begin(owner, frozen))
++			if result != partial || err != failure || state.before != before || state.after != after || state.observed != 1 || opening.refs.Load() != 1 || partial.refs.Load() != 1 {
++				t.Fatal("diagnostic changed original invocation/error/partial ownership")
++			}
++			word := observer.Snapshot().First
++			if (word&(1<<24) != 0) != frozen || (word>>29)&15 != uint64(valuelog.COWBasisRefresh) || observer.Snapshot().Completed != 1 || observer.Snapshot().Missing {
++				t.Fatalf("refresh tuple=%x snapshot=%+v", word, observer.Snapshot())
++			}
++			state.before, state.after, state.partial, state.call = nil, nil, nil, valuelog.COWBasisCall{}
++			for _, original := range []*testSemanticState{opening, partial} {
++				cleanup := original.Release()
++				if cleanup == nil {
++					t.Fatal("missing original cleanup")
++				}
++				completion, err := cleanup.Finish()
++				if err != nil {
++					t.Fatal(err)
++				}
++				completion.Complete()
++			}
++		})
++	}
++}
++
++func TestCOWBasisRefusalExclusiveCacheBinding(t *testing.T) {
++	// Registration predicates only: this control does not open or activate a DB.
++	owner := transactionowner.New()
++	cache := &DB{cow: &cowCache{txnOwner: owner}}
++	var observer valuelog.COWBasisRefusalObserver
++	if cache.EnableNativeBasisRefusalObserverForTest(transactionowner.New(), &observer) {
++		t.Fatal("foreign opening identity accepted")
++	}
++	if !cache.EnableNativeBasisRefusalObserverForTest(owner, &observer) || cache.EnableNativeBasisRefusalObserverForTest(owner, &observer) {
++		t.Fatal("binding not one-shot")
++	}
++	other := &DB{cow: &cowCache{txnOwner: transactionowner.New()}}
++	if other.EnableNativeBasisRefusalObserverForTest(other.cow.txnOwner, &observer) {
++		t.Fatal("receipt migrated to another owner")
++	}
++	call := cache.nativeBasisRefusalObserver.Load().Begin(owner, false)
++	if !call.Enabled() || observer.Begin(other.cow.txnOwner, false).Enabled() {
++		t.Fatal("invocation identity mismatch")
++	}
++}
++
++func TestCOWBasisRefusalMissingSeamPreservesOriginal(t *testing.T) {
++	var observer valuelog.COWBasisRefusalObserver
++	owner := transactionowner.New()
++	if !observer.Bind(owner) {
++		t.Fatal("bind")
++	}
++	original := newTestSemanticState(nil)
++	failure := errors.New("unchanged fallback refusal")
++	state := &testBasisRefreshState{testSemanticState: original, failure: failure}
++	before, after := &backenddb.Snapshot{}, &backenddb.Snapshot{}
++	result, err := refreshCOWSemanticBasisDiagnostic(state, before, after, observer.Begin(owner, false))
++	if result != nil || err != failure || state.before != before || state.after != after || !observer.Snapshot().Missing {
++		t.Fatal("missing observer seam changed original call/result")
++	}
++	state.before, state.after = nil, nil
++	cleanup := original.Release()
++	completion, err := cleanup.Finish()
++	if err != nil {
++		t.Fatal(err)
++	}
++	completion.Complete()
++}
+diff --git a/TreeDB/caching/cow_cut.go b/TreeDB/caching/cow_cut.go
+index a7d040596..67e281121 100644
+--- a/TreeDB/caching/cow_cut.go
++++ b/TreeDB/caching/cow_cut.go
+@@ -361,7 +361,8 @@ func newCOWCacheMode(provider backendSnapshotProvider, shards int, limits memtab
+ 	return c, nil
+ }
+ func cowBasisCharge(sizes backenddb.SnapshotAllocationSizes) uint64 {
+-	return memtable.COWAllocationCharge(uint64(sizes.ValueLog.FileCount)*uint64(unsafe.Sizeof((*rootpublication.IdentityPin)(nil)))) + uint64(sizes.ValueLog.FileCount)*memtable.COWAllocationCharge(uint64(unsafe.Sizeof(rootpublication.IdentityPin{}))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowBackendBasis{}))) +
++	// Pre-admit fixed caller/unwind cells with this containing capture owner.
++	return memtable.COWAllocationCharge(6*uint64(unsafe.Sizeof(uintptr(0)))) + memtable.COWAllocationCharge(uint64(sizes.ValueLog.FileCount)*uint64(unsafe.Sizeof((*rootpublication.IdentityPin)(nil)))) + uint64(sizes.ValueLog.FileCount)*memtable.COWAllocationCharge(uint64(unsafe.Sizeof(rootpublication.IdentityPin{}))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowBackendBasis{}))) +
+ 		cowSnapshotRetentionCharge(sizes)
+ }
+ 
+diff --git a/TreeDB/caching/cow_flush.go b/TreeDB/caching/cow_flush.go
+index 0341dd3e1..39887d8d9 100644
+--- a/TreeDB/caching/cow_flush.go
++++ b/TreeDB/caching/cow_flush.go
+@@ -10,6 +10,7 @@ import (
+ 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+ 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
+ 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
++	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+ 	"github.com/snissn/gomap/TreeDB/node"
+ )
+ 
+@@ -69,7 +70,7 @@ func (c *cowCache) captureBackendBasis(provider backendSnapshotProvider) (*cowBa
+ // Allocation is admitted before construction; cutMu only performs the swap.
+ func (c *cowCache) prepareCOWBasisInstall() (*cowReadCut, error) {
+ 	shards, frozen := len(c.writers), c.budget.Limits().MaxSources
+-	lease, err := c.maintenance.AcquireExternal(cowCutCharge(shards, frozen))
++	lease, err := c.maintenance.AcquireExternal(cowCutCharge(shards, frozen) + memtable.COWAllocationCharge(6*uint64(unsafe.Sizeof(uintptr(0)))))
+ 	if err != nil {
+ 		return nil, err
+ 	}
+@@ -85,10 +86,19 @@ func (db *DB) installCOWBasis(basis *cowBackendBasis, covered *cowReadCut) (*cow
+ 	if err != nil {
+ 		return nil, err
+ 	}
++	finished := false
++	defer func() {
++		if !finished {
++			refund := c.releasePrivateCOWBasisInstall(next)
++			next = nil
++			refund.Close()
++		}
++	}()
+ 	if err = basis.snapshot.ActivatePrimaryMetadataProducer(); err != nil {
+ 		refund := c.releasePrivateCOWBasisInstall(next)
+ 		next = nil
+ 		refund.Close()
++		finished = true
+ 		return nil, err
+ 	}
+ 	old, _, err := db.installPreparedCOWBasis(basis, covered, next)
+@@ -97,6 +107,7 @@ func (db *DB) installCOWBasis(basis *cowBackendBasis, covered *cowReadCut) (*cow
+ 		next = nil
+ 		refund.Close()
+ 	}
++	finished = true
+ 	return old, err
+ }
+ 
+@@ -116,6 +127,17 @@ func (c *cowCache) releasePrivateCOWBasisInstall(next *cowReadCut) *memtable.COW
+ 
+ func (db *DB) installPreparedCOWBasis(basis *cowBackendBasis, covered, next *cowReadCut) (*cowReadCut, bool, error) {
+ 	c := db.cow
++	var leaves *cowMaintenanceLeafScope
++	if covered == nil {
++		var err error
++		leaves, err = db.prepareCOWMaintenanceLeaves()
++		if err != nil {
++			return nil, false, err
++		}
++		// Registered before Unlock: queue transfer follows gate release even
++		// on panic/Goexit. The existing worker owns checked physical cleanup.
++		defer c.retireCOWMaintenanceLeaves(&leaves)
++	}
+ 	c.writerMu.Lock()
+ 	defer c.writerMu.Unlock()
+ 	old := c.cut
+@@ -155,12 +177,13 @@ func (db *DB) installPreparedCOWBasis(basis *cowBackendBasis, covered, next *cow
+ 		captured = covered.frozenSemanticRootSet
+ 	}
+ 	if covered == nil {
++		leaves.before, leaves.after = old.basis.snapshot, basis.snapshot
+ 		// Maintenance changed only the physical basis. It has no captured build
+ 		// ledger and cannot consume a logical source or manufacture coverage.
+ 		// Adopt each private partial before checking err; installCOWBasis releases
+ 		// it through original cleanup only after this writer gate is dropped.
+ 		var err error
+-		next.semanticRootSet, err = refreshCOWSemanticBasis(old.semanticRootSet, old.basis.snapshot, basis.snapshot)
++		next.semanticRootSet, err = refreshCOWSemanticBasisWithMaintenanceLeaves(old.semanticRootSet, old.basis.snapshot, basis.snapshot, db.nativeBasisRefusalObserver.Load().Begin(c.txnOwner, false), leaves)
+ 		if err != nil {
+ 			db.poisonNativeHandoff(err)
+ 			return nil, true, err
+@@ -171,7 +194,7 @@ func (db *DB) installPreparedCOWBasis(basis *cowBackendBasis, covered, next *cow
+ 				next.frozenSemanticRootSet.Retain()
+ 			}
+ 		} else {
+-			next.frozenSemanticRootSet, err = refreshCOWSemanticBasis(old.frozenSemanticRootSet, old.basis.snapshot, basis.snapshot)
++			next.frozenSemanticRootSet, err = refreshCOWSemanticBasisWithMaintenanceLeaves(old.frozenSemanticRootSet, old.basis.snapshot, basis.snapshot, db.nativeBasisRefusalObserver.Load().Begin(c.txnOwner, true), leaves)
+ 			if err != nil {
+ 				db.poisonNativeHandoff(err)
+ 				return nil, true, err
+@@ -246,17 +269,39 @@ func (db *DB) installPreparedCOWBasis(basis *cowBackendBasis, covered, next *cow
+ // equivalent physical rebinding; retaining an unknown descriptor can leave its
+ // scalar roots referring to the wrong Snapshot after rewrite/vacuum.
+ func refreshCOWSemanticBasis(state backenddb.NativeSemanticState, before, after *backenddb.Snapshot) (backenddb.NativeSemanticState, error) {
++	return refreshCOWSemanticBasisDiagnostic(state, before, after, valuelog.COWBasisCall{})
++}
++
++func refreshCOWSemanticBasisDiagnostic(state backenddb.NativeSemanticState, before, after *backenddb.Snapshot, call valuelog.COWBasisCall) (backenddb.NativeSemanticState, error) {
++	return refreshCOWSemanticBasisWithMaintenanceLeaves(state, before, after, call, nil)
++}
++
++func refreshCOWSemanticBasisWithMaintenanceLeaves(state backenddb.NativeSemanticState, before, after *backenddb.Snapshot, call valuelog.COWBasisCall, leaves backenddb.NativeMaintenanceLeafReader) (backenddb.NativeSemanticState, error) {
++	defer call.Finish(valuelog.COWBasisRefresh)
+ 	if state == nil {
+ 		return nil, nil
+ 	}
+ 	refresher, ok := state.(backenddb.NativeSemanticBasisRefresher)
+ 	if !ok {
++		call.Refuse(valuelog.COWBasisRefresh, valuelog.COWBasisUnsupported, valuelog.COWRecordShape{}, false)
+ 		return nil, backenddb.ErrNativeSemanticUnsupported
+ 	}
+-	next, err := refresher.PrepareBasisRefresh(before, after)
++	var next backenddb.NativeSemanticState
++	var err error
++	if scoped, ok := state.(backenddb.NativeSemanticMaintenanceBasisRefresher); leaves != nil && ok {
++		next, err = scoped.PrepareBasisRefreshWithMaintenanceLeaves(before, after, leaves, call)
++	} else if diagnostic, ok := state.(backenddb.NativeSemanticBasisRefusalDiagnostic); call.Enabled() && ok {
++		next, err = diagnostic.PrepareBasisRefreshDiagnostic(before, after, call)
++	} else {
++		if call.Enabled() {
++			call.Missing()
++		}
++		next, err = refresher.PrepareBasisRefresh(before, after)
++	}
+ 	if err == nil && next == nil {
+ 		err = rootpublication.ErrPublisherProtocol
+ 	}
++	call.Error(valuelog.COWBasisRefresh, err, valuelog.COWRecordShape{}, false)
+ 	return next, err
+ }
+ 
+diff --git a/TreeDB/caching/cow_leaf_maintenance.go b/TreeDB/caching/cow_leaf_maintenance.go
+index 459cc0f39..36f4fcafa 100644
+--- a/TreeDB/caching/cow_leaf_maintenance.go
++++ b/TreeDB/caching/cow_leaf_maintenance.go
+@@ -258,6 +258,7 @@ func (db *DB) adoptPrivateCOWLeafBasis(original backenddb.StateToken) error {
+ 	}
+ 	basis, err := db.cow.captureBackendBasis(db.backend.(backendSnapshotProvider))
+ 	if err == nil {
++		defer db.releaseCOWBasisOnUnwind(&basis)
+ 		next, ok := basis.snapshot.StateToken()
+ 		if !ok || next.AppliedCommandLSN != original.AppliedCommandLSN || next.MaxEntryRevision != original.MaxEntryRevision {
+ 			err = fmt.Errorf("private COW leaf maintenance changed logical frontier: %w", backenddb.ErrRootPublicationBasisMismatch)
+@@ -270,6 +271,7 @@ func (db *DB) adoptPrivateCOWLeafBasis(original backenddb.StateToken) error {
+ 			}
+ 		}
+ 		err = joinCOWCleanupError(err, basis.release())
++		basis = nil
+ 	}
+ 	if err == nil && db.valueLogReader != nil {
+ 		err = db.valueLogReader.Refresh()
+diff --git a/TreeDB/caching/cow_maintenance.go b/TreeDB/caching/cow_maintenance.go
+index 086cbe622..a4e88fb23 100644
+--- a/TreeDB/caching/cow_maintenance.go
++++ b/TreeDB/caching/cow_maintenance.go
+@@ -36,8 +36,10 @@ func (db *DB) refreshCOWBackendBasis() error {
+ 	if err != nil {
+ 		return backendMaintenanceError("capture COW basis", err)
+ 	}
++	defer db.releaseCOWBasisOnUnwind(&basis)
+ 	old, err := db.installCOWBasis(basis, nil)
+ 	err = joinCOWCleanupError(err, basis.release())
++	basis = nil
+ 	if err != nil {
+ 		return backendMaintenanceError("install COW basis", err)
+ 	}
+@@ -48,6 +50,20 @@ func (db *DB) refreshCOWBackendBasis() error {
+ 	return backendMaintenanceError("drain previous COW basis", err)
+ }
+ 
++// Original capture ownership also survives a provider panic/Goexit. The
++// containing basis admission covers these fixed deferred-call cells. Normal
++// paths consume and clear the slot explicitly, preserving their error order.
++func (db *DB) releaseCOWBasisOnUnwind(slot **cowBackendBasis) {
++	basis := *slot
++	*slot = nil
++	if basis != nil {
++		if err := basis.release(); err != nil {
++			db.poisonNativeHandoff(err)
++			db.retainOriginalCleanupError(err)
++		}
++	}
++}
++
+ func (db *DB) finishCOWBackendMaintenance(fnErr error) error {
+ 	if refresher, ok := db.backend.(valueLogSetRefresher); ok {
+ 		if err := refresher.RefreshValueLogSet(); err != nil {
+diff --git a/TreeDB/caching/cow_maintenance_dictionary.go b/TreeDB/caching/cow_maintenance_dictionary.go
+new file mode 100644
+index 000000000..2a3c85c51
+--- /dev/null
++++ b/TreeDB/caching/cow_maintenance_dictionary.go
+@@ -0,0 +1,224 @@
++package caching
++
++import (
++	"unsafe"
++
++	backenddb "github.com/snissn/gomap/TreeDB/db"
++	"github.com/snissn/gomap/TreeDB/internal/dictdb"
++	"github.com/snissn/gomap/TreeDB/internal/memtable"
++	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
++	"github.com/snissn/gomap/TreeDB/internal/valuelog"
++	"github.com/snissn/gomap/TreeDB/page"
++)
++
++// The built-in provider transfers into the preadmitted slot before capture can
++// unwind. A return-only provider cannot prove this maintenance lifetime.
++type cowMaintenanceDictionaryProvider interface {
++	PrepareDictionaryReadDefinitionInto(uint64, valuelog.COWReadLimits, int, func(dictdb.DictionaryReadAllocationSizes) (func(), error), **dictdb.DictionaryReadDefinition) error
++}
++
++type cowMaintenanceDictionaryEntry struct {
++	id    uint64
++	owner *dictdb.DictionaryReadDefinition
++	err   error
++}
++
++// This is one synchronous paired-basis operation, not a generation/global cache.
++// The original flush/admission fence keeps the cache/provider alive. writerMu
++// serializes binding and all reads; after it drops only independent definition
++// owners survive. Their possibly blocking cleanup never runs under writerMu.
++type cowMaintenanceLeafScope struct {
++	cache         *cowCache
++	before, after *backenddb.Snapshot
++	provider      cowMaintenanceDictionaryProvider
++	entries       []cowMaintenanceDictionaryEntry
++	used          int
++	lease         *memtable.COWExternalLease
++	cleanup       rootpublication.SemanticCleanup
++	failure       error
++}
++
++func (db *DB) prepareCOWMaintenanceLeaves() (*cowMaintenanceLeafScope, error) {
++	c := db.cow
++	n := c.maintenance.Limits().MaxResources
++	if n < 1 || uint64(n) > ^uint64(0)/uint64(unsafe.Sizeof(cowMaintenanceDictionaryEntry{})) {
++		return nil, memtable.ErrCOWCapacity
++	}
++	charge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowMaintenanceLeafScope{}))) +
++		memtable.COWAllocationCharge(uint64(n)*uint64(unsafe.Sizeof(cowMaintenanceDictionaryEntry{}))) +
++		memtable.COWAllocationCharge(16*uint64(unsafe.Sizeof(uintptr(0))))
++	lease, err := c.maintenance.AcquireExternal(charge)
++	if err != nil {
++		return nil, err
++	}
++	s := &cowMaintenanceLeafScope{cache: c, entries: make([]cowMaintenanceDictionaryEntry, n), lease: lease}
++	s.provider, _ = db.dictStore.(cowMaintenanceDictionaryProvider)
++	s.cleanup.Work = s
++	return s, nil
++}
++
++func (s *cowMaintenanceLeafScope) MatchesNativeMaintenanceSnapshots(before, after *backenddb.Snapshot) bool {
++	return s != nil && s.cache != nil && before != nil && after != nil && before == s.before && after == s.after
++}
++
++func (s *cowMaintenanceLeafScope) admitDefinition(a dictdb.DictionaryReadAllocationSizes) (func(), error) {
++	limits := s.cache.maintenance.Limits()
++	if a.Snapshot.ValueLog.MapHint > limits.MaxResources || a.Snapshot.ValueLog.FileCount > limits.MaxResources {
++		return nil, memtable.ErrCOWCapacity
++	}
++	charge := memtable.COWAllocationCharge(a.Owner) + memtable.COWAllocationCharge(a.Callback) +
++		memtable.COWAllocationCharge(a.Definition) + memtable.COWAllocationCharge(a.Payload) + memtable.COWAllocationCharge(a.Pin) +
++		memtable.COWAllocationCharge(3*uint64(unsafe.Sizeof(uintptr(0)))) + cowSnapshotRetentionCharge(a.Snapshot)
++	lease, metadata, err := admitCOWSnapshotRetention(s.cache.maintenance, charge, a.Snapshot)
++	if err != nil {
++		return nil, err
++	}
++	if metadata != nil && a.CaptureMetadata != nil {
++		*a.CaptureMetadata = metadata
++		metadata = nil
++	}
++	return func() {
++		m, l := metadata, lease
++		metadata, lease = nil, nil
++		m.Close()
++		l.Close()
++	}, nil
++}
++
++func (s *cowMaintenanceLeafScope) definition(id uint64, limits valuelog.COWReadLimits) (*dictdb.DictionaryReadDefinition, error) {
++	for i := 0; i < s.used; i++ {
++		if s.entries[i].id == id {
++			return s.entries[i].owner, s.entries[i].err
++		}
++	}
++	if s.used == len(s.entries) {
++		return nil, memtable.ErrCOWCapacity
++	}
++	if s.provider == nil {
++		return nil, valuelog.ErrCOWReadUnsupported
++	}
++	e := &s.entries[s.used]
++	e.id = id
++	s.used++ // The slot is live before preparation, including panic/Goexit.
++	e.err = s.provider.PrepareDictionaryReadDefinitionInto(id, limits, s.cache.maintenance.Limits().MaxResources, s.admitDefinition, &e.owner)
++	if e.err == nil && e.owner == nil {
++		e.err = rootpublication.ErrPublisherProtocol
++	}
++	return e.owner, e.err
++}
++
++func (s *cowMaintenanceLeafScope) ReadNativeMaintenanceDictionaryLeaf(snapshot *backenddb.Snapshot, ptr page.LeafLogPtr, shape valuelog.COWRecordShape, dst []byte, call valuelog.COWBasisCall) ([]byte, error) {
++	if s == nil || s.cache == nil || snapshot == nil || (snapshot != s.before && snapshot != s.after) || !shape.Compressed || shape.DictID == 0 {
++		return nil, backenddb.ErrRootPublicationBasisMismatch
++	}
++	limit := s.cache.maintenance.Limits().MaxInFlightBytes
++	limits := valuelog.COWReadLimits{MaxRecordBytes: limit, MaxRawBytes: limit, MaxValueBytes: limit}
++	if shape.RawBytes > limit || shape.PayloadBytes() > limit {
++		return nil, memtable.ErrCOWCapacity
++	}
++	// The enclosing helper already inspected this exact Snapshot's record. Pin
++	// lookup is non-I/O; ReadCOWLeafPage revalidates source, shape, frame and CRC.
++	f, _, err := snapshot.PinnedValueLogFile(ptr.ValuePtr().FileID)
++	if err != nil {
++		return nil, err
++	}
++	call.Enter(valuelog.COWBasisDecoderSizes)
++	window := max(shape.RawBytes, uint64(2048))
++	sizes, err := valuelog.COWBoundedDecoderRetentionSizes(shape.RawBytes, shape.PayloadBytes(), window)
++	call.Finish(valuelog.COWBasisDecoderSizes)
++	if err != nil {
++		call.Error(valuelog.COWBasisDecoderSizes, err, shape, true)
++		return nil, err
++	}
++	call.Enter(valuelog.COWBasisAdmission)
++	owner, err := s.definition(shape.DictID, limits)
++	if err != nil {
++		call.Finish(valuelog.COWBasisAdmission)
++		call.Error(valuelog.COWBasisAdmission, err, shape, true)
++		return nil, err
++	}
++	charge := memtable.COWAllocationCharge(sizes.OwnerWrapper) + memtable.COWAllocationCharge(sizes.RawBacking) +
++		memtable.COWAllocationCharge(sizes.InputBacking) + memtable.COWAllocationCharge(3*uint64(unsafe.Sizeof(uintptr(0))))
++	lease, err := s.cache.maintenance.AcquireExternal(charge)
++	call.Finish(valuelog.COWBasisAdmission)
++	if err != nil {
++		call.Error(valuelog.COWBasisAdmission, err, shape, true)
++		return nil, err
++	}
++	var input, raw []byte
++	var decoder *valuelog.COWBoundedDecoder
++	var decode valuelog.COWDecodeFunc
++	defer func() {
++		if decoder != nil {
++			decoder.Close()
++			decoder = nil
++		}
++		decode = nil
++		input, raw = nil, nil
++		lease.Close()
++	}()
++	input, raw = make([]byte, sizes.InputBacking), make([]byte, sizes.RawBacking)
++	call.Enter(valuelog.COWBasisDecoder)
++	decoder, err = valuelog.NewCOWBoundedDecoder(shape.DictID, owner.Bytes, owner, sizes.RawBacking, sizes.InputBacking, window, lease, charge)
++	call.Finish(valuelog.COWBasisDecoder)
++	if err != nil {
++		call.Error(valuelog.COWBasisDecoder, err, shape, true)
++		return nil, err
++	}
++	decode = decoder.Decode
++	call.Enter(valuelog.COWBasisLeafRead)
++	out, err := valuelog.ReadCOWLeafPageDiagnostic(f, ptr.ValuePtr(), shape, true, input, raw, dst, decode, call)
++	call.Finish(valuelog.COWBasisLeafRead)
++	call.Error(valuelog.COWBasisLeafRead, err, shape, true)
++	return out, err
++}
++
++func (s *cowMaintenanceLeafScope) FinishSemanticCleanup() (rootpublication.SemanticCleanupCompletion, error) {
++	if s.failure != nil {
++		return rootpublication.SemanticCleanupCompletion{}, s.failure
++	}
++	for i := 0; i < s.used; i++ {
++		e := &s.entries[i]
++		if err := e.owner.ClosePreparedRead(); err != nil {
++			if s.failure == nil {
++				s.failure = err
++			}
++		} else {
++			*e = cowMaintenanceDictionaryEntry{}
++		}
++	}
++	if s.failure != nil {
++		return rootpublication.SemanticCleanupCompletion{}, s.failure
++	}
++	s.cache, s.before, s.after, s.provider = nil, nil, nil, nil
++	s.entries = nil
++	refund := s.lease
++	s.lease = nil
++	return rootpublication.SemanticCleanupCompletion{Refund: refund}, nil
++}
++
++// Transfer only after writerMu drops. Never borrow the worker's cleanup guard
++// from another goroutine, wait for it while holding flushMu, or run storage
++// callbacks here. The existing worker checks destruction and retains original
++// failure/poison/debt; checked Close joins its eligible frontier before dictStore.
++func (c *cowCache) retireCOWMaintenanceLeaves(slot **cowMaintenanceLeafScope) {
++	s := *slot
++	*slot = nil
++	s.before, s.after = nil, nil
++	if s.used == 0 {
++		// No definition/capture exists; only independent accounting remains.
++		completion, err := s.cleanup.Finish()
++		if err != nil {
++			panic("empty maintenance read scope has cleanup debt")
++		}
++		s = nil
++		completion.Complete()
++		return
++	}
++	record := &s.cleanup
++	s = nil
++	c.semanticMu.Lock()
++	c.enqueueSemanticLocked(record)
++	c.semanticMu.Unlock()
++	c.wakeSemanticCleanup()
++}
+diff --git a/TreeDB/caching/cow_maintenance_dictionary_test.go b/TreeDB/caching/cow_maintenance_dictionary_test.go
+new file mode 100644
+index 000000000..acdcf8c91
+--- /dev/null
++++ b/TreeDB/caching/cow_maintenance_dictionary_test.go
+@@ -0,0 +1,456 @@
++//go:build !windows
++
++package caching
++
++import (
++	"bytes"
++	"context"
++	"errors"
++	"os"
++	"runtime"
++	"testing"
++
++	backenddb "github.com/snissn/gomap/TreeDB/db"
++	"github.com/snissn/gomap/TreeDB/internal/dictdb"
++	"github.com/snissn/gomap/TreeDB/internal/memtable"
++	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
++	"github.com/snissn/gomap/TreeDB/internal/valuelog"
++	"github.com/snissn/gomap/TreeDB/page"
++)
++
++type cowMaintenanceProviderControl struct {
++	store      *dictdb.Store
++	cache      *cowCache
++	mode       string
++	stage      int
++	calls      int
++	releases   int
++	underGate  bool
++	wrongBytes bool
++}
++
++func (p *cowMaintenanceProviderControl) PrepareDictionaryReadDefinitionInto(id uint64, limits valuelog.COWReadLimits, n int, admit func(dictdb.DictionaryReadAllocationSizes) (func(), error), owned **dictdb.DictionaryReadDefinition) error {
++	p.calls++
++	if p.mode == "missing_completion" {
++		// Deliberately omit the required early/completion protocol. This is a
++		// negative owner-contract control, not a storage-failure reproduction.
++		owner, err := p.store.PrepareDictionaryReadDefinition(id, limits, n, admit)
++		*owned = owner
++		return err
++	}
++	if p.mode == "missing" {
++		id ^= 1
++	}
++	err := p.store.PrepareDictionaryReadDefinitionInto(id, limits, n, func(a dictdb.DictionaryReadAllocationSizes) (func(), error) {
++		p.stage++
++		if p.stage == 3 {
++			switch p.mode {
++			case "refusal":
++				return nil, memtable.ErrCOWCapacity
++			case "panic":
++				panic("selected provider unwind")
++			case "goexit":
++				runtime.Goexit()
++			}
++		}
++		release, err := admit(a)
++		if err != nil {
++			return nil, err
++		}
++		return func() {
++			p.releases++
++			if !p.cache.writerMu.TryLock() {
++				p.underGate = true
++			} else {
++				p.cache.writerMu.Unlock()
++			}
++			release()
++		}, nil
++	}, owned)
++	if err == nil && p.wrongBytes {
++		(*owned).Bytes[0] ^= 1
++	}
++	return err
++}
++
++func cowMaintenanceDictionaryPair(t *testing.T, db *DB) (*cowMaintenanceLeafScope, *cowBackendBasis) {
++	t.Helper()
++	after, err := db.cow.captureBackendBasis(db.backend.(*backenddb.DB))
++	if err != nil {
++		t.Fatal(err)
++	}
++	s, err := db.prepareCOWMaintenanceLeaves()
++	if err != nil {
++		t.Fatal(errors.Join(err, after.release()))
++	}
++	s.before, s.after = db.cow.cut.basis.snapshot, after.snapshot
++	return s, after
++}
++
++func cowFinishMaintenancePair(t *testing.T, db *DB, s **cowMaintenanceLeafScope, after *cowBackendBasis) {
++	t.Helper()
++	db.cow.retireCOWMaintenanceLeaves(s)
++	if err := db.joinSemanticCleanupFrontier(); err != nil {
++		t.Error(err)
++	}
++	if err := after.release(); err != nil {
++		t.Error(err)
++	}
++}
++
++func cowMaintenanceActualShape(t *testing.T, snapshot *backenddb.Snapshot, ptr page.LeafLogPtr, limit uint64) valuelog.COWRecordShape {
++	t.Helper()
++	f, _, err := snapshot.PinnedValueLogFile(ptr.ValuePtr().FileID)
++	if err != nil {
++		t.Fatal(err)
++	}
++	shape, err := valuelog.InspectCOWLeafRecord(f, ptr.ValuePtr(), valuelog.COWReadLimits{MaxRecordBytes: limit, MaxRawBytes: limit, MaxValueBytes: limit})
++	if err != nil || !shape.Compressed || shape.DictID == 0 {
++		t.Fatalf("actual trained dictionary leaf: compressed=%t dictionary=%t error=%v", shape.Compressed, shape.DictID != 0, err)
++	}
++	return shape
++}
++
++func TestCOWMaintenanceDictionaryPairedSidesAndRefund(t *testing.T) {
++	db, want, ptr := cowSuccessorDictionaryLeafFixture(t)
++	c := db.cow
++	provider, ok := db.dictStore.(cowDictionaryReadProvider)
++	if !ok {
++		t.Fatal("fixture lacks original supported dictionary reader")
++	}
++	var supported [page.PageSize]byte
++	pageBytes, err := c.cut.basis.nativeLeafPage(c, provider, ptr, supported[:])
++	if err != nil || len(pageBytes) != page.PageSize || &pageBytes[0] != &supported[0] {
++		t.Fatalf("original supported page reader: %v", err)
++	}
++	before := c.maintenance.Stats()
++	ordinary := c.budget.Stats()
++	s, after := cowMaintenanceDictionaryPair(t, db)
++	p := &cowMaintenanceProviderControl{store: db.dictStore.(*dictdb.Store), cache: c}
++	s.provider = p
++	if !s.MatchesNativeMaintenanceSnapshots(s.before, s.after) || s.MatchesNativeMaintenanceSnapshots(s.after, s.before) {
++		t.Fatal("scope did not bind exact ordered pair")
++	}
++	var previous []byte
++	func() {
++		c.writerMu.Lock()
++		defer c.writerMu.Unlock()
++		for _, snapshot := range []*backenddb.Snapshot{s.before, s.after, s.before} {
++			shape := cowMaintenanceActualShape(t, snapshot, ptr, c.maintenance.Limits().MaxInFlightBytes)
++			var dst [page.PageSize]byte
++			got, err := s.ReadNativeMaintenanceDictionaryLeaf(snapshot, ptr, shape, dst[:], valuelog.COWBasisCall{})
++			if err != nil || len(got) != page.PageSize || &got[0] != &dst[0] {
++				t.Fatalf("paired read/alias: bytes=%d error=%v", len(got), err)
++			}
++			if previous != nil && !bytes.Equal(previous, got) {
++				t.Fatal("paired exact snapshots returned different pages")
++			}
++			if !bytes.Equal(got, supported[:]) {
++				t.Fatal("maintenance page differs from original supported reader")
++			}
++			previous = append(previous[:0], got...)
++		}
++		if s.used != 1 || p.calls != 1 || p.releases != 0 {
++			t.Fatalf("operation custody/dedup: used=%d calls=%d releases=%d", s.used, p.calls, p.releases)
++		}
++	}()
++	cowFinishMaintenancePair(t, db, &s, after)
++	if p.underGate || p.releases == 0 {
++		t.Fatal("dictionary cleanup missing or ran under writer gate")
++	}
++	if got := c.maintenance.Stats(); got.ExternalBytes != before.ExternalBytes || got.ExternalLeases != before.ExternalLeases {
++		t.Fatalf("maintenance refund: before=%+v after=%+v", before, got)
++	}
++	if got := c.budget.Stats(); got.ExternalBytes != ordinary.ExternalBytes || got.ExternalLeases != ordinary.ExternalLeases {
++		t.Fatal("maintenance borrowed ordinary read capacity")
++	}
++	if got, err := db.Get([]byte("a000")); err != nil || !bytes.Equal(got, want) {
++		t.Fatalf("original value: %v", err)
++	}
++	if err := db.Close(); err != nil {
++		t.Fatal(err)
++	}
++}
++
++func TestCOWMaintenanceDictionaryRefusalAndUnwind(t *testing.T) {
++	for _, mode := range []string{"missing", "wrong_definition", "refusal", "panic", "goexit", "shape", "frame", "crc", "short_output"} {
++		t.Run(mode, func(t *testing.T) {
++			db, _, ptr := cowSuccessorDictionaryLeafFixture(t)
++			c := db.cow
++			before := c.maintenance.Stats()
++			s, after := cowMaintenanceDictionaryPair(t, db)
++			p := &cowMaintenanceProviderControl{store: db.dictStore.(*dictdb.Store), cache: c, mode: mode, wrongBytes: mode == "wrong_definition"}
++			s.provider = p
++			shape := cowMaintenanceActualShape(t, s.before, ptr, c.maintenance.Limits().MaxInFlightBytes)
++			if mode == "shape" {
++				shape.RawBytes++
++			}
++			if mode == "frame" || mode == "crc" {
++				f, _, err := s.before.PinnedValueLogFile(ptr.ValuePtr().FileID)
++				if err != nil {
++					t.Fatal(err)
++				}
++				w, err := os.OpenFile(f.Name(), os.O_RDWR, 0)
++				if err != nil {
++					t.Fatal(err)
++				}
++				offset := int64(ptr.ValuePtr().Offset - 4)
++				if mode == "frame" {
++					offset += valuelog.HeaderSize + 4 // Actual encoded dictionary-ID byte.
++				}
++				var original [1]byte
++				if _, err := w.ReadAt(original[:], offset); err != nil {
++					t.Fatal(err)
++				}
++				if _, err := w.WriteAt([]byte{original[0] ^ 1}, offset); err != nil {
++					t.Fatal(err)
++				}
++				defer func() {
++					if _, err := w.WriteAt(original[:], offset); err != nil {
++						t.Error(err)
++					}
++					if err := w.Close(); err != nil {
++						t.Error(err)
++					}
++				}()
++			}
++			var result error
++			panicked := false
++			done := make(chan struct{})
++			go func() {
++				defer close(done)
++				defer func() { panicked = recover() != nil }()
++				defer cowFinishMaintenancePair(t, db, &s, after)
++				c.writerMu.Lock()
++				defer c.writerMu.Unlock()
++				var dst [page.PageSize]byte
++				out := dst[:]
++				if mode == "short_output" {
++					out = out[:0:0]
++				}
++				_, result = s.ReadNativeMaintenanceDictionaryLeaf(s.before, ptr, shape, out, valuelog.COWBasisCall{})
++			}()
++			<-done
++			if mode == "panic" && !panicked {
++				t.Fatal("provider panic was swallowed")
++			}
++			if mode != "panic" && mode != "goexit" && result == nil {
++				t.Fatal("adverse dictionary read accepted")
++			}
++			if mode == "refusal" && !errors.Is(result, memtable.ErrCOWCapacity) {
++				t.Fatalf("original admission error: %v", result)
++			}
++			if p.underGate || (p.calls > 0 && p.releases == 0) {
++				t.Fatal("partial owner lost or cleaned under writer gate")
++			}
++			if got := c.maintenance.Stats(); got.ExternalBytes != before.ExternalBytes || got.ExternalLeases != before.ExternalLeases {
++				t.Fatalf("partial/unwind refund: before=%+v after=%+v", before, got)
++			}
++		})
++	}
++}
++
++func TestCOWMaintenanceDictionaryDistinctBoundAndOriginalPair(t *testing.T) {
++	db, _, ptr := cowSuccessorDictionaryLeafFixture(t)
++	s, after := cowMaintenanceDictionaryPair(t, db)
++	defer cowFinishMaintenancePair(t, db, &s, after)
++	store := db.dictStore.(*dictdb.Store)
++	p := &cowMaintenanceProviderControl{store: store, cache: db.cow}
++	s.provider = p
++	shape := cowMaintenanceActualShape(t, s.before, ptr, db.cow.maintenance.Limits().MaxInFlightBytes)
++	id2, err := store.PutDictBytes(context.Background(), []byte("second independently authenticated definition"))
++	if err != nil {
++		t.Fatal(err)
++	}
++	id3, err := store.PutDictBytes(context.Background(), []byte("third independently authenticated definition"))
++	if err != nil {
++		t.Fatal(err)
++	}
++	limits := db.cow.readLimits()
++	// Reduce only the usable slots in the already-admitted original container.
++	// This is a refusal boundary control; it does not grant a larger test budget.
++	s.entries = s.entries[:2]
++	for _, id := range []uint64{shape.DictID, id2, shape.DictID, id2} {
++		owner, err := s.definition(id, limits)
++		if err != nil || owner == nil || len(owner.Bytes) == 0 {
++			t.Fatalf("authenticated distinct owner: %v", err)
++		}
++	}
++	if s.used != 2 || p.calls != 2 || p.releases != 0 {
++		t.Fatal("distinct/repeated visits lost bounded owner custody")
++	}
++	if owner, err := s.definition(id3, limits); owner != nil || !errors.Is(err, memtable.ErrCOWCapacity) || p.calls != 2 {
++		t.Fatalf("exhausted slot performed provider effect: %v", err)
++	}
++	var dst [page.PageSize]byte
++	if _, err := s.ReadNativeMaintenanceDictionaryLeaf(&backenddb.Snapshot{}, ptr, shape, dst[:], valuelog.COWBasisCall{}); !errors.Is(err, backenddb.ErrRootPublicationBasisMismatch) || p.calls != 2 {
++		t.Fatalf("foreign snapshot accepted: %v", err)
++	}
++}
++
++type cowMaintenanceRefreshControl struct {
++	*testSemanticState
++	ptr   page.LeafLogPtr
++	calls int
++}
++
++func (s *cowMaintenanceRefreshControl) PrepareBasisRefresh(before, after *backenddb.Snapshot) (backenddb.NativeSemanticState, error) {
++	return nil, valuelog.ErrCOWReadUnsupported
++}
++
++func (s *cowMaintenanceRefreshControl) PrepareBasisRefreshWithMaintenanceLeaves(before, after *backenddb.Snapshot, leaves backenddb.NativeMaintenanceLeafReader, call valuelog.COWBasisCall) (backenddb.NativeSemanticState, error) {
++	if !leaves.MatchesNativeMaintenanceSnapshots(before, after) {
++		return nil, backenddb.ErrRootPublicationBasisMismatch
++	}
++	for _, snapshot := range []*backenddb.Snapshot{before, after} {
++		f, _, err := snapshot.PinnedValueLogFile(s.ptr.ValuePtr().FileID)
++		if err != nil {
++			return nil, err
++		}
++		shape, err := valuelog.InspectCOWLeafRecord(f, s.ptr.ValuePtr(), valuelog.COWReadLimits{MaxRecordBytes: 1 << 20, MaxRawBytes: 1 << 20, MaxValueBytes: 1 << 20})
++		if err != nil {
++			return nil, err
++		}
++		var dst [page.PageSize]byte
++		if _, err := leaves.ReadNativeMaintenanceDictionaryLeaf(snapshot, s.ptr, shape, dst[:], call); err != nil {
++			return nil, err
++		}
++		s.calls++
++	}
++	s.Retain()
++	return s, nil
++}
++
++func TestCOWMaintenanceDictionaryActualInstallDispatch(t *testing.T) {
++	db, want, ptr := cowSuccessorDictionaryLeafFixture(t)
++	c := db.cow
++	held, err := db.acquireCOWSnapshotWithError()
++	if err != nil {
++		t.Fatal(err)
++	}
++	state := &cowMaintenanceRefreshControl{testSemanticState: newTestSemanticState(nil), ptr: ptr}
++	c.writerMu.Lock()
++	if c.cut.semanticRootSet != nil || c.cut.frozenSemanticRootSet != nil {
++		c.writerMu.Unlock()
++		t.Fatal("raw fixture unexpectedly has semantic ownership")
++	}
++	c.cut.semanticRootSet = state
++	c.writerMu.Unlock()
++	basis, err := c.captureBackendBasis(db.backend.(*backenddb.DB))
++	if err != nil {
++		t.Fatal(err)
++	}
++	if _, err := refreshCOWSemanticBasis(state, held.cowCut.basis.snapshot, basis.snapshot); !errors.Is(err, valuelog.ErrCOWReadUnsupported) {
++		t.Fatalf("unscoped owner did not preserve old refusal: %v", err)
++	}
++	old, installErr := db.installCOWBasis(basis, nil)
++	if err := basis.release(); err != nil {
++		t.Fatal(err)
++	}
++	if installErr != nil || old != nil || state.calls != 2 {
++		t.Fatalf("actual install dispatch: calls=%d retired=%p error=%v", state.calls, old, installErr)
++	}
++	if got, err := held.Get([]byte("a000")); err != nil || !bytes.Equal(got, want) {
++		t.Fatalf("original held cut: %v", err)
++	}
++	if err := held.Close(); err != nil {
++		t.Fatal(err)
++	}
++	if err := db.Checkpoint(); err != nil {
++		t.Fatal(err)
++	}
++	if got, err := db.Get([]byte("a000")); err != nil || !bytes.Equal(got, want) {
++		t.Fatalf("post-checkpoint value: %v", err)
++	}
++	if err := db.Close(); err != nil {
++		t.Fatal(err)
++	}
++}
++
++func TestCOWMaintenanceDictionaryFailedCompletionKeepsOriginalDebt(t *testing.T) {
++	db, _, ptr := cowSuccessorDictionaryLeafFixture(t)
++	s, after := cowMaintenanceDictionaryPair(t, db)
++	c := db.cow
++	s.provider = &cowMaintenanceProviderControl{store: db.dictStore.(*dictdb.Store), cache: c, mode: "missing_completion"}
++	shape := cowMaintenanceActualShape(t, s.before, ptr, c.maintenance.Limits().MaxInFlightBytes)
++	var dst [page.PageSize]byte
++	if _, err := s.ReadNativeMaintenanceDictionaryLeaf(s.before, ptr, shape, dst[:], valuelog.COWBasisCall{}); err != nil {
++		t.Fatal(err)
++	}
++	original := s
++	c.retireCOWMaintenanceLeaves(&s)
++	first := db.joinSemanticCleanupFrontier()
++	if !errors.Is(first, rootpublication.ErrResourceOwnership) || db.joinSemanticCleanupFrontier() != first {
++		t.Fatalf("missing original cleanup completion not retained: %v", first)
++	}
++	c.semanticMu.Lock()
++	parked := c.semanticFailed == &original.cleanup && original.cleanup.Work == original
++	c.semanticMu.Unlock()
++	if !parked || original.lease == nil || original.entries[0].owner == nil {
++		t.Fatal("original failed work/owner/charge lost")
++	}
++	if err := after.release(); err != nil {
++		t.Fatal(err)
++	}
++	if err := db.Close(); err == nil {
++		t.Fatal("checked original Close discarded terminal cleanup failure")
++	}
++	if original.lease == nil || original.entries[0].owner == nil {
++		t.Fatal("failed Close was treated as disposal/refund")
++	}
++}
++
++type cowMaintenanceControlStore struct {
++	DictStore
++	*cowMaintenanceProviderControl
++}
++
++func TestCOWMaintenanceDictionaryInstallUnwindKeepsOpeningCut(t *testing.T) {
++	for _, mode := range []string{"panic", "goexit"} {
++		t.Run(mode, func(t *testing.T) {
++			db, want, ptr := cowSuccessorDictionaryLeafFixture(t)
++			c := db.cow
++			state := &cowMaintenanceRefreshControl{testSemanticState: newTestSemanticState(nil), ptr: ptr}
++			c.writerMu.Lock()
++			c.cut.semanticRootSet = state
++			opening := c.cut
++			c.writerMu.Unlock()
++			original := db.dictStore
++			defer func() { db.dictStore = original }()
++			p := &cowMaintenanceProviderControl{store: original.(*dictdb.Store), cache: c, mode: mode}
++			db.dictStore = &cowMaintenanceControlStore{DictStore: original, cowMaintenanceProviderControl: p}
++			before := c.maintenance.Stats()
++			panicked := false
++			done := make(chan struct{})
++			go func() {
++				defer close(done)
++				defer func() { panicked = recover() != nil }()
++				db.flushMu.Lock()
++				defer db.flushMu.Unlock()
++				if err := db.refreshCOWBackendBasis(); err != nil {
++					t.Error(err)
++				}
++			}()
++			<-done
++			db.dictStore = original
++			if err := db.joinSemanticCleanupFrontier(); err != nil {
++				t.Fatal(err)
++			}
++			if p.stage != 3 || p.releases == 0 || p.underGate || (mode == "panic" && !panicked) {
++				t.Fatal("original unwind/custody boundary not exercised")
++			}
++			if c.cut != opening || state.refs.Load() != 1 {
++				t.Fatal("unwind published or lost original opening cut")
++			}
++			if got := c.maintenance.Stats(); got.ExternalBytes != before.ExternalBytes || got.ExternalLeases != before.ExternalLeases {
++				t.Fatalf("original capture/private install/scope unwind leaked: before=%+v after=%+v", before, got)
++			}
++			if got, err := db.Get([]byte("a000")); err != nil || !bytes.Equal(got, want) {
++				t.Fatalf("opening contents lost after unwind: %v", err)
++			}
++			if err := db.Close(); err != nil {
++				t.Fatal(err)
++			}
++		})
++	}
++}
+diff --git a/TreeDB/caching/db.go b/TreeDB/caching/db.go
+index 89c32e3ee..39ffd0460 100644
+--- a/TreeDB/caching/db.go
++++ b/TreeDB/caching/db.go
+@@ -9063,6 +9063,8 @@ func (s *foregroundReaderState) end() uint32 {
+ }
+ 
+ type DB struct {
++	// Diagnostic overlay only; never charged COW scratch or a global observer.
++	nativeBasisRefusalObserver   atomic.Pointer[valuelog.COWBasisRefusalObserver]
+ 	flushRequested               atomic.Bool
+ 	ownedCloseGuard              *backenddb.OwnedCallbackCloseGuard
+ 	cow                          *cowCache
+diff --git a/TreeDB/collections/native_basis_public_vacuum_activation_test.go b/TreeDB/collections/native_basis_public_vacuum_activation_test.go
+new file mode 100644
+index 000000000..0471ee87b
+--- /dev/null
++++ b/TreeDB/collections/native_basis_public_vacuum_activation_test.go
+@@ -0,0 +1,318 @@
++package collections
++
++import (
++	"bytes"
++	"errors"
++	"testing"
++
++	treedb "github.com/snissn/gomap/TreeDB"
++	backenddb "github.com/snissn/gomap/TreeDB/db"
++	"github.com/snissn/gomap/TreeDB/internal/valuelog"
++	"github.com/snissn/gomap/TreeDB/page"
++	"github.com/snissn/gomap/TreeDB/tree"
++)
++
++// This is a positive public-path activation control, not a reproduction or a
++// repair of the original concurrent lifecycle failure. Unsupported/no-op work
++// and an unobserved descriptor/leaf path fail; none of them is a skip.
++func TestNativeBasisPublicVacuumActivationV1(t *testing.T) {
++	const rows = 8
++	const name = "basis_vacuum_activation"
++	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir())
++	opts.MemtableMode = "cow_btree"
++	opts.COWMemtableLimits = treedb.DefaultCOWMemtableLimits()
++	// Retain the profile's default medium, codec, generation, flush, checkpoint
++	// and background policies. These ordinary documents must earn real work.
++	owner, err := treedb.Open(opts)
++	if err != nil {
++		t.Fatal(err)
++	}
++	var observer valuelog.COWBasisRefusalObserver
++	t.Cleanup(func() {
++		// Registered first, so the resource cleanup below runs before this scalar
++		// receipt. A failed Close is not a borrower join or permission to retry.
++		final := observer.Snapshot()
++		t.Logf("basis-first-refusal: %+v", final)
++		if final.First != 0 || final.Missing || final.Overflow {
++			t.Errorf("original owner recorded refusal/missing/overflow: %+v", final)
++		}
++	})
++	ownerOpen := true
++	var manager *CollectionManager
++	managerOpen := false
++	var held, beforeRead, current *NativeJSONRead
++	t.Cleanup(func() {
++		for _, slot := range []**NativeJSONRead{&current, &beforeRead, &held} {
++			if *slot != nil {
++				read := *slot
++				*slot = nil
++				if err := read.Close(); err != nil {
++					t.Errorf("cleanup native read Close: %v", err)
++				}
++			}
++		}
++		if managerOpen {
++			managerOpen = false
++			if err := manager.Close(); err != nil {
++				t.Errorf("cleanup manager Close: %v", err)
++			}
++		}
++		if ownerOpen {
++			ownerOpen = false
++			if err := owner.Close(); err != nil {
++				t.Errorf("cleanup owner Close: %v", err)
++			}
++		}
++	})
++	if !owner.EnableNativeBasisRefusalObserverForTest(&observer) {
++		t.Fatal("first public owner/cache exclusive registration refused")
++	}
++	if owner.EnableNativeBasisRefusalObserverForTest(&observer) {
++		t.Fatal("first public owner/cache allowed duplicate registration")
++	}
++	backend, err := owner.NativeSemanticBackend()
++	if err != nil {
++		t.Fatal(err)
++	}
++	manager = NewCollectionManager(backend)
++	managerOpen = true
++	if !manager.UsesNativeCommandWALApply() {
++		t.Fatal("first public owner did not activate native command WAL")
++	}
++	if _, err := manager.CreateCollection(&CollectionMeta{Name: name}); err != nil {
++		t.Fatal(err)
++	}
++	collection, err := manager.OpenCollection(name)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if collection.nativeJSON == nil {
++		t.Fatal("first public owner did not activate native collection")
++	}
++	closeRead := func(stage string, slot **NativeJSONRead) {
++		t.Helper()
++		read := *slot
++		*slot = nil
++		if read == nil {
++			t.Fatalf("%s: missing original read", stage)
++		}
++		if err := read.Close(); err != nil {
++			t.Fatalf("%s: checked read Close: %v", stage, err)
++		}
++	}
++	// Check actual persisted catalog records against the exact captured native
++	// descriptors. No alternate owner, manually constructed state or pin exists.
++	checkCatalog := func(stage string, read *NativeJSONRead) (backenddb.StateToken, uint64, uint64) {
++		t.Helper()
++		if read == nil || read.capture == nil || read.collection == nil || read.domain.domain == nil {
++			t.Fatalf("%s: missing native capture/collection/domain", stage)
++		}
++		snapshot := read.capture.Snapshot()
++		token, ok := snapshot.StateToken()
++		if !ok || token.SystemRootPageID == 0 || snapshot.Pager() == nil {
++			t.Fatalf("%s: missing persisted physical system root", stage)
++		}
++		catalog, err := loadCollectionCatalog(snapshot, name)
++		if err != nil || catalog == nil || catalog.meta.Name != name {
++			t.Fatalf("%s: persisted catalog: present=%t err=%v", stage, catalog != nil, err)
++		}
++		root := catalog.rootID(collectionPrimaryRootName(name))
++		domain := read.domain.domain
++		if root == 0 || domain.catalogRoot != root || domain.baseRoot == 0 || len(catalog.rootOverlays) != 0 {
++			t.Fatalf("%s: unsupported/unpersisted primary shape: root=%d catalog=%d base=%d overlays=%d", stage, root, domain.catalogRoot, domain.baseRoot, len(catalog.rootOverlays))
++		}
++		raw, found, err := getSystemValue(snapshot, nativeCatalogIncarnationPrefix+name)
++		if err != nil || !found {
++			t.Fatalf("%s: persisted incarnation: found=%t err=%v", stage, found, err)
++		}
++		incarnation, err := nativeCatalogIdentityValue(raw, false)
++		if err != nil || incarnation != read.collection.incarnation {
++			t.Fatalf("%s: persisted/native incarnation mismatch: err=%v", stage, err)
++		}
++		return token, incarnation, root
++	}
++	var revisions [rows]page.EntryRevision
++	acknowledged, matchingIDs := 0, 0
++	insert := func(row int) {
++		t.Helper()
++		id := nativeOrdinaryConcurrentExactID(row)
++		gotID, insertErr := collection.Insert(id, nativeOrdinaryConcurrentExactDocument(row))
++		if insertErr == nil {
++			acknowledged++
++		}
++		if bytes.Equal(gotID, id) {
++			matchingIDs++
++		}
++		if insertErr != nil || !bytes.Equal(gotID, id) {
++			t.Fatalf("Insert row=%d ACK=%t matching_ID=%t uncertain=%t err=%v", row, insertErr == nil, bytes.Equal(gotID, id), backenddb.CommitPublicationAccepted(insertErr), insertErr)
++		}
++	}
++	verify := func(stage string, read *NativeJSONRead, count int, record bool) {
++		t.Helper()
++		for row := 0; row < count; row++ {
++			id := nativeOrdinaryConcurrentExactID(row)
++			got, err := read.Get(id)
++			if err != nil || !bytes.Equal(got, nativeOrdinaryConcurrentExactDocument(row)) {
++				t.Fatalf("%s: acknowledged value row=%d differs: err=%v", stage, row, err)
++			}
++			entry, err := read.getEntry(id)
++			if err != nil {
++				t.Fatalf("%s: acknowledged revision row=%d: %v", stage, row, err)
++			}
++			if record {
++				revisions[row] = entry.Revision
++			} else if entry.Revision != revisions[row] {
++				t.Fatalf("%s: acknowledged revision row=%d changed: got=%d want=%d", stage, row, entry.Revision, revisions[row])
++			}
++		}
++	}
++	insert(0)
++	if err := owner.Checkpoint(); err != nil {
++		t.Fatalf("seed persisted checkpoint: %v", err)
++	}
++	held, err = collection.nativeJSON.Capture(name)
++	if err != nil {
++		t.Fatal(err)
++	}
++	heldToken, incarnation, heldRoot := checkCatalog("held seed", held)
++	heldPager := held.capture.Snapshot().Pager()
++	verify("held seed", held, 1, true)
++	for row := 1; row < rows; row++ {
++		insert(row)
++	}
++	if acknowledged != rows || matchingIDs != rows {
++		t.Fatalf("incomplete ACK/identity census: ACK=%d matching_ID=%d", acknowledged, matchingIDs)
++	}
++	if err := owner.Checkpoint(); err != nil {
++		t.Fatalf("persisted preparation checkpoint: %v", err)
++	}
++	beforeRead, err = collection.nativeJSON.Capture(name)
++	if err != nil {
++		t.Fatal(err)
++	}
++	beforeToken, beforeIncarnation, beforeRoot := checkCatalog("before public vacuum", beforeRead)
++	if beforeIncarnation != incarnation {
++		t.Fatal("preparation changed logical incarnation")
++	}
++	verify("before public vacuum seed", beforeRead, 1, false)
++	verify("before public vacuum", beforeRead, rows, true)
++	verifyHeld := func(stage string) {
++		t.Helper()
++		token, identity, root := checkCatalog(stage, held)
++		if token != heldToken || identity != incarnation || root != heldRoot || held.capture.Snapshot().Pager() != heldPager {
++			t.Fatalf("%s: original held physical/logical cut changed", stage)
++		}
++		verify(stage, held, 1, false)
++		for row := 1; row < rows; row++ {
++			got, err := held.Get(nativeOrdinaryConcurrentExactID(row))
++			if len(got) != 0 || !errors.Is(err, tree.ErrKeyNotFound) {
++				t.Fatalf("%s: original held cut sees later ACK row=%d err=%v", stage, row, err)
++			}
++		}
++	}
++	verifyHeld("held before public vacuum")
++	beforePager := beforeRead.capture.Snapshot().Pager()
++	attemptBefore := owner.VacuumOnlineStats().AttemptID
++	// Only this interval can satisfy activation. Independent atomic scalar
++	// reads are not an atomic cut, equality assertion or borrower join proof.
++	basisBefore := observer.Snapshot()
++	t.Logf("basis-vacuum-before: %+v", basisBefore)
++	vacuumErr := owner.VacuumIndexOnline(t.Context())
++	basisAfter := observer.Snapshot()
++	t.Logf("basis-vacuum-after: %+v", basisAfter)
++	if vacuumErr != nil {
++		t.Fatalf("original public VacuumIndexOnline: %v", vacuumErr)
++	}
++	work := owner.VacuumOnlineStats()
++	if work.AttemptID <= attemptBefore || !work.WorkCompleted || work.Canceled || work.ReplacementPagerPages == 0 {
++		t.Fatalf("public vacuum did not complete actual replacement work: before_attempt=%d after_attempt=%d completed=%t canceled=%t pages=%d", attemptBefore, work.AttemptID, work.WorkCompleted, work.Canceled, work.ReplacementPagerPages)
++	}
++	if basisBefore.First != 0 || basisAfter.First != 0 || basisBefore.Missing || basisAfter.Missing || basisBefore.Overflow || basisAfter.Overflow {
++		t.Fatalf("public vacuum interval refusal/missing/overflow: before=%+v after=%+v", basisBefore, basisAfter)
++	}
++	if basisAfter.Calls <= basisBefore.Calls || basisAfter.Completed <= basisBefore.Completed {
++		t.Fatalf("public vacuum interval has no completed observed calls: before=%+v after=%+v", basisBefore, basisAfter)
++	}
++	for _, stage := range []valuelog.COWBasisStage{valuelog.COWBasisRefresh, valuelog.COWBasisDescriptor, valuelog.COWBasisLeafRead} {
++		if basisAfter.Entered[stage] <= basisBefore.Entered[stage] || basisAfter.Finished[stage] <= basisBefore.Finished[stage] {
++			t.Fatalf("public vacuum interval did not enter/finish stage=%d: before=%+v after=%+v", stage, basisBefore, basisAfter)
++		}
++	}
++	current, err = collection.nativeJSON.Capture(name)
++	if err != nil {
++		t.Fatal(err)
++	}
++	afterToken, afterIncarnation, afterRoot := checkCatalog("after public vacuum", current)
++	if current.capture.Snapshot().Pager() == beforePager {
++		t.Fatal("public vacuum did not change the actual captured pager generation")
++	}
++	if afterIncarnation != incarnation || afterToken.AppliedCommandLSN != beforeToken.AppliedCommandLSN || afterToken.MaxEntryRevision != beforeToken.MaxEntryRevision {
++		t.Fatal("physical vacuum changed logical incarnation/command LSN/revision bound")
++	}
++	verify("after public vacuum", current, rows, false)
++	verify("pre-vacuum held current cut", beforeRead, rows, false)
++	if token, ok := beforeRead.capture.Snapshot().StateToken(); !ok || token != beforeToken || beforeRead.capture.Snapshot().Pager() != beforePager {
++		t.Fatal("pre-vacuum held current physical cut changed")
++	}
++	verifyHeld("held after public vacuum")
++	closeRead("post-vacuum read", &current)
++	closeRead("pre-vacuum read", &beforeRead)
++	closeRead("original held read", &held)
++	managerOpen = false
++	if err := manager.Close(); err != nil {
++		t.Fatalf("original manager Close: %v", err)
++	}
++	ownerOpen = false
++	if err := owner.Close(); err != nil {
++		t.Fatalf("original owner Close: %v", err)
++	}
++	if pins := backend.ValueLogIdentityPinRegistry().Stats(); pins.ActivePins != 0 || pins.ActiveIdentities != 0 || pins.ActiveStableNamespaceLinks != 0 {
++		t.Fatalf("original owner retained physical resources: %+v", pins)
++	}
++	owner, err = treedb.Open(opts)
++	if err != nil {
++		t.Fatalf("fresh reopen: %v", err)
++	}
++	ownerOpen = true
++	backend, err = owner.NativeSemanticBackend()
++	if err != nil {
++		t.Fatal(err)
++	}
++	manager = NewCollectionManager(backend)
++	managerOpen = true
++	if !manager.UsesNativeCommandWALApply() {
++		t.Fatal("reopened public owner did not activate native command WAL")
++	}
++	collection, err = manager.OpenCollection(name)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if collection.nativeJSON == nil {
++		t.Fatal("reopened public owner did not activate native collection")
++	}
++	current, err = collection.nativeJSON.Capture(name)
++	if err != nil {
++		t.Fatal(err)
++	}
++	reopenedToken, reopenedIncarnation, reopenedRoot := checkCatalog("fresh reopen", current)
++	if reopenedIncarnation != incarnation || reopenedToken.AppliedCommandLSN != afterToken.AppliedCommandLSN || reopenedToken.MaxEntryRevision != afterToken.MaxEntryRevision {
++		t.Fatal("fresh reopen changed logical incarnation/command LSN/revision bound")
++	}
++	verify("fresh reopen", current, rows, false)
++	closeRead("reopened read", &current)
++	managerOpen = false
++	if err := manager.Close(); err != nil {
++		t.Fatalf("reopened manager Close: %v", err)
++	}
++	ownerOpen = false
++	if err := owner.Close(); err != nil {
++		t.Fatalf("reopened owner Close: %v", err)
++	}
++	if pins := backend.ValueLogIdentityPinRegistry().Stats(); pins.ActivePins != 0 || pins.ActiveIdentities != 0 || pins.ActiveStableNamespaceLinks != 0 {
++		t.Fatalf("reopened owner retained physical resources: %+v", pins)
++	}
++	// Completion flags below are emitted only after their checked original calls.
++	// Revisions may legitimately be legacy zero; exact recorded values, not a
++	// manufactured revision, must survive vacuum, old reads and fresh reopen.
++	t.Logf("basis-public-vacuum-work: Rows=%d ACK=%d MatchingID=%d AttemptBefore=%d AttemptAfter=%d WorkCompleted=%t Canceled=%t ReplacementPagerPages=%d PagerChanged=true Incarnation=%d HeldRoot=%d BeforeRoot=%d AfterRoot=%d ReopenedRoot=%d BeforeSystemRoot=%d AfterSystemRoot=%d ReopenedSystemRoot=%d Revisions=%v HeldPreserved=true HeldClosed=true ManagerClosed=true OwnerClosed=true OriginalPinsEmpty=true ReopenedRead=true ReopenedReadClosed=true ReopenedManagerClosed=true ReopenedOwnerClosed=true ReopenedPinsEmpty=true", rows, acknowledged, matchingIDs, attemptBefore, work.AttemptID, work.WorkCompleted, work.Canceled, work.ReplacementPagerPages, incarnation, heldRoot, beforeRoot, afterRoot, reopenedRoot, beforeToken.SystemRootPageID, afterToken.SystemRootPageID, reopenedToken.SystemRootPageID, revisions)
++}
+diff --git a/TreeDB/collections/native_basis_public_vacuum_original_corpus_test.go b/TreeDB/collections/native_basis_public_vacuum_original_corpus_test.go
+new file mode 100644
+index 000000000..937f9edc0
+--- /dev/null
++++ b/TreeDB/collections/native_basis_public_vacuum_original_corpus_test.go
+@@ -0,0 +1,451 @@
++package collections
++
++import (
++	"bytes"
++	"errors"
++	"fmt"
++	"strconv"
++	"sync"
++	"testing"
++
++	treedb "github.com/snissn/gomap/TreeDB"
++	backenddb "github.com/snissn/gomap/TreeDB/db"
++	"github.com/snissn/gomap/TreeDB/internal/valuelog"
++	"github.com/snissn/gomap/TreeDB/page"
++	"github.com/snissn/gomap/TreeDB/tree"
++)
++
++// This focused control sends the original fixed 256-row/16-writer corpus through
++// one explicit public vacuum. It preserves the original pre-checkpoint seed
++// capture; the qualified eight-row control and original witness stay unchanged.
++// A pass covers this route/corpus, not the historical Close failure or its cause.
++func TestNativeBasisPublicVacuumOriginalCorpusV1(t *testing.T) {
++	const rows = 256
++	t.Helper()
++	const writers = 16
++	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir())
++	opts.MemtableMode = "cow_btree"
++	opts.COWMemtableLimits = treedb.DefaultCOWMemtableLimits()
++	// Keep the profile's flush/checkpoint settings and the default finite caps.
++	// Only producer/background maintenance can progress during the public load.
++	owner, err := treedb.Open(opts)
++	if err != nil {
++		t.Fatal(err)
++	}
++	var refusal valuelog.COWBasisRefusalObserver
++	t.Cleanup(func() {
++		// Atomic scalar receipt only. Even Close error is not a borrower join.
++		final := refusal.Snapshot()
++		t.Logf("basis-first-refusal: %+v", final)
++		if final.First != 0 || final.Missing || final.Overflow {
++			t.Errorf("original owner recorded refusal/missing/overflow: %+v", final)
++		}
++	})
++	ownerOpen := true
++	var manager *CollectionManager
++	managerOpen := false
++	var held, beforeRead, current *NativeJSONRead
++	t.Cleanup(func() {
++		// Writers have joined before any assertion can reach this cleanup.
++		for _, slot := range []**NativeJSONRead{&current, &beforeRead} {
++			if *slot != nil {
++				read := *slot
++				*slot = nil
++				if err := read.Close(); err != nil {
++					t.Errorf("cleanup corpus native read Close: %v", err)
++				}
++			}
++		}
++		if held != nil {
++			read := held
++			held = nil
++			if err := read.Close(); err != nil {
++				t.Errorf("cleanup held Close: %v", err)
++			}
++		}
++		if managerOpen {
++			managerOpen = false
++			if err := manager.Close(); err != nil {
++				t.Errorf("cleanup manager Close: %v", err)
++			}
++		}
++		if ownerOpen {
++			ownerOpen = false
++			if err := owner.Close(); err != nil {
++				t.Errorf("cleanup owner Close: %v", err)
++			}
++		}
++	})
++	if !owner.EnableNativeBasisRefusalObserverForTest(&refusal) {
++		t.Fatal("original owner diagnostic binding refused")
++	}
++	if owner.EnableNativeBasisRefusalObserverForTest(&refusal) {
++		t.Fatal("original owner allowed duplicate diagnostic binding")
++	}
++	backend, err := owner.NativeSemanticBackend()
++	if err != nil {
++		t.Fatal(err)
++	}
++	manager = NewCollectionManager(backend)
++	managerOpen = true
++	if !manager.UsesNativeCommandWALApply() {
++		t.Fatal("fixture did not select native command WAL owner")
++	}
++	if _, err := manager.CreateCollection(&CollectionMeta{Name: "exact_docs"}); err != nil {
++		t.Fatal(err)
++	}
++	collection, err := manager.OpenCollection("exact_docs")
++	if err != nil {
++		t.Fatal(err)
++	}
++	if collection.nativeJSON == nil {
++		t.Fatal("fixture did not select the native collection")
++	}
++
++	// Each slot has exactly one writer. Store outcomes, not document bytes. A nil
++	// error is an actual ACK even when its returned ID is wrong; those separate
++	// facts must not be collapsed into one success count.
++	type outcome struct {
++		attempted    bool
++		acknowledged bool
++		idMatches    bool
++		uncertain    bool
++		wrongID      []byte
++		err          error
++	}
++	outcomes := make([]outcome, rows)
++	insert := func(row int) bool {
++		id := nativeOrdinaryConcurrentExactID(row)
++		gotID, insertErr := collection.Insert(id, nativeOrdinaryConcurrentExactDocument(row))
++		result := outcome{attempted: true, acknowledged: insertErr == nil, idMatches: bytes.Equal(gotID, id), err: insertErr}
++		if !result.idMatches && len(gotID) != 0 {
++			result.wrongID = bytes.Clone(gotID)
++		}
++		if insertErr != nil {
++			result.uncertain = backenddb.CommitPublicationAccepted(insertErr)
++		}
++		outcomes[row] = result
++		return result.acknowledged && result.idMatches
++	}
++	if !insert(0) {
++		t.Fatalf("seed Insert: %+v", outcomes[0])
++	}
++	held, err = collection.nativeJSON.Capture(collection.name)
++	if err != nil {
++		t.Fatal(err)
++	}
++	firstBasis, valid := held.capture.Snapshot().StateToken()
++	if !valid {
++		t.Fatal("first ACK has no physical basis")
++	}
++	verifyHeld := func(stage string) {
++		t.Helper()
++		basis, valid := held.capture.Snapshot().StateToken()
++		if !valid || basis != firstBasis {
++			t.Fatalf("%s: held physical basis changed: first=%+v current=%+v valid=%t", stage, firstBasis, basis, valid)
++		}
++		got, err := held.Get(nativeOrdinaryConcurrentExactID(0))
++		if err != nil || !bytes.Equal(got, nativeOrdinaryConcurrentExactDocument(0)) {
++			t.Fatalf("%s: held seed differs: bytes=%d err=%v", stage, len(got), err)
++		}
++		// One post-capture key per worker distinguishes this old cut from a
++		// fresh capture even though the immutable seed itself is not updated.
++		for worker := 0; worker < writers; worker++ {
++			got, err := held.Get(nativeOrdinaryConcurrentExactID(worker + 1))
++			if len(got) != 0 || !errors.Is(err, tree.ErrKeyNotFound) {
++				t.Fatalf("%s: old cut sees later row %d: bytes=%d err=%v", stage, worker+1, len(got), err)
++			}
++		}
++	}
++	verifyHeld("before concurrent load")
++	start := make(chan struct{})
++	var workers sync.WaitGroup
++	workers.Add(writers)
++	for worker := 0; worker < writers; worker++ {
++		go func(worker int) {
++			defer workers.Done()
++			<-start
++			for row := worker + 1; row < rows; row += writers {
++				if !insert(row) {
++					// Preserve the original outcome and stop this shard. Never
++					// retry a capacity refusal, wrong ID, or uncertain mutation.
++					return
++				}
++			}
++		}(worker)
++	}
++	close(start)
++	workers.Wait()
++	var attempted, acknowledged, matchingIDs, uncertain int
++	for row, result := range outcomes {
++		if !result.attempted {
++			continue
++		}
++		attempted++
++		if result.acknowledged {
++			acknowledged++
++		}
++		if result.acknowledged && result.idMatches {
++			matchingIDs++
++		}
++		if result.uncertain {
++			uncertain++
++		}
++		if !result.acknowledged || !result.idMatches {
++			t.Errorf("original Insert row=%d ACK=%t ID_matches=%t wrong_ID=%q uncertain=%t err=%v", row, result.acknowledged, result.idMatches, result.wrongID, result.uncertain, result.err)
++		}
++	}
++	if attempted != rows || acknowledged != rows || matchingIDs != rows || uncertain != 0 {
++		t.Errorf("load incomplete: attempted=%d ACK=%d matching_ID=%d uncertain=%d want=%d/zero uncertain", attempted, acknowledged, matchingIDs, uncertain, rows)
++	}
++
++	t.Logf("basis-corpus-load: Rows=%d Writers=%d Attempted=%d ACK=%d MatchingID=%d Uncertain=%d", rows, writers, attempted, acknowledged, matchingIDs, uncertain)
++
++	verify := func(stage string) {
++		t.Helper()
++		for row, result := range outcomes {
++			if !result.acknowledged {
++				continue // An uncertain error is never invented into an ACK.
++			}
++			id := nativeOrdinaryConcurrentExactID(row)
++			got, err := collection.Get(id)
++			if err != nil || !bytes.Equal(got, nativeOrdinaryConcurrentExactDocument(row)) {
++				t.Fatalf("%s: ACK row=%d differs: bytes=%d err=%v", stage, row, len(got), err)
++			}
++		}
++		seen := make([]bool, rows)
++		count := 0
++		truncated, err := collection.ScanDocumentIDsFunc(rows+1, func(id []byte) (bool, error) {
++			if len(id) != len("row-000000") || !bytes.HasPrefix(id, []byte("row-")) {
++				return false, fmt.Errorf("invented ID %q", id)
++			}
++			row, err := strconv.Atoi(string(id[4:]))
++			if err != nil || row < 0 || row >= rows || !bytes.Equal(id, nativeOrdinaryConcurrentExactID(row)) {
++				return false, fmt.Errorf("unexpected ID %q", id)
++			}
++			if seen[row] || (!outcomes[row].acknowledged && !outcomes[row].uncertain) {
++				return false, fmt.Errorf("duplicate or unaccepted ID %q", id)
++			}
++			seen[row] = true
++			count++
++			return true, nil
++		})
++		if err != nil || truncated {
++			t.Fatalf("%s: census: count=%d truncated=%t err=%v", stage, count, truncated, err)
++		}
++		for row, result := range outcomes {
++			if result.acknowledged && !seen[row] {
++				t.Fatalf("%s: census omitted ACK row=%d", stage, row)
++			}
++		}
++		if acknowledged == rows && count != rows {
++			t.Fatalf("%s: census=%d want=%d", stage, count, rows)
++		}
++	}
++	verify("loaded")
++	verifyHeld("after concurrent load")
++
++	// Additional reads borrow the original public/native owner. They neither
++	// checkpoint the seed nor manufacture a persisted pre-vacuum catalog.
++	closeCorpusRead := func(stage string, slot **NativeJSONRead) {
++		t.Helper()
++		read := *slot
++		*slot = nil
++		if read == nil {
++			t.Fatalf("%s: missing original corpus read", stage)
++		}
++		if err := read.Close(); err != nil {
++			t.Fatalf("%s: checked corpus read Close: %v", stage, err)
++		}
++	}
++	checkPersistedCatalog := func(stage string, read *NativeJSONRead) (backenddb.StateToken, uint64, uint64) {
++		t.Helper()
++		if read == nil || read.capture == nil || read.collection == nil || read.domain.domain == nil {
++			t.Fatalf("%s: missing native capture/collection/domain", stage)
++		}
++		snapshot := read.capture.Snapshot()
++		token, ok := snapshot.StateToken()
++		if !ok || token.SystemRootPageID == 0 || snapshot.Pager() == nil {
++			t.Fatalf("%s: missing persisted physical system root", stage)
++		}
++		catalog, err := loadCollectionCatalog(snapshot, collection.name)
++		if err != nil || catalog == nil || catalog.meta.Name != collection.name {
++			t.Fatalf("%s: persisted catalog: present=%t err=%v", stage, catalog != nil, err)
++		}
++		root := catalog.rootID(collectionPrimaryRootName(collection.name))
++		domain := read.domain.domain
++		if root == 0 || domain.catalogRoot != root || domain.baseRoot == 0 || len(catalog.rootOverlays) != 0 {
++			t.Fatalf("%s: unsupported/unpersisted primary shape: root=%d catalog=%d base=%d overlays=%d", stage, root, domain.catalogRoot, domain.baseRoot, len(catalog.rootOverlays))
++		}
++		raw, found, err := getSystemValue(snapshot, nativeCatalogIncarnationPrefix+collection.name)
++		if err != nil || !found {
++			t.Fatalf("%s: persisted incarnation: found=%t err=%v", stage, found, err)
++		}
++		identity, err := nativeCatalogIdentityValue(raw, false)
++		if err != nil || identity != read.collection.incarnation {
++			t.Fatalf("%s: persisted/native incarnation mismatch: err=%v", stage, err)
++		}
++		return token, identity, root
++	}
++	var revisions [rows]page.EntryRevision
++	verifyCorpusRead := func(stage string, read *NativeJSONRead, record bool) {
++		t.Helper()
++		for row, result := range outcomes {
++			if !result.acknowledged {
++				continue
++			}
++			id := nativeOrdinaryConcurrentExactID(row)
++			got, err := read.Get(id)
++			if err != nil || !bytes.Equal(got, nativeOrdinaryConcurrentExactDocument(row)) {
++				t.Fatalf("%s: acknowledged value row=%d differs: bytes=%d err=%v", stage, row, len(got), err)
++			}
++			entry, err := read.getEntry(id)
++			if err != nil {
++				t.Fatalf("%s: acknowledged revision row=%d: %v", stage, row, err)
++			}
++			if record {
++				revisions[row] = entry.Revision
++			} else if entry.Revision != revisions[row] {
++				t.Fatalf("%s: acknowledged revision row=%d changed: got=%d want=%d", stage, row, entry.Revision, revisions[row])
++			}
++		}
++	}
++	beforeRead, err = collection.nativeJSON.Capture(collection.name)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if beforeRead.collection == nil || beforeRead.domain.domain == nil {
++		t.Fatal("pre-vacuum corpus read has no native identity/domain")
++	}
++	beforeToken, beforeValid := beforeRead.capture.Snapshot().StateToken()
++	beforePager := beforeRead.capture.Snapshot().Pager()
++	if !beforeValid || beforePager == nil {
++		t.Fatal("pre-vacuum corpus read has no physical basis/pager")
++	}
++	// These roots may legitimately be zero: the original load has not been
++	// explicitly checkpointed. The public vacuum performs its own checkpoint.
++	beforeRoot := beforeRead.domain.domain.catalogRoot
++	heldRoot := held.domain.domain.catalogRoot
++	incarnation := beforeRead.collection.incarnation
++	verifyCorpusRead("pre-vacuum original corpus", beforeRead, true)
++	attemptBefore := owner.VacuumOnlineStats().AttemptID
++	// Directly bracket only the selected public operation. These independent
++	// atomics neither identify an atomic cut nor prove a borrower join.
++	basisBefore := refusal.Snapshot()
++	t.Logf("basis-vacuum-before: %+v", basisBefore)
++	vacuumErr := owner.VacuumIndexOnline(t.Context())
++	basisAfter := refusal.Snapshot()
++	t.Logf("basis-vacuum-after: %+v", basisAfter)
++	work := owner.VacuumOnlineStats()
++	// Preserve actual post-call counters and work boundaries before any Fatal.
++	// The packed First word remains available even when the operation refuses.
++	t.Logf("basis-corpus-vacuum-boundary: AttemptBefore=%d AttemptAfter=%d WorkCompleted=%t Canceled=%t ReplacementPagerPages=%d Error=%t", attemptBefore, work.AttemptID, work.WorkCompleted, work.Canceled, work.ReplacementPagerPages, vacuumErr != nil)
++	if vacuumErr != nil {
++		t.Fatalf("original public VacuumIndexOnline: %v", vacuumErr)
++	}
++	if work.AttemptID <= attemptBefore || !work.WorkCompleted || work.Canceled || work.ReplacementPagerPages == 0 {
++		t.Fatalf("public corpus vacuum did not complete actual replacement work: before_attempt=%d after_attempt=%d completed=%t canceled=%t pages=%d", attemptBefore, work.AttemptID, work.WorkCompleted, work.Canceled, work.ReplacementPagerPages)
++	}
++	if basisBefore.First != 0 || basisAfter.First != 0 || basisBefore.Missing || basisAfter.Missing || basisBefore.Overflow || basisAfter.Overflow {
++		t.Fatalf("public corpus vacuum interval refusal/missing/overflow: before=%+v after=%+v", basisBefore, basisAfter)
++	}
++	if basisAfter.Calls <= basisBefore.Calls || basisAfter.Completed <= basisBefore.Completed {
++		t.Fatalf("public corpus vacuum interval has no completed observed calls: before=%+v after=%+v", basisBefore, basisAfter)
++	}
++	for _, stage := range []valuelog.COWBasisStage{valuelog.COWBasisRefresh, valuelog.COWBasisDescriptor, valuelog.COWBasisLeafRead} {
++		if basisAfter.Entered[stage] <= basisBefore.Entered[stage] || basisAfter.Finished[stage] <= basisBefore.Finished[stage] {
++			t.Fatalf("public corpus vacuum interval did not enter/finish stage=%d: before=%+v after=%+v", stage, basisBefore, basisAfter)
++		}
++	}
++	current, err = collection.nativeJSON.Capture(collection.name)
++	if err != nil {
++		t.Fatal(err)
++	}
++	afterToken, afterIncarnation, afterRoot := checkPersistedCatalog("after public corpus vacuum", current)
++	if afterIncarnation != incarnation {
++		t.Fatal("public corpus vacuum changed logical incarnation")
++	}
++	if current.capture.Snapshot().Pager() == beforePager {
++		t.Fatal("public corpus vacuum did not change the actual captured pager generation")
++	}
++	// Vacuum's preparatory checkpoint may advance the physical applied LSN.
++	// Exact logical contents/revisions, not a fabricated physical equality,
++	// establish preservation of this pre-checkpoint captured corpus.
++	verifyCorpusRead("after public corpus vacuum", current, false)
++	verifyCorpusRead("held pre-vacuum corpus", beforeRead, false)
++	if token, ok := beforeRead.capture.Snapshot().StateToken(); !ok || token != beforeToken || beforeRead.capture.Snapshot().Pager() != beforePager {
++		t.Fatal("pre-vacuum held corpus physical cut changed")
++	}
++	verify("vacuumed")
++	verifyHeld("after public vacuum")
++	closeCorpusRead("post-vacuum corpus read", &current)
++	closeCorpusRead("pre-vacuum corpus read", &beforeRead)
++	if err := owner.Checkpoint(); err != nil {
++		t.Fatalf("original checkpoint: %v", err)
++	}
++	verify("checkpointed")
++	verifyHeld("after checkpoint")
++	read := held
++	held = nil
++	if err := read.Close(); err != nil {
++		t.Fatalf("original held Close: %v", err)
++	}
++	managerOpen = false
++	if err := manager.Close(); err != nil {
++		t.Fatalf("original manager Close: %v", err)
++	}
++	ownerOpen = false
++	if err := owner.Close(); err != nil {
++		t.Fatalf("original owner Close: %v", err)
++	}
++	if stats := backend.ValueLogIdentityPinRegistry().Stats(); stats.ActivePins != 0 || stats.ActiveIdentities != 0 || stats.ActiveStableNamespaceLinks != 0 {
++		t.Fatalf("original owner retained physical resources: %+v", stats)
++	}
++	owner, err = treedb.Open(opts)
++	if err != nil {
++		t.Fatalf("fresh reopen: %v", err)
++	}
++	ownerOpen = true
++	backend, err = owner.NativeSemanticBackend()
++	if err != nil {
++		t.Fatal(err)
++	}
++	manager = NewCollectionManager(backend)
++	managerOpen = true
++	if !manager.UsesNativeCommandWALApply() {
++		t.Fatal("reopen did not select native command WAL owner")
++	}
++	collection, err = manager.OpenCollection("exact_docs")
++	if err != nil {
++		t.Fatal(err)
++	}
++	if collection.nativeJSON == nil {
++		t.Fatal("reopen did not select the native collection")
++	}
++	verify("fresh reopened")
++	current, err = collection.nativeJSON.Capture(collection.name)
++	if err != nil {
++		t.Fatal(err)
++	}
++	reopenedToken, reopenedIncarnation, reopenedRoot := checkPersistedCatalog("fresh corpus reopen", current)
++	if reopenedIncarnation != incarnation {
++		t.Fatal("fresh corpus reopen changed logical incarnation")
++	}
++	verifyCorpusRead("fresh corpus reopen", current, false)
++	closeCorpusRead("reopened corpus read", &current)
++	managerOpen = false
++	if err := manager.Close(); err != nil {
++		t.Fatalf("reopened manager Close: %v", err)
++	}
++	ownerOpen = false
++	if err := owner.Close(); err != nil {
++		t.Fatalf("reopened owner Close: %v", err)
++	}
++	if stats := backend.ValueLogIdentityPinRegistry().Stats(); stats.ActivePins != 0 || stats.ActiveIdentities != 0 || stats.ActiveStableNamespaceLinks != 0 {
++		t.Fatalf("reopened owner retained physical resources: %+v", stats)
++	}
++	t.Logf("native JSON exact lifecycle: rows=%d writers=%d attempted=%d ACK=%d matching_ID=%d uncertain=%d held_basis=%+v", rows, writers, attempted, acknowledged, matchingIDs, uncertain, firstBasis)
++	// Completion flags are emitted only after all original checked operations.
++	// BeforeRoot/HeldRoot may be unsealed zero; after/reopen catalogs are real.
++	t.Logf("basis-public-vacuum-work: Rows=%d Writers=%d Attempted=%d ACK=%d MatchingID=%d Uncertain=%d AttemptBefore=%d AttemptAfter=%d WorkCompleted=%t Canceled=%t ReplacementPagerPages=%d PagerChanged=true Incarnation=%d HeldRoot=%d BeforeRoot=%d AfterRoot=%d ReopenedRoot=%d BeforeSystemRoot=%d AfterSystemRoot=%d ReopenedSystemRoot=%d Revisions=%v HeldPreserved=true HeldClosed=true ManagerClosed=true OwnerClosed=true OriginalPinsEmpty=true ReopenedRead=true ReopenedReadClosed=true ReopenedManagerClosed=true ReopenedOwnerClosed=true ReopenedPinsEmpty=true", rows, writers, attempted, acknowledged, matchingIDs, uncertain, attemptBefore, work.AttemptID, work.WorkCompleted, work.Canceled, work.ReplacementPagerPages, incarnation, heldRoot, beforeRoot, afterRoot, reopenedRoot, beforeToken.SystemRootPageID, afterToken.SystemRootPageID, reopenedToken.SystemRootPageID, revisions)
++}
+diff --git a/TreeDB/collections/native_basis_refresh.go b/TreeDB/collections/native_basis_refresh.go
+index f139f40cf..351a49eed 100644
+--- a/TreeDB/collections/native_basis_refresh.go
++++ b/TreeDB/collections/native_basis_refresh.go
+@@ -8,6 +8,7 @@ import (
+ 	backenddb "github.com/snissn/gomap/TreeDB/db"
+ 	"github.com/snissn/gomap/TreeDB/internal/cowbtree"
+ 	"github.com/snissn/gomap/TreeDB/internal/memtable"
++	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+ 	"github.com/snissn/gomap/TreeDB/node"
+ 	"github.com/snissn/gomap/TreeDB/page"
+ 	"github.com/snissn/gomap/TreeDB/tree"
+@@ -19,6 +20,7 @@ import (
+ type nativeBasisRefreshScratch struct {
+ 	before, after             *backenddb.Snapshot
+ 	allocator                 backenddb.NativeSemanticAllocator
++	leaves                    backenddb.NativeMaintenanceLeafReader
+ 	beforeReader, afterReader backenddb.SnapshotRootReader
+ 	beforeRoot, afterRoot     bool
+ 	key                       [page.PageSize]byte
+@@ -27,32 +29,65 @@ type nativeBasisRefreshScratch struct {
+ }
+ 
+ func (s *nativeBasisRefreshScratch) readBeforeLeaf(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
+-	return readNativeSnapshotLeaf(s.before, s.allocator, ptr, dst)
++	return readNativeMaintenanceSnapshotLeaf(s.before, s.allocator, ptr, dst, valuelog.COWBasisCall{}, s.leaves)
+ }
+ func (s *nativeBasisRefreshScratch) readAfterLeaf(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
+-	return readNativeSnapshotLeaf(s.after, s.allocator, ptr, dst)
++	return readNativeMaintenanceSnapshotLeaf(s.after, s.allocator, ptr, dst, valuelog.COWBasisCall{}, s.leaves)
+ }
+-func (s *nativeBasisRefreshScratch) get(key []byte, after bool) ([]byte, bool, error) {
++
++// This view borrows the original scratch synchronously. Its method value is
++// consumed only by the existing non-retaining point traversal. It is neither
++// stored in the observer nor added to the charged scratch allocation. Hosted
++// escape/allocation controls are required before diagnostic admission.
++type nativeBasisRefusalReadView struct {
++	scratch *nativeBasisRefreshScratch
++	call    valuelog.COWBasisCall
++}
++
++func (v *nativeBasisRefusalReadView) readBeforeLeaf(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
++	return readNativeMaintenanceSnapshotLeaf(v.scratch.before, v.scratch.allocator, ptr, dst, v.call, v.scratch.leaves)
++}
++
++func (v *nativeBasisRefusalReadView) readAfterLeaf(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
++	return readNativeMaintenanceSnapshotLeaf(v.scratch.after, v.scratch.allocator, ptr, dst, v.call, v.scratch.leaves)
++}
++
++func (s *nativeBasisRefreshScratch) get(key []byte, after bool, call valuelog.COWBasisCall) ([]byte, bool, error) {
++	call = call.Side(after)
++	view := nativeBasisRefusalReadView{scratch: s, call: call}
+ 	var entry node.LeafEntry
+ 	var err error
+ 	if after {
+ 		if !s.afterRoot {
+ 			return nil, false, nil
+ 		}
+-		entry, err = s.afterReader.GetEntryExactWithFixedScratch(key, s.afterKey[:], s.afterLeaf[:], s.readAfterLeaf)
++		call.Enter(valuelog.COWBasisDescriptor)
++		if call.Enabled() {
++			entry, err = s.afterReader.GetEntryExactWithFixedScratch(key, s.afterKey[:], s.afterLeaf[:], view.readAfterLeaf)
++		} else {
++			entry, err = s.afterReader.GetEntryExactWithFixedScratch(key, s.afterKey[:], s.afterLeaf[:], s.readAfterLeaf)
++		}
+ 	} else {
+ 		if !s.beforeRoot {
+ 			return nil, false, nil
+ 		}
+-		entry, err = s.beforeReader.GetEntryExactWithFixedScratch(key, s.beforeKey[:], s.beforeLeaf[:], s.readBeforeLeaf)
++		call.Enter(valuelog.COWBasisDescriptor)
++		if call.Enabled() {
++			entry, err = s.beforeReader.GetEntryExactWithFixedScratch(key, s.beforeKey[:], s.beforeLeaf[:], view.readBeforeLeaf)
++		} else {
++			entry, err = s.beforeReader.GetEntryExactWithFixedScratch(key, s.beforeKey[:], s.beforeLeaf[:], s.readBeforeLeaf)
++		}
+ 	}
++	call.Finish(valuelog.COWBasisDescriptor)
+ 	if errors.Is(err, tree.ErrKeyNotFound) || (err == nil && entry.Flags&node.FlagTombstone != 0) {
+ 		return nil, false, nil
+ 	}
+ 	if err != nil {
++		call.Error(valuelog.COWBasisDescriptor, err, valuelog.COWRecordShape{}, false)
+ 		return nil, false, err
+ 	}
+ 	if entry.Flags&node.FlagPointer != 0 {
++		call.Refuse(valuelog.COWBasisDescriptor, valuelog.COWBasisUnsupported, valuelog.COWRecordShape{}, false)
+ 		return nil, false, backenddb.ErrNativeSemanticUnsupported
+ 	}
+ 	return entry.Value, true, nil
+@@ -80,16 +115,16 @@ func (s *nativeBasisRefreshScratch) makeKey(prefix, collection, domain string) (
+ 	}
+ 	return key, nil
+ }
+-func (s *nativeBasisRefreshScratch) unchanged(prefix, collection string) (raw []byte, found bool, err error) {
++func (s *nativeBasisRefreshScratch) unchanged(prefix, collection string, call valuelog.COWBasisCall) (raw []byte, found bool, err error) {
+ 	key, err := s.makeKey(prefix, collection, "")
+ 	if err != nil {
+ 		return nil, false, err
+ 	}
+-	old, oldFound, err := s.get(key, false)
++	old, oldFound, err := s.get(key, false, call)
+ 	if err != nil {
+ 		return nil, false, err
+ 	}
+-	current, currentFound, err := s.get(key, true)
++	current, currentFound, err := s.get(key, true, call)
+ 	if err != nil {
+ 		return nil, false, err
+ 	}
+@@ -98,12 +133,12 @@ func (s *nativeBasisRefreshScratch) unchanged(prefix, collection string) (raw []
+ 	}
+ 	return current, currentFound, nil
+ }
+-func (s *nativeBasisRefreshScratch) collection(c *nativeCollectionState) error {
+-	_, metadataFound, err := s.unchanged(systemCollectionMetaPrefix, c.schema.meta.Name)
++func (s *nativeBasisRefreshScratch) collection(c *nativeCollectionState, call valuelog.COWBasisCall) error {
++	_, metadataFound, err := s.unchanged(systemCollectionMetaPrefix, c.schema.meta.Name, call.Descriptor(valuelog.COWBasisMetadata))
+ 	if err != nil {
+ 		return err
+ 	}
+-	raw, identityFound, err := s.unchanged(nativeCatalogIncarnationPrefix, c.schema.meta.Name)
++	raw, identityFound, err := s.unchanged(nativeCatalogIncarnationPrefix, c.schema.meta.Name, call.Descriptor(valuelog.COWBasisIncarnation))
+ 	if err != nil {
+ 		return err
+ 	}
+@@ -121,13 +156,13 @@ func (s *nativeBasisRefreshScratch) collection(c *nativeCollectionState) error {
+ 	}
+ 	return nil
+ }
+-func (s *nativeBasisRefreshScratch) root(c *nativeCollectionState, d *nativeDomainState) (uint64, error) {
++func (s *nativeBasisRefreshScratch) root(c *nativeCollectionState, d *nativeDomainState, call valuelog.COWBasisCall) (uint64, error) {
+ 	key, err := s.makeKey(systemCollectionRootOverlayPrefix, c.schema.meta.Name, d.name)
+ 	if err != nil {
+ 		return 0, err
+ 	}
+ 	for _, after := range [2]bool{false, true} {
+-		if _, found, err := s.get(key, after); err != nil {
++		if _, found, err := s.get(key, after, call.Descriptor(valuelog.COWBasisOverlay)); err != nil {
+ 			return 0, err
+ 		} else if found {
+ 			return 0, backenddb.ErrNativeSemanticUnsupported
+@@ -137,7 +172,7 @@ func (s *nativeBasisRefreshScratch) root(c *nativeCollectionState, d *nativeDoma
+ 	if err != nil {
+ 		return 0, err
+ 	}
+-	old, found, err := s.get(key, false)
++	old, found, err := s.get(key, false, call.Descriptor(valuelog.COWBasisRoot))
+ 	if err != nil {
+ 		return 0, err
+ 	}
+@@ -151,7 +186,7 @@ func (s *nativeBasisRefreshScratch) root(c *nativeCollectionState, d *nativeDoma
+ 	if oldRoot != d.catalogRoot {
+ 		return 0, backenddb.ErrRootPublicationBasisMismatch
+ 	}
+-	current, found, err := s.get(key, true)
++	current, found, err := s.get(key, true, call.Descriptor(valuelog.COWBasisRoot))
+ 	if err != nil {
+ 		return 0, err
+ 	}
+@@ -177,6 +212,17 @@ func (s *nativeBasisRefreshScratch) root(c *nativeCollectionState, d *nativeDoma
+ // the SAME immutable paired Snapshots; no historical rows or source chain are
+ // scanned. Only changed domains/collections get new immutable headers.
+ func prepareNativeEngineBasisRefresh(base *nativeEngineVersion, before, after *backenddb.Snapshot) (*nativeEngineVersion, error) {
++	return prepareNativeEngineBasisRefreshDiagnostic(base, before, after, valuelog.COWBasisCall{})
++}
++
++func prepareNativeEngineBasisRefreshDiagnostic(base *nativeEngineVersion, before, after *backenddb.Snapshot, call valuelog.COWBasisCall) (*nativeEngineVersion, error) {
++	return prepareNativeEngineBasisRefreshWithMaintenanceLeaves(base, before, after, call, nil)
++}
++
++func prepareNativeEngineBasisRefreshWithMaintenanceLeaves(base *nativeEngineVersion, before, after *backenddb.Snapshot, call valuelog.COWBasisCall, leaves backenddb.NativeMaintenanceLeafReader) (*nativeEngineVersion, error) {
++	if leaves != nil && !leaves.MatchesNativeMaintenanceSnapshots(before, after) {
++		return nil, backenddb.ErrRootPublicationBasisMismatch
++	}
+ 	if base == nil || base.collections == nil || before == nil || after == nil || base.maintenance == nil || base.inventory != nil {
+ 		return nil, backenddb.ErrNativeSemanticUnsupported
+ 	}
+@@ -192,7 +238,7 @@ func prepareNativeEngineBasisRefresh(base *nativeEngineVersion, before, after *b
+ 	if err != nil {
+ 		return nil, err
+ 	}
+-	s := &nativeBasisRefreshScratch{before: before, after: after, allocator: base.maintenance}
++	s := &nativeBasisRefreshScratch{before: before, after: after, allocator: base.maintenance, leaves: leaves}
+ 	defer func() {
+ 		*s = nativeBasisRefreshScratch{}
+ 		s = nil
+@@ -212,18 +258,18 @@ func prepareNativeEngineBasisRefresh(base *nativeEngineVersion, before, after *b
+ 		}
+ 		s.afterRoot = true
+ 	}
+-	if _, _, err = s.unchanged(nativeCatalogNextIncarnationKey, ""); err != nil {
++	if _, _, err = s.unchanged(nativeCatalogNextIncarnationKey, "", call.Descriptor(valuelog.COWBasisNextIncarnation)); err != nil {
+ 		return nil, err
+ 	}
+ 	collections, domains := 0, 0
+ 	base.collections.Scan(func(_ uint64, c *nativeCollectionState) bool {
+-		if err = s.collection(c); err != nil {
++		if err = s.collection(c, call); err != nil {
+ 			return false
+ 		}
+ 		touched := false
+ 		c.domains.Scan(func(_ string, d *nativeDomainState) bool {
+ 			var root uint64
+-			root, err = s.root(c, d)
++			root, err = s.root(c, d, call)
+ 			if err != nil {
+ 				return false
+ 			}
+@@ -275,7 +321,7 @@ func prepareNativeEngineBasisRefresh(base *nativeEngineVersion, before, after *b
+ 	base.collections.Scan(func(id uint64, c *nativeCollectionState) bool {
+ 		touched := 0
+ 		c.domains.Scan(func(_ string, d *nativeDomainState) bool {
+-			root, e := s.root(c, d)
++			root, e := s.root(c, d, call)
+ 			if e != nil {
+ 				err = e
+ 				return false
+@@ -297,7 +343,7 @@ func prepareNativeEngineBasisRefresh(base *nativeEngineVersion, before, after *b
+ 			return false
+ 		}
+ 		c.domains.Scan(func(name string, d *nativeDomainState) bool {
+-			root, e := s.root(c, d)
++			root, e := s.root(c, d, call)
+ 			if e != nil {
+ 				err = e
+ 				return false
+diff --git a/TreeDB/collections/native_basis_refusal_diagnostic_test.go b/TreeDB/collections/native_basis_refusal_diagnostic_test.go
+new file mode 100644
+index 000000000..1921b485f
+--- /dev/null
++++ b/TreeDB/collections/native_basis_refusal_diagnostic_test.go
+@@ -0,0 +1,132 @@
++package collections
++
++import (
++	"bytes"
++	"testing"
++	"unsafe"
++
++	treedb "github.com/snissn/gomap/TreeDB"
++	"github.com/snissn/gomap/TreeDB/internal/memtable"
++	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
++	"github.com/snissn/gomap/TreeDB/internal/valuelog"
++)
++
++func TestNativeBasisRefusalDescriptorPropagationAndAllocation(t *testing.T) {
++	// This control's quiet setup is separate from the UNCHANGED lifecycle witness.
++	t.Setenv("TREEDB_DISABLE_VLOG_GENERATION_LOOP", "1")
++	opts := treedb.OptionsFor(treedb.ProfileNoWALFast, t.TempDir())
++	opts.MemtableMode = "cow_btree"
++	opts.FlushThreshold = 1 << 30
++	opts.BackgroundCheckpointInterval = -1
++	opts.BackgroundCheckpointIdleDuration = -1
++	owner, err := treedb.Open(opts)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer func() {
++		if err := owner.Close(); err != nil {
++			t.Error(err)
++		}
++	}()
++	backend, err := owner.NativeSemanticBackend()
++	if err != nil {
++		t.Fatal(err)
++	}
++	manager := NewCollectionManager(backend)
++	defer func() {
++		if err := manager.Close(); err != nil {
++			t.Error(err)
++		}
++	}()
++	if _, err := manager.CreateCollection(&CollectionMeta{Name: "diagnostic_control"}); err != nil {
++		t.Fatal(err)
++	}
++	collection, err := manager.OpenCollection("diagnostic_control")
++	if err != nil {
++		t.Fatal(err)
++	}
++	if _, err := collection.Insert([]byte("one"), []byte(`{"n":1}`)); err != nil {
++		t.Fatal(err)
++	}
++	if err := owner.Checkpoint(); err != nil {
++		t.Fatal(err)
++	}
++	if collection.nativeJSON == nil {
++		t.Fatal("control did not activate native collection")
++	}
++	read, err := collection.nativeJSON.Capture("diagnostic_control")
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer func() {
++		if err := read.Close(); err != nil {
++			t.Error(err)
++		}
++	}()
++	base := read.capture.State().(*nativeEngineVersion)
++	snapshot := read.capture.Snapshot()
++	token, ok := snapshot.StateToken()
++	if !ok || token.SystemRootPageID == 0 {
++		t.Fatal("control requires the original persisted system root")
++	}
++	lease, err := base.maintenance.AdmitNativeBytes(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeBasisRefreshScratch{}))))
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer lease.Close()
++	scratch := &nativeBasisRefreshScratch{before: snapshot, after: snapshot, allocator: base.maintenance}
++	defer func() { *scratch = nativeBasisRefreshScratch{} }()
++	scratch.beforeReader, err = snapshot.NativeReaderAtRoot(token.SystemRootPageID)
++	if err != nil {
++		t.Fatal(err)
++	}
++	scratch.afterReader, err = snapshot.NativeReaderAtRoot(token.SystemRootPageID)
++	if err != nil {
++		t.Fatal(err)
++	}
++	scratch.beforeRoot, scratch.afterRoot = true, true
++	var observer valuelog.COWBasisRefusalObserver
++	identity := transactionowner.New()
++	if !observer.Bind(identity) {
++		t.Fatal("bind scalar control")
++	}
++	call := observer.Begin(identity, false).Descriptor(valuelog.COWBasisNextIncarnation)
++	key := []byte(nativeCatalogNextIncarnationKey)
++	before, found, err := scratch.get(key, false, valuelog.COWBasisCall{})
++	if err != nil || !found {
++		t.Fatalf("original descriptor: found=%t error=%v", found, err)
++	}
++	copyBefore := append([]byte(nil), before...)
++	for _, after := range []bool{false, true} {
++		value, found, err := scratch.get(key, after, call)
++		if err != nil || !found || !bytes.Equal(value, copyBefore) {
++			t.Fatalf("observed descriptor side=%t found=%t error=%v", after, found, err)
++		}
++	}
++	ordinary := testing.AllocsPerRun(16, func() {
++		if _, _, err := scratch.get(key, false, valuelog.COWBasisCall{}); err != nil {
++			panic(err)
++		}
++	})
++	observed := testing.AllocsPerRun(16, func() {
++		if _, _, err := scratch.get(key, false, call); err != nil {
++			panic(err)
++		}
++	})
++	if observed != ordinary {
++		t.Fatalf("descriptor allocations ordinary=%g observed=%g", ordinary, observed)
++	}
++	// A heap-escaped view allocated unconditionally would also violate this
++	// absolute zero control, independent of physical leaf decode allocations.
++	scratch.beforeRoot = false
++	if n := testing.AllocsPerRun(16, func() {
++		if _, _, err := scratch.get(nil, false, call); err != nil {
++			panic(err)
++		}
++	}); n != 0 {
++		t.Fatalf("empty-root diagnostic allocations=%g", n)
++	}
++	if result := observer.Snapshot(); result.First != 0 || result.Entered[valuelog.COWBasisDescriptor] == 0 || result.Entered[valuelog.COWBasisDescriptor] != result.Finished[valuelog.COWBasisDescriptor] {
++		t.Fatalf("descriptor observation=%+v", result)
++	}
++}
+diff --git a/TreeDB/collections/native_json_read.go b/TreeDB/collections/native_json_read.go
+index 0bfdd60d9..d09a73387 100644
+--- a/TreeDB/collections/native_json_read.go
++++ b/TreeDB/collections/native_json_read.go
+@@ -396,33 +396,63 @@ func (r *NativeJSONRead) loadLeaf(ptr page.LeafLogPtr, dst []byte) ([]byte, erro
+ // this synchronous read. Maintenance descriptor reads reuse the same decoder,
+ // admission and integrity policy without constructing another capture authority.
+ func readNativeSnapshotLeaf(snapshot *backenddb.Snapshot, allocator backenddb.NativeSemanticAllocator, ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
+-	return readNativeSnapshotLeafWithAdmission(snapshot, allocator.Limits().MaxInFlightBytes, func(charge uint64) (func(), error) {
++	return readNativeSnapshotLeafDiagnostic(snapshot, allocator, ptr, dst, valuelog.COWBasisCall{})
++}
++
++func readNativeSnapshotLeafDiagnostic(snapshot *backenddb.Snapshot, allocator backenddb.NativeSemanticAllocator, ptr page.LeafLogPtr, dst []byte, call valuelog.COWBasisCall) ([]byte, error) {
++	return readNativeMaintenanceSnapshotLeaf(snapshot, allocator, ptr, dst, call, nil)
++}
++
++func readNativeMaintenanceSnapshotLeaf(snapshot *backenddb.Snapshot, allocator backenddb.NativeSemanticAllocator, ptr page.LeafLogPtr, dst []byte, call valuelog.COWBasisCall, leaves backenddb.NativeMaintenanceLeafReader) ([]byte, error) {
++	return readNativeSnapshotLeafWithMaintenanceAdmission(snapshot, allocator.Limits().MaxInFlightBytes, func(charge uint64) (func(), error) {
+ 		lease, err := allocator.AdmitNativeBytes(charge)
+ 		if err != nil {
+ 			return nil, err
+ 		}
+ 		return lease.Close, nil
+-	}, ptr, dst)
++	}, ptr, dst, call, leaves)
+ }
+ 
+ // Internal synchronous admission may spend a containing preadmitted build
+ // workspace. It cannot reenter application code or outlive this read.
+ func readNativeSnapshotLeafWithAdmission(snapshot *backenddb.Snapshot, limit uint64, admit func(uint64) (func(), error), ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
++	return readNativeSnapshotLeafWithAdmissionDiagnostic(snapshot, limit, admit, ptr, dst, valuelog.COWBasisCall{})
++}
++
++func readNativeSnapshotLeafWithAdmissionDiagnostic(snapshot *backenddb.Snapshot, limit uint64, admit func(uint64) (func(), error), ptr page.LeafLogPtr, dst []byte, call valuelog.COWBasisCall) ([]byte, error) {
++	return readNativeSnapshotLeafWithMaintenanceAdmission(snapshot, limit, admit, ptr, dst, call, nil)
++}
++
++func readNativeSnapshotLeafWithMaintenanceAdmission(snapshot *backenddb.Snapshot, limit uint64, admit func(uint64) (func(), error), ptr page.LeafLogPtr, dst []byte, call valuelog.COWBasisCall, leaves backenddb.NativeMaintenanceLeafReader) ([]byte, error) {
++	call.Enter(valuelog.COWBasisPin)
+ 	f, _, err := snapshot.PinnedValueLogFile(ptr.ValuePtr().FileID)
++	call.Finish(valuelog.COWBasisPin)
+ 	if err != nil {
++		call.Error(valuelog.COWBasisPin, err, valuelog.COWRecordShape{}, false)
+ 		return nil, err
+ 	}
+-	shape, err := valuelog.InspectCOWLeafRecord(f, ptr.ValuePtr(), valuelog.COWReadLimits{MaxRecordBytes: limit, MaxRawBytes: limit, MaxValueBytes: limit})
++	call.Enter(valuelog.COWBasisInspect)
++	shape, err := valuelog.InspectCOWLeafRecordDiagnostic(f, ptr.ValuePtr(), valuelog.COWReadLimits{MaxRecordBytes: limit, MaxRawBytes: limit, MaxValueBytes: limit}, call)
++	call.Finish(valuelog.COWBasisInspect)
+ 	if err != nil {
++		// Every failed inspector returns an empty shape: flags stay UNKNOWN.
++		call.Error(valuelog.COWBasisInspect, err, valuelog.COWRecordShape{}, false)
+ 		return nil, err
+ 	}
+ 	var sizes valuelog.COWDecoderAllocationSizes
+ 	if shape.Compressed {
+ 		if shape.DictID != 0 {
++			if leaves != nil {
++				return leaves.ReadNativeMaintenanceDictionaryLeaf(snapshot, ptr, shape, dst, call)
++			}
++			call.Refuse(valuelog.COWBasisDecoderSizes, valuelog.COWBasisDictionary, shape, true)
+ 			return nil, valuelog.ErrCOWReadUnsupported
+ 		}
++		call.Enter(valuelog.COWBasisDecoderSizes)
+ 		sizes, err = valuelog.COWBlockDecoderRetentionSizes(shape.Codec, shape.RawBytes, shape.PayloadBytes())
++		call.Finish(valuelog.COWBasisDecoderSizes)
+ 		if err != nil {
++			call.Error(valuelog.COWBasisDecoderSizes, err, shape, true)
+ 			return nil, err
+ 		}
+ 	}
+@@ -430,12 +460,16 @@ func readNativeSnapshotLeafWithAdmission(snapshot *backenddb.Snapshot, limit uin
+ 	for _, bytes := range []uint64{shape.RawBytes, sizes.OwnerWrapper} {
+ 		part := memtable.COWAllocationCharge(bytes)
+ 		if part > ^uint64(0)-charge {
++			call.Refuse(valuelog.COWBasisAdmission, valuelog.COWBasisCapacity, shape, true)
+ 			return nil, memtable.ErrCOWCapacity
+ 		}
+ 		charge += part
+ 	}
++	call.Enter(valuelog.COWBasisAdmission)
+ 	finish, err := admit(charge)
++	call.Finish(valuelog.COWBasisAdmission)
+ 	if err != nil {
++		call.Error(valuelog.COWBasisAdmission, err, shape, true)
+ 		return nil, err
+ 	}
+ 	input, raw := make([]byte, shape.PayloadBytes()), make([]byte, shape.RawBytes)
+@@ -451,18 +485,25 @@ func readNativeSnapshotLeafWithAdmission(snapshot *backenddb.Snapshot, limit uin
+ 		finish()
+ 	}()
+ 	if shape.Compressed {
++		call.Enter(valuelog.COWBasisDecoder)
+ 		decoder, err = valuelog.NewCOWBlockDecoder(shape.Codec, shape.RawBytes, shape.PayloadBytes(), func(actual valuelog.COWDecoderAllocationSizes) error {
+ 			if actual != sizes {
+ 				return memtable.ErrCOWCapacity
+ 			}
+ 			return nil
+ 		})
++		call.Finish(valuelog.COWBasisDecoder)
+ 		if err != nil {
++			call.Error(valuelog.COWBasisDecoder, err, shape, true)
+ 			return nil, err
+ 		}
+ 		decode = decoder.Decode
+ 	}
+-	return valuelog.ReadCOWLeafPage(f, ptr.ValuePtr(), shape, true, input, raw, dst, decode)
++	call.Enter(valuelog.COWBasisLeafRead)
++	out, err := valuelog.ReadCOWLeafPageDiagnostic(f, ptr.ValuePtr(), shape, true, input, raw, dst, decode, call)
++	call.Finish(valuelog.COWBasisLeafRead)
++	call.Error(valuelog.COWBasisLeafRead, err, shape, true)
++	return out, err
+ }
+ 
+ func (r *NativeJSONRead) Close() error {
+diff --git a/TreeDB/collections/native_maintenance_leaf_test.go b/TreeDB/collections/native_maintenance_leaf_test.go
+new file mode 100644
+index 000000000..2d49d2a6e
+--- /dev/null
++++ b/TreeDB/collections/native_maintenance_leaf_test.go
+@@ -0,0 +1,155 @@
++package collections
++
++import (
++	"bytes"
++	"crypto/sha256"
++	"encoding/binary"
++	"errors"
++	"fmt"
++	"os"
++	"path/filepath"
++	"testing"
++
++	"github.com/snissn/compress/zstd"
++	backenddb "github.com/snissn/gomap/TreeDB/db"
++	"github.com/snissn/gomap/TreeDB/internal/valuelog"
++	"github.com/snissn/gomap/TreeDB/node"
++	"github.com/snissn/gomap/TreeDB/page"
++)
++
++type nativeMaintenanceLeafControl struct {
++	calls int
++	err   error
++}
++
++func (c *nativeMaintenanceLeafControl) MatchesNativeMaintenanceSnapshots(before, after *backenddb.Snapshot) bool {
++	return false
++}
++
++func (c *nativeMaintenanceLeafControl) ReadNativeMaintenanceDictionaryLeaf(snapshot *backenddb.Snapshot, ptr page.LeafLogPtr, shape valuelog.COWRecordShape, dst []byte, call valuelog.COWBasisCall) ([]byte, error) {
++	c.calls++
++	return nil, c.err
++}
++
++func TestNativeMaintenanceLeafOldRefusalAndBlockIsolation(t *testing.T) {
++	for _, mode := range []string{"raw", "snappy", "lz4", "dictionary"} {
++		t.Run(mode, func(t *testing.T) {
++			dir := t.TempDir()
++			samples := make([][]byte, 4)
++			var want []byte
++			for sample := range samples {
++				leaf := make([]byte, page.PageSize)
++				builder := node.NewBuilderWithOptions(leaf, page.PageTypeLeaf, node.BuilderOptions{})
++				for i := 0; i < 16; i++ {
++					if err := builder.AddLeafEntry([]byte(fmt.Sprintf("a%03d", sample*16+i)), bytes.Repeat([]byte("old-inline-dictionary-value|"), 4), node.FlagInline, page.ValuePtr{}); err != nil {
++						t.Fatal(err)
++					}
++				}
++				builder.FinishNoNode()
++				if sample == 0 {
++					want = leaf
++				}
++				var err error
++				samples[sample], _, err = valuelog.MaybeCompactLeafLogPayload(leaf)
++				if err != nil {
++					t.Fatal(err)
++				}
++			}
++			var definition []byte
++			var id uint64
++			if mode == "dictionary" {
++				var err error
++				definition, err = zstd.BuildDict(zstd.BuildDictOptions{ID: 73, Contents: samples, History: append([]byte(nil), samples[0]...), Offsets: [3]int{1, 4, 8}, Level: zstd.SpeedFastest})
++				if err != nil {
++					t.Fatal(err)
++				}
++				digest := sha256.Sum256(definition)
++				id = binary.BigEndian.Uint64(digest[:8])
++			}
++			leafDir := filepath.Join(dir, "leaf_vlog")
++			if err := os.MkdirAll(leafDir, 0700); err != nil {
++				t.Fatal(err)
++			}
++			fileID, err := valuelog.EncodeFileID(valuelog.ReservedLeafLogLaneID, 1)
++			if err != nil {
++				t.Fatal(err)
++			}
++			path := filepath.Join(leafDir, fmt.Sprintf("value-l%d-%06d.log", valuelog.ReservedLeafLogLaneID, 1))
++			writer, err := valuelog.NewWriter(path, fileID)
++			if err != nil {
++				t.Fatal(err)
++			}
++			if mode == "snappy" {
++				writer.SetBlockCompression(valuelog.BlockCodecSnappy, true)
++			} else if mode == "lz4" {
++				writer.SetBlockCompression(valuelog.BlockCodecLZ4, true)
++			}
++			ptrs, err := writer.AppendFrame(id, definition, []valuelog.Record{{RID: 1, Value: samples[0]}})
++			closeErr := writer.Close()
++			if err != nil || closeErr != nil || len(ptrs) != 1 {
++				t.Fatalf("real leaf producer: append=%v close=%v count=%d", err, closeErr, len(ptrs))
++			}
++			ptr, err := page.LeafLogPtrFromValuePtr(ptrs[0])
++			if err != nil {
++				t.Fatal(err)
++			}
++			owner, err := backenddb.Open(backenddb.Options{Dir: dir, IndexOuterLeavesInValueLog: true, DisableBackgroundPrune: true})
++			if err != nil {
++				t.Fatal(err)
++			}
++			defer func() {
++				if err := owner.Close(); err != nil {
++					t.Error(err)
++				}
++			}()
++			if err := owner.RefreshValueLogSet(); err != nil {
++				t.Fatal(err)
++			}
++			snapshot := owner.AcquireStableSnapshot()
++			if snapshot == nil {
++				t.Fatal("missing real pinned leaf snapshot")
++			}
++			defer func() {
++				if err := snapshot.Close(); err != nil {
++					t.Error(err)
++				}
++			}()
++			file, _, err := snapshot.PinnedValueLogFile(ptr.ValuePtr().FileID)
++			if err != nil {
++				t.Fatal(err)
++			}
++			shape, err := valuelog.InspectCOWLeafRecord(file, ptr.ValuePtr(), valuelog.COWReadLimits{MaxRecordBytes: 1 << 20, MaxRawBytes: 1 << 20, MaxValueBytes: 1 << 20})
++			if err != nil || (mode == "raw") == shape.Compressed || (mode == "dictionary") != (shape.DictID != 0) {
++				t.Fatalf("actual selected producer: mode=%s compressed=%t dictionary=%t error=%v", mode, shape.Compressed, shape.DictID != 0, err)
++			}
++			if (mode == "snappy" && shape.Codec != valuelog.BlockCodecSnappy) || (mode == "lz4" && shape.Codec != valuelog.BlockCodecLZ4) {
++				t.Fatal("block codec did not activate")
++			}
++			admitted := 0
++			admit := func(uint64) (func(), error) {
++				admitted++
++				return func() {}, nil
++			}
++			var dst [page.PageSize]byte
++			got, err := readNativeSnapshotLeafWithAdmission(snapshot, 1<<20, admit, ptr, dst[:])
++			control := &nativeMaintenanceLeafControl{err: errors.New("selected private dictionary capability")}
++			if mode == "dictionary" {
++				if !errors.Is(err, valuelog.ErrCOWReadUnsupported) || admitted != 0 {
++					t.Fatalf("original inspected dictionary refusal: error=%v admitted=%d", err, admitted)
++				}
++				_, err = readNativeSnapshotLeafWithMaintenanceAdmission(snapshot, 1<<20, admit, ptr, dst[:], valuelog.COWBasisCall{}, control)
++				if err != control.err || control.calls != 1 || admitted != 0 {
++					t.Fatal("new scope was not selected at exact original dictionary guard")
++				}
++			} else {
++				if err != nil || !bytes.Equal(got, want) || len(got) != page.PageSize || &got[0] != &dst[0] {
++					t.Fatalf("original block/raw read: %v", err)
++				}
++				got, err = readNativeSnapshotLeafWithMaintenanceAdmission(snapshot, 1<<20, admit, ptr, dst[:], valuelog.COWBasisCall{}, control)
++				if err != nil || !bytes.Equal(got, want) || control.calls != 0 {
++					t.Fatalf("nondictionary branch entered provider: calls=%d error=%v", control.calls, err)
++				}
++			}
++		})
++	}
++}
+diff --git a/TreeDB/collections/native_ordinary_concurrent_correctness_test.go b/TreeDB/collections/native_ordinary_concurrent_correctness_test.go
+index 712ff79cb..b46b6d588 100644
+--- a/TreeDB/collections/native_ordinary_concurrent_correctness_test.go
++++ b/TreeDB/collections/native_ordinary_concurrent_correctness_test.go
+@@ -11,6 +11,7 @@ import (
+ 
+ 	treedb "github.com/snissn/gomap/TreeDB"
+ 	backenddb "github.com/snissn/gomap/TreeDB/db"
++	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+ 	"github.com/snissn/gomap/TreeDB/tree"
+ )
+ 
+@@ -65,6 +66,11 @@ func runNativeOrdinaryConcurrentExactLifecycle(t *testing.T, rows int) {
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
++	var refusal valuelog.COWBasisRefusalObserver
++	t.Cleanup(func() {
++		// Atomic scalar receipt only. Even Close error is not a borrower join.
++		t.Logf("basis-first-refusal: %+v", refusal.Snapshot())
++	})
+ 	ownerOpen := true
+ 	var manager *CollectionManager
+ 	managerOpen := false
+@@ -91,6 +97,9 @@ func runNativeOrdinaryConcurrentExactLifecycle(t *testing.T, rows int) {
+ 			}
+ 		}
+ 	})
++	if !owner.EnableNativeBasisRefusalObserverForTest(&refusal) {
++		t.Fatal("original owner diagnostic binding refused")
++	}
+ 	backend, err := owner.NativeSemanticBackend()
+ 	if err != nil {
+ 		t.Fatal(err)
+diff --git a/TreeDB/collections/native_semantic_adapter.go b/TreeDB/collections/native_semantic_adapter.go
+index d1f68e609..94f7eff6b 100644
+--- a/TreeDB/collections/native_semantic_adapter.go
++++ b/TreeDB/collections/native_semantic_adapter.go
+@@ -5,6 +5,7 @@ import (
+ 
+ 	backenddb "github.com/snissn/gomap/TreeDB/db"
+ 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
++	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+ )
+ 
+ var _ backenddb.NativeSemanticState = (*nativeEngineVersion)(nil)
+@@ -63,7 +64,11 @@ func (e *nativeEngineVersion) PrepareHandoff(latest backenddb.NativeSemanticStat
+ // PrepareBasisRefresh is independent of the single-use captured flush ledger.
+ // Maintenance supplies the exact paired Snapshots and consumes no source prefix.
+ func (e *nativeEngineVersion) PrepareBasisRefresh(before, after *backenddb.Snapshot) (backenddb.NativeSemanticState, error) {
+-	next, err := prepareNativeEngineBasisRefresh(e, before, after)
++	return e.PrepareBasisRefreshDiagnostic(before, after, valuelog.COWBasisCall{})
++}
++
++func (e *nativeEngineVersion) PrepareBasisRefreshDiagnostic(before, after *backenddb.Snapshot, call valuelog.COWBasisCall) (backenddb.NativeSemanticState, error) {
++	next, err := prepareNativeEngineBasisRefreshDiagnostic(e, before, after, call)
+ 	if err != nil {
+ 		err = fmt.Errorf("collections: native basis refresh: %w", err)
+ 	}
+@@ -73,4 +78,17 @@ func (e *nativeEngineVersion) PrepareBasisRefresh(before, after *backenddb.Snaps
+ 	return next, err
+ }
+ 
++func (e *nativeEngineVersion) PrepareBasisRefreshWithMaintenanceLeaves(before, after *backenddb.Snapshot, leaves backenddb.NativeMaintenanceLeafReader, call valuelog.COWBasisCall) (backenddb.NativeSemanticState, error) {
++	next, err := prepareNativeEngineBasisRefreshWithMaintenanceLeaves(e, before, after, call, leaves)
++	if err != nil {
++		err = fmt.Errorf("collections: native basis refresh: %w", err)
++	}
++	if next == nil {
++		return nil, err
++	}
++	return next, err
++}
++
++var _ backenddb.NativeSemanticMaintenanceBasisRefresher = (*nativeEngineVersion)(nil)
++
+ var _ backenddb.NativeSemanticBasisRefresher = (*nativeEngineVersion)(nil)
+diff --git a/TreeDB/db/native_basis_refusal_diagnostic.go b/TreeDB/db/native_basis_refusal_diagnostic.go
+new file mode 100644
+index 000000000..19a23833c
+--- /dev/null
++++ b/TreeDB/db/native_basis_refusal_diagnostic.go
+@@ -0,0 +1,10 @@
++package db
++
++import "github.com/snissn/gomap/TreeDB/internal/valuelog"
++
++// NativeSemanticBasisRefusalDiagnostic is an optional diagnostic-only sibling.
++// The exact original invocation supplies all labels explicitly; implementations
++// must preserve original return/ownership semantics and retain no call context.
++type NativeSemanticBasisRefusalDiagnostic interface {
++	PrepareBasisRefreshDiagnostic(before, after *Snapshot, call valuelog.COWBasisCall) (NativeSemanticState, error)
++}
+diff --git a/TreeDB/db/native_maintenance_leaf.go b/TreeDB/db/native_maintenance_leaf.go
+new file mode 100644
+index 000000000..de233b796
+--- /dev/null
++++ b/TreeDB/db/native_maintenance_leaf.go
+@@ -0,0 +1,21 @@
++package db
++
++import (
++	"github.com/snissn/gomap/TreeDB/internal/valuelog"
++	"github.com/snissn/gomap/TreeDB/page"
++)
++
++// NativeMaintenanceLeafReader is borrowed only during one cache-owned physical
++// basis refresh. Its private implementation binds the exact paired Snapshots;
++// callers cannot replace a snapshot or retain dictionary/provider authority.
++// shape comes from the original validated inspector, not a fabricated header.
++type NativeMaintenanceLeafReader interface {
++	MatchesNativeMaintenanceSnapshots(before, after *Snapshot) bool
++	ReadNativeMaintenanceDictionaryLeaf(snapshot *Snapshot, ptr page.LeafLogPtr, shape valuelog.COWRecordShape, dst []byte, call valuelog.COWBasisCall) ([]byte, error)
++}
++
++// NativeSemanticMaintenanceBasisRefresher adds the synchronous private reader to
++// the original equivalent-basis protocol. It does not create a capture/root cut.
++type NativeSemanticMaintenanceBasisRefresher interface {
++	PrepareBasisRefreshWithMaintenanceLeaves(before, after *Snapshot, leaves NativeMaintenanceLeafReader, call valuelog.COWBasisCall) (NativeSemanticState, error)
++}
+diff --git a/TreeDB/internal/dictdb/read_definition.go b/TreeDB/internal/dictdb/read_definition.go
+index 27e79a969..1e6f48c9c 100644
+--- a/TreeDB/internal/dictdb/read_definition.go
++++ b/TreeDB/internal/dictdb/read_definition.go
+@@ -5,6 +5,7 @@ import (
+ 	"encoding/binary"
+ 	"errors"
+ 	"sync"
++	"sync/atomic"
+ 	"unsafe"
+ 
+ 	"github.com/snissn/gomap/TreeDB/db"
+@@ -45,6 +46,9 @@ type DictionaryReadDefinition struct {
+ 	leafScratch                                 [page.PageSize]byte
+ 	key                                         [len("bytes/") + 8]byte
+ 	once, captureOnce                           sync.Once
++	preparedCloseErr                            error
++	preparedSnapshotErr                         error
++	preparedDone                                atomic.Bool
+ }
+ 
+ func (d *DictionaryReadDefinition) Close() {
+@@ -95,7 +99,71 @@ func (d *DictionaryReadDefinition) ReleaseCapture() {
+ // failure, or ReleaseCapture outside those locks after a successful preparation.
+ // It never drains temporary snapshot/resource callbacks inside those locks.
+ func (s *Store) PrepareDictionaryReadDefinition(id uint64, limits valuelog.COWReadLimits, maxResources int, admit func(DictionaryReadAllocationSizes) (func(), error)) (*DictionaryReadDefinition, error) {
+-	return s.acquireDictionaryReadDefinition(id, limits, maxResources, admit, true)
++	return s.acquireDictionaryReadDefinition(id, limits, maxResources, admit, true, nil)
++}
++
++// PrepareDictionaryReadDefinitionInto is the maintenance preparation entry.
++// The preadmitted caller slot receives custody before any later fallible work.
++// The slot must remain live through unwind; ClosePreparedRead runs off-gate.
++func (s *Store) PrepareDictionaryReadDefinitionInto(id uint64, limits valuelog.COWReadLimits, maxResources int, admit func(DictionaryReadAllocationSizes) (func(), error), owned **DictionaryReadDefinition) error {
++	if owned == nil || *owned != nil {
++		return ErrReadDefinitionCapacity
++	}
++	_, err := s.acquireDictionaryReadDefinition(id, limits, maxResources, admit, true, owned)
++	return err
++}
++
++// ClosePreparedRead checks the original temporary capture destructor. On failure
++// the SAME owner retains the failed capture, bytes, pin and receipts; repeated
++// calls report the original error without retry or a false accounting refund.
++// Do not mix this prepared-owner protocol with ReleaseCapture/Close.
++func (d *DictionaryReadDefinition) ClosePreparedRead() error {
++	if d == nil {
++		return nil
++	}
++	d.once.Do(func() {
++		d.captureOnce.Do(func() {
++			if d.snapshot != nil {
++				d.preparedCloseErr = d.snapshot.Close()
++				if !d.preparedDone.Load() {
++					d.preparedCloseErr = errors.Join(d.preparedCloseErr, rootpublication.ErrResourceOwnership)
++				} else {
++					d.preparedCloseErr = errors.Join(d.preparedCloseErr, d.preparedSnapshotErr)
++				}
++				if d.preparedCloseErr != nil {
++					return
++				}
++				d.snapshot = nil
++			}
++			if d.metadata != nil {
++				metadata := d.metadata
++				d.metadata = nil
++				metadata.Close()
++			}
++			if d.releaseSnapshot != nil {
++				release := d.releaseSnapshot
++				d.releaseSnapshot = nil
++				release()
++			}
++		})
++		if d.preparedCloseErr != nil {
++			return
++		}
++		d.pin.Release()
++		d.pin = nil
++		d.Bytes = nil
++		if d.releaseBytes != nil {
++			release := d.releaseBytes
++			d.releaseBytes = nil
++			release()
++		}
++		if d.releaseOwner != nil {
++			release := d.releaseOwner
++			d.releaseOwner = nil
++			release()
++		}
++	})
++	return d.preparedCloseErr
+ }
+ 
+ // AcquireDictionaryReadDefinition is the built-in provider's pure, bounded
+@@ -105,10 +173,17 @@ func (s *Store) PrepareDictionaryReadDefinition(id uint64, limits valuelog.COWRe
+ // stage; all partial stages are released on refusal. No allocating GetDictBytes,
+ // durable CaptureDictionaryResources, checkpoint, or namespace proof is used.
+ func (s *Store) AcquireDictionaryReadDefinition(id uint64, limits valuelog.COWReadLimits, maxResources int, admit func(DictionaryReadAllocationSizes) (func(), error)) (*DictionaryReadDefinition, error) {
+-	return s.acquireDictionaryReadDefinition(id, limits, maxResources, admit, false)
++	return s.acquireDictionaryReadDefinition(id, limits, maxResources, admit, false, nil)
+ }
+ 
+-func (s *Store) acquireDictionaryReadDefinition(id uint64, limits valuelog.COWReadLimits, maxResources int, admit func(DictionaryReadAllocationSizes) (func(), error), deferred bool) (*DictionaryReadDefinition, error) {
++// SnapshotCleanupCompleted is scalar-only. Publication follows the original
++// finalizer's alias scrub; Close acceptance by itself is not completion.
++func (d *DictionaryReadDefinition) SnapshotCleanupCompleted(err error) {
++	d.preparedSnapshotErr = err
++	d.preparedDone.Store(true)
++}
++
++func (s *Store) acquireDictionaryReadDefinition(id uint64, limits valuelog.COWReadLimits, maxResources int, admit func(DictionaryReadAllocationSizes) (func(), error), deferred bool, owned **DictionaryReadDefinition) (*DictionaryReadDefinition, error) {
+ 	if s == nil || s.backend == nil {
+ 		return nil, errStoreUnavailable
+ 	}
+@@ -120,6 +195,9 @@ func (s *Store) acquireDictionaryReadDefinition(id uint64, limits valuelog.COWRe
+ 		return nil, err
+ 	}
+ 	d := &DictionaryReadDefinition{releaseOwner: ownerRelease}
++	if owned != nil {
++		*owned = d // Transfer before capture/callbacks, including panic and Goexit.
++	}
+ 	d.snapshot, err = s.backend.AcquireStableSnapshotWithAllocationAdmission(func(sizes db.SnapshotAllocationSizes) error {
+ 		if sizes.ValueLog.MapHint > maxResources || sizes.ValueLog.FileCount > maxResources {
+ 			return ErrReadDefinitionCapacity
+@@ -130,6 +208,9 @@ func (s *Store) acquireDictionaryReadDefinition(id uint64, limits valuelog.COWRe
+ 		}
+ 		return err
+ 	})
++	if owned != nil && d.snapshot != nil {
++		err = errors.Join(err, d.snapshot.AdoptSnapshotCleanupCompletion(d))
++	}
+ 	if err != nil {
+ 		return failDictionaryReadDefinition(d, err, deferred)
+ 	}
+diff --git a/TreeDB/internal/dictdb/read_definition_maintenance_test.go b/TreeDB/internal/dictdb/read_definition_maintenance_test.go
+new file mode 100644
+index 000000000..557f71257
+--- /dev/null
++++ b/TreeDB/internal/dictdb/read_definition_maintenance_test.go
+@@ -0,0 +1,117 @@
++package dictdb
++
++import (
++	"bytes"
++	"context"
++	"errors"
++	"runtime"
++	"testing"
++
++	"github.com/snissn/gomap/TreeDB/db"
++	"github.com/snissn/gomap/TreeDB/internal/valuelog"
++)
++
++func TestCOWMaintenanceDictionaryEarlyCustodyAndUnwind(t *testing.T) {
++	for _, mode := range []string{"refusal", "panic", "goexit", "success"} {
++		for _, stop := range []int{1, 2, 3} {
++			t.Run(mode+string(rune('0'+stop)), func(t *testing.T) {
++				s, err := Open(t.TempDir(), db.Options{ChunkSize: 65536})
++				if err != nil {
++					t.Fatal(err)
++				}
++				defer func() {
++					if err := s.Close(); err != nil {
++						t.Error(err)
++					}
++				}()
++				want := bytes.Repeat([]byte("maintenance-definition|"), 128)
++				id, err := s.PutDictBytes(context.Background(), want)
++				if err != nil {
++					t.Fatal(err)
++				}
++				limits := valuelog.COWReadLimits{MaxRecordBytes: 1 << 20, MaxRawBytes: 1 << 20, MaxValueBytes: 1 << 20}
++				refusal := errors.New("selected admission refusal")
++				var owned *DictionaryReadDefinition
++				var result error
++				stage, live, releases := 0, 0, 0
++				unwound, premature := false, false
++				done := make(chan struct{})
++				go func() {
++					defer close(done)
++					defer func() {
++						unwound = recover() != nil
++						premature = releases != 0
++						if err := owned.ClosePreparedRead(); err != nil {
++							result = errors.Join(result, err)
++						}
++					}()
++					result = s.PrepareDictionaryReadDefinitionInto(id, limits, 256, func(DictionaryReadAllocationSizes) (func(), error) {
++						stage++
++						if stage > 1 && owned == nil {
++							panic("owner not transferred before next effect")
++						}
++						if stage == stop {
++							switch mode {
++							case "refusal":
++								return nil, refusal
++							case "panic":
++								panic(refusal)
++							case "goexit":
++								runtime.Goexit()
++							}
++						}
++						live++
++						return func() { live--; releases++ }, nil
++					}, &owned)
++					if result == nil && !bytes.Equal(owned.Bytes, want) {
++						panic("authenticated definition mismatch")
++					}
++				}()
++				<-done // Publishes all scalar/owner observations, including Goexit.
++				if premature || live != 0 {
++					t.Fatalf("cleanup timing/refund: premature=%t live=%d", premature, live)
++				}
++				if mode == "refusal" && !errors.Is(result, refusal) {
++					t.Fatalf("lost original refusal: %v", result)
++				}
++				if mode == "panic" && !unwound {
++					t.Fatal("panic was not propagated to original unwind")
++				}
++				if mode == "success" && result != nil {
++					t.Fatal(result)
++				}
++				if owned != nil {
++					if err := owned.ClosePreparedRead(); err != nil {
++						t.Fatal(err)
++					}
++					if owned.Bytes != nil || owned.snapshot != nil || owned.metadata != nil || owned.pin != nil || owned.releaseOwner != nil || owned.releaseSnapshot != nil || owned.releaseBytes != nil {
++						t.Fatal("refunded before owner aliases were detached")
++					}
++				}
++			})
++		}
++	}
++}
++
++func TestCOWMaintenanceDictionaryRetainsIncompleteCleanup(t *testing.T) {
++	// This negative control supplies a real private snapshot without installing
++	// its required completion receipt. Close acceptance cannot be used as a join.
++	s, err := Open(t.TempDir(), db.Options{ChunkSize: 65536})
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer func() {
++		if err := s.Close(); err != nil {
++			t.Error(err)
++		}
++	}()
++	refunded := false
++	d := &DictionaryReadDefinition{snapshot: s.backend.AcquireStableSnapshot(), releaseOwner: func() { refunded = true }}
++	if d.snapshot == nil {
++		t.Fatal("missing actual snapshot")
++	}
++	first := d.ClosePreparedRead()
++	if first == nil || d.ClosePreparedRead() != first || refunded || d.snapshot == nil || d.releaseOwner == nil {
++		t.Fatal("incomplete original cleanup discarded custody/refunded/retried")
++	}
++}
+diff --git a/TreeDB/internal/valuelog/cow_basis_refusal_observer.go b/TreeDB/internal/valuelog/cow_basis_refusal_observer.go
+new file mode 100644
+index 000000000..1ea65706f
+--- /dev/null
++++ b/TreeDB/internal/valuelog/cow_basis_refusal_observer.go
+@@ -0,0 +1,225 @@
++package valuelog
++
++import (
++	"sync/atomic"
++
++	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
++)
++
++// COWBasisRefusalObserver is a diagnostic-only, fixture-owned scalar receipt.
++// It retains only a resource-free owner identity, never a DB, snapshot, file,
++// allocator, error, key or body. It is single-owner and must never be reset or
++// reused for another owner. Each scalar is safe to read even after failed Close.
++// Cross-counter snapshots are deliberately not claimed to be atomic cuts.
++type COWBasisRefusalObserver struct {
++	owner     atomic.Pointer[transactionowner.Owner]
++	calls     atomic.Uint64
++	completed atomic.Uint64
++	first     atomic.Uint64
++	overflow  atomic.Bool
++	missing   atomic.Bool
++	entered   [COWBasisStageCount]atomic.Uint64
++	finished  [COWBasisStageCount]atomic.Uint64
++}
++
++type COWBasisStage uint8
++
++const (
++	COWBasisRefresh COWBasisStage = iota
++	COWBasisDescriptor
++	COWBasisPin
++	COWBasisInspect
++	COWBasisDecoderSizes
++	COWBasisAdmission
++	COWBasisDecoder
++	COWBasisLeafRead
++	COWBasisStageCount
++)
++
++type COWBasisDescriptorKind uint8
++
++const (
++	COWBasisNoDescriptor COWBasisDescriptorKind = iota
++	COWBasisNextIncarnation
++	COWBasisMetadata
++	COWBasisIncarnation
++	COWBasisOverlay
++	COWBasisRoot
++)
++
++type COWBasisRefusal uint8
++
++const (
++	COWBasisOtherError COWBasisRefusal = iota + 1
++	COWBasisUnsupported
++	COWBasisCapacity
++	COWBasisCorrupt
++	COWBasisSourceContract
++	COWBasisFrameContract
++	COWBasisPayloadContract
++	COWBasisDictionary
++)
++
++// COWBasisCall is a synchronous, explicit invocation label. Copies contain
++// only scalar labels and the fixture receipt, never borrowed storage authority.
++// The cache's original writer gate serializes Begin calls for the bound owner;
++// no other readers discover or look up a current call.
++type COWBasisCall struct {
++	observer   *COWBasisRefusalObserver
++	ordinal    uint32
++	frozen     bool
++	descriptor COWBasisDescriptorKind
++	after      bool
++	leafRead   bool
++}
++
++// COWBasisRefusalSnapshot.First is one indivisible first-refusal tuple:
++// [0:23] ordinal, [24] frozen, [25:27] descriptor, [28] after,
++// [29:32] stage, [33:36] refusal, [37] shape-known, [38] compressed,
++// [39] dictionary-present, [40:47] codec refer ONLY to successfully inspected
++// shape knowledge. Internal refusal metadata is separate: [48] compression-known,
++// [49] dictionary-presence-known, [50] raw-codec-known; [51] compressed,
++// [52] dictionary-present, [53:60] raw frame Reserved. Internal knowledge never
++// sets shape-known. Zero means NO OBSERVED REFUSAL, not success. Completed/counts
++// are independent diagnostics, not a join proof.
++type COWBasisRefusalSnapshot struct {
++	Calls, Completed, First uint64
++	Overflow, Missing       bool
++	Entered, Finished       [COWBasisStageCount]uint64
++}
++
++func (o *COWBasisRefusalObserver) Bind(owner *transactionowner.Owner) bool {
++	return o != nil && owner != nil && o.owner.CompareAndSwap(nil, owner)
++}
++
++func (o *COWBasisRefusalObserver) Begin(owner *transactionowner.Owner, frozen bool) COWBasisCall {
++	if o == nil || owner == nil || o.owner.Load() != owner || o.overflow.Load() {
++		return COWBasisCall{}
++	}
++	n := o.calls.Add(1)
++	if n > 0xffffff {
++		o.overflow.Store(true)
++		return COWBasisCall{}
++	}
++	c := COWBasisCall{observer: o, ordinal: uint32(n), frozen: frozen}
++	c.Enter(COWBasisRefresh)
++	return c
++}
++
++func (c COWBasisCall) Enabled() bool { return c.observer != nil && c.ordinal != 0 }
++
++func (c COWBasisCall) Descriptor(kind COWBasisDescriptorKind) COWBasisCall {
++	c.descriptor = kind
++	return c
++}
++
++func (c COWBasisCall) Side(after bool) COWBasisCall {
++	c.after = after
++	return c
++}
++
++// LeafRead distinguishes revalidation during the original final read from
++// the earlier inspector; it does not imply that a stage was entered.
++func (c COWBasisCall) LeafRead() COWBasisCall {
++	c.leafRead = true
++	return c
++}
++
++func (c COWBasisCall) Enter(stage COWBasisStage) {
++	if c.Enabled() && stage < COWBasisStageCount {
++		c.observer.entered[stage].Add(1)
++	}
++}
++
++func (c COWBasisCall) Finish(stage COWBasisStage) {
++	if c.Enabled() && stage < COWBasisStageCount {
++		c.observer.finished[stage].Add(1)
++		if stage == COWBasisRefresh {
++			c.observer.completed.Add(1)
++		}
++	}
++}
++
++func (c COWBasisCall) Missing() {
++	if c.Enabled() {
++		c.observer.missing.Store(true)
++	}
++}
++
++func (c COWBasisCall) Refuse(stage COWBasisStage, why COWBasisRefusal, shape COWRecordShape, known bool) {
++	c.refuse(stage, why, shape, known, 0)
++}
++
++// RefuseMetadata captures only scalars already read by the original inspector.
++// Compression is known here. Dictionary presence and RAW Reserved are known
++// only when that original local frame exists; no dictionary ID is retained.
++// These bits describe an internal refusal, never a successfully returned shape.
++func (c COWBasisCall) RefuseMetadata(stage COWBasisStage, why COWBasisRefusal, compressed, dictionaryPresent bool, rawCodec uint8, frameKnown bool) {
++	metadata := uint64(1) << 48
++	if compressed {
++		metadata |= 1 << 51
++	}
++	if frameKnown {
++		metadata |= 1<<49 | 1<<50 | uint64(rawCodec)<<53
++		if dictionaryPresent {
++			metadata |= 1 << 52
++		}
++	}
++	c.refuse(stage, why, COWRecordShape{}, false, metadata)
++}
++
++func (c COWBasisCall) refuse(stage COWBasisStage, why COWBasisRefusal, shape COWRecordShape, known bool, metadata uint64) {
++	if !c.Enabled() || stage >= COWBasisStageCount || why == 0 || why > 15 {
++		return
++	}
++	if c.leafRead && stage == COWBasisInspect {
++		stage = COWBasisLeafRead
++	}
++	word := uint64(c.ordinal) | uint64(c.descriptor)<<25 | uint64(stage)<<29 | uint64(why)<<33 | metadata
++	if c.frozen {
++		word |= 1 << 24
++	}
++	if c.after {
++		word |= 1 << 28
++	}
++	if known {
++		word |= 1 << 37
++		if shape.Compressed {
++			word |= 1 << 38
++		}
++		if shape.DictID != 0 {
++			word |= 1 << 39
++		}
++		word |= uint64(uint8(shape.Codec)) << 40
++	}
++	c.observer.first.CompareAndSwap(0, word)
++}
++
++// Direct comparisons never invoke an arbitrary error's Is/Unwrap/Error methods.
++func (c COWBasisCall) Error(stage COWBasisStage, err error, shape COWRecordShape, known bool) {
++	if !c.Enabled() || err == nil {
++		return
++	}
++	why := COWBasisOtherError
++	switch err {
++	case ErrCOWReadUnsupported:
++		why = COWBasisUnsupported
++	case ErrCOWReadCapacity:
++		why = COWBasisCapacity
++	case ErrCorrupt:
++		why = COWBasisCorrupt
++	}
++	c.Refuse(stage, why, shape, known)
++}
++
++func (o *COWBasisRefusalObserver) Snapshot() COWBasisRefusalSnapshot {
++	if o == nil {
++		return COWBasisRefusalSnapshot{}
++	}
++	s := COWBasisRefusalSnapshot{Calls: o.calls.Load(), Completed: o.completed.Load(), First: o.first.Load(), Overflow: o.overflow.Load(), Missing: o.missing.Load()}
++	for i := range s.Entered {
++		s.Entered[i] = o.entered[i].Load()
++		s.Finished[i] = o.finished[i].Load()
++	}
++	return s
++}
+diff --git a/TreeDB/internal/valuelog/cow_basis_refusal_observer_test.go b/TreeDB/internal/valuelog/cow_basis_refusal_observer_test.go
+new file mode 100644
+index 000000000..0458da879
+--- /dev/null
++++ b/TreeDB/internal/valuelog/cow_basis_refusal_observer_test.go
+@@ -0,0 +1,211 @@
++package valuelog
++
++import (
++	"encoding/binary"
++	"os"
++	"sync"
++	"testing"
++
++	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
++)
++
++type basisDiagnosticHostileError struct{}
++
++func (basisDiagnosticHostileError) Error() string { panic("diagnostic invoked Error") }
++func (basisDiagnosticHostileError) Is(error) bool { panic("diagnostic invoked Is") }
++func (basisDiagnosticHostileError) Unwrap() error { panic("diagnostic invoked Unwrap") }
++
++func basisDiagnosticCall(t *testing.T, frozen bool) (*COWBasisRefusalObserver, COWBasisCall) {
++	t.Helper()
++	observer := &COWBasisRefusalObserver{}
++	owner := transactionowner.New()
++	if !observer.Bind(owner) {
++		t.Fatal("bind")
++	}
++	return observer, observer.Begin(owner, frozen).Descriptor(COWBasisRoot).Side(true)
++}
++
++func TestCOWBasisRefusalScalarControls(t *testing.T) {
++	t.Run("owner_and_no_entry", func(t *testing.T) {
++		var observer COWBasisRefusalObserver
++		owner := transactionowner.New()
++		if !observer.Bind(owner) || observer.Bind(owner) || observer.Begin(transactionowner.New(), false).Enabled() {
++			t.Fatal("owner binding was not exclusive")
++		}
++		var absent *COWBasisRefusalObserver
++		if absent.Begin(owner, false).Enabled() || observer.Snapshot().First != 0 || observer.Snapshot().Calls != 0 {
++			t.Fatal("absence became an observation")
++		}
++	})
++	t.Run("first_tuple_and_unknown_shape", func(t *testing.T) {
++		observer, call := basisDiagnosticCall(t, true)
++		call.Refuse(COWBasisInspect, COWBasisFrameContract, COWRecordShape{Compressed: true, DictID: 91}, false)
++		first := observer.Snapshot().First
++		call.Refuse(COWBasisRefresh, COWBasisOtherError, COWRecordShape{}, false)
++		if first != observer.Snapshot().First || first&0xffffff != 1 || first&(1<<24) == 0 || (first>>25)&7 != uint64(COWBasisRoot) || first&(1<<28) == 0 || (first>>29)&15 != uint64(COWBasisInspect) || (first>>33)&15 != uint64(COWBasisFrameContract) || first>>37 != 0 {
++			t.Fatalf("tuple=%x later=%x", first, observer.Snapshot().First)
++		}
++	})
++	t.Run("known_shape_and_read_stage", func(t *testing.T) {
++		observer, call := basisDiagnosticCall(t, false)
++		call.LeafRead().Refuse(COWBasisInspect, COWBasisPayloadContract, COWRecordShape{Compressed: true, DictID: 91, Codec: BlockCodecSnappy}, true)
++		word := observer.Snapshot().First
++		if (word>>29)&15 != uint64(COWBasisLeafRead) || (word>>37)&7 != 7 || (word>>40)&255 != uint64(BlockCodecSnappy) {
++			t.Fatalf("tuple=%x", word)
++		}
++	})
++	t.Run("no_error_methods_or_allocation", func(t *testing.T) {
++		observer, call := basisDiagnosticCall(t, false)
++		if n := testing.AllocsPerRun(32, func() {
++			call.Enter(COWBasisInspect)
++			call.RefuseMetadata(COWBasisInspect, COWBasisFrameContract, true, true, 255, true)
++			COWBasisCall{}.RefuseMetadata(COWBasisInspect, COWBasisFrameContract, true, true, 255, true)
++			call.Error(COWBasisInspect, basisDiagnosticHostileError{}, COWRecordShape{}, false)
++			call.Finish(COWBasisInspect)
++			_ = observer.Snapshot()
++		}); n != 0 {
++			t.Fatalf("scalar-path allocations=%g", n)
++		}
++	})
++	t.Run("metadata_known_subset", func(t *testing.T) {
++		observer, call := basisDiagnosticCall(t, false)
++		// Unknown frame fields must be suppressed even if a caller supplied bits.
++		call.RefuseMetadata(COWBasisInspect, COWBasisPayloadContract, false, true, 255, false)
++		first := observer.Snapshot().First
++		call.Error(COWBasisInspect, ErrCOWReadUnsupported, COWRecordShape{}, false)
++		if (first>>37)&0x7ff != 0 || (first>>48)&7 != 1 || first>>51 != 0 || observer.Snapshot().First != first {
++			t.Fatalf("metadata subset=%x later=%x", first, observer.Snapshot().First)
++		}
++	})
++	t.Run("readback_while_borrower_active", func(t *testing.T) {
++		observer, call := basisDiagnosticCall(t, true)
++		var joined sync.WaitGroup
++		joined.Add(1)
++		go func() {
++			defer joined.Done()
++			for i := 0; i < 64; i++ {
++				call.Enter(COWBasisInspect)
++				call.RefuseMetadata(COWBasisInspect, COWBasisFrameContract, true, false, 255, true)
++				call.Finish(COWBasisInspect)
++			}
++			call.Finish(COWBasisRefresh)
++		}()
++		for i := 0; i < 64; i++ {
++			word := observer.Snapshot().First
++			if word != 0 && ((word>>33)&15 != uint64(COWBasisFrameContract) || (word>>37)&0x7ff != 0 || (word>>48)&7 != 7 || (word>>51)&3 != 1 || (word>>53)&255 != 255) {
++				t.Errorf("torn scalar tuple=%x", word)
++			}
++		}
++		joined.Wait()
++		if snapshot := observer.Snapshot(); snapshot.First == 0 || snapshot.Completed != 1 || snapshot.Entered[COWBasisInspect] != 64 || snapshot.Finished[COWBasisInspect] != 64 {
++			t.Fatalf("joined controls=%+v", snapshot)
++		}
++	})
++	t.Run("ordinal_overflow_refuses_attribution", func(t *testing.T) {
++		var observer COWBasisRefusalObserver
++		owner := transactionowner.New()
++		if !observer.Bind(owner) {
++			t.Fatal("bind")
++		}
++		observer.calls.Store(0xffffff)
++		if observer.Begin(owner, false).Enabled() || observer.Begin(owner, false).Enabled() || !observer.Snapshot().Overflow || observer.Snapshot().First != 0 {
++			t.Fatal("overflow attributed a call")
++		}
++	})
++}
++
++func TestCOWBasisRefusalActualInspectorControls(t *testing.T) {
++	t.Run("successful_inspector_equal_and_allocation", func(t *testing.T) {
++		f, ptr := cowTestLeafRecord(t, buildSparseLeafPageForPayloadTest(t), BlockCodecNone)
++		observer, call := basisDiagnosticCall(t, false)
++		want, wantErr := InspectCOWLeafRecord(f, ptr, cowTestLimits)
++		got, gotErr := InspectCOWLeafRecordDiagnostic(f, ptr, cowTestLimits, call)
++		if wantErr != nil || gotErr != nil || want != got || observer.Snapshot().First != 0 {
++			t.Fatalf("shape equal=%t errors=%v/%v", want == got, wantErr, gotErr)
++		}
++		ordinary := testing.AllocsPerRun(16, func() {
++			if _, err := InspectCOWLeafRecord(f, ptr, cowTestLimits); err != nil {
++				panic(err)
++			}
++		})
++		observed := testing.AllocsPerRun(16, func() {
++			if _, err := InspectCOWLeafRecordDiagnostic(f, ptr, cowTestLimits, call); err != nil {
++				panic(err)
++			}
++		})
++		if observed != ordinary {
++			t.Fatalf("inspector allocation ordinary=%g observed=%g", ordinary, observed)
++		}
++	})
++	t.Run("actual_source_refusal", func(t *testing.T) {
++		observer, call := basisDiagnosticCall(t, false)
++		_, ptr := cowTestLeafRecord(t, buildSparseLeafPageForPayloadTest(t), BlockCodecNone)
++		shape, err := InspectCOWLeafRecordDiagnostic(nil, ptr, cowTestLimits, call)
++		word := observer.Snapshot().First
++		if err != ErrCOWReadUnsupported || shape != (COWRecordShape{}) || (word>>33)&15 != uint64(COWBasisSourceContract) || word>>37 != 0 {
++			t.Fatalf("source refusal=%x error=%v", word, err)
++		}
++	})
++	for _, fixture := range []struct {
++		name       string
++		compressed bool
++		dictionary bool
++		rawCodec   uint8
++	}{
++		{"actual_frame_uncompressed_refusal", false, false, uint8(BlockCodecSnappy)},
++		{"actual_frame_dictionary_refusal", true, true, uint8(BlockCodecSnappy)},
++		{"actual_frame_codec_refusal", true, false, 255},
++	} {
++		t.Run(fixture.name, func(t *testing.T) {
++			codec := BlockCodecNone
++			if fixture.compressed {
++				codec = BlockCodecSnappy
++			}
++			f, ptr := cowTestLeafRecord(t, buildSparseLeafPageForPayloadTest(t), codec)
++			bytes, err := os.ReadFile(f.Name())
++			if err != nil {
++				t.Fatal(err)
++			}
++			bytes[HeaderSize+3] = fixture.rawCodec
++			if fixture.dictionary {
++				binary.LittleEndian.PutUint64(bytes[HeaderSize+4:HeaderSize+12], 91)
++			}
++			if err := os.WriteFile(f.Name(), bytes, 0600); err != nil {
++				t.Fatal(err)
++			}
++			observer, call := basisDiagnosticCall(t, true)
++			shape, err := InspectCOWLeafRecordDiagnostic(f, ptr, cowTestLimits, call)
++			originalShape, originalErr := InspectCOWLeafRecord(f, ptr, cowTestLimits)
++			word := observer.Snapshot().First
++			// Match the actual caller's later empty-shape error observation.
++			call.Error(COWBasisInspect, err, shape, false)
++			if err != originalErr || err != ErrCOWReadUnsupported || shape != (COWRecordShape{}) || originalShape != shape || (word>>33)&15 != uint64(COWBasisFrameContract) || (word>>37)&0x7ff != 0 || (word>>48)&7 != 7 || ((word>>51)&1 != 0) != fixture.compressed || ((word>>52)&1 != 0) != fixture.dictionary || (word>>53)&255 != uint64(fixture.rawCodec) || observer.Snapshot().First != word {
++				t.Fatalf("frame refusal=%x later=%x error=%v/%v", word, observer.Snapshot().First, err, originalErr)
++			}
++		})
++	}
++	t.Run("actual_payload_refusal", func(t *testing.T) {
++		f, ptr := cowTestLeafRecord(t, []byte{'T', 'M', 1, 1, 1, 1}, BlockCodecNone)
++		observer, call := basisDiagnosticCall(t, false)
++		shape, err := InspectCOWLeafRecordDiagnostic(f, ptr, cowTestLimits, call)
++		word := observer.Snapshot().First
++		if err != ErrCOWReadUnsupported || shape != (COWRecordShape{}) || (word>>33)&15 != uint64(COWBasisPayloadContract) || (word>>37)&0x7ff != 0 || (word>>48)&7 != 7 || word>>51 != 0 {
++			t.Fatalf("payload refusal=%x error=%v", word, err)
++		}
++	})
++	t.Run("actual_payload_no_frame_subset", func(t *testing.T) {
++		value := []byte{'T', 'M', 1, 1, 1, 1}
++		f, ptr, record := cowTestRecord(t, value, false, 0)
++		local, err := cowShape(record[:HeaderSize], nil, record[:HeaderSize], uint32(len(value)), ptr, cowTestLimits)
++		if err != nil {
++			t.Fatal(err)
++		}
++		observer, call := basisDiagnosticCall(t, false)
++		shape, err := inspectCOWValuePrefixDiagnostic(f, ptr, local, false, record, call)
++		originalShape, originalErr := inspectCOWValuePrefix(f, ptr, local, false, record)
++		word := observer.Snapshot().First
++		if err != originalErr || err != ErrCOWReadUnsupported || shape != (COWRecordShape{}) || originalShape != shape || (word>>33)&15 != uint64(COWBasisPayloadContract) || (word>>37)&0x7ff != 0 || (word>>48)&7 != 1 || word>>51 != 0 {
++			t.Fatalf("non-frame payload=%x error=%v/%v", word, err, originalErr)
++		}
++	})
++}
+diff --git a/TreeDB/internal/valuelog/cow_reader.go b/TreeDB/internal/valuelog/cow_reader.go
+index 357dfd467..b7130cbea 100644
+--- a/TreeDB/internal/valuelog/cow_reader.go
++++ b/TreeDB/internal/valuelog/cow_reader.go
+@@ -75,7 +75,12 @@ func cowReadHeader(f *os.File, ptr page.ValuePtr, header []byte, limits COWReadL
+ }
+ 
+ func cowCheckReadSource(f *os.File, ptr page.ValuePtr, limits COWReadLimits, leaf bool) error {
++	return cowCheckReadSourceDiagnostic(f, ptr, limits, leaf, COWBasisCall{})
++}
++
++func cowCheckReadSourceDiagnostic(f *os.File, ptr page.ValuePtr, limits COWReadLimits, leaf bool, call COWBasisCall) error {
+ 	if f == nil || ptr.Offset < 4 || ptr.Offset-4 > math.MaxInt64 || isLeafLogFileID(ptr.FileID) != leaf || (leaf && !allowsCompactLeafLogPayload(ptr.FileID, f.Name())) {
++		call.Refuse(COWBasisInspect, COWBasisSourceContract, COWRecordShape{}, false)
+ 		return ErrCOWReadUnsupported
+ 	}
+ 	maxInt := uint64(^uint(0) >> 1)
+@@ -102,6 +107,10 @@ func cowCheckReadHeader(ptr page.ValuePtr, header []byte, limits COWReadLimits)
+ }
+ 
+ func cowShape(header, prefix, metadata []byte, n uint32, ptr page.ValuePtr, limits COWReadLimits) (COWRecordShape, error) {
++	return cowShapeDiagnostic(header, prefix, metadata, n, ptr, limits, COWBasisCall{})
++}
++
++func cowShapeDiagnostic(header, prefix, metadata []byte, n uint32, ptr page.ValuePtr, limits COWReadLimits, call COWBasisCall) (COWRecordShape, error) {
+ 	s := COWRecordShape{RecordBytes: uint64(n) + HeaderSize, ptr: ptr, limits: limits, valid: true}
+ 	grouped := header[5]&recordFlagGrouped != 0
+ 	if grouped != page.ValuePtrIsGrouped(ptr) {
+@@ -126,6 +135,7 @@ func cowShape(header, prefix, metadata []byte, n uint32, ptr page.ValuePtr, limi
+ 		s.DictID, s.Compressed = s.frame.DictID, s.frame.Flags&FrameFlagCompressed != 0
+ 		if s.frame.Reserved != 0 {
+ 			if !s.Compressed || s.DictID != 0 || BlockCodec(s.frame.Reserved) > BlockCodecZSTD {
++				call.RefuseMetadata(COWBasisInspect, COWBasisFrameContract, s.Compressed, s.DictID != 0, s.frame.Reserved, true)
+ 				return COWRecordShape{}, ErrCOWReadUnsupported
+ 			}
+ 			s.Codec = BlockCodec(s.frame.Reserved)
+@@ -191,10 +201,14 @@ func InspectCOWRecord(f *os.File, ptr page.ValuePtr, limits COWReadLimits) (COWR
+ // checked here. Leaves are at most one page, grouped raw bytes at most 255
+ // pages, and stored records at most 2MiB, in addition to the caller's limits.
+ func InspectCOWLeafRecord(f *os.File, ptr page.ValuePtr, limits COWReadLimits) (COWRecordShape, error) {
++	return InspectCOWLeafRecordDiagnostic(f, ptr, limits, COWBasisCall{})
++}
++
++func InspectCOWLeafRecordDiagnostic(f *os.File, ptr page.ValuePtr, limits COWReadLimits, call COWBasisCall) (COWRecordShape, error) {
+ 	limits.MaxRecordBytes = min(limits.MaxRecordBytes, 2<<20)
+ 	limits.MaxRawBytes = min(limits.MaxRawBytes, MaxFrameK*page.PageSize)
+ 	limits.MaxValueBytes = min(limits.MaxValueBytes, page.PageSize)
+-	return inspectCOWLeafRecord(f, ptr, limits)
++	return inspectCOWLeafRecordDiagnostic(f, ptr, limits, call)
+ }
+ 
+ // One fixed metadata window replaces the separate header/frame/offset reads.
+@@ -203,7 +217,11 @@ func InspectCOWLeafRecord(f *os.File, ptr page.ValuePtr, limits COWReadLimits) (
+ // other read errors retain the ordinary inspector's failure behavior. This
+ // buffer fits within the existing separately rounded inspection envelope.
+ func inspectCOWLeafRecord(f *os.File, ptr page.ValuePtr, limits COWReadLimits) (COWRecordShape, error) {
+-	if err := cowCheckReadSource(f, ptr, limits, true); err != nil {
++	return inspectCOWLeafRecordDiagnostic(f, ptr, limits, COWBasisCall{})
++}
++
++func inspectCOWLeafRecordDiagnostic(f *os.File, ptr page.ValuePtr, limits COWReadLimits, call COWBasisCall) (COWRecordShape, error) {
++	if err := cowCheckReadSourceDiagnostic(f, ptr, limits, true, call); err != nil {
+ 		return COWRecordShape{}, err
+ 	}
+ 	var metadata [HeaderSize + cowMaxPrefix]byte
+@@ -239,11 +257,11 @@ func inspectCOWLeafRecord(f *os.File, ptr page.ValuePtr, limits COWReadLimits) (
+ 			return COWRecordShape{}, io.EOF
+ 		}
+ 	}
+-	s, err := cowShape(header, metadata[HeaderSize:HeaderSize+p], metadata[:HeaderSize+p], n, ptr, limits)
++	s, err := cowShapeDiagnostic(header, metadata[HeaderSize:HeaderSize+p], metadata[:HeaderSize+p], n, ptr, limits, call)
+ 	if err != nil {
+ 		return COWRecordShape{}, err
+ 	}
+-	return inspectCOWValuePrefix(f, ptr, s, true, metadata[:available])
++	return inspectCOWValuePrefixDiagnostic(f, ptr, s, true, metadata[:available], call)
+ }
+ 
+ func inspectCOWRecord(f *os.File, ptr page.ValuePtr, limits COWReadLimits, leaf bool) (COWRecordShape, error) {
+@@ -281,6 +299,10 @@ func inspectCOWRecord(f *os.File, ptr page.ValuePtr, limits COWReadLimits, leaf
+ }
+ 
+ func inspectCOWValuePrefix(f *os.File, ptr page.ValuePtr, s COWRecordShape, leaf bool, metadata []byte) (COWRecordShape, error) {
++	return inspectCOWValuePrefixDiagnostic(f, ptr, s, leaf, metadata, COWBasisCall{})
++}
++
++func inspectCOWValuePrefixDiagnostic(f *os.File, ptr page.ValuePtr, s COWRecordShape, leaf bool, metadata []byte, call COWBasisCall) (COWRecordShape, error) {
+ 	if !s.Compressed {
+ 		var valuePrefix [compactLeafPagePayloadHeaderSize]byte
+ 		v := min(uint64(len(valuePrefix)), s.ValueBytes)
+@@ -293,6 +315,7 @@ func inspectCOWValuePrefix(f *os.File, ptr page.ValuePtr, s COWRecordShape, leaf
+ 			}
+ 		}
+ 		if templ.IsEncodedPayload(valuePrefix[:int(v)]) || (!leaf && HasCompactLeafLogPayload(valuePrefix[:int(v)])) {
++			call.RefuseMetadata(COWBasisInspect, COWBasisPayloadContract, s.Compressed, s.DictID != 0, s.frame.Reserved, s.frame.K != 0)
+ 			return COWRecordShape{}, ErrCOWReadUnsupported
+ 		}
+ 		if leaf {
+@@ -328,10 +351,15 @@ func ReadCOWRecord(f *os.File, ptr page.ValuePtr, shape COWRecordShape, verifyCR
+ // global codec cache is used. The retained file has the canonical native path
+ // required by InspectCOWLeafRecord.
+ func ReadCOWLeafPage(f *os.File, ptr page.ValuePtr, shape COWRecordShape, verifyCRC bool, payloadScratch, rawScratch, pageDst []byte, decode COWDecodeFunc) ([]byte, error) {
++	return ReadCOWLeafPageDiagnostic(f, ptr, shape, verifyCRC, payloadScratch, rawScratch, pageDst, decode, COWBasisCall{})
++}
++
++func ReadCOWLeafPageDiagnostic(f *os.File, ptr page.ValuePtr, shape COWRecordShape, verifyCRC bool, payloadScratch, rawScratch, pageDst []byte, decode COWDecodeFunc, call COWBasisCall) ([]byte, error) {
++	call = call.LeafRead()
+ 	if cap(pageDst) < page.PageSize || shape.ValueBytes > page.PageSize || shape.RawBytes > MaxFrameK*page.PageSize || shape.RecordBytes > 2<<20 {
+ 		return nil, ErrCOWReadCapacity
+ 	}
+-	value, err := readCOWRecord(f, ptr, shape, verifyCRC, payloadScratch, rawScratch, pageDst, decode, true)
++	value, err := readCOWRecordDiagnostic(f, ptr, shape, verifyCRC, payloadScratch, rawScratch, pageDst, decode, true, call)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+@@ -360,10 +388,14 @@ func AppendCOWRecord(f *os.File, ptr page.ValuePtr, shape COWRecordShape, verify
+ }
+ 
+ func readCOWRecord(f *os.File, ptr page.ValuePtr, shape COWRecordShape, verifyCRC bool, payloadScratch, rawScratch, outputScratch []byte, decode COWDecodeFunc, leaf bool) ([]byte, error) {
++	return readCOWRecordDiagnostic(f, ptr, shape, verifyCRC, payloadScratch, rawScratch, outputScratch, decode, leaf, COWBasisCall{})
++}
++
++func readCOWRecordDiagnostic(f *os.File, ptr page.ValuePtr, shape COWRecordShape, verifyCRC bool, payloadScratch, rawScratch, outputScratch []byte, decode COWDecodeFunc, leaf bool, call COWBasisCall) ([]byte, error) {
+ 	if uint64(cap(outputScratch)) < shape.ValueBytes {
+ 		return nil, ErrCOWReadCapacity
+ 	}
+-	value, err := readCOWRecordValue(f, ptr, shape, verifyCRC, payloadScratch, rawScratch, decode, leaf)
++	value, err := readCOWRecordValueDiagnostic(f, ptr, shape, verifyCRC, payloadScratch, rawScratch, decode, leaf, call)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+@@ -376,6 +408,10 @@ func readCOWRecord(f *os.File, ptr page.ValuePtr, shape COWRecordShape, verifyCR
+ // owner. Wrappers must finish copying before releasing that owner's mutex; this
+ // private helper never publishes an alias to an API caller.
+ func readCOWRecordValue(f *os.File, ptr page.ValuePtr, shape COWRecordShape, verifyCRC bool, payloadScratch, rawScratch []byte, decode COWDecodeFunc, leaf bool) ([]byte, error) {
++	return readCOWRecordValueDiagnostic(f, ptr, shape, verifyCRC, payloadScratch, rawScratch, decode, leaf, COWBasisCall{})
++}
++
++func readCOWRecordValueDiagnostic(f *os.File, ptr page.ValuePtr, shape COWRecordShape, verifyCRC bool, payloadScratch, rawScratch []byte, decode COWDecodeFunc, leaf bool, call COWBasisCall) ([]byte, error) {
+ 	if !shape.valid || shape.leaf != leaf || shape.ptr != ptr || shape.RecordBytes < HeaderSize ||
+ 		uint64(cap(payloadScratch)) < shape.PayloadBytes() ||
+ 		(shape.Compressed && uint64(cap(rawScratch)) < shape.RawBytes) {
+@@ -384,7 +420,7 @@ func readCOWRecordValue(f *os.File, ptr page.ValuePtr, shape COWRecordShape, ver
+ 
+ 	input := payloadScratch[:int(shape.RecordBytes):int(shape.RecordBytes)]
+ 	header := input[:HeaderSize:HeaderSize]
+-	if err := cowCheckReadSource(f, ptr, shape.limits, leaf); err != nil {
++	if err := cowCheckReadSourceDiagnostic(f, ptr, shape.limits, leaf, call); err != nil {
+ 		return nil, err
+ 	}
+ 	// Input already owns the entire admitted record. Preserve the old header
+@@ -416,7 +452,7 @@ func readCOWRecordValue(f *os.File, ptr page.ValuePtr, shape COWRecordShape, ver
+ 			return nil, ErrCorrupt
+ 		}
+ 	}
+-	actual, err := cowShape(header, payload[:p], input[:HeaderSize+p], n, ptr, shape.limits)
++	actual, err := cowShapeDiagnostic(header, payload[:p], input[:HeaderSize+p], n, ptr, shape.limits, call)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+@@ -443,6 +479,7 @@ func readCOWRecordValue(f *os.File, ptr page.ValuePtr, shape COWRecordShape, ver
+ 	}
+ 	value := raw[int(shape.valueStart):int(uint64(shape.valueStart)+shape.ValueBytes)]
+ 	if templ.IsEncodedPayload(value) || (!leaf && HasCompactLeafLogPayload(value)) {
++		call.Refuse(COWBasisLeafRead, COWBasisPayloadContract, shape, true)
+ 		return nil, ErrCOWReadUnsupported
+ 	}
+ 	return value, nil
+diff --git a/TreeDB/native_basis_refusal_diagnostic.go b/TreeDB/native_basis_refusal_diagnostic.go
+new file mode 100644
+index 000000000..facc1b26b
+--- /dev/null
++++ b/TreeDB/native_basis_refusal_diagnostic.go
+@@ -0,0 +1,14 @@
++package treedb
++
++import "github.com/snissn/gomap/TreeDB/internal/valuelog"
++
++// EnableNativeBasisRefusalObserverForTest belongs only to the diagnostic
++// overlay. The fixture calls it with sole opening-lifecycle ownership, before
++// native work or any concurrent Close. It grants no backend/snapshot authority,
++// changes no Open option, and acquires no new observation lock.
++func (db *DB) EnableNativeBasisRefusalObserverForTest(observer *valuelog.COWBasisRefusalObserver) bool {
++	if db == nil || db.cached == nil {
++		return false
++	}
++	return db.cached.EnableNativeBasisRefusalObserverForTest(db.txnOwner, observer)
++}

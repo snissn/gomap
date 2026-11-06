@@ -1,0 +1,7 @@
+commit 57019f08de0d77f756971729712e729727d93052
+Author:     Mikers <snissn@gmail.com>
+AuthorDate: Thu Nov 5 16:24:11 2026 -1000
+Commit:     Mikers <snissn@gmail.com>
+CommitDate: Thu Nov 5 16:24:11 2026 -1000
+
+    fix(treedb): admit dictionary leaf reads during physical basis refresh

@@ -3,136 +3,288 @@
   "base_tree": "cab3eff3c3ab6a75aa30b60f6bc5cfbe84d82e22",
   "files": {
     ".github/race8-first-refusal-fixture/bindings.json": {
-      "bytes": 9553,
-      "sha256": "e560afa244bd7ed76c76e76fac1ad00dc9899a693c6d89d3e9db9da67d663b14"
+      "bytes": 17066,
+      "sha256": "6980d8fec4bc90f208e663f011c7bf58c4437f005215385866f68a5add802edc"
+    },
+    ".github/race8-first-refusal-fixture/commit.txt": {
+      "bytes": 284,
+      "sha256": "94b8c5532c6d1514d8b8c05a1b4e71e83c3af4a397bdeea8a1316bf6ffbd84f6"
+    },
+    ".github/race8-first-refusal-fixture/complete-overlay-from-15f1.patch": {
+      "bytes": 146610,
+      "sha256": "da6e4adf2b5e09edabc35f9c5fa831a7ecf14a0064729c3984ee57b5a43c347a"
     },
     ".github/race8-first-refusal-fixture/controls.json": {
-      "bytes": 874,
-      "sha256": "34a0596b69b9c4364a02572aa00ceef35d762dcf25d1770ce087ac732ed4fcf7"
+      "bytes": 4297,
+      "sha256": "9f2e9b48d58cf94cb631cb3baaa68889f071549367272563916863d2e56fc8bf"
+    },
+    ".github/race8-first-refusal-fixture/cost-and-lifetime.md": {
+      "bytes": 5447,
+      "sha256": "f2c781566fa10d9e5e91bdd62daab4592058f59d3f1e3c7102ffc94b726ef1bd"
+    },
+    ".github/race8-first-refusal-fixture/delta-from-57a5.patch": {
+      "bytes": 59428,
+      "sha256": "3d1af7068a39019214720eb2aaa4b7fc2be5ec0226491bfa87feea9a0da580a9"
     },
     ".github/race8-first-refusal-fixture/dependencies.json": {
-      "bytes": 2168,
-      "sha256": "8a76fdc74431c6ca393d99cf3fb37dafa8fff2de7eb1826fcb31cf8a4a31deba"
+      "bytes": 2870,
+      "sha256": "b4b8b9a9850da000337f12c3fca6bd02a0db00b8380b8e0b30ceb9daa57823ca"
     },
     ".github/race8-first-refusal-fixture/independent-review.md": {
-      "bytes": 2026,
-      "sha256": "cb0ef16d1ec370a578aa117d78eaf85382ba0962839f47c368ac96e9129b008e"
+      "bytes": 3475,
+      "sha256": "6fc218896fab93d14b07c06b1f09d4bed2f6e27e1fc19268f7e896d6a7c8fb7b"
+    },
+    ".github/race8-first-refusal-fixture/input-bindings.json": {
+      "bytes": 1715,
+      "sha256": "842decc81006c629188fc28883d8a860b281c0c7b48a4e464013b504cd113d6d"
+    },
+    ".github/race8-first-refusal-fixture/inputs/maintenance-dictionary-implementation-selection.txt": {
+      "bytes": 4274,
+      "sha256": "c6867142d925ffca2305b3d97e46010469d278f203513bde882847d4efba6d96"
+    },
+    ".github/race8-first-refusal-fixture/inputs/review.md": {
+      "bytes": 3336,
+      "sha256": "2191616c5a5b0581078e176bfe34e092f30f80b955e78619f112040eb6a2babf"
+    },
+    ".github/race8-first-refusal-fixture/inputs/successor-integration-constraints.md": {
+      "bytes": 3626,
+      "sha256": "5601394ceb26e0dd7e5d54d4f3f2b7ca6ab13786a43d4b6dbbc7ab410af017b7"
+    },
+    ".github/race8-first-refusal-fixture/inverse-to-57a5.patch": {
+      "bytes": 59430,
+      "sha256": "4f001076da838d6e944d9b8a6a316c971eb56efdf9605a8fcad3fda81edb3d7e"
     },
     ".github/race8-first-refusal-fixture/manifest.json": {
-      "bytes": 7289,
-      "sha256": "60c3b7b3ca50fc5351ac0ed3ae6a1939e8448d88379cb08b46b151459eaaa112"
+      "bytes": 11171,
+      "sha256": "6e0aed466005f5b3ee6213645faf0cb03b6e36167b96dd5b95bf59f667fde0b9"
     },
-    ".github/race8-first-refusal-fixture/overlay/TreeDB/caching/cow_basis_refusal_diagnostic.go": {
-      "bytes": 823,
-      "sha256": "397f1e6fa45488dff7e2d3ce323a5bcfffdc54230782ab1c3f760f9a604db58a"
+    ".github/race8-first-refusal-fixture/manifest.sha256": {
+      "bytes": 80,
+      "sha256": "7553aa5834845033ba0a5d134ebf2defa9383f88b88410a17ca25b901f4ed370"
     },
-    ".github/race8-first-refusal-fixture/overlay/TreeDB/caching/cow_basis_refusal_diagnostic_test.go": {
-      "bytes": 4140,
-      "sha256": "4712d8664cdf6f5212dce5f689a191f00f5336f01a4b63d47b914187589d1737"
+    ".github/race8-first-refusal-fixture/ownership-closure.json": {
+      "bytes": 1350,
+      "sha256": "dc7375bfbb6b75f0581c78d1891a8895c49b6e7156d5c84112f85db44deecf3e"
     },
-    ".github/race8-first-refusal-fixture/overlay/TreeDB/caching/cow_flush.go": {
-      "bytes": 22211,
-      "sha256": "58b9a83165f22611f031f30eb07a920aba47a677864f9edfc7728665063278fe"
+    ".github/race8-first-refusal-fixture/preimages15f1/TreeDB/caching/cow_cut.go": {
+      "bytes": 34396,
+      "sha256": "6b7a5392195a4176f05aff8583609423b9a728c860da1871526951e06694f1a7"
     },
-    ".github/race8-first-refusal-fixture/overlay/TreeDB/caching/db.go": {
-      "bytes": 1432006,
-      "sha256": "e40e325a39da1d3a85a17a10971adc7e1e530cc48eb076bb0ca2d44ebcd328f4"
-    },
-    ".github/race8-first-refusal-fixture/overlay/TreeDB/collections/native_basis_public_vacuum_activation_test.go": {
-      "bytes": 13696,
-      "sha256": "edfb01dd9fef7a58f640f76cf23de695baf38594434aaa735d372954b15eb83b"
-    },
-    ".github/race8-first-refusal-fixture/overlay/TreeDB/collections/native_basis_public_vacuum_original_corpus_test.go": {
-      "bytes": 18660,
-      "sha256": "5ce983e254bf8cb7781341258c8522c244d34a5c1943fb3273b6cb5d8866e151"
-    },
-    ".github/race8-first-refusal-fixture/overlay/TreeDB/collections/native_basis_refresh.go": {
-      "bytes": 13593,
-      "sha256": "85fd212eb16dea3c594d8be45dbabd4e26e2fb4639343f9625d7b36f138b6a3f"
-    },
-    ".github/race8-first-refusal-fixture/overlay/TreeDB/collections/native_basis_refusal_diagnostic_test.go": {
-      "bytes": 4334,
-      "sha256": "cab416aba723a692a738baca352e456cc9d061d5b65f817e09cdc029fbd724d6"
-    },
-    ".github/race8-first-refusal-fixture/overlay/TreeDB/collections/native_json_read.go": {
-      "bytes": 19491,
-      "sha256": "d9efdcfe81b71319358b2d3deac425cde622b14f1e63ee05703cfb11280e1508"
-    },
-    ".github/race8-first-refusal-fixture/overlay/TreeDB/collections/native_ordinary_concurrent_correctness_test.go": {
-      "bytes": 10528,
-      "sha256": "4b22d3a7017067bf019db93d840193010a24968e366dc19deefe9c4bbe3f6ad4"
-    },
-    ".github/race8-first-refusal-fixture/overlay/TreeDB/collections/native_semantic_adapter.go": {
-      "bytes": 3336,
-      "sha256": "919696fc60c168d035ff2ad03ad3b121d858e9e380448e30b7fd477b1337d951"
-    },
-    ".github/race8-first-refusal-fixture/overlay/TreeDB/db/native_basis_refusal_diagnostic.go": {
-      "bytes": 482,
-      "sha256": "194e2e462663f5294948248b3aef963d3cf34cb8fadb4a7f4918b4d52310be2b"
-    },
-    ".github/race8-first-refusal-fixture/overlay/TreeDB/internal/valuelog/cow_basis_refusal_observer.go": {
-      "bytes": 6632,
-      "sha256": "a19a8901ae4563bb2b5066e15a9bd7f120c76f503a9f9f6290d2b34f08b7f8e7"
-    },
-    ".github/race8-first-refusal-fixture/overlay/TreeDB/internal/valuelog/cow_basis_refusal_observer_test.go": {
-      "bytes": 9571,
-      "sha256": "5cae1c5fa4fd6691df8740372d0c588a15a84012806e78214059dce0747e06ad"
-    },
-    ".github/race8-first-refusal-fixture/overlay/TreeDB/internal/valuelog/cow_reader.go": {
-      "bytes": 28357,
-      "sha256": "90c226d33056aea9044a7231c39e3c493c695f510e8bee661711d597fbbf3d0d"
-    },
-    ".github/race8-first-refusal-fixture/overlay/TreeDB/native_basis_refusal_diagnostic.go": {
-      "bytes": 616,
-      "sha256": "608f5ea4c6e6bef50f7e66ed8c6c71657e76ee954cd28f3393a952cd294c4de5"
-    },
-    ".github/race8-first-refusal-fixture/preimage/TreeDB/caching/cow_flush.go": {
+    ".github/race8-first-refusal-fixture/preimages15f1/TreeDB/caching/cow_flush.go": {
       "bytes": 21227,
       "sha256": "97f3c3930a75ca731613f89892a56d6331ac7c8032ab1e71415ea895daf4308f"
     },
-    ".github/race8-first-refusal-fixture/preimage/TreeDB/caching/db.go": {
+    ".github/race8-first-refusal-fixture/preimages15f1/TreeDB/caching/cow_leaf_maintenance.go": {
+      "bytes": 13423,
+      "sha256": "33570ff5f6d498379eef236f1614bda8d3277be6adff4201feaa0ac273398808"
+    },
+    ".github/race8-first-refusal-fixture/preimages15f1/TreeDB/caching/cow_maintenance.go": {
+      "bytes": 3457,
+      "sha256": "1c89fbd8b76a1e7d34f73b73bb14c079301a6e21db24176c189adbbe7302391f"
+    },
+    ".github/race8-first-refusal-fixture/preimages15f1/TreeDB/caching/db.go": {
       "bytes": 1431850,
       "sha256": "f9740bc2e1b9ac0eb668aa7d5a0d054211133e0f710065cb7710fd0ec8dad438"
     },
-    ".github/race8-first-refusal-fixture/preimage/TreeDB/collections/native_basis_refresh.go": {
+    ".github/race8-first-refusal-fixture/preimages15f1/TreeDB/collections/native_basis_refresh.go": {
       "bytes": 11326,
       "sha256": "b6e64236b568d48fa87a68a6cebf30d1aa9c32dfa492209fa3b9d449fbed4ba1"
     },
-    ".github/race8-first-refusal-fixture/preimage/TreeDB/collections/native_json_read.go": {
+    ".github/race8-first-refusal-fixture/preimages15f1/TreeDB/collections/native_json_read.go": {
       "bytes": 17697,
       "sha256": "3f07b931124f7137fff27d23727f9bbf815a8c4f66bd5b4b724f6a300e5dc8f9"
     },
-    ".github/race8-first-refusal-fixture/preimage/TreeDB/collections/native_ordinary_concurrent_correctness_test.go": {
+    ".github/race8-first-refusal-fixture/preimages15f1/TreeDB/collections/native_ordinary_concurrent_correctness_test.go": {
       "bytes": 10154,
       "sha256": "1074c1d9d86b51f2742412f50764c8558b2ec3b16dc972a22380c880f25d3014"
     },
-    ".github/race8-first-refusal-fixture/preimage/TreeDB/collections/native_semantic_adapter.go": {
+    ".github/race8-first-refusal-fixture/preimages15f1/TreeDB/collections/native_semantic_adapter.go": {
       "bytes": 3021,
       "sha256": "c67c5b27e1ceb1a2bcf98ea565fcc7764c66de15aba667d22faef767b4331224"
     },
-    ".github/race8-first-refusal-fixture/preimage/TreeDB/internal/valuelog/cow_reader.go": {
+    ".github/race8-first-refusal-fixture/preimages15f1/TreeDB/internal/dictdb/read_definition.go": {
+      "bytes": 8493,
+      "sha256": "fa37df4d3c62890e44e9533a9feaccc096f6c3ee8bf8209d08c1b7b59f9035e4"
+    },
+    ".github/race8-first-refusal-fixture/preimages15f1/TreeDB/internal/valuelog/cow_reader.go": {
       "bytes": 25694,
       "sha256": "f2156e0fe5cde5cee3c6f3c4719b5c54d9ab97ba1db5f5fdba22f27a960d8778"
     },
+    ".github/race8-first-refusal-fixture/preimages57a5/TreeDB/caching/cow_cut.go": {
+      "bytes": 34396,
+      "sha256": "6b7a5392195a4176f05aff8583609423b9a728c860da1871526951e06694f1a7"
+    },
+    ".github/race8-first-refusal-fixture/preimages57a5/TreeDB/caching/cow_flush.go": {
+      "bytes": 22211,
+      "sha256": "58b9a83165f22611f031f30eb07a920aba47a677864f9edfc7728665063278fe"
+    },
+    ".github/race8-first-refusal-fixture/preimages57a5/TreeDB/caching/cow_leaf_maintenance.go": {
+      "bytes": 13423,
+      "sha256": "33570ff5f6d498379eef236f1614bda8d3277be6adff4201feaa0ac273398808"
+    },
+    ".github/race8-first-refusal-fixture/preimages57a5/TreeDB/caching/cow_maintenance.go": {
+      "bytes": 3457,
+      "sha256": "1c89fbd8b76a1e7d34f73b73bb14c079301a6e21db24176c189adbbe7302391f"
+    },
+    ".github/race8-first-refusal-fixture/preimages57a5/TreeDB/collections/native_basis_refresh.go": {
+      "bytes": 13593,
+      "sha256": "85fd212eb16dea3c594d8be45dbabd4e26e2fb4639343f9625d7b36f138b6a3f"
+    },
+    ".github/race8-first-refusal-fixture/preimages57a5/TreeDB/collections/native_json_read.go": {
+      "bytes": 19491,
+      "sha256": "d9efdcfe81b71319358b2d3deac425cde622b14f1e63ee05703cfb11280e1508"
+    },
+    ".github/race8-first-refusal-fixture/preimages57a5/TreeDB/collections/native_semantic_adapter.go": {
+      "bytes": 3336,
+      "sha256": "919696fc60c168d035ff2ad03ad3b121d858e9e380448e30b7fd477b1337d951"
+    },
+    ".github/race8-first-refusal-fixture/preimages57a5/TreeDB/internal/dictdb/read_definition.go": {
+      "bytes": 8493,
+      "sha256": "fa37df4d3c62890e44e9533a9feaccc096f6c3ee8bf8209d08c1b7b59f9035e4"
+    },
+    ".github/race8-first-refusal-fixture/qualification-state.json": {
+      "bytes": 955,
+      "sha256": "e6f6c2c48126b7238ce5fd8e18910a7160b350b4f473cd60fb927838a3ab7a4d"
+    },
+    ".github/race8-first-refusal-fixture/review.md": {
+      "bytes": 9775,
+      "sha256": "f3783f077c383441db4f6f9933344df845db2c4f3874970af28bd859edcd2679"
+    },
+    ".github/race8-first-refusal-fixture/source-anchors.json": {
+      "bytes": 232490,
+      "sha256": "cc96fbb798198c30bd89058c03b4d1080dc49d9f3efa0b1db0300d962d336c3c"
+    },
+    ".github/race8-first-refusal-fixture/source-bindings.json": {
+      "bytes": 17012,
+      "sha256": "73ae28f8cfe065276a96cdb6fab0f1c87da4c4d52a4de19001d6a432508106de"
+    },
+    ".github/race8-first-refusal-fixture/source-diff-stat.txt": {
+      "bytes": 882,
+      "sha256": "262a259f56554d73f0908c898ce1c82832875d682c54a35b9dfab18b6c4f6fe2"
+    },
+    ".github/race8-first-refusal-fixture/source/TreeDB/caching/cow_basis_refusal_diagnostic.go": {
+      "bytes": 823,
+      "sha256": "397f1e6fa45488dff7e2d3ce323a5bcfffdc54230782ab1c3f760f9a604db58a"
+    },
+    ".github/race8-first-refusal-fixture/source/TreeDB/caching/cow_basis_refusal_diagnostic_test.go": {
+      "bytes": 4140,
+      "sha256": "4712d8664cdf6f5212dce5f689a191f00f5336f01a4b63d47b914187589d1737"
+    },
+    ".github/race8-first-refusal-fixture/source/TreeDB/caching/cow_cut.go": {
+      "bytes": 34540,
+      "sha256": "96ae5abbd1d9bfef3ffac7270157eff043fe563e74eba64f068cb49b19e0ea33"
+    },
+    ".github/race8-first-refusal-fixture/source/TreeDB/caching/cow_flush.go": {
+      "bytes": 23451,
+      "sha256": "92fb1a48d664bcba1ce49f84e332317b3412d060bc49bb7bd231041cbd801264"
+    },
+    ".github/race8-first-refusal-fixture/source/TreeDB/caching/cow_leaf_maintenance.go": {
+      "bytes": 13480,
+      "sha256": "d919c98704b49c59523b7e74bbe8af4d9f2de7789348bb137f6bd08f27c58bb4"
+    },
+    ".github/race8-first-refusal-fixture/source/TreeDB/caching/cow_maintenance.go": {
+      "bytes": 3973,
+      "sha256": "0f59fc0ad96be4b3959ea25586dae7973fccc7293107a5790cef2ebcc736df43"
+    },
+    ".github/race8-first-refusal-fixture/source/TreeDB/caching/cow_maintenance_dictionary.go": {
+      "bytes": 8629,
+      "sha256": "99a56de6573cb8e8c5ee2140b656b827b2556217371ced9531f81c83e0012ccd"
+    },
+    ".github/race8-first-refusal-fixture/source/TreeDB/caching/cow_maintenance_dictionary_test.go": {
+      "bytes": 16331,
+      "sha256": "beafc615ee3650c6b90e21ae595600d69e03cbb76659759a19a675348d754f15"
+    },
+    ".github/race8-first-refusal-fixture/source/TreeDB/caching/db.go": {
+      "bytes": 1432006,
+      "sha256": "e40e325a39da1d3a85a17a10971adc7e1e530cc48eb076bb0ca2d44ebcd328f4"
+    },
+    ".github/race8-first-refusal-fixture/source/TreeDB/collections/native_basis_public_vacuum_activation_test.go": {
+      "bytes": 13696,
+      "sha256": "edfb01dd9fef7a58f640f76cf23de695baf38594434aaa735d372954b15eb83b"
+    },
+    ".github/race8-first-refusal-fixture/source/TreeDB/collections/native_basis_public_vacuum_original_corpus_test.go": {
+      "bytes": 18660,
+      "sha256": "5ce983e254bf8cb7781341258c8522c244d34a5c1943fb3273b6cb5d8866e151"
+    },
+    ".github/race8-first-refusal-fixture/source/TreeDB/collections/native_basis_refresh.go": {
+      "bytes": 14265,
+      "sha256": "d1a4c7902f85df68005fcb480792ffb4bad4afec89e285bc2250b569ba8e1482"
+    },
+    ".github/race8-first-refusal-fixture/source/TreeDB/collections/native_basis_refusal_diagnostic_test.go": {
+      "bytes": 4334,
+      "sha256": "cab416aba723a692a738baca352e456cc9d061d5b65f817e09cdc029fbd724d6"
+    },
+    ".github/race8-first-refusal-fixture/source/TreeDB/collections/native_json_read.go": {
+      "bytes": 20300,
+      "sha256": "931837446046f891ac1363e9845f7c54ba4b0efaf4f5285abd5a0bdd63d3010f"
+    },
+    ".github/race8-first-refusal-fixture/source/TreeDB/collections/native_maintenance_leaf_test.go": {
+      "bytes": 5608,
+      "sha256": "d31be592730f0382370641ff7e9fc203a2fcce60785019cea1bfe91948a2d81b"
+    },
+    ".github/race8-first-refusal-fixture/source/TreeDB/collections/native_ordinary_concurrent_correctness_test.go": {
+      "bytes": 10528,
+      "sha256": "4b22d3a7017067bf019db93d840193010a24968e366dc19deefe9c4bbe3f6ad4"
+    },
+    ".github/race8-first-refusal-fixture/source/TreeDB/collections/native_semantic_adapter.go": {
+      "bytes": 3888,
+      "sha256": "bb149a913ef39a42c052c785dfe5def02ccd99be6d5cf28df79bd10aaa1451aa"
+    },
+    ".github/race8-first-refusal-fixture/source/TreeDB/db/native_basis_refusal_diagnostic.go": {
+      "bytes": 482,
+      "sha256": "194e2e462663f5294948248b3aef963d3cf34cb8fadb4a7f4918b4d52310be2b"
+    },
+    ".github/race8-first-refusal-fixture/source/TreeDB/db/native_maintenance_leaf.go": {
+      "bytes": 1092,
+      "sha256": "8e906f38eeaf9d3369f3ef588256d8f0a5d0858b6d6f35a474ca205174eb40a8"
+    },
+    ".github/race8-first-refusal-fixture/source/TreeDB/internal/dictdb/read_definition.go": {
+      "bytes": 11213,
+      "sha256": "20acb75147ebfba2b55ed87c3b15dfede1125e52519da7f8f38df0a223c6007d"
+    },
+    ".github/race8-first-refusal-fixture/source/TreeDB/internal/dictdb/read_definition_maintenance_test.go": {
+      "bytes": 3683,
+      "sha256": "10c513244664ec924f4f0739fec1c19a7b7885107b93f59e3e7480ad4822650c"
+    },
+    ".github/race8-first-refusal-fixture/source/TreeDB/internal/valuelog/cow_basis_refusal_observer.go": {
+      "bytes": 6632,
+      "sha256": "a19a8901ae4563bb2b5066e15a9bd7f120c76f503a9f9f6290d2b34f08b7f8e7"
+    },
+    ".github/race8-first-refusal-fixture/source/TreeDB/internal/valuelog/cow_basis_refusal_observer_test.go": {
+      "bytes": 9571,
+      "sha256": "5cae1c5fa4fd6691df8740372d0c588a15a84012806e78214059dce0747e06ad"
+    },
+    ".github/race8-first-refusal-fixture/source/TreeDB/internal/valuelog/cow_reader.go": {
+      "bytes": 28357,
+      "sha256": "90c226d33056aea9044a7231c39e3c493c695f510e8bee661711d597fbbf3d0d"
+    },
+    ".github/race8-first-refusal-fixture/source/TreeDB/native_basis_refusal_diagnostic.go": {
+      "bytes": 616,
+      "sha256": "608f5ea4c6e6bef50f7e66ed8c6c71657e76ee954cd28f3393a952cd294c4de5"
+    },
+    ".github/race8-first-refusal-fixture/static-checks.json": {
+      "bytes": 1223,
+      "sha256": "a5c8dd4499d0a972febe82a54799d28beba85c0a6eeabbcde4bb350f77f093fa"
+    },
     ".github/scripts/race8_first_refusal_events.py": {
-      "bytes": 24249,
-      "sha256": "578e32eb33aebd8e4a69c0585c799ec288ce8e5ed04f35a0600b435548b6867c"
+      "bytes": 24294,
+      "sha256": "4271963750d4cd7e03307c2824680de0693c43f8f9b3b3cceaf9eb7352daad16"
     },
     ".github/scripts/race8_first_refusal_hosted_controls.py": {
-      "bytes": 18483,
-      "sha256": "47f66296c4a9f0f989aef81b93197067d2e31f525cd92961ee1f02e67665b8ca"
+      "bytes": 20400,
+      "sha256": "e2a829e4f57831fd283a97e5e1acc180d10cff1125c680304423e2419db56c1b"
     },
     ".github/scripts/test_race8_first_refusal_events.py": {
       "bytes": 17963,
-      "sha256": "1af2c622c573d160d0dc746581d3c71cc25701ef3e1ad3736b25f4cd15521d6a"
+      "sha256": "59acdd1193751de0d41fc290d97b85f2cd7a7c08a6370ed0acf63d99e00f3b76"
     },
     ".github/scripts/test_race8_public_vacuum_activation_events.py": {
-      "bytes": 7804,
-      "sha256": "fea02a4bd2f54d85c98241ec650c14aa6f6cb3bdeb5acadf3355b2c9cf88b953"
+      "bytes": 9186,
+      "sha256": "c99791b7061603d649a1837400ceebd57b70e7ffbf03b9e31d68e8e9913f42d8"
     },
     ".github/workflows/treedb-mvcc-maintenance-diagnostic.yml": {
-      "bytes": 4631,
-      "sha256": "b6d4337c5f53f0114c04738b853f7f398f75be367a07c3f239f272b17a4544c3"
+      "bytes": 4635,
+      "sha256": "beb318fa42d926ae90b3e74a9b44ee4c897a1f30fb389ed57ff19df6d1310914"
     },
     "scripts/ycsb_campaign_guard.py": {
       "bytes": 19548,
@@ -152,8 +304,8 @@
     }
   },
   "schema": "race8-first-refusal-fixed-inputs-v1",
-  "semantic_head": "57a5dec783d4e71fe4c1e33e361ada319728a79e",
-  "semantic_parent": "641a721077d71499eed545ef52caa1f0b81a384a",
-  "semantic_tree": "badd632961b02f2f7e75a910f9f659bf321eec11",
-  "status": "SOURCE_ONLY_FINAL_INTEGRATION_REVIEW_AND_ROOT_ADMISSION_REQUIRED"
+  "semantic_head": "57019f08de0d77f756971729712e729727d93052",
+  "semantic_parent": "57a5dec783d4e71fe4c1e33e361ada319728a79e",
+  "semantic_tree": "138895fe4ebac33429705676b84a051d9b35934b",
+  "status": "EXACT_SOURCE_AND_BINDING_REVIEW_REQUIRED_BEFORE_ROOT_ADMISSION"
 }

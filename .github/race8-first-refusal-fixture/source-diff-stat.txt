@@ -1,0 +1,14 @@
+ TreeDB/caching/cow_cut.go                          |   3 +-
+ TreeDB/caching/cow_flush.go                        |  36 +-
+ TreeDB/caching/cow_leaf_maintenance.go             |   2 +
+ TreeDB/caching/cow_maintenance.go                  |  16 +
+ TreeDB/caching/cow_maintenance_dictionary.go       | 224 ++++++++++
+ TreeDB/caching/cow_maintenance_dictionary_test.go  | 456 +++++++++++++++++++++
+ TreeDB/collections/native_basis_refresh.go         |  18 +-
+ TreeDB/collections/native_json_read.go             |  15 +-
+ TreeDB/collections/native_maintenance_leaf_test.go | 155 +++++++
+ TreeDB/collections/native_semantic_adapter.go      |  13 +
+ TreeDB/db/native_maintenance_leaf.go               |  21 +
+ TreeDB/internal/dictdb/read_definition.go          |  87 +++-
+ .../dictdb/read_definition_maintenance_test.go     | 117 ++++++
+ 13 files changed, 1148 insertions(+), 15 deletions(-)

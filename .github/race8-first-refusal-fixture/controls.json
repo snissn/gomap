@@ -1,29 +1,109 @@
 {
-  "actual_public_vacuum_invocations_each": 1,
-  "compile_scope": "existing collections compile route, ROOT-owned exact binding",
-  "count_each": 1,
-  "each_mode": {
-    "leaves": 1,
-    "no_subtests": true,
-    "outcomes": 1,
-    "tops": 1
-  },
-  "existing_controls_or_original_witness_invocations": 0,
-  "file": "TreeDB/collections/native_basis_public_vacuum_original_corpus_test.go",
-  "modes": [
-    "normal",
-    "race"
+  "additional_required_existing_controls": [
+    {
+      "package": "TreeDB/internal/valuelog",
+      "test": "TestCOWBoundedDecoderExactOutputConcurrentCloseAndProvenance",
+      "why": "correct-SHA malformed dictionary grammar, wrong provenance, exact output and concurrent Close in maintained kernel; source unchanged, result UNRUN on this successor"
+    },
+    {
+      "package": "TreeDB/collections",
+      "test": "TestNativeBasisPublicVacuumActivationV1",
+      "why": "unchanged 8-document public activation/real physical work/checked lifecycle"
+    },
+    {
+      "package": "TreeDB/collections",
+      "test": "TestNativeBasisPublicVacuumOriginalCorpusV1",
+      "why": "unchanged 256-document/16-writer default policy, exact ACK IDs, held cut, actual public Vacuum, checkpoint, checked original Close/reopen/pins"
+    },
+    {
+      "package": "TreeDB/collections",
+      "test": "TestNativeOrdinaryConcurrentExactLifecycle",
+      "why": "unchanged original lifecycle witness; original15f1 functional RED not waived"
+    }
   ],
-  "no_skip_policy": "ineligible/unsupported/no-op/zero interval/no replacement is FAIL, never skip/pass",
-  "package": "github.com/snissn/gomap/TreeDB/collections",
-  "rows": 256,
-  "runtime_gates": {
-    "compile": "UNRUN",
-    "gofmt_Go1_26_10": "UNRUN",
-    "normal": "UNRUN",
-    "race": "UNRUN"
-  },
-  "selector": "^TestNativeBasisPublicVacuumOriginalCorpusV1$",
-  "test": "TestNativeBasisPublicVacuumOriginalCorpusV1",
-  "writers": 16
+  "execution_owner": "ROOT; maintained hosted guard/parser and exact-source independent review before any execution",
+  "new_focused_groups": [
+    {
+      "leaves": 15,
+      "named_outcomes": 17,
+      "normal_and_race_required": true,
+      "package": "TreeDB/caching",
+      "platform": "!windows",
+      "selector": "^(TestCOWMaintenanceDictionaryPairedSidesAndRefund|TestCOWMaintenanceDictionaryRefusalAndUnwind|TestCOWMaintenanceDictionaryDistinctBoundAndOriginalPair|TestCOWMaintenanceDictionaryActualInstallDispatch|TestCOWMaintenanceDictionaryFailedCompletionKeepsOriginalDebt|TestCOWMaintenanceDictionaryInstallUnwindKeepsOpeningCut)$",
+      "status": "UNRUN",
+      "tests": {
+        "TestCOWMaintenanceDictionaryActualInstallDispatch": [],
+        "TestCOWMaintenanceDictionaryDistinctBoundAndOriginalPair": [],
+        "TestCOWMaintenanceDictionaryFailedCompletionKeepsOriginalDebt": [],
+        "TestCOWMaintenanceDictionaryInstallUnwindKeepsOpeningCut": [
+          "panic",
+          "goexit"
+        ],
+        "TestCOWMaintenanceDictionaryPairedSidesAndRefund": [],
+        "TestCOWMaintenanceDictionaryRefusalAndUnwind": [
+          "missing",
+          "wrong_definition",
+          "refusal",
+          "panic",
+          "goexit",
+          "shape",
+          "frame",
+          "crc",
+          "short_output"
+        ]
+      },
+      "tops": 6
+    },
+    {
+      "leaves": 13,
+      "named_outcomes": 14,
+      "normal_and_race_required": true,
+      "package": "TreeDB/internal/dictdb",
+      "platform": "all supported source platforms",
+      "selector": "^(TestCOWMaintenanceDictionaryEarlyCustodyAndUnwind|TestCOWMaintenanceDictionaryRetainsIncompleteCleanup)$",
+      "status": "UNRUN",
+      "tests": {
+        "TestCOWMaintenanceDictionaryEarlyCustodyAndUnwind": [
+          "refusal1",
+          "refusal2",
+          "refusal3",
+          "panic1",
+          "panic2",
+          "panic3",
+          "goexit1",
+          "goexit2",
+          "goexit3",
+          "success1",
+          "success2",
+          "success3"
+        ],
+        "TestCOWMaintenanceDictionaryRetainsIncompleteCleanup": []
+      },
+      "tops": 2
+    },
+    {
+      "leaves": 4,
+      "named_outcomes": 5,
+      "normal_and_race_required": true,
+      "package": "TreeDB/collections",
+      "platform": "all supported source platforms",
+      "selector": "^(TestNativeMaintenanceLeafOldRefusalAndBlockIsolation)$",
+      "status": "UNRUN",
+      "tests": {
+        "TestNativeMaintenanceLeafOldRefusalAndBlockIsolation": [
+          "raw",
+          "snappy",
+          "lz4",
+          "dictionary"
+        ]
+      },
+      "tops": 1
+    }
+  ],
+  "receipt_schema": "Existing Go test-json named outcomes; unchanged original scalar witness/activation receipts. No new bodies, DictID or payload logs.",
+  "route_limits": "Use existing admitted maintained route, original workload/resource/timers; no new test budget, skip, retry or cap increase. No local runtime. Stop and retain adverse result. Hosted compile and pinned gofmt first. Full CI/acceptance separate.",
+  "scope": "source inventory only; not test results or dispatch instructions",
+  "total_new_leaves_per_mode": 32,
+  "total_new_named_outcomes_per_mode": 36,
+  "total_new_tops": 9
 }

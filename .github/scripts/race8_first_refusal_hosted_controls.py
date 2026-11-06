@@ -16,16 +16,16 @@ import time
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent
-OWNER_MANIFEST = '60c3b7b3ca50fc5351ac0ed3ae6a1939e8448d88379cb08b46b151459eaaa112'
-OWNER_REVIEW = 'cb0ef16d1ec370a578aa117d78eaf85382ba0962839f47c368ac96e9129b008e'
+OWNER_MANIFEST = '6e0aed466005f5b3ee6213645faf0cb03b6e36167b96dd5b95bf59f667fde0b9'
+OWNER_REVIEW = '6fc218896fab93d14b07c06b1f09d4bed2f6e27e1fc19268f7e896d6a7c8fb7b'
 C = '15f1bcbdf13b9feacaffa6f635688b464c1208a5'
 C_TREE = 'cab3eff3c3ab6a75aa30b60f6bc5cfbe84d82e22'
-DIAGNOSTIC_HEAD = '57a5dec783d4e71fe4c1e33e361ada319728a79e'
-DIAGNOSTIC_TREE = 'badd632961b02f2f7e75a910f9f659bf321eec11'
+DIAGNOSTIC_HEAD = '57019f08de0d77f756971729712e729727d93052'
+DIAGNOSTIC_TREE = '138895fe4ebac33429705676b84a051d9b35934b'
 WHOLE_SECONDS = 1020
 
 
-EXPECTED_OVERLAYS = ('TreeDB/caching/cow_basis_refusal_diagnostic.go', 'TreeDB/caching/cow_basis_refusal_diagnostic_test.go', 'TreeDB/caching/cow_flush.go', 'TreeDB/caching/db.go', 'TreeDB/collections/native_basis_refresh.go', 'TreeDB/collections/native_basis_refusal_diagnostic_test.go', 'TreeDB/collections/native_basis_public_vacuum_activation_test.go', 'TreeDB/collections/native_basis_public_vacuum_original_corpus_test.go', 'TreeDB/collections/native_json_read.go', 'TreeDB/collections/native_ordinary_concurrent_correctness_test.go', 'TreeDB/collections/native_semantic_adapter.go', 'TreeDB/db/native_basis_refusal_diagnostic.go', 'TreeDB/internal/valuelog/cow_basis_refusal_observer.go', 'TreeDB/internal/valuelog/cow_basis_refusal_observer_test.go', 'TreeDB/internal/valuelog/cow_reader.go', 'TreeDB/native_basis_refusal_diagnostic.go')
+EXPECTED_OVERLAYS = ('TreeDB/caching/cow_basis_refusal_diagnostic.go', 'TreeDB/caching/cow_basis_refusal_diagnostic_test.go', 'TreeDB/caching/cow_cut.go', 'TreeDB/caching/cow_flush.go', 'TreeDB/caching/cow_leaf_maintenance.go', 'TreeDB/caching/cow_maintenance.go', 'TreeDB/caching/cow_maintenance_dictionary.go', 'TreeDB/caching/cow_maintenance_dictionary_test.go', 'TreeDB/caching/db.go', 'TreeDB/collections/native_basis_public_vacuum_activation_test.go', 'TreeDB/collections/native_basis_public_vacuum_original_corpus_test.go', 'TreeDB/collections/native_basis_refresh.go', 'TreeDB/collections/native_basis_refusal_diagnostic_test.go', 'TreeDB/collections/native_json_read.go', 'TreeDB/collections/native_maintenance_leaf_test.go', 'TreeDB/collections/native_ordinary_concurrent_correctness_test.go', 'TreeDB/collections/native_semantic_adapter.go', 'TreeDB/db/native_basis_refusal_diagnostic.go', 'TreeDB/db/native_maintenance_leaf.go', 'TreeDB/internal/dictdb/read_definition.go', 'TreeDB/internal/dictdb/read_definition_maintenance_test.go', 'TreeDB/internal/valuelog/cow_basis_refusal_observer.go', 'TreeDB/internal/valuelog/cow_basis_refusal_observer_test.go', 'TreeDB/internal/valuelog/cow_reader.go', 'TreeDB/native_basis_refusal_diagnostic.go')
 
 def need(ok, message):
     if not ok:
@@ -45,7 +45,7 @@ def authority():
          os.environ.get('GITHUB_REPOSITORY')=='snissn/gomap' and
          os.environ.get('GITHUB_ACTOR_ID')=='1981537' and
          os.environ.get('GITHUB_RUN_ATTEMPT')=='1' and
-         os.environ.get('GITHUB_REF')=='refs/heads/diagnostic/race8-original-corpus-vacuum-01', 'fixed hosted authority')
+         os.environ.get('GITHUB_REF')=='refs/heads/diagnostic/race8-maintenance-dictionary-01', 'fixed hosted authority')
     head=os.environ.get('REVIEWED_HEAD','')
     need(re.fullmatch('[0-9a-f]{40}',head) is not None and
          head==os.environ.get('GITHUB_SHA')==os.environ.get('WORKFLOW_COMMIT'), 'exact reviewed harness')
@@ -77,6 +77,8 @@ def authenticate():
     need(sha(REPO/'.github/race8-first-refusal-fixture/independent-review.md')==OWNER_REVIEW,'owner independent source review')
     bindings=json.loads((REPO/'.github/race8-first-refusal-fixture/bindings.json').read_text())
     need(bindings['head']==DIAGNOSTIC_HEAD and bindings['tree']==DIAGNOSTIC_TREE and bindings['base']==C, 'exact semantic diagnostic/base binding')
+    owner=json.loads((REPO/'.github/race8-first-refusal-fixture/manifest.json').read_text())
+    need(owner['head']==DIAGNOSTIC_HEAD and owner['tree']==DIAGNOSTIC_TREE, 'owner manifest exact semantic identity')
     return manifest
 
 
@@ -89,7 +91,7 @@ def load(name,path):
 
 
 def prepare_normal_controls(go, overlay, source, root, run, write):
-    """Compile the fixed activation package within the existing preparation budget; never execute this ELF."""
+    """Compile the fixed repair/control packages under one preparation budget; never execute these ELFs."""
     started=time.monotonic()
     deadline=started+240
     directory=root/'tmp'/'prepared-normal'
@@ -98,7 +100,7 @@ def prepare_normal_controls(go, overlay, source, root, run, write):
              'started_monotonic':started,'test_execution':False,'binaries':[]}
     target=root/'output'/'normal-preparation.json'
     write(target,receipt)
-    for package in ('collections',):
+    for package in ('internal/dictdb', 'internal/valuelog', 'caching', 'collections'):
         seconds=deadline-time.monotonic()
         need(seconds>0,'aggregate normal preparation deadline exhausted')
         binary=directory/(package.replace('/','-')+'.test')
@@ -245,48 +247,63 @@ def main():
             need(path.stat().st_size==row['bytes'] and sha(path)==row['sha256'],
                  'ROOT-selected dependency mismatch: '+row['path'])
         replacements={}
-        for path in sorted((owner/'overlay').rglob('*.go')):
-            name=path.relative_to(owner/'overlay')
+        for path in sorted((owner/'source').rglob('*.go')):
+            name=path.relative_to(owner/'source')
             original=source/name
-            preimage=owner/'preimage'/name
+            preimage=owner/'preimages15f1'/name
             if preimage.exists():
                 need(original.is_file() and sha(original)==sha(preimage),'original fixture preimage mismatch: '+str(name))
             else:
                 need(not original.exists(),'new fixture helper already exists: '+str(name))
             replacements[str(original)]=str(path)
-        need(len(replacements)==16 and set(str(Path(p).relative_to(source)) for p in replacements)==set(EXPECTED_OVERLAYS),'exact sixteen replacements required')
+        need(len(replacements)==25 and set(str(Path(p).relative_to(source)) for p in replacements)==set(EXPECTED_OVERLAYS),'exact twenty-five replacements required')
         overlay=out/'focused-C.overlay.json'
         write(overlay,{'Replace':replacements})
-        formatted=run('gofmt',[gofmt,'-l',*sorted(replacements.values())],30)
-        need(not formatted.strip(),'observer source formatting failed; do not continue')
+        formatted=run('gofmt',[gofmt,'-d',*sorted(replacements.values())],30)
+        need(not formatted.strip(),'repair/control source formatting failed; exact diff retained; do not continue')
         run('pure-controls',[sys.executable,'-B','-m','unittest',
             'test_race8_first_refusal_events','test_race8_public_vacuum_activation_events'],30,cwd=HERE)
         prepare_normal_controls(go,overlay,source,root,run,write)
         need('TREEDB_NATIVE_CORRECTNESS_100K' not in env, '100k opt-in must be unset; no override')
-        write(out/'activation-context.json',{'schema':'race8-original-corpus-public-vacuum-context-v1',
+        write(out/'activation-context.json',{'schema':'race8-maintenance-dictionary-regression-context-v1',
              'observed_opt_in_present':'TREEDB_NATIVE_CORRECTNESS_100K' in env,
-             'selected_rows':256,'selected_writers':16,'original_witness_repeated':False,
-             'api':'VacuumIndexOnline','modes':['normal','race'],'selector':events.ACTIVATION_SELECTOR,'count':1,
-             'profiles':False,'context_scope':'fixed child environment after explicit opt-in absence refusal'})
-        common=[go,'test','-json','-tags=treedb_test','-overlay='+str(overlay),'-count=1','-p=1','-mod=readonly',
-                '-run',events.ACTIVATION_SELECTOR]
+             'selected_rows':256,'selected_writers':16,'original_lifecycle_on_changed_repair':True,
+             'api':'VacuumIndexOnline','modes':['normal','race'],'count':1,
+             'profiles':False,'context_scope':'changed product repair; exact unchanged regression fixtures'})
+        common=[go,'test','-json','-tags=treedb_test','-overlay='+str(overlay),'-count=1','-p=1','-mod=readonly']
         for mode,seconds,flags,deadline in (('normal',180,[], '150s'),('race',600,['-race'],'570s')):
-            run(mode,common+flags+['-timeout='+deadline,'./TreeDB/collections'],seconds,cwd=source,allow_nonzero=True)
-            control_exit=rows[-1]['exit']
-            inventory=events.validate(out/(mode+'.stdout.log'),mode='activation',go_exit=control_exit)
-            write(out/(mode+'-inventory.json'),inventory)
-            if control_exit != 0:
-                raise SystemExit(control_exit)
-            need(inventory['status']=='PASS' and inventory.get('activation_verified') is True,
-                 'public native-owner activation incomplete; no-op and skips do not qualify')
-        write(out/'completion.json',{'status':'ORIGINAL_CORPUS_PUBLIC_VACUUM_CONTROLS_PASS_NOT_PRODUCT_ACCEPTANCE',
-             'normal':{'tops':1,'outcomes':1,'leaves':1},'race':{'tops':1,'outcomes':1,'leaves':1},
-             'original_witness_repeated':False,
-             'meaning':'ORIGINAL_CORPUS_PUBLIC_CALLSITE_COVERAGE_ONLY_NOT_HISTORICAL_CAUSE_OR_REPAIR',
+            # All four fixed invocations consume the SAME original phase budget.
+            # A failed/slow control stops the sequence, never grants a new budget or retry.
+            phase_deadline=time.monotonic()+seconds
+            checks=(('maintenance-controls',events.CONTROLS_SELECTOR,'controls',
+                      ['./TreeDB/internal/dictdb','./TreeDB/internal/valuelog','./TreeDB/caching','./TreeDB/collections']),
+                    ('public-eight',events.SMALL_ACTIVATION_SELECTOR,'small_activation',['./TreeDB/collections']),
+                    ('original-lifecycle',events.WITNESS_SELECTOR,'witness',['./TreeDB/collections']),
+                    ('corpus',events.ACTIVATION_SELECTOR,'activation',['./TreeDB/collections']))
+            for suffix,selector,event_mode,packages in checks:
+                phase_remaining=phase_deadline-time.monotonic()
+                need(phase_remaining>0,'original phase budget exhausted before '+suffix)
+                label=mode+'-'+suffix
+                run(label,common+flags+['-run',selector,'-timeout='+deadline]+packages,
+                    phase_remaining,cwd=source,allow_nonzero=True)
+                control_exit=rows[-1]['exit']
+                inventory=events.validate(out/(label+'.stdout.log'),mode=event_mode,go_exit=control_exit)
+                write(out/(label+'-inventory.json'),inventory)
+                if control_exit != 0:
+                    raise SystemExit(control_exit)
+                need(inventory['status']=='PASS','fixed repair/regression inventory incomplete or failed: '+suffix)
+                if event_mode in ('activation','small_activation'):
+                    need(inventory.get('activation_verified') is True,
+                         'public activation incomplete; no-op and skips do not qualify')
+        write(out/'completion.json',{'status':'SELECTED_REPAIR_FOCUSED_NORMAL_RACE_PASS_NOT_REQUIRED_CI',
+             'each_mode':{'focused_tops':10,'focused_outcomes':37,'focused_leaves':33,
+                          'unchanged_lifecycle_and_public_tests':3},
+             'original_lifecycle_on_changed_repair':True,
+             'meaning':'FOCUSED_CHANGED_PROGRAM_REPAIR_QUALIFICATION_NOT_HISTORICAL_CAUSE_OR_MERGE_CLEARANCE',
              'candidate_only':True,'product_capture':False,'outer_guard_result_required':True})
     except BaseException as caught:
         error=caught
-        write(out/'failure.json',{'status':'SOURCE_CONTROLS_FAILED_NO_CAPTURE',
+        write(out/'failure.json',{'status':'SELECTED_REPAIR_QUALIFICATION_FAILED_SEE_RAW_STAGES',
                       'error_class':type(caught).__name__,'reason':str(caught)})
     finally:
         files={str(p.relative_to(root)):{'bytes':p.stat().st_size,'sha256':sha(p)}

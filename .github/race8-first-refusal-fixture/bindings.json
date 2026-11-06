@@ -1,185 +1,390 @@
 {
   "base": "15f1bcbdf13b9feacaffa6f635688b464c1208a5",
-  "base_tree": "cab3eff3c3ab6a75aa30b60f6bc5cfbe84d82e22",
-  "branch": "readiness/race8-public-vacuum-corpus-20261106-01",
-  "closed_readonly_manifest_sha256": "1d324b09eab61d071e617f8f1ac2397178c83ecebdd0f61d45868afaf0565ce2",
-  "closed_readonly_packet": "/mnt/fast4tb/gomap-graph-seal-c312-20261101T0603Z/correctness-readiness-20261103-01/four-ci-source-20261105-01/race8-vacuum-vs-close-readonly-01",
-  "delta_paths": [
-    "TreeDB/collections/native_basis_public_vacuum_original_corpus_test.go"
-  ],
-  "full_bindings": [
+  "base_tree": "badd632961b02f2f7e75a910f9f659bf321eec11",
+  "bindings": [
     {
-      "15f1_preimage": "ABSENT",
-      "641a_byte_identical": true,
+      "base57a5_sha256": "397f1e6fa45488dff7e2d3ce323a5bcfffdc54230782ab1c3f760f9a604db58a",
       "head_blob": "e53e3f18a9dfee2ce35d45a5bfc887a63deb3809",
       "head_bytes": 823,
       "head_sha256": "397f1e6fa45488dff7e2d3ce323a5bcfffdc54230782ab1c3f760f9a604db58a",
+      "original15f1_sha256": null,
       "path": "TreeDB/caching/cow_basis_refusal_diagnostic.go",
-      "qualified641a_overlay_sha256": "397f1e6fa45488dff7e2d3ce323a5bcfffdc54230782ab1c3f760f9a604db58a"
+      "role": "production",
+      "selected_delta": false
     },
     {
-      "15f1_preimage": "ABSENT",
-      "641a_byte_identical": true,
+      "base57a5_sha256": "4712d8664cdf6f5212dce5f689a191f00f5336f01a4b63d47b914187589d1737",
       "head_blob": "c6e5e0c95a406ceb9bd2402bc4ca6a97928f68ae",
       "head_bytes": 4140,
       "head_sha256": "4712d8664cdf6f5212dce5f689a191f00f5336f01a4b63d47b914187589d1737",
+      "original15f1_sha256": null,
       "path": "TreeDB/caching/cow_basis_refusal_diagnostic_test.go",
-      "qualified641a_overlay_sha256": "4712d8664cdf6f5212dce5f689a191f00f5336f01a4b63d47b914187589d1737"
+      "role": "test",
+      "selected_delta": false
     },
     {
-      "15f1_blob": "0341dd3e1e6c266a0ca71f99201b60e48af1208a",
-      "15f1_preimage_bytes": 21227,
-      "15f1_preimage_sha256": "97f3c3930a75ca731613f89892a56d6331ac7c8032ab1e71415ea895daf4308f",
-      "641a_byte_identical": true,
-      "head_blob": "f8da3a23f8a04264b9d0aa4049cf5450b9077412",
-      "head_bytes": 22211,
-      "head_sha256": "58b9a83165f22611f031f30eb07a920aba47a677864f9edfc7728665063278fe",
+      "base57a5_sha256": "6b7a5392195a4176f05aff8583609423b9a728c860da1871526951e06694f1a7",
+      "head_blob": "67e2811213d0ab7453d1918431fdb83e36d9cf19",
+      "head_bytes": 34540,
+      "head_sha256": "96ae5abbd1d9bfef3ffac7270157eff043fe563e74eba64f068cb49b19e0ea33",
+      "original15f1_sha256": "6b7a5392195a4176f05aff8583609423b9a728c860da1871526951e06694f1a7",
+      "path": "TreeDB/caching/cow_cut.go",
+      "role": "production",
+      "selected_delta": true
+    },
+    {
+      "base57a5_sha256": "58b9a83165f22611f031f30eb07a920aba47a677864f9edfc7728665063278fe",
+      "head_blob": "39887d8d9dda3815dffba5d508d0e3362bc5f097",
+      "head_bytes": 23451,
+      "head_sha256": "92fb1a48d664bcba1ce49f84e332317b3412d060bc49bb7bd231041cbd801264",
+      "original15f1_sha256": "97f3c3930a75ca731613f89892a56d6331ac7c8032ab1e71415ea895daf4308f",
       "path": "TreeDB/caching/cow_flush.go",
-      "qualified641a_overlay_sha256": "58b9a83165f22611f031f30eb07a920aba47a677864f9edfc7728665063278fe"
+      "role": "production",
+      "selected_delta": true
     },
     {
-      "15f1_blob": "89c32e3eec58ea6fd7e370d088247d590edbd62e",
-      "15f1_preimage_bytes": 1431850,
-      "15f1_preimage_sha256": "f9740bc2e1b9ac0eb668aa7d5a0d054211133e0f710065cb7710fd0ec8dad438",
-      "641a_byte_identical": true,
+      "base57a5_sha256": "33570ff5f6d498379eef236f1614bda8d3277be6adff4201feaa0ac273398808",
+      "head_blob": "36f4fcafa96aacf823e00a105c47938163d41890",
+      "head_bytes": 13480,
+      "head_sha256": "d919c98704b49c59523b7e74bbe8af4d9f2de7789348bb137f6bd08f27c58bb4",
+      "original15f1_sha256": "33570ff5f6d498379eef236f1614bda8d3277be6adff4201feaa0ac273398808",
+      "path": "TreeDB/caching/cow_leaf_maintenance.go",
+      "role": "production",
+      "selected_delta": true
+    },
+    {
+      "base57a5_sha256": "1c89fbd8b76a1e7d34f73b73bb14c079301a6e21db24176c189adbbe7302391f",
+      "head_blob": "a4e88fb2326a3192e110b364924b89db920365d9",
+      "head_bytes": 3973,
+      "head_sha256": "0f59fc0ad96be4b3959ea25586dae7973fccc7293107a5790cef2ebcc736df43",
+      "original15f1_sha256": "1c89fbd8b76a1e7d34f73b73bb14c079301a6e21db24176c189adbbe7302391f",
+      "path": "TreeDB/caching/cow_maintenance.go",
+      "role": "production",
+      "selected_delta": true
+    },
+    {
+      "base57a5_sha256": null,
+      "head_blob": "2a3c85c51876f2552cb40c60f8ca5bcfc9ee2ae1",
+      "head_bytes": 8629,
+      "head_sha256": "99a56de6573cb8e8c5ee2140b656b827b2556217371ced9531f81c83e0012ccd",
+      "original15f1_sha256": null,
+      "path": "TreeDB/caching/cow_maintenance_dictionary.go",
+      "role": "production",
+      "selected_delta": true
+    },
+    {
+      "base57a5_sha256": null,
+      "head_blob": "acdcf8c9122bc7d2807267cbaf421cb7ef28de29",
+      "head_bytes": 16331,
+      "head_sha256": "beafc615ee3650c6b90e21ae595600d69e03cbb76659759a19a675348d754f15",
+      "original15f1_sha256": null,
+      "path": "TreeDB/caching/cow_maintenance_dictionary_test.go",
+      "role": "test",
+      "selected_delta": true
+    },
+    {
+      "base57a5_sha256": "e40e325a39da1d3a85a17a10971adc7e1e530cc48eb076bb0ca2d44ebcd328f4",
       "head_blob": "39ffd04606e306d0425f78cc18d05ed1e6aa0cb4",
       "head_bytes": 1432006,
       "head_sha256": "e40e325a39da1d3a85a17a10971adc7e1e530cc48eb076bb0ca2d44ebcd328f4",
+      "original15f1_sha256": "f9740bc2e1b9ac0eb668aa7d5a0d054211133e0f710065cb7710fd0ec8dad438",
       "path": "TreeDB/caching/db.go",
-      "qualified641a_overlay_sha256": "e40e325a39da1d3a85a17a10971adc7e1e530cc48eb076bb0ca2d44ebcd328f4"
+      "role": "production",
+      "selected_delta": false
     },
     {
-      "15f1_preimage": "ABSENT",
-      "641a_byte_identical": true,
+      "base57a5_sha256": "edfb01dd9fef7a58f640f76cf23de695baf38594434aaa735d372954b15eb83b",
       "head_blob": "0471ee87b597afd72cde2eab07f69b6cb96ff232",
       "head_bytes": 13696,
       "head_sha256": "edfb01dd9fef7a58f640f76cf23de695baf38594434aaa735d372954b15eb83b",
+      "original15f1_sha256": null,
       "path": "TreeDB/collections/native_basis_public_vacuum_activation_test.go",
-      "qualified641a_overlay_sha256": "edfb01dd9fef7a58f640f76cf23de695baf38594434aaa735d372954b15eb83b"
+      "role": "test",
+      "selected_delta": false
     },
     {
-      "15f1_preimage": "ABSENT",
-      "641a_preimage": "ABSENT",
+      "base57a5_sha256": "5ce983e254bf8cb7781341258c8522c244d34a5c1943fb3273b6cb5d8866e151",
       "head_blob": "937f9edc0c4416ff8fb2313a6a46843da682f2c5",
       "head_bytes": 18660,
       "head_sha256": "5ce983e254bf8cb7781341258c8522c244d34a5c1943fb3273b6cb5d8866e151",
-      "path": "TreeDB/collections/native_basis_public_vacuum_original_corpus_test.go"
+      "original15f1_sha256": null,
+      "path": "TreeDB/collections/native_basis_public_vacuum_original_corpus_test.go",
+      "role": "test",
+      "selected_delta": false
     },
     {
-      "15f1_blob": "f139f40cf8df3f5bdb6b2edbaad6665c6b4b9bab",
-      "15f1_preimage_bytes": 11326,
-      "15f1_preimage_sha256": "b6e64236b568d48fa87a68a6cebf30d1aa9c32dfa492209fa3b9d449fbed4ba1",
-      "641a_byte_identical": true,
-      "head_blob": "a5fd6ef6b6b2b7bd3e974239195d33b416303f65",
-      "head_bytes": 13593,
-      "head_sha256": "85fd212eb16dea3c594d8be45dbabd4e26e2fb4639343f9625d7b36f138b6a3f",
+      "base57a5_sha256": "85fd212eb16dea3c594d8be45dbabd4e26e2fb4639343f9625d7b36f138b6a3f",
+      "head_blob": "351a49eed30750939e91cdf0368145eb4b18d7ea",
+      "head_bytes": 14265,
+      "head_sha256": "d1a4c7902f85df68005fcb480792ffb4bad4afec89e285bc2250b569ba8e1482",
+      "original15f1_sha256": "b6e64236b568d48fa87a68a6cebf30d1aa9c32dfa492209fa3b9d449fbed4ba1",
       "path": "TreeDB/collections/native_basis_refresh.go",
-      "qualified641a_overlay_sha256": "85fd212eb16dea3c594d8be45dbabd4e26e2fb4639343f9625d7b36f138b6a3f"
+      "role": "production",
+      "selected_delta": true
     },
     {
-      "15f1_preimage": "ABSENT",
-      "641a_byte_identical": true,
+      "base57a5_sha256": "cab416aba723a692a738baca352e456cc9d061d5b65f817e09cdc029fbd724d6",
       "head_blob": "1921b485f87cbb236c2aafe51495ea9eb9814c26",
       "head_bytes": 4334,
       "head_sha256": "cab416aba723a692a738baca352e456cc9d061d5b65f817e09cdc029fbd724d6",
+      "original15f1_sha256": null,
       "path": "TreeDB/collections/native_basis_refusal_diagnostic_test.go",
-      "qualified641a_overlay_sha256": "cab416aba723a692a738baca352e456cc9d061d5b65f817e09cdc029fbd724d6"
+      "role": "test",
+      "selected_delta": false
     },
     {
-      "15f1_blob": "0bfdd60d95437df0ed3152c9a1fcaa455f42ffe2",
-      "15f1_preimage_bytes": 17697,
-      "15f1_preimage_sha256": "3f07b931124f7137fff27d23727f9bbf815a8c4f66bd5b4b724f6a300e5dc8f9",
-      "641a_byte_identical": true,
-      "head_blob": "5effc65a001239cd4ebf0ed195abdc6ef0117da8",
-      "head_bytes": 19491,
-      "head_sha256": "d9efdcfe81b71319358b2d3deac425cde622b14f1e63ee05703cfb11280e1508",
+      "base57a5_sha256": "d9efdcfe81b71319358b2d3deac425cde622b14f1e63ee05703cfb11280e1508",
+      "head_blob": "d09a73387ccd5117375b6d9bab035273121033c3",
+      "head_bytes": 20300,
+      "head_sha256": "931837446046f891ac1363e9845f7c54ba4b0efaf4f5285abd5a0bdd63d3010f",
+      "original15f1_sha256": "3f07b931124f7137fff27d23727f9bbf815a8c4f66bd5b4b724f6a300e5dc8f9",
       "path": "TreeDB/collections/native_json_read.go",
-      "qualified641a_overlay_sha256": "d9efdcfe81b71319358b2d3deac425cde622b14f1e63ee05703cfb11280e1508"
+      "role": "production",
+      "selected_delta": true
     },
     {
-      "15f1_blob": "712ff79cb90d915c13f1d9f3f3aa2baa697a577e",
-      "15f1_preimage_bytes": 10154,
-      "15f1_preimage_sha256": "1074c1d9d86b51f2742412f50764c8558b2ec3b16dc972a22380c880f25d3014",
-      "641a_byte_identical": true,
+      "base57a5_sha256": null,
+      "head_blob": "2d49d2a6e40d86729875c7767f8510320297a113",
+      "head_bytes": 5608,
+      "head_sha256": "d31be592730f0382370641ff7e9fc203a2fcce60785019cea1bfe91948a2d81b",
+      "original15f1_sha256": null,
+      "path": "TreeDB/collections/native_maintenance_leaf_test.go",
+      "role": "test",
+      "selected_delta": true
+    },
+    {
+      "base57a5_sha256": "4b22d3a7017067bf019db93d840193010a24968e366dc19deefe9c4bbe3f6ad4",
       "head_blob": "b46b6d588a9b4c5d46ab8e33abdbd0496d45111d",
       "head_bytes": 10528,
       "head_sha256": "4b22d3a7017067bf019db93d840193010a24968e366dc19deefe9c4bbe3f6ad4",
+      "original15f1_sha256": "1074c1d9d86b51f2742412f50764c8558b2ec3b16dc972a22380c880f25d3014",
       "path": "TreeDB/collections/native_ordinary_concurrent_correctness_test.go",
-      "qualified641a_overlay_sha256": "4b22d3a7017067bf019db93d840193010a24968e366dc19deefe9c4bbe3f6ad4"
+      "role": "test",
+      "selected_delta": false
     },
     {
-      "15f1_blob": "d1f68e609111bd87a111ed4c67a5ca8e81e8c630",
-      "15f1_preimage_bytes": 3021,
-      "15f1_preimage_sha256": "c67c5b27e1ceb1a2bcf98ea565fcc7764c66de15aba667d22faef767b4331224",
-      "641a_byte_identical": true,
-      "head_blob": "81ebb75cec17280ca148aad73f71522eeb39bd4d",
-      "head_bytes": 3336,
-      "head_sha256": "919696fc60c168d035ff2ad03ad3b121d858e9e380448e30b7fd477b1337d951",
+      "base57a5_sha256": "919696fc60c168d035ff2ad03ad3b121d858e9e380448e30b7fd477b1337d951",
+      "head_blob": "94f7eff6b6fde79a83f91039d377d1d9cf56ea89",
+      "head_bytes": 3888,
+      "head_sha256": "bb149a913ef39a42c052c785dfe5def02ccd99be6d5cf28df79bd10aaa1451aa",
+      "original15f1_sha256": "c67c5b27e1ceb1a2bcf98ea565fcc7764c66de15aba667d22faef767b4331224",
       "path": "TreeDB/collections/native_semantic_adapter.go",
-      "qualified641a_overlay_sha256": "919696fc60c168d035ff2ad03ad3b121d858e9e380448e30b7fd477b1337d951"
+      "role": "production",
+      "selected_delta": true
     },
     {
-      "15f1_preimage": "ABSENT",
-      "641a_byte_identical": true,
+      "base57a5_sha256": "194e2e462663f5294948248b3aef963d3cf34cb8fadb4a7f4918b4d52310be2b",
       "head_blob": "19a23833c5f8f1cd991add619978a7841b34ef34",
       "head_bytes": 482,
       "head_sha256": "194e2e462663f5294948248b3aef963d3cf34cb8fadb4a7f4918b4d52310be2b",
+      "original15f1_sha256": null,
       "path": "TreeDB/db/native_basis_refusal_diagnostic.go",
-      "qualified641a_overlay_sha256": "194e2e462663f5294948248b3aef963d3cf34cb8fadb4a7f4918b4d52310be2b"
+      "role": "production",
+      "selected_delta": false
     },
     {
-      "15f1_preimage": "ABSENT",
-      "641a_byte_identical": true,
+      "base57a5_sha256": null,
+      "head_blob": "de233b796178cb44d1f440ad452cb7bbf540e90b",
+      "head_bytes": 1092,
+      "head_sha256": "8e906f38eeaf9d3369f3ef588256d8f0a5d0858b6d6f35a474ca205174eb40a8",
+      "original15f1_sha256": null,
+      "path": "TreeDB/db/native_maintenance_leaf.go",
+      "role": "production",
+      "selected_delta": true
+    },
+    {
+      "base57a5_sha256": "fa37df4d3c62890e44e9533a9feaccc096f6c3ee8bf8209d08c1b7b59f9035e4",
+      "head_blob": "1e6f48c9cf7222a9f3a81620885827b800ff7083",
+      "head_bytes": 11213,
+      "head_sha256": "20acb75147ebfba2b55ed87c3b15dfede1125e52519da7f8f38df0a223c6007d",
+      "original15f1_sha256": "fa37df4d3c62890e44e9533a9feaccc096f6c3ee8bf8209d08c1b7b59f9035e4",
+      "path": "TreeDB/internal/dictdb/read_definition.go",
+      "role": "production",
+      "selected_delta": true
+    },
+    {
+      "base57a5_sha256": null,
+      "head_blob": "557f71257d628684ffc79280e72fad9dfb71001d",
+      "head_bytes": 3683,
+      "head_sha256": "10c513244664ec924f4f0739fec1c19a7b7885107b93f59e3e7480ad4822650c",
+      "original15f1_sha256": null,
+      "path": "TreeDB/internal/dictdb/read_definition_maintenance_test.go",
+      "role": "test",
+      "selected_delta": true
+    },
+    {
+      "base57a5_sha256": "a19a8901ae4563bb2b5066e15a9bd7f120c76f503a9f9f6290d2b34f08b7f8e7",
       "head_blob": "1ea65706ff09c6ba2fe6a6b2c6864fd931459767",
       "head_bytes": 6632,
       "head_sha256": "a19a8901ae4563bb2b5066e15a9bd7f120c76f503a9f9f6290d2b34f08b7f8e7",
+      "original15f1_sha256": null,
       "path": "TreeDB/internal/valuelog/cow_basis_refusal_observer.go",
-      "qualified641a_overlay_sha256": "a19a8901ae4563bb2b5066e15a9bd7f120c76f503a9f9f6290d2b34f08b7f8e7"
+      "role": "production",
+      "selected_delta": false
     },
     {
-      "15f1_preimage": "ABSENT",
-      "641a_byte_identical": true,
+      "base57a5_sha256": "5cae1c5fa4fd6691df8740372d0c588a15a84012806e78214059dce0747e06ad",
       "head_blob": "0458da8797f0e904130f513d5a2a3a5a184aa3b6",
       "head_bytes": 9571,
       "head_sha256": "5cae1c5fa4fd6691df8740372d0c588a15a84012806e78214059dce0747e06ad",
+      "original15f1_sha256": null,
       "path": "TreeDB/internal/valuelog/cow_basis_refusal_observer_test.go",
-      "qualified641a_overlay_sha256": "5cae1c5fa4fd6691df8740372d0c588a15a84012806e78214059dce0747e06ad"
+      "role": "test",
+      "selected_delta": false
     },
     {
-      "15f1_blob": "357dfd467aa92c38a348f3b69719700f22a88efb",
-      "15f1_preimage_bytes": 25694,
-      "15f1_preimage_sha256": "f2156e0fe5cde5cee3c6f3c4719b5c54d9ab97ba1db5f5fdba22f27a960d8778",
-      "641a_byte_identical": true,
+      "base57a5_sha256": "90c226d33056aea9044a7231c39e3c493c695f510e8bee661711d597fbbf3d0d",
       "head_blob": "b7130cbea91d0dc04e801fc412415a9b974bdb31",
       "head_bytes": 28357,
       "head_sha256": "90c226d33056aea9044a7231c39e3c493c695f510e8bee661711d597fbbf3d0d",
+      "original15f1_sha256": "f2156e0fe5cde5cee3c6f3c4719b5c54d9ab97ba1db5f5fdba22f27a960d8778",
       "path": "TreeDB/internal/valuelog/cow_reader.go",
-      "qualified641a_overlay_sha256": "90c226d33056aea9044a7231c39e3c493c695f510e8bee661711d597fbbf3d0d"
+      "role": "production",
+      "selected_delta": false
     },
     {
-      "15f1_preimage": "ABSENT",
-      "641a_byte_identical": true,
+      "base57a5_sha256": "608f5ea4c6e6bef50f7e66ed8c6c71657e76ee954cd28f3393a952cd294c4de5",
       "head_blob": "facc1b26bcfd147f2537c74512260cfc3e909b34",
       "head_bytes": 616,
       "head_sha256": "608f5ea4c6e6bef50f7e66ed8c6c71657e76ee954cd28f3393a952cd294c4de5",
+      "original15f1_sha256": null,
       "path": "TreeDB/native_basis_refusal_diagnostic.go",
-      "qualified641a_overlay_sha256": "608f5ea4c6e6bef50f7e66ed8c6c71657e76ee954cd28f3393a952cd294c4de5"
+      "role": "production",
+      "selected_delta": false
     }
   ],
-  "full_overlay_paths": 16,
-  "head": "57a5dec783d4e71fe4c1e33e361ada319728a79e",
-  "independent_review": {
-    "path": "/mnt/fast4tb/gomap-mongo-perf-graph-6a9s7h58/review/four-gate-execution-20261104-01/race8-original-corpus-vacuum-root-integration-01/semantic-independent-review/review.md",
-    "sha256": "cb0ef16d1ec370a578aa117d78eaf85382ba0962839f47c368ac96e9129b008e",
-    "status": "SOURCE_REVIEW_READY_NOT_RUNTIME_QUALIFICATION"
-  },
-  "new_file_bytes": 18660,
-  "new_file_sha256": "5ce983e254bf8cb7781341258c8522c244d34a5c1943fb3273b6cb5d8866e151",
-  "observer_parent": "402319455310dd8040e98903717da1d8144c7262",
-  "parent": "641a721077d71499eed545ef52caa1f0b81a384a",
-  "parent_tree": "254b4ec1b1996824274a9734e70796640bf9fe6d",
-  "prior_packet_manifest_sha256": "fd55f142c1503b1338621d4198a30f617ab96265f5411e3bd8b6e1b69d1b32c1",
-  "tree": "badd632961b02f2f7e75a910f9f659bf321eec11",
-  "unchanged_641a_overlay_paths": 15,
-  "worktree": "/mnt/fast4tb/gomap-graph-seal-c312-20261101T0603Z/race8-public-vacuum-corpus-641a-20261106-01"
+  "changed_paths": [
+    "TreeDB/caching/cow_cut.go",
+    "TreeDB/caching/cow_flush.go",
+    "TreeDB/caching/cow_leaf_maintenance.go",
+    "TreeDB/caching/cow_maintenance.go",
+    "TreeDB/caching/cow_maintenance_dictionary.go",
+    "TreeDB/caching/cow_maintenance_dictionary_test.go",
+    "TreeDB/collections/native_basis_refresh.go",
+    "TreeDB/collections/native_json_read.go",
+    "TreeDB/collections/native_maintenance_leaf_test.go",
+    "TreeDB/collections/native_semantic_adapter.go",
+    "TreeDB/db/native_maintenance_leaf.go",
+    "TreeDB/internal/dictdb/read_definition.go",
+    "TreeDB/internal/dictdb/read_definition_maintenance_test.go"
+  ],
+  "complete_overlay_paths": [
+    "TreeDB/caching/cow_basis_refusal_diagnostic.go",
+    "TreeDB/caching/cow_basis_refusal_diagnostic_test.go",
+    "TreeDB/caching/cow_cut.go",
+    "TreeDB/caching/cow_flush.go",
+    "TreeDB/caching/cow_leaf_maintenance.go",
+    "TreeDB/caching/cow_maintenance.go",
+    "TreeDB/caching/cow_maintenance_dictionary.go",
+    "TreeDB/caching/cow_maintenance_dictionary_test.go",
+    "TreeDB/caching/db.go",
+    "TreeDB/collections/native_basis_public_vacuum_activation_test.go",
+    "TreeDB/collections/native_basis_public_vacuum_original_corpus_test.go",
+    "TreeDB/collections/native_basis_refresh.go",
+    "TreeDB/collections/native_basis_refusal_diagnostic_test.go",
+    "TreeDB/collections/native_json_read.go",
+    "TreeDB/collections/native_maintenance_leaf_test.go",
+    "TreeDB/collections/native_ordinary_concurrent_correctness_test.go",
+    "TreeDB/collections/native_semantic_adapter.go",
+    "TreeDB/db/native_basis_refusal_diagnostic.go",
+    "TreeDB/db/native_maintenance_leaf.go",
+    "TreeDB/internal/dictdb/read_definition.go",
+    "TreeDB/internal/dictdb/read_definition_maintenance_test.go",
+    "TreeDB/internal/valuelog/cow_basis_refusal_observer.go",
+    "TreeDB/internal/valuelog/cow_basis_refusal_observer_test.go",
+    "TreeDB/internal/valuelog/cow_reader.go",
+    "TreeDB/native_basis_refusal_diagnostic.go"
+  ],
+  "context": [
+    {
+      "bytes": 6927,
+      "head_blob": "49a9ea1d37bbab6f48b7537c6408bc137d7c1859",
+      "path": "TreeDB/caching/cow_semantic_cleanup.go",
+      "sha256": "ae7a8168d89f5445b8b9abf49b57de9dc3caa133c01323f604bcaa7934f760eb",
+      "unchanged_vs_57a5": true
+    },
+    {
+      "bytes": 6593,
+      "head_blob": "cc84f564ca872a2cb67a69087374dd9215d0f0fc",
+      "path": "TreeDB/caching/cow_native_physical_read.go",
+      "sha256": "db147fe54a0e7925b2321a0960b0e25ddbadd14156821fb86d08617e8ea285dc",
+      "unchanged_vs_57a5": true
+    },
+    {
+      "bytes": 18552,
+      "head_blob": "d20a9b9c27c528e2482e8394e63344a0c6ddc296",
+      "path": "TreeDB/caching/cow_ordered_leaf_dictionary_test.go",
+      "sha256": "8106df0c0c424d7fe0f7b2a71faaeceb5062334386897a691ab8bf1cf610e3b0",
+      "unchanged_vs_57a5": true
+    },
+    {
+      "bytes": 3318,
+      "head_blob": "b4b9c910723304265a68d9eeb36b7741a0f3c02f",
+      "path": "TreeDB/caching/cow_basis_completion.go",
+      "sha256": "6c4cab43b5ebf832060852e39c8c674e8abf8b82b736d1fcfe631432766c59be",
+      "unchanged_vs_57a5": true
+    },
+    {
+      "bytes": 13466,
+      "head_blob": "33a6f0ba72c241078bcd23d31467500b207bba17",
+      "path": "TreeDB/caching/cow_semantic_cleanup_test.go",
+      "sha256": "3da33f76662d7450de19b936a21e71f0b7d1c2926c2fa8674cfce4fd54bb534f",
+      "unchanged_vs_57a5": true
+    },
+    {
+      "bytes": 11867,
+      "head_blob": "66da6160598786da498e9098fb60e4d15164971b",
+      "path": "TreeDB/internal/valuelog/cow_bounded_decoder.go",
+      "sha256": "7acdb4926dcfb2dd3c5b15fe87b692004568444b68dafe12b5da6abd8c1f2df2",
+      "unchanged_vs_57a5": true
+    },
+    {
+      "bytes": 9925,
+      "head_blob": "7ceba66f4dc09b1ca30d59b595a2c9d1dc1e9709",
+      "path": "TreeDB/internal/valuelog/cow_bounded_decoder_test.go",
+      "sha256": "c2be9de96df290b06b9b84f491a07e8e0d47b30c65c0b580df158f852cb3a006",
+      "unchanged_vs_57a5": true
+    },
+    {
+      "bytes": 219873,
+      "head_blob": "16a396b3800137bf0ec39d1c30a0f537fb914ed6",
+      "path": "TreeDB/db/db.go",
+      "sha256": "53f43cd2ccd5611eae203b19046900c3f1e486d6dc0d65134f0b7857c0ae64d1",
+      "unchanged_vs_57a5": true
+    },
+    {
+      "bytes": 3281,
+      "head_blob": "d8cf9b8c5cd36cab36a4aeb47ba247f99be60321",
+      "path": "TreeDB/db/snapshot_primary_retention.go",
+      "sha256": "c5fca2d8f61ccbe8672ea9a29ef73e9c35778fab69b26a247cf9f236ae463e9b",
+      "unchanged_vs_57a5": true
+    },
+    {
+      "bytes": 1432006,
+      "head_blob": "39ffd04606e306d0425f78cc18d05ed1e6aa0cb4",
+      "path": "TreeDB/caching/db.go",
+      "sha256": "e40e325a39da1d3a85a17a10971adc7e1e530cc48eb076bb0ca2d44ebcd328f4",
+      "unchanged_vs_57a5": true
+    },
+    {
+      "bytes": 12237,
+      "head_blob": "3b4f84fb2ffd191d1dd40edcb36678564423ad37",
+      "path": "TreeDB/internal/dictdb/store.go",
+      "sha256": "17794451688f4bbd35a019f9b28098f69db9280e43949673f129b2d50d02730d",
+      "unchanged_vs_57a5": true
+    },
+    {
+      "bytes": 10528,
+      "head_blob": "b46b6d588a9b4c5d46ab8e33abdbd0496d45111d",
+      "path": "TreeDB/collections/native_ordinary_concurrent_correctness_test.go",
+      "sha256": "4b22d3a7017067bf019db93d840193010a24968e366dc19deefe9c4bbe3f6ad4",
+      "unchanged_vs_57a5": true
+    }
+  ],
+  "first_parent": "57a5dec783d4e71fe4c1e33e361ada319728a79e",
+  "head": "57019f08de0d77f756971729712e729727d93052",
+  "original_product": "15f1bcbdf13b9feacaffa6f635688b464c1208a5",
+  "selected_production_paths": 10,
+  "selected_test_paths": 3,
+  "tree": "138895fe4ebac33429705676b84a051d9b35934b"
 }

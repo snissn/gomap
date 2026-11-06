@@ -1,0 +1,32 @@
+{
+  "arity_steering": "GOMAP-5403-INTERIM-READONLY-ARITY-REVIEW-20261106-01",
+  "captured_failure": {
+    "artifact": 13468938775,
+    "artifact_sha256": "90c6d735ad2d6c168c0c33d288871191ffc431b885182c02020ea87ad67d4756",
+    "disposition": "actual new captured maintenance dictionary refusal; historical 15f1 chronology/cause remains unproved",
+    "job": 127651022750,
+    "run": 42144019098,
+    "semantic_head": "57a5dec783d4e71fe4c1e33e361ada319728a79e"
+  },
+  "inputs": [
+    {
+      "bytes": 4274,
+      "member": "inputs/maintenance-dictionary-implementation-selection.txt",
+      "original_path": "/mnt/fast4tb/gomap-mongo-perf-graph-6a9s7h58/review/four-gate-execution-20261104-01/race8-original-corpus-vacuum-hosted-execution-01/maintenance-dictionary-implementation-selection.txt",
+      "sha256": "c6867142d925ffca2305b3d97e46010469d278f203513bde882847d4efba6d96"
+    },
+    {
+      "bytes": 3336,
+      "member": "inputs/review.md",
+      "original_path": "/mnt/fast4tb/gomap-mongo-perf-graph-6a9s7h58/review/four-gate-execution-20261104-01/race8-original-corpus-vacuum-hosted-execution-01/maintenance-dictionary-contract-review-01/review.md",
+      "sha256": "2191616c5a5b0581078e176bfe34e092f30f80b955e78619f112040eb6a2babf"
+    },
+    {
+      "bytes": 3626,
+      "member": "inputs/successor-integration-constraints.md",
+      "original_path": "/mnt/fast4tb/gomap-mongo-perf-graph-6a9s7h58/review/four-gate-execution-20261104-01/race8-original-corpus-vacuum-hosted-execution-01/successor-integration-constraints.md",
+      "sha256": "5601394ceb26e0dd7e5d54d4f3f2b7ca6ab13786a43d4b6dbbc7ab410af017b7"
+    }
+  ],
+  "selected_marker": "GOMAP-RACE8-MAINTENANCE-DICTIONARY-IMPLEMENTATION-20261106-01"
+}

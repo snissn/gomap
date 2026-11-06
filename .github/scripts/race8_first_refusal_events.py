@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fixed 3db7d8 basis-refusal controls/witness evidence checker; never changes Go status."""
+"""Fixed maintenance-dictionary controls/regression evidence checker; never changes Go status."""
 import argparse
 import hashlib
 import json
@@ -9,7 +9,7 @@ from pathlib import Path
 
 PREFIX = 'github.com/snissn/gomap/TreeDB/'
 TOP = 'TestNativeOrdinaryConcurrentExactLifecycle'
-CONTROL_CHILDREN = {'caching': {'TestCOWBasisRefreshRefusalKeepsOriginalAndOwnsPartialCleanup': ['unsupported_owner', 'owned_partial'], 'TestCOWBasisRefusalExactInvocationAndPartial': ['active', 'frozen'], 'TestCOWBasisRefusalExclusiveCacheBinding': [], 'TestCOWBasisRefusalMissingSeamPreservesOriginal': [], 'TestCOWPhysicalBasisRefreshPreservesAppliedLogicalIdentity': ['cow_btree/frozen=false', 'cow_btree/frozen=true', 'cow_ordered/frozen=false', 'cow_ordered/frozen=true']}, 'collections': {'TestNativeBasisRefusalDescriptorPropagationAndAllocation': [], 'TestNativeNamedDomainReplacement': [], 'TestNativeScalarReplacementDuringCapturedBuild': []}, 'internal/valuelog': {'TestCOWBasisRefusalActualInspectorControls': ['successful_inspector_equal_and_allocation', 'actual_source_refusal', 'actual_frame_uncompressed_refusal', 'actual_frame_dictionary_refusal', 'actual_frame_codec_refusal', 'actual_payload_refusal', 'actual_payload_no_frame_subset'], 'TestCOWBasisRefusalScalarControls': ['owner_and_no_entry', 'first_tuple_and_unknown_shape', 'known_shape_and_read_stage', 'no_error_methods_or_allocation', 'metadata_known_subset', 'readback_while_borrower_active', 'ordinal_overflow_refuses_attribution'], 'TestCOWLeafInspectionWindowMatchesRecordInspector': ['page', 'compact', 'snappy', 'lz4'], 'TestCOWLeafRecordBoundedRawCompactAndCompressed': ['raw', 'compact', 'compressed-compact'], 'TestCOWRecordRawAndGroupedNoAllocation': ['raw', 'grouped']}}
+CONTROL_CHILDREN = {'caching': {'TestCOWMaintenanceDictionaryActualInstallDispatch': [], 'TestCOWMaintenanceDictionaryDistinctBoundAndOriginalPair': [], 'TestCOWMaintenanceDictionaryFailedCompletionKeepsOriginalDebt': [], 'TestCOWMaintenanceDictionaryInstallUnwindKeepsOpeningCut': ['panic', 'goexit'], 'TestCOWMaintenanceDictionaryPairedSidesAndRefund': [], 'TestCOWMaintenanceDictionaryRefusalAndUnwind': ['missing', 'wrong_definition', 'refusal', 'panic', 'goexit', 'shape', 'frame', 'crc', 'short_output']}, 'internal/dictdb': {'TestCOWMaintenanceDictionaryEarlyCustodyAndUnwind': ['refusal1', 'refusal2', 'refusal3', 'panic1', 'panic2', 'panic3', 'goexit1', 'goexit2', 'goexit3', 'success1', 'success2', 'success3'], 'TestCOWMaintenanceDictionaryRetainsIncompleteCleanup': []}, 'collections': {'TestNativeMaintenanceLeafOldRefusalAndBlockIsolation': ['raw', 'snappy', 'lz4', 'dictionary']}, 'internal/valuelog': {'TestCOWBoundedDecoderExactOutputConcurrentCloseAndProvenance': []}}
 CONTROL_TOPS = {pkg: tuple(tests) for pkg, tests in CONTROL_CHILDREN.items()}
 CONTROLS_SELECTOR = '^(' + '|'.join(x for v in CONTROL_TOPS.values() for x in v) + ')$'
 WITNESS_SELECTOR = '^' + TOP + '$'
@@ -20,6 +20,9 @@ WITNESS = {PREFIX + 'collections': {TOP}}
 ACTIVATION_TOP = 'TestNativeBasisPublicVacuumOriginalCorpusV1'
 ACTIVATION_SELECTOR = '^' + ACTIVATION_TOP + '$'
 ACTIVATION = {PREFIX + 'collections': {ACTIVATION_TOP}}
+SMALL_ACTIVATION_TOP = 'TestNativeBasisPublicVacuumActivationV1'
+SMALL_ACTIVATION_SELECTOR = '^' + SMALL_ACTIVATION_TOP + '$'
+SMALL_ACTIVATION = {PREFIX + 'collections': {SMALL_ACTIVATION_TOP}}
 CHILDREN = {TOP}  # The original witness has one top and no subtests.
 MARKER = 'basis-first-refusal: '
 ACTIVATION_BEFORE_MARKER = 'basis-vacuum-before: '
@@ -138,17 +141,19 @@ def validate(path, mode, go_exit):
     result = {'mode': mode, 'go_exit': go_exit, 'status': 'INVALID_EVENT_EVIDENCE',
               'accepted': False, 'issues': [], 'events': {}, 'packages': {}, 'receipts': {},
               'diagnostic_output': [], 'non_event_lines': [], 'literal_failures': [],
-              'source_scope': '3db7d8-fixed-original-fixture'}
-    if mode not in ('controls', 'witness', 'activation') or type(go_exit) is not int or not -255 <= go_exit <= 255:
+              'source_scope': '57019f08-maintenance-dictionary-repair-with-unchanged-regressions'}
+    if mode not in ('controls', 'witness', 'activation', 'small_activation') or type(go_exit) is not int or not -255 <= go_exit <= 255:
         result['issues'].append({'label': 'invalid_fixed_mode_or_go_exit'})
         return result
-    expected = CONTROLS if mode == 'controls' else ACTIVATION if mode == 'activation' else WITNESS
-    receipt_names = {ACTIVATION_TOP} if mode == 'activation' else CHILDREN
+    activation_mode = mode in ('activation', 'small_activation')
+    activation_top = SMALL_ACTIVATION_TOP if mode == 'small_activation' else ACTIVATION_TOP
+    expected = CONTROLS if mode == 'controls' else SMALL_ACTIVATION if mode == 'small_activation' else ACTIVATION if mode == 'activation' else WITNESS
+    receipt_names = {activation_top} if activation_mode else CHILDREN
     counts = {pkg: {name: {'run': 0, 'pass': 0, 'fail': 0, 'skip': 0} for name in sorted(names)}
               for pkg, names in expected.items()}
     packages = {pkg: {'start': 0, 'pass': 0, 'fail': 0, 'skip': 0} for pkg in expected}
     result['events'], result['packages'] = counts, packages
-    if mode == 'activation':
+    if activation_mode:
         result['activation_interval'] = {}
     event_errors, receipt_errors, incomplete = [], [], []
     compile_failure = False
@@ -238,8 +243,8 @@ def validate(path, mode, go_exit):
                                 (('before', ACTIVATION_BEFORE_MARKER), ('after', ACTIVATION_AFTER_MARKER))
                                 if marker in output]
             if interval_markers:
-                _need(mode == 'activation' and action == 'output'
-                      and pkg == PREFIX + 'collections' and test == ACTIVATION_TOP
+                _need(activation_mode and action == 'output'
+                      and pkg == PREFIX + 'collections' and test == activation_top
                       and len(interval_markers) == 1 and MARKER not in output,
                       'interval_receipt_outside_fixed_activation')
                 name, marker = interval_markers[0]
@@ -258,7 +263,7 @@ def validate(path, mode, go_exit):
                 except (ValueError, TypeError, KeyError, RecursionError):
                     receipt_errors.append({'line': number, 'label': 'invalid_fixed_interval_receipt'})
             if MARKER in output:
-                _need(mode in ('witness', 'activation') and pkg == PREFIX + 'collections' and test in receipt_names and output.count(MARKER) == 1,
+                _need(mode in ('witness', 'activation', 'small_activation') and pkg == PREFIX + 'collections' and test in receipt_names and output.count(MARKER) == 1,
                       'receipt_outside_original_witness')
                 _need(test not in result['receipts'], 'duplicate_original_receipt')
                 text = output.split(MARKER, 1)[1].strip()
@@ -282,9 +287,9 @@ def validate(path, mode, go_exit):
                           for group in counts.values() for v in group.values())
     complete_packages = all(v['start'] == 1 and v['pass'] + v['fail'] == 1 and v['skip'] == 0 for v in packages.values())
     all_pass = complete_events and complete_packages and all(v['fail'] == 0 for group in counts.values() for v in group.values()) and all(v['pass'] == 1 for v in packages.values())
-    if mode in ('witness', 'activation') and set(result['receipts']) != receipt_names:
+    if mode in ('witness', 'activation', 'small_activation') and set(result['receipts']) != receipt_names:
         incomplete.append('missing_original_scalar_receipt')
-    if mode == 'activation' and set(result['activation_interval']) != {'before', 'after'}:
+    if activation_mode and set(result['activation_interval']) != {'before', 'after'}:
         incomplete.append('missing_public_call_interval_receipt')
     has_skips = any(v['skip'] for group in counts.values() for v in group.values()) or any(v['skip'] for v in packages.values())
     if not complete_events or not complete_packages:
@@ -319,7 +324,7 @@ def validate(path, mode, go_exit):
         result['status'] = 'TIMEOUT_OR_INTERRUPTED'
     elif compile_failure:
         result['status'] = 'COMPILE_FAILURE'
-    elif mode in ('controls', 'activation') and (go_exit != 0 or not all_pass or has_skips):
+    elif mode in ('controls', 'activation', 'small_activation') and (go_exit != 0 or not all_pass or has_skips):
         result['status'] = 'CONTROL_FAILURE'
     elif incomplete or has_skips:
         result['status'] = 'INCOMPLETE_DIAGNOSTIC_EVIDENCE'
@@ -332,8 +337,8 @@ def validate(path, mode, go_exit):
         result['status'] = 'FAILED_DIAGNOSTIC_EVIDENCE'
     else:
         result['status'] = 'INCONSISTENT_EXIT_OR_EVENT_EVIDENCE'
-    if mode == 'activation':
-        item = result['receipts'].get(ACTIVATION_TOP, {})
+    if activation_mode:
+        item = result['receipts'].get(activation_top, {})
         snap = item.get('receipt', {})
         interval = result['activation_interval']
         before = interval.get('before', {}).get('receipt', {})
@@ -367,7 +372,7 @@ def validate(path, mode, go_exit):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--path', required=True)
-    parser.add_argument('--mode', choices=('controls', 'witness', 'activation'), required=True)
+    parser.add_argument('--mode', choices=('controls', 'witness', 'activation', 'small_activation'), required=True)
     parser.add_argument('--go-exit', type=int, required=True)
     parser.add_argument('--summary', required=True)
     args = parser.parse_args()

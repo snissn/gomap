@@ -1,0 +1,21 @@
+{
+  "head": "57019f08de0d77f756971729712e729727d93052",
+  "tree": "138895fe4ebac33429705676b84a051d9b35934b",
+  "source_writer": "01a15a41-5e6e-7f21-9052-99e7406d0861",
+  "source_state": "CLOSED",
+  "independent_source_review": "PENDING_ROOT",
+  "gofmt_pinned_1_26_10": "UNRUN",
+  "compile": "UNRUN",
+  "focused_normal": "UNRUN",
+  "focused_race": "UNRUN",
+  "default_public_8_control": "UNRUN_ON_CHANGED_SOURCE",
+  "default_public_256_16_control": "UNRUN_ON_CHANGED_SOURCE",
+  "original_lifecycle_witness": "UNRUN_ON_CHANGED_SOURCE",
+  "recovery_full_ci_platform_M0_performance": "UNQUALIFIED",
+  "push_dispatch_host_runtime": "NOT_PERFORMED",
+  "prior_functional_and_performance_failures": "PRESERVED_UNWAIVED",
+  "old_timing_M0_executable_identity_acceptance_inherited": false,
+  "next_owner": "ROOT",
+  "next_action": "independent exact-source review; review/bind maintained hosted qualification route before execution",
+  "automatic_repeat": false
+}

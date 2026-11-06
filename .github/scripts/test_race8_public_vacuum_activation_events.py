@@ -10,8 +10,8 @@ import test_race8_first_refusal_events as original
 m = original.m
 
 
-def rows(value=None, failed=False, before=None, after=None):
-    pkg, top = m.PREFIX + 'collections', m.ACTIVATION_TOP
+def rows(value=None, failed=False, before=None, after=None, small=False):
+    pkg, top = m.PREFIX + 'collections', m.SMALL_ACTIVATION_TOP if small else m.ACTIVATION_TOP
     result = [{'Package': pkg, 'Action': 'start'},
               {'Package': pkg, 'Test': top, 'Action': 'run'},
               {'Package': pkg, 'Test': top, 'Action': 'output',
@@ -30,11 +30,11 @@ def rows(value=None, failed=False, before=None, after=None):
 
 
 class PublicVacuumActivationControls(unittest.TestCase):
-    def check(self, events, go_exit=0):
+    def check(self, events, go_exit=0, mode='activation'):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'activation.jsonl'
             path.write_text(''.join(json.dumps(x) + '\n' for x in events))
-            return m.validate(path, 'activation', go_exit)
+            return m.validate(path, mode, go_exit)
 
     def test_exact_positive_and_separate_selector(self):
         checked = self.check(rows())
@@ -120,6 +120,27 @@ class PublicVacuumActivationControls(unittest.TestCase):
                                   Entered=[10] * 8, Finished=[4] * 8)))
         self.assertTrue(checked['accepted'])
         self.assertFalse(checked['receipts'][m.ACTIVATION_TOP]['borrower_join_proved'])
+
+    def test_small_fixed_activation_and_cross_selector_refusal(self):
+        checked = self.check(rows(small=True), mode='small_activation')
+        self.assertTrue(checked['accepted'])
+        self.assertTrue(checked['activation_verified'])
+        self.assertEqual(set(checked['receipts']), {m.SMALL_ACTIVATION_TOP})
+        self.assertFalse(self.check(rows(small=True))['accepted'])
+        self.assertFalse(self.check(rows(), mode='small_activation')['accepted'])
+        self.assertFalse(self.check(rows(small=True, failed=True), go_exit=1,
+                                    mode='small_activation')['accepted'])
+        self.assertFalse(self.check(rows(small=True)[:-1], mode='small_activation')['accepted'])
+        unchanged = original.scalar(0, Calls=7, Completed=7,
+                                    Entered=[7] * 8, Finished=[7] * 8)
+        self.assertFalse(self.check(rows(value=unchanged, before=unchanged,
+            after=unchanged, small=True), mode='small_activation')['accepted'])
+        for index in (0, 1, 7):
+            for field in ('Entered', 'Finished'):
+                values = [2] * 8
+                values[index] = 1
+                self.assertFalse(self.check(rows(small=True,
+                    after=original.scalar(0, **{field: values})), mode='small_activation')['accepted'])
 
     def test_original_zero_witness_meaning_unchanged(self):
         with tempfile.TemporaryDirectory() as directory:

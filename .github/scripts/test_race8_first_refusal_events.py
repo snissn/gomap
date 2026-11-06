@@ -52,9 +52,9 @@ class FixedRace8Controls(unittest.TestCase):
             return m.validate(path, mode, go_exit)
 
     def test_exact_owner_inventory_and_both_modes(self):
-        self.assertEqual(sum(len(x) for x in m.CONTROL_TOPS.values()), 13)
-        self.assertEqual(sum(len(x) for x in m.CONTROLS.values()), 44)
-        self.assertEqual(sum(not any(y.startswith(x + '/') for y in group) for group in m.CONTROLS.values() for x in group), 36)
+        self.assertEqual(sum(len(x) for x in m.CONTROL_TOPS.values()), 10)
+        self.assertEqual(sum(len(x) for x in m.CONTROLS.values()), 37)
+        self.assertEqual(sum(not any(y.startswith(x + '/') for y in group) for group in m.CONTROLS.values() for x in group), 33)
         self.assertEqual(m.WITNESS, {m.PREFIX + 'collections': {m.TOP}})
         self.assertNotIn(m.TOP, m.CONTROLS_SELECTOR)
         for mode in ('controls', 'witness'):
