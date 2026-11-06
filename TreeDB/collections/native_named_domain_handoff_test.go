@@ -201,7 +201,8 @@ func TestNativeScalarReplacementDuringCapturedBuild(t *testing.T) {
 		if !reflect.DeepEqual(image(old), oldImage) || !reflect.DeepEqual(image(replacement), replacementImage) || !reflect.DeepEqual(image(current), replacementImage) {
 			t.Fatal("old handoff resurrected captured scalar image or changed held cuts")
 		}
-		refreshed, err := prepareNativeEngineBasisRefresh(current.capture.State().(*nativeEngineVersion), current.capture.Snapshot(), current.capture.Snapshot())
+		base := current.capture.State().(*nativeEngineVersion)
+		refreshed, err := prepareNativeEngineBasisRefresh(base, current.capture.Snapshot(), current.capture.Snapshot())
 		if refreshed != nil {
 			if cleanup := finishPrivateNative(refreshed.Release()); cleanup != nil {
 				t.Error(cleanup)
@@ -209,6 +210,12 @@ func TestNativeScalarReplacementDuringCapturedBuild(t *testing.T) {
 		}
 		if err != nil {
 			t.Fatalf("post-handoff equivalent basis: %v", err)
+		}
+		if refreshed != base {
+			t.Fatal("equivalent snapshots did not return the owned retained engine")
+		}
+		if !reflect.DeepEqual(image(old), oldImage) || !reflect.DeepEqual(image(replacement), replacementImage) || !reflect.DeepEqual(image(current), replacementImage) {
+			t.Fatal("releasing retained refresh result changed held cuts")
 		}
 		rows, err := c.FindByIndex("tenant", "one")
 		want := 2
