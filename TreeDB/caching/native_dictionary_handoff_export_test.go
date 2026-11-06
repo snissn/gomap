@@ -82,14 +82,16 @@ func (r *nativeDictionaryHandoffForwarder) MatchesNativeMaintenanceSnapshots(bef
 }
 
 func (r *nativeDictionaryHandoffForwarder) ReadNativeMaintenanceDictionaryLeaf(snapshot *backenddb.Snapshot, ptr page.LeafLogPtr, shape valuelog.COWRecordShape, dst []byte) ([]byte, error) {
-	if !shape.Compressed || shape.DictID != r.dictID || shape.Codec != valuelog.BlockCodecNone || len(dst) != page.PageSize {
-		return nil, errors.New("real engine did not supply the inspected dictionary shape and caller scratch")
+	// Fixed tree reads pass caller-owned page backing as leafScratch[:0].
+	// Validate its full page capacity; decoding must return that same backing.
+	if !shape.Compressed || shape.DictID != r.dictID || shape.Codec != valuelog.BlockCodecNone || cap(dst) != page.PageSize {
+		return nil, fmt.Errorf("real engine dictionary shape/scratch: compressed=%t dictionaryMatches=%t codec=%d scratchLen=%d scratchCap=%d", shape.Compressed, shape.DictID == r.dictID, shape.Codec, len(dst), cap(dst))
 	}
 	got, err := r.scope.ReadNativeMaintenanceDictionaryLeaf(snapshot, ptr, shape, dst)
 	if err != nil {
 		return nil, err
 	}
-	if len(got) != page.PageSize || &got[0] != &dst[0] {
+	if len(got) != page.PageSize || cap(got) != page.PageSize || &got[0] != &dst[:page.PageSize][0] {
 		return nil, errors.New("real dictionary reader did not fill caller scratch")
 	}
 	switch snapshot {
