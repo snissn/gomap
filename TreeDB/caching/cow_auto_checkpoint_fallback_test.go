@@ -206,6 +206,13 @@ func testCOWAutomaticCheckpointFallbackPreservesNewerSuffix(t *testing.T, engine
 			if value, err := backend.Get([]byte("key")); err != nil || string(value) != "suffix" {
 				t.Fatalf("next physical suffix=%q,%v", value, err)
 			}
+			// These native frames carry fixture states, not real collections.
+			// Recovery must skip every frame using this checkpoint's coverage;
+			// the production replay handler must never interpret fake states.
+			covered, live := backend.StateToken()
+			if !live || covered.AppliedCommandLSN != prefix.C+2 || backend.CommandWALNextLSN() != covered.AppliedCommandLSN+1 {
+				t.Fatalf("fixture WAL not fully covered before reopen: %+v next=%d", covered, backend.CommandWALNextLSN())
+			}
 			if err := opening.Close(); err != nil {
 				t.Fatal(err)
 			}

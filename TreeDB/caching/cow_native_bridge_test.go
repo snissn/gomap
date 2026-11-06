@@ -5,11 +5,11 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
 	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
@@ -159,14 +159,14 @@ func TestCOWNativeNoWALBridgeMinimalJournalAndExactSync(t *testing.T) {
 
 }
 
-var nativeBridgeReplayOnce sync.Once
-
+// These fixtures supply their own admitted publication or reprepare plan. The
+// registry admits that command kind; its preparer still refuses our nil/fake
+// semantic states. Use the production registrar's own once instead of claiming
+// its kind with a stub, so real-engine tests can share this package process.
+// Fake publications are not collection replay inputs: the only reopening
+// fixture asserts complete checkpoint coverage before closing and reopening.
 func registerNativeBridgeTestCommand() {
-	nativeBridgeReplayOnce.Do(func() {
-		backenddb.RegisterCommandWALReplayHandlerWithOptions(commitlog.CommandKindCollectionInsertBatchByID, func(*backenddb.DB, commitlog.CommandEnvelope) error { return nil }, backenddb.CommandWALReplayHandlerOptions{NativePrepare: func(*backenddb.DB, commitlog.CommandEnvelope, backenddb.NativeSemanticState, *backenddb.Snapshot, *backenddb.StableResourceCaptureLease) (*backenddb.NativePreparedPublication, error) {
-			return nil, backenddb.ErrNativeSemanticUnsupported
-		}})
-	})
+	collections.RegisterCommandWALReplayHandlers()
 }
 
 // This is the actual original admitted file/lease ledger used by the finalizer,
@@ -323,7 +323,28 @@ func TestCOWNativeWALExactRequestRequiresOriginalAdmission(t *testing.T) {
 		}
 		return intent
 	}
-	publication := &backenddb.NativePreparedPublication{Basis: capture.State(), State: nativeBridgeState(t, capture), StartSequence: capture.LogicalSequence(), Entries: []batch.Entry{{Type: batch.OpPut, Key: []byte("native-real-raw"), Value: []byte("value")}}}
+	state := nativeBridgeState(t, capture)
+	publication := &backenddb.NativePreparedPublication{Basis: capture.State(), State: state, StartSequence: capture.LogicalSequence(), Entries: []batch.Entry{{Type: batch.OpPut, Key: []byte("native-real-raw"), Value: []byte("value")}}}
+	// The real registrar must preserve the stub's refusal on both fixture bases;
+	// neither preparation may assign a frame or consume our explicit plan.
+	beforeNext := backend.CommandWALNextLSN()
+	func() {
+		lease, err := backend.AcquireStableResourceCaptureLease()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer lease.Release()
+		env := commitlog.CommandEnvelope{Kind: commitlog.CommandKindCollectionInsertBatchByID, Scope: commitlog.CommandScopeCollection, PayloadFormat: commitlog.PayloadFormatCollectionInsertBatchByIDV1, Payload: payload}
+		for i, basis := range [...]backenddb.NativeSemanticState{nil, state} {
+			prepared, err := backend.PrepareCommandWALNativeEffects(env, basis, capture.Snapshot(), lease)
+			if !errors.Is(err, backenddb.ErrNativeSemanticUnsupported) || prepared != nil {
+				t.Fatalf("registered fixture preparation %d: publication=%v err=%v", i, prepared != nil, err)
+			}
+		}
+	}()
+	if backend.CommandWALNextLSN() != beforeNext || state.refs.Load() != 1 || state.calls != 0 {
+		t.Fatal("registered refusal assigned WAL or consumed the explicit fixture state")
+	}
 	unadmitted := newIntent()
 	if err := unadmitted.PrepareSealedReceipt(); err != nil {
 		t.Fatal(err)
