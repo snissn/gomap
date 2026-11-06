@@ -1,3 +1,5 @@
+//go:build !windows
+
 package collections
 
 import (
@@ -14,6 +16,8 @@ import (
 	"github.com/snissn/gomap/TreeDB/tree"
 )
 
+// Public online vacuum is unsupported on Windows; its rejection is covered by
+// TreeDB/vacuum_public_windows_test.go.
 // This observer-free regression sends the original fixed 256-row/16-writer
 // corpus through one public vacuum on ordinary main. It preserves the original
 // pre-checkpoint seed capture, load distribution and checked lifecycle, and
