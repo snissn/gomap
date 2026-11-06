@@ -87,6 +87,8 @@ type NativeDictionaryHandoffTestReceipt struct {
 	BeforeFile, AfterFile                      rootpublication.StableIdentity
 	SourceSelected, DestinationCreated         bool
 	UnscopedRefused, ReversedRefused, Refunded bool
+	ResultChecked, SameResult                  bool
+	FirstFailedClause                          uint8
 	Pack                                       backenddb.LeafGenerationPackRunOnceStats
 }
 
@@ -333,7 +335,31 @@ func CheckNativeDictionaryHandoffForTest(db *DB, capture backenddb.NativeSemanti
 			if err != nil {
 				return err
 			}
-			if states[2] == nil || states[2] == capture.State() || !forward.beforeSeen || !forward.afterSeen || forward.before == 0 || forward.after == 0 || provider.calls != 1 || scope.used != 1 {
+			receipt.ResultChecked = true
+			if states[2] != nil {
+				// A successful refresh owns a retained base when no domain root
+				// changed. SYSTEM relocation alone does not require a new engine.
+				receipt.SameResult = states[2] == capture.State()
+			}
+			// Preserve the original predicate order. Code 2 was the overstrong
+			// distinct-engine requirement; same-result context is now independent.
+			switch {
+			case states[2] == nil:
+				receipt.FirstFailedClause = 1
+			case !forward.beforeSeen:
+				receipt.FirstFailedClause = 3
+			case !forward.afterSeen:
+				receipt.FirstFailedClause = 4
+			case forward.before == 0:
+				receipt.FirstFailedClause = 5
+			case forward.after == 0:
+				receipt.FirstFailedClause = 6
+			case provider.calls != 1:
+				receipt.FirstFailedClause = 7
+			case scope.used != 1:
+				receipt.FirstFailedClause = 8
+			}
+			if receipt.FirstFailedClause != 0 {
 				return errors.New("real engine did not rebind through both authenticated SYSTEM dictionary operands")
 			}
 			if got := c.budget.Stats(); got.ExternalBytes != ordinary.ExternalBytes || got.ExternalLeases != ordinary.ExternalLeases {

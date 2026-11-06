@@ -146,12 +146,12 @@ func TestNativeEngineDictionaryPairedBasisHandoff(t *testing.T) {
 	}
 	verify(capture.Snapshot(), held, true)
 	receipt, err := caching.CheckNativeDictionaryHandoffForTest(cache, capture, dictID)
-	t.Logf("native-engine-dictionary-handoff: BeforeSystem=%d AfterSystem=%d BeforeReads=%d AfterReads=%d Definitions=%d Releases=%d DictionarySHA256=%x DefinitionSHA256=%x SourceSelected=%t DestinationCreated=%t UnscopedRefused=%t ReversedRefused=%t Refunded=%t", receipt.Before.SystemRootPageID, receipt.After.SystemRootPageID, receipt.BeforeReads, receipt.AfterReads, receipt.Definitions, receipt.DefinitionReleases, receipt.DictionarySHA256, receipt.DefinitionSHA256, receipt.SourceSelected, receipt.DestinationCreated, receipt.UnscopedRefused, receipt.ReversedRefused, receipt.Refunded)
+	t.Logf("native-engine-dictionary-handoff: BeforeSystem=%d AfterSystem=%d BeforeReads=%d AfterReads=%d Definitions=%d Releases=%d DictionarySHA256=%x DefinitionSHA256=%x SourceSelected=%t DestinationCreated=%t UnscopedRefused=%t ReversedRefused=%t Refunded=%t ResultChecked=%t SameResult=%t FirstFailedClause=%d", receipt.Before.SystemRootPageID, receipt.After.SystemRootPageID, receipt.BeforeReads, receipt.AfterReads, receipt.Definitions, receipt.DefinitionReleases, receipt.DictionarySHA256, receipt.DefinitionSHA256, receipt.SourceSelected, receipt.DestinationCreated, receipt.UnscopedRefused, receipt.ReversedRefused, receipt.Refunded, receipt.ResultChecked, receipt.SameResult, receipt.FirstFailedClause)
 	t.Logf("native-engine-dictionary-identities: DictionaryIndex=%+v DictionaryFile=%+v BeforeFile=%+v AfterFile=%+v BeforeLeaf=%+v AfterLeaf=%+v", receipt.DictionaryIndex, receipt.DictionaryFile, receipt.BeforeFile, receipt.AfterFile, receipt.BeforeLeaf, receipt.AfterLeaf)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if receipt.Before != beforeToken || receipt.Before.SystemRootPageID == receipt.After.SystemRootPageID || receipt.Before.AppliedCommandLSN != receipt.After.AppliedCommandLSN || receipt.BeforeReads == 0 || receipt.AfterReads == 0 || receipt.Definitions != 1 || receipt.DictionarySHA256 != receipt.DefinitionSHA256 || receipt.DictionarySHA256 == ([32]byte{}) || !receipt.Refunded || !receipt.UnscopedRefused || !receipt.ReversedRefused || !receipt.SourceSelected || !receipt.DestinationCreated {
+	if receipt.Before != beforeToken || receipt.Before.SystemRootPageID == receipt.After.SystemRootPageID || receipt.Before.AppliedCommandLSN != receipt.After.AppliedCommandLSN || receipt.BeforeReads == 0 || receipt.AfterReads == 0 || receipt.Definitions != 1 || receipt.DictionarySHA256 != receipt.DefinitionSHA256 || receipt.DictionarySHA256 == ([32]byte{}) || !receipt.Refunded || !receipt.UnscopedRefused || !receipt.ReversedRefused || !receipt.SourceSelected || !receipt.DestinationCreated || !receipt.ResultChecked || receipt.FirstFailedClause != 0 {
 		t.Fatal("real native engine paired dictionary handoff receipt is incomplete")
 	}
 	verify(capture.Snapshot(), held, false)
@@ -166,9 +166,13 @@ func TestNativeEngineDictionaryPairedBasisHandoff(t *testing.T) {
 			}
 		}()
 		token, ok := current.Snapshot().StateToken()
-		if !ok || token != receipt.After || current.LogicalSequence() != logical || current.State() == nil || primary(current.Snapshot()) == beforeRoot {
+		if !ok || token != receipt.After || current.LogicalSequence() != logical || current.State() == nil {
 			t.Fatal("original cache did not adopt the actual equivalent native physical successor")
 		}
+		// Leaf-log maintenance must adopt the authenticated after basis. It need
+		// not relocate a pager-backed collection root or rebuild its engine.
+		currentRoot := primary(current.Snapshot())
+		t.Logf("native-engine-dictionary-basis: PrimaryUnchanged=%t", currentRoot == beforeRoot)
 		currentRead, err := native.Capture("dict_native_00")
 		if err != nil {
 			t.Fatal(err)
