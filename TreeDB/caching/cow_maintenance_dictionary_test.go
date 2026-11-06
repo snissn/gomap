@@ -178,7 +178,14 @@ func TestCOWMaintenanceDictionaryAfterOnlyFile(t *testing.T) {
 	db, _, originalPtr := cowSuccessorDictionaryLeafFixture(t)
 	c := db.cow
 	db.flushMu.Lock()
-	defer db.flushMu.Unlock()
+	flushLocked := true
+	unlockFlush := func() {
+		if flushLocked {
+			flushLocked = false
+			db.flushMu.Unlock()
+		}
+	}
+	defer unlockFlush()
 	before, err := c.captureBackendBasis(db.backend.(*backenddb.DB))
 	if err != nil {
 		t.Fatal(err)
@@ -232,7 +239,12 @@ func TestCOWMaintenanceDictionaryAfterOnlyFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(errors.Join(err, after.release()))
 	}
-	defer cowFinishMaintenancePair(t, db, &s, after)
+	defer func() {
+		// The sole cleanup worker may already be waiting for this flush fence.
+		// Release it before joining, including on Fatal/panic after preparation.
+		unlockFlush()
+		cowFinishMaintenancePair(t, db, &s, after)
+	}()
 	s.before, s.after = before.snapshot, after.snapshot
 	p := &cowMaintenanceProviderControl{store: store, cache: c}
 	s.provider = p
