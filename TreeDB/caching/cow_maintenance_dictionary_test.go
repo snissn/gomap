@@ -172,6 +172,84 @@ func TestCOWMaintenanceDictionaryPairedSidesAndRefund(t *testing.T) {
 	}
 }
 
+func TestCOWMaintenanceDictionaryAfterOnlyFile(t *testing.T) {
+	t.Setenv(envDisableVlogGenerationLoop, "1")
+	t.Setenv(envDisableVlogGenerationCheckpointKick, "1")
+	db, _, originalPtr := cowSuccessorDictionaryLeafFixture(t)
+	c := db.cow
+	db.flushMu.Lock()
+	defer db.flushMu.Unlock()
+	before, err := c.captureBackendBasis(db.backend.(*backenddb.DB))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := before.release(); err != nil {
+			t.Error(err)
+		}
+	}()
+	shape := cowMaintenanceActualShape(t, before.snapshot, originalPtr, c.maintenance.Limits().MaxInFlightBytes)
+	store := db.dictStore.(*dictdb.Store)
+	definition, err := store.GetDictBytes(context.Background(), shape.DictID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var original [page.PageSize]byte
+	if _, err := before.nativeLeafPage(c, store, originalPtr, original[:]); err != nil {
+		t.Fatal(err)
+	}
+	// The maintained producer appends the authenticated page into a genuinely
+	// new registered segment. The retained before Set cannot resolve this file.
+	db.leafLog.vlogMu.Lock()
+	err = db.rotateValueLogMuHeld(&db.leafLog)
+	db.leafLog.vlogMu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	producer := &cowDictionaryLeafLog{cowDictionaryLeafLifecycle: &cachingLeafPageLog{db: db, lane: &db.leafLog}, db: db, dictID: shape.DictID, dictionary: definition}
+	ptr, resources, err := producer.AppendLeafPageWithStableResources(original[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resources.Release()
+	if ptr.FileID == originalPtr.FileID {
+		t.Fatal("producer did not create an after-only leaf file")
+	}
+	if err := producer.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.backend.(*backenddb.DB).RefreshValueLogSet(); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := before.snapshot.PinnedValueLogFile(ptr.ValuePtr().FileID); !errors.Is(err, rootpublication.ErrUnresolvedResource) {
+		t.Fatalf("new leaf file was already in the before Set: %v", err)
+	}
+	after, err := c.captureBackendBasis(db.backend.(*backenddb.DB))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := db.prepareCOWMaintenanceLeaves()
+	if err != nil {
+		t.Fatal(errors.Join(err, after.release()))
+	}
+	defer cowFinishMaintenancePair(t, db, &s, after)
+	s.before, s.after = before.snapshot, after.snapshot
+	p := &cowMaintenanceProviderControl{store: store, cache: c}
+	s.provider = p
+	afterShape := cowMaintenanceActualShape(t, after.snapshot, ptr, c.maintenance.Limits().MaxInFlightBytes)
+	if afterShape.DictID != shape.DictID {
+		t.Fatal("after-only file lost the persisted dictionary identity")
+	}
+	var dst [page.PageSize]byte
+	c.writerMu.Lock()
+	_, beforeErr := s.ReadNativeMaintenanceDictionaryLeaf(before.snapshot, ptr, afterShape, dst[:])
+	got, afterErr := s.ReadNativeMaintenanceDictionaryLeaf(after.snapshot, ptr, afterShape, dst[:])
+	c.writerMu.Unlock()
+	if !errors.Is(beforeErr, rootpublication.ErrUnresolvedResource) || afterErr != nil || !bytes.Equal(got, original[:]) || len(got) != page.PageSize || &got[0] != &dst[0] || p.calls != 1 || s.used != 1 {
+		t.Fatalf("exact after Snapshot must supply the real new file: before=%v after=%v dispatches=%d definitions=%d", beforeErr, afterErr, p.calls, s.used)
+	}
+}
+
 func TestCOWMaintenanceDictionaryRefusalAndUnwind(t *testing.T) {
 	for _, mode := range []string{"missing", "wrong_definition", "refusal", "panic", "goexit", "shape", "frame", "crc", "short_output"} {
 		t.Run(mode, func(t *testing.T) {
@@ -406,6 +484,8 @@ type cowMaintenanceControlStore struct {
 }
 
 func TestCOWMaintenanceDictionaryInstallUnwindKeepsOpeningCut(t *testing.T) {
+	t.Setenv(envDisableVlogGenerationLoop, "1")
+	t.Setenv(envDisableVlogGenerationCheckpointKick, "1")
 	for _, mode := range []string{"panic", "goexit"} {
 		t.Run(mode, func(t *testing.T) {
 			db, want, ptr := cowSuccessorDictionaryLeafFixture(t)
@@ -442,11 +522,22 @@ func TestCOWMaintenanceDictionaryInstallUnwindKeepsOpeningCut(t *testing.T) {
 			if c.cut != opening || state.refs.Load() != 1 {
 				t.Fatal("unwind published or lost original opening cut")
 			}
+			if !c.refreshRequired.Load() {
+				t.Fatal("successful capture release erased abnormal-install reconciliation debt")
+			}
 			if got := c.maintenance.Stats(); got.ExternalBytes != before.ExternalBytes || got.ExternalLeases != before.ExternalLeases {
 				t.Fatalf("original capture/private install/scope unwind leaked: before=%+v after=%+v", before, got)
 			}
 			if got, err := db.Get([]byte("a000")); err != nil || !bytes.Equal(got, want) {
 				t.Fatalf("opening contents lost after unwind: %v", err)
+			}
+			// Only an actual ordinary refresh, using the restored real provider,
+			// may reconcile the accepted physical publication before final Close.
+			db.flushMu.Lock()
+			err := db.refreshCOWBackendBasis()
+			db.flushMu.Unlock()
+			if err != nil || c.refreshRequired.Load() || c.cut == opening {
+				t.Fatalf("ordinary refresh did not reconcile unwind: %v", err)
 			}
 			if err := db.Close(); err != nil {
 				t.Fatal(err)

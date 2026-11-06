@@ -127,7 +127,12 @@ func (c *cowCache) releasePrivateCOWBasisInstall(next *cowReadCut) *memtable.COW
 func (db *DB) installPreparedCOWBasis(basis *cowBackendBasis, covered, next *cowReadCut) (*cowReadCut, bool, error) {
 	c := db.cow
 	var leaves *cowMaintenanceLeafScope
-	if covered == nil {
+	c.writerMu.Lock()
+	if covered == nil && c.cut != nil && (c.cut.semanticRootSet != nil || c.cut.frozenSemanticRootSet != nil) {
+		// Only semantic refresh can read dictionary leaves. Inspect eligibility
+		// under the writer gate, then release it before fallible admission. The
+		// install below rereads the current cut after reacquiring the gate.
+		c.writerMu.Unlock()
 		var err error
 		leaves, err = db.prepareCOWMaintenanceLeaves()
 		if err != nil {
@@ -136,8 +141,8 @@ func (db *DB) installPreparedCOWBasis(basis *cowBackendBasis, covered, next *cow
 		// Registered before Unlock: queue transfer follows gate release even
 		// on panic/Goexit. The existing worker owns checked physical cleanup.
 		defer c.retireCOWMaintenanceLeaves(&leaves)
+		c.writerMu.Lock()
 	}
-	c.writerMu.Lock()
 	defer c.writerMu.Unlock()
 	old := c.cut
 	if old == nil {
@@ -176,7 +181,9 @@ func (db *DB) installPreparedCOWBasis(basis *cowBackendBasis, covered, next *cow
 		captured = covered.frozenSemanticRootSet
 	}
 	if covered == nil {
-		leaves.before, leaves.after = old.basis.snapshot, basis.snapshot
+		if leaves != nil {
+			leaves.before, leaves.after = old.basis.snapshot, basis.snapshot
+		}
 		// Maintenance changed only the physical basis. It has no captured build
 		// ledger and cannot consume a logical source or manufacture coverage.
 		// Adopt each private partial before checking err; installCOWBasis releases

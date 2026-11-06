@@ -122,46 +122,50 @@ func (d *DictionaryReadDefinition) ClosePreparedRead() error {
 		return nil
 	}
 	d.once.Do(func() {
+		// Both Once guards are consumed even by panic/Goexit. Until EVERY
+		// destructor returns ordinarily, a repeated call must retain failure
+		// custody instead of reporting a nil result from an unfinished callback.
+		d.preparedCloseErr = rootpublication.ErrResourceOwnership
+		captureComplete := false
 		d.captureOnce.Do(func() {
 			if d.snapshot != nil {
-				d.preparedCloseErr = d.snapshot.Close()
+				err := d.snapshot.Close()
 				if !d.preparedDone.Load() {
-					d.preparedCloseErr = errors.Join(d.preparedCloseErr, rootpublication.ErrResourceOwnership)
+					err = errors.Join(err, rootpublication.ErrResourceOwnership)
 				} else {
-					d.preparedCloseErr = errors.Join(d.preparedCloseErr, d.preparedSnapshotErr)
+					err = errors.Join(err, d.preparedSnapshotErr)
 				}
-				if d.preparedCloseErr != nil {
+				if err != nil {
+					d.preparedCloseErr = err
 					return
 				}
 				d.snapshot = nil
 			}
 			if d.metadata != nil {
-				metadata := d.metadata
+				d.metadata.Close()
 				d.metadata = nil
-				metadata.Close()
 			}
 			if d.releaseSnapshot != nil {
-				release := d.releaseSnapshot
+				d.releaseSnapshot()
 				d.releaseSnapshot = nil
-				release()
 			}
+			captureComplete = true
 		})
-		if d.preparedCloseErr != nil {
+		if !captureComplete {
 			return
 		}
 		d.pin.Release()
 		d.pin = nil
 		d.Bytes = nil
 		if d.releaseBytes != nil {
-			release := d.releaseBytes
+			d.releaseBytes()
 			d.releaseBytes = nil
-			release()
 		}
 		if d.releaseOwner != nil {
-			release := d.releaseOwner
+			d.releaseOwner()
 			d.releaseOwner = nil
-			release()
 		}
+		d.preparedCloseErr = nil
 	})
 	return d.preparedCloseErr
 }

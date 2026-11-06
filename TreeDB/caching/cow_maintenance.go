@@ -57,6 +57,10 @@ func (db *DB) releaseCOWBasisOnUnwind(slot **cowBackendBasis) {
 	basis := *slot
 	*slot = nil
 	if basis != nil {
+		// A live slot means the install did not return normally. Physical
+		// maintenance may already be accepted even if capture release succeeds.
+		// Publish reconciliation debt before its fallible destructor runs.
+		db.cow.refreshRequired.Store(true)
 		if err := basis.release(); err != nil {
 			db.poisonNativeHandoff(err)
 			db.retainOriginalCleanupError(err)
