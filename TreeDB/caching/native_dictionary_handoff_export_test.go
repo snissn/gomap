@@ -328,7 +328,7 @@ func ReopenNativeDictionaryHandoffTestFixture(t *testing.T, original *DB) (*DB, 
 		Durability: backenddb.DurabilityWALOnRelaxed, DisableBackgroundPrune: true,
 		IndexOuterLeavesInValueLog: true, LeafPageReadCacheEntries: -1,
 		ValueLog: backenddb.ValueLogOptions{
-			DictLookup: func(id uint64) ([]byte, error) { return store.GetDictBytes(context.Background(), id) },
+			DictLookup:          func(id uint64) ([]byte, error) { return store.GetDictBytes(context.Background(), id) },
 			DictCurrentForClass: store.GetCurrentForClass,
 			DictLeafPayloadMode: store.GetLeafPayloadMode,
 		},

@@ -57,7 +57,9 @@ func TestNativeEngineDictionaryPairedBasisHandoff(t *testing.T) {
 		t.Fatal(err)
 	}
 	id := func(i int) []byte { return []byte(fmt.Sprintf("native-row-%02d", i)) }
-	document := func(i int) []byte { return []byte(fmt.Sprintf(`{"row":%d,"value":"actual-native-dictionary-handoff"}`, i)) }
+	document := func(i int) []byte {
+		return []byte(fmt.Sprintf(`{"row":%d,"value":"actual-native-dictionary-handoff"}`, i))
+	}
 	const rows = 8
 	for i := 0; i < rows; i++ {
 		got, err := collection.Insert(id(i), document(i))
