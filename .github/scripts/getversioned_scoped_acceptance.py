@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exact PR 5397 timing decision route; never changes the measured verdicts."""
+"""Exact PR 5397 bytes decision route; never changes measured verdicts."""
 
 import argparse
 import datetime
@@ -84,11 +84,11 @@ def context(event):
 def original_archive(destination):
     artifact = api("/actions/artifacts/13493038307")
     job = api("/actions/jobs/127829824951")
-    run = api("/actions/runs/42199145251")
+    run = api("/actions/runs/42199145251/attempts/1")
     if (artifact["id"] != 13493038307 or artifact["size_in_bytes"] != 247542595
             or artifact["expired"] or artifact["workflow_run"]["id"] != 42199145251
-            or job["id"] != 127829824951 or job["run_id"] != 42199145251
-            or job["conclusion"] != "failure" or run["head_sha"] != ORIGINAL
+            or job["id"] != 127829824951 or job["run_id"] != 42199145251 or job["run_attempt"] != 1
+            or job["conclusion"] != "failure" or run["id"] != 42199145251 or run["head_sha"] != ORIGINAL
             or run["run_attempt"] != 1 or run["event"] != "pull_request"
             or run["repository"]["full_name"] != REPO):
         raise ValueError("original artifact/job identity mismatch")
@@ -207,8 +207,8 @@ def authenticate_decision(identity, manifest_sha):
             raise ValueError("invalid decision run or attempt")
         if body["run"] == identity["run"]:
             current.append((comment, body))
-        else:
-            raise ValueError("unknown stale bytes decision marker")
+        # Earlier runs are history, never authority for this run.  A marker
+        # for this run remains subject to complete exact-scope comparison.
     if len(current) != 1:
         raise ValueError("decision missing or ambiguous")
     comment, body = current[0]

@@ -60,6 +60,99 @@ class ArchiveTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     original.authenticate(path, archive)
 
+    def test_stock_writer_schemas_full_observation_and_adverse_cases(self):
+        # Synthetic values only: exercise actual stock parsers and receipt shapes.
+        root = Path(__file__).resolve().parents[2]
+        raw = original.load_module("synthetic_raw", root / ".github/scripts/check_mvcc_raw_path_gate.py")
+        primary = original.load_module("synthetic_primary", root / "scripts/mvcc_primary_cost_gate.py")
+        base, head = route.BASE, route.ORIGINAL
+        tree = "1" * 40
+        manifest = {"base": base, "original_head": head, "original_tree": tree,
+                    "raw_elf_sha256": {}, "primary_baseline_elf_sha256": "a" * 64,
+                    "primary_candidate_elf_sha256": "b" * 64}
+        files = {}
+        def put(name, value):
+            files[name] = value if isinstance(value, str) else json.dumps(value)
+        def digest(name):
+            return hashlib.sha256(files[name].encode()).hexdigest()
+        raw_text = "".join(f"{name}-2 1 1000 ns/op 100 B/op 1 allocs/op\n"
+                           for name in raw.BENCHMARKS for _ in range(8))
+        put("baseline.txt", raw_text); put("candidate.txt", raw_text)
+        with tempfile.TemporaryDirectory() as temp:
+            tmp = Path(temp)
+            (tmp / "raw.txt").write_text(raw_text)
+            parsed = raw.parse_benchmarks(tmp / "raw.txt", 8)
+            _, raw_rows = raw.evaluate(parsed, parsed, 5.0, 1.0, 64.0)
+            digests = {package: {} for package in ("db", "caching", "treedb")}
+            ledger = []
+            records = []
+            for revision in ("baseline", "candidate"):
+                for package in digests:
+                    name = f"{revision}-{package}.test"
+                    sha = hashlib.sha256(name.encode()).hexdigest()
+                    manifest["raw_elf_sha256"][name] = sha
+                    digests[package][revision] = sha
+                    ledger.append(f"{sha}  {name}")
+                    pkg = "./TreeDB" if package == "treedb" else "./TreeDB/" + package
+                    records.append({"path": "measured-binaries/" + name, "sha256": sha,
+                                    "source_sha": base if revision == "baseline" else head,
+                                    "source_tree": tree, "package": pkg,
+                                    "build_environment": {"GOWORK": "off"},
+                                    "build_argv": ["go", "test", "-c", "-trimpath", "-buildvcs=false", "-o", "/tmp/" + name, pkg]})
+            put("binary-sha256.txt", "\n".join(ledger) + "\n")
+            put("summary.json", {"baseline_sha": base, "candidate_sha": head, "measurement_pass": True,
+                                 "results": raw_rows, "binary_digests": digests})
+            put("environment.txt", "\n".join(("runs=8", "benchtime=2s", "batch_write_benchtime=1000x", "cpuset=0", "gomaxprocs=1", "max_regression_percent=5", "max_bytes_regression_percent=1", "max_bytes_regression_absolute=64", "go version go1.26.10 linux/amd64")))
+            put("measured-binaries.json", {"status": "RETAINED_ACTUAL_MEASURED_EXECUTABLES", "files": records,
+                    "environment_sha256": digest("environment.txt"), "initial_digests_sha256": digest("binary-sha256.txt"), "checker_summary_sha256": digest("summary.json")})
+            samples, commands = [], []
+            for pair in range(8):
+                for revision in (("baseline", "candidate") if pair % 2 == 0 else ("candidate", "baseline")):
+                    ns = 1000 if revision == "baseline" else 1000.5383210096482
+                    cost = 92138 if revision == "baseline" else 92142.5
+                    body = f"{primary.BENCHMARK}-2 128 {ns} ns/op {cost} B/op 340 allocs/op 0 generation_advances/op\nPASS\n"
+                    name = f"pair-{pair+1}-{revision}.txt"; put("primary/" + name, body)
+                    samples.append({"pair": pair, "revision": revision, "metrics": primary.parse_sample(body)})
+                    commands.append({"label": name[:-4], "exit": 0, "output": name, "output_sha256": digest("primary/" + name)})
+            for label in ("candidate-public-lifecycle", "candidate-guard-before", "candidate-guard-after", "baseline-guard-after"):
+                body = f"--- PASS: {primary.LIFECYCLE} (0.00s)\nPASS\n" if label == "candidate-public-lifecycle" else "PASS\n"
+                put("primary/" + label + ".txt", body)
+                commands.append({"label": label, "exit": 0, "output": label + ".txt", "output_sha256": digest("primary/" + label + ".txt")})
+            measured = primary.evaluate(samples)
+            put("primary/samples.json", samples); put("primary/summary.json", dict(measured, quiet=True))
+            put("primary/commands.json", commands); put("primary/measured-processes.json", {"busy": [], "aggregate_busy": False})
+            binding = {"baseline": base, "candidate": head, "samples": 8, "iterations": 128,
+                       "harness_sha256": "h", "runner_sha256": "r", "binaries": {}}
+            runtime = {}
+            for revision in ("baseline", "candidate"):
+                sha = manifest["primary_" + revision + "_elf_sha256"]
+                binding["binaries"][revision] = {"sha256": sha, "bytes": 100}
+                runtime[revision] = {"linkage": "static", "executable": {"sha256": sha, "bytes": 100},
+                    "interpreter": None, "libraries": [], "inputs": {"harness_sha256": "h", "runner_sha256": "r", "environment_sha256": "e", "cwd": "/tmp", "argv": []}}
+            put("primary/bindings.json", binding); put("primary/runtime-inputs-before.json", runtime); put("primary/runtime-inputs-after.json", runtime)
+            archive = tmp / "synthetic.zip"
+            def verify():
+                with zipfile.ZipFile(archive, "w") as zf:
+                    for name, body in files.items(): zf.writestr(name, body)
+                with mock.patch.object(original.subprocess, "check_output", return_value=tree + "\n"):
+                    return original.verify_observations(archive, root, tmp / "parsed", manifest)
+            self.assertEqual(verify()["original_measurement"], "FAIL")
+            for name in ("primary/samples.json", "primary/commands.json", "primary/bindings.json", "primary/runtime-inputs-after.json", "measured-binaries.json", "summary.json"):
+                saved = files[name]; files[name] = "{}"
+                with self.subTest(name=name), self.assertRaises((ValueError, KeyError, TypeError, RuntimeError)):
+                    verify()
+                files[name] = saved
+            for name in ("primary/candidate-public-lifecycle.txt", "primary/pair-1-baseline.txt", "environment.txt", "binary-sha256.txt"):
+                saved = files[name]; files[name] = "FAIL\n"
+                with self.subTest(name=name), self.assertRaises((ValueError, KeyError, TypeError, RuntimeError)):
+                    verify()
+                files[name] = saved
+            saved_digest = manifest["primary_candidate_elf_sha256"]
+            manifest["primary_candidate_elf_sha256"] = "f" * 64
+            with self.assertRaises(ValueError):
+                verify()
+            manifest["primary_candidate_elf_sha256"] = saved_digest
+
     def test_duplicate_zip_entries_are_refused(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -162,7 +255,7 @@ class ScopeTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 route.authenticate_decision(identity, "f" * 64)
 
-    def test_old_other_scope_marker_is_ignored_and_stale_bytes_marker_refused(self):
+    def test_old_other_scope_marker_is_ignored_and_current_scope_is_unique(self):
         identity = {"head": "a" * 40, "tree": "b" * 40, "base": route.BASE,
                     "merge": "c" * 40, "merge_tree": "b" * 40, "run": 7, "attempt": 1}
         decision = route.expected_decision(identity, "f" * 64)
@@ -178,9 +271,38 @@ class ScopeTests(unittest.TestCase):
             return {"created_at": "2026-11-05T10:00:00Z"}
         with mock.patch.object(route, "api", side_effect=api):
             self.assertEqual(route.authenticate_decision(identity, "f" * 64), 4)
-            comments.append({"body": "gomap-5397-bce-bytes-risk-v1\n" + json.dumps({"run": 8, "attempt": 1})})
+            old = dict(decision, run=8, head="d" * 40)
+            comments.append({"body": "gomap-5397-bce-bytes-risk-v1\n" + json.dumps(old)})
+            self.assertEqual(route.authenticate_decision(identity, "f" * 64), 4)
+            comments.append(dict(current))
             with self.assertRaises(ValueError):
                 route.authenticate_decision(identity, "f" * 64)
+
+    def test_original_attempt_is_immutable_after_rerun(self):
+        artifact = {"id": 13493038307, "size_in_bytes": 247542595, "expired": False,
+                    "workflow_run": {"id": 42199145251}}
+        job = {"id": 127829824951, "run_id": 42199145251, "run_attempt": 1, "conclusion": "failure"}
+        run = {"id": 42199145251, "head_sha": route.ORIGINAL, "run_attempt": 1,
+               "event": "pull_request", "repository": {"full_name": route.REPO}}
+        calls = []
+        def api(path):
+            calls.append(path)
+            return {"/actions/artifacts/13493038307": artifact,
+                    "/actions/jobs/127829824951": job,
+                    "/actions/runs/42199145251/attempts/1": run,
+                    "/actions/runs/42199145251": dict(run, run_attempt=2)}[path]
+        with mock.patch.object(route, "api", side_effect=api), mock.patch.dict(os.environ, {"GH_TOKEN": "fake"}), \
+             mock.patch.object(route, "open_artifact", side_effect=RuntimeError("download reached")):
+            with self.assertRaisesRegex(RuntimeError, "download reached"):
+                route.original_archive("unused")
+            self.assertNotIn("/actions/runs/42199145251", calls)
+            for obj, key, value in ((job, "run_attempt", 2), (job, "id", 1), (run, "run_attempt", 2),
+                                    (run, "head_sha", "wrong"), (run, "id", 1)):
+                saved = obj[key]
+                obj[key] = value
+                with self.assertRaises(ValueError):
+                    route.original_archive("unused")
+                obj[key] = saved
 
     def test_cross_host_redirect_strips_token(self):
         handler = route.SafeArtifactRedirect()
