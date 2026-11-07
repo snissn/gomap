@@ -1,0 +1,21 @@
+{
+  "approval_comment": 6704017517,
+  "approved_predicate": "primary.bytes",
+  "artifact": {
+    "bytes": 247542595,
+    "id": 13493038307,
+    "sha256": "d18c6cab5b01dfd779e7ae4ae58d731dd98f9bf3c061b43113a7966c7bf87c95"
+  },
+  "base": "200580bc80c1ebd9f3b1ed58addc3d5723601946",
+  "expiry_exclusive_utc": "2026-11-12T00:00:00Z",
+  "follow_up": 5396,
+  "identity_derivation": "After authenticating exact ZIP length and SHA256, derive member digests from its bytes; compare retained manifests and all eight rebuilt executables.",
+  "job": 127829824951,
+  "original_head": "bce7e35959fdfb821877163284f7627d1ebf906e",
+  "original_tree": "04a869ab9ff1404d29f6831481b8543c41563d05",
+  "pull_request": 5397,
+  "repository": "snissn/gomap",
+  "run": 42199145251,
+  "status": "FIXED_ARCHIVE_ROOT_DERIVED_IDENTITIES_REVIEW_REQUIRED",
+  "summary_sha256": "709c0ba41fcd4f96c35def7aa96c357a8868ad9a5002a12a7510c61377fa87ac"
+}

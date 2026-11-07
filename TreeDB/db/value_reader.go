@@ -57,6 +57,23 @@ func (r *valueReader) reconfigure(vlogs tree.SlabReader, leafPageCache *leafPage
 	r.leafPageCache = leafPageCache
 }
 
+// appendReadBindings is used only while a private one-shot capture owns r's
+// current backing. Every field comes directly from the same concrete pointer;
+// no old reader, backing policy or interface-discovery result is cached.
+func (r *valueReader) appendReadBindings() tree.AppendReadBindings {
+	return tree.AppendReadBindings{
+		Reader:        r,
+		Appender:      r,
+		Batcher:       r,
+		ToReader:      r,
+		LeafToReader:  r,
+		LeafToState:   r,
+		LeafView:      r,
+		LeafViewState: r,
+		VerifyMarker:  r,
+	}
+}
+
 func (r valueReader) Read(ptr page.ValuePtr) ([]byte, error) {
 	if r.vlogs == nil {
 		return nil, errors.New("treedb: missing value-log reader")

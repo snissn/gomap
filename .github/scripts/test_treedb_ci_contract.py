@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import re
+import subprocess
+import textwrap
 import unittest
 from pathlib import Path
 
@@ -150,7 +152,7 @@ class TreeDBCIContractTests(unittest.TestCase):
         self.assertIn('/pulls/${PR_NUMBER}', mvcc)
         self.assertIn('performance-observation-only', mvcc)
         self.assertIn(
-            "continue-on-error: ${{ steps.scope.outputs.enforce != 'true' }}",
+            "continue-on-error: ${{ steps.scope.outputs.enforce != 'true' && steps.acceptance_scope.outputs.scoped != 'true' }}",
             mvcc,
         )
         self.assertIn("if: steps.paths.outputs.run == 'true'", mvcc)
@@ -161,6 +163,8 @@ class TreeDBCIContractTests(unittest.TestCase):
         self.assertIn("if: ${{ always() }}", required)
         for job in (
             "mvcc-raw-path-gate",
+            "getversioned-bindings-qualification",
+            "getversioned-bytes-acceptance",
             "vet",
             "test",
             "race",
@@ -170,6 +174,45 @@ class TreeDBCIContractTests(unittest.TestCase):
             self.assertRegex(required, rf"(?m)^      - {re.escape(job)}\s*$")
             self.assertIn(f"needs.{job}.result", required)
         self.assertIn('[[ "$result" == "success" ]]', required)
+
+        bindings = dict(re.findall(r"(?m)^          ([A-Z_]+): \$\{\{ needs\.([\w-]+)\.result \}\}$", required))
+        expected = {"mvcc-raw-path-gate", "getversioned-bindings-qualification", "getversioned-bytes-acceptance", "vet", "test", "race", "perf", "snapshot-iterator-perf"}
+        self.assertEqual(set(bindings.values()), expected)
+        self.assertEqual(len(bindings), len(expected))
+        script = textwrap.dedent(required.split("        run: |\n", 1)[1])
+        env = {name: "success" for name in bindings}
+        def run(values: dict[str, str]) -> int:
+            return subprocess.run(["bash", "-c", script], env=values, capture_output=True, check=False).returncode
+        self.assertEqual(run(env), 0)
+        for name in bindings:
+            for bad in ("failure", "cancelled", "skipped", ""):
+                values = dict(env)
+                values[name] = bad
+                with self.subTest(name=name, result=bad):
+                    self.assertNotEqual(run(values), 0)
+
+
+    def test_ordinary_route_keeps_raw_and_primary_enforced(self) -> None:
+        mvcc = block(self.source, "  mvcc-raw-path-gate:\n", "\n  vet:\n")
+        raw = block(mvcc, "      - name: Compare exact base and head\n", "      - name: Compare public PRIMARY")
+        primary = block(mvcc, "      - name: Compare public PRIMARY", "      - name: Compare frozen COW")
+        self.assertIn("if: steps.paths.outputs.run == 'true'\n", raw)
+        self.assertNotIn("outputs.scoped", raw.split("continue-on-error:", 1)[0])
+        self.assertIn("continue-on-error: ${{ steps.scope.outputs.enforce != 'true' && steps.acceptance_scope.outputs.scoped != 'true' }}", raw)
+        self.assertIn("if: ${{ !cancelled() && steps.paths.outputs.run == 'true' && steps.gate_self_checks.outcome == 'success' && steps.acceptance_scope.outputs.scoped != 'true' }}", primary)
+        self.assertIn('MAX_REGRESSION_PERCENT: "5"', raw)
+        self.assertIn('MAX_BYTES_REGRESSION_PERCENT: "1"', raw)
+        self.assertIn('MAX_BYTES_REGRESSION_ABSOLUTE: "64"', raw)
+        self.assertIn('RUNS: "8"', raw)
+        self.assertIn('./scripts/mvcc_raw_path_gate.sh', raw)
+        self.assertIn('python3 scripts/mvcc_primary_cost_gate.py', primary)
+        self.assertNotIn('continue-on-error', primary)
+        self.assertNotIn('steps.scope.outputs.enforce', primary)
+        self.assertNotIn('getversioned-timing-acceptance', self.source)
+        self.assertNotIn('checks: write', self.source)
+        self.assertNotIn('statuses: write', self.source)
+        upload = block(mvcc, "      - name: Upload benchmark evidence\n")
+        self.assertIn("if: always() && steps.paths.outputs.run == 'true'\n", upload)
 
 
 if __name__ == "__main__":

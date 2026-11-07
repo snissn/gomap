@@ -17,12 +17,194 @@ permissions:
   pull-requests: read
 
 jobs:
+  getversioned-bindings-qualification:
+    name: getversioned bindings qualification (linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      GOMEMLIMIT: 4GiB
+      GOMAXPROCS: 2
+      GOWORK: "off"
+      GOTOOLCHAIN: local
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - name: Initialize fixed qualification output
+        id: initialize
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/getversioned-bindings-qualification"
+          mkdir "$out"
+          printf 'QUALIFICATION_OUT=%s\n' "$out" >> "$GITHUB_ENV"
+          printf 'Output directory only: 1GiB; each generated log: 32MiB; boundary checks.\nGOMEMLIMIT is soft, not a measured RSS bound.\n' > "$out/scope.txt"
+
+      - name: Checkout exact source head
+        id: checkout
+        timeout-minutes: 1
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Setup exact qualification Go
+        timeout-minutes: 2
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.10"
+          check-latest: false
+          cache: false
+
+      - name: Record source and tool context; check fixed consumer
+        shell: bash
+        env:
+          EXPECTED_SOURCE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          out="$QUALIFICATION_OUT"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_HEAD"
+          test -z "$(git status --porcelain)"
+          git show -s --format='head=%H%ntree=%T%nparents=%P' HEAD > "$out/source.txt"
+          sha256sum TreeDB/tree/tree.go TreeDB/db/value_reader.go TreeDB/db/db.go TreeDB/tree/append_read_bindings_test.go TreeDB/db/one_shot_append_bindings_test.go .github/scripts/getversioned_bindings_qualification.py .github/scripts/test_getversioned_bindings_qualification.py .github/workflows/treedb-tests.yml > "$out/source-sha256.txt"
+          timeout --signal=TERM --kill-after=10s 10s go version > "$out/go-version.log" 2>&1
+          test "$(timeout --signal=TERM --kill-after=10s 10s go env GOVERSION)" = go1.26.10
+          timeout --signal=TERM --kill-after=10s 10s go env -json GOVERSION GOOS GOARCH GOAMD64 CGO_ENABLED CC CXX CGO_CFLAGS CGO_CPPFLAGS CGO_CXXFLAGS CGO_LDFLAGS GOFLAGS GOEXPERIMENT GOROOT GOCACHE GOMODCACHE GOTOOLCHAIN GOWORK > "$out/go-env.json"
+          set +e
+          timeout --signal=TERM --kill-after=10s 30s python3 -B .github/scripts/test_getversioned_bindings_qualification.py > "$out/source-controls.log" 2>&1
+          rc=$?
+          set -e
+          printf '%s\n' "$rc" > "$out/source-controls.exit"
+          python3 -B .github/scripts/getversioned_bindings_qualification.py bounds "$out"
+          test "$rc" -eq 0
+
+      - name: Exact focused normal inventory
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$QUALIFICATION_OUT"
+          selector="$(python3 -B .github/scripts/getversioned_bindings_qualification.py selector)"
+          set +e
+          timeout --signal=TERM --kill-after=10s 270s go test -json -tags=treedb_test -count=1 -timeout=240s -run "$selector" ./TreeDB/db ./TreeDB/tree > "$out/normal.jsonl" 2> "$out/normal.stderr"
+          rc=$?
+          set -e
+          printf '%s\n' "$rc" > "$out/normal.exit"
+          python3 -B .github/scripts/getversioned_bindings_qualification.py bounds "$out"
+          test "$rc" -eq 0
+          python3 -B .github/scripts/getversioned_bindings_qualification.py normal "$out" > "$out/normal-inventory.json"
+
+      - name: Exact focused race inventory
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$QUALIFICATION_OUT"
+          selector="$(python3 -B .github/scripts/getversioned_bindings_qualification.py selector)"
+          set +e
+          timeout --signal=TERM --kill-after=10s 390s go test -race -json -tags=treedb_test -count=1 -timeout=360s -run "$selector" ./TreeDB/db ./TreeDB/tree > "$out/race.jsonl" 2> "$out/race.stderr"
+          rc=$?
+          set -e
+          printf '%s\n' "$rc" > "$out/race.exit"
+          python3 -B .github/scripts/getversioned_bindings_qualification.py bounds "$out"
+          test "$rc" -eq 0
+          python3 -B .github/scripts/getversioned_bindings_qualification.py race "$out" > "$out/race-inventory.json"
+
+      - name: Compile optimized DB test ELF and escape diagnostics
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$QUALIFICATION_OUT"
+          set +e
+          # Only this owning package emits -m=2. Stream selection retains the
+          # changed functions and ALL unknown/error lines, with full raw digest.
+          # Left-to-right redirection sends stderr to the pipe, stdout to file.
+          timeout --signal=TERM --kill-after=10s 180s go test -c -tags=treedb_test -gcflags='github.com/snissn/gomap/TreeDB/db=-m=2' -o "$out/db.test" ./TreeDB/db 2>&1 > "$out/db-compiler.stdout" |
+            timeout --signal=TERM --kill-after=10s 200s python3 -B .github/scripts/getversioned_bindings_qualification.py compiler-db "$out" > "$out/db-selection.stdout" 2> "$out/db-selection.stderr"
+          exits=("${PIPESTATUS[@]}")
+          set -e
+          test "${#exits[@]}" -eq 2
+          printf '%s\n' "${exits[0]}" > "$out/db-compiler.exit"
+          printf '%s\n' "${exits[1]}" > "$out/db-selection.exit"
+          python3 -B .github/scripts/getversioned_bindings_qualification.py bounds "$out"
+          test "${exits[0]}" -eq 0
+          test "${exits[1]}" -eq 0
+          sha256sum "$out/db.test" > "$out/db-test-sha256.txt"
+
+      - name: Compile optimized Tree test ELF and escape diagnostics
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$QUALIFICATION_OUT"
+          set +e
+          # Only this owning package emits -m=2. Stream selection retains the
+          # changed functions and ALL unknown/error lines, with full raw digest.
+          # Left-to-right redirection sends stderr to the pipe, stdout to file.
+          timeout --signal=TERM --kill-after=10s 180s go test -c -tags=treedb_test -gcflags='github.com/snissn/gomap/TreeDB/tree=-m=2' -o "$out/tree.test" ./TreeDB/tree 2>&1 > "$out/tree-compiler.stdout" |
+            timeout --signal=TERM --kill-after=10s 200s python3 -B .github/scripts/getversioned_bindings_qualification.py compiler-tree "$out" > "$out/tree-selection.stdout" 2> "$out/tree-selection.stderr"
+          exits=("${PIPESTATUS[@]}")
+          set -e
+          test "${#exits[@]}" -eq 2
+          printf '%s\n' "${exits[0]}" > "$out/tree-compiler.exit"
+          printf '%s\n' "${exits[1]}" > "$out/tree-selection.exit"
+          python3 -B .github/scripts/getversioned_bindings_qualification.py bounds "$out"
+          test "${exits[0]}" -eq 0
+          test "${exits[1]}" -eq 0
+          sha256sum "$out/tree.test" > "$out/tree-test-sha256.txt"
+
+      - name: Capture stock optimized symbols and exact structural text
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$QUALIFICATION_OUT"
+          set +e
+          timeout --signal=TERM --kill-after=10s 60s bash -euo pipefail -c '
+            out="$QUALIFICATION_OUT"
+            go tool nm -size "$out/db.test" > "$out/db.nm"
+            go tool nm -size "$out/tree.test" > "$out/tree.nm"
+            go tool objdump -s "^github.com/snissn/gomap/TreeDB/tree\.\(\*Tree\)\.Reset$" "$out/tree.test" > "$out/tree-reset.objdump"
+            go tool objdump -s "^github.com/snissn/gomap/TreeDB/tree\.\(\*Tree\)\.ResetAppendReadBindings$" "$out/tree.test" > "$out/tree-bindings.objdump"
+            go tool objdump -s "^github.com/snissn/gomap/TreeDB/db\.\(\*DB\)\.captureSnapshotForReadWithValueLogPublicationLockHeld$" "$out/db.test" > "$out/db-capture.objdump"
+            go tool objdump -s "^github.com/snissn/gomap/TreeDB/db\.\(\*valueReader\)\.appendReadBindings$" "$out/db.test" > "$out/db-bindings.objdump"
+            if ! test -s "$out/tree-reset.objdump" || ! test -s "$out/tree-bindings.objdump" || ! test -s "$out/db-capture.objdump"; then
+              printf "INCONCLUSIVE: required optimized symbol text absent; no -l fallback.\n" > "$out/structural-status.txt"
+              exit 1
+            fi
+            printf "COMPILED_TEXT_CAPTURED_REVIEW_PENDING\nPrivate constructor may be inlined. Inspect capture text/compiler diagnostics.\nTwelve source discovery assertions are not twelve machine calls. No escape/structural acceptance from command success.\n" > "$out/structural-status.txt"
+          ' > "$out/object-tools.stdout" 2> "$out/object-tools.stderr"
+          rc=$?
+          set -e
+          printf '%s\n' "$rc" > "$out/object-tools.exit"
+          python3 -B .github/scripts/getversioned_bindings_qualification.py bounds "$out"
+          test "$rc" -eq 0
+
+      - name: Retain final raw output ledger on success or failure
+        if: always() && steps.initialize.outcome == 'success' && steps.checkout.outcome == 'success'
+        shell: bash
+        run: |
+          timeout --signal=TERM --kill-after=10s 30s python3 -B .github/scripts/getversioned_bindings_qualification.py manifest "$QUALIFICATION_OUT"
+
+      - name: Upload fixed qualification raw outputs
+        if: always() && steps.initialize.outcome == 'success'
+        timeout-minutes: 2
+        uses: actions/upload-artifact@v4
+        with:
+          name: getversioned-bindings-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/getversioned-bindings-qualification
+          if-no-files-found: error
+          retention-days: 14
+
   mvcc-raw-path-gate:
     name: mvcc raw-path gate (linux)
     # Admin-selected PR and single-job disposable runner; fork/other PRs stay hosted.
     # Drain older runs before arming; clear the label then PR after the run.
     runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && vars.TREEDB_PERF_RUNNER_LABEL != '' && vars.TREEDB_PERF_RUNNER_PR != '' && vars.TREEDB_PERF_RUNNER_PR == format('{0}', github.event.pull_request.number) && vars.TREEDB_PERF_RUNNER_LABEL || 'ubuntu-24.04' }}
     timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+      pull-requests: read
+      issues: read
+    outputs:
+      scoped_acceptance: ${{ steps.acceptance_scope.outputs.scoped }}
     env:
       MVCC_GATE_PATH_RE: '^((TreeDB/)|scripts/mvcc_(raw_path_gate|adapter_overhead_gate|closeout_matrix|candidate_checkout_guard)\.sh$|scripts/(mvcc_(raw_sync_context|storage_context)|mvcc_primary_cost_gate|cow_successor_workspace_diagnostic|pool_pressure_stats_diagnostic)\.py$|\.github/scripts/(check_mvcc_(raw_path|adapter_overhead)_gate|summarize_mvcc_closeout|test_(mvcc_(raw_sync_context|storage_context|raw_path_equivalence|benchmark_pairing|candidate_checkout_guard|primary_cost_gate)|summarize_mvcc_closeout)|test_cow_successor_workspace_diagnostic|test_pool_pressure_stats_diagnostic|test_treedb_ci_contract|test_treedb_windows_core_headroom)\.py$|\.github/workflows/treedb-tests\.yml$)'
       COW_SUCCESSOR_PATH_RE: '^(TreeDB/caching/(cow_(read(_workspace)?|cut|successor_workspace_test)|point_successor)\.go|TreeDB/mvcc/cow_successor_workspace_external_test\.go|scripts/(cow_successor_workspace_diagnostic|mvcc_primary_cost_gate)\.py|\.github/scripts/test_cow_successor_workspace_diagnostic\.py)$'
@@ -109,6 +291,16 @@ jobs:
             echo "No MVCC/raw-gate relevant path changed; skipping."
           fi
 
+      - name: Select single-use reviewed bytes scope
+        id: acceptance_scope
+        if: steps.paths.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          python3 .github/scripts/getversioned_scoped_acceptance.py scope \
+            --event "$GITHUB_EVENT_PATH" --output "$GITHUB_OUTPUT"
+
       - name: Setup Go
         if: steps.paths.outputs.run == 'true'
         uses: actions/setup-go@v5
@@ -145,6 +337,7 @@ jobs:
           python3 .github/scripts/test_summarize_mvcc_closeout.py
           python3 .github/scripts/test_mvcc_candidate_checkout_guard.py
           python3 .github/scripts/test_treedb_ci_contract.py
+          python3 .github/scripts/test_getversioned_scoped_acceptance.py
           python3 .github/scripts/test_treedb_windows_core_headroom.py
           for path in \
             TreeDB/snapshot_seek_iterator_bench_test.go \
@@ -179,7 +372,7 @@ jobs:
 
       - name: Compare exact base and head
         if: steps.paths.outputs.run == 'true'
-        continue-on-error: ${{ steps.scope.outputs.enforce != 'true' }}
+        continue-on-error: ${{ steps.scope.outputs.enforce != 'true' && steps.acceptance_scope.outputs.scoped != 'true' }}
         env:
           BASELINE_HASH: ${{ steps.scope.outputs.base_sha }}
           CANDIDATE_HASH: ${{ steps.scope.outputs.head_sha }}
@@ -202,7 +395,7 @@ jobs:
           ./scripts/mvcc_raw_path_gate.sh
 
       - name: Compare public PRIMARY replacement cost
-        if: ${{ !cancelled() && steps.paths.outputs.run == 'true' && steps.gate_self_checks.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.paths.outputs.run == 'true' && steps.gate_self_checks.outcome == 'success' && steps.acceptance_scope.outputs.scoped != 'true' }}
         env:
           BASE_SHA: ${{ steps.scope.outputs.base_sha }}
           HEAD_SHA: ${{ steps.scope.outputs.head_sha }}
@@ -212,6 +405,24 @@ jobs:
             --root "$GITHUB_WORKSPACE" \
             --baseline "$BASE_SHA" --candidate "$HEAD_SHA" \
             --output "$RUNNER_TEMP/mvcc-raw-path-gate/primary"
+
+      - name: Authenticate original evidence and compile identity-only executables
+        if: steps.acceptance_scope.outputs.scoped == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          python3 .github/scripts/getversioned_scoped_acceptance.py prepare \
+            --event "$GITHUB_EVENT_PATH" --output-dir "$RUNNER_TEMP/getversioned-acceptance"
+
+      - name: Upload single-use identity preparation
+        if: always() && steps.acceptance_scope.outputs.scoped == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: getversioned-scoped-prepared-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/getversioned-acceptance/receipt.json
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Compare frozen COW successor diagnostic
         if: ${{ !cancelled() && steps.paths.outputs.cow_successor == 'true' && steps.gate_self_checks.outcome == 'success' }}
@@ -313,6 +524,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           python3 .github/scripts/test_treedb_ci_contract.py
+          python3 .github/scripts/test_getversioned_scoped_acceptance.py
           python3 .github/scripts/test_treedb_windows_core_headroom.py
           python3 .github/scripts/test_ci_impact.py
           python3 scripts/r1_collection_source_test.py
@@ -1234,11 +1446,87 @@ jobs:
           retention-days: 30
           if-no-files-found: warn
 
+  getversioned-bytes-acceptance:
+    name: GetVersioned single-use bytes acceptance
+    if: ${{ always() }}
+    needs:
+      - mvcc-raw-path-gate
+      - getversioned-bindings-qualification
+      - vet
+      - test
+      - race
+      - perf
+      - snapshot-iterator-perf
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+      pull-requests: read
+      issues: read
+    steps:
+      - name: Checkout exact acceptance source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+      - name: Require original other jobs and authenticated exact-run decision
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PYTHONDONTWRITEBYTECODE: "1"
+          SCOPED_ACCEPTANCE: ${{ needs.mvcc-raw-path-gate.outputs.scoped_acceptance }}
+          MVCC_RESULT: ${{ needs.mvcc-raw-path-gate.result }}
+          GETVERSIONED_BINDINGS_RESULT: ${{ needs.getversioned-bindings-qualification.result }}
+          VET_RESULT: ${{ needs.vet.result }}
+          TEST_RESULT: ${{ needs.test.result }}
+          RACE_RESULT: ${{ needs.race.result }}
+          PERF_RESULT: ${{ needs.perf.result }}
+          SNAPSHOT_ITERATOR_PERF_RESULT: ${{ needs.snapshot-iterator-perf.result }}
+        run: |
+          set -euo pipefail
+          if [[ "$SCOPED_ACCEPTANCE" != "true" ]]; then
+            echo "Single-use bytes acceptance NOT_APPLICABLE; original required results remain enforced."
+            exit 0
+          fi
+          for result in \
+            "$MVCC_RESULT" \
+            "$GETVERSIONED_BINDINGS_RESULT" \
+            "$VET_RESULT" \
+            "$TEST_RESULT" \
+            "$RACE_RESULT" \
+            "$PERF_RESULT" \
+            "$SNAPSHOT_ITERATOR_PERF_RESULT"; do
+            if [[ "$result" != "success" ]]; then
+              echo "Other prerequisite is ${result}; no bytes acceptance." >&2
+              exit 1
+            fi
+          done
+          python3 .github/scripts/getversioned_scoped_acceptance.py accept \
+            --event "$GITHUB_EVENT_PATH" \
+            --prepared-dir "$RUNNER_TEMP/getversioned-acceptance" \
+            --output "$RUNNER_TEMP/getversioned-acceptance-decision.json"
+          {
+            echo "### OWNER_ACCEPTED_BYTES_OBSERVATION"
+            echo "Original measurement verdict remains FAIL; no byte improvement or causal explanation is claimed."
+            cat "$RUNNER_TEMP/getversioned-acceptance-decision.json"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload distinct acceptance decision
+        if: always() && needs.mvcc-raw-path-gate.outputs.scoped_acceptance == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: getversioned-scoped-decision-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/getversioned-acceptance-decision.json
+          if-no-files-found: error
+          retention-days: 14
+
   required:
     name: TreeDB required gate
     if: ${{ always() }}
     needs:
       - mvcc-raw-path-gate
+      - getversioned-bytes-acceptance
+      - getversioned-bindings-qualification
       - vet
       - test
       - race
@@ -1251,6 +1539,8 @@ jobs:
         shell: bash
         env:
           MVCC_RESULT: ${{ needs.mvcc-raw-path-gate.result }}
+          GETVERSIONED_BYTES_ACCEPTANCE_RESULT: ${{ needs.getversioned-bytes-acceptance.result }}
+          GETVERSIONED_BINDINGS_RESULT: ${{ needs.getversioned-bindings-qualification.result }}
           VET_RESULT: ${{ needs.vet.result }}
           TEST_RESULT: ${{ needs.test.result }}
           RACE_RESULT: ${{ needs.race.result }}
@@ -1261,6 +1551,8 @@ jobs:
           failed=false
           for result in \
             "$MVCC_RESULT" \
+            "$GETVERSIONED_BYTES_ACCEPTANCE_RESULT" \
+            "$GETVERSIONED_BINDINGS_RESULT" \
             "$VET_RESULT" \
             "$TEST_RESULT" \
             "$RACE_RESULT" \
