@@ -197,8 +197,10 @@ measurements remain evidence. Neither disposition supplies product acceptance,
 and there is no selective rerun. PASS addresses this small public Stats workload,
 not server memory, retained-resource equilibrium, or final storage qualification.
 
-Under the existing uploaded `mvcc-raw-path-gate-HEAD` artifact, `pressure-stats/`
-contains `bindings.json` (source, fixture, runner/helper, binary identities and
+Under the compact `mvcc-raw-path-evidence-HEAD-RUN-ATTEMPT` artifact, `pressure-stats/`
+retains the raw diagnostic evidence for seven days, excluding compiled `*.test`
+executables and `tmp/` scratch. This is not an executable archive. It contains
+`bindings.json` (source, fixture, runner/helper, binary identities and
 fixed policy), `runtime-inputs-before.json`/`after.json` (actual ELF loader and
 library hashes), separate command stdout/stderr plus `commands.json` receipts,
 all six chronological `samples.json` rows, complete quiet acquisition/process
