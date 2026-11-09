@@ -14,7 +14,26 @@ After the original paired measurements and checker, the raw-path gate retains
 
 Run `python3 -B .github/scripts/test_mvcc_raw_path_equivalence.py` for the
 no-Go digest, retention and exit-status controls. CI uploads the gate output
-directory, including these exact binaries, with its existing artifact step.
+directory as compact evidence, with every `*.test` executable and every `tmp/`
+subtree excluded. The runner still builds, hashes and uses the same executables;
+measurements, diagnostics, checker thresholds and original exit status do not
+change. Raw samples, summaries, command receipts, source/runtime bindings,
+binary digests and any generated profiles remain in the upload on success or
+failure. Disposable databases and build scratch under `tmp/` do not.
+
+The artifact is named `mvcc-raw-path-evidence-HEAD-RUN-ATTEMPT`, has seven-day
+retention, and never overwrites an earlier attempt. It is **not an executable
+archive**: `measured-binaries.json` describes the runner-local copies, not files
+included in the compact upload. Digests do not substitute for original ELF bytes
+for later disassembly, exact-program replay or archive-based acceptance. Profiles
+remain available, but analyses requiring original binaries need separately
+retained executables. Archive any evidence needed beyond seven days separately.
+
+This upload policy does not delete or rewrite historical artifacts. In particular,
+artifact `13493038307` from run `42199145251` is the fixed original archive bound
+by `.github/ci/getversioned-bce-bytes-acceptance/original-evidence.json`; preserve
+that archive and its original failure/acceptance history. The scoped verifier
+continues to authenticate that original archive, not the new compact upload.
 
 ## Public PRIMARY runtime attribution
 

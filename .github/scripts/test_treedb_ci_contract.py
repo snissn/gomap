@@ -191,6 +191,29 @@ class TreeDBCIContractTests(unittest.TestCase):
                 with self.subTest(name=name, result=bad):
                     self.assertNotEqual(run(values), 0)
 
+    def test_mvcc_upload_retains_compact_evidence_without_executables_or_scratch(self) -> None:
+        mvcc = block(self.source, "  mvcc-raw-path-gate:\n", "\n  vet:\n")
+        upload = block(mvcc, "      - name: Upload benchmark evidence\n")
+        self.assertIn("if: always() && steps.paths.outputs.run == 'true'\n", upload)
+        self.assertIn("uses: actions/upload-artifact@v4", upload)
+        self.assertIn(
+            "name: mvcc-raw-path-evidence-${{ steps.scope.outputs.head_sha }}-${{ github.run_id }}-${{ github.run_attempt }}\n",
+            upload,
+        )
+        # Keep the output root so new raw diagnostics are retained by default.
+        # Exclude every owning runner's test ELF and temporary database subtree.
+        paths = block(upload, "          path: |\n", "          if-no-files-found:")
+        self.assertEqual(
+            [line.strip() for line in paths.splitlines()[1:]],
+            ["${{ runner.temp }}/mvcc-raw-path-gate",
+             "!${{ runner.temp }}/mvcc-raw-path-gate/**/*.test",
+             "!${{ runner.temp }}/mvcc-raw-path-gate/**/tmp/**"],
+        )
+        self.assertIn("if-no-files-found: error\n", upload)
+        self.assertIn("retention-days: 7\n", upload)
+        self.assertIn("overwrite: false\n", upload)
+        self.assertNotIn("continue-on-error", upload)
+
 
     def test_ordinary_route_keeps_raw_and_primary_enforced(self) -> None:
         mvcc = block(self.source, "  mvcc-raw-path-gate:\n", "\n  vet:\n")
