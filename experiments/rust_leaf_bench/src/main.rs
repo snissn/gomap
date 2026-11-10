@@ -1,7 +1,12 @@
 use std::cmp::Ordering;
 use std::env;
+use std::ffi::{c_int, c_void};
 use std::hint::black_box;
 use std::time::Instant;
+
+extern "C" {
+    fn memcmp(a: *const c_void, b: *const c_void, n: usize) -> c_int;
+}
 
 const PAGE_SIZE: usize = 4096;
 const NODE_HEADER_SIZE: usize = 16;
@@ -24,9 +29,16 @@ const LEAF_COLUMNAR_PREFIX_V2_META_SIZE: usize = 7;
 struct Options {
     prefix: bool,
     columnar: bool,
+    key_kind: KeyKind,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum KeyKind {
+    Bytes,
+    FixedBe8,
+}
+
+#[derive(Clone, Copy, Default)]
 struct ColumnarEntry {
     key_off: usize,
     key_len: usize,
@@ -37,24 +49,80 @@ struct ColumnarEntry {
 }
 
 struct Builder {
-    data: Vec<u8>,
+    data: [u8; PAGE_SIZE],
     opts: Options,
     count: usize,
     heap_start: usize,
     dir_end: usize,
     leaf_index: usize,
-    prev_key: Vec<u8>,
-    arena: Vec<u8>,
-    value_arena: Vec<u8>,
-    entries: Vec<ColumnarEntry>,
+    prev_key: [u8; BENCH_KEY_SIZE],
+    prev_key_len: usize,
+    arena: [u8; PAGE_SIZE],
+    value_arena: [u8; PAGE_SIZE],
+    arena_len: usize,
+    value_arena_len: usize,
+    entries: [ColumnarEntry; BENCH_KEY_COUNT],
+    entries_len: usize,
     key_bytes: usize,
     value_bytes: usize,
 }
 
 struct Page {
-    data: Vec<u8>,
+    data: [u8; PAGE_SIZE],
     opts: Options,
     count: usize,
+}
+
+struct BytesTable {
+    data: Vec<u8>,
+    count: usize,
+    len: usize,
+}
+
+struct VarBytesTable {
+    data: Vec<u8>,
+    offsets: Vec<usize>,
+}
+
+impl VarBytesTable {
+    fn with_capacity(count: usize, bytes: usize) -> Self {
+        Self {
+            data: Vec::with_capacity(bytes),
+            offsets: Vec::with_capacity(count + 1),
+        }
+    }
+
+    fn push(&mut self, value: &[u8]) {
+        if self.offsets.is_empty() {
+            self.offsets.push(0);
+        }
+        self.data.extend_from_slice(value);
+        self.offsets.push(self.data.len());
+    }
+
+    #[inline(always)]
+    fn len(&self) -> usize {
+        self.offsets.len() - 1
+    }
+
+    #[inline(always)]
+    fn at(&self, i: usize) -> &[u8] {
+        &self.data[self.offsets[i]..self.offsets[i + 1]]
+    }
+}
+
+impl BytesTable {
+    #[inline(always)]
+    fn at(&self, i: usize) -> &[u8] {
+        let off = i * self.len;
+        &self.data[off..off + self.len]
+    }
+
+    #[inline(always)]
+    fn at_mut(&mut self, i: usize) -> &mut [u8] {
+        let off = i * self.len;
+        &mut self.data[off..off + self.len]
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -131,10 +199,18 @@ fn main() {
         });
         ran = true;
     }
+    if case_enabled(&selected_case, "search/columnar_variable_len") {
+        let (mut page, queries) = setup_search_columnar_variable_len();
+        run_case("search/columnar_variable_len", search_iters, || {
+            bench_search_prepared_var(search_iters, &mut page, &queries)
+        });
+        ran = true;
+    }
     if case_enabled(&selected_case, "search/prefix_v2") {
         let (mut page, queries) = setup_search_prefix_variant(Options {
             prefix: true,
             columnar: false,
+            key_kind: KeyKind::Bytes,
         });
         run_case("search/prefix_v2", search_iters, || {
             bench_search_prepared(search_iters, &mut page, &queries)
@@ -145,6 +221,7 @@ fn main() {
         let (mut page, queries) = setup_search_prefix_variant(Options {
             prefix: true,
             columnar: true,
+            key_kind: KeyKind::Bytes,
         });
         run_case("search/columnar_prefix_v2", search_iters, || {
             bench_search_prepared(search_iters, &mut page, &queries)
@@ -193,11 +270,11 @@ where
 }
 
 #[cfg_attr(feature = "profile-attribution", inline(never))]
-fn make_bench_keys(count: usize, prefix_bytes: usize) -> Vec<Vec<u8>> {
+fn make_bench_keys(count: usize, prefix_bytes: usize) -> BytesTable {
     let mut keys = Vec::with_capacity(count);
     let mut rng = Rng::new(1);
     for _ in 0..count {
-        let mut key = vec![0u8; BENCH_KEY_SIZE];
+        let mut key = [0u8; BENCH_KEY_SIZE];
         let p = prefix_bytes.min(BENCH_KEY_SIZE);
         for b in &mut key[..p] {
             *b = 0x42;
@@ -206,47 +283,64 @@ fn make_bench_keys(count: usize, prefix_bytes: usize) -> Vec<Vec<u8>> {
         keys.push(key);
     }
     keys.sort();
-    keys
-}
 
-#[cfg_attr(feature = "profile-attribution", inline(never))]
-fn make_bench_values(count: usize) -> Vec<Vec<u8>> {
-    let mut values = Vec::with_capacity(count);
-    let mut rng = Rng::new(2);
-    for _ in 0..count {
-        let mut value = vec![0u8; BENCH_VALUE_SIZE];
-        rng.fill(&mut value);
-        values.push(value);
+    let mut data = Vec::with_capacity(count * BENCH_KEY_SIZE);
+    for key in keys {
+        data.extend_from_slice(&key);
     }
-    values
-}
-
-fn be8(v: u64) -> Vec<u8> {
-    v.to_be_bytes().to_vec()
-}
-
-fn be16(a: u64, b: u64) -> Vec<u8> {
-    let mut out = Vec::with_capacity(16);
-    out.extend_from_slice(&a.to_be_bytes());
-    out.extend_from_slice(&b.to_be_bytes());
-    out
+    BytesTable {
+        data,
+        count,
+        len: BENCH_KEY_SIZE,
+    }
 }
 
 #[cfg_attr(feature = "profile-attribution", inline(never))]
-fn bench_builder_prepared(iters: usize, prefix: bool, keys: &[Vec<u8>], values: &[Vec<u8>]) -> u64 {
+fn make_bench_values(count: usize) -> BytesTable {
+    let mut table = BytesTable {
+        data: vec![0u8; count * BENCH_VALUE_SIZE],
+        count,
+        len: BENCH_VALUE_SIZE,
+    };
+    let mut rng = Rng::new(2);
+    for i in 0..count {
+        rng.fill(table.at_mut(i));
+    }
+    table
+}
+
+fn fill_be8(dst: &mut [u8], v: u64) {
+    dst[..8].copy_from_slice(&v.to_be_bytes());
+}
+
+fn fill_be16(dst: &mut [u8], a: u64, b: u64) {
+    fill_be8(&mut dst[..8], a);
+    fill_be8(&mut dst[8..16], b);
+}
+
+#[cfg_attr(feature = "profile-attribution", inline(never))]
+fn bench_builder_prepared(
+    iters: usize,
+    prefix: bool,
+    keys: &BytesTable,
+    values: &BytesTable,
+) -> u64 {
     let mut builder = Builder::new(Options {
         prefix,
         columnar: false,
+        key_kind: KeyKind::Bytes,
     });
     let mut checksum = 0u64;
     let mut i = 0usize;
     while i < iters {
-        let idx = i & (keys.len() - 1);
+        let idx = i & (keys.count - 1);
+        let key = keys.at(idx);
+        let value = values.at(idx);
         let (entry_size, prefix_len, suffix_len) =
-            builder.leaf_entry_size_with_prefix(&keys[idx], &values[idx], FLAG_INLINE);
+            builder.leaf_entry_size_with_prefix(key, value, FLAG_INLINE);
         match builder.add_leaf_entry_with_prefix(
-            &keys[idx],
-            &values[idx],
+            key,
+            value,
             FLAG_INLINE,
             entry_size,
             prefix_len,
@@ -260,6 +354,7 @@ fn bench_builder_prepared(iters: usize, prefix: bool, keys: &[Vec<u8>], values: 
                 builder.reset(Options {
                     prefix,
                     columnar: false,
+                    key_kind: KeyKind::Bytes,
                 });
             }
         }
@@ -268,74 +363,151 @@ fn bench_builder_prepared(iters: usize, prefix: bool, keys: &[Vec<u8>], values: 
 }
 
 #[cfg_attr(feature = "profile-attribution", inline(never))]
-fn setup_search_columnar(fixed_be8: bool) -> (Page, Vec<Vec<u8>>) {
+fn setup_search_columnar(fixed_be8: bool) -> (Page, BytesTable) {
     let mut builder = Builder::new(Options {
         prefix: false,
         columnar: true,
+        key_kind: if fixed_be8 {
+            KeyKind::FixedBe8
+        } else {
+            KeyKind::Bytes
+        },
     });
     let mut inserted = 0usize;
+    let mut key = [0u8; 16];
     for i in 0..BENCH_KEY_COUNT {
-        let key = if fixed_be8 {
-            be8(i as u64)
+        let key_len = if fixed_be8 {
+            fill_be8(&mut key[..8], i as u64);
+            8
         } else {
-            be16(i as u64, (i as u64).wrapping_mul(17).wrapping_add(3))
+            fill_be16(
+                &mut key,
+                i as u64,
+                (i as u64).wrapping_mul(17).wrapping_add(3),
+            );
+            16
         };
-        if builder.add_leaf_entry(&key, &[], FLAG_POINTER).is_err() {
+        if builder
+            .add_leaf_entry(&key[..key_len], &[], FLAG_POINTER)
+            .is_err()
+        {
             break;
         }
         inserted += 1;
     }
     let page = builder.finish();
-    let mut queries = Vec::with_capacity(inserted);
+    let query_len = if fixed_be8 { 8 } else { 16 };
+    let mut queries = BytesTable {
+        data: vec![0u8; inserted * query_len],
+        count: inserted,
+        len: query_len,
+    };
     for i in 0..inserted {
-        queries.push(if fixed_be8 {
-            be8(i as u64)
+        if fixed_be8 {
+            fill_be8(queries.at_mut(i), i as u64);
         } else {
-            be16(i as u64, (i as u64).wrapping_mul(17).wrapping_add(3))
-        });
+            fill_be16(
+                queries.at_mut(i),
+                i as u64,
+                (i as u64).wrapping_mul(17).wrapping_add(3),
+            );
+        }
     }
     (page, queries)
 }
 
 #[cfg_attr(feature = "profile-attribution", inline(never))]
-fn bench_search_prepared(iters: usize, page: &mut Page, queries: &[Vec<u8>]) -> u64 {
+fn setup_search_columnar_variable_len() -> (Page, VarBytesTable) {
+    let mut builder = Builder::new(Options {
+        prefix: false,
+        columnar: true,
+        key_kind: KeyKind::Bytes,
+    });
+    let mut inserted = 0usize;
+    let mut key = [0u8; BENCH_KEY_SIZE];
+    for i in 0..BENCH_KEY_COUNT {
+        let key_len = fill_variable_len_key(&mut key, i);
+        if builder
+            .add_leaf_entry(&key[..key_len], &[], FLAG_POINTER)
+            .is_err()
+        {
+            break;
+        }
+        inserted += 1;
+    }
+
+    let page = builder.finish();
+    let mut queries = VarBytesTable::with_capacity(inserted, inserted * BENCH_KEY_SIZE);
+    for i in 0..inserted {
+        let key_len = fill_variable_len_key(&mut key, i);
+        queries.push(&key[..key_len]);
+    }
+    (page, queries)
+}
+
+fn fill_variable_len_key(dst: &mut [u8; BENCH_KEY_SIZE], i: usize) -> usize {
+    let key_len = 9 + (i % (BENCH_KEY_SIZE - 8));
+    fill_be8(&mut dst[..8], i as u64);
+    for (j, b) in dst[8..key_len].iter_mut().enumerate() {
+        *b = i.wrapping_mul(31).wrapping_add(j) as u8;
+    }
+    key_len
+}
+
+#[cfg_attr(feature = "profile-attribution", inline(never))]
+fn bench_search_prepared(iters: usize, page: &mut Page, queries: &BytesTable) -> u64 {
     let mut checksum = 0u64;
     for i in 0..iters {
-        let (idx, found) = page.search_leaf(black_box(&queries[i % queries.len()]));
+        let (idx, found) = page.search_leaf(black_box(queries.at(i % queries.count)));
         checksum = checksum.wrapping_add(idx as u64 + found as u64);
     }
     checksum
 }
 
 #[cfg_attr(feature = "profile-attribution", inline(never))]
-fn setup_search_prefix_variant(opts: Options) -> (Page, Vec<Vec<u8>>) {
+fn bench_search_prepared_var(iters: usize, page: &mut Page, queries: &VarBytesTable) -> u64 {
+    let mut checksum = 0u64;
+    for i in 0..iters {
+        let (idx, found) = page.search_leaf(black_box(queries.at(i % queries.len())));
+        checksum = checksum.wrapping_add(idx as u64 + found as u64);
+    }
+    checksum
+}
+
+#[cfg_attr(feature = "profile-attribution", inline(never))]
+fn setup_search_prefix_variant(opts: Options) -> (Page, BytesTable) {
     const KEY_COUNT: usize = 128;
     let keys = make_bench_keys(KEY_COUNT, 24);
     let mut builder = Builder::new(opts);
-    for (i, key) in keys.iter().enumerate() {
+    for i in 0..keys.count {
+        let key = keys.at(i);
         let flags = match i % 3 {
             0 => FLAG_INLINE,
             1 => FLAG_POINTER,
             _ => FLAG_TOMBSTONE,
         };
+        let value = [i as u8, i.wrapping_add(1) as u8];
         let value = if flags == FLAG_INLINE {
-            vec![i as u8, i.wrapping_add(1) as u8]
+            &value[..]
         } else {
-            Vec::new()
+            &[]
         };
         builder
-            .add_leaf_entry(key, &value, flags)
+            .add_leaf_entry(key, value, flags)
             .expect("prefix setup should fit");
     }
     let page = builder.finish();
-    let mut queries = Vec::with_capacity(4096);
+    let mut queries = BytesTable {
+        data: vec![0u8; 4096 * BENCH_KEY_SIZE],
+        count: 4096,
+        len: BENCH_KEY_SIZE,
+    };
     for i in 0..4096 {
-        let mut q = keys[i % keys.len()].clone();
-        if i & 1 == 1 && !q.is_empty() {
-            let last = q.len() - 1;
-            q[last] ^= 0x01;
+        let q = queries.at_mut(i);
+        q.copy_from_slice(keys.at(i % keys.count));
+        if i & 1 == 1 {
+            q[BENCH_KEY_SIZE - 1] ^= 0x01;
         }
-        queries.push(q);
     }
     (page, queries)
 }
@@ -347,16 +519,20 @@ impl Builder {
     #[cfg_attr(feature = "profile-attribution", inline(never))]
     fn new(opts: Options) -> Self {
         Self {
-            data: vec![0u8; PAGE_SIZE],
+            data: [0u8; PAGE_SIZE],
             opts,
             count: 0,
             heap_start: PAGE_SIZE,
             dir_end: NODE_HEADER_SIZE,
             leaf_index: 0,
-            prev_key: Vec::new(),
-            arena: Vec::new(),
-            value_arena: Vec::new(),
-            entries: Vec::new(),
+            prev_key: [0u8; BENCH_KEY_SIZE],
+            prev_key_len: 0,
+            arena: [0u8; PAGE_SIZE],
+            value_arena: [0u8; PAGE_SIZE],
+            arena_len: 0,
+            value_arena_len: 0,
+            entries: [ColumnarEntry::default(); BENCH_KEY_COUNT],
+            entries_len: 0,
             key_bytes: 0,
             value_bytes: 0,
         }
@@ -369,10 +545,10 @@ impl Builder {
         self.heap_start = PAGE_SIZE;
         self.dir_end = NODE_HEADER_SIZE;
         self.leaf_index = 0;
-        self.prev_key.clear();
-        self.arena.clear();
-        self.value_arena.clear();
-        self.entries.clear();
+        self.prev_key_len = 0;
+        self.arena_len = 0;
+        self.value_arena_len = 0;
+        self.entries_len = 0;
         self.key_bytes = 0;
         self.value_bytes = 0;
     }
@@ -395,9 +571,9 @@ impl Builder {
         let mut suffix_len = key.len();
         if self.opts.prefix
             && self.leaf_index % LEAF_PREFIX_RESTART_INTERVAL != 0
-            && !self.prev_key.is_empty()
+            && self.prev_key_len > 0
         {
-            prefix_len = shared_prefix_len(key, &self.prev_key).min(key.len());
+            prefix_len = shared_prefix_len(key, &self.prev_key[..self.prev_key_len]).min(key.len());
             suffix_len = key.len() - prefix_len;
         }
 
@@ -499,8 +675,8 @@ impl Builder {
         self.count += 1;
         self.leaf_index += 1;
         if self.opts.prefix {
-            self.prev_key.clear();
-            self.prev_key.extend_from_slice(key);
+            self.prev_key[..key.len()].copy_from_slice(key);
+            self.prev_key_len = key.len();
         }
         Ok(())
     }
@@ -518,22 +694,26 @@ impl Builder {
             return Err(ErrFull);
         }
 
-        let key_off = self.arena.len();
-        self.arena.extend_from_slice(key);
-        let value_off = self.arena.len();
+        let key_off = self.arena_len;
+        self.arena[self.arena_len..self.arena_len + key.len()].copy_from_slice(key);
+        self.arena_len += key.len();
+        let value_off = self.arena_len;
         if flags & FLAG_POINTER != 0 {
-            self.arena.resize(self.arena.len() + VALUE_PTR_SIZE, 0);
+            self.arena[self.arena_len..self.arena_len + VALUE_PTR_SIZE].fill(0);
+            self.arena_len += VALUE_PTR_SIZE;
         } else if flags & FLAG_TOMBSTONE == 0 {
-            self.arena.extend_from_slice(value);
+            self.arena[self.arena_len..self.arena_len + value.len()].copy_from_slice(value);
+            self.arena_len += value.len();
         }
-        self.entries.push(ColumnarEntry {
+        self.entries[self.entries_len] = ColumnarEntry {
             key_off,
             key_len: key.len(),
             value_off,
             value_len: value.len(),
             flags,
             prefix_len: 0,
-        });
+        };
+        self.entries_len += 1;
         self.key_bytes += key.len();
         self.value_bytes += val_size;
         self.dir_end += DIRECTORY_ENTRY_SIZE + LEAF_COLUMNAR_V2_META_SIZE;
@@ -566,31 +746,35 @@ impl Builder {
             return Err(ErrFull);
         }
 
-        let key_off = self.arena.len();
-        self.arena.extend_from_slice(&key[prefix_len..]);
-        let value_off = self.value_arena.len();
+        let key_off = self.arena_len;
+        self.arena[self.arena_len..self.arena_len + suffix_len].copy_from_slice(&key[prefix_len..]);
+        self.arena_len += suffix_len;
+        let value_off = self.value_arena_len;
         if flags & FLAG_POINTER != 0 {
-            self.value_arena
-                .resize(self.value_arena.len() + VALUE_PTR_SIZE, 0);
+            self.value_arena[self.value_arena_len..self.value_arena_len + VALUE_PTR_SIZE].fill(0);
+            self.value_arena_len += VALUE_PTR_SIZE;
         } else if flags & FLAG_TOMBSTONE == 0 {
-            self.value_arena.extend_from_slice(value);
+            self.value_arena[self.value_arena_len..self.value_arena_len + value.len()]
+                .copy_from_slice(value);
+            self.value_arena_len += value.len();
         }
-        self.entries.push(ColumnarEntry {
+        self.entries[self.entries_len] = ColumnarEntry {
             key_off,
             key_len: suffix_len,
             value_off,
             value_len: value.len(),
             flags,
             prefix_len,
-        });
+        };
+        self.entries_len += 1;
         self.key_bytes = next_key_bytes;
         self.value_bytes = next_value_bytes;
         self.count = next_count;
         self.leaf_index += 1;
         self.dir_end = dir_end;
         self.heap_start = heap_start;
-        self.prev_key.clear();
-        self.prev_key.extend_from_slice(key);
+        self.prev_key[..key.len()].copy_from_slice(key);
+        self.prev_key_len = key.len();
         Ok(())
     }
 
@@ -619,7 +803,7 @@ impl Builder {
 
         let mut key_off = keys_start;
         let mut val_off = values_start;
-        for (i, e) in self.entries.iter().enumerate() {
+        for (i, e) in self.entries[..self.entries_len].iter().enumerate() {
             put_u16(
                 &mut self.data[key_dir_start + i * 2..key_dir_start + i * 2 + 2],
                 key_off as u16,
@@ -661,10 +845,12 @@ impl Builder {
         let suffix_start = PAGE_SIZE - self.key_bytes;
         let values_start = suffix_start - self.value_bytes;
 
-        self.data[values_start..suffix_start].copy_from_slice(&self.value_arena);
-        self.data[suffix_start..].copy_from_slice(&self.arena);
+        self.data[values_start..suffix_start]
+            .copy_from_slice(&self.value_arena[..self.value_arena_len]);
+        self.data[suffix_start..suffix_start + self.arena_len]
+            .copy_from_slice(&self.arena[..self.arena_len]);
 
-        for (i, e) in self.entries.iter().enumerate() {
+        for (i, e) in self.entries[..self.entries_len].iter().enumerate() {
             put_u16(
                 &mut self.data[key_dir_start + i * 2..key_dir_start + i * 2 + 2],
                 (suffix_start + e.key_off) as u16,
@@ -683,12 +869,15 @@ impl Builder {
 }
 
 impl Page {
-    #[cfg_attr(feature = "profile-attribution", inline(never))]
+    #[inline(always)]
     fn search_leaf(&mut self, key: &[u8]) -> (usize, bool) {
         if self.opts.columnar && self.opts.prefix {
             self.search_columnar_prefix_v2(key)
         } else if self.opts.columnar {
-            self.search_columnar_v2(key)
+            match self.opts.key_kind {
+                KeyKind::FixedBe8 => self.search_columnar_v2_fixed_be8(key),
+                KeyKind::Bytes => self.search_columnar_v2(key),
+            }
         } else if self.opts.prefix {
             self.search_prefix_v2(key)
         } else {
@@ -767,6 +956,43 @@ impl Page {
         &self.data[key_start..key_end]
     }
 
+    #[inline(always)]
+    fn search_columnar_v2_fixed_be8(&self, key: &[u8]) -> (usize, bool) {
+        debug_assert_eq!(key.len(), 8);
+        let target = u64::from_be_bytes(key.try_into().unwrap());
+        if self.count <= SMALL_SEARCH_THRESHOLD {
+            for idx in 0..self.count {
+                let entry = self.columnar_fixed_be8_at(idx);
+                if entry >= target {
+                    return (idx, entry == target);
+                }
+            }
+            return (self.count, false);
+        }
+
+        let mut lo = 0usize;
+        let mut hi = self.count;
+        while lo < hi {
+            let mid = (lo + hi) >> 1;
+            if self.columnar_fixed_be8_at(mid) < target {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        if lo < self.count {
+            (lo, self.columnar_fixed_be8_at(lo) == target)
+        } else {
+            (lo, false)
+        }
+    }
+
+    #[inline(always)]
+    fn columnar_fixed_be8_at(&self, index: usize) -> u64 {
+        let key_start = self.offset_at(index);
+        u64::from_be_bytes(self.data[key_start..key_start + 8].try_into().unwrap())
+    }
+
     #[cfg_attr(feature = "profile-attribution", inline(never))]
     fn search_prefix_v2(&mut self, key: &[u8]) -> (usize, bool) {
         if self.count == 0 {
@@ -804,7 +1030,7 @@ impl Page {
         self.search_prefix_block(block_start, block_end, key)
     }
 
-    #[cfg_attr(feature = "profile-attribution", inline(never))]
+    #[inline(always)]
     fn search_prefix_block(
         &mut self,
         block_start: usize,
@@ -828,26 +1054,25 @@ impl Page {
             let off = self.offset_at(idx);
             let layout = parse_prefix_layout(&self.data, off);
             let suffix = &self.data[off + layout.key_off..off + layout.key_off + layout.suffix_len];
-            let cmp =
-                compare_prefix_virtual_key(&prev[..prev_len], layout.prefix_len, suffix, target);
-            if cmp != Ordering::Less {
-                return (idx, cmp == Ordering::Equal);
-            }
             let key_len = layout.prefix_len + layout.suffix_len;
             prev[layout.prefix_len..key_len].copy_from_slice(suffix);
             prev_len = key_len;
+            let cmp = compare_leaf_key(&prev[..prev_len], target);
+            if cmp != Ordering::Less {
+                return (idx, cmp == Ordering::Equal);
+            }
         }
         (block_end, false)
     }
 
-    #[cfg_attr(feature = "profile-attribution", inline(never))]
+    #[inline(always)]
     fn prefix_restart_key(&self, index: usize) -> &[u8] {
         let off = self.offset_at(index);
         let layout = parse_prefix_layout(&self.data, off);
         &self.data[off + layout.key_off..off + layout.key_off + layout.suffix_len]
     }
 
-    #[cfg_attr(feature = "profile-attribution", inline(never))]
+    #[inline(always)]
     fn search_columnar_prefix_v2(&mut self, key: &[u8]) -> (usize, bool) {
         if self.count == 0 {
             return (0, false);
@@ -883,7 +1108,7 @@ impl Page {
         self.search_columnar_prefix_block(block_start, block_end, key)
     }
 
-    #[cfg_attr(feature = "profile-attribution", inline(never))]
+    #[inline(always)]
     fn search_columnar_prefix_block(
         &mut self,
         block_start: usize,
@@ -905,18 +1130,18 @@ impl Page {
         for idx in block_start + 1..block_end {
             let prefix_len = self.columnar_prefix_len_at(idx);
             let suffix = self.columnar_prefix_suffix_at(idx);
-            let cmp = compare_prefix_virtual_key(&prev[..prev_len], prefix_len, suffix, target);
-            if cmp != Ordering::Less {
-                return (idx, cmp == Ordering::Equal);
-            }
             let key_len = prefix_len + suffix.len();
             prev[prefix_len..key_len].copy_from_slice(suffix);
             prev_len = key_len;
+            let cmp = compare_leaf_key(&prev[..prev_len], target);
+            if cmp != Ordering::Less {
+                return (idx, cmp == Ordering::Equal);
+            }
         }
         (block_end, false)
     }
 
-    #[cfg_attr(feature = "profile-attribution", inline(never))]
+    #[inline(always)]
     fn columnar_prefix_suffix_at(&self, index: usize) -> &[u8] {
         let key_start = self.offset_at(index);
         let key_end = if index + 1 < self.count {
@@ -927,14 +1152,14 @@ impl Page {
         &self.data[key_start..key_end]
     }
 
-    #[cfg_attr(feature = "profile-attribution", inline(never))]
+    #[inline(always)]
     fn columnar_prefix_len_at(&self, index: usize) -> usize {
         let flags_start = NODE_HEADER_SIZE + self.count * 4;
         let prefix_start = flags_start + self.count;
         get_u16(&self.data[prefix_start + index * 2..prefix_start + index * 2 + 2]) as usize
     }
 
-    #[cfg_attr(feature = "profile-attribution", inline(never))]
+    #[inline(always)]
     fn offset_at(&self, index: usize) -> usize {
         get_u16(&self.data[NODE_HEADER_SIZE + index * 2..NODE_HEADER_SIZE + index * 2 + 2]) as usize
     }
@@ -1009,7 +1234,7 @@ fn read_uvarint(src: &[u8]) -> (u64, usize) {
     (0, 0)
 }
 
-#[cfg_attr(feature = "profile-attribution", inline(never))]
+#[inline(always)]
 fn parse_prefix_layout(data: &[u8], off: usize) -> PrefixLayout {
     let shared8 = data[off];
     let suffix8 = data[off + 1];
@@ -1037,39 +1262,22 @@ fn parse_prefix_layout(data: &[u8], off: usize) -> PrefixLayout {
 
 #[cfg_attr(feature = "profile-attribution", inline(never))]
 fn compare_leaf_key(a: &[u8], b: &[u8]) -> Ordering {
-    if a.len() == 8 && b.len() == 8 {
-        return u64::from_be_bytes(a.try_into().unwrap())
-            .cmp(&u64::from_be_bytes(b.try_into().unwrap()));
-    }
-    a.cmp(b)
+    compare_bytes(a, b)
 }
 
-#[cfg_attr(feature = "profile-attribution", inline(never))]
-fn compare_prefix_virtual_key(
-    prev_key: &[u8],
-    prefix_len: usize,
-    suffix: &[u8],
-    target: &[u8],
-) -> Ordering {
-    let prefix_cmp_len = prefix_len.min(target.len());
-    if prefix_cmp_len > 0 {
-        let cmp = prev_key[..prefix_cmp_len].cmp(&target[..prefix_cmp_len]);
-        if cmp != Ordering::Equal {
-            return cmp;
+#[inline(always)]
+fn compare_bytes(a: &[u8], b: &[u8]) -> Ordering {
+    let n = a.len().min(b.len());
+    if n > 0 {
+        let cmp = unsafe { memcmp(a.as_ptr().cast::<c_void>(), b.as_ptr().cast::<c_void>(), n) };
+        if cmp < 0 {
+            return Ordering::Less;
+        }
+        if cmp > 0 {
+            return Ordering::Greater;
         }
     }
-    if target.len() < prefix_len {
-        return Ordering::Greater;
-    }
-    let target_tail = &target[prefix_len..];
-    let suffix_cmp_len = suffix.len().min(target_tail.len());
-    if suffix_cmp_len > 0 {
-        let cmp = suffix[..suffix_cmp_len].cmp(&target_tail[..suffix_cmp_len]);
-        if cmp != Ordering::Equal {
-            return cmp;
-        }
-    }
-    suffix.len().cmp(&target_tail.len())
+    a.len().cmp(&b.len())
 }
 
 #[cfg_attr(feature = "profile-attribution", inline(never))]

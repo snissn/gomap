@@ -9,11 +9,11 @@ COUNT="${COUNT:-1}"
 CC="${CC:-cc}"
 CFLAGS="${CFLAGS:--O3 -std=c11 -Wall -Wextra}"
 
-GO_OUT="$(mktemp /tmp/treedb_leaf_go_XXXXXX.txt)"
-MATCHED_GO_OUT="$(mktemp /tmp/treedb_leaf_matched_go_XXXXXX.txt)"
-MATCHED_C_OUT="$(mktemp /tmp/treedb_leaf_matched_c_XXXXXX.txt)"
-RUST_OUT="$(mktemp /tmp/treedb_leaf_rust_XXXXXX.txt)"
-PARSED_OUT="$(mktemp /tmp/treedb_leaf_parsed_XXXXXX.tsv)"
+GO_OUT="$(mktemp /tmp/treedb_leaf_go_XXXXXX)"
+MATCHED_GO_OUT="$(mktemp /tmp/treedb_leaf_matched_go_XXXXXX)"
+MATCHED_C_OUT="$(mktemp /tmp/treedb_leaf_matched_c_XXXXXX)"
+RUST_OUT="$(mktemp /tmp/treedb_leaf_rust_XXXXXX)"
+PARSED_OUT="$(mktemp /tmp/treedb_leaf_parsed_XXXXXX)"
 MATCHED_C_BIN="$(mktemp /tmp/treedb_leaf_matched_c_bin_XXXXXX)"
 trap 'rm -f "$MATCHED_C_BIN"' EXIT
 
@@ -88,8 +88,9 @@ BEGIN {
   order[3] = "builder/prefix_light"
   order[4] = "search/columnar_fixed_be8"
   order[5] = "search/columnar_variable16"
-  order[6] = "search/prefix_v2"
-  order[7] = "search/columnar_prefix_v2"
+  order[6] = "search/columnar_variable_len"
+  order[7] = "search/prefix_v2"
+  order[8] = "search/columnar_prefix_v2"
 }
 $1 == "GO" { go[$2] = $3 + 0 }
 $1 == "MATCHED_GO" { matched_go[$2] = $3 + 0 }
@@ -98,7 +99,7 @@ $1 == "RUST" { rust[$2] = $3 + 0 }
 END {
   printf "%-30s %13s %13s %10s %10s %10s %10s %8s\n", "case", "prod go ns/op", "match go ns/op", "c ns/op", "rust ns/op", "c/mgo", "r/mgo", "r/c"
   printf "%-30s %13s %13s %10s %10s %10s %10s %8s\n", "----", "-------------", "-------------", "-------", "----------", "-----", "-----", "---"
-  for (i = 1; i <= 7; i++) {
+  for (i = 1; i <= 8; i++) {
     c = order[i]
     g = go[c]
     mg = matched_go[c]
