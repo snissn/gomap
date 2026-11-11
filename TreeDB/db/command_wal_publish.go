@@ -46,14 +46,57 @@ func (mutation conditionalCommitMutation) record(db *DB, commitSeq uint64) {
 	db.conditionalRecordCommittedEntries(mutation.entries, mutation.ranges, commitSeq)
 }
 
+// privateCOWRewriteFinalization keeps maintenance-only inputs and outputs in one
+// borrowed envelope so ordinary commits do not copy an extra output pointer in
+// every finalizeCommitOptions value. Its lifetime ends when finalization returns;
+// it must never be retained in queued publication state.
+type privateCOWRewriteFinalization struct {
+	// owner authorizes an ordinary physical candidate, never a canonical append,
+	// accepted cut, logical install, or frontier advancement.
+	owner *transactionowner.Owner
+	// acceptedStateToken is filled from this installation after acceptance and
+	// before any accepted-error wait, rather than by resampling the current root.
+	acceptedStateToken *StateToken
+}
+
+func newPrivateCOWRewriteFinalization(owner *transactionowner.Owner, out *StateToken) *privateCOWRewriteFinalization {
+	if owner == nil && out == nil {
+		return nil
+	}
+	return &privateCOWRewriteFinalization{owner: owner, acceptedStateToken: out}
+}
+
+func (rewrite *privateCOWRewriteFinalization) rewriteOwner() *transactionowner.Owner {
+	if rewrite == nil {
+		return nil
+	}
+	return rewrite.owner
+}
+
+func (rewrite *privateCOWRewriteFinalization) captureAcceptedState(state *DBState) {
+	if rewrite == nil || rewrite.acceptedStateToken == nil {
+		return
+	}
+	out := rewrite.acceptedStateToken
+	if state == nil {
+		*out = StateToken{}
+		return
+	}
+	// Copy directly into the borrowed output. Returning a StateToken first can
+	// reserve its 48-byte temporary in every ordinary finalizer's stack frame.
+	out.CommitSeq = state.CommitSeq
+	out.RootPageID = state.RootPageID
+	out.SystemRootPageID = state.SystemRootPageID
+	out.AppliedCommandLSN = state.AppliedCommandLSN
+	out.MaxEntryRevision = state.MaxEntryRevision
+	out.LeafGenerationStateVersion = state.LeafGenerationStateVersion
+}
+
 type finalizeCommitOptions struct {
-	// privateCOWEquivalentRewriteOwner is borrowed only by the maintained online
-	// pointer rewrite. It authorizes an ordinary physical candidate, never a
-	// canonical append, accepted cut, logical install, or frontier advancement.
-	privateCOWEquivalentRewriteOwner *transactionowner.Owner
-	commandWALSeal                   *commandWALSealReceipt
-	commandWALSealGroup              []*CommandWALIntent
-	negativeCoverage                 *negativeRootCoverage
+	privateCOWRewrite   *privateCOWRewriteFinalization
+	commandWALSeal      *commandWALSealReceipt
+	commandWALSealGroup []*CommandWALIntent
+	negativeCoverage    *negativeRootCoverage
 	// prepareSnapshotReceipt runs with candidate/teardown custody and rootReuseMu
 	abortSnapshotReceipt func() error
 	// before EnqueueBuilt. Failure is preaccept; original cleanup remains owned.

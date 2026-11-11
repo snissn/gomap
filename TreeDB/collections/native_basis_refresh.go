@@ -175,13 +175,18 @@ func (s *nativeBasisRefreshScratch) root(c *nativeCollectionState, d *nativeDoma
 // prepareNativeEngineBasisRefresh preserves the logical engine, including all
 // active/captured sources and catalog deltas, while rebinding moved physical
 // roots using their original qualified descriptors. Count and construction use
-// the SAME immutable paired Snapshots; no historical rows or source chain are
-// scanned. Only changed domains/collections get new immutable headers.
+// the SAME immutable paired Snapshots; no historical rows are scanned. Only
+// producer-qualified leaf packing additionally walks pending typed headers.
+// Only changed domains/collections get new immutable headers.
 func prepareNativeEngineBasisRefresh(base *nativeEngineVersion, before, after *backenddb.Snapshot) (*nativeEngineVersion, error) {
 	return prepareNativeEngineBasisRefreshWithMaintenanceLeaves(base, before, after, nil)
 }
 
 func prepareNativeEngineBasisRefreshWithMaintenanceLeaves(base *nativeEngineVersion, before, after *backenddb.Snapshot, leaves backenddb.NativeMaintenanceLeafReader) (*nativeEngineVersion, error) {
+	return prepareNativeEnginePhysicalBasisRefresh(base, before, after, leaves, false)
+}
+
+func prepareNativeEnginePhysicalBasisRefresh(base *nativeEngineVersion, before, after *backenddb.Snapshot, leaves backenddb.NativeMaintenanceLeafReader, leafPack bool) (*nativeEngineVersion, error) {
 	if leaves != nil && !leaves.MatchesNativeMaintenanceSnapshots(before, after) {
 		return nil, backenddb.ErrRootPublicationBasisMismatch
 	}
@@ -228,6 +233,11 @@ func prepareNativeEngineBasisRefreshWithMaintenanceLeaves(base *nativeEngineVers
 		if err = s.collection(c); err != nil {
 			return false
 		}
+		graph, e := s.leafPackGraphRefresh(c, leafPack)
+		if e != nil {
+			err = e
+			return false
+		}
 		touched := false
 		c.domains.Scan(func(_ string, d *nativeDomainState) bool {
 			var root uint64
@@ -235,7 +245,7 @@ func prepareNativeEngineBasisRefreshWithMaintenanceLeaves(base *nativeEngineVers
 			if err != nil {
 				return false
 			}
-			if root != d.catalogRoot {
+			if root != d.catalogRoot || graph.touches(d) {
 				if domains == int(^uint(0)>>1) {
 					err = memtable.ErrCOWCapacity
 					return false
@@ -281,6 +291,11 @@ func prepareNativeEngineBasisRefreshWithMaintenanceLeaves(base *nativeEngineVers
 		return next, err
 	}
 	base.collections.Scan(func(id uint64, c *nativeCollectionState) bool {
+		graph, e := s.leafPackGraphRefresh(c, leafPack)
+		if e != nil {
+			err = e
+			return false
+		}
 		touched := 0
 		c.domains.Scan(func(_ string, d *nativeDomainState) bool {
 			root, e := s.root(c, d)
@@ -288,7 +303,7 @@ func prepareNativeEngineBasisRefreshWithMaintenanceLeaves(base *nativeEngineVers
 				err = e
 				return false
 			}
-			if root != d.catalogRoot {
+			if root != d.catalogRoot || graph.touches(d) {
 				touched++
 			}
 			return true
@@ -310,7 +325,7 @@ func prepareNativeEngineBasisRefreshWithMaintenanceLeaves(base *nativeEngineVers
 				err = e
 				return false
 			}
-			if root == d.catalogRoot {
+			if root == d.catalogRoot && !graph.touches(d) {
 				return true
 			}
 			var domain *nativeDomainState
@@ -336,8 +351,15 @@ func prepareNativeEngineBasisRefreshWithMaintenanceLeaves(base *nativeEngineVers
 				}
 				domain.pending = d.pending
 			}
-			d.typed.retain()
-			domain.typed = d.typed
+			if graph.touches(d) {
+				domain.typed, err = graph.clone(d.typed, admit)
+				if err != nil {
+					return false // original private domain owns partial headers
+				}
+			} else {
+				d.typed.retain()
+				domain.typed = d.typed
+			}
 			d.captured.retain()
 			domain.captured = d.captured
 			if err = p.domainBuilder.Set(name, domain); err != nil {
