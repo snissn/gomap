@@ -135,6 +135,9 @@ func TestSparseCatalogExplicitIdentityRequiresExactReopenV1(t *testing.T) {
 
 func sparseCatalogStartV1(t testing.TB, ctx context.Context, configs []FixedPeerTCPConfigV1, placements []raftplacement.CollectionPlacementV1) ([]*fixedPeerTestProcessV1, *FixedPeerTCPClientV1, raftplacement.CatalogV1) {
 	t.Helper()
+	diagnostics := newSparseCatalogSetupFailureDiagnosticsV1(configs)
+	defer func() { diagnostics.report(t.Failed(), t.Logf) }()
+	diagnostics.checkpoint("child-setup")
 	client, err := NewFixedPeerTCPClientV1(configs[len(configs)-1])
 	if err != nil {
 		t.Fatal(err)
@@ -145,9 +148,11 @@ func sparseCatalogStartV1(t testing.TB, ctx context.Context, configs []FixedPeer
 		processes[i] = fixedPeerStartTestProcessV1(t, c)
 	}
 	var leader raftcluster.NodeID
+	diagnostics.checkpoint("catalog-leader")
 	fixedPeerWaitV1(t, ctx, func() bool {
 		for _, peer := range configs[0].Catalog.Peers {
 			status, err := client.Status(ctx, peer.ID)
+			diagnostics.observe(peer.ID, status, err)
 			if err == nil && status.CatalogRaft.State == "Leader" {
 				leader = peer.ID
 				return true
@@ -171,12 +176,15 @@ func sparseCatalogStartV1(t testing.TB, ctx context.Context, configs []FixedPeer
 	if err != nil {
 		t.Fatal(err)
 	}
+	diagnostics.checkpoint("catalog-publish")
 	if _, err := client.PublishCatalog(ctx, leader, command); err != nil {
 		t.Fatal(err)
 	}
+	diagnostics.checkpoint("all-node-readiness")
 	fixedPeerWaitV1(t, ctx, func() bool {
 		for _, c := range configs {
 			status, err := client.Status(ctx, c.NodeID)
+			diagnostics.observe(c.NodeID, status, err)
 			if err != nil {
 				return false
 			}
@@ -191,6 +199,7 @@ func sparseCatalogStartV1(t testing.TB, ctx context.Context, configs []FixedPeer
 		}
 		return true
 	})
+	diagnostics.checkpoint("ready")
 	return processes, client, catalog
 }
 
