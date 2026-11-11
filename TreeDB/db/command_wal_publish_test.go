@@ -1439,6 +1439,12 @@ func installCommandWALCleanupJournalOwnerForTest(tb testing.TB, db *DB, appliedL
 	if db.commandJournal != nil {
 		return
 	}
+	opts := commandWALCleanupJournalOptionsForTest(tb, db, appliedLSN)
+	installCommandWALCleanupJournalOptionsForTest(tb, db, opts, false)
+}
+
+func commandWALCleanupJournalOptionsForTest(tb testing.TB, db *DB, appliedLSN uint64) commitlog.CommandJournalOptions {
+	tb.Helper()
 	segments, err := listRecoverySegments(db.dir)
 	if err != nil {
 		tb.Fatalf("list cleanup journal segments: %v", err)
@@ -1454,12 +1460,17 @@ func installCommandWALCleanupJournalOwnerForTest(tb testing.TB, db *DB, appliedL
 	if segmentSeq != 0 && !hasTerminalTail {
 		segmentSeq++
 	}
-	journal, err := commitlog.OpenCommandJournal(WALDirPath(db.dir), commitlog.CommandJournalOptions{
+	return commitlog.CommandJournalOptions{
 		MaxSegmentSize:         db.walMaxSegmentBytes,
 		InitialLSN:             appliedLSN,
 		SegmentSeq:             segmentSeq,
 		CaptureStableResources: true,
-	})
+	}
+}
+
+func installCommandWALCleanupJournalOptionsForTest(tb testing.TB, db *DB, opts commitlog.CommandJournalOptions, checkedClose bool) {
+	tb.Helper()
+	journal, err := commitlog.OpenCommandJournal(WALDirPath(db.dir), opts)
 	if err != nil {
 		tb.Fatalf("OpenCommandJournal cleanup owner: %v", err)
 	}
@@ -1468,7 +1479,9 @@ func installCommandWALCleanupJournalOwnerForTest(tb testing.TB, db *DB, appliedL
 		if db.commandJournal == journal {
 			db.commandJournal = nil
 		}
-		_ = journal.Close()
+		if err := journal.Close(); checkedClose && err != nil {
+			tb.Errorf("Close fixed cleanup journal owner: %v", err)
+		}
 	})
 }
 

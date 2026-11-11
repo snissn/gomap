@@ -1098,6 +1098,7 @@ func TestColumnVectorGraphNativeSearchWarmScratchZeroAllocsV3(t *testing.T) {
 	if !enterIsolatedVectorAllocationGate(t, "native-search-warm-scratch") {
 		return
 	}
+	completeVectorAllocationSetup(t, d)
 	var hotErr error
 	allocs := testing.AllocsPerRun(1000, func() {
 		if hotErr != nil {

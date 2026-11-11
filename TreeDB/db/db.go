@@ -1936,7 +1936,12 @@ func (db *DB) captureSnapshotForReadWithValueLogPublicationLockHeld(snap *Snapsh
 		sameTree := snap.treePager == idx.pager &&
 			snap.treeRoot == state.RootPageID
 		if !sameTree {
-			snap.tree.Reset(idx.pager, &snap.reader, state.RootPageID)
+			if oneShot {
+				bindings := snap.reader.appendReadBindings()
+				snap.tree.ResetAppendReadBindings(idx.pager, &bindings, state.RootPageID)
+			} else {
+				snap.tree.Reset(idx.pager, &snap.reader, state.RootPageID)
+			}
 			snap.treePager = idx.pager
 			snap.treeRoot = state.RootPageID
 		}

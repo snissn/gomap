@@ -14,13 +14,22 @@ import (
 
 func zeroFrontierCleanupDBForTest(t *testing.T, dir string, durableLSN uint64) *DB {
 	t.Helper()
+	return zeroFrontierCleanupDBWithActiveForTest(t, dir, durableLSN, false)
+}
+
+func zeroFrontierCleanupDBWithActiveForTest(t *testing.T, dir string, durableLSN uint64, fixedActive bool) *DB {
+	t.Helper()
 	database := &DB{dir: dir, commandWAL: true, durability: DurabilityDurable}
 	installCommandWALCleanupTwoRootRuntimeForTest(database, 1, durableLSN)
 	fallback := database.durableRoot.slot ^ 1
 	record := database.durableRoot.slotRecord[fallback]
 	record.AppliedCommandLSN = 0
 	database.durableRoot.slotRecord[fallback] = record
-	installCommandWALCleanupJournalOwnerForTest(t, database, durableLSN)
+	if fixedActive {
+		installFreshFixedCleanupJournalOwnerForTest(t, database, durableLSN)
+	} else {
+		installCommandWALCleanupJournalOwnerForTest(t, database, durableLSN)
+	}
 	return database
 }
 
@@ -46,7 +55,7 @@ func TestCommandWALCleanupZeroFrontierSafety(t *testing.T) {
 				emptySeq++
 			}
 			empty := writeEmptyFixedCleanupSegment(t, dir, emptySeq, 8192)
-			database := zeroFrontierCleanupDBForTest(t, dir, durableLSN)
+			database := zeroFrontierCleanupDBWithActiveForTest(t, dir, durableLSN, variant == "pending_rotation")
 			wantErr := error(ErrCommandWALAppliedLSNNonContig)
 			switch variant {
 			case "duplicate_replay":
@@ -113,6 +122,10 @@ func TestCommandWALCleanupZeroFrontierSafety(t *testing.T) {
 				}
 			case "pending_rotation":
 				wantErr = commitlog.ErrCommandWALCleanupSnapshotStale
+				before, err := database.commandJournal.CaptureCleanupSnapshot()
+				if err != nil || before.ActiveBytes != 0 || before.ActiveSegmentMaxLSN != 0 || before.PendingStableRotation != 0 || before.PendingSuccessor {
+					t.Fatalf("fresh actual cleanup owner: snapshot=%+v err=%v", before, err)
+				}
 				t.Cleanup(func() {
 					rotations, err := database.commandJournal.TakePendingStableRotations()
 					if err != nil {
@@ -131,13 +144,17 @@ func TestCommandWALCleanupZeroFrontierSafety(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					_, err = database.commandJournal.AppendCommand(commitlog.CommandEnvelope{
+					lsn, err := database.commandJournal.AppendCommand(commitlog.CommandEnvelope{
 						Version: commitlog.CommandFrameVersionV2, DurabilityClass: commitlog.CommandDurabilityDurable,
 						Kind: commitlog.CommandKindRawKVBatch, Scope: commitlog.CommandScopeRawKV,
 						PayloadFormat: commitlog.PayloadFormatRawKVBatchV1, Payload: payload,
 					})
 					if err != nil {
 						t.Fatal(err)
+					}
+					after, err := database.commandJournal.CaptureCleanupSnapshot()
+					if err != nil || lsn != durableLSN+1 || after.ActiveSegmentMaxLSN != lsn || after.PendingStableRotation == 0 || after.SegmentSeq != before.SegmentSeq+1 || after.ActivePath == before.ActivePath {
+						t.Fatalf("actual pressure append did not activate pending rotation: before=%+v after=%+v lsn=%d err=%v", before, after, lsn, err)
 					}
 				}
 			case "replaced_identity":

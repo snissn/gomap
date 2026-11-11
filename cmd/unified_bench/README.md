@@ -1904,3 +1904,44 @@ reported separately. Fixed-process artifacts live under
 `public-write-plan.json`, `source-binding.json`, `cell-*-receipt.json`,
 `cell-*.log`, and `result.json`. This diagnostic has no numerical acceptance
 threshold and does not replace final G1 or actual command/Mongo gates.
+
+
+### Opt-in steady-work process usage receipt
+
+Linux-only diagnostics can set `GOMAP_DIAGNOSTIC_STEADY_RUSAGE` to an absolute,
+new JSON receipt path. Select exactly one DB, only `batch_write_steady`, and its
+existing `-cpuprofile`/`-cpuprofile-tests batch_write_steady` path. The DB must
+support the original final checkpoint. An empty variable performs zero usage
+reads or receipt writes; unsupported platforms refuse selected mode before DB
+initialization. This private opt-in adds no benchmark, profile filename, result
+schema, threshold or production-default change. The existing `unified-bench-tests`
+workflow pins Go 1.26.10, retains the platform vet/package tests, and adds Linux
+normal/race JSON controls checked by `check_steady_rusage_events.py` plus raw
+event, literal-exit and receipt artifact uploads. Those qualification receipts do not replace any performance acceptance gate.
+
+The two `RUSAGE_SELF` reads surround the original steady work and successful
+final checkpoint. They follow CPU-profile start and precede CPU-profile stop;
+the original throughput timer excludes their read windows. The receipt records
+actual wall bounds, monotonic read costs and interval bounds, user/system CPU,
+minor/major faults and voluntary/involuntary context switches. It covers all
+threads of this process, not child CPU, and is not pprof's sampled population.
+No observer cost is subtracted. The receipt is written after profiling stops.
+
+`Scope=WORK_INTERVAL` and `Completed=true` certify only the two-read interval,
+not post-run checkpoints, DB Close or lifecycle success. Missing/read-error/
+regressing counters fail the diagnostic; a failed original final checkpoint
+cannot produce a completed interval. Original errors remain first and secondary
+receipt write/Close/removal errors remain joined. Any nonzero benchmark or
+lifecycle result still fails the run. The destination must be absent; output is
+exclusive mode 0600 and bounded to 4096 bytes. These JSON receipts are separate
+diagnostic artifacts, not benchprof inputs or a replacement CPU gate. Preserve
+all original samples and gate failures when interpreting them.
+
+Selected-mode failures still attempt each opened DB's original Close exactly
+once. A failed Close is retained and its directory is left in place; it is not
+retried. Successfully closed directories are removed with checked errors unless
+`-keep` is selected. Original work errors remain first when cleanup errors are
+joined. The default-off path retains its original shutdown behavior. Before DB
+initialization the receipt path must have an existing parent and must not alias
+configured CPU, allocation, checkpoint, block, mutex, trace or profile-directory
+report outputs (including generated per-test names and benchprof insights).

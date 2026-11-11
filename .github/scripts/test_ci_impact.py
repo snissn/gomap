@@ -100,7 +100,7 @@ class ImpactContract(unittest.TestCase):
         receipt = self.plan(self.event())
         self.assertTrue(receipt['forecast_qualified'], receipt['fallback'])
         self.assertFalse(receipt['omission_authority'])
-        self.assertEqual(len([m for m in receipt['members'] if m['workflow'] == 'treedb-tests.yml']), 37)
+        self.assertEqual(len([m for m in receipt['members'] if m['workflow'] == 'treedb-tests.yml']), 39)
         for m in receipt['members']:
             if (m['workflow'] == 'treedb-tests.yml' and m['job'] in ('test', 'race', 'required')) or m['workflow'] == 'root-tests.yml':
                 self.assertEqual(m['decision'], 'would_run', m)
@@ -238,7 +238,7 @@ class ImpactContract(unittest.TestCase):
         self.base = self.commit()
         receipt = self.plan(self.event())
         self.assertFull(receipt, 'bootstrap-no-accepted-policy')
-        self.assertEqual(len(receipt['members']), 63)
+        self.assertEqual(len(receipt['members']), 65)
         self.assertTrue(any(m['workflow'] == 'treedb-tests.yml' and m['job'] == 'vet'
                             for m in receipt['members']))
         policy['workflows']['treedb-tests.yml']['jobs'] = {}
@@ -270,7 +270,7 @@ class ImpactContract(unittest.TestCase):
         self.base = self.commit()
         receipt = self.plan(self.event())
         self.assertFull(receipt, 'bootstrap-no-accepted-policy')
-        self.assertEqual(len(receipt['members']), 63)
+        self.assertEqual(len(receipt['members']), 65)
 
     def test_matrix_invalid_forms_and_label_collisions_fail_closed(self):
         original = json.loads((self.repo / ci_impact.POLICY).read_text())
@@ -433,11 +433,29 @@ class SourceInventoryContract(unittest.TestCase):
         files = [p for p in (ROOT / '.github/workflows').iterdir() if p.suffix in ('.yml', '.yaml')]
         self.assertEqual({p.name for p in files}, set(policy['workflows']))
         self.assertEqual(len(files), 17)
-        self.assertEqual(len(policy['members']), 63)
+        self.assertEqual(len(policy['members']), 65)
         for p in files:
             self.assertEqual(ci_impact.digest(p.read_bytes()), policy['workflows'][p.name]['sha256'], p)
         tree_members = [m for m in policy['members'] if m['workflow'] == 'treedb-tests.yml']
-        self.assertEqual(len(tree_members), 37)
+        self.assertEqual(len(tree_members), 39)
+        self.assertFalse(any(m['job'] == 'getversioned-timing-acceptance' for m in tree_members))
+        self.assertEqual(len([m for m in tree_members if m['job'] == 'getversioned-bytes-acceptance']), 1)
+        # The added fixed job runs both normal and race without adding a matrix.
+        # Keep its complete descriptor explicit; an arbitrary extra member is not
+        # interchangeable with this reviewed qualification job.
+        self.assertEqual([m for m in tree_members if m['job'] == 'getversioned-bindings-qualification'], [{
+            'id': 'treedb-tests/getversioned-bindings-qualification/single',
+            'workflow': 'treedb-tests.yml',
+            'job': 'getversioned-bindings-qualification',
+            'owner': 'CI maintainer with affected package/harness owner',
+            'variant': {
+                'cgo': 'setup-go platform default; explicit command overrides retained',
+                'matrix': {},
+                'race': True,
+                'runs_on': 'ubuntu-latest',
+                'tags': 'entry command defaults/flags retained',
+            },
+        }])
         tests = [m for m in tree_members if m['job'] == 'test']
         source = (ROOT / '.github/workflows/treedb-tests.yml').read_text()
         import re
@@ -448,7 +466,7 @@ class SourceInventoryContract(unittest.TestCase):
         required = source.split('  required:\n', 1)[1]
         self.assertNotIn('impact-shadow', required)
         self.assertIn('[[ "$result" == "success" ]]', required)
-        shadow = source.split('  impact-shadow:\n', 1)[1].split('  required:\n', 1)[0]
+        shadow = re.split(r'(?m)^  [A-Za-z0-9_-]+:\n', source.split('  impact-shadow:\n', 1)[1], maxsplit=1)[0]
         self.assertNotIn('needs:', shadow)
         self.assertIn('continue-on-error: true', shadow)
         self.assertIn('retention-days: 30', shadow)

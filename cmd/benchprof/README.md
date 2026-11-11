@@ -1109,3 +1109,13 @@ reported separately. Fixed-process artifacts live under
 `public-write-plan.json`, `source-binding.json`, `cell-*-receipt.json`,
 `cell-*.log`, and `result.json`. This diagnostic has no numerical acceptance
 threshold and does not replace final G1 or actual command/Mongo gates.
+
+
+The private Linux `GOMAP_DIAGNOSTIC_STEADY_RUSAGE` opt-in records two bounded
+process-usage reads around unified-bench's original `batch_write_steady` work
+through its successful final checkpoint. See the [receipt boundaries and failure
+contract](../unified_bench/README.md#opt-in-steady-work-process-usage-receipt).
+Its WORK_INTERVAL JSON receipt is not a benchprof input, does not equal pprof's
+sampled CPU population, and cannot certify later DB Close or lifecycle success.
+An empty opt-in performs no usage reads/writes. Benchmark/profile names, parsers,
+checker and gate thresholds remain unchanged.

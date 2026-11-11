@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync/atomic"
 	"testing"
 	"unsafe"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/dictdb"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -32,7 +34,12 @@ type cowDictionaryLeafLifecycle interface {
 	backenddb.LeafPageLogSegmentRegistrationObserver
 	backenddb.LeafPageLogCachedWrapperOwner
 	backenddb.LeafPageLogSequenceReserver
+	backenddb.LeafPageLogPrivateCOWPackHandoff
 	CurrentValueLogSegment() (string, uint32, bool)
+	ProtectedLeafGenerationRootIDs() []uint64
+	ProtectedLeafGenerationSystemRootIDs() []uint64
+	ProtectedLeafGenerationRootIDPair() ([]uint64, []uint64)
+	ProtectedLeafGenerationRootIDPairSnapshot() ([]uint64, []uint64, uint64)
 }
 
 type cowDictionaryLeafLog struct {
@@ -40,6 +47,29 @@ type cowDictionaryLeafLog struct {
 	db         *DB
 	dictID     uint64
 	dictionary []byte
+	handoffs   atomic.Uint64
+}
+
+var _ backenddb.LeafPageLogLaneProvider = (*cowDictionaryLeafLog)(nil)
+var _ cowDictionaryLeafLifecycle = (*cowDictionaryLeafLog)(nil)
+
+// Only the original dictionary appender may emit leaves. Promoting the cached
+// group's lane provider would instead expose its dictionary-free appenders.
+func (l *cowDictionaryLeafLog) LeafPageLogLane(workerIndex int) (backenddb.LeafPageLog, bool) {
+	if l == nil || workerIndex != 0 {
+		return nil, false
+	}
+	return l, true
+}
+
+func (l *cowDictionaryLeafLog) HandoffPrivateCOWLeafPackSources(ctx context.Context, owner *transactionowner.Owner, sources []backenddb.LeafPageLogPackSource) error {
+	if err := l.cowDictionaryLeafLifecycle.HandoffPrivateCOWLeafPackSources(ctx, owner, sources); err != nil {
+		return err
+	}
+	// Count only ordinary success from the original owner, never a refused
+	// invocation. The real fixture asserts this through SetLeafPageLog/packing.
+	l.handoffs.Add(1)
+	return nil
 }
 
 func (l *cowDictionaryLeafLog) AppendLeafPage(leaf []byte) (page.LeafLogPtr, error) {
