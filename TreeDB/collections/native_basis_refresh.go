@@ -3,6 +3,7 @@ package collections
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -51,7 +52,7 @@ func (s *nativeBasisRefreshScratch) get(key []byte, after bool) ([]byte, bool, e
 		return nil, false, nil
 	}
 	if err != nil {
-		return nil, false, err
+		return nil, false, fmt.Errorf("basis-refresh guard=leaf-read after=%t: %w", after, err)
 	}
 	if entry.Flags&node.FlagPointer != 0 {
 		return nil, false, backenddb.ErrNativeSemanticUnsupported
@@ -94,8 +95,9 @@ func (s *nativeBasisRefreshScratch) unchanged(prefix, collection string) (raw []
 	if err != nil {
 		return nil, false, err
 	}
-	if oldFound != currentFound || !bytes.Equal(old, current) {
-		return nil, false, backenddb.ErrRootPublicationBasisMismatch
+	presenceChanged := oldFound != currentFound
+	if presenceChanged || !bytes.Equal(old, current) {
+		return nil, false, fmt.Errorf("basis-refresh guard=catalog-equivalence key_class=%q presence_changed=%t before_found=%t after_found=%t before_bytes=%d after_bytes=%d: %w", prefix, presenceChanged, oldFound, currentFound, len(old), len(current), backenddb.ErrRootPublicationBasisMismatch)
 	}
 	return current, currentFound, nil
 }
@@ -109,15 +111,16 @@ func (s *nativeBasisRefreshScratch) collection(c *nativeCollectionState) error {
 		return err
 	}
 	if identityFound != metadataFound {
-		return backenddb.ErrRootPublicationBasisMismatch
+		return fmt.Errorf("basis-refresh guard=metadata-incarnation-presence metadata_found=%t identity_found=%t: %w", metadataFound, identityFound, backenddb.ErrRootPublicationBasisMismatch)
 	}
 	if identityFound {
 		id, err := nativeCatalogIdentityValue(raw, false)
 		if err != nil {
-			return err
+			return fmt.Errorf("basis-refresh guard=incarnation-decode bytes=%d: %w", len(raw), err)
 		}
-		if id != c.incarnation {
-			return backenddb.ErrRootPublicationBasisMismatch
+		incarnation := c.incarnation
+		if id != incarnation {
+			return fmt.Errorf("basis-refresh guard=incarnation-identity decoded=%d semantic=%d: %w", id, incarnation, backenddb.ErrRootPublicationBasisMismatch)
 		}
 	}
 	return nil
@@ -131,7 +134,7 @@ func (s *nativeBasisRefreshScratch) root(c *nativeCollectionState, d *nativeDoma
 		if _, found, err := s.get(key, after); err != nil {
 			return 0, err
 		} else if found {
-			return 0, backenddb.ErrNativeSemanticUnsupported
+			return 0, fmt.Errorf("basis-refresh guard=domain-overlay-presence after=%t: %w", after, backenddb.ErrNativeSemanticUnsupported)
 		}
 	}
 	key, err = s.makeKey(systemCollectionRootPrefix, c.schema.meta.Name, d.name)
@@ -149,8 +152,9 @@ func (s *nativeBasisRefreshScratch) root(c *nativeCollectionState, d *nativeDoma
 			return 0, err
 		}
 	}
-	if oldRoot != d.catalogRoot {
-		return 0, backenddb.ErrRootPublicationBasisMismatch
+	catalogRoot := d.catalogRoot
+	if oldRoot != catalogRoot {
+		return 0, fmt.Errorf("basis-refresh guard=old-domain-root decoded=%d semantic_catalog=%d: %w", oldRoot, catalogRoot, backenddb.ErrRootPublicationBasisMismatch)
 	}
 	current, found, err := s.get(key, true)
 	if err != nil {
@@ -158,7 +162,7 @@ func (s *nativeBasisRefreshScratch) root(c *nativeCollectionState, d *nativeDoma
 	}
 	if !found {
 		if oldRoot != 0 {
-			return 0, backenddb.ErrRootPublicationBasisMismatch
+			return 0, fmt.Errorf("basis-refresh guard=disappearing-domain-root before=%d after_found=%t: %w", oldRoot, found, backenddb.ErrRootPublicationBasisMismatch)
 		}
 		return 0, nil // a purely unsealed collection/domain remains unsealed
 	}
@@ -167,7 +171,7 @@ func (s *nativeBasisRefreshScratch) root(c *nativeCollectionState, d *nativeDoma
 		return 0, err
 	}
 	if oldRoot == 0 && root != 0 || oldRoot != 0 && root == 0 {
-		return 0, backenddb.ErrRootPublicationBasisMismatch
+		return 0, fmt.Errorf("basis-refresh guard=zero-nonzero-domain-root before=%d after=%d: %w", oldRoot, root, backenddb.ErrRootPublicationBasisMismatch)
 	}
 	return root, nil
 }
@@ -188,7 +192,7 @@ func prepareNativeEngineBasisRefreshWithMaintenanceLeaves(base *nativeEngineVers
 
 func prepareNativeEnginePhysicalBasisRefresh(base *nativeEngineVersion, before, after *backenddb.Snapshot, leaves backenddb.NativeMaintenanceLeafReader, leafPack bool) (*nativeEngineVersion, error) {
 	if leaves != nil && !leaves.MatchesNativeMaintenanceSnapshots(before, after) {
-		return nil, backenddb.ErrRootPublicationBasisMismatch
+		return nil, fmt.Errorf("basis-refresh guard=snapshot-pair before=%p after=%p: %w", before, after, backenddb.ErrRootPublicationBasisMismatch)
 	}
 	if base == nil || base.collections == nil || before == nil || after == nil || base.maintenance == nil || base.inventory != nil {
 		return nil, backenddb.ErrNativeSemanticUnsupported
@@ -196,10 +200,10 @@ func prepareNativeEnginePhysicalBasisRefresh(base *nativeEngineVersion, before, 
 	oldToken, oldOK := before.StateToken()
 	newToken, newOK := after.StateToken()
 	if !oldOK || !newOK {
-		return nil, backenddb.ErrClosed
+		return nil, fmt.Errorf("basis-refresh guard=snapshot-liveness before_live=%t after_live=%t: %w", oldOK, newOK, backenddb.ErrClosed)
 	}
 	if oldToken.AppliedCommandLSN != newToken.AppliedCommandLSN {
-		return nil, backenddb.ErrRootPublicationBasisMismatch
+		return nil, fmt.Errorf("basis-refresh guard=command-lsn before=%d after=%d before_system=%d after_system=%d: %w", oldToken.AppliedCommandLSN, newToken.AppliedCommandLSN, oldToken.SystemRootPageID, newToken.SystemRootPageID, backenddb.ErrRootPublicationBasisMismatch)
 	}
 	lease, err := base.maintenance.AdmitNativeBytes(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeBasisRefreshScratch{}))))
 	if err != nil {
@@ -226,7 +230,7 @@ func prepareNativeEnginePhysicalBasisRefresh(base *nativeEngineVersion, before, 
 		s.afterRoot = true
 	}
 	if _, _, err = s.unchanged(nativeCatalogNextIncarnationKey, ""); err != nil {
-		return nil, err
+		return nil, nativeBasisRefreshDiagnosticError("next-incarnation", oldToken, newToken, err)
 	}
 	collections, domains := 0, 0
 	base.collections.Scan(func(_ uint64, c *nativeCollectionState) bool {
@@ -261,7 +265,7 @@ func prepareNativeEnginePhysicalBasisRefresh(base *nativeEngineVersion, before, 
 		return err == nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, nativeBasisRefreshDiagnosticError("count", oldToken, newToken, err)
 	}
 	if domains == 0 {
 		base.Retain()
@@ -398,7 +402,7 @@ func prepareNativeEnginePhysicalBasisRefresh(base *nativeEngineVersion, before, 
 		return err == nil
 	})
 	if err != nil {
-		return next, err
+		return next, nativeBasisRefreshDiagnosticError("construct", oldToken, newToken, err)
 	}
 	next.names = p.names.Seal()
 	p.names = nil
@@ -408,3 +412,15 @@ func prepareNativeEnginePhysicalBasisRefresh(base *nativeEngineVersion, before, 
 	p.pending = nil
 	return next, nil
 }
+
+// BEGIN source-only native refresh diagnostic context.
+// This failure-only helper reuses the ORIGINAL StateToken results. It performs
+// no new snapshot/catalog read and adds nothing to the sizeof-accounted scratch.
+// Guard/context labels identify this invocation, not global causal ordering.
+func nativeBasisRefreshDiagnosticError(phase string, before, after backenddb.StateToken, err error) error {
+	return fmt.Errorf("basis-refresh phase=%s before=(seq=%d root=%d system=%d lsn=%d revision=%d leaf_version=%d) after=(seq=%d root=%d system=%d lsn=%d revision=%d leaf_version=%d): %w", phase,
+		before.CommitSeq, before.RootPageID, before.SystemRootPageID, before.AppliedCommandLSN, before.MaxEntryRevision, before.LeafGenerationStateVersion,
+		after.CommitSeq, after.RootPageID, after.SystemRootPageID, after.AppliedCommandLSN, after.MaxEntryRevision, after.LeafGenerationStateVersion, err)
+}
+
+// END source-only native refresh diagnostic context.

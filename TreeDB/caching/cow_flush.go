@@ -2,6 +2,7 @@ package caching
 
 import (
 	"errors"
+	"fmt"
 	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/batch"
@@ -211,6 +212,7 @@ func (db *DB) installPreparedCOWBasisWithLeafPack(basis *cowBackendBasis, covere
 		var err error
 		next.semanticRootSet, err = refreshCOWSemanticPhysicalBasis(old.semanticRootSet, old.basis.snapshot, basis.snapshot, transition, leafReader)
 		if err != nil {
+			err = fmt.Errorf("COW basis-refresh state=live: %w", err)
 			db.poisonNativeHandoff(err)
 			return nil, true, err
 		}
@@ -222,6 +224,7 @@ func (db *DB) installPreparedCOWBasisWithLeafPack(basis *cowBackendBasis, covere
 		} else {
 			next.frozenSemanticRootSet, err = refreshCOWSemanticPhysicalBasis(old.frozenSemanticRootSet, old.basis.snapshot, basis.snapshot, transition, leafReader)
 			if err != nil {
+				err = fmt.Errorf("COW basis-refresh state=frozen: %w", err)
 				db.poisonNativeHandoff(err)
 				return nil, true, err
 			}
