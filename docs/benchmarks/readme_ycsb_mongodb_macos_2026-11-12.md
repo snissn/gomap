@@ -22,7 +22,7 @@ original source/freeze versions.
 | Toolchain | Go 1.26.10, matching resolved GOROOT/compiler, CGO enabled; native darwin/arm64 |
 | YCSB build tags | `libsqlite3,sqlite_omit_load_extension`; no compatibility overlay |
 | Host | Mac15,13, 8 physical/logical CPUs, 16 GiB RAM; macOS 26.2 (25C56), Darwin 25.2.0 arm64 |
-| Storage/power | local APFS `/dev/disk3s5`; AC power, battery 100%; initial free space about 23 GiB |
+| Initial storage/power snapshot | local APFS `/dev/disk3s5`; about 23 GiB free; AC power, battery 100% |
 | Docker | Desktop 27.5.1; Linux aarch64 6.12.5-linuxkit, 8 CPUs, 8,217,858,048 bytes VM memory |
 | MongoDB | 8.2.7 arm64; immutable image ID and digest below; public buildInfo checked per case |
 | Native Go runtime | `GOMAXPROCS` unset; actual runtime value not independently observed |
@@ -32,6 +32,8 @@ MongoDB image ID:
 `sha256:b8b32a56a1ddc4c278d68124a8f0203663018f62828cadaa995a6cd595f6c9a0`.
 Repository digest:
 `mongo@sha256:d65a15bd109e970d7dab5496d0a4254705793b8a5c49e344aa6126d46b0e4630`.
+The collection-end snapshot also reports AC power, with the battery at 86%
+and charging. Power was not continuously monitored.
 The tag lookup was unreliable in the local Docker API, so launch used the
 observed immutable image ID. The final manifest records all six binary hashes,
 build info, source tree/blob IDs, Docker resources and the host/power/process
