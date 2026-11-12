@@ -170,7 +170,7 @@ original source/freeze versions.
 | Toolchain | Go 1.26.10, matching resolved GOROOT/compiler, CGO enabled; native darwin/arm64 |
 | YCSB build tags | `libsqlite3,sqlite_omit_load_extension`; no compatibility overlay |
 | Host | Mac15,13, 8 physical/logical CPUs, 16 GiB RAM; macOS 26.2 (25C56), Darwin 25.2.0 arm64 |
-| Initial storage/power snapshot | local APFS `/dev/disk3s5`; about 23 GiB free; AC power, battery 100% |
+| Initial storage/power snapshot | local APFS `/dev/disk3s5`; about 21.3 GiB free; AC power, battery 100% |
 | Docker | Desktop 27.5.1; Linux aarch64 6.12.5-linuxkit, 8 CPUs, 8,217,858,048 bytes VM memory |
 | MongoDB | 8.2.7 arm64; immutable image ID and digest below; public buildInfo checked per case |
 | Native Go runtime | `GOMAXPROCS` unset; actual runtime value not independently observed |
@@ -420,10 +420,10 @@ database server or Go build. From the repository root:
 
 ```sh
 EVIDENCE=docs/benchmarks/{STEM}
-python3 "$EVIDENCE/verify_archive.py" --directory "$EVIDENCE"
-EXTRACT=$(mktemp -d /tmp/gomap-readme-evidence.XXXXXX)
-tar -xzf "$EVIDENCE/raw.tar.gz" -C "$EXTRACT"
-python3 "$EXTRACT/recipe/aggregate.py" --root "$EXTRACT"
+python3 "$EVIDENCE/verify_archive.py" --directory "$EVIDENCE" &&
+EXTRACT=$(mktemp -d /tmp/gomap-readme-evidence.XXXXXX) &&
+tar -xzf "$EVIDENCE/raw.tar.gz" -C "$EXTRACT" &&
+python3 "$EXTRACT/recipe/aggregate.py" --root "$EXTRACT" &&
 cmp "$EXTRACT/derived/summary.json" "$EVIDENCE/summary.json"
 ```
 
