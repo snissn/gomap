@@ -191,37 +191,26 @@ measurements, raw data, and evidence archive:
 
 ### YCSB Server Workload
 
-The October 30/31 comparison uses the public Mongo BSON API, the same external
-`go-ycsb` client, 100,000 records, 10,000 operations, 16 workers and 95% reads /
-5% updates. Three fresh fixtures per arm have zero operation errors. Run medians
-and the median of paired GoMap/MongoDB ratios are:
+November 12, 2026 local Mac snapshot: native macOS arm64 client and GoMap,
+Docker Desktop Linux arm64 MongoDB 8.2.7. The public Mongo BSON API uses the
+same external `go-ycsb` binary, 100,000 records, 10,000 operations, 16 workers,
+and 95% reads / 5% updates. Cells are medians of three fresh valid fixtures.
 
-| ACK class | MongoDB 8.2.7 ops/s | GoMap Mongo gateway ops/s | Paired ratio |
+| ACK / profile class | MongoDB 8.2.7 ops/s | GoMap Mongo gateway ops/s | Median paired ratio |
 | --- | ---: | ---: | ---: |
-| Relaxed: both `w:1`, `j` absent | 42,753.6 | 59,245.2 | 1.372250 (+37.23%) |
-| Durable-B: requests differ | 19,879.2 | 11,766.6 | 0.591905 (−40.81%) |
+| Relaxed: both `w:1`, `j` absent | 14,999.7 | 46,921.6 | 3.128x |
+| Different durable requests/profiles; incomplete | N/A (2/3 valid) | 5,895.0 | N/A |
 
-Durable-B uses MongoDB `w:1,j:true` versus GoMap's ordinary
-`command_wal_durable` ACK with `w:1`, `j` absent, supported by separate scoped
-sync/crash controls. Common load, census and a public journal sentinel are
-outside timing. These short, cache-warmed runs with asymmetric resource caps
-are not a sustained or isolated-COW speedup claim. Exact sources, all rates,
-latencies, failed attempts, lifecycle limitations and raw evidence:
-[October final-source YCSB report](docs/benchmarks/ycsb_mongodb_gomap_final_2026-10-30.md).
-
-Historical June results used different whole versions and fixture/runtime
-conditions. The MongoDB URI requested `w:1` with `j` absent; it is not a
-journal-before-ACK baseline. The three June repeats reused one loaded database.
-Keep those numbers separate from the fresh-fixture comparison above:
-
-| Historical June target | profile | load ops/sec | run ops/sec | run avg us | run p99 us |
-| --- | --- | ---: | ---: | ---: | ---: |
-| MongoDB 8 | `w:1`, `j` absent | 38,755.4 | 26,494.1 | 595.0 | 1,275.0 |
-| TreeDB nativewire | `command_wal_durable` | 83,217.0 | 135,318.6 | 113.0 | 367.0 |
-| TreeDB Mongo gateway | `command_wal_durable` | 68,218.2 | 80,628.4 | 199.0 | 649.0 |
-
-[June 3 historical YCSB report](docs/benchmarks/ycsb_latest_main_2026-06-03.md)
-retains its original commands, repeats and limitations.
+The second class requests MongoDB `w:1,j:true` versus GoMap
+`command_wal_durable` with `w:1`, `j` absent, for both load and run. One MongoDB
+reopen failed; its throughput is excluded and the paired comparison is incomplete.
+All selected YCSB runs have zero operation errors and checked original Close
+receipts. The relaxed paired ratios range from 1.621x
+to 5.033x. These short, census-warmed runs on a shared laptop are scoped local
+evidence. Full ranges, tails, every attempt, topology and validation limits:
+[November Mac benchmark report](docs/benchmarks/readme_ycsb_mongodb_macos_2026-11-12.md).
+The [October Linux qualification](docs/benchmarks/ycsb_mongodb_gomap_final_2026-10-30.md)
+and [June history](docs/benchmarks/ycsb_latest_main_2026-06-03.md) remain separate.
 
 ### Indexed Collection Insert Workload
 
@@ -322,46 +311,48 @@ and [`cmd/treedb_vector_highqps_demo`](cmd/treedb_vector_highqps_demo/README.md)
 
 ### TreeDB Mongo Gateway Client-Shape Workload
 
-Gateway-shaped BSON documents, `200000` documents, batch size `1000`,
-16 insert producers, two secondary indexes (`email`, `city`), TreeDB
-`command_wal_relaxed`, settled read state, and 16 concurrent readers for the
-read phases. This benchmark keeps TreeDB storage constant while changing the
-client/protocol boundary.
+November 12, 2026 on the same shared Mac: 200,000 gateway-shaped BSON documents,
+batch 1,000, 16 insert producers, two secondary indexes (`email`, `city`),
+prebuilt documents, TreeDB `command_wal_relaxed`, settled reads and 100,000
+reads per kind with 16 readers. Each cell is the median of three fresh runs;
+latency cells are medians of per-run p95 values.
 
-| TreeDB access path | load docs/sec | concurrent `_id` reads/sec | concurrent indexed `email` reads/sec | `_id` p95 us | `email` p95 us |
+| Access path | Load docs/s | `_id` reads/s, r16 | `email` reads/s, r16 | `_id` p95 us | `email` p95 us |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Direct collection API | 299,777 | 2,026,834 | 230,846 | 6 | 813 |
-| Mongo raw wire over TCP | 283,472 | 276,187 | 65,365 | 81 | 627 |
-| TreeDB native wire over TCP | 271,948 | 115,712 | 66,917 | 213 | 618 |
-| Mongo driver raw command | 276,503 | 124,961 | 70,215 | 197 | 580 |
-| Mongo driver command | 253,315 | 130,387 | 69,213 | 191 | 596 |
-| Mongo driver CRUD | 228,906 | 115,262 | 62,586 | 221 | 643 |
-| Mongo driver unacknowledged writes | 233,169 | 114,026 | 68,454 | 219 | 601 |
+| TreeDB / Mongo driver CRUD | 140,993 | 93,431 | 71,919 | 301 | 477 |
+| TreeDB / Mongo driver command | 143,345 | 92,226 | 66,442 | 305 | 521 |
+| TreeDB / Mongo driver raw command | 144,951 | 90,676 | 73,161 | 311 | 474 |
+| TreeDB / Mongo BSON raw wire over TCP | 145,966 | 113,277 | 89,880 | 239 | 399 |
+| TreeDB / native wire over TCP | 146,273 | 91,359 | 70,971 | 308 | 487 |
+| MongoDB / driver raw command | 238,786 | 19,274 | 19,812 | 1,528 | 1,448 |
+| TreeDB direct collection API | N/A | N/A | N/A | N/A | N/A |
 
-`Direct collection API` is the TreeDB collection/storage ceiling, not a
-Mongo-compatible protocol row. `Mongo driver unacknowledged writes` is not a
-durability-equivalent default. Use this table to compare TreeDB access-path
-overhead; compare against MongoDB only when client mode and acknowledgement
-semantics match.
-
-Source:
-[June 4 fast Mongo/native client-shape matrix](docs/benchmarks/mongo_gateway_fast_client_matrix_2026-06-04.md).
+MongoDB runs in Docker Desktop's Linux VM; native wire is a separate TreeDB
+protocol. Direct API index setup is currently rejected under this command-WAL
+profile, so its old ceiling is unavailable. The obsolete unacknowledged-write
+row is removed because the current gateway rejects `w:0`. All selected runs
+passed the independent full reopened-data checks; the existing macrobenchmark's
+original deferred cleanup return is unobserved.
+[November report, ranges and raw evidence](docs/benchmarks/readme_ycsb_mongodb_macos_2026-11-12.md).
 
 ### Mongo API Full-Sweep Workload
 
-June 17 UTC full benchmark refresh, Docker MongoDB 8 baseline, `100000` BSON
-documents, TreeDB Mongo gateway `driver-command-raw`, and `command_wal_relaxed`.
-The full-sweep load rows include the additional `age_1` range index even when
-the displayed secondary-index count is `0`.
+November 12, 2026 on the same Mac and Docker topology, 100,000 gateway-shaped
+BSON documents, batch 1,000, 16 producers, matched `driver-command-raw` clients,
+TreeDB `command_wal_relaxed` and settled reads. Medians of three fresh pairs
+per row; the additional `age_1` range index exists even in the `0` row.
 
-| secondary indexes | TreeDB load docs/sec | MongoDB load docs/sec | TreeDB `_id` r16 ops/sec | MongoDB `_id` r16 ops/sec | TreeDB physical MiB | MongoDB physical MiB |
+| Secondary indexes | TreeDB load docs/s | MongoDB load docs/s | TreeDB `_id` r16 ops/s | MongoDB `_id` r16 ops/s | TreeDB allocated MiB | MongoDB allocated MiB |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 0 | 549,311 | 454,224 | 137,313 | 34,396 | 68.66 | 213.38 |
-| 1 | 422,113 | 255,638 | 121,289 | 34,727 | 69.38 | 216.94 |
-| 2 | 448,003 | 206,858 | 129,211 | 34,566 | 69.66 | 217.52 |
+| 0 | 219,210 | 231,552 | 79,668 | 18,789 | 49.90 | 214.19 |
+| 1 | 170,389 | 182,436 | 79,146 | 14,014 | 50.62 | 216.61 |
+| 2 | 124,506 | 156,915 | 74,425 | 17,712 | 50.07 | 216.75 |
 
-Source:
-[June 17 full benchmark refresh](docs/benchmarks/full_benchmark_report_2026-06-17.md).
+Allocated bytes cover the entire stopped DB after the full read/range/update
+sweep and untimed TreeDB checkpoint or MongoDB compact, including journals
+and persistent value logs. All selected runs passed the full reopened-data
+checks; the original macrobenchmark cleanup-return limitation above applies.
+[November report with every phase, ranges, storage basis and raw evidence](docs/benchmarks/readme_ycsb_mongodb_macos_2026-11-12.md).
 
 ### Vector Search Server Matched-Recall Matrix
 
