@@ -422,10 +422,13 @@ A transaction opened while native semantic state is still cold privately imports
 the persisted catalog. Physical maintenance can move that catalog before the
 original transaction commits, even though its logical dependencies remain valid.
 After validating those original dependencies, publication must use the catalog
-from its supplied current snapshot. If semantic state is still absent and that
-snapshot changed, the transaction imports it with the original admission owner;
+from its supplied current snapshot. If semantic state is still absent and the
+pager or immutable system-catalog root changed, the transaction imports it with
+the original admission owner;
 it does not recapture or replace its logical opening. An unrelated raw checkpoint
-may also advance applied command coverage, so this is a current-catalog import,
+may advance applied command coverage while retaining the same pager and catalog;
+that case reuses the original import and its decoding capability. This is a
+current-catalog import,
 not physical-equivalence authority. Maintenance's equal-LSN and provenance guards,
 and staged graph recipes' source checks, remain unchanged. The temporary import,
 including partial failure, is released outside publication before original

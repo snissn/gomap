@@ -327,9 +327,17 @@ func (p *nativeJSONLogicalGroup) PrepareNativePublication(latest backenddb.Nativ
 		// private to this transaction, so physical maintenance cannot refresh
 		// it with the published semantic state. Import the exact current catalog
 		// before composing mutations; never change the opening or grant stale
-		// staged graph recipes new provenance. A compatible raw checkpoint may
-		// also advance applied LSN, so physical-only refresh is insufficient.
-		if p.opening.Snapshot() != exact {
+		// staged graph recipes new provenance. An unchanged immutable catalog
+		// on the same pinned pager needs no reimport, even if a compatible raw
+		// checkpoint advanced applied LSN. Keep its original decoding capability.
+		before := p.opening.Snapshot()
+		beforeToken, beforeOK := before.StateToken()
+		afterToken, afterOK := exact.StateToken()
+		beforePager, afterPager := before.Pager(), exact.Pager()
+		if !beforeOK || !afterOK || beforePager == nil || afterPager == nil {
+			return backenddb.NativeFinalizedPublication{}, backenddb.ErrRootPublicationBasisMismatch
+		}
+		if beforePager != afterPager || beforeToken.SystemRootPageID != afterToken.SystemRootPageID {
 			var err error
 			p.reimported, err = importNativeJSONCatalogAt(p.opening, exact)
 			if err != nil {

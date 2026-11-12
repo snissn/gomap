@@ -211,7 +211,7 @@ func TestNativeColdBootstrapPreservesPhysicalRebase(t *testing.T) {
 					t.Fatal("INVALID_WITNESS: no-move control moved its physical basis")
 				}
 			} else if mode == "cold_raw_checkpoint" {
-				if afterRoot != beforeRoot || afterToken == beforeToken {
+				if afterRoot != beforeRoot || afterPager != beforePager || afterToken.SystemRootPageID != beforeToken.SystemRootPageID || afterToken == beforeToken {
 					t.Fatal("INVALID_WITNESS: raw-only checkpoint did not preserve collection roots and advance physical coverage")
 				}
 			} else if afterPager == beforePager || afterRoot == beforeRoot {
