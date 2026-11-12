@@ -302,6 +302,8 @@ type nativeJSONLogicalGroup struct {
 	changes      []nativeJSONPrimaryChange
 	count        int
 	bootstrap    *nativeEngineVersion
+	opening      backenddb.NativeSemanticCapture
+	reimported   *nativeEngineVersion // private owning reference, including failed preparation
 	custody      *nativeMutationCustody
 	prepared     *nativeEngineVersion
 	raw          bool
@@ -318,6 +320,23 @@ func (p *nativeJSONLogicalGroup) PrepareNativePublication(latest backenddb.Nativ
 	}
 	if base == nil {
 		base = p.bootstrap
+		if base == nil || p.opening == nil || p.reimported != nil {
+			return backenddb.NativeFinalizedPublication{}, backenddb.ErrNativeSemanticUnsupported
+		}
+		// The original dependency check has already passed. A cold import is
+		// private to this transaction, so physical maintenance cannot refresh
+		// it with the published semantic state. Import the exact current catalog
+		// before composing mutations; never change the opening or grant stale
+		// staged graph recipes new provenance. A compatible raw checkpoint may
+		// also advance applied LSN, so physical-only refresh is insufficient.
+		if p.opening.Snapshot() != exact {
+			var err error
+			p.reimported, err = importNativeJSONCatalogAt(p.opening, exact)
+			if err != nil {
+				return backenddb.NativeFinalizedPublication{}, err
+			}
+			base = p.reimported
+		}
 	}
 	if base == nil || base.inventory != nil {
 		return backenddb.NativeFinalizedPublication{}, backenddb.ErrNativeSemanticUnsupported
@@ -607,7 +626,23 @@ func (t *NativeJSONTxn) commitNativePlanWithStatsObserved(sealed bool, apply *na
 			return err
 		}
 	}
-	plan := &nativeJSONLogicalGroup{bindings: t.bindings, changes: make([]nativeJSONPrimaryChange, t.count), count: t.count, bootstrap: t.imported, custody: t.custody, raw: t.rawStaged}
+	plan := &nativeJSONLogicalGroup{bindings: t.bindings, changes: make([]nativeJSONPrimaryChange, t.count), count: t.count, bootstrap: t.imported, opening: t.core, custody: t.custody, raw: t.rawStaged}
+	defer func(p *nativeJSONLogicalGroup) {
+		// CommitNative and its finalizer are synchronous. Accepted sparse
+		// custody owns its replacement descriptors; this temporary ancestor
+		// belongs only to preparation. Drop borrowed aliases before refund,
+		// outside the publication gate and before the original import closes.
+		reimported := p.reimported
+		clear(p.changes)
+		*p = nativeJSONLogicalGroup{}
+		if reimported != nil {
+			cleanupErr := finishPrivateNative(reimported.Release())
+			if cleanupErr != nil && expired != nil {
+				*expired = false
+			}
+			resultErr = errors.Join(resultErr, cleanupErr)
+		}
+	}(plan)
 	native := &backenddb.NativePreparedPublication{RequireInlineCompositeRaw: t.rawStaged, Basis: t.core.State(), StartSequence: t.core.LogicalSequence(), Reprepare: plan, Custody: t.custody, Effects: effects, Dependencies: t.dependencies}
 	for i := range t.bindings {
 		if t.bindings[i].typed != nil {

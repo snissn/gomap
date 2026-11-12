@@ -382,6 +382,16 @@ convergence, fallback and deferred-fallback controls. Run affected controls in
 normal and race modes, retain every failed attempt and require actual named
 test execution with no skips. Source review alone is not passing execution.
 
+`TestNativeColdBootstrapPreservesPhysicalRebase` covers a separate cold-import
+boundary. After real close/reopen, it stages one original native transaction,
+performs one public online vacuum, and proves physical pager/root movement with
+unchanged logical identity before committing exactly once. It checks the accepted
+catalog pairing, subsequent physical refresh, held old views, acknowledged values,
+command identity, checked original Close and fresh reopen. Cold/no-move and
+published/move arms are controls. A cold unrelated raw-write/checkpoint arm must
+also compose despite advanced applied LSN. This deterministic defect does not
+identify the missing guard from the historical intermittent service failure.
+
 Run the component controls and the public subprocess/lifecycle controls normally
 and with the race detector. Keep each source-bound command, exit status and
 original failure output. Authored coverage is not an execution result, a passing
