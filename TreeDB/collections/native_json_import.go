@@ -14,6 +14,32 @@ import (
 	"github.com/snissn/gomap/TreeDB/tree"
 )
 
+// nativeJSONCatalogSnapshot borrows the original admission owner with a snapshot
+// already supplied by publication. It deliberately exposes no optional physical
+// reader: the original capture's reader would still use its older pager.
+type nativeJSONCatalogSnapshot struct {
+	backenddb.NativeSemanticCapture
+	exact *backenddb.Snapshot
+}
+
+func (c *nativeJSONCatalogSnapshot) Snapshot() *backenddb.Snapshot { return c.exact }
+
+func importNativeJSONCatalogAt(capture backenddb.NativeSemanticCapture, exact *backenddb.Snapshot) (*nativeEngineVersion, error) {
+	if capture == nil || exact == nil {
+		return nil, backenddb.ErrNativeSemanticUnsupported
+	}
+	lease, err := capture.NativeAllocator().AdmitNativeBytes(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeJSONCatalogSnapshot{}))))
+	if err != nil {
+		return nil, err
+	}
+	borrowed := &nativeJSONCatalogSnapshot{NativeSemanticCapture: capture, exact: exact}
+	defer func() {
+		*borrowed = nativeJSONCatalogSnapshot{}
+		lease.Close()
+	}()
+	return importNativeJSONCatalog(borrowed)
+}
+
 // importNativeJSONCatalog is a private complete import of the exact physical
 // catalog. It publishes nothing and retains no snapshot/resource inventory.
 // Every descriptor is memory-only; physical readers retain the enclosing cut's

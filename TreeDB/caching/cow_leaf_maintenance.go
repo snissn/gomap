@@ -134,6 +134,12 @@ func (db *DB) runPrivateCOWLeafPackSlice() (attempted bool, retErr error) {
 		MaxGenerations:             privateCOWLeafPackGenerations, MaxBytesToCopy: privateCOWLeafPackCopyBytes,
 		ReserveRIDs: db.ReserveValueLogRIDs, ProtectedRootIDs: roots, ProtectedSystemRootIDs: systemRoots,
 	})
+	// Observation only: an already accepted pack must still reach the original
+	// basis adopter even if this nil-by-default test observer returns an error.
+	// Join, rather than replace, the original backend error and keep stats.Ran.
+	if db.testAfterPrivateCOWLeafPack != nil && stats.Ran {
+		packErr = errors.Join(packErr, db.testAfterPrivateCOWLeafPack(ctx, stats))
+	}
 	db.vlogGenerationLeafPackLastSelectionGenerations.Store(int64(len(stats.Selection.GenerationIDs)))
 	db.vlogGenerationLeafPackLastSelectionBytesToCopy.Store(stats.Selection.BytesToCopy)
 	db.vlogGenerationLeafPackLastSelectionBytesDead.Store(stats.Selection.BytesDead)
@@ -165,7 +171,7 @@ func (db *DB) runPrivateCOWLeafPackSlice() (attempted bool, retErr error) {
 	// A failed finalizer can already have accepted a replacement. Reconcile on
 	// every error as well; a declined plan with no error made no publication.
 	if stats.Ran || packErr != nil {
-		if err := db.adoptPrivateCOWLeafBasis(original); err != nil {
+		if err := db.adoptPrivateCOWLeafBasisWithTransition(original, stats.Transition); err != nil {
 			return true, errors.Join(packErr, err)
 		}
 	}
@@ -240,6 +246,10 @@ func (db *DB) runPrivateCOWLeafPackSlice() (attempted bool, retErr error) {
 // and its admitted resources come from the original backend. Nil coverage is
 // essential: this physical maintenance cannot consume any logical COW source.
 func (db *DB) adoptPrivateCOWLeafBasis(original backenddb.StateToken) error {
+	return db.adoptPrivateCOWLeafBasisWithTransition(original, backenddb.LeafGenerationPackTransition{})
+}
+
+func (db *DB) adoptPrivateCOWLeafBasisWithTransition(original backenddb.StateToken, transition backenddb.LeafGenerationPackTransition) error {
 	// A declined/failed pre-publication operation needs no new cut or credit.
 	current, live := db.backend.(backendStateTokenReader).StateToken()
 	cut := db.cow.retainCut()
@@ -265,7 +275,7 @@ func (db *DB) adoptPrivateCOWLeafBasis(original backenddb.StateToken) error {
 		}
 		if err == nil {
 			var old *cowReadCut
-			old, err = db.installCOWBasis(basis, nil)
+			old, err = db.installCOWBasisWithLeafPack(basis, nil, transition)
 			if old != nil {
 				err = joinCOWCleanupError(err, old.drain())
 			}

@@ -204,6 +204,49 @@ change publication/recovery authority. A stage report distinguishes future
 failures; it does not attribute the retained #5332 race7 failure, whose Optimize
 cause and precise refusing guard were not recorded.
 
+### Pending graphs across private leaf packing
+
+Private COW leaf packing can relocate a persisted column manifest while an
+already accepted ordinary graph command remains pending. Its immutable recipe
+and row-asset identities remain unchanged; its private typed header must follow
+the equivalent manifest root before physical construction. The materialization
+root guard remains mandatory.
+
+Only the original private leaf-pack producer can authorize this transition. Its
+fixed-size proof binds the original backend, transaction owner, index and exact
+state tokens. The preparation step may register empty successor generations:
+that producer must authenticate the exact state before its own registration,
+its exact generation-only endpoint and the retained copy snapshot. The accepted
+endpoint comes from the actual visible-state installation, including an
+accepted error and a lawful normalized PRIMARY-directory root; it is not
+required to equal a pre-finalizer physical root. A later current-state
+observation supplies no authority. An intervening publication or an unexplained
+generation change fails closed.
+
+Cache adoption validates this proof against its original paired snapshots under
+the existing writer gate. The leaf-pack-specific refresh carries both this
+transition and the optional dictionary reader bound to the same BEFORE/AFTER
+snapshots; it cannot silently fall back to a path that drops either authority.
+Dictionary preparation remains outside the writer gate, and real dictionary
+retirement follows unlock on every unwind.
+It preserves all logical command identities, raw and semantic sources, and
+current/frozen cuts. Collections additionally authenticates the unchanged
+catalog identity and schema. It admits and clones only the typed
+header prefix through the oldest affected ordinary graph marker, reattaches the
+complete older tail, and shares immutable rows, recipes, asset references and
+the original construction promise. A manifest-only move also touches the
+primary header. Partial preparation uses the existing owned cleanup and refund
+path; an adoption failure retains recovery-required custody.
+
+This proof authorizes only the demonstrated leaf-copy operation. General value
+rewrites, column compaction, GC and captured-prefix consumption retain their
+separate guards. On-disk encodings, WAL assignment, durability and recovery
+ordering do not change. See the private leaf-pack controls in
+[verification.md](verification.md). Graph-only overlap and paired-reader
+component controls are separate: neither establishes a joined dictionary/graph
+witness. Authored coverage or a controlled causal failure does not establish
+the historical CI interleaving.
+
 ### Scalar-forward pressure assertion and delivered controls (2026-10-31)
 
 Exact `7fab8bacaae3142584ebdea8919297251465edcb`, TreeDB run
@@ -374,3 +417,20 @@ The [#5338 evidence record](../evidence/native-columngraph-handoff-5338/README.m
 binds the controlled RED/GREEN, independent reviews, lifecycle measurements and
 original validation failures to the tested source. It distinguishes the repaired
 handoff from the historical incident and retains incomplete or failing gates.
+
+A transaction opened while native semantic state is still cold privately imports
+the persisted catalog. Physical maintenance can move that catalog before the
+original transaction commits, even though its logical dependencies remain valid.
+After validating those original dependencies, publication must use the catalog
+from its supplied current snapshot. If semantic state is still absent and the
+pager or immutable system-catalog root changed, the transaction imports it with
+the original admission owner;
+it does not recapture or replace its logical opening. An unrelated raw checkpoint
+may advance applied command coverage while retaining the same pager and catalog;
+that case reuses the original import and its decoding capability. This is a
+current-catalog import,
+not physical-equivalence authority. Maintenance's equal-LSN and provenance guards,
+and staged graph recipes' source checks, remain unchanged. The temporary import,
+including partial failure, is released outside publication before original
+transaction cleanup, with errors propagated. No optional reader bound to the old
+pager is forwarded; unsupported exact-snapshot leaf encodings refuse before ACK.

@@ -80,6 +80,10 @@ func (c *cowCache) prepareCOWBasisInstall() (*cowReadCut, error) {
 }
 
 func (db *DB) installCOWBasis(basis *cowBackendBasis, covered *cowReadCut) (*cowReadCut, error) {
+	return db.installCOWBasisWithLeafPack(basis, covered, backenddb.LeafGenerationPackTransition{})
+}
+
+func (db *DB) installCOWBasisWithLeafPack(basis *cowBackendBasis, covered *cowReadCut, transition backenddb.LeafGenerationPackTransition) (*cowReadCut, error) {
 	c := db.cow
 	next, err := c.prepareCOWBasisInstall()
 	if err != nil {
@@ -100,7 +104,7 @@ func (db *DB) installCOWBasis(basis *cowBackendBasis, covered *cowReadCut) (*cow
 		finished = true
 		return nil, err
 	}
-	old, _, err := db.installPreparedCOWBasis(basis, covered, next)
+	old, _, err := db.installPreparedCOWBasisWithLeafPack(basis, covered, next, transition)
 	if err != nil {
 		refund := c.releasePrivateCOWBasisInstall(next)
 		next = nil
@@ -125,6 +129,10 @@ func (c *cowCache) releasePrivateCOWBasisInstall(next *cowReadCut) *memtable.COW
 }
 
 func (db *DB) installPreparedCOWBasis(basis *cowBackendBasis, covered, next *cowReadCut) (*cowReadCut, bool, error) {
+	return db.installPreparedCOWBasisWithLeafPack(basis, covered, next, backenddb.LeafGenerationPackTransition{})
+}
+
+func (db *DB) installPreparedCOWBasisWithLeafPack(basis *cowBackendBasis, covered, next *cowReadCut, transition backenddb.LeafGenerationPackTransition) (*cowReadCut, bool, error) {
 	c := db.cow
 	var leaves *cowMaintenanceLeafScope
 	c.writerMu.Lock()
@@ -163,6 +171,14 @@ func (db *DB) installPreparedCOWBasis(basis *cowBackendBasis, covered, next *cow
 	if next == nil || basis == nil || basis.snapshot == nil || len(old.frozen)-n > cap(next.frozen) || len(old.shards) != len(next.shards) {
 		return nil, false, backenddb.ErrRootPublicationBasisMismatch
 	}
+	if !transition.IsZero() {
+		if covered != nil {
+			return nil, false, backenddb.ErrRootPublicationBasisMismatch
+		}
+		if err := transition.Validate(old.basis.snapshot, basis.snapshot); err != nil {
+			return nil, false, err
+		}
+	}
 	if covered != nil {
 		basis.logicalSeq = covered.frozenLogicalSeq
 	} else {
@@ -181,15 +197,19 @@ func (db *DB) installPreparedCOWBasis(basis *cowBackendBasis, covered, next *cow
 		captured = covered.frozenSemanticRootSet
 	}
 	if covered == nil {
+		// Keep the absent scope a nil interface, rather than a nonnil interface
+		// containing a typed nil *cowMaintenanceLeafScope.
+		var leafReader backenddb.NativeMaintenanceLeafReader
 		if leaves != nil {
 			leaves.before, leaves.after = old.basis.snapshot, basis.snapshot
+			leafReader = leaves
 		}
 		// Maintenance changed only the physical basis. It has no captured build
 		// ledger and cannot consume a logical source or manufacture coverage.
 		// Adopt each private partial before checking err; installCOWBasis releases
 		// it through original cleanup only after this writer gate is dropped.
 		var err error
-		next.semanticRootSet, err = refreshCOWSemanticBasisWithMaintenanceLeaves(old.semanticRootSet, old.basis.snapshot, basis.snapshot, leaves)
+		next.semanticRootSet, err = refreshCOWSemanticPhysicalBasis(old.semanticRootSet, old.basis.snapshot, basis.snapshot, transition, leafReader)
 		if err != nil {
 			db.poisonNativeHandoff(err)
 			return nil, true, err
@@ -200,7 +220,7 @@ func (db *DB) installPreparedCOWBasis(basis *cowBackendBasis, covered, next *cow
 				next.frozenSemanticRootSet.Retain()
 			}
 		} else {
-			next.frozenSemanticRootSet, err = refreshCOWSemanticBasisWithMaintenanceLeaves(old.frozenSemanticRootSet, old.basis.snapshot, basis.snapshot, leaves)
+			next.frozenSemanticRootSet, err = refreshCOWSemanticPhysicalBasis(old.frozenSemanticRootSet, old.basis.snapshot, basis.snapshot, transition, leafReader)
 			if err != nil {
 				db.poisonNativeHandoff(err)
 				return nil, true, err
@@ -279,19 +299,31 @@ func refreshCOWSemanticBasis(state backenddb.NativeSemanticState, before, after 
 }
 
 func refreshCOWSemanticBasisWithMaintenanceLeaves(state backenddb.NativeSemanticState, before, after *backenddb.Snapshot, leaves backenddb.NativeMaintenanceLeafReader) (backenddb.NativeSemanticState, error) {
+	return refreshCOWSemanticPhysicalBasis(state, before, after, backenddb.LeafGenerationPackTransition{}, leaves)
+}
+
+func refreshCOWSemanticPhysicalBasis(state backenddb.NativeSemanticState, before, after *backenddb.Snapshot, transition backenddb.LeafGenerationPackTransition, leaves backenddb.NativeMaintenanceLeafReader) (backenddb.NativeSemanticState, error) {
 	if state == nil {
 		return nil, nil
 	}
-	refresher, ok := state.(backenddb.NativeSemanticBasisRefresher)
-	if !ok {
-		return nil, backenddb.ErrNativeSemanticUnsupported
-	}
 	var next backenddb.NativeSemanticState
 	var err error
-	if scoped, ok := state.(backenddb.NativeSemanticMaintenanceBasisRefresher); leaves != nil && ok {
-		next, err = scoped.PrepareBasisRefreshWithMaintenanceLeaves(before, after, leaves)
+	if !transition.IsZero() {
+		refresher, ok := state.(backenddb.NativeSemanticLeafPackBasisRefresher)
+		if !ok {
+			return nil, backenddb.ErrNativeSemanticUnsupported // never drop either authority
+		}
+		next, err = refresher.PrepareLeafPackBasisRefresh(before, after, transition, leaves)
 	} else {
-		next, err = refresher.PrepareBasisRefresh(before, after)
+		refresher, ok := state.(backenddb.NativeSemanticBasisRefresher)
+		if !ok {
+			return nil, backenddb.ErrNativeSemanticUnsupported
+		}
+		if scoped, ok := state.(backenddb.NativeSemanticMaintenanceBasisRefresher); leaves != nil && ok {
+			next, err = scoped.PrepareBasisRefreshWithMaintenanceLeaves(before, after, leaves)
+		} else {
+			next, err = refresher.PrepareBasisRefresh(before, after)
+		}
 	}
 	if err == nil && next == nil {
 		err = rootpublication.ErrPublisherProtocol

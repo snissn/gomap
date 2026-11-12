@@ -12,7 +12,7 @@
     "M0 observation is manual diagnostic-only on a separately fixed product; no forecast starts it or replaces failed M0 acceptance.",
     "Bounded maintenance comparison is a manually granted diagnostic on fixed baseline/candidate products; no forecast starts it or establishes cost, M0 or native acceptance."
   ],
-  "discovery_source_sha256": "9c6f8a5c5d146eed19cb890a94aab092f11e40773200e34a5e75b13723ef9e96",
+  "discovery_source_sha256": "d667d762bebb9bef580f433bd38b5d57a6f4a4215156cb308b6869a853565524",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
@@ -176,7 +176,7 @@
       "mode": "100644"
     },
     ".github/scripts/test_treedb_ci_contract.py": {
-      "git_blob": "883718c2b69a90211f61640d548e2166a87e4c97",
+      "git_blob": "4b506c6e22c27c5447d4b784463a882fe7678021",
       "mode": "100644"
     },
     ".github/scripts/test_treedb_windows_core_headroom.py": {
@@ -2431,7 +2431,7 @@
         },
         "workflow_dispatch": null
       },
-      "git_blob": "b1f8fc6a267bd927e43724e96957dc3a7c7583cb",
+      "git_blob": "8016b1ae9ba8689e095fdc3da99bfb48c94d2d59",
       "jobs": {
         "getversioned-bindings-qualification": {
           "checkout": [
@@ -3111,7 +3111,7 @@
               "working-directory": "TreeDB"
             },
             {
-              "command_sha256": "3215b20e6b2510580ee1b471ee6f6ba3d852d5178b3ff94db7b7cae6046ab50b",
+              "command_sha256": "74eebb04f7f234f75ac7b54efeefb2ecedff26c609c3769f7bc473b030e97d3f",
               "entrypoint": ".github/workflows/treedb-tests.yml:550",
               "if": "${{ matrix.name == 'macos' }}",
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
@@ -3144,7 +3144,7 @@
           "runs_on": "${{ matrix.os }}"
         }
       },
-      "sha256": "9008834c1688baf367530841bfbc56bcfacf7760941dfc74ad8b8e4c1596ee07"
+      "sha256": "95126f17e65762ba8e16f774631fe5bbd804c4f70ad269db080b7eea48d3d7bf"
     },
     "treedb-vacuum-m0-observation.yml": {
       "coverage": "existing execution only; triggers/path filters are unchanged",

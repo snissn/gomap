@@ -250,6 +250,8 @@ func (a *leafRefRewritePageAppender) AppendLeafPage(leafPage []byte) (page.LeafL
 
 type leafRefRewriteRunStats struct {
 	privateCOWOwner                        *transactionowner.Owner
+	handoffTransition                      leafGenerationPackHandoffTransition
+	transition                             LeafGenerationPackTransition
 	maintenanceLimits                      LeafGenerationMaintenanceLimits
 	InternalPagesVisited                   int
 	SubtreesPruned                         int
@@ -1345,6 +1347,13 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	}
 
 	idx := snap.idx
+	transitionBefore, _ := stateTokenFromState(snap.state)
+	if runStats != nil && runStats.privateCOWOwner != nil {
+		transitionBefore, err = runStats.handoffTransition.sourceForCopy(db, runStats.privateCOWOwner, snap)
+		if err != nil {
+			return 0, 0, err
+		}
+	}
 	rootID := snap.state.RootPageID
 	sysRoot := snap.state.SystemRootPageID
 	basis := captureLeafGenerationPackCopyBasis(snap, sourceIDs, singleSourceID, hasSingleSourceID)
@@ -1930,18 +1939,19 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	if runStats != nil {
 		equivalentOwner = runStats.privateCOWOwner
 	}
+	var acceptedStateToken StateToken
 	finalizeStarted := time.Now()
 	post, finalizeErr := db.finalizeCommitLockedWithOptions(publishedRoot, publishedSysRoot, publishRetired, true, adaptive.Metrics{}, createdIDs, len(publishCollectionReplacements) > 0, nil, leafManifest, leafManifestRawFileIDs, finalizeCommitOptions{
-		privateCOWEquivalentRewriteOwner: equivalentOwner,
-		skipPrePublishFlush:              true,
-		syncMetaPageOnly:                 true,
-		durableIndex:                     idx,
-		expectedBaseCommitSeq:            basis.commitSeq,
-		hasExpectedBaseCommitSeq:         true,
-		releaseRootSerialization:         unlockPublish,
-		durableResources:                 durableResources,
-		leafManifestAlreadyPersistent:    true,
-		valueLogPublicationLocked:        true,
+		privateCOWRewrite:             newPrivateCOWRewriteFinalization(equivalentOwner, &acceptedStateToken),
+		skipPrePublishFlush:           true,
+		syncMetaPageOnly:              true,
+		durableIndex:                  idx,
+		expectedBaseCommitSeq:         basis.commitSeq,
+		hasExpectedBaseCommitSeq:      true,
+		releaseRootSerialization:      unlockPublish,
+		durableResources:              durableResources,
+		leafManifestAlreadyPersistent: true,
+		valueLogPublicationLocked:     true,
 	})
 	// The finalizer consumes producer closures on every path. A prepared retry
 	// candidate, when present, now owns their exact handles independently of the
@@ -1951,6 +1961,29 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	// subsequent admission/durability wait fails. Catalog relocation follows
 	// that visibility boundary, not the successful return of the finalizer.
 	if finalizeErr == nil || CommitPublicationAccepted(finalizeErr) {
+		if runStats != nil && equivalentOwner != nil {
+			// The copy basis was revalidated under the visibility gate above.
+			// rewriteLeafRef/Batch preserve decoded entries and asset references;
+			// descriptor publication substitutes only their physical root IDs.
+			// The finalizer fills this caller's exact installed scalar endpoint, including
+			// after accepted-error cleanup; sampling db.state here would race a
+			// newer publication after root serialization was released.
+			before, ok := stateTokenFromState(snap.state)
+			// The queued finalizer may CopyPrimaryRoot/BuildPrimaryRoot to normalize
+			// the physical USER directory while preserving its decoded contents.
+			// Retain that actual accepted RootPageID, not pre-finalizer publishedRoot.
+			after := acceptedStateToken
+			if ok && after.CommitSeq > before.CommitSeq && after.CommitSeq == before.CommitSeq+1 &&
+				after.LeafGenerationStateVersion > before.LeafGenerationStateVersion &&
+				after.LeafGenerationStateVersion == before.LeafGenerationStateVersion+1 &&
+				after.SystemRootPageID == publishedSysRoot &&
+				after.AppliedCommandLSN == before.AppliedCommandLSN && after.MaxEntryRevision == before.MaxEntryRevision {
+				runStats.transition = LeafGenerationPackTransition{
+					db: db, owner: equivalentOwner, idx: idx,
+					before: transitionBefore, copyBasis: before, after: after,
+				}
+			}
+		}
 		relocationFinish(true)
 		relocationCommitted = true
 	}

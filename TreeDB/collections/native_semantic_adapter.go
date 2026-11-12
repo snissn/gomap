@@ -87,3 +87,22 @@ func (e *nativeEngineVersion) PrepareBasisRefreshWithMaintenanceLeaves(before, a
 var _ backenddb.NativeSemanticMaintenanceBasisRefresher = (*nativeEngineVersion)(nil)
 
 var _ backenddb.NativeSemanticBasisRefresher = (*nativeEngineVersion)(nil)
+
+// A producer-qualified leaf pack preserves decoded entries/asset references.
+// Validate that authority, then retain the original reader in the SAME shared
+// refresh scratch. A generic maintenance call cannot acquire this privilege.
+func (e *nativeEngineVersion) PrepareLeafPackBasisRefresh(before, after *backenddb.Snapshot, transition backenddb.LeafGenerationPackTransition, leaves backenddb.NativeMaintenanceLeafReader) (backenddb.NativeSemanticState, error) {
+	if err := transition.Validate(before, after); err != nil {
+		return nil, err
+	}
+	next, err := prepareNativeEnginePhysicalBasisRefresh(e, before, after, leaves, true)
+	if err != nil {
+		err = fmt.Errorf("collections: native leaf-pack basis refresh: %w", err)
+	}
+	if next == nil {
+		return nil, err
+	}
+	return next, err
+}
+
+var _ backenddb.NativeSemanticLeafPackBasisRefresher = (*nativeEngineVersion)(nil)

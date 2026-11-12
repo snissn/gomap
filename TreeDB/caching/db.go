@@ -10222,6 +10222,7 @@ type DB struct {
 	publishWatermarkLastBacklogBytes int64
 	publishWatermarkLastUnixNano     int64
 	// testing hooks
+	testAfterPrivateCOWLeafPack         func(context.Context, backenddb.LeafGenerationPackRunOnceStats) error
 	testOnVlogFlush                     func(laneID int)
 	testOnVlogSync                      func(laneID int)
 	testSyncRotatedValueLogFile         func(*os.File) error

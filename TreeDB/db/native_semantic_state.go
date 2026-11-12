@@ -123,6 +123,16 @@ type NativeSemanticBasisRefresher interface {
 	PrepareBasisRefresh(before, after *Snapshot) (NativeSemanticState, error)
 }
 
+// NativeSemanticLeafPackBasisRefresher authenticates the exact producer-owned
+// leaf-only publication AND borrows the optional maintenance reader for those
+// SAME Snapshots. Neither authority may be dropped in a fallback. Only this
+// decoded-entry/asset-preserving operation may rebind pending graph headers;
+// generic refresh and captured handoff retain their independent zero-transition
+// semantics. Private partial-edge ownership is unchanged from BasisRefresher.
+type NativeSemanticLeafPackBasisRefresher interface {
+	PrepareLeafPackBasisRefresh(before, after *Snapshot, transition LeafGenerationPackTransition, leaves NativeMaintenanceLeafReader) (NativeSemanticState, error)
+}
+
 // NativePreparedPublication is admitted and owned before canonical assignment.
 // The native producer holds Basis through the synchronous publication and
 // transfers State plus sparse original Custody only on installation. Entries

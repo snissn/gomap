@@ -237,7 +237,7 @@ func cowNativePackedDictionaryLeafFixtureWithEncoding(t *testing.T, dictionaryAp
 		if err != nil {
 			return err
 		}
-		return db.adoptPrivateCOWLeafBasis(original)
+		return db.adoptPrivateCOWLeafBasisWithTransition(original, stats.Transition)
 	}()
 	if packErr != nil || !stats.Ran || stats.Pack.BytesCopied == 0 {
 		t.Fatalf("real dictionary pack: ran=%t copied=%d error=%v", stats.Ran, stats.Pack.BytesCopied, packErr)
