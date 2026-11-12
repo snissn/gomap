@@ -7,6 +7,8 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/cowbtree"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 func TestNativeLeafPackGraphRefreshPreservesCompleteSourceAndOldViews(t *testing.T) {
@@ -134,7 +136,30 @@ func TestNativeLeafPackGraphRefreshKeepsReplacementAndRequiresProof(t *testing.T
 		t.Fatalf("generic maintenance attempted graph rebind: %+v %v", g, err)
 	}
 	e := &nativeEngineVersion{}
-	if state, err := e.PrepareLeafPackBasisRefresh(nil, nil, backenddb.LeafGenerationPackTransition{}); state != nil || !errors.Is(err, backenddb.ErrRootPublicationBasisMismatch) {
+	if state, err := e.PrepareLeafPackBasisRefresh(nil, nil, backenddb.LeafGenerationPackTransition{}, nil); state != nil || !errors.Is(err, backenddb.ErrRootPublicationBasisMismatch) {
 		t.Fatalf("zero receipt authorized refresh: state=%v error=%v", state, err)
+	}
+}
+
+// The combined method and the generic wrapper share this exact reader-bearing
+// implementation. A missing/mismatched reader cannot be hidden by entering the
+// leaf-pack path. This is pair refusal, not dictionary decode activation.
+type leafPackMismatchedReaderControl struct{ calls int }
+
+func (r *leafPackMismatchedReaderControl) MatchesNativeMaintenanceSnapshots(*backenddb.Snapshot, *backenddb.Snapshot) bool {
+	r.calls++
+	return false
+}
+func (*leafPackMismatchedReaderControl) ReadNativeMaintenanceDictionaryLeaf(*backenddb.Snapshot, page.LeafLogPtr, valuelog.COWRecordShape, []byte) ([]byte, error) {
+	return nil, errors.New("mismatched reader must not be read")
+}
+
+func TestNativeLeafPackSharedRefreshRejectsMismatchedReader(t *testing.T) {
+	for _, leafPack := range []bool{false, true} {
+		reader := &leafPackMismatchedReaderControl{}
+		state, err := prepareNativeEnginePhysicalBasisRefresh(nil, nil, nil, reader, leafPack)
+		if state != nil || !errors.Is(err, backenddb.ErrRootPublicationBasisMismatch) || reader.calls != 1 {
+			t.Fatalf("reader dropped: leafpack%t calls%d state%p error%v", leafPack, reader.calls, state, err)
+		}
 	}
 }

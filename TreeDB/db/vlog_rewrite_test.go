@@ -2167,6 +2167,16 @@ func TestValueLogRewriteOnline_ProtectedPathsDoNotKeepHistoricalRewriteLanes(t *
 		filepath.Join(dir, "value_vlog", "value-l250-000002.log"),
 	} {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			// Observe only after the original absence check failed. These are
+			// sequential snapshots, not one atomic retirement/identity view.
+			t.Logf("rewrite cleanup failure-only observation: path=%s stat_error=%v rewrite=%+v", filepath.Base(path), err, stats)
+			segments, zombieBytes, pinned, pinnedBytes, unpinned, unpinnedBytes := db.valueLogManager.ZombieStats()
+			t.Logf("rewrite cleanup failure-only zombies: manager_present=%t segments=%d bytes=%d pinned_segments=%d pinned_bytes=%d unpinned_segments=%d unpinned_bytes=%d", db.valueLogManager != nil, segments, zombieBytes, pinned, pinnedBytes, unpinned, unpinnedBytes)
+			for _, seq := range []uint32{1, 2} {
+				id, encodeErr := valuelog.EncodeFileID(250, seq)
+				t.Logf("rewrite cleanup failure-only historical ID: lane=250 seq=%d id=%d encode_error=%v tracked_zombie=%t", seq, id, encodeErr, db.valueLogManager.IsTrackedZombie(id))
+			}
+			t.Logf("rewrite cleanup failure-only identity registry: present=%t stats=%+v", db.valueLogIdentityPins != nil, db.valueLogIdentityPins.Stats())
 			t.Fatalf("expected %s to be deleted after rewrite cleanup, err=%v", filepath.Base(path), err)
 		}
 	}

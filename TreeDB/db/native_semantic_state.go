@@ -123,15 +123,14 @@ type NativeSemanticBasisRefresher interface {
 	PrepareBasisRefresh(before, after *Snapshot) (NativeSemanticState, error)
 }
 
-// NativeSemanticLeafPackBasisRefresher additionally authenticates the exact
-// leaf-only publication. Unlike general rewrite/GC, this operation preserves
-// decoded entries and the original row-asset references and codecs. A participant
-// may therefore rebind private pending graph headers without replacing their
-// original source/capacity promise. It must validate transition against these
-// borrowed Snapshots. Ownership, partial-error cleanup and nil logical coverage
-// are identical to NativeSemanticBasisRefresher; neither Snapshot is retained.
+// NativeSemanticLeafPackBasisRefresher authenticates the exact producer-owned
+// leaf-only publication AND borrows the optional maintenance reader for those
+// SAME Snapshots. Neither authority may be dropped in a fallback. Only this
+// decoded-entry/asset-preserving operation may rebind pending graph headers;
+// generic refresh and captured handoff retain their independent zero-transition
+// semantics. Private partial-edge ownership is unchanged from BasisRefresher.
 type NativeSemanticLeafPackBasisRefresher interface {
-	PrepareLeafPackBasisRefresh(before, after *Snapshot, transition LeafGenerationPackTransition) (NativeSemanticState, error)
+	PrepareLeafPackBasisRefresh(before, after *Snapshot, transition LeafGenerationPackTransition, leaves NativeMaintenanceLeafReader) (NativeSemanticState, error)
 }
 
 // NativePreparedPublication is admitted and owned before canonical assignment.

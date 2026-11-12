@@ -19,6 +19,7 @@ import (
 type nativeBasisRefreshScratch struct {
 	before, after             *backenddb.Snapshot
 	allocator                 backenddb.NativeSemanticAllocator
+	leaves                    backenddb.NativeMaintenanceLeafReader
 	beforeReader, afterReader backenddb.SnapshotRootReader
 	beforeRoot, afterRoot     bool
 	key                       [page.PageSize]byte
@@ -27,10 +28,10 @@ type nativeBasisRefreshScratch struct {
 }
 
 func (s *nativeBasisRefreshScratch) readBeforeLeaf(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
-	return readNativeSnapshotLeaf(s.before, s.allocator, ptr, dst)
+	return readNativeMaintenanceSnapshotLeaf(s.before, s.allocator, ptr, dst, s.leaves)
 }
 func (s *nativeBasisRefreshScratch) readAfterLeaf(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
-	return readNativeSnapshotLeaf(s.after, s.allocator, ptr, dst)
+	return readNativeMaintenanceSnapshotLeaf(s.after, s.allocator, ptr, dst, s.leaves)
 }
 func (s *nativeBasisRefreshScratch) get(key []byte, after bool) ([]byte, bool, error) {
 	var entry node.LeafEntry
@@ -174,14 +175,21 @@ func (s *nativeBasisRefreshScratch) root(c *nativeCollectionState, d *nativeDoma
 // prepareNativeEngineBasisRefresh preserves the logical engine, including all
 // active/captured sources and catalog deltas, while rebinding moved physical
 // roots using their original qualified descriptors. Count and construction use
-// the SAME immutable paired Snapshots; no historical rows are scanned. The
-// qualified leaf-pack path also walks pending typed headers to preserve their
-// exact graph basis. Only changed domains/collections get new immutable headers.
+// the SAME immutable paired Snapshots; no historical rows are scanned. Only
+// producer-qualified leaf packing additionally walks pending typed headers.
+// Only changed domains/collections get new immutable headers.
 func prepareNativeEngineBasisRefresh(base *nativeEngineVersion, before, after *backenddb.Snapshot) (*nativeEngineVersion, error) {
-	return prepareNativeEnginePhysicalBasisRefresh(base, before, after, false)
+	return prepareNativeEngineBasisRefreshWithMaintenanceLeaves(base, before, after, nil)
 }
 
-func prepareNativeEnginePhysicalBasisRefresh(base *nativeEngineVersion, before, after *backenddb.Snapshot, leafPack bool) (*nativeEngineVersion, error) {
+func prepareNativeEngineBasisRefreshWithMaintenanceLeaves(base *nativeEngineVersion, before, after *backenddb.Snapshot, leaves backenddb.NativeMaintenanceLeafReader) (*nativeEngineVersion, error) {
+	return prepareNativeEnginePhysicalBasisRefresh(base, before, after, leaves, false)
+}
+
+func prepareNativeEnginePhysicalBasisRefresh(base *nativeEngineVersion, before, after *backenddb.Snapshot, leaves backenddb.NativeMaintenanceLeafReader, leafPack bool) (*nativeEngineVersion, error) {
+	if leaves != nil && !leaves.MatchesNativeMaintenanceSnapshots(before, after) {
+		return nil, backenddb.ErrRootPublicationBasisMismatch
+	}
 	if base == nil || base.collections == nil || before == nil || after == nil || base.maintenance == nil || base.inventory != nil {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
@@ -190,14 +198,14 @@ func prepareNativeEnginePhysicalBasisRefresh(base *nativeEngineVersion, before, 
 	if !oldOK || !newOK {
 		return nil, backenddb.ErrClosed
 	}
-	if oldToken.AppliedCommandLSN != newToken.AppliedCommandLSN || oldToken.MaxEntryRevision != newToken.MaxEntryRevision {
+	if oldToken.AppliedCommandLSN != newToken.AppliedCommandLSN {
 		return nil, backenddb.ErrRootPublicationBasisMismatch
 	}
 	lease, err := base.maintenance.AdmitNativeBytes(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeBasisRefreshScratch{}))))
 	if err != nil {
 		return nil, err
 	}
-	s := &nativeBasisRefreshScratch{before: before, after: after, allocator: base.maintenance}
+	s := &nativeBasisRefreshScratch{before: before, after: after, allocator: base.maintenance, leaves: leaves}
 	defer func() {
 		*s = nativeBasisRefreshScratch{}
 		s = nil
@@ -346,15 +354,13 @@ func prepareNativeEnginePhysicalBasisRefresh(base *nativeEngineVersion, before, 
 			if graph.touches(d) {
 				domain.typed, err = graph.clone(d.typed, admit)
 				if err != nil {
-					return false // the original private domain owns partial headers
+					return false // original private domain owns partial headers
 				}
 			} else {
 				d.typed.retain()
 				domain.typed = d.typed
 			}
 			d.captured.retain()
-			// Captured sources contain immutable raw COW entries, not graph
-			// headers. Their entire list stays shared; no prefix is consumed.
 			domain.captured = d.captured
 			if err = p.domainBuilder.Set(name, domain); err != nil {
 				return false

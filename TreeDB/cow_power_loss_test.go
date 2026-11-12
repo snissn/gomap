@@ -50,6 +50,7 @@ func TestCOWPublicModeledStableImageCheckpointAndNoWALVolatileAck(t *testing.T) 
 			var stable *powerlossoracle.Model
 			metaEvents := 0
 			var observerMu sync.Mutex
+			var observeFailure cowModeledObserveFailure
 			active := true
 			restore := durabilitycut.Install(func(event durabilitycut.Event) error {
 				if !cowEventBelongsToDB(opts.Dir, event) {
@@ -61,7 +62,7 @@ func TestCOWPublicModeledStableImageCheckpointAndNoWALVolatileAck(t *testing.T) 
 					return nil
 				}
 				if err := model.Observe(opts.Dir, event); err != nil {
-					return err
+					return observeFailure.record(opts.Dir, event, err)
 				}
 				if event.Point == durabilitycut.AfterMetaSync {
 					stable = model.Clone()
@@ -69,6 +70,17 @@ func TestCOWPublicModeledStableImageCheckpointAndNoWALVolatileAck(t *testing.T) 
 				}
 				return nil
 			})
+			reportObserveFailure := func() {
+				observerMu.Lock()
+				defer observerMu.Unlock()
+				if observeFailure.recorded {
+					t.Logf("modeled observer first failure: point=%s resource=%s namespace=%s lsn=%d stable_path=%t stable_parent=%t root=%s path=%s old=%s new=%s created_directory=%s paths_count=%d paths_truncated=%t paths=%v",
+						observeFailure.point, observeFailure.resource, observeFailure.namespace, observeFailure.lsn,
+						observeFailure.stablePath, observeFailure.stableParent, observeFailure.root, observeFailure.path,
+						observeFailure.oldPath, observeFailure.newPath, observeFailure.createdDirectory,
+						observeFailure.pathsCount, observeFailure.pathsTruncated, observeFailure.paths)
+				}
+			}
 			observing := true
 			deactivate := func() {
 				observerMu.Lock()
@@ -86,15 +98,19 @@ func TestCOWPublicModeledStableImageCheckpointAndNoWALVolatileAck(t *testing.T) 
 			value := bytes.Repeat([]byte("persistent-pointer-"), 256)
 			b := db.NewBatch()
 			if err = b.Set([]byte("a"), value); err != nil {
+				reportObserveFailure()
 				t.Fatal(err)
 			}
 			if err = b.Set([]byte("z"), []byte("group")); err != nil {
+				reportObserveFailure()
 				t.Fatal(err)
 			}
 			if err = b.Delete([]byte("seed")); err != nil {
+				reportObserveFailure()
 				t.Fatal(err)
 			}
 			if err = b.Write(); err != nil {
+				reportObserveFailure()
 				t.Fatal(err)
 			}
 			_ = b.Close()
@@ -102,6 +118,7 @@ func TestCOWPublicModeledStableImageCheckpointAndNoWALVolatileAck(t *testing.T) 
 			volatileCut := model.Clone()
 			observerMu.Unlock()
 			if err = db.Checkpoint(); err != nil {
+				reportObserveFailure()
 				t.Fatal(err)
 			}
 			deactivate()

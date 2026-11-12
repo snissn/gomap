@@ -134,10 +134,11 @@ func (db *DB) runPrivateCOWLeafPackSlice() (attempted bool, retErr error) {
 		MaxGenerations:             privateCOWLeafPackGenerations, MaxBytesToCopy: privateCOWLeafPackCopyBytes,
 		ReserveRIDs: db.ReserveValueLogRIDs, ProtectedRootIDs: roots, ProtectedSystemRootIDs: systemRoots,
 	})
-	// Preserve the original native backend while observing its actual completed
-	// operation, before cache adoption. The per-cache test hook is nil normally.
-	if hook := db.testAfterPrivateCOWLeafPack; hook != nil {
-		packErr = errors.Join(packErr, hook(ctx, stats))
+	// Observation only: an already accepted pack must still reach the original
+	// basis adopter even if this nil-by-default test observer returns an error.
+	// Join, rather than replace, the original backend error and keep stats.Ran.
+	if db.testAfterPrivateCOWLeafPack != nil && stats.Ran {
+		packErr = errors.Join(packErr, db.testAfterPrivateCOWLeafPack(ctx, stats))
 	}
 	db.vlogGenerationLeafPackLastSelectionGenerations.Store(int64(len(stats.Selection.GenerationIDs)))
 	db.vlogGenerationLeafPackLastSelectionBytesToCopy.Store(stats.Selection.BytesToCopy)
@@ -267,6 +268,7 @@ func (db *DB) adoptPrivateCOWLeafBasisWithTransition(original backenddb.StateTok
 	}
 	basis, err := db.cow.captureBackendBasis(db.backend.(backendSnapshotProvider))
 	if err == nil {
+		defer db.releaseCOWBasisOnUnwind(&basis)
 		next, ok := basis.snapshot.StateToken()
 		if !ok || next.AppliedCommandLSN != original.AppliedCommandLSN || next.MaxEntryRevision != original.MaxEntryRevision {
 			err = fmt.Errorf("private COW leaf maintenance changed logical frontier: %w", backenddb.ErrRootPublicationBasisMismatch)
@@ -279,6 +281,7 @@ func (db *DB) adoptPrivateCOWLeafBasisWithTransition(original backenddb.StateTok
 			}
 		}
 		err = joinCOWCleanupError(err, basis.release())
+		basis = nil
 	}
 	if err == nil && db.valueLogReader != nil {
 		err = db.valueLogReader.Refresh()

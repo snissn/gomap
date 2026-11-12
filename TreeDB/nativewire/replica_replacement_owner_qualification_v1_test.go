@@ -30,7 +30,7 @@ func replacementOwnerQualificationRequestV1(t *testing.T, ctx context.Context, t
 	t.Helper()
 	_, record, err := target.replacementOwnerCatalogV1(ctx, command, target.localDataV1(command.GroupID))
 	if err != nil {
-		t.Fatal(err)
+		t.Fatal(replicaOwnerOperationErrorV1(ctx, nil, target, command, "qualification-request-catalog", err))
 	}
 	identity := command.OwnerPreparation
 	request := vectorPartitionShardSearchRequestTestV1([]uint32{0})
@@ -54,7 +54,7 @@ func assertReplacementOwnerQualificationParityV1(t *testing.T, ctx context.Conte
 		elapsed := time.Since(started)
 		runtime.ReadMemStats(&after)
 		if err != nil {
-			t.Fatalf("private ANN qualification: %v", err)
+			t.Fatalf("private ANN qualification: %s", replicaOwnerOperationErrorV1(ctx, client, target, command, "private-ann-qualification", err))
 		}
 		t.Logf("private_ann_qualification sample=%d elapsed_ns=%d global_bytes=%d global_allocs=%d scope=caller_five_raft_nodes_background_tls_authority_readindex_applied_and_ann cache=%+v", i, elapsed.Nanoseconds(), after.TotalAlloc-before.TotalAlloc, after.Mallocs-before.Mallocs, target.localDataV1(command.GroupID).replacementWork.ownerSource.Stats())
 		assertReplacementOwnerANNRouteV1(t, result.Search)
@@ -75,7 +75,7 @@ func assertReplacementOwnerQualificationParityV1(t *testing.T, ctx context.Conte
 	if ordinary.Version == 0 {
 		topology, err := oldOwner.vector.ensureImmutableTopologyV1(ctx)
 		if err != nil {
-			t.Fatal(err)
+			t.Fatal(replicaOwnerOperationErrorV1(ctx, client, oldOwner, command, "ordinary-oracle-topology", err))
 		}
 		group, ok := topology.coordinator.groups[command.GroupID]
 		if !ok {

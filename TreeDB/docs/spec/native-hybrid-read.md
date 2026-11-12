@@ -218,13 +218,20 @@ state tokens. The preparation step may register empty successor generations:
 that producer must authenticate the exact state before its own registration,
 its exact generation-only endpoint and the retained copy snapshot. The accepted
 endpoint comes from the actual visible-state installation, including an
-accepted error; a later current-state observation supplies no authority. An
-intervening publication or an unexplained generation change fails closed.
+accepted error and a lawful normalized PRIMARY-directory root; it is not
+required to equal a pre-finalizer physical root. A later current-state
+observation supplies no authority. An intervening publication or an unexplained
+generation change fails closed.
 
 Cache adoption validates this proof against its original paired snapshots under
-the existing writer gate. It preserves all logical command identities, raw and
-semantic sources, and current/frozen cuts. Collections additionally authenticates
-the unchanged catalog identity and schema. It admits and clones only the typed
+the existing writer gate. The leaf-pack-specific refresh carries both this
+transition and the optional dictionary reader bound to the same BEFORE/AFTER
+snapshots; it cannot silently fall back to a path that drops either authority.
+Dictionary preparation remains outside the writer gate, and real dictionary
+retirement follows unlock on every unwind.
+It preserves all logical command identities, raw and semantic sources, and
+current/frozen cuts. Collections additionally authenticates the unchanged
+catalog identity and schema. It admits and clones only the typed
 header prefix through the oldest affected ordinary graph marker, reattaches the
 complete older tail, and shares immutable rows, recipes, asset references and
 the original construction promise. A manifest-only move also touches the
@@ -235,8 +242,10 @@ This proof authorizes only the demonstrated leaf-copy operation. General value
 rewrites, column compaction, GC and captured-prefix consumption retain their
 separate guards. On-disk encodings, WAL assignment, durability and recovery
 ordering do not change. See the private leaf-pack controls in
-[verification.md](verification.md); authored coverage and a controlled causal
-failure do not establish the historical CI interleaving.
+[verification.md](verification.md). Graph-only overlap and paired-reader
+component controls are separate: neither establishes a joined dictionary/graph
+witness. Authored coverage or a controlled causal failure does not establish
+the historical CI interleaving.
 
 ### Scalar-forward pressure assertion and delivered controls (2026-10-31)
 

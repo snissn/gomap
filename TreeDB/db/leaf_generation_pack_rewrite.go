@@ -1969,11 +1969,14 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 			// after accepted-error cleanup; sampling db.state here would race a
 			// newer publication after root serialization was released.
 			before, ok := stateTokenFromState(snap.state)
+			// The queued finalizer may CopyPrimaryRoot/BuildPrimaryRoot to normalize
+			// the physical USER directory while preserving its decoded contents.
+			// Retain that actual accepted RootPageID, not pre-finalizer publishedRoot.
 			after := acceptedStateToken
 			if ok && after.CommitSeq > before.CommitSeq && after.CommitSeq == before.CommitSeq+1 &&
 				after.LeafGenerationStateVersion > before.LeafGenerationStateVersion &&
 				after.LeafGenerationStateVersion == before.LeafGenerationStateVersion+1 &&
-				after.RootPageID == publishedRoot && after.SystemRootPageID == publishedSysRoot &&
+				after.SystemRootPageID == publishedSysRoot &&
 				after.AppliedCommandLSN == before.AppliedCommandLSN && after.MaxEntryRevision == before.MaxEntryRevision {
 				runStats.transition = LeafGenerationPackTransition{
 					db: db, owner: equivalentOwner, idx: idx,

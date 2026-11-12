@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/db"
@@ -45,6 +46,9 @@ type DictionaryReadDefinition struct {
 	leafScratch                                 [page.PageSize]byte
 	key                                         [len("bytes/") + 8]byte
 	once, captureOnce                           sync.Once
+	preparedCloseErr                            error
+	preparedSnapshotErr                         error
+	preparedDone                                atomic.Bool
 }
 
 func (d *DictionaryReadDefinition) Close() {
@@ -95,7 +99,75 @@ func (d *DictionaryReadDefinition) ReleaseCapture() {
 // failure, or ReleaseCapture outside those locks after a successful preparation.
 // It never drains temporary snapshot/resource callbacks inside those locks.
 func (s *Store) PrepareDictionaryReadDefinition(id uint64, limits valuelog.COWReadLimits, maxResources int, admit func(DictionaryReadAllocationSizes) (func(), error)) (*DictionaryReadDefinition, error) {
-	return s.acquireDictionaryReadDefinition(id, limits, maxResources, admit, true)
+	return s.acquireDictionaryReadDefinition(id, limits, maxResources, admit, true, nil)
+}
+
+// PrepareDictionaryReadDefinitionInto is the maintenance preparation entry.
+// The preadmitted caller slot receives custody before any later fallible work.
+// The slot must remain live through unwind; ClosePreparedRead runs off-gate.
+func (s *Store) PrepareDictionaryReadDefinitionInto(id uint64, limits valuelog.COWReadLimits, maxResources int, admit func(DictionaryReadAllocationSizes) (func(), error), owned **DictionaryReadDefinition) error {
+	if owned == nil || *owned != nil {
+		return ErrReadDefinitionCapacity
+	}
+	_, err := s.acquireDictionaryReadDefinition(id, limits, maxResources, admit, true, owned)
+	return err
+}
+
+// ClosePreparedRead checks the original temporary capture destructor. On failure
+// the SAME owner retains the failed capture, bytes, pin and receipts; repeated
+// calls report the original error without retry or a false accounting refund.
+// Do not mix this prepared-owner protocol with ReleaseCapture/Close.
+func (d *DictionaryReadDefinition) ClosePreparedRead() error {
+	if d == nil {
+		return nil
+	}
+	d.once.Do(func() {
+		// Both Once guards are consumed even by panic/Goexit. Until EVERY
+		// destructor returns ordinarily, a repeated call must retain failure
+		// custody instead of reporting a nil result from an unfinished callback.
+		d.preparedCloseErr = rootpublication.ErrResourceOwnership
+		captureComplete := false
+		d.captureOnce.Do(func() {
+			if d.snapshot != nil {
+				err := d.snapshot.Close()
+				if !d.preparedDone.Load() {
+					err = errors.Join(err, rootpublication.ErrResourceOwnership)
+				} else {
+					err = errors.Join(err, d.preparedSnapshotErr)
+				}
+				if err != nil {
+					d.preparedCloseErr = err
+					return
+				}
+				d.snapshot = nil
+			}
+			if d.metadata != nil {
+				d.metadata.Close()
+				d.metadata = nil
+			}
+			if d.releaseSnapshot != nil {
+				d.releaseSnapshot()
+				d.releaseSnapshot = nil
+			}
+			captureComplete = true
+		})
+		if !captureComplete {
+			return
+		}
+		d.pin.Release()
+		d.pin = nil
+		d.Bytes = nil
+		if d.releaseBytes != nil {
+			d.releaseBytes()
+			d.releaseBytes = nil
+		}
+		if d.releaseOwner != nil {
+			d.releaseOwner()
+			d.releaseOwner = nil
+		}
+		d.preparedCloseErr = nil
+	})
+	return d.preparedCloseErr
 }
 
 // AcquireDictionaryReadDefinition is the built-in provider's pure, bounded
@@ -105,10 +177,17 @@ func (s *Store) PrepareDictionaryReadDefinition(id uint64, limits valuelog.COWRe
 // stage; all partial stages are released on refusal. No allocating GetDictBytes,
 // durable CaptureDictionaryResources, checkpoint, or namespace proof is used.
 func (s *Store) AcquireDictionaryReadDefinition(id uint64, limits valuelog.COWReadLimits, maxResources int, admit func(DictionaryReadAllocationSizes) (func(), error)) (*DictionaryReadDefinition, error) {
-	return s.acquireDictionaryReadDefinition(id, limits, maxResources, admit, false)
+	return s.acquireDictionaryReadDefinition(id, limits, maxResources, admit, false, nil)
 }
 
-func (s *Store) acquireDictionaryReadDefinition(id uint64, limits valuelog.COWReadLimits, maxResources int, admit func(DictionaryReadAllocationSizes) (func(), error), deferred bool) (*DictionaryReadDefinition, error) {
+// SnapshotCleanupCompleted is scalar-only. Publication follows the original
+// finalizer's alias scrub; Close acceptance by itself is not completion.
+func (d *DictionaryReadDefinition) SnapshotCleanupCompleted(err error) {
+	d.preparedSnapshotErr = err
+	d.preparedDone.Store(true)
+}
+
+func (s *Store) acquireDictionaryReadDefinition(id uint64, limits valuelog.COWReadLimits, maxResources int, admit func(DictionaryReadAllocationSizes) (func(), error), deferred bool, owned **DictionaryReadDefinition) (*DictionaryReadDefinition, error) {
 	if s == nil || s.backend == nil {
 		return nil, errStoreUnavailable
 	}
@@ -120,6 +199,9 @@ func (s *Store) acquireDictionaryReadDefinition(id uint64, limits valuelog.COWRe
 		return nil, err
 	}
 	d := &DictionaryReadDefinition{releaseOwner: ownerRelease}
+	if owned != nil {
+		*owned = d // Transfer before capture/callbacks, including panic and Goexit.
+	}
 	d.snapshot, err = s.backend.AcquireStableSnapshotWithAllocationAdmission(func(sizes db.SnapshotAllocationSizes) error {
 		if sizes.ValueLog.MapHint > maxResources || sizes.ValueLog.FileCount > maxResources {
 			return ErrReadDefinitionCapacity
@@ -130,6 +212,9 @@ func (s *Store) acquireDictionaryReadDefinition(id uint64, limits valuelog.COWRe
 		}
 		return err
 	})
+	if owned != nil && d.snapshot != nil {
+		err = errors.Join(err, d.snapshot.AdoptSnapshotCleanupCompletion(d))
+	}
 	if err != nil {
 		return failDictionaryReadDefinition(d, err, deferred)
 	}

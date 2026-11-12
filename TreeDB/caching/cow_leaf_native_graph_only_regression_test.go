@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -20,26 +21,27 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
 )
 
-const privateCOWGraphPackChildEnv = "TREEDB_PRIVATE_COW_GRAPH_PACK_CHILD"
-const privateCOWGraphPackCompleted = "PRIVATE_COW_GRAPH_PACK_COMPLETED"
+const laptopGraphOnlyPackChildEnv = "TREEDB_LAPTOP_GRAPH_ONLY_PACK_CHILD"
+const laptopGraphOnlyPackCompleted = "LAPTOP_GRAPH_ONLY_PACK_COMPLETED"
 
-type privateCOWGraphPackHold struct {
-	DB        *backenddb.DB
-	published chan backenddb.LeafGenerationPackRunOnceStats
-	release   chan struct{}
+type laptopGraphOnlyPackHold struct {
+	DB         *backenddb.DB
+	published  chan backenddb.LeafGenerationPackRunOnceStats
+	release    chan struct{}
+	holdExited chan struct{} // preallocated; close means callback is returning
 }
 
 // Public graph calls have no cancellation contract. Isolate the original calls
 // so a failed join cannot race database teardown or leak into another test.
-func enterPrivateCOWGraphPackChild(t *testing.T) bool {
+func enterLaptopGraphOnlyPackChild(t *testing.T) bool {
 	t.Helper()
-	if selected := os.Getenv(privateCOWGraphPackChildEnv); selected != "" {
+	if selected := os.Getenv(laptopGraphOnlyPackChildEnv); selected != "" {
 		if selected != t.Name() {
 			t.Fatalf("INVALID_WITNESS child selector=%q want=%q", selected, t.Name())
 		}
 		t.Cleanup(func() {
 			if !t.Failed() && !t.Skipped() {
-				t.Log(privateCOWGraphPackCompleted)
+				t.Log(laptopGraphOnlyPackCompleted)
 			}
 		})
 		return true
@@ -49,13 +51,13 @@ func enterPrivateCOWGraphPackChild(t *testing.T) bool {
 	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^"+t.Name()+"$", "-test.count=1", "-test.timeout=90s", "-test.v")
 	cmd.WaitDelay = 5 * time.Second
 	for _, entry := range os.Environ() {
-		if !strings.HasPrefix(entry, privateCOWGraphPackChildEnv+"=") {
+		if !strings.HasPrefix(entry, laptopGraphOnlyPackChildEnv+"=") {
 			cmd.Env = append(cmd.Env, entry)
 		}
 	}
-	cmd.Env = append(cmd.Env, privateCOWGraphPackChildEnv+"="+t.Name())
+	cmd.Env = append(cmd.Env, laptopGraphOnlyPackChildEnv+"="+t.Name())
 	output, err := cmd.CombinedOutput()
-	if err != nil || ctx.Err() != nil || !bytes.Contains(output, []byte(privateCOWGraphPackCompleted)) || bytes.Contains(output, []byte("DATA RACE")) {
+	if err != nil || ctx.Err() != nil || !bytes.Contains(output, []byte(laptopGraphOnlyPackCompleted)) || bytes.Contains(output, []byte("DATA RACE")) {
 		t.Fatalf("isolated leaf/graph witness failed: err=%v deadline=%v\n%s", err, ctx.Err(), output)
 	}
 	t.Logf("isolated leaf/graph witness:\n%s", output)
@@ -65,7 +67,7 @@ func enterPrivateCOWGraphPackChild(t *testing.T) bool {
 // The ordinary graph profile is immutable and must be supplied at Open.
 // privateCOWPackFixture's empty-profile relaxed backend cannot admit this graph.
 // Keep the original native backend, native bridge, pack geometry and finite limits.
-func privateCOWGraphPackFixture(t *testing.T) (*DB, *privateCOWGraphPackHold, backenddb.Options) {
+func laptopGraphOnlyPackFixture(t *testing.T) (*DB, *laptopGraphOnlyPackHold, backenddb.Options) {
 	t.Helper()
 	t.Setenv(envDisableVlogGenerationLoop, "1")
 	t.Setenv(envDisableVlogGenerationCheckpointKick, "1")
@@ -111,11 +113,14 @@ func privateCOWGraphPackFixture(t *testing.T) (*DB, *privateCOWGraphPackHold, ba
 	}
 	cache.testSkipVlogCheckpointKick = true
 	skipRetainedPrune(cache)
-	held := &privateCOWGraphPackHold{DB: native,
-		published: make(chan backenddb.LeafGenerationPackRunOnceStats, 1), release: make(chan struct{})}
+	held := &laptopGraphOnlyPackHold{DB: native,
+		published: make(chan backenddb.LeafGenerationPackRunOnceStats, 1), release: make(chan struct{}), holdExited: make(chan struct{})}
 	// Native publication requires the original concrete backend. Observe the
 	// same post-backend/pre-adoption boundary without installing an adapter.
 	cache.testAfterPrivateCOWLeafPack = func(ctx context.Context, stats backenddb.LeafGenerationPackRunOnceStats) error {
+		// Close before returning on release, context expiry or unwind. A pending
+		// packDone alone cannot prove that this post-pack callback still holds.
+		defer close(held.holdExited)
 		held.published <- stats
 		select {
 		case <-held.release:
@@ -127,7 +132,7 @@ func privateCOWGraphPackFixture(t *testing.T) (*DB, *privateCOWGraphPackHold, ba
 	return cache, held, opts
 }
 
-func privateCOWGraphPackManifestRoot(t *testing.T, snapshot *backenddb.Snapshot, name string) uint64 {
+func laptopGraphOnlyPackManifestRoot(t *testing.T, snapshot *backenddb.Snapshot, name string) uint64 {
 	t.Helper()
 	state, live := snapshot.StateToken()
 	if !live {
@@ -140,7 +145,7 @@ func privateCOWGraphPackManifestRoot(t *testing.T, snapshot *backenddb.Snapshot,
 	return binary.BigEndian.Uint64(raw)
 }
 
-func privateCOWGraphPackCachedManifestRoot(t *testing.T, cache *DB, name string) uint64 {
+func laptopGraphOnlyPackCachedManifestRoot(t *testing.T, cache *DB, name string) uint64 {
 	t.Helper()
 	cut := cache.cow.retainCut()
 	if cut == nil {
@@ -151,17 +156,17 @@ func privateCOWGraphPackCachedManifestRoot(t *testing.T, cache *DB, name string)
 			t.Error(err)
 		}
 	}()
-	return privateCOWGraphPackManifestRoot(t, cut.basis.snapshot, name)
+	return laptopGraphOnlyPackManifestRoot(t, cut.basis.snapshot, name)
 }
 
-func privateCOWGraphPackFillerDocument(round int) []byte {
+func laptopGraphOnlyPackFillerDocument(round int) []byte {
 	return []byte(fmt.Sprintf(`{"payload":"%s"}`, strings.Repeat(fmt.Sprintf("%d", round), 128)))
 }
 
 // Native collection activation rejects the raw conditional-transaction adapter
 // used by preparePrivateCOWPack. Keep its real 4096/2048 copy geometry using
 // supported public JSON insert/update calls, with no alternate write authority.
-func preparePrivateCOWGraphPackPublicFiller(t *testing.T, cache *DB, manager *collections.CollectionManager) *collections.Collection {
+func prepareLaptopGraphOnlyPackPublicFiller(t *testing.T, cache *DB, manager *collections.CollectionManager) *collections.Collection {
 	t.Helper()
 	const name = "leaf_pack_filler"
 	if _, err := manager.CreateCollection(&collections.CollectionMeta{Name: name}); err != nil {
@@ -180,7 +185,7 @@ func preparePrivateCOWGraphPackPublicFiller(t *testing.T, cache *DB, manager *co
 		for i := range ids {
 			ids[i] = []byte(fmt.Sprintf("pack-%05d", i))
 		}
-		document := privateCOWGraphPackFillerDocument(round)
+		document := laptopGraphOnlyPackFillerDocument(round)
 		if round == 1 {
 			documents := make([][]byte, count)
 			for i := range documents {
@@ -196,7 +201,7 @@ func preparePrivateCOWGraphPackPublicFiller(t *testing.T, cache *DB, manager *co
 				}
 			}
 		} else {
-			previous := privateCOWGraphPackFillerDocument(round - 1)
+			previous := laptopGraphOnlyPackFillerDocument(round - 1)
 			items := make([]collections.UpdateBatchItem, count)
 			for i := range items {
 				items[i] = collections.UpdateBatchItem{DocumentID: ids[i], Update: func(current []byte) ([]byte, bool, error) {
@@ -231,9 +236,9 @@ func preparePrivateCOWGraphPackPublicFiller(t *testing.T, cache *DB, manager *co
 	return filler
 }
 
-func checkPrivateCOWGraphPackPublicFiller(t *testing.T, phase string, filler *collections.Collection) {
+func checkLaptopGraphOnlyPackPublicFiller(t *testing.T, phase string, filler *collections.Collection) {
 	t.Helper()
-	first, replaced := privateCOWGraphPackFillerDocument(1), privateCOWGraphPackFillerDocument(4)
+	first, replaced := laptopGraphOnlyPackFillerDocument(1), laptopGraphOnlyPackFillerDocument(4)
 	for i := 0; i < 4096; i++ {
 		id := []byte(fmt.Sprintf("pack-%05d", i))
 		want := first
@@ -247,16 +252,20 @@ func checkPrivateCOWGraphPackPublicFiller(t *testing.T, phase string, filler *co
 	}
 }
 
-// A causal regression for physical leaf-basis adoption, not attribution of the
-// historical race7 failure. This low-level native fixture uses the original
-// inline-sync command ACK; it does not qualify public Open's completion group.
-// Both graph completion and original Close must succeed; a guard refusal is RED.
-func TestPrivateCOWLeafPackPreservesAcceptedOrdinaryGraph(t *testing.T) {
+// A separately named graph-only port of the exact #5373 fixture at40288d98
+// (reference SHA256 f918d59343ea036f39fa751a6b2ed517a4256ef9a060c2010cab5d0eb048a72d).
+// Compression stays OFF. This is neither joined dictionary proof nor attribution
+// of the historical race7 failure. The low-level native fixture retains the
+// original inline-sync command ACK, not public Open's completion-group contract.
+// The post-pack hook is local reviewed instrumentation: main78e has no such hook.
+// Original errors are retained, but source preparation is not observed RED/GREEN.
+func TestPrivateCOWLeafPackPreservesAcceptedOrdinaryGraphLaptopDiagnostic(t *testing.T) {
 	requireLeafGenerationPackPromotionSupport(t)
-	if !enterPrivateCOWGraphPackChild(t) {
+	if !enterLaptopGraphOnlyPackChild(t) {
 		return
 	}
-	cache, backend, reopenOptions := privateCOWGraphPackFixture(t)
+	t.Log("GRAPH_ONLY_LAPTOP_DIAGNOSTIC compression=off original_durable_native_owner=true dictionary_proof=false")
+	cache, backend, reopenOptions := laptopGraphOnlyPackFixture(t)
 	budget := cache.cow.budget
 	if budget.Limits() != memtable.DefaultCOWLimits() {
 		t.Fatal("INVALID_WITNESS changed original finite COW limits")
@@ -294,8 +303,8 @@ func TestPrivateCOWLeafPackPreservesAcceptedOrdinaryGraph(t *testing.T) {
 	}
 	// Persist the target manifest before sealing the real partly-live generation.
 	// Public native collection calls supply the filler; no map or root is forged.
-	filler := preparePrivateCOWGraphPackPublicFiller(t, cache, manager)
-	checkPrivateCOWGraphPackPublicFiller(t, "before pack", filler)
+	filler := prepareLaptopGraphOnlyPackPublicFiller(t, cache, manager)
+	checkLaptopGraphOnlyPackPublicFiller(t, "before pack", filler)
 	reader, err := collections.NewNativeJSONManager(backend.DB)
 	if err != nil {
 		t.Fatal(err)
@@ -321,7 +330,7 @@ func TestPrivateCOWLeafPackPreservesAcceptedOrdinaryGraph(t *testing.T) {
 		}
 	}
 	checkRows("before pack", old.Get)
-	oldRoot := privateCOWGraphPackCachedManifestRoot(t, cache, meta.Name)
+	oldRoot := laptopGraphOnlyPackCachedManifestRoot(t, cache, meta.Name)
 	before, err := backend.DB.ObserveNativeProducer()
 	if err != nil || before.UnderPressure {
 		t.Fatalf("INVALID_WITNESS producer requires a drain: %+v err=%v", before, err)
@@ -377,12 +386,12 @@ func TestPrivateCOWLeafPackPreservesAcceptedOrdinaryGraph(t *testing.T) {
 				t.Error(err)
 			}
 		}()
-		return privateCOWGraphPackManifestRoot(t, physical, meta.Name)
+		return laptopGraphOnlyPackManifestRoot(t, physical, meta.Name)
 	}()
 	if newRoot == oldRoot {
 		t.Fatalf("INVALID_WITNESS pack did not relocate target manifest root=%d", oldRoot)
 	}
-	cachedRoot := privateCOWGraphPackCachedManifestRoot(t, cache, meta.Name)
+	cachedRoot := laptopGraphOnlyPackCachedManifestRoot(t, cache, meta.Name)
 	if cachedRoot != oldRoot || cache.maintenanceActive.Load() {
 		t.Fatalf("INVALID_WITNESS cache already adopted/fenced old=%d cached=%d", oldRoot, cachedRoot)
 	}
@@ -416,31 +425,57 @@ func TestPrivateCOWLeafPackPreservesAcceptedOrdinaryGraph(t *testing.T) {
 	case <-time.After(15 * time.Second):
 		t.Fatal("INVALID_WITNESS graph acceptance blocked")
 	}
-	release()
+	// The accepted graph must remain pending while the original pack still owns
+	// its flush fence. An already completed operation is not this held witness.
+	// These nonblocking guards do not extend the original five-second slice.
 	select {
 	case err := <-packDone:
 		packJoined = true
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(15 * time.Second):
-		t.Fatal("INVALID_WITNESS physical basis adoption did not join")
+		t.Fatalf("INVALID_WITNESS pack completed before explicit release: %v", err)
+	default:
 	}
 	select {
 	case err := <-graphDone:
 		graphJoined = true
-		if err != nil {
-			t.Fatalf("accepted graph completion after physical adoption: %v", err)
-		}
+		t.Fatalf("INVALID_WITNESS graph completed before adoption release: %v", err)
+	default:
+	}
+	// The original five-second context may expire before packDone is sent.
+	// Observe this explicit callback-lifetime marker AFTER the graph ACK and
+	// both pending checks; a closed marker invalidates, never extends, the hold.
+	select {
+	case <-backend.holdExited:
+		t.Fatal("INVALID_WITNESS post-pack callback exited before explicit release")
+	default:
+	}
+	t.Logf("GRAPH_ONLY_PENDING_BEFORE_RELEASE expected_lsn=%d pack_pending=true graph_pending=true hold_callback_open=true", expectedLSN)
+	release()
+	var packOutcome, graphOutcome error
+	select {
+	case packOutcome = <-packDone:
+		packJoined = true
 	case <-time.After(15 * time.Second):
-		t.Fatal("INVALID_WITNESS accepted graph completion did not join")
+		// Still attempt the other original join before examining either error.
+		// The existing deferred final join prevents teardown beneath a live call.
+	}
+	select {
+	case graphOutcome = <-graphDone:
+		graphJoined = true
+	case <-time.After(15 * time.Second):
+	}
+	t.Logf("GRAPH_ONLY_ORIGINAL_JOINED_OUTCOMES pack_joined=%t graph_joined=%t pack=%v graph=%v", packJoined, graphJoined, packOutcome, graphOutcome)
+	if !packJoined || !graphJoined {
+		t.Fatalf("UNQUALIFIED_GRAPH_ONLY_FAILURE incomplete original joins; pack=%v graph=%v", packOutcome, graphOutcome)
 	}
 	if observer.Dropped() {
-		t.Fatal("INVALID_WITNESS duplicate graph acceptance")
+		t.Fatalf("UNQUALIFIED_GRAPH_ONLY_FAILURE duplicate graph acceptance; original_pack=%v original_graph=%v", packOutcome, graphOutcome)
+	}
+	if outcome := errors.Join(packOutcome, graphOutcome); outcome != nil {
+		t.Fatalf("GRAPH_ONLY_ORIGINAL_FAILURE after both joins: original_pack=%v original_graph=%v joined=%v", packOutcome, graphOutcome, outcome)
 	}
 	checkRows("held old read after adoption", old.Get)
 	checkRows("current after graph", col.Get)
-	checkPrivateCOWGraphPackPublicFiller(t, "after graph", filler)
+	checkLaptopGraphOnlyPackPublicFiller(t, "after graph", filler)
 	if err := old.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -479,7 +514,7 @@ func TestPrivateCOWLeafPackPreservesAcceptedOrdinaryGraph(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	checkPrivateCOWGraphPackPublicFiller(t, "reopened persisted filler", reopenedFiller)
+	checkLaptopGraphOnlyPackPublicFiller(t, "reopened persisted filler", reopenedFiller)
 	status, err := reopenedCol.VectorIndexStatus("vec")
 	if err != nil || !status.Loaded || status.RebuildNeeded {
 		t.Fatalf("reopened persisted graph=%+v err=%v", status, err)

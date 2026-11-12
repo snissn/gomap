@@ -14,6 +14,13 @@ type packHandoffCachedLog struct{ LeafPageLog }
 
 func (*packHandoffCachedLog) CompactStorageCachedWrapperOwner() bool { return true }
 
+func (l *packHandoffCachedLog) LeafPageLogLane(workerIndex int) (LeafPageLog, bool) {
+	if workerIndex != 0 {
+		return nil, false
+	}
+	return l, true
+}
+
 type packHandoffObservedLog struct {
 	packHandoffCachedLog
 	handoff func(context.Context, *transactionowner.Owner, []LeafPageLogPackSource) error
@@ -57,9 +64,9 @@ func TestPrivateCOWLeafPackSuccessorReconciliationFailureKeepsInstalledWriter(t 
 				}
 				return nil
 			}
-			d.leafPageLog = observed
+			d.SetLeafPageLog(observed)
 			t.Cleanup(func() {
-				d.leafPageLog = originalLog
+				d.SetLeafPageLog(originalLog)
 				d.leafGenerationManifestStore.hooks.BeforeTempCreate = nil
 			})
 			stats, err := d.LeafGenerationPackRunOnceForPrivateCOW(owner, ctx, LeafGenerationPackFromPlanOptions{MaxGenerations: 1, Force: true, Sync: true})
@@ -80,6 +87,13 @@ func TestPrivateCOWLeafPackSuccessorReconciliationFailureKeepsInstalledWriter(t 
 
 func (l *packHandoffObservedLog) HandoffPrivateCOWLeafPackSources(ctx context.Context, owner *transactionowner.Owner, sources []LeafPageLogPackSource) error {
 	return l.handoff(ctx, owner, sources)
+}
+
+func (l *packHandoffObservedLog) LeafPageLogLane(workerIndex int) (LeafPageLog, bool) {
+	if workerIndex != 0 {
+		return nil, false
+	}
+	return l, true
 }
 
 func TestPrivateCOWLeafPackSourceHandoffAdmissionAndExactWitness(t *testing.T) {
@@ -120,10 +134,10 @@ func TestPrivateCOWLeafPackSourceHandoffAdmissionAndExactWitness(t *testing.T) {
 		}
 		return failure
 	}
-	// The normal record-length wrapper must preserve the originally installed
-	// owner's capability, rather than silently treating it as a backend writer.
-	d.leafPageLog = &leafPageLogWithRecordLengthHints{db: d, inner: observed}
-	t.Cleanup(func() { d.leafPageLog = originalLog })
+	// Exercise the actual record-length AND lane-selection installation path.
+	// The bounded lane provider must preserve this exact cached handoff owner.
+	d.SetLeafPageLog(observed)
+	t.Cleanup(func() { d.SetLeafPageLog(originalLog) })
 	before, _ := d.StateToken()
 	opts := LeafGenerationPackFromPlanOptions{MaxGenerations: 1, Force: true, Sync: true}
 
@@ -159,7 +173,7 @@ func TestPrivateCOWLeafPackSourceHandoffAdmissionAndExactWitness(t *testing.T) {
 
 	// A cached owner must explicitly support the handoff; it cannot be bypassed
 	// merely because its ordinary append methods remain available.
-	d.leafPageLog = &packHandoffCachedLog{LeafPageLog: originalLog}
+	d.SetLeafPageLog(&packHandoffCachedLog{LeafPageLog: originalLog})
 	stats, err = d.LeafGenerationPackRunOnceForPrivateCOW(owner, context.Background(), opts)
 	if err == nil || stats.Ran || stats.Pack.CopyAttempts != 0 {
 		t.Fatalf("missing owner capability admitted copy: %+v err=%v", stats, err)
