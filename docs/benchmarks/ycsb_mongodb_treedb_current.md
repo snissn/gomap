@@ -6,10 +6,19 @@ This page is the current entry point for external `go-ycsb` comparisons across:
 - `treedb-native` through the `go-ycsb treedb-native` binding.
 - TreeDB Mongo gateway through the `go-ycsb mongodb` binding.
 
-It distinguishes the retained October comparison from historical reports and
-records the remaining qualification obligations.
+The latest README snapshot is the [November 12 native Mac report](readme_ycsb_mongodb_macos_2026-11-12.md).
+It retains 11 valid YCSB samples and one failed MongoDB reopen, so the second
+request/profile comparison is incomplete. The relaxed row has three fresh
+pairs. Native Mac client/GoMap versus Docker Desktop Linux arm64 MongoDB is
+lower-scoped local evidence, with checked original YCSB Close and graceful
+reopen controls. It is not a pass of the Linux-only runtime validator or a new
+durable-B/crash qualification. The same report refreshes the MongoDB client
+shape and full-sweep README tables.
 
-## Final-source MongoDB comparison
+The retained October Linux qualification and historical reports below keep
+their original source, acceptance and limitations.
+
+## October final-source MongoDB comparison
 
 The [final-source report](ycsb_mongodb_gomap_final_2026-10-30.md) records twelve
 valid samples on GoMap `8bea490ad5a2d89a14f02f428b4283579a6dd864` (landed
