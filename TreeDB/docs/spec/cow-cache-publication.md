@@ -68,9 +68,13 @@ arrays and lease. The lazy transaction journal likewise selects its finite
 ring from the actual namespace-aware control/backing sizes. These bounds leave
 producer capacity beside the separately reserved maintenance tranche; lowering
 a byte limit never assumes an older record layout. Full queue admission first
-checkpoints outside publication gates and retries; an unsuccessful drain or
-admission leaves the next command unassigned. Explicit checkpoints use the same
-preadmitted maintenance lane even when producer admission is exhausted.
+seals the original captured prefix outside publication gates and retries ordinary
+reservation once; an unsuccessful drain or admission leaves the next command
+unassigned. A staged native command uses pressure-only service when the original
+size-maintenance worker and its required hooks/capabilities are present, as
+specified below. Raw commands and missing-capability configurations retain full
+checkpoint service. Explicit checkpoints use the same preadmitted maintenance
+lane even when producer admission is exhausted.
 
 On reopen the opening complete cut starts at the same recovered canonical prefix
 as its original accepted coordinator and exact disk basis. An empty checkpoint
@@ -582,6 +586,19 @@ retirement, then the original semantic refund frontier. The root records the
 same original captured AppliedLSN; a successful request's original durable WAL
 ACK and recovery skipping remain unchanged. The active journal remains
 appendable, and original append-size rollover still applies.
+
+The same capability permits pressure-only service when an already staged native
+command cannot reserve an ordinary accepted-prefix slot. This is a coupled
+scheduling/service policy: fixed-tranche producer scheduling can expose that
+independent finite queue bound. The command has no accepted ticket or append
+guard yet. Callback self-join refusal precedes materialization, and the original
+slot reservation is retried exactly once after the exact physical seal and
+accepted retirement. Held unassigned reservations or competing writers may still
+cause capacity refusal; service grants no future slot. This admission site may
+retain a consumer mutation gate and its original opening, so it does not join
+the semantic cleanup frontier or the producer pressure mutex. Preparation's
+existing cleanup join remains before consumer locks. Automatic WAL maintenance,
+explicit checkpoint/Close, hard byte preflight and WAL ACK contracts are unchanged.
 
 The running worker retains its first captured size threshold; later
 StartAutoCheckpoint calls do not change that worker's behavior. Capability

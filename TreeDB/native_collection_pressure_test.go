@@ -257,6 +257,7 @@ func TestNativeProducerPressurePreservesCollectionReads(t *testing.T) {
 // 444 rows even though an ordinary checkpoint reclaimed most of that debt.
 // Keep all background triggers disabled so only producer pressure can help.
 func TestNativeCollectionPressureDrainsBeforeOpening(t *testing.T) {
+	t.Run("accepted-slots", testNativeCollectionAcceptedCapacity)
 	t.Setenv("TREEDB_DISABLE_VLOG_GENERATION_LOOP", "1")
 	opts := OptionsFor(ProfileCommandWALRelaxed, t.TempDir())
 	opts.MemtableMode = "cow_btree"
@@ -373,6 +374,141 @@ func TestNativeCollectionPressureDrainsBeforeOpening(t *testing.T) {
 		if err != nil || !bytes.Equal(got, want) {
 			t.Fatalf("reopen %s: %x/%v", id, got, err)
 		}
+	}
+	if err := manager.Close(); err != nil {
+		t.Fatal(err)
+	}
+	cache = database.cached
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	database = nil
+	requirePublicCOWFinalZero(t, cache)
+}
+
+// A smaller valid generation inventory makes the original accepted queue finite
+// at 512 slots. Byte/generation producer pressure stays absent: the ordinary
+// BSON update must recycle accepted slots through the actual pressure service.
+func testNativeCollectionAcceptedCapacity(t *testing.T) {
+	t.Setenv("TREEDB_DISABLE_VLOG_GENERATION_LOOP", "1")
+	opts := OptionsFor(ProfileCommandWALRelaxed, t.TempDir())
+	opts.MemtableMode, opts.MemtableShards = "cow_btree", 1
+	opts.FlushThreshold = 1 << 30
+	opts.BackgroundCheckpointInterval, opts.BackgroundCheckpointIdleDuration = time.Hour, -1
+	opts.MaxWALBytes = 1 << 30
+	limits := DefaultCOWMemtableLimits()
+	limits.MaxSources, limits.MaxGenerations = 16, 32
+	limits.MaxInFlightBytes = 512 << 20
+	limits.MaxTotalBytes, limits.MaxRetiredBytes = 1<<30, 1<<30
+	opts.COWMemtableLimits = limits
+	database, err := Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if database != nil {
+			if err := database.Close(); err != nil {
+				t.Error(err)
+			}
+		}
+	}()
+	backend, err := database.NativeSemanticBackend()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := collections.NewCollectionManager(backend)
+	if _, err := manager.CreateCollection(&collections.CollectionMeta{Name: "rows", Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}}); err != nil {
+		t.Fatal(err)
+	}
+	collection, err := manager.OpenCollection("rows")
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := func(value int) []byte {
+		doc, err := bson.Marshal(bson.D{{Key: "_id", Value: "first"}, {Key: "value", Value: int64(value)}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return doc
+	}
+	initial := document(0)
+	if _, err := collection.Insert([]byte("first"), initial); err != nil {
+		t.Fatal(err)
+	}
+	held, err := collection.OpenCollectionReadView()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	var cutovers atomic.Int32
+	var cutSequence atomic.Uint64
+	database.cached.SetCommandWALCheckpointCutoverHook(func() {
+		database.snapshotPublicCommandWALCheckpointCutover()
+		observation, err := backend.ObserveNativeProducer()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		cutSequence.Store(observation.LogicalSequence)
+		cutovers.Add(1)
+	})
+	capacity := limits.MaxSources * limits.MaxGenerations
+	runs := database.Stats()["treedb.cache.checkpoint.runs"]
+	var expected []byte
+	for i := 1; i <= capacity+8; i++ {
+		observation, err := backend.ObserveNativeProducer()
+		if err != nil || observation.UnderPressure {
+			t.Fatalf("producer pressure preceded accepted service at %d: %+v %v", i, observation, err)
+		}
+		expected = document(i)
+		matched, modified, err := collection.UpdateBSONSet([]byte("first"), []collections.BSONSetField{{Key: "value", Value: bson.Raw(expected).Lookup("value")}})
+		if err != nil || !matched || !modified {
+			t.Fatalf("update %d: matched=%v modified=%v error=%v", i, matched, modified, err)
+		}
+		got, err := collection.Get([]byte("first"))
+		if err != nil || !bytes.Equal(got, expected) {
+			t.Fatalf("acknowledged update %d: %x %v", i, got, err)
+		}
+	}
+	if cutovers.Load() != 1 || cutSequence.Load() != uint64(capacity) || database.Stats()["treedb.cache.checkpoint.runs"] != runs {
+		t.Fatalf("not one pressure-only accepted-slot handoff: cutovers=%d sequence=%d expected=%d checkpoints=%s before=%s", cutovers.Load(), cutSequence.Load(), capacity, database.Stats()["treedb.cache.checkpoint.runs"], runs)
+	}
+	old, err := held.FetchDocumentsByID([][]byte{[]byte("first")}, collections.DocumentFetchOptions{})
+	if err != nil || len(old.Results) != 1 || !old.Results[0].Found || !bytes.Equal(old.Results[0].Document, initial) {
+		t.Fatalf("held BSON reader changed: %+v %v", old, err)
+	}
+	if err := held.Close(); err != nil {
+		t.Fatal(err)
+	}
+	database.cached.SetCommandWALCheckpointCutoverHook(database.snapshotPublicCommandWALCheckpointCutover)
+	if err := database.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Close(); err != nil {
+		t.Fatal(err)
+	}
+	cache := database.cached
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	database = nil
+	requirePublicCOWFinalZero(t, cache)
+	database, err = Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend, err = database.NativeSemanticBackend()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager = collections.NewCollectionManager(backend)
+	collection, err = manager.OpenCollection("rows")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := collection.Get([]byte("first"))
+	if err != nil || !bytes.Equal(got, expected) {
+		t.Fatalf("reopened BSON value: %x %v", got, err)
 	}
 	if err := manager.Close(); err != nil {
 		t.Fatal(err)

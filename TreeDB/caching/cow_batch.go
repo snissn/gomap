@@ -1,6 +1,7 @@
 package caching
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"slices"
@@ -765,7 +766,8 @@ func (b *Batch) AcquireCOWAppendGuard(owner *transactionowner.Owner) error {
 
 // admitCOWAccepted reserves the queue slot before any producer/publication gate.
 // A full finite prefix is sealed using the reserved maintenance lane, then the
-// original admission is retried once. Retained readers do not need to end.
+// original admission is retried once. Native pressure can leave journal service
+// to its existing size worker; retained readers do not need to end.
 func (b *Batch) admitCOWAccepted() error {
 	c := b.db.cow
 	if c.prefix == nil || (len(b.entries) == 0 && b.cowState.native == nil) || b.cowState.accepted.Valid() {
@@ -773,7 +775,18 @@ func (b *Batch) admitCOWAccepted() error {
 	}
 	ticket, err := c.prefix.ReserveAccepted(false)
 	if errors.Is(err, rootpublication.ErrAcceptedCapacity) {
-		if err = b.db.Checkpoint(); err != nil {
+		if b.cowState.native != nil && b.db.nativePressureDrainEnabled() {
+			// The native input and its opening are still staged, with no accepted
+			// ticket or append guard. Preserve the exact seal/accepted join, but
+			// never join semantic cleanup while a consumer mutation gate is held.
+			if err = b.db.ownedCloseGuard.CheckClose(); err != nil {
+				return err
+			}
+			err = b.db.materializeCOWPrefix(context.Background(), false, nil, true)
+		} else {
+			err = b.db.Checkpoint()
+		}
+		if err != nil {
 			return err
 		}
 		ticket, err = c.prefix.ReserveAccepted(false)

@@ -4754,6 +4754,16 @@ that review, recovery/race evidence or public performance gates.
 | Maintenance headroom and retained physical views | `TestMinimumCapacityCheckpointMakesProgress`, `TestRetainedViewMaintenanceRefreshAndClose`, `TestMaintenanceDrainUsesOriginalRetiredGeneration`, `TestCOWPublicSelectedSourceRewriteKeepsOldCuts` |
 | Automatic selected-source retirement | `TestPrivateCOWLeafAutomaticSourceRetirement` uses ordinary WAL writes, the real periodic pack entry and original GC, no held reader or setup rotation, exact source inode witnesses, no extra checkpoint/GC, and reopen. `TestPrivateCOWLeafPackConvergesBeforeGCAndUnlinksAfterReaderRelease` retains the independent old-reader and already-closed-source controls. |
 | Finite small-budget recovery and retained reuse | `TestCOWPublicSmallBudgetAcceptedPrefixDrainsAndReopens`, `TestCOWAcceptedPrefixRepeatedDrainReuse`, `TestCOWPublicRetainedHistoryFixture` use actual checkpoint/reopen or canonical appends, held pointer bytes and final original-owner accounting. The retained benchmark remains construction-only until reviewed. |
+| Native accepted-slot pressure service | `TestCOWNativeAcceptedCapacityUsesPressureService` fills the original queue with installed native publications; the unchanged a2 service uses a full checkpoint and fails its selector assertion. `TestCOWNativeAcceptedCapacityFullCheckpointFallbacks` retains raw, interval-only and missing-cutover full service. `TestCOWNativeAcceptedCapacityJoinsOriginalSealAndCustody` separately holds the actual physical seal and original accepted custody before one assignment/publication, preserving a prior reader. `TestCOWNativeAcceptedCapacityCloseDuringOriginalDrain` races real Close against held accepted custody and proves the staged command stays unassigned. `TestCOWNativeAcceptedCapacityUnassignedRefusalAndErrors` uses real unassigned reservations for finite refusal, original error identity and cleanup-callback self-join protection. |
+
+`TestNativeCollectionPressureDrainsBeforeOpening/accepted-slots` uses ordinary
+BSON updates with an explicitly configured finite 512-slot inventory. It checks
+that producer advisory pressure remains absent, the handoff captures the exact
+512th logical publication without a full checkpoint, every acknowledged value
+and a held reader are correct, and explicit checkpoint/checked Close/fresh reopen
+preserve the final BSON value with zero original budget debt. These are activation
+and lifecycle controls; public throughput/tail benefit against the original
+baseline and bounded sustained WAL debt remain separate acceptance requirements.
 
 Run the affected lower lifecycle suites and compile the complete TreeDB tree:
 
