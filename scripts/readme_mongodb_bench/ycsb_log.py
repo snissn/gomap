@@ -58,4 +58,3 @@ def check_counts(parsed, expected, phase, path):
     successful = [row for op, row in rows.items() if op != "TOTAL" and not op.endswith("_ERROR")]
     require(successful and sum(row["count"] for row in successful) == expected, f"operation count mismatch in {path.name}")
     require(all(row["count"] == 0 for op, row in rows.items() if op.endswith("_ERROR")), f"operation errors in {path.name}")
-
