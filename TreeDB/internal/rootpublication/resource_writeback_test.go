@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"reflect"
+	"runtime"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
@@ -179,12 +180,16 @@ func TestStableResourceWritebackCoalescedImportClonePinnedFrontier(t *testing.T)
 	}
 	source.Release()
 	imported.Release()
-	// Replacement diagnostic names must never be reopened by the hint.
-	if err = os.Rename(dir+"/append", dir+"/moved"); err != nil {
-		t.Fatal(err)
-	}
-	if err = os.WriteFile(dir+"/append", []byte("replacement"), 0600); err != nil {
-		t.Fatal(err)
+	// Windows disallows renaming this open file. Keep the ownership, coalescing,
+	// import/clone and full-sync assertions below on every platform; additionally
+	// replace the diagnostic path where open-file rename is supported.
+	if runtime.GOOS != "windows" {
+		if err = os.Rename(dir+"/append", dir+"/moved"); err != nil {
+			t.Fatal(err)
+		}
+		if err = os.WriteFile(dir+"/append", []byte("replacement"), 0600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err = clone.FlushThrough(); err != nil {
 		t.Fatal(err)
