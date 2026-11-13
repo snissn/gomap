@@ -333,11 +333,11 @@ func TestNativeCollectionPressureDrainsBeforeOpening(t *testing.T) {
 	expected := make(map[string][]byte)
 	for _, id := range []string{"first", "row000000", "row000443", "row001499"} {
 		value := []byte("updated-" + id)
-		matched, modified, err := collection.UpdateBSONSet([]byte(id), []collections.BSONSetField{{Key: "field0", Value: value}})
+		expected[id] = document(id, value)
+		matched, modified, err := collection.UpdateBSONSet([]byte(id), []collections.BSONSetField{{Key: "field0", Value: bson.Raw(expected[id]).Lookup("field0")}})
 		if err != nil || !matched || !modified {
 			t.Fatalf("update %s: matched=%v modified=%v err=%v", id, matched, modified, err)
 		}
-		expected[id] = document(id, value)
 		got, err := collection.Get([]byte(id))
 		if err != nil || !bytes.Equal(got, expected[id]) {
 			t.Fatalf("acknowledged BSON update %s: %x/%v", id, got, err)
