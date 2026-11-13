@@ -109,7 +109,10 @@ The binary may be copied to another side root: its hash and build information
 must match, allowing only the filename prefix of `go version -m` to differ.
 The receipt must describe the actual build, not be reconstructed from an
 unrelated binary. Overlays, race builds, custom build flags and observer/runtime
-overrides are excluded. Run the reviewed selector from its clean landed harness
+overrides are excluded, including `GOGC`, `GOMEMLIMIT`, `GODEBUG`,
+`GOEXPERIMENT`, `GOMAP_READ_*` and all `TREEDB_*` settings. Both the parent
+environment and the effective child environment are checked before every case.
+Run the reviewed selector from its clean landed harness
 checkout, with no generated files in that checkout:
 
 ```sh

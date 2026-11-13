@@ -87,7 +87,7 @@ def verify(manifest, root, repo):
                 and manifest['case']['operations'] in (10000, 1000000), 'invalid selected case')
     run.require(manifest['host'] == host(), 'comparison host changed')
     for key in set(os.environ) | set(run.ENV):
-        run.require(not key.startswith(('GOMAP_READ_', 'GODEBUG', 'GOMEMLIMIT', 'GOEXPERIMENT')),
+        run.require(not key.startswith(('GOMAP_READ_', 'TREEDB_', 'GODEBUG', 'GOMEMLIMIT', 'GOGC', 'GOEXPERIMENT')),
                     'observer/runtime override present: '+key)
     run.require(source(repo) == manifest['product'], 'product source changed')
     original = Path(manifest['original_freeze']['path'])

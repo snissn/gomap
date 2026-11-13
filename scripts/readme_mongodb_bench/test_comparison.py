@@ -82,9 +82,14 @@ class ComparisonControls(unittest.TestCase):
         changed['host']['hostname'] = 'other-host'
         with self.assertRaisesRegex(ValueError, 'host changed'):
             self.verify(changed)
-        with patch.dict(comparison.os.environ, GOMAP_READ_PROFILE='1'):
-            with self.assertRaisesRegex(ValueError, 'observer/runtime'):
-                self.verify()
+        for key, value in (('GOMAP_READ_PROFILE', '1'), ('GOGC', 'off'),
+                           ('TREEDB_HOT_PATH_STATS', '1'), ('TREEDB_LEAF_PAGE_READ_CACHE_ENTRIES', '0'),
+                           ('GODEBUG', 'gctrace=1'), ('GOMEMLIMIT', '64MiB'), ('GOEXPERIMENT', 'arenas')):
+            for environment in (comparison.os.environ, run.ENV):
+                with self.subTest(key=key, inherited=environment is comparison.os.environ), \
+                     patch.dict(environment, {key:value}), \
+                     self.assertRaisesRegex(ValueError, 'observer/runtime'):
+                    self.verify()
 
     def test_explicit_client_path_keeps_original_source_identity(self):
         self.source_patch.stop()
