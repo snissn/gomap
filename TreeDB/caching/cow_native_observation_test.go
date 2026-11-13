@@ -113,7 +113,9 @@ func TestCOWNativeProducerObservationFromNotifyError(t *testing.T) {
 		prepareErr = db.PrepareNativeProducer()
 	}
 	limit := c.budget.Limits().MaxInFlightBytes
-	filler, err := c.budget.AcquireExternal(limit - limit/4 - c.budget.Stats().ReservedBytes)
+	fixed := c.maintenance.Limits().MaxInFlightBytes
+	watermark := fixed + (limit - fixed) - (limit-fixed)/4
+	filler, err := c.budget.AcquireExternal(watermark - c.budget.Stats().ReservedBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
