@@ -4,9 +4,11 @@
 import copy
 import importlib.util
 import json
+import math
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 import unittest
@@ -69,6 +71,112 @@ class PrimaryCostGateTests(unittest.TestCase):
             baseline = 100 + row["pair"] * 100
             row["metrics"]["ns/op"] = baseline * (1.02 if row["revision"] == "candidate" else 1)
         self.assertAlmostEqual(gate.evaluate(rows)["median_paired_delta_percent"], 2)
+
+    def v2_evidence(self, baseline=92125.5, candidate=92128, *, equivalent=False):
+        rows = self.rows()
+        for row in rows:
+            row["metrics"]["B/op"] = baseline if row["revision"] == "baseline" else candidate
+        binding = {"linkage": "static", "executable": {"sha256": "base", "bytes": 100},
+                   "interpreter": None, "libraries": [], "inputs": {
+                       "harness_sha256": "harness", "runner_sha256": "runner",
+                       "environment_sha256": "env", "cwd": "/fixed", "argv": ["fixed"]}}
+        before = {"baseline": binding, "candidate": copy.deepcopy(binding)}
+        if not equivalent:
+            before["candidate"]["executable"]["sha256"] = "head"
+        return gate.evaluate(rows), before
+
+    def test_v2_accepts_explicit_byte_budget_without_relabeling_raw_failure(self):
+        raw, before = self.v2_evidence()
+        retained = copy.deepcopy(raw)
+        result = gate.qualify_runtime(raw, before, copy.deepcopy(before), quiet=True,
+                                      acceptance_contract="v2")
+        self.assertEqual(raw, retained)
+        self.assertFalse(result["gates"]["bytes"])
+        self.assertFalse(result["measurement_pass"])
+        self.assertFalse(result["runtime_input_equivalent"])
+        self.assertTrue(result["accepted"])
+        self.assertEqual(result["acceptance_contract"], "v2")
+        self.assertEqual(result["bytes_disposition"], "WITHIN_ACCEPTED_BYTE_BUDGET")
+        self.assertEqual(result["byte_budget"], {
+            "absolute_limit_B_per_op": 8.0, "relative_limit_percent": 0.01,
+            "allowance_B_per_op": 8.0, "growth_B_per_op": 2.5})
+        self.assertFalse(gate.qualify_runtime(raw, before, before, quiet=True)["accepted"])
+
+    def test_v2_enforces_both_byte_boundaries_even_for_equivalent_runtimes(self):
+        for baseline, boundary in ((100000, 100008), (20000, 20002), (0, 0)):
+            for candidate, accepted in ((baseline, True), (boundary, True),
+                                        (math.nextafter(boundary, math.inf), False)):
+                for equivalent in (False, True):
+                    with self.subTest(baseline=baseline, candidate=candidate, equivalent=equivalent):
+                        raw, before = self.v2_evidence(baseline, candidate, equivalent=equivalent)
+                        result = gate.qualify_runtime(raw, before, before, quiet=True,
+                                                      acceptance_contract="v2")
+                        self.assertEqual(result["accepted"], accepted)
+                        self.assertEqual(result["acceptance_gates"]["bytes"], accepted)
+                        self.assertEqual(result["gates"]["bytes"], candidate <= baseline)
+        raw, before = self.v2_evidence(20000, 19999)
+        result = gate.qualify_runtime(raw, before, before, quiet=True, acceptance_contract="v2")
+        self.assertTrue(result["accepted"])
+        self.assertEqual(result["bytes_disposition"], "PASS")
+
+    def test_v2_keeps_object_time_activation_quiet_and_binding_failures_blocking(self):
+        for metric, value, name in (("allocs/op", 4, "allocations"),
+                                    ("ns/op", 106, "timing"),
+                                    ("generation_advances/op", 1, "candidate_primary_activation")):
+            rows = self.rows()
+            for row in rows:
+                if row["revision"] == "candidate":
+                    row["metrics"][metric] = value
+            _, before = self.v2_evidence()
+            result = gate.qualify_runtime(gate.evaluate(rows), before, before, quiet=True,
+                                          acceptance_contract="v2")
+            with self.subTest(metric=metric):
+                self.assertFalse(result["accepted"])
+                self.assertFalse(result["acceptance_gates"][name])
+        raw, before = self.v2_evidence()
+        self.assertFalse(gate.qualify_runtime(raw, before, before, quiet=False,
+                                             acceptance_contract="v2")["accepted"])
+        for missing in ({}, {"baseline": before["baseline"]}, {"baseline": {}, "candidate": {}}):
+            with self.assertRaisesRegex(RuntimeError, "missing"):
+                gate.qualify_runtime(raw, missing, missing, quiet=True, acceptance_contract="v2")
+        after = copy.deepcopy(before)
+        after["candidate"]["inputs"]["argv"] = ["changed"]
+        with self.assertRaisesRegex(RuntimeError, "drift"):
+            gate.qualify_runtime(raw, before, after, quiet=True, acceptance_contract="v2")
+        with self.assertRaisesRegex(ValueError, "unknown acceptance contract"):
+            gate.qualify_runtime(raw, before, before, quiet=True, acceptance_contract="unknown")
+
+    def test_v2_retains_exact_runtime_timing_attribution_but_not_byte_exemption(self):
+        raw, before = self.v2_evidence(equivalent=True)
+        raw["gates"]["timing"] = raw["measurement_pass"] = False
+        result = gate.qualify_runtime(raw, before, before, quiet=True, acceptance_contract="v2")
+        self.assertTrue(result["accepted"])
+        self.assertEqual(result["timing_disposition"], "EQUIVALENT_NON_ATTRIBUTABLE")
+        for field in before["candidate"]["inputs"]:
+            changed = copy.deepcopy(before)
+            changed["candidate"]["inputs"][field] = "different"
+            self.assertFalse(gate.qualify_runtime(raw, changed, changed, quiet=True,
+                                                 acceptance_contract="v2")["accepted"])
+
+    def test_cli_selects_contract_and_refuses_unknown_before_execution(self):
+        argv = [str(path), "--root", "/source", "--output", "/output",
+                "--baseline", "a" * 40, "--candidate", "b" * 40]
+        for extra, contract in (([], "v1"), (["--acceptance-contract", "v2"], "v2")):
+            with mock.patch.object(sys, "argv", argv + extra), mock.patch.object(gate, "run_gate", return_value=0) as run:
+                self.assertEqual(gate.main(), 0)
+                self.assertEqual(run.call_args.kwargs["acceptance_contract"], contract)
+        with mock.patch.object(gate, "run_gate") as run, \
+                mock.patch.object(sys, "argv", argv + ["--acceptance-contract", "unknown"]), \
+                mock.patch.object(sys, "stderr"):
+            with self.assertRaises(SystemExit) as error:
+                gate.main()
+            self.assertEqual(error.exception.code, 2)
+            run.assert_not_called()
+        with mock.patch.object(gate.subprocess, "Popen") as process:
+            with self.assertRaisesRegex(ValueError, "unknown acceptance contract"):
+                gate.run_gate(Path("/source"), Path("/output"), "a" * 40, "b" * 40,
+                              acceptance_contract="unknown")
+            process.assert_not_called()
 
     def test_equivalent_bytes_qualification_retains_raw_failure(self):
         rows = self.rows()
