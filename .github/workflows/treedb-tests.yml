@@ -402,6 +402,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           python3 scripts/mvcc_primary_cost_gate.py \
+            --acceptance-contract v2 \
             --root "$GITHUB_WORKSPACE" \
             --baseline "$BASE_SHA" --candidate "$HEAD_SHA" \
             --output "$RUNNER_TEMP/mvcc-raw-path-gate/primary"

@@ -26,6 +26,9 @@ LIFECYCLE = "TestCommitAtPrimaryOnlyRetainsActualDataGeneration"
 SAMPLES = 8
 ITERATIONS = 128
 TIME_LIMIT_PERCENT = 5.0
+ACCEPTANCE_CONTRACTS = ("v1", "v2")
+BYTE_LIMIT_ABSOLUTE = 8.0
+BYTE_LIMIT_PERCENT = 0.01
 QUIET_LIMIT_PERCENT = 10.0
 QUIET_AGGREGATE_LIMIT_PERCENT = 50.0
 QUIET_WARNING_PERCENT = 2.0
@@ -86,8 +89,11 @@ def runtime_binding(binary: Path, command, label: str, environment: dict) -> dic
             "libraries": list(libraries.values())}
 
 
-def qualify_runtime(result: dict, before: dict, after: dict, *, quiet: bool) -> dict:
-    """Keep raw measurements; qualify timing/bytes only for the same bound runtime."""
+def qualify_runtime(result: dict, before: dict, after: dict, *, quiet: bool,
+                    acceptance_contract: str = "v1") -> dict:
+    """Preserve raw gates while applying the explicitly selected acceptance policy."""
+    if acceptance_contract not in ACCEPTANCE_CONTRACTS:
+        raise ValueError("unknown acceptance contract")
     if set(before) != {"baseline", "candidate"} or before != after:
         raise RuntimeError("measured runtime/input drift or missing bindings")
     for binding in before.values():
@@ -107,7 +113,21 @@ def qualify_runtime(result: dict, before: dict, after: dict, *, quiet: bool) -> 
         acceptance[metric] = raw_pass or equivalent
         dispositions[metric + "_disposition"] = ("PASS" if raw_pass else
             "EQUIVALENT_NON_ATTRIBUTABLE" if equivalent else "FAIL")
-    return dict(result, quiet=quiet, runtime_input_equivalent=equivalent, **dispositions,
+    policy = {"acceptance_contract": acceptance_contract,
+              "historical_results_reinterpreted": False}
+    if acceptance_contract == "v2":
+        baseline = result["medians"]["baseline"]["B/op"]
+        growth = result["medians"]["candidate"]["B/op"] - baseline
+        allowance = min(BYTE_LIMIT_ABSOLUTE, baseline * BYTE_LIMIT_PERCENT / 100)
+        # This is an explicit tolerated-growth budget, including for identical
+        # runtimes; equivalence must not bypass either numeric bound in v2.
+        acceptance["bytes"] = growth <= allowance
+        dispositions["bytes_disposition"] = ("PASS" if result["gates"]["bytes"] else
+            "WITHIN_ACCEPTED_BYTE_BUDGET" if acceptance["bytes"] else "FAIL")
+        policy["byte_budget"] = {"absolute_limit_B_per_op": BYTE_LIMIT_ABSOLUTE,
+                               "relative_limit_percent": BYTE_LIMIT_PERCENT,
+                               "allowance_B_per_op": allowance, "growth_B_per_op": growth}
+    return dict(result, **policy, quiet=quiet, runtime_input_equivalent=equivalent, **dispositions,
                 acceptance_gates=acceptance, accepted=all(acceptance.values()) and quiet)
 
 
@@ -309,7 +329,10 @@ def acquire_quiet_window(output: Path, *, clock=None, sleep=None, observer_facto
     raise RuntimeError("host quiet preflight acquisition exhausted; no timed samples started")
 
 
-def run_gate(root: Path, output: Path, baseline: str, candidate: str) -> int:
+def run_gate(root: Path, output: Path, baseline: str, candidate: str, *,
+             acceptance_contract: str = "v1") -> int:
+    if acceptance_contract not in ACCEPTANCE_CONTRACTS:
+        raise ValueError("unknown acceptance contract")
     if not re.fullmatch(r"[0-9a-f]{40}", baseline) or not re.fullmatch(r"[0-9a-f]{40}", candidate):
         raise ValueError("full immutable source SHAs are required")
     if baseline == candidate or output.exists() or output == root or root in output.parents:
@@ -385,7 +408,8 @@ def run_gate(root: Path, output: Path, baseline: str, candidate: str) -> int:
             binaries[revision] = {"sha256": digest(binary), "bytes": binary.stat().st_size,
                                   "source_sha": baseline if revision == "baseline" else candidate,
                                   "path": binary.name}
-        save("bindings.json", {"baseline": baseline, "candidate": candidate,
+        bindings = {"baseline": baseline, "candidate": candidate,
+             "acceptance_contract": acceptance_contract,
              "harness_sha256": digest(harness), "runner_sha256": digest(Path(__file__)),
              "samples": SAMPLES, "iterations": ITERATIONS, "cpu": 0, "gomaxprocs": 1,
              "max_paired_regression_percent": TIME_LIMIT_PERCENT,
@@ -393,7 +417,13 @@ def run_gate(root: Path, output: Path, baseline: str, candidate: str) -> int:
                                  "cpu_threshold_percent": QUIET_LIMIT_PERCENT,
                                  "aggregate_cpu_threshold_percent": QUIET_AGGREGATE_LIMIT_PERCENT,
                                  "policy": "external-cpu-v2"},
-             "bytes_and_allocations": "no median growth", "binaries": binaries})
+             "bytes_and_allocations": ("no median growth" if acceptance_contract == "v1" else
+                 "v2 bounded median byte growth; no median allocation-count growth"),
+             "binaries": binaries}
+        if acceptance_contract == "v2":
+            bindings["byte_limits"] = {"absolute_limit_B_per_op": BYTE_LIMIT_ABSOLUTE,
+                                     "relative_limit_percent": BYTE_LIMIT_PERCENT}
+        save("bindings.json", bindings)
         benchmark_argv = ["-test.run=^$", "-test.bench=^" + BENCHMARK + "$",
                           "-test.benchtime=128x", "-test.count=1", "-test.benchmem", "-test.timeout=90s"]
 
@@ -436,17 +466,23 @@ def run_gate(root: Path, output: Path, baseline: str, candidate: str) -> int:
         if digest(root / HARNESS) != digest(harness):
             raise RuntimeError("benchmark input drift")
         inputs_after = bind_inputs("after")
-        result = qualify_runtime(evaluate(rows), inputs_before, inputs_after, quiet=not busy)
+        result = qualify_runtime(evaluate(rows), inputs_before, inputs_after, quiet=not busy,
+                                 acceptance_contract=acceptance_contract)
         result.update(baseline=baseline, candidate=candidate)
+        if "byte_budget" in result:
+            bindings["byte_budget"] = result["byte_budget"]
+            save("bindings.json", bindings)
         save("summary.json", result)
         (output / "summary.md").write_text(
             "## Public PRIMARY replacement cost\n\n"
             f"- Verdict: {'PASS' if result['accepted'] else 'FAIL'}\n"
             f"- Exact base/head: `{baseline}` / `{candidate}`\n"
+            f"- Acceptance contract: `{acceptance_contract}`; no historical result reinterpreted.\n"
             "- Eight alternating AB/BA pairs; 128 durable public replacements per sample.\n"
             f"- Median paired time delta: {result['median_paired_delta_percent']:+.3f}% (limit +5%).\n"
             f"- Raw gates: `{json.dumps(result['gates'], sort_keys=True)}`; measurement pass: {result['measurement_pass']}; quiet: {not busy}.\n"
             f"- Timing acceptance: `{result['timing_disposition']}`; bytes acceptance: `{result['bytes_disposition']}`; bound runtime/input equivalent: {result['runtime_input_equivalent']}.\n"
+            f"- Byte budget: `{json.dumps(result.get('byte_budget'), sort_keys=True)}` (v1 has no numeric allowance).\n"
             "- Scope: this public replacement workload; not final graph qualification.\n")
         return 0 if result["accepted"] else 1
     except Exception as error:
@@ -467,8 +503,11 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--baseline", required=True)
     parser.add_argument("--candidate", required=True)
+    parser.add_argument("--acceptance-contract", choices=ACCEPTANCE_CONTRACTS, default="v1",
+                        help="v1 preserves historical attribution; v2 applies the explicit bounded byte-growth budget")
     args = parser.parse_args()
-    return run_gate(args.root.resolve(), args.output.resolve(), args.baseline, args.candidate)
+    return run_gate(args.root.resolve(), args.output.resolve(), args.baseline, args.candidate,
+                    acceptance_contract=args.acceptance_contract)
 
 
 if __name__ == "__main__":

@@ -39,12 +39,29 @@ continues to authenticate that original archive, not the new compact upload.
 
 The separate `scripts/mvcc_primary_cost_gate.py` comparison retains every raw
 sample, median, gate and `measurement_pass`. Raw timing remains limited to +5%
-median paired growth, and raw bytes/allocations permit no median growth. Timing
-and bytes acceptance may report `EQUIVALENT_NON_ATTRIBUTABLE` only for identical
-independently bound runtime and input identities. A different executable, loader,
-library or input retains the original strict timing and bytes gates, with no
-numerical allowance. This attribution does not turn a raw failure into a measured
-PASS or establish a speedup. Allocation count, candidate PRIMARY activation, the
+median paired growth, and raw bytes/allocations permit no median growth.
+The workflow explicitly selects **acceptance contract v2**: positive median byte
+growth is accepted only when it satisfies **both <=8 B/op and <=0.01% of baseline**
+(`min(8, baseline_B_per_op * 0.0001)`). Zero baseline permits zero growth. There
+is no comparison epsilon. Scaling this chosen median allowance to 128 operations
+gives at most 1 KiB; individual raw samples are not independently capped. This
+is not an established noise bound or estimator
+repair. It deliberately revises the prospective zero-growth acceptance obligation
+discussed in #5191; that issue's causal investigation remains unresolved.
+
+V2 preserves raw `gates.bytes` and `measurement_pass`, reporting a separate
+`WITHIN_ACCEPTED_BYTE_BUDGET` disposition when growth fits the allowance. The
+selected contract, absolute/relative limits, effective allowance and measured
+growth appear in `bindings.json` and `summary.json`/`summary.md`. The byte cap
+applies even to identical runtimes. No raw failure becomes a measured PASS.
+
+Timing acceptance may still report `EQUIVALENT_NON_ATTRIBUTABLE` only for identical
+independently bound runtime and input identities; different runtime/input
+identities retain the +5% paired-time limit. The CLI default **v1** preserves
+historical semantics: both timing and bytes can use exact-runtime attribution,
+and different runtimes permit no median byte growth. Historical v1 results are
+not reinterpreted by opting new captures into v2. Allocation count remains strict
+under both versions. Candidate PRIMARY activation, the
 public lifecycle control, quiet-host checks, ordered complete samples and all
 source/input/binary drift checks remain mandatory even for identical runtimes.
 
@@ -69,7 +86,8 @@ identity alone or caller-supplied identity claims never establish equivalence.
 The separate final `accepted` and `acceptance_gates` fields report disposition;
 `gates.timing`, `gates.bytes` and `measurement_pass` preserve the actual measured
 result. `timing_disposition` and `bytes_disposition` distinguish measured PASS,
-FAIL and equivalent-runtime attribution. Identical runtime bindings establish
+FAIL, v2's bounded-growth acceptance and v1's equivalent-runtime attribution.
+Identical runtime bindings establish
 that timing variation cannot be attributed to candidate code; they do not make
 host scheduling or cache/process state immutable. The original timing-only
 failure at PR #5149 head `ab2bbeb5d` (job 118411039651, artifact 12235870827)
@@ -109,8 +127,10 @@ the original final-window schema; the acquisition receipt distinguishes a
 qualifying final window from exhaustion. Already-quiet setup starts timing after
 its first complete window. No public lifecycle or timed sample is repeated to
 obtain acceptance. Once timing begins, all eight alternating pairs of 128 durable
-replacements, measured process observations, +5% paired-time/no-byte-or-object-growth
-rules, source/runtime bindings and drift checks remain unchanged.
+replacements, measured process observations, raw +5% paired-time/no-byte-or-object-growth
+rules, source/runtime bindings and drift checks remain unchanged. Prospective
+acceptance selects the explicit v2 byte budget above; quiet acquisition itself
+does not change any measured acceptance predicate.
 
 This is an explicit **setup acquisition protocol change**, not a measured
 performance improvement or a scientific inference. It requires source/protocol
@@ -146,9 +166,9 @@ assertions precede the timer. Go allocation counters are process-global, so
 the incidental vacuum ticker must not enter this narrow boundary. The hypothesis
 is a 128-byte ticker allocation crossing the timer in a 128-iteration run; this
 does not prove all remaining process-global allocation noise is removed.
-This is a harness isolation change, not a storage optimization or a relaxation of
-the gate: eight alternating pairs, 128 iterations, the 5% paired timing limit,
-no median bytes/allocation growth, identity binding and quiet-host qualification
-remain unchanged. Old failed/noisy measurements remain failed retained evidence;
+The isolation change preserved eight alternating pairs, 128 iterations, the 5%
+paired timing limit, raw no-median-bytes/allocation-growth measurement, identity
+binding and quiet-host qualification. The separate prospective v2 acceptance
+revision is described above. Old failed/noisy measurements remain failed retained evidence;
 new-harness rows cannot be silently pooled with them. Short diagnostics do not
 establish that disabling workers resolves every observed byte difference.

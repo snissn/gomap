@@ -206,7 +206,7 @@ class VacuumM0SummarizeTest(unittest.TestCase):
         }
         self.assertFalse(all(MODULE.evaluate_gates(production, public, "production", "v2").values()))
         self.assertTrue(all(MODULE.evaluate_gates(production, public, "production", "v3").values()))
-        diagnostic = MODULE.pause_diagnostic(production)
+        diagnostic = MODULE.latency_diagnostic(production, "max-writer-pause-ns")
         self.assertEqual(diagnostic["samples"], production["max-writer-pause-ns"]["samples"])
         self.assertEqual(diagnostic["maximum"], 3870643)
         self.assertFalse(diagnostic["cv_at_most_10_percent"])
@@ -245,7 +245,62 @@ class VacuumM0SummarizeTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unknown acceptance contract"):
             MODULE.evaluate_gates(production, public, "production", "unknown")
 
-    def test_cli_preserves_v2_failure_and_names_v3_pending_pause_review(self):
+    def test_v4_retains_failed_p99_cv_and_requires_separate_owner_review(self):
+        production, public = self.production_observations()
+        production["foreground-p99-ns/op"] = {
+            "samples": list(range(1, 11)), "median": 5.5, "mean": 5.5, "cv": 0.55}
+        self.assertFalse(all(MODULE.evaluate_gates(production, public, "production", "v3").values()))
+        self.assertTrue(all(MODULE.evaluate_gates(production, public, "production", "v4").values()))
+        self.assertEqual(MODULE.cv_metrics("production", "v4"), ("vacuum-total-ns/op",))
+        diagnostic = MODULE.latency_diagnostic(production, "foreground-p99-ns/op")
+        self.assertEqual(diagnostic["samples"], list(range(1, 11)))
+        self.assertEqual(diagnostic["minimum"], 1)
+        self.assertEqual(diagnostic["maximum"], 10)
+        self.assertEqual(diagnostic["median"], 5.5)
+        self.assertFalse(diagnostic["cv_at_most_10_percent"])
+        self.assertFalse(diagnostic["merge_predicate"])
+        self.assertTrue(diagnostic["owner_review_required"])
+        self.assertIsNone(diagnostic["owner_review"])
+
+    def test_v4_total_cv_completion_errors_and_classifier_remain_blocking(self):
+        production, public = self.production_observations()
+        production["vacuum-total-ns/op"]["cv"] = 0.10
+        self.assertTrue(all(MODULE.evaluate_gates(production, public, "production", "v4").values()))
+        production["vacuum-total-ns/op"]["cv"] = 0.100001
+        self.assertFalse(all(MODULE.evaluate_gates(production, public, "production", "v4").values()))
+        for metric in ("foreground-overlap-samples/op", "foreground-points/op", "foreground-ranges/op",
+                       "foreground-exposure-misses/op", "vacuum-errors/op", "concurrent-aborts/op"):
+            with self.subTest(metric=metric):
+                production, public = self.production_observations()
+                production[metric]["samples"][4] += 1
+                self.assertFalse(all(MODULE.evaluate_gates(production, public, "production", "v4").values()))
+        for metric in public:
+            with self.subTest(public_metric=metric):
+                production, public = self.production_observations()
+                public[metric]["samples"].pop()
+                self.assertFalse(all(MODULE.evaluate_gates(production, public, "production", "v4").values()))
+        production, public = self.production_observations()
+        public["vacuum-concurrent-retries/op"]["samples"] = [1] * 10
+        self.assertFalse(all(MODULE.evaluate_gates(production, public, "production", "v4").values()))
+
+    def test_v4_requires_all_stability_samples_and_production_arm(self):
+        for metric in MODULE.REQUIRED_CV_METRICS:
+            with self.subTest(metric=metric):
+                production, public = self.production_observations()
+                production[metric]["samples"].pop()
+                self.assertFalse(all(MODULE.evaluate_gates(production, public, "production", "v4").values()))
+                del production[metric]
+                with self.assertRaisesRegex(ValueError, "missing stability metrics"):
+                    MODULE.evaluate_gates(production, public, "production", "v4")
+        production, public = self.production_observations()
+        with self.assertRaisesRegex(ValueError, "requires the production"):
+            MODULE.evaluate_gates(production, public, "legacy", "v4")
+
+    def test_capture_selects_prospective_v4_explicitly(self):
+        script = SCRIPT.with_name("treedb_vacuum_m0_capture.sh").read_text()
+        self.assertIn("--stability-arm production --acceptance-contract v4", script)
+
+    def test_cli_preserves_historical_failure_and_names_pending_latency_reviews(self):
         production, public = self.production_observations()
         diagnostics = {
             "diagnostic-precutover-hooks/op": [1] * 10,
@@ -267,6 +322,8 @@ class VacuumM0SummarizeTest(unittest.TestCase):
             2768094, 3870643, 2833540, 2566792, 2822662,
             2749029, 2872057, 3176223, 2623660, 3005264,
         ]
+        # Stable but very slow p99 must still require an owner decision in v4.
+        production["foreground-p99-ns/op"]["samples"] = [1_000_000_000] * 10
         fixture = {"timing_boundary": "fixed-work", "fixture": {
             "logical_digest": "fixture", "index_bytes": 2, "offline_index_bytes": 1,
             "reclaimable_pages": 1, "reclaimable_page_percent": 50,
@@ -285,7 +342,7 @@ class VacuumM0SummarizeTest(unittest.TestCase):
                     row = benchmark + "-2 1 1 ns/op "
                     row += " ".join(f"{entry['samples'][i]} {name}" for name, entry in metrics.items())
                     (root / "raw" / f"{arm}-{i+1}.txt").write_text(row + "\nPASS\n")
-            for contract, expected_exit, schema in (("v2", 1, 2), ("v3", 0, 3)):
+            for contract, expected_exit, schema in (("v2", 1, 2), ("v3", 0, 3), ("v4", 0, 4)):
                 argv = [str(SCRIPT), "--repo-root", directory, "--run-dir", directory,
                         "--stability-arm", "production", "--acceptance-contract", contract]
                 with mock.patch.object(sys, "argv", argv), mock.patch.object(MODULE, "environment", return_value=env):
@@ -298,11 +355,23 @@ class VacuumM0SummarizeTest(unittest.TestCase):
                 for name, samples in diagnostics.items():
                     self.assertEqual(result["metrics"]["production"][name]["samples"],
                                      [samples[index] for index in sample_order])
-                if contract == "v3":
+                if contract in ("v3", "v4"):
                     self.assertFalse(result["pause_diagnostic"]["cv_at_most_10_percent"])
                     self.assertIsNone(result["pause_diagnostic"]["owner_review"])
                     self.assertEqual(len(result["pause_diagnostic"]["samples"]), 10)
                     self.assertIn("fail (diagnostic only; owner review required)", (root / "summary.md").read_text())
+                if contract == "v4":
+                    p99 = result["foreground_p99_diagnostic"]
+                    self.assertEqual(p99["samples"], [1_000_000_000] * 10)
+                    self.assertEqual(p99["minimum"], 1_000_000_000)
+                    self.assertEqual(p99["maximum"], 1_000_000_000)
+                    self.assertTrue(p99["cv_at_most_10_percent"])
+                    self.assertTrue(p99["owner_review_required"])
+                    self.assertIsNone(p99["owner_review"])
+                    self.assertFalse(p99["merge_predicate"])
+                    self.assertEqual(result["stability_contract"]["required_cv_metrics"], ["vacuum-total-ns/op"])
+                    self.assertFalse(result["stability_contract"]["historical_results_reinterpreted"])
+                    self.assertIn("absolute latency", (root / "summary.md").read_text())
 
     def test_phase_diagnostics_do_not_relax_other_metric_validation(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -326,10 +395,11 @@ class VacuumM0SummarizeTest(unittest.TestCase):
     def test_raw_decoder_rejects_nonfinite_or_negative_observations(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "production-1.txt"
-            for value in ("nan", "inf", "-1"):
-                path.write_text(MODULE.STABILITY_BENCHMARKS["production"] + f"-2 1 {value} ns/op\nPASS\n")
-                with self.assertRaisesRegex(ValueError, "invalid/duplicate metric"):
-                    MODULE.parse_benchmark(path, MODULE.STABILITY_BENCHMARKS["production"])
+            for metric in ("ns/op", "foreground-p99-ns/op"):
+                for value in ("nan", "inf", "-1"):
+                    path.write_text(MODULE.STABILITY_BENCHMARKS["production"] + f"-2 1 {value} {metric}\nPASS\n")
+                    with self.assertRaisesRegex(ValueError, "invalid/duplicate metric"):
+                        MODULE.parse_benchmark(path, MODULE.STABILITY_BENCHMARKS["production"])
 
 
 if __name__ == "__main__":

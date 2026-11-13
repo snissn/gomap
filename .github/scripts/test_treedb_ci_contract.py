@@ -229,6 +229,7 @@ class TreeDBCIContractTests(unittest.TestCase):
         self.assertIn('RUNS: "8"', raw)
         self.assertIn('./scripts/mvcc_raw_path_gate.sh', raw)
         self.assertIn('python3 scripts/mvcc_primary_cost_gate.py', primary)
+        self.assertIn('--acceptance-contract v2', primary)
         self.assertNotIn('continue-on-error', primary)
         self.assertNotIn('steps.scope.outputs.enforce', primary)
         self.assertNotIn('getversioned-timing-acceptance', self.source)
