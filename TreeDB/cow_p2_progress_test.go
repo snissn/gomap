@@ -79,21 +79,25 @@ func TestMinimumCapacityCheckpointMakesProgress(t *testing.T) {
 			defer database.Close()
 			inventory := func(phase string) {
 				inspection := errors.New("test: inventory only")
+				var primary, registry uint64
+				var shape backenddb.SnapshotAllocationSizes
 				_, err := database.backend.AcquireSnapshotWithAllocationAdmission(func(s backenddb.SnapshotAllocationSizes) error {
-					var primary, registry uint64
+					shape.Wrapper, shape.ValueLog = s.Wrapper, s.ValueLog
 					if s.PrimaryMetadata != nil {
 						primary = s.PrimaryMetadata.Bytes()
 					}
 					if s.RegistryMetadata != nil {
 						registry = s.RegistryMetadata.Bytes()
 					}
-					stats := database.Stats()
-					t.Logf("%s: maintenance=%s primary_owner=%d registry_owner=%d snapshot_wrapper=%d vlog=%+v sources=%s generations=%s cuts=%s", phase, stats["treedb.cache.cow.maintenance_used_bytes"], primary, registry, s.Wrapper, s.ValueLog, stats["treedb.cache.cow.sources"], stats["treedb.cache.cow.generations"], stats["treedb.cache.cow.active_cuts"])
 					return inspection
 				})
 				if !errors.Is(err, inspection) {
 					t.Fatalf("inventory %s: %v", phase, err)
 				}
+				// Stats captures another snapshot; call it after the admission
+				// capture fence is released so a waiting writer cannot deadlock it.
+				stats := database.Stats()
+				t.Logf("%s: maintenance=%s primary_owner=%d registry_owner=%d snapshot_wrapper=%d vlog=%+v sources=%s generations=%s cuts=%s", phase, stats["treedb.cache.cow.maintenance_used_bytes"], primary, registry, shape.Wrapper, shape.ValueLog, stats["treedb.cache.cow.sources"], stats["treedb.cache.cow.generations"], stats["treedb.cache.cow.active_cuts"])
 			}
 			inventory("startup")
 			if err := database.Set([]byte("key"), []byte("opening")); err != nil {
