@@ -34,6 +34,13 @@ class RecipeControls(unittest.TestCase):
             with self.assertRaises(ValueError):
                 run.strict_json(value)
 
+    def test_container_user_binding(self):
+        frozen = {'host': {'mongo_container_user': '1000:1000'}}
+        aggregate.check_mongo_user({'Config': {'User': '1000:1000'}}, frozen)
+        for user in ('', '999:999'):
+            with self.assertRaisesRegex(ValueError, 'Mongo container user'):
+                aggregate.check_mongo_user({'Config': {'User': user}}, frozen)
+
     def test_close_identity_and_errors(self):
         env = dict(YCSB_PHASE_ID='phase', YCSB_CLIENT_BUILD_ID='build')
         receipt = dict(schema_version=1, phase_id='phase', client_build_id='build',

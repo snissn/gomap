@@ -50,6 +50,7 @@ def main():
     image = json.loads(run(['docker', 'image', 'inspect', args.mongo_image_id]))[0]
     info = json.loads(run(['docker', 'info', '--format', '{{json .}}']))
     host = dict(os=platform.platform(), kernel=run(['uname', '-a']),
+                mongo_container_user=str(os.getuid())+':'+str(os.getgid()) if platform.system() == 'Linux' else '',
                 disk=run(['df', '-k', root]), background_processes=run(['ps', '-axo', 'pid,comm,%cpu,%mem']),
                 gomaxprocs='unset for all benchmark processes; runtime value not independently observed',
                 infrastructure_unavailable=['INFRASTRUCTURE_UNAVAILABLE: runner: shared user-selected server185; unrelated services remain active'],

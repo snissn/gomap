@@ -37,6 +37,11 @@ def finite(value, label, positive=False):
             (value > 0 if positive else value >= 0), 'invalid metric: '+label)
 
 
+def check_mongo_user(identity, freeze):
+    require(identity['Config']['User'] == freeze['host']['mongo_container_user'],
+            'Mongo container user differs from frozen host policy')
+
+
 def flags(argv):
     """Read the existing producer's recorded flags; never launch a producer."""
     result = {}
@@ -150,6 +155,15 @@ def check_evidence(case, result, freeze, load, original_root):
                             ('ids','identity','stop','stopped-inspect','logs','remove','absence'))
             identity = load(case/(stage+'-cleanup-1-identity.out'))[0]
             stopped = load(case/(stage+'-cleanup-1-stopped-inspect.out'))[0]
+            check_mongo_user(identity, freeze)
+            check_mongo_user(stopped, freeze)
+            create = load(case/(stage+'-create.command.json'))['argv']
+            user = freeze['host']['mongo_container_user']
+            require(create == ['docker', 'run', '-d', '--name', identity['Name'].removeprefix('/'),
+                    '--label', 'gomap.issue=5407', '--restart=no',
+                    *(['--user', user] if user else []), '-p', '127.0.0.1::27017',
+                    '-v', str(original_data)+':/data/db', freeze['mongodb_image_id'], '--quiet'],
+                    'Mongo create command differs from frozen policy')
             require(identity['Id'] == stopped['Id'] == stop['cid'] and
                     identity['Image'] == freeze['mongodb_image_id'] and
                     identity['Config']['Labels'].get('gomap.issue') == '5407' and
