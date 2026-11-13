@@ -326,18 +326,27 @@ func ReadCOWRecord(f *os.File, ptr page.ValuePtr, shape COWRecordShape, verifyCR
 // capacity must be at least page.PageSize before any read/decode. Returned
 // bytes are exactly one page and alias pageDst. No materialization fallback or
 // global codec cache is used. The retained file has the canonical native path
-// required by InspectCOWLeafRecord.
+// required by InspectCOWLeafRecord. As for ReadCOWRecord, scratch must be
+// disjoint, exclusively owned and admitted. Compact bytes borrow input/raw
+// scratch only until synchronous expansion directly into pageDst completes.
 func ReadCOWLeafPage(f *os.File, ptr page.ValuePtr, shape COWRecordShape, verifyCRC bool, payloadScratch, rawScratch, pageDst []byte, decode COWDecodeFunc) ([]byte, error) {
 	if cap(pageDst) < page.PageSize || shape.ValueBytes > page.PageSize || shape.RawBytes > MaxFrameK*page.PageSize || shape.RecordBytes > 2<<20 {
 		return nil, ErrCOWReadCapacity
 	}
-	value, err := readCOWRecord(f, ptr, shape, verifyCRC, payloadScratch, rawScratch, pageDst, decode, true)
+	value, err := readCOWRecordValue(f, ptr, shape, verifyCRC, payloadScratch, rawScratch, decode, true)
 	if err != nil {
 		return nil, err
 	}
-	out, _, _, err := decodeCompactLeafLogPayloadTo(value, pageDst[:page.PageSize:page.PageSize])
+	out, _, compact, err := decodeCompactLeafLogPayloadTo(value, pageDst[:page.PageSize:page.PageSize])
 	if err != nil {
 		return nil, err
+	}
+	if !compact {
+		if len(value) != page.PageSize {
+			return nil, ErrCorrupt
+		}
+		out = pageDst[:page.PageSize:page.PageSize]
+		copy(out, value)
 	}
 	if len(out) != page.PageSize || unsafe.SliceData(out) != unsafe.SliceData(pageDst) {
 		return nil, ErrCorrupt

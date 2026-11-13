@@ -6,7 +6,7 @@ This supplies timing guardrails, not allocation or maintenance-overlap evidence.
 Collect that evidence separately; a timing pass alone is not issue acceptance.
 """
 import argparse
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 import fcntl
 import importlib.util
 import json
@@ -14,11 +14,41 @@ import math
 import os
 from pathlib import Path
 import platform
+import signal
 import statistics
 import subprocess
 import sys
 
 import run as recipe
+
+
+@contextmanager
+def termination_scope():
+    """Unwind owned children before releasing lanes; ignore repeated shutdown."""
+    previous = signal.getsignal(signal.SIGTERM)
+    interrupted = False
+    def cancelled(signum, frame):
+        nonlocal interrupted
+        if interrupted:
+            return
+        interrupted = True
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        raise InterruptedError('diagnostic interrupted by signal '+str(signum))
+    signal.signal(signal.SIGTERM, cancelled)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+
+def terminate_group(process, original=recipe.terminate_group):
+    """Finish cleanup if the first SIGTERM interrupts an existing shutdown."""
+    try:
+        return original(process)
+    except InterruptedError:
+        # termination_scope has ignored further TERM; the primitive is idempotent.
+        original(process)
+        raise
 
 
 def lock_lane(stack, paths):
@@ -31,7 +61,15 @@ def lock_lane(stack, paths):
             raise ValueError('measurement lane already owned: '+str(path)) from error
 
 
+def require_default_environment(*environments):
+    for environment in environments:
+        for key in environment:
+            recipe.require(not key.startswith(('GOMAP_READ_', 'TREEDB_', 'GODEBUG', 'GOMEMLIMIT', 'GOGC', 'GOEXPERIMENT')),
+                           'observer/runtime override present: '+key)
+
+
 def load_arm(root, arm, expected_hash):
+    require_default_environment(os.environ, recipe.ENV)
     root = root.resolve(strict=True)
     recipe.require(recipe.sha(root/'freeze.json') == expected_hash, 'unexpected frozen manifest: '+arm)
     frozen = recipe.strict_json((root/'freeze.json').read_text())
@@ -47,12 +85,15 @@ def load_arm(root, arm, expected_hash):
     spec = importlib.util.spec_from_file_location('idle_ab_'+arm, root/'recipe/run.py')
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    require_default_environment(module.ENV)
     module.ROOT = root
     module.BIN = root/'bin'
     module.FREEZE = frozen
     module.FREEZE_HASH = expected_hash
     module.REPO = Path(module.FREEZE['sources'][0]['path'])
     module.IMAGE = module.FREEZE['mongodb_image_id']
+    frozen_terminate = module.terminate_group
+    module.terminate_group = lambda process: terminate_group(process, frozen_terminate)
     module.verify_freeze()
     return module
 
@@ -133,7 +174,7 @@ def main():
     recipe.require(not lane.is_relative_to(out) and not any(lane.is_relative_to(root) for root in roots),
                    'shared lane lock must stay outside disposable campaign/output roots')
     recipe.require(not out.exists(), 'output already exists; failed attempts cannot be replaced')
-    with ExitStack() as stack:
+    with termination_scope(), ExitStack() as stack:
         lock_lane(stack, [lane, *(root/'campaign.lock' for root in roots)])
         arms = {name: load_arm(root, name, digest) for name, root, digest in
                 zip(('A', 'B'), roots, (args.baseline_freeze_sha256, args.candidate_freeze_sha256))}

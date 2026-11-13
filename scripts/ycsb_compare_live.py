@@ -102,6 +102,10 @@ def phase_stats_rpc(directory, stem, boundary, phase_id, manifest):
     evidence = directory/"server.evidence"
     old_term = signal.getsignal(signal.SIGTERM)
     def cancelled(signum, frame):
+        # Preserve an enclosing owner's cancellation/cleanup state. The default
+        # dispositions retain this RPC's existing InterruptedError behavior.
+        if callable(old_term):
+            old_term(signum, frame)
         raise InterruptedError("phase stats interrupted by signal "+str(signum))
     signal.signal(signal.SIGTERM, cancelled)
     try:
