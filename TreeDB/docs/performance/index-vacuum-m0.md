@@ -7,36 +7,58 @@ The capture script now measures
 It uses the existing shared 4,096-operation fixture (2,048 point writes and
 2,048 range deletes), with the publication coordinator enabled and the
 production recoverable-root maintenance entry. It retains ten fresh interleaved
-samples and the unchanged CV <= 0.10 predicates for total vacuum time and
-foreground p99. Every sample must complete all fixed work,
+samples. **Acceptance contract v4** retains CV <= 0.10 for total vacuum time as
+a hard predicate; foreground-p99 and maximum-writer-pause variability are retained
+diagnostics requiring separate outcome-owner review. Every sample must complete all fixed work,
 with zero vacuum errors, exposure misses or concurrent aborts. The independent
 160-operation PL06 public status arm and its classifier remain unchanged; they
 cannot replace the 4,096-operation stability arm.
 
 Run `RUN_DIR=/mnt/fast4tb/<task>/vacuum-m0 scripts/treedb_vacuum_m0_capture.sh`.
-New schema-v3 output names its acceptance contract, stability arm and exact benchmark; raw files are
+New schema-v4 output names its acceptance contract, stability arm and exact benchmark; raw files are
 `raw/production-*.txt` and `raw/public-*.txt`, with
 `production-benchstat-input.txt`. The summarizer binds raw benchmark identity,
 fixed iteration count and successful process completion. Its explicit
 `--acceptance-contract v2` mode (the summarizer default) retains all three
 original CV gates for either historical stability arm, without relabeling
-metrics or failures. The capture script selects production and v3 explicitly.
+metrics or failures. Explicit v3 retains total and foreground-p99 CV as hard
+predicates, with pause CV diagnostic. The capture script selects production and
+v4 explicitly; v3 and the default v2 preserve their historical interpretations.
 
-V3 retains every maximum-writer-pause sample, median, maximum and CV, including
-its original <= 0.10 diagnostic pass/fail. It requires separate outcome-owner
-review of the complete distribution and source phase evidence before merge;
-the capture records that review as pending. CV of one per-vacuum extreme is
-no longer a v3 merge predicate: reducing its mean can increase relative
-dispersion, while adding a delay could improve CV and make the database slower.
-No delay, numerical tolerance, absolute service bound or sample exclusion is
-introduced. Correctness, progress, debt or demonstrated material regressions
-remain blocking independently of this diagnostic.
+V4 retains all ten foreground-p99 and maximum-writer-pause samples, mean, median,
+minimum, maximum and CV, including the original <= 0.10 diagnostic pass/fail.
+`foreground_p99_diagnostic` and `pause_diagnostic` each mark
+`owner_review_required: true`, `owner_review: null` and `merge_predicate: false`.
+The review is mandatory even when CV passes or latency is stable but very large.
+Before merge, the outcome owner must assess absolute latency, the full
+distribution, applicable comparisons and changed-source phase risk, recording
+the decision against the actual candidate and capture. A green automatic capture
+does not supply performance approval or a latency SLO.
 
-This is an explicit prospective acceptance revision, not a v2 pass. The
+CV measures dispersion relative to a mean; it does not measure a before/after
+latency regression. Reducing the mean can increase CV, while adding delay could
+improve CV and make the database slower. Foreground p99 in this fixed-work fixture
+covers the existing foreground drain before final cutover; it must not be presented
+as final-cutover blocking latency. This selected policy tradeoff does not establish
+the causes of earlier variance. No delay, numerical tolerance, absolute service
+bound or sample exclusion is introduced. Missing/truncated/nonfinite observations,
+total-CV failure, incomplete fixed work, errors, exposure misses, ambiguous public
+status, correctness, progress, debt or demonstrated material regressions remain
+blocking independently of the diagnostics.
+
+This is an explicit prospective acceptance revision, not a historical pass. The
+PR #5410 head `6214307ed9c904189ce45d2fc6b611942d88f8e5` capture failed v3
+foreground-p99 CV at 0.161205 (0.807167–1.291754 ms), with total CV 0.016620
+and complete zero-error fixed work. It remains a v3 failure; v4 does not repair
+that observation or resolve #4519's causal investigation. New qualification
+requires a new applicable exact-head capture under the selected contract.
+
+The earlier v3 pause revision retained its original history: the
 19b713e047d6ba39715ac1a9a544284bc8e9a5dc capture failed v2 with pause
 CV0.127754 (2.567–3.871ms); total and foreground-p99 CVs passed. Its original
 result and the earlier bb1 pass remain source-bound. Schema2/v2 and legacy
-decoders preserve their three-predicate interpretation.
+decoders preserve their three-predicate interpretation; schema3/v3 retains its
+two-predicate interpretation.
 
 This is a prospective contract revision. Historical legacy captures and failed
 CV predicates remain valid under their original source and contract. A new
@@ -70,8 +92,8 @@ summed after the benchmark timer stops, without additional per-operation clocks.
 All five metrics are retained in raw captures and `results.json`; the two signed
 differences retain surprising finite negative values. Their generic summary CV
 fields are diagnostic data, not stability predicates, and are not interpreted
-for signed differences. The original total/p99 CV gates, fixed work, pause review,
-public classifier and acceptance schemas are unchanged. Existing captures without
+for signed differences. They do not change the selected contract's hard CV gates,
+fixed work, latency reviews, public classifier or schema interpretation. Existing captures without
 these diagnostics retain their original interpretation. New phase observations
 do not explain or replace historical failed captures.
 

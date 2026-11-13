@@ -24,6 +24,7 @@ BENCHMARK = "BenchmarkPoolPressurePublicStats"
 HARNESS = "TreeDB/caching/pool_pressure_public_stats_bench_test.go"
 FIXTURE_VERSION = "public-stats-v2-close-excluded"
 PAIRS = 3
+ACCEPTANCE_CONTRACTS = ("v1", "v2")
 BENCHTIME = "250ms"
 METRICS = {"ns/op", "B/op", "allocs/op"}
 ROW = re.compile(r"^" + BENCHMARK + r"(?:-\d+)?\s+(\d+)\s+(.*)$")
@@ -73,7 +74,29 @@ def evaluate(rows: list[dict]) -> dict:
             "measurement_pass": all(gates.values())}
 
 
-def run(root: Path, output: Path, baseline: str, candidate: str) -> int:
+def qualify_measurement(result: dict, *, quiet: bool, acceptance_contract: str = "v1") -> dict:
+    """Apply byte acceptance only; retain strict measured timing and allocations."""
+    if acceptance_contract not in ACCEPTANCE_CONTRACTS:
+        raise ValueError("unknown acceptance contract")
+    acceptance = dict(result["gates"])
+    policy = {}
+    if acceptance_contract == "v2":
+        budget = maintained.byte_growth_budget(result["medians"]["baseline"]["B/op"],
+                                              result["medians"]["candidate"]["B/op"])
+        acceptance["bytes"] = budget["growth_B_per_op"] <= budget["allowance_B_per_op"]
+        policy["byte_budget"] = budget
+    disposition = ("PASS" if result["gates"]["bytes"] else
+                   "WITHIN_ACCEPTED_BYTE_BUDGET" if acceptance["bytes"] else "FAIL")
+    return dict(result, **policy, acceptance_contract=acceptance_contract,
+                historical_results_reinterpreted=False, quiet=quiet,
+                bytes_disposition=disposition, acceptance_gates=acceptance,
+                accepted=all(acceptance.values()) and quiet)
+
+
+def run(root: Path, output: Path, baseline: str, candidate: str, *,
+        acceptance_contract: str = "v1") -> int:
+    if acceptance_contract not in ACCEPTANCE_CONTRACTS:
+        raise ValueError("unknown acceptance contract")
     if not all(re.fullmatch(r"[0-9a-f]{40}", sha) for sha in (baseline, candidate)):
         raise ValueError("full immutable source SHAs are required")
     if baseline == candidate or output.exists() or output == root or root in output.parents:
@@ -85,12 +108,17 @@ def run(root: Path, output: Path, baseline: str, candidate: str) -> int:
     rows, receipts = [], []
     observation = None
     base_root = None
+    byte_limits = ({"absolute_limit_B_per_op": maintained.BYTE_LIMIT_ABSOLUTE,
+                    "relative_limit_percent": maintained.BYTE_LIMIT_PERCENT}
+                   if acceptance_contract == "v2" else None)
 
     def save(name, value):
         (output / name).write_text(json.dumps(value, indent=2, sort_keys=True, allow_nan=False) + "\n")
 
     def report(verdict, **details):
-        result = dict(details, verdict=verdict, product_guard_available=verdict == "PASS",
+        result = dict(details, verdict=verdict, accepted=verdict == "PASS" and details.get("accepted", False),
+                      product_guard_available=verdict == "PASS" and details.get("accepted", False),
+                      acceptance_contract=acceptance_contract, byte_limits=byte_limits,
                       baseline=baseline, candidate=candidate, retained_samples=len(rows),
                       scope="public Stats diagnostic only; not final storage qualification")
         save("summary.json", result)
@@ -98,6 +126,7 @@ def run(root: Path, output: Path, baseline: str, candidate: str) -> int:
             "## Public Stats diagnostic\n\n"
             f"- Verdict: **{verdict}**; product guard available: {result['product_guard_available']}.\n"
             f"- Exact base/head: `{baseline}` / `{candidate}`.\n"
+            f"- Acceptance contract: `{acceptance_contract}`; byte limits: `{json.dumps(byte_limits, sort_keys=True)}`; no historical result reinterpreted.\n"
             f"- Three pairs AB/BA/AB, GOMAXPROCS=1, CPU0, {BENCHTIME}; retained rows: {len(rows)}/6.\n"
             f"- Detail: `{json.dumps(details, sort_keys=True)}`\n"
             "- Diagnostic only; NULL/failure supplies no product acceptance. PRIMARY is unchanged.\n")
@@ -161,7 +190,8 @@ def run(root: Path, output: Path, baseline: str, candidate: str) -> int:
         tracked = [root / HARNESS, Path(__file__), Path(maintained.__file__),
                    root / "scripts/mvcc_candidate_checkout_guard.sh"]
         source_inputs = {str(path.relative_to(root)): maintained.file_identity(path) for path in tracked}
-        save("bindings.json", dict(baseline=baseline, candidate=candidate, binaries=binaries,
+        bindings = dict(baseline=baseline, candidate=candidate, binaries=binaries,
+             acceptance_contract=acceptance_contract, byte_limits=byte_limits,
              fixture_version=FIXTURE_VERSION,
              inputs=source_inputs, pairs=PAIRS, benchtime=BENCHTIME, cpu=0, gomaxprocs=1,
              environment_sha256=hashlib.sha256(json.dumps(environment, sort_keys=True).encode()).hexdigest(),
@@ -169,7 +199,8 @@ def run(root: Path, output: Path, baseline: str, candidate: str) -> int:
              quiet=dict(window_s=maintained.QUIET_WINDOW_SECONDS, cap_s=maintained.QUIET_ACQUISITION_SECONDS,
                         external_cpu_percent=maintained.QUIET_LIMIT_PERCENT,
                         aggregate_external_cpu_percent=maintained.QUIET_AGGREGATE_LIMIT_PERCENT,
-                        policy="external-cpu-v2")))
+                        policy="external-cpu-v2"))
+        save("bindings.json", bindings)
         benchmark_argv = ["-test.run=^$", "-test.bench=^" + BENCHMARK + "$", "-test.benchtime=" + BENCHTIME,
                           "-test.count=1", "-test.benchmem", "-test.timeout=60s"]
 
@@ -198,9 +229,13 @@ def run(root: Path, output: Path, baseline: str, candidate: str) -> int:
         if (before != runtime_inputs("after") or maintained.digest(harness) != maintained.digest(root / HARNESS)
                 or source_inputs != {str(path.relative_to(root)): maintained.file_identity(path) for path in tracked}):
             raise RuntimeError("runtime, binary or source input drift")
-        result = evaluate(rows)
-        verdict = "NULL" if observed["busy"] else "PASS" if result["measurement_pass"] else "FAIL"
-        report(verdict, quiet=not observed["busy"], **result)
+        result = qualify_measurement(evaluate(rows), quiet=not observed["busy"],
+                                     acceptance_contract=acceptance_contract)
+        if "byte_budget" in result:
+            bindings["byte_budget"] = result["byte_budget"]
+            save("bindings.json", bindings)
+        verdict = "NULL" if observed["busy"] else "PASS" if result["accepted"] else "FAIL"
+        report(verdict, **result)
         return 0 if verdict == "PASS" else 1
     except Exception as error:
         if observation is not None:
@@ -218,11 +253,18 @@ def run(root: Path, output: Path, baseline: str, candidate: str) -> int:
             return 1
 
 
-if __name__ == "__main__":
+def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--baseline", required=True)
     parser.add_argument("--candidate", required=True)
+    parser.add_argument("--acceptance-contract", choices=ACCEPTANCE_CONTRACTS, default="v1",
+                        help="v1 preserves strict byte growth; v2 selects the bounded median-byte budget")
     args = parser.parse_args()
-    sys.exit(run(args.root.resolve(), args.output.resolve(), args.baseline, args.candidate))
+    return run(args.root.resolve(), args.output.resolve(), args.baseline, args.candidate,
+               acceptance_contract=args.acceptance_contract)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
