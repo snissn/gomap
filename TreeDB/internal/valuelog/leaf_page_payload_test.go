@@ -19,10 +19,11 @@ func buildSparseLeafPageForPayloadTest(t *testing.T) []byte {
 		LeafPrefixCompression: true,
 		LeafColumnar:          true,
 		PackedValuePtr:        true,
+		EntryRevisions:        true,
 	})
 	b.SetPageID(17)
 	for i := 0; i < 4; i++ {
-		if err := b.AddLeafEntry([]byte("celestia/outer/leaf/key/"+string(rune('a'+i))), []byte("value"), node.FlagInline, page.ValuePtr{}); err != nil {
+		if err := b.AddLeafEntryWithRevision([]byte("celestia/outer/leaf/key/"+string(rune('a'+i))), []byte("value"), node.FlagInline, page.ValuePtr{}, page.EntryRevision(100+i)); err != nil {
 			t.Fatalf("AddLeafEntry(%d): %v", i, err)
 		}
 	}
@@ -30,7 +31,7 @@ func buildSparseLeafPageForPayloadTest(t *testing.T) []byte {
 	return buf
 }
 
-func compactLeafPayloadTestPath(t *testing.T, root string, seq uint32) string {
+func compactLeafPayloadTestPath(t testing.TB, root string, seq uint32) string {
 	t.Helper()
 	leafDir := filepath.Join(root, compactLeafPagePayloadDirName)
 	if err := os.MkdirAll(leafDir, 0o755); err != nil {
