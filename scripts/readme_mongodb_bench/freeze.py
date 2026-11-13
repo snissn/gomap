@@ -53,7 +53,7 @@ def main():
                 mongo_container_user=str(os.getuid())+':'+str(os.getgid()) if platform.system() == 'Linux' else '',
                 disk=run(['df', '-k', root]), background_processes=run(['ps', '-axo', 'pid,comm,%cpu,%mem']),
                 gomaxprocs='unset for all benchmark processes; runtime value not independently observed',
-                infrastructure_unavailable=['INFRASTRUCTURE_UNAVAILABLE: runner: shared user-selected server185; unrelated services remain active'],
+                infrastructure_unavailable=['INFRASTRUCTURE_UNAVAILABLE: runner: shared user-selected '+platform.node()+'; unrelated services remain active'],
                 cache='persistent shared Go build and module caches', storage='durable task directory')
     if platform.system() == 'Linux':
         host.update(cpu=Path('/proc/cpuinfo').read_text(), memory=Path('/proc/meminfo').read_text(),
