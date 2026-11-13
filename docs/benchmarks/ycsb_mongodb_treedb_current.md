@@ -6,8 +6,31 @@ This page is the current entry point for external `go-ycsb` comparisons across:
 - `treedb-native` through the `go-ycsb treedb-native` binding.
 - TreeDB Mongo gateway through the `go-ycsb mongodb` binding.
 
-It distinguishes the retained October comparison from historical reports and
-records the remaining qualification obligations.
+It distinguishes the latest README snapshot, the separately qualified October
+comparison and historical reports, and records their qualification limits.
+
+## Latest README snapshot: Linux server185, November 13, 2026 UTC
+
+The [Linux README alternative](readme_ycsb_mongodb_server185_2026-11-13.md) repeats PR #5408's fixed 48-case
+recipe on the user-selected shared server185, using GoMap
+`4988738a2689b462cdb2053fa1e563f8c0091e23` including #5410, the same external
+client and MongoDB 8.2.7. It preserves all attempts, complete typed-state
+censuses, checked YCSB Close receipts, graceful lifecycle and independent reopen
+checks. Its different-durable-requests class applies MongoDB `w:1,j:true`
+versus GoMap `command_wal_durable` with `w:1`, `j` absent to load and run.
+
+| ACK / profile class | MongoDB 8.2.7 ops/s | GoMap gateway ops/s | Paired GoMap/Mongo ratio |
+| --- | --- | --- | --- |
+| relaxed | 26,541.3 | 17,161.7 | 0.647x |
+| different-durable-requests | 25,470.4 | 51,716.1 | 2.030x |
+
+This direct-CLI snapshot does not replace the stricter runtime-attested October
+qualification below. Hardware, OS, architecture, Docker topology and GoMap
+source changed versus the Mac alternative in [#5408](https://github.com/snissn/gomap/pull/5408);
+relative-ratio changes are descriptive rather than a causal #5410 measurement.
+The report includes the client-shape/full-sweep results and their distinct
+macrobenchmark Close-return and physical-storage limits. Keep this Linux snapshot separate from the Mac dataset and the October
+qualified packet.
 
 ## Final-source MongoDB comparison
 
