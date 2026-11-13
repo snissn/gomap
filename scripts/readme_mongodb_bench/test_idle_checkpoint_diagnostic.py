@@ -83,14 +83,14 @@ class IdleCheckpointDiagnosticControls(unittest.TestCase):
             self.assertNotEqual(*labels)
 
 
-    def fake_toolchain(self, root, mismatch=False):
+    def fake_toolchain(self, root, mismatch=False, configured_flags=''):
         root = root.resolve()
         goroot = root/'effective'
         (goroot/'bin').mkdir(parents=True)
         tools = goroot/'pkg/tool/linux_amd64'
         tools.mkdir(parents=True)
         environment = dict(GOROOT=str(goroot),GOTOOLDIR=str(tools),GOVERSION='go1.26.10',
-                           GOOS='linux',GOARCH='amd64',CGO_ENABLED='1')
+                           GOOS='linux',GOARCH='amd64',CGO_ENABLED='1',GOFLAGS=configured_flags)
         source = '#!'+sys.executable+'\n'+r"""
 import json,os,sys
 from pathlib import Path
@@ -98,6 +98,7 @@ settings = SETTINGS
 if sys.argv[1]=='env':
     assert os.environ['GOTOOLCHAIN'] in ('go1.26.10','local')
     assert os.environ.get('GOROOT') in (None,settings['GOROOT'])
+    settings['GOFLAGS']=os.environ.get('GOFLAGS',settings['GOFLAGS'])
     if Path(sys.argv[0]).name=='launcher' and MISMATCH:
         settings['GOVERSION']='go1.25.0'
     print(json.dumps(settings))
@@ -126,6 +127,7 @@ else: raise AssertionError(sys.argv)
             self.assertEqual(effective,driver)
             self.assertEqual(env['GOTOOLCHAIN'],'local')
             self.assertEqual(binding['toolchain']['compiler_version'],'compile version go1.26.10')
+            self.assertEqual(binding['toolchain']['go_env']['GOFLAGS'], '')
             out = root/'overlay'
             with patch.object(diagnostic,'overlay_sources',return_value={}):
                 with self.assertRaisesRegex(ValueError,'overlay build failed'):
@@ -163,6 +165,32 @@ else: raise AssertionError(sys.argv)
             receipt = json.loads((out/'build.json').read_text())
             self.assertEqual(receipt['error_type'],'ValueError')
             self.assertNotIn('argv',receipt)
+
+    def test_inherited_build_flags_fail_before_overlay(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            arm, launcher, _ = self.fake_toolchain(root)
+            with patch.dict(os.environ, {'GOFLAGS': '-race=true'}), patch.object(diagnostic, 'overlay_sources') as sources:
+                with self.assertRaisesRegex(ValueError, 'unsupported effective GOFLAGS'):
+                    diagnostic.build_overlay(arm, root/'overlay', launcher)
+                sources.assert_not_called()
+            receipt = json.loads((root/'overlay/build.json').read_text())
+            self.assertEqual(json.loads(receipt['toolchain_probes'][0]['stdout'])['GOFLAGS'], '-race=true')
+            self.assertNotIn('argv', receipt)
+
+    def test_configured_build_flags_fail_before_overlay(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            arm, launcher, _ = self.fake_toolchain(root, configured_flags='-gcflags=all=-N')
+            environment = dict(os.environ)
+            environment.pop('GOFLAGS', None)
+            with patch.dict(os.environ, environment, clear=True), patch.object(diagnostic, 'overlay_sources') as sources:
+                with self.assertRaisesRegex(ValueError, 'unsupported effective GOFLAGS'):
+                    diagnostic.build_overlay(arm, root/'overlay', launcher)
+                sources.assert_not_called()
+            receipt = json.loads((root/'overlay/build.json').read_text())
+            self.assertEqual(json.loads(receipt['toolchain_probes'][0]['stdout'])['GOFLAGS'], '-gcflags=all=-N')
+            self.assertNotIn('argv', receipt)
 
     def test_sigterm_overlay_build_reaps_child_before_lane_unlock_and_retains_failure(self):
         actor = r"""

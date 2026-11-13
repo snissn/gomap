@@ -96,16 +96,18 @@ def resolve_toolchain(arm, go, binding):
         recipe.require(result.returncode == 0, 'Go toolchain probe failed')
         return result.stdout.strip()
     keys = ('GOROOT', 'GOTOOLDIR', 'GOVERSION', 'GOOS', 'GOARCH', 'CGO_ENABLED')
-    resolved = recipe.strict_json(output([go, 'env', '-json', *keys], env))
+    probe_keys = (*keys, 'GOFLAGS')
+    resolved = recipe.strict_json(output([go, 'env', '-json', *probe_keys], env))
     for key in keys:
         recipe.require(resolved[key] == frozen[key], 'frozen Go toolchain mismatch: '+key)
+    recipe.require(not resolved['GOFLAGS'], 'unsupported effective GOFLAGS')
     root = Path(resolved['GOROOT']).resolve(strict=True)
     driver = (root/'bin/go').resolve(strict=True)
     recipe.require(Path(resolved['GOTOOLDIR']).resolve(strict=True) ==
                    root/'pkg/tool'/(resolved['GOOS']+'_'+resolved['GOARCH']),
                    'Go tool directory does not belong to effective GOROOT')
     env.update(GOROOT=str(root), GOTOOLCHAIN='local')
-    effective = recipe.strict_json(output([driver, 'env', '-json', *keys], env))
+    effective = recipe.strict_json(output([driver, 'env', '-json', *probe_keys], env))
     recipe.require(effective == resolved, 'effective Go driver identity changed')
     version = output([driver, 'version'], env)
     recipe.require(version == 'go version '+expected+' '+resolved['GOOS']+'/'+resolved['GOARCH'],
