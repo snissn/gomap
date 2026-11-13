@@ -112,6 +112,8 @@ unrelated binary. Overlays, race builds, custom build flags and observer/runtime
 overrides are excluded, including `GOGC`, `GOMEMLIMIT`, `GODEBUG`,
 `GOEXPERIMENT`, `GOMAP_READ_*` and all `TREEDB_*` settings. Both the parent
 environment and the effective child environment are checked before every case.
+The merged receipt build environment receives the same check. Embedded experiment,
+instrumentation and custom Go/C compiler flag settings are rejected as well.
 Run the reviewed selector from its clean landed harness
 checkout, with no generated files in that checkout:
 

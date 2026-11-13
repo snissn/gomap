@@ -140,11 +140,19 @@ class ComparisonControls(unittest.TestCase):
             check(dict(relocated, binary_sha256='0'*64))
         for field, value in (('compiler_version', 'compile version go1.26.9'),
                              ('argv', ['/go/bin/go', 'build', '-overlay=/tmp/x']),
-                             ('environment', dict(receipt['environment'], GOROOT='/wrong'))):
+                             ('environment', dict(receipt['environment'], GOROOT='/wrong')),
+                             ('environment', dict(receipt['environment'], GOEXPERIMENT='greenteagc'))):
             bad = copy.deepcopy(receipt)
             bad[field] = value
             with self.subTest(field=field), self.assertRaises(ValueError):
                 check(bad)
+        plain_info = info
+        for setting in ('GOEXPERIMENT=greenteagc', '-gcflags=all=-N', '-ldflags=-s', '-tags=custom',
+                        '-pgo=/tmp/custom.pgo', 'CGO_CFLAGS=-O0', '-asan=true', '-msan=true', '-cover=true'):
+            info = plain_info+'\n\tbuild\t'+setting
+            with self.subTest(setting=setting), self.assertRaisesRegex(ValueError, 'custom build settings'):
+                check(dict(receipt, binary_build_info=info))
+        info = plain_info
         info = info.replace('vcs.modified=false', 'vcs.modified=true')
         bad = dict(receipt, binary_build_info=info)
         with self.assertRaisesRegex(ValueError, 'VCS build identity'):

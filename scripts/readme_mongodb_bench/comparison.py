@@ -18,6 +18,13 @@ PROFILE = 'command_wal_relaxed'
 HOST_LOCK = Path('/tmp/gomap-ycsb-qualification.lock')
 
 
+def require_default_environment(*environments):
+    for environment in environments:
+        for key in environment:
+            run.require(not key.startswith(('GOMAP_READ_', 'TREEDB_', 'GODEBUG', 'GOMEMLIMIT', 'GOGC', 'GOEXPERIMENT')),
+                        'observer/runtime override present: '+key)
+
+
 def output(argv, env=None):
     return subprocess.check_output([str(x) for x in argv], env=env, text=True, timeout=30).strip()
 
@@ -36,6 +43,7 @@ def build_identity(receipt, repo, binary):
     run.require(receipt['binary_sha256'] == run.sha(binary), 'build binary hash mismatch')
     env = os.environ.copy()
     env.update(receipt['environment'])
+    require_default_environment(env)
     run.require(env['GOTOOLCHAIN'] in ('local', 'go1.26.10') and env['GOWORK'] == 'off' and not env.get('GOFLAGS'),
                 'build environment must pin Go 1.26.10 without overlays/GOFLAGS')
     argv = receipt['argv']
@@ -69,6 +77,11 @@ def build_identity(receipt, repo, binary):
     # receipt's clean source/tree and binary hashes remain mandatory above.
     settings = dict(line.strip().removeprefix('build\t').split('=', 1)
                     for line in info.splitlines() if line.strip().startswith('build\t') and '=' in line)
+    run.require(not any(settings.get(key) for key in
+                ('GOEXPERIMENT', '-overlay', '-gcflags', '-ldflags', '-tags', '-pgo',
+                 'CGO_CFLAGS', 'CGO_CPPFLAGS', 'CGO_CXXFLAGS', 'CGO_LDFLAGS'))
+                and all(settings.get(key) in (None, 'false') for key in ('-race', '-asan', '-msan', '-cover')),
+                'gateway has custom build settings')
     if 'vcs.revision' in settings or 'vcs.modified' in settings:
         run.require(settings.get('vcs.revision') == repo['commit'] and settings.get('vcs.modified') == 'false',
                     'gateway VCS build identity mismatch')
@@ -86,9 +99,7 @@ def verify(manifest, root, repo):
                 profile=PROFILE, ack='relaxed', target='gomap', workers=16)
                 and manifest['case']['operations'] in (10000, 1000000), 'invalid selected case')
     run.require(manifest['host'] == host(), 'comparison host changed')
-    for key in set(os.environ) | set(run.ENV):
-        run.require(not key.startswith(('GOMAP_READ_', 'TREEDB_', 'GODEBUG', 'GOMEMLIMIT', 'GOGC', 'GOEXPERIMENT')),
-                    'observer/runtime override present: '+key)
+    require_default_environment(os.environ, run.ENV)
     run.require(source(repo) == manifest['product'], 'product source changed')
     original = Path(manifest['original_freeze']['path'])
     run.require(run.sha(original) == manifest['original_freeze']['sha256'], 'original freeze changed')
