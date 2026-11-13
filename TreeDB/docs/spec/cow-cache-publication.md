@@ -281,8 +281,13 @@ continuation. Dictionary reads first reuse an already-admitted matching cut-loca
 decoder. Otherwise they decode through the original cache physical workspace.
 Owned version-successor reads finish leaf copy-out or owned value append before
 releasing its mutex. Snapshot and iterator leaves decode into their original
-caller destination; borrowed pointer values are copied into the original reader's
-admitted output before unlocking. Shared decoder backing does not change each
+caller destination. Compact leaf bytes expand directly from the fully revalidated
+input or decoded raw scratch into that destination, without staging the compact
+payload in the page first. Noncompact leaves still copy their full page. The
+private scratch borrow ends before unlock or maintenance admission release; no
+input or decoder alias becomes a returned leaf. Borrowed pointer values are
+copied into the original reader's admitted output before unlocking. Shared
+decoder backing does not change each
 reader's returned-byte ownership or movement/Close boundaries. A provider without
 independent definition admission retains the original complete-cut local route.
 Snappy/LZ4 block decoding and other users of the generic `COWDecoder` retain their

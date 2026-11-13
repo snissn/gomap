@@ -51,7 +51,7 @@ func cowTestFrame(dictID uint64, codec BlockCodec, values [][]byte, compressed [
 	return body
 }
 
-func cowTestRecord(t *testing.T, body []byte, grouped bool, sub uint8) (*os.File, page.ValuePtr, []byte) {
+func cowTestRecord(t testing.TB, body []byte, grouped bool, sub uint8) (*os.File, page.ValuePtr, []byte) {
 	t.Helper()
 	record := make([]byte, HeaderSize+len(body))
 	record[4] = Version
@@ -567,7 +567,7 @@ func TestCOWDecoderConcurrentReadsDrainBeforeClose(t *testing.T) {
 	d.Close()
 }
 
-func cowTestLeafRecord(t *testing.T, value []byte, codec BlockCodec) (*os.File, page.ValuePtr) {
+func cowTestLeafRecord(t testing.TB, value []byte, codec BlockCodec) (*os.File, page.ValuePtr) {
 	t.Helper()
 	var encoded []byte
 	if codec != BlockCodecNone {
@@ -577,7 +577,12 @@ func cowTestLeafRecord(t *testing.T, value []byte, codec BlockCodec) (*os.File, 
 			t.Fatal(err)
 		}
 	}
-	_, ptr, record := cowTestRecord(t, cowTestFrame(0, codec, [][]byte{value}, encoded), true, 0)
+	return cowTestLeafFrame(t, cowTestFrame(0, codec, [][]byte{value}, encoded), 0)
+}
+
+func cowTestLeafFrame(t testing.TB, body []byte, sub uint8) (*os.File, page.ValuePtr) {
+	t.Helper()
+	_, ptr, record := cowTestRecord(t, body, true, sub)
 	path := compactLeafPayloadTestPath(t, t.TempDir(), 1)
 	if err := os.WriteFile(path, record, 0600); err != nil {
 		t.Fatal(err)
@@ -609,11 +614,30 @@ func TestCOWLeafRecordBoundedRawCompactAndCompressed(t *testing.T) {
 		name  string
 		value []byte
 		codec BlockCodec
+		sub   uint8
 	}{
-		{"raw", pageBytes, BlockCodecNone}, {"compact", compact, BlockCodecNone}, {"compressed-compact", compact, BlockCodecSnappy},
+		{"raw", pageBytes, BlockCodecNone, 0},
+		{"compact", compact, BlockCodecNone, 0},
+		{"snappy-compact", compact, BlockCodecSnappy, 0},
+		{"lz4-compact", compact, BlockCodecLZ4, 0},
+		{"zstd-compact", compact, BlockCodecZSTD, 0},
+		{"grouped-raw", pageBytes, BlockCodecNone, 1},
+		{"grouped-compact", compact, BlockCodecNone, 1},
+		{"grouped-snappy-compact", compact, BlockCodecSnappy, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			f, ptr := cowTestLeafRecord(t, tc.value, tc.codec)
+			values := [][]byte{tc.value}
+			if tc.sub != 0 {
+				values = [][]byte{[]byte("unselected-before"), tc.value, []byte("unselected-after")}
+			}
+			var encoded []byte
+			if tc.codec != BlockCodecNone {
+				encoded, err = encodeBlockPayload(tc.codec, bytes.Join(values, nil), nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			f, ptr := cowTestLeafFrame(t, cowTestFrame(0, tc.codec, values, encoded), tc.sub)
 			if _, err := InspectCOWRecord(f, ptr, cowTestLimits); !errors.Is(err, ErrCOWReadUnsupported) {
 				t.Fatal(err)
 			}
@@ -621,7 +645,7 @@ func TestCOWLeafRecordBoundedRawCompactAndCompressed(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			payload, raw, out := make([]byte, s.PayloadBytes()), make([]byte, s.RawBytes), make([]byte, page.PageSize)
+			payload, raw, out := make([]byte, s.PayloadBytes()), make([]byte, s.RawBytes), make([]byte, 0, page.PageSize)
 			callback := d.Decode
 			if _, err := ReadCOWLeafPage(f, ptr, s, true, payload, raw, out[:0:0], callback); !errors.Is(err, ErrCOWReadCapacity) {
 				t.Fatal(err)
@@ -630,7 +654,16 @@ func TestCOWLeafRecordBoundedRawCompactAndCompressed(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			if len(got) != page.PageSize || &got[0] != &out[:cap(out)][0] {
+				t.Fatal("leaf must be materialized into the caller's full page")
+			}
 			requireLeafPagesLogicallyEqual(t, pageBytes, got)
+			want := bytes.Clone(got)
+			clear(payload)
+			clear(raw)
+			if !bytes.Equal(got, want) {
+				t.Fatal("returned page aliases reusable input or decoder scratch")
+			}
 			if n := testing.AllocsPerRun(100, func() {
 				if _, err := ReadCOWLeafPage(f, ptr, s, true, payload, raw, out, callback); err != nil {
 					panic(err)
@@ -658,6 +691,55 @@ func TestCOWLeafRecordBoundedRawCompactAndCompressed(t *testing.T) {
 	f, p := cowTestLeafRecord(t, bad, BlockCodecNone)
 	if _, err := InspectCOWLeafRecord(f, p, cowTestLimits); !errors.Is(err, ErrCorrupt) {
 		t.Fatal(err)
+	}
+}
+
+func TestCOWLeafRecordDictionaryOwnedPage(t *testing.T) {
+	leaf := buildSparseLeafPageForPayloadTest(t)
+	compact, ok, err := MaybeCompactLeafLogPayload(leaf)
+	if err != nil || !ok {
+		t.Fatalf("compact=%v err=%v", ok, err)
+	}
+	samples := make([][]byte, 16)
+	for i := range samples {
+		samples[i] = bytes.Repeat(compact, 32)
+		samples[i][0] = byte(i)
+	}
+	definition, err := buildBenchDict(5416, samples)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(definition)
+	id := binary.BigEndian.Uint64(digest[:8])
+	body, header, err := EncodeFrame(id, definition, []Record{{RID: 1, Value: compact}, {RID: 2, Value: compact}})
+	if err != nil || header.Flags&FrameFlagCompressed == 0 {
+		t.Fatalf("dictionary fixture must compress: header=%+v err=%v", header, err)
+	}
+	f, ptr := cowTestLeafFrame(t, body, 1)
+	s, err := InspectCOWLeafRecord(f, ptr, cowTestLimits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := NewCOWDecoder(id, definition, s.RawBytes, s.PayloadBytes(), 1<<20, func(COWDecoderAllocationSizes) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	input, raw, dst := make([]byte, s.PayloadBytes()), make([]byte, s.RawBytes), make([]byte, page.PageSize)
+	got, err := ReadCOWLeafPage(f, ptr, s, true, input, raw, dst, d.Decode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != page.PageSize || &got[0] != &dst[0] {
+		t.Fatal("dictionary leaf did not use caller page")
+	}
+	requireLeafPagesLogicallyEqual(t, leaf, got)
+	want := bytes.Clone(got)
+	clear(input)
+	clear(raw)
+	d.Close()
+	if !bytes.Equal(got, want) {
+		t.Fatal("dictionary page depends on released decoder scratch")
 	}
 }
 
