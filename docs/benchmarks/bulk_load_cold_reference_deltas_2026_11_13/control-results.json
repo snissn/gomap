@@ -1,0 +1,585 @@
+{
+  "allocation_observations": [
+    {
+      "case": "control-allocation-p1-before",
+      "variant": "before",
+      "pair": 1,
+      "bytes": 800810216,
+      "objects": 367886,
+      "bytes_per_doc": 8008.10216,
+      "allocs_per_doc": 3.67886,
+      "digest": "e077bb29f3afa92147d4cd2ea1491312dff0254c8a3202ee9c8d14fc9dbbd404"
+    },
+    {
+      "case": "control-allocation-p1-candidate",
+      "variant": "candidate",
+      "pair": 1,
+      "bytes": 800016704,
+      "objects": 367846,
+      "bytes_per_doc": 8000.16704,
+      "allocs_per_doc": 3.67846,
+      "digest": "e077bb29f3afa92147d4cd2ea1491312dff0254c8a3202ee9c8d14fc9dbbd404"
+    },
+    {
+      "case": "control-allocation-p2-before",
+      "variant": "before",
+      "pair": 2,
+      "bytes": 800296640,
+      "objects": 367937,
+      "bytes_per_doc": 8002.9664,
+      "allocs_per_doc": 3.67937,
+      "digest": "e077bb29f3afa92147d4cd2ea1491312dff0254c8a3202ee9c8d14fc9dbbd404"
+    },
+    {
+      "case": "control-allocation-p2-candidate",
+      "variant": "candidate",
+      "pair": 2,
+      "bytes": 801936072,
+      "objects": 367863,
+      "bytes_per_doc": 8019.36072,
+      "allocs_per_doc": 3.67863,
+      "digest": "e077bb29f3afa92147d4cd2ea1491312dff0254c8a3202ee9c8d14fc9dbbd404"
+    },
+    {
+      "case": "control-allocation-p3-before",
+      "variant": "before",
+      "pair": 3,
+      "bytes": 801075952,
+      "objects": 367888,
+      "bytes_per_doc": 8010.75952,
+      "allocs_per_doc": 3.67888,
+      "digest": "e077bb29f3afa92147d4cd2ea1491312dff0254c8a3202ee9c8d14fc9dbbd404"
+    },
+    {
+      "case": "control-allocation-p3-candidate",
+      "variant": "candidate",
+      "pair": 3,
+      "bytes": 800227336,
+      "objects": 367824,
+      "bytes_per_doc": 8002.27336,
+      "allocs_per_doc": 3.67824,
+      "digest": "e077bb29f3afa92147d4cd2ea1491312dff0254c8a3202ee9c8d14fc9dbbd404"
+    }
+  ],
+  "warm_observations": [
+    {
+      "case": "control-warm-long-p1-before",
+      "variant": "before",
+      "pair": 1,
+      "writers": 1,
+      "n": 10000,
+      "ns_per_op": 90439.0,
+      "ack_per_s": 11057.0,
+      "bytes_per_op": 77836,
+      "allocs_per_op": 405,
+      "grouped_counter_observations": {
+        "treedb.publish.ordered_root_delta_group.calls_total": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "treedb.publish.ordered_root_delta_group.finalize_calls_total": [
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "case": "control-warm-long-p1-before",
+      "variant": "before",
+      "pair": 1,
+      "writers": 8,
+      "n": 10000,
+      "ns_per_op": 39573.0,
+      "ack_per_s": 25270.0,
+      "bytes_per_op": 56463,
+      "allocs_per_op": 283,
+      "grouped_counter_observations": {
+        "treedb.publish.ordered_root_delta_group.calls_total": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "treedb.publish.ordered_root_delta_group.finalize_calls_total": [
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "case": "control-warm-long-p1-candidate",
+      "variant": "candidate",
+      "pair": 1,
+      "writers": 1,
+      "n": 10000,
+      "ns_per_op": 91256.0,
+      "ack_per_s": 10958.0,
+      "bytes_per_op": 77813,
+      "allocs_per_op": 405,
+      "grouped_counter_observations": {
+        "treedb.publish.ordered_root_delta_group.calls_total": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "treedb.publish.ordered_root_delta_group.finalize_calls_total": [
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "case": "control-warm-long-p1-candidate",
+      "variant": "candidate",
+      "pair": 1,
+      "writers": 8,
+      "n": 10000,
+      "ns_per_op": 37815.0,
+      "ack_per_s": 26444.0,
+      "bytes_per_op": 56780,
+      "allocs_per_op": 284,
+      "grouped_counter_observations": {
+        "treedb.publish.ordered_root_delta_group.calls_total": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "treedb.publish.ordered_root_delta_group.finalize_calls_total": [
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "case": "control-warm-long-p2-before",
+      "variant": "before",
+      "pair": 2,
+      "writers": 1,
+      "n": 10000,
+      "ns_per_op": 92946.0,
+      "ack_per_s": 10759.0,
+      "bytes_per_op": 77847,
+      "allocs_per_op": 405,
+      "grouped_counter_observations": {
+        "treedb.publish.ordered_root_delta_group.calls_total": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "treedb.publish.ordered_root_delta_group.finalize_calls_total": [
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "case": "control-warm-long-p2-before",
+      "variant": "before",
+      "pair": 2,
+      "writers": 8,
+      "n": 10000,
+      "ns_per_op": 39658.0,
+      "ack_per_s": 25216.0,
+      "bytes_per_op": 57016,
+      "allocs_per_op": 285,
+      "grouped_counter_observations": {
+        "treedb.publish.ordered_root_delta_group.calls_total": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "treedb.publish.ordered_root_delta_group.finalize_calls_total": [
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "case": "control-warm-long-p2-candidate",
+      "variant": "candidate",
+      "pair": 2,
+      "writers": 1,
+      "n": 10000,
+      "ns_per_op": 91280.0,
+      "ack_per_s": 10955.0,
+      "bytes_per_op": 77836,
+      "allocs_per_op": 405,
+      "grouped_counter_observations": {
+        "treedb.publish.ordered_root_delta_group.calls_total": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "treedb.publish.ordered_root_delta_group.finalize_calls_total": [
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "case": "control-warm-long-p2-candidate",
+      "variant": "candidate",
+      "pair": 2,
+      "writers": 8,
+      "n": 10000,
+      "ns_per_op": 38901.0,
+      "ack_per_s": 25706.0,
+      "bytes_per_op": 57341,
+      "allocs_per_op": 286,
+      "grouped_counter_observations": {
+        "treedb.publish.ordered_root_delta_group.calls_total": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "treedb.publish.ordered_root_delta_group.finalize_calls_total": [
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "case": "control-warm-long-p3-before",
+      "variant": "before",
+      "pair": 3,
+      "writers": 1,
+      "n": 10000,
+      "ns_per_op": 92090.0,
+      "ack_per_s": 10859.0,
+      "bytes_per_op": 77811,
+      "allocs_per_op": 405,
+      "grouped_counter_observations": {
+        "treedb.publish.ordered_root_delta_group.calls_total": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "treedb.publish.ordered_root_delta_group.finalize_calls_total": [
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "case": "control-warm-long-p3-before",
+      "variant": "before",
+      "pair": 3,
+      "writers": 8,
+      "n": 10000,
+      "ns_per_op": 38748.0,
+      "ack_per_s": 25808.0,
+      "bytes_per_op": 57003,
+      "allocs_per_op": 285,
+      "grouped_counter_observations": {
+        "treedb.publish.ordered_root_delta_group.calls_total": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "treedb.publish.ordered_root_delta_group.finalize_calls_total": [
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "case": "control-warm-long-p3-candidate",
+      "variant": "candidate",
+      "pair": 3,
+      "writers": 1,
+      "n": 10000,
+      "ns_per_op": 91646.0,
+      "ack_per_s": 10911.0,
+      "bytes_per_op": 77819,
+      "allocs_per_op": 405,
+      "grouped_counter_observations": {
+        "treedb.publish.ordered_root_delta_group.calls_total": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "treedb.publish.ordered_root_delta_group.finalize_calls_total": [
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "case": "control-warm-long-p3-candidate",
+      "variant": "candidate",
+      "pair": 3,
+      "writers": 8,
+      "n": 10000,
+      "ns_per_op": 38248.0,
+      "ack_per_s": 26145.0,
+      "bytes_per_op": 56822,
+      "allocs_per_op": 284,
+      "grouped_counter_observations": {
+        "treedb.publish.ordered_root_delta_group.calls_total": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "treedb.publish.ordered_root_delta_group.finalize_calls_total": [
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "case": "control-warm-long-p4-before",
+      "variant": "before",
+      "pair": 4,
+      "writers": 1,
+      "n": 10000,
+      "ns_per_op": 91951.0,
+      "ack_per_s": 10875.0,
+      "bytes_per_op": 77770,
+      "allocs_per_op": 405,
+      "grouped_counter_observations": {
+        "treedb.publish.ordered_root_delta_group.calls_total": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "treedb.publish.ordered_root_delta_group.finalize_calls_total": [
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "case": "control-warm-long-p4-before",
+      "variant": "before",
+      "pair": 4,
+      "writers": 8,
+      "n": 10000,
+      "ns_per_op": 38121.0,
+      "ack_per_s": 26232.0,
+      "bytes_per_op": 56701,
+      "allocs_per_op": 283,
+      "grouped_counter_observations": {
+        "treedb.publish.ordered_root_delta_group.calls_total": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "treedb.publish.ordered_root_delta_group.finalize_calls_total": [
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "case": "control-warm-long-p4-candidate",
+      "variant": "candidate",
+      "pair": 4,
+      "writers": 1,
+      "n": 10000,
+      "ns_per_op": 91837.0,
+      "ack_per_s": 10889.0,
+      "bytes_per_op": 77841,
+      "allocs_per_op": 405,
+      "grouped_counter_observations": {
+        "treedb.publish.ordered_root_delta_group.calls_total": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "treedb.publish.ordered_root_delta_group.finalize_calls_total": [
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "case": "control-warm-long-p4-candidate",
+      "variant": "candidate",
+      "pair": 4,
+      "writers": 8,
+      "n": 10000,
+      "ns_per_op": 38414.0,
+      "ack_per_s": 26032.0,
+      "bytes_per_op": 57025,
+      "allocs_per_op": 285,
+      "grouped_counter_observations": {
+        "treedb.publish.ordered_root_delta_group.calls_total": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "treedb.publish.ordered_root_delta_group.finalize_calls_total": [
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "case": "control-warm-long-p5-before",
+      "variant": "before",
+      "pair": 5,
+      "writers": 1,
+      "n": 10000,
+      "ns_per_op": 89780.0,
+      "ack_per_s": 11138.0,
+      "bytes_per_op": 77846,
+      "allocs_per_op": 405,
+      "grouped_counter_observations": {
+        "treedb.publish.ordered_root_delta_group.calls_total": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "treedb.publish.ordered_root_delta_group.finalize_calls_total": [
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "case": "control-warm-long-p5-before",
+      "variant": "before",
+      "pair": 5,
+      "writers": 8,
+      "n": 10000,
+      "ns_per_op": 38198.0,
+      "ack_per_s": 26179.0,
+      "bytes_per_op": 57275,
+      "allocs_per_op": 287,
+      "grouped_counter_observations": {
+        "treedb.publish.ordered_root_delta_group.calls_total": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "treedb.publish.ordered_root_delta_group.finalize_calls_total": [
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "case": "control-warm-long-p5-candidate",
+      "variant": "candidate",
+      "pair": 5,
+      "writers": 1,
+      "n": 10000,
+      "ns_per_op": 91457.0,
+      "ack_per_s": 10934.0,
+      "bytes_per_op": 77785,
+      "allocs_per_op": 405,
+      "grouped_counter_observations": {
+        "treedb.publish.ordered_root_delta_group.calls_total": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "treedb.publish.ordered_root_delta_group.finalize_calls_total": [
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "case": "control-warm-long-p5-candidate",
+      "variant": "candidate",
+      "pair": 5,
+      "writers": 8,
+      "n": 10000,
+      "ns_per_op": 39542.0,
+      "ack_per_s": 25290.0,
+      "bytes_per_op": 56996,
+      "allocs_per_op": 285,
+      "grouped_counter_observations": {
+        "treedb.publish.ordered_root_delta_group.calls_total": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "treedb.publish.ordered_root_delta_group.finalize_calls_total": [
+          0,
+          0
+        ]
+      }
+    }
+  ],
+  "allocation_summary": {
+    "before": {
+      "bytes": 800810216,
+      "objects": 367888,
+      "bytes_per_doc": 8008.10216,
+      "allocs_per_doc": 3.67888
+    },
+    "candidate": {
+      "bytes": 800227336,
+      "objects": 367846,
+      "bytes_per_doc": 8002.27336,
+      "allocs_per_doc": 3.67846
+    },
+    "bytes_change_pct": -0.07278628423491584,
+    "objects_change_pct": -0.011416518070717085
+  },
+  "warm_summary": {
+    "1": {
+      "before": {
+        "ns_per_op": 91951.0,
+        "ack_per_s": 10875.0,
+        "bytes_per_op": 77836,
+        "allocs_per_op": 405
+      },
+      "candidate": {
+        "ns_per_op": 91457.0,
+        "ack_per_s": 10934.0,
+        "bytes_per_op": 77819,
+        "allocs_per_op": 405
+      },
+      "ns_per_op_change_pct": -0.5372426618525106,
+      "long_guard_pass": true
+    },
+    "8": {
+      "before": {
+        "ns_per_op": 38748.0,
+        "ack_per_s": 25808.0,
+        "bytes_per_op": 57003,
+        "allocs_per_op": 285
+      },
+      "candidate": {
+        "ns_per_op": 38414.0,
+        "ack_per_s": 26032.0,
+        "bytes_per_op": 56996,
+        "allocs_per_op": 285
+      },
+      "ns_per_op_change_pct": -0.8619799731599098,
+      "long_guard_pass": true
+    }
+  },
+  "all_observed_grouped_call_counters_zero": true,
+  "finalize_counter_limit": "Go BENCH log truncation hides the actual 10000-operation finalize counter; only calibration finalize counters are retained. Completed grouped-call counters are visible for every actual sample.",
+  "boundaries": {
+    "allocation": "Process-wide TotalAlloc/Mallocs delta around foreground plus settled drain; excludes prebuild/checkpoint/post-phase Stats, includes concurrent background allocations",
+    "warm": "Request-to-ACK of 10000 real indexed updates, separately for1 and8 writers; excludes fixture and checked Close; counter loop after StopTimer",
+    "grouped_counters": "Aggregate completed grouped publications in bracket, not exact-route activation; no statement about later Close/checkpoint work"
+  },
+  "prior_short_guard_retained": true,
+  "no_samples_excluded": true
+}
