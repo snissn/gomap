@@ -53,9 +53,15 @@ class RecipeControls(unittest.TestCase):
             bad[name]['success'] = False
             with self.assertRaises(ValueError):
                 run.validate_receipt(bad, env, 'profile', 'run')
-        bad = dict(receipt, phase_id='stale')
-        with self.assertRaises(ValueError):
-            run.validate_receipt(bad, env, 'profile', 'run')
+        for field, value in (('phase_id', 'stale'), ('declared_profile', 'wrong-profile'),
+                             ('phase', 'load'), ('total_excludes_close', False)):
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                run.validate_receipt(dict(receipt, **{field:value}), env, 'profile', 'run')
+        for field in ('db_close', 'workload_close'):
+            bad = copy.deepcopy(receipt)
+            del bad[field]
+            with self.subTest(missing=field), self.assertRaises(KeyError):
+                run.validate_receipt(bad, env, 'profile', 'run')
 
     def test_changed_frozen_recipe_fails_before_launch(self):
         old = {name: getattr(run, name, None) for name in ('ROOT', 'FREEZE', 'FREEZE_HASH')}
