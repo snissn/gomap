@@ -84,6 +84,7 @@ class IdleCheckpointDiagnosticControls(unittest.TestCase):
 
 
     def fake_toolchain(self, root, mismatch=False):
+        root = root.resolve()
         goroot = root/'effective'
         (goroot/'bin').mkdir(parents=True)
         tools = goroot/'pkg/tool/linux_amd64'
@@ -258,9 +259,23 @@ if mode!='overlay':
         arm=ab.load_arm(frozen,'A',ab.recipe.sha(frozen/'freeze.json'))
 else:
     arm=SimpleNamespace(REPO=root,FREEZE={'product_commit':'a'*40})
+original_popen=subprocess.Popen
+def ready_popen(*args,**kwargs):
+    child=original_popen(*args,**kwargs)
+    try:
+        deadline=time.monotonic()+5
+        while not (root/'child.pid').exists():
+            assert child.poll() is None, 'driver exited before readiness'
+            assert time.monotonic()<deadline, 'driver readiness deadline'
+            time.sleep(.005)
+        return child
+    except BaseException:
+        ab.terminate_group(child)
+        raise
 try:
     with ab.termination_scope(), ExitStack() as stack:
         ab.lock_lane(stack,[root/'lane.lock'])
+        stack.enter_context(patch.object(subprocess,'Popen',side_effect=ready_popen))
         if mode=='overlay':
             original=diagnostic.owned_command
             def bounded(argv,binding,**kwargs): return original(argv,binding,timeout=.15,**kwargs)
