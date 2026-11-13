@@ -1,6 +1,12 @@
 """Offline controls for diagnostic isolation, drift and sample handling."""
 from contextlib import ExitStack
 import json
+import fcntl
+import os
+import signal
+import subprocess
+import sys
+import time
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -92,6 +98,85 @@ class IdleCheckpointABControls(unittest.TestCase):
                 self.assertTrue(next(out.rglob('result.json')).exists())
                 with self.assertRaisesRegex(ValueError, 'output already exists'):
                     ab.main()
+
+
+    def test_sigterm_both_mains_finish_owned_children_before_lane_unlock(self):
+        actor = r"""
+import json, os, signal, subprocess, sys
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+import idle_checkpoint_ab as ab
+import idle_checkpoint_diagnostic as diagnostic
+root, mode = Path(sys.argv[1]), sys.argv[2]
+ab.recipe.REPO = root
+previous = signal.getsignal(signal.SIGTERM)
+worker = "import os,signal,sys,time\nfrom pathlib import Path\ndef end(signum,frame):\n time.sleep(.25)\n raise SystemExit(0)\nsignal.signal(signal.SIGTERM,end)\nPath(sys.argv[1]).write_text(str(os.getpid()))\ntime.sleep(60)\n"
+def work(*args):
+    gateway = subprocess.Popen([sys.executable,'-c',worker,str(root/'gateway.pid')], start_new_session=True)
+    try:
+        ab.recipe.command(root,'client',[sys.executable,'-c',worker,str(root/'client.pid')],timeout=30)
+    finally:
+        ab.recipe.terminate_group(gateway)
+def arm(path,name,digest):
+    return SimpleNamespace(ROOT=path,FREEZE_HASH=digest,FREEZE={'product_commit':name*40},verify_freeze=lambda:None,run_case=work)
+argv = [mode,'--baseline-root',str(root/'A'),'--candidate-root',str(root/'B'),
+        '--baseline-freeze-sha256','a'*64,'--candidate-freeze-sha256','b'*64,
+        '--out',str(root/'out'),'--lane-lock',str(root/'lane.lock')]
+argv += ['--long-ops','100000'] if mode=='timing' else ['--go',sys.executable,'--operations','10000']
+with patch.object(sys,'argv',argv),patch.object(ab,'load_arm',side_effect=arm),patch.object(ab,'compatible'),patch.object(diagnostic,'build_overlay',return_value={}),patch.object(diagnostic,'collect',side_effect=work):
+    try:
+        (ab.main if mode=='timing' else diagnostic.main)()
+    except InterruptedError:
+        assert signal.getsignal(signal.SIGTERM)==previous
+        (root/'handler-restored').write_text('yes')
+    else:
+        raise AssertionError('SIGTERM did not enter failure path')
+"""
+        for mode in ('timing', 'diagnostic'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root/'A').mkdir()
+                (root/'B').mkdir()
+                with (root/'actor.out').open('w') as stdout, (root/'actor.err').open('w') as stderr:
+                    process = subprocess.Popen([sys.executable, '-c', actor, str(root), mode],
+                                               cwd=Path(ab.__file__).parent, stdout=stdout, stderr=stderr)
+                    children = []
+                    try:
+                        deadline = time.monotonic()+10
+                        while not all((root/(name+'.pid')).exists() for name in ('gateway', 'client')):
+                            self.assertIsNone(process.poll(), (root/'actor.err').read_text())
+                            self.assertLess(time.monotonic(), deadline, 'children did not start')
+                            time.sleep(.01)
+                        children = [int((root/(name+'.pid')).read_text()) for name in ('gateway', 'client')]
+                        os.kill(process.pid, signal.SIGTERM)
+                        time.sleep(.05)
+                        os.kill(process.pid, signal.SIGTERM)
+                        with (root/'lane.lock').open('a') as lane:
+                            while True:
+                                try:
+                                    fcntl.flock(lane, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                                    break
+                                except BlockingIOError:
+                                    self.assertLess(time.monotonic(), deadline, 'lane not released')
+                                    time.sleep(.01)
+                            for pid in children:
+                                with self.assertRaises(ProcessLookupError):
+                                    os.kill(pid, 0)
+                        self.assertEqual(process.wait(timeout=5), 0, (root/'actor.err').read_text())
+                        self.assertTrue((root/'handler-restored').exists())
+                        self.assertIn('InterruptedError', (root/'out/failure.json').read_text())
+                        receipt = json.loads((root/'client.command.json').read_text())
+                        self.assertIn('interrupted_child_cleanup', receipt)
+                    finally:
+                        if process.poll() is None:
+                            process.kill()
+                            process.wait()
+                        for pid in children:
+                            try:
+                                os.killpg(pid, signal.SIGKILL)
+                            except ProcessLookupError:
+                                pass
 
 
 if __name__ == '__main__':

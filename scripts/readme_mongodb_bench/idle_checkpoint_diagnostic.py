@@ -62,31 +62,87 @@ def overlay_sources(repo):
     return {cache: original[:start]+body+original[end:]+EVENT_HELPER, server: gateway}
 
 
+def owned_command(argv, binding, timeout=None, **kwargs):
+    """Keep a cancelled overlay command's separate process group owned."""
+    process = subprocess.Popen(argv, start_new_session=True, **kwargs)
+    binding['pid'] = process.pid
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+        return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
+    finally:
+        try:
+            if process.poll() is None:
+                binding['interrupted_child_cleanup'] = recipe.terminate_group(process)
+        finally:
+            binding['exit_code'] = process.returncode
+
+
+def resolve_toolchain(arm, go, binding):
+    frozen = arm.FREEZE['build_environment']['go_env']
+    expected = frozen['GOVERSION']
+    recipe.require(expected.startswith('go1.') and expected[4:].replace('.', '').isdigit(),
+                   'invalid frozen Go version')
+    env = os.environ.copy()
+    env.pop('GOROOT', None)
+    env.pop('GOMAXPROCS', None)
+    env.update(GOTOOLCHAIN=expected, GOWORK='off')
+    probes = binding.setdefault('toolchain_probes', [])
+    def output(argv, environment):
+        probe = dict(argv=[str(value) for value in argv])
+        probes.append(probe)
+        result = owned_command(probe['argv'], probe, timeout=60, cwd=arm.REPO,
+                               env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        probe.update(stdout=result.stdout, stderr=result.stderr)
+        recipe.require(result.returncode == 0, 'Go toolchain probe failed')
+        return result.stdout.strip()
+    keys = ('GOROOT', 'GOTOOLDIR', 'GOVERSION', 'GOOS', 'GOARCH', 'CGO_ENABLED')
+    resolved = recipe.strict_json(output([go, 'env', '-json', *keys], env))
+    for key in keys:
+        recipe.require(resolved[key] == frozen[key], 'frozen Go toolchain mismatch: '+key)
+    root = Path(resolved['GOROOT']).resolve(strict=True)
+    driver = (root/'bin/go').resolve(strict=True)
+    recipe.require(Path(resolved['GOTOOLDIR']).resolve(strict=True) ==
+                   root/'pkg/tool'/(resolved['GOOS']+'_'+resolved['GOARCH']),
+                   'Go tool directory does not belong to effective GOROOT')
+    env.update(GOROOT=str(root), GOTOOLCHAIN='local')
+    effective = recipe.strict_json(output([driver, 'env', '-json', *keys], env))
+    recipe.require(effective == resolved, 'effective Go driver identity changed')
+    version = output([driver, 'version'], env)
+    recipe.require(version == 'go version '+expected+' '+resolved['GOOS']+'/'+resolved['GOARCH'],
+                   'effective Go driver version mismatch')
+    compiler = output([driver, 'tool', 'compile', '-V'], env)
+    recipe.require(compiler == 'compile version '+expected, 'effective Go compiler version mismatch')
+    binding['toolchain'] = dict(launcher=str(go), driver=str(driver), go_env=resolved,
+                               version=version, compiler_version=compiler)
+    return driver, env
+
+
 def build_overlay(arm, out, go):
     out.mkdir()
-    replacements = {}
-    inputs = {}
-    for index, (source, content) in enumerate(overlay_sources(arm.REPO).items()):
-        target = out/('overlay-'+str(index)+'.go')
-        target.write_text(content)
-        replacements[str(source)] = str(target)
-        inputs[str(source)] = dict(original_sha256=recipe.sha(source), overlay_sha256=recipe.sha(target))
-    recipe.save(out/'overlay.json', dict(Replace=replacements))
-    (out/'bin').mkdir()
-    binary = out/'bin/treedb-mongo-gateway'
-    argv = [str(go), 'build', '-overlay', str(out/'overlay.json'), '-o', str(binary), 'TreeDB/mongo_gateway/server.go']
-    env = os.environ.copy()
-    env.pop('GOMAXPROCS', None)
-    env.update(GOROOT=str(go.parent.parent), GOTOOLCHAIN='local', GOWORK='off')
-    with (out/'build.out').open('x') as stdout, (out/'build.err').open('x') as stderr:
-        result = subprocess.run(argv, cwd=arm.REPO, env=env, stdout=stdout, stderr=stderr)
-    binding = dict(argv=argv, exit_code=result.returncode, inputs=inputs,
-                   source_commit=arm.FREEZE['product_commit'], timing_evidence=False)
-    if result.returncode == 0:
+    binding = dict(inputs={}, source_commit=arm.FREEZE['product_commit'], timing_evidence=False)
+    try:
+        driver, env = resolve_toolchain(arm, go, binding)
+        replacements = {}
+        for index, (source, content) in enumerate(overlay_sources(arm.REPO).items()):
+            target = out/('overlay-'+str(index)+'.go')
+            target.write_text(content)
+            replacements[str(source)] = str(target)
+            binding['inputs'][str(source)] = dict(original_sha256=recipe.sha(source), overlay_sha256=recipe.sha(target))
+        recipe.save(out/'overlay.json', dict(Replace=replacements))
+        (out/'bin').mkdir()
+        binary = out/'bin/treedb-mongo-gateway'
+        argv = [str(driver), 'build', '-overlay', str(out/'overlay.json'), '-o', str(binary), 'TreeDB/mongo_gateway/server.go']
+        binding['argv'] = argv
+        with (out/'build.out').open('x') as stdout, (out/'build.err').open('x') as stderr:
+            result = owned_command(argv, binding, cwd=arm.REPO, env=env, stdout=stdout, stderr=stderr)
+        recipe.require(result.returncode == 0, 'diagnostic overlay build failed')
         binding['binary_sha256'] = recipe.sha(binary)
-    recipe.save(out/'build.json', binding)
-    recipe.require(result.returncode == 0, 'diagnostic overlay build failed')
-    return binding
+        return binding
+    except BaseException as error:
+        binding.update(error=repr(error), error_type=type(error).__name__)
+        raise
+    finally:
+        recipe.save(out/'build.json', binding)
 
 
 def allocation_delta(before, after, operations, updates):
@@ -221,7 +277,7 @@ def main():
     lane = args.lane_lock.resolve()
     recipe.require(lane.parent.is_dir() and not lane.is_relative_to(out)
                    and not any(lane.is_relative_to(root) for root in roots), 'lane must be outside disposable roots')
-    with ExitStack() as stack:
+    with ab.termination_scope(), ExitStack() as stack:
         ab.lock_lane(stack, [lane, *(r/'campaign.lock' for r in roots)])
         arms = {name: ab.load_arm(root, name, digest) for name, root, digest in
                 zip(('A', 'B'), roots, (args.baseline_freeze_sha256, args.candidate_freeze_sha256))}
