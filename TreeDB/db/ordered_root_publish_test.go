@@ -591,7 +591,7 @@ func TestPublishOrderedRootDeltaGroupSystemMaterializationErrorReleasesConsumedP
 	}
 }
 
-func TestPublishOrderedRootDeltaGroupWithCommandWALContextProjectsCollectionDescriptorReachability(t *testing.T) {
+func TestPublishOrderedRootDeltaGroupWithCommandWALContextColdDescriptorsAvoidCandidateScan(t *testing.T) {
 	tests := []struct {
 		name    string
 		publish func(*testing.T, *DB) error
@@ -650,9 +650,10 @@ func TestPublishOrderedRootDeltaGroupWithCommandWALContextProjectsCollectionDesc
 				t.Fatalf("publish: %v", err)
 			}
 			db.testScanCandidateExternalReferencesHook = nil
-			if got := scans.Load(); got != 1 {
-				t.Fatalf("candidate dependency scans=%d want 1 for collection descriptor reachability", got)
+			if got := scans.Load(); got != 0 {
+				t.Fatalf("candidate dependency scans=%d want 0 for covered cold collection descriptors", got)
 			}
+			assertCandidateTrackerMatchesFullScan(t, db)
 		})
 	}
 }

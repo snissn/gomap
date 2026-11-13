@@ -257,6 +257,18 @@ required resource bytes and namespace entries are synced before recoverable
 meta publication. Successful `*Sync`, `Checkpoint`, and clean `Close` retain
 their durability guarantees.
 
+Grouped ordered-root command-WAL batches also build these existing reference
+deltas. A successful empty collection-descriptor census admits a pure cold
+attachment when every grouped predecessor is zero, each produced root is
+distinct and nonzero, and the new inline descriptors consume exactly those
+outputs. Repeated descriptor references to one output count that root once.
+Outputs must not alias the implicit user or old/new system roots. A census
+error is not an empty census. Foreign or unused outputs, malformed or pointer
+descriptors, overlapping descriptor ranges, unavailable required tracking or
+producer evidence retain the existing projection/error path. Warm descriptor transitions
+retain their existing bijective-coverage proof. This admission changes neither
+registration and sync ordering nor destructive-maintenance authority.
+
 ### 0.1 Normative publication state machine
 
 | State | Stable authority | Permitted next action | Failure rule |

@@ -126,7 +126,7 @@ func TestDurableRootCandidateScanRepairsReferenceTracker(t *testing.T) {
 	}
 }
 
-func TestDurableRootCandidateScanColdCollectionAttachmentRepairsTracker(t *testing.T) {
+func TestDurableRootCandidateScanColdCollectionAttachmentRepairsInvalidTracker(t *testing.T) {
 	dir := t.TempDir()
 	enableCommandWALFormat(t, dir)
 	db := openCommandWALDB(t, dir)
@@ -153,6 +153,8 @@ func TestDurableRootCandidateScanColdCollectionAttachmentRepairsTracker(t *testi
 	}
 	scans := 0
 	db.testScanCandidateExternalReferencesHook = func() { scans++ }
+	// A known-empty descriptor base alone cannot repair unavailable counters.
+	db.valueLogRefTracker.invalidate()
 	root := publish(0, first, "cmd/attach")
 	if scans != 1 {
 		t.Fatalf("cold descriptor attachment scans=%d, want 1", scans)

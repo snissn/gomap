@@ -1291,10 +1291,46 @@ func orderedRootCollectionDescriptorTransitionsCoveredEntries(
 	if baseSystemRoot == 0 || newSystemRoot == 0 || len(baseRoots) != len(newRoots) {
 		return false
 	}
-	if len(baseEntries) == 0 || len(baseEntries) != len(newEntries) {
-		// Cold attachment, removal, and key-set changes retain the exact
-		// candidate scanner. The bounded proof only covers warm retargeting of
-		// an already-attached descriptor set.
+	if len(baseEntries) == 0 {
+		// With no attached collection roots, each independently built empty
+		// root contributes its complete pointer delta exactly once. Zero is
+		// absence, not a shared predecessor root. Require the new descriptor
+		// closure to match the distinct produced roots; foreign attachments,
+		// unconsumed outputs and aliases of implicit roots retain the scanner.
+		if len(newEntries) == 0 || len(newRoots) == 0 || (userRoot != 0 && (userRoot == baseSystemRoot || userRoot == newSystemRoot)) {
+			return false
+		}
+		produced := make(map[uint64]bool, len(newRoots))
+		for i, rootID := range newRoots {
+			if baseRoots[i] != 0 || rootID == 0 || rootID == userRoot || rootID == baseSystemRoot || rootID == newSystemRoot {
+				return false
+			}
+			if _, duplicate := produced[rootID]; duplicate {
+				return false
+			}
+			produced[rootID] = false
+		}
+		for _, entry := range newEntries {
+			for _, rootID := range entry.sourceRootIDs {
+				if rootID == 0 {
+					continue
+				}
+				if _, ok := produced[rootID]; !ok {
+					return false
+				}
+				produced[rootID] = true
+			}
+		}
+		for _, consumed := range produced {
+			if !consumed {
+				return false
+			}
+		}
+		return true
+	}
+	if len(baseEntries) != len(newEntries) {
+		// Warm attachment, removal, and key-set changes retain the exact
+		// candidate scanner. Existing roots require a bijective retarget.
 		return false
 	}
 	baseByKey := make(map[string][]uint64, len(baseEntries))
@@ -1396,7 +1432,7 @@ func orderedRootCollectionDescriptorTransitionsCoveredByDelta(
 	userRoot, baseSystemRoot, newSystemRoot uint64,
 	baseRoots, newRoots []uint64,
 ) bool {
-	if delta == nil || len(baseEntries) == 0 {
+	if delta == nil {
 		return false
 	}
 	entries, ranges := delta.ApplyPlan()
@@ -1426,14 +1462,19 @@ func orderedRootCollectionDescriptorTransitionsCoveredByDelta(
 			return false
 		}
 		idx, ok := byKey[string(entry.Key)]
-		if !ok {
+		if !ok && len(baseEntries) != 0 {
 			return false
 		}
 		rootIDs, err := decodeCollectionRootDescriptorRootIDs(entry.Key, entry.Value, allowList)
 		if err != nil {
 			return false
 		}
-		newEntries[idx].sourceRootIDs = rootIDs
+		if ok {
+			newEntries[idx].sourceRootIDs = rootIDs
+		} else {
+			byKey[string(entry.Key)] = len(newEntries)
+			newEntries = append(newEntries, collectionEntry{key: entry.Key, sourceRootIDs: rootIDs})
+		}
 		changed = true
 	}
 	return changed && orderedRootCollectionDescriptorTransitionsCoveredEntries(
@@ -3040,6 +3081,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenanceP
 		return 0, nil, errors.New("nil system root delta iterator")
 	}
 	var baseDescriptorEntries []collectionEntry
+	var baseDescriptorErr error
 	var systemDelta *batch.Batch
 	if trackValueLogRefs {
 		ptrCollector, collectedIter := newPendingValueLogAppendPtrCollectingIterator(iter)
@@ -3051,7 +3093,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenanceP
 		}
 		defer systemDelta.Close()
 		if orderedRootDeltaMayChangeCollectionRootDescriptors(systemDelta) {
-			baseDescriptorEntries, _ = vacuumCollectCollectionEntriesFromRoot(context.Background(), idxGen.pager, db.valueLogManager, baseSystemRoot)
+			baseDescriptorEntries, baseDescriptorErr = vacuumCollectCollectionEntriesFromRoot(context.Background(), idxGen.pager, db.valueLogManager, baseSystemRoot)
 		}
 		iter = newOrderedRootDeltaBatchIterator(systemDelta, true)
 	}
@@ -3080,7 +3122,7 @@ func (db *DB) publishOrderedRootDeltaGroupWithSystemDeltaBuilderWithMaintenanceP
 				baseRoots[idx] = ordered[idx].BaseRoot
 			}
 			if systemRefDelta.requiresCandidateProjection || orderedRootTransitionsChanged(baseRoots, rootIDs) {
-				if orderedRootCollectionDescriptorTransitionsCoveredByDelta(baseDescriptorEntries, systemDelta, userRoot, baseSystemRoot, rootID, baseRoots, rootIDs) {
+				if baseDescriptorErr == nil && orderedRootCollectionDescriptorTransitionsCoveredByDelta(baseDescriptorEntries, systemDelta, userRoot, baseSystemRoot, rootID, baseRoots, rootIDs) {
 					systemRefDelta.requiresCandidateProjection = false
 				} else {
 					exactValueLogRefDelta = false
@@ -3568,8 +3610,9 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 			return 0, nil, false, err
 		}
 		var baseDescriptorEntries []collectionEntry
+		var baseDescriptorErr error
 		if orderedRootDeltaMayChangeCollectionRootDescriptors(systemDelta) {
-			baseDescriptorEntries, _ = vacuumCollectCollectionEntriesFromRoot(context.Background(), idx.pager, db.valueLogManager, systemBaseRoot)
+			baseDescriptorEntries, baseDescriptorErr = vacuumCollectCollectionEntriesFromRoot(context.Background(), idx.pager, db.valueLogManager, systemBaseRoot)
 		}
 		phaseStart = time.Now()
 		rootID, systemRetired, systemMetrics, systemApplyResult, applyErr := db.publishOrderedRootDeltaBatchWithAllocatorResult(idx, systemBaseRoot, systemDelta, systemOpts, systemTracker, systemTracker, false, true)
@@ -3613,7 +3656,7 @@ func (db *DB) tryPublishOrderedRootDeltaBatchGroupOptimistic(ordered []OrderedRo
 				baseRoots[orderedIdx] = ordered[orderedIdx].BaseRoot
 			}
 			if orderedRootDeltaMayChangeCollectionRootDescriptors(systemDelta) || orderedRootTransitionsChanged(baseRoots, rootIDs) {
-				if !orderedRootCollectionDescriptorTransitionsCoveredByDelta(baseDescriptorEntries, systemDelta, baseUserRoot, systemBaseRoot, rootID, baseRoots, rootIDs) {
+				if baseDescriptorErr != nil || !orderedRootCollectionDescriptorTransitionsCoveredByDelta(baseDescriptorEntries, systemDelta, baseUserRoot, systemBaseRoot, rootID, baseRoots, rootIDs) {
 					exactValueLogRefDelta = false
 				}
 			}
@@ -3856,7 +3899,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 	var retired []uint64
 	var merged adaptive.Metrics
 	var touchedValueLogSegments []uint32
-	trackValueLogRefs := commandWALIntent == nil
+	trackValueLogRefs := true
 	var vlogRefDelta *valueLogRefDelta
 	exactValueLogRefDelta := trackValueLogRefs
 	var ptrCollectors []*pendingValueLogAppendPtrCollectingIterator
@@ -3931,6 +3974,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 		return 0, nil, errors.New("nil system root delta iterator")
 	}
 	var baseDescriptorEntries []collectionEntry
+	var baseDescriptorErr error
 	var systemDelta *batch.Batch
 	if trackValueLogRefs {
 		var convertErr error
@@ -3943,7 +3987,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 		}
 		defer systemDelta.Close()
 		if orderedRootDeltaMayChangeCollectionRootDescriptors(systemDelta) {
-			baseDescriptorEntries, _ = vacuumCollectCollectionEntriesFromRoot(context.Background(), idxGen.pager, db.valueLogManager, baseSystemRoot)
+			baseDescriptorEntries, baseDescriptorErr = vacuumCollectCollectionEntriesFromRoot(context.Background(), idxGen.pager, db.valueLogManager, baseSystemRoot)
 		}
 		iter = newOrderedRootDeltaBatchIterator(systemDelta, true)
 	}
@@ -3972,7 +4016,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 				baseRoots[idx] = ordered[idx].BaseRoot
 			}
 			if systemRefDelta.requiresCandidateProjection || orderedRootTransitionsChanged(baseRoots, rootIDs) {
-				if orderedRootCollectionDescriptorTransitionsCoveredByDelta(baseDescriptorEntries, systemDelta, userRoot, baseSystemRoot, rootID, baseRoots, rootIDs) {
+				if baseDescriptorErr == nil && orderedRootCollectionDescriptorTransitionsCoveredByDelta(baseDescriptorEntries, systemDelta, userRoot, baseSystemRoot, rootID, baseRoots, rootIDs) {
 					systemRefDelta.requiresCandidateProjection = false
 				} else {
 					exactValueLogRefDelta = false
@@ -4358,20 +4402,20 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 		}
 	}
 	var baseDescriptorEntries []collectionEntry
+	var baseDescriptorErr error
 	if orderedRootDeltaMayChangeCollectionRootDescriptors(systemDelta) {
-		var collectErr error
 		if opts.preparedLimits != nil {
-			baseDescriptorEntries, collectErr = vacuumCollectCollectionEntriesFromRootWithLimits(
+			baseDescriptorEntries, baseDescriptorErr = vacuumCollectCollectionEntriesFromRootWithLimits(
 				context.Background(), idxGen.pager, db.valueLogManager, baseSystemRoot,
 				opts.preparedLimits.MaxDescriptorEntries,
 				opts.preparedLimits.MaxDescriptorBytes,
 				opts.preparedLimits.MaxDescriptorRootIDs,
 			)
 		} else {
-			baseDescriptorEntries, collectErr = vacuumCollectCollectionEntriesFromRoot(context.Background(), idxGen.pager, db.valueLogManager, baseSystemRoot)
+			baseDescriptorEntries, baseDescriptorErr = vacuumCollectCollectionEntriesFromRoot(context.Background(), idxGen.pager, db.valueLogManager, baseSystemRoot)
 		}
-		if collectErr != nil && opts.preparedLimits != nil {
-			return 0, nil, fmt.Errorf("treedb: prepared base root descriptor scan: %w", collectErr)
+		if baseDescriptorErr != nil && opts.preparedLimits != nil {
+			return 0, nil, fmt.Errorf("treedb: prepared base root descriptor scan: %w", baseDescriptorErr)
 		}
 	}
 	iter = newOrderedRootDeltaBatchIterator(systemDelta, true)
@@ -4398,7 +4442,7 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 			for idx := range allOrdered {
 				baseRoots[idx] = allOrdered[idx].BaseRoot
 			}
-			if orderedRootCollectionDescriptorTransitionsCoveredByDelta(baseDescriptorEntries, systemDelta, userRoot, baseSystemRoot, rootID, baseRoots, rootIDs) {
+			if baseDescriptorErr == nil && orderedRootCollectionDescriptorTransitionsCoveredByDelta(baseDescriptorEntries, systemDelta, userRoot, baseSystemRoot, rootID, baseRoots, rootIDs) {
 				systemRefDelta.requiresCandidateProjection = false
 			} else {
 				exactValueLogRefDelta = false

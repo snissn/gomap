@@ -485,6 +485,13 @@ required scan; it does not add a scan or change the reachability authority for G
 
 Raw outer-leaf created/current identities in an apply delta are physical
 dependency membership only; they do not increment logical reference counters.
+Cold grouped collection attachment may reuse independently built empty-root
+deltas after a successful empty descriptor census and exact coverage of all
+distinct produced roots by inline descriptors. Descriptor aliases count once;
+aliases of implicit roots and incomplete or unknown coverage retain the scanner.
+Command-WAL batch publication uses the same tracking and final activation rules.
+Failed candidates cannot install their private counters, and failed census reads
+cannot establish empty-base eligibility.
 An additive publication conservatively retains predecessor raw segments and
 all producer-created/current segments, including empty lanes and non-current
 segments created by rotations within the apply. This can retain bytes not
