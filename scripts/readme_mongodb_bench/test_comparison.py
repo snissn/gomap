@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 import signal
 import tempfile
-import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -184,14 +183,14 @@ class ComparisonControls(unittest.TestCase):
                 def startup(*args):
                     run.SERVICES.append({'stem':'partial', 'stop_attempts':0})
                     if timeout:
-                        time.sleep(.2)
+                        signal.raise_signal(signal.SIGALRM)
                     raise ValueError('startup failed')
                 with patch.object(run, 'verify_freeze'), patch.object(run, 'gateway', side_effect=startup), \
                      patch.object(run, 'stop') as stop:
                     label = 'timeout' if timeout else 'startup'
                     with self.assertRaises((ValueError, TimeoutError)):
                         comparison.bounded_case(lambda: run.run_case('ycsb', label, 'gomap', 1, 100000, 10000),
-                                                seconds=.02 if timeout else 1)
+                                                seconds=1)
                     stop.assert_called_once()
                     self.assertTrue(stop.call_args.kwargs['abort'])
                     failure = run.strict_json((run.OUT/('ycsb-'+label+'-p1-gomap')/'failure.json').read_text())
