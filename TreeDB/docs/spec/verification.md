@@ -4756,6 +4756,12 @@ that review, recovery/race evidence or public performance gates.
 | Finite small-budget recovery and retained reuse | `TestCOWPublicSmallBudgetAcceptedPrefixDrainsAndReopens`, `TestCOWAcceptedPrefixRepeatedDrainReuse`, `TestCOWPublicRetainedHistoryFixture` use actual checkpoint/reopen or canonical appends, held pointer bytes and final original-owner accounting. The retained benchmark remains construction-only until reviewed. |
 | Native accepted-slot pressure service | `TestCOWNativeAcceptedCapacityUsesPressureService` fills the original queue with installed native publications; the unchanged a2 service uses a full checkpoint and fails its selector assertion. `TestCOWNativeAcceptedCapacityFullCheckpointFallbacks` retains raw, interval-only and missing-cutover full service. `TestCOWNativeAcceptedCapacityJoinsOriginalSealAndCustody` separately holds the actual physical seal and original accepted custody before one assignment/publication, preserving a prior reader. `TestCOWNativeAcceptedCapacityCloseDuringOriginalDrain` races real Close against held accepted custody and proves the staged command stays unassigned. `TestCOWNativeAcceptedCapacityUnassignedRefusalAndErrors` uses real unassigned reservations for finite refusal, original error identity and cleanup-callback self-join protection. |
 
+`TestNativeProducerPreparationDrainsInterveningPressure` and
+`TestNativeProducerPreparationHeldPressureRefuses` obtain the nominal tranche
+from their original capture's maintenance allocator, then retain genuine external
+owners above the variable-capacity watermark. Their exact-prefix drain,
+unchanged-state termination and original finite opening refusal remain required.
+
 `TestNativeCollectionPressureDrainsBeforeOpening/accepted-slots` uses ordinary
 BSON updates with an explicitly configured finite 512-slot inventory. It checks
 that producer advisory pressure remains absent, the handoff captures the exact

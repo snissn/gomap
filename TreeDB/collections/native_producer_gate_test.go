@@ -79,6 +79,7 @@ func TestNativeProducerPreparationDrainsInterveningPressure(t *testing.T) {
 	}
 	allocator := read.capture.NativeAllocator()
 	budget := allocator.(*memtable.COWBudget)
+	fixed := read.capture.NativeMaintenanceAllocator().(*memtable.COWBudget).Limits().MaxInFlightBytes
 	if read.domain.domain.typed == nil {
 		read.Close()
 		t.Fatal("intervening public mutation did not leave pending typed work")
@@ -109,10 +110,11 @@ func TestNativeProducerPreparationDrainsInterveningPressure(t *testing.T) {
 	// Add a real separately owned reservation so the queued observation is now
 	// pressured. This changes no watermark, capacity or retained reader policy.
 	stats, limits := budget.Stats(), budget.Limits()
-	// Leave the same genuine reservation headroom as the held-pressure control.
-	// The original exactly-at-75% fixture could fall below the advisory watermark
-	// when previously queued cleanup completed before producer observation.
-	target := limits.MaxInFlightBytes - limits.MaxInFlightBytes/8
+	// The original startup maintenance tranche remains charged. Leave genuine
+	// headroom above the revised variable-capacity watermark, so queued cleanup
+	// cannot remove pressure before the contender reobserves its original owner.
+	variable := limits.MaxInFlightBytes - fixed
+	target := fixed + variable - variable/8
 	if stats.ReservedBytes >= target {
 		t.Fatal("fixture began above pressure watermark")
 	}
@@ -127,11 +129,11 @@ func TestNativeProducerPreparationDrainsInterveningPressure(t *testing.T) {
 	}
 	next := backend.CommandWALNextLSN()
 	// Reobserve immediately before releasing the contender. No body/transaction
-	// has opened, and queued cleanup has at least 1/16 of the original budget's
-	// headroom before this fixture can slip below the actual 75% watermark.
+	// has opened, and queued cleanup has at least 1/16 of variable capacity as
+	// headroom before this fixture can slip below the revised 75% watermark.
 	pressured, err = backend.ObserveNativeProducer()
-	watermark := limits.MaxInFlightBytes - limits.MaxInFlightBytes/4
-	if err != nil || !pressured.UnderPressure || pressured.ReservedBytes < watermark+limits.MaxInFlightBytes/16 || pressured.LogicalSequence != beforeSequence {
+	watermark := fixed + variable - variable/4
+	if err != nil || !pressured.UnderPressure || pressured.ReservedBytes < watermark+variable/16 || pressured.LogicalSequence != beforeSequence {
 		t.Fatalf("release pressure=%+v err=%v before_sequence=%d watermark=%d", pressured, err, beforeSequence, watermark)
 	}
 	close(release)
@@ -208,13 +210,15 @@ func TestNativeProducerPreparationHeldPressureRefuses(t *testing.T) {
 	defer read.Close()
 	allocator := read.capture.NativeAllocator()
 	budget := allocator.(*memtable.COWBudget)
+	fixed := read.capture.NativeMaintenanceAllocator().(*memtable.COWBudget).Limits().MaxInFlightBytes
 	original, err := read.Get([]byte("row-00000"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	leaseCharge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
 	stats := budget.Stats()
-	filler, err := budget.AcquireExternal(budget.Limits().MaxInFlightBytes - budget.Limits().MaxInFlightBytes/8 - stats.ReservedBytes - leaseCharge)
+	variable := budget.Limits().MaxInFlightBytes - fixed
+	filler, err := budget.AcquireExternal(fixed + variable - variable/8 - stats.ReservedBytes - leaseCharge)
 	if err != nil {
 		t.Fatal(err)
 	}
