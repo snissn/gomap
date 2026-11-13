@@ -868,6 +868,22 @@ otherwise unwired backends fall back to a full checkpoint. Explicit
 reclaimable WAL pressure, but uncovered segments may remain until a later
 durable frontier covers them.
 
+Idle eligibility is measured since the last actual foreground write, including
+COW raw batches and native publication. Write notifications remain coalesced by
+WAL byte growth; when the idle timer expires after an unnotified small write, the
+worker rearms it for the remaining quiet duration and checks again at the next
+expiry. A write arriving after that eligibility decision can still overlap
+maintenance. Periodic, size, and explicit auto-checkpoint triggers do not require
+write-idleness.
+
+The existing idle pressure minimum is `FlushThreshold / 16`, clamped to 1–32 MiB,
+and successful automatic maintenance imposes a 10-second idle cooldown. A timer
+expiry refused by those filters does not schedule another retry: a subsequent
+existing worker event (for example, notified WAL growth that rearms the idle
+timer, a periodic tick, or `TriggerAutoCheckpoint`) is required. Tiny bursts that
+never cross the notification threshold need not arm the idle timer. These rules
+do not change persistent value-log retention, GC, durability, or on-disk formats.
+
 ## 8. Profiles and Intent Bundles
 
 The current public profile surface maps high-level intent to command-WAL-backed

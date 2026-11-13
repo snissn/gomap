@@ -400,8 +400,14 @@ after the collection WAL gate, not current behavior.
 - Adaptive backpressure: `SlowdownBacklogSeconds`, `StopBacklogSeconds`, `MaxBacklogBytes`
 - Cached-mode auto maintenance: `BackgroundCheckpointInterval`,
   `BackgroundCheckpointIdleDuration`, and `MaxWALBytes` bound reclaimable WAL
-  pressure. External command-WAL passes clean only recovery-covered prefixes;
-  legacy/unwired backends use a full checkpoint, as do explicit barriers.
+  pressure. Idle eligibility requires quiet since the last actual write, even
+  when small writes do not send another byte-coalesced notification. Periodic,
+  size, and explicit triggers remain independent of write-idleness. Idle passes
+  still require 1–32 MiB of WAL pressure (scaled by `FlushThreshold`) and respect
+  a 10-second cooldown; a refused idle expiry waits for the next existing event,
+  such as notified growth, rather than scheduling its own retry. External
+  command-WAL passes clean only recovery-covered prefixes; legacy/unwired
+  backends use a full checkpoint, as do explicit barriers.
 - Command-WAL-bounded growth: `CommandWALSegmentTargetBytes` rotates active
   command-WAL segments independently from `WALMaxSegmentBytes`, which remains a
   per-frame safety cap; `MaxWALBytes` triggers command-WAL-aware auto

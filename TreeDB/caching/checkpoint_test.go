@@ -1224,3 +1224,105 @@ func TestCachingDB_AutoCheckpoint_SizeTrigger_DoesNotThrashWithRetainedValueLog(
 		t.Fatalf("expected size-triggered checkpoint to run once (count=%d), got %d", initialCount, n)
 	}
 }
+
+func TestCachingDB_AutoCheckpoint_IndependentTriggersDuringWrites(t *testing.T) {
+	for _, reason := range []string{"interval", "force", "size"} {
+		t.Run(reason, func(t *testing.T) {
+			db, err := Open(t.TempDir(), NewMockBackend(), Options{FlushThreshold: 16 << 20, ValueLogPointerThreshold: 16 << 20, JournalLanes: 1})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			db.testSkipVlogCheckpointKick = true
+			entered := make(chan time.Time, 32)
+			db.testBeforeCheckpointFrontierCapture = func() { entered <- time.Now() }
+			const idle = time.Second
+			var interval time.Duration
+			var maxBytes int64
+			if reason == "interval" {
+				interval = 50 * time.Millisecond
+			}
+			if reason == "size" {
+				maxBytes = 1 << 20
+			}
+			db.StartAutoCheckpoint(interval, maxBytes, idle)
+			if err := db.Set([]byte("seed"), []byte("actual-small-write")); err != nil {
+				t.Fatal(err)
+			}
+			ticker := time.NewTicker(10 * time.Millisecond)
+			defer ticker.Stop()
+			deadline := time.After(withRaceTimeout(3 * time.Second))
+			writes := 0
+			for {
+				select {
+				case at := <-entered:
+					last := time.Unix(0, db.lastForegroundWriteUnixNano.Load())
+					if quiet := at.Sub(last); quiet >= idle {
+						t.Fatalf("%s progress required idle: %s", reason, quiet)
+					}
+					// Completion verifies the selected mode, separately from entry.
+					until := time.Now().Add(withRaceTimeout(2 * time.Second))
+					for db.autoCheckpointCount.Load() == 0 {
+						if time.Now().After(until) {
+							t.Fatal("entered checkpoint did not complete")
+						}
+						time.Sleep(time.Millisecond)
+					}
+					if got := autoCheckpointReasonString(db.autoCheckpointLastReason.Load()); got != reason {
+						t.Fatalf("reason=%q want %q", got, reason)
+					}
+					return
+				case <-ticker.C:
+					if err := db.Set([]byte("active"), []byte("small")); err != nil {
+						t.Fatal(err)
+					}
+					writes++
+					if reason == "size" && writes == 3 {
+						if err := db.Set([]byte("pressure"), bytes.Repeat([]byte("v"), 1100<<10)); err != nil {
+							t.Fatal(err)
+						}
+					}
+					if reason == "force" && writes == 3 {
+						db.TriggerAutoCheckpoint()
+					}
+				case <-deadline:
+					t.Fatalf("%s did not progress while writes continued", reason)
+				}
+			}
+		})
+	}
+}
+
+func TestCachingDB_AutoCheckpoint_IdleCooldownNeedsExistingEvent(t *testing.T) {
+	db, err := Open(t.TempDir(), NewMockBackend(), Options{FlushThreshold: 16 << 20, ValueLogPointerThreshold: 16 << 20, JournalLanes: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.testSkipVlogCheckpointKick = true
+	entered := make(chan struct{}, 8)
+	db.testBeforeCheckpointFrontierCapture = func() { entered <- struct{}{} }
+	const idle = 30 * time.Millisecond
+	// Keep the real ten-second cooldown, but arrange its final 200 ms here.
+	db.autoCheckpointLastUnixNano.Store(time.Now().Add(-autoCheckpointMinIdleInterval + 200*time.Millisecond).UnixNano())
+	db.StartAutoCheckpoint(0, 0, idle)
+	value := bytes.Repeat([]byte("v"), 1100<<10)
+	if err := db.Set([]byte("seed"), value); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-entered:
+		t.Fatal("idle bypassed cooldown")
+	case <-time.After(300 * time.Millisecond):
+	}
+	// Expiry refusal did not add a scheduler: no automatic retry occurred when
+	// cooldown elapsed. Another real growth notification rearms the idle timer.
+	if err := db.Set([]byte("next"), value); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-entered:
+	case <-time.After(withRaceTimeout(2 * time.Second)):
+		t.Fatal("next existing write event did not retry idle maintenance")
+	}
+}
