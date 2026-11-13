@@ -1303,8 +1303,9 @@ func TestCachingDB_AutoCheckpoint_IdleCooldownNeedsExistingEvent(t *testing.T) {
 	entered := make(chan struct{}, 8)
 	db.testBeforeCheckpointFrontierCapture = func() { entered <- struct{}{} }
 	const idle = 30 * time.Millisecond
-	// Keep the real ten-second cooldown, but arrange its final 200 ms here.
-	db.autoCheckpointLastUnixNano.Store(time.Now().Add(-autoCheckpointMinIdleInterval + 200*time.Millisecond).UnixNano())
+	// Start with the full cooldown so fixture I/O and worker scheduling cannot
+	// consume an artificial 200 ms remainder before the first expiry.
+	db.autoCheckpointLastUnixNano.Store(time.Now().UnixNano())
 	db.StartAutoCheckpoint(0, 0, idle)
 	value := bytes.Repeat([]byte("v"), 1100<<10)
 	if err := db.Set([]byte("seed"), value); err != nil {
@@ -1313,10 +1314,17 @@ func TestCachingDB_AutoCheckpoint_IdleCooldownNeedsExistingEvent(t *testing.T) {
 	select {
 	case <-entered:
 		t.Fatal("idle bypassed cooldown")
-	case <-time.After(300 * time.Millisecond):
+	case <-time.After(withRaceTimeout(300 * time.Millisecond)):
 	}
-	// Expiry refusal did not add a scheduler: no automatic retry occurred when
-	// cooldown elapsed. Another real growth notification rearms the idle timer.
+	// Expiry refusal must not add a scheduler. Age the test-controlled cooldown
+	// only after observing refusal, then prove elapsed cooldown alone does not
+	// retry maintenance. Another real growth notification must rearm the timer.
+	db.autoCheckpointLastUnixNano.Store(time.Now().Add(-autoCheckpointMinIdleInterval - time.Second).UnixNano())
+	select {
+	case <-entered:
+		t.Fatal("cooldown expiry scheduled an unexpected retry")
+	case <-time.After(withRaceTimeout(300 * time.Millisecond)):
+	}
 	if err := db.Set([]byte("next"), value); err != nil {
 		t.Fatal(err)
 	}

@@ -18,7 +18,9 @@ func TestCOWAutoCheckpointIdleActualActivity(t *testing.T) {
 	for _, profile := range []Profile{ProfileCommandWALRelaxed, ProfileCommandWALDurable} {
 		for _, engine := range []string{"cow_btree", "cow_ordered"} {
 			t.Run(string(profile)+"/"+engine, func(t *testing.T) {
-				const idle = 300 * time.Millisecond
+				// Scale the complete activity window and its scheduling bounds together.
+				// A one-second idle interval leaves headroom for durable I/O and race CI.
+				const idle = time.Second
 				database, opts, _ := cowPublicContractOpen(t, profile, func(o *Options) {
 					o.MemtableMode = engine
 					// The idle floor is 1 MiB at this threshold; the complete fixture is
@@ -125,7 +127,7 @@ func TestCOWAutoCheckpointIdleActualActivity(t *testing.T) {
 						t.Fatalf("idle entry after only %s quiet; want %s", quiet, idle)
 					}
 					t.Logf("genuine idle maintenance entered after %s quiet", at.Sub(lastWrite))
-				case <-time.After(5 * time.Second):
+				case <-time.After(5 * idle):
 					t.Fatal("genuinely idle maintenance never entered")
 				}
 				if err := database.Checkpoint(); err != nil {
