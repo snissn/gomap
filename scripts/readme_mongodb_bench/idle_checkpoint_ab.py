@@ -61,7 +61,15 @@ def lock_lane(stack, paths):
             raise ValueError('measurement lane already owned: '+str(path)) from error
 
 
+def require_default_environment(*environments):
+    for environment in environments:
+        for key in environment:
+            recipe.require(not key.startswith(('GOMAP_READ_', 'TREEDB_', 'GODEBUG', 'GOMEMLIMIT', 'GOGC', 'GOEXPERIMENT')),
+                           'observer/runtime override present: '+key)
+
+
 def load_arm(root, arm, expected_hash):
+    require_default_environment(os.environ, recipe.ENV)
     root = root.resolve(strict=True)
     recipe.require(recipe.sha(root/'freeze.json') == expected_hash, 'unexpected frozen manifest: '+arm)
     frozen = recipe.strict_json((root/'freeze.json').read_text())
@@ -77,6 +85,7 @@ def load_arm(root, arm, expected_hash):
     spec = importlib.util.spec_from_file_location('idle_ab_'+arm, root/'recipe/run.py')
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    require_default_environment(module.ENV)
     module.ROOT = root
     module.BIN = root/'bin'
     module.FREEZE = frozen

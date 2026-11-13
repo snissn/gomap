@@ -11,7 +11,7 @@ from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import idle_checkpoint_ab as ab
 
@@ -50,6 +50,59 @@ class IdleCheckpointABControls(unittest.TestCase):
                 ab.load_arm(root, 'A', '0'*64)
             with self.assertRaisesRegex(ValueError, 'frozen recipe changed'):
                 ab.load_arm(root, 'A', ab.recipe.sha(root/'freeze.json'))
+
+    def test_default_environment_rejects_inherited_and_import_captured_overrides(self):
+        ab.require_default_environment({}, {'PATH':'/usr/bin','GOTOOLCHAIN':'go1.26.10','GOWORK':'off'})
+        for key in ('GOMAP_READ_PROFILE','TREEDB_HOT_PATH_STATS','TREEDB_LEAF_PAGE_READ_CACHE_ENTRIES',
+                    'GODEBUG','GOMEMLIMIT','GOGC','GOEXPERIMENT'):
+            for environment in (os.environ, ab.recipe.ENV):
+                with self.subTest(key=key,inherited=environment is os.environ), \
+                     patch.dict(environment,{key:''}), \
+                     self.assertRaisesRegex(ValueError,'observer/runtime override present: '+key):
+                    # Rejection precedes even manifest access, including empty overrides.
+                    ab.load_arm(Path('/unused-environment-control'),'A','0'*64)
+
+    def test_loaded_arm_environment_is_checked_and_defaults_are_accepted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root/'freeze.json').write_text('{}')
+            frozen = dict(recipe_sources={name:'f'*64 for name in ('run.py','ycsb_log.py','census.go')},
+                          sources=[dict(path=directory)],mongodb_image_id='unused')
+            for environment in ({'PATH':'/usr/bin'}, {'GOGC':'off'}):
+                with self.subTest(environment=environment):
+                    module = SimpleNamespace(ENV=environment,terminate_group=Mock(),verify_freeze=Mock())
+                    spec = SimpleNamespace(loader=SimpleNamespace(exec_module=Mock()))
+                    with patch.object(ab.recipe,'sha',return_value='f'*64), \
+                         patch.object(ab.recipe,'strict_json',return_value=frozen), \
+                         patch.object(ab.importlib.util,'spec_from_file_location',return_value=spec), \
+                         patch.object(ab.importlib.util,'module_from_spec',return_value=module):
+                        if 'GOGC' in environment:
+                            with self.assertRaisesRegex(ValueError,'observer/runtime override present: GOGC'):
+                                ab.load_arm(root,'A','f'*64)
+                            module.verify_freeze.assert_not_called()
+                        else:
+                            self.assertIs(ab.load_arm(root,'A','f'*64),module)
+                            module.verify_freeze.assert_called_once_with()
+
+    def test_both_entrypoints_refuse_environment_before_launch(self):
+        import idle_checkpoint_diagnostic as diagnostic
+        for main in (ab.main, diagnostic.main):
+            for environment in (os.environ, ab.recipe.ENV):
+                with self.subTest(driver=main.__module__,inherited=environment is os.environ), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    (root/'A').mkdir();(root/'B').mkdir()
+                    argv = ['environment-control','--baseline-root',str(root/'A'),'--candidate-root',str(root/'B'),
+                            '--baseline-freeze-sha256','a'*64,'--candidate-freeze-sha256','b'*64,
+                            '--out',str(root/'out'),'--lane-lock',str(root/'lane.lock')]
+                    argv += ['--long-ops','100000'] if main is ab.main else ['--go',sys.executable,'--operations','10000']
+                    with patch.object(sys,'argv',argv), patch.dict(environment,{'GOGC':'off'}), \
+                         patch.object(ab.recipe.subprocess,'Popen') as launch, \
+                         patch.object(diagnostic,'build_overlay') as build, \
+                         self.assertRaisesRegex(ValueError,'observer/runtime override present: GOGC'):
+                        main()
+                    launch.assert_not_called()
+                    build.assert_not_called()
+                    self.assertFalse((root/'out').exists())
 
     def test_allocation_absence_never_becomes_acceptance(self):
         results = {}
