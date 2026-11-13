@@ -287,10 +287,14 @@ func TestNativeCollectionPressureDrainsBeforeOpening(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	document := func(id string) []byte {
+	document := func(id string, firstField ...[]byte) []byte {
 		doc := bson.D{{Key: "_id", Value: id}}
 		for field := 0; field < 10; field++ {
-			doc = append(doc, bson.E{Key: fmt.Sprintf("field%d", field), Value: []byte("value")})
+			value := []byte("value")
+			if field == 0 && len(firstField) != 0 {
+				value = firstField[0]
+			}
+			doc = append(doc, bson.E{Key: fmt.Sprintf("field%d", field), Value: value})
 		}
 		raw, err := bson.Marshal(doc)
 		if err != nil {
@@ -324,6 +328,24 @@ func TestNativeCollectionPressureDrainsBeforeOpening(t *testing.T) {
 	if err := held.Close(); err != nil {
 		t.Fatal(err)
 	}
+	// Exercise the ordinary BSON update route after real producer drains, then
+	// verify the acknowledged typed values before and after checkpoint/reopen.
+	expected := make(map[string][]byte)
+	for _, id := range []string{"first", "row000000", "row000443", "row001499"} {
+		value := []byte("updated-" + id)
+		matched, modified, err := collection.UpdateBSONSet([]byte(id), []collections.BSONSetField{{Key: "field0", Value: value}})
+		if err != nil || !matched || !modified {
+			t.Fatalf("update %s: matched=%v modified=%v err=%v", id, matched, modified, err)
+		}
+		expected[id] = document(id, value)
+		got, err := collection.Get([]byte(id))
+		if err != nil || !bytes.Equal(got, expected[id]) {
+			t.Fatalf("acknowledged BSON update %s: %x/%v", id, got, err)
+		}
+	}
+	if err := database.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
 	if err := manager.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -342,15 +364,23 @@ func TestNativeCollectionPressureDrainsBeforeOpening(t *testing.T) {
 		t.Fatal(err)
 	}
 	manager = collections.NewCollectionManager(backend)
-	defer manager.Close()
 	collection, err = manager.OpenCollection("rows")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, id := range []string{"first", "row000000", "row000443", "row001499"} {
+	for id, want := range expected {
 		got, err := collection.Get([]byte(id))
-		if err != nil || !bytes.Equal(got, document(id)) {
+		if err != nil || !bytes.Equal(got, want) {
 			t.Fatalf("reopen %s: %x/%v", id, got, err)
 		}
 	}
+	if err := manager.Close(); err != nil {
+		t.Fatal(err)
+	}
+	cache = database.cached
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	database = nil
+	requirePublicCOWFinalZero(t, cache)
 }
