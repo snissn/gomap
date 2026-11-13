@@ -1324,12 +1324,24 @@ Coverage:
     reclamation.
 - `TreeDB/db/durable_root_tracker_repair_test.go`:
   - `TestDurableRootCandidateScanRepairsReferenceTracker`
-  - `TestDurableRootCandidateScanColdCollectionAttachmentRepairsTracker`
+  - `TestDurableRootCandidateScanColdCollectionAttachmentRepairsInvalidTracker`
   - `TestDurableRootCandidateScanAbortPreservesReferenceTracker`
   - `TestDurableRootCandidateScanRejectsMismatchedEvidence`
   - `TestDurableRootCandidateScanDoesNotApplyDeltaTwice`
   - Covers exact empty/nonempty counts, candidate identity, activation ordering,
     reopen, and avoiding repeated fallback scans on subsequent ordinary writes.
+- `TreeDB/db/ordered_root_cold_descriptor_test.go`:
+  - `TestPublishOrderedRootCommandWALColdBatchDescriptorsAvoidCandidateScan`
+    exercises the non-context command-WAL batch route with produced outer leaves,
+    external value pointers, descriptor aliases, exact full-scan counter parity,
+    checked Close and reopened reads.
+  - `TestPublishOrderedRootCommandWALBatchReferenceDeltaWarmRetargetAndAbort`
+    checks pointer-count replacement, no redundant warm scan, unchanged live
+    counters/roots/sequence after activation failure, and recovery-required refusal
+    of a same-handle command-WAL retry.
+  - `TestOrderedRootColdDescriptorCoverage` and
+    `TestOrderedRootColdDescriptorDeltaGuards` reject unknown output closure,
+    implicit root aliases, pointer/malformed descriptors and overlapping ranges.
 
 ## 4. Value-Log Rewrite Correctness
 
