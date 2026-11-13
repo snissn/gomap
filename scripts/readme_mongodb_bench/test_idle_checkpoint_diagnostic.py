@@ -231,6 +231,105 @@ else: raise AssertionError('build did not cancel')
                     try: os.killpg(child,signal.SIGKILL)
                     except ProcessLookupError: pass
 
+    def test_first_sigterm_during_timeout_cleanup_reaps_before_unlock(self):
+        actor = r"""
+import json,os,signal,subprocess,sys,time
+from contextlib import ExitStack
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+import idle_checkpoint_ab as ab
+import idle_checkpoint_diagnostic as diagnostic
+root,mode=Path(sys.argv[1]),sys.argv[2]
+previous=signal.getsignal(signal.SIGTERM)
+if mode!='overlay':
+    frozen=root/'frozen';(frozen/'recipe').mkdir(parents=True);(frozen/'bin').mkdir()
+    sources={}
+    for name in ('run.py','ycsb_log.py','census.go'):
+        target=frozen/'recipe'/name
+        target.write_bytes(Path(ab.recipe.__file__).with_name(name).read_bytes())
+        sources[name]=ab.recipe.sha(target)
+    binaries={}
+    for name in ('go-ycsb','treedb-mongo-gateway','mongo_gateway_bench','ycsb-correctness-fixture','mongo_gateway_compare_report','census'):
+        target=frozen/'bin'/name;target.write_text('');binaries[name]=ab.recipe.sha(target)
+    ab.recipe.save(frozen/'freeze.json',dict(recipe_sources=sources,binaries=binaries,mongodb_image_id='unused',sources=[dict(path=str(root),commit='a'*40,blobs={})]))
+    def git(argv,**kwargs): return '' if 'status' in argv else 'a'*40+'\n'
+    with patch.object(ab.recipe.subprocess,'check_output',side_effect=git):
+        arm=ab.load_arm(frozen,'A',ab.recipe.sha(frozen/'freeze.json'))
+else:
+    arm=SimpleNamespace(REPO=root,FREEZE={'product_commit':'a'*40})
+try:
+    with ab.termination_scope(), ExitStack() as stack:
+        ab.lock_lane(stack,[root/'lane.lock'])
+        if mode=='overlay':
+            original=diagnostic.owned_command
+            def bounded(argv,binding,**kwargs): return original(argv,binding,timeout=.15,**kwargs)
+            with patch.object(diagnostic,'resolve_toolchain',return_value=(root/'driver',os.environ.copy())),patch.object(diagnostic,'overlay_sources',return_value={}),patch.object(diagnostic,'owned_command',side_effect=bounded):
+                diagnostic.build_overlay(arm,root/'overlay',root/'driver')
+        elif mode=='command':
+            arm.command(root,'client',[root/'driver'],timeout=.15)
+        else:
+            child=subprocess.Popen([root/'driver'],start_new_session=True)
+            while not (root/'child.pid').exists(): time.sleep(.005)
+            service=dict(kind='gomap',process=child,stopped=False,stop_attempts=0,stem='server',handles=[])
+            # Enter the same forced cleanup used after a normal Close timeout.
+            original_wait=child.wait
+            def timeout_once(*args,**kwargs):
+                if kwargs.get('timeout')==180: raise subprocess.TimeoutExpired([root/'driver'],180)
+                return original_wait(*args,**kwargs)
+            with patch.object(child,'wait',side_effect=timeout_once): arm.stop(root,service)
+except (InterruptedError,subprocess.TimeoutExpired,ValueError):
+    assert signal.getsignal(signal.SIGTERM)==previous
+    (root/'handler-restored').write_text('yes')
+else: raise AssertionError('timeout/cancellation did not fail')
+"""
+        for mode in ('overlay','command','stop'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                driver = root/'driver'
+                driver.write_text('#!'+sys.executable+'\n'+
+                    "import os,signal,time\nfrom pathlib import Path\n"+
+                    "def end(*args):\n signal.signal(signal.SIGTERM,signal.SIG_IGN)\n Path("+repr(str(root/'term-seen'))+").write_text('yes')\n time.sleep(.4)\n raise SystemExit(0)\n"+
+                    "signal.signal(signal.SIGTERM,end)\nPath("+repr(str(root/'child.pid'))+").write_text(str(os.getpid()))\ntime.sleep(60)\n")
+                driver.chmod(0o755)
+                process = subprocess.Popen([sys.executable,'-c',actor,str(root),mode],cwd=Path(diagnostic.__file__).parent,
+                                           stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+                child = None
+                try:
+                    deadline = time.monotonic()+10
+                    while not (root/'term-seen').exists():
+                        self.assertIsNone(process.poll())
+                        self.assertLess(time.monotonic(),deadline,'timeout cleanup did not start')
+                        time.sleep(.01)
+                    child = int((root/'child.pid').read_text())
+                    os.kill(process.pid,signal.SIGTERM)
+                    with (root/'lane.lock').open('a') as lane:
+                        while True:
+                            try:
+                                fcntl.flock(lane,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                                break
+                            except BlockingIOError:
+                                self.assertLess(time.monotonic(),deadline,'lane not released')
+                                time.sleep(.01)
+                        with self.assertRaises(ProcessLookupError): os.kill(child,0)
+                    _,stderr = process.communicate(timeout=5)
+                    self.assertEqual(process.returncode,0,stderr)
+                    self.assertTrue((root/'handler-restored').exists())
+                    receipt_path = {'overlay':'overlay/build.json','command':'client.command.json','stop':'server-cleanup-1.stop.json'}[mode]
+                    receipt = json.loads((root/receipt_path).read_text())
+                    if mode=='overlay': self.assertEqual(receipt['error_type'],'InterruptedError')
+                    elif mode=='command':
+                        self.assertTrue(receipt['timed_out'])
+                        self.assertEqual(receipt['exit_code'],0)
+                    else: self.assertTrue(receipt['absent'])
+                finally:
+                    if process.poll() is None:
+                        process.kill()
+                    process.communicate()
+                    if child is not None:
+                        try: os.killpg(child,signal.SIGKILL)
+                        except ProcessLookupError: pass
+
     def test_rpc_sigterm_preserves_enclosing_repeat_signal_cleanup_state(self):
         actor = r"""
 import os,signal,sys

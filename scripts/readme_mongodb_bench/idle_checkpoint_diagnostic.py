@@ -72,7 +72,7 @@ def owned_command(argv, binding, timeout=None, **kwargs):
     finally:
         try:
             if process.poll() is None:
-                binding['interrupted_child_cleanup'] = recipe.terminate_group(process)
+                binding['interrupted_child_cleanup'] = ab.terminate_group(process)
         finally:
             binding['exit_code'] = process.returncode
 

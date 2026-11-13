@@ -41,6 +41,16 @@ def termination_scope():
         signal.signal(signal.SIGTERM, previous)
 
 
+def terminate_group(process, original=recipe.terminate_group):
+    """Finish cleanup if the first SIGTERM interrupts an existing shutdown."""
+    try:
+        return original(process)
+    except InterruptedError:
+        # termination_scope has ignored further TERM; the primitive is idempotent.
+        original(process)
+        raise
+
+
 def lock_lane(stack, paths):
     """Hold the host lane and both original recipe campaign locks through exit."""
     for path in sorted(set(paths)):
@@ -73,6 +83,8 @@ def load_arm(root, arm, expected_hash):
     module.FREEZE_HASH = expected_hash
     module.REPO = Path(module.FREEZE['sources'][0]['path'])
     module.IMAGE = module.FREEZE['mongodb_image_id']
+    frozen_terminate = module.terminate_group
+    module.terminate_group = lambda process: terminate_group(process, frozen_terminate)
     module.verify_freeze()
     return module
 
