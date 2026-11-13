@@ -89,6 +89,14 @@ def runtime_binding(binary: Path, command, label: str, environment: dict) -> dic
             "libraries": list(libraries.values())}
 
 
+def byte_growth_budget(baseline: float, candidate: float) -> dict:
+    """The selected v2 median-byte budget, with no comparison epsilon."""
+    return {"absolute_limit_B_per_op": BYTE_LIMIT_ABSOLUTE,
+            "relative_limit_percent": BYTE_LIMIT_PERCENT,
+            "allowance_B_per_op": min(BYTE_LIMIT_ABSOLUTE, baseline * BYTE_LIMIT_PERCENT / 100),
+            "growth_B_per_op": candidate - baseline}
+
+
 def qualify_runtime(result: dict, before: dict, after: dict, *, quiet: bool,
                     acceptance_contract: str = "v1") -> dict:
     """Preserve raw gates while applying the explicitly selected acceptance policy."""
@@ -116,17 +124,14 @@ def qualify_runtime(result: dict, before: dict, after: dict, *, quiet: bool,
     policy = {"acceptance_contract": acceptance_contract,
               "historical_results_reinterpreted": False}
     if acceptance_contract == "v2":
-        baseline = result["medians"]["baseline"]["B/op"]
-        growth = result["medians"]["candidate"]["B/op"] - baseline
-        allowance = min(BYTE_LIMIT_ABSOLUTE, baseline * BYTE_LIMIT_PERCENT / 100)
+        budget = byte_growth_budget(result["medians"]["baseline"]["B/op"],
+                                    result["medians"]["candidate"]["B/op"])
         # This is an explicit tolerated-growth budget, including for identical
         # runtimes; equivalence must not bypass either numeric bound in v2.
-        acceptance["bytes"] = growth <= allowance
+        acceptance["bytes"] = budget["growth_B_per_op"] <= budget["allowance_B_per_op"]
         dispositions["bytes_disposition"] = ("PASS" if result["gates"]["bytes"] else
             "WITHIN_ACCEPTED_BYTE_BUDGET" if acceptance["bytes"] else "FAIL")
-        policy["byte_budget"] = {"absolute_limit_B_per_op": BYTE_LIMIT_ABSOLUTE,
-                               "relative_limit_percent": BYTE_LIMIT_PERCENT,
-                               "allowance_B_per_op": allowance, "growth_B_per_op": growth}
+        policy["byte_budget"] = budget
     return dict(result, **policy, quiet=quiet, runtime_input_equivalent=equivalent, **dispositions,
                 acceptance_gates=acceptance, accepted=all(acceptance.values()) and quiet)
 

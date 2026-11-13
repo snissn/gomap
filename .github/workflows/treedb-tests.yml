@@ -446,6 +446,7 @@ jobs:
           python3 scripts/pool_pressure_stats_diagnostic.py \
             --root "$GITHUB_WORKSPACE" \
             --baseline "$BASE_SHA" --candidate "$HEAD_SHA" \
+            --acceptance-contract v2 \
             --output "$RUNNER_TEMP/mvcc-raw-path-gate/pressure-stats"
 
       - name: Add benchmark summary

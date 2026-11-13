@@ -99,6 +99,32 @@ threshold change; the earlier #5152 bytes-only evidence remains preserved.
 Run `python3 -B .github/scripts/test_mvcc_primary_cost_gate.py` for the no-Go
 measurement, attribution, actual ELF resolution and drift/refusal controls.
 
+## Public Stats byte acceptance
+
+The scoped `scripts/pool_pressure_stats_diagnostic.py` diagnostic defaults to
+historical **v1**, which permits no median byte growth. CI explicitly selects
+**v2**: positive median growth must satisfy both **<=8 B/op and <=0.01% of
+baseline**, using PRIMARY's shared `min(8, baseline_B_per_op * 0.0001)` calculator.
+Zero baseline permits zero growth; there is no comparison epsilon. This is a
+selected engineering allowance, not a measured noise bound or estimator repair.
+Historical failures and the unresolved causes in #5191/#4519 remain unchanged.
+
+Raw `gates.bytes` and `measurement_pass` retain the strict result. Separate
+`acceptance_gates`, `accepted` and `bytes_disposition` report prospective
+acceptance, including `WITHIN_ACCEPTED_BYTE_BUDGET`. Summary and bindings retain
+the selected contract, both limits, effective allowance and measured growth.
+The budget applies to medians, not each raw sample. Both versions retain strict
+allocation count and +5% paired timing, including when executable identities
+match; Stats has no timing or byte equivalence exception.
+
+The three AB/BA/AB pairs, all six observations, 250ms samples, CPU0/GOMAXPROCS1,
+real samplers, quiet-host checks, commands, cleanup and source/binary/runtime
+bindings are unchanged. Drift, a busy host or cleanup failure supplies no product
+guard; cleanup failure overrides earlier acceptance. This remains a short public
+Stats diagnostic, not final storage qualification. Run
+`python3 -B .github/scripts/test_pool_pressure_stats_diagnostic.py` for no-Go
+boundary, CLI, complete-run drift/cleanup/busy and matching-binary failure controls.
+
 ## Bounded PRIMARY quiet-window acquisition (#5185)
 
 After the unchanged candidate public lifecycle and before any timed PRIMARY
