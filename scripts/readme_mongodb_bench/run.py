@@ -482,6 +482,12 @@ def run_case(suite, label, target, repeat, count, ops, mode='driver-command-raw'
 
 
 def verify_freeze():
+    if globals().get('COMPARISON'):
+        import comparison
+        value, expected = COMPARISON
+        require(sha(ROOT/'comparison-freeze.json') == expected, 'comparison manifest changed')
+        comparison.verify(value, ROOT, REPO)
+        return
     require(sha(ROOT/'freeze.json') == FREEZE_HASH, 'frozen manifest changed')
     for name, expected in FREEZE['recipe_sources'].items():
         require(sha(ROOT/'recipe'/name) == expected, 'frozen recipe changed: '+name)
@@ -508,9 +514,17 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--root', type=Path, required=True)
     parser.add_argument('--repo', type=Path, required=True)
-    parser.add_argument('--suite', choices=('smoke','ycsb','shape','sweep'), required=True)
+    parser.add_argument('--suite', choices=('smoke','ycsb','shape','sweep','ycsb-single'), required=True)
     parser.add_argument('--attempt-label', default='')
+    parser.add_argument('--operations', type=int, choices=(10000, 1000000))
+    parser.add_argument('--expected-comparison-sha256')
     args = parser.parse_args()
+    if args.suite == 'ycsb-single':
+        import comparison
+        comparison.execute(args)
+        return
+    require(args.operations is None and args.expected_comparison_sha256 is None,
+            'comparison options require ycsb-single')
     ROOT, REPO = args.root.resolve(), args.repo.resolve()
     lock = (ROOT/'campaign.lock').open('a')
     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
