@@ -47,14 +47,15 @@ func (db *DB) BeginPreparedNativeConditionalTxn() (backenddb.NativeConditionalTx
 // Keep current finite accounting, construction and physical/logical identity;
 // historical high water is not outstanding debt or new maintenance work.
 type cowNativePressureState struct {
-	stats      memtable.COWStats
-	logicalSeq uint64
-	semantic   backenddb.NativeSemanticProducerPressure
-	basis      backenddb.StateToken
+	stats              memtable.COWStats
+	fixedReservedBytes uint64
+	logicalSeq         uint64
+	semantic           backenddb.NativeSemanticProducerPressure
+	basis              backenddb.StateToken
 }
 
 // nativeConstructionUnderPressure applies the original three-quarter policy
-// to the capacity remaining after the SAME inventory's shared build workspace.
+// to the capacity remaining after the SAME inventory's fixed reservation.
 // Subtraction preserves upward rounding and avoids overflow near MaxUint64.
 // Invalid metadata requests maintenance; it never grants construction credit.
 func nativeConstructionUnderPressure(total, fixed, limit uint64) bool {
@@ -67,7 +68,7 @@ func nativeConstructionUnderPressure(total, fixed, limit uint64) bool {
 
 func (s cowNativePressureState) underPressure(limits memtable.COWLimits) bool {
 	p := s.semantic
-	return p.GenerationUnderPressure || s.stats.ReservedBytes >= limits.MaxInFlightBytes-limits.MaxInFlightBytes/4 ||
+	return p.GenerationUnderPressure || nativeConstructionUnderPressure(s.stats.ReservedBytes, s.fixedReservedBytes, limits.MaxInFlightBytes) ||
 		s.stats.Sources >= limits.MaxSources || s.stats.Generations >= limits.MaxGenerations ||
 		(p.ConstructionBytes != 0 &&
 			(nativeConstructionUnderPressure(p.ConstructionBytes, p.FixedConstructionBytes, p.MaxInFlightBytes) ||
@@ -100,6 +101,13 @@ func (c *cowCache) nativeProducerPressureState() (state cowNativePressureState, 
 	err = joinCOWCleanupError(err, c.releaseCut(cut))
 	state.stats = c.budget.Stats()
 	state.stats.PeakBytes = 0
+	if c.maintenance != nil {
+		// This original startup tranche stays charged in the parent budget;
+		// another producer drain cannot reclaim it. Apply the scheduling
+		// watermark to the remaining producer capacity, leaving hard admission
+		// and the tranche's own variable utilization unchanged.
+		state.fixedReservedBytes = c.maintenance.Limits().MaxInFlightBytes
+	}
 	return state, err
 }
 

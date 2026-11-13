@@ -561,8 +561,12 @@ For each finite maintenance byte limit L, advisory scheduling applies the same
 three-quarter watermark to variable construction T-F against remaining capacity
 L-F: pressure is T-F >= (L-F)-(L-F)/4. Subtraction retains upward rounding without
 multiplication overflow. F=0 retains the original watermark; invalid T<F or F>=L
-requests maintenance conservatively. Raw reserved-byte, source, generation and
-typed-member pressure remain independent. The full T is still reported and used
+requests maintenance conservatively. Raw reserved-byte scheduling applies this
+same subtraction to the startup maintenance tranche's fixed nominal capacity,
+which remains charged once in the parent budget for the cache lifetime. Its
+current utilization is not subtracted. The tranche's lease overhead remains in
+variable reserved bytes. Raw source, generation and typed-member pressure remain
+independent. The full reserved total and T are still reported and used
 by exact final admission and original build reservations; this scheduling policy
 grants no credit or authority for an incoming write. Additional capacity refusal
 on a required public workload is a failed scheduling candidate.
