@@ -117,13 +117,24 @@ The budget applies to medians, not each raw sample. Both versions retain strict
 allocation count and +5% paired timing, including when executable identities
 match; Stats has no timing or byte equivalence exception.
 
-The three AB/BA/AB pairs, all six observations, 250ms samples, CPU0/GOMAXPROCS1,
-real samplers, quiet-host checks, commands, cleanup and source/binary/runtime
-bindings are unchanged. Drift, a busy host or cleanup failure supplies no product
-guard; cleanup failure overrides earlier acceptance. This remains a short public
+Protocol `public-stats-v3-fixed512-close-excluded` uses **512 iterations per
+sample** (`-test.benchtime=512x`) in all three AB/BA/AB pairs. Any reported count
+other than 512 produces NULL; bindings and summaries record the fixed count.
+The former independently calibrated 250ms results remain historical. A common
+count avoids dividing process startup allocations by different iteration counts:
+local causal probes observed WAL-worker startup buffers allocated after reset.
+It retains the entire original process TotalAlloc/Mallocs numerator, including
+background work, with no subtraction, readiness hook or sampler change. Startup
+can still fall on different sides of reset; this is not a measured noise bound.
+A genuine per-Stats allocation still contributes on every one of the 512 calls.
+
+All six observations, CPU0/GOMAXPROCS1, real samplers, quiet-host checks, commands,
+cleanup and source/binary/runtime bindings remain required. Drift, a busy host
+or cleanup failure supplies no product guard; cleanup failure overrides earlier acceptance. This remains a short public
 Stats diagnostic, not final storage qualification. Run
 `python3 -B .github/scripts/test_pool_pressure_stats_diagnostic.py` for no-Go
-boundary, CLI, complete-run drift/cleanup/busy and matching-binary failure controls.
+boundary, fixed-count refusal, actual command orchestration, CLI, complete-run
+drift/cleanup/busy and matching-binary failure controls.
 
 ## Bounded PRIMARY quiet-window acquisition (#5185)
 

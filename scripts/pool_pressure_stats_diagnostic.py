@@ -22,10 +22,11 @@ import mvcc_primary_cost_gate as maintained
 
 BENCHMARK = "BenchmarkPoolPressurePublicStats"
 HARNESS = "TreeDB/caching/pool_pressure_public_stats_bench_test.go"
-FIXTURE_VERSION = "public-stats-v2-close-excluded"
+FIXTURE_VERSION = "public-stats-v3-fixed512-close-excluded"
 PAIRS = 3
 ACCEPTANCE_CONTRACTS = ("v1", "v2")
-BENCHTIME = "250ms"
+ITERATIONS_PER_SAMPLE = 512
+BENCHTIME = f"{ITERATIONS_PER_SAMPLE}x"
 METRICS = {"ns/op", "B/op", "allocs/op"}
 ROW = re.compile(r"^" + BENCHMARK + r"(?:-\d+)?\s+(\d+)\s+(.*)$")
 # Shared with the workflow and its source contract test. Other TreeDB changes
@@ -39,6 +40,8 @@ def parse_sample(text: str) -> dict:
     rows = [match for line in text.splitlines() if (match := ROW.fullmatch(line.strip()))]
     if len(rows) != 1 or int(rows[0][1]) <= 0:
         raise ValueError("exactly one completed public Stats sample is required")
+    if int(rows[0][1]) != ITERATIONS_PER_SAMPLE:
+        raise ValueError(f"public Stats sample requires exactly {ITERATIONS_PER_SAMPLE} iterations")
     parts = rows[0][2].split()
     metrics = {}
     if len(parts) % 2:
@@ -60,6 +63,8 @@ def evaluate(rows: list[dict]) -> dict:
                 (("baseline", "candidate") if pair % 2 == 0 else ("candidate", "baseline"))]
     if [(row["pair"], row["revision"]) for row in rows] != expected:
         raise ValueError("missing, duplicated or reordered planned samples")
+    if any(row["iterations"] != ITERATIONS_PER_SAMPLE for row in rows):
+        raise ValueError(f"public Stats samples require exactly {ITERATIONS_PER_SAMPLE} iterations")
     values = {revision: [r["metrics"] for r in rows if r["revision"] == revision]
               for revision in ("baseline", "candidate")}
     medians = {revision: {unit: statistics.median(row[unit] for row in samples) for unit in METRICS}
@@ -120,6 +125,8 @@ def run(root: Path, output: Path, baseline: str, candidate: str, *,
                       product_guard_available=verdict == "PASS" and details.get("accepted", False),
                       acceptance_contract=acceptance_contract, byte_limits=byte_limits,
                       baseline=baseline, candidate=candidate, retained_samples=len(rows),
+                      fixture_version=FIXTURE_VERSION, iterations_per_sample=ITERATIONS_PER_SAMPLE,
+                      benchtime=BENCHTIME,
                       scope="public Stats diagnostic only; not final storage qualification")
         save("summary.json", result)
         (output / "summary.md").write_text(
@@ -127,7 +134,7 @@ def run(root: Path, output: Path, baseline: str, candidate: str, *,
             f"- Verdict: **{verdict}**; product guard available: {result['product_guard_available']}.\n"
             f"- Exact base/head: `{baseline}` / `{candidate}`.\n"
             f"- Acceptance contract: `{acceptance_contract}`; byte limits: `{json.dumps(byte_limits, sort_keys=True)}`; no historical result reinterpreted.\n"
-            f"- Three pairs AB/BA/AB, GOMAXPROCS=1, CPU0, {BENCHTIME}; retained rows: {len(rows)}/6.\n"
+            f"- Three pairs AB/BA/AB, GOMAXPROCS=1, CPU0, {ITERATIONS_PER_SAMPLE} iterations per sample ({BENCHTIME}); retained rows: {len(rows)}/6.\n"
             f"- Detail: `{json.dumps(details, sort_keys=True)}`\n"
             "- Diagnostic only; NULL/failure supplies no product acceptance. PRIMARY is unchanged.\n")
 
@@ -193,7 +200,8 @@ def run(root: Path, output: Path, baseline: str, candidate: str, *,
         bindings = dict(baseline=baseline, candidate=candidate, binaries=binaries,
              acceptance_contract=acceptance_contract, byte_limits=byte_limits,
              fixture_version=FIXTURE_VERSION,
-             inputs=source_inputs, pairs=PAIRS, benchtime=BENCHTIME, cpu=0, gomaxprocs=1,
+             inputs=source_inputs, pairs=PAIRS, iterations_per_sample=ITERATIONS_PER_SAMPLE,
+             benchtime=BENCHTIME, cpu=0, gomaxprocs=1,
              environment_sha256=hashlib.sha256(json.dumps(environment, sort_keys=True).encode()).hexdigest(),
              thresholds=dict(time_percent=maintained.TIME_LIMIT_PERCENT, median_bytes_growth=0, median_allocations_growth=0),
              quiet=dict(window_s=maintained.QUIET_WINDOW_SECONDS, cap_s=maintained.QUIET_ACQUISITION_SECONDS,

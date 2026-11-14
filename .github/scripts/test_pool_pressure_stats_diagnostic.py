@@ -122,7 +122,9 @@ class PublicStatsDiagnosticTests(unittest.TestCase):
                         Path(argv[argv.index("-o") + 1]).write_bytes(b"same bound binary")
                     elif argv[0] == "taskset":
                         candidate = "candidate" in Path(argv[3]).name
-                        text = (f"{diagnostic.BENCHMARK} 12345 "
+                        measured_count = sum(call[0] == "taskset" for call in calls)
+                        iterations = 511 if failure == "iterations" and measured_count == 6 else 512
+                        text = (f"{diagnostic.BENCHMARK} {iterations} "
                                 f"{timing if candidate else 100} ns/op "
                                 f"{100001 if candidate else 100000} B/op "
                                 f"{allocations if candidate else 3} allocs/op\nPASS\n")
@@ -156,8 +158,25 @@ class PublicStatsDiagnosticTests(unittest.TestCase):
                 status = diagnostic.run(root, output, "1" * 40, "2" * 40, acceptance_contract=contract)
             summary = json.loads((output / "summary.json").read_text())
             bindings = json.loads((output / "bindings.json").read_text())
-            self.assertEqual(summary["retained_samples"], 6)
-            self.assertEqual(sum(call[0] == "taskset" for call in calls), 6)
+            self.assertEqual(summary["retained_samples"], 5 if failure == "iterations" else 6)
+            measured = [call for call in calls if call[0] == "taskset"]
+            self.assertEqual(len(measured), 6)
+            for call in measured:
+                self.assertIn("-test.benchtime=512x", call)
+            for record in (summary, bindings):
+                self.assertEqual(record["fixture_version"], "public-stats-v3-fixed512-close-excluded")
+                self.assertEqual(record["iterations_per_sample"], 512)
+                self.assertEqual(record["benchtime"], "512x")
+            if failure == "iterations":
+                receipts = json.loads((output / "commands.json").read_text())
+                samples = [r for r in receipts if r["argv"][0] == "taskset"]
+                self.assertEqual(len(samples), 6)
+                self.assertTrue(all(Path(record["stdout"]["path"]).is_file() for record in samples))
+                self.assertIn(" 511 ", Path(samples[-1]["stdout"]["path"]).read_text())
+                self.assertTrue(all(row["iterations"] == 512 for row in
+                                    json.loads((output / "samples.json").read_text())))
+                self.assertEqual(receipts[-1]["label"], "baseline-worktree-remove")
+                self.assertEqual(receipts[-1]["exit"], 0)
             self.assertEqual([json.loads((output / "runtime-inputs-before.json").read_text())[revision]["executable"]
                               for revision in ("baseline", "candidate")],
                              [dict(sha256=bindings["binaries"]["baseline"]["sha256"],
@@ -182,6 +201,14 @@ class PublicStatsDiagnosticTests(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertEqual(summary["verdict"], "FAIL")
         self.assertFalse(summary["accepted"])
+
+    def test_complete_run_wrong_count_retains_raw_failure_and_cleanup(self):
+        status, summary, _, _ = self.complete_run(failure="iterations")
+        self.assertEqual(status, 1)
+        self.assertEqual(summary["verdict"], "NULL")
+        self.assertFalse(summary["accepted"])
+        self.assertFalse(summary["product_guard_available"])
+        self.assertIn("exactly 512 iterations", summary["error"])
 
     def test_complete_run_drift_cleanup_and_busy_refuse_acceptance(self):
         for failure in ("runtime", "source", "binary", "cleanup", "busy"):
@@ -216,7 +243,7 @@ class PublicStatsDiagnosticTests(unittest.TestCase):
             self.assertIn("injected command failure", result["error"])
 
     def sample(self):
-        return f"{diagnostic.BENCHMARK} 12345 100 ns/op 200 B/op 3 allocs/op\nPASS\n"
+        return f"{diagnostic.BENCHMARK} 512 100 ns/op 200 B/op 3 allocs/op\nPASS\n"
 
     def rows(self):
         return [dict(pair=pair, revision=revision, **diagnostic.parse_sample(self.sample()))
@@ -242,9 +269,20 @@ class PublicStatsDiagnosticTests(unittest.TestCase):
             row["metrics"]["ns/op"] = (row["pair"] + 1) * 100 * (1.02 if row["revision"] == "candidate" else 1)
         self.assertAlmostEqual(diagnostic.evaluate(rows)["median_paired_delta_percent"], 2)
 
+    def test_only_predeclared_iteration_count_is_accepted(self):
+        self.assertEqual(diagnostic.parse_sample(self.sample())["iterations"], 512)
+        for count in (1, 511, 513, 1024):
+            with self.subTest(count=count):
+                with self.assertRaisesRegex(ValueError, "exactly 512 iterations"):
+                    diagnostic.parse_sample(self.sample().replace(" 512 ", f" {count} "))
+                rows = self.rows()
+                rows[-1]["iterations"] = count
+                with self.assertRaisesRegex(ValueError, "exactly 512 iterations"):
+                    diagnostic.evaluate(rows)
+
     def test_incomplete_malformed_and_failed_samples_refused(self):
         good = self.sample()
-        for bad in (good + good, good.replace("12345", "0"), good.replace("PASS", "FAIL"),
+        for bad in (good + good, good.replace("512", "0"), good.replace("PASS", "FAIL"),
                     good.replace("100 ns/op", "nan ns/op"), good.replace("100 ns/op", "0 ns/op"),
                     good.replace("200 B/op", "-1 B/op"), good.replace("3 allocs/op", ""),
                     good.replace("3 allocs/op", "3 allocs/op 3 allocs/op"),
