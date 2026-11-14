@@ -10,6 +10,7 @@ import datetime
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import uuid
@@ -64,17 +65,31 @@ def overlay_sources(repo):
 
 def owned_command(argv, binding, timeout=None, **kwargs):
     """Keep a cancelled overlay command's separate process group owned."""
-    process = subprocess.Popen(argv, start_new_session=True, **kwargs)
-    binding['pid'] = process.pid
+    process = None
+    pending_term = False
+    def defer_term(signum, frame):
+        nonlocal pending_term
+        pending_term = True
+    previous = signal.signal(signal.SIGTERM, defer_term)
     try:
+        try:
+            # A blocked mask would be inherited by the child. Defer in the
+            # parent until both registration and the cleanup finally exist.
+            process = subprocess.Popen(argv, start_new_session=True, **kwargs)
+            binding['pid'] = process.pid
+        finally:
+            signal.signal(signal.SIGTERM, previous)
+            if pending_term:
+                signal.raise_signal(signal.SIGTERM)
         stdout, stderr = process.communicate(timeout=timeout)
         return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
     finally:
         try:
-            if process.poll() is None:
+            if process is not None and process.poll() is None:
                 binding['interrupted_child_cleanup'] = ab.terminate_group(process)
         finally:
-            binding['exit_code'] = process.returncode
+            if process is not None:
+                binding['exit_code'] = process.returncode
 
 
 def resolve_toolchain(arm, go, binding):

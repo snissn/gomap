@@ -220,7 +220,8 @@ else: raise AssertionError('build did not cancel')
             driver.write_text('#!'+sys.executable+'\n'+
                 "import os,signal,time\nfrom pathlib import Path\n"+
                 "def end(*args):\n time.sleep(.25)\n raise SystemExit(0)\n"+
-                "signal.signal(signal.SIGTERM,end)\nPath("+repr(str(root/'build.pid'))+").write_text(str(os.getpid()))\ntime.sleep(60)\n")
+                "signal.signal(signal.SIGTERM,end)\npid=Path("+repr(str(root/'build.pid'))+")\n"+
+                "temporary=pid.with_suffix('.tmp')\ntemporary.write_text(str(os.getpid()))\ntemporary.replace(pid)\ntime.sleep(60)\n")
             driver.chmod(0o755)
             process = subprocess.Popen([sys.executable,'-c',actor,str(root)],cwd=Path(diagnostic.__file__).parent,
                                        stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
@@ -259,6 +260,102 @@ else: raise AssertionError('build did not cancel')
                 if child is not None:
                     try: os.killpg(child,signal.SIGKILL)
                     except ProcessLookupError: pass
+
+    def test_owned_command_preserves_handler_and_masks_on_exit_and_spawn_failure(self):
+        previous_handler = signal.getsignal(signal.SIGTERM)
+        previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK,{signal.SIGUSR1})
+        expected_mask = signal.pthread_sigmask(signal.SIG_BLOCK,set())
+        try:
+            binding = {}
+            command = [sys.executable,'-c',
+                       'import json,signal; print(json.dumps(sorted(signal.pthread_sigmask(signal.SIG_BLOCK,set()))))']
+            result = diagnostic.owned_command(command,binding,stdout=subprocess.PIPE,text=True)
+            self.assertEqual(result.returncode,0)
+            self.assertEqual(json.loads(result.stdout),sorted(expected_mask))
+            self.assertEqual(binding['exit_code'],0)
+            with patch.object(diagnostic.subprocess,'Popen',side_effect=OSError('spawn failed')):
+                with self.assertRaisesRegex(OSError,'spawn failed'):
+                    diagnostic.owned_command(command,{})
+            self.assertEqual(signal.getsignal(signal.SIGTERM),previous_handler)
+            self.assertEqual(signal.pthread_sigmask(signal.SIG_BLOCK,set()),expected_mask)
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK,previous_mask)
+
+    def test_sigterm_after_popen_reaps_before_registration_and_lane_unlock(self):
+        actor = r"""
+import json,os,signal,subprocess,sys
+from contextlib import ExitStack
+from pathlib import Path
+from unittest.mock import patch
+import idle_checkpoint_ab as ab
+import idle_checkpoint_diagnostic as diagnostic
+root=Path(sys.argv[1])
+previous_handler=signal.getsignal(signal.SIGTERM)
+previous_mask=signal.pthread_sigmask(signal.SIG_BLOCK,set())
+binding={}
+original_popen=subprocess.Popen
+def cancelled_acquisition(*args,**kwargs):
+    child=original_popen(*args,**kwargs)
+    assert 'pid' not in binding
+    (root/'acquired.tmp').write_text(json.dumps(dict(pid=child.pid,registered=False)))
+    (root/'acquired.tmp').replace(root/'acquired.json')
+    # The actual child exists, but owned_command has not received it yet.
+    os.kill(os.getpid(),signal.SIGTERM)
+    return child
+try:
+    with ab.termination_scope(), ExitStack() as stack:
+        ab.lock_lane(stack,[root/'lane.lock'])
+        try:
+            with patch.object(subprocess,'Popen',side_effect=cancelled_acquisition):
+                diagnostic.owned_command([sys.executable,'-c','import time; time.sleep(60)'],binding,
+                                         stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        finally:
+            (root/'binding.json').write_text(json.dumps(binding))
+except InterruptedError:
+    assert signal.getsignal(signal.SIGTERM)==previous_handler
+    assert signal.pthread_sigmask(signal.SIG_BLOCK,set())==previous_mask
+    (root/'restored').write_text('handler and mask restored')
+else: raise AssertionError('acquisition did not cancel')
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            process = subprocess.Popen([sys.executable,'-c',actor,str(root)],cwd=Path(diagnostic.__file__).parent,
+                                       stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+            child = None
+            try:
+                deadline = time.monotonic()+10
+                while not (root/'acquired.json').exists():
+                    self.assertIsNone(process.poll())
+                    self.assertLess(time.monotonic(),deadline,'real Popen did not return')
+                    time.sleep(.01)
+                acquisition = json.loads((root/'acquired.json').read_text())
+                child = acquisition['pid']
+                with (root/'lane.lock').open('a') as lane:
+                    while True:
+                        try:
+                            fcntl.flock(lane,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                            break
+                        except BlockingIOError:
+                            self.assertLess(time.monotonic(),deadline,'lane not released')
+                            time.sleep(.01)
+                    try: os.kill(child,0)
+                    except ProcessLookupError: alive = False
+                    else: alive = True
+                _,stderr = process.communicate(timeout=5)
+                self.assertEqual(process.returncode,0,stderr)
+                self.assertTrue((root/'restored').exists())
+                binding = json.loads((root/'binding.json').read_text())
+                self.assertFalse(alive,dict(acquisition=acquisition,binding=binding,child_alive_after_unlock=alive))
+                self.assertEqual(binding['pid'],child)
+                self.assertIn('interrupted_child_cleanup',binding)
+                self.assertIsNotNone(binding['exit_code'])
+            finally:
+                if child is not None:
+                    try: os.killpg(child,signal.SIGKILL)
+                    except ProcessLookupError: pass
+                if process.poll() is None:
+                    process.kill()
+                process.communicate()
 
     def test_first_sigterm_during_timeout_cleanup_reaps_before_unlock(self):
         actor = r"""

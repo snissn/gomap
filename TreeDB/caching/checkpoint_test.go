@@ -1262,9 +1262,9 @@ func TestCachingDB_AutoCheckpoint_IndependentTriggersDuringWrites(t *testing.T) 
 					}
 					// Completion verifies the selected mode, separately from entry.
 					until := time.Now().Add(withRaceTimeout(2 * time.Second))
-					for db.autoCheckpointCount.Load() == 0 {
+					for db.autoCheckpointCount.Load() == 0 || autoCheckpointReasonString(db.autoCheckpointLastReason.Load()) != reason {
 						if time.Now().After(until) {
-							t.Fatal("entered checkpoint did not complete")
+							t.Fatalf("entered checkpoint did not publish completion for %q", reason)
 						}
 						time.Sleep(time.Millisecond)
 					}
@@ -1303,22 +1303,30 @@ func TestCachingDB_AutoCheckpoint_IdleCooldownNeedsExistingEvent(t *testing.T) {
 	entered := make(chan struct{}, 8)
 	db.testBeforeCheckpointFrontierCapture = func() { entered <- struct{}{} }
 	const idle = 30 * time.Millisecond
-	// Start with the full cooldown so fixture I/O and worker scheduling cannot
-	// consume an artificial 200 ms remainder before the first expiry.
-	db.autoCheckpointLastUnixNano.Store(time.Now().UnixNano())
-	db.StartAutoCheckpoint(0, 0, idle)
 	value := bytes.Repeat([]byte("v"), 1100<<10)
 	if err := db.Set([]byte("seed"), value); err != nil {
 		t.Fatal(err)
 	}
+	if got, min := db.effectiveWALBytes(), db.minIdleCheckpointWALBytes(); got < min {
+		t.Fatalf("seed WAL bytes=%d below idle minimum=%d", got, min)
+	}
+	// Seed before starting the worker, so there is no queued write notification
+	// and its idle timer remains stopped. Invoke the policy synchronously to
+	// observe cooldown refusal without assuming the worker has processed expiry.
+	db.StartAutoCheckpoint(0, 0, idle)
+	db.autoCheckpointLastUnixNano.Store(time.Now().UnixNano())
+	db.maybeAutoCheckpoint(0, autoCheckpointModeIdle)
+	if count := db.autoCheckpointCount.Load(); count != 0 {
+		t.Fatalf("idle bypassed cooldown: checkpoint count=%d", count)
+	}
 	select {
 	case <-entered:
 		t.Fatal("idle bypassed cooldown")
-	case <-time.After(withRaceTimeout(300 * time.Millisecond)):
+	default:
 	}
-	// Expiry refusal must not add a scheduler. Age the test-controlled cooldown
-	// only after observing refusal, then prove elapsed cooldown alone does not
-	// retry maintenance. Another real growth notification must rearm the timer.
+	// The synchronous refusal must not schedule its own retry. Age the cooldown
+	// and observe that the worker stays idle; a real subsequent growth write
+	// must activate it through the existing notification path.
 	db.autoCheckpointLastUnixNano.Store(time.Now().Add(-autoCheckpointMinIdleInterval - time.Second).UnixNano())
 	select {
 	case <-entered:
