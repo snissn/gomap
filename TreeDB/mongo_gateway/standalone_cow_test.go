@@ -270,6 +270,41 @@ func TestStandaloneNativeDictionaryCachePolicy(t *testing.T) {
 	}
 	s = nil
 
+	// A compressed fixture can stay below the unchanged 8 MiB generation
+	// target. Reopen and publish fresh high keys through the public owner so
+	// its next leaf writer seals the original generation before maintenance.
+	s, err = OpenStandaloneServer(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err = s.Collections.OpenCollection("db.policy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealIDs, sealDocs := make([][]byte, 64), make([][]byte, 64)
+	for i := range sealIDs {
+		id := fmt.Sprintf("seal-%08d", i)
+		sealIDs[i] = []byte(id)
+		doc := bson.D{{Key: "_id", Value: id}}
+		for field := 0; field < 10; field++ {
+			doc = append(doc, bson.E{Key: fmt.Sprintf("field%d", field), Value: fmt.Sprintf("%08d-%s", i, bytes.Repeat([]byte("value"), 18))})
+		}
+		sealDocs[i], err = bson.Marshal(doc)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err = c.InsertBatchValidatedBSON(sealIDs, sealDocs); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Backend.SyncNativeSemanticPrefix(); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s = nil
+
 	// OpenBackend is the maintained tooling entry point: no live native cut is
 	// bypassed, and persisted format plus dictionary publication remain real.
 	maintenance, cleanup, err := treedb.OpenBackend(treedb.OptionsFor(opts.Profile, opts.Dir))
