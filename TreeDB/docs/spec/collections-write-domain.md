@@ -38,6 +38,18 @@ source generation, pending image and zero logical base remain unchanged. Both
 headers and the captured build's provenance are covered by their existing
 size-derived admission, with no new resource owner or publication boundary.
 
+Native domain materialization streams each retained source through the original
+physical build group in batches of at most 256 rows, flushing at the source end.
+The number of value-log files does not split a batch; physical value placement
+remains a synchronous singleton append. Before physical root construction, the
+group pins value-log files from submitted pointer puts and separately preserves
+touched-only batch metadata. Superseded pointer submissions may retain conservative
+GC pins until group completion or abandon. These pins do not replace exact
+logical reference deltas or the complete durable dependency closure. Source
+ownership, original admission, revisions, failure custody and acknowledgement
+boundaries remain unchanged. `TestNativeDomainBuildStripedPointerBatching` and
+`TestNativeNoTouchPointerPinCustody` cover the striped batch and pin boundaries.
+
 Ordinary native `InsertBatch` and `InsertBatchWithStats` use the same original
 native row planner and publication. Successful ordinary facade inserts replace
 `LastInsertStats`; `WithStats` additionally returns an independent request-owned
