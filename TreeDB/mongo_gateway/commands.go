@@ -3169,6 +3169,35 @@ func mongoReadConcernCommandError(err error) (wire.Document, error) {
 }
 
 func parseMongoReadConcern(command wire.Document) error {
+	var first bson.RawValue
+	seen, duplicate := false, false
+	err := forEachBoundedBSONDocumentElement(bson.Raw(command), math.MaxInt, nil, func(elem bson.RawElement) error {
+		if bsoncore.Element(elem).CompareKey([]byte("readConcern")) {
+			if seen {
+				duplicate = true
+			} else {
+				first, seen = elem.Value(), true
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		// The bounded iterator is stricter about the document envelope than
+		// Raw.Elements. Preserve the legacy acceptance and error precedence.
+		return parseMongoReadConcernLegacy(command)
+	}
+	if seen {
+		if err := parseMongoReadConcernValue(first); err != nil {
+			return err
+		}
+	}
+	if duplicate {
+		return mongoReadConcernBadValue("Mongo command field \"readConcern\" is duplicated")
+	}
+	return nil
+}
+
+func parseMongoReadConcernLegacy(command wire.Document) error {
 	elements, err := bson.Raw(command).Elements()
 	if err != nil {
 		return mongoReadConcernFailedToParse("Mongo command is malformed: %v", err)

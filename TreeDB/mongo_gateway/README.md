@@ -54,7 +54,17 @@ traversal path; input rejected by the stricter flat iterator also uses that
 decoder to preserve existing malformed-input results and errors. Cursor field
 maps and command strings retain their existing admission charges.
 
-The compile-and-apply benchmark covers ten binary 100-byte fields, one-field
+Request metadata uses the existing bounded BSON iterator. Common projection
+selectors use caller-owned scratch for up to 16 elements, with ordinary append
+spill for wider selectors; retained selector keys remain owned strings. Command
+readConcern scanning retains only the first value and duplicate status before
+checking its semantics. Structural scan failures use the legacy element parser
+so malformed envelopes retain their original acceptance and error precedence.
+Row selection compares borrowed key bytes, and returned BSON remains an owned
+copy. No metadata or scratch is retained across requests.
+
+The compile-and-apply benchmark covers ten binary 100-byte fields with and
+without `_id`, one-field
 inclusion, one-field exclusion and dotted fallback:
 
 ```sh
