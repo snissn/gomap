@@ -153,7 +153,7 @@ func metadataErrorSignature(err error) string {
 func TestBSONMetadataProjectionBaselineDifferential(t *testing.T) {
 	fixtures := []wire.Document{nil, {}, {0}, {5, 0, 0, 0, 0}}
 	for _, width := range []int{0, 1, 11, 16, 17, 64} {
-		var d bson.D
+		d := bson.D{}
 		for i := 0; i < width; i++ {
 			d = append(d, bson.E{Key: fmt.Sprintf("field%d", i), Value: i%2 == 0})
 		}
