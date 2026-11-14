@@ -42,6 +42,18 @@ func (group *RootPublicationBuildGroup) buildNativeOrderedRootLocked(input Order
 	if err != nil {
 		return 0, err
 	}
+	// Pin submitted pointers before fallible physical construction. The original
+	// stream needs no sort/range plan; superseded puts conservatively retain a
+	// group-lifetime GC pin without changing the exact logical reference delta.
+	if input.Delta.HasValueLogPointers() {
+		for _, entry := range input.Delta.OrderedEntries() {
+			if entry.Type == batchpkg.OpPut && entry.IsPtr && page.IsValueLogFileID(entry.ValuePtr.FileID) {
+				group.pinValueLogSegmentLocked(entry.ValuePtr.FileID)
+			}
+		}
+	}
+	// Metadata may name a file absent from the submitted pointer entries.
+	group.pinBatchValueLogSegmentsLocked(input.Delta)
 	// Native roots use the existing ordered-root DATA builder. PRIMARY private
 	// construction belongs only to the group's raw user-root path.
 	root, retired, metrics, result, err := group.db.publishOrderedRootDeltaBatchWithAllocatorResult(group.idx, input.BaseRoot, input.Delta, opts, group.tracker, group.tracker, input.IncludeDeletedOnColdBuild, group.db.shouldCollectValueLogRefDelta(group.baseSeq))
@@ -56,7 +68,6 @@ func (group *RootPublicationBuildGroup) buildNativeOrderedRootLocked(input Order
 	}
 	group.mergeValueLogRefDeltaLocked(delta)
 	releaseValueLogRefDelta(delta)
-	group.pinBatchValueLogSegmentsLocked(input.Delta)
 	// Replace superseded outputs in-place. A fifth distinct current output
 	// evicts only the oldest READ capability; original construction is unchanged.
 	if root != input.BaseRoot {

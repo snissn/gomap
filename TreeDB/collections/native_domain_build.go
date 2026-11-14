@@ -40,10 +40,6 @@ type nativeDomainBuild struct {
 	complete bool
 	catalog  bool
 	refund   *cowbtree.OwnedMapRefund
-	// Match the existing batch's bounded small-file path. Flush before a
-	// fifth distinct pointer file so this scratch never allocates a file map.
-	pointerFiles [4]uint32
-	pointerCount int
 }
 
 // newNativeDomainBuild admits all temporary storage before allocating it.
@@ -127,8 +123,6 @@ func (b *nativeDomainBuild) materializeWithCatalog(group nativeOrderedRootBuilde
 	clear(b.roots)
 	b.roots = b.roots[:0]
 	b.delta.Reset()
-	clear(b.pointerFiles[:])
-	b.pointerCount = 0
 	if b.failure != nil {
 		return 0, b.failure
 	}
@@ -147,7 +141,7 @@ func (b *nativeDomainBuild) buildSource(group nativeOrderedRootBuilder, root *me
 				b.failure = backenddb.ErrNativeSemanticUnsupported
 				break
 			}
-			b.appendPointer(group, key, row.Ptr, row.Revision)
+			b.delta.AppendPointerViewNoTouchTrustedSortedWithRevision(key, row.Ptr, row.Revision)
 		default:
 			value := nativeBorrowedStringBytes(row.Value)
 			if b.catalog && names != nil {
@@ -178,7 +172,7 @@ func (b *nativeDomainBuild) buildSource(group nativeOrderedRootBuilder, root *me
 					b.failure = err
 					return false
 				}
-				b.appendPointer(group, key, ptrs[0], row.Revision)
+				b.delta.AppendPointerViewNoTouchTrustedSortedWithRevision(key, ptrs[0], row.Revision)
 			} else {
 				b.failure = b.delta.AppendViewTrustedSortedUniqueWithRevision(key, value, row.Revision)
 			}
@@ -191,25 +185,6 @@ func (b *nativeDomainBuild) buildSource(group nativeOrderedRootBuilder, root *me
 	if b.failure == nil {
 		b.flush(group)
 	}
-}
-
-func (b *nativeDomainBuild) appendPointer(group nativeOrderedRootBuilder, key []byte, ptr page.ValuePtr, revision page.EntryRevision) {
-	known := false
-	for i := 0; i < b.pointerCount; i++ {
-		known = known || b.pointerFiles[i] == ptr.FileID
-	}
-	if !known {
-		if b.pointerCount == len(b.pointerFiles) {
-			b.flush(group)
-			if b.failure != nil {
-				return
-			}
-		}
-		b.pointerFiles[b.pointerCount] = ptr.FileID
-		b.pointerCount++
-	}
-	b.delta.AppendPointerViewNoTouchTrustedSortedWithRevision(key, ptr, revision)
-	b.delta.NoteTouchedValueLogFileID(ptr.FileID)
 }
 
 func (b *nativeDomainBuild) flush(group nativeOrderedRootBuilder) {
@@ -230,8 +205,6 @@ func (b *nativeDomainBuild) flush(group nativeOrderedRootBuilder) {
 	}
 	b.failure = err
 	b.delta.Reset() // no borrowed entry survives synchronous physical apply
-	clear(b.pointerFiles[:])
-	b.pointerCount = 0
 }
 
 // finish runs only from original Work outside publication/cut gates. Failed
