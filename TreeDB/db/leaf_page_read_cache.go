@@ -9,7 +9,9 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"unsafe"
 
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/zipper"
 )
@@ -144,8 +146,11 @@ type leafPageReadCacheSlot struct {
 	data                   []byte
 	valid                  bool
 	recordChecksumVerified bool
-	pageChecksumVerified   atomic.Bool
-	recent                 atomic.Bool
+	// A zero policy is uncredited. Only a successful bounded dictionary decode
+	// may establish this certificate, under the same slot lock as its bytes.
+	cowReadPolicy        valuelog.COWReadLimits
+	pageChecksumVerified atomic.Bool
+	recent               atomic.Bool
 }
 
 func (s *leafPageReadCacheSlot) ReleaseLeafLogPageView() {
@@ -230,6 +235,7 @@ type leafPageReadCacheStats struct {
 	Ways                            uint64
 	Bytes                           uint64
 	BackingBytes                    uint64
+	COWReadPolicyBytes              uint64
 	ReadMissAdmissionSkips          uint64
 	ReadMissAdmissionCandidateSkips uint64
 	ReadMissAdmissionLockSkips      uint64
@@ -575,6 +581,7 @@ func (s *leafPageReadCacheSlot) storeIntoBackingLocked(key leafPageReadCacheKey,
 	s.key = key
 	s.valid = true
 	s.recordChecksumVerified = recordChecksumVerified
+	s.cowReadPolicy = valuelog.COWReadLimits{}
 	s.pageChecksumVerified.Store(false)
 	s.recent.Store(true)
 	s.keyFP.Store(leafPageReadCacheKeyFingerprint(key))
@@ -799,6 +806,12 @@ func (c *leafPageReadCache) getToWithState(ptr page.LeafLogPtr, dst []byte) ([]b
 // A bounded COW read may only reuse bytes whose record CRC was checked. Unlike
 // ordinary tree reads it cannot accept write-origin or unchecked read entries.
 func (c *leafPageReadCache) getToWithRecordPolicy(ptr page.LeafLogPtr, dst []byte, requireVerified bool) ([]byte, bool, leafPageReadCacheState, bool) {
+	return c.getToWithCOWPolicy(ptr, dst, requireVerified, valuelog.COWReadLimits{})
+}
+
+// A nonzero caller policy additionally requires credit from an actual bounded
+// dictionary decode. No canonical-policy exception may bypass that credit.
+func (c *leafPageReadCache) getToWithCOWPolicy(ptr page.LeafLogPtr, dst []byte, requireVerified bool, limits valuelog.COWReadLimits) ([]byte, bool, leafPageReadCacheState, bool) {
 	if c == nil || c.disabled.Load() || len(c.slots) == 0 || len(c.buckets) == 0 {
 		return nil, false, leafPageReadCacheState{}, false
 	}
@@ -815,7 +828,8 @@ func (c *leafPageReadCache) getToWithRecordPolicy(ptr page.LeafLogPtr, dst []byt
 			slot.mu.RUnlock()
 			continue
 		}
-		if requireVerified && (c.disabled.Load() || !slot.recordChecksumVerified || cap(dst) < len(slot.data)) {
+		if (requireVerified && (c.disabled.Load() || !slot.recordChecksumVerified || cap(dst) < len(slot.data))) ||
+			(limits != (valuelog.COWReadLimits{}) && !cowReadPolicyAllows(slot.cowReadPolicy, limits)) {
 			slot.mu.RUnlock()
 			c.misses.Add(1)
 			return nil, false, leafPageReadCacheState{}, false
@@ -837,6 +851,43 @@ func (c *leafPageReadCache) getToWithRecordPolicy(ptr page.LeafLogPtr, dst []byt
 	}
 	c.misses.Add(1)
 	return nil, false, leafPageReadCacheState{}, false
+}
+
+// cowReadPolicyAllows keeps one complete certificate; incomparable policies
+// must never be synthesized from successful reads with different limits.
+func cowReadPolicyAllows(credit, caller valuelog.COWReadLimits) bool {
+	return credit.MaxRecordBytes != 0 && credit.MaxRawBytes != 0 && credit.MaxValueBytes != 0 &&
+		caller.MaxRecordBytes >= credit.MaxRecordBytes && caller.MaxRawBytes >= credit.MaxRawBytes && caller.MaxValueBytes >= credit.MaxValueBytes
+}
+
+// markCOWReadPolicy follows a successful full CRC-verified dictionary decode.
+// An intervening overwrite can only lose credit: it must match both the exact
+// key and copied bytes, and the slot must still have record verification.
+func (c *leafPageReadCache) markCOWReadPolicy(ptr page.LeafLogPtr, verifiedPage []byte, limits valuelog.COWReadLimits) {
+	if c == nil || c.disabled.Load() || len(c.slots) == 0 || len(c.buckets) == 0 || !cowReadPolicyAllows(limits, limits) {
+		return
+	}
+	key := newLeafPageReadCacheKey(ptr)
+	fp := leafPageReadCacheKeyFingerprint(key)
+	start, end := c.bucketRange(c.bucketIndex(key))
+	for i := start; i < end; i++ {
+		slot := &c.slots[i]
+		if slot.keyFP.Load() != fp {
+			continue
+		}
+		if !slot.mu.TryLock() {
+			return
+		}
+		if slot.valid && slot.key == key && slot.recordChecksumVerified && !c.disabled.Load() && bytes.Equal(slot.data, verifiedPage) {
+			// Keep an existing stricter certificate; otherwise retain this actual one.
+			if !cowReadPolicyAllows(slot.cowReadPolicy, limits) {
+				slot.cowReadPolicy = limits
+			}
+			slot.mu.Unlock()
+			return
+		}
+		slot.mu.Unlock()
+	}
 }
 
 // markRecordChecksumVerified upgrades only an existing byte-identical entry
@@ -963,6 +1014,7 @@ func (c *leafPageReadCache) stats() leafPageReadCacheStats {
 		Ways:                            uint64(c.ways),
 		Bytes:                           entries * page.PageSize,
 		BackingBytes:                    c.backingBytes.Load(),
+		COWReadPolicyBytes:              uint64(len(c.slots)) * uint64(unsafe.Sizeof(valuelog.COWReadLimits{})),
 		ReadMissAdmissionSkips:          c.readMissAdmissionSkips.Load(),
 		ReadMissAdmissionCandidateSkips: c.readMissAdmissionCandidateSkips.Load(),
 		ReadMissAdmissionLockSkips:      c.readMissAdmissionLockSkips.Load(),

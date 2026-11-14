@@ -489,6 +489,32 @@ Close and cleanup. These controls do not replace original public mixed-workload
 performance or durable-version correctness qualification.
 
 
+Dictionary leaf cache policy is covered at three levels.
+`TestSnapshotDictionaryPolicyCredit` and
+`TestLeafPageDictionaryPolicyDoesNotSynthesizeCredit` check complete successful
+decode certificates, componentwise caller limits, zero/partial policy refusal,
+overwrite/reset and bounded
+slot accounting. `TestCOWNativePackedDictionaryCompatibleCachePolicy` and
+`TestCOWNativeDictionaryCacheBidirectionalPolicyAndConstruction` exercise real
+maintained packed dictionaries with 64 MiB canonical and 512 MiB native limits.
+The latter uses a genuinely smaller physical construction owner and two real
+dictionary segments: compatible warm owned-page copies avoid dictionary capture;
+a forced-cold stricter policy refuses that owner's insufficient resource bound.
+Construction resource counts are not reusable decoded-page policy dimensions.
+
+`TestStandaloneNativeDictionaryCachePolicy` writes 100,000 actual BSON documents
+through `OpenStandaloneServer(command_wal_relaxed)`, with the maintained 8 MiB
+leaf generation size knob to bound fixture preparation. After original-owner
+sync and checked Close, `OpenBackend` performs real public maintenance planning
+and packing with side-store dictionary publication. Two standalone reopen cycles
+identify the collection root, exact target leaf in a newly packed file and
+nonzero dictionary, then assert public `Collection.Get` cache hits, exact BSON and
+independent owned output. All maintenance precedes the read assertions. This is
+activation/correctness coverage; it makes no performance or memory claim.
+Real generation packing tests skip on platforms without exact retained-parent
+namespace and cross-parent no-replace promotion support; such skips do not
+qualify dictionary cache activation.
+
 The [COW publication contract](cow-cache-publication.md) requires evidence from
 actual public `MemtableMode="cow_btree"` dispatch in all three production
 profiles. Internal foundation/read-owner checks alone do not qualify the mode.

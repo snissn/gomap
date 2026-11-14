@@ -1,13 +1,14 @@
 package db
 
 import (
-	"github.com/snissn/gomap/TreeDB/tree"
 	"os"
 
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/tree"
 )
 
 // AcquireStableSnapshotWithAllocationAdmission adds the existing namespace
@@ -76,6 +77,28 @@ func (s *Snapshot) CopyVerifiedCachedLeafPage(ptr page.LeafLogPtr, inspected *os
 	return data, hit, nil
 }
 
+// CopyVerifiedCachedLeafPageWithCOWPolicy additionally requires dictionary
+// decode credit whose complete limits are dominated by this caller. The caller
+// must inspect under its original limits and check its dictionary capability
+// before calling. An uncredited page is a miss, even for canonical limits.
+func (s *Snapshot) CopyVerifiedCachedLeafPageWithCOWPolicy(ptr page.LeafLogPtr, inspected *os.File, identity rootpublication.StableIdentity, dst []byte, limits valuelog.COWReadLimits) ([]byte, bool, error) {
+	if err := s.beginRead(); err != nil {
+		return nil, false, err
+	}
+	defer s.endRead()
+	if err := s.checkInspectedLeafFile(ptr, inspected, identity); err != nil {
+		return nil, false, err
+	}
+	if !cowReadPolicyAllows(limits, limits) {
+		return nil, false, valuelog.ErrCOWReadUnsupported
+	}
+	if cap(dst) < page.PageSize {
+		return nil, false, nil
+	}
+	data, _, _, hit := s.reader.leafPageCache.getToWithCOWPolicy(ptr, dst[:0:page.PageSize], true, limits)
+	return data, hit, nil
+}
+
 // MarkCachedLeafRecordVerified follows a successful full CRC-verified decode
 // through this snapshot's exact inspected file. It can upgrade only an existing
 // byte-identical decoded page; misses never allocate or populate the cache.
@@ -133,6 +156,30 @@ func (s *Snapshot) AdmitVerifiedCachedLeafPage(ptr page.LeafLogPtr, inspected *o
 	if !cache.markRecordChecksumVerifiedWithLockPolicy(ptr, verifiedPage, true) {
 		cache.storeReadMiss(ptr, verifiedPage, true)
 	}
+	return nil
+}
+
+// AdmitVerifiedCachedLeafPageWithCOWPolicy follows a successful full CRC-
+// verified dictionary decode under limits, including definition preparation.
+// Existing fixed slots own the copied page and policy; no dictionary owner,
+// decoder, snapshot or file is retained. Miss probation and lock contention may
+// decline either admission or credit without failing the completed read.
+func (s *Snapshot) AdmitVerifiedCachedLeafPageWithCOWPolicy(ptr page.LeafLogPtr, inspected *os.File, identity rootpublication.StableIdentity, verifiedPage []byte, limits valuelog.COWReadLimits) error {
+	if err := s.beginRead(); err != nil {
+		return err
+	}
+	defer s.endRead()
+	if err := s.checkInspectedLeafFile(ptr, inspected, identity); err != nil {
+		return err
+	}
+	if !cowReadPolicyAllows(limits, limits) {
+		return valuelog.ErrCOWReadUnsupported
+	}
+	cache := s.reader.leafPageCache
+	if !cache.markRecordChecksumVerifiedWithLockPolicy(ptr, verifiedPage, true) {
+		cache.storeReadMiss(ptr, verifiedPage, true)
+	}
+	cache.markCOWReadPolicy(ptr, verifiedPage, limits)
 	return nil
 }
 

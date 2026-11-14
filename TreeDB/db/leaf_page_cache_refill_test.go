@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -266,4 +267,149 @@ func TestSnapshotStoreVerifiedCachedLeafPageBorrowAndClose(t *testing.T) {
 	}()
 	closeNoErr(t, s)
 	wg.Wait()
+}
+
+// Real dictionary decode activation is covered by the caching regression;
+// this test exercises the fixed slot's complete certificate and owner fences.
+func TestSnapshotDictionaryPolicyCredit(t *testing.T) {
+	s, ptr, f, identity, leaf := newVerifiedCacheSnapshot(t)
+	cache := s.reader.leafPageCache
+	canonical := valuelog.COWReadLimits{MaxRecordBytes: 64 << 20, MaxRawBytes: 64 << 20, MaxValueBytes: 64 << 20}
+	native := valuelog.COWReadLimits{MaxRecordBytes: 512 << 20, MaxRawBytes: 512 << 20, MaxValueBytes: 512 << 20}
+	var dst [page.PageSize]byte
+	check := func(limits valuelog.COWReadLimits, want bool) {
+		t.Helper()
+		got, hit, err := s.CopyVerifiedCachedLeafPageWithCOWPolicy(ptr, f, identity, dst[:0], limits)
+		if err != nil || hit != want || (hit && !bytes.Equal(got, leaf)) {
+			t.Fatalf("credit copy(%+v): hit=%t want=%t err=%v", limits, hit, want, err)
+		}
+	}
+	// Neither existing verified producers nor byte-identical CRC upgrades grant
+	// dictionary preparation credit.
+	cache.storeWithRecordChecksumState(ptr, leaf, true)
+	if err := s.MarkCachedLeafRecordVerified(ptr, f, identity, leaf); err != nil {
+		t.Fatal(err)
+	}
+	check(canonical, false)
+	for i := 0; i < 2; i++ {
+		if err := s.AdmitVerifiedCachedLeafPageWithCOWPolicy(ptr, f, identity, leaf, native); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check(native, true)
+	check(canonical, false)
+	// A successful stricter decode earns its actual policy, in both directions.
+	if err := s.AdmitVerifiedCachedLeafPageWithCOWPolicy(ptr, f, identity, leaf, canonical); err != nil {
+		t.Fatal(err)
+	}
+	check(canonical, true)
+	check(native, true)
+	// Zero or partial caller policies must not bypass the certificate, and
+	// invalid admission must not erase the existing successful policy.
+	invalid := []valuelog.COWReadLimits{{}}
+	for axis := 0; axis < 3; axis++ {
+		partial := canonical
+		switch axis {
+		case 0:
+			partial.MaxRecordBytes = 0
+		case 1:
+			partial.MaxRawBytes = 0
+		case 2:
+			partial.MaxValueBytes = 0
+		}
+		invalid = append(invalid, partial)
+	}
+	for _, policy := range invalid {
+		got, hit, err := s.CopyVerifiedCachedLeafPageWithCOWPolicy(ptr, f, identity, dst[:0], policy)
+		if !errors.Is(err, valuelog.ErrCOWReadUnsupported) || hit || len(got) != 0 {
+			t.Fatalf("invalid policy copy(%+v): hit=%t bytes=%d err=%v", policy, hit, len(got), err)
+		}
+		if err := s.AdmitVerifiedCachedLeafPageWithCOWPolicy(ptr, f, identity, leaf, policy); !errors.Is(err, valuelog.ErrCOWReadUnsupported) {
+			t.Fatalf("invalid policy admission(%+v): %v", policy, err)
+		}
+		check(canonical, true)
+	}
+	for axis := 0; axis < 3; axis++ {
+		stricter := canonical
+		switch axis {
+		case 0:
+			stricter.MaxRecordBytes--
+		case 1:
+			stricter.MaxRawBytes--
+		case 2:
+			stricter.MaxValueBytes--
+		}
+		check(stricter, false)
+	}
+	failed := false
+	if n := testing.AllocsPerRun(1000, func() {
+		got, hit, err := s.CopyVerifiedCachedLeafPageWithCOWPolicy(ptr, f, identity, dst[:0], native)
+		if err != nil || !hit {
+			failed = true
+		}
+		if len(got) > 0 {
+			got[0] ^= 1
+		}
+	}); n != 0 || failed {
+		t.Fatalf("warm copy allocated=%g failed=%t", n, failed)
+	}
+	check(native, true) // copies never expose slot backing
+	wrong := identity
+	wrong.Generation++
+	if _, _, err := s.CopyVerifiedCachedLeafPageWithCOWPolicy(ptr, f, wrong, dst[:0], native); !errors.Is(err, rootpublication.ErrResourceConflict) {
+		t.Fatalf("identity: %v", err)
+	}
+	if err := s.AdmitVerifiedCachedLeafPageWithCOWPolicy(ptr, nil, identity, leaf, native); !errors.Is(err, rootpublication.ErrResourceConflict) {
+		t.Fatalf("handle: %v", err)
+	}
+	// Every overwrite resets credit even when the bytes happen to match.
+	cache.storeWithRecordChecksumState(ptr, leaf, true)
+	check(native, false)
+	if err := s.MarkCachedLeafRecordVerified(ptr, f, identity, leaf); err != nil {
+		t.Fatal(err)
+	}
+	check(native, false)
+	if err := s.AdmitVerifiedCachedLeafPageWithCOWPolicy(ptr, f, identity, leaf, canonical); err != nil {
+		t.Fatal(err)
+	}
+	other := ptr
+	other.Offset++
+	cache.storeWithRecordChecksumState(other, leaf, true)
+	cache.storeWithRecordChecksumState(ptr, leaf, true)
+	check(native, false)
+	if err := s.AdmitVerifiedCachedLeafPageWithCOWPolicy(ptr, f, identity, leaf, canonical); err != nil {
+		t.Fatal(err)
+	}
+	cache.disabled.Store(true)
+	check(native, false)
+	cache.disabled.Store(false)
+	if cache.stats().COWReadPolicyBytes != 24 {
+		t.Fatalf("fixed certificate accounting: %+v", cache.stats())
+	}
+	closeNoErr(t, s)
+	if _, _, err := s.CopyVerifiedCachedLeafPageWithCOWPolicy(ptr, f, identity, dst[:0], native); !errors.Is(err, ErrClosed) {
+		t.Fatalf("closed copy: %v", err)
+	}
+	if err := s.AdmitVerifiedCachedLeafPageWithCOWPolicy(ptr, f, identity, leaf, canonical); !errors.Is(err, ErrClosed) {
+		t.Fatalf("closed admit: %v", err)
+	}
+}
+
+func TestLeafPageDictionaryPolicyDoesNotSynthesizeCredit(t *testing.T) {
+	cache := newLeafPageReadCache(1)
+	ptr := page.LeafLogPtr{FileID: 7, Offset: 128}
+	leaf := bytes.Repeat([]byte{0x42}, page.PageSize)
+	cache.storeWithRecordChecksumState(ptr, leaf, true)
+	first := valuelog.COWReadLimits{MaxRecordBytes: 100, MaxRawBytes: 200, MaxValueBytes: 100}
+	second := valuelog.COWReadLimits{MaxRecordBytes: 200, MaxRawBytes: 100, MaxValueBytes: 100}
+	cache.markCOWReadPolicy(ptr, leaf, first)
+	cache.markCOWReadPolicy(ptr, leaf, second)
+	var dst [page.PageSize]byte
+	imagined := valuelog.COWReadLimits{MaxRecordBytes: 100, MaxRawBytes: 100, MaxValueBytes: 100}
+	if _, _, _, hit := cache.getToWithCOWPolicy(ptr, dst[:0], true, imagined); hit {
+		t.Fatal("incomparable successful policies synthesized stricter credit")
+	}
+	if cache.slots[0].cowReadPolicy != second {
+		t.Fatal("slot did not retain one complete successful policy")
+	}
 }
