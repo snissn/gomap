@@ -152,6 +152,7 @@ func BenchmarkProjectionCompileAndApply(b *testing.B) {
 		projection bson.D
 	}{
 		{"all-ten-fields", all},
+		{"all-ten-fields-no-id", append(bson.D{{Key: "_id", Value: false}}, all...)},
 		{"one-field", bson.D{{Key: "field0", Value: 1}, {Key: "_id", Value: 0}}},
 		{"exclude-one", bson.D{{Key: "field0", Value: 0}}},
 		{"nested-fallback", bson.D{{Key: "missing.part", Value: 1}}},

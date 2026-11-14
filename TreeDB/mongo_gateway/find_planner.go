@@ -2540,13 +2540,13 @@ func projectDocumentWithEffectiveProjection(doc wire.Document, projection compil
 func projectFlatDocument(doc wire.Document, projection compiledProjection, mode projectionMode) (wire.Document, error) {
 	idx, out := bsoncore.AppendDocumentStart(make([]byte, 0, len(doc)))
 	err := forEachBoundedBSONDocumentElement(bson.Raw(doc), math.MaxInt, nil, func(elem bson.RawElement) error {
-		key, err := elem.KeyErr()
+		key, err := bsoncore.Element(elem).KeyBytesErr()
 		if err != nil {
 			return err
 		}
-		_, selected := projection.fields[key]
+		_, selected := projection.fields[string(key)]
 		keep := mode == projectionInclude && selected || mode == projectionExclude && !selected
-		if key == "_id" {
+		if bytes.Equal(key, []byte("_id")) {
 			keep = projection.includeID
 		}
 		if keep {
@@ -2708,8 +2708,24 @@ func projectionHasDottedPath(projection compiledProjection) bool {
 	return false
 }
 
+// bsonElementsWithScratch keeps common request metadata in caller-owned scratch.
+// Wider documents spill through append; malformed envelopes retain Raw.Elements'
+// historical behavior and errors. Returned elements borrow the input document.
+func bsonElementsWithScratch(doc bson.Raw, scratch []bson.RawElement) ([]bson.RawElement, error) {
+	elements := scratch[:0]
+	err := forEachBoundedBSONDocumentElement(doc, math.MaxInt, nil, func(elem bson.RawElement) error {
+		elements = append(elements, elem)
+		return nil
+	})
+	if err != nil {
+		return doc.Elements()
+	}
+	return elements, nil
+}
+
 func parseProjection(projection wire.Document) (projectionMode, map[string]struct{}, bool, bool, error) {
-	elements, err := bson.Raw(projection).Elements()
+	var scratch [16]bson.RawElement
+	elements, err := bsonElementsWithScratch(bson.Raw(projection), scratch[:])
 	if err != nil {
 		return projectionNone, nil, true, false, err
 	}
