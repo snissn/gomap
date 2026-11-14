@@ -484,6 +484,14 @@ func (t *NativeJSONTxn) admitRowControls(g *nativeJSONTxnBinding, count int) err
 	return t.admitStage(g, fixed+indexed+rows)
 }
 func (t *NativeJSONTxn) touchNativeRow(g *nativeJSONTxnBinding, id []byte) (*nativeJSONRow, error) {
+	return t.touchNativeRowWithInsertProbe(g, id, false)
+}
+
+func (t *NativeJSONTxn) touchNativeInsertRow(g *nativeJSONTxnBinding, id []byte) (*nativeJSONRow, error) {
+	return t.touchNativeRowWithInsertProbe(g, id, true)
+}
+
+func (t *NativeJSONTxn) touchNativeRowWithInsertProbe(g *nativeJSONTxnBinding, id []byte, insert bool) (*nativeJSONRow, error) {
 	if len(id) == 0 {
 		return nil, errors.New("collections: document id cannot be empty")
 	}
@@ -503,6 +511,16 @@ func (t *NativeJSONTxn) touchNativeRow(g *nativeJSONTxnBinding, id []byte) (*nat
 		}
 		entry, resolved, err := g.probe.domain.memoryEntry(id)
 		if !resolved {
+			if insert {
+				if physical, ok := g.probe.capture.(backenddb.NativePhysicalReader); ok {
+					// Reuse the original cut's admitted physical workspace for a
+					// negative INSERT probe. A hit returns no inline bytes: retain
+					// the full read below, including pointer errors and ownership.
+					if _, err := physical.NativeEntryAtRoot(g.probe.domain.domain.baseRoot, id, false); err != nil {
+						return nil, err
+					}
+				}
+			}
 			scratch, scratchErr := g.probe.physicalScratch()
 			if scratchErr != nil {
 				return nil, scratchErr
@@ -603,7 +621,7 @@ func (t *NativeJSONTxn) stageNativeInsert(g *nativeJSONTxnBinding, ids, document
 		if err != nil {
 			return err
 		}
-		row, err := t.touchNativeRow(g, item.id)
+		row, err := t.touchNativeInsertRow(g, item.id)
 		if err != nil {
 			return err
 		}
