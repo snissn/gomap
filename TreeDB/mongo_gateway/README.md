@@ -61,7 +61,8 @@ readConcern scanning retains only the first value and duplicate status before
 checking its semantics. Structural scan failures use the legacy element parser
 so malformed envelopes retain their original acceptance and error precedence.
 Row selection compares borrowed key bytes, and returned BSON remains an owned
-copy. No metadata or scratch is retained across requests.
+copy. Transient element scratch and readConcern scan state are not retained
+across requests; compiled cursor selector keys retain their existing lifetime.
 
 The compile-and-apply benchmark covers ten binary 100-byte fields with and
 without `_id`, one-field
