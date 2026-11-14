@@ -36,6 +36,11 @@ func cowNativePackedDictionaryLeafFixture(t *testing.T) (*DB, *backenddb.DB, pag
 // for dictionary reads on both physical operands.
 func cowNativePackedDictionaryLeafFixtureWithEncoding(t *testing.T, dictionaryAppender bool) (*DB, *backenddb.DB, page.LeafLogPtr, uint64, []byte) {
 	t.Helper()
+	return cowNativePackedDictionaryLeafFixtureWithReadPolicy(t, dictionaryAppender, memtable.COWLimits{}, -1)
+}
+
+func cowNativePackedDictionaryLeafFixtureWithReadPolicy(t *testing.T, dictionaryAppender bool, limits memtable.COWLimits, cacheEntries int) (*DB, *backenddb.DB, page.LeafLogPtr, uint64, []byte) {
+	t.Helper()
 	requireLeafGenerationPackPromotionSupport(t)
 	t.Setenv(envDisableVlogGenerationLoop, "1")
 	t.Setenv(envDisableVlogGenerationCheckpointKick, "1")
@@ -50,7 +55,7 @@ func cowNativePackedDictionaryLeafFixtureWithEncoding(t *testing.T, dictionaryAp
 	backend, err := backenddb.Open(backenddb.Options{
 		Dir: backendDir, CommandWAL: true,
 		Durability: backenddb.DurabilityWALOnRelaxed, DisableBackgroundPrune: true,
-		IndexOuterLeavesInValueLog: true, LeafPageReadCacheEntries: -1,
+		IndexOuterLeavesInValueLog: true, LeafPageReadCacheEntries: cacheEntries,
 		ValueLog: backenddb.ValueLogOptions{
 			DictLookup: func(id uint64) ([]byte, error) {
 				if store == nil {
@@ -81,7 +86,7 @@ func cowNativePackedDictionaryLeafFixtureWithEncoding(t *testing.T, dictionaryAp
 		t.Fatal(err)
 	}
 	opts := Options{
-		TransactionOwner: owner, MemtableMode: "cow_ordered", ExternalCommandWAL: true,
+		TransactionOwner: owner, MemtableMode: "cow_ordered", ExternalCommandWAL: true, COWMemtableLimits: limits,
 		MemtableShards: 2, FlushThreshold: 1 << 30, IndexOuterLeavesInValueLog: true,
 		ValueLogPointerThreshold: 256, ValueLogCompression: uint8(vlogCompressionBlock),
 		ValueLogGenerationPolicy:                 uint8(backenddb.ValueLogGenerationHotWarmCold),
@@ -413,5 +418,168 @@ func TestCOWNativePackedDictionaryLeaf(t *testing.T) {
 				check(nil, b.(backenddb.NativePhysicalLeafReader))
 			}
 		})
+	}
+}
+
+// Regression-only policy control: factory-equivalent limits, the maintained pack
+// producer, bounded cache and exported native physical entry API.
+func TestCOWNativePackedDictionaryCompatibleCachePolicy(t *testing.T) {
+	limits := memtable.DefaultCOWLimits()
+	limits.MaxInFlightBytes = 512 << 20
+	limits.MaxTotalBytes, limits.MaxRetiredBytes = 1<<30, 1<<30
+	db, backend, ptr, _, want := cowNativePackedDictionaryLeafFixtureWithReadPolicy(t, false, limits, 128)
+	if db.cow.readLimits().MaxValueBytes != 64<<20 || db.cow.budget.Limits().MaxInFlightBytes != 512<<20 {
+		t.Fatal("factory-equivalent policy not activated")
+	}
+	captured, err := backend.CaptureNativeSemanticState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer captured.Close()
+	capture := captured.(*NativeSemanticCapture)
+	token, ok := capture.cut.basis.snapshot.StateToken()
+	if !ok {
+		t.Fatal("missing retained physical root")
+	}
+	f, _, err := capture.cut.basis.snapshot.PinnedValueLogFile(ptr.ValueLogFileID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	shape, err := valuelog.InspectCOWLeafRecord(f, ptr.ValuePtr(), db.cow.readLimits())
+	if err != nil || !shape.Compressed || shape.DictID == 0 {
+		t.Fatalf("actual maintained dictionary pack absent: %+v %v", shape, err)
+	}
+	hits := cowLeafCacheCounter(t, backend, "hits")
+	for i := 0; i < 12; i++ {
+		entry, err := capture.NativeEntryAtRoot(token.RootPageID, []byte("pack-03000"), true)
+		if err != nil || !bytes.Equal(entry.Value, want) {
+			t.Fatalf("native entry %d: %q %v", i, entry.Value, err)
+		}
+		entry.Value[0] ^= 1
+	}
+	if got := cowLeafCacheCounter(t, backend, "hits") - hits; got == 0 {
+		t.Fatalf("compatible native dictionary reads bypassed verified cache: hits=%d canonical=%+v native_inflight=%d", got, db.cow.readLimits(), limits.MaxInFlightBytes)
+	}
+}
+
+func TestCOWNativeDictionaryCacheBidirectionalPolicyAndConstruction(t *testing.T) {
+	limits := memtable.DefaultCOWLimits()
+	limits.MaxInFlightBytes = 512 << 20
+	limits.MaxTotalBytes = 1 << 30
+	limits.MaxRetiredBytes = 1 << 30
+	db, _, ptr, _, _ := cowNativePackedDictionaryLeafFixtureWithReadPolicy(t, false, limits, 128)
+	// Two genuine dictionary segments make MaxResources=1 an insufficient
+	// capture envelope. Reopening the real store starts its next append file;
+	// the target dictionary and producer credit are never fabricated.
+	db.cow.closePhysicalReader()
+	if err := db.dictStore.(*dictdb.Store).Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err := dictdb.Open(filepath.Join(filepath.Dir(db.dir), "dictdb"), backenddb.Options{ChunkSize: 64 << 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.PutDictBytes(context.Background(), bytes.Repeat([]byte("second-real-definition"), 4096)); err != nil {
+		_ = store.Close()
+		t.Fatal(err)
+	}
+	db.SetDictStore(store)
+	basis := db.cow.cut.basis
+	original := db.dictStore
+	provider := original.(cowDictionaryReadProvider)
+	independent := cowCacheDictionaryRead{provider: provider, cache: db.cow}
+	native := valuelog.COWReadLimits{MaxRecordBytes: 512 << 20, MaxRawBytes: 512 << 20, MaxValueBytes: 512 << 20}
+	canonical := db.cow.readLimits()
+	w, err := admitCOWReadWorkspace(db.cow.budget, native)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.close()
+	var dst [page.PageSize]byte
+	read := func(policy valuelog.COWReadLimits, capability *cowCacheDictionaryRead) ([]byte, error) {
+		w.limits = policy
+		return basis.readPhysicalLeafWithDictionary(db.cow, w, ptr, dst[:0], true, false, capability)
+	}
+	for i := 0; i < 4; i++ {
+		if _, err := read(native, &independent); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db.cow.closePhysicalReader()
+	calls := 0
+	refusal := errors.New("definition construction refused")
+	refusing := cowDictionaryLeafAdmissionStore{DictStore: original, prepare: func(_ uint64, _ valuelog.COWReadLimits, maxResources int, admit func(dictdb.DictionaryReadAllocationSizes) (func(), error)) (*dictdb.DictionaryReadDefinition, error) {
+		calls++
+		if maxResources != db.cow.budget.Limits().MaxResources {
+			t.Fatalf("changed original resource envelope: %d", maxResources)
+		}
+		// The original callback must still refuse an excessive resource map.
+		sizes := dictdb.DictionaryReadAllocationSizes{}
+		sizes.Snapshot.ValueLog.MapHint = maxResources + 1
+		_, err := admit(sizes)
+		if !errors.Is(err, memtable.ErrCOWCapacity) {
+			t.Fatalf("resource construction admission: %v", err)
+		}
+		return nil, refusal
+	}}
+	denied := cowCacheDictionaryRead{provider: refusing, cache: db.cow}
+	if _, err := read(canonical, &denied); !errors.Is(err, refusal) {
+		t.Fatalf("canonical caller accepted broader native credit: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("stricter policy did not consult original provider: %d", calls)
+	}
+	for i := 0; i < 4; i++ {
+		if _, err := read(canonical, &independent); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db.cow.closePhysicalReader()
+	// The physical decoder owner, rather than the point's inspection workspace,
+	// supplies the construction resource envelope. Use a genuinely admitted
+	// smaller owner, not a provider assertion against the default envelope.
+	smallLimits := db.cow.budget.Limits()
+	smallLimits.MaxResources = 1
+	smallBudget, err := memtable.NewCOWBudget(smallLimits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer smallBudget.Close()
+	smallReader, err := admitCOWReadWorkspace(smallBudget, canonical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.cow.physicalMu.Lock()
+	db.cow.physicalReader = smallReader
+	db.cow.physicalMu.Unlock()
+	defer db.cow.closePhysicalReader()
+	calls = 0
+	if _, err := read(native, &denied); err != nil || calls != 0 {
+		t.Fatalf("native failed to reuse actual canonical credit: calls=%d err=%v", calls, err)
+	}
+	if _, err := read(canonical, &denied); err != nil || calls != 0 {
+		t.Fatalf("warm read constructed dictionary resources: calls=%d err=%v", calls, err)
+	}
+	if _, err := read(native, nil); !errors.Is(err, valuelog.ErrCOWReadUnsupported) {
+		t.Fatalf("warm hit bypassed native capability: %v", err)
+	}
+	stricter := canonical
+	stricter.MaxRecordBytes--
+	// The actual provider must capture both real dictionary segments. Check
+	// that the smaller physical construction limit is applied.
+	smallCalls := 0
+	smallProvider := cowDictionaryLeafAdmissionStore{DictStore: original, prepare: func(id uint64, policy valuelog.COWReadLimits, maxResources int, admit func(dictdb.DictionaryReadAllocationSizes) (func(), error)) (*dictdb.DictionaryReadDefinition, error) {
+		smallCalls++
+		if maxResources != 1 {
+			t.Fatalf("smaller physical envelope lost: %d", maxResources)
+		}
+		return provider.PrepareDictionaryReadDefinition(id, policy, maxResources, admit)
+	}}
+	smallCapability := cowCacheDictionaryRead{provider: smallProvider, cache: db.cow}
+	if _, err := read(canonical, &smallCapability); err != nil || smallCalls != 0 {
+		t.Fatalf("warm page constructed under smaller envelope: calls=%d err=%v", smallCalls, err)
+	}
+	if _, err := read(stricter, &smallCapability); !errors.Is(err, dictdb.ErrReadDefinitionCapacity) || smallCalls != 1 {
+		t.Fatalf("cold construction ignored smaller resource envelope: calls=%d err=%v", smallCalls, err)
 	}
 }

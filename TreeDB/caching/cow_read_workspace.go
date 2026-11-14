@@ -848,18 +848,26 @@ func (b *cowBackendBasis) readPhysicalLeafWithDictionary(c *cowCache, w *cowRead
 		// complete cut's dictionary policy and local admission before any hit.
 		return w.readInspected(f, ptr.ValuePtr(), shape, true, dst, nil)
 	}
-	// Ordinary COW limits are fixed for this cache. A fully CRC/producer-
-	// verified page is sufficient immutable authority without retaining a
-	// decoder or recapturing its dictionary on every hit. Private callers using
-	// different limits must pass their original decode/definition policy again.
-	cacheEligible := shape.DictID == 0 || w.limits == c.readLimits()
-	if cacheEligible {
-		if data, hit, err := b.snapshot.CopyVerifiedCachedLeafPage(ptr, f, identity, dst); err != nil || hit {
-			if err != nil {
-				return nil, fmt.Errorf("COW physical leaf verified-cache ptr=%+v file=%q: %w", ptr.ValuePtr(), f.Name(), err)
-			}
-			return data, err
+	// Dictionary credit records the actual successful bounded decode policy.
+	// Every caller, including canonical readers, must dominate that credit.
+	// Inspection and native capability checks above remain mandatory on a hit.
+	copyVerified := func() ([]byte, bool, error) {
+		if shape.DictID != 0 {
+			return b.snapshot.CopyVerifiedCachedLeafPageWithCOWPolicy(ptr, f, identity, dst, w.limits)
 		}
+		return b.snapshot.CopyVerifiedCachedLeafPage(ptr, f, identity, dst)
+	}
+	admitVerified := func(data []byte) error {
+		if shape.DictID != 0 {
+			return b.snapshot.AdmitVerifiedCachedLeafPageWithCOWPolicy(ptr, f, identity, data, w.limits)
+		}
+		return b.snapshot.AdmitVerifiedCachedLeafPage(ptr, f, identity, data)
+	}
+	if data, hit, err := copyVerified(); err != nil || hit {
+		if err != nil {
+			return nil, fmt.Errorf("COW physical leaf verified-cache ptr=%+v file=%q: %w", ptr.ValuePtr(), f.Name(), err)
+		}
+		return data, err
 	}
 	var data []byte
 	// Reuse a matching local dictionary codec first, as on the original
@@ -873,11 +881,9 @@ func (b *cowBackendBasis) readPhysicalLeafWithDictionary(c *cowCache, w *cowRead
 		c.physicalMu.Lock()
 		// A preceding decoder may have admitted this exact inspected leaf
 		// while we waited. Preserve the original policy before copying a hit.
-		if cacheEligible {
-			if data, hit, cacheErr := b.snapshot.CopyVerifiedCachedLeafPage(ptr, f, identity, dst); cacheErr != nil || hit {
-				c.physicalMu.Unlock()
-				return data, cacheErr
-			}
+		if data, hit, cacheErr := copyVerified(); cacheErr != nil || hit {
+			c.physicalMu.Unlock()
+			return data, cacheErr
 		}
 		shared, workspaceErr := c.physicalWorkspaceLocked(w.limits)
 		if workspaceErr != nil {
@@ -891,7 +897,7 @@ func (b *cowBackendBasis) readPhysicalLeafWithDictionary(c *cowCache, w *cowRead
 		if err == nil {
 			// Publish before the next queued decoder checks. Admission keeps
 			// the existing bounded cache, probation and nonblocking slot locks.
-			err = b.snapshot.AdmitVerifiedCachedLeafPage(ptr, f, identity, data)
+			err = admitVerified(data)
 		}
 		c.physicalMu.Unlock()
 		if err != nil {
@@ -910,7 +916,7 @@ func (b *cowBackendBasis) readPhysicalLeafWithDictionary(c *cowCache, w *cowRead
 		}
 		return nil, fmt.Errorf("COW physical leaf decode ptr=%+v file=%q compressed=%t dictionary=%d codec=%d record=%d raw=%d value=%d: %w", ptr.ValuePtr(), f.Name(), shape.Compressed, shape.DictID, shape.Codec, shape.RecordBytes, shape.RawBytes, shape.ValueBytes, err)
 	}
-	if err = b.snapshot.AdmitVerifiedCachedLeafPage(ptr, f, identity, data); err != nil {
+	if err = admitVerified(data); err != nil {
 		return nil, fmt.Errorf("COW physical leaf verified-admission ptr=%+v file=%q: %w", ptr.ValuePtr(), f.Name(), err)
 	}
 	return data, nil

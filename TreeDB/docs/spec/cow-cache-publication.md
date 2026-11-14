@@ -354,10 +354,17 @@ Every physical leaf read still inspects the current record metadata before
 reusing a verified decoded cache entry. Capable dictionary leaves participate in
 that same cache after the original native/capability and shape/limit policy.
 Population requires the existing independently checked definition identity, full
-record CRC and decoded-page validation. With the cache's fixed COW limits, the
-verified immutable page remains usable after a producer decoder is retired:
-a hit needs no decoder, dictionary recapture or physical decoder mutex. Private
-callers using different limits bypass dictionary hits and follow decode/refusal.
+record CRC and decoded-page validation. Each existing fixed cache slot records
+one complete COWReadLimits policy from an actual successful dictionary decode.
+Every dictionary caller, including canonical readers, must dominate all three
+credited limits; otherwise it follows the original decode/refusal path. Thus a
+64 MiB decode can serve the native 512 MiB caller, while a native-only 512 MiB
+credit cannot serve the stricter canonical reader. Incomparable policies never
+synthesize a smaller certificate. Legacy checksum-only admissions are uncredited.
+A verified immutable page remains usable after a producer decoder is retired:
+a hit needs no decoder, dictionary recapture or physical decoder mutex. Resource
+counts and admission callbacks govern construction of new definition owners and
+pins; a warm copied page constructs none and does not retain those owners.
 Captured-only providers keep their original local definition policy before any
 cache reuse. Leaf inspection reads one fixed maximum
 metadata window, interprets only the checked header and frame prefix, and ignores
@@ -379,8 +386,11 @@ backing and never allocates a cold page. Cache `bytes` counts valid-entry bytes;
 `backing_bytes` counts allocated slot backing, including legacy/write admission,
 which can remain retained independently of validity. This cache-owned capacity
 is separate from the caller's temporary workspace admission.
-Existing byte-identical pages can be marked record-verified. Replacement resets
-independent page-checksum verification, and every subsequent hit still requires
+Each slot adds one 24-byte policy certificate (192 KiB at the default 8192
+slots, 6 MiB at the maximum 262144), reported separately as
+cow_read_policy_bytes; page backing capacity is unchanged. Existing
+byte-identical pages can be marked record-verified without inventing dictionary
+credit. Every overwrite resets policy credit and independent page-checksum verification, and every subsequent hit still requires
 record inspection through the exact retained file identity.
 
 On Windows and race builds, `ReadAt` makes fixed inspection buffers heap
