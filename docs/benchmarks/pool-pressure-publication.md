@@ -160,11 +160,13 @@ publication counts were not instrumented in the public diagnostic.
 for the full-snapshot component regression. It times
 `BenchmarkPoolPressurePublicStats`, now isolated in
 `TreeDB/caching/pool_pressure_public_stats_bench_test.go`. Fixture version
-`public-stats-v2-close-excluded` adds `b.StopTimer()` after the measured Stats
+`public-stats-v2-close-excluded` added `b.StopTimer()` after the measured Stats
 loop so deferred cached/backend Close is excluded. The earlier `public-01`
 attempt retained zero timed rows, so this phase correction revises no measured
-result. Both products use identical corrected fixture bytes. Only that fixture is
-overlaid on the exact PR base; no candidate implementation or component helper
+result. Protocol `public-stats-v3-fixed512-close-excluded` now fixes each sample
+at 512 iterations; it leaves those Go fixture bytes unchanged. Both products use
+identical corrected fixture bytes. Only that fixture is overlaid on the exact PR
+base; no candidate implementation or component helper
 is copied into the baseline. Both binaries retain real clocks, ordinary samplers,
 64 inline keys, and the actual cached `DB.Stats` call. The runner imports the
 existing PRIMARY quiet acquisition, process observation, ELF/runtime binding,
@@ -183,9 +185,25 @@ the diagnostic runner/self-test, or its maintained PRIMARY helper. Changes to
 other TreeDB files do not activate this step. The existing PRIMARY comparison
 still runs with its original fixture, sample count, thresholds, and disposition.
 This diagnostic step has no observation-only override. It retains three
-alternating pairs AB/BA/AB, GOMAXPROCS=1, CPU0, 250 ms per sample, and fresh
-processes. Median paired time may increase at most 5%; median bytes/op and
-allocations/op must not grow. Equal binary inputs do not waive a failed metric.
+alternating pairs AB/BA/AB, GOMAXPROCS=1, CPU0, exactly 512 iterations per sample
+(`-test.benchtime=512x`), and fresh processes. A reported count other than 512
+produces NULL. Median paired time may increase at most 5%; allocation count
+remains strict. The strict byte result remains recorded: default v1 permits no
+growth, while CI explicitly selects the existing v2 budget of both <=8 B/op and
+<=0.01% of baseline. See [the acceptance contract](../../scripts/mvcc_raw_path_gate.md#public-stats-byte-acceptance).
+Equal binary inputs do not waive a failed metric.
+
+The earlier 250ms protocol independently calibrated each process, allowing a
+fixed startup cost to be divided by different counts. A local instrumented probe
+observed three WAL-worker scratch-buffer pairs, totaling 1,032,192 bytes,
+allocated between reset and stop. This establishes a mechanism on that probe,
+not the allocation owner of every hosted failure. The common count preserves
+the original process TotalAlloc/Mallocs numerator, including startup, background
+work and real samplers. No bytes are subtracted and no product readiness hook is
+added. Startup may still land on different sides of reset; neither this change
+nor the byte allowance establishes a noise bound. Added per-Stats allocations
+remain in all 512 calls. Historical 250ms results retain their original meaning;
+PRIMARY's fixed128 protocol is unchanged.
 
 Builds finish before the maintained quiet acquisition: complete five-second
 windows, at most 60 seconds, external process CPU strictly below 2%. The same
@@ -201,8 +219,8 @@ Under the compact `mvcc-raw-path-evidence-HEAD-RUN-ATTEMPT` artifact, `pressure-
 retains the raw diagnostic evidence for seven days, excluding compiled `*.test`
 executables and `tmp/` scratch. This is not an executable archive. It contains
 `bindings.json` (source, fixture, runner/helper, binary identities and
-fixed policy), `runtime-inputs-before.json`/`after.json` (actual ELF loader and
-library hashes), separate command stdout/stderr plus `commands.json` receipts,
+fixed policy and explicit iteration count), `runtime-inputs-before.json`/`after.json`
+(actual ELF loader and library hashes), separate command stdout/stderr plus `commands.json` receipts,
 all six chronological `samples.json` rows, complete quiet acquisition/process
 observations, and `summary.json`/`summary.md`. Output must be fresh and outside
 the checkout. Go benchmark text and these JSON receipts are not benchprof inputs.

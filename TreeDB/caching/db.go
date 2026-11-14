@@ -13861,7 +13861,9 @@ func (db *DB) startProcessMemorySampler() {
 // StartAutoCheckpoint enables a background loop that trims cached-mode WAL
 // segments. With an external command WAL it maintains only the recovery-covered
 // prefix; legacy or otherwise unwired modes use a full checkpoint. When
-// idleInterval > 0, the loop also runs after a period of write-idleness.
+// idleInterval > 0, the loop also runs after quiet since the last actual write.
+// Write notifications remain byte-coalesced; interval, size, and explicit triggers
+// do not require write-idleness.
 //
 // interval > 0 enables periodic passes. maxWALBytes is a soft size trigger:
 // if > 0, the loop attempts maintenance after notified WAL growth exceeds the
@@ -19682,6 +19684,15 @@ func (db *DB) autoCheckpointLoop(interval time.Duration, maxWALBytes int64, idle
 				resetTimer(idleTimer, idleInterval)
 			}
 		case <-idleCh:
+			// Notifications coalesce WAL growth, so small actual writes can be
+			// newer than the event that armed this timer. Recheck on every
+			// expiry and wait only for the remaining quiet interval.
+			if last := db.lastForegroundWriteUnixNano.Load(); last > 0 {
+				if remaining := idleInterval - time.Since(time.Unix(0, last)); remaining > 0 {
+					resetTimer(idleTimer, remaining)
+					continue
+				}
+			}
 			db.maybeAutoCheckpoint(maxWALBytes, autoCheckpointModeIdle)
 		}
 	}
