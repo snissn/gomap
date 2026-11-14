@@ -682,6 +682,28 @@ acceptance; it is not itself a logical transaction conflict. The same bounded
 transaction journal separates raw and semantic namespaces. These lower seams do
 not activate collection producers whose legacy barriers are still registered.
 
+Ordinary native collection CREATE stages one immutable descriptor, original
+incarnation and exact catalog mutations. Its live request submits a logical
+reprepare plan, without a prebuilt successor. After validating its original
+namespace and next-incarnation dependencies, the same installer composes those
+mutations against the current compatible engine. A disjoint row publication or
+physical checkpoint does not require a new CREATE or command identity. A real
+catalog conflict still refuses before assignment; basis comparisons are unchanged.
+Deterministic apply and command replay use the same constructor with a ready
+successor, and compatible-existing-schema no-op behavior is unchanged.
+
+The CREATE request keeps its original capture and any private bootstrap import
+through the synchronous write. When no semantic engine is published, the planner
+borrows that import only if its pinned pager and system root still match the
+paired exact snapshot; otherwise it imports the catalog at that exact cut. Every
+partial import remains privately owned, and every nonnil partial successor goes
+to lower cleanup even on preparation error. Sparse custody retains the original
+descriptor, never a whole engine. Plan-private catalog backing is admitted until
+its final use; publication effects/dependencies keep their existing ownership.
+Borrowed aliases are cleared and private reimports are released outside publisher
+gates before the opening capture closes. Cleanup errors are joined, and an
+assigned or installed completion failure never grants retry permission.
+
 Native build materialization of an already logically accepted plan is terminal
 on failure. Only `NativeSemanticBuildRetryableRefusal` proves an untouched
 preadmission refusal; an ordinary capacity error after original asset creation

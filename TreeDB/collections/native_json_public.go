@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
@@ -61,7 +62,7 @@ func finishPrivateNative(work *rootpublication.SemanticCleanup) error {
 	return err
 }
 
-// CreateCollection prepares one immutable successor before entering the same
+// CreateCollection prepares one immutable operation before entering the same
 // canonical command-WAL bridge used by raw COW publication.
 func (m *NativeJSONManager) CreateCollection(meta CollectionMeta) (*CollectionMeta, error) {
 	created, _, err := m.CreateCollectionWithStatus(meta)
@@ -147,8 +148,18 @@ func (m *NativeJSONManager) createCollectionWithStatus(meta CollectionMeta, appl
 			return nil, false, prepErr
 		}
 		native = &backenddb.NativePreparedPublication{State: next}
-	} else {
+	} else if apply != nil {
+		// Deterministic apply continues to hand the bridge a ready state.
 		native, err = prepareNativeJSONCreate(base, normalized)
+	} else {
+		native, err = prepareNativeJSONCreatePlan(base, normalized)
+		if native != nil {
+			plan := native.Reprepare.(*nativeJSONCreatePlan)
+			plan.bootstrap, plan.opening = base, capture
+			// The original capture/import outlive this synchronous write. Clear
+			// borrowed aliases and finish any exact-cut import off publisher gates.
+			defer func() { resultErr = errors.Join(resultErr, plan.close()) }()
+		}
 	}
 	if err != nil {
 		return nil, false, err
@@ -207,7 +218,88 @@ func nativeCreateIdentityUpdates(name string, next uint64) (map[string][]byte, e
 	return map[string][]byte{nativeCatalogIncarnationPrefix + name: identity[:], nativeCatalogNextIncarnationKey: counter[:]}, nil
 }
 
+// nativeJSONCreatePlan borrows its immutable descriptor from sparse custody.
+// Its catalog mutations and original incarnation never change during reprepare.
+// Only reimported is an owned temporary edge; it is finished outside the gates.
+type nativeJSONCreatePlan struct {
+	collection *nativeCollectionState
+	mutations  []memtable.COWMutation
+	bootstrap  *nativeEngineVersion
+	opening    backenddb.NativeSemanticCapture
+	reimported *nativeEngineVersion
+	lease      cowbtree.OwnedMapLease
+}
+
+func (p *nativeJSONCreatePlan) PrepareNativePublication(latest backenddb.NativeSemanticState, exact *backenddb.Snapshot) (backenddb.NativeFinalizedPublication, error) {
+	if exact == nil {
+		return backenddb.NativeFinalizedPublication{}, backenddb.ErrNativeSemanticUnsupported
+	}
+	base, ok := latest.(*nativeEngineVersion)
+	if latest != nil && !ok {
+		return backenddb.NativeFinalizedPublication{}, backenddb.ErrNativeSemanticUnsupported
+	}
+	if base == nil {
+		// Match the row planner's paired cold-import rule. A physical move can
+		// leave latest nil while changing the pager or system catalog root.
+		base = p.bootstrap
+		if base == nil || p.opening == nil || p.reimported != nil {
+			return backenddb.NativeFinalizedPublication{}, backenddb.ErrNativeSemanticUnsupported
+		}
+		before := p.opening.Snapshot()
+		beforeToken, beforeOK := before.StateToken()
+		afterToken, afterOK := exact.StateToken()
+		beforePager, afterPager := before.Pager(), exact.Pager()
+		if !beforeOK || !afterOK || beforePager == nil || afterPager == nil {
+			return backenddb.NativeFinalizedPublication{}, backenddb.ErrRootPublicationBasisMismatch
+		}
+		if beforePager != afterPager || beforeToken.SystemRootPageID != afterToken.SystemRootPageID {
+			var err error
+			p.reimported, err = importNativeJSONCatalogAt(p.opening, exact)
+			if err != nil {
+				return backenddb.NativeFinalizedPublication{}, err
+			}
+			base = p.reimported
+		}
+	}
+	if base == nil || base.inventory != nil {
+		return backenddb.NativeFinalizedPublication{}, backenddb.ErrNativeSemanticUnsupported
+	}
+	next, err := prepareNativeCatalogReplacement(base, nil, p.collection, p.mutations)
+	// Every nonnil partial successor belongs to lower cleanup, even on error.
+	return backenddb.NativeFinalizedPublication{State: next}, err
+}
+
+func (p *nativeJSONCreatePlan) close() error {
+	reimported, lease := p.reimported, p.lease
+	clear(p.mutations)
+	*p = nativeJSONCreatePlan{}
+	var err error
+	if reimported != nil {
+		err = finishPrivateNative(reimported.Release())
+	}
+	if lease != nil {
+		lease.Close()
+	}
+	return err
+}
+
+// Replay and deterministic apply require a ready state, not a deferred live plan.
 func prepareNativeJSONCreate(base *nativeEngineVersion, meta CollectionMeta) (publication *backenddb.NativePreparedPublication, resultErr error) {
+	publication, err := prepareNativeJSONCreatePlan(base, meta)
+	if err != nil {
+		return nil, err
+	}
+	plan := publication.Reprepare.(*nativeJSONCreatePlan)
+	publication.Reprepare = nil
+	defer func() { resultErr = errors.Join(resultErr, plan.close()) }()
+	publication.State, err = prepareNativeCatalogReplacement(base, nil, plan.collection, plan.mutations)
+	if err != nil {
+		return nil, errors.Join(err, cancelPrivateNativePublication(publication))
+	}
+	return publication, nil
+}
+
+func prepareNativeJSONCreatePlan(base *nativeEngineVersion, meta CollectionMeta) (publication *backenddb.NativePreparedPublication, resultErr error) {
 	// Selected cancellation owns memory-only scratch, never resource inventory.
 	if base == nil || base.inventory != nil {
 		return nil, backenddb.ErrNativeSemanticUnsupported
@@ -226,6 +318,11 @@ func prepareNativeJSONCreate(base *nativeEngineVersion, meta CollectionMeta) (pu
 		record := scratch.Release()
 		scratch = nil
 		resultErr = errors.Join(resultErr, finishPrivateNative(record))
+		if resultErr != nil && publication != nil {
+			plan := publication.Reprepare.(*nativeJSONCreatePlan)
+			resultErr = errors.Join(resultErr, cancelPrivateNativePublication(publication), plan.close())
+			publication = nil
+		}
 	}()
 	admit := func(n uint64) (cowbtree.OwnedMapLease, error) { return base.allocator.AdmitNativeBytes(n) }
 	p.schema, err = newNativeSchemaState(&meta, admit)
@@ -297,26 +394,31 @@ func prepareNativeJSONCreate(base *nativeEngineVersion, meta CollectionMeta) (pu
 		effects = append(effects, memtable.COWMutation{Key: []byte(key), Value: value, Flags: node.FlagInline})
 	}
 	sort.Slice(effects, func(i, j int) bool { return string(effects[i].Key) < string(effects[j].Key) })
-	next, err := prepareNativeCatalogReplacement(base, nil, collection, effects)
+	// Admit only private plan backing, which retires after composition/write.
+	// Publication Effects/Dependencies keep their existing ownership convention.
+	// Admit the request plan and its retained catalog mutation backing before
+	// handing its descriptor to sparse custody. This lease is private to the
+	// synchronous request; accepted custody never retains a whole engine.
+	charge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(nativeJSONCreatePlan{}))) +
+		memtable.COWAllocationCharge(uint64(len(effects))*uint64(unsafe.Sizeof(memtable.COWMutation{})))
+	for _, effect := range effects {
+		charge += memtable.COWAllocationCharge(uint64(len(effect.Key))) + memtable.COWAllocationCharge(uint64(len(effect.Value)))
+	}
+	lease, err := base.allocator.AdmitNativeBytes(charge)
 	if err != nil {
-		if next != nil {
-			record := next.Release()
-			next = nil
-			resultErr = errors.Join(resultErr, finishPrivateNative(record))
-		}
 		return nil, err
 	}
 	custody, err := newNativeMutationCustody(0, 1, base.allocator)
 	if err != nil {
-		record := next.Release()
-		next = nil
-		resultErr = errors.Join(resultErr, finishPrivateNative(record))
+		lease.Close()
 		return nil, err
 	}
 	(nativeCollectionLifetime{}).Retain(collection)
 	custody.adoptCollection(collection)
 	changed := []txnhistory.Effect{{Namespace: txnhistory.Namespace{Kind: txnhistory.CatalogNamespace}, Kind: txnhistory.PointEffect, Key: []byte(meta.Name)}, {Namespace: txnhistory.Namespace{Kind: txnhistory.CatalogNamespace}, Kind: txnhistory.PointEffect, Key: []byte(nativeCatalogNextIncarnationKey)}}
-	return &backenddb.NativePreparedPublication{Basis: base, State: next, Custody: custody, Effects: changed, Dependencies: changed}, nil
+	plan := &nativeJSONCreatePlan{collection: collection, mutations: effects, lease: lease}
+	publication = &backenddb.NativePreparedPublication{Basis: base, Reprepare: plan, Custody: custody, Effects: changed, Dependencies: changed}
+	return publication, nil
 }
 
 func prepareNativeJSONCreateCommand(_ *backenddb.DB, env commitlog.CommandEnvelope, basis backenddb.NativeSemanticState, _ *backenddb.Snapshot, _ *backenddb.StableResourceCaptureLease) (*backenddb.NativePreparedPublication, error) {

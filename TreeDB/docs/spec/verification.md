@@ -4,6 +4,37 @@ This document maps specification invariants to existing tests and harnesses.
 
 ## Standalone shared COW delivery
 
+- `TestStandaloneColdCreateSurvivesUnrelatedNativePublication` parks one cold
+  implicit Mongo CREATE at the existing pre-admission hook, accepts one disjoint
+  public insert, then releases the original request exactly once. It requires
+  actual state/sequence/LSN movement, exact target ACK/readback and census,
+  CREATE-plus-row append-before/append-after/cut-swap deltas of two, sequence and
+  LSN deltas of two, checked original shutdown and fresh reopen. Native COW does
+  not emit `AfterLogicalMVCCStaging`; that observed counter stays zero. The
+  baseline RED classifies the exact outward BadValue basis-mismatch sentinel and
+  proves zero target assignment/install effects. This controlled cause does not
+  retrospectively attribute an earlier retained YCSB failure.
+- `TestNativeCreatePreservesPhysicalRebase` crosses a real cold public vacuum
+  and a published-state public checkpoint. The fixed arms require actual paired
+  pager/system-root/collection-root movement as appropriate, unchanged logical
+  sequence and nextLSN during maintenance, one original CREATE acknowledgement,
+  current physical provenance, exact seed/pending values, full admission refund,
+  checked Close and fresh reopen. No forced state or new runtime hook is used.
+- `TestNativeCreateOriginalCatalogConflict` stages the original plan, accepts a
+  same-name or disjoint-name catalog CREATE, and requires original catalog OCC
+  refusal with zero assignment/append/install. `TestNativeCreateAssignedFailureDoesNotRetry`
+  checks the existing postappend failure boundary: one assigned command, preserved
+  error and ambiguous completion, no second attempt. Keep the existing CREATE
+  status/refusal/syntax, replay/idempotence/incompatibility and private-cleanup
+  controls in normal and race coverage.
+  The refusal control checks the immediate error, LSN and namespace census,
+  then uses `JoinNativeSemanticCleanupForTest` to join the existing fixed worker
+  frontier before checking strict no-growth receipt counts. Consumed, unassigned
+  cancellation queues original partial-State and sparse-custody cleanup; this
+  test seam performs no checkpoint, retry, budget change or retained-cut release.
+  `TestCOWSemanticCleanupForTestJoinGuards` checks unsupported/nil handles and
+  refusal from an active cleanup callback before any self-join can occur.
+
 - `TestNativeOrdinaryInsertHistoryExpiry` pauses an ordinary public BSON insert
   across real disjoint writes until its opening is below the retained history
   floor. It requires one fresh reconstruction and one target WAL assignment,

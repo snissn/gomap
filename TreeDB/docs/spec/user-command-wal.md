@@ -1121,6 +1121,16 @@ Acceptance:
   validation;
 - unsupported index DDL is cheap and non-mutating in command-WAL mode.
 
+Ordinary native CREATE also preserves its original command intent when a
+disjoint native publication or compatible physical refresh advances the captured
+basis before admission. Original catalog-name and next-incarnation dependencies
+are validated before a CREATE-specific immutable plan composes against the
+current paired cut. This is preparation of the original operation, not a gateway
+retry. A competing catalog CREATE remains a conflict before assignment. Replay
+and deterministic apply retain ready-State preparation; schema compatibility,
+incarnation selection, ambiguity classification and durability barriers remain
+unchanged.
+
 PR6 evidence:
 
 - canonical frame fixture:
