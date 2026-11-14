@@ -510,6 +510,10 @@ type StableResourceToken struct {
 	metrics            resourceTokenMetrics
 }
 
+func beginResourceWriteback(file *os.File, frontier DurableFrontier) error {
+	return stableio.BeginWriteback(file, frontier.Bytes)
+}
+
 func NewStableResourceToken(spec StableResourceSpec) (*StableResourceToken, error) {
 	if spec.MetadataOwner != nil {
 		if spec.OriginalObservation != nil {
@@ -641,10 +645,16 @@ func initializeStableResourceToken(spec StableResourceSpec, normalized []StableL
 	}
 	flush := spec.FlushThrough
 	if flush == nil {
-		// Concrete producers drain userspace buffers before registration. The
-		// publication flush phase therefore has no additional file primitive;
-		// SyncThrough below owns the single default content fsync.
+		// Concrete producers already drained userspace buffers. Selected append
+		// mappings may initiate writeback before the unchanged full sync pass.
 		flush = func(*os.File, DurableFrontier) error { return nil }
+		// Owned construction clears spec.MetadataOwner before initializing the
+		// same pre-admitted token; inspect that actual allocation instead.
+		if token != nil && token.metadata != nil && !spec.ContentSynced && spec.SyncThrough == nil && spec.OwnedOperations == nil &&
+			((spec.Kind == ResourceValueLog && spec.Reachability == ReachabilityValueLogPointer) ||
+				(spec.Kind == ResourceOuterLeafLog && spec.Reachability == ReachabilityOuterLeafRawPointer)) {
+			flush = beginResourceWriteback
+		}
 	}
 	syncThrough := spec.SyncThrough
 	if syncThrough == nil {

@@ -1163,3 +1163,31 @@ background initialization/cleanup failure is retained and poisons the next
 observing entry before LSN assignment; earlier independent prefix proofs remain
 valid. No worker creates a token, changes a frontier, removes namespace debt or
 permits an early ACK. See the [container resource and lifecycle contract](storage-format.md#initialized-command-wal-container-v3).
+
+### Optional append-file writeback initiation
+
+Selected metadata-owned, unsynced value-log and raw outer-leaf tokens with
+static default operations initiate Linux `SYNC_FILE_RANGE_WRITE` during the
+existing flush-all pass, using the retained file descriptor and the greatest
+coalesced byte frontier. Manager read-only regular-file mappings may select the
+hint, since Linux writeback operates on the mapping without requiring a writable
+descriptor. Already-certified captures (`ContentSynced=true`), custom operations,
+generic tokens, command WAL/external RID, index and PRIMARY resources do not
+select it. Canonical recovered captures are already certified. Validation labels
+alone do not exclude live manager captures that still require their full sync.
+Zero bytes do nothing; unsigned frontiers that cannot fit a signed byte range
+are rejected. EINTR retries; ENOSYS/EOPNOTSUPP leave the optional hint unavailable;
+other errors remain flush errors. Other platforms use a no-op hint. WRITE-only
+initiation can itself block under congestion.
+
+This hint provides no content, namespace, release, retirement or ACK durability
+credit. Every original full dependency sync, physical-sync observer, namespace
+barrier, index/materialization and authority/meta ordering remains in force.
+PRIMARY still performs its fresh full post-staging sync. A flush error prevents
+index/materialization and meta publication through the existing error authority.
+No additional asynchronous owner or disk-format change is introduced.
+
+This is a behavior-preserving performance counterfactual with no intended public
+behavioral RED. Focused selection and safety controls do not establish public
+benefit; natural activation and complete lifecycle performance must be
+qualified separately before promotion.

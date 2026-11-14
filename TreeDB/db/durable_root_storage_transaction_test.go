@@ -186,3 +186,41 @@ func TestExecuteDurableRootStorageTransactionClassifiesIndexSyncFailureRetryable
 		t.Fatalf("meta write occurred after index sync failure: %v", events)
 	}
 }
+
+func TestExecuteDurableRootStorageTransactionFlushFailurePreventsPublication(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "dependency")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	wantErr := errors.New("writeback failed")
+	events := []string{}
+	token, err := rootpublication.NewStableResourceToken(rootpublication.StableResourceSpec{
+		Kind: rootpublication.ResourceValueLog, ResourceID: "1", Generation: 1, DiagnosticPath: "value_vlog/dependency", File: file, Reachability: rootpublication.ReachabilityValueLogPointer,
+		FlushThrough: func(*os.File, rootpublication.DurableFrontier) error {
+			events = append(events, "flush")
+			return wantErr
+		},
+		SyncThrough: func(*os.File, rootpublication.DurableFrontier) error { events = append(events, "sync"); return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	builder := rootpublication.NewStableResourceSetBuilder()
+	if err = builder.Add(token); err != nil {
+		token.Release()
+		t.Fatal(err)
+	}
+	resources, err := builder.Freeze()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resources.Release()
+	mutated, err := executeDurableRootStorageTransactionV1(durableRootStorageTransactionV1{
+		resources: resources, materialize: func() error { events = append(events, "materialize"); return nil }, syncIndex: func() error { events = append(events, "index"); return nil },
+		sink: recordingDurableRootSinkV1{events: &events}, target: MetaPage0ID, meta: testDurableMetaV1(t), syncMeta: func() error { events = append(events, "meta-sync"); return nil },
+	})
+	if !errors.Is(err, wantErr) || mutated || !reflect.DeepEqual(events, []string{"flush"}) {
+		t.Fatalf("mutated=%v err=%v events=%v", mutated, err, events)
+	}
+}

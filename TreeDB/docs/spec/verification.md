@@ -4927,3 +4927,22 @@ Existing `TestNativeTextV2ForwardIdentity*`, `TestNativeHybridPublicScalarPhysic
 forward-corruption, source-work and HNSW cache oracles. The frozen baseline RED
 controls are separate from candidate-focused and unchanged original Keyword
 B/A/A/B public evidence; no helper result replaces performance qualification.
+
+### Optional append writeback controls (#5417)
+
+`stableio/TestBeginWritebackRangeAndErrors` covers zero/overflow, EINTR, optional
+unavailability, real errors and allocation-free hint bookkeeping. Linux
+`TestBeginWritebackLinuxReadOnlyAndClosed` exercises actual descriptor errors.
+`rootpublication/TestStableResourceBeginWritebackSelectionAndFullSync` covers
+static default selection/exclusion, no durability credit and unchanged physical
+sync observers. `TestStableResourceWritebackCoalescedImportClonePinnedFrontier`
+checks greatest-frontier forwarding and retained identity through import/clone
+after diagnostic-path replacement. Linux valuelog
+`TestStableValueLogWritebackReadOnlyManagerRetainsFullSync` uses actual read-only
+descriptors to check manager capture with contentSynced=false, successful hint
+and the retained full sync. Already-certified recovery, generic and WAL
+exclusions are covered by the rootpublication selection test.
+`db/TestExecuteDurableRootStorageTransactionFlushFailurePreventsPublication`
+checks the existing pre-meta flush error boundary. Existing dependency, namespace,
+recovery, pointer-reopen and GC controls remain required. These tests do not
+prove public-path activation frequency or a performance improvement.
