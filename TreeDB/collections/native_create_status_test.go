@@ -168,18 +168,28 @@ func TestNativeCreateCollectionWithStatusRefusal(t *testing.T) {
 		if !errors.Is(err, memtable.ErrCOWCapacity) || got != nil || existed {
 			t.Fatalf("attempt %d: existed=%t meta=%v err=%v", attempt, existed, got, err)
 		}
-		after := budget.Stats()
-		// Producer preflight may retire earlier checkpoint-owned receipts even
-		// with the semantic setup cuts pinned. A refused request must retain
-		// no added reservation or lease, and must assign no WAL identity.
-		if after.ReservedBytes > before.ReservedBytes || after.ExternalLeases > before.ExternalLeases || c.nativeJSON.db.CommandWALNextLSN() != beforeLSN {
-			t.Fatalf("refused create added receipts or changed WAL: before=%+v after=%+v", before, after)
+		if c.nativeJSON.db.CommandWALNextLSN() != beforeLSN {
+			t.Fatal("refused create assigned a WAL identity")
 		}
 		dbCoord.mu.Lock()
 		afterNamespaces := len(dbCoord.collections)
 		dbCoord.mu.Unlock()
 		if afterNamespaces != beforeNamespaces {
 			t.Fatalf("refused create retained namespace coordinators: before=%d after=%d", beforeNamespaces, afterNamespaces)
+		}
+		// A consumed, unassigned cancellation transfers its original sparse
+		// custody and any partial State to the existing cleanup worker. Observe
+		// receipt retirement after that fixed frontier, without checkpointing
+		// or releasing the original pinned semantic setup cuts.
+		if err := c.nativeJSON.db.JoinNativeSemanticCleanupForTest(); err != nil {
+			t.Fatal(err)
+		}
+		after := budget.Stats()
+		// Producer preflight may retire earlier checkpoint-owned receipts even
+		// with the semantic setup cuts pinned. The completed refusal must retain
+		// no added reservation or lease, and must assign no WAL identity.
+		if after.ReservedBytes > before.ReservedBytes || after.ExternalLeases > before.ExternalLeases || c.nativeJSON.db.CommandWALNextLSN() != beforeLSN {
+			t.Fatalf("refused create added receipts or changed WAL: before=%+v after=%+v", before, after)
 		}
 	}
 	blocker.Close()
