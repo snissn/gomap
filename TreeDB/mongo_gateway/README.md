@@ -91,6 +91,30 @@ timing. `B/op` and `allocs/op` cover the driver, gateway and background Go work
 in the same process. This read-only hot-fixture benchmark is separate from the
 100k-row mixed YCSB workload and final MongoDB-relative qualification.
 
+## Insert request buffer lifetime
+
+The standalone opener binds insert-buffer reuse to its own native collection
+manager. After a synchronous insert completes, native staging and the canonical
+command image own their inputs, so the next OP_MSG or OP_QUERY read may overwrite
+the server's request body. Coalesced commands wait for their individual completion.
+A general/legacy server, a replaced collection manager, or a routed server keeps
+the conservative insert exclusion. The retained-buffer size cap and direct
+buffered-message whitelist are unchanged; insert is still excluded from the
+bufio.Peek path. Configuration must not be mutated concurrently with serving.
+
+A finite native wire-to-ACK allocation comparison uses prebuilt ~1KB BSON
+requests; fixture construction, checkpoint and checked Close are outside timing:
+
+```sh
+GOWORK=off go test ./TreeDB/mongo_gateway -run '^$' \
+  -bench '^BenchmarkStandaloneInsertReadBufferReuse$' \
+  -benchmem -benchtime=1000x -count=3
+```
+
+Its whole-process B/op and allocs/op include gateway and background Go work.
+These local measurements do not establish public Load throughput or sustained
+mixed-workload benefit; use the maintained qualification harness for those.
+
 ## Storage memory admission
 
 The standalone opener owns the shared immutable COW database for its full
