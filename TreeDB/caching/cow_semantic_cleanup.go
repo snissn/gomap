@@ -106,6 +106,11 @@ func (db *DB) drainSemanticCleanup() {
 	// the same worker may publish again after this function returns.
 	guard := db.ownedCloseGuard
 	entered := false
+	defer func() {
+		if entered {
+			guard.LeaveCleanup()
+		}
+	}()
 	for {
 		c.semanticMu.Lock()
 		record := c.semanticHead
@@ -128,7 +133,6 @@ func (db *DB) drainSemanticCleanup() {
 			err = guard.EnterCleanup()
 			if err == nil {
 				entered = true
-				defer guard.LeaveCleanup()
 			}
 		}
 		if err == nil {
