@@ -59,6 +59,16 @@ schema for the index count without publishing a mutation. ColumnStore
 `WithStats` remains unsupported here; plain typed insertion and the separate
 typed diagnostics API retain their previous behavior.
 
+INSERT, UPDATE and document-scan statistics use separate private per-handle
+backing allocated on the first corresponding statistics write and reused on
+later writes. Existing per-handle mutexes protect initialization and replacement.
+Unused getters return zero snapshots without allocating. INSERT and UPDATE secondary-run
+arrays remain cloned on ordinary storage and retrieval; the owned INSERT setter
+continues to transfer its already-owned array without another copy. Update-domain
+observations still occur after releasing the handle's statistics lock. This
+process-local layout preserves all counters and snapshot ownership without
+changing metadata capture, publication or recovery.
+
 Native counts come from the captured scalar declarations and actual prepared
 primary/additional logical domain runs, including encoded secondary entry/key
 sizes. They count prepared work, not physical checkpoint roots. `AlreadySorted`
