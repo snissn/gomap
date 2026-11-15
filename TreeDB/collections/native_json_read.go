@@ -36,23 +36,13 @@ type NativeJSONRead struct {
 }
 
 func (m *NativeJSONManager) Capture(name string) (result *NativeJSONRead, resultErr error) {
-	if err := ValidateCollectionName(name); err != nil {
-		return nil, err
-	}
-	if m == nil || m.db == nil {
-		return nil, backenddb.ErrClosed
-	}
-	capture, err := m.db.CaptureNativeSemanticState()
-	if err != nil {
-		return nil, err
-	}
 	charge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(NativeJSONRead{})))
 	for _, bytes := range valuelog.COWInspectionMetadataAllocationSizes() {
 		charge += memtable.COWAllocationCharge(bytes)
 	}
-	lease, err := capture.NativeAllocator().AdmitNativeBytes(charge)
+	capture, lease, err := m.captureNativeCatalog(name, charge)
 	if err != nil {
-		return nil, errors.Join(err, capture.Close())
+		return nil, err
 	}
 	r := &NativeJSONRead{capture: capture, lease: lease, database: m.db}
 	defer func() {
@@ -60,43 +50,12 @@ func (m *NativeJSONManager) Capture(name string) (result *NativeJSONRead, result
 			resultErr = errors.Join(resultErr, r.Close())
 		}
 	}()
-	base, ok := capture.State().(*nativeEngineVersion)
-	if capture.State() != nil && !ok {
-		return nil, backenddb.ErrNativeSemanticUnsupported
+	r.engine, r.collection, r.privateEngine, err = resolveNativeCatalog(capture, name)
+	if err != nil {
+		return nil, err
 	}
-	if base == nil {
-		if projection, ok := capture.(interface {
-			NativeCatalogProjection(func(backenddb.NativeSemanticCapture) (backenddb.NativeSemanticState, error)) (backenddb.NativeSemanticState, error)
-		}); ok {
-			state, projectionErr := projection.NativeCatalogProjection(nativeJSONCatalogProjection)
-			base, ok = state.(*nativeEngineVersion)
-			if projectionErr != nil {
-				// Partial failed construction remains on the original read's
-				// cleanup path, outside both projection locks; never shared.
-				r.privateEngine = base
-				return nil, projectionErr
-			}
-			if !ok || base == nil {
-				return nil, backenddb.ErrNativeSemanticUnsupported
-			}
-		} else {
-			// Other original capture implementations retain private import
-			// ownership. No process/manager cache or alternate capture is used.
-			r.privateEngine, err = importNativeJSONCatalog(capture)
-			if err != nil {
-				return nil, err
-			}
-			base = r.privateEngine
-		}
-	}
-
-	r.engine = base
-	c, ok := base.names.Get(name)
-	if !ok {
-		return nil, tree.ErrKeyNotFound
-	}
+	c := r.collection
 	r.meta = *c.schema.meta
-	r.collection = c
 	d, ok := c.domains.Get("primary")
 	if !ok {
 		return r, nil
@@ -507,12 +466,9 @@ func (r *NativeJSONRead) Close() error {
 	var err error
 	r.collection = nil
 	r.engine = nil
-	if r.privateEngine != nil {
-		record := r.privateEngine.Release()
-		r.privateEngine = nil
-		err = finishPrivateNative(record)
-	}
-	err = errors.Join(err, r.capture.Close())
+	privateEngine := r.privateEngine
+	r.privateEngine = nil
+	err = closeNativeCatalog(r.capture, privateEngine)
 	r.failure = err
 	r.capture = nil
 	lease := r.lease
