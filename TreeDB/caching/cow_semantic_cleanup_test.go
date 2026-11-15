@@ -206,12 +206,20 @@ func TestCOWSemanticFailureParksSameWorkAndGuardsDestructorAndNotificationClose(
 	}
 	defer filler.Close()
 	var destructClose, notifyClose, destructPrepare, notifyPrepare error
+	var firstClose, lastClose, firstPrepare, lastPrepare error
+	first := newTestSemanticState(func() error {
+		firstClose, firstPrepare = db.Close(), db.PrepareNativeProducer()
+		return nil
+	})
 	failed := newTestSemanticState(func() error {
 		destructClose = db.Close()
 		destructPrepare = db.PrepareNativeProducer()
 		return failure
 	})
-	successful := newTestSemanticState(nil)
+	successful := newTestSemanticState(func() error {
+		lastClose, lastPrepare = db.Close(), db.PrepareNativeProducer()
+		return nil
+	})
 	original := failed.resource
 	notifications := 0
 	db.notifyError = func(err error) {
@@ -223,11 +231,12 @@ func TestCOWSemanticFailureParksSameWorkAndGuardsDestructorAndNotificationClose(
 		notifyPrepare = db.PrepareNativeProducer()
 	}
 	c.semanticMu.Lock()
+	c.enqueueSemanticLocked(first.Release())
 	c.enqueueSemanticLocked(failed.Release())
 	c.enqueueSemanticLocked(successful.Release())
 	c.semanticMu.Unlock()
 	db.drainSemanticCleanup()
-	if destructClose == nil || notifyClose == nil || destructPrepare == nil || notifyPrepare == nil || db.closing.Load() {
+	if firstClose == nil || lastClose == nil || firstPrepare == nil || lastPrepare == nil || destructClose == nil || notifyClose == nil || destructPrepare == nil || notifyPrepare == nil || db.closing.Load() {
 		t.Fatal("same-caller Close was not rejected before side effects")
 	}
 	if notifications != 1 || db.backgroundError() != failure || c.semanticFailed != &failed.cleanup || failed.cleanup.Work != failed || failed.cleanup.Err != failure || failed.resource != original || original.charge != 8192 {
@@ -237,7 +246,7 @@ func TestCOWSemanticFailureParksSameWorkAndGuardsDestructorAndNotificationClose(
 	if err := db.joinSemanticCleanupFrontier(); err != failure {
 		t.Fatalf("pressure join lost original cleanup failure: %v", err)
 	}
-	if failed.calls != 1 || successful.calls != 1 || successful.resource != nil || failed.resource != original {
+	if first.calls != 1 || first.resource != nil || failed.calls != 1 || successful.calls != 1 || successful.resource != nil || failed.resource != original {
 		t.Fatal("replayed original work or lost successful sibling refund")
 	}
 }
@@ -245,13 +254,15 @@ func TestCOWSemanticFailureParksSameWorkAndGuardsDestructorAndNotificationClose(
 func TestCOWSemanticGuardRefusalPoisonsWithoutUnsafeNotification(t *testing.T) {
 	db, c := cowCutFixture(t)
 	state := newTestSemanticState(nil)
+	sibling := newTestSemanticState(nil)
 	notifications := 0
 	db.notifyError = func(error) { notifications++ }
 	c.semanticMu.Lock()
 	c.enqueueSemanticLocked(state.Release())
+	c.enqueueSemanticLocked(sibling.Release())
 	c.semanticMu.Unlock()
 	db.drainSemanticCleanup() // bare test factory deliberately has no original guard
-	if db.backgroundError() != rootpublication.ErrPublisherProtocol || state.calls != 0 || state.cleanup.Work != state || c.semanticFailed != &state.cleanup || notifications != 0 {
+	if db.backgroundError() != rootpublication.ErrPublisherProtocol || state.calls != 0 || sibling.calls != 0 || state.cleanup.Work != state || sibling.cleanup.Work != sibling || c.semanticFailed != &sibling.cleanup || sibling.cleanup.Next != &state.cleanup || c.semanticCompleted != 2 || notifications != 0 {
 		t.Fatal("guard refusal lost original terminal custody")
 	}
 }
@@ -279,6 +290,7 @@ func TestCOWSemanticOriginalCompletionScrubsBeforeContainingRefund(t *testing.T)
 	}
 	before := c.budget.Stats()
 	state := newTestSemanticState(nil)
+	first := newTestSemanticState(nil)
 	refund := &observingSemanticRefund{lease: lease}
 	refund.observe = func() {
 		if state.cleanup.Work != nil || state.cleanup.Next != nil || state.cleanup.Err != nil || state.resource != nil || state.refund != nil {
@@ -297,10 +309,11 @@ func TestCOWSemanticOriginalCompletionScrubsBeforeContainingRefund(t *testing.T)
 	}
 	state.refund = refund
 	c.semanticMu.Lock()
+	c.enqueueSemanticLocked(first.Release())
 	c.enqueueSemanticLocked(state.Release())
 	c.semanticMu.Unlock()
 	db.drainSemanticCleanup()
-	if refund.calls != 1 || c.budget.Stats().ExternalBytes >= before.ExternalBytes {
+	if first.calls != 1 || first.resource != nil || refund.calls != 1 || c.budget.Stats().ExternalBytes >= before.ExternalBytes {
 		t.Fatal("original containing charge not refunded exactly once")
 	}
 	db.drainSemanticCleanup()
