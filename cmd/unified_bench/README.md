@@ -1945,3 +1945,28 @@ joined. The default-off path retains its original shutdown behavior. Before DB
 initialization the receipt path must have an existing parent and must not alias
 configured CPU, allocation, checkpoint, block, mutex, trace or profile-directory
 report outputs (including generated per-test names and benchprof insights).
+
+### Focused native uniqueness cursor allocation
+
+The standalone collection recipe uses the native COW `command_wal_relaxed`
+BSON public insert API. Setup/input construction and checked checkpoint,
+Close and reopen verification are outside request timing; public result
+ownership remains inside. The bounded 64-request run avoids longer-run pressure
+and maintenance effects when inspecting per-request allocation costs:
+
+```sh
+GOWORK=off go test ./TreeDB/collections -run '^$' \
+  -bench '^BenchmarkNativeUniqueCursorPublic$' -benchmem -benchtime=64x -count=5
+GOWORK=off go test ./TreeDB/collections -run '^$' \
+  -bench '^BenchmarkNativeUniqueCursorPublic$' -benchmem -benchtime=1000x \
+  -memprofilerate=1 -memprofile=unique-cursor.allocs.pprof
+GOWORK=off go tool pprof -sample_index=alloc_space \
+  -list='checkNativeUpdateUnique|scanNativeUpdateUnique' unique-cursor.allocs.pprof
+```
+
+The 1000-request profile can include ordinary pressure/maintenance allocations;
+report them rather than treating its total as the bounded 64-request cost.
+A missing cursor symbol is meaningful only with the public native activation,
+ACK and assignment checks retained by the benchmark. These package-test profiles
+are separate artifacts, not `benchprof -profiles-dir` inputs or public YCSB TPS
+qualification.

@@ -331,6 +331,9 @@ type typedStorageLegacyNameAllowlistEntry struct {
 }
 
 var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
+	// Unique-cursor typed controls consume retained public schema metadata
+	// to select explicit row ownership.
+	{path: "TreeDB/collections/native_unique_cursor_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
 	// Source preflight consumes the retained public schema field; its refusal
 	// fixtures use the public configuration and value-type names.
 	{path: "TreeDB/collections/document_ingestion.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
