@@ -264,6 +264,7 @@ func OpenStandaloneServer(opts StandaloneOptions) (*StandaloneServer, error) {
 	}
 	server := NewServer()
 	server.Collections = manager
+	server.nativeInsertBufferManager = manager
 	server.diagnosticCommandWALEnabled = backend.CommandWALEnabled
 	server.DefaultCollectionOptions = normalized.DefaultCollectionOptions
 	server.DefaultIndexStoragePolicy = normalized.DefaultIndexStoragePolicy

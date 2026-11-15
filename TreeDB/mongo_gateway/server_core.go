@@ -80,8 +80,10 @@ type Server struct {
 	InsertCoalescingMaxBatch int
 	// InsertCoalescingIdleTTL removes an idle per-collection coalescer after this
 	// duration. Zero uses the default; negative disables idle removal.
-	InsertCoalescingIdleTTL   time.Duration
-	Collections               *collections.CollectionManager
+	InsertCoalescingIdleTTL time.Duration
+	Collections             *collections.CollectionManager
+	// Only the standalone native owner certifies insert input lifetime.
+	nativeInsertBufferManager *collections.CollectionManager
 	DefaultCollectionOptions  collections.CollectionOptions
 	DefaultIndexStoragePolicy collections.RootStoragePolicy
 	ClusterSubmitter          treenativewire.ClusterSubmitter
@@ -766,6 +768,16 @@ func (s *Server) handleMessageInto(ctx context.Context, dst []byte, h wire.Heade
 	}
 }
 
+// canRetainRequestBody permits a subsequent read to overwrite the body only
+// after the synchronous command has stopped consuming it. Native inserts own
+// their staged inputs; general/legacy and routed servers retain the old fence.
+func (s *Server) canRetainRequestBody(name string) bool {
+	if name != "insert" {
+		return true
+	}
+	return s != nil && s.nativeInsertBufferManager != nil && s.nativeInsertBufferManager == s.Collections && !s.clusterSubmitterConfigured()
+}
+
 func (s *Server) handleQuery(h wire.Header, body []byte, cursorOwner int64) ([]byte, error) {
 	response, _, err := s.handleQueryInto(context.Background(), nil, h, body, cursorOwner)
 	return response, err
@@ -789,10 +801,10 @@ func (s *Server) handleQueryInto(ctx context.Context, dst []byte, h wire.Header,
 	response, err = s.commandResponse(ctx, name, q.Query, nil, cursorOwner)
 	diagnosticFailed = err != nil || !commandResponseOK(response)
 	if err != nil {
-		return nil, name != "insert", err
+		return nil, s.canRetainRequestBody(name), err
 	}
 	reply, err := wire.AppendReplyMessage(dst, s.nextID(), h.RequestID, 0, 0, 0, response)
-	return reply, name != "insert", err
+	return reply, s.canRetainRequestBody(name), err
 }
 
 func (s *Server) handleMsg(h wire.Header, body []byte, cursorOwner int64) ([]byte, error) {
@@ -814,7 +826,7 @@ func (s *Server) handleMsgInto(ctx context.Context, dst []byte, h wire.Header, b
 	defer func() {
 		s.noteDiagnosticCommand(name, msg.Body, time.Since(started), diagnosticFailed || err != nil)
 	}()
-	retainRequestBody = name != "insert"
+	retainRequestBody = s.canRetainRequestBody(name)
 
 	if commandRejectsReadOPMsgFeatures(name) {
 		// These read paths neither consume document sequences nor support
