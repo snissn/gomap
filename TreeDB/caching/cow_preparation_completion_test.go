@@ -67,7 +67,9 @@ func TestCOWBatchScratchDetachesBorrowedAliasesBeforeCompletion(t *testing.T) {
 // basis charged through its independently admitted original registry custody.
 // The cleared private wrapper and successful neighbors finish exactly once.
 func TestCOWCancelledPreparationKeepsOriginalFailedBasisAndCharge(t *testing.T) {
-	db, c := cowCutFixture(t)
+	// Failed original custody deliberately survives until physical backend
+	// cleanup, after the cache budget owner closes. Require that terminal error.
+	db, c := cowCutFixtureWithExpectedCloseError(t, memtable.ErrCOWClosed)
 	backend := db.backend.(*backenddb.DB)
 	var original *cowBackendBasis
 	snapshot, err := backend.AcquireSnapshotWithAllocationAdmission(func(s backenddb.SnapshotAllocationSizes) error {

@@ -15,6 +15,11 @@ import (
 
 func cowCutFixture(t testing.TB) (*DB, *cowCache) {
 	t.Helper()
+	return cowCutFixtureWithExpectedCloseError(t, nil)
+}
+
+func cowCutFixtureWithExpectedCloseError(t testing.TB, wantCloseErr error) (*DB, *cowCache) {
+	t.Helper()
 	backend, err := backenddb.Open(backenddb.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
@@ -34,8 +39,8 @@ func cowCutFixture(t testing.TB) (*DB, *cowCache) {
 	db := &DB{backend: backend, cow: c, mutableShards: make([]memShard, 2), mutableShardMask: 1}
 	t.Cleanup(func() {
 		c.close()
-		if err := backend.Close(); err != nil {
-			t.Error(err)
+		if err := backend.Close(); (wantCloseErr == nil && err != nil) || (wantCloseErr != nil && !errors.Is(err, wantCloseErr)) {
+			t.Errorf("backend.Close() = %v; want %v", err, wantCloseErr)
 		}
 	})
 	return db, c
