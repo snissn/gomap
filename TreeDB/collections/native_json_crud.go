@@ -193,6 +193,17 @@ func buildNativeCRUDFinalPlan(name string, opts collectionOptions, runtimes []in
 // recorded in the same history namespace before canonical assignment. A prior
 // owner may be replaced only when the maintained whole-batch handoff permits it.
 func (t *NativeJSONTxn) checkNativeUpdateUnique(g *nativeJSONTxnBinding, runtimes []indexRuntime, changed []preparedBatchUpdate, replacements batchUniqueReplacementSet) error {
+	// Keep escaping cursor storage behind the no-unique boundary. Ordinary
+	// no-index/nonunique mutations need no successor cursor at all.
+	for _, runtime := range runtimes {
+		if runtime.def.unique {
+			return t.scanNativeUpdateUnique(g, runtimes, changed, replacements)
+		}
+	}
+	return nil
+}
+
+func (t *NativeJSONTxn) scanNativeUpdateUnique(g *nativeJSONTxnBinding, runtimes []indexRuntime, changed []preparedBatchUpdate, replacements batchUniqueReplacementSet) error {
 	var cursor [page.PageSize + 1]byte
 	for runtimeIdx, runtime := range runtimes {
 		if !runtime.def.unique {
