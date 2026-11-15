@@ -101,6 +101,16 @@ func (db *DB) drainSemanticCleanup() {
 	if c == nil {
 		return
 	}
+	// One synchronous drain keeps the same caller identity. Scope the original
+	// marker to this invocation, including completion refunds, never flushLoop:
+	// the same worker may publish again after this function returns.
+	guard := db.ownedCloseGuard
+	entered := false
+	defer func() {
+		if entered {
+			guard.LeaveCleanup()
+		}
+	}()
 	for {
 		c.semanticMu.Lock()
 		record := c.semanticHead
@@ -118,8 +128,13 @@ func (db *DB) drainSemanticCleanup() {
 		// Guard actual destruction AND the synchronous NotifyError callback. Close
 		// from this caller must refuse before public/cache waits on this worker.
 		var completion rootpublication.SemanticCleanupCompletion
-		err := db.ownedCloseGuard.EnterCleanup()
-		entered := err == nil
+		var err error
+		if !entered {
+			err = guard.EnterCleanup()
+			if err == nil {
+				entered = true
+			}
+		}
 		if err == nil {
 			completion, err = record.Finish()
 			if err != nil {
@@ -158,9 +173,6 @@ func (db *DB) drainSemanticCleanup() {
 		// or Work access may follow completion of the independent receipt.
 		record = nil
 		completion.Complete()
-		if entered {
-			db.ownedCloseGuard.LeaveCleanup()
-		}
 		c.semanticMu.Lock()
 		c.semanticRunning = false
 		c.semanticCompleted++

@@ -1144,3 +1144,40 @@ A missing cursor symbol is meaningful only with the public native activation,
 ACK and assignment checks retained by the benchmark. These package-test profiles
 are separate artifacts, not `benchprof -profiles-dir` inputs or public YCSB TPS
 qualification.
+
+### Semantic cleanup guard drain cost
+
+`BenchmarkCOWSemanticCleanupGuardDrain/{one,many}` in `TreeDB/caching`
+prequeues 1 or 64 original cleanup records and times one synchronous drain,
+including its guard, Finish, completion/refund and frontier work. Setup and checked
+final cleanup are outside the timer; each iteration checks original refunds and
+accounting. Report ns/drain, B/drain and allocs/drain, dividing by the reported
+`records/drain` for per-record cost. The one-record case controls for work with no
+amortization. Use separate prebuilt baseline/candidate test binaries and five
+alternating bounded samples on an otherwise quiet machine:
+
+```sh
+GOWORK=off go test -c -o /tmp/cleanup-caching.test ./TreeDB/caching
+/tmp/cleanup-caching.test -test.run '^$' \
+  -test.bench '^BenchmarkCOWSemanticCleanupGuardDrain$' \
+  -test.benchmem -test.benchtime=100x -test.count=1
+```
+
+The separate diagnostic `TestCOWSemanticCleanupGuardDrainBatch/{empty,one,many}`
+prequeues 0/1/64 records. Run each subtest independently, preserving distinct raw
+coverage files and identifying the backend `EnterCleanup` entry block:
+
+```sh
+GOWORK=off go test ./TreeDB/caching \
+  -run '^TestCOWSemanticCleanupGuardDrainBatch$/^many$' -count=1 \
+  -coverpkg=github.com/snissn/gomap/TreeDB/db -covermode=count \
+  -coverprofile=cleanup-many.cover
+```
+
+Coverage is a source-specific work-count witness, never timing evidence. These
+standalone Go artifacts are not `benchprof` inputs; inspect any Go profiles
+directly with `go tool pprof`. A prequeued drain improvement alone does not prove
+public throughput or CPU benefit. Public qualification must show natural cleanup
+activation, measured useful cost reduction, and unchanged Load/mixed, tail,
+Close/reopen, storage and accounting guardrails using the maintained public
+harness. Preserve exact source, toolchain, commands and all samples.
