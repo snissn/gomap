@@ -13,7 +13,7 @@ import (
 // The existing API's native role owns no legacy coordinator, write domain or
 // raw barrier. Both public frontends use the same NativeJSONTxn preparation.
 func (m *CollectionManager) openNativeCollection(name string) (collection *Collection, resultErr error) {
-	read, err := m.nativeJSON.Capture(name)
+	read, err := m.nativeJSON.captureCatalog(name)
 	if errors.Is(err, tree.ErrKeyNotFound) {
 		return nil, errors.Join(ErrCollectionNotFound, err)
 	}
@@ -21,7 +21,7 @@ func (m *CollectionManager) openNativeCollection(name string) (collection *Colle
 		return nil, err
 	}
 	defer func() { resultErr = errors.Join(resultErr, read.Close()) }()
-	meta := read.meta.copy()
+	meta := read.collection.schema.meta.copy()
 	coord := collectionSchemaCoordinatorForDBCollection(m.nativeJSON.db, name)
 	if coord == nil {
 		return nil, backenddb.ErrClosed

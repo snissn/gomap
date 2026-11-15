@@ -4448,11 +4448,11 @@ func (c *Collection) MetaView() CollectionMeta {
 // lend a schema slice whose owner has already retired. Their no-error API keeps
 // the opening owned-copy fallback when a new capture is unavailable.
 func (c *Collection) nativeMetaCopy() CollectionMeta {
-	read, err := c.nativeJSON.Capture(c.meta.Name)
+	read, err := c.nativeJSON.captureCatalog(c.meta.Name)
 	if err != nil {
 		return *c.meta.copy()
 	}
-	meta := read.meta.copy()
+	meta := read.collection.schema.meta.copy()
 	_ = read.Close()
 	return *meta
 }
@@ -4472,11 +4472,11 @@ func (c *Collection) SameCachedCatalog(other *Collection) bool {
 		// Native logical roots need no physical catalog root. Compare actual
 		// incarnation and immutable schema identity while BOTH captures are live;
 		// a concurrent schema replacement conservatively declines coalescing.
-		left, err := c.nativeJSON.Capture(c.name)
+		left, err := c.nativeJSON.captureCatalog(c.name)
 		if err != nil {
 			return false
 		}
-		right, err := other.nativeJSON.Capture(other.name)
+		right, err := other.nativeJSON.captureCatalog(other.name)
 		if err != nil {
 			_ = left.Close()
 			return false

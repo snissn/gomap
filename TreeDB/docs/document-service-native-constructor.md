@@ -180,3 +180,10 @@ next command LSN, empty catalog and filesystem namespace/file lengths on refusal
 This is an owner/public-service composition control, not a claim that every
 specialized request is transported by either command protocol. Its exact-source
 execution and the maintained specialized matrices remain required separately.
+
+Native collection metadata operations retain a fresh complete-cut capture and
+copy schema metadata before releasing it. Their internal compact catalog scope
+shares catalog resolution and primary-domain validation with the full read
+constructor, but grants no row-read or mutation authority. It retains no cached
+catalog across operations; public row reads keep their original scope and
+ownership. Persistent value-log storage and redo-WAL durability are unchanged.
