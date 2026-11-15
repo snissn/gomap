@@ -441,11 +441,11 @@ type Collection struct {
 	catalogSystemRoot          uint64
 	catalog                    *collectionCatalog
 	insertStatsMu              sync.RWMutex
-	lastInsertStats            CollectionInsertStats
+	lastInsertStats            *CollectionInsertStats
 	updateStatsMu              sync.RWMutex
-	lastUpdateStats            CollectionUpdateStats
+	lastUpdateStats            *CollectionUpdateStats
 	documentScanStatsMu        sync.RWMutex
-	lastDocumentScanStats      CollectionDocumentScanStats
+	lastDocumentScanStats      *CollectionDocumentScanStats
 	vectorIndexLoadMu          sync.Mutex
 	vectorIndexMutationMu      sync.Mutex
 	vectorIndexesMu            sync.RWMutex
@@ -1894,7 +1894,10 @@ func (c *Collection) LastInsertStats() CollectionInsertStats {
 	}
 	c.insertStatsMu.RLock()
 	defer c.insertStatsMu.RUnlock()
-	return cloneCollectionInsertStats(c.lastInsertStats)
+	if c.lastInsertStats == nil {
+		return CollectionInsertStats{}
+	}
+	return cloneCollectionInsertStats(*c.lastInsertStats)
 }
 
 func (c *Collection) setLastInsertStats(stats CollectionInsertStats) {
@@ -1909,7 +1912,10 @@ func (c *Collection) setLastInsertStatsOwned(stats CollectionInsertStats) {
 		return
 	}
 	c.insertStatsMu.Lock()
-	c.lastInsertStats = stats
+	if c.lastInsertStats == nil {
+		c.lastInsertStats = new(CollectionInsertStats)
+	}
+	*c.lastInsertStats = stats
 	c.insertStatsMu.Unlock()
 }
 
@@ -1928,7 +1934,10 @@ func (c *Collection) LastUpdateStats() CollectionUpdateStats {
 	}
 	c.updateStatsMu.RLock()
 	defer c.updateStatsMu.RUnlock()
-	return cloneCollectionUpdateStats(c.lastUpdateStats)
+	if c.lastUpdateStats == nil {
+		return CollectionUpdateStats{}
+	}
+	return cloneCollectionUpdateStats(*c.lastUpdateStats)
 }
 
 func (c *Collection) setLastUpdateStats(stats CollectionUpdateStats) {
@@ -1936,7 +1945,10 @@ func (c *Collection) setLastUpdateStats(stats CollectionUpdateStats) {
 		return
 	}
 	c.updateStatsMu.Lock()
-	c.lastUpdateStats = cloneCollectionUpdateStats(stats)
+	if c.lastUpdateStats == nil {
+		c.lastUpdateStats = new(CollectionUpdateStats)
+	}
+	*c.lastUpdateStats = cloneCollectionUpdateStats(stats)
 	c.updateStatsMu.Unlock()
 	if c.writeDomain != nil {
 		c.writeDomain.observeUpdateBatchStats(stats)
@@ -1958,7 +1970,10 @@ func (c *Collection) LastDocumentScanStats() CollectionDocumentScanStats {
 	}
 	c.documentScanStatsMu.RLock()
 	defer c.documentScanStatsMu.RUnlock()
-	return c.lastDocumentScanStats
+	if c.lastDocumentScanStats == nil {
+		return CollectionDocumentScanStats{}
+	}
+	return *c.lastDocumentScanStats
 }
 
 func (c *Collection) setLastDocumentScanStats(stats CollectionDocumentScanStats) {
@@ -1966,7 +1981,10 @@ func (c *Collection) setLastDocumentScanStats(stats CollectionDocumentScanStats)
 		return
 	}
 	c.documentScanStatsMu.Lock()
-	c.lastDocumentScanStats = stats
+	if c.lastDocumentScanStats == nil {
+		c.lastDocumentScanStats = new(CollectionDocumentScanStats)
+	}
+	*c.lastDocumentScanStats = stats
 	c.documentScanStatsMu.Unlock()
 }
 
