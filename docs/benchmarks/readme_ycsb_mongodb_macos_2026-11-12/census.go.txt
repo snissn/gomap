@@ -1,0 +1,753 @@
+// Untimed public-API validation only. Build from the frozen GoMap module root:
+// go build -o /absolute/census /absolute/recipe/census.go
+// Sources: GoMap 2590d1e9 cmd/mongo_gateway_bench/main.go:6955-7099;
+// go-ycsb 3c814849 pkg/util/hash.go:21-31 and pkg/workload/core.go:159-171.
+// A valid census is observed-state/shape evidence, not every-write, atomicity,
+// crash, power-loss, original benchmark Close, or physical index activation proof.
+package main
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"hash/fnv"
+	"math"
+	"os"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
+	"go.mongodb.org/mongo-driver/v2/mongo/readpref"
+)
+
+type config struct {
+	URI, Database, Collection, Shape string
+	Documents, SecondaryIndexes      int
+	RangeIndex, PingOnly, SelfTest   bool
+	Timeout                          time.Duration
+}
+
+type callResult struct {
+	Name      string `json:"name"`
+	Attempted bool   `json:"attempted"`
+	Success   bool   `json:"success"`
+	Error     string `json:"error"`
+	StartUTC  string `json:"start_utc"`
+	EndUTC    string `json:"end_utc"`
+	ElapsedNS int64  `json:"elapsed_ns"`
+}
+
+type commandObservation struct {
+	Status   string          `json:"status"`
+	Response json.RawMessage `json:"response,omitempty"`
+	Error    string          `json:"error,omitempty"`
+}
+
+type queryResult struct {
+	Name     string `json:"name"`
+	Hint     string `json:"declared_metadata_index,omitempty"`
+	Expected int    `json:"expected_count"`
+	Observed int    `json:"observed_count"`
+	Success  bool   `json:"success"`
+}
+
+type report struct {
+	SchemaVersion    int                           `json:"schema_version"`
+	Kind             string                        `json:"kind"`
+	Success          bool                          `json:"success"`
+	Error            string                        `json:"error"`
+	Database         string                        `json:"database,omitempty"`
+	Collection       string                        `json:"collection,omitempty"`
+	Shape            string                        `json:"shape,omitempty"`
+	Expected         int                           `json:"expected_count"`
+	Observed         int                           `json:"observed_count"`
+	Missing          int                           `json:"missing_count"`
+	Extra            int                           `json:"extra_count"`
+	Duplicate        int                           `json:"duplicate_count"`
+	Digest           string                        `json:"canonical_typed_state_sha256,omitempty"`
+	DigestSchema     string                        `json:"digest_schema"`
+	IndexStatus      string                        `json:"index_status"`
+	Indexes          []string                      `json:"observed_indexes,omitempty"`
+	Queries          []queryResult                 `json:"queries,omitempty"`
+	Identity         map[string]commandObservation `json:"identity,omitempty"`
+	Calls            []callResult                  `json:"checked_calls"`
+	StartedUTC       string                        `json:"started_utc"`
+	EndedUTC         string                        `json:"ended_utc"`
+	ElapsedNS        int64                         `json:"elapsed_ns"`
+	SelfTestControls int                           `json:"self_test_controls,omitempty"`
+}
+
+func checked(name string, fn func() error) (callResult, error) {
+	start := time.Now()
+	err := fn()
+	r := callResult{Name: name, Attempted: true, Success: err == nil, StartUTC: start.UTC().Format(time.RFC3339Nano), EndUTC: time.Now().UTC().Format(time.RFC3339Nano), ElapsedNS: time.Since(start).Nanoseconds()}
+	if err != nil {
+		r.Error = err.Error()
+	}
+	return r, err
+}
+
+func closeCursor(cursor *mongo.Cursor, name string, r *report) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	receipt, err := checked(name+".cursor_close", func() error { return cursor.Close(ctx) })
+	r.Calls = append(r.Calls, receipt)
+	return err
+}
+
+// Canonical format is length-framed typed BSON. Document keys sort by UTF-8
+// bytes; arrays keep order and require canonical consecutive numeric keys.
+// Scalar bytes retain BSON type and exact representation, including int32/int64.
+func frame(dst []byte, value []byte) []byte {
+	dst = binary.BigEndian.AppendUint64(dst, uint64(len(value)))
+	return append(dst, value...)
+}
+
+func canonical(raw bson.Raw, array bool) ([]byte, error) {
+	if err := raw.Validate(); err != nil {
+		return nil, err
+	}
+	elements, err := raw.Elements()
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]bool, len(elements))
+	for i, element := range elements {
+		key := element.Key()
+		if seen[key] {
+			return nil, fmt.Errorf("duplicate BSON field %q", key)
+		}
+		seen[key] = true
+		if array && key != strconv.Itoa(i) {
+			return nil, errors.New("noncanonical BSON array keys")
+		}
+	}
+	if !array {
+		sort.Slice(elements, func(i, j int) bool { return elements[i].Key() < elements[j].Key() })
+	}
+	out := binary.BigEndian.AppendUint64(nil, uint64(len(elements)))
+	for _, element := range elements {
+		out = frame(out, []byte(element.Key()))
+		v := element.Value()
+		out = append(out, byte(v.Type))
+		value := v.Value
+		switch v.Type {
+		case bson.TypeEmbeddedDocument:
+			value, err = canonical(bson.Raw(v.Value), false)
+		case bson.TypeArray:
+			value, err = canonical(bson.Raw(v.Value), true)
+		}
+		if err != nil {
+			return nil, err
+		}
+		out = frame(out, value)
+	}
+	return out, nil
+}
+
+func fields(raw bson.Raw) (map[string]bson.RawValue, error) {
+	if err := raw.Validate(); err != nil {
+		return nil, err
+	}
+	elements, err := raw.Elements()
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]bson.RawValue, len(elements))
+	for _, element := range elements {
+		if _, exists := out[element.Key()]; exists {
+			return nil, fmt.Errorf("duplicate BSON field %q", element.Key())
+		}
+		out[element.Key()] = element.Value()
+	}
+	return out, nil
+}
+
+func ycsbID(i int) string {
+	var ordinal [8]byte
+	binary.BigEndian.PutUint64(ordinal[:], uint64(i))
+	h := fnv.New64a()
+	_, _ = h.Write(ordinal[:])
+	n := int64(h.Sum64())
+	if n < 0 {
+		n = -n
+	}
+	return "user" + strconv.FormatInt(n, 10)
+}
+
+var cities = [...]string{"hnl", "sfo", "nyc", "lon", "sin", "ber", "tyo", "syd"}
+
+func gatewayID(i int) string { return fmt.Sprintf("doc-%012d", i) }
+func email(i int) string     { return fmt.Sprintf("user%012d@example.test", i) }
+func city(i int) string      { return cities[i%len(cities)] }
+func age(i int) int64        { return int64(18 + i%67) }
+
+func gatewayDocument(i int) bson.D {
+	return bson.D{
+		{Key: "_id", Value: gatewayID(i)}, {Key: "email", Value: email(i)},
+		{Key: "city", Value: city(i)}, {Key: "age", Value: age(i)},
+		{Key: "active", Value: i%2 == 0}, {Key: "score", Value: float64(i%1000) / 10.0},
+		{Key: "tags", Value: bson.A{city(i), fmt.Sprintf("bucket-%02d", i%32)}},
+		{Key: "profile", Value: bson.D{{Key: "rank", Value: int32(i % 1000)}, {Key: "bio", Value: strings.Repeat("x", 96)}}},
+	}
+}
+
+func validateDocument(raw bson.Raw, shape string, ordinal int) error {
+	f, err := fields(raw)
+	if err != nil {
+		return err
+	}
+	if shape == "ycsb" {
+		if len(f) != 11 {
+			return fmt.Errorf("YCSB field count=%d want11", len(f))
+		}
+		id, ok := f["_id"].StringValueOK()
+		if !ok || id != ycsbID(ordinal) {
+			return errors.New("YCSB _id mismatch/type")
+		}
+		for i := 0; i < 10; i++ {
+			v, exists := f[fmt.Sprintf("field%d", i)]
+			if !exists {
+				return fmt.Errorf("missing field%d", i)
+			}
+			subtype, value, ok := v.BinaryOK()
+			if !ok || subtype != 0 || len(value) != 100 {
+				return fmt.Errorf("field%d must be subtype0 binary length100", i)
+			}
+		}
+		return nil
+	}
+	if shape != "gateway" {
+		return errors.New("unknown shape")
+	}
+	expected, err := bson.Marshal(gatewayDocument(ordinal))
+	if err != nil {
+		return err
+	}
+	base, err := fields(expected)
+	if err != nil {
+		return err
+	}
+	for key, want := range base {
+		got, exists := f[key]
+		if !exists || got.Type != want.Type {
+			return fmt.Errorf("missing/wrong BSON type for %s", key)
+		}
+		if want.Type == bson.TypeEmbeddedDocument || want.Type == bson.TypeArray {
+			gc, e := canonical(bson.Raw(got.Value), want.Type == bson.TypeArray)
+			if e != nil {
+				return fmt.Errorf("%s: %w", key, e)
+			}
+			wc, e := canonical(bson.Raw(want.Value), want.Type == bson.TypeArray)
+			if e != nil {
+				return e
+			}
+			if !bytes.Equal(gc, wc) {
+				return fmt.Errorf("base field %s differs from generator", key)
+			}
+		} else if !bytes.Equal(got.Value, want.Value) {
+			return fmt.Errorf("base field %s differs from generator", key)
+		}
+	}
+	allowed := len(base)
+	for _, pair := range [][2]string{{"updated", "update_seq"}, {"concurrent_updated", "concurrent_update_seq"}} {
+		flagValue, haveFlag := f[pair[0]]
+		sequence, haveSequence := f[pair[1]]
+		if haveFlag != haveSequence {
+			return fmt.Errorf("incomplete update pair %s", pair[0])
+		}
+		if haveFlag {
+			v, ok := flagValue.BooleanOK()
+			n, integer := sequence.Int64OK()
+			if !ok || !v || !integer || n < 0 {
+				return fmt.Errorf("invalid update pair %s", pair[0])
+			}
+			allowed += 2
+		}
+	}
+	if len(f) != allowed {
+		return errors.New("unexpected gateway field")
+	}
+	return nil
+}
+
+type census struct {
+	shape                      string
+	ordinals                   map[string]int
+	seen                       []bool
+	digests                    [][32]byte
+	observed, extra, duplicate int
+}
+
+func newCensus(shape string, count int) (*census, error) {
+	s := &census{shape: shape, ordinals: make(map[string]int, count), seen: make([]bool, count), digests: make([][32]byte, count)}
+	for i := 0; i < count; i++ {
+		id := gatewayID(i)
+		if shape == "ycsb" {
+			id = ycsbID(i)
+		}
+		if _, exists := s.ordinals[id]; exists {
+			return nil, errors.New("expected ID hash collision")
+		}
+		s.ordinals[id] = i
+	}
+	return s, nil
+}
+
+func (s *census) add(raw bson.Raw) error {
+	s.observed++
+	f, err := fields(raw)
+	if err != nil {
+		return err
+	}
+	id, ok := f["_id"].StringValueOK()
+	if !ok {
+		return errors.New("missing/string-type _id required")
+	}
+	i, exists := s.ordinals[id]
+	if !exists {
+		s.extra++
+		return fmt.Errorf("unexpected _id %q", id)
+	}
+	if s.seen[i] {
+		s.duplicate++
+		return fmt.Errorf("duplicate _id %q", id)
+	}
+	if err := validateDocument(raw, s.shape, i); err != nil {
+		return fmt.Errorf("_id %s: %w", id, err)
+	}
+	value, err := canonical(raw, false)
+	if err != nil {
+		return err
+	}
+	s.digests[i] = sha256.Sum256(value)
+	s.seen[i] = true
+	return nil
+}
+
+func (s *census) missing() int {
+	n := 0
+	for _, seen := range s.seen {
+		if !seen {
+			n++
+		}
+	}
+	return n
+}
+
+func (s *census) digest() (string, error) {
+	if s.missing() != 0 || s.extra != 0 || s.duplicate != 0 || s.observed != len(s.seen) {
+		return "", errors.New("incomplete census")
+	}
+	h := sha256.New()
+	_, _ = h.Write([]byte("gomap-local-typed-census-v1\x00" + s.shape + "\x00"))
+	var count [8]byte
+	binary.BigEndian.PutUint64(count[:], uint64(len(s.seen)))
+	_, _ = h.Write(count[:])
+	for _, digest := range s.digests {
+		_, _ = h.Write(digest[:])
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+func scan(ctx context.Context, coll *mongo.Collection, s *census, r *report) (retErr error) {
+	cursor, err := coll.Find(ctx, bson.D{}, options.Find().SetBatchSize(256))
+	if err != nil {
+		return err
+	}
+	defer func() { retErr = errors.Join(retErr, closeCursor(cursor, "full_census", r)) }()
+	for cursor.Next(ctx) {
+		if err := s.add(cursor.Current); err != nil {
+			return err
+		}
+	}
+	return cursor.Err()
+}
+
+func numericOne(v bson.RawValue) bool {
+	if n, ok := v.Int32OK(); ok {
+		return n == 1
+	}
+	if n, ok := v.Int64OK(); ok {
+		return n == 1
+	}
+	if n, ok := v.DoubleOK(); ok {
+		return !math.IsNaN(n) && n == 1
+	}
+	return false
+}
+
+func unsupported(err error) bool {
+	var command mongo.CommandError
+	return errors.As(err, &command) && command.Code == 59
+}
+
+func checkIndexes(ctx context.Context, coll *mongo.Collection, cfg config, r *report) (retErr error) {
+	cursor, err := coll.Indexes().List(ctx)
+	if err != nil {
+		if unsupported(err) {
+			r.IndexStatus = "unavailable_command_not_found: " + err.Error()
+			return nil
+		}
+		return err
+	}
+	defer func() { retErr = errors.Join(retErr, closeCursor(cursor, "list_indexes", r)) }()
+	want := map[string]string{}
+	if cfg.SecondaryIndexes >= 1 {
+		want["email_1"] = "email"
+	}
+	if cfg.SecondaryIndexes >= 2 {
+		want["city_1"] = "city"
+	}
+	if cfg.RangeIndex {
+		want["age_1"] = "age"
+	}
+	found := map[string]bool{}
+	for cursor.Next(ctx) {
+		f, err := fields(cursor.Current)
+		if err != nil {
+			return err
+		}
+		name, ok := f["name"].StringValueOK()
+		if !ok || name == "" || found[name] {
+			return errors.New("invalid/duplicate index name")
+		}
+		found[name] = true
+		r.Indexes = append(r.Indexes, name)
+		field, needed := want[name]
+		if !needed {
+			if name != "_id_" {
+				return fmt.Errorf("unexpected index %q", name)
+			}
+			field = "_id"
+		}
+		key, ok := f["key"].DocumentOK()
+		if !ok {
+			return fmt.Errorf("index %s missing key document", name)
+		}
+		keyFields, err := fields(key)
+		if err != nil || len(keyFields) != 1 || !numericOne(keyFields[field]) {
+			return fmt.Errorf("index %s key differs", name)
+		}
+		if name == "email_1" {
+			unique, ok := f["unique"].BooleanOK()
+			if !ok || !unique {
+				return errors.New("email index is not explicitly unique")
+			}
+		}
+	}
+	if err := cursor.Err(); err != nil {
+		return err
+	}
+	for name := range want {
+		if !found[name] {
+			return fmt.Errorf("missing declared index %s", name)
+		}
+	}
+	sort.Strings(r.Indexes)
+	r.IndexStatus = "declared_index_metadata_validated"
+	return nil
+}
+
+func query(ctx context.Context, coll *mongo.Collection, s *census, r *report, name, declaredIndex string, filter bson.D, matches func(int) bool) (retErr error) {
+	q := queryResult{Name: name, Hint: declaredIndex}
+	for i := range s.seen {
+		if matches(i) {
+			q.Expected++
+		}
+	}
+	defer func() { q.Success = retErr == nil; r.Queries = append(r.Queries, q) }()
+	opts := options.Find().SetBatchSize(256)
+	// Match the producer's unhinted public queries. Its legacy homogeneous
+	// single-field indexes do not implement strict compound-planner hints.
+	// declaredIndex names metadata checked separately; it is not activation proof.
+	cursor, err := coll.Find(ctx, filter, opts)
+	if err != nil {
+		return err
+	}
+	defer func() { retErr = errors.Join(retErr, closeCursor(cursor, name, r)) }()
+	seen := make(map[int]bool, q.Expected)
+	for cursor.Next(ctx) {
+		f, err := fields(cursor.Current)
+		if err != nil {
+			return err
+		}
+		id, ok := f["_id"].StringValueOK()
+		i, exists := s.ordinals[id]
+		if !ok || !exists || !matches(i) || seen[i] {
+			return fmt.Errorf("%s unexpected/duplicate result", name)
+		}
+		if err := validateDocument(cursor.Current, s.shape, i); err != nil {
+			return err
+		}
+		canonicalDoc, err := canonical(cursor.Current, false)
+		if err != nil {
+			return err
+		}
+		if sha256.Sum256(canonicalDoc) != s.digests[i] {
+			return fmt.Errorf("%s state changed since census", name)
+		}
+		seen[i] = true
+		q.Observed++
+	}
+	if err := cursor.Err(); err != nil {
+		return err
+	}
+	if q.Observed != q.Expected {
+		return fmt.Errorf("%s result count=%d want%d", name, q.Observed, q.Expected)
+	}
+	return nil
+}
+
+func queries(ctx context.Context, coll *mongo.Collection, s *census, cfg config, r *report) error {
+	samples := []int{0, cfg.Documents / 2, cfg.Documents - 1}
+	seen := map[int]bool{}
+	for _, i := range samples {
+		if seen[i] {
+			continue
+		}
+		seen[i] = true
+		id := gatewayID(i)
+		if cfg.Shape == "ycsb" {
+			id = ycsbID(i)
+		}
+		if err := query(ctx, coll, s, r, fmt.Sprintf("id_%d", i), "", bson.D{{Key: "_id", Value: id}}, func(n int) bool { return n == i }); err != nil {
+			return err
+		}
+		if cfg.Shape == "gateway" && cfg.SecondaryIndexes >= 1 {
+			if err := query(ctx, coll, s, r, fmt.Sprintf("email_%d", i), "email_1", bson.D{{Key: "email", Value: email(i)}}, func(n int) bool { return n == i }); err != nil {
+				return err
+			}
+		}
+	}
+	if cfg.Shape == "gateway" && cfg.SecondaryIndexes >= 2 {
+		if err := query(ctx, coll, s, r, "city_hnl", "city_1", bson.D{{Key: "city", Value: "hnl"}}, func(n int) bool { return city(n) == "hnl" }); err != nil {
+			return err
+		}
+	}
+	if cfg.Shape == "gateway" && cfg.RangeIndex {
+		if err := query(ctx, coll, s, r, "age_gte_80", "age_1", bson.D{{Key: "age", Value: bson.D{{Key: "$gte", Value: int64(80)}}}}, func(n int) bool { return age(n) >= 80 }); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func observe(ctx context.Context, db *mongo.Database, name string, r *report) error {
+	raw, err := db.RunCommand(ctx, bson.D{{Key: name, Value: int32(1)}}).Raw()
+	o := commandObservation{Status: "observed"}
+	if err != nil {
+		o.Status = "error"
+		o.Error = err.Error()
+		r.Identity[name] = o
+		if unsupported(err) {
+			o.Status = "unavailable_command_not_found"
+			r.Identity[name] = o
+			return nil
+		}
+		return err
+	}
+	value, err := bson.MarshalExtJSON(raw, true, false)
+	if err != nil {
+		return err
+	}
+	o.Response = value
+	r.Identity[name] = o
+	return nil
+}
+
+func execute(cfg config, r *report) (retErr error) {
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
+	defer cancel()
+	client, err := mongo.Connect(options.Client().ApplyURI(cfg.URI).SetServerSelectionTimeout(5 * time.Second))
+	if err != nil {
+		return err
+	}
+	defer func() {
+		closeCtx, stop := context.WithTimeout(context.Background(), 30*time.Second)
+		defer stop()
+		receipt, err := checked("client_disconnect", func() error { return client.Disconnect(closeCtx) })
+		r.Calls = append(r.Calls, receipt)
+		retErr = errors.Join(retErr, err)
+	}()
+	ping, err := checked("ping", func() error { return client.Ping(ctx, readpref.Primary()) })
+	r.Calls = append(r.Calls, ping)
+	if err != nil {
+		return err
+	}
+	r.Identity = map[string]commandObservation{}
+	for _, name := range []string{"hello", "buildInfo"} {
+		if err := observe(ctx, client.Database("admin"), name, r); err != nil {
+			return err
+		}
+	}
+	if cfg.PingOnly {
+		r.IndexStatus = "not_requested_ping_only"
+		return nil
+	}
+	coll := client.Database(cfg.Database).Collection(cfg.Collection)
+	s, err := newCensus(cfg.Shape, cfg.Documents)
+	if err != nil {
+		return err
+	}
+	defer func() { r.Observed = s.observed; r.Missing = s.missing(); r.Extra = s.extra; r.Duplicate = s.duplicate }()
+	if err := scan(ctx, coll, s, r); err != nil {
+		return err
+	}
+	r.Digest, err = s.digest()
+	if err != nil {
+		return err
+	}
+	if err := checkIndexes(ctx, coll, cfg, r); err != nil {
+		return err
+	}
+	return queries(ctx, coll, s, cfg, r)
+}
+
+func selfTest() (int, error) {
+	controls := 0
+	check := func(ok bool, why string) error {
+		controls++
+		if !ok {
+			return errors.New("self-test: " + why)
+		}
+		return nil
+	}
+	marshal := func(v any) bson.Raw {
+		raw, err := bson.Marshal(v)
+		if err != nil {
+			panic(err)
+		}
+		return raw
+	}
+	valid := gatewayDocument(3)
+	raw := marshal(valid)
+	if err := check(validateDocument(raw, "gateway", 3) == nil, "valid gateway rejected"); err != nil {
+		return controls, err
+	}
+	reversed := append(bson.D(nil), valid...)
+	for i, j := 0, len(reversed)-1; i < j; i, j = i+1, j-1 {
+		reversed[i], reversed[j] = reversed[j], reversed[i]
+	}
+	a, e1 := canonical(raw, false)
+	b, e2 := canonical(marshal(reversed), false)
+	if err := check(e1 == nil && e2 == nil && bytes.Equal(a, b), "field order changes digest"); err != nil {
+		return controls, err
+	}
+	for name, bad := range map[string]bson.D{
+		"missing field":   valid[:len(valid)-1],
+		"duplicate field": append(append(bson.D(nil), valid...), valid[0]),
+		"wrong type":      append(append(bson.D(nil), valid[:3]...), append(bson.D{{Key: "age", Value: int32(21)}}, valid[4:]...)...),
+		"extra field":     append(append(bson.D(nil), valid...), bson.E{Key: "alien", Value: true}),
+		"unpaired update": append(append(bson.D(nil), valid...), bson.E{Key: "updated", Value: true}),
+	} {
+		if err := check(validateDocument(marshal(bad), "gateway", 3) != nil, name+" accepted"); err != nil {
+			return controls, err
+		}
+	}
+	y := bson.D{{Key: "_id", Value: ycsbID(0)}}
+	for i := 0; i < 10; i++ {
+		y = append(y, bson.E{Key: fmt.Sprintf("field%d", i), Value: bson.Binary{Subtype: 0, Data: bytes.Repeat([]byte{'x'}, 100)}})
+	}
+	if err := check(validateDocument(marshal(y), "ycsb", 0) == nil, "valid YCSB rejected"); err != nil {
+		return controls, err
+	}
+	y[1].Value = bson.Binary{Subtype: 1, Data: bytes.Repeat([]byte{'x'}, 100)}
+	if err := check(validateDocument(marshal(y), "ycsb", 0) != nil, "wrong binary subtype accepted"); err != nil {
+		return controls, err
+	}
+	s, err := newCensus("gateway", 4)
+	if err != nil {
+		return controls, err
+	}
+	if err := s.add(raw); err != nil {
+		return controls, err
+	}
+	if err := check(s.add(raw) != nil && s.duplicate == 1, "duplicate ID accepted"); err != nil {
+		return controls, err
+	}
+	if _, err := s.digest(); err == nil {
+		return controls, errors.New("self-test: missing IDs accepted")
+	}
+	controls++
+	full, err := newCensus("gateway", 4)
+	if err != nil {
+		return controls, err
+	}
+	backwards, err := newCensus("gateway", 4)
+	if err != nil {
+		return controls, err
+	}
+	for i := 0; i < 4; i++ {
+		if err := full.add(marshal(gatewayDocument(i))); err != nil {
+			return controls, err
+		}
+		if err := backwards.add(marshal(gatewayDocument(3 - i))); err != nil {
+			return controls, err
+		}
+	}
+	da, ea := full.digest()
+	db, eb := backwards.digest()
+	if err := check(ea == nil && eb == nil && da == db, "document order changes digest"); err != nil {
+		return controls, err
+	}
+	return controls, nil
+}
+
+func main() {
+	var cfg config
+	flag.StringVar(&cfg.URI, "uri", "", "explicit Mongo URI; never inferred")
+	flag.StringVar(&cfg.Database, "database", "", "database")
+	flag.StringVar(&cfg.Collection, "collection", "", "collection")
+	flag.StringVar(&cfg.Shape, "shape", "", "ycsb or gateway")
+	flag.IntVar(&cfg.Documents, "documents", 0, "exact expected document count")
+	flag.IntVar(&cfg.SecondaryIndexes, "secondary-indexes", 0, "declared email/city index count:0,1,2")
+	flag.BoolVar(&cfg.RangeIndex, "range-index", false, "require age_1 range index")
+	flag.BoolVar(&cfg.PingOnly, "ping-only", false, "only checked readiness and actual hello/buildInfo observations")
+	flag.BoolVar(&cfg.SelfTest, "self-test", false, "local positive/negative controls; no network")
+	flag.DurationVar(&cfg.Timeout, "timeout", 5*time.Minute, "overall finite validation timeout; cleanup has separate30s bounds")
+	flag.Parse()
+	start := time.Now()
+	r := report{SchemaVersion: 1, Kind: "local_mac_public_mongo_validation", Database: cfg.Database, Collection: cfg.Collection, Shape: cfg.Shape, Expected: cfg.Documents, Missing: cfg.Documents, DigestSchema: "v1:sorted-fields-typed-BSON;ordered-arrays;per-document-SHA256;expected-ordinal-order", IndexStatus: "not_validated", StartedUTC: start.UTC().Format(time.RFC3339Nano)}
+	var err error
+	switch {
+	case flag.NArg() != 0:
+		err = errors.New("positional arguments are refused")
+	case cfg.SelfTest:
+		r.Kind = "local_validation_self_test"
+		r.IndexStatus = "not_applicable_self_test"
+		r.SelfTestControls, err = selfTest()
+	case cfg.URI == "" || cfg.Timeout <= 0:
+		err = errors.New("explicit uri and positive timeout required")
+	case !cfg.PingOnly && (cfg.Database == "" || cfg.Collection == "" || cfg.Documents <= 0 || (cfg.Shape != "ycsb" && cfg.Shape != "gateway")):
+		err = errors.New("database,collection,positive documents and shape ycsb|gateway required")
+	case cfg.SecondaryIndexes < 0 || cfg.SecondaryIndexes > 2 || (cfg.Shape == "ycsb" && (cfg.SecondaryIndexes != 0 || cfg.RangeIndex)):
+		err = errors.New("unsupported declared index configuration")
+	default:
+		err = execute(cfg, &r)
+	}
+	r.Success = err == nil
+	if err != nil {
+		r.Error = err.Error()
+	}
+	r.EndedUTC = time.Now().UTC().Format(time.RFC3339Nano)
+	r.ElapsedNS = time.Since(start).Nanoseconds()
+	if encodeErr := json.NewEncoder(os.Stdout).Encode(r); encodeErr != nil {
+		fmt.Fprintln(os.Stderr, encodeErr)
+		os.Exit(1)
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
