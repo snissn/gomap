@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -66,28 +67,35 @@ func TestLeafGenerationManifestStablePrepareAdmissionRollback(t *testing.T) {
 		name           string
 		frame          string
 		refuseRollback bool
+		refuseFence    bool
 	}{
 		{name: "rollback identity", frame: ".admitReplacementIdentity"},
+		{name: "rollback identity deletion fence refused", frame: ".admitReplacementIdentity", refuseFence: true},
 		{name: "builder creation", frame: ".NewStableResourceSetBuilderWithMetadata"},
 		{name: "builder add", frame: ".addAdmittedToken"},
 		{name: "builder freeze", frame: ".Freeze"},
 		{name: "rollback refused", frame: ".NewStableResourceSetBuilderWithMetadata", refuseRollback: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			testLeafGenerationManifestStablePrepareAdmissionRollback(t, tc.frame, tc.refuseRollback)
+			testLeafGenerationManifestStablePrepareAdmissionRollback(t, tc.frame, tc.refuseRollback, tc.refuseFence)
 		})
 	}
 }
 
-func testLeafGenerationManifestStablePrepareAdmissionRollback(t *testing.T, refusalFrame string, refuseRollback bool) {
+func testLeafGenerationManifestStablePrepareAdmissionRollback(t *testing.T, refusalFrame string, refuseRollback, refuseFence bool) {
 	t.Helper()
 	database, err := Open(Options{Dir: t.TempDir(), IndexOuterLeavesInValueLog: true})
 	if err != nil {
 		t.Fatal(err)
 	}
+	fenceErr := errors.New("early rollback deletion fence refused")
 	t.Cleanup(func() {
 		err := database.Close()
-		if refuseRollback {
+		if refuseFence {
+			if !errors.Is(err, fenceErr) || !errors.Is(err, os.ErrClosed) {
+				t.Errorf("close after refused deletion fence=%v want retained fence and file completion failures", err)
+			}
+		} else if refuseRollback {
 			if !errors.Is(err, retainedalloc.ErrCapacity) {
 				t.Errorf("close after refused rollback=%v want retained capacity failure", err)
 			}
@@ -127,12 +135,52 @@ func testLeafGenerationManifestStablePrepareAdmissionRollback(t *testing.T, refu
 	defer enrollment.Close()
 	beforePins, beforeIdentities, beforeLinks := registry.ActivePins(), registry.ActiveIdentities(), registry.ActiveStableNamespaceLinks()
 	beforeBytes := owner.Bytes()
+	if refuseFence {
+		restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+			if event.Resource != durabilitycut.ResourceOuterLeaf || event.Root != leafDir {
+				return nil
+			}
+			if event.Namespace == durabilitycut.NamespaceUnlink {
+				if event.StablePath == nil {
+					t.Error("unlink omitted the exact open revision")
+				} else if err := event.StablePath.Close(); err != nil {
+					t.Errorf("inject physical completion refusal: %v", err)
+				}
+			}
+			if event.Point == durabilitycut.BeforeDeletionDirectorySync {
+				return fenceErr
+			}
+			return nil
+		})
+		defer restore()
+	}
 	closure, persisted, err := database.prepareLeafGenerationManifestStableCandidate(candidate)
 	if !budget.refused || closure != nil || persisted != nil || !errors.Is(err, retainedalloc.ErrCapacity) {
 		t.Fatalf("refused=%t closure=%p persisted=%p error=%v", budget.refused, closure, persisted, err)
 	}
 	if got := registry.ActivePins(); got != beforePins {
 		t.Errorf("pins after admission refusal=%d want %d", got, beforePins)
+	}
+	if refuseFence {
+		if !errors.Is(err, fenceErr) || !errors.Is(err, os.ErrClosed) || !errors.Is(err, ErrRecoveryRequired) || !database.publicationPoisoned.Load() {
+			t.Errorf("refused deletion fence=%v poisoned=%t", err, database.publicationPoisoned.Load())
+		}
+		var receipt *originalDBCleanupFailure
+		if !errors.As(err, &receipt) {
+			t.Error("refused deletion fence omitted the original cleanup receipt")
+		} else if original, ok := receipt.payload.(*LeafGenerationManifestStablePreparedClosure); !ok || original.replacementFiles[1] == nil || !errors.Is(original.replacementErrors[1], os.ErrClosed) {
+			t.Errorf("receipt did not retain the original revision file and failed completion: %T", receipt.payload)
+		}
+		if got := owner.Bytes(); got <= beforeBytes {
+			t.Errorf("refused deletion fence shed original cleanup metadata: got %d baseline %d", got, beforeBytes)
+		}
+		if !bytes.Equal(beforeView, view()) || !slices.Equal(beforeNames, immutableNames()) {
+			t.Error("refused deletion fence changed the compatibility view or left the unlinked name visible")
+		}
+		if _, err := database.PrepareLeafGenerationManifestStableClosure(); !errors.Is(err, ErrRecoveryRequired) {
+			t.Errorf("prepare after refused deletion fence=%v want recovery required", err)
+		}
+		return
 	}
 	if refuseRollback {
 		if !errors.Is(err, ErrRecoveryRequired) || !database.publicationPoisoned.Load() {

@@ -113,6 +113,7 @@ type LeafGenerationManifestStablePreparedClosure struct {
 	cleanupAttempted       bool
 	cleanupDone            bool
 	cleanupErr             error
+	earlyRollbackFailed    bool
 	abandonAttempted       bool
 	abandonErr             error
 	replacementFiles       [6]*os.File
@@ -547,7 +548,11 @@ func (db *DB) prepareLeafGenerationManifestStableCandidate(candidate *leafGenera
 		// Drop any private builder and token edges first. Their successful
 		// release returns pins and metadata capacity used by abandonment.
 		cleanupErr := errors.Join(token.ReleaseWithError(), builder.AbandonWithError())
-		if cleanupErr != nil {
+		if original.earlyRollbackFailed {
+			// The store already poisoned publication. Retain the namespace refusal
+			// and the checked completion results together in the original receipt.
+			cleanupErr = original.retainCleanupFailure(errors.Join(retErr, cleanupErr))
+		} else if cleanupErr != nil {
 			cleanupErr = original.retainCleanupFailure(cleanupErr)
 		} else if original.revision != 0 {
 			cleanupErr = original.abandonUnpublished()
