@@ -365,6 +365,9 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/cmd/treedb_rag_benchmark/application_runner.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 4},
 	{path: "TreeDB/collections/native_text_sizing_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 4},
 	{path: "TreeDB/mongo_gateway/vector_retirement_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 4},
+	// Standalone BSON defaults consult the retained schema field to identify
+	// collections without a configured typed schema.
+	{path: "TreeDB/mongo_gateway/standalone.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/nativewire/create_unsupported_profile_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 4},
 	{path: "TreeDB/collections/native_ordinary_columngraph_publication_fault_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 5},
 	// Leaf-pack fixtures retain public compatibility schema fields and metadata.
