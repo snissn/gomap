@@ -20,6 +20,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
@@ -534,20 +535,68 @@ func TestOrdinaryLeafRotationRetainsExactManifestThroughReopen(t *testing.T) {
 		}
 		return backendToken
 	}
-	beforeGC := sampleGCState("before leaf generation GC dry run")
-	gc, gcErr := database.LeafGenerationGC(ctx, LeafGenerationGCOptions{DryRun: true})
-	afterGC := sampleGCState("after leaf generation GC dry run")
-	t.Logf("leaf generation GC dry run: %+v %v", gc, gcErr)
-	if gcErr != nil || gc.GenerationsDeleted != 0 || gc.FilesDeleted != 0 {
-		t.Errorf("leaf generation GC dry run: %+v %v", gc, gcErr)
+	// Use the real pack producer to put a synced but unpublished segment on
+	// disk. Committed packs already account for all their leaf files, so they
+	// cannot be relied on to leave a segment for dry-run reconciliation.
+	leaf := make([]byte, page.PageSize)
+	builder := node.NewBuilderWithOptions(leaf, page.PageTypeLeaf, node.BuilderOptions{LeafPrefixCompression: true, LeafColumnar: true, PackedValuePtr: true})
+	if err := builder.AddLeafEntry(target, want, node.FlagInline, page.ValuePtr{}); err != nil {
+		t.Fatal(err)
 	}
-	if afterGC.LeafGenerationStateVersion <= beforeGC.LeafGenerationStateVersion {
-		t.Errorf("fixture did not advance leaf generation state during dry run: before=%+v after=%+v", beforeGC, afterGC)
+	builder.FinishNoNode()
+	beforePrepare := sampleGCState("before preparing unpublished pack segment")
+	prepared, err := database.backend.PrepareLeafGenerationPackStableClosure(ctx, [][]byte{leaf})
+	if err != nil {
+		t.Fatalf("prepare unpublished pack segment: %v", err)
 	}
-	afterGC.LeafGenerationStateVersion = beforeGC.LeafGenerationStateVersion
-	if afterGC != beforeGC {
-		t.Errorf("dry run changed the logical root or command frontier: before=%+v after=%+v", beforeGC, afterGC)
+	defer func() {
+		if prepared != nil {
+			if err := prepared.Abandon(); err != nil {
+				t.Error(err)
+			}
+		}
+	}()
+	segments := prepared.Segments()
+	observed := prepared.Observations()
+	if len(segments) != 1 || observed.ContentSyncs == 0 || observed.NamespaceSyncs == 0 {
+		t.Fatalf("fixture requires one synced and promoted pack segment: segments=%v observations=%+v", segments, observed)
 	}
+	segment := segments[0]
+	rawID := page.ValueLogSegmentID(segment.FileID)
+	info, err := os.Stat(segment.Path)
+	if rawID == 0 || reopened.generation[rawID] != 0 || err != nil || !info.Mode().IsRegular() || info.Size() == 0 {
+		t.Fatalf("fixture requires a new physical segment outside the durable manifest: segment=%+v info=%v err=%v", segment, info, err)
+	}
+	if afterPrepare := sampleGCState("after preparing unpublished pack segment"); afterPrepare != beforePrepare {
+		t.Fatalf("preparing the pack segment published state: before=%+v after=%+v", beforePrepare, afterPrepare)
+	}
+	runReconcile := func(label string) {
+		t.Helper()
+		beforeGC := sampleGCState("before " + label)
+		gc, gcErr := database.LeafGenerationGC(ctx, LeafGenerationGCOptions{DryRun: true})
+		afterGC := sampleGCState("after " + label)
+		t.Logf("%s: %+v %v", label, gc, gcErr)
+		if gcErr != nil || gc.GenerationsDeleted != 0 || gc.FilesDeleted != 0 {
+			t.Errorf("%s: %+v %v", label, gc, gcErr)
+		}
+		if afterGC.LeafGenerationStateVersion <= beforeGC.LeafGenerationStateVersion {
+			t.Errorf("fixture did not advance leaf generation state during %s: before=%+v after=%+v", label, beforeGC, afterGC)
+		}
+		afterGC.LeafGenerationStateVersion = beforeGC.LeafGenerationStateVersion
+		if afterGC != beforeGC {
+			t.Errorf("%s changed the logical root or command frontier: before=%+v after=%+v", label, beforeGC, afterGC)
+		}
+	}
+	runReconcile("leaf generation GC dry run with promoted segment")
+	abandonErr := prepared.Abandon()
+	prepared = nil
+	if abandonErr != nil {
+		t.Fatalf("abandon unpublished pack segment: %v", abandonErr)
+	}
+	if _, err := os.Stat(segment.Path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("abandoned pack segment still present: %s, stat err=%v", segment.Path, err)
+	}
+	runReconcile("leaf generation GC dry run after abandonment")
 	backend, err = database.NativeSemanticBackend()
 	if err != nil {
 		t.Fatal(err)
