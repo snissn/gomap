@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
@@ -30,6 +31,100 @@ type externalStableCut struct {
 
 func externalPowerlossObserve(observer durabilitycut.Observer) func() {
 	return sync.OnceFunc(durabilitycut.Install(observer))
+}
+
+// After the file-sync callback returns, WriteDurable closes and renames its
+// CURRENT staging file before it reports the rename. Keep other full-tree
+// model walks out of that interval. The original rename or cleanup still
+// reaches the model, followed by every waiting observation.
+func checkpointCurrentObserver(root string, mu *sync.Mutex, observe durabilitycut.Observer) (durabilitycut.Observer, func()) {
+	ready := sync.NewCond(mu)
+	var syncedTemp string
+	finished := false
+	stop := func() {
+		mu.Lock()
+		defer mu.Unlock()
+		finished = true
+		syncedTemp = ""
+		ready.Broadcast()
+	}
+	return func(e durabilitycut.Event) error {
+		mu.Lock()
+		defer mu.Unlock()
+		if e.Namespace == durabilitycut.NamespaceRename && e.NewPath == filepath.Join(root, "CURRENT") && (syncedTemp == "" || syncedTemp != e.OldPath) {
+			return fmt.Errorf("CURRENT renamed from %q without a completed sync of the same staging file (observed %q)", e.OldPath, syncedTemp)
+		}
+		for syncedTemp != "" {
+			if e.OldPath == syncedTemp && (e.Namespace == durabilitycut.NamespaceRename || e.Namespace == durabilitycut.NamespaceUnlink) {
+				syncedTemp = ""
+				ready.Broadcast()
+				break
+			}
+			ready.Wait()
+		}
+		if err := observe(e); err != nil {
+			return err
+		}
+		if !finished && e.Point == durabilitycut.AfterDependencyFileSync && e.Resource == durabilitycut.ResourceAuxiliary &&
+			filepath.Dir(e.Path) == root && strings.HasPrefix(filepath.Base(e.Path), "CURRENT.tmp.") {
+			syncedTemp = e.Path
+		}
+		return nil
+	}, stop
+}
+
+func TestExternalCheckpointCurrentObserverOrdersConcurrentCuts(t *testing.T) {
+	for _, outcome := range []string{"rename", "unlink", "checkpoint-error"} {
+		t.Run(outcome, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				const root = "checkpoint"
+				target := filepath.Join(root, "CURRENT")
+				temp := target + ".tmp.42"
+				var mu sync.Mutex
+				var seen []durabilitycut.Event
+				sentinel := errors.New("original observer error")
+				observe, finish := checkpointCurrentObserver(root, &mu, func(e durabilitycut.Event) error {
+					seen = append(seen, e)
+					if e.Point == durabilitycut.BeforeUserspaceFlush {
+						return sentinel
+					}
+					return nil
+				})
+				defer finish()
+				if err := observe(durabilitycut.Event{Namespace: durabilitycut.NamespaceRename, OldPath: temp, NewPath: target}); err == nil {
+					t.Fatal("CURRENT publication without its original file sync was accepted")
+				}
+				synced := durabilitycut.Event{Point: durabilitycut.AfterDependencyFileSync, Resource: durabilitycut.ResourceAuxiliary, Root: root, Path: temp}
+				if err := observe(synced); err != nil {
+					t.Fatal(err)
+				}
+				var got error
+				go func() {
+					got = observe(durabilitycut.Event{Point: durabilitycut.BeforeUserspaceFlush})
+				}()
+				synctest.Wait()
+				if len(seen) != 1 {
+					t.Fatal("concurrent overlay entered while the synced CURRENT staging name could move")
+				}
+				switch outcome {
+				case "rename":
+					if err := observe(durabilitycut.Event{Namespace: durabilitycut.NamespaceRename, OldPath: temp, NewPath: target}); err != nil {
+						t.Fatal(err)
+					}
+				case "unlink":
+					if err := observe(durabilitycut.Event{Namespace: durabilitycut.NamespaceUnlink, OldPath: temp}); err != nil {
+						t.Fatal(err)
+					}
+				case "checkpoint-error":
+					finish()
+				}
+				synctest.Wait()
+				if !errors.Is(got, sentinel) || seen[len(seen)-1].Point != durabilitycut.BeforeUserspaceFlush {
+					t.Fatalf("parked observer was not delivered with its original error: events=%v err=%v", seen, got)
+				}
+			})
+		})
+	}
 }
 
 func externalStableReopen(t *testing.T, model *powerlossoracle.Model, opts Options, config ExternalRecoveryConfig, cert ExternalRecoveryCheckpoint, value []byte, previous *ExternalRecoveryCheckpoint, previousValue []byte, absent ...string) {
@@ -163,9 +258,7 @@ func TestExternalRecoveryStableCheckpointPublication(t *testing.T) {
 			var mu sync.Mutex
 			var cuts []externalStableCut
 			var renamed *powerlossoracle.Model
-			restore := externalPowerlossObserve(func(event durabilitycut.Event) error {
-				mu.Lock()
-				defer mu.Unlock()
+			observe, finish := checkpointCurrentObserver(opts.Dir, &mu, func(event durabilitycut.Event) error {
 				if err := model.Observe(opts.Dir, event); err != nil {
 					return err
 				}
@@ -175,7 +268,12 @@ func TestExternalRecoveryStableCheckpointPublication(t *testing.T) {
 				}
 				return nil
 			})
-			defer restore()
+			restore := externalPowerlossObserve(observe)
+			stop := func() {
+				finish()
+				restore()
+			}
+			defer stop()
 			o.testCut = func(stage string) error {
 				mu.Lock()
 				defer mu.Unlock()
@@ -187,7 +285,7 @@ func TestExternalRecoveryStableCheckpointPublication(t *testing.T) {
 			}
 			externalTestSet(t, o, "key", newValue)
 			newCert, err := o.Checkpoint(context.Background(), []byte("new"))
-			restore()
+			stop()
 			o.testCut = nil
 			if err != nil {
 				t.Fatal(err)
