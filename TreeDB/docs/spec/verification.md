@@ -526,6 +526,18 @@ after a pack. It checks producer refusal, queued activation refusal and exact
 namespace rollback, inline pre-meta retry, predecessor-slot retention, and
 unchanged-revision reuse without new manifest syncs on a steady write.
 
+`TestOrdinaryLeafManifestWALRefusalStopsNextWriter` refuses manifest sync after
+the raw command frame has been appended. It exercises both optimistic and
+serialized batches on both publication routes. In the serialized case a
+separate observer acquires the durable gate while the writer is still in
+cleanup and verifies that the handle already requires recovery. Reopen replays
+the single assigned command.
+
+`TestInlineLeafManifestCompatibilityFollowsDurableOutcome` exhausts retries
+before the meta write, then checks that Close restores the predecessor's
+compatibility manifest. It also checks recovery of the successor when durable
+publication completed before visible installation failed.
+
 The [COW publication contract](cow-cache-publication.md) requires evidence from
 actual public `MemtableMode="cow_btree"` dispatch in all three production
 profiles. Internal foundation/read-owner checks alone do not qualify the mode.
