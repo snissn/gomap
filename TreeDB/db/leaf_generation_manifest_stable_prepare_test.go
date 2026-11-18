@@ -6,12 +6,184 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
+
+type manifestPrepareRefusalBudget struct {
+	frame          string
+	bytes          uint64
+	refused        bool
+	refuseRollback bool
+}
+
+func (budget *manifestPrepareRefusalBudget) AcquireRetention(bytes uint64) (retainedalloc.Lease, error) {
+	budget.bytes = bytes
+	return budget, nil
+}
+
+func (budget *manifestPrepareRefusalBudget) Close() {}
+
+func (budget *manifestPrepareRefusalBudget) Resize(bytes uint64) error {
+	if bytes <= budget.bytes {
+		budget.bytes = bytes
+		return nil
+	}
+	if budget.refused && budget.refuseRollback {
+		return retainedalloc.ErrCapacity
+	}
+	if !budget.refused {
+		var callers [24]uintptr
+		n := runtime.Callers(2, callers[:])
+		frames := runtime.CallersFrames(callers[:n])
+		for {
+			frame, more := frames.Next()
+			if strings.HasSuffix(frame.Function, budget.frame) {
+				budget.refused = true
+				return retainedalloc.ErrCapacity
+			}
+			if !more {
+				break
+			}
+		}
+	}
+	budget.bytes = bytes
+	return nil
+}
+
+func TestLeafGenerationManifestStablePrepareAdmissionRollback(t *testing.T) {
+	if !rootpublication.StableRelativeNamespaceSupported() {
+		t.Skip("stable manifest replacement requires exact relative namespace support")
+	}
+	for _, tc := range []struct {
+		name           string
+		frame          string
+		refuseRollback bool
+	}{
+		{name: "rollback identity", frame: ".admitReplacementIdentity"},
+		{name: "builder creation", frame: ".NewStableResourceSetBuilderWithMetadata"},
+		{name: "builder add", frame: ".addAdmittedToken"},
+		{name: "builder freeze", frame: ".Freeze"},
+		{name: "rollback refused", frame: ".NewStableResourceSetBuilderWithMetadata", refuseRollback: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testLeafGenerationManifestStablePrepareAdmissionRollback(t, tc.frame, tc.refuseRollback)
+		})
+	}
+}
+
+func testLeafGenerationManifestStablePrepareAdmissionRollback(t *testing.T, refusalFrame string, refuseRollback bool) {
+	t.Helper()
+	database, err := Open(Options{Dir: t.TempDir(), IndexOuterLeavesInValueLog: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		err := database.Close()
+		if refuseRollback {
+			if !errors.Is(err, retainedalloc.ErrCapacity) {
+				t.Errorf("close after refused rollback=%v want retained capacity failure", err)
+			}
+		} else if err != nil {
+			t.Error(err)
+		}
+	})
+	leafDir := resolveStorageLayout(database.dir).leafVLogDir
+	compatPath := leafGenerationManifestPath(leafDir)
+	view := func() []byte {
+		t.Helper()
+		data, err := os.ReadFile(compatPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+	immutableNames := func() []string {
+		t.Helper()
+		names, err := filepath.Glob(filepath.Join(leafDir, "manifest.durable.*.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return names
+	}
+	beforeView, beforeNames := view(), immutableNames()
+	database.mu.RLock()
+	candidate := database.leafGenerationManifest.clone()
+	database.mu.RUnlock()
+	registry := database.StableResourceIdentityPinRegistry()
+	owner := registry.MetadataOwner()
+	budget := &manifestPrepareRefusalBudget{frame: refusalFrame, refuseRollback: refuseRollback}
+	enrollment, err := owner.Enroll(budget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer enrollment.Close()
+	beforePins, beforeIdentities, beforeLinks := registry.ActivePins(), registry.ActiveIdentities(), registry.ActiveStableNamespaceLinks()
+	beforeBytes := owner.Bytes()
+	closure, persisted, err := database.prepareLeafGenerationManifestStableCandidate(candidate)
+	if !budget.refused || closure != nil || persisted != nil || !errors.Is(err, retainedalloc.ErrCapacity) {
+		t.Fatalf("refused=%t closure=%p persisted=%p error=%v", budget.refused, closure, persisted, err)
+	}
+	if got := registry.ActivePins(); got != beforePins {
+		t.Errorf("pins after admission refusal=%d want %d", got, beforePins)
+	}
+	if refuseRollback {
+		if !errors.Is(err, ErrRecoveryRequired) || !database.publicationPoisoned.Load() {
+			t.Fatalf("refused rollback error=%v poisoned=%t", err, database.publicationPoisoned.Load())
+		}
+		if got := owner.Bytes(); got <= beforeBytes {
+			t.Errorf("refused rollback shed original cleanup metadata: got %d baseline %d", got, beforeBytes)
+		}
+		if bytes.Equal(beforeView, view()) || slices.Equal(beforeNames, immutableNames()) {
+			t.Errorf("refused rollback lost the installed manifest evidence")
+		}
+		if _, _, err := database.leafGenerationManifestStore.Load(); !errors.Is(err, ErrRecoveryRequired) {
+			t.Errorf("load after refused rollback=%v want recovery required", err)
+		}
+		if _, err := database.PrepareLeafGenerationManifestStableClosure(); !errors.Is(err, ErrRecoveryRequired) {
+			t.Errorf("prepare after refused rollback=%v want recovery required", err)
+		}
+		return
+	}
+	if after := view(); !bytes.Equal(beforeView, after) {
+		t.Errorf("compatibility view changed after admission refusal\nbefore=%s\nafter=%s", beforeView, after)
+	}
+	if after := immutableNames(); !slices.Equal(beforeNames, after) {
+		t.Errorf("immutable names changed after admission refusal\nbefore=%v\nafter=%v", beforeNames, after)
+	}
+	if got := registry.ActiveIdentities(); got != beforeIdentities {
+		t.Errorf("identities after admission refusal=%d want %d", got, beforeIdentities)
+	}
+	if got := registry.ActiveStableNamespaceLinks(); got != beforeLinks {
+		t.Errorf("namespace links after admission refusal=%d want %d", got, beforeLinks)
+	}
+	if got := owner.Bytes(); got != beforeBytes {
+		t.Errorf("metadata after admission refusal=%d want %d", got, beforeBytes)
+	}
+	if database.publicationPoisoned.Load() {
+		t.Fatal("definitively abandoned admission refusal poisoned DB")
+	}
+	closure, _, err = database.prepareLeafGenerationManifestStableCandidate(candidate)
+	if err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if got, want := closure.Revision(), candidate.ManifestRevision+1; got != want {
+		t.Errorf("retry revision=%d want %d", got, want)
+	}
+	if err := closure.abandonUnpublished(); err != nil {
+		t.Fatalf("abandon retry: %v", err)
+	}
+	if got := registry.ActivePins(); got != beforePins {
+		t.Errorf("pins after retry abandonment=%d want %d", got, beforePins)
+	}
+}
 
 func TestLeafGenerationManifestStablePreparedClosureAbandonUnpublishedRestoresView(t *testing.T) {
 	if !rootpublication.StableRelativeNamespaceSupported() {

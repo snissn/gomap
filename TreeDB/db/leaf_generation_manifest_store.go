@@ -344,7 +344,8 @@ func (s *leafGenerationManifestStore) replaceStable(manifest *leafGenerationMani
 		if !installed && revisionLinked {
 			cleanupErr := rootpublication.RemoveStableChildFile(parent, revisionName)
 			if cleanupErr != nil {
-				retErr = errors.Join(retErr, fmt.Errorf("clean stable manifest revision: %w", cleanupErr))
+				installed = true // Keep evidence when the early unlink refuses.
+				retErr = s.ambiguous(errors.Join(retErr, fmt.Errorf("clean stable manifest revision: %w", cleanupErr)))
 			}
 		}
 	}()
@@ -363,6 +364,19 @@ func (s *leafGenerationManifestStore) replaceStable(manifest *leafGenerationMani
 	s.durabilityCounters.ContentSyncs.Add(1)
 	if hook := s.hooks.BeforeRename; hook != nil {
 		if err := hook(); err != nil {
+			return nil, err
+		}
+	}
+	newIdentity, err := rootpublication.StableIdentityFromFile(revisionFile)
+	if err != nil {
+		return nil, err
+	}
+	if custody != nil {
+		// Admit the exact rollback name and identity while a refusal still
+		// needs only to unlink the new child, before compatibility changes.
+		rollbackIdentity := newIdentity
+		rollbackIdentity.Generation = candidate.ManifestRevision
+		if err := custody.admitReplacementIdentity(revisionName, rollbackIdentity); err != nil {
 			return nil, err
 		}
 	}
@@ -414,10 +428,6 @@ func (s *leafGenerationManifestStore) replaceStable(manifest *leafGenerationMani
 		return nil, s.ambiguous(err)
 	}
 
-	newIdentity, err := rootpublication.StableIdentityFromFile(revisionFile)
-	if err != nil {
-		return nil, s.ambiguous(err)
-	}
 	if err := s.registry.Observe(newIdentity); err != nil {
 		return nil, s.ambiguous(err)
 	}
@@ -442,6 +452,11 @@ func (s *leafGenerationManifestStore) replaceStable(manifest *leafGenerationMani
 	}
 	newObserved = false
 	manifest.ManifestRevision = candidate.ManifestRevision
+	if custody != nil {
+		// From here on a private producer refusal must abandon this exact
+		// revision before it can discard the compatibility preimage.
+		custody.revision, custody.digest = candidate.ManifestRevision, digest
+	}
 	return token, nil
 }
 

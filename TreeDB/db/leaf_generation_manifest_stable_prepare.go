@@ -249,6 +249,17 @@ func (closure *LeafGenerationManifestStablePreparedClosure) retainCleanupFailure
 	return &closure.failure
 }
 
+func (closure *LeafGenerationManifestStablePreparedClosure) admitReplacementIdentity(resourceID string, identity rootpublication.StableIdentity) error {
+	charge := retainedalloc.AllocationCharge(uint64(len(resourceID))) + retainedalloc.AllocationCharge(uint64(len(identity.Platform)))
+	if err := closure.metadata.AddPending(charge); err != nil {
+		return err
+	}
+	closure.metadataCharge += charge
+	closure.resourceID, identity.Platform = strings.Clone(resourceID), strings.Clone(identity.Platform)
+	closure.identity = identity
+	return nil
+}
+
 // All original namespace/proof completion callbacks run after the store lock
 // is released. Each constituent keeps its first actual physical outcome.
 func (closure *LeafGenerationManifestStablePreparedClosure) closeAuxiliary() error {
@@ -527,66 +538,61 @@ func (db *DB) prepareLeafGenerationManifestStableCandidate(candidate *leafGenera
 	}
 	original := &LeafGenerationManifestStablePreparedClosure{db: db, store: store, metadata: owner, metadataCharge: charge}
 	original.failure.payload = original
+	var token *rootpublication.StableResourceToken
+	var builder *rootpublication.StableResourceSetBuilder
 	defer func() {
-		if retErr != nil {
-			retErr = errors.Join(retErr, original.ReleaseWithError())
+		if retErr == nil {
+			return
+		}
+		// Drop any private builder and token edges first. Their successful
+		// release returns pins and metadata capacity used by abandonment.
+		cleanupErr := errors.Join(token.ReleaseWithError(), builder.AbandonWithError())
+		if cleanupErr != nil {
+			cleanupErr = original.retainCleanupFailure(cleanupErr)
+		} else if original.revision != 0 {
+			cleanupErr = original.abandonUnpublished()
+		} else {
+			cleanupErr = original.ReleaseWithError()
+		}
+		retErr = errors.Join(retErr, cleanupErr)
+		if cleanupErr != nil && original.revision != 0 {
+			store.mu.Lock()
+			retErr = store.ambiguous(retErr)
+			store.mu.Unlock()
 		}
 	}()
 	candidate = candidate.clone()
 	beforeContent := store.durabilityCounters.ContentSyncs.Load()
 	beforeNamespace := store.durabilityCounters.NamespaceSyncs.Load()
-	token, _, err := store.replaceForPreparedClosure(candidate, original)
+	var err error
+	token, _, err = store.replaceForPreparedClosure(candidate, original)
 	err = errors.Join(err, original.closeAuxiliary(), original.closePreviousFile(), original.closeReplacementFiles())
 	if err != nil {
-		if token != nil {
-			err = errors.Join(err, token.ReleaseWithError())
-		}
 		return nil, nil, err
 	}
-	if token == nil {
-		return nil, nil, fmt.Errorf("%w: stable manifest replacement returned no exact token", rootpublication.ErrUnresolvedResource)
-	}
-	builder, err := rootpublication.NewStableResourceSetBuilderWithMetadata(owner, rootpublication.ReachabilityOuterLeafGeneration)
-	if err != nil {
-		return nil, nil, errors.Join(err, token.ReleaseWithError())
-	}
-	if err := builder.Add(token); err != nil {
-		return nil, nil, errors.Join(err, token.ReleaseWithError(), builder.AbandonWithError())
-	}
-	resources, err := builder.Freeze()
-	if err != nil {
-		return nil, nil, errors.Join(err, builder.AbandonWithError())
-	}
-	original.resources = resources
-	diagnostics, captureErr := resources.AcquirePhysicalDiagnostics()
-	if captureErr != nil {
-		return nil, nil, errors.Join(captureErr, resources.ReleaseWithError())
-	}
-
-	descriptors := diagnostics.Physical()
-	if len(descriptors) != 1 || descriptors[0].Kind != rootpublication.ResourceOuterLeafManifest || descriptors[0].Generation != candidate.ManifestRevision || descriptors[0].Digest() == ([32]byte{}) {
-		closeErr := diagnostics.CloseWithError()
-		return nil, nil, errors.Join(closeErr, resources.ReleaseWithError(), fmt.Errorf("%w: manifest replacement token does not match persisted revision %d", rootpublication.ErrResourceConflict, candidate.ManifestRevision))
-	}
-	descriptor := descriptors[0]
-	resourceID, identity, digest := descriptor.ResourceID(), descriptor.Identity(), descriptor.Digest()
-	// The source Set still owns the same physical edge. End the diagnostic
-	// borrow before returning a closure or disposing that source edge.
-	if err := diagnostics.CloseWithError(); err != nil {
-		return nil, nil, errors.Join(err, resources.ReleaseWithError())
+	if token == nil || token.Kind() != rootpublication.ResourceOuterLeafManifest ||
+		token.Generation() != candidate.ManifestRevision || token.Generation() != original.revision ||
+		token.Identity() != original.identity || token.ResourceID() != original.resourceID ||
+		token.Digest() != original.digest || original.digest == ([32]byte{}) {
+		return nil, nil, fmt.Errorf("%w: manifest replacement token does not match persisted revision %d", rootpublication.ErrResourceConflict, candidate.ManifestRevision)
 	}
 	contentSyncs := store.durabilityCounters.ContentSyncs.Load() - beforeContent
 	namespaceSyncs := store.durabilityCounters.NamespaceSyncs.Load() - beforeNamespace
 	if contentSyncs == 0 || namespaceSyncs == 0 {
-		return nil, nil, errors.Join(resources.ReleaseWithError(), fmt.Errorf("%w: manifest replacement lacks producer durability observations", rootpublication.ErrUnresolvedResource))
+		return nil, nil, fmt.Errorf("%w: manifest replacement lacks producer durability observations", rootpublication.ErrUnresolvedResource)
 	}
-	stringCharge := retainedalloc.AllocationCharge(uint64(len(resourceID))) + retainedalloc.AllocationCharge(uint64(len(identity.Platform)))
-	if err := owner.AddPending(stringCharge); err != nil {
+	builder, err = rootpublication.NewStableResourceSetBuilderWithMetadata(owner, rootpublication.ReachabilityOuterLeafGeneration)
+	if err != nil {
 		return nil, nil, err
 	}
-	original.metadataCharge += stringCharge
-	resourceID, identity.Platform = strings.Clone(resourceID), strings.Clone(identity.Platform)
-	original.resourceID, original.identity, original.revision, original.digest = resourceID, identity, candidate.ManifestRevision, digest
+	if err := builder.Add(token); err != nil {
+		return nil, nil, err
+	}
+	token = nil // The builder owns the token after Add succeeds.
+	original.resources, err = builder.Freeze()
+	if err != nil {
+		return nil, nil, err
+	}
 	original.observations = LeafGenerationManifestStableObservations{ContentSyncs: contentSyncs, NamespaceSyncs: namespaceSyncs}
 	return original, candidate, nil
 }
