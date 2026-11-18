@@ -917,10 +917,6 @@ func (db *DB) sealCompactStorageCurrentLeafGeneration(compactLeafLog *rewriteWri
 	if db == nil {
 		return false, nil
 	}
-	var sealedFileIDs []uint32
-	// Sidecar errors may call back into the DB. Report them after releasing
-	// the gate that serializes the manifest and operational view.
-	defer func() { db.persistLeafGenerationRecordLengthIndexes(sealedFileIDs) }()
 	db.durablePublishMu.Lock()
 	defer db.durablePublishMu.Unlock()
 	commitSeq := uint64(1)
@@ -968,7 +964,6 @@ func (db *DB) sealCompactStorageCurrentLeafGeneration(compactLeafLog *rewriteWri
 	if err := db.replaceLeafGenerationManifest(nextManifest); err != nil {
 		return false, err
 	}
-	sealedFileIDs = rawFileIDs
 	db.mu.Lock()
 	db.leafGenerationManifest = nextManifest
 	db.mu.Unlock()

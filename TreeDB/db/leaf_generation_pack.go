@@ -654,46 +654,11 @@ func noteCreatedLeafGenerationFileIDsInManifest(manifest *leafGenerationManifest
 	return rawFileIDs, true, nil
 }
 
-func (db *DB) persistLeafGenerationManifestAndRecordLengthIndexes(manifest *leafGenerationManifest, rawFileIDs []uint32) error {
+func (db *DB) persistLeafGenerationManifest(manifest *leafGenerationManifest) error {
 	if db == nil || manifest == nil {
 		return nil
 	}
-	rawFileIDs = dedupeLeafGenerationRawFileIDs(rawFileIDs)
-	if err := db.replaceLeafGenerationManifest(manifest); err != nil {
-		return err
-	}
-	db.persistLeafGenerationRecordLengthIndexes(rawFileIDs)
-	return nil
-}
-
-func (db *DB) persistLeafGenerationRecordLengthIndexes(rawFileIDs []uint32) {
-	if db == nil {
-		return
-	}
-	rawFileIDs = dedupeLeafGenerationRawFileIDs(rawFileIDs)
-	var reports []error
-	var firstSourceErr error
-	for _, rawFileID := range rawFileIDs {
-		sourceErr, indexErr := db.persistLeafGenerationRecordLengthIndex(rawFileID)
-		switch {
-		case sourceErr != nil:
-			err := fmt.Errorf("read leaf generation record lengths for raw file %d: %w", rawFileID, sourceErr)
-			reports = append(reports, err)
-			if firstSourceErr == nil {
-				firstSourceErr = err
-			}
-		case indexErr != nil:
-			reports = append(reports, fmt.Errorf("persist leaf generation record-length index for raw file %d: %w", rawFileID, indexErr))
-		}
-	}
-	// Retain the authoritative source failure before calling user code. Only
-	// failures writing the reconstructible index are purely advisory.
-	if firstSourceErr != nil {
-		db.retainOriginalCleanupError(firstSourceErr)
-	}
-	if len(reports) > 0 && db.notifyError != nil {
-		db.notifyError(errors.Join(reports...))
-	}
+	return db.replaceLeafGenerationManifest(manifest)
 }
 
 func (db *DB) noteCreatedLeafGenerationFileIDs(commitSeq uint64, fileIDs []uint32) error {
@@ -707,14 +672,14 @@ func (db *DB) noteCreatedLeafGenerationFileIDs(commitSeq uint64, fileIDs []uint3
 		return nil
 	}
 	nextManifest := baseManifest.clone()
-	rawFileIDs, changed, err := noteCreatedLeafGenerationFileIDsInManifest(nextManifest, commitSeq, fileIDs)
+	_, changed, err := noteCreatedLeafGenerationFileIDsInManifest(nextManifest, commitSeq, fileIDs)
 	if err != nil {
 		return err
 	}
 	if !changed {
 		return nil
 	}
-	if err := db.persistLeafGenerationManifestAndRecordLengthIndexes(nextManifest, rawFileIDs); err != nil {
+	if err := db.persistLeafGenerationManifest(nextManifest); err != nil {
 		return err
 	}
 	db.mu.Lock()

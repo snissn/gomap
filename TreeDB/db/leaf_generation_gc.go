@@ -823,18 +823,15 @@ func (db *DB) removeLeafGenerationRecordLengthIndexes(fileIDs []uint32) error {
 	}
 	var errs []error
 	for _, fileID := range fileIDs {
-		if fileID == 0 {
+		path := leafGenerationRecordLengthIndexPath(db.dir, fileID)
+		if path == "" {
 			continue
 		}
-		path := leafGenerationRecordLengthIndexPath(db.dir, fileID)
 		_, err := removePersistentFile(filepath.Dir(path), path, durabilitycut.ResourceAuxiliary)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("remove leaf generation record-length index %d (%s): %w", fileID, path, err))
 			continue
 		}
-		db.leafGenerationRecordLengthMu.Lock()
-		delete(db.leafGenerationRecordLengthByFile, fileID)
-		db.leafGenerationRecordLengthMu.Unlock()
 	}
 	return errors.Join(errs...)
 }

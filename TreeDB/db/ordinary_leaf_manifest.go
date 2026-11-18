@@ -142,7 +142,6 @@ func (db *DB) bindPublicationLeafManifest(resources *rootpublication.StableResou
 	if pack != nil && !update.staged.changed {
 		return result, update, fmt.Errorf("%w: packed publication did not advance the leaf-generation manifest", rootpublication.ErrResourceConflict)
 	}
-	update.staged.rawFileIDs = append(update.staged.rawFileIDs, packRawFileIDs...)
 	missing, err := firstUncoveredOuterLeafFile(resources, func(fileID uint32) bool {
 		return leafManifestContainsActiveFile(update.staged.manifest, fileID)
 	})

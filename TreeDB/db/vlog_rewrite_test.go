@@ -4175,8 +4175,8 @@ func TestRewriteWriter_LeafPagesUseConfiguredLeafLogDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AppendLeafPage: %v", err)
 	}
-	if got := w.LastLeafPageRecordLength(); got == 0 || int(got) >= valuelog.HeaderSize+page.PageSize {
-		t.Fatalf("LastLeafPageRecordLength=%d want compact leaf payload smaller than raw %d", got, valuelog.HeaderSize+page.PageSize)
+	if got := leafPtr.RecordLength(); got == 0 || int(got) >= valuelog.HeaderSize+page.PageSize {
+		t.Fatalf("pointer record length=%d want compact leaf payload smaller than raw %d", got, valuelog.HeaderSize+page.PageSize)
 	}
 	if err := w.Close(); err != nil {
 		t.Fatalf("Close: %v", err)

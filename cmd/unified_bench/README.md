@@ -2007,3 +2007,12 @@ public throughput or CPU benefit. Public qualification must show natural cleanup
 activation, measured useful cost reduction, and unchanged Load/mixed, tail,
 Close/reopen, storage and accounting guardrails using the maintained public
 harness. Preserve exact source, toolchain, commands and all samples.
+
+### Split leaf-generation planner profiles
+
+Run `scripts/leafgen_plan_profile.sh <application.db> <output-dir>` against a
+saved split-leaf store. The script compares the saved-owner planner run with
+the first `LeafGenerationPlan` on each freshly opened read-only owner. Reopen
+cost is outside the timer, and the filesystem page cache can remain warm. The
+reopen profile uses actual retained segment handles and reports `bench_reopen.txt`,
+`cpu_reopen.pprof` and `allocs_reopen.pprof`.

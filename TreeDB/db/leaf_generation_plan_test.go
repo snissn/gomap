@@ -90,18 +90,6 @@ func withValueLogRecordLengthHeaderReadCounter(t *testing.T) *atomic.Uint64 {
 	return &counter
 }
 
-func withLeafGenerationRecordLengthIndexScanCounter(t *testing.T) *atomic.Uint64 {
-	t.Helper()
-	var counter atomic.Uint64
-	unregister := registerLeafGenerationRecordLengthIndexScanHook(func(rawFileID uint32) {
-		counter.Add(1)
-	})
-	t.Cleanup(func() {
-		unregister()
-	})
-	return &counter
-}
-
 func TestDedupeMaintenanceRootsByRootIDDropsRoleAliasesForLiveStats(t *testing.T) {
 	roots := []maintenanceRoot{
 		{kind: maintenanceRootUser, rootID: 7},
@@ -490,9 +478,6 @@ func TestLeafGenerationRecordLengthFromSource_ReadsWritableFile(t *testing.T) {
 	if got := counter.Load(); got != 1 {
 		t.Fatalf("writable retained source header reads=%d, want 1", got)
 	}
-	if idx, ok := db.loadLeafGenerationRecordLengthIndex(writablePtr.FileID); !ok || idx == nil {
-		t.Fatalf("expected cached record-length index for writable file %d", writablePtr.FileID)
-	}
 	if !fileState.source.IsCurrentWritable() {
 		t.Fatal("expected physically writable retained leaf source")
 	}
@@ -501,7 +486,7 @@ func TestLeafGenerationRecordLengthFromSource_ReadsWritableFile(t *testing.T) {
 	}
 }
 
-func TestLeafGenerationPlan_SmallWriteKeepsWritableRecordLengthIndexWarm(t *testing.T) {
+func TestLeafGenerationPlan_SmallWriteUsesInlineRecordLengths(t *testing.T) {
 	db, _ := openLeafGenerationGCTestDB(t)
 
 	writeLeafGenerationKeys(t, db, "k", 256, 'a')
@@ -509,13 +494,13 @@ func TestLeafGenerationPlan_SmallWriteKeepsWritableRecordLengthIndexWarm(t *test
 		t.Fatalf("warmup LeafGenerationPlan: %v", err)
 	}
 
-	scanCounter := withLeafGenerationRecordLengthIndexScanCounter(t)
+	headerReads := withValueLogRecordLengthHeaderReadCounter(t)
 	writeLeafGenerationKeyRange(t, db, "k", 0, 1, 'b')
 	if _, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{}); err != nil {
 		t.Fatalf("LeafGenerationPlan after small write: %v", err)
 	}
-	if got := scanCounter.Load(); got != 0 {
-		t.Fatalf("small write planner path rescanned %d writable files, want 0", got)
+	if got := headerReads.Load(); got != 0 {
+		t.Fatalf("small write planner read %d fallback length headers, want 0", got)
 	}
 }
 
@@ -630,9 +615,6 @@ func TestLeafGenerationRecordLengthFromSource_ReadsSealedFile(t *testing.T) {
 	}
 	if got := counter.Load(); got != 1 {
 		t.Fatalf("sealed retained source header reads=%d, want 1", got)
-	}
-	if idx, ok := db.loadLeafGenerationRecordLengthIndex(sealedPtr.FileID); !ok || idx == nil {
-		t.Fatalf("expected cached record-length index for file %d", sealedPtr.FileID)
 	}
 }
 

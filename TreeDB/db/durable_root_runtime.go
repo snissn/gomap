@@ -180,7 +180,7 @@ func (db *DB) prepareDurableRootManifestResourcesV1(candidate *leafGenerationMan
 			return nil, nil, nil, fmt.Errorf("%w: compatibility manifest cannot replace exact durable-root authority", rootpublication.ErrResourceConflict)
 		}
 		persisted := candidate.clone()
-		if err := db.persistLeafGenerationManifestAndRecordLengthIndexes(persisted, nil); err != nil {
+		if err := db.persistLeafGenerationManifest(persisted); err != nil {
 			return nil, nil, nil, err
 		}
 		return persisted, current, older, nil

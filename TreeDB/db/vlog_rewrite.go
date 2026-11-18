@@ -3860,7 +3860,6 @@ type rewriteWriter struct {
 	stableDictionaryResourceProvider func() StableDictionaryResourceProvider
 	leafStaging                      bool
 	leafStagingRoot                  string
-	lastLeafRecordLen                uint32
 	// blockCompression enables per-frame block compression for dictID=0 append
 	// paths (used by online rewrite). Offline rewrites use AppendRawRecord and do
 	// not consult this setting.
@@ -4380,13 +4379,6 @@ func (w *rewriteWriter) reserveRecordRIDs(count int) (uint64, error) {
 	return startRID, nil
 }
 
-func (w *rewriteWriter) LastLeafPageRecordLength() uint32 {
-	if w == nil {
-		return 0
-	}
-	return w.lastLeafRecordLen
-}
-
 func (w *rewriteWriter) appendLeafPageWithRID(rid uint64, leafPage []byte) (page.LeafLogPtr, error) {
 	return w.appendLeafPageWithRIDCapture(rid, leafPage, nil)
 }
@@ -4423,7 +4415,6 @@ func (w *rewriteWriter) appendLeafPageWithRIDCapture(rid uint64, leafPage []byte
 	if w.blockCompression && w.leafDictID != 0 && len(w.leafDict) > 0 && rewriteAllowDictForSmallPayload(encodedLeafPage) {
 		ptr, err := w.appendSingleValueWithDictClass(rewriteTemplateClassOuterLeaf, w.leafDictID, w.leafDict, rid, encodedLeafPage)
 		if err == nil {
-			w.lastLeafRecordLen = page.ValuePtrRecordLength(ptr)
 			leafPtr, convErr := page.LeafLogPtrFromValuePtr(ptr)
 			if convErr != nil {
 				return page.LeafLogPtr{}, convErr
@@ -4438,7 +4429,6 @@ func (w *rewriteWriter) appendLeafPageWithRIDCapture(rid uint64, leafPage []byte
 	if err != nil {
 		return page.LeafLogPtr{}, err
 	}
-	w.lastLeafRecordLen = page.ValuePtrRecordLength(ptr)
 	leafPtr, convErr := page.LeafLogPtrFromValuePtr(ptr)
 	if convErr != nil {
 		return page.LeafLogPtr{}, convErr
@@ -4655,7 +4645,6 @@ func (w *rewriteWriter) appendPreparedLeafPageBatch(prepared rewritePreparedLeaf
 	}
 	ptrs := make([]page.LeafLogPtr, len(valuePtrs))
 	for i, ptr := range valuePtrs {
-		w.lastLeafRecordLen = page.ValuePtrRecordLength(ptr)
 		leafPtr, err := page.LeafLogPtrFromValuePtr(ptr)
 		if err != nil {
 			return nil, err
@@ -4704,7 +4693,6 @@ func (w *rewriteWriter) appendLeafPageSplitCapture(rid uint64, leafPage []byte, 
 			return page.LeafLogPtr{}, err
 		}
 		w.records++
-		w.lastLeafRecordLen = page.ValuePtrRecordLength(ptr)
 		return page.LeafLogPtrFromValuePtr(ptr)
 	}
 	var templateEncoded bool
@@ -4733,7 +4721,6 @@ func (w *rewriteWriter) appendLeafPageSplitCapture(rid uint64, leafPage []byte, 
 		return page.LeafLogPtr{}, err
 	}
 	w.records++
-	w.lastLeafRecordLen = page.ValuePtrRecordLength(ptr)
 	return page.LeafLogPtrFromValuePtr(ptr)
 }
 

@@ -3399,7 +3399,7 @@ func TestCompactStorageExhaustiveSealsCurrentLeafGeneration(t *testing.T) {
 	}
 }
 
-func TestCompactStorageSealSidecarErrorReleasesPublicationGate(t *testing.T) {
+func TestCompactStorageSealPreservesLegacySidecar(t *testing.T) {
 	dir := t.TempDir()
 	var sidecarErr error
 	database, err := Open(Options{
@@ -3416,7 +3416,7 @@ func TestCompactStorageSealSidecarErrorReleasesPublicationGate(t *testing.T) {
 	t.Cleanup(func() { closeNoErr(t, leafLog) })
 	t.Cleanup(func() {
 		if err := database.Close(); err != nil {
-			t.Errorf("Close after advisory sidecar error %v: %v", sidecarErr, err)
+			t.Errorf("Close: %v", err)
 		}
 	})
 	database.SetLeafPageLog(leafLog)
@@ -3428,19 +3428,18 @@ func TestCompactStorageSealSidecarErrorReleasesPublicationGate(t *testing.T) {
 	}
 	rawFileID := current.FileIDs[0]
 	indexPath := leafGenerationRecordLengthIndexPath(dir, rawFileID)
-	database.storeLeafGenerationRecordLengthIndex(rawFileID, &leafGenerationRecordLengthIndex{offsets: []uint32{4}})
-	database.notifyError = func(err error) {
-		sidecarErr = err
-		if !database.durablePublishMu.TryLock() {
-			t.Error("sidecar error notification holds the publication gate")
-			return
-		}
-		database.durablePublishMu.Unlock()
+	const legacy = "legacy sidecar sentinel"
+	if err := os.WriteFile(indexPath, []byte(legacy), 0600); err != nil {
+		t.Fatal(err)
 	}
+	database.notifyError = func(err error) { sidecarErr = err }
 	sealed, err := database.sealCompactStorageCurrentLeafGeneration(leafLog)
-	wantSidecarFailure := fmt.Sprintf("leaf generation record-length index: encode %q: offset/length mismatch", indexPath)
-	if err != nil || !sealed || sidecarErr == nil || !strings.Contains(sidecarErr.Error(), wantSidecarFailure) {
+	if err != nil || !sealed || sidecarErr != nil {
 		t.Fatalf("seal applied=%t error=%v sidecar notification=%v", sealed, err, sidecarErr)
+	}
+	stored, err := os.ReadFile(indexPath)
+	if err != nil || string(stored) != legacy {
+		t.Fatalf("legacy sidecar after seal = %q, error = %v", stored, err)
 	}
 }
 
