@@ -373,6 +373,15 @@ func collectionPlannerOptionsForDB(db *backenddb.DB, meta CollectionMeta) (colle
 	if err != nil {
 		return collectionOptions{}, err
 	}
+	// Startup recovers single-member WAL commands before the native bridge is
+	// bound. Match the live native primary layout for ordinary BSON with
+	// explicit fast storage. The recovery appender still owns large document
+	// values.
+	if documentFormat == DocumentFormatBSON && meta.Options.ColumnStore == nil &&
+		len(meta.VectorIndexes) == 0 && meta.Options.DataRootStoragePolicy == RootStorageFast &&
+		db.CommandWALReplayUsesNativeCollectionLayout() {
+		dataPolicy = backenddb.OrderedRootStoragePagerLeaves
+	}
 	indexStatePolicy, err := backendRootStoragePolicy(meta.Options.IndexStateStoragePolicy)
 	if err != nil {
 		return collectionOptions{}, err
@@ -1203,7 +1212,9 @@ type CollectionOptions struct {
 	// DataRootStoragePolicy selects the requested collection data-root layout.
 	// Cached TreeDB backends with a persistent value-log appender promote
 	// default/fast data roots to value-log leaf roots at runtime so large
-	// documents can be stored through stable value pointers.
+	// documents can be stored through stable value pointers. The native BSON
+	// owner builds explicit fast primary roots with pager leaves during live
+	// publication and startup recovery, with the same stable value pointers.
 	DataRootStoragePolicy   RootStoragePolicy `json:"data_root_storage_policy,omitempty"`
 	IndexStateStoragePolicy RootStoragePolicy `json:"index_state_storage_policy,omitempty"`
 	// DisableIndexedWriteMemtables opts an indexed collection out of the native

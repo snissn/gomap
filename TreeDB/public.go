@@ -1132,8 +1132,23 @@ func openValidatedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 	}
 	// COW foreground authority and physical DATA sealing remain distinct. The
 	// existing DATA publisher is shared by cached and ordinary backend callers.
+	cacheMode := opts.MemtableMode
+	if backendOnly && (cacheMode == "cow_btree" || cacheMode == "cow_ordered") {
+		// Backend-root producers publish directly. Reuse the ordinary cache's
+		// leaf/value-log services without binding a second logical authority.
+		// Keep the requested physical and durability options intact for DATA.
+		cacheMode = "btree"
+	}
+	if cacheMode == "" {
+		cacheMode = "adaptive"
+	}
+	nativeSemanticOwner := cacheMode == "cow_btree" || cacheMode == "cow_ordered"
+	openBackend := db.Open
+	if nativeSemanticOwner {
+		openBackend = db.OpenForNativeSemanticOwner
+	}
 	opts.Dir = maindbDir
-	backend, err := db.Open(opts)
+	backend, err := openBackend(opts)
 	if err != nil {
 		if dictBackend != nil {
 			_ = dictBackend.Close()
@@ -1149,9 +1164,6 @@ func openValidatedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 	}
 
 	normalizeBackpressureDefaults(&opts)
-	if opts.MemtableMode == "" {
-		opts.MemtableMode = "adaptive"
-	}
 
 	disableWAL := opts.Durability == db.DurabilityWALOffRelaxed
 	relaxedSync := opts.Durability != db.DurabilityDurable
@@ -1162,15 +1174,8 @@ func openValidatedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 		valueLogMaxSegmentBytes = int64(^uint32(0)) - 4
 	}
 
-	cacheMode := opts.MemtableMode
-	if backendOnly && (cacheMode == "cow_btree" || cacheMode == "cow_ordered") {
-		// Backend-root producers publish directly. Reuse the ordinary cache's
-		// leaf/value-log services without binding a second logical authority.
-		// Keep the requested physical and durability options intact for DATA.
-		cacheMode = "btree"
-	}
 	txnOwner := transactionowner.New()
-	if cacheMode == "cow_btree" || cacheMode == "cow_ordered" {
+	if nativeSemanticOwner {
 		if err := backend.BindPrivateCOWOwner(txnOwner); err != nil {
 			_ = backend.Close()
 			if dictBackend != nil {
@@ -1284,7 +1289,7 @@ func openValidatedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 		return nil, err
 	}
 
-	if cacheMode == "cow_btree" || cacheMode == "cow_ordered" {
+	if nativeSemanticOwner {
 		if err := backend.BindNativeSemanticBridge(txnOwner, cached); err != nil {
 			_ = cached.Close()
 			_ = backend.Close()

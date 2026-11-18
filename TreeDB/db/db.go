@@ -613,6 +613,7 @@ type DB struct {
 	testCompactStorageRemoveValueLogSegmentHook    func(uint32) (bool, error)
 	testCommandWALRecoveryFailAfterLSN             atomic.Uint64
 	testCommandWALRecoveryFailBeforeDependencySync atomic.Bool
+	commandWALReplayNativeCollectionLayout         bool
 	commandWALReplayLSN                            atomic.Uint64
 	commandWALReplayToken                          atomic.Uint64
 	commandWALReplayTokenSeq                       atomic.Uint64
@@ -2468,6 +2469,16 @@ func (s *Snapshot) finalizeCloseRead(oneShot bool) error {
 
 // Open opens the database.
 func Open(opts Options) (*DB, error) {
+	return open(opts, false)
+}
+
+// OpenForNativeSemanticOwner opens the backend for a public native COW owner.
+// Recovery runs before that owner can bind its in-memory semantic bridge.
+func OpenForNativeSemanticOwner(opts Options) (*DB, error) {
+	return open(opts, true)
+}
+
+func open(opts Options, nativeSemanticOwner bool) (*DB, error) {
 	if opts.NegativeLookupFilterBytes < 0 || opts.NegativeLookupFilterBytes > 64<<20 || (opts.NegativeLookupFilterBytes > 0 && opts.NegativeLookupFilterBytes < 8) {
 		return nil, errors.New("negative lookup filter budget must be zero or 8 bytes through 64 MiB")
 	}
@@ -2588,7 +2599,7 @@ func Open(opts Options) (*DB, error) {
 			return nil, configErr
 		}
 	}
-	db, err := openWithLock(opts, lock)
+	db, err := openWithLock(opts, lock, nativeSemanticOwner)
 	if err != nil {
 		if !recoveryCleanupOwnsLockV6(err, lock) {
 			err = errors.Join(err, lock.Close())
@@ -2730,7 +2741,7 @@ func resolveInlineThresholdAndAdaptive(opts Options) (*adaptive.Controller, int)
 	return adaptiveCtrl, inlineThreshold
 }
 
-func openWithLock(opts Options, lock *lockfile.Lock) (result *DB, retErr error) {
+func openWithLock(opts Options, lock *lockfile.Lock, nativeSemanticOwner bool) (result *DB, retErr error) {
 	valueLogIdentityPins := rootpublication.NewIdentityPinRegistry()
 	registryTransferred := false
 	defer func() {
@@ -2820,9 +2831,10 @@ func openWithLock(opts Options, lock *lockfile.Lock) (result *DB, retErr error) 
 	}
 
 	*db = DB{
-		ownedFinishGuardV6:                 db.ownedFinishGuardV6,
-		dependencyDirectoryRequiredFeature: requiresDependencyDirectory,
-		physicalSnapshotSideStoreCapture:   opts.PhysicalSnapshotSideStoreCapture,
+		ownedFinishGuardV6:                     db.ownedFinishGuardV6,
+		commandWALReplayNativeCollectionLayout: nativeSemanticOwner,
+		dependencyDirectoryRequiredFeature:     requiresDependencyDirectory,
+		physicalSnapshotSideStoreCapture:       opts.PhysicalSnapshotSideStoreCapture,
 
 		valueLogManager:                vm,
 		valueLogIdentityPins:           valueLogIdentityPins,

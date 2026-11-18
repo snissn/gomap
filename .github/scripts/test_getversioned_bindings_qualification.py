@@ -140,6 +140,8 @@ class FixedQualificationTests(unittest.TestCase):
     def test_compiler_selection_preserves_scope_errors_and_unknowns(self):
         sources = Q.COMPILER_SOURCES["db"]
         kept = [b"TreeDB/db/value_reader.go:65:10: can inline selected\n",
+                b"TreeDB/db/db.go:1793:4: can inline selected\n",
+                b"TreeDB/db/db.go:1974:4: can inline selected\n",
                 b"./TreeDB/db/db.go:1940:4: inlining call to selected\n",
                 b"/checkout/TreeDB/db/db.go:1940:4:   flow: x = y:\n",
                 b"TreeDB/db/db.go:1940:4:     from x (return) at x.go:1:2\n",
@@ -150,6 +152,8 @@ class FixedQualificationTests(unittest.TestCase):
         for line in kept:
             self.assertFalse(Q.omit_optimization(line, sources), line)
         for line in (b"TreeDB/db/other.go:1:2: can inline irrelevant with cost 3\n",
+                     b"TreeDB/db/db.go:1792:4: can inline irrelevant\n",
+                     b"TreeDB/db/db.go:1975:4: can inline irrelevant\n",
                      b"TreeDB/db/db.go:2500:4: x escapes to heap in f:\n",
                      b"TreeDB/db/db.go:2500:4:   flow: x = y:\n",
                      b"TreeDB/db/db.go:2500:4:     from x (return) at x.go:1:2\n"):
@@ -182,7 +186,8 @@ class FixedQualificationTests(unittest.TestCase):
             self.assertEqual(failed["status"], "INCOMPLETE")
             self.assertNotIn("raw_sha256", failed)
             self.assertIn("consumed_prefix_sha256", failed)
-            mismatched = {"db": {"TreeDB/db/db.go": ("0" * 64, ((1791, 1972),))}}
+            _, ranges = Q.COMPILER_SOURCES["db"]["TreeDB/db/db.go"]
+            mismatched = {"db": {"TreeDB/db/db.go": ("0" * 64, ranges)}}
             with mock.patch.object(Q, "COMPILER_SOURCES", mismatched), self.assertRaises(ValueError):
                 Q.compiler_scope("db", repository)
 
