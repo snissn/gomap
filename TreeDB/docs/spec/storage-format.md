@@ -1237,6 +1237,13 @@ predecessor, successor commit sequence, and operational manifest during the
 replacement syncs and until visibility. Reader admission stays open during
 those manifest syncs.
 
+If the staged manifest omits a retained packed leaf file, the ordinary
+publisher scans the final user and system roots, including collection roots.
+It may omit the pack's exact dependency from the successor only after the scan
+proves that the successor cannot reference it. Scan failures and missing
+coverage for reachable packs fail publication. Each older slot retains its own
+immutable manifest and dependency tokens for recovery.
+
 Pack publication acquires the same sequencer before registering promoted files
 in the value-log set. It binds one immutable manifest covering the promoted
 files and any late SYSTEM leaf appends before accepting the root. The pack
