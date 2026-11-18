@@ -129,13 +129,30 @@ def schedule(order, short_ops, long_ops):
             for arm in pair]
 
 
+def tail_observation(run, operation):
+    row = run.get(operation, {})
+    count = row.get('count')
+    recipe.require(type(count) is int and count > 0, f'missing or invalid {operation} count')
+    for field in ('p999_us', 'max_us'):
+        value = row.get(field)
+        recipe.require(type(value) in (int, float) and math.isfinite(value) and value >= 0,
+                       f'missing or invalid {operation} {field}')
+    return dict(count=count, p999_us=row['p999_us'], max_us=row['max_us'])
+
+
 def summarize(results, floor, ceiling):
     rows = []
     for length in ('long', 'short'):
         pairs = []
         for repeat in (1, 2, 3):
             base, cand = (results[(length, repeat, arm)]['run'] for arm in ('A', 'B'))
-            pairs.append(dict(repeat=repeat,
+            tails = {}
+            for operation in ('READ', 'UPDATE'):
+                baseline = tail_observation(base, operation)
+                candidate = tail_observation(cand, operation)
+                ratio = candidate['p999_us'] / baseline['p999_us'] if baseline['p999_us'] else None
+                tails[operation] = dict(baseline=baseline, candidate=candidate, p999_ratio=ratio)
+            pairs.append(dict(repeat=repeat, operation_tails=tails,
                 throughput_ratio=cand['TOTAL']['ops_per_sec']/base['TOTAL']['ops_per_sec'],
                 update_p95_ratio=cand['UPDATE']['p95_us']/base['UPDATE']['p95_us'],
                 update_p99_ratio=cand['UPDATE']['p99_us']/base['UPDATE']['p99_us']))
