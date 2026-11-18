@@ -2167,6 +2167,11 @@ publication consumes that exact stable token in `DependencyManifestV1`; the
 fixed `manifest.json` path is a compatibility view, not the selected revision's
 identity.
 
+An ordinary successor may reuse its inherited revision while the candidate's
+external leaf files are covered by it. A successor that needs a new raw file
+selects the replacement revision in its own dependency closure. The alternate
+slot retains the immutable revision and digest it already selected.
+
 A prepared immutable revision may be abandoned only while no recoverable meta
 slot can name it. Vacuum retains prepared revisions on failure because a
 replacement-meta write may already have made them recoverable. For a proven

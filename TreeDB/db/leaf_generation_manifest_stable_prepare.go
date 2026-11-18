@@ -1,6 +1,7 @@
 package db
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -61,6 +62,9 @@ func loadSelectedDurableLeafGenerationManifestTokens(tokens []*rootpublication.S
 	})
 	if err != nil {
 		return nil, false, err
+	}
+	if uint64(len(data)) != frontier.Bytes || sha256.Sum256(data) != selected.Digest() {
+		return nil, false, fmt.Errorf("%w: selected outer-leaf manifest bytes differ from revision %d", rootpublication.ErrResourceConflict, selected.Generation())
 	}
 	manifest, err := decodeLeafGenerationManifest(data, selected.ResourceID())
 	if err != nil {
@@ -505,9 +509,9 @@ func (db *DB) PrepareLeafGenerationManifestStableClosure() (*LeafGenerationManif
 }
 
 // prepareLeafGenerationManifestStableCandidate persists one immutable
-// candidate revision without changing the DB-visible manifest. The caller
-// must run it outside DB/write/commit/root-build locks, then either transfer
-// the returned closure into a durable-root candidate or abandon it.
+// candidate revision without changing the DB-visible manifest. Callers
+// serialize the manifest transition without holding db.mu or the root-reuse
+// gate. They transfer the returned closure to a root candidate or abandon it.
 func (db *DB) prepareLeafGenerationManifestStableCandidate(candidate *leafGenerationManifest) (closure *LeafGenerationManifestStablePreparedClosure, persisted *leafGenerationManifest, retErr error) {
 	if db == nil || candidate == nil || db.leafGenerationManifestStore == nil {
 		return nil, nil, fmt.Errorf("%w: DB has no outer-leaf generation manifest producer", rootpublication.ErrUnresolvedResource)

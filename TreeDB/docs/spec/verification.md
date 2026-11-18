@@ -515,6 +515,17 @@ Real generation packing tests skip on platforms without exact retained-parent
 namespace and cross-parent no-replace promotion support; such skips do not
 qualify dictionary cache activation.
 
+`TestOrdinaryLeafRotationRetainsExactManifestThroughReopen` uses ordinary
+public cached BSON writes after a maintained pack. It proves a non-idle leaf
+rotation and ties the reached row's raw pointer to both physical slots, their
+immutable manifest identities and digests, and the first public plan after
+reopen. It also checks zero dry-run deletions, agreement of backend and cache
+authority after that call, the typed BSON payload, and checked Close.
+`TestOrdinaryLeafManifestPublicationRoutes` checks queued and inline publication
+after a pack. It checks producer refusal, queued activation refusal and exact
+namespace rollback, inline pre-meta retry, predecessor-slot retention, and
+unchanged-revision reuse without new manifest syncs on a steady write.
+
 The [COW publication contract](cow-cache-publication.md) requires evidence from
 actual public `MemtableMode="cow_btree"` dispatch in all three production
 profiles. Internal foundation/read-owner checks alone do not qualify the mode.

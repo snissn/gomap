@@ -921,6 +921,13 @@ interpret leftover private `manifest.gc.*.tmp` evidence as an unreferenced
 revision to delete. Further revision maintenance refuses that evidence pending
 explicit recovery investigation.
 
+Each ordinary successor of a root with exact leaf-generation authority carries
+an immutable revision that covers its captured leaf resources. A rotation can
+therefore leave the two slots with distinct revisions. Recovery and subsequent
+planning resolve each slot through its own revision and digest. A pending
+producer registration or the newest compatibility view cannot repair an
+uncovered file in an older slot's selected revision.
+
 ## Joint DATA/PRIMARY capsule vacuum recovery
 
 This existing protocol remains active for the temporary explicit/persisted

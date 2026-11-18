@@ -827,14 +827,21 @@ the roots, the command-WAL V1 marker, and `AppliedCommandLSN` together. A
 post-commit sidecar, format-config marker, manifest, system-root-only update, or
 stats update is not a valid source of recovery truth.
 
-Stable split-leaf manifest replacement is a separately certified dependency
-operation: exactly one sync persists the encoded manifest file and exactly one
-retained-parent sync persists its rename. A token captured after those steps is
-already content-synced, so `SyncThrough` must not repeat the file sync. Until
-durable-root publication transfers that exact token into the selected
-candidate's `DependencyManifestV1`, the replacement does not by itself make the
-manifest a root or `AppliedLSN` dependency and does not change the broader
-publication ordering.
+Stable split-leaf manifest replacement syncs the immutable revision file and
+its retained parent, then syncs the separate compatibility file and its rename.
+The exact immutable token carries the completed content and namespace frontiers
+into the root publisher.
+
+Once a root selects an immutable leaf manifest, ordinary inline and queued
+successors check that authority against their captured external leaf resources.
+A successor covered by the inherited revision reuses the token with no new
+manifest write or sync. If a newly reached raw file lacks coverage, the shared
+producer incorporates pending leaf registrations and persists the replacement
+revision before the candidate can install or seal the new root. The successor
+selects that exact revision together with its roots and `AppliedCommandLSN`.
+The predecessor slot retains its own exact authority. Refusal before ownership
+transfer abandons the replacement. A candidate retained for durability retry
+or ambiguous recovery keeps its exact revision.
 
 Under the user-command WAL target, `DB.Checkpoint()` success must cover command
 WAL. A checkpoint that cannot publish `AppliedLSN` covering pre-cut command

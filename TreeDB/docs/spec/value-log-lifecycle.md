@@ -1084,6 +1084,16 @@ Compatibility-only stores retain their segment behavior and explicitly report
 revision GC unsupported. See the precise
 [storage contract](storage-format.md#split-leaf-generation-manifest).
 
+Once exact leaf authority has been established, ordinary publication carries
+forward the selected manifest while its physical leaf files remain covered. A
+newly reached raw file requires an exact successor revision in the same root
+publication. Pending IDs incorporated by the replacement are cleared after
+acceptance, and sealed-file record-length indexes remain rebuildable post-work.
+The cached public `LeafGenerationGC` checkpoints, collects with the cached
+user and system root protections, and refreshes the cached backend basis before
+writers resume. A dry run can reconcile the operational catalog and advance
+the leaf state version even when its deletion counters remain zero.
+
 ## Native appender creation metadata ownership
 
 The command-WAL replay-inline appender registers each produced primary or leaf

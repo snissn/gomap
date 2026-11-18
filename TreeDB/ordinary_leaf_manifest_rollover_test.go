@@ -517,8 +517,36 @@ func TestOrdinaryLeafRotationRetainsExactManifestThroughReopen(t *testing.T) {
 		t.Errorf("reopened exact leaf manifest revision=%d digest=%x omits target raw file=%d",
 			reopened.manifest.Generation, reopened.manifest.Digest, page.ValueLogSegmentID(reopened.pointer.FileID))
 	}
-	if gc, err := database.LeafGenerationGC(ctx, LeafGenerationGCOptions{DryRun: true}); err != nil || gc.GenerationsDeleted != 0 || gc.FilesDeleted != 0 {
-		t.Errorf("leaf generation GC dry run: %+v %v", gc, err)
+	sampleGCState := func(label string) backenddb.StateToken {
+		t.Helper()
+		backendToken, backendOK := database.backend.StateToken()
+		capture, err := database.CaptureNativeSemanticState()
+		if err != nil {
+			t.Fatalf("%s capture native semantic state: %v", label, err)
+		}
+		cacheToken, cacheOK := capture.Snapshot().StateToken()
+		if err := capture.Close(); err != nil {
+			t.Fatalf("%s close original native capture: %v", label, err)
+		}
+		t.Logf("%s backend=%+v cache=%+v", label, backendToken, cacheToken)
+		if !backendOK || !cacheOK || backendToken != cacheToken {
+			t.Errorf("%s backend and cache state differ: backend=%+v (ok=%t) cache=%+v (ok=%t)", label, backendToken, backendOK, cacheToken, cacheOK)
+		}
+		return backendToken
+	}
+	beforeGC := sampleGCState("before leaf generation GC dry run")
+	gc, gcErr := database.LeafGenerationGC(ctx, LeafGenerationGCOptions{DryRun: true})
+	afterGC := sampleGCState("after leaf generation GC dry run")
+	t.Logf("leaf generation GC dry run: %+v %v", gc, gcErr)
+	if gcErr != nil || gc.GenerationsDeleted != 0 || gc.FilesDeleted != 0 {
+		t.Errorf("leaf generation GC dry run: %+v %v", gc, gcErr)
+	}
+	if afterGC.LeafGenerationStateVersion <= beforeGC.LeafGenerationStateVersion {
+		t.Errorf("fixture did not advance leaf generation state during dry run: before=%+v after=%+v", beforeGC, afterGC)
+	}
+	afterGC.LeafGenerationStateVersion = beforeGC.LeafGenerationStateVersion
+	if afterGC != beforeGC {
+		t.Errorf("dry run changed the logical root or command frontier: before=%+v after=%+v", beforeGC, afterGC)
 	}
 	backend, err = database.NativeSemanticBackend()
 	if err != nil {

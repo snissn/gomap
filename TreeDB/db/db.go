@@ -199,6 +199,10 @@ type DB struct {
 	durablePublishMu          sync.Mutex
 	rootPublication           *rootPublicationRuntimeV1
 	rootPublicationFixedDelay time.Duration
+
+	// Protected by durablePublishMu.
+	ordinaryLeafManifestCache ordinaryLeafManifestCache
+
 	// rootReuseMu seals acquisition of a visible root generation while durable
 	// publication converts retired COW pages into reusable pages. Existing
 	// readers remain concurrent; only new generation captures wait for the
@@ -4091,7 +4095,7 @@ type finalizeCommitPost struct {
 // finalizeCommitLockedWithOptions performs the durability-critical publish
 // path. Every caller must bind its constructed roots to the exact visible
 // commit sequence from which they were derived.
-func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, touchedValueLogSegments []uint32, forceValueLogRefresh bool, vlogRefDelta *valueLogRefDelta, leafManifest *leafGenerationManifest, leafManifestRawFileIDs []uint32, opts finalizeCommitOptions) (finalizeCommitPost, error) {
+func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, touchedValueLogSegments []uint32, forceValueLogRefresh bool, vlogRefDelta *valueLogRefDelta, leafManifest *leafGenerationManifest, leafManifestRawFileIDs []uint32, opts finalizeCommitOptions) (_ finalizeCommitPost, retErr error) {
 	post := finalizeCommitPost{
 		metrics: metrics,
 	}
@@ -4300,10 +4304,25 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	// logical candidate fixed while the closure is captured; the exclusive gate
 	// below then seals new old-generation readers before reuse is sampled.
 	var durableResources *rootpublication.StableResourceSet
+	var manifestUpdate ordinaryLeafManifestPublication
+	manifestTransferred := false
 	if db.durableRoot.pending == nil {
 		durableResources, err = db.captureDurableRootResourcesV1(idx, nextMeta, vlogRefDelta, opts.durableResources, opts.durableResourceRequirements, opts.durableResourceMutation, opts.durableResourceAppendMutation, opts.durableResourceRequirementWork, opts.durableResourceRequirementsFallback, opts.valueLogPublicationLocked, opts.publishTiming)
 		if err != nil {
 			return post, wrapFinalizeCommitError(fmt.Errorf("capture durable-root dependencies: %w", err), true)
+		}
+		if leafManifest == nil {
+			durableResources, manifestUpdate, err = db.bindOrdinaryLeafManifest(durableResources, nextMeta.CommitSeq, opts.preparedLimits)
+			if err != nil {
+				return post, prePublishErr(err)
+			}
+			if manifestUpdate.prepared != nil {
+				defer func() {
+					retErr = errors.Join(retErr, manifestUpdate.finish(manifestTransferred || db.publicationPoisoned.Load()))
+				}()
+				leafManifest, leafManifestRawFileIDs = manifestUpdate.staged.manifest, manifestUpdate.staged.rawFileIDs
+				manifestUpdate.bind(&post, &opts)
+			}
 		}
 	} else if opts.durableResources != nil {
 		opts.durableResources.Release()
@@ -4332,6 +4351,7 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	if hook := db.testDurableRootCandidatePreparedHook; hook != nil {
 		hook()
 	}
+	manifestTransferred = true
 	nextMeta, err = db.executeDurableRootCandidateWithRetryV1(candidate)
 	if err != nil {
 		return post, err
@@ -4374,7 +4394,7 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 		post.persistLeafGenerationRawFileIDs = append(post.persistLeafGenerationRawFileIDs[:0], leafManifestRawFileIDs...)
 		leafGenerationView = db.leafGenerationViewForManifest(leafManifest)
 	}
-	if db.leafPageLog != nil {
+	if db.leafPageLog != nil && !opts.ordinaryLeafManifestBound {
 		stagedLeafManifest, err := db.stagedLeafGenerationManifestWithPendingResult(db.leafGenerationManifest, 0, nextMeta.CommitSeq)
 		if err != nil {
 			db.mu.Unlock()
@@ -4535,6 +4555,7 @@ func (db *DB) finalizeCommitPostWork(post finalizeCommitPost) {
 			}
 		} else if post.persistLeafGenerationIndexesOnly {
 			db.persistLeafGenerationRecordLengthIndexes(post.persistLeafGenerationRawFileIDs)
+			clearPending = len(post.clearLeafGenerationPendingFileIDs) > 0
 		} else if len(post.clearLeafGenerationPendingFileIDs) > 0 {
 			clearPending = true
 		}

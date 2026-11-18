@@ -1808,6 +1808,12 @@ func (db *DB) captureRebuiltIndexDurableResourcesWithPackedSelectionV1(p *pager.
 // allocator-owned memory store here but are not copied into the index until
 // after external dependencies cross their flush and sync frontiers.
 func (db *DB) prepareDurableRootCandidateV1(idx *indexGen, next page.MetaPageBody, retired []uint64, resources *rootpublication.StableResourceSet, closeTeardownPinned bool) (candidate *durableRootPublishCandidateV1, err error) {
+	releaseResources := true
+	defer func() {
+		if releaseResources {
+			err = errors.Join(err, resources.ReleaseWithError())
+		}
+	}()
 	current := db.durableRoot
 	if current.meta.CommitSeq == 0 || current.record.CommitSeq != current.meta.CommitSeq || next.CommitSeq != current.meta.CommitSeq+1 {
 		return nil, fmt.Errorf("%w: durable=%d candidate=%d", errDurableRootCandidateStale, current.meta.CommitSeq, next.CommitSeq)
@@ -1819,12 +1825,6 @@ func (db *DB) prepareDurableRootCandidateV1(idx *indexGen, next page.MetaPageBod
 	if err != nil {
 		return nil, err
 	}
-	releaseResources := true
-	defer func() {
-		if releaseResources {
-			err = errors.Join(err, resources.ReleaseWithError())
-		}
-	}()
 	if current.record.Directory.RootPageID != 0 {
 		bound, directoryRetired, buildErr := db.prepareDependencyDirectoryV2(idx, next.CommitSeq, current.slotResources[current.slot], resources)
 		if buildErr != nil {
@@ -3300,6 +3300,7 @@ func (db *DB) releaseDurableRootResourcesV1() error {
 		return nil
 	}
 	db.durablePublishMu.Lock()
+	db.ordinaryLeafManifestCache = ordinaryLeafManifestCache{}
 	primary := db.durableRoot.primary
 	resources := db.durableRoot.slotResources
 	pending := db.durableRoot.pending
