@@ -7,8 +7,10 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -138,19 +140,73 @@ func TestOrdinaryLeafManifestPublicationRoutes(t *testing.T) {
 
 			var retryCuts atomic.Int32
 			var retrying atomic.Bool
-			if route == "inline" {
-				retrying.Store(true)
-				restore := durabilitycut.Install(func(event durabilitycut.Event) error {
-					if retrying.Load() && event.Point == durabilitycut.BeforeMetaWrite && event.Resource == durabilitycut.ResourceMeta && retryCuts.Add(1) == 1 {
-						return cut
-					}
-					return nil
-				})
-				defer restore()
-			}
+			var blocked atomic.Bool
+			syncEntered := make(chan struct{})
+			continueSync := make(chan struct{})
+			retrying.Store(route == "inline")
+			restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+				if event.Point == durabilitycut.BeforeDependencyFileSync && event.Resource == durabilitycut.ResourceOuterLeaf &&
+					strings.HasPrefix(filepath.Base(event.Path), "manifest.durable.") && blocked.CompareAndSwap(false, true) {
+					close(syncEntered)
+					<-continueSync
+				}
+				if retrying.Load() && event.Point == durabilitycut.BeforeMetaWrite && event.Resource == durabilitycut.ResourceMeta && retryCuts.Add(1) == 1 {
+					return cut
+				}
+				return nil
+			})
+			defer restore()
 			previousSyncs := syncTotals()
-			if err := database.SetSync(key, []byte("rotated")); err != nil {
+			batch := database.NewBatch()
+			if err := batch.Set(key, []byte("rotated")); err != nil {
 				t.Fatal(err)
+			}
+			done := make(chan error, 1)
+			go func() { done <- errors.Join(batch.WriteSync(), batch.Close()) }()
+			select {
+			case <-syncEntered:
+			case err := <-done:
+				close(continueSync)
+				t.Fatalf("write returned before blocking in the immutable manifest sync: %v", err)
+			case <-time.After(10 * time.Second):
+				close(continueSync)
+				t.Fatal("write did not reach the immutable manifest sync")
+			}
+			if !database.commitMu.TryLock() {
+				t.Error("immutable manifest sync holds commitMu")
+			} else {
+				database.commitMu.Unlock()
+			}
+			if !database.writeMu.TryLock() {
+				t.Error("immutable manifest sync holds writeMu")
+			} else {
+				database.writeMu.Unlock()
+			}
+			if !database.mu.TryLock() {
+				t.Error("immutable manifest sync holds the visible state lock")
+			} else {
+				database.mu.Unlock()
+			}
+			if !database.rootReuseMu.TryRLock() {
+				t.Error("immutable manifest sync blocks reader admission")
+			} else {
+				database.rootReuseMu.RUnlock()
+			}
+			if database.durablePublishMu.TryLock() {
+				database.durablePublishMu.Unlock()
+				t.Error("blocked manifest lost next-root sequencing")
+			}
+			if state, _ := database.StateToken(); state != initial {
+				t.Errorf("root became visible before manifest sync: before=%+v after=%+v", initial, state)
+			}
+			close(continueSync)
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("write did not finish after the immutable manifest sync resumed")
 			}
 			retrying.Store(false)
 			if route == "inline" && retryCuts.Load() != 2 {
@@ -224,6 +280,136 @@ func TestOrdinaryLeafManifestPublicationRoutes(t *testing.T) {
 			}
 			if value, err := reopened.Get(key); err != nil || string(value) != "steady" {
 				t.Fatalf("reopened value=%q err=%v", value, err)
+			}
+		})
+	}
+}
+
+func TestOrdinaryLeafManifestWALRefusalStopsNextWriter(t *testing.T) {
+	for _, route := range []string{"queued", "inline"} {
+		t.Run(route, func(t *testing.T) {
+			requireLeafGenerationPackPromotionSupport(t)
+			dir := t.TempDir()
+			opts := leafGenerationPackPublicationTestOptions(dir)
+			opts.CommandWAL = true
+			opts.Durability = DurabilityWALOnRelaxed
+			database, err := Open(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			leafLog := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 64<<20)
+			leafLog.ConfigureLeafLog(LeafLogDirPath(dir), rewriteLeafLogLaneID, 0)
+			database.SetLeafPageLog(leafLog)
+			t.Cleanup(func() {
+				if database != nil {
+					_ = database.Close()
+					if err := leafLog.Close(); err != nil {
+						t.Error(err)
+					}
+				}
+			})
+			seed := prepareLeafGenerationPackTestCandidate(t, database, leafLog, 512)
+			if pack, err := database.LeafGenerationPack(context.Background(), LeafGenerationPackOptions{
+				GenerationIDs: []uint64{seed.generation.GenerationID}, Force: true, Sync: true, ReserveRIDs: leafLog.reserveRecordRIDs,
+			}); err != nil || len(pack.CreatedFileIDs) == 0 {
+				t.Fatalf("maintained pack: %+v %v", pack, err)
+			}
+			if route == "inline" {
+				disableRootPublicationForLegacyVacuumBenchmark(t, database)
+			}
+			before, _ := database.StateToken()
+			beforeNextLSN := database.CommandWALNextLSN()
+			if err := leafLog.rotateLeaf(); err != nil {
+				t.Fatal(err)
+			}
+
+			syncEntered := make(chan struct{})
+			continueSync := make(chan struct{})
+			cut := errors.New("refuse manifest content sync after raw command append")
+			var blocked atomic.Bool
+			restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+				if event.Point == durabilitycut.BeforeDependencyFileSync && event.Resource == durabilitycut.ResourceOuterLeaf &&
+					strings.HasPrefix(filepath.Base(event.Path), "manifest.durable.") && blocked.CompareAndSwap(false, true) {
+					close(syncEntered)
+					<-continueSync
+					return cut
+				}
+				return nil
+			})
+			defer restore()
+			write := func(key, value string) error {
+				batch := database.NewBatch()
+				if err := batch.Set([]byte(key), []byte(value)); err != nil {
+					return errors.Join(err, batch.Close())
+				}
+				return errors.Join(batch.WriteSync(), batch.Close())
+			}
+			first := make(chan error, 1)
+			go func() { first <- write("pack-concurrent-0000", "replay this command") }()
+			select {
+			case <-syncEntered:
+			case err := <-first:
+				close(continueSync)
+				t.Fatalf("first writer returned before manifest content sync: %v", err)
+			case <-time.After(10 * time.Second):
+				close(continueSync)
+				t.Fatal("first writer did not reach manifest content sync")
+			}
+			if got := database.CommandWALNextLSN(); got != beforeNextLSN+1 {
+				t.Errorf("manifest sync was not after one assigned command: next LSN=%d want=%d", got, beforeNextLSN+1)
+			}
+			second := make(chan error, 1)
+			go func() { second <- write("raw-rollover-second", "must not append") }()
+			close(continueSync)
+			select {
+			case err := <-first:
+				if !errors.Is(err, cut) || CommitPublicationAccepted(err) {
+					t.Errorf("first writer refusal: %v", err)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("first writer did not finish after refusal")
+			}
+			select {
+			case err := <-second:
+				if !errors.Is(err, ErrRecoveryRequired) {
+					t.Errorf("following writer did not observe the poisoned command prefix: %v", err)
+				}
+			case <-time.After(10 * time.Second):
+				t.Fatal("following writer did not finish after refusal")
+			}
+			after, _ := database.StateToken()
+			if after != before || database.CommandWALNextLSN() != beforeNextLSN+1 {
+				t.Errorf("refusal advanced visible state or assigned a second command: before=%+v after=%+v next=%d", before, after, database.CommandWALNextLSN())
+			}
+			if err := database.CheckCommandWALPublishReady(); !errors.Is(err, ErrRecoveryRequired) {
+				t.Errorf("root publication did not stay poisoned: %v", err)
+			}
+			if err := database.Close(); err != nil {
+				t.Errorf("close: %v", err)
+			}
+			if pins := database.valueLogIdentityPins.ActivePins(); pins != 0 {
+				t.Errorf("close retained %d stable identity pins", pins)
+			}
+			if err := leafLog.Close(); err != nil {
+				t.Error(err)
+			}
+			database = nil
+			reopened, err := Open(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if err := reopened.Close(); err != nil {
+					t.Error(err)
+				}
+			}()
+			value, err := reopened.Get([]byte("pack-concurrent-0000"))
+			if err != nil || string(value) != "replay this command" {
+				t.Fatalf("reopen did not replay the sole assigned command: %q %v", value, err)
+			}
+			value, err = reopened.Get([]byte("raw-rollover-second"))
+			if err != nil || value != nil {
+				t.Fatalf("following writer became visible after reopen: %q %v", value, err)
 			}
 		})
 	}

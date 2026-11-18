@@ -1230,6 +1230,13 @@ authoritative and retains exact candidate ownership for retry. From the first
 target-meta mutation onward, an error is ambiguous and poisons the live handle;
 the process must reopen and run bounded selection.
 
+When an ordinary root brings in an outer-leaf file absent from its inherited
+manifest, the publisher captures the successor manifest and exact retained files
+before releasing construction locks. The publication sequencer preserves the
+predecessor, successor commit sequence, and operational manifest during the
+replacement syncs and until visibility. Reader admission stays open during
+those manifest syncs.
+
 The active stable-I/O adapters are explicit and fail closed:
 
 | Platform | Mapped/index file barrier | Namespace barrier | Contract result |

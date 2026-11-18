@@ -240,11 +240,14 @@ func (db *DB) prepareCompactStorageAuditTopology() (retErr error) {
 			return err
 		}
 		refreshed = true
+		db.durablePublishMu.Lock()
 		commitSeq := uint64(1)
 		if state := db.state.Load(); state != nil && state.CommitSeq != 0 {
 			commitSeq = state.CommitSeq
 		}
-		if _, err := db.reconcileLeafGenerationManifestWithDirLocked(commitSeq); err != nil {
+		_, err := db.reconcileLeafGenerationManifestWithDirLocked(commitSeq)
+		db.durablePublishMu.Unlock()
+		if err != nil {
 			return err
 		}
 	}

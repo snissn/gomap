@@ -234,6 +234,8 @@ func (db *DB) prepareLeafGenerationGCScan(ctx context.Context, limits LeafGenera
 		runLeafGenerationGCExclusivePhaseHook(false)
 		db.writeMu.Unlock()
 	}()
+	db.durablePublishMu.Lock()
+	defer db.durablePublishMu.Unlock()
 
 	if db.closing.Load() || db.leafGenerationManifest == nil || db.valueLogManager == nil {
 		return stats, false, nil
@@ -381,6 +383,8 @@ func (db *DB) leafGenerationGCApplyScan(basis leafGenerationGCScanBasis, liveGen
 		runLeafGenerationGCExclusivePhaseHook(false)
 		db.writeMu.Unlock()
 	}()
+	db.durablePublishMu.Lock()
+	defer db.durablePublishMu.Unlock()
 	if db.closing.Load() {
 		return stats, nil
 	}
@@ -396,7 +400,7 @@ func (db *DB) leafGenerationGCApplyScan(basis leafGenerationGCScanBasis, liveGen
 	filePaths := db.leafGenerationFilePaths(manifest)
 	decision := db.buildLeafGenerationGCDecision(manifest, filePaths, currentLeafLogRawFileIDs, liveGenerations, recoverableGenerations, basis.commitSeq, false)
 	stats = decision.stats
-	if err := recoverableRoots.Revalidate(); err != nil {
+	if err := recoverableRoots.revalidateWithDurablePublishLockHeld(); err != nil {
 		return stats, err
 	}
 	recoverableRoots.Release()

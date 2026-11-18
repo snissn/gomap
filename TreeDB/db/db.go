@@ -4095,7 +4095,7 @@ type finalizeCommitPost struct {
 // finalizeCommitLockedWithOptions performs the durability-critical publish
 // path. Every caller must bind its constructed roots to the exact visible
 // commit sequence from which they were derived.
-func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, touchedValueLogSegments []uint32, forceValueLogRefresh bool, vlogRefDelta *valueLogRefDelta, leafManifest *leafGenerationManifest, leafManifestRawFileIDs []uint32, opts finalizeCommitOptions) (_ finalizeCommitPost, retErr error) {
+func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, touchedValueLogSegments []uint32, forceValueLogRefresh bool, vlogRefDelta *valueLogRefDelta, leafManifest *leafGenerationManifest, leafManifestRawFileIDs []uint32, opts finalizeCommitOptions) (retPost finalizeCommitPost, retErr error) {
 	post := finalizeCommitPost{
 		metrics: metrics,
 	}
@@ -4168,6 +4168,13 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 		releaseDurablePublishAction()
 	}
 	defer releaseDurablePublish()
+	if opts.poisonUnacceptedRawWAL {
+		defer func() {
+			if retErr != nil && !retPost.accepted {
+				db.commandWALFlushPoisoned.Store(true)
+			}
+		}()
+	}
 	// A publication that owned the durable gate while this caller waited may
 	// have crossed an outcome-ambiguous cut and poisoned the open handle. The
 	// admission check above cannot authorize work after that predecessor, and
@@ -4312,7 +4319,7 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 			return post, wrapFinalizeCommitError(fmt.Errorf("capture durable-root dependencies: %w", err), true)
 		}
 		if leafManifest == nil {
-			durableResources, manifestUpdate, err = db.bindOrdinaryLeafManifest(durableResources, nextMeta.CommitSeq, opts.preparedLimits)
+			durableResources, manifestUpdate, err = db.bindOrdinaryLeafManifest(durableResources, nextMeta.CommitSeq, &opts)
 			if err != nil {
 				return post, prePublishErr(err)
 			}
@@ -4342,12 +4349,9 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	if prepareErr != nil {
 		return post, wrapFinalizeCommitError(prepareErr, !errors.Is(prepareErr, ErrRecoveryRequired))
 	}
-	if releaseRootSerialization := opts.releaseRootSerialization; releaseRootSerialization != nil {
-		// The immutable candidate now owns its allocator reservations and exact
-		// resource handles. No root-serialization lock is needed by the remaining
-		// flush/sync/meta transaction or the visible-state install below.
-		releaseRootSerialization()
-	}
+	// The immutable candidate now owns its allocator reservations and exact
+	// resource handles. Any remaining build locks can be released before sync.
+	opts.releaseRootConstruction()
 	if hook := db.testDurableRootCandidatePreparedHook; hook != nil {
 		hook()
 	}
@@ -4529,10 +4533,10 @@ func (db *DB) finalizeCommitPostWork(post finalizeCommitPost) {
 			manifestPersisted bool
 		)
 		db.commitMu.Lock()
-		currentCommitSeq := db.meta.CommitSeq
-		currentManifest := db.leafGenerationManifest
-		currentState := db.state.Load()
 		if post.persistLeafGenerationManifest {
+			db.durablePublishMu.Lock()
+			currentManifest := db.leafGenerationManifest
+			currentState := db.state.Load()
 			switch {
 			case currentManifest == post.persistLeafGenerationManifestView:
 				manifestPersisted = true
@@ -4541,7 +4545,7 @@ func (db *DB) finalizeCommitPostWork(post finalizeCommitPost) {
 				assignPersisted = true
 			}
 			if manifestPersisted {
-				persistErr = db.persistLeafGenerationManifestAndRecordLengthIndexes(post.persistLeafGenerationManifestView, post.persistLeafGenerationRawFileIDs)
+				persistErr = db.replaceLeafGenerationManifest(post.persistLeafGenerationManifestView)
 				if persistErr == nil {
 					clearPending = len(post.clearLeafGenerationPendingFileIDs) > 0
 					if assignPersisted {
@@ -4553,6 +4557,10 @@ func (db *DB) finalizeCommitPostWork(post finalizeCommitPost) {
 					}
 				}
 			}
+			db.durablePublishMu.Unlock()
+			if manifestPersisted && persistErr == nil {
+				db.persistLeafGenerationRecordLengthIndexes(post.persistLeafGenerationRawFileIDs)
+			}
 		} else if post.persistLeafGenerationIndexesOnly {
 			db.persistLeafGenerationRecordLengthIndexes(post.persistLeafGenerationRawFileIDs)
 			clearPending = len(post.clearLeafGenerationPendingFileIDs) > 0
@@ -4563,7 +4571,10 @@ func (db *DB) finalizeCommitPostWork(post finalizeCommitPost) {
 			db.clearLeafGenerationPendingFileIDs(post.clearLeafGenerationPendingFileIDs)
 		}
 		if post.drainLeafGenerationPending {
-			pendingErr = db.noteLeafGenerationPendingFileIDs(0, currentCommitSeq)
+			state := db.state.Load()
+			if state != nil {
+				pendingErr = db.noteLeafGenerationPendingFileIDs(0, state.CommitSeq)
+			}
 		}
 		db.commitMu.Unlock()
 		if persistErr != nil {

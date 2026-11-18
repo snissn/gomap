@@ -46,10 +46,11 @@ func (p ordinaryLeafManifestPublication) bind(post *finalizeCommitPost, opts *fi
 // bindOrdinaryLeafManifest checks the exact immutable generation authority in
 // the captured candidate closure. A successor with no newly uncovered leaf
 // files keeps its existing token. Only a changed candidate invokes the stable
-// producer, while root publication is serialized but outside the snapshot and
-// root-reuse gates. The superseded durable slot keeps its original authority.
+// producer. It finishes the exact staged coverage before releasing the build
+// locks, and persists it under the next-root gate. The superseded durable slot
+// keeps its original authority.
 // This function consumes resources on error or replacement.
-func (db *DB) bindOrdinaryLeafManifest(resources *rootpublication.StableResourceSet, commitSeq uint64, limits *PreparedRootPublicationLimits) (result *rootpublication.StableResourceSet, update ordinaryLeafManifestPublication, retErr error) {
+func (db *DB) bindOrdinaryLeafManifest(resources *rootpublication.StableResourceSet, commitSeq uint64, opts *finalizeCommitOptions) (result *rootpublication.StableResourceSet, update ordinaryLeafManifestPublication, retErr error) {
 	if db.leafGenerationManifestStore == nil || db.leafGenerationManifestStore.mode != leafGenerationManifestStable {
 		return resources, update, nil
 	}
@@ -96,7 +97,7 @@ func (db *DB) bindOrdinaryLeafManifest(resources *rootpublication.StableResource
 	db.mu.RLock()
 	operational := db.leafGenerationManifest
 	db.mu.RUnlock()
-	update.staged, err = db.stagedLeafGenerationManifestWithPendingResultAndLimit(operational, 0, commitSeq, limits)
+	update.staged, err = db.stagedLeafGenerationManifestWithPendingResultAndLimit(operational, 0, commitSeq, opts.preparedLimits)
 	if err != nil {
 		return result, update, err
 	}
@@ -109,6 +110,11 @@ func (db *DB) bindOrdinaryLeafManifest(resources *rootpublication.StableResource
 	if missing != 0 {
 		return result, update, fmt.Errorf("%w: publication leaf-generation manifest omits raw file %d", rootpublication.ErrUnresolvedResource, missing)
 	}
+	// The private roots are built, reuse is still open and resources retain the
+	// candidate's exact files. The publication gate keeps the predecessor and
+	// operational manifest fixed while the staged successor does its file and
+	// directory syncs. No code may reacquire build locks under that gate.
+	opts.releaseRootConstruction()
 	update.prepared, update.staged.manifest, err = db.prepareLeafGenerationManifestStableCandidate(update.staged.manifest)
 	if err != nil {
 		return result, update, err

@@ -914,9 +914,11 @@ func compactStorageCompactionFlags(opts CompactStorageOptions, debt CompactStora
 }
 
 func (db *DB) sealCompactStorageCurrentLeafGeneration(compactLeafLog *rewriteWriter) (bool, error) {
-	if db == nil || db.leafGenerationManifest == nil {
+	if db == nil {
 		return false, nil
 	}
+	db.durablePublishMu.Lock()
+	defer db.durablePublishMu.Unlock()
 	commitSeq := uint64(1)
 	if state, ok := db.StateToken(); ok && state.CommitSeq != 0 {
 		commitSeq = state.CommitSeq

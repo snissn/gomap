@@ -602,6 +602,7 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent, maxEnt
 			return false, err
 		}
 		opts := commandWALFinalizeOptions(intent)
+		opts.poisonUnacceptedRawWAL = intent.lsn != 0
 		opts.skipPrePublishFlush = true
 		opts.skipConditionalRootConflict = true
 		opts.maxEntryRevision = maxEntryRevision
@@ -613,9 +614,9 @@ func (b *Batch) writeOptimistic(sync bool, intent *commandWALBatchIntent, maxEnt
 		opts.conditionalMutation = conditionalMutation
 		opts.negativeCoverage = negativeCoverage
 		post, err = b.db.finalizeCommitLockedWithOptions(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta, nil, nil, opts)
-		// Poison while still holding commitMu only when the frame remains
-		// unapplied. An accepted candidate already made the LSN visible even when
-		// its admission wait reports a retryable publisher failure.
+		// Cover early finalizer refusals before the durable gate was acquired.
+		// Once acquired, the finalizer poisons an unapplied frame before handing
+		// the gate to another publisher.
 		if err != nil && !post.accepted {
 			b.db.poisonCommandWALAfterPostAppendFailure(intent)
 		}

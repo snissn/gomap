@@ -486,10 +486,8 @@ func (db *DB) PrepareLeafGenerationManifestStableClosure() (*LeafGenerationManif
 		return nil, fmt.Errorf("%w: retained-parent manifest replacement unavailable", rootpublication.ErrNamespacePersistenceUnsupported)
 	}
 	// Manifest maintenance and Close serialize in maintenanceMu -> writeMu
-	// order. Commit post-work persists a manifest under commitMu, sometimes
-	// after its optimistic publisher has released writeMu. Hold all three in
-	// that established order so the clone, exact replacement, and DB-owned view
-	// advance form one serialized manifest transition.
+	// order. Join the same publication gate as rollover and commit post-work
+	// so the clone, exact replacement and operational view advance together.
 	db.maintenanceMu.Lock()
 	defer db.maintenanceMu.Unlock()
 	db.writeMu.Lock()
@@ -499,6 +497,8 @@ func (db *DB) PrepareLeafGenerationManifestStableClosure() (*LeafGenerationManif
 	}
 	db.commitMu.Lock()
 	defer db.commitMu.Unlock()
+	db.durablePublishMu.Lock()
+	defer db.durablePublishMu.Unlock()
 
 	db.mu.RLock()
 	if db.leafGenerationManifest == nil || db.leafGenerationManifestStore == nil {

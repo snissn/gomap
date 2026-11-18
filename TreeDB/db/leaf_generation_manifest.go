@@ -504,6 +504,10 @@ func (db *DB) noteLeafGenerationPendingFileIDs(currentFileID uint32, commitSeq u
 	if len(pending) == 0 {
 		return nil
 	}
+	db.durablePublishMu.Lock()
+	defer db.durablePublishMu.Unlock()
+	// An in-flight successor can consume these IDs before we get the gate.
+	pending = db.snapshotLeafGenerationPendingFileIDs(currentFileID)
 	batch := make([]uint32, 0, len(pending))
 	batchCommitSeq := uint64(0)
 	flushBatch := func() error {
@@ -1182,9 +1186,12 @@ func (db *DB) reconcileLeafGenerationManifestWithDirInPlace(commitSeq uint64) (b
 	}
 	db.writeMu.Lock()
 	defer db.writeMu.Unlock()
+	db.durablePublishMu.Lock()
+	defer db.durablePublishMu.Unlock()
 	return db.reconcileLeafGenerationManifestWithDirLocked(commitSeq)
 }
 
+// The caller holds writeMu and durablePublishMu through the operational update.
 func (db *DB) reconcileLeafGenerationManifestWithDirLocked(commitSeq uint64) (bool, error) {
 	if db == nil || db.readOnly || db.leafGenerationManifest == nil {
 		return false, nil

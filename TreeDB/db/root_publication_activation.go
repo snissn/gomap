@@ -1183,7 +1183,7 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 	var manifestUpdate ordinaryLeafManifestPublication
 	manifestAccepted := false
 	if leafManifest == nil {
-		resources, manifestUpdate, err = db.bindOrdinaryLeafManifest(resources, next.CommitSeq, opts.preparedLimits)
+		resources, manifestUpdate, err = db.bindOrdinaryLeafManifest(resources, next.CommitSeq, &opts)
 		if err != nil {
 			return post, prePublishErr(err)
 		}
@@ -1305,9 +1305,7 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 		}
 	}
 
-	if releaseRootSerialization := opts.releaseRootSerialization; releaseRootSerialization != nil {
-		releaseRootSerialization()
-	}
+	opts.releaseRootConstruction()
 	if inlinePrepareGuard != nil {
 		inlinePrepareGuard.Release()
 	}
