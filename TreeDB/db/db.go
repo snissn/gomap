@@ -4326,7 +4326,7 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 			return post, wrapFinalizeCommitError(fmt.Errorf("capture durable-root dependencies: %w", err), true)
 		}
 		if leafManifest == nil || (opts.packedRootPublication != nil && !opts.leafManifestAlreadyPersistent) {
-			durableResources, manifestUpdate, err = db.bindPublicationLeafManifest(durableResources, nextMeta.CommitSeq, leafManifest, leafManifestRawFileIDs, &opts)
+			durableResources, manifestUpdate, err = db.bindPublicationLeafManifest(durableResources, idx, nextMeta, leafManifest, leafManifestRawFileIDs, &opts)
 			if err != nil {
 				return post, prePublishErr(err)
 			}

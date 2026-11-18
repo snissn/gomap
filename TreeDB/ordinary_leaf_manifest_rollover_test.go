@@ -34,13 +34,14 @@ func (f ordinaryLeafIndexFile) ReadPage(id uint64) ([]byte, error) {
 }
 
 type ordinaryLeafSlot struct {
-	record     rootpublication.DurableRootRecordV1
-	manifest   rootpublication.DependencyManifestEntryV1
-	generation map[uint32]uint64
-	pointer    page.LeafLogPtr
-	target     bool
-	frontier   uint64
-	path       string
+	record      rootpublication.DurableRootRecordV1
+	manifest    rootpublication.DependencyManifestEntryV1
+	generation  map[uint32]uint64
+	packedFiles []uint32
+	pointer     page.LeafLogPtr
+	target      bool
+	frontier    uint64
+	path        string
 }
 
 // The root capture owns the original dependency and its namespace. This
@@ -180,6 +181,9 @@ func inspectOrdinaryLeafSlots(t *testing.T, backend *backenddb.DB, dir, name str
 		}
 		entries := dependencies.Entries()
 		for _, entry := range entries {
+			if entry.Kind == rootpublication.ResourceOuterLeafPack {
+				slot.packedFiles = append(slot.packedFiles, page.ValueLogSegmentID(uint32(entry.Generation)))
+			}
 			if entry.Kind != rootpublication.ResourceOuterLeafManifest {
 				continue
 			}
@@ -253,7 +257,7 @@ func inspectOrdinaryLeafSlots(t *testing.T, backend *backenddb.DB, dir, name str
 			recordEnd := slot.pointer.Offset - 4 + shape.RecordBytes
 			for _, entry := range entries {
 				leafDependency := entry.Kind == rootpublication.ResourceOuterLeafLog ||
-					!slot.target && entry.Kind == rootpublication.ResourceOuterLeafPack
+					entry.Kind == rootpublication.ResourceOuterLeafPack
 				if leafDependency && entry.Generation == uint64(slot.pointer.ValueLogFileID()) {
 					if slot.frontier != 0 || !rootpublication.SamePhysicalIdentity(identity, entry.Identity) || entry.Frontier.Bytes < recordEnd {
 						t.Fatalf("slot %d pointer=%+v outside its unique durable identity/frontier: %+v", i, slot.pointer, entry)
@@ -438,7 +442,7 @@ func TestOrdinaryLeafRotationRetainsExactManifestThroughReopen(t *testing.T) {
 	// so it cannot be part of the successor rotation count.
 	prime, _ := insert(512, 1)
 	primed := newerOrdinaryLeafSlot(inspectOrdinaryLeafSlots(t, backend, opts.Dir, name, prime, seed))
-	if !primed.target || primed.pointer.FileID == 0 || primed.record.AppliedCommandLSN <= resumed.record.AppliedCommandLSN {
+	if !primed.target || primed.pointer.FileID == 0 || slices.Contains(primed.packedFiles, primed.pointer.FileID) || primed.record.AppliedCommandLSN <= resumed.record.AppliedCommandLSN {
 		t.Fatalf("resumed owner did not publish its initial ordinary leaf: %+v", primed)
 	}
 	primeLane, primeSeq := valuelog.DecodeFileID(primed.pointer.ValueLogFileID())
@@ -482,7 +486,7 @@ func TestOrdinaryLeafRotationRetainsExactManifestThroughReopen(t *testing.T) {
 	current := newerOrdinaryLeafSlot(slots)
 	lane, seq := valuelog.DecodeFileID(current.pointer.ValueLogFileID())
 	if current.record.CommitSeq <= primed.record.CommitSeq || current.record.AppliedCommandLSN <= primed.record.AppliedCommandLSN ||
-		!current.target || current.pointer.FileID == 0 || lane != primeLane || seq <= primeSeq ||
+		!current.target || current.pointer.FileID == 0 || slices.Contains(current.packedFiles, current.pointer.FileID) || lane != primeLane || seq <= primeSeq ||
 		before[filepath.Base(current.path)] || predecessor.generation[page.ValueLogSegmentID(current.pointer.FileID)] != 0 {
 		t.Fatalf("fixture did not prove a newly emitted, reachable leaf on the already-active ordinary lane: primed=%+v current=%+v", primed, current)
 	}
@@ -510,7 +514,7 @@ func TestOrdinaryLeafRotationRetainsExactManifestThroughReopen(t *testing.T) {
 		t.Errorf("first public LeafGenerationPlan after reopen: %v", err)
 	}
 	reopened := newerOrdinaryLeafSlot(inspectOrdinaryLeafSlots(t, database.backend, opts.Dir, name, target, seed))
-	if !reopened.target || reopened.pointer != current.pointer || reopened.record.AppliedCommandLSN != current.record.AppliedCommandLSN {
+	if !reopened.target || reopened.pointer != current.pointer || slices.Contains(reopened.packedFiles, reopened.pointer.FileID) || reopened.record.AppliedCommandLSN != current.record.AppliedCommandLSN {
 		t.Errorf("reopened target authority changed: acknowledged pointer=%+v lsn=%d, reopened pointer=%+v lsn=%d",
 			current.pointer, current.record.AppliedCommandLSN, reopened.pointer, reopened.record.AppliedCommandLSN)
 	}
