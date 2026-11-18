@@ -824,6 +824,7 @@ func (b *Batch) writeSerializedAttempt(sync bool, intent *commandWALBatchIntent,
 			return err
 		}
 		opts := commandWALFinalizeOptions(intent)
+		opts.poisonUnacceptedRawWAL = intent.lsn != 0
 		opts.skipPrePublishFlush = true
 		opts.skipConditionalRootConflict = true
 		opts.maxEntryRevision = maxEntryRevision

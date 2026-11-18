@@ -286,7 +286,7 @@ func TestOrdinaryLeafManifestPublicationRoutes(t *testing.T) {
 }
 
 func TestOrdinaryLeafManifestWALRefusalStopsNextWriter(t *testing.T) {
-	for _, route := range []string{"queued", "inline"} {
+	for _, route := range []string{"queued", "inline", "serialized-queued", "serialized-inline"} {
 		t.Run(route, func(t *testing.T) {
 			requireLeafGenerationPackPromotionSupport(t)
 			dir := t.TempDir()
@@ -314,7 +314,7 @@ func TestOrdinaryLeafManifestWALRefusalStopsNextWriter(t *testing.T) {
 			}); err != nil || len(pack.CreatedFileIDs) == 0 {
 				t.Fatalf("maintained pack: %+v %v", pack, err)
 			}
-			if route == "inline" {
+			if strings.HasSuffix(route, "inline") {
 				disableRootPublicationForLegacyVacuumBenchmark(t, database)
 			}
 			before, _ := database.StateToken()
@@ -337,15 +337,36 @@ func TestOrdinaryLeafManifestWALRefusalStopsNextWriter(t *testing.T) {
 				return nil
 			})
 			defer restore()
-			write := func(key, value string) error {
+			write := func(key, value string, serialized bool) error {
 				batch := database.NewBatch()
 				if err := batch.Set([]byte(key), []byte(value)); err != nil {
+					return errors.Join(err, batch.Close())
+				}
+				if serialized {
+					// Enter the actual fallback directly so its coverage does not depend
+					// on scheduling enough optimistic conflicts.
+					err := func() error {
+						b := batch.(*Batch)
+						release, err := database.LockCommandWALPublishWithBarriers()
+						if err != nil {
+							return err
+						}
+						defer release()
+						revision := database.assignBatchEntryRevisions(b.batch)
+						intent, err := database.prepareRawKVCommandWALIntent(b, true)
+						if err != nil {
+							return err
+						}
+						defer releaseUnassignedCommandWALIntent(intent)
+						return b.writeSerialized(true, intent, revision, nil)
+					}()
 					return errors.Join(err, batch.Close())
 				}
 				return errors.Join(batch.WriteSync(), batch.Close())
 			}
 			first := make(chan error, 1)
-			go func() { first <- write("pack-concurrent-0000", "replay this command") }()
+			serialized := strings.HasPrefix(route, "serialized-")
+			go func() { first <- write("pack-concurrent-0000", "replay this command", serialized) }()
 			select {
 			case <-syncEntered:
 			case err := <-first:
@@ -359,8 +380,30 @@ func TestOrdinaryLeafManifestWALRefusalStopsNextWriter(t *testing.T) {
 				t.Errorf("manifest sync was not after one assigned command: next LSN=%d want=%d", got, beforeNextLSN+1)
 			}
 			second := make(chan error, 1)
-			go func() { second <- write("raw-rollover-second", "must not append") }()
-			close(continueSync)
+			go func() { second <- write("raw-rollover-second", "must not append", false) }()
+			if serialized {
+				// Stop the caller in pending-pointer cleanup after finalization.
+				// A separate publisher must see poison as soon as it owns the gate.
+				database.pendingValueLogAppendMu.Lock()
+				gatePoison := make(chan bool, 1)
+				go func() {
+					database.durablePublishMu.Lock()
+					gatePoison <- errors.Is(database.commandWALPoisonedError(), ErrRecoveryRequired)
+					database.durablePublishMu.Unlock()
+				}()
+				close(continueSync)
+				select {
+				case poisoned := <-gatePoison:
+					if !poisoned {
+						t.Error("serialized writer released the durable gate before poisoning its unapplied WAL frame")
+					}
+				case <-time.After(10 * time.Second):
+					t.Error("durable publication gate did not release after manifest refusal")
+				}
+				database.pendingValueLogAppendMu.Unlock()
+			} else {
+				close(continueSync)
+			}
 			select {
 			case err := <-first:
 				if !errors.Is(err, cut) || CommitPublicationAccepted(err) {
