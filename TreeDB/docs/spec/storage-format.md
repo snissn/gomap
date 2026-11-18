@@ -1785,6 +1785,14 @@ the record header. A physical record occupies this decoded length plus four
 bytes; storage maintenance must include that CRC when comparing live bytes
 with physical file or chunk sizes. This distinction does not change the encoding.
 
+Leaf-generation reachability accounts for lengths from the live tree pointer or
+from its snapshot-retained leaf record. The record-length index held by the
+writer and its persisted `.lenidx` output do not affect the plan. A missing
+or unreadable referenced leaf source remains a planning error. A plan can
+reuse a checked extent from its retained physically sealed file when validating
+later references to that file. Physically writable sources still use the
+original readability barrier and a fresh extent check on a physical read.
+
 ### 4.1 FileID layout
 
 `FileID` uses a marker bit and packed segment id:

@@ -1,28 +1,33 @@
 package db
 
-import "testing"
+import (
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"sort"
+	"testing"
+)
 
-func TestLeafGenerationRecordLengthIndex_LookupWithHintLocality(t *testing.T) {
-	idx := &leafGenerationRecordLengthIndex{
-		offsets: []uint32{10, 20, 30, 40, 50, 60},
-		lengths: []uint32{100, 200, 300, 400, 500, 600},
+func (idx *leafGenerationRecordLengthIndex) len() int {
+	if idx == nil {
+		return 0
 	}
+	return len(idx.offsets)
+}
 
-	if got, hint, ok := idx.lookupWithHint(30, 2); !ok || got != 300 || hint != 2 {
-		t.Fatalf("exact hint lookup = (%d,%d,%v), want (300,2,true)", got, hint, ok)
+func (idx *leafGenerationRecordLengthIndex) lookup(offset uint64) (uint32, bool) {
+	if idx == nil {
+		return 0, false
 	}
-	if got, hint, ok := idx.lookupWithHint(40, 2); !ok || got != 400 || hint != 3 {
-		t.Fatalf("forward local lookup = (%d,%d,%v), want (400,3,true)", got, hint, ok)
+	i := sort.Search(len(idx.offsets), func(i int) bool {
+		return uint64(idx.offsets[i]) >= offset
+	})
+	if i == len(idx.offsets) || uint64(idx.offsets[i]) != offset {
+		return 0, false
 	}
-	if got, hint, ok := idx.lookupWithHint(20, 3); !ok || got != 200 || hint != 1 {
-		t.Fatalf("backward local lookup = (%d,%d,%v), want (200,1,true)", got, hint, ok)
-	}
-	if got, hint, ok := idx.lookupWithHint(35, 2); ok || got != 0 || hint != 3 {
-		t.Fatalf("midpoint miss = (%d,%d,%v), want (0,3,false)", got, hint, ok)
-	}
-	if got, hint, ok := idx.lookupWithHint(5, 2); ok || got != 0 || hint != 0 {
-		t.Fatalf("low miss = (%d,%d,%v), want (0,0,false)", got, hint, ok)
-	}
+	return idx.lengths[i], true
 }
 
 func TestLeafGenerationRecordLengthIndex_NoteRawIsCopyOnWrite(t *testing.T) {
@@ -61,4 +66,89 @@ func TestLeafGenerationRecordLengthIndex_NoteRawAllowsOffsetZero(t *testing.T) {
 	if got, ok := idx.lookup(0); !ok || got != 64 {
 		t.Fatalf("lookup(0)=(%d,%v), want (64,true)", got, ok)
 	}
+}
+
+// Decode persisted hints only to verify writer output in compatibility tests.
+func loadLeafGenerationRecordLengthIndexFile(path string, rawFileID uint32) (*leafGenerationRecordLengthIndex, bool, error) {
+	if path == "" || rawFileID == 0 {
+		return nil, false, nil
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	defer func() { _ = f.Close() }()
+	const headerSize = 16
+	var header [headerSize]byte
+	if _, err := io.ReadFull(f, header[:]); err != nil {
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			return nil, false, fmt.Errorf("leaf generation record-length index: decode %q: short header", path)
+		}
+		return nil, false, err
+	}
+	if string(header[:4]) != leafGenerationRecordLengthIndexMagic {
+		return nil, false, fmt.Errorf("leaf generation record-length index: decode %q: bad magic", path)
+	}
+	version := binary.LittleEndian.Uint32(header[4:8])
+	if version != leafGenerationRecordLengthIndexVersion {
+		return nil, false, fmt.Errorf("leaf generation record-length index: decode %q: unsupported version %d", path, version)
+	}
+	gotRawFileID := binary.LittleEndian.Uint32(header[8:12])
+	if gotRawFileID != rawFileID {
+		return nil, false, fmt.Errorf("leaf generation record-length index: decode %q: raw file id %d != %d", path, gotRawFileID, rawFileID)
+	}
+	count := int(binary.LittleEndian.Uint32(header[12:16]))
+	if count < 0 {
+		return nil, false, fmt.Errorf("leaf generation record-length index: decode %q: invalid count %d", path, count)
+	}
+	if info, err := f.Stat(); err == nil {
+		if info.Size() != int64(headerSize+count*8) {
+			return nil, false, fmt.Errorf("leaf generation record-length index: decode %q: size mismatch", path)
+		}
+	}
+	idx := &leafGenerationRecordLengthIndex{
+		offsets: make([]uint32, count),
+		lengths: make([]uint32, count),
+	}
+	if count == 0 {
+		return idx, true, nil
+	}
+	entriesPerChunk := leafGenerationRecordLengthIndexChunkBytes / 8
+	if entriesPerChunk <= 0 {
+		entriesPerChunk = 1
+	}
+	buf := make([]byte, entriesPerChunk*8)
+	prev := uint32(0)
+	for out := 0; out < count; {
+		chunkEntries := count - out
+		if chunkEntries > entriesPerChunk {
+			chunkEntries = entriesPerChunk
+		}
+		chunk := buf[:chunkEntries*8]
+		if _, err := io.ReadFull(f, chunk); err != nil {
+			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+				return nil, false, fmt.Errorf("leaf generation record-length index: decode %q: size mismatch", path)
+			}
+			return nil, false, err
+		}
+		for i := 0; i < chunkEntries; i++ {
+			base := i * 8
+			offset := binary.LittleEndian.Uint32(chunk[base : base+4])
+			length := binary.LittleEndian.Uint32(chunk[base+4 : base+8])
+			if length == 0 {
+				return nil, false, fmt.Errorf("leaf generation record-length index: decode %q: zero length at entry %d", path, out+i)
+			}
+			if out+i > 0 && offset <= prev {
+				return nil, false, fmt.Errorf("leaf generation record-length index: decode %q: offsets not strictly increasing", path)
+			}
+			prev = offset
+			idx.offsets[out+i] = offset
+			idx.lengths[out+i] = length
+		}
+		out += chunkEntries
+	}
+	return idx, true, nil
 }
