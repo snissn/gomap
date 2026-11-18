@@ -6,6 +6,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -16,6 +17,10 @@ func openFixedTestCommandJournal(dir string, opts CommandJournalOptions) (*Comma
 }
 
 func TestWALMediumPolicyClassification(t *testing.T) {
+	ext4Reason := "persistent_or_unknown_filesystem"
+	if runtime.GOOS == "linux" {
+		ext4Reason = "ext4_stream"
+	}
 	for _, tc := range []struct {
 		name             string
 		kind             uint64
@@ -25,7 +30,7 @@ func TestWALMediumPolicyClassification(t *testing.T) {
 	}{
 		{"tmpfs", 0x01021994, nil, true, false, "memory_filesystem"},
 		{"ramfs", 0x858458f6, nil, true, false, "memory_filesystem"},
-		{"ext4", 0xef53, nil, true, true, "persistent_or_unknown_filesystem"},
+		{"ext4", 0xef53, nil, true, runtime.GOOS != "linux", ext4Reason},
 		{"overlay", 0x794c7630, nil, true, true, "persistent_or_unknown_filesystem"},
 		{"unknown", 0, nil, true, true, "persistent_or_unknown_filesystem"},
 		{"probe_error", 0, os.ErrPermission, true, true, "filesystem_probe_error"},
@@ -60,7 +65,8 @@ func TestWALMediumProductionSelectionAndBothRotations(t *testing.T) {
 					}
 					defer j.Close()
 					probe, err := walFilesystemType(j.writer.f)
-					want := FixedWALCreationSupported() && (err != nil || !walMemoryFilesystem(probe))
+					isExt4 := runtime.GOOS == "linux" && probe == 0xef53
+					want := FixedWALCreationSupported() && (err != nil || (!walMemoryFilesystem(probe) && !isExt4))
 					if (j.writer.fixed != nil) != want || j.writer.containerSelection.filesystemType != probe {
 						t.Fatalf("initial=%+v fixed=%t filesystem=%x", j.writer.containerSelection, j.writer.fixed != nil, probe)
 					}

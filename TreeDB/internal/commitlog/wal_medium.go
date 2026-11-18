@@ -1,6 +1,9 @@
 package commitlog
 
-import "os"
+import (
+	"os"
+	"runtime"
+)
 
 // walContainerSelection is cold diagnostic metadata for one exact segment. It
 // never authorizes a sync or changes how an existing segment is decoded.
@@ -42,6 +45,13 @@ func productionWALContainer(capacity int64, supported bool, kind uint64, probeEr
 	}
 	if probeErr != nil {
 		selected.reason = "filesystem_probe_error"
+		return selected
+	}
+	// Compare the existing strict stream writer on ordinary persistent ext4.
+	// Existing occupied files are detected before this fresh-file choice.
+	if runtime.GOOS == "linux" && kind == 0xef53 {
+		selected.fixed = false
+		selected.reason = "ext4_stream"
 		return selected
 	}
 	selected.memory = walMemoryFilesystem(kind)

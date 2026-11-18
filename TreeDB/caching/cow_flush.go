@@ -10,6 +10,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
 	"github.com/snissn/gomap/TreeDB/node"
 )
 
@@ -339,6 +340,10 @@ func (db *DB) poisonNativeHandoff(err error) {
 }
 
 func (db *DB) completeCOWHandoff() error {
+	return db.completeCOWHandoffForGeneration(false)
+}
+
+func (db *DB) completeCOWHandoffForGeneration(generationPressure bool) error {
 	c := db.cow
 	h := c.handoff
 	if h == nil {
@@ -353,6 +358,8 @@ func (db *DB) completeCOWHandoff() error {
 	if err != nil {
 		if terminal {
 			h.failure = err // same admitted handoff; never replay either preparation
+		} else if _, refused := err.(backenddb.NativeSemanticHandoffRetryableRefusal); generationPressure && refused {
+			return cowGenerationRetryableRefusal{err}
 		}
 		return err
 	}
@@ -401,10 +408,10 @@ func (db *DB) flushCOWFrozenCut(syncFlush bool, publish *checkpointCommandWALPub
 
 // forceIdle is private to the exact-basis, fully sealed fallback predicate path.
 func (db *DB) flushCOWFrozenCutForFallback(syncFlush bool, publish *checkpointCommandWALPublish, cut *cowReadCut, forceIdle bool) error {
-	return db.flushCOWFrozenCutWithColumnCompaction(syncFlush, publish, cut, forceIdle, nil)
+	return db.flushCOWFrozenCutWithColumnCompaction(syncFlush, publish, cut, forceIdle, nil, false)
 }
 
-func (db *DB) flushCOWFrozenCutWithColumnCompaction(syncFlush bool, publish *checkpointCommandWALPublish, cut *cowReadCut, forceIdle bool, operation backenddb.NativeColumnStoreCompaction) (retErr error) {
+func (db *DB) flushCOWFrozenCutWithColumnCompaction(syncFlush bool, publish *checkpointCommandWALPublish, cut *cowReadCut, forceIdle bool, operation backenddb.NativeColumnStoreCompaction, generationPressure bool) (retErr error) {
 	c := db.cow
 	// The caller receives completion only. Coverage is always reconstructed
 	// from this immutable cut and its exact captured disk basis below.
@@ -442,7 +449,7 @@ func (db *DB) flushCOWFrozenCutWithColumnCompaction(syncFlush bool, publish *che
 	charge := fixedCharge + memtable.COWAllocationCharge(uint64(chunkCap)*uint64(unsafe.Sizeof(batch.Entry{})))
 	lease, err := c.maintenance.AcquireExternal(fixedCharge)
 	if err != nil {
-		return joinCOWCleanupError(err, c.releaseCut(cut))
+		return joinCOWCleanupError(cowGenerationAdmissionError(generationPressure, err), c.releaseCut(cut))
 	}
 	h := &cowFlushHandoff{cut: cut, lease: lease}
 	handoffOwned := true
@@ -488,7 +495,12 @@ func (db *DB) flushCOWFrozenCutWithColumnCompaction(syncFlush bool, publish *che
 		if !ok {
 			return ErrCOWUnsupported
 		}
-		if syncFlush {
+		captured, canCapture := db.backend.(interface {
+			SyncPrivateCOWGenerationWAL(*transactionowner.Owner) error
+		})
+		if generationPressure && canCapture && c.txnOwner != nil {
+			err = captured.SyncPrivateCOWGenerationWAL(c.txnOwner)
+		} else if syncFlush {
 			err = wal.FlushCommandWAL(true)
 		} else {
 			err = wal.CheckCommandWALPublishReady()
@@ -513,11 +525,11 @@ func (db *DB) flushCOWFrozenCutWithColumnCompaction(syncFlush bool, publish *che
 		return err
 	}
 	if err = lease.Resize(charge); err != nil {
-		return err
+		return cowGenerationAdmissionError(generationPressure, err)
 	}
 	group, err := backend.BeginRootPublicationBuildGroupBorrowingLease(cut.basis.snapshot, h.guard)
 	if err != nil {
-		return err
+		return cowGenerationAdmissionError(generationPressure, err)
 	}
 	if h.prefix.Valid() {
 		if err = group.BindAcceptedPrefixCut(h.prefix); err != nil {
@@ -525,25 +537,26 @@ func (db *DB) flushCOWFrozenCutWithColumnCompaction(syncFlush bool, publish *che
 		}
 	}
 	h.next, err = c.prepareCOWBasisInstall()
-	if err == nil {
-		err = group.PrepareAcceptedSnapshot(func(s backenddb.SnapshotAllocationSizes) error {
-			if s.ValueLog.MapHint > c.budget.Limits().MaxResources || s.ValueLog.FileCount > c.budget.Limits().MaxResources {
-				return memtable.ErrCOWCapacity
-			}
-			var e error
-			h.basis, e = admitCOWBackendBasis(c.maintenance, s)
-			return e
-		}, func(snapshot *backenddb.Snapshot) error {
-			if e := h.basis.adoptSnapshot(snapshot); e != nil {
-				return e
-			}
-			return snapshot.ActivatePrimaryMetadataProducer()
-		}, func() error {
-			basis := h.basis
-			h.basis = nil
-			return basis.release()
-		})
+	if err != nil {
+		return errors.Join(cowGenerationAdmissionError(generationPressure, err), group.Close())
 	}
+	err = group.PrepareAcceptedSnapshot(func(s backenddb.SnapshotAllocationSizes) error {
+		if s.ValueLog.MapHint > c.budget.Limits().MaxResources || s.ValueLog.FileCount > c.budget.Limits().MaxResources {
+			return memtable.ErrCOWCapacity
+		}
+		var e error
+		h.basis, e = admitCOWBackendBasis(c.maintenance, s)
+		return e
+	}, func(snapshot *backenddb.Snapshot) error {
+		if e := h.basis.adoptSnapshot(snapshot); e != nil {
+			return e
+		}
+		return snapshot.ActivatePrimaryMetadataProducer()
+	}, func() error {
+		basis := h.basis
+		h.basis = nil
+		return basis.release()
+	})
 	if err != nil {
 		return errors.Join(err, group.Close())
 	}
@@ -565,6 +578,8 @@ func (db *DB) flushCOWFrozenCutWithColumnCompaction(syncFlush bool, publish *che
 				// when its underlying cause happens to be a capacity error.
 				c.prefix.PoisonAccepted(err)
 				group.MarkNativeSemanticBuildRecoveryRequired()
+			} else if _, refused := err.(backenddb.NativeSemanticBuildRetryableRefusal); generationPressure && refused {
+				err = cowGenerationRetryableRefusal{err}
 			}
 			return errors.Join(err, group.Close())
 		}
@@ -640,7 +655,7 @@ func (db *DB) flushCOWFrozenCutWithColumnCompaction(syncFlush bool, publish *che
 		if err != nil {
 			return err
 		}
-		return db.completeCOWHandoff()
+		return db.completeCOWHandoffForGeneration(generationPressure)
 	}
 	return err
 }
