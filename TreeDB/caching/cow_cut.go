@@ -701,18 +701,19 @@ func (p *cowPreparedCut) drainCancelledWithCompletion() (*memtable.COWExternalLe
 }
 
 func (p *cowPreparedCut) publish() *cowReadCut {
-	old, err := p.publishAccepted(rootpublication.AcceptedTicket{})
+	old, _, err := p.publishAccepted(rootpublication.AcceptedTicket{})
 	if err != nil {
 		panic(err)
 	}
 	return old
 }
 
-func (p *cowPreparedCut) publishAccepted(ticket rootpublication.AcceptedTicket) (*cowReadCut, error) {
+func (p *cowPreparedCut) publishAccepted(ticket rootpublication.AcceptedTicket) (*cowReadCut, bool, error) {
 	if p.consumed {
 		panic("consumed COW cut")
 	}
 	var install rootpublication.AcceptedInstall
+	returnCustody := false
 	if ticket.Valid() {
 		var err error
 		descriptor := rootpublication.AcceptedDescriptor{Sequence: p.next.logicalSeq}
@@ -723,10 +724,11 @@ func (p *cowPreparedCut) publishAccepted(ticket rootpublication.AcceptedTicket) 
 			descriptor.SealTarget = p.native.sealTarget
 			descriptor.AdmittedBytes = plan.AdmittedBytes
 			descriptor.CleanupBytes = plan.CleanupBytes
+			returnCustody = plan.ReturnCustodyOnInstall
 		}
 		install, err = ticket.BeginInstall(descriptor)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		defer install.Abort()
 	}
@@ -754,7 +756,11 @@ func (p *cowPreparedCut) publishAccepted(ticket rootpublication.AcceptedTicket) 
 		p.native = nil
 	}
 	if ticket.Valid() {
-		install.Commit()
+		if returnCustody {
+			returnCustody = install.CommitReturningRootCustody()
+		} else {
+			install.Commit()
+		}
 	}
 	c.activeCuts.Add(1)
 	old.refs--
@@ -767,9 +773,9 @@ func (p *cowPreparedCut) publishAccepted(ticket rootpublication.AcceptedTicket) 
 	c.cutMu.Unlock()
 	p.consumed = true
 	if last {
-		return old, nil
+		return old, returnCustody, nil
 	}
-	return nil, nil
+	return nil, returnCustody, nil
 }
 func (c *cowCache) beginRead() bool {
 	c.readMu.RLock()

@@ -8,6 +8,12 @@ type WritePolicy struct {
 	InlineThreshold int   // Max size of value to store inline
 }
 
+// InlineBSONPagerPrimaryValues reports the open-time placement policy to
+// collection builders, including during command-WAL replay.
+func (db *DB) InlineBSONPagerPrimaryValues() bool {
+	return db != nil && db.inlineBSONPagerPrimaryValues
+}
+
 // DefaultWritePolicy returns the default policy.
 func DefaultWritePolicy() WritePolicy {
 	return WritePolicy{

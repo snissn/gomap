@@ -159,8 +159,34 @@ type cowNativeOwner struct {
 // original queue and cancellation paths consume the by-value completion seam.
 func (o *cowNativeOwner) ReleaseAccepted() error { return rootpublication.ErrPublisherProtocol }
 func (o *cowNativeOwner) ReleaseAcceptedCompletion() (rootpublication.AcceptedCleanupCompletion, error) {
+	cache, record, completion, err := o.detachAcceptedCleanup()
+	if record != nil {
+		cache.semanticMu.Lock()
+		cache.enqueueSemanticLocked(record)
+		cache.semanticMu.Unlock()
+		cache.wakeSemanticCleanup()
+	}
+	return completion, err
+}
+
+// returnAcceptedAfterUnlock bridges the write-admission fence to the original
+// cleanup latch. Close can pass its writer fence as soon as unlock runs, but
+// cannot mark cleanup complete or leave only retained-reader work before the
+// returned accepted record has reached the worker FIFO.
+func (o *cowNativeOwner) returnAcceptedAfterUnlock(unlock func()) (rootpublication.AcceptedCleanupCompletion, error) {
+	cache := o.cache
+	cache.semanticMu.Lock()
+	defer cache.semanticMu.Unlock()
+	unlock()
+	_, record, completion, err := o.detachAcceptedCleanup()
+	cache.enqueueSemanticLocked(record)
+	cache.wakeSemanticCleanup()
+	return completion, err
+}
+
+func (o *cowNativeOwner) detachAcceptedCleanup() (*cowCache, *rootpublication.SemanticCleanup, rootpublication.AcceptedCleanupCompletion, error) {
 	if o.failed != nil {
-		return rootpublication.AcceptedCleanupCompletion{}, o.failed
+		return nil, nil, rootpublication.AcceptedCleanupCompletion{}, o.failed
 	}
 	// All paths detach the opening cut BEFORE ownership reaches the queue or this
 	// destructor. Neither success nor cancellation may use o after this refund.
@@ -169,19 +195,16 @@ func (o *cowNativeOwner) ReleaseAcceptedCompletion() (rootpublication.AcceptedCl
 	}
 	cache, custody, lease, seal := o.cache, o.custody, o.lease, o.sealReceipt
 	o.cache, o.custody, o.lease, o.sealReceipt, o.sealTarget = nil, nil, nil, nil, nil
+	var record *rootpublication.SemanticCleanup
 	if custody != nil {
-		record := custody.ReleaseNativeCustody()
-		cache.semanticMu.Lock()
-		cache.enqueueSemanticLocked(record)
-		cache.semanticMu.Unlock()
-		cache.wakeSemanticCleanup()
+		record = custody.ReleaseNativeCustody()
 	}
 	var sealRefund backenddb.NativeAllocationReceipt
 	if seal != nil {
 		sealRefund = seal.ReleaseNativeSeal()
 		seal = nil
 	}
-	return rootpublication.AcceptedCleanupCompletion{Refund: lease, RequestRefund: sealRefund}, nil
+	return cache, record, rootpublication.AcceptedCleanupCompletion{Refund: lease, RequestRefund: sealRefund}, nil
 }
 
 // SetNativeSemanticPublication attaches a preadmitted native composite to the
@@ -221,6 +244,7 @@ func (b *Batch) SetNativeSemanticPublication(owner *transactionowner.Owner, nati
 	}
 	b.cowState.native = &cowNativeOwner{cache: c, plan: native, custody: native.Custody, opening: opening, lease: lease}
 	native.Custody = nil
+	native.ReturnCustodyOnInstall = false // Only the canonical write path can enable this after attachment.
 	return nil
 }
 
@@ -409,6 +433,7 @@ func (db *DB) writeNativePublication(b *Batch, native *backenddb.NativePreparedP
 	if intent.RequestsExactSeal() && !intent.NativeSealedReceiptAdmitted() {
 		return result, ErrCOWUnsupported
 	}
+	returnCustodyOnInstall := native.ReturnCustodyOnInstall
 	if err = b.SetNativeSemanticPublication(owner, native); err != nil {
 		return result, err
 	}
@@ -425,6 +450,9 @@ func (db *DB) writeNativePublication(b *Batch, native *backenddb.NativePreparedP
 	if completionErr != nil {
 		return result, completionErr
 	}
+	native.ReturnCustodyOnInstall = returnCustodyOnInstall && bridge == nil && !effectiveDurable && intent.IsNewNativeBSONUpdate() &&
+		native.Reprepare != nil && native.Finalizer == nil && native.Resources == nil && native.ObserveAssigned == nil &&
+		!native.RequireInlineCompositeRaw && len(b.entries) == 0
 	charge := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowNativeCommandWALRequest{}))) + 3*memtable.COWAllocationCharge(uint64(unsafe.Sizeof([2]uintptr{})))
 	if bridge != nil {
 		charge += memtable.COWAllocationCharge(bridge.NativeCommandWALCompletionBytes())

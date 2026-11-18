@@ -115,6 +115,21 @@ Its whole-process B/op and allocs/op include gateway and background Go work.
 These local measurements do not establish public Load throughput or sustained
 mixed-workload benefit; use the maintained qualification harness for those.
 
+## BSON value placement
+
+The relaxed standalone BSON gateway with Pager data roots stores ordinary
+primary documents up to half a page inline when the encoded key and document
+fit a leaf. This applies to the persisted Pager collection policy, whether
+selected by default or explicitly. Larger documents use the value log.
+Existing inline values and pointers remain readable together when the gateway
+opens an older store. Individual writes use the current placement policy.
+
+Other collection storage policies, column and vector collections, secondary
+indexes, and system records keep their existing placement rules. Keeping
+medium documents inline avoids value-log writes for those documents and
+increases the bytes stored in pager leaves. The write concern continues to
+determine when the gateway acknowledges a write.
+
 ## Storage memory admission
 
 The standalone opener owns the shared immutable COW database for its full

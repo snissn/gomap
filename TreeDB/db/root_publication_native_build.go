@@ -32,15 +32,18 @@ func (db *DB) MarkNativeSemanticRecoveryRequired() {
 func (group *RootPublicationBuildGroup) BuildNativeOrderedRoot(input OrderedRootDeltaBatchPublishInput) (uint64, error) {
 	group.mu.Lock()
 	defer group.mu.Unlock()
-	return group.buildNativeOrderedRootLocked(input)
+	return group.buildNativeOrderedRootLocked(input, false)
 }
-func (group *RootPublicationBuildGroup) buildNativeOrderedRootLocked(input OrderedRootDeltaBatchPublishInput) (uint64, error) {
+func (group *RootPublicationBuildGroup) buildNativeOrderedRootLocked(input OrderedRootDeltaBatchPublishInput, systemRoot bool) (uint64, error) {
 	if group == nil || group.db == nil || group.closed || group.failed || !group.writeLocked || !group.durablePublishLocked || group.tracker == nil || input.Delta == nil {
 		return 0, errors.New("invalid captured native root build")
 	}
 	opts, err := group.db.orderedRootPublishOptionsForPolicy(input.StoragePolicy)
 	if err != nil {
 		return 0, err
+	}
+	if systemRoot {
+		opts = systemRootOrderedPublishOptions(group.db)
 	}
 	// Pin submitted pointers before fallible physical construction. The original
 	// stream needs no sort/range plan; superseded puts conservatively retain a
@@ -102,7 +105,7 @@ func (group *RootPublicationBuildGroup) buildNativeOrderedRootLocked(input Order
 func (group *RootPublicationBuildGroup) BuildNativeSystemDelta(delta *batchpkg.Batch) error {
 	group.mu.Lock()
 	defer group.mu.Unlock()
-	root, err := group.buildNativeOrderedRootLocked(OrderedRootDeltaBatchPublishInput{BaseRoot: group.systemRoot, Delta: delta})
+	root, err := group.buildNativeOrderedRootLocked(OrderedRootDeltaBatchPublishInput{BaseRoot: group.systemRoot, Delta: delta}, true)
 	if err == nil {
 		group.systemRoot = root
 	}
@@ -164,6 +167,16 @@ func (group *RootPublicationBuildGroup) NativeColumnAssetBuildContext() (string,
 		return "", nil, ErrNativeSemanticUnsupported
 	}
 	return root, registry, nil
+}
+
+// InlineBSONPagerPrimaryValues returns the open-time collection placement policy.
+func (group *RootPublicationBuildGroup) InlineBSONPagerPrimaryValues() bool {
+	if group == nil {
+		return false
+	}
+	group.mu.Lock()
+	defer group.mu.Unlock()
+	return group.db.InlineBSONPagerPrimaryValues()
 }
 
 // NativeInlineThresholdForKey returns the maintained physical value placement

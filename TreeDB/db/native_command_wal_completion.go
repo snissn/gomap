@@ -1,6 +1,11 @@
 package db
 
-import "github.com/snissn/gomap/TreeDB/internal/transactionowner"
+import (
+	"time"
+
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
+)
 
 // NativeCommandWALCompletion is transient request ownership through the ordinary
 // public group's final ACK. It owns neither a command nor an engine version.
@@ -36,6 +41,54 @@ func (db *DB) NativeCommandWALCompletionFor(owner *transactionowner.Owner, inten
 		return nil, durable, nil
 	}
 	return db.nativeCommandWALCompletion, durable, nil
+}
+
+// IsNewNativeBSONUpdate identifies the original singleton append class. The
+// producer separately proves the prepared collection and roots are covered.
+func (intent *CommandWALIntent) IsNewNativeBSONUpdate() bool {
+	return intent != nil && !intent.inner.fromReplay && intent.AssignedLSN() == 0 && intent.inner.trustedPayload &&
+		len(intent.inner.durablePrefixGroup) == 0 && !intent.RequestsExactSeal() &&
+		intent.inner.kind == commitlog.CommandKindCollectionUpdateBatchByID &&
+		intent.inner.scope == commitlog.CommandScopeCollection &&
+		intent.inner.payloadFormat == commitlog.PayloadFormatCollectionUpdateBatchByIDV1
+}
+
+// SyncPrivateCOWGenerationWAL gives the relaxed generation worker the same
+// physical WAL flush as FlushCommandWAL(true). Capture flushes and pins the
+// exact active segment before unlocking the journal. Its sync does not cover
+// retired segments, close dependency debt, append a barrier, or advance W.
+func (db *DB) SyncPrivateCOWGenerationWAL(owner *transactionowner.Owner) error {
+	if db == nil || owner == nil || owner != db.privateCOWOwner || !db.commandWAL || db.durability != DurabilityWALOnRelaxed {
+		return ErrNativeSemanticUnsupported
+	}
+	db.teardownMu.RLock()
+	defer db.teardownMu.RUnlock()
+	if db.closing.Load() {
+		return ErrClosed
+	}
+	if err := db.commandWALPoisonedError(); err != nil {
+		return err
+	}
+	if db.commandJournal == nil {
+		return db.commandWALJournalUnavailableError()
+	}
+	started := time.Now()
+	target, err := db.commandJournal.CaptureSync(nil)
+	if err == nil {
+		defer target.Release()
+		err = target.Sync()
+	}
+	if err == nil && db.testFailCommandWALFlush.Load() {
+		err = errTestCommandWALFlushFailpoint
+	}
+	if err != nil {
+		db.commandWALFlushPoisoned.Store(true)
+	}
+	db.observeCommandWALFlush(commandWALAppendStatsBarrier, true, time.Since(started))
+	if err != nil {
+		return err
+	}
+	return db.commandWALPoisonedError()
 }
 
 // FlushPrivateCOWCommandWALBarrier closes the exact dependency-complete prefix

@@ -31,15 +31,16 @@ var _ nativeOrderedRootBuilder = (*backenddb.RootPublicationBuildGroup)(nil)
 // fallible materialization. It owns no engine, current metadata, or group edge.
 // The first materialization failure is terminal on this exact original ledger.
 type nativeDomainBuild struct {
-	source   *nativeDomainState
-	roots    []*memtable.COWRoot
-	delta    *batch.Batch
-	root     uint64
-	failure  error
-	started  bool
-	complete bool
-	catalog  bool
-	refund   *cowbtree.OwnedMapRefund
+	source                 *nativeDomainState
+	roots                  []*memtable.COWRoot
+	delta                  *batch.Batch
+	root                   uint64
+	failure                error
+	started                bool
+	complete               bool
+	catalog                bool
+	inlineBSONPagerPrimary bool
+	refund                 *cowbtree.OwnedMapRefund
 }
 
 // newNativeDomainBuild admits all temporary storage before allocating it.
@@ -152,12 +153,14 @@ func (b *nativeDomainBuild) buildSource(group nativeOrderedRootBuilder, root *me
 					}
 				}
 			}
-			threshold := max(0, page.PageSize-node.NodeHeaderSize-node.DirectoryEntrySize-7-page.EntryRevisionSize-len(key))
+			threshold := collectionLeafInlineValueCapacity(key)
 			placement, hasPlacement := group.(interface {
 				NativeInlineThresholdForKey([]byte) int
 				AppendNativeValueLogValues([][]byte) ([]page.ValuePtr, error)
 			})
-			if !b.catalog && hasPlacement && (b.source.name == "primary" || b.source.name == "templates") {
+			if b.inlineBSONPagerPrimary {
+				threshold = min(threshold, bsonPagerPrimaryInlineThreshold)
+			} else if !b.catalog && hasPlacement && (b.source.name == "primary" || b.source.name == "templates") {
 				threshold = min(threshold, placement.NativeInlineThresholdForKey(key))
 			}
 			if !b.catalog && len(value) > threshold {

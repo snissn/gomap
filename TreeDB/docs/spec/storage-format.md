@@ -2034,9 +2034,10 @@ Child page id reconstructs as `baseChildID + ChildDelta`.
 
 ### 6.3 Leaf-Log Child Refs (IndexOuterLeavesInValueLog)
 
-When `Options.IndexOuterLeavesInValueLog` is enabled, B+Tree leaf pages are
-stored as persistent value-log records instead of pager pages in `index.db`.
-Internal pages still live in `index.db`.
+When `Options.IndexOuterLeavesInValueLog` is enabled, the default B+Tree leaf
+placement is persistent value-log records. Roots with a pager leaf policy
+store their leaf pages in `index.db`. Internal pages still live in
+`index.db`.
 
 Internal pages that point at leaf-log records use an explicit child-ref entry
 layout:
@@ -2061,9 +2062,27 @@ Notes:
   leaf-log child refs. Base-delta page-child encoding is disabled for these
   pages.
 
-System-root rebuilds in online and offline index vacuum preserve the configured
-outer-leaf policy. With `IndexOuterLeavesInValueLog`, rebuilt system leaves are
-appended to `leaf_vlog` and flushed and registered before resource capture.
+The `system_pager_leaves` required feature is a fresh-store choice. It is
+selected by new standalone MongoDB gateway stores with the BSON default and
+can also be requested with `Options.FreshSystemPagerLeaves` when creating a
+TreeDB store with `IndexOuterLeavesInValueLog`. In this layout the system
+tree's leaves are ordinary pager pages in `index.db`. User and collection
+roots keep their own storage policy. Value pointers within system leaves keep
+the same format and durability dependencies.
+
+System publication, WAL replay, index vacuum, and value-log rewrite use the
+persisted system-leaf policy. Stores without the feature continue to append
+outer system leaves to `leaf_vlog` when outer-leaf mode is enabled. Vacuum
+flushes and registers those appends before resource capture. Older binaries
+reject the required feature before modifying an opted-in store.
+
+The optional `relaxed_standalone_ext4_wal_stream` format field records a
+creation policy for fresh native standalone BSON gateway stores opened with
+`command_wal_relaxed` on Linux ext4. The same gateway role uses stream WAL
+segments when the opened segment is on an identified ext4 mount. Existing
+occupied segments are opened according to their physical container, and data
+and namespace synchronization follow the selected segment's existing rules.
+The field can be ignored by readers that support both WAL containers.
 
 ## 7. Value-Log Record Format
 
@@ -4498,6 +4517,13 @@ is constant time per extent; arbitrary logical seeks use the validated index.
 Neither buffer changes the full reserve scan, frame validation, captured prefix,
 or the reader's ownership of its descriptor.
 
+A relaxed native generation-pressure seal may flush the active file under
+command-journal ownership and retain that exact file through its later data
+sync. Appends can proceed during the sync. Segment rotation leaves the pin on
+the captured file, and Close joins its release. Only the captured COW cut can
+advance DATA coverage. The operation creates no new durable command identity
+or namespace proof.
+
 A fully validated, frame-free fixed container may be reclaimed by covered-prefix
 cleanup through the same root, replay-lineage, active-generation, pin and exact
 file-identity guards as occupied segments. Its logical debit is zero; its actual
@@ -4547,12 +4573,12 @@ frames. The per-frame `WALMaxSegmentBytes` limit remains independent.
 
 Fresh journals and forced/checkpoint successors start with at most the existing
 4,199,424-byte reserve. Physical-capacity pressure doubles the next fresh
-reserve, capped by the configured target's physical byte budget, or 64 MiB
-(67,108,864 bytes) when the logical target is nonpositive; a logical-only
-rotation retains the current bounded reserve. Forced boundaries reset it to the
-small initial reserve. Thus a large configured target does not require a large
-empty file at Open or after checkpoint, and sustained growth does not repeatedly
-initialize small segments. Only unpublished fresh successors can change size.
+reserve, capped by the configured target's physical byte budget and the
+64 MiB (67,108,864-byte) ahead-reserve limit. A logical-only rotation retains
+the current reserve within the same bounds. Forced boundaries reset it to the
+small initial reserve. Reserving a larger-than-capacity atomic frame can exceed
+the normal ceiling. Large logical targets may therefore get more physical
+rotations. Only unpublished fresh successors can change size.
 
 A journal with an actual fixed container may prepare one pressure successor
 once its flushed physical occupancy reaches half capacity. It uses the same
@@ -4571,7 +4597,7 @@ the ordinary synchronous path remains available. Its initialization can overlap
 a cancelled ahead reserve, so for normal plans up to 64 MiB the current,
 synchronous successor and extra reserve can total 192 MiB of file lengths.
 Only the extra 64 MiB is new; this is a per-journal bound, not a filesystem quota,
-and existing oversized atomic-frame/configured-target exceptions remain.
+and oversized atomic-frame exceptions can exceed the normal successor bound.
 Initialization buffers can overlap but append buffers are not shared with the
 worker. Forced/checkpoint resets discard predictions and retain small reserves.
 The first real preparation or exact cleanup error poisons the next observing
@@ -4585,15 +4611,16 @@ This shifts reserve work and can waste or contend on it; it changes no extent
 framing, sync obligations, capacity policy or claimed performance result.
 
 Precisely, let `H=4096`, `W=96`, `A=64`, and `align` round upward to `A`.
-For a positive logical target `T`, the physical budget is
-`B=align(H+T+2*W+(A-1))`; otherwise `B=67,108,864`. The initial/reset reserve is
-`Cbase=min(4,199,424,B)`. Physical pressure selects
-`min(B,2*min(Cold,B))`, where `Cold` is the previous header-declared capacity;
-logical-only rotation keeps at least `Cbase`, capped by `B`. A frame of `F`
-logical bytes requires `Cframe=align(align(H+W+F)+W)`, so its fresh successor
-uses the larger of the normal reserve and `Cframe`. This exact atomic-frame
-exception grants no growth above `B` to later successors. All arithmetic is
-checked before file creation or mutation; capped doubling cannot overflow.
+For a positive logical target `T`, the normal reserve budget is
+`B=min(align(H+T+2*W+(A-1)),67,108,864)`. A nonpositive target uses
+`B=67,108,864`. The initial/reset reserve is `Cbase=min(4,199,424,B)`.
+Physical pressure selects `min(B,2*min(Cold,B))`, where `Cold` is the previous
+header-declared capacity. Logical-only rotation keeps at least `Cbase`, capped
+by `B`. A frame of `F` logical bytes requires
+`Cframe=align(align(H+W+F)+W)`, so its fresh successor uses the larger of the
+normal reserve and `Cframe`. This exact atomic-frame exception grants no growth
+above `B` to later successors. All arithmetic is checked before file creation
+or mutation.
 
 Reopen keeps each occupied file's actual header-declared capacity and format,
 even when the configuration changes. Rotation checks that capacity before

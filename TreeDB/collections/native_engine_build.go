@@ -174,6 +174,7 @@ func prepareNativeEngineBuildForCompaction(captured *nativeEngineVersion, basis 
 		}
 		b.catalogBuilt = nativeBuiltDomain{name: nativeCatalogDomainName, interpretation: 1, boundary: boundary}
 	}
+	inlineBSONPagerPrimary := group.InlineBSONPagerPrimaryValues()
 	scanNativeBuildCollections(captured, target, func(id uint64, c *nativeCollectionState) bool {
 		if c.incarnation != id {
 			b.failure = backenddb.ErrNativeSemanticUnsupported
@@ -190,6 +191,7 @@ func prepareNativeEngineBuildForCompaction(captured *nativeEngineVersion, basis 
 			}
 			work, err := newNativeDomainBuild(d, captured.allocator.Limits().MaxSources, admit)
 			if work != nil {
+				work.inlineBSONPagerPrimary = inlineBSONPagerPrimary && name == "primary" && ordinaryBSONPagerCollection(*c.schema.meta)
 				b.domains = append(b.domains, work)
 			}
 			if err != nil {

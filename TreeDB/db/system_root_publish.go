@@ -37,6 +37,19 @@ func (db *DB) systemRootWarmMaxDeltaOps() int {
 }
 
 func systemRootOrderedPublishOptions(db *DB) orderedRootPublishOptions {
+	opts := defaultOrderedRootPublishOptions(db)
+	opts.outerLeavesInValueLog = db.systemRootUsesOuterLeaves()
+	if !opts.outerLeavesInValueLog {
+		opts.leafPageLog = nil
+	}
+	return opts
+}
+
+func (db *DB) systemRootUsesOuterLeaves() bool {
+	return db.indexOuterLeavesInValueLog && !db.indexSystemLeavesInPager
+}
+
+func defaultOrderedRootPublishOptions(db *DB) orderedRootPublishOptions {
 	return orderedRootPublishOptions{
 		maxWarmDeltaOps:       db.systemRootWarmMaxDeltaOps(),
 		leafPrefixCompression: db.leafPrefixCompression,

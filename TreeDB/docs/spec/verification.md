@@ -4964,6 +4964,12 @@ headroom is exhausted. These controls do not activate unconverted collections.
   bounded pressure growth, the target-derived ceiling and a small forced
   successor. `TestFixedWALOversizedFrameCapacityDoesNotAmplify` permits one
   legal atomic frame without granting later unbounded growth.
+- `TestFixedWALPressureAdoptsAtAheadCap` checks that ordinary and stable-resource
+  appends adopt the exact private 64 MiB reserve at the first capped pressure
+  rotation and at the next pressure rotation. It syncs captured predecessor
+  prefixes and checks the LSN after Close and reopen.
+  `TestFixedWALPressureCapPreservesAtomicFrame` checks a frame larger than the
+  ceiling and a later return to the normal bound.
 - `TestFixedWALReopenLargerTargetRotatesAtPhysicalCapacity` and
   `TestFixedWALReopenPhysicalCapacityIncludesBufferedFrames` preserve occupied
   header capacity and include accepted, buffered frames in the fit decision.
