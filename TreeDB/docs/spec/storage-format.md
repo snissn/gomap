@@ -1447,6 +1447,15 @@ Collection document payload encodings are defined separately in
 template-v1 collections store compact `TD1D` primary documents and persist the
 template ID map in the collection-local `<collection>/templates` ordered root.
 
+The standalone Mongo gateway records the existing `fast` data-root policy for
+new native BSON collections when the configured policy is `default`. This
+applies to local collection creation, including implicit creation on insert.
+Native planning uses the stored policy on later writes and after reopen. Its
+pager leaves in `index.db` can still reference persistent value-log records for
+large BSON documents. Existing collection metadata governs its own layout.
+Explicit storage policies, cluster submission, index storage, JSON, and
+template-v1 keep their existing selection rules.
+
 Column-store collections using the non-column retained-payload policy default to
 `semantic-stream-v1`. Insert-batch publication stores compact semantic-stream
 locators in the primary collection root and writes retained scalar streams into

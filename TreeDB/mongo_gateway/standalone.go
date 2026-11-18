@@ -262,6 +262,17 @@ func OpenStandaloneServer(opts StandaloneOptions) (*StandaloneServer, error) {
 	if _, _, err := manager.ListCollectionsBounded(1); err != nil {
 		return failedOpen(fmt.Errorf("mongo gateway standalone: shared COW catalog preflight: %w", err))
 	}
+	// Native collection planning resolves Fast to pager leaves. The local
+	// catalog records that choice when a collection is created and imports it
+	// again on reopen. Large document values still use persistent pointers.
+	collection := &normalized.DefaultCollectionOptions
+	if normalized.ClusterSubmitter == nil && manager.UsesNativeCommandWALApply() &&
+		collection.DocumentFormat == collections.DocumentFormatBSON &&
+		collection.DataRootStoragePolicy == collections.RootStorageDefault &&
+		collection.ColumnStore == nil {
+		collection.DataRootStoragePolicy = collections.RootStorageFast
+	}
+
 	server := NewServer()
 	server.Collections = manager
 	server.nativeInsertBufferManager = manager
