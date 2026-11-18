@@ -109,18 +109,18 @@ func TestCOWRecordRawAndGroupedNoAllocation(t *testing.T) {
 				t.Fatal("value mismatch")
 			}
 			payload, raw, out := make([]byte, shape.PayloadBytes()), make([]byte, shape.RawBytes), make([]byte, shape.ValueBytes)
-			// Windows and race ReadAt make these three fixed metadata buffers
-			// escape. The caller pre-admits their separate rounded capacities.
-			wantInspectAllocs := 0.0
+			// Windows and race ReadAt may put fixed metadata on the heap.
+			// Keep the window within the existing admitted buffer envelope.
+			maxInspectAllocs := 0.0
 			if COWInspectionMetadataAllocationSizes() != [3]uint64{} {
-				wantInspectAllocs = 3
+				maxInspectAllocs = 3
 			}
 			if n := testing.AllocsPerRun(100, func() {
 				if _, err := InspectCOWRecord(f, ptr, cowTestLimits); err != nil {
 					panic(err)
 				}
-			}); n != wantInspectAllocs {
-				t.Fatalf("Inspect allocs=%g want=%g", n, wantInspectAllocs)
+			}); n > maxInspectAllocs {
+				t.Fatalf("Inspect allocs=%g capacity=%g", n, maxInspectAllocs)
 			}
 			if n := testing.AllocsPerRun(100, func() {
 				if _, err := ReadCOWRecord(f, ptr, shape, true, payload, raw, out, nil); err != nil {
