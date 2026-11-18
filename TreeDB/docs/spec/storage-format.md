@@ -1778,6 +1778,12 @@ the record header. A physical record occupies this decoded length plus four
 bytes; storage maintenance must include that CRC when comparing live bytes
 with physical file or chunk sizes. This distinction does not change the encoding.
 
+Leaf-generation reachability accounts for lengths from the live tree pointer or
+from its snapshot-retained leaf record. In-process writer hints can supply an
+omitted length. A persisted `.lenidx` file is advisory writer output. Its
+presence or contents do not affect the plan. A missing or unreadable referenced
+leaf source remains a planning error.
+
 ### 4.1 FileID layout
 
 `FileID` uses a marker bit and packed segment id:

@@ -161,90 +161,6 @@ func leafGenerationRecordLengthIndexPath(rootDir string, rawFileID uint32) strin
 	return leafGenerationFallbackPath(rootDir, rawFileID) + leafGenerationRecordLengthIndexSuffix
 }
 
-func loadLeafGenerationRecordLengthIndexFile(path string, rawFileID uint32) (*leafGenerationRecordLengthIndex, bool, error) {
-	if path == "" || rawFileID == 0 {
-		return nil, false, nil
-	}
-	f, err := os.Open(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, false, nil
-		}
-		return nil, false, err
-	}
-	defer func() { _ = f.Close() }()
-	const headerSize = 16
-	var header [headerSize]byte
-	if _, err := io.ReadFull(f, header[:]); err != nil {
-		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-			return nil, false, fmt.Errorf("leaf generation record-length index: decode %q: short header", path)
-		}
-		return nil, false, err
-	}
-	if string(header[:4]) != leafGenerationRecordLengthIndexMagic {
-		return nil, false, fmt.Errorf("leaf generation record-length index: decode %q: bad magic", path)
-	}
-	version := binary.LittleEndian.Uint32(header[4:8])
-	if version != leafGenerationRecordLengthIndexVersion {
-		return nil, false, fmt.Errorf("leaf generation record-length index: decode %q: unsupported version %d", path, version)
-	}
-	gotRawFileID := binary.LittleEndian.Uint32(header[8:12])
-	if gotRawFileID != rawFileID {
-		return nil, false, fmt.Errorf("leaf generation record-length index: decode %q: raw file id %d != %d", path, gotRawFileID, rawFileID)
-	}
-	count := int(binary.LittleEndian.Uint32(header[12:16]))
-	if count < 0 {
-		return nil, false, fmt.Errorf("leaf generation record-length index: decode %q: invalid count %d", path, count)
-	}
-	if info, err := f.Stat(); err == nil {
-		if info.Size() != int64(headerSize+count*8) {
-			return nil, false, fmt.Errorf("leaf generation record-length index: decode %q: size mismatch", path)
-		}
-	}
-	idx := &leafGenerationRecordLengthIndex{
-		offsets: make([]uint32, count),
-		lengths: make([]uint32, count),
-	}
-	if count == 0 {
-		return idx, true, nil
-	}
-	entriesPerChunk := leafGenerationRecordLengthIndexChunkBytes / 8
-	if entriesPerChunk <= 0 {
-		entriesPerChunk = 1
-	}
-	buf := make([]byte, entriesPerChunk*8)
-	prev := uint32(0)
-	for out := 0; out < count; {
-		chunkEntries := count - out
-		if chunkEntries > entriesPerChunk {
-			chunkEntries = entriesPerChunk
-		}
-		chunk := buf[:chunkEntries*8]
-		if _, err := io.ReadFull(f, chunk); err != nil {
-			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-				return nil, false, fmt.Errorf("leaf generation record-length index: decode %q: size mismatch", path)
-			}
-			return nil, false, err
-		}
-		for i := 0; i < chunkEntries; i++ {
-			base := i * 8
-			offset := binary.LittleEndian.Uint32(chunk[base : base+4])
-			length := binary.LittleEndian.Uint32(chunk[base+4 : base+8])
-			if length == 0 {
-				return nil, false, fmt.Errorf("leaf generation record-length index: decode %q: zero length at entry %d", path, out+i)
-			}
-			if out+i > 0 && offset <= prev {
-				return nil, false, fmt.Errorf("leaf generation record-length index: decode %q: offsets not strictly increasing", path)
-			}
-			prev = offset
-			idx.offsets[out+i] = offset
-			idx.lengths[out+i] = length
-		}
-		out += chunkEntries
-	}
-	return idx, true, nil
-}
-
 func saveLeafGenerationRecordLengthIndexFile(path string, rawFileID uint32, idx *leafGenerationRecordLengthIndex) error {
 	if path == "" || rawFileID == 0 {
 		return nil
@@ -338,14 +254,6 @@ func (db *DB) NoteLeafGenerationRecordLength(ptr page.ValuePtr) {
 	db.noteLeafGenerationRecordLengthRaw(rawFileID, ptr.Offset, recordLen)
 }
 
-func (db *DB) loadLeafGenerationRecordLengthIndexFromDisk(rawFileID uint32) (*leafGenerationRecordLengthIndex, bool, error) {
-	if db == nil || rawFileID == 0 {
-		return nil, false, nil
-	}
-	path := leafGenerationRecordLengthIndexPath(db.dir, rawFileID)
-	return loadLeafGenerationRecordLengthIndexFile(path, rawFileID)
-}
-
 func (db *DB) persistLeafGenerationRecordLengthIndex(rawFileID uint32) error {
 	if db == nil || db.readOnly || rawFileID == 0 {
 		return nil
@@ -373,76 +281,46 @@ func (db *DB) scanLeafGenerationRecordLengthIndexFromDisk(rawFileID uint32) (*le
 	return scanLeafGenerationRecordLengthIndexPath(path, page.ValueLogFileID(rawFileID))
 }
 
-func (db *DB) buildLeafGenerationRecordLengthIndex(rawFileID uint32, set *valuelog.Set) (*leafGenerationRecordLengthIndex, error) {
-	if db == nil || rawFileID == 0 {
-		return &leafGenerationRecordLengthIndex{}, nil
-	}
-	if set != nil {
-		if seg := set.Files[page.ValueLogFileID(rawFileID)]; seg != nil && seg.File != nil {
-			return scanLeafGenerationRecordLengthIndex(seg)
+// The index populated by this process's writers is optional. A retained file
+// is the source of truth for pointers whose length is absent from both places.
+func (db *DB) leafGenerationRecordLengthFromSource(file *leafGenerationScanFileState, ptr page.LeafLogPtr) (uint32, error) {
+	if file.idx == nil {
+		idx, ok := db.loadLeafGenerationRecordLengthIndex(file.fileID)
+		if !ok {
+			idx = &leafGenerationRecordLengthIndex{}
 		}
+		file.idx = idx
 	}
-	return db.scanLeafGenerationRecordLengthIndexFromDisk(rawFileID)
+	length, hint, ok := file.idx.lookupWithHint(ptr.Offset, file.lookupHint)
+	file.lookupHint = hint
+	if ok {
+		return length, nil
+	}
+	if err := file.source.EnsureCurrentWritableReadableFor(ptr.ValuePtr()); err != nil {
+		return 0, err
+	}
+	length, err := readValueLogRecordLengthFromHeader(file.source.File, int64(ptr.Offset)-4)
+	if err != nil {
+		return 0, err
+	}
+	if err := checkLeafGenerationRecordExtent(file.source, ptr.Offset, length); err != nil {
+		return 0, err
+	}
+	return length, nil
 }
 
-func (db *DB) loadOrBuildLeafGenerationRecordLengthIndex(rawFileID uint32, set *valuelog.Set, persist bool) (*leafGenerationRecordLengthIndex, error) {
-	if db == nil || rawFileID == 0 {
-		return &leafGenerationRecordLengthIndex{}, nil
+func checkLeafGenerationRecordExtent(source *valuelog.File, offset uint64, length uint32) error {
+	if length < valuelog.HeaderSize-4 {
+		return valuelog.ErrCorrupt
 	}
-	if idx, ok := db.loadLeafGenerationRecordLengthIndex(rawFileID); ok {
-		return idx, nil
-	}
-	if persist {
-		if idx, ok, err := db.loadLeafGenerationRecordLengthIndexFromDisk(rawFileID); err != nil {
-			return nil, err
-		} else if ok {
-			db.storeLeafGenerationRecordLengthIndex(rawFileID, idx)
-			return idx, nil
-		}
-	}
-	idx, err := db.buildLeafGenerationRecordLengthIndex(rawFileID, set)
+	info, err := source.File.Stat()
 	if err != nil {
-		return nil, err
+		return err
 	}
-	db.storeLeafGenerationRecordLengthIndex(rawFileID, idx)
-	if persist && !db.readOnly {
-		_ = saveLeafGenerationRecordLengthIndexFile(leafGenerationRecordLengthIndexPath(db.dir, rawFileID), rawFileID, idx)
+	if offset+uint64(length) > uint64(info.Size()) {
+		return fmt.Errorf("leaf generation record exceeds retained file %d at offset %d: %w", source.ID, offset, io.ErrUnexpectedEOF)
 	}
-	return idx, nil
-}
-
-func (db *DB) leafGenerationRecordLengthForPlan(ptr page.LeafLogPtr, set *valuelog.Set, view *leafGenerationView) (uint32, bool, error) {
-	if db == nil || view == nil || ptr.FileID == 0 || ptr.Offset == 0 {
-		return 0, false, nil
-	}
-	genID, ok := view.FileToGeneration[ptr.FileID]
-	if !ok {
-		return 0, false, nil
-	}
-	gen, ok := view.Generations[genID]
-	if !ok {
-		return 0, false, nil
-	}
-	persist := gen.State == leafGenerationStateSealed
-	idx, err := db.loadOrBuildLeafGenerationRecordLengthIndex(ptr.FileID, set, persist)
-	if err != nil {
-		return 0, false, err
-	}
-	if length, ok := idx.lookup(ptr.Offset); ok {
-		return length, true, nil
-	}
-	if !persist {
-		idx, err = db.buildLeafGenerationRecordLengthIndex(ptr.FileID, set)
-		if err != nil {
-			return 0, false, err
-		}
-		db.storeLeafGenerationRecordLengthIndex(ptr.FileID, idx)
-		if length, ok := idx.lookup(ptr.Offset); ok {
-			return length, true, nil
-		}
-		return 0, false, nil
-	}
-	return 0, false, fmt.Errorf("leaf generation plan: missing record length for file=%d offset=%d", ptr.FileID, ptr.Offset)
+	return nil
 }
 
 func scanLeafGenerationRecordLengthIndexPath(path string, fileID uint32) (*leafGenerationRecordLengthIndex, error) {

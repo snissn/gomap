@@ -4,10 +4,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
-	"errors"
 	"fmt"
+	"math"
 	"math/bits"
-	"os"
 	"sort"
 	"sync"
 
@@ -108,7 +107,7 @@ type leafGenerationSubtreeStats map[uint64]leafGenerationLiveTotals
 type leafGenerationScanFileState struct {
 	fileID     uint32
 	genID      uint64
-	persist    bool
+	source     *valuelog.File
 	idx        *leafGenerationRecordLengthIndex
 	lookupHint int
 }
@@ -853,6 +852,9 @@ func (db *DB) leafGenerationGroupedFrameInfo(scan *leafGenerationScanContext, pt
 	if scan == nil || scan.snap == nil || scan.snap.state == nil || scan.snap.state.ValueLogSet == nil || ptr.Offset < 4 {
 		return leafGenerationGroupedFrameInfo{}, false, nil
 	}
+	if ptr.Offset > math.MaxInt64 {
+		return leafGenerationGroupedFrameInfo{}, false, valuelog.ErrCorrupt
+	}
 	vptr := ptr.ValuePtr()
 	key, err := groupedRecordKeyForPtr(vptr)
 	if err != nil {
@@ -880,6 +882,11 @@ func (db *DB) leafGenerationGroupedFrameInfo(scan *leafGenerationScanContext, pt
 	expectedLen := uint32(valuelog.HeaderSize-4) + valueLen
 	if recordLen != 0 && recordLen != expectedLen {
 		return leafGenerationGroupedFrameInfo{}, false, valuelog.ErrCorrupt
+	}
+	if recordLen == 0 {
+		if err := checkLeafGenerationRecordExtent(f, ptr.Offset, expectedLen); err != nil {
+			return leafGenerationGroupedFrameInfo{}, false, err
+		}
 	}
 	physicalLen := expectedLen
 	if physicalLen <= ^uint32(0)-4 {
@@ -949,23 +956,20 @@ func (db *DB) newLeafGenerationScanContext(snap *Snapshot) (*leafGenerationScanC
 	fileStateByID := make(map[uint32]*leafGenerationScanFileState, len(view.FileToGeneration))
 	fileStates := make([]leafGenerationScanFileState, 0, len(view.FileToGeneration))
 	for fileID, genID := range view.FileToGeneration {
-		gen, ok := view.Generations[genID]
-		if !ok {
+		if _, ok := view.Generations[genID]; !ok {
 			return nil, fmt.Errorf("maintenance reachability: missing generation for leaf file %d", fileID)
 		}
-		persist := gen.State == leafGenerationStateSealed
-		idx, err := db.loadOrBuildLeafGenerationRecordLengthIndex(fileID, snap.state.ValueLogSet, persist)
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				continue
+		var source *valuelog.File
+		if snap.state.ValueLogSet != nil {
+			valueFileID := page.ValueLogFileID(fileID)
+			if retained := snap.state.ValueLogSet.Files[valueFileID]; retained != nil && retained.File != nil && retained.ID == valueFileID {
+				source = retained
 			}
-			return nil, err
 		}
 		fileStates = append(fileStates, leafGenerationScanFileState{
-			fileID:  fileID,
-			genID:   genID,
-			persist: persist,
-			idx:     idx,
+			fileID: fileID,
+			genID:  genID,
+			source: source,
 		})
 		fileStateByID[fileID] = &fileStates[len(fileStates)-1]
 	}
@@ -990,47 +994,35 @@ func (db *DB) scanLeafGenerationPtrTotals(scan *leafGenerationScanContext, dst l
 		scan.lastFileID = ptr.FileID
 		scan.lastFileState = fileState
 	}
+	if fileState.source == nil {
+		return dst, fmt.Errorf("leaf generation plan: no retained leaf file %d: %w", ptr.FileID, valuelog.ErrFileNotFound)
+	}
+	if ptr.Offset < 4 || ptr.Offset > math.MaxInt64 {
+		return dst, valuelog.ErrCorrupt
+	}
 	recordLen := ptr.RecordLength()
-	ok := recordLen != 0
-	if !ok {
-		var hint int
-		recordLen, hint, ok = fileState.idx.lookupWithHint(ptr.Offset, fileState.lookupHint)
-		fileState.lookupHint = hint
-	}
-	if !ok {
-		if !fileState.persist {
-			idx, err := db.buildLeafGenerationRecordLengthIndex(ptr.FileID, scan.snap.state.ValueLogSet)
-			if err != nil {
-				return dst, err
-			}
-			db.storeLeafGenerationRecordLengthIndex(ptr.FileID, idx)
-			fileState.idx = idx
-			var hint int
-			recordLen, hint, ok = idx.lookupWithHint(ptr.Offset, fileState.lookupHint)
-			fileState.lookupHint = hint
-		}
-		if !ok {
-			if fileState.persist {
-				return dst, fmt.Errorf("leaf generation plan: missing record length for file=%d offset=%d", ptr.FileID, ptr.Offset)
-			}
-			var err error
-			recordLen, err = db.valueLogRecordLengthForRewriteInSet(ptr.ValuePtr(), scan.snap.state.ValueLogSet)
-			if err != nil {
-				return dst, err
-			}
-		}
-	}
-	liveBytes := recordLen
-	if liveBytes <= ^uint32(0)-4 {
-		liveBytes += 4
-	}
+	var liveBytes uint32
 	if ptr.IsGrouped() {
 		if info, grouped, err := db.leafGenerationGroupedFrameInfo(scan, ptr, recordLen); err != nil {
 			return dst, err
 		} else if grouped {
+			liveBytes = info.recordLen
 			if contribution, ok := info.liveByteContribution(ptr.SubIndex); ok {
 				liveBytes = contribution
 			}
+		}
+	}
+	if liveBytes == 0 {
+		if recordLen == 0 {
+			var err error
+			recordLen, err = db.leafGenerationRecordLengthFromSource(fileState, ptr)
+			if err != nil {
+				return dst, err
+			}
+		}
+		liveBytes = recordLen
+		if liveBytes <= ^uint32(0)-4 {
+			liveBytes += 4
 		}
 	}
 	if dst == nil {

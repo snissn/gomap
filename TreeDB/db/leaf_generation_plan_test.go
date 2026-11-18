@@ -432,92 +432,7 @@ func TestLeafGenerationPlan_MinReclaimPerByteCopiedAdmission(t *testing.T) {
 	}
 }
 
-func TestLeafGenerationRecordLengthForPlan_LoadsPersistedSidecarWithoutRescan(t *testing.T) {
-	db, leafLog := openLeafGenerationGCTestDB(t)
-
-	writeLeafGenerationKeys(t, db, "k", 2048, 'a')
-	_, fileID1 := currentLeafSegmentOrFatal(t, leafLog)
-	rawFileID1 := page.ValueLogSegmentID(fileID1)
-	if err := leafLog.rotateLeaf(); err != nil {
-		t.Fatalf("rotateLeaf: %v", err)
-	}
-	writeLeafGenerationKeyRange(t, db, "k", 0, 64, 'b')
-
-	manifest := loadLeafGenerationManifestOrFatal(t, db.dir)
-	gen1 := findLeafGenerationByFileID(t, manifest, rawFileID1)
-
-	db.writeMu.RLock()
-	snap := db.AcquireSnapshot()
-	db.writeMu.RUnlock()
-	if snap == nil {
-		t.Fatal("expected snapshot")
-	}
-	defer func() { _ = snap.Close() }()
-	if len(snap.leafGenerationIDs) > 0 {
-		snap.releaseLeafGenerationPins()
-	}
-	view := snap.state.LeafGenerations
-	if view == nil {
-		t.Fatal("expected leaf generation view")
-	}
-	var sealedPtr page.LeafLogPtr
-	visit := func(ptr page.LeafLogPtr) error {
-		if view.FileToGeneration[ptr.FileID] == gen1.GenerationID && sealedPtr.FileID == 0 {
-			sealedPtr = ptr
-		}
-		return nil
-	}
-	for _, rootID := range []uint64{snap.state.RootPageID, snap.state.SystemRootPageID} {
-		if rootID == 0 || sealedPtr.FileID != 0 {
-			continue
-		}
-		if err := leafrefscan.Walk(context.Background(), rootID, snap.idx.pager.Get, nil, visit); err != nil {
-			t.Fatalf("leafref walk: %v", err)
-		}
-	}
-	if sealedPtr.FileID == 0 {
-		t.Fatal("expected sealed leafref pointer")
-	}
-
-	want, err := db.valueLogRecordLengthForRewriteInSet(sealedPtr.ValuePtr(), snap.state.ValueLogSet)
-	if err != nil {
-		t.Fatalf("valueLogRecordLengthForRewriteInSet: %v", err)
-	}
-	if _, usedIndex, err := db.leafGenerationRecordLengthForPlan(sealedPtr, snap.state.ValueLogSet, view); err != nil {
-		t.Fatalf("leafGenerationRecordLengthForPlan initial: %v", err)
-	} else if !usedIndex {
-		t.Fatal("expected initial sealed lookup to use built index")
-	}
-	indexPath := leafGenerationRecordLengthIndexPath(db.dir, sealedPtr.FileID)
-	if _, err := os.Stat(indexPath); err != nil {
-		t.Fatalf("Stat(%q): %v", indexPath, err)
-	}
-
-	db.leafGenerationRecordLengthMu.Lock()
-	delete(db.leafGenerationRecordLengthByFile, sealedPtr.FileID)
-	db.leafGenerationRecordLengthMu.Unlock()
-
-	scanCounter := withLeafGenerationRecordLengthIndexScanCounter(t)
-	headerCounter := withValueLogRecordLengthHeaderReadCounter(t)
-	got, usedIndex, err := db.leafGenerationRecordLengthForPlan(sealedPtr, snap.state.ValueLogSet, view)
-	if err != nil {
-		t.Fatalf("leafGenerationRecordLengthForPlan reload: %v", err)
-	}
-	if !usedIndex {
-		t.Fatal("expected persisted sidecar lookup to use index")
-	}
-	if got != want {
-		t.Fatalf("record length=%d, want %d", got, want)
-	}
-	if got := scanCounter.Load(); got != 0 {
-		t.Fatalf("persisted sidecar reload unexpectedly rescanned %d files", got)
-	}
-	if got := headerCounter.Load(); got != 0 {
-		t.Fatalf("persisted sidecar reload unexpectedly read %d headers", got)
-	}
-}
-
-func TestLeafGenerationRecordLengthForPlan_UsesWritableIndex(t *testing.T) {
+func TestLeafGenerationRecordLengthFromSource_UsesWritableIndex(t *testing.T) {
 	db, _ := openLeafGenerationGCTestDB(t)
 
 	writeLeafGenerationKeys(t, db, "k", 256, 'a')
@@ -561,12 +476,13 @@ func TestLeafGenerationRecordLengthForPlan_UsesWritableIndex(t *testing.T) {
 		t.Fatalf("valueLogRecordLengthForRewriteInSet: %v", err)
 	}
 	counter := withValueLogRecordLengthHeaderReadCounter(t)
-	got, usedIndex, err := db.leafGenerationRecordLengthForPlan(writablePtr, snap.state.ValueLogSet, view)
-	if err != nil {
-		t.Fatalf("leafGenerationRecordLengthForPlan: %v", err)
+	fileState := &leafGenerationScanFileState{
+		fileID: writablePtr.FileID,
+		source: snap.state.ValueLogSet.Files[writablePtr.ValueLogFileID()],
 	}
-	if !usedIndex {
-		t.Fatal("expected writable leaf length lookup to use in-memory index")
+	got, err := db.leafGenerationRecordLengthFromSource(fileState, writablePtr)
+	if err != nil {
+		t.Fatalf("leafGenerationRecordLengthFromSource: %v", err)
 	}
 	if got != want {
 		t.Fatalf("record length=%d, want %d", got, want)
@@ -642,7 +558,7 @@ func TestLeafGenerationLiveStats_MarksPagerPagesVerified(t *testing.T) {
 	}
 }
 
-func TestLeafGenerationRecordLengthForPlan_UsesSealedIndex(t *testing.T) {
+func TestLeafGenerationRecordLengthFromSource_UsesSealedIndex(t *testing.T) {
 
 	db, leafLog := openLeafGenerationGCTestDB(t)
 
@@ -695,12 +611,13 @@ func TestLeafGenerationRecordLengthForPlan_UsesSealedIndex(t *testing.T) {
 		t.Fatalf("valueLogRecordLengthForRewriteInSet: %v", err)
 	}
 	counter := withValueLogRecordLengthHeaderReadCounter(t)
-	got, usedIndex, err := db.leafGenerationRecordLengthForPlan(sealedPtr, snap.state.ValueLogSet, view)
-	if err != nil {
-		t.Fatalf("leafGenerationRecordLengthForPlan: %v", err)
+	fileState := &leafGenerationScanFileState{
+		fileID: sealedPtr.FileID,
+		source: snap.state.ValueLogSet.Files[sealedPtr.ValueLogFileID()],
 	}
-	if !usedIndex {
-		t.Fatal("expected sealed leaf length lookup to use index")
+	got, err := db.leafGenerationRecordLengthFromSource(fileState, sealedPtr)
+	if err != nil {
+		t.Fatalf("leafGenerationRecordLengthFromSource: %v", err)
 	}
 	if got != want {
 		t.Fatalf("record length=%d, want %d", got, want)

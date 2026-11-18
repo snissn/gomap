@@ -2,6 +2,16 @@
 
 This document maps specification invariants to existing tests and harnesses.
 
+## Leaf-generation planning after reopen
+
+`TestLeafGenerationPlan_ReopensWithUnusableAdvisoryIndex` writes and seals real
+leaf generations, closes the owners and changes only the optional `.lenidx`
+file. After reopen, it checks every value and exact live accounting, including
+when the hint is missing, malformed, truncated or names a different segment.
+Its same-ID wrong-length case also tests a reference with no inline length at
+the production scan seam. The scan resolves that reference against the retained
+source and returns an error if that source is unavailable or fails I/O.
+
 ## Standalone shared COW delivery
 
 - `TestStandaloneColdCreateSurvivesUnrelatedNativePublication` parks one cold
