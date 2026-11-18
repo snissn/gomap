@@ -568,6 +568,7 @@ type commandWALSegmentCleanupDecision struct {
 
 type commandWALSegmentScanResult struct {
 	maxLSN       uint64
+	logicalSize  int64
 	minLSN       uint64
 	scannedBytes int64
 	frames       uint64
@@ -660,7 +661,13 @@ func scanCommandWALSegmentFileWithOptions(file *os.File, maxSegmentBytes int64, 
 		return commandWALSegmentScanResult{}, err
 	}
 	defer r.Close()
-	return scanCommandWALSegmentReader(r, allowTerminalTail, opts)
+	logicalSize, err := r.LogicalSize()
+	if err != nil {
+		return commandWALSegmentScanResult{}, err
+	}
+	scan, err := scanCommandWALSegmentReader(r, allowTerminalTail, opts)
+	scan.logicalSize = logicalSize
+	return scan, err
 }
 
 func scanCommandWALSegmentReader(r *commitlog.Reader, allowTerminalTail bool, opts commandWALSegmentScanOptions) (commandWALSegmentScanResult, error) {
@@ -780,7 +787,7 @@ func scanCommandWALSegmentsForCleanupProof(dir string, cleanupThrough uint64, du
 	// PR2 cleanup deliberately streams segments on demand. It is intended for
 	// checkpoint/maintenance boundaries; a later manifest/catalog can cache
 	// results if this moves onto a hotter path.
-	segments, err := listWALSegments(dir)
+	segments, err := listSegmentsInDirWithLogicalSizes(resolveStorageLayout(dir).walDir, false)
 	if err != nil {
 		return nil, err
 	}
@@ -792,13 +799,20 @@ func scanCommandWALSegmentsForCleanupProof(dir string, cleanupThrough uint64, du
 		if seg.valueLog {
 			continue
 		}
-		if !isCommandWALLaneSegment(seg) {
-			continue
-		}
 		active := seg.seq == activeByLane[seg.lane]
 		file, err := os.Open(seg.path)
 		if err != nil {
 			scanErr = errors.Join(scanErr, fmt.Errorf("open command WAL segment %s: %w", filepath.Base(seg.path), err))
+			continue
+		}
+		// Recognized non-command files still require container validation, even
+		// though they cannot contribute to the cleanup proof.
+		if !isCommandWALLaneSegment(seg) {
+			_, validationErr := commitlog.LogicalFileSize(file)
+			_ = file.Close()
+			if validationErr != nil {
+				scanErr = errors.Join(scanErr, fmt.Errorf("validate WAL container %s: %w", filepath.Base(seg.path), validationErr))
+			}
 			continue
 		}
 		identity, identityErr := rootpublication.StableIdentityFromFile(file)
@@ -823,7 +837,7 @@ func scanCommandWALSegmentsForCleanupProof(dir string, cleanupThrough uint64, du
 			decisions = append(decisions, commandWALSegmentCleanupDecision{
 				Path:         seg.path,
 				Size:         info.Size(),
-				LogicalSize:  seg.size,
+				LogicalSize:  scan.logicalSize,
 				ScannedBytes: scan.scannedBytes,
 				Frames:       scan.frames,
 				MinLSN:       scan.minLSN,
@@ -845,7 +859,7 @@ func scanCommandWALSegmentsForCleanupProof(dir string, cleanupThrough uint64, du
 		decision := commandWALSegmentCleanupDecision{
 			Path:            seg.path,
 			Size:            info.Size(),
-			LogicalSize:     seg.size,
+			LogicalSize:     scan.logicalSize,
 			ScannedBytes:    scan.scannedBytes,
 			Frames:          scan.frames,
 			MinLSN:          scan.minLSN,

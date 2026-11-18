@@ -31,6 +31,12 @@ type logSegment struct {
 }
 
 func listSegmentsInDir(segDir string) ([]logSegment, error) {
+	return listSegmentsInDirWithLogicalSizes(segDir, true)
+}
+
+// Cleanup defers payload validation to the reader on its retained exact handle.
+// All other callers preserve the validating listing contract.
+func listSegmentsInDirWithLogicalSizes(segDir string, logicalSizes bool) ([]logSegment, error) {
 	entries, err := os.ReadDir(segDir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -59,7 +65,7 @@ func listSegmentsInDir(segDir string) ([]logSegment, error) {
 		if info, err := entry.Info(); err == nil {
 			seg.size = info.Size()
 		}
-		if !valueLog {
+		if !valueLog && logicalSizes {
 			file, err := os.Open(seg.path)
 			if err != nil {
 				return nil, err

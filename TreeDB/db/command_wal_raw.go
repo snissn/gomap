@@ -923,6 +923,25 @@ func retainCommandWALCleanupAuthoritySegments(decisions []commandWALSegmentClean
 	return nil
 }
 
+// Cleanup scans can report both an incomplete lineage and a hard error. Only
+// a lineage-only failure may be treated as unavailable cleanup proof.
+func commandWALCleanupOnlyLineageErrors(err error) bool {
+	switch err := err.(type) {
+	case interface{ Unwrap() []error }:
+		children := err.Unwrap()
+		for _, child := range children {
+			if !commandWALCleanupOnlyLineageErrors(child) {
+				return false
+			}
+		}
+		return len(children) > 0
+	case interface{ Unwrap() error }:
+		return commandWALCleanupOnlyLineageErrors(err.Unwrap())
+	default:
+		return err == ErrCommandWALAppliedLSNNonContig || err == commitlog.ErrCommandWALDuplicateLSN
+	}
+}
+
 // cleanupCommandWALCoveredSegmentsV1 is the allow-closing cleanup path used by
 // DB.Close after writers and root publication have drained but before the
 // journal owner is detached. External callers must use the admission-checked
@@ -968,9 +987,8 @@ func (db *DB) cleanupCommandWALCoveredSegmentsV1() (retErr error) {
 	// and apply the same active-generation, identity and pin gates below.
 	scanStart := time.Now()
 	var decisions []commandWALSegmentCleanupDecision
-	// Listing and reader construction both validate fixed-container reserve.
-	// Retain append exclusion through the complete scan so they inspect one
-	// immutable physical prefix. Release it before durablePublishMu below.
+	// Keep the physical prefix immutable through container validation and
+	// command frame scanning. Release append exclusion before durablePublishMu.
 	err = proof.journalOwner.WithCleanupScan(proof.journal, func() error {
 		var scanErr error
 		decisions, scanErr = scanCommandWALSegmentsForCleanupProof(db.dir, proof.cleanupThrough, proof.durableWALLSN, db.walMaxSegmentBytes)
@@ -982,7 +1000,7 @@ func (db *DB) cleanupCommandWALCoveredSegmentsV1() (retErr error) {
 		db.commandWALCleanupScanNs.Add(scanNs)
 	}
 	defer closeCommandWALCleanupDecisions(decisions)
-	if errors.Is(err, ErrCommandWALAppliedLSNNonContig) || errors.Is(err, commitlog.ErrCommandWALDuplicateLSN) {
+	if commandWALCleanupOnlyLineageErrors(err) {
 		// A missing or duplicate frame in the retained replay interval means the
 		// captured roots/WAL lineage cannot authorize deletion. Nothing has been
 		// unlinked yet, so classify this as unavailable proof: explicit cleanup
