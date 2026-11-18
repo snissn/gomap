@@ -198,6 +198,10 @@ type CommandJournalOptions struct {
 	// by the rotation. The callback runs while the journal mutex is held and must
 	// not re-enter the journal.
 	OnSegmentRotated func(closedBytes int64)
+	// OnFileSyncError marks the caller's recovery-required state at the first
+	// physical failure, before another sync can proceed. It must never block
+	// or reenter the journal.
+	OnFileSyncError func()
 	// InitialLSN is the highest already-applied/durable command LSN. CommandJournal
 	// scans existing frames while holding the owner lock and advances reservation
 	// to max(InitialLSN, observed frame LSN)+1.
@@ -210,6 +214,7 @@ type CommandJournalOptions struct {
 
 type CommandJournal struct {
 	mu                     sync.Mutex
+	fileSync               journalFileSync
 	closing                bool
 	closed                 bool
 	closeErr               error
@@ -365,7 +370,8 @@ func openCommandJournal(walDir string, opts CommandJournalOptions, productionMed
 		_ = owner.Close()
 		return nil, fmt.Errorf("commitlog: capture stable command-WAL parent: %w", stableParentErr)
 	}
-	return &CommandJournal{
+	journal := &CommandJournal{
+		fileSync:               journalFileSync{onError: opts.OnFileSyncError},
 		owner:                  owner,
 		writer:                 writer,
 		walDir:                 walDir,
@@ -382,7 +388,9 @@ func openCommandJournal(walDir string, opts CommandJournalOptions, productionMed
 		stableParentErr:        stableParentErr,
 		captureStableResources: opts.CaptureStableResources,
 		stableResourcePins:     rootpublication.NewIdentityPinRegistry(),
-	}, nil
+	}
+	writer.journalFileSync = &journal.fileSync
+	return journal, nil
 }
 
 func commandJournalInitialLSN(walDir, activePath string, opts CommandJournalOptions) (uint64, uint64, error) {
@@ -667,6 +675,9 @@ func (j *CommandJournal) requireNoPendingStableRotationLocked() error {
 
 func (j *CommandJournal) stableRotationFailStopErrorLocked() error {
 	if j != nil {
+		if err := j.fileSync.err(); err != nil {
+			return err
+		}
 		if err := j.fixedWALAheadErrorLocked(); err != nil {
 			j.cancelFixedWALAheadLocked()
 			return err
@@ -839,7 +850,9 @@ func (j *CommandJournal) stableSegmentToken(file *os.File, path string, seq uint
 		DiagnosticPath: commandWALDiagnosticPath(path), File: file, Frontier: frontier,
 		Digest: digest, Reachability: field, Namespace: namespace,
 		ContentSynced: contentSynced, PinRegistry: j.stableResourcePins,
-		SyncThrough: func(file *os.File, _ rootpublication.DurableFrontier) error { return syncCommandWALFile(file) },
+		SyncThrough: func(file *os.File, _ rootpublication.DurableFrontier) error {
+			return j.fileSync.run(func() error { return syncCommandWALFile(file) })
+		},
 	}
 	token, tokenErr := NewStableCommandWALResourceToken(spec)
 	unobserveErr := j.stableResourcePins.Unobserve(identity)
@@ -2175,7 +2188,7 @@ func (j *CommandJournal) Close() error {
 		closeErrs = append(closeErrs, j.stableParent.Close())
 		j.stableParent = nil
 	}
-	closeErrs = append(closeErrs, j.fixedAheadErr)
+	closeErrs = append(closeErrs, j.fixedAheadErr, j.fileSync.err())
 	j.fixedAhead = nil
 	j.closeErr = errors.Join(closeErrs...)
 	j.closed = true
