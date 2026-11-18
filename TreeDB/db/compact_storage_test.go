@@ -3438,7 +3438,8 @@ func TestCompactStorageSealSidecarErrorReleasesPublicationGate(t *testing.T) {
 		database.durablePublishMu.Unlock()
 	}
 	sealed, err := database.sealCompactStorageCurrentLeafGeneration(leafLog)
-	if err != nil || !sealed || sidecarErr == nil || !strings.Contains(sidecarErr.Error(), indexPath) {
+	wantSidecarFailure := fmt.Sprintf("leaf generation record-length index: encode %q: offset/length mismatch", indexPath)
+	if err != nil || !sealed || sidecarErr == nil || !strings.Contains(sidecarErr.Error(), wantSidecarFailure) {
 		t.Fatalf("seal applied=%t error=%v sidecar notification=%v", sealed, err, sidecarErr)
 	}
 }
