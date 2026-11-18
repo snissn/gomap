@@ -154,48 +154,32 @@ func BenchmarkLeafGenerationPlan_SavedHome(b *testing.B) {
 	}
 }
 
-func BenchmarkLeafGenerationPlanPersistedIndexReopen_SavedHome(b *testing.B) {
+// Reopen the retained source handles and pager for every measured plan.
+// The filesystem page cache may remain warm across iterations.
+func BenchmarkLeafGenerationPlanRetainedSourceReopen_SavedHome(b *testing.B) {
 	fixture := benchmarkLeafGenerationPlanWorkFixture(b)
-	materialize := openLeafGenerationPlanDB(b, fixture, false)
-	if _, err := materialize.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{}); err != nil {
-		_ = materialize.Close()
-		b.Fatalf("materialize LeafGenerationPlan: %v", err)
-	}
-	if err := materialize.Close(); err != nil {
-		b.Fatalf("close materialize db: %v", err)
-	}
-
-	db := openLeafGenerationPlanDB(b, fixture, true)
-	b.Cleanup(func() { _ = db.Close() })
+	ctx := context.Background()
 
 	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		db.leafGenerationLiveStatsMu.Lock()
-		db.leafGenerationLiveStatsCache = leafGenerationLiveStatsCache{}
-		db.leafGenerationLiveStatsMu.Unlock()
-		db.leafGenerationRecordLengthMu.Lock()
-		db.leafGenerationRecordLengthByFile = nil
-		db.leafGenerationRecordLengthMu.Unlock()
-		if _, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{}); err != nil {
-			b.Fatalf("LeafGenerationPlan persisted reopen: %v", err)
+	for b.Loop() {
+		b.StopTimer()
+		db := openLeafGenerationPlanDB(b, fixture, true)
+		b.StartTimer()
+		_, err := db.LeafGenerationPlan(ctx, LeafGenerationPlanOptions{})
+		b.StopTimer()
+		benchmarkCloseNoErr(b, db)
+		if err != nil {
+			b.Fatalf("first LeafGenerationPlan after reopen: %v", err)
 		}
+		b.StartTimer()
 	}
 }
 
-func BenchmarkLeafGenerationLiveStatsPersistedIndex_SavedHome(b *testing.B) {
+func BenchmarkLeafGenerationLiveStatsRetainedSource_SavedHome(b *testing.B) {
 	fixture := benchmarkLeafGenerationPlanWorkFixture(b)
-	materialize := openLeafGenerationPlanDB(b, fixture, false)
-	if _, err := materialize.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{}); err != nil {
-		_ = materialize.Close()
-		b.Fatalf("materialize LeafGenerationPlan: %v", err)
-	}
-	if err := materialize.Close(); err != nil {
-		b.Fatalf("close materialize db: %v", err)
-	}
-
 	db := openLeafGenerationPlanDB(b, fixture, true)
-	b.Cleanup(func() { _ = db.Close() })
+	b.Cleanup(func() { benchmarkCloseNoErr(b, db) })
+	ctx := context.Background()
 
 	db.writeMu.RLock()
 	snap := db.AcquireSnapshot()
@@ -203,96 +187,18 @@ func BenchmarkLeafGenerationLiveStatsPersistedIndex_SavedHome(b *testing.B) {
 	if snap == nil {
 		b.Fatal(ErrClosed)
 	}
-	b.Cleanup(func() { _ = snap.Close() })
+	b.Cleanup(func() { benchmarkCloseNoErr(b, snap) })
 	if len(snap.leafGenerationIDs) > 0 {
 		snap.releaseLeafGenerationPins()
 	}
-
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		db.leafGenerationRecordLengthMu.Lock()
-		db.leafGenerationRecordLengthByFile = nil
-		db.leafGenerationRecordLengthMu.Unlock()
-		if _, err := db.scanLeafGenerationLiveStats(context.Background(), snap); err != nil {
-			b.Fatalf("scanLeafGenerationLiveStats: %v", err)
-		}
-	}
-}
-
-func BenchmarkLeafGenerationLiveStatsVerifiedPagesPersistedIndex_SavedHome(b *testing.B) {
-	fixture := benchmarkLeafGenerationPlanWorkFixture(b)
-	materialize := openLeafGenerationPlanDB(b, fixture, false)
-	if _, err := materialize.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{}); err != nil {
-		_ = materialize.Close()
-		b.Fatalf("materialize LeafGenerationPlan: %v", err)
-	}
-	if err := materialize.Close(); err != nil {
-		b.Fatalf("close materialize db: %v", err)
-	}
-
-	db := openLeafGenerationPlanDB(b, fixture, true)
-	b.Cleanup(func() { _ = db.Close() })
-
-	db.writeMu.RLock()
-	snap := db.AcquireSnapshot()
-	db.writeMu.RUnlock()
-	if snap == nil {
-		b.Fatal(ErrClosed)
-	}
-	b.Cleanup(func() { _ = snap.Close() })
-	if len(snap.leafGenerationIDs) > 0 {
-		snap.releaseLeafGenerationPins()
-	}
-	if _, err := db.scanLeafGenerationLiveStats(context.Background(), snap); err != nil {
-		b.Fatalf("warm scanLeafGenerationLiveStats: %v", err)
+	if _, err := db.scanLeafGenerationLiveStats(ctx, snap); err != nil {
+		b.Fatalf("warm verified pages before benchmark: %v", err)
 	}
 
 	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		db.leafGenerationRecordLengthMu.Lock()
-		db.leafGenerationRecordLengthByFile = nil
-		db.leafGenerationRecordLengthMu.Unlock()
-		if _, err := db.scanLeafGenerationLiveStats(context.Background(), snap); err != nil {
-			b.Fatalf("scanLeafGenerationLiveStats verified pages: %v", err)
-		}
-	}
-}
-
-func BenchmarkLeafGenerationLiveStatsWarmIndexesVerifiedPages_SavedHome(b *testing.B) {
-	fixture := benchmarkLeafGenerationPlanWorkFixture(b)
-	materialize := openLeafGenerationPlanDB(b, fixture, false)
-	if _, err := materialize.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{}); err != nil {
-		_ = materialize.Close()
-		b.Fatalf("materialize LeafGenerationPlan: %v", err)
-	}
-	if err := materialize.Close(); err != nil {
-		b.Fatalf("close materialize db: %v", err)
-	}
-
-	db := openLeafGenerationPlanDB(b, fixture, true)
-	b.Cleanup(func() { _ = db.Close() })
-
-	db.writeMu.RLock()
-	snap := db.AcquireSnapshot()
-	db.writeMu.RUnlock()
-	if snap == nil {
-		b.Fatal(ErrClosed)
-	}
-	b.Cleanup(func() { _ = snap.Close() })
-	if len(snap.leafGenerationIDs) > 0 {
-		snap.releaseLeafGenerationPins()
-	}
-	if _, err := db.scanLeafGenerationLiveStats(context.Background(), snap); err != nil {
-		b.Fatalf("warm scanLeafGenerationLiveStats: %v", err)
-	}
-
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		if _, err := db.scanLeafGenerationLiveStats(context.Background(), snap); err != nil {
-			b.Fatalf("scanLeafGenerationLiveStats warm indexes: %v", err)
+	for b.Loop() {
+		if _, err := db.scanLeafGenerationLiveStats(ctx, snap); err != nil {
+			b.Fatalf("scanLeafGenerationLiveStats with verified pager pages: %v", err)
 		}
 	}
 }

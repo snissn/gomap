@@ -49,12 +49,6 @@ func (l *lockedRewriteLeafPageLog) Close() error {
 	return l.inner.Close()
 }
 
-func (l *lockedRewriteLeafPageLog) LastLeafPageRecordLength() uint32 {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.inner.LastLeafPageRecordLength()
-}
-
 func (l *lockedRewriteLeafPageLog) CreatedLeafPageLogSegmentsSnapshot() ([]LeafPageLogSegment, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()

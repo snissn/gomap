@@ -129,7 +129,7 @@ func TestPreparedRootPublicationVisibleInstallRejectsManagerGrowthBeforePin(t *t
 	}
 	_, err = database.prepareRootPublicationVisibleInstallV1(
 		database.idx.Load(), database.meta, database.meta.UserRootPageID,
-		database.meta.UserRootPageID, true, finalizeCommitPost{}, nil, nil,
+		database.meta.UserRootPageID, true, finalizeCommitPost{}, nil,
 		finalizeCommitOptions{preparedLimits: limits},
 	)
 	if err == nil {

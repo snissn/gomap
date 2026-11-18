@@ -1582,12 +1582,6 @@ func TestLeafPageLogStableChildRefsDoNotCacheBeforeDependencyAppendSucceeds(t *t
 	if stats := db.leafPageReadCache.stats(); stats.Stores != 0 {
 		t.Fatalf("cache stores=%d want 0 after rejected dependency append", stats.Stores)
 	}
-	db.leafGenerationRecordLengthMu.Lock()
-	indexedFiles := len(db.leafGenerationRecordLengthByFile)
-	db.leafGenerationRecordLengthMu.Unlock()
-	if indexedFiles != 0 {
-		t.Fatalf("record-length indexes=%d want 0 after rejected dependency append", indexedFiles)
-	}
 }
 
 func TestLeafPageReadCacheNilStatsAreStableZeros(t *testing.T) {

@@ -300,6 +300,13 @@ func TestOrdinaryLeafRotationRetainsExactManifestThroughReopen(t *testing.T) {
 	opts.DisableBackgroundPrune = true
 	opts.FlushApplyConcurrency = 1
 	opts.ValueLog.Generational.LeafSegmentTargetBytes = 8 << 10
+	checkNoLengthIndexes := func() {
+		t.Helper()
+		paths, err := filepath.Glob(filepath.Join(backenddb.LeafLogDirPath(filepath.Join(opts.Dir, "maindb")), "value-l*.log.lenidx"))
+		if err != nil || len(paths) != 0 {
+			t.Fatalf("new public leaf generations created legacy indexes: paths=%v err=%v", paths, err)
+		}
+	}
 	database, err := Open(opts)
 	if err != nil {
 		t.Fatal(err)
@@ -373,6 +380,7 @@ func TestOrdinaryLeafRotationRetainsExactManifestThroughReopen(t *testing.T) {
 	if err := closeOwners(); err != nil {
 		t.Fatalf("checked seed manager and DB Close before pack: %v", err)
 	}
+	checkNoLengthIndexes()
 	// Reuse the maintained closed-owner tooling route from the standalone
 	// dictionary fixture. The generic pack never borrows an active native owner.
 	packPredecessor := func() (proof ordinaryLeafSlot, retErr error) {
@@ -621,5 +629,6 @@ func TestOrdinaryLeafRotationRetainsExactManifestThroughReopen(t *testing.T) {
 	if err := closeOwners(); err != nil {
 		t.Fatalf("checked final manager and DB Close: %v", err)
 	}
+	checkNoLengthIndexes()
 	t.Log("checked final manager and DB Close")
 }

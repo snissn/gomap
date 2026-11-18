@@ -19,8 +19,8 @@ func generousLeafGenerationMaintenanceLimits() LeafGenerationMaintenanceLimits {
 func TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork(t *testing.T) {
 	db, _, _ := openLeafGenerationPackTestDB(t)
 	writeLeafGenerationKeys(t, db, "k", 128, 'a')
-	var indexScans, treeScans atomic.Int64
-	defer registerLeafGenerationRecordLengthIndexScanHook(func(uint32) { indexScans.Add(1) })()
+	var lengthReads, treeScans atomic.Int64
+	defer registerValueLogRecordLengthHeaderReadHook(func() { lengthReads.Add(1) })()
 	defer registerLeafGenerationSubtreeCacheMissHook(func(uint64) { treeScans.Add(1) })()
 	before := db.State().CommitSeq
 	refreshes := db.valueLogManager.RefreshScanCount()
@@ -58,8 +58,8 @@ func TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork(t *testing.T) {
 				if err := op.run(limits); !errors.Is(err, ErrLeafGenerationMaintenanceLimit) {
 					t.Fatalf("error=%v, want footprint rejection", err)
 				}
-				if indexScans.Load() != 0 || treeScans.Load() != 0 {
-					t.Fatalf("rejection scanned indexes=%d trees=%d", indexScans.Load(), treeScans.Load())
+				if lengthReads.Load() != 0 || treeScans.Load() != 0 {
+					t.Fatalf("rejection scanned indexes=%d trees=%d", lengthReads.Load(), treeScans.Load())
 				}
 				if got := db.valueLogManager.RefreshScanCount(); got != refreshes {
 					t.Fatalf("rejection refreshed directories: got %d want %d", got, refreshes)
