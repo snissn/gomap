@@ -6,7 +6,11 @@ import "github.com/snissn/gomap/TreeDB/page"
 const leafGenerationRecordLengthIndexSuffix = ".lenidx"
 
 func leafGenerationRecordLengthIndexPath(rootDir string, rawFileID uint32) string {
-	return leafGenerationFallbackPath(rootDir, rawFileID) + leafGenerationRecordLengthIndexSuffix
+	path := leafGenerationFallbackPath(rootDir, rawFileID)
+	if path == "" {
+		return ""
+	}
+	return path + leafGenerationRecordLengthIndexSuffix
 }
 
 // NoteLeafGenerationRecordLength remains callable by older leaf-log producers.

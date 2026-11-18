@@ -544,6 +544,9 @@ func resetLeafGenerationAfterOfflineVacuum(dir string, commitSeq uint64, evictSe
 			return fmt.Errorf("vacuum: remove stale leaf generation file %s: %w", path, err)
 		}
 		indexPath := leafGenerationRecordLengthIndexPath(dir, file.rawFileID)
+		if indexPath == "" {
+			continue
+		}
 		if _, err := removePersistentFile(leafDir, indexPath, durabilitycut.ResourceAuxiliary); err != nil {
 			return fmt.Errorf("vacuum: remove stale leaf generation record-length index %s: %w", indexPath, err)
 		}
