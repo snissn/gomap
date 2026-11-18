@@ -415,20 +415,6 @@ func (h *leafPageLogLaneHandle) Sync() error {
 	return h.group.withLane(h.index, func(lane LeafPageLog) error { return lane.Sync() })
 }
 
-func (h *leafPageLogLaneHandle) LastLeafPageRecordLength() uint32 {
-	if h == nil || h.group == nil {
-		return 0
-	}
-	var recordLen uint32
-	_ = h.group.withLane(h.index, func(lane LeafPageLog) error {
-		if provider, ok := lane.(leafPageLogRecordLengthProvider); ok {
-			recordLen = provider.LastLeafPageRecordLength()
-		}
-		return nil
-	})
-	return recordLen
-}
-
 func (g *leafPageLogLaneGroup) appendLeafPageAt(index int, leafPage []byte) (page.LeafLogPtr, error) {
 	var ptr page.LeafLogPtr
 	err := g.withLane(index, func(lane LeafPageLog) error {

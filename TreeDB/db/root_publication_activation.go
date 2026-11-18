@@ -419,7 +419,6 @@ func (db *DB) prepareRootPublicationVisibleInstallV1(
 	syncWrite bool,
 	post finalizeCommitPost,
 	leafManifest *leafGenerationManifest,
-	leafManifestRawFileIDs []uint32,
 	opts finalizeCommitOptions,
 ) (_ *rootPublicationVisibleInstallV1, retErr error) {
 	metadata := db.valueLogIdentityPins.MetadataOwner()
@@ -459,9 +458,7 @@ func (db *DB) prepareRootPublicationVisibleInstallV1(
 		install.leafManifest = leafManifest
 		install.installLeafManifest = true
 		install.post.persistLeafGenerationManifest = !opts.leafManifestAlreadyPersistent
-		install.post.persistLeafGenerationIndexesOnly = opts.leafManifestAlreadyPersistent
 		install.post.persistLeafGenerationManifestView = leafManifest
-		install.post.persistLeafGenerationRawFileIDs = append(install.post.persistLeafGenerationRawFileIDs[:0], leafManifestRawFileIDs...)
 		install.leafGenerationView = db.leafGenerationViewForManifest(leafManifest)
 	}
 	if db.leafPageLog != nil && !opts.ordinaryLeafManifestBound {
@@ -474,7 +471,6 @@ func (db *DB) prepareRootPublicationVisibleInstallV1(
 			install.post.persistLeafGenerationManifest = true
 			install.post.persistLeafGenerationManifestView = staged.manifest
 			install.post.persistLeafGenerationStateView = install.leafGenerationView
-			install.post.persistLeafGenerationRawFileIDs = append(install.post.persistLeafGenerationRawFileIDs, staged.rawFileIDs...)
 			install.post.clearLeafGenerationPendingFileIDs = append(install.post.clearLeafGenerationPendingFileIDs[:0], staged.pendingFileIDs...)
 		}
 	}
@@ -1191,7 +1187,7 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 			defer func() {
 				retErr = errors.Join(retErr, manifestUpdate.finish(manifestAccepted || db.publicationPoisoned.Load()))
 			}()
-			leafManifest, leafManifestRawFileIDs = manifestUpdate.staged.manifest, manifestUpdate.staged.rawFileIDs
+			leafManifest = manifestUpdate.staged.manifest
 			manifestUpdate.bind(&post, &opts)
 		}
 	}
@@ -1215,7 +1211,7 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 	post.vlogRefDelta = vlogRefDelta
 	install, err := db.prepareRootPublicationVisibleInstallV1(
 		idx, next, oldUserRootID, newUserRootID, syncWrite, post,
-		leafManifest, leafManifestRawFileIDs, opts,
+		leafManifest, opts,
 	)
 	if err != nil {
 		return post, prePublishErr(fmt.Errorf("prepare queued visible root: %w", err))

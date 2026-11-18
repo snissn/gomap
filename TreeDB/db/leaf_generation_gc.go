@@ -832,9 +832,6 @@ func (db *DB) removeLeafGenerationRecordLengthIndexes(fileIDs []uint32) error {
 			errs = append(errs, fmt.Errorf("remove leaf generation record-length index %d (%s): %w", fileID, path, err))
 			continue
 		}
-		db.leafGenerationRecordLengthMu.Lock()
-		delete(db.leafGenerationRecordLengthByFile, fileID)
-		db.leafGenerationRecordLengthMu.Unlock()
 	}
 	return errors.Join(errs...)
 }

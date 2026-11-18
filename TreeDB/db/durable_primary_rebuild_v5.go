@@ -514,7 +514,7 @@ func (db *DB) prepareRebuiltPrimaryLeafManifestV5(s *primaryRebuildScratchV5, co
 	}
 	if db.leafGenerationManifestStore.mode == leafGenerationManifestCompatibility {
 		persisted = candidate.clone()
-		err = db.persistLeafGenerationManifestAndRecordLengthIndexes(persisted, nil)
+		err = db.persistLeafGenerationManifest(persisted)
 		return persisted, err
 	}
 	if db.leafGenerationManifestStore.mode != leafGenerationManifestStable {

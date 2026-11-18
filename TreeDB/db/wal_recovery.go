@@ -1321,18 +1321,6 @@ func (a *replayInlineAppender) retireRegisteredCreationMetadataLocked(fileID uin
 	}
 }
 
-func (a *replayInlineAppender) LastLeafPageRecordLength() uint32 {
-	if a == nil {
-		return 0
-	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a == nil || a.writer == nil {
-		return 0
-	}
-	return a.writer.LastLeafPageRecordLength()
-}
-
 func (a *replayInlineAppender) Flush() error {
 	if a == nil {
 		return nil
@@ -1484,13 +1472,6 @@ func (l replayInlineLeafPageLog) CurrentValueLogSegment() (string, uint32, bool)
 		return "", 0, false
 	}
 	return l.appender.currentLeafValueLogSegment()
-}
-
-func (l replayInlineLeafPageLog) LastLeafPageRecordLength() uint32 {
-	if l.appender == nil {
-		return 0
-	}
-	return l.appender.LastLeafPageRecordLength()
 }
 
 func (l replayInlineLeafPageLog) AdvanceCompactStorageLeafPageLogSeqAtLeast(seq uint32) error {

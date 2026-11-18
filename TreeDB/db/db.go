@@ -326,8 +326,6 @@ type DB struct {
 	leafGenerationLiveStatsCache     leafGenerationLiveStatsCache
 	leafGenerationSubtreeStatsMu     sync.RWMutex
 	leafGenerationSubtreeStatsByPage map[uint64]leafGenerationSubtreeStats
-	leafGenerationRecordLengthMu     sync.RWMutex
-	leafGenerationRecordLengthByFile map[uint32]*leafGenerationRecordLengthIndex
 	leafGenerationStateVersion       uint64
 
 	rewritePlanLiveBytesMu    sync.RWMutex
@@ -4088,10 +4086,8 @@ type finalizeCommitPost struct {
 	durMeta                           time.Duration
 	durSync2                          time.Duration
 	persistLeafGenerationManifest     bool
-	persistLeafGenerationIndexesOnly  bool
 	persistLeafGenerationManifestView *leafGenerationManifest
 	persistLeafGenerationStateView    *leafGenerationView
-	persistLeafGenerationRawFileIDs   []uint32
 	clearLeafGenerationPendingFileIDs []uint32
 	drainLeafGenerationPending        bool
 }
@@ -4361,7 +4357,7 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	inline := db.inlineLeafManifest
 	hasInlineManifest := inline != nil && inline.candidate == candidate
 	if hasInlineManifest {
-		leafManifest, leafManifestRawFileIDs = inline.update.staged.manifest, inline.update.staged.rawFileIDs
+		leafManifest = inline.update.staged.manifest
 		inline.update.bind(&post, &opts)
 	}
 	// The immutable candidate now owns its allocator reservations and exact
@@ -4413,9 +4409,7 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	if leafManifest != nil {
 		db.leafGenerationManifest = leafManifest
 		post.persistLeafGenerationManifest = !opts.leafManifestAlreadyPersistent
-		post.persistLeafGenerationIndexesOnly = opts.leafManifestAlreadyPersistent
 		post.persistLeafGenerationManifestView = leafManifest
-		post.persistLeafGenerationRawFileIDs = append(post.persistLeafGenerationRawFileIDs[:0], leafManifestRawFileIDs...)
 		leafGenerationView = db.leafGenerationViewForManifest(leafManifest)
 	}
 	if db.leafPageLog != nil && !opts.ordinaryLeafManifestBound {
@@ -4429,7 +4423,6 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 			post.persistLeafGenerationManifest = true
 			post.persistLeafGenerationManifestView = stagedLeafManifest.manifest
 			post.persistLeafGenerationStateView = leafGenerationView
-			post.persistLeafGenerationRawFileIDs = append(post.persistLeafGenerationRawFileIDs, stagedLeafManifest.rawFileIDs...)
 			post.clearLeafGenerationPendingFileIDs = append(post.clearLeafGenerationPendingFileIDs[:0], stagedLeafManifest.pendingFileIDs...)
 		}
 	}
@@ -4548,7 +4541,7 @@ func (db *DB) finalizeCommitPostWork(post finalizeCommitPost) {
 		}
 		_ = db.valueLogManager.Release(post.oldState.ValueLogSet)
 	}
-	if post.persistLeafGenerationManifest || post.persistLeafGenerationIndexesOnly || post.drainLeafGenerationPending || len(post.clearLeafGenerationPendingFileIDs) > 0 {
+	if post.persistLeafGenerationManifest || post.drainLeafGenerationPending || len(post.clearLeafGenerationPendingFileIDs) > 0 {
 		var (
 			persistErr        error
 			pendingErr        error
@@ -4582,12 +4575,6 @@ func (db *DB) finalizeCommitPostWork(post finalizeCommitPost) {
 				}
 			}
 			db.durablePublishMu.Unlock()
-			if manifestPersisted && persistErr == nil {
-				db.persistLeafGenerationRecordLengthIndexes(post.persistLeafGenerationRawFileIDs)
-			}
-		} else if post.persistLeafGenerationIndexesOnly {
-			db.persistLeafGenerationRecordLengthIndexes(post.persistLeafGenerationRawFileIDs)
-			clearPending = len(post.clearLeafGenerationPendingFileIDs) > 0
 		} else if len(post.clearLeafGenerationPendingFileIDs) > 0 {
 			clearPending = true
 		}

@@ -155,6 +155,11 @@ func (db *DB) noteLeafGenerationRecordLength(ptr page.ValuePtr) {
 	if db == nil || db.backend == nil || ptr.FileID == 0 || ptr.Offset == 0 {
 		return
 	}
+	// Only custom backends can use this notification. The built-in method
+	// remains callable by compatibility producers, but it performs no work.
+	if _, builtIn := db.backend.(*backenddb.DB); builtIn {
+		return
+	}
 	if notifier, ok := db.backend.(interface{ NoteLeafGenerationRecordLength(page.ValuePtr) }); ok {
 		notifier.NoteLeafGenerationRecordLength(ptr)
 	}

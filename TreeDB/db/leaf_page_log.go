@@ -267,10 +267,6 @@ type leafPageLogStableDictionaryBinder interface {
 	bindStableDictionaryResourceProvider(func() StableDictionaryResourceProvider) error
 }
 
-type leafPageLogRecordLengthProvider interface {
-	LastLeafPageRecordLength() uint32
-}
-
 type leafPageLogWithRecordLengthHints struct {
 	db    *DB
 	inner LeafPageLog
@@ -292,9 +288,6 @@ func (l *leafPageLogWithRecordLengthHints) AppendLeafPage(leafPage []byte) (page
 	}
 	if l.db != nil {
 		l.db.storeLeafPageReadCache(ptr, leafPage)
-		if provider, ok := l.inner.(leafPageLogRecordLengthProvider); ok {
-			l.db.noteLeafGenerationRecordLengthRaw(ptr.FileID, ptr.Offset, provider.LastLeafPageRecordLength())
-		}
 	}
 	return ptr, nil
 }
@@ -695,13 +688,6 @@ func (l *leafPageLogWithRecordLengthHints) noteLeafPagePointer(leafPage []byte, 
 		return
 	}
 	l.db.storeLeafPageReadCache(ptr, leafPage)
-	recordLen := ptr.RecordLength()
-	if recordLen == 0 {
-		if provider, ok := l.inner.(leafPageLogRecordLengthProvider); ok {
-			recordLen = provider.LastLeafPageRecordLength()
-		}
-	}
-	l.db.noteLeafGenerationRecordLengthRaw(ptr.FileID, ptr.Offset, recordLen)
 }
 
 func (l *leafPageLogWithRecordLengthHints) Flush() error {
