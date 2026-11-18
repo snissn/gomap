@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"math"
 	"math/bits"
 	"sort"
@@ -105,12 +106,51 @@ type leafGenerationLiveTotals struct {
 type leafGenerationSubtreeStats map[uint64]leafGenerationLiveTotals
 
 type leafGenerationScanFileState struct {
-	fileID       uint32
 	genID        uint64
 	source       *valuelog.File
 	sealedExtent uint64
-	idx          *leafGenerationRecordLengthIndex
-	lookupHint   int
+}
+
+// An omitted length is resolved from the file retained by the snapshot.
+func (file *leafGenerationScanFileState) readRecordLength(ptr page.LeafLogPtr) (uint32, error) {
+	if err := file.source.EnsureCurrentWritableReadableFor(ptr.ValuePtr()); err != nil {
+		return 0, err
+	}
+	length, err := readValueLogRecordLengthFromHeader(file.source.File, int64(ptr.Offset)-4)
+	if err != nil {
+		return 0, err
+	}
+	if err := file.checkRecordExtent(ptr.Offset, length); err != nil {
+		return 0, err
+	}
+	return length, nil
+}
+
+func (file *leafGenerationScanFileState) checkRecordExtent(offset uint64, length uint32) error {
+	if length < valuelog.HeaderSize-4 {
+		return valuelog.ErrCorrupt
+	}
+	source := file.source
+	end := offset + uint64(length)
+	// Keep a checked extent for this exact retained source within the current
+	// plan. Physically writable files keep the original readability barrier
+	// and use a fresh size check on a physical read.
+	writable := source.IsCurrentWritable()
+	if !writable && end <= file.sealedExtent {
+		return nil
+	}
+	info, err := source.File.Stat()
+	if err != nil {
+		return err
+	}
+	size := uint64(info.Size())
+	if end > size {
+		return fmt.Errorf("leaf generation record exceeds retained file %d at offset %d: %w", source.ID, offset, io.ErrUnexpectedEOF)
+	}
+	if !writable {
+		file.sealedExtent = size
+	}
+	return nil
 }
 
 type leafGenerationScanContext struct {
@@ -972,7 +1012,6 @@ func (db *DB) newLeafGenerationScanContext(snap *Snapshot) (*leafGenerationScanC
 			}
 		}
 		fileStates = append(fileStates, leafGenerationScanFileState{
-			fileID: fileID,
 			genID:  genID,
 			source: source,
 		})
@@ -1020,7 +1059,7 @@ func (db *DB) scanLeafGenerationPtrTotals(scan *leafGenerationScanContext, dst l
 	if liveBytes == 0 {
 		if recordLen == 0 {
 			var err error
-			recordLen, err = db.leafGenerationRecordLengthFromSource(fileState, ptr)
+			recordLen, err = fileState.readRecordLength(ptr)
 			if err != nil {
 				return dst, err
 			}

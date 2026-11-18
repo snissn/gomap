@@ -432,7 +432,7 @@ func TestLeafGenerationPlan_MinReclaimPerByteCopiedAdmission(t *testing.T) {
 	}
 }
 
-func TestLeafGenerationRecordLengthFromSource_UsesWritableIndex(t *testing.T) {
+func TestLeafGenerationRecordLengthFromSource_ReadsWritableFile(t *testing.T) {
 	db, _ := openLeafGenerationGCTestDB(t)
 
 	writeLeafGenerationKeys(t, db, "k", 256, 'a')
@@ -477,18 +477,18 @@ func TestLeafGenerationRecordLengthFromSource_UsesWritableIndex(t *testing.T) {
 	}
 	counter := withValueLogRecordLengthHeaderReadCounter(t)
 	fileState := &leafGenerationScanFileState{
-		fileID: writablePtr.FileID,
 		source: snap.state.ValueLogSet.Files[writablePtr.ValueLogFileID()],
 	}
-	got, err := db.leafGenerationRecordLengthFromSource(fileState, writablePtr)
+	writablePtr.RecordLengthHint &^= writablePtr.RecordLength()
+	got, err := fileState.readRecordLength(writablePtr)
 	if err != nil {
-		t.Fatalf("leafGenerationRecordLengthFromSource: %v", err)
+		t.Fatalf("readRecordLength: %v", err)
 	}
 	if got != want {
 		t.Fatalf("record length=%d, want %d", got, want)
 	}
-	if got := counter.Load(); got != 0 {
-		t.Fatalf("writable index path unexpectedly read %d headers", got)
+	if got := counter.Load(); got != 1 {
+		t.Fatalf("writable retained source header reads=%d, want 1", got)
 	}
 	if idx, ok := db.loadLeafGenerationRecordLengthIndex(writablePtr.FileID); !ok || idx == nil {
 		t.Fatalf("expected cached record-length index for writable file %d", writablePtr.FileID)
@@ -564,7 +564,7 @@ func TestLeafGenerationLiveStats_MarksPagerPagesVerified(t *testing.T) {
 	}
 }
 
-func TestLeafGenerationRecordLengthFromSource_UsesSealedIndex(t *testing.T) {
+func TestLeafGenerationRecordLengthFromSource_ReadsSealedFile(t *testing.T) {
 
 	db, leafLog := openLeafGenerationGCTestDB(t)
 
@@ -618,18 +618,18 @@ func TestLeafGenerationRecordLengthFromSource_UsesSealedIndex(t *testing.T) {
 	}
 	counter := withValueLogRecordLengthHeaderReadCounter(t)
 	fileState := &leafGenerationScanFileState{
-		fileID: sealedPtr.FileID,
 		source: snap.state.ValueLogSet.Files[sealedPtr.ValueLogFileID()],
 	}
-	got, err := db.leafGenerationRecordLengthFromSource(fileState, sealedPtr)
+	sealedPtr.RecordLengthHint &^= sealedPtr.RecordLength()
+	got, err := fileState.readRecordLength(sealedPtr)
 	if err != nil {
-		t.Fatalf("leafGenerationRecordLengthFromSource: %v", err)
+		t.Fatalf("readRecordLength: %v", err)
 	}
 	if got != want {
 		t.Fatalf("record length=%d, want %d", got, want)
 	}
-	if got := counter.Load(); got != 0 {
-		t.Fatalf("sealed index path unexpectedly read %d headers", got)
+	if got := counter.Load(); got != 1 {
+		t.Fatalf("sealed retained source header reads=%d, want 1", got)
 	}
 	if idx, ok := db.loadLeafGenerationRecordLengthIndex(sealedPtr.FileID); !ok || idx == nil {
 		t.Fatalf("expected cached record-length index for file %d", sealedPtr.FileID)

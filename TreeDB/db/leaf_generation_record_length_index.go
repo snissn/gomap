@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"sort"
 	"sync"
@@ -52,13 +51,6 @@ func runLeafGenerationRecordLengthIndexScanHook(rawFileID uint32) {
 	}
 }
 
-func (idx *leafGenerationRecordLengthIndex) len() int {
-	if idx == nil {
-		return 0
-	}
-	return len(idx.offsets)
-}
-
 func (idx *leafGenerationRecordLengthIndex) clone() *leafGenerationRecordLengthIndex {
 	if idx == nil {
 		return nil
@@ -67,61 +59,6 @@ func (idx *leafGenerationRecordLengthIndex) clone() *leafGenerationRecordLengthI
 		offsets: append([]uint32(nil), idx.offsets...),
 		lengths: append([]uint32(nil), idx.lengths...),
 	}
-}
-
-func (idx *leafGenerationRecordLengthIndex) lookup(offset uint64) (uint32, bool) {
-	length, _, ok := idx.lookupWithHint(offset, 0)
-	return length, ok
-}
-
-func (idx *leafGenerationRecordLengthIndex) lookupWithHint(offset uint64, hint int) (uint32, int, bool) {
-	if idx == nil || len(idx.offsets) == 0 || offset > uint64(^uint32(0)) {
-		return 0, 0, false
-	}
-	off32 := uint32(offset)
-	n := len(idx.offsets)
-	if hint < 0 {
-		hint = 0
-	} else if hint >= n {
-		hint = n - 1
-	}
-	if idx.offsets[hint] == off32 {
-		return idx.lengths[hint], hint, true
-	}
-	if idx.offsets[hint] < off32 {
-		for i := hint + 1; i < n && i <= hint+4; i++ {
-			off := idx.offsets[i]
-			if off == off32 {
-				return idx.lengths[i], i, true
-			}
-			if off > off32 {
-				return 0, i, false
-			}
-		}
-		i := hint + sort.Search(n-hint, func(i int) bool {
-			return idx.offsets[hint+i] >= off32
-		})
-		if i >= n || idx.offsets[i] != off32 {
-			return 0, i, false
-		}
-		return idx.lengths[i], i, true
-	}
-	for i := hint - 1; i >= 0 && i >= hint-2; i-- {
-		off := idx.offsets[i]
-		if off == off32 {
-			return idx.lengths[i], i, true
-		}
-		if off < off32 {
-			return 0, i + 1, false
-		}
-	}
-	i := sort.Search(hint+1, func(i int) bool {
-		return idx.offsets[i] >= off32
-	})
-	if i > hint || idx.offsets[i] != off32 {
-		return 0, i, false
-	}
-	return idx.lengths[i], i, true
 }
 
 func (idx *leafGenerationRecordLengthIndex) add(offset uint64, length uint32) bool {
@@ -279,61 +216,6 @@ func (db *DB) scanLeafGenerationRecordLengthIndexFromDisk(rawFileID uint32) (*le
 	}
 	path := leafGenerationFallbackPath(db.dir, rawFileID)
 	return scanLeafGenerationRecordLengthIndexPath(path, page.ValueLogFileID(rawFileID))
-}
-
-// The index populated by this process's writers is optional. A retained file
-// is the source of truth for pointers whose length is absent from both places.
-func (db *DB) leafGenerationRecordLengthFromSource(file *leafGenerationScanFileState, ptr page.LeafLogPtr) (uint32, error) {
-	if file.idx == nil {
-		idx, ok := db.loadLeafGenerationRecordLengthIndex(file.fileID)
-		if !ok {
-			idx = &leafGenerationRecordLengthIndex{}
-		}
-		file.idx = idx
-	}
-	length, hint, ok := file.idx.lookupWithHint(ptr.Offset, file.lookupHint)
-	file.lookupHint = hint
-	if ok {
-		return length, nil
-	}
-	if err := file.source.EnsureCurrentWritableReadableFor(ptr.ValuePtr()); err != nil {
-		return 0, err
-	}
-	length, err := readValueLogRecordLengthFromHeader(file.source.File, int64(ptr.Offset)-4)
-	if err != nil {
-		return 0, err
-	}
-	if err := file.checkRecordExtent(ptr.Offset, length); err != nil {
-		return 0, err
-	}
-	return length, nil
-}
-
-func (file *leafGenerationScanFileState) checkRecordExtent(offset uint64, length uint32) error {
-	if length < valuelog.HeaderSize-4 {
-		return valuelog.ErrCorrupt
-	}
-	source := file.source
-	end := offset + uint64(length)
-	// Keep a checked extent for this exact retained source within the current
-	// plan. Physically writable files keep the original readability barrier
-	// and use a fresh size check on a physical read.
-	writable := source.IsCurrentWritable()
-	if !writable && end <= file.sealedExtent {
-		return nil
-	}
-	info, err := source.File.Stat()
-	if err != nil {
-		return err
-	}
-	size := uint64(info.Size())
-	if end > size {
-		return fmt.Errorf("leaf generation record exceeds retained file %d at offset %d: %w", source.ID, offset, io.ErrUnexpectedEOF)
-	}
-	if !writable {
-		file.sealedExtent = size
-	}
-	return nil
 }
 
 func scanLeafGenerationRecordLengthIndexPath(path string, fileID uint32) (*leafGenerationRecordLengthIndex, error) {

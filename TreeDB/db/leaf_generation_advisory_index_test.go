@@ -1,14 +1,17 @@
 package db
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/internal/leafrefscan"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -148,7 +151,7 @@ func checkLeafPlanWithoutInlineLength(t *testing.T, db *DB, sealedRawID uint32) 
 		t.Fatalf("expected a checked sealed extent only for the omitted length: inline=%d omitted=%d",
 			withLength.fileStateByID[ptr.FileID].sealedExtent, retainedFileState.sealedExtent)
 	}
-	length, err := db.leafGenerationRecordLengthFromSource(retainedFileState, ptr)
+	length, err := retainedFileState.readRecordLength(ptr)
 	if err != nil || length != inlineLength {
 		t.Fatalf("authoritative header length = %d, want %d, err=%v", length, inlineLength, err)
 	}
@@ -199,5 +202,84 @@ func checkLeafPlanWithoutInlineLength(t *testing.T, db *DB, sealedRawID uint32) 
 		if _, err := db.scanLeafGenerationPtrTotals(failed, nil, ptr); !errors.Is(err, test.want) {
 			t.Fatalf("expected authoritative source error %v, got %v", test.want, err)
 		}
+	}
+}
+
+func TestLeafGenerationPlan_NoInlineLengthUsesRetainedSource(t *testing.T) {
+	dir := t.TempDir()
+	const rawID = 17
+	canonical := leafGenerationFallbackPath(dir, rawID)
+	if err := os.MkdirAll(filepath.Dir(canonical), 0700); err != nil {
+		t.Fatal(err)
+	}
+	writeRecord := func(path string, value []byte) {
+		t.Helper()
+		record := make([]byte, valuelog.HeaderSize+len(value))
+		record[4] = valuelog.Version
+		binary.LittleEndian.PutUint64(record[8:16], 1)
+		binary.LittleEndian.PutUint32(record[16:20], uint32(len(value)))
+		copy(record[valuelog.HeaderSize:], value)
+		binary.LittleEndian.PutUint32(record[:4], crc.ChecksumParts(record[4:valuelog.HeaderSize], value))
+		if err := os.WriteFile(path, record, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	value := bytes.Repeat([]byte{'a'}, 128)
+	retainedPath := filepath.Join(dir, "retained.log")
+	writeRecord(retainedPath, value)
+	retained, err := os.Open(retainedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if retained != nil {
+			if err := retained.Close(); err != nil {
+				t.Error(err)
+			}
+		}
+	})
+	ptr := page.LeafLogPtr{FileID: rawID, Offset: 4}
+	if got, err := valuelog.ReadAt(retained, ptr.ValuePtr(), true); err != nil || !bytes.Equal(got, value) {
+		t.Fatalf("read legacy record with omitted length: bytes=%d, err=%v", len(got), err)
+	}
+
+	// The current pathname and the already retained file have different
+	// identities. Exercise the compatibility writer that scans the pathname
+	// and previously populated the same runtime cache as live writers.
+	replacement := bytes.Repeat([]byte{'b'}, 256)
+	writeRecord(canonical, replacement)
+	db := &DB{dir: dir}
+	if err := db.persistLeafGenerationRecordLengthIndex(rawID); err != nil {
+		t.Fatal(err)
+	}
+	index, found, err := loadLeafGenerationRecordLengthIndexFile(leafGenerationRecordLengthIndexPath(dir, rawID), rawID)
+	if got, ok := index.lookup(ptr.Offset); err != nil || !found || !ok || got != uint32(valuelog.HeaderSize-4+len(replacement)) {
+		t.Fatalf("writer did not scan replacement record: length=%d, found=%t, err=%v", got, found, err)
+	}
+	file := &valuelog.File{ID: ptr.ValueLogFileID(), Path: canonical, File: retained}
+	const generationID = 1
+	snap := &Snapshot{state: &DBState{
+		LeafGenerations: &leafGenerationView{
+			Generations:      map[uint64]leafGenerationViewGeneration{generationID: {}},
+			FileToGeneration: map[uint32]uint64{rawID: generationID},
+		},
+		ValueLogSet: &valuelog.Set{Files: map[uint32]*valuelog.File{file.ID: file}},
+	}}
+	scan, err := db.newLeafGenerationScanContext(snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	totals, err := db.scanLeafGenerationPtrTotals(scan, nil, ptr)
+	want := leafGenerationLiveTotals{LivePages: 1, LiveBytes: int64(valuelog.HeaderSize + len(value))}
+	if err != nil || totals[generationID] != want {
+		t.Errorf("account retained record: totals=%+v, want=%+v, err=%v", totals[generationID], want, err)
+	}
+	closeErr := retained.Close()
+	retained = nil
+	if closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	if _, err := db.scanLeafGenerationPtrTotals(scan, nil, ptr); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("closed retained record with valid canonical replacement: %v", err)
 	}
 }
