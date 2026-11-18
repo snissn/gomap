@@ -90,6 +90,12 @@ The first long baseline runs before any candidate and each long baseline must
 last at least 30 seconds. A short baseline invalidates that attempt; preserve it
 and prepare a fresh plan instead of replacing its samples. Each length has three
 mixed-order pairs, with the original short cell fixed at 10000 operations.
+For each pair, `summary.json` includes `operation_tails.READ` and
+`operation_tails.UPDATE`. Each contains the baseline and candidate operation
+count, p99.9 and maximum latency in microseconds, plus the candidate/baseline
+p99.9 ratio. A zero baseline p99.9 gives a JSON `null` ratio. Each percentile
+describes its own run. The timing guardrail still uses throughput and UPDATE p99.
+
 Every case uses `run_case`/`ycsb_phase`, a fresh DB, full census, checked client
 and server shutdown, deterministic fixture, and independent reopen checks.
 

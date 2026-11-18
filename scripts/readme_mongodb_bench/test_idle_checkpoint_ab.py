@@ -104,14 +104,48 @@ class IdleCheckpointABControls(unittest.TestCase):
                     build.assert_not_called()
                     self.assertFalse((root/'out').exists())
 
-    def test_allocation_absence_never_becomes_acceptance(self):
+    def comparison_results(self):
         results = {}
         for length in ('long', 'short'):
             for repeat in (1, 2, 3):
                 for arm in ('A', 'B'):
                     results[(length, repeat, arm)] = {'run': {
                         'TOTAL': {'ops_per_sec': 1000},
-                        'UPDATE': {'p95_us': 10, 'p99_us': 20}}}
+                        'READ': {'count': 9500, 'p999_us': 17, 'max_us': 30},
+                        'UPDATE': {'count': 500, 'p95_us': 10, 'p99_us': 20,
+                                   'p999_us': 70, 'max_us': 120}}}
+        return results
+
+    def test_tail_observations_are_per_operation_arm_and_repeat(self):
+        results = self.comparison_results()
+        run = results['long', 2, 'B']['run']
+        run['UPDATE'].update(count=501, p999_us=28, max_us=105)
+        results['short', 1, 'A']['run']['READ']['p999_us'] = 0
+        summary = ab.summarize(results, .95, 1.1)
+        tail = summary['cells'][0]['pairs'][1]['operation_tails']
+        self.assertEqual(tail['UPDATE']['baseline'], {'count': 500, 'p999_us': 70, 'max_us': 120})
+        self.assertEqual(tail['UPDATE']['candidate'], {'count': 501, 'p999_us': 28, 'max_us': 105})
+        self.assertEqual(tail['UPDATE']['p999_ratio'], .4)
+        self.assertEqual(tail['READ']['p999_ratio'], 1.0)
+        zero = summary['cells'][1]['pairs'][0]['operation_tails']['READ']
+        self.assertEqual(zero['baseline']['p999_us'], 0)
+        self.assertIsNone(zero['p999_ratio'])
+        json.dumps(summary, allow_nan=False)
+
+    def test_invalid_tail_observation_rejects_the_comparison(self):
+        for field, value in [('count', 0), ('p999_us', None), ('max_us', float('inf'))]:
+            with self.subTest(field=field):
+                results = self.comparison_results()
+                row = results['long', 3, 'A']['run']['READ']
+                if value is None:
+                    del row[field]
+                else:
+                    row[field] = value
+                with self.assertRaisesRegex(ValueError, 'READ'):
+                    ab.summarize(results, .95, 1.1)
+
+    def test_allocation_absence_never_becomes_acceptance(self):
+        results = self.comparison_results()
         summary = ab.summarize(results, .95, 1.1)
         self.assertEqual(summary['timing_guardrail'], 'PASS')
         self.assertIn('INCOMPLETE', summary['acceptance'])
