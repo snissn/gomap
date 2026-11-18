@@ -760,11 +760,8 @@ func (db *DB) noteLeafGenerationWritableFileIDs(fileIDs []uint32, commitSeq uint
 		return err
 	}
 	for _, rawFileID := range sealedFileIDs {
-		if err := db.persistLeafGenerationRecordLengthIndex(rawFileID); err != nil {
-			// Record-length sidecars are rebuildable optimization metadata. Keep
-			// manifest publication authoritative even if the sidecar write fails.
-			continue
-		}
+		// This compatibility registration has already published its manifest.
+		_, _ = db.persistLeafGenerationRecordLengthIndex(rawFileID)
 	}
 	return nil
 }

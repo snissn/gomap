@@ -671,29 +671,28 @@ func (db *DB) persistLeafGenerationRecordLengthIndexes(rawFileIDs []uint32) {
 		return
 	}
 	rawFileIDs = dedupeLeafGenerationRawFileIDs(rawFileIDs)
-	var firstErr error
-	var firstRawFileID uint32
-	failedCount := 0
+	var reports []error
+	var firstSourceErr error
 	for _, rawFileID := range rawFileIDs {
-		if err := db.persistLeafGenerationRecordLengthIndex(rawFileID); err != nil {
-			if firstErr == nil {
-				firstErr = err
-				firstRawFileID = rawFileID
+		sourceErr, indexErr := db.persistLeafGenerationRecordLengthIndex(rawFileID)
+		switch {
+		case sourceErr != nil:
+			err := fmt.Errorf("read leaf generation record lengths for raw file %d: %w", rawFileID, sourceErr)
+			reports = append(reports, err)
+			if firstSourceErr == nil {
+				firstSourceErr = err
 			}
-			failedCount++
-			continue
+		case indexErr != nil:
+			reports = append(reports, fmt.Errorf("persist leaf generation record-length index for raw file %d: %w", rawFileID, indexErr))
 		}
 	}
-	if firstErr != nil {
-		var reportErr error
-		if failedCount == 1 {
-			reportErr = fmt.Errorf("persist leaf generation record-length index for raw file %d: %w", firstRawFileID, firstErr)
-		} else {
-			reportErr = fmt.Errorf("persist leaf generation record-length indexes failed for %d files (first raw file %d): %w", failedCount, firstRawFileID, firstErr)
-		}
-		// Record-length sidecars are rebuildable optimization metadata. Keep the
-		// manifest authoritative and surface the failure out-of-band.
-		db.reportError(reportErr)
+	// Retain the authoritative source failure before calling user code. Only
+	// failures writing the reconstructible index are purely advisory.
+	if firstSourceErr != nil {
+		db.retainOriginalCleanupError(firstSourceErr)
+	}
+	if len(reports) > 0 && db.notifyError != nil {
+		db.notifyError(errors.Join(reports...))
 	}
 }
 

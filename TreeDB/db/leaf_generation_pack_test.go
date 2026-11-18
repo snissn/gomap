@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -208,9 +209,61 @@ func TestPersistLeafGenerationManifestAndRecordLengthIndexes_ReportsSidecarError
 	if _, err := os.Stat(leafGenerationManifestPath(LeafLogDirPath(dir))); err != nil {
 		t.Fatalf("manifest stat: %v", err)
 	}
-	db.bgErrMu.Lock()
-	db.bgErr = nil
-	db.bgErrMu.Unlock()
+	if err := db.backgroundError(); err != nil {
+		t.Fatalf("optional sidecar error became a background storage error: %v", err)
+	}
+}
+
+func TestLeafIndexSaveRetainsSourceFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		sourceID, outputID uint32
+	}{
+		{"source_only", 77, 0},
+		{"output_then_source", 78, 77},
+		{"source_then_output", 77, 78},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			database, err := Open(Options{Dir: dir, DisableBackgroundPrune: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var retained error
+			t.Cleanup(func() {
+				if err := database.Close(); retained == nil || !errors.Is(err, retained) {
+					t.Errorf("Close = %v, want original retained source failure %v", err, retained)
+				}
+			})
+			source := leafGenerationFallbackPath(dir, tc.sourceID)
+			if err := os.MkdirAll(filepath.Dir(source), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(source, bytes.Repeat([]byte{0xff}, 128), 0600); err != nil {
+				t.Fatal(err)
+			}
+			ids := []uint32{tc.sourceID}
+			if tc.outputID != 0 {
+				database.storeLeafGenerationRecordLengthIndex(tc.outputID, &leafGenerationRecordLengthIndex{offsets: []uint32{4}})
+				ids = append(ids, tc.outputID)
+			}
+			var notifications []error
+			database.notifyError = func(err error) {
+				notifications = append(notifications, err)
+				retained = database.backgroundError()
+			}
+			database.persistLeafGenerationRecordLengthIndexes(ids)
+			if retained == nil || !strings.Contains(retained.Error(), source) || strings.Contains(retained.Error(), ".lenidx") {
+				t.Fatalf("authoritative raw source error at notification = %v", retained)
+			}
+			if len(notifications) != 1 || !errors.Is(notifications[0], retained) {
+				t.Fatalf("notifications = %v, want one notification containing %v", notifications, retained)
+			}
+			if tc.outputID != 0 && !strings.Contains(notifications[0].Error(), ".lenidx") {
+				t.Fatalf("mixed notification omitted the index output failure: %v", notifications[0])
+			}
+		})
+	}
 }
 
 func TestLeafGenerationPack_FinalizeFailpointCleansCreatedSegments(t *testing.T) {
