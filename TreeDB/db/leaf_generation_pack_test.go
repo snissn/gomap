@@ -208,9 +208,9 @@ func TestPersistLeafGenerationManifestAndRecordLengthIndexes_ReportsSidecarError
 	if _, err := os.Stat(leafGenerationManifestPath(LeafLogDirPath(dir))); err != nil {
 		t.Fatalf("manifest stat: %v", err)
 	}
-	db.bgErrMu.Lock()
-	db.bgErr = nil
-	db.bgErrMu.Unlock()
+	if err := db.backgroundError(); err != nil {
+		t.Fatalf("optional sidecar error became a background storage error: %v", err)
+	}
 }
 
 func TestLeafGenerationPack_FinalizeFailpointCleansCreatedSegments(t *testing.T) {

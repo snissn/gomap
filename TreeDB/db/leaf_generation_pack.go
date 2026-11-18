@@ -691,9 +691,11 @@ func (db *DB) persistLeafGenerationRecordLengthIndexes(rawFileIDs []uint32) {
 		} else {
 			reportErr = fmt.Errorf("persist leaf generation record-length indexes failed for %d files (first raw file %d): %w", failedCount, firstRawFileID, firstErr)
 		}
-		// Record-length sidecars are rebuildable optimization metadata. Keep the
-		// manifest authoritative and surface the failure out-of-band.
-		db.reportError(reportErr)
+		// Sidecar saves are advisory. Notify the caller without retaining a
+		// storage error that would make a later Close fail.
+		if db.notifyError != nil {
+			db.notifyError(reportErr)
+		}
 	}
 }
 

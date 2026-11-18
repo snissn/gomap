@@ -3415,8 +3415,8 @@ func TestCompactStorageSealSidecarErrorReleasesPublicationGate(t *testing.T) {
 	leafLog.ConfigureLeafLog(LeafLogDirPath(dir), rewriteLeafLogLaneID, 0)
 	t.Cleanup(func() { closeNoErr(t, leafLog) })
 	t.Cleanup(func() {
-		if err := database.Close(); !errors.Is(err, sidecarErr) {
-			t.Errorf("Close error=%v want reported sidecar error %v", err, sidecarErr)
+		if err := database.Close(); err != nil {
+			t.Errorf("Close after advisory sidecar error %v: %v", sidecarErr, err)
 		}
 	})
 	database.SetLeafPageLog(leafLog)
