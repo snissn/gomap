@@ -105,11 +105,12 @@ type leafGenerationLiveTotals struct {
 type leafGenerationSubtreeStats map[uint64]leafGenerationLiveTotals
 
 type leafGenerationScanFileState struct {
-	fileID     uint32
-	genID      uint64
-	source     *valuelog.File
-	idx        *leafGenerationRecordLengthIndex
-	lookupHint int
+	fileID       uint32
+	genID        uint64
+	source       *valuelog.File
+	sealedExtent uint64
+	idx          *leafGenerationRecordLengthIndex
+	lookupHint   int
 }
 
 type leafGenerationScanContext struct {
@@ -884,7 +885,11 @@ func (db *DB) leafGenerationGroupedFrameInfo(scan *leafGenerationScanContext, pt
 		return leafGenerationGroupedFrameInfo{}, false, valuelog.ErrCorrupt
 	}
 	if recordLen == 0 {
-		if err := checkLeafGenerationRecordExtent(f, ptr.Offset, expectedLen); err != nil {
+		file := scan.lastFileState
+		if file == nil || file.source != f {
+			file = &leafGenerationScanFileState{source: f}
+		}
+		if err := file.checkRecordExtent(ptr.Offset, expectedLen); err != nil {
 			return leafGenerationGroupedFrameInfo{}, false, err
 		}
 	}

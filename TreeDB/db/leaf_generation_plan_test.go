@@ -493,6 +493,12 @@ func TestLeafGenerationRecordLengthFromSource_UsesWritableIndex(t *testing.T) {
 	if idx, ok := db.loadLeafGenerationRecordLengthIndex(writablePtr.FileID); !ok || idx == nil {
 		t.Fatalf("expected cached record-length index for writable file %d", writablePtr.FileID)
 	}
+	if !fileState.source.IsCurrentWritable() {
+		t.Fatal("expected physically writable retained leaf source")
+	}
+	if err := fileState.checkRecordExtent(writablePtr.Offset, want); err != nil || fileState.sealedExtent != 0 {
+		t.Fatalf("writable source extent check cached a sealed extent=%d or returned an error: %v", fileState.sealedExtent, err)
+	}
 }
 
 func TestLeafGenerationPlan_SmallWriteKeepsWritableRecordLengthIndexWarm(t *testing.T) {

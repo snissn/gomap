@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"io"
 	"os"
 	"reflect"
 	"testing"
@@ -135,16 +136,24 @@ func checkLeafPlanWithoutInlineLength(t *testing.T, db *DB, sealedRawID uint32) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	length, err := db.leafGenerationRecordLengthFromSource(withoutLength.fileStateByID[ptr.FileID], ptr)
-	if err != nil || length != inlineLength {
-		t.Fatalf("authoritative header length = %d, want %d, err=%v", length, inlineLength, err)
-	}
 	got, err := db.scanLeafGenerationPtrTotals(withoutLength, nil, ptr)
 	if err != nil {
 		t.Fatalf("authoritative accounting for pointer without inline length: %v", err)
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("false sidecar length changed accounting for unchanged source: got=%+v want=%+v", got, want)
+	}
+	retainedFileState := withoutLength.fileStateByID[ptr.FileID]
+	if withLength.fileStateByID[ptr.FileID].sealedExtent != 0 || retainedFileState.sealedExtent < ptr.Offset+uint64(inlineLength) {
+		t.Fatalf("expected a checked sealed extent only for the omitted length: inline=%d omitted=%d",
+			withLength.fileStateByID[ptr.FileID].sealedExtent, retainedFileState.sealedExtent)
+	}
+	length, err := db.leafGenerationRecordLengthFromSource(retainedFileState, ptr)
+	if err != nil || length != inlineLength {
+		t.Fatalf("authoritative header length = %d, want %d, err=%v", length, inlineLength, err)
+	}
+	if err := retainedFileState.checkRecordExtent(retainedFileState.sealedExtent, inlineLength); !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("record past the checked sealed extent: %v", err)
 	}
 	// Test authority errors without changing or closing the DB-owned source.
 	retained := snap.state.ValueLogSet.Files[ptr.ValueLogFileID()]
@@ -155,12 +164,31 @@ func checkLeafPlanWithoutInlineLength(t *testing.T, db *DB, sealedRawID uint32) 
 	if err := closed.Close(); err != nil {
 		t.Fatal(err)
 	}
+	truncated, err := os.CreateTemp(t.TempDir(), "leaf-header-only")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := truncated.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	var header [valuelog.HeaderSize]byte
+	recordStart := int64(ptr.Offset) - 4
+	if _, err := retained.File.ReadAt(header[:], recordStart); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := truncated.WriteAt(header[:], recordStart); err != nil {
+		t.Fatal(err)
+	}
 	for _, test := range []struct {
 		source *valuelog.File
 		want   error
 	}{
 		{nil, valuelog.ErrFileNotFound},
+		{&valuelog.File{ID: retained.ID + 1, Path: retained.Path, File: retained.File}, valuelog.ErrFileNotFound},
 		{&valuelog.File{ID: retained.ID, Path: retained.Path, File: closed}, os.ErrClosed},
+		{&valuelog.File{ID: retained.ID, Path: retained.Path, File: truncated}, io.ErrUnexpectedEOF},
 	} {
 		state := *snap.state
 		state.ValueLogSet = &valuelog.Set{Files: map[uint32]*valuelog.File{retained.ID: test.source}}

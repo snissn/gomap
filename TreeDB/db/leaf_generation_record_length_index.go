@@ -303,22 +303,35 @@ func (db *DB) leafGenerationRecordLengthFromSource(file *leafGenerationScanFileS
 	if err != nil {
 		return 0, err
 	}
-	if err := checkLeafGenerationRecordExtent(file.source, ptr.Offset, length); err != nil {
+	if err := file.checkRecordExtent(ptr.Offset, length); err != nil {
 		return 0, err
 	}
 	return length, nil
 }
 
-func checkLeafGenerationRecordExtent(source *valuelog.File, offset uint64, length uint32) error {
+func (file *leafGenerationScanFileState) checkRecordExtent(offset uint64, length uint32) error {
 	if length < valuelog.HeaderSize-4 {
 		return valuelog.ErrCorrupt
+	}
+	source := file.source
+	end := offset + uint64(length)
+	// Keep a checked extent for this exact retained source within the current
+	// plan. Physically writable files keep the original readability barrier
+	// and use a fresh size check on a physical read.
+	writable := source.IsCurrentWritable()
+	if !writable && end <= file.sealedExtent {
+		return nil
 	}
 	info, err := source.File.Stat()
 	if err != nil {
 		return err
 	}
-	if offset+uint64(length) > uint64(info.Size()) {
+	size := uint64(info.Size())
+	if end > size {
 		return fmt.Errorf("leaf generation record exceeds retained file %d at offset %d: %w", source.ID, offset, io.ErrUnexpectedEOF)
+	}
+	if !writable {
+		file.sealedExtent = size
 	}
 	return nil
 }
