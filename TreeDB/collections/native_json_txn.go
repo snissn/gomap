@@ -13,6 +13,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/txnhistory"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
 
@@ -42,20 +43,21 @@ type nativeJSONTxnBinding struct {
 	learnTemplates    bool
 }
 type NativeJSONTxn struct {
-	mu           sync.Mutex
-	db           *backenddb.DB
-	core         backenddb.NativeConditionalTxn
-	bindings     []nativeJSONTxnBinding
-	members      []commitlog.CompositeMutationMember
-	count        int
-	imported     *nativeEngineVersion
-	dependencies []txnhistory.Dependency
-	custody      *nativeMutationCustody
-	rawStaged    bool
-	lease        *memtable.COWExternalLease
-	stageLeases  []*memtable.COWExternalLease
-	charge       uint64
-	failure      error
+	mu                   sync.Mutex
+	db                   *backenddb.DB
+	core                 backenddb.NativeConditionalTxn
+	bindings             []nativeJSONTxnBinding
+	members              []commitlog.CompositeMutationMember
+	count                int
+	imported             *nativeEngineVersion
+	dependencies         []txnhistory.Dependency
+	custody              *nativeMutationCustody
+	rawStaged            bool
+	structuredBSONUpdate bool
+	lease                *memtable.COWExternalLease
+	stageLeases          []*memtable.COWExternalLease
+	charge               uint64
+	failure              error
 }
 
 // Begin binds the collection's original logical incarnation and interpretation.
@@ -298,19 +300,26 @@ type nativeJSONLogicalInsert struct {
 }
 
 type nativeJSONLogicalGroup struct {
-	bindings     []nativeJSONTxnBinding
-	changes      []nativeJSONPrimaryChange
-	count        int
-	bootstrap    *nativeEngineVersion
-	opening      backenddb.NativeSemanticCapture
-	reimported   *nativeEngineVersion // private owning reference, including failed preparation
-	custody      *nativeMutationCustody
-	prepared     *nativeEngineVersion
-	raw          bool
-	participants []*backenddb.CommandWALIntent
+	bindings               []nativeJSONTxnBinding
+	changes                []nativeJSONPrimaryChange
+	count                  int
+	bootstrap              *nativeEngineVersion
+	opening                backenddb.NativeSemanticCapture
+	reimported             *nativeEngineVersion // private owning reference, including failed preparation
+	custody                *nativeMutationCustody
+	prepared               *nativeEngineVersion
+	raw                    bool
+	returnCustodyOnInstall bool
+	participants           []*backenddb.CommandWALIntent
 }
 
 func (p *nativeJSONLogicalGroup) PrepareNativePublication(latest backenddb.NativeSemanticState, exact *backenddb.Snapshot) (backenddb.NativeFinalizedPublication, error) {
+	custody := p.custody
+	if p.returnCustodyOnInstall {
+		// The original custody is already owned by the cache. This preparation
+		// is the plan's last use of its borrowed ledger.
+		p.custody = nil
+	}
 	if exact == nil {
 		return backenddb.NativeFinalizedPublication{}, backenddb.ErrNativeSemanticUnsupported
 	}
@@ -383,10 +392,29 @@ func (p *nativeJSONLogicalGroup) PrepareNativePublication(latest backenddb.Nativ
 	for i := 0; i < count; i++ {
 		replacement, _ := next.collections.Get(changes[i].collection.incarnation)
 		(nativeCollectionLifetime{}).Retain(replacement)
-		p.custody.adoptCollection(replacement)
+		custody.adoptCollection(replacement)
 	}
 	p.prepared = next
 	return backenddb.NativeFinalizedPublication{State: next}, nil
+}
+
+func (t *NativeJSONTxn) rootCoveredBSONUpdate() bool {
+	if !t.structuredBSONUpdate || t.count != 1 || t.rawStaged || len(t.members) != 1 ||
+		t.members[0].Kind != commitlog.CommandKindCollectionUpdateBatchByID {
+		return false
+	}
+	g := &t.bindings[0]
+	meta := &g.probe.meta
+	if !nativeBSONSetMeta(meta) || len(meta.Indexes) != 0 || len(meta.TextIndexes) != 0 || len(meta.VectorIndexes) != 0 ||
+		g.typed != nil || g.projection != nil || g.plan == nil || g.plan.typed != nil || len(g.plan.additional) != 0 || len(g.plan.mutations) == 0 {
+		return false
+	}
+	for _, row := range g.plan.mutations {
+		if row.Flags != node.FlagInline {
+			return false
+		}
+	}
+	return true
 }
 
 func (t *NativeJSONTxn) GetRaw(key []byte) ([]byte, error) {
@@ -527,6 +555,7 @@ func (t *NativeJSONTxn) commitNativePlanWithStatsObserved(sealed bool, apply *na
 		return backenddb.ErrNativeSemanticUnsupported
 	}
 	rawEntries := t.core.NativeRawEntries()
+	returnCustodyOnInstall := !sealed && apply == nil && !typedGroup && len(rawEntries) == 0 && t.rootCoveredBSONUpdate()
 	// Each distinct allocation is admitted before construction; the outer
 	// image is charged from the codec's exact plan after member planning.
 	admit := func(bytes uint64) error {
@@ -634,7 +663,7 @@ func (t *NativeJSONTxn) commitNativePlanWithStatsObserved(sealed bool, apply *na
 			return err
 		}
 	}
-	plan := &nativeJSONLogicalGroup{bindings: t.bindings, changes: make([]nativeJSONPrimaryChange, t.count), count: t.count, bootstrap: t.imported, opening: t.core, custody: t.custody, raw: t.rawStaged}
+	plan := &nativeJSONLogicalGroup{bindings: t.bindings, changes: make([]nativeJSONPrimaryChange, t.count), count: t.count, bootstrap: t.imported, opening: t.core, custody: t.custody, raw: t.rawStaged, returnCustodyOnInstall: returnCustodyOnInstall}
 	defer func(p *nativeJSONLogicalGroup) {
 		// CommitNative and its finalizer are synchronous. Accepted sparse
 		// custody owns its replacement descriptors; this temporary ancestor
@@ -651,7 +680,7 @@ func (t *NativeJSONTxn) commitNativePlanWithStatsObserved(sealed bool, apply *na
 			resultErr = errors.Join(resultErr, cleanupErr)
 		}
 	}(plan)
-	native := &backenddb.NativePreparedPublication{RequireInlineCompositeRaw: t.rawStaged, Basis: t.core.State(), StartSequence: t.core.LogicalSequence(), Reprepare: plan, Custody: t.custody, Effects: effects, Dependencies: t.dependencies}
+	native := &backenddb.NativePreparedPublication{RequireInlineCompositeRaw: t.rawStaged, Basis: t.core.State(), StartSequence: t.core.LogicalSequence(), Reprepare: plan, Custody: t.custody, Effects: effects, Dependencies: t.dependencies, ReturnCustodyOnInstall: returnCustodyOnInstall}
 	for i := range t.bindings {
 		if t.bindings[i].typed != nil {
 			if err := t.custody.typedResources.Initialize(nil); err != nil {
@@ -705,6 +734,13 @@ func (t *NativeJSONTxn) commitNativePlanWithStatsObserved(sealed bool, apply *na
 	var publishStarted time.Time
 	if stats != nil {
 		publishStarted = time.Now()
+	}
+	if returnCustodyOnInstall {
+		// Clear non-owning caller aliases before the cache can transfer the
+		// successful custody to the cleanup worker. If CommitNative declines
+		// ownership, the original native descriptor is still cancelled below.
+		t.custody = nil
+		t.bindings[0].plan.custody = nil
 	}
 	result, err := t.core.CommitNative(native, intent, sync)
 	if expired != nil {

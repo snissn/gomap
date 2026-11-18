@@ -1,6 +1,7 @@
 package db
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -9,11 +10,197 @@ import (
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/leafrefscan"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
+
+func TestVacuumFreshSystemPagerLeavesPreserveHeldAndRecoverableRoots(t *testing.T) {
+	if runtime.GOOS == "windows" || !rootpublication.StableRelativeNamespaceSupported() {
+		t.Skip("online vacuum and exact manifest namespace required")
+	}
+	opts := Options{Dir: t.TempDir(), ChunkSize: 64 << 10, IndexOuterLeavesInValueLog: true, FreshSystemPagerLeaves: true}
+	var d *DB
+	var log LeafPageLogCloser
+	open := func() {
+		t.Helper()
+		var err error
+		d, err = Open(opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		log, err = NewStandaloneLeafPageLog(opts.Dir, StandaloneLeafPageLogOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		d.SetLeafPageLog(log)
+	}
+	closeDB := func() {
+		t.Helper()
+		if d != nil {
+			if err := d.Close(); err != nil {
+				t.Error(err)
+			}
+			d = nil
+		}
+		if log != nil {
+			if err := log.Close(); err != nil {
+				t.Error(err)
+			}
+			log = nil
+		}
+	}
+	defer closeDB()
+	open()
+	if err := d.SetSync([]byte("raw"), []byte("raw user value")); err != nil {
+		t.Fatal(err)
+	}
+	const systemKey = "sys/0000"
+	const firstValue = "value-0000"
+	const secondValue = "updated"
+	wantDoc := []byte(vacuumTestDocumentValue)
+	_, _, err := d.PublishOrderedRootGroupWithSystemBuilder([]OrderedRootPublishInput{{
+		Iter:          mustFrozenSystemMemtable(t, vacuumTestDocumentKey, vacuumTestDocumentValue).NewIterator(nil, nil),
+		StoragePolicy: OrderedRootStorageValueLogLeaves,
+	}}, func(ids []uint64) (iterator.UnsafeIterator, error) {
+		descriptor := appendCollectionRootDescriptorPointer(t, opts.Dir, ids[0])
+		mt := memtable.NewAppendOnlyWithEntryCapacity(1025)
+		mt.SetEntry([]byte(vacuumTestCollectionRootKey), nil, descriptor, node.FlagPointer)
+		kvs := systemRangeKVs(1024, nil)
+		for i := 0; i < len(kvs); i += 2 {
+			mt.Set([]byte(kvs[i]), []byte(kvs[i+1]))
+		}
+		mt.Freeze()
+		return mt.NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	check := func(snap *Snapshot, expected string) {
+		t.Helper()
+		system := snap.State().SystemRootPageID
+		if err := leafrefscan.Walk(context.Background(), system, snap.Pager().Get, nil, func(page.LeafLogPtr) error {
+			return errors.New("pager system tree contains an outer leaf")
+		}); err != nil {
+			t.Fatal(err)
+		}
+		entry, err := snap.Pager().Get(system)
+		if err != nil || node.NewNode(entry).Type() != page.PageTypeInternal {
+			t.Fatalf("system root %d did not span multiple pager leaves: %v", system, err)
+		}
+		value, err := snap.GetAtRoot(system, []byte(systemKey))
+		if err != nil || string(value) != expected {
+			t.Fatalf("system %s=%q want %q err=%v", systemKey, value, expected, err)
+		}
+		encoded, err := snap.GetAtRoot(system, []byte(vacuumTestCollectionRootKey))
+		if err != nil || len(encoded) != 8 {
+			t.Fatalf("descriptor pointer read %x: %v", encoded, err)
+		}
+		root := binary.BigEndian.Uint64(encoded)
+		all, err := vacuumTreeAllLeafRefsIfComplete(snap.Pager(), root)
+		if err != nil || !all {
+			t.Fatalf("explicit outer root %d all outer=%t err=%v", root, all, err)
+		}
+		rawRoot := snap.State().RootPageID
+		all, err = vacuumTreeAllLeafRefsIfComplete(snap.Pager(), rawRoot)
+		if err != nil || !all {
+			t.Fatalf("default user root %d all outer=%t err=%v", rawRoot, all, err)
+		}
+		raw, err := snap.Get([]byte("raw"))
+		if err != nil || string(raw) != "raw user value" {
+			t.Fatalf("raw user value=%q err=%v", raw, err)
+		}
+		got, err := snap.GetAtRoot(root, []byte(vacuumTestDocumentKey))
+		if err != nil || !bytes.Equal(got, wantDoc) {
+			t.Fatalf("collection value=%q want=%q err=%v", got, wantDoc, err)
+		}
+	}
+	held := d.AcquireSnapshot()
+	if held == nil {
+		t.Fatal("missing held snapshot")
+	}
+	defer func() {
+		if held != nil {
+			if err := held.Close(); err != nil {
+				t.Error(err)
+			}
+		}
+	}()
+	check(held, firstValue)
+	_, _, err = d.PublishOrderedRootDeltaGroupWithSystemDeltaBuilder(nil, func([]uint64) (iterator.UnsafeIterator, error) {
+		return mustFrozenSystemMemtable(t, systemKey, secondValue).NewIterator(nil, nil), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.VacuumIndexOnline(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	check(held, firstValue)
+	closeErr := held.Close()
+	held = nil
+	if closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	checkRoots := func(minimum int) {
+		t.Helper()
+		roots, err := d.CaptureRecoverableRootSetForInspection(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			if err := roots.ReleaseWithError(); err != nil {
+				t.Error(err)
+			}
+		}()
+		candidates := roots.Roots()
+		if len(candidates) < minimum {
+			t.Fatalf("recoverable roots=%d want at least %d", len(candidates), minimum)
+		}
+		for _, root := range candidates {
+			snap := roots.AcquireSnapshotForRoot(root)
+			if snap == nil {
+				t.Fatalf("recoverable root unavailable: %+v", root)
+			}
+			func() {
+				defer func() {
+					if err := snap.Close(); err != nil {
+						t.Error(err)
+					}
+				}()
+				want := firstValue
+				if root.CommitSeq == d.State().CommitSeq {
+					want = secondValue
+				}
+				check(snap, want)
+			}()
+		}
+	}
+	checkRoots(2)
+	closeDB()
+	format, found, err := LoadFormatConfig(opts.Dir)
+	if err != nil || !found || !format.requiresSystemPagerLeaves() {
+		t.Fatalf("pager policy absent: found=%t err=%v", found, err)
+	}
+	withoutFeature := formatConfigFromOptions(opts)
+	if err := SaveFormatConfig(opts.Dir, withoutFeature); !errors.Is(err, ErrLegacyFormatRebuildRequired) {
+		t.Fatalf("removed persisted pager policy: %v", err)
+	}
+	opts.FreshSystemPagerLeaves = false
+	if err := VacuumIndexOffline(opts); err != nil {
+		t.Fatal(err)
+	}
+	open()
+	checkRoots(1)
+}
 
 func TestVacuumSystemLeafPolicyWarmWriteAndRecovery(t *testing.T) {
 	if !rootpublication.StableRelativeNamespaceSupported() {
@@ -169,6 +356,16 @@ func TestVacuumSystemLeafPolicyWarmWriteAndRecovery(t *testing.T) {
 			if t.Failed() {
 				return
 			}
+			// A fresh-store request must leave the populated multi-leaf layout
+			// alone when reopening an older store.
+			opts.FreshSystemPagerLeaves = true
+			if mode == "online" {
+				request := formatConfigFromOptions(opts)
+				request.RequiredFeatures = append(request.RequiredFeatures, RequiredFeatureSystemPagerLeaves)
+				if err := SaveFormatConfig(opts.Dir, request); !errors.Is(err, ErrLegacyFormatRebuildRequired) {
+					t.Fatalf("enabled pager policy on existing outer tree: %v", err)
+				}
+			}
 			openDB()
 			seedFiles := vacuumSystemManifestFiles(t, d, false)
 			if mode == "online" {
@@ -250,6 +447,17 @@ func TestVacuumSystemLeafPolicyWarmWriteAndRecovery(t *testing.T) {
 				}
 			}
 			kvs := append(systemRangeKVs(2048, map[int]string{1024: "updated"}), vacuumTestCollectionRootKey, descriptorText)
+			old := d.AcquireSnapshot()
+			if old == nil {
+				t.Fatal("missing held legacy snapshot")
+			}
+			defer func() {
+				if old != nil {
+					if err := old.Close(); err != nil {
+						t.Error(err)
+					}
+				}
+			}()
 			before := d.systemRootPublishStatsSnapshot()
 			if _, err := d.PublishSystemRootIterator(mustFrozenSystemMemtable(t, kvs...).NewIterator(nil, nil)); err != nil {
 				t.Fatalf("warm system update: %v", err)
@@ -259,6 +467,15 @@ func TestVacuumSystemLeafPolicyWarmWriteAndRecovery(t *testing.T) {
 				t.Fatalf("warm publication before=%+v after=%+v", before, after)
 			}
 			verify(true)
+			oldValue, err := old.GetAtRoot(old.State().SystemRootPageID, []byte("sys/1024"))
+			if err != nil || string(oldValue) != "value-1024" {
+				t.Fatalf("held legacy catalog value=%q err=%v", oldValue, err)
+			}
+			closeErr := old.Close()
+			old = nil
+			if closeErr != nil {
+				t.Fatal(closeErr)
+			}
 			closeDB()
 			if t.Failed() {
 				return

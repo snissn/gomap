@@ -121,6 +121,9 @@ func fixedSuccessorSizePlan(current *fixedWAL, budget int64, reason fixedWALRota
 	if budget <= 0 {
 		return plan, nil
 	}
+	// Keep normal successors within the existing ahead-reserve limit.
+	// The exact incoming frame can still require a larger private file.
+	budget = min(budget, fixedWALDefaultPhysicalBudget)
 	base := min(int64(fixedWALDefaultCapacity), budget)
 	normal := base
 	if reason != fixedWALForcedRotation && current != nil {

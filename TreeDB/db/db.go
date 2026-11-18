@@ -187,6 +187,7 @@ type DB struct {
 	indexPackedValuePtr            bool
 	indexInternalBaseDelta         bool
 	indexOuterLeavesInValueLog     bool
+	indexSystemLeavesInPager       bool
 	indexAdaptiveLeafEncoding      bool
 	piggybackCompaction            bool
 	maintenanceOpsPerCoalesce      int
@@ -1363,6 +1364,10 @@ type Options struct {
 	// When enabled, internal nodes store encoded value-log pointers for leaf
 	// children. This is pre-alpha and changes on-disk format/assumptions.
 	IndexOuterLeavesInValueLog bool
+	// FreshSystemPagerLeaves keeps the system tree in index.db when a new
+	// store uses IndexOuterLeavesInValueLog. The selected policy is persisted;
+	// opens of an existing store use its original system-leaf policy.
+	FreshSystemPagerLeaves bool
 	// IndexAdaptiveLeafEncoding enables per-page adaptive selection of leaf
 	// encoding flags using deterministic heuristics from key/value shape.
 	//
@@ -2578,14 +2583,16 @@ func Open(opts Options) (*DB, error) {
 	}
 	if !patriciaFeature {
 		// Recheck under the store lock before persisting a fresh-store marker.
-		if _, gateErr := validateFreelistTopologyGateV2(opts.Dir); gateErr != nil {
+		hasFormat, gateErr := validateFreelistTopologyGateV2(opts.Dir)
+		if gateErr != nil {
 			_ = lock.Close()
 			return nil, gateErr
 		}
-		configErr := saveFreshFreelistFormatConfig(opts)
-		if configErr != nil {
-			_ = lock.Close()
-			return nil, configErr
+		if !hasFormat {
+			if configErr := saveFreshFreelistFormatConfig(opts); configErr != nil {
+				_ = lock.Close()
+				return nil, configErr
+			}
 		}
 	}
 	db, err := openWithLock(opts, lock)
@@ -2742,6 +2749,10 @@ func openWithLock(opts Options, lock *lockfile.Lock) (result *DB, retErr error) 
 	if err != nil {
 		return nil, err
 	}
+	systemPagerLeaves, err := requiredFormatFeatureEnabled(opts.Dir, RequiredFeatureSystemPagerLeaves)
+	if err != nil {
+		return nil, err
+	}
 	if opts.ReadOnly {
 		return nil, errors.New("BUG: treedb: openWithLock called with read-only options")
 	}
@@ -2846,6 +2857,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (result *DB, retErr error) 
 		indexPackedValuePtr:            opts.IndexPackedValuePtr,
 		indexInternalBaseDelta:         opts.IndexInternalBaseDelta,
 		indexOuterLeavesInValueLog:     opts.IndexOuterLeavesInValueLog,
+		indexSystemLeavesInPager:       systemPagerLeaves,
 		indexAdaptiveLeafEncoding:      opts.IndexAdaptiveLeafEncoding,
 		piggybackCompaction:            !opts.DisablePiggybackCompaction,
 		maintenanceOpsPerCoalesce:      opts.MaintenanceOpsPerCoalesce,

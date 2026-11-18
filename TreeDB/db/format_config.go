@@ -22,6 +22,7 @@ const (
 	RequiredFeatureCommandWALV2          = "command_wal_v2"
 	RequiredFeatureDependencyDirectoryV2 = "dependency_directory_v2"
 	RequiredFeatureFreelistPatriciaV2    = "freelist_patricia_v2"
+	RequiredFeatureSystemPagerLeaves     = "system_pager_leaves"
 	// RequiredFeatureCommandWALV1 is retained as a source-compatibility alias
 	// during the pre-alpha cutover. Newly persisted configs always require V2.
 	RequiredFeatureCommandWALV1       = RequiredFeatureCommandWALV2
@@ -78,6 +79,15 @@ func (cfg FormatConfig) RequiresDependencyDirectoryV2() bool {
 func (cfg FormatConfig) RequiresFreelistPatriciaV2() bool {
 	for _, feature := range cfg.RequiredFeatures {
 		if normalizeFormatConfigMode(feature) == RequiredFeatureFreelistPatriciaV2 {
+			return true
+		}
+	}
+	return false
+}
+
+func (cfg FormatConfig) requiresSystemPagerLeaves() bool {
+	for _, feature := range cfg.RequiredFeatures {
+		if normalizeFormatConfigMode(feature) == RequiredFeatureSystemPagerLeaves {
 			return true
 		}
 	}
@@ -417,7 +427,8 @@ func requiredFormatFeatureEnabled(dir, wanted string) (bool, error) {
 // command_wal_v2 validates that legacy WAL state is clean; re-saving a config
 // that already requires command_wal_v2 does not re-run activation validation
 // because command-WAL segments are expected after activation. The incremental
-// dependency directory is a new-store opt-in and cannot be removed once saved.
+// dependency directory and pager system leaves are new-store opt-ins that
+// cannot be removed once saved.
 // This replaces the configuration; callers updating an existing store must load
 // its config first and preserve required features. In particular, the persisted
 // freelist_patricia_v2 physical-format requirement cannot be removed.
@@ -466,6 +477,18 @@ func SaveFormatConfig(dir string, cfg FormatConfig) error {
 	}
 	if ok && existing.RequiresFreelistPatriciaV2() && !cfg.RequiresFreelistPatriciaV2() {
 		return fmt.Errorf("%w: cannot remove freelist_patricia_v2", ErrLegacyFormatRebuildRequired)
+	}
+	if ok && existing.requiresSystemPagerLeaves() && !cfg.requiresSystemPagerLeaves() {
+		return fmt.Errorf("%w: cannot remove %s", ErrLegacyFormatRebuildRequired, RequiredFeatureSystemPagerLeaves)
+	}
+	if cfg.requiresSystemPagerLeaves() && (!ok || !existing.requiresSystemPagerLeaves()) {
+		if info, statErr := os.Stat(filepath.Join(dir, indexFileName)); statErr == nil {
+			if info.Size() != 0 {
+				return fmt.Errorf("%w: %s requires a new store", ErrLegacyFormatRebuildRequired, RequiredFeatureSystemPagerLeaves)
+			}
+		} else if !os.IsNotExist(statErr) {
+			return statErr
+		}
 	}
 	if cfg.RequiresFreelistPatriciaV2() && (!ok || !existing.RequiresFreelistPatriciaV2()) {
 		if info, statErr := os.Stat(filepath.Join(dir, indexFileName)); statErr == nil {
@@ -520,6 +543,9 @@ func commandWALFormatNeedsActivation(opts Options) (bool, error) {
 func saveFreshFreelistFormatConfig(opts Options) error {
 	cfg, err := formatConfigFromOptionsPreservingRequiredFeatures(opts)
 	if err == nil {
+		if opts.FreshSystemPagerLeaves && opts.IndexOuterLeavesInValueLog {
+			cfg.RequiredFeatures = appendRequiredFormatFeature(cfg.RequiredFeatures, RequiredFeatureSystemPagerLeaves)
+		}
 		return SaveFormatConfig(opts.Dir, cfg)
 	}
 	if !opts.IgnoreFormatConfig {
@@ -711,8 +737,7 @@ func validateRequiredFormatFeatures(features []string) error {
 		}
 		seen[feature] = struct{}{}
 		switch feature {
-		case RequiredFeatureCommandWALV1, RequiredFeatureDependencyDirectoryV2, RequiredFeatureFreelistPatriciaV2:
-			// Current command WAL and incremental dependency directory.
+		case RequiredFeatureCommandWALV1, RequiredFeatureDependencyDirectoryV2, RequiredFeatureFreelistPatriciaV2, RequiredFeatureSystemPagerLeaves:
 		case legacyRequiredFeatureCommandWALV1:
 			return fmt.Errorf("%w: %s", commitlog.ErrCommandWALV1RebuildRequired, raw)
 		default:

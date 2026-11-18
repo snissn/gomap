@@ -96,6 +96,7 @@ func (c *Collection) nativeUpdateBatchMode(items []UpdateBatchItem, mode updateB
 		}
 	}
 	if len(tx.members) != 0 {
+		tx.structuredBSONUpdate = bsonItems != nil
 		if err = tx.Commit(); err != nil {
 			return nil, false, err
 		}
