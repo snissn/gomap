@@ -2188,7 +2188,8 @@ slot retains the immutable revision and digest it already selected.
 Sealed segments may also have a rebuildable `.lenidx` length index.
 An index save failure after publication may reach the configured `NotifyError`
 callback. The published leaf and manifest remain authoritative, and `Close`
-succeeds when its storage and cleanup operations succeed.
+succeeds when its storage and cleanup operations succeed. An error reading a
+raw leaf segment while rebuilding that index remains a storage error.
 
 A prepared immutable revision may be abandoned only while no recoverable meta
 slot can name it. Vacuum retains prepared revisions on failure because a

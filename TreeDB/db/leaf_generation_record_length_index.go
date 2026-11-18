@@ -346,9 +346,9 @@ func (db *DB) loadLeafGenerationRecordLengthIndexFromDisk(rawFileID uint32) (*le
 	return loadLeafGenerationRecordLengthIndexFile(path, rawFileID)
 }
 
-func (db *DB) persistLeafGenerationRecordLengthIndex(rawFileID uint32) error {
+func (db *DB) persistLeafGenerationRecordLengthIndex(rawFileID uint32) (sourceErr, indexErr error) {
 	if db == nil || db.readOnly || rawFileID == 0 {
-		return nil
+		return nil, nil
 	}
 	idx, ok := db.loadLeafGenerationRecordLengthIndex(rawFileID)
 	if !ok {
@@ -356,13 +356,13 @@ func (db *DB) persistLeafGenerationRecordLengthIndex(rawFileID uint32) error {
 		idx, err = db.scanLeafGenerationRecordLengthIndexFromDisk(rawFileID)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
-				return nil
+				return nil, nil
 			}
-			return err
+			return err, nil
 		}
 		db.storeLeafGenerationRecordLengthIndex(rawFileID, idx)
 	}
-	return saveLeafGenerationRecordLengthIndexFile(leafGenerationRecordLengthIndexPath(db.dir, rawFileID), rawFileID, idx)
+	return nil, saveLeafGenerationRecordLengthIndexFile(leafGenerationRecordLengthIndexPath(db.dir, rawFileID), rawFileID, idx)
 }
 
 func (db *DB) scanLeafGenerationRecordLengthIndexFromDisk(rawFileID uint32) (*leafGenerationRecordLengthIndex, error) {
