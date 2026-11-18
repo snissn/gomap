@@ -500,14 +500,25 @@ func (db *DB) clearLeafGenerationPendingFileIDs(fileIDs []uint32) {
 }
 
 func (db *DB) noteLeafGenerationPendingFileIDs(currentFileID uint32, commitSeq uint64) error {
+	if db == nil {
+		return nil
+	}
+	if currentFileID == 0 {
+		db.leafGenerationPendingMu.Lock()
+		empty := len(db.leafGenerationPendingFileIDs) == 0
+		db.leafGenerationPendingMu.Unlock()
+		if empty {
+			return nil
+		}
+	}
+	db.durablePublishMu.Lock()
+	defer db.durablePublishMu.Unlock()
+	// An in-flight successor can consume the IDs before we get the gate.
+	// Copy them only once, after acquiring publication ownership.
 	pending := db.snapshotLeafGenerationPendingFileIDs(currentFileID)
 	if len(pending) == 0 {
 		return nil
 	}
-	db.durablePublishMu.Lock()
-	defer db.durablePublishMu.Unlock()
-	// An in-flight successor can consume these IDs before we get the gate.
-	pending = db.snapshotLeafGenerationPendingFileIDs(currentFileID)
 	batch := make([]uint32, 0, len(pending))
 	batchCommitSeq := uint64(0)
 	flushBatch := func() error {
