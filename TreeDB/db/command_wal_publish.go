@@ -103,6 +103,7 @@ type finalizeCommitOptions struct {
 	prepareSnapshotReceipt      func(*rootPublicationVisibleInstallV1) error
 	preparedLimits              *PreparedRootPublicationLimits
 	commandWALPublish           bool
+	poisonUnacceptedRawWAL      bool
 	appliedCommandLSN           uint64
 	appliedRanges               []CommandWALLSNRange
 	skipPrePublishFlush         bool
@@ -133,10 +134,9 @@ type finalizeCommitOptions struct {
 	// it was derived from. Page IDs alone are ABA-unsafe once COW reuse begins.
 	expectedBaseCommitSeq    uint64
 	hasExpectedBaseCommitSeq bool
-	// releaseRootSerialization transfers an already-prepared candidate from
-	// root construction to the synchronous durability transaction. The callback
-	// must release every DB/write/commit/root-build lock held by the caller and
-	// is invoked exactly once, immediately before external/index/meta I/O.
+	// releaseRootSerialization releases the caller's root-construction locks
+	// once the private roots and exact dependencies needed by the next phase
+	// are captured. The durable publication gate continues to order visibility.
 	releaseRootSerialization func()
 	// recordVacuumMutation transfers a successful primary-tree mutation into the
 	// online-vacuum tail before durablePublishMu can pass to cutover. Cutover
@@ -155,6 +155,8 @@ type finalizeCommitOptions struct {
 	// record-length indexes, but must not create a second manifest revision after
 	// the meta has selected the producer's exact one.
 	leafManifestAlreadyPersistent bool
+	ordinaryLeafManifestBound     bool
+	packedRootPublication         *packedRootPublication
 	// durableResourceRequirements scopes exact logical obligations for external
 	// resources whose physical files can outlive several root generations.
 	durableResourceRequirements rootpublication.StableLogicalObligationRequirements
@@ -175,6 +177,13 @@ type finalizeCommitOptions struct {
 	// higher-level command-WAL publisher. It subdivides queued root
 	// finalization without affecting publication ordering or durability.
 	publishTiming *CommandWALPublishTiming
+}
+
+func (opts *finalizeCommitOptions) releaseRootConstruction() {
+	if release := opts.releaseRootSerialization; release != nil {
+		opts.releaseRootSerialization = nil
+		release()
+	}
 }
 
 func (db *DB) publishCommandWALRoots(newRootID uint64, sysRootID uint64, appliedLSN uint64, covered []CommandWALLSNRange, sync bool) error {

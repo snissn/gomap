@@ -70,6 +70,8 @@ func (db *DB) handoffPrivateCOWLeafPackSources(ctx context.Context, owner *trans
 	// that same basis pin the selected sources during its own retirement pass.
 	db.writeMu.Lock()
 	defer db.writeMu.Unlock()
+	db.durablePublishMu.Lock()
+	defer db.durablePublishMu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return leafGenerationPackHandoffTransition{}, err
 	}

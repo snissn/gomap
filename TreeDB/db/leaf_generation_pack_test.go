@@ -737,6 +737,54 @@ func TestLeafGenerationPack_RewritesCollectionLeafRefRoot(t *testing.T) {
 	if _, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{Force: true}); err != nil {
 		t.Fatalf("LeafGenerationPlan before pack: %v", err)
 	}
+	// The descriptor rebase appends to this fresh raw segment. A refused pack
+	// may leave the append available to the next attempt, whose packed file has
+	// a later sequence and must register in the same manifest as the raw file.
+	if err := leafLog.rotateLeaf(); err != nil {
+		t.Fatalf("rotate leaf log for descriptor rebase: %v", err)
+	}
+	_, rebaseFileID := currentLeafSegmentOrFatal(t, leafLog)
+	before, ok := db.StateToken()
+	if !ok {
+		t.Fatal("missing state before pack")
+	}
+	compatPath := leafGenerationManifestPath(LeafLogDirPath(dir))
+	compatBefore, err := os.ReadFile(compatPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refused := errors.New("refuse relocated descriptor manifest")
+	var refusedFiles []uint32
+	unhook := registerLeafGenerationPackPublishHook(func(event leafGenerationPackPublishEvent) error {
+		if event.Phase != leafGenerationPackAfterManifestPreparation {
+			return nil
+		}
+		if db.durablePublishMu.TryLock() {
+			db.durablePublishMu.Unlock()
+			return errors.New("descriptor manifest preparation lost durable ordering")
+		}
+		refusedFiles = event.FileIDs
+		return refused
+	})
+	_, refuseErr := db.LeafGenerationPack(context.Background(), LeafGenerationPackOptions{
+		GenerationIDs: []uint64{gen.GenerationID}, Sync: true, Force: true,
+	})
+	unhook()
+	if !errors.Is(refuseErr, refused) || errors.Is(refuseErr, ErrRecoveryRequired) || len(refusedFiles) == 0 {
+		t.Fatalf("refused pack error = %v, promoted files = %v", refuseErr, refusedFiles)
+	}
+	if after, ok := db.StateToken(); !ok || after != before {
+		t.Fatalf("refused pack changed root state from %+v to %+v", before, after)
+	}
+	compatAfter, err := os.ReadFile(compatPath)
+	if err != nil || !bytes.Equal(compatBefore, compatAfter) {
+		t.Fatalf("refused pack changed compatibility manifest, read error = %v", err)
+	}
+	for _, fileID := range refusedFiles {
+		if db.valueLogManager.HasSegment(fileID) {
+			t.Fatalf("refused pack file %d remained registered", fileID)
+		}
+	}
 	nextRID := uint64(10_000)
 	reservedRIDs := 0
 	stats, err := db.LeafGenerationPack(context.Background(), LeafGenerationPackOptions{
@@ -759,6 +807,37 @@ func TestLeafGenerationPack_RewritesCollectionLeafRefRoot(t *testing.T) {
 	if reservedRIDs < stats.LeafPagesCopied {
 		t.Fatalf("ReserveRIDs reserved %d records, want at least LeafPagesCopied=%d", reservedRIDs, stats.LeafPagesCopied)
 	}
+	func() {
+		capture, err := db.CaptureRecoverableRootSetForInspection(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			if err := capture.ReleaseWithError(); err != nil {
+				t.Error(err)
+			}
+		}()
+		state := db.State()
+		for _, root := range capture.Roots() {
+			if !root.Durable || root.CommitSeq != state.CommitSeq {
+				continue
+			}
+			if err := capture.resourcesForRoot(root).WithScopedTokens(func(tokens []*rootpublication.StableResourceToken) error {
+				manifest, exact, err := loadSelectedDurableLeafGenerationManifestTokens(tokens)
+				if err != nil {
+					return err
+				}
+				if !exact || !manifest.hasNonDeletedFileID(page.ValueLogSegmentID(rebaseFileID)) {
+					return fmt.Errorf("retried pack's selected manifest omits descriptor append file %d", rebaseFileID)
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			return
+		}
+		t.Fatalf("missing durable pack commit %d", state.CommitSeq)
+	}()
 
 	newRoot := readCollectionRootID(t, db, descriptorKey)
 	if newRoot == oldRoot {

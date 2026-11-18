@@ -339,13 +339,20 @@ func (s *leafGenerationManifestStore) replaceStable(manifest *leafGenerationMani
 	if revisionFile == nil {
 		return nil, fmt.Errorf("create stable manifest revision: exhausted %d exact-parent names", maxRevisionCreateAttempts)
 	}
-	revisionLinked := true
 	defer func() {
-		if !installed && revisionLinked {
-			cleanupErr := rootpublication.RemoveStableChildFile(parent, revisionName)
-			if cleanupErr != nil {
-				retErr = errors.Join(retErr, fmt.Errorf("clean stable manifest revision: %w", cleanupErr))
+		if installed {
+			return
+		}
+		cleanupErr := s.unlinkStableRevisionLocked(revisionFile, revisionName)
+		if cleanupErr == nil {
+			cleanupErr = s.syncStableRevisionDeletionLocked()
+		}
+		if cleanupErr != nil {
+			installed = true // Keep evidence in the store or the producer's cleanup receipt.
+			if custody != nil {
+				custody.earlyRollbackFailed = true
 			}
+			retErr = s.ambiguous(errors.Join(retErr, fmt.Errorf("clean stable manifest revision %q: %w", revisionName, cleanupErr)))
 		}
 	}()
 	if err := observeStableNamespaceMutation(durabilitycut.NamespaceCreate, durabilitycut.ResourceOuterLeaf, s.leafDir, "", revisionFile.Name(), parent, revisionFile, "", revisionName); err != nil {
@@ -363,6 +370,19 @@ func (s *leafGenerationManifestStore) replaceStable(manifest *leafGenerationMani
 	s.durabilityCounters.ContentSyncs.Add(1)
 	if hook := s.hooks.BeforeRename; hook != nil {
 		if err := hook(); err != nil {
+			return nil, err
+		}
+	}
+	newIdentity, err := rootpublication.StableIdentityFromFile(revisionFile)
+	if err != nil {
+		return nil, err
+	}
+	if custody != nil {
+		// Admit the exact rollback name and identity while a refusal still
+		// needs only to unlink the new child, before compatibility changes.
+		rollbackIdentity := newIdentity
+		rollbackIdentity.Generation = candidate.ManifestRevision
+		if err := custody.admitReplacementIdentity(revisionName, rollbackIdentity); err != nil {
 			return nil, err
 		}
 	}
@@ -414,10 +434,6 @@ func (s *leafGenerationManifestStore) replaceStable(manifest *leafGenerationMani
 		return nil, s.ambiguous(err)
 	}
 
-	newIdentity, err := rootpublication.StableIdentityFromFile(revisionFile)
-	if err != nil {
-		return nil, s.ambiguous(err)
-	}
 	if err := s.registry.Observe(newIdentity); err != nil {
 		return nil, s.ambiguous(err)
 	}
@@ -442,6 +458,11 @@ func (s *leafGenerationManifestStore) replaceStable(manifest *leafGenerationMani
 	}
 	newObserved = false
 	manifest.ManifestRevision = candidate.ManifestRevision
+	if custody != nil {
+		// From here on a private producer refusal must abandon this exact
+		// revision before it can discard the compatibility preimage.
+		custody.revision, custody.digest = candidate.ManifestRevision, digest
+	}
 	return token, nil
 }
 
@@ -533,26 +554,34 @@ func (closure *LeafGenerationManifestStablePreparedClosure) removeUnpublishedRev
 		if !rootpublication.SamePhysicalIdentity(identity, closure.identity) {
 			return rootpublication.ErrResourceConflict
 		}
-		if err := rootpublication.ValidateStableChildLink(store.parent, child, closure.resourceID); err != nil {
-			return err
-		}
-		if err := rootpublication.RemoveStableChildFile(store.parent, closure.resourceID); err != nil {
-			return err
-		}
-		if err := observeNamespaceMutation(durabilitycut.NamespaceUnlink, durabilitycut.ResourceOuterLeaf, store.leafDir, child.Name(), ""); err != nil {
+		if err := store.unlinkStableRevisionLocked(child, closure.resourceID); err != nil {
 			return err
 		}
 	}
-	if err := durabilitycut.EmitPath(durabilitycut.BeforeDeletionDirectorySync, durabilitycut.ResourceOuterLeaf, store.leafDir, store.leafDir); err != nil {
-		return err
-	}
-	if err := store.parent.Sync(); err != nil {
-		return err
-	}
-	if err := durabilitycut.EmitPath(durabilitycut.AfterDeletionDirectorySync, durabilitycut.ResourceOuterLeaf, store.leafDir, store.leafDir); err != nil {
+	if err := store.syncStableRevisionDeletionLocked(); err != nil {
 		return err
 	}
 	return store.registry.ForgetStableNamespaceLinkIdentity(parentID, closure.identity, closure.resourceID)
+}
+
+func (s *leafGenerationManifestStore) unlinkStableRevisionLocked(child *os.File, name string) error {
+	if err := rootpublication.ValidateStableChildLink(s.parent, child, name); err != nil {
+		return err
+	}
+	if err := rootpublication.RemoveStableChildFile(s.parent, name); err != nil {
+		return err
+	}
+	return observeStableNamespaceMutation(durabilitycut.NamespaceUnlink, durabilitycut.ResourceOuterLeaf, s.leafDir, child.Name(), "", s.parent, child, name, "")
+}
+
+func (s *leafGenerationManifestStore) syncStableRevisionDeletionLocked() error {
+	if err := durabilitycut.EmitStablePath(durabilitycut.BeforeDeletionDirectorySync, durabilitycut.ResourceOuterLeaf, s.leafDir, s.leafDir, s.parent); err != nil {
+		return err
+	}
+	if err := s.parent.Sync(); err != nil {
+		return err
+	}
+	return durabilitycut.EmitStablePath(durabilitycut.AfterDeletionDirectorySync, durabilitycut.ResourceOuterLeaf, s.leafDir, s.leafDir, s.parent)
 }
 
 func (s *leafGenerationManifestStore) replaceStableCompatibilityView(parent *os.File, data []byte, custody *LeafGenerationManifestStablePreparedClosure, fileIndex, namespaceIndex int) (retErr error) {

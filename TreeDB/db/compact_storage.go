@@ -914,9 +914,15 @@ func compactStorageCompactionFlags(opts CompactStorageOptions, debt CompactStora
 }
 
 func (db *DB) sealCompactStorageCurrentLeafGeneration(compactLeafLog *rewriteWriter) (bool, error) {
-	if db == nil || db.leafGenerationManifest == nil {
+	if db == nil {
 		return false, nil
 	}
+	var sealedFileIDs []uint32
+	// Sidecar errors may call back into the DB. Report them after releasing
+	// the gate that serializes the manifest and operational view.
+	defer func() { db.persistLeafGenerationRecordLengthIndexes(sealedFileIDs) }()
+	db.durablePublishMu.Lock()
+	defer db.durablePublishMu.Unlock()
 	commitSeq := uint64(1)
 	if state, ok := db.StateToken(); ok && state.CommitSeq != 0 {
 		commitSeq = state.CommitSeq
@@ -959,9 +965,10 @@ func (db *DB) sealCompactStorageCurrentLeafGeneration(compactLeafLog *rewriteWri
 		}
 	}
 
-	if err := db.persistLeafGenerationManifestAndRecordLengthIndexes(nextManifest, rawFileIDs); err != nil {
+	if err := db.replaceLeafGenerationManifest(nextManifest); err != nil {
 		return false, err
 	}
+	sealedFileIDs = rawFileIDs
 	db.mu.Lock()
 	db.leafGenerationManifest = nextManifest
 	db.mu.Unlock()

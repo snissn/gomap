@@ -229,16 +229,25 @@ func (ta *publicationGuardTaintAnalysis) custodyAuxiliariesClosed() bool {
 	return len(found) == len(publicationGuardCustodyAuxiliaryTypes)+len(publicationGuardCustodyAuxiliaryFunctions)
 }
 
-// Limit the use of this proof to the actual pinned errors.is target callback.
-// All receiver callbacks, normal Is/As/Unwrap calls and their bodies keep the
-// ordinary source analysis. In particular this is not an error-interface rule.
+// Allow closed custody only at the pinned errors.is target callback and at
+// DB.reportError's notification field. Every other callback and the bodies
+// of the certified error methods remain subject to ordinary source analysis.
 func (ta *publicationGuardTaintAnalysis) privateCustodyTargetArgument(caller *types.Func, call *ast.CallExpr, arg ast.Expr) bool {
 	ta.custodyRefusal = ""
-	if caller == nil || caller.Pkg() == nil || caller.Pkg().Path() != "errors" || caller.Name() != "is" || len(call.Args) != 1 || call.Args[0] != arg {
+	if caller == nil || caller.Pkg() == nil || len(call.Args) != 1 || call.Args[0] != arg {
 		return false
 	}
 	selector, ok := publicationGuardUnparen(call.Fun).(*ast.SelectorExpr)
-	if !ok || selector.Sel.Name != "Is" {
+	if !ok {
+		return false
+	}
+	if publicationGuardFuncID(caller) == publicationGuardDBMethodID("reportError") {
+		selection := ta.source.info.Selections[selector]
+		receiver := caller.Type().(*types.Signature).Recv()
+		return selector.Sel.Name == "notifyError" && selection != nil && selection.Kind() == types.FieldVal &&
+			ta.exprObject(selector.X) == receiver && ta.custodyTargetClosed(arg)
+	}
+	if caller.Pkg().Path() != "errors" || caller.Name() != "is" || selector.Sel.Name != "Is" {
 		return false
 	}
 	if !ta.verifySource("errors/wrap.go", "098116636610ae87dd80e49c4dbe6a2b6c37918d7e1af35ded005be621d68a40") || !ta.verifySource("fmt/errors.go", "01fd304868493a3aa1198cc79a56274930f687353e9405211ca063c1b8195ea6") {
@@ -496,5 +505,42 @@ func(e *privateErrorCapsule)Unwrap()error{return e.cause}
 	source, decls, _, opaque = build(original + `func owns(e *privateErrorCapsule)bool{e.payload.RootPageID++;return e.payload!=nil}`)
 	if publicationGuardOpaqueFieldReadsClosed(source, decls, opaque, observers) {
 		t.Fatal("observer body amendment accepted")
+	}
+}
+
+func TestPublicationSourceGuardNotificationRejectsExposedState(t *testing.T) {
+	source := loadProductionPublicationGuardSource(t, `package db
+type uncheckedNotificationError struct { State *DBState }
+func (*uncheckedNotificationError) Error() string { return "published state" }
+
+func (db *DB) notifyWithUncheckedCustody() {
+	db.reportError(&uncheckedNotificationError{State: db.state.Load()})
+	db.reportUnreviewedNotification(&originalDBCleanupFailure{payload: db.state.Load()})
+}
+
+func (db *DB) reportUnreviewedNotification(err error) {
+	db.notifyError(err)
+}
+`)
+	analysis := analyzePublicationGuard(t, source)
+	var reviewed, unreviewed string
+	for _, write := range analysis.stateWrites {
+		if !strings.Contains(write.detail, "callee=db.notifyError argument=err") {
+			continue
+		}
+		switch publicationGuardFuncID(write.caller) {
+		case publicationGuardDBMethodID("reportError"):
+			reviewed = write.detail
+		case publicationGuardDBMethodID("reportUnreviewedNotification"):
+			unreviewed = write.detail
+		}
+	}
+	// The ordinary production origins coexist with the injected state-bearing
+	// error. A single uncertified alternative must prevent the proof.
+	if !strings.Contains(reviewed, "*errors.joinError") || !strings.Contains(reviewed, "custody-proof-refused=uncertified type *"+publicationGuardPackagePath+".uncheckedNotificationError") {
+		t.Errorf("mixed-origin notification did not refuse the unreviewed error: %s", reviewed)
+	}
+	if unreviewed == "" || strings.Contains(unreviewed, "custody-proof-refused=") {
+		t.Errorf("another method using notifyError entered the reviewed boundary: %s", unreviewed)
 	}
 }

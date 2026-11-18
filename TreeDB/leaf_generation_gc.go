@@ -32,8 +32,8 @@ type LeafGenerationGCStats struct {
 
 // LeafGenerationGC deletes fully unreachable, unpinned sealed leaf generations.
 //
-// In cached mode, this first checkpoints so the backend root used for
-// reachability matches the current public DB state.
+// In cached mode, this checkpoints before collecting and refreshes the cached
+// root authority after backend maintenance, including a dry run.
 func (db *DB) LeafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions) (LeafGenerationGCStats, error) {
 	var out LeafGenerationGCStats
 	if err := db.ensureOpen(); err != nil {
@@ -50,16 +50,23 @@ func (db *DB) LeafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 		if err := db.Checkpoint(); err != nil {
 			return out, err
 		}
-		protectedRootIDs, protectedSystemRootIDs := db.cached.ProtectedLeafGenerationRootIDPair()
-		opts.ProtectedRootIDs = mergeCompactStorageProtectedRootIDs(opts.ProtectedRootIDs, protectedRootIDs)
-		opts.ProtectedSystemRootIDs = mergeCompactStorageProtectedRootIDs(opts.ProtectedSystemRootIDs, protectedSystemRootIDs)
 	}
 
-	stats, err := db.backend.LeafGenerationGC(ctx, treedbdb.LeafGenerationGCOptions{
-		MaintenanceLimits:      opts.MaintenanceLimits,
-		DryRun:                 opts.DryRun,
-		ProtectedRootIDs:       opts.ProtectedRootIDs,
-		ProtectedSystemRootIDs: opts.ProtectedSystemRootIDs,
+	var stats treedbdb.LeafGenerationGCStats
+	err := db.runCachedBackendMaintenance(func() error {
+		if db.cached != nil {
+			protectedRootIDs, protectedSystemRootIDs := db.cached.ProtectedLeafGenerationRootIDPair()
+			opts.ProtectedRootIDs = mergeCompactStorageProtectedRootIDs(opts.ProtectedRootIDs, protectedRootIDs)
+			opts.ProtectedSystemRootIDs = mergeCompactStorageProtectedRootIDs(opts.ProtectedSystemRootIDs, protectedSystemRootIDs)
+		}
+		var runErr error
+		stats, runErr = db.backend.LeafGenerationGC(ctx, treedbdb.LeafGenerationGCOptions{
+			MaintenanceLimits:      opts.MaintenanceLimits,
+			DryRun:                 opts.DryRun,
+			ProtectedRootIDs:       opts.ProtectedRootIDs,
+			ProtectedSystemRootIDs: opts.ProtectedSystemRootIDs,
+		})
+		return runErr
 	})
 	if err != nil {
 		return out, err

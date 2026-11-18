@@ -281,6 +281,46 @@ func (set *StableResourceSet) AcquireStats(now time.Time) (*ResourceDiagnostics,
 	return d, nil
 }
 
+// WalkPhysicalResourceIdentities visits scalar identities for the requested
+// resource kinds without allocating diagnostics. The callback must not
+// re-enter the set.
+func (set *StableResourceSet) WalkPhysicalResourceIdentities(kinds []ResourceKind, visit func(ResourceKind, uint64, StableIdentity, [32]byte) error) error {
+	if set == nil {
+		return nil
+	}
+	set.mu.Lock()
+	defer set.mu.Unlock()
+	if visit == nil || set.Owner() == ResourceOwnerReleased || set.Owner() == ResourceOwnerTransferred {
+		return ErrResourceOwnership
+	}
+	var err error
+	visitEntry := func(entry *stableResourceEntry) bool {
+		token := activeEntryToken(*entry)
+		if token == nil || token.released.Load() {
+			err = ErrResourceOwnership
+			return false
+		}
+		err = visit(token.kind, token.generation, token.identity, token.digest)
+		return err == nil
+	}
+	if set.kindViews != nil {
+		for _, kind := range kinds {
+			view := set.kindViews.get(kind)
+			if !rangeStableResourceLogicalIndex(view.logical, visitEntry) {
+				break
+			}
+		}
+		return err
+	}
+	for i := range set.entries {
+		entry := &set.entries[i]
+		if slices.Contains(kinds, entry.token.kind) && !visitEntry(entry) {
+			break
+		}
+	}
+	return err
+}
+
 // HasKind queries existing immutable entries without exporting diagnostic
 // backing or allocating a temporary descriptor collection.
 func (set *StableResourceSet) HasKind(kind ResourceKind) bool {

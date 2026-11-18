@@ -500,6 +500,21 @@ func (db *DB) clearLeafGenerationPendingFileIDs(fileIDs []uint32) {
 }
 
 func (db *DB) noteLeafGenerationPendingFileIDs(currentFileID uint32, commitSeq uint64) error {
+	if db == nil {
+		return nil
+	}
+	if currentFileID == 0 {
+		db.leafGenerationPendingMu.Lock()
+		empty := len(db.leafGenerationPendingFileIDs) == 0
+		db.leafGenerationPendingMu.Unlock()
+		if empty {
+			return nil
+		}
+	}
+	db.durablePublishMu.Lock()
+	defer db.durablePublishMu.Unlock()
+	// An in-flight successor can consume the IDs before we get the gate.
+	// Copy them only once, after acquiring publication ownership.
 	pending := db.snapshotLeafGenerationPendingFileIDs(currentFileID)
 	if len(pending) == 0 {
 		return nil
@@ -613,7 +628,7 @@ func (db *DB) stagedLeafGenerationManifestWithPendingResult(base *leafGeneration
 	return db.stagedLeafGenerationManifestWithPendingResultAndLimit(base, currentFileID, commitSeq, nil)
 }
 
-func (db *DB) stagedLeafGenerationManifestWithPendingResultAndLimit(base *leafGenerationManifest, currentFileID uint32, commitSeq uint64, limits *PreparedRootPublicationLimits) (stagedLeafGenerationManifestResult, error) {
+func (db *DB) stagedLeafGenerationManifestWithPendingResultAndLimit(base *leafGenerationManifest, currentFileID uint32, commitSeq uint64, limits *PreparedRootPublicationLimits, promotedPackFileIDs ...uint32) (stagedLeafGenerationManifestResult, error) {
 	result := stagedLeafGenerationManifestResult{manifest: base}
 	if db == nil || base == nil {
 		return result, nil
@@ -635,6 +650,13 @@ func (db *DB) stagedLeafGenerationManifestWithPendingResultAndLimit(base *leafGe
 	pending, err := db.snapshotLeafGenerationPendingFileIDsWithLimit(currentFileID, maxPending)
 	if err != nil {
 		return result, err
+	}
+	// Candidate-owned packed files are already promoted and identity-checked.
+	// Register them in the same ordered batch as the pending descriptor leaves.
+	// Applying a higher pack sequence first would suppress an earlier, still
+	// writable raw segment after a refused descriptor publication.
+	for _, rawFileID := range promotedPackFileIDs {
+		pending = append(pending, leafGenerationPendingFile{rawFileID: rawFileID, commitSeq: commitSeq})
 	}
 	if len(pending) == 0 {
 		return result, nil
@@ -1182,9 +1204,12 @@ func (db *DB) reconcileLeafGenerationManifestWithDirInPlace(commitSeq uint64) (b
 	}
 	db.writeMu.Lock()
 	defer db.writeMu.Unlock()
+	db.durablePublishMu.Lock()
+	defer db.durablePublishMu.Unlock()
 	return db.reconcileLeafGenerationManifestWithDirLocked(commitSeq)
 }
 
+// The caller holds writeMu and durablePublishMu through the operational update.
 func (db *DB) reconcileLeafGenerationManifestWithDirLocked(commitSeq uint64) (bool, error) {
 	if db == nil || db.readOnly || db.leafGenerationManifest == nil {
 		return false, nil

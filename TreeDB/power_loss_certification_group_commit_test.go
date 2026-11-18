@@ -351,6 +351,11 @@ func TestPowerLossCertificationGroupedRotationExternalPublicReopen(t *testing.T)
 			t.Fatalf("recovered external value %d len=%d err=%v", index, len(value), err)
 		}
 	}
+	// Recovery can unlink files whose native identities are still overridden.
+	// Release this image's overrides before creating the next image, which can
+	// reuse those inode numbers.
+	closeRecovered()
+
 	// Before the first published WAL sync, the auxiliary dependency drain has
 	// completed but neither accepted frame nor barrier is durable. The group must
 	// remain absent. The later old-segment sync may already persist the frame.

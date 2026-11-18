@@ -1230,6 +1230,19 @@ authoritative and retains exact candidate ownership for retry. From the first
 target-meta mutation onward, an error is ambiguous and poisons the live handle;
 the process must reopen and run bounded selection.
 
+When an ordinary root brings in an outer-leaf file absent from its inherited
+manifest, the publisher captures the successor manifest and exact retained files
+before releasing construction locks. The publication sequencer preserves the
+predecessor, successor commit sequence, and operational manifest during the
+replacement syncs and until visibility. Reader admission stays open during
+those manifest syncs.
+
+Pack publication acquires the same sequencer before registering promoted files
+in the value-log set. It binds one immutable manifest covering the promoted
+files and any late SYSTEM leaf appends before accepting the root. The pack
+keeps the value-log visibility fence and publication sequencer through
+pre-acceptance rollback so another publication cannot pin tentative files.
+
 The active stable-I/O adapters are explicit and fail closed:
 
 | Platform | Mapped/index file barrier | Namespace barrier | Contract result |
@@ -2166,6 +2179,11 @@ persists an immutable `manifest.durable.<revision>.json` revision. Durable-root
 publication consumes that exact stable token in `DependencyManifestV1`; the
 fixed `manifest.json` path is a compatibility view, not the selected revision's
 identity.
+
+An ordinary successor may reuse its inherited revision while the candidate's
+external leaf files are covered by it. A successor that needs a new raw file
+selects the replacement revision in its own dependency closure. The alternate
+slot retains the immutable revision and digest it already selected.
 
 A prepared immutable revision may be abandoned only while no recoverable meta
 slot can name it. Vacuum retains prepared revisions on failure because a

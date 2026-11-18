@@ -2406,7 +2406,7 @@ func publicationGuardCallGraphReaches(calls map[*types.Func]map[*types.Func]stru
 	return false
 }
 
-func loadProductionPublicationGuardSource(t *testing.T) *publicationGuardSource {
+func loadProductionPublicationGuardSource(t *testing.T, fixtures ...string) *publicationGuardSource {
 	t.Helper()
 	_, currentFile, _, ok := runtime.Caller(0)
 	if !ok {
@@ -2456,11 +2456,18 @@ func loadProductionPublicationGuardSource(t *testing.T) *publicationGuardSource 
 	}
 
 	fset := token.NewFileSet()
-	files := make([]*ast.File, 0, len(production.GoFiles)+len(production.CgoFiles))
+	files := make([]*ast.File, 0, len(production.GoFiles)+len(production.CgoFiles)+len(fixtures))
 	for _, name := range append(production.GoFiles, production.CgoFiles...) {
 		file, err := parser.ParseFile(fset, filepath.Join(production.Dir, name), nil, parser.SkipObjectResolution)
 		if err != nil {
 			t.Fatalf("parse production file %s: %v", name, err)
+		}
+		files = append(files, file)
+	}
+	for i, fixture := range fixtures {
+		file, err := parser.ParseFile(fset, fmt.Sprintf("publication_guard_fixture_%d.go", i), fixture, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse production guard fixture: %v", err)
 		}
 		files = append(files, file)
 	}

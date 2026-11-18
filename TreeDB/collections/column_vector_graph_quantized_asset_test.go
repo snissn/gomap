@@ -811,6 +811,10 @@ func TestColumnGraphScalarU8AlphaPreparedTraversalQuantizedOnlyAndRerankUseAlpha
 	if collectionsRaceEnabled {
 		t.Skip("exact allocation counts are unstable under race instrumentation")
 	}
+	if !enterIsolatedVectorAllocationGate(t, "scalar-u8-alpha-prepared-traversal") {
+		return
+	}
+	completeVectorAllocationSetup(t, d)
 	quantizedOnlyAllocs := testing.AllocsPerRun(100, func() {
 		got, err := searcher.SearchWithBuffer(quantizedOnlyOpts, &buffer)
 		if err != nil || len(got.Results) != quantizedOnlyOpts.TopK {

@@ -347,7 +347,7 @@ func TestLeafGenerationPack_PromotionBlocksRefreshUntilRollbackCompletes(t *test
 	}
 }
 
-func TestLeafGenerationPack_ManifestPreparationRunsBeforePublicationLocks(t *testing.T) {
+func TestLeafGenerationPack_ManifestPreparationReleasesConstructionLocks(t *testing.T) {
 	dir := t.TempDir()
 	db, leafLog := openLeafGenerationPackPublicationTestDB(t, dir)
 	defer closeLeafGenerationPackPublicationTestDB(t, db, leafLog)
@@ -355,6 +355,10 @@ func TestLeafGenerationPack_ManifestPreparationRunsBeforePublicationLocks(t *tes
 
 	var observed atomic.Bool
 	unregister := registerLeafGenerationPackPublishHook(func(event leafGenerationPackPublishEvent) error {
+		if event.Phase == leafGenerationPackAfterPromotion && db.durablePublishMu.TryLock() {
+			db.durablePublishMu.Unlock()
+			return errors.New("pack promoted before acquiring the durable publication gate")
+		}
 		if event.Phase != leafGenerationPackAfterManifestPreparation {
 			return nil
 		}
@@ -370,15 +374,18 @@ func TestLeafGenerationPack_ManifestPreparationRunsBeforePublicationLocks(t *tes
 			return errors.New("manifest preparation retained publishPrepareMu")
 		}
 		db.publishPrepareMu.Unlock()
-		if !db.valueLogPublicationMu.TryLock() {
-			return errors.New("manifest preparation retained valueLogPublicationMu")
+		if db.valueLogPublicationMu.TryRLock() {
+			db.valueLogPublicationMu.RUnlock()
+			return errors.New("tentative packed files became visible during manifest preparation")
 		}
-		db.valueLogPublicationMu.Unlock()
 		observed.Store(true)
 		return nil
 	})
 	defer unregister()
 
+	counters := db.leafGenerationManifestStore.durabilityCounters
+	contentBefore := counters.ContentSyncs.Load()
+	namespaceBefore := counters.NamespaceSyncs.Load()
 	if _, err := db.LeafGenerationPack(context.Background(), LeafGenerationPackOptions{
 		GenerationIDs: []uint64{candidate.generation.GenerationID},
 		Force:         true,
@@ -387,6 +394,9 @@ func TestLeafGenerationPack_ManifestPreparationRunsBeforePublicationLocks(t *tes
 	}
 	if !observed.Load() {
 		t.Fatal("manifest preparation hook was not observed")
+	}
+	if content, namespace := counters.ContentSyncs.Load()-contentBefore, counters.NamespaceSyncs.Load()-namespaceBefore; content != 1 || namespace != 1 {
+		t.Fatalf("plain pack manifest syncs = %d content, %d namespace, want one each", content, namespace)
 	}
 }
 

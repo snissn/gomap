@@ -464,7 +464,7 @@ func (db *DB) prepareRootPublicationVisibleInstallV1(
 		install.post.persistLeafGenerationRawFileIDs = append(install.post.persistLeafGenerationRawFileIDs[:0], leafManifestRawFileIDs...)
 		install.leafGenerationView = db.leafGenerationViewForManifest(leafManifest)
 	}
-	if db.leafPageLog != nil {
+	if db.leafPageLog != nil && !opts.ordinaryLeafManifestBound {
 		staged, err := db.stagedLeafGenerationManifestWithPendingResultAndLimit(manifestBasis, 0, next.CommitSeq, opts.preparedLimits)
 		if err != nil {
 			return nil, err
@@ -1079,8 +1079,9 @@ func (c *queuedPrimaryConstructionV6) release(db *DB, idx *indexGen) error {
 }
 
 // finalizeQueuedRootPublicationV1 transfers one fully built logical root from
-// caller serialization into the coordinator. It performs no stable I/O. The
-// allocator, visible DB state, resource closure, and coordinator frontier cross
+// caller serialization into the coordinator. The ordinary manifest producer
+// persists newly required leaf authority before handoff. The allocator,
+// visible DB state, resource closure, and coordinator frontier cross
 // visibility atomically inside EnqueueBuilt's activation callback; only then
 // are rootReuseMu and durablePublishMu released.
 func (db *DB) finalizeQueuedRootPublicationV1(
@@ -1179,6 +1180,21 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 	if err != nil {
 		return post, prePublishErr(fmt.Errorf("capture queued root dependencies: %w", err))
 	}
+	var manifestUpdate ordinaryLeafManifestPublication
+	manifestAccepted := false
+	if leafManifest == nil || (opts.packedRootPublication != nil && !opts.leafManifestAlreadyPersistent) {
+		resources, manifestUpdate, err = db.bindPublicationLeafManifest(resources, next.CommitSeq, leafManifest, leafManifestRawFileIDs, &opts)
+		if err != nil {
+			return post, prePublishErr(err)
+		}
+		if manifestUpdate.prepared != nil {
+			defer func() {
+				retErr = errors.Join(retErr, manifestUpdate.finish(manifestAccepted || db.publicationPoisoned.Load()))
+			}()
+			leafManifest, leafManifestRawFileIDs = manifestUpdate.staged.manifest, manifestUpdate.staged.rawFileIDs
+			manifestUpdate.bind(&post, &opts)
+		}
+	}
 	resourcesOwned := true
 	defer func() {
 		if resourcesOwned {
@@ -1188,19 +1204,13 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 
 	db.rootReuseMu.Lock()
 	rootReuseLocked := true
-	buildLocksReleased := false
-	releaseBuildLocks := func() {
-		if buildLocksReleased {
-			return
-		}
+	releaseReuse := func() {
 		if rootReuseLocked {
 			db.rootReuseMu.Unlock()
 			rootReuseLocked = false
 		}
-		releaseDurablePublish()
-		buildLocksReleased = true
 	}
-	defer releaseBuildLocks()
+	defer releaseReuse()
 
 	post.vlogRefDelta = vlogRefDelta
 	install, err := db.prepareRootPublicationVisibleInstallV1(
@@ -1295,9 +1305,7 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 		}
 	}
 
-	if releaseRootSerialization := opts.releaseRootSerialization; releaseRootSerialization != nil {
-		releaseRootSerialization()
-	}
+	opts.releaseRootConstruction()
 	if inlinePrepareGuard != nil {
 		inlinePrepareGuard.Release()
 	}
@@ -1345,6 +1353,7 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 		return post, prePublishErr(enqueueErr)
 	}
 	candidateOwned = false
+	manifestAccepted = true
 	install.post.physicalSeal = receipt.SealReceipt()
 	if opts.commandWALSeal != nil {
 		opts.commandWALSeal.bind(install.post.physicalSeal)
@@ -1374,7 +1383,11 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 	// The candidate is coordinator-owned and all ordered bookkeeping is now
 	// complete. Release DB build locks before any user error callback or
 	// admission/durability wait can re-enter the coordinator.
-	releaseBuildLocks()
+	releaseReuse()
+	if pack := opts.packedRootPublication; pack != nil {
+		pack.afterActivation()
+	}
+	releaseDurablePublish()
 	if reportErr != nil {
 		db.reportError(reportErr)
 	}

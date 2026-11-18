@@ -3399,6 +3399,51 @@ func TestCompactStorageExhaustiveSealsCurrentLeafGeneration(t *testing.T) {
 	}
 }
 
+func TestCompactStorageSealSidecarErrorReleasesPublicationGate(t *testing.T) {
+	dir := t.TempDir()
+	var sidecarErr error
+	database, err := Open(Options{
+		Dir:                        dir,
+		Durability:                 DurabilityWALOffRelaxed,
+		DisableBackgroundPrune:     true,
+		IndexOuterLeavesInValueLog: true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	leafLog := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 64<<20)
+	leafLog.ConfigureLeafLog(LeafLogDirPath(dir), rewriteLeafLogLaneID, 0)
+	t.Cleanup(func() { closeNoErr(t, leafLog) })
+	t.Cleanup(func() {
+		if err := database.Close(); !errors.Is(err, sidecarErr) {
+			t.Errorf("Close error=%v want reported sidecar error %v", err, sidecarErr)
+		}
+	})
+	database.SetLeafPageLog(leafLog)
+	writeLeafGenerationKeys(t, database, "current", 64, 'z')
+	manifest := database.leafGenerationManifest
+	current := manifest.Generations[manifest.currentGenerationIndex()]
+	if len(current.FileIDs) != 1 {
+		t.Fatalf("expected one writable file, got %v", current.FileIDs)
+	}
+	rawFileID := current.FileIDs[0]
+	indexPath := leafGenerationRecordLengthIndexPath(dir, rawFileID)
+	database.storeLeafGenerationRecordLengthIndex(rawFileID, &leafGenerationRecordLengthIndex{offsets: []uint32{4}})
+	database.notifyError = func(err error) {
+		sidecarErr = err
+		if !database.durablePublishMu.TryLock() {
+			t.Error("sidecar error notification holds the publication gate")
+			return
+		}
+		database.durablePublishMu.Unlock()
+	}
+	sealed, err := database.sealCompactStorageCurrentLeafGeneration(leafLog)
+	wantSidecarFailure := fmt.Sprintf("leaf generation record-length index: encode %q: offset/length mismatch", indexPath)
+	if err != nil || !sealed || sidecarErr == nil || !strings.Contains(sidecarErr.Error(), wantSidecarFailure) {
+		t.Fatalf("seal applied=%t error=%v sidecar notification=%v", sealed, err, sidecarErr)
+	}
+}
+
 func TestCompactStorageExhaustiveRefusesExternalLeafPageLog(t *testing.T) {
 	d, _, _ := openLeafGenerationPackTestDB(t)
 	writeLeafGenerationKeys(t, d, "current", 8, 'x')

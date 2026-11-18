@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -375,8 +376,40 @@ func TestStableLeafGenerationManifestPreRenameFailurePreservesOldAndCleansTemp(t
 	if err != nil {
 		t.Fatal(err)
 	}
+	model, err := powerlossoracle.Capture(leafDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revisionName := leafGenerationDurableManifestFileName(2)
+	var deletion []string
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		switch {
+		case event.Namespace == durabilitycut.NamespaceUnlink:
+			deletion = append(deletion, string(event.Namespace))
+			if event.StableParent != store.parent || event.StablePath == nil || event.StableOldName != revisionName {
+				t.Errorf("unlink did not observe the exact retained parent and revision: %+v", event)
+			}
+		case event.Point == durabilitycut.BeforeDeletionDirectorySync, event.Point == durabilitycut.AfterDeletionDirectorySync:
+			deletion = append(deletion, string(event.Point))
+			if event.StablePath != store.parent {
+				t.Errorf("deletion fence did not use the retained parent: %+v", event)
+			}
+		}
+		return model.Observe(leafDir, event)
+	})
+	defer restore()
 	cut := errors.New("pre-rename cut")
-	store.hooks.BeforeRename = func() error { return cut }
+	store.hooks.BeforeRename = func() error {
+		// The revision link could already survive a crash before the producer's
+		// own directory sync. Establish that outcome deterministically.
+		if err := store.parent.Sync(); err != nil {
+			t.Fatal(err)
+		}
+		if err := durabilitycut.EmitStablePath(durabilitycut.AfterNewFileDirectorySync, durabilitycut.ResourceOuterLeaf, leafDir, leafDir, store.parent); err != nil {
+			t.Fatal(err)
+		}
+		return cut
+	}
 	if _, err := store.Replace(manifest.clone()); !errors.Is(err, cut) || errors.Is(err, ErrRecoveryRequired) {
 		t.Fatalf("Replace error=%v want pre-rename cut without recovery-required", err)
 	}
@@ -387,12 +420,73 @@ func TestStableLeafGenerationManifestPreRenameFailurePreservesOldAndCleansTemp(t
 	if string(gotOld) != string(wantOld) {
 		t.Fatal("pre-rename failure changed old manifest bytes")
 	}
+	if want := []string{string(durabilitycut.NamespaceUnlink), string(durabilitycut.BeforeDeletionDirectorySync), string(durabilitycut.AfterDeletionDirectorySync)}; !slices.Equal(deletion, want) {
+		t.Errorf("deletion events=%v want %v", deletion, want)
+	}
+	crashDir := t.TempDir()
+	if err := model.MaterializeStable(crashDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(crashDir, revisionName)); !os.IsNotExist(err) {
+		t.Errorf("early rollback revision survived modeled crash: %v", err)
+	}
 	temps, err := filepath.Glob(filepath.Join(leafDir, leafGenerationManifestFileName+".tmp.*"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(temps) != 0 || registry.ActivePins() != 0 || registry.ActiveIdentities() != 0 {
 		t.Fatalf("pre-rename leak temps=%v pins=%d identities=%d", temps, registry.ActivePins(), registry.ActiveIdentities())
+	}
+}
+
+func TestStableLeafGenerationManifestPreRenameRebindPreservesForeignChild(t *testing.T) {
+	leafDir := t.TempDir()
+	registry := rootpublication.NewIdentityPinRegistry()
+	store := newLeafGenerationManifestStore(leafDir, registry, leafGenerationManifestStable, nil)
+	defer store.Close()
+	manifest := newLeafGenerationManifest(1)
+	first, err := store.Replace(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.Release()
+	path := filepath.Join(leafDir, leafGenerationDurableManifestFileName(2))
+	const foreign = "foreign manifest"
+	var foreignIdentity os.FileInfo
+	cut := errors.New("pre-rename cut after rebind")
+	store.hooks.BeforeRename = func() error {
+		if err := os.Rename(path, path+".displaced"); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(foreign), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var err error
+		foreignIdentity, err = os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cut
+	}
+	if _, err := store.Replace(manifest.clone()); !errors.Is(err, cut) || !errors.Is(err, rootpublication.ErrResourceConflict) || !errors.Is(err, ErrRecoveryRequired) {
+		t.Errorf("rebound revision error=%v want cut, resource conflict and recovery required", err)
+	}
+	if data, err := os.ReadFile(path); err != nil || string(data) != foreign {
+		t.Errorf("rebound foreign revision=%q err=%v", data, err)
+	}
+	if info, err := os.Stat(path); err != nil || !os.SameFile(info, foreignIdentity) {
+		t.Errorf("rebound foreign inode changed: %v", err)
+	}
+	if data, err := os.ReadFile(path + ".displaced"); err != nil {
+		t.Error(err)
+	} else if displaced, err := decodeLeafGenerationManifest(data, path); err != nil || displaced.ManifestRevision != 2 {
+		t.Errorf("displaced manifest=%v err=%v want revision 2", displaced, err)
+	}
+	if got := store.AmbiguousEvidenceCount(); got != 1 {
+		t.Errorf("ambiguous revision evidence=%d want 1", got)
+	}
+	if _, err := store.Replace(manifest.clone()); !errors.Is(err, ErrRecoveryRequired) {
+		t.Errorf("retry after rebound revision=%v want recovery required", err)
 	}
 }
 

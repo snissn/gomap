@@ -1595,13 +1595,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	var (
 		publishAlloc     *leafGenerationPackPublishAllocator
 		durableResources *rootpublication.StableResourceSet
-		manifestClosure  *LeafGenerationManifestStablePreparedClosure
 	)
-	defer func() {
-		if manifestClosure != nil {
-			err = errors.Join(err, manifestClosure.ReleaseWithError())
-		}
-	}()
 	cleanupCreatedSegments := func(baseErr error) (int, int64, error) {
 		if publishAlloc != nil {
 			baseErr = errors.Join(baseErr, publishAlloc.Rollback())
@@ -1638,52 +1632,25 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		}
 		return 0, 0, errors.Join(baseErr, authority.release())
 	}
-	abandonManifest := func(baseErr error) error {
-		if manifestClosure == nil {
-			return baseErr
-		}
-		if cleanupErr := manifestClosure.abandonUnpublished(); cleanupErr != nil {
-			baseErr = errors.Join(baseErr, cleanupErr)
-			db.publicationPoisoned.Store(true)
-		}
-		manifestClosure = nil
-		return baseErr
-	}
-
-	// Persist the immutable manifest revision before taking write/root
-	// publication locks. Exact basis revalidation below either transfers this
-	// closure into the candidate or abandons it outside those locks.
+	// The finalizer binds the one immutable manifest after capture, when the
+	// promoted pack files and any late SYSTEM leaf appends are both known.
 	if snap.state.LeafGenerations == nil || snap.state.LeafGenerations.sourceManifest == nil {
-		_, _, cleanupErr := cleanupCreatedSegments(fmt.Errorf("%w: packed publication has no source leaf-generation manifest", rootpublication.ErrUnresolvedResource))
-		return 0, 0, abandonManifest(cleanupErr)
+		return cleanupCreatedSegments(fmt.Errorf("%w: packed publication has no source leaf-generation manifest", rootpublication.ErrUnresolvedResource))
 	}
-	leafManifest := snap.state.LeafGenerations.sourceManifest.clone()
-	leafManifestRawFileIDs, changed, manifestErr := noteCreatedLeafGenerationFileIDsInManifest(leafManifest, snap.state.CommitSeq+1, createdIDs)
-	if manifestErr != nil {
-		_, _, cleanupErr := cleanupCreatedSegments(fmt.Errorf("vlog-rewrite: update leaf generation manifest: %w", manifestErr))
-		return 0, 0, abandonManifest(cleanupErr)
-	}
-	if !changed {
-		_, _, cleanupErr := cleanupCreatedSegments(fmt.Errorf("%w: packed publication did not advance the leaf-generation manifest", rootpublication.ErrResourceConflict))
-		return 0, 0, abandonManifest(cleanupErr)
-	}
-	var persistedLeafManifest *leafGenerationManifest
-	manifestClosure, persistedLeafManifest, manifestErr = db.prepareLeafGenerationManifestStableCandidate(leafManifest)
-	if manifestErr != nil {
-		_, _, cleanupErr := cleanupCreatedSegments(fmt.Errorf("vlog-rewrite: persist exact leaf-generation manifest: %w", manifestErr))
-		return 0, 0, abandonManifest(cleanupErr)
-	}
-	leafManifest = persistedLeafManifest
-	publishEvent.Phase = leafGenerationPackAfterManifestPreparation
-	if err := runLeafGenerationPackPublishHook(publishEvent); err != nil {
-		_, _, cleanupErr := cleanupCreatedSegments(fmt.Errorf("vlog-rewrite: manifest preparation failpoint: %w", err))
-		return 0, 0, abandonManifest(cleanupErr)
+	leafManifest := snap.state.LeafGenerations.sourceManifest
+	leafManifestRawFileIDs := filterLeafGenerationRawFileIDs(createdIDs)
+	afterManifestPreparation := func() error {
+		event := publishEvent
+		event.Phase = leafGenerationPackAfterManifestPreparation
+		if err := runLeafGenerationPackPublishHook(event); err != nil {
+			return fmt.Errorf("vlog-rewrite: manifest preparation failpoint: %w", err)
+		}
+		return nil
 	}
 
-	// Promotion installs files into the live value-log namespace. Hold the
-	// publication visibility gate from before that first visible mutation until
-	// the root commit succeeds or rollback has removed the candidate. The lock
-	// order must remain writeMu -> publishPrepareMu -> valueLogPublicationMu.
+	// Promotion registers files in the live value-log set. Acquire durable
+	// ordering before the visibility gate so a preceding publisher can finish
+	// capturing its set without seeing tentative files or waiting on us.
 	publishWaitStarted := time.Now()
 	db.writeMu.Lock()
 	publishWait := time.Since(publishWaitStarted)
@@ -1691,43 +1658,67 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	if runStats != nil {
 		runStats.PublishWaitNanos = publishWait.Nanoseconds()
 	}
-	publishUnlocked := false
-	visibilityLocked := false
-	publishPrepareLocked := false
 	db.publishPrepareMu.RLock()
-	publishPrepareLocked = true
-	db.valueLogPublicationMu.Lock()
-	visibilityLocked = true
-	unlockPublish := func() {
-		if publishUnlocked {
+	buildLocked := true
+	unlockBuild := func() {
+		if !buildLocked {
 			return
 		}
-		publishUnlocked = true
-		if visibilityLocked {
-			db.valueLogPublicationMu.Unlock()
-			visibilityLocked = false
-		}
-		if publishPrepareLocked {
-			db.publishPrepareMu.RUnlock()
-			publishPrepareLocked = false
-		}
+		buildLocked = false
+		db.publishPrepareMu.RUnlock()
 		if runStats != nil {
 			runStats.PublishHoldNanos = time.Since(publishStarted).Nanoseconds()
 		}
 		db.writeMu.Unlock()
 	}
+	var rootBuilder *rootpublication.BuilderToken
+	if runtime := db.rootPublication; runtime != nil {
+		var err error
+		rootBuilder, err = runtime.coordinator.AcquireBuilder(ctx)
+		if err != nil {
+			unlockBuild()
+			_, _, cleanupErr := cleanupCreatedSegments(publicRootPublicationErrorV1(err))
+			return 0, 0, cleanupErr
+		}
+		defer rootBuilder.Release()
+	}
+	db.durablePublishMu.Lock()
+	durableLocked := true
+	unlockDurable := func() {
+		if durableLocked {
+			durableLocked = false
+			db.durablePublishMu.Unlock()
+		}
+	}
+	defer unlockDurable()
+	db.valueLogPublicationMu.Lock()
+	visibilityLocked := true
+	unlockVisibility := func() {
+		if visibilityLocked {
+			visibilityLocked = false
+			db.valueLogPublicationMu.Unlock()
+		}
+	}
+	unlockPublish := func() {
+		unlockVisibility()
+		unlockDurable()
+		unlockBuild()
+	}
 	cleanupAndUnlock := func(baseErr error) (int, int64, error) {
 		copied, copiedBytes, cleanupErr := cleanupCreatedSegments(baseErr)
 		unlockPublish()
-		return copied, copiedBytes, abandonManifest(cleanupErr)
+		return copied, copiedBytes, cleanupErr
 	}
 	unlockAndCleanupBeforeVisibility := func(baseErr error) (int, int64, error) {
 		unlockPublish()
 		copied, copiedBytes, cleanupErr := cleanupCreatedSegments(baseErr)
-		return copied, copiedBytes, abandonManifest(cleanupErr)
+		return copied, copiedBytes, cleanupErr
 	}
 	if db.closing.Load() {
 		return unlockAndCleanupBeforeVisibility(ErrClosed)
+	}
+	if err := db.commandWALPoisonedError(); err != nil {
+		return unlockAndCleanupBeforeVisibility(err)
 	}
 	// Refresh can publish a new state without writeMu. Revalidate only after the
 	// visibility gate is held so every basis field stays stable through promote
@@ -1756,7 +1747,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 			promoteErr = errors.Join(promoteErr, ErrRecoveryRequired)
 			db.publicationPoisoned.Store(true)
 			unlockPublish()
-			return 0, 0, abandonManifest(promoteErr)
+			return 0, 0, promoteErr
 		}
 		return cleanupAndUnlock(promoteErr)
 	}
@@ -1768,53 +1759,20 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	// destination parents once as one namespace batch. Do not issue the former
 	// path-based destination-directory sync here.
 
-	manifestResources, manifestErr := manifestClosure.TakeStableResources()
-	if manifestErr != nil {
-		manifestErr = errors.Join(manifestErr, manifestClosure.ReleaseWithError())
-		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: transfer exact leaf-generation manifest: %w", manifestErr))
-	}
 	packedResources, resourceErr := authority.takeStableResources()
 	if resourceErr != nil {
-		resourceErr = errors.Join(resourceErr, manifestResources.ReleaseWithError())
 		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: transfer exact packed resources: %w", resourceErr))
 	}
-	// The prepared manifest and packed closure share the DB's original
-	// metadata owner. Import preserves the packed producer's exact physical
-	// authority while admitting the retained descriptor before construction.
+	// Preserve the packed producer's physical authority while admitting its
+	// retained descriptor into the DB's metadata owner.
 	metadata := db.valueLogIdentityPins.MetadataOwner()
-	admittedPacked, resourceErr := rootpublication.ImportStableResourceSetMetadata(metadata, packedResources)
-	if resourceErr != nil {
-		resourceErr = errors.Join(resourceErr, packedResources.ReleaseWithError(), manifestResources.ReleaseWithError())
+	durableResources, resourceErr = rootpublication.ImportStableResourceSetMetadata(metadata, packedResources)
+	if resourceErr = errors.Join(resourceErr, packedResources.ReleaseWithError()); resourceErr != nil {
 		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: admit exact packed resources: %w", resourceErr))
 	}
-	resourceErr = packedResources.ReleaseWithError()
-	packedResources = admittedPacked
-	if resourceErr != nil {
-		resourceErr = errors.Join(resourceErr, packedResources.ReleaseWithError(), manifestResources.ReleaseWithError())
-		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: release imported packed descriptor: %w", resourceErr))
-	}
-	resourceBuilder, resourceErr := rootpublication.NewStableResourceSetBuilderWithMetadata(metadata)
-	if resourceErr != nil {
-		resourceErr = errors.Join(resourceErr, packedResources.ReleaseWithError(), manifestResources.ReleaseWithError())
-		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: admit packed resource builder: %w", resourceErr))
-	}
-	if resourceErr = resourceBuilder.Merge(packedResources); resourceErr != nil {
-		resourceErr = errors.Join(resourceErr, packedResources.ReleaseWithError(), manifestResources.ReleaseWithError(), resourceBuilder.AbandonWithError())
-		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: merge exact packed resources: %w", resourceErr))
-	}
-	if resourceErr = resourceBuilder.Merge(manifestResources); resourceErr != nil {
-		resourceErr = errors.Join(resourceErr, manifestResources.ReleaseWithError(), resourceBuilder.AbandonWithError())
-		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: merge exact manifest resource: %w", resourceErr))
-	}
-	durableResources, resourceErr = resourceBuilder.Freeze()
-	if resourceErr != nil {
-		resourceErr = errors.Join(resourceErr, resourceBuilder.AbandonWithError())
-		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: freeze packed durable resources: %w", resourceErr))
-	}
 
-	// Allocate committed IDs only after exact revalidation. No foreground writer
-	// can observe or account for this append range because writeMu is held from
-	// allocation through meta publication.
+	// Allocate committed IDs only after exact revalidation. The allocator owns
+	// this append range through publication or retirement on refusal.
 	relocateStarted := time.Now()
 	publishAlloc = newLeafGenerationPackPublishAllocator(idx, basis.commitSeq)
 	remap := make(map[uint64]uint64, len(privatePages))
@@ -1940,18 +1898,25 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		equivalentOwner = runStats.privateCOWOwner
 	}
 	var acceptedStateToken StateToken
+	packPublication := &packedRootPublication{
+		afterActivation:          unlockVisibility,
+		afterManifestPreparation: afterManifestPreparation,
+	}
 	finalizeStarted := time.Now()
 	post, finalizeErr := db.finalizeCommitLockedWithOptions(publishedRoot, publishedSysRoot, publishRetired, true, adaptive.Metrics{}, createdIDs, len(publishCollectionReplacements) > 0, nil, leafManifest, leafManifestRawFileIDs, finalizeCommitOptions{
-		privateCOWRewrite:             newPrivateCOWRewriteFinalization(equivalentOwner, &acceptedStateToken),
-		skipPrePublishFlush:           true,
-		syncMetaPageOnly:              true,
-		durableIndex:                  idx,
-		expectedBaseCommitSeq:         basis.commitSeq,
-		hasExpectedBaseCommitSeq:      true,
-		releaseRootSerialization:      unlockPublish,
-		durableResources:              durableResources,
-		leafManifestAlreadyPersistent: true,
-		valueLogPublicationLocked:     true,
+		privateCOWRewrite:         newPrivateCOWRewriteFinalization(equivalentOwner, &acceptedStateToken),
+		skipPrePublishFlush:       true,
+		syncMetaPageOnly:          true,
+		durableIndex:              idx,
+		expectedBaseCommitSeq:     basis.commitSeq,
+		hasExpectedBaseCommitSeq:  true,
+		durablePublishLocked:      true,
+		durablePublishRelease:     unlockDurable,
+		rootPublicationBuilder:    rootBuilder,
+		releaseRootSerialization:  unlockBuild,
+		durableResources:          durableResources,
+		packedRootPublication:     packPublication,
+		valueLogPublicationLocked: true,
 	})
 	// The finalizer consumes producer closures on every path. A prepared retry
 	// candidate, when present, now owns their exact handles independently of the
@@ -1992,7 +1957,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		runStats.ApplyStages.FinalizeTimeNanos += finalizeDuration.Nanoseconds()
 	}
 	if finalizeErr != nil {
-		if db.durableRoot.pending != nil {
+		if durableLocked && db.durableRoot.pending != nil {
 			// Before target-meta mutation the exact COW/resource candidate remains
 			// retryable and owns its allocator reservations. Rolling back pages or
 			// unlinking packed children here would corrupt that retained candidate.
@@ -2002,9 +1967,9 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 			unlockPublish()
 			return 0, 0, fmt.Errorf("vlog-rewrite: finalize rewritten leaf refs: %w", finalizeErr)
 		}
-		if !finalizeCommitErrorAllowsCreatedSegmentCleanup(finalizeErr) {
-			// The alternate meta page was written and its durability outcome is
-			// ambiguous. Retain every candidate resource and fail closed until reopen.
+		if !finalizeCommitErrorAllowsCreatedSegmentCleanup(finalizeErr) || errors.Is(finalizeErr, ErrRecoveryRequired) {
+			// A meta outcome or rollback of the deferred stable manifest can be
+			// ambiguous. Retain the exact candidate files until reopen.
 			db.publicationPoisoned.Store(true)
 			retentionErr := authority.retainForRecovery()
 			unlockPublish()
