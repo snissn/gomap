@@ -166,7 +166,9 @@ func TestDurabilityProfilePublicEntrypointInventory(t *testing.T) {
 	for _, name := range []string{"AppendCommandWALIntent", "AppendStagedCommandWALIntent", "publishCommandWALNoop"} {
 		profileInventoryRequireBody(t, backendBodies, "(*DB)."+name, "commandWALIntentPublishSync")
 	}
-	profileInventoryRequireBody(t, backendDBBodies, "Open", "validateOptions")
+	profileInventoryRequireBody(t, backendDBBodies, "Open", "return open(opts, false)")
+	profileInventoryRequireBody(t, backendDBBodies, "OpenForNativeSemanticOwner", "return open(opts, true)")
+	profileInventoryRequireBody(t, backendDBBodies, "open", "if err := validateOptions(opts); err != nil {\n\t\treturn nil, err\n\t}")
 	profileInventoryRequireBody(t, backendDBBodies, "validateOptions", "validateResolvedDurabilityProfile")
 
 	profileInventoryRequireBody(t, orderedRootBodies, "(*DB).publishOrderedRootDeltaGroupWithCommandWALContextAndSystemDeltaBuilder", "publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilderSerialized")

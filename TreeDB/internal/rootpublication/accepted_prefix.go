@@ -66,9 +66,9 @@ func releaseAcceptedCustody(custody AcceptedCustody) (AcceptedCleanupCompletion,
 // original version/plan/asset custody into one bounded FIFO slot. Sequence is
 // supplied by the engine's existing clock; this owner never assigns a second
 // logical sequence. Canonical LSN remains optional for NoWAL publications.
-// Ordinary raw-only descriptors may coalesce into one installed coverage run;
+// Root-covered descriptors may coalesce into one installed coverage run;
 // their Sequence/receipt identify the run endpoint, not one visit per command.
-// Original native custody and exact request descriptors never coalesce.
+// Descriptors with outstanding custody or exact requests never coalesce.
 // PhysicalSealTarget is the preborn exact request receipt. Binding only stores
 // this finite cut's original physical receipt; it cannot execute user callbacks.
 type PhysicalSealTarget interface{ BindAcceptedPhysicalSeal(PhysicalSealReceipt) }
@@ -338,35 +338,56 @@ func (ticket AcceptedTicket) BeginInstall(descriptor AcceptedDescriptor) (Accept
 }
 
 func (install *AcceptedInstall) Commit() {
+	install.commit(false)
+}
+
+// CommitReturningRootCustody returns whether the original owner transfers back
+// to the installer for off-gate cleanup. A witnessed root-covered native
+// publication first binds the same owner as any other preparation and invokes
+// this method only after its complete cut is visible. Obligations discovered
+// at installation keep the original descriptor and owner on the FIFO.
+func (install *AcceptedInstall) CommitReturningRootCustody() bool {
+	return install.commit(true)
+}
+
+func (install *AcceptedInstall) commit(returnCustody bool) bool {
 	if install == nil || install.done || install.ticket.owner == nil {
 		panic("invalid accepted installation")
 	}
 	p, e := install.ticket.entryLocked()
-	e.descriptor = install.descriptor
-	e.receipt.LogicalSequence, e.receipt.Installed = install.descriptor.Sequence, true
+	d := &install.descriptor
+	returnCustody = returnCustody && e.receipt.Assigned && e.receipt.WALCompleted && !e.receipt.WALStable &&
+		e.firstCanonicalLSN == e.receipt.CanonicalLSN && !e.maintenance && !d.RootNeutral &&
+		e.descriptor.Custody != nil && len(d.Projections) == 0 && d.SealTarget == nil && d.AdmittedBytes == 0 && d.CleanupBytes == 0
+	if returnCustody {
+		d.Custody = nil
+	}
+	e.descriptor = *d
+	e.receipt.LogicalSequence, e.receipt.Installed = d.Sequence, true
 	p.orderEntryLocked(install.ticket.slot, e)
-	p.frontiers.V = install.descriptor.Sequence
+	p.frontiers.V = d.Sequence
 	if e.receipt.CanonicalLSN != 0 {
 		p.frontiers.C = e.receipt.CanonicalLSN
 	}
 	// The engine has completed its whole-cut swap. Only now may the transient
-	// raw slot merge into its preceding unguarded installed run. Assigned and
+	// covered slot merge into its preceding unguarded installed run. Assigned and
 	// failed preparations retain their original slots until this boundary.
-	p.coalesceRawTailLocked(install.ticket.slot, e)
+	p.coalesceCoveredTailLocked(install.ticket.slot, e)
 	install.done = true
 	p.changed.Broadcast()
 	p.mu.Unlock()
+	return returnCustody
 }
 
-// coalesceRawTailLocked preserves the original FIFO and all sparse ownership.
+// coalesceCoveredTailLocked preserves the original FIFO and all sparse ownership.
 // A capture endpoint is marked while its engine writer exclusion still holds,
 // so writes before CaptureAcceptedCut arrives cannot extend that endpoint.
-func (p *acceptedPrefixState) coalesceRawTailLocked(slot int, e *acceptedEntry) {
-	if p.count < 2 || p.order[(p.head+p.count-1)%len(p.order)] != slot || !rawCoverageEntry(e) {
+func (p *acceptedPrefixState) coalesceCoveredTailLocked(slot int, e *acceptedEntry) {
+	if p.count < 2 || p.order[(p.head+p.count-1)%len(p.order)] != slot || !rootCoverageEntry(e) {
 		return
 	}
 	previous := &p.entries[p.order[(p.head+p.count-2)%len(p.order)]]
-	if !rawCoverageEntry(previous) || (previous.receipt.CanonicalLSN == 0) != (e.receipt.CanonicalLSN == 0) || (p.activeCut != 0 && p.count-2 < p.cutCount) {
+	if !rootCoverageEntry(previous) || (previous.receipt.CanonicalLSN == 0) != (e.receipt.CanonicalLSN == 0) || (p.activeCut != 0 && p.count-2 < p.cutCount) {
 		return
 	}
 	previous.descriptor, previous.receipt = e.descriptor, e.receipt
@@ -374,7 +395,7 @@ func (p *acceptedPrefixState) coalesceRawTailLocked(slot int, e *acceptedEntry) 
 	p.recycleLocked(slot, e)
 }
 
-func rawCoverageEntry(e *acceptedEntry) bool {
+func rootCoverageEntry(e *acceptedEntry) bool {
 	d := &e.descriptor
 	return e.receipt.Installed && !e.receipt.Uncertain && !e.receipt.Sealed &&
 		!e.maintenance && !e.boundary && !e.handedOff && !e.retiring && !e.released && e.releaseErr == nil &&
@@ -546,6 +567,19 @@ func (c *Coordinator) LogicalFrontiers() LogicalFrontiers {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.frontiers
+}
+
+// AcceptedPendingCount reports the number of ordered accepted entries, which
+// can each cover more than one installed command.
+func (c *Coordinator) AcceptedPendingCount() int {
+	c = c.AcceptedPrefixOwner()
+	if c == nil {
+		return 0
+	}
+	p := &c.accepted
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.count
 }
 
 // ObserveStableWAL accepts only the canonical WAL owner's completed sync proof.

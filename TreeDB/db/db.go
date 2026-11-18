@@ -187,6 +187,7 @@ type DB struct {
 	indexPackedValuePtr            bool
 	indexInternalBaseDelta         bool
 	indexOuterLeavesInValueLog     bool
+	indexSystemLeavesInPager       bool
 	indexAdaptiveLeafEncoding      bool
 	piggybackCompaction            bool
 	maintenanceOpsPerCoalesce      int
@@ -613,6 +614,7 @@ type DB struct {
 	testCompactStorageRemoveValueLogSegmentHook    func(uint32) (bool, error)
 	testCommandWALRecoveryFailAfterLSN             atomic.Uint64
 	testCommandWALRecoveryFailBeforeDependencySync atomic.Bool
+	commandWALReplayNativeCollectionLayout         bool
 	commandWALReplayLSN                            atomic.Uint64
 	commandWALReplayToken                          atomic.Uint64
 	commandWALReplayTokenSeq                       atomic.Uint64
@@ -1363,6 +1365,13 @@ type Options struct {
 	// When enabled, internal nodes store encoded value-log pointers for leaf
 	// children. This is pre-alpha and changes on-disk format/assumptions.
 	IndexOuterLeavesInValueLog bool
+	// FreshSystemPagerLeaves keeps the system tree in index.db when a new
+	// store uses IndexOuterLeavesInValueLog. The selected policy is persisted;
+	// opens of an existing store use its original system-leaf policy.
+	FreshSystemPagerLeaves bool
+	// FreshRelaxedStandaloneWALStream requests the ext4 stream creation policy
+	// for a new native standalone relaxed gateway store.
+	FreshRelaxedStandaloneWALStream bool
 	// IndexAdaptiveLeafEncoding enables per-page adaptive selection of leaf
 	// encoding flags using deterministic heuristics from key/value shape.
 	//
@@ -2468,6 +2477,16 @@ func (s *Snapshot) finalizeCloseRead(oneShot bool) error {
 
 // Open opens the database.
 func Open(opts Options) (*DB, error) {
+	return open(opts, false)
+}
+
+// OpenForNativeSemanticOwner opens the backend for a public native COW owner.
+// Recovery runs before that owner can bind its in-memory semantic bridge.
+func OpenForNativeSemanticOwner(opts Options) (*DB, error) {
+	return open(opts, true)
+}
+
+func open(opts Options, nativeSemanticOwner bool) (*DB, error) {
 	if opts.NegativeLookupFilterBytes < 0 || opts.NegativeLookupFilterBytes > 64<<20 || (opts.NegativeLookupFilterBytes > 0 && opts.NegativeLookupFilterBytes < 8) {
 		return nil, errors.New("negative lookup filter budget must be zero or 8 bytes through 64 MiB")
 	}
@@ -2578,17 +2597,19 @@ func Open(opts Options) (*DB, error) {
 	}
 	if !patriciaFeature {
 		// Recheck under the store lock before persisting a fresh-store marker.
-		if _, gateErr := validateFreelistTopologyGateV2(opts.Dir); gateErr != nil {
+		hasFormat, gateErr := validateFreelistTopologyGateV2(opts.Dir)
+		if gateErr != nil {
 			_ = lock.Close()
 			return nil, gateErr
 		}
-		configErr := saveFreshFreelistFormatConfig(opts)
-		if configErr != nil {
-			_ = lock.Close()
-			return nil, configErr
+		if !hasFormat {
+			if configErr := saveFreshFreelistFormatConfig(opts, nativeSemanticOwner); configErr != nil {
+				_ = lock.Close()
+				return nil, configErr
+			}
 		}
 	}
-	db, err := openWithLock(opts, lock)
+	db, err := openWithLock(opts, lock, nativeSemanticOwner)
 	if err != nil {
 		if !recoveryCleanupOwnsLockV6(err, lock) {
 			err = errors.Join(err, lock.Close())
@@ -2730,7 +2751,7 @@ func resolveInlineThresholdAndAdaptive(opts Options) (*adaptive.Controller, int)
 	return adaptiveCtrl, inlineThreshold
 }
 
-func openWithLock(opts Options, lock *lockfile.Lock) (result *DB, retErr error) {
+func openWithLock(opts Options, lock *lockfile.Lock, nativeSemanticOwner bool) (result *DB, retErr error) {
 	valueLogIdentityPins := rootpublication.NewIdentityPinRegistry()
 	registryTransferred := false
 	defer func() {
@@ -2739,6 +2760,10 @@ func openWithLock(opts Options, lock *lockfile.Lock) (result *DB, retErr error) 
 		}
 	}()
 	requiresDependencyDirectory, err := requiredFormatFeatureEnabled(opts.Dir, RequiredFeatureDependencyDirectoryV2)
+	if err != nil {
+		return nil, err
+	}
+	systemPagerLeaves, err := requiredFormatFeatureEnabled(opts.Dir, RequiredFeatureSystemPagerLeaves)
 	if err != nil {
 		return nil, err
 	}
@@ -2820,9 +2845,10 @@ func openWithLock(opts Options, lock *lockfile.Lock) (result *DB, retErr error) 
 	}
 
 	*db = DB{
-		ownedFinishGuardV6:                 db.ownedFinishGuardV6,
-		dependencyDirectoryRequiredFeature: requiresDependencyDirectory,
-		physicalSnapshotSideStoreCapture:   opts.PhysicalSnapshotSideStoreCapture,
+		ownedFinishGuardV6:                     db.ownedFinishGuardV6,
+		commandWALReplayNativeCollectionLayout: nativeSemanticOwner,
+		dependencyDirectoryRequiredFeature:     requiresDependencyDirectory,
+		physicalSnapshotSideStoreCapture:       opts.PhysicalSnapshotSideStoreCapture,
 
 		valueLogManager:                vm,
 		valueLogIdentityPins:           valueLogIdentityPins,
@@ -2846,6 +2872,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (result *DB, retErr error) 
 		indexPackedValuePtr:            opts.IndexPackedValuePtr,
 		indexInternalBaseDelta:         opts.IndexInternalBaseDelta,
 		indexOuterLeavesInValueLog:     opts.IndexOuterLeavesInValueLog,
+		indexSystemLeavesInPager:       systemPagerLeaves,
 		indexAdaptiveLeafEncoding:      opts.IndexAdaptiveLeafEncoding,
 		piggybackCompaction:            !opts.DisablePiggybackCompaction,
 		maintenanceOpsPerCoalesce:      opts.MaintenanceOpsPerCoalesce,
@@ -2998,7 +3025,16 @@ func openWithLock(opts Options, lock *lockfile.Lock) (result *DB, retErr error) 
 		if commandSegmentSeq != 0 && !hasTerminalTail {
 			commandSegmentSeq++
 		}
+		preferExt4Stream := false
+		if !opts.IgnoreFormatConfig && opts.requestsRelaxedStandaloneWALStream(nativeSemanticOwner) {
+			cfg, _, err := LoadFormatConfig(opts.Dir)
+			if err != nil {
+				return nil, err
+			}
+			preferExt4Stream = cfg.RelaxedStandaloneWALStream
+		}
 		journal, err := commitlog.OpenCommandJournal(WALDirPath(opts.Dir), commitlog.CommandJournalOptions{
+			PreferExt4Stream:                preferExt4Stream,
 			MaxSegmentSize:                  opts.WALMaxSegmentBytes,
 			SegmentTargetBytes:              opts.CommandWALSegmentTargetBytes,
 			BufferSize:                      commandWALWriterBufferSize,
@@ -3006,6 +3042,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (result *DB, retErr error) 
 			DeferredCommandBufferRetainSize: commandWALDeferredPointBufferRetainSize,
 			Compress:                        opts.JournalCompression,
 			OnSegmentRotated:                db.observeCommandWALSegmentRotated,
+			OnFileSyncError:                 func() { db.commandWALFlushPoisoned.Store(true) },
 			InitialLSN:                      db.meta.AppliedCommandLSN,
 			SegmentSeq:                      commandSegmentSeq,
 			CaptureStableResources:          true,

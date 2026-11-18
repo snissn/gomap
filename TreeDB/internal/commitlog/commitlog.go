@@ -74,6 +74,7 @@ type Options struct {
 	// productionMediumPolicy lets the command journal select each fresh segment
 	// from its actual descriptor; it is not a public format option.
 	productionMediumPolicy bool
+	preferExt4Stream       bool
 	fixedCapacity          int64
 
 	// MaxSegmentSize bounds the total commitlog segment payload size (bytes).
