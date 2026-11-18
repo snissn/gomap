@@ -202,6 +202,7 @@ type DB struct {
 
 	// Protected by durablePublishMu.
 	ordinaryLeafManifestCache ordinaryLeafManifestCache
+	inlineLeafManifest        *inlineLeafManifestPublication
 
 	// rootReuseMu seals acquisition of a visible root generation while durable
 	// publication converts retired COW pages into reusable pages. Existing
@@ -3646,6 +3647,9 @@ func (db *DB) closeAfterHooks() (outcome, cleanup error) {
 	}
 	leafPageLog := db.leafPageLog
 	leafGenerationManifestStore := db.leafGenerationManifestStore
+	if err := db.finishFailedInlineLeafManifest(); err != nil {
+		cleanupFailed(err)
+	}
 	if leafGenerationManifestStore != nil {
 		leafGenerationManifestStore.Close()
 	}
@@ -4316,7 +4320,6 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	// below then seals new old-generation readers before reuse is sampled.
 	var durableResources *rootpublication.StableResourceSet
 	var manifestUpdate ordinaryLeafManifestPublication
-	manifestTransferred := false
 	if db.durableRoot.pending == nil {
 		durableResources, err = db.captureDurableRootResourcesV1(idx, nextMeta, vlogRefDelta, opts.durableResources, opts.durableResourceRequirements, opts.durableResourceMutation, opts.durableResourceAppendMutation, opts.durableResourceRequirementWork, opts.durableResourceRequirementsFallback, opts.valueLogPublicationLocked, opts.publishTiming)
 		if err != nil {
@@ -4329,10 +4332,8 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 			}
 			if manifestUpdate.prepared != nil {
 				defer func() {
-					retErr = errors.Join(retErr, manifestUpdate.finish(manifestTransferred || db.publicationPoisoned.Load()))
+					retErr = errors.Join(retErr, manifestUpdate.finish(db.publicationPoisoned.Load()))
 				}()
-				leafManifest, leafManifestRawFileIDs = manifestUpdate.staged.manifest, manifestUpdate.staged.rawFileIDs
-				manifestUpdate.bind(&post, &opts)
 			}
 		}
 	} else if opts.durableResources != nil {
@@ -4353,15 +4354,30 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	if prepareErr != nil {
 		return post, wrapFinalizeCommitError(prepareErr, !errors.Is(prepareErr, ErrRecoveryRequired))
 	}
+	if manifestUpdate.prepared != nil {
+		db.inlineLeafManifest = &inlineLeafManifestPublication{candidate: candidate, update: manifestUpdate}
+		manifestUpdate = ordinaryLeafManifestPublication{}
+	}
+	inline := db.inlineLeafManifest
+	hasInlineManifest := inline != nil && inline.candidate == candidate
+	if hasInlineManifest {
+		leafManifest, leafManifestRawFileIDs = inline.update.staged.manifest, inline.update.staged.rawFileIDs
+		inline.update.bind(&post, &opts)
+	}
 	// The immutable candidate now owns its allocator reservations and exact
 	// resource handles. Any remaining build locks can be released before sync.
 	opts.releaseRootConstruction()
 	if hook := db.testDurableRootCandidatePreparedHook; hook != nil {
 		hook()
 	}
-	manifestTransferred = true
 	nextMeta, err = db.executeDurableRootCandidateWithRetryV1(candidate)
 	if err != nil {
+		if hasInlineManifest && !db.publicationPoisoned.Load() {
+			// A completed durable install can still report a resource cleanup
+			// failure. The visible predecessor cannot admit another write.
+			db.publicationPoisoned.Store(true)
+			err = wrapFinalizeCommitError(errors.Join(err, ErrRecoveryRequired), false)
+		}
 		return post, err
 	}
 	poisonVisibleInstall := func(err error) (finalizeCommitPost, error) {
@@ -4486,6 +4502,10 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	}
 	if opts.recordVacuumMutation != nil {
 		opts.recordVacuumMutation()
+	}
+	if hasInlineManifest {
+		db.inlineLeafManifest = nil
+		_ = inline.update.finish(true)
 	}
 
 	return post, nil

@@ -18,6 +18,32 @@ type ordinaryLeafManifestPublication struct {
 	prepared *LeafGenerationManifestStablePreparedClosure
 }
 
+// The exact resource set belongs to the candidate after preparation. This
+// separate owner keeps the compatibility rollback bytes until visible admission
+// or terminal teardown, including while the same candidate retries a pre-meta cut.
+type inlineLeafManifestPublication struct {
+	candidate *durableRootPublishCandidateV1
+	update    ordinaryLeafManifestPublication
+}
+
+// finishFailedInlineLeafManifest runs after admitted publishers have drained
+// and before the stable manifest store closes its retained parent. Only the
+// exact parked candidate with an untouched meta can be safely abandoned.
+func (db *DB) finishFailedInlineLeafManifest() error {
+	db.durablePublishMu.Lock()
+	defer db.durablePublishMu.Unlock()
+	inline := db.inlineLeafManifest
+	db.inlineLeafManifest = nil
+	if inline == nil {
+		return nil
+	}
+	if db.durableRoot.pending == inline.candidate && !inline.candidate.metaMutated {
+		return inline.update.prepared.abandonUnpublished()
+	}
+	// Preserve both immutable revisions when the root may already be durable.
+	return inline.update.prepared.ReleaseWithError()
+}
+
 type ordinaryLeafManifestAuthority struct {
 	revision uint64
 	identity rootpublication.StableIdentity
