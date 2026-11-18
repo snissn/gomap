@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -16,6 +17,132 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
 )
+
+func TestOrdinaryLeafManifestReachabilityAndOwnership(t *testing.T) {
+	for _, scenario := range []struct {
+		name      string
+		reachable bool
+	}{
+		{name: "reachable_pack_refuses_publication", reachable: true},
+		{name: "releases_projected_candidate_on_stage_failure"},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			database, leafLog := openLeafGenerationPackPublicationTestDB(t, t.TempDir())
+			registry := database.valueLogIdentityPins
+			t.Cleanup(func() {
+				closeLeafGenerationPackPublicationTestDB(t, database, leafLog)
+				if got := registry.ActivePins(); got != 0 {
+					t.Errorf("retained stable physical pins after close: %d", got)
+				}
+				if err := registry.CleanupError(); err != nil {
+					t.Error(err)
+				}
+			})
+			const keys = 512
+			seed := prepareLeafGenerationPackTestCandidate(t, database, leafLog, keys)
+			pack, err := database.LeafGenerationPack(context.Background(), LeafGenerationPackOptions{
+				GenerationIDs: []uint64{seed.generation.GenerationID}, Force: true, Sync: true,
+			})
+			if err != nil || len(pack.CreatedFileIDs) != 1 {
+				t.Fatalf("publish pack: %+v, %v", pack, err)
+			}
+			packed := pack.CreatedFileIDs[0]
+			if err := leafLog.rotateLeaf(); err != nil {
+				t.Fatal(err)
+			}
+			if err := database.SetSync([]byte("pack-tail-0030"), []byte("seal the pack")); err != nil {
+				t.Fatal(err)
+			}
+			if !scenario.reachable {
+				writeLeafGenerationKeys(t, database, "pack-concurrent", keys, 'c')
+			}
+			before, ok := database.StateToken()
+			if !ok {
+				t.Fatal("missing visible state")
+			}
+			next := page.MetaPageBody{CommitSeq: before.CommitSeq, UserRootPageID: before.RootPageID, SystemRootPageID: before.SystemRootPageID}
+			references, err := database.scanCandidateValueLogReferencesV1(database.idx.Load(), next, false)
+			if _, reachable := references[page.ValueLogFileID(packed)]; err != nil || reachable != scenario.reachable {
+				t.Fatalf("current roots reference pack %d: %t, want %t, err=%v", packed, reachable, scenario.reachable, err)
+			}
+
+			// Omit the pack only from the operational view. Its physical file,
+			// immutable manifest and recoverable slot dependencies are real.
+			database.durablePublishMu.Lock()
+			basis := database.recoverableDurableBasisLocked()
+			selected := database.durableRoot.slotResources[database.durableRoot.slot]
+			database.mu.Lock()
+			original := database.leafGenerationManifest
+			faulty := original.clone()
+			index := slices.IndexFunc(faulty.Generations, func(generation leafGenerationRecord) bool {
+				return slices.Contains(generation.FileIDs, packed)
+			})
+			sealed := index >= 0 && faulty.Generations[index].State == leafGenerationStateSealed
+			if sealed {
+				faulty.Generations[index].State = leafGenerationStateDeleted
+				database.leafGenerationManifest = faulty
+			}
+			database.mu.Unlock()
+			database.durablePublishMu.Unlock()
+			if !sealed {
+				t.Fatalf("operational manifest has no sealed pack %d", packed)
+			}
+			defer func() {
+				database.durablePublishMu.Lock()
+				database.mu.Lock()
+				database.leafGenerationManifest = original
+				database.mu.Unlock()
+				database.durablePublishMu.Unlock()
+			}()
+			var identity rootpublication.StableIdentity
+			if err := selected.WalkPhysicalResourceIdentities([]rootpublication.ResourceKind{rootpublication.ResourceOuterLeafPack},
+				func(_ rootpublication.ResourceKind, generation uint64, candidate rootpublication.StableIdentity, _ [32]byte) error {
+					if generation == uint64(page.ValueLogFileID(packed)) {
+						identity = candidate
+					}
+					return nil
+				}); err != nil {
+				t.Fatal(err)
+			}
+			pins := registry.PinCount(identity)
+			if pins == 0 {
+				t.Fatalf("earlier slot does not pin the exact pack %d", packed)
+			}
+			if err := leafLog.rotateLeaf(); err != nil {
+				t.Fatal(err)
+			}
+			cut := errors.New("refuse immutable manifest after pack projection")
+			store := database.leafGenerationManifestStore
+			store.hooks.BeforeTempCreate = func() error { return cut }
+			key := []byte("pack-tail-0031")
+			err = database.SetSync(key, []byte("rotating write"))
+			store.hooks.BeforeTempCreate = nil
+			if scenario.reachable {
+				want := fmt.Sprintf("publication leaf-generation manifest omits leaf file %d", packed)
+				if !errors.Is(err, rootpublication.ErrUnresolvedResource) || !strings.Contains(err.Error(), want) {
+					t.Fatalf("live pack must fail the original coverage check: %v", err)
+				}
+			} else if !errors.Is(err, cut) {
+				t.Fatalf("unreachable pack prevented manifest preparation: %v", err)
+			}
+			if CommitPublicationAccepted(err) {
+				t.Fatalf("refused publication was accepted: %v", err)
+			}
+			if after, _ := database.StateToken(); after != before {
+				t.Fatalf("refused root advanced visible state: before=%+v after=%+v", before, after)
+			}
+			database.durablePublishMu.Lock()
+			sameBasis := basis.equal(database.recoverableDurableBasisLocked())
+			database.durablePublishMu.Unlock()
+			if !sameBasis || registry.PinCount(identity) != pins {
+				t.Fatalf("refused candidate changed durable basis or predecessor pins: unchanged=%t, pins=%d want %d", sameBasis, registry.PinCount(identity), pins)
+			}
+			if got, err := database.Get(key); err != nil || !bytes.Equal(got, bytes.Repeat([]byte{'z'}, 32)) {
+				t.Fatalf("refused write altered the existing row: %q, %v", got, err)
+			}
+		})
+	}
+}
 
 func TestOrdinaryLeafManifestPublicationRoutes(t *testing.T) {
 	for _, route := range []string{"queued", "inline"} {
