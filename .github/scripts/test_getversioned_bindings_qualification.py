@@ -182,7 +182,7 @@ class FixedQualificationTests(unittest.TestCase):
             self.assertEqual(failed["status"], "INCOMPLETE")
             self.assertNotIn("raw_sha256", failed)
             self.assertIn("consumed_prefix_sha256", failed)
-            mismatched = {"db": {"TreeDB/db/db.go": ("0" * 64, ((1787, 1968),))}}
+            mismatched = {"db": {"TreeDB/db/db.go": ("0" * 64, ((1791, 1972),))}}
             with mock.patch.object(Q, "COMPILER_SOURCES", mismatched), self.assertRaises(ValueError):
                 Q.compiler_scope("db", repository)
 
