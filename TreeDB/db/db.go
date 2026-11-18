@@ -3006,6 +3006,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (result *DB, retErr error) 
 			DeferredCommandBufferRetainSize: commandWALDeferredPointBufferRetainSize,
 			Compress:                        opts.JournalCompression,
 			OnSegmentRotated:                db.observeCommandWALSegmentRotated,
+			OnFileSyncError:                 func() { db.commandWALFlushPoisoned.Store(true) },
 			InitialLSN:                      db.meta.AppliedCommandLSN,
 			SegmentSeq:                      commandSegmentSeq,
 			CaptureStableResources:          true,

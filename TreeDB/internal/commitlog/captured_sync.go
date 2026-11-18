@@ -5,11 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
-	"github.com/snissn/gomap/TreeDB/internal/stableio"
 )
 
 // One exact handle per active segment is shared by captures. Its reference
@@ -19,6 +17,7 @@ type capturedJournalFile struct {
 	token        *rootpublication.StableResourceToken
 	seq          uint64
 	refs         int
+	syncFile     func(*os.File) error
 	dataOnlySync bool // Immutable format of this exact retained segment, not the mutable writer.
 }
 
@@ -83,7 +82,7 @@ func (j *CommandJournal) CaptureSyncInto(target *CapturedSync, rotated []*rootpu
 		if j.capturedFile != nil {
 			j.releaseCapturedFileLocked(j.capturedFile)
 		}
-		j.capturedFile = &capturedJournalFile{token: token, seq: j.segmentSeq, refs: 1, dataOnlySync: j.writer.fixed != nil}
+		j.capturedFile = &capturedJournalFile{token: token, seq: j.segmentSeq, refs: 1, syncFile: j.writer.syncFn, dataOnlySync: j.writer.fixed != nil}
 	}
 	target.active = j.capturedFile
 	target.active.refs++
@@ -150,22 +149,9 @@ func (target *CapturedSync) Sync() error {
 		if err := emit(durabilitycut.BeforeDependencyFileSync); err != nil {
 			return err
 		}
-		started := time.Now()
-		// Always perform a physical sync. The shared handle's zero frontier is only
-		// a retention pin and must never cache a later capture's durability result.
-		// Writer construction validated the format before this exact segment
-		// was captured. Rotation may now change the writer's file and format,
-		// but not the captured owner. Avoid probing its header on every ACK.
-		var err error
-		if target.active.dataOnlySync {
-			err = syncWALData(file)
-		} else {
-			err = stableio.SyncFile(file)
-		}
-		target.writer.fileSyncCalls.Add(1)
-		target.writer.fileSyncNs.Add(uint64(time.Since(started)))
-		if err != nil {
-			target.writer.fileSyncErrors.Add(1)
+		// This zero-frontier handle is only a pin. A successful sync still
+		// performs physical I/O using the exact file's captured mode.
+		if err := target.writer.syncPinnedFile(file, target.active.syncFile); err != nil {
 			return err
 		}
 		return emit(durabilitycut.AfterDependencyFileSync)

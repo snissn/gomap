@@ -153,6 +153,7 @@ type Writer struct {
 	compress               bool
 	enc                    *zstd.Encoder
 	syncFn                 func(*os.File) error
+	journalFileSync        *journalFileSync
 	closeRotateFn          func(*os.File) error
 	fileSyncCalls          atomic.Uint64
 	fileSyncNs             atomic.Uint64
@@ -398,21 +399,25 @@ func (w *Writer) syncFile() error {
 	if w == nil || w.f == nil {
 		return nil
 	}
-	start := time.Now()
-	var err error
-	if w.syncFn != nil {
-		err = w.syncFn(w.f)
-	} else {
-		err = w.f.Sync()
-	}
-	w.fileSyncCalls.Add(1)
-	if ns := time.Since(start).Nanoseconds(); ns > 0 {
-		w.fileSyncNs.Add(uint64(ns))
-	}
-	if err != nil {
-		w.fileSyncErrors.Add(1)
-	}
-	return err
+	return w.syncPinnedFile(w.f, w.syncFn)
+}
+
+func (w *Writer) syncPinnedFile(file *os.File, syncFile func(*os.File) error) error {
+	return w.journalFileSync.run(func() error {
+		start := time.Now()
+		if syncFile == nil {
+			syncFile = (*os.File).Sync
+		}
+		err := syncFile(file)
+		w.fileSyncCalls.Add(1)
+		if ns := time.Since(start).Nanoseconds(); ns > 0 {
+			w.fileSyncNs.Add(uint64(ns))
+		}
+		if err != nil {
+			w.fileSyncErrors.Add(1)
+		}
+		return err
+	})
 }
 
 func (w *Writer) syncDirectory(path string) error {
