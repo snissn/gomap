@@ -5,7 +5,10 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
+	"reflect"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -20,14 +23,12 @@ func benchmarkLeafGenerationPlanFixtureDir(b *testing.B, envName string) string 
 	if fixture == "" {
 		b.Skipf("set %s to a saved application.db or maindb fixture", envName)
 	}
-	if _, err := os.Stat(fixture); err != nil {
-		b.Fatalf("stat fixture %q: %v", fixture, err)
-	}
-	if _, err := os.Stat(fixture + "/index.db"); err == nil {
+	if info, err := os.Stat(filepath.Join(fixture, "index.db")); err == nil && info.Mode().IsRegular() {
 		return fixture
 	}
-	if _, err := os.Stat(fixture + "/maindb/index.db"); err == nil {
-		return fixture + "/maindb"
+	mainDir := filepath.Join(fixture, "maindb")
+	if info, err := os.Stat(filepath.Join(mainDir, "index.db")); err == nil && info.Mode().IsRegular() {
+		return mainDir
 	}
 	b.Fatalf("fixture %q is neither a maindb nor an application.db directory", fixture)
 	return ""
@@ -45,21 +46,136 @@ func benchmarkLeafGenerationPlanWorkFixture(b *testing.B) string {
 
 func openLeafGenerationPlanDB(b *testing.B, fixture string, readOnly bool) *DB {
 	b.Helper()
-	db, err := Open(Options{
+	db, err := openSavedLeafGenerationPlanDB(fixture, readOnly)
+	if err != nil {
+		b.Fatalf("open fixture %q: %v", fixture, err)
+	}
+	return db
+}
+
+func openSavedLeafGenerationPlanDB(fixture string, readOnly bool) (*DB, error) {
+	profile, _, err := LoadPersistedDurabilityProfile(fixture)
+	if err != nil {
+		return nil, err
+	}
+	opts := Options{
 		Dir:                        fixture,
 		ReadOnly:                   readOnly,
 		IndexOuterLeavesInValueLog: true,
-	})
-	if err != nil {
-		b.Fatalf("open fixture: %v", err)
+		ResolvedProfile:            profile,
 	}
-	return db
+	switch profile {
+	case ProfileCommandWALDurable:
+		opts.CommandWAL = true
+		opts.Durability = DurabilityDurable
+	case ProfileCommandWALRelaxed:
+		opts.CommandWAL = true
+		opts.Durability = DurabilityWALOnRelaxed
+	case ProfileNoWALFast:
+		opts.Durability = DurabilityWALOffRelaxed
+	case ProfileBenchUnsafe:
+		return nil, fmt.Errorf("saved leaf-generation planner does not support %q fixtures", profile)
+	}
+	return Open(opts)
+}
+
+func TestSavedLeafGenerationPlanFixtureProfile(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		profile    DurabilityProfile
+		commandWAL bool
+		durability DurabilityMode
+	}{
+		{name: "legacy"},
+		{name: "durable", profile: ProfileCommandWALDurable, commandWAL: true, durability: DurabilityDurable},
+		{name: "relaxed", profile: ProfileCommandWALRelaxed, commandWAL: true, durability: DurabilityWALOnRelaxed},
+		{name: "wal_off", profile: ProfileNoWALFast, durability: DurabilityWALOffRelaxed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			db, err := Open(Options{
+				Dir:                        dir,
+				ResolvedProfile:            tc.profile,
+				CommandWAL:                 tc.commandWAL,
+				Durability:                 tc.durability,
+				IndexOuterLeavesInValueLog: true,
+			})
+			if err != nil {
+				t.Fatalf("create fixture: %v", err)
+			}
+			closeNoErr(t, db)
+
+			reopened, err := openSavedLeafGenerationPlanDB(dir, true)
+			if err != nil {
+				t.Fatalf("open saved fixture: %v", err)
+			}
+			defer closeNoErr(t, reopened)
+			if !reopened.readOnly || reopened.resolvedProfile != tc.profile || reopened.commandWAL != tc.commandWAL || reopened.durability != tc.durability {
+				t.Fatalf("reopened fixture: read-only=%t profile=%q command WAL=%t durability=%v", reopened.readOnly, reopened.resolvedProfile, reopened.commandWAL, reopened.durability)
+			}
+		})
+	}
+	for _, tc := range []struct {
+		name, format, wantErr string
+	}{
+		{name: "malformed", format: `{"version":4,"durability_profile":`, wantErr: "durability-profile gate"},
+		{name: "unsafe", format: `{"version":4,"durability_profile":"bench_unsafe"}`, wantErr: `does not support "bench_unsafe"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, formatConfigFileName), []byte(tc.format), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			db, err := openSavedLeafGenerationPlanDB(dir, true)
+			if db != nil {
+				closeNoErr(t, db)
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("open saved fixture: got %v, want error containing %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestSavedLeafGenerationPlanFreshReopen(t *testing.T) {
+	db, leafLog, opts := openLeafLogLaneGCTestDB(t, 32<<10)
+	writeLeafGenerationKeys(t, db, "older", 1024, 'a')
+	writeLeafGenerationKeys(t, db, "newer", 1024, 'b')
+	if err := db.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	closeLeafLogLaneGCTestDB(t, db, leafLog)
+	indexes, err := filepath.Glob(filepath.Join(LeafLogDirPath(opts.Dir), "*.lenidx"))
+	if err != nil || len(indexes) == 0 {
+		t.Fatalf("writer produced no advisory index: %v", err)
+	}
+
+	var first LeafGenerationPlan
+	for i := range 2 {
+		reopened, err := openSavedLeafGenerationPlanDB(opts.Dir, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		plan, err := reopened.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{})
+		closeNoErr(t, reopened)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !leafGenerationPlanHasLivePages(plan) {
+			t.Fatal("first plan has no live split-leaf pages")
+		}
+		if i == 0 {
+			first = plan
+		} else if !reflect.DeepEqual(first, plan) {
+			t.Fatal("first plan changed across fresh read-only opens")
+		}
+	}
 }
 
 func openLeafGenerationPlanFixtureDB(b *testing.B) *DB {
 	b.Helper()
 	db := openLeafGenerationPlanDB(b, benchmarkLeafGenerationPlanFixture(b), true)
-	b.Cleanup(func() { _ = db.Close() })
+	b.Cleanup(func() { benchmarkCloseNoErr(b, db) })
 	return db
 }
 
@@ -154,6 +270,40 @@ func BenchmarkLeafGenerationPlan_SavedHome(b *testing.B) {
 	}
 }
 
+// BenchmarkLeafGenerationPlanRetainedSourceReopen_SavedHome times the first plan
+// on each read-only owner. The filesystem page cache can remain warm.
+func BenchmarkLeafGenerationPlanRetainedSourceReopen_SavedHome(b *testing.B) {
+	fixture := benchmarkLeafGenerationPlanFixture(b)
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.StopTimer()
+	b.ResetTimer()
+	for range b.N {
+		db := openLeafGenerationPlanDB(b, fixture, true)
+		b.StartTimer()
+		plan, err := db.LeafGenerationPlan(ctx, LeafGenerationPlanOptions{})
+		b.StopTimer()
+		benchmarkCloseNoErr(b, db)
+		if err != nil {
+			b.Fatalf("first LeafGenerationPlan after reopen: %v", err)
+		}
+		if !leafGenerationPlanHasLivePages(plan) {
+			b.Fatalf("fixture %q has no live split-leaf pages", fixture)
+		}
+	}
+}
+
+func leafGenerationPlanHasLivePages(plan LeafGenerationPlan) bool {
+	for _, generation := range plan.Generations {
+		if generation.LivePages > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// This historical name describes its original sidecar-reader workload. The
+// current planner reads retained sources, and the owner is reused across plans.
 func BenchmarkLeafGenerationPlanPersistedIndexReopen_SavedHome(b *testing.B) {
 	fixture := benchmarkLeafGenerationPlanWorkFixture(b)
 	materialize := openLeafGenerationPlanDB(b, fixture, false)

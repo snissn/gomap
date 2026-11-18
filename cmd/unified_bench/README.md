@@ -1035,6 +1035,38 @@ python3 docs/benchmarks/treedb_algorithm_work_20261001/capture.py capture \
   --grant COORDINATOR_EXCLUSIVE_GRANT --freeze-sha256 "$NORMAL_FREEZE_SHA"
 ```
 
+### Saved-home leaf-generation plan profiles
+
+From the repository root, pass a closed split-leaf `application.db` or `maindb`
+and a separate new or empty output directory whose parent already exists.
+
+```sh
+LEAFGEN_PLAN_PROFILE_COUNT=3 scripts/leafgen_plan_profile.sh /path/to/application.db /path/to/artifacts/leafgen-plan
+```
+
+The script reads the saved store in place and runs each case in a fresh Go test
+process. `BenchmarkLeafGenerationPlanRetainedSourceReopen_SavedHome` measures
+the first backend plan on a fresh read-only owner each iteration. Go's timer
+and reported allocations exclude Open and checked Close. The filesystem page
+cache can remain warm. `BenchmarkLeafGenerationPlanCached_SavedHome` warms the
+plan cache with an untimed call on the same owner. To measure a reused owner
+with live-stats invalidation on each iteration, run the historical selector
+separately.
+
+```sh
+TREEDB_LEAFGEN_PLAN_FIXTURE=/path/to/application.db GOWORK=off \
+  go test ./TreeDB/db -run '^$' -bench '^BenchmarkLeafGenerationPlan_SavedHome$' -benchmem
+```
+
+Each script case writes `bench_{reopen,warm}.txt`, `cpu_{reopen,warm}.pprof`,
+`allocs_{reopen,warm}.pprof`, and their CPU, alloc-space, and alloc-object top
+reports. Go test CPU and heap profiles cover the whole process, including Open
+and Close. Inspect them with `go tool pprof` and the supplied `treedb_db.test`.
+The unified-bench `-profile-dir` and benchprof input formats are separate.
+Historical `*_persisted.*` captures used a copied fixture and a reused owner.
+The legacy writable cases require a disposable `TREEDB_LEAFGEN_PLAN_WORK_FIXTURE`.
+Saved production profiles come from `format.json`. The tool rejects `bench_unsafe`.
+
 ### Leaf point lookup microprofiles
 
 Capture `BenchmarkLeafPointMetadata`, `BenchmarkLeafCommonPrefixSuffixSearch`
