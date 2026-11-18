@@ -920,7 +920,7 @@ func TestEnsureLeafPageLogSegmentRegistered_AddsWritableFileToManifest(t *testin
 	}
 }
 
-func TestNoteLeafGenerationWritableFileIDs_PersistsSealedRecordLengthIndex(t *testing.T) {
+func TestNoteLeafGenerationWritableFileIDs_SealsWithoutRecordLengthIndex(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{Dir: dir, IndexOuterLeavesInValueLog: true})
 	if err != nil {
@@ -934,30 +934,17 @@ func TestNoteLeafGenerationWritableFileIDs_PersistsSealedRecordLengthIndex(t *te
 	if err := db.noteLeafGenerationWritableFileID(fileID1, 55); err != nil {
 		t.Fatalf("noteLeafGenerationWritableFileID first: %v", err)
 	}
-	db.storeLeafGenerationRecordLengthIndex(rawFileID1, &leafGenerationRecordLengthIndex{
-		offsets: []uint32{4, 128},
-		lengths: []uint32{96, 104},
-	})
 	if err := db.noteLeafGenerationWritableFileID(fileID2, 89); err != nil {
 		t.Fatalf("noteLeafGenerationWritableFileID rollover: %v", err)
 	}
 
 	indexPath := leafGenerationRecordLengthIndexPath(dir, rawFileID1)
-	if _, err := os.Stat(indexPath); err != nil {
-		t.Fatalf("Stat(%q): %v", indexPath, err)
+	manifest := loadLeafGenerationManifestOrFatal(t, dir)
+	if gen := findLeafGenerationByFileID(t, manifest, rawFileID1); gen.State != leafGenerationStateSealed {
+		t.Fatalf("rolled generation is %q, want sealed", gen.State)
 	}
-	idx, ok, err := loadLeafGenerationRecordLengthIndexFile(indexPath, rawFileID1)
-	if err != nil {
-		t.Fatalf("loadLeafGenerationRecordLengthIndexFile: %v", err)
-	}
-	if !ok {
-		t.Fatal("expected persisted record-length index")
-	}
-	if got, found := idx.lookup(4); !found || got != 96 {
-		t.Fatalf("lookup(4)=(%d,%v), want (96,true)", got, found)
-	}
-	if got, found := idx.lookup(128); !found || got != 104 {
-		t.Fatalf("lookup(128)=(%d,%v), want (104,true)", got, found)
+	if _, err := os.Stat(indexPath); !os.IsNotExist(err) {
+		t.Fatalf("sealed generation created %q: %v", indexPath, err)
 	}
 }
 

@@ -1779,9 +1779,11 @@ bytes; storage maintenance must include that CRC when comparing live bytes
 with physical file or chunk sizes. This distinction does not change the encoding.
 
 Leaf-generation reachability accounts for lengths from the live tree pointer or
-from its snapshot-retained leaf record. The record-length index held by the
-writer and its persisted `.lenidx` output do not affect the plan. A missing
-or unreadable referenced leaf source remains a planning error. A plan can
+from its snapshot-retained leaf record. Older stores may contain advisory
+`.lenidx` files. Current writers omit them, and the planner uses the retained
+leaf records for pointers with omitted lengths. Leaf retirement and offline
+vacuum may remove the legacy files with their leaf segments. A missing or
+unreadable referenced leaf source remains a planning error. A plan can
 reuse a checked extent from its retained physically sealed file when validating
 later references to that file. Physically writable sources still use the
 original readability barrier and a fresh extent check on a physical read.

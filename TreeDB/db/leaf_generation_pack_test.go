@@ -73,7 +73,7 @@ func openLeafGenerationPackTestDB(t *testing.T) (*DB, *rewriteWriter, string) {
 	return db, leafLog, dir
 }
 
-func TestNoteCreatedLeafGenerationFileIDs_PersistsRecordLengthIndex(t *testing.T) {
+func TestNoteCreatedLeafGenerationFileIDs_DoesNotPersistRecordLengthIndex(t *testing.T) {
 	db, _, dir := openLeafGenerationPackTestDB(t)
 
 	writer := newRewriteWriter(ValueLogDirPath(dir), 0, 0, 64<<20)
@@ -95,48 +95,17 @@ func TestNoteCreatedLeafGenerationFileIDs_PersistsRecordLengthIndex(t *testing.T
 		t.Fatalf("noteCreatedLeafGenerationFileIDs: %v", err)
 	}
 
-	for _, rawFileID := range filterLeafGenerationRawFileIDs(createdIDs) {
+	rawIDs := filterLeafGenerationRawFileIDs(createdIDs)
+	if len(rawIDs) == 0 {
+		t.Fatal("fixture created no leaf files")
+	}
+	manifest := loadLeafGenerationManifestOrFatal(t, dir)
+	for _, rawFileID := range rawIDs {
+		findLeafGenerationByFileID(t, manifest, rawFileID)
 		indexPath := leafGenerationRecordLengthIndexPath(dir, rawFileID)
-		if _, err := os.Stat(indexPath); err != nil {
-			t.Fatalf("Stat(%q): %v", indexPath, err)
+		if _, err := os.Stat(indexPath); !os.IsNotExist(err) {
+			t.Fatalf("registered leaf created %q: %v", indexPath, err)
 		}
-		idx, ok, err := loadLeafGenerationRecordLengthIndexFile(indexPath, rawFileID)
-		if err != nil {
-			t.Fatalf("loadLeafGenerationRecordLengthIndexFile(%d): %v", rawFileID, err)
-		}
-		if !ok {
-			t.Fatalf("expected persisted record-length index for raw file %d", rawFileID)
-		}
-		if idx == nil || idx.len() == 0 {
-			t.Fatalf("expected non-empty record-length index for raw file %d", rawFileID)
-		}
-	}
-}
-
-func TestLoadLeafGenerationRecordLengthIndex_ReturnsStableSnapshot(t *testing.T) {
-	db, _, _ := openLeafGenerationPackTestDB(t)
-	rawFileID := uint32(77)
-	db.noteLeafGenerationRecordLengthRaw(rawFileID, 4, 96)
-
-	first, ok := db.loadLeafGenerationRecordLengthIndex(rawFileID)
-	if !ok || first == nil {
-		t.Fatal("expected first record-length snapshot")
-	}
-	if got, found := first.lookup(4); !found || got != 96 {
-		t.Fatalf("first.lookup(4)=(%d,%v), want (96,true)", got, found)
-	}
-
-	db.noteLeafGenerationRecordLengthRaw(rawFileID, 128, 104)
-	if _, found := first.lookup(128); found {
-		t.Fatal("first snapshot observed later append")
-	}
-
-	second, ok := db.loadLeafGenerationRecordLengthIndex(rawFileID)
-	if !ok || second == nil {
-		t.Fatal("expected second record-length snapshot")
-	}
-	if got, found := second.lookup(128); !found || got != 104 {
-		t.Fatalf("second.lookup(128)=(%d,%v), want (104,true)", got, found)
 	}
 }
 
@@ -172,45 +141,6 @@ func TestNoteCreatedLeafGenerationFileIDsInManifest_OnlyReturnsNewLeafFiles(t *t
 	if rawFileIDs != nil {
 		t.Fatalf("rawFileIDs=%v want nil on duplicate registration", rawFileIDs)
 	}
-}
-
-func TestPersistLeafGenerationManifestAndRecordLengthIndexes_ReportsSidecarError(t *testing.T) {
-	db, _, dir := openLeafGenerationPackTestDB(t)
-	if db.leafGenerationManifest == nil {
-		t.Fatal("expected leaf generation manifest")
-	}
-	rawFileID := uint32(77)
-	db.leafGenerationRecordLengthMu.Lock()
-	if db.leafGenerationRecordLengthByFile == nil {
-		db.leafGenerationRecordLengthByFile = make(map[uint32]*leafGenerationRecordLengthIndex)
-	}
-	db.leafGenerationRecordLengthByFile[rawFileID] = &leafGenerationRecordLengthIndex{
-		offsets: []uint32{4},
-		lengths: nil,
-	}
-	db.leafGenerationRecordLengthMu.Unlock()
-
-	var reported error
-	db.notifyError = func(err error) {
-		reported = err
-	}
-
-	err := db.persistLeafGenerationManifestAndRecordLengthIndexes(db.leafGenerationManifest.clone(), []uint32{rawFileID})
-	if err != nil {
-		t.Fatalf("persistLeafGenerationManifestAndRecordLengthIndexes: %v", err)
-	}
-	if reported == nil {
-		t.Fatal("expected record-length sidecar persist error to be reported")
-	}
-	if !strings.Contains(reported.Error(), "raw file 77") {
-		t.Fatalf("reported error=%q, want raw file id context", reported)
-	}
-	if _, err := os.Stat(leafGenerationManifestPath(LeafLogDirPath(dir))); err != nil {
-		t.Fatalf("manifest stat: %v", err)
-	}
-	db.bgErrMu.Lock()
-	db.bgErr = nil
-	db.bgErrMu.Unlock()
 }
 
 func TestLeafGenerationPack_FinalizeFailpointCleansCreatedSegments(t *testing.T) {
@@ -955,6 +885,10 @@ func TestLeafGenerationPack_RewritesCollectionInternalRootsBeforeGC(t *testing.T
 	}
 	if err := leafLog.rotateLeaf(); err != nil {
 		t.Fatalf("rotate leaf log: %v", err)
+	}
+
+	if err := os.WriteFile(oldLeafIndexPath, legacyLeafLengthIndexFixture(t, dir, rawFileID1), 0600); err != nil {
+		t.Fatal(err)
 	}
 
 	_, updatedRootIDs, err := db.PublishOrderedRootDeltaGroupWithSystemBuilder([]OrderedRootDeltaPublishInput{{

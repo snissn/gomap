@@ -751,6 +751,9 @@ func TestLeafGenerationGC_DeletesFullyDeadGeneration(t *testing.T) {
 		t.Fatalf("generation1 state=%q, want %q", got, want)
 	}
 
+	if err := os.WriteFile(indexPath1, legacyLeafLengthIndexFixture(t, db.dir, rawFileID1), 0600); err != nil {
+		t.Fatal(err)
+	}
 	advancePastRetainedDurableSlotForTest(t, db)
 	stats1, err := db.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{})
 	if err != nil {

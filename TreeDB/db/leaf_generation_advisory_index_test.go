@@ -18,7 +18,7 @@ import (
 )
 
 func TestLeafGenerationPlan_ReopensWithUnusableAdvisoryIndex(t *testing.T) {
-	for _, scenario := range []string{"unchanged", "missing", "malformed", "truncated", "wrong_segment", "wrong_lengths"} {
+	for _, scenario := range []string{"valid", "missing", "malformed", "truncated", "wrong_segment", "wrong_lengths"} {
 		t.Run(scenario, func(t *testing.T) {
 			ctx := context.Background()
 			db, leafLog, opts := openLeafLogLaneGCTestDB(t, 32<<10)
@@ -46,15 +46,11 @@ func TestLeafGenerationPlan_ReopensWithUnusableAdvisoryIndex(t *testing.T) {
 			db, leafLog = nil, nil
 
 			path := leafGenerationRecordLengthIndexPath(opts.Dir, sealedRawID)
-			contents, err := os.ReadFile(path)
-			if err != nil || len(contents) < 24 {
-				t.Fatalf("produced advisory index %q: %d bytes, %v", path, len(contents), err)
+			if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("new sealed generation created %q: %v", path, err)
 			}
+			contents := legacyLeafLengthIndexFixture(t, opts.Dir, sealedRawID)
 			switch scenario {
-			case "missing":
-				if err := os.Remove(path); err != nil {
-					t.Fatal(err)
-				}
 			case "malformed":
 				copy(contents[:4], "bad!")
 			case "truncated":
@@ -66,7 +62,7 @@ func TestLeafGenerationPlan_ReopensWithUnusableAdvisoryIndex(t *testing.T) {
 					binary.LittleEndian.PutUint32(contents[offset:offset+4], 1)
 				}
 			}
-			if scenario != "unchanged" && scenario != "missing" {
+			if scenario != "missing" {
 				if err := os.WriteFile(path, contents, 0600); err != nil {
 					t.Fatal(err)
 				}
@@ -81,7 +77,7 @@ func TestLeafGenerationPlan_ReopensWithUnusableAdvisoryIndex(t *testing.T) {
 				expectLeafGenerationValue(t, reopened, leafGenerationKey("older", i), 'a')
 				expectLeafGenerationValue(t, reopened, leafGenerationKey("newer", i), 'b')
 			}
-			scanCounter := withLeafGenerationRecordLengthIndexScanCounter(t)
+			headerReads := withValueLogRecordLengthHeaderReadCounter(t)
 			after, err := reopened.LeafGenerationPlan(ctx, LeafGenerationPlanOptions{})
 			if err != nil {
 				t.Fatalf("first plan after checked reopen and complete reads: %v", err)
@@ -89,8 +85,8 @@ func TestLeafGenerationPlan_ReopensWithUnusableAdvisoryIndex(t *testing.T) {
 			if !reflect.DeepEqual(before.liveStats, after.liveStats) {
 				t.Fatalf("live totals changed with unchanged leaf data: before=%+v after=%+v", before.liveStats, after.liveStats)
 			}
-			if scanned := scanCounter.Load(); scanned != 0 {
-				t.Fatalf("first plan unexpectedly performed %d full segment scans", scanned)
+			if reads := headerReads.Load(); reads != 0 {
+				t.Fatalf("first plan read %d headers despite inline lengths", reads)
 			}
 			if scenario == "wrong_lengths" {
 				checkLeafPlanWithoutInlineLength(t, reopened, sealedRawID)
@@ -244,17 +240,21 @@ func TestLeafGenerationPlan_NoInlineLengthUsesRetainedSource(t *testing.T) {
 	}
 
 	// The current pathname and the already retained file have different
-	// identities. Exercise the compatibility writer that scans the pathname
-	// and previously populated the same runtime cache as live writers.
+	// identities. The legacy index describes the valid replacement, whose
+	// record has the same ID and offset but a different physical length.
 	replacement := bytes.Repeat([]byte{'b'}, 256)
 	writeRecord(canonical, replacement)
 	db := &DB{dir: dir}
-	if err := db.persistLeafGenerationRecordLengthIndex(rawID); err != nil {
+	if err := os.WriteFile(leafGenerationRecordLengthIndexPath(dir, rawID), legacyLeafLengthIndexFixture(t, dir, rawID), 0600); err != nil {
 		t.Fatal(err)
 	}
-	index, found, err := loadLeafGenerationRecordLengthIndexFile(leafGenerationRecordLengthIndexPath(dir, rawID), rawID)
-	if got, ok := index.lookup(ptr.Offset); err != nil || !found || !ok || got != uint32(valuelog.HeaderSize-4+len(replacement)) {
-		t.Fatalf("writer did not scan replacement record: length=%d, found=%t, err=%v", got, found, err)
+	actual, err := retained.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := os.Stat(canonical)
+	if err != nil || os.SameFile(actual, other) {
+		t.Fatalf("expected distinct retained and canonical files: %v", err)
 	}
 	file := &valuelog.File{ID: ptr.ValueLogFileID(), Path: canonical, File: retained}
 	const generationID = 1
