@@ -343,24 +343,7 @@ func TestOrdinaryLeafManifestWALRefusalStopsNextWriter(t *testing.T) {
 					return errors.Join(err, batch.Close())
 				}
 				if serialized {
-					// Enter the actual fallback directly so its coverage does not depend
-					// on scheduling enough optimistic conflicts.
-					err := func() error {
-						b := batch.(*Batch)
-						release, err := database.LockCommandWALPublishWithBarriers()
-						if err != nil {
-							return err
-						}
-						defer release()
-						revision := database.assignBatchEntryRevisions(b.batch)
-						intent, err := database.prepareRawKVCommandWALIntent(b, true)
-						if err != nil {
-							return err
-						}
-						defer releaseUnassignedCommandWALIntent(intent)
-						return b.writeSerialized(true, intent, revision, nil)
-					}()
-					return errors.Join(err, batch.Close())
+					return errors.Join(writeSerializedRawBatchForManifestTest(batch.(*Batch)), batch.Close())
 				}
 				return errors.Join(batch.WriteSync(), batch.Close())
 			}
@@ -456,4 +439,21 @@ func TestOrdinaryLeafManifestWALRefusalStopsNextWriter(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Enter the actual raw batch fallback without depending on enough optimistic
+// conflicts to exhaust its retry budget.
+func writeSerializedRawBatchForManifestTest(b *Batch) error {
+	release, err := b.db.LockCommandWALPublishWithBarriers()
+	if err != nil {
+		return err
+	}
+	defer release()
+	revision := b.db.assignBatchEntryRevisions(b.batch)
+	intent, err := b.db.prepareRawKVCommandWALIntent(b, true)
+	if err != nil {
+		return err
+	}
+	defer releaseUnassignedCommandWALIntent(intent)
+	return b.writeSerialized(true, intent, revision, nil)
 }
