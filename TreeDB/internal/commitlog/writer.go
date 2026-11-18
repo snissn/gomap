@@ -132,6 +132,7 @@ type Writer struct {
 	fixedIncomingBytes     int64
 	fixedRotationReason    fixedWALRotationReason
 	productionMediumPolicy bool
+	preferExt4Stream       bool
 	containerSelection     walContainerSelection
 	bw                     *bufio.Writer
 	fileSink               writerFileSink
@@ -153,6 +154,7 @@ type Writer struct {
 	compress               bool
 	enc                    *zstd.Encoder
 	syncFn                 func(*os.File) error
+	journalFileSync        *journalFileSync
 	closeRotateFn          func(*os.File) error
 	fileSyncCalls          atomic.Uint64
 	fileSyncNs             atomic.Uint64
@@ -281,7 +283,7 @@ func NewWriterWithOptions(path string, opts Options) (*Writer, error) {
 		_ = f.Close()
 		return nil, loadErr
 	}
-	selection := existingWALContainer(state)
+	selection := existingWALContainer(f, state, opts.productionMediumPolicy && opts.preferExt4Stream)
 	if state == nil {
 		info, e := f.Stat()
 		if e != nil {
@@ -289,7 +291,7 @@ func NewWriterWithOptions(path string, opts Options) (*Writer, error) {
 			return nil, e
 		}
 		if info.Size() == 0 {
-			selection = selectWALContainer(f, opts.fixedCapacity, opts.productionMediumPolicy)
+			selection = selectWALContainer(f, opts.fixedCapacity, opts.productionMediumPolicy, opts.preferExt4Stream)
 			if selection.fixed {
 				state, loadErr = initializeFixedWAL(&f, opts.fixedCapacity, nil)
 				if loadErr != nil {
@@ -303,6 +305,7 @@ func NewWriterWithOptions(path string, opts Options) (*Writer, error) {
 	w.fixed = state
 	w.fixedBudget = opts.fixedCapacity
 	w.productionMediumPolicy = opts.productionMediumPolicy
+	w.preferExt4Stream = opts.productionMediumPolicy && opts.preferExt4Stream
 	w.containerSelection = selection
 	if state != nil {
 		w.syncFn = syncWALData
@@ -398,21 +401,25 @@ func (w *Writer) syncFile() error {
 	if w == nil || w.f == nil {
 		return nil
 	}
-	start := time.Now()
-	var err error
-	if w.syncFn != nil {
-		err = w.syncFn(w.f)
-	} else {
-		err = w.f.Sync()
-	}
-	w.fileSyncCalls.Add(1)
-	if ns := time.Since(start).Nanoseconds(); ns > 0 {
-		w.fileSyncNs.Add(uint64(ns))
-	}
-	if err != nil {
-		w.fileSyncErrors.Add(1)
-	}
-	return err
+	return w.syncPinnedFile(w.f, w.syncFn)
+}
+
+func (w *Writer) syncPinnedFile(file *os.File, syncFile func(*os.File) error) error {
+	return w.journalFileSync.run(func() error {
+		start := time.Now()
+		if syncFile == nil {
+			syncFile = (*os.File).Sync
+		}
+		err := syncFile(file)
+		w.fileSyncCalls.Add(1)
+		if ns := time.Since(start).Nanoseconds(); ns > 0 {
+			w.fileSyncNs.Add(uint64(ns))
+		}
+		if err != nil {
+			w.fileSyncErrors.Add(1)
+		}
+		return err
+	})
 }
 
 func (w *Writer) syncDirectory(path string) error {

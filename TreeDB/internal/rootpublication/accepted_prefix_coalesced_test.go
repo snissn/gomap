@@ -160,3 +160,89 @@ func TestAcceptedPrefixCannotCaptureUnmarkedInteriorOfRawRun(t *testing.T) {
 		t.Fatal("late mark accepted", err)
 	}
 }
+
+func TestAcceptedRootCustodyNeedsCompletedUnstableSingletonAndNoSparseObligations(t *testing.T) {
+	failure := errors.New("original uncertain append")
+	for _, tc := range []struct {
+		name        string
+		first, last uint64
+		stable      bool
+		maintenance bool
+		appendErr   error
+		descriptor  AcceptedDescriptor
+		returns     bool
+	}{
+		{name: "covered", first: 1, last: 1, descriptor: AcceptedDescriptor{Sequence: 1}, returns: true},
+		{name: "stable", first: 1, last: 1, stable: true, descriptor: AcceptedDescriptor{Sequence: 1}},
+		{name: "uncertain", first: 1, last: 1, appendErr: failure, descriptor: AcceptedDescriptor{Sequence: 1}},
+		{name: "no-wal", descriptor: AcceptedDescriptor{Sequence: 1}},
+		{name: "grouped", first: 1, last: 2, descriptor: AcceptedDescriptor{Sequence: 1}},
+		{name: "projection", first: 1, last: 1, descriptor: AcceptedDescriptor{Sequence: 1, Projections: []ParticipantProjection{{Domain: 1}}}},
+		{name: "exact-seal", first: 1, last: 1, descriptor: AcceptedDescriptor{Sequence: 1, SealTarget: new(prefixTestSealTarget)}},
+		{name: "admitted-bytes", first: 1, last: 1, descriptor: AcceptedDescriptor{Sequence: 1, AdmittedBytes: 1}},
+		{name: "cleanup-bytes", first: 1, last: 1, descriptor: AcceptedDescriptor{Sequence: 1, CleanupBytes: 1}},
+		{name: "root-neutral", first: 1, last: 1, descriptor: AcceptedDescriptor{RootNeutral: true}},
+		{name: "maintenance", first: 1, last: 1, maintenance: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, err := New(Options{StartupSynchronous: true, Publisher: PublisherFunc(func(context.Context, *PreparedRootCandidate) PublishResult {
+				return PublishResult{Outcome: PublishSucceeded}
+			})})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer stopClean(t, c)
+			if err := c.ConfigureAcceptedPrefix(2, LogicalFrontiers{}); err != nil {
+				t.Fatal(err)
+			}
+			ticket, err := c.ReserveAccepted(tc.maintenance)
+			if err != nil {
+				t.Fatal(err)
+			}
+			released := 0
+			original := &prefixOriginalCustody{release: func() error { released++; return nil }}
+			if err := ticket.BindPreassignedCustody(original); err != nil {
+				t.Fatal(err)
+			}
+			if err := ticket.RecordAssignedRange(tc.first, tc.last, tc.appendErr, tc.stable); err != tc.appendErr {
+				t.Fatalf("append: got %v, want %v", err, tc.appendErr)
+			}
+			d := tc.descriptor
+			d.Custody = original
+			install, err := ticket.BeginInstall(d)
+			if err != tc.appendErr {
+				t.Fatalf("install: got %v, want %v", err, tc.appendErr)
+			}
+			if err == nil {
+				if returned := install.CommitReturningRootCustody(); returned != tc.returns {
+					t.Fatalf("returned custody=%t, want %t", returned, tc.returns)
+				}
+			}
+			c.accepted.mu.Lock()
+			_, entry := ticket.entryLocked()
+			stillOwned := entry != nil && entry.descriptor.Custody == original
+			c.accepted.mu.Unlock()
+			if stillOwned == tc.returns || released != 0 {
+				t.Fatalf("original still owned=%t, released=%d, expected returned=%t", stillOwned, released, tc.returns)
+			}
+			if err := c.CloseAccepted(); err != tc.appendErr {
+				t.Fatalf("close: got %v, want %v", err, tc.appendErr)
+			}
+			if tc.returns {
+				if released != 0 {
+					t.Fatal("queue released custody already returned to caller")
+				}
+				if err := original.ReleaseAccepted(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if released != 1 {
+				t.Fatalf("original released %d times", released)
+			}
+		})
+	}
+}
+
+type prefixTestSealTarget struct{}
+
+func (*prefixTestSealTarget) BindAcceptedPhysicalSeal(PhysicalSealReceipt) {}

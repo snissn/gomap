@@ -121,6 +121,9 @@ func fixedSuccessorSizePlan(current *fixedWAL, budget int64, reason fixedWALRota
 	if budget <= 0 {
 		return plan, nil
 	}
+	// Keep normal successors within the existing ahead-reserve limit.
+	// The exact incoming frame can still require a larger private file.
+	budget = min(budget, fixedWALDefaultPhysicalBudget)
 	base := min(int64(fixedWALDefaultCapacity), budget)
 	normal := base
 	if reason != fixedWALForcedRotation && current != nil {
@@ -619,13 +622,13 @@ func (w *Writer) prepareFixedSuccessorAhead(file **os.File, parent *os.File, pla
 	if err != nil {
 		return nil, 0, walContainerSelection{}, err
 	}
-	selection := existingWALContainer(state)
+	selection := existingWALContainer(*file, state, w.preferExt4Stream)
 	info, err := (*file).Stat()
 	if err != nil {
 		return nil, 0, selection, err
 	}
 	if state == nil && info.Size() == 0 {
-		selection = selectWALContainer(*file, plan.capacity, w.productionMediumPolicy)
+		selection = selectWALContainer(*file, plan.capacity, w.productionMediumPolicy, w.preferExt4Stream)
 	}
 	needsCapacity := state != nil && state.logical == 0 && !state.fitsEmptyFrame(plan.incoming)
 	if (state == nil && selection.fixed) || needsCapacity {

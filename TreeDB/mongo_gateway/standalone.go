@@ -171,6 +171,9 @@ func NormalizeStandaloneOptions(opts StandaloneOptions) (StandaloneOptions, erro
 	if err != nil {
 		return opts, fmt.Errorf("mongo gateway standalone: data root storage policy: %w", err)
 	}
+	if dataRoot == collections.RootStorageDefault && format == collections.DocumentFormatBSON {
+		dataRoot = collections.RootStoragePager
+	}
 	opts.DefaultCollectionOptions.DataRootStoragePolicy = dataRoot
 
 	indexState, err := normalizeStandaloneRootStoragePolicy(opts.DefaultCollectionOptions.IndexStateStoragePolicy)
@@ -240,6 +243,9 @@ func OpenStandaloneServer(opts StandaloneOptions) (*StandaloneServer, error) {
 	treeOpts := treedb.OptionsFor(normalized.Profile, normalized.Dir)
 	treeOpts.MemtableMode = "cow_btree"
 	treeOpts.COWMemtableLimits = normalized.COWMemtableLimits
+	bsonDefault := normalized.DefaultCollectionOptions.DocumentFormat == collections.DocumentFormatBSON
+	treeOpts.FreshSystemPagerLeaves = bsonDefault
+	treeOpts.FreshRelaxedStandaloneWALStream = bsonDefault && normalized.Profile == treedb.ProfileCommandWALRelaxed && normalized.ClusterSubmitter == nil
 	// Own the public DB for the entire server lifetime. The semantic backend
 	// borrows its complete COW cut; it must never be independently closed.
 	database, err := treedb.Open(treeOpts)
@@ -806,6 +812,8 @@ func normalizeStandaloneRootStoragePolicy(policy collections.RootStoragePolicy) 
 		return collections.RootStorageDefault, nil
 	case collections.RootStorageFast:
 		return collections.RootStorageFast, nil
+	case collections.RootStoragePager:
+		return collections.RootStoragePager, nil
 	case collections.RootStorageCompressed:
 		return collections.RootStorageCompressed, nil
 	default:

@@ -37,8 +37,8 @@ func TestNormalizeStandaloneOptionsDefaultsAndValidation(t *testing.T) {
 	if opts.DefaultCollectionOptions.DocumentFormat != collections.DocumentFormatBSON {
 		t.Fatalf("document format=%q want bson", opts.DefaultCollectionOptions.DocumentFormat)
 	}
-	if opts.DefaultCollectionOptions.DataRootStoragePolicy != collections.RootStorageDefault {
-		t.Fatalf("data root storage=%q want default", opts.DefaultCollectionOptions.DataRootStoragePolicy)
+	if opts.DefaultCollectionOptions.DataRootStoragePolicy != collections.RootStoragePager {
+		t.Fatalf("data root storage=%q want pager", opts.DefaultCollectionOptions.DataRootStoragePolicy)
 	}
 
 	normalized, err := NormalizeStandaloneOptions(StandaloneOptions{

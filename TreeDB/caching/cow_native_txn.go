@@ -167,7 +167,32 @@ func (db *DB) PrepareNativeProducerObservation() (backenddb.NativeProducerObserv
 	}
 	c.nativePressureRemembered = false
 	if db.nativePressureDrainEnabled() {
-		err = db.materializeCOWPrefix(context.Background(), false, nil, true)
+		// A full active generation can be captured without waiting for its
+		// physical seal. The captured roots and held readers keep their real
+		// charges. All other pressure, including a full parent budget after
+		// capture, uses the original synchronous reclamation.
+		if db.relaxedSync && before.semantic.GenerationUnderPressure && before.semantic.ConstructionBytes == 0 {
+			remaining := before
+			remaining.semantic.GenerationUnderPressure = false
+			if !remaining.underPressure(limits) {
+				if err = db.rolloverCOWForFlush(); err == nil {
+					select {
+					case db.nativeGenerationFlushCh <- struct{}{}:
+					default:
+					}
+					after, observeErr := c.nativeProducerPressureState()
+					if observeErr != nil {
+						return backenddb.NativeProducerObservation{}, observeErr
+					}
+					if !after.underPressure(limits) {
+						return after.observation(limits), nil
+					}
+				} else if err != memtable.ErrCOWCapacity {
+					return backenddb.NativeProducerObservation{}, err
+				}
+			}
+		}
+		err = db.materializeCOWPrefix(context.Background(), false, nil, cowSynchronousPressureMaterialization)
 	} else {
 		err = db.Checkpoint()
 	}
