@@ -277,6 +277,7 @@ func TestTemplateSuppliedMetadataActualLegacyCapturers(t *testing.T) {
 				var id uint64
 				var kv templatedb.KV
 				var registry *rootpublication.IdentityPinRegistry
+				var checkpoint func() error
 				if cached {
 					opts := Options{Dir: t.TempDir()}
 					opts.ValueLog.ForcePointers = pointer
@@ -287,6 +288,7 @@ func TestTemplateSuppliedMetadataActualLegacyCapturers(t *testing.T) {
 					defer database.Close()
 					kv = templateKV{db: database}
 					registry = database.backend.StableResourceIdentityPinRegistry()
+					checkpoint = database.Checkpoint
 				} else {
 					directory := t.TempDir()
 					// Seed a persistent pointer through the public producer;
@@ -322,6 +324,7 @@ func TestTemplateSuppliedMetadataActualLegacyCapturers(t *testing.T) {
 					defer database.Close()
 					kv = templateBackendKV{db: database}
 					registry = database.StableResourceIdentityPinRegistry()
+					checkpoint = database.Checkpoint
 				}
 				store := templatedb.New(kv, templatedb.Config{})
 				if id == 0 {
@@ -358,10 +361,15 @@ func TestTemplateSuppliedMetadataActualLegacyCapturers(t *testing.T) {
 				if _, err = store.PutTemplateDef(context.Background(), []byte("future-valid-template"), nil); err != nil {
 					t.Fatal(err)
 				}
+				// Finish publishing the setup write before measuring the registry.
+				// Its publisher can acquire its own pins after PutTemplateDef returns.
+				if err := checkpoint(); err != nil {
+					t.Fatal(err)
+				}
 				before := registry.ActivePins()
 				refused, err := store.CaptureTemplateResourcesWithMetadata(context.Background(), id, &metadata)
-				if refused != nil || !errors.Is(err, retainedalloc.ErrClosed) || registry.ActivePins() != before {
-					t.Fatalf("refusal effects resource=%v err=%v", refused, err)
+				if after := registry.ActivePins(); refused != nil || !errors.Is(err, retainedalloc.ErrClosed) || after != before {
+					t.Fatalf("refusal effects resource=%v err=%v pins=%d->%d", refused, err, before, after)
 				}
 			})
 		}
