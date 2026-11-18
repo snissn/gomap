@@ -249,9 +249,7 @@ func TestLeafGenerationPlan_NoInlineLengthUsesRetainedSource(t *testing.T) {
 	replacement := bytes.Repeat([]byte{'b'}, 256)
 	writeRecord(canonical, replacement)
 	db := &DB{dir: dir}
-	if err := db.persistLeafGenerationRecordLengthIndex(rawID); err != nil {
-		t.Fatal(err)
-	}
+	db.persistLeafGenerationRecordLengthIndexes([]uint32{rawID})
 	index, found, err := loadLeafGenerationRecordLengthIndexFile(leafGenerationRecordLengthIndexPath(dir, rawID), rawID)
 	if got, ok := index.lookup(ptr.Offset); err != nil || !found || !ok || got != uint32(valuelog.HeaderSize-4+len(replacement)) {
 		t.Fatalf("writer did not scan replacement record: length=%d, found=%t, err=%v", got, found, err)
