@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"sync"
 
@@ -107,6 +108,17 @@ func saveLeafGenerationRecordLengthIndexFile(path string, rawFileID uint32, idx 
 		count = len(idx.offsets)
 		if len(idx.lengths) != count {
 			return fmt.Errorf("leaf generation record-length index: encode %q: offset/length mismatch", path)
+		}
+	}
+	if count == 0 {
+		// A fresh empty hint has no records to advertise. Replace existing
+		// entries as usual so an older nonempty table cannot survive.
+		if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
+			// ENOENT can also mean the directory disappeared. In that case
+			// let the normal atomic write report the storage error.
+			if parent, err := os.Stat(filepath.Dir(path)); err == nil && parent.IsDir() {
+				return nil
+			}
 		}
 	}
 	const headerSize = 16

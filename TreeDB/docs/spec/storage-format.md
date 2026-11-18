@@ -2201,6 +2201,8 @@ selects the replacement revision in its own dependency closure. The alternate
 slot retains the immutable revision and digest it already selected.
 
 Sealed segments may also have a rebuildable `.lenidx` length index.
+The writer omits a fresh index with no entries. If an index already exists,
+the writer replaces it even when the new table is empty.
 An index save failure after publication may reach the configured `NotifyError`
 callback. The published leaf and manifest remain authoritative, and `Close`
 succeeds when its storage and cleanup operations succeed. An error reading a
