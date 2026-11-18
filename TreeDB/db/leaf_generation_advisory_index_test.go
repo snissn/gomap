@@ -86,7 +86,7 @@ func TestLeafGenerationPlan_ReopensWithUnusableAdvisoryIndex(t *testing.T) {
 				t.Fatalf("live totals changed with unchanged leaf data: before=%+v after=%+v", before.liveStats, after.liveStats)
 			}
 			if reads := headerReads.Load(); reads != 0 {
-				t.Fatalf("first plan read %d headers despite inline lengths", reads)
+				t.Fatalf("first plan used the omitted-length fallback %d times for inline lengths", reads)
 			}
 			if scenario == "wrong_lengths" {
 				checkLeafPlanWithoutInlineLength(t, reopened, sealedRawID)
