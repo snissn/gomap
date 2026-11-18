@@ -1179,7 +1179,7 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 	var manifestUpdate ordinaryLeafManifestPublication
 	manifestAccepted := false
 	if leafManifest == nil || (opts.packedRootPublication != nil && !opts.leafManifestAlreadyPersistent) {
-		resources, manifestUpdate, err = db.bindPublicationLeafManifest(resources, next.CommitSeq, leafManifest, leafManifestRawFileIDs, &opts)
+		resources, manifestUpdate, err = db.bindPublicationLeafManifest(resources, idx, next, leafManifest, leafManifestRawFileIDs, &opts)
 		if err != nil {
 			return post, prePublishErr(err)
 		}
