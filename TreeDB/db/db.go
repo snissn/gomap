@@ -4167,7 +4167,11 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 		durablePublishLocked = false
 		releaseDurablePublishAction()
 	}
-	defer releaseDurablePublish()
+	if opts.packedRootPublication == nil {
+		defer releaseDurablePublish()
+	}
+	// A pack that has not activated owns the durable gate through rollback
+	// of its promoted children. Queued activation releases the transferred gate.
 	if opts.poisonUnacceptedRawWAL {
 		defer func() {
 			if retErr != nil && !retPost.accepted {
@@ -4318,8 +4322,8 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 		if err != nil {
 			return post, wrapFinalizeCommitError(fmt.Errorf("capture durable-root dependencies: %w", err), true)
 		}
-		if leafManifest == nil {
-			durableResources, manifestUpdate, err = db.bindOrdinaryLeafManifest(durableResources, nextMeta.CommitSeq, &opts)
+		if leafManifest == nil || (opts.packedRootPublication != nil && !opts.leafManifestAlreadyPersistent) {
+			durableResources, manifestUpdate, err = db.bindPublicationLeafManifest(durableResources, nextMeta.CommitSeq, leafManifest, leafManifestRawFileIDs, &opts)
 			if err != nil {
 				return post, prePublishErr(err)
 			}

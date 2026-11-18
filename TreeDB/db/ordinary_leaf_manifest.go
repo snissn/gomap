@@ -8,6 +8,11 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
+type packedRootPublication struct {
+	afterActivation          func()
+	afterManifestPreparation func() error
+}
+
 type ordinaryLeafManifestPublication struct {
 	staged   stagedLeafGenerationManifestResult
 	prepared *LeafGenerationManifestStablePreparedClosure
@@ -43,17 +48,14 @@ func (p ordinaryLeafManifestPublication) bind(post *finalizeCommitPost, opts *fi
 	post.clearLeafGenerationPendingFileIDs = p.staged.pendingFileIDs
 }
 
-// bindOrdinaryLeafManifest checks the exact immutable generation authority in
-// the captured candidate closure. A successor with no newly uncovered leaf
-// files keeps its existing token. Only a changed candidate invokes the stable
-// producer. It finishes the exact staged coverage before releasing the build
-// locks, and persists it under the next-root gate. The superseded durable slot
-// keeps its original authority.
+// bindPublicationLeafManifest checks the exact immutable generation authority in
+// the captured candidate closure. An ordinary successor with no newly uncovered
+// leaf files keeps its existing token. A pack stages promoted files and any
+// late descriptor appends against its original copy basis. The
+// exact staged coverage precedes build lock release, and persistence runs under
+// the next-root gate. The superseded durable slot keeps its original authority.
 // This function consumes resources on error or replacement.
-func (db *DB) bindOrdinaryLeafManifest(resources *rootpublication.StableResourceSet, commitSeq uint64, opts *finalizeCommitOptions) (result *rootpublication.StableResourceSet, update ordinaryLeafManifestPublication, retErr error) {
-	if db.leafGenerationManifestStore == nil || db.leafGenerationManifestStore.mode != leafGenerationManifestStable {
-		return resources, update, nil
-	}
+func (db *DB) bindPublicationLeafManifest(resources *rootpublication.StableResourceSet, commitSeq uint64, pack *leafGenerationManifest, packRawFileIDs []uint32, opts *finalizeCommitOptions) (result *rootpublication.StableResourceSet, update ordinaryLeafManifestPublication, retErr error) {
 	result = resources
 	defer func() {
 		if retErr != nil {
@@ -62,53 +64,67 @@ func (db *DB) bindOrdinaryLeafManifest(resources *rootpublication.StableResource
 			update = ordinaryLeafManifestPublication{}
 		}
 	}()
-
-	authority, err := exactOrdinaryLeafManifestAuthority(resources)
-	if err != nil {
-		return result, update, err
-	}
-	if authority.revision == 0 {
+	if db.leafGenerationManifestStore == nil || db.leafGenerationManifestStore.mode != leafGenerationManifestStable {
+		if pack != nil {
+			return result, update, fmt.Errorf("%w: stable manifest replacement mode unavailable", rootpublication.ErrNamespacePersistenceUnsupported)
+		}
 		return resources, update, nil
 	}
-	// A compatibility replacement or an abandoned candidate may leave or
-	// reuse a revision number. Only the inherited token gives coverage credit.
-	if db.ordinaryLeafManifestCache.authority != authority {
-		var exact *leafGenerationManifest
-		if err := resources.WithScopedTokens(func(tokens []*rootpublication.StableResourceToken) error {
-			var err error
-			exact, _, err = loadSelectedDurableLeafGenerationManifestTokens(tokens)
-			return err
-		}); err != nil {
+
+	base := pack
+	if pack == nil {
+		authority, err := exactOrdinaryLeafManifestAuthority(resources)
+		if err != nil {
 			return result, update, err
 		}
-		if exact == nil || exact.ManifestRevision != authority.revision {
-			return result, update, fmt.Errorf("%w: missing inherited leaf-generation manifest revision %d", rootpublication.ErrResourceConflict, authority.revision)
+		if authority.revision == 0 {
+			return resources, update, nil
 		}
-		db.ordinaryLeafManifestCache = ordinaryLeafManifestCache{authority: authority, view: newLeafGenerationView(exact)}
+		// A compatibility replacement or an abandoned candidate may leave or
+		// reuse a revision number. Only the inherited token gives coverage credit.
+		if db.ordinaryLeafManifestCache.authority != authority {
+			var exact *leafGenerationManifest
+			if err := resources.WithScopedTokens(func(tokens []*rootpublication.StableResourceToken) error {
+				var err error
+				exact, _, err = loadSelectedDurableLeafGenerationManifestTokens(tokens)
+				return err
+			}); err != nil {
+				return result, update, err
+			}
+			if exact == nil || exact.ManifestRevision != authority.revision {
+				return result, update, fmt.Errorf("%w: missing inherited leaf-generation manifest revision %d", rootpublication.ErrResourceConflict, authority.revision)
+			}
+			db.ordinaryLeafManifestCache = ordinaryLeafManifestCache{authority: authority, view: newLeafGenerationView(exact)}
+		}
+		files := db.ordinaryLeafManifestCache.view.FileToGeneration
+		missing, err := firstUncoveredOuterLeafFile(resources, func(fileID uint32) bool { return files[fileID] != 0 })
+		if err != nil {
+			return result, update, err
+		}
+		if missing == 0 {
+			return result, update, nil
+		}
+		db.mu.RLock()
+		base = db.leafGenerationManifest
+		db.mu.RUnlock()
 	}
-	files := db.ordinaryLeafManifestCache.view.FileToGeneration
-	missing, err := firstUncoveredOuterLeafFile(resources, func(fileID uint32) bool { return files[fileID] != 0 })
+	var err error
+	update.staged, err = db.stagedLeafGenerationManifestWithPendingResultAndLimit(base, 0, commitSeq, opts.preparedLimits, packRawFileIDs...)
 	if err != nil {
 		return result, update, err
 	}
-	if missing == 0 {
-		return result, update, nil
+	if pack != nil && !update.staged.changed {
+		return result, update, fmt.Errorf("%w: packed publication did not advance the leaf-generation manifest", rootpublication.ErrResourceConflict)
 	}
-	db.mu.RLock()
-	operational := db.leafGenerationManifest
-	db.mu.RUnlock()
-	update.staged, err = db.stagedLeafGenerationManifestWithPendingResultAndLimit(operational, 0, commitSeq, opts.preparedLimits)
-	if err != nil {
-		return result, update, err
-	}
-	missing, err = firstUncoveredOuterLeafFile(resources, func(fileID uint32) bool {
+	update.staged.rawFileIDs = append(update.staged.rawFileIDs, packRawFileIDs...)
+	missing, err := firstUncoveredOuterLeafFile(resources, func(fileID uint32) bool {
 		return leafManifestContainsActiveFile(update.staged.manifest, fileID)
 	})
 	if err != nil {
 		return result, update, err
 	}
 	if missing != 0 {
-		return result, update, fmt.Errorf("%w: publication leaf-generation manifest omits raw file %d", rootpublication.ErrUnresolvedResource, missing)
+		return result, update, fmt.Errorf("%w: publication leaf-generation manifest omits leaf file %d", rootpublication.ErrUnresolvedResource, missing)
 	}
 	// The private roots are built, reuse is still open and resources retain the
 	// candidate's exact files. The publication gate keeps the predecessor and
@@ -118,6 +134,11 @@ func (db *DB) bindOrdinaryLeafManifest(resources *rootpublication.StableResource
 	update.prepared, update.staged.manifest, err = db.prepareLeafGenerationManifestStableCandidate(update.staged.manifest)
 	if err != nil {
 		return result, update, err
+	}
+	if pack != nil {
+		if err := opts.packedRootPublication.afterManifestPreparation(); err != nil {
+			return result, update, err
+		}
 	}
 	manifestResources, err := update.prepared.TakeStableResources()
 	if err != nil {

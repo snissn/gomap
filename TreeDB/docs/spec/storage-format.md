@@ -1237,6 +1237,12 @@ predecessor, successor commit sequence, and operational manifest during the
 replacement syncs and until visibility. Reader admission stays open during
 those manifest syncs.
 
+Pack publication acquires the same sequencer before registering promoted files
+in the value-log set. It binds one immutable manifest covering the promoted
+files and any late SYSTEM leaf appends before accepting the root. The pack
+keeps the value-log visibility fence and publication sequencer through
+pre-acceptance rollback so another publication cannot pin tentative files.
+
 The active stable-I/O adapters are explicit and fail closed:
 
 | Platform | Mapped/index file barrier | Namespace barrier | Contract result |

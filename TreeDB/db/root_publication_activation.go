@@ -1182,8 +1182,8 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 	}
 	var manifestUpdate ordinaryLeafManifestPublication
 	manifestAccepted := false
-	if leafManifest == nil {
-		resources, manifestUpdate, err = db.bindOrdinaryLeafManifest(resources, next.CommitSeq, &opts)
+	if leafManifest == nil || (opts.packedRootPublication != nil && !opts.leafManifestAlreadyPersistent) {
+		resources, manifestUpdate, err = db.bindPublicationLeafManifest(resources, next.CommitSeq, leafManifest, leafManifestRawFileIDs, &opts)
 		if err != nil {
 			return post, prePublishErr(err)
 		}
@@ -1384,6 +1384,9 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 	// complete. Release DB build locks before any user error callback or
 	// admission/durability wait can re-enter the coordinator.
 	releaseReuse()
+	if pack := opts.packedRootPublication; pack != nil {
+		pack.afterActivation()
+	}
 	releaseDurablePublish()
 	if reportErr != nil {
 		db.reportError(reportErr)

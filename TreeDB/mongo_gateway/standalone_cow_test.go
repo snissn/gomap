@@ -3,11 +3,15 @@ package mongogateway
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"testing"
 
@@ -333,6 +337,99 @@ func TestStandaloneNativeDictionaryCachePolicy(t *testing.T) {
 	if len(packed.CreatedFileIDs) == 0 {
 		t.Fatalf("public maintenance produced no pack: %+v", packed)
 	}
+	if err := maintenance.Checkpoint(); err != nil {
+		t.Fatalf("seal packed root: %v", err)
+	}
+	func() {
+		snap := maintenance.AcquireSnapshot()
+		if snap == nil {
+			t.Fatal("missing packed snapshot")
+		}
+		defer func() {
+			if err := snap.Close(); err != nil {
+				t.Error(err)
+			}
+		}()
+		state, ok := snap.StateToken()
+		if !ok {
+			t.Fatal("missing packed state token")
+		}
+		reader, err := snap.NativeReaderAtRoot(state.SystemRootPageID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var keyScratch, leafScratch [page.PageSize]byte
+		var ptr page.LeafLogPtr
+		stop := errors.New("inspect packed system descriptor leaf")
+		_, err = reader.GetEntryExactWithFixedScratch([]byte("collections/root/db.policy/primary"), keyScratch[:], leafScratch[:], func(p page.LeafLogPtr, _ []byte) ([]byte, error) { ptr = p; return nil, stop })
+		if !errors.Is(err, stop) || ptr.FileID == 0 {
+			t.Fatalf("packed system descriptor pointer: %+v %v", ptr, err)
+		}
+		rawID := page.ValueLogSegmentID(ptr.FileID)
+		if slices.Contains(packed.CreatedFileIDs, rawID) {
+			t.Fatalf("expected a late SYSTEM append outside packed files: pointer=%+v pack=%v", ptr, packed.CreatedFileIDs)
+		}
+		roots, err := maintenance.CaptureRecoverableRootSetForInspection(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			if err := roots.ReleaseWithError(); err != nil {
+				t.Error(err)
+			}
+		}()
+		for _, root := range roots.Roots() {
+			if !root.Durable || root.CommitSeq != state.CommitSeq || root.SystemRootPageID != state.SystemRootPageID {
+				continue
+			}
+			resources, err := roots.ImportNativeResourcesForRoot(root)
+			defer func() {
+				if err := resources.ReleaseWithError(); err != nil {
+					t.Error(err)
+				}
+			}()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := resources.WithScopedTokens(func(tokens []*rootpublication.StableResourceToken) error {
+				for _, token := range tokens {
+					if token.Kind() != rootpublication.ResourceOuterLeafManifest {
+						continue
+					}
+					return token.WithPinnedFile(func(file *os.File) error {
+						data, err := io.ReadAll(io.NewSectionReader(file, 0, int64(token.Frontier().Bytes)))
+						if err != nil {
+							return err
+						}
+						if sha256.Sum256(data) != token.Digest() {
+							return errors.New("packed manifest digest differs from retained token")
+						}
+						var manifest struct {
+							Generations []struct {
+								State   string   `json:"state"`
+								FileIDs []uint32 `json:"file_ids"`
+							} `json:"generations"`
+						}
+						if err := json.Unmarshal(data, &manifest); err != nil {
+							return err
+						}
+						for _, generation := range manifest.Generations {
+							if (generation.State == "writable" || generation.State == "sealed") && slices.Contains(generation.FileIDs, rawID) {
+								t.Logf("durable packed commit %d manifest revision %d covers SYSTEM leaf file %d", root.CommitSeq, token.Generation(), rawID)
+								return nil
+							}
+						}
+						return fmt.Errorf("packed commit %d manifest revision %d omits reachable SYSTEM leaf file %d", root.CommitSeq, token.Generation(), rawID)
+					})
+				}
+				return errors.New("packed root has no exact manifest token")
+			}); err != nil {
+				t.Fatal(err)
+			}
+			return
+		}
+		t.Fatalf("packed commit %d has no durable recovery root", state.CommitSeq)
+	}()
 	if err = cleanup(); err != nil {
 		t.Fatal(err)
 	}

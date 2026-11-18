@@ -617,7 +617,7 @@ func (db *DB) stagedLeafGenerationManifestWithPendingResult(base *leafGeneration
 	return db.stagedLeafGenerationManifestWithPendingResultAndLimit(base, currentFileID, commitSeq, nil)
 }
 
-func (db *DB) stagedLeafGenerationManifestWithPendingResultAndLimit(base *leafGenerationManifest, currentFileID uint32, commitSeq uint64, limits *PreparedRootPublicationLimits) (stagedLeafGenerationManifestResult, error) {
+func (db *DB) stagedLeafGenerationManifestWithPendingResultAndLimit(base *leafGenerationManifest, currentFileID uint32, commitSeq uint64, limits *PreparedRootPublicationLimits, promotedPackFileIDs ...uint32) (stagedLeafGenerationManifestResult, error) {
 	result := stagedLeafGenerationManifestResult{manifest: base}
 	if db == nil || base == nil {
 		return result, nil
@@ -639,6 +639,13 @@ func (db *DB) stagedLeafGenerationManifestWithPendingResultAndLimit(base *leafGe
 	pending, err := db.snapshotLeafGenerationPendingFileIDsWithLimit(currentFileID, maxPending)
 	if err != nil {
 		return result, err
+	}
+	// Candidate-owned packed files are already promoted and identity-checked.
+	// Register them in the same ordered batch as the pending descriptor leaves.
+	// Applying a higher pack sequence first would suppress an earlier, still
+	// writable raw segment after a refused descriptor publication.
+	for _, rawFileID := range promotedPackFileIDs {
+		pending = append(pending, leafGenerationPendingFile{rawFileID: rawFileID, commitSeq: commitSeq})
 	}
 	if len(pending) == 0 {
 		return result, nil

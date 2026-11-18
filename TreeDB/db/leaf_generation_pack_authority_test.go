@@ -589,8 +589,11 @@ func TestLeafGenerationPackTargetProbePreservesTwoParentSyncContract(t *testing.
 	var beforeSyncs, afterSyncs int
 	counting := false
 	unregister := registerLeafGenerationPackPublishHook(func(event leafGenerationPackPublishEvent) error {
-		if event.Phase == leafGenerationPackAfterManifestPreparation {
+		switch event.Phase {
+		case leafGenerationPackBeforePromotion:
 			counting = true
+		case leafGenerationPackAfterPromotion:
+			counting = false
 		}
 		return nil
 	})
