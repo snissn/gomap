@@ -101,6 +101,11 @@ snapshot eligibility are unchanged.
 - Once both durable slots advance beyond the retired root and explicit
   snapshots/iterators/`KeepRecent` pins drain, a fresh maintenance pass can
   reclaim the retained resource.
+- A retired pack can remain an exact dependency of a recoverable slot even
+  after it becomes unreachable. If a successor needs a new ordinary leaf
+  manifest that omits the pack, its final root closure must prove the pack
+  unreachable before it releases the dependency. The older slot keeps its own
+  manifest and pack token until that slot is superseded.
 - Namespace deletion is successful only after its owning directory has been
   made durable. An unlink followed by directory-sync failure is recovery
   required, never reported as clean success.

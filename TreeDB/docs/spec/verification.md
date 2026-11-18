@@ -1402,6 +1402,14 @@ Coverage:
   - `TestExternalRecoveryLeafMaintenanceRetainsAndReclaimsExactCuts` covers
     repeated checkpoint publication with journaling disabled alongside background
     reclamation.
+- `TreeDB/ordinary_leaf_manifest_gc_public_test.go`:
+  - `TestOrdinaryLeafPublicationAfterUnreachableGenerationGC` drives native
+    BSON updates, a held reader, pack retirement and a rotating writer. It
+    requires exact successor coverage, the older slot's retained pack and
+    manifest, and checked close and reopened reads.
+- `TreeDB/db/ordinary_leaf_manifest_test.go`:
+  - `TestOrdinaryLeafManifestReachabilityAndOwnership` verifies fail-closed
+    coverage for a reachable pack and releases candidate pins after a refusal.
 - `TreeDB/db/durable_root_tracker_repair_test.go`:
   - `TestDurableRootCandidateScanRepairsReferenceTracker`
   - `TestDurableRootCandidateScanColdCollectionAttachmentRepairsInvalidTracker`
