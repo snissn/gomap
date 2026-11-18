@@ -45,11 +45,26 @@ func benchmarkLeafGenerationPlanWorkFixture(b *testing.B) string {
 
 func openLeafGenerationPlanDB(b *testing.B, fixture string, readOnly bool) *DB {
 	b.Helper()
-	db, err := Open(Options{
-		Dir:                        fixture,
-		ReadOnly:                   readOnly,
-		IndexOuterLeavesInValueLog: true,
-	})
+	opts := Options{Dir: fixture, ReadOnly: readOnly, IndexOuterLeavesInValueLog: true}
+	if readOnly {
+		profile, _, err := LoadPersistedDurabilityProfile(fixture)
+		if err != nil {
+			b.Fatalf("read fixture durability profile: %v", err)
+		}
+		opts.ResolvedProfile = profile
+		switch profile {
+		case ProfileCommandWALDurable:
+			opts.CommandWAL = true
+			opts.Durability = DurabilityDurable
+		case ProfileCommandWALRelaxed:
+			opts.CommandWAL = true
+			opts.Durability = DurabilityWALOnRelaxed
+		case ProfileNoWALFast, ProfileBenchUnsafe:
+			opts.Durability = DurabilityWALOffRelaxed
+			opts.UnsafeBenchmarkProfile = profile == ProfileBenchUnsafe
+		}
+	}
+	db, err := Open(opts)
 	if err != nil {
 		b.Fatalf("open fixture: %v", err)
 	}
@@ -157,7 +172,7 @@ func BenchmarkLeafGenerationPlan_SavedHome(b *testing.B) {
 // Reopen the retained source handles and pager for every measured plan.
 // The filesystem page cache may remain warm across iterations.
 func BenchmarkLeafGenerationPlanRetainedSourceReopen_SavedHome(b *testing.B) {
-	fixture := benchmarkLeafGenerationPlanWorkFixture(b)
+	fixture := benchmarkLeafGenerationPlanFixture(b)
 	ctx := context.Background()
 
 	b.ReportAllocs()
@@ -176,7 +191,7 @@ func BenchmarkLeafGenerationPlanRetainedSourceReopen_SavedHome(b *testing.B) {
 }
 
 func BenchmarkLeafGenerationLiveStatsRetainedSource_SavedHome(b *testing.B) {
-	fixture := benchmarkLeafGenerationPlanWorkFixture(b)
+	fixture := benchmarkLeafGenerationPlanFixture(b)
 	db := openLeafGenerationPlanDB(b, fixture, true)
 	b.Cleanup(func() { benchmarkCloseNoErr(b, db) })
 	ctx := context.Background()

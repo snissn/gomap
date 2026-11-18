@@ -2014,5 +2014,5 @@ Run `scripts/leafgen_plan_profile.sh <application.db> <output-dir>` against a
 saved split-leaf store. The script compares the saved-owner planner run with
 the first `LeafGenerationPlan` on each freshly opened read-only owner. Reopen
 cost is outside the timer, and the filesystem page cache can remain warm. The
-reopen profile uses actual retained segment handles and reports `bench_reopen.txt`,
-`cpu_reopen.pprof` and `allocs_reopen.pprof`.
+reopen profile reads the fixture in place so its durable file identities stay
+valid. It reports `bench_reopen.txt`, `cpu_reopen.pprof` and `allocs_reopen.pprof`.
