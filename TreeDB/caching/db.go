@@ -10178,10 +10178,11 @@ type DB struct {
 	wg                         sync.WaitGroup
 	releasePoolPressureSampler func()
 
-	autoCheckpointOnceCh  chan struct{}
-	autoCheckpointWriteCh chan struct{}
-	autoCheckpointOn      atomic.Bool
-	autoCheckpointBytesFn atomic.Pointer[autoCheckpointBytesHookBox]
+	autoCheckpointOnceCh    chan struct{}
+	autoCheckpointWriteCh   chan struct{}
+	nativeGenerationFlushCh chan struct{}
+	autoCheckpointOn        atomic.Bool
+	autoCheckpointBytesFn   atomic.Pointer[autoCheckpointBytesHookBox]
 	// autoCheckpointSizeArmed gates the maxWALBytes size-triggered checkpoint.
 	// It is normally re-armed after reclaimable WAL bytes fall below
 	// maxWALBytes/2. A successful pass that leaves reclaimable bytes above the
@@ -13362,6 +13363,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		flushCoordinatorWaitCh:                     make(chan struct{}),
 		autoCheckpointOnceCh:                       make(chan struct{}, 1),
 		autoCheckpointWriteCh:                      make(chan struct{}, 1),
+		nativeGenerationFlushCh:                    make(chan struct{}, 1),
 		journalLanesConfigured:                     journalLaneDefaults.Configured,
 		journalLanesDefaulted:                      journalLaneDefaults.Defaulted,
 		journalLanesGOMAXPROCS:                     journalLaneDefaults.GOMAXPROCS,
@@ -19647,6 +19649,37 @@ func (db *DB) appendWALFast(l *lane, record logRecord) error {
 	return err
 }
 
+// Only a proven temporary admission refusal arms this retry. A single timer
+// owned by the existing worker keeps a lone frozen prefix eligible to drain
+// even when no more writes or configured periodic checkpoints arrive.
+const cowGenerationPressureRetryDelay = time.Second
+
+func (db *DB) maintainCOWGenerationPressure() (retry bool) {
+	// Close takes flushMu and drains the full frontier before stopping this
+	// worker. Otherwise this pass owns the original pressure seal and retirement.
+	err := db.materializeCOWPrefix(context.Background(), false, nil, cowGenerationPressureMaterialization)
+	if err == nil || err == errDBClosing {
+		return false
+	}
+	if cowGenerationRetryableOnly(err) {
+		return true
+	}
+
+	// Retain the cause even if an external Close started after this attempt.
+	// A callback on this same worker must never join the worker through Close.
+	db.retainOriginalCleanupError(err)
+	if db.notifyError == nil {
+		return false
+	}
+	guard := db.ownedCloseGuard
+	if err := guard.EnterCheckpointNotification(); err != nil {
+		return false
+	}
+	defer guard.LeaveCheckpointNotification()
+	db.reportError(err)
+	return false
+}
+
 func (db *DB) autoCheckpointLoop(interval time.Duration, maxWALBytes int64, idleInterval time.Duration) {
 	defer db.wg.Done()
 
@@ -19668,12 +19701,37 @@ func (db *DB) autoCheckpointLoop(interval time.Duration, maxWALBytes int64, idle
 		idleCh = idleTimer.C
 	}
 
+	var generationTimer *time.Timer
+	var generationRetry <-chan time.Time
+	defer func() {
+		if generationTimer != nil {
+			generationTimer.Stop()
+		}
+	}()
+	maintainGeneration := func() {
+		if !db.maintainCOWGenerationPressure() {
+			return
+		}
+		if generationTimer == nil {
+			generationTimer = time.NewTimer(cowGenerationPressureRetryDelay)
+		} else {
+			generationTimer.Reset(cowGenerationPressureRetryDelay)
+		}
+		generationRetry = generationTimer.C
+	}
 	for {
 		select {
 		case <-db.closeCh:
 			return
 		case <-intervalCh:
 			db.maybeAutoCheckpoint(maxWALBytes, autoCheckpointModeInterval)
+		case <-db.nativeGenerationFlushCh:
+			if generationRetry == nil {
+				maintainGeneration()
+			}
+		case <-generationRetry:
+			generationRetry = nil
+			maintainGeneration()
 		case <-db.autoCheckpointOnceCh:
 			db.maybeAutoCheckpoint(maxWALBytes, autoCheckpointModeForce)
 		case <-db.autoCheckpointWriteCh:

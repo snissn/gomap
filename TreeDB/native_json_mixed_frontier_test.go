@@ -1,9 +1,12 @@
 package treedb
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"sync"
@@ -13,8 +16,263 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/workstats"
 	"github.com/snissn/gomap/TreeDB/tree"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
+
+func TestNativeBSONRootCoveredPublication(t *testing.T) {
+	if dir := os.Getenv("GOMAP_ROOT_COVERED_BSON_CRASH_DIR"); dir != "" {
+		testNativeBSONRootCoveredPublication(t, ProfileCommandWALRelaxed, dir, false, false, 1, true)
+		return
+	}
+	for _, tc := range []struct {
+		name    string
+		profile Profile
+		indexed bool
+		generic bool
+		entries int
+	}{
+		{name: "covered", profile: ProfileCommandWALRelaxed, entries: 1},
+		{name: "durable", profile: ProfileCommandWALDurable, entries: 3},
+		{name: "indexed", profile: ProfileCommandWALRelaxed, indexed: true, entries: 3},
+		{name: "generic-update", profile: ProfileCommandWALRelaxed, generic: true, entries: 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testNativeBSONRootCoveredPublication(t, tc.profile, t.TempDir(), tc.indexed, tc.generic, tc.entries, false)
+		})
+	}
+}
+
+func nativeBSONRootCoveredOptions(profile Profile, dir string) Options {
+	opts := OptionsFor(profile, dir)
+	opts.MemtableMode = "cow_btree"
+	opts.FlushThreshold = 1 << 30
+	opts.BackgroundCheckpointInterval = -1
+	opts.BackgroundCheckpointIdleDuration = -1
+	return opts
+}
+
+func testNativeBSONRootCoveredPublication(t *testing.T, profile Profile, dir string, indexed, generic bool, entries int, crash bool) {
+	t.Helper()
+	opts := nativeBSONRootCoveredOptions(profile, dir)
+	database, err := Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache := database.cached
+	t.Cleanup(func() {
+		if database != nil {
+			if err := database.Close(); err != nil {
+				t.Errorf("Close: %v", err)
+			}
+		}
+	})
+	backend, err := database.NativeSemanticBackend()
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix, _, err := backend.PrivateCOWAcceptedPrefix(database.txnOwner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := collections.NewCollectionManager(backend)
+	meta := collections.CollectionMeta{Name: "rows", Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON}}
+	if indexed {
+		meta.Indexes = []collections.IndexDefinition{{Name: "n", Field: "n", ValueType: collections.IndexValueBSONOrderedV2}}
+	}
+	if _, err := manager.CreateCollection(&meta); err != nil {
+		t.Fatal(err)
+	}
+	collection, err := manager.OpenCollection("rows")
+	if err != nil {
+		t.Fatal(err)
+	}
+	read, err := collections.NewNativeJSONManager(backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := []byte("row")
+	document, err := bson.Marshal(bson.D{{Key: "_id", Value: "row"}, {Key: "n", Value: int64(0)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := collection.InsertBatchValidatedBSON([][]byte{id}, [][]byte{document}); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	start := prefix.LogicalFrontiers()
+	write := func(value int64) {
+		t.Helper()
+		if generic {
+			matched, modified, err := collection.Update(id, func([]byte) ([]byte, bool, error) {
+				replacement, err := bson.Marshal(bson.D{{Key: "_id", Value: "row"}, {Key: "n", Value: value}})
+				return replacement, true, err
+			})
+			if err != nil || !matched || !modified {
+				t.Fatalf("generic BSON update %d: matched=%t modified=%t err=%v", value, matched, modified, err)
+			}
+			return
+		}
+		results, complete, err := collection.UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges([]collections.BSONSetUpdateBatchItem{{
+			DocumentID: id,
+			Fields:     []collections.BSONSetField{{Key: "n", Value: nativeBSONQuery(t, value)}},
+		}})
+		if err != nil || !complete || len(results) != 1 || !results[0].Matched || !results[0].Modified {
+			t.Fatalf("structured BSON update %d: results=%+v complete=%t err=%v", value, results, complete, err)
+		}
+	}
+	checkValue := func(value []byte, err error, want int64) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, ok := bson.Raw(value).Lookup("n").Int64OK(); !ok || got != want {
+			t.Fatalf("BSON value %d/%t, want %d", got, ok, want)
+		}
+	}
+	write(1)
+	held, err := read.Capture("rows")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	write(2)
+	write(3)
+	old := prefix.LogicalFrontiers()
+	if old.V != start.V+3 || old.C != start.C+3 || old.S != start.S {
+		t.Fatalf("independent accepted commands: start=%+v old=%+v", start, old)
+	}
+	if count := prefix.AcceptedPendingCount(); count != entries {
+		t.Errorf("accepted prefix has %d entries for three BSON commands, want %d", count, entries)
+	}
+	if crash {
+		// The uncovered frames contain only inline BSON bytes. Sync those exact
+		// WAL bytes so process termination exercises replay from the older S.
+		if err := backend.FlushCommandWAL(true); err != nil {
+			t.Fatal(err)
+		}
+		if applied := backend.State().AppliedCommandLSN; applied != start.C || t.Failed() {
+			t.Fatalf("expected an unapplied root-covered prefix: base=%d tip=%d applied=%d", start.C, old.C, applied)
+		}
+		fmt.Printf("ROOT-COVERED BSON UNAPPLIED base=%d tip=%d\n", start.C, old.C)
+		os.Exit(97)
+	}
+	resume := startNativeJSONPausedCheckpoint(t, database, opts.Dir)
+	write(4)
+	write(5)
+	write(6)
+	if count := prefix.AcceptedPendingCount(); count != 2*entries {
+		t.Errorf("held old seal plus accepted suffix occupies %d entries, want %d", count, 2*entries)
+	}
+	value, err := read.Get("rows", id)
+	checkValue(value, err, 6)
+	if err := resume(); err != nil {
+		t.Fatal(err)
+	}
+	if got := prefix.LogicalFrontiers(); got.S.LogicalSequence != old.V || got.S.CanonicalLSN != old.C || got.C != old.C+3 || got.V != old.V+3 {
+		t.Fatalf("first seal must end at the exact older tip: old=%+v current=%+v", old, got)
+	}
+	disk := backend.AcquireSnapshot()
+	if disk == nil {
+		t.Fatal("missing first physical seal")
+	}
+	func() {
+		defer func() {
+			if err := disk.Close(); err != nil {
+				t.Error(err)
+			}
+		}()
+		state, ok := disk.StateToken()
+		if !ok || state.AppliedCommandLSN != old.C {
+			t.Fatalf("wrong physical frontier: %+v want LSN %d", state, old.C)
+		}
+		root, err := disk.GetAtRoot(state.SystemRootPageID, []byte("collections/root/rows/primary"))
+		if err != nil || len(root) != 8 {
+			t.Fatalf("physical primary root %x: %v", root, err)
+		}
+		value, err := disk.GetAtRoot(binary.BigEndian.Uint64(root), id)
+		checkValue(value, err, 3)
+	}()
+	if err := database.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	if got := prefix.LogicalFrontiers(); got.S.LogicalSequence != old.V+3 || got.S.CanonicalLSN != old.C+3 || prefix.AcceptedPendingCount() != 0 {
+		t.Fatalf("second seal must drain exactly through the suffix: %+v", got)
+	}
+	value, err = held.Get(id)
+	checkValue(value, err, 1)
+	if err := held.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	database = nil
+	requirePublicCOWFinalZero(t, cache)
+	database, err = Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend, err = database.NativeSemanticBackend()
+	if err != nil {
+		t.Fatal(err)
+	}
+	read, err = collections.NewNativeJSONManager(backend)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err = read.Get("rows", id)
+	checkValue(value, err, 6)
+}
+
+func TestNativeBSONRootCoveredUnappliedReplay(t *testing.T) {
+	dir := t.TempDir()
+	cmd := exec.Command(os.Args[0], "-test.run=^TestNativeBSONRootCoveredPublication$", "-test.v")
+	cmd.Env = append(os.Environ(), "GOMAP_ROOT_COVERED_BSON_CRASH_DIR="+dir)
+	output, err := cmd.CombinedOutput()
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 97 || !bytes.Contains(output, []byte("ROOT-COVERED BSON UNAPPLIED base=2 tip=5")) || bytes.Contains(output, []byte("DATA RACE")) {
+		t.Fatalf("abrupt child: %v\n%s", err, output)
+	}
+	for _, expected := range []uint64{3, 0} {
+		before := workstats.Read().Replay
+		database, err := Open(nativeBSONRootCoveredOptions(ProfileCommandWALRelaxed, dir))
+		if err != nil {
+			t.Fatal(err)
+		}
+		after := workstats.Read().Replay
+		cache := database.cached
+		func() {
+			defer func() {
+				if err := database.Close(); err != nil {
+					t.Error(err)
+				}
+			}()
+			if after.FramesApplied-before.FramesApplied != expected || after.FrameErrors != before.FrameErrors {
+				t.Fatalf("canonical recovery applied %d frames, want %d: %+v -> %+v", after.FramesApplied-before.FramesApplied, expected, before, after)
+			}
+			backend, err := database.NativeSemanticBackend()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if applied, next := backend.State().AppliedCommandLSN, backend.CommandWALNextLSN(); applied != 5 || next != 6 {
+				t.Fatalf("original command identity: applied=%d next=%d", applied, next)
+			}
+			reader, err := collections.NewNativeJSONManager(backend)
+			if err != nil {
+				t.Fatal(err)
+			}
+			doc, err := reader.Get("rows", []byte("row"))
+			if err != nil || bson.Raw(doc).Lookup("n").Int64() != 3 {
+				t.Fatalf("replayed BSON: %v %v", bson.Raw(doc), err)
+			}
+		}()
+		requirePublicCOWFinalZero(t, cache)
+	}
+}
 
 // The external-package lifecycle regression remains separate. This companion
 // uses the same public entry and operations; only the existing durability observer

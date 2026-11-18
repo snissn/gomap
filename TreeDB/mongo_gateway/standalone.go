@@ -171,6 +171,9 @@ func NormalizeStandaloneOptions(opts StandaloneOptions) (StandaloneOptions, erro
 	if err != nil {
 		return opts, fmt.Errorf("mongo gateway standalone: data root storage policy: %w", err)
 	}
+	if dataRoot == collections.RootStorageDefault && format == collections.DocumentFormatBSON {
+		dataRoot = collections.RootStoragePager
+	}
 	opts.DefaultCollectionOptions.DataRootStoragePolicy = dataRoot
 
 	indexState, err := normalizeStandaloneRootStoragePolicy(opts.DefaultCollectionOptions.IndexStateStoragePolicy)
@@ -806,6 +809,8 @@ func normalizeStandaloneRootStoragePolicy(policy collections.RootStoragePolicy) 
 		return collections.RootStorageDefault, nil
 	case collections.RootStorageFast:
 		return collections.RootStorageFast, nil
+	case collections.RootStoragePager:
+		return collections.RootStoragePager, nil
 	case collections.RootStorageCompressed:
 		return collections.RootStorageCompressed, nil
 	default:
