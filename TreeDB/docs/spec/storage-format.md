@@ -4498,6 +4498,13 @@ is constant time per extent; arbitrary logical seeks use the validated index.
 Neither buffer changes the full reserve scan, frame validation, captured prefix,
 or the reader's ownership of its descriptor.
 
+A relaxed native generation-pressure seal may flush the active file under
+command-journal ownership and retain that exact file through its later data
+sync. Appends can proceed during the sync. Segment rotation leaves the pin on
+the captured file, and Close joins its release. Only the captured COW cut can
+advance DATA coverage. The operation creates no new durable command identity
+or namespace proof.
+
 A fully validated, frame-free fixed container may be reclaimed by covered-prefix
 cleanup through the same root, replay-lineage, active-generation, pin and exact
 file-identity guards as occupied segments. Its logical debit is zero; its actual

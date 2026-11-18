@@ -33,14 +33,23 @@ func (db *DB) checkpointCOWColumnCompaction(ctx context.Context, automatic bool,
 		db.checkpointTotalNs.Add(dur)
 		updateAtomicMaxUint64(&db.checkpointMaxNs, dur)
 	}()
-	return db.materializeCOWPrefix(ctx, automatic, operation, false)
+	return db.materializeCOWPrefix(ctx, automatic, operation, cowCheckpointMaterialization)
 }
+
+type cowPrefixMaterialization uint8
+
+const (
+	cowCheckpointMaterialization cowPrefixMaterialization = iota
+	cowSynchronousPressureMaterialization
+	cowGenerationPressureMaterialization
+)
 
 // materializeCOWPrefix keeps the original captured raw+semantic cut, build group
 // and handoff. Pressure-only completion joins its exact durable seal and accepted
 // retirement, leaving journal rotation and covered-file maintenance to the already
 // running size-maintenance worker. Public checkpoint/Close/Drain are unchanged.
-func (db *DB) materializeCOWPrefix(ctx context.Context, automatic bool, operation backenddb.NativeColumnStoreCompaction, pressureOnly bool) (retErr error) {
+func (db *DB) materializeCOWPrefix(ctx context.Context, automatic bool, operation backenddb.NativeColumnStoreCompaction, mode cowPrefixMaterialization) (retErr error) {
+	pressureOnly := mode != cowCheckpointMaterialization
 	if db.closing.Load() {
 		return errDBClosing
 	}
@@ -51,6 +60,9 @@ func (db *DB) materializeCOWPrefix(ctx context.Context, automatic bool, operatio
 		return err
 	}
 	defer db.flushMu.Unlock()
+	if mode == cowGenerationPressureMaterialization && db.closing.Load() {
+		return errDBClosing
+	}
 	db.checkpointMu.Lock()
 	db.checkpointPostFrontierAdmission.Store(false)
 	db.checkpointWriteCutoverActive.Store(true)
@@ -82,7 +94,21 @@ func (db *DB) materializeCOWPrefix(ctx context.Context, automatic bool, operatio
 		hook()
 	}
 	var frontier *cowReadCut
-	err := db.rotateCOWFrontier(ctx, true, &frontier, !pressureOnly)
+	var err error
+	if mode == cowGenerationPressureMaterialization {
+		// Producer admission already froze and marked this prefix. Retain
+		// that root set and use its frozen endpoint; concurrent writes in
+		// the mutable successor belong to a later publication.
+		frontier = db.cow.retainCut()
+		if frontier == nil {
+			err = backenddb.ErrClosed
+		} else if db.snapshotCommandWALCheckpointCutover() {
+			db.checkpointPostFrontierAdmission.Store(true)
+		}
+		db.writeMu.Unlock()
+	} else {
+		err = db.rotateCOWFrontier(ctx, true, &frontier, !pressureOnly)
+	}
 	defer func() { retErr = joinCOWCleanupError(retErr, db.cow.releaseCut(frontier)) }()
 	db.recordCheckpointCutover(time.Since(cutover))
 	db.checkpointMu.Lock()
@@ -98,13 +124,13 @@ func (db *DB) materializeCOWPrefix(ctx context.Context, automatic bool, operatio
 	if err = ctx.Err(); err != nil {
 		return err
 	}
+	// Preserve the original captured endpoint before the flush consumes frontier.
+	through := rootpublication.SealedPrefix{LogicalSequence: frontier.frozenLogicalSeq, CanonicalLSN: frontier.frozenCommandLSN}
 	// COW admits only the canonical command-WAL and NoWAL cached profiles. Their
 	// value log is independent persistent storage, synced before root coverage.
 	if err = db.checkpointFlushValueLogLanes(); err != nil {
 		return err
 	}
-	// Preserve the original captured endpoint before the flush consumes frontier.
-	through := rootpublication.SealedPrefix{LogicalSequence: frontier.frozenLogicalSeq, CanonicalLSN: frontier.frozenCommandLSN}
 	var publish checkpointCommandWALPublish
 	if hook := db.testBeforeCheckpointFrontierDrain; hook != nil {
 		hook()
@@ -112,7 +138,7 @@ func (db *DB) materializeCOWPrefix(ctx context.Context, automatic bool, operatio
 	if err = ctx.Err(); err != nil {
 		return err
 	}
-	err = db.flushCOWFrozenCutWithColumnCompaction(true, &publish, frontier, operation != nil, operation)
+	err = db.flushCOWFrozenCutWithColumnCompaction(true, &publish, frontier, operation != nil, operation, mode == cowGenerationPressureMaterialization)
 	frontier = nil
 	if err != nil {
 		return err

@@ -147,7 +147,13 @@ type NativeSemanticCustody interface {
 
 type NativePreparedPublication struct {
 	// Selected composite raw members require the final inline Set representation.
-	RequireInlineCompositeRaw   bool
+	RequireInlineCompositeRaw bool
+	// ReturnCustodyOnInstall is an opt-in from the trusted structured BSON
+	// producer that its complete cut owns every effect and its custody can
+	// detach a preborn record without waiting or calling user code. Other
+	// native producers leave it false. Custody still protects assignment
+	// and failure. The canonical installer rechecks outstanding obligations.
+	ReturnCustodyOnInstall      bool
 	Basis                       NativeSemanticState
 	State                       NativeSemanticState
 	Entries                     []batch.Entry

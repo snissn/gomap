@@ -1,6 +1,7 @@
 package caching
 
 import (
+	"context"
 	"errors"
 	"sync/atomic"
 	"testing"
@@ -9,7 +10,31 @@ import (
 	"github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
+
+func TestCOWGenerationPressureStaleWakeReportsAcceptedError(t *testing.T) {
+	cache, _ := nativeBridgeFixture(t, true)
+	if err := cache.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	cut := cache.cow.retainCut()
+	through := rootpublication.SealedPrefix{LogicalSequence: cut.frozenLogicalSeq, CanonicalLSN: cut.frozenCommandLSN}
+	if err := cache.cow.releaseCut(cut); err != nil {
+		t.Fatal(err)
+	}
+	if sealed := cache.cow.prefix.LogicalFrontiers().S; sealed != through {
+		t.Fatalf("fixture must wake for an already sealed endpoint: want %+v, S=%+v", through, sealed)
+	}
+	failure := errors.New("accepted prefix failure before generation worker woke")
+	cache.cow.prefix.PoisonAccepted(failure)
+	if err := cache.materializeCOWPrefix(context.Background(), false, nil, cowGenerationPressureMaterialization); !errors.Is(err, failure) {
+		t.Fatalf("stale wake lost original accepted prefix error: %v", err)
+	}
+	if err := cache.Close(); !errors.Is(err, failure) {
+		t.Fatalf("checked Close lost original accepted prefix error: %v", err)
+	}
+}
 
 var errCOWAcceptedReport = errors.New("test: reported error after real accepted publication")
 

@@ -10178,10 +10178,11 @@ type DB struct {
 	wg                         sync.WaitGroup
 	releasePoolPressureSampler func()
 
-	autoCheckpointOnceCh  chan struct{}
-	autoCheckpointWriteCh chan struct{}
-	autoCheckpointOn      atomic.Bool
-	autoCheckpointBytesFn atomic.Pointer[autoCheckpointBytesHookBox]
+	autoCheckpointOnceCh    chan struct{}
+	autoCheckpointWriteCh   chan struct{}
+	nativeGenerationFlushCh chan struct{}
+	autoCheckpointOn        atomic.Bool
+	autoCheckpointBytesFn   atomic.Pointer[autoCheckpointBytesHookBox]
 	// autoCheckpointSizeArmed gates the maxWALBytes size-triggered checkpoint.
 	// It is normally re-armed after reclaimable WAL bytes fall below
 	// maxWALBytes/2. A successful pass that leaves reclaimable bytes above the
@@ -13362,6 +13363,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		flushCoordinatorWaitCh:                     make(chan struct{}),
 		autoCheckpointOnceCh:                       make(chan struct{}, 1),
 		autoCheckpointWriteCh:                      make(chan struct{}, 1),
+		nativeGenerationFlushCh:                    make(chan struct{}, 1),
 		journalLanesConfigured:                     journalLaneDefaults.Configured,
 		journalLanesDefaulted:                      journalLaneDefaults.Defaulted,
 		journalLanesGOMAXPROCS:                     journalLaneDefaults.GOMAXPROCS,
@@ -19674,6 +19676,15 @@ func (db *DB) autoCheckpointLoop(interval time.Duration, maxWALBytes int64, idle
 			return
 		case <-intervalCh:
 			db.maybeAutoCheckpoint(maxWALBytes, autoCheckpointModeInterval)
+		case <-db.nativeGenerationFlushCh:
+			// Close takes flushMu and drains the full frontier before stopping
+			// this worker. Otherwise this pass owns the original pressure seal,
+			// including value-log/WAL syncs and accepted retirement.
+			err := db.materializeCOWPrefix(context.Background(), false, nil, cowGenerationPressureMaterialization)
+			if err != nil && err != errDBClosing {
+				db.retainOriginalCleanupError(err)
+				db.reportError(err)
+			}
 		case <-db.autoCheckpointOnceCh:
 			db.maybeAutoCheckpoint(maxWALBytes, autoCheckpointModeForce)
 		case <-db.autoCheckpointWriteCh:
