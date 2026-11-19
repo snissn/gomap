@@ -66,6 +66,12 @@ func syncNewLogFileDirectory(w *Writer, file *os.File, path string) error {
 	return durabilitycut.EmitPath(durabilitycut.AfterNewFileDirectorySync, durabilitycut.ResourceCommandWAL, "", dir)
 }
 
+// SegmentPayloadLimit reports the effective per-frame payload cap, with zero
+// representing an unlimited reader.
+func SegmentPayloadLimit(configured int64) int64 {
+	return normalizeMaxSegmentSize(configured)
+}
+
 func normalizeMaxSegmentSize(size int64) int64 {
 	if size == 0 {
 		return defaultMaxSegmentSize

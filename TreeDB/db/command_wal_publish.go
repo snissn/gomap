@@ -577,10 +577,11 @@ type commandWALSegmentScanResult struct {
 }
 
 type commandWALSegmentScanOptions struct {
-	seenLSNs          map[uint64]struct{}
-	seenLSNAppliedLSN uint64
-	seenLSNMax        uint64
-	readBuffer        *commitlog.CleanupReadBuffer
+	seenLSNs              map[uint64]struct{}
+	seenLSNAppliedLSN     uint64
+	seenLSNMax            uint64
+	readBuffer            *commitlog.CleanupReadBuffer
+	boundedCleanupPayload int64
 }
 
 func requireNoUnappliedCommandWALFrames(dir string, appliedLSN uint64, maxSegmentBytes int64) error {
@@ -668,7 +669,13 @@ func scanCommandWALSegmentReader(r *commitlog.Reader, allowTerminalTail bool, op
 	var lastLSN uint64
 	scan := commandWALSegmentScanResult{emptyFixed: r.IsEmptyFixedContainer()}
 	for {
-		lsn, err := r.ReadValidatedCommandFrameLSN()
+		var lsn uint64
+		var err error
+		if opts.boundedCleanupPayload > 0 {
+			lsn, err = opts.readBuffer.ReadValidatedBoundedCommandFrameLSN(r, opts.boundedCleanupPayload)
+		} else {
+			lsn, err = r.ReadValidatedCommandFrameLSN()
+		}
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return scan, nil
@@ -803,12 +810,20 @@ func newCommandWALCleanupScan(cleanupThrough, durableWALLSN uint64, maxSegmentBy
 }
 
 func (s *commandWALCleanupScan) scanLockedDirectory(dir string) error {
+	return s.scanLockedDirectoryWithStreamPair(dir, nil)
+}
+
+func (s *commandWALCleanupScan) scanLockedDirectoryWithStreamPair(dir string, stream *commitlog.CommandJournalCleanupSnapshot) error {
 	segments, err := listWALSegments(dir)
 	if err != nil {
 		return err
 	}
 	activeByLane := commandWALActiveSeqByLane(segments)
 	s.decisions = make([]commandWALSegmentCleanupDecision, 0, len(segments))
+	if stream != nil && s.canScanClosedStreamPair(segments, *stream, activeByLane[stream.Lane]) &&
+		s.scanClosedStreamPair(segments[0], segments[1], stream.ActiveIdentity) {
+		segments = segments[2:]
+	}
 	for _, seg := range segments {
 		if !seg.valueLog && isCommandWALLaneSegment(seg) {
 			s.scanSegment(seg, seg.seq == activeByLane[seg.lane], false, nil)

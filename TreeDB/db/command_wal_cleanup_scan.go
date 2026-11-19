@@ -112,7 +112,7 @@ func (db *DB) scanCommandWALCleanupProof(proof durableWALCleanupProofV1, scanSea
 			if current.SegmentSeq > 1 {
 				scan.closedStreamBuffer = new(commitlog.CleanupReadBuffer)
 			}
-			return scan.scanLockedDirectory(db.dir)
+			return scan.scanLockedDirectoryWithStreamPair(db.dir, &current)
 		}
 		if current.SegmentSeq <= 2 {
 			return scan.scanLockedDirectory(db.dir)

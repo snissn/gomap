@@ -2,9 +2,15 @@ package commitlog
 
 import (
 	"bufio"
+	"encoding/binary"
+	"errors"
 	"io"
 	"os"
 )
+
+// ErrCommandWALCleanupReadLimit asks the caller to use the ordinary reader
+// for records outside the concurrent cleanup reader's workspace limit.
+var ErrCommandWALCleanupReadLimit = errors.New("commitlog: command WAL cleanup record requires the ordinary reader")
 
 // CleanupReadBuffer reuses one read-ahead window across an invocation's closed
 // stream segments. Only one Reader may use the buffer at a time. The caller
@@ -34,6 +40,34 @@ func (b *CleanupReadBuffer) Open(file *os.File, opts Options) (*Reader, error) {
 	b.file, b.offset = file, offset
 	r.input = b
 	return r, nil
+}
+
+// ReadValidatedBoundedCommandFrameLSN inspects the header without consuming it
+// or allocating payload/decoder storage. An eligible frame still goes through
+// the ordinary validator, including complete framing, checksum and payload
+// validation. A refused frame has consumed no bytes from the buffered stream.
+func (b *CleanupReadBuffer) ReadValidatedBoundedCommandFrameLSN(r *Reader, maxPayload int64) (uint64, error) {
+	if b == nil || r.input != b {
+		return 0, ErrCommandWALCleanupReadLimit
+	}
+	header, err := b.input.Peek(segmentHeaderSize)
+	if err != nil {
+		if len(header) != 0 {
+			// Peek returned these buffered bytes together with the read
+			// error. Account for them as the ordinary ReadFull would.
+			discarded, _ := b.input.Discard(len(header))
+			b.offset += int64(discarded)
+			if err == io.EOF || err == io.ErrUnexpectedEOF {
+				return 0, ErrCommandWALTerminalTail
+			}
+		}
+		return 0, err
+	}
+	length := binary.LittleEndian.Uint32(header[:4])
+	if length&segmentFlagCompressed != 0 || int64(length&segmentLenMask) > maxPayload {
+		return 0, ErrCommandWALCleanupReadLimit
+	}
+	return r.ReadValidatedCommandFrameLSN()
 }
 
 func (b *CleanupReadBuffer) Read(p []byte) (int, error) {
