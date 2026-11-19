@@ -248,10 +248,10 @@ func (b *Batch) SetNativeSemanticPublication(owner *transactionowner.Owner, nati
 	return nil
 }
 
-func (b *Batch) releaseNativePublication() {
+func (b *Batch) releaseNativePublication() error {
 	owner := b.cowState.native
 	if owner == nil {
-		return
+		return nil
 	}
 	b.cowState.native = nil
 	cache, opening, native := owner.cache, owner.opening, owner.plan
@@ -275,13 +275,14 @@ func (b *Batch) releaseNativePublication() {
 		cache.semanticMu.Unlock()
 		cache.wakeSemanticCleanup()
 	}
-	_ = cache.releaseCut(opening)
+	closeErr := cache.releaseCut(opening)
 	completion, err := owner.ReleaseAcceptedCompletion()
 	owner = nil
 	if err != nil {
 		panic(err)
 	}
 	completion.Complete()
+	return closeErr
 }
 
 // parkAssignedNative transfers the SAME original adapter to its prebound FIFO
@@ -417,6 +418,7 @@ func (db *DB) writeNativePublication(b *Batch, native *backenddb.NativePreparedP
 		}
 		receipt := b.COWReceipt()
 		result.LogicalInstalled, result.LogicalSequence = receipt.LogicalInstalled, receipt.LogicalSeq
+		result.OnlyPointConflict = receipt.OnlyPointConflict
 		if err == nil && sealed != nil {
 			result.Seal = sealed.Receipt()
 			err = result.Seal.Wait(context.Background())
@@ -486,6 +488,7 @@ func (db *DB) writeNativePublication(b *Batch, native *backenddb.NativePreparedP
 	result.AssignedLSN, result.LogicalSequence = receipt.AssignedLSN, receipt.LogicalSeq
 	result.Assigned, result.Uncertain, result.LogicalInstalled = receipt.Assigned, receipt.Uncertain, receipt.LogicalInstalled
 	result.WALCompleted, result.WALStable = receipt.WALCompleted, receipt.WALStable
+	result.OnlyPointConflict = receipt.OnlyPointConflict
 	if err == nil {
 		backend.ObserveNativeInstalledForTest(intent, result)
 	}

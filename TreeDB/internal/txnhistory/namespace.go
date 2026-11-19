@@ -1,6 +1,7 @@
 package txnhistory
 
 import (
+	"bytes"
 	"cmp"
 	"errors"
 )
@@ -23,6 +24,27 @@ const (
 type Namespace struct {
 	Kind                               NamespaceKind
 	Collection, Domain, Interpretation uint64
+}
+
+// OnlyPointChanged requires an actual write to point and excludes changes to
+// other dependencies, covering ranges and namespace replacement barriers.
+// Callers serialize it with validation and accepted publication.
+func (j *History) OnlyPointChanged(start uint64, point Dependency, dependencies, effects []Dependency) bool {
+	if j == nil || j.Check(start) != nil || point.Kind != PointEffect || point.Namespace.Kind != CollectionNamespace ||
+		j.index[j.slotIn(point.Namespace, string(point.Key))].seq <= start || j.pointCoveredByRange(start, point.Namespace, point.Key) {
+		return false
+	}
+	for _, set := range [2][]Dependency{dependencies, effects} {
+		for _, d := range set {
+			if d.Kind == PointEffect && d.Namespace == point.Namespace && bytes.Equal(d.Key, point.Key) {
+				continue
+			}
+			if changed, err := j.DependenciesChanged(start, []Dependency{d}); changed || err != nil {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func compareNamespace(a, b Namespace) int {

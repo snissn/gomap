@@ -110,6 +110,9 @@ func (b *Batch) PrepareExternalCommandWALPublication() (err error) {
 					return validateErr
 				}
 				if changed {
+					if i := int(plan.ObservePointConflict) - 1; i >= 0 && i < len(plan.Dependencies) {
+						b.cowState.receipt.OnlyPointConflict = c.journal.OnlyPointChanged(plan.StartSequence, plan.Dependencies[i], plan.Dependencies, plan.Effects)
+					}
 					return backenddb.ErrConcurrentModification
 				}
 			}
@@ -348,9 +351,9 @@ func (b *Batch) finalizeCOWPublication(payload []byte, lookup func(page.ValuePtr
 	return durabilitycut.EmitBasic(durabilitycut.AfterCOWCanonicalPreparation, durabilitycut.ResourceAuxiliary, b.db.dir)
 }
 
-func (b *Batch) cancelCOWPublication() *cowBatchPreparation {
+func (b *Batch) cancelCOWPublication() (*cowBatchPreparation, error) {
 	if b.cowState == nil {
-		return nil
+		return nil, nil
 	}
 	p := b.cowState.prepared
 	b.cowState.prepared = nil
@@ -364,13 +367,12 @@ func (b *Batch) cancelCOWPublication() *cowBatchPreparation {
 	if p != nil && p.cut != nil {
 		p.cut.cancel()
 	}
+	var cancelErr error
 	if b.cowState.accepted.Valid() && !b.cowState.receipt.Assigned {
-		if err := b.cowState.accepted.CancelAccepted(); err != nil {
-			b.db.reportError(err)
-		}
+		cancelErr = b.cowState.accepted.CancelAccepted()
 	}
 	b.cowState.accepted = rootpublication.AcceptedTicket{}
-	return p
+	return p, cancelErr
 }
 
 func (p *cowBatchPreparation) drainCancelled() error {
@@ -441,8 +443,11 @@ func (b *Batch) writeCOWPublication(syncWrite bool, unlock func()) error {
 				_ = b.drainAssignedNative(owner, opening, p, backenddb.ErrRecoveryRequired)
 				return
 			}
-			p := b.cancelCOWPublication()
+			p, cancelErr := b.cancelCOWPublication()
 			unlock()
+			if cancelErr != nil {
+				b.db.reportError(cancelErr)
+			}
 			if p != nil {
 				if cleanupErr := p.drainCancelled(); cleanupErr != nil {
 					b.db.reportError(cleanupErr)
@@ -505,8 +510,14 @@ func (b *Batch) writeCOWPublication(syncWrite bool, unlock func()) error {
 			// waiters with the same terminal failure before releasing the writer.
 			b.db.cow.prefix.PoisonAccepted(err)
 		}
-		p := b.cancelCOWPublication()
+		p, cancelErr := b.cancelCOWPublication()
 		unlock()
+		if cancelErr != nil {
+			b.db.reportError(cancelErr)
+			if b.cowState.receipt.OnlyPointConflict {
+				err = joinCOWCleanupError(err, cancelErr)
+			}
+		}
 		if p != nil {
 			err = joinCOWCleanupError(err, p.drainCancelled())
 		}
@@ -538,8 +549,11 @@ func (b *Batch) writeCOWPublication(syncWrite bool, unlock func()) error {
 					return
 				}
 			}
-			p := b.cancelCOWPublication()
+			p, cancelErr := b.cancelCOWPublication()
 			unlock()
+			if cancelErr != nil {
+				b.db.reportError(cancelErr)
+			}
 			if p != nil {
 				if cleanupErr := p.drainCancelled(); cleanupErr != nil {
 					b.db.reportError(cleanupErr)
@@ -702,6 +716,7 @@ func (b *Batch) EntriesForTxn() []batch.Entry { return b.entries }
 type COWPublicationReceipt struct {
 	AssignedLSN, LogicalSeq                                        uint64
 	Assigned, Uncertain, LogicalInstalled, WALCompleted, WALStable bool
+	OnlyPointConflict                                              bool
 	SealedLogicalSeq                                               uint64
 }
 

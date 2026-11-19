@@ -65,8 +65,11 @@ func TestCOWBatchFinalizerRefusalCancelsPrivateRoots(t *testing.T) {
 		c.writerMu.Unlock()
 		t.Fatal("mismatched revision accepted")
 	}
-	p := b.cancelCOWPublication()
+	p, cancelErr := b.cancelCOWPublication()
 	c.writerMu.Unlock()
+	if cancelErr != nil {
+		t.Error(cancelErr)
+	}
 	p.drainCancelled()
 	// No read workspace has been constructed yet: all preparation-only leases
 	// must have refunded while generation-local resolver leases remain live.
@@ -91,8 +94,9 @@ func TestCOWLogicalSizeChangedKeysAndDuplicates(t *testing.T) {
 		c.writerMu.Lock()
 		err := db.backend.(*backenddb.DB).FinalizeRawKVEntryScanForCachedPublication(b.PrepareExternalCommandWALPublication, b.finalizeCOWPublication, b.Replay, len(entries))
 		if err != nil {
-			p := b.cancelCOWPublication()
+			p, cancelErr := b.cancelCOWPublication()
 			c.writerMu.Unlock()
+			err = errors.Join(err, cancelErr)
 			if p != nil {
 				p.drainCancelled()
 			}

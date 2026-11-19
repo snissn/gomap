@@ -24,7 +24,14 @@ func (c *Collection) nativeUpdateBatch(items []UpdateBatchItem) ([]UpdateBatchRe
 // A conditional decline closes the original private transaction without claiming
 // an identity. The same captured metadata and encoded old/new scalar states are
 // used by ordinary callbacks and structured BSON updates.
-func (c *Collection) nativeUpdateBatchMode(items []UpdateBatchItem, mode updateBatchMode, bsonItems []BSONSetUpdateBatchItem) (results []UpdateBatchResult, complete bool, resultErr error) {
+func (c *Collection) nativeUpdateBatchMode(items []UpdateBatchItem, mode updateBatchMode, bsonItems []BSONSetUpdateBatchItem) ([]UpdateBatchResult, bool, error) {
+	return c.nativeUpdateBatchModeObserved(items, mode, bsonItems, nil)
+}
+
+func (c *Collection) nativeUpdateBatchModeObserved(items []UpdateBatchItem, mode updateBatchMode, bsonItems []BSONSetUpdateBatchItem, retry *nativeBSONSetRetry) (results []UpdateBatchResult, complete bool, resultErr error) {
+	if retry != nil {
+		retry.rowConflict = false
+	}
 	if c.manager.isClosing() {
 		return nil, false, backenddb.ErrClosed
 	}
@@ -42,12 +49,30 @@ func (c *Collection) nativeUpdateBatchMode(items []UpdateBatchItem, mode updateB
 	if err != nil {
 		return nil, false, err
 	}
-	defer func() { resultErr = errors.Join(resultErr, tx.Close()) }()
+	defer func() {
+		closeErr := tx.Close()
+		if closeErr != nil && retry != nil {
+			retry.rowConflict = false
+		}
+		resultErr = errors.Join(resultErr, closeErr)
+	}()
 	count := len(items)
 	if bsonItems != nil {
 		count = len(bsonItems)
 	}
 	g := tx.binding(c.name)
+	if retry != nil {
+		if retry.incarnation == 0 {
+			retry.incarnation, retry.start = g.incarnation, tx.core.LogicalSequence()
+		} else {
+			if retry.incarnation != g.incarnation {
+				return nil, false, backenddb.ErrConcurrentModification
+			}
+			if err := tx.core.CheckNativeRetryCatalog(retry.start, tx.dependencies[0].Key); err != nil {
+				return nil, false, err
+			}
+		}
+	}
 	if bsonItems != nil {
 		items, err = tx.prepareNativeBSONSetItems(c.name, bsonItems)
 		if err != nil {
@@ -97,7 +122,12 @@ func (c *Collection) nativeUpdateBatchMode(items []UpdateBatchItem, mode updateB
 	}
 	if len(tx.members) != 0 {
 		tx.structuredBSONUpdate = bsonItems != nil
-		if err = tx.Commit(); err != nil {
+		if retry == nil {
+			err = tx.Commit()
+		} else {
+			err = tx.commitNativePlanObserved(false, nil, false, nil, nil, retry)
+		}
+		if err != nil {
 			return nil, false, err
 		}
 	}

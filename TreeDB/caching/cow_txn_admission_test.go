@@ -30,8 +30,11 @@ func TestCOWTxnCanceledPublicationReleasesStagingBeforeNextWriter(t *testing.T) 
 		t.Fatalf("wrong refusal stage: %v", err)
 	}
 	stale := first.cowState.prepared.mutation
-	canceled := first.cancelCOWPublication()
+	canceled, cancelErr := first.cancelCOWPublication()
 	c.writerMu.Unlock()
+	if cancelErr != nil {
+		t.Error(cancelErr)
+	}
 	if stale.Valid() {
 		canceled.drainCancelled()
 		t.Fatal("canceled command retained shared staging after writer release")
@@ -45,8 +48,9 @@ func TestCOWTxnCanceledPublicationReleasesStagingBeforeNextWriter(t *testing.T) 
 		close(ready)
 		<-retired
 		if err != nil {
-			p := second.cancelCOWPublication()
+			p, cancelErr := second.cancelCOWPublication()
 			c.writerMu.Unlock()
+			err = errors.Join(err, cancelErr)
 			if p != nil {
 				p.drainCancelled()
 			}

@@ -104,10 +104,13 @@ func TestCOWDictionaryCleanupPrepareRefusalTransfersOwner(t *testing.T) {
 				// The same carrier used by partial batch cancellation must preserve
 				// transferred ownership without executing callbacks in cancel.
 				b := &Batch{db: db, cowState: &cowBatchState{prepared: &cowBatchPreparation{resources: []*cowLiveResource{{definition: owner}}}}}
-				cancelled := b.cancelCOWPublication()
+				cancelled, cancelErr := b.cancelCOWPublication()
 				held := c.budget.Stats()
 				c.writerMu.Unlock()
 				db.writeMu.RUnlock()
+				if cancelErr != nil {
+					t.Error(cancelErr)
+				}
 				if !errors.Is(err, cowDictionaryCleanupRefusal) || probe.stages != stage {
 					t.Fatalf("refusal err=%v stages=%d want=%d", err, probe.stages, stage)
 				}

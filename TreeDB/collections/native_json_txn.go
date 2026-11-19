@@ -495,9 +495,16 @@ func (t *NativeJSONTxn) commitNativePlanWithStats(sealed bool, apply *nativeComm
 // expired observes a preassignment history refusal after successful synchronous
 // cancellation and Close checks. Retirement may complete asynchronously. It is
 // private one-shot insertion authority, never an instruction to rebase a txn.
-func (t *NativeJSONTxn) commitNativePlanWithStatsObserved(sealed bool, apply *nativeCommandWALApplyCommit, typedGroup bool, stats *CollectionInsertStats, expired *bool) (resultErr error) {
+func (t *NativeJSONTxn) commitNativePlanWithStatsObserved(sealed bool, apply *nativeCommandWALApplyCommit, typedGroup bool, stats *CollectionInsertStats, expired *bool) error {
+	return t.commitNativePlanObserved(sealed, apply, typedGroup, stats, expired, nil)
+}
+
+func (t *NativeJSONTxn) commitNativePlanObserved(sealed bool, apply *nativeCommandWALApplyCommit, typedGroup bool, stats *CollectionInsertStats, expired *bool, retry *nativeBSONSetRetry) (resultErr error) {
 	if expired != nil {
 		*expired = false
+	}
+	if retry != nil {
+		retry.rowConflict = false
 	}
 	if t == nil {
 		return backenddb.ErrClosed
@@ -509,8 +516,8 @@ func (t *NativeJSONTxn) commitNativePlanWithStatsObserved(sealed bool, apply *na
 	}
 	defer func() {
 		err, stages, lease := t.closeLocked()
-		if err != nil && expired != nil {
-			*expired = false
+		if err != nil {
+			clearNativeCommitRetry(expired, retry)
 		}
 		resultErr = errors.Join(resultErr, err)
 		t.mu.Unlock()
@@ -674,13 +681,21 @@ func (t *NativeJSONTxn) commitNativePlanWithStatsObserved(sealed bool, apply *na
 		*p = nativeJSONLogicalGroup{}
 		if reimported != nil {
 			cleanupErr := finishPrivateNative(reimported.Release())
-			if cleanupErr != nil && expired != nil {
-				*expired = false
+			if cleanupErr != nil {
+				clearNativeCommitRetry(expired, retry)
 			}
 			resultErr = errors.Join(resultErr, cleanupErr)
 		}
 	}(plan)
 	native := &backenddb.NativePreparedPublication{RequireInlineCompositeRaw: t.rawStaged, Basis: t.core.State(), StartSequence: t.core.LogicalSequence(), Reprepare: plan, Custody: t.custody, Effects: effects, Dependencies: t.dependencies, ReturnCustodyOnInstall: returnCustodyOnInstall}
+	if retry != nil && len(t.dependencies) >= 2 {
+		// The singleton's original catalog dependency precedes the point read
+		// recorded by touchNativeRow. Later unique-key dependencies still apply.
+		point := t.dependencies[1]
+		if point.Kind == txnhistory.PointEffect && point.Namespace == t.bindings[0].namespace() && bytes.Equal(point.Key, retry.id) {
+			native.ObservePointConflict = 2
+		}
+	}
 	for i := range t.bindings {
 		if t.bindings[i].typed != nil {
 			if err := t.custody.typedResources.Initialize(nil); err != nil {
@@ -751,6 +766,11 @@ func (t *NativeJSONTxn) commitNativePlanWithStatsObserved(sealed bool, apply *na
 			!result.LogicalInstalled && !backenddb.CommitPublicationAccepted(err) &&
 			!errors.Is(err, ErrCommitAmbiguous)
 	}
+	if retry != nil {
+		retry.rowConflict = native.ObservePointConflict != 0 && result.OnlyPointConflict && err == backenddb.ErrConcurrentModification &&
+			!result.Assigned && result.AssignedLSN == 0 && !result.Uncertain && !result.LogicalInstalled &&
+			!result.WALCompleted && !result.WALStable
+	}
 	if stats != nil {
 		stats.Publish = time.Since(publishStarted)
 	}
@@ -767,13 +787,22 @@ func (t *NativeJSONTxn) commitNativePlanWithStatsObserved(sealed bool, apply *na
 	t.custody = nil
 	if !result.Consumed {
 		cleanupErr := cancelPrivateNativePublication(native)
-		if cleanupErr != nil && expired != nil {
-			*expired = false
+		if cleanupErr != nil {
+			clearNativeCommitRetry(expired, retry)
 		}
 		err = errors.Join(err, cleanupErr)
 	}
 	native, intent, plan, payload, effects = nil, nil, nil, nil, nil
 	return err
+}
+
+func clearNativeCommitRetry(expired *bool, retry *nativeBSONSetRetry) {
+	if expired != nil {
+		*expired = false
+	}
+	if retry != nil {
+		retry.rowConflict = false
+	}
 }
 func (t *NativeJSONTxn) Close() error {
 	if t == nil {

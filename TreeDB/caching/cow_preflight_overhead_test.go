@@ -76,8 +76,11 @@ func TestCOWPreflightIncludesCanonicalControlHeadroom(t *testing.T) {
 					// Exercise the old failure mechanism directly, without revisions or WAL:
 					// the same actual staged command cannot satisfy canonical late control.
 					canonicalErr := b.PrepareExternalCommandWALPublication()
-					cleanup := b.cancelCOWPublication()
+					cleanup, cancelErr := b.cancelCOWPublication()
 					db.cow.writerMu.Unlock()
+					if cancelErr != nil {
+						t.Error(cancelErr)
+					}
 					if cleanup != nil {
 						if err := cleanup.drainCancelled(); err != nil {
 							t.Fatal(err)
