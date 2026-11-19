@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -108,7 +109,7 @@ func TestCommandWALCleanupFixedPrefixDescriptorExhaustion(t *testing.T) {
 				},
 				beforeSegment: func(path string) {
 					if len(scans) == 0 {
-						if _, err := first.Stat(); !errors.Is(err, os.ErrClosed) {
+						if _, err := first.Seek(0, io.SeekCurrent); !errors.Is(err, os.ErrClosed) {
 							t.Errorf("staged descriptor was not closed before restart: %v", err)
 						}
 					}
@@ -121,7 +122,7 @@ func TestCommandWALCleanupFixedPrefixDescriptorExhaustion(t *testing.T) {
 			if openCalls != 2 || first == nil {
 				t.Fatalf("preopen fixture didn't stage one descriptor before refusal: calls=%d first=%v", openCalls, first)
 			}
-			if _, closeErr := first.Stat(); !errors.Is(closeErr, os.ErrClosed) {
+			if _, closeErr := first.Seek(0, io.SeekCurrent); !errors.Is(closeErr, os.ErrClosed) {
 				t.Fatalf("staged descriptor not closed: %v", closeErr)
 			}
 			if tc.fallback {
@@ -188,7 +189,7 @@ func TestCommandWALCleanupFixedPrefixRestartChecksDiscardClose(t *testing.T) {
 				t.Fatalf("did not preopen both original predecessors: %d", len(opened))
 			}
 			for _, file := range opened {
-				if _, err := file.Stat(); !errors.Is(err, os.ErrClosed) {
+				if _, err := file.Seek(0, io.SeekCurrent); !errors.Is(err, os.ErrClosed) {
 					t.Fatalf("discard retained a staged descriptor: file=%q err=%v", file.Name(), err)
 				}
 			}
@@ -256,7 +257,7 @@ func TestCommandWALCleanupFixedPrefixFinishChecksDiscardClose(t *testing.T) {
 				if decisions[0].file != nil {
 					t.Fatal("discard should consume the decision handle")
 				}
-				if _, err := file.Stat(); !errors.Is(err, os.ErrClosed) {
+				if _, err := file.Seek(0, io.SeekCurrent); !errors.Is(err, os.ErrClosed) {
 					t.Fatalf("discard retained a live descriptor: %v", err)
 				}
 			})
