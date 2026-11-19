@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
+	"syscall"
 
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -20,6 +22,7 @@ const maxOpenClosedWALCleanupSegments = 8
 type commandWALCleanupTestHooks struct {
 	beforeSegment func(string)
 	afterScan     func()
+	openPrefix    func(string) (*os.File, error)
 }
 
 type cleanupClosedWALFile struct {
@@ -65,10 +68,21 @@ func simpleCommandWALCleanupInventory(dir string, current commitlog.CommandJourn
 	return segments, nil
 }
 
+func commandWALCleanupDescriptorExhausted(err error) bool {
+	// os.Open on Windows reports Win32 ERROR_TOO_MANY_OPEN_FILES directly.
+	const windowsTooManyOpenFiles syscall.Errno = 4
+	return errors.Is(err, syscall.EMFILE) || errors.Is(err, syscall.ENFILE) ||
+		(runtime.GOOS == "windows" && errors.Is(err, windowsTooManyOpenFiles))
+}
+
 func (db *DB) scanCommandWALCleanupProof(proof durableWALCleanupProofV1, scanSealedPrefix bool) ([]commandWALSegmentCleanupDecision, error) {
 	var beforeSegment func(string)
+	openPrefix := os.Open
 	if hooks := db.testCommandWALCleanupHooks; hooks != nil {
 		beforeSegment = hooks.beforeSegment
+		if hooks.openPrefix != nil {
+			openPrefix = hooks.openPrefix
+		}
 	}
 	scan := newCommandWALCleanupScan(proof.cleanupThrough, proof.durableWALLSN, db.walMaxSegmentBytes, beforeSegment)
 	if !scanSealedPrefix {
@@ -105,9 +119,18 @@ func (db *DB) scanCommandWALCleanupProof(proof durableWALCleanupProofV1, scanSea
 			return scan.scanLockedDirectory(db.dir)
 		}
 		for _, seg := range segments[:min(len(segments)-1, maxOpenClosedWALCleanupSegments)] {
-			file, err := os.Open(seg.path)
+			file, err := openPrefix(seg.path)
 			if err != nil {
-				return fmt.Errorf("open closed command WAL segment %s: %w", filepath.Base(seg.path), err)
+				if !commandWALCleanupDescriptorExhausted(err) {
+					return fmt.Errorf("open closed command WAL segment %s: %w", filepath.Base(seg.path), err)
+				}
+				// The locked scan opens uncovered files one at a time. Drop the
+				// staged handles and try it once with the same replay bounds.
+				if closeErr := closePrefix(); closeErr != nil {
+					return errors.Join(err, closeErr)
+				}
+				prefix = nil
+				return scan.scanLockedDirectory(db.dir)
 			}
 			info, statErr := file.Stat()
 			identity, identityErr := rootpublication.StableIdentityFromFile(file)
@@ -153,10 +176,9 @@ func (db *DB) scanCommandWALCleanupProof(proof durableWALCleanupProofV1, scanSea
 		}) {
 			// An unsupported inventory gets a single locked full scan. Keep
 			// the same captured root bounds. There is no retry loop.
-			if err := closePrefix(); err != nil {
+			if err := errors.Join(closePrefix(), closeCommandWALCleanupDecisions(scan.decisions)); err != nil {
 				return err
 			}
-			closeCommandWALCleanupDecisions(scan.decisions)
 			scan = newCommandWALCleanupScan(proof.cleanupThrough, proof.durableWALLSN, db.walMaxSegmentBytes, beforeSegment)
 			return scan.scanLockedDirectory(db.dir)
 		}

@@ -180,51 +180,60 @@ func testCommandWALCleanupClosedScanWrite(t *testing.T, dir, container string, c
 
 func testCommandWALCleanupScanOverlap(t *testing.T, database *DB, cleanup func(*DB) error, closedPath string, wantOverlap bool, op func() error) []string {
 	t.Helper()
-	reached, release := make(chan struct{}), make(chan struct{})
+	reached, release := make(chan bool, 1), make(chan struct{})
 	var scanned []string
 	database.testCommandWALCleanupHooks = &commandWALCleanupTestHooks{beforeSegment: func(path string) {
 		scanned = append(scanned, path)
 		if path == closedPath && len(scanned) == 1 {
-			close(reached)
+			// No writer has started yet; sample append exclusion at the scan.
+			reached <- database.commandJournal.AppendLockAvailableForTesting()
 			<-release
 		}
 	}}
-	defer func() { database.testCommandWALCleanupHooks = nil }()
+	wait := func(done <-chan error, operation string) error {
+		t.Helper()
+		select {
+		case err := <-done:
+			return err
+		case <-time.After(10 * time.Second):
+			t.Fatalf("%s did not complete after releasing the scan", operation)
+			return nil
+		}
+	}
 	cleanupDone := make(chan error, 1)
 	go func() { cleanupDone <- cleanup(database) }()
 	select {
-	case <-reached:
+	case available := <-reached:
+		if available != wantOverlap {
+			t.Errorf("append lock available at closed WAL scan=%t, want %t", available, wantOverlap)
+		}
 	case err := <-cleanupDone:
 		close(release)
 		t.Fatalf("cleanup returned before validating the closed file: %v", err)
-	case <-time.After(5 * time.Second):
+	case <-time.After(10 * time.Second):
 		close(release)
-		<-cleanupDone
-		t.Fatal("cleanup did not enter the closed scan")
+		t.Fatalf("cleanup did not enter the closed scan, eventual error %v", wait(cleanupDone, "cleanup"))
 	}
-	started, performed := make(chan struct{}), make(chan error, 1)
-	go func() {
-		close(started)
-		performed <- op()
-	}()
-	<-started
-	wait := 2 * time.Second
-	if !wantOverlap {
-		wait = 100 * time.Millisecond
-	}
+	performed := make(chan error, 1)
+	go func() { performed <- op() }()
 	var opErr error
-	var overlapped bool
-	select {
-	case opErr = <-performed:
-		overlapped = true
-	case <-time.After(wait):
+	completed := false
+	if wantOverlap {
+		select {
+		case opErr = <-performed:
+			completed = true
+		case <-time.After(10 * time.Second):
+			t.Error("independent writer did not finish while the closed WAL scan was paused")
+		}
 	}
 	close(release)
-	if !overlapped {
-		opErr = <-performed
+	if !completed {
+		opErr = wait(performed, "write")
 	}
-	if cleanupErr := <-cleanupDone; opErr != nil || cleanupErr != nil || overlapped != wantOverlap {
-		t.Fatalf("operation overlapped closed WAL scan=%t want %t, operation=%v cleanup=%v", overlapped, wantOverlap, opErr, cleanupErr)
+	cleanupErr := wait(cleanupDone, "cleanup")
+	database.testCommandWALCleanupHooks = nil
+	if opErr != nil || cleanupErr != nil {
+		t.Fatalf("write error=%v, cleanup error=%v", opErr, cleanupErr)
 	}
 	return scanned
 }

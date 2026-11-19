@@ -884,21 +884,21 @@ func (s *commandWALCleanupScan) finish(err error) ([]commandWALSegmentCleanupDec
 	if err == nil {
 		s.lineageErr = errors.Join(s.lineageErr, validateCommandWALCleanupReplayLineage(s.options.seenLSNs, s.options.seenLSNAppliedLSN, s.options.seenLSNMax))
 	}
+	if err == nil && s.hardErr == nil && s.lineageErr == nil {
+		return s.decisions, nil
+	}
+	s.hardErr = errors.Join(s.hardErr, closeCommandWALCleanupDecisions(s.decisions))
 	if s.hardErr != nil && errors.Is(err, commitlog.ErrCommandWALCleanupSnapshotStale) {
 		// A hard close or scan error still needs to reach checked callers.
 		err = nil
 	}
 	hardErr := errors.Join(err, s.hardErr)
-	if hardErr != nil || s.lineageErr != nil {
-		closeCommandWALCleanupDecisions(s.decisions)
-		if hardErr == nil {
-			return s.decisions, errors.Join(errDurableWALCleanupProofUnavailable, s.lineageErr)
-		}
-		// A missing or duplicate frame is an unavailable proof, but must
-		// never hide an unrelated I/O, namespace, or corruption error.
-		return s.decisions, errors.Join(hardErr, s.lineageErr)
+	if hardErr == nil {
+		return s.decisions, errors.Join(errDurableWALCleanupProofUnavailable, s.lineageErr)
 	}
-	return s.decisions, nil
+	// A missing or duplicate frame is an unavailable proof, but must
+	// never hide an unrelated I/O, namespace, or corruption error.
+	return s.decisions, errors.Join(hardErr, s.lineageErr)
 }
 
 // validateCommandWALCleanupReplayLineage proves that every LSN which the
@@ -1079,11 +1079,13 @@ func removeCoveredCommandWALSegmentsWithRegistry(decisions []commandWALSegmentCl
 	return decisions, nil
 }
 
-func closeCommandWALCleanupDecisions(decisions []commandWALSegmentCleanupDecision) {
+func closeCommandWALCleanupDecisions(decisions []commandWALSegmentCleanupDecision) error {
+	var err error
 	for i := range decisions {
 		if decisions[i].file != nil {
-			_ = decisions[i].file.Close()
+			err = errors.Join(err, decisions[i].file.Close())
 			decisions[i].file = nil
 		}
 	}
+	return err
 }
