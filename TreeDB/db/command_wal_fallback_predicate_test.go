@@ -15,7 +15,7 @@ import (
 )
 
 func TestCommandWALFallbackPredicateReleasesForegroundDuringSeal(t *testing.T) {
-	for _, mode := range []string{"wal-append-and-close", "changed-basis", "failed-seal"} {
+	for _, mode := range []string{"wal-append-and-close", "changed-basis", "failed-seal", "poisoned-suffix"} {
 		t.Run(mode, func(t *testing.T) {
 			testCommandWALFallbackPredicateSeal(t, mode)
 		})
@@ -153,6 +153,10 @@ func testCommandWALFallbackPredicateSeal(t *testing.T, mode string) {
 	key, value := []byte("following"), []byte("acknowledged")
 	foreground := make(chan error, 1)
 	next := db.CommandWALNextLSN()
+	if mode == "poisoned-suffix" {
+		db.testFailCommandWALFlush.Store(true)
+		defer db.testFailCommandWALFlush.Store(false)
+	}
 	if mode == "changed-basis" {
 		go func() { foreground <- db.Set(key, value) }()
 	} else {
@@ -162,7 +166,7 @@ func testCommandWALFallbackPredicateSeal(t *testing.T, mode string) {
 		}
 		go func() {
 			lsn, err := db.AppendRawKVBatchPayloadCommandWALTrustedWithMode(payload, RawKVCommandWALAppendRelaxed)
-			if err == nil && lsn != next {
+			if lsn != next {
 				t.Errorf("relaxed canonical append assigned LSN %d, want %d", lsn, next)
 			}
 			foreground <- err
@@ -170,7 +174,12 @@ func testCommandWALFallbackPredicateSeal(t *testing.T, mode string) {
 	}
 	select {
 	case err := <-foreground:
-		if err != nil {
+		if mode == "poisoned-suffix" {
+			if !errors.Is(err, errTestCommandWALFlushFailpoint) {
+				t.Fatalf("post-append error while seal is held: %v", err)
+			}
+			db.testFailCommandWALFlush.Store(false)
+		} else if err != nil {
 			t.Fatalf("foreground write while seal is held: %v", err)
 		}
 	case <-time.After(time.Second):
@@ -216,6 +225,10 @@ func testCommandWALFallbackPredicateSeal(t *testing.T, mode string) {
 		case "failed-seal":
 			if got.needs || !errors.Is(got.err, injected) {
 				t.Fatalf("physical seal failure lost: %+v", got)
+			}
+		case "poisoned-suffix":
+			if got.needs || !errors.Is(got.err, ErrRecoveryRequired) || coordinator.Stats().DurableCommitSeq < basis.CommitSeq {
+				t.Fatalf("suffix poison lost after the original root sealed: %+v", got)
 			}
 		default:
 			if !got.needs || got.err != nil {
