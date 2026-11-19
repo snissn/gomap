@@ -2071,7 +2071,10 @@ roots keep their own storage policy. Value pointers within system leaves keep
 the same format and durability dependencies.
 
 System publication, WAL replay, index vacuum, and value-log rewrite use the
-persisted system-leaf policy. Stores without the feature continue to append
+persisted system-leaf policy. Online leaf-generation packing also uses it
+when staging and publishing updated collection descriptors. Packing external
+collection leaves in a store with pager-backed system leaves therefore keeps
+those descriptors in `index.db`. Stores without the feature continue to append
 outer system leaves to `leaf_vlog` when outer-leaf mode is enabled. Vacuum
 flushes and registers those appends before resource capture. Older binaries
 reject the required feature before modifying an opted-in store.
