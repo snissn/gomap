@@ -46,7 +46,8 @@ func (c *cowCache) captureBackendBasis(provider backendSnapshotProvider) (*cowBa
 	var admitted *cowBackendBasis
 	snapshot, err := bounded.AcquireSnapshotWithAllocationAdmission(func(s backenddb.SnapshotAllocationSizes) error {
 		if s.ValueLog.MapHint > c.budget.Limits().MaxResources || s.ValueLog.FileCount > c.budget.Limits().MaxResources {
-			return memtable.ErrCOWCapacity
+			// Releasing a maintenance lease or reader cannot make this shape fit.
+			return fmt.Errorf("snapshot value-log shape exceeds COW resource limit: %w", memtable.ErrCOWCapacity)
 		}
 		var e error
 		admitted, e = admitCOWBackendBasis(c.maintenance, s)

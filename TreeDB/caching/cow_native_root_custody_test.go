@@ -97,10 +97,14 @@ func TestCOWNativeRootCustodyChecksOptInAndRefundsBeforeSeal(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer opening.Close()
+			detached := make(chan struct{})
 			started, finish := make(chan struct{}), make(chan struct{})
 			finishOnce := sync.OnceFunc(func() { close(finish) })
 			defer finishOnce()
-			ledger := &cowRootCustodyTestLedger{onFinish: func() error { close(started); <-finish; return nil }}
+			ledger := &cowRootCustodyTestLedger{
+				onDetach: func() { close(detached) },
+				onFinish: func() error { close(started); <-finish; return nil },
+			}
 			publication, intent, lease := prepareTestRootCustody(t, cache, backend, opening, tc.trusted, tc.optIn, ledger)
 			before := cache.cow.prefix.LogicalFrontiers()
 			result, err := backend.WriteNativePublication(publication, intent, false)
@@ -112,12 +116,18 @@ func TestCOWNativeRootCustodyChecksOptInAndRefundsBeforeSeal(t *testing.T) {
 			}
 			if !tc.trusted || !tc.optIn {
 				select {
-				case <-started:
+				case <-detached:
 					t.Fatal("fallback detached before its physical seal")
 				default:
 				}
 				if err := cache.Checkpoint(); err != nil {
 					t.Fatal(err)
+				}
+			} else {
+				select {
+				case <-detached:
+				default:
+					t.Fatal("root-covered ACK did not transfer cleanup custody")
 				}
 			}
 			waitRootCustodyTestEvent(t, started, "the original cleanup worker")

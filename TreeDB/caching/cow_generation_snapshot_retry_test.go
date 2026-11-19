@@ -3,6 +3,8 @@ package caching
 import (
 	"context"
 	"errors"
+	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -15,8 +17,97 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/lifecycle"
 )
+
+func TestCOWGenerationBasisRefreshDistinguishesFixedAndTemporaryLimits(t *testing.T) {
+	t.Run("fixed-value-log-shape", func(t *testing.T) {
+		limits := memtable.DefaultCOWLimits()
+		limits.MaxResources = 8
+		cache, db := nativeBridgeFixtureWithLimits(t, true, limits)
+		before, seq, nextLSN := cache.cow.prefix.LogicalFrontiers(), db.State().CommitSeq, db.CommandWALNextLSN()
+		valueDir := backenddb.ValueLogDirPath(db.Dir())
+		// Equivalent backend maintenance can change the retained file set
+		// without advancing either the captured roots or the WAL frontier.
+		err := cache.RunBackendMaintenance(func() error {
+			for i := 0; i <= limits.MaxResources; i++ {
+				const lane = 0
+				seq := uint32(100 + i)
+				id, err := valuelog.EncodeFileID(lane, seq)
+				if err != nil {
+					return err
+				}
+				path := filepath.Join(valueDir, fmt.Sprintf("value-l%d-%06d.log", lane, seq))
+				writer, err := valuelog.NewWriter(path, id)
+				if err != nil {
+					return err
+				}
+				_, err = writer.Append(0, nil, uint64(i+1), []byte("retained"))
+				if err = errors.Join(err, writer.Close()); err != nil {
+					return err
+				}
+				if err := db.RegisterValueLogSegment(path, id); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		if !errors.Is(err, memtable.ErrCOWCapacity) || !cache.cow.refreshRequired.Load() {
+			t.Fatalf("backend maintenance did not leave the original basis pending: %v", err)
+		}
+		inspect := errors.New("inspected value-log shape")
+		var fileCount int
+		snapshot, err := db.AcquireSnapshotWithAllocationAdmission(func(s backenddb.SnapshotAllocationSizes) error {
+			fileCount = s.ValueLog.FileCount
+			return inspect
+		})
+		if snapshot != nil || !errors.Is(err, inspect) || fileCount <= limits.MaxResources {
+			if snapshot != nil {
+				t.Error(snapshot.Close())
+			}
+			t.Fatalf("actual snapshot admitted shape: snapshot=%p err=%v files=%d limit=%d", snapshot, err, fileCount, limits.MaxResources)
+		}
+		var reported error
+		cache.notifyError = func(err error) { reported = err }
+		if retry, allocation := cache.maintainCOWGenerationPressure(); retry || allocation != nil {
+			t.Fatalf("generation worker retried a fixed value-log shape: files=%d limit=%d allocation=%v", fileCount, limits.MaxResources, allocation)
+		}
+		if !errors.Is(reported, memtable.ErrCOWCapacity) || !strings.Contains(reported.Error(), "snapshot value-log shape exceeds COW resource limit") {
+			t.Fatalf("worker lost the fixed resource failure: %v", reported)
+		}
+		if after := cache.cow.prefix.LogicalFrontiers(); after != before || db.State().CommitSeq != seq || db.CommandWALNextLSN() != nextLSN {
+			t.Fatalf("fixed shape refusal changed publication authority: %+v -> %+v", before, after)
+		}
+		if err := cache.Close(); !errors.Is(err, reported) {
+			t.Fatalf("checked Close lost the original fixed resource error: %v", err)
+		}
+	})
+
+	t.Run("temporarily-held-maintenance-bytes", func(t *testing.T) {
+		cache, _ := nativeBridgeFixture(t, true)
+		budget := cache.cow.maintenance
+		overhead := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
+		lease, err := budget.AcquireExternal(budget.Limits().MaxTotalBytes - budget.Stats().TotalBytes - overhead)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer lease.Close()
+		if err := cache.RunBackendMaintenance(nil); !errors.Is(err, memtable.ErrCOWCapacity) || !cache.cow.refreshRequired.Load() {
+			t.Fatalf("backend maintenance did not leave a temporarily refused basis: %v", err)
+		}
+		if retry, allocation := cache.maintainCOWGenerationPressure(); !retry || allocation != nil {
+			t.Fatalf("generation worker lost the temporary retry: retry=%v allocation=%v", retry, allocation)
+		}
+		lease.Close()
+		if retry, allocation := cache.maintainCOWGenerationPressure(); retry || allocation != nil || cache.cow.refreshRequired.Load() {
+			t.Fatalf("basis did not refresh after releasing the original bytes: retry=%v allocation=%v", retry, allocation)
+		}
+		if err := cache.Close(); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
 
 type generationSnapshotTestBackend struct {
 	*backenddb.DB
@@ -278,6 +369,12 @@ func TestCOWGenerationWorkerRetriesFinalSnapshotAdmission(t *testing.T) {
 					case <-ctx.Done():
 						t.Fatal("initial capacity retry did not run")
 					}
+					// WriteSync reports before the worker unwinds and samples
+					// maintenance usage. The same flush fence covers that sample.
+					if err := lockCheckpointMutexContext(ctx, &cache.flushMu); err != nil {
+						t.Fatalf("initial capacity retry did not finish: %v", err)
+					}
+					cache.flushMu.Unlock()
 					quiet := time.NewTimer(2 * cowGenerationPressureRetryDelay)
 					defer quiet.Stop()
 					select {

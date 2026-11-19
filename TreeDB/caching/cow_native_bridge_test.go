@@ -20,6 +20,11 @@ import (
 
 func nativeBridgeFixture(t *testing.T, wal bool) (*DB, *backenddb.DB) {
 	t.Helper()
+	return nativeBridgeFixtureWithLimits(t, wal, memtable.COWLimits{})
+}
+
+func nativeBridgeFixtureWithLimits(t *testing.T, wal bool, limits memtable.COWLimits) (*DB, *backenddb.DB) {
+	t.Helper()
 	dir := t.TempDir()
 	durability := backenddb.DurabilityWALOffRelaxed
 	if wal {
@@ -33,7 +38,7 @@ func nativeBridgeFixture(t *testing.T, wal bool) (*DB, *backenddb.DB) {
 	if err := backend.BindPrivateCOWOwner(owner); err != nil {
 		t.Fatal(err)
 	}
-	cache, err := Open(dir, backend, Options{TransactionOwner: owner, MemtableMode: "cow_btree", DisableWAL: !wal, AllowUnsafe: true, ExternalCommandWAL: wal, MemtableShards: 2, FlushThreshold: 1 << 30, ValueLogPointerThreshold: 1, ValueLogCompression: uint8(vlogCompressionOff)})
+	cache, err := Open(dir, backend, Options{TransactionOwner: owner, MemtableMode: "cow_btree", COWMemtableLimits: limits, DisableWAL: !wal, AllowUnsafe: true, ExternalCommandWAL: wal, MemtableShards: 2, FlushThreshold: 1 << 30, ValueLogPointerThreshold: 1, ValueLogCompression: uint8(vlogCompressionOff)})
 	if err != nil {
 		_ = backend.Close()
 		t.Fatal(err)
