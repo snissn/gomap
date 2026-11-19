@@ -2,6 +2,7 @@ package treedb
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"runtime"
 	"testing"
@@ -154,14 +155,47 @@ func TestCOWSharedValueLogWritersSurviveRepeatedMaintenance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Block the second successor so the first writer completes its rotation
+	// before an actual storage error leaves the remaining writers behind.
+	firstID, err := valuelog.EncodeFileID(0, externalSeq+1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blockedID, err := valuelog.EncodeFileID(0, externalSeq+2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blockedPath := valuelog.SegmentPath(path, blockedID)
+	if err := os.Mkdir(blockedPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	_, err = database.ValueLogGC(t.Context(), ValueLogGCOptions{Mode: ValueLogGCModeOnline, DryRun: true})
+	var pathErr *os.PathError
+	if !errors.As(err, &pathErr) || pathErr.Path != blockedPath {
+		t.Fatalf("GC did not reach the blocked successor: %v", err)
+	}
+	firstPath := valuelog.SegmentPath(path, firstID)
+	first, err := os.Stat(firstPath)
+	if err != nil || !first.Mode().IsRegular() {
+		t.Fatalf("first writer did not install its successor: %v %v", first, err)
+	}
+	oldPaths[firstID] = first
+	if err := os.Remove(blockedPath); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := database.ValueLogGC(t.Context(), ValueLogGCOptions{Mode: ValueLogGCModeOnline, DryRun: true}); err != nil {
 		t.Fatal(err)
 	}
 	after := appendValues()
+	var usedFirst bool
 	for i, ptr := range after {
+		usedFirst = usedFirst || ptr.FileID == firstID
 		if lane, seq := valuelog.DecodeFileID(ptr.FileID); lane != 0 || seq <= externalSeq {
-			t.Fatalf("writer %d did not move past unreserved sequence %d: lane=%d seq=%d", i, externalSeq, lane, seq)
+			t.Fatalf("writer %d did not resume its fence past unreserved sequence %d: lane=%d seq=%d", i, externalSeq, lane, seq)
 		}
+	}
+	if !usedFirst {
+		t.Fatal("fence retry rotated the already advanced writer")
 	}
 	runMaintenance(fileCount())
 	checkPaths()

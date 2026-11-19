@@ -128,6 +128,20 @@ func (db *DB) advanceNativeRootValueLogAppendSeqAtLeast(seq int) {
 	}
 }
 
+// A sequence beyond the reservation floor fences the group. Keep that external
+// floor for the lifetime of the cache so a partial rotation can be retried after
+// the reservation counter advances. Writers already past the fence are skipped.
+func (db *DB) observeNativeRootValueLogExternalSeq(seq int) int {
+	if uint64(seq) > uint64(db.nativeRootValueLogAppendSeq.Load()) {
+		for floor := db.nativeRootValueLogExternalSeq.Load(); int64(seq) > floor; floor = db.nativeRootValueLogExternalSeq.Load() {
+			if db.nativeRootValueLogExternalSeq.CompareAndSwap(floor, int64(seq)) {
+				break
+			}
+		}
+	}
+	return int(db.nativeRootValueLogExternalSeq.Load())
+}
+
 func (db *DB) nextNativeRootValueLogAppendSeq() (int, error) {
 	if db == nil || !db.nativeRootValueLogAppendShared || len(db.nativeRootValueLogAppendLanes) == 0 {
 		return 0, errWALUnavailable

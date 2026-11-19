@@ -552,9 +552,10 @@ leaf lane each reserve unique sequences from their own allocator before creating
 files. Higher sequences already reserved by the lane do not rotate its peers.
 Maintained backend leaf writers also reserve through the leaf allocator. An
 unreserved external advance still fences the affected lane and rotates its
-older writers past that sequence. Explicit compaction retains its stronger
-handoff. These fences prevent filename collisions without creating empty
-successor segments after no-op GC.
+older writers past that sequence. Shared value writers retain this external
+floor so a later reconciliation can finish a partially completed fence.
+Explicit compaction retains its stronger handoff. These fences prevent filename
+collisions without creating empty successor segments after no-op GC.
 
 ### 5.1 Periodic whole-generation leaf reclamation
 

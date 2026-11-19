@@ -8174,11 +8174,10 @@ func (db *DB) reconcileSplitValueLogWritersAfterBackendMaintenanceAdmitted(admit
 	}
 	if db.nativeRootValueLogAppendShared && len(db.nativeRootValueLogAppendLanes) > 0 {
 		laneID := db.nativeRootValueLogAppendLanes[0].id
-		observedMaxSeq := maxSeqByLane[laneID]
-		// Peers reserve from the same high-water mark before creating files.
-		// Only an unreserved external advance needs to fence the group.
-		if uint64(observedMaxSeq) > uint64(db.nativeRootValueLogAppendSeq.Load()) {
-			db.advanceNativeRootValueLogAppendSeqAtLeast(observedMaxSeq)
+		externalSeq := db.observeNativeRootValueLogExternalSeq(maxSeqByLane[laneID])
+		if externalSeq > 0 {
+			db.advanceNativeRootValueLogAppendSeqAtLeast(externalSeq)
+			maxSeqByLane[laneID] = externalSeq
 		} else {
 			delete(maxSeqByLane, laneID)
 		}
@@ -10247,6 +10246,9 @@ type DB struct {
 	testAgeBlockedStateReadHook         func()
 	testStageConfirmStateReadHook       func()
 	testForegroundMaintenancePollCh     <-chan time.Time
+
+	// Reconciliation uses this independently of the writer reservation counter.
+	nativeRootValueLogExternalSeq atomic.Int64
 }
 
 const (
