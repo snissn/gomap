@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 	"unsafe"
 
@@ -177,8 +178,8 @@ func TestCOWGenerationWorkerRetriesFinalSnapshotAdmission(t *testing.T) {
 		{name: "snapshot-allocation-pressure-concurrent-close", memory: true, closeTogether: true},
 		{name: "capacity-outside-snapshot-receipt", requirePoison: true},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if tc.refundDuringConfirmation {
+		run := func(t *testing.T) {
+			if tc.memory && !tc.closeTogether {
 				// Only the generation-pressure worker may rescue this cut.
 				t.Setenv(envDisableVlogGenerationLoop, "1")
 			}
@@ -535,6 +536,14 @@ func TestCOWGenerationWorkerRetriesFinalSnapshotAdmission(t *testing.T) {
 			if token, ok := reopened.StateToken(); !ok || token.AppliedCommandLSN != before.C || reopened.CommandWALNextLSN() != nextLSN {
 				t.Fatalf("reopened WAL coverage = %+v, next = %d, want applied %d and next %d", token, reopened.CommandWALNextLSN(), before.C, nextLSN)
 			}
-		})
+		}
+		if tc.memory && !tc.closeTogether && !tc.refundDuringConfirmation {
+			// Real worker timers share this clock. Once the quiet check wakes
+			// the test, time cannot advance to a later quiet retry before
+			// the runnable test has transferred the equal-charge lease.
+			t.Run(tc.name, func(t *testing.T) { synctest.Test(t, run) })
+		} else {
+			t.Run(tc.name, run)
+		}
 	}
 }
