@@ -496,6 +496,9 @@ func TestFixedPeerVectorInitializationRootIdentityV1(t *testing.T) {
 
 func TestFixedPeerVectorInitializationRealRaftCreateIngestReopenV1(t *testing.T) {
 	configs := initializationTestConfigsV1(t)
+	for i := range configs {
+		configs[i].RequestTimeout = fixedPeerPositiveCompletionRequestTimeoutV1
+	}
 	nodes := make([]*FixedPeerTCPRuntimeV1, len(configs))
 	reserved := make([]map[string]net.Listener, len(configs))
 	open := func() {
