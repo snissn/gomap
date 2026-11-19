@@ -564,6 +564,8 @@ type commandWALSegmentCleanupDecision struct {
 	lane            int
 	seq             uint64
 	generationKnown bool
+
+	sealedStreamInfo os.FileInfo
 }
 
 type commandWALSegmentScanResult struct {
@@ -1029,9 +1031,10 @@ func removeCoveredCommandWALSegmentsWithRegistry(decisions []commandWALSegmentCl
 			return decisions, errors.Join(ErrRecoveryRequired, fmt.Errorf("revalidate command WAL cleanup target %s: %w", filepath.Base(decision.Path), openErr))
 		}
 		currentIdentity, identityErr := rootpublication.StableIdentityFromFile(current)
+		extentErr := revalidateSealedCommandWALStream(decision, current)
 		closeErr := current.Close()
-		if identityErr != nil || closeErr != nil || !rootpublication.SamePhysicalIdentity(decision.identity, currentIdentity) {
-			revalidateErr := errors.Join(identityErr, closeErr)
+		if identityErr != nil || extentErr != nil || closeErr != nil || !rootpublication.SamePhysicalIdentity(decision.identity, currentIdentity) {
+			revalidateErr := errors.Join(identityErr, extentErr, closeErr)
 			if revalidateErr == nil {
 				revalidateErr = fmt.Errorf("command WAL cleanup target identity changed: %s", filepath.Base(decision.Path))
 			}
@@ -1083,6 +1086,24 @@ func removeCoveredCommandWALSegmentsWithRegistry(decisions []commandWALSegmentCl
 		}
 	}
 	return decisions, nil
+}
+
+func revalidateSealedCommandWALStream(decision *commandWALSegmentCleanupDecision, file *os.File) error {
+	if decision.sealedStreamInfo == nil {
+		return nil
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	linked, err := os.Lstat(decision.Path)
+	if err != nil {
+		return err
+	}
+	if !sameSealedWALStreamExtent(decision.sealedStreamInfo, info) || !sameSealedWALStreamExtent(info, linked) {
+		return fmt.Errorf("closed command WAL stream changed: %s", filepath.Base(decision.Path))
+	}
+	return nil
 }
 
 func closeCommandWALCleanupDecisions(decisions []commandWALSegmentCleanupDecision) error {

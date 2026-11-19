@@ -36,6 +36,7 @@ type durableWALCleanupProofV1 struct {
 	journalOwner   *commitlog.CommandJournal
 	journal        commitlog.CommandJournalCleanupSnapshot
 	segments       []commandWALSegmentCleanupDecision
+	streamCut      *commandWALStreamCleanupCut
 }
 
 func (db *DB) captureDurableWALCleanupProofV1() (durableWALCleanupProofV1, error) {

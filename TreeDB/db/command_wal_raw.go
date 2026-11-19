@@ -970,22 +970,33 @@ func (db *DB) cleanupCommandWALCoveredSegmentsV1(scanSealedPrefix bool) (retErr 
 	// containers to be reclaimed. Scan the complete retained replay lineage
 	// and apply the same active-generation, identity and pin gates below.
 	scanStart := time.Now()
-	decisions, err := db.scanCommandWALCleanupProof(proof, scanSealedPrefix)
+	decisions, err := db.scanCommandWALCleanupProof(&proof, scanSealedPrefix)
 	proof.segments = decisions
 	db.commandWALCleanupScans.Add(1)
 	if scanNs := commandWALDurationNs(time.Since(scanStart)); scanNs > 0 {
 		db.commandWALCleanupScanNs.Add(scanNs)
 	}
-	defer closeCommandWALCleanupDecisions(decisions)
+	if proof.streamCut == nil {
+		defer closeCommandWALCleanupDecisions(decisions)
+	}
 	if hooks := db.testCommandWALCleanupHooks; err == nil && hooks != nil && hooks.afterScan != nil {
 		hooks.afterScan()
 	}
 	if err == nil {
 		db.durablePublishMu.Lock()
 		if err = db.revalidateDurableWALCleanupProofV1(proof); err == nil {
-			err = proof.journalOwner.WithCleanupSnapshot(proof.journal, func(registry *rootpublication.IdentityPinRegistry, current commitlog.CommandJournalCleanupSnapshot) (bool, error) {
+			snapshot := proof.journal
+			if cut := proof.streamCut; cut != nil {
+				snapshot = cut.journal
+			}
+			err = proof.journalOwner.WithCleanupSnapshot(snapshot, func(registry *rootpublication.IdentityPinRegistry, current commitlog.CommandJournalCleanupSnapshot) (bool, error) {
 				if poisonErr := db.commandWALPoisonedError(); poisonErr != nil {
 					return false, poisonErr
+				}
+				if cut := proof.streamCut; cut != nil {
+					if cutErr := errors.Join(cut.validateLinks(resolveStorageLayout(db.dir).walDir, current), cut.closeUnkept()); cutErr != nil {
+						return false, cutErr
+					}
 				}
 				if retainErr := retainCommandWALCleanupAuthoritySegments(proof.segments, proof.journal, current); retainErr != nil {
 					return false, retainErr
@@ -1001,6 +1012,15 @@ func (db *DB) cleanupCommandWALCoveredSegmentsV1(scanSealedPrefix bool) (retErr 
 			})
 		}
 		db.durablePublishMu.Unlock()
+	}
+	if cut := proof.streamCut; cut != nil {
+		if closeErr := errors.Join(cut.closeUnkept(), closeCommandWALCleanupDecisions(decisions)); closeErr != nil {
+			if errors.Is(err, errDurableWALCleanupProofStale) || errors.Is(err, commitlog.ErrCommandWALCleanupSnapshotStale) ||
+				errors.Is(err, errDurableWALCleanupProofUnavailable) {
+				err = nil
+			}
+			err = errors.Join(err, closeErr)
+		}
 	}
 	decisions = proof.segments
 	removed := uint64(0)

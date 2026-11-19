@@ -122,7 +122,16 @@ Ordinary cleanup is serialized per DB and follows this order:
    Stream cleanup through `CleanupCommandWALCoveredPrefix` reuses a bounded
    read-ahead buffer for closed stream segments. Frame validation and WAL
    offsets use the bytes consumed by the decoder, including on short reads.
-   Active streams and fixed containers keep their original readers;
+   On a canonical ext4 stream inventory with up to eight sealed predecessors
+   and exactly one sealed file of at least 96 MiB, deferred cleanup can use
+   this path when the live active stream is at most 1 MiB. Pin those exact
+   files and validate the live active stream under append exclusion. Validate
+   the captured sealed streams once through the pinned files after releasing
+   exclusion. The original decoder and replay
+   range checks apply to both parts of the same captured cut. The active file
+   may advance afterward and remains ineligible for removal. Other inventories
+   retain the locked stream scan. Active streams and fixed containers keep
+   their original readers;
 5. reacquire the durable-publication lock, freshly validate current root
    runtime, and require its minimum cleanup frontier and durable WAL LSN not to
    have regressed below the captured authority;
@@ -130,7 +139,10 @@ Ordinary cleanup is serialized per DB and follows this order:
    rotation progress, marking the captured and current active identities plus
    every captured-lane generation at or above the captured active sequence,
    acquiring all remaining candidate identity/namespace delete leases, and
-   revalidating every pathname against its captured physical identity;
+   revalidating every pathname against its captured physical identity. For a
+   detached stream cut, recheck the canonical inventory and every captured
+   sealed identity and extent before the first unlink, as well as the captured active identity and its
+   minimum size. Revalidate each detached sealed extent again at its unlink;
 7. unlink only the eligible exact identities;
 8. advance the in-process journal namespace generation and cleanup epoch, and
    record command-WAL namespace-sync debt, as soon as any unlink succeeds;
