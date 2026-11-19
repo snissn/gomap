@@ -110,7 +110,15 @@ Ordinary cleanup is serialized per DB and follows this order:
 3. capture the journal namespace snapshot and reject pending rotation or
    successor ownership;
 4. scan every typed command segment completely and bind the exact decisions to
-   the proof;
+   the proof. When deferred automatic cleanup runs after checkpoint writer
+   admission is released, a canonical single-lane inventory with an active
+   fixed container and at least two sealed fixed predecessors can release
+   append exclusion while scanning a bounded prefix of those predecessors
+   through retained handles. Reacquire append exclusion to verify the prefix
+   links and identities against the current inventory and finish scanning the
+   suffix. Synchronous checkpoint, explicit and close cleanup, small
+   inventories, stream journals, and unsupported layouts keep the complete
+   scan under append exclusion;
 5. reacquire the durable-publication lock, freshly validate current root
    runtime, and require its minimum cleanup frontier and durable WAL LSN not to
    have regressed below the captured authority;

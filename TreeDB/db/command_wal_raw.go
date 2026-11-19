@@ -835,7 +835,7 @@ func (db *DB) CleanupCommandWALCoveredSegments(_ bool) (retErr error) {
 	if db.closing.Load() {
 		return ErrClosed
 	}
-	return db.cleanupCommandWALCoveredSegmentsV1()
+	return db.cleanupCommandWALCoveredSegmentsV1(false)
 }
 
 // CleanupCommandWALCoveredSegmentsAtCheckpoint performs opportunistic cleanup
@@ -864,7 +864,7 @@ func (db *DB) CleanupCommandWALCoveredPrefix() (bool, error) {
 	if db.closing.Load() {
 		return false, ErrClosed
 	}
-	err := db.cleanupCommandWALCoveredSegmentsV1()
+	err := db.cleanupCommandWALCoveredSegmentsV1(true)
 	if errors.Is(err, errDurableWALCleanupProofUnavailable) ||
 		errors.Is(err, errDurableWALCleanupProofStale) ||
 		errors.Is(err, commitlog.ErrCommandWALCleanupSnapshotStale) {
@@ -881,13 +881,13 @@ func (db *DB) CleanupCommandWALCoveredPrefix() (bool, error) {
 func (db *DB) cleanupCommandWALCoveredSegmentsAtCheckpointV1(maintenanceAlreadyHeld bool) error {
 	var err error
 	if maintenanceAlreadyHeld {
-		err = db.cleanupCommandWALCoveredSegmentsV1()
+		err = db.cleanupCommandWALCoveredSegmentsV1(false)
 	} else {
 		if !db.maintenanceMu.TryLock() {
 			return nil
 		}
 		defer db.maintenanceMu.Unlock()
-		err = db.cleanupCommandWALCoveredSegmentsV1()
+		err = db.cleanupCommandWALCoveredSegmentsV1(false)
 	}
 	return normalizeCommandWALCheckpointCleanupError(err)
 }
@@ -927,7 +927,7 @@ func retainCommandWALCleanupAuthoritySegments(decisions []commandWALSegmentClean
 // DB.Close after writers and root publication have drained but before the
 // journal owner is detached. External callers must use the admission-checked
 // CleanupCommandWALCoveredSegments method above.
-func (db *DB) cleanupCommandWALCoveredSegmentsV1() (retErr error) {
+func (db *DB) cleanupCommandWALCoveredSegmentsV1(scanSealedPrefix bool) (retErr error) {
 	db.commandWALCleanupMu.Lock()
 	defer db.commandWALCleanupMu.Unlock()
 	cleanupStart := time.Now()
@@ -967,31 +967,15 @@ func (db *DB) cleanupCommandWALCoveredSegmentsV1() (retErr error) {
 	// containers to be reclaimed. Scan the complete retained replay lineage
 	// and apply the same active-generation, identity and pin gates below.
 	scanStart := time.Now()
-	var decisions []commandWALSegmentCleanupDecision
-	// Listing and reader construction both validate fixed-container reserve.
-	// Retain append exclusion through the complete scan so they inspect one
-	// immutable physical prefix. Release it before durablePublishMu below.
-	err = proof.journalOwner.WithCleanupScan(proof.journal, func() error {
-		var scanErr error
-		decisions, scanErr = scanCommandWALSegmentsForCleanupProof(db.dir, proof.cleanupThrough, proof.durableWALLSN, db.walMaxSegmentBytes)
-		return scanErr
-	})
+	decisions, err := db.scanCommandWALCleanupProof(proof, scanSealedPrefix)
 	proof.segments = decisions
 	db.commandWALCleanupScans.Add(1)
 	if scanNs := commandWALDurationNs(time.Since(scanStart)); scanNs > 0 {
 		db.commandWALCleanupScanNs.Add(scanNs)
 	}
 	defer closeCommandWALCleanupDecisions(decisions)
-	if errors.Is(err, ErrCommandWALAppliedLSNNonContig) || errors.Is(err, commitlog.ErrCommandWALDuplicateLSN) {
-		// A missing or duplicate frame in the retained replay interval means the
-		// captured roots/WAL lineage cannot authorize deletion. Nothing has been
-		// unlinked yet, so classify this as unavailable proof: explicit cleanup
-		// still receives the exact lineage error, while checkpoint/close retain
-		// the namespace and allow a later recovery baseline to converge.
-		err = errors.Join(errDurableWALCleanupProofUnavailable, err)
-	}
-	if err == nil && db.testCommandWALCleanupAfterScanHook != nil {
-		db.testCommandWALCleanupAfterScanHook()
+	if hooks := db.testCommandWALCleanupHooks; err == nil && hooks != nil && hooks.afterScan != nil {
+		hooks.afterScan()
 	}
 	if err == nil {
 		db.durablePublishMu.Lock()
