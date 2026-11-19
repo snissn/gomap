@@ -148,6 +148,9 @@ type NativeSemanticCustody interface {
 type NativePreparedPublication struct {
 	// Selected composite raw members require the final inline Set representation.
 	RequireInlineCompositeRaw bool
+	// ObservePointConflict is the 1-based position of the one original row
+	// dependency eligible for ordinary singleton reconstruction. Zero opts out.
+	ObservePointConflict uint8
 	// ReturnCustodyOnInstall is an opt-in from the trusted structured BSON
 	// producer that its complete cut owns every effect and its custody can
 	// detach a preborn record without waiting or calling user code. Other
@@ -192,6 +195,7 @@ type NativeConditionalTxn interface {
 	Set([]byte, []byte) error
 	NativeRawEntries() []batch.Entry
 	NativeSemanticCapture
+	CheckNativeRetryCatalog(start uint64, name []byte) error
 	CommitNative(*NativePreparedPublication, *CommandWALIntent, bool) (NativePublicationResult, error)
 }
 
@@ -252,8 +256,11 @@ type NativeSemanticCapture interface {
 // the original descriptor custody even when a later assigned phase fails.
 type NativePublicationResult struct {
 	Consumed, Assigned, Uncertain, LogicalInstalled, WALCompleted, WALStable bool
-	AssignedLSN, LogicalSequence                                             uint64
-	Seal                                                                     rootpublication.PhysicalSealReceipt
+	// OnlyPointConflict reports original journal evidence, independently of
+	// assignment and cleanup. It does not by itself authorize reconstruction.
+	OnlyPointConflict            bool
+	AssignedLSN, LogicalSequence uint64
+	Seal                         rootpublication.PhysicalSealReceipt
 }
 
 // NativeColumnStoreCompaction carries only an operation's scalar completion.

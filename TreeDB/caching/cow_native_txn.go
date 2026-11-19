@@ -7,6 +7,7 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/txnhistory"
 )
 
 // nativeConditionalTxn adapts only method names; its sole opening owner is P1.
@@ -267,6 +268,30 @@ func (tx *nativeConditionalTxn) NativeMaintenanceAllocator() backenddb.NativeSem
 	}
 	return tx.db.cow.maintenance
 }
+
+// CheckNativeRetryCatalog proves continuity through this new opening and up
+// to the current accepted cut. The new opening owns its own commit check.
+func (tx *nativeConditionalTxn) CheckNativeRetryCatalog(start uint64, name []byte) error {
+	if tx == nil || tx.ConditionalTxn == nil {
+		return backenddb.ErrConditionalTxnClosed
+	}
+	if err := tx.ensureOpen(); err != nil {
+		return err
+	}
+	if err := tx.db.beginDirectWrite(); err != nil {
+		return err
+	}
+	defer tx.db.writeMu.RUnlock()
+	c := tx.db.cow
+	c.writerMu.Lock()
+	defer c.writerMu.Unlock()
+	if c.journal == nil || start > tx.startSeq || c.journal.Check(start) != nil ||
+		c.journal.PointChangedIn(start, txnhistory.Namespace{Kind: txnhistory.CatalogNamespace}, name) {
+		return backenddb.ErrConcurrentModification
+	}
+	return nil
+}
+
 func (tx *nativeConditionalTxn) CommitNative(native *backenddb.NativePreparedPublication, intent *backenddb.CommandWALIntent, sync bool) (result backenddb.NativePublicationResult, err error) {
 	if tx == nil || tx.ConditionalTxn == nil {
 		return result, backenddb.ErrConditionalTxnClosed
@@ -278,7 +303,10 @@ func (tx *nativeConditionalTxn) CommitNative(native *backenddb.NativePreparedPub
 		tx.db.observeConditionalTxnCommit(len(tx.reads), err)
 		// Queue private native edges/custody before withdrawing the ORIGINAL
 		// transaction opening, even when it differs from the attach-time cut.
-		tx.batch.releaseNativePublication()
+		releaseErr := tx.batch.releaseNativePublication()
+		if result.OnlyPointConflict {
+			err = joinCOWCleanupError(err, releaseErr)
+		}
 		err = joinCOWCleanupError(err, tx.Close())
 	}()
 	// The consumer cannot replace the original opening sequence/cut. Reprepare
@@ -298,10 +326,11 @@ func (tx *nativeConditionalTxn) Close() error {
 	core, lease := tx.ConditionalTxn, tx.lease
 	tx.ConditionalTxn, tx.lease = nil, nil
 	// Enqueue native private edges before the original opening cut ends.
+	var releaseErr error
 	if core.batch != nil {
-		core.batch.releaseNativePublication()
+		releaseErr = core.batch.releaseNativePublication()
 	}
-	err := core.Close()
+	err := joinCOWCleanupError(core.Close(), releaseErr)
 	core = nil
 	lease.Close()
 	return err

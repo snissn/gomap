@@ -541,6 +541,10 @@ func (j *History) PointChangedIn(start uint64, namespace Namespace, key []byte) 
 	if j.index[j.slotIn(namespace, string(key))].seq > start {
 		return true
 	}
+	return j.pointCoveredByRange(start, namespace, key)
+}
+
+func (j *History) pointCoveredByRange(start uint64, namespace Namespace, key []byte) bool {
 	if j.rangeSeq <= start {
 		return false
 	}

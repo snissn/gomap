@@ -57,18 +57,7 @@ var bsonSetBatchDocumentIDHashSeed = maphash.MakeSeed()
 // Flush/Close later publishes the covered roots.
 func (c *Collection) UpdateBSONSet(documentID []byte, fields []BSONSetField) (bool, bool, error) {
 	if c != nil && c.nativeJSON != nil {
-		results, _, err := c.nativeUpdateBatchMode(nil, updateBatchModeAny, []BSONSetUpdateBatchItem{{DocumentID: documentID, Fields: fields}})
-		if err != nil {
-			var item *UpdateBatchItemError
-			if errors.As(err, &item) && item.Index == 0 {
-				err = item.Err
-			}
-			return false, false, err
-		}
-		if len(results) != 1 {
-			return false, false, fmt.Errorf("collections: BSON $set result count %d for single update", len(results))
-		}
-		return results[0].Matched, results[0].Modified, nil
+		return c.nativeUpdateBSONSet(documentID, fields)
 	}
 	if err := validateCollectionUpdateDocumentInput(c, documentID); err != nil {
 		return false, false, err

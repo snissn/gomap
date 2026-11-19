@@ -110,6 +110,9 @@ func (b *Batch) PrepareExternalCommandWALPublication() (err error) {
 					return validateErr
 				}
 				if changed {
+					if i := int(plan.ObservePointConflict) - 1; i >= 0 && i < len(plan.Dependencies) {
+						b.cowState.receipt.OnlyPointConflict = c.journal.OnlyPointChanged(plan.StartSequence, plan.Dependencies[i], plan.Dependencies, plan.Effects)
+					}
 					return backenddb.ErrConcurrentModification
 				}
 			}
@@ -702,6 +705,7 @@ func (b *Batch) EntriesForTxn() []batch.Entry { return b.entries }
 type COWPublicationReceipt struct {
 	AssignedLSN, LogicalSeq                                        uint64
 	Assigned, Uncertain, LogicalInstalled, WALCompleted, WALStable bool
+	OnlyPointConflict                                              bool
 	SealedLogicalSeq                                               uint64
 }
 

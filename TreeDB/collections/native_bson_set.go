@@ -2,12 +2,45 @@ package collections
 
 import (
 	"errors"
+	"fmt"
 	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
+
+type nativeBSONSetRetry struct {
+	id                 []byte
+	incarnation, start uint64
+	rowConflict        bool
+}
+
+func (c *Collection) nativeUpdateBSONSet(id []byte, fields []BSONSetField) (bool, bool, error) {
+	items := [...]BSONSetUpdateBatchItem{{DocumentID: id, Fields: fields}}
+	retry := nativeBSONSetRetry{id: id}
+	var lastErr error
+	for attempt := range maxCollectionMutationRetries {
+		results, _, err := c.nativeUpdateBatchModeObserved(nil, updateBatchModeAny, items[:], &retry)
+		if retry.rowConflict {
+			lastErr = err
+			waitBeforeCollectionMutationRetry(attempt)
+			continue
+		}
+		if err != nil {
+			var item *UpdateBatchItemError
+			if errors.As(err, &item) && item.Index == 0 {
+				err = item.Err
+			}
+			return false, false, err
+		}
+		if len(results) != 1 {
+			return false, false, fmt.Errorf("collections: BSON $set result count %d for single update", len(results))
+		}
+		return results[0].Matched, results[0].Modified, nil
+	}
+	return false, false, collectionMutationRetryExhausted(lastErr)
+}
 
 func nativeBSONSetMeta(meta *CollectionMeta) bool {
 	return meta.Options.ColumnStore == nil && normalizedDocumentFormat(meta.Options.DocumentFormat) == DocumentFormatBSON
