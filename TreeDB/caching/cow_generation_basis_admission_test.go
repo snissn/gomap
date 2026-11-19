@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 	"unsafe"
 
@@ -216,6 +217,50 @@ func TestCOWGenerationBasisRefreshReservesActualSources(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCOWGenerationBasisRefreshDrainsAdmittedWriter(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		t.Setenv(envDisableVlogGenerationLoop, "1")
+		cache, db := nativeBridgeFixture(t, true)
+		backend := &generationBasisCaptureBackend{DB: db}
+		cache.backend = backend
+		if err := cache.beginDirectWrite(); err != nil {
+			t.Fatal(err)
+		}
+		writerAdmitted := true
+		cache.cow.refreshRequired.Store(true)
+		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+		done := make(chan struct{})
+		var outcome error
+		go func() {
+			defer close(done)
+			outcome = cache.materializeCOWPrefix(ctx, false, nil, cowGenerationPressureMaterialization)
+		}()
+		defer func() {
+			if writerAdmitted {
+				cache.writeMu.RUnlock()
+			}
+			cancel()
+			<-done
+		}()
+
+		// The exact generation worker reaches its checkpoint fence while the
+		// original writer still holds admission. Capture must wait for release.
+		synctest.Wait()
+		if !cache.checkpointing.Load() || backend.captures.Load() != 0 {
+			t.Fatalf("basis capture crossed admitted writer: checkpoint=%t captures=%d", cache.checkpointing.Load(), backend.captures.Load())
+		}
+		cache.writeMu.RUnlock()
+		writerAdmitted = false
+		<-done
+		if outcome != nil || backend.captures.Load() != 1 || cache.cow.refreshRequired.Load() {
+			t.Fatalf("basis refresh did not resume after admitted writer: captures=%d error=%v", backend.captures.Load(), outcome)
+		}
+		if err := cache.Close(); err != nil {
+			t.Fatal(err)
+		}
+	})
 }
 
 type generationBasisCaptureBackend struct {
