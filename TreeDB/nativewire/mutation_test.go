@@ -6,13 +6,18 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
+	"fmt"
+	"path/filepath"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	iwire "github.com/snissn/gomap/TreeDB/internal/nativewire"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
@@ -216,6 +221,86 @@ func TestMutationUpdateBSONSetRoundTrip(t *testing.T) {
 	}
 	if got := bson.Raw(updated).Lookup("field1").StringValue(); got != "keep" {
 		t.Fatalf("field1=%q want keep", got)
+	}
+}
+
+func TestMutationUpdateBSONSetConcurrentFields(t *testing.T) {
+	dir := t.TempDir()
+	env := openCOWLoadWireOwner(t, treedb.ProfileCommandWALRelaxed, dir, 2)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	const name = "users"
+	ids := [][]byte{[]byte("u1")}
+	if _, err := env.clients[0].CreateCollection(ctx, collections.CollectionMeta{
+		Name: name, Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	doc, err := bson.Marshal(bson.D{{Key: "a", Value: int32(0)}, {Key: "b", Value: int32(0)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := env.clients[0].InsertBatchNoResult(ctx, name, collections.DocumentFormatBSON, ids, [][]byte{doc}, AckVisible); err != nil {
+		t.Fatal(err)
+	}
+
+	// Hold the first request after it reads the row. The second connection
+	// must be able to change a different field before the first publishes.
+	entered, release := make(chan struct{}), make(chan struct{})
+	unblock := sync.OnceFunc(func() { close(release) })
+	var parked atomic.Bool
+	restore := cowBSONInstallCut(t, func(event durabilitycut.Event) error {
+		if event.Point != durabilitycut.BeforeCOWAdmission {
+			return nil
+		}
+		rel, err := filepath.Rel(dir, event.Root)
+		if err == nil && filepath.IsLocal(rel) && parked.CompareAndSwap(false, true) {
+			close(entered)
+			<-release
+		}
+		return nil
+	})
+	defer restore()
+	defer unblock()
+	value := mustNativewireBSONRawValue(t, int32(1))
+	set := func(client *Client, field string) error {
+		fields := []collections.BSONSetField{{Key: field, Value: value}}
+		matched, modified, err := client.UpdateBSONSet(ctx, name, ids[0], fields, AckVisible)
+		if err == nil && (matched != 1 || modified != 1) {
+			return fmt.Errorf("set %s matched=%d modified=%d, want 1/1", field, matched, modified)
+		}
+		return err
+	}
+	first := make(chan error, 1)
+	go func() { first <- set(env.clients[0], "a") }()
+	select {
+	case <-entered:
+	case err := <-first:
+		t.Fatalf("first request returned before admission: %v", err)
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	if err := set(env.clients[1], "b"); err != nil {
+		t.Fatal(err)
+	}
+	unblock()
+	if err := <-first; err != nil {
+		t.Fatalf("first request after overlapping update: %v", err)
+	}
+	restore()
+	if err := env.clients[0].Checkpoint(ctx); err != nil {
+		t.Fatal(err)
+	}
+	env.close(t)
+	reopened := openCOWLoadWireOwner(t, treedb.ProfileCommandWALRelaxed, dir, 1)
+	docs, present, err := reopened.clients[0].GetMany(ctx, name, ids)
+	if err != nil || len(docs) != 1 || len(present) != 1 || !present[0] {
+		t.Fatalf("reopened get: present=%v docs=%d err=%v", present, len(docs), err)
+	}
+	for _, field := range []string{"a", "b"} {
+		if got, ok := bson.Raw(docs[0]).Lookup(field).Int32OK(); !ok || got != 1 {
+			t.Errorf("reopened field %s=%d (int32=%v), want 1", field, got, ok)
+		}
 	}
 }
 
