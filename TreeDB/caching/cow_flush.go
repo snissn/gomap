@@ -70,9 +70,13 @@ func (c *cowCache) captureBackendBasis(provider backendSnapshotProvider) (*cowBa
 // the exact accepted captured prefix alone is removed. A maintenance refresh
 // supplies nil coverage and preserves every source on the equivalent new tree.
 // Allocation is admitted before construction; cutMu only performs the swap.
+func cowBasisInstallCharge(shards, frozen int) uint64 {
+	return cowCutCharge(shards, frozen) + memtable.COWAllocationCharge(6*uint64(unsafe.Sizeof(uintptr(0))))
+}
+
 func (c *cowCache) prepareCOWBasisInstall() (*cowReadCut, error) {
 	shards, frozen := len(c.writers), c.budget.Limits().MaxSources
-	lease, err := c.maintenance.AcquireExternal(cowCutCharge(shards, frozen) + memtable.COWAllocationCharge(6*uint64(unsafe.Sizeof(uintptr(0)))))
+	lease, err := c.maintenance.AcquireExternal(cowBasisInstallCharge(shards, frozen))
 	if err != nil {
 		return nil, err
 	}
@@ -82,14 +86,23 @@ func (c *cowCache) prepareCOWBasisInstall() (*cowReadCut, error) {
 		domains: make([]rootDomainSnapshot, shards)}, nil
 }
 
-func (db *DB) installCOWBasis(basis *cowBackendBasis, covered *cowReadCut) (*cowReadCut, error) {
-	return db.installCOWBasisWithLeafPack(basis, covered, backenddb.LeafGenerationPackTransition{})
+func (db *DB) installCOWBasis(basis *cowBackendBasis, covered *cowReadCut, generationPressure bool) (*cowReadCut, error) {
+	return db.installCOWBasisWithLeafPack(basis, covered, backenddb.LeafGenerationPackTransition{}, generationPressure)
 }
 
-func (db *DB) installCOWBasisWithLeafPack(basis *cowBackendBasis, covered *cowReadCut, transition backenddb.LeafGenerationPackTransition) (*cowReadCut, error) {
+func (db *DB) installCOWBasisWithLeafPack(basis *cowBackendBasis, covered *cowReadCut, transition backenddb.LeafGenerationPackTransition, generationPressure bool) (*cowReadCut, error) {
 	c := db.cow
 	next, err := c.prepareCOWBasisInstall()
 	if err != nil {
+		if generationPressure && err == memtable.ErrCOWCapacity {
+			budget := c.maintenance
+			charge := cowBasisInstallCharge(len(c.writers), c.budget.Limits().MaxSources) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
+			if charge <= budget.Limits().MaxTotalBytes-budget.Stats().ControlBytes {
+				// The caller can mark this pre-swap refusal retryable after
+				// it has successfully released the captured private basis.
+				err = &cowGenerationSnapshotAllocationRefusal{error: err, basisRefresh: true}
+			}
+		}
 		return nil, err
 	}
 	finished := false
