@@ -19810,10 +19810,10 @@ func (db *DB) autoCheckpointLoop(interval time.Duration, maxWALBytes int64, idle
 	for {
 		var generationCh <-chan time.Time
 		if db.nativeGenerationSeals.idleInterval.Load() > 0 && generationRetry == nil {
-			select {
-			case <-db.closeCh:
+			// Close owns the remaining frontier as soon as it fences admission.
+			// A refused request can stay pending until after its final drain.
+			if db.closing.Load() {
 				return
-			default:
 			}
 			// Check the absolute deadline each time around the select. A stream
 			// of writes or coalesced wakes cannot extend the first rotation.

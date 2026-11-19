@@ -167,6 +167,7 @@ func TestCOWGenerationWorkerRetriesFinalSnapshotAdmission(t *testing.T) {
 	for _, tc := range []struct {
 		name                     string
 		closeTogether            bool
+		pairedClose              bool
 		requirePoison            bool
 		memory                   bool
 		refundDuringConfirmation bool
@@ -176,6 +177,7 @@ func TestCOWGenerationWorkerRetriesFinalSnapshotAdmission(t *testing.T) {
 		{name: "snapshot-allocation-pressure", memory: true},
 		{name: "snapshot-allocation-pressure-refund-during-confirmation", memory: true, refundDuringConfirmation: true},
 		{name: "snapshot-allocation-pressure-concurrent-close", memory: true, closeTogether: true},
+		{name: "snapshot-allocation-pressure-paired-close", memory: true, closeTogether: true, pairedClose: true},
 		{name: "capacity-outside-snapshot-receipt", requirePoison: true},
 	} {
 		run := func(t *testing.T) {
@@ -333,8 +335,21 @@ func TestCOWGenerationWorkerRetriesFinalSnapshotAdmission(t *testing.T) {
 				defer restore()
 			}
 
-			cache.StartAutoCheckpoint(0, 1<<40, 0)
-			cache.nativeGenerationFlushCh <- struct{}{}
+			workerDone := make(chan struct{})
+			if tc.pairedClose {
+				const idle = time.Second
+				cache.nativeGenerationSeals.idleInterval.Store(int64(idle))
+				through := rootpublication.SealedPrefix{LogicalSequence: before.V, CanonicalLSN: before.C}
+				cache.nativeGenerationSeals.add(cowGenerationSealRequest{through: through, deadline: time.Now()})
+				cache.wg.Add(1)
+				go func() {
+					defer close(workerDone)
+					cache.autoCheckpointLoop(0, 1<<40, idle)
+				}()
+			} else {
+				cache.StartAutoCheckpoint(0, 1<<40, 0)
+				cache.nativeGenerationFlushCh <- struct{}{}
+			}
 			defer resume()
 			ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 			defer cancel()
@@ -387,6 +402,23 @@ func TestCOWGenerationWorkerRetriesFinalSnapshotAdmission(t *testing.T) {
 				}
 				return
 			case tc.closeTogether:
+				closeAtMeta := make(chan struct{})
+				finishClose := make(chan struct{})
+				var finishOnce sync.Once
+				resumeClose := func() { finishOnce.Do(func() { close(finishClose) }) }
+				defer resumeClose()
+				if tc.pairedClose {
+					var entered atomic.Bool
+					restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+						if event.Point == durabilitycut.BeforeAppliedLSNAdvance && event.Resource == durabilitycut.ResourceMeta &&
+							event.LSN == before.C && entered.CompareAndSwap(false, true) {
+							close(closeAtMeta)
+							<-finishClose
+						}
+						return nil
+					})
+					defer restore()
+				}
 				done := make(chan error, 1)
 				go func() { done <- cache.Close() }()
 				for !cache.closing.Load() {
@@ -398,6 +430,21 @@ func TestCOWGenerationWorkerRetriesFinalSnapshotAdmission(t *testing.T) {
 				}
 				releasePressure()
 				resume()
+				if tc.pairedClose {
+					select {
+					case <-closeAtMeta:
+					case err := <-done:
+						t.Fatalf("Close finished before reaching the held publication: %v", err)
+					case <-ctx.Done():
+						t.Fatal("Close did not reach the original META advance")
+					}
+					select {
+					case <-workerDone:
+					case <-time.After(time.Second):
+						t.Fatal("generation worker did not yield the refused request to held Close")
+					}
+					resumeClose()
+				}
 				select {
 				case err := <-done:
 					if err != nil {
