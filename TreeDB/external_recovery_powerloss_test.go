@@ -268,6 +268,10 @@ func TestExternalRecoveryStableCheckpointPublication(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer func() { _ = o.Close() }()
+			// This fixture models checkpoint publication. Pause unrelated background
+			// maintenance, which can rename a value-log refcount cache temp file
+			// between enumeration and open during a full-tree oracle capture.
+			o.DB().SetMaintenancePhase(MaintenancePhaseCatchUp)
 			oldValue, newValue := bytes.Repeat([]byte("old"), 4096), bytes.Repeat([]byte("new"), 4096)
 			externalTestSet(t, o, "key", oldValue)
 			old, err := o.Checkpoint(context.Background(), []byte("old"))
