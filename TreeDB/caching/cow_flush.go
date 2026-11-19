@@ -90,28 +90,23 @@ func (c *cowCache) prepareCOWBasisInstallWithFrozen(frozen int) (*cowReadCut, er
 		domains: make([]rootDomainSnapshot, shards)}, nil
 }
 
-func (db *DB) installCOWBasis(basis *cowBackendBasis, covered *cowReadCut, generationPressure bool) (*cowReadCut, error) {
+func (db *DB) installCOWBasis(basis *cowBackendBasis, generationPressure bool) (*cowReadCut, error) {
 	c := db.cow
-	frozen := c.budget.Limits().MaxSources
-	if covered == nil {
-		// The equivalent refresh caller fences both physical cutovers and
-		// producer admission, including draining already-admitted writers.
-		// The current frozen cardinality suffices until the next producer-owned
-		// cut, which always has its own independently admitted source vectors.
-		c.cutMu.Lock()
-		if old := c.cut; old != nil {
-			frozen = len(old.frozen)
-		}
+	// The equivalent refresh caller fences both physical cutovers and
+	// producer admission, including draining already-admitted writers.
+	// The current frozen cardinality suffices until the next producer-owned
+	// cut, which always has its own independently admitted source vectors.
+	c.cutMu.Lock()
+	if c.cut == nil {
 		c.cutMu.Unlock()
+		return nil, backenddb.ErrClosed
 	}
-	return db.installCOWBasisWithFrozen(basis, covered, backenddb.LeafGenerationPackTransition{}, generationPressure, frozen)
+	frozen := len(c.cut.frozen)
+	c.cutMu.Unlock()
+	return db.installCOWBasisWithLeafPack(basis, backenddb.LeafGenerationPackTransition{}, frozen, generationPressure)
 }
 
-func (db *DB) installCOWBasisWithLeafPack(basis *cowBackendBasis, covered *cowReadCut, transition backenddb.LeafGenerationPackTransition, generationPressure bool) (*cowReadCut, error) {
-	return db.installCOWBasisWithFrozen(basis, covered, transition, generationPressure, db.cow.budget.Limits().MaxSources)
-}
-
-func (db *DB) installCOWBasisWithFrozen(basis *cowBackendBasis, covered *cowReadCut, transition backenddb.LeafGenerationPackTransition, generationPressure bool, frozen int) (*cowReadCut, error) {
+func (db *DB) installCOWBasisWithLeafPack(basis *cowBackendBasis, transition backenddb.LeafGenerationPackTransition, frozen int, generationPressure bool) (*cowReadCut, error) {
 	c := db.cow
 	next, err := c.prepareCOWBasisInstallWithFrozen(frozen)
 	if err != nil {
@@ -137,7 +132,7 @@ func (db *DB) installCOWBasisWithFrozen(basis *cowBackendBasis, covered *cowRead
 		finished = true
 		return nil, err
 	}
-	old, _, err := db.installPreparedCOWBasisWithLeafPack(basis, covered, next, transition)
+	old, _, err := db.installPreparedCOWBasisWithLeafPack(basis, nil, next, transition)
 	if err != nil {
 		refund := c.releasePrivateCOWBasisInstall(next)
 		next = nil

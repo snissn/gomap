@@ -49,7 +49,7 @@ func TestCOWBasisRefreshRefusalKeepsOriginalAndOwnsPartialCleanup(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
-			old, err := db.installCOWBasis(basis, nil, false)
+			old, err := db.installCOWBasis(basis, false)
 			if !errors.Is(err, failure) || old != nil || c.cut != opening || original.refs.Load() != 1 {
 				t.Fatalf("refusal changed original cut: old=%p error=%v refs=%d", old, err, original.refs.Load())
 			}
