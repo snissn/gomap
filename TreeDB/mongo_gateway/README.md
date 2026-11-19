@@ -159,6 +159,58 @@ reingest into a fresh directory with the new binary. See
 cross-version policy. Startup errors preserve their underlying I/O, capacity or
 compatibility cause.
 
+### Reclaiming an over-limit standalone value-log inventory
+
+A relaxed, unclustered BSON database may have more value-log files than the
+default 256-resource COW limit, including empty successors left by earlier
+maintenance. A default restart can still succeed because recovery starts from
+the durable inventory. Verify typed reads and the process exit after checked
+shutdown. A successful restart alone gives no evidence that files were reclaimed.
+
+For a compatible database on its original filesystem and inodes, stop all
+gateway instances, preserve a recovery backup using an identity-aware procedure,
+and open the directory exclusively for maintenance. Use the Go API for this
+one-time resource override. The stock gateway CLI uses the ordinary limit.
+The example uses 512 for a tested 257-file inventory. The count must cover the retained value-log resources,
+including any leaf resources. Preserve the other standalone limits and the
+original storage profile. This procedure assumes the ordinary standalone
+`command_wal_relaxed` BSON format.
+
+```go
+import (
+    "context"
+    "errors"
+
+    treedb "github.com/snissn/gomap/TreeDB"
+    _ "github.com/snissn/gomap/TreeDB/collections" // Register collection WAL replay.
+)
+
+func reclaimValueLog(ctx context.Context, dir string) (stats treedb.ValueLogGCStats, err error) {
+    opts := treedb.OptionsFor(treedb.ProfileCommandWALRelaxed, dir)
+    opts.MemtableMode = "cow_btree"
+    opts.COWMemtableLimits = treedb.StandaloneCOWMemtableLimits()
+    opts.COWMemtableLimits.MaxResources = 512
+    opts.FreshSystemPagerLeaves = true
+    opts.FreshRelaxedStandaloneWALStream = true
+
+    db, err := treedb.Open(opts)
+    if err != nil {
+        return stats, err
+    }
+    defer func() { err = errors.Join(err, db.Close()) }()
+    return db.ValueLogGC(ctx, treedb.ValueLogGCOptions{Mode: treedb.ValueLogGCModeStrict})
+}
+```
+
+Check the strict GC result and Close error before restarting. Strict GC
+checkpoints and uses the engine's reachability checks. Leave the files in place
+for the engine to assess, including empty files. After Close, confirm that the
+physical inventory is below the default limit. Start the ordinary gateway with
+its original limits and verify typed reads and checked Close again. Keep the
+store offline if an operation fails or the inventory remains over the limit.
+This one-time operation reclaims unreachable segments. A stock writer can
+create new successors during later maintenance.
+
 ## Transport policy
 
 Plaintext is deliberately limited to loopback listeners. A standalone listener
