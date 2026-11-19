@@ -43,3 +43,27 @@ func TestParsePublicProfileFlagRejectsDeprecatedProfiles(t *testing.T) {
 		})
 	}
 }
+
+func TestNativeServerCOWMemoryOptions(t *testing.T) {
+	large := treedb.DefaultCOWMemtableLimits()
+	large.MaxInFlightBytes = 512 << 20
+	large.MaxTotalBytes = 1 << 30
+	large.MaxRetiredBytes = 1 << 30
+	for _, profile := range []treedb.Profile{treedb.ProfileCommandWALDurable, treedb.ProfileCommandWALRelaxed, treedb.ProfileNoWALFast} {
+		for _, legacy := range []bool{false, true} {
+			for _, mode := range []string{"auto", "compact"} {
+				opts, err := nativeServerOptions(profile, "db", legacy, mode)
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := treedb.OptionsFor(profile, "db").COWMemtableLimits
+				if profile == treedb.ProfileCommandWALRelaxed && !legacy && mode == "auto" {
+					want = large
+				}
+				if opts.COWMemtableLimits != want {
+					t.Errorf("profile=%s legacy=%t mode=%s: limits=%+v want %+v", profile, legacy, mode, opts.COWMemtableLimits, want)
+				}
+			}
+		}
+	}
+}

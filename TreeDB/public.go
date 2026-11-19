@@ -36,6 +36,17 @@ type COWMemtableLimits = db.COWMemtableLimits
 
 func DefaultCOWMemtableLimits() COWMemtableLimits { return db.DefaultCOWMemtableLimits() }
 
+// StandaloneCOWMemtableLimits returns the larger per-database budget used by
+// standalone servers for concurrent document writes. The limits bound COW
+// allocation charges; process RSS also includes memory outside the COW owner.
+func StandaloneCOWMemtableLimits() COWMemtableLimits {
+	limits := DefaultCOWMemtableLimits()
+	limits.MaxInFlightBytes = 512 << 20
+	limits.MaxTotalBytes = 1 << 30
+	limits.MaxRetiredBytes = 1 << 30
+	return limits
+}
+
 var errVacuumUnsupported = db.ErrVacuumUnsupported
 
 // EntryRevision is TreeDB's native per-entry revision metadata. Revision zero is

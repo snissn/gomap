@@ -51,7 +51,12 @@ func TestNativeServerCommandVisiblePrefixSyncedBoundarySurvivesHardExit(t *testi
 					t.Fatal("hard-exit child returned success")
 				}
 				_ = client.Close()
-				reopened, client := startNativeCommand(t, dir, "-profile", string(profile))
+				reopenArgs := []string{"-profile", string(profile)}
+				if profile == treedb.ProfileCommandWALRelaxed {
+					// The compact owner must recover the larger owner's synced prefix.
+					reopenArgs = append(reopenArgs, "-cow-load-memory=compact")
+				}
+				reopened, client := startNativeCommand(t, dir, reopenArgs...)
 				got, present, err := client.GetMany(ctx, "wire", ids)
 				if err != nil || len(got) != len(docs) || len(present) != len(ids) {
 					t.Fatalf("recovered prefix docs=%q present=%v err=%v", got, present, err)

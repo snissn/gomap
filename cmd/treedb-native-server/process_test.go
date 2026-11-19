@@ -3,11 +3,15 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +21,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/documentservice"
 	"github.com/snissn/gomap/TreeDB/nativewire"
 	"github.com/snissn/gomap/cmd/internal/documentserviceowner"
+	"github.com/snissn/gomap/internal/ycsbevidence"
 )
 
 func TestNativeServerCommandProcess(t *testing.T) {
@@ -71,6 +76,52 @@ func startNativeCommand(t *testing.T, dir string, extra ...string) (*exec.Cmd, *
 			t.Fatalf("native command unavailable: %v\n%s", err, raw)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestNativeServerCommandCOWMaintenanceCapacity(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("owner receipts require Linux procfs")
+	}
+	for _, tc := range []struct {
+		name    string
+		args    []string
+		profile treedb.Profile
+		wantMiB int
+	}{
+		{"relaxed-default", []string{"-profile", "command_wal_relaxed"}, treedb.ProfileCommandWALRelaxed, 256},
+		{"relaxed-compact", []string{"-profile", "command_wal_relaxed", "-cow-load-memory=compact"}, treedb.ProfileCommandWALRelaxed, 32},
+		{"implicit-durable", nil, treedb.ProfileCommandWALDurable, 32},
+		{"no-wal", []string{"-profile", "no_wal_fast"}, treedb.ProfileNoWALFast, 32},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			receipts := t.TempDir()
+			t.Setenv("YCSB_SERVER_RECEIPT_DIR", receipts)
+			cmd, client := startNativeCommand(t, t.TempDir(), tc.args...)
+			b, err := os.ReadFile(filepath.Join(receipts, "owner.open.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var owner ycsbevidence.Observation
+			if err := json.Unmarshal(b, &owner); err != nil {
+				t.Fatal(err)
+			}
+			if owner.Process.PID != cmd.Process.Pid || owner.Backend != "cow" || owner.Profile != string(tc.profile) {
+				t.Fatalf("unexpected owner pid=%d backend=%s profile=%s", owner.Process.PID, owner.Backend, owner.Profile)
+			}
+			if got, want := owner.Stats["treedb.cache.cow.maintenance_capacity_bytes"], strconv.Itoa(tc.wantMiB<<20); got != want {
+				t.Errorf("maintenance capacity = %s bytes, want %s", got, want)
+			}
+			if err := client.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := cmd.Process.Signal(os.Interrupt); err != nil {
+				t.Fatal(err)
+			}
+			if err := cmd.Wait(); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 
@@ -285,5 +336,18 @@ func TestNativeServerCommandListenFailureReleasesOwner(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+func TestNativeServerCommandRejectsUnknownCOWMemoryBeforeOpen(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "unopened")
+	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestNativeServerCommandProcess$")
+	cmd.Env = append(os.Environ(), "GOMAP_NATIVE_COMMAND_CHILD=1", "GOMAP_NATIVE_COMMAND_ARGS="+strings.Join([]string{"-dir", dir, "-cow-load-memory=unknown"}, "\n"))
+	out, err := cmd.CombinedOutput()
+	if err == nil || !bytes.Contains(out, []byte("unsupported -cow-load-memory")) {
+		t.Fatalf("unexpected startup result: %v %s", err, out)
+	}
+	if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected unopened directory, stat returned %v", err)
 	}
 }

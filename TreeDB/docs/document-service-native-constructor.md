@@ -84,6 +84,26 @@ Profiles, finite budgets and the existing mutation acknowledgement boundaries
 remain in force. Upserts use `InsertBatchWithStats`; deferred Optimize uses the
 same owner's maintenance capability.
 
+For `treedb-native-server -profile command_wal_relaxed` with shared COW, the
+default `-cow-load-memory=auto` allows 512 MiB in flight, 1 GiB total and
+1 GiB retired per open database. Half of the in-flight limit (256 MiB) is
+reserved for physical maintenance. These are engine accounting limits within
+one owner. Collections share that budget. Each server process opening its own
+database has a separate budget, and its RSS includes other allocations.
+
+Use `-cow-load-memory=compact` when several owners share a memory limit or a
+smaller per-owner budget is preferable. Compact uses 64 MiB in flight, 512 MiB
+total and 512 MiB retired, with a 32 MiB maintenance reservation. Restarting
+with a different budget reopens the same database. Durable (the default
+profile) and no-WAL shared owners use the compact engine limits in either
+mode. Legacy storage has no shared-COW budget.
+
+In the 64-client singleton BSON LOAD that motivated this change, the larger
+limits increased throughput from 36–38k to about 83k inserts/s and reduced
+INSERT p99 from about 58 ms to under 2 ms. Peak COW charges rose from about
+65 MiB to 602–605 MiB and the slowest INSERT rose from 162–191 ms to
+379–392 ms. [Fixture and measurements](https://github.com/snissn/gomap/issues/5504#issuecomment-7017937348).
+
 The command capability matrix preserves the underlying profile contracts:
 
 | Capability | `command_wal_durable` | `command_wal_relaxed` / `no_wal_fast` |
