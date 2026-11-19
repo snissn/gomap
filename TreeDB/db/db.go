@@ -598,7 +598,7 @@ type DB struct {
 	testAfterOptimisticPublishPrepareHook          func()
 	testCommandWALAfterBuilderAcquireHook          func()
 	testCommandWALBeforeDurablePublishLockHook     func()
-	testCommandWALCleanupAfterScanHook             func()
+	testCommandWALCleanupHooks                     *commandWALCleanupTestHooks
 	testBeforeFinalizeCommitHook                   func()
 	testAfterFinalizeRootSerializationReleaseHook  func()
 	testDurableRootCandidatePreparedHook           func()
@@ -3642,7 +3642,7 @@ func (db *DB) closeAfterHooks() (outcome, cleanup error) {
 	// dependency debt and recovery handoffs stay pinned until shutdown below.
 	// Only the exact pre-unlink sentinel qualifies; joined failures must surface.
 	if db.commandWAL && !db.readOnly && db.commandJournal != nil && db.commandWALPoisonedError() == nil {
-		if err := db.cleanupCommandWALCoveredSegmentsV1(); err != nil &&
+		if err := db.cleanupCommandWALCoveredSegmentsV1(false); err != nil &&
 			err != rootpublication.ErrResourcePinned &&
 			!errors.Is(err, errDurableWALCleanupProofUnavailable) &&
 			!errors.Is(err, errDurableWALCleanupProofStale) &&

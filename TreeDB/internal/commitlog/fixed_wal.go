@@ -317,16 +317,23 @@ func readFixedWALFull(input io.Reader, p []byte) (int, error) {
 	return n, err
 }
 
-// loadFixedWAL returns nil for the original stream format. For containers every
-// reserve byte is examined: a zero header is never an EOF decision by itself.
-func loadFixedWAL(file *os.File) (*fixedWAL, []byte, error) {
+// HasFixedWALMagic only classifies the leading bytes of an open file.
+// Callers must still validate the complete container before trusting its data.
+func HasFixedWALMagic(file *os.File) (bool, error) {
 	var prefix [8]byte
 	n, err := file.ReadAt(prefix[:], 0)
 	if err != nil && err != io.EOF {
-		return nil, nil, err
+		return false, err
 	}
-	if n < 8 || prefix != fixedWALMagic {
-		return nil, nil, nil
+	return n == len(prefix) && prefix == fixedWALMagic, nil
+}
+
+// loadFixedWAL returns nil for the original stream format. For containers every
+// reserve byte is examined: a zero header is never an EOF decision by itself.
+func loadFixedWAL(file *os.File) (*fixedWAL, []byte, error) {
+	fixed, err := HasFixedWALMagic(file)
+	if err != nil || !fixed {
+		return nil, nil, err
 	}
 	info, err := file.Stat()
 	if err != nil {

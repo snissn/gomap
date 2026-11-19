@@ -775,110 +775,130 @@ func scanCommandWALSegmentsCoveredByAppliedLSN(dir string, appliedLSN uint64, ma
 
 func scanCommandWALSegmentsForCleanupProof(dir string, cleanupThrough uint64, durableWALLSN uint64, maxSegmentBytes int64) ([]commandWALSegmentCleanupDecision, error) {
 	if durableWALLSN < cleanupThrough {
-		return nil, fmt.Errorf("%w: durable WAL LSN %d is behind cleanup frontier %d", ErrCommandWALAppliedLSNNonContig, durableWALLSN, cleanupThrough)
+		return nil, validateCommandWALCleanupReplayLineage(nil, cleanupThrough, durableWALLSN)
 	}
-	// PR2 cleanup deliberately streams segments on demand. It is intended for
-	// checkpoint/maintenance boundaries; a later manifest/catalog can cache
-	// results if this moves onto a hotter path.
+	scan := newCommandWALCleanupScan(cleanupThrough, durableWALLSN, maxSegmentBytes, nil)
+	return scan.finish(scan.scanLockedDirectory(dir))
+}
+
+type commandWALCleanupScan struct {
+	options         commandWALSegmentScanOptions
+	maxSegmentBytes int64
+	beforeSegment   func(string)
+	decisions       []commandWALSegmentCleanupDecision
+	lineageErr      error
+	hardErr         error
+}
+
+func newCommandWALCleanupScan(cleanupThrough, durableWALLSN uint64, maxSegmentBytes int64, beforeSegment func(string)) *commandWALCleanupScan {
+	return &commandWALCleanupScan{
+		options: commandWALSegmentScanOptions{
+			seenLSNs: make(map[uint64]struct{}), seenLSNAppliedLSN: cleanupThrough, seenLSNMax: durableWALLSN,
+		},
+		maxSegmentBytes: maxSegmentBytes,
+		beforeSegment:   beforeSegment,
+	}
+}
+
+func (s *commandWALCleanupScan) scanLockedDirectory(dir string) error {
 	segments, err := listWALSegments(dir)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	activeByLane := commandWALActiveSeqByLane(segments)
-	decisions := make([]commandWALSegmentCleanupDecision, 0, len(segments))
-	var scanErr error
-	seenLSNs := make(map[uint64]struct{})
+	s.decisions = make([]commandWALSegmentCleanupDecision, 0, len(segments))
 	for _, seg := range segments {
-		if seg.valueLog {
-			continue
+		if !seg.valueLog && isCommandWALLaneSegment(seg) {
+			s.scanSegment(seg, seg.seq == activeByLane[seg.lane], false, nil)
 		}
-		if !isCommandWALLaneSegment(seg) {
-			continue
-		}
-		active := seg.seq == activeByLane[seg.lane]
-		file, err := os.Open(seg.path)
+	}
+	return nil
+}
+
+func (s *commandWALCleanupScan) scanSegment(seg logSegment, active, loadLogicalSize bool, expected *rootpublication.StableIdentity) {
+	file, err := os.Open(seg.path)
+	if err != nil {
+		s.hardErr = errors.Join(s.hardErr, fmt.Errorf("open command WAL segment %s: %w", filepath.Base(seg.path), err))
+		return
+	}
+	if !s.scanFile(seg, file, active, loadLogicalSize, expected) {
+		s.hardErr = errors.Join(s.hardErr, file.Close())
+	}
+}
+
+// scanFile scans this exact descriptor and reports whether it has transferred
+// the handle into a deletion decision. The caller owns all other handles.
+func (s *commandWALCleanupScan) scanFile(seg logSegment, file *os.File, active, loadLogicalSize bool, expected *rootpublication.StableIdentity) bool {
+	if s.beforeSegment != nil {
+		s.beforeSegment(seg.path)
+	}
+	identity, identityErr := rootpublication.StableIdentityFromFile(file)
+	info, statErr := file.Stat()
+	if err := errors.Join(identityErr, statErr); err != nil {
+		s.hardErr = errors.Join(s.hardErr, fmt.Errorf("identify command WAL segment %s: %w", filepath.Base(seg.path), err))
+		return false
+	}
+	if expected != nil && !rootpublication.SamePhysicalIdentity(identity, *expected) {
+		s.hardErr = errors.Join(s.hardErr, fmt.Errorf("%w: active command WAL segment identity changed: %s", ErrRecoveryRequired, filepath.Base(seg.path)))
+		return false
+	}
+	if loadLogicalSize {
+		var err error
+		seg.size, err = commitlog.LogicalFileSize(file)
 		if err != nil {
-			scanErr = errors.Join(scanErr, fmt.Errorf("open command WAL segment %s: %w", filepath.Base(seg.path), err))
-			continue
+			s.hardErr = errors.Join(s.hardErr, fmt.Errorf("size command WAL segment %s: %w", filepath.Base(seg.path), err))
+			return false
 		}
-		identity, identityErr := rootpublication.StableIdentityFromFile(file)
-		if identityErr != nil {
-			_ = file.Close()
-			scanErr = errors.Join(scanErr, fmt.Errorf("identify command WAL segment %s: %w", filepath.Base(seg.path), identityErr))
-			continue
-		}
-		info, statErr := file.Stat()
-		if statErr != nil {
-			_ = file.Close()
-			scanErr = errors.Join(scanErr, fmt.Errorf("stat command WAL segment %s: %w", filepath.Base(seg.path), statErr))
-			continue
-		}
-		scan, err := scanCommandWALSegmentFileWithOptions(file, maxSegmentBytes, active, commandWALSegmentScanOptions{
-			seenLSNs:          seenLSNs,
-			seenLSNAppliedLSN: cleanupThrough,
-			seenLSNMax:        durableWALLSN,
-		})
-		if err != nil {
-			_ = file.Close()
-			decisions = append(decisions, commandWALSegmentCleanupDecision{
-				Path:         seg.path,
-				Size:         info.Size(),
-				LogicalSize:  seg.size,
-				ScannedBytes: scan.scannedBytes,
-				Frames:       scan.frames,
-				MinLSN:       scan.minLSN,
-				MaxLSN:       scan.maxLSN,
-				Active:       active,
-				Error:        err.Error(),
-			})
-			scanErr = errors.Join(scanErr, fmt.Errorf("scan command WAL segment %s: %w", filepath.Base(seg.path), err))
-			continue
-		}
-		// A valid fixed reserve can be closed before its first accepted frame
-		// (for example, a first input exceeds the initial physical budget).
-		// Only the reader's positive exact-handle classification admits such a
-		// candidate; empty streams and legacy/unrecognized files stay retained.
-		if !scan.typed && !scan.emptyFixed {
-			_ = file.Close()
-			continue
-		}
-		decision := commandWALSegmentCleanupDecision{
-			Path:            seg.path,
-			Size:            info.Size(),
-			LogicalSize:     seg.size,
-			ScannedBytes:    scan.scannedBytes,
-			Frames:          scan.frames,
-			MinLSN:          scan.minLSN,
-			MaxLSN:          scan.maxLSN,
-			Active:          active,
-			Covered:         scan.maxLSN <= cleanupThrough,
-			identity:        identity,
-			lane:            seg.lane,
-			seq:             seg.seq,
-			generationKnown: true,
-		}
-		// Only deletion candidates need their discovery handles retained until
-		// exact identity leases are acquired. Keeping handles for active or
-		// uncovered replay segments makes cleanup descriptor usage grow with the
-		// entire retained WAL lineage even though those objects cannot be unlinked.
-		if decision.Covered && !decision.Active {
-			decision.file = file
-		} else if closeErr := file.Close(); closeErr != nil {
-			decision.Error = closeErr.Error()
-			decisions = append(decisions, decision)
-			scanErr = errors.Join(scanErr, fmt.Errorf("close retained command WAL segment %s: %w", filepath.Base(seg.path), closeErr))
-			continue
-		}
-		decisions = append(decisions, decision)
 	}
-	if lineageErr := validateCommandWALCleanupReplayLineage(seenLSNs, cleanupThrough, durableWALLSN); lineageErr != nil {
-		scanErr = errors.Join(scanErr, lineageErr)
+	scan, err := scanCommandWALSegmentFileWithOptions(file, s.maxSegmentBytes, active, s.options)
+	decision := commandWALSegmentCleanupDecision{
+		Path: seg.path, Size: info.Size(), LogicalSize: seg.size,
+		ScannedBytes: scan.scannedBytes, Frames: scan.frames, MinLSN: scan.minLSN, MaxLSN: scan.maxLSN,
+		Active: active, identity: identity, lane: seg.lane, seq: seg.seq, generationKnown: true,
 	}
-	if scanErr != nil {
-		closeCommandWALCleanupDecisions(decisions)
-		return decisions, scanErr
+	if err != nil {
+		decision.Error = err.Error()
+		s.decisions = append(s.decisions, decision)
+		wrapped := fmt.Errorf("scan command WAL segment %s: %w", filepath.Base(seg.path), err)
+		if errors.Is(err, commitlog.ErrCommandWALDuplicateLSN) {
+			s.lineageErr = errors.Join(s.lineageErr, wrapped)
+		} else {
+			s.hardErr = errors.Join(s.hardErr, wrapped)
+		}
+		return false
 	}
-	return decisions, nil
+	// Only positive whole-container validation can admit an empty fixed
+	// segment. Empty streams and legacy/unrecognized files stay retained.
+	if !scan.typed && !scan.emptyFixed {
+		return false
+	}
+	decision.Covered = scan.maxLSN <= s.options.seenLSNAppliedLSN
+	if decision.Covered && !decision.Active {
+		decision.file = file
+	}
+	s.decisions = append(s.decisions, decision)
+	return decision.file != nil
+}
+
+func (s *commandWALCleanupScan) finish(err error) ([]commandWALSegmentCleanupDecision, error) {
+	if err == nil {
+		s.lineageErr = errors.Join(s.lineageErr, validateCommandWALCleanupReplayLineage(s.options.seenLSNs, s.options.seenLSNAppliedLSN, s.options.seenLSNMax))
+	}
+	if err == nil && s.hardErr == nil && s.lineageErr == nil {
+		return s.decisions, nil
+	}
+	s.hardErr = errors.Join(s.hardErr, closeCommandWALCleanupDecisions(s.decisions))
+	if s.hardErr != nil && errors.Is(err, commitlog.ErrCommandWALCleanupSnapshotStale) {
+		// A hard close or scan error still needs to reach checked callers.
+		err = nil
+	}
+	hardErr := errors.Join(err, s.hardErr)
+	if hardErr == nil {
+		return s.decisions, errors.Join(errDurableWALCleanupProofUnavailable, s.lineageErr)
+	}
+	// A missing or duplicate frame is an unavailable proof, but must
+	// never hide an unrelated I/O, namespace, or corruption error.
+	return s.decisions, errors.Join(hardErr, s.lineageErr)
 }
 
 // validateCommandWALCleanupReplayLineage proves that every LSN which the
@@ -1059,11 +1079,13 @@ func removeCoveredCommandWALSegmentsWithRegistry(decisions []commandWALSegmentCl
 	return decisions, nil
 }
 
-func closeCommandWALCleanupDecisions(decisions []commandWALSegmentCleanupDecision) {
+func closeCommandWALCleanupDecisions(decisions []commandWALSegmentCleanupDecision) error {
+	var err error
 	for i := range decisions {
 		if decisions[i].file != nil {
-			_ = decisions[i].file.Close()
+			err = errors.Join(err, decisions[i].file.Close())
 			decisions[i].file = nil
 		}
 	}
+	return err
 }

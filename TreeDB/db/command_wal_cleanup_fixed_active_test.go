@@ -135,7 +135,7 @@ func TestCommandWALCleanupFreshFixedActiveEntryControls(t *testing.T) {
 					rotation.Release()
 				}
 			})
-			database.testCommandWALCleanupAfterScanHook = func() {
+			database.testCommandWALCleanupHooks = &commandWALCleanupTestHooks{afterScan: func() {
 				payload, err := commitlog.EncodeRawKVBatchPayload([]commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: []byte("pending"), Value: make([]byte, 5<<20)}})
 				if err != nil {
 					t.Fatal(err)
@@ -149,7 +149,7 @@ func TestCommandWALCleanupFreshFixedActiveEntryControls(t *testing.T) {
 				if err != nil || snapshotErr != nil || lsn != 2 || after.ActiveSegmentMaxLSN != lsn || after.PendingStableRotation == 0 || after.SegmentSeq != before.SegmentSeq+1 || after.ActivePath == before.ActivePath {
 					t.Fatalf("pending pressure witness: before=%+v after=%+v lsn=%d append=%v snapshot=%v", before, after, lsn, err, snapshotErr)
 				}
-			}
+			}}
 			if err := database.CleanupCommandWALCoveredSegments(true); !errors.Is(err, commitlog.ErrCommandWALCleanupSnapshotStale) {
 				t.Fatalf("cleanup error=%v; require actual pending-ownership refusal", err)
 			}
@@ -244,7 +244,7 @@ func TestCommandWALCleanupStreamAppendWithoutPendingRotation(t *testing.T) {
 	if err != nil || before.ActiveSegmentMaxLSN != 2 || before.ActiveBytes == 0 || before.PendingStableRotation != 0 || before.PendingSuccessor {
 		t.Fatalf("occupied stream before append: snapshot=%+v err=%v", before, err)
 	}
-	database.testCommandWALCleanupAfterScanHook = func() {
+	database.testCommandWALCleanupHooks = &commandWALCleanupTestHooks{afterScan: func() {
 		payload, err := commitlog.EncodeRawKVBatchPayload([]commitlog.RawKVOperation{{Op: commitlog.RawKVOpSet, Key: []byte("pending"), Value: make([]byte, 5<<20)}})
 		if err != nil {
 			t.Fatal(err)
@@ -258,7 +258,7 @@ func TestCommandWALCleanupStreamAppendWithoutPendingRotation(t *testing.T) {
 		if err != nil || snapshotErr != nil || lsn != 3 || after.ActiveSegmentMaxLSN != lsn || after.PendingStableRotation != 0 || after.PendingSuccessor || after.SegmentSeq != before.SegmentSeq || after.ActivePath != before.ActivePath || after.ActiveBytes <= before.ActiveBytes {
 			t.Fatalf("legitimate stream append: before=%+v after=%+v lsn=%d append=%v snapshot=%v", before, after, lsn, err, snapshotErr)
 		}
-	}
+	}}
 	if err := database.CleanupCommandWALCoveredSegments(true); err != nil {
 		t.Fatalf("safe monotonic stream cleanup: %v", err)
 	}

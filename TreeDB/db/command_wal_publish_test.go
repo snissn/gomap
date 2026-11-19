@@ -1878,14 +1878,14 @@ func TestCommandWALCleanupConvergesAfterActiveAppend(t *testing.T) {
 		t.Fatalf("EncodeRawKVBatchPayload: %v", err)
 	}
 	var appendErr error
-	db.testCommandWALCleanupAfterScanHook = func() {
+	db.testCommandWALCleanupHooks = &commandWALCleanupTestHooks{afterScan: func() {
 		_, appendErr = journal.AppendCommand(commitlog.CommandEnvelope{
 			Kind:          commitlog.CommandKindRawKVBatch,
 			Scope:         commitlog.CommandScopeRawKV,
 			PayloadFormat: commitlog.PayloadFormatRawKVBatchV1,
 			Payload:       payload,
 		})
-	}
+	}}
 
 	if err := db.CleanupCommandWALCoveredSegments(false); err != nil {
 		t.Fatalf("CleanupCommandWALCoveredSegments: %v", err)
@@ -1980,7 +1980,7 @@ func TestCommandWALCleanupAcceptsMonotonicDurableRootAdvance(t *testing.T) {
 	db := &DB{dir: dir, commandWAL: true, durability: DurabilityDurable, commandJournal: journal}
 	installCommandWALCleanupRootRuntimeForTest(db, 1, 1)
 	db.commandWALDurableLSN.Store(2)
-	db.testCommandWALCleanupAfterScanHook = func() {
+	db.testCommandWALCleanupHooks = &commandWALCleanupTestHooks{afterScan: func() {
 		meta := page.DurableMetaV1{CommitSeq: 2}
 		record := rootpublication.DurableRootRecordV1{CommitSeq: 2, AppliedCommandLSN: 2}
 		db.durableRoot.slot = 0
@@ -1989,7 +1989,7 @@ func TestCommandWALCleanupAcceptsMonotonicDurableRootAdvance(t *testing.T) {
 		db.durableRoot.slotCommit = [2]uint64{2, 0}
 		db.durableRoot.slotMeta = [2]page.DurableMetaV1{meta}
 		db.durableRoot.slotRecord = [2]rootpublication.DurableRootRecordV1{record}
-	}
+	}}
 
 	if err := db.CleanupCommandWALCoveredSegments(false); err != nil {
 		t.Fatalf("CleanupCommandWALCoveredSegments: %v", err)
@@ -2020,11 +2020,11 @@ func TestCommandWALCleanupRetainsSegmentsRotatedAfterScan(t *testing.T) {
 			db := &DB{dir: dir, commandWAL: true, durability: DurabilityDurable, commandJournal: journal}
 			installCommandWALCleanupRootRuntimeForTest(db, 1, 1)
 			var rotateErr error
-			db.testCommandWALCleanupAfterScanHook = func() {
+			db.testCommandWALCleanupHooks = &commandWALCleanupTestHooks{afterScan: func() {
 				for i := 0; i < rotations && rotateErr == nil; i++ {
 					rotateErr = journal.RotateActiveSegment(false)
 				}
-			}
+			}}
 
 			if err := db.CleanupCommandWALCoveredSegments(false); err != nil {
 				t.Fatalf("CleanupCommandWALCoveredSegments: %v", err)
@@ -2094,11 +2094,11 @@ func TestCommandWALCleanupConvergesUnderSustainedRotatingWrites(t *testing.T) {
 		installCommandWALCleanupRootRuntimeForTest(db, uint64(round+1), appliedLSN)
 		beforeRemoved := db.commandWALCleanupRemoved.Load()
 		var result writerResult
-		db.testCommandWALCleanupAfterScanHook = func() {
+		db.testCommandWALCleanupHooks = &commandWALCleanupTestHooks{afterScan: func() {
 			response := make(chan writerResult, 1)
 			requests <- response
 			result = <-response
-		}
+		}}
 
 		if err := db.CleanupCommandWALCoveredSegments(false); err != nil {
 			t.Fatalf("cleanup round %d: %v", round, err)
@@ -2178,7 +2178,7 @@ func TestCommandWALCleanupRejectsPendingJournalOwnershipAfterScan(t *testing.T) 
 	db := &DB{dir: dir, commandWAL: true, durability: DurabilityDurable, commandJournal: journal}
 	installCommandWALCleanupRootRuntimeForTest(db, 1, 1)
 	var appendErr error
-	db.testCommandWALCleanupAfterScanHook = func() {
+	db.testCommandWALCleanupHooks = &commandWALCleanupTestHooks{afterScan: func() {
 		for i := 0; i < 2 && appendErr == nil; i++ {
 			_, appendErr = journal.AppendCommand(commitlog.CommandEnvelope{
 				Kind:          commitlog.CommandKindRawKVBatch,
@@ -2186,7 +2186,7 @@ func TestCommandWALCleanupRejectsPendingJournalOwnershipAfterScan(t *testing.T) 
 				PayloadFormat: commitlog.PayloadFormatRawKVBatchV1,
 			})
 		}
-	}
+	}}
 
 	err = db.CleanupCommandWALCoveredSegments(false)
 	if appendErr != nil {
@@ -2260,7 +2260,7 @@ func TestCommandWALCleanupRejectsMonotonicAuthorityRegression(t *testing.T) {
 
 			db := &DB{dir: dir, commandWAL: true, durability: DurabilityDurable, commandJournal: journal}
 			installCommandWALCleanupRootRuntimeForTest(db, 2, 2)
-			db.testCommandWALCleanupAfterScanHook = func() { tc.setup(db) }
+			db.testCommandWALCleanupHooks = &commandWALCleanupTestHooks{afterScan: func() { tc.setup(db) }}
 
 			err = db.CleanupCommandWALCoveredSegments(false)
 			if !errors.Is(err, errDurableWALCleanupProofStale) {
@@ -2284,7 +2284,7 @@ func TestCommandWALCleanupRejectsPostAppendPoison(t *testing.T) {
 
 	db := &DB{dir: dir, commandWAL: true, durability: DurabilityDurable}
 	installCommandWALCleanupRootForTest(t, db, 1, 1)
-	db.testCommandWALCleanupAfterScanHook = func() { db.commandWALFlushPoisoned.Store(true) }
+	db.testCommandWALCleanupHooks = &commandWALCleanupTestHooks{afterScan: func() { db.commandWALFlushPoisoned.Store(true) }}
 
 	err := db.CleanupCommandWALCoveredSegments(false)
 	if !errors.Is(err, ErrRecoveryRequired) {

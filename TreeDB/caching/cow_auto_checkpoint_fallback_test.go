@@ -90,7 +90,22 @@ func writeCOWAutoFallbackNative(t *testing.T, backend *backenddb.DB) *testSemant
 
 type cowAutomaticFallbackRolloverBackend struct {
 	*backenddb.DB
-	rollover func()
+	rollover          func()
+	backgroundRefused chan struct{}
+}
+
+func (b *cowAutomaticFallbackRolloverBackend) CheckCommandWALPublishReady() error {
+	if b.backgroundRefused == nil {
+		return b.DB.CheckCommandWALPublishReady()
+	}
+	// A separate asynchronous pass takes flushMu after the original checkpoint
+	// and can publish the newly frozen suffix. Refuse this pass before it starts
+	// its physical build so assertions observe the original checkpoint alone.
+	select {
+	case b.backgroundRefused <- struct{}{}:
+	default:
+	}
+	return backenddb.ErrSnapshotCapacity
 }
 
 func (b *cowAutomaticFallbackRolloverBackend) CommandWALCheckpointFallbackNeedsRefresh(basis backenddb.StateToken) (bool, error) {
@@ -125,6 +140,7 @@ func testCOWAutomaticCheckpointFallbackPreservesNewerSuffix(t *testing.T, engine
 			prefix := cache.cow.prefix.LogicalFrontiers()
 			before := backend.State().CommitSeq
 			var nativeSuffix *testSemanticState
+			var backgroundRefused chan struct{}
 			cache.testAfterCheckpointFrontierCapture = func() {
 				writeCOWAutoFallbackRaw(t, cache, backend, "suffix")
 				nativeSuffix = writeCOWAutoFallbackNative(t, backend)
@@ -132,6 +148,9 @@ func testCOWAutomaticCheckpointFallbackPreservesNewerSuffix(t *testing.T, engine
 					if err := cache.rolloverCOWForFlush(); err != nil {
 						t.Fatal(err)
 					}
+					backgroundRefused = make(chan struct{}, 1)
+					cache.backend = &cowAutomaticFallbackRolloverBackend{DB: backend, backgroundRefused: backgroundRefused}
+					cache.TriggerFlush()
 				}
 				if mode == "rollover-during-convergence" {
 					// Native ingress requires its concrete backend owner. Install
@@ -147,6 +166,13 @@ func testCOWAutomaticCheckpointFallbackPreservesNewerSuffix(t *testing.T, engine
 				t.Fatal(err)
 			}
 			cache.testAfterCheckpointFrontierCapture = nil
+			if frozen {
+				select {
+				case <-backgroundRefused:
+				case <-time.After(5 * time.Second):
+					t.Fatal("separate asynchronous flush did not reach its WAL readiness check")
+				}
+			}
 			// Automatic physical completion can return while the dispatcher is
 			// releasing this original accepted custody. In the frozen case the
 			// optional convergence safely skips before joining that cleanup.
