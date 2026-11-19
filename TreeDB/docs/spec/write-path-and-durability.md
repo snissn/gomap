@@ -626,7 +626,8 @@ its accepted Snapshot remains the exact frozen boundary. They reuse the
 complete-cut publication and Snapshot handoff at the same applied LSN, without
 appending a command or consuming newer mutable raw or semantic writes. When
 the frozen cut exactly matches the already sealed disk basis, fallback publication
-checks WAL health and reuses that coverage. It still seals the other DATA slot
+drains the WAL buffer, checks journal health, and reuses that coverage. It
+still seals the other DATA slot
 and all of its storage dependencies. A newer
 frozen suffix defers convergence to the next checkpoint. Covered-segment cleanup
 remains on the existing worker after checkpoint admission is released, and still

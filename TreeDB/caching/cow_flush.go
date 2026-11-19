@@ -550,8 +550,10 @@ func (db *DB) flushCOWFrozenCutWithColumnCompaction(syncFlush bool, publish *che
 		})
 		if generationPressure && canCapture && c.txnOwner != nil {
 			err = captured.SyncPrivateCOWGenerationWAL(c.txnOwner)
-		} else if syncFlush && !sealedFallback {
-			err = wal.FlushCommandWAL(true)
+		} else if syncFlush {
+			// Always drain the writer and surface journal-local failures, even
+			// when the command prefix already has durable root coverage.
+			err = wal.FlushCommandWAL(!sealedFallback)
 		} else {
 			err = wal.CheckCommandWALPublishReady()
 		}
