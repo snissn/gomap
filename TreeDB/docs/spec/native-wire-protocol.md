@@ -564,8 +564,14 @@ text_indexes
 
 Collection metadata emission uses version `5` for schemas without text indexes
 or a column store, preserving its scalar_u8 calibration encoding. Version `6`
-adds the maintained column-store schema payload. These non-text encodings and
-versions `1` through `6` decoding remain unchanged.
+adds the maintained column-store schema payload. The compact root storage
+policy fields and scalar index definitions encode Default, Fast and Compressed
+as `0`, `1` and `2`, respectively. Metadata responses encode Pager as `3` in
+those same fields. Existing metadata retains its encoding. Peers whose decoder
+supports only `0` through `2` reject a compact metadata response containing
+Pager. Upgrade metadata clients before using them to inspect Pager collections.
+Native-wire Create keeps the existing input policies and forced-Fast data and
+index-state roots.
 
 Schemas declaring text indexes use version `7`: `uvarint(7)` followed directly
 by the canonical catalog-create command-WAL payload returned by

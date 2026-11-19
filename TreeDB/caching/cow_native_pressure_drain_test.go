@@ -90,7 +90,9 @@ func TestCOWNativePressureDrainJoinsSealAndAcceptedRetirement(t *testing.T) {
 	}
 	through := cache.cow.prefix.LogicalFrontiers()
 	done := make(chan error, 1)
-	go func() { done <- cache.materializeCOWPrefix(context.Background(), false, nil, true) }()
+	go func() {
+		done <- cache.materializeCOWPrefix(context.Background(), false, nil, cowSynchronousPressureMaterialization)
+	}()
 	wait := func(ch <-chan struct{}, label string) {
 		t.Helper()
 		select {

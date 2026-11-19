@@ -9,6 +9,68 @@ This page is the current entry point for external `go-ycsb` comparisons across:
 It distinguishes the retained October comparison from historical reports and
 records the remaining qualification obligations.
 
+## November 18 sustained UPDATE comparison
+
+A relaxed standalone BSON candidate removed most UPDATE stalls and exceeded the
+gateway process memory guard. Table entries are individual six-million-operation
+runs on host111. Each starts from 100,000 records and uses 16 clients issuing
+95% full-document READs and 5% single-field UPDATEs. The two native binaries
+were built from main `554dab30` and candidate `08d7290f`. The long-run decision
+uses about 300,000 UPDATEs per run. [Exact source, storage, resource and lifecycle records](https://github.com/snissn/gomap/issues/5467#issuecomment-6995333936)
+
+| Native mixed measurement | Matched main | Candidate |
+| --- | --- | --- |
+| UPDATE p99, ms | 0.692 / 0.646 / 0.670 | 0.497 / 0.499 / 0.500 |
+| UPDATE p99.9, ms | 147.071 / 62.943 / 122.367 | 0.755 / 0.782 / 0.788 |
+| UPDATE p99.99, ms | 544.767 / 182.783 / 274.687 | 203.007 / 243.071 / 271.871 |
+| UPDATE maximum, ms | 690.687 / 195.455 / 1392.639 | 616.959 / 1325.055 / 1972.223 |
+| READ p99.9, ms | 0.514 / 0.509 / 0.522 | 0.461 / 0.467 / 0.469 |
+| Throughput, ops/s | 122,697 / 136,265 / 126,168 | 180,055 / 176,486 / 172,010 |
+| Gateway high-water memory through mixed end, MiB | 435.6 / 431.7 / 380.7 | 485.7 / 482.4 / 504.5 |
+
+The counterbalanced 1M screen measured UPDATE p99.9 of 119.167 and 118.783 ms
+on main and 0.751 and 0.771 ms on the candidate, against a 35.0395 ms ceiling.
+The native sustained median paired p99.9 reduction was 99.36%. The candidate's
+three Docker p99.9 measurements were 0.842 / 0.805 / 0.827 ms, alongside MongoDB
+8.2.7 at 0.496 / 0.498 / 0.502 ms. GoMap had higher throughput in all six short
+and long Docker comparisons. The original checked Close and full typed reopen
+passed in all 24 cells. Separate observers counted 122 and 43 natural physical
+publications on main and candidate. [Original product comparison](https://github.com/snissn/gomap/issues/5467#issuecomment-6995333936)
+
+The candidate moved medium BSON values into index pages. Gateway high-water
+memory grew in every native pair, exceeding the existing 10% concern threshold.
+A separate joined trace identified two groups of 16 UPDATEs, one during a
+checkpoint seal and another during WAL append as deferred cleanup started.
+Its maximum was 222 ms. The 617–1,972 ms maxima in the ordinary candidate
+measurements still lack an exact cause. [Process memory and alternative placement](https://github.com/snissn/gomap/issues/5467#issuecomment-6995781695)
+· [Client incidents](https://github.com/snissn/gomap/issues/5467#issuecomment-6995614094)
+
+A second candidate kept medium documents in the value log and released two
+foreground locks during maintenance. Fresh 1M pairs measured 151.423 → 4.207 ms
+and 78.591 → 2.419 ms against the same 35.0395 ms ceiling. Process high-water
+memory through mixed completion fell from 449.0 to 415.4 MiB and from 435.9
+to 420.8 MiB. The closed-stream verifier separately took 73% longer to complete
+cleanup even as it reduced foreground delay. [Second stock comparison](https://github.com/snissn/gomap/issues/5467#issuecomment-6996121100)
+· [Closed-stream cost](https://github.com/snissn/gomap/issues/5482#issuecomment-6996084351)
+
+Across three native 6M pairs this pointer candidate reduced UPDATE p99.9
+from 93.631 / 116.543 / 77.567 ms to 3.575 / 3.523 / 13.119 ms. Maximum
+UPDATE latency was 63.743 / 37.023 / 85.503 ms on the candidate. Long-run
+peak memory ratios were 1.005 / 0.999 / 1.018. The three candidate Docker
+p99.9 values were 1.378 / 3.915 / 4.311 ms. All six Docker throughput
+comparisons favored GoMap. Two of three short-run LOAD times increased by
+more than 10%. No long-run LOAD time crossed that threshold. A separate
+observer confirmed 120 / 44 natural main / candidate cuts. The stream
+cleanup cost keeps this revision out of production. [Sustained runs and disposition](https://github.com/snissn/gomap/issues/5467#issuecomment-6996418894)
+
+Restoring the original closed-stream cleanup retained the UPDATE benefit on
+main `679c3647`. Two matched 1M runs went from 61.919 to 3.211 ms and
+66.623 to 3.581 ms. Both cleared the binding 30.9595 ms screen. Throughput
+rose 27–28%, and the gateway used less peak memory in each pair. The release
+comparison and any later qualifications are tracked on the production PR.
+[Matched screen](https://github.com/snissn/gomap/issues/5467#issuecomment-6996506527)
+· [Production qualification](https://github.com/snissn/gomap/pull/5481)
+
 ## Final-source MongoDB comparison
 
 The [final-source report](ycsb_mongodb_gomap_final_2026-10-30.md) records twelve

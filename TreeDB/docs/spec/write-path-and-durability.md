@@ -1143,13 +1143,13 @@ The choice uses the actual opened file at creation; existing files and captured
 handles keep their detected format. See [storage format](storage-format.md#initialized-command-wal-container-v3).
 
 The configured logical command-WAL segment target is independent of initialized
-physical capacity. Physical pressure grows fresh reserves geometrically within
-that target's physical byte budget. For a nonpositive logical target, the default
-physical ceiling is 64 MiB (67,108,864 bytes); initial and forced/checkpoint
-successors retain the small 4,199,424-byte reserve. A zero logical target still
-requires physical-fit checks. Larger reserves can increase initialized bytes,
-cold recovery scanning, and unused tail space; this policy changes no per-frame
-geometry and promises no measured latency improvement. Successor
+physical capacity. Physical pressure grows fresh reserves geometrically up to
+the target's physical byte budget and the 64 MiB (67,108,864-byte) limit for
+ahead reserves. A larger atomic frame can require a larger reserve for its
+own successor. Initial and forced/checkpoint successors start with at most
+4,199,424 bytes of normal reserve. A zero logical target still requires
+physical-fit checks. A large configured target may get more physical WAL
+rotations, each with the ordinary file and namespace obligations. Successor
 preparation precedes installation; required file and namespace obligations
 follow the existing policy and settle before durable ACK. Fixed-container
 initialization itself is completely synced before publication. Capacity changes

@@ -594,6 +594,29 @@ same original captured AppliedLSN; a successful request's original durable WAL
 ACK and recovery skipping remain unchanged. The active journal remains
 appendable, and original append-size rollover still applies.
 
+Only the relaxed native generation-pressure worker flushes complete WAL frames
+and pins the exact active journal file under append ownership, then syncs that
+file after releasing the journal lock. Under the existing checkpoint writer
+fence it takes the already marked frozen COW prefix. Writes in the mutable
+successor keep their own later publication boundary. The worker waits for the
+file sync before DATA publication. This is the same
+active-file physical operation as synchronous WAL flush. Rotated files,
+namespace and dependency debt follow their original owners. The worker issues
+no barrier frame or durable WAL frontier. A proven temporary admission refusal
+leaves the captured work eligible for retry. The same worker arms one rate-limited
+timer so a lone frozen prefix can progress after admission resumes, even without
+more writes. At final snapshot registration, the worker may retry a full
+reader registry only before enqueue. It verifies the captured cut is still
+active and that the WAL intent already covers precisely the interval from
+the physical basis through that cut. A newly assigned intent, an accepted
+installation error or a cleanup failure follows the original failure path.
+Physical failures and any joined original cleanup failure still reach checked
+Close. A flush or sync failure poisons WAL publication. A direct
+Close call from that worker's error callback returns the existing callback
+reentry error before teardown begins.
+Public checkpoints, explicit durable requests and synchronous pressure retain
+their original WAL operations.
+
 The running worker retains its first captured size threshold; later
 StartAutoCheckpoint calls do not change that worker's behavior. Capability
 selection uses that captured positive threshold, not merely a later notification
@@ -631,13 +654,23 @@ Each entry distinguishes canonical assignment or uncertainty, complete logical
 installation, WAL completion and the exact physical seal. V (visible logical
 sequence), C (visible command prefix), W (stable WAL prefix) and S (sealed root)
 are separate; a NoWAL publication has no fabricated command LSN or W advance.
-Installed ordinary raw-only publications share a coalesced FIFO coverage run.
-The run's descriptor and receipt name its exact endpoint; iteration is not one
-visit per raw command. No raw effects move into this queue: immutable COW roots
-still own them. Native custody, projection, exact-seal request, charged and
-root-neutral entries retain their original independent slots. Canonical V+1/C+1
-validation occurs before whole-cut installation and only then can its raw slot
-merge, so assigned failures cannot disappear into a run.
+Installed ordinary raw-only publications and qualifying native publications
+share coalesced FIFO coverage runs. A run's descriptor and receipt name its
+exact endpoint. The immutable COW roots still own the effects of every
+command. Native coverage is limited to an original, relaxed singleton
+structured BSON update whose complete cut owns the unindexed inline primary
+mutations. Assignment first binds the original native custody. After
+canonical V+1/C+1 validation and the complete logical cut swap, the accepted
+installer can return the redundant collection reference to the original
+semantic cleanup worker after dropping the publication gates. The native
+producer explicitly opts in with a custody record that detaches without waiting
+or invoking user code. The cleanup latch spans release of writer admission
+and transfer of the preborn record, so Close joins work from the accepted
+update before the worker can become responsible only for retained readers.
+The registered worker performs actual retirement and refunds. Readers and frozen cuts retain
+their own original roots. Native projections, exact-seal requests, charged
+or root-neutral entries, and all other native custody retain their original
+independent slots. Assigned failures keep their original parked ownership.
 
 Before releasing the original writer exclusion, rollover marks its current
 exact V/C endpoint in that same FIFO. A grouped durable ACK can append a bare

@@ -3591,7 +3591,7 @@ func ValueLogRewriteOffline(opts Options) (stats ValueLogRewriteStats, retErr er
 			if len(replacements) != 0 {
 				system = &vacuumSystemRootRewriteIterator{base: system, replacements: replacements}
 			}
-			systemRoot, e := buildTreeFromIterator(system, rewriteUsesLeafLog)
+			systemRoot, e := buildTreeFromIterator(system, d.systemRootUsesOuterLeaves())
 			if e != nil {
 				return rebuiltDurableRootV1{}, e
 			}
@@ -3657,7 +3657,7 @@ func ValueLogRewriteOffline(opts Options) (stats ValueLogRewriteStats, retErr er
 			replacements: collectionRootReplacements,
 		}
 	}
-	sysRoot, err := buildTreeFromIterator(sysIter, opts.IndexOuterLeavesInValueLog)
+	sysRoot, err := buildTreeFromIterator(sysIter, d.systemRootUsesOuterLeaves())
 	if err != nil {
 		_ = closeReplacement()
 		return stats, err

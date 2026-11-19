@@ -340,7 +340,7 @@ func backendRootStoragePolicy(policy RootStoragePolicy) (backenddb.OrderedRootSt
 	switch policy {
 	case RootStorageDefault:
 		return backenddb.OrderedRootStorageDefault, nil
-	case RootStorageFast:
+	case RootStorageFast, RootStoragePager:
 		return backenddb.OrderedRootStoragePagerLeaves, nil
 	case RootStorageCompressed:
 		return backenddb.OrderedRootStorageValueLogLeaves, nil
@@ -1164,6 +1164,8 @@ const (
 	RootStorageDefault    RootStoragePolicy = ""
 	RootStorageFast       RootStoragePolicy = "fast"
 	RootStorageCompressed RootStoragePolicy = "compressed"
+	// RootStoragePager stores leaf pages in the index pager even when an external value appender is available.
+	RootStoragePager RootStoragePolicy = "pager"
 )
 
 type DocumentFormat string

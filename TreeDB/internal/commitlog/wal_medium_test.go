@@ -32,7 +32,7 @@ func TestWALMediumPolicyClassification(t *testing.T) {
 		{"unsupported", 0x01021994, nil, false, false, "platform_stream"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := productionWALContainer(1024, tc.supported, tc.kind, tc.err)
+			got := productionWALContainer(1024, tc.supported, tc.kind, tc.err, false)
 			if got.fixed != tc.fixed || got.reason != tc.reason {
 				t.Fatalf("selection=%+v", got)
 			}

@@ -194,9 +194,9 @@ func parseFlags(args []string, stderr io.Writer) (cliConfig, error) {
 	fs.StringVar(&cfg.dir, "dir", cfg.dir, "TreeDB root directory")
 	fs.StringVar(&cfg.profile, "profile", cfg.profile, "TreeDB profile: "+treedb.ProfileFlagHelp)
 	fs.StringVar(&cfg.documentFormat, "document-format", cfg.documentFormat, "default collection document format: bson, json, or template-v1")
-	fs.StringVar(&cfg.dataRootStorage, "data-root-storage", cfg.dataRootStorage, "default collection data root storage: default, fast, or compressed")
-	fs.StringVar(&cfg.indexStateStorage, "index-state-storage", cfg.indexStateStorage, "default collection index-state storage: default, fast, or compressed")
-	fs.StringVar(&cfg.indexRootStorage, "index-root-storage", cfg.indexRootStorage, "default collection secondary-index root storage: default, fast, or compressed")
+	fs.StringVar(&cfg.dataRootStorage, "data-root-storage", cfg.dataRootStorage, "default collection data root storage: default, fast, compressed, or pager")
+	fs.StringVar(&cfg.indexStateStorage, "index-state-storage", cfg.indexStateStorage, "default collection index-state storage: default, fast, compressed, or pager")
+	fs.StringVar(&cfg.indexRootStorage, "index-root-storage", cfg.indexRootStorage, "default collection secondary-index root storage: default, fast, compressed, or pager")
 	fs.IntVar(&cfg.maxFindScanDocuments, "max-find-scan-documents", cfg.maxFindScanDocuments, "maximum documents scanned by fallback find paths; 0 uses the gateway default")
 	fs.IntVar(&cfg.maxMessageBytes, "max-message-bytes", cfg.maxMessageBytes, "maximum MongoDB wire message size; 0 uses the gateway default")
 	fs.IntVar(&cfg.maxCursorRetainedBytes, "max-cursor-retained-bytes", cfg.maxCursorRetainedBytes, "maximum retained cursor batch bytes; 0 uses the gateway default")
@@ -342,6 +342,8 @@ func rootStoragePolicyFromFlag(value string) collections.RootStoragePolicy {
 		return collections.RootStorageFast
 	case string(collections.RootStorageCompressed):
 		return collections.RootStorageCompressed
+	case string(collections.RootStoragePager):
+		return collections.RootStoragePager
 	default:
 		return collections.RootStoragePolicy(value)
 	}

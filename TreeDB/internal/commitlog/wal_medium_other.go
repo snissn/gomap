@@ -10,3 +10,7 @@ import (
 func walFilesystemType(file *os.File) (uint64, error) {
 	return 0, errors.New("commitlog: filesystem classification unavailable")
 }
+
+func walIsExt4Mount(_ *os.File, _ uint64) bool {
+	return false
+}

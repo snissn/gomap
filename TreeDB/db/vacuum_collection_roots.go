@@ -853,7 +853,7 @@ func vacuumCollectLeafRefChildrenIfComplete(p *pager.Pager, rootID uint64) ([]va
 }
 
 func (db *DB) vacuumBuildSystemRoot(oldPager *pager.Pager, reader tree.SlabReader, systemRootID uint64, alloc vacuumAllocator, newPager *pager.Pager, opts bulk.BuildOptions, replacements []vacuumCollectionRootReplacement) (uint64, bool, error) {
-	appendOuterLeaves := db != nil && db.indexOuterLeavesInValueLog
+	appendOuterLeaves := db != nil && db.systemRootUsesOuterLeaves()
 	opts.LeafPageLog = nil
 	if appendOuterLeaves {
 		if db.leafPageLog == nil {

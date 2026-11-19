@@ -117,6 +117,55 @@ Offline driver controls (no services or benchmark workload):
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_idle_checkpoint_ab.py
 ```
 
+## Client UPDATE tail qualification
+
+The standalone Mongo gateway uses the MongoDB binding. Each comparison starts
+with a fresh 100,000-record BSON database. The client uses 16 workers, 95%
+full-document READs, 5% single-field UPDATEs and relaxed `w:1` acknowledgment.
+Keep the original load, census, checked Close and fresh-process typed reopen.
+Build both gateways with the same Go toolchain and use the same pinned client
+and helper binaries. The on-host resource envelope for the November campaign
+was 16 CPUs, 4 GiB of memory and zero swap. [Qualification contract](https://github.com/snissn/gomap/issues/5434)
+
+After preparing two full recipe freezes, the checked-in native A/B driver can
+collect paired six-million-operation and 10,000-operation runs.
+
+```sh
+python3 "$HARNESS/scripts/readme_mongodb_bench/idle_checkpoint_ab.py" \
+  --baseline-root "$BASELINE_TASK" --candidate-root "$CANDIDATE_TASK" \
+  --baseline-freeze-sha256 "$BASELINE_FREEZE_SHA256" \
+  --candidate-freeze-sha256 "$CANDIDATE_FREEZE_SHA256" \
+  --out "$EVIDENCE/native-update-tail" --lane-lock "$SHARED_MEASUREMENT_LOCK" \
+  --long-ops 6000000 --short-ops 10000 --order AB,BA,AB \
+  --min-throughput-ratio 0.95 --max-update-p99-ratio 1.05
+```
+
+Record the p99, p99.9, p99.99 and maximum from each client's final UPDATE line
+in `run.out`. Keep individual run percentiles and compute medians of paired
+ratios. At 6M total operations there are about 300,000 UPDATEs per long run.
+One storage incident can delay several clients, so the number of slow requests
+also needs the count of independent incidents. Keep 10k runs for short-run
+throughput and lifecycle cost.
+
+For product qualification, begin with two counterbalanced 1M pairs. Both
+candidate UPDATE p99.9 values must meet the smaller of 35.0395 ms and half
+the lower matched baseline. Require at least 30 s of mixed traffic for every
+sustained long cell. In native pairs the median long UPDATE p99.9 ratio must
+be at most 0.20, the median long p99 ratio at most 1.05, and the median
+throughput ratio at each length at least 0.95. In independently paired Docker
+cells, GoMap must exceed MongoDB throughput at both lengths in every pair.
+Each long GoMap UPDATE p99 must be at most the greater of 1 ms or 1.5 times
+MongoDB. Each long p99.9 must be at most the greater of 5 ms or 5 times MongoDB.
+
+Read the per-arm READ, load, complete lifecycle, stopped allocated bytes
+and gateway process high-water marks before accepting a result. `VmHWM`
+sampled just after the mixed client finishes includes earlier load and
+census work. Preserve its scope and inspect a consistent regression over
+10%. Establish actual maintenance separately by observing three or more
+naturally completed physical cuts per arm inside the measured mixed interval.
+Record observer cost against the ordinary build. Keep ordinary timing,
+incident tracing, and observer-based maintenance counts as separate receipts.
+
 ## Separate allocation and maintenance diagnostics
 
 Run `idle_checkpoint_diagnostic.py` with the same two frozen roots and manifest
