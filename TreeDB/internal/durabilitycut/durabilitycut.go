@@ -24,6 +24,7 @@ const (
 	AfterUserspaceFlush          Point = "after-userspace-flush"
 	BeforeDependencyFileSync     Point = "before-dependency-file-sync"
 	AfterDependencyFileSync      Point = "after-dependency-file-sync"
+	AfterCapturedWALRetirement   Point = "after-captured-wal-retirement"
 	BeforeNewFileDirectorySync   Point = "before-new-file-directory-sync"
 	AfterNewFileDirectorySync    Point = "after-new-file-directory-sync"
 	BeforeIndexDataSync          Point = "before-index-data-sync"
