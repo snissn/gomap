@@ -19807,14 +19807,15 @@ func (db *DB) autoCheckpointLoop(interval time.Duration, maxWALBytes int64, idle
 			generationDeadlineTimer.Stop()
 		}
 	}()
+	pairedGeneration := db.nativeGenerationSeals.idleInterval.Load() > 0
 	for {
+		// Close owns the remaining frontier as soon as it fences admission.
+		// A refused request can stay pending until after its final drain.
+		if pairedGeneration && db.closing.Load() {
+			return
+		}
 		var generationCh <-chan time.Time
-		if db.nativeGenerationSeals.idleInterval.Load() > 0 && generationRetry == nil {
-			// Close owns the remaining frontier as soon as it fences admission.
-			// A refused request can stay pending until after its final drain.
-			if db.closing.Load() {
-				return
-			}
+		if pairedGeneration && generationRetry == nil {
 			// Check the absolute deadline each time around the select. A stream
 			// of writes or coalesced wakes cannot extend the first rotation.
 			request, count := db.nativeGenerationSeals.next(time.Now())
@@ -19841,7 +19842,7 @@ func (db *DB) autoCheckpointLoop(interval time.Duration, maxWALBytes int64, idle
 		case <-intervalCh:
 			db.maybeAutoCheckpoint(maxWALBytes, autoCheckpointModeInterval)
 		case <-db.nativeGenerationFlushCh:
-			if db.nativeGenerationSeals.idleInterval.Load() <= 0 && generationRetry == nil {
+			if !pairedGeneration && generationRetry == nil {
 				maintainGeneration(rootpublication.SealedPrefix{}, 0)
 			}
 		case <-generationRetry:
