@@ -69,6 +69,18 @@ func TestNativeBSONGenerationPressureSealsTwoFrozenGenerations(t *testing.T) {
 	testNativeBSONGenerationPressureForeground(t, nativeGenerationSyncTest{wal: true, pair: true})
 }
 
+func TestNativeBSONGenerationPressureLoneSealWithContinuingWrites(t *testing.T) {
+	testNativeBSONGenerationPressureForeground(t, nativeGenerationSyncTest{wal: true, idle: 400 * time.Millisecond})
+}
+
+func TestNativeBSONGenerationPressureThirdDrainsSynchronously(t *testing.T) {
+	testNativeBSONGenerationPressureForeground(t, nativeGenerationSyncTest{wal: true, pair: true, hardThird: true})
+}
+
+func TestNativeBSONGenerationPressureCloseDrainsPendingSeal(t *testing.T) {
+	testNativeBSONGenerationPressureForeground(t, nativeGenerationSyncTest{wal: true, closePending: true})
+}
+
 type nativeGenerationSyncTest struct {
 	pair            bool
 	closeFromNotify bool
@@ -78,6 +90,9 @@ type nativeGenerationSyncTest struct {
 	wal             bool
 	rotate          bool
 	failure         error
+	idle            time.Duration
+	hardThird       bool
+	closePending    bool
 }
 
 func testNativeBSONGenerationPressureForeground(t *testing.T, control nativeGenerationSyncTest) {
@@ -107,15 +122,18 @@ func testNativeBSONGenerationPressureForeground(t *testing.T, control nativeGene
 	opts.COWMemtableLimits.MaxTotalBytes = 1 << 30
 	opts.COWMemtableLimits.MaxRetiredBytes = 1 << 30
 	opts.COWMemtableLimits.MaxGenerationBytes = 2 << 20
-	if control.exactFrozen || control.pair {
+	if control.exactFrozen || control.pair || control.closePending {
 		opts.COWMemtableLimits.MaxGenerationBytes = 128 << 10
 	}
 	opts.MaxWALBytes = 2 << 30
 	opts.FlushThreshold = 1 << 30
 	opts.BackgroundCheckpointInterval = -1
 	opts.BackgroundCheckpointIdleDuration = -1
-	if control.pair {
+	if control.pair || control.closePending {
 		opts.BackgroundCheckpointIdleDuration = time.Hour
+	}
+	if control.idle > 0 {
+		opts.BackgroundCheckpointIdleDuration = control.idle
 	}
 	backgroundFailure := make(chan error, 1)
 	callbackClose := make(chan error, 1)
@@ -197,6 +215,67 @@ func testNativeBSONGenerationPressureForeground(t *testing.T, control nativeGene
 			t.Error(err)
 		}
 	})
+	check := func(raw []byte, err error, n int64) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, ok := bson.Raw(raw).Lookup("n").Int64OK(); !ok || got != n {
+			t.Fatalf("BSON n=%d,%v want %d", got, ok, n)
+		}
+	}
+	var primarySyncs atomic.Int64
+	finish := func(last int64) {
+		t.Helper()
+		if err := held.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := manager.Close(); err != nil {
+			t.Fatal(err)
+		}
+		closeErr := db.Close()
+		db = nil
+		if !errors.Is(closeErr, syncFailure) {
+			t.Fatalf("checked Close = %v, want %v", closeErr, syncFailure)
+		}
+		if control.closePending && primarySyncs.Load() == 0 {
+			t.Fatal("Close returned without physically publishing and syncing the pending primary")
+		}
+		requirePublicCOWFinalZero(t, cache)
+		opts.FreshSystemPagerLeaves = false
+		db, err = Open(opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if control.ext4Stream && db.Stats()["treedb.command_wal.writer.container"] != "stream" {
+			t.Fatal("recovery did not retain the ext4 stream policy")
+		}
+		backend, err = db.NativeSemanticBackend()
+		if err != nil {
+			t.Fatal(err)
+		}
+		reader, err = collections.NewNativeJSONManager(backend)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := reader.Get("rows", id)
+		check(raw, err, last)
+		if control.systemPager {
+			snapshot := backend.AcquireSnapshot()
+			if snapshot == nil {
+				t.Fatal("missing recovered physical snapshot")
+			}
+			if err := leafrefscan.Walk(context.Background(), snapshot.State().SystemRootPageID, snapshot.Pager().Get, nil, func(page.LeafLogPtr) error {
+				return errors.New("WAL replay wrote a system leaf to the outer log")
+			}); err != nil {
+				t.Error(err)
+			}
+			if err := snapshot.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
 	write := func(n int64) error {
 		typ, buf, err := bson.MarshalValue(n)
 		if err != nil {
@@ -242,11 +321,15 @@ func testNativeBSONGenerationPressureForeground(t *testing.T, control nativeGene
 	}
 	completedSync := make(chan syncWitness, 1)
 	var armed atomic.Bool
+	var physicalSyncs atomic.Int64
 	var once sync.Once
 	resume := func() { once.Do(func() { close(release) }) }
 	path := filepath.Join(opts.Dir, "maindb", "index.db")
 	wal := filepath.Join(opts.Dir, "maindb", "wal")
 	restore := durabilitycut.Install(func(e durabilitycut.Event) error {
+		if control.closePending && e.Point == durabilitycut.AfterMetaSync && e.Resource == durabilitycut.ResourceMeta && e.Path == path {
+			primarySyncs.Add(1)
+		}
 		match := e.Point == durabilitycut.BeforeMetaWrite && e.Resource == durabilitycut.ResourceMeta && e.Path == path
 		if holdWAL {
 			match = e.Point == durabilitycut.BeforeDependencyFileSync && e.Resource == durabilitycut.ResourceCommandWAL && e.StablePath != nil && filepath.Dir(e.Path) == wal && strings.HasPrefix(filepath.Base(e.Path), "commit-l0-")
@@ -258,10 +341,13 @@ func testNativeBSONGenerationPressureForeground(t *testing.T, control nativeGene
 			default:
 			}
 		}
-		if match && armed.CompareAndSwap(false, true) {
-			reached <- e
-			<-release
-			return syncFailure
+		if match {
+			physicalSyncs.Add(1)
+			if armed.CompareAndSwap(false, true) {
+				reached <- e
+				<-release
+				return syncFailure
+			}
 		}
 		return nil
 	})
@@ -285,6 +371,20 @@ func testNativeBSONGenerationPressureForeground(t *testing.T, control nativeGene
 				t.Fatalf("%s remained blocked after releasing generation publication (WAL=%t)", operation, holdWAL)
 			}
 		}
+	}
+	if control.closePending {
+		last++
+		if err := write(last); err != nil {
+			t.Fatal(err)
+		}
+		if got := prefix.LogicalFrontiers(); got.S != old.S || got.V != old.V+1 || physicalSyncs.Load() != 0 || primarySyncs.Load() != 0 {
+			t.Fatalf("expected one acknowledged suffix with a pending seal before Close: before=%+v after=%+v syncs=%d", old, got, physicalSyncs.Load())
+		}
+		raw, err := held.Get(id)
+		check(raw, err, 0)
+		resume()
+		finish(last)
+		return
 	}
 	if control.pair {
 		first := old
@@ -321,13 +421,56 @@ func testNativeBSONGenerationPressureForeground(t *testing.T, control nativeGene
 			t.Fatalf("first generation was sealed before the second rotation: first=%+v second=%+v", first, old)
 		}
 	}
-	go func() { done <- write(last + 1) }()
+	start := time.Now()
+	go func(n int64) { done <- write(n) }(last + 1)
 	var heldSync durabilitycut.Event
-	select {
-	case heldSync = <-reached:
-	case <-time.After(10 * time.Second):
-		resume()
-		t.Fatalf("physical generation publication did not reach held sync (WAL=%v)", holdWAL)
+	var continuingWrites int64
+	if control.idle > 0 {
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+		done <- nil
+		ticker := time.NewTicker(control.idle / 16)
+		defer ticker.Stop()
+		deadline := time.After(4 * control.idle)
+		lastWrite := start
+		idleAck := make(chan error, 1)
+	waitIdle:
+		for {
+			select {
+			case heldSync = <-reached:
+				now := time.Now()
+				if continuingWrites == 0 || now.Sub(start) < control.idle || now.Sub(lastWrite) >= control.idle {
+					t.Fatalf("lone seal did not honor its original idle bound while writes continued: seal age=%s write age=%s writes=%d", now.Sub(start), now.Sub(lastWrite), continuingWrites)
+				}
+				break waitIdle
+			case <-ticker.C:
+				continuingWrites++
+				go func(n int64) { idleAck <- write(n) }(last + 1 + continuingWrites)
+				select {
+				case err := <-idleAck:
+					if err != nil {
+						t.Fatal(err)
+					}
+				case <-time.After(2 * time.Second):
+					t.Fatal("suffix update stalled during lone-generation scheduling")
+				}
+				lastWrite = time.Now()
+				observation, err := backend.ObserveNativeProducer()
+				if err != nil || observation.UnderPressure {
+					t.Fatalf("unexpected second pressure while testing the first generation deadline: %+v, %v", observation, err)
+				}
+			case <-deadline:
+				t.Fatalf("continuing writes starved the lone seal after %d acknowledged suffixes", continuingWrites)
+			}
+		}
+	} else {
+		select {
+		case heldSync = <-reached:
+		case <-time.After(10 * time.Second):
+			resume()
+			t.Fatalf("physical generation publication did not reach held sync (WAL=%v)", holdWAL)
+		}
 	}
 	waitWhileHeld("generation-triggering UPDATE")
 	var heldFile os.FileInfo
@@ -346,20 +489,12 @@ func testNativeBSONGenerationPressureForeground(t *testing.T, control nativeGene
 		}
 	}
 	// Start the successor only after the older physical operation is held.
-	go func() { done <- write(last + 2) }()
+	go func() { done <- write(last + 2 + continuingWrites) }()
 	waitWhileHeld("successor UPDATE")
 	f := prefix.LogicalFrontiers()
-	if f.V != old.V+2 || f.C != old.C+2 || f.S != old.S || f.W != old.W {
+	added := uint64(2 + continuingWrites)
+	if f.V != old.V+added || f.C != old.C+added || f.S != old.S || f.W != old.W {
 		t.Fatalf("while physical publication held (WAL=%v): old=%+v now=%+v", holdWAL, old, f)
-	}
-	check := func(raw []byte, err error, n int64) {
-		t.Helper()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got, ok := bson.Raw(raw).Lookup("n").Int64OK(); !ok || got != n {
-			t.Fatalf("BSON n=%d,%v want %d", got, ok, n)
-		}
 	}
 	readWhileHeld := func(operation string, get func() ([]byte, error), want int64) {
 		t.Helper()
@@ -373,9 +508,56 @@ func testNativeBSONGenerationPressureForeground(t *testing.T, control nativeGene
 		check(raw, nil, want)
 	}
 	readWhileHeld("held-reader GET", func() ([]byte, error) { return held.Get(id) }, 0)
-	readWhileHeld("current-reader GET", func() ([]byte, error) { return reader.Get("rows", id) }, last+2)
-	last += 2
+	readWhileHeld("current-reader GET", func() ([]byte, error) { return reader.Get("rows", id) }, last+2+continuingWrites)
+	last += 2 + continuingWrites
 	wantSeal := rootpublication.SealedPrefix{LogicalSequence: old.V, CanonicalLSN: old.C}
+	if control.hardThird {
+		for attempts := 0; ; attempts++ {
+			if attempts == 1024 {
+				t.Fatal("third generation did not reach its watermark")
+			}
+			observed, err := backend.ObserveNativeProducer()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if observed.UnderPressure {
+				if !observed.Semantic.GenerationUnderPressure || observed.Semantic.ConstructionBytes != 0 {
+					t.Fatalf("expected generation pressure: %+v", observed)
+				}
+				break
+			}
+			last++
+			if err := write(last); err != nil {
+				t.Fatal(err)
+			}
+		}
+		third := prefix.LogicalFrontiers()
+		last++
+		started := make(chan struct{})
+		go func(n int64) {
+			close(started)
+			done <- write(n)
+		}(last)
+		<-started
+		select {
+		case err := <-done:
+			t.Fatalf("a third queued generation escaped the original synchronous drain: %v", err)
+		case <-time.After(50 * time.Millisecond):
+		}
+		resume()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("synchronous third generation failed to join after original sync")
+		}
+		f = prefix.LogicalFrontiers()
+		if f.S.LogicalSequence != third.V || f.S.CanonicalLSN != third.C || f.V != third.V+1 || f.C != third.C+1 {
+			t.Fatalf("synchronous third generation did not seal its exact predecessor: third=%+v after=%+v", third, f)
+		}
+	}
 	if control.exactFrozen {
 		// While the sole pressure worker still owns the older WAL sync,
 		// fill and rotate a real second generation and accept a suffix.
@@ -444,6 +626,12 @@ func testNativeBSONGenerationPressureForeground(t *testing.T, control nativeGene
 				t.Fatalf("generation seal must exclude the newer accepted suffix: before=%+v now=%+v", f, after)
 			}
 		}
+		if control.pair && !control.hardThird {
+			want := rootpublication.SealedPrefix{LogicalSequence: old.V, CanonicalLSN: old.C}
+			if after, syncs := prefix.LogicalFrontiers(), physicalSyncs.Load(); after.S != want || syncs != 1 {
+				t.Fatalf("paired publication: sealed=%+v syncs=%d, want exact %+v and one sync", after.S, syncs, want)
+			}
+		}
 		if err := db.Checkpoint(); err != nil {
 			t.Fatal(err)
 		}
@@ -479,48 +667,5 @@ func testNativeBSONGenerationPressureForeground(t *testing.T, control nativeGene
 			t.Fatalf("failed WAL sync changed logical, durable or applied frontiers: %+v -> %+v", f, after)
 		}
 	}
-	if err := held.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := manager.Close(); err != nil {
-		t.Fatal(err)
-	}
-	closeErr := db.Close()
-	db = nil
-	if !errors.Is(closeErr, syncFailure) {
-		t.Fatalf("checked Close = %v, want %v", closeErr, syncFailure)
-	}
-	requirePublicCOWFinalZero(t, cache)
-	opts.FreshSystemPagerLeaves = false
-	db, err = Open(opts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if control.ext4Stream && db.Stats()["treedb.command_wal.writer.container"] != "stream" {
-		t.Fatal("recovery did not retain the ext4 stream policy")
-	}
-	backend, err = db.NativeSemanticBackend()
-	if err != nil {
-		t.Fatal(err)
-	}
-	reader, err = collections.NewNativeJSONManager(backend)
-	if err != nil {
-		t.Fatal(err)
-	}
-	raw, err := reader.Get("rows", id)
-	check(raw, err, last)
-	if control.systemPager {
-		snapshot := backend.AcquireSnapshot()
-		if snapshot == nil {
-			t.Fatal("missing recovered physical snapshot")
-		}
-		if err := leafrefscan.Walk(context.Background(), snapshot.State().SystemRootPageID, snapshot.Pager().Get, nil, func(page.LeafLogPtr) error {
-			return errors.New("WAL replay wrote a system leaf to the outer log")
-		}); err != nil {
-			t.Error(err)
-		}
-		if err := snapshot.Close(); err != nil {
-			t.Fatal(err)
-		}
-	}
+	finish(last)
 }
