@@ -8163,23 +8163,34 @@ func (db *DB) reconcileSplitValueLogWritersAfterBackendMaintenanceAdmitted(admit
 	// In cached mode DB.dir is the wal/ directory, not the DB root.
 	walDir := db.dir
 	segments, _ := listNonEmptySplitLogSegments(walDir, db.valueLogDir, db.leafLogDir)
+	sharedLaneID := -1
+	if db.nativeRootValueLogAppendShared && len(db.nativeRootValueLogAppendLanes) > 0 {
+		sharedLaneID = db.nativeRootValueLogAppendLanes[0].id
+	}
 	maxSeqByLane := make(map[int]int, len(db.lanes)+1)
 	for _, seg := range segments {
-		if !seg.valueLog {
+		if !seg.valueLog || seg.seq <= maxSeqByLane[seg.lane] {
 			continue
 		}
-		if seg.seq > maxSeqByLane[seg.lane] {
-			maxSeqByLane[seg.lane] = seg.seq
+		if seg.lane == sharedLaneID {
+			// The permissive filename census can report a number the reader
+			// cannot encode. Keep it out of the shared reservation and fence.
+			if uint64(seg.lane) > math.MaxUint32 || uint64(seg.seq) > math.MaxUint32 {
+				continue
+			}
+			if _, err := valuelog.EncodeFileID(uint32(seg.lane), uint32(seg.seq)); err != nil {
+				continue
+			}
 		}
+		maxSeqByLane[seg.lane] = seg.seq
 	}
-	if db.nativeRootValueLogAppendShared && len(db.nativeRootValueLogAppendLanes) > 0 {
-		laneID := db.nativeRootValueLogAppendLanes[0].id
-		externalSeq := db.observeNativeRootValueLogExternalSeq(maxSeqByLane[laneID])
+	if sharedLaneID >= 0 {
+		externalSeq := db.observeNativeRootValueLogExternalSeq(maxSeqByLane[sharedLaneID])
 		if externalSeq > 0 {
 			db.advanceNativeRootValueLogAppendSeqAtLeast(externalSeq)
-			maxSeqByLane[laneID] = externalSeq
+			maxSeqByLane[sharedLaneID] = externalSeq
 		} else {
-			delete(maxSeqByLane, laneID)
+			delete(maxSeqByLane, sharedLaneID)
 		}
 	}
 	for i := range db.lanes {

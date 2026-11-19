@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"os"
+	"path/filepath"
 	"runtime"
 	"testing"
 
@@ -155,6 +156,17 @@ func TestCOWSharedValueLogWritersSurviveRepeatedMaintenance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Neither an invalid encoded sequence nor a sequence that would wrap on
+	// conversion to uint32 may conceal the valid external advance.
+	invalidPaths := []string{
+		filepath.Join(path, "value-l0-8388608.log"),
+		filepath.Join(path, "value-l0-4294967297.log"),
+	}
+	for _, invalid := range invalidPaths {
+		if err := os.WriteFile(invalid, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	// Block the second successor so the first writer completes its rotation
 	// before an actual storage error leaves the remaining writers behind.
 	firstID, err := valuelog.EncodeFileID(0, externalSeq+1)
@@ -196,6 +208,11 @@ func TestCOWSharedValueLogWritersSurviveRepeatedMaintenance(t *testing.T) {
 	}
 	if !usedFirst {
 		t.Fatal("fence retry rotated the already advanced writer")
+	}
+	for _, invalid := range invalidPaths {
+		if err := os.Remove(invalid); err != nil {
+			t.Fatal(err)
+		}
 	}
 	runMaintenance(fileCount())
 	checkPaths()
