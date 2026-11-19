@@ -91,6 +91,17 @@ same-schema, prepared-owner and queue-controlled publication tests cover these
 rules in `TreeDB/collections`; actual append/finalize callers are covered in
 `TreeDB/internal/raftapply`.
 
+## Command-WAL checkpoint fallback checks
+
+A fallback check pins teardown and captures the original root publication
+coordinator and complete backend state token. The wait for that root's physical
+seal holds only the teardown pin. Before reading the durable slots, the check
+enters the existing publication lock order and verifies that the captured
+runtime is still current and that the current state token matches both the
+captured token and the caller's basis. An online vacuum that supersedes the
+captured runtime makes the basis stale. A failure of the captured physical seal
+is returned to the caller.
+
 ## Bounded vector prepare in the Raft FSM
 
 Vector prepare takes a factory-minted stable DB capture, the root-scoped vector
