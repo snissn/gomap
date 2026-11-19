@@ -304,7 +304,7 @@ func (tx *nativeConditionalTxn) CommitNative(native *backenddb.NativePreparedPub
 		// Queue private native edges/custody before withdrawing the ORIGINAL
 		// transaction opening, even when it differs from the attach-time cut.
 		releaseErr := tx.batch.releaseNativePublication()
-		if result.OnlyPointConflict {
+		if native != nil && native.ObservePointConflict != 0 {
 			err = joinCOWCleanupError(err, releaseErr)
 		}
 		err = joinCOWCleanupError(err, tx.Close())
