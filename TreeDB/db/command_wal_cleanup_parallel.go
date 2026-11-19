@@ -56,14 +56,26 @@ func (s *commandWALCleanupScan) canScanClosedStreamPair(segments []logSegment, a
 // single append exclusion. Replay the same second handle in order for records
 // above the worker's scratch limit, compressed records and shared replay LSNs.
 // Only the normal reader may decompress and report a cross-file duplicate.
-func (s *commandWALCleanupScan) scanClosedStreamPair(first, second logSegment, active rootpublication.StableIdentity) bool {
-	firstFile, firstInfo, err := openParallelWALCleanupStream(first, active)
-	s.hardErr = errors.Join(s.hardErr, err)
+func (s *commandWALCleanupScan) scanClosedStreamPair(first, second logSegment, active rootpublication.StableIdentity, open func(string) (*os.File, error)) bool {
+	firstFile, firstInfo, err := s.openParallelWALCleanupStream(first, active, open)
+	if err != nil {
+		s.hardErr = errors.Join(s.hardErr, err)
+		s.scanSegment(second, false, false, nil)
+		return true
+	}
 	if firstFile == nil {
 		return false
 	}
-	secondFile, secondInfo, err := openParallelWALCleanupStream(second, active)
-	s.hardErr = errors.Join(s.hardErr, err)
+	secondFile, secondInfo, err := s.openParallelWALCleanupStream(second, active, open)
+	if err != nil {
+		// The first file still owns its original position in the proof and
+		// error order. The failed second probe is its scan's hard error.
+		if !s.scanFile(first, firstFile, false, false, nil) {
+			s.hardErr = errors.Join(s.hardErr, firstFile.Close())
+		}
+		s.hardErr = errors.Join(s.hardErr, err)
+		return true
+	}
 	if secondFile == nil {
 		s.hardErr = errors.Join(s.hardErr, firstFile.Close())
 		return false
@@ -112,23 +124,34 @@ func (s *commandWALCleanupScan) scanClosedStreamPair(first, second logSegment, a
 	return true
 }
 
-// Opening a pair is optional. If it cannot be staged, the ordered scan owns
-// the file errors. Any error from closing an already-open handle must survive.
-func openParallelWALCleanupStream(seg logSegment, active rootpublication.StableIdentity) (*os.File, os.FileInfo, error) {
+// Opening a pair is optional. Link/mount mismatch and descriptor exhaustion
+// allow the original ordered scan. Actual faults on known segment handles
+// still belong to the proof, including a failed close on ineligible handles.
+func (s *commandWALCleanupScan) openParallelWALCleanupStream(seg logSegment, active rootpublication.StableIdentity, open func(string) (*os.File, error)) (*os.File, os.FileInfo, error) {
 	link, err := os.Lstat(seg.path)
 	if err != nil || !link.Mode().IsRegular() {
 		return nil, nil, nil
 	}
-	file, err := os.Open(seg.path)
+	file, err := open(seg.path)
 	if err != nil {
-		return nil, nil, nil
+		if commandWALCleanupDescriptorExhausted(err) {
+			return nil, nil, nil
+		}
+		return nil, nil, fmt.Errorf("open command WAL segment %s: %w", filepath.Base(seg.path), err)
 	}
 	info, statErr := file.Stat()
-	fixed, formatErr := commitlog.HasFixedWALMagic(file)
 	identity, identityErr := rootpublication.StableIdentityFromFile(file)
-	if statErr != nil || !os.SameFile(link, info) || info.Size() != seg.size || formatErr != nil || fixed ||
-		identityErr != nil || rootpublication.SamePhysicalIdentity(identity, active) || !commitlog.IsExt4WALFilesystem(file) {
-		return nil, nil, file.Close()
+	if err := errors.Join(identityErr, statErr); err != nil {
+		return nil, nil, errors.Join(fmt.Errorf("identify command WAL segment %s: %w", filepath.Base(seg.path), err), file.Close())
+	}
+	fixed, formatErr := commitlog.HasFixedWALMagic(file)
+	if formatErr != nil {
+		return nil, nil, errors.Join(fmt.Errorf("scan command WAL segment %s: %w", filepath.Base(seg.path), formatErr), file.Close())
+	}
+	if !os.SameFile(link, info) || info.Size() != seg.size || fixed ||
+		rootpublication.SamePhysicalIdentity(identity, active) || !commitlog.IsExt4WALFilesystem(file) {
+		s.hardErr = errors.Join(s.hardErr, file.Close())
+		return nil, nil, nil
 	}
 	return file, info, nil
 }

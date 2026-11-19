@@ -821,7 +821,7 @@ func (s *commandWALCleanupScan) scanLockedDirectoryWithStreamPair(dir string, st
 	activeByLane := commandWALActiveSeqByLane(segments)
 	s.decisions = make([]commandWALSegmentCleanupDecision, 0, len(segments))
 	if stream != nil && s.canScanClosedStreamPair(segments, *stream, activeByLane[stream.Lane]) &&
-		s.scanClosedStreamPair(segments[0], segments[1], stream.ActiveIdentity) {
+		s.scanClosedStreamPair(segments[0], segments[1], stream.ActiveIdentity, os.Open) {
 		segments = segments[2:]
 	}
 	for _, seg := range segments {

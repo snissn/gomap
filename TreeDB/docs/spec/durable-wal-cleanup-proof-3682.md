@@ -122,7 +122,14 @@ Ordinary cleanup is serialized per DB and follows this order:
    Stream cleanup through `CleanupCommandWALCoveredPrefix` reuses a bounded
    read-ahead buffer for closed stream segments. Frame validation and WAL
    offsets use the bytes consumed by the decoder, including on short reads.
-   Active streams and fixed containers keep their original readers;
+   The two oldest canonical ext4 stream predecessors can use independent
+   validators under the same append exclusion when both are at least 128 MiB
+   and the replay interval contains at most 4,096 LSNs. The additional reader
+   uses at most 8 MiB of frame scratch and one 64 KiB read-ahead buffer.
+   A compressed or larger frame, or overlapping replay LSNs, causes one
+   ordered rescan of the exact second handle. This can reread its previously
+   validated prefix. The final decision and any error follow the original
+   order. Active streams and fixed containers keep their original readers;
 5. reacquire the durable-publication lock, freshly validate current root
    runtime, and require its minimum cleanup frontier and durable WAL LSN not to
    have regressed below the captured authority;

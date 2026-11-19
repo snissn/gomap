@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
@@ -173,7 +175,7 @@ func TestCommandWALCleanupParallelStreamOrderedProof(t *testing.T) {
 
 			split := newCommandWALCleanupScan(test.lower, test.upper, 0, nil)
 			split.closedStreamBuffer = new(commitlog.CleanupReadBuffer)
-			if !split.scanClosedStreamPair(segments[0], segments[1], rootpublication.StableIdentity{}) {
+			if !split.scanClosedStreamPair(segments[0], segments[1], rootpublication.StableIdentity{}, os.Open) {
 				t.Fatal("ext4 stream pair was declined")
 			}
 			split.scanSegment(segments[2], false, false, nil)
@@ -257,7 +259,7 @@ func TestCommandWALCleanupParallelStreamRejectsAliases(t *testing.T) {
 	}
 	scan := newCommandWALCleanupScan(1, 1, 0, nil)
 	scan.closedStreamBuffer = new(commitlog.CleanupReadBuffer)
-	if scan.scanClosedStreamPair(segments[0], segments[1], rootpublication.StableIdentity{}) || scan.hardErr != nil {
+	if scan.scanClosedStreamPair(segments[0], segments[1], rootpublication.StableIdentity{}, os.Open) || scan.hardErr != nil {
 		t.Fatalf("closed alias selected or failed: %v", scan.hardErr)
 	}
 	file, err := os.Open(first)
@@ -268,7 +270,71 @@ func TestCommandWALCleanupParallelStreamRejectsAliases(t *testing.T) {
 	if err := errors.Join(err, file.Close()); err != nil {
 		t.Fatal(err)
 	}
-	if scan.scanClosedStreamPair(segments[0], segments[1], identity) || scan.hardErr != nil {
+	if scan.scanClosedStreamPair(segments[0], segments[1], identity, os.Open) || scan.hardErr != nil {
 		t.Fatalf("active alias selected or failed: %v", scan.hardErr)
+	}
+}
+
+func TestCommandWALCleanupParallelStreamOpenFault(t *testing.T) {
+	dir := t.TempDir()
+	requireExt4ForParallelWALCleanup(t, dir)
+	writeCommandWALFrame(t, dir, 1, 1)
+	writeCommandWALFrame(t, dir, 2, 2)
+	segments, err := listWALSegments(dir)
+	if err != nil || len(segments) != 2 {
+		t.Fatalf("segments=%v err=%v", segments, err)
+	}
+	payload, err := os.ReadFile(segments[0].path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload[len(payload)-1] ^= 1
+	if err := os.WriteFile(segments[0].path, payload, 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		fault              error
+		wantsOrderedResult bool
+	}{
+		{syscall.EMFILE, false}, {syscall.ENFILE, false}, {syscall.EIO, true},
+	} {
+		t.Run(tc.fault.Error(), func(t *testing.T) {
+			scan := newCommandWALCleanupScan(2, 2, 0, nil)
+			scan.closedStreamBuffer = new(commitlog.CleanupReadBuffer)
+			var first *os.File
+			secondOpens := 0
+			open := func(path string) (*os.File, error) {
+				if path == segments[1].path {
+					secondOpens++
+					if secondOpens == 1 {
+						return nil, &os.PathError{Op: "open", Path: path, Err: tc.fault}
+					}
+					return os.Open(path)
+				}
+				first, err = os.Open(path)
+				return first, err
+			}
+			got := scan.scanClosedStreamPair(segments[0], segments[1], rootpublication.StableIdentity{}, open)
+			if got != tc.wantsOrderedResult || secondOpens != 1 {
+				t.Fatalf("handled=%t second opens=%d want=%t and one open", got, secondOpens, tc.wantsOrderedResult)
+			}
+			if _, err := first.Stat(); !errors.Is(err, os.ErrClosed) {
+				t.Fatalf("first staged fd still open: %v", err)
+			}
+			if !got {
+				if scan.hardErr != nil {
+					t.Fatalf("descriptor exhaustion became a scan error: %v", scan.hardErr)
+				}
+				return
+			}
+			if !errors.Is(scan.hardErr, tc.fault) || !errors.Is(scan.hardErr, commitlog.ErrCorrupt) {
+				t.Fatalf("lost actual read/storage error: %v", scan.hardErr)
+			}
+			order := scan.hardErr.Error()
+			firstIndex, secondIndex := strings.Index(order, filepath.Base(segments[0].path)), strings.Index(order, filepath.Base(segments[1].path))
+			if firstIndex < 0 || secondIndex <= firstIndex {
+				t.Fatalf("noncanonical hard error order: %v", scan.hardErr)
+			}
+		})
 	}
 }
