@@ -1330,7 +1330,12 @@ func TestPowerLossOracleCounterexampleRelaxedCommandFrameMissingRID(t *testing.T
 		variant := variant
 		t.Run(variant.ID, func(t *testing.T) {
 			t.Run("read-only", func(t *testing.T) {
-				result, reopened, closeFn, err := powerlossreopen.StableAt(t.TempDir(), variant.Model, opts, true)
+				// StableAt rejects symlinked ancestors, including macOS's /var alias.
+				destination, err := filepath.EvalSymlinks(t.TempDir())
+				if err != nil {
+					t.Fatal(err)
+				}
+				result, reopened, closeFn, err := powerlossreopen.StableAt(destination, variant.Model, opts, true)
 				if err != nil {
 					t.Fatal(err)
 				}
