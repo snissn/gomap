@@ -130,3 +130,46 @@ func TestHistoryOversizedSemanticEffectsUseOnlyAffectedDomainBarriers(t *testing
 		t.Fatal("oversize fallback lost namespace")
 	}
 }
+
+func TestHistoryOnlyPointChanged(t *testing.T) {
+	rows := Namespace{Kind: CollectionNamespace, Collection: 1, Domain: 1, Interpretation: 1}
+	index := rows
+	index.Domain++
+	row := Dependency{Namespace: rows, Kind: PointEffect, Key: []byte("row")}
+	catalog := Dependency{Namespace: Namespace{Kind: CatalogNamespace}, Kind: PointEffect, Key: []byte("users")}
+	indexEntry := Dependency{Namespace: index, Kind: PointEffect, Key: []byte("blue")}
+	deps, effects := []Dependency{catalog, row}, []Dependency{row, indexEntry}
+	for _, tc := range []struct {
+		name   string
+		writes []Effect
+		want   bool
+	}{
+		{"row only", []Effect{row}, true},
+		{"disjoint write", []Effect{{Namespace: rows, Kind: PointEffect, Key: []byte("other")}}, false},
+		{"row and disjoint namespace", []Effect{row, {Namespace: index, Kind: PointEffect, Key: row.Key}}, true},
+		{"row and collection metadata", []Effect{row, catalog}, false},
+		{"row and index effect", []Effect{row, indexEntry}, false},
+		{"row and covering range", []Effect{row, {Namespace: rows, Kind: RangeEffect, Key: []byte("r"), End: []byte("s")}}, false},
+		{"row and disjoint range", []Effect{row, {Namespace: rows, Kind: RangeEffect, Key: []byte("a"), End: row.Key}}, true},
+		{"row and namespace barrier", []Effect{row, {Namespace: rows, Kind: BarrierEffect}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, err := New(32, 1<<20, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer h.Close()
+			installEffects(t, h, 1, tc.writes...)
+			if got := h.OnlyPointChanged(0, row, deps, effects); got != tc.want {
+				t.Errorf("OnlyPointChanged = %v, want %v", got, tc.want)
+			}
+			if h.OnlyPointChanged(1, row, deps, effects) {
+				t.Error("counted a change included in the opening")
+			}
+			h.Evict()
+			if h.OnlyPointChanged(0, row, deps, effects) {
+				t.Error("authorized retry with expired history")
+			}
+		})
+	}
+}
