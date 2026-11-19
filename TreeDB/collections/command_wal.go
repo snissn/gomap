@@ -300,6 +300,21 @@ func DecodeCatalogCreateCollectionCommandWALPayload(raw []byte, create bool) (Co
 	if !bytes.Equal(canonical, payload.Metadata) {
 		return CollectionMeta{}, errors.New("collections: catalog create wire metadata is not canonical")
 	}
+	if create {
+		if meta.Options.DataRootStoragePolicy == RootStoragePager || meta.Options.IndexStateStoragePolicy == RootStoragePager {
+			return CollectionMeta{}, errors.New("collections: wire create does not support pager storage policy")
+		}
+		for _, index := range meta.Indexes {
+			if index.StoragePolicy == RootStoragePager {
+				return CollectionMeta{}, errors.New("collections: wire create does not support pager index storage policy")
+			}
+		}
+		for _, index := range meta.TextIndexes {
+			if index.StoragePolicy == RootStoragePager {
+				return CollectionMeta{}, errors.New("collections: wire create does not support pager text index storage policy")
+			}
+		}
+	}
 	if meta.Options.ColumnStore != nil {
 		if _, err := EncodeColumnStoreWireConfigV1(meta.Name, meta.Options.ColumnStore, create); err != nil {
 			return CollectionMeta{}, err

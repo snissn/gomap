@@ -110,7 +110,18 @@ Ordinary cleanup is serialized per DB and follows this order:
 3. capture the journal namespace snapshot and reject pending rotation or
    successor ownership;
 4. scan every typed command segment completely and bind the exact decisions to
-   the proof;
+   the proof. When deferred automatic cleanup runs after checkpoint writer
+   admission is released, canonical single-lane journals can release append
+   exclusion while scanning a bounded prefix through retained handles. A fixed
+   journal needs two sealed fixed predecessors. The ext4 relaxed standalone
+   stream requires positive closed debt and at least one nonempty sealed
+   stream in the captured prefix. Rotation has flushed and released those
+   stream files. Capture their exact identities and extents, then verify both
+   after scanning. Under append exclusion, verify the prefix against the
+   current inventory and scan the suffix. Verify each target's physical
+   identity again before unlink, including its extent for split stream scans.
+   Synchronous checkpoint, explicit and close cleanup, and unsupported
+   layouts keep the complete scan under append exclusion;
 5. reacquire the durable-publication lock, freshly validate current root
    runtime, and require its minimum cleanup frontier and durable WAL LSN not to
    have regressed below the captured authority;

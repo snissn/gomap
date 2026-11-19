@@ -132,6 +132,7 @@ type Writer struct {
 	fixedIncomingBytes     int64
 	fixedRotationReason    fixedWALRotationReason
 	productionMediumPolicy bool
+	preferExt4Stream       bool
 	containerSelection     walContainerSelection
 	bw                     *bufio.Writer
 	fileSink               writerFileSink
@@ -282,7 +283,7 @@ func NewWriterWithOptions(path string, opts Options) (*Writer, error) {
 		_ = f.Close()
 		return nil, loadErr
 	}
-	selection := existingWALContainer(state)
+	selection := existingWALContainer(f, state, opts.productionMediumPolicy && opts.preferExt4Stream)
 	if state == nil {
 		info, e := f.Stat()
 		if e != nil {
@@ -290,7 +291,7 @@ func NewWriterWithOptions(path string, opts Options) (*Writer, error) {
 			return nil, e
 		}
 		if info.Size() == 0 {
-			selection = selectWALContainer(f, opts.fixedCapacity, opts.productionMediumPolicy)
+			selection = selectWALContainer(f, opts.fixedCapacity, opts.productionMediumPolicy, opts.preferExt4Stream)
 			if selection.fixed {
 				state, loadErr = initializeFixedWAL(&f, opts.fixedCapacity, nil)
 				if loadErr != nil {
@@ -304,6 +305,7 @@ func NewWriterWithOptions(path string, opts Options) (*Writer, error) {
 	w.fixed = state
 	w.fixedBudget = opts.fixedCapacity
 	w.productionMediumPolicy = opts.productionMediumPolicy
+	w.preferExt4Stream = opts.productionMediumPolicy && opts.preferExt4Stream
 	w.containerSelection = selection
 	if state != nil {
 		w.syncFn = syncWALData

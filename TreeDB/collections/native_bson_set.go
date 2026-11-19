@@ -9,6 +9,10 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
 
+func nativeBSONSetMeta(meta *CollectionMeta) bool {
+	return meta.Options.ColumnStore == nil && normalizedDocumentFormat(meta.Options.DocumentFormat) == DocumentFormatBSON
+}
+
 // Only synchronous staging borrows the caller's fields. The maintained BSON
 // transformer runs before Commit and no callback/spec enters an immutable cut
 // or canonical frame. Its output backing is admitted before allocation.
@@ -19,7 +23,7 @@ func (t *NativeJSONTxn) prepareNativeBSONSetItems(name string, input []BSONSetUp
 	if t.core == nil {
 		return nil, backenddb.ErrClosed
 	}
-	if g == nil || g.probe.meta.Options.ColumnStore != nil || normalizedDocumentFormat(g.probe.meta.Options.DocumentFormat) != DocumentFormatBSON {
+	if g == nil || !nativeBSONSetMeta(&g.probe.meta) {
 		return nil, errBSONSetRequiresBSONFormat
 	}
 	if err := t.admitRowControls(g, len(input)); err != nil {

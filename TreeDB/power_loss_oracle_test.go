@@ -295,6 +295,12 @@ func requirePowerLossPointerFixtureState(t *testing.T, db *treedb.DB, present bo
 // enumerator used by later durability children. Failure output always includes
 // the replayable seed and stable cut-point identifier.
 func TestPowerLossOracleEnumerateCutPoints(t *testing.T) {
+	// This fixture enumerates the foreground Batch.Write, SetSync and
+	// Checkpoint schedule. Generation GC can independently checkpoint a
+	// relaxed WAL frame before its value-log dependencies become stable.
+	// The missing-RID counterexample below covers that recovery boundary.
+	t.Setenv("TREEDB_DISABLE_VLOG_GENERATION_GC", "1")
+
 	type cutSnapshot struct {
 		model                  *powerlossoracle.Model
 		phase                  string
@@ -1323,6 +1329,30 @@ func TestPowerLossOracleCounterexampleRelaxedCommandFrameMissingRID(t *testing.T
 	for _, variant := range variants {
 		variant := variant
 		t.Run(variant.ID, func(t *testing.T) {
+			t.Run("read-only", func(t *testing.T) {
+				result, reopened, closeFn, err := powerlossreopen.StableAt(t.TempDir(), variant.Model, opts, true)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer func() {
+					if err := closeFn(); err != nil {
+						t.Fatalf("read-only Close: %v", err)
+					}
+				}()
+				if variant.Family == powerlossoracle.VariantFullWriteback {
+					if !result.Rejected || reopened != nil || !errors.Is(result.Err, treedb.ErrRecoveryRequired) {
+						t.Fatalf("read-only Open of checksum-valid unapplied frame: got %+v, want ErrRecoveryRequired", result)
+					}
+					return
+				}
+				if result.Rejected || reopened == nil || result.CommitSeq != baseSequence || result.AppliedLSN != 0 {
+					t.Fatalf("read-only Open of synced old root: got %+v, want commit=%d applied LSN=0", result, baseSequence)
+				}
+				if got, err := reopened.Get([]byte("rid/missing")); err != nil || len(got) != 0 {
+					t.Fatalf("read-only old root exposed missing-RID write: value=%q err=%v", got, err)
+				}
+			})
+
 			result, reopened, closeFn, err := powerlossreopen.Stable(variant.Model, opts, false)
 			if err != nil {
 				t.Fatal(err)

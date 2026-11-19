@@ -350,6 +350,9 @@ func (s *Server) submitClusterCreateCollection(ctx context.Context, meta collect
 	if len(meta.Indexes) != 0 || len(meta.VectorIndexes) != 0 || len(meta.TextIndexes) != 0 {
 		return errors.New("Mongo gateway cluster create currently supports only collection metadata without indexes")
 	}
+	if mongoClusterPagerCollection(meta.Options) {
+		return errors.New("Mongo gateway cluster create does not support the pager root storage policy")
+	}
 	catalogVersion, err := s.currentClusterCatalogVersion(ctx)
 	if err != nil {
 		return err
@@ -360,6 +363,15 @@ func (s *Server) submitClusterCreateCollection(ctx context.Context, meta collect
 	}
 	_, err = s.submitClusterMutation(ctx, iwire.CommandCreateCollection, sections, seq, ack, route)
 	return err
+}
+
+func mongoClusterPagerCollection(opts collections.CollectionOptions) bool {
+	if opts.DataRootStoragePolicy == collections.RootStoragePager || opts.IndexStateStoragePolicy == collections.RootStoragePager {
+		return true
+	}
+	column := opts.ColumnStore
+	return column != nil && (column.ControlRootStoragePolicy == collections.RootStoragePager ||
+		column.ManifestRoot != nil && column.ManifestRoot.StoragePolicy == collections.RootStoragePager)
 }
 
 func (s *Server) submitClusterInsert(ctx context.Context, name string, format collections.DocumentFormat, ids, docs [][]byte, ack iwire.AckPolicy, route *treenativewire.ClusterRouteRequest) (int32, error) {

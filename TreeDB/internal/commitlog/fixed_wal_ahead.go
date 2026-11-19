@@ -159,7 +159,7 @@ func (j *CommandJournal) fixedWALAheadErrorLocked() error {
 // The worker sees only immutable scalars and a duplicated retained parent.
 func (j *CommandJournal) maybeStartFixedWALAheadLocked() error {
 	w := j.writer
-	if j.fixedAhead != nil || j.closing || w == nil || w.fixed == nil || j.stableParent == nil || !FixedWALCreationSupported() ||
+	if j.fixedAhead != nil || j.closing || w == nil || w.fixed == nil || w.containerSelection.ext4Stream || j.stableParent == nil || !FixedWALCreationSupported() ||
 		j.pendingStableSuccessor != nil || len(j.pendingStableRotations) != 0 || j.segmentSeq == ^uint64(0) || j.fixedAheadGeneration == ^uint64(0) {
 		return nil
 	}

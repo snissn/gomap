@@ -121,6 +121,9 @@ func fixedSuccessorSizePlan(current *fixedWAL, budget int64, reason fixedWALRota
 	if budget <= 0 {
 		return plan, nil
 	}
+	// Keep normal successors within the existing ahead-reserve limit.
+	// The exact incoming frame can still require a larger private file.
+	budget = min(budget, fixedWALDefaultPhysicalBudget)
 	base := min(int64(fixedWALDefaultCapacity), budget)
 	normal := base
 	if reason != fixedWALForcedRotation && current != nil {
@@ -317,16 +320,23 @@ func readFixedWALFull(input io.Reader, p []byte) (int, error) {
 	return n, err
 }
 
-// loadFixedWAL returns nil for the original stream format. For containers every
-// reserve byte is examined: a zero header is never an EOF decision by itself.
-func loadFixedWAL(file *os.File) (*fixedWAL, []byte, error) {
+// HasFixedWALMagic only classifies the leading bytes of an open file.
+// Callers must still validate the complete container before trusting its data.
+func HasFixedWALMagic(file *os.File) (bool, error) {
 	var prefix [8]byte
 	n, err := file.ReadAt(prefix[:], 0)
 	if err != nil && err != io.EOF {
-		return nil, nil, err
+		return false, err
 	}
-	if n < 8 || prefix != fixedWALMagic {
-		return nil, nil, nil
+	return n == len(prefix) && prefix == fixedWALMagic, nil
+}
+
+// loadFixedWAL returns nil for the original stream format. For containers every
+// reserve byte is examined: a zero header is never an EOF decision by itself.
+func loadFixedWAL(file *os.File) (*fixedWAL, []byte, error) {
+	fixed, err := HasFixedWALMagic(file)
+	if err != nil || !fixed {
+		return nil, nil, err
 	}
 	info, err := file.Stat()
 	if err != nil {
@@ -619,13 +629,13 @@ func (w *Writer) prepareFixedSuccessorAhead(file **os.File, parent *os.File, pla
 	if err != nil {
 		return nil, 0, walContainerSelection{}, err
 	}
-	selection := existingWALContainer(state)
+	selection := existingWALContainer(*file, state, w.preferExt4Stream)
 	info, err := (*file).Stat()
 	if err != nil {
 		return nil, 0, selection, err
 	}
 	if state == nil && info.Size() == 0 {
-		selection = selectWALContainer(*file, plan.capacity, w.productionMediumPolicy)
+		selection = selectWALContainer(*file, plan.capacity, w.productionMediumPolicy, w.preferExt4Stream)
 	}
 	needsCapacity := state != nil && state.logical == 0 && !state.fitsEmptyFrame(plan.incoming)
 	if (state == nil && selection.fixed) || needsCapacity {
