@@ -241,8 +241,8 @@ def main():
             print(json.dumps(summary, indent=2, allow_nan=False))
             return 0 if summary['timing_guardrail'] == 'PASS' else 1
         except BaseException as error:
-            recipe.save(out/'failure.json', dict(error=repr(error), ended_utc=recipe.now(),
-                                               completed_slots=len(results)))
+            recipe.save_receipt(out/'failure.json', dict(error=repr(error), ended_utc=recipe.now(),
+                                                       completed_slots=len(results)), error)
             raise
 
 

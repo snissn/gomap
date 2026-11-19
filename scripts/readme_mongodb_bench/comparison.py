@@ -187,6 +187,7 @@ def execute(args):
                  environment={k: run.ENV.get(k) for k in ('GOTOOLCHAIN', 'GOWORK', 'GOMAXPROCS', 'GOROOT')},
                  operations=args.operations,
                  telemetry='pre/post only; allocation, retained/peak RSS and maintenance metrics unavailable'))
+        failure = None
         try:
             path = run.ROOT/'comparison-freeze.json'
             run.require(run.sha(path) == args.expected_comparison_sha256, 'comparison manifest changed')
@@ -199,13 +200,14 @@ def execute(args):
             run.FREEZE_HASH = args.expected_comparison_sha256
             bounded_case(lambda: run.run_case('ycsb', 'relaxed', 'gomap', 1, 100000, args.operations))
         except BaseException as error:
-            run.save(run.OUT/'selector-failure.json', dict(error=repr(error), ended_utc=run.now(),
-                     elapsed_seconds=time.monotonic()-started, host=host()))
+            failure = error
+            run.save_receipt(run.OUT/'selector-failure.json', dict(error=repr(error), ended_utc=run.now(),
+                             elapsed_seconds=time.monotonic()-started, host=host()), failure)
             raise
         finally:
-            run.save(run.OUT/'selector-end.json', dict(ended_utc=run.now(), host=host(),
-                     process_snapshot=process_snapshot(),
-                     elapsed_seconds=time.monotonic()-started))
+            run.save_receipt(run.OUT/'selector-end.json', dict(ended_utc=run.now(), host=host(),
+                             process_snapshot=process_snapshot(),
+                             elapsed_seconds=time.monotonic()-started), failure)
 
 
 def main():

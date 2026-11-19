@@ -34,8 +34,11 @@ python3 "$TASK/recipe/verify_archive.py" --directory "$EVIDENCE"
 ```
 
 Record the freeze digest outside the mutable task before running. An exclusive
-task lock prevents simultaneous suites. A failure stops the suite, leaves its
-failure receipt and database, and must never be retried as a replacement sample.
+task lock prevents simultaneous suites. A failure stops the suite, attempts
+checked shutdown of each owned service, and preserves any unreleased database.
+If the evidence directory is unwritable, the runner reports missing receipts
+on stderr and retains the original error. A failed sample must never be retried
+as a replacement sample.
 A reviewed continuation may execute only never-started slots. Builds, tests,
 compression and cleanup of unrelated outputs stay outside timed collection.
 The freeze records the actual user-selected host as shared infrastructure;
