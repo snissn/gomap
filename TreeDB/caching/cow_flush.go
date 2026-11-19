@@ -2,6 +2,7 @@ package caching
 
 import (
 	"errors"
+	"fmt"
 	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/batch"
@@ -546,10 +547,18 @@ func (db *DB) flushCOWFrozenCutWithColumnCompaction(syncFlush bool, publish *che
 	}
 	err = prepareSnapshot(func(s backenddb.SnapshotAllocationSizes) error {
 		if s.ValueLog.MapHint > c.budget.Limits().MaxResources || s.ValueLog.FileCount > c.budget.Limits().MaxResources {
-			return memtable.ErrCOWCapacity
+			return fmt.Errorf("candidate snapshot value-log shape exceeds COW resource limit: %w", memtable.ErrCOWCapacity)
 		}
 		var e error
 		h.basis, e = admitCOWBackendBasis(c.maintenance, s)
+		if generationPressure && e == memtable.ErrCOWCapacity {
+			budget := c.maintenance
+			leaseBytes := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
+			emptySpace := budget.Limits().MaxTotalBytes - budget.Stats().ControlBytes
+			if leaseBytes > emptySpace || cowBasisCharge(s) > emptySpace-leaseBytes {
+				return fmt.Errorf("candidate snapshot basis exceeds COW maintenance limit: %w", e)
+			}
+		}
 		return e
 	}, func(snapshot *backenddb.Snapshot) error {
 		if e := h.basis.adoptSnapshot(snapshot); e != nil {
@@ -662,6 +671,9 @@ func (db *DB) flushCOWFrozenCutWithColumnCompaction(syncFlush bool, publish *che
 		return db.completeCOWHandoffForGeneration(generationPressure)
 	}
 	if generationPressure && backenddb.IsOnlyRootPublicationSnapshotAdmissionRefusal(err) {
+		if errors.Is(err, memtable.ErrCOWCapacity) {
+			err = &cowGenerationSnapshotAllocationRefusal{error: err, through: target}
+		}
 		return cowGenerationRetryableRefusal{err}
 	}
 	return err

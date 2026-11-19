@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -19,9 +20,11 @@ import (
 
 type generationSnapshotTestBackend struct {
 	*backenddb.DB
-	once   atomic.Bool
-	done   chan error
-	resume chan struct{}
+	once    atomic.Bool
+	before  func() error
+	done    chan error
+	retries chan error
+	resume  chan struct{}
 }
 
 type generationSnapshotTestBatch struct {
@@ -36,7 +39,20 @@ func (b *generationSnapshotTestBackend) NewPhysicalBatchWithSize(size int) batch
 func (b *generationSnapshotTestBatch) WriteSync() error {
 	owner := b.owner
 	if !owner.once.CompareAndSwap(false, true) {
-		return b.Batch.WriteSync()
+		err := b.Batch.WriteSync()
+		if owner.retries != nil {
+			select {
+			case owner.retries <- err:
+			default:
+			}
+		}
+		return err
+	}
+	if owner.before != nil {
+		if err := owner.before(); err != nil {
+			owner.done <- err
+			return err
+		}
 	}
 	err := b.Batch.WriteSync()
 	owner.done <- err
@@ -49,9 +65,12 @@ func TestCOWGenerationWorkerRetriesFinalSnapshotAdmission(t *testing.T) {
 		name          string
 		closeTogether bool
 		requirePoison bool
+		memory        bool
 	}{
 		{name: "lone-frozen-cut"},
 		{name: "concurrent-close", closeTogether: true},
+		{name: "snapshot-allocation-pressure", memory: true},
+		{name: "snapshot-allocation-pressure-concurrent-close", memory: true, closeTogether: true},
 		{name: "capacity-outside-snapshot-receipt", requirePoison: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -70,7 +89,7 @@ func TestCOWGenerationWorkerRetriesFinalSnapshotAdmission(t *testing.T) {
 				readers = nil
 			}
 			defer closeReaders()
-			if !tc.requirePoison {
+			if !tc.requirePoison && !tc.memory {
 				for i := 0; i < lifecycle.FastReaderShardCount-1; i++ {
 					reader, err := db.AcquireSnapshotWithAllocationAdmission(func(backenddb.SnapshotAllocationSizes) error { return nil })
 					if err != nil {
@@ -124,6 +143,35 @@ func TestCOWGenerationWorkerRetriesFinalSnapshotAdmission(t *testing.T) {
 			owner := &generationSnapshotTestBackend{
 				DB: db, done: make(chan error, 1), resume: make(chan struct{}),
 			}
+			if tc.memory && !tc.closeTogether {
+				owner.retries = make(chan error, 2)
+			}
+			var pressure, replacement *memtable.COWExternalLease
+			var pressureBytes uint64
+			releasePressure := func() {
+				if tc.memory {
+					pressure.Close()
+					replacement.Close()
+				} else {
+					releaseReader()
+				}
+			}
+			if tc.memory {
+				budget := cache.cow.maintenance
+				owner.before = func() (err error) {
+					headroom := budget.Limits().MaxTotalBytes - budget.Stats().TotalBytes
+					leaseCell := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
+					// Leave space for the smaller dependency build so
+					// that the final receipt is the phase that refuses.
+					const headroomBeforeBuild = 14 << 10
+					if headroom <= leaseCell+headroomBeforeBuild {
+						return errors.New("insufficient free maintenance budget before the test reservation")
+					}
+					pressureBytes = headroom - leaseCell - headroomBeforeBuild
+					pressure, err = budget.AcquireExternal(pressureBytes)
+					return err
+				}
+			}
 			var once sync.Once
 			resume := func() { once.Do(func() { close(owner.resume) }) }
 			cache.backend = owner
@@ -151,16 +199,19 @@ func TestCOWGenerationWorkerRetriesFinalSnapshotAdmission(t *testing.T) {
 			cache.StartAutoCheckpoint(0, 1<<40, 0)
 			cache.nativeGenerationFlushCh <- struct{}{}
 			defer resume()
-			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 			defer cancel()
 			var refusal error
 			select {
 			case refusal = <-owner.done:
+				if tc.memory {
+					defer pressure.Close()
+				}
 			case <-ctx.Done():
 				t.Fatal("generation worker did not attempt its final physical batch")
 			}
 			want := backenddb.ErrSnapshotCapacity
-			if tc.requirePoison {
+			if tc.requirePoison || tc.memory {
 				want = memtable.ErrCOWCapacity
 			}
 			if !errors.Is(refusal, want) {
@@ -171,6 +222,11 @@ func TestCOWGenerationWorkerRetriesFinalSnapshotAdmission(t *testing.T) {
 			}
 			if got := prefix.LogicalFrontiers(); got != before || db.State().CommitSeq != beforeSeq || db.CommandWALNextLSN() != nextLSN {
 				t.Fatalf("capacity refusal changed captured authority: %+v -> %+v", before, got)
+			}
+			if !tc.requirePoison {
+				if err := db.CheckCommandWALPublishReady(); err != nil {
+					t.Fatalf("admission failed before an exact cut could enqueue, but poisoned its original WAL: %v", err)
+				}
 			}
 
 			switch {
@@ -201,7 +257,7 @@ func TestCOWGenerationWorkerRetriesFinalSnapshotAdmission(t *testing.T) {
 					case <-time.After(time.Millisecond):
 					}
 				}
-				releaseReader()
+				releasePressure()
 				resume()
 				select {
 				case err := <-done:
@@ -212,7 +268,53 @@ func TestCOWGenerationWorkerRetriesFinalSnapshotAdmission(t *testing.T) {
 					t.Fatal("Close did not drain the exact frozen cut")
 				}
 			default:
-				releaseReader()
+				if tc.memory {
+					resume()
+					select {
+					case err := <-owner.retries:
+						if !errors.Is(err, memtable.ErrCOWCapacity) || !strings.Contains(err.Error(), "prepare accepted snapshot receipt") {
+							t.Fatalf("still charged on retry: %v", err)
+						}
+					case <-ctx.Done():
+						t.Fatal("initial capacity retry did not run")
+					}
+					quiet := time.NewTimer(2 * cowGenerationPressureRetryDelay)
+					defer quiet.Stop()
+					select {
+					case err := <-owner.retries:
+						t.Fatalf("unchanged maintenance charge repeated physical build: %v", err)
+					case <-quiet.C:
+					}
+
+					// The first owner refunds part of its real charge and
+					// a distinct owner reuses exactly that much capacity.
+					// The allocator can still change ownership at equal use.
+					budget := cache.cow.maintenance
+					beforeSwap := budget.Stats().TotalBytes
+					const swapCharge = 1024
+					if err := pressure.Resize(pressureBytes - swapCharge); err != nil {
+						t.Fatal(err)
+					}
+					leaseCell := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
+					next, err := budget.AcquireExternal(swapCharge - leaseCell)
+					if err != nil {
+						t.Fatal(err)
+					}
+					replacement = next
+					defer replacement.Close()
+					if afterSwap := budget.Stats().TotalBytes; afterSwap != beforeSwap {
+						t.Fatalf("owner replacement changed charge: %d -> %d", beforeSwap, afterSwap)
+					}
+					select {
+					case err := <-owner.retries:
+						if !errors.Is(err, memtable.ErrCOWCapacity) {
+							t.Fatalf("equal-charge owner replacement retry before release: %v", err)
+						}
+					case <-ctx.Done():
+						t.Fatal("equal-charge owner replacement did not wake the exact pending cut")
+					}
+				}
+				releasePressure()
 				resume()
 				through := rootpublication.SealedPrefix{LogicalSequence: before.V, CanonicalLSN: before.C}
 				if err := prefix.WaitAccepted(ctx, through); err != nil {

@@ -51,6 +51,14 @@ type cowGenerationRetryableRefusal struct{ error }
 
 func (e cowGenerationRetryableRefusal) Unwrap() error { return e.error }
 
+type cowGenerationSnapshotAllocationRefusal struct {
+	error
+	through                              rootpublication.SealedPrefix
+	maintenanceBytes, maintenanceRefunds uint64
+}
+
+func (e *cowGenerationSnapshotAllocationRefusal) Unwrap() error { return e.error }
+
 func cowGenerationRetryableOnly(err error) bool {
 	for err != nil {
 		switch e := err.(type) {
@@ -111,8 +119,20 @@ func (db *DB) materializeCOWPrefix(ctx context.Context, automatic bool, operatio
 		return err
 	}
 	defer db.flushMu.Unlock()
-	if generationPressure && db.closing.Load() {
-		return errDBClosing
+	if generationPressure {
+		if db.closing.Load() {
+			return errDBClosing
+		}
+		defer func() {
+			var refusal *cowGenerationSnapshotAllocationRefusal
+			if cowGenerationRetryableOnly(retErr) && errors.As(retErr, &refusal) {
+				// Seal the observation after the attempt's full unwind but
+				// before another physical basis/owner can use the flush fence.
+				maintenance := db.cow.maintenance.Stats()
+				refusal.maintenanceBytes = maintenance.TotalBytes
+				refusal.maintenanceRefunds = maintenance.MaintenanceRefunds
+			}
+		}()
 	}
 	db.checkpointMu.Lock()
 	db.checkpointPostFrontierAdmission.Store(false)

@@ -45,7 +45,7 @@ func (l COWLimits) Validate() error {
 
 type COWStats struct {
 	TotalBytes, HistoryBytes, ReservedBytes, RetiredBytes, PeakBytes, ControlBytes, DeferredBytes uint64
-	ExternalBytes                                                                                 uint64
+	ExternalBytes, MaintenanceRefunds                                                             uint64
 	Views, Generations, Sources, ExternalLeases                                                   int
 }
 
@@ -234,6 +234,9 @@ func (l *COWExternalLease) Resize(bytes uint64) error {
 		b.stats.TotalBytes -= delta
 		b.stats.ReservedBytes -= delta
 		b.stats.ExternalBytes -= delta
+		if delta != 0 && b.maintenanceChild {
+			b.stats.MaintenanceRefunds++
+		}
 	}
 	l.charge = target
 	return nil

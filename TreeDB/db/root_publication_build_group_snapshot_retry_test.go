@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
@@ -67,7 +68,17 @@ func TestRootPublicationSnapshotRetryRequiresExactCapturedCoverage(t *testing.T)
 	if group.hasExactCapturedCoverage(&intent) {
 		t.Fatal("abandoned captured coverage acquired the retry exception")
 	}
-	if IsOnlyRootPublicationSnapshotAdmissionRefusal(errors.Join(errRootPublicationSnapshotRegistryRefused, ErrRecoveryRequired)) {
-		t.Fatal("receipt marker masked an unrelated error")
+	for _, cause := range []error{ErrSnapshotCapacity, memtable.ErrCOWCapacity} {
+		if IsOnlyRootPublicationSnapshotAdmissionRefusal(errors.Join(cause, nil)) {
+			t.Errorf("unqualified capacity error was treated as an admission receipt: %v", cause)
+		}
+	}
+	for _, marker := range []error{errRootPublicationSnapshotRegistryRefused, errRootPublicationSnapshotAllocationRefused} {
+		if !IsOnlyRootPublicationSnapshotAdmissionRefusal(errors.Join(marker, nil)) {
+			t.Errorf("wrapped receipt marker lost: %v", marker)
+		}
+		if IsOnlyRootPublicationSnapshotAdmissionRefusal(errors.Join(marker, ErrRecoveryRequired)) {
+			t.Errorf("receipt marker %v masked an unrelated error", marker)
+		}
 	}
 }

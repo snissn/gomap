@@ -605,11 +605,15 @@ namespace and dependency debt follow their original owners. The worker issues
 no barrier frame or durable WAL frontier. A proven temporary admission refusal
 leaves the captured work eligible for retry. The same worker arms one rate-limited
 timer so a lone frozen prefix can progress after admission resumes, even without
-more writes. At final snapshot registration, the worker may retry a full
-reader registry only before enqueue. It verifies the captured cut is still
+more writes. Before enqueue, the final snapshot receipt may retry temporary
+allocation exhaustion or a full bounded reader registry. After one allocation
+retry, the timer checks for a tranche refund, lower retained usage or a
+different frozen prefix before rebuilding. Checked Close still attempts its
+ordinary final drain. The worker verifies that the captured cut is still
 active and that the WAL intent already covers precisely the interval from
-the physical basis through that cut. A newly assigned intent, an accepted
-installation error or a cleanup failure follows the original failure path.
+the physical basis through that cut. A fixed snapshot resource limit, a
+newly assigned intent, an accepted installation error or a cleanup failure
+follows the original failure path.
 Physical failures and any joined original cleanup failure still reach checked
 Close. A flush or sync failure poisons WAL publication. A direct
 Close call from that worker's error callback returns the existing callback

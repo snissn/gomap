@@ -9,21 +9,25 @@ import (
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/zipper"
 )
 
-// Only bounded reader registry exhaustion in the frozen group's pre-enqueue
-// receipt can set this marker. Cleanup must also succeed before retry.
-var errRootPublicationSnapshotRegistryRefused = fmt.Errorf("candidate snapshot registry: %w", ErrSnapshotCapacity)
+// Only temporary refusal of the frozen group's pre-enqueue snapshot receipt
+// can set these markers. Cleanup must also succeed before retry.
+var (
+	errRootPublicationSnapshotRegistryRefused   = fmt.Errorf("candidate snapshot registry: %w", ErrSnapshotCapacity)
+	errRootPublicationSnapshotAllocationRefused = fmt.Errorf("candidate snapshot allocation: %w", memtable.ErrCOWCapacity)
+)
 
 // IsOnlyRootPublicationSnapshotAdmissionRefusal recognizes the receipt
 // through wrapped errors without suppressing any candidate or group cleanup.
 func IsOnlyRootPublicationSnapshotAdmissionRefusal(err error) bool {
 	for err != nil {
-		if err == errRootPublicationSnapshotRegistryRefused {
+		if err == errRootPublicationSnapshotRegistryRefused || err == errRootPublicationSnapshotAllocationRefused {
 			return true
 		}
 		switch e := err.(type) {
@@ -800,7 +804,9 @@ func (group *RootPublicationBuildGroup) PrepareAcceptedSnapshot(admit func(Snaps
 }
 
 // PrepareGenerationAcceptedSnapshot uses the already-bound captured prefix.
-// Reader registry capacity is retryable after admission of this exact tuple.
+// For the exact preassigned WAL range, admit may return memtable.ErrCOWCapacity
+// for temporary allocation exhaustion. Fixed limits must use a distinct error.
+// Reader registry exhaustion after successful allocation is also retryable.
 func (group *RootPublicationBuildGroup) PrepareGenerationAcceptedSnapshot(admit func(SnapshotAllocationSizes) error, adopt func(*Snapshot) error, cancel func() error) error {
 	return group.prepareAcceptedSnapshot(admit, adopt, cancel, true)
 }
@@ -834,6 +840,9 @@ func (group *RootPublicationBuildGroup) prepareSnapshotReceiptLocked(install *ro
 	if group.retrySnapshotAdmission {
 		admit = func(s SnapshotAllocationSizes) error {
 			err := group.snapshotAdmit(s)
+			if err == memtable.ErrCOWCapacity {
+				return errRootPublicationSnapshotAllocationRefused
+			}
 			admitted = err == nil
 			return err
 		}
