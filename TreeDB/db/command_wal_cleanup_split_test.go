@@ -1,6 +1,7 @@
 package db
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -74,6 +75,162 @@ func TestCommandWALCleanupClosedScanKeepsStreamExclusion(t *testing.T) {
 			t.Fatalf("older recovery root needs stream predecessor: %v", err)
 		}
 	})
+}
+
+func TestCommandWALCleanupDeferredClosedStreamRejectsLateDamage(t *testing.T) {
+	opts := Options{
+		Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true,
+		ResolvedProfile: ProfileCommandWALRelaxed, Durability: DurabilityWALOnRelaxed,
+		MemtableMode: "cow_btree", FreshRelaxedStandaloneWALStream: true,
+	}
+	opts.ValueLog.PointerThreshold = 4096
+	database, err := OpenForNativeSemanticOwner(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed := false
+	defer func() {
+		if !closed {
+			if err := database.Close(); err != nil {
+				t.Error(err)
+			}
+		}
+	}()
+	if actual := database.commandJournal.WriterBufferStats().Container; actual != "stream" {
+		t.Skipf("fixture requires a stream WAL, got %s", actual)
+	}
+	value := bytes.Repeat([]byte("original"), 146)
+	var paths [2]string
+	var keys [][]byte
+	for segment, count := range []int{1, 130} {
+		paths[segment], _ = database.commandWALActiveSegmentSnapshot()
+		for i := 0; i < count; i++ {
+			key := []byte(fmt.Sprintf("covered-%d-%d", segment, i))
+			keys = append(keys, key)
+			write := database.Set
+			if i == count-1 {
+				write = database.SetSync
+			}
+			if err := write(key, value); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := database.RotateCommandWALActiveSegment(true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := database.RefreshCommandWALCheckpointFallback(); err != nil {
+		t.Fatal(err)
+	}
+	if pending, err := database.PrepareCommandWALCoveredPrefixCleanup(); err != nil || !pending {
+		t.Fatalf("fixture did not leave real deferred cleanup debt: pending=%t err=%v", pending, err)
+	}
+	proof, err := database.captureDurableWALCleanupProofV1()
+	if err != nil || proof.rootCount != 2 || proof.cleanupThrough != database.State().AppliedCommandLSN {
+		t.Fatalf("both roots must cover the closed predecessors: roots=%d frontier=%d err=%v", proof.rootCount, proof.cleanupThrough, err)
+	}
+	var originalInfo [2]os.FileInfo
+	for i, path := range paths {
+		originalInfo[i], err = os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	original, err := os.ReadFile(paths[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(original) <= 128<<10 {
+		t.Fatalf("damaged stream must cross two read windows, got %d bytes", len(original))
+	}
+	last := int64(len(original) - 1)
+	replaceLastByte := func(value byte) error {
+		file, err := os.OpenFile(paths[1], os.O_WRONLY, 0)
+		if err != nil {
+			return err
+		}
+		_, err = file.WriteAt([]byte{value}, last)
+		return errors.Join(err, file.Sync(), file.Close())
+	}
+	truncateLastByte := func() error {
+		file, err := os.OpenFile(paths[1], os.O_WRONLY, 0)
+		if err != nil {
+			return err
+		}
+		return errors.Join(file.Truncate(last), file.Sync(), file.Close())
+	}
+	removed := database.commandWALCleanupRemoved.Load()
+	for _, tc := range []struct {
+		name   string
+		damage func() error
+		want   error
+	}{
+		{"same_inode_crc", func() error { return replaceLastByte(original[last] ^ 1) }, commitlog.ErrCorrupt},
+		{"short_closed_tail", truncateLastByte, commitlog.ErrCommandWALTerminalTail},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			defer func() {
+				if err := replaceLastByte(original[last]); err != nil {
+					t.Fatal(err)
+				}
+			}()
+			if err := tc.damage(); err != nil {
+				t.Fatal(err)
+			}
+			beforeScanned := database.commandWALCleanupScanBytes.Load()
+			complete, err := database.CleanupCommandWALCoveredPrefix()
+			if complete || !errors.Is(err, tc.want) || errors.Is(err, errDurableWALCleanupProofUnavailable) {
+				t.Fatalf("deferred cleanup complete=%t error=%v, want hard %v", complete, err, tc.want)
+			}
+			if database.commandWALCleanupRemoved.Load() != removed || database.commandWALCleanupNamespaceDirty.Load() {
+				t.Fatal("refused cleanup changed deletion accounting")
+			}
+			for i, path := range paths {
+				info, err := os.Stat(path)
+				if err != nil || !os.SameFile(info, originalInfo[i]) {
+					t.Fatalf("original predecessor %d must remain linked: %v", i, err)
+				}
+			}
+			delta := database.commandWALCleanupScanBytes.Load() - beforeScanned
+			if delta < 128<<10 {
+				t.Fatalf("cleanup did not validate to the damaged frame: scanned=%d", delta)
+			}
+			t.Logf("validated %d bytes before %v; both original predecessors retained", delta, err)
+		})
+	}
+	if t.Failed() {
+		return
+	}
+	if err := cleanupDeferredCommandWALPrefixForTest(database); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range paths {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("restored predecessor was not retired: %v", err)
+		}
+	}
+	if delta := database.commandWALCleanupRemoved.Load() - removed; delta != uint64(len(paths)) {
+		t.Fatalf("removed=%d, want %d predecessors", delta, len(paths))
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	closed = true
+	reopened, err := OpenForNativeSemanticOwner(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := reopened.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	for _, key := range keys {
+		got, err := reopened.Get(key)
+		if err != nil || !bytes.Equal(got, value) {
+			t.Fatalf("reopened %q: got %d bytes, err=%v", key, len(got), err)
+		}
+	}
 }
 
 func cleanupDeferredCommandWALPrefixForTest(database *DB) error {

@@ -118,7 +118,10 @@ Ordinary cleanup is serialized per DB and follows this order:
    links and identities against the current inventory and finish scanning the
    suffix. Synchronous checkpoint, explicit and close cleanup, small
    inventories, stream journals, and unsupported layouts keep the complete
-   scan under append exclusion;
+   scan under append exclusion. Deferred stream cleanup reuses a bounded
+   read-ahead buffer for closed stream segments. Frame validation and WAL
+   offsets still use the bytes consumed by the decoder, including on short
+   reads. Active streams and fixed containers keep their original readers;
 5. reacquire the durable-publication lock, freshly validate current root
    runtime, and require its minimum cleanup frontier and durable WAL LSN not to
    have regressed below the captured authority;
