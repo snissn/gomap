@@ -32,6 +32,7 @@ func run() (resultErr error) {
 	dataDir := flag.String("dir", "/tmp/treedb-native-server", "TreeDB data directory")
 	profile := flag.String("profile", string(treedb.ProfileCommandWALDurable), "TreeDB profile: "+treedb.ProfileFlagHelp+"; ColumnGraph requires command_wal_durable and offline public owner/API Optimize after vector writes")
 	legacyStorage := flag.Bool("legacy-storage", false, "use legacy storage for specialized typed and normalized/quantized routes; default is shared COW")
+	cowLoadMemory := flag.String("cow-load-memory", "auto", "COW memory budget: auto uses larger limits for shared COW with command_wal_relaxed; compact uses engine defaults")
 	pprofAddr := flag.String("pprof", "", "optional net/http/pprof listen address, e.g. 127.0.0.1:6060")
 	blockProfileRate := flag.Int("block-profile-rate", 0, "runtime.SetBlockProfileRate value for pprof diagnostics (0=disabled, 1=all blocking events)")
 	mutexProfileFraction := flag.Int("mutex-profile-fraction", 0, "runtime.SetMutexProfileFraction value for pprof diagnostics (0=disabled, 1=all mutex contention)")
@@ -45,7 +46,10 @@ func run() (resultErr error) {
 	if err != nil {
 		return err
 	}
-	opts := treedb.OptionsFor(normalizedProfile, *dataDir)
+	opts, err := nativeServerOptions(normalizedProfile, *dataDir, *legacyStorage, *cowLoadMemory)
+	if err != nil {
+		return err
+	}
 
 	if *blockProfileRate > 0 {
 		runtime.SetBlockProfileRate(*blockProfileRate)
@@ -110,4 +114,19 @@ func parsePublicProfileFlag(raw string) (treedb.Profile, error) {
 		return "", fmt.Errorf("unsupported TreeDB profile %q; allowed: %s", raw, treedb.ProfileFlagHelp)
 	}
 	return profile, nil
+}
+
+func nativeServerOptions(profile treedb.Profile, dir string, legacy bool, cowLoadMemory string) (treedb.Options, error) {
+	opts := treedb.OptionsFor(profile, dir)
+	switch cowLoadMemory {
+	case "auto":
+		if !legacy && profile == treedb.ProfileCommandWALRelaxed {
+			opts.COWMemtableLimits = treedb.StandaloneCOWMemtableLimits()
+		}
+	case "compact":
+		// Keep the profile's engine limits.
+	default:
+		return treedb.Options{}, fmt.Errorf("unsupported -cow-load-memory %q (use auto or compact)", cowLoadMemory)
+	}
+	return opts, nil
 }

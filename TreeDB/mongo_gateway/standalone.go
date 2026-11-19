@@ -148,14 +148,11 @@ func NormalizeStandaloneOptions(opts StandaloneOptions) (StandaloneOptions, erro
 	}
 	opts.Profile = profile
 	if opts.COWMemtableLimits == (treedb.COWMemtableLimits{}) {
-		opts.COWMemtableLimits = treedb.DefaultCOWMemtableLimits()
 		// Half the in-flight budget is reserved for physical maintenance. The
 		// other 256 MiB covers overlapping row, canonical WAL and immutable
 		// images of a <=48 MB request, plus catalog/index planning. Index scratch
 		// is admitted from referenced BSON fields, not unrelated payload bytes.
-		opts.COWMemtableLimits.MaxInFlightBytes = 512 << 20
-		opts.COWMemtableLimits.MaxTotalBytes = 1 << 30
-		opts.COWMemtableLimits.MaxRetiredBytes = 1 << 30
+		opts.COWMemtableLimits = treedb.StandaloneCOWMemtableLimits()
 	}
 	if err := opts.COWMemtableLimits.Validate(); err != nil {
 		return opts, fmt.Errorf("mongo gateway standalone: COWMemtableLimits: %w", err)

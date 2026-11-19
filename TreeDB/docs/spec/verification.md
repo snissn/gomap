@@ -94,6 +94,13 @@ the retained record and requires the original file error after its close.
   completion after file sync in a child, retains one group assignment, ambiguous
   member errors, the recovery-required write fence and prior frame contents,
   then recovers both indexed rows exactly once without a rescuing child close.
+- `TestNativeServerCOWMemoryOptions` covers the full standalone native
+  budget tuple across profile, storage owner and CLI mode. On Linux,
+  `TestNativeServerCommandCOWMaintenanceCapacity` checks the actual owner's
+  startup reservation. `TestNativeServerCommandRejectsUnknownCOWMemoryBeforeOpen`
+  checks rejection before directory creation.
+  `TestNativeServerCommandVisiblePrefixSyncedBoundarySurvivesHardExit`
+  recovers the relaxed auto owner's synced prefix and index under compact.
 - `TestStandaloneSharedCOWCollectionLifecycle` and
   `TestStandaloneSharedCOWCrashReopen` exercise ordinary startup, indexed BSON
   mutation/read, authentication and explicit journal ACK across all three
