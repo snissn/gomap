@@ -6,6 +6,7 @@ subprocess argv, exit, stdout/stderr and lifecycle action is retained. Tools
 are prebuilt and frozen before collection. Never retries a failed sample.
 """
 import argparse
+from contextlib import ExitStack
 import fcntl
 import sys
 import datetime as dt
@@ -44,6 +45,22 @@ def save(path, value):
         f.write('\n')
 
 
+def report_secondary_failure(action, error):
+    try:
+        print(f'{action} failed: {error!r}', file=sys.stderr, flush=True)
+    except BaseException:
+        pass  # A failed diagnostic sink must not replace the original error.
+
+
+def save_receipt(path, value, primary_error=None):
+    try:
+        save(path, value)
+    except BaseException as error:
+        if primary_error is None:
+            raise
+        report_secondary_failure(f'recording {path}', error)
+
+
 def require(ok, message):
     if not ok:
         raise ValueError(message)
@@ -72,7 +89,7 @@ for key in list(ENV):
 ENV.update(GOTOOLCHAIN='go1.26.10', GOWORK='off')
 
 
-def command(case, stem, argv, timeout=180, extra_env=None):
+def command(case, stem, argv, timeout=180, extra_env=None, receipt_errors=None):
     env = ENV.copy()
     env.update(extra_env or {})
     rec = dict(argv=[str(x) for x in argv], started_utc=now(), cwd=str(REPO),
@@ -80,14 +97,27 @@ def command(case, stem, argv, timeout=180, extra_env=None):
     start = time.monotonic()
     p = None
     error = None
+    captured = None
     try:
-        with (case / (stem+'.out')).open('x') as out, (case / (stem+'.err')).open('x') as err:
+        with ExitStack() as streams:
+            if receipt_errors is None:
+                out = streams.enter_context((case/(stem+'.out')).open('x'))
+                err = streams.enter_context((case/(stem+'.err')).open('x'))
+            else:
+                # Docker control replies are needed to close the owned service.
+                # Their receipt files may be on the same failed evidence volume.
+                out = err = subprocess.PIPE
             p = subprocess.Popen(rec['argv'], cwd=REPO, env=env, stdout=out, stderr=err,
                                  start_new_session=True)
             rec['pid'] = p.pid
-            rec['exit_code'] = p.wait(timeout=timeout)
+            if receipt_errors is None:
+                rec['exit_code'] = p.wait(timeout=timeout)
+            else:
+                captured = p.communicate(timeout=timeout)
     except BaseException as caught:
         error = caught
+        if receipt_errors is not None and isinstance(caught, subprocess.TimeoutExpired):
+            captured = caught.output or b'', caught.stderr or b''
         rec.update(error_type=type(caught).__name__, error=str(caught),
                    timed_out=isinstance(caught, subprocess.TimeoutExpired))
     finally:
@@ -99,13 +129,27 @@ def command(case, stem, argv, timeout=180, extra_env=None):
         if p is not None:
             rec['exit_code'] = p.returncode
         rec.update(ended_utc=now(), elapsed_seconds=time.monotonic()-start)
-        for suffix in ('out', 'err'):
-            path = case/(stem+'.'+suffix)
-            rec['stdout_sha256' if suffix == 'out' else 'stderr_sha256'] = sha(path) if path.exists() else None
-        save(case/(stem+'.command.json'), rec)
+        try:
+            if captured is not None:
+                for suffix, output in zip(('out', 'err'), captured):
+                    with (case/(stem+'.'+suffix)).open('xb') as stream:
+                        stream.write(output)
+            for suffix in ('out', 'err'):
+                path = case/(stem+'.'+suffix)
+                rec['stdout_sha256' if suffix == 'out' else 'stderr_sha256'] = sha(path) if path.exists() else None
+            save(case/(stem+'.command.json'), rec)
+        except BaseException as receipt_error:
+            if receipt_errors is not None:
+                receipt_errors.append(f'{stem} evidence: {receipt_error!r}')
+            elif error is not None or rec.get('exit_code') not in (None, 0):
+                report_secondary_failure(f'recording {stem} command', receipt_error)
+            else:
+                raise
     if error is not None:
         raise error
     require(rec['exit_code'] == 0 and not rec.get('timed_out'), stem+' failed: '+str(rec))
+    if captured is not None:
+        return captured[0].decode('utf-8')
     return (case/(stem+'.out')).read_text()
 
 
@@ -197,16 +241,18 @@ def stop(case, service, abort=False):
     service['stop_attempts'] += 1
     stem = service['stem']+'-cleanup-'+str(service['stop_attempts'])
     rec = dict(started_utc=now(), kind=service['kind'], graceful=False, absent=False)
+    primary_error = None
     try:
         stop_impl(case, service, stem, rec)
         require(abort or rec['graceful'], 'normal lifecycle stop lacks checked graceful exit')
     except BaseException as error:
+        primary_error = error
         rec.setdefault('errors', []).append(repr(error))
         raise
     finally:
         rec['ended_utc'] = now()
         service['stopped'] = rec['absent']
-        save(case/(stem+'.stop.json'), rec)
+        save_receipt(case/(stem+'.stop.json'), rec, primary_error)
 
 
 def stop_impl(case, service, stem, rec):
@@ -232,19 +278,26 @@ def stop_impl(case, service, stem, rec):
                     errors.append(repr(cleanup))
         finally:
             for handle in service['handles']:
-                handle.close()
+                try:
+                    handle.close()
+                except OSError as error:
+                    errors.append(repr(error))
             rec.update(absent=service['process'] is None or service['process'].poll() is not None,
                        elapsed_seconds=time.monotonic()-start)
     else:
+        def control(step, argv, timeout=180):
+            return command(case, stem+'-'+step, argv, timeout=timeout, receipt_errors=errors)
+
         # Recover by the fresh unique name even if docker run was interrupted
         # before its stdout CID reached Python. Never remove an unverified owner.
-        ids = command(case, stem+'-ids', ['docker', 'ps', '-a', '--no-trunc',
+        ids = control('ids', ['docker', 'ps', '-a', '--no-trunc',
                       '--filter', 'name=^/'+service['name']+'$', '--format', '{{.ID}}']).splitlines()
         if ids:
             require(len(ids) == 1, 'ambiguous owned container identity')
             cid = ids[0]
-            inspection = json_command(case, stem+'-identity', ['docker', 'inspect', cid])[0]
-            require(inspection['Name'] == '/'+service['name'] and inspection['Image'] == IMAGE and
+            require(re.fullmatch('[0-9a-f]{64}', cid), 'invalid full container id')
+            inspection = strict_json(control('identity', ['docker', 'inspect', cid]))[0]
+            require(inspection['Id'] == cid and inspection['Name'] == '/'+service['name'] and inspection['Image'] == IMAGE and
                     inspection['Config']['Labels'].get('gomap.issue') == '5407' and
                     any(m.get('Source') == service['data'] and m.get('Destination') == '/data/db'
                         for m in inspection['Mounts']) and
@@ -252,21 +305,24 @@ def stop_impl(case, service, stem, rec):
             service['cid'] = cid
             rec['cid'] = cid
             try:
-                command(case, stem+'-stop', ['docker', 'stop', '--time', '120', cid], timeout=150)
-                inspection = json_command(case, stem+'-stopped-inspect', ['docker', 'inspect', cid])[0]
+                control('stop', ['docker', 'stop', '--time', '120', cid], timeout=150)
+                inspection = strict_json(control('stopped-inspect', ['docker', 'inspect', cid]))[0]
                 rec['graceful'] = not inspection['State']['Running'] and inspection['State']['ExitCode'] == 0
                 require(rec['graceful'], 'MongoDB graceful stop failed')
             except BaseException as error:
                 errors.append(repr(error))
-            for step, argv in (('logs', ['docker','logs',cid]), ('remove', ['docker','rm','-f','-v',cid])):
-                try:
-                    command(case, stem+'-'+step, argv, timeout=60)
-                except BaseException as error:
-                    errors.append(repr(error))
+            try:
+                command(case, stem+'-logs', ['docker','logs',cid], timeout=60)
+            except BaseException as error:
+                errors.append(repr(error))
+            try:
+                control('remove', ['docker','rm','-f','-v',cid], timeout=60)
+            except BaseException as error:
+                errors.append(repr(error))
         else:
             rec['not_present'] = True
         try:
-            remaining = command(case, stem+'-absence', ['docker', 'ps', '-a', '--no-trunc',
+            remaining = control('absence', ['docker', 'ps', '-a', '--no-trunc',
                                 '--filter', 'name=^/'+service['name']+'$', '--format', '{{.ID}}'])
             rec['absent'] = not remaining.strip()
             require(rec['absent'], 'owned container remained')
@@ -470,14 +526,18 @@ def run_case(suite, label, target, repeat, count, ops, mode='driver-command-raw'
         save(case/'result.json', rec)
         print(case.name+' VALID', flush=True)
     except BaseException as error:
-        rec.update(state='invalid', ended_utc=now(), error=str(error))
-        save(case/'failure.json', rec)
+        cleanup_failures = []
         for owned in reversed(SERVICES):
             try:
                 stop(case, owned, abort=True)
             except BaseException as cleanup:
-                save(case/('cleanup-failure-'+owned['stem']+'-'+str(owned['stop_attempts'])+'.json'),
-                     dict(error=str(cleanup), time=now()))
+                cleanup_failures.append((owned, cleanup))
+        rec.update(state='invalid', ended_utc=now(), error=str(error))
+        save_receipt(case/'failure.json', rec, error)
+        for owned, cleanup in cleanup_failures:
+            stem = 'cleanup-failure-'+owned['stem']+'-'+str(owned['stop_attempts'])
+            report_secondary_failure(stem, cleanup)
+            save_receipt(case/(stem+'.json'), dict(error=str(cleanup), time=now()), error)
         raise
 
 
