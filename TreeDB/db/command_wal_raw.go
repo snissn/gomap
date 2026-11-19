@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"sort"
 	"sync"
@@ -978,7 +977,7 @@ func (db *DB) cleanupCommandWALCoveredSegmentsV1(scanSealedPrefix bool) (retErr 
 	if hooks := db.testCommandWALCleanupHooks; err == nil && hooks != nil && hooks.afterScan != nil {
 		hooks.afterScan()
 	}
-	var retiredFiles []*os.File
+	var retirement commandWALRetirementFiles
 	if err == nil {
 		db.durablePublishMu.Lock()
 		if err = db.revalidateDurableWALCleanupProofV1(proof); err == nil {
@@ -989,9 +988,10 @@ func (db *DB) cleanupCommandWALCoveredSegmentsV1(scanSealedPrefix bool) (retErr 
 				if retainErr := retainCommandWALCleanupAuthoritySegments(proof.segments, proof.journal, current); retainErr != nil {
 					return false, retainErr
 				}
-				var closeAfterUnlock *[]*os.File
+				var closeAfterUnlock *commandWALRetirementFiles
 				if scanSealedPrefix && current.Ext4Stream {
-					closeAfterUnlock = &retiredFiles
+					retirement.volume = current.ActiveIdentity.VolumeID
+					closeAfterUnlock = &retirement
 				}
 				var removeErr error
 				proof.segments, removeErr = unlinkCoveredCommandWALSegments(proof.segments, registry, closeAfterUnlock)
@@ -1090,7 +1090,7 @@ func (db *DB) cleanupCommandWALCoveredSegmentsV1(scanSealedPrefix bool) (retErr 
 	// without an open descriptor would perform under journal exclusion.
 	// Finish that checked close before the directory fence and while this
 	// cleanup invocation still owns maintenance.
-	for _, file := range retiredFiles {
+	for _, file := range retirement.files {
 		if hooks := db.testCommandWALCleanupHooks; hooks != nil && hooks.beforeCloseRetired != nil {
 			hooks.beforeCloseRetired(file)
 		}

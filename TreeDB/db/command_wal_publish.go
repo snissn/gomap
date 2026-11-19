@@ -933,10 +933,15 @@ func removeCoveredCommandWALSegmentsWithRegistry(decisions []commandWALSegmentCl
 	return unlinkCoveredCommandWALSegments(decisions, registry, nil)
 }
 
-// A non-nil closeAfterUnlock transfers each positively revalidated descriptor
-// to the caller before unlink. The scanner handles and delete leases keep
-// their original lifetimes. This transfer is used on verified ext4 only.
-func unlinkCoveredCommandWALSegments(decisions []commandWALSegmentCleanupDecision, registry *rootpublication.IdentityPinRegistry, closeAfterUnlock *[]*os.File) ([]commandWALSegmentCleanupDecision, error) {
+type commandWALRetirementFiles struct {
+	volume uint64
+	files  []*os.File
+}
+
+// A non-nil closeAfterUnlock transfers positively revalidated regular ext4
+// files on the active device to the caller before unlink. The scanner handles
+// and delete leases keep their original lifetimes.
+func unlinkCoveredCommandWALSegments(decisions []commandWALSegmentCleanupDecision, registry *rootpublication.IdentityPinRegistry, closeAfterUnlock *commandWALRetirementFiles) ([]commandWALSegmentCleanupDecision, error) {
 	defer closeCommandWALCleanupDecisions(decisions)
 	type cleanupLease struct {
 		decision int
@@ -1043,8 +1048,8 @@ func unlinkCoveredCommandWALSegments(decisions []commandWALSegmentCleanupDecisio
 		currentIdentity, identityErr := rootpublication.StableIdentityFromFile(current)
 		matches := identityErr == nil && rootpublication.SamePhysicalIdentity(decision.identity, currentIdentity)
 		var closeErr error
-		if closeAfterUnlock != nil && matches {
-			*closeAfterUnlock = append(*closeAfterUnlock, current)
+		if closeAfterUnlock != nil && matches && canRetireCommandWALFileAfterUnlock(current, currentIdentity.VolumeID, closeAfterUnlock.volume) {
+			closeAfterUnlock.files = append(closeAfterUnlock.files, current)
 		} else {
 			closeErr = current.Close()
 		}
@@ -1101,6 +1106,20 @@ func unlinkCoveredCommandWALSegments(decisions []commandWALSegmentCleanupDecisio
 		}
 	}
 	return decisions, nil
+}
+
+// Losing the positive retirement witness keeps the original close placement.
+// The under-lock pathname and unlink authority remain those of the caller.
+func canRetireCommandWALFileAfterUnlock(file *os.File, fileVolume, activeVolume uint64) bool {
+	if fileVolume != activeVolume {
+		return false
+	}
+	named, err := os.Lstat(file.Name())
+	if err != nil || !named.Mode().IsRegular() {
+		return false
+	}
+	opened, err := file.Stat()
+	return err == nil && os.SameFile(opened, named)
 }
 
 func closeCommandWALCleanupDecisions(decisions []commandWALSegmentCleanupDecision) error {

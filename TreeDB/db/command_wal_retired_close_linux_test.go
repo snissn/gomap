@@ -61,11 +61,49 @@ func requireRetiredWALExt4(t *testing.T, dir string) {
 
 func seedRetiredWALFixture(t *testing.T, dir string, count, rounds, segments int) *retiredWALFixture {
 	t.Helper()
+	return seedRetiredWALFixtureWithFormat(t, dir, count, rounds, segments, false)
+}
+
+func seedRetiredWALFixtureWithFormat(t *testing.T, dir string, count, rounds, segments int, fixedPredecessor bool) *retiredWALFixture {
+	t.Helper()
 	requireRetiredWALExt4(t, dir)
 	opts := retiredWALOptions(dir)
 	database, err := OpenForNativeSemanticOwner(opts)
 	if err != nil {
 		t.Fatal(err)
+	}
+	var predecessorPath string
+	if fixedPredecessor {
+		// Initialize the role's persisted creation policy, then seed an older
+		// physical fixed container before any user commands exist.
+		predecessorPath, _ = database.commandWALActiveSegmentSnapshot()
+		if err := database.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(predecessorPath); err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		writer, err := commitlog.NewFixedWriterWithCapacity(predecessorPath, 256<<10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		payload, err := commitlog.EncodeRawKVBatchPayload([]commitlog.RawKVOperation{{
+			Op: commitlog.RawKVOpSet, Key: []byte("old-fixed"), Value: []byte("old-value"),
+		}})
+		if err != nil {
+			_ = writer.Close()
+			t.Fatal(err)
+		}
+		if err := errors.Join(writer.AppendCommandV2(commitlog.CommandEnvelope{
+			LSN: 1, Kind: commitlog.CommandKindRawKVBatch, Scope: commitlog.CommandScopeRawKV,
+			PayloadFormat: commitlog.PayloadFormatRawKVBatchV1, DurabilityClass: commitlog.CommandDurabilityDurable, Payload: payload,
+		}), writer.Sync(), writer.Close()); err != nil {
+			t.Fatal(err)
+		}
+		database, err = OpenForNativeSemanticOwner(opts)
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	f := &retiredWALFixture{db: database, opts: opts, keys: make([][]byte, count), paths: make([]string, segments), info: make([]os.FileInfo, segments)}
 	t.Cleanup(func() {
@@ -76,11 +114,21 @@ func seedRetiredWALFixture(t *testing.T, dir string, count, rounds, segments int
 	if c := database.commandJournal.WriterBufferStats().Container; c != "stream" {
 		t.Fatalf("expected original ext4 stream, got %q", c)
 	}
+	if fixedPredecessor {
+		f.paths[0] = predecessorPath
+		if f.info[0], err = os.Stat(predecessorPath); err != nil {
+			t.Fatal(err)
+		}
+		assertRetiredWALValue(t, database.Get, []byte("old-fixed"), []byte("old-value"))
+	}
 	for i := range f.keys {
 		f.keys[i] = []byte(fmt.Sprintf("seed-%05d", i))
 	}
 	f.value = bytes.Repeat([]byte("retirement"), 116)
 	for segment := range f.paths {
+		if fixedPredecessor && segment == 0 {
+			continue
+		}
 		f.paths[segment], _ = database.commandWALActiveSegmentSnapshot()
 		for i := range rounds {
 			f.value[0] = byte(segment*rounds + i)
@@ -120,7 +168,7 @@ func seedRetiredWALFixture(t *testing.T, dir string, count, rounds, segments int
 		t.Fatalf("both persistent roots must cover seeded commands, roots=%d covered=%d err=%v", proof.rootCount, proof.cleanupThrough, err)
 	}
 	f.active = proof.journal.ActivePath
-	if slices.Contains(f.paths, f.active) || proof.journal.FixedContainer {
+	if slices.Contains(f.paths, f.active) || proof.journal.FixedContainer || !proof.journal.Ext4Stream {
 		t.Fatal("fixture lost its distinct active stream")
 	}
 	paths, err := filepath.Glob(filepath.Join(WALDirPath(dir), "commit-l*.log"))
@@ -447,4 +495,100 @@ func TestRetiredExt4WALCloseUncleanReopen(t *testing.T) {
 	}
 	f.value[0] = 5
 	f.verify(t, map[string][]byte{string(key): value})
+}
+
+func TestRetiredExt4WALCloseHandlesMixedPredecessors(t *testing.T) {
+	f := seedRetiredWALFixtureWithFormat(t, t.TempDir(), 32, 3, 2, true)
+	var closed []string
+	f.db.testCommandWALCleanupHooks = &commandWALCleanupTestHooks{
+		beforeCloseRetired: func(file *os.File) {
+			i := slices.Index(f.paths, file.Name())
+			info, err := file.Stat()
+			if i < 0 || err != nil || !os.SameFile(info, f.info[i]) {
+				t.Errorf("close lost original predecessor identity for %q, err=%v", file.Name(), err)
+				return
+			}
+			closed = append(closed, file.Name())
+		},
+	}
+	if err := cleanupDeferredCommandWALPrefixForTest(f.db); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(closed, f.paths) {
+		t.Fatalf("expected both exact fixed and stream predecessor closes in order, got %v", closed)
+	}
+	f.close(t)
+	f.verify(t, map[string][]byte{"old-fixed": []byte("old-value")})
+}
+
+func TestRetiredExt4WALCloseKeepsLegacyPlacementForSymlink(t *testing.T) {
+	f := seedRetiredWALFixture(t, t.TempDir(), 32, 3, 2)
+	linkPath := f.paths[0]
+	target := filepath.Join(f.opts.Dir, "same-inode-original-wal")
+	if err := os.Rename(linkPath, target); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, linkPath); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(linkPath); err != nil || !os.SameFile(info, f.info[0]) {
+		t.Fatalf("symlink does not reference exact original scanned inode: %v", err)
+	}
+	observed := make(map[string]int, 2)
+	restore := durabilitycut.Install(func(e durabilitycut.Event) error {
+		i := slices.Index(f.paths, e.OldPath)
+		if e.Point == durabilitycut.AfterWALOrAssetUnlink && i >= 0 {
+			observed[e.OldPath] = matchingRetiredFileHandles(t, f.info[i])
+		}
+		return nil
+	})
+	cleanupErr := cleanupDeferredCommandWALPrefixForTest(f.db)
+	restore()
+	if cleanupErr != nil || len(observed) != 2 || observed[linkPath] != 0 || observed[f.paths[1]] != 1 {
+		t.Fatalf("expected legacy symlink close and ordinary retained descriptor, saw %v, err=%v", observed, cleanupErr)
+	}
+	if _, err := os.Lstat(linkPath); !os.IsNotExist(err) {
+		t.Fatalf("expected original cleanup's removal of the link: %v", err)
+	}
+	if info, err := os.Stat(target); err != nil || !os.SameFile(info, f.info[0]) {
+		t.Fatalf("symlink target lost original identity: %v", err)
+	}
+	f.close(t)
+	f.verify(t, nil)
+}
+
+func TestRetiredExt4WALCloseRefusesForeignDevice(t *testing.T) {
+	dir := t.TempDir()
+	requireRetiredWALExt4(t, dir)
+	active, err := os.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := active.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	foreign, err := os.CreateTemp("/dev/shm", "treedb-wal-retirement-foreign-")
+	if err != nil {
+		t.Skipf("different device unavailable: %v", err)
+	}
+	defer func() {
+		if err := errors.Join(foreign.Close(), os.Remove(foreign.Name())); err != nil {
+			t.Error(err)
+		}
+	}()
+	activeInfo, activeErr := active.Stat()
+	foreignInfo, foreignErr := foreign.Stat()
+	if err := errors.Join(activeErr, foreignErr); err != nil {
+		t.Fatal(err)
+	}
+	activeDev := uint64(activeInfo.Sys().(*syscall.Stat_t).Dev)
+	foreignDev := uint64(foreignInfo.Sys().(*syscall.Stat_t).Dev)
+	if activeDev == foreignDev {
+		t.Skip("different device unavailable")
+	}
+	if canRetireCommandWALFileAfterUnlock(foreign, foreignDev, activeDev) {
+		t.Fatal("regular exact name on a different device was eligible for ext4 retirement")
+	}
 }
