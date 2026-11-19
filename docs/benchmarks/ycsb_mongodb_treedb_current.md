@@ -9,6 +9,33 @@ This page is the current entry point for external `go-ycsb` comparisons across:
 It distinguishes the retained October comparison from historical reports and
 records the remaining qualification obligations.
 
+## November 19 captured-publication result
+
+On host111, the uninstrumented 95% READ / 5% UPDATE workload used 16 clients
+and 100,000 BSON documents. The release binaries came from `84c1e33a` and its
+integrated WAL predecessor `f3f3ee12`. Both 1M UPDATE p99.9 comparisons passed
+the 30.0475 ms screen, improving from 60.095 to 2.597 ms and from 61.599 to
+13.487 ms. The ceiling was half the lower matched baseline.
+
+| Six million operations per run | Reference UPDATE p99.9 (ms) | Candidate UPDATE p99.9 (ms) |
+| --- | --- | --- |
+| Native GoMap A/B, pairs 1–3 | 79.103 / 83.775 / 62.591 | 4.203 / 23.487 / 5.171 |
+| Docker, MongoDB 8.2.7 vs. GoMap, pairs 1–3 | 0.499 / 0.501 / 0.497 | 3.829 / 3.539 / 3.955 |
+
+Native median paired UPDATE p99.9 fell 91.74%. Native UPDATE p99 fell 24.09%
+and throughput rose 27.06% on the same long pairs. All three Docker GoMap
+p99.9 observations cleared the 5 ms comparison limit. GoMap exceeded MongoDB
+throughput in all six long and short pairs. All 24 ordinary cells completed
+checked shutdown and a full typed reopen. All native READ, LOAD, stopped
+storage, memory and whole-lifecycle ratios stayed within the 10% guard.
+
+The earlier release recorded 21.711 ms in one Docker run. Along with the
+23.487 ms native result above, this illustrates the remaining variation across
+runs. The release preserves the foreground improvement while the remaining
+individual stalls have a separate investigation.
+[Release and physical maintenance receipts](https://github.com/snissn/gomap/issues/5467)
+· [Remaining client stalls](https://github.com/snissn/gomap/issues/5485)
+
 ## November 18 sustained UPDATE comparison
 
 A relaxed standalone BSON candidate removed most UPDATE stalls and exceeded the
