@@ -8173,7 +8173,15 @@ func (db *DB) reconcileSplitValueLogWritersAfterBackendMaintenanceAdmitted(admit
 		}
 	}
 	if db.nativeRootValueLogAppendShared && len(db.nativeRootValueLogAppendLanes) > 0 {
-		db.advanceNativeRootValueLogAppendSeqAtLeast(maxSeqByLane[db.nativeRootValueLogAppendLanes[0].id])
+		laneID := db.nativeRootValueLogAppendLanes[0].id
+		observedMaxSeq := maxSeqByLane[laneID]
+		// Peers reserve from the same high-water mark before creating files.
+		// Only an unreserved external advance needs to fence the group.
+		if uint64(observedMaxSeq) > uint64(db.nativeRootValueLogAppendSeq.Load()) {
+			db.advanceNativeRootValueLogAppendSeqAtLeast(observedMaxSeq)
+		} else {
+			delete(maxSeqByLane, laneID)
+		}
 	}
 	for i := range db.lanes {
 		if err := db.advanceValueLogWriterPastObservedSeq(&db.lanes[i], maxSeqByLane[db.lanes[i].id]); err != nil {

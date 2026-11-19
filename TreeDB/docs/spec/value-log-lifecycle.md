@@ -546,14 +546,15 @@ Checkpoint and retention pruning:
 
 Backend maintenance that creates new value-log or split leaf-log segments must
 reconcile cached-mode split writers after the backend operation. Reconciliation
-refreshes the value-log reader. Value lanes advance past their maximum observed
-on-disk sequence. Independent cached leaf writers reserve unique sequences from
-one allocator before creating files; observing a peer's higher reserved sequence
-does not rotate the other leaf writers. Maintained backend leaf writers reserve
-through that same allocator. An unreserved external leaf sequence still invokes
-the conservative advance-and-rotate fence, and explicit compaction retains its
-stronger handoff. These fences prevent filename collisions without creating
-empty successor generations after no-op GC.
+refreshes the value-log reader. A single-writer value lane advances past its
+maximum observed on-disk sequence. The shared native value lane and the shared
+leaf lane each reserve unique sequences from their own allocator before creating
+files. Higher sequences already reserved by the lane do not rotate its peers.
+Maintained backend leaf writers also reserve through the leaf allocator. An
+unreserved external advance still fences the affected lane and rotates its
+older writers past that sequence. Explicit compaction retains its stronger
+handoff. These fences prevent filename collisions without creating empty
+successor segments after no-op GC.
 
 ### 5.1 Periodic whole-generation leaf reclamation
 
