@@ -34,7 +34,7 @@ func TestFixedWALPressureAdoptsAtAheadCap(t *testing.T) {
 				t.Fatal(err)
 			}
 			opts := CommandJournalOptions{SegmentTargetBytes: 256 << 20, CaptureStableResources: tc.stable}
-			j, err := OpenCommandJournal(dir, opts)
+			j, err := openFixedTestCommandJournal(dir, opts)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -111,7 +111,7 @@ func TestFixedWALPressureAdoptsAtAheadCap(t *testing.T) {
 			if err := j.Close(); err != nil {
 				t.Fatal(err)
 			}
-			reopened, err := OpenCommandJournal(dir, opts)
+			reopened, err := openFixedTestCommandJournal(dir, opts)
 			if err != nil {
 				t.Fatal(err)
 			}

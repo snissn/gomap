@@ -54,10 +54,20 @@ func (e cowGenerationRetryableRefusal) Unwrap() error { return e.error }
 type cowGenerationSnapshotAllocationRefusal struct {
 	error
 	through                              rootpublication.SealedPrefix
+	basisRefresh                         bool
 	maintenanceBytes, maintenanceRefunds uint64
 }
 
 func (e *cowGenerationSnapshotAllocationRefusal) Unwrap() error { return e.error }
+
+func (c *cowCache) generationFrozenThrough() rootpublication.SealedPrefix {
+	c.cutMu.Lock()
+	defer c.cutMu.Unlock()
+	if cut := c.cut; cut != nil {
+		return rootpublication.SealedPrefix{LogicalSequence: cut.frozenLogicalSeq, CanonicalLSN: cut.frozenCommandLSN}
+	}
+	return rootpublication.SealedPrefix{}
+}
 
 func cowGenerationRetryableOnly(err error) bool {
 	for err != nil {
@@ -126,6 +136,9 @@ func (db *DB) materializeCOWPrefix(ctx context.Context, automatic bool, operatio
 		defer func() {
 			var refusal *cowGenerationSnapshotAllocationRefusal
 			if cowGenerationRetryableOnly(retErr) && errors.As(retErr, &refusal) {
+				if refusal.basisRefresh {
+					refusal.through = db.cow.generationFrozenThrough()
+				}
 				// Seal the observation after the attempt's full unwind but
 				// before another physical basis/owner can use the flush fence.
 				refusal.maintenanceBytes, refusal.maintenanceRefunds = db.cow.maintenance.MaintenanceUsage()

@@ -111,10 +111,11 @@ Ordinary cleanup is serialized per DB and follows this order:
    successor ownership;
 4. scan every typed command segment completely and bind the exact decisions to
    the proof. When deferred automatic cleanup runs after checkpoint writer
-   admission is released, a canonical single-lane inventory with an active
-   fixed container and at least two sealed fixed predecessors can release
-   append exclusion while scanning a bounded prefix of those predecessors
-   through retained handles. Reacquire append exclusion to verify the prefix
+   admission is released, a canonical single-lane inventory with a fixed active
+   container and at least two sealed predecessors selects up to eight of the
+   oldest predecessors. Every selected predecessor must be fixed to release
+   append exclusion and scan the prefix through retained handles. Reacquire
+   append exclusion to verify the prefix
    links and identities against the current inventory and finish scanning the
    suffix. Synchronous checkpoint, explicit and close cleanup, small
    inventories, stream journals, and unsupported layouts keep the complete
