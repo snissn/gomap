@@ -74,6 +74,19 @@ the retained record and requires the original file error after its close.
   one modification. After a checkpoint and checked close, a fresh connection
   reads both field values from the reopened database.
 
+- `TestNativeBSONSetRetrySameRow` checks the two replacement images in the
+  command WAL, the old document in a held read view, and the combined document
+  after reopen. The WAL-off case checks two logical publications and zero WAL
+  appends. `TestNativeBSONSetRetryRejectsCatalogChange` exercises schema changes
+  before refusal and between attempts, including an index created and dropped
+  between attempts.
+
+- `TestCOWNativeBSONSetConflictIncludesAcceptedCancelError` checks a failed
+  reservation cancellation. `TestNativeBSONSetRetryRequiresCleanPreassignmentRefusal`
+  checks that cleanup failures and assigned or uncertain outcomes prevent a retry.
+  `TestNativeBSONSetRetryAfterActualAppend` injects a failure after a real
+  command append and verifies one frame and its recovered document on reopen.
+
 - `TestCOWNativewireInsertResultIDParity` exercises Client -> Server -> public
   shared COW insertion for JSON/BSON with returned and omitted IDs under all
   three production profiles. It checks native BSON binary bytes, caller-buffer
