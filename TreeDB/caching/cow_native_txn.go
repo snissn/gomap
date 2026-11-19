@@ -174,11 +174,19 @@ func (db *DB) PrepareNativeProducerObservation() (backenddb.NativeProducerObserv
 		if db.relaxedSync && before.semantic.GenerationUnderPressure && before.semantic.ConstructionBytes == 0 {
 			remaining := before
 			remaining.semantic.GenerationUnderPressure = false
-			if !remaining.underPressure(limits) {
-				if err = db.rolloverCOWForFlush(); err == nil {
-					select {
-					case db.nativeGenerationFlushCh <- struct{}{}:
-					default:
+			if !remaining.underPressure(limits) && !db.nativeGenerationSeals.full() {
+				idleInterval := db.nativeGenerationSeals.idleInterval
+				var request cowGenerationSealRequest
+				var track *cowGenerationSealRequest
+				if idleInterval > 0 {
+					track = &request
+				}
+				if err = db.rolloverCOWForFlushAt(track, idleInterval); err == nil {
+					if track == nil || db.nativeGenerationSeals.add(request) {
+						select {
+						case db.nativeGenerationFlushCh <- struct{}{}:
+						default:
+						}
 					}
 					after, observeErr := c.nativeProducerPressureState()
 					if observeErr != nil {

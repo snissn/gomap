@@ -10181,6 +10181,7 @@ type DB struct {
 	autoCheckpointOnceCh    chan struct{}
 	autoCheckpointWriteCh   chan struct{}
 	nativeGenerationFlushCh chan struct{}
+	nativeGenerationSeals   cowGenerationSealQueue
 	autoCheckpointOn        atomic.Bool
 	autoCheckpointBytesFn   atomic.Pointer[autoCheckpointBytesHookBox]
 	// autoCheckpointSizeArmed gates the maxWALBytes size-triggered checkpoint.
@@ -13884,6 +13885,9 @@ func (db *DB) StartAutoCheckpoint(interval time.Duration, maxWALBytes int64, idl
 	}
 	if !db.autoCheckpointOn.CompareAndSwap(false, true) {
 		return
+	}
+	if db.cow != nil && db.cow.prefix != nil && db.relaxedSync && db.externalCommandWAL {
+		db.nativeGenerationSeals.idleInterval = idleInterval
 	}
 	db.autoCheckpointWorkerMaxWALBytes.Store(maxWALBytes)
 	db.wg.Add(1)
@@ -19664,9 +19668,13 @@ const (
 )
 
 func (db *DB) maintainCOWGenerationPressure() (retry bool, allocation *cowGenerationSnapshotAllocationRefusal) {
+	return db.maintainCOWGenerationPressureThrough(rootpublication.SealedPrefix{})
+}
+
+func (db *DB) maintainCOWGenerationPressureThrough(through rootpublication.SealedPrefix) (retry bool, allocation *cowGenerationSnapshotAllocationRefusal) {
 	// Close takes flushMu and drains the full frontier before stopping this
 	// worker. Otherwise this pass owns the original pressure seal and retirement.
-	err := db.materializeCOWPrefix(context.Background(), false, nil, cowGenerationPressureMaterialization)
+	err := db.materializeCOWPrefixThrough(context.Background(), false, nil, cowGenerationPressureMaterialization, through)
 	if err == nil || err == errDBClosing {
 		return false, nil
 	}
@@ -19714,6 +19722,7 @@ func (db *DB) autoCheckpointLoop(interval time.Duration, maxWALBytes int64, idle
 
 	var generationTimer *time.Timer
 	var generationRetry <-chan time.Time
+	var timerDeadline time.Time
 	defer func() {
 		if generationTimer != nil {
 			generationTimer.Stop()
@@ -19734,7 +19743,7 @@ func (db *DB) autoCheckpointLoop(interval time.Duration, maxWALBytes int64, idle
 		}
 		generationRetry = generationTimer.C
 	}
-	maintainGeneration := func() {
+	maintainGeneration := func(through rootpublication.SealedPrefix, count int) {
 		var maintenanceBefore uint64
 		if blockedAllocation {
 			if db.closing.Load() {
@@ -19770,7 +19779,7 @@ func (db *DB) autoCheckpointLoop(interval time.Duration, maxWALBytes int64, idle
 				return
 			}
 		}
-		retry, allocation := db.maintainCOWGenerationPressure()
+		retry, allocation := db.maintainCOWGenerationPressureThrough(through)
 		if allocation != nil {
 			if blockedAllocation && blockedThrough == allocation.through && blockedBasisRefresh == allocation.basisRefresh {
 				quietRetryDelay = min(cowGenerationQuietRetryMax, max(cowGenerationQuietRetryFloor, 2*quietRetryDelay))
@@ -19788,21 +19797,59 @@ func (db *DB) autoCheckpointLoop(interval time.Duration, maxWALBytes int64, idle
 		}
 		if retry {
 			armGenerationRetry()
+		} else if count != 0 {
+			db.nativeGenerationSeals.complete(count)
 		}
 	}
+	var generationDeadlineTimer *time.Timer
+	defer func() {
+		if generationDeadlineTimer != nil {
+			generationDeadlineTimer.Stop()
+		}
+	}()
 	for {
+		var generationCh <-chan time.Time
+		if db.nativeGenerationSeals.idleInterval > 0 && generationRetry == nil {
+			select {
+			case <-db.closeCh:
+				return
+			default:
+			}
+			// Check the absolute deadline each time around the select. A stream
+			// of writes or coalesced wakes cannot extend the first rotation.
+			request, count := db.nativeGenerationSeals.next(time.Now())
+			if count > 0 {
+				maintainGeneration(request.through, count)
+				continue
+			}
+			if !request.deadline.IsZero() {
+				if timerDeadline != request.deadline {
+					wait := time.Until(request.deadline)
+					if generationDeadlineTimer == nil {
+						generationDeadlineTimer = time.NewTimer(wait)
+					} else {
+						resetTimer(generationDeadlineTimer, wait)
+					}
+					timerDeadline = request.deadline
+				}
+				generationCh = generationDeadlineTimer.C
+			}
+		}
 		select {
 		case <-db.closeCh:
 			return
 		case <-intervalCh:
 			db.maybeAutoCheckpoint(maxWALBytes, autoCheckpointModeInterval)
 		case <-db.nativeGenerationFlushCh:
-			if generationRetry == nil {
-				maintainGeneration()
+			if db.nativeGenerationSeals.idleInterval <= 0 && generationRetry == nil {
+				maintainGeneration(rootpublication.SealedPrefix{}, 0)
 			}
 		case <-generationRetry:
 			generationRetry = nil
-			maintainGeneration()
+			request, count := db.nativeGenerationSeals.next(time.Now())
+			maintainGeneration(request.through, count)
+		case <-generationCh:
+			timerDeadline = time.Time{}
 		case <-db.autoCheckpointOnceCh:
 			db.maybeAutoCheckpoint(maxWALBytes, autoCheckpointModeForce)
 		case <-db.autoCheckpointWriteCh:

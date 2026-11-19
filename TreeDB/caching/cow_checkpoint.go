@@ -116,7 +116,11 @@ func cowGenerationAdmissionError(generationPressure bool, err error) error {
 // and handoff. Pressure-only completion joins its exact durable seal and accepted
 // retirement, leaving journal rotation and covered-file maintenance to the already
 // running size-maintenance worker. Public checkpoint/Close/Drain are unchanged.
-func (db *DB) materializeCOWPrefix(ctx context.Context, automatic bool, operation backenddb.NativeColumnStoreCompaction, mode cowPrefixMaterialization) (retErr error) {
+func (db *DB) materializeCOWPrefix(ctx context.Context, automatic bool, operation backenddb.NativeColumnStoreCompaction, mode cowPrefixMaterialization) error {
+	return db.materializeCOWPrefixThrough(ctx, automatic, operation, mode, rootpublication.SealedPrefix{})
+}
+
+func (db *DB) materializeCOWPrefixThrough(ctx context.Context, automatic bool, operation backenddb.NativeColumnStoreCompaction, mode cowPrefixMaterialization, requested rootpublication.SealedPrefix) (retErr error) {
 	pressureOnly := mode != cowCheckpointMaterialization
 	generationPressure := mode == cowGenerationPressureMaterialization
 	if db.closing.Load() {
@@ -173,6 +177,12 @@ func (db *DB) materializeCOWPrefix(ctx context.Context, automatic bool, operatio
 		db.writeMu.Unlock()
 		if err := db.refreshCOWBackendBasisForGeneration(generationPressure); err != nil {
 			return err
+		}
+	}
+	if generationPressure && requested != (rootpublication.SealedPrefix{}) {
+		sealed := db.cow.prefix.LogicalFrontiers().S
+		if sealed.LogicalSequence >= requested.LogicalSequence && sealed.CanonicalLSN >= requested.CanonicalLSN {
+			return db.cow.prefix.WaitAccepted(ctx, requested)
 		}
 	}
 	if err := lockCheckpointWriteMutexContext(ctx, &db.writeMu); err != nil {
@@ -368,7 +378,9 @@ func (db *DB) vacuumCOWCheckpointBasis(automatic bool) error {
 	return errors.Join(err, db.refreshCOWBackendBasis())
 }
 
-func (db *DB) rolloverCOWForFlush() error {
+func (db *DB) rolloverCOWForFlush() error { return db.rolloverCOWForFlushAt(nil, 0) }
+
+func (db *DB) rolloverCOWForFlushAt(request *cowGenerationSealRequest, idleInterval time.Duration) error {
 	if err := db.beginDirectWrite(); err != nil {
 		return err
 	}
@@ -378,6 +390,12 @@ func (db *DB) rolloverCOWForFlush() error {
 	if err == nil && p != nil {
 		p.install()
 		db.mutableBytes.Store(0)
+		if request != nil {
+			request.through = rootpublication.SealedPrefix{LogicalSequence: p.next.frozenLogicalSeq, CanonicalLSN: p.next.frozenCommandLSN}
+			if cowGenerationSealHasHeadroom(c.budget.Limits(), c.budget.Stats()) {
+				request.deadline = time.Now().Add(idleInterval)
+			}
+		}
 	}
 	c.writerMu.Unlock()
 	db.writeMu.RUnlock()

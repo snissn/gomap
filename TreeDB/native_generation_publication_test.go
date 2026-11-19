@@ -65,7 +65,12 @@ func TestNativeBSONGenerationPressureSealsExactFrozenPrefix(t *testing.T) {
 	testNativeBSONGenerationPressureForeground(t, nativeGenerationSyncTest{wal: true, exactFrozen: true})
 }
 
+func TestNativeBSONGenerationPressureSealsTwoFrozenGenerations(t *testing.T) {
+	testNativeBSONGenerationPressureForeground(t, nativeGenerationSyncTest{wal: true, pair: true})
+}
+
 type nativeGenerationSyncTest struct {
+	pair            bool
 	closeFromNotify bool
 	exactFrozen     bool
 	systemPager     bool
@@ -102,13 +107,16 @@ func testNativeBSONGenerationPressureForeground(t *testing.T, control nativeGene
 	opts.COWMemtableLimits.MaxTotalBytes = 1 << 30
 	opts.COWMemtableLimits.MaxRetiredBytes = 1 << 30
 	opts.COWMemtableLimits.MaxGenerationBytes = 2 << 20
-	if control.exactFrozen {
+	if control.exactFrozen || control.pair {
 		opts.COWMemtableLimits.MaxGenerationBytes = 128 << 10
 	}
 	opts.MaxWALBytes = 2 << 30
 	opts.FlushThreshold = 1 << 30
 	opts.BackgroundCheckpointInterval = -1
 	opts.BackgroundCheckpointIdleDuration = -1
+	if control.pair {
+		opts.BackgroundCheckpointIdleDuration = time.Hour
+	}
 	backgroundFailure := make(chan error, 1)
 	callbackClose := make(chan error, 1)
 	var calledClose atomic.Bool
@@ -276,6 +284,41 @@ func testNativeBSONGenerationPressureForeground(t *testing.T, control nativeGene
 				closeWouldBlock = true
 				t.Fatalf("%s remained blocked after releasing generation publication (WAL=%t)", operation, holdWAL)
 			}
+		}
+	}
+	if control.pair {
+		first := old
+		last++
+		if err := write(last); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-reached:
+			t.Fatal("first generation started its own physical WAL seal")
+		case <-time.After(50 * time.Millisecond):
+		}
+		for attempts := 0; ; attempts++ {
+			if attempts == 1024 {
+				t.Fatal("second generation did not reach its watermark")
+			}
+			o, err := backend.ObserveNativeProducer()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if o.UnderPressure {
+				if !o.Semantic.GenerationUnderPressure || o.Semantic.ConstructionBytes != 0 {
+					t.Fatalf("expected only generation pressure: %+v", o)
+				}
+				break
+			}
+			last++
+			if err := write(last); err != nil {
+				t.Fatal(err)
+			}
+		}
+		old = prefix.LogicalFrontiers()
+		if old.S != first.S || old.W != first.W || old.V <= first.V {
+			t.Fatalf("first generation was sealed before the second rotation: first=%+v second=%+v", first, old)
 		}
 	}
 	go func() { done <- write(last + 1) }()
