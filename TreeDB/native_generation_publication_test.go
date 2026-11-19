@@ -182,6 +182,9 @@ func testNativeBSONGenerationPressureForeground(t *testing.T, control nativeGene
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
+		if closeWouldBlock {
+			return
+		}
 		if err := held.Close(); err != nil {
 			t.Error(err)
 		}
@@ -315,10 +318,19 @@ func testNativeBSONGenerationPressureForeground(t *testing.T, control nativeGene
 			t.Fatalf("BSON n=%d,%v want %d", got, ok, n)
 		}
 	}
-	raw, err := held.Get(id)
-	check(raw, err, 0)
-	raw, err = reader.Get("rows", id)
-	check(raw, err, last+2)
+	readWhileHeld := func(operation string, get func() ([]byte, error), want int64) {
+		t.Helper()
+		var raw []byte
+		go func() {
+			value, err := get()
+			raw = value
+			done <- err
+		}()
+		waitWhileHeld(operation)
+		check(raw, nil, want)
+	}
+	readWhileHeld("held-reader GET", func() ([]byte, error) { return held.Get(id) }, 0)
+	readWhileHeld("current-reader GET", func() ([]byte, error) { return reader.Get("rows", id) }, last+2)
 	last += 2
 	wantSeal := rootpublication.SealedPrefix{LogicalSequence: old.V, CanonicalLSN: old.C}
 	if control.exactFrozen {
@@ -361,7 +373,7 @@ func testNativeBSONGenerationPressureForeground(t *testing.T, control nativeGene
 		if f.S != wantSeal || f.V != frozen.V+2 || f.C != frozen.C+2 || f.W != old.W {
 			t.Fatalf("generation worker applied past exact frozen endpoint %+v: %+v", wantSeal, f)
 		}
-		raw, err = held.Get(id)
+		raw, err := held.Get(id)
 		check(raw, err, 0)
 		raw, err = reader.Get("rows", id)
 		check(raw, err, last)
@@ -452,7 +464,7 @@ func testNativeBSONGenerationPressureForeground(t *testing.T, control nativeGene
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, err = reader.Get("rows", id)
+	raw, err := reader.Get("rows", id)
 	check(raw, err, last)
 	if control.systemPager {
 		snapshot := backend.AcquireSnapshot()
