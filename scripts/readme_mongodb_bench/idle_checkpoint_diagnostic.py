@@ -326,7 +326,7 @@ def main():
                 arm.verify_freeze()
                 verify_helpers()
         except BaseException as error:
-            recipe.save(out/'failure.json', dict(error=repr(error), ended_utc=recipe.now()))
+            recipe.save_receipt(out/'failure.json', dict(error=repr(error), ended_utc=recipe.now()), error)
             raise
 
 
