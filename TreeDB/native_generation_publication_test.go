@@ -114,7 +114,7 @@ func testNativeBSONGenerationPressureForeground(t *testing.T, control nativeGene
 	var calledClose atomic.Bool
 	var db *DB
 	var err error
-	var callbackBlocked bool
+	var closeWouldBlock bool
 	if syncFailure != nil {
 		// Reopen physically replays every unapplied update after injected failure.
 		// Keep this fixture small while reaching the same real generation threshold.
@@ -136,7 +136,7 @@ func testNativeBSONGenerationPressureForeground(t *testing.T, control nativeGene
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if db != nil && !callbackBlocked {
+		if db != nil && !closeWouldBlock {
 			if err := db.Close(); err != nil {
 				t.Error(err)
 			}
@@ -257,6 +257,24 @@ func testNativeBSONGenerationPressureForeground(t *testing.T, control nativeGene
 	defer restore()
 	defer resume()
 	done := make(chan error, 1)
+	waitWhileHeld := func(operation string) {
+		t.Helper()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(2 * time.Second):
+			resume()
+			select {
+			case err := <-done:
+				t.Fatalf("%s waited for held generation publication (WAL=%t), eventual error %v", operation, holdWAL, err)
+			case <-time.After(10 * time.Second):
+				closeWouldBlock = true
+				t.Fatalf("%s remained blocked after releasing generation publication (WAL=%t)", operation, holdWAL)
+			}
+		}
+	}
 	go func() { done <- write(last + 1) }()
 	var heldSync durabilitycut.Event
 	select {
@@ -265,16 +283,7 @@ func testNativeBSONGenerationPressureForeground(t *testing.T, control nativeGene
 		resume()
 		t.Fatalf("physical generation publication did not reach held sync (WAL=%v)", holdWAL)
 	}
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(2 * time.Second):
-		resume()
-		err := <-done
-		t.Fatalf("generation-triggering UPDATE waited for held physical publication (WAL=%v), eventual error %v", holdWAL, err)
-	}
+	waitWhileHeld("generation-triggering UPDATE")
 	var heldFile os.FileInfo
 	if control.rotate {
 		heldFile, err = heldSync.StablePath.Stat()
@@ -285,32 +294,14 @@ func testNativeBSONGenerationPressureForeground(t *testing.T, control nativeGene
 			t.Fatal("captured WAL segment has no accepted bytes before rotation")
 		}
 		go func() { done <- db.backend.RotateCommandWALActiveSegment(false) }()
-		select {
-		case err := <-done:
-			if err != nil {
-				t.Fatal(err)
-			}
-		case <-time.After(2 * time.Second):
-			resume()
-			err := <-done
-			t.Fatalf("journal rotation waited for the captured WAL sync, eventual error %v", err)
-		}
+		waitWhileHeld("journal rotation")
 		if db.backend.CommandWALActiveBytes() != 0 {
 			t.Fatal("journal rotation did not install an empty successor")
 		}
 	}
 	// Start the successor only after the older physical operation is held.
 	go func() { done <- write(last + 2) }()
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(2 * time.Second):
-		resume()
-		err := <-done
-		t.Fatalf("successor UPDATE waited for held physical publication (WAL=%v), eventual error %v", holdWAL, err)
-	}
+	waitWhileHeld("successor UPDATE")
 	f := prefix.LogicalFrontiers()
 	if f.V != old.V+2 || f.C != old.C+2 || f.S != old.S || f.W != old.W {
 		t.Fatalf("while physical publication held (WAL=%v): old=%+v now=%+v", holdWAL, old, f)
@@ -329,6 +320,7 @@ func testNativeBSONGenerationPressureForeground(t *testing.T, control nativeGene
 	raw, err = reader.Get("rows", id)
 	check(raw, err, last+2)
 	last += 2
+	wantSeal := rootpublication.SealedPrefix{LogicalSequence: old.V, CanonicalLSN: old.C}
 	if control.exactFrozen {
 		// While the sole pressure worker still owns the older WAL sync,
 		// fill and rotate a real second generation and accept a suffix.
@@ -337,15 +329,7 @@ func testNativeBSONGenerationPressureForeground(t *testing.T, control nativeGene
 		publish := func() {
 			last++
 			go func(n int64) { done <- write(n) }(last)
-			select {
-			case err := <-done:
-				if err != nil {
-					t.Fatal(err)
-				}
-			case <-time.After(2 * time.Second):
-				resume()
-				t.Fatalf("generation rollover or suffix waited for older WAL sync: %v", <-done)
-			}
+			waitWhileHeld("generation rollover or suffix")
 		}
 		for attempts := 0; ; attempts++ {
 			if attempts == 1024 {
@@ -369,13 +353,13 @@ func testNativeBSONGenerationPressureForeground(t *testing.T, control nativeGene
 		resume()
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		endpoint := rootpublication.SealedPrefix{LogicalSequence: frozen.V, CanonicalLSN: frozen.C}
-		if err := prefix.WaitAccepted(ctx, endpoint); err != nil {
+		wantSeal = rootpublication.SealedPrefix{LogicalSequence: frozen.V, CanonicalLSN: frozen.C}
+		if err := prefix.WaitAccepted(ctx, wantSeal); err != nil {
 			t.Fatal(err)
 		}
 		f = prefix.LogicalFrontiers()
-		if f.S != endpoint || f.V != frozen.V+2 || f.C != frozen.C+2 || f.W != old.W {
-			t.Fatalf("generation worker applied past exact frozen endpoint %+v: %+v", endpoint, f)
+		if f.S != wantSeal || f.V != frozen.V+2 || f.C != frozen.C+2 || f.W != old.W {
+			t.Fatalf("generation worker applied past exact frozen endpoint %+v: %+v", wantSeal, f)
 		}
 		raw, err = held.Get(id)
 		check(raw, err, 0)
@@ -397,11 +381,11 @@ func testNativeBSONGenerationPressureForeground(t *testing.T, control nativeGene
 		if holdWAL {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			if err := prefix.WaitAccepted(ctx, rootpublication.SealedPrefix{LogicalSequence: old.V, CanonicalLSN: old.C}); err != nil {
+			if err := prefix.WaitAccepted(ctx, wantSeal); err != nil {
 				t.Fatal(err)
 			}
 			after := prefix.LogicalFrontiers()
-			if after.S.CanonicalLSN < old.C || after.S.CanonicalLSN >= f.C || after.C != f.C || after.W != old.W {
+			if after.S != wantSeal || after.C != f.C || after.W != old.W {
 				t.Fatalf("generation seal must exclude the newer accepted suffix: before=%+v now=%+v", f, after)
 			}
 		}
@@ -425,7 +409,7 @@ func testNativeBSONGenerationPressureForeground(t *testing.T, control nativeGene
 					t.Fatalf("callback Close did not refuse reentry: %v", closeErr)
 				}
 			case <-time.After(2 * time.Second):
-				callbackBlocked = true // A second Close would join the same stuck worker.
+				closeWouldBlock = true // A second Close would join the same stuck worker.
 				t.Fatal("generation NotifyError callback deadlocked calling Close")
 			}
 		}

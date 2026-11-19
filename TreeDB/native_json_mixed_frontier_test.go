@@ -2,6 +2,7 @@ package treedb
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -230,9 +231,14 @@ func testNativeBSONRootCoveredPublication(t *testing.T, profile Profile, dir str
 
 func TestNativeBSONRootCoveredUnappliedReplay(t *testing.T) {
 	dir := t.TempDir()
-	cmd := exec.Command(os.Args[0], "-test.run=^TestNativeBSONRootCoveredPublication$", "-test.v")
+	ctx, cancel := context.WithTimeout(t.Context(), 45*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestNativeBSONRootCoveredPublication$", "-test.v")
 	cmd.Env = append(os.Environ(), "GOMAP_ROOT_COVERED_BSON_CRASH_DIR="+dir)
 	output, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		t.Fatalf("crash child did not finish: %v\n%s", ctx.Err(), output)
+	}
 	var exit *exec.ExitError
 	if !errors.As(err, &exit) || exit.ExitCode() != 97 || !bytes.Contains(output, []byte("ROOT-COVERED BSON UNAPPLIED base=2 tip=5")) || bytes.Contains(output, []byte("DATA RACE")) {
 		t.Fatalf("abrupt child: %v\n%s", err, output)
