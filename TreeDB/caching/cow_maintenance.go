@@ -41,7 +41,7 @@ func (db *DB) refreshCOWBackendBasisForGeneration(generationPressure bool) error
 		return backendMaintenanceError("capture COW basis", cowGenerationAdmissionError(generationPressure, err))
 	}
 	defer db.releaseCOWBasisOnUnwind(&basis)
-	old, err := db.installCOWBasis(basis, nil, generationPressure)
+	old, err := db.installCOWBasis(basis, generationPressure)
 	cleanupErr := basis.release()
 	basis = nil
 	if refusal, ok := err.(*cowGenerationSnapshotAllocationRefusal); ok && cleanupErr == nil {

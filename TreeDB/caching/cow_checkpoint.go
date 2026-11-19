@@ -164,6 +164,13 @@ func (db *DB) materializeCOWPrefix(ctx context.Context, automatic bool, operatio
 		return err
 	}
 	if db.cow.refreshRequired.Load() {
+		// A writer may have entered before the reconciliation debt or this
+		// checkpoint's admission fence. Drain it before sizing the successor
+		// to the exact frozen sources. Keep writeMu free during storage work.
+		if err := lockCheckpointWriteMutexContext(ctx, &db.writeMu); err != nil {
+			return err
+		}
+		db.writeMu.Unlock()
 		if err := db.refreshCOWBackendBasisForGeneration(generationPressure); err != nil {
 			return err
 		}
