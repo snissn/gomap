@@ -99,7 +99,7 @@ func (l *COWExternalLease) closeLocked() {
 	b.stats.ExternalBytes -= l.charge
 	b.stats.ExternalLeases--
 	if b.maintenanceChild {
-		b.stats.MaintenanceRefunds++
+		b.maintenanceRefunds++
 	}
 }
 func (b *COWBudget) refundIdleReadLocked(e cowIdleReadScratch) {

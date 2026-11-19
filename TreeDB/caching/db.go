@@ -19751,9 +19751,9 @@ func (db *DB) autoCheckpointLoop(interval time.Duration, maxWALBytes int64, idle
 				// inherit the previous range's allocation wait.
 				blockedAllocation = rootpublication.SealedPrefix{}
 			} else {
-				maintenance := c.maintenance.Stats()
-				maintenanceBefore = maintenance.TotalBytes
-				if allocationRetried && maintenanceBefore >= blockedMaintenanceBytes && maintenance.MaintenanceRefunds == blockedRefunds {
+				var refunds uint64
+				maintenanceBefore, refunds = c.maintenance.MaintenanceUsage()
+				if allocationRetried && maintenanceBefore >= blockedMaintenanceBytes && refunds == blockedRefunds {
 					armGenerationRetry()
 					return
 				}

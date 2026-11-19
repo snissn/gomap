@@ -128,9 +128,7 @@ func (db *DB) materializeCOWPrefix(ctx context.Context, automatic bool, operatio
 			if cowGenerationRetryableOnly(retErr) && errors.As(retErr, &refusal) {
 				// Seal the observation after the attempt's full unwind but
 				// before another physical basis/owner can use the flush fence.
-				maintenance := db.cow.maintenance.Stats()
-				refusal.maintenanceBytes = maintenance.TotalBytes
-				refusal.maintenanceRefunds = maintenance.MaintenanceRefunds
+				refusal.maintenanceBytes, refusal.maintenanceRefunds = db.cow.maintenance.MaintenanceUsage()
 			}
 		}()
 	}

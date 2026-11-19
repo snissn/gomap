@@ -45,7 +45,7 @@ func (l COWLimits) Validate() error {
 
 type COWStats struct {
 	TotalBytes, HistoryBytes, ReservedBytes, RetiredBytes, PeakBytes, ControlBytes, DeferredBytes uint64
-	ExternalBytes, MaintenanceRefunds                                                             uint64
+	ExternalBytes                                                                                 uint64
 	Views, Generations, Sources, ExternalLeases                                                   int
 }
 
@@ -61,9 +61,10 @@ type COWBudget struct {
 	idleReadCount int
 	// Exactly one coarse physical-maintenance partition. Its original parent
 	// lease is retained through Close and the last child finalizer.
-	maintenance      *COWBudget
-	reservation      *COWExternalLease
-	maintenanceChild bool // immutable before publication; ordinary hot path skips partition cleanup
+	maintenance        *COWBudget
+	reservation        *COWExternalLease
+	maintenanceChild   bool // immutable before publication; ordinary hot path skips partition cleanup
+	maintenanceRefunds uint64
 }
 
 func NewCOWBudget(limits COWLimits) (*COWBudget, error) {
@@ -79,6 +80,14 @@ func NewCOWBudget(limits COWLimits) (*COWBudget, error) {
 
 func (b *COWBudget) Stats() COWStats   { b.mu.Lock(); defer b.mu.Unlock(); return b.stats }
 func (b *COWBudget) Limits() COWLimits { return b.limits }
+
+// MaintenanceUsage samples usage and the maintenance child's refund sequence.
+// The sequence is a wake witness and is separate from current accounting.
+func (b *COWBudget) MaintenanceUsage() (totalBytes, refunds uint64) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.stats.TotalBytes, b.maintenanceRefunds
+}
 
 // Close refuses new retention-increasing admissions. Existing view/source
 // leases remain valid; the budget wrapper is released after their last owner.
@@ -235,7 +244,7 @@ func (l *COWExternalLease) Resize(bytes uint64) error {
 		b.stats.ReservedBytes -= delta
 		b.stats.ExternalBytes -= delta
 		if delta != 0 && b.maintenanceChild {
-			b.stats.MaintenanceRefunds++
+			b.maintenanceRefunds++
 		}
 	}
 	l.charge = target
