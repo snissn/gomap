@@ -3,6 +3,7 @@ package caching
 import (
 	"context"
 	"github.com/snissn/gomap/TreeDB/batch"
+	"time"
 	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -174,8 +175,8 @@ func (db *DB) PrepareNativeProducerObservation() (backenddb.NativeProducerObserv
 		if db.relaxedSync && before.semantic.GenerationUnderPressure && before.semantic.ConstructionBytes == 0 {
 			remaining := before
 			remaining.semantic.GenerationUnderPressure = false
-			if !remaining.underPressure(limits) && !db.nativeGenerationSeals.full() {
-				idleInterval := db.nativeGenerationSeals.idleInterval
+			idleInterval := time.Duration(db.nativeGenerationSeals.idleInterval.Load())
+			if !remaining.underPressure(limits) && (idleInterval <= 0 || !db.nativeGenerationSeals.full()) {
 				var request cowGenerationSealRequest
 				var track *cowGenerationSealRequest
 				if idleInterval > 0 {

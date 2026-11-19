@@ -81,18 +81,28 @@ func TestNativeBSONGenerationPressureCloseDrainsPendingSeal(t *testing.T) {
 	testNativeBSONGenerationPressureForeground(t, nativeGenerationSyncTest{wal: true, closePending: true})
 }
 
+func TestNativeBSONGenerationPressureLoneSealWithoutWrites(t *testing.T) {
+	testNativeBSONGenerationPressureForeground(t, nativeGenerationSyncTest{wal: true, quiet: 400 * time.Millisecond})
+}
+
+func TestNativeBSONGenerationPressureCheckpointDrainsPendingSeal(t *testing.T) {
+	testNativeBSONGenerationPressureForeground(t, nativeGenerationSyncTest{wal: true, checkpointPending: true})
+}
+
 type nativeGenerationSyncTest struct {
-	pair            bool
-	closeFromNotify bool
-	exactFrozen     bool
-	systemPager     bool
-	ext4Stream      bool
-	wal             bool
-	rotate          bool
-	failure         error
-	idle            time.Duration
-	hardThird       bool
-	closePending    bool
+	pair              bool
+	closeFromNotify   bool
+	exactFrozen       bool
+	systemPager       bool
+	ext4Stream        bool
+	wal               bool
+	rotate            bool
+	failure           error
+	idle              time.Duration
+	hardThird         bool
+	closePending      bool
+	checkpointPending bool
+	quiet             time.Duration
 }
 
 func testNativeBSONGenerationPressureForeground(t *testing.T, control nativeGenerationSyncTest) {
@@ -122,18 +132,21 @@ func testNativeBSONGenerationPressureForeground(t *testing.T, control nativeGene
 	opts.COWMemtableLimits.MaxTotalBytes = 1 << 30
 	opts.COWMemtableLimits.MaxRetiredBytes = 1 << 30
 	opts.COWMemtableLimits.MaxGenerationBytes = 2 << 20
-	if control.exactFrozen || control.pair || control.closePending {
+	if control.exactFrozen || control.pair || control.closePending || control.checkpointPending || control.quiet > 0 {
 		opts.COWMemtableLimits.MaxGenerationBytes = 128 << 10
 	}
 	opts.MaxWALBytes = 2 << 30
 	opts.FlushThreshold = 1 << 30
 	opts.BackgroundCheckpointInterval = -1
 	opts.BackgroundCheckpointIdleDuration = -1
-	if control.pair || control.closePending {
+	if control.pair || control.closePending || control.checkpointPending {
 		opts.BackgroundCheckpointIdleDuration = time.Hour
 	}
 	if control.idle > 0 {
 		opts.BackgroundCheckpointIdleDuration = control.idle
+	}
+	if control.quiet > 0 {
+		opts.BackgroundCheckpointIdleDuration = control.quiet
 	}
 	backgroundFailure := make(chan error, 1)
 	callbackClose := make(chan error, 1)
@@ -327,7 +340,7 @@ func testNativeBSONGenerationPressureForeground(t *testing.T, control nativeGene
 	path := filepath.Join(opts.Dir, "maindb", "index.db")
 	wal := filepath.Join(opts.Dir, "maindb", "wal")
 	restore := durabilitycut.Install(func(e durabilitycut.Event) error {
-		if control.closePending && e.Point == durabilitycut.AfterMetaSync && e.Resource == durabilitycut.ResourceMeta && e.Path == path {
+		if (control.closePending || control.checkpointPending) && e.Point == durabilitycut.AfterMetaSync && e.Resource == durabilitycut.ResourceMeta && e.Path == path {
 			primarySyncs.Add(1)
 		}
 		match := e.Point == durabilitycut.BeforeMetaWrite && e.Resource == durabilitycut.ResourceMeta && e.Path == path
@@ -372,7 +385,8 @@ func testNativeBSONGenerationPressureForeground(t *testing.T, control nativeGene
 			}
 		}
 	}
-	if control.closePending {
+	if control.closePending || control.checkpointPending || control.quiet > 0 {
+		start := time.Now()
 		last++
 		if err := write(last); err != nil {
 			t.Fatal(err)
@@ -382,7 +396,37 @@ func testNativeBSONGenerationPressureForeground(t *testing.T, control nativeGene
 		}
 		raw, err := held.Get(id)
 		check(raw, err, 0)
-		resume()
+		if control.quiet > 0 {
+			select {
+			case <-reached:
+				if time.Since(start) < control.quiet {
+					t.Fatal("lone seal escaped before its original deadline")
+				}
+			case <-time.After(4 * control.quiet):
+				t.Fatal("lone generation did not drain without further writes")
+			}
+			resume()
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			through := rootpublication.SealedPrefix{LogicalSequence: old.V, CanonicalLSN: old.C}
+			if err := prefix.WaitAccepted(ctx, through); err != nil {
+				t.Fatal(err)
+			}
+			if received := prefix.LogicalFrontiers().S; received != through {
+				t.Fatalf("lone generation accepted %+v, want %+v", received, through)
+			}
+		} else {
+			resume()
+		}
+		if control.checkpointPending {
+			if err := db.Checkpoint(); err != nil {
+				t.Fatal(err)
+			}
+			f := prefix.LogicalFrontiers()
+			if primarySyncs.Load() == 0 || f.S.LogicalSequence != f.V || f.S.CanonicalLSN != f.C || prefix.AcceptedPendingCount() != 0 {
+				t.Fatalf("explicit checkpoint returned before pending physical retirement: %+v", f)
+			}
+		}
 		finish(last)
 		return
 	}

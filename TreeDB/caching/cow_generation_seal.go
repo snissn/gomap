@@ -2,6 +2,7 @@ package caching
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
@@ -17,7 +18,7 @@ type cowGenerationSealRequest struct {
 
 type cowGenerationSealQueue struct {
 	// Fixed before publishing the running worker's captured size threshold.
-	idleInterval time.Duration
+	idleInterval atomic.Int64
 	mu           sync.Mutex
 	pending      [2]cowGenerationSealRequest
 }

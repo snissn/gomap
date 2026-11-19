@@ -13887,7 +13887,7 @@ func (db *DB) StartAutoCheckpoint(interval time.Duration, maxWALBytes int64, idl
 		return
 	}
 	if db.cow != nil && db.cow.prefix != nil && db.relaxedSync && db.externalCommandWAL {
-		db.nativeGenerationSeals.idleInterval = idleInterval
+		db.nativeGenerationSeals.idleInterval.Store(int64(idleInterval))
 	}
 	db.autoCheckpointWorkerMaxWALBytes.Store(maxWALBytes)
 	db.wg.Add(1)
@@ -19809,7 +19809,7 @@ func (db *DB) autoCheckpointLoop(interval time.Duration, maxWALBytes int64, idle
 	}()
 	for {
 		var generationCh <-chan time.Time
-		if db.nativeGenerationSeals.idleInterval > 0 && generationRetry == nil {
+		if db.nativeGenerationSeals.idleInterval.Load() > 0 && generationRetry == nil {
 			select {
 			case <-db.closeCh:
 				return
@@ -19841,7 +19841,7 @@ func (db *DB) autoCheckpointLoop(interval time.Duration, maxWALBytes int64, idle
 		case <-intervalCh:
 			db.maybeAutoCheckpoint(maxWALBytes, autoCheckpointModeInterval)
 		case <-db.nativeGenerationFlushCh:
-			if db.nativeGenerationSeals.idleInterval <= 0 && generationRetry == nil {
+			if db.nativeGenerationSeals.idleInterval.Load() <= 0 && generationRetry == nil {
 				maintainGeneration(rootpublication.SealedPrefix{}, 0)
 			}
 		case <-generationRetry:
