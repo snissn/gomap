@@ -19727,6 +19727,15 @@ func (db *DB) autoCheckpointLoop(interval time.Duration, maxWALBytes int64, idle
 	maintainGeneration := func() {
 		var maintenanceBefore uint64
 		if blockedAllocation != (rootpublication.SealedPrefix{}) {
+			if db.closing.Load() {
+				return
+			}
+			// Close withdraws the original prefix under flushMu. A parked
+			// probe must never wait behind Close or a physical maintenance pass.
+			if !db.flushMu.TryLock() {
+				armGenerationRetry()
+				return
+			}
 			c := db.cow
 			c.cutMu.Lock()
 			var current rootpublication.SealedPrefix
@@ -19735,6 +19744,7 @@ func (db *DB) autoCheckpointLoop(interval time.Duration, maxWALBytes int64, idle
 			}
 			c.cutMu.Unlock()
 			sealed := c.prefix.LogicalFrontiers().S
+			db.flushMu.Unlock()
 			if current != blockedAllocation ||
 				(sealed.LogicalSequence >= blockedAllocation.LogicalSequence && sealed.CanonicalLSN >= blockedAllocation.CanonicalLSN) {
 				// An independent checkpoint or a newly frozen range must not
