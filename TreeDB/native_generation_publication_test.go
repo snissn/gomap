@@ -597,8 +597,9 @@ func testNativeBSONGenerationPressureForeground(t *testing.T, control nativeGene
 		case <-time.After(10 * time.Second):
 			t.Fatal("synchronous third generation failed to join after original sync")
 		}
+		wantSeal = rootpublication.SealedPrefix{LogicalSequence: third.V, CanonicalLSN: third.C}
 		f = prefix.LogicalFrontiers()
-		if f.S.LogicalSequence != third.V || f.S.CanonicalLSN != third.C || f.V != third.V+1 || f.C != third.C+1 {
+		if f.S != wantSeal || f.V != third.V+1 || f.C != third.C+1 {
 			t.Fatalf("synchronous third generation did not seal its exact predecessor: third=%+v after=%+v", third, f)
 		}
 	}
