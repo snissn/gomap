@@ -25763,10 +25763,20 @@ func (db *DB) waitForActiveCheckpointContext(ctx context.Context) error {
 }
 
 func (db *DB) backendCheckpointBoundary(automatic bool) error {
+	return db.backendCheckpointBoundaryWithClosedWAL(automatic, commitlog.ClosedSegmentSyncReceipt{})
+}
+
+func (db *DB) backendCheckpointBoundaryWithClosedWAL(automatic bool, closed commitlog.ClosedSegmentSyncReceipt) error {
 	if automatic && db.externalCommandWAL {
 		if maintainer, ok := db.backend.(backendDeferredCoveredPrefixMaintainer); ok {
 			start := time.Now()
-			pending, err := maintainer.PrepareCommandWALCoveredPrefixCleanup()
+			var pending bool
+			var err error
+			if backend, ok := db.backend.(*backenddb.DB); ok && closed.Valid() {
+				pending, err = backend.PrepareCommandWALCoveredPrefixCleanupWithClosedSyncReceipt(closed)
+			} else {
+				pending, err = maintainer.PrepareCommandWALCoveredPrefixCleanup()
+			}
 			recordCheckpointStageSince(&db.checkpointStageCommandWALPrefixClose, start)
 			if err != nil {
 				return err

@@ -1,6 +1,7 @@
 package caching
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -36,7 +37,7 @@ func (b *cowCheckpointWALBackend) FlushCommandWAL(sync bool) error {
 // raw batch. Wrapper coverage must not replace it or cause a separate commit.
 func TestCOWCheckpointCompleteCoverageAndWALFence(t *testing.T) {
 	registerNativeBridgeTestCommand()
-	for _, mode := range []string{"checkpoint", "close", "rotation-error", "flush-error"} {
+	for _, mode := range []string{"checkpoint", "close", "rotation-error", "automatic-rotation-error", "flush-error"} {
 		t.Run(mode, func(t *testing.T) {
 			cache, backend := nativeBridgeFixture(t, true)
 			capture, err := backend.CaptureNativeSemanticState()
@@ -63,7 +64,9 @@ func TestCOWCheckpointCompleteCoverageAndWALFence(t *testing.T) {
 			if original.C != 1 || original.S.CanonicalLSN != 0 || backend.CommandWALActiveBytes() == 0 {
 				t.Fatalf("missing pending original frame: %+v", original)
 			}
-			wal := &cowCheckpointWALBackend{DB: backend, failRotation: mode == "rotation-error", failFlush: mode == "flush-error"}
+			automaticRotationFailure := mode == "automatic-rotation-error"
+			rotationFailure := mode == "rotation-error" || automaticRotationFailure
+			wal := &cowCheckpointWALBackend{DB: backend, failRotation: rotationFailure, failFlush: mode == "flush-error"}
 			cache.backend = wal
 			cache.SetCommandWALCheckpointPublishHook(func(bool) (uint64, []backenddb.CommandWALLSNRange, error) {
 				t.Error("COW consulted per-producer coverage")
@@ -77,8 +80,8 @@ func TestCOWCheckpointCompleteCoverageAndWALFence(t *testing.T) {
 				}
 				return nil
 			})
-			if mode == "rotation-error" || mode == "flush-error" {
-				if err := cache.Checkpoint(); !errors.Is(err, errCOWCheckpointWALFence) {
+			if rotationFailure || mode == "flush-error" {
+				if err := cache.checkpointContext(context.Background(), automaticRotationFailure); !errors.Is(err, errCOWCheckpointWALFence) {
 					t.Fatalf("original fence error=%v", err)
 				}
 				failed := cache.cow.prefix.LogicalFrontiers()

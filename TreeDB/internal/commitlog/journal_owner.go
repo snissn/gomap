@@ -769,6 +769,73 @@ func (j *CommandJournal) RotateActiveSegment(syncCurrent bool) error {
 	return j.rotateActiveSegmentLockedObserved(syncCurrent, durabilitycut.Enabled())
 }
 
+// ClosedSegmentSyncReceipt certifies the terminal file fence of one successful
+// synchronous checkpoint rotation. It owns no handles and makes no claim about
+// directory entries, other segments, or recovery coverage.
+type ClosedSegmentSyncReceipt struct {
+	journal  *CommandJournal
+	identity rootpublication.StableIdentity
+	sequence uint64
+	bytes    uint64
+	maxLSN   uint64
+}
+
+func (receipt ClosedSegmentSyncReceipt) Valid() bool {
+	return receipt.journal != nil
+}
+
+// RotateActiveSegmentWithClosedSyncReceipt performs the ordinary synchronous
+// rotation. A fresh ext4 stream can supply file-fence evidence to the same
+// automatic checkpoint's covered-prefix preparation. Keep the original
+// rotation behavior even when optional receipt evidence is unavailable.
+func (j *CommandJournal) RotateActiveSegmentWithClosedSyncReceipt() (ClosedSegmentSyncReceipt, error) {
+	if j == nil {
+		return ClosedSegmentSyncReceipt{}, nil
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	var receipt ClosedSegmentSyncReceipt
+	if j.captureStableResources && j.writer != nil && j.writer.fixed == nil &&
+		j.writer.containerSelection.ext4Stream && j.activeSegmentMaxLSN != 0 {
+		bytes := j.writer.ActiveBytes()
+		if identity, err := rootpublication.StableIdentityFromFile(j.writer.f); err == nil && bytes > 0 {
+			// The stream's accepted bytes include buffered frames. Rotation
+			// drains all of them before syncing and replacing this writer.
+			receipt = ClosedSegmentSyncReceipt{
+				journal: j, identity: identity, sequence: j.segmentSeq,
+				bytes: uint64(bytes), maxLSN: j.activeSegmentMaxLSN,
+			}
+		}
+	}
+	if err := j.rotateActiveSegmentLockedObserved(true, durabilitycut.Enabled()); err != nil {
+		return ClosedSegmentSyncReceipt{}, err
+	}
+	if receipt.Valid() && j.segmentSeq != receipt.sequence+1 {
+		return ClosedSegmentSyncReceipt{}, nil
+	}
+	return receipt, nil
+}
+
+// CoversRetainedFile checks an already-registered rotation debt token. It
+// preserves original handle ownership and the journal's sticky sync error.
+func (receipt ClosedSegmentSyncReceipt) CoversRetainedFile(j *CommandJournal, token *rootpublication.StableResourceToken) (bool, error) {
+	if !receipt.Valid() || receipt.journal != j || token == nil || token.Kind() != rootpublication.ResourceCommandWAL ||
+		token.Generation() != receipt.sequence || !rootpublication.SamePhysicalIdentity(token.Identity(), receipt.identity) {
+		return false, nil
+	}
+	field := token.Reachability()
+	if field != rootpublication.ReachabilityCommandWALActive && field != rootpublication.ReachabilityCommandWALRotated {
+		return false, nil
+	}
+	required := token.Frontier()
+	if required.Bytes > receipt.bytes || required.MaxLSN > receipt.maxLSN || required.RIDCount != 0 {
+		return false, nil
+	}
+	return true, token.WithPinnedFile(func(*os.File) error {
+		return j.fileSync.run(func() error { return nil })
+	})
+}
+
 // CommandJournalStableRotation retains exact handles for the segment closed by
 // a rotation and its newly-created successor.
 type CommandJournalStableRotation struct {

@@ -820,6 +820,19 @@ func (db *DB) RotateCommandWALActiveSegment(sync bool) error {
 	return db.commandJournal.RotateActiveSegment(sync)
 }
 
+// RotateCommandWALActiveSegmentWithClosedSyncReceipt is the synchronous cache
+// checkpoint cutover. The receipt may satisfy one retained file dependency
+// during this checkpoint's later covered-prefix preparation.
+func (db *DB) RotateCommandWALActiveSegmentWithClosedSyncReceipt() (commitlog.ClosedSegmentSyncReceipt, error) {
+	if db == nil || !db.commandWAL || db.commandJournal == nil {
+		return commitlog.ClosedSegmentSyncReceipt{}, nil
+	}
+	if err := db.commandWALPoisonedError(); err != nil {
+		return commitlog.ClosedSegmentSyncReceipt{}, err
+	}
+	return db.commandJournal.RotateActiveSegmentWithClosedSyncReceipt()
+}
+
 // CleanupCommandWALCoveredSegments removes complete command-WAL segments covered
 // by a freshly revalidated monotonic durable-root proof and outside every
 // journal/generation/pin protection. Any successful unlink is followed by a
@@ -1127,7 +1140,7 @@ func (db *DB) closeCommandWALDurablePrefixThrough(lsn uint64) {
 	db.commandWALDebt.releaseThrough(lsn)
 }
 
-func (db *DB) syncCommandWALDependenciesThrough(lsn uint64, extra *rootpublication.StableResourceSet) error {
+func (db *DB) syncCommandWALDependenciesThrough(lsn uint64, extra *rootpublication.StableResourceSet, closed commitlog.ClosedSegmentSyncReceipt) error {
 	if db == nil || lsn == 0 {
 		return nil
 	}
@@ -1151,7 +1164,7 @@ func (db *DB) syncCommandWALDependenciesThrough(lsn uint64, extra *rootpublicati
 	}); err != nil {
 		return err
 	}
-	if err := db.commandWALDebt.syncRotationFilesThrough(db.dir, db.commandWALDir, lsn); err != nil {
+	if err := db.commandWALDebt.syncRotationFilesThrough(db.dir, db.commandWALDir, lsn, db.commandJournal, closed); err != nil {
 		db.commandWALDebt.noteRetryThrough(lsn)
 		return err
 	}
@@ -2982,7 +2995,7 @@ func (db *DB) appendCommandWALIntentWithTiming(intent *commandWALBatchIntent, sy
 		if !sync && !intent.capturedDurable {
 			return nil
 		}
-		return db.syncCommandWALDependenciesThrough(^uint64(0), dependencies)
+		return db.syncCommandWALDependenciesThrough(^uint64(0), dependencies, commitlog.ClosedSegmentSyncReceipt{})
 	}
 	afterAppend := func(lsn uint64, rotations []*commitlog.CommandJournalStableRotation) error {
 		rotationFiles := commandWALStableRotationTokens(rotations)

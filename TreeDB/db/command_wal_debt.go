@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
@@ -193,12 +194,21 @@ func (debt *CommandWALDependencyDebt) rotationFileViewThrough(lsn uint64) ([]*ro
 	return view, nil
 }
 
-func (debt *CommandWALDependencyDebt) syncRotationFilesThrough(root, walDir string, lsn uint64) error {
+func (debt *CommandWALDependencyDebt) syncRotationFilesThrough(root, walDir string, lsn uint64, journal *commitlog.CommandJournal, closed commitlog.ClosedSegmentSyncReceipt) error {
 	tokens, err := debt.rotationFileViewThrough(lsn)
 	if err != nil {
 		return err
 	}
 	for _, token := range tokens {
+		if closed.Valid() {
+			covered, err := closed.CoversRetainedFile(journal, token)
+			if err != nil {
+				return err
+			}
+			if covered {
+				continue
+			}
+		}
 		if !durabilitycut.Enabled() {
 			if err := token.SyncThrough(); err != nil {
 				return err

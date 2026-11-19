@@ -4878,7 +4878,7 @@ func (db *DB) MaintainCommandWALCoveredPrefix() error {
 	}
 	for {
 		db.maintenanceMu.Lock()
-		pending, err := db.prepareCommandWALCoveredPrefixCleanupLocked()
+		pending, err := db.prepareCommandWALCoveredPrefixCleanupLocked(commitlog.ClosedSegmentSyncReceipt{})
 		if err == nil && pending {
 			err = db.cleanupCommandWALCoveredSegmentsAtCheckpointV1(true)
 		}
@@ -4898,13 +4898,20 @@ func (db *DB) MaintainCommandWALCoveredPrefix() error {
 // this internal capability during automatic checkpoints so it can release its
 // writer frontier before consuming cleanup debt on its existing worker.
 func (db *DB) PrepareCommandWALCoveredPrefixCleanup() (bool, error) {
+	return db.PrepareCommandWALCoveredPrefixCleanupWithClosedSyncReceipt(commitlog.ClosedSegmentSyncReceipt{})
+}
+
+// PrepareCommandWALCoveredPrefixCleanupWithClosedSyncReceipt optionally uses
+// the exact terminal file fence from this automatic checkpoint's cutover.
+func (db *DB) PrepareCommandWALCoveredPrefixCleanupWithClosedSyncReceipt(closed commitlog.ClosedSegmentSyncReceipt) (bool, error) {
 	if db == nil {
 		return false, ErrClosed
 	}
 	for {
 		db.maintenanceMu.Lock()
-		pending, err := db.prepareCommandWALCoveredPrefixCleanupLocked()
+		pending, err := db.prepareCommandWALCoveredPrefixCleanupLocked(closed)
 		db.maintenanceMu.Unlock()
+		closed = commitlog.ClosedSegmentSyncReceipt{}
 		drain := commandWALPendingDrain(err)
 		if drain == nil {
 			return pending, err
@@ -4915,7 +4922,7 @@ func (db *DB) PrepareCommandWALCoveredPrefixCleanup() (bool, error) {
 	}
 }
 
-func (db *DB) prepareCommandWALCoveredPrefixCleanupLocked() (bool, error) {
+func (db *DB) prepareCommandWALCoveredPrefixCleanupLocked(closed commitlog.ClosedSegmentSyncReceipt) (bool, error) {
 	if db.closing.Load() {
 		return false, ErrClosed
 	}
@@ -4952,7 +4959,7 @@ func (db *DB) prepareCommandWALCoveredPrefixCleanupLocked() (bool, error) {
 		return false, nil
 	}
 	unlockCommandWALPublish := db.commandWALRawPublishMu.Unlock
-	rotated, advanced, err := db.closeCommandWALCheckpointPrefix()
+	rotated, advanced, err := db.closeCommandWALCheckpointPrefix(closed)
 	unlockCommandWALPublish()
 	if err != nil {
 		return false, err
@@ -5050,7 +5057,7 @@ func (db *DB) checkpointTeardownPinned(maintenanceAlreadyHeld bool) error {
 			return publicRootPublicationErrorV1(err)
 		}
 		unlockCommandWALPublish = db.lockCommandWALRawPublish()
-		rotatedCommandWAL, commandWALPrefixAdvanced, err := db.closeCommandWALCheckpointPrefix()
+		rotatedCommandWAL, commandWALPrefixAdvanced, err := db.closeCommandWALCheckpointPrefix(commitlog.ClosedSegmentSyncReceipt{})
 		if err != nil {
 			return err
 		}
@@ -5094,7 +5101,7 @@ func (db *DB) checkpointTeardownPinned(maintenanceAlreadyHeld bool) error {
 			return err
 		}
 	}
-	rotatedCommandWAL, commandWALPrefixAdvanced, err := db.closeCommandWALCheckpointPrefix()
+	rotatedCommandWAL, commandWALPrefixAdvanced, err := db.closeCommandWALCheckpointPrefix(commitlog.ClosedSegmentSyncReceipt{})
 	if err != nil {
 		return err
 	}
@@ -5134,7 +5141,7 @@ func (db *DB) checkpointTeardownPinned(maintenanceAlreadyHeld bool) error {
 // WAL frontier used by cleanup proofs. The caller must hold raw-publish so the
 // latest assigned LSN, dependency debt, active segment sync, and frontier
 // publication describe one append-serialization cut.
-func (db *DB) closeCommandWALCheckpointPrefix() (rotated, advanced bool, err error) {
+func (db *DB) closeCommandWALCheckpointPrefix(closed commitlog.ClosedSegmentSyncReceipt) (rotated, advanced bool, err error) {
 	if db == nil || !db.commandWAL || db.commandJournal == nil {
 		return false, false, nil
 	}
@@ -5154,7 +5161,7 @@ func (db *DB) closeCommandWALCheckpointPrefix() (rotated, advanced bool, err err
 	// independently advance commandWALDurableLSN through its own contract.
 	advanced = durableWALLSN >= db.commandWALSessionAppliedLSN && durableWALLSN < frontier
 	if advanced {
-		if err := db.syncCommandWALDependenciesThrough(frontier, nil); err != nil {
+		if err := db.syncCommandWALDependenciesThrough(frontier, nil, closed); err != nil {
 			return false, false, err
 		}
 	}

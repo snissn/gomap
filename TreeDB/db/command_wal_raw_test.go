@@ -20,7 +20,7 @@ import (
 func TestSyncCommandWALDependenciesThroughNoDebtIsAllocationFree(t *testing.T) {
 	db := &DB{}
 	if allocs := testing.AllocsPerRun(1000, func() {
-		if err := db.syncCommandWALDependenciesThrough(1, nil); err != nil {
+		if err := db.syncCommandWALDependenciesThrough(1, nil, commitlog.ClosedSegmentSyncReceipt{}); err != nil {
 			t.Fatalf("syncCommandWALDependenciesThrough: %v", err)
 		}
 	}); allocs != 0 {

@@ -816,6 +816,15 @@ fallback convergence joins the corresponding exact basis before comparing the
 frontiers. These joins preserve original cleanup failures and do not wait for
 the separate semantic cleanup worker.
 
+An automatic COW checkpoint with the relaxed standalone ext4 stream may reuse
+its checked cutover rotation's terminal file sync during the same
+covered-prefix preparation. The receipt covers one already-retained command-WAL
+file of the same journal, physical identity and segment generation, through its
+exact submitted byte and LSN frontiers. A failed rotation or a new preparation
+attempt supplies no receipt. Other retained files, the current active WAL,
+namespace validation, and CRC-checked cleanup all retain their existing
+barriers. The file receipt alone cannot advance the durable WAL frontier.
+
 For a cached command-WAL checkpoint with no pending public frames, maintenance
 may republish the selected roots with the same `AppliedCommandLSN` only when
 the recovery-selectable fallback slot still has an older applied LSN. It writes

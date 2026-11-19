@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"time"
@@ -183,6 +184,7 @@ func (db *DB) materializeCOWPrefix(ctx context.Context, automatic bool, operatio
 		hook()
 	}
 	var frontier *cowReadCut
+	var closedWAL commitlog.ClosedSegmentSyncReceipt
 	var err error
 	if generationPressure {
 		// Producer admission already froze and marked this prefix. Retain
@@ -196,7 +198,11 @@ func (db *DB) materializeCOWPrefix(ctx context.Context, automatic bool, operatio
 		}
 		db.writeMu.Unlock()
 	} else {
-		err = db.rotateCOWFrontier(ctx, true, &frontier, !pressureOnly)
+		var closed *commitlog.ClosedSegmentSyncReceipt
+		if automatic && !pressureOnly && operation == nil {
+			closed = &closedWAL
+		}
+		err = db.rotateCOWFrontier(ctx, true, &frontier, !pressureOnly, closed)
 	}
 	defer func() { retErr = joinCOWCleanupError(retErr, db.cow.releaseCut(frontier)) }()
 	db.recordCheckpointCutover(time.Since(cutover))
@@ -253,7 +259,7 @@ func (db *DB) materializeCOWPrefix(ctx context.Context, automatic bool, operatio
 		}
 		return db.cow.prefix.WaitAccepted(ctx, through)
 	}
-	if err = db.backendCheckpointBoundary(automatic); err != nil {
+	if err = db.backendCheckpointBoundaryWithClosedWAL(automatic, closedWAL); err != nil {
 		return err
 	}
 	if automatic && db.externalCommandWAL {
@@ -283,12 +289,12 @@ func (db *DB) materializeCOWPrefix(ctx context.Context, automatic bool, operatio
 // and returns with it unlocked. The existing checkpoint/Close admission fence
 // excludes writers through the finite retry, while flushMu remains outer D.
 func (db *DB) rotateCOWCheckpointFrontier(ctx context.Context, postFrontier bool, captured **cowReadCut) error {
-	return db.rotateCOWFrontier(ctx, postFrontier, captured, true)
+	return db.rotateCOWFrontier(ctx, postFrontier, captured, true, nil)
 }
 
 // rotateJournal is false only for producer pressure with an existing size worker.
 // Rollover, finite source-capacity retry and original cutover capture stay shared.
-func (db *DB) rotateCOWFrontier(ctx context.Context, postFrontier bool, captured **cowReadCut, rotateJournal bool) error {
+func (db *DB) rotateCOWFrontier(ctx context.Context, postFrontier bool, captured **cowReadCut, rotateJournal bool, closed *commitlog.ClosedSegmentSyncReceipt) error {
 	c := db.cow
 	for attempt := 0; ; attempt++ {
 		c.writerMu.Lock()
@@ -309,7 +315,13 @@ func (db *DB) rotateCOWFrontier(ctx context.Context, postFrontier bool, captured
 			if !ok {
 				err = ErrCOWUnsupported
 			} else if wal.CommandWALActiveBytes() > 0 {
-				err = wal.RotateCommandWALActiveSegment(true)
+				// Only the concrete owner provides the paired file receipt.
+				// Wrappers retain their own ordinary rotation capability.
+				if backend, ok := db.backend.(*backenddb.DB); ok && closed != nil {
+					*closed, err = backend.RotateCommandWALActiveSegmentWithClosedSyncReceipt()
+				} else {
+					err = wal.RotateCommandWALActiveSegment(true)
+				}
 			}
 		}
 		if err == nil && db.snapshotCommandWALCheckpointCutover() && db.externalCommandWAL && postFrontier {
