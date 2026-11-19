@@ -4642,7 +4642,8 @@ custody. Refusal does not loop callbacks or resize a pinned successor.
 The deferred automatic-checkpoint worker can capture exact handles to a
 bounded prefix of sealed fixed containers under journal append exclusion. This
 applies to a canonical single-lane inventory with a fixed active container
-and at least two sealed fixed predecessors. The worker releases append
+and at least two sealed predecessors. The worker selects up to eight of the
+oldest predecessors. When every selected file is fixed, it releases append
 exclusion while validating those files' frames and complete reserves, and
 reacquires it to verify that prefix and validate the remaining inventory.
 Synchronous checkpoint, explicit and close cleanup, small inventories, stream

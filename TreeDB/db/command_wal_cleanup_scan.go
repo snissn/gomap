@@ -167,17 +167,17 @@ func (db *DB) scanCommandWALCleanupProof(proof durableWALCleanupProofV1, scanSea
 	}
 
 	err = proof.journalOwner.WithCleanupScanSnapshot(proof.journal, func(current commitlog.CommandJournalCleanupSnapshot) error {
-		segments, err := simpleCommandWALCleanupInventory(dir, current)
-		if err != nil {
-			return err
+		segments, inventoryErr := simpleCommandWALCleanupInventory(dir, current)
+		if inventoryErr != nil && !commandWALCleanupDescriptorExhausted(inventoryErr) {
+			return inventoryErr
 		}
-		if !current.FixedContainer || len(segments) <= len(prefix) || !slices.EqualFunc(prefix, segments[:len(prefix)], func(a cleanupClosedWALFile, b logSegment) bool {
+		if inventoryErr != nil || !current.FixedContainer || len(segments) <= len(prefix) || !slices.EqualFunc(prefix, segments[:len(prefix)], func(a cleanupClosedWALFile, b logSegment) bool {
 			return a.segment.path == b.path
 		}) {
-			// An unsupported inventory gets a single locked full scan. Keep
-			// the same captured root bounds. There is no retry loop.
+			// Drop staged handles before one locked full scan under the same
+			// captured root bounds. The locked scan opens uncovered files one at a time.
 			if err := errors.Join(closePrefix(), closeCommandWALCleanupDecisions(scan.decisions)); err != nil {
-				return err
+				return errors.Join(inventoryErr, err)
 			}
 			scan = newCommandWALCleanupScan(proof.cleanupThrough, proof.durableWALLSN, db.walMaxSegmentBytes, beforeSegment)
 			return scan.scanLockedDirectory(db.dir)
