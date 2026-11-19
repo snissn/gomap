@@ -1786,6 +1786,74 @@ func TestCommandWALCleanupPinnedRetryRescansAndConverges(t *testing.T) {
 	}
 }
 
+func TestCommandWALDeferredCleanupRetriesCapturedActivePin(t *testing.T) {
+	dir := t.TempDir()
+	db := &DB{dir: dir, commandWAL: true, durability: DurabilityDurable}
+	installCommandWALCleanupJournalOptionsForTest(t, db, commitlog.CommandJournalOptions{
+		SegmentSeq:             1,
+		CaptureStableResources: true,
+	}, true)
+	journal := db.commandJournal
+	lsn, err := journal.AppendCommand(commitlog.CommandEnvelope{
+		Kind:          commitlog.CommandKindRawKVBatch,
+		Scope:         commitlog.CommandScopeRawKV,
+		PayloadFormat: commitlog.PayloadFormatRawKVBatchV1,
+	})
+	if err != nil {
+		t.Fatalf("append active frame: %v", err)
+	}
+	capture, err := journal.CaptureSync(nil)
+	if err != nil {
+		t.Fatalf("capture active segment: %v", err)
+	}
+	defer capture.Release()
+	if lsn != 1 || capture.LSN != lsn {
+		t.Fatalf("captured LSN=%d, appended=%d, want both 1", capture.LSN, lsn)
+	}
+	if err := capture.Sync(); err != nil {
+		t.Fatalf("sync captured segment: %v", err)
+	}
+	if err := journal.RotateActiveSegment(false); err != nil {
+		t.Fatalf("rotate while capture retains previous active segment: %v", err)
+	}
+	installCommandWALCleanupTwoRootRuntimeForTest(db, 1, lsn)
+
+	walDir := WALDirPath(dir)
+	pinnedPath := filepath.Join(walDir, commitlog.CommandSegmentName(0, 1))
+	pinnedInfo, err := os.Stat(pinnedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.CleanupCommandWALCoveredSegments(true); err != rootpublication.ErrResourcePinned {
+		t.Fatalf("explicit cleanup error=%v, want exact ErrResourcePinned", err)
+	}
+	complete, err := db.CleanupCommandWALCoveredPrefix()
+	if complete || err != nil {
+		t.Fatalf("deferred cleanup while pinned complete=%t err=%v, want incomplete without error", complete, err)
+	}
+	afterPin, err := os.Stat(pinnedPath)
+	if err != nil || !os.SameFile(afterPin, pinnedInfo) ||
+		db.commandWALCleanupRemoved.Load() != 0 || db.commandWALCleanupNamespaceDirty.Load() {
+		t.Fatalf("pinned cleanup changed inode or namespace accounting: file=%v err=%v removed=%d dirty=%t",
+			afterPin, err, db.commandWALCleanupRemoved.Load(), db.commandWALCleanupNamespaceDirty.Load())
+	}
+
+	capture.Release()
+	complete, err = db.CleanupCommandWALCoveredPrefix()
+	if !complete || err != nil {
+		t.Fatalf("deferred cleanup after release complete=%t err=%v, want successful retry", complete, err)
+	}
+	if _, err := os.Stat(pinnedPath); !os.IsNotExist(err) {
+		t.Fatalf("captured segment stat after retry=%v, want absent", err)
+	}
+	if _, err := os.Stat(filepath.Join(walDir, commitlog.CommandSegmentName(0, 2))); err != nil {
+		t.Fatalf("active successor stat after retry: %v", err)
+	}
+	if removed, dirty := db.commandWALCleanupRemoved.Load(), db.commandWALCleanupNamespaceDirty.Load(); removed != 1 || dirty {
+		t.Fatalf("retry removed=%d namespace dirty=%t, want one directory-synced removal", removed, dirty)
+	}
+}
+
 func TestCommandWALCleanupRetainsReplayForOlderRecoverableRoot(t *testing.T) {
 	dir := t.TempDir()
 	writeCommandWALFrame(t, dir, 1, 1)
@@ -2396,14 +2464,14 @@ func TestCommandWALCleanupAfterUnlinkFailureRetainsNamespaceSyncDebt(t *testing.
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
 		if !fired && event.Point == durabilitycut.AfterWALOrAssetUnlink && event.Resource == durabilitycut.ResourceCommandWAL {
 			fired = true
-			return wantErr
+			return errors.Join(rootpublication.ErrResourcePinned, wantErr)
 		}
 		return nil
 	})
 	complete, err := db.CleanupCommandWALCoveredPrefix()
 	restore()
-	if !errors.Is(err, wantErr) || !errors.Is(err, ErrRecoveryRequired) {
-		t.Fatalf("CleanupCommandWALCoveredPrefix error=%v, want injected cut and ErrRecoveryRequired", err)
+	if !errors.Is(err, wantErr) || !errors.Is(err, ErrRecoveryRequired) || !errors.Is(err, rootpublication.ErrResourcePinned) {
+		t.Fatalf("CleanupCommandWALCoveredPrefix error=%v, want injected cut, ErrRecoveryRequired and joined pin cause", err)
 	}
 	if complete {
 		t.Fatal("failed post-unlink namespace sync reported cleanup complete")
