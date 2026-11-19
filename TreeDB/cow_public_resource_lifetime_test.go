@@ -49,7 +49,9 @@ func TestCOWPublicCompressedDictionaryAndPhysicalPinLifetime(t *testing.T) {
 				o.ValueLog.Compression = ValueLogCompressionDict
 				o.ValueLog.CompressionAutotune = AutotuneOptions{Mode: AutotuneOff}
 				o.ValueLog.DictAdaptiveRatio = -1
-				EnableValueLogDictCompression(o)
+				// This fixture publishes the exact dictionaries itself. Disable the
+				// trainer so it cannot access the store during manual installation.
+				DisableValueLogDictCompression(o)
 			})
 			store := dictdb.New(database.dictdb)
 			definition, want := cowPublicOwnedDictionary(t, 'A')
@@ -69,30 +71,35 @@ func TestCOWPublicCompressedDictionaryAndPhysicalPinLifetime(t *testing.T) {
 				t.Fatal("missing old cut")
 			}
 			defer old.Close()
-			entry, err := old.GetEntry([]byte("compressed"))
-			if err != nil || entry.ValuePtr.FileID == 0 {
-				t.Fatalf("pointer=%+v error=%v", entry, err)
-			}
 			registry := database.backend.ValueLogIdentityPinRegistry()
 			other, err := valuelog.NewManagerWithStableResourcePinRegistry(database.backend.Dir()+"/value_vlog", registry)
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer other.Close()
-			subset := other.CurrentSubsetNoRefresh(map[uint32]struct{}{entry.ValuePtr.FileID: {}})
-			if subset == nil || subset.Files[entry.ValuePtr.FileID] == nil {
-				t.Fatal("missing registered producer file")
+			requireCompressed := func(snapshot Snapshot, dictID uint64) rootpublication.StableIdentity {
+				t.Helper()
+				entry, err := snapshot.GetEntry([]byte("compressed"))
+				if err != nil || entry.ValuePtr.FileID == 0 {
+					t.Fatalf("pointer=%+v error=%v want dictionary=%d", entry, err, dictID)
+				}
+				subset := other.CurrentSubsetNoRefresh(map[uint32]struct{}{entry.ValuePtr.FileID: {}})
+				defer other.Release(subset)
+				file := subset.Files[entry.ValuePtr.FileID]
+				if file == nil {
+					t.Fatal("missing registered producer file")
+				}
+				shape, err := valuelog.InspectCOWRecord(file.File, entry.ValuePtr, valuelog.COWReadLimits{MaxRecordBytes: 64 << 20, MaxRawBytes: 64 << 20, MaxValueBytes: 64 << 20})
+				if err != nil || !shape.Compressed || shape.DictID != dictID {
+					t.Fatalf("actual producer shape=%+v error=%v want dictionary=%d", shape, err, dictID)
+				}
+				identity, ok := other.StableSegmentIdentity(entry.ValuePtr.FileID)
+				if !ok {
+					t.Fatal("missing physical identity")
+				}
+				return identity
 			}
-			file := subset.Files[entry.ValuePtr.FileID]
-			shape, err := valuelog.InspectCOWRecord(file.File, entry.ValuePtr, valuelog.COWReadLimits{MaxRecordBytes: 64 << 20, MaxRawBytes: 64 << 20, MaxValueBytes: 64 << 20})
-			identity, ok := other.StableSegmentIdentity(entry.ValuePtr.FileID)
-			other.Release(subset)
-			if err != nil || !shape.Compressed || shape.DictID != id {
-				t.Fatalf("actual producer shape=%+v error=%v want dictionary=%d", shape, err, id)
-			}
-			if !ok {
-				t.Fatal("missing physical identity")
-			}
+			identity := requireCompressed(old, id)
 			if lease, err := registry.BeginDelete(identity); !errors.Is(err, rootpublication.ErrResourcePinned) {
 				if lease != nil {
 					lease.Abort()
@@ -114,6 +121,9 @@ func TestCOWPublicCompressedDictionaryAndPhysicalPinLifetime(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			if next == id {
+				t.Fatal("replacement dictionary reused the original ID")
+			}
 			if err = store.SetCurrent(context.Background(), next); err != nil {
 				t.Fatal(err)
 			}
@@ -124,6 +134,16 @@ func TestCOWPublicCompressedDictionaryAndPhysicalPinLifetime(t *testing.T) {
 			if err = database.Checkpoint(); err != nil {
 				t.Fatal(err)
 			}
+			if err = other.Refresh(); err != nil {
+				t.Fatal(err)
+			}
+			replacementCut := database.AcquireSnapshot()
+			if replacementCut == nil {
+				t.Fatal("missing replacement cut")
+			}
+			defer replacementCut.Close()
+			requireCompressed(replacementCut, next)
+			replacementCut.Close()
 			if stats, err := database.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{BatchSize: 1, SyncEachBatch: true}); err != nil {
 				t.Fatal(err)
 			} else if stats.ValueRecordsCopied == 0 {
@@ -168,7 +188,11 @@ func TestCOWPublicCompressedDictionaryAndPhysicalPinLifetime(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer reopened.Close()
+			defer func() {
+				if err := reopened.Close(); err != nil {
+					t.Error(err)
+				}
+			}()
 			if got, err := reopened.Get([]byte("compressed")); err != nil || !bytes.Equal(got, newValue) {
 				t.Fatalf("reopened dictionary=(%d,%v)", len(got), err)
 			}
