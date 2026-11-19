@@ -1228,6 +1228,16 @@ func (j *CommandJournal) CaptureCleanupSnapshot() (CommandJournalCleanupSnapshot
 	return j.cleanupSnapshotLocked()
 }
 
+// AppendLockAvailableForTesting probes journal exclusion without waiting. A
+// controlled caller with no other writers can sample it inside a scan hook.
+func (j *CommandJournal) AppendLockAvailableForTesting() bool {
+	if !j.mu.TryLock() {
+		return false
+	}
+	j.mu.Unlock()
+	return true
+}
+
 // WithCleanupScan excludes append and rotation for the entire listing/reader
 // scan, including reserve validation of the active fixed container. The caller
 // must release this authority before acquiring publication/durability locks;
