@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
 )
 
@@ -150,17 +151,34 @@ func (target *CommandWALCapturedPrefix) Sync() (CommandWALBarrierResult, error) 
 	target.once.Do(func() {
 		db := target.db
 		defer db.teardownMu.RUnlock()
+		var retiredPhysicalDebt bool
+		defer func() {
+			if retiredPhysicalDebt {
+				_ = durabilitycut.EmitLSN(durabilitycut.AfterCapturedWALRetirement, durabilitycut.ResourceCommandWAL, db.Dir(), target.journal.LSN)
+			}
+		}()
 		defer target.journal.Release()
-		defer db.commandWALDebt.releaseCapture()
+		rawPublishHeld := false
+		defer func() {
+			// A panic during physical sync still drops the capture. Hold
+			// raw-publish through debt release, since a checkpoint borrows
+			// these handles for its dependency drain under that same lock.
+			if !rawPublishHeld {
+				db.commandWALRawPublishMu.Lock()
+			}
+			defer db.commandWALRawPublishMu.Unlock()
+			retiredPhysicalDebt = db.commandWALDebt.releaseCapture()
+		}()
 		started := time.Now()
 		err := target.journal.Sync()
 		if err == nil && db.testFailCommandWALFlush.Load() {
 			err = errTestCommandWALFlushFailpoint
 		}
 		db.observeCommandWALFlush(commandWALAppendStatsBarrier, true, time.Since(started))
-		// Publish completion under the same append authority used by capture. Pins
-		// remain alive until this update; no successor can lose borrowed debt.
+		// Publish completion and release eligible debt under the same append
+		// authority so the next dependency drain sees a complete frontier.
 		db.commandWALRawPublishMu.Lock()
+		rawPublishHeld = true
 		if err != nil {
 			db.commandWALFlushPoisoned.Store(true)
 			target.err = errors.Join(err, ErrRecoveryRequired)
@@ -170,7 +188,6 @@ func (target *CommandWALCapturedPrefix) Sync() (CommandWALBarrierResult, error) 
 			db.closeCommandWALDurablePrefixThrough(target.journal.LSN)
 			target.result.CoveredDependencyEntries = target.result.AttemptedDependencyEntries
 		}
-		db.commandWALRawPublishMu.Unlock()
 	})
 	return target.result, target.err
 }

@@ -321,7 +321,7 @@ func (debt *CommandWALDependencyDebt) retainCapture() {
 	debt.mu.Unlock()
 }
 
-func (debt *CommandWALDependencyDebt) releaseCapture() {
+func (debt *CommandWALDependencyDebt) releaseCapture() bool {
 	debt.mu.Lock()
 	debt.capturePins--
 	var frontier uint64
@@ -330,14 +330,12 @@ func (debt *CommandWALDependencyDebt) releaseCapture() {
 		debt.deferredReleaseLSN = 0
 	}
 	debt.mu.Unlock()
-	// A newly admitted capture can race here; releaseThrough will defer this
-	// frontier again under the same mutex rather than dropping its resources.
-	debt.releaseThrough(frontier)
+	return debt.releaseThrough(frontier)
 }
 
-func (debt *CommandWALDependencyDebt) releaseThrough(lsn uint64) {
+func (debt *CommandWALDependencyDebt) releaseThrough(lsn uint64) bool {
 	if debt == nil || lsn == 0 {
-		return
+		return false
 	}
 	debt.mu.Lock()
 	if debt.capturePins != 0 {
@@ -345,7 +343,7 @@ func (debt *CommandWALDependencyDebt) releaseThrough(lsn uint64) {
 			debt.deferredReleaseLSN = lsn
 		}
 		debt.mu.Unlock()
-		return
+		return false
 	}
 	cut := 0
 	for cut < len(debt.entries) && debt.entries[cut].lastLSN <= lsn {
@@ -389,6 +387,7 @@ func (debt *CommandWALDependencyDebt) releaseThrough(lsn uint64) {
 			token.Release()
 		}
 	}
+	return len(released) != 0
 }
 
 func (debt *CommandWALDependencyDebt) releaseAll() {
