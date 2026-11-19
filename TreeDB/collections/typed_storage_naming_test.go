@@ -566,7 +566,12 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	// Raft snapshot M1 fixture names the public compatibility configuration and
 	// stable typed-column append API while proving ready-manifest transport.
 	{path: "TreeDB/internal/raftfsm/raft_snapshot_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 5},
-	{path: "TreeDB/collections/api.go", classification: typedStorageLegacyCompatibility, matchingLines: 75, occurrences: 81},
+	{path: "TreeDB/collections/api.go", classification: typedStorageLegacyCompatibility, matchingLines: 74, occurrences: 80},
+	// Gateway policy selection and metadata tests preserve the public typed-column configuration.
+	{path: "TreeDB/mongo_gateway/cluster_submitter.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
+	{path: "TreeDB/mongo_gateway/standalone.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
+	{path: "TreeDB/mongo_gateway/standalone_pager_metadata_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 4},
+	{path: "TreeDB/nativewire/pager_metadata_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 9, occurrences: 11},
 	// Complete-row read fixtures use the retained public schema configuration.
 	{path: "TreeDB/collections/r1_reads_5058_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 4},
 	// Bounded range history inspects the retained public schema option.
