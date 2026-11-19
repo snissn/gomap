@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"reflect"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -12,6 +13,17 @@ import (
 // own notification. This avoids replacing its timer or command-WAL bytes hook.
 func cowIdlePendingNotifications(database *DB) int {
 	return reflect.ValueOf(database.cached).Elem().FieldByName("autoCheckpointWriteCh").Len()
+}
+
+func cowIdleForegroundWriteTime(t *testing.T, database *DB) time.Time {
+	t.Helper()
+	const stat = "treedb.cache.vlog_generation.maintenance.foreground_last_write_unix_nano"
+	raw := database.cached.Stats()[stat]
+	stamp, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || stamp <= 0 {
+		t.Fatalf("missing foreground activity time %q: %v", raw, err)
+	}
+	return time.Unix(0, stamp)
 }
 
 func TestCOWAutoCheckpointIdleActualActivity(t *testing.T) {
@@ -79,21 +91,26 @@ func TestCOWAutoCheckpointIdleActualActivity(t *testing.T) {
 					t.Fatal("seed unexpectedly flushed before the active window")
 				}
 				t.Logf("owner=%s profile=%s notified_bytes=%d flush_threshold=%d", engine, profile, notifiedBytes, opts.FlushThreshold)
+				activity := []time.Time{cowIdleForegroundWriteTime(t, database)}
 				started := time.Now()
 				ticker := time.NewTicker(idle / 5)
 				defer ticker.Stop()
 				lastWrite := started
 				var writes []time.Duration
-				lastWriteStarted := started
+				var cutover time.Time
 				var want []byte
 				activeUntil := started.Add(3 * idle)
+			active:
 				for time.Now().Before(activeUntil) {
 					select {
-					case at := <-entered:
-						t.Fatalf("idle maintenance entered during writes at %s, last ACK age=%s, writes=%v", at.Format(time.RFC3339Nano), at.Sub(lastWrite), writes)
+					case cutover = <-entered:
+						break active
 					case <-ticker.C:
+						lastWriteStarted := time.Now()
+						if !lastWriteStarted.Before(activeUntil) {
+							break active
+						}
 						want = []byte(fmt.Sprintf("acknowledged-small-write-%d", len(writes)))
-						lastWriteStarted = time.Now()
 						if gap := lastWriteStarted.Sub(lastWrite); gap >= idle/2 {
 							t.Fatalf("active writer scheduling gap=%s exceeds half the idle interval", gap)
 						}
@@ -102,6 +119,11 @@ func TestCOWAutoCheckpointIdleActualActivity(t *testing.T) {
 						}
 						lastWrite = time.Now()
 						writes = append(writes, lastWrite.Sub(started))
+						stamp := cowIdleForegroundWriteTime(t, database)
+						if stamp.Before(lastWriteStarted) || stamp.After(lastWrite) {
+							t.Fatalf("write did not record foreground activity within the call: start=%s activity=%s ACK=%s", lastWriteStarted, stamp, lastWrite)
+						}
+						activity = append(activity, stamp)
 						growth := database.publicCommandWALAutoCheckpointBytes() - notifiedBytes
 						if growth < 0 || growth >= 1<<20 || cowIdlePendingNotifications(database) != 0 {
 							t.Fatalf("small writes invalidated coalescing: relative_growth=%d pending=%d", growth, cowIdlePendingNotifications(database))
@@ -111,25 +133,43 @@ func TestCOWAutoCheckpointIdleActualActivity(t *testing.T) {
 						}
 					}
 				}
-				select {
-				case at := <-entered:
-					t.Fatalf("idle maintenance entered during active window: %v", at)
-				default:
-				}
-				if database.backend.State().CommitSeq != initialCommit {
-					t.Fatal("active window unexpectedly flushed")
+				if cutover.IsZero() {
+					// A durable ACK can finish after the activity deadline. The cutover's
+					// own timestamp identifies its phase, even when the event is queued.
+					flushed := database.backend.State().CommitSeq != initialCommit
+					select {
+					case cutover = <-entered:
+					default:
+						if flushed {
+							t.Fatal("backend flushed without the corresponding maintenance cutover")
+						}
+					}
 				}
 				t.Logf("actual write ACK offsets=%v relative_wal_growth=%d", writes, database.publicCommandWALAutoCheckpointBytes()-notifiedBytes)
-				select {
-				case at := <-entered:
-					// noteWrite runs between write start and acknowledgement.
-					if quiet := at.Sub(lastWriteStarted); quiet < idle {
-						t.Fatalf("idle entry after only %s quiet; want %s", quiet, idle)
+				if cutover.IsZero() {
+					select {
+					case cutover = <-entered:
+					case <-time.After(5 * idle):
+						t.Fatal("genuinely idle maintenance never entered")
 					}
-					t.Logf("genuine idle maintenance entered after %s quiet", at.Sub(lastWrite))
-				case <-time.After(5 * idle):
-					t.Fatal("genuinely idle maintenance never entered")
 				}
+				// The timestamp can be recorded before a durable ACK returns. Use
+				// the latest recorded activity preceding the actual cutover.
+				lastActivity := activity[0]
+				for _, stamp := range activity[1:] {
+					if stamp.After(cutover) {
+						break
+					}
+					lastActivity = stamp
+				}
+				quiet := cutover.Sub(lastActivity)
+				if cutover.Before(activeUntil) {
+					t.Fatalf("idle maintenance entered inside active window: elapsed=%s quiet=%s ACK offsets=%v", cutover.Sub(started), quiet, writes)
+				}
+				if quiet < idle {
+					t.Fatalf("idle entry after only %s quiet; want %s, ACK offsets=%v", quiet, idle, writes)
+				}
+				t.Logf("genuine idle maintenance entered after %s quiet", quiet)
 				if err := database.Checkpoint(); err != nil {
 					t.Fatal(err)
 				}
