@@ -774,6 +774,12 @@ func applyCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map[uint
 	}
 }
 
+// CommandWALReplayUsesNativeCollectionLayout reports whether the active replay
+// belongs to an open for the native semantic owner.
+func (db *DB) CommandWALReplayUsesNativeCollectionLayout() bool {
+	return db != nil && db.commandWALReplayNativeCollectionLayout && db.commandWALReplayLSN.Load() != 0
+}
+
 func (db *DB) applyRegisteredCommandWALFrame(env commitlog.CommandEnvelope, registration commandWALReplayHandlerRegistration) error {
 	db.ensureCommandWALRecoverySnapshotView()
 	previousReplayLSN := db.commandWALReplayLSN.Swap(env.LSN)
