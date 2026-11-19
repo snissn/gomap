@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"sort"
 	"sync"
@@ -977,6 +978,7 @@ func (db *DB) cleanupCommandWALCoveredSegmentsV1(scanSealedPrefix bool) (retErr 
 	if hooks := db.testCommandWALCleanupHooks; err == nil && hooks != nil && hooks.afterScan != nil {
 		hooks.afterScan()
 	}
+	var retiredFiles []*os.File
 	if err == nil {
 		db.durablePublishMu.Lock()
 		if err = db.revalidateDurableWALCleanupProofV1(proof); err == nil {
@@ -987,8 +989,12 @@ func (db *DB) cleanupCommandWALCoveredSegmentsV1(scanSealedPrefix bool) (retErr 
 				if retainErr := retainCommandWALCleanupAuthoritySegments(proof.segments, proof.journal, current); retainErr != nil {
 					return false, retainErr
 				}
+				var closeAfterUnlock *[]*os.File
+				if scanSealedPrefix && current.Ext4Stream {
+					closeAfterUnlock = &retiredFiles
+				}
 				var removeErr error
-				proof.segments, removeErr = removeCoveredCommandWALSegmentsWithRegistry(proof.segments, registry)
+				proof.segments, removeErr = unlinkCoveredCommandWALSegments(proof.segments, registry, closeAfterUnlock)
 				for i := range proof.segments {
 					if proof.segments[i].Removed {
 						return true, removeErr
@@ -1079,11 +1085,23 @@ func (db *DB) cleanupCommandWALCoveredSegmentsV1(scanSealedPrefix bool) (retErr 
 		if removedLogicalBytes > 0 {
 			db.commandWALClosedBytes.Add(-removedLogicalBytes)
 		}
-		if err != nil {
-			// At least one unlink completed, but cleanup stopped before the
-			// deletion directory could be proven durable.
-			return errors.Join(err, ErrRecoveryRequired)
+	}
+	// On ext4, the last close can do the inode reclamation that an unlink
+	// without an open descriptor would perform under journal exclusion.
+	// Finish that checked close before the directory fence and while this
+	// cleanup invocation still owns maintenance.
+	for _, file := range retiredFiles {
+		if hooks := db.testCommandWALCleanupHooks; hooks != nil && hooks.beforeCloseRetired != nil {
+			hooks.beforeCloseRetired(file)
 		}
+		if closeErr := file.Close(); closeErr != nil {
+			err = errors.Join(err, closeErr)
+		}
+	}
+	if removed > 0 && err != nil {
+		// At least one unlink completed, but cleanup stopped before the
+		// deletion directory could be proven durable.
+		return errors.Join(err, ErrRecoveryRequired)
 	}
 	if syncErr := db.syncCommandWALCleanupNamespaceIfDirty(); syncErr != nil {
 		return syncErr

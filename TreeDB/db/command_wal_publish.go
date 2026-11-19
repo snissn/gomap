@@ -930,6 +930,13 @@ func removeCoveredCommandWALSegments(decisions []commandWALSegmentCleanupDecisio
 }
 
 func removeCoveredCommandWALSegmentsWithRegistry(decisions []commandWALSegmentCleanupDecision, registry *rootpublication.IdentityPinRegistry) ([]commandWALSegmentCleanupDecision, error) {
+	return unlinkCoveredCommandWALSegments(decisions, registry, nil)
+}
+
+// A non-nil closeAfterUnlock transfers each positively revalidated descriptor
+// to the caller before unlink. The scanner handles and delete leases keep
+// their original lifetimes. This transfer is used on verified ext4 only.
+func unlinkCoveredCommandWALSegments(decisions []commandWALSegmentCleanupDecision, registry *rootpublication.IdentityPinRegistry, closeAfterUnlock *[]*os.File) ([]commandWALSegmentCleanupDecision, error) {
 	defer closeCommandWALCleanupDecisions(decisions)
 	type cleanupLease struct {
 		decision int
@@ -1006,6 +1013,11 @@ func removeCoveredCommandWALSegmentsWithRegistry(decisions []commandWALSegmentCl
 			return decisions, err
 		}
 	}
+	// Match cleanup's staged-descriptor budget while foreground writers
+	// and rotations are admitted during the final closes.
+	if len(leases) > maxOpenClosedWALCleanupSegments {
+		closeAfterUnlock = nil
+	}
 	for leaseIndex := range leases {
 		entry := &leases[leaseIndex]
 		decision := &decisions[entry.decision]
@@ -1029,8 +1041,14 @@ func removeCoveredCommandWALSegmentsWithRegistry(decisions []commandWALSegmentCl
 			return decisions, errors.Join(ErrRecoveryRequired, fmt.Errorf("revalidate command WAL cleanup target %s: %w", filepath.Base(decision.Path), openErr))
 		}
 		currentIdentity, identityErr := rootpublication.StableIdentityFromFile(current)
-		closeErr := current.Close()
-		if identityErr != nil || closeErr != nil || !rootpublication.SamePhysicalIdentity(decision.identity, currentIdentity) {
+		matches := identityErr == nil && rootpublication.SamePhysicalIdentity(decision.identity, currentIdentity)
+		var closeErr error
+		if closeAfterUnlock != nil && matches {
+			*closeAfterUnlock = append(*closeAfterUnlock, current)
+		} else {
+			closeErr = current.Close()
+		}
+		if !matches || closeErr != nil {
 			revalidateErr := errors.Join(identityErr, closeErr)
 			if revalidateErr == nil {
 				revalidateErr = fmt.Errorf("command WAL cleanup target identity changed: %s", filepath.Base(decision.Path))

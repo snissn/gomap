@@ -131,11 +131,19 @@ Ordinary cleanup is serialized per DB and follows this order:
    every captured-lane generation at or above the captured active sequence,
    acquiring all remaining candidate identity/namespace delete leases, and
    revalidating every pathname against its captured physical identity;
-7. unlink only the eligible exact identities;
+7. unlink only the eligible exact identities. The deferred covered-prefix
+   path on the verified ext4 stream role may keep up to eight final
+   revalidation descriptors through unlink, after checking the close of
+   the original scan handles. This moves inode reclamation to checked
+   closes outside journal and durable-publication exclusion. Other paths
+   close all revalidation descriptors before unlink;
 8. advance the in-process journal namespace generation and cleanup epoch, and
    record command-WAL namespace-sync debt, as soon as any unlink succeeds;
-9. sync the WAL directory, emit the before/after durability boundaries, and
-   clear the debt only after the full boundary succeeds;
+9. finish any deferred descriptor closes within the same maintenance
+   invocation, then sync the WAL directory, emit the before/after
+   durability boundaries, and clear the debt only after the full
+   boundary succeeds; a post-unlink close failure preserves the
+   completed namespace mutation as pending durability debt;
 10. report success only after the deletion namespace is durable. Cleanup never
     mints or advances the dependency-closed WAL frontier; checkpoint, recovery,
     and explicit durability barriers establish that authority before cleanup.

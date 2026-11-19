@@ -20,9 +20,10 @@ const maxOpenClosedWALCleanupSegments = 8
 // commandWALCleanupTestHooks gives cleanup's per-handle observation points one
 // slot in DB. These callbacks are installed only by tests before starting cleanup.
 type commandWALCleanupTestHooks struct {
-	beforeSegment func(string)
-	afterScan     func()
-	openPrefix    func(string) (*os.File, error)
+	beforeSegment      func(string)
+	afterScan          func()
+	beforeCloseRetired func(*os.File)
+	openPrefix         func(string) (*os.File, error)
 }
 
 type cleanupClosedWALFile struct {
