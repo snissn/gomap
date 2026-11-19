@@ -54,3 +54,49 @@ func TestCOWMaintenanceReservationSurvivesProducerPressureAndLastFinalizer(t *te
 		t.Fatalf("child did not finish: %+v", s)
 	}
 }
+
+func TestCOWMaintenanceReservationRejectsMandatoryLeaseOverlap(t *testing.T) {
+	parent, err := NewCOWBudget(DefaultCOWLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close()
+	maintenance, err := parent.ReserveMaintenance(32 << 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer maintenance.Close()
+	live, err := maintenance.AcquireExternal(16 << 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer live.Close()
+	candidate, err := maintenance.AcquireExternal(8 << 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer candidate.Close()
+	foreign, err := parent.AcquireExternal(16 << 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer foreign.Close()
+
+	const successorBytes = 8 << 10
+	if successor, err := maintenance.AcquireExternal(successorBytes); !errors.Is(err, ErrCOWCapacity) {
+		successor.Close()
+		t.Fatalf("allocator admitted overlapping live, candidate and successor leases: %v", err)
+	}
+	if maintenance.ExternalAllocationFitsWith(successorBytes, live, candidate) {
+		t.Fatal("mandatory live leases were classified as refundable pressure")
+	}
+	if !maintenance.ExternalAllocationFitsWith(successorBytes, live, foreign) {
+		t.Fatal("independently refundable or foreign leases were classified as mandatory pressure")
+	}
+	candidate.Close()
+	successor, err := maintenance.AcquireExternal(successorBytes)
+	if err != nil {
+		t.Fatalf("released pressure did not make the actual successor reservation fit: %v", err)
+	}
+	successor.Close()
+}
