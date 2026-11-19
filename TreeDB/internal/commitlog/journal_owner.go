@@ -256,6 +256,7 @@ type CommandJournalCleanupSnapshot struct {
 	ActiveBytes           int64
 	ActivePath            string
 	ActiveIdentity        rootpublication.StableIdentity
+	FixedContainer        bool
 	PendingStableRotation int
 	PendingSuccessor      bool
 }
@@ -1193,7 +1194,7 @@ func (j *CommandJournal) ActiveSegmentSnapshot() (path string, bytes int64) {
 }
 
 func (j *CommandJournal) cleanupSnapshotLocked() (CommandJournalCleanupSnapshot, error) {
-	if j == nil || j.writer == nil || j.writer.f == nil {
+	if j == nil || j.writer == nil || j.writer.f == nil || j.closing {
 		return CommandJournalCleanupSnapshot{}, errors.New("commitlog: command journal is closed")
 	}
 	identity, err := rootpublication.StableIdentityFromFile(j.writer.f)
@@ -1209,6 +1210,7 @@ func (j *CommandJournal) cleanupSnapshotLocked() (CommandJournalCleanupSnapshot,
 		ActiveBytes:           j.writer.ActiveBytes(),
 		ActivePath:            j.path,
 		ActiveIdentity:        identity,
+		FixedContainer:        j.writer.fixed != nil,
 		PendingStableRotation: len(j.pendingStableRotations),
 		PendingSuccessor:      j.pendingStableSuccessor != nil,
 	}, nil
@@ -1232,6 +1234,16 @@ func (j *CommandJournal) CaptureCleanupSnapshot() (CommandJournalCleanupSnapshot
 // fn may inspect files but must not call back into the journal or publish roots.
 // Unflushed accepted bytes are intentionally not flushed by maintenance.
 func (j *CommandJournal) WithCleanupScan(snapshot CommandJournalCleanupSnapshot, fn func() error) error {
+	if fn == nil {
+		return j.WithCleanupScanSnapshot(snapshot, nil)
+	}
+	return j.WithCleanupScanSnapshot(snapshot, func(CommandJournalCleanupSnapshot) error { return fn() })
+}
+
+// WithCleanupScanSnapshot supplies the exact live journal cut under append
+// exclusion. Callers can pin immutable predecessors here and scan them after
+// the callback. Mutable files must remain inside this authority.
+func (j *CommandJournal) WithCleanupScanSnapshot(snapshot CommandJournalCleanupSnapshot, fn func(CommandJournalCleanupSnapshot) error) error {
 	if j == nil {
 		return errors.Join(ErrCommandWALCleanupSnapshotStale, errors.New("commitlog: command journal is closed"))
 	}
@@ -1247,7 +1259,7 @@ func (j *CommandJournal) WithCleanupScan(snapshot CommandJournalCleanupSnapshot,
 	if fn == nil {
 		return nil
 	}
-	return fn()
+	return fn(current)
 }
 
 func validateMonotonicCleanupSnapshot(captured, current CommandJournalCleanupSnapshot) error {
