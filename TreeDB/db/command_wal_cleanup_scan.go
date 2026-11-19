@@ -75,6 +75,21 @@ func sameSealedWALStreamExtent(captured, linked os.FileInfo) bool {
 
 func (cut *commandWALStreamCleanupCut) validateLinks(dir string, current commitlog.CommandJournalCleanupSnapshot) error {
 	segments, err := simpleCommandWALCleanupInventory(dir, current)
+	if commandWALCleanupDescriptorExhausted(err) {
+		// Validate the captured names against their still-open objects before
+		// releasing handles the locked scanner would already have closed. A
+		// covered deletion target keeps its scan handle throughout.
+		if linkErr := cut.validateCapturedLinks(); linkErr != nil {
+			return linkErr
+		}
+		if closeErr := cut.closeUnkept(); closeErr != nil {
+			return errors.Join(err, closeErr)
+		}
+		// The final journal owner and durable root remain locked. Retry only
+		// the directory read with the same descriptor budget as the locked
+		// scanner, then recheck every captured name before any unlink.
+		segments, err = simpleCommandWALCleanupInventory(dir, current)
+	}
 	if err != nil {
 		return err
 	}
@@ -86,6 +101,10 @@ func (cut *commandWALStreamCleanupCut) validateLinks(dir string, current commitl
 			return fmt.Errorf("%w: command WAL stream cleanup inventory changed", ErrRecoveryRequired)
 		}
 	}
+	return cut.validateCapturedLinks()
+}
+
+func (cut *commandWALStreamCleanupCut) validateCapturedLinks() error {
 	for _, sealed := range cut.sealed {
 		linked, err := os.Lstat(sealed.segment.path)
 		if err != nil {
