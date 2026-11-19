@@ -3,16 +3,48 @@ package db
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/zipper"
 )
+
+// Only temporary refusal of the frozen group's pre-enqueue snapshot receipt
+// can set these markers. Cleanup must also succeed before retry.
+var (
+	errRootPublicationSnapshotRegistryRefused   = fmt.Errorf("candidate snapshot registry: %w", ErrSnapshotCapacity)
+	errRootPublicationSnapshotAllocationRefused = fmt.Errorf("candidate snapshot allocation: %w", memtable.ErrCOWCapacity)
+)
+
+// IsOnlyRootPublicationSnapshotAdmissionRefusal recognizes the receipt
+// through wrapped errors without suppressing any candidate or group cleanup.
+func IsOnlyRootPublicationSnapshotAdmissionRefusal(err error) bool {
+	for err != nil {
+		if err == errRootPublicationSnapshotRegistryRefused || err == errRootPublicationSnapshotAllocationRefused {
+			return true
+		}
+		switch e := err.(type) {
+		case interface{ Unwrap() []error }:
+			causes := e.Unwrap()
+			if len(causes) != 1 {
+				return false
+			}
+			err = causes[0]
+		case interface{ Unwrap() error }:
+			err = e.Unwrap()
+		default:
+			return false
+		}
+	}
+	return false
+}
 
 type privatePrimaryConstructionV6 interface {
 	primaryarena.ReadRootConstructionV6
@@ -53,6 +85,8 @@ type RootPublicationBuildGroup struct {
 	snapshotReceipt   *Snapshot
 	physicalSeal      rootpublication.PhysicalSealReceipt
 	acceptedPrefixCut rootpublication.AcceptedCut
+
+	retrySnapshotAdmission bool
 
 	// Only original factory outputs enter these two custody cells. baseRoot is
 	// borrowed and never enters them. A failed disposal preserves both originals.
@@ -435,6 +469,23 @@ func (group *RootPublicationBuildGroup) observeAcceptedOutputLocked() {
 	group.db.invalidateLeafGenerationSubtreeStats(group.tracker.Pages())
 }
 
+func (group *RootPublicationBuildGroup) hasExactCapturedCoverage(intent *commandWALBatchIntent) bool {
+	cut := group.acceptedPrefixCut
+	if group.capturedBasis == nil || group.capturedBasis.state == nil {
+		return false
+	}
+	basis := group.capturedBasis.state.AppliedCommandLSN
+	through := cut.Through().CanonicalLSN
+	if intent == nil {
+		return through == basis && cut.ValidatePhysicalCoverage(group.coordinator, basis) == nil
+	}
+	// Check the pre-existing assignment and exact range before the append call.
+	// Do not admit fresh, replay or unrelated intents to the exception.
+	return through > basis && !intent.fromReplay && intent.lsn == through &&
+		intent.coveredRange[0].First == basis+1 && intent.coveredRange[0].Last == through &&
+		cut.ValidatePhysicalCoverage(group.coordinator, intent.lsn) == nil
+}
+
 func (group *RootPublicationBuildGroup) finalizeLocked(b *Batch, syncWrite bool) error {
 	db := group.db
 	group.releaseWriteLocked()
@@ -445,6 +496,7 @@ func (group *RootPublicationBuildGroup) finalizeLocked(b *Batch, syncWrite bool)
 	defer publishPrepareGuard.Release()
 
 	intent := b.commandWALPublishIntent
+	group.retrySnapshotAdmission = group.retrySnapshotAdmission && group.hasExactCapturedCoverage(intent)
 	commandAppended := false
 	if intent != nil {
 		if _, err := db.appendRawKVCommandWALIntent(intent, syncWrite); err != nil {
@@ -524,7 +576,11 @@ func (group *RootPublicationBuildGroup) finalizeLocked(b *Batch, syncWrite bool)
 		group.physicalSeal = post.physicalSeal
 	}
 	if err != nil {
-		if commandAppended && !post.accepted {
+		// The authenticated cut's coverage intent refers to an already
+		// installed WAL range. A clean pre-enqueue admission refusal never
+		// appends a new command or changes that range.
+		retryReceipt := group.retrySnapshotAdmission && IsOnlyRootPublicationSnapshotAdmissionRefusal(err)
+		if commandAppended && !post.accepted && !retryReceipt {
 			db.poisonCommandWALAfterPostAppendFailure(intent)
 		}
 		if post.accepted {
@@ -565,6 +621,9 @@ func (group *RootPublicationBuildGroup) writeBatch(b *Batch, syncWrite bool, max
 	err := group.finalizeLocked(b, syncWrite)
 	group.failed = err != nil
 	cleanupErr := group.cleanupLocked(!group.accepted)
+	if cleanupErr != nil && group.retrySnapshotAdmission && IsOnlyRootPublicationSnapshotAdmissionRefusal(err) {
+		group.db.poisonCommandWALAfterPostAppendFailure(b.commandWALPublishIntent)
+	}
 	return errors.Join(err, cleanupErr)
 }
 
@@ -741,15 +800,28 @@ func (group *RootPublicationBuildGroup) Close() error {
 // the final batch can accept. adopt must retain even a Snapshot whose later
 // publication fails; its caller owns cancellation as well as accepted handoff.
 func (group *RootPublicationBuildGroup) PrepareAcceptedSnapshot(admit func(SnapshotAllocationSizes) error, adopt func(*Snapshot) error, cancel func() error) error {
+	return group.prepareAcceptedSnapshot(admit, adopt, cancel, false)
+}
+
+// PrepareGenerationAcceptedSnapshot uses the already-bound captured prefix.
+// For the exact preassigned WAL range, admit may return memtable.ErrCOWCapacity
+// for temporary allocation exhaustion. Fixed limits must use a distinct error.
+// Reader registry exhaustion after successful allocation is also retryable.
+func (group *RootPublicationBuildGroup) PrepareGenerationAcceptedSnapshot(admit func(SnapshotAllocationSizes) error, adopt func(*Snapshot) error, cancel func() error) error {
+	return group.prepareAcceptedSnapshot(admit, adopt, cancel, true)
+}
+
+func (group *RootPublicationBuildGroup) prepareAcceptedSnapshot(admit func(SnapshotAllocationSizes) error, adopt func(*Snapshot) error, cancel func() error, retryAdmission bool) error {
 	if group == nil || admit == nil || adopt == nil || cancel == nil {
 		return ErrRootPublicationBasisMismatch
 	}
 	group.mu.Lock()
 	defer group.mu.Unlock()
-	if group.closed || group.accepted || group.snapshotAdmit != nil {
+	if group.closed || group.accepted || group.snapshotAdmit != nil || (retryAdmission && !group.acceptedPrefixCut.Valid()) {
 		return ErrRootPublicationBasisMismatch
 	}
 	group.snapshotAdmit, group.snapshotAdopt, group.snapshotCancel = admit, adopt, cancel
+	group.retrySnapshotAdmission = retryAdmission
 	return nil
 }
 
@@ -763,8 +835,23 @@ func (group *RootPublicationBuildGroup) prepareSnapshotReceiptLocked(install *ro
 	if install.preparedView == nil {
 		return ErrRootPublicationBasisMismatch
 	}
-	snapshot, err := group.db.captureSnapshotViewBoundedLocked(nil, group.snapshotAdmit, true, install.preparedView, false)
+	admit := group.snapshotAdmit
+	admitted := false
+	if group.retrySnapshotAdmission {
+		admit = func(s SnapshotAllocationSizes) error {
+			err := group.snapshotAdmit(s)
+			if err == memtable.ErrCOWCapacity {
+				return errRootPublicationSnapshotAllocationRefused
+			}
+			admitted = err == nil
+			return err
+		}
+	}
+	snapshot, err := group.db.captureSnapshotViewBoundedLocked(nil, admit, true, install.preparedView, false)
 	if err != nil {
+		if admitted && err == ErrSnapshotCapacity {
+			return errRootPublicationSnapshotRegistryRefused
+		}
 		return err
 	}
 	group.snapshotReceipt = snapshot

@@ -61,9 +61,10 @@ type COWBudget struct {
 	idleReadCount int
 	// Exactly one coarse physical-maintenance partition. Its original parent
 	// lease is retained through Close and the last child finalizer.
-	maintenance      *COWBudget
-	reservation      *COWExternalLease
-	maintenanceChild bool // immutable before publication; ordinary hot path skips partition cleanup
+	maintenance        *COWBudget
+	reservation        *COWExternalLease
+	maintenanceChild   bool // immutable before publication; ordinary hot path skips partition cleanup
+	maintenanceRefunds uint64
 }
 
 func NewCOWBudget(limits COWLimits) (*COWBudget, error) {
@@ -79,6 +80,14 @@ func NewCOWBudget(limits COWLimits) (*COWBudget, error) {
 
 func (b *COWBudget) Stats() COWStats   { b.mu.Lock(); defer b.mu.Unlock(); return b.stats }
 func (b *COWBudget) Limits() COWLimits { return b.limits }
+
+// MaintenanceUsage samples usage and the maintenance child's refund sequence.
+// The sequence is a wake witness and is separate from current accounting.
+func (b *COWBudget) MaintenanceUsage() (totalBytes, refunds uint64) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.stats.TotalBytes, b.maintenanceRefunds
+}
 
 // Close refuses new retention-increasing admissions. Existing view/source
 // leases remain valid; the budget wrapper is released after their last owner.
@@ -170,6 +179,29 @@ func (b *COWBudget) AcquireExternal(bytes uint64) (*COWExternalLease, error) {
 	return b.acquireExternal(bytes, false)
 }
 
+// ExternalAllocationFitsWith reports whether a new lease can coexist with the
+// distinct required leases after every other allocation is refunded. Leases
+// charged to another budget do not consume this budget's capacity.
+func (b *COWBudget) ExternalAllocationFitsWith(bytes uint64, required ...*COWExternalLease) bool {
+	charge, ok := cowAdd(bytes, cowAllocation(uint64(unsafe.Sizeof(COWExternalLease{}))))
+	if !ok {
+		return false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, lease := range required {
+		if lease == nil || lease.budget != b || lease.closed {
+			continue
+		}
+		charge, ok = cowAdd(charge, lease.charge)
+		if !ok {
+			return false
+		}
+	}
+	return !b.closed && cowFits(b.limits.MaxTotalBytes, b.stats.ControlBytes, charge) &&
+		charge <= b.limits.MaxInFlightBytes && charge <= b.limits.MaxRetiredBytes
+}
+
 // nativeSource is used only by the original prewrite native generation cell.
 // Slot and metadata admission are one original budget operation; the cell,
 // rather than the external allocation receipt, releases the slot at last edge.
@@ -234,6 +266,9 @@ func (l *COWExternalLease) Resize(bytes uint64) error {
 		b.stats.TotalBytes -= delta
 		b.stats.ReservedBytes -= delta
 		b.stats.ExternalBytes -= delta
+		if delta != 0 && b.maintenanceChild {
+			b.maintenanceRefunds++
+		}
 	}
 	l.charge = target
 	return nil

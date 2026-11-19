@@ -38,7 +38,7 @@ func TestNormalizeStandaloneOptionsDefaultsAndValidation(t *testing.T) {
 		t.Fatalf("document format=%q want bson", opts.DefaultCollectionOptions.DocumentFormat)
 	}
 	if opts.DefaultCollectionOptions.DataRootStoragePolicy != collections.RootStorageDefault {
-		t.Fatalf("data root storage=%q want default", opts.DefaultCollectionOptions.DataRootStoragePolicy)
+		t.Fatalf("durable data root storage=%q want default", opts.DefaultCollectionOptions.DataRootStoragePolicy)
 	}
 
 	normalized, err := NormalizeStandaloneOptions(StandaloneOptions{
@@ -63,6 +63,9 @@ func TestNormalizeStandaloneOptionsDefaultsAndValidation(t *testing.T) {
 	}
 	if commandWAL.Profile != treedb.ProfileCommandWALDurable {
 		t.Fatalf("command WAL profile=%q want %q", commandWAL.Profile, treedb.ProfileCommandWALDurable)
+	}
+	if normalized.DefaultCollectionOptions.DataRootStoragePolicy != collections.RootStoragePager {
+		t.Fatalf("relaxed BSON data root storage=%q want pager", normalized.DefaultCollectionOptions.DataRootStoragePolicy)
 	}
 	if normalized.DefaultCollectionOptions.DocumentFormat != collections.DocumentFormatBSON {
 		t.Fatalf("normalized document format=%q want bson", normalized.DefaultCollectionOptions.DocumentFormat)

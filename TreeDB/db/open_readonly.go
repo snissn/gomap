@@ -33,6 +33,10 @@ func openReadOnly(opts Options) (result *DB, retErr error) {
 	if err != nil {
 		return nil, err
 	}
+	systemPagerLeaves, err := requiredFormatFeatureEnabled(opts.Dir, RequiredFeatureSystemPagerLeaves)
+	if err != nil {
+		return nil, err
+	}
 	NormalizeFlushAdmissionOptions(&opts)
 	if err := ensureNoLegacyMixedWALValueSegments(opts.Dir); err != nil {
 		return nil, err
@@ -147,6 +151,7 @@ func openReadOnly(opts Options) (result *DB, retErr error) {
 		indexPackedValuePtr:            opts.IndexPackedValuePtr,
 		indexInternalBaseDelta:         opts.IndexInternalBaseDelta,
 		indexOuterLeavesInValueLog:     opts.IndexOuterLeavesInValueLog,
+		indexSystemLeavesInPager:       systemPagerLeaves,
 		indexAdaptiveLeafEncoding:      opts.IndexAdaptiveLeafEncoding,
 		leafFillTargetPPM:              opts.LeafFillTargetPPM,
 		internalFillTargetPPM:          opts.InternalFillTargetPPM,
@@ -254,6 +259,10 @@ func openReadOnlyNoLockWithRegistryV6(opts Options, valueLogIdentityPins *rootpu
 	if err != nil {
 		return nil, err
 	}
+	systemPagerLeaves, err := requiredFormatFeatureEnabled(opts.Dir, RequiredFeatureSystemPagerLeaves)
+	if err != nil {
+		return nil, err
+	}
 	NormalizeFlushAdmissionOptions(&opts)
 	if err := ensureNoLegacyMixedWALValueSegments(opts.Dir); err != nil {
 		return nil, err
@@ -347,6 +356,7 @@ func openReadOnlyNoLockWithRegistryV6(opts Options, valueLogIdentityPins *rootpu
 		indexPackedValuePtr:            opts.IndexPackedValuePtr,
 		indexInternalBaseDelta:         opts.IndexInternalBaseDelta,
 		indexOuterLeavesInValueLog:     opts.IndexOuterLeavesInValueLog,
+		indexSystemLeavesInPager:       systemPagerLeaves,
 		indexAdaptiveLeafEncoding:      opts.IndexAdaptiveLeafEncoding,
 		leafFillTargetPPM:              opts.LeafFillTargetPPM,
 		internalFillTargetPPM:          opts.InternalFillTargetPPM,

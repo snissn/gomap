@@ -42,6 +42,9 @@ func DecodeColumnStoreWireConfigV1(collection string, raw []byte, create bool) (
 	if err != nil {
 		return nil, err
 	}
+	if create && normalized.ControlRootStoragePolicy == RootStoragePager {
+		return nil, errors.New("collections: column_store wire create does not support pager storage policy")
+	}
 	canonical, err := json.Marshal(normalized)
 	if err != nil {
 		return nil, err

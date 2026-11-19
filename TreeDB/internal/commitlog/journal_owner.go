@@ -182,6 +182,9 @@ type CommandJournalOptions struct {
 	// target rotate to the next lane segment before reserving an LSN. The target
 	// is independent from MaxSegmentSize, which remains a per-frame safety cap.
 	SegmentTargetBytes int64
+	// PreferExt4Stream selects a stream for fresh segments on Linux ext4.
+	// The existing container always controls how occupied segments are opened.
+	PreferExt4Stream bool
 	// BufferSize controls this command journal's buffered writer size. Zero
 	// uses the commitlog default.
 	BufferSize int
@@ -352,6 +355,7 @@ func openCommandJournal(walDir string, opts CommandJournalOptions, productionMed
 	writer, err := NewWriterWithOptions(path, Options{
 		fixedCapacity:                   initialCapacity,
 		productionMediumPolicy:          productionMediumPolicy,
+		preferExt4Stream:                opts.PreferExt4Stream,
 		MaxSegmentSize:                  opts.MaxSegmentSize,
 		BufferSize:                      opts.BufferSize,
 		DeferredCommandBufferSize:       opts.DeferredCommandBufferSize,

@@ -436,7 +436,7 @@ func TestCOWMaintenanceDictionaryActualInstallDispatch(t *testing.T) {
 	if _, err := refreshCOWSemanticBasis(state, held.cowCut.basis.snapshot, basis.snapshot); !errors.Is(err, valuelog.ErrCOWReadUnsupported) {
 		t.Fatalf("unscoped owner did not preserve old refusal: %v", err)
 	}
-	old, installErr := db.installCOWBasis(basis, nil)
+	old, installErr := db.installCOWBasis(basis, false)
 	if err := basis.release(); err != nil {
 		t.Fatal(err)
 	}

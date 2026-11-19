@@ -32,14 +32,22 @@ func (db *DB) RunBackendMaintenanceWithPostRefresh(fn, settle func() error) erro
 }
 
 func (db *DB) refreshCOWBackendBasis() error {
+	return db.refreshCOWBackendBasisForGeneration(false)
+}
+
+func (db *DB) refreshCOWBackendBasisForGeneration(generationPressure bool) error {
 	basis, err := db.cow.captureBackendBasis(db.backend.(backendSnapshotProvider))
 	if err != nil {
-		return backendMaintenanceError("capture COW basis", err)
+		return backendMaintenanceError("capture COW basis", cowGenerationAdmissionError(generationPressure, err))
 	}
 	defer db.releaseCOWBasisOnUnwind(&basis)
-	old, err := db.installCOWBasis(basis, nil)
-	err = joinCOWCleanupError(err, basis.release())
+	old, err := db.installCOWBasis(basis, generationPressure)
+	cleanupErr := basis.release()
 	basis = nil
+	if refusal, ok := err.(*cowGenerationSnapshotAllocationRefusal); ok && cleanupErr == nil {
+		err = cowGenerationRetryableRefusal{refusal}
+	}
+	err = joinCOWCleanupError(err, cleanupErr)
 	if err != nil {
 		return backendMaintenanceError("install COW basis", err)
 	}

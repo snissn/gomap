@@ -119,6 +119,10 @@ func (b *cowAutomaticFallbackRolloverBackend) CommandWALCheckpointFallbackNeedsR
 }
 
 func TestCOWAutomaticCheckpointFallbackPreservesNewerSuffix(t *testing.T) {
+	// The periodic value-log eligibility pass can run its own durable checkpoint
+	// after the automatic cut. Leave this fixture's explicit next checkpoint in
+	// charge of the suffix; the separately triggered background flush still runs.
+	t.Setenv(envDisableVlogGenerationLoop, "1")
 	for _, engine := range []string{"cow_btree", "cow_ordered"} {
 		t.Run(engine, func(t *testing.T) { testCOWAutomaticCheckpointFallbackPreservesNewerSuffix(t, engine) })
 	}

@@ -272,7 +272,7 @@ func decodeCollectionMetaForPurpose(src []byte, create bool) (collections.Collec
 		if err != nil {
 			return collections.CollectionMeta{}, err
 		}
-		meta.Options.ColumnStore, err = collections.DecodeColumnStoreWireConfigV1(name, []byte(raw), false)
+		meta.Options.ColumnStore, err = collections.DecodeColumnStoreWireConfigV1(name, []byte(raw), create)
 		if err != nil {
 			return collections.CollectionMeta{}, invalidMetadata("%v", err)
 		}
@@ -741,6 +741,8 @@ func encodeRootStorage(policy collections.RootStoragePolicy) uint64 {
 		return 1
 	case collections.RootStorageCompressed:
 		return 2
+	case collections.RootStoragePager:
+		return 3
 	default:
 		return 0
 	}
@@ -765,6 +767,8 @@ func decodeRootStorageStrict(policy uint64) (collections.RootStoragePolicy, erro
 		return collections.RootStorageFast, nil
 	case 2:
 		return collections.RootStorageCompressed, nil
+	case 3:
+		return collections.RootStoragePager, nil
 	default:
 		return "", protocolError(iwire.ErrInvalidCommand, "unsupported root_storage enum %d", policy)
 	}

@@ -571,7 +571,7 @@ func (b *Batch) writeCOWPublication(syncWrite bool, unlock func()) error {
 	// only accepted installation remains under this short authority cut.
 	admission := b.db.beginMVCCInputCut()
 	admission.ObserveSummary(b.mvccSummary)
-	old, publishErr := p.cut.publishAccepted(b.cowState.accepted)
+	old, returnedCustody, publishErr := p.cut.publishAccepted(b.cowState.accepted)
 	if publishErr != nil {
 		// BeginInstall is the only error return and precedes any installation.
 		admission.Abort()
@@ -600,8 +600,8 @@ func (b *Batch) writeCOWPublication(syncWrite bool, unlock func()) error {
 	b.cowState.receipt.LogicalInstalled = true
 	b.cowState.receipt.LogicalSeq = p.cut.next.logicalSeq
 	if native != nil {
-		// The cut owns State; the accepted queue owns sparse custody. No queue
-		// edge may retain the whole caller descriptor or captured EngineVersion.
+		// The cut owns State. Sparse custody either stays on the accepted
+		// queue or returns for the original semantic cleanup below.
 		b.cowState.native = nil
 	}
 	var mutableBytes int64
@@ -611,7 +611,14 @@ func (b *Batch) writeCOWPublication(syncWrite bool, unlock func()) error {
 	b.db.mutableBytes.Store(mutableBytes)
 	// Batch storage is no longer borrowed: C1 copied changed payloads before
 	// the append. Release admission and owner before retirement or checkpoint.
-	unlock()
+	if returnedCustody {
+		completion, cleanupErr := native.returnAcceptedAfterUnlock(unlock)
+		native = nil
+		completion.Complete()
+		err = joinCOWCleanupError(err, cleanupErr)
+	} else {
+		unlock()
+	}
 	if nativeOpening != nil {
 		err = joinCOWCleanupError(err, b.db.cow.releaseCut(nativeOpening))
 	}

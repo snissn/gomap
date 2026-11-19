@@ -275,7 +275,7 @@ func (db *DB) adoptPrivateCOWLeafBasisWithTransition(original backenddb.StateTok
 		}
 		if err == nil {
 			var old *cowReadCut
-			old, err = db.installCOWBasisWithLeafPack(basis, nil, transition)
+			old, err = db.installCOWBasisWithLeafPack(basis, transition, db.cow.budget.Limits().MaxSources, false)
 			if old != nil {
 				err = joinCOWCleanupError(err, old.drain())
 			}

@@ -210,7 +210,10 @@ func TestStandaloneNativeDictionaryCachePolicy(t *testing.T) {
 	t.Setenv("TREEDB_DISABLE_VLOG_GENERATION_LOOP", "1")
 	t.Setenv(backenddb.LeafPageReadCacheEntriesEnvKey, "128")
 	t.Setenv("TREEDB_VLOG_GENERATION_LEAF_SEGMENT_TARGET_BYTES", "8388608")
-	opts := StandaloneOptions{Dir: t.TempDir(), Profile: treedb.ProfileCommandWALRelaxed}
+	// Keep the legacy external catalog for the late SYSTEM append and manifest
+	// coverage check below. The tested collection explicitly uses BSON.
+	opts := StandaloneOptions{Dir: t.TempDir(), Profile: treedb.ProfileCommandWALRelaxed,
+		DefaultCollectionOptions: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatJSON}}
 	s, err := OpenStandaloneServer(opts)
 	if err != nil {
 		t.Fatal(err)

@@ -1025,6 +1025,22 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 	}
 }
 
+// Both pack phases rewrite collection descriptors in SYSTEM. The collection
+// leaves being relocated can use a different placement policy.
+func (c *leafRefRewriteCtx) initSystemZipper(base *zipper.Zipper, reader zipper.LeafPageReader, log zipper.LeafPageLog) {
+	z := base.CloneWithPagerAllocator(c.pager, c.alloc)
+	outer := c.db.systemRootUsesOuterLeaves()
+	z.SetPrimaryDirectory(false)
+	z.SetOuterLeavesInValueLog(outer)
+	z.SetIndexInternalBaseDelta(c.db.indexInternalBaseDelta && !outer)
+	if !outer {
+		log = nil
+	}
+	z.SetLeafPageLog(log)
+	z.SetLeafPageReader(reader)
+	c.zipper = z
+}
+
 func (c *leafRefRewriteCtx) applySystemRootCollectionRootReplacements(rootID uint64, replacements []vacuumCollectionRootReplacement) (uint64, bool, error) {
 	if c == nil {
 		return rootID, false, errors.New("vlog-rewrite: nil leafref rewrite ctx")
@@ -1448,17 +1464,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 			err = errors.Join(err, closeErr)
 		}
 	}()
-	leafCtx.zipper = idx.zipper.CloneWithPagerAllocator(stagingPager, tracker)
-	// This zipper applies collection descriptors to SYSTEM only. The user
-	// PRIMARY directory is rewritten separately above its real operands; never
-	// wrap a materialized SYSTEM delta in the inherited user-root preference.
-	leafCtx.zipper.SetPrimaryDirectory(false)
-	leafCtx.zipper.SetOuterLeavesInValueLog(db.indexOuterLeavesInValueLog)
-	leafCtx.zipper.SetLeafPageReader(leafCtx)
-	leafCtx.zipper.SetIndexInternalBaseDelta(db.indexInternalBaseDelta && !db.indexOuterLeavesInValueLog)
-	if db.indexOuterLeavesInValueLog {
-		leafCtx.zipper.SetLeafPageLog(&leafRefRewritePageAppender{ctx: leafCtx})
-	}
+	leafCtx.initSystemZipper(idx.zipper, leafCtx, &leafRefRewritePageAppender{ctx: leafCtx})
 	if runStats != nil {
 		defer func() {
 			runStats.InternalPagesVisited = leafCtx.internalVisited
@@ -1840,11 +1846,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 			leafReader: db.valueLogManager,
 			alloc:      publishAlloc,
 		}
-		publishCtx.zipper = idx.zipper.CloneWithPagerAllocator(idx.pager, publishAlloc)
-		publishCtx.zipper.SetPrimaryDirectory(false)
-		publishCtx.zipper.SetOuterLeavesInValueLog(db.indexOuterLeavesInValueLog)
-		publishCtx.zipper.SetLeafPageReader(db.valueLogManager)
-		publishCtx.zipper.SetLeafPageLog(db.leafPageLog)
+		publishCtx.initSystemZipper(idx.zipper, db.valueLogManager, db.leafPageLog)
 		publishedSysRoot, _, err = publishCtx.applySystemRootCollectionRootReplacements(publishedSysRoot, publishCollectionReplacements)
 		if err != nil {
 			return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: publish collection descriptors: %w", err))

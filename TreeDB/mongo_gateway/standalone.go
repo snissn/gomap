@@ -171,6 +171,9 @@ func NormalizeStandaloneOptions(opts StandaloneOptions) (StandaloneOptions, erro
 	if err != nil {
 		return opts, fmt.Errorf("mongo gateway standalone: data root storage policy: %w", err)
 	}
+	if dataRoot == collections.RootStorageDefault && opts.usesRelaxedStandaloneBSONPolicy() && opts.DefaultCollectionOptions.ColumnStore == nil {
+		dataRoot = collections.RootStoragePager
+	}
 	opts.DefaultCollectionOptions.DataRootStoragePolicy = dataRoot
 
 	indexState, err := normalizeStandaloneRootStoragePolicy(opts.DefaultCollectionOptions.IndexStateStoragePolicy)
@@ -184,6 +187,9 @@ func NormalizeStandaloneOptions(opts StandaloneOptions) (StandaloneOptions, erro
 		return opts, fmt.Errorf("mongo gateway standalone: index root storage policy: %w", err)
 	}
 	opts.DefaultIndexStoragePolicy = indexRoot
+	if opts.ClusterSubmitter != nil && (mongoClusterPagerCollection(opts.DefaultCollectionOptions) || indexRoot == collections.RootStoragePager) {
+		return opts, errors.New("mongo gateway standalone: pager root storage policy is unavailable with a cluster submitter")
+	}
 	if opts.MaxMessageLength < 0 {
 		return opts, errors.New("mongo gateway standalone: MaxMessageLength must be >= 0")
 	}
@@ -230,6 +236,11 @@ func NormalizeStandaloneOptions(opts StandaloneOptions) (StandaloneOptions, erro
 	return opts, nil
 }
 
+func (opts StandaloneOptions) usesRelaxedStandaloneBSONPolicy() bool {
+	return opts.DefaultCollectionOptions.DocumentFormat == collections.DocumentFormatBSON &&
+		opts.Profile == treedb.ProfileCommandWALRelaxed && opts.ClusterSubmitter == nil
+}
+
 // OpenStandaloneServer opens TreeDB and returns a standalone MongoDB gateway.
 func OpenStandaloneServer(opts StandaloneOptions) (*StandaloneServer, error) {
 	normalized, err := NormalizeStandaloneOptions(opts)
@@ -240,6 +251,9 @@ func OpenStandaloneServer(opts StandaloneOptions) (*StandaloneServer, error) {
 	treeOpts := treedb.OptionsFor(normalized.Profile, normalized.Dir)
 	treeOpts.MemtableMode = "cow_btree"
 	treeOpts.COWMemtableLimits = normalized.COWMemtableLimits
+	freshOrdinaryBSON := normalized.usesRelaxedStandaloneBSONPolicy() && normalized.DefaultCollectionOptions.ColumnStore == nil
+	treeOpts.FreshSystemPagerLeaves = freshOrdinaryBSON
+	treeOpts.FreshRelaxedStandaloneWALStream = freshOrdinaryBSON
 	// Own the public DB for the entire server lifetime. The semantic backend
 	// borrows its complete COW cut; it must never be independently closed.
 	database, err := treedb.Open(treeOpts)
@@ -806,6 +820,8 @@ func normalizeStandaloneRootStoragePolicy(policy collections.RootStoragePolicy) 
 		return collections.RootStorageDefault, nil
 	case collections.RootStorageFast:
 		return collections.RootStorageFast, nil
+	case collections.RootStoragePager:
+		return collections.RootStoragePager, nil
 	case collections.RootStorageCompressed:
 		return collections.RootStorageCompressed, nil
 	default:

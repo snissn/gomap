@@ -96,7 +96,10 @@ func TestCOWPublicAcceptedFullCheckpointRetriesOriginalWrite(t *testing.T) {
 				}
 			}
 			update := func(n int64) (bool, bool, error) {
-				return rows.UpdateBSONSet(id, []collections.BSONSetField{{Key: "n", Value: nativeBSONQuery(t, n)}})
+				return rows.Update(id, func([]byte) ([]byte, bool, error) {
+					doc, err := bson.Marshal(bson.D{{Key: "_id", Value: "row"}, {Key: "n", Value: n}})
+					return doc, true, err
+				})
 			}
 
 			prefix, _, err := backend.PrivateCOWAcceptedPrefix(db.txnOwner)
@@ -112,8 +115,8 @@ func TestCOWPublicAcceptedFullCheckpointRetriesOriginalWrite(t *testing.T) {
 				return token
 			}
 			initial, physical := prefix.LogicalFrontiers(), state()
-			// These small native BSON writes retain one original accepted entry
-			// each and leave the producer's byte limits at their defaults.
+			// Generic native BSON updates retain their original accepted entry
+			// and can fill the FIFO while bytes stay below producer pressure.
 			capacity := int64(opts.COWMemtableLimits.MaxSources * opts.COWMemtableLimits.MaxGenerations)
 			for n := int64(1); n <= capacity; n++ {
 				if matched, changed, err := update(n); err != nil || !matched || !changed {
