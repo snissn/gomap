@@ -106,7 +106,15 @@ func (db *DB) scanCommandWALCleanupProof(proof durableWALCleanupProofV1, scanSea
 	}
 
 	err := proof.journalOwner.WithCleanupScanSnapshot(proof.journal, func(current commitlog.CommandJournalCleanupSnapshot) error {
-		if !current.FixedContainer || current.SegmentSeq <= 2 {
+		if !current.FixedContainer {
+			// Stream cleanup retains append exclusion for the full scan.
+			// Read ahead only on closed streams, using their original validator.
+			if current.SegmentSeq > 1 {
+				scan.closedStreamBuffer = new(commitlog.CleanupReadBuffer)
+			}
+			return scan.scanLockedDirectory(db.dir)
+		}
+		if current.SegmentSeq <= 2 {
 			return scan.scanLockedDirectory(db.dir)
 		}
 		segments, err := simpleCommandWALCleanupInventory(dir, current)

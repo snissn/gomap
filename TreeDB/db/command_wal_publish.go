@@ -580,6 +580,7 @@ type commandWALSegmentScanOptions struct {
 	seenLSNs          map[uint64]struct{}
 	seenLSNAppliedLSN uint64
 	seenLSNMax        uint64
+	readBuffer        *commitlog.CleanupReadBuffer
 }
 
 func requireNoUnappliedCommandWALFrames(dir string, appliedLSN uint64, maxSegmentBytes int64) error {
@@ -655,7 +656,7 @@ func scanCommandWALSegmentWithOptions(path string, maxSegmentBytes int64, allowT
 }
 
 func scanCommandWALSegmentFileWithOptions(file *os.File, maxSegmentBytes int64, allowTerminalTail bool, opts commandWALSegmentScanOptions) (commandWALSegmentScanResult, error) {
-	r, err := commitlog.NewReaderFromFileWithOptions(file, commitlog.Options{MaxSegmentSize: maxSegmentBytes})
+	r, err := opts.readBuffer.Open(file, commitlog.Options{MaxSegmentSize: maxSegmentBytes})
 	if err != nil {
 		return commandWALSegmentScanResult{}, err
 	}
@@ -782,12 +783,13 @@ func scanCommandWALSegmentsForCleanupProof(dir string, cleanupThrough uint64, du
 }
 
 type commandWALCleanupScan struct {
-	options         commandWALSegmentScanOptions
-	maxSegmentBytes int64
-	beforeSegment   func(string)
-	decisions       []commandWALSegmentCleanupDecision
-	lineageErr      error
-	hardErr         error
+	options            commandWALSegmentScanOptions
+	maxSegmentBytes    int64
+	beforeSegment      func(string)
+	decisions          []commandWALSegmentCleanupDecision
+	lineageErr         error
+	hardErr            error
+	closedStreamBuffer *commitlog.CleanupReadBuffer
 }
 
 func newCommandWALCleanupScan(cleanupThrough, durableWALLSN uint64, maxSegmentBytes int64, beforeSegment func(string)) *commandWALCleanupScan {
@@ -850,7 +852,11 @@ func (s *commandWALCleanupScan) scanFile(seg logSegment, file *os.File, active, 
 			return false
 		}
 	}
-	scan, err := scanCommandWALSegmentFileWithOptions(file, s.maxSegmentBytes, active, s.options)
+	opts := s.options
+	if !active {
+		opts.readBuffer = s.closedStreamBuffer
+	}
+	scan, err := scanCommandWALSegmentFileWithOptions(file, s.maxSegmentBytes, active, opts)
 	decision := commandWALSegmentCleanupDecision{
 		Path: seg.path, Size: info.Size(), LogicalSize: seg.size,
 		ScannedBytes: scan.scannedBytes, Frames: scan.frames, MinLSN: scan.minLSN, MaxLSN: scan.maxLSN,

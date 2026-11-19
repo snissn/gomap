@@ -118,7 +118,11 @@ Ordinary cleanup is serialized per DB and follows this order:
    fixed, release append exclusion to scan the prefix through retained handles.
    Reacquire exclusion to verify prefix links and identities and finish scanning
    the suffix. Ineligible inventories, `CleanupCommandWALCoveredSegments`,
-   synchronous checkpoint and Close keep the complete scan under exclusion;
+   synchronous checkpoint and Close keep the complete scan under exclusion.
+   Stream cleanup through `CleanupCommandWALCoveredPrefix` reuses a bounded
+   read-ahead buffer for closed stream segments. Frame validation and WAL
+   offsets use the bytes consumed by the decoder, including on short reads.
+   Active streams and fixed containers keep their original readers;
 5. reacquire the durable-publication lock, freshly validate current root
    runtime, and require its minimum cleanup frontier and durable WAL LSN not to
    have regressed below the captured authority;
