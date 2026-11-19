@@ -744,6 +744,12 @@ to exactly one BSON document. Missing IDs return `matched_count=0` and
 `modified_count=0`; unchanged values return `matched_count=1` and
 `modified_count=0`.
 
+On a standalone shared-COW owner, if another writer changes the same row
+before this request receives a WAL assignment, the server can reread the
+current document and apply the requested fields to it. This bounded retry
+requires the original collection and schema and a cleanly cancelled attempt.
+An assigned or uncertain write cannot be reissued by this mechanism.
+
 Duplicate IDs in one mutation batch MUST be rejected unless a future command
 schema explicitly defines ordered same-ID semantics.
 

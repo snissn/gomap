@@ -68,6 +68,12 @@ the retained record and requires the original file error after its close.
   preserved error causes and a subsequent healthy public write/checkpoint.
   Its synthetic descriptor failure does not simulate physical I/O failure.
 
+- `TestMutationUpdateBSONSetConcurrentFields` parks one native-wire singleton
+  update after its initial read. A second connection commits a change to a
+  different field on the same document. Both clients must report one match and
+  one modification. After a checkpoint and checked close, a fresh connection
+  reads both field values from the reopened database.
+
 - `TestCOWNativewireInsertResultIDParity` exercises Client -> Server -> public
   shared COW insertion for JSON/BSON with returned and omitted IDs under all
   three production profiles. It checks native BSON binary bytes, caller-buffer
