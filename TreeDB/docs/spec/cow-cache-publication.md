@@ -621,6 +621,18 @@ reentry error before teardown begins.
 Public checkpoints, explicit durable requests and synchronous pressure retain
 their original WAL operations.
 
+After the ordinary relaxed native worker's captured WAL sync succeeds and
+before DATA publication, it may reserve ext4 blocks on the same retained
+stream file through Linux `FALLOC_FL_KEEP_SIZE`. The captured byte frontier
+must have reached 64 MiB. Each reservation starts on a full block beyond that
+frontier and ends within 8 MiB or at the configured segment target, whichever
+comes first. A later capture extends that window only when less than half
+remains. The retained descriptor ties the reservation to the captured inode
+even if append or rotation has progressed. The reservation preserves logical
+EOF and the captured LSN. Successful and partial allocations consume disk or
+quota space. A capacity or capability refusal stops further attempts on that
+retained inode. Hard allocation I/O errors follow the journal fail-stop.
+
 The running worker retains its first captured size threshold; later
 StartAutoCheckpoint calls do not change that worker's behavior. Capability
 selection uses that captured positive threshold, not merely a later notification

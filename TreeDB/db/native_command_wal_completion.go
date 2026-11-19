@@ -57,6 +57,8 @@ func (intent *CommandWALIntent) IsNewNativeBSONUpdate() bool {
 // physical WAL flush as FlushCommandWAL(true). Capture flushes and pins the
 // exact active segment before unlocking the journal. Its sync does not cover
 // retired segments, close dependency debt, append a barrier, or advance W.
+// After a successful sync the worker may reserve a bounded tail beyond that
+// prefix on the same ext4 stream. Reservation supplies no durability proof.
 func (db *DB) SyncPrivateCOWGenerationWAL(owner *transactionowner.Owner) error {
 	if db == nil || owner == nil || owner != db.privateCOWOwner || !db.commandWAL || db.durability != DurabilityWALOnRelaxed {
 		return ErrNativeSemanticUnsupported
@@ -76,7 +78,7 @@ func (db *DB) SyncPrivateCOWGenerationWAL(owner *transactionowner.Owner) error {
 	target, err := db.commandJournal.CaptureSync(nil)
 	if err == nil {
 		defer target.Release()
-		err = target.Sync()
+		err = target.SyncGenerationWAL()
 	}
 	if err == nil && db.testFailCommandWALFlush.Load() {
 		err = errTestCommandWALFlushFailpoint

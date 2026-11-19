@@ -14,11 +14,13 @@ import (
 // count is protected by journal.mu; each capture retains it through Sync.
 // Frontier authority belongs to the immutable capture, not this handle owner.
 type capturedJournalFile struct {
-	token        *rootpublication.StableResourceToken
-	seq          uint64
-	refs         int
-	syncFile     func(*os.File) error
-	dataOnlySync bool // Immutable format of this exact retained segment, not the mutable writer.
+	token         *rootpublication.StableResourceToken
+	seq           uint64
+	refs          int
+	syncFile      func(*os.File) error
+	dataOnlySync  bool // Immutable format of this exact retained segment, not the mutable writer.
+	preferStream  bool // Original writer preference, including an occupied stream reopened on ext4.
+	streamReserve generationStreamReserve
 }
 
 // CapturedSync owns a complete flushed segment prefix independently of the
@@ -82,7 +84,10 @@ func (j *CommandJournal) CaptureSyncInto(target *CapturedSync, rotated []*rootpu
 		if j.capturedFile != nil {
 			j.releaseCapturedFileLocked(j.capturedFile)
 		}
-		j.capturedFile = &capturedJournalFile{token: token, seq: j.segmentSeq, refs: 1, syncFile: j.writer.syncFn, dataOnlySync: j.writer.fixed != nil}
+		j.capturedFile = &capturedJournalFile{
+			token: token, seq: j.segmentSeq, refs: 1, syncFile: j.writer.syncFn,
+			dataOnlySync: j.writer.fixed != nil, preferStream: j.writer.preferExt4Stream,
+		}
 	}
 	target.active = j.capturedFile
 	target.active.refs++
