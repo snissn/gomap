@@ -75,7 +75,11 @@ func cowBasisInstallCharge(shards, frozen int) uint64 {
 }
 
 func (c *cowCache) prepareCOWBasisInstall() (*cowReadCut, error) {
-	shards, frozen := len(c.writers), c.budget.Limits().MaxSources
+	return c.prepareCOWBasisInstallWithFrozen(c.budget.Limits().MaxSources)
+}
+
+func (c *cowCache) prepareCOWBasisInstallWithFrozen(frozen int) (*cowReadCut, error) {
+	shards := len(c.writers)
 	lease, err := c.maintenance.AcquireExternal(cowBasisInstallCharge(shards, frozen))
 	if err != nil {
 		return nil, err
@@ -87,14 +91,31 @@ func (c *cowCache) prepareCOWBasisInstall() (*cowReadCut, error) {
 }
 
 func (db *DB) installCOWBasis(basis *cowBackendBasis, covered *cowReadCut, generationPressure bool) (*cowReadCut, error) {
-	return db.installCOWBasisWithLeafPack(basis, covered, backenddb.LeafGenerationPackTransition{}, generationPressure)
+	c := db.cow
+	frozen := c.budget.Limits().MaxSources
+	if covered == nil {
+		// The equivalent refresh caller fences both physical cutovers and
+		// producer admission, including draining already-admitted writers.
+		// The current frozen cardinality suffices until the next producer-owned
+		// cut, which always has its own independently admitted source vectors.
+		c.cutMu.Lock()
+		if old := c.cut; old != nil {
+			frozen = len(old.frozen)
+		}
+		c.cutMu.Unlock()
+	}
+	return db.installCOWBasisWithFrozen(basis, covered, backenddb.LeafGenerationPackTransition{}, generationPressure, frozen)
 }
 
 func (db *DB) installCOWBasisWithLeafPack(basis *cowBackendBasis, covered *cowReadCut, transition backenddb.LeafGenerationPackTransition, generationPressure bool) (*cowReadCut, error) {
+	return db.installCOWBasisWithFrozen(basis, covered, transition, generationPressure, db.cow.budget.Limits().MaxSources)
+}
+
+func (db *DB) installCOWBasisWithFrozen(basis *cowBackendBasis, covered *cowReadCut, transition backenddb.LeafGenerationPackTransition, generationPressure bool, frozen int) (*cowReadCut, error) {
 	c := db.cow
-	next, err := c.prepareCOWBasisInstall()
+	next, err := c.prepareCOWBasisInstallWithFrozen(frozen)
 	if err != nil {
-		if generationPressure && err == memtable.ErrCOWCapacity && c.canRetryCOWBasisSuccessor(basis) {
+		if generationPressure && err == memtable.ErrCOWCapacity && c.canRetryCOWBasisSuccessor(basis, frozen) {
 			// The caller can mark this pre-swap refusal retryable after
 			// it has successfully released the captured private basis.
 			err = &cowGenerationSnapshotAllocationRefusal{error: err, basisRefresh: true}
@@ -126,7 +147,7 @@ func (db *DB) installCOWBasisWithLeafPack(basis *cowBackendBasis, covered *cowRe
 	return old, err
 }
 
-func (c *cowCache) canRetryCOWBasisSuccessor(basis *cowBackendBasis) bool {
+func (c *cowCache) canRetryCOWBasisSuccessor(basis *cowBackendBasis, frozen int) bool {
 	// The shared flush fence keeps the live backend basis installed until this
 	// refresh swaps it. Neither it nor the private candidate can be refunded
 	// to make room for their successor vector.
@@ -138,7 +159,7 @@ func (c *cowCache) canRetryCOWBasisSuccessor(basis *cowBackendBasis) bool {
 	}
 	// Each cut holds its original basis lease while installed. A current cut
 	// itself can also occupy this same partition after an earlier handoff.
-	bytes := cowBasisInstallCharge(len(c.writers), c.budget.Limits().MaxSources)
+	bytes := cowBasisInstallCharge(len(c.writers), frozen)
 	return c.maintenance.ExternalAllocationFitsWith(bytes, old.basis.lease, basis.lease, old.lease)
 }
 

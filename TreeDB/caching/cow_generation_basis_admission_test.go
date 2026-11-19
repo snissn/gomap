@@ -3,6 +3,7 @@ package caching
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -136,75 +137,84 @@ func TestCOWGenerationWorkerRetriesBasisRefreshSuccessorAdmission(t *testing.T) 
 	}
 }
 
-func TestCOWGenerationWorkerRejectsImpossibleBasisRefreshSuccessor(t *testing.T) {
-	limits := memtable.DefaultCOWLimits()
-	limits.MaxGenerations = 1 << 20
-	limits.MaxSources = limits.MaxGenerations
-	cache, db := nativeBridgeFixtureWithLimits(t, true, limits)
-	backend := &generationBasisCaptureBackend{DB: db}
-	cache.backend = backend
-	if charge := cowCutCharge(len(cache.cow.writers), limits.MaxSources); charge <= cache.cow.maintenance.Limits().MaxTotalBytes {
-		t.Fatalf("fixed successor vectors fit the maintenance budget: %d", charge)
-	}
-	if err := cache.RunBackendMaintenance(nil); !errors.Is(err, memtable.ErrCOWCapacity) || !strings.Contains(err.Error(), "install COW basis") {
-		t.Fatalf("real successor allocation did not refuse fixed geometry: %v", err)
-	}
-	var reported error
-	cache.notifyError = func(err error) { reported = err }
-	captures := backend.captures.Load()
-	if retry, refusal := cache.maintainCOWGenerationPressure(); retry || refusal != nil {
-		t.Fatalf("worker retried a successor that exceeds the whole maintenance budget: retry=%t, refusal=%v", retry, refusal)
-	}
-	if backend.captures.Load() != captures+1 || !errors.Is(reported, memtable.ErrCOWCapacity) || !strings.Contains(reported.Error(), "install COW basis") {
-		t.Fatalf("worker lost the hard successor error: %v", reported)
-	}
-	if err := cache.Close(); !errors.Is(err, reported) {
-		t.Fatalf("checked Close lost the original hard refusal: %v", err)
-	}
-}
+func TestCOWGenerationBasisRefreshReservesActualSources(t *testing.T) {
+	const heldSourceCapacity = 1 << 20
+	for _, capacity := range []uint64{50_784, 56_000, 63_599, 108_000, heldSourceCapacity} {
+		t.Run(fmt.Sprint(capacity), func(t *testing.T) {
+			t.Setenv(envDisableVlogGenerationLoop, "1")
+			limits := memtable.DefaultCOWLimits()
+			limits.MaxSources, limits.MaxGenerations = 512, 512
+			limits.MaxInFlightBytes = 2 * capacity
+			cache, db := nativeBridgeFixtureWithLimits(t, true, limits)
+			budget := cache.cow.maintenance
+			backend := &generationBasisCaptureBackend{DB: db}
+			cache.backend = backend
 
-func TestCOWGenerationWorkerRejectsImpossibleBasisRefreshOverlap(t *testing.T) {
-	t.Setenv(envDisableVlogGenerationLoop, "1")
-	limits := memtable.DefaultCOWLimits()
-	limits.MaxSources, limits.MaxGenerations = 512, 512
-	leaseBytes := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
-	successorCharge := cowBasisInstallCharge(2, limits.MaxSources) + leaseBytes
-	limits.MaxInFlightBytes = 2 * (successorCharge + 1024)
-	cache, db := nativeBridgeFixtureWithLimits(t, true, limits)
-	backend := &generationBasisCaptureBackend{DB: db}
-	cache.backend = backend
-	budget := cache.cow.maintenance
-	limit := budget.Limits().MaxTotalBytes
-	openingCharge, _ := budget.MaintenanceUsage()
-	var capturedCharge uint64
-	backend.afterCapture = func() {
-		capturedCharge, _ = budget.MaintenanceUsage()
-	}
-	prefix, commit, nextLSN := cache.cow.prefix.LogicalFrontiers(), db.State().CommitSeq, db.CommandWALNextLSN()
-	original := cache.cow.cut
-	if err := cache.RunBackendMaintenance(nil); !errors.Is(err, memtable.ErrCOWCapacity) || !strings.Contains(err.Error(), "install COW basis") {
-		t.Fatalf("actual private successor admission did not refuse: %v", err)
-	}
-	after, _ := budget.MaintenanceUsage()
-	if successorCharge > limit-budget.Stats().ControlBytes || capturedCharge <= openingCharge || capturedCharge+successorCharge <= limit || after != openingCharge {
-		t.Fatalf("fixture did not reach mandatory overlap: live=%d captured=%d after=%d successor=%d limit=%d", openingCharge, capturedCharge, after, successorCharge, limit)
-	}
-	var reported error
-	cache.notifyError = func(err error) { reported = err }
-	if retry, allocation := cache.maintainCOWGenerationPressure(); retry || allocation != nil {
-		t.Fatalf("fixed overlap kept retrying the pending basis: live=%d captured=%d successor=%d limit=%d retry=%t allocation=%v", openingCharge, capturedCharge, successorCharge, limit, retry, allocation)
-	}
-	if !errors.Is(reported, memtable.ErrCOWCapacity) || !strings.Contains(reported.Error(), "install COW basis") {
-		t.Fatalf("worker lost the hard successor refusal: %v", reported)
-	}
-	if cache.cow.cut != original || cache.cow.prefix.LogicalFrontiers() != prefix || db.State().CommitSeq != commit || db.CommandWALNextLSN() != nextLSN {
-		t.Fatal("pre-swap refusal changed the current publication authority")
-	}
-	if err := cache.Set([]byte("key"), []byte("value")); !errors.Is(err, memtable.ErrCOWCapacity) {
-		t.Fatalf("write crossed the unresolved basis refresh: %v", err)
-	}
-	if err := cache.Close(); !errors.Is(err, reported) {
-		t.Fatalf("checked Close lost the original hard refusal: %v", err)
+			// At the larger cap, preserve a real frozen source across both swaps.
+			var hold *Snapshot
+			key, value := []byte("key"), []byte("frozen suffix")
+			if capacity == heldSourceCapacity {
+				if err := cache.Set(key, value); err != nil {
+					t.Fatal(err)
+				}
+				if err := cache.rolloverCOWForFlush(); err != nil {
+					t.Fatal(err)
+				}
+				hold = cache.AcquireSnapshot()
+				if hold == nil {
+					t.Fatal("cannot hold the original frozen source")
+				}
+				t.Cleanup(func() { _ = hold.Close() })
+			}
+			original := cache.cow.cut
+			frozen := len(original.frozen)
+			if hold != nil && frozen == 0 {
+				t.Fatal("no actually frozen source")
+			}
+			frontiers, commit, nextLSN := cache.cow.prefix.LogicalFrontiers(), db.State().CommitSeq, db.CommandWALNextLSN()
+			for attempt := 1; attempt <= 2; attempt++ {
+				old := cache.cow.cut
+				oldBasis := old.basis
+				if err := cache.RunBackendMaintenance(nil); err != nil {
+					t.Fatalf("basis refresh %d: %v", attempt, err)
+				}
+				installed := cache.cow.cut
+				if installed == old || installed.basis == oldBasis || len(installed.frozen) != frozen || cap(installed.frozen) != frozen ||
+					cap(installed.sources) != len(installed.shards)+frozen || cache.cow.refreshRequired.Load() {
+					t.Fatalf("refresh %d did not install an exact-size successor: frozen length=%d capacity=%d source capacity=%d", attempt, len(installed.frozen), cap(installed.frozen), cap(installed.sources))
+				}
+				if cache.cow.prefix.LogicalFrontiers() != frontiers || db.State().CommitSeq != commit || db.CommandWALNextLSN() != nextLSN {
+					t.Fatalf("refresh %d changed logical authority", attempt)
+				}
+				if hold != nil {
+					if installed.frozen[0].root != original.frozen[0].root {
+						t.Fatalf("refresh %d replaced the original frozen root", attempt)
+					}
+					if got, err := hold.Get(key); err != nil || string(got) != string(value) {
+						t.Fatalf("held frozen source after refresh %d: %q, %v", attempt, got, err)
+					}
+					if got, err := cache.Get(key); err != nil || string(got) != string(value) {
+						t.Fatalf("current frozen source after refresh %d: %q, %v", attempt, got, err)
+					}
+				}
+			}
+			if backend.captures.Load() != 2 {
+				t.Fatalf("expected two actual backend captures, got %d", backend.captures.Load())
+			}
+			if hold != nil {
+				if err := hold.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := cache.Close(); err != nil {
+				t.Fatal(err)
+			}
+			closedStats := budget.Stats()
+			closedStats.PeakBytes = 0
+			if closedStats != (memtable.COWStats{}) {
+				t.Fatalf("basis refreshes left maintenance memory or pins after Close: %+v", closedStats)
+			}
+		})
 	}
 }
 
