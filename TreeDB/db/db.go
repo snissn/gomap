@@ -598,8 +598,7 @@ type DB struct {
 	testAfterOptimisticPublishPrepareHook          func()
 	testCommandWALAfterBuilderAcquireHook          func()
 	testCommandWALBeforeDurablePublishLockHook     func()
-	testCommandWALCleanupBeforeSegmentScanHook     func(string)
-	testCommandWALCleanupAfterScanHook             func()
+	testCommandWALCleanupHooks                     *commandWALCleanupTestHooks
 	testBeforeFinalizeCommitHook                   func()
 	testAfterFinalizeRootSerializationReleaseHook  func()
 	testDurableRootCandidatePreparedHook           func()

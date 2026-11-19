@@ -110,16 +110,16 @@ func TestCommandWALCleanupZeroFrontierSafety(t *testing.T) {
 				}
 			case "stale_root":
 				wantErr = errDurableWALCleanupProofStale
-				database.testCommandWALCleanupAfterScanHook = func() {
+				database.testCommandWALCleanupHooks = &commandWALCleanupTestHooks{afterScan: func() {
 					database.durableRoot.pending = &durableRootPublishCandidateV1{}
-				}
+				}}
 			case "stale_journal":
 				wantErr = commitlog.ErrCommandWALCleanupSnapshotStale
-				database.testCommandWALCleanupAfterScanHook = func() {
+				database.testCommandWALCleanupHooks = &commandWALCleanupTestHooks{afterScan: func() {
 					if err := database.commandJournal.Close(); err != nil {
 						t.Fatal(err)
 					}
-				}
+				}}
 			case "pending_rotation":
 				wantErr = commitlog.ErrCommandWALCleanupSnapshotStale
 				before, err := database.commandJournal.CaptureCleanupSnapshot()
@@ -135,7 +135,7 @@ func TestCommandWALCleanupZeroFrontierSafety(t *testing.T) {
 						rotation.Release()
 					}
 				})
-				database.testCommandWALCleanupAfterScanHook = func() {
+				database.testCommandWALCleanupHooks = &commandWALCleanupTestHooks{afterScan: func() {
 					// Actual first-frame physical pressure creates pending stable
 					// ownership; an explicit completed rotation is monotonic.
 					payload, err := commitlog.EncodeRawKVBatchPayload([]commitlog.RawKVOperation{{
@@ -156,15 +156,15 @@ func TestCommandWALCleanupZeroFrontierSafety(t *testing.T) {
 					if err != nil || lsn != durableLSN+1 || after.ActiveSegmentMaxLSN != lsn || after.PendingStableRotation == 0 || after.SegmentSeq != before.SegmentSeq+1 || after.ActivePath == before.ActivePath {
 						t.Fatalf("actual pressure append did not activate pending rotation: before=%+v after=%+v lsn=%d err=%v", before, after, lsn, err)
 					}
-				}
+				}}
 			case "replaced_identity":
 				wantErr = ErrRecoveryRequired
-				database.testCommandWALCleanupAfterScanHook = func() {
+				database.testCommandWALCleanupHooks = &commandWALCleanupTestHooks{afterScan: func() {
 					if err := os.Rename(empty, empty+".old"); err != nil {
 						t.Fatal(err)
 					}
 					writeEmptyFixedCleanupSegment(t, dir, emptySeq, 8192)
-				}
+				}}
 			}
 			err := database.CleanupCommandWALCoveredSegments(true)
 			if !errors.Is(err, wantErr) {

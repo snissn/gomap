@@ -15,6 +15,13 @@ import (
 // and the mutable suffix are scanned under the original append exclusion.
 const maxOpenClosedWALCleanupSegments = 8
 
+// commandWALCleanupTestHooks gives cleanup's per-handle observation points one
+// slot in DB. These callbacks are installed only by tests before starting cleanup.
+type commandWALCleanupTestHooks struct {
+	beforeSegment func(string)
+	afterScan     func()
+}
+
 type cleanupClosedWALFile struct {
 	segment  logSegment
 	file     *os.File
@@ -59,7 +66,10 @@ func simpleCommandWALCleanupInventory(dir string, current commitlog.CommandJourn
 }
 
 func (db *DB) scanCommandWALCleanupProof(proof durableWALCleanupProofV1, scanSealedPrefix bool) ([]commandWALSegmentCleanupDecision, error) {
-	beforeSegment := db.testCommandWALCleanupBeforeSegmentScanHook
+	var beforeSegment func(string)
+	if hooks := db.testCommandWALCleanupHooks; hooks != nil {
+		beforeSegment = hooks.beforeSegment
+	}
 	scan := newCommandWALCleanupScan(proof.cleanupThrough, proof.durableWALLSN, db.walMaxSegmentBytes, beforeSegment)
 	if !scanSealedPrefix {
 		// Checkpoint, Close, and explicit cleanup use the original locked scan.

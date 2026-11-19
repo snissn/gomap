@@ -974,8 +974,8 @@ func (db *DB) cleanupCommandWALCoveredSegmentsV1(scanSealedPrefix bool) (retErr 
 		db.commandWALCleanupScanNs.Add(scanNs)
 	}
 	defer closeCommandWALCleanupDecisions(decisions)
-	if err == nil && db.testCommandWALCleanupAfterScanHook != nil {
-		db.testCommandWALCleanupAfterScanHook()
+	if hooks := db.testCommandWALCleanupHooks; err == nil && hooks != nil && hooks.afterScan != nil {
+		hooks.afterScan()
 	}
 	if err == nil {
 		db.durablePublishMu.Lock()

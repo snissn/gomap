@@ -182,14 +182,14 @@ func testCommandWALCleanupScanOverlap(t *testing.T, database *DB, cleanup func(*
 	t.Helper()
 	reached, release := make(chan struct{}), make(chan struct{})
 	var scanned []string
-	database.testCommandWALCleanupBeforeSegmentScanHook = func(path string) {
+	database.testCommandWALCleanupHooks = &commandWALCleanupTestHooks{beforeSegment: func(path string) {
 		scanned = append(scanned, path)
 		if path == closedPath && len(scanned) == 1 {
 			close(reached)
 			<-release
 		}
-	}
-	defer func() { database.testCommandWALCleanupBeforeSegmentScanHook = nil }()
+	}}
+	defer func() { database.testCommandWALCleanupHooks = nil }()
 	cleanupDone := make(chan error, 1)
 	go func() { cleanupDone <- cleanup(database) }()
 	select {
