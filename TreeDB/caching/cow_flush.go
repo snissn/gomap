@@ -510,6 +510,7 @@ func (db *DB) flushCOWFrozenCutWithColumnCompaction(syncFlush bool, publish *che
 		}
 	}()
 	var localRange [1]backenddb.CommandWALLSNRange
+	var sealedFallback bool
 	if c.prefix != nil {
 		h.prefix, err = c.prefix.CaptureAcceptedCut(target, rootpublication.LogicalRootSet{Raw: cut, Semantic: cut.frozenSemanticRootSet})
 		if err != nil {
@@ -521,6 +522,12 @@ func (db *DB) flushCOWFrozenCutWithColumnCompaction(syncFlush bool, publish *che
 		if !ok {
 			return backenddb.ErrClosed
 		}
+		// Fallback convergence republishes an already sealed basis into the
+		// other recovery slot. Any later commands belong to a different cut.
+		// The fallback still performs its full DATA publication.
+		sealedFallback = forceIdle && operation == nil && len(cut.frozen) == 0 &&
+			target.CanonicalLSN == basis.AppliedCommandLSN && target.LogicalSequence == cut.basis.logicalSeq &&
+			target == c.prefix.LogicalFrontiers().S
 		if target.CanonicalLSN > basis.AppliedCommandLSN {
 			localRange[0] = backenddb.CommandWALLSNRange{First: basis.AppliedCommandLSN + 1, Last: target.CanonicalLSN}
 			localPublish.appliedLSN, localPublish.ranges = target.CanonicalLSN, localRange[:]
@@ -544,7 +551,9 @@ func (db *DB) flushCOWFrozenCutWithColumnCompaction(syncFlush bool, publish *che
 		if generationPressure && canCapture && c.txnOwner != nil {
 			err = captured.SyncPrivateCOWGenerationWAL(c.txnOwner)
 		} else if syncFlush {
-			err = wal.FlushCommandWAL(true)
+			// Always drain the writer and surface journal-local failures, even
+			// when the command prefix already has durable root coverage.
+			err = wal.FlushCommandWAL(!sealedFallback)
 		} else {
 			err = wal.CheckCommandWALPublishReady()
 		}

@@ -1215,6 +1215,10 @@ One synchronous publication executes in this order:
 7. install visible state and only then advance frontiers or release overwritten
    generation ownership.
 
+A COW checkpoint that republishes the same sealed basis to the alternate slot
+reuses its existing command-WAL coverage. The new publication still performs
+the dependency, index, and meta barriers for that slot.
+
 Preparation derives the dependency-manifest reference directly from its
 immutable payload and reserved page interval. It does not encode disposable
 pages to obtain that reference. Actual materialization still writes the complete
