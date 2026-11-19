@@ -852,9 +852,9 @@ func (db *DB) CleanupCommandWALCoveredSegmentsAtCheckpoint(_ bool) error {
 
 // CleanupCommandWALCoveredPrefix consumes cleanup debt created by
 // PrepareCommandWALCoveredPrefixCleanup. The boolean reports whether the debt
-// was serviced. A stale or temporarily unavailable proof leaves every segment
-// intact and asks the existing automatic-checkpoint worker to try once on a
-// later event.
+// was serviced. A pin refusal before unlink or a stale or temporarily
+// unavailable proof asks the existing automatic-checkpoint worker to retry on
+// a later event.
 func (db *DB) CleanupCommandWALCoveredPrefix() (bool, error) {
 	if db == nil || !db.commandWAL {
 		return true, nil
@@ -865,7 +865,10 @@ func (db *DB) CleanupCommandWALCoveredPrefix() (bool, error) {
 		return false, ErrClosed
 	}
 	err := db.cleanupCommandWALCoveredSegmentsV1(true)
-	if errors.Is(err, errDurableWALCleanupProofUnavailable) ||
+	// The exact refusal means deletion preflight found a live pin before any
+	// unlink. A joined error can include namespace damage and must propagate.
+	if err == rootpublication.ErrResourcePinned ||
+		errors.Is(err, errDurableWALCleanupProofUnavailable) ||
 		errors.Is(err, errDurableWALCleanupProofStale) ||
 		errors.Is(err, commitlog.ErrCommandWALCleanupSnapshotStale) {
 		return false, nil
