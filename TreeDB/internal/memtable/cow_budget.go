@@ -179,6 +179,29 @@ func (b *COWBudget) AcquireExternal(bytes uint64) (*COWExternalLease, error) {
 	return b.acquireExternal(bytes, false)
 }
 
+// ExternalAllocationFitsWith reports whether a new lease can coexist with the
+// distinct required leases after every other allocation is refunded. Leases
+// charged to another budget do not consume this budget's capacity.
+func (b *COWBudget) ExternalAllocationFitsWith(bytes uint64, required ...*COWExternalLease) bool {
+	charge, ok := cowAdd(bytes, cowAllocation(uint64(unsafe.Sizeof(COWExternalLease{}))))
+	if !ok {
+		return false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, lease := range required {
+		if lease == nil || lease.budget != b || lease.closed {
+			continue
+		}
+		charge, ok = cowAdd(charge, lease.charge)
+		if !ok {
+			return false
+		}
+	}
+	return !b.closed && cowFits(b.limits.MaxTotalBytes, b.stats.ControlBytes, charge) &&
+		charge <= b.limits.MaxInFlightBytes && charge <= b.limits.MaxRetiredBytes
+}
+
 // nativeSource is used only by the original prewrite native generation cell.
 // Slot and metadata admission are one original budget operation; the cell,
 // rather than the external allocation receipt, releases the slot at last edge.

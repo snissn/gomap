@@ -94,14 +94,10 @@ func (db *DB) installCOWBasisWithLeafPack(basis *cowBackendBasis, covered *cowRe
 	c := db.cow
 	next, err := c.prepareCOWBasisInstall()
 	if err != nil {
-		if generationPressure && err == memtable.ErrCOWCapacity {
-			budget := c.maintenance
-			charge := cowBasisInstallCharge(len(c.writers), c.budget.Limits().MaxSources) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
-			if charge <= budget.Limits().MaxTotalBytes-budget.Stats().ControlBytes {
-				// The caller can mark this pre-swap refusal retryable after
-				// it has successfully released the captured private basis.
-				err = &cowGenerationSnapshotAllocationRefusal{error: err, basisRefresh: true}
-			}
+		if generationPressure && err == memtable.ErrCOWCapacity && c.canRetryCOWBasisSuccessor(basis) {
+			// The caller can mark this pre-swap refusal retryable after
+			// it has successfully released the captured private basis.
+			err = &cowGenerationSnapshotAllocationRefusal{error: err, basisRefresh: true}
 		}
 		return nil, err
 	}
@@ -128,6 +124,22 @@ func (db *DB) installCOWBasisWithLeafPack(basis *cowBackendBasis, covered *cowRe
 	}
 	finished = true
 	return old, err
+}
+
+func (c *cowCache) canRetryCOWBasisSuccessor(basis *cowBackendBasis) bool {
+	// The shared flush fence keeps the live backend basis installed until this
+	// refresh swaps it. Neither it nor the private candidate can be refunded
+	// to make room for their successor vector.
+	c.cutMu.Lock()
+	defer c.cutMu.Unlock()
+	old := c.cut
+	if old == nil {
+		return false
+	}
+	// Each cut holds its original basis lease while installed. A current cut
+	// itself can also occupy this same partition after an earlier handoff.
+	bytes := cowBasisInstallCharge(len(c.writers), c.budget.Limits().MaxSources)
+	return c.maintenance.ExternalAllocationFitsWith(bytes, old.basis.lease, basis.lease, old.lease)
 }
 
 // A failed private successor owns no published raw-root edges. End its semantic
