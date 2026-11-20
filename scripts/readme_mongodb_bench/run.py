@@ -176,7 +176,7 @@ def json_command(case, stem, argv, **kwargs):
     return strict_json(command(case, stem, argv, **kwargs))
 
 
-def gateway(case, data, profile, stem):
+def gateway(case, data, profile, stem, *, extra_env=None):
     argv = [str(BIN/'treedb-mongo-gateway'), '-addr', '127.0.0.1:0', '-dir', str(data),
             '-profile', profile, '-document-format', 'bson',
             '-max-find-scan-documents', '500000', '-max-cursor-retained-bytes', '536870912']
@@ -184,7 +184,8 @@ def gateway(case, data, profile, stem):
     err = (case/(stem+'.err')).open('x')
     service = dict(kind='gomap', process=None, handles=(out, err), stem=stem, stopped=False, stop_attempts=0)
     SERVICES.append(service)
-    p = subprocess.Popen(argv, cwd=REPO, env=ENV, stdout=out, stderr=err, start_new_session=True)
+    p = subprocess.Popen(argv, cwd=REPO, env={**ENV, **(extra_env or {})},
+                         stdout=out, stderr=err, start_new_session=True)
     service['process'] = p
     rec = dict(kind='native_'+platform.system().lower()+'_gateway', argv=argv, pid=p.pid, started_utc=now(),
                binary_sha256=sha(BIN/'treedb-mongo-gateway'), profile=profile,
@@ -357,11 +358,11 @@ def parse_ycsb(text, expected, phase):
     return rows
 
 
-def ycsb_phase(case, phase, uri, count, ops, profile):
+def ycsb_phase(case, phase, uri, count, ops, profile, *, threads=16):
     env = dict(YCSB_CLOSE_RECEIPT_PATH=str(case/(phase+'.close.json')),
                YCSB_PHASE_ID=case.name+'-'+phase, YCSB_CLIENT_BUILD_ID=FREEZE['binaries']['go-ycsb'],
                YCSB_PROFILE=profile)
-    props = dict(recordcount=count, operationcount=ops, threadcount=16, fieldcount=10,
+    props = dict(recordcount=count, operationcount=ops, threadcount=threads, fieldcount=10,
                  fieldlength=100, readallfields='true', writeallfields='false',
                  insertorder='hashed', keyprefix='user', zeropadding=1, insertstart=0,
                  requestdistribution='uniform', readproportion=.95, updateproportion=.05,

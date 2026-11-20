@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -2788,6 +2789,32 @@ func TestTreeDBFullMaintenancePreservesBenchmarkProfile(t *testing.T) {
 				if !bytes.Equal(got, want) {
 					t.Fatalf("maintained document %d differs from inserted BSON", ordinal)
 				}
+				ids, err := col.FindByIndexValue("email_1", benchmarkEmail(ordinal))
+				if err != nil || len(ids) != 1 || !bytes.Equal(ids[0], key) {
+					t.Fatalf("maintained email index at document %d: ids=%x want %x, err=%v", ordinal, ids, key, err)
+				}
+			}
+
+			city := benchmarkCity(0)
+			var wantCityKeys [][]byte
+			for ordinal := 0; ordinal < cfg.Documents; ordinal++ {
+				if benchmarkCity(ordinal) != city {
+					continue
+				}
+				key, _, err := directTreeDBBenchmarkDocument(ordinal, cfg.DocumentShape, cfg.TreeDBDocumentFormat)
+				if err != nil {
+					t.Fatal(err)
+				}
+				wantCityKeys = append(wantCityKeys, key)
+			}
+			cityKeys, err := col.FindByIndexValue("city_1", city)
+			if err != nil {
+				t.Fatalf("look up maintained city index: %v", err)
+			}
+			slices.SortFunc(cityKeys, bytes.Compare)
+			slices.SortFunc(wantCityKeys, bytes.Compare)
+			if !slices.EqualFunc(cityKeys, wantCityKeys, bytes.Equal) {
+				t.Fatalf("maintained city index keys=%x want %x", cityKeys, wantCityKeys)
 			}
 		})
 	}
