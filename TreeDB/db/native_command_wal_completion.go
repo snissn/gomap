@@ -30,6 +30,54 @@ func (db *DB) BindNativeCommandWALCompletion(owner *transactionowner.Owner, brid
 	return nil
 }
 
+// NativeCommandWALPrefixEligible checks the original active native owner and
+// the open journal's actual container. Relaxed owners keep their root checkpoint
+// boundary, including stores that retain a fixed segment from an earlier policy.
+func (db *DB) NativeCommandWALPrefixEligible(owner *transactionowner.Owner) (bool, error) {
+	if db == nil {
+		return false, ErrClosed
+	}
+	db.teardownMu.RLock()
+	defer db.teardownMu.RUnlock()
+	if db.closing.Load() {
+		return false, ErrClosed
+	}
+	if err := db.commandWALPoisonedError(); err != nil {
+		return false, err
+	}
+	if owner == nil || owner != db.privateCOWOwner || !db.nativeSemanticActive.Load() || !db.HasNativeSemanticBridge() {
+		return false, ErrNativeSemanticUnsupported
+	}
+	if err := db.ActivateNativeSemanticOwner(); err != nil {
+		return false, err
+	}
+	if !db.commandWAL || db.resolvedProfile != ProfileCommandWALDurable {
+		return false, nil
+	}
+	if db.commandJournal == nil {
+		return false, db.commandWALJournalUnavailableError()
+	}
+	return db.commandJournal.HasFixedWriter(), nil
+}
+
+// SyncNativeCommandWALPrefix delegates admission and physical completion to the
+// original public owner. A healthy capability miss permits a root checkpoint.
+func (db *DB) SyncNativeCommandWALPrefix() (selected bool, err error) {
+	if db == nil {
+		return false, ErrClosed
+	}
+	if db.resolvedProfile != ProfileCommandWALDurable {
+		return false, nil
+	}
+	syncer, ok := db.nativeCommandWALCompletion.(interface {
+		SyncNativeCommandWALPrefix() (bool, error)
+	})
+	if !ok {
+		return false, nil
+	}
+	return syncer.SyncNativeCommandWALPrefix()
+}
+
 // NativeCommandWALCompletionFor authenticates the original unassigned intent.
 // Already-combined publications keep their existing synchronous ordinal path.
 func (db *DB) NativeCommandWALCompletionFor(owner *transactionowner.Owner, intent *CommandWALIntent, requestedSync bool) (NativeCommandWALCompletionBridge, bool, error) {

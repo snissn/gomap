@@ -1157,6 +1157,14 @@ func (j *CommandJournal) ActiveBytes() int64 {
 	return bytes
 }
 
+// HasFixedWriter reports the active physical container, including an
+// occupied segment whose on-disk format overrides the creation policy.
+func (j *CommandJournal) HasFixedWriter() bool {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return !j.closing && !j.closed && j.writer != nil && j.writer.f != nil && j.writer.fixed != nil
+}
+
 func (j *CommandJournal) WriterBufferStats() WriterBufferStats {
 	if j == nil {
 		return WriterBufferStats{}

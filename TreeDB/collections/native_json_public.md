@@ -303,13 +303,13 @@ buffers until their last owner closes.
 
 ## WAL, physical construction and failure
 
-`CollectionManager.SyncForStandaloneWriteConcern` synchronizes the same cache
-owner's complete captured raw/collection prefix with its existing checkpoint.
-It reports `physicalSync=true` on success, including a repeated sync. Command-WAL
-profiles synchronize the covered command/dependency prefix; NoWAL synchronizes
-its physical checkpoint. This does not acquire a legacy publisher or change the
-profile-dependent acknowledgement returned by native `Commit`; physical
-checkpoint completion remains a separate boundary.
+`CollectionManager.SyncForStandaloneWriteConcern` uses the original native
+owner. An active durable command WAL with a fixed-format writer synchronizes
+the captured journal prefix and its persistent dependencies. Other native
+owners synchronize the complete captured raw/collection prefix through their
+checkpoint. A successful native call reports `physicalSync=true`. Index
+maintenance uses its own physical checkpoint boundary. Native `Commit` follows
+the ordinary acknowledgement boundary of its configured profile.
 
 A multi-member transaction appends one canonical bounded nonrecursive composite
 command and installs one complete logical successor. Its raw member binds the
