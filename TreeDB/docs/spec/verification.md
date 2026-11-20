@@ -68,6 +68,18 @@ the retained record and requires the original file error after its close.
   preserved error causes and a subsequent healthy public write/checkpoint.
   Its synthetic descriptor failure does not simulate physical I/O failure.
 
+- `TestNativeOrdinaryProjectedGenerationPressure` uses the canonical
+  100,000-document BSON fixture at both 1,000- and 16,000-document batch sizes with
+  the stock standalone COW limits. It checks generation refusal below the advisory
+  watermark, one sequence/LSN/COW publication per acknowledged batch, exact
+  returned IDs, held-read values, separately checked checkpoint, original Close,
+  full live and reopen payload census, and empty original budget and pins.
+  `TestNativeOrdinaryProjectedGenerationControls` checks that oversized requests
+  and the validated, gateway and explicit transaction paths reject before
+  assignment, joins original refunds, proves a stale receipt skips physical
+  rollover, and checks intervening duplicate and schema changes on a fresh
+  attempt. Existing actual postappend and recovery tests retain their scope.
+
 - `TestMutationUpdateBSONSetConcurrentFields` parks one native-wire singleton
   update after its initial read. A second connection commits a change to a
   different field on the same document. Both clients must report one match and

@@ -125,7 +125,7 @@ func (c *Collection) nativeUpdateBatchModeObserved(items []UpdateBatchItem, mode
 		if retry == nil {
 			err = tx.Commit()
 		} else {
-			err = tx.commitNativePlanObserved(false, nil, false, nil, nil, retry)
+			err = tx.commitNativePlanObserved(false, nil, false, nil, nil, retry, nil)
 		}
 		if err != nil {
 			return nil, false, err

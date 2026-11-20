@@ -6,6 +6,18 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
 
+func (e *nativeEngineVersion) NativeProjectedGenerationNeedsRollover(pressure backenddb.NativeProjectedGenerationPressure) bool {
+	c, ok := e.collections.Get(pressure.Collection)
+	if !ok || pressure.Refusal == nil {
+		return false
+	}
+	domain, ok := c.pending.Get(pressure.Domain)
+	if !ok || domain.pending == nil {
+		return false
+	}
+	return domain.pending.NeedsProjectedGenerationRollover(pressure.Refusal)
+}
+
 // prepareNativeEngineRollover prepares one complete immutable successor. The
 // caller adopts its returned edge BEFORE checking err. Partial failure belongs
 // only to Release on the original worker, after publication gates are released.

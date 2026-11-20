@@ -20,6 +20,10 @@ type nativeDomainAllocator interface {
 // source Publish establishes the original root ownership, not logical database
 // visibility; only the complete engine installation may expose the result.
 func prepareNativeDomainUpdate(base *nativeDomainState, name string, baseRoot, interpretation uint64, policy backenddb.OrderedRootStoragePolicy, entries []memtable.COWMutation, allocator nativeDomainAllocator) (*nativeDomainState, error) {
+	return prepareNativeDomainUpdateObserved(base, name, baseRoot, interpretation, policy, entries, allocator, false)
+}
+
+func prepareNativeDomainUpdateObserved(base *nativeDomainState, name string, baseRoot, interpretation uint64, policy backenddb.OrderedRootStoragePolicy, entries []memtable.COWMutation, allocator nativeDomainAllocator, reportProjection bool) (*nativeDomainState, error) {
 	if allocator == nil {
 		return nil, backenddb.ErrNativeSemanticUnsupported
 	}
@@ -42,7 +46,12 @@ func prepareNativeDomainUpdate(base *nativeDomainState, name string, baseRoot, i
 			return nil, err
 		}
 	}
-	prepared, err := writer.Prepare(entries, memtable.COWPrepareOptions{})
+	var prepared *memtable.COWPrepared
+	if reportProjection {
+		prepared, err = writer.PrepareNativeProjected(entries)
+	} else {
+		prepared, err = writer.Prepare(entries, memtable.COWPrepareOptions{})
+	}
 	if err != nil {
 		retirement := writer.Close()
 		writer = nil

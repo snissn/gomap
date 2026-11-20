@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 	"unsafe"
+	"weak"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
@@ -20,34 +21,56 @@ import (
 // transactions retain their original opening and are never retried here.
 const nativeInsertAttempts = 2
 
+// nativeInsertProjectedRefusal is private to the ordinary in-process attempt.
+// Its scope and weak schema stamp survive successful teardown without retaining
+// the captured catalog or any allocator edge.
+type nativeInsertProjectedRefusal struct {
+	pressure backenddb.NativeProjectedGenerationPressure
+	schema   weak.Pointer[nativeSchemaState]
+}
+
+func (r *nativeInsertProjectedRefusal) Error() string { return r.pressure.Refusal.Error() }
+func (r *nativeInsertProjectedRefusal) Unwrap() error { return r.pressure.Refusal }
+
 // InsertBatch is the one-shot form of Begin, staged InsertBatch, and Commit.
 func (m *NativeJSONManager) InsertBatch(name string, ids, documents [][]byte) error {
 	for attempt := 0; ; attempt++ {
 		tx, err := m.Begin(name)
-		_, retry, err := finishNativeJSONInsert(tx, err, ids, documents, nil, false, nil)
+		_, retry, err := finishNativeJSONInsert(tx, err, ids, documents, nil, false, nil, nil)
 		if !retry || attempt+1 == nativeInsertAttempts {
 			return err
 		}
 	}
 }
 
-func (m *NativeJSONManager) insertPrepared(name string, ids, documents [][]byte, stats *CollectionInsertStats, ordinaryOnly bool, projection *trustedFloat32Projection) (bool, bool, error) {
+func (m *NativeJSONManager) insertPrepared(name string, ids, documents [][]byte, stats *CollectionInsertStats, ordinaryOnly bool, projection *trustedFloat32Projection, projected **nativeInsertProjectedRefusal) (bool, bool, error) {
 	tx, err := m.beginPrepared(name)
-	return finishNativeJSONInsert(tx, err, ids, documents, stats, ordinaryOnly, projection)
+	return finishNativeJSONInsert(tx, err, ids, documents, stats, ordinaryOnly, projection, projected)
 }
 
-func finishNativeJSONInsert(tx *NativeJSONTxn, err error, ids, documents [][]byte, stats *CollectionInsertStats, ordinaryOnly bool, projection *trustedFloat32Projection) (recordStats, retry bool, resultErr error) {
+func finishNativeJSONInsert(tx *NativeJSONTxn, err error, ids, documents [][]byte, stats *CollectionInsertStats, ordinaryOnly bool, projection *trustedFloat32Projection, projected **nativeInsertProjectedRefusal) (recordStats, retry bool, resultErr error) {
+	var previous *nativeInsertProjectedRefusal
+	if projected != nil {
+		previous, *projected = *projected, nil
+	}
 	if err != nil {
 		return false, false, err
 	}
 	defer func() {
 		cleanupErr := tx.Close()
 		if cleanupErr != nil {
-			retry = false
+			clearNativeCommitRetry(&retry, nil, projected)
 		}
 		resultErr = errors.Join(resultErr, cleanupErr)
 	}()
-	ordinary := tx.bindings[0].probe.meta.Options.ColumnStore == nil || nativeOrdinaryColumnGraphMeta(tx.bindings[0].probe.meta)
+	binding := &tx.bindings[0]
+	if previous != nil && (previous.pressure.Collection != binding.incarnation || previous.schema.Value() != binding.probe.collection.schema) {
+		return false, false, backenddb.ErrConcurrentModification
+	}
+	if binding.probe.meta.Options.ColumnStore != nil || projection != nil {
+		projected = nil
+	}
+	ordinary := binding.probe.meta.Options.ColumnStore == nil || nativeOrdinaryColumnGraphMeta(binding.probe.meta)
 	if !ordinary {
 		if ordinaryOnly {
 			return false, false, backenddb.ErrNativeSemanticUnsupported
@@ -77,7 +100,7 @@ func finishNativeJSONInsert(tx *NativeJSONTxn, err error, ids, documents [][]byt
 	if stats != nil {
 		stats.PrepareDocuments = time.Since(started)
 	}
-	err = tx.commitNativePlanWithStatsObserved(false, nil, false, stats, &retry)
+	err = tx.commitNativePlanObserved(false, nil, false, stats, &retry, nil, projected)
 	return stats != nil, retry && ordinary, err
 }
 
@@ -213,17 +236,17 @@ type nativeNamedCollectionChange struct {
 }
 
 func prepareNativeNamedDomains(base *nativeEngineVersion, changes []nativeNamedCollectionChange) (*nativeEngineVersion, error) {
-	return prepareNativeCollectionChanges(base, nil, changes)
+	return prepareNativeCollectionChanges(base, nil, changes, false)
 }
 
 func prepareNativeJSONPrimary(base *nativeEngineVersion, c *nativeCollectionState, entries []memtable.COWMutation) (*nativeEngineVersion, error) {
 	return prepareNativeJSONPrimaries(base, []nativeJSONPrimaryChange{{collection: c, entries: entries}})
 }
 func prepareNativeJSONPrimaries(base *nativeEngineVersion, changes []nativeJSONPrimaryChange) (*nativeEngineVersion, error) {
-	return prepareNativeCollectionChanges(base, changes, nil)
+	return prepareNativeCollectionChanges(base, changes, nil, false)
 }
 
-func prepareNativeCollectionChanges(base *nativeEngineVersion, changes []nativeJSONPrimaryChange, named []nativeNamedCollectionChange) (*nativeEngineVersion, error) {
+func prepareNativeCollectionChanges(base *nativeEngineVersion, changes []nativeJSONPrimaryChange, named []nativeNamedCollectionChange, reportProjection bool) (*nativeEngineVersion, error) {
 	count := len(changes) + len(named)
 	if base == nil || base.inventory != nil || count == 0 || (len(changes) != 0 && len(named) != 0) {
 		return nil, backenddb.ErrNativeSemanticUnsupported
@@ -354,11 +377,17 @@ func prepareNativeCollectionChanges(base *nativeEngineVersion, changes []nativeJ
 					old, root = nil, 0
 				}
 			}
-			domain, err := prepareNativeDomainUpdate(old, name, root, interpretation, policy, rows, base.allocator)
+			domain, err := prepareNativeDomainUpdateObserved(old, name, root, interpretation, policy, rows, base.allocator, reportProjection)
 			if domain != nil {
 				p.ownedDomains = append(p.ownedDomains, domain)
 			}
 			if err != nil {
+				if refusal, ok := err.(*memtable.COWProjectedGenerationRefusal); ok {
+					err = &nativeInsertProjectedRefusal{
+						pressure: backenddb.NativeProjectedGenerationPressure{Collection: c.incarnation, Domain: name, Refusal: refusal},
+						schema:   weak.Make(c.schema),
+					}
+				}
 				return next, err
 			}
 			if !primary && delta.replace {

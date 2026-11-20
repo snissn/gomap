@@ -514,7 +514,10 @@ func (b *Batch) writeCOWPublication(syncWrite bool, unlock func()) error {
 		unlock()
 		if cancelErr != nil {
 			b.db.reportError(cancelErr)
-			if b.cowState.receipt.OnlyPointConflict {
+			// Reconstruction requires both the original refusal and a clean
+			// cancellation. Preserve diagnostics without its exact retry identity.
+			var refusal *memtable.COWProjectedGenerationRefusal
+			if b.cowState.receipt.OnlyPointConflict || errors.As(err, &refusal) {
 				err = joinCOWCleanupError(err, cancelErr)
 			}
 		}

@@ -5025,7 +5025,7 @@ func (c *Collection) dropIndexes(names map[string]struct{}, all bool) (*Collecti
 // Close covers the write.
 func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 	if c != nil && c.nativeJSON != nil {
-		ids, err := c.nativeInsertBatch([][]byte{id}, [][]byte{document})
+		ids, err := c.nativeInsertBatch([][]byte{id}, [][]byte{document}, false)
 		if len(ids) == 0 {
 			return nil, err
 		}
@@ -11832,7 +11832,7 @@ func (c *Collection) insertOneViaBatchWithCoverageLocked(id, document []byte, ad
 // no partial batch. Post-commit failures must be reported as commit-ambiguous.
 func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
 	if c != nil && c.nativeJSON != nil {
-		return c.nativeInsertBatch(ids, documents)
+		return c.nativeInsertBatch(ids, documents, true)
 	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
@@ -11939,7 +11939,7 @@ func (c *Collection) InsertBatchWithTemplateV1Encoder(ids, documents [][]byte, e
 // validation pass on the insert hot path.
 func (c *Collection) InsertBatchValidatedBSON(ids, documents [][]byte) ([][]byte, error) {
 	if c != nil && c.nativeJSON != nil {
-		return c.nativeInsertBatch(ids, documents)
+		return c.nativeInsertBatch(ids, documents, false)
 	}
 	unlockSchema := c.lockCollectionSchemaRead()
 	defer unlockSchema()
@@ -12109,6 +12109,16 @@ func (c *Collection) InsertBatchWithCommandWALIntent(ids, documents [][]byte, tr
 	return resultIDs, c.invalidateVectorIndexCoverageOnAcceptedMutation(err)
 }
 
+// InsertBatchFromWire applies the gateway producer contract for decoded
+// non-BSON wire documents and returns the ordinary owned result IDs.
+// Validated BSON wire documents use InsertBatchValidatedBSON.
+func (c *Collection) InsertBatchFromWire(ids, documents [][]byte) ([][]byte, error) {
+	if c != nil && c.nativeJSON != nil {
+		return c.nativeInsertBatch(ids, documents, false)
+	}
+	return c.InsertBatch(ids, documents)
+}
+
 // NativewireInsertBatchNoResultIDs executes an insert batch without cloning
 // response-owned result IDs. It exists for the nativewire gateway omit-result
 // fast path; public callers that need returned IDs should keep using
@@ -12118,7 +12128,7 @@ func (c *Collection) NativewireInsertBatchNoResultIDs(ids, documents [][]byte, t
 		if trustedValidBSON && normalizedDocumentFormat(c.meta.Options.DocumentFormat) != DocumentFormatBSON {
 			return errors.New("collections: trusted BSON insert requires BSON document format")
 		}
-		_, err := c.nativeInsertBatchWithResultIDs(ids, documents, nil, nil, false)
+		_, err := c.nativeInsertBatchWithResultIDs(ids, documents, nil, nil, false, false)
 		return err
 	}
 	unlockSchema := c.lockCollectionSchemaRead()
@@ -12184,7 +12194,7 @@ func (c *Collection) insertBatchWithCommandWALIntentSchemaLocked(ids, documents 
 		if templateEncoder != nil {
 			return c.nativeInsertTemplateBatch(ids, documents, templateEncoder)
 		}
-		return c.nativeInsertBatch(ids, documents)
+		return c.nativeInsertBatch(ids, documents, false)
 	}
 	defer func() { resultErr = c.invalidateVectorIndexCoverageOnAcceptedMutation(resultErr) }()
 

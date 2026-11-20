@@ -13,6 +13,25 @@ Asynchronous semantic retirement retains its existing ownership. Bounded history
 capacity and durable ACK requirements remain unchanged. Eligibility and diagnostic
 timing are described in [the native API contract](../../collections/native_json_public.md).
 
+An in-process native `Collection.InsertBatch` or `InsertBatchWithStats` on an
+ordinary collection without column storage also MAY use that same single
+reconstruction budget when private preparation of an active COW domain cannot
+reserve the requested generation history. The typed refusal MUST identify the
+exact generation and requested history, rule out other simultaneous hard-cap
+denials, and fit the unchanged estimate on an empty native generation. Before
+maintenance, the original private attempt and producer admission MUST close and
+the original worker MUST complete the queued cleanup successfully. Under the
+producer pressure lock, the current generation MUST still match the refusal and
+its original projection MUST still require rollover. If the generation advanced
+or the projection fits, the fresh attempt proceeds without that rollover.
+Maintenance can capture and move the old tail, or materialize it through the
+original physical publication and refund join. Held cuts retain their original
+resources. The retry MUST capture again, require the same collection
+incarnation and schema, validate all inputs and conflicts, and publish at most
+one whole batch through the original WAL and COW path. Stock hard capacities,
+advisory scheduling, and gateway/explicit transaction refusal behavior remain
+in force.
+
 The named public online value-log rewrite uses the original COW maintenance
 owner when native semantics are active. Its ordinary physical publications
 preserve entry revisions and applied command LSN; they do not represent a new

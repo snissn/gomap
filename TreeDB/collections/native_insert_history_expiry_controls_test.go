@@ -267,7 +267,7 @@ func TestNativeInsertHistoryExpiryReceiptAndCleanup(t *testing.T) {
 				t.Fatal(err)
 			}
 			tx.core = &historyExpiryResultTxn{NativeConditionalTxn: tx.core, result: tc.result, failure: tc.failure, closeFailure: tc.closeFailure}
-			_, retry, err := finishNativeJSONInsert(tx, nil, [][]byte{[]byte("id")}, [][]byte{[]byte(`{"value":1}`)}, nil, false, nil)
+			_, retry, err := finishNativeJSONInsert(tx, nil, [][]byte{[]byte("id")}, [][]byte{[]byte(`{"value":1}`)}, nil, false, nil, nil)
 			if err == nil || retry != tc.wantRetry || !errors.Is(err, tc.failure) {
 				t.Fatalf("retry=%v want=%v err=%v", retry, tc.wantRetry, err)
 			}
@@ -353,7 +353,7 @@ func TestNativeInsertHistoryExpiryPrivateCancellation(t *testing.T) {
 				},
 			}
 			before := backend.CommandWALNextLSN()
-			_, retry, err := finishNativeJSONInsert(tx, nil, [][]byte{[]byte("id")}, [][]byte{[]byte(`{"value":1}`)}, nil, false, nil)
+			_, retry, err := finishNativeJSONInsert(tx, nil, [][]byte{[]byte("id")}, [][]byte{[]byte(`{"value":1}`)}, nil, false, nil, nil)
 			if retry != tc.wantRetry || !errors.Is(err, backenddb.ErrTxnTooOld) {
 				t.Fatalf("retry=%v want=%v err=%v", retry, tc.wantRetry, err)
 			}

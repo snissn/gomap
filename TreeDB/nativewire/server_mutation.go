@@ -142,7 +142,7 @@ func (s *Server) insertBatchDecoded(collection *collections.Collection, format c
 		}
 	} else {
 		if includeResultIDs {
-			resultIDs, err = collection.InsertBatch(ids, docs)
+			resultIDs, err = collection.InsertBatchFromWire(ids, docs)
 		} else {
 			err = collection.NativewireInsertBatchNoResultIDs(ids, docs, false)
 		}

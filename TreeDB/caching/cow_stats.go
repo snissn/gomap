@@ -40,6 +40,8 @@ func (db *DB) cowStatsInto(stats map[string]string) {
 		{"capture_calls_total", c.captureCalls.Load()}, {"prepare_calls_total", c.prepareCalls.Load()},
 		{"publications_total", c.publications.Load()}, {"rollovers_total", c.rollovers.Load()},
 		{"handoffs_total", c.handoffs.Load()},
+		{"native_projected_refusals_total", c.nativeProjectedRefusals.Load()},
+		{"native_projected_relief_ns", c.nativeProjectedReliefNs.Load()},
 		{"txn.journal_effects", c.journalCount.Load()}, {"txn.journal_bytes", c.journalBytes.Load()}, {"txn.history_floor", c.journalFloor.Load()},
 		{"txn.index_points", c.journalPoints.Load()}, {"txn.range_effects", c.journalRanges.Load()}, {"txn.too_old_total", c.tooOld.Load()},
 		{"txn.barrier_effect_capacity_total", c.journalBarrierEffects.Load()}, {"txn.barrier_byte_capacity_total", c.journalBarrierBytes.Load()},
