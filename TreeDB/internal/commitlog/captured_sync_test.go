@@ -58,7 +58,13 @@ func TestReopenKeepsCapturedActiveLSNLocalToSelectedLane(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer target.Release()
-			if target.LSN != tc.lsn || (target.Bytes == 0) != (tc.lsn == 0) {
+			// Fixed containers retain their physical header even when
+			// the selected segment has no command frames.
+			var emptyBytes uint64
+			if journal.writer.fixed != nil {
+				emptyBytes = fixedWALHeaderSize
+			}
+			if target.LSN != tc.lsn || target.Bytes < emptyBytes || (target.Bytes == emptyBytes) != (tc.lsn == 0) {
 				t.Fatalf("selected lane capture LSN=%d bytes=%d, want exact local LSN %d", target.LSN, target.Bytes, tc.lsn)
 			}
 			if got := journal.NextLSN(); got != last+1 {
