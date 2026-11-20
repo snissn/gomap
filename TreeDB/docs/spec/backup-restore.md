@@ -44,6 +44,46 @@ commands instead use the active V2 `ExternalRefFenceV1` dependency closure.
 The typed external-ref prepare, protection, restore, and quarantine steps below
 describe a separate future activation, not authority accepted by current codecs.
 
+### Document files on a separate Linux mount
+
+A root-layout store can have a mount at `maindb/value_vlog`. Its document
+segments belong to the same backup as the native index and WAL. Stop writes,
+complete checked Close, and keep both filesystems mounted while copying and
+verifying the closed store. A traversal with `--one-file-system` omits those
+segments. Taking independent live snapshots of the two filesystems does not
+establish a common cut.
+
+Before opening this layout, verify the native store and document mount in the
+mount namespace the gateway or maintenance process will actually use. Compare
+the filesystem UUIDs and the two directory device/inode pairs against the
+values recorded when provisioning this store. For a Linux service that mounts the document directory directly, run
+this check in the service launch shell before starting the process. Supply
+the four expected values from the installation record outside the store.
+
+```sh
+set -eu
+: "${store:?}" "${store_uuid:?}" "${document_uuid:?}"
+: "${store_dir_id:?}" "${document_dir_id:?}"  # decimal device:inode from stat
+doc="$store/maindb/value_vlog"
+test "$store_uuid" != "$document_uuid"
+test "$(findmnt --target "$store" --noheadings --output UUID)" = "$store_uuid"
+test "$(stat --format='%d:%i' -- "$store")" = "$store_dir_id"
+test "$(findmnt --mountpoint "$doc" --noheadings --output UUID)" = "$document_uuid"
+test "$(stat --format='%d:%i' -- "$doc")" = "$document_dir_id"
+```
+
+An absent mount, empty UUID or identity mismatch must stop that invocation
+before writable Open. Keep the mount stable until checked Close. If a document
+dependency is missing, recovery can select an older complete durable root.
+A successful Open alone cannot verify that the intended mount or cut was used.
+
+For a restore onto new devices or inodes, first verify the full closed backup
+and stage both parts in their intended destination layout. Ordinary Open
+checks the durable dependencies' physical identities. A byte-for-byte copy
+can therefore require the private snapshot identity rebind described below.
+Perform that step only on a verified private restore, followed by typed
+readback and checked Close. Preserve the original backup through validation.
+
 ### Paged vector projection closure
 
 For schema7 local vector projections, the two directory roots are only the
