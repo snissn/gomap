@@ -16,8 +16,9 @@ import (
 // once completes. A durable waiter can run the I/O while holding journal.mu.
 // The completion and fail-stop notification therefore never acquire journal.mu.
 type checkpointNamespace struct {
-	finish func() error
-	done   atomic.Bool
+	finish     func() error
+	done       atomic.Bool
+	installErr error // Set under journal.mu before this new obligation is exposed.
 }
 
 func checkpointParentsMatch(old, prepared *os.File) error {
@@ -79,14 +80,14 @@ func (j *CommandJournal) newCheckpointNamespace(parent, child *os.File) *checkpo
 	p.finish = sync.OnceValue(func() error {
 		// This parent was opened afresh during rotation. Older captures have
 		// their own descriptors. Only successor consumers join this obligation.
-		if err := j.fileSync.err(); err != nil {
+		if err := j.fileSync.err(); err != nil && p.installErr == nil {
 			return err
 		}
 		if err := syncNamespace(); err != nil {
-			return j.fileSync.fail(err)
+			return joinJournalFailures(p.installErr, j.fileSync.fail(err))
 		}
 		if err := j.fileSync.err(); err != nil {
-			return err
+			return joinJournalFailures(p.installErr, err)
 		}
 		p.done.Store(true)
 		return nil
@@ -111,14 +112,16 @@ func (j *CommandJournal) RotateAtAutomaticCOWCut() (func() error, error) {
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	previous := j.checkpointNamespace
 	err := j.rotateActiveSegmentForCheckpointLocked(true, durabilitycut.Enabled(), true)
 	p := j.checkpointNamespace
 	if err != nil {
-		if p != nil {
-			// Failure after installation (including old-file/parent close)
-			// still owes the namespace and forbids subsequent successful sync.
-			err = errors.Join(err, j.finishCheckpointNamespaceLocked())
-			return nil, j.fileSync.fail(err)
+		if p != nil && p != previous {
+			// A newly installed child still owes its directory, even after
+			// checked predecessor disposal fails. Preserve all installation
+			// errors and settle it once before exposing a caller.
+			p.installErr = j.fileSync.fail(err)
+			return nil, j.finishCheckpointNamespaceLocked()
 		}
 		return nil, err
 	}

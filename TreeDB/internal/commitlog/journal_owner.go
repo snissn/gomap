@@ -759,6 +759,11 @@ func (j *CommandJournal) rotateActiveSegmentForCheckpointLocked(syncCurrent, obs
 	if stableParent == nil {
 		stableParent, stableParentErr = captureStableCommandWALParent(j.walDir, j.writer.f)
 	} else {
+		if rotateErr != nil {
+			// An already captured data sync can run outside journal.mu.
+			// Publish the checked predecessor-close failure immediately.
+			j.fileSync.fail(rotateErr)
+		}
 		j.checkpointNamespace = j.newCheckpointNamespace(stableParent, j.writer.f)
 	}
 	oldStableParent := j.stableParent
@@ -779,6 +784,9 @@ func (j *CommandJournal) rotateActiveSegmentForCheckpointLocked(syncCurrent, obs
 	var closeParentErr error
 	if oldStableParent != nil {
 		closeParentErr = oldStableParent.Close()
+		if outcome.checkpointParent != nil && closeParentErr != nil {
+			j.fileSync.fail(closeParentErr)
+		}
 	}
 	if j.captureStableResources {
 		return errors.Join(rotateErr, stableParentErr, closeParentErr)
@@ -2256,7 +2264,7 @@ func (j *CommandJournal) Close() error {
 		closeErrs = append(closeErrs, j.stableParent.Close())
 		j.stableParent = nil
 	}
-	closeErrs = append(closeErrs, j.fixedAheadErr, j.fileSync.err(), namespaceErr)
+	closeErrs = append(closeErrs, j.fixedAheadErr, joinJournalFailures(j.fileSync.err(), namespaceErr))
 	j.fixedAhead = nil
 	j.closeErr = errors.Join(closeErrs...)
 	j.closed = true

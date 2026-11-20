@@ -5008,6 +5008,9 @@ headroom is exhausted. These controls do not activate unconverted collections.
   `TestJournalFileSyncSeesIndependentNamespaceFailure`, and
   `TestAutomaticCOWJournalRotationRequiresOriginalOwner` cover the inline
   fallback, retained journal failure, and exact owner check.
+- `TestCheckpointSuccessorDirectoryPreservesPredecessorCloseFailure` checks
+  immediate fail-stop at a failed predecessor close, the single outstanding
+  directory attempt, and both errors on repeated checked Close.
 
 ### Logical rotation and physical command-WAL capacity
 

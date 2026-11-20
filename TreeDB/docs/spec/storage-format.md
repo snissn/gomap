@@ -4544,7 +4544,10 @@ root, and applied LSN still require their respective durability boundaries.
 The journal retains the successor and its parent through the directory sync
 and rechecks their canonical link before and after syncing the retained parent.
 A durable command joins that operation before reserving its LSN. A namespace
-or identity failure poisons the journal and reaches checked Close. Explicit
+or identity failure poisons the journal and reaches checked Close. A checked
+predecessor disposal error becomes visible before the journal settles the
+already installed successor. Checked Close preserves that error and any
+independently failing directory or already in-flight data sync. Explicit
 Checkpoint, Close, pressure cuts, and rotations with pre-existing successors
 or other container types use the inline rotation path.
 

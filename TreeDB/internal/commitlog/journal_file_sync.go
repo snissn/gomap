@@ -38,11 +38,17 @@ func (s *journalFileSync) fail(err error) error {
 		}
 		return err
 	}
-	first := s.err()
-	if errors.Is(err, first) {
-		return err
+	return joinJournalFailures(s.err(), err)
+}
+
+func joinJournalFailures(first, other error) error {
+	if other == nil || errors.Is(first, other) {
+		return first
 	}
-	return errors.Join(err, first)
+	if first == nil || errors.Is(other, first) {
+		return other
+	}
+	return errors.Join(first, other)
 }
 
 func (s *journalFileSync) run(syncFile func() error) error {
@@ -55,7 +61,13 @@ func (s *journalFileSync) run(syncFile func() error) error {
 		return err
 	}
 	if err := syncFile(); err != nil {
-		return s.fail(err)
+		reported := s.fail(err)
+		// At most this one data sync was in flight when another owner
+		// published the primary failure. Later data calls stop above.
+		if first := s.failure.Load(); !errors.Is(first.cause, err) {
+			s.failure.Store(&journalFileSyncFailure{cause: reported})
+		}
+		return reported
 	}
 	return s.err()
 }
