@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"sync"
+	"sync/atomic"
 	"syscall"
 
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
@@ -86,12 +88,14 @@ func commandWALCleanupDescriptorExhausted(err error) bool {
 
 func (db *DB) scanCommandWALCleanupProof(proof durableWALCleanupProofV1, scanSealedPrefix bool) ([]commandWALSegmentCleanupDecision, error) {
 	var beforeSegment func(string)
-	openPrefix := os.Open
+	var openSplitPrefix func(string) (*os.File, error)
 	if hooks := db.testCommandWALCleanupHooks; hooks != nil {
 		beforeSegment = hooks.beforeSegment
-		if hooks.openPrefix != nil {
-			openPrefix = hooks.openPrefix
-		}
+		openSplitPrefix = hooks.openPrefix
+	}
+	openPrefix := os.Open
+	if openSplitPrefix != nil {
+		openPrefix = openSplitPrefix
 	}
 	scan := newCommandWALCleanupScan(proof.cleanupThrough, proof.durableWALLSN, db.walMaxSegmentBytes, beforeSegment)
 	if !scanSealedPrefix {
@@ -104,7 +108,7 @@ func (db *DB) scanCommandWALCleanupProof(proof durableWALCleanupProofV1, scanSea
 	if proof.journal.Ext4Stream && proof.journal.ActiveBytes <= maxSplitStreamCleanupActiveBytes &&
 		db.commandWALClosedBytes.Load() >= 2*minSplitStreamCleanupSegmentBytes &&
 		db.commandWALCleanupSplitValueLogVolume(proof.journal) {
-		if attempted, err := db.scanSplitCommandWALCleanupPrefix(proof, scan, openPrefix, minSplitStreamCleanupSegmentBytes); attempted {
+		if attempted, err := db.scanSplitCommandWALCleanupPrefix(proof, scan, openSplitPrefix, minSplitStreamCleanupSegmentBytes); attempted {
 			return scan.finish(err)
 		}
 	}
@@ -242,10 +246,11 @@ func (db *DB) commandWALCleanupSplitValueLogVolume(snapshot commitlog.CommandJou
 }
 
 // The existing proof capture already holds the append lock and names the active
-// generation. The cleanup owner serializes deletion. Files strictly before that
-// generation cannot be appended to, even if the writer rotates during this scan.
-// Refresh the inventory under the original scan lock before reading the suffix.
-func (db *DB) scanSplitCommandWALCleanupPrefix(proof durableWALCleanupProofV1, scan *commandWALCleanupScan, openPrefix func(string) (*os.File, error), minClosedBytes int64) (attempted bool, returnErr error) {
+// generation. The cleanup owner serializes deletion. Rotation releases the
+// detached handles before allocating any of its own and forces a locked retry.
+// Otherwise refresh the inventory and validate the one active stream under
+// append exclusion.
+func (db *DB) scanSplitCommandWALCleanupPrefix(proof durableWALCleanupProofV1, scan *commandWALCleanupScan, openPrefix func(string) (*os.File, error), minClosedBytes int64) (bool, error) {
 	dir := resolveStorageLayout(db.dir).walDir
 	segments, err := simpleCommandWALCleanupInventory(dir, proof.journal)
 	if commandWALCleanupDescriptorExhausted(err) {
@@ -258,7 +263,7 @@ func (db *DB) scanSplitCommandWALCleanupPrefix(proof durableWALCleanupProofV1, s
 		return false, nil
 	}
 	sealed := segments[:len(segments)-1]
-	infos := make([]os.FileInfo, len(sealed))
+	prefix := make([]cleanupClosedWALFile, len(sealed))
 	large := 0
 	for i, seg := range sealed {
 		info, err := os.Lstat(seg.path)
@@ -266,7 +271,8 @@ func (db *DB) scanSplitCommandWALCleanupPrefix(proof durableWALCleanupProofV1, s
 			// Use the locked directory path to handle an unusual inventory.
 			return false, nil
 		}
-		infos[i] = info
+		seg.size = info.Size()
+		prefix[i] = cleanupClosedWALFile{segment: seg, info: info}
 		if info.Size() >= minClosedBytes {
 			large++
 		}
@@ -275,119 +281,203 @@ func (db *DB) scanSplitCommandWALCleanupPrefix(proof durableWALCleanupProofV1, s
 		return false, nil
 	}
 
-	files := make([]*os.File, 0, len(sealed))
-	closeFiles := func() error {
+	var refreshDir *os.File
+	var dirInfo os.FileInfo
+	closeReader := func() error {
+		if refreshDir == nil {
+			return nil
+		}
+		err := refreshDir.Close()
+		refreshDir = nil
+		return err
+	}
+	closeFiles := func(onlyUnkept bool) error {
 		var err error
-		for _, file := range files {
-			err = errors.Join(err, file.Close())
+		for i := range prefix {
+			file := &prefix[i]
+			if file.file != nil && (!onlyUnkept || !file.kept) {
+				err = errors.Join(err, file.file.Close())
+				file.file = nil
+			}
 		}
 		return err
 	}
-	for i, seg := range sealed {
-		file, err := openPrefix(seg.path)
+
+	var yieldCloseErr error
+	var released atomic.Bool
+	var fileIO sync.Mutex
+	lease, err := proof.journalOwner.StageDetachedCleanupScan(proof.journal, func() (func(), error) {
+		// Reserve a directory stream for refresh and open predecessors
+		// relative to this exact directory without following symlinks or
+		// blocking if a pathname was replaced with a FIFO.
+		var err error
+		refreshDir, err = os.Open(dir)
 		if commandWALCleanupDescriptorExhausted(err) {
-			// No bytes have been scanned. Release staged descriptors before
-			// the stock scanner opens one file at a time.
-			if closeErr := closeFiles(); closeErr != nil {
-				return true, errors.Join(err, closeErr)
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		dirInfo, err = refreshDir.Stat()
+		if err != nil {
+			return nil, errors.Join(err, closeReader())
+		}
+		discard := func(err error) (func(), error) {
+			closeErr := errors.Join(closeFiles(false), closeReader())
+			if commandWALCleanupDescriptorExhausted(err) && closeErr == nil {
+				// No frames have been scanned. Let the stock scan open
+				// uncovered files one at a time.
+				return nil, nil
 			}
-			return false, nil
+			return nil, errors.Join(err, closeErr)
 		}
+		for i := range prefix {
+			closed := &prefix[i]
+			path := closed.segment.path
+			var file *os.File
+			if openPrefix != nil {
+				file, err = openPrefix(path)
+			} else {
+				file, err = rootpublication.OpenStableChildFile(refreshDir, filepath.Base(path), os.O_RDONLY, 0)
+			}
+			if err != nil {
+				return discard(fmt.Errorf("open closed command WAL segment %s: %w", filepath.Base(path), err))
+			}
+			closed.file = file
+		}
+		// The file pointers remain immutable until FinishDetachedCleanupScan
+		// even if rotation closes them during an independent Read.
+		return func() {
+			released.Store(true)
+			// A regular file's Close can return while an in-flight Read
+			// still owns the descriptor. Drain that one syscall before
+			// returning descriptor capacity to rotation.
+			fileIO.Lock()
+			defer fileIO.Unlock()
+			yieldCloseErr = refreshDir.Close()
+			for i := range prefix {
+				yieldCloseErr = errors.Join(yieldCloseErr, prefix[i].file.Close())
+			}
+		}, nil
+	})
+	if lease == nil || err != nil {
+		return err != nil, err
+	}
+
+	var mixedFormat bool
+	for i := range prefix {
+		closed := &prefix[i]
+		fileIO.Lock()
+		if released.Load() {
+			fileIO.Unlock()
+			break
+		}
+		info, statErr := closed.file.Stat()
+		if statErr != nil || !sameSplitCommandWALStreamExtent(closed.info, info) {
+			fileIO.Unlock()
+			scan.hardErr = errors.Join(splitCommandWALStreamChanged(closed.segment.path), statErr)
+			break
+		}
+		identity, err := rootpublication.StableIdentityFromFile(closed.file)
+		if err != nil || rootpublication.SamePhysicalIdentity(identity, proof.journal.ActiveIdentity) {
+			fileIO.Unlock()
+			scan.hardErr = errors.Join(splitCommandWALStreamChanged(closed.segment.path), err)
+			break
+		}
+		fixed, err := commitlog.HasFixedWALMagic(closed.file)
+		fileIO.Unlock()
 		if err != nil {
-			return true, errors.Join(fmt.Errorf("open closed command WAL segment %s: %w", filepath.Base(seg.path), err), closeFiles())
+			scan.hardErr = fmt.Errorf("inspect closed command WAL segment %s: %w", filepath.Base(closed.segment.path), err)
+			break
 		}
-		files = append(files, file)
-		info, statErr := file.Stat()
-		identity, identityErr := rootpublication.StableIdentityFromFile(file)
-		if err := errors.Join(statErr, identityErr); err != nil {
-			return true, errors.Join(err, closeFiles())
-		}
-		if !sameSplitCommandWALStreamExtent(infos[i], info) || rootpublication.SamePhysicalIdentity(identity, proof.journal.ActiveIdentity) {
-			return true, errors.Join(splitCommandWALStreamChanged(seg.path), closeFiles())
-		}
-		fixed, err := commitlog.HasFixedWALMagic(file)
-		if err != nil {
-			return true, errors.Join(err, closeFiles())
-		}
+		closed.identity = identity
 		if fixed {
-			if err := closeFiles(); err != nil {
-				return true, err
+			mixedFormat = true
+			break
+		}
+	}
+	scan.closedStreamBuffer = commitlog.NewDetachedStreamCleanupReadBuffer(&fileIO, &released)
+	for i := 0; !mixedFormat && scan.hardErr == nil && i < len(prefix); i++ {
+		closed := &prefix[i]
+		if scan.beforeSegment != nil {
+			scan.beforeSegment(closed.segment.path)
+		}
+		if released.Load() {
+			break
+		}
+		closed.kept = scan.scanIdentifiedFile(closed.segment, closed.file, closed.info, closed.identity, false)
+		if closed.kept {
+			scan.decisions[len(scan.decisions)-1].validatedExtent = closed.info
+		}
+	}
+
+	finish := func(current commitlog.CommandJournalCleanupSnapshot, snapshotErr error) (err error) {
+		defer func() {
+			if err != nil || mixedFormat || scan.hardErr != nil {
+				// No retirement follows this attempt. Relinquish even covered
+				// handles before rotation can start, and give finish no file
+				// handles to close again.
+				err = errors.Join(err, closeReader(), closeFiles(false))
+				for i := range scan.decisions {
+					scan.decisions[i].file = nil
+				}
 			}
-			return false, nil
+		}()
+		if snapshotErr != nil || mixedFormat || scan.hardErr != nil {
+			return snapshotErr
 		}
-	}
-
-	// Reserve the refresh reader before scanning any frames. Covered WAL
-	// handles stay open through retirement and concurrent writers may consume
-	// the remaining descriptors while the append lock is available.
-	refreshDir, err := os.Open(dir)
-	if commandWALCleanupDescriptorExhausted(err) {
-		if closeErr := closeFiles(); closeErr != nil {
-			return true, errors.Join(err, closeErr)
+		if err := closeFiles(true); err != nil {
+			return err
 		}
-		return false, nil
-	}
-	if err != nil {
-		return true, errors.Join(err, closeFiles())
-	}
-	defer func() {
-		if refreshDir != nil {
-			returnErr = errors.Join(returnErr, refreshDir.Close())
-		}
-	}()
-	dirInfo, err := refreshDir.Stat()
-	if err != nil {
-		return true, errors.Join(err, closeFiles())
-	}
-
-	scan.closedStreamBuffer = new(commitlog.CleanupReadBuffer)
-	for i, seg := range sealed {
-		file := files[i]
-		// The stream's logical extent is its physical file size.
-		seg.size = infos[i].Size()
-		if scan.scanFile(seg, file, false, false, nil) {
-			scan.decisions[len(scan.decisions)-1].validatedExtent = infos[i]
-		} else {
-			scan.hardErr = errors.Join(scan.hardErr, file.Close())
-		}
-	}
-	if scan.hardErr != nil {
-		return true, nil
-	}
-
-	err = proof.journalOwner.WithCleanupScanSnapshot(proof.journal, func(current commitlog.CommandJournalCleanupSnapshot) error {
 		linkedDir, err := os.Stat(dir)
 		if err != nil || !os.SameFile(dirInfo, linkedDir) {
 			return errors.Join(fmt.Errorf("%w: command WAL directory changed", ErrRecoveryRequired), err)
 		}
 		entries, readErr := refreshDir.ReadDir(-1)
-		closeErr := refreshDir.Close()
-		refreshDir = nil
-		if err := errors.Join(readErr, closeErr); err != nil {
+		if err := errors.Join(readErr, closeReader()); err != nil {
 			return err
 		}
 		live := simpleCommandWALCleanupEntries(dir, entries, current)
-		if len(live) <= len(sealed) || live[len(sealed)].path != proof.journal.ActivePath ||
+		if len(live) != len(segments) || live[len(sealed)].path != proof.journal.ActivePath ||
 			!slices.EqualFunc(sealed, live[:len(sealed)], func(a, b logSegment) bool { return a.path == b.path }) {
 			return fmt.Errorf("%w: command WAL cleanup inventory changed", ErrRecoveryRequired)
 		}
 		for i, seg := range sealed {
 			linked, err := os.Lstat(seg.path)
-			if err != nil || !sameSplitCommandWALStreamExtent(infos[i], linked) {
+			if err != nil || !sameSplitCommandWALStreamExtent(prefix[i].info, linked) {
 				return errors.Join(splitCommandWALStreamChanged(seg.path), err)
 			}
 		}
-		for i, seg := range live[len(sealed) : len(live)-1] {
-			var expected *rootpublication.StableIdentity
-			if i == 0 {
-				expected = &proof.journal.ActiveIdentity
-			}
-			scan.scanSegment(seg, false, true, expected)
-		}
 		scan.scanSegment(live[len(live)-1], true, true, &current.ActiveIdentity)
 		return nil
-	})
-	return true, err
+	}
+	yielded, err := proof.journalOwner.FinishDetachedCleanupScan(proof.journal, lease, finish)
+	if !yielded && (!mixedFormat || err != nil) {
+		return true, err
+	}
+
+	// Rotation closed every handle before allocating. Preserve independently
+	// observed validation and close errors, and never use partial decisions.
+	// Otherwise restart the stock scan under the original replay bounds.
+	var hardErr error
+	if splitCleanupNonCloseError(scan.hardErr) {
+		hardErr = scan.hardErr
+	}
+	err = errors.Join(yieldCloseErr, hardErr)
+	lineageErr := scan.lineageErr
+	*scan = *newCommandWALCleanupScan(proof.cleanupThrough, proof.durableWALLSN, scan.maxSegmentBytes, scan.beforeSegment)
+	scan.lineageErr = lineageErr
+	return err != nil, err
+}
+
+func splitCleanupNonCloseError(err error) bool {
+	if group, ok := err.(interface{ Unwrap() []error }); ok {
+		return slices.ContainsFunc(group.Unwrap(), splitCleanupNonCloseError)
+	}
+	if cause := errors.Unwrap(err); cause != nil {
+		return splitCleanupNonCloseError(cause)
+	}
+	return err != nil && !errors.Is(err, os.ErrClosed)
 }
 
 func sameSplitCommandWALStreamExtent(captured, linked os.FileInfo) bool {

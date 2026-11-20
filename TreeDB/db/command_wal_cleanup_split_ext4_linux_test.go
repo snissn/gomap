@@ -223,7 +223,7 @@ func TestCommandWALCleanupSplitExt4SealedPrefix(t *testing.T) {
 		return database.RotateCommandWALActiveSegment(true)
 	})
 	current, _ := database.commandWALActiveSegmentSnapshot()
-	if current == active || !slices.Equal(scanned, []string{closed[0], closed[1], active, current}) {
+	if current == active || !slices.Equal(scanned, []string{closed[0], closed[0], closed[1], active, current}) {
 		t.Fatalf("physical scan order=%q active at capture=%q current=%q", scanned, active, current)
 	}
 	if frames := database.commandWALCleanupScanFrames.Load() - beforeFrames; frames != 2*32769+2 {

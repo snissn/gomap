@@ -247,3 +247,91 @@ func TestCommandWALCleanupSplitStreamSecondInventoryDescriptorExhaustion(t *test
 		t.Fatalf("inventory refresh did not retain both covered decisions: %+v", decisions)
 	}
 }
+
+func TestCommandWALCleanupSplitStreamRotationDescriptorExhaustion(t *testing.T) {
+	limit, child := runWALCleanupDescriptorLimitChild(t)
+	if !child {
+		return
+	}
+	database := &DB{dir: t.TempDir(), commandWAL: true, durability: DurabilityDurable}
+	for seq := uint64(1); seq <= 2; seq++ {
+		writeCommandWALFrame(t, database.dir, seq, seq)
+	}
+	installCommandWALCleanupTwoRootRuntimeForTest(database, 1, 1)
+	database.commandWALDurableLSN.Store(2)
+	opts := commandWALCleanupJournalOptionsForTest(t, database, 2)
+	opts.PreferExt4Stream = true
+	installCommandWALCleanupJournalOptionsForTest(t, database, opts, true)
+	proof, err := database.captureDurableWALCleanupProofV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !proof.journal.Ext4Stream {
+		t.Skip("requires an ext4 stream")
+	}
+
+	var padding []*os.File
+	t.Cleanup(func() {
+		for _, file := range padding {
+			if err := file.Close(); err != nil {
+				t.Error(err)
+			}
+		}
+	})
+	for {
+		file, err := os.Open(os.DevNull)
+		if errors.Is(err, syscall.EMFILE) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		padding = append(padding, file)
+	}
+	const slots = 4
+	if len(padding) < slots {
+		t.Fatalf("RLIMIT_NOFILE=%d left only %d available slots", limit, len(padding))
+	}
+	for _, file := range padding[len(padding)-slots:] {
+		if err := file.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	padding = padding[:len(padding)-slots]
+
+	var opened []*os.File
+	var visited []string
+	scan := newCommandWALCleanupScan(proof.cleanupThrough, proof.durableWALLSN, database.walMaxSegmentBytes, func(path string) {
+		visited = append(visited, path)
+		if len(visited) != 1 {
+			return
+		}
+		if !database.commandJournal.AppendLockAvailableForTesting() {
+			t.Fatal("rotation must run while detached readers are staged")
+		}
+		if err := database.RotateCommandWALActiveSegment(false); err != nil {
+			t.Fatalf("public rotation with %d free slots before staging: %v", slots, err)
+		}
+		checkClosedSplitStreamReaders(t, opened, 2)
+	})
+	attempted, err := database.scanSplitCommandWALCleanupPrefix(proof, scan, func(path string) (*os.File, error) {
+		file, err := os.Open(path)
+		if err == nil {
+			opened = append(opened, file)
+		}
+		return file, err
+	}, 1)
+	if attempted || err != nil || len(visited) != 1 {
+		t.Fatalf("rotation did not return staged cleanup to locked scan: attempted=%t visited=%q err=%v", attempted, visited, err)
+	}
+	decisions, err := scan.finish(database.commandJournal.WithCleanupScan(proof.journal, func() error {
+		return scan.scanLockedDirectory(database.dir)
+	}))
+	defer closeCommandWALCleanupDecisions(decisions)
+	successor, _ := database.commandWALActiveSegmentSnapshot()
+	if err != nil || len(decisions) != 2 || !decisions[0].Covered || decisions[1].Covered ||
+		decisions[0].file == nil || decisions[1].file != nil || successor == proof.journal.ActivePath {
+		t.Fatalf("locked retry did not preserve the covered and replay ownership after rotation: %+v successor=%q err=%v", decisions, successor, err)
+	}
+	t.Logf("public rotation and locked retry succeeded with %d free descriptors before staging at RLIMIT_NOFILE=%d", slots, limit)
+}

@@ -853,6 +853,10 @@ func (s *commandWALCleanupScan) scanFile(seg logSegment, file *os.File, active, 
 			return false
 		}
 	}
+	return s.scanIdentifiedFile(seg, file, info, identity, active)
+}
+
+func (s *commandWALCleanupScan) scanIdentifiedFile(seg logSegment, file *os.File, info os.FileInfo, identity rootpublication.StableIdentity, active bool) bool {
 	opts := s.options
 	if !active {
 		opts.readBuffer = s.closedStreamBuffer
