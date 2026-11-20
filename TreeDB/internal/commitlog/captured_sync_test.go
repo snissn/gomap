@@ -9,6 +9,74 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 )
 
+func TestReopenKeepsCapturedActiveLSNLocalToSelectedLane(t *testing.T) {
+	dir := t.TempDir()
+	appendToLane := func(lane int) uint64 {
+		t.Helper()
+		journal, err := OpenCommandJournal(dir, CommandJournalOptions{Lane: lane, CaptureStableResources: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		lsn, err := journal.AppendCommand(CommandEnvelope{
+			Version: CommandFrameVersionV2, DurabilityClass: CommandDurabilityRelaxed,
+			Kind: CommandKindRawKVBatch, Scope: CommandScopeRawKV, PayloadFormat: PayloadFormatRawKVBatchV1,
+		})
+		if err != nil {
+			_ = journal.Close()
+			t.Fatal(err)
+		}
+		if err := journal.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return lsn
+	}
+	first := appendToLane(0)
+	last := appendToLane(1)
+	if last != first+1 {
+		t.Fatalf("second lane assigned LSN %d, want %d", last, first+1)
+	}
+	for _, tc := range []struct {
+		name string
+		seq  uint64
+		lsn  uint64
+	}{
+		{"existing", 1, first},
+		{"empty_successor", 2, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			journal, err := OpenCommandJournal(dir, CommandJournalOptions{SegmentSeq: tc.seq, CaptureStableResources: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if err := journal.Close(); err != nil {
+					t.Error(err)
+				}
+			})
+			target, err := journal.CaptureSync(nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer target.Release()
+			// Fixed containers retain their physical header even when
+			// the selected segment has no command frames.
+			var emptyBytes uint64
+			if journal.writer.fixed != nil {
+				emptyBytes = fixedWALHeaderSize
+			}
+			if target.LSN != tc.lsn || target.Bytes < emptyBytes || (target.Bytes == emptyBytes) != (tc.lsn == 0) {
+				t.Fatalf("selected lane capture LSN=%d bytes=%d, want exact local LSN %d", target.LSN, target.Bytes, tc.lsn)
+			}
+			if got := journal.NextLSN(); got != last+1 {
+				t.Fatalf("global next LSN=%d, want %d", got, last+1)
+			}
+			if err := target.Sync(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestCapturedSyncRetainsFormatAcrossMixedRotation(t *testing.T) {
 	if !FixedWALCreationSupported() {
 		t.Skip("mixed fixed/stream rotation requires fixed-container creation")
