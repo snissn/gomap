@@ -114,7 +114,7 @@ func TestCommandWALDebtEmptyFixedPressureRotationRetainsSyncHandle(t *testing.T)
 		return nil
 	})
 	defer restore()
-	if err = debt.syncRotationFilesThrough(root, walDir, lsn); err != nil {
+	if err = debt.syncRotationFilesThrough(root, walDir, lsn, nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(counts) != 2 || counts[emptyPath] != [2]int{1, 1} || counts[active] != [2]int{1, 1} {
@@ -161,4 +161,68 @@ func TestCommandWALDebtEmptyFixedPressureRotationRetainsSyncHandle(t *testing.T)
 		t.Fatalf("pinned predecessor removed: %v", err)
 	}
 	t.Logf("actual empty pressure predecessor retained: path=%s identity=%+v debtLSN=%d cleanup=%v", emptyPath, emptyDecision.identity, lsn, rootpublication.ErrResourcePinned)
+}
+
+// The new representative deliberately uses the very same inode, logical names,
+// generation and LSN as the retired registration. A pointer retained by the
+// preparatory pass cannot be recycled while the final pass still references it.
+func TestCheckpointRotationFileCreditRequiresOriginalRegistration(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "sealed")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := f.Write([]byte("abc")); err != nil {
+		t.Fatal(err)
+	}
+	var physical int
+	register := func() *rootpublication.StableResourceToken {
+		t.Helper()
+		token, err := commitlog.NewStableCommandWALResourceToken(rootpublication.StableResourceSpec{
+			Kind: rootpublication.ResourceCommandWAL, Reachability: rootpublication.ReachabilityCommandWALRotated,
+			LogicalLane: "lane-0", ResourceID: "0:1", Generation: 1, File: f, DiagnosticPath: "wal/sealed",
+			Frontier:    rootpublication.DurableFrontier{Bytes: 3, MaxLSN: 1},
+			SyncThrough: func(file *os.File, _ rootpublication.DurableFrontier) error { physical++; return file.Sync() },
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return token
+	}
+	var debt CommandWALDependencyDebt
+	first := register()
+	if err := debt.add(1, []*rootpublication.StableResourceToken{first}); err != nil {
+		t.Fatal(err)
+	}
+	defer debt.releaseAll()
+	chosen, err := debt.checkpointRotationFile(1)
+	if err != nil || chosen != first {
+		t.Fatalf("selected %p, %v; want %p", chosen, err, first)
+	}
+	lease, err := chosen.PinUnsyncedRotatedCommandWAL()
+	if err != nil || lease == nil {
+		t.Fatalf("lease %p %v", lease, err)
+	}
+	defer lease.Release()
+	if err := lease.SyncThrough(); err != nil {
+		t.Fatal(err)
+	}
+	if !debt.releaseThrough(1) {
+		t.Fatal("original ownership did not retire")
+	}
+	fresh := register()
+	if err := debt.add(2, []*rootpublication.StableResourceToken{fresh}); err != nil {
+		t.Fatal(err)
+	}
+	if err := lease.ReleaseWithError(); err != nil {
+		t.Fatal(err)
+	}
+	if err := debt.syncRotationFilesThrough(root, root, 2, chosen); err != nil {
+		t.Fatal(err)
+	}
+	if physical != 2 {
+		t.Fatalf("re-created registration reused retired file sync, physical=%d", physical)
+	}
 }

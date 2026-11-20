@@ -4878,7 +4878,7 @@ func (db *DB) MaintainCommandWALCoveredPrefix() error {
 	}
 	for {
 		db.maintenanceMu.Lock()
-		pending, err := db.prepareCommandWALCoveredPrefixCleanupLocked()
+		pending, err := db.prepareCommandWALCoveredPrefixCleanupLocked(false)
 		if err == nil && pending {
 			err = db.cleanupCommandWALCoveredSegmentsAtCheckpointV1(true)
 		}
@@ -4903,7 +4903,7 @@ func (db *DB) PrepareCommandWALCoveredPrefixCleanup() (bool, error) {
 	}
 	for {
 		db.maintenanceMu.Lock()
-		pending, err := db.prepareCommandWALCoveredPrefixCleanupLocked()
+		pending, err := db.prepareCommandWALCoveredPrefixCleanupLocked(true)
 		db.maintenanceMu.Unlock()
 		drain := commandWALPendingDrain(err)
 		if drain == nil {
@@ -4915,7 +4915,7 @@ func (db *DB) PrepareCommandWALCoveredPrefixCleanup() (bool, error) {
 	}
 }
 
-func (db *DB) prepareCommandWALCoveredPrefixCleanupLocked() (bool, error) {
+func (db *DB) prepareCommandWALCoveredPrefixCleanupLocked(automatic bool) (bool, error) {
 	if db.closing.Load() {
 		return false, ErrClosed
 	}
@@ -4945,15 +4945,18 @@ func (db *DB) prepareCommandWALCoveredPrefixCleanupLocked() (bool, error) {
 		return false, db.checkpointTeardownPinned(true)
 	}
 
-	// Covered-prefix maintenance is retryable. Never wait for a public vacuum's
-	// publish guard while holding maintenanceMu: vacuum takes those locks in the
-	// opposite order before entering backend maintenance.
-	if !db.commandWALRawPublishMu.TryLock() {
-		return false, nil
+	alreadySynced, locked, err := db.lockCommandWALCheckpointPrefix(automatic)
+	if err != nil || !locked {
+		return false, err
 	}
-	unlockCommandWALPublish := db.commandWALRawPublishMu.Unlock
-	rotated, advanced, err := db.closeCommandWALCheckpointPrefix()
-	unlockCommandWALPublish()
+	defer db.commandWALRawPublishMu.Unlock()
+	if db.closing.Load() {
+		return false, ErrClosed
+	}
+	if err := db.commandWALPoisonedError(); err != nil {
+		return false, err
+	}
+	rotated, advanced, err := db.closeCommandWALCheckpointPrefix(alreadySynced)
 	if err != nil {
 		return false, err
 	}
@@ -5050,7 +5053,7 @@ func (db *DB) checkpointTeardownPinned(maintenanceAlreadyHeld bool) error {
 			return publicRootPublicationErrorV1(err)
 		}
 		unlockCommandWALPublish = db.lockCommandWALRawPublish()
-		rotatedCommandWAL, commandWALPrefixAdvanced, err := db.closeCommandWALCheckpointPrefix()
+		rotatedCommandWAL, commandWALPrefixAdvanced, err := db.closeCommandWALCheckpointPrefix(nil)
 		if err != nil {
 			return err
 		}
@@ -5094,7 +5097,7 @@ func (db *DB) checkpointTeardownPinned(maintenanceAlreadyHeld bool) error {
 			return err
 		}
 	}
-	rotatedCommandWAL, commandWALPrefixAdvanced, err := db.closeCommandWALCheckpointPrefix()
+	rotatedCommandWAL, commandWALPrefixAdvanced, err := db.closeCommandWALCheckpointPrefix(nil)
 	if err != nil {
 		return err
 	}
@@ -5130,19 +5133,59 @@ func (db *DB) checkpointTeardownPinned(maintenanceAlreadyHeld bool) error {
 	return nil
 }
 
-// closeCommandWALCheckpointPrefix establishes the dependency-closed physical
-// WAL frontier used by cleanup proofs. The caller must hold raw-publish so the
-// latest assigned LSN, dependency debt, active segment sync, and frontier
-// publication describe one append-serialization cut.
-func (db *DB) closeCommandWALCheckpointPrefix() (rotated, advanced bool, err error) {
-	if db == nil || !db.commandWAL || db.commandJournal == nil {
-		return false, false, nil
+// lockCommandWALCheckpointPrefix returns publication custody for the final,
+// freshly sampled prefix. Maintenance already holds teardown and maintenanceMu.
+// Never block on raw publication here: a vacuum can own it while waiting for
+// maintenanceMu, including when the checkpoint re-enters after I/O.
+func (db *DB) lockCommandWALCheckpointPrefix(automatic bool) (*rootpublication.StableResourceToken, bool, error) {
+	if !db.commandWALRawPublishMu.TryLock() {
+		return nil, false, nil
 	}
+	if !automatic || !db.nativeSemanticActive.Load() || db.durability != DurabilityWALOnRelaxed {
+		return nil, true, nil
+	}
+	frontier, advanced := db.commandWALCheckpointFrontier()
+	if !advanced {
+		return nil, true, nil
+	}
+	original, err := db.commandWALDebt.checkpointRotationFile(frontier)
+	if err != nil {
+		db.commandWALRawPublishMu.Unlock()
+		return nil, false, err
+	}
+	lease, err := original.PinUnsyncedRotatedCommandWAL()
+	if err != nil {
+		db.commandWALRawPublishMu.Unlock()
+		return nil, false, err
+	}
+	if lease == nil {
+		return nil, true, nil
+	}
+	db.commandWALRawPublishMu.Unlock()
+	if err := db.syncCheckpointRotationFile(lease); err != nil {
+		db.commandWALDebt.noteRetryThrough(frontier)
+		return nil, false, err
+	}
+	return original, db.commandWALRawPublishMu.TryLock(), nil
+}
+
+// syncCheckpointRotationFile owns this single lease for the duration of I/O.
+func (db *DB) syncCheckpointRotationFile(lease *rootpublication.StableResourceToken) (err error) {
+	defer func() {
+		if closeErr := lease.ReleaseWithError(); closeErr != nil {
+			db.retainOriginalCleanupError(closeErr)
+			err = errors.Join(err, closeErr)
+		}
+	}()
+	return syncCommandWALRotationFile(db.dir, db.commandWALDir, lease)
+}
+
+func (db *DB) commandWALCheckpointFrontier() (frontier uint64, advanced bool) {
 	nextLSN := db.CommandWALNextLSN()
 	if nextLSN <= 1 {
-		return false, false, nil
+		return 0, false
 	}
-	frontier := nextLSN - 1
+	frontier = nextLSN - 1
 	durableWALLSN := db.commandWALDurableLSN.Load()
 	// A relaxed frame can be recovered into a durable root while remaining
 	// above the physically classified durable-WAL frontier. The writer then
@@ -5152,9 +5195,23 @@ func (db *DB) closeCommandWALCheckpointPrefix() (rotated, advanced bool, err err
 	// may promote the prefix through this checkpoint path. A later reopen can
 	// establish that recovery baseline; an explicit durable append/barrier may
 	// independently advance commandWALDurableLSN through its own contract.
-	advanced = durableWALLSN >= db.commandWALSessionAppliedLSN && durableWALLSN < frontier
+	return frontier, durableWALLSN >= db.commandWALSessionAppliedLSN && durableWALLSN < frontier
+}
+
+// closeCommandWALCheckpointPrefix establishes the dependency-closed physical
+// WAL frontier used by cleanup proofs, while raw publication excludes appends.
+// A successful checkpoint-local file sync can cover only the exact immutable
+// token still present in the newly sampled prefix.
+func (db *DB) closeCommandWALCheckpointPrefix(alreadySynced *rootpublication.StableResourceToken) (rotated, advanced bool, err error) {
+	if db == nil || !db.commandWAL || db.commandJournal == nil {
+		return false, false, nil
+	}
+	frontier, advanced := db.commandWALCheckpointFrontier()
+	if frontier == 0 {
+		return false, false, nil
+	}
 	if advanced {
-		if err := db.syncCommandWALDependenciesThrough(frontier, nil); err != nil {
+		if err := db.syncCommandWALDependenciesThrough(frontier, nil, alreadySynced); err != nil {
 			return false, false, err
 		}
 	}

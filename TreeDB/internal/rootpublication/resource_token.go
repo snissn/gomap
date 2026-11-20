@@ -806,6 +806,30 @@ func (token *StableResourceToken) LogicalObligations() []StableLogicalObligation
 	return cloneStableLogicalObligations(token.logicalObligations)
 }
 
+// PinUnsyncedRotatedCommandWAL returns one independently releasable lease on
+// the original producer's exact closed file, carrying its shared sync/error
+// owner. The caller owns the original registration for the duration of this
+// call. A live successor or a file already covered needs no such lease.
+func (token *StableResourceToken) PinUnsyncedRotatedCommandWAL() (*StableResourceToken, error) {
+	if token == nil || token.kind != ResourceCommandWAL || token.reachability != ReachabilityCommandWALRotated {
+		return nil, nil
+	}
+	if token.metadata != nil || token.importedSource != nil || token.observationCleanup != nil || token.namespace != nil || token.directory != nil ||
+		token.hasSyncedFrontier && durableFrontierCovers(token.syncedFrontier, token.frontier) {
+		return nil, nil
+	}
+	if token.released.Load() {
+		return nil, ErrResourceOwnership
+	}
+	lease, err := token.cloneSharedPinned(token.logicalLane, token.resourceID, token.diagnosticPath, token.frontier, token.reachability, token.logicalObligations, nil)
+	if err == retainedalloc.ErrCapacity || errors.Unwrap(err) == retainedalloc.ErrCapacity {
+		// The original pin remains usable by the canonical in-lock sync. A
+		// failed admission for this optional, additional pin grants no credit.
+		return nil, nil
+	}
+	return lease, err
+}
+
 func (token *StableResourceToken) FlushThrough() error {
 	return token.flushThrough(token.frontier)
 }

@@ -1130,7 +1130,7 @@ func (db *DB) closeCommandWALDurablePrefixThrough(lsn uint64) {
 	db.commandWALDebt.releaseThrough(lsn)
 }
 
-func (db *DB) syncCommandWALDependenciesThrough(lsn uint64, extra *rootpublication.StableResourceSet) error {
+func (db *DB) syncCommandWALDependenciesThrough(lsn uint64, extra *rootpublication.StableResourceSet, alreadySynced *rootpublication.StableResourceToken) error {
 	if db == nil || lsn == 0 {
 		return nil
 	}
@@ -1154,7 +1154,7 @@ func (db *DB) syncCommandWALDependenciesThrough(lsn uint64, extra *rootpublicati
 	}); err != nil {
 		return err
 	}
-	if err := db.commandWALDebt.syncRotationFilesThrough(db.dir, db.commandWALDir, lsn); err != nil {
+	if err := db.commandWALDebt.syncRotationFilesThrough(db.dir, db.commandWALDir, lsn, alreadySynced); err != nil {
 		db.commandWALDebt.noteRetryThrough(lsn)
 		return err
 	}
@@ -2985,7 +2985,7 @@ func (db *DB) appendCommandWALIntentWithTiming(intent *commandWALBatchIntent, sy
 		if !sync && !intent.capturedDurable {
 			return nil
 		}
-		return db.syncCommandWALDependenciesThrough(^uint64(0), dependencies)
+		return db.syncCommandWALDependenciesThrough(^uint64(0), dependencies, nil)
 	}
 	afterAppend := func(lsn uint64, rotations []*commitlog.CommandJournalStableRotation) error {
 		rotationFiles := commandWALStableRotationTokens(rotations)

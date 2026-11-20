@@ -102,6 +102,23 @@ captured token and the caller's basis. An online vacuum that supersedes the
 captured runtime makes the basis stale. A failure of the captured physical seal
 is returned to the caller.
 
+During automatic covered-prefix maintenance on an active native COW database
+with relaxed WAL, the checkpoint can release raw publication while syncing one
+already-closed WAL file. It selects the first file from the ordered debt of a
+prefix with no external resource dependencies and retains that exact handle.
+Relaxed writes may append during its I/O. Durable writers use their ordinary
+dependency-before-marker path and share the journal's physical error owner.
+
+Before advancing the durable prefix, the checkpoint tries to reacquire raw
+publication, checks closure and poison, and samples a fresh frontier. Only the
+original immutable file registration can receive credit for the completed
+sync. The checkpoint retains its registration pointer until revalidation. A
+fresh registration for a reused pathname, inode or generation receives its
+own physical sync. If the extra pin reaches its capacity limit, the checkpoint
+uses the original in-lock operation. Every outstanding namespace and active segment crosses its normal
+barrier. A busy vacuum or publisher defers the checkpoint without holding up
+that owner.
+
 ## Bounded vector prepare in the Raft FSM
 
 Vector prepare takes a factory-minted stable DB capture, the root-scoped vector
