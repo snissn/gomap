@@ -6382,7 +6382,7 @@ func collectFinalStats(ctx context.Context, cfg config, target *benchTarget, res
 			result.TreeDBStatsFinal = stats
 		}
 		if cfg.TreeDBMaintenance == treeDBMaintenanceFull {
-			if err := runTreeDBMaintenanceStack(ctx, target, result); err != nil {
+			if err := runTreeDBMaintenanceStack(ctx, cfg.TreeDBProfile, target, result); err != nil {
 				return err
 			}
 			stats, err := collectTreeDBStatsFromDir(cfg, target)
@@ -6423,7 +6423,7 @@ var runMongoCommandDecode = func(ctx context.Context, db *mongo.Database, comman
 	return db.RunCommand(ctx, command).Decode(out)
 }
 
-func runTreeDBMaintenanceStack(ctx context.Context, target *benchTarget, result *benchmarkResult) error {
+func runTreeDBMaintenanceStack(ctx context.Context, profile treedb.Profile, target *benchTarget, result *benchmarkResult) error {
 	if target == nil || target.db == nil {
 		return nil
 	}
@@ -6445,7 +6445,7 @@ func runTreeDBMaintenanceStack(ctx context.Context, target *benchTarget, result 
 		if err := closeBenchTargetKeepDir(cleanupCtx, target); err != nil {
 			return nil, "", err
 		}
-		if err := treedb.VacuumIndexOffline(treedb.Options{Dir: target.treedbDir}); err != nil {
+		if err := treedb.VacuumIndexOffline(treedb.OptionsForBenchmark(profile, target.treedbDir)); err != nil {
 			return nil, "", err
 		}
 		return map[string]int64{"offline": 1}, "", nil

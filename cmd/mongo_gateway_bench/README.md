@@ -255,14 +255,21 @@ commands are supported for this workload:
 - `-treedb-maintenance full`
 - `-client-mode driver`
 
+The unified benchmark's `fast` preset selects the production `no_wal_fast`
+profile. For that contract in this command, use `-treedb-profile no_wal_fast`.
+Both profiles disable the WAL. `no_wal_fast` keeps read verification and
+uses explicit sync, checkpoints, or a clean close for a durable root boundary.
+The default `bench_unsafe` throughput ceiling skips read checksums by default
+and has no production durability guarantee.
+
 The TreeDB target always opens with outer leaves in the leaf value log and the
 cached leaf-log backend, so collection and secondary-index roots exercise the
 same leaf-vlog path as the optimized collection benchmarks. The default `full`
 maintenance mode runs the high-level `CompactStorage` path first, then closes
-the benchmark gateway and runs offline index vacuum to shrink `index.db` for
-final-footprint reporting. Use `-treedb-maintenance checkpoint` to reproduce the
-older checkpoint-only disk metric, or `none` to skip final TreeDB disk
-reporting. No-index YCSB-style command-WAL comparisons are covered by
+the benchmark gateway and runs offline index vacuum with the same benchmark
+profile to shrink `index.db` for final-footprint reporting. Use
+`-treedb-maintenance checkpoint` for the older checkpoint-only disk metric,
+or `none` to skip final TreeDB disk reporting. No-index YCSB-style command-WAL comparisons are covered by
 `scripts/ycsb_compare_mongodb_treedb.sh`; this indexed benchmark default should
 move to command WAL after catalog index commands are implemented.
 
