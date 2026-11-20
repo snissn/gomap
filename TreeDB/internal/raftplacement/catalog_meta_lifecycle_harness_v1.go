@@ -68,6 +68,21 @@ type CatalogMetaLifecycleHarnessV1 struct {
 	providers   map[raftcluster.NodeID]*raftcluster.CatalogMetaRaftProviderV1
 	authorities map[raftcluster.NodeID]*CatalogMetaAuthorityV1
 	leader      raftcluster.NodeID
+
+	restartObserver catalogMetaRestartObserverV1
+}
+
+// Installed only by the restart fixture, after the initial runtime is open.
+type catalogMetaRestartObserverV1 interface {
+	phase(string)
+	raftLog(raftcluster.NodeID) io.Writer
+	leaderPoll(complete, multiple bool, dwell catalogMetaLeaderDwellV1)
+}
+
+func (h *CatalogMetaLifecycleHarnessV1) noteRestartPhase(phase string) {
+	if h.restartObserver != nil {
+		h.restartObserver.phase(phase)
+	}
 }
 
 func OpenCatalogMetaLifecycleHarnessV1(ctx context.Context, opts CatalogMetaLifecycleHarnessOptionsV1) (*CatalogMetaLifecycleHarnessV1, error) {
@@ -139,7 +154,12 @@ func (h *CatalogMetaLifecycleHarnessV1) openRuntimeV1() error {
 	}
 	for _, peer := range h.peers {
 		authority := NewCatalogMetaAuthorityV1()
-		provider, err := raftcluster.OpenCatalogMetaRaftProviderV1(raftcluster.CatalogMetaRaftProviderOptionsV1{Cluster: raftcluster.Config{Dir: filepath.Join(h.root, string(peer.ID), "db"), NodeID: peer.ID, GroupID: h.groupID, Peers: slices.Clone(h.peers), Features: features}, State: authority, Transport: h.transports[peer.ID], RaftConfig: catalogMetaLifecycleHarnessRaftConfigV1(), Bootstrap: true, ApplyTimeout: 3 * time.Second})
+		config := catalogMetaLifecycleHarnessRaftConfigV1()
+		if h.restartObserver != nil {
+			config.LogLevel = "INFO"
+			config.LogOutput = h.restartObserver.raftLog(peer.ID)
+		}
+		provider, err := raftcluster.OpenCatalogMetaRaftProviderV1(raftcluster.CatalogMetaRaftProviderOptionsV1{Cluster: raftcluster.Config{Dir: filepath.Join(h.root, string(peer.ID), "db"), NodeID: peer.ID, GroupID: h.groupID, Peers: slices.Clone(h.peers), Features: features}, State: authority, Transport: h.transports[peer.ID], RaftConfig: config, Bootstrap: true, ApplyTimeout: 3 * time.Second})
 		if err != nil {
 			_ = h.closeRuntimeV1()
 			return fmt.Errorf("open catalog-meta node %s: %w", peer.ID, err)
@@ -173,6 +193,7 @@ func (h *CatalogMetaLifecycleHarnessV1) waitLeader(ctx context.Context) error {
 	defer tick.Stop()
 	for {
 		var leader raftcluster.NodeID
+		multiple := false
 		complete := true
 		for id, p := range h.providers {
 			status, err := p.ClusterAdmissionStatus(ctx)
@@ -182,13 +203,18 @@ func (h *CatalogMetaLifecycleHarnessV1) waitLeader(ctx context.Context) error {
 			}
 			if status.Leader {
 				if leader != "" {
+					multiple = true
 					leader = ""
 					break
 				}
 				leader = id
 			}
 		}
-		if dwell.Observe(time.Now(), complete, leader, catalogMetaLifecycleHarnessLeaderDwellV1, catalogMetaLeaderObservationMaxGapV1) {
+		ready := dwell.Observe(time.Now(), complete, leader, catalogMetaLifecycleHarnessLeaderDwellV1, catalogMetaLeaderObservationMaxGapV1)
+		if h.restartObserver != nil {
+			h.restartObserver.leaderPoll(complete, multiple, dwell)
+		}
+		if ready {
 			h.leader = leader
 			return nil
 		}
@@ -295,22 +321,28 @@ func (h *CatalogMetaLifecycleHarnessV1) RestartV1(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	h.noteRestartPhase("fence")
 	applied, err := h.LeaderFence().LinearizableCatalogMetaAppliedIndexV1(ctx)
 	if err != nil {
 		return fmt.Errorf("fence catalog-meta before restart: %w", err)
 	}
+	h.noteRestartPhase("close-old-runtime")
 	if err := h.closeRuntimeV1(); err != nil {
 		return fmt.Errorf("close catalog-meta runtime for restart: %w", err)
 	}
+	h.noteRestartPhase("open-new-runtime")
 	if err := h.openRuntimeV1(); err != nil {
 		return err
 	}
 	fail := func(err error) error {
+		h.noteRestartPhase("failure-cleanup")
 		return errors.Join(err, h.closeRuntimeV1())
 	}
+	h.noteRestartPhase("leader-wait")
 	if err := h.waitLeader(ctx); err != nil {
 		return fail(err)
 	}
+	h.noteRestartPhase("replay-wait")
 	if err := h.waitAuthorities(ctx, func(authority *CatalogMetaAuthorityV1) bool {
 		replayed, ok := authority.CatalogMetaAppliedIndexV1()
 		return ok && replayed >= applied
