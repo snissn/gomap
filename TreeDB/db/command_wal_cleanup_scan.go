@@ -75,6 +75,27 @@ func commandWALCleanupDescriptorExhausted(err error) bool {
 		(runtime.GOOS == "windows" && errors.Is(err, windowsTooManyOpenFiles))
 }
 
+// A first capture pins its active WAL, and cleanup must separately reopen a
+// covered pathname while still holding the scanned inode. Let both operations
+// make progress before detaching optional readers.
+func commandWALCleanupHasDescriptorHeadroom(dir string) (room bool, err error) {
+	retirement, err := os.Open(dir)
+	if err != nil {
+		if commandWALCleanupDescriptorExhausted(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	capture, err := os.Open(dir)
+	if err != nil {
+		if commandWALCleanupDescriptorExhausted(err) {
+			return false, retirement.Close()
+		}
+		return false, errors.Join(err, retirement.Close())
+	}
+	return true, errors.Join(capture.Close(), retirement.Close())
+}
+
 func (db *DB) scanCommandWALCleanupProof(proof durableWALCleanupProofV1, scanSealedPrefix bool) ([]commandWALSegmentCleanupDecision, error) {
 	var beforeSegment func(string)
 	openPrefix := os.Open
@@ -126,22 +147,16 @@ func (db *DB) scanCommandWALCleanupProof(proof durableWALCleanupProofV1, scanSea
 			// one lock acquisition and use the original full validation.
 			return scan.scanLockedDirectory(db.dir)
 		}
-		restartLocked := func(cause error) error {
-			if err := closePrefix(); err != nil {
-				return errors.Join(cause, err)
-			}
-			prefix = nil
-			return scan.scanLockedDirectory(db.dir)
-		}
-		for _, seg := range segments[:min(len(segments)-1, maxOpenClosedWALCleanupSegments)] {
+		wanted := min(len(segments)-1, maxOpenClosedWALCleanupSegments)
+		var stageErr error
+		for _, seg := range segments[:wanted] {
 			file, err := openPrefix(seg.path)
 			if err != nil {
 				if !commandWALCleanupDescriptorExhausted(err) {
 					return fmt.Errorf("open closed command WAL segment %s: %w", filepath.Base(seg.path), err)
 				}
-				// The locked scan opens uncovered files one at a time. Drop the
-				// staged handles and try it once with the same replay bounds.
-				return restartLocked(err)
+				stageErr = err
+				break
 			}
 			info, statErr := file.Stat()
 			identity, identityErr := rootpublication.StableIdentityFromFile(file)
@@ -150,25 +165,32 @@ func (db *DB) scanCommandWALCleanupProof(proof durableWALCleanupProofV1, scanSea
 				return errors.Join(err, file.Close())
 			}
 			if !fixed || !info.Mode().IsRegular() || rootpublication.SamePhysicalIdentity(identity, current.ActiveIdentity) {
-				if err := file.Close(); err != nil {
+				if err := errors.Join(file.Close(), closePrefix()); err != nil {
 					return err
 				}
-				return restartLocked(nil)
+				prefix = nil
+				return scan.scanLockedDirectory(db.dir)
 			}
 			prefix = append(prefix, cleanupClosedWALFile{segment: seg, file: file, info: info, identity: identity})
 		}
-		// A first foreground prefix capture needs one descriptor to pin the
-		// active WAL. Do not give up append exclusion with all remaining
-		// descriptors in optional readers. The locked scan opens the active
-		// file last, then closes it before allowing a capture to proceed.
-		spare, err := os.Open(dir)
-		if commandWALCleanupDescriptorExhausted(err) {
-			return restartLocked(err)
-		}
+		room, err := commandWALCleanupHasDescriptorHeadroom(dir)
 		if err != nil {
 			return err
 		}
-		return spare.Close()
+		if room && len(prefix) == wanted {
+			return nil
+		}
+		if err := closePrefix(); err != nil {
+			return errors.Join(stageErr, err)
+		}
+		prefix = nil
+		if !room {
+			// No retirement has started. A later maintenance event retries the
+			// debt after the optional staging descriptors have been released.
+			return errDurableWALCleanupProofUnavailable
+		}
+		// A transient staging refusal still permits the original locked scan.
+		return scan.scanLockedDirectory(db.dir)
 	})
 	if err != nil || len(prefix) == 0 {
 		scan.hardErr = errors.Join(scan.hardErr, closePrefix())
