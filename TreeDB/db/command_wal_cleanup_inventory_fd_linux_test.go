@@ -14,23 +14,24 @@ import (
 	"time"
 )
 
-func TestCommandWALCleanupFixedPrefixSecondInventoryDescriptorExhaustion(t *testing.T) {
-	const child = "GOMAP_CLEANUP_INVENTORY_FD_CHILD"
+func enterLimitedWALCleanupProcess(t *testing.T) bool {
+	t.Helper()
+	const child = "GOMAP_CLEANUP_FD_CHILD"
 	if os.Getenv(child) != "1" {
 		executable, err := os.Executable()
 		if err != nil {
 			t.Fatal(err)
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
 		defer cancel()
-		command := exec.CommandContext(ctx, executable, "-test.run=^TestCommandWALCleanupFixedPrefixSecondInventoryDescriptorExhaustion$", "-test.v")
+		command := exec.CommandContext(ctx, executable, "-test.run=^"+t.Name()+"$", "-test.v")
 		command.Env = append(os.Environ(), child+"=1")
 		output, err := command.CombinedOutput()
 		t.Logf("isolated descriptor limit:\n%s", output)
 		if err != nil {
 			t.Fatal(err)
 		}
-		return
+		return false
 	}
 	var limit syscall.Rlimit
 	if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &limit); err != nil {
@@ -39,6 +40,13 @@ func TestCommandWALCleanupFixedPrefixSecondInventoryDescriptorExhaustion(t *test
 	limit.Cur = min(limit.Cur, 128)
 	if err := syscall.Setrlimit(syscall.RLIMIT_NOFILE, &limit); err != nil {
 		t.Fatal(err)
+	}
+	return true
+}
+
+func TestCommandWALCleanupFixedPrefixSecondInventoryDescriptorExhaustion(t *testing.T) {
+	if !enterLimitedWALCleanupProcess(t) {
+		return
 	}
 	for _, failClose := range []bool{false, true} {
 		t.Run(fmt.Sprintf("discard_close_failure=%t", failClose), func(t *testing.T) {
@@ -133,7 +141,7 @@ func TestCommandWALCleanupFixedPrefixSecondInventoryDescriptorExhaustion(t *test
 						if _, err := os.ReadDir(filepath.Dir(active)); !errors.Is(err, syscall.EMFILE) {
 							t.Fatalf("kernel did not refuse a directory reader while both predecessors were staged: %v", err)
 						}
-						t.Logf("both predecessors staged before real ReadDir EMFILE at RLIMIT_NOFILE=%d, padding=%d", limit.Cur, len(padding))
+						t.Logf("both predecessors staged before real ReadDir EMFILE at the process file limit, padding=%d", len(padding))
 					case 3:
 						for _, file := range opened {
 							if _, err := file.Seek(0, io.SeekCurrent); !errors.Is(err, os.ErrClosed) {
