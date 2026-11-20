@@ -2,10 +2,12 @@ package collections
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"reflect"
 	"runtime"
 	"testing"
+	"unsafe"
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -24,6 +26,8 @@ type nativeStripedBuildRecorder struct {
 	appendWidths               []int
 	files                      map[uint32]bool
 	placements, placementBytes int
+	beforeClaim                func()
+	beforeAppend               func()
 }
 
 func (r *nativeStripedBuildRecorder) BuildNativeOrderedRoot(input backenddb.OrderedRootDeltaBatchPublishInput) (uint64, error) {
@@ -31,7 +35,20 @@ func (r *nativeStripedBuildRecorder) BuildNativeOrderedRoot(input backenddb.Orde
 	return r.RootPublicationBuildGroup.BuildNativeOrderedRoot(input)
 }
 
+func (r *nativeStripedBuildRecorder) ClaimNativeValueLogInitialAppendWidth() int {
+	width := r.RootPublicationBuildGroup.ClaimNativeValueLogInitialAppendWidth()
+	if r.beforeClaim != nil {
+		r.beforeClaim()
+		r.beforeClaim = nil
+	}
+	return width
+}
+
 func (r *nativeStripedBuildRecorder) AppendNativeValueLogValues(values [][]byte) ([]page.ValuePtr, error) {
+	if r.beforeAppend != nil {
+		r.beforeAppend()
+		r.beforeAppend = nil
+	}
 	r.appendWidths = append(r.appendWidths, len(values))
 	ptrs, err := r.RootPublicationBuildGroup.AppendNativeValueLogValues(values)
 	if err == nil {
@@ -60,12 +77,12 @@ func TestNativeDomainBuildStripedPointerBatching(t *testing.T) {
 	t.Run("inline-boundaries", func(t *testing.T) {
 		testNativeDomainBuildStripedPointers(t, 6, true, true)
 	})
-	t.Run("scratch-refused", func(t *testing.T) {
+	t.Run("without-handoff-workspace", func(t *testing.T) {
 		testNativeDomainBuildStripedPointers(t, 3, false, false)
 	})
 }
 
-func testNativeDomainBuildStripedPointers(t *testing.T, count int, mixed, canReserve bool) {
+func testNativeDomainBuildStripedPointers(t *testing.T, count int, mixed, startupWorkspace bool) {
 	t.Helper()
 	dir := t.TempDir()
 	opts := treedb.OptionsFor(treedb.ProfileCommandWALRelaxed, dir)
@@ -204,26 +221,55 @@ func testNativeDomainBuildStripedPointers(t *testing.T, count int, mixed, canRes
 	}
 	defer group.Close()
 	recorder := &nativeStripedBuildRecorder{RootPublicationBuildGroup: group, files: make(map[uint32]bool)}
-	reservations := 0
-	reserveStartup := func(n uint64) (*memtable.COWExternalLease, error) {
-		reservations++
-		if !canReserve {
-			return nil, memtable.ErrCOWCapacity
-		}
-		return read.capture.NativeMaintenanceAllocator().AdmitNativeBytes(n)
+	promise, _, _, err := nativeHandoffCapacity(read.engine)
+	if err != nil || promise < memtable.COWAllocationCharge(nativeBuildInitialAppendScratch) {
+		t.Fatalf("fixture handoff capacity=%d: %v", promise, err)
 	}
-	root, err := build.materialize(recorder, nil, reserveStartup)
+	// Saturate shared maintenance across startup selection only. The stock
+	// appender and root builder can still use their usual physical resources.
+	if startupWorkspace && count == 3 {
+		maintenance := read.capture.NativeMaintenanceAllocator().(*memtable.COWBudget)
+		var pressure *memtable.COWExternalLease
+		var before memtable.COWStats
+		defer func() { pressure.Close() }()
+		recorder.beforeClaim = func() {
+			stats, limits := maintenance.Stats(), maintenance.Limits()
+			available := min(limits.MaxInFlightBytes-stats.ReservedBytes, limits.MaxTotalBytes-stats.TotalBytes,
+				limits.MaxRetiredBytes-stats.HistoryBytes-stats.ReservedBytes-stats.DeferredBytes)
+			overhead := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
+			if available <= overhead {
+				t.Fatal("fixture has no remaining shared maintenance")
+			}
+			var err error
+			pressure, err = maintenance.AcquireExternal(available - overhead)
+			if err != nil {
+				t.Fatal(err)
+			}
+			extra, err := maintenance.AcquireExternal(1)
+			extra.Close()
+			if !errors.Is(err, memtable.ErrCOWCapacity) {
+				t.Fatalf("startup selection fixture is not saturated: %v", err)
+			}
+			before = maintenance.Stats()
+		}
+		recorder.beforeAppend = func() {
+			if got := maintenance.Stats(); got != before {
+				t.Fatalf("startup selection changed the shared maintenance ledger: before=%+v after=%+v", before, got)
+			}
+			pressure.Close()
+			t.Logf("private successor credit=%d shared maintenance available=0 at selection", promise)
+		}
+	}
+	root, err := build.materialize(recorder, nil, startupWorkspace)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reservations != 1 {
-		t.Fatalf("startup scratch reservations=%d want=1", reservations)
-	}
+
 	coldWidth := min(8, count)
 	if mixed {
 		coldWidth = 2
 	}
-	if !canReserve {
+	if !startupWorkspace {
 		coldWidth = 1
 	}
 	if len(recorder.appendWidths) != 1+wantPlacements-coldWidth || recorder.appendWidths[0] != coldWidth {

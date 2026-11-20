@@ -54,6 +54,7 @@ type nativeEngineBuild struct {
 	failure           error
 	started           bool
 	complete          bool
+	startupWorkspace  bool
 	refund            *cowbtree.OwnedMapRefund
 }
 
@@ -147,6 +148,10 @@ func prepareNativeEngineBuildForCompaction(captured *nativeEngineVersion, basis 
 		built:   make([]nativeBuiltDomain, 0, domains), collections: collections,
 		allocation: nativeBuildAllocation{NativeSemanticAllocator: captured.maintenance, parent: lease, floor: floor},
 		refund:     refund,
+		// A plain build retains both successor promises until complete.
+		// Domain materialization is synchronous and clears startup scratch
+		// before either successor may split from the original reservation.
+		startupWorkspace: typedCollections == 0 && promise >= memtable.COWAllocationCharge(nativeBuildInitialAppendScratch),
 	}
 	captured.build = b
 	if operation != nil {
@@ -290,19 +295,16 @@ func (b *nativeEngineBuild) materializeDomains(group nativeOrderedRootBuilder, n
 		}
 	}
 	if b.catalog != nil {
-		if _, err := b.catalog.materialize(group, names, nil); err != nil {
+		if _, err := b.catalog.materialize(group, names, false); err != nil {
 			b.failure = fmt.Errorf("native materialize catalog: %w", err)
 			return b.failure
 		}
 	}
-	// The existing maintenance budget can lend one synchronous startup
-	// workspace. A refusal leaves the already-admitted singleton plan intact.
-	reserveStartup := b.allocation.NativeSemanticAllocator.AdmitNativeBytes
 	for i, work := range b.domains {
 		if b.hasTypedCollection(b.built[i].collection) && nativeTypedPhysicalDomain(b.built[i].name) {
 			continue
 		}
-		root, err := work.materialize(group, nil, reserveStartup)
+		root, err := work.materialize(group, nil, b.startupWorkspace)
 		if err != nil {
 			b.failure = fmt.Errorf("native materialize domain index=%d collection=%d: %w", i, b.built[i].collection, err)
 			return b.failure

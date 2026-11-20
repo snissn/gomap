@@ -13,9 +13,9 @@ import (
 
 const (
 	nativeBuildBatchEntries = 256
-	// Reserve bounded cohort views, routing and per-lane append scratch
-	// from spare physical-progress capacity before the startup append.
-	// The shared appender routes at most eight records to distinct writers.
+	// Bound cohort-only row/value views, routing, and per-lane calls.
+	// At most eight distinct stripes append one record each using the
+	// existing appender buffers. The engine lends unused handoff credit.
 	nativeBuildInitialAppendScratch = 4096
 )
 
@@ -101,7 +101,7 @@ func nativeDomainBuildCharge(maxSources int) (uint64, error) {
 // The descriptor edge covers every borrowed byte until Reset/Close scrubs it.
 // names is borrowed synchronously from the same captured engine that owns this
 // build. It is never stored on the ledger or used for ordinary row domains.
-func (b *nativeDomainBuild) materialize(group nativeOrderedRootBuilder, names *cowbtree.OwnedMap[string, *nativeCollectionState], reserveStartup func(uint64) (*memtable.COWExternalLease, error)) (uint64, error) {
+func (b *nativeDomainBuild) materialize(group nativeOrderedRootBuilder, names *cowbtree.OwnedMap[string, *nativeCollectionState], startupWorkspace bool) (uint64, error) {
 	if b.failure != nil {
 		return 0, b.failure
 	}
@@ -122,10 +122,10 @@ func (b *nativeDomainBuild) materialize(group nativeOrderedRootBuilder, names *c
 		b.roots = append(b.roots, positions.source.root)
 	}
 	for i := len(b.roots) - 1; i >= 0 && b.failure == nil; i-- {
-		b.buildSource(group, b.roots[i], names, reserveStartup)
+		b.buildSource(group, b.roots[i], names, startupWorkspace)
 	}
 	if b.failure == nil && b.source.pending != nil {
-		b.buildSource(group, b.source.pending, names, reserveStartup)
+		b.buildSource(group, b.source.pending, names, startupWorkspace)
 	}
 	clear(b.roots)
 	b.roots = b.roots[:0]
@@ -137,19 +137,17 @@ func (b *nativeDomainBuild) materialize(group nativeOrderedRootBuilder, names *c
 	return b.root, nil
 }
 
-func (b *nativeDomainBuild) buildSource(group nativeOrderedRootBuilder, root *memtable.COWRoot, names *cowbtree.OwnedMap[string, *nativeCollectionState], reserveStartup func(uint64) (*memtable.COWExternalLease, error)) {
+func (b *nativeDomainBuild) buildSource(group nativeOrderedRootBuilder, root *memtable.COWRoot, names *cowbtree.OwnedMap[string, *nativeCollectionState], startupWorkspace bool) {
 	placement, hasPlacement := group.(nativeBuildValuePlacement)
 	usePlacementThreshold := hasPlacement && (b.source.name == "primary" || b.source.name == "templates")
 	startup, checkStartup := group.(interface{ ClaimNativeValueLogInitialAppendWidth() int })
-	checkStartup = checkStartup && reserveStartup != nil && !b.catalog && b.source.name == "primary"
+	checkStartup = checkStartup && startupWorkspace && !b.catalog && b.source.name == "primary"
 	var initial *[backenddb.NativeValueLogInitialAppendMax]memtable.COWRecord
-	var startupLease *memtable.COWExternalLease
 	var initialCount, initialWidth int
 	appendInitial := func() bool {
 		b.appendInitialValues(placement, initial[:initialCount])
 		clear(initial[:initialCount])
 		initial = nil
-		startupLease.Close()
 		initialCount, initialWidth = 0, 0
 		return b.flushFull(group)
 	}
@@ -170,11 +168,8 @@ func (b *nativeDomainBuild) buildSource(group nativeOrderedRootBuilder, root *me
 					checkStartup = false
 					width := min(startup.ClaimNativeValueLogInitialAppendWidth(), nativeBuildBatchEntries-b.delta.Len())
 					if width > 1 && width <= backenddb.NativeValueLogInitialAppendMax {
-						if lease, err := reserveStartup(nativeBuildInitialAppendScratch); err == nil {
-							startupLease = lease
-							initial = new([backenddb.NativeValueLogInitialAppendMax]memtable.COWRecord)
-							initialWidth = width
-						}
+						initial = new([backenddb.NativeValueLogInitialAppendMax]memtable.COWRecord)
+						initialWidth = width
 					}
 				}
 				if initialWidth > 1 {
