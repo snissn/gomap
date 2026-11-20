@@ -776,7 +776,7 @@ func TestBenchmarkCollectionChunkSizeEnv(t *testing.T) {
 	}
 }
 
-func openBenchmarkBackend(b *testing.B, dir string) (*backenddb.DB, func() error) {
+func benchmarkCollectionDBOptions(b *testing.B, dir string) treedb.Options {
 	b.Helper()
 
 	dataOuter, indexOuter := benchmarkCollectionStoragePolicy(b)
@@ -789,6 +789,13 @@ func openBenchmarkBackend(b *testing.B, dir string) (*backenddb.DB, func() error
 	if syncConcurrency := benchmarkIntEnv(b, "TREEDB_COLLECTION_PAGER_SYNC_CONCURRENCY", 0); syncConcurrency > 0 {
 		opts.PagerSyncConcurrency = syncConcurrency
 	}
+	return opts
+}
+
+func openBenchmarkBackend(b *testing.B, dir string) (*backenddb.DB, func() error) {
+	b.Helper()
+
+	opts := benchmarkCollectionDBOptions(b, dir)
 	open := treedb.OpenBackend
 	if opts.IndexOuterLeavesInValueLog {
 		open = treedb.OpenBackendWithCachedLeafLog
@@ -816,6 +823,12 @@ func openBenchmarkCollectionWithManager(b *testing.B, name string, indexes ...co
 	})
 
 	manager := collections.NewCollectionManager(backend)
+	return backend, manager, createBenchmarkCollection(b, manager, name, indexes)
+}
+
+func createBenchmarkCollection(b *testing.B, manager *collections.CollectionManager, name string, indexes []collections.IndexDefinition) *collections.Collection {
+	b.Helper()
+
 	dataOuter, indexOuter := benchmarkCollectionStoragePolicy(b)
 	documentFormat := benchmarkCollectionDocumentFormat(b)
 	bufferedIndexedWrites := benchmarkBoolEnv(b, "TREEDB_COLLECTION_BUFFERED_INDEXED_WRITES", true) && len(indexes) > 0
@@ -850,7 +863,7 @@ func openBenchmarkCollectionWithManager(b *testing.B, name string, indexes ...co
 	if err != nil {
 		b.Fatalf("open collection: %v", err)
 	}
-	return backend, manager, collection
+	return collection
 }
 
 func benchmarkSyncBoundary(b *testing.B, backend *backenddb.DB) {

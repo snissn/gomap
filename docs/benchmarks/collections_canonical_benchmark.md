@@ -185,6 +185,62 @@ the canonical names stable and explicit:
 - `sqlite_json_2_indexes`
 - `sqlite_native_columns_2_indexes`
 
+## Native COW Companion
+
+Use the opt-in companion to measure the legacy backend and the shared TreeDB
+`cow_btree` owner on the same collection shapes. Both owners use
+`command_wal_relaxed`, the canonical `index-vlog` storage cell, the same
+caller-provided IDs and document fixture, and the same batch sizes. The native
+owner uses the standalone server's COW memory limits. The indexed BSON control
+maintains a unique email index and a nonunique city index.
+
+These timed-only commands skip SQLite and the independent compaction fixtures.
+Use distinct, fresh output directories for the two shapes.
+
+```bash
+GOWORK=off ./scripts/bench_collections_canonical.sh \
+  -native-cow-companion -skip-offline-rewrite -skip-full-leafgen -skip-sqlite \
+  -out-dir "$RESULTS/zero-index" -docs 100000 -batch-size 16000 \
+  -indexes 0 -formats bson,json -benchtime 100000x -count 3
+
+GOWORK=off ./scripts/bench_collections_canonical.sh \
+  -native-cow-companion -skip-offline-rewrite -skip-full-leafgen -skip-sqlite \
+  -out-dir "$RESULTS/two-index-bson" -docs 100000 -batch-size 16000 \
+  -indexes 2 -formats bson -benchtime 100000x -count 3
+```
+
+For a functional smoke, use `-docs 32 -batch-size 16 -benchtime 32x -count 1`.
+The companion accepts BSON and JSON with zero secondary indexes, and BSON with
+two secondary indexes. Select a fixed `-benchtime` matching `-docs`. The full
+workflow still applies its compaction and legacy producer guardrails when the
+compaction phases are requested.
+
+The timed rows come from `BenchmarkCollectionShapeInsertBatch` (legacy) and
+`BenchmarkCollectionShapeInsertBatchNativeCOW` (shared native COW).
+Each benchmark operation accounts for one document. Fixture encoding, the
+checked checkpoint, the primary-key census, and cleanup are outside the timer.
+The legacy timer includes its final publication flush when buffered. The
+native timer includes public `InsertBatch` through its COW publication. The
+native check samples the shared owner before and after the insert loop and
+requires one new COW publication per successful batch. The checked public
+`Checkpoint` must cover the accepted command-WAL LSN. The legacy row retains
+its own `command_wal_publish` evidence and checked backend checkpoint. The
+ordinary relaxed acknowledgement and the explicit checkpoint are distinct
+boundaries. See [Go benchmark flags](https://pkg.go.dev/cmd/go@go1.26.10#hdr-Testing_flags)
+and [the benchmark timer API](https://pkg.go.dev/testing@go1.26.10#B.ResetTimer).
+
+Use `benchmark_results.json` for the owner, mean metrics, and each sample's
+`ns/op`, `B/op`, `allocs/op`, checkpoint duration, and publication evidence.
+It links each row to its `collections_report.json`. The raw Go events are in
+`timed_matrix/*/go_test.json`. The Markdown report lists each owner sample.
+
+Add `-profile-timed-matrix -profile-count 1` to collect profiles in a separate
+pass. Each cell's `profiles/collection_profile_manifest.json` identifies its
+Go test output and CPU, allocation, block, and mutex profiles. Those profiles
+cover the whole process and include setup and post-timer work. Use the regular
+timed samples for time and allocation comparisons, and analyze the profiles
+with `go tool pprof`. See [Profiling Go Programs](https://go.dev/blog/pprof).
+
 ## Comparing Runs
 
 Prefer comparing `benchmark_results.json` or `benchmark_matrix.csv` rather than

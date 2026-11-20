@@ -5,6 +5,12 @@ including its command and artifact names, see the [collection insert profiling
 recipe](../unified_bench/README.md#focused-collection-insert-compression-profile).
 Its Go test profiles are not benchprof inputs.
 
+The [canonical collection COW companion](../../docs/benchmarks/collections_canonical_benchmark.md#native-cow-companion)
+optionally captures standalone Go test profiles for
+`BenchmarkCollectionShapeInsertBatchNativeCOW` and its legacy peer. Use the
+cell's `collection_profile_manifest.json` and inspect the artifacts directly
+with `go tool pprof`.
+
 The public ordinary ColumnGraph lifecycle comparison for #5338 uses standalone
 `BenchmarkOrdinaryColumnGraphNativeLifecycle4096`; see the
 [exact-source reproduction commands and interpretation](../unified_bench/README.md#ordinary-columngraph-lifecycle-control-5338).
