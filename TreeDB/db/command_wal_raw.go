@@ -976,7 +976,11 @@ func (db *DB) cleanupCommandWALCoveredSegmentsV1(scanSealedPrefix bool) (retErr 
 	if scanNs := commandWALDurationNs(time.Since(scanStart)); scanNs > 0 {
 		db.commandWALCleanupScanNs.Add(scanNs)
 	}
-	defer closeCommandWALCleanupDecisions(decisions)
+	defer func() {
+		if closeErr := closeCommandWALCleanupDecisions(decisions); closeErr != nil {
+			retErr = commandWALCleanupWithHardError(retErr, closeErr)
+		}
+	}()
 	if hooks := db.testCommandWALCleanupHooks; err == nil && hooks != nil && hooks.afterScan != nil {
 		hooks.afterScan()
 	}
@@ -1089,9 +1093,36 @@ func (db *DB) cleanupCommandWALCoveredSegmentsV1(scanSealedPrefix bool) (retErr 
 		}
 	}
 	if syncErr := db.syncCommandWALCleanupNamespaceIfDirty(); syncErr != nil {
-		return syncErr
+		return commandWALCleanupWithHardError(err, syncErr)
 	}
 	return err
+}
+
+// A hard I/O failure must reach callers that treat a stale or unavailable
+// proof as pending work. Keep the refusal as context and retain independent
+// causes, such as a failed stat joined to a stale journal snapshot.
+func commandWALCleanupWithHardError(prior, hard error) error {
+	if hard == nil {
+		return prior
+	}
+	if prior == nil {
+		return hard
+	}
+	if !errors.Is(prior, errDurableWALCleanupProofUnavailable) &&
+		!errors.Is(prior, errDurableWALCleanupProofStale) &&
+		!errors.Is(prior, commitlog.ErrCommandWALCleanupSnapshotStale) {
+		return errors.Join(prior, hard)
+	}
+	if group, ok := prior.(interface{ Unwrap() []error }); ok {
+		for _, cause := range group.Unwrap() {
+			hard = commandWALCleanupWithHardError(cause, hard)
+		}
+		return hard
+	}
+	if cause := errors.Unwrap(prior); cause != nil {
+		hard = commandWALCleanupWithHardError(cause, hard)
+	}
+	return fmt.Errorf("%v: %w", prior, hard)
 }
 
 func (db *DB) syncCommandWALCleanupNamespaceIfDirty() error {
