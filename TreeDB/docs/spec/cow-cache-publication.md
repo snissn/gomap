@@ -366,13 +366,16 @@ a hit needs no decoder, dictionary recapture or physical decoder mutex. Resource
 counts and admission callbacks govern construction of new definition owners and
 pins; a warm copied page constructs none and does not retain those owners.
 Captured-only providers keep their original local definition policy before any
-cache reuse. Leaf inspection reads one fixed maximum
-metadata window, interprets only the checked header and frame prefix, and ignores
-extra bytes. EOF beyond complete required metadata is harmless; truncated
-metadata and corruption retain the original errors. Uncompressed value-prefix
-checks reuse the window when present and otherwise read their exact bytes.
-Registered file identity checks, full CRC verification before cache promotion,
-page validation, cache disablement and captured-cut lifetimes remain required.
+cache reuse. The snapshot inspects the leaf through its exact registered
+value-log segment. An eligible mapping covers the checked record range within
+the producer-visible file extent. The positional fallback reads one bounded
+metadata window and fetches a selected raw value prefix separately when needed.
+Both paths validate the header, frame and selected value prefix under the
+caller limits. Incomplete required metadata returns EOF. A short payload after
+complete metadata is detected by the full read on a cache miss. The inspection
+returns an owned shape while the cut retains the segment. Registered file
+identity, full record CRC before promotion, decoded-page validation and cache
+disablement apply to both paths.
 
 After a full verified decode, repeated COW misses may populate the original
 backend leaf cache through explicit cache-owned admission. Each configured slot

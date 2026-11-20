@@ -41,6 +41,34 @@ func (s *Snapshot) PinnedValueLogFile(fileID uint32) (*os.File, rootpublication.
 		return nil, rootpublication.StableIdentity{}, err
 	}
 	defer s.endRead()
+	f, identity, err := s.pinnedValueLogSegment(fileID)
+	if err != nil {
+		return nil, rootpublication.StableIdentity{}, err
+	}
+	return f.File, identity, nil
+}
+
+// InspectPinnedCOWLeafRecord inspects the same retained segment as
+// PinnedValueLogFile and can use its managed mapping. The caller must retain
+// the snapshot throughout any use of the returned handle.
+func (s *Snapshot) InspectPinnedCOWLeafRecord(ptr page.ValuePtr, limits valuelog.COWReadLimits) (*os.File, rootpublication.StableIdentity, valuelog.COWRecordShape, error) {
+	if s == nil {
+		return nil, rootpublication.StableIdentity{}, valuelog.COWRecordShape{}, ErrClosed
+	}
+	if err := s.beginRead(); err != nil {
+		return nil, rootpublication.StableIdentity{}, valuelog.COWRecordShape{}, err
+	}
+	defer s.endRead()
+	f, identity, err := s.pinnedValueLogSegment(ptr.FileID)
+	if err != nil {
+		return nil, rootpublication.StableIdentity{}, valuelog.COWRecordShape{}, err
+	}
+	shape, err := f.InspectCOWLeafRecord(ptr, limits)
+	return f.File, identity, shape, err
+}
+
+// The caller holds a snapshot read.
+func (s *Snapshot) pinnedValueLogSegment(fileID uint32) (*valuelog.File, rootpublication.StableIdentity, error) {
 	if s.state == nil || s.state.ValueLogSet == nil {
 		return nil, rootpublication.StableIdentity{}, rootpublication.ErrUnresolvedResource
 	}
@@ -52,12 +80,12 @@ func (s *Snapshot) PinnedValueLogFile(fileID uint32) (*os.File, rootpublication.
 	if !ok {
 		return nil, rootpublication.StableIdentity{}, rootpublication.ErrUnresolvedResource
 	}
-	return f.File, identity, nil
+	return f, identity, nil
 }
 
 // CopyVerifiedCachedLeafPage copies a hit from this captured snapshot's existing
 // decoded cache into caller-admitted page storage. The caller must first inspect
-// the record through PinnedValueLogFile and apply its shape/codec/limit policy.
+// the pinned record and apply its shape/codec/limit policy.
 // The exact inspected handle and registered identity must still belong to this
 // snapshot. Misses, unverified records, disabled caches and insufficient scratch
 // return no hit; this operation never allocates or admits a cache entry. The

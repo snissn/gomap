@@ -191,10 +191,50 @@ func InspectCOWRecord(f *os.File, ptr page.ValuePtr, limits COWReadLimits) (COWR
 // checked here. Leaves are at most one page, grouped raw bytes at most 255
 // pages, and stored records at most 2MiB, in addition to the caller's limits.
 func InspectCOWLeafRecord(f *os.File, ptr page.ValuePtr, limits COWReadLimits) (COWRecordShape, error) {
+	limits = cowLeafReadLimits(limits)
+	if err := cowCheckReadSource(f, ptr, limits, true); err != nil {
+		return COWRecordShape{}, err
+	}
+	return inspectCOWLeafReadAt(f, ptr, limits)
+}
+
+// InspectCOWLeafRecord borrows metadata from the registered segment's mapping
+// when the existing mmap policy and readable file size permit it. The caller
+// retains the File and producer visibility for the entire inspection.
+func (f *File) InspectCOWLeafRecord(ptr page.ValuePtr, limits COWReadLimits) (COWRecordShape, error) {
+	if f == nil || f.ID != ptr.FileID {
+		return COWRecordShape{}, ErrCOWReadUnsupported
+	}
+	limits = cowLeafReadLimits(limits)
+	if err := cowCheckReadSource(f.File, ptr, limits, true); err != nil {
+		return COWRecordShape{}, err
+	}
+	// A full mapped record also covers a selected raw value's prefix when it
+	// sits beyond the fixed metadata window. The parser verifies the hint.
+	hint := uint64(page.ValuePtrRecordLength(ptr))
+	if hint >= headerWithoutCRC && hint+4 <= limits.MaxRecordBytes && ptr.Offset <= math.MaxInt64-hint {
+		data, _ := f.mmapData.Load().([]byte)
+		if data == nil && f.tryEnableSealedLazyMmap() {
+			data, _ = f.mmapData.Load().([]byte)
+		}
+		if data != nil {
+			start, end := int64(ptr.Offset-4), int64(ptr.Offset+hint)
+			// A refreshed writable mapping can reserve address space past EOF.
+			if data, ok := f.ensureMmapRangeReadable(data, start, end); ok && end <= f.verifiedFileSize.Load() {
+				f.mmapReadHits.Add(1)
+				return inspectCOWLeafMetadata(f.File, ptr, limits, data[start:end:end])
+			}
+		}
+	}
+	f.mmapReadFallbackReadAt.Add(1)
+	return inspectCOWLeafReadAt(f.File, ptr, limits)
+}
+
+func cowLeafReadLimits(limits COWReadLimits) COWReadLimits {
 	limits.MaxRecordBytes = min(limits.MaxRecordBytes, 2<<20)
 	limits.MaxRawBytes = min(limits.MaxRawBytes, MaxFrameK*page.PageSize)
 	limits.MaxValueBytes = min(limits.MaxValueBytes, page.PageSize)
-	return inspectCOWLeafRecord(f, ptr, limits)
+	return limits
 }
 
 // One fixed metadata window replaces the separate header/frame/offset reads.
@@ -202,16 +242,17 @@ func InspectCOWLeafRecord(f *os.File, ptr page.ValuePtr, limits COWReadLimits) (
 // no authority. EOF beyond that prefix is harmless, but missing metadata and
 // other read errors retain the ordinary inspector's failure behavior. This
 // buffer fits within the existing separately rounded inspection envelope.
-func inspectCOWLeafRecord(f *os.File, ptr page.ValuePtr, limits COWReadLimits) (COWRecordShape, error) {
-	if err := cowCheckReadSource(f, ptr, limits, true); err != nil {
-		return COWRecordShape{}, err
-	}
+func inspectCOWLeafReadAt(f *os.File, ptr page.ValuePtr, limits COWReadLimits) (COWRecordShape, error) {
 	var metadata [HeaderSize + cowMaxPrefix]byte
 	available, readErr := f.ReadAt(metadata[:], int64(ptr.Offset-4))
 	if readErr != nil && readErr != io.EOF {
 		return COWRecordShape{}, readErr
 	}
-	if available < HeaderSize {
+	return inspectCOWLeafMetadata(f, ptr, limits, metadata[:available])
+}
+
+func inspectCOWLeafMetadata(f *os.File, ptr page.ValuePtr, limits COWReadLimits, metadata []byte) (COWRecordShape, error) {
+	if len(metadata) < HeaderSize {
 		return COWRecordShape{}, io.EOF
 	}
 	header := metadata[:HeaderSize]
@@ -224,7 +265,7 @@ func inspectCOWLeafRecord(f *os.File, ptr page.ValuePtr, limits COWReadLimits) (
 		if n < FrameHeaderSize {
 			return COWRecordShape{}, ErrCorrupt
 		}
-		if available < HeaderSize+FrameHeaderSize {
+		if len(metadata) < HeaderSize+FrameHeaderSize {
 			return COWRecordShape{}, io.EOF
 		}
 		k := int(metadata[HeaderSize+2])
@@ -235,7 +276,7 @@ func inspectCOWLeafRecord(f *os.File, ptr page.ValuePtr, limits COWReadLimits) (
 		if uint64(p) > uint64(n) {
 			return COWRecordShape{}, ErrCorrupt
 		}
-		if available < HeaderSize+p {
+		if len(metadata) < HeaderSize+p {
 			return COWRecordShape{}, io.EOF
 		}
 	}
@@ -243,7 +284,7 @@ func inspectCOWLeafRecord(f *os.File, ptr page.ValuePtr, limits COWReadLimits) (
 	if err != nil {
 		return COWRecordShape{}, err
 	}
-	return inspectCOWValuePrefix(f, ptr, s, true, metadata[:available])
+	return inspectCOWValuePrefix(f, ptr, s, true, metadata)
 }
 
 func inspectCOWRecord(f *os.File, ptr page.ValuePtr, limits COWReadLimits, leaf bool) (COWRecordShape, error) {

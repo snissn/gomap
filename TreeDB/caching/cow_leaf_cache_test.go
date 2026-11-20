@@ -58,13 +58,28 @@ func cowLeafCacheModeFixture(t testing.TB, entries int, compressed bool, mode st
 	return db, backend, want
 }
 
-func cowLeafCacheCounter(t *testing.T, backend *backenddb.DB, name string) uint64 {
+func cowLeafCacheCounter(t testing.TB, backend *backenddb.DB, name string) uint64 {
 	t.Helper()
 	value, err := strconv.ParseUint(backend.Stats()["treedb.process.read_path.outer_leaf.cache."+name], 10, 64)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return value
+}
+
+func disableCOWSealedLeafMmapForFaultInjection(t *testing.T) {
+	t.Helper()
+	previous := valuelog.MaxMappedLeafSealedSegments
+	valuelog.MaxMappedLeafSealedSegments = 0
+	t.Cleanup(func() { valuelog.MaxMappedLeafSealedSegments = previous })
+}
+
+func requireCOWUnmappedFaultFixture(t *testing.T, backend *backenddb.DB) {
+	t.Helper()
+	stats := backend.Stats()
+	if active, dead := stats["treedb.vlog.mmap_active_bytes"], stats["treedb.vlog.mmap_dead_bytes"]; active != "0" || dead != "0" {
+		t.Fatalf("fault fixture has active mmap bytes=%s, retired mmap bytes=%s", active, dead)
+	}
 }
 
 // The write-populated case first verifies write-origin pages, then reuses
@@ -164,6 +179,7 @@ func TestCOWPhysicalLeafCacheActivationAndCapturedCuts(t *testing.T) {
 }
 
 func TestCOWPhysicalLeafCacheRequiresVerifiedRecordAndInspection(t *testing.T) {
+	disableCOWSealedLeafMmapForFaultInjection(t)
 	db, backend, want := cowLeafCacheFixture(t, 128, false)
 	s, err := db.acquireCOWSnapshotWithError()
 	if err != nil {
@@ -196,6 +212,7 @@ func TestCOWPhysicalLeafCacheRequiresVerifiedRecordAndInspection(t *testing.T) {
 	if _, _, err := basis.snapshot.CopyVerifiedCachedLeafPage(ptr, nil, identity, leafScratch[:]); !errors.Is(err, rootpublication.ErrResourceConflict) {
 		t.Fatalf("wrong inspected handle: %v", err)
 	}
+	requireCOWUnmappedFaultFixture(t, backend)
 	writer, err := os.OpenFile(f.Name(), os.O_RDWR, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -222,6 +239,7 @@ func TestCOWPhysicalLeafCacheRequiresVerifiedRecordAndInspection(t *testing.T) {
 	if _, hit, err := basis.snapshot.CopyVerifiedCachedLeafPage(ptr, f, identity, leafScratch[:]); err != nil || hit {
 		t.Fatalf("failed full decode upgraded record: hit=%t %v", hit, err)
 	}
+	requireCOWUnmappedFaultFixture(t, backend)
 	if _, err := writer.WriteAt(original[:], crcOffset); err != nil {
 		t.Fatal(err)
 	}
@@ -238,6 +256,13 @@ func TestCOWPhysicalLeafCacheRequiresVerifiedRecordAndInspection(t *testing.T) {
 		t.Fatal("verified retry did not enable actual COW cache hit")
 	}
 	// Even a verified cached page cannot bypass the original record inspector.
+	requireCOWUnmappedFaultFixture(t, backend)
+	// The same pointer and identity hold a verified page immediately before
+	// this header is rejected by the deliberately unmapped fixture.
+	if _, hit, err := basis.snapshot.CopyVerifiedCachedLeafPage(ptr, f, identity, leafScratch[:]); err != nil || !hit {
+		t.Fatalf("expected verified page before header rejection: hit=%t %v", hit, err)
+	}
+	beforeHits = cowLeafCacheCounter(t, backend, "hits")
 	versionOffset := int64(ptr.Offset)
 	var version [1]byte
 	if _, err := writer.ReadAt(version[:], versionOffset); err != nil {
@@ -252,6 +277,9 @@ func TestCOWPhysicalLeafCacheRequiresVerifiedRecordAndInspection(t *testing.T) {
 	}
 	if _, err := db.Get([]byte("a000")); !errors.Is(err, valuelog.ErrCorrupt) {
 		t.Fatalf("public point bypassed record inspection: %v", err)
+	}
+	if hits := cowLeafCacheCounter(t, backend, "hits"); hits != beforeHits {
+		t.Fatalf("rejected inspection used the verified cache: hits=%d, want %d", hits, beforeHits)
 	}
 	if _, err := writer.WriteAt(version[:], versionOffset); err != nil {
 		t.Fatal(err)

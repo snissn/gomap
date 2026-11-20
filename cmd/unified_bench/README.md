@@ -1811,6 +1811,25 @@ All public classification gates remain unchanged. See
 [the M0 contract](../../TreeDB/docs/performance/index-vacuum-m0.md) for boundaries
 and the incremental #4519 scope.
 
+### COW physical leaf inspection
+
+From the repository root, run these standalone Go package benchmarks with
+TreeDB environment overrides unset. The public rows include acquiring a COW
+read cut, seeking, checking the owned result and closing the cut.
+
+```sh
+GOWORK=off GOMAXPROCS=8 go test ./TreeDB/caching -run '^$' -bench '^BenchmarkCOWVerifiedLeafMissLifecycle$/^entries=(128|-1)$/^distinct=(true|false)$' -benchtime=40000x -benchmem
+GOWORK=off GOMAXPROCS=8 go test ./TreeDB/caching -run '^$' -bench '^BenchmarkCOWParallelWarmSeek$' -benchtime=100000x -benchmem
+GOWORK=off GOMAXPROCS=8 go test ./TreeDB/internal/valuelog -run '^$' -bench '^BenchmarkCOW(Interior)?LeafInspector$' -benchtime=1000000x -benchmem
+```
+
+The public fixtures reopen a checkpointed `cow_ordered` database with the
+TreeDB WAL disabled. Compare repeat timings, `cache-hits/op`, `mmap-hits/op`,
+and allocations. The interior control lets the positional reader fill its
+metadata window in one call. The direct benchmarks report the observed mmap and
+fallback counters and can run on platforms without mapping support. See the
+[standalone syscall trace recipe](../benchprof/README.md#cow-physical-leaf-inspection).
+
 ### Public COW point-read allocation boundary
 
 `BenchmarkCOWPublicPointRead` is a standalone public-package diagnostic:

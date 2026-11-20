@@ -543,6 +543,16 @@ read-side stores. `TestCOWPhysicalLeafCacheRequiresVerifiedRecordAndInspection`
 requires the first write-origin entry to undergo full record CRC verification,
 keeps failed verification untrusted, checks exact captured file/identity and
 scratch, and preserves record inspection even after a verified cache hit.
+`TestCOWWarmSeekUsesMappedLeafInspection` warms a real reopened dictionary
+leaf. A checked public seek then records one verified decoded-cache hit and one
+mapped inspection. `TestCOWWarmSeekRetainsMappedLeafAcrossCheckpoint` exercises
+the old mapping through a held cut after publication of a newer value. The
+corruption controls exercise the same pinned record on deliberately unmapped
+fixtures. `TestCOWLeafInspectionNoMappingUsesReadAt` covers budget denial and
+disabled writable mapping, including on Windows.
+`TestCOWLeafInspectionTruncatedRecord` writes short fixtures before opening them
+and checks positional error parity, including the full read of a short payload
+and a writable remap whose address range crosses EOF.
 `TestLeafPageReadCacheVerifiedRecordUpgradeExistingOnly` covers byte mismatch,
 maintenance disablement, eviction, caller isolation and no miss population.
 The existing raw/native workspace lifetime and pointer checkpoint/maintenance

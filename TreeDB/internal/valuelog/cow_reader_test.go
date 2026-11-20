@@ -6,13 +6,16 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/page"
+	templ "github.com/snissn/gomap/TreeDB/template"
 )
 
 var cowTestLimits = COWReadLimits{MaxRecordBytes: 1 << 20, MaxRawBytes: 1 << 20, MaxValueBytes: 1 << 20}
@@ -599,6 +602,186 @@ func cowTestLeafFrame(t testing.TB, body []byte, sub uint8) (*os.File, page.Valu
 	return f, ptr
 }
 
+func TestCOWLeafInspectionUsesManagedMapping(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap not supported on windows")
+	}
+	leaf := buildSparseLeafPageForPayloadTest(t)
+	// The selected raw leaf starts beyond the fixed ReadAt metadata window.
+	raw, ptr := cowTestLeafFrame(t, cowTestFrame(0, BlockCodecNone, [][]byte{leaf, leaf}, nil), 1)
+	f := cowOpenManagedLeafForTest(t, raw.Name(), ptr.FileID)
+
+	want, err := InspectCOWLeafRecord(raw, ptr, cowTestLimits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := f.InspectCOWLeafRecord(ptr, cowTestLimits)
+	if err != nil || got != want {
+		t.Fatalf("mapped shape=%+v, err=%v, want %+v", got, err, want)
+	}
+	if hits, fallbacks := f.mmapReadHits.Load(), f.mmapReadFallbackReadAt.Load(); hits != 1 || fallbacks != 0 {
+		t.Fatalf("mapped hits=%d, ReadAt fallbacks=%d", hits, fallbacks)
+	}
+	limited := cowTestLimits
+	limited.MaxValueBytes = page.PageSize - 1
+	if _, err := f.InspectCOWLeafRecord(ptr, limited); !errors.Is(err, ErrCOWReadCapacity) {
+		t.Fatalf("mapped read exceeded caller limit: %v", err)
+	}
+	bad := ptr
+	bad.Length = page.ValuePtrMarkGrouped(page.ValuePtrRecordLength(ptr)-1, 1)
+	if _, err := f.InspectCOWLeafRecord(bad, cowTestLimits); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("mapped read accepted an invalid length hint: %v", err)
+	}
+	wrongFile := ptr
+	wrongFile.FileID++
+	if _, err := f.InspectCOWLeafRecord(wrongFile, cowTestLimits); !errors.Is(err, ErrCOWReadUnsupported) {
+		t.Fatalf("mapped read accepted a different segment: %v", err)
+	}
+	noHint := ptr
+	noHint.Length = page.ValuePtrMarkGrouped(0, 1)
+	want, err = InspectCOWLeafRecord(raw, noHint, cowTestLimits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err = f.InspectCOWLeafRecord(noHint, cowTestLimits)
+	if err != nil || got != want || f.mmapReadFallbackReadAt.Load() != 1 {
+		t.Fatalf("no-hint shape=%+v, err=%v, ReadAt fallbacks=%d, want %+v", got, err, f.mmapReadFallbackReadAt.Load(), want)
+	}
+}
+
+func TestCOWLeafInspectionNoMappingUsesReadAt(t *testing.T) {
+	leaf := buildSparseLeafPageForPayloadTest(t)
+	raw, ptr := cowTestLeafRecord(t, leaf, BlockCodecNone)
+	want, err := InspectCOWLeafRecord(raw, ptr, cowTestLimits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"sealed-budget-denied", "current-writable-disabled"} {
+		t.Run(mode, func(t *testing.T) {
+			if mode == "sealed-budget-denied" {
+				withMappedLeafSealedBudget(t, 0)
+			} else {
+				current, currentLeaf := enableCurrentWritableMmap, enableCurrentLeafWritableMmap
+				enableCurrentWritableMmap, enableCurrentLeafWritableMmap = false, false
+				t.Cleanup(func() {
+					enableCurrentWritableMmap, enableCurrentLeafWritableMmap = current, currentLeaf
+				})
+			}
+			manager, err := NewManager(filepath.Dir(raw.Name()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if err := manager.Close(); err != nil {
+					t.Error(err)
+				}
+			})
+			if mode == "current-writable-disabled" {
+				if err := manager.PromoteCurrentWritable(ptr.FileID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			f, err := manager.fileFor(ptr.FileID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := f.InspectCOWLeafRecord(ptr, cowTestLimits)
+			if err != nil || got != want {
+				t.Fatalf("fallback shape=%+v err=%v, want %+v", got, err, want)
+			}
+			data, _ := f.mmapData.Load().([]byte)
+			if hits, fallbacks := f.mmapReadHits.Load(), f.mmapReadFallbackReadAt.Load(); len(data) != 0 || hits != 0 || fallbacks != 1 {
+				t.Fatalf("mapped bytes=%d hits=%d, ReadAt fallbacks=%d", len(data), hits, fallbacks)
+			}
+		})
+	}
+}
+
+func TestCOWLeafInspectionTruncatedRecord(t *testing.T) {
+	leaf := buildSparseLeafPageForPayloadTest(t)
+	source, ptr := cowTestLeafRecord(t, leaf, BlockCodecSnappy)
+	full, err := os.ReadFile(source.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const singleValueTable = 8 + 2*4
+	for _, tc := range []struct {
+		name  string
+		size  int
+		err   error
+		grows bool
+	}{
+		{"header", HeaderSize - 1, io.EOF, false},
+		{"frame-header", HeaderSize + FrameHeaderSize - 1, io.EOF, false},
+		{"offset-table", HeaderSize + FrameHeaderSize + singleValueTable - 1, io.EOF, false},
+		{"compressed-body", len(full) - 1, nil, false},
+		{"writable-remap-past-eof", len(full) - 1, nil, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.grows && runtime.GOOS == "windows" {
+				t.Skip("mmap not supported on windows")
+			}
+			path := compactLeafPayloadTestPath(t, t.TempDir(), 1)
+			if err := os.WriteFile(path, full[:tc.size], 0o600); err != nil {
+				t.Fatal(err)
+			}
+			f := cowOpenManagedLeafForTest(t, path, ptr.FileID)
+			end := int64(ptr.Offset + uint64(page.ValuePtrRecordLength(ptr)))
+			if tc.grows {
+				// Seed an exact-size mapping so inspection has to refresh it.
+				if !f.tryEnableSealedLazyMmap() {
+					t.Fatal("could not map the short segment")
+				}
+				data, _ := f.mmapData.Load().([]byte)
+				if int64(len(data)) >= end {
+					t.Fatalf("initial mapping size %d already spans requested end %d", len(data), end)
+				}
+				withCurrentWritableMmapTargetBytes(t, 64<<10)
+				enabled := enableCurrentLeafWritableMmap
+				enableCurrentLeafWritableMmap = true
+				t.Cleanup(func() { enableCurrentLeafWritableMmap = enabled })
+				f.currentWritable.Store(true)
+			}
+			want, wantErr := InspectCOWLeafRecord(f.File, ptr, cowTestLimits)
+			got, err := f.InspectCOWLeafRecord(ptr, cowTestLimits)
+			if !errors.Is(wantErr, tc.err) || !errors.Is(err, wantErr) || got != want {
+				t.Fatalf("managed shape=%+v err=%v, positional shape=%+v err=%v, expected error %v", got, err, want, wantErr, tc.err)
+			}
+			if tc.grows {
+				data, _ := f.mmapData.Load().([]byte)
+				if int64(len(data)) < end || f.verifiedFileSize.Load() >= end {
+					t.Fatalf("expected remap beyond EOF: mapped=%d verified=%d end=%d", len(data), f.verifiedFileSize.Load(), end)
+				}
+			}
+			if hits, fallbacks := f.mmapReadHits.Load(), f.mmapReadFallbackReadAt.Load(); hits != 0 || fallbacks != 1 {
+				t.Fatalf("mapped hits=%d, ReadAt fallbacks=%d", hits, fallbacks)
+			}
+			if tc.err == nil {
+				payload := make([]byte, got.PayloadBytes())
+				raw := make([]byte, got.RawBytes)
+				dst := make([]byte, 0, page.PageSize)
+				if _, err := ReadCOWLeafPage(f.File, ptr, got, true, payload, raw, dst, nil); !errors.Is(err, io.EOF) {
+					t.Fatalf("full read of short body: %v, want EOF", err)
+				}
+			}
+		})
+	}
+}
+
+func cowOpenManagedLeafForTest(t *testing.T, path string, fileID uint32) *File {
+	t.Helper()
+	f, err := openFile(path, fileID, nil, nil, templ.DecodeOptions{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := f.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	return f
+}
+
 func TestCOWLeafRecordBoundedRawCompactAndCompressed(t *testing.T) {
 	pageBytes := buildSparseLeafPageForPayloadTest(t)
 	compact, ok, err := MaybeCompactLeafLogPayload(pageBytes)
@@ -644,6 +827,13 @@ func TestCOWLeafRecordBoundedRawCompactAndCompressed(t *testing.T) {
 			s, err := InspectCOWLeafRecord(f, ptr, cowTestLimits)
 			if err != nil {
 				t.Fatal(err)
+			}
+			managed := cowOpenManagedLeafForTest(t, f.Name(), ptr.FileID)
+			if mapped, err := managed.InspectCOWLeafRecord(ptr, cowTestLimits); err != nil || mapped != s {
+				t.Fatalf("managed shape=%+v err=%v, positional shape=%+v", mapped, err, s)
+			}
+			if runtime.GOOS != "windows" && managed.mmapReadHits.Load() != 1 {
+				t.Fatal("managed inspector did not use the sealed mapping")
 			}
 			payload, raw, out := make([]byte, s.PayloadBytes()), make([]byte, s.RawBytes), make([]byte, 0, page.PageSize)
 			callback := d.Decode

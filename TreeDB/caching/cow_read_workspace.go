@@ -823,12 +823,11 @@ func (b *cowBackendBasis) readPhysicalLeafWithWorkspace(c *cowCache, w *cowReadW
 // reusable scratch retains a caller/provider; the shared codec owns its checked
 // definition independently. Captured-only providers keep their local decoder.
 func (b *cowBackendBasis) readPhysicalLeafWithDictionary(c *cowCache, w *cowReadWorkspace, ptr page.LeafLogPtr, dst []byte, native, localBlock bool, independent *cowCacheDictionaryRead) ([]byte, error) {
-	f, identity, err := b.snapshot.PinnedValueLogFile(ptr.ValuePtr().FileID)
+	f, identity, shape, err := b.snapshot.InspectPinnedCOWLeafRecord(ptr.ValuePtr(), w.limits)
 	if err != nil {
-		return nil, fmt.Errorf("COW physical leaf pinned-file ptr=%+v: %w", ptr.ValuePtr(), err)
-	}
-	shape, err := valuelog.InspectCOWLeafRecord(f, ptr.ValuePtr(), w.limits)
-	if err != nil {
+		if f == nil {
+			return nil, fmt.Errorf("COW physical leaf pinned-file ptr=%+v: %w", ptr.ValuePtr(), err)
+		}
 		return nil, fmt.Errorf("COW physical leaf inspect ptr=%+v file=%q identity=%+v: %w", ptr.ValuePtr(), f.Name(), identity, err)
 	}
 	// Packing/rewrite may legitimately publish dictionary leaves even though
