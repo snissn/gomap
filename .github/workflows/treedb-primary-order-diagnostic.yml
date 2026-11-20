@@ -1,11 +1,6 @@
-name: TreeDB PRIMARY order diagnostic
+name: TreeDB PRIMARY interleaving diagnostic
 
 on:
-  pull_request:
-    paths:
-      - .github/workflows/treedb-primary-order-diagnostic.yml
-      - .github/scripts/test_mvcc_primary_order_diagnostic.py
-      - scripts/mvcc_primary_order_diagnostic.py
   workflow_dispatch:
 
 permissions:
@@ -13,14 +8,13 @@ permissions:
 
 jobs:
   controls:
-    name: PRIMARY order controls (runner ${{ matrix.shard }})
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    name: PRIMARY interleaving (runner ${{ matrix.shard }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 18
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2]
+        shard: [1, 2, 3, 4]
     env:
       GOWORK: "off"
       PYTHONDONTWRITEBYTECODE: "1"
@@ -28,7 +22,7 @@ jobs:
       - name: Checkout exact diagnostic source
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Setup Go as in the enforcing runner
@@ -37,28 +31,28 @@ jobs:
           go-version-file: go.mod
           cache: false
 
-      - name: Validate diagnostic parser and counterfactuals
+      - name: Check grant and sample contracts
         run: |
           python3 .github/scripts/test_mvcc_primary_cost_gate.py
-          python3 .github/scripts/test_mvcc_primary_order_diagnostic.py
+          python3 .github/scripts/test_mvcc_primary_interleave_diagnostic.py
 
-      - name: Run declared full-length controls
+      - name: Run complete original and resident control schedules
         env:
-          EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          EXACT_HEAD: ${{ github.sha }}
           RUNNER_SLOT: ${{ matrix.shard }}
         run: |
-          python3 scripts/mvcc_primary_order_diagnostic.py \
+          python3 scripts/mvcc_primary_interleave_diagnostic.py \
             --root "$GITHUB_WORKSPACE" --head "$EXACT_HEAD" --slot "$RUNNER_SLOT" \
-            --output "$RUNNER_TEMP/primary-order"
+            --output "$RUNNER_TEMP/primary-interleave"
 
       - name: Preserve completed and partial evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: primary-order-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}
+          name: primary-interleave-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}
           path: |
-            ${{ runner.temp }}/primary-order
-            !${{ runner.temp }}/primary-order/**/*.test
-            !${{ runner.temp }}/primary-order/tmp/**
+            ${{ runner.temp }}/primary-interleave
+            !${{ runner.temp }}/primary-interleave/**/*.test
+            !${{ runner.temp }}/primary-interleave/tmp/**
           if-no-files-found: warn
           retention-days: 14

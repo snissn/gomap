@@ -1,0 +1,106 @@
+// primaryInterleave replaces only the benchmark's timed loop in its build overlay.
+// The maintained seed, durability API, and lifecycle test are retained verbatim.
+func primaryInterleave(b *testing.B, st *Store, opts treedb.Options, mutation []Mutation) int {
+	const measured, chunk, stride = 128, 16, 4
+	injected := 0
+	extra := []Mutation{{Key: mutation[0].Key, Value: []byte("again")}}
+	positive := os.Getenv("GOMAP_PRIMARY_INTERLEAVE_IO") == "1"
+	steps := func(first, end int) {
+		for i := first; i < end; i++ {
+			if err := st.CommitAt(100, mutation, CommitDurable); err != nil {
+				b.Fatal(err)
+			}
+			if positive && (i+1)%stride == 0 {
+				if err := st.CommitAt(100, extra, CommitDurable); err != nil {
+					b.Fatal(err)
+				}
+				injected++
+			}
+		}
+	}
+	if b.N != measured {
+		if b.N != 1 {
+			b.Fatalf("unexpected benchmark calibration count %d", b.N)
+		}
+		b.ResetTimer()
+		steps(0, b.N)
+		b.StopTimer()
+		return injected
+	}
+
+	// Both schedules initialize and reset once. The resident schedules park
+	// outside timing and allocator sampling. The original runs one window.
+	b.StopTimer()
+	b.ResetTimer()
+	fd := os.Getenv("GOMAP_PRIMARY_INTERLEAVE_STATUS_FD")
+	window := measured
+	var status *os.File
+	if fd != "" {
+		n, err := strconv.Atoi(fd)
+		if err != nil || n < 3 {
+			b.Fatal("invalid supervisor status descriptor", err)
+		}
+		status = os.NewFile(uintptr(n), "primary-interleave-status")
+		if status == nil {
+			b.Fatal("missing supervisor descriptor")
+		}
+		defer status.Close()
+		window = chunk
+	}
+	marker := func(format string, args ...any) {
+		if _, err := fmt.Fprintf(os.Stderr, format, args...); err != nil {
+			b.Fatal(err)
+		}
+	}
+	note := func(format string, args ...any) {
+		if _, err := fmt.Fprintf(status, format, args...); err != nil {
+			b.Fatal(err)
+		}
+	}
+	grant := func(want byte) {
+		var data [1]byte
+		n, err := os.Stdin.Read(data[:])
+		if n != 1 || err != nil || data[0] != want {
+			b.Fatalf("invalid supervisor grant %d: %d %v", want, data[0], err)
+		}
+	}
+	if status != nil {
+		note("READY\n")
+	}
+	for first := 0; first < measured; first += window {
+		part := first / window
+		if status != nil {
+			grant(byte(part))
+		}
+		marker("PRIMARY_WINDOW_START part=%d dir=%q\n", part, opts.Dir)
+		b.StartTimer()
+		steps(first, first+window)
+		b.StopTimer()
+		marker("PRIMARY_WINDOW_STOP part=%d total_ns=%d\n", part, b.Elapsed().Nanoseconds())
+		if status != nil {
+			note("DONE %d %d\n", part, b.Elapsed().Nanoseconds())
+		}
+	}
+	if status != nil {
+		// Park the completed process until every measured child has stopped.
+		grant(255)
+	}
+	return injected
+}
+
+func primaryInterleaveReadback(b *testing.B, opts treedb.Options, injected int) {
+	reopened, err := treedb.Open(opts)
+	if err != nil {
+		b.Fatal(err)
+	}
+	value, readErr := New(reopened).GetAt([]byte("k031"), 100)
+	closeErr := reopened.Close()
+	want := "after"
+	if injected > 0 {
+		want = "again"
+	}
+	if readErr != nil || closeErr != nil || !bytes.Equal(value.Value, []byte(want)) {
+		b.Fatalf("checked reopen: value=%q want=%q read=%v close=%v", value.Value, want, readErr, closeErr)
+	}
+	fmt.Fprintf(os.Stderr, "PRIMARY_READBACK normal=%d extra=%d value=%s\n", b.N, injected, want)
+}
