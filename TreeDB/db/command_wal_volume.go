@@ -2,6 +2,7 @@ package db
 
 import (
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -42,10 +43,16 @@ func (db *DB) commandWALHasDedicatedVolume(wal rootpublication.StableIdentity) (
 			return false, nil
 		}
 		identity, identityErr := rootpublication.StableIdentityFromFile(dir)
+		eligible := identityErr == nil && identity.Platform == indexIdentity.Platform && identity.VolumeID == indexIdentity.VolumeID
+		if eligible && path == layout.columnAssetDir {
+			// A nested column namespace can place assets on another volume.
+			names, err := dir.Readdirnames(1)
+			eligible = len(names) == 0 && errors.Is(err, io.EOF)
+		}
 		if err := dir.Close(); err != nil {
 			return false, errors.Join(identityErr, err)
 		}
-		if identityErr != nil || identity.Platform != indexIdentity.Platform || identity.VolumeID != indexIdentity.VolumeID {
+		if !eligible {
 			return false, nil
 		}
 	}

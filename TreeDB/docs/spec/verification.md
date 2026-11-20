@@ -2531,6 +2531,13 @@ Required command/data combinations:
 - command payload external refs for oversized logical payload bytes;
 - generated external files for future column-store apply outputs.
 
+Dedicated WAL sealed-file sync reuse has focused controls for exact ordered
+registrations and canonical fallback
+(`TestSealedDebtOnlyOriginalOrderedRegistrations`), incomplete rotation proof
+and sticky errors (`TestSealedDebtRefusesUnprovedCutAndPreservesStickyError`),
+and rejecting both top-level and nested column assets that can share the WAL
+volume (`TestCommandWALDedicatedVolumeRejectsSharedColumnAssets`).
+
 ### 11.5.4 Model, Property, and Fuzz Testing
 
 Required state-machine models:

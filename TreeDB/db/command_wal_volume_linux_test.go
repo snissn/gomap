@@ -63,6 +63,23 @@ func TestCommandWALDedicatedVolumeRejectsSharedColumnAssets(t *testing.T) {
 		t.Fatal("dedicated WAL layout declined")
 	}
 	assets := resolveStorageLayout(dir).columnAssetDir
+	namespace := filepath.Join(assets, "events")
+	segments := filepath.Join(namespace, "nested", "assets", "segments")
+	if err := os.MkdirAll(filepath.Dir(segments), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(walVolume, segments); err != nil {
+		t.Fatal(err)
+	}
+	if check() {
+		t.Fatal("nested column assets sharing the WAL device selected dedicated WAL credit")
+	}
+	if err := os.RemoveAll(namespace); err != nil {
+		t.Fatal(err)
+	}
+	if !check() {
+		t.Fatal("dedicated WAL layout declined after clearing column assets")
+	}
 	if err := os.Remove(assets); err != nil {
 		t.Fatal(err)
 	}
