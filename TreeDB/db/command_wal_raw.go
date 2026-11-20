@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"sort"
 	"sync"
@@ -984,6 +985,7 @@ func (db *DB) cleanupCommandWALCoveredSegmentsV1(scanSealedPrefix bool) (retErr 
 	if hooks := db.testCommandWALCleanupHooks; err == nil && hooks != nil && hooks.afterScan != nil {
 		hooks.afterScan()
 	}
+	var retiredFiles []*os.File
 	if err == nil {
 		db.durablePublishMu.Lock()
 		if err = db.revalidateDurableWALCleanupProofV1(proof); err == nil {
@@ -994,8 +996,12 @@ func (db *DB) cleanupCommandWALCoveredSegmentsV1(scanSealedPrefix bool) (retErr 
 				if retainErr := retainCommandWALCleanupAuthoritySegments(proof.segments, proof.journal, current); retainErr != nil {
 					return false, retainErr
 				}
+				var holdOpen *[]*os.File
+				if scanSealedPrefix && current.Ext4Stream {
+					holdOpen = &retiredFiles
+				}
 				var removeErr error
-				proof.segments, removeErr = removeCoveredCommandWALSegmentsWithRegistry(proof.segments, registry)
+				proof.segments, removeErr = unlinkCoveredCommandWALSegments(proof.segments, registry, holdOpen)
 				for i := range proof.segments {
 					if proof.segments[i].Removed {
 						return true, removeErr
@@ -1005,6 +1011,15 @@ func (db *DB) cleanupCommandWALCoveredSegmentsV1(scanSealedPrefix bool) (retErr 
 			})
 		}
 		db.durablePublishMu.Unlock()
+	}
+	// On ext4 the last close can reclaim the inode and its cached pages.
+	// Keep that work in this maintenance pass, after both proof locks and
+	// before accounting for removal or syncing the deletion namespace.
+	for _, file := range retiredFiles {
+		if hooks := db.testCommandWALCleanupHooks; hooks != nil && hooks.beforeRetiredClose != nil {
+			hooks.beforeRetiredClose(file)
+		}
+		err = commandWALCleanupWithHardError(err, file.Close())
 	}
 	decisions = proof.segments
 	removed := uint64(0)

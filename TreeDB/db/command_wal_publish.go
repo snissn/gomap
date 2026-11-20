@@ -937,7 +937,13 @@ func removeCoveredCommandWALSegments(decisions []commandWALSegmentCleanupDecisio
 	return removeCoveredCommandWALSegmentsWithRegistry(decisions, nil)
 }
 
-func removeCoveredCommandWALSegmentsWithRegistry(decisions []commandWALSegmentCleanupDecision, registry *rootpublication.IdentityPinRegistry) (_ []commandWALSegmentCleanupDecision, retErr error) {
+func removeCoveredCommandWALSegmentsWithRegistry(decisions []commandWALSegmentCleanupDecision, registry *rootpublication.IdentityPinRegistry) ([]commandWALSegmentCleanupDecision, error) {
+	return unlinkCoveredCommandWALSegments(decisions, registry, nil)
+}
+
+// If retiredFiles is supplied, the caller owns the final revalidation handles
+// for accepted unlinks, including partial batches that return an error.
+func unlinkCoveredCommandWALSegments(decisions []commandWALSegmentCleanupDecision, registry *rootpublication.IdentityPinRegistry, retiredFiles *[]*os.File) (_ []commandWALSegmentCleanupDecision, retErr error) {
 	defer func() {
 		if closeErr := closeCommandWALCleanupDecisions(decisions); closeErr != nil {
 			retErr = errors.Join(retErr, closeErr)
@@ -1041,8 +1047,13 @@ func removeCoveredCommandWALSegmentsWithRegistry(decisions []commandWALSegmentCl
 			return decisions, errors.Join(ErrRecoveryRequired, fmt.Errorf("revalidate command WAL cleanup target %s: %w", filepath.Base(decision.Path), openErr))
 		}
 		currentIdentity, identityErr := rootpublication.StableIdentityFromFile(current)
-		closeErr := current.Close()
-		if identityErr != nil || closeErr != nil || !rootpublication.SamePhysicalIdentity(decision.identity, currentIdentity) {
+		matches := identityErr == nil && rootpublication.SamePhysicalIdentity(decision.identity, currentIdentity)
+		holdOpen := retiredFiles != nil && matches
+		var closeErr error
+		if !holdOpen {
+			closeErr = current.Close()
+		}
+		if !matches || closeErr != nil {
 			revalidateErr := errors.Join(identityErr, closeErr)
 			if revalidateErr == nil {
 				revalidateErr = fmt.Errorf("command WAL cleanup target identity changed: %s", filepath.Base(decision.Path))
@@ -1057,6 +1068,9 @@ func removeCoveredCommandWALSegmentsWithRegistry(decisions []commandWALSegmentCl
 		}
 		removeErr := os.Remove(decision.Path)
 		if removeErr != nil && !os.IsNotExist(removeErr) {
+			if holdOpen {
+				removeErr = errors.Join(removeErr, current.Close())
+			}
 			decision.Error = removeErr.Error()
 			for i := leaseIndex; i < len(leases); i++ {
 				if leases[i].lease != nil {
@@ -1064,6 +1078,9 @@ func removeCoveredCommandWALSegmentsWithRegistry(decisions []commandWALSegmentCl
 				}
 			}
 			return decisions, removeErr
+		}
+		if holdOpen {
+			*retiredFiles = append(*retiredFiles, current)
 		}
 		if entry.lease != nil {
 			entry.lease.CommitDeleted()

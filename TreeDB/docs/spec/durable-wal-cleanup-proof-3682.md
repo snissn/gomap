@@ -132,8 +132,13 @@ Ordinary cleanup is serialized per DB and follows this order:
    acquiring all remaining candidate identity/namespace delete leases, and
    revalidating every pathname against its captured physical identity;
 7. unlink only the eligible exact identities;
-8. advance the in-process journal namespace generation and cleanup epoch, and
-   record command-WAL namespace-sync debt, as soon as any unlink succeeds;
+8. advance the in-process journal namespace generation and cleanup epoch after
+   any unlink succeeds. Deferred cleanup on an active writer selected as an
+   ext4 stream keeps each accepted removal's final revalidation handle across
+   unlink. It closes those handles under maintenance ownership after releasing
+   the journal and publication locks, so inode reclamation can overlap appends.
+   Record namespace-sync debt for every accepted removal, including when the
+   final close fails. Synchronous cleanup keeps the original ordering;
 9. sync the WAL directory, emit the before/after durability boundaries, and
    clear the debt only after the full boundary succeeds;
 10. report success only after the deletion namespace is durable. Cleanup never
@@ -158,7 +163,7 @@ in either case so a cleanup failure cannot strand the journal owner.
 
 Acquiring every delete lease before the first unlink prevents a later pinned
 candidate from producing an avoidable partial batch. If an observer, unlink,
-or directory-sync boundary fails after one unlink, the API returns
+retained-handle close, or directory-sync boundary fails after one unlink, the API returns
 `ErrRecoveryRequired` and retains namespace-sync debt. A same-process retry
 re-syncs the directory even when the removed pathname is already absent.
 
