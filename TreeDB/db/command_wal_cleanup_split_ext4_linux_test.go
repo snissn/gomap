@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"os"
+	"path/filepath"
 	"slices"
 	"syscall"
 	"testing"
@@ -11,6 +12,49 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
+
+func TestCommandWALCleanupSplitDirectory(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "actual")
+	if err := os.Mkdir(path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(root, "wal")
+	if err := os.Symlink(path, alias); err != nil {
+		t.Fatal(err)
+	}
+	notDirectory := filepath.Join(root, "regular")
+	if err := os.WriteFile(notDirectory, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	want, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{path, alias} {
+		dir, err := openSplitCommandWALCleanupDirectory(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, statErr := dir.Stat()
+		entries, readErr := dir.ReadDir(-1)
+		closeErr := dir.Close()
+		if err := errors.Join(statErr, readErr, closeErr); err != nil {
+			t.Fatal(err)
+		}
+		if !got.IsDir() || !os.SameFile(want, got) || len(entries) != 0 {
+			t.Fatalf("%q did not open the expected directory", name)
+		}
+	}
+	dir, err := openSplitCommandWALCleanupDirectory(notDirectory)
+	if dir != nil {
+		_ = dir.Close()
+		t.Fatal("opened a regular file as the staged cleanup directory")
+	}
+	if !errors.Is(err, syscall.ENOTDIR) {
+		t.Fatalf("regular-file directory open error = %v, want ENOTDIR", err)
+	}
+}
 
 func TestCommandWALCleanupSplitExt4SealedPrefix(t *testing.T) {
 	dir := t.TempDir()

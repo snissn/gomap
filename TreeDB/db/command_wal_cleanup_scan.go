@@ -245,6 +245,26 @@ func (db *DB) commandWALCleanupSplitValueLogVolume(snapshot commitlog.CommandJou
 	return identityErr == nil && identity.VolumeID != snapshot.ActiveIdentity.VolumeID && commitlog.IsExt4WALFilesystem(valueDir)
 }
 
+// Existing storage layouts may point walDir at an alternate directory. Keep
+// the common open directory-only, and resolve a configured final symlink before
+// retrying the exact directory open. The refresh still checks the configured
+// pathname against the directory this call captured.
+func openSplitCommandWALCleanupDirectory(path string) (*os.File, error) {
+	dir, err := rootpublication.OpenStableParent(path)
+	if err == nil || commandWALCleanupDescriptorExhausted(err) {
+		return dir, err
+	}
+	info, statErr := os.Lstat(path)
+	if statErr != nil || info.Mode()&os.ModeSymlink == 0 {
+		return nil, err
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return nil, err
+	}
+	return rootpublication.OpenStableParent(resolved)
+}
+
 // The existing proof capture already holds the append lock and names the active
 // generation. The cleanup owner serializes deletion. Rotation releases the
 // detached handles before allocating any of its own and forces a locked retry.
@@ -311,7 +331,7 @@ func (db *DB) scanSplitCommandWALCleanupPrefix(proof durableWALCleanupProofV1, s
 		// relative to this exact directory without following symlinks or
 		// blocking if a pathname was replaced with a FIFO.
 		var err error
-		refreshDir, err = os.Open(dir)
+		refreshDir, err = openSplitCommandWALCleanupDirectory(dir)
 		if commandWALCleanupDescriptorExhausted(err) {
 			return nil, nil
 		}
