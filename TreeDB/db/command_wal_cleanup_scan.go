@@ -174,6 +174,7 @@ func (db *DB) scanCommandWALCleanupProof(proof durableWALCleanupProofV1, scanSea
 		return scan.finish(closePrefix())
 	}
 
+	var suffixDescriptorErr error
 	err = proof.journalOwner.WithCleanupScanSnapshot(proof.journal, func(current commitlog.CommandJournalCleanupSnapshot) error {
 		segments, inventoryErr := simpleCommandWALCleanupInventory(dir, current)
 		if inventoryErr != nil && !commandWALCleanupDescriptorExhausted(inventoryErr) {
@@ -203,12 +204,33 @@ func (db *DB) scanCommandWALCleanupProof(proof durableWALCleanupProofV1, scanSea
 		if err := closePrefix(); err != nil {
 			return err
 		}
-		for _, seg := range segments[len(prefix) : len(segments)-1] {
-			scan.scanSegment(seg, false, true, nil)
+		suffix := segments[len(prefix):]
+		for i, seg := range suffix {
+			active := i == len(suffix)-1
+			var expected *rootpublication.StableIdentity
+			if active {
+				expected = &current.ActiveIdentity
+			}
+			if openErr := scan.scanSegment(seg, active, true, expected); openErr != nil {
+				if commandWALCleanupDescriptorExhausted(openErr) {
+					suffixDescriptorErr = errors.Join(suffixDescriptorErr, openErr)
+				} else {
+					scan.hardErr = errors.Join(scan.hardErr, openErr)
+				}
+			}
 		}
-		scan.scanSegment(segments[len(segments)-1], true, true, &current.ActiveIdentity)
 		return nil
 	})
 	scan.hardErr = errors.Join(scan.hardErr, closePrefix())
-	return scan.finish(err)
+	if suffixDescriptorErr == nil {
+		return scan.finish(err)
+	}
+	// Incomplete validation prohibits retirement. Finish closes the retained
+	// scan handles. Defer debt only if descriptor acquisition was the sole
+	// failure, keeping independent scan, identity, and close errors visible.
+	decisions, scanErr := scan.finish(errors.Join(err, suffixDescriptorErr))
+	if err == nil && scan.hardErr == nil && scan.lineageErr == nil {
+		return decisions, errDurableWALCleanupProofUnavailable
+	}
+	return decisions, scanErr
 }
