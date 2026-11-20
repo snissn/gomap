@@ -4003,7 +4003,7 @@ func TestAdvanceValueLogWriterPastObservedSeq_RollsBackToOriginalSeqOnRegisterFa
 	})
 
 	backend.registerValueLogErr = errors.New("test: register failed")
-	err = db.advanceValueLogWriterPastObservedSeq(l, oldSeq+1)
+	err = db.advanceValueLogWriterPastObservedSeq(l, oldSeq+1, oldSeq+1)
 	if err == nil || !strings.Contains(err.Error(), "register failed") {
 		t.Fatalf("advanceValueLogWriterPastObservedSeq err=%v want register failure", err)
 	}

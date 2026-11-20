@@ -115,6 +115,30 @@ func (db *DB) nativeRootValueLogAppendLaneForFileID(laneID, seq uint32) *lane {
 	return nil
 }
 
+// emptyNativeRootValueLogPeers records only exact, still-current empty
+// writer files. A reservation, numeric sequence, or sealed path is insufficient.
+func (db *DB) emptyNativeRootValueLogPeers() map[int]string {
+	peers := make(map[int]string, len(db.nativeRootValueLogAppendLanes))
+	for _, l := range db.nativeRootValueLogAppendLanes {
+		l.vlogMu.Lock()
+		if db.ownsEmptyNativeRootValueLogPeerMuHeld(l) {
+			peers[l.vlogSeq] = l.vlogPath
+		}
+		l.vlogMu.Unlock()
+	}
+	return peers
+}
+
+func (db *DB) ownsEmptyNativeRootValueLogPeerMuHeld(l *lane) bool {
+	writer, ok := l.vlog.(*valuelog.Writer)
+	if !ok || writer.Size() != 0 || writer.PendingBytes() != 0 || l.vlogSeq <= 0 {
+		return false
+	}
+	fileID, err := valuelog.EncodeFileID(uint32(l.id), uint32(l.vlogSeq))
+	return err == nil && l.vlogPath == valuelog.SegmentPath(db.valueLogDir, fileID) &&
+		db.valueLogReader.IsSegmentCurrentWritable(fileID) && writer.OwnsEmptyFile(l.vlogPath, fileID)
+}
+
 func (db *DB) advanceNativeRootValueLogAppendSeqAtLeast(seq int) {
 	if db == nil || !db.nativeRootValueLogAppendShared || seq <= 0 {
 		return
