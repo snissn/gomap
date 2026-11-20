@@ -2691,6 +2691,108 @@ func TestTreeDBRawWireLoadPhaseHonorsCanceledContext(t *testing.T) {
 	}
 }
 
+func TestTreeDBFullMaintenancePreservesBenchmarkProfile(t *testing.T) {
+	for _, profile := range []treedb.Profile{treedb.ProfileBenchUnsafe, treedb.ProfileNoWALFast} {
+		t.Run(string(profile), func(t *testing.T) {
+			tempDir, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatalf("resolve benchmark scratch directory: %v", err)
+			}
+			dir := filepath.Join(tempDir, "db")
+			cfg, err := parseConfig([]string{
+				"-target", "treedb",
+				"-treedb-dir", dir,
+				"-treedb-profile", string(profile),
+				"-treedb-document-format", "bson",
+				"-treedb-maintenance", treeDBMaintenanceFull,
+				"-documents", "1000",
+				"-batch-size", "500",
+				"-secondary-indexes", "2",
+				"-reads", "0", "-range-reads", "0", "-updates", "0",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+			target, err := openTarget(ctx, cfg)
+			if err != nil {
+				t.Fatalf("open benchmark target: %v", err)
+			}
+			t.Cleanup(func() {
+				cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				if err := closeBenchTarget(cleanupCtx, target); err != nil {
+					t.Errorf("close benchmark target: %v", err)
+				}
+			})
+
+			result, err := runBenchmark(ctx, cfg, target, nil)
+			if err != nil {
+				t.Fatalf("run benchmark: %v", err)
+			}
+			loadOperations := 0
+			for _, phase := range result.Phases {
+				if phase.Name == "load_insert_many" {
+					loadOperations += phase.Operations
+				}
+			}
+			if loadOperations != cfg.Documents {
+				t.Fatalf("completed load operations = %d, want %d", loadOperations, cfg.Documents)
+			}
+			if result.TreeDBDiskAfterCheckpoint == nil || result.TreeDBDiskAfterMaintenance == nil {
+				t.Fatal("missing checkpoint or final maintenance disk snapshot")
+			}
+			steps := result.TreeDBMaintenance
+			if len(steps) != 2 || steps[0].Name != "compact_storage" || steps[1].Name != "index_vacuum_offline" ||
+				steps[0].DiskAfter == nil || steps[1].DiskAfter == nil || steps[1].Metrics["offline"] != 1 {
+				t.Fatalf("expected compaction and offline vacuum disk snapshots, got %+v", steps)
+			}
+			if got := result.TreeDBStatsFinal["treedb.profile.resolved"]; got != string(profile) {
+				t.Fatalf("reported profile = %q, want %q", got, profile)
+			}
+			if profile == treedb.ProfileBenchUnsafe {
+				err := treedb.VacuumIndexOffline(treedb.Options{Dir: dir})
+				if err == nil || !strings.Contains(err.Error(), "requires OptionsForBenchmark or ApplyBenchmarkProfile") {
+					t.Fatalf("directory-only vacuum error = %v, want explicit benchmark opt-in error", err)
+				}
+			}
+
+			opts := treedb.OptionsForBenchmark(profile, dir)
+			opts.ReadOnly = true
+			db, cleanup, err := treedb.OpenBackendWithCachedLeafLog(opts)
+			if err != nil {
+				t.Fatalf("reopen maintained store: %v", err)
+			}
+			t.Cleanup(func() {
+				if err := cleanup(); err != nil {
+					t.Errorf("close reopened store: %v", err)
+				}
+			})
+			if got := db.Stats()["treedb.profile.resolved"]; got != string(profile) {
+				t.Fatalf("reopened profile = %q, want %q", got, profile)
+			}
+			col, err := collections.NewCollectionManager(db).OpenCollection(cfg.Database + "." + cfg.Collection)
+			if err != nil {
+				t.Fatalf("reopen benchmark collection: %v", err)
+			}
+			for _, ordinal := range []int{0, cfg.Documents - 1} {
+				key, want, err := directTreeDBBenchmarkDocument(ordinal, cfg.DocumentShape, cfg.TreeDBDocumentFormat)
+				if err != nil {
+					t.Fatal(err)
+				}
+				got, err := col.Get(key)
+				if err != nil {
+					t.Fatalf("read maintained document %d: %v", ordinal, err)
+				}
+				if !bytes.Equal(got, want) {
+					t.Fatalf("maintained document %d differs from inserted BSON", ordinal)
+				}
+			}
+		})
+	}
+}
+
 func runTreeDBProfileSmoke(t *testing.T, profile treedb.Profile) float64 {
 	t.Helper()
 	cfg, err := parseConfig([]string{

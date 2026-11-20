@@ -44,6 +44,68 @@ commands instead use the active V2 `ExternalRefFenceV1` dependency closure.
 The typed external-ref prepare, protection, restore, and quarantine steps below
 describe a separate future activation, not authority accepted by current codecs.
 
+### Document files on a separate Linux mount
+
+A root-layout store can have a mount at `maindb/value_vlog`. Its document
+segments belong to the same backup as the native index and WAL. Stop writes,
+complete checked Close, and keep both filesystems mounted while copying and
+verifying the closed store. A traversal with `--one-file-system` omits those
+segments. Taking independent live snapshots of the two filesystems does not
+establish a common cut.
+
+Before opening this layout, verify the native store and document mount in the
+mount namespace the gateway or maintenance process will actually use. Compare
+the filesystem UUIDs and the two directory device/inode pairs against the
+values recorded when provisioning this store. The example assumes two distinct Linux filesystems with only the document
+mount nested inside the store. Run it in the service launch shell. Supply
+the four expected values from the installation record outside the store.
+
+```sh
+set -eu
+: "${store:?}" "${store_uuid:?}" "${document_uuid:?}"
+: "${store_dir_id:?}" "${document_dir_id:?}"  # decimal device:inode from stat
+doc="$store/maindb/value_vlog"
+check_value() {
+    expected=$1
+    shift
+    actual=$("$@") && test "$actual" = "$expected"
+}
+test "$store_uuid" != "$document_uuid" || exit 1
+check_value "$store_uuid" findmnt --target "$store" -n -o UUID || exit 1
+check_value "$store_dir_id" stat --format='%d:%i' -- "$store" || exit 1
+check_value "$document_uuid" findmnt --mountpoint "$doc" -n -o UUID || exit 1
+check_value "$document_dir_id" stat --format='%d:%i' -- "$doc" || exit 1
+```
+
+An absent mount, empty UUID or identity mismatch must stop that invocation
+before writable Open. Keep the mount stable until checked Close. If a document
+dependency is missing, recovery can select an older complete durable root.
+A successful Open alone cannot verify that the intended mount or cut was used.
+
+Linux device numbers can change at reboot, particularly for loop and
+device-mapper volumes. TreeDB persists the device number as part of a file's
+identity. If the same UUID returns on a different device number, keep the
+gateway stopped. Reestablish the original device mapping, or restore from a
+verified closed backup into the new layout. Updating the launch record alone
+leaves the persisted dependencies bound to the original device.
+
+For a restore onto new devices or inodes:
+
+1. Verify the full closed backup against its source manifest. Extract both
+   parts into their intended private destination mounts. Independently verify
+   the intended destination filesystems and content, and record their UUIDs
+   and directory identities outside the copy.
+2. On the closed private copy, run `quicksilver_snapshot_restore "$store"`
+   (from `cmd/quicksilver_snapshot_restore`). It calls
+   `RebindDurableRootSnapshotLayoutWithContextV1` on each present side-store
+   index first, then on the staged `maindb` with the store root as its
+   side-store root. A failure can leave the staging copy partially rebound.
+   Keep the original backup and start again from a fresh verified extraction.
+3. Use the proposed destination identities for the pre-Open check. Compare
+   typed readback against the expected backup cut and check Close. Install the
+   verified destination identity record for subsequent launches only after
+   those checks succeed.
+
 ### Paged vector projection closure
 
 For schema7 local vector projections, the two directory roots are only the

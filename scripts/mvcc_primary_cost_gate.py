@@ -158,10 +158,16 @@ def parse_sample(text: str) -> dict[str, float]:
     return result
 
 
-def evaluate(rows: list[dict]) -> dict:
-    expected = [(pair, revision) for pair in range(SAMPLES)
-                for revision in (("baseline", "candidate") if pair % 2 == 0
-                                 else ("candidate", "baseline"))]
+def sample_order(first_revision: str = "baseline") -> list[tuple[int, str]]:
+    if first_revision not in ("baseline", "candidate"):
+        raise ValueError("unknown first revision")
+    second = "candidate" if first_revision == "baseline" else "baseline"
+    return [(pair, revision) for pair in range(SAMPLES)
+            for revision in ((first_revision, second) if pair % 2 == 0 else (second, first_revision))]
+
+
+def evaluate(rows: list[dict], *, first_revision: str = "baseline") -> dict:
+    expected = sample_order(first_revision)
     if [(r["pair"], r["revision"]) for r in rows] != expected:
         raise ValueError("missing, duplicated or reordered planned samples")
     by_revision = {revision: [r["metrics"] for r in rows if r["revision"] == revision]
@@ -172,6 +178,8 @@ def evaluate(rows: list[dict]) -> dict:
     paired = [(head["ns/op"] / base["ns/op"] - 1) * 100
               for base, head in zip(by_revision["baseline"], by_revision["candidate"])]
     delta = statistics.median(paired)
+    by_first = {revision: [paired[pair] for pair, first in expected[::2] if first == revision]
+                for revision in ("baseline", "candidate")}
     base, head = medians["baseline"], medians["candidate"]
     gates = {"timing": delta <= TIME_LIMIT_PERCENT,
              "bytes": head["B/op"] <= base["B/op"],
@@ -180,7 +188,11 @@ def evaluate(rows: list[dict]) -> dict:
                                                  for r in by_revision["candidate"])}
     return {"medians": medians, "paired_deltas_percent": paired,
             "median_paired_delta_percent": delta, "gates": gates,
-            "measurement_pass": all(gates.values())}
+            "measurement_pass": all(gates.values()),
+            "order_observation": {"first_revision": first_revision,
+                                  "first_pair_delta_percent": paired[0],
+                                  "median_paired_delta_percent_by_first_revision": {
+                                      revision: statistics.median(values) for revision, values in by_first.items()}}}
 
 
 def processes() -> dict:
@@ -452,13 +464,11 @@ def run_gate(root: Path, output: Path, baseline: str, candidate: str, *,
             raise RuntimeError("actual candidate public lifecycle control did not pass")
         acquire_quiet_window(output)
         observation = ProcessObservation(output / "measured-processes.jsonl")
-        for pair in range(SAMPLES):
-            order = ("baseline", "candidate") if pair % 2 == 0 else ("candidate", "baseline")
-            for revision in order:
-                text = command(f"pair-{pair+1}-{revision}", ["taskset", "-c", "0",
-                     output / binaries[revision]["path"]] + benchmark_argv)
-                rows.append({"pair": pair, "revision": revision, "metrics": parse_sample(text)})
-                save("samples.json", rows)
+        for pair, revision in sample_order():
+            text = command(f"pair-{pair+1}-{revision}", ["taskset", "-c", "0",
+                 output / binaries[revision]["path"]] + benchmark_argv)
+            rows.append({"pair": pair, "revision": revision, "metrics": parse_sample(text)})
+            save("samples.json", rows)
         observed = observation.finish()
         observation = None
         busy = observed["busy"]
@@ -485,6 +495,7 @@ def run_gate(root: Path, output: Path, baseline: str, candidate: str, *,
             f"- Acceptance contract: `{acceptance_contract}`; no historical result reinterpreted.\n"
             "- Eight alternating AB/BA pairs; 128 durable public replacements per sample.\n"
             f"- Median paired time delta: {result['median_paired_delta_percent']:+.3f}% (limit +5%).\n"
+            f"- Order observation: `{json.dumps(result['order_observation'], sort_keys=True)}`.\n"
             f"- Raw gates: `{json.dumps(result['gates'], sort_keys=True)}`; measurement pass: {result['measurement_pass']}; quiet: {not busy}.\n"
             f"- Timing acceptance: `{result['timing_disposition']}`; bytes acceptance: `{result['bytes_disposition']}`; bound runtime/input equivalent: {result['runtime_input_equivalent']}.\n"
             f"- Byte budget: `{json.dumps(result.get('byte_budget'), sort_keys=True)}` (v1 has no numeric allowance).\n"

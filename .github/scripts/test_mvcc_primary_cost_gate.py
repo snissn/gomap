@@ -72,6 +72,27 @@ class PrimaryCostGateTests(unittest.TestCase):
             row["metrics"]["ns/op"] = baseline * (1.02 if row["revision"] == "candidate" else 1)
         self.assertAlmostEqual(gate.evaluate(rows)["median_paired_delta_percent"], 2)
 
+    def test_order_observation_does_not_change_the_verdict(self):
+        rows = self.rows()
+        for row in rows:
+            if row["revision"] == "candidate":
+                row["metrics"]["ns/op"] = 112 if row["pair"] % 2 == 0 else 98
+        measured = gate.evaluate(rows)
+        self.assertFalse(measured["gates"]["timing"])
+        order = measured["order_observation"]
+        self.assertEqual(order["first_revision"], "baseline")
+        self.assertAlmostEqual(order["first_pair_delta_percent"], 12)
+        self.assertAlmostEqual(order["median_paired_delta_percent_by_first_revision"]["baseline"], 12)
+        self.assertAlmostEqual(order["median_paired_delta_percent_by_first_revision"]["candidate"], -2)
+
+        reversed_start = [row for index in range(0, len(rows), 2) for row in reversed(rows[index:index + 2])]
+        with self.assertRaises(ValueError):
+            gate.evaluate(reversed_start)
+        reversed_measured = gate.evaluate(reversed_start, first_revision="candidate")
+        self.assertEqual(reversed_measured["gates"], measured["gates"])
+        self.assertEqual(reversed_measured["paired_deltas_percent"], measured["paired_deltas_percent"])
+        self.assertAlmostEqual(reversed_measured["order_observation"]["median_paired_delta_percent_by_first_revision"]["candidate"], 12)
+
     def v2_evidence(self, baseline=92125.5, candidate=92128, *, equivalent=False):
         rows = self.rows()
         for row in rows:
