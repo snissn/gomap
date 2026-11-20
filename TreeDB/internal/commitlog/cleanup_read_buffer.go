@@ -8,7 +8,7 @@ import (
 
 // CleanupReadBuffer reuses one read-ahead window across an invocation's closed
 // stream segments. Only one Reader may use the buffer at a time. The caller
-// retains its exact file and append-exclusion authority.
+// retains the exact file and must ensure its extent is immutable.
 type CleanupReadBuffer struct {
 	input  *bufio.Reader
 	file   *os.File

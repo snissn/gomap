@@ -45,6 +45,10 @@ func simpleCommandWALCleanupInventory(dir string, current commitlog.CommandJourn
 	if err != nil {
 		return nil, err
 	}
+	return simpleCommandWALCleanupEntries(dir, entries, current), nil
+}
+
+func simpleCommandWALCleanupEntries(dir string, entries []os.DirEntry, current commitlog.CommandJournalCleanupSnapshot) []logSegment {
 	var segments []logSegment
 	for _, entry := range entries {
 		name := entry.Name()
@@ -54,7 +58,7 @@ func simpleCommandWALCleanupInventory(dir string, current commitlog.CommandJourn
 		}
 		if valueLog || !entry.Type().IsRegular() || lane != current.Lane || seq == 0 || seq > current.SegmentSeq ||
 			name != commitlog.CommandSegmentName(lane, seq) {
-			return nil, nil
+			return nil
 		}
 		segments = append(segments, logSegment{seq: seq, lane: lane, path: filepath.Join(dir, name)})
 	}
@@ -68,9 +72,9 @@ func simpleCommandWALCleanupInventory(dir string, current commitlog.CommandJourn
 		return 0
 	})
 	if len(segments) == 0 || !samePath(segments[len(segments)-1].path, current.ActivePath) {
-		return nil, nil
+		return nil
 	}
-	return segments, nil
+	return segments
 }
 
 func commandWALCleanupDescriptorExhausted(err error) bool {
@@ -100,7 +104,7 @@ func (db *DB) scanCommandWALCleanupProof(proof durableWALCleanupProofV1, scanSea
 	if proof.journal.Ext4Stream && proof.journal.ActiveBytes <= maxSplitStreamCleanupActiveBytes &&
 		db.commandWALClosedBytes.Load() >= 2*minSplitStreamCleanupSegmentBytes &&
 		db.commandWALCleanupSplitValueLogVolume(proof.journal) {
-		if attempted, err := db.scanSplitCommandWALCleanupPrefix(proof, scan, openPrefix); attempted {
+		if attempted, err := db.scanSplitCommandWALCleanupPrefix(proof, scan, openPrefix, minSplitStreamCleanupSegmentBytes); attempted {
 			return scan.finish(err)
 		}
 	}
@@ -241,7 +245,7 @@ func (db *DB) commandWALCleanupSplitValueLogVolume(snapshot commitlog.CommandJou
 // generation. The cleanup owner serializes deletion. Files strictly before that
 // generation cannot be appended to, even if the writer rotates during this scan.
 // Refresh the inventory under the original scan lock before reading the suffix.
-func (db *DB) scanSplitCommandWALCleanupPrefix(proof durableWALCleanupProofV1, scan *commandWALCleanupScan, openPrefix func(string) (*os.File, error)) (bool, error) {
+func (db *DB) scanSplitCommandWALCleanupPrefix(proof durableWALCleanupProofV1, scan *commandWALCleanupScan, openPrefix func(string) (*os.File, error), minClosedBytes int64) (attempted bool, returnErr error) {
 	dir := resolveStorageLayout(db.dir).walDir
 	segments, err := simpleCommandWALCleanupInventory(dir, proof.journal)
 	if commandWALCleanupDescriptorExhausted(err) {
@@ -263,7 +267,7 @@ func (db *DB) scanSplitCommandWALCleanupPrefix(proof durableWALCleanupProofV1, s
 			return false, nil
 		}
 		infos[i] = info
-		if info.Size() >= minSplitStreamCleanupSegmentBytes {
+		if info.Size() >= minClosedBytes {
 			large++
 		}
 	}
@@ -313,6 +317,29 @@ func (db *DB) scanSplitCommandWALCleanupPrefix(proof durableWALCleanupProofV1, s
 		}
 	}
 
+	// Reserve the refresh reader before scanning any frames. Covered WAL
+	// handles stay open through retirement and concurrent writers may consume
+	// the remaining descriptors while the append lock is available.
+	refreshDir, err := os.Open(dir)
+	if commandWALCleanupDescriptorExhausted(err) {
+		if closeErr := closeFiles(); closeErr != nil {
+			return true, errors.Join(err, closeErr)
+		}
+		return false, nil
+	}
+	if err != nil {
+		return true, errors.Join(err, closeFiles())
+	}
+	defer func() {
+		if refreshDir != nil {
+			returnErr = errors.Join(returnErr, refreshDir.Close())
+		}
+	}()
+	dirInfo, err := refreshDir.Stat()
+	if err != nil {
+		return true, errors.Join(err, closeFiles())
+	}
+
 	scan.closedStreamBuffer = new(commitlog.CleanupReadBuffer)
 	for i, seg := range sealed {
 		file := files[i]
@@ -324,12 +351,22 @@ func (db *DB) scanSplitCommandWALCleanupPrefix(proof durableWALCleanupProofV1, s
 			scan.hardErr = errors.Join(scan.hardErr, file.Close())
 		}
 	}
+	if scan.hardErr != nil {
+		return true, nil
+	}
 
 	err = proof.journalOwner.WithCleanupScanSnapshot(proof.journal, func(current commitlog.CommandJournalCleanupSnapshot) error {
-		live, err := simpleCommandWALCleanupInventory(dir, current)
-		if err != nil {
+		linkedDir, err := os.Stat(dir)
+		if err != nil || !os.SameFile(dirInfo, linkedDir) {
+			return errors.Join(fmt.Errorf("%w: command WAL directory changed", ErrRecoveryRequired), err)
+		}
+		entries, readErr := refreshDir.ReadDir(-1)
+		closeErr := refreshDir.Close()
+		refreshDir = nil
+		if err := errors.Join(readErr, closeErr); err != nil {
 			return err
 		}
+		live := simpleCommandWALCleanupEntries(dir, entries, current)
 		if len(live) <= len(sealed) || live[len(sealed)].path != proof.journal.ActivePath ||
 			!slices.EqualFunc(sealed, live[:len(sealed)], func(a, b logSegment) bool { return a.path == b.path }) {
 			return fmt.Errorf("%w: command WAL cleanup inventory changed", ErrRecoveryRequired)

@@ -949,6 +949,11 @@ func removeCoveredCommandWALSegmentsWithRegistry(decisions []commandWALSegmentCl
 		if !decision.Covered || decision.Active {
 			continue
 		}
+		if err := verifyCommandWALCleanupExtent(decision); err != nil {
+			decision.Error = err.Error()
+			abortLeases()
+			return decisions, err
+		}
 		current, err := os.Open(decision.Path)
 		if err != nil {
 			decision.Error = err.Error()
@@ -1023,6 +1028,11 @@ func removeCoveredCommandWALSegmentsWithRegistry(decisions []commandWALSegmentCl
 					leases[i].lease.Abort()
 				}
 			}
+			return decisions, err
+		}
+		if err := verifyCommandWALCleanupExtent(decision); err != nil {
+			decision.Error = err.Error()
+			abortLeases()
 			return decisions, err
 		}
 		current, openErr := os.Open(decision.Path)

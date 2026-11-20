@@ -122,12 +122,15 @@ Ordinary cleanup is serialized per DB and follows this order:
    directory are on distinct ext4 volumes. That path requires a canonical
    single-lane inventory, two closed streams of at least 96 MiB each, at most
    eight closed streams, and at most 1 MiB of active WAL bytes at proof capture.
-   It opens exact earlier generations, scans them in order, and uses the
-   original scan lock to verify the prefix identities and extents and scan the
-   current suffix. Predecessor extent and pathname validation repeats before
-   deletion. Descriptor exhaustion while staging readers falls back before
-   any frames are scanned. Ineligible inventories, explicit cleanup,
-   synchronous checkpoint and Close retain their existing scan paths.
+   It opens exact earlier generations and reserves the directory reader for
+   the refreshed inventory before scanning the prefix in order. It uses the
+   original scan lock to verify prefix identities and extents and scan the
+   current suffix, including generations published during the prefix scan.
+   Predecessor extent and pathname validation repeats before deletion.
+   Descriptor exhaustion while staging readers and rotation already visible
+   in the initial listing both fall back before any frames are scanned.
+   Ineligible inventories, explicit cleanup, synchronous checkpoint and
+   Close retain their existing scan paths.
    Deferred stream cleanup reuses a bounded read-ahead buffer for closed
    streams. Frame validation and WAL offsets use the decoder's consumed bytes,
    including on short reads. Active streams and fixed containers keep their
