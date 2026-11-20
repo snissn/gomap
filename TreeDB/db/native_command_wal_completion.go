@@ -45,13 +45,8 @@ func (db *DB) NativeCommandWALPrefixEligible(owner *transactionowner.Owner) (boo
 	if owner == nil || owner != db.privateCOWOwner {
 		return false, ErrNativeSemanticUnsupported
 	}
-	if !db.commandWAL || db.resolvedProfile != ProfileCommandWALDurable {
-		return false, nil
-	}
-	if db.commandJournal == nil {
-		return false, db.commandWALJournalUnavailableError()
-	}
-	return db.commandJournal.HasFixedWriter(), nil
+	fixed, err := db.nativeJournalFixedWriter()
+	return fixed && db.resolvedProfile == ProfileCommandWALDurable, err
 }
 
 // SyncNativeCommandWALPrefix delegates admission and physical completion to the
@@ -70,7 +65,22 @@ func (db *DB) SyncNativeCommandWALPrefix() (selected bool, err error) {
 	}
 	db.teardownMu.RLock()
 	defer db.teardownMu.RUnlock()
-	return false, db.checkNativeJournalOwner()
+	if err := db.checkNativeJournalOwner(); err != nil {
+		return false, err
+	}
+	_, err = db.nativeJournalFixedWriter()
+	return false, err
+}
+
+// nativeJournalFixedWriter checks the active writer under teardownMu.
+func (db *DB) nativeJournalFixedWriter() (bool, error) {
+	if !db.commandWAL {
+		return false, nil
+	}
+	if db.commandJournal == nil {
+		return false, db.commandWALJournalUnavailableError()
+	}
+	return db.commandJournal.HasFixedWriter()
 }
 
 // checkNativeJournalOwner checks an already active cache owner under teardownMu.

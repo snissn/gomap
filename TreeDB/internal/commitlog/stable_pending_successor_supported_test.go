@@ -334,6 +334,10 @@ func TestCommandJournalStableRotationFailStopIsStickyAcrossDurabilityAPIs(t *tes
 		t.Fatalf("sticky retry error=%v want ErrResourceOwnership", stickyErr)
 	}
 
+	if fixed, err := journal.HasFixedWriter(); fixed || !errors.Is(err, rootpublication.ErrResourceOwnership) {
+		t.Fatalf("fail-stop writer eligibility=%t/%v", fixed, err)
+	}
+
 	var events []durabilitycut.Event
 	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
 		if event.Resource == durabilitycut.ResourceCommandWAL {

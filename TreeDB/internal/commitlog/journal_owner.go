@@ -1157,12 +1157,18 @@ func (j *CommandJournal) ActiveBytes() int64 {
 	return bytes
 }
 
-// HasFixedWriter reports the active physical container, including an
-// occupied segment whose on-disk format overrides the creation policy.
-func (j *CommandJournal) HasFixedWriter() bool {
+// HasFixedWriter reports the active physical container of a live journal.
+// An unhealthy journal returns the original failure instead of a format miss.
+func (j *CommandJournal) HasFixedWriter() (bool, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	return !j.closing && !j.closed && j.writer != nil && j.writer.f != nil && j.writer.fixed != nil
+	if err := j.stableRotationFailStopErrorLocked(); err != nil {
+		return false, err
+	}
+	if j.closed || j.writer == nil || j.writer.f == nil {
+		return false, errors.New("commitlog: command journal is closed")
+	}
+	return j.writer.fixed != nil, nil
 }
 
 func (j *CommandJournal) WriterBufferStats() WriterBufferStats {
