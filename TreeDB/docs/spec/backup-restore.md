@@ -44,43 +44,48 @@ commands instead use the active V2 `ExternalRefFenceV1` dependency closure.
 The typed external-ref prepare, protection, restore, and quarantine steps below
 describe a separate future activation, not authority accepted by current codecs.
 
-### Document files on a separate Linux mount
+### Document files or the WAL on a separate Linux mount
 
-A root-layout store can have a mount at `maindb/value_vlog`. Its document
-segments belong to the same backup as the native index and WAL. Stop writes,
-complete checked Close, and keep both filesystems mounted while copying and
-verifying the closed store. A traversal with `--one-file-system` omits those
-segments. Taking independent live snapshots of the two filesystems does not
-establish a common cut.
+A root-layout store can have its document segments at `maindb/value_vlog` or
+its command journal at `maindb/wal` on a separate filesystem. Keep both
+filesystems mounted through checked Close, backup and verification of that
+closed store. A copy constrained to one filesystem skips the mounted files.
+Independent live snapshots require a TreeDB backup barrier spanning both.
 
-Before opening this layout, verify the native store and document mount in the
-mount namespace the gateway or maintenance process will actually use. Compare
-the filesystem UUIDs and the two directory device/inode pairs against the
-values recorded when provisioning this store. The example assumes two distinct Linux filesystems with only the document
-mount nested inside the store. Run it in the service launch shell. Supply
-the four expected values from the installation record outside the store.
+Check the native store and the nested mount in the gateway or maintenance
+process's own mount namespace before each writable Open. The example covers
+one nested mount. Set `mounted_role` to the directory selected at provisioning
+(`value_vlog` or `wal`). Read the expected filesystem UUIDs and directory
+identities from the installation record outside the store. Run the checks in
+the service launch shell and keep the mounts stable until checked Close.
 
 ```sh
 set -eu
-: "${store:?}" "${store_uuid:?}" "${document_uuid:?}"
-: "${store_dir_id:?}" "${document_dir_id:?}"  # decimal device:inode from stat
-doc="$store/maindb/value_vlog"
+: "${store:?}" "${mounted_role:?}" "${store_uuid:?}" "${mounted_uuid:?}"
+: "${store_dir_id:?}" "${mounted_dir_id:?}"  # decimal device:inode from stat
+case "$mounted_role" in
+    value_vlog|wal) mounted="$store/maindb/$mounted_role" ;;
+    *) exit 1 ;;
+esac
 check_value() {
     expected=$1
     shift
     actual=$("$@") && test "$actual" = "$expected"
 }
-test "$store_uuid" != "$document_uuid" || exit 1
+test "$store_uuid" != "$mounted_uuid" || exit 1
 check_value "$store_uuid" findmnt --target "$store" -n -o UUID || exit 1
 check_value "$store_dir_id" stat --format='%d:%i' -- "$store" || exit 1
-check_value "$document_uuid" findmnt --mountpoint "$doc" -n -o UUID || exit 1
-check_value "$document_dir_id" stat --format='%d:%i' -- "$doc" || exit 1
+check_value "$mounted_uuid" findmnt --mountpoint "$mounted" -n -o UUID || exit 1
+check_value "$mounted_dir_id" stat --format='%d:%i' -- "$mounted" || exit 1
 ```
 
-An absent mount, empty UUID or identity mismatch must stop that invocation
-before writable Open. Keep the mount stable until checked Close. If a document
-dependency is missing, recovery can select an older complete durable root.
-A successful Open alone cannot verify that the intended mount or cut was used.
+An absent mount, empty UUID or identity mismatch must stop the launch. With a
+missing document dependency, recovery can select an older complete durable
+root. With an empty directory covering the intended WAL, writable recovery can
+also succeed at an earlier applied frontier and omit complete records still in
+the original WAL. Keep the original journal with its store through crash
+recovery, backup and rollback. A successful Open or Close cannot establish
+that the intended journal was present.
 
 Linux device numbers can change at reboot, particularly for loop and
 device-mapper volumes. TreeDB persists the device number as part of a file's
