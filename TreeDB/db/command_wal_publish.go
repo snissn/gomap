@@ -813,21 +813,25 @@ func (s *commandWALCleanupScan) scanLockedDirectory(dir string) error {
 	s.decisions = make([]commandWALSegmentCleanupDecision, 0, len(segments))
 	for _, seg := range segments {
 		if !seg.valueLog && isCommandWALLaneSegment(seg) {
-			s.scanSegment(seg, seg.seq == activeByLane[seg.lane], false, nil)
+			if err := s.scanSegment(seg, seg.seq == activeByLane[seg.lane], false, nil); err != nil {
+				s.hardErr = errors.Join(s.hardErr, err)
+			}
 		}
 	}
 	return nil
 }
 
-func (s *commandWALCleanupScan) scanSegment(seg logSegment, active, loadLogicalSize bool, expected *rootpublication.StableIdentity) {
+// scanSegment returns only the descriptor acquisition error. Validation and
+// close failures are recorded on the scan independently.
+func (s *commandWALCleanupScan) scanSegment(seg logSegment, active, loadLogicalSize bool, expected *rootpublication.StableIdentity) error {
 	file, err := os.Open(seg.path)
 	if err != nil {
-		s.hardErr = errors.Join(s.hardErr, fmt.Errorf("open command WAL segment %s: %w", filepath.Base(seg.path), err))
-		return
+		return fmt.Errorf("open command WAL segment %s: %w", filepath.Base(seg.path), err)
 	}
 	if !s.scanFile(seg, file, active, loadLogicalSize, expected) {
 		s.hardErr = errors.Join(s.hardErr, file.Close())
 	}
+	return nil
 }
 
 // scanFile scans this exact descriptor and reports whether it has transferred
