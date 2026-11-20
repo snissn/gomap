@@ -23,7 +23,7 @@ func TestCatalogMetaBackupRestoresFreshThreeAuthorityClusterAndSurvivesReopenFai
 	defer func() {
 		t.Logf("catalog meta leader waits: total_elapsed=%s completed=%+v", time.Since(progress.started), progress.completed[:progress.count])
 	}()
-	source := newRealCatalogMetaClusterV1(t, "source")
+	source := newRealCatalogMetaClusterV1(t, "source", nil)
 	sourceLeader := source.waitLeader(t, ctx, &progress, "source-initial")
 	command1 := mustCatalogMetaCommand(t, 0, 1, realCatalogMetaIntegrationCatalogV1("group-a"))
 	if _, _, err := source.providers[sourceLeader].SubmitCatalogMetaCommandV1(ctx, command1); err != nil {
@@ -59,7 +59,23 @@ func TestCatalogMetaBackupRestoresFreshThreeAuthorityClusterAndSurvivesReopenFai
 		t.Fatalf("backup size=%d want payload", len(backup))
 	}
 
-	target := newRealCatalogMetaClusterV1(t, "target")
+	targetLogs := make(map[raftcluster.NodeID]*catalogMetaRaftLogV1)
+	target := newRealCatalogMetaClusterV1(t, "target", targetLogs)
+	// Only reached boundaries are recorded. The origin also aligns the
+	// monotonic phase offsets with the native peer logs' wall timestamps.
+	rejoinPhases := make(map[string]time.Duration, 4)
+	failoverEvents := make(map[raftcluster.NodeID]string, len(target.peers))
+	defer func() {
+		if t.Failed() {
+			t.Logf("target rejoin phases since %s: %v", progress.started.Format(time.RFC3339Nano), rejoinPhases)
+			for _, peer := range target.peers {
+				if events, ok := failoverEvents[peer.ID]; ok {
+					t.Logf("%s Raft events at failover election completion: %s", peer.ID, events)
+				}
+				t.Logf("%s recent Raft events at failure: %s", peer.ID, targetLogs[peer.ID])
+			}
+		}
+	}()
 	targetLeader := target.waitLeader(t, ctx, &progress, "target-initial")
 	follower := target.anyFollower(targetLeader)
 	target.waitFollower(t, ctx, follower)
@@ -113,6 +129,10 @@ func TestCatalogMetaBackupRestoresFreshThreeAuthorityClusterAndSurvivesReopenFai
 	// apply progress, and idempotency state before publishing the new route.
 	target.closeNode(t, targetLeader)
 	newLeader := target.waitLeader(t, ctx, &progress, "target-after-failover")
+	// Later replication retries can overwrite the election history.
+	for _, peer := range target.peers {
+		failoverEvents[peer.ID] = targetLogs[peer.ID].String()
+	}
 	unsafeCommand2 := mustCatalogMetaCommand(t, 1, 2, realCatalogMetaIntegrationCatalogV1("group-b"))
 	if _, _, err := target.providers[newLeader].SubmitCatalogMetaCommandV1(ctx, unsafeCommand2); !errors.Is(err, ErrCatalogMetaTopologyChange) {
 		t.Fatalf("target owner move error=%v want ErrCatalogMetaTopologyChange", err)
@@ -122,6 +142,7 @@ func TestCatalogMetaBackupRestoresFreshThreeAuthorityClusterAndSurvivesReopenFai
 	// The refused log entry does not prevent a safe metadata generation from
 	// advancing monotonically, and the old backup still cannot roll it back.
 	newLeader = target.waitLeader(t, ctx, &progress, "target-after-topology-refusal")
+	rejoinPhases["epoch-2-command-start"] = time.Since(progress.started)
 	command2 := mustCatalogMetaCommand(t, 1, 2, realCatalogMetaIntegrationCatalogV1("group-a"))
 	if _, _, err := target.providers[newLeader].SubmitCatalogMetaCommandV1(ctx, command2); err != nil {
 		t.Fatalf("target epoch 2 after failover: %v", err)
@@ -135,8 +156,11 @@ func TestCatalogMetaBackupRestoresFreshThreeAuthorityClusterAndSurvivesReopenFai
 
 	// Rejoin the former leader with a new real authority and prove it receives
 	// the newer snapshot/log state and exact identity.
+	rejoinPhases["former-leader-reopen-start"] = time.Since(progress.started)
 	target.reopenNode(t, targetLeader)
+	rejoinPhases["former-leader-reopen-done"] = time.Since(progress.started)
 	target.connectAll()
+	rejoinPhases["former-leader-connected"] = time.Since(progress.started)
 	target.waitEpochOn(t, ctx, targetLeader, 2)
 	target.assertEpochAndRoute(t, ctx, 2, "group-a")
 }
@@ -148,6 +172,7 @@ const realCatalogMetaIntegrationLeaderDwellV1 = realCatalogMetaIntegrationCoordi
 const realCatalogMetaIntegrationTestTimeoutV1 = 2 * time.Minute
 
 type realCatalogMetaClusterV1 struct {
+	logs        map[raftcluster.NodeID]*catalogMetaRaftLogV1
 	peers       []raftcluster.Peer
 	configs     map[raftcluster.NodeID]raftcluster.Config
 	transports  map[raftcluster.NodeID]*hraft.InmemTransport
@@ -155,7 +180,7 @@ type realCatalogMetaClusterV1 struct {
 	authorities map[raftcluster.NodeID]*CatalogMetaAuthorityV1
 }
 
-func newRealCatalogMetaClusterV1(t *testing.T, prefix string) *realCatalogMetaClusterV1 {
+func newRealCatalogMetaClusterV1(t *testing.T, prefix string, logs map[raftcluster.NodeID]*catalogMetaRaftLogV1) *realCatalogMetaClusterV1 {
 	t.Helper()
 	features := raftcluster.FeatureSet{
 		ConfigVersion: raftcluster.SupportedConfigVersion,
@@ -165,6 +190,7 @@ func newRealCatalogMetaClusterV1(t *testing.T, prefix string) *realCatalogMetaCl
 		},
 	}
 	cluster := &realCatalogMetaClusterV1{
+		logs:        logs,
 		configs:     make(map[raftcluster.NodeID]raftcluster.Config, 3),
 		transports:  make(map[raftcluster.NodeID]*hraft.InmemTransport, 3),
 		providers:   make(map[raftcluster.NodeID]*raftcluster.CatalogMetaRaftProviderV1, 3),
@@ -212,11 +238,19 @@ func (c *realCatalogMetaClusterV1) reopenNode(t *testing.T, id raftcluster.NodeI
 		t.Fatalf("%s provider is already open", id)
 	}
 	authority := NewCatalogMetaAuthorityV1()
+	config := realCatalogMetaRaftConfigV1()
+	if c.logs != nil {
+		if c.logs[id] == nil {
+			c.logs[id] = new(catalogMetaRaftLogV1)
+		}
+		config.LogOutput = c.logs[id]
+		config.LogLevel = "INFO"
+	}
 	provider, err := raftcluster.OpenCatalogMetaRaftProviderV1(raftcluster.CatalogMetaRaftProviderOptionsV1{
 		Cluster:      c.configs[id],
 		State:        authority,
 		Transport:    c.transports[id],
-		RaftConfig:   realCatalogMetaRaftConfigV1(),
+		RaftConfig:   config,
 		Bootstrap:    true,
 		ApplyTimeout: 3 * time.Second,
 	})
@@ -391,9 +425,21 @@ func (c *realCatalogMetaClusterV1) waitEpoch(t *testing.T, ctx context.Context, 
 
 func (c *realCatalogMetaClusterV1) waitEpochOn(t *testing.T, ctx context.Context, id raftcluster.NodeID, epoch uint64) {
 	t.Helper()
+	entered := time.Now()
+	deadline, _ := ctx.Deadline()
+	var last CatalogMetaStatusV1
+	var available bool
+	var polls int
+	defer func() {
+		if t.Failed() {
+			t.Logf("epoch wait node=%s wanted=%d budget_at_entry=%s elapsed=%s polls=%d last_available=%t last_epoch=%d last_applied_index=%d",
+				id, epoch, deadline.Sub(entered), time.Since(entered), polls, available, last.Epoch, last.AppliedIndex)
+		}
+	}()
 	waitRealCatalogMetaConditionV1(t, ctx, func() bool {
-		status, ok := c.authorities[id].Status()
-		return ok && status.Epoch == epoch
+		last, available = c.authorities[id].Status()
+		polls++
+		return available && last.Epoch == epoch
 	}, fmt.Sprintf("%s did not converge to epoch %d", id, epoch))
 }
 
