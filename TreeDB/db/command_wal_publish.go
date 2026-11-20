@@ -778,11 +778,12 @@ func scanCommandWALSegmentsForCleanupProof(dir string, cleanupThrough uint64, du
 	if durableWALLSN < cleanupThrough {
 		return nil, validateCommandWALCleanupReplayLineage(nil, cleanupThrough, durableWALLSN)
 	}
-	scan := newCommandWALCleanupScan(cleanupThrough, durableWALLSN, maxSegmentBytes, nil)
+	scan := newCommandWALCleanupScan(cleanupThrough, durableWALLSN, maxSegmentBytes, nil, nil)
 	return scan.finish(scan.scanLockedDirectory(dir))
 }
 
 type commandWALCleanupScan struct {
+	capturedJournal    *commitlog.CommandJournalCleanupSnapshot
 	options            commandWALSegmentScanOptions
 	maxSegmentBytes    int64
 	beforeSegment      func(string)
@@ -792,8 +793,9 @@ type commandWALCleanupScan struct {
 	closedStreamBuffer *commitlog.CleanupReadBuffer
 }
 
-func newCommandWALCleanupScan(cleanupThrough, durableWALLSN uint64, maxSegmentBytes int64, beforeSegment func(string)) *commandWALCleanupScan {
+func newCommandWALCleanupScan(cleanupThrough, durableWALLSN uint64, maxSegmentBytes int64, beforeSegment func(string), captured *commitlog.CommandJournalCleanupSnapshot) *commandWALCleanupScan {
 	return &commandWALCleanupScan{
+		capturedJournal: captured,
 		options: commandWALSegmentScanOptions{
 			seenLSNs: make(map[uint64]struct{}), seenLSNAppliedLSN: cleanupThrough, seenLSNMax: durableWALLSN,
 		},
@@ -880,7 +882,13 @@ func (s *commandWALCleanupScan) scanFile(seg logSegment, file *os.File, active, 
 	}
 	decision.Covered = scan.maxLSN <= s.options.seenLSNAppliedLSN
 	if decision.Covered && !decision.Active {
-		decision.file = file
+		// A rotation since proof capture can leave a sealed, covered file in
+		// the protected suffix. Validate it as sealed, then release its reader.
+		if s.capturedJournal != nil && decision.protectedByCapture(s.capturedJournal) {
+			decision.Active = true
+		} else {
+			decision.file = file
+		}
 	}
 	s.decisions = append(s.decisions, decision)
 	return decision.file != nil
