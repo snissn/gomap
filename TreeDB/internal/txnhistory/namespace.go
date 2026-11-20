@@ -114,3 +114,19 @@ func (j *History) DependenciesChanged(start uint64, dependencies []Dependency) (
 	}
 	return false, nil
 }
+
+// ValidateCurrentDependencies checks dependencies when the caller holds the
+// publication sequencer and knows no installed sequence exceeds start.
+func (j *History) ValidateCurrentDependencies(start uint64, dependencies []Dependency) error {
+	if err := j.Check(start); err != nil {
+		return err
+	}
+	for _, d := range dependencies {
+		switch d.Kind {
+		case PointEffect, RangeEffect, BarrierEffect:
+		default:
+			return ErrInvalidEffect
+		}
+	}
+	return nil
+}

@@ -104,8 +104,17 @@ func (b *Batch) PrepareExternalCommandWALPublication() (err error) {
 		}
 		if owner := b.cowState.native; owner != nil {
 			plan := owner.plan
+			// Journal install and cut publication share the append sequencer.
+			// On equal sequences the journal has no newer effects to probe.
+			currentSequence := plan.StartSequence == c.cut.logicalSeq
 			for _, dependencies := range [][]txnhistory.Dependency{plan.Dependencies, plan.Effects} {
-				changed, validateErr := c.journal.DependenciesChanged(plan.StartSequence, dependencies)
+				var changed bool
+				var validateErr error
+				if currentSequence {
+					validateErr = c.journal.ValidateCurrentDependencies(plan.StartSequence, dependencies)
+				} else {
+					changed, validateErr = c.journal.DependenciesChanged(plan.StartSequence, dependencies)
+				}
 				if validateErr != nil {
 					return validateErr
 				}
