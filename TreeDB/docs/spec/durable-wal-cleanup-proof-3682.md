@@ -121,7 +121,7 @@ Ordinary cleanup is serialized per DB and follows this order:
    taking the scan lock when a selected ext4 stream WAL and the value-log
    directory are on distinct ext4 volumes. That path requires a canonical
    single-lane inventory, two closed streams of at least 96 MiB each, at most
-   eight closed streams, and at most 1 MiB of active WAL bytes at proof capture.
+   eight closed streams, and at most 2.5 MiB of active WAL bytes at proof capture.
    It opens exact earlier generations and reserves the directory reader under
    append exclusion, then releases exclusion to scan the prefix in order.
    If a rotation begins, it closes these temporary readers before creating its

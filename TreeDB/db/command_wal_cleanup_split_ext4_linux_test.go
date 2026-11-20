@@ -94,13 +94,41 @@ func TestCommandWALCleanupSplitExt4SealedPrefix(t *testing.T) {
 	if pending, err := database.PrepareCommandWALCoveredPrefixCleanup(); err != nil || !pending {
 		t.Fatalf("expected deferred cleanup debt: pending=%t err=%v", pending, err)
 	}
+	activeFirstLSN := database.CommandWALNextLSN()
 	if err := database.SetSync([]byte("active-prefix"), []byte("still live")); err != nil {
 		t.Fatal(err)
 	}
-	proof, err := database.captureDurableWALCleanupProofV1()
-	if err != nil || !proof.journal.Ext4Stream || !database.commandWALCleanupSplitValueLogVolume(proof.journal) {
-		t.Fatalf("fixture did not select split ext4 stream cleanup: %v", err)
+	// Reach the inclusive capture limit with real stream frames. Use a
+	// separate key so the checked reopen still proves the original value.
+	paddingKey := []byte("active-padding")
+	beforePad := database.CommandWALActiveBytes()
+	if err := database.Set(paddingKey, value); err != nil {
+		t.Fatal(err)
 	}
+	frameOverhead := database.CommandWALActiveBytes() - beforePad - int64(len(value))
+	for remaining := int64(maxSplitStreamCleanupActiveBytes) - database.CommandWALActiveBytes(); remaining > 0; remaining = int64(maxSplitStreamCleanupActiveBytes) - database.CommandWALActiveBytes() {
+		payload := remaining - frameOverhead
+		if payload > int64(len(value)) {
+			payload = min(int64(len(value)), remaining-2*frameOverhead-1)
+		}
+		if payload <= 0 {
+			t.Fatalf("cannot pad %d active WAL bytes with frame overhead %d", remaining, frameOverhead)
+		}
+		write := database.Set
+		if payload+frameOverhead == remaining {
+			write = database.SetSync
+		}
+		if err := write(paddingKey, value[:payload]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	proof, err := database.captureDurableWALCleanupProofV1()
+	if err != nil || !proof.journal.Ext4Stream || proof.journal.ActiveBytes != maxSplitStreamCleanupActiveBytes ||
+		!database.commandWALCleanupSplitValueLogVolume(proof.journal) {
+		t.Fatalf("fixture did not select split ext4 stream cleanup at %d active bytes: proof=%+v err=%v",
+			maxSplitStreamCleanupActiveBytes, proof.journal, err)
+	}
+	activeFrames := database.CommandWALNextLSN() - activeFirstLSN
 	active := proof.journal.ActivePath
 	assertPresent := func() {
 		t.Helper()
@@ -226,8 +254,8 @@ func TestCommandWALCleanupSplitExt4SealedPrefix(t *testing.T) {
 	if current == active || !slices.Equal(scanned, []string{closed[0], closed[0], closed[1], active, current}) {
 		t.Fatalf("physical scan order=%q active at capture=%q current=%q", scanned, active, current)
 	}
-	if frames := database.commandWALCleanupScanFrames.Load() - beforeFrames; frames != 2*32769+2 {
-		t.Fatalf("scanned physical frames=%d, want both complete predecessors and two active-prefix frames", frames)
+	if frames := database.commandWALCleanupScanFrames.Load() - beforeFrames; frames != 2*32769+activeFrames+1 {
+		t.Fatalf("scanned physical frames=%d, want both complete predecessors, %d initially active frames, and the concurrent write", frames, activeFrames)
 	}
 	if removed := database.commandWALCleanupBytes.Load() - beforeRemoved; removed != uint64(sizes[0]+sizes[1]) {
 		t.Fatalf("retired bytes=%d, want %d", removed, sizes[0]+sizes[1])

@@ -109,14 +109,23 @@ func TestPublicCommandWALIdleFusionHeldSyncAdmitsSuccessorAndBlocksClose(t *test
 	default:
 	}
 	unblock()
-	for _, done := range []chan error{first, second, closed} {
+	for _, completion := range []struct {
+		stage string
+		done  <-chan error
+	}{
+		{"first ACK", first},
+		{"second ACK", second},
+		{"Close", closed},
+	} {
 		select {
-		case err := <-done:
+		case err := <-completion.done:
 			if err != nil {
-				t.Fatal(err)
+				t.Fatalf("%s: %v", completion.stage, err)
 			}
 		case <-time.After(2 * time.Second):
-			t.Fatal("completion or Close stalled")
+			buf := make([]byte, 1<<20)
+			n := runtime.Stack(buf, true)
+			t.Fatalf("%s stalled after releasing the held sync; blocked goroutines:\n%s", completion.stage, buf[:n])
 		}
 	}
 	reopened, err := Open(opts)
@@ -126,6 +135,9 @@ func TestPublicCommandWALIdleFusionHeldSyncAdmitsSuccessorAndBlocksClose(t *test
 	defer reopened.Close()
 	requireRawKVValue(t, reopened, []byte("first"), []byte("one"))
 	requireRawKVValue(t, reopened, []byte("second"), []byte("two"))
+	if err := reopened.Close(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestPublicCommandWALIdleFusionDemandDuringAppendUsesSameCommand(t *testing.T) {

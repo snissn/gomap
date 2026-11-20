@@ -21,7 +21,7 @@ const maxOpenClosedWALCleanupSegments = 8
 
 const (
 	minSplitStreamCleanupSegmentBytes = 96 << 20
-	maxSplitStreamCleanupActiveBytes  = 1 << 20
+	maxSplitStreamCleanupActiveBytes  = 5 << 19 // 2.5 MiB at proof capture
 )
 
 // commandWALCleanupTestHooks gives cleanup's per-handle observation points one
