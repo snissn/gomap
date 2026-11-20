@@ -260,6 +260,7 @@ type CommandJournalCleanupSnapshot struct {
 	ActivePath            string
 	ActiveIdentity        rootpublication.StableIdentity
 	FixedContainer        bool
+	Ext4Stream            bool // The active stream was created using the exact ext4 mount policy.
 	PendingStableRotation int
 	PendingSuccessor      bool
 }
@@ -1217,6 +1218,7 @@ func (j *CommandJournal) cleanupSnapshotLocked() (CommandJournalCleanupSnapshot,
 		ActivePath:            j.path,
 		ActiveIdentity:        identity,
 		FixedContainer:        j.writer.fixed != nil,
+		Ext4Stream:            j.writer.fixed == nil && j.writer.containerSelection.ext4Stream,
 		PendingStableRotation: len(j.pendingStableRotations),
 		PendingSuccessor:      j.pendingStableSuccessor != nil,
 	}, nil
@@ -1232,6 +1234,12 @@ func (j *CommandJournal) CaptureCleanupSnapshot() (CommandJournalCleanupSnapshot
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	return j.cleanupSnapshotLocked()
+}
+
+// CleanupResourcePinned lets an advisory operation skip already pinned resources.
+// Deletion must still acquire its lease under WithCleanupSnapshot.
+func (j *CommandJournal) CleanupResourcePinned(identity rootpublication.StableIdentity) bool {
+	return j.stableResourcePins == nil || j.stableResourcePins.PinCount(identity) != 0
 }
 
 // AppendLockAvailableForTesting probes journal exclusion without waiting. A

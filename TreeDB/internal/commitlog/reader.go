@@ -68,6 +68,9 @@ func NewReaderFromFileWithOptions(file *os.File, opts Options) (*Reader, error) 
 	}, nil
 }
 
+// IsFixedContainer reports whether this reader validated a fixed WAL layout.
+func (r *Reader) IsFixedContainer() bool { return r.fixed != nil }
+
 // IsEmptyFixedContainer reports a positively validated frame-free fixed
 // container, not an empty stream or an EOF observation. Reader construction
 // validated the complete header and reserve on this exact descriptor; callers

@@ -23,6 +23,7 @@ type commandWALCleanupTestHooks struct {
 	beforeSegment func(string)
 	afterScan     func()
 	openPrefix    func(string) (*os.File, error)
+	advisePages   func(*os.File, func() error)
 }
 
 type cleanupClosedWALFile struct {
@@ -96,7 +97,7 @@ func commandWALCleanupHasDescriptorHeadroom(dir string) (room bool, err error) {
 	return true, errors.Join(capture.Close(), retirement.Close())
 }
 
-func (db *DB) scanCommandWALCleanupProof(proof durableWALCleanupProofV1, scanSealedPrefix bool) ([]commandWALSegmentCleanupDecision, error) {
+func (db *DB) scanCommandWALCleanupProof(proof durableWALCleanupProofV1, scanSealedPrefix bool) ([]commandWALSegmentCleanupDecision, bool, error) {
 	var beforeSegment func(string)
 	openPrefix := os.Open
 	if hooks := db.testCommandWALCleanupHooks; hooks != nil {
@@ -108,9 +109,10 @@ func (db *DB) scanCommandWALCleanupProof(proof durableWALCleanupProofV1, scanSea
 	scan := newCommandWALCleanupScan(proof.cleanupThrough, proof.durableWALLSN, db.walMaxSegmentBytes, beforeSegment, &proof.journal)
 	if !scanSealedPrefix {
 		// Checkpoint, Close, and explicit cleanup use the original locked scan.
-		return scan.finish(proof.journalOwner.WithCleanupScan(proof.journal, func() error {
+		decisions, err := scan.finish(proof.journalOwner.WithCleanupScan(proof.journal, func() error {
 			return scan.scanLockedDirectory(db.dir)
 		}))
+		return decisions, false, err
 	}
 	dir := resolveStorageLayout(db.dir).walDir
 	var prefix []cleanupClosedWALFile
@@ -128,6 +130,7 @@ func (db *DB) scanCommandWALCleanupProof(proof durableWALCleanupProofV1, scanSea
 
 	err := proof.journalOwner.WithCleanupScanSnapshot(proof.journal, func(current commitlog.CommandJournalCleanupSnapshot) error {
 		if !current.FixedContainer {
+			scan.retireStreamPages = proof.journal.Ext4Stream && current.Ext4Stream && current.SegmentSeq == proof.journal.SegmentSeq
 			// Stream cleanup retains append exclusion for the full scan.
 			// Read ahead only on closed streams, using their original validator.
 			if current.SegmentSeq > 1 {
@@ -194,7 +197,8 @@ func (db *DB) scanCommandWALCleanupProof(proof durableWALCleanupProofV1, scanSea
 	})
 	if err != nil || len(prefix) == 0 {
 		scan.hardErr = errors.Join(scan.hardErr, closePrefix())
-		return scan.finish(err)
+		decisions, err := scan.finish(err)
+		return decisions, err == nil && scan.retireStreamPages, err
 	}
 
 	// The database maintenance owner serializes deletes and journal rotation
@@ -206,7 +210,8 @@ func (db *DB) scanCommandWALCleanupProof(proof durableWALCleanupProofV1, scanSea
 		closed.kept = scan.scanFile(closed.segment, closed.file, false, true, nil)
 	}
 	if scan.hardErr != nil {
-		return scan.finish(closePrefix())
+		decisions, err := scan.finish(closePrefix())
+		return decisions, false, err
 	}
 
 	err = proof.journalOwner.WithCleanupScanSnapshot(proof.journal, func(current commitlog.CommandJournalCleanupSnapshot) error {
@@ -245,5 +250,6 @@ func (db *DB) scanCommandWALCleanupProof(proof durableWALCleanupProofV1, scanSea
 		return nil
 	})
 	scan.hardErr = errors.Join(scan.hardErr, closePrefix())
-	return scan.finish(err)
+	decisions, err := scan.finish(err)
+	return decisions, false, err
 }

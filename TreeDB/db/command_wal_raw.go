@@ -970,7 +970,7 @@ func (db *DB) cleanupCommandWALCoveredSegmentsV1(scanSealedPrefix bool) (retErr 
 	// containers to be reclaimed. Scan the complete retained replay lineage
 	// and apply the same active-generation, identity and pin gates below.
 	scanStart := time.Now()
-	decisions, err := db.scanCommandWALCleanupProof(proof, scanSealedPrefix)
+	decisions, retireStreamPages, err := db.scanCommandWALCleanupProof(proof, scanSealedPrefix)
 	proof.segments = decisions
 	db.commandWALCleanupScans.Add(1)
 	if scanNs := commandWALDurationNs(time.Since(scanStart)); scanNs > 0 {
@@ -983,6 +983,9 @@ func (db *DB) cleanupCommandWALCoveredSegmentsV1(scanSealedPrefix bool) (retErr 
 	}()
 	if hooks := db.testCommandWALCleanupHooks; err == nil && hooks != nil && hooks.afterScan != nil {
 		hooks.afterScan()
+	}
+	if retireStreamPages {
+		db.adviseCommandWALRetirementPages(proof)
 	}
 	if err == nil {
 		db.durablePublishMu.Lock()

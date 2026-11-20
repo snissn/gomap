@@ -2107,7 +2107,7 @@ func TestCommandWALCleanupReleasesCoveredReaderProtectedByCapture(t *testing.T) 
 	// Rotation between proof capture and scanning leaves the previous active
 	// segment immutable for validation and protected from this cleanup.
 	for _, deferred := range []bool{false, true} {
-		decisions, err := database.scanCommandWALCleanupProof(proof, deferred)
+		decisions, _, err := database.scanCommandWALCleanupProof(proof, deferred)
 		if err != nil {
 			t.Fatal(err)
 		}

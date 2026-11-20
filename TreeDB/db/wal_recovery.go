@@ -27,6 +27,7 @@ type logSegment struct {
 	path     string
 	size     int64
 	valueLog bool
+	regular  bool
 	fileID   uint32
 }
 
@@ -58,6 +59,7 @@ func listSegmentsInDir(segDir string) ([]logSegment, error) {
 		}
 		if info, err := entry.Info(); err == nil {
 			seg.size = info.Size()
+			seg.regular = info.Mode().IsRegular()
 		}
 		if !valueLog {
 			file, err := os.Open(seg.path)

@@ -573,6 +573,7 @@ type commandWALSegmentScanResult struct {
 	frames       uint64
 	typed        bool
 	terminalTail bool
+	fixed        bool
 	emptyFixed   bool // Positive whole-container validation, never inferred from EOF/LSN.
 }
 
@@ -666,7 +667,7 @@ func scanCommandWALSegmentFileWithOptions(file *os.File, maxSegmentBytes int64, 
 
 func scanCommandWALSegmentReader(r *commitlog.Reader, allowTerminalTail bool, opts commandWALSegmentScanOptions) (commandWALSegmentScanResult, error) {
 	var lastLSN uint64
-	scan := commandWALSegmentScanResult{emptyFixed: r.IsEmptyFixedContainer()}
+	scan := commandWALSegmentScanResult{fixed: r.IsFixedContainer(), emptyFixed: r.IsEmptyFixedContainer()}
 	for {
 		lsn, err := r.ReadValidatedCommandFrameLSN()
 		if err != nil {
@@ -791,6 +792,7 @@ type commandWALCleanupScan struct {
 	lineageErr         error
 	hardErr            error
 	closedStreamBuffer *commitlog.CleanupReadBuffer
+	retireStreamPages  bool
 }
 
 func newCommandWALCleanupScan(cleanupThrough, durableWALLSN uint64, maxSegmentBytes int64, beforeSegment func(string), captured *commitlog.CommandJournalCleanupSnapshot) *commandWALCleanupScan {
@@ -808,6 +810,18 @@ func (s *commandWALCleanupScan) scanLockedDirectory(dir string) error {
 	segments, err := listWALSegments(dir)
 	if err != nil {
 		return err
+	}
+	if s.retireStreamPages {
+		// Only a canonical single-lane stream inventory has the measured
+		// retirement shape. Leave old, mixed and unusual layouts unadvised.
+		s.retireStreamPages = len(segments) != 0 && samePath(segments[len(segments)-1].path, s.capturedJournal.ActivePath)
+		for _, seg := range segments {
+			if !seg.regular || seg.valueLog || seg.lane != s.capturedJournal.Lane ||
+				seg.seq == 0 || filepath.Base(seg.path) != commitlog.CommandSegmentName(seg.lane, seg.seq) {
+				s.retireStreamPages = false
+				break
+			}
+		}
 	}
 	activeByLane := commandWALActiveSeqByLane(segments)
 	s.decisions = make([]commandWALSegmentCleanupDecision, 0, len(segments))
@@ -859,6 +873,10 @@ func (s *commandWALCleanupScan) scanFile(seg logSegment, file *os.File, active, 
 		opts.readBuffer = s.closedStreamBuffer
 	}
 	scan, err := scanCommandWALSegmentFileWithOptions(file, s.maxSegmentBytes, active, opts)
+	if s.retireStreamPages && (scan.fixed || !info.Mode().IsRegular() || scan.terminalTail ||
+		(!scan.typed && (!active || info.Size() != 0))) {
+		s.retireStreamPages = false
+	}
 	decision := commandWALSegmentCleanupDecision{
 		Path: seg.path, Size: info.Size(), LogicalSize: seg.size,
 		ScannedBytes: scan.scannedBytes, Frames: scan.frames, MinLSN: scan.minLSN, MaxLSN: scan.maxLSN,

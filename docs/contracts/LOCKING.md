@@ -102,6 +102,18 @@ captured token and the caller's basis. An online vacuum that supersedes the
 captured runtime makes the basis stale. A failure of the captured physical seal
 is returned to the caller.
 
+## Deferred command-WAL retirement
+
+On Linux, deferred cleanup on a dedicated ext4 WAL volume can advise the
+kernel to release cache pages from a covered, fully scanned sealed stream of
+at least 128 MiB. The hint uses the retained scan reader after the complete
+cleanup proof succeeds, with both the durable-publication and journal mutexes
+released. The advisory operation skips already pinned files. Cleanup then
+revalidates both durable roots and the journal, acquires its deletion leases,
+checks every scan-reader close and pathname identity, and persists the namespace
+in the existing order. A failed cache hint leaves the original cleanup path
+in charge.
+
 ## Bounded vector prepare in the Raft FSM
 
 Vector prepare takes a factory-minted stable DB capture, the root-scoped vector
