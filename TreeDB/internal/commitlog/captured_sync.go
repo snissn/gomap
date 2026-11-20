@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"syscall"
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -75,7 +76,7 @@ func (j *CommandJournal) CaptureSyncInto(target *CapturedSync, rotated []*rootpu
 		}
 	}()
 	if j.capturedFile == nil || j.capturedFile.seq != j.segmentSeq {
-		token, tokenErr := j.stableSegmentToken(j.writer.f, j.path, j.segmentSeq, rootpublication.ReachabilityCommandWALActive, rootpublication.DurableFrontier{}, nil, false)
+		token, tokenErr := j.pinCapturedSyncFileLocked(j.writer.f, j.path, j.segmentSeq, rootpublication.ReachabilityCommandWALActive, rootpublication.DurableFrontier{}, nil)
 		if tokenErr != nil {
 			return nil, tokenErr
 		}
@@ -90,7 +91,7 @@ func (j *CommandJournal) CaptureSyncInto(target *CapturedSync, rotated []*rootpu
 		var pinned *rootpublication.StableResourceToken
 		err = original.WithPinnedFile(func(file *os.File) error {
 			var pinErr error
-			pinned, pinErr = j.stableSegmentToken(file, original.DiagnosticPath(), original.Generation(), original.Reachability(), original.Frontier(), original.Namespace(), false)
+			pinned, pinErr = j.pinCapturedSyncFileLocked(file, original.DiagnosticPath(), original.Generation(), original.Reachability(), original.Frontier(), original.Namespace())
 			return pinErr
 		})
 		if err != nil {
@@ -103,6 +104,39 @@ func (j *CommandJournal) CaptureSyncInto(target *CapturedSync, rotated []*rootpu
 	}
 	j.syncPins++
 	return target, nil
+}
+
+func (j *CommandJournal) pinCapturedSyncFileLocked(file *os.File, path string, seq uint64, field rootpublication.ReachabilityField, frontier rootpublication.DurableFrontier, namespace *rootpublication.StableNamespaceToken) (*rootpublication.StableResourceToken, error) {
+	token, err := j.stableSegmentToken(file, path, seq, field, frontier, namespace, false)
+	if err == nil || j.detachedCleanupScan == nil || !captureHasOnlyDescriptorLimit(err) {
+		return token, err
+	}
+	// The optional ext4 cleanup scan can be holding the last descriptors.
+	// Yield its temporary readers and retry only the pin, under the same
+	// journal lock and on the same exact file. Cleanup owns its close errors.
+	j.yieldDetachedCleanupScanLocked()
+	token, retryErr := j.stableSegmentToken(file, path, seq, field, frontier, namespace, false)
+	if retryErr != nil {
+		return token, errors.Join(err, retryErr)
+	}
+	return token, nil
+}
+
+func captureHasOnlyDescriptorLimit(err error) bool {
+	if group, ok := err.(interface{ Unwrap() []error }); ok {
+		causes := group.Unwrap()
+		for _, cause := range causes {
+			if !captureHasOnlyDescriptorLimit(cause) {
+				return false
+			}
+		}
+		return len(causes) != 0
+	}
+	if cause := errors.Unwrap(err); cause != nil {
+		return captureHasOnlyDescriptorLimit(cause)
+	}
+	errno, ok := err.(syscall.Errno)
+	return ok && (errno == syscall.EMFILE || errno == syscall.ENFILE)
 }
 
 // Sync completes only the captured physical prefix. Bytes appended after the

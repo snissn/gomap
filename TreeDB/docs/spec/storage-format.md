@@ -4652,9 +4652,9 @@ of the oldest predecessors. When every selected file is fixed, it releases
 append exclusion to validate their frames and complete reserves, then reacquires
 it to verify the prefix and validate the remaining inventory. The same method
 can validate a large sealed stream prefix outside append exclusion when the
-WAL and value log are on the same ext4 volume. A concurrent rotation
-releases its temporary cleanup readers and the attempt reverts to the original
-locked scan. See the
+WAL and value log are on the same ext4 volume. A concurrent rotation or a
+captured sync under descriptor pressure releases the temporary cleanup readers.
+Cleanup then uses the original locked scan. See the
 [durable WAL cleanup proof](durable-wal-cleanup-proof-3682.md) for the placement,
 inventory, and identity checks. Ineligible inventories,
 `CleanupCommandWALCoveredSegments`, synchronous checkpoint and Close use the

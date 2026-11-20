@@ -1289,7 +1289,8 @@ func (j *CommandJournal) withCleanupScanSnapshotLocked(snapshot CommandJournalCl
 
 // CommandJournalDetachedCleanupScan binds a batch of temporary cleanup readers
 // to one journal owner. Rotation releases the readers before opening any of
-// its own files. Cleanup owns decisions only after finishing the batch.
+// its own files, and sync capture can release them under descriptor pressure.
+// Cleanup owns decisions only after finishing the batch.
 type CommandJournalDetachedCleanupScan struct {
 	release func()
 }
@@ -1319,7 +1320,7 @@ func (j *CommandJournal) StageDetachedCleanupScan(snapshot CommandJournalCleanup
 }
 
 // FinishDetachedCleanupScan claims the readers for final validation under
-// append exclusion, or reports that rotation released them first. The callback
+// append exclusion, or reports that the journal released them first. The callback
 // disposes of any unneeded readers before append exclusion ends, including
 // when the current snapshot cannot be validated.
 func (j *CommandJournal) FinishDetachedCleanupScan(snapshot CommandJournalCleanupSnapshot, scan *CommandJournalDetachedCleanupScan, fn func(CommandJournalCleanupSnapshot, error) error) (yielded bool, err error) {

@@ -124,10 +124,12 @@ Ordinary cleanup is serialized per DB and follows this order:
    eight closed streams, and at most 2.5 MiB of active WAL bytes at proof capture.
    It opens exact earlier generations and reserves the directory reader under
    append exclusion, then releases exclusion to scan the prefix in order.
-   If a rotation begins, it closes these temporary readers before creating its
-   successor. Cleanup discards the partial decisions and uses the original
-   locked scan under the captured replay bounds. Without rotation, cleanup
-   reacquires append exclusion to refresh the inventory, verify predecessor
+   Rotation closes these temporary readers before creating its successor.
+   A captured sync that runs out of descriptors also closes the temporary
+   readers before retrying the original file pin once. Cleanup discards the
+   partial decisions and uses the original locked scan under the captured
+   replay bounds. Otherwise cleanup reacquires append exclusion to refresh the
+   inventory, verify predecessor
    identities and extents, and scan the active generation. Ordinary appends can
    advance that generation after capture, up to a rotation. Predecessor extent
    and pathname validation repeats before deletion.

@@ -256,7 +256,7 @@ func (db *DB) scanDetachedCommandWALCleanupPrefix(proof durableWALCleanupProofV1
 		return true, err
 	}
 
-	// Rotation closed every handle before allocating. Preserve independently
+	// The journal closed every handle before allocating. Preserve independently
 	// observed validation and close errors, and never use partial decisions.
 	// Otherwise restart the stock scan under the original replay bounds.
 	var hardErr error
