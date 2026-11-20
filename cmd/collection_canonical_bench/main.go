@@ -50,6 +50,7 @@ type config struct {
 	FullLeafgenMaxGenerations int
 	FullLeafgenIndexVacuum    string
 	SkipTimedMatrix           bool
+	NativeCOWCompanion        bool
 	SkipOfflineRewrite        bool
 	SkipFullLeafgen           bool
 	SkipSQLite                bool
@@ -91,6 +92,8 @@ type canonicalConfig struct {
 	FullLeafgenMaxGenerations int      `json:"full_leafgen_max_generations"`
 	FullLeafgenIndexVacuum    string   `json:"full_leafgen_index_vacuum"`
 	SkipSQLite                bool     `json:"skip_sqlite"`
+	NativeCOWCompanion        bool     `json:"native_cow_companion,omitempty"`
+	TimedOnly                 bool     `json:"timed_only,omitempty"`
 	ProfileTimedMatrix        bool     `json:"profile_timed_matrix"`
 	ProfileBenchtime          string   `json:"profile_benchtime,omitempty"`
 	ProfileCount              int      `json:"profile_count,omitempty"`
@@ -135,6 +138,10 @@ type resultRow struct {
 	MaintenanceStats   map[string]float64  `json:"maintenance_stats,omitempty"`
 	Extra              map[string]string   `json:"extra,omitempty"`
 	ProductionEvidence *productionEvidence `json:"production_evidence,omitempty"`
+	Owner              string              `json:"owner,omitempty"`
+	BytesPerOp         *float64            `json:"bytes_per_op,omitempty"`
+	AllocsPerOp        *float64            `json:"allocs_per_op,omitempty"`
+	Samples            []benchmarkSample   `json:"samples,omitempty"`
 }
 
 type comparisonRow struct {
@@ -185,12 +192,15 @@ type reportSection struct {
 }
 
 type reportBenchmark struct {
-	Name        string             `json:"name"`
-	Section     string             `json:"section"`
-	Description string             `json:"description"`
-	MeanNSPerOp float64            `json:"mean_ns_per_op"`
-	OpsPerSec   float64            `json:"ops_per_sec"`
-	MeanMetrics map[string]float64 `json:"mean_metrics"`
+	Name            string             `json:"name"`
+	Section         string             `json:"section"`
+	Description     string             `json:"description"`
+	MeanNSPerOp     float64            `json:"mean_ns_per_op"`
+	OpsPerSec       float64            `json:"ops_per_sec"`
+	MeanMetrics     map[string]float64 `json:"mean_metrics"`
+	MeanBytesPerOp  *float64           `json:"mean_bytes_per_op"`
+	MeanAllocsPerOp *float64           `json:"mean_allocs_per_op"`
+	Runs            []benchmarkSample  `json:"runs"`
 }
 
 type productionEvidence struct {
@@ -362,6 +372,8 @@ func run(argv []string) error {
 			FullLeafgenMaxGenerations: cfg.FullLeafgenMaxGenerations,
 			FullLeafgenIndexVacuum:    cfg.FullLeafgenIndexVacuum,
 			SkipSQLite:                cfg.SkipSQLite,
+			NativeCOWCompanion:        cfg.NativeCOWCompanion,
+			TimedOnly:                 cfg.NativeCOWCompanion && cfg.SkipOfflineRewrite && cfg.SkipFullLeafgen && cfg.SkipSQLite,
 			ProfileTimedMatrix:        cfg.ProfileTimedMatrix,
 			ProfileBenchtime:          cfg.ProfileBenchtime,
 			ProfileCount:              cfg.ProfileCount,
@@ -370,8 +382,10 @@ func run(argv []string) error {
 	}
 
 	fmt.Printf("canonical collections benchmark run dir: %s\n", cfg.OutDir)
-	if err := runBuildHelpers(cfg, canon); err != nil {
-		return err
+	if !canon.Config.TimedOnly {
+		if err := runBuildHelpers(cfg, canon); err != nil {
+			return err
+		}
 	}
 	if !cfg.SkipTimedMatrix {
 		if err := runTimedMatrix(cfg, canon); err != nil {
@@ -518,6 +532,7 @@ func parseConfig(args []string) (config, error) {
 	fs.BoolVar(&cfg.FullLeafgenForce, "leafgen-pack-force", cfg.FullLeafgenForce, "Force full leafgen pack candidate selection")
 	fs.IntVar(&cfg.FullLeafgenMaxGenerations, "leafgen-pack-max-generations", cfg.FullLeafgenMaxGenerations, "Max generations to pack in full leafgen phase; 0 means no limit")
 	fs.StringVar(&cfg.FullLeafgenIndexVacuum, "index-vacuum", cfg.FullLeafgenIndexVacuum, "Index vacuum mode for full leafgen fixture: offline, online, auto, or none")
+	fs.BoolVar(&cfg.NativeCOWCompanion, "native-cow-companion", false, "Add native cow_btree companion to the timed command_wal_relaxed BSON/JSON collection measurements")
 	fs.BoolVar(&cfg.SkipTimedMatrix, "skip-timed-matrix", false, "Skip timed TreeDB/SQLite benchmark matrix")
 	fs.BoolVar(&cfg.SkipOfflineRewrite, "skip-offline-rewrite", false, "Skip high-level offline compact matrix")
 	fs.BoolVar(&cfg.SkipFullLeafgen, "skip-full-leafgen", false, "Skip full leafgen pack/GC fixture")
@@ -559,6 +574,11 @@ func parseConfig(args []string) (config, error) {
 	if cfg.ProfileCount <= 0 {
 		return config{}, errors.New("-profile-count must be > 0")
 	}
+	if cfg.NativeCOWCompanion {
+		if err := validateNativeCOWConfig(cfg); err != nil {
+			return config{}, err
+		}
+	}
 	return cfg, nil
 }
 
@@ -569,6 +589,11 @@ func runBuildHelpers(cfg config, canon *canonicalRun) error {
 func runTimedMatrix(cfg config, canon *canonicalRun) error {
 	matrixDir := filepath.Join(cfg.OutDir, "timed_matrix")
 	treePattern := fmt.Sprintf("^BenchmarkCollectionShapeInsertBatch$/^indexes_%d$", cfg.Indexes)
+	var env map[string]string
+	if cfg.NativeCOWCompanion {
+		treePattern = fmt.Sprintf("^(%s|%s)$/^indexes_%d$", legacyShapeBenchmark, nativeShapeBenchmark, cfg.Indexes)
+		env = map[string]string{"TREEDB_COLLECTION_BENCH_NATIVE_COW_COMPANION": "true"}
+	}
 	sqlitePattern := fmt.Sprintf("^(BenchmarkSQLiteShapeInsertBatchJSON|BenchmarkSQLiteShapeInsertBatchNativeColumns)$/^indexes_%d$", cfg.Indexes)
 	args := []string{
 		"run", "./cmd/collection_bench_matrix",
@@ -594,7 +619,10 @@ func runTimedMatrix(cfg config, canon *canonicalRun) error {
 			"-profile-count", strconv.Itoa(cfg.ProfileCount),
 		)
 	}
-	if err := runLoggedCommand(cfg, canon, "timed_matrix", nil, "go", args...); err != nil {
+	if canon.Config.TimedOnly {
+		args = append(args, "-report-vlog-rewrite=false", "-report-leafgen-pack-gc=false", "-report-post-maintenance-index-vacuum=false")
+	}
+	if err := runLoggedCommand(cfg, canon, "timed_matrix", env, "go", args...); err != nil {
 		return err
 	}
 	canon.Artifacts["timed_matrix_dir"] = matrixDir
@@ -757,10 +785,31 @@ func parseTimedMatrixReports(canon *canonicalRun, matrixDir string, cfg config) 
 		if err := readJSONFile(path, &report); err != nil {
 			return err
 		}
+		if cfg.NativeCOWCompanion && (report.Commit != canon.Commit || report.Worktree != canon.Worktree) {
+			return fmt.Errorf("%s: timed report source identity does not match the canonical run", path)
+		}
 		for _, section := range report.Sections {
 			for _, bench := range section.Benchmarks {
-				if strings.Contains(bench.Name, "BenchmarkCollectionShapeInsertBatch") {
+				benchmarkName, _, _ := strings.Cut(bench.Name, "/")
+				switch benchmarkName {
+				case nativeShapeBenchmark:
+					if !cfg.NativeCOWCompanion {
+						return fmt.Errorf("%s: unexpected native COW companion row", path)
+					}
+					if err := addNativeCOWTimedRow(canon, report, bench, path, cfg); err != nil {
+						return fmt.Errorf("%s: %w", path, err)
+					}
+				case legacyShapeBenchmark:
+					if cfg.NativeCOWCompanion {
+						if err := validateCompanionBenchmark(report, bench, cfg, false); err != nil {
+							return fmt.Errorf("%s: %w", path, err)
+						}
+					}
 					addTreeDBTimedRows(canon, report, bench, path, cfg)
+				default:
+					if !cfg.NativeCOWCompanion && strings.Contains(bench.Name, legacyShapeBenchmark) {
+						addTreeDBTimedRows(canon, report, bench, path, cfg)
+					}
 				}
 				if strings.Contains(bench.Name, "BenchmarkSQLiteShapeInsertBatch") {
 					addSQLiteTimedRows(canon, report, bench, path, cfg)
@@ -802,6 +851,10 @@ func addTreeDBTimedRows(canon *canonicalRun, report collectionReport, bench repo
 		SourceArtifact:     path,
 		MaintenanceStats:   copyMetrics(metrics, "prepare_ns/doc", "publish_ns/doc", "secondary_runs_ns/doc", "disk_total_bytes"),
 		ProductionEvidence: evidence,
+		Owner:              legacyBackendOwner,
+		BytesPerOp:         bench.MeanBytesPerOp,
+		AllocsPerOp:        bench.MeanAllocsPerOp,
+		Samples:            bench.Runs,
 	})
 
 	onlineTotal, onlineMetric := firstMetric(metrics,
@@ -1214,8 +1267,15 @@ func validateCanonicalRun(canon *canonicalRun) []guardrailCheck {
 	add := func(sev, code, msg string) {
 		checks = append(checks, guardrailCheck{Severity: sev, Code: code, Message: msg})
 	}
-	add("warning", "phase.online_one_pass.partial", "online_one_pass_maintenance is partial online maintenance; do not describe it as full compaction")
-	if checksBlockCompactedClaims(canon.Checks) || !hasCanonicalExhaustiveCompactEvidence(canon) {
+	if canon.Config.NativeCOWCompanion {
+		checks = append(checks, validateCompanionPairs(canon)...)
+	}
+	if canon.Config.TimedOnly {
+		add("info", "compaction.not_requested", "Timed-only companion run omits SQLite and canonical compaction comparisons")
+	} else {
+		add("warning", "phase.online_one_pass.partial", "online_one_pass_maintenance is partial online maintenance; do not describe it as full compaction")
+	}
+	if !canon.Config.TimedOnly && (checksBlockCompactedClaims(canon.Checks) || !hasCanonicalExhaustiveCompactEvidence(canon)) {
 		add("error", "exhaustive_compact_required", "exhaustive_compact must complete before canonical TreeDB compacted-size comparisons or byte-minimized headlines are reportable")
 	}
 	if !hasCanonicalProductionEvidence(canon) {
@@ -1424,6 +1484,7 @@ func isTreeDBTimedPostInsertProductionRow(row resultRow) bool {
 	return row.Phase == phasePostInsert &&
 		row.Shape == "collection" &&
 		strings.HasPrefix(row.ConfigName, "treedb_") &&
+		row.Owner != nativeCOWOwner &&
 		row.BenchmarkTimed
 }
 
@@ -1565,6 +1626,9 @@ func renderMarkdownReport(canon *canonicalRun) string {
 	}
 	sb.WriteString("\n")
 
+	if canon.Config.NativeCOWCompanion {
+		writeNativeCOWCompanion(&sb, canon)
+	}
 	sb.WriteString("## Post-Insert Storage Comparison\n\n")
 	sb.WriteString("These rows use the timed benchmark matrix post-insert basis. They are fair to compare with each other, but they are not compacted-state numbers.\n\n")
 	sb.WriteString("| Config | Format | Indexes | Total bytes | B/doc | Docs/sec |\n")
@@ -1588,31 +1652,33 @@ func renderMarkdownReport(canon *canonicalRun) string {
 	writeProductionEvidence(&sb, canon)
 	sb.WriteString("\n")
 
-	sb.WriteString("## Fair Compacted-State Comparison\n\n")
-	sb.WriteString("TreeDB compacted rows are compared with SQLite after `VACUUM`. Use `exhaustive_compact` for byte-minimized benchmark/VACUUM-equivalent claims; do not compare TreeDB compacted rows only against SQLite `post_insert` rows.\n\n")
-	writeFairComparison(&sb, canon)
-	sb.WriteString("\n")
+	if !canon.Config.TimedOnly {
+		sb.WriteString("## Fair Compacted-State Comparison\n\n")
+		sb.WriteString("TreeDB compacted rows are compared with SQLite after `VACUUM`. Use `exhaustive_compact` for byte-minimized benchmark/VACUUM-equivalent claims; do not compare TreeDB compacted rows only against SQLite `post_insert` rows.\n\n")
+		writeFairComparison(&sb, canon)
+		sb.WriteString("\n")
 
-	sb.WriteString("## Maintenance/Compaction Details\n\n")
-	sb.WriteString("| Phase | Canonical meaning | Required comparison basis |\n")
-	sb.WriteString("| --- | --- | --- |\n")
-	sb.WriteString("| `post_insert` | Size after insert benchmark/fixture and correctness flush/checkpoint. | Compare with other post-insert rows only. |\n")
-	sb.WriteString("| `online_one_pass_maintenance` | Partial online maintenance from benchmark harness; currently one online rewrite/GC path and one leafgen-pack pass. | Do not present as full compaction. |\n")
-	sb.WriteString("| `offline_compact` | Production high-level `treemap compact <dir> -rw -mode full` path. | Compare with SQLite `sqlite_vacuum`; not the byte-minimized headline. |\n")
-	sb.WriteString("| `exhaustive_compact` | Benchmark/VACUUM-equivalent `treemap compact <dir> -rw -mode exhaustive` path. | Preferred TreeDB compacted-size headline versus SQLite `sqlite_vacuum`. |\n")
-	sb.WriteString("| `full_leafgen_pack_gc` | Diagnostic forced/full leaf generation pack/GC with explicit knobs and configured index vacuum. | Diagnostic only; compare with SQLite `sqlite_vacuum` if reported. |\n")
-	sb.WriteString("| `sqlite_vacuum` | SQLite compacted baseline after `VACUUM`. | Required baseline for compacted-state comparison. |\n\n")
-	sb.WriteString("Full leafgen knobs recorded for this run:\n\n")
-	writeKVTable(&sb, [][2]string{
-		{"leaf-segment-target-bytes", strconv.FormatInt(canon.Config.LeafSegmentTargetBytes, 10)},
-		{"leafgen-pack-gc", "true"},
-		{"leafgen-pack-force", strconv.FormatBool(canon.Config.FullLeafgenForce)},
-		{"leafgen-pack-max-generations", strconv.Itoa(canon.Config.FullLeafgenMaxGenerations)},
-		{"leafgen-pack-frame-k", strconv.Itoa(canon.Config.LeafgenPackFrameK)},
-		{"index-vacuum", canon.Config.FullLeafgenIndexVacuum},
-	})
-	sb.WriteString("\n")
+		sb.WriteString("## Maintenance/Compaction Details\n\n")
+		sb.WriteString("| Phase | Canonical meaning | Required comparison basis |\n")
+		sb.WriteString("| --- | --- | --- |\n")
+		sb.WriteString("| `post_insert` | Size after insert benchmark/fixture and correctness flush/checkpoint. | Compare with other post-insert rows only. |\n")
+		sb.WriteString("| `online_one_pass_maintenance` | Partial online maintenance from benchmark harness; currently one online rewrite/GC path and one leafgen-pack pass. | Do not present as full compaction. |\n")
+		sb.WriteString("| `offline_compact` | Production high-level `treemap compact <dir> -rw -mode full` path. | Compare with SQLite `sqlite_vacuum`; not the byte-minimized headline. |\n")
+		sb.WriteString("| `exhaustive_compact` | Benchmark/VACUUM-equivalent `treemap compact <dir> -rw -mode exhaustive` path. | Preferred TreeDB compacted-size headline versus SQLite `sqlite_vacuum`. |\n")
+		sb.WriteString("| `full_leafgen_pack_gc` | Diagnostic forced/full leaf generation pack/GC with explicit knobs and configured index vacuum. | Diagnostic only; compare with SQLite `sqlite_vacuum` if reported. |\n")
+		sb.WriteString("| `sqlite_vacuum` | SQLite compacted baseline after `VACUUM`. | Required baseline for compacted-state comparison. |\n\n")
+		sb.WriteString("Full leafgen knobs recorded for this run:\n\n")
+		writeKVTable(&sb, [][2]string{
+			{"leaf-segment-target-bytes", strconv.FormatInt(canon.Config.LeafSegmentTargetBytes, 10)},
+			{"leafgen-pack-gc", "true"},
+			{"leafgen-pack-force", strconv.FormatBool(canon.Config.FullLeafgenForce)},
+			{"leafgen-pack-max-generations", strconv.Itoa(canon.Config.FullLeafgenMaxGenerations)},
+			{"leafgen-pack-frame-k", strconv.Itoa(canon.Config.LeafgenPackFrameK)},
+			{"index-vacuum", canon.Config.FullLeafgenIndexVacuum},
+		})
+		sb.WriteString("\n")
 
+	}
 	sb.WriteString("## Guardrail Checks\n\n")
 	sb.WriteString("| Severity | Code | Message |\n")
 	sb.WriteString("| --- | --- | --- |\n")
@@ -1659,6 +1725,9 @@ func renderMarkdownReport(canon *canonicalRun) string {
 }
 
 func renderExecutiveSummary(canon *canonicalRun) string {
+	if canon.Config.TimedOnly {
+		return "This run measures matched legacy-backend and shared native COW collection inserts through publication. It reports the checked post-timer checkpoints separately."
+	}
 	fastest := fastestThroughput(canon.Results)
 	offline := findResult(canon.Results, compactedTreeDBConfigName(canon), phaseOfflineCompact)
 	exhaustive := findResult(canon.Results, compactedTreeDBConfigName(canon), phaseExhaustiveCompact)

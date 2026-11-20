@@ -3,12 +3,11 @@ package caching
 import (
 	"context"
 	"errors"
-
-	"github.com/snissn/gomap/TreeDB/internal/memtable"
-	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 // The COW frontier is the bounded cut vector itself. The existing admission
@@ -25,7 +24,11 @@ func (db *DB) CompactNativeColumnStore(ctx context.Context, operation backenddb.
 	return db.checkpointCOWColumnCompaction(ctx, false, operation)
 }
 
-func (db *DB) checkpointCOWColumnCompaction(ctx context.Context, automatic bool, operation backenddb.NativeColumnStoreCompaction) (retErr error) {
+func (db *DB) checkpointCOWColumnCompaction(ctx context.Context, automatic bool, operation backenddb.NativeColumnStoreCompaction) error {
+	return db.checkpointCOWColumnCompactionProjected(ctx, automatic, operation, nil)
+}
+
+func (db *DB) checkpointCOWColumnCompactionProjected(ctx context.Context, automatic bool, operation backenddb.NativeColumnStoreCompaction, projected *backenddb.NativeProjectedGenerationPressure) error {
 	start := time.Now()
 	defer func() {
 		dur := uint64(time.Since(start))
@@ -33,7 +36,7 @@ func (db *DB) checkpointCOWColumnCompaction(ctx context.Context, automatic bool,
 		db.checkpointTotalNs.Add(dur)
 		updateAtomicMaxUint64(&db.checkpointMaxNs, dur)
 	}()
-	return db.materializeCOWPrefix(ctx, automatic, operation, cowCheckpointMaterialization)
+	return db.materializeCOWPrefixProjected(ctx, automatic, operation, cowCheckpointMaterialization, projected)
 }
 
 type cowPrefixMaterialization uint8
@@ -116,7 +119,11 @@ func cowGenerationAdmissionError(generationPressure bool, err error) error {
 // and handoff. Pressure-only completion joins its exact durable seal and accepted
 // retirement, leaving journal rotation and covered-file maintenance to the already
 // running size-maintenance worker. Public checkpoint/Close/Drain are unchanged.
-func (db *DB) materializeCOWPrefix(ctx context.Context, automatic bool, operation backenddb.NativeColumnStoreCompaction, mode cowPrefixMaterialization) (retErr error) {
+func (db *DB) materializeCOWPrefix(ctx context.Context, automatic bool, operation backenddb.NativeColumnStoreCompaction, mode cowPrefixMaterialization) error {
+	return db.materializeCOWPrefixProjected(ctx, automatic, operation, mode, nil)
+}
+
+func (db *DB) materializeCOWPrefixProjected(ctx context.Context, automatic bool, operation backenddb.NativeColumnStoreCompaction, mode cowPrefixMaterialization, projected *backenddb.NativeProjectedGenerationPressure) (retErr error) {
 	pressureOnly := mode != cowCheckpointMaterialization
 	generationPressure := mode == cowGenerationPressureMaterialization
 	if db.closing.Load() {
@@ -177,6 +184,18 @@ func (db *DB) materializeCOWPrefix(ctx context.Context, automatic bool, operatio
 	}
 	if err := lockCheckpointWriteMutexContext(ctx, &db.writeMu); err != nil {
 		return err
+	}
+	if projected != nil {
+		// A physical worker can advance the active generation while this
+		// producer waits on flush ownership. The exclusive write fence now
+		// ties the scope check to the ensuing frontier rotation.
+		db.cow.writerMu.Lock()
+		needed := nativeProjectedGenerationNeedsRollover(db.cow.cut, *projected)
+		db.cow.writerMu.Unlock()
+		if !needed {
+			db.writeMu.Unlock()
+			return nil
+		}
 	}
 	cutover := time.Now()
 	if hook := db.testBeforeCheckpointFrontierCapture; hook != nil {
@@ -369,11 +388,21 @@ func (db *DB) vacuumCOWCheckpointBasis(automatic bool) error {
 }
 
 func (db *DB) rolloverCOWForFlush() error {
+	_, err := db.rolloverCOWForFlushProjected(nil)
+	return err
+}
+
+func (db *DB) rolloverCOWForFlushProjected(projected *backenddb.NativeProjectedGenerationPressure) (bool, error) {
 	if err := db.beginDirectWrite(); err != nil {
-		return err
+		return false, err
 	}
 	c := db.cow
 	c.writerMu.Lock()
+	if projected != nil && !nativeProjectedGenerationNeedsRollover(c.cut, *projected) {
+		c.writerMu.Unlock()
+		db.writeMu.RUnlock()
+		return false, nil
+	}
 	p, err := c.prepareRollover()
 	if err == nil && p != nil {
 		p.install()
@@ -385,7 +414,7 @@ func (db *DB) rolloverCOWForFlush() error {
 	if cleanupErr != nil {
 		db.reportError(cleanupErr)
 	}
-	return joinCOWCleanupError(err, cleanupErr)
+	return p != nil && p.installed, joinCOWCleanupError(err, cleanupErr)
 }
 
 func (db *DB) flushCOWBackground(syncFlush bool) bool {

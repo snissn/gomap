@@ -68,6 +68,18 @@ the retained record and requires the original file error after its close.
   preserved error causes and a subsequent healthy public write/checkpoint.
   Its synthetic descriptor failure does not simulate physical I/O failure.
 
+- `TestNativeOrdinaryProjectedGenerationPressure` uses the canonical
+  100,000-document BSON fixture at both 1,000- and 16,000-document batch sizes with
+  the stock standalone COW limits. It checks generation refusal below the advisory
+  watermark, one sequence/LSN/COW publication per acknowledged batch, exact
+  returned IDs, held-read values, separately checked checkpoint, original Close,
+  full live and reopen payload census, and empty original budget and pins.
+  `TestNativeOrdinaryProjectedGenerationControls` checks that oversized requests
+  and the validated, gateway and explicit transaction paths reject before
+  assignment, joins original refunds, proves a stale receipt skips physical
+  rollover, and checks intervening duplicate and schema changes on a fresh
+  attempt. Existing actual postappend and recovery tests retain their scope.
+
 - `TestMutationUpdateBSONSetConcurrentFields` parks one native-wire singleton
   update after its initial read. A second connection commits a change to a
   different field on the same document. Both clients must report one match and
@@ -360,6 +372,16 @@ real maintenance capacity refusal;
 the owner test also checks final-close failure and durable value recovery.
 These controls do not extend ordinary ACK guarantees for the
 `command_wal_relaxed` or `no_wal_fast` profiles.
+
+`TestNativeJSONScalarStateReuseAcrossGrowthAndReopen` keeps earlier scalar rows
+staged through successive backing growth, replacement and deletion. It checks
+public document and ordered index contents before and after checkpoint, checked
+close and fresh reopen for JSON and BSON. Its public duplicate-ID and unique
+conflicts leave the neighboring row unpublished. `TestNativeJSONScalarStateCopyPartialAdmission`
+uses the original finite stage budget to exercise exact-size fallback and a
+refused refill. The refused update leaves the prior staged row and sequence
+intact. The failed commit publishes neither the staged row nor its indexes, and
+checked close balances the budget.
 
 ## Immutable COW cache qualification
 

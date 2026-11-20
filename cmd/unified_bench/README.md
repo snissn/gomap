@@ -7,6 +7,11 @@ boundary](../mongo_gateway_bench/README.md#standalone-product-opener).
 Its Go benchmark text and optional pprof files are standalone artifacts, not
 benchprof inputs; no unified-bench schema changes.
 
+The [canonical collection COW companion](../../docs/benchmarks/collections_canonical_benchmark.md#native-cow-companion)
+pairs `BenchmarkCollectionShapeInsertBatch` with
+`BenchmarkCollectionShapeInsertBatchNativeCOW`. Its separate profiling pass
+writes per-cell Go test profile manifests for inspection with `go tool pprof`.
+
 Pool-pressure publication has standalone component controls:
 
 ```sh

@@ -354,10 +354,10 @@ func (t *NativeJSONTxn) prepareValidation(g *nativeJSONTxnBinding, doc []byte) e
 	return nil
 }
 
-// Copy only the already parsed, single-valued encoded state. The original
-// arena remains reusable; no decoder object or document alias enters the row.
-// Arrays keep the original extraction path and its normalized reference slices.
-func retainNativeJSONScalarState(state orderedDocumentIndexState, admit func(uint64) error) (orderedDocumentIndexState, error) {
+// A binding keeps the active chunk of each backing. Staged rows keep their
+// slices into older chunks, so refill never copies or refunds those chunks.
+// The stage lease outlives all of these aliases.
+func (t *NativeJSONTxn) retainNativeJSONScalarState(g *nativeJSONTxnBinding, state orderedDocumentIndexState, rowsRemaining int) (orderedDocumentIndexState, error) {
 	if len(state) == 0 {
 		return nil, nil
 	}
@@ -376,21 +376,14 @@ func retainNativeJSONScalarState(state orderedDocumentIndexState, admit func(uin
 		bytesCount += len(values[0])
 		valueCount++
 	}
-	for _, allocation := range []struct {
-		count int
-		size  uint64
-	}{
-		{bytesCount, 1},
-		{len(state), uint64(unsafe.Sizeof([][]byte{}))},
-		{valueCount, uint64(unsafe.Sizeof([]byte{}))},
-	} {
-		if err := admitNativeInsertArray(allocation.count, allocation.size, admit); err != nil {
+	arena := &g.retainedScalar
+	if bytesCount > cap(arena.buf)-len(arena.buf) ||
+		len(state) > cap(arena.states)-len(arena.states) ||
+		valueCount > cap(arena.valueRefs)-len(arena.valueRefs) {
+		if err := t.refillNativeJSONScalarArena(g, bytesCount, len(state), valueCount, rowsRemaining); err != nil {
 			return nil, err
 		}
 	}
-	// Reuse the maintained arena layout with exact immutable capacities. The
-	// three backings, including every reference header, were admitted above.
-	arena := indexEncodeArena{buf: make([]byte, 0, bytesCount), states: make([][][]byte, 0, len(state)), valueRefs: make([][]byte, 0, valueCount)}
 	owned := arena.appendState(len(state))
 	for i, values := range state {
 		if len(values) == 0 {
@@ -403,13 +396,73 @@ func retainNativeJSONScalarState(state orderedDocumentIndexState, admit func(uin
 	return owned, nil
 }
 
-func (t *NativeJSONTxn) validateDocument(g *nativeJSONTxnBinding, doc []byte, runtimes []indexRuntime, opts collectionOptions) (orderedDocumentIndexState, error) {
+func (t *NativeJSONTxn) refillNativeJSONScalarArena(g *nativeJSONTxnBinding, bytesCount, stateCount, valueCount, rowsRemaining int) error {
+	const (
+		stateSize = int(unsafe.Sizeof([][]byte{}))
+		valueSize = int(unsafe.Sizeof([]byte{}))
+	)
+	arena := &g.retainedScalar
+	capacities := func(rows int) [3]int {
+		return [3]int{
+			nativeJSONScalarRefillCapacity(bytesCount, cap(arena.buf)-len(arena.buf), rows, 1),
+			nativeJSONScalarRefillCapacity(stateCount, cap(arena.states)-len(arena.states), rows, stateSize),
+			nativeJSONScalarRefillCapacity(valueCount, cap(arena.valueRefs)-len(arena.valueRefs), rows, valueSize),
+		}
+	}
+	admit := func(caps [3]int) error {
+		charge := memtable.COWAllocationCharge(uint64(caps[0]))
+		for i, unit := range [...]int{stateSize, valueSize} {
+			n := memtable.COWAllocationCharge(uint64(caps[i+1]) * uint64(unit))
+			if n > ^uint64(0)-charge {
+				return memtable.ErrCOWCapacity
+			}
+			charge += n
+		}
+		return t.admitStage(g, charge)
+	}
+	caps := capacities(min(rowsRemaining, 64))
+	if err := admit(caps); err != nil {
+		// Spare capacity is optional. A failed resize leaves the original
+		// receipt and all arena backings intact.
+		exact := capacities(1)
+		if caps == exact || !errors.Is(err, memtable.ErrCOWCapacity) {
+			return err
+		}
+		caps = exact
+		if err = admit(caps); err != nil {
+			return err
+		}
+	}
+	if caps[0] != 0 {
+		arena.buf = make([]byte, 0, caps[0])
+	}
+	if caps[1] != 0 {
+		arena.states = make([][][]byte, 0, caps[1])
+	}
+	if caps[2] != 0 {
+		arena.valueRefs = make([][]byte, 0, caps[2])
+	}
+	return nil
+}
+
+// Limit optional capacity both by remaining rows and by raw backing bytes.
+// A large single value still gets the full space it requires.
+func nativeJSONScalarRefillCapacity(needed, available, rows, unit int) int {
+	if needed <= available {
+		return 0
+	}
+	limit := int(^uint(0)>>1) / unit
+	spare := min((4<<10)/unit, limit-needed)
+	return needed + min(rows-1, spare/needed)*needed
+}
+
+func (t *NativeJSONTxn) validateDocument(g *nativeJSONTxnBinding, doc []byte, runtimes []indexRuntime, opts collectionOptions, rowsRemaining int) (orderedDocumentIndexState, error) {
 	if err := t.prepareValidation(g, doc); err != nil {
 		return nil, err
 	}
 	state, err := orderedIndexStateForDocumentWithArena(doc, runtimes, opts, &g.validation)
 	var retained orderedDocumentIndexState
-	if err == nil && !opts.allowArrayValuesInIndex && opts.typedProjection == nil {
+	if err == nil && len(state) != 0 && !opts.allowArrayValuesInIndex && opts.typedProjection == nil {
 		scalar := true
 		for _, runtime := range runtimes {
 			if runtime.def.multiKey {
@@ -418,7 +471,7 @@ func (t *NativeJSONTxn) validateDocument(g *nativeJSONTxnBinding, doc []byte, ru
 			}
 		}
 		if scalar {
-			retained, err = retainNativeJSONScalarState(state, func(n uint64) error { return t.admitStage(g, n) })
+			retained, err = t.retainNativeJSONScalarState(g, state, rowsRemaining)
 		}
 	}
 	clear(g.validation.states)
@@ -617,7 +670,7 @@ func (t *NativeJSONTxn) stageNativeInsert(g *nativeJSONTxnBinding, ids, document
 		if item.document == nil {
 			return backenddb.ErrNativeSemanticUnsupported
 		}
-		state, err := t.validateDocument(g, item.document, runtimes, planner.options)
+		state, err := t.validateDocument(g, item.document, runtimes, planner.options, len(items)-i)
 		if err != nil {
 			return err
 		}
@@ -753,7 +806,7 @@ func (t *NativeJSONTxn) UpdateBatchInto(name string, items []UpdateBatchItem) (r
 		if err != nil {
 			return nil, updateBatchItemError(i, err)
 		}
-		state, err := t.validateDocument(g, normalized[0], runtimes, planner.options)
+		state, err := t.validateDocument(g, normalized[0], runtimes, planner.options, len(owned)-i)
 		if err != nil {
 			return nil, updateBatchItemError(i, err)
 		}
@@ -778,7 +831,7 @@ func (t *NativeJSONTxn) UpdateBatchInto(name string, items []UpdateBatchItem) (r
 		}
 		planner.options = options
 		for i, document := range normalized {
-			state, err := t.validateDocument(g, document, runtimes, planner.options)
+			state, err := t.validateDocument(g, document, runtimes, planner.options, len(docs)-i)
 			if err != nil {
 				return nil, updateBatchItemError(changedIndices[i], err)
 			}

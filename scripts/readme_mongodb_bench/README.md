@@ -66,6 +66,52 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_recipe.py
 "$TASK/bin/census" -self-test
 ```
 
+## Standalone LOAD comparison
+
+Use the opt-in Linux runner for high-concurrency LOAD through the production
+standalone GoMap executable and a local MongoDB container. It uses the same
+pinned Go YCSB client, shape and checked client Close as the recipe above.
+With `--ack journaled` both engines receive `w=1&journal=true` and GoMap uses
+`command_wal_durable`. With `--ack w1` both get `w=1` with the journal option
+absent, and GoMap uses `command_wal_relaxed`. Each trial creates a fresh store
+on the output filesystem. Pairs alternate engine
+order and have no RUN phase.
+
+From the GoMap root, with the intended Go toolchain, CGO and `GOWORK=off`:
+
+```sh
+mkdir -p "$BIN"
+go build -o "$BIN/treedb-mongo-gateway" ./TreeDB/mongo_gateway/server.go
+go build -o "$BIN/census" ./scripts/readme_mongodb_bench/census.go
+go build -o "$BIN/standalone-checkpoint" ./scripts/readme_mongodb_bench/standalone_checkpoint.go
+go build -o "$BIN/mongodb-reference-control" ./scripts/ycsb_mongodb_reference_client.go
+go -C "$YCSB_SOURCE" build -buildvcs=true -o "$BIN/go-ycsb" ./cmd/go-ycsb
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/readme_mongodb_bench/standalone_load.py \
+  --bin-dir "$BIN" --out "$NEW_OUTPUT" --mongo-image-id "$IMAGE_ID" \
+  --lane-lock "$SHARED_MEASUREMENT_LOCK" --ack w1 --count 100000 --threads 64 --pairs 3
+```
+
+Use absolute paths, a clean GoMap checkout, a clean Go YCSB checkout pinned to
+the commit above and a local immutable Docker image ID. Pass `--lane-lock`
+again for other locks shared on the same host. Build and run a separate
+smoke for each class with `--count 1000 --pairs 1` before collecting timings.
+Record the count for each ACK class and compare equal-length fixtures within
+each pair. The runner preserves the attempt, command logs, runner checkout,
+executable hashes, live gateway owner observations, typed census and checked
+shutdown evidence. Keep the build commands and source commits for the
+prebuilt executables with their hashes.
+
+Use the YCSB `TOTAL` row for ACK throughput and `INSERT` for request tails.
+GoMap's live phase observations bracket the client process and require a
+native COW owner, new publications and matching acknowledgements.
+The post-ACK drain metric sums checked GoMap `FlushAll` and
+`CheckpointStorage` call durations or records MongoDB's checked `fsync` with
+`lock:false`. Both occur after client exit and before the untimed census.
+The operator commands exercise distinct storage engines. Their latencies
+depend on background work and the amount of outstanding checkpoint work.
+The comparison covers local requested acknowledgements and explicit drain
+timing. Power-loss equivalence and replication are outside its scope.
+
 ## Idle-checkpoint A/B diagnostic
 
 `idle_checkpoint_ab.py` is an opt-in GoMap-only timing comparison for #5415;

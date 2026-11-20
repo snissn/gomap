@@ -2,8 +2,11 @@ package caching
 
 import (
 	"context"
-	"github.com/snissn/gomap/TreeDB/batch"
+	"errors"
+	"time"
 	"unsafe"
+
+	"github.com/snissn/gomap/TreeDB/batch"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
@@ -137,17 +140,54 @@ func (db *DB) PrepareNativeProducer() error {
 // PrepareNativeProducerObservation preserves the original preparation algorithm
 // and returns the observation at its successful exit, after any original drain.
 func (db *DB) PrepareNativeProducerObservation() (backenddb.NativeProducerObservation, error) {
+	return db.prepareNativeProducerObservation(nil)
+}
+
+func (db *DB) PrepareNativeProjectedGeneration(pressure backenddb.NativeProjectedGenerationPressure) error {
+	if db == nil || db.cow == nil {
+		return ErrCOWUnsupported
+	}
+	if pressure.Refusal == nil {
+		return backenddb.ErrNativeSemanticUnsupported
+	}
+	started := time.Now()
+	db.cow.nativeProjectedRefusals.Add(1)
+	_, err := db.prepareNativeProducerObservation(&pressure)
+	db.cow.nativeProjectedReliefNs.Add(uint64(time.Since(started)))
+	return err
+}
+
+func (c *cowCache) nativeProjectedGenerationNeedsRollover(pressure backenddb.NativeProjectedGenerationPressure) (bool, error) {
+	cut := c.retainCut()
+	if cut == nil {
+		return false, backenddb.ErrClosed
+	}
+	needsRollover := nativeProjectedGenerationNeedsRollover(cut, pressure)
+	return needsRollover, c.releaseCut(cut)
+}
+
+func nativeProjectedGenerationNeedsRollover(cut *cowReadCut, pressure backenddb.NativeProjectedGenerationPressure) bool {
+	if cut == nil {
+		return false
+	}
+	observer, ok := cut.semanticRootSet.(backenddb.NativeProjectedGenerationState)
+	return ok && observer.NativeProjectedGenerationNeedsRollover(pressure)
+}
+
+func (db *DB) prepareNativeProducerObservation(projected *backenddb.NativeProjectedGenerationPressure) (backenddb.NativeProducerObservation, error) {
 	if db == nil || db.cow == nil {
 		return backenddb.NativeProducerObservation{}, ErrCOWUnsupported
 	}
 	c := db.cow
 	limits := c.budget.Limits()
-	observed, err := c.nativeProducerPressureState()
-	if err != nil {
-		return backenddb.NativeProducerObservation{}, err
-	}
-	if !observed.underPressure(limits) {
-		return observed.observation(limits), nil
+	if projected == nil {
+		observed, err := c.nativeProducerPressureState()
+		if err != nil {
+			return backenddb.NativeProducerObservation{}, err
+		}
+		if !observed.underPressure(limits) {
+			return observed.observation(limits), nil
+		}
 	}
 	// A cleanup/Finish callback cannot join its own original worker frontier.
 	if err := db.ownedCloseGuard.CheckClose(); err != nil {
@@ -156,14 +196,25 @@ func (db *DB) PrepareNativeProducerObservation() (backenddb.NativeProducerObserv
 	// No consumer gate or opening is held while waiting for the original drain.
 	c.nativePressureMu.Lock()
 	defer c.nativePressureMu.Unlock()
+	if projected != nil {
+		// The abandoned preparation queued its original refunds before the
+		// caller released its producer gate. Join them before testing relief.
+		if err := db.joinSemanticCleanupFrontier(); err != nil {
+			return backenddb.NativeProducerObservation{}, err
+		}
+		needsRollover, err := c.nativeProjectedGenerationNeedsRollover(*projected)
+		if err != nil || !needsRollover {
+			return backenddb.NativeProducerObservation{}, err
+		}
+	}
 	before, err := c.nativeProducerPressureState()
 	if err != nil {
 		return backenddb.NativeProducerObservation{}, err
 	}
-	if !before.underPressure(limits) {
+	if projected == nil && !before.underPressure(limits) {
 		return before.observation(limits), nil
 	}
-	if c.nativePressureRemembered && c.nativePressureState == before {
+	if projected == nil && c.nativePressureRemembered && c.nativePressureState == before {
 		return before.observation(limits), nil
 	}
 	c.nativePressureRemembered = false
@@ -172,11 +223,25 @@ func (db *DB) PrepareNativeProducerObservation() (backenddb.NativeProducerObserv
 		// physical seal. The captured roots and held readers keep their real
 		// charges. All other pressure, including a full parent budget after
 		// capture, uses the original synchronous reclamation.
-		if db.relaxedSync && before.semantic.GenerationUnderPressure && before.semantic.ConstructionBytes == 0 {
+		if db.relaxedSync && (projected != nil || before.semantic.GenerationUnderPressure) && before.semantic.ConstructionBytes == 0 {
 			remaining := before
 			remaining.semantic.GenerationUnderPressure = false
 			if !remaining.underPressure(limits) {
-				if err = db.rolloverCOWForFlush(); err == nil {
+				rolled, rolloverErr := db.rolloverCOWForFlushProjected(projected)
+				if rolloverErr == nil {
+					if projected != nil {
+						if !rolled {
+							return before.observation(limits), nil
+						}
+						// Any following drain covers shared pressure remaining
+						// after this actual captured generation change.
+						projected = nil
+						// Physical ownership may continue in the original worker. No
+						// private preparation/refund is carried into the new attempt.
+						if err := db.joinSemanticCleanupFrontier(); err != nil {
+							return backenddb.NativeProducerObservation{}, err
+						}
+					}
 					select {
 					case db.nativeGenerationFlushCh <- struct{}{}:
 					default:
@@ -188,12 +253,14 @@ func (db *DB) PrepareNativeProducerObservation() (backenddb.NativeProducerObserv
 					if !after.underPressure(limits) {
 						return after.observation(limits), nil
 					}
-				} else if err != memtable.ErrCOWCapacity {
-					return backenddb.NativeProducerObservation{}, err
+				} else if rolloverErr != memtable.ErrCOWCapacity {
+					return backenddb.NativeProducerObservation{}, rolloverErr
 				}
 			}
 		}
-		err = db.materializeCOWPrefix(context.Background(), false, nil, cowSynchronousPressureMaterialization)
+		err = db.materializeCOWPrefixProjected(context.Background(), false, nil, cowSynchronousPressureMaterialization, projected)
+	} else if projected != nil {
+		err = db.checkpointCOWColumnCompactionProjected(context.Background(), false, nil, projected)
 	} else {
 		err = db.Checkpoint()
 	}
@@ -304,8 +371,11 @@ func (tx *nativeConditionalTxn) CommitNative(native *backenddb.NativePreparedPub
 		// Queue private native edges/custody before withdrawing the ORIGINAL
 		// transaction opening, even when it differs from the attach-time cut.
 		releaseErr := tx.batch.releaseNativePublication()
-		if native != nil && native.ObservePointConflict != 0 {
-			err = joinCOWCleanupError(err, releaseErr)
+		if releaseErr != nil && native != nil {
+			var refusal *memtable.COWProjectedGenerationRefusal
+			if native.ObservePointConflict != 0 || errors.As(err, &refusal) {
+				err = joinCOWCleanupError(err, releaseErr)
+			}
 		}
 		err = joinCOWCleanupError(err, tx.Close())
 	}()

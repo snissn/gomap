@@ -109,6 +109,20 @@ type NativeSemanticProducerPressureState interface {
 	NativeProducerPressure(*Snapshot) (NativeSemanticProducerPressure, error)
 }
 
+// NativeProjectedGenerationPressure identifies the exact collection domain and
+// active generation that refused a private native insert reservation.
+type NativeProjectedGenerationPressure struct {
+	Collection uint64
+	Domain     string
+	Refusal    *memtable.COWProjectedGenerationRefusal
+}
+
+// NativeProjectedGenerationState resolves the disputed generation on the
+// exact current cut. It transfers no physical or logical ownership.
+type NativeProjectedGenerationState interface {
+	NativeProjectedGenerationNeedsRollover(NativeProjectedGenerationPressure) bool
+}
+
 // NativeSemanticBasisRefresher optionally rebinds an immutable semantic root set
 // after logically equivalent backend maintenance. before and after are the exact
 // retained old/new physical Snapshots, never newly captured by the participant.
@@ -372,6 +386,21 @@ func (db *DB) PrepareNativeProducerObservation() (NativeProducerObservation, err
 		return NativeProducerObservation{}, ErrNativeSemanticUnsupported
 	}
 	return db.nativeSemanticBridge.PrepareNativeProducerObservation()
+}
+
+// PrepareNativeProjectedGeneration runs the original producer maintenance for
+// a clean preassignment generation refusal after its opening has closed.
+func (db *DB) PrepareNativeProjectedGeneration(pressure NativeProjectedGenerationPressure) error {
+	if !db.HasNativeSemanticBridge() {
+		return ErrNativeSemanticUnsupported
+	}
+	bridge, ok := db.nativeSemanticBridge.(interface {
+		PrepareNativeProjectedGeneration(NativeProjectedGenerationPressure) error
+	})
+	if !ok {
+		return ErrNativeSemanticUnsupported
+	}
+	return bridge.PrepareNativeProjectedGeneration(pressure)
 }
 
 // BeginPreparedNativeConditionalTxn is the opening-only adapter for consumers
