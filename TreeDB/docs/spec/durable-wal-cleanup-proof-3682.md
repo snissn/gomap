@@ -117,12 +117,28 @@ Ordinary cleanup is serialized per DB and follows this order:
    to eight of the oldest predecessors. When every selected predecessor is
    fixed, release append exclusion to scan the prefix through retained handles.
    Reacquire exclusion to verify prefix links and identities and finish scanning
-   the suffix. Ineligible inventories, `CleanupCommandWALCoveredSegments`,
-   synchronous checkpoint and Close keep the complete scan under exclusion.
-   Stream cleanup through `CleanupCommandWALCoveredPrefix` reuses a bounded
-   read-ahead buffer for closed stream segments. Frame validation and WAL
-   offsets use the bytes consumed by the decoder, including on short reads.
-   Active streams and fixed containers keep their original readers;
+   the suffix. Deferred cleanup can also scan sealed predecessors before
+   taking the scan lock when a selected ext4 stream WAL and the value-log
+   directory are on the same ext4 volume. That path requires a canonical
+   single-lane inventory, two closed streams of at least 96 MiB each, at most
+   eight closed streams, and at most 2.5 MiB of active WAL bytes at proof capture.
+   It opens exact earlier generations and reserves the directory reader under
+   append exclusion, then releases exclusion to scan the prefix in order.
+   If a rotation begins, it closes these temporary readers before creating its
+   successor. Cleanup discards the partial decisions and uses the original
+   locked scan under the captured replay bounds. Without rotation, cleanup
+   reacquires append exclusion to refresh the inventory, verify predecessor
+   identities and extents, and scan the active generation. Ordinary appends can
+   advance that generation after capture, up to a rotation. Predecessor extent
+   and pathname validation repeats before deletion.
+   Descriptor exhaustion while staging readers and rotation already visible
+   in the initial listing both fall back before any frames are scanned.
+   Ineligible inventories, `CleanupCommandWALCoveredSegments`, synchronous
+   checkpoint and Close retain their existing scan paths.
+   Deferred stream cleanup reuses a bounded read-ahead buffer for closed
+   streams. Frame validation and WAL offsets use the decoder's consumed bytes,
+   including on short reads. Active streams and fixed containers keep their
+   original readers;
 5. reacquire the durable-publication lock, freshly validate current root
    runtime, and require its minimum cleanup frontier and durable WAL LSN not to
    have regressed below the captured authority;

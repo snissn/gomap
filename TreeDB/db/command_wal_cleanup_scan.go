@@ -17,6 +17,11 @@ import (
 // and the mutable suffix are scanned under the original append exclusion.
 const maxOpenClosedWALCleanupSegments = 8
 
+const (
+	minDetachedStreamCleanupSegmentBytes = 96 << 20
+	maxDetachedStreamCleanupActiveBytes  = 5 << 19 // 2.5 MiB at proof capture
+)
+
 // commandWALCleanupTestHooks gives cleanup's per-handle observation points one
 // slot in DB. These callbacks are installed only by tests before starting cleanup.
 type commandWALCleanupTestHooks struct {
@@ -40,6 +45,10 @@ func simpleCommandWALCleanupInventory(dir string, current commitlog.CommandJourn
 	if err != nil {
 		return nil, err
 	}
+	return simpleCommandWALCleanupEntries(dir, entries, current), nil
+}
+
+func simpleCommandWALCleanupEntries(dir string, entries []os.DirEntry, current commitlog.CommandJournalCleanupSnapshot) []logSegment {
 	var segments []logSegment
 	for _, entry := range entries {
 		name := entry.Name()
@@ -49,7 +58,7 @@ func simpleCommandWALCleanupInventory(dir string, current commitlog.CommandJourn
 		}
 		if valueLog || !entry.Type().IsRegular() || lane != current.Lane || seq == 0 || seq > current.SegmentSeq ||
 			name != commitlog.CommandSegmentName(lane, seq) {
-			return nil, nil
+			return nil
 		}
 		segments = append(segments, logSegment{seq: seq, lane: lane, path: filepath.Join(dir, name)})
 	}
@@ -63,9 +72,9 @@ func simpleCommandWALCleanupInventory(dir string, current commitlog.CommandJourn
 		return 0
 	})
 	if len(segments) == 0 || !samePath(segments[len(segments)-1].path, current.ActivePath) {
-		return nil, nil
+		return nil
 	}
-	return segments, nil
+	return segments
 }
 
 func commandWALCleanupDescriptorExhausted(err error) bool {
@@ -78,10 +87,12 @@ func commandWALCleanupDescriptorExhausted(err error) bool {
 func (db *DB) scanCommandWALCleanupProof(proof durableWALCleanupProofV1, scanSealedPrefix bool) ([]commandWALSegmentCleanupDecision, error) {
 	var beforeSegment func(string)
 	openPrefix := os.Open
+	var testOpenPrefix func(string) (*os.File, error)
 	if hooks := db.testCommandWALCleanupHooks; hooks != nil {
 		beforeSegment = hooks.beforeSegment
-		if hooks.openPrefix != nil {
-			openPrefix = hooks.openPrefix
+		testOpenPrefix = hooks.openPrefix
+		if testOpenPrefix != nil {
+			openPrefix = testOpenPrefix
 		}
 	}
 	scan := newCommandWALCleanupScan(proof.cleanupThrough, proof.durableWALLSN, db.walMaxSegmentBytes, beforeSegment, &proof.journal)
@@ -92,6 +103,13 @@ func (db *DB) scanCommandWALCleanupProof(proof durableWALCleanupProofV1, scanSea
 		}))
 	}
 	dir := resolveStorageLayout(db.dir).walDir
+	if proof.journal.Ext4Stream && proof.journal.ActiveBytes <= maxDetachedStreamCleanupActiveBytes &&
+		db.commandWALClosedBytes.Load() >= 2*minDetachedStreamCleanupSegmentBytes &&
+		db.commandWALCleanupSharesValueLogVolume(proof.journal) {
+		if attempted, err := db.scanDetachedCommandWALCleanupPrefix(proof, scan, testOpenPrefix, minDetachedStreamCleanupSegmentBytes); attempted {
+			return scan.finish(err)
+		}
+	}
 	var prefix []cleanupClosedWALFile
 	closePrefix := func() error {
 		var err error

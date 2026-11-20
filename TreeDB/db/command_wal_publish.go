@@ -564,6 +564,7 @@ type commandWALSegmentCleanupDecision struct {
 	lane            int
 	seq             uint64
 	generationKnown bool
+	validatedExtent os.FileInfo // Non-nil for an immutable prefix scanned outside append ownership.
 }
 
 type commandWALSegmentScanResult struct {
@@ -854,6 +855,10 @@ func (s *commandWALCleanupScan) scanFile(seg logSegment, file *os.File, active, 
 			return false
 		}
 	}
+	return s.scanIdentifiedFile(seg, file, info, identity, active)
+}
+
+func (s *commandWALCleanupScan) scanIdentifiedFile(seg logSegment, file *os.File, info os.FileInfo, identity rootpublication.StableIdentity, active bool) bool {
 	opts := s.options
 	if !active {
 		opts.readBuffer = s.closedStreamBuffer
@@ -956,6 +961,11 @@ func removeCoveredCommandWALSegmentsWithRegistry(decisions []commandWALSegmentCl
 		if !decision.Covered || decision.Active {
 			continue
 		}
+		if err := verifyCommandWALCleanupExtent(decision); err != nil {
+			decision.Error = err.Error()
+			abortLeases()
+			return decisions, err
+		}
 		current, err := os.Open(decision.Path)
 		if err != nil {
 			decision.Error = err.Error()
@@ -963,6 +973,7 @@ func removeCoveredCommandWALSegmentsWithRegistry(decisions []commandWALSegmentCl
 			return decisions, errors.Join(ErrRecoveryRequired, fmt.Errorf("reopen command WAL cleanup target %s: %w", filepath.Base(decision.Path), err))
 		}
 		currentIdentity, identityErr := rootpublication.StableIdentityFromFile(current)
+		extentErr := verifyCommandWALCleanupExtent(decision)
 		closeErr := current.Close()
 		if identityErr != nil {
 			decision.Error = identityErr.Error()
@@ -973,6 +984,11 @@ func removeCoveredCommandWALSegmentsWithRegistry(decisions []commandWALSegmentCl
 			decision.Error = closeErr.Error()
 			abortLeases()
 			return decisions, closeErr
+		}
+		if extentErr != nil {
+			decision.Error = extentErr.Error()
+			abortLeases()
+			return decisions, extentErr
 		}
 		if decision.file == nil || !rootpublication.SamePhysicalIdentity(decision.identity, currentIdentity) {
 			err := errors.Join(ErrRecoveryRequired, fmt.Errorf("command WAL cleanup target identity changed: %s", filepath.Base(decision.Path)))
@@ -1026,6 +1042,11 @@ func removeCoveredCommandWALSegmentsWithRegistry(decisions []commandWALSegmentCl
 			}
 			return decisions, err
 		}
+		if err := verifyCommandWALCleanupExtent(decision); err != nil {
+			decision.Error = err.Error()
+			abortLeases()
+			return decisions, err
+		}
 		current, openErr := os.Open(decision.Path)
 		if openErr != nil {
 			decision.Error = openErr.Error()
@@ -1037,9 +1058,10 @@ func removeCoveredCommandWALSegmentsWithRegistry(decisions []commandWALSegmentCl
 			return decisions, errors.Join(ErrRecoveryRequired, fmt.Errorf("revalidate command WAL cleanup target %s: %w", filepath.Base(decision.Path), openErr))
 		}
 		currentIdentity, identityErr := rootpublication.StableIdentityFromFile(current)
+		extentErr := verifyCommandWALCleanupExtent(decision)
 		closeErr := current.Close()
-		if identityErr != nil || closeErr != nil || !rootpublication.SamePhysicalIdentity(decision.identity, currentIdentity) {
-			revalidateErr := errors.Join(identityErr, closeErr)
+		if identityErr != nil || extentErr != nil || closeErr != nil || !rootpublication.SamePhysicalIdentity(decision.identity, currentIdentity) {
+			revalidateErr := errors.Join(identityErr, extentErr, closeErr)
 			if revalidateErr == nil {
 				revalidateErr = fmt.Errorf("command WAL cleanup target identity changed: %s", filepath.Base(decision.Path))
 			}
@@ -1091,6 +1113,17 @@ func removeCoveredCommandWALSegmentsWithRegistry(decisions []commandWALSegmentCl
 		}
 	}
 	return decisions, nil
+}
+
+func verifyCommandWALCleanupExtent(decision *commandWALSegmentCleanupDecision) error {
+	if decision.validatedExtent == nil {
+		return nil
+	}
+	linked, err := os.Lstat(decision.Path)
+	if err != nil || !sameStreamCleanupExtent(decision.validatedExtent, linked) {
+		return errors.Join(streamCleanupExtentChanged(decision.Path), err)
+	}
+	return nil
 }
 
 func closeCommandWALCleanupDecisions(decisions []commandWALSegmentCleanupDecision) error {

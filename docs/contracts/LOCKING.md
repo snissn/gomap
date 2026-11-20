@@ -91,6 +91,16 @@ same-schema, prepared-owner and queue-controlled publication tests cover these
 rules in `TreeDB/collections`; actual append/finalize callers are covered in
 `TreeDB/internal/raftapply`.
 
+## Deferred command-WAL cleanup
+
+On the eligible ordinary ext4 stream path, the journal proof capture identifies
+immutable predecessors before cleanup reads them. Cleanup serializes deletion
+for the store while reading the exact closed files without the append lock.
+The existing scan lock protects inventory checks and the live suffix. Final
+retirement still holds durable-publication and append ownership and takes the
+exact identity deletion leases. See the
+[durable WAL cleanup proof](../../TreeDB/docs/spec/durable-wal-cleanup-proof-3682.md#ordered-cleanup-algorithm).
+
 ## Command-WAL checkpoint fallback checks
 
 A fallback check pins teardown and captures the original root publication

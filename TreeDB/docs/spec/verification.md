@@ -5048,6 +5048,15 @@ they do not substitute for crash recovery. The unchanged public
 requires checkpoint cleanup to reclaim every covered predecessor, including a
 validated frame-free reserve.
 
+Deferred ext4 stream validation has these focused controls.
+
+| Test | Placement | Verification |
+| --- | --- | --- |
+| `TestCommandWALCleanupDetachedStreamPrefix` | Portable scanner fixture | Validates the retained replay generation, admits an ordinary append during detached validation, releases staged readers before rotation allocates successors, and retries through the locked scanner. Independent validation errors and late-frame corruption remain visible. |
+| `TestCleanupReadBufferPreservesStreamValidation` | Portable commitlog fixture | Preserves validation across the detached 64 KiB physical-read limit, including larger frames, damaged payloads, and partial tails. |
+| `TestCommandWALCleanupStreamDirectory` | Linux, one filesystem | Captures an ordinary directory or a valid directory symlink through an exact directory handle and refuses a regular replacement. |
+| `TestCommandWALCleanupOrdinaryExt4SealedPrefix` | Linux, one ext4 volume | Exercises real selector activation at the inclusive 2.5 MiB capture limit, staged-descriptor fallback, late-frame corruption, pathname replacement, rotation, exact retirement, held reads, and checked Close and reopen. |
+
 `TestNativeScalarForwardForegroundReadScope` checks a native view enters and ends
 the observer on its existing backend, and a closed view starts no scope.
 The provisional ordinary no-vector V2 Keyword composite reuse is covered by
