@@ -354,19 +354,14 @@ func repairCommandWALV2Suffix(walDir string, classification commandWALV2Classifi
 	if err != nil {
 		return diagnostic, errors.Join(err, ErrRecoveryRequired)
 	}
-	stages, removable := planCommandWALV2RepairStagesWithEmptySegments(classification, emptySegments)
+	retainedFloorByPath := commandWALV2RetainedRepairFloors(classification)
+	stages, removable := planCommandWALV2RepairStagesWithEmptySegments(classification, emptySegments, retainedFloorByPath)
 	diagnostic.RepairStages = stages
 	if readOnly {
 		return diagnostic, &CommandWALV2RecoveryRequiredError{Diagnostic: diagnostic}
 	}
 
 	anchor := classification.DiscardSuffix[0]
-	completeByPath := make(map[string]bool)
-	for i := range classification.CompletePrefix {
-		completeByPath[classification.CompletePrefix[i].Coordinate.SourceSegment] = true
-	}
-	retainedFloorByPath := commandWALV2RetainedRepairFloors(classification, completeByPath)
-
 	completeStage := func() { diagnostic.CompletedRepairStages++ }
 	for i := len(classification.DiscardSuffix) - 1; i > 0; i-- {
 		frame := classification.DiscardSuffix[i]
@@ -374,14 +369,7 @@ func repairCommandWALV2Suffix(walDir string, classification commandWALV2Classifi
 			continue
 		}
 		truncatePlan := commandWALV2TruncatePlan{pathMode: commandWALV2TruncateDisposable}
-		if completeByPath[frame.Coordinate.SourceSegment] {
-			retainedFloor, hasRetainedFloor := retainedFloorByPath[frame.Coordinate.SourceSegment]
-			if !hasRetainedFloor {
-				return diagnostic, errors.Join(
-					fmt.Errorf("%w: retained repair path %s has no classified floor", commitlog.ErrCorrupt, filepath.Base(frame.Coordinate.SourceSegment)),
-					ErrRecoveryRequired,
-				)
-			}
+		if retainedFloor := retainedFloorByPath[frame.Coordinate.SourceSegment]; retainedFloor > 0 {
 			truncatePlan = commandWALV2TruncatePlan{
 				pathMode:      commandWALV2TruncateRetained,
 				retainedFloor: retainedFloor,
@@ -393,9 +381,6 @@ func repairCommandWALV2Suffix(walDir string, classification commandWALV2Classifi
 		completeStage()
 	}
 	for _, path := range removable {
-		if completeByPath[path] || path == anchor.Coordinate.SourceSegment {
-			continue
-		}
 		if err := durabilitycut.EmitPath(durabilitycut.BeforeWALOrAssetUnlink, durabilitycut.ResourceCommandWAL, walDir, path); err != nil {
 			return diagnostic, errors.Join(err, ErrRecoveryRequired)
 		}
@@ -423,18 +408,18 @@ func repairCommandWALV2Suffix(walDir string, classification commandWALV2Classifi
 }
 
 // commandWALV2RetainedRepairFloors derives the lowest safe size for every
-// mixed retained path from the immutable classification. A retry may observe
+// mixed retained path from the immutable classification. A positive first
+// discarded offset also protects frames already applied by the selected
+// root, which do not appear in CompletePrefix but may be needed by fallback.
+// A retry may observe
 // a size below an earlier, larger planned cut only when it is still at or
 // above this floor; the floor stage itself remains in the plan and will sync
 // the final retained prefix. Sizes below the floor have lost prefix bytes and
 // must fail closed.
-func commandWALV2RetainedRepairFloors(classification commandWALV2Classification, completeByPath map[string]bool) map[string]int64 {
+func commandWALV2RetainedRepairFloors(classification commandWALV2Classification) map[string]int64 {
 	floors := make(map[string]int64)
 	for i := range classification.DiscardSuffix {
 		coordinate := classification.DiscardSuffix[i].Coordinate
-		if !completeByPath[coordinate.SourceSegment] {
-			continue
-		}
 		floor, exists := floors[coordinate.SourceSegment]
 		if !exists || coordinate.StartOffset < floor {
 			floors[coordinate.SourceSegment] = coordinate.StartOffset
@@ -444,7 +429,7 @@ func commandWALV2RetainedRepairFloors(classification commandWALV2Classification,
 }
 
 func planCommandWALV2RepairStages(classification commandWALV2Classification) ([]string, []string) {
-	return planCommandWALV2RepairStagesWithEmptySegments(classification, nil)
+	return planCommandWALV2RepairStagesWithEmptySegments(classification, nil, commandWALV2RetainedRepairFloors(classification))
 }
 
 type commandWALV2RemovableSegment struct {
@@ -453,16 +438,12 @@ type commandWALV2RemovableSegment struct {
 	coordinate          commandWALV2Coordinate
 }
 
-func planCommandWALV2RepairStagesWithEmptySegments(classification commandWALV2Classification, emptySegments []logSegment) ([]string, []string) {
+func planCommandWALV2RepairStagesWithEmptySegments(classification commandWALV2Classification, emptySegments []logSegment, retainedFloorByPath map[string]int64) ([]string, []string) {
 	if len(classification.DiscardSuffix) == 0 {
 		return nil, nil
 	}
 	stages := make([]string, 0, len(classification.DiscardSuffix)+2)
 	removableByPath := make(map[string]commandWALV2RemovableSegment)
-	completeByPath := make(map[string]bool)
-	for i := range classification.CompletePrefix {
-		completeByPath[classification.CompletePrefix[i].Coordinate.SourceSegment] = true
-	}
 	anchorPath := classification.DiscardSuffix[0].Coordinate.SourceSegment
 	for i := len(classification.DiscardSuffix) - 1; i > 0; i-- {
 		frame := classification.DiscardSuffix[i]
@@ -472,7 +453,7 @@ func planCommandWALV2RepairStagesWithEmptySegments(classification commandWALV2Cl
 			continue
 		}
 		stages = append(stages, fmt.Sprintf("truncate-sync:%s@%d", filepath.Base(path), coordinate.StartOffset))
-		if !completeByPath[path] {
+		if retainedFloorByPath[path] == 0 {
 			candidate, exists := removableByPath[path]
 			if !exists || frame.Envelope.LSN > candidate.highestDiscardedLSN ||
 				(frame.Envelope.LSN == candidate.highestDiscardedLSN && commandWALV2CoordinateLater(coordinate, candidate.coordinate)) {
@@ -481,7 +462,7 @@ func planCommandWALV2RepairStagesWithEmptySegments(classification commandWALV2Cl
 		}
 	}
 	for _, segment := range emptySegments {
-		if completeByPath[segment.path] || segment.path == anchorPath {
+		if retainedFloorByPath[segment.path] > 0 || segment.path == anchorPath {
 			continue
 		}
 		if _, exists := removableByPath[segment.path]; !exists {
