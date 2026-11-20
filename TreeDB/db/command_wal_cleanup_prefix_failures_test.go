@@ -241,7 +241,7 @@ func TestCommandWALCleanupFixedPrefixFinishChecksDiscardClose(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				scan := newCommandWALCleanupScan(1, 2, 0, nil)
+				scan := newCommandWALCleanupScan(1, 2, 0, nil, nil)
 				scan.decisions = []commandWALSegmentCleanupDecision{{file: file}}
 				decisions, err := scan.finish(tc.err)
 				if failClose {

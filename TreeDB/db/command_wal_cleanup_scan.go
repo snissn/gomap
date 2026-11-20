@@ -84,7 +84,7 @@ func (db *DB) scanCommandWALCleanupProof(proof durableWALCleanupProofV1, scanSea
 			openPrefix = hooks.openPrefix
 		}
 	}
-	scan := newCommandWALCleanupScan(proof.cleanupThrough, proof.durableWALLSN, db.walMaxSegmentBytes, beforeSegment)
+	scan := newCommandWALCleanupScan(proof.cleanupThrough, proof.durableWALLSN, db.walMaxSegmentBytes, beforeSegment, &proof.journal)
 	if !scanSealedPrefix {
 		// Checkpoint, Close, and explicit cleanup use the original locked scan.
 		return scan.finish(proof.journalOwner.WithCleanupScan(proof.journal, func() error {
@@ -187,7 +187,7 @@ func (db *DB) scanCommandWALCleanupProof(proof durableWALCleanupProofV1, scanSea
 			if err := errors.Join(closePrefix(), closeCommandWALCleanupDecisions(scan.decisions)); err != nil {
 				return errors.Join(inventoryErr, err)
 			}
-			scan = newCommandWALCleanupScan(proof.cleanupThrough, proof.durableWALLSN, db.walMaxSegmentBytes, beforeSegment)
+			scan = newCommandWALCleanupScan(proof.cleanupThrough, proof.durableWALLSN, db.walMaxSegmentBytes, beforeSegment, &proof.journal)
 			return scan.scanLockedDirectory(db.dir)
 		}
 		for _, file := range prefix {

@@ -2070,6 +2070,86 @@ func TestCommandWALCleanupAcceptsMonotonicDurableRootAdvance(t *testing.T) {
 	}
 }
 
+func TestCommandWALCleanupReleasesCoveredReaderProtectedByCapture(t *testing.T) {
+	opts := Options{Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true}
+	database, err := Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if database != nil {
+			if err := database.Close(); err != nil {
+				t.Error(err)
+			}
+		}
+	})
+	key, value := []byte("protected-reader"), []byte("current value")
+	oldPath, _ := database.commandWALActiveSegmentSnapshot()
+	if err := database.SetSync(key, []byte("prior value")); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.RotateCommandWALActiveSegment(true); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.SetSync(key, value); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.RefreshCommandWALCheckpointFallback(); err != nil {
+		t.Fatal(err)
+	}
+	proof, err := database.captureDurableWALCleanupProofV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.RotateCommandWALActiveSegment(true); err != nil {
+		t.Fatal(err)
+	}
+	// Rotation between proof capture and scanning leaves the previous active
+	// segment immutable for validation and protected from this cleanup.
+	for _, deferred := range []bool{false, true} {
+		decisions, err := database.scanCommandWALCleanupProof(proof, deferred)
+		if err != nil {
+			t.Fatal(err)
+		}
+		foundProtected, foundRetirable := false, false
+		for _, decision := range decisions {
+			if decision.Path == oldPath {
+				foundRetirable = decision.Covered && decision.Frames != 0 && decision.file != nil
+			}
+			if decision.Path != proof.journal.ActivePath {
+				continue
+			}
+			foundProtected = true
+			if !decision.Covered || decision.Frames == 0 || decision.file != nil {
+				t.Errorf("deferred=%t: capture-active segment covered=%t frames=%d retained reader=%t", deferred, decision.Covered, decision.Frames, decision.file != nil)
+			}
+		}
+		if err := closeCommandWALCleanupDecisions(decisions); err != nil {
+			t.Fatal(err)
+		}
+		if !foundProtected || !foundRetirable {
+			t.Fatalf("deferred=%t: protected segment seen=%t, older retirement reader retained=%t", deferred, foundProtected, foundRetirable)
+		}
+	}
+	if err := database.CleanupCommandWALCoveredSegments(true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(oldPath); !os.IsNotExist(err) {
+		t.Fatalf("retired WAL segment stat error=%v", err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	database = nil
+	database, err = Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := database.Get(key); err != nil || !bytes.Equal(got, value) {
+		t.Fatalf("reopened value=%q err=%v", got, err)
+	}
+}
+
 func TestCommandWALCleanupRetainsSegmentsRotatedAfterScan(t *testing.T) {
 	for _, rotations := range []int{1, 3} {
 		t.Run(fmt.Sprintf("%d-rotations", rotations), func(t *testing.T) {

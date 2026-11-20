@@ -905,6 +905,11 @@ func normalizeCommandWALCheckpointCleanupError(err error) error {
 	return err
 }
 
+func (decision *commandWALSegmentCleanupDecision) protectedByCapture(captured *commitlog.CommandJournalCleanupSnapshot) bool {
+	return rootpublication.SamePhysicalIdentity(decision.identity, captured.ActiveIdentity) ||
+		(decision.lane == captured.Lane && decision.seq >= captured.SegmentSeq)
+}
+
 func retainCommandWALCleanupAuthoritySegments(decisions []commandWALSegmentCleanupDecision, captured, current commitlog.CommandJournalCleanupSnapshot) error {
 	for i := range decisions {
 		decision := &decisions[i]
@@ -914,12 +919,7 @@ func retainCommandWALCleanupAuthoritySegments(decisions []commandWALSegmentClean
 		if !decision.generationKnown || decision.lane < 0 {
 			return errors.Join(ErrRecoveryRequired, fmt.Errorf("command WAL cleanup candidate has invalid generation: %s", filepath.Base(decision.Path)))
 		}
-		if rootpublication.SamePhysicalIdentity(decision.identity, captured.ActiveIdentity) ||
-			rootpublication.SamePhysicalIdentity(decision.identity, current.ActiveIdentity) {
-			decision.Active = true
-			continue
-		}
-		if decision.lane == captured.Lane && decision.seq >= captured.SegmentSeq {
+		if decision.protectedByCapture(&captured) || rootpublication.SamePhysicalIdentity(decision.identity, current.ActiveIdentity) {
 			decision.Active = true
 		}
 	}
