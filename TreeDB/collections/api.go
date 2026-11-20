@@ -12109,6 +12109,16 @@ func (c *Collection) InsertBatchWithCommandWALIntent(ids, documents [][]byte, tr
 	return resultIDs, c.invalidateVectorIndexCoverageOnAcceptedMutation(err)
 }
 
+// InsertBatchFromWire applies the gateway producer contract for decoded
+// non-BSON wire documents and returns the ordinary owned result IDs.
+// Validated BSON wire documents use InsertBatchValidatedBSON.
+func (c *Collection) InsertBatchFromWire(ids, documents [][]byte) ([][]byte, error) {
+	if c != nil && c.nativeJSON != nil {
+		return c.nativeInsertBatch(ids, documents, false)
+	}
+	return c.InsertBatch(ids, documents)
+}
+
 // NativewireInsertBatchNoResultIDs executes an insert batch without cloning
 // response-owned result IDs. It exists for the nativewire gateway omit-result
 // fast path; public callers that need returned IDs should keep using

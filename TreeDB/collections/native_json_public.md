@@ -107,9 +107,10 @@ generation before attempting rollover. The fresh attempt validates the original
 collection incarnation and schema, then restages and rechecks duplicates and
 other conflicts. A generation-pressure reconstruction does not increment
 `HistoryExpiryRetries`. A real capacity denial, a closing owner, or failed
-cleanup returns the actual error. The validated-BSON gateway, its omitted-ID
-and grouped paths, direct `NativeJSONManager` inserts and explicit transactions
-retain their existing generation-capacity refusal behavior.
+cleanup returns the actual error. Existing wire gateway routes (including
+validated BSON and returned-ID/omitted-ID requests), grouped paths, direct
+`NativeJSONManager` inserts and explicit transactions keep their generation-capacity
+refusal behavior.
 
 Scalar JSON index reads support `FindByIndexRange`, `ScanIndexRange`,
 `FindDocumentsByIndexRange` and `ScanBorrowedDocumentsByIndexRange`. Ascending

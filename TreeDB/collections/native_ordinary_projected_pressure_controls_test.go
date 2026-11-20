@@ -98,6 +98,12 @@ func TestNativeOrdinaryProjectedGenerationControls(t *testing.T) {
 			return err
 		})
 	})
+	t.Run("gateway_with_result", func(t *testing.T) {
+		checkCapacity(t, func() error {
+			_, err := col.InsertBatchFromWire(ids, docs)
+			return err
+		})
+	})
 	t.Run("gateway_no_result", func(t *testing.T) {
 		checkCapacity(t, func() error { return col.NativewireInsertBatchNoResultIDs(ids, docs, true) })
 	})
