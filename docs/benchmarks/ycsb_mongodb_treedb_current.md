@@ -11,6 +11,25 @@ records the remaining qualification obligations.
 
 ## November 20 WAL placement on ext4
 
+On GoMap `1c9adaf`, moving only the WAL to a second ext4 journal on the same
+NVMe reduced UPDATE p99.9 in all three sustained Docker pairs. The standard
+and separate-WAL results were 2.419 → 0.803, 3.291 → 0.769 and 4.123 → 0.807 ms.
+Mixed throughput was 1.002× standard by paired median. UPDATE p99.99 rose
+from 26–43 ms to 51–77 ms. In three independent sustained comparisons GoMap
+reached 0.802–0.820 ms p99.9 against MongoDB's 0.501–0.505 ms. GoMap served
+7.92–9.67% more operations per second, with maximum UPDATE latency of
+309–472 ms against MongoDB's 8–10 ms. [Matched results](https://github.com/snissn/gomap/issues/5528#issuecomment-7040033141) · [MongoDB comparisons](https://github.com/snissn/gomap/issues/5528#issuecomment-7040510824)
+
+The 10,000-operation Docker comparison on that same binary missed the READ
+p99.9 limit. Standard → separate-WAL was 545 → 712, 527 → 469 and
+508 → 588 µs. The paired median was 1.1575× against a 1.10× ceiling.
+READ p99 improved in all three pairs, and each cell passed typed reopen and
+checked Close. The short independent MongoDB stage therefore stayed unrun.
+The sustained UPDATE result applies to that workload. Overall qualification
+of the layout on this binary remains open. [Short reads, rank counts and storage](https://github.com/snissn/gomap/issues/5528#issuecomment-7040683573)
+
+### Earlier complete comparison at `5fc6200`
+
 On host111 at `5fc6200`, placing only `maindb/wal` on a second ext4 journal
 brought sustained client UPDATE p99.9 below 0.9 ms in all nine scored, uninstrumented
 GoMap runs with that layout. The standard layout kept the command WAL, document value log and
@@ -38,13 +57,16 @@ median, and recorded a worst UPDATE of 315.647–435.199 ms per run. MongoDB's
 maxima were 8.179–11.407 ms. The cumulative client histograms
 first reported those GoMap maxima in the 20–30 second MIXED interval. [Matched Docker results](https://github.com/snissn/gomap/issues/5528#issuecomment-7037958435) · [Independent Docker results](https://github.com/snissn/gomap/issues/5528#issuecomment-7038502182)
 
-The tested WAL filesystem used a 1.5 GiB sparse image, a direct-I/O loop
-device with 4 KiB sectors, an eagerly initialized 16 MiB ext4 journal, 128 KiB
-per inode and online discard. The native runs sampled 410–427 MiB of live
-backing allocation and 20.31 MiB after shutdown. Counting the backing image
-once and all store files outside the WAL mount, the largest paired stopped-space ratios
-were 1.0470× standard for native and 1.0457× for Docker. The same layout cost 16.03–16.07% more physical space on the roughly
-133 MB stores in the matched 10,000-operation runs. [Short comparisons and storage costs](https://github.com/snissn/gomap/issues/5528#issuecomment-7038980978)
+The tested WAL filesystem used a 1.5 GiB sparse image and a direct-I/O loop
+device with 4 KiB sectors. Ext4 used a 16 MiB eagerly initialized journal,
+128 KiB per inode and online discard. [Tested filesystem geometry](https://github.com/snissn/gomap/issues/5528#issuecomment-7037147409)
+
+The native runs sampled 410–427 MiB of live backing allocation and 20.31 MiB
+after shutdown. Dividing stopped separate-WAL host bytes by stopped standard-layout
+host bytes gave a maximum of 1.0470× across the native pairs and 1.0457× across
+the Docker pairs. This counts the backing image once and adds files outside
+the WAL mount. In the short runs the same layout added 16.03–16.07% to the
+roughly 133 MB standard stores. [Native bytes](https://github.com/snissn/gomap/issues/5528#issuecomment-7037456507) · [Docker bytes](https://github.com/snissn/gomap/issues/5528#issuecomment-7037958435) · [Short-store costs](https://github.com/snissn/gomap/issues/5528#issuecomment-7038980978)
 
 For a new test store, place the separate filesystem at `maindb/wal` before
 the first writable Open and keep it there through checked Close. The service
