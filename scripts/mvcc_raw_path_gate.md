@@ -209,3 +209,50 @@ binding and quiet-host qualification. The separate prospective v2 acceptance
 revision is described above. Old failed/noisy measurements remain failed retained evidence;
 new-harness rows cannot be silently pooled with them. Short diagnostics do not
 establish that disabling workers resolves every observed byte difference.
+
+### PRIMARY timing order diagnostic
+
+The enforcing summary retains the full median and every paired sample. Its order
+observation gives the first pair and medians grouped by which revision ran first.
+These descriptive numbers do not affect acceptance or remove any sample.
+
+The separate `TreeDB PRIMARY order diagnostic` runs on two `ubuntu-24.04` hosted
+runners. It uses the same Go selection, CPU affinity, public fixture, eight
+alternating pairs, and 128 durable replacements per measured process as the
+enforcing PRIMARY comparison. On each runner, the fixed eight-block experiment
+crosses three factors:
+
+- Run the current protocol or run two fresh, full-length public replacement
+  preconditioning processes after quiet admission. Neither preconditioning
+  process charges the positive-control dose. The two protocol labels do not
+  assert that the runner was physically cold or that any file is reused.
+- Assign both labels the same executable and inputs, or assign the candidate
+  label the same executable with a deliberate 1 ms of process CPU per replacement
+  after the durable call returns and before the benchmark timer stops.
+- Begin with either AB or BA, alternating thereafter and retaining all measured
+  pairs. The second runner reverses the whole block order.
+
+A test-only overlay adds CPU and trace markers outside the timer, the conditional
+positive dose inside the timer, and no production changes. Both arms have the
+same ELF, runtime inputs, and public durability and allocation routes. The
+usual lifecycle fixture still exercises checked close and reopen. The diagnostic
+retains each complete and partial attempt, actual CPU dose and process CPU time
+per operation, raw ns/op, the full pair and order results, and observed external
+CPU. Separate traced processes count syncs and elapsed syscall time on the actual
+`index.db.primary` file. Their timing never contributes to the untraced comparison.
+
+Interpret each planned block even if a threshold trips. Identical controls use
+the raw paired median in both label orientations. A median outside ±5% is
+evidence of a large measurement difference without a binary difference. The
+positive control checks whether the unchanged +5% comparison sees the known
+added cost. It is a strong positive and does not measure sensitivity to a cost
+just above +5%. A preconditioning proposal first needs all preconditioned
+identical blocks within ±5%, all preconditioned slow blocks above +5%, complete
+quiet-qualified blocks, and a decrease of at least 25% in the worst absolute
+identical-block median compared to the unconditioned protocol over both runners.
+Even that outcome supports further independent qualification. These controls
+never authorize an enforcing gate change, clear a product PR, or reinterpret a
+historical rejection.
+
+See [#5509](https://github.com/snissn/gomap/issues/5509) for the archived evidence
+and hosted controls.

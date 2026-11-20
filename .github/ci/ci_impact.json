@@ -12,7 +12,7 @@
     "M0 observation is manual diagnostic-only on a separately fixed product; no forecast starts it or replaces failed M0 acceptance.",
     "Bounded maintenance comparison is a manually granted diagnostic on fixed baseline/candidate products; no forecast starts it or establishes cost, M0 or native acceptance."
   ],
-  "discovery_source_sha256": "73bdbd30027ec9b33c012940667b7f346bf0456cb26a6cffed9aa29f505bef11",
+  "discovery_source_sha256": "8bc6708b7b1d1f2cab554b00b65074a6cb310ede2d70f6d7d289ecc31f558f85",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
@@ -168,7 +168,7 @@
       "mode": "100644"
     },
     ".github/scripts/test_ci_impact.py": {
-      "git_blob": "103835c36c1a01fcf037ffd67ff14d2700dcd9ad",
+      "git_blob": "ecfd61868dc90258c9349f12f6e9843604bed44a",
       "mode": "100644"
     },
     ".github/scripts/test_getversioned_scoped_acceptance.py": {
@@ -485,6 +485,36 @@
         "tags": "entry command defaults/flags retained"
       },
       "workflow": "treedb-mvcc-maintenance-diagnostic.yml"
+    },
+    {
+      "id": "treedb-primary-order-diagnostic/controls/1",
+      "job": "controls",
+      "owner": "CI maintainer with affected MVCC PRIMARY benchmark owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {
+          "shard": 1
+        },
+        "race": false,
+        "runs_on": "ubuntu-24.04",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "treedb-primary-order-diagnostic.yml"
+    },
+    {
+      "id": "treedb-primary-order-diagnostic/controls/2",
+      "job": "controls",
+      "owner": "CI maintainer with affected MVCC PRIMARY benchmark owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {
+          "shard": 2
+        },
+        "race": false,
+        "runs_on": "ubuntu-24.04",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "treedb-primary-order-diagnostic.yml"
     },
     {
       "id": "treedb-tests/getversioned-bindings-qualification/single",
@@ -1337,6 +1367,7 @@
         "root-tests.yml",
         "sparse-catalog-qualification.yml",
         "treedb-mvcc-maintenance-diagnostic.yml",
+        "treedb-primary-order-diagnostic.yml",
         "treedb-tests.yml",
         "treedb-vacuum-m0-observation.yml",
         "treedb-vacuum-m0.yml",
@@ -1361,6 +1392,7 @@
         "root-tests.yml",
         "sparse-catalog-qualification.yml",
         "treedb-mvcc-maintenance-diagnostic.yml",
+        "treedb-primary-order-diagnostic.yml",
         "treedb-tests.yml",
         "treedb-vacuum-m0-observation.yml",
         "treedb-vacuum-m0.yml",
@@ -1385,6 +1417,7 @@
         "root-tests.yml",
         "sparse-catalog-qualification.yml",
         "treedb-mvcc-maintenance-diagnostic.yml",
+        "treedb-primary-order-diagnostic.yml",
         "treedb-tests.yml",
         "treedb-vacuum-m0-observation.yml",
         "treedb-vacuum-m0.yml",
@@ -1420,6 +1453,7 @@
         "root-tests.yml",
         "sparse-catalog-qualification.yml",
         "treedb-mvcc-maintenance-diagnostic.yml",
+        "treedb-primary-order-diagnostic.yml",
         "treedb-tests.yml",
         "treedb-vacuum-m0-observation.yml",
         "treedb-vacuum-m0.yml",
@@ -1444,6 +1478,7 @@
         "root-tests.yml",
         "sparse-catalog-qualification.yml",
         "treedb-mvcc-maintenance-diagnostic.yml",
+        "treedb-primary-order-diagnostic.yml",
         "treedb-tests.yml",
         "treedb-vacuum-m0-observation.yml",
         "treedb-vacuum-m0.yml",
@@ -1468,6 +1503,7 @@
         "root-tests.yml",
         "sparse-catalog-qualification.yml",
         "treedb-mvcc-maintenance-diagnostic.yml",
+        "treedb-primary-order-diagnostic.yml",
         "treedb-tests.yml",
         "treedb-vacuum-m0-observation.yml",
         "treedb-vacuum-m0.yml",
@@ -1492,6 +1528,7 @@
         "root-tests.yml",
         "sparse-catalog-qualification.yml",
         "treedb-mvcc-maintenance-diagnostic.yml",
+        "treedb-primary-order-diagnostic.yml",
         "treedb-tests.yml",
         "treedb-vacuum-m0-observation.yml",
         "treedb-vacuum-m0.yml",
@@ -1516,6 +1553,7 @@
         "root-tests.yml",
         "sparse-catalog-qualification.yml",
         "treedb-mvcc-maintenance-diagnostic.yml",
+        "treedb-primary-order-diagnostic.yml",
         "treedb-tests.yml",
         "treedb-vacuum-m0-observation.yml",
         "treedb-vacuum-m0.yml",
@@ -1540,6 +1578,7 @@
         "root-tests.yml",
         "sparse-catalog-qualification.yml",
         "treedb-mvcc-maintenance-diagnostic.yml",
+        "treedb-primary-order-diagnostic.yml",
         "treedb-tests.yml",
         "treedb-vacuum-m0-observation.yml",
         "treedb-vacuum-m0.yml",
@@ -1564,6 +1603,7 @@
         "root-tests.yml",
         "sparse-catalog-qualification.yml",
         "treedb-mvcc-maintenance-diagnostic.yml",
+        "treedb-primary-order-diagnostic.yml",
         "treedb-tests.yml",
         "treedb-vacuum-m0-observation.yml",
         "treedb-vacuum-m0.yml",
@@ -2418,6 +2458,62 @@
         }
       },
       "sha256": "2d682ddfe8416722c6408e033606700217b614858c78e7479d25caa294c126c8"
+    },
+    "treedb-primary-order-diagnostic.yml": {
+      "coverage": "existing execution only; triggers/path filters are unchanged",
+      "events": {
+        "pull_request": {
+          "paths": [
+            ".github/workflows/treedb-primary-order-diagnostic.yml",
+            ".github/scripts/test_mvcc_primary_order_diagnostic.py",
+            "scripts/mvcc_primary_order_diagnostic.py"
+          ]
+        },
+        "workflow_dispatch": null
+      },
+      "git_blob": "b442917bc4817460a09a6966c4b0f3e1d6f56964",
+      "jobs": {
+        "controls": {
+          "checkout": [
+            {
+              "persist-credentials": false,
+              "ref": "${{ github.event.pull_request.head.sha || github.sha }}"
+            }
+          ],
+          "commands": [
+            {
+              "command_sha256": "8503154d64a63a19d1125245b7151bb08a204ce9061a0ae4067f351619d558eb",
+              "entrypoint": ".github/workflows/treedb-primary-order-diagnostic.yml:41",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Validate diagnostic parser and counterfactuals"
+            },
+            {
+              "command_sha256": "16c34e9a5e67cc1d0ec57d1e54931d63ba628f1f2bc239c720a258007ddab3cc",
+              "entrypoint": ".github/workflows/treedb-primary-order-diagnostic.yml:49",
+              "env": {
+                "EXACT_HEAD": "${{ github.event.pull_request.head.sha || github.sha }}",
+                "RUNNER_SLOT": "${{ matrix.shard }}"
+              },
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Run declared full-length controls"
+            }
+          ],
+          "environment": {
+            "GOWORK": "off",
+            "PYTHONDONTWRITEBYTECODE": "1"
+          },
+          "matrix": {
+            "shard": [
+              1,
+              2
+            ]
+          },
+          "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": false,
+          "runs_on": "ubuntu-24.04"
+        }
+      },
+      "sha256": "b5cb2abaf216ec201a8496bc43c6920b5a4f0195df910f045119409492037fe9"
     },
     "treedb-tests.yml": {
       "coverage": "existing execution only; triggers/path filters are unchanged",
