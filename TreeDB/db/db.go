@@ -4878,7 +4878,7 @@ func (db *DB) MaintainCommandWALCoveredPrefix() error {
 	}
 	for {
 		db.maintenanceMu.Lock()
-		pending, err := db.prepareCommandWALCoveredPrefixCleanupLocked()
+		pending, err := db.prepareCommandWALCoveredPrefixCleanupLocked(false)
 		if err == nil && pending {
 			err = db.cleanupCommandWALCoveredSegmentsAtCheckpointV1(true)
 		}
@@ -4903,7 +4903,7 @@ func (db *DB) PrepareCommandWALCoveredPrefixCleanup() (bool, error) {
 	}
 	for {
 		db.maintenanceMu.Lock()
-		pending, err := db.prepareCommandWALCoveredPrefixCleanupLocked()
+		pending, err := db.prepareCommandWALCoveredPrefixCleanupLocked(true)
 		db.maintenanceMu.Unlock()
 		drain := commandWALPendingDrain(err)
 		if drain == nil {
@@ -4915,7 +4915,7 @@ func (db *DB) PrepareCommandWALCoveredPrefixCleanup() (bool, error) {
 	}
 }
 
-func (db *DB) prepareCommandWALCoveredPrefixCleanupLocked() (bool, error) {
+func (db *DB) prepareCommandWALCoveredPrefixCleanupLocked(automatic bool) (bool, error) {
 	if db.closing.Load() {
 		return false, ErrClosed
 	}
@@ -4945,6 +4945,20 @@ func (db *DB) prepareCommandWALCoveredPrefixCleanupLocked() (bool, error) {
 		return false, db.checkpointTeardownPinned(true)
 	}
 
+	var sealed commitlog.SealedRotationDebt
+	if automatic && db.nativeSemanticActive.Load() && db.durability == DurabilityWALOnRelaxed {
+		candidate, volume := db.commandJournal.SealedDebtForMaintenance()
+		if volume != (rootpublication.StableIdentity{}) {
+			dedicated, err := db.commandWALHasDedicatedVolume(volume)
+			if err != nil {
+				db.retainOriginalCleanupError(err)
+				return false, err
+			}
+			if dedicated {
+				sealed = candidate
+			}
+		}
+	}
 	// Covered-prefix maintenance is retryable. Never wait for a public vacuum's
 	// publish guard while holding maintenanceMu: vacuum takes those locks in the
 	// opposite order before entering backend maintenance.
@@ -4952,7 +4966,7 @@ func (db *DB) prepareCommandWALCoveredPrefixCleanupLocked() (bool, error) {
 		return false, nil
 	}
 	unlockCommandWALPublish := db.commandWALRawPublishMu.Unlock
-	rotated, advanced, err := db.closeCommandWALCheckpointPrefix()
+	rotated, advanced, err := db.closeCommandWALCheckpointPrefix(sealed)
 	unlockCommandWALPublish()
 	if err != nil {
 		return false, err
@@ -5050,7 +5064,7 @@ func (db *DB) checkpointTeardownPinned(maintenanceAlreadyHeld bool) error {
 			return publicRootPublicationErrorV1(err)
 		}
 		unlockCommandWALPublish = db.lockCommandWALRawPublish()
-		rotatedCommandWAL, commandWALPrefixAdvanced, err := db.closeCommandWALCheckpointPrefix()
+		rotatedCommandWAL, commandWALPrefixAdvanced, err := db.closeCommandWALCheckpointPrefix(commitlog.SealedRotationDebt{})
 		if err != nil {
 			return err
 		}
@@ -5094,7 +5108,7 @@ func (db *DB) checkpointTeardownPinned(maintenanceAlreadyHeld bool) error {
 			return err
 		}
 	}
-	rotatedCommandWAL, commandWALPrefixAdvanced, err := db.closeCommandWALCheckpointPrefix()
+	rotatedCommandWAL, commandWALPrefixAdvanced, err := db.closeCommandWALCheckpointPrefix(commitlog.SealedRotationDebt{})
 	if err != nil {
 		return err
 	}
@@ -5134,7 +5148,7 @@ func (db *DB) checkpointTeardownPinned(maintenanceAlreadyHeld bool) error {
 // WAL frontier used by cleanup proofs. The caller must hold raw-publish so the
 // latest assigned LSN, dependency debt, active segment sync, and frontier
 // publication describe one append-serialization cut.
-func (db *DB) closeCommandWALCheckpointPrefix() (rotated, advanced bool, err error) {
+func (db *DB) closeCommandWALCheckpointPrefix(sealed commitlog.SealedRotationDebt) (rotated, advanced bool, err error) {
 	if db == nil || !db.commandWAL || db.commandJournal == nil {
 		return false, false, nil
 	}
@@ -5154,7 +5168,7 @@ func (db *DB) closeCommandWALCheckpointPrefix() (rotated, advanced bool, err err
 	// independently advance commandWALDurableLSN through its own contract.
 	advanced = durableWALLSN >= db.commandWALSessionAppliedLSN && durableWALLSN < frontier
 	if advanced {
-		if err := db.syncCommandWALDependenciesThrough(frontier, nil); err != nil {
+		if err := db.syncCommandWALDependenciesWithSealedDebt(frontier, nil, sealed); err != nil {
 			return false, false, err
 		}
 	}

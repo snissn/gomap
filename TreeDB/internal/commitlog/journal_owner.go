@@ -242,6 +242,7 @@ type CommandJournal struct {
 	stableParent           *os.File
 	stableParentErr        error
 	captureStableResources bool
+	rotationDebt           rotationDebtRegistration
 	pendingStableRotations []*CommandJournalStableRotation
 	pendingStableSuccessor *pendingCommandWALSuccessor
 	stableResourcePins     *rootpublication.IdentityPinRegistry
@@ -661,6 +662,10 @@ func (j *CommandJournal) maybeRotateForFrameLockedObservedWithNamespaceDebt(fram
 		if err != nil {
 			return err
 		}
+		j.rotationDebt = rotationDebtRegistration{}
+		if !syncCurrent && deferNamespace && j.writer.fixed == nil && j.writer.containerSelection.ext4Stream {
+			j.rotationDebt = rotationDebtRegistration{previous: rotation.Closed, active: rotation.Active, writer: j.writer.f}
+		}
 		j.pendingStableRotations = append(j.pendingStableRotations, rotation)
 		return nil
 	}
@@ -768,7 +773,90 @@ func (j *CommandJournal) RotateActiveSegment(syncCurrent bool) error {
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	return j.rotateActiveSegmentLockedObserved(syncCurrent, durabilitycut.Enabled())
+	registered := j.rotationDebt
+	j.rotationDebt = rotationDebtRegistration{}
+	eligible := syncCurrent && registered.canSeal(j)
+	if err := j.rotateActiveSegmentLockedObserved(syncCurrent, durabilitycut.Enabled()); err != nil {
+		return err
+	}
+	if eligible && j.segmentSeq == registered.active.Generation()+1 && j.writer.f != nil &&
+		j.writer.fixed == nil && j.writer.containerSelection.ext4Stream {
+		registered.writer = j.writer.f
+		registered.sealed = true
+		j.rotationDebt = registered
+	}
+	return nil
+}
+
+// The journal borrows these registration identities without owning a resource
+// reference. The original debt owner remains responsible for both releases.
+// Only the same journal can certify the exact active registration by sealing
+// the writer file from which the token was constructed.
+type rotationDebtRegistration struct {
+	previous, active *rootpublication.StableResourceToken
+	writer           *os.File
+	sealed           bool
+}
+
+func (r rotationDebtRegistration) canSeal(j *CommandJournal) bool {
+	if r.active == nil || r.sealed || j.writer == nil || j.writer.f == nil || j.writer.f != r.writer ||
+		j.writer.fixed != nil || !j.writer.containerSelection.ext4Stream || j.segmentSeq != r.active.Generation() {
+		return false
+	}
+	need := r.active.Frontier()
+	bytes := j.writer.StableBytes()
+	return bytes > 0 && need.Bytes > 0 && need.Bytes <= uint64(bytes) && need.MaxLSN > 0 &&
+		need.MaxLSN <= j.activeSegmentMaxLSN && need.RIDCount == 0
+}
+
+// SealedRotationDebt is transient evidence for automatic checkpoint maintenance.
+// It owns no file descriptors and conveys no authority over namespace, current
+// writer sync, durable markers, WAL publication or retirement.
+type SealedRotationDebt struct {
+	journal      *CommandJournal
+	registration rotationDebtRegistration
+}
+
+func (j *CommandJournal) hasSealedRotationDebt(r rotationDebtRegistration) bool {
+	return r.sealed && j.rotationDebt == r && !j.closing && j.writer != nil && j.writer.f != nil &&
+		j.writer.f == r.writer && j.writer.fixed == nil && j.writer.containerSelection.ext4Stream &&
+		j.segmentSeq == r.active.Generation()+1
+}
+
+// SealedDebtForMaintenance returns a checked volume of the current successor.
+// A busy or replaced journal declines this optional optimization.
+func (j *CommandJournal) SealedDebtForMaintenance() (SealedRotationDebt, rootpublication.StableIdentity) {
+	if j == nil || !j.mu.TryLock() {
+		return SealedRotationDebt{}, rootpublication.StableIdentity{}
+	}
+	defer j.mu.Unlock()
+	r := j.rotationDebt
+	if !j.hasSealedRotationDebt(r) {
+		return SealedRotationDebt{}, rootpublication.StableIdentity{}
+	}
+	volume, err := rootpublication.StableIdentityFromFile(j.writer.f)
+	old := r.active.Identity()
+	if err != nil || old.Platform != volume.Platform || old.VolumeID != volume.VolumeID {
+		return SealedRotationDebt{}, rootpublication.StableIdentity{}
+	}
+	return SealedRotationDebt{journal: j, registration: r}, volume
+}
+
+// Covers tests the two exact registrations in a fresh, ordered debt view after
+// the first sync succeeded. The caller retains the active token throughout.
+func (r SealedRotationDebt) Covers(previous, active *rootpublication.StableResourceToken) (bool, error) {
+	j := r.journal
+	if j == nil || previous != r.registration.previous || active != r.registration.active || !j.mu.TryLock() {
+		return false, nil
+	}
+	current := j.hasSealedRotationDebt(r.registration)
+	j.mu.Unlock()
+	if !current {
+		return false, nil
+	}
+	return true, active.WithPinnedFile(func(*os.File) error {
+		return j.fileSync.run(func() error { return nil })
+	})
 }
 
 // CommandJournalStableRotation retains exact handles for the segment closed by
@@ -1144,6 +1232,11 @@ func (j *CommandJournal) takePendingStableRotationsLocked() ([]*CommandJournalSt
 		rootpublication.DurableFrontier{Bytes: uint64(j.writer.StableBytes()), MaxLSN: j.activeSegmentMaxLSN}, last.Active.Namespace(), false)
 	if err != nil {
 		return nil, err
+	}
+	if j.rotationDebt.writer == j.writer.f && j.rotationDebt.previous == last.Closed && j.rotationDebt.active == last.Active {
+		j.rotationDebt.active = active
+	} else {
+		j.rotationDebt = rotationDebtRegistration{}
 	}
 	last.Active.Release()
 	last.Active = active
@@ -2179,6 +2272,7 @@ func (j *CommandJournal) Close() error {
 		return j.closeErr
 	}
 	j.closing = true
+	j.rotationDebt = rotationDebtRegistration{}
 	j.cancelFixedWALAheadLocked()
 	for j.fixedAhead != nil && !j.fixedAhead.done {
 		j.syncCond.Wait()

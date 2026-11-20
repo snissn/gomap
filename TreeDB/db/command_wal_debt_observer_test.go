@@ -114,7 +114,7 @@ func TestCommandWALDebtEmptyFixedPressureRotationRetainsSyncHandle(t *testing.T)
 		return nil
 	})
 	defer restore()
-	if err = debt.syncRotationFilesThrough(root, walDir, lsn); err != nil {
+	if err = debt.syncRotationFilesThrough(root, walDir, lsn, commitlog.SealedRotationDebt{}); err != nil {
 		t.Fatal(err)
 	}
 	if len(counts) != 2 || counts[emptyPath] != [2]int{1, 1} || counts[active] != [2]int{1, 1} {
