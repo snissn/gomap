@@ -2988,6 +2988,10 @@ func (db *DB) appendCommandWALIntentWithTiming(intent *commandWALBatchIntent, sy
 		return db.syncCommandWALDependenciesThrough(^uint64(0), dependencies)
 	}
 	afterAppend := func(lsn uint64, rotations []*commitlog.CommandJournalStableRotation) error {
+		var sealed *commitlog.SealedCommandWALSync
+		if !sync && !intent.capturedDurable && len(rotations) == 1 && rotations[0] != nil {
+			sealed = rotations[0].DetachedSync
+		}
 		rotationFiles := commandWALStableRotationTokens(rotations)
 		if err := db.commandWALDebt.add(lsn, rotationFiles, dependencies); err != nil {
 			for _, token := range rotationFiles {
@@ -2998,6 +3002,9 @@ func (db *DB) appendCommandWALIntentWithTiming(intent *commandWALBatchIntent, sy
 				intent.dependencyResources = nil
 			}
 			return err
+		}
+		if sealed != nil {
+			db.commandWALDebt.offerSealedSync(lsn, sealed)
 		}
 		intent.dependencyResources = nil
 		return nil

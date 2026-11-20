@@ -19790,10 +19790,22 @@ func (db *DB) autoCheckpointLoop(interval time.Duration, maxWALBytes int64, idle
 			armGenerationRetry()
 		}
 	}
+	var sealedSyncWake <-chan struct{}
+	backend, _ := db.backend.(interface {
+		SealedCommandWALSyncNotifications() <-chan struct{}
+		RunPendingSealedCommandWALSync()
+	})
+	if db.externalCommandWAL && backend != nil {
+		sealedSyncWake = backend.SealedCommandWALSyncNotifications()
+	}
 	for {
 		select {
 		case <-db.closeCh:
 			return
+		case <-sealedSyncWake:
+			if !db.closing.Load() {
+				backend.RunPendingSealedCommandWALSync()
+			}
 		case <-intervalCh:
 			db.maybeAutoCheckpoint(maxWALBytes, autoCheckpointModeInterval)
 		case <-db.nativeGenerationFlushCh:

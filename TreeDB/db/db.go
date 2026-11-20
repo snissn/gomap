@@ -3051,6 +3051,9 @@ func openWithLock(opts Options, lock *lockfile.Lock, nativeSemanticOwner bool) (
 			return nil, err
 		}
 		db.commandJournal = journal
+		if preferExt4Stream {
+			db.commandWALDebt.sealedSyncWake = make(chan struct{}, 1)
+		}
 		db.commandWALSessionAppliedLSN = db.meta.AppliedCommandLSN
 		// replayCommandWALIntoBackend records the physically classified durable
 		// frontier. A recovered durable root may advance AppliedCommandLSN beyond

@@ -2,8 +2,6 @@ package db
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"sync"
 	"time"
@@ -20,6 +18,8 @@ type CommandWALDependencyDebt struct {
 	entries            []commandWALDependencyDebtEntry
 	capturePins        int
 	deferredReleaseLSN uint64
+	sealedSyncWake     chan struct{}
+	sealedSync         *commandWALSealedSync
 }
 
 func (debt *CommandWALDependencyDebt) entryCountThrough(lsn uint64) uint64 {
@@ -195,22 +195,20 @@ func (debt *CommandWALDependencyDebt) rotationFileViewThrough(lsn uint64) ([]*ro
 
 func (debt *CommandWALDependencyDebt) syncRotationFilesThrough(root, walDir string, lsn uint64) error {
 	tokens, err := debt.rotationFileViewThrough(lsn)
-	if err != nil {
+	if err != nil || len(tokens) == 0 {
 		return err
 	}
+	debt.mu.Lock()
+	sealed := debt.sealedSync
+	debt.mu.Unlock()
 	for _, token := range tokens {
-		if !durabilitycut.Enabled() {
-			if err := token.SyncThrough(); err != nil {
+		if sealed != nil && sealed.target.Token() == token {
+			if err := sealed.syncForPublication(root, walDir); err != nil {
 				return err
 			}
 			continue
 		}
-		path := filepath.Join(walDir, filepath.Base(token.DiagnosticPath()))
-		if err := token.SyncThroughWithFileSyncObserver(func(file *os.File) error {
-			return durabilitycut.EmitStablePath(durabilitycut.BeforeDependencyFileSync, durabilitycut.ResourceCommandWAL, root, path, file)
-		}, func(file *os.File) error {
-			return durabilitycut.EmitStablePath(durabilitycut.AfterDependencyFileSync, durabilitycut.ResourceCommandWAL, root, path, file)
-		}); err != nil {
+		if err := syncCommandWALRotationFile(root, walDir, token); err != nil {
 			return err
 		}
 	}
@@ -363,6 +361,9 @@ func (debt *CommandWALDependencyDebt) releaseThrough(lsn uint64) bool {
 	}
 	var released []commandWALDependencyDebtEntry
 	if cut != 0 && physical {
+		if debt.sealedSync != nil && debt.sealedSync.registeredBy <= lsn {
+			debt.sealedSync = nil
+		}
 		released = append([]commandWALDependencyDebtEntry(nil), debt.entries[:cut]...)
 		copy(debt.entries, debt.entries[cut:])
 		clear(debt.entries[len(debt.entries)-cut:])
@@ -397,6 +398,7 @@ func (debt *CommandWALDependencyDebt) releaseAll() {
 	debt.mu.Lock()
 	entries := debt.entries
 	debt.entries = nil
+	debt.sealedSync = nil
 	debt.mu.Unlock()
 	for _, entry := range entries {
 		for _, resource := range entry.resources {

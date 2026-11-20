@@ -31,15 +31,20 @@ func (s *journalFileSync) run(syncFile func() error) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.syncDistinctFile(syncFile)
+}
+
+// syncDistinctFile shares the journal's first failure with the active writer.
+// Outside run's lock, the caller must prove it exclusively owns sync of this
+// open-file description. Other descriptions cannot consume its error cursor.
+func (s *journalFileSync) syncDistinctFile(syncFile func() error) error {
 	if err := s.err(); err != nil {
 		return err
 	}
 	if err := syncFile(); err != nil {
-		s.failure.Store(&journalFileSyncFailure{cause: err})
-		if s.onError != nil {
+		if s.failure.CompareAndSwap(nil, &journalFileSyncFailure{cause: err}) && s.onError != nil {
 			s.onError()
 		}
-		return err
 	}
-	return nil
+	return s.err()
 }

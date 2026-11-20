@@ -776,6 +776,11 @@ func (j *CommandJournal) RotateActiveSegment(syncCurrent bool) error {
 type CommandJournalStableRotation struct {
 	Closed *rootpublication.StableResourceToken
 	Active *rootpublication.StableResourceToken
+
+	// DetachedSync borrows Closed. The debt owner must exclude any previously
+	// retained active aliases and serialize its calls against normal closed-file
+	// sync on that exact token. Outstanding journal captures disqualify it.
+	DetachedSync *SealedCommandWALSync
 }
 
 var newCommandWALStableNamespaceToken = rootpublication.NewStableNamespaceToken
@@ -1068,6 +1073,8 @@ func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurren
 		return nil, pendingCommandWALFailure(parent, prepared, nextPath, err)
 	}
 	closedBytes := j.writer.ActiveBytes()
+	detachable := !syncCurrent && deferNamespace && j.writer.fixed == nil &&
+		j.writer.containerSelection.ext4Stream && j.syncPins == 0
 	old := j.writer.f
 	if err := j.writer.closeRotatedResource(old); err != nil {
 		activeToken.Release()
@@ -1107,7 +1114,11 @@ func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurren
 		j.onSegmentRotated(closedBytes)
 	}
 	j.pendingStableSuccessor = nil
-	return &CommandJournalStableRotation{Closed: closedToken, Active: activeToken}, nil
+	result := &CommandJournalStableRotation{Closed: closedToken, Active: activeToken}
+	if detachable {
+		result.DetachedSync = &SealedCommandWALSync{token: closedToken, owner: &j.fileSync}
+	}
+	return result, nil
 }
 
 // TakePendingStableRotations flushes and refreshes the current active segment

@@ -39,6 +39,10 @@ type CapturedSync struct {
 
 // CaptureSync flushes under append authority and pins the exact active handle
 // and every earlier rotation dependency before relinquishing that authority.
+// The caller owns its rotated handles exclusively for sync. The DB's
+// dependency ledger drains them before CaptureSync and passes nil here, so
+// detached sealed-file sync never shares an open-file description with this
+// path.
 func (j *CommandJournal) CaptureSync(rotated []*rootpublication.StableResourceToken) (_ *CapturedSync, err error) {
 	return j.CaptureSyncInto(new(CapturedSync), rotated)
 }

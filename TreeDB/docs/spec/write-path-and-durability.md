@@ -119,6 +119,17 @@ recovery publishes that physical frontier. Direct backend constructors keep thei
 inline completion path, and already combined command groups keep their existing
 path.
 
+The automatic checkpoint worker may also sync one sealed ext4 stream
+predecessor after a relaxed size rotation. The debt owner must prove the
+predecessor has no preceding external dependencies and that no other retained
+rotation or journal capture can sync its open-file description. The worker
+pins the exact closed file and releases writer admission before I/O. A later
+dependency drain can use successful completion only for the original token
+and its sealed bytes and LSN. Other files and directory entries still cross
+the original barrier, which alone advances the durable WAL frontier. A
+refused early attempt leaves that barrier's file sync available. A physical
+I/O failure remains sticky for the journal across both sync paths.
+
 A failure after assignment retains the command identity and is ambiguous to an
 ordinary collection caller, even if logical installation did not complete. The
 exact successor may already be visible when final synchronization fails; that
