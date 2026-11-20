@@ -84,6 +84,37 @@ func TestHistorySemanticRangeBarrierAndPhysicalDrift(t *testing.T) {
 	}
 }
 
+func TestHistoryValidateCurrentDependencies(t *testing.T) {
+	h, err := New(32, 1<<20, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Close()
+	rows := Namespace{Kind: CollectionNamespace, Collection: 1, Domain: 1}
+	catalog := Namespace{Kind: CatalogNamespace}
+	point := Effect{Namespace: rows, Kind: PointEffect, Key: []byte("a")}
+	rangeEffect := Effect{Namespace: rows, Kind: RangeEffect, Key: []byte("b"), End: []byte("d")}
+	barrier := Effect{Namespace: catalog, Kind: BarrierEffect}
+	dependencies := []Dependency{point, rangeEffect, barrier}
+	installEffects(t, h, 1, dependencies...)
+	if err := h.ValidateCurrentDependencies(1, dependencies); err != nil {
+		t.Fatalf("current dependencies: %v", err)
+	}
+	invalid := append(dependencies, Dependency{Kind: 0})
+	if err := h.ValidateCurrentDependencies(1, invalid); !errors.Is(err, ErrInvalidEffect) {
+		t.Fatalf("current invalid dependency: %v", err)
+	}
+	for _, dependency := range dependencies {
+		if changed, err := h.DependenciesChanged(0, []Dependency{dependency}); !changed || err != nil {
+			t.Fatalf("previous opening missed %v: changed=%t err=%v", dependency.Kind, changed, err)
+		}
+	}
+	h.Evict()
+	if err := h.ValidateCurrentDependencies(0, invalid); !errors.Is(err, ErrTooOld) {
+		t.Fatalf("expired history must take precedence: %v", err)
+	}
+}
+
 func TestHistorySemanticOwnedBackingWrapAndFloor(t *testing.T) {
 	h, _ := New(8, 1<<20, nil)
 	defer h.Close()
