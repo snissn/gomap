@@ -2,6 +2,7 @@ package db
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
@@ -16,6 +17,37 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/page"
 )
+
+func TestAppendCommandWALPayloadRejectsStandaloneBSONSetDelta(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := d.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	payload, err := commitlog.EncodeCollectionBSONSetDelta("db.coll", commitlog.CollectionBSONSetDelta{
+		ID: []byte{0x10, 0x29, 0, 0, 0}, Field: []byte("binary"),
+		Value: []byte{1, 0, 0, 0, 0, 1}, Incarnation: 7,
+		Before: sha256.Sum256([]byte("before")), After: sha256.Sum256([]byte("after")),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := d.CommandWALNextLSN()
+	for _, sync := range []bool{false, true} {
+		lsn, err := d.AppendCommandWALPayload(commitlog.CommandKindCollectionUpdateBatchByID,
+			commitlog.CommandScopeCollection, commitlog.PayloadFormatCollectionUpdateBatchByIDV1, payload, sync)
+		if lsn != 0 || !errors.Is(err, ErrCommandWALUnsupported) {
+			t.Fatalf("sync=%t lsn=%d err=%v, want rejection before assignment", sync, lsn, err)
+		}
+		if got := d.CommandWALNextLSN(); got != next {
+			t.Fatalf("sync=%t next LSN=%d, want unchanged %d", sync, got, next)
+		}
+	}
+}
 
 func TestSyncCommandWALDependenciesThroughNoDebtIsAllocationFree(t *testing.T) {
 	db := &DB{}

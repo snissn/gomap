@@ -2928,6 +2928,13 @@ func (db *DB) appendCommandWALIntentWithTiming(intent *commandWALBatchIntent, sy
 	if db == nil {
 		return 0, ErrClosed
 	}
+	if intent.kind == commitlog.CommandKindCollectionUpdateBatchByID &&
+		intent.payloadFormat == commitlog.PayloadFormatCollectionUpdateBatchByIDV1 &&
+		commitlog.IsCollectionBSONSetDelta(intent.payload) &&
+		(!db.experimentalStandaloneBSONSetWALDelta || !db.requiresBSONSetWALDelta ||
+			!intent.trustedPayload || intent.privateCOWOwner == nil || intent.privateCOWOwner != db.privateCOWOwner) {
+		return 0, fmt.Errorf("%w: BSON $set WAL delta requires the opted-in standalone writer", ErrCommandWALUnsupported)
+	}
 	// Already-assigned physical/replay continuations above do not assign another
 	// command. Only a real new frame needs admission against semantic activation.
 	tracked, admissionErr := db.beginSemanticBackendOperation(intent.privateCOWOwner, false)
