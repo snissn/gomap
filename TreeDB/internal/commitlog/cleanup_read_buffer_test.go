@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -18,15 +20,25 @@ func TestCleanupReadBufferPreservesStreamValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	largePayload, err := EncodeRawKVBatchPayload([]RawKVOperation{{
+		Op: RawKVOpSet, Key: []byte("large"), Value: bytes.Repeat([]byte("value"), cleanupReadWindowBytes),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	writer, err := NewWriter(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	const frameCount = 80
 	for lsn := uint64(1); lsn <= frameCount; lsn++ {
+		frame := payload
+		if lsn == frameCount {
+			frame = largePayload
+		}
 		if err := writer.AppendCommand(CommandEnvelope{
 			LSN: lsn, Kind: CommandKindRawKVBatch, Scope: CommandScopeRawKV,
-			PayloadFormat: PayloadFormatRawKVBatchV1, Payload: payload,
+			PayloadFormat: PayloadFormatRawKVBatchV1, Payload: frame,
 		}); err != nil {
 			_ = writer.Close()
 			t.Fatal(err)
@@ -47,15 +59,8 @@ func TestCleanupReadBufferPreservesStreamValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer file.Close()
-	read := func(buffer *CleanupReadBuffer) ([]int64, error) {
+	readFrames := func(reader *Reader) ([]int64, error) {
 		t.Helper()
-		if _, err := file.Seek(0, io.SeekStart); err != nil {
-			t.Fatal(err)
-		}
-		reader, err := buffer.Open(file, Options{})
-		if err != nil {
-			t.Fatal(err)
-		}
 		defer reader.Close()
 		var offsets []int64
 		for {
@@ -73,7 +78,21 @@ func TestCleanupReadBufferPreservesStreamValidation(t *testing.T) {
 			offsets = append(offsets, offset)
 		}
 	}
+	read := func(buffer *CleanupReadBuffer) ([]int64, error) {
+		t.Helper()
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			t.Fatal(err)
+		}
+		reader, err := buffer.Open(file, Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return readFrames(reader)
+	}
 	var buffer CleanupReadBuffer
+	var fileIO sync.Mutex
+	var released atomic.Bool
+	detached := NewDetachedStreamCleanupReadBuffer(&fileIO, &released)
 	plain, err := read(nil)
 	if len(plain) != frameCount+1 || !errors.Is(err, io.EOF) || plain[frameCount-1] != int64(len(original)) {
 		t.Fatalf("original valid fixture offsets=%v err=%v", plain, err)
@@ -107,7 +126,34 @@ func TestCleanupReadBufferPreservesStreamValidation(t *testing.T) {
 			if !errors.Is(wantErr, tc.want) || !errors.Is(gotErr, tc.want) || !slices.Equal(gotOffsets, wantOffsets) {
 				t.Fatalf("offsets and result: buffered %v %v, ordinary %v %v, want %v", gotOffsets, gotErr, wantOffsets, wantErr, tc.want)
 			}
+			detachedOffsets, detachedErr := read(detached)
+			if !errors.Is(detachedErr, tc.want) || !slices.Equal(detachedOffsets, wantOffsets) {
+				t.Fatalf("offsets and result: detachable %v %v, ordinary %v %v", detachedOffsets, detachedErr, wantOffsets, wantErr)
+			}
+			copyBytes, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			copiedOffsets, copiedErr := readFrames(NewReaderFromCapturedStream(copyBytes, Options{}))
+			if !errors.Is(copiedErr, tc.want) || !slices.Equal(copiedOffsets, wantOffsets) {
+				t.Fatalf("offsets and result: captured %v %v, ordinary %v %v", copiedOffsets, copiedErr, wantOffsets, wantErr)
+			}
+
 		})
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := detached.Open(file, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 3*cleanupReadWindowBytes)
+	if n, err := detached.Read(buf); n != cleanupReadWindowBytes || err != nil {
+		t.Fatalf("direct read beyond the window: n=%d err=%v", n, err)
+	}
+	released.Store(true)
+	if n, err := detached.Read(buf); n != 0 || !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("released reader started another read: n=%d err=%v", n, err)
 	}
 }
 

@@ -245,6 +245,7 @@ type CommandJournal struct {
 	pendingStableRotations []*CommandJournalStableRotation
 	pendingStableSuccessor *pendingCommandWALSuccessor
 	stableResourcePins     *rootpublication.IdentityPinRegistry
+	detachedCleanupScan    *CommandJournalDetachedCleanupScan
 }
 
 // CommandJournalCleanupSnapshot captures the monotonic append/rotation
@@ -260,6 +261,7 @@ type CommandJournalCleanupSnapshot struct {
 	ActivePath            string
 	ActiveIdentity        rootpublication.StableIdentity
 	FixedContainer        bool
+	Ext4Stream            bool
 	PendingStableRotation int
 	PendingSuccessor      bool
 }
@@ -718,6 +720,7 @@ func (j *CommandJournal) rotateActiveSegmentLockedObserved(syncCurrent, observe 
 	if j.segmentSeq == ^uint64(0) {
 		return ErrCommandWALSegmentSeqExhausted
 	}
+	j.yieldDetachedCleanupScanLocked()
 	nextSeq := j.segmentSeq + 1
 	nextPath := filepath.Join(j.walDir, CommandSegmentName(j.lane, nextSeq))
 	plan, err := j.writer.fixedSuccessorSizePlan()
@@ -916,6 +919,7 @@ func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurren
 	if j.segmentSeq == ^uint64(0) {
 		return nil, ErrCommandWALSegmentSeqExhausted
 	}
+	j.yieldDetachedCleanupScanLocked()
 	plan, err := j.writer.fixedSuccessorSizePlan()
 	if err != nil {
 		return nil, err
@@ -1217,6 +1221,7 @@ func (j *CommandJournal) cleanupSnapshotLocked() (CommandJournalCleanupSnapshot,
 		ActivePath:            j.path,
 		ActiveIdentity:        identity,
 		FixedContainer:        j.writer.fixed != nil,
+		Ext4Stream:            j.writer.fixed == nil && j.writer.containerSelection.ext4Stream,
 		PendingStableRotation: len(j.pendingStableRotations),
 		PendingSuccessor:      j.pendingStableSuccessor != nil,
 	}, nil
@@ -1265,6 +1270,10 @@ func (j *CommandJournal) WithCleanupScanSnapshot(snapshot CommandJournalCleanupS
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	return j.withCleanupScanSnapshotLocked(snapshot, fn)
+}
+
+func (j *CommandJournal) withCleanupScanSnapshotLocked(snapshot CommandJournalCleanupSnapshot, fn func(CommandJournalCleanupSnapshot) error) error {
 	current, err := j.cleanupSnapshotLocked()
 	if err != nil {
 		return errors.Join(ErrCommandWALCleanupSnapshotStale, err)
@@ -1276,6 +1285,64 @@ func (j *CommandJournal) WithCleanupScanSnapshot(snapshot CommandJournalCleanupS
 		return nil
 	}
 	return fn(current)
+}
+
+// CommandJournalDetachedCleanupScan binds a batch of temporary cleanup readers
+// to one journal owner. Rotation releases the readers before opening any of
+// its own files, and sync capture can release them under descriptor pressure.
+// Cleanup owns decisions only after finishing the batch.
+type CommandJournalDetachedCleanupScan struct {
+	release func()
+}
+
+// StageDetachedCleanupScan prepares readers while append and rotation are
+// excluded. A nil release callback declines the detached scan. Release may
+// close readers in use outside the lock and must not enter the journal or DB.
+func (j *CommandJournal) StageDetachedCleanupScan(snapshot CommandJournalCleanupSnapshot, prepare func(CommandJournalCleanupSnapshot) (release func(), err error)) (*CommandJournalDetachedCleanupScan, error) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.detachedCleanupScan != nil {
+		return nil, ErrCommandWALCleanupSnapshotStale
+	}
+	var scan *CommandJournalDetachedCleanupScan
+	err := j.withCleanupScanSnapshotLocked(snapshot, func(current CommandJournalCleanupSnapshot) error {
+		if current.SegmentSeq != snapshot.SegmentSeq {
+			return nil
+		}
+		release, err := prepare(current)
+		if err == nil && release != nil {
+			scan = &CommandJournalDetachedCleanupScan{release: release}
+			j.detachedCleanupScan = scan
+		}
+		return err
+	})
+	return scan, err
+}
+
+// FinishDetachedCleanupScan claims the readers for final validation under
+// append exclusion, or reports that the journal released them first. The callback
+// disposes of any unneeded readers before append exclusion ends, including
+// when the current snapshot cannot be validated.
+func (j *CommandJournal) FinishDetachedCleanupScan(snapshot CommandJournalCleanupSnapshot, scan *CommandJournalDetachedCleanupScan, fn func(CommandJournalCleanupSnapshot, error) error) (yielded bool, err error) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.detachedCleanupScan != scan {
+		return true, nil
+	}
+	j.detachedCleanupScan = nil
+	var current CommandJournalCleanupSnapshot
+	snapshotErr := j.withCleanupScanSnapshotLocked(snapshot, func(c CommandJournalCleanupSnapshot) error {
+		current = c
+		return nil
+	})
+	return false, fn(current, snapshotErr)
+}
+
+func (j *CommandJournal) yieldDetachedCleanupScanLocked() {
+	if scan := j.detachedCleanupScan; scan != nil {
+		j.detachedCleanupScan = nil
+		scan.release()
+	}
 }
 
 func validateMonotonicCleanupSnapshot(captured, current CommandJournalCleanupSnapshot) error {
@@ -2179,6 +2246,7 @@ func (j *CommandJournal) Close() error {
 		return j.closeErr
 	}
 	j.closing = true
+	j.yieldDetachedCleanupScanLocked()
 	j.cancelFixedWALAheadLocked()
 	for j.fixedAhead != nil && !j.fixedAhead.done {
 		j.syncCond.Wait()
