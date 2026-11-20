@@ -604,7 +604,7 @@ func benchmarkCollectionShapeInsertBatch(b *testing.B, indexCount int, checkpoin
 			if bufferedIndexedWrites {
 				flushStart := time.Now()
 				if err := collection.Flush(); err != nil {
-					b.Fatalf("flush buffered indexed writes: %v", err)
+					b.Fatalf("flush buffered collection writes: %v", err)
 				}
 				bufferedFlushElapsed += time.Since(flushStart)
 			}
@@ -615,11 +615,13 @@ func benchmarkCollectionShapeInsertBatch(b *testing.B, indexCount int, checkpoin
 		}
 		inserted += batchSize
 	}
-	if bufferedIndexedWrites && !checkpoint {
+	// Command-WAL inserts without secondary indexes can buffer even when the
+	// collection's indexed-write buffer option is off.
+	if !checkpoint && (bufferedIndexedWrites || insertStats.BufferedIndexedBatches > 0) {
 		b.StartTimer()
 		flushStart := time.Now()
 		if err := collection.Flush(); err != nil {
-			b.Fatalf("flush buffered indexed writes: %v", err)
+			b.Fatalf("flush buffered collection writes: %v", err)
 		}
 		bufferedFlushElapsed += time.Since(flushStart)
 		b.StopTimer()
@@ -645,10 +647,12 @@ func benchmarkCollectionShapeInsertBatch(b *testing.B, indexCount int, checkpoin
 				b.ReportMetric(float64(meta.Options.BufferedIndexedAsyncFlushMaxQueuedUnits), "buffered_async_max_units")
 			}
 		}
-		if insertStats.BufferedIndexedBatches > 0 && insertStats.BufferedIndexedBypassBatches == 0 && insertElapsed > 0 {
+	}
+	if insertStats.BufferedIndexedBatches > 0 && insertStats.BufferedIndexedBypassBatches == 0 {
+		if insertElapsed > 0 {
 			b.ReportMetric(float64(insertElapsed.Nanoseconds())/float64(b.N), "buffered_insert_ns/doc")
 		}
-		if insertStats.BufferedIndexedBatches > 0 && insertStats.BufferedIndexedBypassBatches == 0 && bufferedFlushElapsed > 0 {
+		if bufferedFlushElapsed > 0 {
 			b.ReportMetric(float64(bufferedFlushElapsed.Nanoseconds())/float64(b.N), "buffered_flush_ns/doc")
 		}
 	}

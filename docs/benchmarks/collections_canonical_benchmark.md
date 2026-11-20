@@ -57,6 +57,13 @@ directories without that sentinel.
 Size after insert and the flush/checkpoint needed for correctness. This is not a
 compacted state. It can be compared with other post-insert rows.
 
+The TreeDB insert timer includes the final collection flush when inserts were
+buffered, including zero-secondary-index command-WAL BSON and JSON batches.
+Producer-route evidence is sampled after this publication. The subsequent
+durability checkpoint for disk measurement and any storage maintenance run
+outside the insert timer. Earlier zero-index BSON and JSON timings that stopped
+after staging the inserts omit this publication cost.
+
 `online_one_pass_maintenance`
 
 The current benchmark harness's online maintenance path. It is useful for
