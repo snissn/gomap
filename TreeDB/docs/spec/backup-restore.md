@@ -83,9 +83,17 @@ An absent mount, empty UUID or identity mismatch must stop the launch. With a
 missing document dependency, recovery can select an older complete durable
 root. With an empty directory covering the intended WAL, writable recovery can
 also succeed at an earlier applied frontier and omit complete records still in
-the original WAL. Keep the original journal with its store through crash
-recovery, backup and rollback. A successful Open or Close cannot establish
-that the intended journal was present.
+the original WAL. A successful Open or Close cannot establish that the
+intended journal was present.
+
+Writable recovery can truncate or remove a damaged relaxed suffix. To retain
+a rollback point after an interrupted stop, verify the intended mounts and
+take a complete, manifest-verified copy of the stopped store and its original
+WAL before the first writable Open. Keep that copy outside the store. If the
+gateway accepted writes on a substitute WAL, stop it and restore the store
+and original WAL together from a verified cut preceding the divergence.
+Reattaching the original WAL alone can silently skip different records at or
+below the store's persisted applied LSN.
 
 Linux device numbers can change at reboot, particularly for loop and
 device-mapper volumes. TreeDB persists the device number as part of a file's
