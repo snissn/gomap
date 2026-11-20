@@ -27,6 +27,14 @@ func newCachingValueLogAppender(db *DB, l *lane) backenddb.ValueLogAppender {
 }
 
 func (a *cachingValueLogAppender) AppendValues(values [][]byte) ([]page.ValuePtr, error) {
+	return a.appendValues(values, false)
+}
+
+func (a *cachingValueLogAppender) AppendSerialBSONValues(values [][]byte) ([]page.ValuePtr, error) {
+	return a.appendValues(values, true)
+}
+
+func (a *cachingValueLogAppender) appendValues(values [][]byte, serialBSON bool) ([]page.ValuePtr, error) {
 	if a == nil || a.db == nil || a.lane == nil {
 		return nil, errWALUnavailable
 	}
@@ -48,7 +56,16 @@ func (a *cachingValueLogAppender) AppendValues(values [][]byte) ([]page.ValuePtr
 			Value: values[i],
 		}
 	}
-	ptrs, err := a.appendRecords(records)
+	var writer *lane
+	if serialBSON && len(records) == 1 {
+		writer = a.firstBSONProjectionWriter(len(values[0]))
+	}
+	var ptrs []page.ValuePtr
+	if writer != nil {
+		ptrs, err = a.appendRecordsToSingleLane(writer, records)
+	} else {
+		ptrs, err = a.appendRecords(records)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -63,6 +80,44 @@ func (a *cachingValueLogAppender) AppendValues(values [][]byte) ([]page.ValuePtr
 	return ptrs, nil
 }
 
+// The first append uses its ordinary RID stripe. Serial projections can reuse
+// that exact live writer while it is the only hot segment opened. A second
+// sequence (including a rotation or a preexisting newer segment) restores the
+// ordinary stripe selection for all subsequent writes.
+func (a *cachingValueLogAppender) firstBSONProjectionWriter(valueBytes int) *lane {
+	db := a.db
+	if !db.nativeRootValueLogAppendShared || db.valueLogGenerationHotTarget < defaultVlogGenerationHotTargetBytes ||
+		db.nativeRootValueLogAppendSeq.Load() != 1 {
+		return nil
+	}
+	for _, writer := range db.nativeRootValueLogAppendLanesSnapshot() {
+		if !writer.vlogMu.TryLock() {
+			continue
+		}
+		maxBytes := db.valueLogMaxSegmentBytesForLane(writer)
+		hasRoom := writer.vlogSeq == 1 && writer.vlog != nil && writer.vlogPath != "" &&
+			maxBytes >= defaultVlogGenerationHotTargetBytes &&
+			writer.vlog.Size() <= maxBytes-int64(valueBytes)-2*valuelog.HeaderSize
+		writer.vlogMu.Unlock()
+		if hasRoom && db.nativeRootValueLogAppendSeq.Load() == 1 {
+			// This probe only selects the writer. Append still checks its size
+			// under the same lock and handles any intervening rotation.
+			return writer
+		}
+	}
+	return nil
+}
+
+func (a *cachingValueLogAppender) appendRecordsToSingleLane(l *lane, records []valuelog.Record) ([]page.ValuePtr, error) {
+	ptrs, err := a.appendRecordsToLane(l, records)
+	if err != nil {
+		return nil, err
+	}
+	out := append([]page.ValuePtr(nil), ptrs...)
+	putValueLogPtrs(ptrs)
+	return out, nil
+}
+
 func (a *cachingValueLogAppender) appendRecords(records []valuelog.Record) ([]page.ValuePtr, error) {
 	laneCount := a.appendLaneCount()
 	if laneCount <= 1 || len(records) == 1 {
@@ -70,13 +125,7 @@ func (a *cachingValueLogAppender) appendRecords(records []valuelog.Record) ([]pa
 		if laneCount > 1 {
 			lane = a.appendLane(a.appendLaneIndexForRID(records[0].RID))
 		}
-		ptrs, err := a.appendRecordsToLane(lane, records)
-		if err != nil {
-			return nil, err
-		}
-		out := append([]page.ValuePtr(nil), ptrs...)
-		putValueLogPtrs(ptrs)
-		return out, nil
+		return a.appendRecordsToSingleLane(lane, records)
 	}
 
 	type laneBatch struct {

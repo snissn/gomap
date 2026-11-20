@@ -182,6 +182,21 @@ func (group *RootPublicationBuildGroup) NativeInlineThresholdForKey(key []byte) 
 // this group's segment ledger. Finalize includes those segments in its ordinary
 // dependency flush/sync; Close releases them on success and abandon alike.
 func (group *RootPublicationBuildGroup) AppendNativeValueLogValues(values [][]byte) ([]page.ValuePtr, error) {
+	return group.appendNativeValueLogValues(values, false)
+}
+
+// AppendNativeBSONValue appends a singleton from a serial plain BSON primary
+// projection under the same group custody as other physical values.
+func (group *RootPublicationBuildGroup) AppendNativeBSONValue(value []byte) (page.ValuePtr, error) {
+	values := [1][]byte{value}
+	ptrs, err := group.appendNativeValueLogValues(values[:], true)
+	if err != nil {
+		return page.ValuePtr{}, err
+	}
+	return ptrs[0], nil
+}
+
+func (group *RootPublicationBuildGroup) appendNativeValueLogValues(values [][]byte, serialBSON bool) ([]page.ValuePtr, error) {
 	if group == nil {
 		return nil, ErrNativeSemanticUnsupported
 	}
@@ -190,7 +205,7 @@ func (group *RootPublicationBuildGroup) AppendNativeValueLogValues(values [][]by
 	if group.db == nil || group.closed || group.failed || !group.writeLocked || !group.durablePublishLocked || group.tracker == nil {
 		return nil, ErrNativeSemanticUnsupported
 	}
-	ptrs, err := group.db.AppendValueLogValues(values)
+	ptrs, err := group.db.appendValueLogValues(values, serialBSON)
 	if err != nil {
 		group.failed = true
 		return nil, err

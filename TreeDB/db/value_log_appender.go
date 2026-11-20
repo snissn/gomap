@@ -146,6 +146,10 @@ func (db *DB) ReadValueLogRecordAppend(ptr page.ValuePtr, dst []byte) ([]byte, e
 // AppendValueLogValues appends values through the configured persistent value
 // log appender.
 func (db *DB) AppendValueLogValues(values [][]byte) ([]page.ValuePtr, error) {
+	return db.appendValueLogValues(values, false)
+}
+
+func (db *DB) appendValueLogValues(values [][]byte, serialBSON bool) ([]page.ValuePtr, error) {
 	if len(values) == 0 {
 		return nil, nil
 	}
@@ -161,7 +165,15 @@ func (db *DB) AppendValueLogValues(values [][]byte) ([]page.ValuePtr, error) {
 	if err := durabilitycut.EmitBasic(durabilitycut.BeforeDependencyAppend, durabilitycut.ResourceValueLog, db.dir); err != nil {
 		return nil, err
 	}
-	ptrs, err := appender.AppendValues(values)
+	appendValues := appender.AppendValues
+	if serialBSON {
+		if specialized, ok := appender.(interface {
+			AppendSerialBSONValues([][]byte) ([]page.ValuePtr, error)
+		}); ok {
+			appendValues = specialized.AppendSerialBSONValues
+		}
+	}
+	ptrs, err := appendValues(values)
 	if err != nil {
 		return nil, err
 	}

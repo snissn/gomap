@@ -196,6 +196,9 @@ func prepareNativeEngineBuildForCompaction(captured *nativeEngineVersion, basis 
 				b.failure = err
 				return false
 			}
+			meta := c.schema.meta
+			work.plainBSONPrimary = name == "primary" && nativeBSONSetMeta(meta) &&
+				len(meta.Indexes) == 0 && len(meta.TextIndexes) == 0 && len(meta.VectorIndexes) == 0
 			boundary := d.pending
 			if boundary == nil && d.captured != nil {
 				boundary = d.captured.source.root

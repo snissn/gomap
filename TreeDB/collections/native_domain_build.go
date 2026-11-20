@@ -31,15 +31,16 @@ var _ nativeOrderedRootBuilder = (*backenddb.RootPublicationBuildGroup)(nil)
 // fallible materialization. It owns no engine, current metadata, or group edge.
 // The first materialization failure is terminal on this exact original ledger.
 type nativeDomainBuild struct {
-	source   *nativeDomainState
-	roots    []*memtable.COWRoot
-	delta    *batch.Batch
-	root     uint64
-	failure  error
-	started  bool
-	complete bool
-	catalog  bool
-	refund   *cowbtree.OwnedMapRefund
+	source           *nativeDomainState
+	roots            []*memtable.COWRoot
+	delta            *batch.Batch
+	root             uint64
+	failure          error
+	started          bool
+	complete         bool
+	catalog          bool
+	plainBSONPrimary bool
+	refund           *cowbtree.OwnedMapRefund
 }
 
 // newNativeDomainBuild admits all temporary storage before allocating it.
@@ -131,6 +132,9 @@ func (b *nativeDomainBuild) materializeWithCatalog(group nativeOrderedRootBuilde
 }
 
 func (b *nativeDomainBuild) buildSource(group nativeOrderedRootBuilder, root *memtable.COWRoot, names *cowbtree.OwnedMap[string, *nativeCollectionState]) {
+	bsonPlacement, _ := group.(interface {
+		AppendNativeBSONValue([]byte) (page.ValuePtr, error)
+	})
 	root.ScanOwned(func(row memtable.COWRecord) bool {
 		key := nativeBorrowedStringBytes(row.Key)
 		switch {
@@ -165,14 +169,22 @@ func (b *nativeDomainBuild) buildSource(group nativeOrderedRootBuilder, root *me
 					b.failure = backenddb.ErrValueLogAppenderUnavailable
 					return false
 				}
-				var values [1][]byte
-				values[0] = value
-				ptrs, err := placement.AppendNativeValueLogValues(values[:])
-				if err != nil {
-					b.failure = err
+				var ptr page.ValuePtr
+				if b.plainBSONPrimary && bsonPlacement != nil {
+					ptr, b.failure = bsonPlacement.AppendNativeBSONValue(value)
+				} else {
+					var values [1][]byte
+					values[0] = value
+					var ptrs []page.ValuePtr
+					ptrs, b.failure = placement.AppendNativeValueLogValues(values[:])
+					if b.failure == nil {
+						ptr = ptrs[0]
+					}
+				}
+				if b.failure != nil {
 					return false
 				}
-				b.delta.AppendPointerViewNoTouchTrustedSortedWithRevision(key, ptrs[0], row.Revision)
+				b.delta.AppendPointerViewNoTouchTrustedSortedWithRevision(key, ptr, row.Revision)
 			} else {
 				b.failure = b.delta.AppendViewTrustedSortedUniqueWithRevision(key, value, row.Revision)
 			}
