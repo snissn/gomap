@@ -41,6 +41,13 @@ Range APIs return each document at its first matching encoded value; limits and
 truncation count distinct live documents. Operation-local deduplication and
 per-value encoding/extraction backing are admitted before allocation under the
 original native budget. Compound/typed-array eligibility is unchanged.
+Foreground staging for eligible single-valued indexes copies encoded values
+and references from reusable validation scratch into immutable chunks owned by
+the original transaction binding. The stage lease admits each rounded backing
+before allocation and keeps earlier chunks charged through cleanup while staged
+rows can borrow them. If admission refuses the bounded spare capacity, staging
+tries the exact backing needed for the next row. A refused refill leaves the
+staged rows and lease intact and fails the transaction before WAL acceptance.
 `UpdateBSONSet` retains top-level field validation and `_id` preservation; its
 canonical command contains the resulting full BSON replacement, using the
 existing update payload format. Conditional callback and BSON-set batches decline

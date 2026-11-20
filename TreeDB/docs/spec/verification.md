@@ -361,6 +361,16 @@ the owner test also checks final-close failure and durable value recovery.
 These controls do not extend ordinary ACK guarantees for the
 `command_wal_relaxed` or `no_wal_fast` profiles.
 
+`TestNativeJSONScalarStateReuseAcrossGrowthAndReopen` keeps earlier scalar rows
+staged through successive backing growth, replacement and deletion. It checks
+public document and ordered index contents before and after checkpoint, checked
+close and fresh reopen for JSON and BSON. Its public duplicate-ID and unique
+conflicts leave the neighboring row unpublished. `TestNativeJSONScalarStateCopyPartialAdmission`
+uses the original finite stage budget to exercise exact-size fallback and a
+refused refill. The refused update leaves the prior staged row and sequence
+intact. The failed commit publishes neither the staged row nor its indexes, and
+checked close balances the budget.
+
 ## Immutable COW cache qualification
 
 Exact-cut cold native catalog controls:
