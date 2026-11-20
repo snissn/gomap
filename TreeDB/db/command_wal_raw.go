@@ -413,6 +413,12 @@ func (intent *CommandWALIntent) staged() bool {
 	return intent != nil && intent.inner.staged
 }
 
+// ExperimentalStandaloneBSONSetWALDeltaEnabled reports writer opt-in after
+// verifying the fresh-store compatibility gate.
+func (db *DB) ExperimentalStandaloneBSONSetWALDeltaEnabled() bool {
+	return db != nil && db.experimentalStandaloneBSONSetWALDelta
+}
+
 func (db *DB) CommandWALEnabled() bool {
 	return db != nil && db.commandWAL
 }
@@ -1188,6 +1194,11 @@ func (db *DB) NewCommandWALIntent(kind commitlog.CommandKind, scope commitlog.Co
 	}
 	if db.durability == DurabilityWALOffRelaxed {
 		return nil, fmt.Errorf("%w: WAL-off durability is incompatible with command WAL", ErrCommandWALUnsupported)
+	}
+	if kind == commitlog.CommandKindCollectionUpdateBatchByID &&
+		payloadFormat == commitlog.PayloadFormatCollectionUpdateBatchByIDV1 &&
+		commitlog.IsCollectionBSONSetDelta(payload) && !db.experimentalStandaloneBSONSetWALDelta {
+		return nil, fmt.Errorf("%w: BSON $set WAL delta requires an opted-in standalone writer", ErrCommandWALUnsupported)
 	}
 	maxEntryRevision, err := maxEntryRevisionFromCommandWALPayload(kind, scope, payloadFormat, payload)
 	if err != nil {

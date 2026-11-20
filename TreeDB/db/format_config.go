@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/snissn/gomap/TreeDB/internal/atomicfile"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 )
 
@@ -23,6 +24,7 @@ const (
 	RequiredFeatureDependencyDirectoryV2 = "dependency_directory_v2"
 	RequiredFeatureFreelistPatriciaV2    = "freelist_patricia_v2"
 	RequiredFeatureSystemPagerLeaves     = "system_pager_leaves"
+	RequiredFeatureBSONSetWALDelta       = "standalone_bson_set_wal_delta_v1"
 	// RequiredFeatureCommandWALV1 is retained as a source-compatibility alias
 	// during the pre-alpha cutover. Newly persisted configs always require V2.
 	RequiredFeatureCommandWALV1       = RequiredFeatureCommandWALV2
@@ -92,6 +94,15 @@ func (cfg FormatConfig) RequiresFreelistPatriciaV2() bool {
 func (cfg FormatConfig) requiresSystemPagerLeaves() bool {
 	for _, feature := range cfg.RequiredFeatures {
 		if normalizeFormatConfigMode(feature) == RequiredFeatureSystemPagerLeaves {
+			return true
+		}
+	}
+	return false
+}
+
+func (cfg FormatConfig) requiresBSONSetWALDelta() bool {
+	for _, feature := range cfg.RequiredFeatures {
+		if normalizeFormatConfigMode(feature) == RequiredFeatureBSONSetWALDelta {
 			return true
 		}
 	}
@@ -483,6 +494,27 @@ func SaveFormatConfig(dir string, cfg FormatConfig) error {
 	if ok && existing.RequiresFreelistPatriciaV2() && !cfg.RequiresFreelistPatriciaV2() {
 		return fmt.Errorf("%w: cannot remove freelist_patricia_v2", ErrLegacyFormatRebuildRequired)
 	}
+	if ok && existing.requiresBSONSetWALDelta() && !cfg.requiresBSONSetWALDelta() {
+		return fmt.Errorf("%w: cannot remove %s", ErrLegacyFormatRebuildRequired, RequiredFeatureBSONSetWALDelta)
+	}
+	if cfg.requiresBSONSetWALDelta() && (!cfg.RequiresCommandWALV2() || cfg.DurabilityProfile != ProfileCommandWALRelaxed) {
+		return fmt.Errorf("%w: %s requires relaxed command WAL V2", ErrLegacyFormatRebuildRequired, RequiredFeatureBSONSetWALDelta)
+	}
+	if cfg.requiresBSONSetWALDelta() && (!ok || !existing.requiresBSONSetWALDelta()) {
+		if !cfg.RelaxedStandaloneWALStream || !isExt4WALDir(dir) {
+			return fmt.Errorf("%w: %s requires an ext4 standalone WAL stream", ErrLegacyFormatRebuildRequired, RequiredFeatureBSONSetWALDelta)
+		}
+		if info, statErr := os.Stat(filepath.Join(dir, indexFileName)); statErr == nil {
+			if info.Size() != 0 {
+				return fmt.Errorf("%w: %s requires a new store", ErrLegacyFormatRebuildRequired, RequiredFeatureBSONSetWALDelta)
+			}
+		} else if !os.IsNotExist(statErr) {
+			return statErr
+		}
+		if err := ValidateCommandWALActivationClean(dir); err != nil {
+			return err
+		}
+	}
 	if ok && existing.requiresSystemPagerLeaves() && !cfg.requiresSystemPagerLeaves() {
 		return fmt.Errorf("%w: cannot remove %s", ErrLegacyFormatRebuildRequired, RequiredFeatureSystemPagerLeaves)
 	}
@@ -539,6 +571,9 @@ func writeFormatConfig(dir string, cfg FormatConfig) error {
 	if err != nil {
 		return err
 	}
+	if cfg.requiresBSONSetWALDelta() {
+		return atomicfile.WriteDurable(path, data, 0o600)
+	}
 	return writeFileAtomic(path, data, 0o600)
 }
 
@@ -559,21 +594,21 @@ func commandWALFormatNeedsActivation(opts Options) (bool, error) {
 func saveFreshFreelistFormatConfig(opts Options, nativeSemanticOwner bool) error {
 	cfg, err := formatConfigFromOptionsPreservingRequiredFeatures(opts)
 	if err == nil {
+		if opts.ExperimentalStandaloneBSONSetWALDelta {
+			cfg.RequiredFeatures = appendRequiredFormatFeature(cfg.RequiredFeatures, RequiredFeatureBSONSetWALDelta)
+		}
 		if opts.FreshSystemPagerLeaves && opts.IndexOuterLeavesInValueLog {
 			cfg.RequiredFeatures = appendRequiredFormatFeature(cfg.RequiredFeatures, RequiredFeatureSystemPagerLeaves)
 		}
-		if opts.requestsRelaxedStandaloneWALStream(nativeSemanticOwner) {
-			if dir, openErr := os.Open(WALDirPath(opts.Dir)); openErr == nil {
-				ext4 := commitlog.IsExt4WALFilesystem(dir)
-				_ = dir.Close()
-				if ext4 {
-					cfg.RelaxedStandaloneWALStream = true
-				}
-			}
+		if opts.requestsRelaxedStandaloneWALStream(nativeSemanticOwner) && isExt4WALDir(opts.Dir) {
+			cfg.RelaxedStandaloneWALStream = true
+		}
+		if opts.ExperimentalStandaloneBSONSetWALDelta && !cfg.RelaxedStandaloneWALStream {
+			return errors.New("treedb: BSON $set WAL delta requires the ext4 standalone WAL stream")
 		}
 		return SaveFormatConfig(opts.Dir, cfg)
 	}
-	if !opts.IgnoreFormatConfig {
+	if !opts.IgnoreFormatConfig || opts.ExperimentalStandaloneBSONSetWALDelta {
 		return err
 	}
 	if gateErr := ValidateDurabilityProfileGate(opts.Dir, opts.ResolvedProfile); gateErr != nil {
@@ -605,6 +640,15 @@ func saveFreshFreelistFormatConfig(opts Options, nativeSemanticOwner bool) error
 		}
 	}
 	return writeFormatConfig(opts.Dir, cfg)
+}
+
+func isExt4WALDir(dir string) bool {
+	wal, err := os.Open(WALDirPath(dir))
+	if err != nil {
+		return false
+	}
+	isExt4 := commitlog.IsExt4WALFilesystem(wal)
+	return wal.Close() == nil && isExt4
 }
 
 func (opts Options) requestsRelaxedStandaloneWALStream(nativeSemanticOwner bool) bool {
@@ -767,7 +811,7 @@ func validateRequiredFormatFeatures(features []string) error {
 		}
 		seen[feature] = struct{}{}
 		switch feature {
-		case RequiredFeatureCommandWALV1, RequiredFeatureDependencyDirectoryV2, RequiredFeatureFreelistPatriciaV2, RequiredFeatureSystemPagerLeaves:
+		case RequiredFeatureCommandWALV1, RequiredFeatureDependencyDirectoryV2, RequiredFeatureFreelistPatriciaV2, RequiredFeatureSystemPagerLeaves, RequiredFeatureBSONSetWALDelta:
 		case legacyRequiredFeatureCommandWALV1:
 			return fmt.Errorf("%w: %s", commitlog.ErrCommandWALV1RebuildRequired, raw)
 		default:

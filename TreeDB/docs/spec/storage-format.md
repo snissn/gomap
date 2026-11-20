@@ -2990,6 +2990,20 @@ compressed records. Production V2 journals disable outer segment compression;
 a later format may enable it only after introducing and verifying framing that
 keeps the required terminal identity prefix uncompressed.
 
+The standalone BSON $set experiment uses kind 102, format family 5,
+payload version 3, and critical feature bit 15. An earlier V2 reader
+refuses that bit even in the identifiable header of a partial stream record.
+A complete envelope must pair the bit with that payload version and contain
+no external references, preconditions, or result assertions.
+
+The little-endian payload contains the collection batch header (version 3,
+namespace, and count 1), then the typed ID length (u32), field name length
+(u16), BSON type byte (5), raw replacement length (u32), nonzero collection
+incarnation (u64), SHA-256 of the complete prior BSON, SHA-256 of the complete
+result BSON, typed ID bytes, field name bytes, and raw BSON binary value bytes
+(length, generic subtype 0, and data). Version 1 full postimages remain the
+default and fallback. Cell, leaf, page, and value-log formats are unchanged.
+
 V2 keeps the 72-byte envelope above and assigns the former reserved header
 field at bytes `[54,56)` to a little-endian durability class:
 

@@ -97,6 +97,9 @@ type StandaloneOptions struct {
 	InsertCoalescingIdleTTL     time.Duration
 	ClusterSubmitter            treenativewire.ClusterSubmitter
 	ClusterCatalogVersion       ClusterCatalogVersionProvider
+	// ExperimentalBSONSetWALDelta opts a new relaxed standalone BSON store
+	// into the typed binary SET delta writer.
+	ExperimentalBSONSetWALDelta bool
 
 	// TLSCertFile and TLSKeyFile enable TLS for the standalone listener. They
 	// must be supplied together. TLSCAFile optionally supplies client-CA roots;
@@ -163,6 +166,9 @@ func NormalizeStandaloneOptions(opts StandaloneOptions) (StandaloneOptions, erro
 		return opts, err
 	}
 	opts.DefaultCollectionOptions.DocumentFormat = format
+	if opts.ExperimentalBSONSetWALDelta && (!opts.usesRelaxedStandaloneBSONPolicy() || opts.DefaultCollectionOptions.ColumnStore != nil) {
+		return opts, errors.New("mongo gateway standalone: experimental BSON SET WAL delta requires relaxed standalone BSON")
+	}
 
 	dataRoot, err := normalizeStandaloneRootStoragePolicy(opts.DefaultCollectionOptions.DataRootStoragePolicy)
 	if err != nil {
@@ -251,6 +257,7 @@ func OpenStandaloneServer(opts StandaloneOptions) (*StandaloneServer, error) {
 	freshOrdinaryBSON := normalized.usesRelaxedStandaloneBSONPolicy() && normalized.DefaultCollectionOptions.ColumnStore == nil
 	treeOpts.FreshSystemPagerLeaves = freshOrdinaryBSON
 	treeOpts.FreshRelaxedStandaloneWALStream = freshOrdinaryBSON
+	treeOpts.ExperimentalStandaloneBSONSetWALDelta = normalized.ExperimentalBSONSetWALDelta
 	// Own the public DB for the entire server lifetime. The semantic backend
 	// borrows its complete COW cut; it must never be independently closed.
 	database, err := treedb.Open(treeOpts)

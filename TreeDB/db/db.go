@@ -615,6 +615,8 @@ type DB struct {
 	testCommandWALRecoveryFailAfterLSN             atomic.Uint64
 	testCommandWALRecoveryFailBeforeDependencySync atomic.Bool
 	commandWALReplayNativeCollectionLayout         bool
+	experimentalStandaloneBSONSetWALDelta          bool
+	requiresBSONSetWALDelta                        bool
 	commandWALReplayLSN                            atomic.Uint64
 	commandWALReplayToken                          atomic.Uint64
 	commandWALReplayTokenSeq                       atomic.Uint64
@@ -1372,6 +1374,10 @@ type Options struct {
 	// FreshRelaxedStandaloneWALStream requests the ext4 stream creation policy
 	// for a new native standalone relaxed gateway store.
 	FreshRelaxedStandaloneWALStream bool
+	// ExperimentalStandaloneBSONSetWALDelta writes a fresh-store required
+	// feature for the opt-in, relaxed, native BSON journal producer. Omitting
+	// it on a supported reopen stops writing delta records.
+	ExperimentalStandaloneBSONSetWALDelta bool
 	// IndexAdaptiveLeafEncoding enables per-page adaptive selection of leaf
 	// encoding flags using deterministic heuristics from key/value shape.
 	//
@@ -2574,6 +2580,10 @@ func open(opts Options, nativeSemanticOwner bool) (*DB, error) {
 	if err := validateOptions(opts); err != nil {
 		return nil, err
 	}
+	if opts.ExperimentalStandaloneBSONSetWALDelta &&
+		(opts.IgnoreFormatConfig || opts.ReadOnly || !opts.requestsRelaxedStandaloneWALStream(nativeSemanticOwner)) {
+		return nil, ErrNativeSemanticUnsupported
+	}
 	patriciaFeature, err := validateFreelistTopologyGateV2(opts.Dir)
 	if err != nil {
 		return nil, err
@@ -2770,6 +2780,27 @@ func openWithLock(opts Options, lock *lockfile.Lock, nativeSemanticOwner bool) (
 	if opts.ReadOnly {
 		return nil, errors.New("BUG: treedb: openWithLock called with read-only options")
 	}
+	requiresBSONSetWALDelta, err := requiredFormatFeatureEnabled(opts.Dir, RequiredFeatureBSONSetWALDelta)
+	if err != nil {
+		return nil, err
+	}
+	if opts.ExperimentalStandaloneBSONSetWALDelta {
+		cfg, _, err := LoadFormatConfig(opts.Dir)
+		if err != nil {
+			return nil, err
+		}
+		if !cfg.requiresBSONSetWALDelta() {
+			return nil, fmt.Errorf("%w: %s requires a new store", ErrLegacyFormatRebuildRequired, RequiredFeatureBSONSetWALDelta)
+		}
+		if !cfg.RelaxedStandaloneWALStream || !isExt4WALDir(opts.Dir) {
+			return nil, errors.New("treedb: BSON $set WAL delta requires the ext4 standalone WAL stream")
+		}
+		// Re-fence an existing marker before a writer can use it. A prior
+		// activation may have reached rename but failed the directory sync.
+		if err := writeFormatConfig(opts.Dir, cfg); err != nil {
+			return nil, err
+		}
+	}
 	if err := recoverIndexSwapWithRegistryV6(opts.Dir, valueLogIdentityPins, lock); err != nil {
 		return nil, err
 	}
@@ -2847,6 +2878,8 @@ func openWithLock(opts Options, lock *lockfile.Lock, nativeSemanticOwner bool) (
 	*db = DB{
 		ownedFinishGuardV6:                     db.ownedFinishGuardV6,
 		commandWALReplayNativeCollectionLayout: nativeSemanticOwner,
+		experimentalStandaloneBSONSetWALDelta:  opts.ExperimentalStandaloneBSONSetWALDelta,
+		requiresBSONSetWALDelta:                requiresBSONSetWALDelta,
 		dependencyDirectoryRequiredFeature:     requiresDependencyDirectory,
 		physicalSnapshotSideStoreCapture:       opts.PhysicalSnapshotSideStoreCapture,
 
@@ -3051,6 +3084,15 @@ func openWithLock(opts Options, lock *lockfile.Lock, nativeSemanticOwner bool) (
 			return nil, err
 		}
 		db.commandJournal = journal
+		if opts.ExperimentalStandaloneBSONSetWALDelta {
+			snapshot, err := journal.CaptureCleanupSnapshot()
+			if err != nil {
+				return nil, err
+			}
+			if snapshot.FixedContainer {
+				return nil, errors.New("treedb: BSON $set WAL delta writer requires the stream container")
+			}
+		}
 		db.commandWALSessionAppliedLSN = db.meta.AppliedCommandLSN
 		// replayCommandWALIntoBackend records the physically classified durable
 		// frontier. A recovered durable root may advance AppliedCommandLSN beyond

@@ -58,6 +58,37 @@ command WAL format is allowed to break compatibility with the current raw
 `commitlog.Record` batch format; reducing implementation churn and keeping one
 command format is preferred over preserving old WAL payload readers.
 
+### Experimental standalone BSON $set WAL records
+
+The gateway flag `-experimental-bson-set-wal-delta` is off by default.
+It accepts a new, exclusively controlled standalone store using the relaxed
+BSON command-WAL profile and the native ext4 WAL stream. Existing unmarked
+stores cannot opt in, and fixed containers and clustered writers are outside
+this option. Do not admit older processes or tools to a directory while it is
+being created or initialized.
+
+A qualifying single-row, single-field update of an existing top-level,
+same-size generic BSON binary value may record the field replacement, the
+collection incarnation, and full prior and result digests. The collection
+must use ordinary BSON without secondary, text, vector, or column indexes.
+Other writes use their existing encoding. Foreground publication retains the
+full typed BSON and uses the original durability and acknowledgement rules.
+Recovery verifies the actual prior row and incarnation at each original LSN
+before publishing the verified, reconstructed postimage. The existing
+durable-prefix, fallback-root coverage, and WAL retirement rules still apply.
+
+Before the first eligible write the DB durably installs
+`standalone_bson_set_wal_delta_v1` in `format.json` and fences its containing
+directory. A writer re-establishes the marker fence when reopening. Normal
+older opens, including read-only and format-override modes, reject the
+required feature before serving or repairing the WAL. Upgraded binaries can
+recover marked stores with the writer flag omitted. Physical archives retain
+the marker and require an upgraded reader. Retiring all delta WAL does not
+remove the marker or enable an old binary. To return to an older binary,
+restore a verified pre-enable backup into a separate directory or use an
+upgraded reader for a typed logical export into a new compatible store.
+Use upgraded tools for raw inspection or repair of a marked store.
+
 ## 2. Design Goals
 
 1. Keep the WAL simple: append ordered command frames, replay only after crash.

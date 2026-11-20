@@ -3496,10 +3496,14 @@ func decodeCollectionBatchHeader(payload []byte) (collection string, count uint3
 }
 
 func parseCollectionBatchHeader(payload []byte) (collection []byte, count uint32, off int, err error) {
+	return parseCollectionBatchHeaderVersion(payload, 1)
+}
+
+func parseCollectionBatchHeaderVersion(payload []byte, version uint16) (collection []byte, count uint32, off int, err error) {
 	if len(payload) < 10 {
 		return nil, 0, 0, ErrCorrupt
 	}
-	if binary.LittleEndian.Uint16(payload[0:2]) != 1 {
+	if binary.LittleEndian.Uint16(payload[0:2]) != version {
 		return nil, 0, 0, ErrCommandWALUnsupportedVersion
 	}
 	nameLen := binary.LittleEndian.Uint32(payload[2:6])

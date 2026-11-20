@@ -1014,6 +1014,7 @@ func openValidatedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 		dictOpts.IndexOuterLeavesInValueLog = false
 		dictOpts.FreshSystemPagerLeaves = false
 		dictOpts.FreshRelaxedStandaloneWALStream = false
+		dictOpts.ExperimentalStandaloneBSONSetWALDelta = false
 		dictOpts.DisableBackgroundPrune = true
 		dictOpts.ValueLog.DictLookup = nil
 		dictOpts.ValueLog.DictTrain = TrainConfig{TrainBytes: -1}
@@ -1073,6 +1074,7 @@ func openValidatedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 		templateOpts.IndexOuterLeavesInValueLog = false
 		templateOpts.FreshSystemPagerLeaves = false
 		templateOpts.FreshRelaxedStandaloneWALStream = false
+		templateOpts.ExperimentalStandaloneBSONSetWALDelta = false
 		templateOpts.ValueLog.DictLookup = nil
 		templateOpts.ValueLog.DictTrain = TrainConfig{TrainBytes: -1}
 		// templatedb uses batch.Set for small routing/index entries. Do not

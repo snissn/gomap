@@ -96,7 +96,11 @@ func (c *Collection) nativeUpdateBatchModeObserved(items []UpdateBatchItem, mode
 		}
 		return make([]UpdateBatchResult, count), false, nil
 	}
-	results, err = tx.UpdateBatch(items)
+	var deltaField *BSONSetField
+	if len(bsonItems) == 1 && len(bsonItems[0].Fields) == 1 && c.nativeJSON.db.ExperimentalStandaloneBSONSetWALDeltaEnabled() {
+		deltaField = &bsonItems[0].Fields[0]
+	}
+	results, err = tx.updateBatchInto("", items, deltaField)
 	if err != nil {
 		return nil, false, err
 	}

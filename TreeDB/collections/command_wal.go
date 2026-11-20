@@ -660,6 +660,9 @@ func replayCollectionUpdateBatchByIDCommandWAL(db *backenddb.DB, env commitlog.C
 		}
 		return collection.reconcileVectorPartitionLiveReplay(ids)
 	}
+	if env.PayloadFormat == commitlog.PayloadFormatCollectionUpdateBatchByIDV1 && commitlog.IsCollectionBSONSetDelta(env.Payload) {
+		return replayBSONSetWALDelta(db, manager, env)
+	}
 	payload, err := commitlog.DecodeCollectionUpdateBatchByIDPayload(env.Payload)
 	if err != nil {
 		return err

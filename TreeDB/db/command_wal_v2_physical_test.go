@@ -30,7 +30,7 @@ func TestReadCommandWALV2PhysicalFramesAcrossLanes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	frames, err := readCommandWALV2PhysicalFrames(segments, 0, 0)
+	frames, err := readCommandWALV2PhysicalFrames(segments, 0, 0, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +67,7 @@ func TestReadCommandWALV2RejectsNonIncreasingPhysicalSegmentBeforeRepair(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := readCommandWALV2PhysicalFrames(segments, 0, 0); !errors.Is(err, commitlog.ErrCommandWALDuplicateLSN) {
+	if _, err := readCommandWALV2PhysicalFrames(segments, 0, 0, false); !errors.Is(err, commitlog.ErrCommandWALDuplicateLSN) {
 		t.Fatalf("physical scan error=%v, want ErrCommandWALDuplicateLSN before global sorting", err)
 	}
 	if after := mustReadFile(t, path); !reflect.DeepEqual(after, before) {
@@ -90,7 +90,7 @@ func TestReadCommandWALV2IncompleteRelaxedTailFailsBelowLaterBarrier(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	frames, err := readCommandWALV2PhysicalFrames(segments, 0, 0)
+	frames, err := readCommandWALV2PhysicalFrames(segments, 0, 0, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +144,7 @@ func TestReadCommandWALV2TailWithoutCompleteClassFailsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = readCommandWALV2PhysicalFrames(segments, 0, 0)
+	_, err = readCommandWALV2PhysicalFrames(segments, 0, 0, false)
 	if !errors.Is(err, commitlog.ErrCommandWALV2TailIdentityUnavailable) || !errors.Is(err, commitlog.ErrCorrupt) {
 		t.Fatalf("short tail error=%v, want identity-unavailable corruption", err)
 	}
@@ -165,7 +165,7 @@ func TestReadCommandWALV2TerminalTailCriticalFeatureFlagFailsClosed(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = readCommandWALV2PhysicalFrames(segments, 0, 0)
+	_, err = readCommandWALV2PhysicalFrames(segments, 0, 0, false)
 	if !errors.Is(err, commitlog.ErrCommandWALUnsupportedCriticalFlag) {
 		t.Fatalf("terminal tail error=%v, want ErrCommandWALUnsupportedCriticalFlag", err)
 	}
@@ -717,7 +717,7 @@ func TestRepairCommandWALV2SuffixPowerLossVariantsDriveFreshRescanRetry(t *testi
 			if err != nil {
 				t.Fatal(err)
 			}
-			frames, err := readCommandWALV2PhysicalFrames(segments, 0, 0)
+			frames, err := readCommandWALV2PhysicalFrames(segments, 0, 0, false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -812,7 +812,7 @@ func classifyCommandWALV2Directory(t *testing.T, walDir string) commandWALV2Clas
 	if err != nil {
 		t.Fatal(err)
 	}
-	frames, err := readCommandWALV2PhysicalFrames(segments, 0, 0)
+	frames, err := readCommandWALV2PhysicalFrames(segments, 0, 0, false)
 	if err != nil {
 		t.Fatal(err)
 	}

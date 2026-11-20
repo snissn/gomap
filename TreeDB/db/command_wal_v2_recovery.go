@@ -48,7 +48,7 @@ type CommandWALV2RecoveryDiagnostic struct {
 // across lanes and retains exact record boundaries for deterministic repair.
 // A terminal partial record is tolerated only in the active segment for its
 // lane; any resulting LSN hole is decided later against the durable horizon.
-func readCommandWALV2PhysicalFrames(segments []logSegment, appliedLSN uint64, maxSegmentBytes int64) ([]commandWALV2PhysicalFrame, error) {
+func readCommandWALV2PhysicalFrames(segments []logSegment, appliedLSN uint64, maxSegmentBytes int64, allowBSONSetDelta bool) ([]commandWALV2PhysicalFrame, error) {
 	activeByLane := commandWALActiveSeqByLane(segments)
 	frames := make([]commandWALV2PhysicalFrame, 0, 64)
 	for _, segment := range segments {
@@ -64,7 +64,11 @@ func readCommandWALV2PhysicalFrames(segments []logSegment, appliedLSN uint64, ma
 		}
 		var previousLSN uint64
 		havePreviousLSN := false
-		acceptPhysicalLSN := func(lsn uint64) error {
+		acceptPhysicalFrame := func(env commitlog.CommandEnvelope) error {
+			if env.UsesBSONSetWALDelta() && !allowBSONSetDelta {
+				return fmt.Errorf("%w: %s requires the store feature marker", ErrLegacyFormatRebuildRequired, RequiredFeatureBSONSetWALDelta)
+			}
+			lsn := env.LSN
 			if havePreviousLSN && lsn <= previousLSN {
 				return fmt.Errorf("%w: segment=%s previous=%d current=%d", commitlog.ErrCommandWALDuplicateLSN, filepath.Base(segment.path), previousLSN, lsn)
 			}
@@ -80,7 +84,7 @@ func readCommandWALV2PhysicalFrames(segments []logSegment, appliedLSN uint64, ma
 			}
 			env, readErr := reader.ReadCommandFrameV2()
 			if readErr == nil {
-				if lsnErr := acceptPhysicalLSN(env.LSN); lsnErr != nil {
+				if lsnErr := acceptPhysicalFrame(env); lsnErr != nil {
 					_ = reader.Close()
 					return nil, lsnErr
 				}
@@ -114,7 +118,7 @@ func readCommandWALV2PhysicalFrames(segments []logSegment, appliedLSN uint64, ma
 					_ = reader.Close()
 					return nil, commitlog.ErrCorrupt
 				}
-				if lsnErr := acceptPhysicalLSN(partial.Envelope.LSN); lsnErr != nil {
+				if lsnErr := acceptPhysicalFrame(partial.Envelope); lsnErr != nil {
 					_ = reader.Close()
 					return nil, lsnErr
 				}
@@ -132,7 +136,7 @@ func readCommandWALV2PhysicalFrames(segments []logSegment, appliedLSN uint64, ma
 					_ = reader.Close()
 					return nil, inspectErr
 				}
-				if lsnErr := acceptPhysicalLSN(tailEnv.LSN); lsnErr != nil {
+				if lsnErr := acceptPhysicalFrame(tailEnv); lsnErr != nil {
 					_ = reader.Close()
 					return nil, lsnErr
 				}

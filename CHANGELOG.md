@@ -5,6 +5,11 @@ See `docs/API_STABILITY.md` for what is intended to be stable for downstream use
 
 ## Unreleased
 
+- The standalone Mongo gateway offers an experimental, default-off
+  `-experimental-bson-set-wal-delta` flag for fresh relaxed BSON stores on
+  the ext4 WAL stream. The store retains a required format marker after
+  command retirement and needs an upgraded reader for physical restore.
+
 - The standalone Mongo gateway now defaults to the shared immutable COW engine
   through ordinary collection APIs. This pre-alpha cutover refuses legacy
   catalogs without logical incarnation records and unsupported native domains

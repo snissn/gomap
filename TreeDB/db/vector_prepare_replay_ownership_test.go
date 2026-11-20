@@ -96,7 +96,7 @@ func TestVectorPrepareReplayOwnershipActualFrameV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	frames, err := readCommandWALV2PhysicalFrames(segments, 0, 0)
+	frames, err := readCommandWALV2PhysicalFrames(segments, 0, 0, false)
 	if err != nil {
 		t.Fatal(err)
 	}

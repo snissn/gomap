@@ -31,7 +31,7 @@ func TestCommandWALV2RepairPreservesAppliedPrefixOnNonAnchorLane(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		frames, err := readCommandWALV2PhysicalFrames(segments, applied, 0)
+		frames, err := readCommandWALV2PhysicalFrames(segments, applied, 0, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -123,7 +123,7 @@ func TestCommandWALV2RepairPreservesFixedLogicalAppliedPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	frames, err := readCommandWALV2PhysicalFrames(segments, 2, 0)
+	frames, err := readCommandWALV2PhysicalFrames(segments, 2, 0, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +142,7 @@ func TestCommandWALV2RepairPreservesFixedLogicalAppliedPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	kept, err := readCommandWALV2PhysicalFrames(segments, 1, 0)
+	kept, err := readCommandWALV2PhysicalFrames(segments, 1, 0, false)
 	if err != nil || len(kept) != 1 || kept[0].Envelope.LSN != 2 || kept[0].Coordinate.EndOffset != prefixBytes {
 		t.Fatalf("repaired fixed logical prefix: frames=%+v error=%v", kept, err)
 	}

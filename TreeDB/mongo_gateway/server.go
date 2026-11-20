@@ -54,6 +54,8 @@ type cliConfig struct {
 	tlsHandshakeTimeout      time.Duration
 	allowInsecureRemote      bool
 	authenticationEnabled    bool
+
+	experimentalBSONSetWALDelta bool
 }
 
 func main() {
@@ -216,6 +218,7 @@ func parseFlags(args []string, stderr io.Writer) (cliConfig, error) {
 	fs.DurationVar(&cfg.tlsHandshakeTimeout, "tls-handshake-timeout", 0, "TLS handshake timeout; 0 uses 10s")
 	fs.BoolVar(&cfg.allowInsecureRemote, "allow-insecure-remote", false, "allow plaintext non-loopback listen (unsafe; emits warning)")
 	fs.BoolVar(&cfg.authenticationEnabled, "authentication", false, "enable SCRAM-SHA-256 authentication (bootstrap users through the library API before serving)")
+	fs.BoolVar(&cfg.experimentalBSONSetWALDelta, "experimental-bson-set-wal-delta", false, "opt a new relaxed standalone BSON store into the experimental WAL delta dialect")
 	if err := fs.Parse(args); err != nil {
 		return cfg, err
 	}
@@ -310,6 +313,7 @@ func standaloneOptions(cfg cliConfig) mongogateway.StandaloneOptions {
 		TLSHandshakeTimeout:         cfg.tlsHandshakeTimeout,
 		AllowInsecureRemote:         cfg.allowInsecureRemote,
 		AuthenticationEnabled:       cfg.authenticationEnabled,
+		ExperimentalBSONSetWALDelta: cfg.experimentalBSONSetWALDelta,
 	}
 }
 

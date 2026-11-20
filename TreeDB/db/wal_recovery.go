@@ -331,7 +331,7 @@ func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes 
 	db.mu.RLock()
 	applied := db.meta.AppliedCommandLSN
 	db.mu.RUnlock()
-	physicalFrames, err := readCommandWALV2PhysicalFrames(segments, applied, maxSegmentBytes)
+	physicalFrames, err := readCommandWALV2PhysicalFrames(segments, applied, maxSegmentBytes, db.requiresBSONSetWALDelta)
 	if err != nil {
 		return err
 	}

@@ -704,7 +704,11 @@ func (t *NativeJSONTxn) stageNativeInsert(g *nativeJSONTxnBinding, ids, document
 func (t *NativeJSONTxn) UpdateBatch(items []UpdateBatchItem) ([]UpdateBatchResult, error) {
 	return t.UpdateBatchInto("", items)
 }
-func (t *NativeJSONTxn) UpdateBatchInto(name string, items []UpdateBatchItem) (result []UpdateBatchResult, resultErr error) {
+func (t *NativeJSONTxn) UpdateBatchInto(name string, items []UpdateBatchItem) ([]UpdateBatchResult, error) {
+	return t.updateBatchInto(name, items, nil)
+}
+
+func (t *NativeJSONTxn) updateBatchInto(name string, items []UpdateBatchItem, deltaField *BSONSetField) (result []UpdateBatchResult, resultErr error) {
 	if t == nil {
 		return nil, backenddb.ErrClosed
 	}
@@ -844,6 +848,11 @@ func (t *NativeJSONTxn) UpdateBatchInto(name string, items []UpdateBatchItem) (r
 			row.current = document
 			row.currentState = state
 			result[changedIndices[i]].Modified = true
+		}
+	}
+	if deltaField != nil && len(docs) == 1 && t.count == 1 && !t.rawStaged && len(t.members) == 0 && bsonSetWALDeltaMeta(&g.probe.meta) {
+		if appended, err := t.tryAppendBSONSetWALDelta(g, docs[0].ID, *deltaField); appended || err != nil {
+			return result, err
 		}
 	}
 	if err = t.admitMemberPayload(g, docs, nil); err != nil {

@@ -164,8 +164,11 @@ func prepareCommandFrameV2ForEncode(env CommandEnvelope) (CommandEnvelope, []Com
 	if env.Version != CommandFrameVersionV2 {
 		return CommandEnvelope{}, nil, ErrCommandWALUnsupportedVersion
 	}
-	if env.FeatureFlags&commandWALCriticalFlagsMask != 0 {
+	if env.FeatureFlags&(commandWALCriticalFlagsMask&^commandWALBSONSetDeltaFlag) != 0 {
 		return CommandEnvelope{}, nil, ErrCommandWALUnsupportedCriticalFlag
+	}
+	if isCollectionBSONSetDelta(env.Kind, env.PayloadFormat, env.Payload) {
+		env.FeatureFlags |= commandWALBSONSetDeltaFlag
 	}
 	if env.Kind == CommandKindRawKVBatch && env.Payload == nil {
 		payload, err := EncodeRawKVBatchPayload(nil)
@@ -223,7 +226,7 @@ func decodeCommandFrameV2(frame []byte, borrowPayload bool) (CommandEnvelope, er
 	env.Kind = CommandKind(binary.LittleEndian.Uint16(frame[8:10]))
 	env.Scope = CommandScope(binary.LittleEndian.Uint16(frame[10:12]))
 	env.FeatureFlags = binary.LittleEndian.Uint64(frame[12:20])
-	if env.FeatureFlags&commandWALCriticalFlagsMask != 0 {
+	if env.FeatureFlags&(commandWALCriticalFlagsMask&^commandWALBSONSetDeltaFlag) != 0 {
 		return env, ErrCommandWALUnsupportedCriticalFlag
 	}
 	env.LSN = binary.LittleEndian.Uint64(frame[20:28])
@@ -391,7 +394,7 @@ func decodeCommandFrameV2TailIdentity(header []byte) (CommandEnvelope, error) {
 	env.Kind = CommandKind(binary.LittleEndian.Uint16(header[8:10]))
 	env.Scope = CommandScope(binary.LittleEndian.Uint16(header[10:12]))
 	env.FeatureFlags = binary.LittleEndian.Uint64(header[12:20])
-	if env.FeatureFlags&commandWALCriticalFlagsMask != 0 {
+	if env.FeatureFlags&(commandWALCriticalFlagsMask&^commandWALBSONSetDeltaFlag) != 0 {
 		return env, ErrCommandWALUnsupportedCriticalFlag
 	}
 	env.LSN = binary.LittleEndian.Uint64(header[20:28])
@@ -399,6 +402,10 @@ func decodeCommandFrameV2TailIdentity(header []byte) (CommandEnvelope, error) {
 	env.PayloadFormat = PayloadFormat(binary.LittleEndian.Uint16(header[52:54]))
 	env.DurabilityClass = CommandDurabilityClass(binary.LittleEndian.Uint16(header[54:56]))
 	if env.LSN == 0 || !validCommandDurabilityClass(env.DurabilityClass) {
+		return CommandEnvelope{}, ErrCorrupt
+	}
+	if env.FeatureFlags&commandWALBSONSetDeltaFlag != 0 &&
+		(env.Kind != CommandKindCollectionUpdateBatchByID || env.Scope != CommandScopeCollection || env.PayloadFormat != PayloadFormatCollectionUpdateBatchByIDV1) {
 		return CommandEnvelope{}, ErrCorrupt
 	}
 	return env, nil
@@ -419,10 +426,22 @@ func validateCommandEnvelopeV2Identity(env CommandEnvelope) error {
 
 func validateCommandEnvelopePayloadV2(env CommandEnvelope) error {
 	if env.Kind == CommandKindDurablePrefixBarrier {
-		if len(env.Payload) != 0 || len(env.ExternalRefs) != 0 || len(env.Preconditions) != 0 || len(env.ResultAssertions) != 0 {
+		if env.FeatureFlags&commandWALBSONSetDeltaFlag != 0 || len(env.Payload) != 0 || len(env.ExternalRefs) != 0 || len(env.Preconditions) != 0 || len(env.ResultAssertions) != 0 {
 			return ErrCorrupt
 		}
 		return nil
+	}
+	flagged := env.FeatureFlags&commandWALBSONSetDeltaFlag != 0
+	delta := isCollectionBSONSetDelta(env.Kind, env.PayloadFormat, env.Payload)
+	if flagged != delta {
+		return ErrCorrupt
+	}
+	if delta {
+		if len(env.ExternalRefs) != 0 || len(env.Preconditions) != 0 || len(env.ResultAssertions) != 0 {
+			return ErrCorrupt
+		}
+		_, _, err := DecodeCollectionBSONSetDelta(env.Payload)
+		return err
 	}
 	return validateCommandEnvelopePayload(env)
 }
