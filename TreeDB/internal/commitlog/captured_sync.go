@@ -60,6 +60,9 @@ func (j *CommandJournal) CaptureSyncInto(target *CapturedSync, rotated []*rootpu
 	if target == nil || target.journal != nil {
 		return nil, errors.New("commitlog: capture target must be unused")
 	}
+	if err := j.finishCheckpointNamespaceLocked(); err != nil {
+		return nil, err
+	}
 	if err := j.flushDirectCommandWALLocked(false, durabilitycut.Enabled()); err != nil {
 		return nil, err
 	}

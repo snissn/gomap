@@ -244,6 +244,7 @@ type CommandJournal struct {
 	captureStableResources bool
 	pendingStableRotations []*CommandJournalStableRotation
 	pendingStableSuccessor *pendingCommandWALSuccessor
+	checkpointNamespace    *checkpointNamespace
 	stableResourcePins     *rootpublication.IdentityPinRegistry
 }
 
@@ -603,6 +604,13 @@ func truncateCommandJournalTail(path string, size int64) error {
 // must hold j.mu. The owner mutex still protects owner state even though
 // OpenCommandJournal keeps the owner private to this journal.
 func (j *CommandJournal) reserveLSNLocked() (uint64, error) {
+	if err := j.finishCheckpointNamespaceLocked(); err != nil {
+		return 0, err
+	}
+	return j.reserveAdmittedLSNLocked()
+}
+
+func (j *CommandJournal) reserveAdmittedLSNLocked() (uint64, error) {
 	if j == nil || j.owner == nil {
 		return 0, errors.New("commitlog: command journal is closed")
 	}
@@ -668,6 +676,9 @@ func (j *CommandJournal) maybeRotateForFrameLockedObservedWithNamespaceDebt(fram
 }
 
 func (j *CommandJournal) requireNoPendingStableRotationLocked() error {
+	if err := j.finishCheckpointNamespaceLocked(); err != nil {
+		return err
+	}
 	if err := j.stableRotationFailStopErrorLocked(); err != nil {
 		return err
 	}
@@ -708,7 +719,11 @@ func (j *CommandJournal) rotateActiveSegmentLocked(syncCurrent bool) error {
 	return j.rotateActiveSegmentLockedObserved(syncCurrent, false)
 }
 
-func (j *CommandJournal) rotateActiveSegmentLockedObserved(syncCurrent, observe bool) (retErr error) {
+func (j *CommandJournal) rotateActiveSegmentLockedObserved(syncCurrent, observe bool) error {
+	return j.rotateActiveSegmentForCheckpointLocked(syncCurrent, observe, false)
+}
+
+func (j *CommandJournal) rotateActiveSegmentForCheckpointLocked(syncCurrent, observe, handoff bool) (retErr error) {
 	if j == nil || j.writer == nil {
 		return errors.New("commitlog: command journal is closed")
 	}
@@ -730,11 +745,22 @@ func (j *CommandJournal) rotateActiveSegmentLockedObserved(syncCurrent, observe 
 	}
 	defer func() { retErr = errors.Join(retErr, j.disposeFixedWALAheadLocked(ahead)) }()
 	closedBytes := j.writer.ActiveBytes()
-	outcome, rotateErr := j.writer.rotateToWithSyncObservedAhead(nextPath, syncCurrent, j.root, observe, ahead)
+	var parent *os.File
+	if handoff && syncCurrent && j.stableParentErr == nil && j.writer.fixed == nil && j.writer.preferExt4Stream &&
+		(j.writer.containerSelection.ext4Stream || IsExt4WALFilesystem(j.writer.f)) {
+		parent = j.stableParent
+	}
+	outcome, rotateErr := j.writer.rotateToWithCheckpointParent(nextPath, syncCurrent, j.root, observe, ahead, parent)
 	if !outcome.Installed {
 		return rotateErr
 	}
-	stableParent, stableParentErr := captureStableCommandWALParent(j.walDir, j.writer.f)
+	stableParent := outcome.checkpointParent
+	var stableParentErr error
+	if stableParent == nil {
+		stableParent, stableParentErr = captureStableCommandWALParent(j.walDir, j.writer.f)
+	} else {
+		j.checkpointNamespace = j.newCheckpointNamespace(stableParent, j.writer.f)
+	}
 	oldStableParent := j.stableParent
 	j.stableParent = stableParent
 	j.stableParentErr = stableParentErr
@@ -904,6 +930,9 @@ func (j *CommandJournal) RotateActiveSegmentWithStableResources(syncCurrent bool
 }
 
 func (j *CommandJournal) rotateActiveSegmentWithStableResourcesLocked(syncCurrent, deferNamespace, observe bool) (rotation *CommandJournalStableRotation, retErr error) {
+	if err := j.finishCheckpointNamespaceLocked(); err != nil {
+		return nil, err
+	}
 	if err := j.stableRotationFailStopErrorLocked(); err != nil {
 		return nil, err
 	}
@@ -1218,7 +1247,7 @@ func (j *CommandJournal) cleanupSnapshotLocked() (CommandJournalCleanupSnapshot,
 		ActiveIdentity:        identity,
 		FixedContainer:        j.writer.fixed != nil,
 		PendingStableRotation: len(j.pendingStableRotations),
-		PendingSuccessor:      j.pendingStableSuccessor != nil,
+		PendingSuccessor:      j.pendingStableSuccessor != nil || (j.checkpointNamespace != nil && !j.checkpointNamespace.done.Load()),
 	}, nil
 }
 
@@ -1401,6 +1430,13 @@ func (j *CommandJournal) appendCommand(
 	if j.writer == nil || j.owner == nil {
 		return 0, errors.New("commitlog: command journal is closed")
 	}
+	if j.checkpointNamespace != nil && (j.checkpointNamespace.done.Load() ||
+		env.DurabilityClass != CommandDurabilityRelaxed || env.Kind != CommandKindCollectionUpdateBatchByID ||
+		env.Scope != CommandScopeCollection || env.PayloadFormat != PayloadFormatCollectionUpdateBatchByIDV1) {
+		if err := j.finishCheckpointNamespaceLocked(); err != nil {
+			return 0, err
+		}
+	}
 	if err := j.emitDirectCommandWALAppendBeforeLocked(observe); err != nil {
 		return 0, err
 	}
@@ -1474,7 +1510,7 @@ func (j *CommandJournal) appendCommand(
 			return 0, ErrRecordTooLarge
 		}
 	}
-	lsn, err := j.reserveLSNLocked()
+	lsn, err := j.reserveAdmittedLSNLocked()
 	if err != nil {
 		return 0, err
 	}
@@ -1951,6 +1987,9 @@ func (j *CommandJournal) flushLocked(sync bool) error {
 		return errors.New("commitlog: command journal is closed")
 	}
 	if sync {
+		if err := j.finishCheckpointNamespaceLocked(); err != nil {
+			return err
+		}
 		return j.writer.Sync()
 	}
 	return j.writer.Flush()
@@ -2143,7 +2182,7 @@ func (j *CommandJournal) Sync() error {
 	if j.writer == nil {
 		return nil
 	}
-	return j.writer.Sync()
+	return j.flushLocked(true)
 }
 
 // FlushObserved flushes or syncs the exact active segment while holding the
@@ -2179,6 +2218,7 @@ func (j *CommandJournal) Close() error {
 		return j.closeErr
 	}
 	j.closing = true
+	namespaceErr := j.finishCheckpointNamespaceLocked()
 	j.cancelFixedWALAheadLocked()
 	for j.fixedAhead != nil && !j.fixedAhead.done {
 		j.syncCond.Wait()
@@ -2216,7 +2256,7 @@ func (j *CommandJournal) Close() error {
 		closeErrs = append(closeErrs, j.stableParent.Close())
 		j.stableParent = nil
 	}
-	closeErrs = append(closeErrs, j.fixedAheadErr, j.fileSync.err())
+	closeErrs = append(closeErrs, j.fixedAheadErr, j.fileSync.err(), namespaceErr)
 	j.fixedAhead = nil
 	j.closeErr = errors.Join(closeErrs...)
 	j.closed = true

@@ -1,6 +1,7 @@
 package commitlog
 
 import (
+	"errors"
 	"sync"
 	"sync/atomic"
 )
@@ -25,6 +26,25 @@ func (s *journalFileSync) err() error {
 	return nil
 }
 
+// fail publishes the first error from a data-file or namespace owner. The
+// namespace has its own descriptor and may fail during an older file sync.
+func (s *journalFileSync) fail(err error) error {
+	if s == nil || err == nil {
+		return err
+	}
+	if s.failure.CompareAndSwap(nil, &journalFileSyncFailure{cause: err}) {
+		if s.onError != nil {
+			s.onError()
+		}
+		return err
+	}
+	first := s.err()
+	if errors.Is(err, first) {
+		return err
+	}
+	return errors.Join(err, first)
+}
+
 func (s *journalFileSync) run(syncFile func() error) error {
 	if s == nil { // A low-level Writer with no CommandJournal owner.
 		return syncFile()
@@ -35,11 +55,7 @@ func (s *journalFileSync) run(syncFile func() error) error {
 		return err
 	}
 	if err := syncFile(); err != nil {
-		s.failure.Store(&journalFileSyncFailure{cause: err})
-		if s.onError != nil {
-			s.onError()
-		}
-		return err
+		return s.fail(err)
 	}
-	return nil
+	return s.err()
 }

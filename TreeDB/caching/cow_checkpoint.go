@@ -202,6 +202,7 @@ func (db *DB) materializeCOWPrefixProjected(ctx context.Context, automatic bool,
 		hook()
 	}
 	var frontier *cowReadCut
+	var finishNamespace func() error
 	var err error
 	if generationPressure {
 		// Producer admission already froze and marked this prefix. Retain
@@ -215,7 +216,11 @@ func (db *DB) materializeCOWPrefixProjected(ctx context.Context, automatic bool,
 		}
 		db.writeMu.Unlock()
 	} else {
-		err = db.rotateCOWFrontier(ctx, true, &frontier, !pressureOnly)
+		var finish *func() error
+		if automatic && !pressureOnly && operation == nil && db.loadCommandWALCheckpointCutoverHook() != nil {
+			finish = &finishNamespace
+		}
+		err = db.rotateCOWFrontier(ctx, true, &frontier, !pressureOnly, finish)
 	}
 	defer func() { retErr = joinCOWCleanupError(retErr, db.cow.releaseCut(frontier)) }()
 	db.recordCheckpointCutover(time.Since(cutover))
@@ -223,6 +228,11 @@ func (db *DB) materializeCOWPrefixProjected(ctx context.Context, automatic bool,
 	db.checkpointWriteCutoverActive.Store(false)
 	db.checkpointCond.Broadcast()
 	db.checkpointMu.Unlock()
+	// The retained cut still governs publication. Complete its exact successor
+	// namespace even when the rollover's subsequent cleanup failed.
+	if finishNamespace != nil {
+		err = joinCOWCleanupError(err, finishNamespace())
+	}
 	if err != nil {
 		return err
 	}
@@ -302,12 +312,12 @@ func (db *DB) materializeCOWPrefixProjected(ctx context.Context, automatic bool,
 // and returns with it unlocked. The existing checkpoint/Close admission fence
 // excludes writers through the finite retry, while flushMu remains outer D.
 func (db *DB) rotateCOWCheckpointFrontier(ctx context.Context, postFrontier bool, captured **cowReadCut) error {
-	return db.rotateCOWFrontier(ctx, postFrontier, captured, true)
+	return db.rotateCOWFrontier(ctx, postFrontier, captured, true, nil)
 }
 
 // rotateJournal is false only for producer pressure with an existing size worker.
 // Rollover, finite source-capacity retry and original cutover capture stay shared.
-func (db *DB) rotateCOWFrontier(ctx context.Context, postFrontier bool, captured **cowReadCut, rotateJournal bool) error {
+func (db *DB) rotateCOWFrontier(ctx context.Context, postFrontier bool, captured **cowReadCut, rotateJournal bool, finish *func() error) error {
 	c := db.cow
 	for attempt := 0; ; attempt++ {
 		c.writerMu.Lock()
@@ -328,7 +338,11 @@ func (db *DB) rotateCOWFrontier(ctx context.Context, postFrontier bool, captured
 			if !ok {
 				err = ErrCOWUnsupported
 			} else if wal.CommandWALActiveBytes() > 0 {
-				err = wal.RotateCommandWALActiveSegment(true)
+				if native, ok := db.backend.(*backenddb.DB); finish != nil && c.txnOwner != nil && ok {
+					*finish, err = native.RotateCommandWALAtAutomaticCOWCut(c.txnOwner)
+				} else {
+					err = wal.RotateCommandWALActiveSegment(true)
+				}
 			}
 		}
 		if err == nil && db.snapshotCommandWALCheckpointCutover() && db.externalCommandWAL && postFrontier {

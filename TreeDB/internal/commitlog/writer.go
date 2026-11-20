@@ -669,7 +669,8 @@ func RotationInstalled(err error) bool {
 }
 
 type writerRotationOutcome struct {
-	Installed bool
+	Installed        bool
+	checkpointParent *os.File
 }
 
 func (w *Writer) rotateToWithSyncObserved(path string, syncCurrent bool, root string, observe bool) (writerRotationOutcome, error) {
@@ -677,6 +678,12 @@ func (w *Writer) rotateToWithSyncObserved(path string, syncCurrent bool, root st
 }
 
 func (w *Writer) rotateToWithSyncObservedAhead(path string, syncCurrent bool, root string, observe bool, ahead *fixedWALAheadReserve) (writerRotationOutcome, error) {
+	return w.rotateToWithCheckpointParent(path, syncCurrent, root, observe, ahead, nil)
+}
+
+// On a selected checkpoint only, transfer the already-open successor parent to
+// the journal. All other callers complete the original namespace sync inline.
+func (w *Writer) rotateToWithCheckpointParent(path string, syncCurrent bool, root string, observe bool, ahead *fixedWALAheadReserve, oldParent *os.File) (_ writerRotationOutcome, retErr error) {
 	if w == nil {
 		return writerRotationOutcome{}, errors.New("commitlog: nil writer")
 	}
@@ -721,8 +728,20 @@ func (w *Writer) rotateToWithSyncObservedAhead(path string, syncCurrent bool, ro
 		if err != nil {
 			return writerRotationOutcome{}, errors.Join(err, file.Close())
 		}
-		defer preparedParent.Close()
-		if err = rootpublication.ValidateStableChildLink(preparedParent, file, filepath.Base(path)); err != nil {
+		defer func() {
+			if preparedParent != nil {
+				closeErr := preparedParent.Close()
+				if oldParent != nil {
+					retErr = errors.Join(retErr, closeErr)
+				}
+			}
+		}()
+		if oldParent != nil {
+			if err := checkpointChildLink(preparedParent, file); err != nil {
+				cause := errors.Join(err, file.Close())
+				return writerRotationOutcome{}, w.journalFileSync.fail(cause)
+			}
+		} else if err = rootpublication.ValidateStableChildLink(preparedParent, file, filepath.Base(path)); err != nil {
 			return writerRotationOutcome{}, errors.Join(err, file.Close())
 		}
 	}
@@ -741,7 +760,20 @@ func (w *Writer) rotateToWithSyncObservedAhead(path string, syncCurrent bool, ro
 		err = errors.Join(err, file.Close())
 		return writerRotationOutcome{}, w.poisonCommandBuffer(err)
 	}
-	if syncCurrent {
+	var checkpointParent *os.File
+	if oldParent != nil && preparedParent != nil && state == nil && selection.ext4Stream && size == 0 {
+		// Once the new stream is selected, a replaced name or a failed
+		// identity lookup cannot be retried by syncing a fresh pathname.
+		err := errors.Join(checkpointParentsMatch(oldParent, preparedParent), checkpointChildLink(oldParent, w.f),
+			checkpointChildLink(preparedParent, file), checkpointParentCurrent(preparedParent, path))
+		if err != nil {
+			cause := errors.Join(err, file.Close())
+			return writerRotationOutcome{}, w.journalFileSync.fail(cause)
+		}
+		checkpointParent = preparedParent
+		preparedParent = nil
+	}
+	if syncCurrent && checkpointParent == nil {
 		if err := syncNewLogFileDirectory(w, file, path); err != nil {
 			_ = file.Close()
 			return writerRotationOutcome{}, err
@@ -760,7 +792,7 @@ func (w *Writer) rotateToWithSyncObservedAhead(path string, syncCurrent bool, ro
 		w.syncFn = stableio.SyncFile
 	}
 	w.scratch = w.scratch[:0]
-	return writerRotationOutcome{Installed: true}, w.closeRotatedResource(old)
+	return writerRotationOutcome{Installed: true, checkpointParent: checkpointParent}, w.closeRotatedResource(old)
 }
 
 func (w *Writer) closeRotatedResource(file *os.File) error {

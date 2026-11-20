@@ -820,6 +820,21 @@ func (db *DB) RotateCommandWALActiveSegment(sync bool) error {
 	return db.commandJournal.RotateActiveSegment(sync)
 }
 
+// RotateCommandWALAtAutomaticCOWCut transfers the fresh stream directory sync
+// to its private cache owner during an automatic, native, relaxed checkpoint.
+func (db *DB) RotateCommandWALAtAutomaticCOWCut(owner *transactionowner.Owner) (func() error, error) {
+	if db == nil || owner == nil || owner != db.privateCOWOwner {
+		return nil, ErrNativeSemanticUnsupported
+	}
+	if !db.nativeSemanticActive.Load() || db.durability != DurabilityWALOnRelaxed || db.commandJournal == nil {
+		return nil, db.RotateCommandWALActiveSegment(true)
+	}
+	if err := db.commandWALPoisonedError(); err != nil {
+		return nil, err
+	}
+	return db.commandJournal.RotateAtAutomaticCOWCut()
+}
+
 // CleanupCommandWALCoveredSegments removes complete command-WAL segments covered
 // by a freshly revalidated monotonic durable-root proof and outside every
 // journal/generation/pin protection. Any successful unlink is followed by a
