@@ -915,11 +915,7 @@ func (s *commandWALCleanupScan) finish(err error) ([]commandWALSegmentCleanupDec
 		return s.decisions, nil
 	}
 	s.hardErr = errors.Join(s.hardErr, closeCommandWALCleanupDecisions(s.decisions))
-	if s.hardErr != nil && errors.Is(err, commitlog.ErrCommandWALCleanupSnapshotStale) {
-		// A hard close or scan error still needs to reach checked callers.
-		err = nil
-	}
-	hardErr := errors.Join(err, s.hardErr)
+	hardErr := commandWALCleanupWithHardError(err, s.hardErr)
 	if hardErr == nil {
 		return s.decisions, errors.Join(errDurableWALCleanupProofUnavailable, s.lineageErr)
 	}
@@ -950,8 +946,12 @@ func removeCoveredCommandWALSegments(decisions []commandWALSegmentCleanupDecisio
 	return removeCoveredCommandWALSegmentsWithRegistry(decisions, nil)
 }
 
-func removeCoveredCommandWALSegmentsWithRegistry(decisions []commandWALSegmentCleanupDecision, registry *rootpublication.IdentityPinRegistry) ([]commandWALSegmentCleanupDecision, error) {
-	defer closeCommandWALCleanupDecisions(decisions)
+func removeCoveredCommandWALSegmentsWithRegistry(decisions []commandWALSegmentCleanupDecision, registry *rootpublication.IdentityPinRegistry) (_ []commandWALSegmentCleanupDecision, retErr error) {
+	defer func() {
+		if closeErr := closeCommandWALCleanupDecisions(decisions); closeErr != nil {
+			retErr = errors.Join(retErr, closeErr)
+		}
+	}()
 	type cleanupLease struct {
 		decision int
 		lease    *rootpublication.IdentityDeleteLease
