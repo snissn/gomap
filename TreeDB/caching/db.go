@@ -8165,7 +8165,7 @@ func (db *DB) reconcileSplitValueLogWritersAfterBackendMaintenanceAdmitted(admit
 	segments, _ := listNonEmptySplitLogSegments(walDir, db.valueLogDir, db.leafLogDir)
 	sharedLane := -1
 	var emptyPeers map[int]string
-	if db.nativeRootValueLogAppendShared {
+	if db.nativeRootValueLogAppendShared && len(db.nativeRootValueLogAppendLanes) > 0 {
 		sharedLane = db.nativeRootValueLogAppendLanes[0].id
 		emptyPeers = db.emptyNativeRootValueLogPeers()
 	}
