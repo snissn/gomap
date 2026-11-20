@@ -439,7 +439,9 @@ func commandJournalInitialLSN(walDir, activePath string, opts CommandJournalOpti
 		if typed && maxLSN > initialLSN {
 			initialLSN = maxLSN
 		}
-		if seg.active && typed {
+		// Recovery treats the newest segment in each lane as an active
+		// tail. Only the selected writer file owns this captured frontier.
+		if seg.path == activePath && typed {
 			activeMaxLSN = maxLSN
 		}
 	}
