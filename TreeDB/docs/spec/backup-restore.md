@@ -82,12 +82,29 @@ before writable Open. Keep the mount stable until checked Close. If a document
 dependency is missing, recovery can select an older complete durable root.
 A successful Open alone cannot verify that the intended mount or cut was used.
 
-For a restore onto new devices or inodes, first verify the full closed backup
-and stage both parts in their intended destination layout. Ordinary Open
-checks the durable dependencies' physical identities. A byte-for-byte copy
-can therefore require the private snapshot identity rebind described below.
-Perform that step only on a verified private restore, then compare typed
-readback with the expected backup cut and check Close. Preserve the original backup through validation.
+Linux device numbers can change at reboot, particularly for loop and
+device-mapper volumes. TreeDB persists the device number as part of a file's
+identity. If the same UUID returns on a different device number, keep the
+gateway stopped. Reestablish the original device mapping, or restore from a
+verified closed backup into the new layout. Updating the launch record alone
+leaves the persisted dependencies bound to the original device.
+
+For a restore onto new devices or inodes:
+
+1. Verify the full closed backup against its source manifest. Extract both
+   parts into their intended private destination mounts. Independently verify
+   the intended destination filesystems and content, and record their UUIDs
+   and directory identities outside the copy.
+2. On the closed private copy, run `quicksilver_snapshot_restore "$store"`
+   (from `cmd/quicksilver_snapshot_restore`). It calls
+   `RebindDurableRootSnapshotLayoutWithContextV1` on each present side-store
+   index first, then on the staged `maindb` with the store root as its
+   side-store root. A failure can leave the staging copy partially rebound.
+   Keep the original backup and start again from a fresh verified extraction.
+3. Use the proposed destination identities for the pre-Open check. Compare
+   typed readback against the expected backup cut and check Close. Install the
+   verified destination identity record for subsequent launches only after
+   those checks succeed.
 
 ### Paged vector projection closure
 
