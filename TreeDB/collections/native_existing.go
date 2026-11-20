@@ -32,22 +32,22 @@ func (m *CollectionManager) openNativeCollection(name string) (collection *Colle
 	return &Collection{manager: m, nativeJSON: m.nativeJSON, nativeSchemaCoordinator: coord, name: name, meta: *meta}, nil
 }
 
-func (c *Collection) nativeInsertBatch(ids, documents [][]byte) ([][]byte, error) {
-	return c.nativeInsertBatchWithStats(ids, documents, nil)
+func (c *Collection) nativeInsertBatch(ids, documents [][]byte, retryProjectedGeneration bool) ([][]byte, error) {
+	return c.nativeInsertBatchWithResultIDs(ids, documents, nil, nil, true, retryProjectedGeneration)
 }
 
 func (c *Collection) nativeInsertBatchWithStats(ids, documents [][]byte, requested *CollectionInsertStats) ([][]byte, error) {
-	return c.nativeInsertBatchWithStatsProjection(ids, documents, requested, nil)
+	return c.nativeInsertBatchWithResultIDs(ids, documents, requested, nil, true, true)
 }
 
 func (c *Collection) nativeInsertBatchWithStatsProjection(ids, documents [][]byte, requested *CollectionInsertStats, projection *trustedFloat32Projection) ([][]byte, error) {
-	return c.nativeInsertBatchWithResultIDs(ids, documents, requested, projection, true)
+	return c.nativeInsertBatchWithResultIDs(ids, documents, requested, projection, true, false)
 }
 
 // The transaction owns mutation inputs independently of optional response IDs.
 // Omitted-ID gateways share preparation, validation and publication with the
 // ordinary API, without allocating a response-only ID vector and byte arena.
-func (c *Collection) nativeInsertBatchWithResultIDs(ids, documents [][]byte, requested *CollectionInsertStats, projection *trustedFloat32Projection, returnResultIDs bool) ([][]byte, error) {
+func (c *Collection) nativeInsertBatchWithResultIDs(ids, documents [][]byte, requested *CollectionInsertStats, projection *trustedFloat32Projection, returnResultIDs, retryProjectedGeneration bool) ([][]byte, error) {
 	if c.manager.isClosing() {
 		return nil, backenddb.ErrClosed
 	}
@@ -94,11 +94,30 @@ func (c *Collection) nativeInsertBatchWithResultIDs(ids, documents [][]byte, req
 			return nil, err
 		}
 	}
+	var refusal *nativeInsertProjectedRefusal
+	var observeProjection **nativeInsertProjectedRefusal
+	if retryProjectedGeneration {
+		observeProjection = &refusal
+	}
 	var refusedPrepare, refusedPublish time.Duration
+	historyExpiryRetries := 0
 	for attempt := 0; ; attempt++ {
 		stats = CollectionInsertStats{}
-		recordStats, retry, err := c.nativeInsertPreparedOnce(ids, documents, &stats, requested != nil, projection)
-		if retry && attempt+1 < nativeInsertAttempts {
+		recordStats, retry, err := c.nativeInsertPreparedOnce(ids, documents, &stats, requested != nil, projection, observeProjection)
+		if attempt+1 < nativeInsertAttempts && (retry || refusal != nil) {
+			if refusal != nil {
+				// The first transaction and its capture, lease and producer
+				// gate are gone. The maintenance request owns only its stamp.
+				if c.manager.isClosing() {
+					return nil, backenddb.ErrClosed
+				}
+				if reliefErr := c.nativeJSON.db.PrepareNativeProjectedGeneration(refusal.pressure); reliefErr != nil {
+					return nil, errors.Join(err, reliefErr)
+				}
+			}
+			if retry {
+				historyExpiryRetries++
+			}
 			refusedPrepare, refusedPublish = stats.PrepareDocuments, stats.Publish
 			continue
 		}
@@ -106,7 +125,7 @@ func (c *Collection) nativeInsertBatchWithResultIDs(ids, documents [][]byte, req
 			return nil, err
 		}
 		if recordStats {
-			stats.HistoryExpiryRetries = attempt
+			stats.HistoryExpiryRetries = historyExpiryRetries
 			stats.PrepareDocuments += refusedPrepare
 			stats.Publish += refusedPublish
 			c.recordInsertBatchStats(stats, insertBatchExecutionOptions{insertStats: requested})
@@ -117,13 +136,13 @@ func (c *Collection) nativeInsertBatchWithResultIDs(ids, documents [][]byte, req
 
 // End the original producer admission before fresh maintenance/capture. The
 // deferred unlock also covers panic/error paths; no private attempt survives it.
-func (c *Collection) nativeInsertPreparedOnce(ids, documents [][]byte, stats *CollectionInsertStats, ordinaryOnly bool, projection *trustedFloat32Projection) (bool, bool, error) {
+func (c *Collection) nativeInsertPreparedOnce(ids, documents [][]byte, stats *CollectionInsertStats, ordinaryOnly bool, projection *trustedFloat32Projection, projected **nativeInsertProjectedRefusal) (bool, bool, error) {
 	unlockVector, _, err := c.prepareNativeProducerMutation()
 	if err != nil {
 		return false, false, err
 	}
 	defer unlockVector()
-	return c.nativeJSON.insertPrepared(c.name, ids, documents, stats, ordinaryOnly, projection)
+	return c.nativeJSON.insertPrepared(c.name, ids, documents, stats, ordinaryOnly, projection, projected)
 }
 
 func (c *Collection) nativeGetInto(id, dst []byte) ([]byte, bool, error) {

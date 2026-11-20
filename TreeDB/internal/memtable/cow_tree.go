@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sync"
 	"unsafe"
+	"weak"
 
 	btree "github.com/snissn/gomap/TreeDB/internal/cowbtree"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -173,10 +174,7 @@ func newCOWWriterMode(b, maintenance *COWBudget, ordered bool) (*COWWriter, erro
 	if b == nil {
 		return nil, fmt.Errorf("nil COW budget")
 	}
-	base := cowAllocation(uint64(unsafe.Sizeof(COWWriter{}))) + cowAllocation(uint64(unsafe.Sizeof(cowGeneration{}))) +
-		cowAllocation(uint64(unsafe.Sizeof(btree.Map[string, cowValue]{}))) +
-		cowAllocation(uint64(b.limits.MaxResources)*uint64(unsafe.Sizeof(COWResourceID{}))) +
-		cowAllocation(uint64(b.limits.MaxResources)*uint64(unsafe.Sizeof(cowResourceOwner{})))
+	base := cowWriterConstructionCharge(b.limits.MaxResources)
 	if maintenance != nil {
 		// Same immutable empty-root/map wrapper envelope as Prepare(nil), with
 		// no mutable payload or resource-growth allowance hidden in the reserve.
@@ -194,6 +192,15 @@ func newCOWWriterMode(b, maintenance *COWBudget, ordered bool) (*COWWriter, erro
 		w.ordered = newCOWOrderedTree()
 	}
 	return w, nil
+}
+
+// cowWriterConstructionCharge is the ordinary empty writer's generation history.
+// The native source's original lease is accounted by its separate constructor.
+func cowWriterConstructionCharge(resourceLimit int) uint64 {
+	return cowAllocation(uint64(unsafe.Sizeof(COWWriter{}))) + cowAllocation(uint64(unsafe.Sizeof(cowGeneration{}))) +
+		cowAllocation(uint64(unsafe.Sizeof(btree.Map[string, cowValue]{}))) +
+		cowAllocation(uint64(resourceLimit)*uint64(unsafe.Sizeof(COWResourceID{}))) +
+		cowAllocation(uint64(resourceLimit)*uint64(unsafe.Sizeof(cowResourceOwner{})))
 }
 
 // BindReservedEmptyRoot installs the one already-admitted generation resolver
@@ -495,7 +502,51 @@ func (p *COWPrepared) Charge() COWCharge { return p.charge }
 // Before then it must not be exposed, retained, or used for pointer resolution.
 func (p *COWPrepared) Root() *COWRoot { return p.root }
 
+// COWProjectedGenerationRefusal describes a single denied history projection
+// with a fitting estimate on an empty native generation. Its weak identity
+// cannot keep alive the old root, generation or any of their resources.
+type COWProjectedGenerationRefusal struct {
+	generation                                                 weak.Pointer[cowGeneration]
+	HistoryBytes, PendingBytes, DemandBytes, FreshHistoryBytes uint64
+}
+
+func (r *COWProjectedGenerationRefusal) Error() string { return ErrCOWCapacity.Error() }
+func (r *COWProjectedGenerationRefusal) Unwrap() error { return ErrCOWCapacity }
+
+// NeedsProjectedGenerationRollover rechecks the old owner's exact prospective demand.
+// Caller holds this root's original edge throughout.
+func (r *COWRoot) NeedsProjectedGenerationRollover(refusal *COWProjectedGenerationRefusal) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	g := r.generation
+	if g == nil || g != refusal.generation.Value() {
+		return false
+	}
+	b := g.budget
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return !cowGenerationFits(g, refusal.DemandBytes)
+}
+
+// The subtraction guards ensure the intermediate sum cannot overflow.
+func cowGenerationFits(g *cowGeneration, demand uint64) bool {
+	history := g.generationHistoryLocked()
+	limit := g.budget.limits.MaxGenerationBytes
+	return cowFits(limit, history, g.pending) && cowFits(limit, history+g.pending, demand)
+}
+
 func (w *COWWriter) Prepare(entries []COWMutation, opts COWPrepareOptions) (*COWPrepared, error) {
+	return w.prepare(entries, opts, false)
+}
+
+// PrepareNativeProjected reports only a pre-reservation generation projection
+// on a nonempty native tail. All capacities and actual reservations are shared
+// with Prepare.
+func (w *COWWriter) PrepareNativeProjected(entries []COWMutation) (*COWPrepared, error) {
+	return w.prepare(entries, COWPrepareOptions{}, true)
+}
+
+func (w *COWWriter) prepare(entries []COWMutation, opts COWPrepareOptions, observeProjected bool) (*COWPrepared, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.closed {
@@ -523,10 +574,41 @@ func (w *COWWriter) Prepare(entries []COWMutation, opts COWPrepareOptions) (*COW
 		return nil, ErrCOWPending
 	}
 	total := c.Total()
-	if g.frozen || !b.inFlightFitsLocked(total) ||
-		!cowFits(b.limits.MaxGenerationBytes, g.generationHistoryLocked(), g.pending) ||
-		!cowFits(b.limits.MaxGenerationBytes, g.generationHistoryLocked()+g.pending, c.History()) ||
-		!b.retirementFitsLocked(total) ||
+	if g.frozen || !b.inFlightFitsLocked(total) {
+		b.mu.Unlock()
+		return nil, ErrCOWCapacity
+	}
+	if !cowGenerationFits(g, c.History()) {
+		// Preserve the original short circuit. This diagnostic proof reads
+		// other dimensions without reclaiming scratch or reserving bytes.
+		historyAndReserved, ok := cowAdd(b.stats.HistoryBytes, b.stats.ReservedBytes)
+		retirement, ok2 := cowAdd(historyAndReserved, b.stats.DeferredBytes)
+		if !observeProjected || g.nativeSource == nil || w.private.Len() == 0 ||
+			!ok || !ok2 || !cowFits(b.limits.MaxRetiredBytes, retirement, total) ||
+			!cowFits(b.limits.MaxTotalBytes, b.stats.TotalBytes, total) {
+			b.mu.Unlock()
+			return nil, ErrCOWCapacity
+		}
+		history, pending := g.generationHistoryLocked(), g.pending
+		freshBase := cowWriterConstructionCharge(b.limits.MaxResources)
+		sourceCharge, limit := g.nativeSource.lease.charge, b.limits.MaxGenerationBytes
+		b.mu.Unlock()
+
+		// Rollover moves the active tail to its original captured source.
+		// The next writer is the same ordinary, empty native constructor.
+		// Reuse the unchanged reservation estimator over that shape.
+		empty := COWWriter{private: new(btree.Map[string, cowValue]), generation: g}
+		fresh, err := empty.estimate(entries, opts)
+		if err != nil || !cowFits(limit, freshBase, sourceCharge) ||
+			!cowFits(limit, freshBase+sourceCharge, fresh.History()) {
+			return nil, ErrCOWCapacity
+		}
+		return nil, &COWProjectedGenerationRefusal{
+			generation: weak.Make(g), HistoryBytes: history, PendingBytes: pending,
+			DemandBytes: c.History(), FreshHistoryBytes: freshBase + sourceCharge + fresh.History(),
+		}
+	}
+	if !b.retirementFitsLocked(total) ||
 		opts.ResourceSlots > b.limits.MaxResources-len(g.ids) || !b.addLocked(total) {
 		b.mu.Unlock()
 		return nil, ErrCOWCapacity

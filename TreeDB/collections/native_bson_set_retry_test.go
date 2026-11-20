@@ -557,7 +557,7 @@ func TestNativeBSONSetRetryRequiresCleanPreassignmentRefusal(t *testing.T) {
 			}
 			tx.structuredBSONUpdate = true
 			before := f.backend.CommandWALNextLSN()
-			err = tx.commitNativePlanObserved(false, nil, false, nil, nil, &retry)
+			err = tx.commitNativePlanObserved(false, nil, false, nil, nil, &retry, nil)
 			if retry.rowConflict != tc.wantRetry || !errors.Is(err, original) || attempts != 1 || state.releases != 1 || state.finishes != 1 || f.backend.CommandWALNextLSN() != before {
 				t.Fatalf("retry=%t err=%v attempts=%d releases=%d finishes=%d", retry.rowConflict, err, attempts, state.releases, state.finishes)
 			}

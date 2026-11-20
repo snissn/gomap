@@ -29,6 +29,11 @@ func testNativeOrdinaryProjectedGenerationPressure(t *testing.T, batchSize int) 
 	const publications = "treedb.cache.cow.publications_total"
 	const rollovers = "treedb.cache.cow.rollovers_total"
 	const reserved = "treedb.cache.cow.reserved_bytes"
+	const refusals = "treedb.cache.cow.native_projected_refusals_total"
+	const reliefNs = "treedb.cache.cow.native_projected_relief_ns"
+	const checkpointCalls = "treedb.public.checkpoint.calls_total"
+	const acceptedLSN = "treedb.command_wal.live_accepted_max_lsn"
+	const appliedLSN = "treedb.command_wal.applied_lsn"
 	opts := treedb.OptionsForBenchmark(treedb.ProfileCommandWALRelaxed, t.TempDir())
 	opts.MemtableMode = "cow_btree"
 	opts.COWMemtableLimits = treedb.StandaloneCOWMemtableLimits()
@@ -42,6 +47,7 @@ func testNativeOrdinaryProjectedGenerationPressure(t *testing.T, batchSize int) 
 	var manager *collections.CollectionManager
 	var c *collections.Collection
 	var held *collections.CollectionReadView
+	var budget interface{ Stats() memtable.COWStats }
 	open := func(create bool) {
 		t.Helper()
 		var err error
@@ -52,6 +58,18 @@ func testNativeOrdinaryProjectedGenerationPressure(t *testing.T, batchSize int) 
 		backend, err = owner.NativeSemanticBackend()
 		if err != nil {
 			t.Fatal(err)
+		}
+		capture, err := backend.CaptureNativeSemanticState()
+		if err != nil {
+			t.Fatal(err)
+		}
+		limits := capture.NativeAllocator().Limits()
+		budget = capture.NativeAllocator().(interface{ Stats() memtable.COWStats })
+		if err := capture.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if limits != opts.COWMemtableLimits {
+			t.Fatalf("live capacity changed: %+v want %+v", limits, opts.COWMemtableLimits)
 		}
 		manager = collections.NewCollectionManager(backend)
 		if !manager.UsesNativeCommandWALApply() {
@@ -97,6 +115,11 @@ func testNativeOrdinaryProjectedGenerationPressure(t *testing.T, batchSize int) 
 		if err != nil {
 			t.Errorf("original Close: %v", err)
 		}
+		if budget != nil {
+			if s := budget.Stats(); s.TotalBytes != 0 || s.ReservedBytes != 0 || s.Views != 0 || s.ExternalLeases != 0 || s.Generations != 0 || s.Sources != 0 {
+				t.Errorf("original COW budget after Close: %+v", s)
+			}
+		}
 		pins := backend.ValueLogIdentityPinRegistry()
 		if s := pins.Stats(); s.ActivePins != 0 || s.ActiveIdentities != 0 || s.ActiveStableNamespaceLinks != 0 || pins.CleanupError() != nil {
 			t.Errorf("original stable custody after Close: %+v: %v", s, pins.CleanupError())
@@ -113,7 +136,7 @@ func testNativeOrdinaryProjectedGenerationPressure(t *testing.T, batchSize int) 
 		return n
 	}
 	initial := owner.Stats()
-	acknowledged := 0
+	acknowledged, underWatermarkRefusals := 0, 0
 	for acknowledged < rows {
 		count := min(rows-acknowledged, batchSize)
 		ids, documents := benchmarkDocumentBatch(t, acknowledged, count, true)
@@ -149,6 +172,13 @@ func testNativeOrdinaryProjectedGenerationPressure(t *testing.T, batchSize int) 
 				acknowledged, len(got), count, before.LogicalSequence, after.LogicalSequence, next, backend.CommandWALNextLSN(),
 				stat(beforeStats, publications), stat(afterStats, publications), stat(beforeStats, reserved), stat(afterStats, reserved))
 		}
+		reclaimed := stat(afterStats, refusals) - stat(beforeStats, refusals)
+		if reclaimed > 1 {
+			t.Fatalf("batch at %d initiated %d projected relief operations", acknowledged, reclaimed)
+		}
+		if reclaimed == 1 && !before.Semantic.GenerationUnderPressure {
+			underWatermarkRefusals++
+		}
 		for i := range got {
 			if !bytes.Equal(got[i], ids[i]) {
 				t.Fatalf("acknowledged ID at %d is %q, want %q", acknowledged+i, got[i], ids[i])
@@ -163,8 +193,11 @@ func testNativeOrdinaryProjectedGenerationPressure(t *testing.T, batchSize int) 
 		acknowledged += count
 	}
 	final := owner.Stats()
-	if acknowledged == rows && stat(final, rollovers) <= stat(initial, rollovers) {
-		t.Error("no automatic physical rollover")
+	if acknowledged == rows && (stat(final, rollovers) <= stat(initial, rollovers) || underWatermarkRefusals == 0) {
+		t.Error("no automatic physical rollover from a projected refusal below the advisory watermark")
+	}
+	if stat(final, checkpointCalls) != stat(initial, checkpointCalls) {
+		t.Error("load invoked the public checkpoint")
 	}
 	heldRead := func() {
 		t.Helper()
@@ -198,11 +231,18 @@ func testNativeOrdinaryProjectedGenerationPressure(t *testing.T, batchSize int) 
 		t.Fatal(err)
 	}
 	checkpointElapsed := time.Since(checkpointStart)
+	checkpointed := owner.Stats()
+	if stat(checkpointed, checkpointCalls) != stat(final, checkpointCalls)+1 ||
+		stat(checkpointed, appliedLSN) < stat(final, acceptedLSN) {
+		t.Fatal("explicit checkpoint did not cover the accepted WAL frontier")
+	}
 	heldRead()
 	census()
 	closeOwner()
 	open(false)
 	census()
 	closeOwner()
-	t.Logf("exact lifecycle: acknowledged=%d rollovers=%d checkpoint=%s", acknowledged, stat(final, rollovers)-stat(initial, rollovers), checkpointElapsed)
+	t.Logf("exact lifecycle: acknowledged=%d rollovers=%d projected_refusals=%d below_watermark=%d foreground_relief=%s checkpoint=%s reserve=%d peak=%d",
+		acknowledged, stat(final, rollovers)-stat(initial, rollovers), stat(final, refusals)-stat(initial, refusals), underWatermarkRefusals,
+		time.Duration(stat(final, reliefNs)-stat(initial, reliefNs)), checkpointElapsed, stat(final, reserved), stat(final, "treedb.cache.cow.peak_bytes"))
 }

@@ -99,6 +99,18 @@ staging/publication work. Other unmeasured request overhead remains outside thos
 phase timers. Other typed insertion and prepared template producers retain their
 existing refusal behavior.
 
+In-process `Collection.InsertBatch` and `InsertBatchWithStats` without column
+storage use the same one-reconstruction budget for a clean domain generation
+reservation refusal that fits a fresh empty native generation. The producer
+joins the original cleanup off the mutation gate and rechecks the refused
+generation before attempting rollover. The fresh attempt validates the original
+collection incarnation and schema, then restages and rechecks duplicates and
+other conflicts. A generation-pressure reconstruction does not increment
+`HistoryExpiryRetries`. A real capacity denial, a closing owner, or failed
+cleanup returns the actual error. The validated-BSON gateway, its omitted-ID
+and grouped paths, direct `NativeJSONManager` inserts and explicit transactions
+retain their existing generation-capacity refusal behavior.
+
 Scalar JSON index reads support `FindByIndexRange`, `ScanIndexRange`,
 `FindDocumentsByIndexRange` and `ScanBorrowedDocumentsByIndexRange`. Ascending
 scans seek directly to the maintained scalar bounds and merge pending,
