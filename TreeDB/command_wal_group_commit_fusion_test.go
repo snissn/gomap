@@ -57,7 +57,14 @@ func TestPublicCommandWALIdleFusionHeldSyncAdmitsSuccessorAndBlocksClose(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	closeStarted := false
+	defer func() {
+		if !closeStarted {
+			if err := db.Close(); err != nil {
+				t.Errorf("cleanup Close: %v", err)
+			}
+		}
+	}()
 	entered, release, successorAppended := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	var releaseOnce sync.Once
 	unblock := func() { releaseOnce.Do(func() { close(release) }) }
@@ -102,6 +109,7 @@ func TestPublicCommandWALIdleFusionHeldSyncAdmitsSuccessorAndBlocksClose(t *test
 		}
 	}
 	closed := make(chan error, 1)
+	closeStarted = true
 	go func() { closed <- db.Close() }()
 	select {
 	case err := <-closed:
@@ -109,21 +117,34 @@ func TestPublicCommandWALIdleFusionHeldSyncAdmitsSuccessorAndBlocksClose(t *test
 	default:
 	}
 	unblock()
-	for _, done := range []chan error{first, second, closed} {
+	for _, completion := range []struct {
+		stage string
+		done  <-chan error
+	}{
+		{"first ACK", first},
+		{"second ACK", second},
+		{"Close", closed},
+	} {
 		select {
-		case err := <-done:
+		case err := <-completion.done:
 			if err != nil {
-				t.Fatal(err)
+				t.Fatalf("%s: %v", completion.stage, err)
 			}
 		case <-time.After(2 * time.Second):
-			t.Fatal("completion or Close stalled")
+			buf := make([]byte, 1<<20)
+			n := runtime.Stack(buf, true)
+			t.Fatalf("%s stalled after releasing the held sync; blocked goroutines:\n%s", completion.stage, buf[:n])
 		}
 	}
 	reopened, err := Open(opts)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer reopened.Close()
+	defer func() {
+		if err := reopened.Close(); err != nil {
+			t.Errorf("reopened Close: %v", err)
+		}
+	}()
 	requireRawKVValue(t, reopened, []byte("first"), []byte("one"))
 	requireRawKVValue(t, reopened, []byte("second"), []byte("two"))
 }
