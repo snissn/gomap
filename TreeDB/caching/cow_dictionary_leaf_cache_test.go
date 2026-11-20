@@ -121,7 +121,6 @@ func TestCOWDictionaryLeafColdCacheAdmissionAndPolicy(t *testing.T) {
 				}
 				return append([]byte(nil), it.Value()...), it.Error()
 			}
-			requireCOWUnmappedFaultFixture(t, backend)
 			writer, err := os.OpenFile(file.Name(), os.O_RDWR, 0)
 			if err != nil {
 				t.Fatal(err)
@@ -132,20 +131,15 @@ func TestCOWDictionaryLeafColdCacheAdmissionAndPolicy(t *testing.T) {
 			if _, err := writer.ReadAt(crc[:], crcOffset); err != nil {
 				t.Fatal(err)
 			}
-			defer writer.WriteAt(crc[:], crcOffset)
-			if _, err := writer.WriteAt([]byte{crc[0] ^ 1}, crcOffset); err != nil {
-				t.Fatal(err)
-			}
+			writeCOWUnmappedLeafByte(t, backend, writer, crcOffset, crc[0]^1)
+			defer writeCOWUnmappedLeafByte(t, backend, writer, crcOffset, crc[0])
 			if _, err := read(); !errors.Is(err, valuelog.ErrCorrupt) {
 				t.Fatalf("cold dictionary record CRC was bypassed: %v", err)
 			}
 			if cowLeafCacheCounter(t, backend, "stores") != 0 {
 				t.Fatal("failed dictionary CRC admitted a decoded page")
 			}
-			requireCOWUnmappedFaultFixture(t, backend)
-			if _, err := writer.WriteAt(crc[:], crcOffset); err != nil {
-				t.Fatal(err)
-			}
+			writeCOWUnmappedLeafByte(t, backend, writer, crcOffset, crc[0])
 			for i := 0; i < 8; i++ {
 				got, err := read()
 				if err != nil || !bytes.Equal(got, want) {
@@ -190,15 +184,13 @@ func TestCOWDictionaryLeafColdCacheAdmissionAndPolicy(t *testing.T) {
 			db.dictStore = store
 			// The verified cache remains subordinate to inspection, even after
 			// successful full-record CRC and normal tree page validation.
-			requireCOWUnmappedFaultFixture(t, backend)
 			var version [1]byte
-			if _, err := writer.ReadAt(version[:], int64(ptr.Offset)); err != nil {
+			versionOffset := int64(ptr.Offset)
+			if _, err := writer.ReadAt(version[:], versionOffset); err != nil {
 				t.Fatal(err)
 			}
-			defer writer.WriteAt(version[:], int64(ptr.Offset))
-			if _, err := writer.WriteAt([]byte{version[0] ^ 1}, int64(ptr.Offset)); err != nil {
-				t.Fatal(err)
-			}
+			writeCOWUnmappedLeafByte(t, backend, writer, versionOffset, version[0]^1)
+			defer writeCOWUnmappedLeafByte(t, backend, writer, versionOffset, version[0])
 			hits := cowLeafCacheCounter(t, backend, "hits")
 			if _, err := read(); !errors.Is(err, valuelog.ErrCorrupt) {
 				t.Fatalf("warm dictionary cache bypassed inspection: %v", err)
@@ -206,7 +198,6 @@ func TestCOWDictionaryLeafColdCacheAdmissionAndPolicy(t *testing.T) {
 			if cowLeafCacheCounter(t, backend, "hits") != hits {
 				t.Fatal("invalid dictionary record reached verified cache lookup")
 			}
-			requireCOWUnmappedFaultFixture(t, backend)
 		})
 	}
 }

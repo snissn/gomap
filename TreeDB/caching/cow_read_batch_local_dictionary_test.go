@@ -52,7 +52,6 @@ func TestCOWReadBatchLocalCorruptionAndRefund(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				requireCOWUnmappedFaultFixture(t, backend)
 				writer, err := os.OpenFile(f.Name(), os.O_RDWR, 0)
 				if err != nil {
 					t.Fatal(err)
@@ -66,10 +65,8 @@ func TestCOWReadBatchLocalCorruptionAndRefund(t *testing.T) {
 				if _, err = writer.ReadAt(saved[:], offset); err != nil {
 					t.Fatal(err)
 				}
-				if _, err = writer.WriteAt([]byte{saved[0] ^ 1}, offset); err != nil {
-					t.Fatal(err)
-				}
-				defer writer.WriteAt(saved[:], offset)
+				writeCOWUnmappedLeafByte(t, backend, writer, offset, saved[0]^1)
+				defer writeCOWUnmappedLeafByte(t, backend, writer, offset, saved[0])
 				if err = s.SeekGEVersionRanges(a, b, r); err != nil {
 					t.Fatal(err)
 				}
@@ -78,10 +75,7 @@ func TestCOWReadBatchLocalCorruptionAndRefund(t *testing.T) {
 						t.Fatalf("probe%d lost real error: %+v", i, v)
 					}
 				}
-				requireCOWUnmappedFaultFixture(t, backend)
-				if _, err = writer.WriteAt(saved[:], offset); err != nil {
-					t.Fatal(err)
-				}
+				writeCOWUnmappedLeafByte(t, backend, writer, offset, saved[0])
 				if err = s.SeekGEVersionRanges(a, b, r); err != nil {
 					t.Fatal(err)
 				}

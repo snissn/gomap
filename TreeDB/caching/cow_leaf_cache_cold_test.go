@@ -92,7 +92,6 @@ func TestCOWColdLeafCacheReopenAdmission(t *testing.T) {
 						if err != nil {
 							t.Fatal(err)
 						}
-						requireCOWUnmappedFaultFixture(t, backend)
 						writer, err := os.OpenFile(file.Name(), os.O_RDWR, 0)
 						if err != nil {
 							t.Fatal(err)
@@ -103,20 +102,15 @@ func TestCOWColdLeafCacheReopenAdmission(t *testing.T) {
 						if _, err := writer.ReadAt(crc[:], crcOffset); err != nil {
 							t.Fatal(err)
 						}
-						defer writer.WriteAt(crc[:], crcOffset)
-						if _, err := writer.WriteAt([]byte{crc[0] ^ 1}, crcOffset); err != nil {
-							t.Fatal(err)
-						}
+						writeCOWUnmappedLeafByte(t, backend, writer, crcOffset, crc[0]^1)
+						defer writeCOWUnmappedLeafByte(t, backend, writer, crcOffset, crc[0])
 						if _, err := db.Get([]byte("a000")); !errors.Is(err, valuelog.ErrCorrupt) {
 							t.Fatalf("cold corrupt record was admitted: %v", err)
 						}
 						if cowLeafCacheCounter(t, backend, "stores") != 0 {
 							t.Fatal("failed cold decode populated cache")
 						}
-						requireCOWUnmappedFaultFixture(t, backend)
-						if _, err := writer.WriteAt(crc[:], crcOffset); err != nil {
-							t.Fatal(err)
-						}
+						writeCOWUnmappedLeafByte(t, backend, writer, crcOffset, crc[0])
 					}
 					for i := 0; i < 4; i++ {
 						got, err := db.Get([]byte("a000"))

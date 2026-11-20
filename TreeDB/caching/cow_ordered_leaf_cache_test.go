@@ -190,23 +190,16 @@ func TestCOWIteratorLeafCacheRetainsRecordVerification(t *testing.T) {
 		}
 	}
 	for _, offset := range []int64{int64(pointer.Offset - 4), int64(pointer.Offset)} {
-		requireCOWUnmappedFaultFixture(t, backend)
 		var original [1]byte
 		if _, err := writer.ReadAt(original[:], offset); err != nil {
 			t.Fatal(err)
 		}
 		// Even a fatal assertion must leave the real file intact for the
 		// snapshot and database cleanup paths.
-		defer func(offset int64, original [1]byte) { _, _ = writer.WriteAt(original[:], offset) }(offset, original)
-		if _, err := writer.WriteAt([]byte{original[0] ^ 1}, offset); err != nil {
-			t.Fatal(err)
-		}
+		writeCOWUnmappedLeafByte(t, backend, writer, offset, original[0]^1)
+		defer writeCOWUnmappedLeafByte(t, backend, writer, offset, original[0])
 		check(true)
-		requireCOWUnmappedFaultFixture(t, backend)
-		if _, err := writer.WriteAt(original[:], offset); err != nil {
-			t.Fatal(err)
-		}
+		writeCOWUnmappedLeafByte(t, backend, writer, offset, original[0])
 		check(false) // upgrade only after the original full verified decode
 	}
-	requireCOWUnmappedFaultFixture(t, backend)
 }

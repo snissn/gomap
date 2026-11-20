@@ -192,7 +192,6 @@ func TestCOWVerifiedLeafMissCoalescesPublicCuts(t *testing.T) {
 func TestCOWVerifiedLeafMissFailureDoesNotPublish(t *testing.T) {
 	disableCOWSealedLeafMmapForFaultInjection(t)
 	db, backend, _, ptr := cowLeafMissFixture(t, 128, 64)
-	requireCOWUnmappedFaultFixture(t, backend)
 	file, _, err := db.cow.cut.basis.snapshot.PinnedValueLogFile(ptr.ValueLogFileID())
 	if err != nil {
 		t.Fatal(err)
@@ -207,14 +206,8 @@ func TestCOWVerifiedLeafMissFailureDoesNotPublish(t *testing.T) {
 	if _, err := writer.ReadAt(saved[:], offset); err != nil {
 		t.Fatal(err)
 	}
-	defer func() {
-		if _, err := writer.WriteAt(saved[:], offset); err != nil {
-			t.Error(err)
-		}
-	}()
-	if _, err := writer.WriteAt([]byte{saved[0] ^ 1}, offset); err != nil {
-		t.Fatal(err)
-	}
+	writeCOWUnmappedLeafByte(t, backend, writer, offset, saved[0]^1)
+	defer writeCOWUnmappedLeafByte(t, backend, writer, offset, saved[0])
 	for _, r := range cowQueuedLeafReads(t, db, 4) {
 		if !errors.Is(r.err, valuelog.ErrCorrupt) {
 			t.Fatalf("failed CRC read: %+v", r)
@@ -223,10 +216,7 @@ func TestCOWVerifiedLeafMissFailureDoesNotPublish(t *testing.T) {
 	if cowLeafCacheCounter(t, backend, "hits") != 0 || cowLeafCacheCounter(t, backend, "stores") != 0 {
 		t.Fatal("failed decode published a verified page")
 	}
-	requireCOWUnmappedFaultFixture(t, backend)
-	if _, err := writer.WriteAt(saved[:], offset); err != nil {
-		t.Fatal(err)
-	}
+	writeCOWUnmappedLeafByte(t, backend, writer, offset, saved[0])
 	// A decode error must release the mutex and leave the original owner usable.
 	s, err := db.AcquireMVCCReadCut()
 	if err != nil {
@@ -302,6 +292,7 @@ func TestCOWWarmSeekUsesMappedLeafInspection(t *testing.T) {
 			t.Fatalf("expected a verified cache entry for the same file and pointer: hit=%t err=%v", hit, err)
 		}
 		beforeCache := cowLeafCacheCounter(t, backend, "hits")
+		beforeMisses := cowLeafCacheCounter(t, backend, "misses")
 		beforeMapped := cowLeafMappedHits(t, backend)
 		limits := w.limits
 		defer func() { w.limits = limits }()
@@ -312,8 +303,10 @@ func TestCOWWarmSeekUsesMappedLeafInspection(t *testing.T) {
 		if got := cowLeafMappedHits(t, backend) - beforeMapped; got != 1 {
 			t.Fatalf("limited inspection mmap hits = %d, want 1", got)
 		}
-		if got := cowLeafCacheCounter(t, backend, "hits") - beforeCache; got != 0 {
-			t.Fatalf("limited inspection reached the verified cache: hits=%d", got)
+		hits := cowLeafCacheCounter(t, backend, "hits") - beforeCache
+		misses := cowLeafCacheCounter(t, backend, "misses") - beforeMisses
+		if hits != 0 || misses != 0 {
+			t.Fatalf("limited inspection reached the cache: hits=%d misses=%d", hits, misses)
 		}
 	})
 }
