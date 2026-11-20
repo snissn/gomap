@@ -290,16 +290,19 @@ func (b *nativeEngineBuild) materializeDomains(group nativeOrderedRootBuilder, n
 		}
 	}
 	if b.catalog != nil {
-		if _, err := b.catalog.materializeWithCatalog(group, names); err != nil {
+		if _, err := b.catalog.materialize(group, names, nil); err != nil {
 			b.failure = fmt.Errorf("native materialize catalog: %w", err)
 			return b.failure
 		}
 	}
+	// The existing maintenance budget can lend one synchronous startup
+	// workspace. A refusal leaves the already-admitted singleton plan intact.
+	reserveStartup := b.allocation.NativeSemanticAllocator.AdmitNativeBytes
 	for i, work := range b.domains {
 		if b.hasTypedCollection(b.built[i].collection) && nativeTypedPhysicalDomain(b.built[i].name) {
 			continue
 		}
-		root, err := work.materialize(group)
+		root, err := work.materialize(group, nil, reserveStartup)
 		if err != nil {
 			b.failure = fmt.Errorf("native materialize domain index=%d collection=%d: %w", i, b.built[i].collection, err)
 			return b.failure

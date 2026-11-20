@@ -21,6 +21,7 @@ import (
 type nativeStripedBuildRecorder struct {
 	*backenddb.RootPublicationBuildGroup
 	sizes                      []int
+	appendWidths               []int
 	files                      map[uint32]bool
 	placements, placementBytes int
 }
@@ -31,13 +32,13 @@ func (r *nativeStripedBuildRecorder) BuildNativeOrderedRoot(input backenddb.Orde
 }
 
 func (r *nativeStripedBuildRecorder) AppendNativeValueLogValues(values [][]byte) ([]page.ValuePtr, error) {
-	if len(values) != 1 {
-		return nil, fmt.Errorf("native source placement width=%d, want singleton", len(values))
-	}
+	r.appendWidths = append(r.appendWidths, len(values))
 	ptrs, err := r.RootPublicationBuildGroup.AppendNativeValueLogValues(values)
 	if err == nil {
-		r.placements++
-		r.placementBytes += len(values[0])
+		r.placements += len(values)
+		for _, value := range values {
+			r.placementBytes += len(value)
+		}
 		for _, ptr := range ptrs {
 			r.files[ptr.FileID] = true
 		}
@@ -53,12 +54,18 @@ func TestNativeDomainBuildStripedPointerBatching(t *testing.T) {
 	defer runtime.GOMAXPROCS(previous)
 	for _, count := range []int{3, 257} {
 		t.Run(fmt.Sprintf("rows-%d", count), func(t *testing.T) {
-			testNativeDomainBuildStripedPointers(t, count)
+			testNativeDomainBuildStripedPointers(t, count, false, true)
 		})
 	}
+	t.Run("inline-boundaries", func(t *testing.T) {
+		testNativeDomainBuildStripedPointers(t, 6, true, true)
+	})
+	t.Run("scratch-refused", func(t *testing.T) {
+		testNativeDomainBuildStripedPointers(t, 3, false, false)
+	})
 }
 
-func testNativeDomainBuildStripedPointers(t *testing.T, count int) {
+func testNativeDomainBuildStripedPointers(t *testing.T, count int, mixed, canReserve bool) {
 	t.Helper()
 	dir := t.TempDir()
 	opts := treedb.OptionsFor(treedb.ProfileCommandWALRelaxed, dir)
@@ -129,7 +136,11 @@ func testNativeDomainBuildStripedPointers(t *testing.T, count int) {
 	ids, docs := make([][]byte, count), make([][]byte, count)
 	for i := range ids {
 		ids[i] = []byte(fmt.Sprintf("row-%04d", i))
-		docs[i], err = bson.Marshal(bson.D{{Key: "row", Value: i}, {Key: "payload", Value: string(bytes.Repeat([]byte("p"), 8192))}})
+		payload := "inline"
+		if !mixed || (i != 0 && i != 3) {
+			payload = string(bytes.Repeat([]byte("p"), 8192))
+		}
+		docs[i], err = bson.Marshal(bson.D{{Key: "row", Value: i}, {Key: "payload", Value: payload}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -154,9 +165,13 @@ func testNativeDomainBuildStripedPointers(t *testing.T, count int) {
 	}
 	want := make(map[string]expectedRow)
 	wantBytes := 0
+	wantPlacements := 0
 	source.pending.ScanOwned(func(row memtable.COWRecord) bool {
 		want[row.Key] = expectedRow{[]byte(row.Value), row.Revision}
-		wantBytes += len(row.Value)
+		if len(row.Value) >= 8192 {
+			wantBytes += len(row.Value)
+			wantPlacements++
+		}
 		return true
 	})
 	if len(want) != count {
@@ -189,12 +204,39 @@ func testNativeDomainBuildStripedPointers(t *testing.T, count int) {
 	}
 	defer group.Close()
 	recorder := &nativeStripedBuildRecorder{RootPublicationBuildGroup: group, files: make(map[uint32]bool)}
-	root, err := build.materialize(recorder)
+	reservations := 0
+	reserveStartup := func(n uint64) (*memtable.COWExternalLease, error) {
+		reservations++
+		if !canReserve {
+			return nil, memtable.ErrCOWCapacity
+		}
+		return read.capture.NativeMaintenanceAllocator().AdmitNativeBytes(n)
+	}
+	root, err := build.materialize(recorder, nil, reserveStartup)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if recorder.placements != count || recorder.placementBytes != wantBytes || (count == 257 && len(recorder.files) <= 4) || (count == 3 && len(recorder.files) > 4) {
-		t.Fatalf("striped fixture: real files=%d singleton placements=%d bytes=%d want rows=%d bytes=%d", len(recorder.files), recorder.placements, recorder.placementBytes, count, wantBytes)
+	if reservations != 1 {
+		t.Fatalf("startup scratch reservations=%d want=1", reservations)
+	}
+	coldWidth := min(8, count)
+	if mixed {
+		coldWidth = 2
+	}
+	if !canReserve {
+		coldWidth = 1
+	}
+	if len(recorder.appendWidths) != 1+wantPlacements-coldWidth || recorder.appendWidths[0] != coldWidth {
+		t.Fatalf("appends=%d first=%v, want one %d-row cold append then %d singletons", len(recorder.appendWidths), recorder.appendWidths[:min(2, len(recorder.appendWidths))], coldWidth, wantPlacements-coldWidth)
+	}
+	for _, width := range recorder.appendWidths[1:] {
+		if width != 1 {
+			t.Fatalf("warm append width=%d want=1", width)
+		}
+	}
+	wantFiles := min(8, wantPlacements)
+	if recorder.placements != wantPlacements || recorder.placementBytes != wantBytes || len(recorder.files) != wantFiles {
+		t.Fatalf("striped fixture: real files=%d want=%d placements=%d bytes=%d want rows=%d bytes=%d", len(recorder.files), wantFiles, recorder.placements, recorder.placementBytes, wantPlacements, wantBytes)
 	}
 	if err := group.WithNativeConstructionRoots([]uint64{root}, func(readers []iterator.UnsafeIterator) error {
 		it := readers[0]
@@ -229,7 +271,7 @@ func testNativeDomainBuildStripedPointers(t *testing.T, count int) {
 	if count == 257 {
 		wantSizes = []int{256, 1}
 	}
-	t.Logf("warm basis=%d real pointer files=%d singleton placements=%d bytes=%d apply sizes=%v", source.baseRoot, len(recorder.files), recorder.placements, recorder.placementBytes, recorder.sizes)
+	t.Logf("warm basis=%d real pointer files=%d placements=%d bytes=%d apply sizes=%v", source.baseRoot, len(recorder.files), recorder.placements, recorder.placementBytes, recorder.sizes)
 	if !reflect.DeepEqual(recorder.sizes, wantSizes) {
 		t.Fatalf("fifth-file flushing fragmented admitted native batch: sizes=%v want=%v", recorder.sizes, wantSizes)
 	}

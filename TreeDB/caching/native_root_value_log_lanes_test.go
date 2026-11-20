@@ -2,11 +2,16 @@ package caching
 
 import (
 	"bytes"
+	"errors"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
 
@@ -177,5 +182,92 @@ func TestCachingValueLogAppenderSyncsAuxiliaryHotWriters(t *testing.T) {
 		if got := writer.syncs.Load(); got != 1 {
 			t.Fatalf("writer %d syncs=%d want 1", i, got)
 		}
+	}
+}
+
+func TestCachingNativeInitialAppendJoinsFailedLanes(t *testing.T) {
+	previous := runtime.GOMAXPROCS(8)
+	defer runtime.GOMAXPROCS(previous)
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir, Durability: backenddb.DurabilityDurable})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := backend.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	cache, err := Open(dir, backend, Options{
+		JournalLanes:             3,
+		ValueLogGenerationPolicy: uint8(backenddb.ValueLogGenerationHotWarmCold),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := cache.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	group, err := backend.BeginRootPublicationBuildGroup()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer group.Close()
+	if width := group.ClaimNativeValueLogInitialAppendWidth(); width != 8 {
+		t.Fatalf("initial append width=%d want=8", width)
+	}
+	if width := group.ClaimNativeValueLogInitialAppendWidth(); width != 0 {
+		t.Fatalf("repeated initial claim width=%d want=0", width)
+	}
+	lanes := cache.nativeRootValueLogAppendLanesSnapshot()
+	var cold int32
+	for _, lane := range lanes {
+		lane.vlogMu.Lock()
+		if lane.vlog == nil {
+			cold++
+		}
+		lane.vlogMu.Unlock()
+	}
+	injected := errors.New("failed one initial value-log namespace fence")
+	var entered, synced atomic.Int32
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Resource == durabilitycut.ResourceValueLog && filepath.Base(event.Path) == "value_vlog" {
+			switch event.Point {
+			case durabilitycut.BeforeNewFileDirectorySync:
+				if entered.Add(1) == 1 {
+					return injected
+				}
+			case durabilitycut.AfterNewFileDirectorySync:
+				synced.Add(1)
+			}
+		}
+		return nil
+	})
+	value := bytes.Repeat([]byte("payload"), 1024)
+	values := make([][]byte, len(lanes))
+	for i := range values {
+		values[i] = value
+	}
+	ptrs, err := group.AppendNativeValueLogValues(values)
+	restore()
+	if !errors.Is(err, injected) || len(ptrs) != 0 || entered.Load() != cold || synced.Load() != cold-1 {
+		t.Fatalf("partial append ptrs=%v err=%v cold=%d entered=%d synced=%d", ptrs, err, cold, entered.Load(), synced.Load())
+	}
+	for i, lane := range lanes {
+		if lane.nativeRootAppendCalls.Load() != 1 || lane.nativeRootAppendWallNs.Load() == 0 {
+			t.Fatalf("lane %d append did not complete", i)
+		}
+	}
+	final := backend.NewPhysicalBatch().(*backenddb.Batch)
+	defer final.Close()
+	if err := final.SetRootPublicationBuildGroup(group, true); err == nil {
+		if err := final.WriteSync(); err == nil {
+			t.Fatal("published failed native append group")
+		}
+	}
+	if err := group.Close(); err != nil {
+		t.Fatal(err)
 	}
 }

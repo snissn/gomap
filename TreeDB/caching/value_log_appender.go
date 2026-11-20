@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -13,8 +14,9 @@ import (
 )
 
 type cachingValueLogAppender struct {
-	db   *DB
-	lane *lane
+	db                         *DB
+	lane                       *lane
+	initialNativeAppendClaimed atomic.Bool
 }
 
 var _ backenddb.ValueLogAppender = (*cachingValueLogAppender)(nil)
@@ -24,6 +26,29 @@ var _ backenddb.ValueLogRecordReader = (*cachingValueLogAppender)(nil)
 
 func newCachingValueLogAppender(db *DB, l *lane) backenddb.ValueLogAppender {
 	return &cachingValueLogAppender{db: db, lane: l}
+}
+
+// ClaimNativeValueLogInitialAppendWidth sizes one startup cohort of real
+// primary values on this open appender. It creates no writers. A normal
+// append still reserves RIDs, routes them and owns every creation fence.
+func (a *cachingValueLogAppender) ClaimNativeValueLogInitialAppendWidth() int {
+	if !a.db.nativeRootValueLogAppendShared || a.initialNativeAppendClaimed.Load() {
+		return 0
+	}
+	lanes := a.db.nativeRootValueLogAppendLanesSnapshot()
+	if len(lanes) > backenddb.NativeValueLogInitialAppendMax {
+		return 0
+	}
+	var cold int
+	for _, lane := range lanes {
+		if lane.vlogRotateTotal.Load() == 0 {
+			cold++
+		}
+	}
+	if cold < 2 || !a.initialNativeAppendClaimed.CompareAndSwap(false, true) {
+		return 0
+	}
+	return len(lanes)
 }
 
 func (a *cachingValueLogAppender) AppendValues(values [][]byte) ([]page.ValuePtr, error) {

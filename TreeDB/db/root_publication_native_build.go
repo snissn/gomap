@@ -177,6 +177,31 @@ func (group *RootPublicationBuildGroup) NativeInlineThresholdForKey(key []byte) 
 	return group.db.InlineThresholdForKey(key)
 }
 
+// NativeValueLogInitialAppendMax bounds routing and borrowing scratch shared
+// by the native build and the cached appender.
+const NativeValueLogInitialAppendMax = 8
+
+// ClaimNativeValueLogInitialAppendWidth reports a one-time startup hint from
+// the configured appender. An appender without that hint uses singleton
+// native primary appends.
+func (group *RootPublicationBuildGroup) ClaimNativeValueLogInitialAppendWidth() int {
+	if group == nil {
+		return 0
+	}
+	group.mu.Lock()
+	defer group.mu.Unlock()
+	if group.db == nil || group.closed || group.failed || !group.writeLocked || !group.durablePublishLocked || group.tracker == nil {
+		return 0
+	}
+	appender, ok := group.db.currentValueLogAppender().(interface {
+		ClaimNativeValueLogInitialAppendWidth() int
+	})
+	if !ok {
+		return 0
+	}
+	return appender.ClaimNativeValueLogInitialAppendWidth()
+}
+
 // AppendNativeValueLogValues prepares physical projection values. The existing
 // append owner fences GC until these per-pointer pins have been transferred to
 // this group's segment ledger. Finalize includes those segments in its ordinary

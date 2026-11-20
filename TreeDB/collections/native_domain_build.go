@@ -11,7 +11,13 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
-const nativeBuildBatchEntries = 256
+const (
+	nativeBuildBatchEntries = 256
+	// Reserve bounded cohort views, routing and per-lane append scratch
+	// from spare physical-progress capacity before the startup append.
+	// The shared appender routes at most eight records to distinct writers.
+	nativeBuildInitialAppendScratch = 4096
+)
 
 // nativeOrderedRootBuilder is the existing physical group operation, with no
 // publication or callback registration. The production owner is always the
@@ -22,6 +28,11 @@ type nativeOrderedRootBuilder interface {
 
 type nativeSystemRootBuilder interface {
 	BuildNativeSystemDelta(*batch.Batch) error
+}
+
+type nativeBuildValuePlacement interface {
+	NativeInlineThresholdForKey([]byte) int
+	AppendNativeValueLogValues([][]byte) ([]page.ValuePtr, error)
 }
 
 var _ nativeOrderedRootBuilder = (*backenddb.RootPublicationBuildGroup)(nil)
@@ -88,13 +99,9 @@ func nativeDomainBuildCharge(maxSources int) (uint64, error) {
 // active root, preserving final replacements/deletions and exact revisions.
 // Each synchronous group call receives at most nativeBuildBatchEntries rows.
 // The descriptor edge covers every borrowed byte until Reset/Close scrubs it.
-func (b *nativeDomainBuild) materialize(group nativeOrderedRootBuilder) (uint64, error) {
-	return b.materializeWithCatalog(group, nil)
-}
-
 // names is borrowed synchronously from the same captured engine that owns this
 // build. It is never stored on the ledger or used for ordinary row domains.
-func (b *nativeDomainBuild) materializeWithCatalog(group nativeOrderedRootBuilder, names *cowbtree.OwnedMap[string, *nativeCollectionState]) (uint64, error) {
+func (b *nativeDomainBuild) materialize(group nativeOrderedRootBuilder, names *cowbtree.OwnedMap[string, *nativeCollectionState], reserveStartup func(uint64) (*memtable.COWExternalLease, error)) (uint64, error) {
 	if b.failure != nil {
 		return 0, b.failure
 	}
@@ -115,10 +122,10 @@ func (b *nativeDomainBuild) materializeWithCatalog(group nativeOrderedRootBuilde
 		b.roots = append(b.roots, positions.source.root)
 	}
 	for i := len(b.roots) - 1; i >= 0 && b.failure == nil; i-- {
-		b.buildSource(group, b.roots[i], names)
+		b.buildSource(group, b.roots[i], names, reserveStartup)
 	}
 	if b.failure == nil && b.source.pending != nil {
-		b.buildSource(group, b.source.pending, names)
+		b.buildSource(group, b.source.pending, names, reserveStartup)
 	}
 	clear(b.roots)
 	b.roots = b.roots[:0]
@@ -130,9 +137,67 @@ func (b *nativeDomainBuild) materializeWithCatalog(group nativeOrderedRootBuilde
 	return b.root, nil
 }
 
-func (b *nativeDomainBuild) buildSource(group nativeOrderedRootBuilder, root *memtable.COWRoot, names *cowbtree.OwnedMap[string, *nativeCollectionState]) {
+func (b *nativeDomainBuild) buildSource(group nativeOrderedRootBuilder, root *memtable.COWRoot, names *cowbtree.OwnedMap[string, *nativeCollectionState], reserveStartup func(uint64) (*memtable.COWExternalLease, error)) {
+	placement, hasPlacement := group.(nativeBuildValuePlacement)
+	usePlacementThreshold := hasPlacement && (b.source.name == "primary" || b.source.name == "templates")
+	startup, checkStartup := group.(interface{ ClaimNativeValueLogInitialAppendWidth() int })
+	checkStartup = checkStartup && reserveStartup != nil && !b.catalog && b.source.name == "primary"
+	var initial *[backenddb.NativeValueLogInitialAppendMax]memtable.COWRecord
+	var startupLease *memtable.COWExternalLease
+	var initialCount, initialWidth int
+	appendInitial := func() bool {
+		b.appendInitialValues(placement, initial[:initialCount])
+		clear(initial[:initialCount])
+		initial = nil
+		startupLease.Close()
+		initialCount, initialWidth = 0, 0
+		return b.flushFull(group)
+	}
+
 	root.ScanOwned(func(row memtable.COWRecord) bool {
 		key := nativeBorrowedStringBytes(row.Key)
+		if !b.catalog && row.Flags&(node.FlagTombstone|node.FlagPointer) == 0 {
+			threshold := max(0, page.PageSize-node.NodeHeaderSize-node.DirectoryEntrySize-7-page.EntryRevisionSize-len(key))
+			if usePlacementThreshold {
+				threshold = min(threshold, placement.NativeInlineThresholdForKey(key))
+			}
+			if len(row.Value) > threshold {
+				if !hasPlacement {
+					b.failure = backenddb.ErrValueLogAppenderUnavailable
+					return false
+				}
+				if checkStartup {
+					checkStartup = false
+					width := min(startup.ClaimNativeValueLogInitialAppendWidth(), nativeBuildBatchEntries-b.delta.Len())
+					if width > 1 && width <= backenddb.NativeValueLogInitialAppendMax {
+						if lease, err := reserveStartup(nativeBuildInitialAppendScratch); err == nil {
+							startupLease = lease
+							initial = new([backenddb.NativeValueLogInitialAppendMax]memtable.COWRecord)
+							initialWidth = width
+						}
+					}
+				}
+				if initialWidth > 1 {
+					initial[initialCount] = row
+					initialCount++
+					if initialCount < initialWidth {
+						return true
+					}
+					return appendInitial()
+				}
+				values := [1][]byte{nativeBorrowedStringBytes(row.Value)}
+				ptrs, err := placement.AppendNativeValueLogValues(values[:])
+				if err != nil {
+					b.failure = err
+					return false
+				}
+				b.delta.AppendPointerViewNoTouchTrustedSortedWithRevision(key, ptrs[0], row.Revision)
+				return b.flushFull(group)
+			}
+		}
+		if initialCount != 0 && !appendInitial() {
+			return false
+		}
 		switch {
 		case row.Flags&node.FlagTombstone != 0:
 			b.failure = b.delta.AppendDeleteViewTrustedSortedUniqueWithRevision(key, row.Revision)
@@ -152,39 +217,39 @@ func (b *nativeDomainBuild) buildSource(group nativeOrderedRootBuilder, root *me
 					}
 				}
 			}
-			threshold := max(0, page.PageSize-node.NodeHeaderSize-node.DirectoryEntrySize-7-page.EntryRevisionSize-len(key))
-			placement, hasPlacement := group.(interface {
-				NativeInlineThresholdForKey([]byte) int
-				AppendNativeValueLogValues([][]byte) ([]page.ValuePtr, error)
-			})
-			if !b.catalog && hasPlacement && (b.source.name == "primary" || b.source.name == "templates") {
-				threshold = min(threshold, placement.NativeInlineThresholdForKey(key))
-			}
-			if !b.catalog && len(value) > threshold {
-				if !hasPlacement {
-					b.failure = backenddb.ErrValueLogAppenderUnavailable
-					return false
-				}
-				var values [1][]byte
-				values[0] = value
-				ptrs, err := placement.AppendNativeValueLogValues(values[:])
-				if err != nil {
-					b.failure = err
-					return false
-				}
-				b.delta.AppendPointerViewNoTouchTrustedSortedWithRevision(key, ptrs[0], row.Revision)
-			} else {
-				b.failure = b.delta.AppendViewTrustedSortedUniqueWithRevision(key, value, row.Revision)
-			}
+			b.failure = b.delta.AppendViewTrustedSortedUniqueWithRevision(key, value, row.Revision)
 		}
-		if b.failure == nil && b.delta.Len() == nativeBuildBatchEntries {
-			b.flush(group)
-		}
-		return b.failure == nil
+		return b.flushFull(group)
 	})
+	if b.failure == nil && initialCount != 0 {
+		appendInitial()
+	}
 	if b.failure == nil {
 		b.flush(group)
 	}
+}
+
+func (b *nativeDomainBuild) appendInitialValues(placement nativeBuildValuePlacement, rows []memtable.COWRecord) {
+	var values [backenddb.NativeValueLogInitialAppendMax][]byte
+	for i, row := range rows {
+		values[i] = nativeBorrowedStringBytes(row.Value)
+	}
+	ptrs, err := placement.AppendNativeValueLogValues(values[:len(rows)])
+	clear(values[:len(rows)])
+	if err != nil {
+		b.failure = err
+		return
+	}
+	for i, row := range rows {
+		b.delta.AppendPointerViewNoTouchTrustedSortedWithRevision(nativeBorrowedStringBytes(row.Key), ptrs[i], row.Revision)
+	}
+}
+
+func (b *nativeDomainBuild) flushFull(group nativeOrderedRootBuilder) bool {
+	if b.failure == nil && b.delta.Len() == nativeBuildBatchEntries {
+		b.flush(group)
+	}
+	return b.failure == nil
 }
 
 func (b *nativeDomainBuild) flush(group nativeOrderedRootBuilder) {

@@ -34,9 +34,15 @@ func TestNativePhysicalAppendPinLifetime(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer group.Close()
-			ptrs, err := group.AppendNativeValueLogValues([][]byte{bytes.Repeat([]byte("large value"), 512)})
+			ptrs, err := group.AppendNativeValueLogValues([][]byte{
+				bytes.Repeat([]byte("large value"), 512),
+				bytes.Repeat([]byte("second large value"), 512),
+			})
 			if err != nil {
 				t.Fatal(err)
+			}
+			if len(ptrs) != 2 || ptrs[0] == ptrs[1] || ptrs[0].FileID != ptrs[1].FileID {
+				t.Fatalf("need two distinct append pointers sharing one pin: %v", ptrs)
 			}
 			database.pendingValueLogAppendMu.Lock()
 			ptrCount, fileRefs := len(database.pendingValueLogAppendPtrRefs), database.pendingValueLogAppendFileIDRefs[ptrs[0].FileID]
