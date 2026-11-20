@@ -6,11 +6,13 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
 
+	"github.com/golang/snappy"
 	"github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -85,6 +87,74 @@ func cowTestRead(t *testing.T, f *os.File, ptr page.ValuePtr, shape COWRecordSha
 		t.Fatal(err)
 	}
 	return out
+}
+
+func TestCOWSnappySingletonUsesOnlyBorrowedScratch(t *testing.T) {
+	want := bytes.Repeat([]byte("stored BSON body"), 70)
+	compressed := snappy.Encode(nil, want)
+	f, ptr, record := cowTestRecord(t, cowTestFrame(0, BlockCodecSnappy, [][]byte{want}, compressed), true, 0)
+	input, raw := make([]byte, len(record)), make([]byte, len(want))
+	if n := testing.AllocsPerRun(100, func() {
+		value, handled, err := ReadCOWSnappySingleton(f, ptr, cowTestLimits, input, raw)
+		if !handled || err != nil || !bytes.Equal(value, want) || &value[0] != &raw[0] {
+			panic("exact singleton did not use borrowed scratch")
+		}
+	}); n != 0 {
+		t.Fatalf("borrowed singleton allocated %g times", n)
+	}
+	omitted, otherSlot := ptr, ptr
+	omitted.Length = page.ValuePtrMarkGrouped(0, 0)
+	otherSlot.Length = page.ValuePtrMarkGrouped(page.ValuePtrRecordLength(ptr), 1)
+	for _, test := range []struct {
+		ptr       page.ValuePtr
+		inputSize int
+		rawSize   int
+	}{
+		{omitted, len(input), len(raw)},
+		{otherSlot, len(input), len(raw)},
+		{ptr, len(input) - 1, len(raw)},
+		{ptr, len(input), len(raw) - 1},
+	} {
+		if value, handled, err := ReadCOWSnappySingleton(f, test.ptr, cowTestLimits, input[:test.inputSize], raw[:test.rawSize]); value != nil || handled || err != nil {
+			t.Fatalf("ineligible singleton result: len=%d handled=%t err=%v", len(value), handled, err)
+		}
+	}
+
+	use := func(f *os.File, ptr page.ValuePtr, wantErr error) {
+		t.Helper()
+		value, handled, err := ReadCOWSnappySingleton(f, ptr, cowTestLimits, input, raw)
+		if value != nil || !handled || !errors.Is(err, wantErr) {
+			t.Fatalf("read after corruption: len=%d handled=%t err=%v want=%v", len(value), handled, err, wantErr)
+		}
+	}
+	staleHint := ptr
+	staleHint.Length = page.ValuePtrMarkGrouped(page.ValuePtrRecordLength(ptr)-1, 0)
+	use(f, staleHint, ErrCorrupt)
+	if _, err := f.WriteAt([]byte{record[len(record)-1] ^ 1}, int64(len(record)-1)); err != nil {
+		t.Fatal(err)
+	}
+	use(f, ptr, ErrCorrupt)
+	if err := f.Truncate(int64(len(record) - 1)); err != nil {
+		t.Fatal(err)
+	}
+	use(f, ptr, io.EOF)
+	// A valid CRC is insufficient when the declared size disagrees with the
+	// Snappy stream. The bounded reader must refuse rather than use more raw.
+	mismatch, mismatchPtr, _ := cowTestRecord(t, cowTestFrame(0, BlockCodecSnappy, [][]byte{want[:len(want)-1]}, compressed), true, 0)
+	use(mismatch, mismatchPtr, ErrCorrupt)
+
+	ineligible := [][]byte{
+		cowTestFrame(0, BlockCodecNone, [][]byte{[]byte("plain")}, nil),
+		cowTestFrame(73, BlockCodecNone, [][]byte{want}, compressed),
+		cowTestFrame(0, BlockCodecLZ4, [][]byte{want}, compressed),
+		cowTestFrame(0, BlockCodecSnappy, [][]byte{want[:20], want[20:]}, compressed),
+	}
+	for _, body := range ineligible {
+		other, otherPtr, otherRecord := cowTestRecord(t, body, true, 0)
+		if value, handled, err := ReadCOWSnappySingleton(other, otherPtr, cowTestLimits, make([]byte, len(otherRecord)), raw); value != nil || handled || err != nil {
+			t.Fatalf("unsupported shape escaped to singleton decoder: len=%d handled=%t err=%v", len(value), handled, err)
+		}
+	}
 }
 
 func TestCOWRecordRawAndGroupedNoAllocation(t *testing.T) {

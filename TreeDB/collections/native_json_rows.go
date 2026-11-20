@@ -587,6 +587,14 @@ func (t *NativeJSONTxn) touchNativeRowWithInsertProbe(g *nativeJSONTxnBinding, i
 			return nil, tree.ErrKeyNotFound
 		}
 		if entry.Flags&node.FlagPointer != 0 {
+			if scratch := g.probe.scratch; scratch != nil && !insert && nativeBSONSetMeta(&g.probe.meta) {
+				if physical, ok := g.probe.capture.(backenddb.NativeConditionalBlockValueReader); ok {
+					// The pointer's metadata no longer borrows any traversal bytes.
+					// The private key page may be overwritten; the decoded leaf
+					// and its per-probe identity stay intact.
+					return physical.NativeConditionalBlockValueAtPointer(entry.ValuePtr, scratch.key[:], admit)
+				}
+			}
 			return g.probe.readValue(entry.ValuePtr, admit)
 		}
 		return entry.Value, nil

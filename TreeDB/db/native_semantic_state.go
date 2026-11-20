@@ -486,8 +486,15 @@ type NativePhysicalLeafReader interface {
 // admitOutput is nil for caller-owned public results. The existing internal
 // retained consumer may supply only its synchronous original-budget admission:
 // no application callback, capture, publication or scope lock acquisition. It
-// runs before the independent output allocation, under the basis read mutex.
+// runs before the independent output allocation and may hold the reader lock.
 // As with NativePhysicalReader, the enclosing scope excludes same-capture Close.
 type NativePhysicalValueReader interface {
 	NativeValueAtPointer(ptr page.ValuePtr, admitOutput func(uint64) error) ([]byte, error)
+}
+
+// NativeConditionalBlockValueReader may use the conditional caller's already
+// admitted, exclusive traversal scratch when the original cache decoder is
+// busy. It uses the same exact opening file and owned-output contract.
+type NativeConditionalBlockValueReader interface {
+	NativeConditionalBlockValueAtPointer(ptr page.ValuePtr, scratch []byte, admitOutput func(uint64) error) ([]byte, error)
 }
