@@ -118,6 +118,95 @@ func TestStandaloneSharedCOWCollectionLifecycle(t *testing.T) {
 	}
 }
 
+func TestStandaloneSharedCOWOfflineIndexVacuum(t *testing.T) {
+	const name = "db.vacuum"
+	const publicationStat = "treedb.cache.cow.publications_total"
+	opts := StandaloneOptions{Dir: t.TempDir(), Profile: treedb.ProfileNoWALFast}
+	open := func() *StandaloneServer {
+		t.Helper()
+		server, err := OpenStandaloneServer(opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if err := server.Close(); err != nil {
+				t.Errorf("close standalone: %v", err)
+			}
+		})
+		if !server.Backend.HasNativeSemanticBridge() || server.Stats()["treedb.cache.memtable_mode"] != "cow_btree" {
+			t.Fatal("standalone must open a native COW owner")
+		}
+		return server
+	}
+	publications := func(server *StandaloneServer) uint64 {
+		t.Helper()
+		value := server.Stats()[publicationStat]
+		count, err := strconv.ParseUint(value, 10, 64)
+		if err != nil {
+			t.Fatalf("COW publications=%q: %v", value, err)
+		}
+		return count
+	}
+	ids := [][]byte{[]byte("a"), []byte("b"), []byte("c")}
+	docs := make([][]byte, len(ids))
+	for i, id := range ids {
+		n := int64(7)
+		if i == 2 {
+			n = 9
+		}
+		var err error
+		docs[i], err = bson.Marshal(bson.D{{Key: "_id", Value: string(id)}, {Key: "n", Value: n}})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	server := open()
+	_, err := server.Collections.CreateCollection(&collections.CollectionMeta{
+		Name:    name,
+		Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON},
+		Indexes: []collections.IndexDefinition{{Name: "n", Field: "n", ValueType: collections.IndexValueInt64}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	collection, err := server.Collections.OpenCollection(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := publications(server)
+	inserted, err := collection.InsertBatch(ids, docs)
+	if err != nil || !slices.EqualFunc(inserted, ids, bytes.Equal) {
+		t.Fatalf("inserted ids=%q want %q, err=%v", inserted, ids, err)
+	}
+	if after := publications(server); after <= before {
+		t.Fatalf("indexed insert did not publish through COW: before=%d after=%d", before, after)
+	}
+	if err := server.Close(); err != nil {
+		t.Fatalf("close before vacuum: %v", err)
+	}
+	if err := treedb.VacuumIndexOffline(treedb.OptionsFor(opts.Profile, opts.Dir)); err != nil {
+		t.Fatalf("offline vacuum: %v", err)
+	}
+
+	server = open()
+	collection, err = server.Collections.OpenCollection(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, id := range ids {
+		got, err := collection.Get(id)
+		if err != nil || !bytes.Equal(got, docs[i]) {
+			t.Fatalf("reopen document %q: got %x want %x, err=%v", id, got, docs[i], err)
+		}
+	}
+	got, err := collection.FindByIndexValue("n", int64(7))
+	slices.SortFunc(got, bytes.Compare)
+	if err != nil || !slices.EqualFunc(got, ids[:2], bytes.Equal) {
+		t.Fatalf("reopen index: ids=%q want %q, err=%v", got, ids[:2], err)
+	}
+}
+
 // Exit without cleanup after j:true. The child acknowledges only after the
 // shared raw/auth and semantic prefixes have crossed the explicit sync fence.
 func TestStandaloneSharedCOWCrashReopen(t *testing.T) {
