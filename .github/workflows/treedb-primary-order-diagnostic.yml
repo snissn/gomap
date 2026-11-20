@@ -1,0 +1,64 @@
+name: TreeDB PRIMARY order diagnostic
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/treedb-primary-order-diagnostic.yml
+      - .github/scripts/test_mvcc_primary_order_diagnostic.py
+      - scripts/mvcc_primary_order_diagnostic.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  controls:
+    name: PRIMARY order controls (runner ${{ matrix.shard }})
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    env:
+      GOWORK: "off"
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - name: Checkout exact diagnostic source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Setup Go as in the enforcing runner
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Validate diagnostic parser and counterfactuals
+        run: |
+          python3 .github/scripts/test_mvcc_primary_cost_gate.py
+          python3 .github/scripts/test_mvcc_primary_order_diagnostic.py
+
+      - name: Run declared full-length controls
+        env:
+          EXACT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          RUNNER_SLOT: ${{ matrix.shard }}
+        run: |
+          python3 scripts/mvcc_primary_order_diagnostic.py \
+            --root "$GITHUB_WORKSPACE" --head "$EXACT_HEAD" --slot "$RUNNER_SLOT" \
+            --output "$RUNNER_TEMP/primary-order"
+
+      - name: Preserve completed and partial evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: primary-order-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}
+          path: |
+            ${{ runner.temp }}/primary-order
+            !${{ runner.temp }}/primary-order/**/*.test
+            !${{ runner.temp }}/primary-order/tmp/**
+          if-no-files-found: warn
+          retention-days: 14

@@ -97,7 +97,7 @@ func (db *DB) scanCommandWALCleanupProof(proof durableWALCleanupProofV1, scanSea
 	if openSplitPrefix != nil {
 		openPrefix = openSplitPrefix
 	}
-	scan := newCommandWALCleanupScan(proof.cleanupThrough, proof.durableWALLSN, db.walMaxSegmentBytes, beforeSegment)
+	scan := newCommandWALCleanupScan(proof.cleanupThrough, proof.durableWALLSN, db.walMaxSegmentBytes, beforeSegment, &proof.journal)
 	if !scanSealedPrefix {
 		// Checkpoint, Close, and explicit cleanup use the original locked scan.
 		return scan.finish(proof.journalOwner.WithCleanupScan(proof.journal, func() error {
@@ -207,7 +207,7 @@ func (db *DB) scanCommandWALCleanupProof(proof durableWALCleanupProofV1, scanSea
 			if err := errors.Join(closePrefix(), closeCommandWALCleanupDecisions(scan.decisions)); err != nil {
 				return errors.Join(inventoryErr, err)
 			}
-			scan = newCommandWALCleanupScan(proof.cleanupThrough, proof.durableWALLSN, db.walMaxSegmentBytes, beforeSegment)
+			scan = newCommandWALCleanupScan(proof.cleanupThrough, proof.durableWALLSN, db.walMaxSegmentBytes, beforeSegment, &proof.journal)
 			return scan.scanLockedDirectory(db.dir)
 		}
 		for _, file := range prefix {
@@ -465,7 +465,7 @@ func (db *DB) scanSplitCommandWALCleanupPrefix(proof durableWALCleanupProofV1, s
 	}
 	err = errors.Join(yieldCloseErr, hardErr)
 	lineageErr := scan.lineageErr
-	*scan = *newCommandWALCleanupScan(proof.cleanupThrough, proof.durableWALLSN, scan.maxSegmentBytes, scan.beforeSegment)
+	*scan = *newCommandWALCleanupScan(proof.cleanupThrough, proof.durableWALLSN, scan.maxSegmentBytes, scan.beforeSegment, &proof.journal)
 	scan.lineageErr = lineageErr
 	return err != nil, err
 }

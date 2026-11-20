@@ -51,7 +51,7 @@ func TestCommandWALCleanupSplitStreamPrefix(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-		})
+		}, &proof.journal)
 		attempted, scanErr := db.scanSplitCommandWALCleanupPrefix(proof, scan, os.Open, 1)
 		decisions, err := scan.finish(scanErr)
 		defer closeCommandWALCleanupDecisions(decisions)
@@ -88,7 +88,7 @@ func TestCommandWALCleanupSplitStreamPrefix(t *testing.T) {
 			if err := db.commandJournal.RotateActiveSegment(true); err != nil {
 				t.Fatal(err)
 			}
-		})
+		}, &proof.journal)
 		attempted, scanErr := db.scanSplitCommandWALCleanupPrefix(proof, scan, func(path string) (*os.File, error) {
 			file, err := os.Open(path)
 			if err == nil {
@@ -125,7 +125,7 @@ func TestCommandWALCleanupSplitStreamPrefix(t *testing.T) {
 			if err := db.commandJournal.RotateActiveSegment(true); err != nil {
 				t.Fatal(err)
 			}
-		})
+		}, &proof.journal)
 		attempted, scanErr := db.scanSplitCommandWALCleanupPrefix(proof, scan, os.Open, 1)
 		if !attempted || !errors.Is(scanErr, readErr) || !errors.Is(scanErr, commitlog.ErrCorrupt) {
 			t.Fatalf("yield hid unrelated failure: attempted=%t error=%v", attempted, scanErr)
@@ -146,7 +146,7 @@ func TestCommandWALCleanupSplitStreamPrefix(t *testing.T) {
 		var opened []*os.File
 		scan := newCommandWALCleanupScan(proof.cleanupThrough, proof.durableWALLSN, db.walMaxSegmentBytes, func(path string) {
 			visited = append(visited, path)
-		})
+		}, &proof.journal)
 		attempted, scanErr := db.scanSplitCommandWALCleanupPrefix(proof, scan, func(path string) (*os.File, error) {
 			file, err := os.Open(path)
 			if err == nil {
@@ -167,7 +167,7 @@ func TestCommandWALCleanupSplitStreamPrefix(t *testing.T) {
 		}
 		scan := newCommandWALCleanupScan(proof.cleanupThrough, proof.durableWALLSN, db.walMaxSegmentBytes, func(path string) {
 			t.Fatalf("unexpected scan before locked fallback of %q", path)
-		})
+		}, &proof.journal)
 		if attempted, err := db.scanSplitCommandWALCleanupPrefix(proof, scan, os.Open, 1); attempted || err != nil {
 			t.Fatalf("rotation before staging: attempted=%t err=%v", attempted, err)
 		}

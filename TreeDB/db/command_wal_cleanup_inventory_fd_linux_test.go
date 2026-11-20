@@ -236,7 +236,7 @@ func TestCommandWALCleanupSplitStreamSecondInventoryDescriptorExhaustion(t *test
 			t.Fatalf("a new inventory reader should be refused at RLIMIT_NOFILE=%d: %v", limit, err)
 		}
 		t.Logf("both covered descriptors retained under real ReadDir EMFILE at RLIMIT_NOFILE=%d", limit)
-	})
+	}, &proof.journal)
 	attempted, scanErr := database.scanSplitCommandWALCleanupPrefix(proof, scan, os.Open, 1)
 	decisions, err := scan.finish(scanErr)
 	defer closeCommandWALCleanupDecisions(decisions)
@@ -313,7 +313,7 @@ func TestCommandWALCleanupSplitStreamRotationDescriptorExhaustion(t *testing.T) 
 			t.Fatalf("public rotation with %d free slots before staging: %v", slots, err)
 		}
 		checkClosedSplitStreamReaders(t, opened, 2)
-	})
+	}, &proof.journal)
 	attempted, err := database.scanSplitCommandWALCleanupPrefix(proof, scan, func(path string) (*os.File, error) {
 		file, err := os.Open(path)
 		if err == nil {
