@@ -8163,25 +8163,51 @@ func (db *DB) reconcileSplitValueLogWritersAfterBackendMaintenanceAdmitted(admit
 	// In cached mode DB.dir is the wal/ directory, not the DB root.
 	walDir := db.dir
 	segments, _ := listNonEmptySplitLogSegments(walDir, db.valueLogDir, db.leafLogDir)
+	sharedLane := -1
+	var emptyPeers map[int]string
+	if db.nativeRootValueLogAppendShared {
+		sharedLane = db.nativeRootValueLogAppendLanes[0].id
+		emptyPeers = db.emptyNativeRootValueLogPeers()
+	}
 	maxSeqByLane := make(map[int]int, len(db.lanes)+1)
+	var emptyWriterFence int
 	for _, seg := range segments {
-		if !seg.valueLog {
+		if !seg.valueLog || seg.seq <= 0 {
 			continue
 		}
-		if seg.seq > maxSeqByLane[seg.lane] {
-			maxSeqByLane[seg.lane] = seg.seq
+		if seg.lane == sharedLane {
+			// Ignore unencodable names before computing either sequence floor.
+			if uint64(seg.seq) > math.MaxUint32 {
+				continue
+			}
+			if _, err := valuelog.EncodeFileID(uint32(seg.lane), uint32(seg.seq)); err != nil {
+				continue
+			}
+			if seg.size != 0 || emptyPeers[seg.seq] != seg.path {
+				emptyWriterFence = max(emptyWriterFence, seg.seq)
+			}
 		}
+		maxSeqByLane[seg.lane] = max(maxSeqByLane[seg.lane], seg.seq)
 	}
-	if db.nativeRootValueLogAppendShared && len(db.nativeRootValueLogAppendLanes) > 0 {
-		db.advanceNativeRootValueLogAppendSeqAtLeast(maxSeqByLane[db.nativeRootValueLogAppendLanes[0].id])
+	if sharedLane >= 0 {
+		// Save the fence before reserving successors. A partial rotation must
+		// finish even if the observed segment is gone by the next maintenance.
+		for old := db.nativeRootValueLogMaintenanceFence.Load(); int64(emptyWriterFence) > old; old = db.nativeRootValueLogMaintenanceFence.Load() {
+			if db.nativeRootValueLogMaintenanceFence.CompareAndSwap(old, int64(emptyWriterFence)) {
+				break
+			}
+		}
+		emptyWriterFence = int(db.nativeRootValueLogMaintenanceFence.Load())
+		maxSeqByLane[sharedLane] = max(maxSeqByLane[sharedLane], emptyWriterFence)
+		db.advanceNativeRootValueLogAppendSeqAtLeast(maxSeqByLane[sharedLane])
 	}
 	for i := range db.lanes {
-		if err := db.advanceValueLogWriterPastObservedSeq(&db.lanes[i], maxSeqByLane[db.lanes[i].id]); err != nil {
+		if err := db.advanceValueLogWriterPastObservedSeq(&db.lanes[i], maxSeqByLane[db.lanes[i].id], emptyWriterFence); err != nil {
 			return err
 		}
 	}
 	for _, l := range db.nativeRootValueLogAppendAuxLanesSnapshot() {
-		if err := db.advanceValueLogWriterPastObservedSeq(l, maxSeqByLane[l.id]); err != nil {
+		if err := db.advanceValueLogWriterPastObservedSeq(l, maxSeqByLane[l.id], emptyWriterFence); err != nil {
 			return err
 		}
 	}
@@ -8230,7 +8256,7 @@ func (db *DB) advanceLeafLogAppendWriterPastObservedSeq(l *lane, observedMaxSeq 
 	return db.rotateValueLogMuHeldToSeq(l, nextSeq)
 }
 
-func (db *DB) advanceValueLogWriterPastObservedSeq(l *lane, observedMaxSeq int) error {
+func (db *DB) advanceValueLogWriterPastObservedSeq(l *lane, observedMaxSeq, emptyWriterFence int) error {
 	if db == nil || l == nil || observedMaxSeq <= 0 {
 		return nil
 	}
@@ -8248,6 +8274,9 @@ func (db *DB) advanceValueLogWriterPastObservedSeq(l *lane, observedMaxSeq int) 
 		return nil
 	}
 	if db.isSharedNativeRootValueLogAppendLane(l) {
+		if l.vlogSeq >= emptyWriterFence && db.ownsEmptyNativeRootValueLogPeerMuHeld(l) {
+			return nil
+		}
 		nextSeq, err := db.nextNativeRootValueLogAppendSeq()
 		if err != nil {
 			return err
@@ -10239,6 +10268,9 @@ type DB struct {
 	testAgeBlockedStateReadHook         func()
 	testStageConfirmStateReadHook       func()
 	testForegroundMaintenancePollCh     <-chan time.Time
+
+	// Populated or unproven shared-lane observations still fence empty writers.
+	nativeRootValueLogMaintenanceFence atomic.Int64
 }
 
 const (

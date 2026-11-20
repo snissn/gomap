@@ -1002,6 +1002,20 @@ func (w *Writer) StableIdentity() (rootpublication.StableIdentity, error) {
 	return rootpublication.StableIdentityFromFile(file)
 }
 
+// OwnsEmptyFile checks the logical prefix and the physical file at path. The
+// caller must hold the writer lease through the check.
+func (w *Writer) OwnsEmptyFile(path string, fileID uint32) bool {
+	if w == nil || w.f == nil || w.fileID != fileID || w.size != 0 || w.PendingBytes() != 0 {
+		return false
+	}
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() != 0 {
+		return false
+	}
+	active, err := w.f.Stat()
+	return err == nil && active.Size() == 0 && os.SameFile(active, info)
+}
+
 func (w *Writer) Size() int64 {
 	if w == nil {
 		return 0

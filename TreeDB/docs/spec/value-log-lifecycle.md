@@ -547,7 +547,15 @@ Checkpoint and retention pruning:
 Backend maintenance that creates new value-log or split leaf-log segments must
 reconcile cached-mode split writers after the backend operation. Reconciliation
 refreshes the value-log reader. Value lanes advance past their maximum observed
-on-disk sequence. Independent cached leaf writers reserve unique sequences from
+on-disk sequence. A shared native value writer can keep its current empty file
+when every higher observed sequence belongs to another current empty writer in
+that shared lane. The checked canonical paths must identify the active regular
+files. The logical prefix, buffered bytes and physical length must all be zero.
+Populated writers use the full observed sequence fence. A populated, sealed or
+unproven shared-lane observation also fences older empty writers, including an
+external segment below a newer peer. Reconciliation retains that fence across
+partial rotation failures so a later attempt can finish after the observed file
+is removed. Independent cached leaf writers reserve unique sequences from
 one allocator before creating files; observing a peer's higher reserved sequence
 does not rotate the other leaf writers. Maintained backend leaf writers reserve
 through that same allocator. An unreserved external leaf sequence still invokes

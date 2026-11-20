@@ -2382,6 +2382,18 @@ func (m *Manager) currentWritableKeyLocked(lane, fileID uint32) uint32 {
 	return lane
 }
 
+// IsSegmentCurrentWritable reports whether fileID is registered as an active
+// writer and remains eligible for appends.
+func (m *Manager) IsSegmentCurrentWritable(fileID uint32) bool {
+	if m == nil {
+		return false
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	f := m.files[fileID]
+	return f != nil && f.IsCurrentWritable()
+}
+
 // CurrentWritableFileIDs returns the registered current writable value-log
 // segment IDs. These files may still be held open or mapped and must not be
 // physically removed by maintenance cleanup.
