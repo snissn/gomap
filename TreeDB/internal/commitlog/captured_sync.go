@@ -76,9 +76,12 @@ func (j *CommandJournal) CaptureSyncInto(target *CapturedSync, rotated []*rootpu
 		}
 	}()
 	if j.capturedFile == nil || j.capturedFile.seq != j.segmentSeq {
-		token, tokenErr := j.pinCapturedSyncFileLocked(j.writer.f, j.path, j.segmentSeq, rootpublication.ReachabilityCommandWALActive, rootpublication.DurableFrontier{}, nil)
+		token, tokenErr := j.stableSegmentToken(j.writer.f, j.path, j.segmentSeq, rootpublication.ReachabilityCommandWALActive, rootpublication.DurableFrontier{}, nil, false)
 		if tokenErr != nil {
-			return nil, tokenErr
+			token, tokenErr = j.retryCapturedSyncPinLocked(tokenErr, j.writer.f, j.path, j.segmentSeq, rootpublication.ReachabilityCommandWALActive, rootpublication.DurableFrontier{}, nil)
+			if tokenErr != nil {
+				return nil, tokenErr
+			}
 		}
 		if j.capturedFile != nil {
 			j.releaseCapturedFileLocked(j.capturedFile)
@@ -91,7 +94,11 @@ func (j *CommandJournal) CaptureSyncInto(target *CapturedSync, rotated []*rootpu
 		var pinned *rootpublication.StableResourceToken
 		err = original.WithPinnedFile(func(file *os.File) error {
 			var pinErr error
-			pinned, pinErr = j.pinCapturedSyncFileLocked(file, original.DiagnosticPath(), original.Generation(), original.Reachability(), original.Frontier(), original.Namespace())
+			frontier := original.Frontier()
+			pinned, pinErr = j.stableSegmentToken(file, original.DiagnosticPath(), original.Generation(), original.Reachability(), frontier, original.Namespace(), false)
+			if pinErr != nil {
+				pinned, pinErr = j.retryCapturedSyncPinLocked(pinErr, file, original.DiagnosticPath(), original.Generation(), original.Reachability(), frontier, original.Namespace())
+			}
 			return pinErr
 		})
 		if err != nil {
@@ -106,10 +113,9 @@ func (j *CommandJournal) CaptureSyncInto(target *CapturedSync, rotated []*rootpu
 	return target, nil
 }
 
-func (j *CommandJournal) pinCapturedSyncFileLocked(file *os.File, path string, seq uint64, field rootpublication.ReachabilityField, frontier rootpublication.DurableFrontier, namespace *rootpublication.StableNamespaceToken) (*rootpublication.StableResourceToken, error) {
-	token, err := j.stableSegmentToken(file, path, seq, field, frontier, namespace, false)
-	if err == nil || j.detachedCleanupScan == nil || !captureHasOnlyDescriptorLimit(err) {
-		return token, err
+func (j *CommandJournal) retryCapturedSyncPinLocked(err error, file *os.File, path string, seq uint64, field rootpublication.ReachabilityField, frontier rootpublication.DurableFrontier, namespace *rootpublication.StableNamespaceToken) (*rootpublication.StableResourceToken, error) {
+	if j.detachedCleanupScan == nil || !captureHasOnlyDescriptorLimit(err) {
+		return nil, err
 	}
 	// The optional ext4 cleanup scan can be holding the last descriptors.
 	// Yield its temporary readers and retry only the pin, under the same

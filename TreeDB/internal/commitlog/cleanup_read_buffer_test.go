@@ -78,12 +78,12 @@ func TestCleanupReadBufferPreservesStreamValidation(t *testing.T) {
 			offsets = append(offsets, offset)
 		}
 	}
-	read := func(buffer *CleanupReadBuffer) ([]int64, error) {
+	read := func(open func(*os.File, Options) (*Reader, error)) ([]int64, error) {
 		t.Helper()
 		if _, err := file.Seek(0, io.SeekStart); err != nil {
 			t.Fatal(err)
 		}
-		reader, err := buffer.Open(file, Options{})
+		reader, err := open(file, Options{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -93,7 +93,7 @@ func TestCleanupReadBufferPreservesStreamValidation(t *testing.T) {
 	var fileIO sync.Mutex
 	var released atomic.Bool
 	detached := NewDetachedStreamCleanupReadBuffer(&fileIO, &released)
-	plain, err := read(nil)
+	plain, err := read(NewReaderFromFileWithOptions)
 	if len(plain) != frameCount+1 || !errors.Is(err, io.EOF) || plain[frameCount-1] != int64(len(original)) {
 		t.Fatalf("original valid fixture offsets=%v err=%v", plain, err)
 	}
@@ -121,12 +121,12 @@ func TestCleanupReadBufferPreservesStreamValidation(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			wantOffsets, wantErr := read(nil)
-			gotOffsets, gotErr := read(&buffer)
+			wantOffsets, wantErr := read(NewReaderFromFileWithOptions)
+			gotOffsets, gotErr := read(buffer.Open)
 			if !errors.Is(wantErr, tc.want) || !errors.Is(gotErr, tc.want) || !slices.Equal(gotOffsets, wantOffsets) {
 				t.Fatalf("offsets and result: buffered %v %v, ordinary %v %v, want %v", gotOffsets, gotErr, wantOffsets, wantErr, tc.want)
 			}
-			detachedOffsets, detachedErr := read(detached)
+			detachedOffsets, detachedErr := read(detached.Open)
 			if !errors.Is(detachedErr, tc.want) || !slices.Equal(detachedOffsets, wantOffsets) {
 				t.Fatalf("offsets and result: detachable %v %v, ordinary %v %v", detachedOffsets, detachedErr, wantOffsets, wantErr)
 			}
@@ -182,5 +182,53 @@ func TestCleanupReadBufferLeavesFixedValidationIntact(t *testing.T) {
 	defer reader.Close()
 	if !reader.IsEmptyFixedContainer() || buffer.input != nil {
 		t.Fatal("fixed reserve was not validated by the original reader")
+	}
+}
+
+func TestDetachedCleanupReadBufferRelativeSeekAndRelease(t *testing.T) {
+	data := bytes.Repeat([]byte("0123456789"), 1<<15)
+	path := filepath.Join(t.TempDir(), "stream")
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := file.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	var fileIO sync.Mutex
+	var released atomic.Bool
+	b := NewDetachedStreamCleanupReadBuffer(&fileIO, &released)
+	r, err := b.Open(file, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	var p [8]byte
+	if _, err := io.ReadFull(b, p[:]); err != nil || !bytes.Equal(p[:], data[:8]) {
+		t.Fatalf("initial data %q, error %v", p, err)
+	}
+	if pos, err := b.Seek(-5, io.SeekCurrent); err != nil || pos != 3 {
+		t.Fatalf("relative seek got %d, %v; want 3", pos, err)
+	}
+	if _, err := io.ReadFull(b, p[:]); err != nil || !bytes.Equal(p[:], data[3:11]) {
+		t.Fatalf("data after seek %q, error %v", p, err)
+	}
+	if _, err := b.Seek(-20, io.SeekCurrent); err == nil {
+		t.Fatal("accepted a negative absolute offset")
+	}
+	if pos, err := r.Offset(); err != nil || pos != 11 {
+		t.Fatalf("failed seek changed reported offset to %d, %v", pos, err)
+	}
+	released.Store(true)
+	if pos, err := r.Offset(); err != nil || pos != 11 {
+		t.Fatalf("released logical offset %d, %v", pos, err)
+	}
+	if _, err := b.Seek(0, io.SeekStart); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("physical seek after release returned %v", err)
 	}
 }

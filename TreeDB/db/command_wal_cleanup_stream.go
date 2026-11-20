@@ -280,7 +280,7 @@ func (db *DB) scanDetachedCommandWALCleanupPrefix(proof durableWALCleanupProofV1
 			break
 		}
 	}
-	scan.closedStreamBuffer = commitlog.NewDetachedStreamCleanupReadBuffer(&fileIO, &released)
+	detachedBuffer := commitlog.NewDetachedStreamCleanupReadBuffer(&fileIO, &released)
 	for i := 0; !canonicalFallback && scan.hardErr == nil && i < len(prefix); i++ {
 		closed := &prefix[i]
 		if scan.beforeSegment != nil {
@@ -289,7 +289,14 @@ func (db *DB) scanDetachedCommandWALCleanupPrefix(proof durableWALCleanupProofV1
 		if released.Load() {
 			break
 		}
-		closed.kept = scan.scanIdentifiedFile(closed.segment, closed.file, closed.info, closed.identity, false)
+		reader, err := detachedBuffer.Open(closed.file, commitlog.Options{MaxSegmentSize: scan.maxSegmentBytes})
+		if err != nil {
+			scan.hardErr = err
+			break
+		}
+		result, readErr := scanCommandWALSegmentReader(reader, false, scan.options)
+		readErr = errors.Join(readErr, reader.Close())
+		closed.kept = scan.recordSegmentScan(closed.segment, closed.file, closed.info, closed.identity, false, result, readErr)
 		if closed.kept {
 			scan.decisions[len(scan.decisions)-1].validatedExtent = closed.info
 		}
