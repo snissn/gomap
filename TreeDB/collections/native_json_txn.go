@@ -33,6 +33,7 @@ type nativeJSONTxnBinding struct {
 	rows              nativeJSONRows
 	stageCharge       uint64
 	validation        indexEncodeArena
+	retainedScalar    indexEncodeArena
 	validationLease   *memtable.COWExternalLease
 	validationCharge  uint64
 	templates         templateV1Resolver
