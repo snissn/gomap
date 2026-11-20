@@ -119,6 +119,10 @@ checkpointed `AppliedLSN`, validates V2 frames and required external refs,
 repairs only the discardable suffix above the durable frontier, replays complete
 commands with `LSN > AppliedLSN` through the deterministic command executor,
 then checkpoints the recovered `AppliedLSN` before cleaning covered WAL.
+Suffix repair preserves all complete bytes preceding the first discarded
+frame in each segment. This includes frames already applied by the selected
+root that an older recoverable root may still need. Only a segment with no
+retained prefix can be removed by suffix repair.
 
 A failed replay operation and failed physical teardown are distinct outcomes.
 Open returns the operation error after verified clean teardown and releases its
