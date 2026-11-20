@@ -2694,7 +2694,11 @@ func TestTreeDBRawWireLoadPhaseHonorsCanceledContext(t *testing.T) {
 func TestTreeDBFullMaintenancePreservesBenchmarkProfile(t *testing.T) {
 	for _, profile := range []treedb.Profile{treedb.ProfileBenchUnsafe, treedb.ProfileNoWALFast} {
 		t.Run(string(profile), func(t *testing.T) {
-			dir := filepath.Join(t.TempDir(), "db")
+			tempDir, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatalf("resolve benchmark scratch directory: %v", err)
+			}
+			dir := filepath.Join(tempDir, "db")
 			cfg, err := parseConfig([]string{
 				"-target", "treedb",
 				"-treedb-dir", dir,
