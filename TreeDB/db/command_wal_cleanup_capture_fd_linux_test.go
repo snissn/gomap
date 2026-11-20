@@ -97,7 +97,15 @@ func testCommandWALCleanupFirstPrefixCapture(t *testing.T, free int, bothCovered
 
 	// Start capture while staging owns the journal. On an admitted detached
 	// scan force the capture to finish before validation and retirement.
+	startCapture := make(chan struct{})
 	captured := make(chan struct{})
+	var released bool
+	releaseCapture := func() {
+		if !released {
+			close(startCapture)
+			released = true
+		}
+	}
 	var captureErr error
 	opened, scans := 0, 0
 	database.testCommandWALCleanupHooks = &commandWALCleanupTestHooks{
@@ -108,6 +116,7 @@ func testCommandWALCleanupFirstPrefixCapture(t *testing.T, free int, bothCovered
 				if opened == 2 {
 					go func() {
 						defer close(captured)
+						<-startCapture
 						target, _, err := database.CaptureCommandWALPrefix()
 						if err == nil {
 							_, err = target.Sync()
@@ -120,15 +129,23 @@ func testCommandWALCleanupFirstPrefixCapture(t *testing.T, free int, bothCovered
 		},
 		beforeSegment: func(string) {
 			scans++
-			if scans == 1 && database.commandJournal.AppendLockAvailableForTesting() {
-				<-captured
+			if scans == 1 {
+				detached := database.commandJournal.AppendLockAvailableForTesting()
+				if !detached {
+					t.Error("the admitted first scan still owns the journal")
+				}
+				releaseCapture()
+				if detached {
+					<-captured
+				}
 			}
 		},
-		afterScan: func() { <-captured },
+		afterScan: func() { releaseCapture(); <-captured },
 	}
 	removed := database.commandWALCleanupRemoved.Load()
 	complete, scanErr := database.CleanupCommandWALCoveredPrefix()
 	database.testCommandWALCleanupHooks = nil
+	releaseCapture()
 	if opened != 2 {
 		t.Fatalf("staged %d predecessors: %v", opened, scanErr)
 	}
@@ -139,6 +156,9 @@ func testCommandWALCleanupFirstPrefixCapture(t *testing.T, free int, bothCovered
 	wantPending := free < 4
 	if scanErr != nil || complete == wantPending {
 		t.Fatalf("cleanup: complete=%v err=%v", complete, scanErr)
+	}
+	if !wantPending && scans == 0 {
+		t.Fatal("admitted cleanup did not scan any predecessor")
 	}
 	if wantPending {
 		if scans != 0 || database.commandWALCleanupRemoved.Load() != removed {
