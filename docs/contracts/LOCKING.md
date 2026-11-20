@@ -102,6 +102,15 @@ captured token and the caller's basis. An online vacuum that supersedes the
 captured runtime makes the basis stale. A failure of the captured physical seal
 is returned to the caller.
 
+A full automatic native COW cut may release writer admission after it installs
+a fresh ext4 stream and registers its successor directory with the current
+journal owner. The checkpoint retains the cut and completes this directory sync
+before materialization. A durable waiter can perform or join the same sync
+under the journal mutex. Completion uses the retained child and parent without
+taking that mutex. A second rotation and Close join the outstanding operation
+before replacing or releasing either descriptor. At most one successor
+directory sync per journal can be outstanding.
+
 ## Bounded vector prepare in the Raft FSM
 
 Vector prepare takes a factory-minted stable DB capture, the root-scoped vector

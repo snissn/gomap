@@ -4998,6 +4998,17 @@ headroom is exhausted. These controls do not activate unconverted collections.
   `TestCapturedSyncFinalLegalLSN`: retained exact identity, independent physical
   syncs, rotations, last legal LSN and Close joining all pins.
 
+- `TestAutomaticCheckpointSuccessorDirectoryAdmitsRelaxedBSON` holds the
+  original directory operation after the predecessor sync and canonical successor
+  creation on ext4. It checks the typed relaxed update on that successor,
+  unchanged durable and applied frontiers, and a durable waiter at the namespace
+  join before marker reservation. Checked Close and reopen recover the BSON
+  update and the durable key.
+- `TestCheckpointSuccessorDirectoryErrorAndFallback`,
+  `TestJournalFileSyncSeesIndependentNamespaceFailure`, and
+  `TestAutomaticCOWJournalRotationRequiresOriginalOwner` cover the inline
+  fallback, retained journal failure, and exact owner check.
+
 ### Logical rotation and physical command-WAL capacity
 
 - `TestCommandJournalPreservesLogicalRotationTarget` keeps the configured

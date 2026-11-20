@@ -4531,6 +4531,23 @@ the captured file, and Close joins its release. Only the captured COW cut can
 advance DATA coverage. The operation creates no new durable command identity
 or namespace proof.
 
+A full automatic checkpoint on the standalone native COW owner can install a
+fresh, empty Linux ext4 stream successor before its canonical name is durable.
+The cut first flushes and syncs the predecessor, checks both canonical names
+against their open files and retained parent, installs the successor and checks
+the predecessor close. While the original directory sync is pending, a relaxed
+V2 collection update by ID (kind 102, collection scope, payload format 5) that
+fits this successor may append there and acknowledge. The acknowledgement can
+advance the visible and accepted frontiers. The durable WAL frontier, sealed
+root, and applied LSN still require their respective durability boundaries.
+
+The journal retains the successor and its parent through the directory sync
+and rechecks their canonical link before and after syncing the retained parent.
+A durable command joins that operation before reserving its LSN. A namespace
+or identity failure poisons the journal and reaches checked Close. Explicit
+Checkpoint, Close, pressure cuts, and rotations with pre-existing successors
+or other container types use the inline rotation path.
+
 A fully validated, frame-free fixed container may be reclaimed by covered-prefix
 cleanup through the same root, replay-lineage, active-generation, pin and exact
 file-identity guards as occupied segments. Its logical debit is zero; its actual
