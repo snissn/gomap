@@ -339,3 +339,104 @@ func TestAcceptedCloseRetainsOriginalFailedCustodyAndContainingArrays(t *testing
 		}
 	}
 }
+
+func TestAcceptedPrefixAbandonResumesSealedPredecessor(t *testing.T) {
+	t.Run("success", func(t *testing.T) { testAcceptedPrefixAbandonResumesSealedPredecessor(t, nil) })
+	t.Run("custody_error", func(t *testing.T) {
+		testAcceptedPrefixAbandonResumesSealedPredecessor(t, errors.New("original custody release failed"))
+	})
+}
+
+func testAcceptedPrefixAbandonResumesSealedPredecessor(t *testing.T, releaseErr error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	c, err := New(Options{StartupSynchronous: true, Publisher: PublisherFunc(func(context.Context, *PreparedRootCandidate) PublishResult {
+		return PublishResult{Outcome: PublishSucceeded}
+	})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stopClean(t, c)
+	if err := c.ConfigureAcceptedPrefix(2, LogicalFrontiers{}); err != nil {
+		t.Fatal(err)
+	}
+	install := func(sequence uint64, releases *int, custodyErr error) AcceptedCut {
+		t.Helper()
+		ticket, err := c.ReserveAccepted(false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := ticket.RecordAssigned(sequence, nil, false); err != nil {
+			t.Fatal(err)
+		}
+		custody := &prefixOriginalCustody{release: func() error {
+			(*releases)++
+			return custodyErr
+		}}
+		if err := ticket.InstallAccepted(AcceptedDescriptor{Sequence: sequence, Custody: custody}); err != nil {
+			t.Fatal(err)
+		}
+		cut, err := c.CaptureAcceptedCut(SealedPrefix{LogicalSequence: sequence, CanonicalLSN: sequence}, LogicalRootSet{Raw: releases})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cut
+	}
+
+	var predecessorReleases, suffixReleases int
+	original := install(1, &predecessorReleases, releaseErr)
+	builder, err := c.AcquireBuilder(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	physical, err := c.EnqueueBuiltAcceptedCut(prefixPhysicalCandidate(t, 1, 1), builder, original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seal := physical.SealReceipt()
+	if seal.Sealed() {
+		t.Fatal("expected an accepted but unsealed publication")
+	}
+	if err := original.CompleteHandoff(seal); err != nil {
+		t.Fatal(err)
+	}
+
+	// The newer writer captured private disk construction before its WAL
+	// readiness check. Let the real dispatcher finish the predecessor while
+	// that newer cut prevents the accepted queue from shifting underneath it.
+	refused := install(2, &suffixReleases, nil)
+	if err := seal.Wait(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !seal.Sealed() || predecessorReleases != 0 || c.LogicalFrontiers().S != (SealedPrefix{}) {
+		t.Fatal("predecessor custody crossed the active cut")
+	}
+	if !errors.Is(original.Abandon(), ErrAcceptedReceipt) || predecessorReleases != 0 {
+		t.Fatal("stale abandon disturbed the newer cut")
+	}
+	if err := refused.Abandon(); !errors.Is(err, releaseErr) {
+		t.Fatalf("abandon error=%v, want %v", err, releaseErr)
+	}
+	if err := c.WaitAccepted(ctx, original.through); !errors.Is(err, releaseErr) {
+		t.Fatalf("accepted wait after abandon=%v, want %v", err, releaseErr)
+	}
+	if !errors.Is(refused.Abandon(), ErrAcceptedReceipt) {
+		t.Fatal("duplicate abandon accepted")
+	}
+	wantSealed := original.through
+	if releaseErr != nil {
+		wantSealed = SealedPrefix{}
+	}
+	if got := c.LogicalFrontiers(); got.S != wantSealed || got.V != 2 || got.C != 2 || got.W != 0 {
+		t.Fatalf("abandon changed logical suffix or WAL durability: %+v", got)
+	}
+	if predecessorReleases != 1 || suffixReleases != 0 {
+		t.Fatalf("abandon released wrong custody: predecessor=%d suffix=%d", predecessorReleases, suffixReleases)
+	}
+	if err := c.CloseAccepted(); !errors.Is(err, releaseErr) {
+		t.Fatalf("checked Close error=%v, want %v", err, releaseErr)
+	}
+	if predecessorReleases != 1 || suffixReleases != 1 {
+		t.Fatalf("close released custody twice or leaked: predecessor=%d suffix=%d", predecessorReleases, suffixReleases)
+	}
+}

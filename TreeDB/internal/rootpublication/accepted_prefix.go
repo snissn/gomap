@@ -805,22 +805,25 @@ func (cut AcceptedCut) CompleteHandoff(seal PhysicalSealReceipt) error {
 	return cut.owner.drainSealedAccepted()
 }
 
-// Abandon ends only private disk construction. Accepted source custody stays
-// in the queue; a later disk pass may capture and materialize the same prefix.
+// Abandon ends only private disk construction. The abandoned cut's sources
+// stay queued for a later disk pass, but a sealed predecessor can now drain.
 func (cut AcceptedCut) Abandon() error {
 	if cut.owner == nil {
 		return nil
 	}
 	p := &cut.owner.accepted
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	if p.activeCut != cut.nonce || p.cutCount != cut.count || p.cutThrough != cut.through || !sameLogicalRootSet(p.cutRootSet, cut.rootSet) {
+		p.mu.Unlock()
 		return ErrAcceptedReceipt
 	}
 	p.activeCut, p.cutCount = 0, 0
 	p.cutThrough, p.cutRootSet = SealedPrefix{}, LogicalRootSet{}
 	p.changed.Broadcast()
-	return nil
+	p.mu.Unlock()
+	// The physical dispatcher may have observed a seal while this cut still
+	// held queue offsets stable. Resume that drain without waiting for new I/O.
+	return cut.owner.drainSealedAccepted()
 }
 
 func (c *Coordinator) observeAcceptedPhysicalSeal(physical *Coordinator, sequence uint64) {
@@ -858,7 +861,7 @@ func (c *Coordinator) drainSealedAccepted() error {
 			p.mu.Unlock()
 			return err
 		}
-		if p.count == 0 || p.activeCut != 0 {
+		if p.closed || p.count == 0 || p.activeCut != 0 {
 			p.mu.Unlock()
 			return nil
 		}
