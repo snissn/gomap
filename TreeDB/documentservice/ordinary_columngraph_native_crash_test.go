@@ -19,6 +19,15 @@ import (
 // This is process-crash recovery coverage, not a power-loss simulation or a
 // construction-capacity test (the separate original4096 lifecycle covers fit).
 func TestOrdinaryColumnGraphNativeOptimizeCrashReopen(t *testing.T) {
+	testOrdinaryColumnGraphNativeOptimizeCrashReopen(t, true)
+}
+
+func TestOrdinaryColumnGraphNativeStandaloneOptimizeCrashReopen(t *testing.T) {
+	testOrdinaryColumnGraphNativeOptimizeCrashReopen(t, false)
+}
+
+func testOrdinaryColumnGraphNativeOptimizeCrashReopen(t *testing.T, deferred bool) {
+	t.Helper()
 	const helper = "GOMAP_NATIVE_ORDINARY_COLUMNGRAPH_OPTIMIZE_CRASH_DIR"
 	const marker = "NATIVE_ORDINARY_COLUMNGRAPH_OPTIMIZE_ACCEPTED "
 	type acceptedManifest struct {
@@ -49,7 +58,10 @@ func TestOrdinaryColumnGraphNativeOptimizeCrashReopen(t *testing.T) {
 			t.Fatal(err)
 		}
 		manager := collections.NewCollectionManager(backend)
-		return owner, manager, NewWithDeferredVectorBuildMaintenance(manager, owner.DeferredVectorBuildMaintenance())
+		if deferred {
+			return owner, manager, NewWithDeferredVectorBuildMaintenance(manager, owner.DeferredVectorBuildMaintenance())
+		}
+		return owner, manager, New(manager)
 	}
 	manifest := func(svc *Service, dir string) acceptedManifest {
 		t.Helper()
@@ -110,7 +122,7 @@ func TestOrdinaryColumnGraphNativeOptimizeCrashReopen(t *testing.T) {
 	dir := t.TempDir()
 	childCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(childCtx, os.Args[0], "-test.run=^TestOrdinaryColumnGraphNativeOptimizeCrashReopen$")
+	cmd := exec.CommandContext(childCtx, os.Args[0], "-test.run=^"+t.Name()+"$")
 	cmd.Env = append(os.Environ(), helper+"="+dir)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
