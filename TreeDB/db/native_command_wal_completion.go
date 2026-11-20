@@ -39,17 +39,11 @@ func (db *DB) NativeCommandWALPrefixEligible(owner *transactionowner.Owner) (boo
 	}
 	db.teardownMu.RLock()
 	defer db.teardownMu.RUnlock()
-	if db.closing.Load() {
-		return false, ErrClosed
-	}
-	if err := db.commandWALPoisonedError(); err != nil {
+	if err := db.checkNativeJournalOwner(); err != nil {
 		return false, err
 	}
-	if owner == nil || owner != db.privateCOWOwner || !db.nativeSemanticActive.Load() || !db.HasNativeSemanticBridge() {
+	if owner == nil || owner != db.privateCOWOwner {
 		return false, ErrNativeSemanticUnsupported
-	}
-	if err := db.ActivateNativeSemanticOwner(); err != nil {
-		return false, err
 	}
 	if !db.commandWAL || db.resolvedProfile != ProfileCommandWALDurable {
 		return false, nil
@@ -66,16 +60,31 @@ func (db *DB) SyncNativeCommandWALPrefix() (selected bool, err error) {
 	if db == nil {
 		return false, ErrClosed
 	}
-	if db.resolvedProfile != ProfileCommandWALDurable {
-		return false, nil
-	}
 	syncer, ok := db.nativeCommandWALCompletion.(interface {
 		SyncNativeCommandWALPrefix() (bool, error)
 	})
-	if !ok {
-		return false, nil
+	if db.resolvedProfile == ProfileCommandWALDurable && ok {
+		// The public callback admits under its own lifecycle before it consults
+		// this backend. Taking teardown here would reverse that lock order.
+		return syncer.SyncNativeCommandWALPrefix()
 	}
-	return syncer.SyncNativeCommandWALPrefix()
+	db.teardownMu.RLock()
+	defer db.teardownMu.RUnlock()
+	return false, db.checkNativeJournalOwner()
+}
+
+// checkNativeJournalOwner checks an already active cache owner under teardownMu.
+func (db *DB) checkNativeJournalOwner() error {
+	if db.closing.Load() {
+		return ErrClosed
+	}
+	if err := db.commandWALPoisonedError(); err != nil {
+		return err
+	}
+	if !db.nativeSemanticActive.Load() {
+		return ErrNativeSemanticUnsupported
+	}
+	return db.ActivateNativeSemanticOwner()
 }
 
 // NativeCommandWALCompletionFor authenticates the original unassigned intent.

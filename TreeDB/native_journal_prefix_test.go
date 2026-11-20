@@ -138,6 +138,9 @@ func TestNativeJournalPrefixOriginalOwnerAndFallback(t *testing.T) {
 			if selected, err := database.SyncNativeCommandWALPrefix(); selected || !errors.Is(err, ErrClosed) {
 				t.Fatalf("closed public: %v", err)
 			}
+			if supported, err := backend.SyncNativeCommandWALPrefix(); supported || !errors.Is(err, backenddb.ErrClosed) {
+				t.Fatalf("closed backend dispatch: %t/%v", supported, err)
+			}
 			if supported, err := backend.NativeCommandWALPrefixEligible(database.txnOwner); supported || !errors.Is(err, backenddb.ErrClosed) {
 				t.Fatalf("closed backend: %t/%v", supported, err)
 			}
