@@ -656,11 +656,16 @@ func TestCOWLeafInspectionNoMappingUsesReadAt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, mode := range []string{"sealed-budget-denied", "current-writable-disabled"} {
+	modes := []string{"sealed-budget-denied", "current-writable-disabled"}
+	if runtime.GOOS == "windows" {
+		modes = append(modes, "sealed-platform-unsupported")
+	}
+	for _, mode := range modes {
 		t.Run(mode, func(t *testing.T) {
-			if mode == "sealed-budget-denied" {
+			switch mode {
+			case "sealed-budget-denied":
 				withMappedLeafSealedBudget(t, 0)
-			} else {
+			case "current-writable-disabled":
 				current, currentLeaf := enableCurrentWritableMmap, enableCurrentLeafWritableMmap
 				enableCurrentWritableMmap, enableCurrentLeafWritableMmap = false, false
 				t.Cleanup(func() {
@@ -685,6 +690,11 @@ func TestCOWLeafInspectionNoMappingUsesReadAt(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			if mode == "sealed-platform-unsupported" {
+				// Starting from an unknown extent exposes a futile mmap
+				// admission attempt, which would Stat the sealed segment.
+				f.verifiedFileSize.Store(0)
+			}
 			got, err := f.InspectCOWLeafRecord(ptr, cowTestLimits)
 			if err != nil || got != want {
 				t.Fatalf("fallback shape=%+v err=%v, want %+v", got, err, want)
@@ -692,6 +702,9 @@ func TestCOWLeafInspectionNoMappingUsesReadAt(t *testing.T) {
 			data, _ := f.mmapData.Load().([]byte)
 			if hits, fallbacks := f.mmapReadHits.Load(), f.mmapReadFallbackReadAt.Load(); len(data) != 0 || hits != 0 || fallbacks != 1 {
 				t.Fatalf("mapped bytes=%d hits=%d, ReadAt fallbacks=%d", len(data), hits, fallbacks)
+			}
+			if mode == "sealed-platform-unsupported" && f.verifiedFileSize.Load() != 0 {
+				t.Fatal("inspection tried to verify a mapping extent on Windows")
 			}
 		})
 	}

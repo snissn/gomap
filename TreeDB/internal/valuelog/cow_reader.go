@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"runtime"
 	"sync"
 	"unsafe"
 
@@ -212,7 +213,7 @@ func (f *File) InspectCOWLeafRecord(ptr page.ValuePtr, limits COWReadLimits) (CO
 	// A full mapped record also covers a selected raw value's prefix when it
 	// sits beyond the fixed metadata window. The parser verifies the hint.
 	hint := uint64(page.ValuePtrRecordLength(ptr))
-	if hint >= headerWithoutCRC && hint+4 <= limits.MaxRecordBytes && ptr.Offset <= math.MaxInt64-hint {
+	if runtime.GOOS != "windows" && hint >= headerWithoutCRC && hint+4 <= limits.MaxRecordBytes && ptr.Offset <= math.MaxInt64-hint {
 		data, _ := f.mmapData.Load().([]byte)
 		if data == nil && f.tryEnableSealedLazyMmap() {
 			data, _ = f.mmapData.Load().([]byte)

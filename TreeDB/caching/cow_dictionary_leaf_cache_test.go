@@ -54,6 +54,7 @@ func TestCOWDictionaryLeafPointCompletesFirstTraversal(t *testing.T) {
 func TestCOWDictionaryLeafColdCacheAdmissionAndPolicy(t *testing.T) {
 	for _, iterator := range []bool{false, true} {
 		t.Run(map[bool]string{false: "point", true: "iterator"}[iterator], func(t *testing.T) {
+			disableCOWSealedLeafMmapForFaultInjection(t)
 			original, want, ptr := cowSuccessorDictionaryLeafFixture(t)
 			dir := filepath.Dir(original.dir) // the cache owns dir/wal
 			if err := original.Close(); err != nil {
@@ -120,6 +121,7 @@ func TestCOWDictionaryLeafColdCacheAdmissionAndPolicy(t *testing.T) {
 				}
 				return append([]byte(nil), it.Value()...), it.Error()
 			}
+			requireCOWUnmappedFaultFixture(t, backend)
 			writer, err := os.OpenFile(file.Name(), os.O_RDWR, 0)
 			if err != nil {
 				t.Fatal(err)
@@ -140,6 +142,7 @@ func TestCOWDictionaryLeafColdCacheAdmissionAndPolicy(t *testing.T) {
 			if cowLeafCacheCounter(t, backend, "stores") != 0 {
 				t.Fatal("failed dictionary CRC admitted a decoded page")
 			}
+			requireCOWUnmappedFaultFixture(t, backend)
 			if _, err := writer.WriteAt(crc[:], crcOffset); err != nil {
 				t.Fatal(err)
 			}
@@ -187,6 +190,7 @@ func TestCOWDictionaryLeafColdCacheAdmissionAndPolicy(t *testing.T) {
 			db.dictStore = store
 			// The verified cache remains subordinate to inspection, even after
 			// successful full-record CRC and normal tree page validation.
+			requireCOWUnmappedFaultFixture(t, backend)
 			var version [1]byte
 			if _, err := writer.ReadAt(version[:], int64(ptr.Offset)); err != nil {
 				t.Fatal(err)
@@ -202,6 +206,7 @@ func TestCOWDictionaryLeafColdCacheAdmissionAndPolicy(t *testing.T) {
 			if cowLeafCacheCounter(t, backend, "hits") != hits {
 				t.Fatal("invalid dictionary record reached verified cache lookup")
 			}
+			requireCOWUnmappedFaultFixture(t, backend)
 		})
 	}
 }

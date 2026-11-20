@@ -242,7 +242,7 @@ func TestCOWVerifiedLeafMissFailureDoesNotPublish(t *testing.T) {
 }
 
 func TestCOWWarmSeekUsesMappedLeafInspection(t *testing.T) {
-	db, backend, want, _ := cowLeafMissFixture(t, 128, 64)
+	db, backend, want, ptr := cowLeafMissFixture(t, 128, 64)
 	start, end := []byte("a000"), []byte("b")
 	seek := func() []byte {
 		s, err := db.AcquireMVCCReadCut()
@@ -275,6 +275,47 @@ func TestCOWWarmSeekUsesMappedLeafInspection(t *testing.T) {
 	if got := cowLeafMappedHits(t, backend) - beforeMapped; got != 1 {
 		t.Fatalf("warm seek mmap hits = %d, want 1", got)
 	}
+
+	t.Run("smaller-value-limit", func(t *testing.T) {
+		s, err := db.acquireCOWSnapshotWithError()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if err := s.Close(); err != nil {
+				t.Error(err)
+			}
+		})
+		s.cowReadMu.Lock()
+		defer s.cowReadMu.Unlock()
+		w, err := s.cowWorkspaceLocked()
+		if err != nil {
+			t.Fatal(err)
+		}
+		basis := s.cowCut.basis
+		file, identity, shape, err := basis.snapshot.InspectPinnedCOWLeafRecord(ptr.ValuePtr(), w.limits)
+		if err != nil || shape.ValueBytes <= 1 {
+			t.Fatalf("expected a bounded leaf shape: %+v %v", shape, err)
+		}
+		var scratch [page.PageSize]byte
+		if _, hit, err := basis.snapshot.CopyVerifiedCachedLeafPageWithCOWPolicy(ptr, file, identity, scratch[:], w.limits); err != nil || !hit {
+			t.Fatalf("expected a verified cache entry for the same file and pointer: hit=%t err=%v", hit, err)
+		}
+		beforeCache := cowLeafCacheCounter(t, backend, "hits")
+		beforeMapped := cowLeafMappedHits(t, backend)
+		limits := w.limits
+		defer func() { w.limits = limits }()
+		w.limits.MaxValueBytes = shape.ValueBytes - 1
+		if _, err := basis.readPhysicalLeafWithWorkspace(db.cow, w, ptr, scratch[:], false, true); !errors.Is(err, valuelog.ErrCOWReadCapacity) {
+			t.Fatalf("expected value limit refusal on the verified leaf: %v", err)
+		}
+		if got := cowLeafMappedHits(t, backend) - beforeMapped; got != 1 {
+			t.Fatalf("limited inspection mmap hits = %d, want 1", got)
+		}
+		if got := cowLeafCacheCounter(t, backend, "hits") - beforeCache; got != 0 {
+			t.Fatalf("limited inspection reached the verified cache: hits=%d", got)
+		}
+	})
 }
 
 func TestCOWWarmSeekRetainsMappedLeafAcrossCheckpoint(t *testing.T) {

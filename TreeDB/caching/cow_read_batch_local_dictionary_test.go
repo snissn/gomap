@@ -21,7 +21,8 @@ func TestCOWReadBatchLocalCorruptionAndRefund(t *testing.T) {
 	for _, cache := range []int{128, -1} {
 		for _, warm := range []bool{false, true} {
 			t.Run(fmt.Sprintf("cache%d/warm%t", cache, warm), func(t *testing.T) {
-				db, _, want, ptr := cowLeafMissFixture(t, cache, 64)
+				disableCOWSealedLeafMmapForFaultInjection(t)
+				db, backend, want, ptr := cowLeafMissFixture(t, cache, 64)
 				// Establish physical-cache ownership before measuring local lifetime.
 				primer, err := db.AcquireMVCCReadCut()
 				if err != nil {
@@ -51,6 +52,7 @@ func TestCOWReadBatchLocalCorruptionAndRefund(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
+				requireCOWUnmappedFaultFixture(t, backend)
 				writer, err := os.OpenFile(f.Name(), os.O_RDWR, 0)
 				if err != nil {
 					t.Fatal(err)
@@ -76,6 +78,7 @@ func TestCOWReadBatchLocalCorruptionAndRefund(t *testing.T) {
 						t.Fatalf("probe%d lost real error: %+v", i, v)
 					}
 				}
+				requireCOWUnmappedFaultFixture(t, backend)
 				if _, err = writer.WriteAt(saved[:], offset); err != nil {
 					t.Fatal(err)
 				}

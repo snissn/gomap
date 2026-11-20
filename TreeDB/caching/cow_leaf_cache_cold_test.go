@@ -20,6 +20,9 @@ func TestCOWColdLeafCacheReopenAdmission(t *testing.T) {
 		for _, compressed := range []bool{false, true} {
 			for _, entries := range []int{128, -1} {
 				t.Run(fmt.Sprintf("mode=%s/compressed=%t/entries=%d", mode, compressed, entries), func(t *testing.T) {
+					if entries > 0 {
+						disableCOWSealedLeafMmapForFaultInjection(t)
+					}
 					dir := t.TempDir()
 					backendOpts := backenddb.Options{Dir: dir, IndexOuterLeavesInValueLog: true, LeafPageReadCacheEntries: entries}
 					compression := vlogCompressionOff
@@ -89,6 +92,7 @@ func TestCOWColdLeafCacheReopenAdmission(t *testing.T) {
 						if err != nil {
 							t.Fatal(err)
 						}
+						requireCOWUnmappedFaultFixture(t, backend)
 						writer, err := os.OpenFile(file.Name(), os.O_RDWR, 0)
 						if err != nil {
 							t.Fatal(err)
@@ -109,6 +113,7 @@ func TestCOWColdLeafCacheReopenAdmission(t *testing.T) {
 						if cowLeafCacheCounter(t, backend, "stores") != 0 {
 							t.Fatal("failed cold decode populated cache")
 						}
+						requireCOWUnmappedFaultFixture(t, backend)
 						if _, err := writer.WriteAt(crc[:], crcOffset); err != nil {
 							t.Fatal(err)
 						}

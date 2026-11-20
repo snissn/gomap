@@ -281,6 +281,7 @@ func TestCOWPhysicalLeafCacheRequiresVerifiedRecordAndInspection(t *testing.T) {
 	if hits := cowLeafCacheCounter(t, backend, "hits"); hits != beforeHits {
 		t.Fatalf("rejected inspection used the verified cache: hits=%d, want %d", hits, beforeHits)
 	}
+	requireCOWUnmappedFaultFixture(t, backend)
 	if _, err := writer.WriteAt(version[:], versionOffset); err != nil {
 		t.Fatal(err)
 	}
@@ -292,6 +293,7 @@ func TestCOWPhysicalLeafCacheRequiresVerifiedRecordAndInspection(t *testing.T) {
 func TestCOWOrderedVerifiedReadRefillsEvictedLeaf(t *testing.T) {
 	for _, compressed := range []bool{false, true} {
 		t.Run(fmt.Sprintf("compressed=%t", compressed), func(t *testing.T) {
+			disableCOWSealedLeafMmapForFaultInjection(t)
 			db, backend, want := cowLeafCacheModeFixture(t, 1, compressed, "cow_ordered")
 			old, err := db.acquireCOWSnapshotWithError()
 			if err != nil {
@@ -333,6 +335,7 @@ func TestCOWOrderedVerifiedReadRefillsEvictedLeaf(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			requireCOWUnmappedFaultFixture(t, backend)
 			writer, err := os.OpenFile(file.Name(), os.O_RDWR, 0)
 			if err != nil {
 				t.Fatal(err)
@@ -353,6 +356,7 @@ func TestCOWOrderedVerifiedReadRefillsEvictedLeaf(t *testing.T) {
 			if cowLeafCacheCounter(t, backend, "read_miss_admission_stores") != stores {
 				t.Fatal("failed CRC populated an absent cache entry")
 			}
+			requireCOWUnmappedFaultFixture(t, backend)
 			if _, err := writer.WriteAt(crc[:], crcOffset); err != nil {
 				t.Fatal(err)
 			}
