@@ -96,9 +96,10 @@ the commit above and a local immutable Docker image ID. Pass `--lane-lock`
 again for other locks shared on the same host. Build and run a separate
 smoke for each class with `--count 1000 --pairs 1` before collecting timings.
 Record the count for each ACK class and compare equal-length fixtures within
-each pair. The runner
-preserves the attempt, command logs, source and binary identities, actual
-gateway owner observations, typed census and checked shutdown evidence.
+each pair. The runner preserves the attempt, command logs, runner checkout,
+executable hashes, live gateway owner observations, typed census and checked
+shutdown evidence. Keep the build commands and source commits for the
+prebuilt executables with their hashes.
 
 Use the YCSB `TOTAL` row for ACK throughput and `INSERT` for request tails.
 GoMap's live phase observations bracket the client process and require a

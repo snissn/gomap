@@ -200,20 +200,22 @@ Use distinct, fresh output directories for the two shapes.
 ```bash
 GOWORK=off ./scripts/bench_collections_canonical.sh \
   -native-cow-companion -skip-offline-rewrite -skip-full-leafgen -skip-sqlite \
-  -out-dir "$RESULTS/zero-index" -docs 100000 -batch-size 16000 \
-  -indexes 0 -formats bson,json -benchtime 100000x -count 3
+  -out-dir "$RESULTS/zero-index" -docs 16000 -batch-size 1000 \
+  -indexes 0 -formats bson,json -benchtime 16000x -count 3
 
 GOWORK=off ./scripts/bench_collections_canonical.sh \
   -native-cow-companion -skip-offline-rewrite -skip-full-leafgen -skip-sqlite \
-  -out-dir "$RESULTS/two-index-bson" -docs 100000 -batch-size 16000 \
-  -indexes 2 -formats bson -benchtime 100000x -count 3
+  -out-dir "$RESULTS/two-index-bson" -docs 16000 -batch-size 1000 \
+  -indexes 2 -formats bson -benchtime 16000x -count 3
 ```
 
 For a functional smoke, use `-docs 32 -batch-size 16 -benchtime 32x -count 1`.
 The companion accepts BSON and JSON with zero secondary indexes, and BSON with
 two secondary indexes. Select a fixed `-benchtime` matching `-docs`. The full
 workflow still applies its compaction and legacy producer guardrails when the
-compaction phases are requested.
+compaction phases are requested. The companion uses the standalone COW memory
+limits, so larger fixtures can fail with `immutable memtable capacity exhausted`.
+The 16,000-document recipes above passed all three matched shapes on host185.
 
 The timed rows come from `BenchmarkCollectionShapeInsertBatch` (legacy) and
 `BenchmarkCollectionShapeInsertBatchNativeCOW` (shared native COW).
