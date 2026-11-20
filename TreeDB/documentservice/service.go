@@ -1230,7 +1230,7 @@ func (s *Service) OptimizeIndex(ctx context.Context, index string, req OptimizeI
 	if s.deferredVectorBuildMaintenance != nil {
 		err = s.deferredVectorBuildMaintenance.Finalize(ctx, index, info.Generation, s.manager.FlushAll, build)
 	} else {
-		_, err = s.manager.SyncForStandaloneWriteConcern()
+		err = s.manager.SyncForIndexMaintenance()
 		if err == nil {
 			err = build()
 		}
