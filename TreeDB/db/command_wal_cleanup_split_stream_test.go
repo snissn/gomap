@@ -2,6 +2,7 @@ package db
 
 import (
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -98,8 +99,11 @@ func TestCommandWALCleanupSplitStreamPrefix(t *testing.T) {
 		if !attempted || !errors.Is(err, commitlog.ErrCorrupt) || !slices.Equal(visited, sealed) {
 			t.Fatalf("corrupt cleanup attempted=%t visited=%q err=%v", attempted, visited, err)
 		}
+		if len(opened) != len(sealed) {
+			t.Fatalf("corrupt cleanup opened %d handles for %d sealed files", len(opened), len(sealed))
+		}
 		for _, file := range opened {
-			if _, err := file.Stat(); !errors.Is(err, os.ErrClosed) {
+			if _, err := file.Seek(0, io.SeekCurrent); !errors.Is(err, os.ErrClosed) {
 				t.Errorf("corruption leaked %q: %v", file.Name(), err)
 			}
 		}
