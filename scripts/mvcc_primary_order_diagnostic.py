@@ -189,7 +189,12 @@ def run(root: Path, output: Path, slot: int, head: str) -> None:
                                              "stdout_sha256": gate.digest(log), "stderr_sha256": gate.digest(errors)}) + "\n")
         if status:
             raise RuntimeError(f"{label} failed with exit {status}")
-        return log.read_text() + "\n" + errors.read_text()
+        return log.read_text()
+
+    def measure(label, argv, *, slow=False, observer=None):
+        stdout = command(label, argv, slow=slow, observer=observer)
+        stderr = (output / (label + ".stderr")).read_text()
+        return sample(stdout + "\n" + stderr, slow=slow)
 
     guard = ["bash", root / "scripts/mvcc_candidate_checkout_guard.sh", root, head]
     command("checkout-before", guard)
@@ -239,11 +244,11 @@ def run(root: Path, output: Path, slot: int, head: str) -> None:
         try:
             if protocol == "preconditioned":
                 for _, revision in order[:2]:
-                    sample(command(f"block-{index}/warm-{revision}", bench, observer=observation), slow=False)
+                    measure(f"block-{index}/warm-{revision}", bench, observer=observation)
             for pair, revision in order:
                 slow = control == "slow" and revision == "candidate"
-                raw = command(f"block-{index}/pair-{pair + 1}-{revision}", bench, observer=observation, slow=slow)
-                rows.append({"pair": pair, "revision": revision, **sample(raw, slow=slow)})
+                metrics = measure(f"block-{index}/pair-{pair + 1}-{revision}", bench, slow=slow, observer=observation)
+                rows.append({"pair": pair, "revision": revision, **metrics})
                 save(cell / "samples.json", rows)
         finally:
             host = observation.finish()
@@ -257,10 +262,10 @@ def run(root: Path, output: Path, slot: int, head: str) -> None:
     for mode in ("identical", "slow"):
         trace_path = output / (mode + ".strace")
         slow = mode == "slow"
-        raw = command("trace-" + mode,
-                      ["strace", "-f", "-yy", "-ttt", "-T", "-s", "64", "-o", trace_path,
-                       "-e", "trace=fsync,fdatasync,msync,write", *bench], slow=slow)
-        traces[mode] = {**sample(raw, slow=slow), **sync_trace(trace_path)}
+        metrics = measure("trace-" + mode,
+                          ["strace", "-f", "-yy", "-ttt", "-T", "-s", "64", "-o", trace_path,
+                           "-e", "trace=fsync,fdatasync,msync,write", *bench], slow=slow)
+        traces[mode] = {**metrics, **sync_trace(trace_path)}
     command("checkout-after", guard)
     if gate.runtime_binding(binary, command, "after", env) != runtime or any(
             gate.digest(path) != source_digests[str(path)] for path in source_paths):
