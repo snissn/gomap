@@ -3543,6 +3543,18 @@ func (m *CollectionManager) CheckpointStorage() error {
 // path always performs a physical sync boundary. Native managers use the SAME
 // cache owner's complete captured-prefix checkpoint and report physicalSync=true.
 func (m *CollectionManager) SyncForStandaloneWriteConcern() (physicalSync bool, err error) {
+	return m.syncCollectionStorageBoundary()
+}
+
+// SyncForIndexMaintenance publishes prerequisites before index maintenance.
+// The native owner seals its captured roots. A classic owner uses its existing
+// applied-prefix boundary, or a physical checkpoint when WAL is disabled.
+func (m *CollectionManager) SyncForIndexMaintenance() error {
+	_, err := m.syncCollectionStorageBoundary()
+	return err
+}
+
+func (m *CollectionManager) syncCollectionStorageBoundary() (physicalSync bool, err error) {
 	if m != nil && m.initializationError != nil {
 		return false, m.initializationError
 	}
@@ -3550,6 +3562,9 @@ func (m *CollectionManager) SyncForStandaloneWriteConcern() (physicalSync bool, 
 		return false, backenddb.ErrClosed
 	}
 	if m.nativeJSON != nil {
+		if err := m.FlushAll(); err != nil {
+			return false, err
+		}
 		if err := m.CheckpointStorage(); err != nil {
 			return false, err
 		}

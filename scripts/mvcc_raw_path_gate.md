@@ -57,7 +57,11 @@ applies even to identical runtimes. No raw failure becomes a measured PASS.
 
 Timing acceptance may still report `EQUIVALENT_NON_ATTRIBUTABLE` only for identical
 independently bound runtime and input identities; different runtime/input
-identities retain the +5% paired-time limit. The CLI default **v1** preserves
+identities use the +5% paired-time limit. The hosted workflow selects
+`--timing-advisory`, so a miss that would otherwise fail the timing gate is
+reported as `ADVISORY_THRESHOLD_MISS` in the artifacts and as a workflow
+warning. The raw timing verdict and samples stay intact. Invocations without
+`--timing-advisory` continue to enforce the timing limit. The CLI default **v1** preserves
 historical semantics: both timing and bytes can use exact-runtime attribution,
 and different runtimes permit no median byte growth. Historical v1 results are
 not reinterpreted by opting new captures into v2. Allocation count remains strict
