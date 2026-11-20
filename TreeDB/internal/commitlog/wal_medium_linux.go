@@ -53,3 +53,19 @@ func walMountIsExt4(mounts *bufio.Scanner, mountID string) bool {
 	}
 	return false
 }
+
+// Keep the format probe on this exact descriptor without dirtying access
+// times. Its stable pins share the open file description. If setting the
+// flag fails, reads and fences still run with their original behavior.
+func avoidWALReadAtime(file *os.File) {
+	raw, err := file.SyscallConn()
+	if err != nil {
+		return
+	}
+	_ = raw.Control(func(fd uintptr) {
+		flags, err := unix.FcntlInt(fd, unix.F_GETFL, 0)
+		if err == nil && flags&unix.O_NOATIME == 0 {
+			_, _ = unix.FcntlInt(fd, unix.F_SETFL, flags|unix.O_NOATIME)
+		}
+	})
+}

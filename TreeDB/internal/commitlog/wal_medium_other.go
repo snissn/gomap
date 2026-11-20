@@ -14,3 +14,5 @@ func walFilesystemType(file *os.File) (uint64, error) {
 func walIsExt4Mount(_ *os.File, _ uint64) bool {
 	return false
 }
+
+func avoidWALReadAtime(*os.File) {}

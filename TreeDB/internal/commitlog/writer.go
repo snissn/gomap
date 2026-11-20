@@ -300,6 +300,9 @@ func NewWriterWithOptions(path string, opts Options) (*Writer, error) {
 				}
 			}
 		}
+		if state == nil && isOwnedExt4WALStream(f, selection, opts.productionMediumPolicy && opts.preferExt4Stream) {
+			avoidWALReadAtime(f)
+		}
 	}
 	w.f = f
 	w.fixed = state

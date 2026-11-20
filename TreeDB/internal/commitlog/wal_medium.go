@@ -65,6 +65,13 @@ func productionWALContainer(capacity int64, supported bool, kind uint64, probeEr
 	return selected
 }
 
+// isOwnedExt4WALStream accepts a fresh selected stream or a previously
+// populated stream already identified by its writer. Call only for stream files.
+func isOwnedExt4WALStream(file *os.File, selection walContainerSelection, preferExt4Stream bool) bool {
+	return selection.ext4Stream ||
+		(preferExt4Stream && selection.reason == "existing_format" && IsExt4WALFilesystem(file))
+}
+
 // IsExt4WALFilesystem checks the actual retained WAL file or directory.
 func IsExt4WALFilesystem(file *os.File) bool {
 	kind, err := walFilesystemType(file)

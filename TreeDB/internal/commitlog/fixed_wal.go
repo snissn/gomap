@@ -655,6 +655,9 @@ func (w *Writer) prepareFixedSuccessorAhead(file **os.File, parent *os.File, pla
 		}
 		return state, state.logical, selection, nil
 	}
+	if isOwnedExt4WALStream(*file, selection, w.preferExt4Stream) {
+		avoidWALReadAtime(*file)
+	}
 	if _, err = (*file).Seek(info.Size(), io.SeekStart); err != nil {
 		return nil, 0, selection, err
 	}

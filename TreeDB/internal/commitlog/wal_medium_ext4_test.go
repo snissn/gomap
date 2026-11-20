@@ -8,6 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"golang.org/x/sys/unix"
 )
 
 func TestWALMountIsExactExt4(t *testing.T) {
@@ -133,4 +136,116 @@ func TestWALMediumExt4KeepsOccupiedContainersAndHeldSync(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCapturedExt4StreamSuppressesOwnedReadAtime(t *testing.T) {
+	wal := t.TempDir()
+	dir, err := os.Open(wal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ext4 := IsExt4WALFilesystem(dir)
+	if err := dir.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !ext4 {
+		t.Skip("requires a positively identified ext4 filesystem")
+	}
+
+	expectFlag := func(f *os.File, want bool) {
+		t.Helper()
+		flags, err := unix.FcntlInt(f.Fd(), unix.F_GETFL, 0)
+		if err != nil || (flags&unix.O_NOATIME != 0) != want {
+			t.Fatalf("%s status flags %#x, want noatime=%t: %v", f.Name(), flags, want, err)
+		}
+	}
+	opts := CommandJournalOptions{CaptureStableResources: true, PreferExt4Stream: true}
+	j, err := OpenCommandJournal(wal, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = j.Close() })
+	expectFlag(j.writer.f, true)
+	if lsn, err := j.AppendCommand(fixedWALTestBarrier()); err != nil || lsn != 1 {
+		t.Fatalf("append LSN=%d: %v", lsn, err)
+	}
+	rotation, err := j.RotateActiveSegmentWithStableResources(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rotation.Release()
+	expectFlag(j.writer.f, true)
+	if lsn, err := j.AppendCommand(fixedWALTestBarrier()); err != nil || lsn != 2 {
+		t.Fatalf("append LSN=%d: %v", lsn, err)
+	}
+	if err := j.RotateActiveSegment(true); err != nil {
+		t.Fatal(err)
+	}
+	expectFlag(j.writer.f, true)
+	if lsn, err := j.AppendCommand(fixedWALTestBarrier()); err != nil || lsn != 3 {
+		t.Fatalf("append LSN=%d: %v", lsn, err)
+	}
+	target, err := j.CaptureSync([]*rootpublication.StableResourceToken{rotation.Closed, rotation.Active})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer target.Release()
+	if target.LSN != 3 || len(target.rotated) != 2 {
+		t.Fatalf("captured LSN=%d retained count=%d", target.LSN, len(target.rotated))
+	}
+	for _, token := range target.rotated {
+		path := filepath.Join(wal, CommandSegmentName(0, token.Generation()))
+		st, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := token.WithPinnedFile(func(file *os.File) error {
+			info, err := file.Stat()
+			if err == nil && !os.SameFile(info, st) {
+				t.Errorf("capture lost retained inode %s", path)
+			}
+			expectFlag(file, true)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := target.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	target.Release()
+	rotation.Release()
+	if err := j.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for seq := uint64(1); seq <= 3; seq++ {
+		path := filepath.Join(wal, CommandSegmentName(0, seq))
+		frames, err := ScanCommandFramesV2(path, Options{})
+		if err != nil || len(frames) != 1 || frames[0].LSN != seq {
+			t.Fatalf("invalid segment %d: frames=%v error=%v", seq, frames, err)
+		}
+	}
+	j, err = OpenCommandJournal(wal, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	expectFlag(j.writer.f, true)
+	if j.NextLSN() != 4 {
+		t.Errorf("reopen next LSN=%d", j.NextLSN())
+	}
+	if err := j.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	opts.PreferExt4Stream = false
+	fixed, err := OpenCommandJournal(t.TempDir(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fixed.Close()
+	if fixed.writer.fixed == nil {
+		t.Fatal("ineligible persistent WAL should use its fixed container")
+	}
+	expectFlag(fixed.writer.f, false)
 }
