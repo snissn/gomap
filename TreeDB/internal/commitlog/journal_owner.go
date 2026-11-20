@@ -260,6 +260,7 @@ type CommandJournalCleanupSnapshot struct {
 	ActivePath            string
 	ActiveIdentity        rootpublication.StableIdentity
 	FixedContainer        bool
+	Ext4Stream            bool
 	PendingStableRotation int
 	PendingSuccessor      bool
 }
@@ -1217,6 +1218,7 @@ func (j *CommandJournal) cleanupSnapshotLocked() (CommandJournalCleanupSnapshot,
 		ActivePath:            j.path,
 		ActiveIdentity:        identity,
 		FixedContainer:        j.writer.fixed != nil,
+		Ext4Stream:            j.writer.fixed == nil && j.writer.containerSelection.ext4Stream,
 		PendingStableRotation: len(j.pendingStableRotations),
 		PendingSuccessor:      j.pendingStableSuccessor != nil,
 	}, nil

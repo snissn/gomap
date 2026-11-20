@@ -564,6 +564,7 @@ type commandWALSegmentCleanupDecision struct {
 	lane            int
 	seq             uint64
 	generationKnown bool
+	validatedExtent os.FileInfo // Non-nil for an immutable prefix scanned outside append ownership.
 }
 
 type commandWALSegmentScanResult struct {
@@ -955,6 +956,7 @@ func removeCoveredCommandWALSegmentsWithRegistry(decisions []commandWALSegmentCl
 			return decisions, errors.Join(ErrRecoveryRequired, fmt.Errorf("reopen command WAL cleanup target %s: %w", filepath.Base(decision.Path), err))
 		}
 		currentIdentity, identityErr := rootpublication.StableIdentityFromFile(current)
+		extentErr := verifyCommandWALCleanupExtent(decision)
 		closeErr := current.Close()
 		if identityErr != nil {
 			decision.Error = identityErr.Error()
@@ -965,6 +967,11 @@ func removeCoveredCommandWALSegmentsWithRegistry(decisions []commandWALSegmentCl
 			decision.Error = closeErr.Error()
 			abortLeases()
 			return decisions, closeErr
+		}
+		if extentErr != nil {
+			decision.Error = extentErr.Error()
+			abortLeases()
+			return decisions, extentErr
 		}
 		if decision.file == nil || !rootpublication.SamePhysicalIdentity(decision.identity, currentIdentity) {
 			err := errors.Join(ErrRecoveryRequired, fmt.Errorf("command WAL cleanup target identity changed: %s", filepath.Base(decision.Path)))
@@ -1029,9 +1036,10 @@ func removeCoveredCommandWALSegmentsWithRegistry(decisions []commandWALSegmentCl
 			return decisions, errors.Join(ErrRecoveryRequired, fmt.Errorf("revalidate command WAL cleanup target %s: %w", filepath.Base(decision.Path), openErr))
 		}
 		currentIdentity, identityErr := rootpublication.StableIdentityFromFile(current)
+		extentErr := verifyCommandWALCleanupExtent(decision)
 		closeErr := current.Close()
-		if identityErr != nil || closeErr != nil || !rootpublication.SamePhysicalIdentity(decision.identity, currentIdentity) {
-			revalidateErr := errors.Join(identityErr, closeErr)
+		if identityErr != nil || extentErr != nil || closeErr != nil || !rootpublication.SamePhysicalIdentity(decision.identity, currentIdentity) {
+			revalidateErr := errors.Join(identityErr, extentErr, closeErr)
 			if revalidateErr == nil {
 				revalidateErr = fmt.Errorf("command WAL cleanup target identity changed: %s", filepath.Base(decision.Path))
 			}
@@ -1083,6 +1091,17 @@ func removeCoveredCommandWALSegmentsWithRegistry(decisions []commandWALSegmentCl
 		}
 	}
 	return decisions, nil
+}
+
+func verifyCommandWALCleanupExtent(decision *commandWALSegmentCleanupDecision) error {
+	if decision.validatedExtent == nil {
+		return nil
+	}
+	linked, err := os.Lstat(decision.Path)
+	if err != nil || !sameSplitCommandWALStreamExtent(decision.validatedExtent, linked) {
+		return errors.Join(splitCommandWALStreamChanged(decision.Path), err)
+	}
+	return nil
 }
 
 func closeCommandWALCleanupDecisions(decisions []commandWALSegmentCleanupDecision) error {

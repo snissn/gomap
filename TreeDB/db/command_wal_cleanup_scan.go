@@ -17,6 +17,11 @@ import (
 // and the mutable suffix are scanned under the original append exclusion.
 const maxOpenClosedWALCleanupSegments = 8
 
+const (
+	minSplitStreamCleanupSegmentBytes = 96 << 20
+	maxSplitStreamCleanupActiveBytes  = 1 << 20
+)
+
 // commandWALCleanupTestHooks gives cleanup's per-handle observation points one
 // slot in DB. These callbacks are installed only by tests before starting cleanup.
 type commandWALCleanupTestHooks struct {
@@ -92,6 +97,13 @@ func (db *DB) scanCommandWALCleanupProof(proof durableWALCleanupProofV1, scanSea
 		}))
 	}
 	dir := resolveStorageLayout(db.dir).walDir
+	if proof.journal.Ext4Stream && proof.journal.ActiveBytes <= maxSplitStreamCleanupActiveBytes &&
+		db.commandWALClosedBytes.Load() >= 2*minSplitStreamCleanupSegmentBytes &&
+		db.commandWALCleanupSplitValueLogVolume(proof.journal) {
+		if attempted, err := db.scanSplitCommandWALCleanupPrefix(proof, scan, openPrefix); attempted {
+			return scan.finish(err)
+		}
+	}
 	var prefix []cleanupClosedWALFile
 	closePrefix := func() error {
 		var err error
@@ -211,4 +223,140 @@ func (db *DB) scanCommandWALCleanupProof(proof durableWALCleanupProofV1, scanSea
 	})
 	scan.hardErr = errors.Join(scan.hardErr, closePrefix())
 	return scan.finish(err)
+}
+
+// The split placement is a performance selector. Exact journal identity,
+// lineage, and namespace checks still govern cleanup on this placement.
+func (db *DB) commandWALCleanupSplitValueLogVolume(snapshot commitlog.CommandJournalCleanupSnapshot) bool {
+	valueDir, err := os.Open(resolveStorageLayout(db.dir).valueVLogDir)
+	if err != nil {
+		return false
+	}
+	identity, identityErr := rootpublication.StableIdentityFromFile(valueDir)
+	defer valueDir.Close()
+	return identityErr == nil && identity.VolumeID != snapshot.ActiveIdentity.VolumeID && commitlog.IsExt4WALFilesystem(valueDir)
+}
+
+// The existing proof capture already holds the append lock and names the active
+// generation. The cleanup owner serializes deletion. Files strictly before that
+// generation cannot be appended to, even if the writer rotates during this scan.
+// Refresh the inventory under the original scan lock before reading the suffix.
+func (db *DB) scanSplitCommandWALCleanupPrefix(proof durableWALCleanupProofV1, scan *commandWALCleanupScan, openPrefix func(string) (*os.File, error)) (bool, error) {
+	dir := resolveStorageLayout(db.dir).walDir
+	segments, err := simpleCommandWALCleanupInventory(dir, proof.journal)
+	if commandWALCleanupDescriptorExhausted(err) {
+		return false, nil
+	}
+	if err != nil {
+		return true, err
+	}
+	if len(segments) < 3 || len(segments)-1 > maxOpenClosedWALCleanupSegments {
+		return false, nil
+	}
+	sealed := segments[:len(segments)-1]
+	infos := make([]os.FileInfo, len(sealed))
+	large := 0
+	for i, seg := range sealed {
+		info, err := os.Lstat(seg.path)
+		if err != nil || !info.Mode().IsRegular() {
+			// Use the locked directory path to handle an unusual inventory.
+			return false, nil
+		}
+		infos[i] = info
+		if info.Size() >= minSplitStreamCleanupSegmentBytes {
+			large++
+		}
+	}
+	if large < 2 {
+		return false, nil
+	}
+
+	files := make([]*os.File, 0, len(sealed))
+	closeFiles := func() error {
+		var err error
+		for _, file := range files {
+			err = errors.Join(err, file.Close())
+		}
+		return err
+	}
+	for i, seg := range sealed {
+		file, err := openPrefix(seg.path)
+		if commandWALCleanupDescriptorExhausted(err) {
+			// No bytes have been scanned. Release staged descriptors before
+			// the stock scanner opens one file at a time.
+			if closeErr := closeFiles(); closeErr != nil {
+				return true, errors.Join(err, closeErr)
+			}
+			return false, nil
+		}
+		if err != nil {
+			return true, errors.Join(fmt.Errorf("open closed command WAL segment %s: %w", filepath.Base(seg.path), err), closeFiles())
+		}
+		files = append(files, file)
+		info, statErr := file.Stat()
+		identity, identityErr := rootpublication.StableIdentityFromFile(file)
+		if err := errors.Join(statErr, identityErr); err != nil {
+			return true, errors.Join(err, closeFiles())
+		}
+		if !sameSplitCommandWALStreamExtent(infos[i], info) || rootpublication.SamePhysicalIdentity(identity, proof.journal.ActiveIdentity) {
+			return true, errors.Join(splitCommandWALStreamChanged(seg.path), closeFiles())
+		}
+		fixed, err := commitlog.HasFixedWALMagic(file)
+		if err != nil {
+			return true, errors.Join(err, closeFiles())
+		}
+		if fixed {
+			if err := closeFiles(); err != nil {
+				return true, err
+			}
+			return false, nil
+		}
+	}
+
+	scan.closedStreamBuffer = new(commitlog.CleanupReadBuffer)
+	for i, seg := range sealed {
+		file := files[i]
+		// The stream's logical extent is its physical file size.
+		seg.size = infos[i].Size()
+		if scan.scanFile(seg, file, false, false, nil) {
+			scan.decisions[len(scan.decisions)-1].validatedExtent = infos[i]
+		} else {
+			scan.hardErr = errors.Join(scan.hardErr, file.Close())
+		}
+	}
+
+	err = proof.journalOwner.WithCleanupScanSnapshot(proof.journal, func(current commitlog.CommandJournalCleanupSnapshot) error {
+		live, err := simpleCommandWALCleanupInventory(dir, current)
+		if err != nil {
+			return err
+		}
+		if len(live) <= len(sealed) || live[len(sealed)].path != proof.journal.ActivePath ||
+			!slices.EqualFunc(sealed, live[:len(sealed)], func(a, b logSegment) bool { return a.path == b.path }) {
+			return fmt.Errorf("%w: command WAL cleanup inventory changed", ErrRecoveryRequired)
+		}
+		for i, seg := range sealed {
+			linked, err := os.Lstat(seg.path)
+			if err != nil || !sameSplitCommandWALStreamExtent(infos[i], linked) {
+				return errors.Join(splitCommandWALStreamChanged(seg.path), err)
+			}
+		}
+		for i, seg := range live[len(sealed) : len(live)-1] {
+			var expected *rootpublication.StableIdentity
+			if i == 0 {
+				expected = &proof.journal.ActiveIdentity
+			}
+			scan.scanSegment(seg, false, true, expected)
+		}
+		scan.scanSegment(live[len(live)-1], true, true, &current.ActiveIdentity)
+		return nil
+	})
+	return true, err
+}
+
+func sameSplitCommandWALStreamExtent(captured, linked os.FileInfo) bool {
+	return linked.Mode().IsRegular() && os.SameFile(captured, linked) && linked.Size() == captured.Size() && linked.ModTime().Equal(captured.ModTime())
+}
+
+func splitCommandWALStreamChanged(path string) error {
+	return fmt.Errorf("%w: closed command WAL extent changed: %s", ErrRecoveryRequired, filepath.Base(path))
 }
