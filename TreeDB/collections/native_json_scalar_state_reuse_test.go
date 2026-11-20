@@ -2,7 +2,9 @@ package collections
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
@@ -13,6 +15,12 @@ import (
 func openNativeScalarStateReuse(t *testing.T, format DocumentFormat, multiKey bool) *Collection {
 	t.Helper()
 	opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir())
+	c, _, _ := createNativeScalarStateReuse(t, opts, format, multiKey)
+	return c
+}
+
+func openNativeScalarStateReuseOwner(t *testing.T, opts treedb.Options) (*treedb.DB, *CollectionManager, func()) {
+	t.Helper()
 	opts.MemtableMode = "cow_btree"
 	opts.BackgroundCheckpointInterval = -1
 	opts.BackgroundCheckpointIdleDuration = -1
@@ -20,21 +28,35 @@ func openNativeScalarStateReuse(t *testing.T, format DocumentFormat, multiKey bo
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
+	var manager *CollectionManager
+	closed := false
+	closeOwner := func() {
+		t.Helper()
+		if closed {
+			return
+		}
+		closed = true
+		if manager != nil {
+			if err := manager.Close(); err != nil {
+				t.Error(err)
+			}
+		}
 		if err := owner.Close(); err != nil {
 			t.Error(err)
 		}
-	})
+	}
+	t.Cleanup(closeOwner)
 	backend, err := owner.NativeSemanticBackend()
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager := NewCollectionManager(backend)
-	t.Cleanup(func() {
-		if err := manager.Close(); err != nil {
-			t.Error(err)
-		}
-	})
+	manager = NewCollectionManager(backend)
+	return owner, manager, closeOwner
+}
+
+func createNativeScalarStateReuse(t *testing.T, opts treedb.Options, format DocumentFormat, multiKey bool) (*Collection, *treedb.DB, func()) {
+	t.Helper()
+	owner, manager, closeOwner := openNativeScalarStateReuseOwner(t, opts)
 	meta := &CollectionMeta{Name: "scalar_reuse", Options: CollectionOptions{DocumentFormat: format}, Indexes: []IndexDefinition{
 		{Name: "tenant", Field: "meta.tenant", ValueType: IndexValueString, Unique: !multiKey, MultiKey: multiKey},
 		{Name: "rank", Field: "meta.rank", ValueType: IndexValueInt64},
@@ -47,7 +69,7 @@ func openNativeScalarStateReuse(t *testing.T, format DocumentFormat, multiKey bo
 	if err != nil {
 		t.Fatal(err)
 	}
-	return c
+	return c, owner, closeOwner
 }
 
 func nativeScalarStateReuseDocument(t *testing.T, format DocumentFormat, tenant string, rank int64) []byte {
@@ -211,4 +233,134 @@ func TestNativeJSONScalarStateReuseFallbackAndValidation(t *testing.T) {
 		}
 		requireNativeScalarStateReuseIndex(t, c, "tenant", "valid", "a")
 	})
+}
+
+func TestNativeJSONScalarStateReuseAcrossGrowthAndReopen(t *testing.T) {
+	for _, format := range []DocumentFormat{DocumentFormatBSON, DocumentFormatJSON} {
+		t.Run(string(format), func(t *testing.T) {
+			const batchSize = 137
+			opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, t.TempDir())
+			c, owner, closeOwner := createNativeScalarStateReuse(t, opts, format, false)
+			txn, err := c.nativeJSON.Begin(c.name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if err := txn.Close(); err != nil {
+					t.Error(err)
+				}
+			})
+			names := []string{"keep", "replace", "delete"}
+			ids, docs := make([][]byte, len(names)), make([][]byte, len(names))
+			for i, name := range names {
+				ids[i] = []byte(name)
+				docs[i] = nativeScalarStateReuseDocument(t, format, name, int64(i+1))
+			}
+			if err = txn.InsertBatch(ids, docs); err != nil {
+				t.Fatal(err)
+			}
+			for i := range docs {
+				clear(docs[i])
+			}
+			var finalDocs [][]byte
+			var finalIDs [][]byte
+			first := txn.bindings[0].rows.find(ids[0]).currentState
+			for batch := range 2 {
+				batchIDs, batchDocs := make([][]byte, batchSize), make([][]byte, batchSize)
+				for i := range batchSize {
+					n := batch*batchSize + i
+					name := fmt.Sprintf("new%04d", n)
+					batchIDs[i] = []byte(name)
+					batchDocs[i] = nativeScalarStateReuseDocument(t, format, name+strings.Repeat("x", n%60), int64(n+100))
+					finalDocs = append(finalDocs, bytes.Clone(batchDocs[i]))
+					finalIDs = append(finalIDs, batchIDs[i])
+				}
+				if err = txn.InsertBatch(batchIDs, batchDocs); err != nil {
+					t.Fatal(err)
+				}
+				for _, doc := range batchDocs {
+					clear(doc)
+				}
+				if batch != 0 {
+					continue
+				}
+				replacement := nativeScalarStateReuseDocument(t, format, "replaced", -1)
+				result, err := txn.UpdateBatch([]UpdateBatchItem{{DocumentID: ids[1], Update: func([]byte) ([]byte, bool, error) {
+					return replacement, true, nil
+				}}})
+				if err != nil || len(result) != 1 || !result[0].Modified {
+					t.Fatalf("replace staged row: %+v %v", result, err)
+				}
+				clear(replacement)
+				if count, err := txn.DeleteBatch([][]byte{ids[2]}); err != nil || count != 1 {
+					t.Fatalf("delete staged row: %d %v", count, err)
+				}
+			}
+			g := &txn.bindings[0]
+			keep := g.rows.find(ids[0]).currentState
+			if &keep[0] != &first[0] || &g.retainedScalar.states[0] == &first[0] {
+				t.Fatal("mixed commands did not retain the first row across state backing growth")
+			}
+			first, keep, g = nil, nil, nil
+			if err := txn.Commit(); err != nil {
+				t.Fatal(err)
+			}
+
+			// Errors on the public entry neither publish a staged neighbor nor
+			// overwrite the winning unique key.
+			mustReject := func(conflictID []byte, tenant string, want error) {
+				t.Helper()
+				rejectedID := []byte("rejected")
+				results, err := c.InsertBatch([][]byte{rejectedID, conflictID}, [][]byte{
+					nativeScalarStateReuseDocument(t, format, "rejected", 10),
+					nativeScalarStateReuseDocument(t, format, tenant, 11),
+				})
+				if len(results) != 0 || !errors.Is(err, want) {
+					t.Fatalf("conflict: IDs=%q err=%v want=%v", results, err, want)
+				}
+				if got, found, err := c.GetInto(rejectedID, nil); err != nil || found || len(got) != 0 {
+					t.Fatalf("conflict published its neighbor: doc=%q found=%t err=%v", got, found, err)
+				}
+			}
+			mustReject(ids[0], "distinct", ErrDocumentExists)
+			mustReject([]byte("conflict"), "keep", ErrUniqueIndexConflict)
+
+			verify := func(c *Collection) {
+				t.Helper()
+				rows, truncated, err := c.FindByIndexRange("rank", IndexRangeOptions{
+					Lower: IndexRangeBound{Unbounded: true},
+					Upper: IndexRangeBound{Unbounded: true},
+					Limit: len(finalIDs) + 2,
+				})
+				if err != nil || truncated || len(rows) != len(finalIDs)+2 || !bytes.Equal(rows[0], ids[1]) || !bytes.Equal(rows[1], ids[0]) {
+					t.Fatalf("rank scan: rows=%q truncated=%t err=%v", rows, truncated, err)
+				}
+				for i, id := range finalIDs {
+					if !bytes.Equal(id, rows[i+2]) {
+						t.Fatalf("rank result [%d]=%q want=%q", i, rows[i+2], id)
+					}
+					got, err := c.Get(id)
+					if err != nil || !bytes.Equal(got, finalDocs[i]) {
+						t.Fatalf("readback %q: %q %v", id, got, err)
+					}
+				}
+				requireNativeScalarStateReuseIndex(t, c, "tenant", "keep", "keep")
+				requireNativeScalarStateReuseIndex(t, c, "tenant", "replaced", "replace")
+				if missing, err := c.FindByIndexValue("optional", "absent"); err != nil || len(missing) != 0 {
+					t.Fatalf("missing optional field: %q %v", missing, err)
+				}
+			}
+			verify(c)
+			if err := owner.Checkpoint(); err != nil {
+				t.Fatal(err)
+			}
+			closeOwner()
+			_, manager, _ := openNativeScalarStateReuseOwner(t, opts)
+			c, err = manager.OpenCollection("scalar_reuse")
+			if err != nil {
+				t.Fatal(err)
+			}
+			verify(c)
+		})
+	}
 }

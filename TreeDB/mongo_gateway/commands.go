@@ -188,7 +188,7 @@ func (s *Server) runMongoInsertCommand(name string, col *collections.Collection,
 				err = runMongoInsertOne(col, ids[i], stored[i])
 			}
 		} else {
-			_, err = col.InsertBatch(ids[i:i+1], stored[i:i+1])
+			_, err = col.InsertBatchFromWire(ids[i:i+1], stored[i:i+1])
 		}
 		if err == nil {
 			inserted++

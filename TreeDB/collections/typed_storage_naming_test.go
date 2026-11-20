@@ -415,7 +415,7 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/native_column_compaction_cancel_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 6, occurrences: 9},
 	{path: "TreeDB/collections/native_column_compaction.go", classification: typedStorageLegacyCompatibility, matchingLines: 17, occurrences: 20},
 	{path: "TreeDB/caching/cow_flush.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 4},
-	{path: "TreeDB/caching/cow_checkpoint.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 4},
+	{path: "TreeDB/caching/cow_checkpoint.go", classification: typedStorageLegacyCompatibility, matchingLines: 5, occurrences: 6},
 	// Native typed construction, reads and replay consume the retained public
 	// schema API. Dependency and recovery fixtures use that same configuration.
 	// Multi-column accounting and reconstruction iterate that schema and reuse
@@ -436,7 +436,7 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/native_catalog_source.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/collections/native_json_composite_replay.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/collections/native_json_indexes.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
-	{path: "TreeDB/collections/native_json_insert.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
+	{path: "TreeDB/collections/native_json_insert.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 3},
 	{path: "TreeDB/collections/native_json_public.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
 	// Native V2 text eligibility consumes the retained public typed-schema field.
 	{path: "TreeDB/collections/native_text_plan.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},

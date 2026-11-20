@@ -33,6 +33,7 @@ type nativeJSONTxnBinding struct {
 	rows              nativeJSONRows
 	stageCharge       uint64
 	validation        indexEncodeArena
+	retainedScalar    indexEncodeArena
 	validationLease   *memtable.COWExternalLease
 	validationCharge  uint64
 	templates         templateV1Resolver
@@ -300,17 +301,18 @@ type nativeJSONLogicalInsert struct {
 }
 
 type nativeJSONLogicalGroup struct {
-	bindings               []nativeJSONTxnBinding
-	changes                []nativeJSONPrimaryChange
-	count                  int
-	bootstrap              *nativeEngineVersion
-	opening                backenddb.NativeSemanticCapture
-	reimported             *nativeEngineVersion // private owning reference, including failed preparation
-	custody                *nativeMutationCustody
-	prepared               *nativeEngineVersion
-	raw                    bool
-	returnCustodyOnInstall bool
-	participants           []*backenddb.CommandWALIntent
+	bindings                  []nativeJSONTxnBinding
+	changes                   []nativeJSONPrimaryChange
+	count                     int
+	bootstrap                 *nativeEngineVersion
+	opening                   backenddb.NativeSemanticCapture
+	reimported                *nativeEngineVersion // private owning reference, including failed preparation
+	custody                   *nativeMutationCustody
+	prepared                  *nativeEngineVersion
+	raw                       bool
+	returnCustodyOnInstall    bool
+	reportProjectedGeneration bool
+	participants              []*backenddb.CommandWALIntent
 }
 
 func (p *nativeJSONLogicalGroup) PrepareNativePublication(latest backenddb.NativeSemanticState, exact *backenddb.Snapshot) (backenddb.NativeFinalizedPublication, error) {
@@ -381,7 +383,7 @@ func (p *nativeJSONLogicalGroup) PrepareNativePublication(latest backenddb.Nativ
 	if count == 0 {
 		next, err = prepareNativeCommandWALNoop(base)
 	} else {
-		next, err = prepareNativeJSONPrimaries(base, changes[:count])
+		next, err = prepareNativeCollectionChanges(base, changes[:count], nil, p.reportProjectedGeneration)
 	}
 	if err != nil {
 		return backenddb.NativeFinalizedPublication{State: next}, err
@@ -489,17 +491,12 @@ func (t *NativeJSONTxn) commitNativePlan(sealed bool, apply *nativeCommandWALApp
 }
 
 func (t *NativeJSONTxn) commitNativePlanWithStats(sealed bool, apply *nativeCommandWALApplyCommit, typedGroup bool, stats *CollectionInsertStats) error {
-	return t.commitNativePlanWithStatsObserved(sealed, apply, typedGroup, stats, nil)
+	return t.commitNativePlanObserved(sealed, apply, typedGroup, stats, nil, nil, nil)
 }
 
-// expired observes a preassignment history refusal after successful synchronous
-// cancellation and Close checks. Retirement may complete asynchronously. It is
-// private one-shot insertion authority, never an instruction to rebase a txn.
-func (t *NativeJSONTxn) commitNativePlanWithStatsObserved(sealed bool, apply *nativeCommandWALApplyCommit, typedGroup bool, stats *CollectionInsertStats, expired *bool) error {
-	return t.commitNativePlanObserved(sealed, apply, typedGroup, stats, expired, nil)
-}
-
-func (t *NativeJSONTxn) commitNativePlanObserved(sealed bool, apply *nativeCommandWALApplyCommit, typedGroup bool, stats *CollectionInsertStats, expired *bool, retry *nativeBSONSetRetry) (resultErr error) {
+// The optional observations describe clean, preassignment refusals for their
+// original one-shot callers. An explicit transaction never rebases itself.
+func (t *NativeJSONTxn) commitNativePlanObserved(sealed bool, apply *nativeCommandWALApplyCommit, typedGroup bool, stats *CollectionInsertStats, expired *bool, retry *nativeBSONSetRetry, projected **nativeInsertProjectedRefusal) (resultErr error) {
 	if expired != nil {
 		*expired = false
 	}
@@ -517,7 +514,7 @@ func (t *NativeJSONTxn) commitNativePlanObserved(sealed bool, apply *nativeComma
 	defer func() {
 		err, stages, lease := t.closeLocked()
 		if err != nil {
-			clearNativeCommitRetry(expired, retry)
+			clearNativeCommitRetry(expired, retry, projected)
 		}
 		resultErr = errors.Join(resultErr, err)
 		t.mu.Unlock()
@@ -670,7 +667,7 @@ func (t *NativeJSONTxn) commitNativePlanObserved(sealed bool, apply *nativeComma
 			return err
 		}
 	}
-	plan := &nativeJSONLogicalGroup{bindings: t.bindings, changes: make([]nativeJSONPrimaryChange, t.count), count: t.count, bootstrap: t.imported, opening: t.core, custody: t.custody, raw: t.rawStaged, returnCustodyOnInstall: returnCustodyOnInstall}
+	plan := &nativeJSONLogicalGroup{bindings: t.bindings, changes: make([]nativeJSONPrimaryChange, t.count), count: t.count, bootstrap: t.imported, opening: t.core, custody: t.custody, raw: t.rawStaged, returnCustodyOnInstall: returnCustodyOnInstall, reportProjectedGeneration: projected != nil}
 	defer func(p *nativeJSONLogicalGroup) {
 		// CommitNative and its finalizer are synchronous. Accepted sparse
 		// custody owns its replacement descriptors; this temporary ancestor
@@ -682,7 +679,7 @@ func (t *NativeJSONTxn) commitNativePlanObserved(sealed bool, apply *nativeComma
 		if reimported != nil {
 			cleanupErr := finishPrivateNative(reimported.Release())
 			if cleanupErr != nil {
-				clearNativeCommitRetry(expired, retry)
+				clearNativeCommitRetry(expired, retry, projected)
 			}
 			resultErr = errors.Join(resultErr, cleanupErr)
 		}
@@ -766,6 +763,12 @@ func (t *NativeJSONTxn) commitNativePlanObserved(sealed bool, apply *nativeComma
 			!result.LogicalInstalled && !backenddb.CommitPublicationAccepted(err) &&
 			!errors.Is(err, ErrCommitAmbiguous)
 	}
+	if projected != nil && apply == nil && !typedGroup &&
+		!result.Assigned && result.AssignedLSN == 0 && !result.Uncertain && !result.LogicalInstalled &&
+		!result.WALCompleted && !result.WALStable {
+		// The exact type excludes a release failure joined into the refusal.
+		*projected, _ = err.(*nativeInsertProjectedRefusal)
+	}
 	if retry != nil {
 		retry.rowConflict = native.ObservePointConflict != 0 && result.OnlyPointConflict && err == backenddb.ErrConcurrentModification &&
 			!result.Assigned && result.AssignedLSN == 0 && !result.Uncertain && !result.LogicalInstalled &&
@@ -788,7 +791,7 @@ func (t *NativeJSONTxn) commitNativePlanObserved(sealed bool, apply *nativeComma
 	if !result.Consumed {
 		cleanupErr := cancelPrivateNativePublication(native)
 		if cleanupErr != nil {
-			clearNativeCommitRetry(expired, retry)
+			clearNativeCommitRetry(expired, retry, projected)
 		}
 		err = errors.Join(err, cleanupErr)
 	}
@@ -796,12 +799,15 @@ func (t *NativeJSONTxn) commitNativePlanObserved(sealed bool, apply *nativeComma
 	return err
 }
 
-func clearNativeCommitRetry(expired *bool, retry *nativeBSONSetRetry) {
+func clearNativeCommitRetry(expired *bool, retry *nativeBSONSetRetry, projected **nativeInsertProjectedRefusal) {
 	if expired != nil {
 		*expired = false
 	}
 	if retry != nil {
 		retry.rowConflict = false
+	}
+	if projected != nil {
+		*projected = nil
 	}
 }
 func (t *NativeJSONTxn) Close() error {
