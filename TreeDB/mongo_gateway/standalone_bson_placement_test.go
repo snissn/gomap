@@ -29,6 +29,7 @@ import (
 func TestStandaloneRelaxedBSONValuePlacementCrashReplay(t *testing.T) {
 	const databaseDirEnv = "TREEDB_MONGO_BSON_PLACEMENT_REPLAY_DIR"
 	const ready = "BSON_PLACEMENT_REPLAY_READY"
+	const updatedPayload = "updated before process exit"
 	dir, child := os.LookupEnv(databaseDirEnv)
 	if !child {
 		dir = t.TempDir()
@@ -114,7 +115,24 @@ func TestStandaloneRelaxedBSONValuePlacementCrashReplay(t *testing.T) {
 		if next := owner.Backend.CommandWALNextLSN(); next != applied+2 {
 			t.Fatalf("fixture next WAL LSN=%d, want %d", next, applied+2)
 		}
-		fmt.Printf("%s %d\n", ready, applied+1)
+		// Leave this ordinary UPDATE above both the applied root and the last
+		// explicit WAL sync. The child receives no further storage barrier.
+		result, err := visible.UpdateOne(t.Context(), bson.D{{Key: "_id", Value: "prefix-small"}},
+			bson.D{{Key: "$set", Value: bson.D{{Key: "payload", Value: updatedPayload}}}})
+		if err != nil || !result.Acknowledged || result.MatchedCount != 1 || result.ModifiedCount != 1 {
+			t.Fatalf("relaxed update result=%+v err=%v", result, err)
+		}
+		if next := owner.Backend.CommandWALNextLSN(); next != applied+3 {
+			t.Fatalf("next WAL LSN after UPDATE=%d, want %d", next, applied+3)
+		}
+		if got := owner.Backend.State().AppliedCommandLSN; got != applied {
+			t.Fatalf("UPDATE already root-covered at %d, want %d", got, applied)
+		}
+		durable, err = strconv.ParseUint(owner.Backend.Stats()["treedb.command_wal.durable_wal_lsn"], 10, 64)
+		if err != nil || durable >= applied+2 {
+			t.Fatalf("expected relaxed UPDATE at %d above durable WAL prefix %d: %v", applied+2, durable, err)
+		}
+		fmt.Printf("%s %d\n", ready, applied+2)
 		<-t.Context().Done()
 		t.Fatal("test process exited before the crash signal")
 	}
@@ -154,6 +172,11 @@ func TestStandaloneRelaxedBSONValuePlacementCrashReplay(t *testing.T) {
 		t.Fatal("child exited gracefully")
 	}
 
+	updated, err := bson.Marshal(bson.D{{Key: "_id", Value: "prefix-small"}, {Key: "payload", Value: updatedPayload}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefixRows[0].raw = updated
 	for range 2 {
 		owner, err := OpenStandaloneServer(opts)
 		if err != nil {
