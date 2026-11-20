@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -2109,84 +2110,211 @@ func TestValueLogRewriteOnline_NoPointerKeys_DoesNotCreateNewSegment(t *testing.
 }
 
 func TestValueLogRewriteOnline_ProtectedPathsDoNotKeepHistoricalRewriteLanes(t *testing.T) {
-	dir := t.TempDir()
-
-	db, err := Open(Options{Dir: dir})
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	defer func() { _ = db.Close() }()
-
-	livePtr := appendPointersInNewSegment(t, dir, 0, 1, 90_000, 1, func(int) []byte {
-		return bytes.Repeat([]byte("live|"), 64)
-	})[0]
-	appendPointersInNewSegment(t, dir, 0, 2, 91_000, 1, func(int) []byte {
-		return bytes.Repeat([]byte("protected|"), 64)
-	})
-	appendPointersInNewSegment(t, dir, 250, 1, 92_000, 1, func(int) []byte {
-		return bytes.Repeat([]byte("dead-a|"), 64)
-	})
-	appendPointersInNewSegment(t, dir, 250, 2, 93_000, 1, func(int) []byte {
-		return bytes.Repeat([]byte("dead-b|"), 64)
-	})
-
-	if err := db.RefreshValueLogSet(); err != nil {
-		t.Fatalf("RefreshValueLogSet: %v", err)
-	}
-
-	b := db.NewBatch()
-	ptrBatch, ok := b.(interface {
-		SetPointer(key []byte, ptr page.ValuePtr) error
-	})
-	if !ok {
-		t.Fatalf("missing SetPointer on batch")
-	}
-	if err := ptrBatch.SetPointer([]byte("k"), livePtr); err != nil {
-		t.Fatalf("set pointer: %v", err)
-	}
-	if err := b.Write(); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	closeNoErr(t, b)
-
-	protected := []string{
-		filepath.Join(dir, "value_vlog", "value-l0-000002.log"),
-	}
-	stats, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
-		ProtectedPaths: protected,
-	})
-	if err != nil {
-		t.Fatalf("ValueLogRewriteOnline: %v", err)
-	}
-	if stats.RecordsCopied == 0 {
-		t.Fatalf("expected rewrite to copy at least one record, got %+v", stats)
-	}
-
-	for _, path := range []string{
-		filepath.Join(dir, "value_vlog", "value-l250-000001.log"),
-		filepath.Join(dir, "value_vlog", "value-l250-000002.log"),
+	for _, tc := range []struct {
+		name                        string
+		syncEachBatch               bool
+		publishDuringGCRevalidation bool
+	}{
+		{name: "relaxed"},
+		{name: "durable", syncEachBatch: true},
+		{name: "relaxed-publication-during-cleanup", publishDuringGCRevalidation: true},
 	} {
-		if _, err := os.Stat(path); !os.IsNotExist(err) {
-			// Observe only after the original absence check failed. These are
-			// sequential snapshots, not one atomic retirement/identity view.
-			t.Logf("rewrite cleanup failure-only observation: path=%s stat_error=%v rewrite=%+v", filepath.Base(path), err, stats)
-			segments, zombieBytes, pinned, pinnedBytes, unpinned, unpinnedBytes := db.valueLogManager.ZombieStats()
-			t.Logf("rewrite cleanup failure-only zombies: manager_present=%t segments=%d bytes=%d pinned_segments=%d pinned_bytes=%d unpinned_segments=%d unpinned_bytes=%d", db.valueLogManager != nil, segments, zombieBytes, pinned, pinnedBytes, unpinned, unpinnedBytes)
-			for _, seq := range []uint32{1, 2} {
-				id, encodeErr := valuelog.EncodeFileID(250, seq)
-				t.Logf("rewrite cleanup failure-only historical ID: lane=250 seq=%d id=%d encode_error=%v tracked_zombie=%t", seq, id, encodeErr, db.valueLogManager.IsTrackedZombie(id))
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			opts := Options{Dir: dir}
+			db, err := Open(opts)
+			if err != nil {
+				t.Fatalf("open: %v", err)
 			}
-			t.Logf("rewrite cleanup failure-only identity registry: present=%t stats=%+v", db.valueLogIdentityPins != nil, db.valueLogIdentityPins.Stats())
-			t.Fatalf("expected %s to be deleted after rewrite cleanup, err=%v", filepath.Base(path), err)
-		}
-	}
+			defer func() {
+				if db != nil {
+					closeNoErr(t, db)
+				}
+			}()
 
-	got, err := db.Get([]byte("k"))
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
-	if !bytes.Equal(got, bytes.Repeat([]byte("live|"), 64)) {
-		t.Fatalf("rewritten value mismatch")
+			liveValue := bytes.Repeat([]byte("live|"), 64)
+			livePtr := appendPointersInNewSegment(t, dir, 0, 1, 90_000, 1, func(int) []byte {
+				return liveValue
+			})[0]
+			appendPointersInNewSegment(t, dir, 0, 2, 91_000, 1, func(int) []byte {
+				return bytes.Repeat([]byte("protected|"), 64)
+			})
+			deadA := appendPointersInNewSegment(t, dir, 250, 1, 92_000, 1, func(int) []byte {
+				return bytes.Repeat([]byte("dead-a|"), 64)
+			})[0]
+			deadB := appendPointersInNewSegment(t, dir, 250, 2, 93_000, 1, func(int) []byte {
+				return bytes.Repeat([]byte("dead-b|"), 64)
+			})[0]
+
+			vlogDir := filepath.Join(dir, "value_vlog")
+			protected := filepath.Join(vlogDir, "value-l0-000002.log")
+			historical := []string{
+				filepath.Join(vlogDir, "value-l250-000001.log"),
+				filepath.Join(vlogDir, "value-l250-000002.log"),
+			}
+			readFile := func(path string) []byte {
+				t.Helper()
+				data, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatalf("read %s: %v", filepath.Base(path), err)
+				}
+				return data
+			}
+			protectedBytes := readFile(protected)
+			historicalBytes := [][]byte{readFile(historical[0]), readFile(historical[1])}
+			assertReadable := func() {
+				t.Helper()
+				if !bytes.Equal(readFile(protected), protectedBytes) {
+					t.Fatal("protected value-log segment changed")
+				}
+				got, err := db.Get([]byte("k"))
+				if err != nil || !bytes.Equal(got, liveValue) {
+					t.Fatalf("rewritten value mismatch: bytes=%d err=%v", len(got), err)
+				}
+			}
+			assertReclaimed := func(result any) {
+				t.Helper()
+				for _, path := range historical {
+					if _, err := os.Stat(path); !os.IsNotExist(err) {
+						t.Fatalf("expected %s to be deleted after cleanup: stat=%v cleanup=%+v", filepath.Base(path), err, result)
+					}
+				}
+			}
+
+			if err := db.RefreshValueLogSet(); err != nil {
+				t.Fatalf("RefreshValueLogSet: %v", err)
+			}
+			b := db.NewBatch()
+			ptrBatch, ok := b.(interface {
+				SetPointer(key []byte, ptr page.ValuePtr) error
+			})
+			if !ok {
+				t.Fatal("missing SetPointer on batch")
+			}
+			if err := ptrBatch.SetPointer([]byte("k"), livePtr); err != nil {
+				t.Fatalf("set pointer: %v", err)
+			}
+			if err := b.Write(); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+			closeNoErr(t, b)
+
+			// Drain the seed so the only publication that can change the
+			// recoverable-root set during GC is the rewrite's own swap.
+			if err := db.Checkpoint(); err != nil {
+				t.Fatalf("checkpoint seed: %v", err)
+			}
+			coordinator := db.rootPublication.coordinator
+			seed := coordinator.Stats().DurableCommitSeq
+			var releaseRewrite func()
+			if !tc.syncEachBatch {
+				await, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				entered, release := make(chan struct{}), make(chan struct{})
+				releaseRewrite = sync.OnceFunc(func() { close(release) })
+				var paused atomic.Bool
+				restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+					if event.Root == dir && event.Point == durabilitycut.AfterMetaSync && paused.CompareAndSwap(false, true) {
+						close(entered)
+						select {
+						case <-release:
+						case <-await.Done():
+							return fmt.Errorf("waiting to resume parked rewrite publication: %w", await.Err())
+						}
+					}
+					return nil
+				})
+				defer func() {
+					releaseRewrite()
+					restore()
+				}()
+				db.testValueLogGCBeforeRevalidateHook = func() {
+					select {
+					case <-entered:
+					case <-await.Done():
+						t.Fatal("rewrite publisher did not reach the META fence")
+					}
+					before := coordinator.Stats()
+					if before.DurableCommitSeq != seed || before.VisibleCommitSeq != seed+1 {
+						t.Fatalf("expected pending rewrite after seed %d, got %+v", seed, before)
+					}
+					if tc.publishDuringGCRevalidation {
+						releaseRewrite()
+						if err := coordinator.WaitThrough(await, seed+1); err != nil {
+							t.Fatalf("wait for the rewrite publication: %v", err)
+						}
+					}
+				}
+			}
+
+			stats, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
+				ProtectedPaths: []string{protected},
+				SyncEachBatch:  tc.syncEachBatch,
+			})
+			db.testValueLogGCBeforeRevalidateHook = nil
+			if err != nil {
+				t.Fatalf("ValueLogRewriteOnline: %v", err)
+			}
+			if stats.RecordsCopied != 1 {
+				t.Fatalf("expected one copied record, got %+v", stats)
+			}
+
+			if tc.publishDuringGCRevalidation {
+				wantBytes := int64(len(historicalBytes[0]) + len(historicalBytes[1]))
+				if stats.SourceSegmentsRetainedRecoverableRootStale != len(historical) ||
+					stats.SourceBytesRetainedRecoverableRootStale != wantBytes {
+					t.Fatalf("expected stale GC to retain both historical segments (%d bytes), got %+v", wantBytes, stats)
+				}
+				for i, path := range historical {
+					if !bytes.Equal(readFile(path), historicalBytes[i]) {
+						t.Fatalf("deferred cleanup changed %s", filepath.Base(path))
+					}
+				}
+				if db.valueLogManager.IsTrackedZombie(deadA.FileID) || db.valueLogManager.IsTrackedZombie(deadB.FileID) {
+					t.Fatal("deferred cleanup marked a historical segment as a zombie")
+				}
+				assertReadable()
+
+				gc, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{
+					ProtectedPaths:                   []string{protected},
+					ObservedSourceFileIDs:            []uint32{deadA.FileID, deadB.FileID},
+					ObservedSourceAssumeUnreferenced: true,
+					ObservedSourceReclaimActive:      true,
+				})
+				if err != nil || gc.ObservedSourceSegmentsDeleted != len(historical) {
+					t.Fatalf("one GC against the durable root should delete both historical segments: %+v err=%v", gc, err)
+				}
+				assertReclaimed(gc)
+			} else {
+				assertReclaimed(stats)
+			}
+
+			after := coordinator.Stats()
+			if after.VisibleCommitSeq != seed+1 {
+				t.Fatalf("expected one visible rewrite after seed %d, got %+v", seed, after)
+			}
+			wantDurable := seed
+			if tc.syncEachBatch || tc.publishDuringGCRevalidation {
+				wantDurable++
+			}
+			if after.DurableCommitSeq != wantDurable {
+				t.Fatalf("expected durable seq %d at cleanup, got %+v", wantDurable, after)
+			}
+			assertReadable()
+			if releaseRewrite != nil {
+				releaseRewrite()
+			}
+
+			toClose := db
+			db = nil
+			closeNoErr(t, toClose)
+			db, err = Open(opts)
+			if err != nil {
+				t.Fatalf("reopen: %v", err)
+			}
+			assertReclaimed("checked close and reopen")
+			assertReadable()
+		})
 	}
 }
 
