@@ -47,7 +47,10 @@ func TestPrivateCOWLeafAutomaticSourceRetirement(t *testing.T) {
 			sources[gen.GenerationID] = append(sources[gen.GenerationID], path)
 		}
 	}
-	before, _ := backend.DB.StateToken()
+	before, ok := backend.DB.StateToken()
+	if !ok {
+		t.Fatal("missing backend state before automatic retirement")
+	}
 	next, checkpoints := backend.DB.CommandWALNextLSN(), cache.checkpointRuns.Load()
 	backend.published = make(chan backenddb.LeafGenerationPackRunOnceStats, 1)
 	backend.release = make(chan struct{})
@@ -74,10 +77,11 @@ func TestPrivateCOWLeafAutomaticSourceRetirement(t *testing.T) {
 	}
 	var selected []string
 	for _, id := range packed.Selection.GenerationIDs {
-		selected = append(selected, sources[id]...)
-	}
-	if len(selected) == 0 {
-		t.Fatal("missing original selected source")
+		paths := sources[id]
+		if len(paths) == 0 {
+			t.Fatalf("missing original source for selected generation %d", id)
+		}
+		selected = append(selected, paths...)
 	}
 	for _, path := range selected {
 		info, err := os.Stat(path)
@@ -122,7 +126,10 @@ func TestPrivateCOWLeafAutomaticSourceRetirement(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	after, _ := backend.DB.StateToken()
+	after, ok := backend.DB.StateToken()
+	if !ok {
+		t.Fatal("missing backend state after automatic retirement")
+	}
 	afterNext, afterCheckpoints := backend.DB.CommandWALNextLSN(), cache.checkpointRuns.Load()
 	if after.AppliedCommandLSN != before.AppliedCommandLSN || after.MaxEntryRevision != before.MaxEntryRevision || afterNext != next || afterCheckpoints != checkpoints {
 		t.Fatalf("automatic retirement changed logical frontier: before=%+v after=%+v nextLSN=%d/%d checkpoints=%d/%d", before, after, next, afterNext, checkpoints, afterCheckpoints)
