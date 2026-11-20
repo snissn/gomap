@@ -633,6 +633,9 @@ type DB struct {
 	// gap merely by syncing an empty or newly-created successor segment.
 	commandWALSessionAppliedLSN uint64
 	commandWALDebt              CommandWALDependencyDebt
+	// maintenanceMu protects this one-attempt preference after a lost raw
+	// reentry. The preference carries no file registration or sync credit.
+	commandWALCheckpointKeepRaw bool
 	// publicationPoisoned is set after an outcome-ambiguous root/meta publish or
 	// after bounded pre-meta retry exhaustion leaves a prepared COW candidate.
 	// It is intentionally cleared only by close/reopen.
@@ -5148,6 +5151,10 @@ func (db *DB) lockCommandWALCheckpointPrefix(automatic bool) (*rootpublication.S
 	if !advanced {
 		return nil, true, nil
 	}
+	if db.commandWALCheckpointKeepRaw {
+		db.commandWALCheckpointKeepRaw = false
+		return nil, true, nil
+	}
 	original, err := db.commandWALDebt.checkpointRotationFile(frontier)
 	if err != nil {
 		db.commandWALRawPublishMu.Unlock()
@@ -5166,7 +5173,13 @@ func (db *DB) lockCommandWALCheckpointPrefix(automatic bool) (*rootpublication.S
 		db.commandWALDebt.noteRetryThrough(frontier)
 		return nil, false, err
 	}
-	return original, db.commandWALRawPublishMu.TryLock(), nil
+	if !db.commandWALRawPublishMu.TryLock() {
+		// Repeatedly yielding to arriving writers could sync this file on
+		// every attempt while permanently postponing the durable frontier.
+		db.commandWALCheckpointKeepRaw = true
+		return nil, false, nil
+	}
+	return original, true, nil
 }
 
 // syncCheckpointRotationFile owns this single lease for the duration of I/O.

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -78,26 +80,34 @@ func newSealedWALForegroundFixture(t *testing.T) *sealedWALForegroundFixture {
 	if err := database.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
-	names := publicCommandWALSegmentNames(t, filepath.Join(opts.Dir, "maindb"))
+	f.rotateRelaxedWAL(t)
+	return f
+}
+
+func (f *sealedWALForegroundFixture) rotateRelaxedWAL(t *testing.T) {
+	t.Helper()
+	main := filepath.Join(f.opts.Dir, "maindb")
+	names := publicCommandWALSegmentNames(t, main)
 	if len(names) == 0 {
 		t.Fatal("missing active WAL")
 	}
-	f.oldPath = filepath.Join(opts.Dir, "maindb", "wal", names[len(names)-1])
-	f.oldFile, err = os.Stat(f.oldPath)
+	f.oldPath = filepath.Join(main, "wal", names[len(names)-1])
+	oldFile, err := os.Stat(f.oldPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for f.value = 1; f.value <= 512; f.value++ {
+	f.oldFile = oldFile
+	for range 512 {
+		f.value++
 		if err := f.write(f.value); err != nil {
 			t.Fatal(err)
 		}
-		names = publicCommandWALSegmentNames(t, filepath.Join(opts.Dir, "maindb"))
+		names = publicCommandWALSegmentNames(t, main)
 		if names[len(names)-1] != filepath.Base(f.oldPath) {
-			return f
+			return
 		}
 	}
 	t.Fatal("relaxed BSON UPDATEs did not rotate the original WAL")
-	return nil
 }
 
 func (f *sealedWALForegroundFixture) write(value int64) error {
@@ -319,12 +329,44 @@ func TestAutomaticCheckpointSealedWALDefersBusyReentry(t *testing.T) {
 	held, resume := make(chan error, 1), make(chan struct{})
 	unblock := sync.OnceFunc(func() { close(resume) })
 	var oldSyncs atomic.Int32
+	var canonicalRetries, extraHandoffs int
+	var releaseSecondGuard func()
+	defer func() {
+		if releaseSecondGuard != nil {
+			releaseSecondGuard()
+		}
+	}()
 	restore := sync.OnceFunc(durabilitycut.Install(func(e durabilitycut.Event) error {
-		if e.Resource == durabilitycut.ResourceCommandWAL && e.Path == f.oldPath && e.Point == durabilitycut.BeforeDependencyFileSync && oldSyncs.Add(1) == 1 {
-			err := f.verifyOld(e)
-			held <- err
-			<-resume
+		if e.Resource != durabilitycut.ResourceCommandWAL || e.Path != f.oldPath || e.Point != durabilitycut.BeforeDependencyFileSync {
+			return nil
+		}
+		if err := f.verifyOld(e); err != nil {
 			return err
+		}
+		switch oldSyncs.Add(1) {
+		case 1:
+			held <- nil
+			<-resume
+		case 2, 3:
+			// Apply contention to a handoff every time it yields. The canonical
+			// producer holds raw already, so never acquire a second guard there.
+			var stack [8192]byte
+			frames := string(stack[:runtime.Stack(stack[:], false)])
+			switch {
+			case strings.Contains(frames, ".syncCheckpointRotationFile("):
+				extraHandoffs++
+				if extraHandoffs == 1 && canonicalRetries == 0 {
+					guard, err := backend.LockPrivateCOWStagingGuard(f.db.txnOwner)
+					if err != nil {
+						return err
+					}
+					releaseSecondGuard = guard.Release
+				}
+			case strings.Contains(frames, ".closeCommandWALCheckpointPrefix("):
+				canonicalRetries++
+			default:
+				return fmt.Errorf("unknown producer for exact sealed file: %s", frames)
+			}
 		}
 		return nil
 	}))
@@ -377,13 +419,33 @@ func TestAutomaticCheckpointSealedWALDefersBusyReentry(t *testing.T) {
 	case <-time.After(publicCommandWALCheckpointTestTimeout):
 		t.Fatal("re-entering checkpoint waited for raw publication while holding maintenance")
 	}
+	// Even after a lost reentry, an initially busy automatic pass must return
+	// without waiting, performing I/O or consuming the next admitted retry.
+	go func() { p, err := backend.PrepareCommandWALCoveredPrefixCleanup(); done <- result{p, err} }()
+	select {
+	case r := <-done:
+		if r.pending || r.err != nil || oldSyncs.Load() != 1 || f.prefix.LogicalFrontiers() != before {
+			t.Fatalf("initially busy retry did work: %+v, old syncs=%d", r, oldSyncs.Load())
+		}
+	case <-time.After(publicCommandWALCheckpointTestTimeout):
+		t.Fatal("initially busy retry blocked")
+	}
 	releaseGuard()
 	<-released
 	if _, err := backend.PrepareCommandWALCoveredPrefixCleanup(); err != nil {
 		t.Fatal(err)
 	}
-	if oldSyncs.Load() != 2 || f.prefix.LogicalFrontiers().W < before.C {
-		t.Fatalf("fresh checkpoint failed to repeat uncredited file or cover prefix: old syncs=%d, frontier=%+v", oldSyncs.Load(), f.prefix.LogicalFrontiers())
+	if oldSyncs.Load() != 2 || canonicalRetries != 1 || extraHandoffs != 0 || f.prefix.LogicalFrontiers().W < before.C {
+		t.Fatalf("admitted retry failed to close prefix under raw publication: old syncs=%d canonical=%d handoffs=%d W=%d target=%d", oldSyncs.Load(), canonicalRetries, extraHandoffs, f.prefix.LogicalFrontiers().W, before.C)
+	}
+	// A later, independently registered sealed file may use the handoff again.
+	f.rotateRelaxedWAL(t)
+	next := f.prefix.LogicalFrontiers().C
+	if _, err := backend.PrepareCommandWALCoveredPrefixCleanup(); err != nil {
+		t.Fatal(err)
+	}
+	if oldSyncs.Load() != 3 || canonicalRetries != 1 || extraHandoffs != 1 || f.prefix.LogicalFrontiers().W < next {
+		t.Fatalf("subsequent prefix failed to hand off: old syncs=%d canonical=%d handoffs=%d W=%d target=%d", oldSyncs.Load(), canonicalRetries, extraHandoffs, f.prefix.LogicalFrontiers().W, next)
 	}
 	restore()
 	f.reopen(t)

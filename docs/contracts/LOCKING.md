@@ -115,9 +115,16 @@ original immutable file registration can receive credit for the completed
 sync. The checkpoint retains its registration pointer until revalidation. A
 fresh registration for a reused pathname, inode or generation receives its
 own physical sync. If the extra pin reaches its capacity limit, the checkpoint
-uses the original in-lock operation. Every outstanding namespace and active segment crosses its normal
-barrier. A busy vacuum or publisher defers the checkpoint without holding up
-that owner.
+uses the original in-lock operation. Every outstanding namespace and active
+segment crosses its normal barrier.
+
+Both raw acquisitions are nonblocking under backend maintenance ownership. If a
+publisher or vacuum holds raw at reentry, the checkpoint releases maintenance
+without advancing the frontier. Under `maintenanceMu` it records that the next
+eligible automatic pass must keep raw from initial acquisition through canonical
+prefix closure. An initially busy pass leaves that preference intact. The
+admitted retry resamples all current debt, including the old file, and consumes
+the preference once. Later passes may hand off a sealed file again.
 
 ## Bounded vector prepare in the Raft FSM
 
