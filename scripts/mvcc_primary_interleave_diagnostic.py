@@ -21,15 +21,28 @@ CHUNKS = 8
 CHUNK = 16
 EXTRA_STRIDE = 4
 SCHEDULES = ("original", "resident-serial", "interleaved")
-BLOCKS = tuple((schedule, control, first) for schedule in SCHEDULES
-               for control, first in (("null", "baseline"), ("io", "candidate"),
-                                      ("null", "candidate"), ("io", "baseline")))
+BLOCKS = (
+    ("original", "null", "baseline"),
+    ("resident-serial", "io", "candidate"),
+    ("interleaved", "null", "candidate"),
+    ("resident-serial", "null", "baseline"),
+    ("interleaved", "io", "baseline"),
+    ("original", "io", "candidate"),
+    ("interleaved", "null", "baseline"),
+    ("original", "null", "candidate"),
+    ("resident-serial", "io", "baseline"),
+    ("original", "io", "baseline"),
+    ("interleaved", "io", "candidate"),
+    ("resident-serial", "null", "candidate"),
+)
 ROLE = ("baseline", "candidate")
 STATUS_FD = "GOMAP_PRIMARY_INTERLEAVE_STATUS_FD"
 DOSE = "GOMAP_PRIMARY_INTERLEAVE_IO"
+REOPEN = "GOMAP_PRIMARY_INTERLEAVE_REOPEN"
 WINDOW_START = re.compile(r'PRIMARY_WINDOW_START part=(\d+) dir=([^\n]+)')
 WINDOW_STOP = re.compile(r'PRIMARY_WINDOW_STOP part=(\d+) total_ns=(\d+)')
 READBACK = re.compile(r'(?m)^PRIMARY_READBACK normal=(\d+) extra=(\d+) value=(\w+)$')
+COUNT = re.compile(r'(?m)^PRIMARY_COUNT normal=(\d+) extra=(\d+)$')
 FILE_WRITE = re.compile(r'^(?:write|writev|pwrite64|pwritev|pwritev2|ftruncate|fallocate|sync_file_range)\(\d+<([^>]+)>')
 PRIMARY_SYNC = re.compile(r'^(fsync|fdatasync)\(\d+<([^>]+)>')
 SYNC_RESUME = re.compile(r'^<\.\.\. (fsync|fdatasync) resumed>')
@@ -55,6 +68,9 @@ def instrument(src: str, helpers: str) -> str:
     report = '\tb.ReportMetric(float64(after-before)/float64(b.N), "generation_advances/op")'
     bench = prior.replace_once(bench, report, report + """
 	if b.N == 128 {
+		fmt.Fprintf(os.Stderr, "PRIMARY_COUNT normal=%d extra=%d\\n", b.N, injected)
+	}
+	if b.N == 128 && os.Getenv("GOMAP_PRIMARY_INTERLEAVE_REOPEN") == "1" {
 		err := d.Close()
 		d = nil
 		if err != nil {
@@ -85,7 +101,7 @@ def grants(schedule: str, first: str) -> list[tuple[int, str]]:
     raise ValueError("grant plan is resident only")
 
 
-def check_sample(stdout: str, stderr: str, schedule: str, positive: bool, progress: list) -> dict:
+def check_sample(stdout: str, stderr: str, schedule: str, positive: bool, progress: list, *, trace: bool) -> dict:
     metrics = gate.parse_sample(stdout)
     expected = 1 if schedule == "original" else CHUNKS
     starts = [(int(part), json.loads(path)) for part, path in WINDOW_START.findall(stderr)]
@@ -101,8 +117,9 @@ def check_sample(stdout: str, stderr: str, schedule: str, positive: bool, progre
     if abs(metrics["ns/op"] - stops[-1][1] / gate.ITERATIONS) > 1.0:
         raise ValueError("Go wall metric differs from the sum of measured windows")
     extra = gate.ITERATIONS // EXTRA_STRIDE if positive else 0
-    if (READBACK.findall(stderr) != [(str(gate.ITERATIONS), str(extra), "again" if positive else "after")]
-            or metrics["generation_advances/op"] != 0):
+    readback = [(str(gate.ITERATIONS), str(extra), "again" if positive else "after")] if trace else []
+    if (COUNT.findall(stderr) != [(str(gate.ITERATIONS), str(extra))]
+            or READBACK.findall(stderr) != readback or metrics["generation_advances/op"] != 0):
         raise ValueError("durable readback, injected work, or PRIMARY route failed")
     return {"metrics": metrics, "store": starts[0][1], "windows": stops, "extra": extra}
 
@@ -112,15 +129,15 @@ def save(path: Path, value) -> None:
 
 
 class Child:
-    def __init__(self, stack, command, env, output, *, resident, positive):
+    def __init__(self, stack, command, env, output, *, resident, positive, trace):
         self.output = output
         self.progress = []
         self.buffer = b""
-        self.record = {"argv": command, "resident": resident, "extra_io": positive}
+        self.record = {"argv": command, "resident": resident, "extra_io": positive, "reopen": trace}
         self.reader = None
         writer = None
         pass_fds = ()
-        child_env = dict(env, **{DOSE: str(int(positive))})
+        child_env = dict(env, **{DOSE: str(int(positive)), REOPEN: str(int(trace))})
         child_env.pop(STATUS_FD, None)
         try:
             if resident:
@@ -202,7 +219,7 @@ def run_pair(cell: Path, schedule: str, first: str, control: str, argv: list, en
                 command = ["strace", "-f", "-yy", "-ttt", "-T", "-s", "384", "-o", str(cell / (role + ".strace")),
                            "-e", "trace=" + TRACE_FILTER, *argv]
             child = Child(stack, command, env, cell / role, resident=resident,
-                          positive=control == "io" and role == "candidate")
+                          positive=control == "io" and role == "candidate", trace=trace)
             children[role] = child
             if resident:
                 if child.receive(deadline, observer) != "READY":
@@ -229,7 +246,7 @@ def run_pair(cell: Path, schedule: str, first: str, control: str, argv: list, en
                 child.join(deadline, observer)
     rows = {role: check_sample(child.output.with_suffix(".stdout").read_text(),
                                child.output.with_suffix(".stderr").read_text(), schedule,
-                               control == "io" and role == "candidate", child.progress)
+                               control == "io" and role == "candidate", child.progress, trace=trace)
             for role, child in children.items()}
     if len({row["store"] for row in rows.values()}) != 2:
         raise ValueError("the two measured stores were not independently created")
@@ -264,7 +281,7 @@ def trace_events(path: Path, store: str) -> dict:
         if write := FILE_WRITE.match(body):
             if write[1].startswith(store + "/"):
                 writes.append((timestamp, write[1]))
-        if METADATA_WRITE.match(body) and store + "/" in body or body.startswith("msync("):
+        if (METADATA_WRITE.match(body) and store + "/" in body) or body.startswith("msync("):
             writes.append((timestamp, body))
         if sync := PRIMARY_SYNC.match(body):
             operation, file = sync.groups()
@@ -414,7 +431,9 @@ def run(root: Path, output: Path, slot: int, head: str, smoke: bool, cpu: int):
 
     physical_cases = [(schedule, control, first) for schedule in SCHEDULES
                       for control, first in (("io", "baseline"), ("io", "candidate"))]
+    physical_cases += [("interleaved", "null", first) for first in ROLE]
     if smoke:
+        run_pair(output / "ordinary-interleaved-smoke", "interleaved", "baseline", "null", bench, env)
         physical_cases = [("original", "io", "baseline"), ("resident-serial", "null", "candidate"),
                           ("interleaved", "io", "candidate")]
     physical = {}

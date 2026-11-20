@@ -33,13 +33,15 @@ class InterleavingTest(unittest.TestCase):
         boundaries = "".join(f'PRIMARY_WINDOW_START part={i} dir="/isolated"\n'
                              f"PRIMARY_WINDOW_STOP part={i} total_ns={(i + 1) * 32_000_000}\n"
                              for i in range(8))
+        count = "PRIMARY_COUNT normal=128 extra=32\n"
         readback = "PRIMARY_READBACK normal=128 extra=32 value=again\n"
-        evidence = boundaries + readback
-        self.assertEqual(diag.check_sample(row, evidence, "interleaved", True, [])["extra"], 32)
+        evidence = boundaries + count + readback
+        self.assertEqual(diag.check_sample(row, evidence, "interleaved", True, [], trace=True)["extra"], 32)
+        self.assertEqual(diag.check_sample(row, boundaries + count, "interleaved", True, [], trace=False)["extra"], 32)
         for invalid in (boundaries, evidence.replace("extra=32", "extra=0"),
                         evidence.replace("part=4", "part=1"), evidence.replace("256000000", "256001280")):
             with self.assertRaises(ValueError):
-                diag.check_sample(row, invalid, "interleaved", True, [])
+                diag.check_sample(row, invalid, "interleaved", True, [], trace=True)
 
 
 if __name__ == "__main__":
