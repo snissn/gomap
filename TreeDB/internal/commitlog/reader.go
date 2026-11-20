@@ -1,6 +1,7 @@
 package commitlog
 
 import (
+	"bytes"
 	"encoding/binary"
 	"io"
 	"os"
@@ -68,6 +69,12 @@ func NewReaderFromFileWithOptions(file *os.File, opts Options) (*Reader, error) 
 	}, nil
 }
 
+// NewReaderFromCapturedStream reads an immutable copy of an ordinary WAL
+// stream. The caller verifies format, extent and inode while capturing it.
+func NewReaderFromCapturedStream(data []byte, opts Options) *Reader {
+	return &Reader{input: bytes.NewReader(data), maxSegmentSize: normalizeMaxSegmentSize(opts.MaxSegmentSize)}
+}
+
 // IsEmptyFixedContainer reports a positively validated frame-free fixed
 // container, not an empty stream or an EOF observation. Reader construction
 // validated the complete header and reserve on this exact descriptor; callers
@@ -88,7 +95,7 @@ func (r *Reader) ReadBatch() ([]Record, error) {
 }
 
 func (r *Reader) Offset() (int64, error) {
-	if r == nil || r.f == nil {
+	if r == nil || r.input == nil {
 		return 0, os.ErrInvalid
 	}
 	return r.input.Seek(0, io.SeekCurrent)
@@ -336,7 +343,7 @@ func decodeZeroInlineBatch(payload []byte) ([]Record, error) {
 }
 
 func (r *Reader) Close() error {
-	if r == nil || r.f == nil {
+	if r == nil {
 		return nil
 	}
 	if r.dec != nil {
@@ -345,10 +352,11 @@ func (r *Reader) Close() error {
 	}
 	r.scanRaw = nil
 	r.scanDecoded = nil
-	if !r.ownsFile {
+	if !r.ownsFile || r.f == nil {
 		return nil
 	}
 	err := r.f.Close()
 	r.f = nil
+	r.input = nil
 	return err
 }

@@ -117,12 +117,34 @@ Ordinary cleanup is serialized per DB and follows this order:
    to eight of the oldest predecessors. When every selected predecessor is
    fixed, release append exclusion to scan the prefix through retained handles.
    Reacquire exclusion to verify prefix links and identities and finish scanning
-   the suffix. Ineligible inventories, `CleanupCommandWALCoveredSegments`,
-   synchronous checkpoint and Close keep the complete scan under exclusion.
-   Stream cleanup through `CleanupCommandWALCoveredPrefix` reuses a bounded
-   read-ahead buffer for closed stream segments. Frame validation and WAL
-   offsets use the bytes consumed by the decoder, including on short reads.
-   Active streams and fixed containers keep their original readers;
+   the suffix. Deferred stream cleanup can also release append exclusion
+   during validation when the ext4 WAL occupies a different volume from the
+   index, store root, value log and leaf log. Those locations and any
+   separate primary pager must share a volume. The stream route requires a canonical single-lane inventory of
+   two to eight sealed files totaling at least 192 MiB. The active WAL must
+   fit within 2.5 MiB at proof capture and again at staging.
+
+   Under append exclusion, cleanup opens the exact active stream. Its
+   visible EOF must equal the accepted byte count. Cleanup copies that
+   bounded extent, closes its handle, pins the immutable predecessors and
+   retains a directory reader. It then releases exclusion and validates the
+   complete sealed streams followed by the copied active bytes in canonical
+   order, with the existing CRC, typed frames and replay membership rules.
+   The active copy must end at a complete frame and match the staged final
+   LSN, or be positively empty. Recovery still checks the retained live WAL,
+   including same-generation appends beyond the staged extent.
+
+   Before claiming decisions, cleanup briefly reacquires append exclusion,
+   checks that the same active file remains linked without shrinking, and
+   verifies exact directory and sealed-file identities and extents. It does
+   not read the appended suffix. The selected and fallback roots and the
+   original journal retirement authority still govern deletion. Rotation or
+   foreground sync descriptor pressure may release the staged readers before
+   retrying the original operation. Ineligible staging, mixed formats and
+   clean yields use the original locked scanner with the captured replay
+   bounds. Hard scan, namespace and close errors remain visible. Maintenance
+   does not flush accepted bytes. Explicit cleanup, synchronous checkpoint
+   and Close retain the existing locked scan;
 5. reacquire the durable-publication lock, freshly validate current root
    runtime, and require its minimum cleanup frontier and durable WAL LSN not to
    have regressed below the captured authority;

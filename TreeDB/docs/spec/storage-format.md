@@ -4650,11 +4650,18 @@ use the same scan. A canonical single-lane inventory must have a fixed active
 container and at least two sealed predecessors. The method selects up to eight
 of the oldest predecessors. When every selected file is fixed, it releases
 append exclusion to validate their frames and complete reserves, then reacquires
-it to verify the prefix and validate the remaining inventory. Ineligible
-inventories, `CleanupCommandWALCoveredSegments`, synchronous checkpoint and
-Close use the complete locked scan. Cleanup releases append exclusion before
-publication revalidation and never flushes buffered commands as a maintenance
-side effect.
+it to verify the prefix and validate the remaining inventory. The same method
+can validate a large sealed stream prefix outside append exclusion when the
+ext4 WAL occupies a dedicated volume while the index and value storage
+share the database volume. Cleanup validates a bounded copy of the staged
+active bytes after the immutable predecessors. A concurrent rotation or a
+captured sync under descriptor pressure releases the temporary cleanup readers.
+Cleanup then uses the original locked scan. See the
+[durable WAL cleanup proof](durable-wal-cleanup-proof-3682.md) for the placement,
+inventory, and identity checks. Ineligible inventories,
+`CleanupCommandWALCoveredSegments`, synchronous checkpoint and Close use the
+complete locked scan. Cleanup releases append exclusion before publication
+revalidation and never flushes buffered commands as a maintenance side effect.
 
 An interrupted relaxed extent can retain an explicit incomplete-frame identity
 only when its start bounds/checksum and stable V2 identity validate and its end

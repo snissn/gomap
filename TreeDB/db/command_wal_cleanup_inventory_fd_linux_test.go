@@ -200,3 +200,337 @@ func TestCommandWALCleanupFixedPrefixSecondInventoryDescriptorExhaustion(t *test
 		})
 	}
 }
+
+func TestCommandWALCleanupDetachedStreamSecondInventoryDescriptorExhaustion(t *testing.T) {
+	if !enterLimitedWALCleanupProcess(t) {
+		return
+	}
+	var rlim syscall.Rlimit
+	if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &rlim); err != nil {
+		t.Fatal(err)
+	}
+	limit := rlim.Cur
+	database, proof, sealed := prepareDetachedStreamCleanupTest(t, 2, 2)
+	var padding []*os.File
+	defer func() {
+		for _, file := range padding {
+			if err := file.Close(); err != nil {
+				t.Error(err)
+			}
+		}
+	}()
+	var visited []string
+	scan := newCommandWALCleanupScan(proof.cleanupThrough, proof.durableWALLSN, database.walMaxSegmentBytes, func(path string) {
+		visited = append(visited, path)
+		if len(visited) != len(sealed) {
+			return
+		}
+		for {
+			file, err := os.Open(os.DevNull)
+			if errors.Is(err, syscall.EMFILE) {
+				break
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			padding = append(padding, file)
+		}
+		if _, err := os.ReadDir(filepath.Dir(path)); !errors.Is(err, syscall.EMFILE) {
+			t.Fatalf("a new inventory reader should be refused at RLIMIT_NOFILE=%d: %v", limit, err)
+		}
+		t.Logf("both covered descriptors retained under real ReadDir EMFILE at RLIMIT_NOFILE=%d", limit)
+	}, &proof.journal)
+	attempted, scanErr := database.scanDetachedCommandWALCleanupPrefix(proof, scan, os.Open, 1)
+	decisions, err := scan.finish(scanErr)
+	defer closeCommandWALCleanupDecisions(decisions)
+	if !attempted || err != nil || !slices.Equal(visited, append(slices.Clone(sealed), proof.journal.ActivePath)) {
+		t.Fatalf("cleanup attempted=%t visited=%q err=%v", attempted, visited, err)
+	}
+	if len(decisions) < len(sealed) || decisions[0].file == nil || decisions[1].file == nil {
+		t.Fatalf("inventory refresh did not retain both covered decisions: %+v", decisions)
+	}
+}
+
+func TestCommandWALCleanupDetachedStreamRotationDescriptorExhaustion(t *testing.T) {
+	if !enterLimitedWALCleanupProcess(t) {
+		return
+	}
+	var rlim syscall.Rlimit
+	if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &rlim); err != nil {
+		t.Fatal(err)
+	}
+	limit := rlim.Cur
+	database := &DB{dir: t.TempDir(), commandWAL: true, durability: DurabilityDurable}
+	for seq := uint64(1); seq <= 2; seq++ {
+		writeCommandWALFrame(t, database.dir, seq, seq)
+	}
+	installCommandWALCleanupTwoRootRuntimeForTest(database, 1, 1)
+	database.commandWALDurableLSN.Store(2)
+	opts := commandWALCleanupJournalOptionsForTest(t, database, 2)
+	opts.PreferExt4Stream = true
+	installCommandWALCleanupJournalOptionsForTest(t, database, opts, true)
+	proof, err := database.captureDurableWALCleanupProofV1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !proof.journal.Ext4Stream {
+		t.Skip("requires an ext4 stream")
+	}
+
+	var padding []*os.File
+	t.Cleanup(func() {
+		for _, file := range padding {
+			if err := file.Close(); err != nil {
+				t.Error(err)
+			}
+		}
+	})
+	for {
+		file, err := os.Open(os.DevNull)
+		if errors.Is(err, syscall.EMFILE) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		padding = append(padding, file)
+	}
+	const slots = 4
+	if len(padding) < slots {
+		t.Fatalf("RLIMIT_NOFILE=%d left only %d available slots", limit, len(padding))
+	}
+	for _, file := range padding[len(padding)-slots:] {
+		if err := file.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	padding = padding[:len(padding)-slots]
+
+	var opened []*os.File
+	var visited []string
+	scan := newCommandWALCleanupScan(proof.cleanupThrough, proof.durableWALLSN, database.walMaxSegmentBytes, func(path string) {
+		visited = append(visited, path)
+		if len(visited) != 1 {
+			return
+		}
+		if !database.commandJournal.AppendLockAvailableForTesting() {
+			t.Fatal("rotation must run while detached readers are staged")
+		}
+		if err := database.RotateCommandWALActiveSegment(false); err != nil {
+			t.Fatalf("public rotation with %d free slots before staging: %v", slots, err)
+		}
+		checkClosedSplitStreamReaders(t, opened, 2)
+	}, &proof.journal)
+	attempted, err := database.scanDetachedCommandWALCleanupPrefix(proof, scan, func(path string) (*os.File, error) {
+		file, err := os.Open(path)
+		if err == nil {
+			opened = append(opened, file)
+		}
+		return file, err
+	}, 1)
+	if attempted || err != nil || len(visited) != 1 {
+		t.Fatalf("rotation did not return staged cleanup to locked scan: attempted=%t visited=%q err=%v", attempted, visited, err)
+	}
+	decisions, err := scan.finish(database.commandJournal.WithCleanupScan(proof.journal, func() error {
+		return scan.scanLockedDirectory(database.dir)
+	}))
+	defer closeCommandWALCleanupDecisions(decisions)
+	successor, _ := database.commandWALActiveSegmentSnapshot()
+	if err != nil || len(decisions) != 2 || !decisions[0].Covered || decisions[1].Covered ||
+		decisions[0].file == nil || decisions[1].file != nil || successor == proof.journal.ActivePath {
+		t.Fatalf("locked retry did not preserve the covered and replay ownership after rotation: %+v successor=%q err=%v", decisions, successor, err)
+	}
+	t.Logf("public rotation and locked retry succeeded with %d free descriptors before staging at RLIMIT_NOFILE=%d", slots, limit)
+}
+
+func TestCommandWALCleanupDetachedStreamCaptureDescriptorExhaustion(t *testing.T) {
+	if !enterLimitedWALCleanupProcess(t) {
+		return
+	}
+	var rlim syscall.Rlimit
+	if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &rlim); err != nil {
+		t.Fatal(err)
+	}
+	limit := rlim.Cur
+	for _, detached := range []bool{false, true} {
+		name := "locked"
+		if detached {
+			name = "detached"
+		}
+		t.Run(name, func(t *testing.T) {
+			opts := Options{
+				Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true,
+				ResolvedProfile: ProfileCommandWALRelaxed, Durability: DurabilityWALOnRelaxed,
+				MemtableMode: "cow_btree", FreshRelaxedStandaloneWALStream: true,
+			}
+			database, err := OpenForNativeSemanticOwner(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if database != nil {
+					if err := database.Close(); err != nil {
+						t.Error(err)
+					}
+				}
+			})
+			var sealed []string
+			for _, key := range []string{"covered", "requires-replay"} {
+				if err := database.SetSync([]byte(key), []byte("value")); err != nil {
+					t.Fatal(err)
+				}
+				if err := database.rootPublication.coordinator.WaitThrough(t.Context(), database.State().CommitSeq); err != nil {
+					t.Fatal(err)
+				}
+				path, _ := database.commandWALActiveSegmentSnapshot()
+				sealed = append(sealed, path)
+				if err := database.RotateCommandWALActiveSegment(true); err != nil {
+					t.Fatal(err)
+				}
+			}
+			proof, err := database.captureDurableWALCleanupProofV1()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !proof.journal.Ext4Stream {
+				t.Skip("requires an ordinary ext4 stream")
+			}
+			if proof.cleanupThrough != 1 || proof.durableWALLSN != 2 || proof.journal.ActiveBytes != 0 {
+				t.Fatalf("expected one covered and one replay segment before first successor capture: covered=%d durable=%d active=%+v",
+					proof.cleanupThrough, proof.durableWALLSN, proof.journal)
+			}
+
+			// Allow the two predecessor readers and refresh directory, but
+			// leave no descriptor for the first capture while they are held.
+			const slots = 3
+			var padding []*os.File
+			releasePadding := func() {
+				for _, file := range padding {
+					if err := file.Close(); err != nil {
+						t.Error(err)
+					}
+				}
+				padding = nil
+			}
+			defer releasePadding()
+			for {
+				file, err := os.Open(os.DevNull)
+				if errors.Is(err, syscall.EMFILE) {
+					break
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				padding = append(padding, file)
+			}
+			if len(padding) < slots {
+				t.Fatalf("RLIMIT_NOFILE=%d left fewer than %d usable slots", limit, slots)
+			}
+			for _, file := range padding[len(padding)-slots:] {
+				if err := file.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			padding = padding[:len(padding)-slots]
+
+			capture := func() error {
+				before := database.commandJournal.WriterDurabilityStats()
+				target, result, err := database.CaptureCommandWALPrefix()
+				if err != nil {
+					return err
+				}
+				_, err = target.Sync()
+				if result.LSN != 0 || target.journal.LSN != 0 {
+					return errors.Join(err, fmt.Errorf("physical sync changed the logical frontier: result=%+v lsn=%d", result, target.journal.LSN))
+				}
+				after := database.commandJournal.WriterDurabilityStats()
+				if after.FileSyncCalls != before.FileSyncCalls+1 || after.FileSyncErrors != before.FileSyncErrors {
+					return errors.Join(err, fmt.Errorf("expected one successful physical file sync: before=%+v after=%+v", before, after))
+				}
+				return err
+			}
+			var captureErr, scanErr error
+			var captureCalled bool
+			var opened []*os.File
+			scan := newCommandWALCleanupScan(proof.cleanupThrough, proof.durableWALLSN, database.walMaxSegmentBytes, nil, &proof.journal)
+			defer func() {
+				if err := closeCommandWALCleanupDecisions(scan.decisions); err != nil {
+					t.Error(err)
+				}
+			}()
+			if detached {
+				scan.beforeSegment = func(path string) {
+					if captureCalled {
+						return
+					}
+					captureCalled = true
+					if path != sealed[0] || !database.commandJournal.AppendLockAvailableForTesting() {
+						captureErr = fmt.Errorf("capture did not enter during detached scanning of %q", path)
+						return
+					}
+					if file, err := os.Open(os.DevNull); !errors.Is(err, syscall.EMFILE) {
+						if file != nil {
+							_ = file.Close()
+						}
+						captureErr = fmt.Errorf("staging did not consume the three remaining FDs: %v", err)
+						return
+					}
+					captureErr = capture()
+				}
+				attempted, err := database.scanDetachedCommandWALCleanupPrefix(proof, scan, func(path string) (*os.File, error) {
+					file, err := os.Open(path)
+					if err == nil {
+						opened = append(opened, file)
+					}
+					return file, err
+				}, 1)
+				if !captureCalled || captureErr != nil {
+					t.Fatalf("first capture under detached cleanup at RLIMIT_NOFILE=%d: called=%t error=%v, poison=%v scan=%v",
+						limit, captureCalled, captureErr, database.commandWALPoisonedError(), err)
+				}
+				if attempted || err != nil {
+					t.Fatalf("expected clean yield to the locked scan: attempted=%t error=%v", attempted, err)
+				}
+				checkClosedSplitStreamReaders(t, opened, len(sealed))
+			}
+			scanErr = database.commandJournal.WithCleanupScan(proof.journal, func() error {
+				return scan.scanLockedDirectory(database.dir)
+			})
+			decisions, err := scan.finish(scanErr)
+			if err != nil || len(decisions) != 2 || !decisions[0].Covered || decisions[1].Covered {
+				t.Fatalf("locked scan did not preserve the covered and replay distinction: %+v error=%v", decisions, err)
+			}
+			if !detached {
+				if err := capture(); err != nil {
+					t.Fatalf("first capture after locked scan at RLIMIT_NOFILE=%d: %v", limit, err)
+				}
+			}
+			current, err := database.commandJournal.CaptureCleanupSnapshot()
+			if err != nil || current.SegmentSeq != proof.journal.SegmentSeq || current.ActivePath != proof.journal.ActivePath {
+				t.Fatalf("capture changed active generation: %+v err=%v", current, err)
+			}
+			if err := closeCommandWALCleanupDecisions(decisions); err != nil {
+				t.Fatal(err)
+			}
+			releasePadding()
+			if err := database.SetSync([]byte("subsequent"), []byte("value")); err != nil {
+				t.Fatal(err)
+			}
+			toClose := database
+			database = nil
+			if err := toClose.Close(); err != nil {
+				t.Fatal(err)
+			}
+			database, err = OpenForNativeSemanticOwner(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, key := range []string{"covered", "requires-replay", "subsequent"} {
+				if got, err := database.Get([]byte(key)); string(got) != "value" || err != nil {
+					t.Fatalf("reopened %q=%q error=%v", key, got, err)
+				}
+			}
+			t.Logf("first same-generation public capture completed with %d available slots before scan at RLIMIT_NOFILE=%d", slots, limit)
+		})
+	}
+}

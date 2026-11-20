@@ -340,8 +340,9 @@ func testCommandWALCleanupScanOverlap(t *testing.T, database *DB, cleanup func(*
 	reached, release := make(chan bool, 1), make(chan struct{})
 	var scanned []string
 	database.testCommandWALCleanupHooks = &commandWALCleanupTestHooks{beforeSegment: func(path string) {
+		first := !slices.Contains(scanned, closedPath)
 		scanned = append(scanned, path)
-		if path == closedPath && len(scanned) == 1 {
+		if path == closedPath && first {
 			// No writer has started yet; sample append exclusion at the scan.
 			reached <- database.commandJournal.AppendLockAvailableForTesting()
 			<-release
