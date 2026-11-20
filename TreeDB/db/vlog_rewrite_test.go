@@ -2216,7 +2216,11 @@ func TestValueLogRewriteOnline_ProtectedPathsDoNotKeepHistoricalRewriteLanes(t *
 				restore := durabilitycut.Install(func(event durabilitycut.Event) error {
 					if event.Root == dir && event.Point == durabilitycut.AfterMetaSync && paused.CompareAndSwap(false, true) {
 						close(entered)
-						<-release
+						select {
+						case <-release:
+						case <-await.Done():
+							return fmt.Errorf("waiting to resume parked rewrite publication: %w", await.Err())
+						}
 					}
 					return nil
 				})
