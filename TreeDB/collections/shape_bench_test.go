@@ -565,7 +565,10 @@ func benchmarkSingleStringDocumentBatch(tb testing.TB, start, count int) ([][]by
 }
 
 func benchmarkCollectionShapeInsertBatch(b *testing.B, indexCount int, checkpoint bool) {
-	backend, collection := openBenchmarkCollection(b, fmt.Sprintf("bench_shape_insert_%d", indexCount), collectionShapeIndexes(indexCount)...)
+	backend, manager, collection := openBenchmarkCollectionWithManager(b, fmt.Sprintf("bench_shape_insert_%d", indexCount), collectionShapeIndexes(indexCount)...)
+	if manager.UsesNativeCommandWALApply() {
+		b.Fatal("legacy shape benchmark unexpectedly activated the native collection owner")
+	}
 	targetBatchSize := benchmarkBatchSize(b)
 	startKeyFallback, startPrefixFallback := benchmarkNativeProbeFallbackCounters(b, backend)
 	startTreeDBStats := backend.Stats()
@@ -627,6 +630,7 @@ func benchmarkCollectionShapeInsertBatch(b *testing.B, indexCount int, checkpoin
 		b.StopTimer()
 	}
 	b.StopTimer()
+	b.ReportMetric(1, "legacy_backend_owner")
 	b.ReportMetric(float64(targetBatchSize), metricName)
 	b.ReportMetric(float64(indexCount), "indexes/doc")
 	if bufferedIndexedWrites {
@@ -663,6 +667,10 @@ func benchmarkCollectionShapeInsertBatch(b *testing.B, indexCount int, checkpoin
 	benchmarkReportTreeDBSpanNativeStatDeltas(b, backend, startTreeDBStats)
 	benchmarkReportNativeProbeFallbackDeltas(b, backend, startKeyFallback, startPrefixFallback)
 	benchmarkReportTreeDBDiskUsage(b, backend, b.N)
+	if !checkpoint && benchmarkBoolEnv(b, "TREEDB_COLLECTION_BENCH_NATIVE_COW_COMPANION", false) &&
+		benchmarkBoolEnv(b, "TREEDB_COLLECTION_REPORT_DISK_USAGE", true) {
+		b.ReportMetric(float64(benchmarkVerifyCollectionShapeIDs(b, collection)), "verified_shape_docs")
+	}
 }
 
 func BenchmarkCollectionShapeInsertBatch(b *testing.B) {
