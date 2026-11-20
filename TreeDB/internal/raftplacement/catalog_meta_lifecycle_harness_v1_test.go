@@ -3,6 +3,7 @@ package raftplacement
 import (
 	"context"
 	"fmt"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -92,7 +93,17 @@ func TestCatalogMetaLifecycleImmutableIdentitySurvivesReopenV1(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := harness.RestartV1(ctx); err != nil {
+	deadline, _ := ctx.Deadline()
+	receipt := &catalogMetaRestartReceiptV1{deadline: deadline, logs: make(map[raftcluster.NodeID]*catalogMetaRaftLogV1)}
+	harness.restartObserver = receipt
+	defer func() {
+		if t.Failed() {
+			receipt.report(t, harness.NodeIDs())
+		}
+	}()
+	err = harness.RestartV1(ctx)
+	receipt.phase("returned")
+	if err != nil {
 		t.Fatal(err)
 	}
 	if err := harness.WaitForAuthorities(ctx, func(authority *CatalogMetaAuthorityV1) bool {
@@ -114,6 +125,72 @@ func TestCatalogMetaLifecycleHarnessRaftConfigProvidesSchedulingHeadroomV1(t *te
 	}
 	if catalogMetaLeaderObservationMaxGapV1 >= config.ElectionTimeout || catalogMetaLeaderObservationMaxGapV1 >= config.LeaderLeaseTimeout {
 		t.Fatalf("leader observation max gap=%s want below election=%s and lease=%s", catalogMetaLeaderObservationMaxGapV1, config.ElectionTimeout, config.LeaderLeaseTimeout)
+	}
+}
+
+type catalogMetaRestartReceiptV1 struct {
+	deadline                                                time.Time
+	phases                                                  []string
+	logs                                                    map[raftcluster.NodeID]*catalogMetaRaftLogV1
+	beforeCleanup                                           map[raftcluster.NodeID]string
+	dwell                                                   catalogMetaLeaderDwellV1
+	polls, incomplete, noLeader, multipleLeaders, gapResets int
+	maxGap                                                  time.Duration
+}
+
+func (r *catalogMetaRestartReceiptV1) phase(name string) {
+	now := time.Now()
+	r.phases = append(r.phases, fmt.Sprintf("%s at=%s remaining=%s", name, now.Format(time.RFC3339Nano), r.deadline.Sub(now)))
+	if name == "failure-cleanup" {
+		// Closing the new runtime can generate events that evict the failed
+		// election from its bounded rings. Save their contents at failure.
+		r.beforeCleanup = make(map[raftcluster.NodeID]string, len(r.logs))
+		for id, log := range r.logs {
+			r.beforeCleanup[id] = log.String()
+		}
+	}
+}
+
+func (r *catalogMetaRestartReceiptV1) raftLog(id raftcluster.NodeID) io.Writer {
+	log := new(catalogMetaRaftLogV1)
+	r.logs[id] = log
+	return log
+}
+
+func (r *catalogMetaRestartReceiptV1) leaderPoll(complete, multiple bool, dwell catalogMetaLeaderDwellV1) {
+	r.polls++
+	switch {
+	case !complete:
+		r.incomplete++
+	case multiple:
+		r.multipleLeaders++
+	case dwell.leader == "":
+		r.noLeader++
+	}
+	if !r.dwell.lastObservation.IsZero() {
+		gap := dwell.lastObservation.Sub(r.dwell.lastObservation)
+		r.maxGap = max(r.maxGap, gap)
+		if gap > catalogMetaLeaderObservationMaxGapV1 && dwell.leader != "" && dwell.leader == r.dwell.leader {
+			r.gapResets++
+		}
+	}
+	r.dwell = dwell
+}
+
+func (r *catalogMetaRestartReceiptV1) report(t *testing.T, peers []raftcluster.NodeID) {
+	t.Helper()
+	var dwellElapsed time.Duration
+	if !r.dwell.since.IsZero() {
+		dwellElapsed = r.dwell.lastObservation.Sub(r.dwell.since)
+	}
+	t.Logf("catalog restart deadline=%s phases=%v polls=%d incomplete=%d no_leader=%d multiple_leaders=%d max_gap=%s same_leader_gap_resets=%d last_dwell_leader=%q last_dwell_elapsed=%s",
+		r.deadline.Format(time.RFC3339Nano), r.phases, r.polls, r.incomplete, r.noLeader, r.multipleLeaders, r.maxGap, r.gapResets, r.dwell.leader, dwellElapsed)
+	for _, id := range peers {
+		if events, ok := r.beforeCleanup[id]; ok {
+			t.Logf("reopened peer %s Raft events at failure: %s", id, events)
+		} else if log := r.logs[id]; log != nil {
+			t.Logf("reopened peer %s recent Raft events: %s", id, log)
+		}
 	}
 }
 
