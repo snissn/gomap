@@ -1013,10 +1013,11 @@ and the incremental #4519 scope.
 
 ### COW physical leaf inspection
 
-For syscall attribution, capture a separate warm seek trace from the repository
-root with TreeDB environment overrides unset. Use the standalone
+On Linux or macOS, capture a separate warm seek trace from the repository root
+with TreeDB environment overrides unset. Use the standalone
 [package benchmarks](../unified_bench/README.md#cow-physical-leaf-inspection)
-for uninstrumented timing.
+for uninstrumented timing. The same guide includes the direct inspector command
+for Windows.
 
 ```sh
 OUT=$(mktemp -d /tmp/gomap_leaf_trace_XXXXXX)

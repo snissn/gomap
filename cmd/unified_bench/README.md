@@ -1813,22 +1813,30 @@ and the incremental #4519 scope.
 
 ### COW physical leaf inspection
 
-From the repository root, run these standalone Go package benchmarks with
-TreeDB environment overrides unset. The public rows include acquiring a COW
-read cut, seeking, checking the owned result and closing the cut.
+From the repository root, set `GOWORK=off` and `GOMAXPROCS=8` in your shell
+and leave TreeDB environment overrides unset.
+
+Run the public seek benchmarks on Linux or macOS. Each operation acquires a
+COW read cut, seeks, checks the owned result and closes the cut.
 
 ```sh
-GOWORK=off GOMAXPROCS=8 go test ./TreeDB/caching -run '^$' -bench '^BenchmarkCOWVerifiedLeafMissLifecycle$/^entries=(128|-1)$/^distinct=(true|false)$' -benchtime=40000x -benchmem
-GOWORK=off GOMAXPROCS=8 go test ./TreeDB/caching -run '^$' -bench '^BenchmarkCOWParallelWarmSeek$' -benchtime=100000x -benchmem
-GOWORK=off GOMAXPROCS=8 go test ./TreeDB/internal/valuelog -run '^$' -bench '^BenchmarkCOW(Interior)?LeafInspector$' -benchtime=1000000x -benchmem
+go test ./TreeDB/caching -run '^$' -bench '^BenchmarkCOWVerifiedLeafMissLifecycle$/^entries=(128|-1)$/^distinct=(true|false)$' -benchtime=40000x -benchmem
+go test ./TreeDB/caching -run '^$' -bench '^BenchmarkCOWParallelWarmSeek$' -benchtime=100000x -benchmem
 ```
 
 The public fixtures reopen a checkpointed `cow_ordered` database with the
 TreeDB WAL disabled. Compare repeat timings, `cache-hits/op`, `mmap-hits/op`,
-and allocations. The interior control lets the positional reader fill its
-metadata window in one call. The direct benchmarks report the observed mmap and
-fallback counters and can run on platforms without mapping support. See the
-[standalone syscall trace recipe](../benchprof/README.md#cow-physical-leaf-inspection).
+and allocations. See the [standalone syscall trace recipe](../benchprof/README.md#cow-physical-leaf-inspection).
+
+Run the direct inspector benchmarks on Linux, macOS, or Windows.
+
+```sh
+go test ./TreeDB/internal/valuelog -run '^$' -bench '^BenchmarkCOW(Interior)?LeafInspector$' -benchtime=1000000x -benchmem
+```
+
+The direct benchmarks report mmap and fallback counters. The Windows rows
+measure the positional reader. The interior control lets it fill its metadata
+window in one call.
 
 ### Public COW point-read allocation boundary
 
