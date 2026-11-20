@@ -17,6 +17,11 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
 
+type privateCOWLeafGCResult struct {
+	packet <-chan struct{}
+	stats  backenddb.LeafGenerationGCStats
+}
+
 // This adapter pauses the actual named backend operation immediately after its
 // physical publication, before the cache can adopt that basis. Backend copy's
 // own writeMu split is separately exercised by its maintained copy-hook tests.
@@ -29,7 +34,8 @@ type privateCOWPackHeldBackend struct {
 	calls           int
 	gcCalls         int
 	last            backenddb.LeafGenerationPackRunOnceStats
-	gcCompleted     chan backenddb.LeafGenerationGCStats
+	packPacket      chan (<-chan struct{})
+	gcCompleted     chan privateCOWLeafGCResult
 	forceNoop       bool
 	hideRanOnError  bool
 }
@@ -42,6 +48,9 @@ func (b *privateCOWPackHeldBackend) LeafGenerationPackRunOnceForPrivateCOW(owner
 	}
 	stats, err := b.DB.LeafGenerationPackRunOnceForPrivateCOW(owner, ctx, opts)
 	b.last = stats
+	if b.packPacket != nil {
+		b.packPacket <- ctx.Done()
+	}
 	if b.published != nil {
 		b.published <- stats
 		select {
@@ -70,7 +79,7 @@ func (b *privateCOWPackHeldBackend) LeafGenerationGC(ctx context.Context, opts b
 	b.gcCalls++
 	stats, err := b.DB.LeafGenerationGC(ctx, opts)
 	if b.gcCompleted != nil {
-		b.gcCompleted <- stats
+		b.gcCompleted <- privateCOWLeafGCResult{packet: ctx.Done(), stats: stats}
 	}
 	return stats, err
 }

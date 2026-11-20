@@ -47,14 +47,22 @@ func TestPrivateCOWLeafAutomaticSourceRetirement(t *testing.T) {
 			sources[gen.GenerationID] = append(sources[gen.GenerationID], path)
 		}
 	}
-	before, _ := backend.DB.StateToken()
+	before, ok := backend.DB.StateToken()
+	if !ok {
+		t.Fatal("missing backend state before automatic retirement")
+	}
 	next, checkpoints := backend.DB.CommandWALNextLSN(), cache.checkpointRuns.Load()
 	backend.published = make(chan backenddb.LeafGenerationPackRunOnceStats, 1)
 	backend.release = make(chan struct{})
 	var releaseOnce sync.Once
 	release := func() { releaseOnce.Do(func() { close(backend.release) }) }
 	t.Cleanup(release)
-	backend.gcCompleted = make(chan backenddb.LeafGenerationGCStats, 16)
+	backend.packPacket = make(chan (<-chan struct{}), 1)
+	backend.gcCompleted = make(chan privateCOWLeafGCResult, 16)
+	// The ordinary ticker also checks general value-log GC eligibility. Its
+	// independent checkpoint must not supply progress to this leaf pack.
+	// Put only that eligibility check in its normal cooldown.
+	cache.vlogGenerationLastGCUnixNano.Store(time.Now().UnixNano())
 	t.Setenv(envEnableLeafGenerationPackMaintenance, "1")
 	t.Setenv(envDisableVlogGenerationLoop, "0")
 	cache.startVlogGenerationLoop()
@@ -69,10 +77,11 @@ func TestPrivateCOWLeafAutomaticSourceRetirement(t *testing.T) {
 	}
 	var selected []string
 	for _, id := range packed.Selection.GenerationIDs {
-		selected = append(selected, sources[id]...)
-	}
-	if len(selected) == 0 {
-		t.Fatal("missing original selected source")
+		paths := sources[id]
+		if len(paths) == 0 {
+			t.Fatalf("missing original source for selected generation %d", id)
+		}
+		selected = append(selected, paths...)
 	}
 	for _, path := range selected {
 		info, err := os.Stat(path)
@@ -80,9 +89,14 @@ func TestPrivateCOWLeafAutomaticSourceRetirement(t *testing.T) {
 			t.Fatalf("selected source identity changed before automatic GC: %s err=%v", path, err)
 		}
 	}
+	packet := <-backend.packPacket
 	release()
 	select {
-	case gc := <-backend.gcCompleted:
+	case result := <-backend.gcCompleted:
+		if packet == nil || result.packet != packet {
+			t.Fatal("GC did not belong to the selected periodic leaf pack")
+		}
+		gc := result.stats
 		t.Logf("first automatic GC: %+v selected=%v", gc, selected)
 		if gc.GenerationsRetiring != 0 || gc.GenerationsEligible < len(packed.Selection.GenerationIDs) {
 			t.Fatalf("automatic packet retained sources without an external reader: %+v", gc)
@@ -90,6 +104,10 @@ func TestPrivateCOWLeafAutomaticSourceRetirement(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("automatic pack did not reach GC")
 	}
+	// The adapter reports the backend's GC return while the owning slice
+	// still holds flushMu. Join its cache adoption and GC accounting first.
+	cache.flushMu.Lock()
+	cache.flushMu.Unlock()
 	deadline := time.Now().Add(8 * time.Second)
 	for {
 		remaining := 0
@@ -108,9 +126,13 @@ func TestPrivateCOWLeafAutomaticSourceRetirement(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	after, _ := backend.DB.StateToken()
-	if after.AppliedCommandLSN != before.AppliedCommandLSN || after.MaxEntryRevision != before.MaxEntryRevision || backend.DB.CommandWALNextLSN() != next || cache.checkpointRuns.Load() != checkpoints {
-		t.Fatalf("automatic retirement changed logical frontier: before=%+v after=%+v", before, after)
+	after, ok := backend.DB.StateToken()
+	if !ok {
+		t.Fatal("missing backend state after automatic retirement")
+	}
+	afterNext, afterCheckpoints := backend.DB.CommandWALNextLSN(), cache.checkpointRuns.Load()
+	if after.AppliedCommandLSN != before.AppliedCommandLSN || after.MaxEntryRevision != before.MaxEntryRevision || afterNext != next || afterCheckpoints != checkpoints {
+		t.Fatalf("automatic retirement changed logical frontier: before=%+v after=%+v nextLSN=%d/%d checkpoints=%d/%d", before, after, next, afterNext, checkpoints, afterCheckpoints)
 	}
 	if calls := cache.vlogGenerationLeafPackGCRuns.Load(); calls != 1 {
 		t.Fatalf("source unlink required %d automatic GC passes, want original packet only", calls)
@@ -124,7 +146,11 @@ func TestPrivateCOWLeafAutomaticSourceRetirement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer reopened.Close()
+	defer func() {
+		if err := reopened.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	for key, want := range map[string]byte{"pack-00000": 4, "pack-03000": 1} {
 		got, err := reopened.Get([]byte(key))
 		if err != nil || len(got) != 128 || got[0] != want {
