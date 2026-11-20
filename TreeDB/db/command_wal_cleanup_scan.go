@@ -126,6 +126,13 @@ func (db *DB) scanCommandWALCleanupProof(proof durableWALCleanupProofV1, scanSea
 			// one lock acquisition and use the original full validation.
 			return scan.scanLockedDirectory(db.dir)
 		}
+		restartLocked := func(cause error) error {
+			if err := closePrefix(); err != nil {
+				return errors.Join(cause, err)
+			}
+			prefix = nil
+			return scan.scanLockedDirectory(db.dir)
+		}
 		for _, seg := range segments[:min(len(segments)-1, maxOpenClosedWALCleanupSegments)] {
 			file, err := openPrefix(seg.path)
 			if err != nil {
@@ -134,11 +141,7 @@ func (db *DB) scanCommandWALCleanupProof(proof durableWALCleanupProofV1, scanSea
 				}
 				// The locked scan opens uncovered files one at a time. Drop the
 				// staged handles and try it once with the same replay bounds.
-				if closeErr := closePrefix(); closeErr != nil {
-					return errors.Join(err, closeErr)
-				}
-				prefix = nil
-				return scan.scanLockedDirectory(db.dir)
+				return restartLocked(err)
 			}
 			info, statErr := file.Stat()
 			identity, identityErr := rootpublication.StableIdentityFromFile(file)
@@ -147,15 +150,25 @@ func (db *DB) scanCommandWALCleanupProof(proof durableWALCleanupProofV1, scanSea
 				return errors.Join(err, file.Close())
 			}
 			if !fixed || !info.Mode().IsRegular() || rootpublication.SamePhysicalIdentity(identity, current.ActiveIdentity) {
-				if err := errors.Join(file.Close(), closePrefix()); err != nil {
+				if err := file.Close(); err != nil {
 					return err
 				}
-				prefix = nil
-				return scan.scanLockedDirectory(db.dir)
+				return restartLocked(nil)
 			}
 			prefix = append(prefix, cleanupClosedWALFile{segment: seg, file: file, info: info, identity: identity})
 		}
-		return nil
+		// A first foreground prefix capture needs one descriptor to pin the
+		// active WAL. Do not give up append exclusion with all remaining
+		// descriptors in optional readers. The locked scan opens the active
+		// file last, then closes it before allowing a capture to proceed.
+		spare, err := os.Open(dir)
+		if commandWALCleanupDescriptorExhausted(err) {
+			return restartLocked(err)
+		}
+		if err != nil {
+			return err
+		}
+		return spare.Close()
 	})
 	if err != nil || len(prefix) == 0 {
 		scan.hardErr = errors.Join(scan.hardErr, closePrefix())
