@@ -56,8 +56,8 @@ establish a common cut.
 Before opening this layout, verify the native store and document mount in the
 mount namespace the gateway or maintenance process will actually use. Compare
 the filesystem UUIDs and the two directory device/inode pairs against the
-values recorded when provisioning this store. For a Linux service that mounts the document directory directly, run
-this check in the service launch shell before starting the process. Supply
+values recorded when provisioning this store. The example assumes two distinct Linux filesystems with only the document
+mount nested inside the store. Run it in the service launch shell. Supply
 the four expected values from the installation record outside the store.
 
 ```sh
@@ -65,11 +65,16 @@ set -eu
 : "${store:?}" "${store_uuid:?}" "${document_uuid:?}"
 : "${store_dir_id:?}" "${document_dir_id:?}"  # decimal device:inode from stat
 doc="$store/maindb/value_vlog"
-test "$store_uuid" != "$document_uuid"
-test "$(findmnt --target "$store" --noheadings --output UUID)" = "$store_uuid"
-test "$(stat --format='%d:%i' -- "$store")" = "$store_dir_id"
-test "$(findmnt --mountpoint "$doc" --noheadings --output UUID)" = "$document_uuid"
-test "$(stat --format='%d:%i' -- "$doc")" = "$document_dir_id"
+check_value() {
+    expected=$1
+    shift
+    actual=$("$@") && test "$actual" = "$expected"
+}
+test "$store_uuid" != "$document_uuid" || exit 1
+check_value "$store_uuid" findmnt --target "$store" -n -o UUID || exit 1
+check_value "$store_dir_id" stat --format='%d:%i' -- "$store" || exit 1
+check_value "$document_uuid" findmnt --mountpoint "$doc" -n -o UUID || exit 1
+check_value "$document_dir_id" stat --format='%d:%i' -- "$doc" || exit 1
 ```
 
 An absent mount, empty UUID or identity mismatch must stop that invocation
@@ -81,8 +86,8 @@ For a restore onto new devices or inodes, first verify the full closed backup
 and stage both parts in their intended destination layout. Ordinary Open
 checks the durable dependencies' physical identities. A byte-for-byte copy
 can therefore require the private snapshot identity rebind described below.
-Perform that step only on a verified private restore, followed by typed
-readback and checked Close. Preserve the original backup through validation.
+Perform that step only on a verified private restore, then compare typed
+readback with the expected backup cut and check Close. Preserve the original backup through validation.
 
 ### Paged vector projection closure
 
