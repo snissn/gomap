@@ -9,6 +9,50 @@ This page is the current entry point for external `go-ycsb` comparisons across:
 It distinguishes the retained October comparison from historical reports and
 records the remaining qualification obligations.
 
+## November 20 WAL placement on ext4
+
+On host111 at `5fc6200`, placing only `maindb/wal` on a second ext4 journal
+brought sustained client UPDATE p99.9 below 0.9 ms in all nine GoMap runs with
+that layout. The standard layout kept the command WAL, document value log and
+index on one ext4 filesystem. In that layout a document fsync could hold a
+journal transaction that a foreground WAL append needed. Both layouts used
+the same NVMe and GoMap executable. [Kernel attribution](https://github.com/snissn/gomap/issues/5528#issuecomment-7029008688)
+
+| Sustained comparison, three matched pairs | Reference UPDATE p99.9 (ms) | GoMap with separate WAL (ms) |
+| --- | --- | --- |
+| Native GoMap, standard layout | 3.269 / 10.183 / 13.383 | 0.797 / 0.814 / 0.790 |
+| Docker GoMap, standard layout | 3.241 / 3.141 / 3.453 | 0.806 / 0.827 / 0.811 |
+| Docker MongoDB 8.2.7 | 0.491 / 0.504 / 0.507 | 0.851 / 0.801 / 0.899 |
+
+Each fresh store loaded 100,000 BSON documents, then served 6 million uniform
+95% READ / 5% UPDATE operations with 16 clients, 16 CPUs, 4 GiB memory and
+zero swap. GoMap used `command_wal_relaxed` and `w:1`. All cells passed typed
+readback, checked shutdown and reopen. Separate observations counted 44
+completed pressure-driven maintenance cuts during MIXED on the standard
+layout and 42 with the separate WAL. [Native results](https://github.com/snissn/gomap/issues/5528#issuecomment-7037456507) · [Maintenance evidence](https://github.com/snissn/gomap/issues/5528#issuecomment-7038085604)
+
+The matched Docker p99.99 increased in every pair, from 23.551–37.375 ms to
+54.847–86.271 ms. Against MongoDB the separate-WAL GoMap runs served 7.92–9.34%
+more mixed operations per second, took 1.628× as long to load by paired
+median, and recorded a worst UPDATE of 315.647–435.199 ms per run. MongoDB's
+maxima were 8.179–11.407 ms. The ten-second client windows put those GoMap
+maxima between 20 and 30 seconds into MIXED. [Matched Docker results](https://github.com/snissn/gomap/issues/5528#issuecomment-7037958435) · [Independent Docker results](https://github.com/snissn/gomap/issues/5528#issuecomment-7038502182)
+
+The tested WAL filesystem used a 1.5 GiB sparse image, a direct-I/O loop
+device with 4 KiB sectors, an eagerly initialized 16 MiB ext4 journal, 128 KiB
+per inode and online discard. The native runs sampled 410–427 MiB of live
+backing allocation and 20.31 MiB after shutdown. Counting the backing image
+once and all store files outside the WAL mount, the largest paired stopped-space ratios
+were 1.0471× standard for native and 1.0457× for Docker. The same layout cost 16.03–16.07% more physical space on the roughly
+133 MB stores in the matched 10,000-operation runs. [Short comparisons and storage costs](https://github.com/snissn/gomap/issues/5528#issuecomment-7038980978)
+
+For a new test store, place the separate filesystem at `maindb/wal` before
+the first writable Open and keep it there through checked Close. The service
+must verify the expected store and WAL filesystem and directory identities
+at every writable Open. An empty directory at the intended mount point can
+allow a successful reopen at an earlier WAL frontier. For an existing store, follow the
+cross-device restore procedure from a verified common-cut backup. [Backup and restore](../../TreeDB/docs/spec/backup-restore.md) · [Recovery, held readers and retirement](https://github.com/snissn/gomap/issues/5528#issuecomment-7037834046)
+
 ## November 19 captured-publication result
 
 On host111, the uninstrumented 95% READ / 5% UPDATE workload used 16 clients
