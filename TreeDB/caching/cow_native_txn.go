@@ -223,12 +223,17 @@ func (db *DB) prepareNativeProducerObservation(projected *backenddb.NativeProjec
 		// physical seal. The captured roots and held readers keep their real
 		// charges. All other pressure, including a full parent budget after
 		// capture, uses the original synchronous reclamation.
-		if db.relaxedSync && (projected != nil || before.semantic.GenerationUnderPressure) && before.semantic.ConstructionBytes == 0 {
-			remaining := before
-			remaining.semantic.GenerationUnderPressure = false
-			if !remaining.underPressure(limits) {
+		remaining := before
+		remaining.semantic.GenerationUnderPressure = false
+		if (projected != nil || before.semantic.GenerationUnderPressure) &&
+			before.semantic.ConstructionBytes == 0 && !remaining.underPressure(limits) {
+			captureGeneration, err := db.nativeGenerationCaptureEligible(projected)
+			if err != nil {
+				return backenddb.NativeProducerObservation{}, err
+			}
+			if captureGeneration {
 				rolled, rolloverErr := db.rolloverCOWForFlushProjected(projected)
-				if rolloverErr == nil {
+				if rolloverErr == nil && (rolled || db.relaxedSync) {
 					if projected != nil {
 						if !rolled {
 							return before.observation(limits), nil
@@ -253,7 +258,7 @@ func (db *DB) prepareNativeProducerObservation(projected *backenddb.NativeProjec
 					if !after.underPressure(limits) {
 						return after.observation(limits), nil
 					}
-				} else if rolloverErr != memtable.ErrCOWCapacity {
+				} else if rolloverErr != nil && rolloverErr != memtable.ErrCOWCapacity {
 					return backenddb.NativeProducerObservation{}, rolloverErr
 				}
 			}
@@ -281,6 +286,23 @@ func (db *DB) prepareNativeProducerObservation(projected *backenddb.NativeProjec
 		c.nativePressureRemembered = true
 	}
 	return after.observation(limits), nil
+}
+
+// A strict producer can use the captured-generation worker only on the
+// original fixed-WAL owner. Its successor still takes the normal per-command
+// sync boundary. Projected admission refusal keeps its synchronous relief.
+func (db *DB) nativeGenerationCaptureEligible(projected *backenddb.NativeProjectedGenerationPressure) (bool, error) {
+	if db.relaxedSync {
+		return true, nil
+	}
+	if projected != nil || db.cow.prefix == nil {
+		return false, nil
+	}
+	backend, ok := db.backend.(*backenddb.DB)
+	if !ok {
+		return false, nil
+	}
+	return backend.NativeCommandWALPrefixEligible(db.cow.txnOwner)
 }
 
 // nativePressureDrainEnabled requires a real running size-maintenance worker.
