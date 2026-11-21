@@ -829,10 +829,13 @@ Mongo gateway:
   profile. In particular, `command_wal_relaxed` and `no_wal_fast` do not gain a
   stronger promise from an ordinary acknowledgement.
 - A successful standalone `j: true` acknowledgement completes
-  `CollectionManager.SyncForStandaloneWriteConcern`. A native manager uses its
-  existing cache owner's checkpoint to seal and synchronize the complete
-  captured raw/collection prefix, including persistent value-log dependencies,
-  and reports a physical sync on every successful call. A legacy manager first
+  `CollectionManager.SyncForStandaloneWriteConcern`. The active native
+  command-WAL durable owner uses a forced journal-prefix completion when its
+  open writer is fixed-format. That completion synchronizes the captured
+  journal and persistent dependencies before acknowledgement. Other native
+  owners use the complete captured-prefix checkpoint, including relaxed
+  ext4-stream where the applied root must cover the acknowledged prefix.
+  A failed selected completion is reported to the caller. A legacy manager first
   drains collection publishing, then completes `SyncCommandWALAppliedPrefix`
   when command WAL is enabled or `DB.Checkpoint` when it is disabled. The legacy
   command-WAL boundary syncs a relaxed suffix and publishes its durable-prefix
