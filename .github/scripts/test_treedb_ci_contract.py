@@ -3,11 +3,14 @@
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
+import tempfile
 import textwrap
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -32,15 +35,58 @@ class TreeDBCIContractTests(unittest.TestCase):
 
     def test_vet_platform_budgets_and_macos_diagnostics(self) -> None:
         vet = block(self.source, "  vet:\n", "  test:\n")
-        for platform, timeout in (("ubuntu", 15), ("macos", 30), ("windows", 15)):
-            self.assertRegex(vet, rf"name: {platform}\n\s+os: [^\n]+\n\s+timeout_minutes: {timeout}\n")
-        self.assertIn("timeout-minutes: ${{ matrix.timeout_minutes }}", vet)
-        self.assertIn("if: ${{ matrix.name != 'macos' }}", vet)
-        self.assertIn("if: ${{ matrix.name == 'macos' }}", vet)
-        self.assertIn("/usr/bin/time -l go vet -p=1 -x ./...", vet)
+        for platform in ("ubuntu", "windows"):
+            self.assertRegex(vet, rf"name: {platform}\n\s+os: [^\n]+\n\s+timeout_minutes: 15\n")
+        self.assertNotIn("macos-latest", vet)
         self.assertIn("run: go vet ./...", vet)
         self.assertIn("cache: false", vet)
         self.assertNotIn("continue-on-error", vet)
+
+        tests = block(self.source, "  test:\n", "  race:\n")
+        self.assertIn("matrix.os == 'macos-latest' && 35 || matrix.timeout", tests)
+        self.assertIn("- name: Test\n        timeout-minutes: ${{ matrix.timeout }}", tests)
+        all_case = block(tests, "            all)", "            windows-core)")
+        self.assertEqual(all_case.count("go list ./..."), 1)
+        selector = all_case.index(' "$package_all_file" "$package_file"')
+        leave = all_case.index('cp "$package_file" "$RUNNER_TEMP/treedb-macos-vet-packages"')
+        self.assertLess(selector, leave)
+        self.assertIn('if [[ "$RUNNER_OS" == macOS ]]; then', all_case[selector:leave])
+        self.assertLess(leave, all_case.index('xargs go test -json -timeout 30m -p 1 < "$package_file"'))
+        self.assertLess(tests.index("Upload test timing log"), tests.index("Vet tested packages"))
+        tail = tests[tests.index("      - name: Vet tested packages"):]
+        self.assertIn("if: ${{ !cancelled() && matrix.os == 'macos-latest' }}", tail)
+        self.assertNotIn("continue-on-error", tail)
+        self.assertNotIn("go list", tail)
+        self.assertIn('xargs /usr/bin/time -l go vet -p=1 -x < "$plan"', tail)
+
+    def test_darwin_vet_executes_selected_packages_and_propagates_errors(self) -> None:
+        tail = block(self.source, "      - name: Vet tested packages", "  race:\n")
+        script = textwrap.dedent(tail.split("run: |\n", 1)[1]).replace("/usr/bin/time", '"$RUNNER_TEMP/time"')
+        # Mock only Darwin time(1) and the Go tool; exercise the workflow bash/xargs.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name, content in {
+                "time": '#!/bin/bash\n[[ "$1" == -l ]] || exit 8\nshift; exec "$@"\n',
+                "go": '#!/bin/bash\nprintf "%s\\n" "$@" > "$RUNNER_TEMP/argv"\nexit "$GO_STATUS"\n',
+            }.items():
+                path = root / name
+                path.write_text(content)
+                path.chmod(0o755)
+            env = dict(os.environ, RUNNER_TEMP=tmp, PATH=tmp + os.pathsep + os.environ["PATH"], GO_STATUS="0")
+            plan = root / "treedb-macos-vet-packages"
+            argv = root / "argv"
+            for data in (None, ""):
+                if data is not None:
+                    plan.write_text(data)
+                run = subprocess.run(["bash", "-c", script], env=env, capture_output=True)
+                self.assertNotEqual(run.returncode, 0)
+                self.assertFalse(argv.exists())
+            plan.write_text("example.org/TreeDB\nexample.org/TreeDB/second\n")
+            run = subprocess.run(["bash", "-c", script], env=env, capture_output=True)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertEqual(argv.read_text().splitlines(), ["vet", "-p=1", "-x", "example.org/TreeDB", "example.org/TreeDB/second"])
+            run = subprocess.run(["bash", "-c", script], env=dict(env, GO_STATUS="7"), capture_output=True)
+            self.assertNotEqual(run.returncode, 0)
 
     def test_events_cover_merge_results_manual_certification_and_main_push(self) -> None:
         events = block(self.source, "on:\n", "\npermissions:")
@@ -76,19 +122,57 @@ class TreeDBCIContractTests(unittest.TestCase):
         )
         self.assertLess(job.index("run: go clean -testcache"), job.index("- name: Test\n"))
 
-    def test_only_pr_root_race_narrows_original_size_offline_compact(self) -> None:
-        # Complete top-level discovery and the parent assignment remain intact.
-        # Never give every loaded root test a shared subtest inclusion filter.
+    def test_only_pr_root_race_excludes_redundant_exact_work(self) -> None:
+        # All top-level assignments stay intact. Never impose a shared subtest
+        # inclusion filter or broad -short on these loaded root suites.
         race = block(self.source, "  race:\n", "\n  perf:\n")
         root = block(race, 'if [ -s "$root_test_file" ]; then', 'if [ -s "$caching_test_file" ]; then')
-        parent = "TestCompactStorageExhaustiveCommandWALRandom4KOffline"
-        skip = f"root_race_options=(-skip '^{parent}$/^keys100000$')"
-        self.assertEqual(self.source.count(skip), 1)
-        self.assertIn("root_race_options=()", root)
-        guard = f'if [[ "$GITHUB_EVENT_NAME" == pull_request ]] && grep -Fxq {parent} "$root_test_file"; then'
-        self.assertIn(skip, block(root, guard, "            fi"))
+        compact = "TestCompactStorageExhaustiveCommandWALRandom4KOffline"
+        driver = "TestProductionAuthorityExecutableCompositeOmissionMatrix"
+        compact_exclusion = f"^{compact}$/^keys100000$"
+        driver_exclusion = f"^{driver}$"
+        self.assertEqual(self.source.count(compact_exclusion), 1)
+        self.assertEqual(self.source.count(driver_exclusion), 1)
         self.assertIn(' . -run "$root_regex" "${root_race_options[@]}"', root)
         self.assertNotIn(" -short", root)
+        options = textwrap.dedent(block(root, "root_race_options=()",
+                                        "            GOMEMLIMIT=4GiB GOMAXPROCS=2 go test"))
+        shell = ('set -euo pipefail\nGITHUB_EVENT_NAME="$1"\nroot_test_file="$2"\n'
+                 + options + '\nfor arg in "${root_race_options[@]}"; do printf "arg:%s\n" "$arg"; done')
+        for event, assigned, want in (
+            ("pull_request", [compact], [compact_exclusion]),
+            ("pull_request", [driver], [driver_exclusion]),
+            ("pull_request", [compact, driver], [compact_exclusion, driver_exclusion]),
+            ("pull_request", [compact + "Another", driver + "Another"], []),
+            ("push", [compact, driver], []),
+            ("merge_group", [compact, driver], []),
+            ("workflow_dispatch", [compact, driver], []),
+        ):
+            with self.subTest(event=event, assigned=assigned):
+                with TemporaryDirectory() as tmp:
+                    tests = Path(tmp) / "assigned-tests"
+                    tests.write_text("\n".join(assigned) + "\n", encoding="utf-8")
+                    result = subprocess.run(
+                        ["bash", "-c", shell, "test-root-race", event, str(tests)],
+                        check=True, capture_output=True, text=True, timeout=5,
+                    )
+                args = [line[4:] for line in result.stdout.splitlines() if line.startswith("arg:")]
+                self.assertEqual(args, ["-skip", "|".join(want)] if want else [])
+
+    def test_pr_omission_driver_preserves_owning_normal_and_race_routes(self) -> None:
+        normal = block(self.source, "  test:\n", "\n  race:\n")
+        race = block(self.source, "  race:\n", "\n  perf:\n")
+        required = block(self.source, "  required:\n")
+        self.assertIn('xargs go test -json -timeout 30m -p 1 < "$package_file"', normal)
+        self.assertNotIn("TestProductionAuthorityExecutableCompositeOmissionMatrix", normal)
+        self.assertIn('go test -json -race -p 1 -timeout 20m ./collections', race)
+        self.assertIn('xargs go test -json -race -p 1 -timeout 12m < "$package_file"', race)
+        package_scope = next(line for line in race.splitlines() if "packages go list" in line)
+        for owner in ("dictdb", "templatedb", "valuelog"):
+            with self.subTest(owner=owner):
+                self.assertNotIn(f"/internal/{owner}", package_scope)
+        self.assertIn("      - test", required)
+        self.assertIn("      - race", required)
 
     def test_required_test_jobs_checkout_the_event_sha(self) -> None:
         required_jobs = (

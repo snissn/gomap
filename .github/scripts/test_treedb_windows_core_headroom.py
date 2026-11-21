@@ -398,18 +398,21 @@ class TreeDBUnixHeadroomTest(unittest.TestCase):
         self.assertIn('if [ -s "$package_file" ]; then', all_case)
         self.assertIn("xargs go test -json -timeout 30m -p 1", all_case)
 
-    def test_vet_is_a_separate_three_os_matrix_and_required_gate_dependency(self) -> None:
+    def test_vet_on_every_platform_remains_a_required_gate_dependency(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
         vet_job = workflow_job(workflow, "vet")
         test_job = workflow_job(workflow, "test")
-        self.assertEqual(vet_job.count("            os: "), 3)
-        for os_name in ("ubuntu-latest", "macos-latest", "windows-latest"):
+        self.assertEqual(vet_job.count("            os: "), 2)
+        for os_name in ("ubuntu-latest", "windows-latest"):
             self.assertIn(f"            os: {os_name}", vet_job)
         self.assertIn("run: go vet ./...", vet_job)
-        self.assertNotIn("      - name: Vet", test_job)
+        self.assertNotIn("            os: macos-latest", vet_job)
+        self.assertIn("      - name: Vet tested packages (macOS", test_job)
         required = workflow_job(workflow, "required")
         self.assertIn("      - vet", required)
         self.assertIn("needs.vet.result", required)
+        self.assertIn("      - test", required)
+        self.assertIn("needs.test.result", required)
 
 
 class TreeDBLinuxRaceHeadroomTest(unittest.TestCase):

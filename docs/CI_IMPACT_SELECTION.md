@@ -8,11 +8,11 @@ on the advisory job, and no execution condition reads a forecast.
 
 The reviewed manifest is `.github/ci/ci_impact.json`; the single authority contract
 is `.github/scripts/ci_impact.py plan` / `validate`. It inventories all 18 source
-workflows, 67 original members, entry command source locations/digests, module and
+workflows, 66 original members, entry command source locations/digests, module and
 checkout contexts, platforms, race variants, and explicit dynamic consumers.
-The TreeDB vet and test workflow contributes 39 original members, including its required
+The TreeDB vet and test workflow contributes 38 original members, including its required
 aggregate. Linux race coverage uses seven weighted core shards plus one dedicated
-collections/vacuum shard. The independent advisory job makes 40 physical jobs in
+collections/vacuum shard. The independent advisory job makes 39 physical jobs in
 that workflow. The forecast includes push-only, path-filtered, and manual
 workflows that run on their eligible events.
 
@@ -58,8 +58,9 @@ partition), root test/docs-check members, and the always-running required gate.
 TreeDB's tracked UTF-8 naming scan consumes retained `RESULTS.json`; docs globs,
 source authority scans, subprocess witnesses, and Python-launched services are
 explicitly inventoried. Go/Python/shell files under docs remain executable/source
-inputs and choose full. TreeDB vet, MVCC comparison scope, and the two performance
-jobs have separate entry commands; root docs data does not become their input
+inputs and choose full. Darwin TreeDB test members also run stock vet on the same package partition.
+Linux/Windows TreeDB vet, MVCC comparison scope, and the two performance jobs
+have separate entry commands; root docs data does not become their input
 merely by sharing the workflow. This is a forecast for those commands, not a
 blanket docs exemption.
 

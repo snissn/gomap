@@ -1642,6 +1642,16 @@ Coverage:
     runs also race the 100,000-key case. To run both locally, use
     `go test -race ./TreeDB -run '^TestCompactStorageExhaustiveCommandWALRandom4KOffline$' -count=1`.
     `-short` skips the original size.
+- `TreeDB/production_authority_matrix_test.go`
+  - `TestProductionAuthorityExecutableCompositeOmissionMatrix` binds the literal
+    authority registry to five subprocess witnesses and fails if an invocation
+    fails or skips its witness. Required ordinary PR tests still run the complete
+    driver. The extra PR root-race invocation is omitted because its subprocesses
+    are ordinary, uninstrumented Go tests; the dictdb, templatedb, valuelog, and
+    dedicated collections race suites independently run all five witnesses under
+    race instrumentation. The unrelated root-race tests are unchanged. Main,
+    merge-group, manual TreeDB CI and direct local runs retain the full driver
+    replay. No witness or registry assertion was removed.
 - `TreeDB/side_store_lookups_test.go`
   - read-only dictionary owners retain lookups without writes; stable capture
     succeeds on supported owners and returns typed namespace refusal without
