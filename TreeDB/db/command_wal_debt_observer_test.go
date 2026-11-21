@@ -285,7 +285,7 @@ func TestCheckpointRotationFileAndSealedDebtCreditStayIndependent(t *testing.T) 
 	if err := journal.RotateActiveSegment(true); err != nil {
 		t.Fatal(err)
 	}
-	sealed, volume := journal.SealedDebtForMaintenance()
+	sealed, volume := journal.CheckpointExt4StreamState(false)
 	if volume == (rootpublication.StableIdentity{}) {
 		t.Fatal("expected the checked seal for the second registration")
 	}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/snissn/gomap/TreeDB/internal/mvccadmission"
 	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -633,6 +634,9 @@ type DB struct {
 	// gap merely by syncing an empty or newly-created successor segment.
 	commandWALSessionAppliedLSN uint64
 	commandWALDebt              CommandWALDependencyDebt
+	// Fixed at open. A different index volume admits live topology checks
+	// during automatic maintenance. It conveys no sync credit.
+	commandWALCheckpointSeparateVolume bool
 	// maintenanceMu protects this one-attempt preference after a lost raw
 	// reentry. The preference carries no file registration or sync credit.
 	commandWALCheckpointKeepRaw bool
@@ -3054,6 +3058,10 @@ func openWithLock(opts Options, lock *lockfile.Lock, nativeSemanticOwner bool) (
 			return nil, err
 		}
 		db.commandJournal = journal
+		if preferExt4Stream {
+			_, wal := journal.CheckpointExt4StreamState(true)
+			_, db.commandWALCheckpointSeparateVolume = commandWALSeparateIndexVolume(gen, wal)
+		}
 		db.commandWALSessionAppliedLSN = db.meta.AppliedCommandLSN
 		// replayCommandWALIntoBackend records the physically classified durable
 		// frontier. A recovered durable root may advance AppliedCommandLSN beyond
@@ -4949,8 +4957,9 @@ func (db *DB) prepareCommandWALCoveredPrefixCleanupLocked(automatic bool) (bool,
 	}
 
 	var sealed commitlog.SealedRotationDebt
+	var handoffVolume rootpublication.StableIdentity
 	if automatic && db.nativeSemanticActive.Load() && db.durability == DurabilityWALOnRelaxed {
-		candidate, volume := db.commandJournal.SealedDebtForMaintenance()
+		candidate, volume := db.commandJournal.CheckpointExt4StreamState(db.commandWALCheckpointSeparateVolume)
 		if volume != (rootpublication.StableIdentity{}) {
 			dedicated, err := db.commandWALHasDedicatedVolume(volume)
 			if err != nil {
@@ -4959,11 +4968,14 @@ func (db *DB) prepareCommandWALCoveredPrefixCleanupLocked(automatic bool) (bool,
 			}
 			if dedicated {
 				sealed = candidate
+				if db.commandWALCheckpointSeparateVolume {
+					handoffVolume = volume
+				}
 			}
 		}
 	}
 
-	alreadySynced, locked, err := db.lockCommandWALCheckpointPrefix(automatic)
+	alreadySynced, locked, err := db.lockCommandWALCheckpointPrefix(handoffVolume)
 	if err != nil || !locked {
 		return false, err
 	}
@@ -5155,11 +5167,11 @@ func (db *DB) checkpointTeardownPinned(maintenanceAlreadyHeld bool) error {
 // freshly sampled prefix. Maintenance already holds teardown and maintenanceMu.
 // Never block on raw publication here: a vacuum can own it while waiting for
 // maintenanceMu, including when the checkpoint re-enters after I/O.
-func (db *DB) lockCommandWALCheckpointPrefix(automatic bool) (*rootpublication.StableResourceToken, bool, error) {
+func (db *DB) lockCommandWALCheckpointPrefix(volume rootpublication.StableIdentity) (*rootpublication.StableResourceToken, bool, error) {
 	if !db.commandWALRawPublishMu.TryLock() {
 		return nil, false, nil
 	}
-	if !automatic || !db.nativeSemanticActive.Load() || db.durability != DurabilityWALOnRelaxed {
+	if volume == (rootpublication.StableIdentity{}) {
 		return nil, true, nil
 	}
 	frontier, advanced := db.commandWALCheckpointFrontier()
@@ -5174,6 +5186,23 @@ func (db *DB) lockCommandWALCheckpointPrefix(automatic bool) (*rootpublication.S
 	if err != nil {
 		db.commandWALRawPublishMu.Unlock()
 		return nil, false, err
+	}
+	if original == nil || original.Reachability() != rootpublication.ReachabilityCommandWALRotated {
+		return nil, true, nil
+	}
+	identity := original.Identity()
+	if identity.Platform != volume.Platform || identity.VolumeID != volume.VolumeID {
+		return nil, true, nil
+	}
+	// A fixed predecessor can have a stream successor on the very same
+	// ext4 volume. Leave its barrier on the canonical path.
+	var fixed bool
+	if err := original.WithPinnedFile(func(file *os.File) error {
+		var err error
+		fixed, err = commitlog.HasFixedWALMagic(file)
+		return err
+	}); err != nil || fixed {
+		return nil, true, nil
 	}
 	lease, err := original.PinUnsyncedRotatedCommandWAL()
 	if err != nil {

@@ -29,12 +29,39 @@ type sealedWALForegroundFixture struct {
 	value   int64
 }
 
-func newSealedWALForegroundFixture(t *testing.T) *sealedWALForegroundFixture {
+func newSealedWALForegroundFixture(t *testing.T, dedicated bool) *sealedWALForegroundFixture {
 	t.Helper()
 	// The explicit force below drives the original automatic checkpoint worker.
 	// An independent value-log generation kick would consume the same WAL debt.
 	t.Setenv("TREEDB_DISABLE_VLOG_GENERATION_LOOP", "1")
-	opts := OptionsFor(ProfileCommandWALRelaxed, t.TempDir())
+	dir := t.TempDir()
+	if dedicated {
+		// The caller supplies one empty store with a real ext4 WAL submount.
+		// A symlink cannot satisfy the WAL's stable namespace checks.
+		dir = os.Getenv("TREEDB_TEST_DEDICATED_WAL_ROOT")
+		if dir == "" {
+			t.Skip("requires a private ext4 WAL submount")
+		}
+		main := filepath.Join(dir, "maindb")
+		entries, err := os.ReadDir(dir)
+		if err != nil || len(entries) != 1 || entries[0].Name() != "maindb" {
+			t.Fatalf("expected an empty dedicated test store: %v, %v", entries, err)
+		}
+		entries, err = os.ReadDir(main)
+		if err != nil || len(entries) != 1 || entries[0].Name() != "wal" {
+			t.Fatalf("expected only the mounted WAL directory: %v, %v", entries, err)
+		}
+		wal, err := os.Open(filepath.Join(main, "wal"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		names, readErr := wal.Readdirnames(-1)
+		ext4 := commitlog.IsExt4WALFilesystem(wal)
+		if err := errors.Join(readErr, wal.Close()); err != nil || len(names) != 0 || !ext4 {
+			t.Fatalf("expected an empty ext4 WAL mount: %v, %v, ext4=%t", names, err, ext4)
+		}
+	}
+	opts := OptionsFor(ProfileCommandWALRelaxed, dir)
 	opts.FreshRelaxedStandaloneWALStream = true
 	opts.MemtableMode = "cow_btree"
 	opts.COWMemtableLimits = StandaloneCOWMemtableLimits()
@@ -172,7 +199,7 @@ func (f *sealedWALForegroundFixture) reopen(t *testing.T) {
 }
 
 func TestAutomaticCheckpointSealedWALAdmitsRelaxedBSONThroughRotation(t *testing.T) {
-	f := newSealedWALForegroundFixture(t)
+	f := newSealedWALForegroundFixture(t, true)
 	beforeCount := statMapUint64(t, f.db.cached.Stats(), "treedb.cache.auto_checkpoint.count")
 	entered := make(chan error, 1)
 	release := make(chan struct{})
@@ -276,7 +303,7 @@ func TestAutomaticCheckpointSealedWALAdmitsRelaxedBSONThroughRotation(t *testing
 }
 
 func TestDurableMarkerRefusesFailedSealedWALDependency(t *testing.T) {
-	f := newSealedWALForegroundFixture(t)
+	f := newSealedWALForegroundFixture(t, false)
 	nextLSN := f.db.backend.CommandWALNextLSN()
 	base := f.prefix.LogicalFrontiers()
 	fault := errors.New("sealed WAL pre-physical refusal")
@@ -321,7 +348,7 @@ func TestDurableMarkerRefusesFailedSealedWALDependency(t *testing.T) {
 // Hold that exact lock through re-entry: the checkpoint must defer and
 // release maintenance without certifying obsolete work.
 func TestAutomaticCheckpointSealedWALDefersBusyReentry(t *testing.T) {
-	f := newSealedWALForegroundFixture(t)
+	f := newSealedWALForegroundFixture(t, true)
 	backend, err := f.db.NativeSemanticBackend()
 	if err != nil {
 		t.Fatal(err)
@@ -448,5 +475,38 @@ func TestAutomaticCheckpointSealedWALDefersBusyReentry(t *testing.T) {
 		t.Fatalf("subsequent prefix failed to hand off: old syncs=%d canonical=%d handoffs=%d W=%d target=%d", oldSyncs.Load(), canonicalRetries, extraHandoffs, f.prefix.LogicalFrontiers().W, next)
 	}
 	restore()
+	f.reopen(t)
+}
+
+// The same-device layout must take the existing in-lock route even when its
+// WAL otherwise qualifies for the ext4 stream policy.
+func TestAutomaticCheckpointSealedWALSharedVolumeKeepsRaw(t *testing.T) {
+	f := newSealedWALForegroundFixture(t, false)
+	syncs := 0
+	restore := durabilitycut.Install(func(e durabilitycut.Event) error {
+		if e.Resource != durabilitycut.ResourceCommandWAL || e.Path != f.oldPath || e.Point != durabilitycut.BeforeDependencyFileSync {
+			return nil
+		}
+		if err := f.verifyOld(e); err != nil {
+			return err
+		}
+		var stack [8192]byte
+		frames := string(stack[:runtime.Stack(stack[:], false)])
+		if !strings.Contains(frames, ".closeCommandWALCheckpointPrefix(") ||
+			strings.Contains(frames, ".syncCheckpointRotationFile(") {
+			return fmt.Errorf("shared WAL bypassed canonical checkpoint closure: %s", frames)
+		}
+		syncs++
+		return nil
+	})
+	_, err := f.db.backend.PrepareCommandWALCoveredPrefixCleanup()
+	restore()
+	if err != nil || syncs != 1 {
+		t.Fatalf("checkpoint observed %d canonical predecessor syncs, err=%v", syncs, err)
+	}
+	f.value++
+	if err := f.write(f.value); err != nil {
+		t.Fatal(err)
+	}
 	f.reopen(t)
 }

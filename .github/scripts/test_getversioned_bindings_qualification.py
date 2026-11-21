@@ -140,11 +140,11 @@ class FixedQualificationTests(unittest.TestCase):
     def test_compiler_selection_preserves_scope_errors_and_unknowns(self):
         sources = Q.COMPILER_SOURCES["db"]
         kept = [b"TreeDB/db/value_reader.go:65:10: can inline selected\n",
-                b"TreeDB/db/db.go:1804:4: can inline selected\n",
-                b"TreeDB/db/db.go:1985:4: can inline selected\n",
-                b"./TreeDB/db/db.go:1946:4: inlining call to selected\n",
-                b"/checkout/TreeDB/db/db.go:1946:4:   flow: x = y:\n",
-                b"TreeDB/db/db.go:1946:4:     from x (return) at x.go:1:2\n",
+                b"TreeDB/db/db.go:1808:4: can inline selected\n",
+                b"TreeDB/db/db.go:1989:4: can inline selected\n",
+                b"./TreeDB/db/db.go:1950:4: inlining call to selected\n",
+                b"/checkout/TreeDB/db/db.go:1950:4:   flow: x = y:\n",
+                b"TreeDB/db/db.go:1950:4:     from x (return) at x.go:1:2\n",
                 b"TreeDB/db/other.go:1:2: x escapes to heap, not allowed in runtime\n",
                 b"TreeDB/db/other.go:1:2: undefined: missing\n",
                 b"TreeDB/db/other.go:1:2:   warning: truncated explanation\n",
@@ -152,8 +152,8 @@ class FixedQualificationTests(unittest.TestCase):
         for line in kept:
             self.assertFalse(Q.omit_optimization(line, sources), line)
         for line in (b"TreeDB/db/other.go:1:2: can inline irrelevant with cost 3\n",
-                     b"TreeDB/db/db.go:1803:4: can inline irrelevant\n",
-                     b"TreeDB/db/db.go:1986:4: can inline irrelevant\n",
+                     b"TreeDB/db/db.go:1807:4: can inline irrelevant\n",
+                     b"TreeDB/db/db.go:1990:4: can inline irrelevant\n",
                      b"TreeDB/db/db.go:2500:4: x escapes to heap in f:\n",
                      b"TreeDB/db/db.go:2500:4:   flow: x = y:\n",
                      b"TreeDB/db/db.go:2500:4:     from x (return) at x.go:1:2\n"):

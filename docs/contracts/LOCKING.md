@@ -118,6 +118,11 @@ own physical sync. If the extra pin reaches its capacity limit, the checkpoint
 uses the original in-lock operation. Every outstanding namespace and active
 segment crosses its normal barrier.
 
+The handoff requires the live ext4 stream WAL on a dedicated volume, with the
+sealed predecessor on that volume. A shared or unproved layout takes raw once
+and completes the existing canonical barrier. The second-file seal keeps its
+own independent eligibility and proof.
+
 Both raw acquisitions are nonblocking under backend maintenance ownership. If a
 publisher or vacuum holds raw at reentry, the checkpoint releases maintenance
 without advancing the frontier. Under `maintenanceMu` it records that the next

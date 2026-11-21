@@ -31,7 +31,7 @@ NEW_TOPS = {n.split("/")[0] for names in NEW.values() for n in names}
 COMPILER_SOURCES = {
     "db": {
         "TreeDB/db/value_reader.go": ("5e91f5d3f97f1a85f22a2f7995bb9663a75030c1f8d00ef64722ab7763d7db17", ((63, 75),)),
-        "TreeDB/db/db.go": ("0bf579046f175d94ddc2913e8b2545a3a3ebb3c24df66556d00479e8495004fe", ((1804, 1985),)),
+        "TreeDB/db/db.go": ("df7ba981c8933e5b08d4c20224ac20ca09c3006d1b132be6b79a8ec850b257bf", ((1808, 1989),)),
     },
     "tree": {
         "TreeDB/tree/tree.go": ("94acd5911f9c8fce15f3ac382a36c36f6ef0202c665d946e70914e6aa720e411", ((369, 487),)),

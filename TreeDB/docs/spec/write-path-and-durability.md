@@ -834,9 +834,12 @@ checkpoint-without-publication mode must report command WAL debt and retain all
 required WAL segments and external refs.
 
 An automatic native COW checkpoint in `command_wal_relaxed` may release raw
-publication to sync the first registered, unsynced, sealed command-WAL file
-when the selected prefix has no external dependencies. A bounded pin retains
-that file across the sync. Relaxed operations can append to the successor
+publication to sync the first registered, unsynced, sealed command-WAL stream
+file when the selected prefix has no external dependencies. The live ext4 WAL
+volume must be separate from the pager and the other storage roles, and the
+retained predecessor must belong to that same WAL volume. A shared or unproved
+layout uses the canonical in-lock barrier. A bounded pin retains the file
+across the sync. Relaxed operations can append to the successor
 during this interval. A durable write must still complete its dependency
 barriers before its marker. On reacquiring raw publication, the checkpoint
 samples a fresh prefix and credits the sync only against the same immutable

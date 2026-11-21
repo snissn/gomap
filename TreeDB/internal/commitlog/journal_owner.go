@@ -823,20 +823,29 @@ func (j *CommandJournal) hasSealedRotationDebt(r rotationDebtRegistration) bool 
 		j.segmentSeq == r.active.Generation()+1
 }
 
-// SealedDebtForMaintenance returns a checked volume of the current successor.
-// A busy or replaced journal declines this optional optimization.
-func (j *CommandJournal) SealedDebtForMaintenance() (SealedRotationDebt, rootpublication.StableIdentity) {
+// CheckpointExt4StreamState reports the current stream's volume and any
+// independently established second-file seal. Only callers considering a
+// first-file handoff need the volume without a seal.
+func (j *CommandJournal) CheckpointExt4StreamState(allowUnsealed bool) (SealedRotationDebt, rootpublication.StableIdentity) {
 	if j == nil || !j.mu.TryLock() {
 		return SealedRotationDebt{}, rootpublication.StableIdentity{}
 	}
 	defer j.mu.Unlock()
 	r := j.rotationDebt
-	if !j.hasSealedRotationDebt(r) {
+	sealed := j.hasSealedRotationDebt(r)
+	if !sealed && (!allowUnsealed || j.closing || j.writer == nil || j.writer.f == nil ||
+		j.writer.fixed != nil || !j.writer.containerSelection.ext4Stream) {
 		return SealedRotationDebt{}, rootpublication.StableIdentity{}
 	}
 	volume, err := rootpublication.StableIdentityFromFile(j.writer.f)
+	if err != nil {
+		return SealedRotationDebt{}, rootpublication.StableIdentity{}
+	}
+	if !sealed {
+		return SealedRotationDebt{}, volume
+	}
 	old := r.active.Identity()
-	if err != nil || old.Platform != volume.Platform || old.VolumeID != volume.VolumeID {
+	if old.Platform != volume.Platform || old.VolumeID != volume.VolumeID {
 		return SealedRotationDebt{}, rootpublication.StableIdentity{}
 	}
 	return SealedRotationDebt{journal: j, registration: r}, volume

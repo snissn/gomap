@@ -47,8 +47,16 @@ func TestSealedDebtOnlyOriginalOrderedRegistrations(t *testing.T) {
 	if alias.Identity() != r.Active.Identity() || alias.Generation() != r.Active.Generation() || alias.Digest() != r.Active.Digest() {
 		t.Fatal("alias does not reproduce the same underlying physical registration fields")
 	}
-	if _, vol := j.SealedDebtForMaintenance(); vol != (rootpublication.StableIdentity{}) {
+	if _, vol := j.CheckpointExt4StreamState(false); vol != (rootpublication.StableIdentity{}) {
 		t.Fatal("live active received terminal credit")
+	}
+	stream, vol := j.CheckpointExt4StreamState(true)
+	original := r.Closed.Identity()
+	if vol == (rootpublication.StableIdentity{}) || vol.Platform != original.Platform || vol.VolumeID != original.VolumeID {
+		t.Fatalf("unsealed stream volume %+v, predecessor %+v", vol, original)
+	}
+	if covered, err := stream.Covers(r.Closed, r.Active); covered || err != nil {
+		t.Fatalf("stream volume without a seal granted terminal credit: %v, %v", covered, err)
 	}
 	stats := j.WriterDurabilityStats()
 	if err := j.RotateActiveSegment(true); err != nil {
@@ -58,7 +66,7 @@ func TestSealedDebtOnlyOriginalOrderedRegistrations(t *testing.T) {
 	if after.FileSyncCalls != stats.FileSyncCalls+1 || after.DirectorySyncCalls != stats.DirectorySyncCalls+1 {
 		t.Fatalf("actual checked rotation before=%+v after=%+v", stats, after)
 	}
-	proof, vol := j.SealedDebtForMaintenance()
+	proof, vol := j.CheckpointExt4StreamState(false)
 	if vol == (rootpublication.StableIdentity{}) {
 		t.Fatal("terminal credit missing")
 	}
@@ -107,7 +115,7 @@ func TestSealedDebtRefusesUnprovedCutAndPreservesStickyError(t *testing.T) {
 			})
 			err := j.RotateActiveSegment(tc != "unsynced")
 			restore()
-			proof, vol := j.SealedDebtForMaintenance()
+			proof, vol := j.CheckpointExt4StreamState(false)
 			switch tc {
 			case "later-sticky", "released-registration":
 				if err != nil || vol == (rootpublication.StableIdentity{}) {
