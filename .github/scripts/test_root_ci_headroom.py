@@ -18,15 +18,17 @@ SHARD_AWK = "BEGIN { c = 0 } { if ((c % n) == idx) print; c++ }"
 
 
 def matrix_entries(source: str) -> dict[str, dict[str, str]]:
-    matrix = source.split("        include:\n", 1)[1].split(
-        "    timeout-minutes:", 1
-    )[0]
+    # The two Darwin jobs have literal stable check names and one matrix row
+    # each; Linux retains its two-row matrix. Read all static include blocks.
+    matrix = "\n".join(re.findall(r"(?m)^        include:\n((?: {10}[^\n]*\n)+)", source))
     entries: dict[str, dict[str, str]] = {}
     current: dict[str, str] | None = None
     for line in matrix.splitlines():
         name_match = re.fullmatch(r"          - name: (\S+)", line)
         if name_match is not None:
             name = name_match.group(1)
+            if name in entries:
+                raise ValueError(f"duplicate root matrix entry: {name}")
             current = {"name": name}
             entries[name] = current
             continue

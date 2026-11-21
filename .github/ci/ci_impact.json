@@ -12,7 +12,7 @@
     "M0 observation is manual diagnostic-only on a separately fixed product; no forecast starts it or replaces failed M0 acceptance.",
     "Bounded maintenance comparison is a manually granted diagnostic on fixed baseline/candidate products; no forecast starts it or establishes cost, M0 or native acceptance."
   ],
-  "discovery_source_sha256": "56fa1bfd04c0b732c3b81cf74b2abef3b77d168245db3521482624c230f13bea",
+  "discovery_source_sha256": "45322df0acccec9576d29b072318067cb4db5565d5cf5417c824da2ece908947",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
@@ -155,6 +155,10 @@
       "git_blob": "20aa94a867598da1501cedca36f7c91fab5d18ed",
       "mode": "100644"
     },
+    ".github/scripts/ci_macos_scope.py": {
+      "git_blob": "62c81e8f0c010eef36c569c393cfd3245fa9026d",
+      "mode": "100644"
+    },
     ".github/scripts/getversioned_identity_build.py": {
       "git_blob": "dc627e91fc22773f97c0945b0ef8e2c08bbf772c",
       "mode": "100644"
@@ -168,7 +172,15 @@
       "mode": "100644"
     },
     ".github/scripts/test_ci_impact.py": {
-      "git_blob": "ecfd61868dc90258c9349f12f6e9843604bed44a",
+      "git_blob": "39a5ea836262f359ab2f3720ce2a93920339fe16",
+      "mode": "100644"
+    },
+    ".github/scripts/test_ci_macos_scope.py": {
+      "git_blob": "a26596d83af97a5c9eff5168ede7d98a573d12e7",
+      "mode": "100644"
+    },
+    ".github/scripts/test_ci_trigger_policy.py": {
+      "git_blob": "dba1a0e158187069752034fae7598d1a807a49bf",
       "mode": "100644"
     },
     ".github/scripts/test_getversioned_scoped_acceptance.py": {
@@ -368,6 +380,19 @@
       "workflow": "redis-bench.yml"
     },
     {
+      "id": "root-tests/macos-scope/single",
+      "job": "macos-scope",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {},
+        "race": false,
+        "runs_on": "ubuntu-latest",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "root-tests.yml"
+    },
+    {
       "id": "root-tests/test/ubuntu-latest-1",
       "job": "test",
       "owner": "CI maintainer with affected package/harness owner",
@@ -408,8 +433,8 @@
       "workflow": "root-tests.yml"
     },
     {
-      "id": "root-tests/test/macos-latest-1",
-      "job": "test",
+      "id": "root-tests/macos_1/macos-latest-1",
+      "job": "macos_1",
       "owner": "CI maintainer with affected package/harness owner",
       "variant": {
         "cgo": "setup-go platform default; explicit command overrides retained",
@@ -422,14 +447,14 @@
           "test_shard_index": 0
         },
         "race": false,
-        "runs_on": "${{ matrix.os }}",
+        "runs_on": "macos-latest",
         "tags": "entry command defaults/flags retained"
       },
       "workflow": "root-tests.yml"
     },
     {
-      "id": "root-tests/test/macos-latest-2",
-      "job": "test",
+      "id": "root-tests/macos_2/macos-latest-2",
+      "job": "macos_2",
       "owner": "CI maintainer with affected package/harness owner",
       "variant": {
         "cgo": "setup-go platform default; explicit command overrides retained",
@@ -442,7 +467,7 @@
           "test_shard_index": 1
         },
         "race": false,
-        "runs_on": "${{ matrix.os }}",
+        "runs_on": "macos-latest",
         "tags": "entry command defaults/flags retained"
       },
       "workflow": "root-tests.yml"
@@ -1321,6 +1346,19 @@
       "workflow": "unified-bench-suites.yml"
     },
     {
+      "id": "unified-bench-tests/macos-scope/single",
+      "job": "macos-scope",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {},
+        "race": false,
+        "runs_on": "ubuntu-latest",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "unified-bench-tests.yml"
+    },
+    {
       "id": "unified-bench-tests/test/ubuntu-latest",
       "job": "test",
       "owner": "CI maintainer with affected package/harness owner",
@@ -1336,16 +1374,14 @@
       "workflow": "unified-bench-tests.yml"
     },
     {
-      "id": "unified-bench-tests/test/macos-latest",
-      "job": "test",
+      "id": "unified-bench-tests/macos/single",
+      "job": "macos",
       "owner": "CI maintainer with affected package/harness owner",
       "variant": {
         "cgo": "setup-go platform default; explicit command overrides retained",
-        "matrix": {
-          "os": "macos-latest"
-        },
+        "matrix": {},
         "race": true,
-        "runs_on": "${{ matrix.os }}",
+        "runs_on": "macos-latest",
         "tags": "entry command defaults/flags retained"
       },
       "workflow": "unified-bench-tests.yml"
@@ -1430,14 +1466,15 @@
     },
     {
       "consumers": [
-        "root-tests.yml/test",
+        "root-tests.yml",
         "treedb-mvcc-maintenance-diagnostic.yml",
         "treedb-tests.yml/race",
         "treedb-tests.yml/test",
-        "treedb-vacuum-m0-observation.yml"
+        "treedb-vacuum-m0-observation.yml",
+        "unified-bench-tests.yml/macos-scope"
       ],
       "glob": "docs/**",
-      "reason": "docs-and-tracked-utf8-naming-consumers"
+      "reason": "docs-and-tracked-utf8-naming-consumers Native PR scope decisions can consume this change list; standalone root Mac owners remain conservatively retained."
     },
     {
       "consumers": [
@@ -1618,7 +1655,7 @@
   "schema_version": 2,
   "workflows": {
     "cow-c3-hosted-qualification.yml": {
-      "coverage": "existing execution only; triggers/path filters are unchanged",
+      "coverage": "source workflow owns actual event eligibility; forecast never changes execution",
       "events": {
         "workflow_dispatch": {
           "inputs": {
@@ -1730,11 +1767,12 @@
       "sha256": "da6b04d75bee522e4dac3a8cc0fc38d1486d2f350b1aadfdef385306aa4cf161"
     },
     "format.yml": {
-      "coverage": "existing execution only; triggers/path filters are unchanged",
+      "coverage": "source workflow owns actual event eligibility; forecast never changes execution",
       "events": {
-        "push": null
+        "push": null,
+        "workflow_dispatch": null
       },
-      "git_blob": "8b383de2309424864ae17d7b2afba507ab474b39",
+      "git_blob": "7b9a70f2c0556d4e12b4bb039b06f6f94a10704b",
       "jobs": {
         "gofmt": {
           "checkout": [
@@ -1743,7 +1781,7 @@
           "commands": [
             {
               "command_sha256": "8c685419b4aaf6ba10081287ef876dd5d61e83c63e75607c074a216e17d407df",
-              "entrypoint": ".github/workflows/format.yml:27",
+              "entrypoint": ".github/workflows/format.yml:48",
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
               "name": "Check formatting"
             }
@@ -1755,14 +1793,15 @@
           "runs_on": "ubuntu-latest"
         }
       },
-      "sha256": "ebd68ccc334734d7904240311e98124a3827feb8cd2defd1c9f3dd14c2749ec6"
+      "sha256": "a8c97e001283b462627c2b57fa090675daca6d1a24dbee18354e449cda4311bb"
     },
     "hashdb-tests.yml": {
-      "coverage": "existing execution only; triggers/path filters are unchanged",
+      "coverage": "source workflow owns actual event eligibility; forecast never changes execution",
       "events": {
-        "push": null
+        "push": null,
+        "workflow_dispatch": null
       },
-      "git_blob": "d2c79514339927a460218277532c6b224583c69b",
+      "git_blob": "441b0697f50388f09fe33b2787fa61bbce712e01",
       "jobs": {
         "test": {
           "checkout": [
@@ -1771,14 +1810,14 @@
           "commands": [
             {
               "command_sha256": "3d4b424f6fcd11f530525ddea9a46aeaffec7c883b6c04b6baf7df36bf47800b",
-              "entrypoint": ".github/workflows/hashdb-tests.yml:28",
+              "entrypoint": ".github/workflows/hashdb-tests.yml:49",
               "invocation": "go vet ./...",
               "name": "Vet",
               "working-directory": "HashDB"
             },
             {
               "command_sha256": "1bb497e3e13a1105cf24e3359fa3ef75de08b66ff8a2839cd7f9ea97824d9eb3",
-              "entrypoint": ".github/workflows/hashdb-tests.yml:32",
+              "entrypoint": ".github/workflows/hashdb-tests.yml:53",
               "invocation": "go test ./...",
               "name": "Test",
               "working-directory": "HashDB"
@@ -1791,10 +1830,10 @@
           "runs_on": "windows-latest"
         }
       },
-      "sha256": "5dd5f1232088036c03d17466dd26fb52fbce630c02ff5769d048d87e8d42746a"
+      "sha256": "f914b10676eae98af039749cc8f4d6d6a40e3a2d1412b0a632323208ee3981d4"
     },
     "memtier-bench.yml": {
-      "coverage": "existing execution only; triggers/path filters are unchanged",
+      "coverage": "source workflow owns actual event eligibility; forecast never changes execution",
       "events": {
         "workflow_dispatch": {
           "inputs": {
@@ -1878,7 +1917,7 @@
       "sha256": "23869425c6e777eeab72ddea9d3e34338e248855cf963f394e1c710f0b199fb4"
     },
     "owner-local-metadata-qualification.yml": {
-      "coverage": "existing execution only; triggers/path filters are unchanged",
+      "coverage": "source workflow owns actual event eligibility; forecast never changes execution",
       "events": {
         "pull_request": {
           "paths": [
@@ -2000,7 +2039,7 @@
       "sha256": "23899afbdf4d26fc13c1beea95dd66c645f552b6ac3c237c28c87c4bb9649ce6"
     },
     "peer-security-qualification.yml": {
-      "coverage": "existing execution only; triggers/path filters are unchanged",
+      "coverage": "source workflow owns actual event eligibility; forecast never changes execution",
       "events": {
         "pull_request": {
           "paths": [
@@ -2111,7 +2150,7 @@
       "sha256": "ca03010c50c44ca1a933af54332b90b8b058e8f97a993b16ec4a4b17e64ef72c"
     },
     "race.yml": {
-      "coverage": "existing execution only; triggers/path filters are unchanged",
+      "coverage": "source workflow owns actual event eligibility; forecast never changes execution",
       "events": {
         "workflow_dispatch": null
       },
@@ -2145,7 +2184,7 @@
       "sha256": "e850b8393a23ab9d9c6f36a693502ba9c34147418683439a25e38ba0b965c357"
     },
     "read-snapshot-guardrails.yml": {
-      "coverage": "existing execution only; triggers/path filters are unchanged",
+      "coverage": "source workflow owns actual event eligibility; forecast never changes execution",
       "events": {
         "pull_request": null
       },
@@ -2182,11 +2221,19 @@
       "sha256": "cd73f94a8b9d561fc9a528334124bc930e4d5131cccf7224b0ceffa938e4ec49"
     },
     "redis-bench.yml": {
-      "coverage": "existing execution only; triggers/path filters are unchanged",
+      "coverage": "source workflow owns actual event eligibility; forecast never changes execution",
       "events": {
-        "push": null
+        "push": {
+          "branches": [
+            "main"
+          ],
+          "tags": [
+            "**"
+          ]
+        },
+        "workflow_dispatch": null
       },
-      "git_blob": "931f41ed7019c59ace49ab9cf09a9c1ab654d343",
+      "git_blob": "2efd101adcecbc557f79ed5986e631e37c82e11a",
       "jobs": {
         "bench": {
           "checkout": [
@@ -2195,13 +2242,13 @@
           "commands": [
             {
               "command_sha256": "d854620a2333d66554eeb53932d96f3d2804e38e9f7fb0d761dae7646a07970d",
-              "entrypoint": ".github/workflows/redis-bench.yml:27",
+              "entrypoint": ".github/workflows/redis-bench.yml:30",
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
               "name": "Install redis-benchmark"
             },
             {
               "command_sha256": "f5d7f7090dc8a91e87466cec2e448ba8317b752c7c2c7017bbabaadf8dcb1a76",
-              "entrypoint": ".github/workflows/redis-bench.yml:43",
+              "entrypoint": ".github/workflows/redis-bench.yml:46",
               "env": {
                 "BENCH_CONCURRENCY": 30,
                 "BENCH_KEYS": 20000,
@@ -2221,23 +2268,60 @@
           "runs_on": "ubuntu-latest"
         }
       },
-      "sha256": "838df03981dc70d128fbe6e2a80ea196dac46bf3fe1d165cb2c0ff3898dde51b"
+      "sha256": "d7764e4747b7b6241f37f09e4f216cc18413c6ae9bb0e8eed7b41ff43a981b82"
     },
     "root-tests.yml": {
-      "coverage": "existing execution only; triggers/path filters are unchanged",
+      "coverage": "source workflow owns actual event eligibility; forecast never changes execution",
       "events": {
-        "push": null
+        "pull_request": null,
+        "push": {
+          "branches": [
+            "main"
+          ],
+          "tags": [
+            "**"
+          ]
+        },
+        "workflow_dispatch": null
       },
-      "git_blob": "e189371c224be635358411d41a5f7439d8702e78",
+      "git_blob": "19adcb74663c79a040347c62135c2cc56bceef33",
       "jobs": {
-        "test": {
+        "macos-scope": {
+          "checkout": [
+            {
+              "fetch-depth": 2,
+              "persist-credentials": false,
+              "sparse-checkout": "/.github/scripts/ci_macos_scope.py",
+              "sparse-checkout-cone-mode": false
+            }
+          ],
+          "commands": [
+            {
+              "command_sha256": "38c7532ad2fff76d7bce49fd8400df4f9177d3fdd03af485ed11c4578154845f",
+              "entrypoint": ".github/workflows/root-tests.yml:42",
+              "env": {
+                "BASE": "${{ github.event.pull_request.base.sha }}",
+                "HEAD_SHA": "${{ github.event.pull_request.head.sha }}",
+                "MERGE": "${{ github.sha }}"
+              },
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Resolve scope using the immutable base policy"
+            }
+          ],
+          "environment": {},
+          "matrix": null,
+          "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": false,
+          "runs_on": "ubuntu-latest"
+        },
+        "macos_1": {
           "checkout": [
             {}
           ],
           "commands": [
             {
               "command_sha256": "61096b190f441bcb1df0babab46ca6d0637b777cad2ec012ed7617aab75537ea",
-              "entrypoint": ".github/workflows/root-tests.yml:58",
+              "entrypoint": ".github/workflows/root-tests.yml:94",
               "env": {
                 "PYTHONDONTWRITEBYTECODE": "1"
               },
@@ -2246,8 +2330,18 @@
               "name": "Root CI headroom contract"
             },
             {
+              "command_sha256": "c316cf3ba18de8bd32ca4287a02fa931ce76c32d84f5aee18d86874bac01f9de",
+              "entrypoint": ".github/workflows/root-tests.yml:100",
+              "env": {
+                "PYTHONDONTWRITEBYTECODE": "1"
+              },
+              "if": "${{ matrix.name == 'ubuntu-latest-1' }}",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Trigger and macOS scope contracts"
+            },
+            {
               "command_sha256": "bd93a94a7da3f1ceebf9b4435dd56fe7527bce0720101b356faee2fb663f6a6c",
-              "entrypoint": ".github/workflows/root-tests.yml:63",
+              "entrypoint": ".github/workflows/root-tests.yml:107",
               "if": "${{ matrix.name == 'ubuntu-latest-2' }}",
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
               "name": "Python native client",
@@ -2255,21 +2349,169 @@
             },
             {
               "command_sha256": "ae6da23dfdaf06c5b1615d9cc1190963f416b0eb74dbef126bc19320f7fda3e5",
-              "entrypoint": ".github/workflows/root-tests.yml:69",
+              "entrypoint": ".github/workflows/root-tests.yml:113",
               "if": "${{ matrix.run_docs_check }}",
               "invocation": "make docs-check",
               "name": "Docs check"
             },
             {
               "command_sha256": "5f81ad60fbe2f61adb9e2dfa4690181b8d6754a0c00db84c82067f93703b889a",
-              "entrypoint": ".github/workflows/root-tests.yml:74",
+              "entrypoint": ".github/workflows/root-tests.yml:118",
               "if": "${{ matrix.run_vet }}",
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
               "name": "Vet"
             },
             {
               "command_sha256": "d081a3acced10dc6ae75746ccf59e0c902abd7974c7c1ba3ea8103c0fed87266",
-              "entrypoint": ".github/workflows/root-tests.yml:82",
+              "entrypoint": ".github/workflows/root-tests.yml:126",
+              "env": {
+                "GOMAP_M3_DIAGNOSTICS_DIR": "${{ runner.temp }}/gomap-m3-diagnostics"
+              },
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Test"
+            }
+          ],
+          "environment": {},
+          "matrix": {
+            "include": [
+              {
+                "name": "macos-latest-1",
+                "os": "macos-latest",
+                "run_docs_check": true,
+                "run_vet": true,
+                "test_shard_count": 2,
+                "test_shard_index": 0
+              }
+            ]
+          },
+          "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": false,
+          "runs_on": "macos-latest"
+        },
+        "macos_2": {
+          "checkout": [
+            {}
+          ],
+          "commands": [
+            {
+              "command_sha256": "61096b190f441bcb1df0babab46ca6d0637b777cad2ec012ed7617aab75537ea",
+              "entrypoint": ".github/workflows/root-tests.yml:94",
+              "env": {
+                "PYTHONDONTWRITEBYTECODE": "1"
+              },
+              "if": "${{ matrix.name == 'ubuntu-latest-1' }}",
+              "invocation": "python3 .github/scripts/test_root_ci_headroom.py",
+              "name": "Root CI headroom contract"
+            },
+            {
+              "command_sha256": "c316cf3ba18de8bd32ca4287a02fa931ce76c32d84f5aee18d86874bac01f9de",
+              "entrypoint": ".github/workflows/root-tests.yml:100",
+              "env": {
+                "PYTHONDONTWRITEBYTECODE": "1"
+              },
+              "if": "${{ matrix.name == 'ubuntu-latest-1' }}",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Trigger and macOS scope contracts"
+            },
+            {
+              "command_sha256": "bd93a94a7da3f1ceebf9b4435dd56fe7527bce0720101b356faee2fb663f6a6c",
+              "entrypoint": ".github/workflows/root-tests.yml:107",
+              "if": "${{ matrix.name == 'ubuntu-latest-2' }}",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Python native client",
+              "working-directory": "clients/python/treedb_client"
+            },
+            {
+              "command_sha256": "ae6da23dfdaf06c5b1615d9cc1190963f416b0eb74dbef126bc19320f7fda3e5",
+              "entrypoint": ".github/workflows/root-tests.yml:113",
+              "if": "${{ matrix.run_docs_check }}",
+              "invocation": "make docs-check",
+              "name": "Docs check"
+            },
+            {
+              "command_sha256": "5f81ad60fbe2f61adb9e2dfa4690181b8d6754a0c00db84c82067f93703b889a",
+              "entrypoint": ".github/workflows/root-tests.yml:118",
+              "if": "${{ matrix.run_vet }}",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Vet"
+            },
+            {
+              "command_sha256": "d081a3acced10dc6ae75746ccf59e0c902abd7974c7c1ba3ea8103c0fed87266",
+              "entrypoint": ".github/workflows/root-tests.yml:126",
+              "env": {
+                "GOMAP_M3_DIAGNOSTICS_DIR": "${{ runner.temp }}/gomap-m3-diagnostics"
+              },
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Test"
+            }
+          ],
+          "environment": {},
+          "matrix": {
+            "include": [
+              {
+                "name": "macos-latest-2",
+                "os": "macos-latest",
+                "run_docs_check": false,
+                "run_vet": false,
+                "test_shard_count": 2,
+                "test_shard_index": 1
+              }
+            ]
+          },
+          "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": false,
+          "runs_on": "macos-latest"
+        },
+        "test": {
+          "checkout": [
+            {}
+          ],
+          "commands": [
+            {
+              "command_sha256": "61096b190f441bcb1df0babab46ca6d0637b777cad2ec012ed7617aab75537ea",
+              "entrypoint": ".github/workflows/root-tests.yml:94",
+              "env": {
+                "PYTHONDONTWRITEBYTECODE": "1"
+              },
+              "if": "${{ matrix.name == 'ubuntu-latest-1' }}",
+              "invocation": "python3 .github/scripts/test_root_ci_headroom.py",
+              "name": "Root CI headroom contract"
+            },
+            {
+              "command_sha256": "c316cf3ba18de8bd32ca4287a02fa931ce76c32d84f5aee18d86874bac01f9de",
+              "entrypoint": ".github/workflows/root-tests.yml:100",
+              "env": {
+                "PYTHONDONTWRITEBYTECODE": "1"
+              },
+              "if": "${{ matrix.name == 'ubuntu-latest-1' }}",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Trigger and macOS scope contracts"
+            },
+            {
+              "command_sha256": "bd93a94a7da3f1ceebf9b4435dd56fe7527bce0720101b356faee2fb663f6a6c",
+              "entrypoint": ".github/workflows/root-tests.yml:107",
+              "if": "${{ matrix.name == 'ubuntu-latest-2' }}",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Python native client",
+              "working-directory": "clients/python/treedb_client"
+            },
+            {
+              "command_sha256": "ae6da23dfdaf06c5b1615d9cc1190963f416b0eb74dbef126bc19320f7fda3e5",
+              "entrypoint": ".github/workflows/root-tests.yml:113",
+              "if": "${{ matrix.run_docs_check }}",
+              "invocation": "make docs-check",
+              "name": "Docs check"
+            },
+            {
+              "command_sha256": "5f81ad60fbe2f61adb9e2dfa4690181b8d6754a0c00db84c82067f93703b889a",
+              "entrypoint": ".github/workflows/root-tests.yml:118",
+              "if": "${{ matrix.run_vet }}",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Vet"
+            },
+            {
+              "command_sha256": "d081a3acced10dc6ae75746ccf59e0c902abd7974c7c1ba3ea8103c0fed87266",
+              "entrypoint": ".github/workflows/root-tests.yml:126",
               "env": {
                 "GOMAP_M3_DIAGNOSTICS_DIR": "${{ runner.temp }}/gomap-m3-diagnostics"
               },
@@ -2295,22 +2537,6 @@
                 "run_vet": false,
                 "test_shard_count": 2,
                 "test_shard_index": 1
-              },
-              {
-                "name": "macos-latest-1",
-                "os": "macos-latest",
-                "run_docs_check": true,
-                "run_vet": true,
-                "test_shard_count": 2,
-                "test_shard_index": 0
-              },
-              {
-                "name": "macos-latest-2",
-                "os": "macos-latest",
-                "run_docs_check": false,
-                "run_vet": false,
-                "test_shard_count": 2,
-                "test_shard_index": 1
               }
             ]
           },
@@ -2319,10 +2545,10 @@
           "runs_on": "${{ matrix.os }}"
         }
       },
-      "sha256": "adfe014ab21e06388072f09df5a783b3c946950c324728673e1d55fd8139e60d"
+      "sha256": "7b7ac7a2b54199e146221f40ae96d91909258ca2b949213f114c8001e07694eb"
     },
     "sparse-catalog-qualification.yml": {
-      "coverage": "existing execution only; triggers/path filters are unchanged",
+      "coverage": "source workflow owns actual event eligibility; forecast never changes execution",
       "events": {
         "pull_request": {
           "paths": [
@@ -2414,7 +2640,7 @@
       "sha256": "8e4cff3764f31a85972ff9383a5e9cf7b1280d119bb7d0d0138bfcd4b7c9effe"
     },
     "treedb-mvcc-maintenance-diagnostic.yml": {
-      "coverage": "existing execution only; triggers/path filters are unchanged",
+      "coverage": "source workflow owns actual event eligibility; forecast never changes execution",
       "events": {
         "workflow_dispatch": null
       },
@@ -2460,7 +2686,7 @@
       "sha256": "2d682ddfe8416722c6408e033606700217b614858c78e7479d25caa294c126c8"
     },
     "treedb-primary-order-diagnostic.yml": {
-      "coverage": "existing execution only; triggers/path filters are unchanged",
+      "coverage": "source workflow owns actual event eligibility; forecast never changes execution",
       "events": {
         "pull_request": {
           "paths": [
@@ -2516,7 +2742,7 @@
       "sha256": "b5cb2abaf216ec201a8496bc43c6920b5a4f0195df910f045119409492037fe9"
     },
     "treedb-tests.yml": {
-      "coverage": "existing execution only; triggers/path filters are unchanged",
+      "coverage": "source workflow owns actual event eligibility; forecast never changes execution",
       "events": {
         "merge_group": null,
         "pull_request": null,
@@ -3243,7 +3469,7 @@
       "sha256": "29bc8408f2c30798ff3843ba96b5c69609cd480c04a98ec4bdaca8d20e1bed7c"
     },
     "treedb-vacuum-m0-observation.yml": {
-      "coverage": "existing execution only; triggers/path filters are unchanged",
+      "coverage": "source workflow owns actual event eligibility; forecast never changes execution",
       "events": {
         "workflow_dispatch": null
       },
@@ -3305,7 +3531,7 @@
       "sha256": "257ee8b3e313e38df5728153d636558f6a4c55372dfe39d6924afdefb97c618c"
     },
     "treedb-vacuum-m0.yml": {
-      "coverage": "existing execution only; triggers/path filters are unchanged",
+      "coverage": "source workflow owns actual event eligibility; forecast never changes execution",
       "events": {
         "pull_request": {
           "paths": [
@@ -3355,11 +3581,19 @@
       "sha256": "dd1f10370d77c404523df9efbaea0f19427edf2547c6cd2df64d9bd14ec3ca0f"
     },
     "unified-bench-suites.yml": {
-      "coverage": "existing execution only; triggers/path filters are unchanged",
+      "coverage": "source workflow owns actual event eligibility; forecast never changes execution",
       "events": {
-        "push": null
+        "push": {
+          "branches": [
+            "main"
+          ],
+          "tags": [
+            "**"
+          ]
+        },
+        "workflow_dispatch": null
       },
-      "git_blob": "fe5d9b1cbbf4ce56733ad41fea16f3669ce720ea",
+      "git_blob": "e298182f19b75842ef6439d523f06c3059b1075e",
       "jobs": {
         "bigkeys_guard": {
           "checkout": [
@@ -3370,7 +3604,7 @@
           "commands": [
             {
               "command_sha256": "8794f41c6b4590575f583d455e55bc3a4877f2bd21471c5896680a3c0faff0e6",
-              "entrypoint": ".github/workflows/unified-bench-suites.yml:63",
+              "entrypoint": ".github/workflows/unified-bench-suites.yml:66",
               "env": {
                 "PYTHONDONTWRITEBYTECODE": "1"
               },
@@ -3379,13 +3613,13 @@
             },
             {
               "command_sha256": "52cba5b7aae3ef24929b0a490394705fa23bf9c90f0ccc8171c0b79e9d2acb83",
-              "entrypoint": ".github/workflows/unified-bench-suites.yml:66",
+              "entrypoint": ".github/workflows/unified-bench-suites.yml:69",
               "invocation": "make unified-bench",
               "name": "Build unified-bench"
             },
             {
               "command_sha256": "612eb6ebbfc5edae1547935732255b9096af61054bc56ded68d6ba9fda290524",
-              "entrypoint": ".github/workflows/unified-bench-suites.yml:69",
+              "entrypoint": ".github/workflows/unified-bench-suites.yml:72",
               "invocation": "./bin/unified-bench -suite bigkeys_guard -keys 1000000 -seed 1 -progress=false -max-wall 45m -max-rss-mb 4096",
               "name": "Suite: bigkeys_guard"
             }
@@ -3403,13 +3637,13 @@
           "commands": [
             {
               "command_sha256": "52cba5b7aae3ef24929b0a490394705fa23bf9c90f0ccc8171c0b79e9d2acb83",
-              "entrypoint": ".github/workflows/unified-bench-suites.yml:91",
+              "entrypoint": ".github/workflows/unified-bench-suites.yml:94",
               "invocation": "make unified-bench",
               "name": "Build unified-bench"
             },
             {
               "command_sha256": "e1f90f0d2f1feae95edfd854eb1d1209aa4f0f7faefb2a95b3ee4c5a436fb8ca",
-              "entrypoint": ".github/workflows/unified-bench-suites.yml:94",
+              "entrypoint": ".github/workflows/unified-bench-suites.yml:97",
               "invocation": "./bin/unified-bench -dbs treedb -profile ${{ matrix.profile }} -test write_rand,read_rand -keys 20000 -seed 1 -progress=false -checkpoint-between-tests",
               "name": "Smoke: ${{ matrix.profile }}"
             }
@@ -3433,7 +3667,7 @@
           "commands": [
             {
               "command_sha256": "8794f41c6b4590575f583d455e55bc3a4877f2bd21471c5896680a3c0faff0e6",
-              "entrypoint": ".github/workflows/unified-bench-suites.yml:29",
+              "entrypoint": ".github/workflows/unified-bench-suites.yml:32",
               "env": {
                 "PYTHONDONTWRITEBYTECODE": "1"
               },
@@ -3442,19 +3676,19 @@
             },
             {
               "command_sha256": "52cba5b7aae3ef24929b0a490394705fa23bf9c90f0ccc8171c0b79e9d2acb83",
-              "entrypoint": ".github/workflows/unified-bench-suites.yml:32",
+              "entrypoint": ".github/workflows/unified-bench-suites.yml:35",
               "invocation": "make unified-bench",
               "name": "Build unified-bench"
             },
             {
               "command_sha256": "d24aa2c40a7ffe4c39aa4f5d82651099340b75def0920e61193f7748a131616c",
-              "entrypoint": ".github/workflows/unified-bench-suites.yml:35",
+              "entrypoint": ".github/workflows/unified-bench-suites.yml:38",
               "invocation": "./bin/unified-bench -suite flushthrash -keys 200000 -seed 1 -progress=false",
               "name": "Suite: flushthrash"
             },
             {
               "command_sha256": "93fc5dc7c2101541bd7e7ff07226740991cc27b30d5928c366894beb62043c67",
-              "entrypoint": ".github/workflows/unified-bench-suites.yml:38",
+              "entrypoint": ".github/workflows/unified-bench-suites.yml:41",
               "invocation": "./bin/unified-bench -suite longmix -keys 100001 -seed 1 -progress=false",
               "name": "Suite: longmix"
             }
@@ -3466,37 +3700,46 @@
           "runs_on": "ubuntu-latest"
         }
       },
-      "sha256": "998905570aff9ee40ca90d6b52b3be2b7e0a9c639cc9b6f9eb275c80be45ca4a"
+      "sha256": "19b314ebdab113cf2390f1dc40c1b7535c0d0da9f07d6c8853c04dbb2b63760c"
     },
     "unified-bench-tests.yml": {
-      "coverage": "existing execution only; triggers/path filters are unchanged",
+      "coverage": "source workflow owns actual event eligibility; forecast never changes execution",
       "events": {
-        "push": null
+        "pull_request": null,
+        "push": {
+          "branches": [
+            "main"
+          ],
+          "tags": [
+            "**"
+          ]
+        },
+        "workflow_dispatch": null
       },
-      "git_blob": "9fe052c5f0c2e1b7af525514ecd2325b0550a0c0",
+      "git_blob": "ec63e33b6970ee39fa41ea94cdd3ccbfcb07af5c",
       "jobs": {
-        "test": {
+        "macos": {
           "checkout": [
             {}
           ],
           "commands": [
             {
               "command_sha256": "3d4b424f6fcd11f530525ddea9a46aeaffec7c883b6c04b6baf7df36bf47800b",
-              "entrypoint": ".github/workflows/unified-bench-tests.yml:33",
+              "entrypoint": ".github/workflows/unified-bench-tests.yml:81",
               "invocation": "go vet ./...",
               "name": "Vet",
               "working-directory": "cmd/unified_bench"
             },
             {
               "command_sha256": "1bb497e3e13a1105cf24e3359fa3ef75de08b66ff8a2839cd7f9ea97824d9eb3",
-              "entrypoint": ".github/workflows/unified-bench-tests.yml:37",
+              "entrypoint": ".github/workflows/unified-bench-tests.yml:85",
               "invocation": "go test ./...",
               "name": "Test",
               "working-directory": "cmd/unified_bench"
             },
             {
               "command_sha256": "8801a61537a5e852a7db19dddc264b7a5fa391abe8d4938a6ee570149add4468",
-              "entrypoint": ".github/workflows/unified-bench-tests.yml:45",
+              "entrypoint": ".github/workflows/unified-bench-tests.yml:93",
               "env": {
                 "GOMAXPROCS": "2",
                 "GOMEMLIMIT": "4GiB",
@@ -3508,7 +3751,7 @@
             },
             {
               "command_sha256": "1e737b4459bdb77d0ac53c93e5712b7c4edd4646cc99bc7ccaa457c5c98e6df2",
-              "entrypoint": ".github/workflows/unified-bench-tests.yml:59",
+              "entrypoint": ".github/workflows/unified-bench-tests.yml:107",
               "env": {
                 "GOMAXPROCS": "2",
                 "GOMEMLIMIT": "4GiB",
@@ -3521,7 +3764,99 @@
             },
             {
               "command_sha256": "deebb4bc1a1571898f67fe8b5585de469873e88a00afe1c60ccc152fc9393118",
-              "entrypoint": ".github/workflows/unified-bench-tests.yml:77",
+              "entrypoint": ".github/workflows/unified-bench-tests.yml:125",
+              "env": {
+                "GOMAXPROCS": "2",
+                "GOMEMLIMIT": "4GiB",
+                "GOWORK": "off",
+                "PYTHONDONTWRITEBYTECODE": "1"
+              },
+              "if": "runner.os == 'Linux'",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Focused steady-rusage controls race (Linux)"
+            }
+          ],
+          "environment": {},
+          "matrix": null,
+          "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": true,
+          "runs_on": "macos-latest"
+        },
+        "macos-scope": {
+          "checkout": [
+            {
+              "fetch-depth": 2,
+              "persist-credentials": false,
+              "sparse-checkout": "/.github/scripts/ci_macos_scope.py",
+              "sparse-checkout-cone-mode": false
+            }
+          ],
+          "commands": [
+            {
+              "command_sha256": "43c13b3e64a50488af5a39a7aeebe1144fd70d1c23a63e4975b8aa198776b91e",
+              "entrypoint": ".github/workflows/unified-bench-tests.yml:42",
+              "env": {
+                "BASE": "${{ github.event.pull_request.base.sha }}",
+                "HEAD_SHA": "${{ github.event.pull_request.head.sha }}",
+                "MERGE": "${{ github.sha }}"
+              },
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Resolve scope using the immutable base policy"
+            }
+          ],
+          "environment": {},
+          "matrix": null,
+          "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": false,
+          "runs_on": "ubuntu-latest"
+        },
+        "test": {
+          "checkout": [
+            {}
+          ],
+          "commands": [
+            {
+              "command_sha256": "3d4b424f6fcd11f530525ddea9a46aeaffec7c883b6c04b6baf7df36bf47800b",
+              "entrypoint": ".github/workflows/unified-bench-tests.yml:81",
+              "invocation": "go vet ./...",
+              "name": "Vet",
+              "working-directory": "cmd/unified_bench"
+            },
+            {
+              "command_sha256": "1bb497e3e13a1105cf24e3359fa3ef75de08b66ff8a2839cd7f9ea97824d9eb3",
+              "entrypoint": ".github/workflows/unified-bench-tests.yml:85",
+              "invocation": "go test ./...",
+              "name": "Test",
+              "working-directory": "cmd/unified_bench"
+            },
+            {
+              "command_sha256": "8801a61537a5e852a7db19dddc264b7a5fa391abe8d4938a6ee570149add4468",
+              "entrypoint": ".github/workflows/unified-bench-tests.yml:93",
+              "env": {
+                "GOMAXPROCS": "2",
+                "GOMEMLIMIT": "4GiB",
+                "GOWORK": "off"
+              },
+              "if": "runner.os == 'Linux'",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Record focused Linux qualification inputs"
+            },
+            {
+              "command_sha256": "1e737b4459bdb77d0ac53c93e5712b7c4edd4646cc99bc7ccaa457c5c98e6df2",
+              "entrypoint": ".github/workflows/unified-bench-tests.yml:107",
+              "env": {
+                "GOMAXPROCS": "2",
+                "GOMEMLIMIT": "4GiB",
+                "GOWORK": "off",
+                "PYTHONDONTWRITEBYTECODE": "1"
+              },
+              "if": "runner.os == 'Linux'",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Focused steady-rusage controls normal (Linux)"
+            },
+            {
+              "command_sha256": "deebb4bc1a1571898f67fe8b5585de469873e88a00afe1c60ccc152fc9393118",
+              "entrypoint": ".github/workflows/unified-bench-tests.yml:125",
               "env": {
                 "GOMAXPROCS": "2",
                 "GOMEMLIMIT": "4GiB",
@@ -3536,8 +3871,7 @@
           "environment": {},
           "matrix": {
             "os": [
-              "ubuntu-latest",
-              "macos-latest"
+              "ubuntu-latest"
             ]
           },
           "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
@@ -3545,7 +3879,7 @@
           "runs_on": "${{ matrix.os }}"
         }
       },
-      "sha256": "99d0ab3d19d5d00513da45f42bd10fab6e0a02e908042cec68092bae44383264"
+      "sha256": "544d7a3e7ebd434176e413f4c6d0528afc9b16ff9154c018584d89df52e72c86"
     }
   }
 }

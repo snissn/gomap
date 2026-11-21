@@ -2,11 +2,59 @@ name: "Root: vet+test"
 
 on:
   push:
+    branches: [main]
+    tags: ['**']
+  workflow_dispatch:
+  pull_request:
+
+# Only consecutive runs of one ordinary PR coalesce. Main, tags and dispatch
+# have unique groups: even cancel-in-progress:false can evict a pending run.
+concurrency:
+  group: root-tests-${{ github.event_name == 'pull_request' && !contains(github.event.pull_request.title, '[ci retain]') && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && !contains(github.event.pull_request.title, '[ci retain]') }}
 
 permissions:
   contents: read
 
 jobs:
+  macos-scope:
+    name: macOS PR scope (root)
+    if: ${{ github.event_name == 'pull_request' && !contains(github.event.pull_request.title, '[ci retain]') && github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      mode: ${{ steps.route.outputs.mode }}
+    steps:
+      - uses: actions/checkout@v4
+        continue-on-error: true
+        with:
+          fetch-depth: 2
+          sparse-checkout: /.github/scripts/ci_macos_scope.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - id: route
+        name: Resolve scope using the immutable base policy
+        shell: bash
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MERGE: ${{ github.sha }}
+        run: |
+          set -eu
+          mode=full
+          policy="$RUNNER_TEMP/base-macos-scope.py"
+          if [[ "$(git rev-parse HEAD)" == "$MERGE" && "$(git show -s --format=%P HEAD)" == "$BASE $HEAD_SHA" ]] &&
+              git show "$BASE:.github/scripts/ci_macos_scope.py" > "$policy" &&
+              decision="$(python3 -I "$policy" --base "$BASE" --head "$MERGE" --lane root)"; then
+            if [[ "$decision" == skip ]]; then mode=skip; fi
+          fi
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          if [[ "$mode" == skip ]]; then
+            echo "macOS root: **skipped**. The accepted base policy recognized every changed path as outside this native lane."
+          else
+            echo "macOS root: **full**. No positive exemption from the accepted base policy."
+          fi >> "$GITHUB_STEP_SUMMARY"
+
   test:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
@@ -26,20 +74,8 @@ jobs:
             run_vet: false
             test_shard_index: 1
             test_shard_count: 2
-          - name: macos-latest-1
-            os: macos-latest
-            run_docs_check: true
-            run_vet: true
-            test_shard_index: 0
-            test_shard_count: 2
-          - name: macos-latest-2
-            os: macos-latest
-            run_docs_check: false
-            run_vet: false
-            test_shard_index: 1
-            test_shard_count: 2
     timeout-minutes: 40
-    steps:
+    steps: &root_checks
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -56,6 +92,14 @@ jobs:
         env:
           PYTHONDONTWRITEBYTECODE: "1"
         run: python3 .github/scripts/test_root_ci_headroom.py
+
+      - name: Trigger and macOS scope contracts
+        if: ${{ matrix.name == 'ubuntu-latest-1' }}
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          python3 .github/scripts/test_ci_trigger_policy.py
+          python3 .github/scripts/test_ci_macos_scope.py
 
       - name: Python native client
         if: ${{ matrix.name == 'ubuntu-latest-2' }}
@@ -99,3 +143,39 @@ jobs:
           name: m3-footprint-${{ matrix.name }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/gomap-m3-diagnostics/
           if-no-files-found: ignore
+
+  macos_1:
+    name: macos-latest-1
+    needs: macos-scope
+    if: ${{ !cancelled() && (needs.macos-scope.result != 'success' || needs.macos-scope.outputs.mode != 'skip') }}
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-latest-1
+            os: macos-latest
+            run_docs_check: true
+            run_vet: true
+            test_shard_index: 0
+            test_shard_count: 2
+    timeout-minutes: 40
+    steps: *root_checks
+
+  macos_2:
+    name: macos-latest-2
+    needs: macos-scope
+    if: ${{ !cancelled() && (needs.macos-scope.result != 'success' || needs.macos-scope.outputs.mode != 'skip') }}
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos-latest-2
+            os: macos-latest
+            run_docs_check: false
+            run_vet: false
+            test_shard_index: 1
+            test_shard_count: 2
+    timeout-minutes: 40
+    steps: *root_checks
