@@ -405,6 +405,9 @@ func TestPublicCOWDurableGroupBarrierRefusalAndRefund(t *testing.T) {
 	if got := prefix.LogicalFrontiers(); got != opening || database.backend.CommandWALNextLSN() != next {
 		t.Fatalf("preassignment refusal changed prefix: opening=%+v got=%+v", opening, got)
 	}
+	if got, err := database.Get(key); err != nil || got != nil {
+		t.Fatalf("preassignment refusal exposed the raw value: %q, %v", got, err)
+	}
 	assertLastFree()
 
 	probeError := errors.New("unassigned original native callback refused")
@@ -452,6 +455,79 @@ func TestPublicCOWDurableGroupBarrierRefusalAndRefund(t *testing.T) {
 	}
 	assertLastFree()
 	requireRawKVValue(t, database, key, value)
+}
+
+func TestPublicCOWDurableGroupOwnsBarrierForRelaxedTail(t *testing.T) {
+	t.Setenv("TREEDB_DISABLE_VLOG_GENERATION_LOOP", "1")
+	opts := indexedSliceOptions(ProfileCommandWALRelaxed, t.TempDir())
+	opts.COWMemtableLimits = DefaultCOWMemtableLimits()
+	opts.COWMemtableLimits.MaxSources = 4
+	opts.COWMemtableLimits.MaxGenerations = 8
+	database, err := Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	prefix, _, err := database.backend.PrivateCOWAcceptedPrefix(database.txnOwner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opening := prefix.LogicalFrontiers()
+	capacity := opts.COWMemtableLimits.MaxSources * opts.COWMemtableLimits.MaxGenerations
+	for range capacity - 3 {
+		ticket, err := prefix.ReserveAccepted(false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			if err := ticket.CancelAccepted(); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	value := []byte("value")
+	submit := func(key string, durable bool) *commandWALPublicBatch {
+		t.Helper()
+		batch := database.NewBatch().(*commandWALPublicBatch)
+		t.Cleanup(func() { _ = batch.Close() })
+		if err := batch.Set([]byte(key), value); err != nil {
+			t.Fatal(err)
+		}
+		if err := batch.submitCOWWrite(durable); err != nil {
+			t.Fatal(err)
+		}
+		return batch
+	}
+	first := submit("marker", true)
+	group := &database.commandWALGroupCommit
+	group.mu.Lock()
+	singleton := group.pendingSingleton
+	group.mu.Unlock()
+	if singleton == 0 || singleton != first.cowState.registration.ticket {
+		t.Fatal("first write did not use the idle captured-marker path")
+	}
+	tail := submit("relaxed-tail", false)
+	if before := prefix.LogicalFrontiers(); before.C != opening.C+2 || before.W != opening.W {
+		t.Fatalf("relaxed tail must install before capture of the initial marker: %+v", before)
+	}
+	ticket, err := prefix.ReserveAccepted(false)
+	if ticket.Valid() {
+		_ = ticket.CancelAccepted()
+	}
+	if !errors.Is(err, rootpublication.ErrAcceptedCapacity) {
+		t.Fatalf("another producer could take the authenticated barrier slot: %v", err)
+	}
+	if err := first.completeCOWWrite(true, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := tail.completeCOWWrite(false, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := prefix.LogicalFrontiers(); got.C != opening.C+3 || got.W != got.C || got.V != opening.V+2 {
+		t.Fatalf("captured endpoint missed its trailing relaxed participant or barrier: %+v", got)
+	}
+	requireRawKVValue(t, database, []byte("marker"), value)
+	requireRawKVValue(t, database, []byte("relaxed-tail"), value)
 }
 
 // No group configuration or eligibility-disabling observer is changed here.

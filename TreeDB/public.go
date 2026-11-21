@@ -1946,11 +1946,6 @@ func (db *DB) Close() error {
 	db.lifecycleMu.Lock()
 	defer db.lifecycleMu.Unlock()
 
-	// Withdraw unspent group admission before the cached accepted FIFO closes.
-	if e := db.closePublicCommandWALGroupCommit(); e != nil {
-		err = errors.Join(err, e)
-	}
-
 	// Close cached layer first if present
 	if db.cached != nil {
 		if db.commandWALCached {
@@ -1966,6 +1961,8 @@ func (db *DB) Close() error {
 		err = errors.Join(err, db.cached.Close())
 		db.cached = nil
 	}
+	db.closePublicCommandWALGroupCommit()
+
 	// Always close backend if present
 	if db.backend != nil {
 		err = errors.Join(err, db.backend.Close())

@@ -1010,7 +1010,15 @@ func (c *Coordinator) closeAccepted() error {
 	p.cutThrough, p.cutRootSet = SealedPrefix{}, LogicalRootSet{}
 	for i := range p.entries {
 		e := &p.entries[i]
-		if !e.reserved || e.released || e.descriptor.Custody == nil {
+		if !e.reserved || e.released {
+			continue
+		}
+		if e.descriptor.Custody == nil {
+			// The cache has withdrawn producers. Return unspent reservations
+			// even if unrelated failed custody keeps these arrays admitted.
+			if !e.receipt.Assigned && !e.receipt.Installed {
+				p.recycleLocked(i, e)
+			}
 			continue
 		}
 		e.retiring = true
