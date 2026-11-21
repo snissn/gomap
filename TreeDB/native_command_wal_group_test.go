@@ -263,7 +263,7 @@ func nativeCommandWALGroupFixture(t *testing.T, rotate bool) (*DB, *collections.
 }
 
 func TestNativeCommandWALGroupFailurePoisonsInstalledWaiters(t *testing.T) {
-	for _, point := range []string{"dependency", "barrier-assigned"} {
+	for _, point := range []string{"dependency", "barrier-assigned", "barrier-assigned-panic"} {
 		t.Run(point, func(t *testing.T) {
 			database, c := nativeCommandWALGroupFixture(t, true)
 			database.commandWALGroupCommit.delay = time.Second
@@ -271,6 +271,11 @@ func TestNativeCommandWALGroupFailurePoisonsInstalledWaiters(t *testing.T) {
 			database.commandWALGroupCommit.maxBytes = 1 << 30
 			before := database.Stats()
 			beforeNext := database.backend.CommandWALNextLSN()
+			prefix, _, err := database.backend.PrivateCOWAcceptedPrefix(database.txnOwner)
+			if err != nil {
+				t.Fatal(err)
+			}
+			opening, initialEntries := prefix.LogicalFrontiers(), prefix.AcceptedPendingCount()
 			mainRoot := filepath.Join(database.dir, "maindb")
 			// This hook runs after installation and release of the producer gates.
 			// Rendezvous before either waiter starts the shared durability barrier.
@@ -294,8 +299,13 @@ func TestNativeCommandWALGroupFailurePoisonsInstalledWaiters(t *testing.T) {
 					return nil
 				}
 				if event.Point == durabilitycut.AfterDependencyAppend {
-					if assigned := appends.Add(1); point == "barrier-assigned" && assigned == 3 {
-						return cutErr
+					if assigned := appends.Add(1); assigned == 3 {
+						switch point {
+						case "barrier-assigned":
+							return cutErr
+						case "barrier-assigned-panic":
+							panic(cutErr)
+						}
 					}
 				}
 				// Private reserve initialization has WAL-directory root and can
@@ -310,21 +320,50 @@ func TestNativeCommandWALGroupFailurePoisonsInstalledWaiters(t *testing.T) {
 				}
 				return nil
 			})
+			defer restore()
 			doc, _ := bson.Marshal(bson.D{{Key: "n", Value: int32(2)}})
-			errs := make(chan error, 2)
+			type outcome struct {
+				err    error
+				unwind any
+			}
+			outcomes := make(chan outcome, 2)
 			var callbacks atomic.Int32
 			for _, id := range []string{"a", "b"} {
 				go func(id string) {
-					_, _, err := c.Update([]byte(id), func([]byte) ([]byte, bool, error) { callbacks.Add(1); return doc, true, nil })
-					errs <- err
+					var completed outcome
+					defer func() {
+						completed.unwind = recover()
+						outcomes <- completed
+					}()
+					_, _, completed.err = c.Update([]byte(id), func([]byte) ([]byte, bool, error) { callbacks.Add(1); return doc, true, nil })
 				}(id)
 			}
+			var panics int
+			waiterCause := cutErr
+			if point == "barrier-assigned-panic" {
+				waiterCause = ErrRecoveryRequired
+			}
 			for range 2 {
-				if err := <-errs; !errors.Is(err, cutErr) || !errors.Is(err, collections.ErrCommitAmbiguous) {
-					t.Errorf("waiter error=%v want%v", err, cutErr)
+				select {
+				case completed := <-outcomes:
+					if completed.unwind != nil {
+						if completed.unwind != cutErr || point != "barrier-assigned-panic" {
+							t.Errorf("unexpected leader panic: %v", completed.unwind)
+						}
+						panics++
+						continue
+					}
+					if !errors.Is(completed.err, waiterCause) || !errors.Is(completed.err, collections.ErrCommitAmbiguous) {
+						t.Errorf("waiter error=%v want ambiguous with %v", completed.err, waiterCause)
+					}
+				case <-time.After(5 * time.Second):
+					t.Fatal("durable waiter did not settle after barrier fault")
 				}
 			}
 			restore()
+			if wantPanic := point == "barrier-assigned-panic"; panics > 1 || (panics == 1) != wantPanic {
+				t.Fatalf("barrier leader panics=%d want one=%t", panics, wantPanic)
+			}
 			database.commandWALGroupCommit.testBeforeNativeComplete = nil
 			if installTimeout.Load() || installed.Load() != 2 {
 				t.Fatalf("installed participants=%d timeout=%t", installed.Load(), installTimeout.Load())
@@ -335,9 +374,16 @@ func TestNativeCommandWALGroupFailurePoisonsInstalledWaiters(t *testing.T) {
 			if callbacks.Load() != 2 {
 				t.Fatalf("callbacks=%d want2", callbacks.Load())
 			}
-			wantNext := beforeNext + 2
-			if point == "barrier-assigned" {
+			wantNext, wantEntries := beforeNext+2, initialEntries+2
+			if point != "dependency" {
 				wantNext++
+				wantEntries++
+			}
+			if got := prefix.AcceptedPendingCount(); got != wantEntries {
+				t.Fatalf("ordered FIFO entries=%d want %d including any uncertain barrier", got, wantEntries)
+			}
+			if got := prefix.LogicalFrontiers(); got.C != beforeNext+1 || got.V != opening.V+2 || got.W != opening.W {
+				t.Fatalf("failed barrier changed the installed prefix or stable WAL: opening=%+v got=%+v", opening, got)
 			}
 			if got := database.backend.CommandWALNextLSN(); got != wantNext {
 				t.Fatalf("assigned next=%d want%d", got, wantNext)
@@ -355,6 +401,11 @@ func TestNativeCommandWALGroupFailurePoisonsInstalledWaiters(t *testing.T) {
 				t.Fatal("mutation after poison succeeded")
 			}
 			requirePublicStatDelta(t, before, database.Stats(), "treedb.command_wal.group_commit.errors_total", 1)
+			if point == "barrier-assigned-panic" {
+				if err := database.Close(); !errors.Is(err, ErrRecoveryRequired) {
+					t.Fatalf("checked Close did not retain barrier unwind: %v", err)
+				}
+			}
 		})
 	}
 }
