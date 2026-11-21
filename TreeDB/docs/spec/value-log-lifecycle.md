@@ -70,6 +70,16 @@ Record CRC verification precedes a mapped cache hit; cache identity includes the
 verification mode and frame shape. Physical identity pins, segment reachability,
 eviction and close retain their existing lifetime rules.
 
+COW physical leaf inspection borrows an eligible managed mapping only while
+its snapshot holds the registered segment. The record length hint bounds the
+borrowed range, and the common metadata parser checks the hint against the
+record header. The verified file extent also bounds the range, including after
+a writable remap that reserves address space beyond EOF. Missing hints, policy
+denials and unreadable ranges use the bounded positional inspector. The same
+sealed mmap budgets and current-writable policy govern admission. Only shape
+values leave inspection, and a cache miss still reads and verifies the full
+payload into admitted caller storage.
+
 ### 1.3 Durable raw-frame read cost
 
 Ordinary raw value batches protected by the cached redo/journal or the public

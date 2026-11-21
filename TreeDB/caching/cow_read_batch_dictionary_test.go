@@ -84,7 +84,8 @@ func TestCOWReadBatchDictionaryReopenCloseAndPressure(t *testing.T) {
 }
 
 func TestCOWReadBatchWarmHeaderCorruptionAndRepair(t *testing.T) {
-	db, _, want, ptr := cowLeafMissFixture(t, 128, 64)
+	disableCOWSealedLeafMmapForFaultInjection(t)
+	db, backend, want, ptr := cowLeafMissFixture(t, 128, 64)
 	s, e := db.AcquireMVCCReadCut()
 	if e != nil {
 		t.Fatal(e)
@@ -108,19 +109,15 @@ func TestCOWReadBatchWarmHeaderCorruptionAndRepair(t *testing.T) {
 	if _, e = writer.ReadAt(version[:], offset); e != nil {
 		t.Fatal(e)
 	}
-	if _, e = writer.WriteAt([]byte{version[0] ^ 1}, offset); e != nil {
-		t.Fatal(e)
-	}
-	defer writer.WriteAt(version[:], offset)
+	writeCOWUnmappedLeafByte(t, backend, writer, offset, version[0]^1)
+	defer writeCOWUnmappedLeafByte(t, backend, writer, offset, version[0])
 	if e = s.SeekGEVersionRanges(a, b, r); e != nil {
 		t.Fatal(e)
 	}
 	if !errors.Is(r[0].Err, valuelog.ErrCorrupt) {
 		t.Fatalf("warm cached header bypassed: %+v", r[0])
 	}
-	if _, e = writer.WriteAt(version[:], offset); e != nil {
-		t.Fatal(e)
-	}
+	writeCOWUnmappedLeafByte(t, backend, writer, offset, version[0])
 	if e = s.SeekGEVersionRanges(a, b, r); e != nil {
 		t.Fatal(e)
 	}
@@ -209,7 +206,8 @@ func TestCOWReadBatchCapturedDictionaryFreshRefund(t *testing.T) {
 }
 
 func TestCOWReadBatchColdCRCFailure(t *testing.T) {
-	db, _, want, ptr := cowLeafMissFixture(t, -1, 64)
+	disableCOWSealedLeafMmapForFaultInjection(t)
+	db, backend, want, ptr := cowLeafMissFixture(t, -1, 64)
 	s, e := db.AcquireMVCCReadCut()
 	if e != nil {
 		t.Fatal(e)
@@ -229,10 +227,8 @@ func TestCOWReadBatchColdCRCFailure(t *testing.T) {
 	if _, e = writer.ReadAt(crc[:], offset); e != nil {
 		t.Fatal(e)
 	}
-	if _, e = writer.WriteAt([]byte{crc[0] ^ 1}, offset); e != nil {
-		t.Fatal(e)
-	}
-	defer writer.WriteAt(crc[:], offset)
+	writeCOWUnmappedLeafByte(t, backend, writer, offset, crc[0]^1)
+	defer writeCOWUnmappedLeafByte(t, backend, writer, offset, crc[0])
 	a, b, r := batchRawProbes(2)
 	if e = s.SeekGEVersionRanges(a, b, r); e != nil {
 		t.Fatal(e)
@@ -242,9 +238,7 @@ func TestCOWReadBatchColdCRCFailure(t *testing.T) {
 			t.Fatalf("cold CRC bypassed: %+v", v)
 		}
 	}
-	if _, e = writer.WriteAt(crc[:], offset); e != nil {
-		t.Fatal(e)
-	}
+	writeCOWUnmappedLeafByte(t, backend, writer, offset, crc[0])
 	if e = s.SeekGEVersionRanges(a, b, r); e != nil {
 		t.Fatal(e)
 	}

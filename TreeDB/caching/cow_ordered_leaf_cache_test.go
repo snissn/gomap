@@ -144,7 +144,8 @@ func TestCOWOrderedIteratorReusesVerifiedLeafCache(t *testing.T) {
 }
 
 func TestCOWIteratorLeafCacheRetainsRecordVerification(t *testing.T) {
-	db, _, _ := cowLeafCacheFixture(t, 128, false)
+	disableCOWSealedLeafMmapForFaultInjection(t)
+	db, backend, _ := cowLeafCacheFixture(t, 128, false)
 	snapshot, err := db.acquireCOWSnapshotWithError()
 	if err != nil {
 		t.Fatal(err)
@@ -195,14 +196,10 @@ func TestCOWIteratorLeafCacheRetainsRecordVerification(t *testing.T) {
 		}
 		// Even a fatal assertion must leave the real file intact for the
 		// snapshot and database cleanup paths.
-		defer func(offset int64, original [1]byte) { _, _ = writer.WriteAt(original[:], offset) }(offset, original)
-		if _, err := writer.WriteAt([]byte{original[0] ^ 1}, offset); err != nil {
-			t.Fatal(err)
-		}
+		writeCOWUnmappedLeafByte(t, backend, writer, offset, original[0]^1)
+		defer writeCOWUnmappedLeafByte(t, backend, writer, offset, original[0])
 		check(true)
-		if _, err := writer.WriteAt(original[:], offset); err != nil {
-			t.Fatal(err)
-		}
+		writeCOWUnmappedLeafByte(t, backend, writer, offset, original[0])
 		check(false) // upgrade only after the original full verified decode
 	}
 }

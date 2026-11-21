@@ -1011,6 +1011,25 @@ All public classification gates remain unchanged. See
 [the M0 contract](../../TreeDB/docs/performance/index-vacuum-m0.md) for boundaries
 and the incremental #4519 scope.
 
+### COW physical leaf inspection
+
+On Linux or macOS, capture a separate warm seek trace from the repository root
+with TreeDB environment overrides unset. Use the standalone
+[package benchmarks](../unified_bench/README.md#cow-physical-leaf-inspection)
+for uninstrumented timing. The same guide includes the direct inspector command
+for Windows.
+
+```sh
+OUT=$(mktemp -d /tmp/gomap_leaf_trace_XXXXXX)
+GOWORK=off GOMAXPROCS=8 go test ./TreeDB/caching -run '^$' -bench '^BenchmarkCOWVerifiedLeafMissLifecycle$/^entries=128$/^distinct=false$' -benchtime=20000x -trace "$OUT/seek.trace"
+go tool trace -pprof=syscall "$OUT/seek.trace" > "$OUT/seek-syscall.pprof"
+go tool pprof -raw "$OUT/seek-syscall.pprof" > "$OUT/seek-syscall-stacks.txt"
+```
+
+Inspect the `SeekGEVersionRange` stacks for inspector `pread` calls from the
+timed loop. Treat setup, warmup and full payload reads as separate costs.
+Analyze the standalone Go trace with `go tool trace` and `go tool pprof`.
+
 ### Public COW point-read allocation boundary
 
 `BenchmarkCOWPublicPointRead` is a standalone public-package diagnostic:
