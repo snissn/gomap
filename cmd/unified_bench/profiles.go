@@ -313,6 +313,9 @@ func customUsage() {
 			if f.DefValue != "" {
 				s += fmt.Sprintf(" (default %v)", f.DefValue)
 			}
+			if f.Name == "dbs" {
+				s += "\n    \t" + strings.ReplaceAll(dbUsageDetails(), "\n", "\n    \t")
+			}
 			fmt.Fprintf(os.Stderr, "%s\n", s)
 		}
 		fmt.Fprintf(os.Stderr, "\n")

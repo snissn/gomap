@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/snissn/gomap/kvstore"
@@ -23,10 +24,7 @@ func RegisterDB(name string, factory DBFactory) {
 	dbFactories[name] = factory
 }
 
-// RegisterHiddenDB registers a DB factory that can be selected explicitly via
-// -dbs, but is intentionally omitted from the "all" DB list and from usage
-// listings. This is useful for benchmark variants that should not run by
-// default.
+// RegisterHiddenDB registers an explicit -dbs variant outside the default "all" set.
 func RegisterHiddenDB(name string, factory DBFactory) {
 	name = normalizeDBNameForLookup(name)
 	dbFactories[name] = factory
@@ -83,8 +81,37 @@ func GetRegisteredDBsList() string {
 	return strings.Join(dbOrder, ", ")
 }
 
+func dbUsageDetails() string {
+	defaults := resolveDBs("all", "")
+	details := []string{"DBs included in 'all'\n  " + strings.Join(defaults, ", ")}
+
+	var variants []string
+	for name := range dbFactories {
+		if canonicalDBName(name) == name && !slices.Contains(defaults, name) {
+			variants = append(variants, name)
+		}
+	}
+	if len(variants) > 0 {
+		slices.Sort(variants)
+		details = append(details, "Explicit variants\n  "+strings.Join(variants, "\n  "))
+	}
+
+	var aliases []string
+	for alias := range dbAliases {
+		target := canonicalDBName(alias)
+		if _, ok := dbFactories[target]; ok {
+			aliases = append(aliases, alias+" -> "+target)
+		}
+	}
+	if len(aliases) > 0 {
+		slices.Sort(aliases)
+		details = append(details, "Aliases\n  "+strings.Join(aliases, "\n  "))
+	}
+	return strings.Join(details, "\n")
+}
+
 // resolveDBs returns the list of DBs to run based on the comma-separated arg.
-// If "all" is present, it includes all registered DBs.
+// If "all" is present, it includes the default DB set.
 // It excludes any DBs listed in excludeArg.
 func resolveDBs(arg, excludeArg string) []string {
 	requested := parseList(arg)
