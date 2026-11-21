@@ -131,6 +131,10 @@ canonical command/LSN, adds no collection timer or barrier frame, and performs o
 physical command-file sync at final completion. Its append receipt does not claim
 that the WAL is already stable. Queued requests retain the coordinator's shared
 prefix completion; any root-neutral barrier frame adds no logical transaction.
+The first durable registration reserves the epoch's potential barrier before
+any durable participant appends. Capture takes that same slot for an actual
+barrier or returns it when the sampled prefix already has enough WAL coverage.
+Capacity refusal therefore occurs before the participant's canonical assignment.
 No durable waiter acknowledges before its dependency-complete file and namespace
 obligations succeed. Immediate logical visibility and WAL completion therefore do
 not imply that the physical `AppliedCommandLSN` has advanced. Checkpoint or

@@ -7,6 +7,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
 )
 
@@ -49,13 +50,29 @@ func (db *DB) CaptureCommandWALPrefixInto(target *CommandWALCapturedPrefix, owne
 	return db.captureCommandWALPrefix(owner, target)
 }
 
+// CapturePrivateCOWCommandWALPrefixInto uses the durable epoch's existing
+// admission. It clears the reservation when the exact capture spends or
+// cancels it. The caller retains an unspent ticket on preflight failure.
+func (db *DB) CapturePrivateCOWCommandWALPrefixInto(target *CommandWALCapturedPrefix, owner *transactionowner.Owner, barrier *rootpublication.AcceptedTicket) (*CommandWALCapturedPrefix, CommandWALBarrierResult, error) {
+	if target == nil || target.db != nil {
+		return nil, CommandWALBarrierResult{}, errors.New("command WAL capture target must be unused")
+	}
+	if db == nil || owner == nil || owner != db.privateCOWOwner {
+		return nil, CommandWALBarrierResult{}, ErrNativeSemanticUnsupported
+	}
+	if barrier == nil || !barrier.Valid() {
+		return nil, CommandWALBarrierResult{}, rootpublication.ErrAcceptedReceipt
+	}
+	return db.captureCommandWALPrefixAfterAppend(owner, target, 0, barrier)
+}
+
 func (db *DB) captureCommandWALPrefix(owner *transactionowner.Owner, target *CommandWALCapturedPrefix) (_ *CommandWALCapturedPrefix, result CommandWALBarrierResult, err error) {
-	return db.captureCommandWALPrefixAfterAppend(owner, target, 0)
+	return db.captureCommandWALPrefixAfterAppend(owner, target, 0, nil)
 }
 
 // The exact already-assigned identity enables only failure poisoning. Capture
 // always reacquires its original authority, reruns hooks and samples a fresh cut.
-func (db *DB) captureCommandWALPrefixAfterAppend(owner *transactionowner.Owner, target *CommandWALCapturedPrefix, assignedLSN uint64) (_ *CommandWALCapturedPrefix, result CommandWALBarrierResult, err error) {
+func (db *DB) captureCommandWALPrefixAfterAppend(owner *transactionowner.Owner, target *CommandWALCapturedPrefix, assignedLSN uint64, barrier *rootpublication.AcceptedTicket) (_ *CommandWALCapturedPrefix, result CommandWALBarrierResult, err error) {
 	// The fixed COW owner appends only fully prepared commands under its typed
 	// staging guard. As with LockPrivateCOWStagingGuard, it needs raw append
 	// authority, not legacy prepared-publisher admission. A physical checkpoint
@@ -84,7 +101,7 @@ func (db *DB) captureCommandWALPrefixAfterAppend(owner *transactionowner.Owner, 
 			db.teardownMu.RUnlock()
 		}
 	}()
-	target, result, err = db.captureCommandWALPrefixLocked(owner, target)
+	target, result, err = db.captureCommandWALPrefixLocked(owner, target, barrier)
 	if err != nil {
 		return nil, result, err
 	}
@@ -101,7 +118,7 @@ func (db *DB) captureCommandWALPrefixAfterAppend(owner *transactionowner.Owner, 
 // under existing teardown/raw publication custody. The caller retains ownership
 // of those locks on failure; success transfers only the captured resources, and
 // the caller must transfer its original teardown lease to target.Sync.
-func (db *DB) captureCommandWALPrefixLocked(owner *transactionowner.Owner, target *CommandWALCapturedPrefix) (_ *CommandWALCapturedPrefix, result CommandWALBarrierResult, err error) {
+func (db *DB) captureCommandWALPrefixLocked(owner *transactionowner.Owner, target *CommandWALCapturedPrefix, barrier *rootpublication.AcceptedTicket) (_ *CommandWALCapturedPrefix, result CommandWALBarrierResult, err error) {
 	if db.closing.Load() {
 		return nil, result, ErrClosed
 	}
@@ -110,6 +127,11 @@ func (db *DB) captureCommandWALPrefixLocked(owner *transactionowner.Owner, targe
 	}
 	if err := db.commandWALPoisonedError(); err != nil {
 		return nil, result, err
+	}
+	if barrier != nil {
+		if err := barrier.CheckUnassignedBarrier(db.acceptedPrefix.Load()); err != nil {
+			return nil, result, err
+		}
 	}
 	frontier := db.commandJournal.AppendedLSN()
 	if frontier != 0 {
@@ -120,8 +142,14 @@ func (db *DB) captureCommandWALPrefixLocked(owner *transactionowner.Owner, targe
 		// under the journal mutex, before rotation, LSN assignment or marker
 		// bytes. Retain that V2 dependency-before-marker ordering in its owning
 		// append path; draining here too would sync the same retained cut twice.
-		result.LSN, err = db.appendCommandWALPrefixBarrierForOwner(true, owner)
+		result.LSN, err = db.appendCommandWALPrefixBarrierForOwner(true, owner, barrier, frontier)
 		if err != nil {
+			return nil, result, err
+		}
+	} else if barrier != nil {
+		ticket := *barrier
+		*barrier = rootpublication.AcceptedTicket{}
+		if err = ticket.CancelAccepted(); err != nil {
 			return nil, result, err
 		}
 	}
