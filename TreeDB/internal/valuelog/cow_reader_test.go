@@ -112,11 +112,11 @@ func TestCOWRecordRawAndGroupedNoAllocation(t *testing.T) {
 				t.Fatal("value mismatch")
 			}
 			payload, raw, out := make([]byte, shape.PayloadBytes()), make([]byte, shape.RawBytes), make([]byte, shape.ValueBytes)
-			// Windows and race ReadAt make these three fixed metadata buffers
-			// escape. The caller pre-admits their separate rounded capacities.
+			// Windows and race ReadAt make the metadata window and payload
+			// discriminator escape. The caller pre-admits those capacities.
 			wantInspectAllocs := 0.0
 			if COWInspectionMetadataAllocationSizes() != [3]uint64{} {
-				wantInspectAllocs = 3
+				wantInspectAllocs = 2
 			}
 			if n := testing.AllocsPerRun(100, func() {
 				if _, err := InspectCOWRecord(f, ptr, cowTestLimits); err != nil {
@@ -150,6 +150,54 @@ func TestCOWRecordRawAndGroupedNoAllocation(t *testing.T) {
 				if got := cowTestRead(t, f, ptr, empty, nil); len(got) != 0 {
 					t.Fatal("empty grouped value")
 				}
+			}
+		})
+	}
+}
+
+func TestCOWRecordInspectionMatchesExactMetadataReads(t *testing.T) {
+	wide := make([][]byte, MaxFrameK)
+	wide[0] = make([]byte, HeaderSize+cowMaxPrefix)
+	wide[len(wide)-1] = []byte("last value beyond the metadata window")
+	for _, tc := range []struct {
+		name    string
+		body    []byte
+		grouped bool
+		sub     uint8
+	}{
+		{"raw", []byte("raw value with discriminator"), false, 0},
+		{"snappy", cowTestFrame(0, BlockCodecSnappy, [][]byte{[]byte("value")}, []byte{1, 2, 3}), true, 0},
+		{"wide-group", cowTestFrame(73, BlockCodecNone, wide, nil), true, MaxFrameK - 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, ptr, record := cowTestRecord(t, tc.body, tc.grouped, tc.sub)
+			compare := func(candidate page.ValuePtr, limits COWReadLimits) {
+				t.Helper()
+				want, wantErr := inspectCOWRecord(f, candidate, limits, false)
+				got, gotErr := InspectCOWRecord(f, candidate, limits)
+				if got != want || gotErr != wantErr {
+					t.Fatalf("ptr=%+v limits=%+v shapeEqual=%t error=%v want=%v", candidate, limits, got == want, gotErr, wantErr)
+				}
+			}
+			for _, hint := range []uint32{0, 1, uint32(len(record) - 4), uint32(len(record) - 3)} {
+				candidate := ptr
+				candidate.Length = hint
+				if tc.grouped {
+					candidate.Length = page.ValuePtrMarkGrouped(hint, tc.sub)
+				}
+				compare(candidate, cowTestLimits)
+			}
+			limited := cowTestLimits
+			limited.MaxRecordBytes = uint64(len(record) - 1)
+			compare(ptr, limited)
+			for _, end := range []int{HeaderSize - 1, HeaderSize, HeaderSize + FrameHeaderSize, HeaderSize + cowMaxPrefix - 1, len(record) - 1} {
+				if end >= len(record) {
+					continue
+				}
+				if err := os.WriteFile(f.Name(), record[:end], 0600); err != nil {
+					t.Fatal(err)
+				}
+				compare(ptr, cowTestLimits)
 			}
 		})
 	}

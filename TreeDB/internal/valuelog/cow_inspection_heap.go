@@ -2,11 +2,10 @@
 
 package valuelog
 
-// COWInspectionMetadataAllocationSizes reports the separate metadata buffers
-// that escape through os.File.ReadAt on this build. Callers must reserve each
-// allocator-rounded capacity before Inspect and retain the peak envelope for
-// the lifetime of their serialized read workspace. It excludes caller-owned
-// file names, record scratch, output and decoder storage.
+// COWInspectionMetadataAllocationSizes bounds the metadata buffers that escape
+// through os.File.ReadAt on this build. Account for a separate header and prefix
+// or a combined window, plus the payload discriminator. Callers reserve each
+// rounded capacity for the lifetime of their serialized read workspace.
 func COWInspectionMetadataAllocationSizes() [3]uint64 {
-	return [3]uint64{HeaderSize, cowMaxPrefix, uint64(compactLeafPagePayloadHeaderSize)}
+	return [3]uint64{HeaderSize, HeaderSize + cowMaxPrefix, uint64(compactLeafPagePayloadHeaderSize)}
 }
