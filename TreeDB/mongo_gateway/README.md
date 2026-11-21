@@ -43,8 +43,9 @@ mongodb://127.0.0.1:27017/?directConnection=true
 
 The standalone gateway batches queued updates to the same collection by default.
 Add `-update-coalescing-batch 1` to the gateway command to run eligible
-single-document updates directly. The client's write concern still controls
-acknowledgement.
+single-document updates directly. Supported write concerns apply in both modes.
+The standalone gateway rejects `w:0` before applying a write. See the
+[compatibility matrix](COMPATIBILITY.md#test-backed-matrix).
 
 With 16 clients and a 95% READ / 5% UPDATE BSON workload using
 `command_wal_relaxed` and `w:1` with journal unspecified, bypassing the batch
