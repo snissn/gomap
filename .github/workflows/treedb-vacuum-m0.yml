@@ -3,6 +3,7 @@ name: "TreeDB: index-vacuum M0 evidence"
 on:
   pull_request:
     paths:
+      - "TreeDB/db/native_command_wal_completion.go"
       - "TreeDB/db/vacuum*.go"
       - "TreeDB/db/recoverable_root_set.go"
       - "TreeDB/db/durable_root*.go"

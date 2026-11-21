@@ -31,7 +31,7 @@ func TestDurabilityProfilePublicEntrypointInventory(t *testing.T) {
 		"LeafGenerationPack", "LeafGenerationPackFromPlan", "LeafGenerationPackRunOnce",
 		"LeafGenerationPlan", "MVCCWriteWorkLimit", "MaintenancePhase", "NewBatch", "NewBatchWithSize",
 		"NativeCommandWALCompletionBytes", "NativeSemanticBackend", "NewConditionalTxn", "NewConditionalTxnWithSnapshot", "NewMVCCAdmission", "NewMVCCWriteWorkEstimator", "PreflightMVCCPrune", "PrepareMVCCPrune", "PrepareNativeCommandWAL", "Print", "ResolvedProfile",
-		"ReverseIterator", "SeekGE", "SeekGEVersionRange", "Set", "SetMaintenancePhase", "SetPointWithMVCCInput", "SetNativeSemanticPublication", "SetSync", "Stats", "SubmitLogicalMVCC", "SupportsLogicalMVCC", "SupportsLogicalMVCCStaging", "SupportsMVCCReadCut",
+		"ReverseIterator", "SeekGE", "SeekGEVersionRange", "Set", "SetMaintenancePhase", "SetPointWithMVCCInput", "SetNativeSemanticPublication", "SetSync", "Stats", "SubmitLogicalMVCC", "SupportsLogicalMVCC", "SupportsLogicalMVCCStaging", "SupportsMVCCReadCut", "SyncNativeCommandWALPrefix",
 		"Update", "UpdateSync", "VacuumIndexOnline", "VacuumOnlineStats", "ValueLogGC", "ValueLogRewriteOnline",
 	}
 	slices.Sort(want)
@@ -54,6 +54,9 @@ func TestDurabilityProfilePublicEntrypointInventory(t *testing.T) {
 	profileBodies := profileInventoryFunctionBodies(t, filepath.Join(treeDBDir, "profiles.go"))
 	backendOpenBodies := profileInventoryFunctionBodies(t, filepath.Join(treeDBDir, "open_backend.go"))
 	batchBodies := profileInventoryFunctionBodies(t, filepath.Join(treeDBDir, "command_wal_public_cached.go"))
+	for _, fragment := range []string{"tdb.beginPublicOperation()", "tdb.lifecycleMu.RUnlock()", "tdb.backend.NativeCommandWALPrefixEligible(tdb.txnOwner)", "tdb.syncPublicCommandWAL()"} {
+		profileInventoryRequireBody(t, batchBodies, "(*DB).SyncNativeCommandWALPrefix", fragment)
+	}
 	profileInventoryRequireBody(t, batchBodies, "(*DB).NativeCommandWALCompletionBytes", "unsafe.Sizeof(nativePublicCommandWALCompletion{})")
 	for _, fragment := range []string{"!tdb.commandWALCached", "tdb.backend == nil", "announced: durable", "tdb.commandWALGroupCommit.durableIntents.Add(1)"} {
 		profileInventoryRequireBody(t, batchBodies, "(*DB).PrepareNativeCommandWAL", fragment)

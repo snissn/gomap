@@ -57,8 +57,11 @@ Standalone Mongo retains the public DB owner through gateway and collection
 cleanup. Reopen selects the same immutable profile and recovers native collection
 commands through the existing replay owner. A durable ACK (including an explicit
 Mongo journal request) must recover the acknowledged documents, index effects,
-authentication records and referenced persistent value-log dependencies. Abrupt
-process exit controls are process-crash evidence, not a physical power-loss test.
+authentication records and referenced persistent value-log dependencies. A
+durable fixed-format journal fence can leave the applied root behind the
+synchronized prefix. Reopen replays the covered commands and their captured
+dependencies. A relaxed ext4-stream journal ACK completes the root checkpoint
+before replying. Abrupt process exit controls are process-crash evidence, not a physical power-loss test.
 
 Logical collection/WAL BSON stays inline when the physical builder places large
 root values in the value log. The physical projection retains the exact appended

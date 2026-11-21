@@ -136,6 +136,11 @@ the retained record and requires the original file error after its close.
   `TestStandaloneSharedCOWCrashReopen` exercise ordinary startup, indexed BSON
   mutation/read, authentication and explicit journal ACK across all three
   production profiles, including an actual child-process exit without cleanup.
+- `TestStandaloneRelaxedExt4StreamJournalAckCrashReopen` checks the applied-root
+  frontier at acknowledgement. The official-driver fixed journal fence and
+  SIGKILL controls verify typed BSON recovery without a cache checkpoint.
+  `TestNativeJournalPrefix` cases check selected ownership, captured dependencies,
+  terminal sync failures and the lifetime of an in-flight fence.
 - `TestStandaloneLargeIndexedBSON`,
   `TestStandaloneExplicitCOWBudgetRefusesBeforeAssignment` and
   `TestMongoInsertCoalescerBoundsBytes` cover advertised document size, explicit
