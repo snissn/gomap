@@ -167,6 +167,43 @@ class PrimaryCostGateTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unknown acceptance contract"):
             gate.qualify_runtime(raw, before, before, quiet=True, acceptance_contract="unknown")
 
+    def test_advisory_timing_preserves_the_raw_miss_and_other_requirements(self):
+        rows = self.rows()
+        for row in rows:
+            if row["revision"] == "candidate":
+                row["metrics"]["ns/op"] = 120
+        raw = gate.evaluate(rows)
+        _, before = self.v2_evidence()
+        self.assertFalse(gate.qualify_runtime(raw, before, before, quiet=True,
+                                              acceptance_contract="v2")["accepted"])
+        options = dict(acceptance_contract="v2", timing_advisory=True)
+        advisory = gate.qualify_runtime(raw, before, before, quiet=True, **options)
+        self.assertTrue(advisory["accepted"])
+        self.assertTrue(advisory["timing_advisory"])
+        self.assertEqual(advisory["timing_disposition"], "ADVISORY_THRESHOLD_MISS")
+        self.assertEqual(advisory["gates"], raw["gates"])
+        self.assertFalse(advisory["gates"]["timing"])
+        self.assertFalse(advisory["measurement_pass"])
+        self.assertFalse(advisory["runtime_input_equivalent"])
+
+        for metric, value, name in (("B/op", 201, "bytes"), ("allocs/op", 4, "allocations"),
+                                    ("generation_advances/op", 1, "candidate_primary_activation")):
+            changed = copy.deepcopy(rows)
+            for row in changed:
+                if row["revision"] == "candidate":
+                    row["metrics"][metric] = value
+            with self.subTest(metric=metric):
+                result = gate.qualify_runtime(gate.evaluate(changed), before, before,
+                                              quiet=True, **options)
+                self.assertFalse(result["acceptance_gates"][name])
+                self.assertFalse(result["accepted"])
+
+        self.assertFalse(gate.qualify_runtime(raw, before, before, quiet=False, **options)["accepted"])
+        after = copy.deepcopy(before)
+        after["candidate"]["inputs"]["argv"] = ["changed"]
+        with self.assertRaisesRegex(RuntimeError, "drift"):
+            gate.qualify_runtime(raw, before, after, quiet=True, **options)
+
     def test_v2_retains_exact_runtime_timing_attribution_but_not_byte_exemption(self):
         raw, before = self.v2_evidence(equivalent=True)
         raw["gates"]["timing"] = raw["measurement_pass"] = False
