@@ -56,8 +56,8 @@ func TestAcceptedPressureWakeRequiresInstallationAndRearmsAfterRetirement(t *tes
 		}
 		maintenance := reserve(true)
 		requireQuiet()
-		if c.NeedsAcceptedPressure() {
-			t.Fatal("maintenance used ordinary headroom")
+		if needed, err := c.AcceptedPressure(); needed || err != nil {
+			t.Fatalf("maintenance used ordinary headroom: needed=%t err=%v", needed, err)
 		}
 		if err := maintenance.CancelAccepted(); err != nil {
 			t.Fatal(err)
@@ -71,8 +71,8 @@ func TestAcceptedPressureWakeRequiresInstallationAndRearmsAfterRetirement(t *tes
 		default:
 			t.Fatal("installed custody at the threshold did not request pressure work")
 		}
-		if !c.NeedsAcceptedPressure() {
-			t.Fatal("original latch missed actionable pressure")
+		if needed, err := c.AcceptedPressure(); !needed || err != nil {
+			t.Fatalf("original latch missed actionable pressure: needed=%t err=%v", needed, err)
 		}
 		through := SealedPrefix{LogicalSequence: end, CanonicalLSN: end}
 		cut, err := c.CaptureAcceptedCut(through, roots)
@@ -90,12 +90,15 @@ func TestAcceptedPressureWakeRequiresInstallationAndRearmsAfterRetirement(t *tes
 		if err := cut.CompleteHandoff(physical.SealReceipt()); err != nil {
 			t.Fatal(err)
 		}
+		if err := physical.SealReceipt().Wait(ctx); err != nil {
+			t.Fatal(err)
+		}
 		if err := c.WaitAccepted(ctx, through); err != nil {
 			t.Fatal(err)
 		}
 		requireQuiet()
-		if c.NeedsAcceptedPressure() {
-			t.Fatal("original retirement did not clear the stale wake")
+		if needed, err := c.AcceptedPressure(); needed || err != nil {
+			t.Fatalf("original retirement did not clear the stale wake: needed=%t err=%v", needed, err)
 		}
 	}
 }

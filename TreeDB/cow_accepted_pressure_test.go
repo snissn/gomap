@@ -2,6 +2,7 @@ package treedb
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -17,6 +18,20 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
+func acceptedPressureOptions(t *testing.T, profile Profile) Options {
+	t.Helper()
+	opts := indexedSliceOptions(profile, t.TempDir())
+	opts.MaxWALBytes = 128 << 20 // Run the actual size worker without reaching its byte threshold.
+	opts.ValueLog.PointerThreshold, opts.ValueLog.ForcePointers = 1, true
+	opts.MemtableShards = 2
+	opts.COWMemtableLimits = DefaultCOWMemtableLimits()
+	opts.COWMemtableLimits.MaxSources = 4
+	opts.COWMemtableLimits.MaxGenerations = 8
+	opts.DisableBackgroundPrune = true
+	opts.BackgroundIndexVacuumInterval = -1
+	return opts
+}
+
 func TestCOWPublicAcceptedPressureOverlapsFollowingWrite(t *testing.T) {
 	t.Setenv("TREEDB_DISABLE_VLOG_GENERATION_LOOP", "1")
 	const (
@@ -26,15 +41,7 @@ func TestCOWPublicAcceptedPressureOverlapsFollowingWrite(t *testing.T) {
 	)
 	for _, profile := range []Profile{ProfileCommandWALDurable, ProfileCommandWALRelaxed} {
 		t.Run(string(profile), func(t *testing.T) {
-			opts := indexedSliceOptions(profile, t.TempDir())
-			opts.MaxWALBytes = 128 << 20 // Run the actual size worker; the fixture cannot cross its byte trigger.
-			opts.ValueLog.PointerThreshold, opts.ValueLog.ForcePointers = 1, true
-			opts.MemtableShards = 2
-			opts.COWMemtableLimits = DefaultCOWMemtableLimits()
-			opts.COWMemtableLimits.MaxSources = 4
-			opts.COWMemtableLimits.MaxGenerations = 8
-			opts.DisableBackgroundPrune = true
-			opts.BackgroundIndexVacuumInterval = -1
+			opts := acceptedPressureOptions(t, profile)
 			maintenanceErr := make(chan error, 1)
 			opts.NotifyError = func(err error) {
 				select {
@@ -203,5 +210,87 @@ func TestCOWPublicAcceptedPressureOverlapsFollowingWrite(t *testing.T) {
 			}
 			closeDB(db, manager)
 		})
+	}
+}
+
+func TestCOWPublicAcceptedPressureReportsOriginalSealFailure(t *testing.T) {
+	t.Setenv("TREEDB_DISABLE_VLOG_GENERATION_LOOP", "1")
+	opts := acceptedPressureOptions(t, ProfileCommandWALDurable)
+	report := make(chan error, 1)
+	opts.NotifyError = func(err error) {
+		select {
+		case report <- err:
+		default:
+		}
+	}
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	backend, err := db.NativeSemanticBackend()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := collections.NewCollectionManager(backend)
+	defer manager.Close()
+	_, err = manager.CreateCollection(&collections.CollectionMeta{
+		Name: "rows", Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := manager.OpenCollection("rows")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	prefix, _, err := backend.PrivateCOWAcceptedPrefix(db.txnOwner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := prefix.LogicalFrontiers()
+	failure := errors.New("injected accepted pressure seal failure")
+	var sealAttempts atomic.Int32
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Point == durabilitycut.BeforePublicationSealWrite && event.Resource == durabilitycut.ResourceSeal && event.Root == backend.Dir() {
+			sealAttempts.Add(1)
+			return failure
+		}
+		return nil
+	})
+	defer restore()
+	const trigger = 24
+	for n := 0; n < trigger; n++ {
+		id := fmt.Sprintf("row-%03d", n)
+		body := nativeBSONDocument(t, bson.D{{Key: "_id", Value: id}, {Key: "n", Value: int64(n)}})
+		if _, err := rows.InsertBatchValidatedBSON([][]byte{[]byte(id)}, [][]byte{body}); err != nil {
+			t.Fatalf("durable INSERT %d: %v", n, err)
+		}
+	}
+	select {
+	case err := <-report:
+		if !errors.Is(err, failure) {
+			t.Fatalf("original seal error lost: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("original seal failure did not reach the owner")
+	}
+	current := prefix.LogicalFrontiers()
+	if current.S != original.S || current.C != original.C+trigger || current.W != current.C || sealAttempts.Load() != 1 {
+		t.Fatalf("failed seal changed original durability: before=%+v after=%+v attempts=%d", original, current, sealAttempts.Load())
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := prefix.WaitAccepted(ctx, rootpublication.SealedPrefix{LogicalSequence: current.V, CanonicalLSN: current.C}); !errors.Is(err, failure) {
+		t.Fatalf("failed seal was retired or lost: %v", err)
+	}
+	if err := manager.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); !errors.Is(err, failure) {
+		t.Fatalf("checked Close lost original seal failure: %v", err)
 	}
 }

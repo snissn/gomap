@@ -1,6 +1,7 @@
 package caching
 
 import (
+	"errors"
 	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -28,6 +29,10 @@ type cowRollover struct {
 }
 
 func (c *cowCache) prepareRollover() (*cowRollover, error) {
+	return c.prepareRolloverWithAdvisoryAdmission(false)
+}
+
+func (c *cowCache) prepareRolloverWithAdvisoryAdmission(advisory bool) (*cowRollover, error) {
 	old := c.cut
 	count := 0
 	for _, successor := range c.successors {
@@ -58,12 +63,12 @@ func (c *cowCache) prepareRollover() (*cowRollover, error) {
 		memtable.COWAllocationCharge(uint64(n)*uint64(unsafe.Sizeof(memtable.COWRetirement{})))
 	lease, err := c.maintenance.AcquireExternal(bytes)
 	if err != nil {
-		return nil, err
+		return nil, cowGenerationAdmissionError(advisory, err)
 	}
 	p := &cowRollover{cache: c, scratch: lease, writers: make([]*memtable.COWWriter, n), roots: make([]*memtable.COWRoot, n), resources: make([]*cowGenerationResources, n), retired: make([]memtable.COWRetirement, n)}
 	p.cutLease, err = c.maintenance.AcquireExternal(cowCutCharge(n, len(old.frozen)+count))
 	if err != nil {
-		return p, err
+		return p, cowGenerationAdmissionError(advisory, err)
 	}
 	// These exact empty writers/roots were constructed before first dirty
 	// acceptance. They remain cache-owned on every refusal and retry.
@@ -77,6 +82,16 @@ func (c *cowCache) prepareRollover() (*cowRollover, error) {
 		}
 		p.semantic, err = old.semanticRootSet.PrepareRollover()
 		if err != nil {
+			// The failed semantic successor is private. Mark only a single
+			// admission refusal before any raw Freeze, and require its
+			// original off-gate cleanup to succeed before suppressing it.
+			if advisory {
+				for cause := err; cause != nil; cause = errors.Unwrap(cause) {
+					if cause == memtable.ErrCOWCapacity {
+						return p, cowGenerationRetryableRefusal{err}
+					}
+				}
+			}
 			return p, err
 		}
 		if p.semantic == nil {

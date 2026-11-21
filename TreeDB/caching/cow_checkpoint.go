@@ -146,8 +146,11 @@ func (db *DB) materializeCOWPrefixProjected(ctx context.Context, automatic bool,
 		if db.closing.Load() {
 			return errDBClosing
 		}
-		if db.cow.prefix == nil || !db.cow.prefix.NeedsAcceptedPressure() {
+		if db.cow.prefix == nil {
 			return nil
+		}
+		if needed, err := db.cow.prefix.AcceptedPressure(); err != nil || !needed {
+			return err
 		}
 	}
 	if generationPressure {
@@ -204,9 +207,9 @@ func (db *DB) materializeCOWPrefixProjected(ctx context.Context, automatic bool,
 			db.writeMu.Unlock()
 			return errDBClosing
 		}
-		if !db.cow.prefix.NeedsAcceptedPressure() {
+		if needed, err := db.cow.prefix.AcceptedPressure(); err != nil || !needed {
 			db.writeMu.Unlock()
-			return nil
+			return err
 		}
 	}
 	if projected != nil {
@@ -335,7 +338,7 @@ func (db *DB) rotateCOWFrontier(ctx context.Context, postFrontier bool, captured
 	c := db.cow
 	for attempt := 0; ; attempt++ {
 		c.writerMu.Lock()
-		rollover, err := c.prepareRollover()
+		rollover, err := c.prepareRolloverWithAdvisoryAdmission(mode == cowAcceptedPressureMaterialization)
 		if err == nil && rollover != nil {
 			rollover.install()
 			db.mutableBytes.Store(0)
@@ -366,10 +369,13 @@ func (db *DB) rotateCOWFrontier(ctx context.Context, postFrontier bool, captured
 			db.reportError(cleanupErr)
 			return joinCOWCleanupError(err, cleanupErr)
 		}
-		if mode == cowAcceptedPressureMaterialization && err == memtable.ErrCOWCapacity {
+		if mode == cowAcceptedPressureMaterialization && cowGenerationRetryableOnly(err) {
+			if original := c.prefix.AcceptedError(); original != nil {
+				return original
+			}
 			// This advisory owns no blocked writer. Its refusal leaves the
 			// original full or synchronous producer fallback available.
-			return cowGenerationRetryableRefusal{err}
+			return err
 		}
 		// A complete captured prefix can contain native-only sources. Raw
 		// table count alone does not describe its reclaimable coverage.

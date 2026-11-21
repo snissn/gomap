@@ -190,13 +190,13 @@ func (c *Coordinator) SetAcceptedPressureWake(wake chan<- struct{}) {
 	p.mu.Unlock()
 }
 
-// NeedsAcceptedPressure reports actionable installed work near the ordinary
-// slot limit. A reservation alone never requests a physical publication.
-func (c *Coordinator) NeedsAcceptedPressure() bool {
+// AcceptedPressure reports actionable installed work near the ordinary slot
+// limit and preserves any original failure when rechecking a queued wake.
+func (c *Coordinator) AcceptedPressure() (bool, error) {
 	p := &c.AcceptedPrefixOwner().accepted
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.needsPressureLocked()
+	return p.needsPressureLocked(), p.poison
 }
 
 func (p *acceptedPrefixState) needsPressureLocked() bool {
