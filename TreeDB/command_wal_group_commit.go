@@ -656,9 +656,9 @@ func (group *publicCommandWALGroupCommit) initWakeLocked() {
 	}
 }
 
-func (tdb *DB) closePublicCommandWALGroupCommit() error {
+func (tdb *DB) closePublicCommandWALGroupCommit() {
 	if tdb == nil {
-		return nil
+		return
 	}
 	group := &tdb.commandWALGroupCommit
 	group.mu.Lock()
@@ -686,9 +686,10 @@ func (tdb *DB) closePublicCommandWALGroupCommit() error {
 		group.timer = nil
 	}
 	group.wake = nil
-	err := group.cancelPendingBarrierLocked()
+	// Cached Close has already returned any unassigned reservation through
+	// the original FIFO. Drop this reference after its owner shuts down.
+	group.pendingBarrier = rootpublication.AcceptedTicket{}
 	group.mu.Unlock()
-	return err
 }
 
 func (group *publicCommandWALGroupCommit) cancelPendingBarrierLocked() error {
