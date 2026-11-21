@@ -451,6 +451,24 @@ func (tdb *DB) syncPublicCommandWAL() error {
 	return tdb.forcePublicCommandWALGroupCommit()
 }
 
+// SyncNativeCommandWALPrefix completes the original public owner's journal
+// boundary. Hold its lifetime through the physical group result and release the
+// publication gates through the group's existing capture protocol.
+func (tdb *DB) SyncNativeCommandWALPrefix() (selected bool, err error) {
+	if err := tdb.beginPublicOperation(); err != nil {
+		return false, err
+	}
+	defer tdb.lifecycleMu.RUnlock()
+	if tdb.cached == nil || !tdb.cached.COWMode() || tdb.backend == nil {
+		return false, db.ErrNativeSemanticUnsupported
+	}
+	eligible, err := tdb.backend.NativeCommandWALPrefixEligible(tdb.txnOwner)
+	if err != nil || !eligible {
+		return false, err
+	}
+	return true, tdb.syncPublicCommandWAL()
+}
+
 // Refused constructors return an immutable carrier rather than allocating an
 // uncharged public wrapper. Every mutable entry point checks batchError first.
 var cowDeniedPublicBatch = commandWALPublicBatch{cowState: &commandWALPublicCOWState{batchError: memtable.ErrCOWCapacity}}

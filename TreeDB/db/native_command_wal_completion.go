@@ -30,6 +30,73 @@ func (db *DB) BindNativeCommandWALCompletion(owner *transactionowner.Owner, brid
 	return nil
 }
 
+// NativeCommandWALPrefixEligible checks the original active native owner and
+// the open journal's actual container. Relaxed owners keep their root checkpoint
+// boundary, including stores that retain a fixed segment from an earlier policy.
+func (db *DB) NativeCommandWALPrefixEligible(owner *transactionowner.Owner) (bool, error) {
+	if db == nil {
+		return false, ErrClosed
+	}
+	db.teardownMu.RLock()
+	defer db.teardownMu.RUnlock()
+	if err := db.checkNativeJournalOwner(); err != nil {
+		return false, err
+	}
+	if owner == nil || owner != db.privateCOWOwner {
+		return false, ErrNativeSemanticUnsupported
+	}
+	fixed, err := db.nativeJournalFixedWriter()
+	return fixed && db.resolvedProfile == ProfileCommandWALDurable, err
+}
+
+// SyncNativeCommandWALPrefix delegates admission and physical completion to the
+// original public owner. A healthy capability miss permits a root checkpoint.
+func (db *DB) SyncNativeCommandWALPrefix() (selected bool, err error) {
+	if db == nil {
+		return false, ErrClosed
+	}
+	syncer, ok := db.nativeCommandWALCompletion.(interface {
+		SyncNativeCommandWALPrefix() (bool, error)
+	})
+	if db.resolvedProfile == ProfileCommandWALDurable && ok {
+		// The public callback admits under its own lifecycle before it consults
+		// this backend. Taking teardown here would reverse that lock order.
+		return syncer.SyncNativeCommandWALPrefix()
+	}
+	db.teardownMu.RLock()
+	defer db.teardownMu.RUnlock()
+	if err := db.checkNativeJournalOwner(); err != nil {
+		return false, err
+	}
+	_, err = db.nativeJournalFixedWriter()
+	return false, err
+}
+
+// nativeJournalFixedWriter checks the active writer under teardownMu.
+func (db *DB) nativeJournalFixedWriter() (bool, error) {
+	if !db.commandWAL {
+		return false, nil
+	}
+	if db.commandJournal == nil {
+		return false, db.commandWALJournalUnavailableError()
+	}
+	return db.commandJournal.HasFixedWriter()
+}
+
+// checkNativeJournalOwner checks an already active cache owner under teardownMu.
+func (db *DB) checkNativeJournalOwner() error {
+	if db.closing.Load() {
+		return ErrClosed
+	}
+	if err := db.commandWALPoisonedError(); err != nil {
+		return err
+	}
+	if !db.nativeSemanticActive.Load() {
+		return ErrNativeSemanticUnsupported
+	}
+	return db.ActivateNativeSemanticOwner()
+}
+
 // NativeCommandWALCompletionFor authenticates the original unassigned intent.
 // Already-combined publications keep their existing synchronous ordinal path.
 func (db *DB) NativeCommandWALCompletionFor(owner *transactionowner.Owner, intent *CommandWALIntent, requestedSync bool) (NativeCommandWALCompletionBridge, bool, error) {
