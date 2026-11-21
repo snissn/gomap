@@ -28,6 +28,42 @@ func TestSyncCommandWALDependenciesThroughNoDebtIsAllocationFree(t *testing.T) {
 	}
 }
 
+func TestCommandWALPressureSamplerSurvivesClose(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = d.Close() }()
+	if err := d.Set([]byte("key"), []byte("value")); err != nil {
+		t.Fatal(err)
+	}
+	sample := d.NewCommandWALPressureSampler()
+	if sample == nil {
+		t.Fatal("no sampler for an open WAL")
+	}
+	if got, ok := sample(); !ok || got <= 0 || got != d.CommandWALBytes() {
+		t.Fatalf("sample=(%d, %v), logical bytes=%d", got, ok, d.CommandWALBytes())
+	}
+	sampled := make(chan struct{})
+	go func() {
+		defer close(sampled)
+		for range 1000 {
+			sample()
+		}
+	}()
+	err = d.Close()
+	<-sampled
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := sample(); !ok || got != 0 {
+		t.Fatalf("sample after Close=(%d, %v), want (0, true)", got, ok)
+	}
+	if d.NewCommandWALPressureSampler() != nil {
+		t.Fatal("closed DB returned a new sampler")
+	}
+}
+
 func TestSyncCommandWALAppliedPrefixIsContiguousRepeatableAndReopenDurable(t *testing.T) {
 	dir := t.TempDir()
 	d, err := Open(Options{Dir: dir, CommandWAL: true, DisableBackgroundPrune: true})
