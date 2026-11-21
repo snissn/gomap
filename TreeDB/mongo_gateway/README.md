@@ -147,8 +147,10 @@ These are engine-owned allocation charges, not preallocated memory or a process
 RSS limit. Array/index shapes, concurrent preparation and retained read views
 still consume capacity and can refuse before acceptance. Library callers can
 supply a complete `StandaloneOptions.COWMemtableLimits` bundle; explicit smaller
-limits are respected. Profile selection and write concern retain their normal
-acknowledgement boundaries.
+limits are respected. An explicit standalone `j: true` acknowledgement on an
+active native durable fixed WAL synchronizes the original owner's journal
+prefix and its dependencies. Relaxed ext4-stream acknowledgements with
+`j: true` advance the applied root through the checkpoint.
 
 The default also selects the native immutable catalog. Startup validates the
 complete catalog and refuses legacy directories missing logical incarnation

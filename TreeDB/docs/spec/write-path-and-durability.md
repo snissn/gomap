@@ -631,6 +631,12 @@ on acknowledgement. Dictionary and template stores have independent lifetimes
 and default to DATA unless explicitly selecting or reopening PRIMARY. A newly acquired cut after checkpoint binds the exact
 successor backend StateToken, while held cuts retain their original basis and values.
 
+An explicit native standalone journal acknowledgement uses the forced
+command-WAL prefix boundary only on the active durable owner's fixed writer.
+That boundary retains the original owner until the captured journal and its
+dependencies finish syncing. Other native configurations use a checkpoint.
+In particular, relaxed ext4-stream retains the applied-root seal before ACK.
+
 Checkpoint flushes one captured prefix against its captured backend basis,
 streams bounded private chunks through one backend publication group and removes
 only the proved-covered prefix at handoff. It retains the acceptance receipt

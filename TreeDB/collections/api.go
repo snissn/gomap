@@ -3540,9 +3540,19 @@ func (m *CollectionManager) CheckpointStorage() error {
 // This is intentionally stronger than FlushAll, which is only a visibility
 // and draining boundary. physicalSync is false only when a command-WAL prefix
 // was already durable (or no command prefix exists); the WAL-free checkpoint
-// path always performs a physical sync boundary. Native managers use the SAME
-// cache owner's complete captured-prefix checkpoint and report physicalSync=true.
+// path always performs a physical sync boundary. A native durable fixed WAL
+// may complete on its original public owner without sealing roots. Other native
+// owners retain the complete captured-prefix checkpoint.
 func (m *CollectionManager) SyncForStandaloneWriteConcern() (physicalSync bool, err error) {
+	if m != nil && m.initializationError == nil && m.nativeJSON != nil {
+		if m.isClosing() {
+			return false, backenddb.ErrClosed
+		}
+		selected, err := m.nativeJSON.db.SyncNativeCommandWALPrefix()
+		if selected || err != nil {
+			return selected && err == nil, err
+		}
+	}
 	return m.syncCollectionStorageBoundary()
 }
 
