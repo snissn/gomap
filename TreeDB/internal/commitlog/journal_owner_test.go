@@ -631,10 +631,11 @@ func TestCommandJournalDirectSyncRotationCutOrderAndPaths(t *testing.T) {
 }
 
 func TestCommandJournalOrdinaryRotationNamespaceFailureStopsAppends(t *testing.T) {
-	for _, failure := range []string{"created", "namespace-sync"} {
+	for _, failure := range []string{"created", "namespace-sync", "captured-sync-and-namespace", "read-only-successor"} {
 		t.Run(failure, func(t *testing.T) {
 			dir := t.TempDir()
-			opts := CommandJournalOptions{PreferExt4Stream: true}
+			failures := 0
+			opts := CommandJournalOptions{PreferExt4Stream: true, OnFileSyncError: func() { failures++ }}
 			j, err := OpenCommandJournal(dir, opts)
 			if err != nil {
 				t.Fatal(err)
@@ -647,6 +648,35 @@ func TestCommandJournalOrdinaryRotationNamespaceFailureStopsAppends(t *testing.T
 			oldPath := j.Path()
 			successor := filepath.Join(dir, CommandSegmentName(j.lane, j.segmentSeq+1))
 			injected := errors.New("injected successor namespace failure")
+			var capture *CapturedSync
+			var captureFailure, capturedErr error
+			switch failure {
+			case "captured-sync-and-namespace":
+				captureFailure = errors.New("independent captured sync failure")
+				syncFile := j.writer.syncFn
+				j.writer.syncFn = func(*os.File) error { return captureFailure }
+				capture, err = j.CaptureSync(nil)
+				j.writer.syncFn = syncFile
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(capture.Release)
+			case "read-only-successor":
+				if err := os.WriteFile(successor, nil, 0400); err != nil {
+					t.Fatal(err)
+				}
+				injected = os.ErrPermission
+				writable, err := os.OpenFile(successor, os.O_RDWR, 0)
+				if err == nil {
+					if err := writable.Close(); err != nil {
+						t.Fatal(err)
+					}
+					t.Skip("requires filesystem enforcement of read-only file mode")
+				}
+				if !errors.Is(err, injected) {
+					t.Fatal(err)
+				}
+			}
 			restore := durabilitycut.Install(func(e durabilitycut.Event) error {
 				if e.Resource != durabilitycut.ResourceCommandWAL {
 					return nil
@@ -656,10 +686,13 @@ func TestCommandJournalOrdinaryRotationNamespaceFailureStopsAppends(t *testing.T
 					if e.Namespace == durabilitycut.NamespaceCreate && e.NewPath == successor {
 						return injected
 					}
-				case "namespace-sync":
+				case "namespace-sync", "captured-sync-and-namespace":
 					// This is the ordinary rotation's final namespace barrier,
 					// after fixed initialization when that format is selected.
 					if e.Point == durabilitycut.BeforeNewFileDirectorySync && e.Root == "" && e.Path == dir {
+						if capture != nil {
+							capturedErr = capture.Sync()
+						}
 						return injected
 					}
 				}
@@ -667,6 +700,12 @@ func TestCommandJournalOrdinaryRotationNamespaceFailureStopsAppends(t *testing.T
 			})
 			rotateErr := j.RotateActiveSegment(true)
 			restore()
+			if capture != nil {
+				capture.Release()
+				if !errors.Is(capturedErr, captureFailure) || !errors.Is(rotateErr, captureFailure) {
+					t.Fatalf("captured sync = %v, rotation = %v, want both to retain %v", capturedErr, rotateErr, captureFailure)
+				}
+			}
 			if !errors.Is(rotateErr, injected) {
 				t.Fatalf("rotation = %v, want injected failure", rotateErr)
 			}
@@ -680,8 +719,16 @@ func TestCommandJournalOrdinaryRotationNamespaceFailureStopsAppends(t *testing.T
 			if lsn != 0 || !errors.Is(err, injected) || j.NextLSN() != 2 {
 				t.Fatalf("append past failed seal = (%d, %v), next LSN %d", lsn, err, j.NextLSN())
 			}
-			if err := j.Close(); !errors.Is(err, injected) {
-				t.Fatalf("Close = %v, want injected failure", err)
+			if err := j.Close(); !errors.Is(err, injected) || (captureFailure != nil && !errors.Is(err, captureFailure)) {
+				t.Fatalf("Close = %v, want rotation failure %v and any captured failure %v", err, injected, captureFailure)
+			}
+			if failures != 1 {
+				t.Fatalf("failure notifications = %d, want 1", failures)
+			}
+			if failure == "read-only-successor" {
+				if err := os.Chmod(successor, 0600); err != nil {
+					t.Fatal(err)
+				}
 			}
 			fresh, err := OpenCommandJournal(dir, opts)
 			if err != nil {

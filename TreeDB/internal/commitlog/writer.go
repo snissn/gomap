@@ -668,8 +668,8 @@ func RotationInstalled(err error) bool {
 }
 
 type writerRotationOutcome struct {
-	Installed        bool
-	SuccessorVisible bool
+	Installed             bool
+	SuccessorMayBeVisible bool
 }
 
 func (w *Writer) rotateToWithSyncObserved(path string, syncCurrent bool, root string, observe bool) (writerRotationOutcome, error) {
@@ -711,11 +711,24 @@ func (w *Writer) rotateToWithSyncObservedAhead(path string, syncCurrent bool, ro
 			}
 		}
 	}
+	preInstall := writerRotationOutcome{SuccessorMayBeVisible: true}
 	file, created, err := openLogFileWithCreation(path, os.O_RDWR)
 	if err != nil {
-		return writerRotationOutcome{SuccessorVisible: created}, err
+		if !created {
+			// A failed read/write open can leave a successor that recovery
+			// still selects. Recovery skips directories.
+			entry, statErr := os.Lstat(path)
+			switch {
+			case statErr == nil:
+				preInstall.SuccessorMayBeVisible = !entry.IsDir()
+			case errors.Is(statErr, os.ErrNotExist):
+				preInstall.SuccessorMayBeVisible = false
+			default:
+				err = errors.Join(err, statErr)
+			}
+		}
+		return preInstall, err
 	}
-	preInstall := writerRotationOutcome{SuccessorVisible: true}
 	var preparedParent *os.File
 	if created && w.fixedBudget > 0 {
 		preparedParent, err = rootpublication.OpenStableParent(filepath.Dir(path))
