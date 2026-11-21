@@ -294,7 +294,7 @@ func TestNativeCommandWALGroupFailurePoisonsInstalledWaiters(t *testing.T) {
 			}
 			cutErr := errors.New("native shared durable failure")
 			var appends, dependencyCuts atomic.Int32
-			restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+			restore := sync.OnceFunc(durabilitycut.Install(func(event durabilitycut.Event) error {
 				if event.Resource != durabilitycut.ResourceCommandWAL || event.Root != mainRoot {
 					return nil
 				}
@@ -319,7 +319,7 @@ func TestNativeCommandWALGroupFailurePoisonsInstalledWaiters(t *testing.T) {
 					return cutErr
 				}
 				return nil
-			})
+			}))
 			defer restore()
 			doc, _ := bson.Marshal(bson.D{{Key: "n", Value: int32(2)}})
 			type outcome struct {
