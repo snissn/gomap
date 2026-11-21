@@ -479,8 +479,8 @@ acceptance:
    entries, avoiding a second staged payload copy.
 2. Assign final `EntryRevision` and cached `IsPtr`/`ValuePtr` through the existing
    prepared-revision authority; prepare immutable roots from those owned entries.
-3. Let the canonical backend intent resolve RID, encode the existing command
-   payload and capture its ordered external dependency closure.
+3. Let the canonical backend intent resolve RID, encode the command payload,
+   and capture its ordered external dependency closure when required.
 4. Before append, validate canonical RID/pointer/revision identity and attach
    an independently retained generation read lease. WAL dependency custody
    remains owned by the WAL intent/debt, including materialized/self-contained
@@ -505,12 +505,21 @@ IDs select retained definitions; cut readers do not resolve through unrelated
 global definition/codec state.
 
 `no_wal_fast` uses the same canonical RID planner and final metadata authority
-without appending a journal or retaining journal dependency custody. Registered
-producer visibility and independently owned live file/dictionary pins still
-precede cut publication. Explicit NoWAL sync releases command/writer/admission
-ownership before the existing sealed-root Checkpoint. Pre-append refusal has
-no visible effect; post-append errors retain existing ambiguous/poison/reopen
-rules.
+for writes with value-log pointers. For a one-shot public unsynced `Set` or
+`Delete` that resolves to a single unqualified inline entry, the original
+private owner uses a typed canonical operation under its teardown guard. The
+backend applies the raw payload size and operation checks, and the cache
+compares the key, operation, inline value and assigned revision with the
+prepared entry before completing canonical preparation. The synchronous
+public call borrows inputs through completion, and preparation owns all bytes
+retained in the generation and conflict history. Batches, qualified entries
+and explicit sync use ordinary canonical encoding.
+
+Registered producer visibility and independently owned live file/dictionary
+pins precede cut publication. Explicit NoWAL sync releases command, writer and
+admission ownership before the existing sealed-root Checkpoint. Refusals before
+acceptance have no visible effect. Post-append errors follow the existing
+poison and reopen rules.
 
 ## Captured-prefix flush and backend maintenance
 

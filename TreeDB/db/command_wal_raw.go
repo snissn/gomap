@@ -1621,6 +1621,42 @@ func (db *DB) FinalizePrivateCOWPublication(owner *transactionowner.Owner, prepa
 	return db.finalizeRawKVEntryScanForOwnedCachedPublication(prepare, finalize, scanEntries, opHint, nil, false)
 }
 
+// FinalizePrivateCOWInlinePoint lends the private WAL-off owner one canonical
+// point operation under the same teardown lock as its batch finalization.
+// Placement and revision assignment precede this call. The finalizer checks
+// the operation against the entry it used to prepare the cut.
+func (db *DB) FinalizePrivateCOWInlinePoint(owner *transactionowner.Owner, entry batchpkg.Entry, prepare func() error, finalize func(commitlog.RawKVOperation) error) error {
+	if db == nil || owner == nil || owner != db.privateCOWOwner || db.durability != DurabilityWALOffRelaxed ||
+		prepare == nil || finalize == nil {
+		return ErrNativeSemanticUnsupported
+	}
+	db.teardownMu.RLock()
+	defer db.teardownMu.RUnlock()
+	if db.closing.Load() {
+		return ErrClosed
+	}
+	if db.readOnly {
+		return ErrReadOnly
+	}
+	if entry.IsPtr || entry.ValuePtr != (page.ValuePtr{}) || entry.MVCCInput.Present() || entry.Revision == page.LegacyEntryRevision ||
+		(entry.Type != batchpkg.OpPut && (entry.Type != batchpkg.OpDelete || entry.Value != nil)) {
+		return ErrNativeSemanticUnsupported
+	}
+	if err := prepare(); err != nil {
+		return err
+	}
+	op, _, err := db.rawKVCommandWALOperationFromEntry(entry, nil, nil, nil, 1, false, false)
+	if err != nil {
+		return err
+	}
+	if _, err := commitlog.PlanRawKVBatchPayloadScan(func(emit func(commitlog.RawKVOperation) error) error {
+		return emit(op)
+	}); err != nil {
+		return err
+	}
+	return finalize(op)
+}
+
 // FinalizeNativeRawUnderGuard shares the original raw/teardown staging owner;
 // reacquiring teardown while Close queues would deadlock its existing reader.
 func (db *DB) FinalizeNativeRawUnderGuard(guard *CommandWALStagingGuardV1, outer *CommandWALIntent, prepare func() error, finalize RawKVCommandWALFinalize, scanEntries func(func(batchpkg.Entry) error) error, opHint int) error {

@@ -3057,6 +3057,23 @@ func (db *DB) writeCOWPointAdmitted(key, value []byte, put, syncWrite bool) erro
 	return db.writeCOWPointAdmittedWithMVCCInput(key, value, put, syncWrite, mvccadmission.Input{})
 }
 func (db *DB) writeCOWPointAdmittedWithMVCCInput(key, value []byte, put, syncWrite bool, input mvccadmission.Input) error {
+	if !syncWrite && !db.commandWALCached && !input.Present() {
+		if b := db.cached.NewPrivateCOWPointBatch(db.txnOwner); b != nil {
+			db.lifecycleMu.RUnlock()
+			// The one-shot write and Close complete before the point call
+			// returns. COW preparation owns the data retained by its cut.
+			var err error
+			if put {
+				err = b.SetViewValidated(key, value)
+			} else {
+				err = b.DeleteViewValidated(key)
+			}
+			if err == nil {
+				err = b.Write()
+			}
+			return errors.Join(err, b.Close())
+		}
+	}
 	var b Batch = db.cached.NewBatchWithSize(1)
 	if db.commandWALCached {
 		b = newCommandWALPublicBatch(db, b, 1)

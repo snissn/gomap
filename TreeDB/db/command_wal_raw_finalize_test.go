@@ -8,8 +8,43 @@ import (
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
 	"github.com/snissn/gomap/TreeDB/page"
 )
+
+func TestPrivateCOWInlinePointFinalizerRequiresOriginalOwner(t *testing.T) {
+	d, err := OpenForNativeSemanticOwner(Options{Dir: t.TempDir(), Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	owner := transactionowner.New()
+	if err := d.BindPrivateCOWOwner(owner); err != nil {
+		t.Fatal(err)
+	}
+	entry := batchpkg.Entry{Type: batchpkg.OpPut, Key: []byte("key"), Value: []byte("value"), Revision: 42}
+	rejectPreparation := func() error {
+		t.Fatal("ineligible point reached preparation")
+		return nil
+	}
+	finalize := func(commitlog.RawKVOperation) error {
+		t.Fatal("ineligible point reached finalization")
+		return nil
+	}
+	if err := d.FinalizePrivateCOWInlinePoint(transactionowner.New(), entry, rejectPreparation, finalize); !errors.Is(err, ErrNativeSemanticUnsupported) {
+		t.Fatalf("foreign owner error = %v", err)
+	}
+	for _, invalid := range []batchpkg.Entry{
+		{Type: batchpkg.OpPut, IsPtr: true, Revision: 42},
+		{Type: batchpkg.OpPut, Revision: page.LegacyEntryRevision},
+		{Type: batchpkg.OpDelete, Value: []byte("value"), Revision: 42},
+		{Type: batchpkg.OpDeleteRange, Revision: 42},
+	} {
+		if err := d.FinalizePrivateCOWInlinePoint(owner, invalid, rejectPreparation, finalize); !errors.Is(err, ErrNativeSemanticUnsupported) {
+			t.Fatalf("ineligible entry %+v error = %v", invalid, err)
+		}
+	}
+}
 
 func TestRawKVPreparedFinalizerHasCanonicalRIDBeforeAppend(t *testing.T) {
 	for _, materialized := range []bool{false, true} {
