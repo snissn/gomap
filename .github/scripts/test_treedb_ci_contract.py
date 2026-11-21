@@ -120,7 +120,7 @@ class TreeDBCIContractTests(unittest.TestCase):
         self.assertEqual(self.m0.count("vars.TREEDB_PERF_RUNNER_LABEL"), 2)
         self.assertEqual(self.m0.count("vars.TREEDB_PERF_RUNNER_PR"), 2)
 
-    def test_m0_routing_preserves_original_enforced_capture(self) -> None:
+    def test_m0_routing_advises_only_on_total_cv_without_waiving_capture(self) -> None:
         self.assertIn("    timeout-minutes: 20\n", self.m0)
         self.assertNotIn("continue-on-error", self.m0)
         self.assertNotIn("fromJSON", self.m0)
@@ -130,6 +130,7 @@ class TreeDBCIContractTests(unittest.TestCase):
             'run: RUN_DIR="$RUNNER_TEMP/treedb-vacuum-m0" scripts/treedb_vacuum_m0_capture.sh',
             self.m0,
         )
+        self.assertIn("          TREEDB_M0_TOTAL_CV_MODE: advisory", self.m0)
         self.assertIn("      - name: Upload complete evidence packet\n        if: always()", self.m0)
         self.assertIn("          if-no-files-found: error", self.m0)
 

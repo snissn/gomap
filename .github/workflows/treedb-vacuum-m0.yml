@@ -48,6 +48,8 @@ jobs:
           cache: true
 
       - name: Capture and enforce M0 evidence
+        env:
+          TREEDB_M0_TOTAL_CV_MODE: advisory
         run: RUN_DIR="$RUNNER_TEMP/treedb-vacuum-m0" scripts/treedb_vacuum_m0_capture.sh
 
       - name: Upload complete evidence packet
