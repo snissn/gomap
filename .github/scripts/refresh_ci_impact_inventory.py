@@ -32,7 +32,7 @@ def source_workflows(root, inputs):
         workflows[path.name] = {'sha256': ci_impact.digest(raw),
                                 'git_blob': inputs[full_path]['git_blob'],
                                 'events': source.get('on', source.get(True)),
-                                'coverage': 'existing execution only; triggers/path filters are unchanged', 'jobs': {}}
+                                'coverage': 'source workflow owns actual event eligibility; forecast never changes execution', 'jobs': {}}
         for name, job in source['jobs'].items():
             if (filename, name) == ci_impact.CONTROL_JOB:
                 continue  # Control job is not part of the original execution universe.

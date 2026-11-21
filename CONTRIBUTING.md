@@ -2,6 +2,7 @@
 
 ## TL;DR
 
+- CI: [ordinary PR checks, native scope, and full evidence routes](docs/CI_TRIGGER_POLICY.md)
 - Format: `make fmt`
 - Tests: `make test` (plus `make test-race` optionally)
 - Bench: `make unified-bench && ./bin/unified-bench`

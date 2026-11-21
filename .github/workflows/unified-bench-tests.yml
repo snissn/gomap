@@ -2,19 +2,67 @@ name: "unified_bench: vet+test"
 
 on:
   push:
+    branches: [main]
+    tags: ['**']
+  workflow_dispatch:
+  pull_request:
+
+# Only consecutive runs of one ordinary PR coalesce. Main, tags and dispatch
+# have unique groups: even cancel-in-progress:false can evict a pending run.
+concurrency:
+  group: unified-bench-tests-${{ github.event_name == 'pull_request' && !contains(github.event.pull_request.title, '[ci retain]') && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && !contains(github.event.pull_request.title, '[ci retain]') }}
 
 permissions:
   contents: read
 
 jobs:
+  macos-scope:
+    name: macOS PR scope (unified)
+    if: ${{ github.event_name == 'pull_request' && !contains(github.event.pull_request.title, '[ci retain]') && github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      mode: ${{ steps.route.outputs.mode }}
+    steps:
+      - uses: actions/checkout@v4
+        continue-on-error: true
+        with:
+          fetch-depth: 2
+          sparse-checkout: /.github/scripts/ci_macos_scope.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - id: route
+        name: Resolve scope using the immutable base policy
+        shell: bash
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MERGE: ${{ github.sha }}
+        run: |
+          set -eu
+          mode=full
+          policy="$RUNNER_TEMP/base-macos-scope.py"
+          if [[ "$(git rev-parse HEAD)" == "$MERGE" && "$(git show -s --format=%P HEAD)" == "$BASE $HEAD_SHA" ]] &&
+              git show "$BASE:.github/scripts/ci_macos_scope.py" > "$policy" &&
+              decision="$(python3 -I "$policy" --base "$BASE" --head "$MERGE" --lane unified)"; then
+            if [[ "$decision" == skip ]]; then mode=skip; fi
+          fi
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          if [[ "$mode" == skip ]]; then
+            echo "macOS unified: **skipped**. The accepted base policy recognized every changed path as outside this native lane."
+          else
+            echo "macOS unified: **full**. No positive exemption from the accepted base policy."
+          fi >> "$GITHUB_STEP_SUMMARY"
+
   test:
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest]
     timeout-minutes: 15
-    steps:
+    steps: &unified_checks
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -93,3 +141,11 @@ jobs:
           path: artifacts/steady-rusage
           if-no-files-found: error
           retention-days: 14
+
+  macos:
+    name: macos-latest
+    needs: macos-scope
+    if: ${{ !cancelled() && (needs.macos-scope.result != 'success' || needs.macos-scope.outputs.mode != 'skip') }}
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps: *unified_checks
