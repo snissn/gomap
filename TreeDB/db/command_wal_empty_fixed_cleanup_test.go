@@ -185,6 +185,49 @@ func TestCommandWALCleanupEmptyFixedEligibility(t *testing.T) {
 	}
 }
 
+func TestCommandWALLockedCleanupRetainsPredecessorOnCorruptFixedReserve(t *testing.T) {
+	for _, name := range []string{"active", "legacy_inventory"} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			predecessor := writeEmptyFixedCleanupSegment(t, dir, 1, 8192)
+			database := zeroFrontierCleanupDBWithActiveForTest(t, dir, 0, true)
+			damaged, _ := database.commandWALActiveSegmentSnapshot()
+			if name == "legacy_inventory" {
+				seed := writeEmptyFixedCleanupSegment(t, dir, 3, 8192)
+				damaged = filepath.Join(WALDirPath(dir), "commit-3.log")
+				if err := os.Rename(seed, damaged); err != nil {
+					t.Fatal(err)
+				}
+			}
+			file, err := os.OpenFile(damaged, os.O_WRONLY, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			info, err := file.Stat()
+			if err != nil {
+				_ = file.Close()
+				t.Fatal(err)
+			}
+			_, writeErr := file.WriteAt([]byte{1}, info.Size()-1)
+			if err = errors.Join(writeErr, file.Close()); err != nil {
+				t.Fatal(err)
+			}
+			err = database.CleanupCommandWALCoveredSegments(false)
+			if !errors.Is(err, commitlog.ErrCorrupt) || errors.Is(err, errDurableWALCleanupProofUnavailable) {
+				t.Fatalf("cleanup error=%v, want hard reserve corruption", err)
+			}
+			for _, path := range []string{predecessor, damaged} {
+				if _, err = os.Stat(path); err != nil {
+					t.Fatalf("refused cleanup must retain %s: %v", path, err)
+				}
+			}
+			if database.commandWALCleanupRemoved.Load() != 0 || database.commandWALCleanupNamespaceDirty.Load() {
+				t.Fatal("refused cleanup changed deletion accounting")
+			}
+		})
+	}
+}
+
 func TestCommandWALCleanupEmptyFixedPinAndReplacement(t *testing.T) {
 	for _, replace := range []bool{false, true} {
 		name := "pin"
