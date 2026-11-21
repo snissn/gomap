@@ -849,6 +849,19 @@ fallback slot to converge before covered-segment cleanup can use that proof.
 If the publication fails, cleanup remains fail-closed and the older fallback
 continues to retain the required command-WAL coverage.
 
+For automatic maintenance on the relaxed native semantic WAL stream, a
+dedicated ext4 WAL volume can reuse the completed file sync for the exact
+immutable segment sealed by a successful synchronous rotation. The checkpoint
+must complete the preceding registration's sync first. The sealed registration
+and its successor must still match the recorded rotation, and the sealed file's
+sticky sync error is checked while the caller holds its pin. The live pagers and
+resolved data roots must share a volume distinct from the WAL. The opened
+column-assets root must be empty because a nested namespace can resolve to
+another volume. Occupied or unreadable asset roots, changed writers or
+registrations, a different debt order, and unproven layouts use the canonical
+sync path. The active WAL and successor-directory barriers, applied-root
+publication, and retirement checks still run.
+
 The authoritative `AppliedLSN` must be selected by the same backend meta choice
 as the roots whose effects it covers. The V1 storage target is the
 in-page-marked meta-page field `AppliedCommandLSN`; the meta write must select
