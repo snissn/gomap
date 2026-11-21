@@ -1,7 +1,7 @@
-# kind	shard	item	max_seconds	optional preserve-fallback; evidence runs 32407394988, 32418139347, 32828779665, 37027765317
+# kind	shard	item	max_seconds	optional preserve-fallback; evidence runs 32407394988, 32418139347, 32828779665, 37027765317, 44835530459, 44852581135
 db	0	TestCompactIndex_AllocatesNewPagesByAppending	29.20
 package	0	github.com/snissn/gomap/TreeDB/docs	12.28
-package	0	github.com/snissn/gomap/TreeDB/cmd/treedb_rag_benchmark	489.68	preserve-fallback
+package	4	github.com/snissn/gomap/TreeDB/cmd/treedb_rag_benchmark	449.67	preserve-fallback
 package	1	github.com/snissn/gomap/TreeDB/internal/raftcluster	90.57
 root	0	TestCompactStorageClearsPublicRewriteSourceGCBehindActiveWriters	18.19
 root	0	TestIndexVacuumM4CertificationMatrix	14.83
@@ -25,6 +25,9 @@ package	2	github.com/snissn/gomap/TreeDB/mongo_gateway	48.67
 root	2	TestProfileFast_BulkRestoreMaintainsKeyValueParity	18.25
 root	2	TestReadSnapshotsSeeQueuedWritesAfterCheckpoint_Control	12.16
 root	2	TestReadSnapshotsSeeQueuedWritesBeforeCheckpoint_ProfileMatrix	25.17
-# Nativewire top-level race timings: run 36918608045 attempts 1 and 2; split the two longest tests.
-nativewire	0	TestVectorPartitionLiveSelectedLifecycleV1	88.93
-nativewire	2	TestMultiOwnerTCPAcceptedModelScaledCorrectnessV1	102.13
+# Rebalance the latest long critical paths without adding runners.
+# Existing pins keep their fallback policy. Newly pinned tests keep their
+# original ordinal in the fallback stream, so unrelated assignments do not move.
+nativewire	3	TestVectorPartitionLiveSelectedLifecycleV1	265.43
+nativewire	5	TestMultiOwnerTCPAcceptedModelScaledCorrectnessV1	227.76
+root	6	TestCompactStorageExhaustiveCommandWALRandom4KOffline	167.93	preserve-fallback
