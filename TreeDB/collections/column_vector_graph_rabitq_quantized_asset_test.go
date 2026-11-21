@@ -324,7 +324,7 @@ func TestRabitQPreparedHNSWSearchPackRerankPreservesEfTraversal2587(t *testing.T
 		QuantizedRerankCandidates: 4,
 		TopK:                      3,
 		EfSearch:                  len(rows),
-		StatsMode:                 VectorIndexSearchStatsModeProduction,
+		StatsMode:                 VectorIndexSearchStatsModeFullDiagnostics,
 	}
 	var packBuffer, fallbackBuffer VectorIndexSearchBuffer
 	packResults, err := packSearcher.SearchWithBuffer(opts, &packBuffer)
@@ -343,7 +343,7 @@ func TestRabitQPreparedHNSWSearchPackRerankPreservesEfTraversal2587(t *testing.T
 			t.Fatalf("%s stats=%+v want rerank shortlist=%d", name, stats, opts.QuantizedRerankCandidates)
 		}
 		if name == "pack" && stats.PreparedScoreCalls != uint64(opts.QuantizedRerankCandidates) {
-			t.Fatalf("pack stats=%+v want prepared rerank shortlist=%d", stats, opts.QuantizedRerankCandidates)
+			t.Fatalf("%s stats=%+v want pack rerank prepared score calls=%d", name, stats, opts.QuantizedRerankCandidates)
 		}
 	}
 	if packResults.Stats.Candidates == 0 || packResults.Stats.VisitedEdges == 0 {
