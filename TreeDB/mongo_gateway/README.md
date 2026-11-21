@@ -39,6 +39,20 @@ with direct/single-server mode when their driver supports it, for example:
 mongodb://127.0.0.1:27017/?directConnection=true
 ```
 
+## UPDATE coalescing
+
+The standalone gateway batches queued updates to the same collection by default.
+Add `-update-coalescing-batch 1` to the gateway command to run eligible
+single-document updates directly. The client's write concern still controls
+acknowledgement.
+
+With 16 clients and a 95% READ / 5% UPDATE BSON workload using
+`command_wal_relaxed` and `w:1` with journal unspecified, bypassing the batch
+queue reduced UPDATE p99.9 by 2–13% across two six-million-operation pairs.
+Mixed throughput changed by −3.4% and +1.3%, and UPDATE p99.99 moved in both
+directions. Compare the flag with the default under your own client mix and
+write concern before adopting it. [Paired benchmark results](https://github.com/snissn/gomap/issues/5485#issuecomment-7063715948)
+
 ## BSON projection
 
 Find projections support inclusion or exclusion, with the usual independent
