@@ -4,6 +4,7 @@
 package cowbtree
 
 import (
+	"reflect"
 	"sync/atomic"
 	"unsafe"
 )
@@ -20,6 +21,19 @@ type copier[T any] interface {
 
 type isoCopier[T any] interface {
 	IsoCopy() T
+}
+
+func valueCopyMethods[V any]() (copyValue, isoCopyValue bool) {
+	valueType := reflect.TypeFor[V]()
+	// The zero value of an interface has no dynamic copy methods. Inspect
+	// concrete type metadata without boxing a possibly large zero value.
+	if valueType.Kind() == reflect.Interface {
+		return false, false
+	}
+	if valueType.Implements(reflect.TypeFor[copier[V]]()) {
+		return true, false
+	}
+	return false, valueType.Implements(reflect.TypeFor[isoCopier[V]]())
 }
 
 func degreeToMinMax(deg int) (min, max int) {
@@ -275,10 +289,7 @@ func (tr *Map[K, V]) init(degree int) {
 		return
 	}
 	tr.min, tr.max = degreeToMinMax(degree)
-	_, tr.copyValues = ((interface{})(tr.empty.value)).(copier[V])
-	if !tr.copyValues {
-		_, tr.isoCopyValues = ((interface{})(tr.empty.value)).(isoCopier[V])
-	}
+	tr.copyValues, tr.isoCopyValues = valueCopyMethods[V]()
 }
 
 // Set or replace a value for a key.

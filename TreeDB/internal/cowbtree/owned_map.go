@@ -4,6 +4,8 @@ import (
 	"errors"
 	"sync/atomic"
 	"unsafe"
+
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 )
 
 // OwnedValueLifetime belongs to the original immutable descriptor owner. Retain
@@ -152,9 +154,13 @@ func NewOwnedMapBuilder[K ordered, V any](base *OwnedMap[K, V], mutations int, l
 	if mutations > int(^uint(0)>>1)-count {
 		return nil, ErrOwnedMap
 	}
-	charge, err := ownedMapBuilderCharge[K, V](count+mutations, degreeMax, mutations)
-	if err != nil {
-		return nil, err
+	charge, tiny := tinyOwnedMapBuilderCharge(base, mutations)
+	if !tiny {
+		var err error
+		charge, err = ownedMapBuilderCharge[K, V](count+mutations, degreeMax, mutations)
+		if err != nil {
+			return nil, err
+		}
 	}
 	lease, err := admit(charge)
 	if err != nil {
@@ -172,6 +178,58 @@ func NewOwnedMapBuilder[K ordered, V any](base *OwnedMap[K, V], mutations int, l
 		tree.isoid, tree.sealed = newIsoID(), false
 	}
 	return &OwnedMapBuilder[K, V]{tree: tree, allocation: a, lifetime: lifetime, remaining: mutations}, nil
+}
+
+// A single mutation of an empty or one-item degree-32 leaf cannot split or
+// rebalance. It can allocate one leaf, the copied item backing (at most two
+// slots), and a growth backing only when the copy has just one slot. Reserve
+// for a one-slot and a two-slot backing even when either allocation is unused.
+func tinyOwnedMapBuilderCharge[K ordered, V any](base *OwnedMap[K, V], mutations int) (uint64, bool) {
+	if mutations != 1 {
+		return 0, false
+	}
+	if base == nil {
+		copies, isoCopies := valueCopyMethods[V]()
+		if copies || isoCopies {
+			return 0, false
+		}
+	} else {
+		tree := base.tree
+		if !tree.sealed || tree.min != 31 || tree.max != 63 || tree.copyValues || tree.isoCopyValues {
+			return 0, false
+		}
+		if root := tree.root; root == nil {
+			if tree.count != 0 {
+				return 0, false
+			}
+		} else if tree.count != 1 || root.count != 1 || len(root.items) != 1 || !root.leaf() || root.ownership == nil {
+			return 0, false
+		}
+	}
+
+	pairBytes := uint64(unsafe.Sizeof(mapPair[K, V]{}))
+	if pairBytes > ^uint64(0)/2 {
+		return 0, false
+	}
+	// Refund metadata is embedded in ownedMapAllocation. The caller's lease
+	// storage is separately accounted for by the original admit callback.
+	var total uint64
+	for _, raw := range [...]uint64{
+		uint64(unsafe.Sizeof(OwnedMapBuilder[K, V]{})),
+		uint64(unsafe.Sizeof(OwnedMap[K, V]{})),
+		uint64(unsafe.Sizeof(Map[K, V]{})),
+		uint64(unsafe.Sizeof(ownedMapAllocation{})),
+		uint64(unsafe.Sizeof(mapNode[K, V]{})),
+		uint64(unsafe.Sizeof(ownedMapNode[K, V]{})),
+		pairBytes, 2 * pairBytes,
+	} {
+		charge := retainedalloc.AllocationCharge(raw)
+		if charge == ^uint64(0) || charge > ^uint64(0)-total {
+			return 0, false
+		}
+		total += charge
+	}
+	return total, true
 }
 
 // OwnedMapBuilderMaximumCharge bounds a sparse builder against any later
