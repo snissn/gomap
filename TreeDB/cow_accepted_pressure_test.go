@@ -282,10 +282,12 @@ func TestCOWPublicAcceptedPressureReportsOriginalSealFailure(t *testing.T) {
 	if current.S != original.S || current.C != original.C+trigger || current.W != current.C || sealAttempts.Load() != 1 {
 		t.Fatalf("failed seal changed original durability: before=%+v after=%+v attempts=%d", original, current, sealAttempts.Load())
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := prefix.WaitAccepted(ctx, rootpublication.SealedPrefix{LogicalSequence: current.V, CanonicalLSN: current.C}); !errors.Is(err, failure) {
-		t.Fatalf("failed seal was retired or lost: %v", err)
+	// The failed physical receipt reported above does not retire the logical
+	// prefix. WaitAccepted checks the frontier before returning cancellation.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := prefix.WaitAccepted(ctx, rootpublication.SealedPrefix{LogicalSequence: current.V, CanonicalLSN: current.C}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("failed seal did not leave the accepted prefix pending: %v", err)
 	}
 	if err := manager.Close(); err != nil {
 		t.Fatal(err)
