@@ -7,12 +7,10 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
-	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
-	"github.com/snissn/gomap/TreeDB/node"
 )
 
 // A successful final physical batch proves coverage of exactly this captured
@@ -579,6 +577,11 @@ func (db *DB) flushCOWFrozenCutWithColumnCompaction(syncFlush bool, publish *che
 	if err = lease.Resize(charge); err != nil {
 		return cowGenerationAdmissionError(generationPressure, err)
 	}
+	merge, err := openCOWFrozenMerge(c.budget, cut.frozen)
+	if err != nil {
+		return err
+	}
+	defer func() { retErr = joinCOWCleanupError(retErr, merge.close()) }()
 	group, err := backend.BeginRootPublicationBuildGroupBorrowingLease(cut.basis.snapshot, h.guard)
 	if err != nil {
 		return cowGenerationAdmissionError(generationPressure, err)
@@ -651,49 +654,11 @@ func (db *DB) flushCOWFrozenCutWithColumnCompaction(syncFlush bool, publish *che
 	if cut.frozenSemanticRootSet == nil && operation != nil {
 		return errors.Join(backenddb.ErrNativeSemanticUnsupported, group.Close())
 	}
-	ops := make([]batch.Entry, 0, chunkCap)
-	// Sources apply oldest to newest within the same private build group. This
-	// preserves tombstones and precedence without a second materialized merge.
-	for i := range cut.frozen {
-		it := cut.frozen[i].NewIterator(nil, nil)
-		metadata, ok := it.(iterator.RevisionUnsafeIterator)
-		if !ok {
-			_ = it.Close()
-			err = ErrCOWUnsupported
-			break
-		}
-		for it.Valid() {
-			value, ptr, flags, revision := metadata.UnsafeEntryWithRevision()
-			op := batch.Entry{Type: batch.OpPut, Key: it.(iterator.UnsafeIterator).UnsafeKey(), Value: value, ValuePtr: ptr, IsPtr: flags&node.FlagPointer != 0, Revision: revision}
-			if flags&node.FlagTombstone != 0 {
-				op.Type = batch.OpDelete
-				op.Value = nil
-			}
-			ops = append(ops, op)
-			it.Next()
-			if len(ops) == chunkCap || !it.Valid() {
-				if err = it.Error(); err != nil {
-					break
-				}
-				last := i == n-1 && !it.Valid()
-				if err = db.writeCanonicalFlushRunOpsChunk(ops, syncFlush, publish, group, last, flushCollectionBackground); err != nil {
-					break
-				}
-				ops = ops[:0]
-			}
-		}
-		if err == nil {
-			err = it.Error()
-		}
-		_ = it.Close()
-		if err != nil {
-			break
-		}
-	}
-
-	if n == 0 && err == nil {
-		err = db.writeCanonicalFlushRunOpsChunk(nil, syncFlush, publish, group, true, flushCollectionBackground)
-	}
+	err = writeCOWFrozenRawChunks(cut.frozen, &merge, chunkCap, func(ops []batch.Entry, last bool) error {
+		return db.writeCanonicalFlushRunOpsChunk(ops, syncFlush, publish, group, last, flushCollectionBackground)
+	})
+	// Only the captured prefix and handoff controls can outlive this build.
+	err = joinCOWCleanupError(err, lease.Resize(fixedCharge))
 	err = errors.Join(err, group.Close())
 	// End local coverage accesses before completeCOWHandoff can refund this
 	// original control tranche. Only scalar completion escapes, never ranges.
