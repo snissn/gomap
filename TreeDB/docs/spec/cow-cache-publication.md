@@ -594,6 +594,17 @@ same original captured AppliedLSN; a successful request's original durable WAL
 ACK and recovery skipping remain unchanged. The active journal remains
 appendable, and original append-size rollover still applies.
 
+In the durable command-WAL profile, when ordinary accepted slots reach the
+three-quarter watermark, a native write with original accepted custody can
+request a pass from that same size worker.
+The wake is coalesced and never delays accepted installation. The worker
+rechecks the live prefix under existing checkpoint admission fences and joins
+its exact physical seal and retirement. This pass uses the ordinary WAL flush.
+A clean temporary refusal leaves the original foreground fallback available.
+The accepted-slot limit and foreground checkpoint on hard exhaustion still
+apply. This scheduling signal carries no WAL or applied-root completion
+certificate for any request.
+
 Only the relaxed native generation-pressure worker flushes complete WAL frames
 and pins the exact active journal file under append ownership, then syncs that
 file after releasing the journal lock. Under the existing checkpoint writer

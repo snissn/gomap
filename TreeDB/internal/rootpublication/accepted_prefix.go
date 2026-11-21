@@ -139,6 +139,7 @@ type acceptedPrefixState struct {
 	cutThrough             SealedPrefix
 	cutRootSet             LogicalRootSet
 	retiring               int
+	pressureWake           chan<- struct{}
 }
 
 // AcceptedPrefixOwner returns the original logical authority across a physical
@@ -177,6 +178,34 @@ func (c *Coordinator) ConfigureAcceptedPrefix(capacity int, initial LogicalFront
 	p.frontiers = initial
 	p.changed = sync.NewCond(&p.mu)
 	return nil
+}
+
+// SetAcceptedPressureWake wires the existing maintenance owner's optional
+// wake before exposing the cache to producers. The owner keeps the channel
+// open for the lifetime of the prefix; installation never waits for it.
+func (c *Coordinator) SetAcceptedPressureWake(wake chan<- struct{}) {
+	p := &c.AcceptedPrefixOwner().accepted
+	p.mu.Lock()
+	p.pressureWake = wake
+	p.mu.Unlock()
+}
+
+// AcceptedPressure reports actionable installed work near the ordinary slot
+// limit and preserves any original failure when rechecking a queued wake.
+func (c *Coordinator) AcceptedPressure() (bool, error) {
+	p := &c.AcceptedPrefixOwner().accepted
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.needsPressureLocked(), p.poison
+}
+
+func (p *acceptedPrefixState) needsPressureLocked() bool {
+	headroom := len(p.free) / 4
+	if p.poison != nil || p.closed || headroom == 0 || p.freeCount > headroom || p.count == 0 {
+		return false
+	}
+	last := &p.entries[p.order[(p.head+p.count-1)%len(p.order)]]
+	return last.receipt.Installed && !last.handedOff
 }
 
 // ReserveAccepted performs bounded preaccept admission. Ordinary producers
@@ -373,9 +402,19 @@ func (install *AcceptedInstall) commit(returnCustody bool) bool {
 	// covered slot merge into its preceding unguarded installed run. Assigned and
 	// failed preparations retain their original slots until this boundary.
 	p.coalesceCoveredTailLocked(install.ticket.slot, e)
+	var wake chan<- struct{}
+	if p.pressureWake != nil && e.receipt.Assigned && d.Custody != nil && !e.maintenance && p.needsPressureLocked() {
+		wake = p.pressureWake
+	}
 	install.done = true
 	p.changed.Broadcast()
 	p.mu.Unlock()
+	if wake != nil {
+		select {
+		case wake <- struct{}{}:
+		default:
+		}
+	}
 	return returnCustody
 }
 

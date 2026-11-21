@@ -451,10 +451,11 @@ func (db *DB) flushCOWFrozenCut(syncFlush bool, publish *checkpointCommandWALPub
 
 // forceIdle is private to the exact-basis, fully sealed fallback predicate path.
 func (db *DB) flushCOWFrozenCutForFallback(syncFlush bool, publish *checkpointCommandWALPublish, cut *cowReadCut, forceIdle bool) error {
-	return db.flushCOWFrozenCutWithColumnCompaction(syncFlush, publish, cut, forceIdle, nil, false)
+	return db.flushCOWFrozenCutWithColumnCompaction(syncFlush, publish, cut, forceIdle, nil, cowCheckpointMaterialization)
 }
 
-func (db *DB) flushCOWFrozenCutWithColumnCompaction(syncFlush bool, publish *checkpointCommandWALPublish, cut *cowReadCut, forceIdle bool, operation backenddb.NativeColumnStoreCompaction, generationPressure bool) (retErr error) {
+func (db *DB) flushCOWFrozenCutWithColumnCompaction(syncFlush bool, publish *checkpointCommandWALPublish, cut *cowReadCut, forceIdle bool, operation backenddb.NativeColumnStoreCompaction, mode cowPrefixMaterialization) (retErr error) {
+	advisory := mode.advisory()
 	c := db.cow
 	// The caller receives completion only. Coverage is always reconstructed
 	// from this immutable cut and its exact captured disk basis below.
@@ -492,7 +493,7 @@ func (db *DB) flushCOWFrozenCutWithColumnCompaction(syncFlush bool, publish *che
 	charge := fixedCharge + memtable.COWAllocationCharge(uint64(chunkCap)*uint64(unsafe.Sizeof(batch.Entry{})))
 	lease, err := c.maintenance.AcquireExternal(fixedCharge)
 	if err != nil {
-		return joinCOWCleanupError(cowGenerationAdmissionError(generationPressure, err), c.releaseCut(cut))
+		return joinCOWCleanupError(cowGenerationAdmissionError(advisory, err), c.releaseCut(cut))
 	}
 	h := &cowFlushHandoff{cut: cut, lease: lease}
 	handoffOwned := true
@@ -548,7 +549,7 @@ func (db *DB) flushCOWFrozenCutWithColumnCompaction(syncFlush bool, publish *che
 		captured, canCapture := db.backend.(interface {
 			SyncPrivateCOWGenerationWAL(*transactionowner.Owner) error
 		})
-		if generationPressure && canCapture && c.txnOwner != nil {
+		if mode == cowGenerationPressureMaterialization && canCapture && c.txnOwner != nil {
 			err = captured.SyncPrivateCOWGenerationWAL(c.txnOwner)
 		} else if syncFlush {
 			// Always drain the writer and surface journal-local failures, even
@@ -577,11 +578,11 @@ func (db *DB) flushCOWFrozenCutWithColumnCompaction(syncFlush bool, publish *che
 		return err
 	}
 	if err = lease.Resize(charge); err != nil {
-		return cowGenerationAdmissionError(generationPressure, err)
+		return cowGenerationAdmissionError(advisory, err)
 	}
 	group, err := backend.BeginRootPublicationBuildGroupBorrowingLease(cut.basis.snapshot, h.guard)
 	if err != nil {
-		return cowGenerationAdmissionError(generationPressure, err)
+		return cowGenerationAdmissionError(advisory, err)
 	}
 	if h.prefix.Valid() {
 		if err = group.BindAcceptedPrefixCut(h.prefix); err != nil {
@@ -590,10 +591,10 @@ func (db *DB) flushCOWFrozenCutWithColumnCompaction(syncFlush bool, publish *che
 	}
 	h.next, err = c.prepareCOWBasisInstall()
 	if err != nil {
-		return errors.Join(cowGenerationAdmissionError(generationPressure, err), group.Close())
+		return errors.Join(cowGenerationAdmissionError(advisory, err), group.Close())
 	}
 	prepareSnapshot := group.PrepareAcceptedSnapshot
-	if generationPressure {
+	if advisory {
 		prepareSnapshot = group.PrepareGenerationAcceptedSnapshot
 	}
 	err = prepareSnapshot(func(s backenddb.SnapshotAllocationSizes) error {
@@ -602,7 +603,7 @@ func (db *DB) flushCOWFrozenCutWithColumnCompaction(syncFlush bool, publish *che
 		}
 		var e error
 		h.basis, e = admitCOWBackendBasis(c.maintenance, s)
-		if generationPressure && e == memtable.ErrCOWCapacity {
+		if advisory && e == memtable.ErrCOWCapacity {
 			budget := c.maintenance
 			leaseBytes := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
 			emptySpace := budget.Limits().MaxTotalBytes - budget.Stats().ControlBytes
@@ -642,7 +643,7 @@ func (db *DB) flushCOWFrozenCutWithColumnCompaction(syncFlush bool, publish *che
 				// when its underlying cause happens to be a capacity error.
 				c.prefix.PoisonAccepted(err)
 				group.MarkNativeSemanticBuildRecoveryRequired()
-			} else if _, refused := err.(backenddb.NativeSemanticBuildRetryableRefusal); generationPressure && refused {
+			} else if _, refused := err.(backenddb.NativeSemanticBuildRetryableRefusal); advisory && refused {
 				err = cowGenerationRetryableRefusal{err}
 			}
 			return errors.Join(err, group.Close())
@@ -719,9 +720,9 @@ func (db *DB) flushCOWFrozenCutWithColumnCompaction(syncFlush bool, publish *che
 		if err != nil {
 			return err
 		}
-		return db.completeCOWHandoffForGeneration(generationPressure)
+		return db.completeCOWHandoffForGeneration(advisory)
 	}
-	if generationPressure && backenddb.IsOnlyRootPublicationSnapshotAdmissionRefusal(err) {
+	if advisory && backenddb.IsOnlyRootPublicationSnapshotAdmissionRefusal(err) {
 		if errors.Is(err, memtable.ErrCOWCapacity) {
 			err = &cowGenerationSnapshotAllocationRefusal{error: err, through: target}
 		}

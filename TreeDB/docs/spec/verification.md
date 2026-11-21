@@ -4891,6 +4891,17 @@ results from owning-package/race results and the parent performance gates.
 
 ## Complete COW prefix, original custody and sealed completion
 
+`TestCOWPublicAcceptedPressureOverlapsFollowingWrite` holds the original
+physical Apply after the accepted-slot advisory captures its frontier. It
+checks a later durable WAL completion while Apply is held, exact accepted
+retirement, old reads and typed reopen.
+`TestStandaloneRelaxedExt4StreamJournalAckAfterAcceptedOccupancyCrashReopen`
+fills ordinary accepted slots to the same watermark on relaxed ext4 stream.
+It then holds the public `j:true` request's applied-root advance, checks the
+response remains pending and verifies typed contents after abrupt gateway exit.
+`TestCOWPublicAcceptedPressureReportsOriginalSealFailure` verifies original
+error notification, pending retirement and checked Close.
+
 The lower native seam is independently testable while unmigrated collection
 producers retain their existing barriers. Passing these controls does not claim
 that every collection producer uses native immutable descriptors.
