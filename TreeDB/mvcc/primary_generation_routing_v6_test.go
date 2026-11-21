@@ -5,7 +5,9 @@ package mvcc
 import (
 	"bytes"
 	"fmt"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
@@ -131,7 +133,17 @@ func TestCommitAtPrimaryOnlyRetainsActualDataGeneration(t *testing.T) {
 // public replacement route after genuine DATA materialization. Both versions
 // report generation advances; the baseline may churn and must remain runnable.
 func BenchmarkCommitAtPrimaryOnlyAfterDataGeneration(b *testing.B) {
-	opts := primaryReplacementOptions(b.TempDir())
+	temp := b.TempDir()
+	// The random parent name from b.TempDir can move file paths between Go
+	// allocation size classes. Keep the store path the same length for every
+	// sample under the same temporary root and retain b.TempDir's cleanup.
+	const fixturePathBytes = 80
+	parentName := filepath.Base(filepath.Dir(temp))
+	padding := fixturePathBytes - len(parentName) - len(filepath.Base(temp)) - 2
+	if padding < 1 {
+		b.Fatalf("temporary fixture name leaves no room for padding: %q", temp)
+	}
+	opts := primaryReplacementOptions(filepath.Join(temp, strings.Repeat("x", padding)))
 	d, err := treedb.Open(opts)
 	if err != nil {
 		b.Fatal(err)
