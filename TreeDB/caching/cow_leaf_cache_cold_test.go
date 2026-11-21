@@ -20,6 +20,9 @@ func TestCOWColdLeafCacheReopenAdmission(t *testing.T) {
 		for _, compressed := range []bool{false, true} {
 			for _, entries := range []int{128, -1} {
 				t.Run(fmt.Sprintf("mode=%s/compressed=%t/entries=%d", mode, compressed, entries), func(t *testing.T) {
+					if entries > 0 {
+						disableCOWSealedLeafMmapForFaultInjection(t)
+					}
 					dir := t.TempDir()
 					backendOpts := backenddb.Options{Dir: dir, IndexOuterLeavesInValueLog: true, LeafPageReadCacheEntries: entries}
 					compression := vlogCompressionOff
@@ -99,19 +102,15 @@ func TestCOWColdLeafCacheReopenAdmission(t *testing.T) {
 						if _, err := writer.ReadAt(crc[:], crcOffset); err != nil {
 							t.Fatal(err)
 						}
-						defer writer.WriteAt(crc[:], crcOffset)
-						if _, err := writer.WriteAt([]byte{crc[0] ^ 1}, crcOffset); err != nil {
-							t.Fatal(err)
-						}
+						writeCOWUnmappedLeafByte(t, backend, writer, crcOffset, crc[0]^1)
+						defer writeCOWUnmappedLeafByte(t, backend, writer, crcOffset, crc[0])
 						if _, err := db.Get([]byte("a000")); !errors.Is(err, valuelog.ErrCorrupt) {
 							t.Fatalf("cold corrupt record was admitted: %v", err)
 						}
 						if cowLeafCacheCounter(t, backend, "stores") != 0 {
 							t.Fatal("failed cold decode populated cache")
 						}
-						if _, err := writer.WriteAt(crc[:], crcOffset); err != nil {
-							t.Fatal(err)
-						}
+						writeCOWUnmappedLeafByte(t, backend, writer, crcOffset, crc[0])
 					}
 					for i := 0; i < 4; i++ {
 						got, err := db.Get([]byte("a000"))

@@ -58,13 +58,36 @@ func cowLeafCacheModeFixture(t testing.TB, entries int, compressed bool, mode st
 	return db, backend, want
 }
 
-func cowLeafCacheCounter(t *testing.T, backend *backenddb.DB, name string) uint64 {
+func cowLeafCacheCounter(t testing.TB, backend *backenddb.DB, name string) uint64 {
 	t.Helper()
 	value, err := strconv.ParseUint(backend.Stats()["treedb.process.read_path.outer_leaf.cache."+name], 10, 64)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return value
+}
+
+func disableCOWSealedLeafMmapForFaultInjection(t *testing.T) {
+	t.Helper()
+	previous := valuelog.MaxMappedLeafSealedSegments
+	valuelog.MaxMappedLeafSealedSegments = 0
+	t.Cleanup(func() { valuelog.MaxMappedLeafSealedSegments = previous })
+}
+
+func requireCOWUnmappedFaultFixture(t *testing.T, backend *backenddb.DB) {
+	t.Helper()
+	stats := backend.Stats()
+	if active, dead := stats["treedb.vlog.mmap_active_bytes"], stats["treedb.vlog.mmap_dead_bytes"]; active != "0" || dead != "0" {
+		t.Fatalf("fault fixture has active mmap bytes=%s, retired mmap bytes=%s", active, dead)
+	}
+}
+
+func writeCOWUnmappedLeafByte(t *testing.T, backend *backenddb.DB, writer *os.File, offset int64, value byte) {
+	t.Helper()
+	requireCOWUnmappedFaultFixture(t, backend)
+	if _, err := writer.WriteAt([]byte{value}, offset); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // The write-populated case first verifies write-origin pages, then reuses
@@ -164,6 +187,7 @@ func TestCOWPhysicalLeafCacheActivationAndCapturedCuts(t *testing.T) {
 }
 
 func TestCOWPhysicalLeafCacheRequiresVerifiedRecordAndInspection(t *testing.T) {
+	disableCOWSealedLeafMmapForFaultInjection(t)
 	db, backend, want := cowLeafCacheFixture(t, 128, false)
 	s, err := db.acquireCOWSnapshotWithError()
 	if err != nil {
@@ -208,10 +232,8 @@ func TestCOWPhysicalLeafCacheRequiresVerifiedRecordAndInspection(t *testing.T) {
 	}
 	// CRC corruption survives shape inspection but must fail full verification,
 	// leaving the write-origin cache entry untrusted.
-	if _, err := writer.WriteAt([]byte{original[0] ^ 1}, crcOffset); err != nil {
-		t.Fatal(err)
-	}
-	defer writer.WriteAt(original[:], crcOffset)
+	writeCOWUnmappedLeafByte(t, backend, writer, crcOffset, original[0]^1)
+	defer writeCOWUnmappedLeafByte(t, backend, writer, crcOffset, original[0])
 	beforeHits := cowLeafCacheCounter(t, backend, "hits")
 	if _, err := s.Get([]byte("a000")); !errors.Is(err, valuelog.ErrCorrupt) {
 		t.Fatalf("unverified cached record bypassed CRC: %v", err)
@@ -222,9 +244,7 @@ func TestCOWPhysicalLeafCacheRequiresVerifiedRecordAndInspection(t *testing.T) {
 	if _, hit, err := basis.snapshot.CopyVerifiedCachedLeafPage(ptr, f, identity, leafScratch[:]); err != nil || hit {
 		t.Fatalf("failed full decode upgraded record: hit=%t %v", hit, err)
 	}
-	if _, err := writer.WriteAt(original[:], crcOffset); err != nil {
-		t.Fatal(err)
-	}
+	writeCOWUnmappedLeafByte(t, backend, writer, crcOffset, original[0])
 	if got, err := s.Get([]byte("a000")); err != nil || !bytes.Equal(got, want) {
 		t.Fatalf("verified retry: %q %v", got, err)
 	}
@@ -238,24 +258,29 @@ func TestCOWPhysicalLeafCacheRequiresVerifiedRecordAndInspection(t *testing.T) {
 		t.Fatal("verified retry did not enable actual COW cache hit")
 	}
 	// Even a verified cached page cannot bypass the original record inspector.
+	// The same pointer and identity hold a verified page immediately before
+	// this header is rejected by the deliberately unmapped fixture.
+	if _, hit, err := basis.snapshot.CopyVerifiedCachedLeafPage(ptr, f, identity, leafScratch[:]); err != nil || !hit {
+		t.Fatalf("expected verified page before header rejection: hit=%t %v", hit, err)
+	}
+	beforeHits = cowLeafCacheCounter(t, backend, "hits")
 	versionOffset := int64(ptr.Offset)
 	var version [1]byte
 	if _, err := writer.ReadAt(version[:], versionOffset); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := writer.WriteAt([]byte{version[0] ^ 1}, versionOffset); err != nil {
-		t.Fatal(err)
-	}
-	defer writer.WriteAt(version[:], versionOffset)
+	writeCOWUnmappedLeafByte(t, backend, writer, versionOffset, version[0]^1)
+	defer writeCOWUnmappedLeafByte(t, backend, writer, versionOffset, version[0])
 	if _, err := s.Get([]byte("a000")); !errors.Is(err, valuelog.ErrCorrupt) {
 		t.Fatalf("verified cache bypassed record inspection: %v", err)
 	}
 	if _, err := db.Get([]byte("a000")); !errors.Is(err, valuelog.ErrCorrupt) {
 		t.Fatalf("public point bypassed record inspection: %v", err)
 	}
-	if _, err := writer.WriteAt(version[:], versionOffset); err != nil {
-		t.Fatal(err)
+	if hits := cowLeafCacheCounter(t, backend, "hits"); hits != beforeHits {
+		t.Fatalf("rejected inspection used the verified cache: hits=%d, want %d", hits, beforeHits)
 	}
+	writeCOWUnmappedLeafByte(t, backend, writer, versionOffset, version[0])
 }
 
 // A retained cut whose page was evicted by a later checkpoint must be able to
@@ -264,6 +289,7 @@ func TestCOWPhysicalLeafCacheRequiresVerifiedRecordAndInspection(t *testing.T) {
 func TestCOWOrderedVerifiedReadRefillsEvictedLeaf(t *testing.T) {
 	for _, compressed := range []bool{false, true} {
 		t.Run(fmt.Sprintf("compressed=%t", compressed), func(t *testing.T) {
+			disableCOWSealedLeafMmapForFaultInjection(t)
 			db, backend, want := cowLeafCacheModeFixture(t, 1, compressed, "cow_ordered")
 			old, err := db.acquireCOWSnapshotWithError()
 			if err != nil {
@@ -315,19 +341,15 @@ func TestCOWOrderedVerifiedReadRefillsEvictedLeaf(t *testing.T) {
 			if _, err := writer.ReadAt(crc[:], crcOffset); err != nil {
 				t.Fatal(err)
 			}
-			defer writer.WriteAt(crc[:], crcOffset)
-			if _, err := writer.WriteAt([]byte{crc[0] ^ 1}, crcOffset); err != nil {
-				t.Fatal(err)
-			}
+			writeCOWUnmappedLeafByte(t, backend, writer, crcOffset, crc[0]^1)
+			defer writeCOWUnmappedLeafByte(t, backend, writer, crcOffset, crc[0])
 			if _, err := old.Get([]byte("a000")); !errors.Is(err, valuelog.ErrCorrupt) {
 				t.Fatalf("evicted corrupt record was admitted: %v", err)
 			}
 			if cowLeafCacheCounter(t, backend, "read_miss_admission_stores") != stores {
 				t.Fatal("failed CRC populated an absent cache entry")
 			}
-			if _, err := writer.WriteAt(crc[:], crcOffset); err != nil {
-				t.Fatal(err)
-			}
+			writeCOWUnmappedLeafByte(t, backend, writer, crcOffset, crc[0])
 			for i := 0; i < 4; i++ {
 				got, err := old.Get([]byte("a000"))
 				if err != nil || !bytes.Equal(got, want) {
