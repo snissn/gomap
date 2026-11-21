@@ -194,16 +194,37 @@ class TreeDBCIContractTests(unittest.TestCase):
         self.assertEqual(set(bindings.values()), expected)
         self.assertEqual(len(bindings), len(expected))
         script = textwrap.dedent(required.split("        run: |\n", 1)[1])
+        single_use = "GETVERSIONED_BYTES_ACCEPTANCE_RESULT"
+        acceptance = block(self.source, "  getversioned-bytes-acceptance:\n", "\n  required:\n")
+        self.assertIn("    if: ${{ always() && !cancelled() && needs.mvcc-raw-path-gate.outputs.scoped_acceptance == 'true' }}\n", acceptance)
+        self.assertIn("SINGLE_USE_PR: ${{ github.event_name == 'pull_request' && github.repository == 'snissn/gomap' && github.event.pull_request.number == 5397 }}", required)
+        self.assertIn("SCOPED_ACCEPTANCE: ${{ needs.mvcc-raw-path-gate.outputs.scoped_acceptance }}", required)
         env = {name: "success" for name in bindings}
         def run(values: dict[str, str]) -> int:
             return subprocess.run(["bash", "-c", script], env=values, capture_output=True, check=False).returncode
-        self.assertEqual(run(env), 0)
-        for name in bindings:
-            for bad in ("failure", "cancelled", "skipped", ""):
-                values = dict(env)
-                values[name] = bad
-                with self.subTest(name=name, result=bad):
-                    self.assertNotEqual(run(values), 0)
+        for target, scope, result in (
+            ("true", "true", "success"), ("false", "false", "skipped"), ("false", "", "skipped")
+        ):
+            allowed = dict(env, SINGLE_USE_PR=target, SCOPED_ACCEPTANCE=scope)
+            allowed[single_use] = result
+            self.assertEqual(run(allowed), 0)
+            for name in bindings:
+                if name == single_use:
+                    continue
+                for bad in ("failure", "cancelled", "skipped", ""):
+                    with self.subTest(target=target, scope=scope, job=name, bad=bad):
+                        self.assertNotEqual(run(dict(allowed, **{name: bad})), 0)
+        # Exercise the real aggregate Bash, not a Python imitation of its routing.
+        for target in ("true", "false"):
+            for scope in ("true", "false", "", "malformed"):
+                for result in ("success", "skipped", "failure", "cancelled", ""):
+                    should_pass = (target, scope, result) in {
+                        ("true", "true", "success"), ("false", "false", "skipped"), ("false", "", "skipped")
+                    }
+                    with self.subTest(target=target, scope=scope, decision=result):
+                        self.assertEqual(run(dict(env, SINGLE_USE_PR=target, SCOPED_ACCEPTANCE=scope,
+                                                  **{single_use: result})) == 0, should_pass)
+
 
     def test_mvcc_upload_retains_compact_evidence_without_executables_or_scratch(self) -> None:
         mvcc = block(self.source, "  mvcc-raw-path-gate:\n", "\n  vet:\n")

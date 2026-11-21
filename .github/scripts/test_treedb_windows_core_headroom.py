@@ -260,7 +260,12 @@ class TreeDBWindowsCoreHeadroomTest(unittest.TestCase):
                 )
                 self.assertIsNotNone(helper)
                 for label in labels:
-                    self.assertIn(f"time_discovery {label} go ", job)
+                    env_prefix = (
+                        "env GOMEMLIMIT=4GiB GOMAXPROCS=2 "
+                        if name == "race" and label != "packages"
+                        else ""
+                    )
+                    self.assertIn(f"time_discovery {label} {env_prefix}go ", job)
                 script = helper.group() + '\ntime_discovery probe "$@"\n'
                 success = subprocess.run(
                     ["bash", "-c", script, "probe", "printf", "TestOne\nTestTwo\n"],
@@ -450,10 +455,14 @@ class TreeDBLinuxRaceHeadroomTest(unittest.TestCase):
         self.assertLess(12, outer_minutes)
 
         self.assertIn("grep -v '^github.com/snissn/gomap/TreeDB/nativewire$'", race_job)
-        self.assertIn(
-            "go test ./nativewire -list '^(Test|Example|Fuzz).*' | grep -E '^(Test|Example|Fuzz)'",
-            race_job,
-        )
+        for command in (
+            "go test -race -p 1 . -list '^(Test|Example).*' | grep -E '^(Test|Example)'",
+            "go test -race -p 1 ./caching -list 'Test.*' | grep '^Test'",
+            "go test -race -p 1 ./db -list 'Test.*' | grep '^Test' | grep -v '^TestVacuumRaceMissingKey$'",
+            "go test -race -p 1 ./nativewire -list '^(Test|Example|Fuzz).*' | grep -E '^(Test|Example|Fuzz)'",
+        ):
+            with self.subTest(command=command):
+                self.assertIn("GOMEMLIMIT=4GiB GOMAXPROCS=2 " + command, race_job)
 
     def test_actual_race_selector_covers_all_domains_and_new_items_once(self) -> None:
         race_job = workflow_job(WORKFLOW.read_text(encoding="utf-8"), "race")

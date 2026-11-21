@@ -7,6 +7,12 @@ on:
   pull_request:
   merge_group:
   workflow_dispatch:
+    inputs:
+      getversioned_compiler_witness:
+        description: Collect the pinned Go 1.26.10 GetVersioned compiler witness (requires matching source)
+        type: boolean
+        required: false
+        default: false
 
 concurrency:
   group: treedb-${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
@@ -30,6 +36,9 @@ jobs:
     steps:
       - name: Initialize fixed qualification output
         id: initialize
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          MANUAL_WITNESS: ${{ inputs.getversioned_compiler_witness == true }}
         shell: bash
         run: |
           set -euo pipefail
@@ -37,6 +46,19 @@ jobs:
           mkdir "$out"
           printf 'QUALIFICATION_OUT=%s\n' "$out" >> "$GITHUB_ENV"
           printf 'Output directory only: 1GiB; each generated log: 32MiB; boundary checks.\nGOMEMLIMIT is soft, not a measured RSS bound.\n' > "$out/scope.txt"
+          structural=false
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch && "$MANUAL_WITNESS" == true ]] || \
+             [[ "$GITHUB_EVENT_NAME" == pull_request && "$GITHUB_REPOSITORY" == snissn/gomap && "$PR_NUMBER" == 5397 ]]; then
+            structural=true
+          fi
+          echo "structural=$structural" >> "$GITHUB_OUTPUT"
+          if [[ "$structural" == true ]]; then
+            echo "Compiler witness: REQUESTED; the pinned source, compiler and structural checks are required." >> "$out/scope.txt"
+          else
+            echo "FUNCTIONAL_ONLY: compiler/escape witness NOT_REQUESTED. No structural qualification." > "$out/structural-status.txt"
+            cat "$out/structural-status.txt" >> "$out/scope.txt"
+            cat "$out/structural-status.txt" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Checkout exact source head
         id: checkout
@@ -108,6 +130,7 @@ jobs:
           python3 -B .github/scripts/getversioned_bindings_qualification.py race "$out" > "$out/race-inventory.json"
 
       - name: Compile optimized DB test ELF and escape diagnostics
+        if: steps.initialize.outputs.structural == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -129,6 +152,7 @@ jobs:
           sha256sum "$out/db.test" > "$out/db-test-sha256.txt"
 
       - name: Compile optimized Tree test ELF and escape diagnostics
+        if: steps.initialize.outputs.structural == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -150,6 +174,7 @@ jobs:
           sha256sum "$out/tree.test" > "$out/tree-test-sha256.txt"
 
       - name: Capture stock optimized symbols and exact structural text
+        if: steps.initialize.outputs.structural == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -1069,10 +1094,12 @@ jobs:
           nativewire_all_file="$(make_tmp)"
           nativewire_test_file="$(make_tmp)"
           time_discovery packages go list ./... | grep -v '^github.com/snissn/gomap/TreeDB$' | grep -v '^github.com/snissn/gomap/TreeDB/caching$' | grep -v '^github.com/snissn/gomap/TreeDB/collections$' | grep -v '^github.com/snissn/gomap/TreeDB/db$' | grep -v '^github.com/snissn/gomap/TreeDB/nativewire$' > "$package_all_file"
-          time_discovery root go test . -list '^(Test|Example).*' | grep -E '^(Test|Example)' > "$root_all_file"
-          time_discovery caching go test ./caching -list 'Test.*' | grep '^Test' > "$caching_all_file"
-          time_discovery db go test ./db -list 'Test.*' | grep '^Test' | grep -v '^TestVacuumRaceMissingKey$' > "$db_all_file"
-          time_discovery nativewire go test ./nativewire -list '^(Test|Example|Fuzz).*' | grep -E '^(Test|Example|Fuzz)' > "$nativewire_all_file"
+          # Enumerate in the same build mode as execution so compiled
+          # packages are reused, not test results.
+          time_discovery root env GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -race -p 1 . -list '^(Test|Example).*' | grep -E '^(Test|Example)' > "$root_all_file"
+          time_discovery caching env GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -race -p 1 ./caching -list 'Test.*' | grep '^Test' > "$caching_all_file"
+          time_discovery db env GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -race -p 1 ./db -list 'Test.*' | grep '^Test' | grep -v '^TestVacuumRaceMissingKey$' > "$db_all_file"
+          time_discovery nativewire env GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -race -p 1 ./nativewire -list '^(Test|Example|Fuzz).*' | grep -E '^(Test|Example|Fuzz)' > "$nativewire_all_file"
           weighted_shard_file package "$shard_index" "$shard_count" "$weights_file" "$package_all_file" "$package_file"
           weighted_shard_file root "$shard_index" "$shard_count" "$weights_file" "$root_all_file" "$root_test_file"
           weighted_shard_file caching "$shard_index" "$shard_count" "$weights_file" "$caching_all_file" "$caching_test_file"
@@ -1509,7 +1536,8 @@ jobs:
 
   getversioned-bytes-acceptance:
     name: GetVersioned single-use bytes acceptance
-    if: ${{ always() }}
+    # No serialized runner/checkout when no single-use decision is requested.
+    if: ${{ always() && !cancelled() && needs.mvcc-raw-path-gate.outputs.scoped_acceptance == 'true' }}
     needs:
       - mvcc-raw-path-gate
       - getversioned-bindings-qualification
@@ -1600,6 +1628,8 @@ jobs:
         shell: bash
         env:
           MVCC_RESULT: ${{ needs.mvcc-raw-path-gate.result }}
+          SINGLE_USE_PR: ${{ github.event_name == 'pull_request' && github.repository == 'snissn/gomap' && github.event.pull_request.number == 5397 }}
+          SCOPED_ACCEPTANCE: ${{ needs.mvcc-raw-path-gate.outputs.scoped_acceptance }}
           GETVERSIONED_BYTES_ACCEPTANCE_RESULT: ${{ needs.getversioned-bytes-acceptance.result }}
           GETVERSIONED_BINDINGS_RESULT: ${{ needs.getversioned-bindings-qualification.result }}
           VET_RESULT: ${{ needs.vet.result }}
@@ -1609,10 +1639,15 @@ jobs:
           SNAPSHOT_ITERATOR_PERF_RESULT: ${{ needs.snapshot-iterator-perf.result }}
         run: |
           set -euo pipefail
+          # The historic PR may never pass on a skipped decision or a lost scope
+          # output. A missing output is normal on other events with no MVCC pair.
+          case "$SINGLE_USE_PR:$SCOPED_ACCEPTANCE:$GETVERSIONED_BYTES_ACCEPTANCE_RESULT" in
+            true:true:success|false:false:skipped|false::skipped) ;;
+            *) echo "Unexpected single-use bytes scope/result: $SINGLE_USE_PR:$SCOPED_ACCEPTANCE:$GETVERSIONED_BYTES_ACCEPTANCE_RESULT" >&2; exit 1 ;;
+          esac
           failed=false
           for result in \
             "$MVCC_RESULT" \
-            "$GETVERSIONED_BYTES_ACCEPTANCE_RESULT" \
             "$GETVERSIONED_BINDINGS_RESULT" \
             "$VET_RESULT" \
             "$TEST_RESULT" \

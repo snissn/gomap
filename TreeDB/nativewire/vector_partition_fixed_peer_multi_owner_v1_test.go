@@ -47,7 +47,7 @@ func TestMultiOwnerTCPDomainSearchRejectsMissingHostedOwnerAssetV1(t *testing.T)
 // public lifecycle and TCP path. It does not qualify the retained epoch-zero
 // 100K fixture, its D16/P64 geometry, recall, or performance.
 func TestMultiOwnerTCPAcceptedModelFreshIndexEpochV1(t *testing.T) {
-	testMultiOwnerTCPAcceptedModelFreshIndexEpochV1(t, 64, 1, 4, 8, 16)
+	testMultiOwnerTCPAcceptedModelFreshIndexEpochV1(t, 64, 1, 4, 8, 16, 0)
 }
 
 // Exercise the real ACTIVE-to-observer setup ordering on the existing fresh64
@@ -56,16 +56,16 @@ func TestMultiOwnerTCPCostSetupAfterActiveFreshIndexEpochV1(t *testing.T) {
 	t.Setenv("GOMAP_ACCEPTED_COMPARATIVE_COST_V1", "")
 	t.Setenv("GOMAP_FIXED_PEER_COST_SETUP_PREFLIGHT_V1", "1")
 	t.Log("cost observation setup mode: fresh64 ACTIVE-before-first-search; comparative collection disabled")
-	testMultiOwnerTCPAcceptedModelFreshIndexEpochV1(t, 64, 1, 4, 8, 16)
+	testMultiOwnerTCPAcceptedModelFreshIndexEpochV1(t, 64, 1, 4, 8, 16, 0)
 }
 
 // These declared deterministic queries check public/native parity, not held-out
 // recall or performance. Both fresh domain graphs have more than L256 rows.
 func TestMultiOwnerTCPAcceptedModelScaledCorrectnessV1(t *testing.T) {
-	testMultiOwnerTCPAcceptedModelFreshIndexEpochV1(t, 1024, 32, 10, 96, 32)
+	testMultiOwnerTCPAcceptedModelFreshIndexEpochV1(t, 1024, 32, 10, 96, 32, 64)
 }
 
-func testMultiOwnerTCPAcceptedModelFreshIndexEpochV1(t *testing.T, rowCount, queryCount, topK, efSearch, mergeEntries int) {
+func testMultiOwnerTCPAcceptedModelFreshIndexEpochV1(t *testing.T, rowCount, queryCount, topK, efSearch, mergeEntries, seedBatchSize int) {
 	t.Helper()
 	definition := collections.VectorIndexDefinition{
 		Name: "embedding_graph", Field: "embedding", Metric: collections.VectorMetricCosine,
@@ -89,7 +89,13 @@ func testMultiOwnerTCPAcceptedModelFreshIndexEpochV1(t *testing.T, rowCount, que
 		vector[0] += float32(i) / float32(rowCount)
 		documents[i] = vectorPartitionLiveDocumentV1{id: fmt.Sprintf("fresh-%02d", i), vector: vector, home: uint32(i % 3)}
 	}
-	seed := newVectorPartitionLiveNativewireDocumentsWithDefinitionV1(t, documents, nil, [2]string{"group-b", "group-c"}, true, true, definition)
+	// Direct trusted genesis contributes opaque command-WAL coverage, not one
+	// replicated mutation per seed row. The source-holder verifies the exact
+	// durable LSN when reopening its copied DB; all later Raft work is real.
+	seed := (vectorPartitionLiveFixtureConfigV1{
+		definition: definition, owners: [2]string{"group-b", "group-c"}, commandWAL: true,
+		ownerSeparated: true, partitions: 3, domains: 2, seedBatchSize: seedBatchSize,
+	}).build(t, documents, nil)
 	t.Cleanup(func() { _ = seed.database.Close() })
 	// Seed construction is synchronous setup, not part of the TCP correctness
 	// deadline. Keep the real graph geometry and the same bounded operation budget.

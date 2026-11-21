@@ -49,6 +49,15 @@ footprints, review the manifest, stage the intended source/workflow/harness inpu
 run its documented refresh/contract commands and stage the reviewed manifest.
 A refreshed candidate policy cannot authorize its own omissions.
 
+The GetVersioned bindings job always requires its 29 focused normal and race
+tests. Its historical Go 1.26.10 compiler/escape evidence is a separate
+qualification, not a property established by a functional pass. For that
+evidence, dispatch **TreeDB: vet+test** with **getversioned_compiler_witness**
+enabled on the intended source. The strict route checks the published source
+hashes and rejects a mismatch; it does not silently move pinned line ranges.
+The original PR #5397 also requires that route. Ordinary changes to unrelated
+parts of a pinned file do not require refreshing a historical witness.
+
 ## Code Guidelines
 
 - Keep commits small and reviewable.
