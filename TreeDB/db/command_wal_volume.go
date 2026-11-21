@@ -9,20 +9,25 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
+func commandWALSeparateIndexVolume(idx *indexGen, wal rootpublication.StableIdentity) (rootpublication.StableIdentity, bool) {
+	if idx == nil || idx.pager == nil || wal == (rootpublication.StableIdentity{}) {
+		return rootpublication.StableIdentity{}, false
+	}
+	var indexIdentity rootpublication.StableIdentity
+	err := idx.pager.WithStableResourceFile(func(file *os.File) error {
+		var err error
+		indexIdentity, err = rootpublication.StableIdentityFromFile(file)
+		return err
+	})
+	return indexIdentity, err == nil && indexIdentity.Platform == wal.Platform && indexIdentity.VolumeID != wal.VolumeID
+}
+
 // commandWALHasDedicatedVolume compares a known ext4 WAL descriptor with the
 // live pager and resolved storage roles. Invoke it from pinned maintenance.
 func (db *DB) commandWALHasDedicatedVolume(wal rootpublication.StableIdentity) (bool, error) {
 	idx := db.idx.Load()
-	if idx == nil || idx.pager == nil {
-		return false, nil
-	}
-	var indexIdentity rootpublication.StableIdentity
-	if err := idx.pager.WithStableResourceFile(func(file *os.File) error {
-		var err error
-		indexIdentity, err = rootpublication.StableIdentityFromFile(file)
-		return err
-	}); err != nil || indexIdentity.Platform != wal.Platform ||
-		indexIdentity.VolumeID == wal.VolumeID {
+	indexIdentity, separate := commandWALSeparateIndexVolume(idx, wal)
+	if !separate {
 		return false, nil
 	}
 	if idx.primary != nil {

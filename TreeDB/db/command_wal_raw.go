@@ -1162,10 +1162,10 @@ func (db *DB) closeCommandWALDurablePrefixThrough(lsn uint64) {
 }
 
 func (db *DB) syncCommandWALDependenciesThrough(lsn uint64, extra *rootpublication.StableResourceSet) error {
-	return db.syncCommandWALDependenciesWithSealedDebt(lsn, extra, commitlog.SealedRotationDebt{})
+	return db.syncCommandWALDependencies(lsn, extra, commitlog.SealedRotationDebt{}, nil)
 }
 
-func (db *DB) syncCommandWALDependenciesWithSealedDebt(lsn uint64, extra *rootpublication.StableResourceSet, sealed commitlog.SealedRotationDebt) error {
+func (db *DB) syncCommandWALDependencies(lsn uint64, extra *rootpublication.StableResourceSet, sealed commitlog.SealedRotationDebt, alreadySynced *rootpublication.StableResourceToken) error {
 	if db == nil || lsn == 0 {
 		return nil
 	}
@@ -1189,7 +1189,7 @@ func (db *DB) syncCommandWALDependenciesWithSealedDebt(lsn uint64, extra *rootpu
 	}); err != nil {
 		return err
 	}
-	if err := db.commandWALDebt.syncRotationFilesThrough(db.dir, db.commandWALDir, lsn, sealed); err != nil {
+	if err := db.commandWALDebt.syncRotationFilesThrough(db.dir, db.commandWALDir, lsn, sealed, alreadySynced); err != nil {
 		db.commandWALDebt.noteRetryThrough(lsn)
 		return err
 	}

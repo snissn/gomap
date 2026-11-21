@@ -194,12 +194,55 @@ func (debt *CommandWALDependencyDebt) rotationFileViewThrough(lsn uint64) ([]*ro
 	return view, nil
 }
 
-func (debt *CommandWALDependencyDebt) syncRotationFilesThrough(root, walDir string, lsn uint64, sealed commitlog.SealedRotationDebt) error {
+// checkpointRotationFile borrows the first file in the ordinary dependency
+// order while the caller still holds raw publication. Select a file only when
+// the prefix requires no earlier external-resource work.
+func (debt *CommandWALDependencyDebt) checkpointRotationFile(lsn uint64) (*rootpublication.StableResourceToken, error) {
+	debt.mu.Lock()
+	haveRotation := false
+	for _, entry := range debt.entries {
+		if entry.firstLSN > lsn {
+			break
+		}
+		if len(entry.resources) != 0 {
+			debt.mu.Unlock()
+			return nil, nil
+		}
+		haveRotation = haveRotation || len(entry.rotationFiles) != 0
+	}
+	debt.mu.Unlock()
+	if !haveRotation {
+		return nil, nil
+	}
+	tokens, err := debt.rotationFileViewThrough(lsn)
+	if err != nil || len(tokens) == 0 {
+		return nil, err
+	}
+	return tokens[0], nil
+}
+
+func syncCommandWALRotationFile(root, walDir string, token *rootpublication.StableResourceToken) error {
+	if !durabilitycut.Enabled() {
+		return token.SyncThrough()
+	}
+	path := filepath.Join(walDir, filepath.Base(token.DiagnosticPath()))
+	return token.SyncThroughWithFileSyncObserver(func(file *os.File) error {
+		return durabilitycut.EmitStablePath(durabilitycut.BeforeDependencyFileSync, durabilitycut.ResourceCommandWAL, root, path, file)
+	}, func(file *os.File) error {
+		return durabilitycut.EmitStablePath(durabilitycut.AfterDependencyFileSync, durabilitycut.ResourceCommandWAL, root, path, file)
+	})
+}
+
+func (debt *CommandWALDependencyDebt) syncRotationFilesThrough(root, walDir string, lsn uint64, sealed commitlog.SealedRotationDebt, alreadySynced *rootpublication.StableResourceToken) error {
 	tokens, err := debt.rotationFileViewThrough(lsn)
 	if err != nil {
 		return err
 	}
 	for index, token := range tokens {
+		// Early I/O can cover only the same immutable first registration.
+		if index == 0 && token == alreadySynced {
+			continue
+		}
 		if index == 1 {
 			covered, err := sealed.Covers(tokens[0], token)
 			if err != nil {
@@ -209,18 +252,7 @@ func (debt *CommandWALDependencyDebt) syncRotationFilesThrough(root, walDir stri
 				continue
 			}
 		}
-		if !durabilitycut.Enabled() {
-			if err := token.SyncThrough(); err != nil {
-				return err
-			}
-			continue
-		}
-		path := filepath.Join(walDir, filepath.Base(token.DiagnosticPath()))
-		if err := token.SyncThroughWithFileSyncObserver(func(file *os.File) error {
-			return durabilitycut.EmitStablePath(durabilitycut.BeforeDependencyFileSync, durabilitycut.ResourceCommandWAL, root, path, file)
-		}, func(file *os.File) error {
-			return durabilitycut.EmitStablePath(durabilitycut.AfterDependencyFileSync, durabilitycut.ResourceCommandWAL, root, path, file)
-		}); err != nil {
+		if err := syncCommandWALRotationFile(root, walDir, token); err != nil {
 			return err
 		}
 	}

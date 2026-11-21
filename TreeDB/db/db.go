@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/snissn/gomap/TreeDB/internal/mvccadmission"
 	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -633,6 +634,12 @@ type DB struct {
 	// gap merely by syncing an empty or newly-created successor segment.
 	commandWALSessionAppliedLSN uint64
 	commandWALDebt              CommandWALDependencyDebt
+	// Fixed at open. A different index volume admits live topology checks
+	// during automatic maintenance. It conveys no sync credit.
+	commandWALCheckpointSeparateVolume bool
+	// maintenanceMu protects this one-attempt preference after a lost raw
+	// reentry. The preference carries no file registration or sync credit.
+	commandWALCheckpointKeepRaw bool
 	// publicationPoisoned is set after an outcome-ambiguous root/meta publish or
 	// after bounded pre-meta retry exhaustion leaves a prepared COW candidate.
 	// It is intentionally cleared only by close/reopen.
@@ -3051,6 +3058,10 @@ func openWithLock(opts Options, lock *lockfile.Lock, nativeSemanticOwner bool) (
 			return nil, err
 		}
 		db.commandJournal = journal
+		if preferExt4Stream {
+			_, wal := journal.CheckpointExt4StreamState(true)
+			_, db.commandWALCheckpointSeparateVolume = commandWALSeparateIndexVolume(gen, wal)
+		}
 		db.commandWALSessionAppliedLSN = db.meta.AppliedCommandLSN
 		// replayCommandWALIntoBackend records the physically classified durable
 		// frontier. A recovered durable root may advance AppliedCommandLSN beyond
@@ -4946,8 +4957,9 @@ func (db *DB) prepareCommandWALCoveredPrefixCleanupLocked(automatic bool) (bool,
 	}
 
 	var sealed commitlog.SealedRotationDebt
+	var handoffVolume rootpublication.StableIdentity
 	if automatic && db.nativeSemanticActive.Load() && db.durability == DurabilityWALOnRelaxed {
-		candidate, volume := db.commandJournal.SealedDebtForMaintenance()
+		candidate, volume := db.commandJournal.CheckpointExt4StreamState(db.commandWALCheckpointSeparateVolume)
 		if volume != (rootpublication.StableIdentity{}) {
 			dedicated, err := db.commandWALHasDedicatedVolume(volume)
 			if err != nil {
@@ -4956,18 +4968,25 @@ func (db *DB) prepareCommandWALCoveredPrefixCleanupLocked(automatic bool) (bool,
 			}
 			if dedicated {
 				sealed = candidate
+				if db.commandWALCheckpointSeparateVolume {
+					handoffVolume = volume
+				}
 			}
 		}
 	}
-	// Covered-prefix maintenance is retryable. Never wait for a public vacuum's
-	// publish guard while holding maintenanceMu: vacuum takes those locks in the
-	// opposite order before entering backend maintenance.
-	if !db.commandWALRawPublishMu.TryLock() {
-		return false, nil
+
+	alreadySynced, locked, err := db.lockCommandWALCheckpointPrefix(handoffVolume)
+	if err != nil || !locked {
+		return false, err
 	}
-	unlockCommandWALPublish := db.commandWALRawPublishMu.Unlock
-	rotated, advanced, err := db.closeCommandWALCheckpointPrefix(sealed)
-	unlockCommandWALPublish()
+	defer db.commandWALRawPublishMu.Unlock()
+	if db.closing.Load() {
+		return false, ErrClosed
+	}
+	if err := db.commandWALPoisonedError(); err != nil {
+		return false, err
+	}
+	rotated, advanced, err := db.closeCommandWALCheckpointPrefix(sealed, alreadySynced)
 	if err != nil {
 		return false, err
 	}
@@ -5064,7 +5083,7 @@ func (db *DB) checkpointTeardownPinned(maintenanceAlreadyHeld bool) error {
 			return publicRootPublicationErrorV1(err)
 		}
 		unlockCommandWALPublish = db.lockCommandWALRawPublish()
-		rotatedCommandWAL, commandWALPrefixAdvanced, err := db.closeCommandWALCheckpointPrefix(commitlog.SealedRotationDebt{})
+		rotatedCommandWAL, commandWALPrefixAdvanced, err := db.closeCommandWALCheckpointPrefix(commitlog.SealedRotationDebt{}, nil)
 		if err != nil {
 			return err
 		}
@@ -5108,7 +5127,7 @@ func (db *DB) checkpointTeardownPinned(maintenanceAlreadyHeld bool) error {
 			return err
 		}
 	}
-	rotatedCommandWAL, commandWALPrefixAdvanced, err := db.closeCommandWALCheckpointPrefix(commitlog.SealedRotationDebt{})
+	rotatedCommandWAL, commandWALPrefixAdvanced, err := db.closeCommandWALCheckpointPrefix(commitlog.SealedRotationDebt{}, nil)
 	if err != nil {
 		return err
 	}
@@ -5144,19 +5163,86 @@ func (db *DB) checkpointTeardownPinned(maintenanceAlreadyHeld bool) error {
 	return nil
 }
 
-// closeCommandWALCheckpointPrefix establishes the dependency-closed physical
-// WAL frontier used by cleanup proofs. The caller must hold raw-publish so the
-// latest assigned LSN, dependency debt, active segment sync, and frontier
-// publication describe one append-serialization cut.
-func (db *DB) closeCommandWALCheckpointPrefix(sealed commitlog.SealedRotationDebt) (rotated, advanced bool, err error) {
-	if db == nil || !db.commandWAL || db.commandJournal == nil {
-		return false, false, nil
+// lockCommandWALCheckpointPrefix returns publication custody for the final,
+// freshly sampled prefix. Maintenance already holds teardown and maintenanceMu.
+// Never block on raw publication here: a vacuum can own it while waiting for
+// maintenanceMu, including when the checkpoint re-enters after I/O.
+func (db *DB) lockCommandWALCheckpointPrefix(volume rootpublication.StableIdentity) (*rootpublication.StableResourceToken, bool, error) {
+	if !db.commandWALRawPublishMu.TryLock() {
+		return nil, false, nil
 	}
+	if volume == (rootpublication.StableIdentity{}) {
+		return nil, true, nil
+	}
+	frontier, advanced := db.commandWALCheckpointFrontier()
+	if !advanced {
+		return nil, true, nil
+	}
+	if db.commandWALCheckpointKeepRaw {
+		db.commandWALCheckpointKeepRaw = false
+		return nil, true, nil
+	}
+	original, err := db.commandWALDebt.checkpointRotationFile(frontier)
+	if err != nil {
+		db.commandWALRawPublishMu.Unlock()
+		return nil, false, err
+	}
+	if original == nil || original.Reachability() != rootpublication.ReachabilityCommandWALRotated {
+		return nil, true, nil
+	}
+	identity := original.Identity()
+	if identity.Platform != volume.Platform || identity.VolumeID != volume.VolumeID {
+		return nil, true, nil
+	}
+	// A fixed predecessor can have a stream successor on the very same
+	// ext4 volume. Leave its barrier on the canonical path.
+	var fixed bool
+	if err := original.WithPinnedFile(func(file *os.File) error {
+		var err error
+		fixed, err = commitlog.HasFixedWALMagic(file)
+		return err
+	}); err != nil || fixed {
+		return nil, true, nil
+	}
+	lease, err := original.PinUnsyncedRotatedCommandWAL()
+	if err != nil {
+		db.commandWALRawPublishMu.Unlock()
+		return nil, false, err
+	}
+	if lease == nil {
+		return nil, true, nil
+	}
+	db.commandWALRawPublishMu.Unlock()
+	if err := db.syncCheckpointRotationFile(lease); err != nil {
+		db.commandWALDebt.noteRetryThrough(frontier)
+		return nil, false, err
+	}
+	if !db.commandWALRawPublishMu.TryLock() {
+		// Repeatedly yielding to arriving writers could sync this file on
+		// every attempt while permanently postponing the durable frontier.
+		db.commandWALCheckpointKeepRaw = true
+		return nil, false, nil
+	}
+	return original, true, nil
+}
+
+// syncCheckpointRotationFile owns this single lease for the duration of I/O.
+func (db *DB) syncCheckpointRotationFile(lease *rootpublication.StableResourceToken) (err error) {
+	defer func() {
+		if closeErr := lease.ReleaseWithError(); closeErr != nil {
+			db.retainOriginalCleanupError(closeErr)
+			err = errors.Join(err, closeErr)
+		}
+	}()
+	return syncCommandWALRotationFile(db.dir, db.commandWALDir, lease)
+}
+
+func (db *DB) commandWALCheckpointFrontier() (frontier uint64, advanced bool) {
 	nextLSN := db.CommandWALNextLSN()
 	if nextLSN <= 1 {
-		return false, false, nil
+		return 0, false
 	}
-	frontier := nextLSN - 1
+	frontier = nextLSN - 1
 	durableWALLSN := db.commandWALDurableLSN.Load()
 	// A relaxed frame can be recovered into a durable root while remaining
 	// above the physically classified durable-WAL frontier. The writer then
@@ -5166,9 +5252,23 @@ func (db *DB) closeCommandWALCheckpointPrefix(sealed commitlog.SealedRotationDeb
 	// may promote the prefix through this checkpoint path. A later reopen can
 	// establish that recovery baseline; an explicit durable append/barrier may
 	// independently advance commandWALDurableLSN through its own contract.
-	advanced = durableWALLSN >= db.commandWALSessionAppliedLSN && durableWALLSN < frontier
+	return frontier, durableWALLSN >= db.commandWALSessionAppliedLSN && durableWALLSN < frontier
+}
+
+// closeCommandWALCheckpointPrefix establishes the dependency-closed physical
+// WAL frontier used by cleanup proofs, while raw publication excludes appends.
+// A successful checkpoint-local file sync can cover only the exact immutable
+// token still present in the newly sampled prefix.
+func (db *DB) closeCommandWALCheckpointPrefix(sealed commitlog.SealedRotationDebt, alreadySynced *rootpublication.StableResourceToken) (rotated, advanced bool, err error) {
+	if db == nil || !db.commandWAL || db.commandJournal == nil {
+		return false, false, nil
+	}
+	frontier, advanced := db.commandWALCheckpointFrontier()
+	if frontier == 0 {
+		return false, false, nil
+	}
 	if advanced {
-		if err := db.syncCommandWALDependenciesWithSealedDebt(frontier, nil, sealed); err != nil {
+		if err := db.syncCommandWALDependencies(frontier, nil, sealed, alreadySynced); err != nil {
 			return false, false, err
 		}
 	}

@@ -102,6 +102,35 @@ captured token and the caller's basis. An online vacuum that supersedes the
 captured runtime makes the basis stale. A failure of the captured physical seal
 is returned to the caller.
 
+During automatic covered-prefix maintenance on an active native COW database
+with relaxed WAL, the checkpoint can release raw publication while syncing one
+already-closed WAL file. It selects the first file from the ordered debt of a
+prefix with no external resource dependencies and retains that exact handle.
+Relaxed writes may append during its I/O. Durable writers use their ordinary
+dependency-before-marker path and share the journal's physical error owner.
+
+Before advancing the durable prefix, the checkpoint tries to reacquire raw
+publication, checks closure and poison, and samples a fresh frontier. Only the
+original immutable file registration can receive credit for the completed
+sync. The checkpoint retains its registration pointer until revalidation. A
+fresh registration for a reused pathname, inode or generation receives its
+own physical sync. If the extra pin reaches its capacity limit, the checkpoint
+uses the original in-lock operation. Every outstanding namespace and active
+segment crosses its normal barrier.
+
+The handoff requires the live ext4 stream WAL on a dedicated volume, with the
+sealed predecessor on that volume. A shared or unproved layout takes raw once
+and completes the existing canonical barrier. The second-file seal keeps its
+own independent eligibility and proof.
+
+Both raw acquisitions are nonblocking under backend maintenance ownership. If a
+publisher or vacuum holds raw at reentry, the checkpoint releases maintenance
+without advancing the frontier. Under `maintenanceMu` it records that the next
+eligible automatic pass must keep raw from initial acquisition through canonical
+prefix closure. An initially busy pass leaves that preference intact. The
+admitted retry resamples all current debt, including the old file, and consumes
+the preference once. Later passes may hand off a sealed file again.
+
 ## Bounded vector prepare in the Raft FSM
 
 Vector prepare takes a factory-minted stable DB capture, the root-scoped vector
