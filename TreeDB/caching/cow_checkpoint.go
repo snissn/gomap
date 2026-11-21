@@ -45,7 +45,12 @@ const (
 	cowCheckpointMaterialization cowPrefixMaterialization = iota
 	cowSynchronousPressureMaterialization
 	cowGenerationPressureMaterialization
+	cowAcceptedPressureMaterialization
 )
+
+func (mode cowPrefixMaterialization) advisory() bool {
+	return mode == cowGenerationPressureMaterialization || mode == cowAcceptedPressureMaterialization
+}
 
 // cowGenerationRetryableRefusal is added only where the original attempt can
 // still proceed on the same frozen prefix. A later cleanup failure must
@@ -126,6 +131,7 @@ func (db *DB) materializeCOWPrefix(ctx context.Context, automatic bool, operatio
 func (db *DB) materializeCOWPrefixProjected(ctx context.Context, automatic bool, operation backenddb.NativeColumnStoreCompaction, mode cowPrefixMaterialization, projected *backenddb.NativeProjectedGenerationPressure) (retErr error) {
 	pressureOnly := mode != cowCheckpointMaterialization
 	generationPressure := mode == cowGenerationPressureMaterialization
+	acceptedPressure := mode == cowAcceptedPressureMaterialization
 	if db.closing.Load() {
 		return errDBClosing
 	}
@@ -136,6 +142,14 @@ func (db *DB) materializeCOWPrefixProjected(ctx context.Context, automatic bool,
 		return err
 	}
 	defer db.flushMu.Unlock()
+	if acceptedPressure {
+		if db.closing.Load() {
+			return errDBClosing
+		}
+		if db.cow.prefix == nil || !db.cow.prefix.NeedsAcceptedPressure() {
+			return nil
+		}
+	}
 	if generationPressure {
 		if db.closing.Load() {
 			return errDBClosing
@@ -167,7 +181,7 @@ func (db *DB) materializeCOWPrefixProjected(ctx context.Context, automatic bool,
 	}()
 	// A prior accepted physical publication must complete its handoff first.
 	// Refusal keeps the covered prefix and never replays backend work.
-	if err := db.completeCOWHandoffForGeneration(generationPressure); err != nil {
+	if err := db.completeCOWHandoffForGeneration(mode.advisory()); err != nil {
 		return err
 	}
 	if db.cow.refreshRequired.Load() {
@@ -178,12 +192,22 @@ func (db *DB) materializeCOWPrefixProjected(ctx context.Context, automatic bool,
 			return err
 		}
 		db.writeMu.Unlock()
-		if err := db.refreshCOWBackendBasisForGeneration(generationPressure); err != nil {
+		if err := db.refreshCOWBackendBasisForGeneration(mode.advisory()); err != nil {
 			return err
 		}
 	}
 	if err := lockCheckpointWriteMutexContext(ctx, &db.writeMu); err != nil {
 		return err
+	}
+	if acceptedPressure {
+		if db.closing.Load() {
+			db.writeMu.Unlock()
+			return errDBClosing
+		}
+		if !db.cow.prefix.NeedsAcceptedPressure() {
+			db.writeMu.Unlock()
+			return nil
+		}
 	}
 	if projected != nil {
 		// A physical worker can advance the active generation while this
@@ -215,7 +239,7 @@ func (db *DB) materializeCOWPrefixProjected(ctx context.Context, automatic bool,
 		}
 		db.writeMu.Unlock()
 	} else {
-		err = db.rotateCOWFrontier(ctx, true, &frontier, !pressureOnly)
+		err = db.rotateCOWFrontier(ctx, true, &frontier, mode)
 	}
 	defer func() { retErr = joinCOWCleanupError(retErr, db.cow.releaseCut(frontier)) }()
 	db.recordCheckpointCutover(time.Since(cutover))
@@ -246,7 +270,7 @@ func (db *DB) materializeCOWPrefixProjected(ctx context.Context, automatic bool,
 	if err = ctx.Err(); err != nil {
 		return err
 	}
-	err = db.flushCOWFrozenCutWithColumnCompaction(true, &publish, frontier, operation != nil, operation, generationPressure)
+	err = db.flushCOWFrozenCutWithColumnCompaction(true, &publish, frontier, operation != nil, operation, mode)
 	frontier = nil
 	if err != nil {
 		return err
@@ -302,12 +326,12 @@ func (db *DB) materializeCOWPrefixProjected(ctx context.Context, automatic bool,
 // and returns with it unlocked. The existing checkpoint/Close admission fence
 // excludes writers through the finite retry, while flushMu remains outer D.
 func (db *DB) rotateCOWCheckpointFrontier(ctx context.Context, postFrontier bool, captured **cowReadCut) error {
-	return db.rotateCOWFrontier(ctx, postFrontier, captured, true)
+	return db.rotateCOWFrontier(ctx, postFrontier, captured, cowCheckpointMaterialization)
 }
 
-// rotateJournal is false only for producer pressure with an existing size worker.
-// Rollover, finite source-capacity retry and original cutover capture stay shared.
-func (db *DB) rotateCOWFrontier(ctx context.Context, postFrontier bool, captured **cowReadCut, rotateJournal bool) error {
+// Pressure runs under an existing size worker, which owns physical rotation.
+// Rollover and original cutover capture are shared with explicit checkpoint.
+func (db *DB) rotateCOWFrontier(ctx context.Context, postFrontier bool, captured **cowReadCut, mode cowPrefixMaterialization) error {
 	c := db.cow
 	for attempt := 0; ; attempt++ {
 		c.writerMu.Lock()
@@ -320,7 +344,7 @@ func (db *DB) rotateCOWFrontier(ctx context.Context, postFrontier bool, captured
 		// writeMu still excludes every same-owner append. Rotate the journal at
 		// this complete raw+semantic cut, independently of public raw notices.
 		// Rotation is a file fence; only the canonical WAL owner can advance W.
-		if err == nil && db.externalCommandWAL && rotateJournal {
+		if err == nil && db.externalCommandWAL && mode == cowCheckpointMaterialization {
 			wal, ok := db.backend.(interface {
 				CommandWALActiveBytes() int64
 				RotateCommandWALActiveSegment(bool) error
@@ -341,6 +365,11 @@ func (db *DB) rotateCOWFrontier(ctx context.Context, postFrontier bool, captured
 		if cleanupErr := rollover.drain(); cleanupErr != nil {
 			db.reportError(cleanupErr)
 			return joinCOWCleanupError(err, cleanupErr)
+		}
+		if mode == cowAcceptedPressureMaterialization && err == memtable.ErrCOWCapacity {
+			// This advisory owns no blocked writer. Its refusal leaves the
+			// original full or synchronous producer fallback available.
+			return cowGenerationRetryableRefusal{err}
 		}
 		// A complete captured prefix can contain native-only sources. Raw
 		// table count alone does not describe its reclaimable coverage.

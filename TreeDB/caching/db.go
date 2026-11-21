@@ -10181,6 +10181,7 @@ type DB struct {
 	autoCheckpointOnceCh    chan struct{}
 	autoCheckpointWriteCh   chan struct{}
 	nativeGenerationFlushCh chan struct{}
+	nativeAcceptedFlushCh   chan struct{}
 	autoCheckpointOn        atomic.Bool
 	autoCheckpointBytesFn   atomic.Pointer[autoCheckpointBytesHookBox]
 	// autoCheckpointSizeArmed gates the maxWALBytes size-triggered checkpoint.
@@ -13378,6 +13379,10 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	}
 
 	db.cow = cowOwner
+	if db.externalCommandWAL && cowOwner != nil && cowOwner.prefix != nil {
+		db.nativeAcceptedFlushCh = make(chan struct{}, 1)
+		cowOwner.prefix.SetAcceptedPressureWake(db.nativeAcceptedFlushCh)
+	}
 	db.storeMemtableMode(mode)
 	if opts.IndexOuterLeavesInValueLog {
 		db.leafLog.id = leafLogLaneID
@@ -19675,20 +19680,23 @@ func (db *DB) maintainCOWGenerationPressure() (retry bool, allocation *cowGenera
 		errors.As(err, &refused)
 		return true, refused
 	}
+	db.reportCOWMaintenanceFailure(err)
+	return false, nil
+}
 
+func (db *DB) reportCOWMaintenanceFailure(err error) {
 	// Retain the cause even if an external Close started after this attempt.
 	// A callback on this same worker must never join the worker through Close.
 	db.retainOriginalCleanupError(err)
 	if db.notifyError == nil {
-		return false, nil
+		return
 	}
 	guard := db.ownedCloseGuard
 	if err := guard.EnterCheckpointNotification(); err != nil {
-		return false, nil
+		return
 	}
 	defer guard.LeaveCheckpointNotification()
 	db.reportError(err)
-	return false, nil
 }
 
 func (db *DB) autoCheckpointLoop(interval time.Duration, maxWALBytes int64, idleInterval time.Duration) {
@@ -19714,6 +19722,7 @@ func (db *DB) autoCheckpointLoop(interval time.Duration, maxWALBytes int64, idle
 
 	var generationTimer *time.Timer
 	var generationRetry <-chan time.Time
+	var acceptedPressureFailed bool
 	defer func() {
 		if generationTimer != nil {
 			generationTimer.Stop()
@@ -19799,6 +19808,14 @@ func (db *DB) autoCheckpointLoop(interval time.Duration, maxWALBytes int64, idle
 		case <-db.nativeGenerationFlushCh:
 			if generationRetry == nil {
 				maintainGeneration()
+			}
+		case <-db.nativeAcceptedFlushCh:
+			if !acceptedPressureFailed && db.nativePressureDrainEnabled() {
+				err := db.materializeCOWPrefix(context.Background(), false, nil, cowAcceptedPressureMaterialization)
+				if err != nil && err != errDBClosing && !cowGenerationRetryableOnly(err) {
+					acceptedPressureFailed = true
+					db.reportCOWMaintenanceFailure(err)
+				}
 			}
 		case <-generationRetry:
 			generationRetry = nil
