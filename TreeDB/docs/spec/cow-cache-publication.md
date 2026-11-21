@@ -524,10 +524,21 @@ poison and reopen rules.
 ## Captured-prefix flush and backend maintenance
 
 Write/maintenance rollover freezes a bounded source frontier without walking
-its records. Flush retains that prefix and its exact backend basis, streams
-bounded canonical physical chunks oldest to newest, and uses one existing
-`RootPublicationBuildGroup` for one final backend publication. Intermediate
-chunk progress does not remove old-prefix precedence.
+its records. Flush retains that prefix and its exact backend basis and uses one
+`RootPublicationBuildGroup` for one final backend publication. A stable merge
+streams frozen raw records in key order across generations and hash shards.
+The newest frozen source wins a shared key, including tombstones and pointers.
+The merge preserves its revision verbatim.
+
+The source budget admits the merge heap and cursor array before allocation,
+and each cursor separately acquires its root view and traversal storage.
+One bounded operation chunk borrows immutable key and value bytes from roots
+owned by the captured cut through physical batch write and close. If optional
+merge storage or cursor admission fails for capacity, flush closes provisional
+cursors before starting the build and streams one source at a time, oldest to
+newest. Both paths keep the final chunk pending until every source has closed
+and reported successful completion. A raw-empty build still finalizes its
+captured coverage. Intermediate chunks stay private.
 
 Before backend acceptance, the group admits the exact successor Snapshot and
 handoff/cleanup capacity. After acceptance, handoff adopts that retained receipt's

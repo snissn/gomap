@@ -71,8 +71,8 @@ func leafMaintenanceFiles(t *testing.T, dir string) map[string]os.FileInfo {
 	return out
 }
 
-// The seed uses public mutation and checkpoint APIs to populate several leaf
-// writers. GC must not mistake one cached writer's sequence for external output.
+// Checkpoint updates to an existing tree use several leaf writers. A no-op GC
+// must preserve each of their segments.
 func TestValueLogGCNoopPreservesIndependentLeafWriters(t *testing.T) {
 	opts := leafMaintenanceOptions(t.TempDir())
 	db, err := Open(opts)
@@ -81,6 +81,9 @@ func TestValueLogGCNoopPreservesIndependentLeafWriters(t *testing.T) {
 	}
 	defer func() { _ = db.Close() }()
 	leafMaintenanceWrite(t, db, 0)
+	// Exercise parallel apply over existing leaf spans, since the initial
+	// sorted build can create the tree with a single writer.
+	leafMaintenanceWrite(t, db, 1)
 	stats := db.Stats()
 	active, err := strconv.Atoi(stats["treedb.cache.leaf_log_lanes.active"])
 	if err != nil || active < 2 {
@@ -109,7 +112,8 @@ func TestValueLogGCNoopPreservesIndependentLeafWriters(t *testing.T) {
 			t.Fatalf("no-op GC rotated leaf writers: before=%s after=%s", rotations, got)
 		}
 	}
-	leafMaintenanceWrite(t, db, 1)
+	const postGCRound = 2
+	leafMaintenanceWrite(t, db, postGCRound)
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +123,7 @@ func TestValueLogGCNoopPreservesIndependentLeafWriters(t *testing.T) {
 	}
 	for _, i := range []int{0, 2048, 4095} {
 		got, err := db.Get([]byte(fmt.Sprintf("leaf-maintenance-%08d", i)))
-		want := bytes.Repeat([]byte{byte(1 + i%251)}, 128)
+		want := bytes.Repeat([]byte{byte(postGCRound + i%251)}, 128)
 		if err != nil || !bytes.Equal(got, want) {
 			t.Fatalf("reopen key%d: got=%x err=%v", i, got, err)
 		}
