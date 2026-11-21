@@ -580,7 +580,6 @@ type commandWALSegmentScanOptions struct {
 	seenLSNs          map[uint64]struct{}
 	seenLSNAppliedLSN uint64
 	seenLSNMax        uint64
-	readBuffer        *commitlog.CleanupReadBuffer
 }
 
 func requireNoUnappliedCommandWALFrames(dir string, appliedLSN uint64, maxSegmentBytes int64) error {
@@ -656,7 +655,7 @@ func scanCommandWALSegmentWithOptions(path string, maxSegmentBytes int64, allowT
 }
 
 func scanCommandWALSegmentFileWithOptions(file *os.File, maxSegmentBytes int64, allowTerminalTail bool, opts commandWALSegmentScanOptions) (commandWALSegmentScanResult, error) {
-	r, err := opts.readBuffer.Open(file, commitlog.Options{MaxSegmentSize: maxSegmentBytes})
+	r, err := commitlog.NewReaderFromFileWithOptions(file, commitlog.Options{MaxSegmentSize: maxSegmentBytes})
 	if err != nil {
 		return commandWALSegmentScanResult{}, err
 	}
@@ -805,7 +804,7 @@ func newCommandWALCleanupScan(cleanupThrough, durableWALLSN uint64, maxSegmentBy
 }
 
 func (s *commandWALCleanupScan) scanLockedDirectory(dir string) error {
-	segments, err := listWALSegments(dir)
+	segments, err := listSegments(resolveStorageLayout(dir).walDir, true)
 	if err != nil {
 		return err
 	}
@@ -813,7 +812,7 @@ func (s *commandWALCleanupScan) scanLockedDirectory(dir string) error {
 	s.decisions = make([]commandWALSegmentCleanupDecision, 0, len(segments))
 	for _, seg := range segments {
 		if !seg.valueLog && isCommandWALLaneSegment(seg) {
-			if err := s.scanSegment(seg, seg.seq == activeByLane[seg.lane], false, nil); err != nil {
+			if err := s.scanSegment(seg, seg.seq == activeByLane[seg.lane], nil); err != nil {
 				s.hardErr = errors.Join(s.hardErr, err)
 			}
 		}
@@ -823,12 +822,12 @@ func (s *commandWALCleanupScan) scanLockedDirectory(dir string) error {
 
 // scanSegment returns only the descriptor acquisition error. Validation and
 // close failures are recorded on the scan independently.
-func (s *commandWALCleanupScan) scanSegment(seg logSegment, active, loadLogicalSize bool, expected *rootpublication.StableIdentity) error {
+func (s *commandWALCleanupScan) scanSegment(seg logSegment, active bool, expected *rootpublication.StableIdentity) error {
 	file, err := os.Open(seg.path)
 	if err != nil {
 		return fmt.Errorf("open command WAL segment %s: %w", filepath.Base(seg.path), err)
 	}
-	if !s.scanFile(seg, file, active, loadLogicalSize, expected) {
+	if !s.scanFile(seg, file, active, expected) {
 		s.hardErr = errors.Join(s.hardErr, file.Close())
 	}
 	return nil
@@ -836,7 +835,7 @@ func (s *commandWALCleanupScan) scanSegment(seg logSegment, active, loadLogicalS
 
 // scanFile scans this exact descriptor and reports whether it has transferred
 // the handle into a deletion decision. The caller owns all other handles.
-func (s *commandWALCleanupScan) scanFile(seg logSegment, file *os.File, active, loadLogicalSize bool, expected *rootpublication.StableIdentity) bool {
+func (s *commandWALCleanupScan) scanFile(seg logSegment, file *os.File, active bool, expected *rootpublication.StableIdentity) bool {
 	if s.beforeSegment != nil {
 		s.beforeSegment(seg.path)
 	}
@@ -850,21 +849,23 @@ func (s *commandWALCleanupScan) scanFile(seg logSegment, file *os.File, active, 
 		s.hardErr = errors.Join(s.hardErr, fmt.Errorf("%w: active command WAL segment identity changed: %s", ErrRecoveryRequired, filepath.Base(seg.path)))
 		return false
 	}
-	if loadLogicalSize {
-		var err error
-		seg.size, err = commitlog.LogicalFileSize(file)
-		if err != nil {
-			s.hardErr = errors.Join(s.hardErr, fmt.Errorf("size command WAL segment %s: %w", filepath.Base(seg.path), err))
-			return false
-		}
+	readBuffer := s.closedStreamBuffer
+	if active {
+		readBuffer = nil
 	}
-	opts := s.options
-	if !active {
-		opts.readBuffer = s.closedStreamBuffer
+	r, err := readBuffer.Open(file, commitlog.Options{MaxSegmentSize: s.maxSegmentBytes})
+	if err != nil {
+		s.hardErr = errors.Join(s.hardErr, fmt.Errorf("open reader for command WAL segment %s: %w", filepath.Base(seg.path), err))
+		return false
 	}
-	scan, err := scanCommandWALSegmentFileWithOptions(file, s.maxSegmentBytes, active, opts)
+	defer r.Close()
+	logicalSize, fixed := r.FixedLogicalSize()
+	if !fixed {
+		logicalSize = info.Size()
+	}
+	scan, err := scanCommandWALSegmentReader(r, active, s.options)
 	decision := commandWALSegmentCleanupDecision{
-		Path: seg.path, Size: info.Size(), LogicalSize: seg.size,
+		Path: seg.path, Size: info.Size(), LogicalSize: logicalSize,
 		ScannedBytes: scan.scannedBytes, Frames: scan.frames, MinLSN: scan.minLSN, MaxLSN: scan.maxLSN,
 		Active: active, identity: identity, lane: seg.lane, seq: seg.seq, generationKnown: true,
 	}
