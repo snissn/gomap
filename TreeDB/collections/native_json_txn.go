@@ -511,7 +511,16 @@ func (t *NativeJSONTxn) commitNativePlanObserved(sealed bool, apply *nativeComma
 		t.mu.Unlock()
 		return backenddb.ErrClosed
 	}
+	var committing *backenddb.NativePreparedPublication
 	defer func() {
+		if committing != nil {
+			// Attachment clears Custody before the cache can assign or install
+			// a frame. If CommitNative unwinds, only an unaccepted original
+			// edge can return to this transaction's cleanup.
+			t.custody, _ = committing.Custody.(*nativeMutationCustody)
+			committing.Reprepare.(*nativeJSONLogicalGroup).participants = nil
+			committing = nil
+		}
 		err, stages, lease := t.closeLocked()
 		if err != nil {
 			clearNativeCommitRetry(expired, retry, projected)
@@ -751,10 +760,12 @@ func (t *NativeJSONTxn) commitNativePlanObserved(sealed bool, apply *nativeComma
 		// Clear non-owning caller aliases before the cache can transfer the
 		// successful custody to the cleanup worker. If CommitNative declines
 		// ownership, the original native descriptor is still cancelled below.
-		t.custody = nil
 		t.bindings[0].plan.custody = nil
 	}
+	t.custody = nil
+	committing = native
 	result, err := t.core.CommitNative(native, intent, sync)
+	committing = nil
 	if expired != nil {
 		// Exact identity also excludes a lower-layer cleanup error joined to
 		// the sentinel. Consumed alone only transfers descriptor ownership.
@@ -787,7 +798,6 @@ func (t *NativeJSONTxn) commitNativePlanObserved(sealed bool, apply *nativeComma
 	if apply == nil && err != nil && (result.Assigned || result.LogicalInstalled) {
 		err = commitAmbiguousError("native command publication completion", err)
 	}
-	t.custody = nil
 	if !result.Consumed {
 		cleanupErr := cancelPrivateNativePublication(native)
 		if cleanupErr != nil {

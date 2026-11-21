@@ -679,6 +679,14 @@ their own original roots. Native projections, exact-seal requests, charged
 or root-neutral entries, and all other native custody retain their original
 independent slots. Assigned failures keep their original parked ownership.
 
+Public raw and native durable COW registrations admit one ordinary ticket per
+pending durability epoch before its first canonical append. The active capture
+spends that exact reservation on an actual root-neutral barrier with unchanged
+V. A stable or marked prefix returns the unused reservation before physical sync.
+The separate maintenance slot can stay owned by an earlier barrier until exact
+physical retirement. Unassigned group reservations return on refusal, unwind or
+teardown, and a later pending epoch can hold its own admission during prior I/O.
+
 Before releasing the original writer exclusion, rollover marks its current
 exact V/C endpoint in that same FIFO. A grouped durable ACK can append a bare
 root-neutral command after that cut's last root-changing mutation. Rollover

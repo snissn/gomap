@@ -159,6 +159,16 @@ the retained record and requires the original file error after its close.
   preassignment and preinstall refusal controls retain their separate behavior.
   Native logical sequence assertions are separate from physical applied and
   canonical barrier LSNs.
+- `TestNativeCommandWALDurableGroupOwnsBarrierAtCapacity` protects the final
+  ordinary accepted slot before allowing either real native command to ACK.
+  It observes canonical assignment, stable WAL coverage, retained visibility,
+  checkpoint retirement and typed reopen. `TestPublicCOWDurableGroupBarrierRefusalAndRefund`
+  checks clean preassignment refusal, unused reservation cleanup and the idle
+  one-frame path. `TestPublicCOWDurableGroupAfterRelaxedReplay` proves a
+  public durable boundary for a session whose recovered opening is ahead of
+  the classified WAL frontier. `TestPublicCOWDurableGroupOwnsBarrierForRelaxedTail`
+  installs a real relaxed participant beyond an idle marker before capture
+  and proves the reserved barrier closes the extended endpoint.
 - `TestNativeCollectionPressureDrainsBeforeOpening` holds a public collection
   read across repeated automatic handoffs, checks old visibility and reopen, and
   requires the original allocator to reach zero after final release/close.

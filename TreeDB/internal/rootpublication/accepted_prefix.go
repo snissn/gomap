@@ -526,6 +526,23 @@ func (ticket AcceptedTicket) InstallAccepted(descriptor AcceptedDescriptor) erro
 
 func (ticket AcceptedTicket) Valid() bool { return ticket.owner != nil && ticket.nonce != 0 }
 
+// CheckUnassignedBarrier authenticates an ordinary reservation before the
+// original raw append sequencer can spend it on a root-neutral WAL barrier.
+// The caller owns the capability exclusively through that append.
+func (ticket AcceptedTicket) CheckUnassignedBarrier(owner *Coordinator) error {
+	if ticket.owner == nil || ticket.owner != owner.AcceptedPrefixOwner() {
+		return ErrAcceptedReceipt
+	}
+	p := &ticket.owner.accepted
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	_, e := ticket.entryLocked()
+	if p.closed || e == nil || e.maintenance || e.receipt.Assigned || e.receipt.Installed || e.descriptor.Custody != nil {
+		return ErrAcceptedReceipt
+	}
+	return p.poison
+}
+
 // CancelAccepted cancels only an unassigned private reservation. Its caller
 // still owns native private preparation and disposes it through its own path.
 func (ticket AcceptedTicket) CancelAccepted() error {
@@ -993,7 +1010,15 @@ func (c *Coordinator) closeAccepted() error {
 	p.cutThrough, p.cutRootSet = SealedPrefix{}, LogicalRootSet{}
 	for i := range p.entries {
 		e := &p.entries[i]
-		if !e.reserved || e.released || e.descriptor.Custody == nil {
+		if !e.reserved || e.released {
+			continue
+		}
+		if e.descriptor.Custody == nil {
+			// The cache has withdrawn producers. Return unspent reservations
+			// even if unrelated failed custody keeps these arrays admitted.
+			if !e.receipt.Assigned && !e.receipt.Installed {
+				p.recycleLocked(i, e)
+			}
 			continue
 		}
 		e.retiring = true
