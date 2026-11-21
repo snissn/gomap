@@ -510,6 +510,17 @@ func TestPublicCOWDurableGroupOwnsBarrierForRelaxedTail(t *testing.T) {
 	if before := prefix.LogicalFrontiers(); before.C != opening.C+2 || before.W != opening.W {
 		t.Fatalf("relaxed tail must install before capture of the initial marker: %+v", before)
 	}
+	// The two raw publications coalesce after installation. Hold the tail's
+	// returned slot to verify the barrier's original reservation separately.
+	coalescedSlot, err := prefix.ReserveAccepted(false)
+	if err != nil {
+		t.Fatalf("installed raw tail did not return its coalesced slot: %v", err)
+	}
+	defer func() {
+		if err := coalescedSlot.CancelAccepted(); err != nil {
+			t.Error(err)
+		}
+	}()
 	ticket, err := prefix.ReserveAccepted(false)
 	if ticket.Valid() {
 		_ = ticket.CancelAccepted()
