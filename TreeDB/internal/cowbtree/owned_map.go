@@ -189,9 +189,7 @@ func tinyOwnedMapBuilderCharge[K ordered, V any](base *OwnedMap[K, V], mutations
 		return 0, false
 	}
 	if base == nil {
-		var zero V
-		_, copies := any(zero).(copier[V])
-		_, isoCopies := any(zero).(isoCopier[V])
+		copies, isoCopies := valueCopyMethods[V]()
 		if copies || isoCopies {
 			return 0, false
 		}
