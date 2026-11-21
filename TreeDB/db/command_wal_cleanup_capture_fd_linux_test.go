@@ -12,19 +12,31 @@ func TestCommandWALCleanupLeavesRoomForFirstPrefixCapture(t *testing.T) {
 	if !enterLimitedWALCleanupProcess(t) {
 		return
 	}
-	for _, free := range []int{2, 3, 4} {
-		t.Run(fmt.Sprintf("%d_free", free), func(t *testing.T) {
-			testCommandWALCleanupFirstPrefixCapture(t, free, false)
-		})
-		t.Run(fmt.Sprintf("%d_free_both_covered", free), func(t *testing.T) {
-			testCommandWALCleanupFirstPrefixCapture(t, free, true)
+	for _, container := range []string{"fixed", "stream"} {
+		t.Run(container, func(t *testing.T) {
+			for _, free := range []int{2, 3, 4} {
+				t.Run(fmt.Sprintf("%d_free", free), func(t *testing.T) {
+					testCommandWALCleanupFirstPrefixCapture(t, container, free, false)
+				})
+				t.Run(fmt.Sprintf("%d_free_both_covered", free), func(t *testing.T) {
+					testCommandWALCleanupFirstPrefixCapture(t, container, free, true)
+				})
+			}
 		})
 	}
 }
 
-func testCommandWALCleanupFirstPrefixCapture(t *testing.T, free int, bothCovered bool) {
+func testCommandWALCleanupFirstPrefixCapture(t *testing.T, container string, free int, bothCovered bool) {
 	opts := Options{Dir: t.TempDir(), CommandWAL: true, DisableBackgroundPrune: true}
-	database, err := Open(opts)
+	open := Open
+	if container == "stream" {
+		opts.ResolvedProfile = ProfileCommandWALRelaxed
+		opts.Durability = DurabilityWALOnRelaxed
+		opts.MemtableMode = "cow_btree"
+		opts.FreshRelaxedStandaloneWALStream = true
+		open = OpenForNativeSemanticOwner
+	}
+	database, err := open(opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,8 +45,8 @@ func testCommandWALCleanupFirstPrefixCapture(t *testing.T, free int, bothCovered
 			t.Error(err)
 		}
 	})
-	if database.commandJournal.WriterBufferStats().Container != "fixed" {
-		t.Skip("requires fixed WAL")
+	if actual := database.commandJournal.WriterBufferStats().Container; actual != container {
+		t.Skipf("fixture requires a %s WAL, got %s", container, actual)
 	}
 	var predecessors []string
 	for _, key := range []string{"covered", "replay"} {
@@ -189,7 +201,7 @@ func testCommandWALCleanupFirstPrefixCapture(t *testing.T, free int, bothCovered
 	if err := database.Close(); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := Open(opts)
+	reopened, err := open(opts)
 	if err != nil {
 		t.Fatal(err)
 	}

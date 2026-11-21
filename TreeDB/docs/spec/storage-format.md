@@ -4647,17 +4647,18 @@ frame that no longer fits the installed physical capacity is refused before
 LSN assignment. Already-created rotation resources retain their existing pending
 custody. Refusal does not loop callbacks or resize a pinned successor.
 The backend method `CleanupCommandWALCoveredPrefix` can capture handles to
-sealed fixed containers under journal append exclusion. The deferred automatic
+sealed WAL files under journal append exclusion. The deferred automatic
 checkpoint calls this method after releasing writer admission. Direct callers
-use the same scan. A canonical single-lane inventory must have a fixed active
-container and at least two sealed predecessors. The method selects up to eight
-of the oldest predecessors. When every selected file is fixed, it releases
-append exclusion to validate their frames and complete reserves, then reacquires
-it to verify the prefix and validate the remaining inventory. Ineligible
-inventories, `CleanupCommandWALCoveredSegments`, synchronous checkpoint and
-Close use the complete locked scan. Cleanup releases append exclusion before
-publication revalidation and never flushes buffered commands as a maintenance
-side effect.
+use the same scan. For a canonical single-lane inventory with at least two
+sealed predecessors, it selects up to eight of the oldest predecessors.
+When each selected file uses the active file's format, it releases append
+exclusion to validate sealed frames and, for fixed containers, their complete
+reserves. It then reacquires exclusion to verify the prefix and validate the
+remaining inventory. It checks sealed streams' size and modification time
+against the captured handles. Ineligible inventories,
+`CleanupCommandWALCoveredSegments`, synchronous checkpoint and Close use
+the complete locked scan. Cleanup releases append exclusion before publication
+revalidation and never flushes buffered commands as a maintenance side effect.
 
 An interrupted relaxed extent can retain an explicit incomplete-frame identity
 only when its start bounds/checksum and stable V2 identity validate and its end

@@ -2677,6 +2677,11 @@ Required tests:
 - `TestCommandWALCheckpointPublishesAppliedLSNBeforeCleanup`;
 - `TestCommandWALCleanupRequiresDurableCheckpointBoundary`;
 - `TestCommandWALSegmentCleanupDecodesEveryFrame`;
+- `TestCommandWALCleanupDeferredStreamScan` verifies that eligible sealed-stream
+  validation lets appends and rollover proceed, and that single-predecessor and
+  mixed-format inventories use the locked scan;
+- `TestCommandWALCleanupDeferredClosedStreamRejectsLateDamage` verifies that a
+  change to a sealed stream after validation prevents retirement;
 - `TestCommandWALCleanupDoesNotReleaseProtectionBeforeReachabilityHandoff`;
 - `TestCommandWALPreparedUncommittedExternalFilesQuarantinedAfterRestore`;
 - `TestCommandWALQuarantinePurgeRequiresCheckpoint`.
