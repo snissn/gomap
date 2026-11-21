@@ -373,6 +373,92 @@ class VacuumM0SummarizeTest(unittest.TestCase):
                     self.assertFalse(result["stability_contract"]["historical_results_reinterpreted"])
                     self.assertIn("absolute latency", (root / "summary.md").read_text())
 
+    def test_advisory_total_cv_preserves_raw_miss_and_does_not_waive_other_failures(self):
+        production, public = self.production_observations()
+        total_metric = "vacuum-total-ns/op"
+        total_samples = [500] * 5 + [1500] * 5
+        production[total_metric]["samples"] = total_samples
+        fixture = {"timing_boundary": "fixed-work", "fixture": {
+            "logical_digest": "fixture", "index_bytes": 2, "offline_index_bytes": 1,
+            "reclaimable_pages": 1, "reclaimable_page_percent": 50,
+            "value_log_bytes": 1, "offline_value_log_bytes": 1,
+            "leaf_log_bytes": 0, "parameters": {},
+        }}
+        env = {"git_sha": "source", "dirty_state": "clean", "go_version": "test",
+               "goos": "linux", "goarch": "amd64", "device": "test", "filesystem": "test", "commands": []}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "raw").mkdir()
+            (root / "fixture.json").write_text(json.dumps(fixture))
+
+            def write_sample(arm, i, metrics, outcome="PASS"):
+                benchmark = MODULE.STABILITY_BENCHMARKS[arm] if arm == "production" else "BenchmarkPublic"
+                row = benchmark + "-2 1 1 ns/op " + " ".join(
+                    f"{entry['samples'][i]} {name}" for name, entry in metrics.items()
+                )
+                path = root / "raw" / f"{arm}-{i+1}.txt"
+                path.write_text(row + f"\n{outcome}\n")
+                return path
+
+            def run(*options):
+                argv = [str(SCRIPT), "--repo-root", directory, "--run-dir", directory,
+                        "--stability-arm", "production", "--acceptance-contract", "v4", *options]
+                with mock.patch.object(sys, "argv", argv), mock.patch.object(MODULE, "environment", return_value=env):
+                    return MODULE.main()
+
+            for arm, metrics in (("production", production), ("public", public)):
+                for i in range(10):
+                    write_sample(arm, i, metrics)
+
+            self.assertEqual(run(), 1)
+            strict = json.loads((root / "results.json").read_text())
+            with mock.patch("builtins.print") as warn:
+                self.assertEqual(run("--total-cv-advisory"), 0)
+                self.assertIn("::warning::TreeDB M0 total-vacuum CV", warn.call_args.args[0])
+            advisory = json.loads((root / "results.json").read_text())
+            self.assertEqual(strict["gates"], advisory["gates"])
+            self.assertEqual(strict["metrics"], advisory["metrics"])
+            self.assertEqual(advisory["stability_contract"]["required_cv_metrics"], [])
+            self.assertEqual(advisory["stability_contract"]["advisory_cv_metrics"], [total_metric])
+            self.assertFalse(advisory["gates"][MODULE.PRODUCTION_CV_GATE])
+            self.assertNotIn(MODULE.PRODUCTION_CV_GATE, advisory["enforced_gates"])
+            self.assertTrue(all(advisory["enforced_gates"].values()))
+            diagnostic = advisory["total_vacuum_diagnostic"]
+            self.assertFalse(diagnostic["cv_at_most_10_percent"])
+            self.assertFalse(diagnostic["merge_predicate"])
+            self.assertFalse(diagnostic["owner_review_required"])
+            self.assertIsNone(diagnostic["owner_review"])
+            self.assertCountEqual(diagnostic["samples"], total_samples)
+            self.assertEqual((diagnostic["minimum"], diagnostic["median"], diagnostic["maximum"]),
+                             (500, 1000, 1500))
+            self.assertIn("fail (advisory)", (root / "summary.md").read_text())
+
+            for metric, value in (("concurrent-aborts/op", 1), ("vacuum-errors/op", 1),
+                                  ("foreground-exposure-misses/op", 1), ("foreground-overlap-samples/op", 4095)):
+                with self.subTest(metric=metric):
+                    original = production[metric]["samples"][0]
+                    production[metric]["samples"][0] = value
+                    write_sample("production", 0, production)
+                    with mock.patch("builtins.print"):
+                        self.assertEqual(run("--total-cv-advisory"), 1)
+                    production[metric]["samples"][0] = original
+            write_sample("production", 0, production)
+            public["vacuum-unsupported/op"]["samples"][0] = 1
+            write_sample("public", 0, public)
+            with mock.patch("builtins.print"):
+                self.assertEqual(run("--total-cv-advisory"), 1)
+
+            path = write_sample("production", 0, production, "FAIL")
+            with self.assertRaisesRegex(ValueError, "did not complete successfully"):
+                run("--total-cv-advisory")
+            production[total_metric]["samples"][0] = float("nan")
+            write_sample("production", 0, production)
+            with self.assertRaisesRegex(ValueError, "invalid/duplicate metric"):
+                run("--total-cv-advisory")
+            path.unlink()
+            with self.assertRaisesRegex(ValueError, "expected 10 samples"):
+                run("--total-cv-advisory")
+
     def test_phase_diagnostics_do_not_relax_other_metric_validation(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "production-1.txt"

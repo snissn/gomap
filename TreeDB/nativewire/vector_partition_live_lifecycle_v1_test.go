@@ -473,11 +473,14 @@ func TestVectorPartitionLiveSelectedLifecycleV1(t *testing.T) {
 		os.Exit(23)
 	}
 	if os.Getenv("GOMAP_SELECTED_LIVE_FIXTURE") != "" {
+		started := time.Now()
 		fixture, vectors, queries, probes := liveLifecycleOpenRetainedV1(t, "")
+		t.Logf("lifecycle setup retained_fixture_open=%s", time.Since(started))
 		runVectorPartitionLiveLifecycleV1(t, fixture, vectors, queries, probes, "doc-000000", 8)
 		return
 	}
 
+	started := time.Now()
 	documents := make([]vectorPartitionLiveDocumentV1, rows)
 	vectors := make(map[string][]float32, rows)
 	for i := range documents {
@@ -500,7 +503,17 @@ func TestVectorPartitionLiveSelectedLifecycleV1(t *testing.T) {
 	}
 	// Exercise M3's required scalar sort key and non-column retained payload
 	// through every mutation, reopen, crash and replacement phase in normal CI.
-	fixture := newVectorPartitionLiveNativewireDocumentsV1(t, documents, liveLifecycleColumnsV1(dimensions))
+	// This tests live revisions relative to the published base, not the count
+	// of pre-binding commits. Keep multiple base generations, without making a
+	// separate storage publication for each immutable seed document.
+	t.Logf("lifecycle setup generate_documents=%s", time.Since(started))
+	started = time.Now()
+	fixture := (vectorPartitionLiveFixtureConfigV1{
+		definition: defaultVectorPartitionLiveFixtureIndexV1(documents),
+		owners:     [2]string{"group-a", "group-b"},
+		partitions: 3, domains: 2, seedBatchSize: 64,
+	}).build(t, documents, liveLifecycleColumnsV1(dimensions))
+	t.Logf("lifecycle setup build_fixture=%s", time.Since(started))
 	runVectorPartitionLiveLifecycleV1(t, fixture, vectors, queries, 1, "a", 32)
 }
 
@@ -512,6 +525,7 @@ type liveLifecycleCrashV1 struct {
 
 func runVectorPartitionLiveLifecycleV1(t *testing.T, fixture vectorPartitionLiveProductionFixtureV1, vectors map[string][]float32, queries [][]float32, probes int, changedID string, mutations int) {
 	const topK, workers, perWorker = 10, 4, 1024
+	started := time.Now()
 	t.Cleanup(func() {
 		if fixture.database != nil {
 			_ = fixture.database.Close()
@@ -546,6 +560,8 @@ func runVectorPartitionLiveLifecycleV1(t *testing.T, fixture vectorPartitionLive
 	}
 	// Pick by canonical truth, not observed ANN success. Require that this
 	// relevant deletion is actually visible in the baseline search below.
+	t.Logf("lifecycle setup validate_fixture_and_routes=%s", time.Since(started))
+	started = time.Now()
 	baseline := liveLifecycleUnchangedTruthV1(t, vectors, queries[:1], nil, topK)
 	ids := slices.Sorted(maps.Keys(baseline[0].top))
 	deletedID := ids[0]
@@ -559,8 +575,11 @@ func runVectorPartitionLiveLifecycleV1(t *testing.T, fixture vectorPartitionLive
 	if fixture.manifest.Collection != "docs" {
 		liveLifecycleValidateRetainedTruthV1(t, truthFor())
 	}
+	t.Logf("lifecycle setup baseline_truth=%s", time.Since(started))
+	started = time.Now()
 	client, closeClient := liveLifecycleNativeClientV1(t, fixture.database)
 	coordinator, closeReader := liveLifecycleTCPReaderV1(t, fixture)
+	t.Logf("lifecycle setup open_client_and_reader=%s", time.Since(started))
 	request := VectorPartitionCoordinatorRequestV1{
 		Version: VectorPartitionCoordinatorVersionV1, Database: "default", Catalog: "default", Collection: fixture.manifest.Collection, IndexName: fixture.definition.Name,
 		IndexDefinitionDigest: collections.VectorIndexDefinitionDigestV1(fixture.definition), Metric: VectorPartitionShardSearchMetricCosineV1,
@@ -623,6 +642,7 @@ func runVectorPartitionLiveLifecycleV1(t *testing.T, fixture vectorPartitionLive
 	// The first search installs the normal standalone binding; never create a
 	// benchmark-only delta or substitute a direct local-search result.
 	initial := searchAll()
+	t.Logf("lifecycle setup first_search_including_binding=%s", initial[0].finished.Sub(initial[0].started))
 	remember(truthFor())
 	check("initial", initial)
 	if !slices.ContainsFunc(initial[0].response.Neighbors, func(n VectorPartitionCoordinatorNeighborV1) bool { return n.ID == deletedID }) {

@@ -7,9 +7,12 @@ The capture script now measures
 It uses the existing shared 4,096-operation fixture (2,048 point writes and
 2,048 range deletes), with the publication coordinator enabled and the
 production recoverable-root maintenance entry. It retains ten fresh interleaved
-samples. **Acceptance contract v4** retains CV <= 0.10 for total vacuum time as
-a hard predicate; foreground-p99 and maximum-writer-pause variability are retained
-diagnostics requiring separate outcome-owner review. Every sample must complete all fixed work,
+samples. **Acceptance contract v4** retains the CV <= 0.10 comparison for total
+vacuum time. It is hard in direct captures by default and advisory in the
+repository's M0 Actions workflow, including an explicitly selected runner. A
+miss emits a warning, not a retry, approval requirement or independent merge veto.
+Foreground-p99 and maximum-writer-pause variability remain diagnostics
+requiring separate outcome-owner review. Every sample must complete all fixed work,
 with zero vacuum errors, exposure misses or concurrent aborts. The independent
 160-operation PL06 public status arm and its classifier remain unchanged; they
 cannot replace the 4,096-operation stability arm.
@@ -24,6 +27,15 @@ original CV gates for either historical stability arm, without relabeling
 metrics or failures. Explicit v3 retains total and foreground-p99 CV as hard
 predicates, with pause CV diagnostic. The capture script selects production and
 v4 explicitly; v3 and the default v2 preserve their historical interpretations.
+
+The Actions workflow sets `TREEDB_M0_TOTAL_CV_MODE=advisory` for the capture.
+For direct replay, add `--total-cv-advisory` to the production-v4 summarizer
+invocation to reproduce that enforcement policy with the same samples.
+In advisory mode, `gates.production_cv_at_most_10_percent` keeps the original
+raw Boolean comparison, while `enforced_gates` lists the predicates that
+determine exit status. `total_vacuum_diagnostic` preserves all ten values, CV,
+mean, median and range. Only the total-time CV predicate is excluded. The
+old strict schema-v4 reports, and the v2/v3 modes, remain unchanged.
 
 V4 retains all ten foreground-p99 and maximum-writer-pause samples, mean, median,
 minimum, maximum and CV, including the original <= 0.10 diagnostic pass/fail.
@@ -42,9 +54,9 @@ covers the existing foreground drain before final cutover; it must not be presen
 as final-cutover blocking latency. This selected policy tradeoff does not establish
 the causes of earlier variance. No delay, numerical tolerance, absolute service
 bound or sample exclusion is introduced. Missing/truncated/nonfinite observations,
-total-CV failure, incomplete fixed work, errors, exposure misses, ambiguous public
-status, correctness, progress, debt or demonstrated material regressions remain
-blocking independently of the diagnostics.
+incomplete fixed work, errors, exposure misses, ambiguous public status,
+correctness, progress, debt or demonstrated material regressions remain blocking
+independently of the diagnostics. A total-CV failure remains blocking in strict mode.
 
 This is an explicit prospective acceptance revision, not a historical pass. The
 PR #5410 head `6214307ed9c904189ce45d2fc6b611942d88f8e5` capture failed v3

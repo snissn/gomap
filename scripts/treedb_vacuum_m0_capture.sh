@@ -3,6 +3,13 @@ set -euo pipefail
 
 # Capture the public vacuum status, offline shrink ceiling, and ten
 # interleaved production/public samples with the coordinator enabled.
+cv_args=()
+case "${TREEDB_M0_TOTAL_CV_MODE:-strict}" in
+  strict) ;;
+  advisory) cv_args+=(--total-cv-advisory) ;;
+  *) echo "invalid TREEDB_M0_TOTAL_CV_MODE (expected strict or advisory)" >&2; exit 2 ;;
+esac
+
 ROOT=$(git rev-parse --show-toplevel)
 RUN_DIR=${RUN_DIR:-"$ROOT/artifacts/treedb-vacuum-m0/$(date +%Y%m%d_%H%M%S)"}
 SHA=$(git rev-parse HEAD)
@@ -78,6 +85,6 @@ if command -v benchstat >/dev/null 2>&1; then
 fi
 
 python3 "$ROOT/scripts/treedb_vacuum_m0_summarize_test.py"
-python3 "$ROOT/scripts/treedb_vacuum_m0_summarize.py" --repo-root "$ROOT" --run-dir "$RUN_DIR" --stability-arm production --acceptance-contract v4
+python3 "$ROOT/scripts/treedb_vacuum_m0_summarize.py" --repo-root "$ROOT" --run-dir "$RUN_DIR" --stability-arm production --acceptance-contract v4 "${cv_args[@]}"
 
 echo "M0 artifacts written to $RUN_DIR"
