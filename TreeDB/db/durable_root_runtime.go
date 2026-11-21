@@ -2131,7 +2131,7 @@ func executeDurableRootStorageTransactionV1(tx durableRootStorageTransactionV1) 
 			return false, fmt.Errorf("flush durable-root external dependencies: %w", err)
 		}
 		if !tx.dependenciesCovered {
-			phase, err := syncStableResourceDependenciesV1(tx.resources, tx.dir, tx.resources.SyncThrough, nil)
+			phase, err := syncStableResourceDependenciesV1(tx.resources, tx.dir, tx.resources.SyncThroughForDurableRoot, nil)
 			if err != nil {
 				switch phase {
 				case stableResourceDependencyObserveV1:

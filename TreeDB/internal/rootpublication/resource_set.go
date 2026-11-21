@@ -4354,6 +4354,17 @@ func (set *StableResourceSet) FlushThrough() error {
 // SyncThrough persists every pinned resource through the greatest frontier
 // retained by this set.
 func (set *StableResourceSet) SyncThrough() error {
+	return set.syncThrough(false)
+}
+
+// SyncThroughForDurableRoot persists a root's dependencies before its index
+// or authority can advance. Small sets of independent value logs can sync
+// concurrently while the set still owns all of the pinned files.
+func (set *StableResourceSet) SyncThroughForDurableRoot() error {
+	return set.syncThrough(true)
+}
+
+func (set *StableResourceSet) syncThrough(parallelValueLogs bool) error {
 	if set == nil {
 		return nil
 	}
@@ -4361,6 +4372,11 @@ func (set *StableResourceSet) SyncThrough() error {
 	defer set.mu.Unlock()
 	if ResourceOwnerState(set.owner.Load()) == ResourceOwnerReleased {
 		return ErrResourceOwnership
+	}
+	if parallelValueLogs {
+		if used, err := set.syncIndependentValueLogsLocked(); used {
+			return err
+		}
 	}
 	var errs []error
 	set.rangeEntriesLocked(func(entry *stableResourceEntry) bool {
