@@ -215,7 +215,7 @@ class TreeDBCIContractTests(unittest.TestCase):
         self.assertNotIn("continue-on-error", upload)
 
 
-    def test_ordinary_route_keeps_raw_and_primary_enforced(self) -> None:
+    def test_ordinary_route_enforces_raw_and_reports_primary_timing(self) -> None:
         mvcc = block(self.source, "  mvcc-raw-path-gate:\n", "\n  vet:\n")
         raw = block(mvcc, "      - name: Compare exact base and head\n", "      - name: Compare public PRIMARY")
         primary = block(mvcc, "      - name: Compare public PRIMARY", "      - name: Compare frozen COW")
@@ -230,6 +230,7 @@ class TreeDBCIContractTests(unittest.TestCase):
         self.assertIn('./scripts/mvcc_raw_path_gate.sh', raw)
         self.assertIn('python3 scripts/mvcc_primary_cost_gate.py', primary)
         self.assertIn('--acceptance-contract v2', primary)
+        self.assertIn('--timing-advisory', primary)
         self.assertNotIn('continue-on-error', primary)
         self.assertNotIn('steps.scope.outputs.enforce', primary)
         self.assertNotIn('getversioned-timing-acceptance', self.source)

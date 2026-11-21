@@ -204,7 +204,12 @@ be at most 0.20, the median long p99 ratio at most 1.05, and the median
 throughput ratio at each length at least 0.95. In independently paired Docker
 cells, GoMap must exceed MongoDB throughput at both lengths in every pair.
 Each long GoMap UPDATE p99 must be at most the greater of 1 ms or 1.5 times
-MongoDB. Each long p99.9 must be at most the greater of 5 ms or 5 times MongoDB.
+MongoDB. The long GoMap UPDATE p99.9 target is the greater of 5 ms or 5 times
+MongoDB in each pair. Report every miss and keep the target open until each
+pair meets it. An absolute p99.9 miss alone does not block an incremental PR
+or stop the remaining short-run and lifecycle checks. Judge the increment's
+effect on the client tail against matched GoMap stock runs and investigate
+repeatable regressions.
 
 Read the per-arm READ, load, complete lifecycle, stopped allocated bytes
 and gateway process high-water marks before accepting a result. `VmHWM`

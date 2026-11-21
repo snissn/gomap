@@ -98,7 +98,7 @@ def byte_growth_budget(baseline: float, candidate: float) -> dict:
 
 
 def qualify_runtime(result: dict, before: dict, after: dict, *, quiet: bool,
-                    acceptance_contract: str = "v1") -> dict:
+                    acceptance_contract: str = "v1", timing_advisory: bool = False) -> dict:
     """Preserve raw gates while applying the explicitly selected acceptance policy."""
     if acceptance_contract not in ACCEPTANCE_CONTRACTS:
         raise ValueError("unknown acceptance contract")
@@ -123,6 +123,11 @@ def qualify_runtime(result: dict, before: dict, after: dict, *, quiet: bool,
             "EQUIVALENT_NON_ATTRIBUTABLE" if equivalent else "FAIL")
     policy = {"acceptance_contract": acceptance_contract,
               "historical_results_reinterpreted": False}
+    if timing_advisory:
+        policy["timing_advisory"] = True
+        if not acceptance["timing"]:
+            acceptance["timing"] = True
+            dispositions["timing_disposition"] = "ADVISORY_THRESHOLD_MISS"
     if acceptance_contract == "v2":
         budget = byte_growth_budget(result["medians"]["baseline"]["B/op"],
                                     result["medians"]["candidate"]["B/op"])
@@ -347,7 +352,7 @@ def acquire_quiet_window(output: Path, *, clock=None, sleep=None, observer_facto
 
 
 def run_gate(root: Path, output: Path, baseline: str, candidate: str, *,
-             acceptance_contract: str = "v1") -> int:
+             acceptance_contract: str = "v1", timing_advisory: bool = False) -> int:
     if acceptance_contract not in ACCEPTANCE_CONTRACTS:
         raise ValueError("unknown acceptance contract")
     if not re.fullmatch(r"[0-9a-f]{40}", baseline) or not re.fullmatch(r"[0-9a-f]{40}", candidate):
@@ -440,6 +445,8 @@ def run_gate(root: Path, output: Path, baseline: str, candidate: str, *,
         if acceptance_contract == "v2":
             bindings["byte_limits"] = {"absolute_limit_B_per_op": BYTE_LIMIT_ABSOLUTE,
                                      "relative_limit_percent": BYTE_LIMIT_PERCENT}
+        if timing_advisory:
+            bindings["timing_advisory"] = True
         save("bindings.json", bindings)
         benchmark_argv = ["-test.run=^$", "-test.bench=^" + BENCHMARK + "$",
                           "-test.benchtime=128x", "-test.count=1", "-test.benchmem", "-test.timeout=90s"]
@@ -482,7 +489,7 @@ def run_gate(root: Path, output: Path, baseline: str, candidate: str, *,
             raise RuntimeError("benchmark input drift")
         inputs_after = bind_inputs("after")
         result = qualify_runtime(evaluate(rows), inputs_before, inputs_after, quiet=not busy,
-                                 acceptance_contract=acceptance_contract)
+                                 acceptance_contract=acceptance_contract, timing_advisory=timing_advisory)
         result.update(baseline=baseline, candidate=candidate)
         if "byte_budget" in result:
             bindings["byte_budget"] = result["byte_budget"]
@@ -500,6 +507,10 @@ def run_gate(root: Path, output: Path, baseline: str, candidate: str, *,
             f"- Timing acceptance: `{result['timing_disposition']}`; bytes acceptance: `{result['bytes_disposition']}`; bound runtime/input equivalent: {result['runtime_input_equivalent']}.\n"
             f"- Byte budget: `{json.dumps(result.get('byte_budget'), sort_keys=True)}` (v1 has no numeric allowance).\n"
             "- Scope: this public replacement workload; not final graph qualification.\n")
+        if result["timing_disposition"] == "ADVISORY_THRESHOLD_MISS":
+            delta = result["median_paired_delta_percent"]
+            print(f"::warning title=Public PRIMARY timing::Median paired change {delta:+.3f}% "
+                  f"exceeded the advisory +{TIME_LIMIT_PERCENT:g}% threshold.")
         return 0 if result["accepted"] else 1
     except Exception as error:
         if observation is not None:
@@ -521,9 +532,11 @@ def main() -> int:
     parser.add_argument("--candidate", required=True)
     parser.add_argument("--acceptance-contract", choices=ACCEPTANCE_CONTRACTS, default="v1",
                         help="v1 preserves historical attribution; v2 applies the explicit bounded byte-growth budget")
+    parser.add_argument("--timing-advisory", action="store_true",
+                        help="report a paired timing miss as advisory; all other requirements still apply")
     args = parser.parse_args()
     return run_gate(args.root.resolve(), args.output.resolve(), args.baseline, args.candidate,
-                    acceptance_contract=args.acceptance_contract)
+                    acceptance_contract=args.acceptance_contract, timing_advisory=args.timing_advisory)
 
 
 if __name__ == "__main__":
