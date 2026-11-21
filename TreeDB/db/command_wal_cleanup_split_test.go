@@ -210,7 +210,7 @@ func TestCommandWALCleanupDeferredClosedStreamRejectsLateDamage(t *testing.T) {
 		})
 	}
 	t.Run("changed_after_detached_read", func(t *testing.T) {
-		file, err := os.OpenFile(paths[0], os.O_WRONLY|os.O_APPEND, 0)
+		file, err := os.OpenFile(paths[0], os.O_WRONLY, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -224,7 +224,7 @@ func TestCommandWALCleanupDeferredClosedStreamRejectsLateDamage(t *testing.T) {
 			if path != paths[1] {
 				return
 			}
-			if _, err := file.Write([]byte{0}); err != nil {
+			if _, err := file.WriteAt([]byte{0}, originalInfo[0].Size()); err != nil {
 				t.Fatal(err)
 			}
 			changed = true
