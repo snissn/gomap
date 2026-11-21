@@ -710,6 +710,100 @@ func TestCOWLeafInspectionNoMappingUsesReadAt(t *testing.T) {
 	}
 }
 
+func TestCOWLeafPayloadUsesManagedMapping(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap not supported on windows")
+	}
+	leaf := buildSparseLeafPageForPayloadTest(t)
+	for _, codec := range []BlockCodec{BlockCodecNone, BlockCodecSnappy} {
+		t.Run(fmt.Sprint(codec), func(t *testing.T) {
+			source, ptr := cowTestLeafRecord(t, leaf, codec)
+			file := cowOpenManagedLeafForTest(t, source.Name(), ptr.FileID)
+			shape, err := file.InspectCOWLeafRecord(ptr, cowTestLimits)
+			if err != nil {
+				t.Fatal(err)
+			}
+			input, raw, pageDst := make([]byte, shape.PayloadBytes()), make([]byte, shape.RawBytes), make([]byte, page.PageSize)
+			var decode COWDecodeFunc
+			if codec != BlockCodecNone {
+				d, err := NewCOWBlockDecoder(codec, shape.RawBytes, shape.PayloadBytes(), func(COWDecoderAllocationSizes) error { return nil })
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(d.Close)
+				decode = func(frame FrameHeader, body, dst []byte) ([]byte, error) {
+					if len(body) == 0 || &body[0] != &input[0] {
+						t.Fatal("decoder received input outside its admitted scratch")
+					}
+					return d.Decode(frame, body, dst)
+				}
+			}
+			hits, fallbacks := file.mmapReadHits.Load(), file.mmapReadFallbackReadAt.Load()
+			got, err := file.ReadCOWLeafPage(ptr, shape, input[:0], raw, pageDst, decode)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got == nil || &got[0] != &pageDst[0] {
+				t.Fatal("page aliases a mapped or decoder buffer")
+			}
+			requireLeafPagesLogicallyEqual(t, leaf, got)
+			if mapped, positional := file.mmapReadHits.Load()-hits, file.mmapReadFallbackReadAt.Load()-fallbacks; mapped != 1 || positional != 0 {
+				t.Fatalf("payload reads: mmap=%d ReadAt=%d, want 1/0", mapped, positional)
+			}
+			if _, err := file.ReadCOWLeafPage(ptr, shape, input[:0:0], raw, pageDst, decode); !errors.Is(err, ErrCOWReadCapacity) {
+				t.Fatalf("missing scratch admission: %v", err)
+			}
+			wrong := ptr
+			wrong.FileID++
+			if _, err := file.ReadCOWLeafPage(wrong, shape, input, raw, pageDst, decode); !errors.Is(err, ErrCOWReadCapacity) {
+				t.Fatalf("foreign pointer accepted: %v", err)
+			}
+			foreign := &File{ID: wrong.FileID, File: file.File}
+			if _, err := foreign.ReadCOWLeafPage(ptr, shape, input, raw, pageDst, decode); !errors.Is(err, ErrCOWReadUnsupported) {
+				t.Fatalf("foreign segment accepted: %v", err)
+			}
+
+			writer, err := os.OpenFile(source.Name(), os.O_RDWR, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if err := writer.Close(); err != nil {
+					t.Error(err)
+				}
+			})
+			start := int64(ptr.Offset) - 4
+			for _, offset := range []int64{start, start + 16, start + int64(shape.RecordBytes) - 1} {
+				// Corrupt the record CRC, length and body separately after inspection.
+				// The admitted mapping must surface each failure without ReadAt.
+				var saved [1]byte
+				if _, err := writer.ReadAt(saved[:], offset); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := writer.WriteAt([]byte{saved[0] ^ 1}, offset); err != nil {
+					t.Fatal(err)
+				}
+				_, mappedErr := file.ReadCOWLeafPage(ptr, shape, input, raw, pageDst, decode)
+				_, positionalErr := ReadCOWLeafPage(source, ptr, shape, true, input, raw, pageDst, decode)
+				if _, err := writer.WriteAt(saved[:], offset); err != nil {
+					t.Fatal(err)
+				}
+				if !errors.Is(mappedErr, ErrCorrupt) || !errors.Is(positionalErr, ErrCorrupt) {
+					t.Fatalf("corrupt offset %d: mmap=%v ReadAt=%v", offset, mappedErr, positionalErr)
+				}
+			}
+			if mapped, positional := file.mmapReadHits.Load()-hits, file.mmapReadFallbackReadAt.Load()-fallbacks; mapped != 4 || positional != 0 {
+				t.Fatalf("corruption fallback: mmap=%d ReadAt=%d, want 4/0", mapped, positional)
+			}
+			if got, err := file.ReadCOWLeafPage(ptr, shape, input, raw, pageDst, decode); err != nil {
+				t.Fatalf("mapped read after repair: %v", err)
+			} else {
+				requireLeafPagesLogicallyEqual(t, leaf, got)
+			}
+		})
+	}
+}
+
 func TestCOWLeafInspectionTruncatedRecord(t *testing.T) {
 	leaf := buildSparseLeafPageForPayloadTest(t)
 	source, ptr := cowTestLeafRecord(t, leaf, BlockCodecSnappy)
@@ -775,6 +869,35 @@ func TestCOWLeafInspectionTruncatedRecord(t *testing.T) {
 				dst := make([]byte, 0, page.PageSize)
 				if _, err := ReadCOWLeafPage(f.File, ptr, got, true, payload, raw, dst, nil); !errors.Is(err, io.EOF) {
 					t.Fatalf("full read of short body: %v, want EOF", err)
+				}
+				if _, err := f.ReadCOWLeafPage(ptr, got, payload, raw, dst, nil); !errors.Is(err, io.EOF) {
+					t.Fatalf("managed full read of short body: %v, want EOF", err)
+				}
+				if hits, fallbacks := f.mmapReadHits.Load(), f.mmapReadFallbackReadAt.Load(); hits != 0 || fallbacks != 2 {
+					t.Fatalf("short payload: mmap hits=%d ReadAt fallbacks=%d, want 0/2", hits, fallbacks)
+				}
+				if tc.grows {
+					writer, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+					if err != nil {
+						t.Fatal(err)
+					}
+					_, writeErr := writer.Write(full[tc.size:])
+					if err := errors.Join(writeErr, writer.Close()); err != nil {
+						t.Fatal(err)
+					}
+					d, err := NewCOWBlockDecoder(BlockCodecSnappy, got.RawBytes, got.PayloadBytes(), func(COWDecoderAllocationSizes) error { return nil })
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer d.Close()
+					result, err := f.ReadCOWLeafPage(ptr, got, payload, raw, dst, d.Decode)
+					if err != nil {
+						t.Fatalf("full read following observable growth: %v", err)
+					}
+					requireLeafPagesLogicallyEqual(t, leaf, result)
+					if hits, fallbacks := f.mmapReadHits.Load(), f.mmapReadFallbackReadAt.Load(); hits != 1 || fallbacks != 2 {
+						t.Fatalf("grown payload: mmap hits=%d ReadAt fallbacks=%d, want 1/2", hits, fallbacks)
+					}
 				}
 			}
 		})
