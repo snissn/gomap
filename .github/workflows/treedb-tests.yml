@@ -535,9 +535,6 @@ jobs:
           - name: ubuntu
             os: ubuntu-latest
             timeout_minutes: 15
-          - name: macos
-            os: macos-latest
-            timeout_minutes: 30
           - name: windows
             os: windows-latest
             timeout_minutes: 15
@@ -569,16 +566,8 @@ jobs:
           python3 -B scripts/cow_c3_read/load_readiness_test.py
 
       - name: Vet
-        if: ${{ matrix.name != 'macos' }}
         working-directory: TreeDB
         run: go vet ./...
-
-      - name: Vet (macOS elapsed and resource diagnostics)
-        if: ${{ matrix.name == 'macos' }}
-        working-directory: TreeDB
-        run: |
-          date -u '+vet started %Y-%m-%dT%H:%M:%SZ'
-          /usr/bin/time -l go vet -p=1 -x ./...
 
   test:
     name: ${{ matrix.name }}
@@ -713,7 +702,8 @@ jobs:
             shard_kind: windows-caching-rest
             rest_shard_index: 2
             rest_shard_count: 3
-    timeout-minutes: ${{ matrix.timeout }}
+    # Allow a bounded vet tail on the three existing Darwin test reservations.
+    timeout-minutes: ${{ matrix.os == 'macos-latest' && 35 || matrix.timeout }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -732,6 +722,7 @@ jobs:
         run: go clean -testcache
 
       - name: Test
+        timeout-minutes: ${{ matrix.timeout }}
         working-directory: TreeDB
         shell: bash
         env:
@@ -826,6 +817,10 @@ jobs:
               package_file="$(make_tmp)"
               time_discovery packages go list ./... > "$package_all_file"
               weighted_shard_file package "$package_shard_index" "$package_shard_count" ../.github/ci/treedb_unix_weighted_shards.tsv "$package_all_file" "$package_file"
+              if [[ "$RUNNER_OS" == macOS ]]; then
+                # Publish only after discovery and the existing selector both succeed.
+                cp "$package_file" "$RUNNER_TEMP/treedb-macos-vet-packages"
+              fi
               echo "TreeDB package shard=${package_shard_index}/${package_shard_count}"
               cat "$package_file"
               if [ -s "$package_file" ]; then
@@ -984,6 +979,21 @@ jobs:
             TreeDB/treedb-test.jsonl
             TreeDB/treedb-test.jsonl.summary.md
 
+      # Leave normal test-failure summaries and JSON uploads independent of vet.
+      - name: Vet tested packages (macOS elapsed and resource diagnostics)
+        if: ${{ !cancelled() && matrix.os == 'macos-latest' }}
+        working-directory: TreeDB
+        shell: bash
+        run: |
+          set -euo pipefail
+          plan="$RUNNER_TEMP/treedb-macos-vet-packages"
+          if ! [[ -s "$plan" ]]; then
+            echo "missing or empty macOS package plan; refusing to skip vet" >&2
+            exit 1
+          fi
+          date -u '+vet started %Y-%m-%dT%H:%M:%SZ'
+          xargs /usr/bin/time -l go vet -p=1 -x < "$plan"
+
   race:
     name: race-check (linux)-${{ matrix.shard }}
     runs-on: ubuntu-latest
@@ -1123,11 +1133,23 @@ jobs:
             root_regex="^($(paste -sd'|' "$root_test_file"))$"
             echo "TreeDB root race test shard=${shard_index}/${shard_count} regex=${root_regex}"
             root_race_options=()
-            # Both sizes reproduced the historic leaf-log lifetime failure (#4886).
-            # Only the larger nested subtest is redundant in the PR race rerun.
-            if [[ "$GITHUB_EVENT_NAME" == pull_request ]] && grep -Fxq TestCompactStorageExhaustiveCommandWALRandom4KOffline "$root_test_file"; then
-              root_race_options=(-skip '^TestCompactStorageExhaustiveCommandWALRandom4KOffline$/^keys100000$')
-              echo "PR race: 20k offline compact regression; 100k still runs normally and under race on main, merge-group, and TreeDB workflow dispatch."
+            if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
+              root_race_exclusions=()
+              # Both sizes reproduce the historic leaf-log failure (#4886).
+              if grep -Fxq TestCompactStorageExhaustiveCommandWALRandom4KOffline "$root_test_file"; then
+                root_race_exclusions+=('^TestCompactStorageExhaustiveCommandWALRandom4KOffline$/^keys100000$')
+                echo "PR race: 20k offline compact regression; 100k still runs normally and under race on main, merge-group, and TreeDB workflow dispatch."
+              fi
+              # This driver repeats ordinary Go subprocesses; the required
+              # normal root job runs it, and owning package race jobs run all
+              # five producer witnesses with actual race instrumentation.
+              if grep -Fxq TestProductionAuthorityExecutableCompositeOmissionMatrix "$root_test_file"; then
+                root_race_exclusions+=('^TestProductionAuthorityExecutableCompositeOmissionMatrix$')
+                echo "PR race: ordinary omission driver remains in required normal tests; producer witnesses still execute in their race packages."
+              fi
+              if (("${#root_race_exclusions[@]}")); then
+                root_race_options=(-skip "$(IFS='|'; printf '%s' "${root_race_exclusions[*]}")")
+              fi
             fi
             GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -race -p 1 -timeout 12m . -run "$root_regex" "${root_race_options[@]}" | tee -a treedb-race.jsonl
             ran_tests=true
