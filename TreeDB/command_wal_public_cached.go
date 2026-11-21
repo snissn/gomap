@@ -1705,8 +1705,17 @@ func (b *commandWALPublicBatch) submitCOWWrite(commandSync bool) error {
 	}
 	returned := false
 	defer func() {
-		if !returned && b.cowState.registration.awaiting {
+		if returned {
+			return
+		}
+		registration := b.cowState.registration
+		b.cowState.registration = publicCommandWALRegistration{}
+		if registration.awaiting {
 			b.db.commandWALGroupCommit.failPanickedCompletion(b.db)
+		} else if registration.ticket == publicCommandWALFastRelaxedTicket || registration.ticket == publicCommandWALFastRelaxedAppendedTicket {
+			// Registration transferred the public operation lease, but
+			// the caller will not reach completeCOWWrite.
+			b.db.finishPublicCommandWALGroupPublication(registration.publicCommandWALPublication, db.ErrRecoveryRequired)
 		}
 	}()
 	err := inner.WriteAfterCommandWALAppendWithPreparedRevision(commandSync, b.registerCOWAppend)
