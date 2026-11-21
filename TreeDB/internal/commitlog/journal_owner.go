@@ -737,6 +737,11 @@ func (j *CommandJournal) rotateActiveSegmentLockedObserved(syncCurrent, observe 
 	closedBytes := j.writer.ActiveBytes()
 	outcome, rotateErr := j.writer.rotateToWithSyncObservedAhead(nextPath, syncCurrent, j.root, observe, ahead)
 	if !outcome.Installed {
+		if outcome.SuccessorVisible {
+			// Recovery may already see the canonical successor and classify the
+			// predecessor as sealed. Stop appends until reopen selects the writer.
+			return j.fileSync.run(func() error { return rotateErr })
+		}
 		return rotateErr
 	}
 	stableParent, stableParentErr := captureStableCommandWALParent(j.walDir, j.writer.f)

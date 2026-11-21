@@ -43,8 +43,7 @@ func openLogFileWithCreation(path string, flags int) (*os.File, bool, error) {
 	created, err := os.OpenFile(path, flags|os.O_CREATE|os.O_EXCL, 0o600)
 	if err == nil {
 		if observeErr := durabilitycut.EmitNamespace(durabilitycut.NamespaceCreate, durabilitycut.ResourceCommandWAL, filepath.Dir(path), "", path); observeErr != nil {
-			_ = created.Close()
-			return nil, true, observeErr
+			return nil, true, errors.Join(observeErr, created.Close())
 		}
 		return created, true, nil
 	}
@@ -669,7 +668,8 @@ func RotationInstalled(err error) bool {
 }
 
 type writerRotationOutcome struct {
-	Installed bool
+	Installed        bool
+	SuccessorVisible bool
 }
 
 func (w *Writer) rotateToWithSyncObserved(path string, syncCurrent bool, root string, observe bool) (writerRotationOutcome, error) {
@@ -713,17 +713,18 @@ func (w *Writer) rotateToWithSyncObservedAhead(path string, syncCurrent bool, ro
 	}
 	file, created, err := openLogFileWithCreation(path, os.O_RDWR)
 	if err != nil {
-		return writerRotationOutcome{}, err
+		return writerRotationOutcome{SuccessorVisible: created}, err
 	}
+	preInstall := writerRotationOutcome{SuccessorVisible: true}
 	var preparedParent *os.File
 	if created && w.fixedBudget > 0 {
 		preparedParent, err = rootpublication.OpenStableParent(filepath.Dir(path))
 		if err != nil {
-			return writerRotationOutcome{}, errors.Join(err, file.Close())
+			return preInstall, errors.Join(err, file.Close())
 		}
 		defer preparedParent.Close()
 		if err = rootpublication.ValidateStableChildLink(preparedParent, file, filepath.Base(path)); err != nil {
-			return writerRotationOutcome{}, errors.Join(err, file.Close())
+			return preInstall, errors.Join(err, file.Close())
 		}
 	}
 	// A pre-existing empty successor is not permission to replace its identity.
@@ -743,8 +744,7 @@ func (w *Writer) rotateToWithSyncObservedAhead(path string, syncCurrent bool, ro
 	}
 	if syncCurrent {
 		if err := syncNewLogFileDirectory(w, file, path); err != nil {
-			_ = file.Close()
-			return writerRotationOutcome{}, err
+			return preInstall, errors.Join(err, file.Close())
 		}
 	}
 	old, oldFixed := w.f, w.fixed

@@ -630,6 +630,78 @@ func TestCommandJournalDirectSyncRotationCutOrderAndPaths(t *testing.T) {
 	}
 }
 
+func TestCommandJournalOrdinaryRotationNamespaceFailureStopsAppends(t *testing.T) {
+	for _, failure := range []string{"created", "namespace-sync"} {
+		t.Run(failure, func(t *testing.T) {
+			dir := t.TempDir()
+			opts := CommandJournalOptions{PreferExt4Stream: true}
+			j, err := OpenCommandJournal(dir, opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = j.Close() })
+			lsn, err := j.AppendRawKVPointCommandTrustedAndFlush(0, RawKVOpSet, []byte("before"), []byte("first"), false)
+			if err != nil || lsn != 1 {
+				t.Fatalf("initial append = (%d, %v), want (1, nil)", lsn, err)
+			}
+			oldPath := j.Path()
+			successor := filepath.Join(dir, CommandSegmentName(j.lane, j.segmentSeq+1))
+			injected := errors.New("injected successor namespace failure")
+			restore := durabilitycut.Install(func(e durabilitycut.Event) error {
+				if e.Resource != durabilitycut.ResourceCommandWAL {
+					return nil
+				}
+				switch failure {
+				case "created":
+					if e.Namespace == durabilitycut.NamespaceCreate && e.NewPath == successor {
+						return injected
+					}
+				case "namespace-sync":
+					// This is the ordinary rotation's final namespace barrier,
+					// after fixed initialization when that format is selected.
+					if e.Point == durabilitycut.BeforeNewFileDirectorySync && e.Root == "" && e.Path == dir {
+						return injected
+					}
+				}
+				return nil
+			})
+			rotateErr := j.RotateActiveSegment(true)
+			restore()
+			if !errors.Is(rotateErr, injected) {
+				t.Fatalf("rotation = %v, want injected failure", rotateErr)
+			}
+			if j.Path() != oldPath {
+				t.Fatalf("failed rotation installed %q, want %q", j.Path(), oldPath)
+			}
+			if _, err := os.Stat(successor); err != nil {
+				t.Fatalf("published successor: %v", err)
+			}
+			lsn, err = j.AppendRawKVPointCommandTrustedAndFlush(0, RawKVOpSet, []byte("after"), []byte("second"), false)
+			if lsn != 0 || !errors.Is(err, injected) || j.NextLSN() != 2 {
+				t.Fatalf("append past failed seal = (%d, %v), next LSN %d", lsn, err, j.NextLSN())
+			}
+			if err := j.Close(); !errors.Is(err, injected) {
+				t.Fatalf("Close = %v, want injected failure", err)
+			}
+			fresh, err := OpenCommandJournal(dir, opts)
+			if err != nil {
+				t.Fatalf("reopen: %v", err)
+			}
+			t.Cleanup(func() { _ = fresh.Close() })
+			if fresh.Path() != successor || fresh.NextLSN() != 2 {
+				t.Fatalf("reopen has path %q and next LSN %d, want %q and 2", fresh.Path(), fresh.NextLSN(), successor)
+			}
+			lsn, err = fresh.AppendRawKVPointCommandTrustedAndFlush(1, RawKVOpSet, []byte("after"), []byte("second"), true)
+			if err != nil || lsn != 2 {
+				t.Fatalf("append after reopen = (%d, %v), want (2, nil)", lsn, err)
+			}
+			if err := fresh.Close(); err != nil {
+				t.Fatalf("reopened Close: %v", err)
+			}
+		})
+	}
+}
+
 func TestCommandJournalPointAppendAndFlushMeasuredReportsPhases(t *testing.T) {
 	dir := t.TempDir()
 	j, err := OpenCommandJournal(dir, CommandJournalOptions{})
