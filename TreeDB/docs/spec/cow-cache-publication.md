@@ -594,8 +594,9 @@ same original captured AppliedLSN; a successful request's original durable WAL
 ACK and recovery skipping remain unchanged. The active journal remains
 appendable, and original append-size rollover still applies.
 
-When ordinary accepted slots reach the three-quarter watermark, a native write
-with original accepted custody can request a pass from that same size worker.
+In the durable command-WAL profile, when ordinary accepted slots reach the
+three-quarter watermark, a native write with original accepted custody can
+request a pass from that same size worker.
 The wake is coalesced and never delays accepted installation. The worker
 rechecks the live prefix under existing checkpoint admission fences and joins
 its exact physical seal and retirement. This pass uses the ordinary WAL flush.

@@ -26,7 +26,7 @@ const (
 	streamAcceptedPressureColl    = "docs"
 )
 
-func TestStandaloneRelaxedExt4StreamJournalAckDuringAcceptedPressureCrashReopen(t *testing.T) {
+func TestStandaloneRelaxedExt4StreamJournalAckAfterAcceptedOccupancyCrashReopen(t *testing.T) {
 	const (
 		dirEnv = "TREEDB_MONGO_EXT4_STREAM_ACCEPTED_PRESSURE_DIR"
 		marker = "EXT4 STREAM ACCEPTED PRESSURE ACK "
@@ -50,7 +50,7 @@ func TestStandaloneRelaxedExt4StreamJournalAckDuringAcceptedPressureCrashReopen(
 
 	ctx, cancel := context.WithTimeout(t.Context(), 25*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestStandaloneRelaxedExt4StreamJournalAckDuringAcceptedPressureCrashReopen$", "-test.v")
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestStandaloneRelaxedExt4StreamJournalAckAfterAcceptedOccupancyCrashReopen$", "-test.v")
 	cmd.Env = append(os.Environ(), dirEnv+"="+dir)
 	output, err := cmd.CombinedOutput()
 	var exited *exec.ExitError
@@ -141,21 +141,13 @@ func runStreamAcceptedPressureJournalAck(t *testing.T, opts StandaloneOptions) u
 	if initial == 0 || before.JournalAcknowledgements != 1 || owner.Backend.CommandWALNextLSN() != initial+1 {
 		t.Fatalf("fixture did not start from a complete applied seed: LSN=%d stats=%+v", initial, before)
 	}
-	oldLSN := initial + streamAcceptedPressureTrigger
-	followingLSN := oldLSN + 1
+	followingLSN := initial + streamAcceptedPressureTrigger + 1
 
 	root := filepath.Join(opts.Dir, "maindb")
-	valueLog := backenddb.ValueLogDirPath(root)
 	wal := backenddb.WALDirPath(root)
-	oldApply, releaseOldApply := make(chan struct{}), make(chan struct{})
 	followingAppend := make(chan struct{})
 	followingApply, releaseFollowingApply := make(chan struct{}), make(chan struct{})
-	unblockOld := sync.OnceFunc(func() { close(releaseOldApply) })
 	unblockFollowing := sync.OnceFunc(func() { close(releaseFollowingApply) })
-	holdOld := sync.OnceFunc(func() {
-		close(oldApply)
-		<-releaseOldApply
-	})
 	markAppend := sync.OnceFunc(func() { close(followingAppend) })
 	holdFollowing := sync.OnceFunc(func() {
 		close(followingApply)
@@ -166,13 +158,6 @@ func runStreamAcceptedPressureJournalAck(t *testing.T, opts StandaloneOptions) u
 			return nil
 		}
 		switch {
-		case event.Resource == durabilitycut.ResourceValueLog && event.Point == durabilitycut.AfterDependencyAppend:
-			for _, path := range event.Paths {
-				if filepath.Dir(path) == valueLog {
-					holdOld()
-					break
-				}
-			}
 		case event.Resource == durabilitycut.ResourceCommandWAL && event.Point == durabilitycut.AfterDependencyAppend &&
 			event.LSN == followingLSN && filepath.Dir(event.Path) == wal:
 			markAppend()
@@ -182,27 +167,21 @@ func runStreamAcceptedPressureJournalAck(t *testing.T, opts StandaloneOptions) u
 		return nil
 	})
 	defer restore()
-	defer unblockOld()
 	defer unblockFollowing()
 
 	for n := 1; n <= streamAcceptedPressureTrigger; n++ {
 		if n == streamAcceptedPressureTrigger {
 			pressure, err := owner.Backend.ObserveNativeProducer()
 			if err != nil || pressure.UnderPressure {
-				t.Fatalf("fixture reached another producer pressure boundary: %+v %v", pressure, err)
+				t.Fatalf("fixture reached producer pressure before the occupancy watermark: %+v %v", pressure, err)
 			}
 		}
 		reply := serveCommand(t, owner.Server, int32(n+1), streamAcceptedPressureInsert(n, false))
 		assertOK(t, reply)
 		assertInt32(t, reply, "n", 1)
 	}
-	select {
-	case <-oldApply:
-	case <-time.After(wait):
-		t.Fatal("background Apply did not start after 24 of 32 ordinary slots")
-	}
 	if applied, next := owner.Backend.State().AppliedCommandLSN, owner.Backend.CommandWALNextLSN(); applied != initial || next != followingLSN {
-		t.Fatalf("held background Apply has wrong frontier: applied=%d next=%d, want %d and %d", applied, next, initial, followingLSN)
+		t.Fatalf("visible writes at the occupancy watermark changed the applied frontier: applied=%d next=%d, want %d and %d", applied, next, initial, followingLSN)
 	}
 
 	following := streamAcceptedPressureInsert(streamAcceptedPressureTrigger+1, true)
@@ -213,12 +192,11 @@ func runStreamAcceptedPressureJournalAck(t *testing.T, opts StandaloneOptions) u
 		close(done)
 	}()
 	defer func() {
-		unblockOld()
 		unblockFollowing()
 		select {
 		case <-done:
 		case <-time.After(wait):
-			t.Error("journaled request failed to join after releasing both physical holds")
+			t.Error("journaled request failed to join after releasing the applied-root hold")
 		}
 	}()
 	assertPending := func(point string, applied uint64) {
@@ -238,10 +216,8 @@ func runStreamAcceptedPressureJournalAck(t *testing.T, opts StandaloneOptions) u
 	case <-done:
 		t.Fatalf("journaled request returned without its WAL append: %s %v", bson.Raw(result.doc), result.err)
 	case <-time.After(wait):
-		t.Fatal("journaled request did not reach its own WAL append with background Apply held")
+		t.Fatal("journaled request did not reach its own WAL append")
 	}
-	assertPending("background Apply is held", initial)
-	unblockOld()
 	select {
 	case <-followingApply:
 	case <-done:
@@ -249,7 +225,7 @@ func runStreamAcceptedPressureJournalAck(t *testing.T, opts StandaloneOptions) u
 	case <-time.After(wait):
 		t.Fatal("journaled request did not reach its own applied-root boundary")
 	}
-	assertPending("successor applied-root advance is held", oldLSN)
+	assertPending("its applied-root advance is held", initial)
 	unblockFollowing()
 	select {
 	case <-done:
@@ -274,6 +250,6 @@ func runStreamAcceptedPressureJournalAck(t *testing.T, opts StandaloneOptions) u
 	if applied, next := owner.Backend.State().AppliedCommandLSN, owner.Backend.CommandWALNextLSN(); durable != followingLSN || applied != followingLSN || next != followingLSN+1 {
 		t.Fatalf("journaled suffix durable=%d applied=%d next=%d, want %d, %d, %d", durable, applied, next, followingLSN, followingLSN, followingLSN+1)
 	}
-	t.Logf("held background Apply through LSN %d after %d visible writes, observed successor append and applied-root hold at LSN %d", oldLSN, streamAcceptedPressureTrigger, followingLSN)
+	t.Logf("applied LSN stayed at %d after %d visible writes, then the journaled LSN %d waited for its applied-root advance", initial, streamAcceptedPressureTrigger, followingLSN)
 	return followingLSN
 }

@@ -4893,13 +4893,14 @@ results from owning-package/race results and the parent performance gates.
 
 `TestCOWPublicAcceptedPressureOverlapsFollowingWrite` holds the original
 physical Apply after the accepted-slot advisory captures its frontier. It
-checks a later fixed durable WAL completion and a later relaxed visible write
-while Apply is held, exact accepted retirement, old reads and typed reopen.
-`TestStandaloneRelaxedExt4StreamJournalAckDuringAcceptedPressureCrashReopen`
-exercises the public `j:true` path on ext4 stream, holds the request's own
-applied-root completion, and verifies typed contents in a fresh process after
-abrupt gateway exit. `TestCOWPublicAcceptedPressureReportsOriginalSealFailure`
-verifies original error notification, pending retirement and checked Close.
+checks a later durable WAL completion while Apply is held, exact accepted
+retirement, old reads and typed reopen.
+`TestStandaloneRelaxedExt4StreamJournalAckAfterAcceptedOccupancyCrashReopen`
+fills ordinary accepted slots to the same watermark on relaxed ext4 stream.
+It then holds the public `j:true` request's applied-root advance, checks the
+response remains pending and verifies typed contents after abrupt gateway exit.
+`TestCOWPublicAcceptedPressureReportsOriginalSealFailure` verifies original
+error notification, pending retirement and checked Close.
 
 The lower native seam is independently testable while unmigrated collection
 producers retain their existing barriers. Passing these controls does not claim

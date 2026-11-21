@@ -13379,7 +13379,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	}
 
 	db.cow = cowOwner
-	if db.externalCommandWAL && cowOwner != nil && cowOwner.prefix != nil {
+	// The durable profile reclaims this prefix while later requests keep their
+	// own WAL sync. Relaxed owners retain their generation and root scheduling.
+	if db.externalCommandWAL && !db.relaxedSync && cowOwner != nil && cowOwner.prefix != nil {
 		db.nativeAcceptedFlushCh = make(chan struct{}, 1)
 		cowOwner.prefix.SetAcceptedPressureWake(db.nativeAcceptedFlushCh)
 	}
