@@ -4868,6 +4868,13 @@ func (db *DB) Checkpoint() error {
 	return db.checkpoint(false)
 }
 
+// CheckpointWithoutCommandWALCleanup establishes the same durable boundary as
+// Checkpoint. The cache uses it when this invocation already owns a later
+// synchronous cleanup pass after accepted publication retirement.
+func (db *DB) CheckpointWithoutCommandWALCleanup() error {
+	return db.checkpointWithCommandWALCleanup(false, false)
+}
+
 // MaintainCommandWALCoveredPrefix rotates the physical command-WAL prefix and
 // removes only segments already covered by recovery-selectable durable roots.
 // Automatic cache maintenance uses this instead of Checkpoint so deferred root
@@ -4942,7 +4949,7 @@ func (db *DB) prepareCommandWALCoveredPrefixCleanupLocked(automatic bool) (bool,
 	hasRootPublication := db.rootPublication != nil && db.rootPublication.coordinator != nil
 	db.mu.RUnlock()
 	if !db.commandWAL || db.commandJournal == nil || !hasRootPublication {
-		return false, db.checkpointTeardownPinned(true)
+		return false, db.checkpointTeardownPinned(true, true)
 	}
 
 	var sealed commitlog.SealedRotationDebt
@@ -4981,6 +4988,10 @@ func (db *DB) prepareCommandWALCoveredPrefixCleanupLocked(automatic bool) (bool,
 // maintenance operation such as CompactStorage. Command-WAL cleanup must not
 // recursively acquire maintenanceMu in that case.
 func (db *DB) checkpoint(maintenanceAlreadyHeld bool) error {
+	return db.checkpointWithCommandWALCleanup(maintenanceAlreadyHeld, true)
+}
+
+func (db *DB) checkpointWithCommandWALCleanup(maintenanceAlreadyHeld, cleanupCommandWAL bool) error {
 	if db == nil {
 		return ErrClosed
 	}
@@ -4991,7 +5002,7 @@ func (db *DB) checkpoint(maintenanceAlreadyHeld bool) error {
 			}
 		}
 		db.teardownMu.RLock()
-		err := db.checkpointTeardownPinned(maintenanceAlreadyHeld)
+		err := db.checkpointTeardownPinned(maintenanceAlreadyHeld, cleanupCommandWAL)
 		db.teardownMu.RUnlock()
 		drain := commandWALPendingDrain(err)
 		if drain == nil {
@@ -5004,7 +5015,7 @@ func (db *DB) checkpoint(maintenanceAlreadyHeld bool) error {
 }
 
 // checkpointTeardownPinned runs while the caller holds teardownMu.RLock.
-func (db *DB) checkpointTeardownPinned(maintenanceAlreadyHeld bool) error {
+func (db *DB) checkpointTeardownPinned(maintenanceAlreadyHeld, cleanupCommandWAL bool) error {
 	if db == nil || db.closing.Load() {
 		return ErrClosed
 	}
@@ -5068,7 +5079,7 @@ func (db *DB) checkpointTeardownPinned(maintenanceAlreadyHeld bool) error {
 		if err != nil {
 			return err
 		}
-		if rotatedCommandWAL || commandWALPrefixAdvanced {
+		if cleanupCommandWAL && (rotatedCommandWAL || commandWALPrefixAdvanced) {
 			// Cleanup captures and revalidates its own exact journal namespace
 			// snapshot. Release publish admission before maintenance cleanup so a
 			// concurrent storage maintenance pass cannot invert those locks.
@@ -5127,7 +5138,7 @@ func (db *DB) checkpointTeardownPinned(maintenanceAlreadyHeld bool) error {
 	} else if err := idx.pager.Sync(); err != nil {
 		return err
 	}
-	if rotatedCommandWAL || commandWALPrefixAdvanced {
+	if cleanupCommandWAL && (rotatedCommandWAL || commandWALPrefixAdvanced) {
 		// The cleanup proof independently rejects new appends and namespace
 		// changes. Drop write/publish admission before maintenance cleanup to
 		// keep the global maintenance -> publish -> write order acyclic.

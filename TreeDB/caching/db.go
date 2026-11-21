@@ -26471,7 +26471,10 @@ func (db *DB) snapshotCommandWALCheckpointCutover() bool {
 }
 
 func (db *DB) cleanupCommandWALCheckpoint(sync bool) error {
-	cleanupHook := db.loadCommandWALCheckpointCleanupHook()
+	return runCommandWALCheckpointCleanupHook(db.loadCommandWALCheckpointCleanupHook(), sync)
+}
+
+func runCommandWALCheckpointCleanupHook(cleanupHook func(bool) error, sync bool) error {
 	if cleanupHook == nil {
 		return nil
 	}

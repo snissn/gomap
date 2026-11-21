@@ -272,7 +272,19 @@ func (db *DB) materializeCOWPrefixProjected(ctx context.Context, automatic bool,
 		}
 		return db.cow.prefix.WaitAccepted(ctx, through)
 	}
-	if err = db.backendCheckpointBoundary(automatic); err != nil {
+	cleanupNeeded := publish.appliedLSN != 0 || publish.consumed
+	cleanupHook := db.loadCommandWALCheckpointCleanupHook()
+	checkpoint, canDeferCleanup := db.backend.(interface {
+		backendDeferredCoveredPrefixMaintainer
+		CheckpointWithoutCommandWALCleanup() error
+	})
+	cleanupAfterAccept := canDeferCleanup && !automatic && operation == nil && db.externalCommandWAL && cleanupNeeded && cleanupHook != nil
+	if cleanupAfterAccept {
+		err = checkpoint.CheckpointWithoutCommandWALCleanup()
+	} else {
+		err = db.backendCheckpointBoundary(automatic)
+	}
+	if err != nil {
 		return err
 	}
 	if automatic && db.externalCommandWAL {
@@ -287,10 +299,20 @@ func (db *DB) materializeCOWPrefixProjected(ctx context.Context, automatic bool,
 		// direct Close cannot detach/refund prefix during this wait; accepted
 		// custody only queues cleanup and needs none of the cache writer gates.
 		if err = db.cow.prefix.WaitAccepted(ctx, through); err != nil {
+			if cleanupAfterAccept {
+				db.requestCommandWALCleanup()
+			}
 			return err
 		}
 	}
-	if publish.appliedLSN != 0 || publish.consumed {
+	if cleanupAfterAccept {
+		start := time.Now()
+		err = runCommandWALCheckpointCleanupHook(cleanupHook, true)
+		recordCheckpointStageSince(&db.checkpointStageCommandWALCleanup, start)
+		if err != nil {
+			return err
+		}
+	} else if cleanupNeeded {
 		if err = db.cleanupCommandWALCheckpointBoundary(automatic, true); err != nil {
 			return err
 		}
