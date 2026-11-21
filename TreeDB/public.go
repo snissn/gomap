@@ -1337,7 +1337,7 @@ func openValidatedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 		cached.SetCommandWALCheckpointCutoverHook(out.snapshotPublicCommandWALCheckpointCutover)
 		cached.SetCommandWALCheckpointPublishHook(out.preparePublicCommandWALPendingPublish)
 		cached.SetCommandWALCheckpointCleanupHook(out.cleanupPublicCommandWALCheckpoint)
-		cached.SetAutoCheckpointWALBytesHook(out.publicCommandWALAutoCheckpointBytes)
+		cached.SetAutoCheckpointWALBytesHooks(out.publicCommandWALAutoCheckpointBytes, backend.TryCommandWALBytes)
 	}
 
 	// Cached-mode auto checkpointing is enabled by default to keep `wal/` growth

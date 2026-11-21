@@ -1250,6 +1250,19 @@ func (j *CommandJournal) ActiveBytes() int64 {
 	return bytes
 }
 
+// TryActiveBytes samples logical WAL growth without waiting for the journal
+// lock. The result is advisory and cannot establish a durable frontier.
+func (j *CommandJournal) TryActiveBytes() (int64, bool) {
+	if j == nil {
+		return 0, true
+	}
+	if !j.mu.TryLock() {
+		return 0, false
+	}
+	defer j.mu.Unlock()
+	return j.writer.ActiveBytes(), true
+}
+
 // HasFixedWriter reports the active physical container of a live journal.
 // An unhealthy journal returns the original failure instead of a format miss.
 func (j *CommandJournal) HasFixedWriter() (bool, error) {

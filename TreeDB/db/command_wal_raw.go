@@ -770,11 +770,20 @@ func (db *DB) CommandWALBytes() int64 {
 		return 0
 	}
 	_, active := db.commandWALActiveSegmentSnapshot()
-	closed := db.commandWALClosedBytes.Load()
-	if closed < 0 {
-		closed = 0
+	return max(0, db.commandWALClosedBytes.Load()) + active
+}
+
+// TryCommandWALBytes provides the same logical byte accounting for advisory
+// write notifications. It returns false if another operation owns the journal.
+func (db *DB) TryCommandWALBytes() (int64, bool) {
+	if db == nil || !db.commandWAL {
+		return 0, true
 	}
-	return closed + active
+	active, ok := db.commandJournal.TryActiveBytes()
+	if !ok {
+		return 0, false
+	}
+	return max(0, db.commandWALClosedBytes.Load()) + active, true
 }
 
 func (db *DB) observeCommandWALSegmentRotated(closedBytes int64) {

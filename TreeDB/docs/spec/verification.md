@@ -2855,7 +2855,10 @@ checkpoint rotation and covered-segment cleanup, and
 `TestPublicCommandWALAutoCheckpointUsesCommandWALBytes`, which proves
 command-WAL cached mode feeds total command-WAL segment bytes into the
 size-triggered auto-checkpoint loop while the legacy cached redo journal is
-disabled.
+disabled. `TestCOWWriteAcknowledgesWhileWALByteSampleContended` holds the
+journal lock during WAL cleanup after the write has appended. It verifies
+visibility and acknowledgement while cleanup is held, a size checkpoint after
+release without another write, and checked Close and reopen.
 
 Post-frontier admission evidence includes
 `TestCachingDB_CheckpointExternalCommandWALAdmitsAfterFrontierCut`, which latches

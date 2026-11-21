@@ -64,7 +64,8 @@ type commandWALCheckpointCleanupHookBox struct {
 }
 
 type autoCheckpointBytesHookBox struct {
-	fn func() int64
+	fn  func() int64
+	try func() (int64, bool)
 }
 
 type statsHookBox struct {
@@ -10178,11 +10179,12 @@ type DB struct {
 	wg                         sync.WaitGroup
 	releasePoolPressureSampler func()
 
-	autoCheckpointOnceCh    chan struct{}
-	autoCheckpointWriteCh   chan struct{}
-	nativeGenerationFlushCh chan struct{}
-	autoCheckpointOn        atomic.Bool
-	autoCheckpointBytesFn   atomic.Pointer[autoCheckpointBytesHookBox]
+	autoCheckpointOnceCh     chan struct{}
+	autoCheckpointWriteCh    chan struct{}
+	autoCheckpointResampleCh chan struct{}
+	nativeGenerationFlushCh  chan struct{}
+	autoCheckpointOn         atomic.Bool
+	autoCheckpointBytesFn    atomic.Pointer[autoCheckpointBytesHookBox]
 	// autoCheckpointSizeArmed gates the maxWALBytes size-triggered checkpoint.
 	// It is normally re-armed after reclaimable WAL bytes fall below
 	// maxWALBytes/2. A successful pass that leaves reclaimable bytes above the
@@ -13363,6 +13365,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		flushCoordinatorWaitCh:                     make(chan struct{}),
 		autoCheckpointOnceCh:                       make(chan struct{}, 1),
 		autoCheckpointWriteCh:                      make(chan struct{}, 1),
+		autoCheckpointResampleCh:                   make(chan struct{}, 1),
 		nativeGenerationFlushCh:                    make(chan struct{}, 1),
 		journalLanesConfigured:                     journalLaneDefaults.Configured,
 		journalLanesDefaulted:                      journalLaneDefaults.Defaulted,
@@ -13895,6 +13898,13 @@ func (db *DB) StartAutoCheckpoint(interval time.Duration, maxWALBytes int64, idl
 // value should include reclaimable non-active bytes, not only active-writer
 // bytes, so size-triggered checkpoints can bound total WAL growth.
 func (db *DB) SetAutoCheckpointWALBytesHook(fn func() int64) {
+	db.SetAutoCheckpointWALBytesHooks(fn, nil)
+}
+
+// SetAutoCheckpointWALBytesHooks also accepts a nonblocking sample of the same
+// bytes for write notifications. On contention the worker repeats the sample
+// with the blocking hook.
+func (db *DB) SetAutoCheckpointWALBytesHooks(fn func() int64, try func() (int64, bool)) {
 	if db == nil {
 		return
 	}
@@ -13902,7 +13912,7 @@ func (db *DB) SetAutoCheckpointWALBytesHook(fn func() int64) {
 		db.autoCheckpointBytesFn.Store(nil)
 		return
 	}
-	db.autoCheckpointBytesFn.Store(&autoCheckpointBytesHookBox{fn: fn})
+	db.autoCheckpointBytesFn.Store(&autoCheckpointBytesHookBox{fn: fn, try: try})
 }
 
 // TriggerAutoCheckpoint schedules a best-effort immediate auto-checkpoint pass.
@@ -14427,11 +14437,25 @@ func (db *DB) noteWrite() {
 	if !db.autoCheckpointOn.Load() {
 		return
 	}
-	if db.disableJournal && db.loadAutoCheckpointBytesHook() == nil {
+	hook := db.autoCheckpointBytesFn.Load()
+	if db.disableJournal && hook == nil {
 		return
 	}
+	current, sampled := db.sampleWALBytes(hook, true)
+	if !sampled {
+		// Keep retries distinct from byte-qualified notifications. A pending
+		// retry must not displace a concurrent successful notification.
+		select {
+		case db.autoCheckpointResampleCh <- struct{}{}:
+		default:
+		}
+		return
+	}
+	db.noteAutoCheckpointWALGrowth(current)
+}
+
+func (db *DB) noteAutoCheckpointWALGrowth(current int64) {
 	const autoCheckpointWriteEveryBytes int64 = 1 << 20
-	current := db.effectiveWALBytes()
 	if current <= 0 {
 		return
 	}
@@ -14747,17 +14771,30 @@ func (db *DB) effectiveWALBytes() int64 {
 	if db == nil {
 		return 0
 	}
+	total, _ := db.sampleWALBytes(db.autoCheckpointBytesFn.Load(), false)
+	return total
+}
+
+func (db *DB) sampleWALBytes(hook *autoCheckpointBytesHookBox, try bool) (int64, bool) {
 	var total int64
 	for i := range db.lanes {
 		l := &db.lanes[i]
 		total += l.walClosedBytes.Load() + l.walLiveBytes.Load()
 	}
-	if fn := db.loadAutoCheckpointBytesHook(); fn != nil {
-		if external := fn(); external > 0 {
-			total += external
+	if hook != nil {
+		var external int64
+		if try && hook.try != nil {
+			var sampled bool
+			external, sampled = hook.try()
+			if !sampled {
+				return 0, false
+			}
+		} else {
+			external = hook.fn()
 		}
+		total += max(0, external)
 	}
-	return total
+	return total, true
 }
 
 func (db *DB) reclaimableWALBytes() int64 {
@@ -19805,6 +19842,8 @@ func (db *DB) autoCheckpointLoop(interval time.Duration, maxWALBytes int64, idle
 			maintainGeneration()
 		case <-db.autoCheckpointOnceCh:
 			db.maybeAutoCheckpoint(maxWALBytes, autoCheckpointModeForce)
+		case <-db.autoCheckpointResampleCh:
+			db.noteAutoCheckpointWALGrowth(db.effectiveWALBytes())
 		case <-db.autoCheckpointWriteCh:
 			if maxWALBytes > 0 {
 				db.maybeAutoCheckpoint(maxWALBytes, autoCheckpointModeSize)
