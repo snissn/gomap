@@ -1,6 +1,7 @@
 package nativewire
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -683,11 +685,7 @@ func newVectorPartitionLiveNativewireDocumentsForOwnersV1(t testing.TB, document
 
 func newVectorPartitionLiveNativewireDocumentsForOwnersModeV1(t testing.TB, documents []vectorPartitionLiveDocumentV1, columns *collections.ColumnStoreConfig, owners [2]string, commandWAL, ownerSeparated bool) vectorPartitionLiveProductionFixtureV1 {
 	t.Helper()
-	dimensions := len(documents[0].vector)
-	definition := collections.VectorIndexDefinition{Name: "embedding_graph", Field: "embedding", Metric: collections.VectorMetricCosine, Dimensions: dimensions, M: 2, EfConstruction: 8, EfSearch: 8, Strategy: collections.VectorIndexStrategyColumnGraph}
-	if len(documents) > 4 {
-		definition.M, definition.EfConstruction, definition.EfSearch = 16, 128, 96
-	}
+	definition := defaultVectorPartitionLiveFixtureIndexV1(documents)
 	if ownerSeparated {
 		// This trusted genesis creates its first index with the collection. The
 		// command-WAL seed cannot issue a later unframed schema mutation, so
@@ -695,6 +693,15 @@ func newVectorPartitionLiveNativewireDocumentsForOwnersModeV1(t testing.TB, docu
 		definition.SchemaGeneration = 1
 	}
 	return newVectorPartitionLiveNativewireDocumentsWithDefinitionV1(t, documents, columns, owners, commandWAL, ownerSeparated, definition)
+}
+
+func defaultVectorPartitionLiveFixtureIndexV1(documents []vectorPartitionLiveDocumentV1) collections.VectorIndexDefinition {
+	dimensions := len(documents[0].vector)
+	definition := collections.VectorIndexDefinition{Name: "embedding_graph", Field: "embedding", Metric: collections.VectorMetricCosine, Dimensions: dimensions, M: 2, EfConstruction: 8, EfSearch: 8, Strategy: collections.VectorIndexStrategyColumnGraph}
+	if len(documents) > 4 {
+		definition.M, definition.EfConstruction, definition.EfSearch = 16, 128, 96
+	}
+	return definition
 }
 
 // The supplied definition is declared before trusted genesis creates the index.
@@ -706,6 +713,25 @@ func newVectorPartitionLiveNativewireDocumentsWithDefinitionV1(t testing.TB, doc
 
 func newVectorPartitionLiveNativewireDocumentsWithGeometryV1(t testing.TB, documents []vectorPartitionLiveDocumentV1, columns *collections.ColumnStoreConfig, owners [2]string, commandWAL, ownerSeparated bool, definition collections.VectorIndexDefinition, partitionCount, domainCount uint32) vectorPartitionLiveProductionFixtureV1 {
 	t.Helper()
+	return (vectorPartitionLiveFixtureConfigV1{
+		definition: definition, owners: owners, commandWAL: commandWAL, ownerSeparated: ownerSeparated,
+		partitions: partitionCount, domains: domainCount,
+	}).build(t, documents, columns)
+}
+
+type vectorPartitionLiveFixtureConfigV1 struct {
+	definition                 collections.VectorIndexDefinition
+	owners                     [2]string
+	commandWAL, ownerSeparated bool
+	partitions, domains        uint32
+	seedBatchSize              int // zero preserves one ordinary Insert per row
+}
+
+func (setup vectorPartitionLiveFixtureConfigV1) build(t testing.TB, documents []vectorPartitionLiveDocumentV1, columns *collections.ColumnStoreConfig) vectorPartitionLiveProductionFixtureV1 {
+	t.Helper()
+	definition, owners := setup.definition, setup.owners
+	partitionCount, domainCount := setup.partitions, setup.domains
+	commandWAL, ownerSeparated := setup.commandWAL, setup.ownerSeparated
 	if !collections.VectorPartitionNamespacePersistenceSupportedForTestingV1() {
 		t.Skip("vector partition namespace persistence unsupported on this platform")
 	}
@@ -744,8 +770,27 @@ func newVectorPartitionLiveNativewireDocumentsWithGeometryV1(t testing.TB, docum
 		definition = persisted.VectorIndexes[0]
 	}
 	byID := make(map[string]vectorPartitionLiveDocumentV1, len(documents))
+	if setup.seedBatchSize > 0 {
+		for batch := range slices.Chunk(documents, setup.seedBatchSize) {
+			ids, bodies := make([][]byte, len(batch)), make([][]byte, len(batch))
+			for i, d := range batch {
+				ids[i], bodies[i] = []byte(d.id), encodeVectorPartitionLiveDocumentV1(t, d.vector)
+			}
+			stored, err := collection.InsertBatch(ids, bodies)
+			if err != nil {
+				database.Close()
+				t.Fatalf("seed batch starting %q: %v", ids[0], err)
+			}
+			if !slices.EqualFunc(stored, ids, bytes.Equal) {
+				database.Close()
+				t.Fatalf("seed batch starting %q returned different IDs", ids[0])
+			}
+		}
+	}
 	for _, document := range documents {
-		insertVectorPartitionLiveDocumentV1(t, collection, document.id, document.vector)
+		if setup.seedBatchSize == 0 {
+			insertVectorPartitionLiveDocumentV1(t, collection, document.id, document.vector)
+		}
 		byID[document.id] = document
 	}
 	if _, err := collection.RebuildVectorIndex(definition.Name); err != nil {
@@ -782,8 +827,26 @@ func newVectorPartitionLiveNativewireDocumentsWithGeometryV1(t testing.TB, docum
 	for p := range parts {
 		parts[p].PartitionID = uint32(p)
 	}
-	for _, row := range rows {
-		document := byID[string(row.DocumentID)]
+	// Verify the complete batched seed against the authoritative typed source.
+	// Physical ordinal order is the graph builder's, not insertion order.
+	var seen map[string]bool
+	if setup.seedBatchSize > 0 {
+		if len(rows) != len(documents) {
+			database.Close()
+			t.Fatalf("seeded source rows=%d want=%d", len(rows), len(documents))
+		}
+		seen = make(map[string]bool, len(rows))
+	}
+	for i, row := range rows {
+		id := string(row.DocumentID)
+		document, ok := byID[id]
+		if seen != nil {
+			if !ok || seen[id] || row.VectorOrdinal != uint64(i) || !slices.Equal(row.Values, document.vector) {
+				database.Close()
+				t.Fatalf("seeded source differs at ordinal %d (id=%q)", i, id)
+			}
+			seen[id] = true
+		}
 		home := document.home
 		manifest.Memberships = append(manifest.Memberships, collections.VectorPartitionMembershipV1{VectorOrdinal: row.VectorOrdinal, PartitionID: home})
 		parts[home].Vectors = append(parts[home].Vectors, internalrouter.RouterVectorV1{Ordinal: row.VectorOrdinal, Values: append([]float32(nil), row.Values...), MembershipKind: string(collections.VectorPartitionMembershipHomeV1)})
@@ -901,13 +964,18 @@ func vectorPartitionLiveProductionStorageBytesV1(root string) (uint64, error) {
 	return total, err
 }
 
-func insertVectorPartitionLiveDocumentV1(t testing.TB, collection *collections.Collection, id string, vector []float32) {
+func encodeVectorPartitionLiveDocumentV1(t testing.TB, vector []float32) []byte {
 	t.Helper()
-	document, err := json.Marshal(map[string]any{"embedding": vector, "time_us": 1})
+	doc, err := json.Marshal(map[string]any{"embedding": vector, "time_us": 1})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := collection.Insert([]byte(id), document); err != nil {
+	return doc
+}
+
+func insertVectorPartitionLiveDocumentV1(t testing.TB, collection *collections.Collection, id string, vector []float32) {
+	t.Helper()
+	if _, err := collection.Insert([]byte(id), encodeVectorPartitionLiveDocumentV1(t, vector)); err != nil {
 		t.Fatalf("insert %s: %v", id, err)
 	}
 }

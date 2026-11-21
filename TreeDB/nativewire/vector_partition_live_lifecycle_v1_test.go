@@ -500,7 +500,14 @@ func TestVectorPartitionLiveSelectedLifecycleV1(t *testing.T) {
 	}
 	// Exercise M3's required scalar sort key and non-column retained payload
 	// through every mutation, reopen, crash and replacement phase in normal CI.
-	fixture := newVectorPartitionLiveNativewireDocumentsV1(t, documents, liveLifecycleColumnsV1(dimensions))
+	// This tests live revisions relative to the published base, not the count
+	// of pre-binding commits. Keep multiple base generations, without making a
+	// separate storage publication for each immutable seed document.
+	fixture := (vectorPartitionLiveFixtureConfigV1{
+		definition: defaultVectorPartitionLiveFixtureIndexV1(documents),
+		owners:     [2]string{"group-a", "group-b"},
+		partitions: 3, domains: 2, seedBatchSize: 64,
+	}).build(t, documents, liveLifecycleColumnsV1(dimensions))
 	runVectorPartitionLiveLifecycleV1(t, fixture, vectors, queries, 1, "a", 32)
 }
 

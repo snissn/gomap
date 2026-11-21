@@ -84,3 +84,15 @@ Be extra careful when touching metadata formats or recovery logic:
 - Add/extend tests that cover crash/reopen and truncated/corrupt tail cases.
 - Prefer versioned metadata changes (explicit version fields).
 - If compatibility is intentionally broken, document it in `docs/API_STABILITY.md` / `CHANGELOG.md`.
+
+### Comparative snapshot and value-log performance
+
+The required ordinary TreeDB test matrix already runs snapshot seek contract,
+randomized oracle, reopen, and public iterator parity tests in the root
+package. The performance jobs retain the snapshot report parser tests and
+value-log compression ratio, fallback, mode, and persistent-size checks. A pull request or merge queue does not treat synthetic
+throughput/CPU timing as a universal veto. The same workflow runs the full
+comparisons (including snapshot bytes and allocations per operation) after a push to main and when manually dispatched.
+For a change intended to alter one of these performance surfaces, dispatch
+**TreeDB: vet+test** on the proposed branch and review its comparative
+artifacts before claiming a performance improvement.
