@@ -8,6 +8,31 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
+func TestCOWPrivateInlinePointPublicationRejectsMismatchedEntry(t *testing.T) {
+	entry := batch.Entry{Type: batch.OpPut, Key: []byte("key"), Value: []byte("value"), Revision: 42}
+	b := Batch{
+		entries:  []batch.Entry{entry},
+		cowState: &cowBatchState{privatePoint: true, prepared: &cowBatchPreparation{cut: &cowPreparedCut{}}},
+	}
+	for _, test := range []struct {
+		name string
+		edit func(*commitlog.RawKVOperation)
+	}{
+		{"key", func(op *commitlog.RawKVOperation) { op.Key = []byte("other") }},
+		{"value", func(op *commitlog.RawKVOperation) { op.Value = []byte("other") }},
+		{"revision", func(op *commitlog.RawKVOperation) { op.Revision++ }},
+		{"type", func(op *commitlog.RawKVOperation) { op.Op = commitlog.RawKVOpDelete }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			op := commitlog.RawKVOperation{Op: commitlog.RawKVOpSet, Key: entry.Key, Value: entry.Value, Revision: uint64(entry.Revision)}
+			test.edit(&op)
+			if err := b.finalizeCOWInlinePoint(op); err == nil {
+				t.Fatal("mismatched operation accepted")
+			}
+		})
+	}
+}
+
 func TestCOWCanonicalMetadataIdentityAndRefusal(t *testing.T) {
 	ptr := page.ValuePtr{FileID: 7, Offset: 128}
 	entries := []batch.Entry{{Type: batch.OpPut, Key: []byte("inline"), Value: []byte("v"), Revision: 19},
