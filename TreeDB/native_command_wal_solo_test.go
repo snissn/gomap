@@ -9,6 +9,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
@@ -30,6 +31,264 @@ func TestNativeCommandWALSoloDurableUsesCapturedSync(t *testing.T) {
 	if got := database.commandWALGroupCommit.durableIntents.Load(); got != 0 {
 		t.Fatalf("durable announcements after ACK=%d", got)
 	}
+}
+
+func TestNativeCommandWALDurableGroupOwnsBarrierAtCapacity(t *testing.T) {
+	t.Setenv("TREEDB_DISABLE_VLOG_GENERATION_LOOP", "1")
+	opts := indexedSliceOptions(ProfileCommandWALDurable, t.TempDir())
+	opts.COWMemtableLimits = DefaultCOWMemtableLimits()
+	opts.COWMemtableLimits.MaxSources = 4
+	opts.COWMemtableLimits.MaxGenerations = 8
+	openRows := func() (*DB, *collections.CollectionManager) {
+		t.Helper()
+		database, err := Open(opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = database.Close() })
+		backend, err := database.NativeSemanticBackend()
+		if err != nil {
+			t.Fatal(err)
+		}
+		manager := collections.NewCollectionManager(backend)
+		t.Cleanup(func() { _ = manager.Close() })
+		return database, manager
+	}
+	database, manager := openRows()
+	if _, err := manager.CreateCollection(&collections.CollectionMeta{
+		Name: "rows", Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := manager.OpenCollection("rows")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	prefix, _, err := database.backend.PrivateCOWAcceptedPrefix(database.txnOwner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial := prefix.LogicalFrontiers()
+	if initial.C != initial.W || database.backend.CommandWALNextLSN() != initial.C+1 || prefix.AcceptedPendingCount() != 0 {
+		t.Fatalf("fixture requires an empty stable opening prefix, got %+v", initial)
+	}
+	var blockers []rootpublication.AcceptedTicket
+	cancel := func(ticket rootpublication.AcceptedTicket) {
+		t.Helper()
+		if err := ticket.CancelAccepted(); err != nil {
+			t.Errorf("release private slot: %v", err)
+		}
+	}
+	releaseBlockers := func() {
+		for _, ticket := range blockers {
+			cancel(ticket)
+		}
+		blockers = nil
+	}
+	defer releaseBlockers()
+	capacity := opts.COWMemtableLimits.MaxSources * opts.COWMemtableLimits.MaxGenerations
+	for i := 0; i < capacity-2; i++ {
+		ticket, err := prefix.ReserveAccepted(false)
+		if err != nil {
+			t.Fatalf("hold ordinary slot %d/%d: %v", i+1, capacity, err)
+		}
+		blockers = append(blockers, ticket)
+	}
+
+	group := &database.commandWALGroupCommit
+	group.testBeforeSync = func(int) {} // Make each native command use queued capture.
+	reachedCompletion := make(chan struct{})
+	resumeCompletion := make(chan struct{})
+	stop := make(chan struct{})
+	var stopOnce sync.Once
+	stopCompletion := func() { stopOnce.Do(func() { close(stop) }) }
+	var joined []<-chan struct{}
+	defer func() {
+		stopCompletion()
+		for _, done := range joined {
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Error("native write did not join after completion release")
+			}
+		}
+	}()
+	group.testBeforeNativeComplete = func() {
+		select {
+		case reachedCompletion <- struct{}{}:
+		case <-stop:
+			return
+		}
+		select {
+		case <-resumeCompletion:
+		case <-stop:
+		}
+	}
+	firstID, secondID := []byte("first"), []byte("second")
+	firstDoc := nativeBSONDocument(t, bson.D{{Key: "_id", Value: "first"}, {Key: "n", Value: int64(1)}})
+	secondDoc := nativeBSONDocument(t, bson.D{{Key: "_id", Value: "second"}, {Key: "n", Value: int64(2)}})
+	start := func(id, doc []byte) <-chan error {
+		t.Helper()
+		done := make(chan error, 1)
+		exited := make(chan struct{})
+		joined = append(joined, exited)
+		go func() {
+			defer close(exited)
+			_, err := rows.InsertBatchValidatedBSON([][]byte{id}, [][]byte{doc})
+			done <- err
+		}()
+		select {
+		case <-reachedCompletion:
+		case err := <-done:
+			t.Fatalf("%s returned before installed completion: %v", id, err)
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s did not reach installed completion", id)
+		}
+		return done
+	}
+	finish := func(done <-chan error) error {
+		t.Helper()
+		resumeCompletion <- struct{}{}
+		select {
+		case err := <-done:
+			return err
+		case <-time.After(5 * time.Second):
+			t.Fatal("group did not finish")
+			return nil
+		}
+	}
+	requireRow := func(rows *collections.Collection, id, want []byte) {
+		t.Helper()
+		got, err := rows.Get(id)
+		if err != nil || !bytes.Equal(got, want) {
+			t.Fatalf("%s = %v, %v, want %v", id, bson.Raw(got), err, bson.Raw(want))
+		}
+	}
+	requireAssigned := func(opening rootpublication.LogicalFrontiers, id, doc []byte) rootpublication.LogicalFrontiers {
+		t.Helper()
+		frontiers := prefix.LogicalFrontiers()
+		if frontiers.C != opening.C+1 || frontiers.V != opening.V+1 || frontiers.W != opening.W ||
+			database.backend.CommandWALNextLSN() != frontiers.C+1 {
+			t.Fatalf("%s must install once before ACK: opening=%+v assigned=%+v next=%d", id, opening, frontiers, database.backend.CommandWALNextLSN())
+		}
+		requireRow(rows, id, doc)
+		return frontiers
+	}
+	requireBarrier := func(assigned rootpublication.LogicalFrontiers) rootpublication.LogicalFrontiers {
+		t.Helper()
+		stable := prefix.LogicalFrontiers()
+		if stable.C != assigned.C+1 || stable.V != assigned.V || stable.W != stable.C ||
+			database.backend.CommandWALNextLSN() != stable.C+1 {
+			t.Fatalf("ACK must own one stable root-neutral barrier: assigned=%+v ack=%+v next=%d", assigned, stable, database.backend.CommandWALNextLSN())
+		}
+		return stable
+	}
+
+	first := start(firstID, firstDoc)
+	firstAssigned := requireAssigned(initial, firstID, firstDoc)
+	lastOrdinary, err := prefix.ReserveAccepted(false)
+	if err != nil && !errors.Is(err, rootpublication.ErrAcceptedCapacity) {
+		t.Fatalf("claim last ordinary slot during first capture: %v", err)
+	}
+	if lastOrdinary.Valid() {
+		defer func() { cancel(lastOrdinary) }()
+	}
+	if err := finish(first); err != nil {
+		t.Fatalf("first ACK: %v", err)
+	}
+	firstStable := requireBarrier(firstAssigned)
+	if lastOrdinary.Valid() {
+		// Stock finds its only maintenance slot at capture. It remains in
+		// the accepted FIFO despite W now covering the actual barrier.
+		maintenance, err := prefix.ReserveAccepted(true)
+		if maintenance.Valid() {
+			cancel(maintenance)
+		}
+		if !errors.Is(err, rootpublication.ErrAcceptedCapacity) {
+			t.Fatalf("first acknowledged barrier did not retain maintenance: %v", err)
+		}
+		cancel(lastOrdinary)
+		lastOrdinary = rootpublication.AcceptedTicket{}
+		t.Logf("first barrier retained maintenance with stable W=%d", firstStable.W)
+	} else {
+		t.Logf("first group protected the last ordinary slot, stable W=%d", firstStable.W)
+	}
+	held, err := rows.OpenCollectionReadView()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = held.Close() })
+	requireHeld := func() {
+		t.Helper()
+		got, err := held.FetchDocumentsByID([][]byte{firstID, secondID}, collections.DocumentFetchOptions{})
+		if err != nil || len(got.Results) != 2 || !got.Results[0].Found ||
+			!bytes.Equal(got.Results[0].Document, firstDoc) || got.Results[1].Found {
+			t.Fatalf("held cut must retain only first document: %+v, %v", got, err)
+		}
+	}
+	requireHeld()
+	second := start(secondID, secondDoc)
+	secondAssigned := requireAssigned(firstStable, secondID, secondDoc)
+	if err := finish(second); err != nil {
+		stalled := prefix.LogicalFrontiers()
+		next := database.backend.CommandWALNextLSN()
+		requireRow(rows, secondID, secondDoc)
+		requireHeld()
+		stopCompletion()
+		thirdID := []byte("should-not-assign")
+		thirdDoc := nativeBSONDocument(t, bson.D{{Key: "_id", Value: string(thirdID)}, {Key: "n", Value: int64(3)}})
+		_, subsequent := rows.InsertBatchValidatedBSON([][]byte{thirdID}, [][]byte{thirdDoc})
+		continuedNext := database.backend.CommandWALNextLSN()
+		releaseBlockers()
+		_ = held.Close()
+		_ = manager.Close()
+		closeErr := database.Close()
+		t.Fatalf("second ACK failed after installation: err=%v (ambiguous=%t capacity=%t), assigned=%+v stalled=%+v next=%d, continued=%v (recovery=%t next=%d), close=%v",
+			err, errors.Is(err, collections.ErrCommitAmbiguous), errors.Is(err, rootpublication.ErrAcceptedCapacity),
+			secondAssigned, stalled, next, subsequent, errors.Is(subsequent, ErrRecoveryRequired) || errors.Is(subsequent, collections.ErrRecoveryRequired), continuedNext, closeErr)
+	}
+	requireBarrier(secondAssigned)
+	requireHeld()
+	if err := database.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	requireHeld()
+	requireRow(rows, firstID, firstDoc)
+	requireRow(rows, secondID, secondDoc)
+	if err := held.Close(); err != nil {
+		t.Fatal(err)
+	}
+	releaseBlockers()
+	if count := prefix.AcceptedPendingCount(); count != 0 {
+		t.Fatalf("checkpoint retained %d accepted entries", count)
+	}
+	closeRows := func(database *DB, manager *collections.CollectionManager) {
+		t.Helper()
+		cache := database.cached
+		pins := database.backend.ValueLogIdentityPinRegistry()
+		if err := manager.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := database.Close(); err != nil {
+			t.Fatal(err)
+		}
+		requirePublicCOWFinalZero(t, cache)
+		if stats := pins.Stats(); stats.ActivePins != 0 || stats.ActiveIdentities != 0 {
+			t.Fatalf("close retained value-log pins: %+v", stats)
+		}
+	}
+	closeRows(database, manager)
+	reopened, reopenedManager := openRows()
+	reopenedRows, err := reopenedManager.OpenCollection("rows")
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireRow(reopenedRows, firstID, firstDoc)
+	requireRow(reopenedRows, secondID, secondDoc)
+	closeRows(reopened, reopenedManager)
 }
 
 // No group configuration or eligibility-disabling observer is changed here.
