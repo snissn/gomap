@@ -275,6 +275,33 @@ func TestOwnedMapBuilderTinyLeafFallback(t *testing.T) {
 	})
 }
 
+type largeOwnedValue [4096]byte
+
+type largeOwnedValueLifetime struct{}
+
+func (largeOwnedValueLifetime) Retain(largeOwnedValue) {}
+func (largeOwnedValueLifetime) Release(largeOwnedValue) (OwnedMapCompletion, error) {
+	return OwnedMapCompletion{}, nil
+}
+
+func TestOwnedMapBuilderTinyLeafLargeValueRefusal(t *testing.T) {
+	refused := errors.New("admission refused")
+	admissions := 0
+	admit := func(uint64) (OwnedMapLease, error) {
+		admissions++
+		return nil, refused
+	}
+	allocs := testing.AllocsPerRun(20, func() {
+		builder, err := NewOwnedMapBuilder[string, largeOwnedValue](nil, 1, largeOwnedValueLifetime{}, admit)
+		if builder != nil || err != refused {
+			t.Fatalf("builder=%p err=%v", builder, err)
+		}
+	})
+	if admissions == 0 || allocs != 0 {
+		t.Fatalf("admissions=%d allocations per refusal=%g", admissions, allocs)
+	}
+}
+
 func tinyLeafTestOpening(t *testing.T, items, degree int, primary *ownedTestValue) (*OwnedMap[string, *ownedTestValue], *ownedTestLease) {
 	t.Helper()
 	if items < 0 {
