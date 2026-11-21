@@ -833,6 +833,23 @@ plus new `AppliedLSN`, never a split state. A future
 checkpoint-without-publication mode must report command WAL debt and retain all
 required WAL segments and external refs.
 
+An automatic native COW checkpoint in `command_wal_relaxed` may release raw
+publication to sync the first registered, unsynced, sealed command-WAL file
+when the selected prefix has no external dependencies. A bounded pin retains
+that file across the sync. Relaxed operations can append to the successor
+during this interval. A durable write must still complete its dependency
+barriers before its marker. On reacquiring raw publication, the checkpoint
+samples a fresh prefix and credits the sync only against the same immutable
+registration. Remaining files, namespaces and the current writer cross their
+ordinary barriers before the checkpoint advances the durable WAL frontier.
+
+If raw publication is busy on reentry, the attempt discards its file credit
+and leaves the frontier unchanged. The next eligible automatic pass that
+obtains raw at entry keeps it through canonical prefix closure, rechecking the
+registered file and every current obligation. Initial contention defers that
+pass and preserves the retry preference. After that one in-lock attempt,
+uncontended checkpoints can use the handoff again.
+
 In COW mode, explicit checkpoint also joins the original accepted-custody
 retirement through its captured logical/canonical endpoint. Physical durability
 can complete before that retirement advances the sealed logical frontier; the

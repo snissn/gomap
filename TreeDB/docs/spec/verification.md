@@ -1603,6 +1603,16 @@ Coverage:
   `TreeDB/internal/valuelog/valuelog_test.go`:
   deterministic file/directory sync-hook count and rotation tests.
 
+### Automatic covered-prefix handoff in native COW relaxed WAL
+
+| Invariant | Deterministic coverage |
+| --- | --- |
+| A bounded pin retains the first eligible sealed registration. At capacity, the file uses its ordinary in-lock sync. A replaced registration crosses its own barrier. | `rootpublication/TestCheckpointRotationFilePinAdmissionAndRetirement` and `db/TestCheckpointRotationFileCreditRequiresOriginalRegistration` |
+| A fresh public BSON update can append and return while the predecessor sync is held. The completed checkpoint covers the newer frontier and the typed value survives reopen. | `TreeDB/TestAutomaticCheckpointSealedWALAdmitsRelaxedBSONThroughRotation` |
+| A failed predecessor prevents a durable marker and later barriers. Retrying completes the original ordering. | `TreeDB/TestDurableMarkerRefusesFailedSealedWALDependency` |
+| Lost reentry leaves the frontier unchanged. An initially busy pass preserves the retry. The next admitted pass closes the fresh prefix under raw and a subsequent eligible pass can yield again. | `TreeDB/TestAutomaticCheckpointSealedWALDefersBusyReentry` |
+| The handoff can cover the first file while a valid dedicated-WAL seal covers the second. A later rotation invalidates that seal and requires the second file to sync. | `db/TestCheckpointRotationFileAndSealedDebtCreditStayIndependent` |
+
 ## 7. Maintenance/Compaction Behavior
 
 Invariant:
