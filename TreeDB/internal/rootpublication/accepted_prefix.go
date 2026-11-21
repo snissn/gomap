@@ -526,6 +526,23 @@ func (ticket AcceptedTicket) InstallAccepted(descriptor AcceptedDescriptor) erro
 
 func (ticket AcceptedTicket) Valid() bool { return ticket.owner != nil && ticket.nonce != 0 }
 
+// CheckUnassignedBarrier authenticates an ordinary reservation before the
+// original raw append sequencer can spend it on a root-neutral WAL barrier.
+// The caller owns the capability exclusively through that append.
+func (ticket AcceptedTicket) CheckUnassignedBarrier(owner *Coordinator) error {
+	if ticket.owner == nil || ticket.owner != owner.AcceptedPrefixOwner() {
+		return ErrAcceptedReceipt
+	}
+	p := &ticket.owner.accepted
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	_, e := ticket.entryLocked()
+	if p.closed || e == nil || e.maintenance || e.receipt.Assigned || e.receipt.Installed || e.descriptor.Custody != nil {
+		return ErrAcceptedReceipt
+	}
+	return p.poison
+}
+
 // CancelAccepted cancels only an unassigned private reservation. Its caller
 // still owns native private preparation and disposes it through its own path.
 func (ticket AcceptedTicket) CancelAccepted() error {

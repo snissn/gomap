@@ -3,12 +3,15 @@ package treedb
 import (
 	"bytes"
 	"errors"
+	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
@@ -55,6 +58,7 @@ func TestNativeCommandWALDurableGroupOwnsBarrierAtCapacity(t *testing.T) {
 		return database, manager
 	}
 	database, manager := openRows()
+	t.Logf("command WAL container=%s", database.Stats()["treedb.command_wal.writer.container"])
 	if _, err := manager.CreateCollection(&collections.CollectionMeta{
 		Name: "rows", Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatBSON},
 	}); err != nil {
@@ -291,6 +295,165 @@ func TestNativeCommandWALDurableGroupOwnsBarrierAtCapacity(t *testing.T) {
 	closeRows(reopened, reopenedManager)
 }
 
+func TestPublicCOWDurableGroupAfterRelaxedReplay(t *testing.T) {
+	t.Setenv("TREEDB_DISABLE_VLOG_GENERATION_LOOP", "1")
+	opts := indexedSliceOptions(ProfileCommandWALRelaxed, t.TempDir())
+	source, err := Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = source.Close() })
+	if err := source.Set([]byte("replayed"), []byte("relaxed")); err != nil {
+		t.Fatal(err)
+	}
+	if got := source.backend.State().AppliedCommandLSN; got != 0 {
+		t.Fatalf("source checkpointed before the crash image: applied=%d", got)
+	}
+	image := filepath.Join(t.TempDir(), "relaxed-replay")
+	if err := copyPublicCommandWALCrashImage(opts.Dir, image); err != nil {
+		t.Fatal(err)
+	}
+	if err := source.Close(); err != nil {
+		t.Fatal(err)
+	}
+	opts.Dir = image
+	recovered, err := Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = recovered.Close() })
+	requireRawKVValue(t, recovered, []byte("replayed"), []byte("relaxed"))
+	prefix, _, err := recovered.backend.PrivateCOWAcceptedPrefix(recovered.txnOwner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opening := prefix.LogicalFrontiers()
+	if opening.C != 1 || opening.W != 0 {
+		t.Fatalf("fixture requires an opening recovered LSN ahead of W: %+v", opening)
+	}
+	if err := recovered.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	if got := prefix.LogicalFrontiers(); got.C != opening.C || got.W != opening.W {
+		t.Fatalf("same-session checkpoint gave unexpected WAL credit: %+v", got)
+	}
+	recovered.commandWALGroupCommit.testBeforeSync = func(int) {}
+	t.Logf("command WAL container=%s, recovered opening=%+v", recovered.Stats()["treedb.command_wal.writer.container"], opening)
+	if err := recovered.SetSync([]byte("synced"), []byte("durable")); err != nil {
+		t.Fatal(err)
+	}
+	if got := prefix.LogicalFrontiers(); got.C != opening.C+2 || got.V != opening.V+1 || got.W != got.C ||
+		recovered.backend.CommandWALNextLSN() != got.C+1 {
+		t.Fatalf("public raw sync must prove its own barrier after relaxed replay: %+v", got)
+	}
+	requireRawKVValue(t, recovered, []byte("synced"), []byte("durable"))
+	if err := recovered.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPublicCOWDurableGroupBarrierRefusalAndRefund(t *testing.T) {
+	t.Setenv("TREEDB_DISABLE_VLOG_GENERATION_LOOP", "1")
+	opts := indexedSliceOptions(ProfileCommandWALDurable, t.TempDir())
+	opts.COWMemtableLimits = DefaultCOWMemtableLimits()
+	opts.COWMemtableLimits.MaxSources = 4
+	opts.COWMemtableLimits.MaxGenerations = 8
+	database, err := Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	prefix, _, err := database.backend.PrivateCOWAcceptedPrefix(database.txnOwner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var blockers []rootpublication.AcceptedTicket
+	cancel := func(ticket rootpublication.AcceptedTicket) {
+		t.Helper()
+		if err := ticket.CancelAccepted(); err != nil {
+			t.Error(err)
+		}
+	}
+	defer func() {
+		for _, ticket := range blockers {
+			cancel(ticket)
+		}
+	}()
+	capacity := opts.COWMemtableLimits.MaxSources * opts.COWMemtableLimits.MaxGenerations
+	for i := 0; i < capacity-1; i++ {
+		ticket, err := prefix.ReserveAccepted(false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		blockers = append(blockers, ticket)
+	}
+	assertLastFree := func() {
+		t.Helper()
+		ticket, err := prefix.ReserveAccepted(false)
+		if err != nil {
+			t.Fatalf("last ordinary slot did not return: %v", err)
+		}
+		cancel(ticket)
+	}
+
+	next := database.backend.CommandWALNextLSN()
+	opening := prefix.LogicalFrontiers()
+	key, value := []byte("raw"), []byte("first value")
+	if err := database.SetSync(key, value); !errors.Is(err, memtable.ErrCOWCapacity) || errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("last ordinary slot must refuse before assignment: %v", err)
+	}
+	if got := prefix.LogicalFrontiers(); got != opening || database.backend.CommandWALNextLSN() != next {
+		t.Fatalf("preassignment refusal changed prefix: opening=%+v got=%+v", opening, got)
+	}
+	assertLastFree()
+
+	probeError := errors.New("unassigned original native callback refused")
+	for _, panicAppend := range []bool{false, true} {
+		func() {
+			completion, err := database.PrepareNativeCommandWAL(1, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer completion.ReleaseNativeCommandWAL()
+			if panicAppend {
+				defer func() {
+					if got := recover(); got != probeError {
+						t.Errorf("callback panic=%v", got)
+					}
+				}()
+			}
+			err = completion.RegisterNativeCommandWAL(func(bool) (uint64, error) {
+				ticket, err := prefix.ReserveAccepted(false)
+				if ticket.Valid() {
+					cancel(ticket)
+				}
+				if !errors.Is(err, rootpublication.ErrAcceptedCapacity) {
+					t.Errorf("original callback started without custody of the remaining slot: %v", err)
+				}
+				if panicAppend {
+					panic(probeError)
+				}
+				return 0, probeError
+			})
+			if err != probeError {
+				t.Errorf("callback refusal=%v", err)
+			}
+		}()
+		assertLastFree()
+	}
+	cancel(blockers[len(blockers)-1])
+	blockers = blockers[:len(blockers)-1]
+	if err := database.SetSync(key, value); err != nil {
+		t.Fatal(err)
+	}
+	if got := prefix.LogicalFrontiers(); got.C != next || got.W != next || got.V != opening.V+1 ||
+		database.backend.CommandWALNextLSN() != next+1 {
+		t.Fatalf("idle raw admission must preserve a one-frame durable ACK: %+v", got)
+	}
+	assertLastFree()
+	requireRawKVValue(t, database, key, value)
+}
+
 // No group configuration or eligibility-disabling observer is changed here.
 // The completion observer holds callers only after their producer/raw gates end.
 func TestNativeCommandWALAnnouncesBeforeProducerSerialization(t *testing.T) {
@@ -441,8 +604,8 @@ func TestNativeCommandWALSoloAssignedSyncFailureRetainsIdentity(t *testing.T) {
 	}
 }
 
-// Only the actual captured-file observer is installed: collector hooks would
-// disable singleton eligibility and silently exercise the queued fallback.
+// No collector policy is changed: a collector override would disable the
+// first singleton's eligibility and silently exercise the queued fallback.
 func TestNativeCommandWALSoloCapturedFenceReleasesGatesBeforeACK(t *testing.T) {
 	database, c := nativeCommandWALGroupFixture(t, false)
 	before := database.Stats()
@@ -453,6 +616,13 @@ func TestNativeCommandWALSoloCapturedFenceReleasesGatesBeforeACK(t *testing.T) {
 	nextLSN := database.backend.CommandWALNextLSN()
 	entered, release := make(chan struct{}), make(chan struct{})
 	successorAppended := make(chan struct{})
+	successorInstalled := make(chan struct{})
+	var installed atomic.Int32
+	group.testBeforeNativeComplete = func() {
+		if installed.Add(1) == 2 {
+			close(successorInstalled)
+		}
+	}
 	var unblockOnce, holdOnce, successorOnce sync.Once
 	unblock := func() { unblockOnce.Do(func() { close(release) }) }
 	first, second := make(chan error, 1), make(chan error, 1)
@@ -516,9 +686,10 @@ func TestNativeCommandWALSoloCapturedFenceReleasesGatesBeforeACK(t *testing.T) {
 	database.commandWALPublicOperationGate.Unlock()
 	group.mu.Lock()
 	timer := group.timer
+	pendingBarrier := group.pendingBarrier.Valid()
 	group.mu.Unlock()
-	if timer != beforeTimer {
-		t.Fatal("idle native singleton created a collection timer")
+	if timer != beforeTimer || pendingBarrier {
+		t.Fatal("idle native singleton left a timer or pending barrier during its file fence")
 	}
 	requirePublicStatDelta(t, before, database.Stats(), "treedb.command_wal.group_commit.trigger.timeout_total", 0)
 	secondStarted = true
@@ -533,6 +704,19 @@ func TestNativeCommandWALSoloCapturedFenceReleasesGatesBeforeACK(t *testing.T) {
 		t.Fatalf("successor returned before assigning under held sync: %v", err)
 	case <-time.After(5 * time.Second):
 		t.Fatal("captured sync retained producer or raw publisher gate")
+	}
+	select {
+	case <-successorInstalled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("successor did not install while the previous captured file fence was held")
+	}
+	group.mu.Lock()
+	pendingBarrier = group.pendingBarrier.Valid()
+	pending := group.pendingCommits
+	leaderActive := group.leaderActive
+	group.mu.Unlock()
+	if !leaderActive || pending != 1 || !pendingBarrier {
+		t.Fatalf("successor epoch lost its own barrier during prior sync: leader=%t commits=%d reserved=%t", leaderActive, pending, pendingBarrier)
 	}
 	for _, result := range []<-chan error{first, second} {
 		select {

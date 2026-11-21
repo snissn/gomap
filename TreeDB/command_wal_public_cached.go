@@ -1703,18 +1703,34 @@ func (b *commandWALPublicBatch) submitCOWWrite(commandSync bool) error {
 		b.db.commandWALGroupCommit.durableIntents.Add(1)
 		defer b.db.commandWALGroupCommit.durableIntents.Add(-1)
 	}
-	return inner.WriteAfterCommandWALAppendWithPreparedRevision(commandSync, b.registerCOWAppend)
+	returned := false
+	defer func() {
+		if !returned && b.cowState.registration.awaiting {
+			b.db.commandWALGroupCommit.failPanickedCompletion(b.db)
+		}
+	}()
+	err := inner.WriteAfterCommandWALAppendWithPreparedRevision(commandSync, b.registerCOWAppend)
+	returned = true
+	return err
 }
 
 func (b *commandWALPublicBatch) completeCOWWrite(commandSync bool, err error) error {
 	inner := b.inner.(*caching.Batch)
-	defer func() { b.cowState.registration = publicCommandWALRegistration{} }()
-	publication := b.cowState.registration.publicCommandWALPublication
+	registration := b.cowState.registration
+	returned := false
+	defer func() {
+		b.cowState.registration = publicCommandWALRegistration{}
+		if !returned && registration.awaiting {
+			b.db.commandWALGroupCommit.failPanickedCompletion(b.db)
+		}
+	}()
+	publication := registration.publicCommandWALPublication
 	if err == nil {
-		publication, err = b.db.awaitPublicCommandWAL(b.cowState.registration, nil, nil)
+		publication, err = b.db.awaitPublicCommandWAL(registration, nil, nil)
 	}
 	b.db.finishPublicCommandWALGroupPublication(publication, err)
 	inner.CompleteCOWAcknowledgement(b.db.txnOwner, commandSync, err)
+	returned = true
 	if err != nil {
 		return err
 	}
@@ -1797,10 +1813,17 @@ func (tdb *DB) PrepareNativeCommandWAL(bytes int, durable bool) (db.NativeComman
 	}
 	return completion, nil
 }
-func (c *nativePublicCommandWALCompletion) ReleaseNativeCommandWAL() {
+func (c *nativePublicCommandWALCompletion) withdrawIntent() {
 	if c.announced {
 		c.announced = false
 		c.db.commandWALGroupCommit.durableIntents.Add(-1)
+	}
+}
+func (c *nativePublicCommandWALCompletion) ReleaseNativeCommandWAL() {
+	c.withdrawIntent()
+	if c.registration.awaiting {
+		c.registration = publicCommandWALRegistration{}
+		c.db.commandWALGroupCommit.failPanickedCompletion(c.db)
 	}
 }
 func (c *nativePublicCommandWALCompletion) RegisterNativeCommandWAL(appendFrame func(bool) (uint64, error)) error {
@@ -1808,18 +1831,24 @@ func (c *nativePublicCommandWALCompletion) RegisterNativeCommandWAL(appendFrame 
 		return ErrClosed
 	}
 	c.registered = true
-	defer c.ReleaseNativeCommandWAL()
+	defer c.withdrawIntent()
 	registration, err := c.db.registerPublicCommandWALPolicy(c.bytes, nil, c.durable, nil, appendFrame, c.announced)
 	c.registration = registration
 	return err
 }
 func (c *nativePublicCommandWALCompletion) CompleteNativeCommandWAL(installErr error) error {
-	c.ReleaseNativeCommandWAL()
+	c.withdrawIntent()
 	tdb, registration := c.db, c.registration
 	c.db, c.registration = nil, publicCommandWALRegistration{}
 	if tdb == nil {
 		return ErrClosed
 	}
+	returned := false
+	defer func() {
+		if !returned && registration.awaiting {
+			tdb.commandWALGroupCommit.failPanickedCompletion(tdb)
+		}
+	}()
 	if hook := tdb.commandWALGroupCommit.testBeforeNativeComplete; hook != nil {
 		hook()
 	}
@@ -1829,6 +1858,7 @@ func (c *nativePublicCommandWALCompletion) CompleteNativeCommandWAL(installErr e
 		publication, err = tdb.awaitPublicCommandWAL(registration, nil, nil)
 	}
 	tdb.finishPublicCommandWALGroupPublication(publication, err)
+	returned = true
 	// The original COW receipt poisons assigned failures, including failures
 	// before registration. A preassignment refusal leaves the handle usable.
 	return err
