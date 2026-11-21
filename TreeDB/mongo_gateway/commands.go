@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/collections"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/mongo_gateway/wire"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/x/bsonx/bsoncore"
@@ -43,6 +44,17 @@ const primaryKeyPrefixBSONValue byte = 1
 var maxInt = int(^uint(0) >> 1)
 
 func (s *Server) insertResponse(ctx context.Context, command wire.Document, sequences []wire.DocumentSequence) (wire.Document, error) {
+	return s.insertResponseWithJournal(ctx, command, sequences, nil)
+}
+
+// This explicit result belongs to one accepted command; it is not a context
+// flag, cached frontier, or response inferred from another worker's last commit.
+type standaloneOperationJournalOutcome struct {
+	completion backenddb.NativeJournalCompletion
+	err        error
+}
+
+func (s *Server) insertResponseWithJournal(ctx context.Context, command wire.Document, sequences []wire.DocumentSequence, journal *standaloneOperationJournalOutcome) (wire.Document, error) {
 	if s.clusterSubmitterConfigured() {
 		return s.clusterInsertResponse(ctx, command, sequences)
 	}
@@ -109,6 +121,8 @@ func (s *Server) insertResponse(ctx context.Context, command wire.Document, sequ
 		}
 	}()
 	if col == nil {
+		// Auto-create has a catalog effect outside the insert publication.
+		journal = nil
 		if s.mongoWriteBeforeFirstCreateHook != nil {
 			s.mongoWriteBeforeFirstCreateHook(budget)
 		}
@@ -127,7 +141,7 @@ func (s *Server) insertResponse(ctx context.Context, command wire.Document, sequ
 			format = actualFormat
 		}
 	}
-	return s.runMongoInsertCommand(name, col, format, ids, stored, ordered, budget)
+	return s.runMongoInsertCommandWithJournal(name, col, format, ids, stored, ordered, budget, journal)
 }
 
 // runMongoInsertCommand applies a fully parsed insert command.  A native
@@ -136,6 +150,10 @@ func (s *Server) insertResponse(ctx context.Context, command wire.Document, sequ
 // fallback is item-at-a-time, so it reserves target capacity and rechecks the
 // deadline before every possible side effect.
 func (s *Server) runMongoInsertCommand(name string, col *collections.Collection, format collections.DocumentFormat, ids, stored [][]byte, ordered bool, budget *mongoWriteBudget) (wire.Document, error) {
+	return s.runMongoInsertCommandWithJournal(name, col, format, ids, stored, ordered, budget, nil)
+}
+
+func (s *Server) runMongoInsertCommandWithJournal(name string, col *collections.Collection, format collections.DocumentFormat, ids, stored [][]byte, ordered bool, budget *mongoWriteBudget, journal *standaloneOperationJournalOutcome) (wire.Document, error) {
 	// Preserve the native batch fast path for the normal success case.  Its
 	// planner rejects duplicate conflicts before publishing, so a duplicate can
 	// safely fall back to the per-item path that supplies Mongo's indexed
@@ -183,7 +201,7 @@ func (s *Server) runMongoInsertCommand(name string, col *collections.Collection,
 		var err error
 		if format == collections.DocumentFormatBSON {
 			if len(ids) == 1 {
-				err = s.runMongoInsertCoalesced(name, col, ids[i], stored[i], budget)
+				err = s.runMongoInsertCoalesced(name, col, ids[i], stored[i], budget, journal)
 			} else {
 				err = runMongoInsertOne(col, ids[i], stored[i])
 			}
@@ -301,6 +319,7 @@ type mongoInsertCoalescerRequest struct {
 	id       []byte
 	stored   []byte
 	deadline time.Time
+	journal  *standaloneOperationJournalOutcome
 	done     chan mongoInsertCoalescerResult
 }
 
@@ -308,27 +327,50 @@ type mongoInsertCoalescerResult struct {
 	err error
 }
 
-func (s *Server) runMongoInsertCoalesced(name string, col *collections.Collection, id, stored []byte, budget *mongoWriteBudget) error {
+func (s *Server) runMongoInsertCoalesced(name string, col *collections.Collection, id, stored []byte, budget *mongoWriteBudget, journal *standaloneOperationJournalOutcome) error {
 	if err := budget.checkDeadline(); err != nil {
 		return err
 	}
 	if col == nil {
-		return runMongoInsertOne(col, id, stored)
+		return runMongoInsertOneWithJournal(col, id, stored, journal)
 	}
 	coalescer := s.mongoInsertCoalescer(name)
 	if coalescer == nil {
-		return runMongoInsertOne(col, id, stored)
+		return runMongoInsertOneWithJournal(col, id, stored, journal)
 	}
 	done := make(chan mongoInsertCoalescerResult, 1)
-	// The handler waits for completion before returning, so request-body-backed
-	// BSON remains live while the worker builds and applies the coalesced batch.
-	if !coalescer.enqueue(mongoInsertCoalescerRequest{col: col, id: id, stored: stored, deadline: budget.deadline, done: done}) {
+	// The waiting handler retains request BSON through publication and cleanup.
+	if !coalescer.enqueue(mongoInsertCoalescerRequest{col: col, id: id, stored: stored, deadline: budget.deadline, journal: journal, done: done}) {
 		if err := budget.checkDeadline(); err != nil {
 			return err
 		}
-		return runMongoInsertOne(col, id, stored)
+		return runMongoInsertOneWithJournal(col, id, stored, journal)
 	}
 	return coalescer.waitForInsertResult(done).err
+}
+
+// The optional destination belongs to this waiting command. The original small
+// completion channel establishes happens-before for its worker-written fields;
+// plain requests keep the original channel payload and allocate no destination.
+func runMongoInsertOneWithJournal(col *collections.Collection, id, stored []byte, journal *standaloneOperationJournalOutcome) error {
+	if journal == nil {
+		return runMongoInsertOne(col, id, stored)
+	}
+	if col == nil {
+		journal.err = errCollectionMissingForInsert()
+		return journal.err
+	}
+	result, completion, err := col.InsertBatchValidatedBSONWithJournalReceipt([][]byte{id}, [][]byte{stored})
+	logicalErr := err
+	if completion.Installed() {
+		logicalErr = checkMongoInsertReceiptMembers(result, [][]byte{id})
+		if logicalErr != nil {
+			err = errors.Join(err, logicalErr)
+			completion = completion.WithoutSuccess()
+		}
+	}
+	journal.completion, journal.err = completion, err
+	return logicalErr
 }
 
 func runMongoInsertOne(col *collections.Collection, id, stored []byte) error {
@@ -647,16 +689,47 @@ func (c *mongoInsertCoalescer) runInsertBatch(batch []mongoInsertCoalescerReques
 		ids[i] = req.id
 		stored[i] = req.stored
 	}
-	_, err := batch[0].col.InsertBatchValidatedBSON(ids, stored)
+	var completion backenddb.NativeJournalCompletion
+	var err, journalErr error
+	journal := false
+	for _, req := range batch {
+		journal = journal || req.journal != nil
+	}
+	if journal {
+		var result [][]byte
+		result, completion, err = batch[0].col.InsertBatchValidatedBSONWithJournalReceipt(ids, stored)
+		journalErr = err
+		if completion.Installed() {
+			err = checkMongoInsertReceiptMembers(result, ids)
+			if err != nil {
+				journalErr = errors.Join(journalErr, err)
+				completion = completion.WithoutSuccess()
+			}
+		}
+	} else {
+		_, err = batch[0].col.InsertBatchValidatedBSON(ids, stored)
+	}
 	if err != nil {
-		if (collections.IsDuplicateKeyError(err) || errors.Is(err, collections.ErrMutationNotAccepted)) && !errors.Is(err, collections.ErrCommitAmbiguous) {
+		if !completion.Selected() && (collections.IsDuplicateKeyError(err) || errors.Is(err, collections.ErrMutationNotAccepted)) && !errors.Is(err, collections.ErrCommitAmbiguous) {
 			runMongoInsertCoalescerSequential(batch)
 			return
 		}
-		completeMongoInsertCoalescerBatch(batch, mongoInsertCoalescerResult{err: err})
-		return
 	}
-	completeMongoInsertCoalescerBatch(batch, mongoInsertCoalescerResult{})
+	completeMongoInsertCoalescerBatch(batch, mongoInsertCoalescerResult{err: err}, completion, journalErr)
+}
+
+// The native producer returns a checked, ordered ID result for an atomic
+// batch. Verify exact membership before distributing its operation receipt.
+func checkMongoInsertReceiptMembers(inserted, requested [][]byte) error {
+	if len(inserted) != len(requested) {
+		return fmt.Errorf("mongo gateway journal insert results=%d want %d", len(inserted), len(requested))
+	}
+	for i, id := range inserted {
+		if !bytes.Equal(id, requested[i]) {
+			return fmt.Errorf("mongo gateway journal insert result ID mismatch at index %d", i)
+		}
+	}
+	return nil
 }
 
 // A coalescer can wait behind unrelated traffic.  Drop requests whose command
@@ -673,8 +746,11 @@ func filterExpiredMongoInsertCoalescerRequests(batch []mongoInsertCoalescerReque
 	return kept
 }
 
-func completeMongoInsertCoalescerBatch(batch []mongoInsertCoalescerRequest, result mongoInsertCoalescerResult) {
+func completeMongoInsertCoalescerBatch(batch []mongoInsertCoalescerRequest, result mongoInsertCoalescerResult, completion backenddb.NativeJournalCompletion, journalErr error) {
 	for _, req := range batch {
+		if req.journal != nil {
+			req.journal.completion, req.journal.err = completion, journalErr
+		}
 		req.done <- result
 	}
 }
@@ -713,7 +789,7 @@ func runMongoInsertCoalescerSequential(batch []mongoInsertCoalescerRequest) {
 			req.done <- mongoInsertCoalescerResult{err: errors.New("Mongo gateway multi-write command exceeded its execution-time budget")}
 			continue
 		}
-		req.done <- mongoInsertCoalescerResult{err: runMongoInsertOne(req.col, req.id, req.stored)}
+		req.done <- mongoInsertCoalescerResult{err: runMongoInsertOneWithJournal(req.col, req.id, req.stored, req.journal)}
 	}
 }
 
@@ -1111,6 +1187,10 @@ func (s *Server) findSimpleProjectedPrimaryEqualityPayload(col *collections.Coll
 }
 
 func (s *Server) updateResponse(ctx context.Context, command wire.Document, sequences []wire.DocumentSequence) (wire.Document, error) {
+	return s.updateResponseWithJournal(ctx, command, sequences, nil)
+}
+
+func (s *Server) updateResponseWithJournal(ctx context.Context, command wire.Document, sequences []wire.DocumentSequence, journal *standaloneOperationJournalOutcome) (wire.Document, error) {
 	if s.clusterSubmitterConfigured() {
 		return s.clusterUpdateResponse(ctx, command, sequences)
 	}
@@ -1219,6 +1299,12 @@ func (s *Server) updateResponse(ctx context.Context, command wire.Document, sequ
 			return commandError(commandCodeBadValue, "BadValue", err.Error())
 		}
 	}
+	// Only one existing-collection exact-ID structured set can cover the whole
+	// RPC. Multi-spec/DDL/upsert/selector routes keep their fresh final fence.
+	if journal != nil && !missingCollection && len(parsed) == 1 && !parsed[0].multi &&
+		mongoUpdateCanUseBSONSet(col, parsed[0]) && mongoUpdateCanUseBatch(col, parsed[0]) {
+		budget.journal = journal
+	}
 	return s.runMongoUpdateCommand(name, col, parsed, ordered)
 }
 
@@ -1244,6 +1330,9 @@ type mongoUpdateItem struct {
 // mongoWriteBudget is local to one command. It prevents a batch of otherwise
 // bounded filter specifications from multiplying the configured scan budget.
 type mongoWriteBudget struct {
+	// Written by the synchronous producer before the existing done-channel send.
+	// Nil for ordinary requests; result channels and queued items stay unchanged.
+	journal                   *standaloneOperationJournalOutcome
 	examinedRemaining         int
 	targetsRemaining          int
 	retainedKeyBytesRemaining int
@@ -1821,6 +1910,20 @@ func runMongoUpdateOneWithUpsert(col *collections.Collection, update mongoUpdate
 		return matched, modified, false, err
 	}
 	if mongoUpdateCanUseBSONSet(col, update) {
+		if !update.upsert && update.budget != nil && update.budget.journal != nil {
+			journal := update.budget.journal
+			if err := update.budget.checkDeadline(); err != nil {
+				return false, false, false, err
+			}
+			matched, modified, completion, err := col.UpdateBSONSetWithJournalReceipt(update.key, update.bsonSetFields)
+			journal.completion, journal.err = completion, err
+			// Return the checked logical outcome together with the original
+			// durability error in the journal response.
+			if err != nil && !(completion.Installed() && modified) {
+				return false, false, false, mongoUpdateErrorWithIndex(update.index, err)
+			}
+			return matched, modified, false, nil
+		}
 		matched, modified, err := col.UpdateBSONSet(update.key, update.bsonSetFields)
 		if err != nil || matched || !update.upsert {
 			return matched, modified, false, mongoUpdateErrorWithIndex(update.index, err)
@@ -2022,6 +2125,10 @@ func runMongoUpdateBatch(col *collections.Collection, updates []mongoUpdateItem)
 }
 
 func runMongoUpdateBatchResults(col *collections.Collection, updates []mongoUpdateItem) ([]collections.UpdateBatchResult, bool, error) {
+	return runMongoUpdateBatchResultsWithJournal(col, updates, nil)
+}
+
+func runMongoUpdateBatchResultsWithJournal(col *collections.Collection, updates []mongoUpdateItem, journal *standaloneOperationJournalOutcome) ([]collections.UpdateBatchResult, bool, error) {
 	if !mongoUpdateItemsCanUseBatch(col, updates) {
 		return make([]collections.UpdateBatchResult, len(updates)), false, nil
 	}
@@ -2040,6 +2147,11 @@ func runMongoUpdateBatchResults(col *collections.Collection, updates []mongoUpda
 			if err := updates[0].budget.checkDeadline(); err != nil {
 				return nil, false, err
 			}
+		}
+		if journal != nil {
+			results, batched, completion, err := col.UpdateBSONSetBatchIfNoSecondaryUniqueIndexChangesWithJournalReceipt(items)
+			journal.completion, journal.err = completion, err
+			return results, batched, err
 		}
 		return col.UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges(items)
 	}
@@ -2440,12 +2552,30 @@ func (c *mongoUpdateCoalescer) runBatch(batch []mongoUpdateCoalescerRequest) {
 	for i, req := range batch {
 		updates[i] = req.item
 	}
-	results, batched, err := runMongoUpdateBatchResults(batch[0].col, updates)
+	var journal *standaloneOperationJournalOutcome
+	for _, req := range batch {
+		if req.item.budget != nil && req.item.budget.journal != nil {
+			journal = &standaloneOperationJournalOutcome{}
+			break
+		}
+	}
+	results, batched, err := runMongoUpdateBatchResultsWithJournal(batch[0].col, updates, journal)
+	installed := batched && journal != nil && journal.completion.Installed()
+	if err != nil && !installed && ((journal != nil && journal.completion.Selected()) || errors.Is(err, collections.ErrCommitAmbiguous)) {
+		for _, req := range batch {
+			if journal != nil && req.item.budget != nil && req.item.budget.journal != nil {
+				req.item.budget.journal.completion = journal.completion.WithoutSuccess()
+				req.item.budget.journal.err = err
+			}
+		}
+		completeMongoUpdateCoalescerBatch(batch, mongoUpdateCoalescerResult{err: err})
+		return
+	}
 	if !batched {
 		runMongoUpdateCoalescerSequential(batch)
 		return
 	}
-	if err != nil {
+	if err != nil && !installed {
 		if index, ok := collectionUpdateBatchErrorIndex(err); ok && index >= 0 && index < len(batch) {
 			completeMongoUpdateCoalescerBatchExcept(batch, index)
 			batch[index].done <- mongoUpdateCoalescerResult{err: collectionUpdateBatchErrorForRequest(err, batch[index].item.index)}
@@ -2455,11 +2585,25 @@ func (c *mongoUpdateCoalescer) runBatch(batch []mongoUpdateCoalescerRequest) {
 		return
 	}
 	if len(results) != len(batch) {
-		completeMongoUpdateCoalescerBatch(batch, mongoUpdateCoalescerResult{err: fmt.Errorf("mongo gateway update coalescer batch results=%d want %d", len(results), len(batch))})
+		countErr := fmt.Errorf("mongo gateway update coalescer batch results=%d want %d", len(results), len(batch))
+		if journal != nil && journal.completion.Selected() {
+			for _, req := range batch {
+				if req.item.budget != nil && req.item.budget.journal != nil {
+					req.item.budget.journal.completion = journal.completion.WithoutSuccess()
+					req.item.budget.journal.err = errors.Join(err, countErr)
+				}
+			}
+		}
+		completeMongoUpdateCoalescerBatch(batch, mongoUpdateCoalescerResult{err: countErr})
 		return
 	}
 	for i, req := range batch {
 		result := results[i]
+		// An unchanged/missing neighbor never inherits another member's receipt.
+		if journal != nil && result.Modified && req.item.budget != nil && req.item.budget.journal != nil {
+			req.item.budget.journal.completion = journal.completion
+			req.item.budget.journal.err = journal.err
+		}
 		req.done <- mongoUpdateCoalescerResult{matched: result.Matched, modified: result.Modified}
 	}
 }

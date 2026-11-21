@@ -311,6 +311,14 @@ checkpoint. A successful native call reports `physicalSync=true`. Index
 maintenance uses its own physical checkpoint boundary. Native `Commit` follows
 the ordinary acknowledgement boundary of its configured profile.
 
+The receipt-aware BSON insert and structured update entry points request the
+original native owner's assigned command completion. A usable receipt requires
+actual assignment, verified physical completion, and checked producer cleanup.
+A missing or unselected receipt leaves the caller responsible for the fresh
+fence. A selected error is terminal. An operation can report a proved installed
+mutation even when its durability outcome is uncertain. The existing bounded
+history retry requires a clean preappend refusal and successful cancellation.
+
 A multi-member transaction appends one canonical bounded nonrecursive composite
 command and installs one complete logical successor. Its raw member binds the
 actual revisioned bytes from the original finalizer. Startup validates the whole

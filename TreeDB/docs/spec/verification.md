@@ -141,6 +141,14 @@ the retained record and requires the original file error after its close.
   SIGKILL controls verify typed BSON recovery without a cache checkpoint.
   `TestNativeJournalPrefix` cases check selected ownership, captured dependencies,
   terminal sync failures and the lifetime of an in-flight fence.
+- `TestStandaloneNativeSharedBoundaryHeldSyncExactACK` and the coalesced INSERT
+  and BSON SET receipt controls hold the actual WAL sync and verify assignment,
+  member-specific outcomes, and ACK ordering. The held-sync failure and
+  no-op controls verify terminal error propagation and fresh-fence fallback.
+  `TestStandaloneNativeSharedBoundaryCrashReopen` and
+  `TestStandaloneNativeUpdateJournalCrashReopen` verify typed recovery after a
+  process kill. The focused Close controls join held completion and check the
+  original owner teardown.
 - `TestStandaloneLargeIndexedBSON`,
   `TestStandaloneExplicitCOWBudgetRefusesBeforeAssignment` and
   `TestMongoInsertCoalescerBoundsBytes` cover advertised document size, explicit

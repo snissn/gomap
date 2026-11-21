@@ -373,11 +373,14 @@ func (tx *nativeConditionalTxn) CommitNative(native *backenddb.NativePreparedPub
 		releaseErr := tx.batch.releaseNativePublication()
 		if releaseErr != nil && native != nil {
 			var refusal *memtable.COWProjectedGenerationRefusal
-			if native.ObservePointConflict != 0 || errors.As(err, &refusal) {
+			if result.Journal.Selected() || native.ObservePointConflict != 0 || errors.As(err, &refusal) {
 				err = joinCOWCleanupError(err, releaseErr)
 			}
 		}
 		err = joinCOWCleanupError(err, tx.Close())
+		if err != nil {
+			result.Journal = result.Journal.WithoutSuccess()
+		}
 	}()
 	// The consumer cannot replace the original opening sequence/cut. Reprepare
 	// changes the physical preparation basis only AFTER original dependencies pass.

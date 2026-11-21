@@ -1836,12 +1836,12 @@ func (c *nativePublicCommandWALCompletion) RegisterNativeCommandWAL(appendFrame 
 	c.registration = registration
 	return err
 }
-func (c *nativePublicCommandWALCompletion) CompleteNativeCommandWAL(installErr error) error {
+func (c *nativePublicCommandWALCompletion) CompleteNativeCommandWAL(installErr error) (result db.NativeCommandWALCompletionResult, err error) {
 	c.withdrawIntent()
 	tdb, registration := c.db, c.registration
 	c.db, c.registration = nil, publicCommandWALRegistration{}
 	if tdb == nil {
-		return ErrClosed
+		return result, ErrClosed
 	}
 	returned := false
 	defer func() {
@@ -1853,13 +1853,57 @@ func (c *nativePublicCommandWALCompletion) CompleteNativeCommandWAL(installErr e
 		hook()
 	}
 	publication := registration.publicCommandWALPublication
-	err := installErr
+	result.AssignedLSN = registration.assignedLSN
+	err = installErr
 	if err == nil {
-		publication, err = tdb.awaitPublicCommandWAL(registration, nil, nil)
+		result.WaitAttempted = registration.awaiting && registration.durable && registration.assignedLSN != 0
+		var wait time.Duration
+		publication, err = tdb.awaitPublicCommandWAL(registration, &wait, nil)
+		result.WaitNanos = uint64(wait)
+		result.PhysicalCompleted = result.WaitAttempted && err == nil && publication.ticket == registration.ticket
 	}
 	tdb.finishPublicCommandWALGroupPublication(publication, err)
 	returned = true
 	// The original COW receipt poisons assigned failures, including failures
 	// before registration. A preassignment refusal leaves the handle usable.
-	return err
+	return result, err
 }
+
+// CanShareNativeJournalCompletion reads current scheduling eligibility under a
+// short lifecycle lease. Real mutation admission also checks the active writer.
+func (tdb *DB) CanShareNativeJournalCompletion(backend *db.DB, owner *transactionowner.Owner) bool {
+	if tdb == nil || backend == nil || owner == nil || !tdb.lifecycleMu.TryRLock() {
+		return false
+	}
+	defer tdb.lifecycleMu.RUnlock()
+	return tdb.ownsNativeJournalCompletion(backend, owner) && tdb.cached.CheckNativeSemanticOwnerOpen() == nil &&
+		backend.CanShareNativeCommandWALPrefixForOwner(owner)
+}
+
+// TryBeginNativeJournalCompletion authenticates the original public receiver
+// and keeps its lifecycle stable. TryRLock cannot stall behind Close while an
+// admitted native producer still holds its opening cut.
+func (tdb *DB) TryBeginNativeJournalCompletion(backend *db.DB, owner *transactionowner.Owner) (bool, error) {
+	if tdb == nil || backend == nil || owner == nil || !tdb.lifecycleMu.TryRLock() {
+		return false, nil
+	}
+	var err error
+	if tdb.ownsNativeJournalCompletion(backend, owner) {
+		if err = tdb.cached.CheckNativeSemanticOwnerOpen(); err == nil {
+			var eligible bool
+			eligible, err = backend.NativeCommandWALPrefixEligible(owner)
+			if eligible && err == nil {
+				return true, nil
+			}
+		}
+	}
+	tdb.lifecycleMu.RUnlock()
+	return false, err
+}
+
+func (tdb *DB) ownsNativeJournalCompletion(backend *db.DB, owner *transactionowner.Owner) bool {
+	return tdb.backend == backend && tdb.txnOwner == owner && tdb.commandWALCached &&
+		tdb.cached != nil && tdb.cached.COWMode()
+}
+
+func (tdb *DB) EndNativeJournalCompletion() { tdb.lifecycleMu.RUnlock() }

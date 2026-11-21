@@ -58,10 +58,12 @@ cleanup. Reopen selects the same immutable profile and recovers native collectio
 commands through the existing replay owner. A durable ACK (including an explicit
 Mongo journal request) must recover the acknowledged documents, index effects,
 authentication records and referenced persistent value-log dependencies. A
-durable fixed-format journal fence can leave the applied root behind the
-synchronized prefix. Reopen replays the covered commands and their captured
-dependencies. A relaxed ext4-stream journal ACK completes the root checkpoint
-before replying. Abrupt process exit controls are process-crash evidence, not a physical power-loss test.
+durable fixed-format journal fence or verified original-operation completion
+can leave the applied root behind the synchronized prefix. Reopen replays the
+covered commands and their captured dependencies. Each acknowledged overlapping
+write requires coverage by its own completion or a later explicit fence.
+A relaxed ext4-stream journal ACK completes the root checkpoint before replying.
+The abrupt process exit controls exercise recovery after a process crash.
 
 Logical collection/WAL BSON stays inline when the physical builder places large
 root values in the value log. The physical projection retains the exact appended

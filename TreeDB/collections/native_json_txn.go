@@ -497,6 +497,10 @@ func (t *NativeJSONTxn) commitNativePlanWithStats(sealed bool, apply *nativeComm
 // The optional observations describe clean, preassignment refusals for their
 // original one-shot callers. An explicit transaction never rebases itself.
 func (t *NativeJSONTxn) commitNativePlanObserved(sealed bool, apply *nativeCommandWALApplyCommit, typedGroup bool, stats *CollectionInsertStats, expired *bool, retry *nativeBSONSetRetry, projected **nativeInsertProjectedRefusal) (resultErr error) {
+	return t.commitNativePlanWithJournal(sealed, apply, typedGroup, stats, expired, retry, projected, nil)
+}
+
+func (t *NativeJSONTxn) commitNativePlanWithJournal(sealed bool, apply *nativeCommandWALApplyCommit, typedGroup bool, stats *CollectionInsertStats, expired *bool, retry *nativeBSONSetRetry, projected **nativeInsertProjectedRefusal, journal *nativeOperationJournal) (resultErr error) {
 	if expired != nil {
 		*expired = false
 	}
@@ -745,6 +749,7 @@ func (t *NativeJSONTxn) commitNativePlanObserved(sealed bool, apply *nativeComma
 		}
 	}
 	members, rawEntries = nil, nil
+	native.RequestJournalCompletion = journal != nil && journal.requested && apply == nil && !typedGroup && !sealed
 	sync := false
 	if apply != nil {
 		sync = apply.sync
@@ -766,6 +771,9 @@ func (t *NativeJSONTxn) commitNativePlanObserved(sealed bool, apply *nativeComma
 	committing = native
 	result, err := t.core.CommitNative(native, intent, sync)
 	committing = nil
+	if journal != nil && journal.requested {
+		journal.completion = result.Journal
+	}
 	if expired != nil {
 		// Exact identity also excludes a lower-layer cleanup error joined to
 		// the sentinel. Consumed alone only transfers descriptor ownership.

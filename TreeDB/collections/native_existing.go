@@ -48,6 +48,26 @@ func (c *Collection) nativeInsertBatchWithStatsProjection(ids, documents [][]byt
 // Omitted-ID gateways share preparation, validation and publication with the
 // ordinary API, without allocating a response-only ID vector and byte arena.
 func (c *Collection) nativeInsertBatchWithResultIDs(ids, documents [][]byte, requested *CollectionInsertStats, projection *trustedFloat32Projection, returnResultIDs, retryProjectedGeneration bool) ([][]byte, error) {
+	return c.nativeInsertBatchWithJournal(ids, documents, requested, projection, returnResultIDs, retryProjectedGeneration, nil)
+}
+
+// nativeOperationJournal belongs to this one synchronous operation. It is never
+// stored on a Collection or read from a last-result/cache diagnostic.
+type nativeOperationJournal struct {
+	requested  bool
+	completion backenddb.NativeJournalCompletion
+}
+
+// selectCapturedBSON authenticates the schema of the actual transaction. The
+// completion owner is authenticated independently by CommitNative's bridge.
+func (j *nativeOperationJournal) selectCapturedBSON(meta CollectionMeta) {
+	if j != nil {
+		j.requested = j.requested && normalizedDocumentFormat(meta.Options.DocumentFormat) == DocumentFormatBSON &&
+			meta.Options.ColumnStore == nil && len(meta.VectorIndexes) == 0 && len(meta.TextIndexes) == 0
+	}
+}
+
+func (c *Collection) nativeInsertBatchWithJournal(ids, documents [][]byte, requested *CollectionInsertStats, projection *trustedFloat32Projection, returnResultIDs, retryProjectedGeneration bool, journal *nativeOperationJournal) ([][]byte, error) {
 	if c.manager.isClosing() {
 		return nil, backenddb.ErrClosed
 	}
@@ -103,7 +123,12 @@ func (c *Collection) nativeInsertBatchWithResultIDs(ids, documents [][]byte, req
 	historyExpiryRetries := 0
 	for attempt := 0; ; attempt++ {
 		stats = CollectionInsertStats{}
-		recordStats, retry, err := c.nativeInsertPreparedOnce(ids, documents, &stats, requested != nil, projection, observeProjection)
+		recordStats, retry, err := c.nativeInsertPreparedOnceWithJournal(ids, documents, &stats, requested != nil, projection, observeProjection, journal)
+		// The original history/projection refusal is retryable only before a
+		// physical attempt. Preserve the same original owner and bound.
+		if journal != nil && (journal.completion.AssignedLSN() != 0 || journal.completion.Attempted()) {
+			retry, refusal = false, nil
+		}
 		if attempt+1 < nativeInsertAttempts && (retry || refusal != nil) {
 			if refusal != nil {
 				// The first transaction and its capture, lease and producer
@@ -119,9 +144,15 @@ func (c *Collection) nativeInsertBatchWithResultIDs(ids, documents [][]byte, req
 				historyExpiryRetries++
 			}
 			refusedPrepare, refusedPublish = stats.PrepareDocuments, stats.Publish
+			if journal != nil {
+				journal.completion = backenddb.NativeJournalCompletion{}
+			}
 			continue
 		}
 		if err != nil {
+			if journal != nil && journal.completion.Installed() {
+				return result, err
+			}
 			return nil, err
 		}
 		if recordStats {
@@ -137,12 +168,16 @@ func (c *Collection) nativeInsertBatchWithResultIDs(ids, documents [][]byte, req
 // End the original producer admission before fresh maintenance/capture. The
 // deferred unlock also covers panic/error paths; no private attempt survives it.
 func (c *Collection) nativeInsertPreparedOnce(ids, documents [][]byte, stats *CollectionInsertStats, ordinaryOnly bool, projection *trustedFloat32Projection, projected **nativeInsertProjectedRefusal) (bool, bool, error) {
+	return c.nativeInsertPreparedOnceWithJournal(ids, documents, stats, ordinaryOnly, projection, projected, nil)
+}
+
+func (c *Collection) nativeInsertPreparedOnceWithJournal(ids, documents [][]byte, stats *CollectionInsertStats, ordinaryOnly bool, projection *trustedFloat32Projection, projected **nativeInsertProjectedRefusal, journal *nativeOperationJournal) (bool, bool, error) {
 	unlockVector, _, err := c.prepareNativeProducerMutation()
 	if err != nil {
 		return false, false, err
 	}
 	defer unlockVector()
-	return c.nativeJSON.insertPrepared(c.name, ids, documents, stats, ordinaryOnly, projection, projected)
+	return c.nativeJSON.insertPrepared(c.name, ids, documents, stats, ordinaryOnly, projection, projected, journal)
 }
 
 func (c *Collection) nativeGetInto(id, dst []byte) ([]byte, bool, error) {

@@ -22,6 +22,7 @@ import (
 func TestStandaloneFixedJournalFenceKillReopen(t *testing.T) {
 	const childDir = "GOMAP_FIXED_JOURNAL_FENCE_CRASH_DIR"
 	const count = 64
+	const requests = count / 2
 	open := func(dir string) *StandaloneServer {
 		t.Helper()
 		owner, err := OpenStandaloneServer(StandaloneOptions{
@@ -45,17 +46,21 @@ func TestStandaloneFixedJournalFenceKillReopen(t *testing.T) {
 		journal := true
 		coll := client.Database("diagnostic").Collection("docs", options.Collection().SetWriteConcern(&writeconcern.WriteConcern{W: 1, Journal: &journal}))
 		var group sync.WaitGroup
-		failures := make(chan error, count)
+		failures := make(chan error, requests)
 		start := make(chan struct{})
-		group.Add(count)
-		for index := range count {
+		// Multi-document wire inserts use the standalone prefix fence. The
+		// receipt crash test independently covers mutation-owned completion.
+		group.Add(requests)
+		for request := range requests {
 			go func() {
 				defer group.Done()
 				<-start
-				id := fmt.Sprintf("key-%02d", index)
-				result, err := coll.InsertOne(ctx, standaloneNativeJournalDocument(id, index))
-				if err != nil || result == nil || !result.Acknowledged || result.InsertedID != id {
-					failures <- fmt.Errorf("insert %s: result=%+v err=%v", id, result, err)
+				index := request * 2
+				first, second := fmt.Sprintf("key-%02d", index), fmt.Sprintf("key-%02d", index+1)
+				result, err := coll.InsertMany(ctx, []any{standaloneNativeJournalDocument(first, index), standaloneNativeJournalDocument(second, index+1)})
+				if err != nil || result == nil || !result.Acknowledged || len(result.InsertedIDs) != 2 ||
+					result.InsertedIDs[0] != first || result.InsertedIDs[1] != second {
+					failures <- fmt.Errorf("insert %s/%s: result=%+v err=%v", first, second, result, err)
 				}
 			}()
 		}
@@ -70,16 +75,16 @@ func TestStandaloneFixedJournalFenceKillReopen(t *testing.T) {
 		}
 		ack := owner.Server.StandaloneWriteConcernStats()
 		stats := owner.Stats()
-		if ack.JournalAcknowledgements != count || ack.SyncFailures != 0 {
+		if ack.JournalAcknowledgements != requests || ack.SyncFailures != 0 {
 			t.Fatalf("journal ACK proof: %+v", ack)
 		}
-		if steps := writeConcernBenchmarkStat(t, stats, "treedb.command_wal.group_commit.forced_total"); steps != count {
-			t.Fatalf("forced journal groups = %d, want %d", steps, count)
+		if steps := writeConcernBenchmarkStat(t, stats, "treedb.command_wal.group_commit.forced_total"); steps != requests {
+			t.Fatalf("forced journal groups = %d, want %d", steps, requests)
 		}
 		if checkpoints := writeConcernBenchmarkStat(t, stats, "treedb.cache.checkpoint.runs"); checkpoints != 0 {
 			t.Fatalf("cache checkpoint runs = %d, want no physical checkpoints before kill", checkpoints)
 		}
-		if err := os.WriteFile(filepath.Join(dir, "ready"), []byte("64 journal ACKs"), 0600); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, "ready"), []byte("32 journal ACKs"), 0600); err != nil {
 			t.Fatal(err)
 		}
 		<-ctx.Done()
@@ -124,7 +129,7 @@ func TestStandaloneFixedJournalFenceKillReopen(t *testing.T) {
 			if err != nil && !errors.Is(err, os.ErrNotExist) {
 				t.Fatal(err)
 			}
-			if string(ready) == "64 journal ACKs" {
+			if string(ready) == "32 journal ACKs" {
 				goto kill
 			}
 		}
@@ -172,5 +177,5 @@ kill:
 		}
 		requireStandaloneNativeJournalDocument(t, document, id, index)
 	}
-	t.Logf("SIGKILL after %d real driver ACKs with no cache checkpoint; all typed rows verified on fresh owner", count)
+	t.Logf("SIGKILL after %d real driver ACKs with no cache checkpoint; all %d typed rows verified on fresh owner", requests, count)
 }

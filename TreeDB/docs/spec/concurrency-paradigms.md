@@ -97,6 +97,16 @@ Representative barriers:
 - lane sync barrier uses lane `syncing` + `laneCond`,
 - close path enforces lock order to avoid deadlock with auto-checkpoint.
 
+The standalone Mongo gateway's `standaloneWriteBoundaryMu` admits ordinary
+visible writes and eligible native fixed-format durable collection journal
+commands with a read lock. The capability check is a scheduling snapshot. The
+original manager and its admitted operation still own mutation and completion.
+The handler holds its boundary through the operation's checked completion or
+its fresh journal fence. Legacy and relaxed journal commands, journaled
+authentication mutations, and journaled commands with custom write-concern
+callbacks use exclusive gateway admission. Existing
+collection coalescers publish each member's outcome before signalling `done`.
+
 ### 3.3 Atomic/RCU state publication
 
 Mechanisms:
