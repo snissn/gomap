@@ -607,14 +607,14 @@ func (db *DB) appendCommandWALDurablePrefixBarrier() (uint64, error) {
 }
 
 func (db *DB) appendOwnedCommandWALDurablePrefixBarrier(privateOwner *transactionowner.Owner) (uint64, error) {
-	return db.appendCommandWALPrefixBarrierForOwner(false, privateOwner)
+	return db.appendCommandWALPrefixBarrierForOwner(false, privateOwner, nil, 0)
 }
 
 func (db *DB) appendCommandWALPrefixBarrier(captured bool) (uint64, error) {
-	return db.appendCommandWALPrefixBarrierForOwner(captured, nil)
+	return db.appendCommandWALPrefixBarrierForOwner(captured, nil, nil, 0)
 }
 
-func (db *DB) appendCommandWALPrefixBarrierForOwner(captured bool, privateOwner *transactionowner.Owner) (uint64, error) {
+func (db *DB) appendCommandWALPrefixBarrierForOwner(captured bool, privateOwner *transactionowner.Owner, reserved *rootpublication.AcceptedTicket, frontier uint64) (uint64, error) {
 	intent := &commandWALBatchIntent{
 		privateCOWOwner: privateOwner,
 		kind:            commitlog.CommandKindDurablePrefixBarrier, scope: commitlog.CommandScopeSystem,
@@ -624,7 +624,25 @@ func (db *DB) appendCommandWALPrefixBarrierForOwner(captured bool, privateOwner 
 	}
 	owner := db.acceptedPrefix.Load()
 	var ticket rootpublication.AcceptedTicket
-	if owner != nil {
+	appendReturned := false
+	if reserved != nil {
+		ticket = *reserved
+		*reserved = rootpublication.AcceptedTicket{}
+		defer func() {
+			if appendReturned {
+				return
+			}
+			// The raw sequencer still excludes other appenders. The
+			// journal records an assigned frame before its after-append
+			// callbacks, even if a callback unwinds without a receipt.
+			if lsn := db.commandJournal.AppendedLSN(); lsn > frontier {
+				db.MarkCommandWALRecoveryRequired()
+				_ = ticket.RecordAssigned(lsn, ErrRecoveryRequired, false)
+			} else {
+				_ = ticket.CancelAccepted()
+			}
+		}()
+	} else if owner != nil {
 		var err error
 		ticket, err = owner.ReserveAccepted(false)
 		if errors.Is(err, rootpublication.ErrAcceptedCapacity) {
@@ -635,6 +653,7 @@ func (db *DB) appendCommandWALPrefixBarrierForOwner(captured bool, privateOwner 
 		}
 	}
 	lsn, err := db.appendCommandWALIntent(intent, !captured)
+	appendReturned = true
 	if owner == nil {
 		return lsn, err
 	}
@@ -2777,11 +2796,11 @@ func (db *DB) appendRawKVBatchPayloadCommandWALPreparedCapture(prepare func() ([
 		owned = false
 		// The existing acquisition loop performs the unlocked drain and reruns
 		// every hook. The assigned mutation is never appended again.
-		_, result, captureErr := db.captureCommandWALPrefixAfterAppend(nil, target, lsn)
+		_, result, captureErr := db.captureCommandWALPrefixAfterAppend(nil, target, lsn, nil)
 		returned = true
 		return lsn, requestTiming, result, captureErr
 	}
-	_, result, captureErr := db.captureCommandWALPrefixLocked(nil, target)
+	_, result, captureErr := db.captureCommandWALPrefixLocked(nil, target, nil)
 	if captureErr != nil {
 		db.commandWALFlushPoisoned.Store(true)
 		returned = true

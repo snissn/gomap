@@ -1,12 +1,15 @@
 package treedb
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
 const (
@@ -31,6 +34,7 @@ type publicCommandWALGroupCommit struct {
 	pendingSealed            bool      // caller-owned aggregate already completed its collection window
 	pendingCount             int
 	pendingCommits           int
+	pendingBarrier           rootpublication.AcceptedTicket // one original FIFO slot for this COW epoch
 	pendingBytes             int
 	pendingForceTickets      []uint64
 	pendingTriggered         bool
@@ -241,7 +245,7 @@ func (tdb *DB) appendAndCaptureOrdinaryPublicCommandWAL(bytes int, preparedBytes
 			if preparedBytes != nil {
 				bytes = *preparedBytes
 			}
-			publication.ticket, publication.leader, err = group.registerCollected(bytes, true, false, false)
+			publication.ticket, publication.leader, err = group.registerCollected(bytes, true, false, false, rootpublication.AcceptedTicket{})
 			publication.awaiting, publication.observeWait, publication.durable = err == nil, true, true
 		}
 		if captured {
@@ -355,9 +359,37 @@ func (tdb *DB) registerPublicCommandWALCollected(bytes int, preparedBytes *int, 
 		group := &tdb.commandWALGroupCommit
 		group.mu.Lock()
 		singleton := durable && group.idleDurableCaptureEligibleLocked()
+		needsBarrier := durable && !group.pendingBarrier.Valid() && tdb.cached != nil && tdb.cached.COWMode()
+		terminalErr := group.terminalErr
 		group.mu.Unlock()
+		var barrier rootpublication.AcceptedTicket
+		if needsBarrier {
+			if terminalErr != nil {
+				err = terminalErr
+				return
+			}
+			prefix, _, reserveErr := tdb.backend.PrivateCOWAcceptedPrefix(tdb.txnOwner)
+			if reserveErr == nil {
+				barrier, reserveErr = prefix.ReserveAccepted(false)
+			}
+			if reserveErr != nil {
+				// The original append callback has not run. A checkpoint
+				// cannot run here under the public and cache writer gates.
+				if reserveErr == rootpublication.ErrAcceptedCapacity {
+					reserveErr = memtable.ErrCOWCapacity
+				}
+				err = reserveErr
+				return
+			}
+			defer func() {
+				if cancelErr := barrier.CancelAccepted(); cancelErr != nil {
+					err = errors.Join(err, cancelErr)
+				}
+			}()
+		}
 		// Queued writes retain relaxed prefix debt. Only a truly idle mutation
-		// emits its own durable marker; a successor epoch closes debt once.
+		// emits its own durable marker. A later relaxed suffix can still
+		// outrun that marker before capture, so it uses the same admission.
 		lsn, appendErr := appendFrame(singleton)
 		err = appendErr
 		if lsn != 0 {
@@ -371,7 +403,10 @@ func (tdb *DB) registerPublicCommandWALCollected(bytes int, preparedBytes *int, 
 			if preparedBytes != nil {
 				bytes = *preparedBytes
 			}
-			ticket, leader, err = group.registerCollected(bytes, durable, false, collectionSealed)
+			ticket, leader, err = group.registerCollected(bytes, durable, false, collectionSealed, barrier)
+			if err == nil {
+				barrier = rootpublication.AcceptedTicket{} // pending epoch owns it now
+			}
 			if err == nil && singleton && leader {
 				group.mu.Lock()
 				group.pendingSingleton = ticket
@@ -460,10 +495,10 @@ func (group *publicCommandWALGroupCommit) idleDurableCaptureEligibleLocked() boo
 }
 
 func (group *publicCommandWALGroupCommit) register(bytes int, durable, force bool) (ticket uint64, leader bool, err error) {
-	return group.registerCollected(bytes, durable, force, false)
+	return group.registerCollected(bytes, durable, force, false, rootpublication.AcceptedTicket{})
 }
 
-func (group *publicCommandWALGroupCommit) registerCollected(bytes int, durable, force, collectionSealed bool) (ticket uint64, leader bool, err error) {
+func (group *publicCommandWALGroupCommit) registerCollected(bytes int, durable, force, collectionSealed bool, barrier rootpublication.AcceptedTicket) (ticket uint64, leader bool, err error) {
 	if group == nil {
 		return 0, false, ErrClosed
 	}
@@ -494,6 +529,9 @@ func (group *publicCommandWALGroupCommit) registerCollected(bytes int, durable, 
 	group.pendingSealed = group.pendingSealed || collectionSealed
 	if durable && !force {
 		group.pendingCommits++
+		if barrier.Valid() {
+			group.pendingBarrier = barrier
+		}
 	} else if force {
 		group.pendingForceTickets = append(group.pendingForceTickets, ticket)
 	}
@@ -526,7 +564,7 @@ func (group *publicCommandWALGroupCommit) allocateTicketLocked() (uint64, error)
 		return 0, group.terminalErr
 	}
 	if group.nextTicket == publicCommandWALFastRelaxedAppendedTicket-1 {
-		group.terminalErr = fmt.Errorf("treedb: command wal publication ticket space exhausted")
+		group.setTerminalErrLocked(fmt.Errorf("treedb: command wal publication ticket space exhausted"))
 		return 0, group.terminalErr
 	}
 	group.nextTicket++
@@ -618,9 +656,9 @@ func (group *publicCommandWALGroupCommit) initWakeLocked() {
 	}
 }
 
-func (tdb *DB) closePublicCommandWALGroupCommit() {
+func (tdb *DB) closePublicCommandWALGroupCommit() error {
 	if tdb == nil {
-		return
+		return nil
 	}
 	group := &tdb.commandWALGroupCommit
 	group.mu.Lock()
@@ -648,7 +686,22 @@ func (tdb *DB) closePublicCommandWALGroupCommit() {
 		group.timer = nil
 	}
 	group.wake = nil
+	err := group.cancelPendingBarrierLocked()
 	group.mu.Unlock()
+	return err
+}
+
+func (group *publicCommandWALGroupCommit) cancelPendingBarrierLocked() error {
+	ticket := group.pendingBarrier
+	group.pendingBarrier = rootpublication.AcceptedTicket{}
+	return ticket.CancelAccepted()
+}
+
+func (group *publicCommandWALGroupCommit) setTerminalErrLocked(err error) {
+	if cancelErr := group.cancelPendingBarrierLocked(); cancelErr != nil {
+		err = errors.Join(err, cancelErr)
+	}
+	group.terminalErr = err
 }
 
 func (tdb *DB) finishPublicCommandWALGroupPublication(publication publicCommandWALPublication, publishErr error) {
@@ -668,7 +721,7 @@ func (tdb *DB) finishPublicCommandWALGroupPublication(publication publicCommandW
 			group.mu.Lock()
 			if group.terminalErr == nil {
 				group.errors.Add(1)
-				group.terminalErr = publishErr
+				group.setTerminalErrLocked(publishErr)
 				group.cond.Broadcast()
 			}
 			group.mu.Unlock()
@@ -691,7 +744,7 @@ func (tdb *DB) finishPublicCommandWALGroupPublication(publication publicCommandW
 	}
 	if publishErr != nil {
 		group.errors.Add(1)
-		group.terminalErr = publishErr
+		group.setTerminalErrLocked(publishErr)
 		group.completedTicket = group.nextTicket
 		group.pendingCount = 0
 		group.pendingDeadline = time.Time{}
@@ -727,6 +780,7 @@ type publicCommandWALCapturedGroup struct {
 	lastTicket     uint64
 	forceTickets   []uint64
 	target         *backenddb.CommandWALCapturedPrefix
+	barrierTicket  rootpublication.AcceptedTicket
 	barrier        backenddb.CommandWALBarrierResult
 	err            error
 }
@@ -765,9 +819,13 @@ func (group *publicCommandWALGroupCommit) runLeader(tdb *DB) {
 	}
 	leaderWaitHook := group.testBeforeLeaderWait
 	group.mu.Unlock()
+	var batch publicCommandWALCapturedGroup
 	returned := false
 	defer func() {
 		if !returned {
+			// A detached but unspent reservation is still the active leader's
+			// responsibility if a capture hook unwinds before backend custody.
+			_ = batch.barrierTicket.CancelAccepted()
 			group.failPanickedLeader(tdb)
 		}
 	}()
@@ -795,7 +853,6 @@ func (group *publicCommandWALGroupCommit) runLeader(tdb *DB) {
 	// Public append and ticket registration use the same outer mutex. Holding
 	// it through capture binds the tickets to an exact complete WAL prefix.
 	// The physical barrier runs after these gates release.
-	var batch publicCommandWALCapturedGroup
 	func() {
 		tdb.commandWALPublicOperationGate.Lock()
 		defer tdb.commandWALPublicOperationGate.Unlock()
@@ -842,9 +899,11 @@ func (group *publicCommandWALGroupCommit) runLeader(tdb *DB) {
 func (group *publicCommandWALGroupCommit) detachPendingLocked() publicCommandWALCapturedGroup {
 	batch := publicCommandWALCapturedGroup{
 		count: group.pendingCount, commits: group.pendingCommits,
-		lastTicket:   group.nextTicket,
-		forceTickets: append([]uint64(nil), group.pendingForceTickets...),
+		lastTicket:    group.nextTicket,
+		forceTickets:  append([]uint64(nil), group.pendingForceTickets...),
+		barrierTicket: group.pendingBarrier,
 	}
+	group.pendingBarrier = rootpublication.AcceptedTicket{}
 	group.pendingSingleton = 0
 	group.pendingCount = 0
 	group.pendingDeadline = time.Time{}
@@ -861,14 +920,22 @@ func (group *publicCommandWALGroupCommit) detachPendingLocked() publicCommandWAL
 }
 
 // captureGroup requires the existing exclusive public operation and publish
-// gates. Backend admission, producer drains and actual frontier sampling remain
-// unchanged; only the active leader may reuse capturedPrefix.
+// gates. The pending group's protected COW admission follows its existing
+// active leader, which alone may reuse capturedPrefix.
 func (group *publicCommandWALGroupCommit) captureGroup(tdb *DB, batch *publicCommandWALCapturedGroup) {
 	// The previous leader completed Sync and all deferred releases before it
 	// cleared leaderActive. This storage is never exposed to public waiters.
 	group.capturedPrefix = backenddb.CommandWALCapturedPrefix{}
 	if tdb.cached != nil && tdb.cached.COWMode() {
-		batch.target, batch.barrier, batch.err = tdb.backend.CaptureCommandWALPrefixInto(&group.capturedPrefix, tdb.txnOwner)
+		if batch.commits != 0 {
+			batch.target, batch.barrier, batch.err = tdb.backend.CapturePrivateCOWCommandWALPrefixInto(&group.capturedPrefix, tdb.txnOwner, &batch.barrierTicket)
+			if cancelErr := batch.barrierTicket.CancelAccepted(); cancelErr != nil {
+				batch.err = errors.Join(batch.err, cancelErr)
+			}
+			batch.barrierTicket = rootpublication.AcceptedTicket{}
+		} else {
+			batch.target, batch.barrier, batch.err = tdb.backend.CaptureCommandWALPrefixInto(&group.capturedPrefix, tdb.txnOwner)
+		}
 	} else {
 		batch.target, batch.barrier, batch.err = tdb.backend.CaptureCommandWALPrefixInto(&group.capturedPrefix, nil)
 	}
@@ -886,7 +953,7 @@ func (group *publicCommandWALGroupCommit) failPanickedLeader(tdb *DB) {
 	group.errors.Add(1)
 	group.mu.Lock()
 	if group.terminalErr == nil {
-		group.terminalErr = ErrRecoveryRequired
+		group.setTerminalErrLocked(ErrRecoveryRequired)
 	}
 	group.completedTicket = group.nextTicket
 	group.leaderActive = false
@@ -903,7 +970,7 @@ func (group *publicCommandWALGroupCommit) failPanickedCompletion(tdb *DB) {
 	defer group.mu.Unlock()
 	if group.terminalErr == nil {
 		group.errors.Add(1)
-		group.terminalErr = ErrRecoveryRequired
+		group.setTerminalErrLocked(ErrRecoveryRequired)
 		group.completedTicket = group.nextTicket
 		group.cond.Broadcast()
 	}
@@ -943,7 +1010,7 @@ func (group *publicCommandWALGroupCommit) syncAndCompleteGroup(tdb *DB, batch *p
 		}
 		group.completedTicket = batch.lastTicket
 	} else if group.terminalErr == nil && batch.err != nil {
-		group.terminalErr = batch.err
+		group.setTerminalErrLocked(batch.err)
 	}
 	if group.terminalErr != nil {
 		group.completedTicket = group.nextTicket

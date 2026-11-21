@@ -242,6 +242,16 @@ physical sync and terminal completion. Every backend producer drain remains
 required. The exclusive public gates release before physical sync. COW retains
 its separate registration, accepted installation and completion sequence.
 
+Before the first public COW durable participant in a pending epoch can append,
+the epoch takes one ordinary reservation in the original finite accepted FIFO.
+The reservation follows that epoch into capture and covers its possible
+root-neutral barrier. An idle command's durable marker normally suffices, so
+capture returns the unused reservation. A relaxed append before capture can
+extend the exact endpoint past that marker. A successor epoch registering
+during the active file sync takes its own reservation. If the FIFO cannot
+admit the obligation, the originating write can fail before assignment. An
+assigned barrier retains its original identity, including on terminal failure.
+
 The ordinary prepared-payload family can retain the backend's original teardown,
 publisher-admission and raw-publication leases from append through capture. This
 includes prebuilt and prepared payloads, with and without request timing. The
