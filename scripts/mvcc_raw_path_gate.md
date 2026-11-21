@@ -21,6 +21,14 @@ change. Raw samples, summaries, command receipts, source/runtime bindings,
 binary digests and any generated profiles remain in the upload on success or
 failure. Disposable databases and build scratch under `tmp/` do not.
 
+Ordinary PR CI sets `RAW_GROUPED_BUILD=1`: each revision builds its same three
+test executables in one `go test -c` invocation, then uses the same six measured
+files and the same eight alternating baseline/candidate pairs per group. The
+manifest records the actual grouped argv for each executable. Local runs default
+to the original per-package invocations; the single-use historical acceptance
+also keeps that mode. A failed build or missing output stops the gate before
+any benchmark samples run.
+
 The artifact is named `mvcc-raw-path-evidence-HEAD-RUN-ATTEMPT`, has seven-day
 retention, and never overwrites an earlier attempt. It is **not an executable
 archive**: `measured-binaries.json` describes the runner-local copies, not files

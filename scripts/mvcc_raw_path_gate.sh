@@ -16,6 +16,11 @@ MAX_BYTES_REGRESSION_ABSOLUTE="${MAX_BYTES_REGRESSION_ABSOLUTE:-64}"
 SCRIPT_GOWORK="${SCRIPT_GOWORK:-off}"
 OUT_DIR="${OUT_DIR:-$ROOT/artifacts/mvcc_raw_path_gate}"
 RAW_SYNC_CONTEXT="${RAW_SYNC_CONTEXT:-0}"
+RAW_GROUPED_BUILD="${RAW_GROUPED_BUILD:-0}"
+if [[ "$RAW_GROUPED_BUILD" != 0 && "$RAW_GROUPED_BUILD" != 1 ]]; then
+  echo "RAW_GROUPED_BUILD must be 0 or 1" >&2
+  exit 2
+fi
 if [[ "$RAW_SYNC_CONTEXT" != 0 && "$RAW_SYNC_CONTEXT" != 1 ]]; then
   echo "RAW_SYNC_CONTEXT must be 0 or 1" >&2
   exit 2
@@ -119,20 +124,31 @@ CANDIDATE_TREEDB_BIN="$TMP_ROOT/candidate-treedb.test"
   lscpu
 } >"$ENVIRONMENT"
 
-env GOWORK="$SCRIPT_GOWORK" go test -c -trimpath -buildvcs=false \
-  -o "$CANDIDATE_DB_BIN" ./TreeDB/db
-env GOWORK="$SCRIPT_GOWORK" go test -c -trimpath -buildvcs=false \
-  -o "$CANDIDATE_CACHING_BIN" ./TreeDB/caching
-env GOWORK="$SCRIPT_GOWORK" go test -c -trimpath -buildvcs=false \
-  -o "$CANDIDATE_TREEDB_BIN" ./TreeDB
+build_benchmarks() {
+  local revision="$1"
+  if [[ "$RAW_GROUPED_BUILD" == 1 ]]; then
+    local dir="$TMP_ROOT/$revision-build"
+    local -a argv=(go test -c -trimpath -buildvcs=false -o "$dir/" ./TreeDB/db ./TreeDB/caching ./TreeDB)
+    mkdir "$dir"
+    env GOWORK="$SCRIPT_GOWORK" "${argv[@]}"
+    # Keep the six existing measured names and record the actual shared invocation.
+    printf '%s\0' "${argv[@]}" > "$dir/argv"
+    mv "$dir/db.test" "$TMP_ROOT/$revision-db.test"
+    mv "$dir/caching.test" "$TMP_ROOT/$revision-caching.test"
+    mv "$dir/TreeDB.test" "$TMP_ROOT/$revision-treedb.test"
+  else
+    env GOWORK="$SCRIPT_GOWORK" go test -c -trimpath -buildvcs=false \
+      -o "$TMP_ROOT/$revision-db.test" ./TreeDB/db
+    env GOWORK="$SCRIPT_GOWORK" go test -c -trimpath -buildvcs=false \
+      -o "$TMP_ROOT/$revision-caching.test" ./TreeDB/caching
+    env GOWORK="$SCRIPT_GOWORK" go test -c -trimpath -buildvcs=false \
+      -o "$TMP_ROOT/$revision-treedb.test" ./TreeDB
+  fi
+}
+build_benchmarks candidate
 (
   cd "$BASELINE_WT"
-  env GOWORK="$SCRIPT_GOWORK" go test -c -trimpath -buildvcs=false \
-    -o "$BASELINE_DB_BIN" ./TreeDB/db
-  env GOWORK="$SCRIPT_GOWORK" go test -c -trimpath -buildvcs=false \
-    -o "$BASELINE_CACHING_BIN" ./TreeDB/caching
-  env GOWORK="$SCRIPT_GOWORK" go test -c -trimpath -buildvcs=false \
-    -o "$BASELINE_TREEDB_BIN" ./TreeDB
+  build_benchmarks baseline
 )
 (
   cd "$TMP_ROOT"
@@ -223,11 +239,11 @@ fi
 retain_measured_binaries() {
   python3 - "$TMP_ROOT" "$OUT_DIR" "$BASELINE_SHA" "$CANDIDATE_SHA" \
     "$SCRIPT_GOWORK" "$(git rev-parse "${BASELINE_SHA}^{tree}")" \
-    "$(git rev-parse "${CANDIDATE_SHA}^{tree}")" <<'PY_RETAIN'
+    "$(git rev-parse "${CANDIDATE_SHA}^{tree}")" "${RAW_GROUPED_BUILD:-0}" <<'PY_RETAIN'
 import hashlib, json, pathlib, re, shutil, stat, sys
 
 temporary, output = map(pathlib.Path, sys.argv[1:3])
-baseline, candidate, gowork, baseline_tree, candidate_tree = sys.argv[3:]
+baseline, candidate, gowork, baseline_tree, candidate_tree, grouped = sys.argv[3:]
 if any(re.fullmatch(r"[0-9a-f]{40}", value) is None
        for value in (baseline, candidate, baseline_tree, candidate_tree)):
     raise ValueError("malformed executable source identity")
@@ -251,6 +267,14 @@ destination.mkdir()
 records = []
 for revision, sha, tree in (("baseline", baseline, baseline_tree),
                             ("candidate", candidate, candidate_tree)):
+    grouped_argv = None
+    if grouped == "1":
+        build_dir = temporary / (revision + "-build")
+        grouped_argv = (build_dir / "argv").read_bytes().decode().split("\0")
+        expected = ["go", "test", "-c", "-trimpath", "-buildvcs=false", "-o", str(build_dir) + "/", *packages.values()]
+        if grouped_argv != expected + [""]:
+            raise ValueError("unexpected grouped build invocation")
+        grouped_argv.pop()  # NUL terminator written by the actual invocation.
     for package, source_package in packages.items():
         name = f"{revision}-{package}.test"
         source = temporary / name
@@ -265,12 +289,13 @@ for revision, sha, tree in (("baseline", baseline, baseline_tree),
         if (hashlib.sha256(retained.read_bytes()).hexdigest() != digest
                 or stat.S_IMODE(retained.stat().st_mode) != stat.S_IMODE(mode)):
             raise ValueError(f"retained executable digest drift: {name}")
+        build_argv = grouped_argv or ["go", "test", "-c", "-trimpath", "-buildvcs=false",
+                                      "-o", str(source), source_package]
         records.append({"path": "measured-binaries/" + name, "sha256": digest,
                         "bytes": retained.stat().st_size, "mode": stat.S_IMODE(mode),
                         "source_sha": sha, "source_tree": tree,
                         "package": source_package,
-                        "build_argv": ["go", "test", "-c", "-trimpath", "-buildvcs=false",
-                                       "-o", str(source), source_package],
+                        "build_argv": build_argv,
                         "build_environment": {"GOWORK": gowork}})
 manifest = {"status": "RETAINED_ACTUAL_MEASURED_EXECUTABLES", "files": records,
             "environment_sha256": hashlib.sha256((output / "environment.txt").read_bytes()).hexdigest(),

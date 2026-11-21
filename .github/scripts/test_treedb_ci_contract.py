@@ -64,6 +64,32 @@ class TreeDBCIContractTests(unittest.TestCase):
         )
         self.assertNotIn("github.ref", concurrency)
 
+    def test_macos_normal_tests_reuse_builds_but_not_test_results(self) -> None:
+        job = block(self.source, "  test:\n", "\n  race:")
+        self.assertIn("cache: ${{ matrix.os == 'macos-latest' }}", job)
+        self.assertIn(
+            "      - name: Expire cached Go test results (macOS)\n"
+            "        if: ${{ matrix.os == 'macos-latest' }}\n"
+            "        shell: bash\n"
+            "        run: go clean -testcache\n",
+            job,
+        )
+        self.assertLess(job.index("run: go clean -testcache"), job.index("- name: Test\n"))
+
+    def test_only_pr_root_race_narrows_original_size_offline_compact(self) -> None:
+        # Complete top-level discovery and the parent assignment remain intact.
+        # Never give every loaded root test a shared subtest inclusion filter.
+        race = block(self.source, "  race:\n", "\n  perf:\n")
+        root = block(race, 'if [ -s "$root_test_file" ]; then', 'if [ -s "$caching_test_file" ]; then')
+        parent = "TestCompactStorageExhaustiveCommandWALRandom4KOffline"
+        skip = f"root_race_options=(-skip '^{parent}$/^keys100000$')"
+        self.assertEqual(self.source.count(skip), 1)
+        self.assertIn("root_race_options=()", root)
+        guard = f'if [[ "$GITHUB_EVENT_NAME" == pull_request ]] && grep -Fxq {parent} "$root_test_file"; then'
+        self.assertIn(skip, block(root, guard, "            fi"))
+        self.assertIn(' . -run "$root_regex" "${root_race_options[@]}"', root)
+        self.assertNotIn(" -short", root)
+
     def test_required_test_jobs_checkout_the_event_sha(self) -> None:
         required_jobs = (
             ("vet", "test"),
@@ -120,7 +146,7 @@ class TreeDBCIContractTests(unittest.TestCase):
         self.assertEqual(self.m0.count("vars.TREEDB_PERF_RUNNER_LABEL"), 2)
         self.assertEqual(self.m0.count("vars.TREEDB_PERF_RUNNER_PR"), 2)
 
-    def test_m0_routing_preserves_original_enforced_capture(self) -> None:
+    def test_m0_routing_advises_only_on_total_cv_without_waiving_capture(self) -> None:
         self.assertIn("    timeout-minutes: 20\n", self.m0)
         self.assertNotIn("continue-on-error", self.m0)
         self.assertNotIn("fromJSON", self.m0)
@@ -130,6 +156,7 @@ class TreeDBCIContractTests(unittest.TestCase):
             'run: RUN_DIR="$RUNNER_TEMP/treedb-vacuum-m0" scripts/treedb_vacuum_m0_capture.sh',
             self.m0,
         )
+        self.assertIn("          TREEDB_M0_TOTAL_CV_MODE: advisory", self.m0)
         self.assertIn("      - name: Upload complete evidence packet\n        if: always()", self.m0)
         self.assertIn("          if-no-files-found: error", self.m0)
 
@@ -180,16 +207,37 @@ class TreeDBCIContractTests(unittest.TestCase):
         self.assertEqual(set(bindings.values()), expected)
         self.assertEqual(len(bindings), len(expected))
         script = textwrap.dedent(required.split("        run: |\n", 1)[1])
+        single_use = "GETVERSIONED_BYTES_ACCEPTANCE_RESULT"
+        acceptance = block(self.source, "  getversioned-bytes-acceptance:\n", "\n  required:\n")
+        self.assertIn("    if: ${{ always() && !cancelled() && needs.mvcc-raw-path-gate.outputs.scoped_acceptance == 'true' }}\n", acceptance)
+        self.assertIn("SINGLE_USE_PR: ${{ github.event_name == 'pull_request' && github.repository == 'snissn/gomap' && github.event.pull_request.number == 5397 }}", required)
+        self.assertIn("SCOPED_ACCEPTANCE: ${{ needs.mvcc-raw-path-gate.outputs.scoped_acceptance }}", required)
         env = {name: "success" for name in bindings}
         def run(values: dict[str, str]) -> int:
             return subprocess.run(["bash", "-c", script], env=values, capture_output=True, check=False).returncode
-        self.assertEqual(run(env), 0)
-        for name in bindings:
-            for bad in ("failure", "cancelled", "skipped", ""):
-                values = dict(env)
-                values[name] = bad
-                with self.subTest(name=name, result=bad):
-                    self.assertNotEqual(run(values), 0)
+        for target, scope, result in (
+            ("true", "true", "success"), ("false", "false", "skipped"), ("false", "", "skipped")
+        ):
+            allowed = dict(env, SINGLE_USE_PR=target, SCOPED_ACCEPTANCE=scope)
+            allowed[single_use] = result
+            self.assertEqual(run(allowed), 0)
+            for name in bindings:
+                if name == single_use:
+                    continue
+                for bad in ("failure", "cancelled", "skipped", ""):
+                    with self.subTest(target=target, scope=scope, job=name, bad=bad):
+                        self.assertNotEqual(run(dict(allowed, **{name: bad})), 0)
+        # Exercise the real aggregate Bash, not a Python imitation of its routing.
+        for target in ("true", "false"):
+            for scope in ("true", "false", "", "malformed"):
+                for result in ("success", "skipped", "failure", "cancelled", ""):
+                    should_pass = (target, scope, result) in {
+                        ("true", "true", "success"), ("false", "false", "skipped"), ("false", "", "skipped")
+                    }
+                    with self.subTest(target=target, scope=scope, decision=result):
+                        self.assertEqual(run(dict(env, SINGLE_USE_PR=target, SCOPED_ACCEPTANCE=scope,
+                                                  **{single_use: result})) == 0, should_pass)
+
 
     def test_mvcc_upload_retains_compact_evidence_without_executables_or_scratch(self) -> None:
         mvcc = block(self.source, "  mvcc-raw-path-gate:\n", "\n  vet:\n")

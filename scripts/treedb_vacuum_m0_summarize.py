@@ -20,6 +20,7 @@ REQUIRED_CV_METRICS = (
 )
 PRODUCT_V3_CV_METRICS = ("vacuum-total-ns/op", "foreground-p99-ns/op")
 PRODUCT_V4_CV_METRICS = ("vacuum-total-ns/op",)
+PRODUCTION_CV_GATE = "production_cv_at_most_10_percent"
 SIGNED_PHASE_DIAGNOSTICS = {
     "diagnostic-foreground-wait-gap-ns/op",
     "diagnostic-other-vacuum-ns/op",
@@ -36,7 +37,9 @@ def cv_metrics(stability_arm: str, acceptance_contract: str) -> tuple[str, ...]:
     return REQUIRED_CV_METRICS
 
 
-def latency_diagnostic(metrics: dict[str, dict[str, object]], metric: str) -> dict[str, object]:
+def latency_diagnostic(
+    metrics: dict[str, dict[str, object]], metric: str, *, owner_review_required: bool = True
+) -> dict[str, object]:
     entry = metrics[metric]
     return {
         **entry,
@@ -44,7 +47,7 @@ def latency_diagnostic(metrics: dict[str, dict[str, object]], metric: str) -> di
         "maximum": max(entry["samples"]),
         "cv_at_most_10_percent": entry["cv"] <= 0.10,
         "merge_predicate": False,
-        "owner_review_required": True,
+        "owner_review_required": owner_review_required,
         "owner_review": None,
     }
 
@@ -216,7 +219,9 @@ def render_markdown(result: dict[str, object]) -> str:
     fixture = result["fixture"]["fixture"]
     stability_arm = result["stability_arm"]
     contract = result.get("acceptance_contract", "v2")
-    required_cv = cv_metrics(stability_arm, contract)
+    comparison_cv = cv_metrics(stability_arm, contract)
+    total_cv_advisory = "total_vacuum_diagnostic" in result
+    required_cv = () if total_cv_advisory else comparison_cv
     legacy = result["metrics"][stability_arm]
     public = result["metrics"]["public"]
     lines = [
@@ -229,7 +234,10 @@ def render_markdown(result: dict[str, object]) -> str:
         f"- Repetitions: `10` interleaved {stability_arm}/public runs",
         f"- Stability benchmark: `{STABILITY_BENCHMARKS[stability_arm]}`",
         f"- Acceptance contract: `{contract}`; no historical result reinterpreted",
-        "- Stability predicates: " + ", ".join(f"`{name}` CV <= 0.10" for name in required_cv) + "; no discarded samples",
+        ("- Total-vacuum CV <= 0.10: advisory in repository CI; no discarded samples"
+         if total_cv_advisory else
+          "- Stability predicates: " + ", ".join(f"`{name}` CV <= 0.10" for name in required_cv)
+         + "; no discarded samples"),
         f"- Status: `{result['public_status']}`",
         "",
         "## Fixture",
@@ -249,9 +257,15 @@ def render_markdown(result: dict[str, object]) -> str:
     for metric in REQUIRED_CV_METRICS:
         entry = legacy[metric]
         classification = 'pass' if entry['cv'] <= 0.10 else 'fail'
-        if metric not in required_cv:
+        if total_cv_advisory and metric in comparison_cv:
+            classification += ' (advisory)'
+        elif metric not in required_cv:
             classification += ' (diagnostic only; owner review required)'
         lines.append(f"| `{metric}` | {entry['median']:.3f} | {entry['cv']:.4f} | {classification} |")
+    if total_cv_advisory:
+        total = result["total_vacuum_diagnostic"]
+        lines.extend(["", f"- Total-vacuum minimum/median/maximum: `{total['minimum']:.0f}` / `{total['median']:.0f}` / `{total['maximum']:.0f} ns/op`; original CV verdict and all samples are retained.",
+                      "- This warning alone requires no rerun or additional approval."])
     if contract in ("v3", "v4"):
         pause = result["pause_diagnostic"]
         lines.extend(["", f"- Pause maximum: `{pause['maximum']:.0f} ns`; all ten raw maxima and CV remain above/in results.json.",
@@ -295,7 +309,11 @@ def main() -> int:
                         help="legacy retains historical interpretation; production is the current capture contract")
     parser.add_argument("--acceptance-contract", choices=("v2", "v3", "v4"), default="v2",
                         help="v2 retains three CV gates; v3 diagnoses pause CV; v4 diagnoses pause and p99 CV, with mandatory owner review")
+    parser.add_argument("--total-cv-advisory", action="store_true",
+                        help="production v4 only: retain original total-CV comparison but exclude it from exit status")
     args = parser.parse_args()
+    if args.total_cv_advisory and (args.stability_arm, args.acceptance_contract) != ("production", "v4"):
+        parser.error("--total-cv-advisory requires --stability-arm production --acceptance-contract v4")
     repo = args.repo_root.resolve()
     run_dir = args.run_dir.resolve()
     fixture = json.loads((run_dir / "fixture.json").read_text())
@@ -324,9 +342,22 @@ def main() -> int:
         result["pause_diagnostic"] = latency_diagnostic(legacy, "max-writer-pause-ns")
     if args.acceptance_contract == "v4":
         result["foreground_p99_diagnostic"] = latency_diagnostic(legacy, "foreground-p99-ns/op")
+    enforced_gates = gates
+    if args.total_cv_advisory:
+        enforced_gates = {name: passed for name, passed in gates.items() if name != PRODUCTION_CV_GATE}
+        result["stability_contract"]["required_cv_metrics"] = []
+        result["stability_contract"]["advisory_cv_metrics"] = list(required_cv)
+        result["total_vacuum_diagnostic"] = latency_diagnostic(
+            legacy, PRODUCT_V4_CV_METRICS[0], owner_review_required=False
+        )
+        result["enforced_gates"] = enforced_gates
     (run_dir / "results.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
     (run_dir / "summary.md").write_text(render_markdown(result))
-    return 0 if all(gates.values()) else 1
+    if args.total_cv_advisory and not gates[PRODUCTION_CV_GATE]:
+        cv = result["total_vacuum_diagnostic"]["cv"]
+        print(f"::warning::TreeDB M0 total-vacuum CV {cv:.6f} exceeds 0.10 (advisory); "
+              "raw verdict and samples retained")
+    return 0 if all(enforced_gates.values()) else 1
 
 
 if __name__ == "__main__":

@@ -122,7 +122,7 @@ class TreeDBWeightedManifestTest(unittest.TestCase):
         filename = "treedb_race_weighted_shards.tsv"
         race = read_weights(filename, 7, {"package", "root", "caching", "db", "nativewire"})
         rag = "github.com/snissn/gomap/TreeDB/cmd/treedb_rag_benchmark"
-        self.assertEqual(race.get(("package", rag)), (0, True))
+        self.assertEqual(race.get(("package", rag)), (4, True))
         before = {key: pin for key, pin in race.items() if key != ("package", rag)}
         domain = sorted(item for kind, item in before if kind == "package")
         domain.extend(("future-package-a", "future-package-b", "future-package-c"))
@@ -141,7 +141,7 @@ class TreeDBWeightedManifestTest(unittest.TestCase):
             before_file.write_text(
                 "\n".join(
                     line for line in (CI_DIR / filename).read_text().splitlines()
-                    if line.split("\t")[:3] != ["package", "0", rag]
+                    if line.split("\t")[:3] != ["package", "4", rag]
                 ) + "\n",
                 encoding="utf-8",
             )
@@ -175,7 +175,7 @@ class TreeDBWeightedManifestTest(unittest.TestCase):
                             item: shard for shard, part in enumerate(actual) for item in part
                         })
                     old, new = assignments
-                    self.assertEqual(new[rag], 0)
+                    self.assertEqual(new[rag], 4)
                     self.assertEqual(
                         {item: shard for item, shard in old.items() if item != rag},
                         {item: shard for item, shard in new.items() if item != rag},
@@ -246,6 +246,41 @@ class TreeDBWeightedManifestTest(unittest.TestCase):
 
 
 class TreeDBWindowsCoreHeadroomTest(unittest.TestCase):
+    def test_discovery_timers_leave_inventory_and_failure_status_intact(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        for name, labels in (
+            ("test", ("packages", "root", "db", "collections", "caching")),
+            ("race", ("packages", "root", "caching", "db", "nativewire")),
+        ):
+            with self.subTest(job=name):
+                job = workflow_job(workflow, name)
+                helper = re.search(
+                    r"(?ms)^          time_discovery\(\) \{\n.*?^          \}",
+                    job,
+                )
+                self.assertIsNotNone(helper)
+                for label in labels:
+                    env_prefix = (
+                        "env GOMEMLIMIT=4GiB GOMAXPROCS=2 "
+                        if name == "race" and label != "packages"
+                        else ""
+                    )
+                    self.assertIn(f"time_discovery {label} {env_prefix}go ", job)
+                script = helper.group() + '\ntime_discovery probe "$@"\n'
+                success = subprocess.run(
+                    ["bash", "-c", script, "probe", "printf", "TestOne\nTestTwo\n"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                self.assertEqual(success.returncode, 0)
+                self.assertEqual(success.stdout, "TestOne\nTestTwo\n")
+                self.assertRegex(success.stderr, r"TreeDB discovery probe: wall=.+s user=.+s sys=.+s")
+                fail = subprocess.run(
+                    ["bash", "-c", "set -o pipefail\n" + script.rstrip() + " | cat", "probe", "false"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                self.assertNotEqual(fail.returncode, 0)
+                self.assertEqual(fail.stdout, "")
+
     def test_core_shards_use_eight_weighted_jobs_plus_dedicated_heavy_tests(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
         self.assertEqual(
@@ -420,10 +455,14 @@ class TreeDBLinuxRaceHeadroomTest(unittest.TestCase):
         self.assertLess(12, outer_minutes)
 
         self.assertIn("grep -v '^github.com/snissn/gomap/TreeDB/nativewire$'", race_job)
-        self.assertIn(
-            "go test ./nativewire -list '^(Test|Example|Fuzz).*' | grep -E '^(Test|Example|Fuzz)'",
-            race_job,
-        )
+        for command in (
+            "go test -race -p 1 . -list '^(Test|Example).*' | grep -E '^(Test|Example)'",
+            "go test -race -p 1 ./caching -list 'Test.*' | grep '^Test'",
+            "go test -race -p 1 ./db -list 'Test.*' | grep '^Test' | grep -v '^TestVacuumRaceMissingKey$'",
+            "go test -race -p 1 ./nativewire -list '^(Test|Example|Fuzz).*' | grep -E '^(Test|Example|Fuzz)'",
+        ):
+            with self.subTest(command=command):
+                self.assertIn("GOMEMLIMIT=4GiB GOMAXPROCS=2 " + command, race_job)
 
     def test_actual_race_selector_covers_all_domains_and_new_items_once(self) -> None:
         race_job = workflow_job(WORKFLOW.read_text(encoding="utf-8"), "race")
@@ -477,8 +516,10 @@ class TreeDBLinuxRaceHeadroomTest(unittest.TestCase):
                     self.assertEqual(shards, weighted_shards(names, kind, 7, pins))
                     self.assertTrue(all(shards), "each added core shard must receive work")
                     if kind == "nativewire":
-                        self.assertIn("TestVectorPartitionLiveSelectedLifecycleV1", shards[0])
-                        self.assertIn("TestMultiOwnerTCPAcceptedModelScaledCorrectnessV1", shards[2])
+                        self.assertIn("TestVectorPartitionLiveSelectedLifecycleV1", shards[3])
+                        self.assertIn("TestMultiOwnerTCPAcceptedModelScaledCorrectnessV1", shards[5])
+                    if kind == "root":
+                        self.assertIn("TestCompactStorageExhaustiveCommandWALRandom4KOffline", shards[6])
 
 
 if __name__ == "__main__":

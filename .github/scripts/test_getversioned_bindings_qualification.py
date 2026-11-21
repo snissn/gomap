@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import os
+import subprocess
 from unittest import mock
 from pathlib import Path
 import tempfile
@@ -137,6 +138,39 @@ class FixedQualificationTests(unittest.TestCase):
         self.assertIn("INCONCLUSIVE: required optimized symbol text absent", job)
         self.assertEqual(len(set(Q.DB_TOPS + Q.TREE_TOPS)), 29)
 
+    def test_event_routes_only_the_three_compiler_steps(self):
+        source = (HERE.parent / "workflows/treedb-tests.yml").read_text()
+        self.assertIn("getversioned_compiler_witness:", source)
+        job = source.split("  getversioned-bindings-qualification:\n", 1)[1].split("  mvcc-raw-path-gate:\n", 1)[0]
+        steps = {chunk.splitlines()[0]: chunk for chunk in job.split("      - name: ")[1:]}
+        guarded = {name for name, code in steps.items()
+                   if "if: steps.initialize.outputs.structural == 'true'" in code}
+        self.assertEqual(guarded, {"Compile optimized DB test ELF and escape diagnostics",
+                                   "Compile optimized Tree test ELF and escape diagnostics",
+                                   "Capture stock optimized symbols and exact structural text"})
+        for name in ("Exact focused normal inventory", "Exact focused race inventory"):
+            self.assertNotIn("        if:", steps[name])
+        initialize = steps["Initialize fixed qualification output"]
+        self.assertIn("MANUAL_WITNESS: ${{ inputs.getversioned_compiler_witness == true }}", initialize)
+        self.assertIn("PR_NUMBER: ${{ github.event.pull_request.number }}", initialize)
+        start = initialize.index("structural=false")
+        end = initialize.index('echo "structural=$structural"')
+        predicate = initialize[start:end] + 'printf "%s" "$structural"'
+        for event, repo, number, manual, want in (
+            ("push", "snissn/gomap", "", "false", "false"),
+            ("merge_group", "snissn/gomap", "", "false", "false"),
+            ("pull_request", "snissn/gomap", "5600", "true", "false"),
+            ("pull_request", "snissn/gomap", "5397", "false", "true"),
+            ("pull_request", "another/gomap", "5397", "false", "false"),
+            ("workflow_dispatch", "snissn/gomap", "", "false", "false"),
+            ("workflow_dispatch", "snissn/gomap", "", "true", "true"),
+        ):
+            env = {**os.environ, "GITHUB_EVENT_NAME": event, "GITHUB_REPOSITORY": repo,
+                   "PR_NUMBER": number, "MANUAL_WITNESS": manual}
+            with self.subTest(event=event, number=number, manual=manual):
+                self.assertEqual(subprocess.check_output(["bash", "-eu", "-c", predicate],
+                                                         text=True, env=env), want)
+
     def test_compiler_selection_preserves_scope_errors_and_unknowns(self):
         sources = Q.COMPILER_SOURCES["db"]
         kept = [b"TreeDB/db/value_reader.go:65:10: can inline selected\n",
@@ -164,7 +198,17 @@ class FixedQualificationTests(unittest.TestCase):
             os.environ["RUNNER_TEMP"] = d
             root = Path(d) / "getversioned-bindings-qualification"
             root.mkdir()
-            repository = HERE.parents[1]
+            # Unit-test transport with fixed inputs. The optional real compiler
+            # steps (not the functional controls) enforce published source pins.
+            repository = Path(d) / "source"
+            source_file = repository / "TreeDB/db/value_reader.go"
+            source_file.parent.mkdir(parents=True)
+            source_file.write_bytes(b"fixed unit-test source\n")
+            fixture = {"db": {"TreeDB/db/value_reader.go":
+                              (hashlib.sha256(source_file.read_bytes()).hexdigest(), ((63, 75),))}}
+            patch = mock.patch.object(Q, "COMPILER_SOURCES", fixture)
+            patch.start()
+            self.addCleanup(patch.stop)
             raw = (b"TreeDB/db/other.go:1:2: can inline irrelevant\n"
                    b"TreeDB/db/value_reader.go:65:2: r does not escape\n"
                    b"TreeDB/db/other.go:1:2: undefined: missing\n")
@@ -186,8 +230,8 @@ class FixedQualificationTests(unittest.TestCase):
             self.assertEqual(failed["status"], "INCOMPLETE")
             self.assertNotIn("raw_sha256", failed)
             self.assertIn("consumed_prefix_sha256", failed)
-            _, ranges = Q.COMPILER_SOURCES["db"]["TreeDB/db/db.go"]
-            mismatched = {"db": {"TreeDB/db/db.go": ("0" * 64, ranges)}}
+            _, ranges = fixture["db"]["TreeDB/db/value_reader.go"]
+            mismatched = {"db": {"TreeDB/db/value_reader.go": ("0" * 64, ranges)}}
             with mock.patch.object(Q, "COMPILER_SOURCES", mismatched), self.assertRaises(ValueError):
                 Q.compiler_scope("db", repository)
 
