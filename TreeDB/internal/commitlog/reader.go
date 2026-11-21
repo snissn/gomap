@@ -68,6 +68,15 @@ func NewReaderFromFileWithOptions(file *os.File, opts Options) (*Reader, error) 
 	}, nil
 }
 
+// FixedLogicalSize reports the logical length from this reader's validated
+// fixed container. For a stream the caller can use its descriptor's file size.
+func (r *Reader) FixedLogicalSize() (int64, bool) {
+	if r == nil || r.f == nil || r.fixed == nil {
+		return 0, false
+	}
+	return r.fixed.logical, true
+}
+
 // IsEmptyFixedContainer reports a positively validated frame-free fixed
 // container, not an empty stream or an EOF observation. Reader construction
 // validated the complete header and reserve on this exact descriptor; callers

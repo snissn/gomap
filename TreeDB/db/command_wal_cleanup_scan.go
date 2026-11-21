@@ -203,7 +203,7 @@ func (db *DB) scanCommandWALCleanupProof(proof durableWALCleanupProofV1, scanSea
 	// cleanup invocation.
 	for i := range prefix {
 		closed := &prefix[i]
-		closed.kept = scan.scanFile(closed.segment, closed.file, false, true, nil)
+		closed.kept = scan.scanFile(closed.segment, closed.file, false, nil)
 	}
 	if scan.hardErr != nil {
 		return scan.finish(closePrefix())
@@ -246,7 +246,7 @@ func (db *DB) scanCommandWALCleanupProof(proof durableWALCleanupProofV1, scanSea
 			if active {
 				expected = &current.ActiveIdentity
 			}
-			if openErr := scan.scanSegment(seg, active, true, expected); openErr != nil {
+			if openErr := scan.scanSegment(seg, active, expected); openErr != nil {
 				if commandWALCleanupDescriptorExhausted(openErr) {
 					suffixDescriptorErr = errors.Join(suffixDescriptorErr, openErr)
 				} else {

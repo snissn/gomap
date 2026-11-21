@@ -31,6 +31,12 @@ type logSegment struct {
 }
 
 func listSegmentsInDir(segDir string) ([]logSegment, error) {
+	return listSegments(segDir, false)
+}
+
+// Cleanup gets command segment sizes from its exact readers. Other WAL names
+// still go through their usual validation during enumeration.
+func listSegments(segDir string, deferCommandSizes bool) ([]logSegment, error) {
 	entries, err := os.ReadDir(segDir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -55,6 +61,10 @@ func listSegmentsInDir(segDir string) ([]logSegment, error) {
 			lane:     lane,
 			path:     filepath.Join(segDir, name),
 			valueLog: valueLog,
+		}
+		if deferCommandSizes && !valueLog && commitlog.IsCommandSegmentName(name) {
+			segments = append(segments, seg)
+			continue
 		}
 		if info, err := entry.Info(); err == nil {
 			seg.size = info.Size()
