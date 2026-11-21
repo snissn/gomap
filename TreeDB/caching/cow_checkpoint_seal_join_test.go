@@ -1,6 +1,8 @@
 package caching
 
 import (
+	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -37,19 +39,37 @@ type checkpointRetirementBackend struct {
 }
 
 func (b *checkpointRetirementBackend) Checkpoint() error {
+	return b.atPhysicalBoundary(b.DB.Checkpoint)
+}
+
+func (b *checkpointRetirementBackend) CheckpointWithoutCommandWALCleanup() error {
+	return b.atPhysicalBoundary(b.DB.CheckpointWithoutCommandWALCleanup)
+}
+
+func (b *checkpointRetirementBackend) atPhysicalBoundary(checkpoint func() error) error {
 	if !b.first.Swap(false) {
-		return b.DB.Checkpoint()
+		return checkpoint()
 	}
 	// The cache has installed the accepted basis and completed its handoff.
 	// Only now permit the original physical publisher to reach durability.
 	b.unpausePhysical()
-	err := b.DB.Checkpoint()
+	err := checkpoint()
 	close(b.physicalDone)
 	<-b.returnBoundary
 	return err
 }
 
 func TestCOWCheckpointJoinsOriginalAcceptedRetirement(t *testing.T) {
+	testCOWCheckpointJoinsOriginalAcceptedRetirement(t, false)
+}
+
+func TestCOWCheckpointCanceledAcceptedWaitRetainsCommandWALCleanupDebt(t *testing.T) {
+	testCOWCheckpointJoinsOriginalAcceptedRetirement(t, true)
+}
+
+func testCOWCheckpointJoinsOriginalAcceptedRetirement(t *testing.T, cancelWait bool) {
+	t.Helper()
+	t.Setenv(envDisableVlogGenerationLoop, "1")
 	cache, backend := nativeBridgeFixture(t, true)
 	registerNativeBridgeTestCommand()
 	custody := &checkpointRetirementCustody{entered: make(chan struct{}), release: make(chan struct{})}
@@ -90,8 +110,17 @@ func TestCOWCheckpointJoinsOriginalAcceptedRetirement(t *testing.T) {
 	}
 	cache.backend = wrapped
 	through := cache.cow.prefix.LogicalFrontiers()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var cleanupCalls int
+	if cancelWait {
+		cache.SetCommandWALCheckpointCleanupHook(func(sync bool) error {
+			cleanupCalls++
+			return backend.CleanupCommandWALCoveredSegmentsAtCheckpoint(sync)
+		})
+	}
 	done := make(chan error, 1)
-	go func() { done <- cache.Checkpoint() }()
+	go func() { done <- cache.CheckpointContext(ctx) }()
 	wait := func(ch <-chan struct{}, label string) {
 		t.Helper()
 		select {
@@ -121,14 +150,37 @@ func TestCOWCheckpointJoinsOriginalAcceptedRetirement(t *testing.T) {
 		t.Fatalf("checkpoint returned before original custody release: %v", err)
 	case <-time.After(50 * time.Millisecond):
 	}
-	releaseCustody()
-	select {
-	case err := <-done:
-		if err != nil {
+	if cancelWait {
+		cancel()
+		select {
+		case err := <-done:
+			if !errors.Is(err, context.Canceled) || cleanupCalls != 0 || !cache.commandWALCleanupPending.Load() {
+				t.Fatalf("canceled wait: error=%v cleanup=%d pending=%t", err, cleanupCalls, cache.commandWALCleanupPending.Load())
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("checkpoint cancellation waited for held custody")
+		}
+		commitSeq := backend.State().CommitSeq
+		releaseCustody()
+		acceptedCtx, stop := context.WithTimeout(context.Background(), 10*time.Second)
+		defer stop()
+		if err := cache.cow.prefix.WaitAccepted(acceptedCtx, rootpublication.SealedPrefix{LogicalSequence: through.V, CanonicalLSN: through.C}); err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("checkpoint did not join original accepted retirement")
+		cache.runPendingCommandWALCleanup()
+		if cache.commandWALCleanupPending.Load() || cache.commandWALCleanupCompletions.Load() != 1 || backend.State().CommitSeq != commitSeq {
+			t.Fatal("cleanup debt did not converge independently of the original publication")
+		}
+	} else {
+		releaseCustody()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("checkpoint did not join original accepted retirement")
+		}
 	}
 	if got := cache.cow.prefix.LogicalFrontiers(); got.S.LogicalSequence != through.V || got.S.CanonicalLSN != through.C || custody.calls.Load() != 1 {
 		t.Fatalf("original retirement not complete once: %+v through=%+v calls=%d", got, through, custody.calls.Load())
