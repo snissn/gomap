@@ -280,8 +280,11 @@ GOWORK=off GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -p 1 . \
   - `bench_unsafe` (explicit benchmark-only ceiling; TreeDB skips read checksums and has no production durability promise; `unsafe` is its legacy alias)
   - `wal_on_fast` (benchmark-runner relaxed-WAL preset; TreeDB maps this to `command_wal_relaxed` with verified read integrity and the same compression defaults)
   - These names are unified-bench presets shared across database adapters. Native no-sync flags have engine-specific guarantees and are not durability-equivalent. The public TreeDB server profile vocabulary is separate. Public TreeDB servers should use `command_wal_durable`, `command_wal_relaxed`, or `no_wal_fast`; benchmark-only `bench_unsafe` requires an explicit benchmark constructor boundary.
-- `-dbs` (`all` or CSV): `hashdb,btree,treedb,pebble,badger,leveldb`
-  - Hidden TreeDB variants can be selected explicitly, including
+- `-dbs` selects a comma-separated list of DBs. `all` (the default) selects
+  the default set. Run `unified-bench -help` to see that set, explicit variants,
+  and accepted aliases for your build. Optional adapters appear when compiled
+  into the executable.
+  - TreeDB variants you can select explicitly include
     `treedb_public_command_wal` (alias `treedb_cached_command_wal`) for the
     public cached `command_wal_v1` path,
     `treedb_backend` for the direct backend path and
