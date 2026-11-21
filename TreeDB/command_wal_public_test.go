@@ -2468,6 +2468,140 @@ func TestPublicCommandWALEmptyCheckpointReclaimsCoveredBenchmarkEpochs(t *testin
 	}
 }
 
+func TestCOWWriteAcknowledgesWhileWALByteSampleContended(t *testing.T) {
+	database, opts, _ := cowPublicContractOpen(t, ProfileCommandWALRelaxed, func(o *Options) {
+		o.MaxWALBytes = -1
+		o.BackgroundCheckpointInterval = -1
+		o.BackgroundCheckpointIdleDuration = -1
+		o.DisableSideStores = true
+		o.DisableBackgroundPrune = true
+	})
+	walDir := backenddb.WALDirPath(database.backend.Dir())
+	isWALUnlink := func(event durabilitycut.Event) bool {
+		return event.Resource == durabilitycut.ResourceCommandWAL &&
+			event.Point == durabilitycut.BeforeWALOrAssetUnlink && filepath.Dir(event.Path) == walDir
+	}
+	// Retain a covered segment through both durable root publications.
+	database.cached.SetCommandWALCheckpointCleanupHook(func(bool) error { return nil })
+	restore := sync.OnceFunc(durabilitycut.Install(func(event durabilitycut.Event) error {
+		if isWALUnlink(event) {
+			return backenddb.ErrDurableWALCleanupProofStale
+		}
+		return nil
+	}))
+	defer restore()
+	for _, key := range []string{"first", "second"} {
+		if err := database.Set([]byte(key), []byte("seed")); err != nil {
+			t.Fatal(err)
+		}
+		if err := database.cached.Checkpoint(); err != nil {
+			t.Fatal(err)
+		}
+		database.clearPublishedPublicCommandWALPending()
+	}
+	restore()
+	database.cached.SetCommandWALCheckpointCleanupHook(database.cleanupPublicCommandWALCheckpoint)
+
+	const maxWALBytes = 6 << 10
+	before := database.backend.State().AppliedCommandLSN
+	batch := database.NewBatch()
+	defer batch.Close()
+	if err := batch.Set([]byte("first"), []byte("changed")); err != nil {
+		t.Fatal(err)
+	}
+	// Long keys supply WAL pressure even when values are stored by pointer.
+	for i := 0; i < 16; i++ {
+		key := []byte(fmt.Sprintf("pressure/%02d/%s", i, strings.Repeat("k", 512)))
+		if err := batch.Set(key, []byte("value")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	atSwap, atCleanup := make(chan struct{}), make(chan struct{})
+	swap, cleanup := make(chan struct{}), make(chan struct{})
+	releaseSwap := sync.OnceFunc(func() { close(swap) })
+	releaseCleanup := sync.OnceFunc(func() { close(cleanup) })
+	holdCleanup := sync.OnceFunc(func() {
+		close(atCleanup)
+		<-cleanup
+	})
+	stop := durabilitycut.Install(func(event durabilitycut.Event) error {
+		switch {
+		case event.Point == durabilitycut.BeforeCOWCutSwap && event.Root == walDir:
+			close(atSwap)
+			<-swap
+		case isWALUnlink(event):
+			holdCleanup()
+		}
+		return nil
+	})
+	defer stop()
+	var wg sync.WaitGroup
+	defer func() {
+		releaseSwap()
+		releaseCleanup()
+		wg.Wait()
+	}()
+	database.cached.StartAutoCheckpoint(0, maxWALBytes, 0)
+	wrote := make(chan error, 1)
+	wg.Go(func() { wrote <- batch.Write() })
+	select {
+	case <-atSwap:
+	case err := <-wrote:
+		t.Fatalf("write exited before the COW cut swap: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("write did not reach the COW cut swap")
+	}
+	cleaned := make(chan error, 1)
+	wg.Go(func() { cleaned <- database.backend.CleanupCommandWALCoveredSegments(false) })
+	select {
+	case <-atCleanup:
+	case err := <-cleaned:
+		t.Fatalf("cleanup exited before holding the journal latch: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("cleanup did not reach the held WAL unlink")
+	}
+	releaseSwap()
+	select {
+	case err := <-wrote:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(4 * time.Second):
+		t.Fatal("published write waited on WAL cleanup before acknowledging")
+	}
+	if got, err := database.Get([]byte("first")); err != nil || string(got) != "changed" {
+		t.Fatalf("visible update while unlink is held: %q, %v", got, err)
+	}
+	releaseCleanup()
+	if err := <-cleaned; err != nil {
+		t.Fatal(err)
+	}
+	// The contended write is the only source of a worker wake in this fixture.
+	deadline := time.Now().Add(5 * time.Second)
+	for database.backend.State().AppliedCommandLSN <= before {
+		if time.Now().After(deadline) {
+			t.Fatal("deferred sample did not trigger the size checkpoint")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if err := batch.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := reopened.Get([]byte("first")); err != nil || string(got) != "changed" {
+		t.Errorf("reopened update: %q, %v", got, err)
+	}
+	if err := reopened.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestPublicCommandWALAutoCheckpointUsesCommandWALBytes(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{

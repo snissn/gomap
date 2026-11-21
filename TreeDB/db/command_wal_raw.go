@@ -770,11 +770,32 @@ func (db *DB) CommandWALBytes() int64 {
 		return 0
 	}
 	_, active := db.commandWALActiveSegmentSnapshot()
-	closed := db.commandWALClosedBytes.Load()
-	if closed < 0 {
-		closed = 0
+	return max(0, db.commandWALClosedBytes.Load()) + active
+}
+
+// NewCommandWALPressureSampler binds an advisory byte sample to the open
+// journal. Sampling returns false on journal contention and uses no DB lock.
+// The sampler reports zero once it observes that the DB is closing.
+func (db *DB) NewCommandWALPressureSampler() func() (int64, bool) {
+	if db == nil || !db.commandWAL {
+		return nil
 	}
-	return closed + active
+	db.mu.RLock()
+	journal := db.commandJournal
+	db.mu.RUnlock()
+	if journal == nil {
+		return nil
+	}
+	return func() (int64, bool) {
+		if db.closing.Load() {
+			return 0, true
+		}
+		active, ok := journal.TryActiveBytes()
+		if !ok {
+			return 0, false
+		}
+		return max(0, db.commandWALClosedBytes.Load()) + active, true
+	}
 }
 
 func (db *DB) observeCommandWALSegmentRotated(closedBytes int64) {
