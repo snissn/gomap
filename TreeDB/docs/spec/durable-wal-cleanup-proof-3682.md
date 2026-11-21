@@ -113,11 +113,12 @@ Ordinary cleanup is serialized per DB and follows this order:
    the proof. `CleanupCommandWALCoveredPrefix` takes the same path when a
    caller invokes it directly as when the deferred automatic checkpoint invokes
    it after releasing writer admission. On a canonical single-lane inventory
-   with a fixed active container and at least two sealed predecessors, select up
-   to eight of the oldest predecessors. When every selected predecessor is
-   fixed, release append exclusion to scan the prefix through retained handles.
-   Reacquire exclusion to verify prefix links and identities and finish scanning
-   the suffix. Ineligible inventories, `CleanupCommandWALCoveredSegments`,
+   with at least two sealed predecessors, select up to eight of the oldest
+   predecessors. When each selected predecessor uses the active file's format,
+   release append exclusion to scan the prefix through retained handles.
+   Reacquire exclusion to verify prefix links and identities, confirm captured
+   sizes and modification times for sealed streams, and finish scanning the
+   suffix. Ineligible inventories, `CleanupCommandWALCoveredSegments`,
    synchronous checkpoint and Close keep the complete scan under exclusion.
    Stream cleanup through `CleanupCommandWALCoveredPrefix` reuses a bounded
    read-ahead buffer for closed stream segments. Frame validation and WAL
