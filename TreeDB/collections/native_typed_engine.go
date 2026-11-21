@@ -408,7 +408,7 @@ func nativeGenerationUnderPressure(usage memtable.COWGenerationUsage) bool {
 // nativePendingGenerationPressure borrows only active pending roots in this
 // retained engine. Captured old sources remain owned but aren't current tails.
 // The sparse pending directories avoid a catalog-wide or manifest scan.
-func (e *nativeEngineVersion) nativePendingGenerationPressure() (pressure bool, err error) {
+func (e *nativeEngineVersion) nativePendingGenerationPressure() (pressure, bsonPrimaryOnly bool, err error) {
 	observe := func(d *nativeDomainState) bool {
 		if d == nil || d.pending == nil {
 			return true
@@ -419,13 +419,22 @@ func (e *nativeEngineVersion) nativePendingGenerationPressure() (pressure bool, 
 		return err == nil && !pressure
 	}
 	if !observe(e.catalog) {
-		return pressure, err
+		return pressure, false, err
 	}
 	e.pending.Scan(func(_ uint64, c *nativeCollectionState) bool {
-		c.pending.Scan(func(_ string, d *nativeDomainState) bool { return observe(d) })
+		c.pending.Scan(func(name string, d *nativeDomainState) bool {
+			scanNext := observe(d)
+			if !scanNext && pressure && name == "primary" && e.pending.Len() == 1 && c.pending.Len() == 1 {
+				meta := c.schema.meta
+				bsonPrimaryOnly = normalizedDocumentFormat(meta.Options.DocumentFormat) == DocumentFormatBSON &&
+					len(meta.Indexes) == 0 && len(meta.VectorIndexes) == 0 &&
+					len(meta.TextIndexes) == 0 && meta.Options.ColumnStore == nil
+			}
+			return scanNext
+		})
 		return err == nil && !pressure
 	})
-	return pressure, err
+	return pressure, bsonPrimaryOnly, err
 }
 
 // NativeProducerPressure scans this retained state's active generation tails
@@ -433,24 +442,26 @@ func (e *nativeEngineVersion) nativePendingGenerationPressure() (pressure bool, 
 // still avoids manifest iterators and the typed handoff/build inventory.
 // No result reserves or discounts capacity.
 func (e *nativeEngineVersion) NativeProducerPressure(basis *backenddb.Snapshot) (backenddb.NativeSemanticProducerPressure, error) {
-	pressure, err := e.nativePendingGenerationPressure()
+	pressure, bsonPrimaryOnly, err := e.nativePendingGenerationPressure()
 	if err != nil {
 		return backenddb.NativeSemanticProducerPressure{}, err
 	}
+	result := backenddb.NativeSemanticProducerPressure{
+		GenerationUnderPressure:            pressure,
+		BSONPrimaryGenerationUnderPressure: bsonPrimaryOnly,
+	}
 	inventory, err := nativeTypedConstructionCapacity(e, basis)
 	if err != nil || inventory.typed == 0 {
-		return backenddb.NativeSemanticProducerPressure{GenerationUnderPressure: pressure}, err
+		return result, err
 	}
 	limits := e.maintenance.Limits()
-	return backenddb.NativeSemanticProducerPressure{
-		GenerationUnderPressure: pressure,
-		ConstructionBytes:       inventory.total,
-		FixedConstructionBytes:  inventory.workspace,
-		MaxInFlightBytes:        limits.MaxInFlightBytes,
-		MaxTotalBytes:           limits.MaxTotalBytes,
-		Sources:                 inventory.sources,
-		MaxSources:              e.allocator.Limits().MaxSources,
-	}, nil
+	result.ConstructionBytes = inventory.total
+	result.FixedConstructionBytes = inventory.workspace
+	result.MaxInFlightBytes = limits.MaxInFlightBytes
+	result.MaxTotalBytes = limits.MaxTotalBytes
+	result.Sources = inventory.sources
+	result.MaxSources = e.allocator.Limits().MaxSources
+	return result, nil
 }
 
 // Validate the complete next finite cohort BEFORE canonical assignment. This

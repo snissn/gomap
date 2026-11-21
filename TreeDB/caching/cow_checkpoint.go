@@ -388,17 +388,18 @@ func (db *DB) vacuumCOWCheckpointBasis(automatic bool) error {
 }
 
 func (db *DB) rolloverCOWForFlush() error {
-	_, err := db.rolloverCOWForFlushProjected(nil)
+	_, err := db.rolloverCOWForFlushProjected(nil, nil)
 	return err
 }
 
-func (db *DB) rolloverCOWForFlushProjected(projected *backenddb.NativeProjectedGenerationPressure) (bool, error) {
+func (db *DB) rolloverCOWForFlushProjected(projected *backenddb.NativeProjectedGenerationPressure, expectedSequence *uint64) (bool, error) {
 	if err := db.beginDirectWrite(); err != nil {
 		return false, err
 	}
 	c := db.cow
 	c.writerMu.Lock()
-	if projected != nil && !nativeProjectedGenerationNeedsRollover(c.cut, *projected) {
+	if (expectedSequence != nil && c.cut.logicalSeq != *expectedSequence) ||
+		(projected != nil && !nativeProjectedGenerationNeedsRollover(c.cut, *projected)) {
 		c.writerMu.Unlock()
 		db.writeMu.RUnlock()
 		return false, nil

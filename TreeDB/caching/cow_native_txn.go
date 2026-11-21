@@ -225,14 +225,21 @@ func (db *DB) prepareNativeProducerObservation(projected *backenddb.NativeProjec
 		// capture, uses the original synchronous reclamation.
 		remaining := before
 		remaining.semantic.GenerationUnderPressure = false
-		if (projected != nil || before.semantic.GenerationUnderPressure) &&
+		if (db.relaxedSync || before.semantic.BSONPrimaryGenerationUnderPressure) &&
+			(projected != nil || before.semantic.GenerationUnderPressure) &&
 			before.semantic.ConstructionBytes == 0 && !remaining.underPressure(limits) {
 			captureGeneration, err := db.nativeGenerationCaptureEligible(projected)
 			if err != nil {
 				return backenddb.NativeProducerObservation{}, err
 			}
 			if captureGeneration {
-				rolled, rolloverErr := db.rolloverCOWForFlushProjected(projected)
+				// Strict scheduling relies on the collection shape observed
+				// above. A newer producer may have changed the pending cut.
+				var expectedSequence *uint64
+				if !db.relaxedSync {
+					expectedSequence = &before.logicalSeq
+				}
+				rolled, rolloverErr := db.rolloverCOWForFlushProjected(projected, expectedSequence)
 				if rolloverErr == nil && (rolled || db.relaxedSync) {
 					if projected != nil {
 						if !rolled {
@@ -295,7 +302,7 @@ func (db *DB) nativeGenerationCaptureEligible(projected *backenddb.NativeProject
 	if db.relaxedSync {
 		return true, nil
 	}
-	if projected != nil || db.cow.prefix == nil {
+	if projected != nil || db.cow.txnOwner == nil {
 		return false, nil
 	}
 	backend, ok := db.backend.(*backenddb.DB)

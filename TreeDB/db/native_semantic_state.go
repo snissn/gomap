@@ -74,7 +74,10 @@ type NativeSemanticProducerPressure struct {
 	// GenerationUnderPressure applies advisory scheduling to active pending
 	// generations only. It reserves no headroom; final admission is unchanged.
 	GenerationUnderPressure bool
-	ConstructionBytes       uint64
+	// BSONPrimaryGenerationUnderPressure identifies a pressured, unindexed
+	// BSON primary when it is the only pending collection domain.
+	BSONPrimaryGenerationUnderPressure bool
+	ConstructionBytes                  uint64
 	// FixedConstructionBytes is the once-per-build maximum already included in
 	// ConstructionBytes. It changes only advisory scheduling: every hard check
 	// and reservation still uses the full ConstructionBytes. Zero preserves the

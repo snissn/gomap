@@ -154,7 +154,7 @@ func TestNativePendingGenerationObservationDomains(t *testing.T) {
 			next := backend.CommandWALNextLSN()
 			prepare(t, domains[name])
 			observed, err := backend.ObserveNativeProducer()
-			if err != nil || !observed.UnderPressure || !observed.Semantic.GenerationUnderPressure || observed.Semantic.ConstructionBytes != 0 || observed.Basis != basis || observed.LogicalSequence != before.LogicalSequence || backend.CommandWALNextLSN() != next {
+			if err != nil || !observed.UnderPressure || !observed.Semantic.GenerationUnderPressure || observed.Semantic.BSONPrimaryGenerationUnderPressure || observed.Semantic.ConstructionBytes != 0 || observed.Basis != basis || observed.LogicalSequence != before.LogicalSequence || backend.CommandWALNextLSN() != next {
 				t.Fatalf("active %s pressure=%+v err=%v original=%+v", name, observed, err, before)
 			}
 		})
