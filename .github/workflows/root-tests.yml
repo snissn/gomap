@@ -144,8 +144,8 @@ jobs:
           path: ${{ runner.temp }}/gomap-m3-diagnostics/
           if-no-files-found: ignore
 
-  macos_1:
-    name: macos-latest-1
+  macos:
+    name: ${{ matrix.name }}
     needs: macos-scope
     if: ${{ !cancelled() && (needs.macos-scope.result != 'success' || needs.macos-scope.outputs.mode != 'skip') }}
     runs-on: macos-latest
@@ -159,18 +159,6 @@ jobs:
             run_vet: true
             test_shard_index: 0
             test_shard_count: 2
-    timeout-minutes: 40
-    steps: *root_checks
-
-  macos_2:
-    name: macos-latest-2
-    needs: macos-scope
-    if: ${{ !cancelled() && (needs.macos-scope.result != 'success' || needs.macos-scope.outputs.mode != 'skip') }}
-    runs-on: macos-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
           - name: macos-latest-2
             os: macos-latest
             run_docs_check: false

@@ -124,13 +124,23 @@ class TriggerPolicy(unittest.TestCase):
 
     def test_stable_native_names_and_fail_to_full_on_missing_or_failed_scope(self):
         guard = "if: ${{ !cancelled() && (needs.macos-scope.result != 'success' || needs.macos-scope.outputs.mode != 'skip') }}"
-        for name, lane, contexts in (("root-tests", "root", ("macos-latest-1", "macos-latest-2")),
-                                     ("unified-bench-tests", "unified", ("macos-latest",))):
+        for name, lane, native_name in (("root-tests", "root", "${{ matrix.name }}"),
+                                        ("unified-bench-tests", "unified", "macos-latest")):
             s = source(name)
             self.assertIn("if: ${{ " + ORDINARY_PR + " && github.event.pull_request.head.repo.full_name == github.repository }}", s)
-            self.assertEqual(s.count(guard), len(contexts))
-            for context in contexts:
-                self.assertIn(f"    name: {context}\n    needs: macos-scope\n    {guard}", s)
+            self.assertEqual(s.count(guard), 1)
+            native = s.split("\n  macos:\n", 1)[1]
+            self.assertTrue(native.startswith(f"    name: {native_name}\n    needs: macos-scope\n    {guard}"))
+            if lane == "root":
+                # A literal name on a matrix job gets a GitHub-generated
+                # parameter suffix. Resolve the old check strings via the
+                # matrix name expression, just like the Linux shards.
+                self.assertRegex(native, r"(?s)strategy:\n.*?matrix:\n.*?include:\n")
+                self.assertEqual(re.findall(r"^          - name: (.*)$", native, re.M),
+                                 ["macos-latest-1", "macos-latest-2"])
+                self.assertIn("steps: *root_checks", native)
+            else:
+                self.assertNotIn("matrix:", native)
             self.assertIn("persist-credentials: false", s)
             self.assertIn("fetch-depth: 2", s)
             self.assertIn("python3 -I \"$policy\" --base \"$BASE\" --head \"$MERGE\" --lane " + lane, s)

@@ -12,7 +12,7 @@
     "M0 observation is manual diagnostic-only on a separately fixed product; no forecast starts it or replaces failed M0 acceptance.",
     "Bounded maintenance comparison is a manually granted diagnostic on fixed baseline/candidate products; no forecast starts it or establishes cost, M0 or native acceptance."
   ],
-  "discovery_source_sha256": "1d8cb2246c7267c3c359c191b71b26a49c5e7de51131980eafebd7df6084e004",
+  "discovery_source_sha256": "7dea3ad9e8b7dd31a4d8a8d27bdb23aaf00a181998d9e37bf2aa7173423598bb",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
@@ -180,7 +180,7 @@
       "mode": "100644"
     },
     ".github/scripts/test_ci_trigger_policy.py": {
-      "git_blob": "dba1a0e158187069752034fae7598d1a807a49bf",
+      "git_blob": "9ee6d26d009aa479dada19254b1d85d54690da3d",
       "mode": "100644"
     },
     ".github/scripts/test_getversioned_scoped_acceptance.py": {
@@ -433,8 +433,8 @@
       "workflow": "root-tests.yml"
     },
     {
-      "id": "root-tests/macos_1/macos-latest-1",
-      "job": "macos_1",
+      "id": "root-tests/macos/macos-latest-1",
+      "job": "macos",
       "owner": "CI maintainer with affected package/harness owner",
       "variant": {
         "cgo": "setup-go platform default; explicit command overrides retained",
@@ -453,8 +453,8 @@
       "workflow": "root-tests.yml"
     },
     {
-      "id": "root-tests/macos_2/macos-latest-2",
-      "job": "macos_2",
+      "id": "root-tests/macos/macos-latest-2",
+      "job": "macos",
       "owner": "CI maintainer with affected package/harness owner",
       "variant": {
         "cgo": "setup-go platform default; explicit command overrides retained",
@@ -2284,37 +2284,9 @@
         },
         "workflow_dispatch": null
       },
-      "git_blob": "19adcb74663c79a040347c62135c2cc56bceef33",
+      "git_blob": "9933732088edfd608362a878e712e346fa155902",
       "jobs": {
-        "macos-scope": {
-          "checkout": [
-            {
-              "fetch-depth": 2,
-              "persist-credentials": false,
-              "sparse-checkout": "/.github/scripts/ci_macos_scope.py",
-              "sparse-checkout-cone-mode": false
-            }
-          ],
-          "commands": [
-            {
-              "command_sha256": "38c7532ad2fff76d7bce49fd8400df4f9177d3fdd03af485ed11c4578154845f",
-              "entrypoint": ".github/workflows/root-tests.yml:42",
-              "env": {
-                "BASE": "${{ github.event.pull_request.base.sha }}",
-                "HEAD_SHA": "${{ github.event.pull_request.head.sha }}",
-                "MERGE": "${{ github.sha }}"
-              },
-              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
-              "name": "Resolve scope using the immutable base policy"
-            }
-          ],
-          "environment": {},
-          "matrix": null,
-          "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
-          "race": false,
-          "runs_on": "ubuntu-latest"
-        },
-        "macos_1": {
+        "macos": {
           "checkout": [
             {}
           ],
@@ -2381,73 +2353,7 @@
                 "run_vet": true,
                 "test_shard_count": 2,
                 "test_shard_index": 0
-              }
-            ]
-          },
-          "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
-          "race": false,
-          "runs_on": "macos-latest"
-        },
-        "macos_2": {
-          "checkout": [
-            {}
-          ],
-          "commands": [
-            {
-              "command_sha256": "61096b190f441bcb1df0babab46ca6d0637b777cad2ec012ed7617aab75537ea",
-              "entrypoint": ".github/workflows/root-tests.yml:94",
-              "env": {
-                "PYTHONDONTWRITEBYTECODE": "1"
               },
-              "if": "${{ matrix.name == 'ubuntu-latest-1' }}",
-              "invocation": "python3 .github/scripts/test_root_ci_headroom.py",
-              "name": "Root CI headroom contract"
-            },
-            {
-              "command_sha256": "c316cf3ba18de8bd32ca4287a02fa931ce76c32d84f5aee18d86874bac01f9de",
-              "entrypoint": ".github/workflows/root-tests.yml:100",
-              "env": {
-                "PYTHONDONTWRITEBYTECODE": "1"
-              },
-              "if": "${{ matrix.name == 'ubuntu-latest-1' }}",
-              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
-              "name": "Trigger and macOS scope contracts"
-            },
-            {
-              "command_sha256": "bd93a94a7da3f1ceebf9b4435dd56fe7527bce0720101b356faee2fb663f6a6c",
-              "entrypoint": ".github/workflows/root-tests.yml:107",
-              "if": "${{ matrix.name == 'ubuntu-latest-2' }}",
-              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
-              "name": "Python native client",
-              "working-directory": "clients/python/treedb_client"
-            },
-            {
-              "command_sha256": "ae6da23dfdaf06c5b1615d9cc1190963f416b0eb74dbef126bc19320f7fda3e5",
-              "entrypoint": ".github/workflows/root-tests.yml:113",
-              "if": "${{ matrix.run_docs_check }}",
-              "invocation": "make docs-check",
-              "name": "Docs check"
-            },
-            {
-              "command_sha256": "5f81ad60fbe2f61adb9e2dfa4690181b8d6754a0c00db84c82067f93703b889a",
-              "entrypoint": ".github/workflows/root-tests.yml:118",
-              "if": "${{ matrix.run_vet }}",
-              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
-              "name": "Vet"
-            },
-            {
-              "command_sha256": "d081a3acced10dc6ae75746ccf59e0c902abd7974c7c1ba3ea8103c0fed87266",
-              "entrypoint": ".github/workflows/root-tests.yml:126",
-              "env": {
-                "GOMAP_M3_DIAGNOSTICS_DIR": "${{ runner.temp }}/gomap-m3-diagnostics"
-              },
-              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
-              "name": "Test"
-            }
-          ],
-          "environment": {},
-          "matrix": {
-            "include": [
               {
                 "name": "macos-latest-2",
                 "os": "macos-latest",
@@ -2461,6 +2367,34 @@
           "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
           "race": false,
           "runs_on": "macos-latest"
+        },
+        "macos-scope": {
+          "checkout": [
+            {
+              "fetch-depth": 2,
+              "persist-credentials": false,
+              "sparse-checkout": "/.github/scripts/ci_macos_scope.py",
+              "sparse-checkout-cone-mode": false
+            }
+          ],
+          "commands": [
+            {
+              "command_sha256": "38c7532ad2fff76d7bce49fd8400df4f9177d3fdd03af485ed11c4578154845f",
+              "entrypoint": ".github/workflows/root-tests.yml:42",
+              "env": {
+                "BASE": "${{ github.event.pull_request.base.sha }}",
+                "HEAD_SHA": "${{ github.event.pull_request.head.sha }}",
+                "MERGE": "${{ github.sha }}"
+              },
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Resolve scope using the immutable base policy"
+            }
+          ],
+          "environment": {},
+          "matrix": null,
+          "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": false,
+          "runs_on": "ubuntu-latest"
         },
         "test": {
           "checkout": [
@@ -2545,7 +2479,7 @@
           "runs_on": "${{ matrix.os }}"
         }
       },
-      "sha256": "7b7ac7a2b54199e146221f40ae96d91909258ca2b949213f114c8001e07694eb"
+      "sha256": "2d0e366f88e38fe184d0b5d68e5addf8b94b8341c65c702b7918b78216821413"
     },
     "sparse-catalog-qualification.yml": {
       "coverage": "source workflow owns actual event eligibility; forecast never changes execution",
