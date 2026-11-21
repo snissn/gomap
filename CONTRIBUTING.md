@@ -49,6 +49,20 @@ footprints, review the manifest, stage the intended source/workflow/harness inpu
 run its documented refresh/contract commands and stage the reviewed manifest.
 A refreshed candidate policy cannot authorize its own omissions.
 
+The normal macOS TreeDB test shards restore the Go build cache and expire
+cached test results before running the tests. Record runner wait separately
+from test execution when comparing CI wall time. The RAG service test checks
+real HTTP/direct query parity by default; run the existing timed evidence
+variant from the repository root with:
+
+```sh
+RAG_SVC_OVERHEAD_REPS=3 go test -count=1 -v ./TreeDB/cmd/treedb_rag_benchmark \
+  -run '^TestServiceOverheadParityRows$'
+```
+
+Keep the production UPDATE tail-latency qualification separate from this
+service parity fixture.
+
 ## Code Guidelines
 
 - Keep commits small and reviewable.

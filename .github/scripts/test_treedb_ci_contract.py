@@ -64,6 +64,18 @@ class TreeDBCIContractTests(unittest.TestCase):
         )
         self.assertNotIn("github.ref", concurrency)
 
+    def test_macos_normal_tests_reuse_builds_but_not_test_results(self) -> None:
+        job = block(self.source, "  test:\n", "\n  race:")
+        self.assertIn("cache: ${{ matrix.os == 'macos-latest' }}", job)
+        self.assertIn(
+            "      - name: Expire cached Go test results (macOS)\n"
+            "        if: ${{ matrix.os == 'macos-latest' }}\n"
+            "        shell: bash\n"
+            "        run: go clean -testcache\n",
+            job,
+        )
+        self.assertLess(job.index("run: go clean -testcache"), job.index("- name: Test\n"))
+
     def test_required_test_jobs_checkout_the_event_sha(self) -> None:
         required_jobs = (
             ("vet", "test"),

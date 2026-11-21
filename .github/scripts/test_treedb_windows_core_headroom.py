@@ -122,7 +122,7 @@ class TreeDBWeightedManifestTest(unittest.TestCase):
         filename = "treedb_race_weighted_shards.tsv"
         race = read_weights(filename, 7, {"package", "root", "caching", "db", "nativewire"})
         rag = "github.com/snissn/gomap/TreeDB/cmd/treedb_rag_benchmark"
-        self.assertEqual(race.get(("package", rag)), (0, True))
+        self.assertEqual(race.get(("package", rag)), (4, True))
         before = {key: pin for key, pin in race.items() if key != ("package", rag)}
         domain = sorted(item for kind, item in before if kind == "package")
         domain.extend(("future-package-a", "future-package-b", "future-package-c"))
@@ -141,7 +141,7 @@ class TreeDBWeightedManifestTest(unittest.TestCase):
             before_file.write_text(
                 "\n".join(
                     line for line in (CI_DIR / filename).read_text().splitlines()
-                    if line.split("\t")[:3] != ["package", "0", rag]
+                    if line.split("\t")[:3] != ["package", "4", rag]
                 ) + "\n",
                 encoding="utf-8",
             )
@@ -175,7 +175,7 @@ class TreeDBWeightedManifestTest(unittest.TestCase):
                             item: shard for shard, part in enumerate(actual) for item in part
                         })
                     old, new = assignments
-                    self.assertEqual(new[rag], 0)
+                    self.assertEqual(new[rag], 4)
                     self.assertEqual(
                         {item: shard for item, shard in old.items() if item != rag},
                         {item: shard for item, shard in new.items() if item != rag},
@@ -477,8 +477,10 @@ class TreeDBLinuxRaceHeadroomTest(unittest.TestCase):
                     self.assertEqual(shards, weighted_shards(names, kind, 7, pins))
                     self.assertTrue(all(shards), "each added core shard must receive work")
                     if kind == "nativewire":
-                        self.assertIn("TestVectorPartitionLiveSelectedLifecycleV1", shards[0])
-                        self.assertIn("TestMultiOwnerTCPAcceptedModelScaledCorrectnessV1", shards[2])
+                        self.assertIn("TestVectorPartitionLiveSelectedLifecycleV1", shards[3])
+                        self.assertIn("TestMultiOwnerTCPAcceptedModelScaledCorrectnessV1", shards[5])
+                    if kind == "root":
+                        self.assertIn("TestCompactStorageExhaustiveCommandWALRandom4KOffline", shards[6])
 
 
 if __name__ == "__main__":

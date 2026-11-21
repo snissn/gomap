@@ -695,9 +695,14 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-          cache: false
+          cache: ${{ matrix.os == 'macos-latest' }}
           cache-dependency-path: |
             go.sum
+
+      - name: Expire cached Go test results (macOS)
+        if: ${{ matrix.os == 'macos-latest' }}
+        shell: bash
+        run: go clean -testcache
 
       - name: Test
         working-directory: TreeDB
