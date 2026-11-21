@@ -238,7 +238,7 @@ class ImpactContract(unittest.TestCase):
         self.base = self.commit()
         receipt = self.plan(self.event())
         self.assertFull(receipt, 'bootstrap-no-accepted-policy')
-        self.assertEqual(len(receipt['members']), 67)
+        self.assertEqual(len(receipt['members']), 69)
         self.assertTrue(any(m['workflow'] == 'treedb-tests.yml' and m['job'] == 'vet'
                             for m in receipt['members']))
         policy['workflows']['treedb-tests.yml']['jobs'] = {}
@@ -270,7 +270,7 @@ class ImpactContract(unittest.TestCase):
         self.base = self.commit()
         receipt = self.plan(self.event())
         self.assertFull(receipt, 'bootstrap-no-accepted-policy')
-        self.assertEqual(len(receipt['members']), 67)
+        self.assertEqual(len(receipt['members']), 69)
 
     def test_matrix_invalid_forms_and_label_collisions_fail_closed(self):
         original = json.loads((self.repo / ci_impact.POLICY).read_text())
@@ -433,7 +433,7 @@ class SourceInventoryContract(unittest.TestCase):
         files = [p for p in (ROOT / '.github/workflows').iterdir() if p.suffix in ('.yml', '.yaml')]
         self.assertEqual({p.name for p in files}, set(policy['workflows']))
         self.assertEqual(len(files), 18)
-        self.assertEqual(len(policy['members']), 67)
+        self.assertEqual(len(policy['members']), 69)
         primary = [m for m in policy['members'] if m['workflow'] == 'treedb-primary-order-diagnostic.yml']
         self.assertEqual({(m['job'], m['variant']['matrix']['shard'], m['variant']['runs_on']) for m in primary},
                          {('controls', 1, 'ubuntu-24.04'), ('controls', 2, 'ubuntu-24.04')})
