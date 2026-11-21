@@ -136,7 +136,7 @@ func TestSealedDebtRefusesUnprovedCutAndPreservesStickyError(t *testing.T) {
 				}
 			}
 			err = j.Close()
-			if tc == "old-file-sync" || tc == "later-sticky" {
+			if tc == "old-file-sync" || tc == "namespace" || tc == "later-sticky" {
 				if !errors.Is(err, fail) {
 					t.Fatalf("checked close lost sticky error %v", err)
 				}

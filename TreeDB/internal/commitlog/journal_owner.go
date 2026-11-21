@@ -202,8 +202,8 @@ type CommandJournalOptions struct {
 	// not re-enter the journal.
 	OnSegmentRotated func(closedBytes int64)
 	// OnFileSyncError marks the caller's recovery-required state at the first
-	// physical failure, before another sync can proceed. It must never block
-	// or reenter the journal.
+	// file-sync failure or ambiguous successor handoff, before another sync
+	// can proceed. It must never block or reenter the journal.
 	OnFileSyncError func()
 	// InitialLSN is the highest already-applied/durable command LSN. CommandJournal
 	// scans existing frames while holding the owner lock and advances reservation
@@ -737,6 +737,11 @@ func (j *CommandJournal) rotateActiveSegmentLockedObserved(syncCurrent, observe 
 	closedBytes := j.writer.ActiveBytes()
 	outcome, rotateErr := j.writer.rotateToWithSyncObservedAhead(nextPath, syncCurrent, j.root, observe, ahead)
 	if !outcome.Installed {
+		if outcome.SuccessorMayBeVisible {
+			// Recovery may already see the canonical successor and classify the
+			// predecessor as sealed. Stop appends until reopen selects the writer.
+			return j.fileSync.recordFailure(rotateErr)
+		}
 		return rotateErr
 	}
 	stableParent, stableParentErr := captureStableCommandWALParent(j.walDir, j.writer.f)
