@@ -246,6 +246,36 @@ class TreeDBWeightedManifestTest(unittest.TestCase):
 
 
 class TreeDBWindowsCoreHeadroomTest(unittest.TestCase):
+    def test_discovery_timers_leave_inventory_and_failure_status_intact(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        for name, labels in (
+            ("test", ("packages", "root", "db", "collections", "caching")),
+            ("race", ("packages", "root", "caching", "db", "nativewire")),
+        ):
+            with self.subTest(job=name):
+                job = workflow_job(workflow, name)
+                helper = re.search(
+                    r"(?ms)^          time_discovery\(\) \{\n.*?^          \}",
+                    job,
+                )
+                self.assertIsNotNone(helper)
+                for label in labels:
+                    self.assertIn(f"time_discovery {label} go ", job)
+                script = helper.group() + '\ntime_discovery probe "$@"\n'
+                success = subprocess.run(
+                    ["bash", "-c", script, "probe", "printf", "TestOne\nTestTwo\n"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                self.assertEqual(success.returncode, 0)
+                self.assertEqual(success.stdout, "TestOne\nTestTwo\n")
+                self.assertRegex(success.stderr, r"TreeDB discovery probe: wall=.+s user=.+s sys=.+s")
+                fail = subprocess.run(
+                    ["bash", "-c", "set -o pipefail\n" + script.rstrip() + " | cat", "probe", "false"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                self.assertNotEqual(fail.returncode, 0)
+                self.assertEqual(fail.stdout, "")
+
     def test_core_shards_use_eight_weighted_jobs_plus_dedicated_heavy_tests(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
         self.assertEqual(

@@ -33,11 +33,12 @@ type parsedBench struct {
 func main() {
 	var benchOutputPath string
 	var baselinePath string
-	var strict bool
+	var strict, storageOnly bool
 
 	flag.StringVar(&benchOutputPath, "bench-output", "", "path to go test benchmark output")
 	flag.StringVar(&baselinePath, "baseline", "", "path to baseline json")
 	flag.BoolVar(&strict, "strict", false, "exit non-zero on baseline violations")
+	flag.BoolVar(&storageOnly, "storage-only", false, "require observed compression ratio and fallback metrics; ignore throughput thresholds")
 	flag.Parse()
 
 	if benchOutputPath == "" || baselinePath == "" {
@@ -85,17 +86,17 @@ func main() {
 
 		fmt.Printf("perf: %s runs=%d mbps=%.2f ratio=%.5f fallback_max=%.0f\n", entry.Name, len(samples), mbps, ratio, fallbackMax)
 
-		if mbps < entry.MinMBps {
+		if !storageOnly && mbps < entry.MinMBps {
 			msg := fmt.Sprintf("%s MB/s %.2f < min %.2f", entry.Name, mbps, entry.MinMBps)
 			emitViolation(strict, msg)
 			violations++
 		}
-		if !math.IsNaN(ratio) && (ratio < entry.MinObservedRatio || ratio > entry.MaxObservedRatio) {
+		if (storageOnly && math.IsNaN(ratio)) || (!math.IsNaN(ratio) && (ratio < entry.MinObservedRatio || ratio > entry.MaxObservedRatio)) {
 			msg := fmt.Sprintf("%s observed_ratio %.5f not in [%.5f, %.5f]", entry.Name, ratio, entry.MinObservedRatio, entry.MaxObservedRatio)
 			emitViolation(strict, msg)
 			violations++
 		}
-		if !math.IsNaN(fallbackMax) && fallbackMax > entry.MaxDictFallback {
+		if (storageOnly && math.IsNaN(fallbackMax)) || (!math.IsNaN(fallbackMax) && fallbackMax > entry.MaxDictFallback) {
 			msg := fmt.Sprintf("%s dict_fallback max %.0f > max %.0f", entry.Name, fallbackMax, entry.MaxDictFallback)
 			emitViolation(strict, msg)
 			violations++

@@ -64,6 +64,20 @@ class TreeDBCIContractTests(unittest.TestCase):
         )
         self.assertNotIn("github.ref", concurrency)
 
+    def test_only_pr_root_race_narrows_original_size_offline_compact(self) -> None:
+        # Complete top-level discovery and the parent assignment remain intact.
+        # Never give every loaded root test a shared subtest inclusion filter.
+        race = block(self.source, "  race:\n", "\n  perf:\n")
+        root = block(race, 'if [ -s "$root_test_file" ]; then', 'if [ -s "$caching_test_file" ]; then')
+        parent = "TestCompactStorageExhaustiveCommandWALRandom4KOffline"
+        skip = f"root_race_options=(-skip '^{parent}$/^keys100000$')"
+        self.assertEqual(self.source.count(skip), 1)
+        self.assertIn("root_race_options=()", root)
+        guard = f'if [[ "$GITHUB_EVENT_NAME" == pull_request ]] && grep -Fxq {parent} "$root_test_file"; then'
+        self.assertIn(skip, block(root, guard, "            fi"))
+        self.assertIn(' . -run "$root_regex" "${root_race_options[@]}"', root)
+        self.assertNotIn(" -short", root)
+
     def test_required_test_jobs_checkout_the_event_sha(self) -> None:
         required_jobs = (
             ("vet", "test"),
