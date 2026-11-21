@@ -409,6 +409,7 @@ func TestNativeExistingCollectionJournalSyncCrashReopen(t *testing.T) {
 					t.Fatal(err)
 				}
 				accepted := backend.CommandWALNextLSN()
+				before := database.Stats()
 				for i := 0; i < 2; i++ {
 					if physical, err := manager.SyncForStandaloneWriteConcern(); err != nil || !physical {
 						t.Fatalf("sync %d: physical=%v error=%v", i, physical, err)
@@ -423,8 +424,18 @@ func TestNativeExistingCollectionJournalSyncCrashReopen(t *testing.T) {
 					if err := snapshot.Close(); err != nil {
 						t.Fatal(err)
 					}
-					if !ok || accepted == 0 || token.AppliedCommandLSN != accepted-1 {
+					if !ok || accepted == 0 {
 						t.Fatalf("sync prefix: token=%+v valid=%v next=%d", token, ok, accepted)
+					}
+					after := database.Stats()
+					if profile == ProfileCommandWALDurable && before["treedb.command_wal.writer.container"] == "fixed" {
+						if durable := statMapUint64(t, after, "treedb.command_wal.durable_wal_lsn"); durable < accepted-1 {
+							t.Fatalf("fixed journal durable=%d next=%d", durable, accepted)
+						}
+						requireNativeJournalStatDelta(t, before, after, "treedb.cache.checkpoint.runs", 0)
+						requireNativeJournalStatDelta(t, before, after, "treedb.command_wal.group_commit.forced_total", 2)
+					} else if token.AppliedCommandLSN != accepted-1 {
+						t.Fatalf("checkpoint applied=%d next=%d", token.AppliedCommandLSN, accepted)
 					}
 				}
 				old, err := held.FetchDocumentsByID([][]byte{[]byte("a"), []byte("b")}, collections.DocumentFetchOptions{})
