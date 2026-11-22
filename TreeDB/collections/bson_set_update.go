@@ -88,6 +88,20 @@ func (c *Collection) UpdateBSONSet(documentID []byte, fields []BSONSetField) (bo
 	return matched, modified, c.invalidateVectorIndexCoverageOnAcceptedMutation(err)
 }
 
+// UpdateBSONSetWithJournalReceipt runs the original singleton BSON update and
+// returns any checked journal completion from its final attempt.
+func (c *Collection) UpdateBSONSetWithJournalReceipt(documentID []byte, fields []BSONSetField) (matched, modified bool, completion backenddb.NativeJournalCompletion, err error) {
+	if c != nil && c.nativeJSON != nil && c.manager != nil && c.manager.CanShareStandaloneJournalBoundary() {
+		matched, modified, completion, err = c.nativeUpdateBSONSetWithJournal(documentID, fields, true)
+		if !c.nativeJSON.db.OwnsNativeJournalCompletion(completion) {
+			completion = backenddb.NativeJournalCompletion{}
+		}
+		return
+	}
+	matched, modified, err = c.UpdateBSONSet(documentID, fields)
+	return
+}
+
 func (c *Collection) validateBSONSetDocumentFormat() error {
 	if c == nil {
 		return errCollectionNil
@@ -173,6 +187,31 @@ func (c *Collection) UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges(items []B
 		err = commitAmbiguousError("UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges vector index maintenance", c.notifyVectorIndexesBSONSetUpdateBatch(items, results))
 	}
 	return results, batched, c.invalidateVectorIndexCoverageOnAcceptedMutation(err)
+}
+
+// UpdateBSONSetBatchIfNoSecondaryUniqueIndexChangesWithJournalReceipt is the
+// opt-in operation-completion sibling of the ordinary BSON-set batch API.
+// Only a changed, captured ordinary BSON publication can produce a receipt.
+// A selected error is terminal even when batched is false: never replay or
+// issue another fence to conceal the original completion failure. A batched
+// result can report proved logical installation alongside such an error.
+// Missing and unchanged rows retain the caller's fresh-fence duty.
+func (c *Collection) UpdateBSONSetBatchIfNoSecondaryUniqueIndexChangesWithJournalReceipt(items []BSONSetUpdateBatchItem) (results []UpdateBatchResult, batched bool, completion backenddb.NativeJournalCompletion, err error) {
+	if c == nil {
+		return nil, false, completion, errCollectionNil
+	}
+	if c.nativeJSON == nil || c.manager == nil || !c.manager.CanShareStandaloneJournalBoundary() || len(items) == 0 {
+		results, batched, err = c.UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges(items)
+		return
+	}
+	journal := nativeOperationJournal{requested: true}
+	results, batched, err = c.nativeUpdateBatchModeWithJournal(nil, updateBatchModeNoSecondaryUniqueIndexChanges, items, nil, &journal)
+	// The transaction's checked Close and producer unlock have both completed.
+	completion = journal.completion
+	if !c.nativeJSON.db.OwnsNativeJournalCompletion(completion) {
+		completion = backenddb.NativeJournalCompletion{}
+	}
+	return
 }
 
 // PrepareBSONSetUpdateBatchCommandWAL plans a BSON $set batch without applying

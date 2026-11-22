@@ -1268,6 +1268,16 @@ func (j *CommandJournal) TryActiveBytes() (int64, bool) {
 	return j.writer.ActiveBytes(), true
 }
 
+// CanShareFixedWriter reads tracked writer health for scheduling. Reserve
+// consumption, cleanup and error promotion belong to actual admission.
+func (j *CommandJournal) CanShareFixedWriter() bool {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return !j.closing && !j.closed && j.writer != nil && j.writer.f != nil && j.writer.fixed != nil &&
+		j.fileSync.err() == nil && j.fixedAheadErr == nil && j.writer.commandBufferError() == nil &&
+		(j.pendingStableSuccessor == nil || !j.pendingStableSuccessor.failStop)
+}
+
 // HasFixedWriter reports the active physical container of a live journal.
 // An unhealthy journal returns the original failure instead of a format miss.
 func (j *CommandJournal) HasFixedWriter() (bool, error) {

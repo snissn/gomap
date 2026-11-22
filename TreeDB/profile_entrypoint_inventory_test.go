@@ -22,9 +22,9 @@ func TestDurabilityProfilePublicEntrypointInventory(t *testing.T) {
 	treeDBDir := profileInventoryTreeDBDir(t)
 	methods := profileInventoryMethods(t, treeDBDir, "treedb", "DB")
 	want := []string{
-		"AcquireMVCCReadCut", "AcquireSnapshot", "BeginLogicalMVCC", "CaptureNativeSemanticState", "Checkpoint", "Close", "CommitLogicalMVCC", "CompactIndex", "CompactStorage",
+		"AcquireMVCCReadCut", "AcquireSnapshot", "BeginLogicalMVCC", "CanShareNativeJournalCompletion", "CaptureNativeSemanticState", "Checkpoint", "Close", "CommitLogicalMVCC", "CompactIndex", "CompactStorage",
 		"CompactStorageLeafPageLogOwnerClassification", "CompactStoragePlan", "DeferredVectorBuildMaintenance", "Delete",
-		"DeleteRange", "DeleteSync", "DurabilityMode", "EstimateMVCCWriteWork", "FragmentationReport", "Get",
+		"DeleteRange", "DeleteSync", "DurabilityMode", "EndNativeJournalCompletion", "EstimateMVCCWriteWork", "FragmentationReport", "Get",
 		"GetAppend", "GetMany", "GetManyParallelPlan", "GetManyView", "GetUnsafe",
 		"GetVersioned", "GetVersionedAppend", "Has", "HasMany", "HasPrefixes",
 		"InitConditionalTxn", "InitConditionalTxnWithSnapshot", "Iterator", "LeafGenerationGC",
@@ -32,7 +32,7 @@ func TestDurabilityProfilePublicEntrypointInventory(t *testing.T) {
 		"LeafGenerationPlan", "MVCCWriteWorkLimit", "MaintenancePhase", "NewBatch", "NewBatchWithSize",
 		"NativeCommandWALCompletionBytes", "NativeSemanticBackend", "NewConditionalTxn", "NewConditionalTxnWithSnapshot", "NewMVCCAdmission", "NewMVCCWriteWorkEstimator", "PreflightMVCCPrune", "PrepareMVCCPrune", "PrepareNativeCommandWAL", "Print", "ResolvedProfile",
 		"ReverseIterator", "SeekGE", "SeekGEVersionRange", "Set", "SetMaintenancePhase", "SetPointWithMVCCInput", "SetNativeSemanticPublication", "SetSync", "Stats", "SubmitLogicalMVCC", "SupportsLogicalMVCC", "SupportsLogicalMVCCStaging", "SupportsMVCCReadCut", "SyncNativeCommandWALPrefix",
-		"Update", "UpdateSync", "VacuumIndexOnline", "VacuumOnlineStats", "ValueLogGC", "ValueLogRewriteOnline",
+		"TryBeginNativeJournalCompletion", "Update", "UpdateSync", "VacuumIndexOnline", "VacuumOnlineStats", "ValueLogGC", "ValueLogRewriteOnline",
 	}
 	slices.Sort(want)
 	if !slices.Equal(methods, want) {
@@ -62,7 +62,19 @@ func TestDurabilityProfilePublicEntrypointInventory(t *testing.T) {
 		profileInventoryRequireBody(t, batchBodies, "(*DB).PrepareNativeCommandWAL", fragment)
 	}
 	profileInventoryRequireBody(t, batchBodies, "(*nativePublicCommandWALCompletion).RegisterNativeCommandWAL", "registerPublicCommandWALPolicy")
-	profileInventoryRequireBody(t, batchBodies, "(*nativePublicCommandWALCompletion).CompleteNativeCommandWAL", "awaitPublicCommandWAL")
+	for _, fragment := range []string{"awaitPublicCommandWAL", "registration.assignedLSN", "publication.ticket == registration.ticket"} {
+		profileInventoryRequireBody(t, batchBodies, "(*nativePublicCommandWALCompletion).CompleteNativeCommandWAL", fragment)
+	}
+	for _, fragment := range []string{"tdb.lifecycleMu.TryRLock()", "tdb.ownsNativeJournalCompletion(backend, owner)", "backend.CanShareNativeCommandWALPrefixForOwner(owner)"} {
+		profileInventoryRequireBody(t, batchBodies, "(*DB).CanShareNativeJournalCompletion", fragment)
+	}
+	for _, fragment := range []string{"tdb.backend == backend", "tdb.txnOwner == owner"} {
+		profileInventoryRequireBody(t, batchBodies, "(*DB).ownsNativeJournalCompletion", fragment)
+	}
+	for _, fragment := range []string{"tdb.lifecycleMu.TryRLock()", "tdb.ownsNativeJournalCompletion(backend, owner)", "backend.NativeCommandWALPrefixEligible(owner)"} {
+		profileInventoryRequireBody(t, batchBodies, "(*DB).TryBeginNativeJournalCompletion", fragment)
+	}
+	profileInventoryRequireBody(t, batchBodies, "(*DB).EndNativeJournalCompletion", "tdb.lifecycleMu.RUnlock()")
 	backendBodies := profileInventoryFunctionBodies(t, filepath.Join(treeDBDir, "db", "command_wal_raw.go"))
 	backendDBBodies := profileInventoryFunctionBodies(t, filepath.Join(treeDBDir, "db", "db.go"))
 	orderedRootBodies := profileInventoryFunctionBodies(t, filepath.Join(treeDBDir, "db", "ordered_root_publish.go"))

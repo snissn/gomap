@@ -94,6 +94,16 @@ func mapCopyCapacity(length, maximum int) int {
 	return maximum
 }
 
+func mapGrowthCapacity(length, capacity, extra, maximum int) int {
+	return min(maximum, max(capacity*2, length+extra))
+}
+
+func (tr *Map[K, V]) allocItems(length, capacity int) []mapPair[K, V] {
+	items := make([]mapPair[K, V], length, capacity)
+	tr.recordAllocation(uint64(capacity) * uint64(unsafe.Sizeof(mapPair[K, V]{})))
+	return items
+}
+
 // Every zeroed capacity slot and copied source/destination slot is admitted
 // before make/copy. Explicit growth keeps concrete capacity knowable before
 // allocation; ordinary Set drives the same growth without accounting scans.
@@ -101,20 +111,13 @@ func (tr *Map[K, V]) growItems(items []mapPair[K, V], extra int, w Work) ([]mapP
 	if cap(items)-len(items) >= extra {
 		return items, true
 	}
-	capacity := cap(items) * 2
-	if capacity < len(items)+extra {
-		capacity = len(items) + extra
-	}
-	if capacity > tr.max {
-		capacity = tr.max
-	}
+	capacity := mapGrowthCapacity(len(items), cap(items), extra, tr.max)
 	size := uint64(unsafe.Sizeof(mapPair[K, V]{}))
 	if !mutationReserve(w, uint64(capacity), uint64(capacity)*size) ||
 		!mutationReserve(w, uint64(len(items)), 2*uint64(len(items))*size) {
 		return nil, false
 	}
-	grown := make([]mapPair[K, V], len(items), capacity)
-	tr.recordAllocation(uint64(cap(grown)) * size)
+	grown := tr.allocItems(len(items), capacity)
 	copy(grown, items)
 	return grown, true
 }

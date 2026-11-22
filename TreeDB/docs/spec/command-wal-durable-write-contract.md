@@ -231,6 +231,14 @@ there is no builder timer or exported scheduling deadline.
 Idle first work remains immediate. There is one active capture and no
 background goroutine or second accepted-prefix/root owner.
 
+The native fixed-format standalone Mongo gateway can wait for the existing
+registered completion of an eligible BSON INSERT or structured UPDATE. Its
+checked acknowledgement uses that command's assigned LSN, successful WAL and
+dependency completion, and successful producer cleanup. A coalesced command
+can satisfy the members whose writes it installed. Other effects need their
+own verified completion or an explicit fence. The existing collector settings
+and physical sync authority apply. See the [gateway contract](contracts.md).
+
 For an ordinary cached durable write, uncontended exclusive public admission
 can combine append registration and capture in one handoff. The caller announces
 one durable intent before attempting that admission. It rechecks demand after

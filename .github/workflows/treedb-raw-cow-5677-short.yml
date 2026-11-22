@@ -1,0 +1,80 @@
+name: "Raw COW #5677: one manual short-only diagnostic"
+
+on:
+  workflow_dispatch:
+    inputs:
+      acknowledge:
+        description: "One guest-only short diagnostic; no retries or release authority"
+        required: true
+        type: choice
+        options:
+          - guest-short-5677-once
+
+permissions:
+  contents: read
+
+concurrency:
+  group: treedb-raw-cow-5677-short-once
+  cancel-in-progress: false
+
+jobs:
+  short:
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.repository == 'snissn/gomap' &&
+      github.ref == 'refs/heads/main' &&
+      github.actor_id == '1981537' &&
+      github.run_number == '1' &&
+      github.run_attempt == '1' &&
+      inputs.acknowledge == 'guest-short-5677-once'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 18
+    steps:
+      - name: Freeze first-attempt job origin
+        shell: bash
+        run: |
+          python3 -I -B - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import time
+
+          temp = Path(os.environ["RUNNER_TEMP"]).resolve(strict=True)
+          root = temp / "raw-cow-5677-short" / "evidence"
+          root.mkdir(parents=True, exist_ok=False)
+          (root / "origin.json").write_text(json.dumps({
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "start_monotonic": time.monotonic(),
+          }) + "\n")
+          PY
+
+      - name: Checkout the immutable admitted default-branch workflow source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Set up the original Go 1.26.11 toolchain
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.26.11"
+          check-latest: false
+          cache: false
+
+      - name: Admitted short A/A followed by one conditional A/B
+        timeout-minutes: 14
+        shell: bash
+        env:
+          RAW_COW_SHORT_ACK: ${{ inputs.acknowledge }}
+        run: python3 -I -B .github/scripts/treedb_raw_cow_5677_short.py
+
+      - name: Retain success, refusal or partial receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: raw-cow-5677-short-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/raw-cow-5677-short/evidence
+          if-no-files-found: error
+          retention-days: 14

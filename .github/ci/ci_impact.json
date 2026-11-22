@@ -12,7 +12,7 @@
     "M0 observation is manual diagnostic-only on a separately fixed product; no forecast starts it or replaces failed M0 acceptance.",
     "Bounded maintenance comparison is a manually granted diagnostic on fixed baseline/candidate products; no forecast starts it or establishes cost, M0 or native acceptance."
   ],
-  "discovery_source_sha256": "b5a9eacb01f5612eb2d3217438a3d923ffc027ac4d8484851d0d3da6779bc79c",
+  "discovery_source_sha256": "174fbf0d5a6d607e106e977016f5e94ca4bd3ec4f5f1bee51d94ab0159a40fa1",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
@@ -172,7 +172,7 @@
       "mode": "100644"
     },
     ".github/scripts/test_ci_impact.py": {
-      "git_blob": "39a5ea836262f359ab2f3720ce2a93920339fe16",
+      "git_blob": "71db9853bfe1731274ac7b70a9e2df359364be5c",
       "mode": "100644"
     },
     ".github/scripts/test_ci_macos_scope.py": {
@@ -540,6 +540,19 @@
         "tags": "entry command defaults/flags retained"
       },
       "workflow": "treedb-primary-order-diagnostic.yml"
+    },
+    {
+      "id": "treedb-raw-cow-5677-short/short/single",
+      "job": "short",
+      "owner": "CI maintainer and raw COW qualification owner (manual issue #5678 only)",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {},
+        "race": false,
+        "runs_on": "ubuntu-24.04",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "treedb-raw-cow-5677-short.yml"
     },
     {
       "id": "treedb-tests/getversioned-bindings-qualification/single",
@@ -2674,6 +2687,58 @@
         }
       },
       "sha256": "b5cb2abaf216ec201a8496bc43c6920b5a4f0195df910f045119409492037fe9"
+    },
+    "treedb-raw-cow-5677-short.yml": {
+      "coverage": "source workflow owns actual event eligibility; forecast never changes execution",
+      "events": {
+        "workflow_dispatch": {
+          "inputs": {
+            "acknowledge": {
+              "description": "One guest-only short diagnostic; no retries or release authority",
+              "options": [
+                "guest-short-5677-once"
+              ],
+              "required": true,
+              "type": "choice"
+            }
+          }
+        }
+      },
+      "git_blob": "7db2fb499ab4d11917c1841948ef6a2fae35f5ac",
+      "jobs": {
+        "short": {
+          "checkout": [
+            {
+              "fetch-depth": 1,
+              "persist-credentials": false,
+              "ref": "${{ github.workflow_sha }}"
+            }
+          ],
+          "commands": [
+            {
+              "command_sha256": "2acb0c6cf10633beb5c1d67a8b2aec50e2d1bc74604bf2f5387c139c5a5d711b",
+              "entrypoint": ".github/workflows/treedb-raw-cow-5677-short.yml:35",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Freeze first-attempt job origin"
+            },
+            {
+              "command_sha256": "7f6d976c83ff0af7687ff791b9312651c3ae1256a5d0936f006f800d6448f00e",
+              "entrypoint": ".github/workflows/treedb-raw-cow-5677-short.yml:71",
+              "env": {
+                "RAW_COW_SHORT_ACK": "${{ inputs.acknowledge }}"
+              },
+              "invocation": "python3 -I -B .github/scripts/treedb_raw_cow_5677_short.py",
+              "name": "Admitted short A/A followed by one conditional A/B"
+            }
+          ],
+          "environment": {},
+          "matrix": null,
+          "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": false,
+          "runs_on": "ubuntu-24.04"
+        }
+      },
+      "sha256": "f3d4e0627f7ab36b3a743a7f534d3d9f6f23622d9e64c5cf56556695f384e11c"
     },
     "treedb-tests.yml": {
       "coverage": "source workflow owns actual event eligibility; forecast never changes execution",

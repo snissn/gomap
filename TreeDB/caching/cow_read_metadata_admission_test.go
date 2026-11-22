@@ -81,3 +81,92 @@ func TestCOWReadWorkspaceMetadataAdmissionRefusalAndDrain(t *testing.T) {
 		t.Fatalf("metadata ownership did not return to the retained-cut baseline: before%+v after%+v", before, got)
 	}
 }
+
+func TestCOWGetManyViewReleasesResultOnLookupPressure(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		refuse bool
+	}{
+		{name: "retained-result-blocks-lookup"},
+		{name: "lookup-does-not-fit-without-result", refuse: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			db := cowPointerFixture(t)
+			settled, dirty := []byte("settled-empty"), []byte("dirty-inline")
+			if err := db.Set(settled, []byte{}); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Checkpoint(); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Set(dirty, []byte("x")); err != nil {
+				t.Fatal(err)
+			}
+			snapshot, err := db.acquireCOWSnapshotWithError()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer snapshot.Close()
+			budget := db.cow.budget
+			cowPressureEvictIdleReadScratch(t, budget)
+			before := budget.Stats()
+			overhead := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWExternalLease{})))
+			workspace := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowReadWorkspace{}))) + cowReadWorkspaceInspectionCharge() + overhead
+			point := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowPointScratch{}))) + overhead
+			// The empty result fits after the physical lookup, with no allowance
+			// for the prior nonempty copy. The control also starves traversal.
+			remaining := workspace + point + overhead
+			if test.refuse {
+				remaining = workspace + point - 1
+			}
+			pressure, err := budget.AcquireExternal(budget.Limits().MaxInFlightBytes - before.ReservedBytes - remaining - overhead)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer pressure.Close()
+			pressured := budget.Stats()
+			calls := 0
+			err = snapshot.GetManyView([][]byte{dirty, settled}, func(i int, key, value []byte, found bool) error {
+				if i != calls || !found || cap(value) != len(value) {
+					t.Fatalf("callback index=%d calls=%d found=%v len/cap=%d/%d", i, calls, found, len(value), cap(value))
+				}
+				calls++
+				if i == 0 {
+					if !bytes.Equal(key, dirty) || string(value) != "x" || snapshot.cowReader != nil {
+						t.Fatalf("expected dirty inline hit without workspace: key=%q value=%q", key, value)
+					}
+					// With the callback's actual result charged, the same snapshot's
+					// physical read admits the workspace but refuses point scratch.
+					got, err := snapshot.Get(settled)
+					if got != nil || !errors.Is(err, memtable.ErrCOWCapacity) || snapshot.cowReader == nil || snapshot.cowReader.point != nil {
+						t.Fatalf("nested physical lookup under pressure: value=%v err=%v workspace=%v", got, err, snapshot.cowReader != nil)
+					}
+					if string(value) != "x" {
+						t.Fatal("nested lookup changed the callback value")
+					}
+				} else if !bytes.Equal(key, settled) || value == nil || len(value) != 0 {
+					t.Fatalf("present empty callback: key=%q value=%v", key, value)
+				}
+				return nil
+			})
+			leases, readCharge := 2, workspace+point
+			if test.refuse {
+				if !errors.Is(err, memtable.ErrCOWCapacity) || calls != 1 {
+					t.Fatalf("true pressure: callbacks=%d err=%v", calls, err)
+				}
+				leases, readCharge = 1, workspace
+			} else if err != nil || calls != 2 {
+				t.Fatalf("lookup after dropping result: callbacks=%d err=%v", calls, err)
+			}
+			if after := budget.Stats(); after.ExternalLeases-pressured.ExternalLeases != leases || after.ReservedBytes-pressured.ReservedBytes != readCharge {
+				t.Fatalf("callback retained budget debt: before=%+v after=%+v", pressured, after)
+			}
+			if err := snapshot.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if after := budget.Stats(); after.ExternalLeases != pressured.ExternalLeases || after.ReservedBytes != pressured.ReservedBytes {
+				t.Fatalf("snapshot did not refund read workspace: before=%+v after=%+v", pressured, after)
+			}
+		})
+	}
+}

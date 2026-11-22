@@ -828,22 +828,27 @@ Mongo gateway:
   acknowledgements use the ordinary boundary of the configured durability
   profile. In particular, `command_wal_relaxed` and `no_wal_fast` do not gain a
   stronger promise from an ordinary acknowledgement.
-- A successful standalone `j: true` acknowledgement completes
-  `CollectionManager.SyncForStandaloneWriteConcern`. The active native
-  command-WAL durable owner uses a forced journal-prefix completion when its
-  open writer is fixed-format. That completion synchronizes the captured
-  journal and persistent dependencies before acknowledgement. Other native
-  owners use the complete captured-prefix checkpoint, including relaxed
-  ext4-stream where the applied root must cover the acknowledged prefix.
-  A failed selected completion is reported to the caller. A legacy manager first
+- A successful standalone `j: true` acknowledgement on an active native durable
+  fixed-format owner can reuse the assigned command's WAL completion for an
+  eligible singleton BSON INSERT or changed exact-ID structured UPDATE. The
+  original owner must verify assignment, a successful physical wait, and checked
+  producer cleanup. Each qualifying coalesced member receives that completion
+  for its own effect. A selected failure is terminal and reports the original
+  error with any proved installed-mutation count.
+- Uncovered requests use `CollectionManager.SyncForStandaloneWriteConcern`.
+  The active native command-WAL durable owner with a fixed-format writer forces
+  completion of the captured journal prefix and persistent dependencies before
+  acknowledgement. Other native owners use the complete captured-prefix
+  checkpoint, including relaxed ext4-stream where the applied root must cover
+  the acknowledged prefix. A legacy manager first
   drains collection publishing, then completes `SyncCommandWALAppliedPrefix`
   when command WAL is enabled or `DB.Checkpoint` when it is disabled. The legacy
   command-WAL boundary syncs a relaxed suffix and publishes its durable-prefix
   barrier as a root-neutral contiguous applied command; an already-durable
   prefix is reused without another barrier or file sync. Because existing
   multi-item and DDL handlers can return a command
-  error after a partial mutation, an accepted `j: true` request closes this
-  boundary even when the handler response is `ok: 0`; the original command
+  error after a partial mutation, an uncovered `j: true` request closes this
+  boundary even when the handler response is `ok: 0`. The original command
   error is preserved. This is a local crash/reopen boundary only; it does not
   imply replica commit, retryability, transactions, or a stronger read concern.
 - Unsupported or malformed standalone concerns reject before mutation. A
