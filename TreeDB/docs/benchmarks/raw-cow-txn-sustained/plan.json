@@ -1,0 +1,65 @@
+[
+  {
+    "name": "one-1",
+    "clients": 1,
+    "pairs": 128,
+    "ops": 200000,
+    "layout": "disjoint"
+  },
+  {
+    "name": "sixteen-1",
+    "clients": 16,
+    "pairs": 128,
+    "ops": 25000,
+    "layout": "disjoint"
+  },
+  {
+    "name": "hot-1",
+    "clients": 16,
+    "pairs": 1,
+    "ops": 50000,
+    "layout": "hot"
+  },
+  {
+    "name": "sixteen-2",
+    "clients": 16,
+    "pairs": 128,
+    "ops": 25000,
+    "layout": "disjoint"
+  },
+  {
+    "name": "hot-2",
+    "clients": 16,
+    "pairs": 1,
+    "ops": 50000,
+    "layout": "hot"
+  },
+  {
+    "name": "one-2",
+    "clients": 1,
+    "pairs": 128,
+    "ops": 200000,
+    "layout": "disjoint"
+  },
+  {
+    "name": "hot-3",
+    "clients": 16,
+    "pairs": 1,
+    "ops": 50000,
+    "layout": "hot"
+  },
+  {
+    "name": "one-3",
+    "clients": 1,
+    "pairs": 128,
+    "ops": 200000,
+    "layout": "disjoint"
+  },
+  {
+    "name": "sixteen-3",
+    "clients": 16,
+    "pairs": 128,
+    "ops": 25000,
+    "layout": "disjoint"
+  }
+]

@@ -1,0 +1,106 @@
+[
+  {
+    "name": "one-a1",
+    "clients": 1,
+    "pairs": 128,
+    "ops": 4000,
+    "layout": "disjoint",
+    "phases": false
+  },
+  {
+    "name": "one-b1",
+    "clients": 1,
+    "pairs": 128,
+    "ops": 4000,
+    "layout": "disjoint",
+    "phases": true
+  },
+  {
+    "name": "one-b2",
+    "clients": 1,
+    "pairs": 128,
+    "ops": 4000,
+    "layout": "disjoint",
+    "phases": true
+  },
+  {
+    "name": "one-a2",
+    "clients": 1,
+    "pairs": 128,
+    "ops": 4000,
+    "layout": "disjoint",
+    "phases": false
+  },
+  {
+    "name": "sixteen-a1",
+    "clients": 16,
+    "pairs": 128,
+    "ops": 250,
+    "layout": "disjoint",
+    "phases": false
+  },
+  {
+    "name": "sixteen-b1",
+    "clients": 16,
+    "pairs": 128,
+    "ops": 250,
+    "layout": "disjoint",
+    "phases": true
+  },
+  {
+    "name": "sixteen-b2",
+    "clients": 16,
+    "pairs": 128,
+    "ops": 250,
+    "layout": "disjoint",
+    "phases": true
+  },
+  {
+    "name": "sixteen-a2",
+    "clients": 16,
+    "pairs": 128,
+    "ops": 250,
+    "layout": "disjoint",
+    "phases": false
+  },
+  {
+    "name": "hot-a1",
+    "clients": 16,
+    "pairs": 1,
+    "ops": 250,
+    "layout": "hot",
+    "phases": false
+  },
+  {
+    "name": "hot-b1",
+    "clients": 16,
+    "pairs": 1,
+    "ops": 250,
+    "layout": "hot",
+    "phases": true
+  },
+  {
+    "name": "hot-b2",
+    "clients": 16,
+    "pairs": 1,
+    "ops": 250,
+    "layout": "hot",
+    "phases": true
+  },
+  {
+    "name": "hot-a2",
+    "clients": 16,
+    "pairs": 1,
+    "ops": 250,
+    "layout": "hot",
+    "phases": false
+  },
+  {
+    "name": "held-control",
+    "clients": 16,
+    "pairs": 128,
+    "ops": 250,
+    "layout": "disjoint",
+    "hold-reader": true
+  }
+]
