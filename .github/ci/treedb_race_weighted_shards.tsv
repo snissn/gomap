@@ -21,10 +21,12 @@ db	2	TestValueLogRewriteOnline_DoesNotLoseConcurrentWrites	10.30
 package	2	github.com/snissn/gomap/TreeDB/cmd/treemap	17.30
 package	2	github.com/snissn/gomap/TreeDB/internal/raftplacement	73.37
 package	2	github.com/snissn/gomap/TreeDB/internal/rootpublication	96.68
-package	2	github.com/snissn/gomap/TreeDB/mongo_gateway	48.67
 root	2	TestProfileFast_BulkRestoreMaintainsKeyValueParity	18.25
 root	2	TestReadSnapshotsSeeQueuedWritesAfterCheckpoint_Control	12.16
 root	2	TestReadSnapshotsSeeQueuedWritesBeforeCheckpoint_ProfileMatrix	25.17
+# mongo_gateway's largest package elapsed in 44966133116, 44968207147,
+# 44968296053 and 44970681684. Keep its existing exclusive pin policy.
+package	3	github.com/snissn/gomap/TreeDB/mongo_gateway	216.18
 # Rebalance the latest long critical paths without adding runners.
 # Existing pins keep their fallback policy. Newly pinned tests keep their
 # original ordinal in the fallback stream, so unrelated assignments do not move.
