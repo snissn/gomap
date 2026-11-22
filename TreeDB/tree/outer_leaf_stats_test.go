@@ -12,7 +12,6 @@ func TestOuterLeafReadStatsRecentEstimator(t *testing.T) {
 	outerLeafLoadsTotal.Store(0)
 	outerLeafPointLoadsTotal.Store(0)
 	outerLeafIteratorLoadsTotal.Store(0)
-	outerLeafBytesTotal.Store(0)
 	outerLeafSamplesTotal.Store(0)
 	outerLeafRecent64HitsTotal.Store(0)
 	outerLeafRecent256HitsTotal.Store(0)
@@ -30,9 +29,9 @@ func TestOuterLeafReadStatsRecentEstimator(t *testing.T) {
 	ptrA := page.ValuePtr{FileID: 7, Offset: 128}
 	ptrB := page.ValuePtr{FileID: 7, Offset: 256}
 
-	noteOuterLeafLoad(ptrA, page.PageSize, false)
-	noteOuterLeafLoad(ptrB, page.PageSize, true)
-	noteOuterLeafLoad(ptrA, page.PageSize, false)
+	noteOuterLeafLoad(ptrA, false)
+	noteOuterLeafLoad(ptrB, true)
+	noteOuterLeafLoad(ptrA, false)
 
 	stats := OuterLeafReadStatsSnapshot()
 	if stats.LoadsTotal != 3 {
@@ -70,7 +69,6 @@ func TestOuterLeafReadStatsEstimatorKeyAvoidsHighOffsetCollision(t *testing.T) {
 	outerLeafLoadsTotal.Store(0)
 	outerLeafPointLoadsTotal.Store(0)
 	outerLeafIteratorLoadsTotal.Store(0)
-	outerLeafBytesTotal.Store(0)
 	outerLeafSamplesTotal.Store(0)
 	outerLeafRecent64HitsTotal.Store(0)
 	outerLeafRecent256HitsTotal.Store(0)
@@ -88,8 +86,8 @@ func TestOuterLeafReadStatsEstimatorKeyAvoidsHighOffsetCollision(t *testing.T) {
 	ptrA := page.ValuePtr{FileID: 1, Offset: 0}
 	ptrB := page.ValuePtr{FileID: 0, Offset: 1 << 32}
 
-	noteOuterLeafLoad(ptrA, page.PageSize, false)
-	noteOuterLeafLoad(ptrB, page.PageSize, false)
+	noteOuterLeafLoad(ptrA, false)
+	noteOuterLeafLoad(ptrB, false)
 
 	stats := OuterLeafReadStatsSnapshot()
 	if stats.Recent64HitsTotal != 0 {
