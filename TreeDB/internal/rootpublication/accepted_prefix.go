@@ -208,12 +208,43 @@ func (c *Coordinator) ReserveAccepted(maintenance bool) (AcceptedTicket, error) 
 		p.freeCount--
 		slot = p.free[p.freeCount]
 	}
+	return p.reserveSlotLocked(c, slot, maintenance), nil
+}
+
+// ReserveAcceptedOrdinaryPair reserves a writer and its optional group marker
+// together. A refusal holds neither slot and leaves the maintenance reserve alone.
+func (c *Coordinator) ReserveAcceptedOrdinaryPair() (AcceptedTicket, AcceptedTicket, error) {
+	c = c.AcceptedPrefixOwner()
+	if c == nil {
+		return AcceptedTicket{}, AcceptedTicket{}, ErrAcceptedReceipt
+	}
+	p := &c.accepted
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.poison != nil {
+		return AcceptedTicket{}, AcceptedTicket{}, p.poison
+	}
+	if p.closed || len(p.entries) == 0 {
+		return AcceptedTicket{}, AcceptedTicket{}, ErrAcceptedReceipt
+	}
+	if p.freeCount < 2 {
+		return AcceptedTicket{}, AcceptedTicket{}, ErrAcceptedCapacity
+	}
+	if p.nonce > ^uint64(0)-2 {
+		panic("accepted publication nonce exhausted")
+	}
+	p.freeCount -= 2
+	return p.reserveSlotLocked(c, p.free[p.freeCount+1], false),
+		p.reserveSlotLocked(c, p.free[p.freeCount], false), nil
+}
+
+func (p *acceptedPrefixState) reserveSlotLocked(c *Coordinator, slot int, maintenance bool) AcceptedTicket {
 	p.nonce++
 	if p.nonce == 0 {
 		panic("accepted publication nonce exhausted")
 	}
 	p.entries[slot] = acceptedEntry{nonce: p.nonce, reserved: true, maintenance: maintenance}
-	return AcceptedTicket{owner: c, slot: slot, nonce: p.nonce}, nil
+	return AcceptedTicket{owner: c, slot: slot, nonce: p.nonce}
 }
 
 func (ticket AcceptedTicket) entryLocked() (*acceptedPrefixState, *acceptedEntry) {

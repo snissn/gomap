@@ -844,16 +844,29 @@ func (b *Batch) admitCOWAccepted() error {
 	if c.prefix == nil || (len(b.entries) == 0 && b.cowState.native == nil) || b.cowState.accepted.Valid() {
 		return nil
 	}
-	ticket, err := c.prefix.ReserveAccepted(false)
+	pair := b.rawTxnPairAdmission()
+	reserve := func() (rootpublication.AcceptedTicket, rootpublication.AcceptedTicket, error) {
+		if pair != nil {
+			return c.prefix.ReserveAcceptedOrdinaryPair()
+		}
+		ticket, err := c.prefix.ReserveAccepted(false)
+		return ticket, rootpublication.AcceptedTicket{}, err
+	}
+	ticket, spare, err := reserve()
 	if errors.Is(err, rootpublication.ErrAcceptedCapacity) {
+		// Neither member is held on a paired refusal. Keep the original
+		// checkpoint and one re-reservation before any foreground gates.
 		if err = b.db.Checkpoint(); err != nil {
 			return err
 		}
-		ticket, err = c.prefix.ReserveAccepted(false)
+		ticket, spare, err = reserve()
 	}
 	if err != nil {
 		return acceptedAdmissionError(err)
 	}
 	b.cowState.accepted = ticket
+	if pair != nil {
+		pair.barrierSpare = spare
+	}
 	return nil
 }

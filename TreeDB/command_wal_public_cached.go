@@ -1754,7 +1754,12 @@ func (b *commandWALPublicBatch) completeCOWWrite(commandSync bool, err error) er
 // The existing COW wrapper owns registration scratch through ACK. Named
 // callbacks avoid an escaping per-write registration cell and nested captures.
 func (b *commandWALPublicBatch) registerCOWAppend() error {
-	registration, err := b.db.registerPublicCommandWALCollected(b.opCount*64, nil, b.cowState.commandSync, b.cowState.commandSync, b.cowState.collectionSealed, nil, b.appendCOWFrame)
+	inner := b.inner.(*caching.Batch)
+	spare, err := inner.TakeRawTxnBarrierSpare(b.db.txnOwner)
+	if err != nil {
+		return err
+	}
+	registration, err := b.db.registerPublicCommandWALCollectedWithSpare(b.opCount*64, nil, b.cowState.commandSync, b.cowState.commandSync, b.cowState.collectionSealed, nil, b.appendCOWFrame, spare)
 	b.cowState.registration = registration
 	return err
 }

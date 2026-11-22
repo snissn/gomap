@@ -24860,7 +24860,14 @@ func (db *DB) waitForRangeSpanCheckpointDrain() {
 }
 
 func (db *DB) beginDirectWrite() error {
-	if db.cow != nil && db.cow.refreshRequired.Load() && !db.maintenanceActive.Load() {
+	return db.beginDirectWriteWithCOWRefreshWait(false)
+}
+
+// Raw public transactions may arrive during a checkpoint they did not start.
+// Join already-admitted maintenance using the existing checkpoint condition;
+// an idle DB with an unreconciled basis still rejects before any assignment.
+func (db *DB) beginDirectWriteWithCOWRefreshWait(waitForActive bool) error {
+	if !waitForActive && db.cow != nil && db.cow.refreshRequired.Load() && !db.maintenanceActive.Load() {
 		return memtable.ErrCOWCapacity
 	}
 	for {
@@ -24878,7 +24885,7 @@ func (db *DB) beginDirectWrite() error {
 			}
 			return backenddb.ErrClosed
 		}
-		if db.cow != nil && db.cow.refreshRequired.Load() && !db.maintenanceActive.Load() {
+		if !waitForActive && db.cow != nil && db.cow.refreshRequired.Load() && !db.maintenanceActive.Load() {
 			db.writeMu.RUnlock()
 			return memtable.ErrCOWCapacity
 		}
@@ -24894,6 +24901,16 @@ func (db *DB) beginDirectWrite() error {
 					db.observeWriteWaitForCheckpoint(time.Since(start))
 				}
 				return err
+			}
+			// Readiness has precedence over the sticky-basis refusal after a
+			// checkpoint wait: a recovery-required result is not capacity.
+			if waitForActive && db.cow != nil && db.cow.refreshRequired.Load() {
+				db.writeMu.RUnlock()
+				if preWaitReason != writeWaitReasonNone {
+					db.observeWriteWaitReason(preWaitReason, time.Since(start))
+					db.observeWriteWaitForCheckpoint(time.Since(start))
+				}
+				return memtable.ErrCOWCapacity
 			}
 			if preWaitReason != writeWaitReasonNone {
 				db.observeWriteWaitReason(preWaitReason, time.Since(start))
@@ -38729,7 +38746,7 @@ func (b *Batch) tryWriteWALOffStreamBypass(sync bool) (bool, error) {
 	return true, nil
 }
 
-func (b *Batch) writeRegular(syncWrite bool) error {
+func (b *Batch) writeRegular(syncWrite bool) (err error) {
 	if b.db.cow != nil {
 		b.cowState.receipt = COWPublicationReceipt{}
 	}
@@ -38754,6 +38771,16 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 		if err := b.admitCOWAccepted(); err != nil {
 			return err
 		}
+		if pair := b.rawTxnPairAdmission(); pair != nil {
+			// An unhanded spare remains owned by this attempt through the
+			// bounded, pre-append generation-pressure drain and any unwind.
+			defer func() {
+				if cleanupErr := pair.cancelBarrierSpare(); cleanupErr != nil {
+					b.db.reportError(cleanupErr)
+					err = joinCOWCleanupError(err, cleanupErr)
+				}
+			}()
+		}
 		defer func() {
 			if b.cowState.accepted.Valid() && !b.cowState.receipt.Assigned {
 				if err := b.cowState.accepted.CancelAccepted(); err != nil {
@@ -38763,7 +38790,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			}
 		}()
 	}
-	if err := b.db.beginDirectWrite(); err != nil {
+	if err := b.db.beginDirectWriteWithCOWRefreshWait(b.rawTxnPairAdmission() != nil); err != nil {
 		return err
 	}
 	return b.writeRegularLocked(syncWrite, b.db.writeMu.RUnlock, true)
@@ -38828,7 +38855,7 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func(), release
 				if err := b.db.Checkpoint(); err != nil {
 					return err
 				}
-				if err := b.db.beginDirectWrite(); err != nil {
+				if err := b.db.beginDirectWriteWithCOWRefreshWait(b.rawTxnPairAdmission() != nil); err != nil {
 					return err
 				}
 				unlockWriteMu = b.db.writeMu.RUnlock
@@ -38856,7 +38883,7 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func(), release
 				// No producer, revision assignment or command append has run. Rejoin
 				// ordinary admission after unlocked retirement; another writer may
 				// precede this command in the admitted empty successor.
-				if err := b.db.beginDirectWrite(); err != nil {
+				if err := b.db.beginDirectWriteWithCOWRefreshWait(b.rawTxnPairAdmission() != nil); err != nil {
 					return err
 				}
 				unlockWriteMu = b.db.writeMu.RUnlock

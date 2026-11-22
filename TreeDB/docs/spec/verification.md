@@ -2,6 +2,27 @@
 
 This document maps specification invariants to existing tests and harnesses.
 
+## Raw durable transaction group admission
+
+`TestPublicRawCOWTxnGroupPressurePreAdmitsBothSlots` uses a real grouped
+pair of ordinary durable raw transactions to build installed prefix pressure.
+At exactly one free ordinary entry, stock rejects the next raw transaction
+before assignment at its possible group-marker reservation. The reclaimed
+path checks that it held neither entry when entering the original DATA
+checkpoint, then verifies the old seal, one new raw mutation with its original
+WAL group, held cut and fresh reopen. A separate all-uninstalled pressure case
+must refuse cleanly, with no new assignment and no leaked entry; releasing
+the fixture's reservations restores legitimate progress. The internal
+`TestReserveAcceptedOrdinaryPairIsAllOrNothing` checks the shared fixed free
+list and untouched separate maintenance entry.
+`TestPublicRawCOWTxnGroupPressureReturnsPreappendReservations` injects a
+real pre-append refusal, checks both entries are returned and no frame or
+logical update was assigned, then verifies a fresh successful commit and
+reopen. `TestRawTxnRefreshWaitKeepsExistingAdmissionFence` deterministically
+holds and clears the original checkpoint fence and checks idle sticky
+refresh, the post-frontier lane, terminal publication readiness, and Close;
+no waiter retains the write lease while the checkpoint drains.
+
 ## Leaf-generation planning after reopen
 
 `TestLeafGenerationPlan_ReopensWithUnusableAdvisoryIndex` writes and seals real

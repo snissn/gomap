@@ -110,6 +110,32 @@ that lease ends. Existing request grouping surrounds the entire cached install;
 its group wait follows lease release, while solo durable writes preserve their
 single-frame sync optimization. No per-item group fsync is added.
 
+In a nonempty ordinary raw `Commit` on the public durable `cow_btree`
+command-WAL route, admission reserves the original mutation entry and an
+ordinary spare for a possible durable-group marker together, or neither.
+The existing single foreground checkpoint and one re-reservation run
+before the writer/publication gates on capacity refusal. Both unassigned
+entries may remain during the original bounded generation-pressure drain;
+the separate maintenance entry is never consumed by this admission.
+
+The batch owns the spare through pre-append failures. At original group
+registration it either transfers the existing entry to the pending epoch
+or refunds it before appending into an epoch that already owns a marker.
+Capture, assignment, ACK and post-assignment recovery keep the existing
+group authority. This path does not turn a generic capacity error into a
+safe caller retry. Empty and explicit-sync commits do not use the paired
+reservation; ordered, native, ordinary-batch, relaxed and NoWAL routes do
+not participate.
+
+A Begin on the qualified raw durable route may join an existing checkpoint
+cutover before it captures any view, including when the caller later elects
+a read-only transaction or explicit sync. An ordinary nonempty raw commit
+may join the same cutover before assignment. Neither path starts another
+writer wait mechanism or replays anything; admission rechecks publication
+readiness and refuses an unreconciled basis when the original gate permits
+admission. The existing post-frontier lane and Close behavior remain in
+force.
+
 The request receipt distinguishes assigned identity/uncertainty, logical install,
 WAL completion/stability and sealed logical coverage. Empty NoWAL explicit Sync records a logical coverage
 lower bound captured before its real checkpoint, only on success; it creates no
