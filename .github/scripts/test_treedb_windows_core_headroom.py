@@ -475,6 +475,8 @@ class TreeDBLinuxRaceHeadroomTest(unittest.TestCase):
         pins = read_weights(
             weights.name, 7, {"package", "root", "caching", "db", "nativewire"}
         )
+        mongo = "github.com/snissn/gomap/TreeDB/mongo_gateway"
+        self.assertEqual(pins[("package", mongo)], (3, False))
         domains = {
             "package": sorted({
                 "github.com/snissn/gomap/" + path.parent.relative_to(REPO_ROOT).as_posix()
@@ -497,24 +499,42 @@ class TreeDBLinuxRaceHeadroomTest(unittest.TestCase):
             })
         with tempfile.TemporaryDirectory() as directory:
             all_file = Path(directory) / "all"
+            previous_weights = Path(directory) / "previous-weights.tsv"
+            current_mongo_pin = f"package\t3\t{mongo}\t"
+            previous_weights.write_text(
+                weights.read_text().replace(current_mongo_pin, f"package\t2\t{mongo}\t")
+            )
+
+            def select(kind: str, weights_file: Path) -> list[list[str]]:
+                shards = []
+                for index in range(7):
+                    output = Path(directory) / str(index)
+                    subprocess.run(
+                        ["bash", "--noprofile", "--norc", "-ceu", textwrap.dedent(selector.group()) +
+                         'weighted_shard_file "$1" "$2" 7 "$3" "$4" "$5"',
+                         "selector", kind, str(index), str(weights_file), str(all_file), str(output)],
+                        check=True, timeout=5,
+                        env={key: value for key, value in os.environ.items() if key != "BASH_ENV"},
+                    )
+                    shards.append(output.read_text().splitlines())
+                return shards
+
             for kind, names in domains.items():
                 with self.subTest(kind=kind):
                     names += [f"NewFallback{index}" for index in range(14)]
                     all_file.write_text("\n".join(names) + "\n")
-                    shards = []
-                    for index in range(7):
-                        output = Path(directory) / str(index)
-                        subprocess.run(
-                            ["bash", "--noprofile", "--norc", "-ceu", textwrap.dedent(selector.group()) +
-                             'weighted_shard_file "$1" "$2" 7 "$3" "$4" "$5"',
-                             "selector", kind, str(index), str(weights), str(all_file), str(output)],
-                            check=True, timeout=5,
-                            env={key: value for key, value in os.environ.items() if key != "BASH_ENV"},
-                        )
-                        shards.append(output.read_text().splitlines())
+                    shards = select(kind, weights)
                     self.assertEqual(Counter(name for shard in shards for name in shard), Counter(names))
                     self.assertEqual(shards, weighted_shards(names, kind, 7, pins))
                     self.assertTrue(all(shards), "each added core shard must receive work")
+                    if kind == "package":
+                        previous = select(kind, previous_weights)
+                        self.assertIn(mongo, previous[2])
+                        self.assertIn(mongo, shards[3])
+                        self.assertEqual(
+                            [[name for name in shard if name != mongo] for shard in shards],
+                            [[name for name in shard if name != mongo] for shard in previous],
+                        )
                     if kind == "nativewire":
                         self.assertIn("TestVectorPartitionLiveSelectedLifecycleV1", shards[3])
                         self.assertIn("TestMultiOwnerTCPAcceptedModelScaledCorrectnessV1", shards[5])

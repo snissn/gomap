@@ -76,6 +76,11 @@ and the package universe selector are unchanged. A test defined only under a
 race-specific build constraint belongs to the race executable's named inventory,
 whereas a non-race-only test cannot run in those shards.
 
+The Linux race plan pins the whole `TreeDB/mongo_gateway` package to core shard
+4. Its previous shard 3 was on the critical path in multiple hosted runs; the
+package retains the same race invocation and does not take a fallback slot.
+This rebalance changes no named-test partitions or runner count.
+
 The manifest's discovery-source fingerprint binds each path, Git mode, and blob
 for tracked Go/Python/shell,
 assembly/C/C++/Objective-C/header sources, native objects, module files, and

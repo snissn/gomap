@@ -12,7 +12,7 @@
     "M0 observation is manual diagnostic-only on a separately fixed product; no forecast starts it or replaces failed M0 acceptance.",
     "Bounded maintenance comparison is a manually granted diagnostic on fixed baseline/candidate products; no forecast starts it or establishes cost, M0 or native acceptance."
   ],
-  "discovery_source_sha256": "39c01a9519a44e63bba7e47abef4c1d9e2a371d4c323daa3006c715c83f726eb",
+  "discovery_source_sha256": "efba0f08b78a99ec28d0a2291a97ae7e5eb43803a119f2c6ad2c60d923affb81",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
@@ -132,7 +132,7 @@
       "mode": "100644"
     },
     ".github/ci/treedb_race_weighted_shards.tsv": {
-      "git_blob": "44cf3708479595086866f76df59dd808d1169b0f",
+      "git_blob": "9fe74dff6e7facecfa775456197c63e3fb4e53a8",
       "mode": "100644"
     },
     ".github/ci/treedb_unix_weighted_shards.tsv": {
@@ -192,7 +192,7 @@
       "mode": "100644"
     },
     ".github/scripts/test_treedb_windows_core_headroom.py": {
-      "git_blob": "61a0564cb2a80f055e0c03bdcbf69caa21d1ceb6",
+      "git_blob": "d7e4fd92d9fba5548f3695203cf8c0bbfb4ebc5a",
       "mode": "100644"
     },
     "go.mod": {
