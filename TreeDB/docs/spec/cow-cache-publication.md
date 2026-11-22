@@ -1039,6 +1039,10 @@ registration errors remain fatal.
 COW map copies allocate independent item and child backing sized to the live
 length plus one spare slot, capped at the tree maximum. Further private growth
 uses the original admitted mutation work and records the actual allocation.
+An ordinary insertion into a shared non-full leaf without value-copy callbacks
+copies the existing items directly into their final positions in a single new
+backing. It uses the same final capacity as separate copying and insertion and
+charges the new leaf and its backing.
 Internal nodes contain their child slice header in the same allocation; leaves
 keep the smaller header. Admission charges the rounded containing allocation,
 and owned cleanup clears its embedded child reference before refunding it.

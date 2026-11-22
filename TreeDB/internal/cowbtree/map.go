@@ -98,8 +98,7 @@ func (tr *Map[K, V]) copyWithWork(n *mapNode[K, V], w Work) (*mapNode[K, V], boo
 	// belongs to the old node; duplicating all of it amplifies every publication.
 	// Keep one insertion slot where available. A private bulk writer can grow
 	// normally, with the same explicit admission and allocation receipts.
-	n2.items = make([]mapPair[K, V], len(n.items), mapCopyCapacity(len(n.items), cap(n.items)))
-	tr.recordAllocation(uint64(cap(n2.items)) * uint64(unsafe.Sizeof(mapPair[K, V]{})))
+	n2.items = tr.allocItems(len(n.items), mapCopyCapacity(len(n.items), cap(n.items)))
 	copy(n2.items, n.items)
 	if tr.copyValues {
 		for i := 0; i < len(n2.items); i++ {
@@ -437,13 +436,28 @@ func (n *mapNode[K, V]) updateCount() {
 
 func (tr *Map[K, V]) nodeSet(pn **mapNode[K, V], item mapPair[K, V], w Work,
 ) (prev V, replaced bool, split bool, ready bool) {
-	n, ok := tr.isoLoadWithWork(pn, true, w)
-	if !ok {
-		return tr.empty.value, false, false, false
-	}
-	i, found, ok := tr.searchWithWork(n, item.key, w)
-	if !ok {
-		return tr.empty.value, false, false, false
+	n := *pn
+	var i int
+	var found bool
+	if w == nil && n.isoid != tr.isoid && n.leaf() && len(n.items) < tr.max && !tr.copyValues && !tr.isoCopyValues {
+		// Search the shared leaf before allocating. On a miss, copy each
+		// range directly to its final position in the new backing.
+		i, found = tr.search(n, item.key)
+		if !found {
+			*pn = tr.copyInsertLeaf(n, i, item)
+			return tr.empty.value, false, false, true
+		}
+		n = tr.isoLoad(pn, true)
+	} else {
+		var ok bool
+		n, ok = tr.isoLoadWithWork(pn, true, w)
+		if !ok {
+			return tr.empty.value, false, false, false
+		}
+		i, found, ok = tr.searchWithWork(n, item.key, w)
+		if !ok {
+			return tr.empty.value, false, false, false
+		}
 	}
 	if found {
 		if !tr.admitReplacement(w) {
@@ -501,6 +515,21 @@ func (tr *Map[K, V]) nodeSet(pn **mapNode[K, V], item mapPair[K, V], w Work,
 		n.count++
 	}
 	return prev, replaced, false, true
+}
+
+func (tr *Map[K, V]) copyInsertLeaf(n *mapNode[K, V], i int, item mapPair[K, V]) *mapNode[K, V] {
+	length := len(n.items)
+	capacity := mapCopyCapacity(length, cap(n.items))
+	if capacity == length {
+		capacity = mapGrowthCapacity(length, capacity, 1, tr.max)
+	}
+	leaf := tr.newNode(true)
+	leaf.items = tr.allocItems(length+1, capacity)
+	copy(leaf.items[:i], n.items[:i])
+	leaf.items[i] = item
+	copy(leaf.items[i+1:], n.items[i:])
+	leaf.count = length + 1
+	return leaf
 }
 
 func (tr *Map[K, V]) Scan(iter func(key K, value V) bool) {

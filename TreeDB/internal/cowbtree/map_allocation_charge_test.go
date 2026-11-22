@@ -40,6 +40,36 @@ func TestMapAllocationChargeCountsActualSitesAndDiscardedGrowth(t *testing.T) {
 	}
 }
 
+func TestMapSharedLeafInsertUsesOneBacking(t *testing.T) {
+	m := NewMap[int, int](32)
+	m.Set(10, 10)
+	m.Set(30, 30)
+	if !m.root.leaf() || len(m.root.items) != 2 || cap(m.root.items) != 2 {
+		t.Fatal("fixture needs a non-full leaf with no spare backing")
+	}
+	fork := m.Copy()
+	if _, replaced := fork.Set(20, 21); replaced {
+		t.Fatal("fork replaced an existing key")
+	}
+	if _, found := m.Get(20); found || m.Len() != 2 || fork.Len() != 3 || fork.root.count != 3 {
+		t.Fatal("shared leaf contents or counts changed unexpectedly")
+	}
+	want := []mapPair[int, int]{{key: 10, value: 10}, {key: 20, value: 21}, {key: 30, value: 30}}
+	for i, item := range want {
+		if got := fork.root.items[i]; got != item {
+			t.Fatalf("item %d = %+v, want %+v", i, got, item)
+		}
+	}
+	if got := cap(fork.root.items); got != 4 {
+		t.Fatalf("item capacity = %d, want 4", got)
+	}
+	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(*fork.root))) +
+		retainedalloc.AllocationCharge(4*uint64(unsafe.Sizeof(mapPair[int, int]{})))
+	if got := fork.AllocationCharge(); got != charge {
+		t.Fatalf("fork charge = %d, want %d for leaf and final backing", got, charge)
+	}
+}
+
 func TestMapAllocationChargeForksAndCopiedInternalNodes(t *testing.T) {
 	m := NewMap[int, int](2)
 	for i := range 1024 {
