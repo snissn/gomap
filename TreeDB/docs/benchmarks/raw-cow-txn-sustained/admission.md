@@ -1,7 +1,7 @@
 # Durable raw COW transactions: admission and 16-client progress
 
 Phase 1 measured the public read/modify/write call, not raw KV or a native
-column-store transaction. It established that six stock fixed-concurrency
+semantic transaction. It established that six stock fixed-concurrency
 16-client cohorts refused before completing the requested work. Each
 acknowledged prefix was independently reopened. This follow-up addresses two
 specific refusals without changing log assignment, durability, or caller retry.
