@@ -175,6 +175,7 @@ type UpdateFunc = db.UpdateFunc
 type DB struct {
 	ownedCloseGuard                      *db.OwnedCallbackCloseGuard
 	txnOwner                             *transactionowner.Owner
+	cowTxnWrite                          func(*caching.Batch, bool) error
 	cached                               *caching.DB
 	backend                              *db.DB
 	dictdb                               *db.DB
@@ -1321,6 +1322,11 @@ func openValidatedWithCacheRole(opts Options, backendOnly bool) (*DB, error) {
 	cached.SetDictStore(dictStore)
 	cached.SetTemplateStore(templateStore)
 	out := &DB{ownedCloseGuard: backend.OwnedCallbackCloseGuard(), txnOwner: txnOwner, cached: cached, backend: backend, dictdb: dictBackend, templateDB: templateDB, writePath: writePath, commandWALCached: opts.CommandWAL, publicBatchWriteSyncPhaseEnabled: opts.CommandWAL && opts.PublicBatchWriteSyncPhaseStats, notifyError: opts.NotifyError, resolvedProfile: Profile(opts.ResolvedProfile), deprecatedProfileAlias: Profile(opts.DeprecatedProfileAlias), durabilityMode: computeDurabilityMode(opts), valueLogReadIntegrity: valueLogReadIntegrityLabel(opts), dir: rootDir}
+	if cached.COWMode() {
+		// Bind the original public writer once. Each transaction still owns
+		// its own batch and goes through the same publish/acknowledgement path.
+		out.cowTxnWrite = out.bindCOWConditionalWriter()
+	}
 	if out.commandWALCached {
 		if cached.COWMode() {
 			if err := backend.BindNativeCommandWALCompletion(txnOwner, out); err != nil {
@@ -2321,6 +2327,25 @@ func (db *DB) InitConditionalTxnWithSnapshot(tx *ConditionalTxn) error {
 	return db.initConditionalTxn(tx, true)
 }
 
+func (db *DB) bindCOWConditionalWriter() func(*caching.Batch, bool) error {
+	return func(b *caching.Batch, sync bool) error {
+		if !db.commandWALCached {
+			if sync {
+				return b.WriteSync()
+			}
+			return b.Write()
+		}
+		wrapper := newCommandWALPublicBatchWithCustody(db, b, len(b.EntriesForTxn()), false)
+		if wrapper == &cowDeniedPublicBatch || wrapper == &cowClosedPublicBatch {
+			return wrapper.cowState.batchError
+		}
+		defer wrapper.closeCOWAdapter()
+		wrapper.dirty = len(b.EntriesForTxn()) > 0
+		wrapper.opCount = len(b.EntriesForTxn())
+		return wrapper.write(sync, sync || db.commandWALOrdinaryWriteRequiresSync())
+	}
+}
+
 func (db *DB) initConditionalTxn(tx *ConditionalTxn, withSnapshot bool) error {
 	if tx == nil || tx.cachedActive || tx.backend != nil {
 		return ErrConditionalTxnClosed
@@ -2330,22 +2355,7 @@ func (db *DB) initConditionalTxn(tx *ConditionalTxn, withSnapshot bool) error {
 	}
 	defer db.lifecycleMu.RUnlock()
 	if db.cached != nil && db.cached.COWMode() {
-		if err := db.cached.InitOwnedCOWTxnWithRawDurableAdmission(&tx.cached, db.txnOwner, db.commandWALOrdinaryWriteRequiresSync() && !db.cached.SupportsLogicalMVCC(), func(b *caching.Batch, sync bool) error {
-			if !db.commandWALCached {
-				if sync {
-					return b.WriteSync()
-				}
-				return b.Write()
-			}
-			wrapper := newCommandWALPublicBatchWithCustody(db, b, len(b.EntriesForTxn()), false)
-			if wrapper == &cowDeniedPublicBatch || wrapper == &cowClosedPublicBatch {
-				return wrapper.cowState.batchError
-			}
-			defer wrapper.closeCOWAdapter()
-			wrapper.dirty = len(b.EntriesForTxn()) > 0
-			wrapper.opCount = len(b.EntriesForTxn())
-			return wrapper.write(sync, sync || db.commandWALOrdinaryWriteRequiresSync())
-		}); err != nil {
+		if err := db.cached.InitOwnedCOWTxnWithRawDurableAdmission(&tx.cached, db.txnOwner, db.commandWALOrdinaryWriteRequiresSync() && !db.cached.SupportsLogicalMVCC(), db.cowTxnWrite); err != nil {
 			return err
 		}
 		tx.cachedActive = true
