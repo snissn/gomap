@@ -227,11 +227,27 @@ class RawPathEquivalenceTests(unittest.TestCase):
         self.assertEqual(batch_write["acceptance_verdict"], "FAIL")
         self.assertEqual(CHECKER.acceptance_verdict(rows), "FAIL")
 
-    def retention_tail(self, status: int, damage: str = "", grouped: bool = False) -> subprocess.CompletedProcess[str]:
-        temporary = self.root / "executables"
+    def retention_tail(self, status: int, damage: str = "", grouped: bool = False,
+                       temp_setting: str | None = None) -> subprocess.CompletedProcess[str]:
+        source = (ROOT / "scripts" / "mvcc_raw_path_gate.sh").read_text()
+        if temp_setting is None:
+            temporary_text = str(self.root / "executables")
+            Path(temporary_text).mkdir()
+        else:
+            # Execute the gate's actual allocator against the requested spelling.
+            # pathlib is only for accessing files; argv stores the literal shell string.
+            end = source.index('BASELINE_WT="$TMP_ROOT/baseline"')
+            begin = source.rindex("\nfi\n", 0, end) + len("\nfi\n")
+            allocated = subprocess.run(
+                ["bash", "-eu", "-c", source[begin:end] + '\nprintf "%s" "$TMP_ROOT"'],
+                env=dict(os.environ, RUNNER_TEMP=temp_setting),
+                check=True, text=True, capture_output=True,
+            )
+            temporary_text = allocated.stdout
+        temporary = Path(temporary_text)
         output = self.root / "output"
         commands = self.root / "commands"
-        for directory in (temporary, output, commands):
+        for directory in (output, commands):
             directory.mkdir()
         digests = {}
         for package in CHECKER.BINARY_PACKAGES:
@@ -245,7 +261,7 @@ class RawPathEquivalenceTests(unittest.TestCase):
             for revision in ("baseline", "candidate"):
                 build_dir = temporary / (revision + "-build")
                 build_dir.mkdir()
-                argv = ["go", "test", "-c", "-trimpath", "-buildvcs=false", "-o", str(build_dir) + "/",
+                argv = ["go", "test", "-c", "-trimpath", "-buildvcs=false", "-o", f"{temporary_text}/{revision}-build/",
                         "./TreeDB/db", "./TreeDB/caching", "./TreeDB"]
                 if damage == "argv" and revision == "candidate":
                     argv.pop()
@@ -275,10 +291,9 @@ class RawPathEquivalenceTests(unittest.TestCase):
         (commands / "go").write_text("#!/bin/sh\necho unexpected-go >&2\nexit 99\n")
         for path in commands.iterdir():
             path.chmod(0o755)
-        source = (ROOT / "scripts" / "mvcc_raw_path_gate.sh").read_text()
         tail = source[source.index("# Retain the exact measured executables"):]
         environment = dict(os.environ, PATH=str(commands) + os.pathsep + os.environ["PATH"],
-                           TMP_ROOT=str(temporary), OUT_DIR=str(output),
+                           TMP_ROOT=temporary_text, OUT_DIR=str(output),
                            BASELINE_SHA="a" * 40, CANDIDATE_SHA="b" * 40,
                            SCRIPT_GOWORK="off", RAW_GROUPED_BUILD=str(int(grouped)), SUMMARY_JSON=str(output / "summary.json"),
                            gate_status=str(status))
@@ -402,6 +417,15 @@ for package in args[pos + 2:]:
                              "./TreeDB/db", "./TreeDB/caching", "./TreeDB"])
             self.assertEqual(row["source_sha"], ("a" if revision == "baseline" else "b") * 40)
             self.assertEqual(row["sha256"], hashlib.sha256((self.root / "output" / row["path"]).read_bytes()).hexdigest())
+
+    def test_grouped_retention_keeps_temp_directory_with_trailing_separator(self) -> None:
+        result = self.retention_tail(0, grouped=True, temp_setting=str(self.root) + "/")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        receipt = self.root / "output" / "measured-binaries.json"
+        self.assertTrue(receipt.is_file(), result.stderr)
+        files = json.loads(receipt.read_text())["files"]
+        self.assertEqual(len(files), 6)
+        self.assertTrue(all("//" not in entry["build_argv"][6] for entry in files))
 
     def test_grouped_retention_refuses_truncated_build_receipt(self) -> None:
         result = self.retention_tail(1, "argv", grouped=True)

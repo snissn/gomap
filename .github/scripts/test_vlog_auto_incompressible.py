@@ -34,6 +34,42 @@ def perf_job_script() -> str:
     return match.group("body")
 
 
+class VLogDictStorageOnlyCheckerTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        build = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(build.cleanup)
+        cls.checker_bin = Path(build.name) / "check-vlog-dict-bench"
+        subprocess.run(
+            ["go", "build", "-o", str(cls.checker_bin), str(CHECKER.with_name("check_vlog_dict_bench.go"))],
+            cwd=REPO_ROOT, check=True, capture_output=True, text=True,
+        )
+
+    def check_dict(self, second_row: str) -> subprocess.CompletedProcess[str]:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            baseline = root / "baseline.json"
+            baseline.write_text('{"benchmarks":[{"name":"BenchmarkFixture","min_mbps":50,'
+                                '"min_observed_ratio":0.9,"max_observed_ratio":1.1,"max_dict_fallback":0}]}')
+            output = root / "go-output.txt"
+            output.write_text("BenchmarkFixture-2 1 10 ns/op 1.0 observed_ratio 0 dict_fallback\n"
+                              + "BenchmarkFixture-2 1 10 ns/op" + second_row + "\n")
+            return subprocess.run(
+                [str(self.checker_bin), "-baseline", str(baseline), "-bench-output", str(output),
+                 "-storage-only", "-strict=true"],
+                check=False, text=True, capture_output=True,
+            )
+
+    def test_repeated_rows_must_have_both_required_metrics(self) -> None:
+        self.assertEqual(self.check_dict(" 1.0 observed_ratio 0 dict_fallback").returncode, 0)
+        for row in ("", " 1.0 observed_ratio", " 0 dict_fallback", " NaN observed_ratio 0 dict_fallback",
+                    " 1.0 observed_ratio -Inf dict_fallback"):
+            with self.subTest(row=row):
+                result = self.check_dict(row)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("sample 2", result.stdout)
+
+
 class VLogAutoIncompressibleCheckerTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:

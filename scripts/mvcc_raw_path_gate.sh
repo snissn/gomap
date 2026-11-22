@@ -83,7 +83,9 @@ else
   rm -rf "$OUT_DIR"
   mkdir -p "$OUT_DIR"
 fi
-TMP_ROOT=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/mvcc-raw-path-gate.XXXXXX")
+# Use one spelling for actual build argv and its retained identity receipt.
+TMP_PARENT=$(realpath -e -- "${RUNNER_TEMP:-${TMPDIR:-/tmp}}")
+TMP_ROOT=$(mktemp -d "${TMP_PARENT%/}/mvcc-raw-path-gate.XXXXXX")
 BASELINE_WT="$TMP_ROOT/baseline"
 cleanup() {
   git worktree remove --force "$BASELINE_WT" >/dev/null 2>&1 || true

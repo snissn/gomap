@@ -80,6 +80,21 @@ func main() {
 			continue
 		}
 
+		if storageOnly {
+			complete := true
+			for i, sample := range samples {
+				if math.IsNaN(sample.ObservedRatio) || math.IsInf(sample.ObservedRatio, 0) ||
+					math.IsNaN(sample.DictFallback) || math.IsInf(sample.DictFallback, 0) {
+					emitViolation(strict, fmt.Sprintf("%s sample %d requires finite observed_ratio and dict_fallback", entry.Name, i+1))
+					violations++
+					complete = false
+				}
+			}
+			if !complete {
+				continue
+			}
+		}
+
 		mbps := trimmedMeanFloat(samples, func(s parsedBench) float64 { return s.MBps })
 		ratio := trimmedMeanFloat(samples, func(s parsedBench) float64 { return s.ObservedRatio })
 		fallbackMax := maxFloat(samples, func(s parsedBench) float64 { return s.DictFallback })
@@ -91,12 +106,12 @@ func main() {
 			emitViolation(strict, msg)
 			violations++
 		}
-		if (storageOnly && math.IsNaN(ratio)) || (!math.IsNaN(ratio) && (ratio < entry.MinObservedRatio || ratio > entry.MaxObservedRatio)) {
+		if !math.IsNaN(ratio) && (ratio < entry.MinObservedRatio || ratio > entry.MaxObservedRatio) {
 			msg := fmt.Sprintf("%s observed_ratio %.5f not in [%.5f, %.5f]", entry.Name, ratio, entry.MinObservedRatio, entry.MaxObservedRatio)
 			emitViolation(strict, msg)
 			violations++
 		}
-		if (storageOnly && math.IsNaN(fallbackMax)) || (!math.IsNaN(fallbackMax) && fallbackMax > entry.MaxDictFallback) {
+		if !math.IsNaN(fallbackMax) && fallbackMax > entry.MaxDictFallback {
 			msg := fmt.Sprintf("%s dict_fallback max %.0f > max %.0f", entry.Name, fallbackMax, entry.MaxDictFallback)
 			emitViolation(strict, msg)
 			violations++
