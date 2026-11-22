@@ -759,8 +759,8 @@ func TestApplyProfile_FastAndExplicitUnsafeCeiling(t *testing.T) {
 			if (opts.ValueLog.ReadIntegrity == treedb.IntegritySkipChecksums) != tc.unsafe {
 				t.Fatalf("integrity=%v benchmark=%t", opts.ValueLog.ReadIntegrity, tc.unsafe)
 			}
-			if !tc.unsafe && opts.ValueLog.CurrentWritableMmap {
-				t.Fatal("production fast enabled current writable mmap")
+			if wantMmap := tc.want == treedb.ProfileNoWALFast; opts.ValueLog.CurrentWritableMmap != wantMmap {
+				t.Fatalf("current writable mmap=%t, want %t", opts.ValueLog.CurrentWritableMmap, wantMmap)
 			}
 			report := (treeDBOptionsReport{opts: opts}).formatText("")
 			for _, field := range []string{fmt.Sprintf("profile_resolved=%s", tc.want), fmt.Sprintf("benchmark_unsafe=%t", tc.unsafe), fmt.Sprintf("vlog_current_writable_mmap=%t", opts.ValueLog.CurrentWritableMmap)} {

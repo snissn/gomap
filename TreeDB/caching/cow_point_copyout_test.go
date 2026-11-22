@@ -77,7 +77,7 @@ func cowPointCopyoutFixture(t *testing.T) (*DB, []byte, page.ValuePtr, valuelog.
 	f, err := w.file(entry.ValuePtr)
 	var shape valuelog.COWRecordShape
 	if err == nil {
-		shape, err = valuelog.InspectCOWRecord(f, entry.ValuePtr, db.cow.readLimits())
+		shape, err = f.InspectCOWRecord(entry.ValuePtr, db.cow.readLimits())
 	}
 	s.cowReadMu.Unlock()
 	if err != nil {

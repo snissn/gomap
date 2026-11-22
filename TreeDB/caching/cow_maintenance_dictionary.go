@@ -118,7 +118,7 @@ func (s *cowMaintenanceLeafScope) ReadNativeMaintenanceDictionaryLeaf(snapshot *
 	}
 	// The enclosing helper already inspected this exact Snapshot's record. Pin
 	// lookup is non-I/O; ReadCOWLeafPage revalidates source, shape, frame and CRC.
-	f, _, err := snapshot.PinnedValueLogFile(ptr.ValuePtr().FileID)
+	f, _, err := snapshot.PinnedValueLogSegment(ptr.ValuePtr().FileID)
 	if err != nil {
 		return nil, err
 	}
@@ -155,7 +155,7 @@ func (s *cowMaintenanceLeafScope) ReadNativeMaintenanceDictionaryLeaf(snapshot *
 		return nil, err
 	}
 	decode = decoder.Decode
-	out, err := valuelog.ReadCOWLeafPage(f, ptr.ValuePtr(), shape, true, input, raw, dst, decode)
+	out, err := f.ReadCOWLeafPage(ptr.ValuePtr(), shape, input, raw, dst, decode)
 	return out, err
 }
 

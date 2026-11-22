@@ -2941,6 +2941,9 @@ func openWithLock(opts Options, lock *lockfile.Lock, nativeSemanticOwner bool) (
 	}
 	gen.zipper.SetOuterLeavesInValueLog(opts.IndexOuterLeavesInValueLog)
 	db.leafPageReadCache = newLeafPageReadCacheWithWriteAdmission(configuredLeafPageReadCacheEntries(opts.LeafPageReadCacheEntries), opts.LeafPageReadCacheWriteAdmission)
+	if opts.ResolvedProfile == ProfileNoWALFast && opts.ValueLog.CurrentWritableMmap && db.leafPageReadCache != nil {
+		vm.SetSkipCurrentMappedLeafFrameCache(true)
+	}
 	gen.zipper.SetLeafPageReader(db.leafPageReader(vm))
 	gen.zipper.SetAdaptiveLeafEncoding(opts.IndexAdaptiveLeafEncoding)
 	gen.zipper.SetMaintenanceOpsPerCoalesce(opts.MaintenanceOpsPerCoalesce)

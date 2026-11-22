@@ -36,6 +36,67 @@ func appendCompressedFrameForCacheTestsTB(tb testing.TB, writer *Writer, frame i
 	return ptrs, want
 }
 
+func TestCurrentLeafMmapSkipsDecodedFrameAdmission(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap not supported on windows")
+	}
+	dir := t.TempDir()
+	m, err := NewManager(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Close() })
+	m.SetCurrentWritableMmapEnabled(true)
+	m.SetSkipCurrentMappedLeafFrameCache(true)
+	// Both files use the reserved lane. The leaf namespace determines which
+	// segment is eligible for the page cache.
+	paths := []string{
+		compactLeafPayloadTestPath(t, dir, 1),
+		filepath.Join(dir, fmt.Sprintf("value-l%d-000002.log", ReservedLeafLogLaneID)),
+	}
+	for i, path := range paths {
+		fileID, err := EncodeFileID(ReservedLeafLogLaneID, uint32(i+1))
+		if err != nil {
+			t.Fatal(err)
+		}
+		w, err := NewWriter(path, fileID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		w.SetBlockCompression(BlockCodecSnappy, true)
+		ptrs, want := appendCompressedFrameForCacheTestsTB(t, w, 1, 2)
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := m.RegisterSegment(path, fileID); err != nil {
+			t.Fatal(err)
+		}
+		if err := m.PromoteCurrentWritable(fileID); err != nil {
+			t.Fatal(err)
+		}
+		f := m.files[fileID]
+		read := func(wantEntries int) {
+			t.Helper()
+			f.remapToFileSize()
+			hits := f.mmapReadHits.Load()
+			for i, ptr := range ptrs {
+				got, err := m.ReadAppend(ptr, nil)
+				if err != nil || !bytes.Equal(got, want[i]) {
+					t.Fatalf("file %d record %d read failed: %v", fileID, i, err)
+				}
+			}
+			if stats := f.groupedFrameCacheDetailedStats(); stats.Entries != wantEntries || f.mmapReadHits.Load()-hits != uint64(len(ptrs)) {
+				t.Fatalf("file %d current=%v: entries=%d (want %d), mmap hits=%d", fileID, f.IsCurrentWritable(), stats.Entries, wantEntries, f.mmapReadHits.Load()-hits)
+			}
+		}
+		if i == 0 {
+			read(0)
+			m.DemoteCurrentWritable(fileID)
+		}
+		read(1)
+	}
+}
+
 func benchmarkRandomReadGroupedFrameReadUnsafeTo(b *testing.B) {
 	if runtime.GOOS == "windows" {
 		b.Skip("mmap not supported on windows")

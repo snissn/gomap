@@ -241,11 +241,11 @@ func (s *Store) acquireDictionaryReadDefinition(id uint64, limits valuelog.COWRe
 		}
 		d.Bytes = append([]byte(nil), entry.Value...)
 	} else {
-		file, identity, err := d.snapshot.PinnedValueLogFile(entry.ValuePtr.FileID)
+		file, identity, err := d.snapshot.PinnedValueLogSegment(entry.ValuePtr.FileID)
 		if err != nil {
 			return failDictionaryReadDefinition(d, err, deferred)
 		}
-		shape, err := valuelog.InspectCOWRecord(file, entry.ValuePtr, limits)
+		shape, err := file.InspectCOWRecord(entry.ValuePtr, limits)
 		if err != nil {
 			return failDictionaryReadDefinition(d, err, deferred)
 		}
@@ -264,7 +264,7 @@ func (s *Store) acquireDictionaryReadDefinition(id uint64, limits valuelog.COWRe
 		}
 		payload := make([]byte, shape.RecordBytes)
 		output := make([]byte, shape.ValueBytes)
-		d.Bytes, err = valuelog.ReadCOWRecord(file, entry.ValuePtr, shape, true, payload, nil, output, nil)
+		d.Bytes, err = file.ReadCOWRecord(entry.ValuePtr, shape, payload, nil, output, nil)
 		if err != nil {
 			return failDictionaryReadDefinition(d, err, deferred)
 		}

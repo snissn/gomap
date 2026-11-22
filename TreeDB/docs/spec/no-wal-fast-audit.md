@@ -67,8 +67,10 @@ later during the drain.
 frontiers and namespace dependencies before index sync and alternate-meta
 publication. A failure before meta publication is retryable; an ambiguous
 post-meta failure poisons publication until reopen. Production profile resolution
-in [profiles.go](../../profiles.go) keeps CRC verification enabled and
-`CurrentWritableMmap=false`.
+in [profiles.go](../../profiles.go) keeps CRC verification enabled.
+`no_wal_fast` uses read-only mappings for eligible ranges in current value and
+leaf-log segments. The mapping borrows only data within the verified file
+extent. The command-WAL profiles keep current-file mapping disabled by default.
 
 [Recovery](../../db/durable_root_recovery.go) validates each meta slot against
 its complete manifest and namespace, then selects a complete valid generation.

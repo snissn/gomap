@@ -147,7 +147,7 @@ func TestCOWOwnedDictionarySuccessorAlternatingValues(t *testing.T) {
 		f, err := w.file(entry.ValuePtr)
 		var shape valuelog.COWRecordShape
 		if err == nil {
-			shape, err = valuelog.InspectCOWRecord(f, entry.ValuePtr, w.limits)
+			shape, err = f.InspectCOWRecord(entry.ValuePtr, w.limits)
 		}
 		a.cowReadMu.Unlock()
 		if err != nil || !shape.Compressed || shape.DictID != ids[d] {

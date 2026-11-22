@@ -169,7 +169,7 @@ func TestCOWReadBatchCapturedDictionaryFreshRefund(t *testing.T) {
 		f, fe := w.file(ptr.ValuePtr())
 		e = fe
 		if e == nil {
-			shape, se := valuelog.InspectCOWLeafRecord(f, ptr.ValuePtr(), w.limits)
+			shape, se := f.InspectCOWLeafRecord(ptr.ValuePtr(), w.limits)
 			e = se
 			if e == nil {
 				_, e = w.readInspected(f, ptr.ValuePtr(), shape, true, pageScratch[:], nil)

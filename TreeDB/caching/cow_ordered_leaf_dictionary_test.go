@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"sync/atomic"
 	"testing"
 	"unsafe"
@@ -436,11 +435,11 @@ func TestCOWSuccessorFreshDictionaryLaneRefundsBeforeLocalTraversal(t *testing.T
 				// This fixture specifically exercises a pre-existing local owner,
 				// including legacy captured-only readers. Warm the maintained local
 				// kernel explicitly; public capable reads now share generic scratch.
-				var f *os.File
+				var f *valuelog.File
 				f, err = w.file(pointer.ValuePtr())
 				if err == nil {
 					var shape valuelog.COWRecordShape
-					shape, err = valuelog.InspectCOWLeafRecord(f, pointer.ValuePtr(), w.limits)
+					shape, err = f.InspectCOWLeafRecord(pointer.ValuePtr(), w.limits)
 					if err == nil {
 						_, err = w.readInspected(f, pointer.ValuePtr(), shape, true, pageScratch[:], nil)
 					}

@@ -472,7 +472,7 @@ func TestCOWSuccessorFreshQueuedPointerRefundsBeforeLocalGrowth(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			shape, err := valuelog.InspectCOWRecord(file, ptr, db.cow.readLimits())
+			shape, err := file.InspectCOWRecord(ptr, db.cow.readLimits())
 			if err != nil || shape.Compressed || shape.PayloadBytes() <= uint64(cap(local.input)) || shape.ValueBytes <= uint64(cap(local.output)) {
 				t.Fatalf("queued pointer must require real uncompressed growth: shape=%+v err=%v", shape, err)
 			}
