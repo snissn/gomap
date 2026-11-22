@@ -45,11 +45,14 @@ func TestPublicRawCOWTxnRechecksQueuedPairAfterCheckpoint(t *testing.T) {
 			if crash && (crashRoot == "" || tc.name != "live-size-worker") {
 				t.Fatal("queued crash child requires its own directory and the live size worker")
 			}
-			db, opts, blocked := cowPublicContractOpen(t, ProfileCommandWALDurable, func(o *Options) {
+			var dir string
+			if crash {
+				dir = filepath.Join(crashRoot, "db")
+			} else {
+				dir = t.TempDir()
+			}
+			db, opts, blocked := cowPublicContractOpenAt(t, ProfileCommandWALDurable, dir, func(o *Options) {
 				configureRawTxnQueuedPair(o, tc.maxWAL)
-				if crash {
-					o.Dir = filepath.Join(crashRoot, "db")
-				}
 			})
 			prefix, opening, err := db.backend.PrivateCOWAcceptedPrefix(db.txnOwner)
 			if err != nil {
@@ -61,15 +64,36 @@ func TestPublicRawCOWTxnRechecksQueuedPairAfterCheckpoint(t *testing.T) {
 				t.Fatalf("opening accepted-prefix census: capacity=%d pending=%d err=%v", capacity, prefix.AcceptedPendingCount(), err)
 			}
 
+			var writers sync.WaitGroup
+			var releaseCheckpoint func()
+			defer func() {
+				// Failure can occur after any subset of the writers started.
+				// Unpark DATA, then join all started callers before fixture cleanup.
+				if releaseCheckpoint != nil {
+					releaseCheckpoint()
+				}
+				rawTxnGroupPressureJoin(t, &writers, blocked)
+			}()
+			commit := func(label string, tx *ConditionalTxn) {
+				t.Helper()
+				select {
+				case err := <-rawTxnGroupPressureStart(&writers, tx):
+					if err != nil {
+						t.Fatalf("%s: %v", label, err)
+					}
+				case <-time.After(10 * time.Second):
+					blocked.Store(true)
+					t.Fatalf("%s did not complete: possible lock reentry deadlock", label)
+				}
+			}
+
 			// The genuine root-neutral marker separates installed entries and
 			// prevents the following raw singleton from coalescing with the
 			// grouped raw prefix. After reclaim we need at least four free
 			// slots, enough for both contenders before either can publish.
 			rawTxnGroupPressureSeed(t, db, blocked)
-			extra := rawTxnGroupPressureStage(t, db, "seed-extra/", "seed-extra")
-			if err := cowPublicContractComplete(t, blocked, "seed additional installed raw transaction", extra.Commit); err != nil {
-				t.Fatal(err)
-			}
+			extra := rawTxnGroupPressureStageGuarded(t, db, "seed-extra/", "seed-extra", blocked)
+			commit("seed additional installed raw transaction", extra)
 			rawTxnGroupPressureRequireIdle(t, db)
 			full := prefix.LogicalFrontiers()
 			installed := prefix.AcceptedPendingCount()
@@ -117,8 +141,8 @@ func TestPublicRawCOWTxnRechecksQueuedPairAfterCheckpoint(t *testing.T) {
 					}
 				}
 			})
-			first := rawTxnGroupPressureStage(t, db, "first/", "first")
-			follower := rawTxnGroupPressureStage(t, db, "follower/", "follower")
+			first := rawTxnGroupPressureStageGuarded(t, db, "first/", "first", blocked)
+			follower := rawTxnGroupPressureStageGuarded(t, db, "follower/", "follower", blocked)
 			next := db.backend.CommandWALNextLSN()
 			before := db.Stats()
 
@@ -132,8 +156,7 @@ func TestPublicRawCOWTxnRechecksQueuedPairAfterCheckpoint(t *testing.T) {
 			dataReached := make(chan struct{})
 			var dataOnce atomic.Bool
 			unblock := make(chan struct{})
-			releaseCheckpoint := sync.OnceFunc(func() { close(unblock) })
-			defer releaseCheckpoint()
+			releaseCheckpoint = sync.OnceFunc(func() { close(unblock) })
 			restore := sync.OnceFunc(durabilitycut.Install(func(e durabilitycut.Event) error {
 				switch {
 				case e.Point == durabilitycut.BeforeCOWAcceptedPairPressureWait && e.Resource == durabilitycut.ResourceAuxiliary:
@@ -149,7 +172,6 @@ func TestPublicRawCOWTxnRechecksQueuedPairAfterCheckpoint(t *testing.T) {
 				return nil
 			}))
 			t.Cleanup(restore)
-			firstDone, followerDone := make(chan error, 1), make(chan error, 1)
 			awaitPressure := func(label string, done <-chan error) {
 				t.Helper()
 				select {
@@ -165,7 +187,7 @@ func TestPublicRawCOWTxnRechecksQueuedPairAfterCheckpoint(t *testing.T) {
 				}
 			}
 
-			go func() { firstDone <- first.Commit() }()
+			firstDone := rawTxnGroupPressureStart(&writers, first)
 			awaitPressure("first public commit", firstDone)
 			select {
 			case <-dataReached:
@@ -175,7 +197,7 @@ func TestPublicRawCOWTxnRechecksQueuedPairAfterCheckpoint(t *testing.T) {
 				blocked.Store(true)
 				t.Fatal("first caller did not reach real original prefix DATA sync")
 			}
-			go func() { followerDone <- follower.Commit() }()
+			followerDone := rawTxnGroupPressureStart(&writers, follower)
 			// Not merely a goroutine start: this observer runs only after
 			// the follower itself actually got an atomic no-pair result.
 			awaitPressure("queued follower", followerDone)
@@ -196,10 +218,8 @@ func TestPublicRawCOWTxnRechecksQueuedPairAfterCheckpoint(t *testing.T) {
 					}
 				}
 				heldTickets = heldTickets[:n]
-				suffix := rawTxnGroupPressureStage(t, db, "late/", "late")
-				if err := cowPublicContractComplete(t, blocked, "durable late suffix", suffix.Commit); err != nil {
-					t.Fatal(err)
-				}
+				suffix := rawTxnGroupPressureStageGuarded(t, db, "late/", "late", blocked)
+				commit("durable late suffix", suffix)
 				remaining, err := rawTxnGroupPressureFreeSlots(prefix, bound)
 				if err != nil || remaining+installed < 4 {
 					t.Fatalf("late suffix consumed a queued contender's needed slot: remaining=%d old installed=%d: %v", remaining, installed, err)
@@ -223,7 +243,7 @@ func TestPublicRawCOWTxnRechecksQueuedPairAfterCheckpoint(t *testing.T) {
 				stems = append(stems, "late")
 			}
 			releaseCheckpoint()
-			for i, done := range []chan error{firstDone, followerDone} {
+			for i, done := range []<-chan error{firstDone, followerDone} {
 				select {
 				case err := <-done:
 					if err != nil {
