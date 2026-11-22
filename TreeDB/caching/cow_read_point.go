@@ -130,19 +130,7 @@ func (b *cowBackendBasis) appendInline(db *DB, key, dst []byte, freshOwner *cowF
 	if err != nil {
 		return dst, node.LeafEntry{}, true, err
 	}
-	point, err := w.pointScratch()
-	if err != nil {
-		return dst, node.LeafEntry{}, true, err
-	}
-	var independent *cowCacheDictionaryRead
-	if provider, ok := db.dictStore.(cowDictionaryReadProvider); ok {
-		definition := cowCacheDictionaryRead{provider: provider, cache: db.cow}
-		independent = &definition
-	}
-	readLeaf := func(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
-		return b.readPhysicalLeafWithDictionary(db.cow, w, ptr, dst, false, false, independent)
-	}
-	entry, err := b.snapshot.GetEntryExactWithFixedScratch(key, point.key[:], point.leaf[:], readLeaf)
+	entry, err := b.readPhysicalPoint(db.cow, w, key, false, db.cowPhysicalDictionary(db.cow))
 	_, dictionaryCapacity := err.(*cowPhysicalDictionaryCapacity)
 	if err == errCOWPhysicalDictionary || dictionaryCapacity {
 		// Leave this lock before the original exact-cut Snapshot handoff can

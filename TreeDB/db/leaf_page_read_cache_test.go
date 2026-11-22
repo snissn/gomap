@@ -901,6 +901,49 @@ func TestLeafPageReadCacheChecksumVerifiedStateRequiresVerifiedRecord(t *testing
 	}
 }
 
+func TestLeafPageReadCacheCopiedChecksumProof(t *testing.T) {
+	cache := newLeafPageReadCache(1)
+	ptr := page.LeafLogPtr{FileID: 1, Offset: 8}
+	original := bytes.Repeat([]byte{0x11}, page.PageSize)
+	updated := bytes.Repeat([]byte{0x22}, page.PageSize)
+	dst := make([]byte, 0, page.PageSize)
+
+	checkCopy := func(want []byte, verified bool) {
+		t.Helper()
+		got, usedDst, state, hit := cache.getToWithRecordPolicy(ptr, dst, true)
+		if !hit || !usedDst || !state.RecordChecksumVerified || !bytes.Equal(got, want) || state.PageChecksumVerified != verified {
+			t.Fatalf("copied cache hit=%t scratch=%t state=%+v, want matching bytes and page proof=%t", hit, usedDst, state, verified)
+		}
+	}
+
+	cache.storeWithRecordChecksumState(ptr, original, true)
+	if !cache.markPageChecksumVerified(ptr) {
+		t.Fatal("expected the ordinary by-key mark to succeed")
+	}
+	checkCopy(original, false)
+	cache.markCopiedPageChecksumVerified(ptr, original)
+	checkCopy(original, true)
+
+	cache.storeWithRecordChecksumState(ptr, updated, true)
+	cache.markCopiedPageChecksumVerified(ptr, original)
+	checkCopy(updated, false)
+	cache.disabled.Store(true)
+	cache.markCopiedPageChecksumVerified(ptr, updated)
+	cache.disabled.Store(false)
+	checkCopy(updated, false)
+	cache.markCopiedPageChecksumVerified(ptr, updated)
+	checkCopy(updated, true)
+
+	cache.store(ptr, updated)
+	cache.markCopiedPageChecksumVerified(ptr, updated)
+	if _, _, state, hit := cache.getToWithState(ptr, dst); !hit || state.PageChecksumVerified || state.RecordChecksumVerified {
+		t.Fatalf("unchecked replacement hit=%t state=%+v, want an unchecked hit", hit, state)
+	}
+	if _, _, _, hit := cache.getToWithRecordPolicy(ptr, dst, true); hit {
+		t.Fatal("unchecked replacement accepted by bounded read")
+	}
+}
+
 func TestLeafPageReadCacheVerifiedStateEvictedAndRewriteFallback(t *testing.T) {
 	cache := newLeafPageReadCache(1)
 	oldPtr := page.LeafLogPtr{FileID: 7, Offset: 128, RecordLengthHint: 4096}

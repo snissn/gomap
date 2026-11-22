@@ -375,10 +375,19 @@ Both paths validate the header, frame and selected value prefix under the
 caller limits. Incomplete required metadata returns EOF. A short payload after
 complete metadata is detected by the full read on a cache miss.
 
-The bounded snapshot owner holds one read pin across live inspection, caller
-policy, verified cache lookup and full page materialization. The registered
-handle and stable identity come from the captured value-log Set. Reusing that
-observation avoids another snapshot read pin and segment lookup on cache hits.
+A bounded COW point read holds one backend snapshot read pin across tree
+traversal, live inspection, caller policy, verified cache lookup and full page
+materialization. Standalone leaf readers acquire their own pin for the scoped
+read. The registered handle and stable identity come from the captured
+value-log Set.
+An ordinary bounded COW point lookup can reuse the page checksum of a cached
+copy after live record inspection and caller admission. A successful page CRC
+and leaf-type check credits the cache entry only if it still contains the exact
+verified bytes and holds record checksum verification. Copying the page and
+reading its checksum state use the same cache slot read lock. Cache replacement
+clears the credit. Verify-on-read and the dictionary and explicit PRIMARY paths
+retain their existing page validation policies.
+
 On misses, the registered file checks the full admitted record range against
 the pointer hint, when present, and against the mapping length and verified
 file size before reading mapped bytes. Remap and demotion retain earlier mappings until the last file pin is

@@ -79,7 +79,7 @@ func (t *Tree) loadReadRefInto(n *node.Node, ref page.ChildRef, verify bool, key
 		if err != nil {
 			return err
 		}
-		if len(data) != page.PageSize || cap(data) != page.PageSize || &data[0] != &leafScratch[:page.PageSize][0] {
+		if !aliasesFixedLeafLogScratch(data, leafScratch) {
 			return ErrOwnedIteratorLeafReader
 		}
 		if err = validateLeafLogNodeInto(n, data, ref.Log, t.shouldVerifyLeafRefChecksum(), false); err != nil {
@@ -92,6 +92,10 @@ func (t *Tree) loadReadRefInto(n *node.Node, ref page.ChildRef, verify bool, key
 		n.SetFixedKeyScratch(keyScratch)
 	}
 	return nil
+}
+
+func aliasesFixedLeafLogScratch(data, scratch []byte) bool {
+	return len(data) == page.PageSize && cap(data) == page.PageSize && &data[0] == &scratch[:page.PageSize][0]
 }
 
 // SeekGEWithFixedScratch returns borrowed metadata from this exact captured tree.

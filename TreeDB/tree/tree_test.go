@@ -255,6 +255,74 @@ func TestValidateLeafLogStateRequiresRecordChecksumForChecksumSkip(t *testing.T)
 	}
 }
 
+func TestFixedPointLeafChecksumProof(t *testing.T) {
+	ptr := page.LeafLogPtr{FileID: 1, Offset: 8, RecordLengthHint: page.PageSize}
+	reader := &statefulLeafLogPageReader{
+		mapValueReader: newMapValueReader(),
+		state:          LeafLogPageReadState{RecordChecksumVerified: true, CacheEntryPresent: true},
+	}
+	leafData := make([]byte, page.PageSize)
+	leaf := node.NewNode(leafData)
+	leaf.SetType(page.PageTypeLeaf)
+	leaf.SetPageID(1)
+	key := []byte("k")
+	if err := leaf.AddLeafEntry(key, []byte("value"), node.FlagInline, page.ValuePtr{}); err != nil {
+		t.Fatal(err)
+	}
+	leaf.UpdateChecksum()
+	reader.values[ptr.ValuePtr()] = leafData
+	tr, _ := newTreeWithLeafLogRoot(t, reader, nil, ptr)
+
+	keyScratch, leafScratch := make([]byte, 0, page.PageSize), make([]byte, 0, page.PageSize)
+	read := func(ref page.LeafLogPtr, dst []byte) ([]byte, LeafLogPageReadState, error) {
+		data, _, state, err := reader.ReadLeafLogPageUnsafeToWithState(ref, dst)
+		return data, state, err
+	}
+	mark := func(ref page.LeafLogPtr, checked []byte) {
+		if ref != ptr || !bytes.Equal(checked, leafData) {
+			t.Fatal("marker received a different page")
+		}
+		reader.MarkLeafLogPageChecksumVerified(ref)
+	}
+	before := OuterLeafReadStatsSnapshot()
+	for range 2 {
+		entry, err := tr.GetEntryWithFixedScratchLeafProof(key, keyScratch, leafScratch, read, mark)
+		if err != nil || string(entry.Value) != "value" {
+			t.Fatalf("entry=%+v err=%v, want value", entry, err)
+		}
+	}
+	after := OuterLeafReadStatsSnapshot()
+	if reader.marks != 1 || after.ChecksumVerifiedTotal-before.ChecksumVerifiedTotal != 1 ||
+		after.ChecksumSkippedTotal-before.ChecksumSkippedTotal != 1 {
+		t.Fatalf("marks=%d before=%+v after=%+v, want one mark, verification and skip", reader.marks, before, after)
+	}
+
+	leafData[node.NodeHeaderSize] ^= 0x80
+	tr.pager.SetVerifyOnRead(true)
+	_, err := tr.GetEntryWithFixedScratchLeafProof(key, keyScratch, leafScratch, read, mark)
+	if err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
+		t.Fatalf("strict read error=%v, want checksum mismatch", err)
+	}
+	tr.pager.SetVerifyOnRead(false)
+	reader.state.RecordChecksumVerified = false
+	_, err = tr.GetEntryWithFixedScratchLeafProof(key, keyScratch, leafScratch, read, mark)
+	if err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
+		t.Fatalf("unchecked-record read error=%v, want checksum mismatch", err)
+	}
+	reader.state.RecordChecksumVerified = true
+	reader.state.PageChecksumVerified = false
+	_, err = tr.GetEntryWithFixedScratchLeafProof(key, keyScratch, leafScratch, read, mark)
+	if err == nil || !strings.Contains(err.Error(), "checksum mismatch") || reader.marks != 1 {
+		t.Fatalf("unproved page read error=%v marks=%d, want checksum mismatch and no new mark", err, reader.marks)
+	}
+	leaf.SetType(page.PageTypeInternal)
+	leaf.UpdateChecksum()
+	_, err = tr.GetEntryWithFixedScratchLeafProof(key, keyScratch, leafScratch, read, mark)
+	if err == nil || !strings.Contains(err.Error(), "invalid page type") || reader.marks != 1 {
+		t.Fatalf("invalid-page read error=%v marks=%d, want invalid page type and no new mark", err, reader.marks)
+	}
+}
+
 func TestTreeGetManyAppend_RejectsUndersizedOut(t *testing.T) {
 	var tr *Tree
 	arena := []byte("keep")

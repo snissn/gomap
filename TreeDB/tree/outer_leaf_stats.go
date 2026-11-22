@@ -15,7 +15,6 @@ var (
 	outerLeafLoadsTotal            atomic.Uint64
 	outerLeafPointLoadsTotal       atomic.Uint64
 	outerLeafIteratorLoadsTotal    atomic.Uint64
-	outerLeafBytesTotal            atomic.Uint64
 	outerLeafSamplesTotal          atomic.Uint64
 	outerLeafRecent64HitsTotal     atomic.Uint64
 	outerLeafRecent256HitsTotal    atomic.Uint64
@@ -45,11 +44,12 @@ type OuterLeafReadStats struct {
 }
 
 func OuterLeafReadStatsSnapshot() OuterLeafReadStats {
+	loads := outerLeafLoadsTotal.Load()
 	return OuterLeafReadStats{
-		LoadsTotal:            outerLeafLoadsTotal.Load(),
+		LoadsTotal:            loads,
 		PointLoadsTotal:       outerLeafPointLoadsTotal.Load(),
 		IteratorLoadsTotal:    outerLeafIteratorLoadsTotal.Load(),
-		BytesTotal:            outerLeafBytesTotal.Load(),
+		BytesTotal:            loads * uint64(page.PageSize),
 		SampleMod:             outerLeafReadSampleMod,
 		SamplesTotal:          outerLeafSamplesTotal.Load(),
 		Recent64HitsTotal:     outerLeafRecent64HitsTotal.Load(),
@@ -137,17 +137,14 @@ func noteOuterLeafChecksumSkipped() {
 	outerLeafChecksumSkippedTotal.Add(1)
 }
 
-func noteOuterLeafLoad(ptr page.ValuePtr, bytes int, iterator bool) {
+// Every logged leaf load records one validated page of page.PageSize bytes.
+func noteOuterLeafLoad(ptr page.ValuePtr, iterator bool) {
 	seq := outerLeafLoadsTotal.Add(1)
 	if iterator {
 		outerLeafIteratorLoadsTotal.Add(1)
 	} else {
 		outerLeafPointLoadsTotal.Add(1)
 	}
-	if bytes > 0 {
-		outerLeafBytesTotal.Add(uint64(bytes))
-	}
-
 	if outerLeafReadSampleMod == 0 {
 		return
 	}
