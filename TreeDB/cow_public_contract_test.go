@@ -86,6 +86,10 @@ func TestCOWPublicGetManyViewResultAllocations(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			opts := OptionsFor(ProfileNoWALFast, t.TempDir())
 			opts.MemtableMode, opts.MemtableShards = mode, 2
+			// Measure callback result ownership with inline memtable hits.
+			// Persisted leaf reads have platform-dependent allocation costs.
+			opts.ValueLog.PointerThreshold, opts.ValueLog.ForcePointers = 256, false
+			opts.FlushThreshold = 1 << 30
 			opts.BackgroundCheckpointInterval = -1
 			opts.BackgroundCheckpointIdleDuration = -1
 			opts.BackgroundIndexVacuumInterval = -1
@@ -108,9 +112,6 @@ func TestCOWPublicGetManyViewResultAllocations(t *testing.T) {
 				if err := database.Set(key, values[i]); err != nil {
 					t.Fatal(err)
 				}
-			}
-			if err := database.Checkpoint(); err != nil {
-				t.Fatal(err)
 			}
 			batch := make([][]byte, 64)
 			for i := range batch {
