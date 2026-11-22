@@ -125,9 +125,10 @@ func (r *PinnedCOWLeafRead) ReadPage(input, raw, dst []byte, decode valuelog.COW
 }
 
 // CopyVerifiedPage requires the callback to finish all current caller-policy
-// checks first. Dictionary leaves require a dominated decode credit.
-func (r *PinnedCOWLeafRead) CopyVerifiedPage(dst []byte) ([]byte, bool, error) {
-	return copyVerifiedCachedLeafPage(r.cache, r.ptr, dst, r.shape.DictID != 0, r.limits)
+// checks first. Dictionary leaves require a dominated decode credit and do
+// not carry a reusable page proof.
+func (r *PinnedCOWLeafRead) CopyVerifiedPage(dst []byte) ([]byte, tree.LeafLogPageReadState, bool, error) {
+	return copyVerifiedCachedLeafPageWithState(r.cache, r.ptr, dst, r.shape.DictID != 0, r.limits)
 }
 
 // AdmitVerifiedPage is valid only after ReadPage completed successfully on
@@ -186,18 +187,23 @@ func (s *Snapshot) CopyVerifiedCachedLeafPageWithCOWPolicy(ptr page.LeafLogPtr, 
 }
 
 func copyVerifiedCachedLeafPage(cache *leafPageReadCache, ptr page.LeafLogPtr, dst []byte, dictionary bool, limits valuelog.COWReadLimits) ([]byte, bool, error) {
+	data, _, hit, err := copyVerifiedCachedLeafPageWithState(cache, ptr, dst, dictionary, limits)
+	return data, hit, err
+}
+
+func copyVerifiedCachedLeafPageWithState(cache *leafPageReadCache, ptr page.LeafLogPtr, dst []byte, dictionary bool, limits valuelog.COWReadLimits) ([]byte, tree.LeafLogPageReadState, bool, error) {
 	if dictionary && !cowReadPolicyAllows(limits, limits) {
-		return nil, false, valuelog.ErrCOWReadUnsupported
+		return nil, tree.LeafLogPageReadState{}, false, valuelog.ErrCOWReadUnsupported
 	}
 	if cap(dst) < page.PageSize {
-		return nil, false, nil
+		return nil, tree.LeafLogPageReadState{}, false, nil
 	}
 	if dictionary {
 		data, _, _, hit := cache.getToWithCOWPolicy(ptr, dst[:0:page.PageSize], true, limits)
-		return data, hit, nil
+		return data, tree.LeafLogPageReadState{}, hit, nil
 	}
-	data, _, _, hit := cache.getToWithRecordPolicy(ptr, dst[:0:page.PageSize], true)
-	return data, hit, nil
+	data, _, state, hit := cache.getToWithRecordPolicy(ptr, dst[:0:page.PageSize], true)
+	return data, tree.LeafLogPageReadState(state), hit, nil
 }
 
 // MarkCachedLeafRecordVerified follows a successful full CRC-verified decode
@@ -408,17 +414,24 @@ func (s *Snapshot) GetEntryExactWithFixedScratch(key, keyScratch, leafScratch []
 // inspects any logged leaf under the same snapshot read pin as the traversal.
 // The record is scoped to readLeaf. Returned slices have the same lifetime as
 // GetEntryExactWithFixedScratch.
-func (s *Snapshot) GetEntryExactWithPinnedCOWLeaf(key, keyScratch, leafScratch []byte, limits valuelog.COWReadLimits, readLeaf func(page.LeafLogPtr, []byte, PinnedCOWLeafRead) ([]byte, error)) (node.LeafEntry, error) {
+func (s *Snapshot) GetEntryExactWithPinnedCOWLeaf(key, keyScratch, leafScratch []byte, limits valuelog.COWReadLimits, readLeaf func(page.LeafLogPtr, []byte, PinnedCOWLeafRead) ([]byte, tree.LeafLogPageReadState, error)) (node.LeafEntry, error) {
 	if readLeaf == nil {
 		return s.GetEntryExactWithFixedScratch(key, keyScratch, leafScratch, nil)
 	}
-	return s.GetEntryExactWithFixedScratch(key, keyScratch, leafScratch, func(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
+	if s == nil {
+		return node.LeafEntry{}, ErrClosed
+	}
+	if err := s.beginRead(); err != nil {
+		return node.LeafEntry{}, err
+	}
+	defer s.endRead()
+	return s.tree.GetEntryWithFixedScratchLeafProof(key, keyScratch, leafScratch, func(ptr page.LeafLogPtr, dst []byte) ([]byte, tree.LeafLogPageReadState, error) {
 		record, err := s.inspectPinnedCOWLeafRecord(ptr, limits)
 		if err != nil {
-			return nil, err
+			return nil, tree.LeafLogPageReadState{}, err
 		}
 		return readLeaf(ptr, dst, record)
-	})
+	}, s.reader.leafPageCache.markCopiedPageChecksumVerified)
 }
 
 // OwnedUserRootEmpty checks the exact tree pinned by this snapshot. It does

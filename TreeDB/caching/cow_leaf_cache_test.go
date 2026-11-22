@@ -12,6 +12,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/tree"
 )
 
 func cowLeafCacheFixture(t *testing.T, entries int, compressed bool) (*DB, *backenddb.DB, []byte) {
@@ -65,6 +66,55 @@ func cowLeafCacheCounter(t testing.TB, backend *backenddb.DB, name string) uint6
 		t.Fatal(err)
 	}
 	return value
+}
+
+func TestCOWCopiedLeafChecksumProof(t *testing.T) {
+	for _, mode := range []string{"cow_ordered", "cow_btree"} {
+		t.Run(mode, func(t *testing.T) {
+			db, backend, want := cowLeafCacheModeFixture(t, 128, false, mode)
+			key := []byte("a000")
+			if got, err := db.GetAppend(key, nil); err != nil || !bytes.Equal(got, want) {
+				t.Fatalf("initial record verification: got %q, err %v", got, err)
+			}
+			initialMarks := cowLeafCacheCounter(t, backend, "page_checksum_verified_marks")
+			initialHits := cowLeafCacheCounter(t, backend, "hits")
+			if got, err := db.GetAppend(key, nil); err != nil || !bytes.Equal(got, want) {
+				t.Fatalf("initial copied page: got %q, err %v", got, err)
+			}
+			if cowLeafCacheCounter(t, backend, "hits") <= initialHits {
+				t.Fatal("expected a decoded cache hit after record verification")
+			}
+			if cowLeafCacheCounter(t, backend, "page_checksum_verified_marks") <= initialMarks {
+				t.Fatal("first verified copy did not mark the exact page checksum")
+			}
+			snap, err := db.acquireCOWSnapshotWithError()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer snap.Close()
+			for _, reader := range []struct {
+				name string
+				read func(key, dst []byte) ([]byte, error)
+			}{{"DB", db.GetAppend}, {"retained snapshot", snap.GetAppend}} {
+				before := tree.OuterLeafReadStatsSnapshot()
+				hits := cowLeafCacheCounter(t, backend, "page_checksum_verified_hits")
+				dst := make([]byte, 1, 1+len(want))
+				dst[0] = '!'
+				got, err := reader.read(key, dst)
+				if err != nil || len(got) != 1+len(want) || got[0] != '!' || !bytes.Equal(got[1:], want) || &got[0] != &dst[0] {
+					t.Fatalf("%s append: got %q, err %v", reader.name, got, err)
+				}
+				if tree.OuterLeafReadStatsSnapshot().ChecksumSkippedTotal <= before.ChecksumSkippedTotal ||
+					cowLeafCacheCounter(t, backend, "page_checksum_verified_hits") <= hits {
+					t.Fatalf("%s did not reuse the exact cached page proof", reader.name)
+				}
+				got[1] ^= 1
+			}
+			if got, err := db.GetAppend(key, nil); err != nil || !bytes.Equal(got, want) {
+				t.Fatalf("caller mutation changed the cached page: got %q, err %v", got, err)
+			}
+		})
+	}
 }
 
 func disableCOWSealedLeafMmapForFaultInjection(t *testing.T) {

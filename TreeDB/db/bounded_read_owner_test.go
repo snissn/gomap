@@ -10,6 +10,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/tree"
 )
 
 func TestCOWStableReadSnapshotAdmissionAndRelease(t *testing.T) {
@@ -130,10 +131,11 @@ func TestCOWFixedScratchPointKeepsOneReadPinAcrossClose(t *testing.T) {
 	go func() {
 		defer close(done)
 		var keyScratch, leafScratch [page.PageSize]byte
-		readLeaf := func(_ page.LeafLogPtr, dst []byte, record PinnedCOWLeafRead) ([]byte, error) {
+		readLeaf := func(_ page.LeafLogPtr, dst []byte, record PinnedCOWLeafRead) ([]byte, tree.LeafLogPageReadState, error) {
 			entered <- s.readState.Load() &^ snapshotReadClosedBit
 			<-resume
-			return record.ReadPage(make([]byte, record.Shape().RecordBytes), nil, dst, nil)
+			data, err := record.ReadPage(make([]byte, record.Shape().RecordBytes), nil, dst, nil)
+			return data, tree.LeafLogPageReadState{}, err
 		}
 		entry, err := s.GetEntryExactWithPinnedCOWLeaf(key, keyScratch[:], leafScratch[:], limits, readLeaf)
 		readErr = err
