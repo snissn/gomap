@@ -12,6 +12,8 @@ import (
 
 var (
 	profileArg = flag.String("profile", "", "Cross-DB benchmark preset to use (balanced, durable, fast, wal_on_fast, bench_unsafe). Not a TreeDB server profile. Overrides default flags unless explicitly set.")
+
+	pebbleSyncBatches bool
 )
 
 type Profile struct {
@@ -29,6 +31,9 @@ func init() {
 
 		// Badger
 		setBoolIfUnset("badger-nosync", true, isSet, badgerNoSync)
+
+		// LevelDB
+		setBoolIfUnset("leveldb-nosync", true, isSet, leveldbNoSync)
 
 		// Bbolt
 		setBoolIfUnset("bbolt-nosync", true, isSet, bboltNoSync)
@@ -60,6 +65,7 @@ func init() {
 
 		// Other DBs: match "fast" behavior (nosync).
 		setBoolIfUnset("badger-nosync", true, isSet, badgerNoSync)
+		setBoolIfUnset("leveldb-nosync", true, isSet, leveldbNoSync)
 		setBoolIfUnset("bbolt-nosync", true, isSet, bboltNoSync)
 		setBoolIfUnset("lmdb-nosync", true, isSet, lmdbNoSync)
 		setBoolIfUnset("lmdb-nometasync", true, isSet, lmdbNoMetaSync)
@@ -86,7 +92,7 @@ func init() {
 			Apply:       applyBenchUnsafe,
 		},
 		"durable": {
-			Description: "Strict durability: WAL/sync enabled (defaults). Ideal for correctness verification.",
+			Description: "Enable native synchronous writes on supported adapters, including TreeDB, Badger, LevelDB, and Pebble. Explicit engine flags take precedence.",
 			Apply: func(isSet map[string]bool) {
 				// TreeDB
 				setBoolIfUnset("treedb-disable-wal", false, isSet, treedbDisableWAL)
@@ -95,6 +101,9 @@ func init() {
 
 				// Badger
 				setBoolIfUnset("badger-nosync", false, isSet, badgerNoSync)
+
+				// LevelDB
+				setBoolIfUnset("leveldb-nosync", false, isSet, leveldbNoSync)
 
 				// Bbolt
 				setBoolIfUnset("bbolt-nosync", false, isSet, bboltNoSync)
@@ -194,14 +203,16 @@ func setStringIfUnset(name, val string, isSet map[string]bool, target *string) {
 }
 
 func applyProfile(name string, isSet map[string]bool) error {
-	if name == "" {
-		return nil
+	profile := strings.ToLower(name)
+	if profile != "" {
+		p, ok := profiles[profile]
+		if !ok {
+			return fmt.Errorf("unknown profile: %q", name)
+		}
+		p.Apply(isSet)
 	}
-	p, ok := profiles[strings.ToLower(name)]
-	if !ok {
-		return fmt.Errorf("unknown profile: %q", name)
-	}
-	p.Apply(isSet)
+	// Pebble's balanced default syncs point writes and relaxes batches.
+	pebbleSyncBatches = !*pebbleNoSync && (profile == "durable" || isSet["pebble-nosync"])
 	return nil
 }
 

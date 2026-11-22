@@ -9,7 +9,7 @@ import (
 )
 
 var (
-	badgerNoSync = flag.Bool("badger-nosync", false, "Badger: disable SyncWrites")
+	badgerNoSync = flag.Bool("badger-nosync", true, "Badger: disable SyncWrites")
 )
 
 func init() {
@@ -77,10 +77,7 @@ type BadgerWrapper struct {
 }
 
 func NewBadger(dir string) (kvstore.DB, error) {
-	opts := badger.DefaultOptions(dir).WithLogger(nil)
-	if *badgerNoSync {
-		opts.SyncWrites = false
-	}
+	opts := badger.DefaultOptions(dir).WithLogger(nil).WithSyncWrites(!*badgerNoSync)
 	db, err := badger.Open(opts)
 	if err != nil {
 		return nil, err

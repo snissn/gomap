@@ -9,7 +9,7 @@ import (
 )
 
 var (
-	pebbleNoSync  = flag.Bool("pebble-nosync", false, "Pebble: use NoSync for writes")
+	pebbleNoSync  = flag.Bool("pebble-nosync", false, "Pebble: explicitly choose NoSync (true) or Sync (false) for ordinary point and batch writes")
 	pebbleCacheMB = flag.Int("pebble-cache-mb", 1024, "Pebble: block cache size in MiB")
 )
 
@@ -18,7 +18,9 @@ func init() {
 }
 
 type PebbleWrapper struct {
-	db *pebble.DB
+	db             *pebble.DB
+	pointWriteOpts *pebble.WriteOptions
+	batchWriteOpts *pebble.WriteOptions
 }
 
 func NewPebble(dir string) (kvstore.DB, error) {
@@ -29,7 +31,14 @@ func NewPebble(dir string) (kvstore.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &PebbleWrapper{db: db}, nil
+	wrapper := &PebbleWrapper{db: db, pointWriteOpts: pebble.NoSync, batchWriteOpts: pebble.NoSync}
+	if !*pebbleNoSync {
+		wrapper.pointWriteOpts = pebble.Sync
+	}
+	if pebbleSyncBatches {
+		wrapper.batchWriteOpts = pebble.Sync
+	}
+	return wrapper, nil
 }
 
 func (p *PebbleWrapper) Name() string { return "Pebble" }
@@ -51,19 +60,11 @@ func (p *PebbleWrapper) Get(key []byte) ([]byte, error) {
 }
 
 func (p *PebbleWrapper) Set(key, value []byte) error {
-	opts := pebble.Sync
-	if *pebbleNoSync {
-		opts = pebble.NoSync
-	}
-	return p.db.Set(key, value, opts)
+	return p.db.Set(key, value, p.pointWriteOpts)
 }
 
 func (p *PebbleWrapper) Delete(key []byte) error {
-	opts := pebble.Sync
-	if *pebbleNoSync {
-		opts = pebble.NoSync
-	}
-	return p.db.Delete(key, opts)
+	return p.db.Delete(key, p.pointWriteOpts)
 }
 
 func (p *PebbleWrapper) RangeDeleteMode() string {
@@ -142,7 +143,8 @@ func (p *PebbleWrapper) ReverseIterator(start, end []byte) (kvstore.Iterator, er
 
 // Pebble Batch
 type PebbleBatch struct {
-	batch *pebble.Batch
+	batch     *pebble.Batch
+	writeOpts *pebble.WriteOptions
 }
 
 func (b *PebbleBatch) Set(key, value []byte) error { return b.batch.Set(key, value, nil) }
@@ -150,10 +152,10 @@ func (b *PebbleBatch) Delete(key []byte) error     { return b.batch.Delete(key, 
 func (b *PebbleBatch) DeleteRange(start, end []byte) error {
 	return b.batch.DeleteRange(start, end, nil)
 }
-func (b *PebbleBatch) Commit() error     { return b.batch.Commit(pebble.NoSync) }
+func (b *PebbleBatch) Commit() error     { return b.batch.Commit(b.writeOpts) }
 func (b *PebbleBatch) CommitSync() error { return b.batch.Commit(pebble.Sync) }
 func (b *PebbleBatch) Close() error      { return b.batch.Close() }
 
 func (p *PebbleWrapper) NewBatch() (kvstore.Batch, error) {
-	return &PebbleBatch{batch: p.db.NewBatch()}, nil
+	return &PebbleBatch{batch: p.db.NewBatch(), writeOpts: p.batchWriteOpts}, nil
 }

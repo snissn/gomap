@@ -29,13 +29,17 @@ var (
 	leveldbHandles              = flag.Int("leveldb-handles", 1024, "LevelDB: open files cache capacity (matches geth semantics)")
 	leveldbBlockCompressionMode = flag.String("leveldb-block-compression", "default", "LevelDB: block compression mode for unified_bench (default|on|off|both)")
 	leveldbBlockSize            = flag.Int("leveldb-block-size", 4096, "LevelDB: table block size in bytes (opt.Options.BlockSize)")
+	leveldbNoSync               = flag.Bool("leveldb-nosync", true, "LevelDB: skip sync for ordinary point and batch writes")
 )
 
+var leveldbSyncWriteOpts = &opt.WriteOptions{Sync: true}
+
 type LevelDBBatch struct {
-	db       *leveldb.DB
-	batch    leveldb.Batch
-	pointOps int
-	ranges   []levelDBRangeOp
+	db        *leveldb.DB
+	writeOpts *opt.WriteOptions
+	batch     leveldb.Batch
+	pointOps  int
+	ranges    []levelDBRangeOp
 }
 
 type levelDBRangeOp struct {
@@ -78,10 +82,10 @@ func (b *LevelDBBatch) DeleteRange(start, end []byte) error {
 	return nil
 }
 func (b *LevelDBBatch) Commit() error {
-	return b.commit(nil)
+	return b.commit(b.writeOpts)
 }
 func (b *LevelDBBatch) CommitSync() error {
-	return b.commit(&opt.WriteOptions{Sync: true})
+	return b.commit(leveldbSyncWriteOpts)
 }
 func (b *LevelDBBatch) Close() error {
 	b.batch.Reset()
@@ -148,6 +152,7 @@ type LevelDBWrapper struct {
 	dir         string
 	name        string
 	compression opt.Compression
+	writeOpts   *opt.WriteOptions
 }
 
 type levelDBReadSnapshot struct {
@@ -213,7 +218,11 @@ func openLevelDB(dir, name string, compression opt.Compression) (kvstore.DB, err
 	if err != nil {
 		return nil, err
 	}
-	return &LevelDBWrapper{db: db, dir: dir, name: name, compression: compression}, nil
+	wrapper := &LevelDBWrapper{db: db, dir: dir, name: name, compression: compression}
+	if !*leveldbNoSync {
+		wrapper.writeOpts = leveldbSyncWriteOpts
+	}
+	return wrapper, nil
 }
 
 func NewLevelDB(dir string) (kvstore.DB, error) {
@@ -235,7 +244,7 @@ func (l *LevelDBWrapper) Name() string {
 	}
 	return "LevelDB"
 }
-func (l *LevelDBWrapper) Set(k, v []byte) error        { return l.db.Put(k, v, nil) }
+func (l *LevelDBWrapper) Set(k, v []byte) error        { return l.db.Put(k, v, l.writeOpts) }
 func (l *LevelDBWrapper) Get(k []byte) ([]byte, error) { return l.db.Get(k, nil) }
 func (l *LevelDBWrapper) AcquireReadSnapshot() (kvstore.ReadSnapshot, error) {
 	snap, err := l.db.GetSnapshot()
@@ -270,7 +279,7 @@ func (l *LevelDBWrapper) GetMany(keys [][]byte) ([][]byte, error) {
 	}
 	return out, nil
 }
-func (l *LevelDBWrapper) Delete(k []byte) error { return l.db.Delete(k, nil) }
+func (l *LevelDBWrapper) Delete(k []byte) error { return l.db.Delete(k, l.writeOpts) }
 func (l *LevelDBWrapper) RangeDeleteMode() string {
 	return kvstore.RangeDeleteModeFallbackIteratorDelete
 }
@@ -319,7 +328,7 @@ func (l *LevelDBWrapper) ReverseIterator(start, end []byte) (kvstore.Iterator, e
 	return &LevelDBIterator{it: it, reverse: true}, nil
 }
 func (l *LevelDBWrapper) NewBatch() (kvstore.Batch, error) {
-	return &LevelDBBatch{db: l.db}, nil
+	return &LevelDBBatch{db: l.db, writeOpts: l.writeOpts}, nil
 }
 
 func verifyRangeIteration(db kvstore.DB, rs kvstore.RangeScanner, prefix []byte, n int) (retErr error) {
