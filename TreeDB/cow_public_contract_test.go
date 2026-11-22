@@ -81,6 +81,167 @@ func cowPublicContractSnapshotValue(t *testing.T, snap Snapshot, key string, wan
 	return revision
 }
 
+func TestCOWPublicGetManyViewResultAllocations(t *testing.T) {
+	for _, mode := range []string{"cow_btree", "cow_ordered"} {
+		t.Run(mode, func(t *testing.T) {
+			opts := OptionsFor(ProfileNoWALFast, t.TempDir())
+			opts.MemtableMode, opts.MemtableShards = mode, 2
+			opts.BackgroundCheckpointInterval = -1
+			opts.BackgroundCheckpointIdleDuration = -1
+			opts.BackgroundIndexVacuumInterval = -1
+			opts.DisableBackgroundPrune = true
+			database, err := Open(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if err := database.Close(); err != nil {
+					t.Error(err)
+				}
+			})
+			if got := database.Stats()["treedb.cache.memtable_mode"]; got != mode || database.ResolvedProfile() != ProfileNoWALFast {
+				t.Fatalf("mode=%q profile=%s", got, database.ResolvedProfile())
+			}
+			keys := [][]byte{[]byte("view-a"), []byte("view-b")}
+			values := [][]byte{bytes.Repeat([]byte{'a'}, 128), bytes.Repeat([]byte{'b'}, 128)}
+			for i, key := range keys {
+				if err := database.Set(key, values[i]); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := database.Checkpoint(); err != nil {
+				t.Fatal(err)
+			}
+			batch := make([][]byte, 64)
+			for i := range batch {
+				batch[i] = keys[i%len(keys)]
+			}
+			var calls int
+			visit := func(index int, key, value []byte, found bool) error {
+				if calls >= len(batch) || index != calls || !found || !bytes.Equal(key, batch[calls]) || !bytes.Equal(value, values[calls%len(values)]) {
+					return fmt.Errorf("visit %d: index=%d key=%q len(value)=%d found=%v", calls, index, key, len(value), found)
+				}
+				calls++
+				return nil
+			}
+			measure := func(size int) float64 {
+				return testing.AllocsPerRun(20, func() {
+					calls = 0
+					if err := database.GetManyView(batch[:size], visit); err != nil || calls != size {
+						t.Fatalf("GetManyView(%d): callbacks=%d err=%v", size, calls, err)
+					}
+				})
+			}
+			short, long := measure(8), measure(len(batch))
+			t.Logf("public GetManyView allocations per call: 8 keys %.0f, 64 keys %.0f", short, long)
+			if long-short > 4 {
+				t.Fatalf("56 more same-size hits add %.0f allocations, want at most 4", long-short)
+			}
+		})
+	}
+}
+
+func TestCOWPublicGetManyViewResultLifetime(t *testing.T) {
+	for _, mode := range []string{"cow_btree", "cow_ordered"} {
+		t.Run(mode, func(t *testing.T) {
+			database, _, blocked := cowPublicContractOpen(t, ProfileNoWALFast, func(opts *Options) {
+				opts.MemtableMode = mode
+				opts.ValueLog.PointerThreshold, opts.ValueLog.ForcePointers = 256, false
+			})
+			first, second, shorter := bytes.Repeat([]byte{'a'}, 128), bytes.Repeat([]byte{'b'}, 128), bytes.Repeat([]byte{'s'}, 64)
+			large := bytes.Repeat([]byte{'l'}, 8<<10)
+			keys := [][]byte{[]byte("a"), []byte("b"), []byte("short"), []byte("missing"), []byte("deleted"), []byte("empty"), []byte("large"), []byte("a")}
+			values := [][]byte{first, second, shorter, nil, nil, {}, large, first}
+			for i, key := range keys {
+				if values[i] != nil {
+					if err := database.Set(key, values[i]); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if err := database.Set(keys[4], first); err != nil {
+				t.Fatal(err)
+			}
+			if err := database.Delete(keys[4]); err != nil {
+				t.Fatal(err)
+			}
+			snap := database.AcquireSnapshot()
+			if snap == nil {
+				t.Fatal("public snapshot unavailable")
+			}
+			defer snap.Close()
+			calls := 0
+			err := cowPublicContractComplete(t, blocked, "nested GetManyView", func() error {
+				return snap.GetManyView(keys, func(i int, key, value []byte, found bool) error {
+					if i != calls || i >= len(keys) || !bytes.Equal(key, keys[i]) || found != (values[i] != nil) || (value == nil) != (values[i] == nil) || !bytes.Equal(value, values[i]) || cap(value) != len(value) {
+						return fmt.Errorf("callback index=%d key=%q len/cap=%d/%d found=%v", i, key, len(value), cap(value), found)
+					}
+					calls++
+					if i != 0 {
+						return nil
+					}
+					err := snap.GetManyView([][]byte{keys[1], keys[1]}, func(_ int, _ []byte, nested []byte, found bool) error {
+						if !found || !bytes.Equal(nested, second) || !bytes.Equal(value, first) {
+							return errors.New("nested view changed the outer value or its own value")
+						}
+						return nil
+					})
+					if err != nil {
+						return err
+					}
+					if !bytes.Equal(value, first) {
+						return errors.New("nested view changed the outer value")
+					}
+					return database.Set(keys[1], []byte("later")) // The next outer hit still uses the original cut.
+				})
+			})
+			if err != nil || calls != len(keys) {
+				t.Fatalf("nested view callbacks=%d err=%v", calls, err)
+			}
+			if got, err := database.Get(keys[1]); err != nil || string(got) != "later" {
+				t.Fatalf("nested write value=%q err=%v", got, err)
+			}
+			before := database.cached.COWMemoryStats()
+			stop := errors.New("stop view")
+			calls = 0
+			err = snap.GetManyView(keys[:3], func(i int, _ []byte, _ []byte, _ bool) error {
+				calls++
+				if i == 1 {
+					return stop
+				}
+				return nil
+			})
+			if !errors.Is(err, stop) || calls != 2 {
+				t.Fatalf("stop view callbacks=%d err=%v", calls, err)
+			}
+			if stats := database.cached.COWMemoryStats(); stats.ExternalLeases != before.ExternalLeases || stats.ExternalBytes != before.ExternalBytes {
+				t.Fatalf("callback error retained result ownership: before=%+v after=%+v", before, stats)
+			}
+			calls = 0
+			func() {
+				defer func() {
+					if got := recover(); got != stop {
+						t.Errorf("callback panic=%v, want %v", got, stop)
+					}
+				}()
+				_ = snap.GetManyView(keys[:3], func(i int, _ []byte, _ []byte, _ bool) error {
+					calls++
+					if i == 1 {
+						panic(stop)
+					}
+					return nil
+				})
+			}()
+			if calls != 2 {
+				t.Fatalf("panic view callbacks=%d", calls)
+			}
+			if stats := database.cached.COWMemoryStats(); stats.ExternalLeases != before.ExternalLeases || stats.ExternalBytes != before.ExternalBytes {
+				t.Fatalf("callback panic retained result ownership: before=%+v after=%+v", before, stats)
+			}
+		})
+	}
+}
+
 func TestCOWPublicContractDirtyReadOwnership(t *testing.T) {
 	for _, profile := range cowPublicContractProfiles {
 		t.Run(string(profile), func(t *testing.T) {
