@@ -52,10 +52,8 @@ func TestValueLogGC_RefreshesFullInventoryAfterBoundedOpen(t *testing.T) {
 	if d.valueLogManager.HasSegment(id1) {
 		t.Fatalf("bounded open unexpectedly discovered unreferenced segment %d", id1)
 	}
-	// Simulate siblings created outside the open handle after its manager set was
-	// populated. Full GC must discover them; otherwise the older unreferenced
-	// sibling remains invisible forever. The newest lane segment is retained as
-	// the active-segment safety guard.
+	// Bounded open leaves unreachable on-disk segments unregistered. Full GC
+	// must discover them and retain the newest lane segment as the active guard.
 	path2, id2 := writeValueLogSegment(t, dir, 7, 2)
 	path3, id3 := writeValueLogSegment(t, dir, 7, 3)
 	if d.valueLogManager.HasSegment(id2) || d.valueLogManager.HasSegment(id3) {
@@ -68,8 +66,10 @@ func TestValueLogGC_RefreshesFullInventoryAfterBoundedOpen(t *testing.T) {
 		t.Fatalf("ValueLogGC: %v", err)
 	}
 	after := d.valueLogManager.RefreshScanCount()
-	if after != before+1 {
-		t.Fatalf("ValueLogGC refresh scans=%d want exactly one (before=%d after=%d)", after-before, before, after)
+	// Discovery from an empty registered inventory is followed by the
+	// destructive-phase refresh after reachability and publication revalidation.
+	if after != before+2 {
+		t.Fatalf("ValueLogGC refresh scans=%d, want two from an empty registered inventory", after-before)
 	}
 	for _, path := range []string{path1, path2} {
 		if _, err := os.Stat(path); err == nil || !os.IsNotExist(err) {
@@ -81,6 +81,26 @@ func TestValueLogGC_RefreshesFullInventoryAfterBoundedOpen(t *testing.T) {
 	}
 	if !d.valueLogManager.HasSegment(id3) {
 		t.Fatalf("expected GC refresh to register retained segment %d", id3)
+	}
+
+	// Once there is a registered ordinary file, the destructive-phase refresh
+	// alone discovers new siblings and preserves the newest lane head.
+	path4, id4 := writeValueLogSegment(t, dir, 7, 4)
+	if d.valueLogManager.HasSegment(id4) {
+		t.Fatal("new sibling unexpectedly registered before GC")
+	}
+	before = d.valueLogManager.RefreshScanCount()
+	if _, err := d.ValueLogGC(context.Background(), ValueLogGCOptions{}); err != nil {
+		t.Fatalf("ValueLogGC with a registered ordinary segment: %v", err)
+	}
+	if scans := d.valueLogManager.RefreshScanCount() - before; scans != 1 {
+		t.Fatalf("ValueLogGC refresh scans=%d, want one from a populated registered inventory", scans)
+	}
+	if _, err := os.Stat(path3); !os.IsNotExist(err) {
+		t.Fatalf("expected GC to remove the older sibling %q: %v", path3, err)
+	}
+	if _, err := os.Stat(path4); err != nil {
+		t.Fatalf("expected GC to retain the newest sibling %q: %v", path4, err)
 	}
 }
 

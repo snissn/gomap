@@ -1,6 +1,8 @@
 package db
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -58,6 +60,49 @@ func BenchmarkValueLogRefDeltaOverwrite(b *testing.B) {
 				}
 				_ = update.Close()
 			}
+		})
+	}
+}
+
+func BenchmarkValueLogGCLeafBacked(b *testing.B) {
+	for _, name := range []string{"LeafOnly", "Mixed"} {
+		b.Run(name, func(b *testing.B) {
+			database, opts, _ := openValueLogGCLeafFixture(b, 8192)
+			wantSegments := 0
+			if name == "Mixed" {
+				ptrs := appendPointersInNewSegment(b, opts.Dir, 100, 1, 1<<30, 1, func(int) []byte {
+					return []byte("referenced external value")
+				})
+				batch := database.NewBatch().(*Batch)
+				if err := batch.SetPointer([]byte("k008191"), ptrs[0]); err != nil {
+					b.Fatalf("SetPointer: %v", err)
+				}
+				if err := errors.Join(batch.WriteSync(), batch.Close()); err != nil {
+					b.Fatalf("publish mixed fixture: %v", err)
+				}
+				if err := database.Checkpoint(); err != nil {
+					b.Fatalf("checkpoint mixed fixture: %v", err)
+				}
+				wantSegments = 1
+			}
+
+			ctx := context.Background()
+			gcOpts := ValueLogGCOptions{}
+			manager := database.valueLogManager
+			checksBefore := manager.ReadStats().RecordCRCChecks
+			refreshesBefore := manager.RefreshScanCount()
+			b.ReportAllocs()
+			for b.Loop() {
+				stats, err := database.ValueLogGC(ctx, gcOpts)
+				if err != nil {
+					b.Fatalf("ValueLogGC: %v", err)
+				}
+				if stats.SegmentsTotal != wantSegments || stats.SegmentsReferenced != wantSegments || stats.SegmentsDeleted != 0 {
+					b.Fatalf("unexpected GC stats: %+v", stats)
+				}
+			}
+			b.ReportMetric(float64(manager.ReadStats().RecordCRCChecks-checksBefore)/float64(b.N), "leaf-record-crcs/op")
+			b.ReportMetric(float64(manager.RefreshScanCount()-refreshesBefore)/float64(b.N), "inventory-refreshes/op")
 		})
 	}
 }
