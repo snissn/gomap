@@ -822,20 +822,34 @@ func (b *cowBackendBasis) readPhysicalLeafLocked(c *cowCache, ptr page.LeafLogPt
 func (b *cowBackendBasis) readPhysicalLeafWithWorkspace(c *cowCache, w *cowReadWorkspace, ptr page.LeafLogPtr, dst []byte, native, localBlock bool) ([]byte, error) {
 	var independent *cowCacheDictionaryRead
 	if w.snapshot != nil {
-		if provider, ok := w.snapshot.db.dictStore.(cowDictionaryReadProvider); ok {
-			definition := cowCacheDictionaryRead{provider: provider, cache: c}
-			independent = &definition
-		}
+		independent = w.snapshot.db.cowPhysicalDictionary(c)
 	}
 	return b.readPhysicalLeafWithDictionary(c, w, ptr, dst, native, localBlock, independent)
 }
 
-// independent is borrowed only for this traversal. Neither the basis nor its
-// reusable scratch retains a caller/provider; the shared codec owns its checked
-// definition independently. Captured-only providers keep their local decoder.
+// The provider is borrowed for this traversal. The shared codec acquires and
+// owns its checked definition separately.
 func (b *cowBackendBasis) readPhysicalLeafWithDictionary(c *cowCache, w *cowReadWorkspace, ptr page.LeafLogPtr, dst []byte, native, localBlock bool, independent *cowCacheDictionaryRead) ([]byte, error) {
 	return b.snapshot.WithPinnedCOWLeafRecord(ptr, w.limits, func(record backenddb.PinnedCOWLeafRead) ([]byte, error) {
 		return readInspectedPhysicalLeaf(c, w, ptr, dst, native, localBlock, independent, &record)
+	})
+}
+
+func (db *DB) cowPhysicalDictionary(c *cowCache) *cowCacheDictionaryRead {
+	provider, ok := db.dictStore.(cowDictionaryReadProvider)
+	if !ok {
+		return nil
+	}
+	return &cowCacheDictionaryRead{provider: provider, cache: c}
+}
+
+func (b *cowBackendBasis) readPhysicalPoint(c *cowCache, w *cowReadWorkspace, key []byte, localBlock bool, independent *cowCacheDictionaryRead) (node.LeafEntry, error) {
+	point, err := w.pointScratch()
+	if err != nil {
+		return node.LeafEntry{}, err
+	}
+	return b.snapshot.GetEntryExactWithPinnedCOWLeaf(key, point.key[:], point.leaf[:], w.limits, func(ptr page.LeafLogPtr, dst []byte, record backenddb.PinnedCOWLeafRead) ([]byte, error) {
+		return readInspectedPhysicalLeaf(c, w, ptr, dst, false, localBlock, independent, &record)
 	})
 }
 
@@ -926,11 +940,7 @@ func (s *Snapshot) cowPhysicalEntryLocked(key []byte) (node.LeafEntry, error) {
 	if err != nil {
 		return node.LeafEntry{}, err
 	}
-	point, err := w.pointScratch()
-	if err != nil {
-		return node.LeafEntry{}, err
-	}
-	entry, err := basis.snapshot.GetEntryExactWithFixedScratch(key, point.key[:], point.leaf[:], s.cowPhysicalLeafLocked)
+	entry, err := basis.readPhysicalPoint(s.cowCache, w, key, true, s.db.cowPhysicalDictionary(s.cowCache))
 	if err != nil {
 		return node.LeafEntry{}, err
 	}
