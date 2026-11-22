@@ -51,6 +51,7 @@ func main() {
 		minCPUSeconds        float64
 		maxSizeFrac          float64
 		minSamples           int
+		storageOnly          bool
 	)
 	flag.Var(&offLogPaths, "off-log", "path to unified_bench output for treedb_vlog_off; repeat once per paired sample")
 	flag.Var(&autoLogPaths, "auto-log", "path to unified_bench output for treedb_vlog_auto; repeat once per paired sample")
@@ -60,6 +61,7 @@ func main() {
 	flag.Float64Var(&minCPUSeconds, "min-cpu-seconds", 0.25, "minimum total sampled CPU seconds required from every exact-test profile")
 	flag.Float64Var(&maxSizeFrac, "max-size-frac", 1.02, "maximum allowed auto/off combined persistent value-log bytes fraction")
 	flag.IntVar(&minSamples, "min-samples", 2, "minimum number of complete paired samples required")
+	flag.BoolVar(&storageOnly, "storage-only", false, "validate modes and persistent size without CPU profiles")
 	flag.Parse()
 
 	if len(offLogPaths) != len(autoLogPaths) {
@@ -70,12 +72,16 @@ func main() {
 		fmt.Fprintf(os.Stderr, "CPU profile pair count mismatch: off=%d auto=%d\n", len(offCPUProfilePaths), len(autoCPUProfilePaths))
 		os.Exit(2)
 	}
-	if len(offCPUProfilePaths) != len(offLogPaths) {
+	if storageOnly && len(offCPUProfilePaths) != 0 {
+		fmt.Fprintln(os.Stderr, "CPU profiles must not be passed in storage-only mode")
+		os.Exit(2)
+	}
+	if !storageOnly && len(offCPUProfilePaths) != len(offLogPaths) {
 		fmt.Fprintf(os.Stderr, "CPU profile/log sample count mismatch: profiles=%d logs=%d\n", len(offCPUProfilePaths), len(offLogPaths))
 		os.Exit(2)
 	}
-	if minSamples < 2 {
-		fmt.Fprintf(os.Stderr, "invalid -min-samples %d: must be at least 2\n", minSamples)
+	if minSamples < 1 || (!storageOnly && minSamples < 2) {
+		fmt.Fprintf(os.Stderr, "invalid -min-samples %d: must be at least 2 for CPU or 1 for storage-only\n", minSamples)
 		os.Exit(2)
 	}
 	if minCPUEfficiencyFrac <= 0 || math.IsNaN(minCPUEfficiencyFrac) || math.IsInf(minCPUEfficiencyFrac, 0) {
@@ -122,36 +128,38 @@ func main() {
 			fmt.Fprintf(os.Stderr, "invalid mode metrics sample %d: %v\n", idx+1, err)
 			os.Exit(2)
 		}
-		offCPUSeconds, err := parseCPUProfile(offCPUProfilePaths[idx])
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "parse off CPU profile sample %d: %v\n", idx+1, err)
-			os.Exit(2)
-		}
-		autoCPUSeconds, err := parseCPUProfile(autoCPUProfilePaths[idx])
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "parse auto CPU profile sample %d: %v\n", idx+1, err)
-			os.Exit(2)
-		}
-		if offCPUSeconds < minCPUSeconds {
-			fmt.Fprintf(os.Stderr, "off CPU profile too short sample %d: total_samples=%.6fs want>=%.6fs\n", idx+1, offCPUSeconds, minCPUSeconds)
-			os.Exit(2)
-		}
-		if autoCPUSeconds < minCPUSeconds {
-			fmt.Fprintf(os.Stderr, "auto CPU profile too short sample %d: total_samples=%.6fs want>=%.6fs\n", idx+1, autoCPUSeconds, minCPUSeconds)
-			os.Exit(2)
-		}
+		if !storageOnly {
+			offCPUSeconds, err := parseCPUProfile(offCPUProfilePaths[idx])
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "parse off CPU profile sample %d: %v\n", idx+1, err)
+				os.Exit(2)
+			}
+			autoCPUSeconds, err := parseCPUProfile(autoCPUProfilePaths[idx])
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "parse auto CPU profile sample %d: %v\n", idx+1, err)
+				os.Exit(2)
+			}
+			if offCPUSeconds < minCPUSeconds {
+				fmt.Fprintf(os.Stderr, "off CPU profile too short sample %d: total_samples=%.6fs want>=%.6fs\n", idx+1, offCPUSeconds, minCPUSeconds)
+				os.Exit(2)
+			}
+			if autoCPUSeconds < minCPUSeconds {
+				fmt.Fprintf(os.Stderr, "auto CPU profile too short sample %d: total_samples=%.6fs want>=%.6fs\n", idx+1, autoCPUSeconds, minCPUSeconds)
+				os.Exit(2)
+			}
 
+			cpuEfficiencyFrac := offCPUSeconds / autoCPUSeconds
+			cpuEfficiencyLogSum += math.Log(cpuEfficiencyFrac)
+			fmt.Printf("incompressible gate sample %d: off_cpu_seconds=%.6f auto_cpu_seconds=%.6f cpu_efficiency_frac=%.4f\n", idx+1, offCPUSeconds, autoCPUSeconds, cpuEfficiencyFrac)
+		}
 		wallThroughputFrac := auto.OpsPerSec / off.OpsPerSec
-		cpuEfficiencyFrac := offCPUSeconds / autoCPUSeconds
 		sizeFrac := auto.PersistentVLog / off.PersistentVLog
 		wallThroughputLogSum += math.Log(wallThroughputFrac)
-		cpuEfficiencyLogSum += math.Log(cpuEfficiencyFrac)
 		if sizeFrac > maxObservedSizeFrac {
 			maxObservedSizeFrac = sizeFrac
 		}
 
 		fmt.Printf("incompressible gate sample %d: off_ops=%.0f auto_ops=%.0f wall_throughput_frac=%.4f\n", idx+1, off.OpsPerSec, auto.OpsPerSec, wallThroughputFrac)
-		fmt.Printf("incompressible gate sample %d: off_cpu_seconds=%.6f auto_cpu_seconds=%.6f cpu_efficiency_frac=%.4f\n", idx+1, offCPUSeconds, autoCPUSeconds, cpuEfficiencyFrac)
 		fmt.Printf("incompressible gate sample %d: off_persistent_vlog=%.0f auto_persistent_vlog=%.0f size_frac=%.4f\n", idx+1, off.PersistentVLog, auto.PersistentVLog, sizeFrac)
 		fmt.Printf("incompressible gate sample %d: user_mode=off raw_bytes=%d leaf_modes=off:%s/auto:%s leaf_raw_bytes=%d auto_leaf_stored_bytes=%d\n", idx+1, auto.UserRawBytes, off.LeafWriteMode, auto.LeafWriteMode, auto.LeafRawBytes, auto.LeafStoredBytes)
 		if sizeFrac > maxSizeFrac {
@@ -161,6 +169,15 @@ func main() {
 	}
 
 	wallThroughputGeomean := math.Exp(wallThroughputLogSum / float64(len(offLogPaths)))
+	if storageOnly {
+		fmt.Printf("incompressible gate storage-only: samples=%d wall_throughput_geomean=%.4f max_size_frac=%.4f (max=%.4f)\n", len(offLogPaths), wallThroughputGeomean, maxObservedSizeFrac, maxSizeFrac)
+		if fail {
+			os.Exit(1)
+		}
+		fmt.Println("PASS incompressible auto-vs-off storage and mode checks; CPU not qualified")
+		return
+	}
+
 	cpuEfficiencyGeomean := math.Exp(cpuEfficiencyLogSum / float64(len(offLogPaths)))
 	fmt.Printf("incompressible gate aggregate: samples=%d wall_throughput_geomean=%.4f cpu_efficiency_geomean=%.4f (min=%.4f) max_size_frac=%.4f (max=%.4f)\n", len(offLogPaths), wallThroughputGeomean, cpuEfficiencyGeomean, minCPUEfficiencyFrac, maxObservedSizeFrac, maxSizeFrac)
 	if cpuEfficiencyGeomean <= minCPUEfficiencyFrac {

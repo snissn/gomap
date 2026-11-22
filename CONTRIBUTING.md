@@ -50,6 +50,29 @@ footprints, review the manifest, stage the intended source/workflow/harness inpu
 run its documented refresh/contract commands and stage the reviewed manifest.
 A refreshed candidate policy cannot authorize its own omissions.
 
+The normal macOS TreeDB test shards restore the Go build cache and expire
+cached test results before running the tests. Record runner wait separately
+from test execution when comparing CI wall time. The RAG service test checks
+real HTTP/direct query parity by default; run the existing timed evidence
+variant from the repository root with:
+
+```sh
+RAG_SVC_OVERHEAD_REPS=3 go test -count=1 -v ./TreeDB/cmd/treedb_rag_benchmark \
+  -run '^TestServiceOverheadParityRows$'
+```
+
+Keep the production UPDATE tail-latency qualification separate from this
+service parity fixture.
+
+The GetVersioned bindings job always requires its 29 focused normal and race
+tests. Its historical Go 1.26.10 compiler/escape evidence is a separate
+qualification, not a property established by a functional pass. For that
+evidence, dispatch **TreeDB: vet+test** with **getversioned_compiler_witness**
+enabled on the intended source. The strict route checks the published source
+hashes and rejects a mismatch; it does not silently move pinned line ranges.
+The original PR #5397 also requires that route. Ordinary changes to unrelated
+parts of a pinned file do not require refreshing a historical witness.
+
 ## Code Guidelines
 
 - Keep commits small and reviewable.
@@ -85,3 +108,15 @@ Be extra careful when touching metadata formats or recovery logic:
 - Add/extend tests that cover crash/reopen and truncated/corrupt tail cases.
 - Prefer versioned metadata changes (explicit version fields).
 - If compatibility is intentionally broken, document it in `docs/API_STABILITY.md` / `CHANGELOG.md`.
+
+### Comparative snapshot and value-log performance
+
+The required ordinary TreeDB test matrix already runs snapshot seek contract,
+randomized oracle, reopen, and public iterator parity tests in the root
+package. The performance jobs retain the snapshot report parser tests and
+value-log compression ratio, fallback, mode, and persistent-size checks. A pull request or merge queue does not treat synthetic
+throughput/CPU timing as a universal veto. The same workflow runs the full
+comparisons (including snapshot bytes and allocations per operation) after a push to main and when manually dispatched.
+For a change intended to alter one of these performance surfaces, dispatch
+**TreeDB: vet+test** on the proposed branch and review its comparative
+artifacts before claiming a performance improvement.

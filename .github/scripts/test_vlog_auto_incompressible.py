@@ -23,6 +23,7 @@ def perf_job_script() -> str:
     workflow = WORKFLOW.read_text(encoding="utf-8")
     match = re.search(
         r"      - name: Incompressible auto-vs-off gate\n"
+        r"        shell: bash\n"
         r"        run: \|\n(?P<body>.*?)"
         r"(?=^  snapshot-iterator-perf:)",
         workflow,
@@ -31,6 +32,42 @@ def perf_job_script() -> str:
     if match is None:
         raise AssertionError("missing incompressible auto-vs-off workflow step")
     return match.group("body")
+
+
+class VLogDictStorageOnlyCheckerTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        build = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(build.cleanup)
+        cls.checker_bin = Path(build.name) / "check-vlog-dict-bench"
+        subprocess.run(
+            ["go", "build", "-o", str(cls.checker_bin), str(CHECKER.with_name("check_vlog_dict_bench.go"))],
+            cwd=REPO_ROOT, check=True, capture_output=True, text=True,
+        )
+
+    def check_dict(self, second_row: str) -> subprocess.CompletedProcess[str]:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            baseline = root / "baseline.json"
+            baseline.write_text('{"benchmarks":[{"name":"BenchmarkFixture","min_mbps":50,'
+                                '"min_observed_ratio":0.9,"max_observed_ratio":1.1,"max_dict_fallback":0}]}')
+            output = root / "go-output.txt"
+            output.write_text("BenchmarkFixture-2 1 10 ns/op 1.0 observed_ratio 0 dict_fallback\n"
+                              + "BenchmarkFixture-2 1 10 ns/op" + second_row + "\n")
+            return subprocess.run(
+                [str(self.checker_bin), "-baseline", str(baseline), "-bench-output", str(output),
+                 "-storage-only", "-strict=true"],
+                check=False, text=True, capture_output=True,
+            )
+
+    def test_repeated_rows_must_have_both_required_metrics(self) -> None:
+        self.assertEqual(self.check_dict(" 1.0 observed_ratio 0 dict_fallback").returncode, 0)
+        for row in ("", " 1.0 observed_ratio", " 0 dict_fallback", " NaN observed_ratio 0 dict_fallback",
+                    " 1.0 observed_ratio -Inf dict_fallback"):
+            with self.subTest(row=row):
+                result = self.check_dict(row)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("sample 2", result.stdout)
 
 
 class VLogAutoIncompressibleCheckerTest(unittest.TestCase):
@@ -65,6 +102,7 @@ class VLogAutoIncompressibleCheckerTest(unittest.TestCase):
         wrong_last_off_leaf_mode: bool = False,
         hidden_auto_sidecar_last: bool = False,
         include_cpu_profiles: bool = True,
+        storage_only: bool = False,
         cpu_efficiency_ratios: list[float] | None = None,
         omit_last_auto_cpu_profile: bool = False,
         missing_last_auto_cpu_profile: bool = False,
@@ -82,6 +120,8 @@ class VLogAutoIncompressibleCheckerTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temp_dir:
             args = [str(self.checker_bin)]
+            if storage_only:
+                args.append("-storage-only")
             fake_bin = Path(temp_dir) / "bin"
             fake_bin.mkdir()
             fake_go = fake_bin / "go"
@@ -247,6 +287,17 @@ class VLogAutoIncompressibleCheckerTest(unittest.TestCase):
                 check=False,
                 env=env,
             )
+
+    def test_storage_smoke_ignores_wall_speed_but_enforces_modes_and_size(self):
+        good = self.run_checker([0.4], storage_only=True, include_cpu_profiles=False)
+        self.assertEqual(good.returncode, 0, good.stderr)
+        self.assertIn("CPU not qualified", good.stdout)
+        for change in ({"size_ratios": [1.04]}, {"wrong_last_off_leaf_mode": True}, {"corrupt_last_auto": True}):
+            with self.subTest(change=change):
+                bad = self.run_checker(
+                    [1.0], storage_only=True, include_cpu_profiles=False, **change
+                )
+                self.assertNotEqual(bad.returncode, 0)
 
     def test_one_lucky_sample_cannot_override_mostly_failing_pairs(self) -> None:
         ratios = [0.94, 0.93, 0.92, 0.91, 0.90, 0.94, 0.93, 0.92, 0.91, 1.18]
@@ -501,7 +552,7 @@ class VLogAutoIncompressibleWorkflowContractTest(unittest.TestCase):
         script = normalized(perf_job_script())
 
         self.assertIn("sample_count=6", script)
-        self.assertIn("if ((sample_count % 2 != 0)); then", script)
+        self.assertIn('if [[ "${storage_only}" == false ]] && ((sample_count % 2 != 0)); then', script)
         self.assertIn("sample_count must be even to balance off/auto row order", script)
         self.assertNotIn("max_attempts", script)
         self.assertNotIn("exit 0", script)

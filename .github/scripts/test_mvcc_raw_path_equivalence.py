@@ -227,11 +227,27 @@ class RawPathEquivalenceTests(unittest.TestCase):
         self.assertEqual(batch_write["acceptance_verdict"], "FAIL")
         self.assertEqual(CHECKER.acceptance_verdict(rows), "FAIL")
 
-    def retention_tail(self, status: int, damage: str = "") -> subprocess.CompletedProcess[str]:
-        temporary = self.root / "executables"
+    def retention_tail(self, status: int, damage: str = "", grouped: bool = False,
+                       temp_setting: str | None = None) -> subprocess.CompletedProcess[str]:
+        source = (ROOT / "scripts" / "mvcc_raw_path_gate.sh").read_text()
+        if temp_setting is None:
+            temporary_text = str(self.root / "executables")
+            Path(temporary_text).mkdir()
+        else:
+            # Execute the gate's actual allocator against the requested spelling.
+            # pathlib is only for accessing files; argv stores the literal shell string.
+            end = source.index('BASELINE_WT="$TMP_ROOT/baseline"')
+            begin = source.rindex("\nfi\n", 0, end) + len("\nfi\n")
+            allocated = subprocess.run(
+                ["bash", "-eu", "-c", source[begin:end] + '\nprintf "%s" "$TMP_ROOT"'],
+                env=dict(os.environ, RUNNER_TEMP=temp_setting),
+                check=True, text=True, capture_output=True,
+            )
+            temporary_text = allocated.stdout
+        temporary = Path(temporary_text)
         output = self.root / "output"
         commands = self.root / "commands"
-        for directory in (temporary, output, commands):
+        for directory in (output, commands):
             directory.mkdir()
         digests = {}
         for package in CHECKER.BINARY_PACKAGES:
@@ -241,6 +257,15 @@ class RawPathEquivalenceTests(unittest.TestCase):
                 path.write_bytes(f"actual timed {revision} {package}".encode())
                 path.chmod(0o755)
                 digests[package][revision] = hashlib.sha256(path.read_bytes()).hexdigest()
+        if grouped:
+            for revision in ("baseline", "candidate"):
+                build_dir = temporary / (revision + "-build")
+                build_dir.mkdir()
+                argv = ["go", "test", "-c", "-trimpath", "-buildvcs=false", "-o", f"{temporary_text}/{revision}-build/",
+                        "./TreeDB/db", "./TreeDB/caching", "./TreeDB"]
+                if damage == "argv" and revision == "candidate":
+                    argv.pop()
+                (build_dir / "argv").write_bytes(("\0".join(argv) + "\0").encode())
         (output / "environment.txt").write_text("go version fixture: no Go invoked\n")
         (output / "binary-sha256.txt").write_text("".join(
             f"{digest}  {revision}-{package}.test\n"
@@ -266,12 +291,11 @@ class RawPathEquivalenceTests(unittest.TestCase):
         (commands / "go").write_text("#!/bin/sh\necho unexpected-go >&2\nexit 99\n")
         for path in commands.iterdir():
             path.chmod(0o755)
-        source = (ROOT / "scripts" / "mvcc_raw_path_gate.sh").read_text()
         tail = source[source.index("# Retain the exact measured executables"):]
         environment = dict(os.environ, PATH=str(commands) + os.pathsep + os.environ["PATH"],
-                           TMP_ROOT=str(temporary), OUT_DIR=str(output),
+                           TMP_ROOT=temporary_text, OUT_DIR=str(output),
                            BASELINE_SHA="a" * 40, CANDIDATE_SHA="b" * 40,
-                           SCRIPT_GOWORK="off", SUMMARY_JSON=str(output / "summary.json"),
+                           SCRIPT_GOWORK="off", RAW_GROUPED_BUILD=str(int(grouped)), SUMMARY_JSON=str(output / "summary.json"),
                            gate_status=str(status))
         return subprocess.run(["bash", "-euo", "pipefail", "-c", tail],
                               env=environment, text=True, capture_output=True, check=False)
@@ -320,6 +344,93 @@ class RawPathEquivalenceTests(unittest.TestCase):
                         self.assertNotIn("unexpected-go", completed.stderr)
                     finally:
                         self.root = original
+
+    def test_grouped_build_failures_do_not_reach_the_sample_phase(self) -> None:
+        source = (ROOT / "scripts/mvcc_raw_path_gate.sh").read_text()
+        begin = source.index("build_benchmarks() {")
+        build = source[begin:source.index('(\n  cd "$TMP_ROOT"', begin)]
+        workflow = (ROOT / ".github/workflows/treedb-tests.yml").read_text()
+        self.assertIn('RAW_GROUPED_BUILD="${RAW_GROUPED_BUILD:-0}"', source)
+        self.assertIn("RAW_GROUPED_BUILD: ${{ steps.acceptance_scope.outputs.scoped == 'false' && '1' || '0' }}", workflow)
+        packages = ["./TreeDB/db", "./TreeDB/caching", "./TreeDB"]
+        for behavior, mode in (("ok", "1"), ("ok", "0"), ("compile-error", "1"), ("missing", "1")):
+            with self.subTest(behavior=behavior, mode=mode), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                candidate, baseline, scratch = [root / n for n in ("candidate", "baseline", "work")]
+                for path in (candidate, baseline, scratch):
+                    path.mkdir()
+                shim = root / "go"
+                shim.write_text("""#!/usr/bin/env python3
+import json, os, sys
+from pathlib import Path
+args = sys.argv[1:]
+with open(os.environ['CALLS'], 'a') as trace:
+    trace.write(json.dumps([os.getcwd(), os.environ['GOWORK'], args]) + '\\n')
+if os.environ['BEHAVIOR'] == 'compile-error':
+    sys.exit(27)
+pos = args.index('-o')
+dest = Path(args[pos + 1])
+for package in args[pos + 2:]:
+    if os.environ['BEHAVIOR'] == 'missing' and package == './TreeDB':
+        continue
+    output = dest / (Path(package).name + '.test') if dest.is_dir() else dest
+    output.write_bytes((Path.cwd().name + ':' + package).encode())
+""")
+                shim.chmod(0o755)
+                env = dict(os.environ, PATH=str(root) + os.pathsep + os.environ["PATH"], BEHAVIOR=behavior,
+                           CALLS=str(root / "calls"), TMP_ROOT=str(scratch), BASELINE_WT=str(baseline),
+                           RAW_GROUPED_BUILD=mode, SCRIPT_GOWORK="off")
+                completed = subprocess.run(["bash", "-euo", "pipefail", "-c", build + '\nprintf "sampling"'],
+                                           cwd=candidate, env=env, capture_output=True, text=True)
+                calls = [json.loads(line) for line in (root / "calls").read_text().splitlines()]
+                if behavior != "ok":
+                    self.assertNotEqual(completed.returncode, 0)
+                    self.assertNotIn("sampling", completed.stdout)
+                    self.assertEqual(len(calls), 1, "a build failure must not try a fallback")
+                    continue
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                self.assertEqual(completed.stdout, "sampling")
+                self.assertEqual(len(calls), 2 if mode == "1" else 6)
+                for revision in ("candidate", "baseline"):
+                    actual = [argv for cwd, gowork, argv in calls if cwd == str(root / revision) and gowork == "off"]
+                    output = scratch / (revision + "-build")
+                    if mode == "1":
+                        self.assertEqual(actual, [["test", "-c", "-trimpath", "-buildvcs=false", "-o", str(output) + "/", *packages]])
+                        self.assertEqual((output / "argv").read_bytes().split(b"\0"),
+                                         [item.encode() for item in ["go", *actual[0]]] + [b""])
+                    else:
+                        self.assertEqual([argv[-1] for argv in actual], packages)
+                    for package in packages:
+                        binary = scratch / (revision + "-" + Path(package).name.lower() + ".test")
+                        self.assertEqual(binary.read_bytes(), (revision + ":" + package).encode())
+
+    def test_grouped_retention_binds_actual_invocation_to_each_measured_file(self) -> None:
+        result = self.retention_tail(0, grouped=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        files = json.loads((self.root / "output" / "measured-binaries.json").read_text())["files"]
+        self.assertEqual(len(files), 6)
+        for row in files:
+            name = Path(row["path"]).name
+            revision = name.split("-", 1)[0]
+            self.assertEqual(row["build_argv"], ["go", "test", "-c", "-trimpath", "-buildvcs=false", "-o",
+                             str(self.root / "executables" / (revision + "-build")) + "/",
+                             "./TreeDB/db", "./TreeDB/caching", "./TreeDB"])
+            self.assertEqual(row["source_sha"], ("a" if revision == "baseline" else "b") * 40)
+            self.assertEqual(row["sha256"], hashlib.sha256((self.root / "output" / row["path"]).read_bytes()).hexdigest())
+
+    def test_grouped_retention_keeps_temp_directory_with_trailing_separator(self) -> None:
+        result = self.retention_tail(0, grouped=True, temp_setting=str(self.root) + "/")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        receipt = self.root / "output" / "measured-binaries.json"
+        self.assertTrue(receipt.is_file(), result.stderr)
+        files = json.loads(receipt.read_text())["files"]
+        self.assertEqual(len(files), 6)
+        self.assertTrue(all("//" not in entry["build_argv"][6] for entry in files))
+
+    def test_grouped_retention_refuses_truncated_build_receipt(self) -> None:
+        result = self.retention_tail(1, "argv", grouped=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertFalse((self.root / "output" / "measured-binaries.json").exists())
 
     def test_mixed_rows_cannot_hide_failed_changed_binary_row(self) -> None:
         parsed = CHECKER.compute_binary_digests(

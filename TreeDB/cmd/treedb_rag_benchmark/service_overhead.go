@@ -75,37 +75,60 @@ func runServiceOverheadBenchmark(cfg serviceOverheadConfig) (*serviceOverheadRep
 	if cfg.Docs <= 0 || cfg.Reps <= 0 || cfg.TopK <= 0 {
 		return nil, fmt.Errorf("docs, reps, and top_k must be positive")
 	}
+	var report *serviceOverheadReport
+	err := withServiceOverheadParity(cfg, nil, func(col *collections.Collection, corpus *ragCorpus, client *http.Client, baseURL string) error {
+		var err error
+		report, err = measureServiceOverheadRows(col, corpus, cfg, client, baseURL)
+		return err
+	})
+	return report, err
+}
+
+// withServiceOverheadParity owns both real stores and checks all fixture queries
+// before optionally invoking the repeated measurement campaign.
+func withServiceOverheadParity(cfg serviceOverheadConfig, observe func(string, time.Duration), afterParity func(*collections.Collection, *ragCorpus, *http.Client, string) error) error {
+	phaseStart := time.Now()
+	mark := func(phase string) {
+		if observe != nil {
+			now := time.Now()
+			observe(phase, now.Sub(phaseStart))
+			phaseStart = now
+		}
+	}
 	corpus, _, err := buildRagCorpus(cfg.Docs, cfg.Dims)
 	if err != nil {
-		return nil, fmt.Errorf("build fixture: %w", err)
+		return fmt.Errorf("build fixture: %w", err)
 	}
+	mark("build corpus")
 	ctx := context.Background()
 
 	// --- Direct collection-API lane -------------------------------------
 	db, err := backenddb.Open(backenddb.Options{Dir: filepath.Join(cfg.Dir, "direct"), CommandWAL: true, DisableBackgroundPrune: true})
 	if err != nil {
-		return nil, fmt.Errorf("open direct db: %w", err)
+		return fmt.Errorf("open direct db: %w", err)
 	}
 	defer func() { _ = db.Close() }()
 	manager := collections.NewCollectionManager(db)
 	if _, err := manager.CreateCollection(serviceOverheadCollectionMeta(cfg)); err != nil {
-		return nil, fmt.Errorf("create direct collection: %w", err)
+		return fmt.Errorf("create direct collection: %w", err)
 	}
 	col, err := manager.OpenCollection(svcOverheadCollection)
 	if err != nil {
-		return nil, fmt.Errorf("open direct collection: %w", err)
+		return fmt.Errorf("open direct collection: %w", err)
 	}
 	if err := ingestServiceOverheadDocs(col, corpus.Chunks); err != nil {
-		return nil, fmt.Errorf("ingest direct docs: %w", err)
+		return fmt.Errorf("ingest direct docs: %w", err)
 	}
 	if _, err := col.RebuildVectorIndex(svcOverheadVectorIndex); err != nil {
-		return nil, fmt.Errorf("rebuild direct vector index: %w", err)
+		return fmt.Errorf("rebuild direct vector index: %w", err)
 	}
+
+	mark("build direct index")
 
 	// --- HTTP service lane ----------------------------------------------
 	serviceDB, err := backenddb.Open(backenddb.Options{Dir: filepath.Join(cfg.Dir, "service"), CommandWAL: true, DisableBackgroundPrune: true})
 	if err != nil {
-		return nil, fmt.Errorf("open service db: %w", err)
+		return fmt.Errorf("open service db: %w", err)
 	}
 	defer func() { _ = serviceDB.Close() }()
 	service := documentservice.New(collections.NewCollectionManager(serviceDB))
@@ -117,10 +140,10 @@ func runServiceOverheadBenchmark(cfg serviceOverheadConfig) (*serviceOverheadRep
 		ScalarFields:       []documentservice.ScalarFieldDeclaration{{Field: "meta.tenant"}},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("service create index: %w", err)
+		return fmt.Errorf("service create index: %w", err)
 	}
 	if !info.Capabilities.HybridSearch || info.Capabilities.HybridMetadataFilters {
-		return nil, fmt.Errorf("service must support unfiltered Hybrid and refuse ordinary vector Hybrid filters")
+		return fmt.Errorf("service must support unfiltered Hybrid and refuse ordinary vector Hybrid filters")
 	}
 	documents := make([]documentservice.Document, len(corpus.Chunks))
 	for i, ch := range corpus.Chunks {
@@ -135,15 +158,28 @@ func runServiceOverheadBenchmark(cfg serviceOverheadConfig) (*serviceOverheadRep
 		Documents:               documents,
 		DeferVectorIndexRebuild: true,
 	}); err != nil {
-		return nil, fmt.Errorf("service upsert: %w", err)
+		return fmt.Errorf("service upsert: %w", err)
 	}
 	if _, err := service.OptimizeIndex(ctx, svcOverheadCollection, documentservice.OptimizeIndexRequest{}); err != nil {
-		return nil, fmt.Errorf("service optimize: %w", err)
+		return fmt.Errorf("service optimize: %w", err)
 	}
+	mark("build service index")
 	server := httptest.NewServer(documentservice.NewHandler(service))
 	defer server.Close()
 	client := server.Client()
 
+	if err := validateServiceOverheadParity(col, corpus, cfg, client, server.URL); err != nil {
+		return err
+	}
+
+	mark("untimed direct/HTTP query parity")
+	if afterParity != nil {
+		return afterParity(col, corpus, client, server.URL)
+	}
+	return nil
+}
+
+func measureServiceOverheadRows(col *collections.Collection, corpus *ragCorpus, cfg serviceOverheadConfig, client *http.Client, baseURL string) (*serviceOverheadReport, error) {
 	report := &serviceOverheadReport{
 		Schema:         svcOverheadSchema,
 		Docs:           cfg.Docs,
@@ -151,10 +187,6 @@ func runServiceOverheadBenchmark(cfg serviceOverheadConfig) (*serviceOverheadRep
 		TopK:           cfg.TopK,
 		EfSearch:       svcOverheadEfSearch,
 		CandidateLimit: cfg.CandidateLimit,
-	}
-
-	if err := validateServiceOverheadParity(col, corpus, cfg, client, server.URL); err != nil {
-		return nil, err
 	}
 
 	directHybridSamples, directHybridHits, err := timeServiceOverheadQueries(corpus, cfg, directTimingIterations, func(q ragQuery) (int, error) {
@@ -186,7 +218,7 @@ func runServiceOverheadBenchmark(cfg serviceOverheadConfig) (*serviceOverheadRep
 		var parsed struct {
 			Documents []json.RawMessage `json:"documents"`
 		}
-		if err := postServiceOverheadJSON(client, server.URL+"/v1/indexes/"+svcOverheadCollection+"/search/hybrid", body, &parsed); err != nil {
+		if err := postServiceOverheadJSON(client, baseURL+"/v1/indexes/"+svcOverheadCollection+"/search/hybrid", body, &parsed); err != nil {
 			return 0, err
 		}
 		return len(parsed.Documents), nil
@@ -225,7 +257,7 @@ func runServiceOverheadBenchmark(cfg serviceOverheadConfig) (*serviceOverheadRep
 		var parsed struct {
 			Documents []json.RawMessage `json:"documents"`
 		}
-		if err := postServiceOverheadJSON(client, server.URL+"/v1/indexes/"+svcOverheadCollection+"/search/vector", body, &parsed); err != nil {
+		if err := postServiceOverheadJSON(client, baseURL+"/v1/indexes/"+svcOverheadCollection+"/search/vector", body, &parsed); err != nil {
 			return 0, err
 		}
 		return len(parsed.Documents), nil

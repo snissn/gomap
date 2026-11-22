@@ -67,7 +67,14 @@ No package reverse closure or individual-test scheduler is installed. Existing
 `weighted_shard_file`, TSV pins, preserve-fallback behavior, modulo fallbacks,
 caching heavy/rest partitions, power-loss route, and dedicated race routes remain
 the execution authority. Assignment is on the full inventory before any future
-intersection; affected packages retain every named partition.
+intersection; affected packages retain every named partition. Linux general
+race shards discover their named tests with `go test -race -list`, using the
+same build selection as the commands that execute them. This shares Go's
+compiled race package archives; it does not share test outcomes or omit jobs.
+Windows and other normal-mode discovery, named filters, dedicated race routes,
+and the package universe selector are unchanged. A test defined only under a
+race-specific build constraint belongs to the race executable's named inventory,
+whereas a non-race-only test cannot run in those shards.
 
 The manifest's discovery-source fingerprint binds each path, Git mode, and blob
 for tracked Go/Python/shell,

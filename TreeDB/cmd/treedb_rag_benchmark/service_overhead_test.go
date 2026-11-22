@@ -4,14 +4,35 @@ import (
 	"os"
 	"strconv"
 	"testing"
+	"time"
 )
 
-// TestServiceOverheadParityRows runs the C6 (#4273) service-level parity rows
-// on a small slice of the committed fixture and prints the observational
-// overhead table (service HTTP vs direct collection API, p50/p99 per query).
-// RAG_SVC_OVERHEAD_DOCS / RAG_SVC_OVERHEAD_REPS let evidence runs scale the
-// fixture up without changing the deterministic default.
+// TestServiceOverheadParityRows checks actual direct/HTTP query parity without
+// running the repeated overhead campaign in ordinary CI. Setting either
+// RAG_SVC_OVERHEAD_DOCS or RAG_SVC_OVERHEAD_REPS keeps the historical evidence
+// invocation available, including its timing-row validation.
 func TestServiceOverheadParityRows(t *testing.T) {
+	if os.Getenv("RAG_SVC_OVERHEAD_DOCS") != "" || os.Getenv("RAG_SVC_OVERHEAD_REPS") != "" {
+		testServiceOverheadEvidenceRows(t)
+		return
+	}
+	cfg := serviceOverheadConfig{
+		Docs:           128,
+		Dims:           ragFixtureDims,
+		M:              8,
+		TopK:           10,
+		CandidateLimit: 64,
+		Dir:            t.TempDir(),
+	}
+	if err := withServiceOverheadParity(cfg, func(phase string, elapsed time.Duration) {
+		t.Logf("service parity phase %q: %s", phase, elapsed)
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func testServiceOverheadEvidenceRows(t *testing.T) {
+	t.Helper()
 	docs := 128
 	if raw := os.Getenv("RAG_SVC_OVERHEAD_DOCS"); raw != "" {
 		parsed, err := strconv.Atoi(raw)

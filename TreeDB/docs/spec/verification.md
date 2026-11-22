@@ -1655,7 +1655,13 @@ Coverage:
     and original 100,000-key size run two maintenance/GC passes and verify every
     final value plus 10,000 missing keys through independent read-only opens.
     The smaller case also checks partial-phase failure, cleanup, and retry when
-    packed dictionary authority is unavailable. `-short` skips the original size.
+    packed dictionary authority is unavailable. Both sizes reproduced the original
+    missing leaf-log failure ([#4886 evidence](https://github.com/snissn/gomap/issues/4886#issuecomment-5944232852)).
+    On supported Linux, ordinary PR tests run both sizes. PR race repeats the
+    20,000-key case; main push, merge-group and manual **TreeDB: vet+test**
+    runs also race the 100,000-key case. To run both locally, use
+    `go test -race ./TreeDB -run '^TestCompactStorageExhaustiveCommandWALRandom4KOffline$' -count=1`.
+    `-short` skips the original size.
 - `TreeDB/side_store_lookups_test.go`
   - read-only dictionary owners retain lookups without writes; stable capture
     succeeds on supported owners and returns typed namespace refusal without

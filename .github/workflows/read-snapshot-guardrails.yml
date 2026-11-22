@@ -3,6 +3,11 @@ name: "read-snapshot: guardrails"
 on:
   pull_request:
 
+# Superseded PR heads need no second guardrail; never share a group across PRs.
+concurrency:
+  group: read-snapshot-${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
