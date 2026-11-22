@@ -1,3 +1,5 @@
+//go:build darwin || linux || freebsd || netbsd || openbsd
+
 package collections
 
 import (
@@ -82,8 +84,20 @@ func BenchmarkNativeBSONJournalReceiptInsert(b *testing.B) {
 							}
 							if receipt {
 								got, completed, err := col.InsertBatchValidatedBSONWithJournalReceipt(ids, docs)
-								if err != nil || len(got) != batch || !completed.Completed() {
+								if err != nil || len(got) != batch {
 									b.Fatalf("receipt ACKs=%d expected=%d completion=%+v err=%v", len(got), batch, completed, err)
+								}
+								if profile == treedb.ProfileCommandWALDurable {
+									if !completed.Completed() {
+										b.Fatalf("durable receipt not completed: completion=%+v", completed)
+									}
+								} else {
+									if completed.Selected() || completed.Completed() {
+										b.Fatalf("relaxed receipt unexpectedly selected: completion=%+v", completed)
+									}
+									if physical, err := manager.SyncForStandaloneWriteConcern(); !physical || err != nil {
+										b.Fatalf("relaxed fallback boundary=%t/%v", physical, err)
+									}
 								}
 							} else {
 								if got, err := col.InsertBatchValidatedBSON(ids, docs); err != nil || len(got) != batch {

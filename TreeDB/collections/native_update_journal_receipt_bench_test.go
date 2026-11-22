@@ -1,3 +1,5 @@
+//go:build darwin || linux || freebsd || netbsd || openbsd
+
 package collections
 
 import (
@@ -67,8 +69,20 @@ func BenchmarkCollectionBSONSetJournalReceipt(b *testing.B) {
 				for n := range b.N {
 					if receipt {
 						results, batched, completion, err := col.UpdateBSONSetBatchIfNoSecondaryUniqueIndexChangesWithJournalReceipt(requests[n%2])
-						if err != nil || !batched || len(results) != 1 || !results[0].Modified || !completion.Completed() {
+						if err != nil || !batched || len(results) != 1 || !results[0].Modified {
 							b.Fatalf("receipt mutation=%+v/%t/%+v/%v", results, batched, completion, err)
+						}
+						if profile == treedb.ProfileCommandWALDurable {
+							if !completion.Completed() {
+								b.Fatalf("durable update receipt not completed: completion=%+v", completion)
+							}
+						} else {
+							if completion.Selected() || completion.Completed() {
+								b.Fatalf("relaxed update receipt unexpectedly selected: completion=%+v", completion)
+							}
+							if physical, err := manager.SyncForStandaloneWriteConcern(); !physical || err != nil {
+								b.Fatalf("relaxed update fallback=%t/%v", physical, err)
+							}
 						}
 					} else {
 						results, batched, err := col.UpdateBSONSetBatchIfNoSecondaryUniqueIndexChanges(requests[n%2])
