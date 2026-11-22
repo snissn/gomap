@@ -435,6 +435,17 @@ func (db *DB) writeNativePublication(b *Batch, native *backenddb.NativePreparedP
 	if intent.RequestsExactSeal() && !intent.NativeSealedReceiptAdmitted() {
 		return result, ErrCOWUnsupported
 	}
+	if native.RequestJournalCompletion && native.Finalizer == nil && native.Resources == nil && native.ObserveAssigned == nil && !native.RequireInlineCompositeRaw {
+		var journalOwner backenddb.NativeJournalCompletionOwner
+		result.Journal, journalOwner, err = backend.BeginNativeJournalCompletion(owner, intent)
+		if err != nil {
+			return result, err
+		}
+		if journalOwner != nil {
+			defer journalOwner.EndNativeJournalCompletion()
+			sync = true
+		}
+	}
 	returnCustodyOnInstall := native.ReturnCustodyOnInstall
 	if err = b.SetNativeSemanticPublication(owner, native); err != nil {
 		return result, err
@@ -480,7 +491,7 @@ func (db *DB) writeNativePublication(b *Batch, native *backenddb.NativePreparedP
 	}
 	err = b.WriteAfterCommandWALAppendWithPreparedRevision(effectiveDurable, r.register)
 	if r.completion != nil {
-		err = r.completion.CompleteNativeCommandWAL(err)
+		r.result, err = r.completion.CompleteNativeCommandWAL(err)
 		r.completion = nil
 	}
 	b.CompleteCOWAcknowledgement(owner, effectiveDurable, err)
@@ -489,6 +500,7 @@ func (db *DB) writeNativePublication(b *Batch, native *backenddb.NativePreparedP
 	result.Assigned, result.Uncertain, result.LogicalInstalled = receipt.Assigned, receipt.Uncertain, receipt.LogicalInstalled
 	result.WALCompleted, result.WALStable = receipt.WALCompleted, receipt.WALStable
 	result.OnlyPointConflict = receipt.OnlyPointConflict
+	result.Journal = backend.CompleteNativeJournalCompletion(result.Journal, result, r.result)
 	if err == nil {
 		backend.ObserveNativeInstalledForTest(intent, result)
 	}
@@ -512,6 +524,7 @@ type cowNativeCommandWALRequest struct {
 	owner      *transactionowner.Owner
 	bridge     backenddb.NativeCommandWALCompletionBridge
 	completion backenddb.NativeCommandWALCompletion
+	result     backenddb.NativeCommandWALCompletionResult
 	durable    bool
 }
 

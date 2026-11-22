@@ -10183,6 +10183,7 @@ type DB struct {
 	autoCheckpointWriteCh    chan struct{}
 	autoCheckpointResampleCh chan struct{}
 	nativeGenerationFlushCh  chan struct{}
+	nativeReservationFlushCh chan struct{}
 	autoCheckpointOn         atomic.Bool
 	autoCheckpointBytesFn    atomic.Pointer[autoCheckpointBytesHookBox]
 	// autoCheckpointSizeArmed gates the maxWALBytes size-triggered checkpoint.
@@ -13367,6 +13368,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		autoCheckpointWriteCh:                      make(chan struct{}, 1),
 		autoCheckpointResampleCh:                   make(chan struct{}, 1),
 		nativeGenerationFlushCh:                    make(chan struct{}, 1),
+		nativeReservationFlushCh:                   make(chan struct{}, 1),
 		journalLanesConfigured:                     journalLaneDefaults.Configured,
 		journalLanesDefaulted:                      journalLaneDefaults.Defaulted,
 		journalLanesGOMAXPROCS:                     journalLaneDefaults.GOMAXPROCS,
@@ -19700,6 +19702,57 @@ const (
 	cowGenerationQuietRetryMax   = 8 * cowGenerationPressureRetryDelay
 )
 
+func (db *DB) maintainCOWReservationPressure() {
+	if db == nil || db.cow == nil || db.closing.Load() {
+		return
+	}
+	err := db.materializeCOWPrefix(context.Background(), false, nil, cowReservationPressureMaterialization)
+	if err == nil {
+		if cleanupErr := db.joinSemanticCleanupFrontier(); cleanupErr != nil && cleanupErr != errDBClosing {
+			db.retainOriginalCleanupError(cleanupErr)
+			if db.notifyError != nil {
+				guard := db.ownedCloseGuard
+				if enterErr := guard.EnterCheckpointNotification(); enterErr == nil {
+					defer guard.LeaveCheckpointNotification()
+					db.reportError(cleanupErr)
+				}
+			}
+			return
+		}
+		limits := db.cow.budget.Limits()
+		after := db.cow.budget.Stats().ReservedBytes
+		soft := limits.MaxInFlightBytes - limits.MaxInFlightBytes/4
+		if after < soft {
+			db.cow.reservationDrainFloor.Store(0)
+		} else {
+			hard := limits.MaxInFlightBytes - limits.MaxInFlightBytes/8
+			step := limits.MaxInFlightBytes / 16
+			if step == 0 {
+				step = 1
+			}
+			nextFloor := after + step
+			if nextFloor < after || nextFloor > hard {
+				nextFloor = hard
+			}
+			db.cow.reservationDrainFloor.Store(nextFloor)
+		}
+		return
+	}
+	if err == errDBClosing || cowGenerationRetryableOnly(err) {
+		return
+	}
+	db.retainOriginalCleanupError(err)
+	if db.notifyError == nil {
+		return
+	}
+	guard := db.ownedCloseGuard
+	if err := guard.EnterCheckpointNotification(); err != nil {
+		return
+	}
+	defer guard.LeaveCheckpointNotification()
+	db.reportError(err)
+}
+
 func (db *DB) maintainCOWGenerationPressure() (retry bool, allocation *cowGenerationSnapshotAllocationRefusal) {
 	// Close takes flushMu and drains the full frontier before stopping this
 	// worker. Otherwise this pass owns the original pressure seal and retirement.
@@ -19837,6 +19890,8 @@ func (db *DB) autoCheckpointLoop(interval time.Duration, maxWALBytes int64, idle
 			if generationRetry == nil {
 				maintainGeneration()
 			}
+		case <-db.nativeReservationFlushCh:
+			db.maintainCOWReservationPressure()
 		case <-generationRetry:
 			generationRetry = nil
 			maintainGeneration()

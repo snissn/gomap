@@ -17,29 +17,51 @@ type nativeBSONSetRetry struct {
 }
 
 func (c *Collection) nativeUpdateBSONSet(id []byte, fields []BSONSetField) (bool, bool, error) {
+	matched, modified, _, err := c.nativeUpdateBSONSetWithJournal(id, fields, false)
+	return matched, modified, err
+}
+
+func (c *Collection) nativeUpdateBSONSetWithJournal(id []byte, fields []BSONSetField, requestJournal bool) (bool, bool, backenddb.NativeJournalCompletion, error) {
 	items := [...]BSONSetUpdateBatchItem{{DocumentID: id, Fields: fields}}
 	retry := nativeBSONSetRetry{id: id}
 	var lastErr error
 	for attempt := range maxCollectionMutationRetries {
-		results, _, err := c.nativeUpdateBatchModeObserved(nil, updateBatchModeAny, items[:], &retry)
-		if retry.rowConflict {
+		var operation nativeOperationJournal
+		var journal *nativeOperationJournal
+		mode := updateBatchModeAny
+		if requestJournal {
+			operation.requested = true
+			journal = &operation
+			mode = updateBatchModeNoSecondaryUniqueIndexChanges
+		}
+		results, batched, err := c.nativeUpdateBatchModeWithJournal(nil, mode, items[:], &retry, journal)
+		if requestJournal && !batched && err == nil {
+			// The conditional path declined before publication. Give the
+			// original unrestricted singleton its own current catalog basis.
+			requestJournal = false
+			retry = nativeBSONSetRetry{id: id}
+			results, _, err = c.nativeUpdateBatchModeObserved(nil, updateBatchModeAny, items[:], &retry)
+		}
+		completion := operation.completion
+		if retry.rowConflict && completion.AssignedLSN() == 0 && !completion.Attempted() {
 			lastErr = err
 			waitBeforeCollectionMutationRetry(attempt)
 			continue
 		}
-		if err != nil {
+		if err != nil && !completion.Installed() {
 			var item *UpdateBatchItemError
 			if errors.As(err, &item) && item.Index == 0 {
 				err = item.Err
 			}
-			return false, false, err
+			return false, false, completion, err
 		}
 		if len(results) != 1 {
-			return false, false, fmt.Errorf("collections: BSON $set result count %d for single update", len(results))
+			countErr := fmt.Errorf("collections: BSON $set result count %d for single update", len(results))
+			return false, false, completion.WithoutSuccess(), errors.Join(err, countErr)
 		}
-		return results[0].Matched, results[0].Modified, nil
+		return results[0].Matched, results[0].Modified, completion, err
 	}
-	return false, false, collectionMutationRetryExhausted(lastErr)
+	return false, false, backenddb.NativeJournalCompletion{}, collectionMutationRetryExhausted(lastErr)
 }
 
 func nativeBSONSetMeta(meta *CollectionMeta) bool {

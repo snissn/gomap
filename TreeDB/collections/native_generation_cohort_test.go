@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
 // These four requests enter from low pressure, then finish against a generation
@@ -173,15 +175,30 @@ func TestNativeOrdinaryGenerationAdmittedCohort(t *testing.T) {
 	if got, err := c.Insert(sentinelID, sentinel); err != nil || !bytes.Equal(got, sentinelID) {
 		t.Fatalf("later public sentinel: id=%q err=%v", got, err)
 	}
-	current, err := c.nativeJSON.Capture(c.name)
-	if err != nil {
-		t.Fatal(err)
+	if observed, err := backend.ObserveNativeProducer(); err != nil || observed.Semantic.GenerationUnderPressure {
+		t.Fatalf("later producer did not relieve generation pressure: observed=%+v err=%v", observed, err)
 	}
-	afterBasis, valid := current.capture.Snapshot().StateToken()
-	if err := current.Close(); err != nil {
-		t.Fatal(err)
+	var afterBasis backenddb.StateToken
+	var afterValid bool
+	waitDeadline := time.Now().Add(10 * time.Second)
+	for {
+		current, err := c.nativeJSON.Capture(c.name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		afterBasis, afterValid = current.capture.Snapshot().StateToken()
+		if err := current.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if afterValid && afterBasis.CommitSeq > pressured.Basis.CommitSeq {
+			break
+		}
+		if time.Now().After(waitDeadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	if !valid || afterBasis.CommitSeq <= pressured.Basis.CommitSeq {
+	if !afterValid || afterBasis.CommitSeq <= pressured.Basis.CommitSeq {
 		t.Errorf("later producer did not perform physical maintenance: pressured=%+v after=%+v", pressured.Basis, afterBasis)
 	}
 	if err := owner.Checkpoint(); err != nil {

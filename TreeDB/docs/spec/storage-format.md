@@ -3126,8 +3126,10 @@ There is no additional native WAL format or native durability coordinator.
 An uncontended native request may instead use the existing synchronous mutation
 envelope directly, without an extra barrier frame. An explicit standalone
 journal fence on a native durable fixed writer uses the existing forced prefix
-completion and persistent dependency ordering. The relaxed ext4-stream ACK
-continues to publish its applied root through the checkpoint path.
+completion and persistent dependency ordering. An eligible standalone request
+can acknowledge from its own verified completion using those same frames and
+dependency rules. The relaxed ext4-stream ACK continues to publish its applied
+root through the checkpoint path.
 
 A `RawKVBatch` command frame is one atomic command: one frame, one `LSN`, and
 all contained operations decode as one batch. Delete operations require

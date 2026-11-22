@@ -69,14 +69,26 @@ func nativeConstructionUnderPressure(total, fixed, limit uint64) bool {
 	return total-fixed >= remaining-remaining/4
 }
 
-func (s cowNativePressureState) underPressure(limits memtable.COWLimits) bool {
+func (s cowNativePressureState) reservationSoftPressure(limits memtable.COWLimits) bool {
+	return s.stats.ReservedBytes >= limits.MaxInFlightBytes-limits.MaxInFlightBytes/4
+}
+
+func (s cowNativePressureState) reservationHardPressure(limits memtable.COWLimits) bool {
+	return s.stats.ReservedBytes >= limits.MaxInFlightBytes-limits.MaxInFlightBytes/8
+}
+
+func (s cowNativePressureState) nonReservationPressure(limits memtable.COWLimits) bool {
 	p := s.semantic
-	return p.GenerationUnderPressure || s.stats.ReservedBytes >= limits.MaxInFlightBytes-limits.MaxInFlightBytes/4 ||
+	return p.GenerationUnderPressure ||
 		s.stats.Sources >= limits.MaxSources || s.stats.Generations >= limits.MaxGenerations ||
 		(p.ConstructionBytes != 0 &&
 			(nativeConstructionUnderPressure(p.ConstructionBytes, p.FixedConstructionBytes, p.MaxInFlightBytes) ||
 				nativeConstructionUnderPressure(p.ConstructionBytes, p.FixedConstructionBytes, p.MaxTotalBytes) ||
 				p.Sources >= p.MaxSources))
+}
+
+func (s cowNativePressureState) underPressure(limits memtable.COWLimits) bool {
+	return s.reservationSoftPressure(limits) || s.nonReservationPressure(limits)
 }
 
 func (c *cowCache) nativeProducerPressureState() (state cowNativePressureState, err error) {
@@ -186,6 +198,24 @@ func (db *DB) prepareNativeProducerObservation(projected *backenddb.NativeProjec
 			return backenddb.NativeProducerObservation{}, err
 		}
 		if !observed.underPressure(limits) {
+			if c.reservationDrainFloor.Load() != 0 {
+				c.reservationDrainFloor.Store(0)
+			}
+			return observed.observation(limits), nil
+		}
+		// In durable command-WAL mode with a running size-maintenance worker,
+		// soft reservation pressure (3/4..7/8 of MaxInFlightBytes) still leaves
+		// headroom for concurrent writers while the background worker seals and
+		// retires the captured prefix. Hard reservation pressure (>=7/8) and
+		// non-reservation pressure retain the synchronous foreground drain.
+		if db.nativePressureDrainEnabled() && !db.relaxedSync &&
+			!observed.nonReservationPressure(limits) && !observed.reservationHardPressure(limits) {
+			if floor := c.reservationDrainFloor.Load(); floor == 0 || observed.stats.ReservedBytes >= floor {
+				select {
+				case db.nativeReservationFlushCh <- struct{}{}:
+				default:
+				}
+			}
 			return observed.observation(limits), nil
 		}
 	}
@@ -223,10 +253,11 @@ func (db *DB) prepareNativeProducerObservation(projected *backenddb.NativeProjec
 		// physical seal. The captured roots and held readers keep their real
 		// charges. All other pressure, including a full parent budget after
 		// capture, uses the original synchronous reclamation.
-		if db.relaxedSync && (projected != nil || before.semantic.GenerationUnderPressure) && before.semantic.ConstructionBytes == 0 {
+		if (projected != nil || before.semantic.GenerationUnderPressure) && before.semantic.ConstructionBytes == 0 {
 			remaining := before
 			remaining.semantic.GenerationUnderPressure = false
-			if !remaining.underPressure(limits) {
+			canDeferReservation := !db.relaxedSync && !remaining.nonReservationPressure(limits) && !remaining.reservationHardPressure(limits)
+			if !remaining.underPressure(limits) || canDeferReservation {
 				rolled, rolloverErr := db.rolloverCOWForFlushProjected(projected)
 				if rolloverErr == nil {
 					if projected != nil {
@@ -250,7 +281,8 @@ func (db *DB) prepareNativeProducerObservation(projected *backenddb.NativeProjec
 					if observeErr != nil {
 						return backenddb.NativeProducerObservation{}, observeErr
 					}
-					if !after.underPressure(limits) {
+					if !after.underPressure(limits) ||
+						(!db.relaxedSync && !after.nonReservationPressure(limits) && !after.reservationHardPressure(limits)) {
 						return after.observation(limits), nil
 					}
 				} else if rolloverErr != memtable.ErrCOWCapacity {
@@ -373,11 +405,14 @@ func (tx *nativeConditionalTxn) CommitNative(native *backenddb.NativePreparedPub
 		releaseErr := tx.batch.releaseNativePublication()
 		if releaseErr != nil && native != nil {
 			var refusal *memtable.COWProjectedGenerationRefusal
-			if native.ObservePointConflict != 0 || errors.As(err, &refusal) {
+			if result.Journal.Selected() || native.ObservePointConflict != 0 || errors.As(err, &refusal) {
 				err = joinCOWCleanupError(err, releaseErr)
 			}
 		}
 		err = joinCOWCleanupError(err, tx.Close())
+		if err != nil {
+			result.Journal = result.Journal.WithoutSuccess()
+		}
 	}()
 	// The consumer cannot replace the original opening sequence/cut. Reprepare
 	// changes the physical preparation basis only AFTER original dependencies pass.

@@ -546,7 +546,7 @@ func (db *DB) flushCOWFrozenCutWithColumnCompaction(syncFlush bool, publish *che
 		captured, canCapture := db.backend.(interface {
 			SyncPrivateCOWGenerationWAL(*transactionowner.Owner) error
 		})
-		if generationPressure && canCapture && c.txnOwner != nil {
+		if generationPressure && db.relaxedSync && canCapture && c.txnOwner != nil {
 			err = captured.SyncPrivateCOWGenerationWAL(c.txnOwner)
 		} else if syncFlush {
 			// Always drain the writer and surface journal-local failures, even

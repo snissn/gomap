@@ -79,6 +79,7 @@ type publicCommandWALPublication struct{ ticket uint64 }
 // published state remains the original compact ticket, not a second queue.
 type publicCommandWALRegistration struct {
 	publicCommandWALPublication
+	assignedLSN                            uint64
 	leader, awaiting, observeWait, durable bool
 }
 
@@ -338,6 +339,7 @@ func (tdb *DB) registerPublicCommandWALCollectedWithSpare(bytes int, preparedByt
 			}
 		}()
 		lsn, err := appendFrame(false)
+		publication.assignedLSN = lsn
 		if lsn != 0 {
 			publication.ticket = publicCommandWALFastRelaxedAppendedTicket
 			start := time.Now()
@@ -420,6 +422,7 @@ func (tdb *DB) registerPublicCommandWALCollectedWithSpare(bytes int, preparedByt
 		// emits its own durable marker. A later relaxed suffix can still
 		// outrun that marker before capture, so it uses the same admission.
 		lsn, appendErr := appendFrame(singleton)
+		publication.assignedLSN = lsn
 		err = appendErr
 		if lsn != 0 {
 			start := time.Now()

@@ -439,3 +439,37 @@ func TestCommandJournalStableRotationRetryDescriptorPlateau(t *testing.T) {
 		t.Fatalf("final path=%q", got)
 	}
 }
+
+func TestCommandJournalFixedWriterSchedulingLeavesReserveAndStickyErrorUntouched(t *testing.T) {
+	if !FixedWALCreationSupported() {
+		t.Skip("fixed WAL container is unavailable")
+	}
+	journal, err := openCommandJournal(t.TempDir(), CommandJournalOptions{Lane: 19}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	injected := errors.New("fixed writer reserve fail-stop")
+	defer func() {
+		if err := journal.Close(); err != nil && !errors.Is(err, injected) {
+			t.Error(err)
+		}
+	}()
+	if fixed, err := journal.HasFixedWriter(); err != nil || !fixed {
+		t.Fatalf("open fixed writer=%t/%v", fixed, err)
+	}
+	slot := &fixedWALAheadSlot{done: true, signal: make(chan struct{})}
+	journal.fixedAhead = slot
+	if !journal.CanShareFixedWriter() || journal.fixedAhead != slot {
+		t.Fatal("healthy scheduling consumed a completed reserve")
+	}
+	journal.fixedAheadErr = injected
+	if journal.CanShareFixedWriter() || journal.fixedAhead != slot || journal.writer.commandBufferError() != nil {
+		t.Fatal("scheduling consumed the reserve or promoted the pending error")
+	}
+	if fixed, err := journal.HasFixedWriter(); fixed || !errors.Is(err, injected) {
+		t.Fatalf("authoritative admission returned %t/%v, want original fail-stop", fixed, err)
+	}
+	if journal.fixedAhead != nil || !errors.Is(journal.writer.commandBufferError(), injected) {
+		t.Fatal("actual admission did not consume joined reserve and retain original writer poison")
+	}
+}

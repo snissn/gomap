@@ -41,14 +41,14 @@ func (r *nativeCompletionTestRequest) RegisterNativeCommandWAL(appendFrame func(
 }
 func (*nativeCompletionTestRequest) ReleaseNativeCommandWAL() {}
 
-func (r *nativeCompletionTestRequest) CompleteNativeCommandWAL(err error) error {
+func (r *nativeCompletionTestRequest) CompleteNativeCommandWAL(err error) (backenddb.NativeCommandWALCompletionResult, error) {
 	b := r.bridge
 	r.bridge = nil
 	b.completions++
 	if err != nil {
-		return err
+		return backenddb.NativeCommandWALCompletionResult{}, err
 	}
-	return b.failure
+	return backenddb.NativeCommandWALCompletionResult{}, b.failure
 }
 
 func TestCOWNativeDeferredCompletionPreservesInstalledReceipt(t *testing.T) {
@@ -77,6 +77,9 @@ func testCOWNativeDeferredCompletionPreservesInstalledReceipt(t *testing.T, capt
 	result, err := tx.CommitNative(publication, nativeTxnIntent(t, backend, true), true)
 	if !errors.Is(err, failure) || !result.Consumed || !result.Assigned || !result.LogicalInstalled || !result.Uncertain || result.WALStable || result.AssignedLSN == 0 || result.AssignedLSN != bridge.assigned {
 		t.Fatalf("installed deferred failure=%+v/%v bridge=%+v", result, err, bridge)
+	}
+	if result.Journal.Selected() {
+		t.Fatal("unbound completion created a journal receipt")
 	}
 	if plan.calls != 1 || bridge.appendCalls != 1 || bridge.completions != 1 {
 		t.Fatalf("reexecuted original plan=%d bridge=%+v", plan.calls, bridge)

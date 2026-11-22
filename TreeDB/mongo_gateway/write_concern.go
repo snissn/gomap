@@ -83,6 +83,112 @@ type standaloneWriteConcernStats struct {
 	uncertainOutcomes             atomic.Uint64
 	acknowledgementNanos          atomic.Uint64
 	journalSyncNanos              atomic.Uint64
+	journalRoutes                 atomic.Pointer[standaloneJournalRoutes]
+}
+
+type standaloneJournalRoutes struct {
+	insert, modifiedUpdate, unmodifiedUpdate, otherUpdate standaloneJournalRouteCounts
+}
+
+type standaloneJournalRouteCounts struct {
+	receiptSettled, receiptFailed, receiptWaitAttempted, receiptInstalled atomic.Uint64
+	sharedFreshFence, sharedFreshFenceFailed                              atomic.Uint64
+	exclusiveFreshFence, exclusiveFreshFenceFailed                        atomic.Uint64
+	logicalErrors                                                         atomic.Uint64
+}
+
+// EnableStandaloneJournalRouteStats enables per-command observation for the
+// standalone journaled INSERT and UPDATE paths. Call before serving a workload.
+func (s *Server) EnableStandaloneJournalRouteStats() {
+	s.writeConcernStats.journalRoutes.CompareAndSwap(nil, &standaloneJournalRoutes{})
+}
+
+// StandaloneJournalRouteStats returns cumulative request-level route counts if
+// enabled. Sample at a quiescent phase boundary for across-counter comparisons.
+// Physical WAL groups are counted separately by the storage owner.
+func (s *Server) StandaloneJournalRouteStats() map[string]uint64 {
+	if s == nil {
+		return nil
+	}
+	routes := s.writeConcernStats.journalRoutes.Load()
+	if routes == nil {
+		return nil
+	}
+	stats := make(map[string]uint64)
+	routes.insert.snapshot(stats, "Insert.")
+	routes.modifiedUpdate.snapshot(stats, "UpdateModified.")
+	routes.unmodifiedUpdate.snapshot(stats, "UpdateUnmodified.")
+	routes.otherUpdate.snapshot(stats, "UpdateOther.")
+	return stats
+}
+
+func (c *standaloneJournalRouteCounts) snapshot(stats map[string]uint64, prefix string) {
+	stats[prefix+"ReceiptSettled"] = c.receiptSettled.Load()
+	stats[prefix+"ReceiptFailed"] = c.receiptFailed.Load()
+	stats[prefix+"ReceiptWaitAttempted"] = c.receiptWaitAttempted.Load()
+	stats[prefix+"ReceiptInstalled"] = c.receiptInstalled.Load()
+	stats[prefix+"SharedFreshFence"] = c.sharedFreshFence.Load()
+	stats[prefix+"SharedFreshFenceFailed"] = c.sharedFreshFenceFailed.Load()
+	stats[prefix+"ExclusiveFreshFence"] = c.exclusiveFreshFence.Load()
+	stats[prefix+"ExclusiveFreshFenceFailed"] = c.exclusiveFreshFenceFailed.Load()
+	stats[prefix+"LogicalErrors"] = c.logicalErrors.Load()
+}
+
+func (r *standaloneJournalRoutes) record(name string, response wire.Document, commandOK, shared, syncOK bool, outcome *standaloneOperationJournalOutcome) {
+	if name != "insert" && name != "update" {
+		return
+	}
+	raw := bson.Raw(response)
+	logicalError := !commandOK || raw.Lookup("writeErrors").Type != 0
+	counts := &r.insert
+	positiveCount := false
+	if name == "update" {
+		counts = &r.otherUpdate
+		if commandOK {
+			modified, known := raw.Lookup("nModified").Int32OK()
+			positiveCount = known && modified > 0
+			switch {
+			case positiveCount:
+				counts = &r.modifiedUpdate
+			case known && modified == 0 && !logicalError && raw.Lookup("upserted").Type == 0:
+				counts = &r.unmodifiedUpdate
+			}
+		}
+	}
+	if logicalError {
+		counts.logicalErrors.Add(1)
+	}
+	if outcome != nil && outcome.completion.Selected() {
+		if name == "insert" && commandOK {
+			inserted, known := raw.Lookup("n").Int32OK()
+			positiveCount = known && inserted > 0
+		}
+		if outcome.completion.Attempted() {
+			counts.receiptWaitAttempted.Add(1)
+		}
+		// A failed coalescer membership check can preserve aggregate install
+		// evidence. The command's checked count establishes this member's effect.
+		if positiveCount && outcome.completion.Installed() {
+			counts.receiptInstalled.Add(1)
+		}
+		if syncOK {
+			counts.receiptSettled.Add(1)
+		} else {
+			counts.receiptFailed.Add(1)
+		}
+		return
+	}
+	if shared {
+		counts.sharedFreshFence.Add(1)
+		if !syncOK {
+			counts.sharedFreshFenceFailed.Add(1)
+		}
+	} else {
+		counts.exclusiveFreshFence.Add(1)
+		if !syncOK {
+			counts.exclusiveFreshFenceFailed.Add(1)
+		}
+	}
 }
 
 // StandaloneWriteConcernStats returns the current standalone acknowledgement
@@ -124,6 +230,20 @@ func standaloneWriteCommand(name string) bool {
 	}
 }
 
+// Only collection commands can authenticate their actual completion owner via
+// Collections. AuthCatalog may use an unrelated store, so auth remains exclusive.
+func (s *Server) canShareStandaloneJournalBoundary(name string) bool {
+	if s == nil || s.standaloneWriteConcernSync != nil || s.Collections == nil {
+		return false
+	}
+	switch name {
+	case "create", "createIndexes", "delete", "dropIndexes", "findAndModify", "insert", "update":
+		return s.Collections.CanShareStandaloneJournalBoundary()
+	default:
+		return false
+	}
+}
+
 func (s *Server) recordStandaloneMoreToComeRejection() {
 	stats := &s.writeConcernStats
 	stats.requests.Add(1)
@@ -152,17 +272,36 @@ func (s *Server) standaloneWriteCommandResponse(ctx context.Context, name string
 		}
 		return commandError(commandCodeBadValue, "BadValue", err.Error())
 	}
+	sharedJournal := false
 	if concern.policy == standaloneWriteConcernJournal {
 		stats.journalRequests.Add(1)
-		s.standaloneWriteBoundaryMu.Lock()
-		defer s.standaloneWriteBoundaryMu.Unlock()
+		sharedJournal = s.canShareStandaloneJournalBoundary(name)
+		if sharedJournal {
+			s.standaloneWriteBoundaryMu.RLock()
+			defer s.standaloneWriteBoundaryMu.RUnlock()
+		} else {
+			s.standaloneWriteBoundaryMu.Lock()
+			defer s.standaloneWriteBoundaryMu.Unlock()
+		}
 	} else {
 		stats.visibleRequests.Add(1)
 		s.standaloneWriteBoundaryMu.RLock()
 		defer s.standaloneWriteBoundaryMu.RUnlock()
 	}
 
-	response, dispatchErr := s.dispatchCommandResponse(ctx, name, command, sequences, cursorOwner)
+	var operationJournal *standaloneOperationJournalOutcome
+	var response wire.Document
+	var dispatchErr error
+	if sharedJournal && (name == "insert" || name == "update") {
+		operationJournal = &standaloneOperationJournalOutcome{}
+		if name == "insert" {
+			response, dispatchErr = s.insertResponseWithJournal(ctx, command, sequences, operationJournal)
+		} else {
+			response, dispatchErr = s.updateResponseWithJournal(ctx, command, sequences, operationJournal)
+		}
+	} else {
+		response, dispatchErr = s.dispatchCommandResponse(ctx, name, command, sequences, cursorOwner)
+	}
 	commandOK := dispatchErr == nil && mongoCommandResponseOK(response)
 	if commandOK {
 		stats.logicalWrites.Add(1)
@@ -176,16 +315,36 @@ func (s *Server) standaloneWriteCommandResponse(ctx context.Context, name string
 	}
 
 	// A handler can return ok:0 after partially applying a multi-definition DDL
-	// command. Without a mutation outcome signal from every handler, every
-	// accepted journal request conservatively closes the boundary before its
-	// response is returned, including command-error responses.
-	stats.syncAttempts.Add(1)
-	syncStart := time.Now()
-	physicalSync, syncErr := s.syncStandaloneWriteConcern()
-	stats.journalSyncNanos.Add(uint64(time.Since(syncStart)))
+	// command. An authenticated operation receipt covers only its own checked
+	// publication. All uncovered requests conservatively close a fresh boundary
+	// before returning, including command-error responses.
+	var physicalSync bool
+	var syncErr error
+	if operationJournal != nil && operationJournal.completion.Selected() {
+		completion := operationJournal.completion
+		// The same original owner's assigned publication already performed the
+		// actual native durability wait. Never replay or issue a masking force.
+		if completion.Attempted() {
+			stats.syncAttempts.Add(1)
+		}
+		stats.journalSyncNanos.Add(completion.WaitNanos())
+		physicalSync = completion.Completed()
+		syncErr = operationJournal.err
+		if syncErr == nil && !physicalSync {
+			syncErr = errors.New("native operation journal completion did not complete")
+		}
+	} else {
+		stats.syncAttempts.Add(1)
+		syncStart := time.Now()
+		physicalSync, syncErr = s.syncStandaloneWriteConcern()
+		stats.journalSyncNanos.Add(uint64(time.Since(syncStart)))
+	}
 	stats.acknowledgementNanos.Add(uint64(time.Since(start)))
 	if physicalSync {
 		stats.physicalSyncBoundaries.Add(1)
+	}
+	if routes := stats.journalRoutes.Load(); routes != nil {
+		routes.record(name, response, commandOK, sharedJournal, syncErr == nil, operationJournal)
 	}
 	if syncErr == nil {
 		stats.journalAcknowledgements.Add(1)

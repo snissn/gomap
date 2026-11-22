@@ -45,6 +45,7 @@ const (
 	cowCheckpointMaterialization cowPrefixMaterialization = iota
 	cowSynchronousPressureMaterialization
 	cowGenerationPressureMaterialization
+	cowReservationPressureMaterialization
 )
 
 // cowGenerationRetryableRefusal is added only where the original attempt can
@@ -132,10 +133,47 @@ func (db *DB) materializeCOWPrefixProjected(ctx context.Context, automatic bool,
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := lockCheckpointMutexContext(ctx, &db.flushMu); err != nil {
-		return err
+	waitedForFlushMu := false
+	if !db.flushMu.TryLock() {
+		waitedForFlushMu = true
+		if err := lockCheckpointMutexContext(ctx, &db.flushMu); err != nil {
+			return err
+		}
 	}
 	defer db.flushMu.Unlock()
+	if mode == cowReservationPressureMaterialization {
+		if db.closing.Load() {
+			return errDBClosing
+		}
+		if db.cow.prefix != nil {
+			f := db.cow.prefix.LogicalFrontiers()
+			if f.V <= f.S.LogicalSequence && f.C <= f.S.CanonicalLSN {
+				return nil
+			}
+		}
+		observed, obsErr := db.cow.nativeProducerPressureState()
+		if obsErr != nil {
+			return obsErr
+		}
+		limits := db.cow.budget.Limits()
+		if !observed.reservationSoftPressure(limits) {
+			if db.cow.reservationDrainFloor.Load() != 0 {
+				db.cow.reservationDrainFloor.Store(0)
+			}
+			return nil
+		}
+		if floor := db.cow.reservationDrainFloor.Load(); floor != 0 && observed.stats.ReservedBytes < floor {
+			return nil
+		}
+	} else if waitedForFlushMu && mode == cowSynchronousPressureMaterialization && projected == nil {
+		if db.closing.Load() {
+			return errDBClosing
+		}
+		observed, obsErr := db.cow.nativeProducerPressureState()
+		if obsErr == nil && !observed.underPressure(db.cow.budget.Limits()) {
+			return nil
+		}
+	}
 	if generationPressure {
 		if db.closing.Load() {
 			return errDBClosing
