@@ -192,6 +192,7 @@ type cowCache struct {
 	captureCalls                                                                                   atomic.Uint64
 	prepareCalls                                                                                   atomic.Uint64
 	publications                                                                                   atomic.Uint64
+	inlinePointPublications                                                                        atomic.Uint64
 	rollovers                                                                                      atomic.Uint64
 	handoffs                                                                                       atomic.Uint64
 	closeRetired                                                                                   []memtable.COWRetirement

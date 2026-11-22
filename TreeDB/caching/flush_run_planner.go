@@ -525,6 +525,10 @@ func mergeCanonicalStableIteratorUnits(units []flushUnit, out *canonicalFlushRun
 			heap = append(heap, stableOpMergeItem{iter: &wrappers[i], priority: priority, key: wrappers[i].Key()})
 		}
 	}
+	return mergeCanonicalStableIteratorHeap(heap, out, emit)
+}
+
+func mergeCanonicalStableIteratorHeap(heap stableOpMergeHeap, out *canonicalFlushRun, emit func(batch.Entry) error) error {
 	for i := len(heap)/2 - 1; i >= 0; i-- {
 		(&heap).down(i, len(heap))
 	}

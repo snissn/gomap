@@ -9,6 +9,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/mvccadmission"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -32,6 +33,7 @@ type cowBatchState struct {
 	inPublication, trustedAppend bool
 	guardReserved                bool
 	shardAssignmentsReady        bool
+	privatePoint                 bool
 }
 
 // One admitted allocation owns the public batch and its COW-only state. Both
@@ -63,6 +65,20 @@ func cowBatchBaseBytes(guardReserved bool) uint64 {
 		charge += memtable.COWAllocationCharge(backenddb.CommandWALStagingGuardAllocationBytesV1())
 	}
 	return charge
+}
+
+// NewPrivateCOWPointBatch marks one-shot writes from the owning public DB.
+// The caller retains its input through Write and Close. Actual inline
+// eligibility is established after placement and final revision assignment.
+func (db *DB) NewPrivateCOWPointBatch(owner *transactionowner.Owner) *Batch {
+	if db == nil || db.cow == nil || owner == nil || owner != db.cow.txnOwner || !db.disableJournal || db.externalCommandWAL {
+		return nil
+	}
+	b := db.newCOWBatch(1)
+	if b.cowState.err == nil {
+		b.cowState.privatePoint = true
+	}
+	return b
 }
 
 func (db *DB) newCOWBatch(hint int) *Batch {
@@ -138,11 +154,11 @@ func (b *Batch) cowAddEntry(e batch.Entry, owned bool) error {
 			return b.cowState.err
 		}
 	}
+	n := len(e.Key) + len(e.Value)
+	if n < len(e.Key) {
+		return memtable.ErrCOWCapacity
+	}
 	if owned {
-		n := len(e.Key) + len(e.Value)
-		if n < len(e.Key) {
-			return memtable.ErrCOWCapacity
-		}
 		buf, err := b.cowCopyStorage(n)
 		if err != nil {
 			return err
@@ -154,14 +170,13 @@ func (b *Batch) cowAddEntry(e batch.Entry, owned bool) error {
 			copy(value, e.Value)
 			e.Value = normalizeRawKVValue(value)
 		}
-
 	} else {
 		b.hasViewOps = true
 	}
 	b.entries = append(b.entries, e)
 	b.cowState.shardAssignmentsReady = false
 	b.noteEntryAppend()
-	b.size += len(e.Key) + len(e.Value)
+	b.size += n
 	return nil
 }
 
@@ -205,6 +220,7 @@ func (b *Batch) cowReset() {
 	b.cowState.predictionGroups = nil
 	b.cowState.predictionStorage = nil
 	b.cowState.shardAssignmentsReady = false
+	b.cowState.privatePoint = false
 	b.stableViewValueLeaseChunks = nil
 	b.size, b.maxEntries = 0, 0
 	b.hasViewOps, b.hasDeleteRanges = false, false

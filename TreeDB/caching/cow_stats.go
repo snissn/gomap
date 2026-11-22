@@ -39,6 +39,7 @@ func (db *DB) cowStatsInto(stats map[string]string) {
 		{"external_leases", uint64(s.ExternalLeases)}, {"active_cuts", uint64(c.activeCuts.Load())},
 		{"capture_calls_total", c.captureCalls.Load()}, {"prepare_calls_total", c.prepareCalls.Load()},
 		{"publications_total", c.publications.Load()}, {"rollovers_total", c.rollovers.Load()},
+		{"inline_point_publications_total", c.inlinePointPublications.Load()},
 		{"handoffs_total", c.handoffs.Load()},
 		{"native_projected_refusals_total", c.nativeProjectedRefusals.Load()},
 		{"native_projected_relief_ns", c.nativeProjectedReliefNs.Load()},

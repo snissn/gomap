@@ -2,6 +2,9 @@ name: "unified_bench: suites (gates)"
 
 on:
   push:
+    branches: [main]
+    tags: ['**']
+  workflow_dispatch:
 
 permissions:
   contents: read

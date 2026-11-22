@@ -190,6 +190,7 @@ func TestCOWVerifiedLeafMissCoalescesPublicCuts(t *testing.T) {
 }
 
 func TestCOWVerifiedLeafMissFailureDoesNotPublish(t *testing.T) {
+	disableCOWSealedLeafMmapForFaultInjection(t)
 	db, backend, _, ptr := cowLeafMissFixture(t, 128, 64)
 	file, _, err := db.cow.cut.basis.snapshot.PinnedValueLogFile(ptr.ValueLogFileID())
 	if err != nil {
@@ -205,14 +206,8 @@ func TestCOWVerifiedLeafMissFailureDoesNotPublish(t *testing.T) {
 	if _, err := writer.ReadAt(saved[:], offset); err != nil {
 		t.Fatal(err)
 	}
-	defer func() {
-		if _, err := writer.WriteAt(saved[:], offset); err != nil {
-			t.Error(err)
-		}
-	}()
-	if _, err := writer.WriteAt([]byte{saved[0] ^ 1}, offset); err != nil {
-		t.Fatal(err)
-	}
+	writeCOWUnmappedLeafByte(t, backend, writer, offset, saved[0]^1)
+	defer writeCOWUnmappedLeafByte(t, backend, writer, offset, saved[0])
 	for _, r := range cowQueuedLeafReads(t, db, 4) {
 		if !errors.Is(r.err, valuelog.ErrCorrupt) {
 			t.Fatalf("failed CRC read: %+v", r)
@@ -221,9 +216,7 @@ func TestCOWVerifiedLeafMissFailureDoesNotPublish(t *testing.T) {
 	if cowLeafCacheCounter(t, backend, "hits") != 0 || cowLeafCacheCounter(t, backend, "stores") != 0 {
 		t.Fatal("failed decode published a verified page")
 	}
-	if _, err := writer.WriteAt(saved[:], offset); err != nil {
-		t.Fatal(err)
-	}
+	writeCOWUnmappedLeafByte(t, backend, writer, offset, saved[0])
 	// A decode error must release the mutex and leave the original owner usable.
 	s, err := db.AcquireMVCCReadCut()
 	if err != nil {
@@ -236,6 +229,259 @@ func TestCOWVerifiedLeafMissFailureDoesNotPublish(t *testing.T) {
 	if got := db.COWMemoryStats().Views; got != 0 {
 		t.Fatalf("failed read views leaked: %d", got)
 	}
+}
+
+func TestCOWColdSeekUsesMappedLeafPayload(t *testing.T) {
+	for _, mapped := range []bool{true, false} {
+		t.Run(fmt.Sprintf("mapped=%t", mapped), func(t *testing.T) {
+			if !mapped {
+				disableCOWSealedLeafMmapForFaultInjection(t)
+			}
+			db, backend, want, _ := cowLeafMissFixture(t, -1, 64)
+			s, err := db.AcquireMVCCReadCut()
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if err := s.Close(); err != nil {
+					t.Error(err)
+				}
+			})
+			counters := func() (uint64, uint64) {
+				t.Helper()
+				stats := backend.Stats()
+				hits, err := strconv.ParseUint(stats["treedb.vlog.mmap_read.hits"], 10, 64)
+				if err != nil {
+					t.Fatal(err)
+				}
+				fallbacks, err := strconv.ParseUint(stats["treedb.vlog.mmap_read.fallback_readat"], 10, 64)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return hits, fallbacks
+			}
+			beforeHits, beforeFallbacks := counters()
+			start := []byte("a000")
+			key, value, found, err := s.SeekGEVersionRange(start, []byte("a001"))
+			if err != nil || !found || !bytes.Equal(key, start) || !bytes.Equal(value, want) {
+				t.Fatalf("seek key=%q found=%t value=%q err=%v", key, found, value, err)
+			}
+			if cowLeafCacheCounter(t, backend, "hits") != 0 || cowLeafCacheCounter(t, backend, "stores") != 0 {
+				t.Fatal("decoded cache served a disabled read")
+			}
+			afterHits, afterFallbacks := counters()
+			wantHits, wantFallbacks := uint64(2), uint64(0)
+			if !mapped {
+				wantHits, wantFallbacks = 0, 2
+			}
+			// The value is inline and this range touches one persisted leaf.
+			// One observation is inspection, the second is full payload.
+			if gotHits, gotFallbacks := afterHits-beforeHits, afterFallbacks-beforeFallbacks; gotHits != wantHits || gotFallbacks != wantFallbacks {
+				t.Fatalf("mmap hits=%d fallback reads=%d, want %d/%d (metadata and payload)", gotHits, gotFallbacks, wantHits, wantFallbacks)
+			}
+		})
+	}
+}
+
+func TestCOWWarmSeekUsesMappedLeafInspection(t *testing.T) {
+	db, backend, want, ptr := cowLeafMissFixture(t, 128, 64)
+	start, end := []byte("a000"), []byte("b")
+	seek := func() []byte {
+		s, err := db.AcquireMVCCReadCut()
+		if err != nil {
+			t.Fatal(err)
+		}
+		key, value, found, readErr := s.SeekGEVersionRange(start, end)
+		if err := errors.Join(readErr, s.Close()); err != nil || !found || !bytes.Equal(key, start) || !bytes.Equal(value, want) {
+			t.Fatalf("seek key=%q found=%t value=%q err=%v", key, found, value, err)
+		}
+		return value
+	}
+	for range 128 {
+		seek()
+	}
+
+	beforeControl := cowLeafCacheCounter(t, backend, "hits")
+	control := seek()
+	if got := cowLeafCacheCounter(t, backend, "hits") - beforeControl; got != 1 {
+		t.Fatalf("control seek decoded-cache hits = %d, want 1", got)
+	}
+	control[0] ^= 1
+
+	beforeCache := cowLeafCacheCounter(t, backend, "hits")
+	beforeMapped := cowLeafMappedHits(t, backend)
+	seek()
+	if got := cowLeafCacheCounter(t, backend, "hits") - beforeCache; got != 1 {
+		t.Fatalf("warm seek decoded-cache hits = %d, want 1", got)
+	}
+	if got := cowLeafMappedHits(t, backend) - beforeMapped; got != 1 {
+		t.Fatalf("warm seek mmap hits = %d, want 1", got)
+	}
+
+	t.Run("header-corruption-and-repair", func(t *testing.T) {
+		s, err := db.AcquireMVCCReadCut()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if err := s.Close(); err != nil {
+				t.Error(err)
+			}
+		})
+		file, _, err := s.cowCut.basis.snapshot.PinnedValueLogFile(ptr.ValueLogFileID())
+		if err != nil {
+			t.Fatal(err)
+		}
+		writer, err := os.OpenFile(file.Name(), os.O_RDWR, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if err := writer.Close(); err != nil {
+				t.Error(err)
+			}
+		})
+		offset := int64(ptr.Offset)
+		var version [1]byte
+		if _, err := writer.ReadAt(version[:], offset); err != nil {
+			t.Fatal(err)
+		}
+		beforeCache := cowLeafCacheCounter(t, backend, "hits")
+		beforeMapped := cowLeafMappedHits(t, backend)
+		if _, err := writer.WriteAt([]byte{version[0] ^ 1}, offset); err != nil {
+			t.Fatal(err)
+		}
+		_, _, _, readErr := s.SeekGEVersionRange(start, end)
+		if _, err := writer.WriteAt(version[:], offset); err != nil {
+			t.Fatal(err)
+		}
+		if !errors.Is(readErr, valuelog.ErrCorrupt) {
+			t.Fatalf("warm cached page hid corrupt header: %v", readErr)
+		}
+		if hits := cowLeafCacheCounter(t, backend, "hits") - beforeCache; hits != 0 {
+			t.Fatalf("corrupt header reached cache: hits=%d", hits)
+		}
+		if hits := cowLeafMappedHits(t, backend) - beforeMapped; hits != 1 {
+			t.Fatalf("corrupt header mapping hits=%d, want 1", hits)
+		}
+		key, val, found, err := s.SeekGEVersionRange(start, end)
+		if err != nil || !found || !bytes.Equal(key, start) || !bytes.Equal(val, want) {
+			t.Fatalf("repaired header seek key=%q value=%q found=%t err=%v", key, val, found, err)
+		}
+		if hits := cowLeafCacheCounter(t, backend, "hits") - beforeCache; hits != 1 {
+			t.Fatalf("repaired header cache hits=%d, want 1", hits)
+		}
+	})
+
+	t.Run("smaller-value-limit", func(t *testing.T) {
+		s, err := db.acquireCOWSnapshotWithError()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if err := s.Close(); err != nil {
+				t.Error(err)
+			}
+		})
+		s.cowReadMu.Lock()
+		defer s.cowReadMu.Unlock()
+		w, err := s.cowWorkspaceLocked()
+		if err != nil {
+			t.Fatal(err)
+		}
+		basis := s.cowCut.basis
+		file, identity, shape, err := basis.snapshot.InspectPinnedCOWLeafRecord(ptr.ValuePtr(), w.limits)
+		if err != nil || shape.ValueBytes <= 1 {
+			t.Fatalf("expected a bounded leaf shape: %+v %v", shape, err)
+		}
+		var scratch [page.PageSize]byte
+		if _, hit, err := basis.snapshot.CopyVerifiedCachedLeafPageWithCOWPolicy(ptr, file, identity, scratch[:], w.limits); err != nil || !hit {
+			t.Fatalf("expected a verified cache entry for the same file and pointer: hit=%t err=%v", hit, err)
+		}
+		beforeCache := cowLeafCacheCounter(t, backend, "hits")
+		beforeMisses := cowLeafCacheCounter(t, backend, "misses")
+		beforeMapped := cowLeafMappedHits(t, backend)
+		limits := w.limits
+		defer func() { w.limits = limits }()
+		w.limits.MaxValueBytes = shape.ValueBytes - 1
+		if _, err := basis.readPhysicalLeafWithWorkspace(db.cow, w, ptr, scratch[:], false, true); !errors.Is(err, valuelog.ErrCOWReadCapacity) {
+			t.Fatalf("expected value limit refusal on the verified leaf: %v", err)
+		}
+		if got := cowLeafMappedHits(t, backend) - beforeMapped; got != 1 {
+			t.Fatalf("limited inspection mmap hits = %d, want 1", got)
+		}
+		hits := cowLeafCacheCounter(t, backend, "hits") - beforeCache
+		misses := cowLeafCacheCounter(t, backend, "misses") - beforeMisses
+		if hits != 0 || misses != 0 {
+			t.Fatalf("limited inspection reached the cache: hits=%d misses=%d", hits, misses)
+		}
+	})
+}
+
+func TestCOWWarmSeekRetainsMappedLeafAcrossCheckpoint(t *testing.T) {
+	checkCOWSeekRetainsMappedLeafAcrossCheckpoint(t, 128, 1)
+}
+
+func TestCOWColdSeekRetainsMappedLeafPayloadAcrossCheckpoint(t *testing.T) {
+	checkCOWSeekRetainsMappedLeafAcrossCheckpoint(t, -1, 2)
+}
+
+func checkCOWSeekRetainsMappedLeafAcrossCheckpoint(t *testing.T, cacheEntries int, expectedHits uint64) {
+	t.Helper()
+	db, backend, want, _ := cowLeafMissFixture(t, cacheEntries, 64)
+	old, err := db.AcquireMVCCReadCut()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := old.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	start, end := []byte("a000"), []byte("b")
+	check := func(s *Snapshot, want []byte) {
+		t.Helper()
+		key, value, found, err := s.SeekGEVersionRange(start, end)
+		if err != nil || !found || !bytes.Equal(key, start) || !bytes.Equal(value, want) {
+			t.Fatalf("seek key=%q found=%t value=%q err=%v", key, found, value, err)
+		}
+	}
+	for range 8 {
+		check(old, want)
+	}
+	next := []byte("new-after-checkpoint")
+	if err := db.Set(start, next); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	current, err := db.AcquireMVCCReadCut()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := current.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	check(current, next)
+	beforeMapped := cowLeafMappedHits(t, backend)
+	check(old, want)
+	if hits := cowLeafMappedHits(t, backend) - beforeMapped; hits != expectedHits {
+		t.Fatalf("retained seek mmap hits=%d, want %d", hits, expectedHits)
+	}
+}
+
+func cowLeafMappedHits(t testing.TB, backend *backenddb.DB) uint64 {
+	t.Helper()
+	const key = "treedb.vlog.mmap_read.hits"
+	raw := backend.Stats()[key]
+	n, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		t.Fatalf("invalid %s counter %q: %v", key, raw, err)
+	}
+	return n
 }
 
 // Sequential warm and cache-disabled guards include the public cut lifetime.
@@ -261,14 +507,8 @@ func BenchmarkCOWVerifiedLeafMissLifecycle(b *testing.B) {
 						b.Fatal(err)
 					}
 				}
-				hits := func() uint64 {
-					v, err := strconv.ParseUint(backend.Stats()["treedb.process.read_path.outer_leaf.cache.hits"], 10, 64)
-					if err != nil {
-						b.Fatal(err)
-					}
-					return v
-				}
-				beforeHits := hits()
+				beforeMmap := cowLeafMappedHits(b, backend)
+				beforeHits := cowLeafCacheCounter(b, backend, "hits")
 				b.ReportAllocs()
 				b.ResetTimer()
 				for i := 0; i < b.N; i++ {
@@ -287,7 +527,8 @@ func BenchmarkCOWVerifiedLeafMissLifecycle(b *testing.B) {
 					}
 				}
 				b.StopTimer()
-				b.ReportMetric(float64(hits()-beforeHits)/float64(b.N), "cache-hits/op")
+				b.ReportMetric(float64(cowLeafMappedHits(b, backend)-beforeMmap)/float64(b.N), "mmap-hits/op")
+				b.ReportMetric(float64(cowLeafCacheCounter(b, backend, "hits")-beforeHits)/float64(b.N), "cache-hits/op")
 			})
 		}
 	}

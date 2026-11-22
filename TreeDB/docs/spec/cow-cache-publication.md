@@ -366,13 +366,31 @@ a hit needs no decoder, dictionary recapture or physical decoder mutex. Resource
 counts and admission callbacks govern construction of new definition owners and
 pins; a warm copied page constructs none and does not retain those owners.
 Captured-only providers keep their original local definition policy before any
-cache reuse. Leaf inspection reads one fixed maximum
-metadata window, interprets only the checked header and frame prefix, and ignores
-extra bytes. EOF beyond complete required metadata is harmless; truncated
-metadata and corruption retain the original errors. Uncompressed value-prefix
-checks reuse the window when present and otherwise read their exact bytes.
-Registered file identity checks, full CRC verification before cache promotion,
-page validation, cache disablement and captured-cut lifetimes remain required.
+cache reuse. The snapshot inspects the leaf through its exact registered
+value-log segment. An eligible mapping covers the checked record range within
+the producer-visible file extent. The positional fallback reads one bounded
+metadata window and fetches a selected raw value prefix separately when needed.
+Both paths validate the header, frame and selected value prefix under the
+caller limits. Incomplete required metadata returns EOF. A short payload after
+complete metadata is detected by the full read on a cache miss.
+
+The bounded snapshot owner holds one read pin across live inspection, caller
+policy, verified cache lookup and full page materialization. The registered
+handle and stable identity come from the captured value-log Set. Reusing that
+observation avoids another snapshot read pin and segment lookup on cache hits.
+On misses, the registered file checks the full admitted record range against
+the pointer hint, mapping length and verified file size before reading mapped
+bytes. Remap and demotion retain earlier mappings until the last file pin is
+released. The file's producer only appends while readers can hold these pins.
+
+Full reads validate framing and record CRC through either the managed mapping
+or the positional fallback, then materialize into the caller's admitted page
+scratch. A range the mapping cannot read uses the positional fallback. A
+malformed record in an acquired range returns the validation error. Compressed
+bytes are staged in the existing admitted input scratch because a decoder may
+retain its input. The map borrow ends after synchronous page materialization
+and the decoded cache owns only a copied page. The writable mapping policy,
+workspace admission and decoded cache limits remain unchanged.
 
 After a full verified decode, repeated COW misses may populate the original
 backend leaf cache through explicit cache-owned admission. Each configured slot
@@ -476,8 +494,8 @@ acceptance:
    entries, avoiding a second staged payload copy.
 2. Assign final `EntryRevision` and cached `IsPtr`/`ValuePtr` through the existing
    prepared-revision authority; prepare immutable roots from those owned entries.
-3. Let the canonical backend intent resolve RID, encode the existing command
-   payload and capture its ordered external dependency closure.
+3. Let the canonical backend intent resolve RID, encode the command payload,
+   and capture its ordered external dependency closure when required.
 4. Before append, validate canonical RID/pointer/revision identity and attach
    an independently retained generation read lease. WAL dependency custody
    remains owned by the WAL intent/debt, including materialized/self-contained
@@ -502,20 +520,40 @@ IDs select retained definitions; cut readers do not resolve through unrelated
 global definition/codec state.
 
 `no_wal_fast` uses the same canonical RID planner and final metadata authority
-without appending a journal or retaining journal dependency custody. Registered
-producer visibility and independently owned live file/dictionary pins still
-precede cut publication. Explicit NoWAL sync releases command/writer/admission
-ownership before the existing sealed-root Checkpoint. Pre-append refusal has
-no visible effect; post-append errors retain existing ambiguous/poison/reopen
-rules.
+for writes with value-log pointers. For a one-shot public unsynced `Set` or
+`Delete` that resolves to a single unqualified inline entry, the original
+private owner uses a typed canonical operation under its teardown guard. The
+backend applies the raw payload size and operation checks, and the cache
+compares the key, operation, inline value and assigned revision with the
+prepared entry before completing canonical preparation. The synchronous
+public call borrows inputs through completion, and preparation owns all bytes
+retained in the generation and conflict history. Batches, qualified entries
+and explicit sync use ordinary canonical encoding.
+
+Registered producer visibility and independently owned live file/dictionary
+pins precede cut publication. Explicit NoWAL sync releases command, writer and
+admission ownership before the existing sealed-root Checkpoint. Refusals before
+acceptance have no visible effect. Post-append errors follow the existing
+poison and reopen rules.
 
 ## Captured-prefix flush and backend maintenance
 
 Write/maintenance rollover freezes a bounded source frontier without walking
-its records. Flush retains that prefix and its exact backend basis, streams
-bounded canonical physical chunks oldest to newest, and uses one existing
-`RootPublicationBuildGroup` for one final backend publication. Intermediate
-chunk progress does not remove old-prefix precedence.
+its records. Flush retains that prefix and its exact backend basis and uses one
+`RootPublicationBuildGroup` for one final backend publication. A stable merge
+streams frozen raw records in key order across generations and hash shards.
+The newest frozen source wins a shared key, including tombstones and pointers.
+The merge preserves its revision verbatim.
+
+The source budget admits the merge heap and cursor array before allocation,
+and each cursor separately acquires its root view and traversal storage.
+One bounded operation chunk borrows immutable key and value bytes from roots
+owned by the captured cut through physical batch write and close. If optional
+merge storage or cursor admission fails for capacity, flush closes provisional
+cursors before starting the build and streams one source at a time, oldest to
+newest. Both paths keep the final chunk pending until every source has closed
+and reported successful completion. A raw-empty build still finalizes its
+captured coverage. Intermediate chunks stay private.
 
 Before backend acceptance, the group admits the exact successor Snapshot and
 handoff/cleanup capacity. After acceptance, handoff adopts that retained receipt's
@@ -675,6 +713,14 @@ The registered worker performs actual retirement and refunds. Readers and frozen
 their own original roots. Native projections, exact-seal requests, charged
 or root-neutral entries, and all other native custody retain their original
 independent slots. Assigned failures keep their original parked ownership.
+
+Public raw and native durable COW registrations admit one ordinary ticket per
+pending durability epoch before its first canonical append. The active capture
+spends that exact reservation on an actual root-neutral barrier with unchanged
+V. A stable or marked prefix returns the unused reservation before physical sync.
+The separate maintenance slot can stay owned by an earlier barrier until exact
+physical retirement. Unassigned group reservations return on refusal, unwind or
+teardown, and a later pending epoch can hold its own admission during prior I/O.
 
 Before releasing the original writer exclusion, rollover marks its current
 exact V/C endpoint in that same FIFO. A grouped durable ACK can append a bare

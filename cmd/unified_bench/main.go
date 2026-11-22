@@ -60,7 +60,7 @@ var (
 	keyScaleArg               = flag.String("keyscale", "", "Generate keycounts by scale: log10 or doubling (uses -keys-min/-keys-max)")
 	keysMin                   = flag.Int("keys-min", 1000, "Minimum key count for -keyscale")
 	keysMax                   = flag.Int("keys-max", 10000000, "Maximum key count for -keyscale")
-	dbsArg                    = flag.String("dbs", "all", "Comma-separated list of DBs to run. Use 'all' for registered DBs.")
+	dbsArg                    = flag.String("dbs", "all", "Comma-separated list of DBs to run. Use 'all' for the default set.")
 	dbsExcludeArg             = flag.String("exclude-dbs", "", "Comma-separated list of DBs to exclude")
 	testArg                   = flag.String("test", "all", "Comma-separated list of tests (sequential_write,random_read,random_read_parallel,random_read_parallel_acquire_snapshot,random_read_batch,random_write,random_write_parallel,dataset_write_random,dataset_write_sorted,dataset_update_fork_choice,dataset_read_random,random_delete,full_scan,prefix_scan,batch_write,batch_write_steady,batch_random,batch_delete,batch_delete_range,update_fork_choice); aliases: write_seq->sequential_write, write_rand->random_write, write_sorted->dataset_write_sorted, write_dataset->dataset_write_random, read_rand->random_read, read_rand_parallel->random_read_parallel, read_rand_batch->random_read_batch, read_random_batch->random_read_batch, delete_rand->random_delete, scan->full_scan, range_scan->prefix_scan, batch_write_ss->batch_write_steady, batch_range_delete->batch_delete_range, delete_range->batch_delete_range, forkchoice->update_fork_choice")
 	formatArg                 = flag.String("format", "table", "Output format: table or markdown")

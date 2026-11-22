@@ -38,19 +38,30 @@ func TestCommandWALCleanupDeferredClosedScan(t *testing.T) {
 	}
 }
 
-func TestCommandWALCleanupClosedScanKeepsStreamExclusion(t *testing.T) {
-	t.Run("stream", func(t *testing.T) {
-		dir := t.TempDir()
-		if runtime.GOOS == "linux" {
-			var err error
-			dir, err = os.MkdirTemp("/dev/shm", "treedb-wal-stream-cleanup-")
-			if err != nil {
-				t.Skipf("memory filesystem unavailable: %v", err)
+func TestCommandWALCleanupDeferredStreamScan(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		closed      int
+		rotate      bool
+		wantOverlap bool
+	}{
+		{"same_active", 2, false, true},
+		{"rotate_active", 2, true, true},
+		{"single_predecessor", 1, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if runtime.GOOS == "linux" {
+				var err error
+				dir, err = os.MkdirTemp("/dev/shm", "treedb-wal-stream-cleanup-")
+				if err != nil {
+					t.Skipf("memory filesystem unavailable: %v", err)
+				}
+				t.Cleanup(func() { _ = os.RemoveAll(dir) })
 			}
-			t.Cleanup(func() { _ = os.RemoveAll(dir) })
-		}
-		testCommandWALCleanupClosedScanWrite(t, dir, "stream", 2, false, false, cleanupDeferredCommandWALPrefixForTest, false)
-	})
+			testCommandWALCleanupClosedScanWrite(t, dir, "stream", tc.closed, tc.rotate, false, cleanupDeferredCommandWALPrefixForTest, tc.wantOverlap)
+		})
+	}
 	t.Run("fixed_with_stream_predecessor", func(t *testing.T) {
 		dir := t.TempDir()
 		writeCommandWALFrame(t, dir, 1, 1)
@@ -198,6 +209,35 @@ func TestCommandWALCleanupDeferredClosedStreamRejectsLateDamage(t *testing.T) {
 			t.Logf("validated %d bytes before %v; both original predecessors retained", delta, err)
 		})
 	}
+	t.Run("changed_after_detached_read", func(t *testing.T) {
+		file, err := os.OpenFile(paths[0], os.O_WRONLY, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			if err := errors.Join(file.Truncate(originalInfo[0].Size()), file.Close()); err != nil {
+				t.Fatal(err)
+			}
+		}()
+		var changed bool
+		database.testCommandWALCleanupHooks = &commandWALCleanupTestHooks{beforeSegment: func(path string) {
+			if path != paths[1] {
+				return
+			}
+			if _, err := file.WriteAt([]byte{0}, originalInfo[0].Size()); err != nil {
+				t.Fatal(err)
+			}
+			changed = true
+		}}
+		defer func() { database.testCommandWALCleanupHooks = nil }()
+		complete, err := database.CleanupCommandWALCoveredPrefix()
+		if !changed || complete || !errors.Is(err, ErrRecoveryRequired) || errors.Is(err, errDurableWALCleanupProofUnavailable) {
+			t.Fatalf("changed=%t complete=%t error=%v, want hard refusal of changed stream", changed, complete, err)
+		}
+		if database.commandWALCleanupRemoved.Load() != removed || database.commandWALCleanupNamespaceDirty.Load() {
+			t.Fatal("refused cleanup changed deletion accounting")
+		}
+	})
 	if t.Failed() {
 		return
 	}

@@ -114,6 +114,7 @@ func (db *DB) scanCommandWALCleanupProof(proof durableWALCleanupProofV1, scanSea
 	}
 	dir := resolveStorageLayout(db.dir).walDir
 	var prefix []cleanupClosedWALFile
+	var stagedFixed bool
 	closePrefix := func() error {
 		var err error
 		for i := range prefix {
@@ -127,13 +128,8 @@ func (db *DB) scanCommandWALCleanupProof(proof durableWALCleanupProofV1, scanSea
 	}
 
 	err := proof.journalOwner.WithCleanupScanSnapshot(proof.journal, func(current commitlog.CommandJournalCleanupSnapshot) error {
-		if !current.FixedContainer {
-			// Stream cleanup retains append exclusion for the full scan.
-			// Read ahead only on closed streams, using their original validator.
-			if current.SegmentSeq > 1 {
-				scan.closedStreamBuffer = new(commitlog.CleanupReadBuffer)
-			}
-			return scan.scanLockedDirectory(db.dir)
+		if !current.FixedContainer && current.SegmentSeq > 1 {
+			scan.closedStreamBuffer = new(commitlog.CleanupReadBuffer)
 		}
 		if current.SegmentSeq <= 2 {
 			return scan.scanLockedDirectory(db.dir)
@@ -164,7 +160,7 @@ func (db *DB) scanCommandWALCleanupProof(proof durableWALCleanupProofV1, scanSea
 			if err := errors.Join(statErr, identityErr, formatErr); err != nil {
 				return errors.Join(err, file.Close())
 			}
-			if !fixed || !info.Mode().IsRegular() || rootpublication.SamePhysicalIdentity(identity, current.ActiveIdentity) {
+			if fixed != current.FixedContainer || !info.Mode().IsRegular() || rootpublication.SamePhysicalIdentity(identity, current.ActiveIdentity) {
 				if err := errors.Join(file.Close(), closePrefix()); err != nil {
 					return err
 				}
@@ -178,6 +174,7 @@ func (db *DB) scanCommandWALCleanupProof(proof durableWALCleanupProofV1, scanSea
 			return err
 		}
 		if room && len(prefix) == wanted {
+			stagedFixed = current.FixedContainer
 			return nil
 		}
 		if err := closePrefix(); err != nil {
@@ -203,7 +200,7 @@ func (db *DB) scanCommandWALCleanupProof(proof durableWALCleanupProofV1, scanSea
 	// cleanup invocation.
 	for i := range prefix {
 		closed := &prefix[i]
-		closed.kept = scan.scanFile(closed.segment, closed.file, false, true, nil)
+		closed.kept = scan.scanFile(closed.segment, closed.file, false, nil)
 	}
 	if scan.hardErr != nil {
 		return scan.finish(closePrefix())
@@ -215,7 +212,7 @@ func (db *DB) scanCommandWALCleanupProof(proof durableWALCleanupProofV1, scanSea
 		if inventoryErr != nil && !commandWALCleanupDescriptorExhausted(inventoryErr) {
 			return inventoryErr
 		}
-		if inventoryErr != nil || !current.FixedContainer || len(segments) <= len(prefix) || !slices.EqualFunc(prefix, segments[:len(prefix)], func(a cleanupClosedWALFile, b logSegment) bool {
+		if inventoryErr != nil || current.FixedContainer != stagedFixed || len(segments) <= len(prefix) || !slices.EqualFunc(prefix, segments[:len(prefix)], func(a cleanupClosedWALFile, b logSegment) bool {
 			return a.segment.path == b.path
 		}) {
 			// Drop staged handles before one locked full scan under the same
@@ -224,6 +221,9 @@ func (db *DB) scanCommandWALCleanupProof(proof durableWALCleanupProofV1, scanSea
 				return errors.Join(inventoryErr, err)
 			}
 			scan = newCommandWALCleanupScan(proof.cleanupThrough, proof.durableWALLSN, db.walMaxSegmentBytes, beforeSegment, &proof.journal)
+			if !current.FixedContainer && current.SegmentSeq > 1 {
+				scan.closedStreamBuffer = new(commitlog.CleanupReadBuffer)
+			}
 			return scan.scanLockedDirectory(db.dir)
 		}
 		for _, file := range prefix {
@@ -234,6 +234,9 @@ func (db *DB) scanCommandWALCleanupProof(proof durableWALCleanupProofV1, scanSea
 			if !linked.Mode().IsRegular() || !os.SameFile(file.info, linked) ||
 				rootpublication.SamePhysicalIdentity(file.identity, current.ActiveIdentity) {
 				return fmt.Errorf("%w: closed command WAL segment changed: %s", ErrRecoveryRequired, filepath.Base(file.segment.path))
+			}
+			if !stagedFixed && (linked.Size() != file.info.Size() || !linked.ModTime().Equal(file.info.ModTime())) {
+				return fmt.Errorf("%w: closed command WAL stream changed during scan: %s", ErrRecoveryRequired, filepath.Base(file.segment.path))
 			}
 		}
 		if err := closePrefix(); err != nil {
@@ -246,7 +249,7 @@ func (db *DB) scanCommandWALCleanupProof(proof durableWALCleanupProofV1, scanSea
 			if active {
 				expected = &current.ActiveIdentity
 			}
-			if openErr := scan.scanSegment(seg, active, true, expected); openErr != nil {
+			if openErr := scan.scanSegment(seg, active, expected); openErr != nil {
 				if commandWALCleanupDescriptorExhausted(openErr) {
 					suffixDescriptorErr = errors.Join(suffixDescriptorErr, openErr)
 				} else {

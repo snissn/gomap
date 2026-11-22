@@ -280,8 +280,11 @@ GOWORK=off GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -p 1 . \
   - `bench_unsafe` (explicit benchmark-only ceiling; TreeDB skips read checksums and has no production durability promise; `unsafe` is its legacy alias)
   - `wal_on_fast` (benchmark-runner relaxed-WAL preset; TreeDB maps this to `command_wal_relaxed` with verified read integrity and the same compression defaults)
   - These names are unified-bench presets shared across database adapters. Native no-sync flags have engine-specific guarantees and are not durability-equivalent. The public TreeDB server profile vocabulary is separate. Public TreeDB servers should use `command_wal_durable`, `command_wal_relaxed`, or `no_wal_fast`; benchmark-only `bench_unsafe` requires an explicit benchmark constructor boundary.
-- `-dbs` (`all` or CSV): `hashdb,btree,treedb,pebble,badger,leveldb`
-  - Hidden TreeDB variants can be selected explicitly, including
+- `-dbs` selects a comma-separated list of DBs. `all` (the default) selects
+  the default set. Run `unified-bench -help` to see that set, explicit variants,
+  and accepted aliases for your build. Optional adapters appear when compiled
+  into the executable.
+  - TreeDB variants you can select explicitly include
     `treedb_public_command_wal` (alias `treedb_cached_command_wal`) for the
     public cached `command_wal_v1` path,
     `treedb_backend` for the direct backend path and
@@ -1810,6 +1813,33 @@ Explicit v2 decoding retains all three original gates and historical failures.
 All public classification gates remain unchanged. See
 [the M0 contract](../../TreeDB/docs/performance/index-vacuum-m0.md) for boundaries
 and the incremental #4519 scope.
+
+### COW physical leaf inspection
+
+From the repository root, set `GOWORK=off` and `GOMAXPROCS=8` in your shell
+and leave TreeDB environment overrides unset.
+
+Run the public seek benchmarks on Linux or macOS. Each operation acquires a
+COW read cut, seeks, checks the owned result and closes the cut.
+
+```sh
+go test ./TreeDB/caching -run '^$' -bench '^BenchmarkCOWVerifiedLeafMissLifecycle$/^entries=(128|-1)$/^distinct=(true|false)$' -benchtime=40000x -benchmem
+go test ./TreeDB/caching -run '^$' -bench '^BenchmarkCOWParallelWarmSeek$' -benchtime=100000x -benchmem
+```
+
+The public fixtures reopen a checkpointed `cow_ordered` database with the
+TreeDB WAL disabled. Compare repeat timings, `cache-hits/op`, `mmap-hits/op`,
+and allocations. See the [standalone syscall trace recipe](../benchprof/README.md#cow-physical-leaf-inspection).
+
+Run the direct inspector benchmarks on Linux, macOS, or Windows.
+
+```sh
+go test ./TreeDB/internal/valuelog -run '^$' -bench '^BenchmarkCOW(Interior)?LeafInspector$' -benchtime=1000000x -benchmem
+```
+
+The direct benchmarks report mmap and fallback counters. The Windows rows
+measure the positional reader. The interior control lets it fill its metadata
+window in one call.
 
 ### Public COW point-read allocation boundary
 

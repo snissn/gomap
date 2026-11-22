@@ -293,7 +293,7 @@ func TestAcceptedCloseRetainsOriginalFailedCustodyAndContainingArrays(t *testing
 		t.Fatal(err)
 	}
 	defer stopClean(t, c)
-	if err = c.ConfigureAcceptedPrefix(2, LogicalFrontiers{}); err != nil {
+	if err = c.ConfigureAcceptedPrefix(3, LogicalFrontiers{}); err != nil {
 		t.Fatal(err)
 	}
 	failure := errors.New("original destruction failed")
@@ -313,6 +313,10 @@ func TestAcceptedCloseRetainsOriginalFailedCustodyAndContainingArrays(t *testing
 			t.Fatal(e)
 		}
 	}
+	unused, err := c.ReserveAccepted(false)
+	if err != nil {
+		t.Fatal(err)
+	}
 	originalEntries, originalOrder, originalFree := &c.accepted.entries[0], &c.accepted.order[0], &c.accepted.free[0]
 	for attempt := 0; attempt < 2; attempt++ {
 		if err = c.CloseAccepted(); !errors.Is(err, failure) {
@@ -320,6 +324,9 @@ func TestAcceptedCloseRetainsOriginalFailedCustodyAndContainingArrays(t *testing
 		}
 		if !c.AcceptedCleanupFailed() || &c.accepted.entries[0] != originalEntries || &c.accepted.order[0] != originalOrder || &c.accepted.free[0] != originalFree {
 			t.Fatal("lost original containing owner")
+		}
+		if entry := &c.accepted.entries[unused.slot]; entry.reserved || entry.nonce != 0 {
+			t.Fatal("Close kept an unused ordinary reservation")
 		}
 		found := false
 		for i := range c.accepted.entries {

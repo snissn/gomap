@@ -607,14 +607,14 @@ func (db *DB) appendCommandWALDurablePrefixBarrier() (uint64, error) {
 }
 
 func (db *DB) appendOwnedCommandWALDurablePrefixBarrier(privateOwner *transactionowner.Owner) (uint64, error) {
-	return db.appendCommandWALPrefixBarrierForOwner(false, privateOwner)
+	return db.appendCommandWALPrefixBarrierForOwner(false, privateOwner, nil, 0)
 }
 
 func (db *DB) appendCommandWALPrefixBarrier(captured bool) (uint64, error) {
-	return db.appendCommandWALPrefixBarrierForOwner(captured, nil)
+	return db.appendCommandWALPrefixBarrierForOwner(captured, nil, nil, 0)
 }
 
-func (db *DB) appendCommandWALPrefixBarrierForOwner(captured bool, privateOwner *transactionowner.Owner) (uint64, error) {
+func (db *DB) appendCommandWALPrefixBarrierForOwner(captured bool, privateOwner *transactionowner.Owner, reserved *rootpublication.AcceptedTicket, frontier uint64) (uint64, error) {
 	intent := &commandWALBatchIntent{
 		privateCOWOwner: privateOwner,
 		kind:            commitlog.CommandKindDurablePrefixBarrier, scope: commitlog.CommandScopeSystem,
@@ -624,7 +624,25 @@ func (db *DB) appendCommandWALPrefixBarrierForOwner(captured bool, privateOwner 
 	}
 	owner := db.acceptedPrefix.Load()
 	var ticket rootpublication.AcceptedTicket
-	if owner != nil {
+	appendReturned := false
+	if reserved != nil {
+		ticket = *reserved
+		*reserved = rootpublication.AcceptedTicket{}
+		defer func() {
+			if appendReturned {
+				return
+			}
+			// The raw sequencer still excludes other appenders. The
+			// journal records an assigned frame before its after-append
+			// callbacks, even if a callback unwinds without a receipt.
+			if lsn := db.commandJournal.AppendedLSN(); lsn > frontier {
+				db.MarkCommandWALRecoveryRequired()
+				_ = ticket.RecordAssigned(lsn, ErrRecoveryRequired, false)
+			} else {
+				_ = ticket.CancelAccepted()
+			}
+		}()
+	} else if owner != nil {
 		var err error
 		ticket, err = owner.ReserveAccepted(false)
 		if errors.Is(err, rootpublication.ErrAcceptedCapacity) {
@@ -635,6 +653,7 @@ func (db *DB) appendCommandWALPrefixBarrierForOwner(captured bool, privateOwner 
 		}
 	}
 	lsn, err := db.appendCommandWALIntent(intent, !captured)
+	appendReturned = true
 	if owner == nil {
 		return lsn, err
 	}
@@ -751,11 +770,32 @@ func (db *DB) CommandWALBytes() int64 {
 		return 0
 	}
 	_, active := db.commandWALActiveSegmentSnapshot()
-	closed := db.commandWALClosedBytes.Load()
-	if closed < 0 {
-		closed = 0
+	return max(0, db.commandWALClosedBytes.Load()) + active
+}
+
+// NewCommandWALPressureSampler binds an advisory byte sample to the open
+// journal. Sampling returns false on journal contention and uses no DB lock.
+// The sampler reports zero once it observes that the DB is closing.
+func (db *DB) NewCommandWALPressureSampler() func() (int64, bool) {
+	if db == nil || !db.commandWAL {
+		return nil
 	}
-	return closed + active
+	db.mu.RLock()
+	journal := db.commandJournal
+	db.mu.RUnlock()
+	if journal == nil {
+		return nil
+	}
+	return func() (int64, bool) {
+		if db.closing.Load() {
+			return 0, true
+		}
+		active, ok := journal.TryActiveBytes()
+		if !ok {
+			return 0, false
+		}
+		return max(0, db.commandWALClosedBytes.Load()) + active, true
+	}
 }
 
 func (db *DB) observeCommandWALSegmentRotated(closedBytes int64) {
@@ -1579,6 +1619,42 @@ func (db *DB) FinalizePrivateCOWPublication(owner *transactionowner.Owner, prepa
 	}
 	defer db.endSemanticBackendOperation(tracked)
 	return db.finalizeRawKVEntryScanForOwnedCachedPublication(prepare, finalize, scanEntries, opHint, nil, false)
+}
+
+// FinalizePrivateCOWInlinePoint lends the private WAL-off owner one canonical
+// point operation under the same teardown lock as its batch finalization.
+// Placement and revision assignment precede this call. The finalizer checks
+// the operation against the entry it used to prepare the cut.
+func (db *DB) FinalizePrivateCOWInlinePoint(owner *transactionowner.Owner, entry batchpkg.Entry, prepare func() error, finalize func(commitlog.RawKVOperation) error) error {
+	if db == nil || owner == nil || owner != db.privateCOWOwner || db.durability != DurabilityWALOffRelaxed ||
+		prepare == nil || finalize == nil {
+		return ErrNativeSemanticUnsupported
+	}
+	db.teardownMu.RLock()
+	defer db.teardownMu.RUnlock()
+	if db.closing.Load() {
+		return ErrClosed
+	}
+	if db.readOnly {
+		return ErrReadOnly
+	}
+	if entry.IsPtr || entry.ValuePtr != (page.ValuePtr{}) || entry.MVCCInput.Present() || entry.Revision == page.LegacyEntryRevision ||
+		(entry.Type != batchpkg.OpPut && (entry.Type != batchpkg.OpDelete || entry.Value != nil)) {
+		return ErrNativeSemanticUnsupported
+	}
+	if err := prepare(); err != nil {
+		return err
+	}
+	op, _, err := db.rawKVCommandWALOperationFromEntry(entry, nil, nil, nil, 1, false, false)
+	if err != nil {
+		return err
+	}
+	if _, err := commitlog.PlanRawKVBatchPayloadScan(func(emit func(commitlog.RawKVOperation) error) error {
+		return emit(op)
+	}); err != nil {
+		return err
+	}
+	return finalize(op)
 }
 
 // FinalizeNativeRawUnderGuard shares the original raw/teardown staging owner;
@@ -2777,11 +2853,11 @@ func (db *DB) appendRawKVBatchPayloadCommandWALPreparedCapture(prepare func() ([
 		owned = false
 		// The existing acquisition loop performs the unlocked drain and reruns
 		// every hook. The assigned mutation is never appended again.
-		_, result, captureErr := db.captureCommandWALPrefixAfterAppend(nil, target, lsn)
+		_, result, captureErr := db.captureCommandWALPrefixAfterAppend(nil, target, lsn, nil)
 		returned = true
 		return lsn, requestTiming, result, captureErr
 	}
-	_, result, captureErr := db.captureCommandWALPrefixLocked(nil, target)
+	_, result, captureErr := db.captureCommandWALPrefixLocked(nil, target, nil)
 	if captureErr != nil {
 		db.commandWALFlushPoisoned.Store(true)
 		returned = true

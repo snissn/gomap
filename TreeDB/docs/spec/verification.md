@@ -159,6 +159,16 @@ the retained record and requires the original file error after its close.
   preassignment and preinstall refusal controls retain their separate behavior.
   Native logical sequence assertions are separate from physical applied and
   canonical barrier LSNs.
+- `TestNativeCommandWALDurableGroupOwnsBarrierAtCapacity` protects the final
+  ordinary accepted slot before allowing either real native command to ACK.
+  It observes canonical assignment, stable WAL coverage, retained visibility,
+  checkpoint retirement and typed reopen. `TestPublicCOWDurableGroupBarrierRefusalAndRefund`
+  checks clean preassignment refusal, unused reservation cleanup and the idle
+  one-frame path. `TestPublicCOWDurableGroupAfterRelaxedReplay` proves a
+  public durable boundary for a session whose recovered opening is ahead of
+  the classified WAL frontier. `TestPublicCOWDurableGroupOwnsBarrierForRelaxedTail`
+  installs a real relaxed participant beyond an idle marker before capture
+  and proves the reserved barrier closes the extended endpoint.
 - `TestNativeCollectionPressureDrainsBeforeOpening` holds a public collection
   read across repeated automatic handoffs, checks old visibility and reopen, and
   requires the original allocator to reach zero after final release/close.
@@ -548,6 +558,16 @@ read-side stores. `TestCOWPhysicalLeafCacheRequiresVerifiedRecordAndInspection`
 requires the first write-origin entry to undergo full record CRC verification,
 keeps failed verification untrusted, checks exact captured file/identity and
 scratch, and preserves record inspection even after a verified cache hit.
+`TestCOWWarmSeekUsesMappedLeafInspection` warms a real reopened dictionary
+leaf. A checked public seek then records one verified decoded-cache hit and one
+mapped inspection. `TestCOWWarmSeekRetainsMappedLeafAcrossCheckpoint` exercises
+the old mapping through a held cut after publication of a newer value. The
+corruption controls exercise the same pinned record on deliberately unmapped
+fixtures. `TestCOWLeafInspectionNoMappingUsesReadAt` covers budget denial and
+disabled writable mapping, including on Windows.
+`TestCOWLeafInspectionTruncatedRecord` writes short fixtures before opening them
+and checks positional error parity, including the full read of a short payload
+and a writable remap whose address range crosses EOF.
 `TestLeafPageReadCacheVerifiedRecordUpgradeExistingOnly` covers byte mismatch,
 maintenance disablement, eviction, caller isolation and no miss population.
 The existing raw/native workspace lifetime and pointer checkpoint/maintenance
@@ -2663,6 +2683,11 @@ Required tests:
 - `TestCommandWALCheckpointPublishesAppliedLSNBeforeCleanup`;
 - `TestCommandWALCleanupRequiresDurableCheckpointBoundary`;
 - `TestCommandWALSegmentCleanupDecodesEveryFrame`;
+- `TestCommandWALCleanupDeferredStreamScan` verifies that eligible sealed-stream
+  validation lets appends and rollover proceed, and that single-predecessor and
+  mixed-format inventories use the locked scan;
+- `TestCommandWALCleanupDeferredClosedStreamRejectsLateDamage` verifies that a
+  change to a sealed stream after validation prevents retirement;
 - `TestCommandWALCleanupDoesNotReleaseProtectionBeforeReachabilityHandoff`;
 - `TestCommandWALPreparedUncommittedExternalFilesQuarantinedAfterRestore`;
 - `TestCommandWALQuarantinePurgeRequiresCheckpoint`.
@@ -2836,7 +2861,10 @@ checkpoint rotation and covered-segment cleanup, and
 `TestPublicCommandWALAutoCheckpointUsesCommandWALBytes`, which proves
 command-WAL cached mode feeds total command-WAL segment bytes into the
 size-triggered auto-checkpoint loop while the legacy cached redo journal is
-disabled.
+disabled. `TestCOWWriteAcknowledgesWhileWALByteSampleContended` holds the
+journal lock during WAL cleanup after the write has appended. It verifies
+visibility and acknowledgement while cleanup is held, a size checkpoint after
+release without another write, and checked Close and reopen.
 
 Post-frontier admission evidence includes
 `TestCachingDB_CheckpointExternalCommandWALAdmitsAfterFrontierCut`, which latches

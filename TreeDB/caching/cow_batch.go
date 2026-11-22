@@ -9,6 +9,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -313,6 +314,31 @@ func (b *Batch) finalizeCOWPublication(payload []byte, lookup func(page.ValuePtr
 	if err := validateCOWCanonicalEntries(payload, b.entries, lookup); err != nil {
 		return err
 	}
+	return b.finishCOWCanonicalPreparation()
+}
+
+func (b *Batch) eligibleCOWInlinePoint(syncWrite bool) bool {
+	state := b.cowState
+	if !state.privatePoint || syncWrite || len(b.entries) != 1 || b.commandWALPreparedRevision ||
+		state.native != nil || state.txn != nil || state.producer != nil {
+		return false
+	}
+	e := &b.entries[0]
+	return !e.IsPtr && e.ValuePtr == (page.ValuePtr{}) && !e.MVCCInput.Present() &&
+		e.Revision != page.LegacyEntryRevision && (e.Type == batch.OpPut || (e.Type == batch.OpDelete && e.Value == nil))
+}
+
+func (b *Batch) finalizeCOWInlinePoint(op commitlog.RawKVOperation) error {
+	if b.cowState.prepared == nil || b.cowState.prepared.cut == nil || !b.eligibleCOWInlinePoint(false) {
+		return ErrCOWUnsupported
+	}
+	if err := validateCOWCanonicalEntry(0, &b.entries[0], op.Op, op.Key, op.Value, op.Revision, nil); err != nil {
+		return err
+	}
+	return b.finishCOWCanonicalPreparation()
+}
+
+func (b *Batch) finishCOWCanonicalPreparation() error {
 	for _, resource := range b.cowState.prepared.resources {
 		if resource.id.Kind != cowResourceDictionary {
 			continue
@@ -428,6 +454,7 @@ func (b *Batch) writeCOWPublication(syncWrite bool, unlock func()) error {
 	}
 	defer unlock()
 	checkpoint := syncWrite && b.commandWALAppend == nil
+	inlinePoint := false
 	var err error
 	if b.commandWALAppend != nil {
 		callbackReturned := false
@@ -476,25 +503,7 @@ func (b *Batch) writeCOWPublication(syncWrite bool, unlock func()) error {
 			err = finalizer.FinalizeRawKVEntryScanForCachedPublication(b.PrepareExternalCommandWALPublication, b.finalizeCOWPublication, b.Replay, len(b.entries))
 		}
 	} else {
-		finalizer, ok := b.db.backend.(interface {
-			FinalizePrivateCOWPublication(*transactionowner.Owner, func() error, backenddb.RawKVCommandWALFinalize, func(func(batch.Entry) error) error, int) error
-		})
-		if !ok {
-			err = fmt.Errorf("COW cache requires canonical backend finalization")
-		} else {
-			if b.cowState.native != nil && b.cowState.native.plan.RequireInlineCompositeRaw {
-				nativeFinalizer, ok := b.db.backend.(interface {
-					FinalizeNativePrivateCOWPublication(*transactionowner.Owner, func() error, backenddb.RawKVCommandWALFinalize, func(func(batch.Entry) error) error, int) error
-				})
-				if !ok {
-					err = ErrCOWUnsupported
-				} else {
-					err = nativeFinalizer.FinalizeNativePrivateCOWPublication(b.db.cow.txnOwner, b.PrepareExternalCommandWALPublication, b.finalizeCOWPublication, b.Replay, len(b.entries))
-				}
-			} else {
-				err = finalizer.FinalizePrivateCOWPublication(b.db.cow.txnOwner, b.PrepareExternalCommandWALPublication, b.finalizeCOWPublication, b.Replay, len(b.entries))
-			}
-		}
+		err, inlinePoint = b.finalizePrivateCOWPublication(syncWrite)
 	}
 	if err != nil && b.cowState.receipt.Assigned && b.cowState.native != nil {
 		if poisoner, ok := b.db.backend.(interface{ MarkCommandWALRecoveryRequired() }); ok {
@@ -625,6 +634,9 @@ func (b *Batch) writeCOWPublication(syncWrite bool, unlock func()) error {
 	b.cowState.accepted = rootpublication.AcceptedTicket{}
 	b.cowState.receipt.LogicalInstalled = true
 	b.cowState.receipt.LogicalSeq = p.cut.next.logicalSeq
+	if inlinePoint {
+		b.db.cow.inlinePointPublications.Add(1)
+	}
 	if native != nil {
 		// The cut owns State. Sparse custody either stays on the accepted
 		// queue or returns for the original semantic cleanup below.
@@ -675,6 +687,33 @@ func (b *Batch) writeCOWPublication(syncWrite bool, unlock func()) error {
 		return err
 	}
 	return nil
+}
+
+func (b *Batch) finalizePrivateCOWPublication(syncWrite bool) (err error, inlinePoint bool) {
+	owner := b.db.cow.txnOwner
+	if b.eligibleCOWInlinePoint(syncWrite) {
+		if finalizer, ok := b.db.backend.(interface {
+			FinalizePrivateCOWInlinePoint(*transactionowner.Owner, batch.Entry, func() error, func(commitlog.RawKVOperation) error) error
+		}); ok {
+			return finalizer.FinalizePrivateCOWInlinePoint(owner, b.entries[0], b.PrepareExternalCommandWALPublication, b.finalizeCOWInlinePoint), true
+		}
+	}
+	finalizer, ok := b.db.backend.(interface {
+		FinalizePrivateCOWPublication(*transactionowner.Owner, func() error, backenddb.RawKVCommandWALFinalize, func(func(batch.Entry) error) error, int) error
+	})
+	if !ok {
+		return fmt.Errorf("COW cache requires canonical backend finalization"), false
+	}
+	if b.cowState.native != nil && b.cowState.native.plan.RequireInlineCompositeRaw {
+		nativeFinalizer, ok := b.db.backend.(interface {
+			FinalizeNativePrivateCOWPublication(*transactionowner.Owner, func() error, backenddb.RawKVCommandWALFinalize, func(func(batch.Entry) error) error, int) error
+		})
+		if !ok {
+			return ErrCOWUnsupported, false
+		}
+		return nativeFinalizer.FinalizeNativePrivateCOWPublication(owner, b.PrepareExternalCommandWALPublication, b.finalizeCOWPublication, b.Replay, len(b.entries)), false
+	}
+	return finalizer.FinalizePrivateCOWPublication(owner, b.PrepareExternalCommandWALPublication, b.finalizeCOWPublication, b.Replay, len(b.entries)), false
 }
 
 func (db *DB) cowPoint(key, value []byte, put, syncWrite bool) error {

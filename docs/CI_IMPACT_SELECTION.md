@@ -8,7 +8,7 @@ on the advisory job, and no execution condition reads a forecast.
 
 The reviewed manifest is `.github/ci/ci_impact.json`; the single authority contract
 is `.github/scripts/ci_impact.py plan` / `validate`. It inventories all 18 source
-workflows, 67 original members, entry command source locations/digests, module and
+workflows, 69 source members, entry command source locations/digests, module and
 checkout contexts, platforms, race variants, and explicit dynamic consumers.
 The TreeDB vet and test workflow contributes 39 original members, including its required
 aggregate. Linux race coverage uses seven weighted core shards plus one dedicated
@@ -232,3 +232,7 @@ zero unresolved misses. Negative findings may require a NO-GO decision. Any
 future enforcement needs separately accepted evidence, executed-or-authorized
 member receipts, success-only aggregate semantics, a permanent owner, and a
 proved full rollback. Current advisory receipts cannot supply those approvals.
+
+See [CI trigger policy](CI_TRIGGER_POLICY.md) for the independently owned event
+and native-routing rules. The two small macOS scope jobs are included in this
+inventory; neither uses the shadow planner as authority to skip a runner.

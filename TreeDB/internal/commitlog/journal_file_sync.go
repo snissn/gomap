@@ -1,6 +1,7 @@
 package commitlog
 
 import (
+	"errors"
 	"sync"
 	"sync/atomic"
 )
@@ -11,7 +12,9 @@ type journalFileSyncFailure struct{ cause error }
 // retained duplicates, including the ones that have rotated out. On Linux
 // duplicates share the open-file description's writeback error cursor. Do
 // not let another sync consume a successful result after that cursor has
-// advanced past a failed write. This lock does not protect append or flush.
+// advanced past a failed write. It also retains errors that leave the
+// authoritative segment ambiguous to recovery. This lock does not protect
+// append or flush.
 type journalFileSync struct {
 	mu      sync.Mutex
 	failure atomic.Pointer[journalFileSyncFailure]
@@ -35,11 +38,27 @@ func (s *journalFileSync) run(syncFile func() error) error {
 		return err
 	}
 	if err := syncFile(); err != nil {
-		s.failure.Store(&journalFileSyncFailure{cause: err})
-		if s.onError != nil {
-			s.onError()
-		}
-		return err
+		return s.recordFailureLocked(err)
 	}
 	return nil
+}
+
+// recordFailure retains an error from an operation that already ran, even
+// when a captured sync has independently failed.
+func (s *journalFileSync) recordFailure(cause error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.recordFailureLocked(cause)
+}
+
+func (s *journalFileSync) recordFailureLocked(cause error) error {
+	prior := s.err()
+	if prior != nil {
+		cause = errors.Join(prior, cause)
+	}
+	s.failure.Store(&journalFileSyncFailure{cause: cause})
+	if prior == nil && s.onError != nil {
+		s.onError()
+	}
+	return cause
 }
