@@ -1048,27 +1048,49 @@ func (s *Snapshot) cowValueFromEntryLocked(entry node.LeafEntry) ([]byte, page.E
 	return entry.Value, entry.Revision, nil
 }
 
-// A view callback runs after read gates and workspace locks are released. Its
-// single owned value is admitted before copying and refunded after the callback.
-func (s *Snapshot) cowViewCopy(key []byte) ([]byte, *memtable.COWExternalLease, bool, error) {
+// cowViewResult owns one callback's copy, independent of the cut's borrowed
+// read workspace. One invocation may reuse it for consecutive same-size hits.
+type cowViewResult struct {
+	value []byte
+	lease *memtable.COWExternalLease
+}
+
+func (r *cowViewResult) reusable() bool {
+	return len(r.value) > 0 && len(r.value) <= page.PageSize
+}
+
+func (r *cowViewResult) close() {
+	lease := r.lease
+	*r = cowViewResult{}
+	lease.Close()
+}
+
+// Copy borrowed bytes under the original read locks. The callback runs only
+// after both the snapshot read gate and the workspace lock have been released.
+func (s *Snapshot) cowViewCopy(key []byte, result *cowViewResult) (bool, error) {
 	if err := s.beginRead(); err != nil {
-		return nil, nil, false, err
+		return false, err
 	}
 	defer s.endRead()
 	s.cowReadMu.Lock()
 	defer s.cowReadMu.Unlock()
 	value, _, err := s.cowValueLocked(normalizeRawKVPointKey(key))
 	if err == tree.ErrKeyNotFound {
-		return nil, nil, false, nil
+		result.close()
+		return false, nil
 	}
 	if err != nil {
-		return nil, nil, false, err
+		return false, err
 	}
-	lease, err := s.cowCache.budget.AcquireExternal(memtable.COWAllocationCharge(uint64(len(value))))
-	if err != nil {
-		return nil, nil, false, err
+	if result.lease == nil || len(result.value) != len(value) {
+		result.close()
+		lease, err := s.cowCache.budget.AcquireExternal(memtable.COWAllocationCharge(uint64(len(value))))
+		if err != nil {
+			return false, err
+		}
+		result.lease = lease
+		result.value = make([]byte, len(value))
 	}
-	out := make([]byte, len(value))
-	copy(out, value)
-	return out, lease, true, nil
+	copy(result.value, value)
+	return true, nil
 }

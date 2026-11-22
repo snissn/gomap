@@ -172,23 +172,37 @@ func TestCOWPublicViewCallbackCanCloseDatabase(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := database.Set([]byte("key"), []byte("value")); err != nil {
-				t.Fatal(err)
+			keys := [][]byte{[]byte("first"), []byte("later"), []byte("third")}
+			for _, key := range keys {
+				if err := database.Set(key, key); err != nil {
+					t.Fatal(err)
+				}
 			}
 			cache := database.cached
 			done := make(chan error, 1)
+			calls := 0
 			go func() {
-				done <- database.GetManyView([][]byte{[]byte("key")}, func(_ int, _ []byte, value []byte, found bool) error {
-					if !found || string(value) != "value" {
+				done <- database.GetManyView(keys, func(i int, key, value []byte, found bool) error {
+					if i != calls || i >= 2 || !found || !bytes.Equal(key, keys[i]) || !bytes.Equal(value, keys[i]) {
 						return fmt.Errorf("missing admitted callback value")
 					}
-					return database.Close()
+					calls++
+					if i == 0 {
+						return nil
+					}
+					if err := database.Close(); err != nil {
+						return err
+					}
+					if !bytes.Equal(value, keys[i]) {
+						return errors.New("Close changed the current callback value")
+					}
+					return nil
 				})
 			}()
 			select {
 			case err := <-done:
-				if err != nil {
-					t.Fatal(err)
+				if !errors.Is(err, ErrClosed) || calls != 2 {
+					t.Fatalf("callback Close: calls=%d err=%v", calls, err)
 				}
 			case <-time.After(10 * time.Second):
 				t.Fatal("callback Close blocked by public read lock")

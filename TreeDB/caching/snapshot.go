@@ -1121,17 +1121,24 @@ func (s *Snapshot) GetManyView(keys [][]byte, fn tree.GetManyViewFunc) error {
 		if fn == nil {
 			return errors.New("caching snapshot: GetManyView nil callback")
 		}
+		var result cowViewResult
+		defer result.close()
 		for i, key := range keys {
-			v, lease, found, err := s.cowViewCopy(key)
+			found, err := s.cowViewCopy(key, &result)
+			if err != nil && result.lease != nil && errors.Is(err, memtable.ErrCOWCapacity) {
+				// The prior callback's copy can compete with this lookup's read
+				// workspace. No callback has seen this key, so retry once without it.
+				result.close()
+				found, err = s.cowViewCopy(key, &result)
+			}
 			if err != nil {
 				return err
 			}
-			err = func() error {
-				defer lease.Close()
-				return fn(i, normalizeRawKVPointKey(key), v, found)
-			}()
-			if err != nil {
+			if err := fn(i, normalizeRawKVPointKey(key), result.value, found); err != nil {
 				return err
+			}
+			if !result.reusable() {
+				result.close()
 			}
 		}
 		return nil

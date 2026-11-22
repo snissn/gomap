@@ -442,10 +442,13 @@ the Store uses this same successor on its admitted snapshot after releasing
 floor admission; it never seeks through a newly captured DB cut.
 
 
-`GetManyView` retains one immutable snapshot, materializes bounded admitted
-temporary value ownership per callback, and invokes callbacks outside read,
-writer and publication locks. Callback values remain read-only and valid only
-for that callback. Empty input does not bypass closed-handle checks.
+`GetManyView` retains one immutable snapshot and invokes callbacks outside read,
+writer and publication locks. It can reuse one call-local, budgeted copy for
+consecutive nonempty values of the same size up to one page. Other values use
+per-callback admission. A lookup that encounters capacity pressure drops any
+retained callback copy before retrying once on the same cut. Callback values
+remain read-only and valid only for that callback. Empty input does not bypass
+closed-handle checks.
 
 ## External MVCC read admission
 
