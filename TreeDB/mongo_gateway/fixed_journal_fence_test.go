@@ -115,8 +115,8 @@ func characterizeStandaloneNativeJournalDriver(t *testing.T, profile treedb.Prof
 	}()
 	ctx, cancelContext := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancelContext()
-	// Precreate before the observed request interval; inserts exercise the real
-	// official driver's explicit w:1,j:true, including wire dispatch and ACK.
+	// Precreate before the observed request interval. Multi-document wire
+	// batches exercise the standalone prefix fence and its real driver ACK.
 	if err := client.Database("app").CreateCollection(ctx, "journal_fence"); err != nil {
 		t.Fatalf("precreate BSON collection: %v", err)
 	}
@@ -125,11 +125,12 @@ func characterizeStandaloneNativeJournalDriver(t *testing.T, profile treedb.Prof
 	before := standalone.Stats()
 	beforeACK := standalone.Server.StandaloneWriteConcernStats()
 	var acknowledged uint64
-	for i := 0; i < count; i++ {
-		id := fmt.Sprintf("journal-%02d", i)
-		result, err := collection.InsertOne(ctx, standaloneNativeJournalDocument(id, i))
-		if err != nil || result == nil || !result.Acknowledged || result.InsertedID != id {
-			t.Fatalf("journal insert %s result=%+v err=%v", id, result, err)
+	for i := 0; i < count; i += 2 {
+		first, second := fmt.Sprintf("journal-%02d", i), fmt.Sprintf("journal-%02d", i+1)
+		result, err := collection.InsertMany(ctx, []any{standaloneNativeJournalDocument(first, i), standaloneNativeJournalDocument(second, i+1)})
+		if err != nil || result == nil || !result.Acknowledged || len(result.InsertedIDs) != 2 ||
+			result.InsertedIDs[0] != first || result.InsertedIDs[1] != second {
+			t.Fatalf("journal insert %s/%s result=%+v err=%v", first, second, result, err)
 		}
 		acknowledged++
 	}
@@ -140,8 +141,9 @@ func characterizeStandaloneNativeJournalDriver(t *testing.T, profile treedb.Prof
 		before["treedb.command_wal.group_commit.forced_total"], after["treedb.command_wal.group_commit.forced_total"],
 		before["treedb.command_wal.sync.count_total"], after["treedb.command_wal.sync.count_total"],
 		before["treedb.command_wal.file_sync.calls_total"], after["treedb.command_wal.file_sync.calls_total"], beforeACK, afterACK)
-	if acknowledged != count || afterACK.JournalAcknowledgements-beforeACK.JournalAcknowledgements != count ||
-		afterACK.SyncAttempts-beforeACK.SyncAttempts != count || afterACK.PhysicalSyncBoundaries-beforeACK.PhysicalSyncBoundaries != count ||
+	const commands = count / 2
+	if acknowledged != commands || afterACK.JournalAcknowledgements-beforeACK.JournalAcknowledgements != commands ||
+		afterACK.SyncAttempts-beforeACK.SyncAttempts != commands || afterACK.PhysicalSyncBoundaries-beforeACK.PhysicalSyncBoundaries != commands ||
 		afterACK.SyncFailures != beforeACK.SyncFailures || afterACK.UncertainOutcomes != beforeACK.UncertainOutcomes {
 		t.Fatalf("journal ACK/boundary mismatch acknowledged=%d before=%+v after=%+v", acknowledged, beforeACK, afterACK)
 	}

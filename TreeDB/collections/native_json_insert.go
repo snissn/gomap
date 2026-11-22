@@ -43,12 +43,16 @@ func (m *NativeJSONManager) InsertBatch(name string, ids, documents [][]byte) er
 	}
 }
 
-func (m *NativeJSONManager) insertPrepared(name string, ids, documents [][]byte, stats *CollectionInsertStats, ordinaryOnly bool, projection *trustedFloat32Projection, projected **nativeInsertProjectedRefusal) (bool, bool, error) {
+func (m *NativeJSONManager) insertPrepared(name string, ids, documents [][]byte, stats *CollectionInsertStats, ordinaryOnly bool, projection *trustedFloat32Projection, projected **nativeInsertProjectedRefusal, journal *nativeOperationJournal) (bool, bool, error) {
 	tx, err := m.beginPrepared(name)
-	return finishNativeJSONInsert(tx, err, ids, documents, stats, ordinaryOnly, projection, projected)
+	return finishNativeJSONInsertWithJournal(tx, err, ids, documents, stats, ordinaryOnly, projection, projected, journal)
 }
 
 func finishNativeJSONInsert(tx *NativeJSONTxn, err error, ids, documents [][]byte, stats *CollectionInsertStats, ordinaryOnly bool, projection *trustedFloat32Projection, projected **nativeInsertProjectedRefusal) (recordStats, retry bool, resultErr error) {
+	return finishNativeJSONInsertWithJournal(tx, err, ids, documents, stats, ordinaryOnly, projection, projected, nil)
+}
+
+func finishNativeJSONInsertWithJournal(tx *NativeJSONTxn, err error, ids, documents [][]byte, stats *CollectionInsertStats, ordinaryOnly bool, projection *trustedFloat32Projection, projected **nativeInsertProjectedRefusal, journal *nativeOperationJournal) (recordStats, retry bool, resultErr error) {
 	var previous *nativeInsertProjectedRefusal
 	if projected != nil {
 		previous, *projected = *projected, nil
@@ -62,6 +66,9 @@ func finishNativeJSONInsert(tx *NativeJSONTxn, err error, ids, documents [][]byt
 			clearNativeCommitRetry(&retry, nil, projected)
 		}
 		resultErr = errors.Join(resultErr, cleanupErr)
+		if resultErr != nil && journal != nil {
+			journal.completion = journal.completion.WithoutSuccess()
+		}
 	}()
 	binding := &tx.bindings[0]
 	if previous != nil && (previous.pressure.Collection != binding.incarnation || previous.schema.Value() != binding.probe.collection.schema) {
@@ -70,6 +77,7 @@ func finishNativeJSONInsert(tx *NativeJSONTxn, err error, ids, documents [][]byt
 	if binding.probe.meta.Options.ColumnStore != nil || projection != nil {
 		projected = nil
 	}
+	journal.selectCapturedBSON(binding.probe.meta)
 	ordinary := binding.probe.meta.Options.ColumnStore == nil || nativeOrdinaryColumnGraphMeta(binding.probe.meta)
 	if !ordinary {
 		if ordinaryOnly {
@@ -100,7 +108,7 @@ func finishNativeJSONInsert(tx *NativeJSONTxn, err error, ids, documents [][]byt
 	if stats != nil {
 		stats.PrepareDocuments = time.Since(started)
 	}
-	err = tx.commitNativePlanObserved(false, nil, false, stats, &retry, nil, projected)
+	err = tx.commitNativePlanWithJournal(false, nil, false, stats, &retry, nil, projected, journal)
 	return stats != nil, retry && ordinary, err
 }
 

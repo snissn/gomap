@@ -160,6 +160,9 @@ type NativeSemanticCustody interface {
 }
 
 type NativePreparedPublication struct {
+	// RequestJournalCompletion opts a captured ordinary BSON mutation into
+	// original-owner receipt admission. Ineligible mutations keep their policy.
+	RequestJournalCompletion bool
 	// Selected composite raw members require the final inline Set representation.
 	RequireInlineCompositeRaw bool
 	// ObservePointConflict is the 1-based position of the one original row
@@ -269,6 +272,7 @@ type NativeSemanticCapture interface {
 // installation, WAL completion and exact physical sealing. Consumed transfers
 // the original descriptor custody even when a later assigned phase fails.
 type NativePublicationResult struct {
+	Journal                                                                  NativeJournalCompletion
 	Consumed, Assigned, Uncertain, LogicalInstalled, WALCompleted, WALStable bool
 	// OnlyPointConflict reports original journal evidence, independently of
 	// assignment and cleanup. It does not by itself authorize reconstruction.

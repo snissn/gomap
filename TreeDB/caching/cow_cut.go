@@ -205,6 +205,7 @@ type cowCache struct {
 	nativePressureState                                                                            cowNativePressureState
 	nativeProjectedRefusals                                                                        atomic.Uint64
 	nativeProjectedReliefNs                                                                        atomic.Uint64
+	reservationDrainFloor                                                                          atomic.Uint64
 	nativePressureRemembered                                                                       bool
 	semanticHead, semanticTail, semanticFailed                                                     *rootpublication.SemanticCleanup
 	semanticRunning, semanticStopped, closeCleanupDone                                             bool

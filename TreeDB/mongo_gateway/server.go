@@ -90,6 +90,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
+	if os.Getenv("YCSB_OWNER_PHASE_STATS") == "1" {
+		standalone.Server.EnableStandaloneJournalRouteStats()
+	}
 	evidence, err := ycsbevidence.OpenFromEnv(string(standalone.Options.Profile), standalone.Options.Dir, standalone.Backend, func() map[string]string {
 		return ownerEvidenceStats(standalone)
 	})
@@ -149,8 +152,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// This adapter belongs only to the opt-in executable observer. Stats supplies a
-// fresh map; neither public Stats nor the hot acknowledgement path is changed.
+// This adapter supplies the opt-in executable observer with a fresh stats map.
 func ownerEvidenceStats(standalone *mongogateway.StandaloneServer) map[string]string {
 	stats := standalone.Stats()
 	if stats == nil || os.Getenv("YCSB_OWNER_PHASE_STATS") != "1" {
@@ -169,6 +171,9 @@ func ownerEvidenceStats(standalone *mongogateway.StandaloneServer) map[string]st
 		"AcknowledgementNanos": ack.AcknowledgementNanos, "JournalSyncNanos": ack.JournalSyncNanos,
 	} {
 		stats["ycsb.gateway.write_concern."+name] = strconv.FormatUint(value, 10)
+	}
+	for name, value := range standalone.Server.StandaloneJournalRouteStats() {
+		stats["ycsb.gateway.write_concern.Route."+name] = strconv.FormatUint(value, 10)
 	}
 	return stats
 }

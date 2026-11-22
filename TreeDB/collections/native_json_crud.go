@@ -29,6 +29,10 @@ func (c *Collection) nativeUpdateBatchMode(items []UpdateBatchItem, mode updateB
 }
 
 func (c *Collection) nativeUpdateBatchModeObserved(items []UpdateBatchItem, mode updateBatchMode, bsonItems []BSONSetUpdateBatchItem, retry *nativeBSONSetRetry) (results []UpdateBatchResult, complete bool, resultErr error) {
+	return c.nativeUpdateBatchModeWithJournal(items, mode, bsonItems, retry, nil)
+}
+
+func (c *Collection) nativeUpdateBatchModeWithJournal(items []UpdateBatchItem, mode updateBatchMode, bsonItems []BSONSetUpdateBatchItem, retry *nativeBSONSetRetry, journal *nativeOperationJournal) ([]UpdateBatchResult, bool, error) {
 	if retry != nil {
 		retry.rowConflict = false
 	}
@@ -49,18 +53,29 @@ func (c *Collection) nativeUpdateBatchModeObserved(items []UpdateBatchItem, mode
 	if err != nil {
 		return nil, false, err
 	}
+	return c.finishPreparedNativeUpdateBatchWithJournal(tx, items, mode, bsonItems, retry, journal)
+}
+
+// The caller owns the producer admission; this finisher owns the original
+// prepared transaction through its checked Close and completion invalidation.
+func (c *Collection) finishPreparedNativeUpdateBatchWithJournal(tx *NativeJSONTxn, items []UpdateBatchItem, mode updateBatchMode, bsonItems []BSONSetUpdateBatchItem, retry *nativeBSONSetRetry, journal *nativeOperationJournal) (results []UpdateBatchResult, complete bool, resultErr error) {
+	var err error
 	defer func() {
 		closeErr := tx.Close()
 		if closeErr != nil && retry != nil {
 			retry.rowConflict = false
 		}
 		resultErr = errors.Join(resultErr, closeErr)
+		if resultErr != nil && journal != nil {
+			journal.completion = journal.completion.WithoutSuccess()
+		}
 	}()
 	count := len(items)
 	if bsonItems != nil {
 		count = len(bsonItems)
 	}
 	g := tx.binding(c.name)
+	journal.selectCapturedBSON(g.probe.meta)
 	if retry != nil {
 		if retry.incarnation == 0 {
 			retry.incarnation, retry.start = g.incarnation, tx.core.LogicalSequence()
@@ -122,12 +137,10 @@ func (c *Collection) nativeUpdateBatchModeObserved(items []UpdateBatchItem, mode
 	}
 	if len(tx.members) != 0 {
 		tx.structuredBSONUpdate = bsonItems != nil
-		if retry == nil {
-			err = tx.Commit()
-		} else {
-			err = tx.commitNativePlanObserved(false, nil, false, nil, nil, retry, nil)
-		}
-		if err != nil {
+		if err = tx.commitNativePlanWithJournal(false, nil, false, nil, nil, retry, nil, journal); err != nil {
+			if journal != nil && journal.completion.Installed() {
+				return results, true, err
+			}
 			return nil, false, err
 		}
 	}

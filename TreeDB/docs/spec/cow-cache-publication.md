@@ -648,24 +648,38 @@ appendable, and original append-size rollover still applies.
 
 Only the relaxed native generation-pressure worker flushes complete WAL frames
 and pins the exact active journal file under append ownership, then syncs that
-file after releasing the journal lock. Under the existing checkpoint writer
-fence it takes the already marked frozen COW prefix. Writes in the mutable
-successor keep their own later publication boundary. The worker waits for the
-file sync before DATA publication. This is the same
-active-file physical operation as synchronous WAL flush. Rotated files,
-namespace and dependency debt follow their original owners. The worker issues
-no barrier frame or durable WAL frontier. A proven temporary admission refusal
-leaves the captured work eligible for retry. The same worker arms one rate-limited
-timer so a lone frozen prefix can progress after admission resumes, even without
-more writes. Before enqueue, the final snapshot receipt may retry temporary
-allocation exhaustion or a full bounded reader registry. After one allocation
-retry, the timer checks for a tranche refund, lower retained usage or a
-different frozen prefix before rebuilding. Checked Close still attempts its
-ordinary final drain. The worker verifies that the captured cut is still
-active and that the WAL intent already covers precisely the interval from
-the physical basis through that cut. A fixed snapshot resource limit, a
-newly assigned intent, an accepted installation error or a cleanup failure
-follows the original failure path.
+file after releasing the journal lock. Durable mode retains the ordinary WAL
+flush path (`FlushCommandWAL`) when the background worker seals a captured
+generation or soft-reservation prefix. Under the existing checkpoint writer
+fence the generation-pressure worker takes the already marked frozen COW prefix.
+Writes in the mutable successor keep their own later publication boundary. The
+worker waits for the WAL flush/sync before DATA publication. Rotated files,
+namespace and dependency debt follow their original owners. In relaxed mode the
+worker issues no barrier frame or durable WAL frontier. A proven temporary
+admission refusal leaves the captured work eligible for retry. The same worker
+arms one rate-limited timer so a lone frozen prefix can progress after admission
+resumes, even without more writes. Before enqueue, the final snapshot receipt
+may retry temporary allocation exhaustion or a full bounded reader registry.
+After one allocation retry, the timer checks for a tranche refund, lower
+retained usage or a different frozen prefix before rebuilding. Checked Close
+still attempts its ordinary final drain. The worker verifies that the captured
+cut is still active and that the WAL intent already covers precisely the
+interval from the physical basis through that cut. A fixed snapshot resource
+limit, a newly assigned intent, an accepted installation error or a cleanup
+failure follows the original failure path.
+
+In durable command-WAL mode with a running size-maintenance worker, soft parent
+reservation pressure (`[3/4, 7/8)` of `MaxInFlightBytes`, with no independent
+non-reservation pressure) wakes the existing maintenance worker asynchronously
+to seal and retire the captured prefix without stalling concurrent foreground
+writers. If a retained reader keeps `ReservedBytes` at or above the soft
+watermark after that pass, the worker raises a temporary re-wake floor by
+`MaxInFlightBytes/16` (clamped at the `7/8` hard ceiling) so small writes do
+not spin background drains; dropping below the soft watermark clears the floor.
+Hard reservation pressure (`>= 7/8` of `MaxInFlightBytes`) and non-reservation
+pressure retain synchronous foreground reclamation, while contended synchronous
+callers that waited on `flushMu` re-check pressure before performing a second
+drain.
 Physical failures and any joined original cleanup failure still reach checked
 Close. A flush or sync failure poisons WAL publication. A direct
 Close call from that worker's error callback returns the existing callback
