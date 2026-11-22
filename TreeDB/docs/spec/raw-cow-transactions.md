@@ -179,6 +179,13 @@ sustained mixed-load qualification. Existing raw/legacy controls provide the
 before/after comparison; an unsupported pre-P1 transaction path is no comparator.
 
 
+The opt-in [sustained public driver](../../../scripts/raw_cow_txn_sustained/)
+uses actual two-key read-modify-write and ordinary durable Commit. Its
+[first campaign](../benchmarks/raw-cow-txn-sustained/) reports the stock
+concurrent accepted-prefix capacity refusal separately from the successful
+single-client and short controls. It is not a full engine qualification.
+
+
 ## Preserved maintenance limit
 
 The baseline retained-view fixture (forced pointer value, checkpoint, then public
