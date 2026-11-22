@@ -6,6 +6,7 @@ import (
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
@@ -29,14 +30,61 @@ func (db *DB) checkpointCOWColumnCompaction(ctx context.Context, automatic bool,
 }
 
 func (db *DB) checkpointCOWColumnCompactionProjected(ctx context.Context, automatic bool, operation backenddb.NativeColumnStoreCompaction, projected *backenddb.NativeProjectedGenerationPressure) error {
-	start := time.Now()
-	defer func() {
-		dur := uint64(time.Since(start))
-		db.checkpointRuns.Add(1)
-		db.checkpointTotalNs.Add(dur)
-		updateAtomicMaxUint64(&db.checkpointMaxNs, dur)
-	}()
+	defer db.observeCOWCheckpointRun(time.Now())
 	return db.materializeCOWPrefixProjected(ctx, automatic, operation, cowCheckpointMaterialization, projected)
+}
+
+func (db *DB) observeCOWCheckpointRun(start time.Time) {
+	dur := uint64(time.Since(start))
+	db.checkpointRuns.Add(1)
+	db.checkpointTotalNs.Add(dur)
+	updateAtomicMaxUint64(&db.checkpointMaxNs, dur)
+}
+
+// reserveRawTxnPairAfterPressure is only for ordinary durable paired denial.
+// It never duplicates flush ownership, holds half a pair, or waits with a
+// foreground publication lock. The original retry remains outside flushMu.
+func (db *DB) reserveRawTxnPairAfterPressure(denied rootpublication.AcceptedOrdinaryPairRefusal) (rootpublication.AcceptedTicket, rootpublication.AcceptedTicket, error) {
+	ticket, spare, err := db.joinRawTxnPressureCheckpoint(denied)
+	if err != nil || ticket.Valid() {
+		return ticket, spare, err
+	}
+	ticket, spare, err = db.cow.prefix.ReserveAcceptedOrdinaryPair()
+	return ticket, spare, acceptedAdmissionError(err)
+}
+
+func (db *DB) joinRawTxnPressureCheckpoint(denied rootpublication.AcceptedOrdinaryPairRefusal) (rootpublication.AcceptedTicket, rootpublication.AcceptedTicket, error) {
+	if db.closing.Load() {
+		return rootpublication.AcceptedTicket{}, rootpublication.AcceptedTicket{}, errDBClosing
+	}
+	if err := durabilitycut.EmitBasic(durabilitycut.BeforeCOWAcceptedPairPressureWait, durabilitycut.ResourceAuxiliary, db.dir); err != nil {
+		return rootpublication.AcceptedTicket{}, rootpublication.AcceptedTicket{}, err
+	}
+	start := time.Now()
+	checkpoint := false
+	defer func() {
+		if checkpoint {
+			db.observeCOWCheckpointRun(start)
+		}
+	}()
+	db.flushMu.Lock()
+	defer db.flushMu.Unlock()
+	if db.closing.Load() {
+		return rootpublication.AcceptedTicket{}, rootpublication.AcceptedTicket{}, errDBClosing
+	}
+	if !db.maintenanceActive.Load() &&
+		db.cow.handoff == nil && !db.cow.refreshRequired.Load() && db.nativePressureDrainEnabled() {
+		if err := backendPublicationReady(db.backend); err != nil {
+			return rootpublication.AcceptedTicket{}, rootpublication.AcceptedTicket{}, err
+		}
+		ticket, spare, err := db.cow.prefix.ReserveAcceptedOrdinaryPairAfterRetirement(denied)
+		if err != nil || ticket.Valid() {
+			return ticket, spare, err
+		}
+	}
+	checkpoint = true
+	err := db.materializeCOWPrefixProjectedLocked(context.Background(), false, nil, cowCheckpointMaterialization, nil)
+	return rootpublication.AcceptedTicket{}, rootpublication.AcceptedTicket{}, err
 }
 
 type cowPrefixMaterialization uint8
@@ -123,9 +171,7 @@ func (db *DB) materializeCOWPrefix(ctx context.Context, automatic bool, operatio
 	return db.materializeCOWPrefixProjected(ctx, automatic, operation, mode, nil)
 }
 
-func (db *DB) materializeCOWPrefixProjected(ctx context.Context, automatic bool, operation backenddb.NativeColumnStoreCompaction, mode cowPrefixMaterialization, projected *backenddb.NativeProjectedGenerationPressure) (retErr error) {
-	pressureOnly := mode != cowCheckpointMaterialization
-	generationPressure := mode == cowGenerationPressureMaterialization
+func (db *DB) materializeCOWPrefixProjected(ctx context.Context, automatic bool, operation backenddb.NativeColumnStoreCompaction, mode cowPrefixMaterialization, projected *backenddb.NativeProjectedGenerationPressure) error {
 	if db.closing.Load() {
 		return errDBClosing
 	}
@@ -136,6 +182,14 @@ func (db *DB) materializeCOWPrefixProjected(ctx context.Context, automatic bool,
 		return err
 	}
 	defer db.flushMu.Unlock()
+	return db.materializeCOWPrefixProjectedLocked(ctx, automatic, operation, mode, projected)
+}
+
+// materializeCOWPrefixProjectedLocked is the original durable materialization;
+// its caller owns flushMu through the final unwind and cleanup.
+func (db *DB) materializeCOWPrefixProjectedLocked(ctx context.Context, automatic bool, operation backenddb.NativeColumnStoreCompaction, mode cowPrefixMaterialization, projected *backenddb.NativeProjectedGenerationPressure) (retErr error) {
+	pressureOnly := mode != cowCheckpointMaterialization
+	generationPressure := mode == cowGenerationPressureMaterialization
 	if generationPressure {
 		if db.closing.Load() {
 			return errDBClosing

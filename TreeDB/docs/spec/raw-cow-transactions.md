@@ -212,6 +212,30 @@ concurrent accepted-prefix capacity refusal separately from the successful
 single-client and short controls. It is not a full engine qualification.
 
 
+## When ordinary durable raw admission reuses prior checkpoint work
+
+An initially refused two-ticket reservation holds neither ticket. It observes
+the original accepted-prefix owner and its frontiers at that exact refusal:
+`V` is the installed logical version, `C` the installed canonical command
+LSN, `W` the stable canonical-WAL observation, and `S` the logical/command
+endpoint retired after its exact installed physical seal and custody release.
+Capacity refunds, written bytes and backend state alone cannot prove `S`.
+
+After entering the existing flush fence, an ordinary durable raw transaction
+can avoid another full checkpoint only if the same owner has retired an
+outstanding denied endpoint (both its `V` and `C`) and canonical `W` covers
+that `C`. The owner verifies coverage and spends both real slots together.
+The observation is one-shot and is not a reservation; a rival may still win
+the real capacity. A newer accepted suffix is not retired by the decision.
+Missing proof, insufficient capacity, a parked handoff, stale basis or inactive
+original size/cleanup capability keeps the full fallback. Terminal errors and
+closing do not become retries.
+
+Explicit checkpoint, synchronous Commit, the ordinary maintenance worker and
+Close keep their original work and acknowledgement boundaries. The narrow
+shortcut defers later maintenance to those existing authorities; its slot
+reclamation is not a bound on WAL bytes or persistent value-log storage.
+
 ## Preserved maintenance limit
 
 The baseline retained-view fixture (forced pointer value, checkpoint, then public

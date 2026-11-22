@@ -214,9 +214,66 @@ func (c *Coordinator) ReserveAccepted(maintenance bool) (AcceptedTicket, error) 
 // ReserveAcceptedOrdinaryPair reserves a writer and its optional group marker
 // together. A refusal holds neither slot and leaves the maintenance reserve alone.
 func (c *Coordinator) ReserveAcceptedOrdinaryPair() (AcceptedTicket, AcceptedTicket, error) {
+	a, b, _, err := c.reserveAcceptedOrdinaryPair(false)
+	return a, b, err
+}
+
+// AcceptedOrdinaryPairRefusal binds real capacity denial and its unsettled
+// frontier to one original owner. It never holds a reservation. Copies share
+// the private one-shot state; callers cannot copy or forge that state.
+type AcceptedOrdinaryPairRefusal struct{ state *acceptedPairRefusal }
+
+func (r AcceptedOrdinaryPairRefusal) Valid() bool { return r.state != nil }
+
+type acceptedPairRefusal struct {
+	owner  *Coordinator
+	denied LogicalFrontiers
+	used   bool // guarded by owner's accepted mutex
+}
+
+// ReserveAcceptedOrdinaryPairWithRefusal is the initial raw-transaction
+// attempt. Healthy success is the ordinary atomic pair, without a witness.
+// Only the true capacity check returns a refusal; terminal errors are
+// separate even if they are equal to or wrap ErrAcceptedCapacity.
+func (c *Coordinator) ReserveAcceptedOrdinaryPairWithRefusal() (AcceptedTicket, AcceptedTicket, AcceptedOrdinaryPairRefusal, error) {
+	return c.reserveAcceptedOrdinaryPair(true)
+}
+
+func (c *Coordinator) reserveAcceptedOrdinaryPair(captureRefusal bool) (AcceptedTicket, AcceptedTicket, AcceptedOrdinaryPairRefusal, error) {
 	c = c.AcceptedPrefixOwner()
+	var refusal AcceptedOrdinaryPairRefusal
 	if c == nil {
-		return AcceptedTicket{}, AcceptedTicket{}, ErrAcceptedReceipt
+		return AcceptedTicket{}, AcceptedTicket{}, refusal, ErrAcceptedReceipt
+	}
+	p := &c.accepted
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.poison != nil {
+		return AcceptedTicket{}, AcceptedTicket{}, refusal, p.poison
+	}
+	if p.closed || len(p.entries) == 0 {
+		return AcceptedTicket{}, AcceptedTicket{}, refusal, ErrAcceptedReceipt
+	}
+	if p.freeCount < 2 {
+		if captureRefusal {
+			refusal.state = &acceptedPairRefusal{owner: c, denied: p.frontiers}
+		}
+		return AcceptedTicket{}, AcceptedTicket{}, refusal, ErrAcceptedCapacity
+	}
+	a, b := p.reserveOrdinaryPairLocked(c)
+	return a, b, refusal, nil
+}
+
+// ReserveAcceptedOrdinaryPairAfterRetirement consumes a single actual refusal.
+// A clean miss has no tickets and nil error. A terminal outcome is never a miss.
+// S comes only from the completed original accepted retirement, not slot count,
+// and W comes only from the canonical WAL owner. A later accepted suffix is not
+// part of this claim. No waits or external calls occur under accepted.mu.
+func (c *Coordinator) ReserveAcceptedOrdinaryPairAfterRetirement(observation AcceptedOrdinaryPairRefusal) (AcceptedTicket, AcceptedTicket, error) {
+	c = c.AcceptedPrefixOwner()
+	refusal := observation.state
+	if c == nil || refusal == nil || refusal.owner != c {
+		return AcceptedTicket{}, AcceptedTicket{}, nil
 	}
 	p := &c.accepted
 	p.mu.Lock()
@@ -227,15 +284,28 @@ func (c *Coordinator) ReserveAcceptedOrdinaryPair() (AcceptedTicket, AcceptedTic
 	if p.closed || len(p.entries) == 0 {
 		return AcceptedTicket{}, AcceptedTicket{}, ErrAcceptedReceipt
 	}
-	if p.freeCount < 2 {
-		return AcceptedTicket{}, AcceptedTicket{}, ErrAcceptedCapacity
+	if refusal.used {
+		return AcceptedTicket{}, AcceptedTicket{}, nil
 	}
+	refusal.used = true
+	f, before := p.frontiers, refusal.denied
+	if p.freeCount < 2 || f.W < before.C ||
+		(before.S.LogicalSequence >= before.V && before.S.CanonicalLSN >= before.C) ||
+		f.S.LogicalSequence < before.S.LogicalSequence || f.S.CanonicalLSN < before.S.CanonicalLSN ||
+		f.S.LogicalSequence < before.V || f.S.CanonicalLSN < before.C {
+		return AcceptedTicket{}, AcceptedTicket{}, nil
+	}
+	a, b := p.reserveOrdinaryPairLocked(c)
+	return a, b, nil
+}
+
+func (p *acceptedPrefixState) reserveOrdinaryPairLocked(c *Coordinator) (AcceptedTicket, AcceptedTicket) {
 	if p.nonce > ^uint64(0)-2 {
 		panic("accepted publication nonce exhausted")
 	}
 	p.freeCount -= 2
 	return p.reserveSlotLocked(c, p.free[p.freeCount+1], false),
-		p.reserveSlotLocked(c, p.free[p.freeCount], false), nil
+		p.reserveSlotLocked(c, p.free[p.freeCount], false)
 }
 
 func (p *acceptedPrefixState) reserveSlotLocked(c *Coordinator, slot int, maintenance bool) AcceptedTicket {
