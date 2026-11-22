@@ -238,6 +238,28 @@ func TestCOWPublicGetManyViewResultLifetime(t *testing.T) {
 			if stats := database.cached.COWMemoryStats(); stats.ExternalLeases != before.ExternalLeases || stats.ExternalBytes != before.ExternalBytes {
 				t.Fatalf("callback panic retained result ownership: before=%+v after=%+v", before, stats)
 			}
+
+			calls = 0
+			err = cowPublicContractComplete(t, blocked, "GetManyView with concurrent snapshot Close", func() error {
+				return snap.GetManyView(keys[:3], func(i int, _ []byte, value []byte, found bool) error {
+					calls++
+					if i != 1 {
+						return nil
+					}
+					closed := make(chan error, 1)
+					go func() { closed <- snap.Close() }()
+					if err := <-closed; err != nil {
+						return err
+					}
+					if !found || !bytes.Equal(value, second) {
+						return errors.New("snapshot Close changed the current callback value")
+					}
+					return nil
+				})
+			})
+			if !errors.Is(err, ErrClosed) || calls != 2 {
+				t.Fatalf("concurrent snapshot Close: callbacks=%d err=%v", calls, err)
+			}
 		})
 	}
 }
