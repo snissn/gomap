@@ -132,3 +132,8 @@ JSON. The archive binds the diagnostic argv and changed overlay source
 hashes. See [#5652](https://github.com/snissn/gomap/issues/5652); this experiment
 does not close [#5145](https://github.com/snissn/gomap/issues/5145) or
 [#4879](https://github.com/snissn/gomap/issues/4879).
+
+## Follow-up
+
+[Raw durable admission and 16-client progress](admission.md) records the
+separate Phase 2 candidate, qualification, and its singleton tail tradeoff.

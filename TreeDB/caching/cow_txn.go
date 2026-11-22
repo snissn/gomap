@@ -10,6 +10,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/transactionowner"
 	publiciterator "github.com/snissn/gomap/TreeDB/iterator"
 )
@@ -26,17 +27,33 @@ func cloneCOWTxnBound(bound []byte) []byte {
 }
 
 type cowTxnState struct {
-	writeIndex    map[string]int
-	writeIndexCap int
-	lease         *memtable.COWExternalLease
-	charged       uint64
-	write         func(*Batch, bool) error
-	ranges        []cowTxnRange
-	rangeCharge   uint64
-	iterators     *cowTxnIterator
+	writeIndex              map[string]int
+	writeIndexCap           int
+	lease                   *memtable.COWExternalLease
+	charged                 uint64
+	write                   func(*Batch, bool) error
+	ranges                  []cowTxnRange
+	rangeCharge             uint64
+	iterators               *cowTxnIterator
+	durableOrdinaryEligible bool
+	pairAdmission           bool
+	barrierSpare            rootpublication.AcceptedTicket
 }
 
 func (db *DB) InitOwnedCOWTxn(tx *ConditionalTxn, owner *transactionowner.Owner, write func(*Batch, bool) error) error {
+	return db.initOwnedCOWTxn(tx, owner, false, write)
+}
+
+// InitOwnedCOWTxnWithRawDurableAdmission lets the original public owner select
+// paired admission only for a qualified raw durable transaction.
+func (db *DB) InitOwnedCOWTxnWithRawDurableAdmission(tx *ConditionalTxn, owner *transactionowner.Owner, eligible bool, write func(*Batch, bool) error) error {
+	if eligible && (db == nil || !db.externalCommandWAL || db.relaxedSync || db.cow == nil || db.cow.ordered) {
+		return backenddb.ErrConditionalTxnUnsupported
+	}
+	return db.initOwnedCOWTxn(tx, owner, eligible, write)
+}
+
+func (db *DB) initOwnedCOWTxn(tx *ConditionalTxn, owner *transactionowner.Owner, durableOrdinaryEligible bool, write func(*Batch, bool) error) error {
 	if db == nil || db.cow == nil || owner == nil || db.cow.txnOwner != owner {
 		return backenddb.ErrConditionalTxnUnsupported
 	}
@@ -52,7 +69,7 @@ func (db *DB) InitOwnedCOWTxn(tx *ConditionalTxn, owner *transactionowner.Owner,
 	if err := provider.PreflightPrivateCOWCommand(owner); err != nil {
 		return err
 	}
-	if err := db.beginDirectWrite(); err != nil {
+	if err := db.beginDirectWriteWithCOWRefreshWait(durableOrdinaryEligible); err != nil {
 		return err
 	}
 	defer db.writeMu.RUnlock()
@@ -79,7 +96,7 @@ func (db *DB) InitOwnedCOWTxn(tx *ConditionalTxn, owner *transactionowner.Owner,
 		lease.Close()
 		return errors.Join(batchErr, closeErr)
 	}
-	*tx = ConditionalTxn{db: db, batch: b, snap: snap, startSeq: snap.cowCut.logicalSeq, cow: &cowTxnState{lease: lease, charged: charge, write: write}}
+	*tx = ConditionalTxn{db: db, batch: b, snap: snap, startSeq: snap.cowCut.logicalSeq, cow: &cowTxnState{lease: lease, charged: charge, write: write, durableOrdinaryEligible: durableOrdinaryEligible}}
 	tx.reads = tx.inlineReads[:0]
 	tx.keyArena = tx.inlineKeys[:0]
 	b.cowState.txn = tx
@@ -124,7 +141,43 @@ func (tx *ConditionalTxn) cowCommit(sync bool) (err error) {
 		}
 		return nil
 	}
+	// Only the original public owner may opt in at initialization. Explicit
+	// CommitSync and an empty or native-bearing transaction keep their route.
+	tx.cow.pairAdmission = !sync && tx.cow.durableOrdinaryEligible &&
+		len(tx.batch.entries) > 0 && tx.batch.cowState.native == nil
 	return tx.cow.write(tx.batch, sync)
+}
+
+func (b *Batch) rawTxnPairAdmission() *cowTxnState {
+	if b.cowState == nil || b.cowState.txn == nil {
+		return nil
+	}
+	s := b.cowState.txn.cow
+	if s == nil || !s.pairAdmission {
+		return nil
+	}
+	return s
+}
+
+func (s *cowTxnState) cancelBarrierSpare() error {
+	ticket := s.barrierSpare
+	s.barrierSpare = rootpublication.AcceptedTicket{}
+	return ticket.CancelAccepted()
+}
+
+// TakeRawTxnBarrierSpare transfers the actual unassigned ticket to the
+// original public group registrar. Non-selected callers have no spare.
+func (b *Batch) TakeRawTxnBarrierSpare(owner *transactionowner.Owner) (rootpublication.AcceptedTicket, error) {
+	s := b.rawTxnPairAdmission()
+	if s == nil {
+		return rootpublication.AcceptedTicket{}, nil
+	}
+	if owner == nil || b.db.cow.txnOwner != owner || !s.barrierSpare.Valid() {
+		return rootpublication.AcceptedTicket{}, ErrCOWUnsupported
+	}
+	ticket := s.barrierSpare
+	s.barrierSpare = rootpublication.AcceptedTicket{}
+	return ticket, nil
 }
 
 // Iterator records the complete requested interval before exposing any result.

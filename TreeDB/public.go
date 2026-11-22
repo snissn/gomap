@@ -2330,7 +2330,7 @@ func (db *DB) initConditionalTxn(tx *ConditionalTxn, withSnapshot bool) error {
 	}
 	defer db.lifecycleMu.RUnlock()
 	if db.cached != nil && db.cached.COWMode() {
-		if err := db.cached.InitOwnedCOWTxn(&tx.cached, db.txnOwner, func(b *caching.Batch, sync bool) error {
+		if err := db.cached.InitOwnedCOWTxnWithRawDurableAdmission(&tx.cached, db.txnOwner, db.commandWALOrdinaryWriteRequiresSync() && !db.cached.SupportsLogicalMVCC(), func(b *caching.Batch, sync bool) error {
 			if !db.commandWALCached {
 				if sync {
 					return b.WriteSync()

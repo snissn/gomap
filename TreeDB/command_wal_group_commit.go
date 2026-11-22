@@ -311,6 +311,20 @@ func (tdb *DB) registerPublicCommandWALWithIntent(bytes int, preparedBytes *int,
 // collectionSealed is scheduling metadata from a caller-owned aggregate. It
 // closes collection without adding a force ticket or changing prefix/ACK rules.
 func (tdb *DB) registerPublicCommandWALCollected(bytes int, preparedBytes *int, durable, intentRegistered, collectionSealed bool, pendingBookkeeping *time.Duration, appendFrame func(bool) (uint64, error)) (publicCommandWALRegistration, error) {
+	return tdb.registerPublicCommandWALCollectedWithSpare(bytes, preparedBytes, durable, intentRegistered, collectionSealed, pendingBookkeeping, appendFrame, rootpublication.AcceptedTicket{})
+}
+
+func (tdb *DB) registerPublicCommandWALCollectedWithSpare(bytes int, preparedBytes *int, durable, intentRegistered, collectionSealed bool, pendingBookkeeping *time.Duration, appendFrame func(bool) (uint64, error), spare rootpublication.AcceptedTicket) (_ publicCommandWALRegistration, result error) {
+	// A moved spare is never assigned here unless the existing pending
+	// group's ownership adopts it. Preserve clean error identity otherwise.
+	if spare.Valid() {
+		defer func() {
+			if cleanupErr := spare.CancelAccepted(); cleanupErr != nil {
+				result = errors.Join(result, cleanupErr)
+			}
+		}()
+	}
+
 	var publication publicCommandWALRegistration
 	if tdb == nil || !tdb.commandWALCached || tdb.backend == nil || appendFrame == nil {
 		return publication, ErrClosed
@@ -368,9 +382,16 @@ func (tdb *DB) registerPublicCommandWALCollected(bytes int, preparedBytes *int, 
 				err = terminalErr
 				return
 			}
-			prefix, _, reserveErr := tdb.backend.PrivateCOWAcceptedPrefix(tdb.txnOwner)
-			if reserveErr == nil {
-				barrier, reserveErr = prefix.ReserveAccepted(false)
+			var reserveErr error
+			if spare.Valid() {
+				barrier = spare
+				spare = rootpublication.AcceptedTicket{}
+			} else {
+				var prefix *rootpublication.Coordinator
+				prefix, _, reserveErr = tdb.backend.PrivateCOWAcceptedPrefix(tdb.txnOwner)
+				if reserveErr == nil {
+					barrier, reserveErr = prefix.ReserveAccepted(false)
+				}
 			}
 			if reserveErr != nil {
 				// The original append callback has not run. A checkpoint
@@ -386,6 +407,14 @@ func (tdb *DB) registerPublicCommandWALCollected(bytes int, preparedBytes *int, 
 					err = errors.Join(err, cancelErr)
 				}
 			}()
+		} else if spare.Valid() {
+			// This epoch owns its existing marker. Refund the surplus before
+			// append while the same public publication gate excludes capture.
+			err = spare.CancelAccepted()
+			spare = rootpublication.AcceptedTicket{}
+			if err != nil {
+				return
+			}
 		}
 		// Queued writes retain relaxed prefix debt. Only a truly idle mutation
 		// emits its own durable marker. A later relaxed suffix can still
