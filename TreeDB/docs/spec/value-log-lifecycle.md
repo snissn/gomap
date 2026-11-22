@@ -526,7 +526,18 @@ remain reader-capable until their original release. Column-asset deletion also
 retains its exact durable-root identity pins, fallback protection and deletion
 revalidation; a directory page pin is not a substitute for those resource edges.
 
-For each segment in current value-log set:
+When full GC sees no ordinary value segment in the registered file set, it
+refreshes the manager inventory to discover on-disk siblings before deciding
+whether to walk the trees. If the refreshed inventory is empty or contains only
+leaf-log segments, both dry-run and mutating GC return zero work without walking
+the live or recoverable roots. Explicit storage audits still diagnose tree
+corruption. When discovery finds ordinary segments, full GC still walks the
+roots and refreshes again at its existing post-scan inventory step. A registered
+ordinary segment skips the discovery refresh. Mutation continues to require
+publication and recoverable-root revalidation. Whole-generation leaf reclamation
+continues through its own collector.
+
+For each ordinary segment in the current value-log set:
 
 1. determine referenced set (incremental counters when valid; otherwise full scan),
 2. keep if referenced,

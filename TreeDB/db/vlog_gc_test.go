@@ -73,6 +73,204 @@ func TestValueLogGC_PostRefreshNilSetReturnsEmptyStats(t *testing.T) {
 	}
 }
 
+func openValueLogGCLeafFixture(tb testing.TB, keys int) (*DB, Options, func()) {
+	tb.Helper()
+	opts := Options{
+		Dir:                        tb.TempDir(),
+		Durability:                 DurabilityWALOffRelaxed,
+		DisableBackgroundPrune:     true,
+		IndexOuterLeavesInValueLog: true,
+		LeafPageReadCacheEntries:   -1,
+	}
+	database, err := Open(opts)
+	if err != nil {
+		tb.Fatalf("open: %v", err)
+	}
+	leafLog, err := NewStandaloneLeafPageLog(opts.Dir, StandaloneLeafPageLogOptions{Compression: ValueLogCompressionOff})
+	if err != nil {
+		_ = database.Close()
+		tb.Fatalf("open leaf log: %v", err)
+	}
+	closeFixture := sync.OnceFunc(func() {
+		if err := errors.Join(database.Close(), leafLog.Close()); err != nil {
+			tb.Errorf("close fixture: %v", err)
+		}
+	})
+	tb.Cleanup(closeFixture)
+	database.SetLeafPageLog(leafLog)
+
+	seed := database.NewBatch().(*Batch)
+	for i := 0; i < keys; i++ {
+		if err := seed.Set([]byte(fmt.Sprintf("k%06d", i)), []byte("inline value")); err != nil {
+			tb.Fatalf("seed Set: %v", err)
+		}
+	}
+	if err := errors.Join(seed.WriteSync(), seed.Close()); err != nil {
+		tb.Fatalf("publish seed: %v", err)
+	}
+	deletion := database.NewBatch().(*Batch)
+	if err := deletion.DeleteRange([]byte("k000000"), []byte(fmt.Sprintf("k%06d", keys/8))); err != nil {
+		tb.Fatalf("DeleteRange: %v", err)
+	}
+	if err := errors.Join(deletion.WriteSync(), deletion.Close()); err != nil {
+		tb.Fatalf("publish deletion: %v", err)
+	}
+	if err := database.Checkpoint(); err != nil {
+		tb.Fatalf("checkpoint: %v", err)
+	}
+
+	manager := database.valueLogManager
+	set := manager.CurrentSetNoRefresh()
+	defer manager.Release(set)
+	if len(set.Files) == 0 || len(database.valueOnlyValueLogFiles(set.Files)) != 0 {
+		tb.Fatalf("expected a registered leaf-only inventory, got %d files", len(set.Files))
+	}
+	for _, file := range set.Files {
+		info, err := os.Stat(file.Path)
+		if err != nil {
+			tb.Fatalf("stat leaf segment: %v", err)
+		}
+		if filepath.Dir(file.Path) != LeafLogDirPath(opts.Dir) || info.Size() == 0 {
+			tb.Fatalf("expected a non-empty leaf segment, got %s (%d bytes)", file.Path, info.Size())
+		}
+	}
+	return database, opts, closeFixture
+}
+
+func TestValueLogGC_LeafOnlySkipsReachability(t *testing.T) {
+	database, opts, closeFixture := openValueLogGCLeafFixture(t, 512)
+	requireLeafLogRootChildren(t, database, database.State().RootPageID)
+	ctx := context.Background()
+
+	// Verify the read counter detects an actual recoverable-root walk on this
+	// fixture. The DB uses verified reads with the decoded leaf cache disabled.
+	roots, err := database.CaptureRecoverableRootSetForInspection(ctx)
+	if err != nil {
+		t.Fatalf("capture recoverable roots: %v", err)
+	}
+	manager := database.valueLogManager
+	before := manager.ReadStats().RecordCRCChecks
+	_, scanErr := database.referencedValueLogSegmentsForRecoverableRootSet(ctx, roots)
+	if err := errors.Join(scanErr, roots.ReleaseWithError()); err != nil {
+		t.Fatalf("project recoverable-root value refs: %v", err)
+	}
+	if checks := manager.ReadStats().RecordCRCChecks - before; checks == 0 {
+		t.Fatal("fixture recoverable-root walk produced no leaf reads")
+	}
+
+	for _, dryRun := range []bool{true, false} {
+		t.Run(fmt.Sprintf("dry_run=%t", dryRun), func(t *testing.T) {
+			scans := 0
+			restore := registerScanValueLogRefCountsHook(func() { scans++ })
+			defer restore()
+			before := manager.ReadStats().RecordCRCChecks
+			refreshes := manager.RefreshScanCount()
+			stats, err := database.ValueLogGC(ctx, ValueLogGCOptions{DryRun: dryRun})
+			if err != nil || stats != (ValueLogGCStats{}) {
+				t.Fatalf("ValueLogGC=(%+v, %v), want zero stats and no error", stats, err)
+			}
+			if checks := manager.ReadStats().RecordCRCChecks - before; scans != 0 || checks != 0 {
+				t.Errorf("zero-work GC ran %d live scans and %d leaf record CRC checks, want both zero", scans, checks)
+			}
+			if got := manager.RefreshScanCount() - refreshes; got != 1 {
+				t.Errorf("GC inventory refreshes=%d, want 1", got)
+			}
+		})
+	}
+	checkData := func(d *DB) {
+		t.Helper()
+		if got, err := d.Get([]byte("k000511")); err != nil || string(got) != "inline value" {
+			t.Fatalf("read surviving leaf=(%q, %v)", got, err)
+		}
+		assertMissing(t, d, "k000000")
+	}
+	checkData(database)
+	closeFixture()
+	reopened, err := Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer closeNoErr(t, reopened)
+	checkData(reopened)
+}
+
+func TestValueLogGC_LeafOnlyRegisteredSetDiscoversUnregisteredValues(t *testing.T) {
+	database, opts, _ := openValueLogGCLeafFixture(t, 512)
+	// The canonical primary directory takes precedence even for the leaf lane.
+	const lane, oldSeq = rewriteLeafLogLaneID, 100
+	record := func(int) []byte { return []byte("ordinary value") }
+	_, older, olderID := appendPointersInUnregisteredNewSegment(t, opts.Dir, lane, oldSeq, 1<<30, 1, record)
+	_, newest, newestID := appendPointersInUnregisteredNewSegment(t, opts.Dir, lane, oldSeq+1, 1<<30+1, 1, record)
+	manager := database.valueLogManager
+	set := manager.CurrentSetNoRefresh()
+	if len(set.Files) == 0 || set.Files[olderID] != nil || set.Files[newestID] != nil {
+		_ = manager.Release(set)
+		t.Fatal("registered inventory must contain leaves and exclude both ordinary siblings")
+	}
+	if err := manager.Release(set); err != nil {
+		t.Fatalf("release registered set: %v", err)
+	}
+
+	stats, err := database.ValueLogGC(context.Background(), ValueLogGCOptions{})
+	if err != nil {
+		t.Fatalf("ValueLogGC: %v", err)
+	}
+	if stats.SegmentsTotal != 2 || stats.SegmentsActive != 1 ||
+		stats.SegmentsEligible != 1 || stats.SegmentsDeleted != 1 || stats.BytesDeleted == 0 {
+		t.Fatalf("expected discovery and reclamation of the older ordinary sibling, got %+v", stats)
+	}
+	if _, err := os.Stat(older); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected older sibling to be removed, stat: %v", err)
+	}
+	if _, err := os.Stat(newest); err != nil {
+		t.Fatalf("expected newest sibling to be retained, stat: %v", err)
+	}
+}
+
+func TestValueLogGC_EmptyInventoryAdmission(t *testing.T) {
+	dir := t.TempDir()
+	enableCommandWALFormat(t, dir)
+	database := openCommandWALDB(t, dir)
+	defer closeNoErr(t, database)
+
+	ctx := context.Background()
+	check := func(ctx context.Context, dryRun bool, wantErr error) {
+		t.Helper()
+		stats, err := database.ValueLogGC(ctx, ValueLogGCOptions{DryRun: dryRun})
+		if stats != (ValueLogGCStats{}) || !errors.Is(err, wantErr) {
+			t.Fatalf("ValueLogGC dryRun=%t returned (%+v, %v), want zero stats and %v", dryRun, stats, err, wantErr)
+		}
+	}
+	database.commandWALFlushPoisoned.Store(true)
+	check(ctx, false, ErrRecoveryRequired)
+	check(ctx, true, nil)
+	database.commandWALFlushPoisoned.Store(false)
+
+	database.publicationPoisoned.Store(true)
+	check(ctx, false, ErrRecoveryRequired)
+	check(ctx, true, ErrRecoveryRequired)
+	database.publicationPoisoned.Store(false)
+
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	before := database.valueLogManager.RefreshScanCount()
+	check(cancelled, false, context.Canceled)
+	check(cancelled, true, context.Canceled)
+	if after := database.valueLogManager.RefreshScanCount(); after != before {
+		t.Fatalf("cancelled GC invoked Refresh %d times", after-before)
+	}
+
+	afterRefresh, cancelAfterRefresh := context.WithCancel(ctx)
+	defer cancelAfterRefresh()
+	original := valueLogGCPostRefreshCurrentSetNoRefresh
+	valueLogGCPostRefreshCurrentSetNoRefresh = func(vm *valuelog.Manager) *valuelog.Set {
+		cancelAfterRefresh()
+		return original(vm)
+	}
+	defer func() { valueLogGCPostRefreshCurrentSetNoRefresh = original }()
+	check(afterRefresh, false, context.Canceled)
+}
+
 func TestValueLogRefTracker_OuterLeavesRebuildsStaleMetadata(t *testing.T) {
 	dir := t.TempDir()
 	stale := []byte("stale ref-count metadata from an older build")
@@ -2096,14 +2294,14 @@ func registerTestValueLogProducer(tb testing.TB, dir, path string, fileID uint32
 	}
 }
 
-func appendPointersInNewSegment(t *testing.T, dir string, lane, seq uint32, ridBase uint64, n int, valueAt func(i int) []byte) []page.ValuePtr {
+func appendPointersInNewSegment(t testing.TB, dir string, lane, seq uint32, ridBase uint64, n int, valueAt func(i int) []byte) []page.ValuePtr {
 	t.Helper()
 	ptrs, path, fileID := appendPointersInUnregisteredNewSegment(t, dir, lane, seq, ridBase, n, valueAt)
 	registerTestValueLogProducer(t, dir, path, fileID)
 	return ptrs
 }
 
-func appendPointersInUnregisteredNewSegment(t *testing.T, dir string, lane, seq uint32, ridBase uint64, n int, valueAt func(i int) []byte) ([]page.ValuePtr, string, uint32) {
+func appendPointersInUnregisteredNewSegment(t testing.TB, dir string, lane, seq uint32, ridBase uint64, n int, valueAt func(i int) []byte) ([]page.ValuePtr, string, uint32) {
 	t.Helper()
 	walDir := filepath.Join(dir, "value_vlog")
 	if err := os.MkdirAll(walDir, 0o755); err != nil {

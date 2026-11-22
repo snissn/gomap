@@ -24,7 +24,7 @@ const valueLogKeepRecentSegmentsPerLane = 2
 var ErrValueLogZombieDeferred = errors.New("treedb: value-log zombie marking deferred")
 
 // valueLogGCPostRefreshCurrentSetNoRefresh is a narrow test seam for the
-// second no-refresh read after the fallback Refresh call.
+// no-refresh inventory read following Refresh.
 var valueLogGCPostRefreshCurrentSetNoRefresh = func(vm *valuelog.Manager) *valuelog.Set {
 	return vm.CurrentSetNoRefresh()
 }
@@ -194,6 +194,66 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 		}
 		return nil
 	}
+	finishEmptyInventory := func() error {
+		if err := missingObservedSourceError(); err != nil {
+			return err
+		}
+		if !opts.DryRun && !db.readOnly {
+			db.persistValueLogRefTrackerBestEffort()
+		}
+		return nil
+	}
+	if !observedOnly {
+		if err := ctx.Err(); err != nil {
+			return stats, err
+		}
+		if opts.DryRun {
+			if db.closing.Load() {
+				return stats, ErrClosed
+			}
+			if err := db.publicationPoisonedError(); err != nil {
+				return stats, err
+			}
+		}
+
+		hasOrdinaryFiles := func(set *valuelog.Set) bool {
+			if set == nil {
+				return false
+			}
+			defer vm.Release(set)
+			for id, file := range set.Files {
+				if file != nil && !db.isLeafLogValueFile(id, file) {
+					return true
+				}
+			}
+			return false
+		}
+		// The registered inventory can omit on-disk siblings. A refreshed
+		// inventory without ordinary value files needs no root walk or GC
+		// deletion. With ordinary files, the destructive phase still refreshes
+		// under the publication fence after the walks.
+		if !hasOrdinaryFiles(vm.CurrentSetNoRefresh()) {
+			if err := ctx.Err(); err != nil {
+				return stats, err
+			}
+			if err := vm.Refresh(); err != nil {
+				return stats, err
+			}
+			hasRefreshedOrdinaryFiles := hasOrdinaryFiles(valueLogGCPostRefreshCurrentSetNoRefresh(vm))
+			if err := ctx.Err(); err != nil {
+				return stats, err
+			}
+			if !hasRefreshedOrdinaryFiles {
+				if opts.DryRun {
+					return stats, db.publicationPoisonedError()
+				}
+				if err := db.CheckStorageMaintenanceReady(); err != nil {
+					return stats, err
+				}
+				return stats, finishEmptyInventory()
+			}
+		}
+	}
 	var referenced map[uint32]struct{}
 	var scannedSeq uint64
 	var recoverableRoots *RecoverableRootSet
@@ -284,30 +344,13 @@ func (db *DB) valueLogGC(ctx context.Context, opts ValueLogGCOptions, lockMainte
 		}
 		set = valueLogGCPostRefreshCurrentSetNoRefresh(vm)
 	}
-	if set == nil || len(set.Files) == 0 {
-		if set != nil {
-			_ = vm.Release(set)
-		}
-		if err := missingObservedSourceError(); err != nil {
-			return stats, err
-		}
-		if !opts.DryRun && !db.readOnly {
-			db.persistValueLogRefTrackerBestEffort()
-		}
-		return stats, nil
+	var files map[uint32]*valuelog.File
+	if set != nil {
+		files = db.valueOnlyValueLogFiles(set.Files)
 	}
-	files := db.valueOnlyValueLogFiles(set.Files)
 	if len(files) == 0 {
-		if set != nil {
-			_ = vm.Release(set)
-		}
-		if err := missingObservedSourceError(); err != nil {
-			return stats, err
-		}
-		if !opts.DryRun && !db.readOnly {
-			db.persistValueLogRefTrackerBestEffort()
-		}
-		return stats, nil
+		_ = vm.Release(set)
+		return stats, finishEmptyInventory()
 	}
 	defer func() {
 		if set != nil {
