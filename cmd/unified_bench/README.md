@@ -275,7 +275,7 @@ GOWORK=off GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -p 1 . \
 
 - `-profile` benchmark profile preset (see `cmd/unified_bench/profiles.go`):
   - `balanced` (default)
-  - `durable` (strict durability benchmark preset)
+  - `durable` (cross-DB benchmark preset for native synchronous writes on supported adapters, including TreeDB, Badger, LevelDB, and Pebble)
   - `fast` (TreeDB selects production `no_wal_fast`: verified reads and volatile ordinary ACKs; explicit `*Sync`, `Checkpoint`, and clean `Close` seal a durable root. Persistent value-log/outer-leaf assets remain protected. A crash may lose recent volatile writes, never a torn batch or a root with missing references. Independently buffered collection domains do not promise a global ordinary-ACK-order prefix; explicit database boundaries drain registered managers.)
   - `bench_unsafe` (explicit benchmark-only ceiling; TreeDB skips read checksums and has no production durability promise; `unsafe` is its legacy alias)
   - `wal_on_fast` (benchmark-runner relaxed-WAL preset; TreeDB maps this to `command_wal_relaxed` with verified read integrity and the same compression defaults)
@@ -320,6 +320,24 @@ GOWORK=off GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -p 1 . \
 - `-range-span` number of keys per range (default 100)
 - `-leveldb-block-compression` LevelDB: block compression mode (`default|on|off|both`)
 - `-leveldb-block-size` LevelDB: table block size in bytes (default 4096)
+
+### Badger, LevelDB, and Pebble write durability
+
+The preset sets the native sync policy for ordinary `Set`, `Delete`, and
+`Batch.Commit`. Each cell lists policy for point writes / batch commits.
+
+| Preset | Badger | LevelDB | Pebble |
+| --- | --- | --- | --- |
+| `durable` | sync / sync | sync / sync | sync / sync |
+| `fast`, `wal_on_fast`, `bench_unsafe` (or `unsafe`) | relaxed / relaxed | relaxed / relaxed | relaxed / relaxed |
+| `balanced` or omitted | relaxed / relaxed | relaxed / relaxed | sync / relaxed |
+
+An explicit `-badger-nosync`, `-leveldb-nosync`, or `-pebble-nosync` overrides
+the preset for that engine. Set it to `true` for relaxed point and batch
+writes or `false` for synchronous writes. LevelDB and Pebble always request
+sync on explicit `CommitSync`. Badger uses its database-wide `SyncWrites`
+setting for both commit methods. A sync request uses the selected engine's
+native persistence semantics.
 
 ### TreeDB Main Knobs
 
