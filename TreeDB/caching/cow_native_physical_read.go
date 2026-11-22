@@ -114,11 +114,11 @@ func (b *cowBackendBasis) nativeValueAtPointer(cache *cowCache, provider cowDict
 	if err != nil {
 		return nil, err
 	}
-	f, _, err := b.snapshot.PinnedValueLogFile(ptr.FileID)
+	f, _, err := b.snapshot.PinnedValueLogSegment(ptr.FileID)
 	if err != nil {
 		return nil, err
 	}
-	shape, err := valuelog.InspectCOWRecord(f, ptr, w.limits)
+	shape, err := f.InspectCOWRecord(ptr, w.limits)
 	if err != nil {
 		return nil, err
 	}

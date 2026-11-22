@@ -35,6 +35,17 @@ func (db *DB) AcquireStableSnapshotWithAllocationAdmission(admit func(SnapshotAl
 // retained Set. The caller must retain the snapshot throughout all handle use;
 // the result grants no mutation, durability, or namespace authority.
 func (s *Snapshot) PinnedValueLogFile(fileID uint32) (*os.File, rootpublication.StableIdentity, error) {
+	f, identity, err := s.PinnedValueLogSegment(fileID)
+	if err != nil {
+		return nil, rootpublication.StableIdentity{}, err
+	}
+	return f.File, identity, nil
+}
+
+// PinnedValueLogSegment returns the exact registered segment from the retained
+// Set. The caller must keep the snapshot open and exclude concurrent Close
+// throughout the borrow. Producer visibility and mutation authority are separate.
+func (s *Snapshot) PinnedValueLogSegment(fileID uint32) (*valuelog.File, rootpublication.StableIdentity, error) {
 	if s == nil {
 		return nil, rootpublication.StableIdentity{}, ErrClosed
 	}
@@ -42,11 +53,7 @@ func (s *Snapshot) PinnedValueLogFile(fileID uint32) (*os.File, rootpublication.
 		return nil, rootpublication.StableIdentity{}, err
 	}
 	defer s.endRead()
-	f, identity, err := s.pinnedValueLogSegment(fileID)
-	if err != nil {
-		return nil, rootpublication.StableIdentity{}, err
-	}
-	return f.File, identity, nil
+	return s.pinnedValueLogSegment(fileID)
 }
 
 // InspectPinnedCOWLeafRecord inspects the same retained segment as

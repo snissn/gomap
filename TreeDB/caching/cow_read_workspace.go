@@ -3,7 +3,6 @@ package caching
 import (
 	"errors"
 	"fmt"
-	"os"
 	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -240,9 +239,9 @@ func (w *cowReadWorkspace) grow(input, output uint64) error {
 	return nil
 }
 
-func (w *cowReadWorkspace) file(ptr page.ValuePtr) (*os.File, error) {
+func (w *cowReadWorkspace) file(ptr page.ValuePtr) (*valuelog.File, error) {
 	if w.basis != nil {
-		f, _, err := w.basis.PinnedValueLogFile(ptr.FileID)
+		f, _, err := w.basis.PinnedValueLogSegment(ptr.FileID)
 		return f, err
 	}
 	if w.snapshot == nil {
@@ -254,7 +253,7 @@ func (w *cowReadWorkspace) file(ptr page.ValuePtr) (*os.File, error) {
 		if r := cut.shards[i].resources.get(id); r != nil {
 			f := r.set.Files[ptr.FileID]
 			if f != nil {
-				return f.File, nil
+				return f, nil
 			}
 		}
 	}
@@ -262,11 +261,11 @@ func (w *cowReadWorkspace) file(ptr page.ValuePtr) (*os.File, error) {
 		if r := cut.frozen[i].resources.get(id); r != nil {
 			f := r.set.Files[ptr.FileID]
 			if f != nil {
-				return f.File, nil
+				return f, nil
 			}
 		}
 	}
-	f, _, err := cut.basis.snapshot.PinnedValueLogFile(ptr.FileID)
+	f, _, err := cut.basis.snapshot.PinnedValueLogSegment(ptr.FileID)
 	return f, err
 }
 
@@ -519,9 +518,9 @@ func (w *cowReadWorkspace) read(ptr page.ValuePtr, leaf bool, dst []byte) ([]byt
 	}
 	var shape valuelog.COWRecordShape
 	if leaf {
-		shape, err = valuelog.InspectCOWLeafRecord(f, ptr, w.limits)
+		shape, err = f.InspectCOWLeafRecord(ptr, w.limits)
 	} else {
-		shape, err = valuelog.InspectCOWRecord(f, ptr, w.limits)
+		shape, err = f.InspectCOWRecord(ptr, w.limits)
 	}
 	if err != nil {
 		return nil, err
@@ -532,7 +531,7 @@ func (w *cowReadWorkspace) read(ptr page.ValuePtr, leaf bool, dst []byte) ([]byt
 // Preserve the original read-owner dispatch after an inspection handoff. The
 // retained cut pins f throughout; shared dictionary storage owns its definition
 // independently and never retains this cut or its borrowed result bytes.
-func (w *cowReadWorkspace) readWithInspection(f *os.File, ptr page.ValuePtr, shape valuelog.COWRecordShape, leaf bool, dst []byte) ([]byte, error) {
+func (w *cowReadWorkspace) readWithInspection(f *valuelog.File, ptr page.ValuePtr, shape valuelog.COWRecordShape, leaf bool, dst []byte) ([]byte, error) {
 	if w.basis != nil && shape.Compressed && (shape.DictID != 0 || (shape.Codec != valuelog.BlockCodecSnappy && shape.Codec != valuelog.BlockCodecLZ4)) {
 		return nil, valuelog.ErrCOWReadUnsupported
 	}
@@ -565,7 +564,7 @@ func (w *cowReadWorkspace) sharedDictionaryProvider(shape valuelog.COWRecordShap
 // cowSuccessorInspection is caller-local metadata, never retained by a slot.
 // Its file is pinned by the original basis until the admitted read completes.
 type cowSuccessorInspection struct {
-	file  *os.File
+	file  *valuelog.File
 	shape valuelog.COWRecordShape
 }
 
@@ -578,7 +577,7 @@ func (w *cowReadWorkspace) readUncompressedOwned(ptr page.ValuePtr, inspected *c
 	if err != nil {
 		return nil, false, err
 	}
-	shape, err := valuelog.InspectCOWRecord(f, ptr, w.limits)
+	shape, err := f.InspectCOWRecord(ptr, w.limits)
 	if err != nil {
 		return nil, false, err
 	}
@@ -597,7 +596,7 @@ func (w *cowReadWorkspace) readUncompressedOwned(ptr page.ValuePtr, inspected *c
 // this call. Generic codec/input/raw backing belongs to the SAME cache
 // across bases. Value copy-out and leaf decode into caller dst finish under its
 // mutex; the shared workspace never retains caller authority or output aliases.
-func (w *cowReadWorkspace) readSharedRecord(f *os.File, ptr page.ValuePtr, shape valuelog.COWRecordShape, leaf bool, dst []byte, independent *cowCacheDictionaryRead) ([]byte, error) {
+func (w *cowReadWorkspace) readSharedRecord(f *valuelog.File, ptr page.ValuePtr, shape valuelog.COWRecordShape, leaf bool, dst []byte, independent *cowCacheDictionaryRead) ([]byte, error) {
 	if !leaf {
 		if err := w.grow(0, shape.ValueBytes); err != nil {
 			return nil, err
@@ -622,7 +621,7 @@ func (w *cowReadWorkspace) readSharedRecord(f *os.File, ptr page.ValuePtr, shape
 
 // readInspected shares the maintained admission/codec/CRC path. The inspector
 // and its caller's policy have already validated this exact file and shape.
-func (w *cowReadWorkspace) readInspected(f *os.File, ptr page.ValuePtr, shape valuelog.COWRecordShape, leaf bool, dst []byte, independent *cowCacheDictionaryRead) ([]byte, error) {
+func (w *cowReadWorkspace) readInspected(f *valuelog.File, ptr page.ValuePtr, shape valuelog.COWRecordShape, leaf bool, dst []byte, independent *cowCacheDictionaryRead) ([]byte, error) {
 	outputNeed := shape.ValueBytes
 	if leaf {
 		outputNeed = 0
@@ -636,9 +635,9 @@ func (w *cowReadWorkspace) readInspected(f *os.File, ptr page.ValuePtr, shape va
 		decode = codec.decoder.Decode
 	}
 	if leaf {
-		return valuelog.ReadCOWLeafPage(f, ptr, shape, true, input, raw, dst, decode)
+		return f.ReadCOWLeafPage(ptr, shape, input, raw, dst, decode)
 	}
-	return valuelog.ReadCOWRecord(f, ptr, shape, true, input, raw, w.output, decode)
+	return f.ReadCOWRecord(ptr, shape, input, raw, w.output, decode)
 }
 
 func (w *cowReadWorkspace) readPinnedLeaf(record *backenddb.PinnedCOWLeafRead, dst []byte, independent *cowCacheDictionaryRead) ([]byte, error) {
@@ -693,14 +692,14 @@ func (w *cowReadWorkspace) appendPointer(ptr page.ValuePtr, dst []byte) (result 
 	if err != nil {
 		return dst, err
 	}
-	shape, err := valuelog.InspectCOWRecord(f, ptr, w.limits)
+	shape, err := f.InspectCOWRecord(ptr, w.limits)
 	if err != nil {
 		return dst, err
 	}
 	return w.appendWithInspection(f, ptr, shape, dst)
 }
 
-func (w *cowReadWorkspace) appendWithInspection(f *os.File, ptr page.ValuePtr, shape valuelog.COWRecordShape, dst []byte) ([]byte, error) {
+func (w *cowReadWorkspace) appendWithInspection(f *valuelog.File, ptr page.ValuePtr, shape valuelog.COWRecordShape, dst []byte) ([]byte, error) {
 	if w.basis != nil && shape.Compressed && (shape.DictID != 0 || (shape.Codec != valuelog.BlockCodecSnappy && shape.Codec != valuelog.BlockCodecLZ4)) {
 		return dst, valuelog.ErrCOWReadUnsupported
 	}
@@ -733,7 +732,7 @@ func (w *cowReadWorkspace) readOwnedSuccessor(ptr page.ValuePtr, leaf bool, dst 
 		}
 	}()
 	w.poolable = false
-	var f *os.File
+	var f *valuelog.File
 	var shape valuelog.COWRecordShape
 	if inspected != nil && inspected.file != nil {
 		f, shape = inspected.file, inspected.shape
@@ -743,9 +742,9 @@ func (w *cowReadWorkspace) readOwnedSuccessor(ptr page.ValuePtr, leaf bool, dst 
 			return nil, err
 		}
 		if leaf {
-			shape, err = valuelog.InspectCOWLeafRecord(f, ptr, w.limits)
+			shape, err = f.InspectCOWLeafRecord(ptr, w.limits)
 		} else {
-			shape, err = valuelog.InspectCOWRecord(f, ptr, w.limits)
+			shape, err = f.InspectCOWRecord(ptr, w.limits)
 		}
 		if err != nil {
 			return nil, err
@@ -771,7 +770,7 @@ func (w *cowReadWorkspace) readOwnedSuccessorLeaf(ptr page.LeafLogPtr, dst []byt
 	return w.readOwnedSuccessor(ptr.ValuePtr(), true, dst, nil)
 }
 
-func (w *cowReadWorkspace) appendInspected(f *os.File, ptr page.ValuePtr, shape valuelog.COWRecordShape, dst []byte, independent *cowCacheDictionaryRead) ([]byte, error) {
+func (w *cowReadWorkspace) appendInspected(f *valuelog.File, ptr page.ValuePtr, shape valuelog.COWRecordShape, dst []byte, independent *cowCacheDictionaryRead) ([]byte, error) {
 	input, raw, codec, err := w.prepareRead(shape, 0, independent)
 	if err != nil {
 		return dst, err
@@ -780,7 +779,7 @@ func (w *cowReadWorkspace) appendInspected(f *os.File, ptr page.ValuePtr, shape 
 	if codec != nil {
 		decode = codec.decoder.Decode
 	}
-	return valuelog.AppendCOWRecord(f, ptr, shape, true, input, raw, dst, decode)
+	return f.AppendCOWRecord(ptr, shape, input, raw, dst, decode)
 }
 
 func (w *cowReadWorkspace) readLeaf(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {

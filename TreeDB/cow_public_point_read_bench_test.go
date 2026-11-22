@@ -20,12 +20,26 @@ import (
 // For an old source that lacks this benchmark, apply this exact test-only file
 // as a shared overlay; do not include candidate production files in the baseline.
 func BenchmarkCOWPublicPointRead(b *testing.B) {
+	benchmarkCOWPublicPointRead(b, ProfileCommandWALRelaxed, 500000)
+}
+
+// BenchmarkCOWPublicNoWALFastPointRead exercises the verified fast profile
+// with the 50,000-key inline workload and the same dirty and pointer controls.
+func BenchmarkCOWPublicNoWALFastPointRead(b *testing.B) {
+	benchmarkCOWPublicPointRead(b, ProfileNoWALFast, 50000)
+}
+
+func benchmarkCOWPublicPointRead(b *testing.B, profile Profile, settledRecords int) {
+	settledName := "Settled500k"
+	if settledRecords == 50000 {
+		settledName = "Settled50k"
+	}
 	for _, fixture := range []struct {
 		name                string
 		records, valueBytes int
 		settled, pointers   bool
 	}{
-		{"Settled500k", 500000, 128, true, false},
+		{settledName, settledRecords, 128, true, false},
 		{"Dirty4096", 4096, 128, false, false},
 		{"SettledPointer4096", 4096, 4096, true, true},
 		{"DirtyPointer4096", 4096, 4096, false, true},
@@ -33,7 +47,7 @@ func BenchmarkCOWPublicPointRead(b *testing.B) {
 		b.Run(fixture.name, func(b *testing.B) {
 			b.StopTimer()
 			records := fixture.records
-			opts := OptionsFor(ProfileCommandWALRelaxed, b.TempDir())
+			opts := OptionsFor(profile, b.TempDir())
 			opts.MemtableMode, opts.MemtableShards = "cow_ordered", 2
 			opts.BackgroundCheckpointInterval = -1
 			opts.BackgroundCheckpointIdleDuration = -1
@@ -56,7 +70,7 @@ func BenchmarkCOWPublicPointRead(b *testing.B) {
 				}
 			})
 			stats := database.Stats()
-			if stats["treedb.cache.memtable_mode"] != "cow_ordered" || database.ResolvedProfile() != ProfileCommandWALRelaxed {
+			if stats["treedb.cache.memtable_mode"] != "cow_ordered" || database.ResolvedProfile() != profile {
 				b.Fatalf("public mode/profile not active: mode=%q profile=%s", stats["treedb.cache.memtable_mode"], database.ResolvedProfile())
 			}
 			value := make([]byte, fixture.valueBytes)

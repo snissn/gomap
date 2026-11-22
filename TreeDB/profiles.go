@@ -238,9 +238,9 @@ func validateProfileOwnedOptionEnums(opts Options) error {
 	return nil
 }
 
-// applyResolvedDurabilityContract makes the selected acknowledgement,
-// durability, and integrity contract immutable at Open while preserving
-// caller-owned layout and tuning overrides applied after OptionsFor.
+// applyResolvedDurabilityContract reapplies profile-owned acknowledgment,
+// durability, integrity and current-writable mapping policies at Open. It
+// preserves layout and tuning overrides applied after OptionsFor.
 func applyResolvedDurabilityContract(opts *Options, resolved Profile) {
 	opts.ResolvedProfile = resolved
 	opts.UnsafeBenchmarkProfile = resolved == ProfileBenchUnsafe
@@ -259,7 +259,7 @@ func applyResolvedDurabilityContract(opts *Options, resolved Profile) {
 		opts.CommandWAL = false
 		opts.Durability = DurabilityWALOffRelaxed
 		opts.ValueLog.ReadIntegrity = IntegrityVerify
-		opts.ValueLog.CurrentWritableMmap = false
+		opts.ValueLog.CurrentWritableMmap = true
 	case ProfileBenchUnsafe:
 		opts.CommandWAL = false
 		opts.Durability = DurabilityWALOffRelaxed
@@ -401,13 +401,13 @@ func applyUnsafeFastProfile(opts *Options) {
 func applyNoWALFastProfile(opts *Options) {
 	applyUnsafeFastProfile(opts)
 	opts.ValueLog.ReadIntegrity = IntegrityVerify
-	opts.ValueLog.CurrentWritableMmap = false
 }
 
 func applyCommandWALDurableProfile(opts *Options) {
 	applyNoWALFastProfile(opts)
 	opts.CommandWAL = true
 	opts.Durability = DurabilityDurable
+	opts.ValueLog.CurrentWritableMmap = false
 	applyCommandWALProfileSegmentDefaults(opts)
 }
 

@@ -70,15 +70,21 @@ Record CRC verification precedes a mapped cache hit; cache identity includes the
 verification mode and frame shape. Physical identity pins, segment reachability,
 eviction and close retain their existing lifetime rules.
 
-COW physical leaf inspection borrows an eligible managed mapping only while
-its snapshot holds the registered segment. The record length hint bounds the
-borrowed range, and the common metadata parser checks the hint against the
-record header. The verified file extent also bounds the range, including after
-a writable remap that reserves address space beyond EOF. Missing hints, policy
-denials and unreadable ranges use the bounded positional inspector. The same
-sealed mmap budgets and current-writable policy govern admission. Only shape
-values leave inspection, and a cache miss still reads and verifies the full
-payload into admitted caller storage.
+Bounded COW value and leaf reads borrow a managed mapping while the caller
+holds the exact registered segment. Inspection uses the checked length hint or
+derives the record length from the mapped header when the hint is omitted. The
+verified file extent limits both reads, including after a writable remap that
+reserves address space beyond EOF. Policy denials and unreadable ranges use
+the bounded positional path. Sealed mapping budgets apply as usual, and the
+verified `no_wal_fast` profile enables current-file read-only mapping.
+When its outer-leaf read cache is enabled, the backend skips decoded grouped
+frame admission for current leaf segments. The page cache owns retained decoded
+leaves, and the frame cache remains available for sealed leaves and values.
+
+Only the record shape leaves inspection. A full read rechecks that shape and
+verifies the CRC before decoding. It copies compressed input into admitted
+scratch before handing it to a decoder that can retain input. Value bytes and
+materialized leaf pages are copied to caller-owned storage within the file pin.
 
 ### 1.3 Durable raw-frame read cost
 

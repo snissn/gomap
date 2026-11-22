@@ -36,6 +36,62 @@ func appendCompressedFrameForCacheTestsTB(tb testing.TB, writer *Writer, frame i
 	return ptrs, want
 }
 
+func TestCurrentLeafMmapSkipsDecodedFrameAdmission(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap not supported on windows")
+	}
+	dir := t.TempDir()
+	m, err := NewManager(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Close() })
+	m.SetCurrentWritableMmapEnabled(true)
+	m.SetSkipCurrentLeafFrameCache(true)
+	for _, lane := range []uint32{ReservedLeafLogLaneID, 0} {
+		fileID, err := EncodeFileID(lane, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(dir, fmt.Sprintf("value-l%d-000001.log", lane))
+		w, err := NewWriter(path, fileID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		w.SetBlockCompression(BlockCodecSnappy, true)
+		ptrs, want := appendCompressedFrameForCacheTestsTB(t, w, 1, 2)
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := m.RegisterSegment(path, fileID); err != nil {
+			t.Fatal(err)
+		}
+		if err := m.PromoteCurrentWritable(fileID); err != nil {
+			t.Fatal(err)
+		}
+		f := m.files[fileID]
+		read := func(wantEntries int) {
+			t.Helper()
+			f.remapToFileSize()
+			hits := f.mmapReadHits.Load()
+			for i, ptr := range ptrs {
+				got, err := m.ReadAppend(ptr, nil)
+				if err != nil || !bytes.Equal(got, want[i]) {
+					t.Fatalf("lane %d record %d read failed: %v", lane, i, err)
+				}
+			}
+			if stats := f.groupedFrameCacheDetailedStats(); stats.Entries != wantEntries || f.mmapReadHits.Load()-hits != uint64(len(ptrs)) {
+				t.Fatalf("lane %d current=%v: entries=%d (want %d), mmap hits=%d", lane, f.IsCurrentWritable(), stats.Entries, wantEntries, f.mmapReadHits.Load()-hits)
+			}
+		}
+		if lane == ReservedLeafLogLaneID {
+			read(0)
+			m.DemoteCurrentWritable(fileID)
+		}
+		read(1)
+	}
+}
+
 func benchmarkRandomReadGroupedFrameReadUnsafeTo(b *testing.B) {
 	if runtime.GOOS == "windows" {
 		b.Skip("mmap not supported on windows")

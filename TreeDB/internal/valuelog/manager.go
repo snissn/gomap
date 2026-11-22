@@ -589,6 +589,9 @@ func (f *File) groupedFrameCacheAllowsRaw(rawLen int) bool {
 	if f == nil || f.closed.Load() {
 		return false
 	}
+	if f.manager != nil && f.manager.skipCurrentLeafFrameCache.Load() && f.currentWritable.Load() && isLeafLogFileID(f.ID) {
+		return false
+	}
 	f.groupedMu.Lock()
 	entries := f.groupedFrameCacheEntries
 	maxRaw := f.groupedFrameCacheMaxRaw
@@ -1538,6 +1541,7 @@ type Manager struct {
 	groupedFrameCacheMaxBytes   int64
 	groupedFrameCacheBudget     *groupedFrameCacheBudget
 	currentWritableMmap         atomic.Bool
+	skipCurrentLeafFrameCache   atomic.Bool
 	currentWritableReadBarrier  atomic.Value
 	stableResourcePins          *rootpublication.IdentityPinRegistry
 	retiredCount                int                   // tracked zombies; protected by mu
@@ -1751,6 +1755,12 @@ func (m *Manager) SetCurrentWritableMmapEnabled(enabled bool) {
 		return
 	}
 	m.currentWritableMmap.Store(enabled)
+}
+
+// SetSkipCurrentLeafFrameCache skips decoded frame admission for current leaf
+// segments owned by a caller that already caches decoded pages.
+func (m *Manager) SetSkipCurrentLeafFrameCache(skip bool) {
+	m.skipCurrentLeafFrameCache.Store(skip)
 }
 
 // SetMultiCurrentWritableLane allows multiple physical files with the same

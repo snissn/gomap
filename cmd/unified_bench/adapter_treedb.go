@@ -1072,6 +1072,10 @@ func attachUnifiedBenchTreeDBProfile(opts *treedb.Options, profile treedb.Profil
 	opts.ResolvedProfile = proof.ResolvedProfile
 	opts.DeprecatedProfileAlias = proof.DeprecatedProfileAlias
 	opts.UnsafeBenchmarkProfile = proof.UnsafeBenchmarkProfile
+	if proof.ResolvedProfile == treedb.ProfileNoWALFast {
+		// Match the verified production mmap policy that Open reapplies.
+		opts.ValueLog.CurrentWritableMmap = proof.ValueLog.CurrentWritableMmap
+	}
 }
 
 // validateTreeDBPrimaryDirectoryRequest rejects requests before suite dispatch or

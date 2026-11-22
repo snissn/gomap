@@ -247,12 +247,12 @@ func (r *NativeJSONRead) readValue(ptr page.ValuePtr, admitOutput func(uint64) e
 	}
 	// Capture implementations without shared physical decoding retain their
 	// original scoped buffers and Snappy/LZ4-only, dictionary-free eligibility.
-	f, _, err := r.capture.Snapshot().PinnedValueLogFile(ptr.FileID)
+	f, _, err := r.capture.Snapshot().PinnedValueLogSegment(ptr.FileID)
 	if err != nil {
 		return nil, err
 	}
 	limit := r.capture.NativeAllocator().Limits().MaxInFlightBytes
-	shape, err := valuelog.InspectCOWRecord(f, ptr, valuelog.COWReadLimits{MaxRecordBytes: limit, MaxRawBytes: limit, MaxValueBytes: limit})
+	shape, err := f.InspectCOWRecord(ptr, valuelog.COWReadLimits{MaxRecordBytes: limit, MaxRawBytes: limit, MaxValueBytes: limit})
 	if err != nil {
 		return nil, err
 	}
@@ -303,7 +303,7 @@ func (r *NativeJSONRead) readValue(ptr page.ValuePtr, admitOutput func(uint64) e
 		}
 		decode = decoder.Decode
 	}
-	value, err = valuelog.ReadCOWRecord(f, ptr, shape, true, input, raw, output, decode)
+	value, err = f.ReadCOWRecord(ptr, shape, input, raw, output, decode)
 	if err != nil {
 		return nil, err
 	}
@@ -375,11 +375,11 @@ func readNativeSnapshotLeafWithAdmission(snapshot *backenddb.Snapshot, limit uin
 }
 
 func readNativeSnapshotLeafWithMaintenanceAdmission(snapshot *backenddb.Snapshot, limit uint64, admit func(uint64) (func(), error), ptr page.LeafLogPtr, dst []byte, leaves backenddb.NativeMaintenanceLeafReader) ([]byte, error) {
-	f, _, err := snapshot.PinnedValueLogFile(ptr.ValuePtr().FileID)
+	f, _, err := snapshot.PinnedValueLogSegment(ptr.ValuePtr().FileID)
 	if err != nil {
 		return nil, err
 	}
-	shape, err := valuelog.InspectCOWLeafRecord(f, ptr.ValuePtr(), valuelog.COWReadLimits{MaxRecordBytes: limit, MaxRawBytes: limit, MaxValueBytes: limit})
+	shape, err := f.InspectCOWLeafRecord(ptr.ValuePtr(), valuelog.COWReadLimits{MaxRecordBytes: limit, MaxRawBytes: limit, MaxValueBytes: limit})
 	if err != nil {
 		return nil, err
 	}
@@ -432,7 +432,7 @@ func readNativeSnapshotLeafWithMaintenanceAdmission(snapshot *backenddb.Snapshot
 		}
 		decode = decoder.Decode
 	}
-	return valuelog.ReadCOWLeafPage(f, ptr.ValuePtr(), shape, true, input, raw, dst, decode)
+	return f.ReadCOWLeafPage(ptr.ValuePtr(), shape, input, raw, dst, decode)
 }
 
 func (r *NativeJSONRead) Close() error {

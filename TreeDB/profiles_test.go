@@ -261,8 +261,8 @@ func TestApplyProfile_FastSetsPolicyBools(t *testing.T) {
 	if opts.ValueLog.ForcePointers {
 		t.Fatalf("expected ValueLog.ForcePointers=false for fast profile")
 	}
-	if opts.ValueLog.CurrentWritableMmap {
-		t.Fatalf("expected ValueLog.CurrentWritableMmap=false for production no_wal_fast profile")
+	if !opts.ValueLog.CurrentWritableMmap {
+		t.Fatalf("expected ValueLog.CurrentWritableMmap=true for production no_wal_fast profile")
 	}
 	if !opts.LeafPrefixCompression {
 		t.Fatalf("expected LeafPrefixCompression=true for fast profile")

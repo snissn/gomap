@@ -78,7 +78,7 @@ func TestCOWReadCodecReplacementRefusalRetry(t *testing.T) {
 		}
 		f, err := w.file(entry.ValuePtr)
 		if err == nil {
-			shapes[i], err = valuelog.InspectCOWRecord(f, entry.ValuePtr, db.cow.readLimits())
+			shapes[i], err = f.InspectCOWRecord(entry.ValuePtr, db.cow.readLimits())
 		}
 		f = nil
 		s.cowReadMu.Unlock()
