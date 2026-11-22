@@ -368,7 +368,8 @@ pins; a warm copied page constructs none and does not retain those owners.
 Captured-only providers keep their original local definition policy before any
 cache reuse. The snapshot inspects the leaf through its exact registered
 value-log segment. An eligible mapping covers the checked record range within
-the producer-visible file extent. The positional fallback reads one bounded
+the verified file extent. When the pointer omits the length hint, inspection
+can derive the length from the mapped record header. The positional fallback reads one bounded
 metadata window and fetches a selected raw value prefix separately when needed.
 Both paths validate the header, frame and selected value prefix under the
 caller limits. Incomplete required metadata returns EOF. A short payload after
@@ -379,8 +380,8 @@ policy, verified cache lookup and full page materialization. The registered
 handle and stable identity come from the captured value-log Set. Reusing that
 observation avoids another snapshot read pin and segment lookup on cache hits.
 On misses, the registered file checks the full admitted record range against
-the pointer hint, mapping length and verified file size before reading mapped
-bytes. Remap and demotion retain earlier mappings until the last file pin is
+the pointer hint, when present, and against the mapping length and verified
+file size before reading mapped bytes. Remap and demotion retain earlier mappings until the last file pin is
 released. The file's producer only appends while readers can hold these pins.
 
 Full reads validate framing and record CRC through either the managed mapping
@@ -389,8 +390,9 @@ scratch. A range the mapping cannot read uses the positional fallback. A
 malformed record in an acquired range returns the validation error. Compressed
 bytes are staged in the existing admitted input scratch because a decoder may
 retain its input. The map borrow ends after synchronous page materialization
-and the decoded cache owns only a copied page. The writable mapping policy,
-workspace admission and decoded cache limits remain unchanged.
+and the decoded cache owns only a copied page. The verified `no_wal_fast`
+profile allows this read path for current segments under the existing mapping
+and workspace admission rules.
 
 After a full verified decode, repeated COW misses may populate the original
 backend leaf cache through explicit cache-owned admission. Each configured slot

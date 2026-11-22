@@ -602,6 +602,135 @@ func cowTestLeafFrame(t testing.TB, body []byte, sub uint8) (*os.File, page.Valu
 	return f, ptr
 }
 
+func TestCOWValueUsesManagedMapping(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap not supported on windows")
+	}
+	withCurrentWritableMmapTargetBytes(t, 64<<10)
+	for _, mode := range []string{"single", "grouped", "compressed"} {
+		t.Run(mode, func(t *testing.T) {
+			want := []byte("selected value")
+			body := want
+			var sub uint8
+			if mode != "single" {
+				first := bytes.Repeat([]byte("a"), 4096)
+				values := [][]byte{first, want}
+				var encoded []byte
+				codec := BlockCodecNone
+				if mode == "compressed" {
+					codec = BlockCodecSnappy
+					var err error
+					encoded, err = encodeBlockPayload(codec, append(first, want...), nil)
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				body, sub = cowTestFrame(0, codec, values, encoded), 1
+			}
+			source, ptr, record := cowTestRecord(t, body, mode != "single", sub)
+			if mode == "single" {
+				ptr.Length = 0
+			} else {
+				ptr.Length = page.ValuePtrMarkGrouped(0, sub)
+			}
+			dir := t.TempDir()
+			path := filepath.Join(dir, "value-l0-000001.log")
+			if err := os.WriteFile(path, record, 0600); err != nil {
+				t.Fatal(err)
+			}
+			manager, err := NewManager(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if err := manager.Close(); err != nil {
+					t.Error(err)
+				}
+			})
+			manager.SetCurrentWritableMmapEnabled(true)
+			if err := manager.PromoteCurrentWritable(ptr.FileID); err != nil {
+				t.Fatal(err)
+			}
+			f, err := manager.fileFor(ptr.FileID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantShape, err := InspectCOWRecord(source, ptr, cowTestLimits)
+			if err != nil {
+				t.Fatal(err)
+			}
+			shape, err := f.InspectCOWRecord(ptr, cowTestLimits)
+			if err != nil || shape != wantShape {
+				t.Fatalf("mapped shape=%+v, err=%v, want %+v", shape, err, wantShape)
+			}
+			input, raw := make([]byte, shape.PayloadBytes()), make([]byte, shape.RawBytes)
+			out := make([]byte, shape.ValueBytes)
+			var decode COWDecodeFunc
+			if shape.Compressed {
+				decoder, err := NewCOWBlockDecoder(shape.Codec, shape.RawBytes, shape.PayloadBytes(), func(COWDecoderAllocationSizes) error { return nil })
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(decoder.Close)
+				decode = func(frame FrameHeader, body, dst []byte) ([]byte, error) {
+					if len(body) == 0 || &body[0] != &input[0] {
+						t.Fatal("decoder received input outside its admitted scratch")
+					}
+					return decoder.Decode(frame, body, dst)
+				}
+			}
+			got, err := f.ReadCOWRecord(ptr, shape, input, raw, out, decode)
+			if err != nil || !bytes.Equal(got, want) || &got[0] != &out[0] {
+				t.Fatalf("bounded read=%q, err=%v", got, err)
+			}
+			dst := make([]byte, 1, 1+len(want))
+			dst[0] = '!'
+			got, err = f.AppendCOWRecord(ptr, shape, input, raw, dst, decode)
+			if err != nil || !bytes.Equal(got[1:], want) || got[0] != '!' || &got[0] != &dst[0] {
+				t.Fatalf("bounded append=%q, err=%v", got, err)
+			}
+			if hits, fallbacks := f.mmapReadHits.Load(), f.mmapReadFallbackReadAt.Load(); hits != 3 || fallbacks != 0 {
+				t.Fatalf("mmap hits=%d, ReadAt fallbacks=%d, want 3/0", hits, fallbacks)
+			}
+			// Seal the segment while its original set is pinned and read again
+			// through the same registered file as a held snapshot would.
+			set := manager.CurrentSetNoRefresh()
+			t.Cleanup(func() {
+				if err := manager.Release(set); err != nil {
+					t.Error(err)
+				}
+			})
+			if set == nil || set.Files[ptr.FileID] != f {
+				t.Fatal("retained set lost the registered value-log segment")
+			}
+			manager.DemoteCurrentWritable(ptr.FileID)
+			got, err = f.ReadCOWRecord(ptr, shape, input, raw, out, decode)
+			if f.IsCurrentWritable() || err != nil || !bytes.Equal(got, want) || f.mmapReadFallbackReadAt.Load() != 0 {
+				t.Fatalf("mapped read after sealing=%q, err=%v, fallback count=%d", got, err, f.mmapReadFallbackReadAt.Load())
+			}
+			// Damage only the body after inspection. Both readers must detect
+			// its bad CRC before handing any bytes off to the decoder.
+			writer, err := os.OpenFile(path, os.O_WRONLY, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, writeErr := writer.WriteAt([]byte{record[len(record)-1] ^ 1}, int64(len(record)-1))
+			if closeErr := writer.Close(); writeErr != nil || closeErr != nil {
+				t.Fatalf("damage fixture: write=%v close=%v", writeErr, closeErr)
+			}
+			rejectDecode := func(FrameHeader, []byte, []byte) ([]byte, error) {
+				t.Fatal("decoded a record with a bad CRC")
+				return nil, nil
+			}
+			_, mappedErr := f.ReadCOWRecord(ptr, shape, input, raw, out, rejectDecode)
+			_, positionalErr := ReadCOWRecord(f.File, ptr, shape, true, input, raw, out, rejectDecode)
+			if !errors.Is(mappedErr, ErrCorrupt) || !errors.Is(positionalErr, ErrCorrupt) {
+				t.Fatalf("bad CRC: mapped=%v positional=%v", mappedErr, positionalErr)
+			}
+		})
+	}
+}
+
 func TestCOWLeafInspectionUsesManagedMapping(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("mmap not supported on windows")
@@ -644,7 +773,7 @@ func TestCOWLeafInspectionUsesManagedMapping(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err = f.InspectCOWLeafRecord(noHint, cowTestLimits)
-	if err != nil || got != want || f.mmapReadFallbackReadAt.Load() != 1 {
+	if err != nil || got != want || f.mmapReadHits.Load() != 4 || f.mmapReadFallbackReadAt.Load() != 0 {
 		t.Fatalf("no-hint shape=%+v, err=%v, ReadAt fallbacks=%d, want %+v", got, err, f.mmapReadFallbackReadAt.Load(), want)
 	}
 }

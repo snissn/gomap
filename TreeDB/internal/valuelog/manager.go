@@ -1538,6 +1538,7 @@ type Manager struct {
 	groupedFrameCacheMaxBytes   int64
 	groupedFrameCacheBudget     *groupedFrameCacheBudget
 	currentWritableMmap         atomic.Bool
+	skipCurrentLeafMmapCache    atomic.Bool
 	currentWritableReadBarrier  atomic.Value
 	stableResourcePins          *rootpublication.IdentityPinRegistry
 	retiredCount                int                   // tracked zombies; protected by mu
@@ -1751,6 +1752,12 @@ func (m *Manager) SetCurrentWritableMmapEnabled(enabled bool) {
 		return
 	}
 	m.currentWritableMmap.Store(enabled)
+}
+
+// SetSkipCurrentMappedLeafFrameCache skips decoded frame admission on mapped
+// reads of current leaf segments when the caller already caches decoded pages.
+func (m *Manager) SetSkipCurrentMappedLeafFrameCache(skip bool) {
+	m.skipCurrentLeafMmapCache.Store(skip)
 }
 
 // SetMultiCurrentWritableLane allows multiple physical files with the same
