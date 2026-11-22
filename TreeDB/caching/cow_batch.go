@@ -845,28 +845,54 @@ func (b *Batch) admitCOWAccepted() error {
 		return nil
 	}
 	pair := b.rawTxnPairAdmission()
-	reserve := func() (rootpublication.AcceptedTicket, rootpublication.AcceptedTicket, error) {
-		if pair != nil {
-			return c.prefix.ReserveAcceptedOrdinaryPair()
+	var ticket, spare rootpublication.AcceptedTicket
+	if pair != nil {
+		var denied rootpublication.AcceptedOrdinaryPairRefusal
+		var err error
+		ticket, spare, denied, err = c.prefix.ReserveAcceptedOrdinaryPairWithRefusal()
+		if err != nil {
+			if !denied.Valid() {
+				return err
+			}
+			return b.admitCOWAcceptedAfterRawRefusal(pair, denied)
 		}
-		ticket, err := c.prefix.ReserveAccepted(false)
-		return ticket, rootpublication.AcceptedTicket{}, err
-	}
-	ticket, spare, err := reserve()
-	if errors.Is(err, rootpublication.ErrAcceptedCapacity) {
-		// Neither member is held on a paired refusal. Keep the original
-		// checkpoint and one re-reservation before any foreground gates.
-		if err = b.db.Checkpoint(); err != nil {
-			return err
+	} else {
+		var err error
+		ticket, err = c.prefix.ReserveAccepted(false)
+		if err != nil {
+			return b.admitCOWAcceptedAfterOrdinaryError(c, err)
 		}
-		ticket, spare, err = reserve()
-	}
-	if err != nil {
-		return acceptedAdmissionError(err)
 	}
 	b.cowState.accepted = ticket
 	if pair != nil {
 		pair.barrierSpare = spare
 	}
+	return nil
+}
+
+//go:noinline
+func (b *Batch) admitCOWAcceptedAfterOrdinaryError(c *cowCache, cause error) error {
+	if !errors.Is(cause, rootpublication.ErrAcceptedCapacity) {
+		return acceptedAdmissionError(cause)
+	}
+	if err := b.db.Checkpoint(); err != nil {
+		return err
+	}
+	ticket, err := c.prefix.ReserveAccepted(false)
+	if err != nil {
+		return acceptedAdmissionError(err)
+	}
+	b.cowState.accepted = ticket
+	return nil
+}
+
+//go:noinline
+func (b *Batch) admitCOWAcceptedAfterRawRefusal(pair *cowTxnState, denied rootpublication.AcceptedOrdinaryPairRefusal) error {
+	ticket, spare, err := b.db.reserveRawTxnPairAfterPressure(denied)
+	if err != nil {
+		return err
+	}
+	b.cowState.accepted = ticket
+	pair.barrierSpare = spare
 	return nil
 }

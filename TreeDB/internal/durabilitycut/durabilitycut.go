@@ -46,6 +46,9 @@ const (
 	AfterDeletionDirectorySync  Point = "after-deletion-directory-sync"
 )
 
+// BeforeCOWAcceptedPairPressureWait marks a raw pair refusal before the original flush fence.
+const BeforeCOWAcceptedPairPressureWait Point = "before-cow-accepted-pair-pressure-wait"
+
 type Resource string
 
 const (

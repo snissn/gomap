@@ -19,7 +19,14 @@ var cowPublicContractProfiles = []Profile{ProfileCommandWALDurable, ProfileComma
 
 func cowPublicContractOpen(t *testing.T, profile Profile, configure ...func(*Options)) (*DB, Options, *atomic.Bool) {
 	t.Helper()
-	opts := OptionsFor(profile, t.TempDir())
+	return cowPublicContractOpenAt(t, profile, t.TempDir(), configure...)
+}
+
+// cowPublicContractOpenAt keeps an intentional crash child's temporary files
+// beneath the directory owned by its parent test process.
+func cowPublicContractOpenAt(t *testing.T, profile Profile, dir string, configure ...func(*Options)) (*DB, Options, *atomic.Bool) {
+	t.Helper()
+	opts := OptionsFor(profile, dir)
 	opts.MemtableMode = "cow_btree"
 	opts.MemtableShards = 2
 	opts.FlushThreshold = 1 << 30

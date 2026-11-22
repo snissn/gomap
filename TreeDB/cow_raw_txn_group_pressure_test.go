@@ -401,11 +401,20 @@ func rawTxnGroupPressureRequireIdle(t *testing.T, db *DB) {
 
 func rawTxnGroupPressureStage(t *testing.T, db *DB, prefix, value string) *ConditionalTxn {
 	t.Helper()
+	return rawTxnGroupPressureStageGuarded(t, db, prefix, value, nil)
+}
+
+func rawTxnGroupPressureStageGuarded(t *testing.T, db *DB, prefix, value string, blocked *atomic.Bool) *ConditionalTxn {
+	t.Helper()
 	tx, err := db.NewConditionalTxn()
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = tx.Close() })
+	t.Cleanup(func() {
+		if blocked == nil || !blocked.Load() {
+			_ = tx.Close()
+		}
+	})
 	for _, suffix := range []string{"a", "b"} {
 		key := []byte(prefix + suffix)
 		if got, err := tx.Get(key); err != nil || got != nil {
@@ -418,8 +427,28 @@ func rawTxnGroupPressureStage(t *testing.T, db *DB, prefix, value string) *Condi
 	return tx
 }
 
+func rawTxnGroupPressureStart(writers *sync.WaitGroup, tx *ConditionalTxn) <-chan error {
+	done := make(chan error, 1)
+	writers.Go(func() { done <- tx.Commit() })
+	return done
+}
+
+func rawTxnGroupPressureJoin(t *testing.T, writers *sync.WaitGroup, blocked *atomic.Bool) {
+	t.Helper()
+	joined := make(chan struct{})
+	go func() { writers.Wait(); close(joined) }()
+	select {
+	case <-joined:
+	case <-time.After(10 * time.Second):
+		blocked.Store(true)
+		t.Error("public raw writers did not unwind before fixture cleanup")
+	}
+}
+
 func rawTxnGroupPressureSeed(t *testing.T, db *DB, blocked *atomic.Bool) {
 	t.Helper()
+	var writers sync.WaitGroup
+	defer rawTxnGroupPressureJoin(t, &writers, blocked)
 	g := &db.commandWALGroupCommit
 	delay, maxCommits, maxBytes := g.delay, g.maxCommits, g.maxBytes
 	g.delay, g.maxCommits, g.maxBytes = 10*time.Second, 2, 1<<30
@@ -433,10 +462,9 @@ func rawTxnGroupPressureSeed(t *testing.T, db *DB, blocked *atomic.Bool) {
 	groups := make(chan int, 2)
 	g.testBeforeSync = func(n int) { groups <- n }
 	next := db.backend.CommandWALNextLSN()
-	a := rawTxnGroupPressureStage(t, db, "seed-one/", "seed-one")
-	b := rawTxnGroupPressureStage(t, db, "seed-two/", "seed-two")
-	aDone, bDone := make(chan error, 1), make(chan error, 1)
-	go func() { aDone <- a.Commit() }()
+	a := rawTxnGroupPressureStageGuarded(t, db, "seed-one/", "seed-one", blocked)
+	b := rawTxnGroupPressureStageGuarded(t, db, "seed-two/", "seed-two", blocked)
+	aDone := rawTxnGroupPressureStart(&writers, a)
 	select {
 	case <-registered:
 	case err := <-aDone:
@@ -445,8 +473,8 @@ func rawTxnGroupPressureSeed(t *testing.T, db *DB, blocked *atomic.Bool) {
 		blocked.Store(true)
 		t.Fatal("first public WAL registration timed out")
 	}
-	go func() { bDone <- b.Commit() }()
-	for _, done := range []chan error{aDone, bDone} {
+	bDone := rawTxnGroupPressureStart(&writers, b)
+	for _, done := range []<-chan error{aDone, bDone} {
 		select {
 		case err := <-done:
 			if err != nil {
