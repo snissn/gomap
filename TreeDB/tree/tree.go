@@ -571,7 +571,7 @@ func validateLeafLogNodeIntoWithState(dst *node.Node, data []byte, ptr page.LogR
 	if dst.Type() != page.PageTypeLeaf {
 		return false, fmt.Errorf("invalid page type %d at leaf-log ref file=%d offset=%d", dst.Type(), ptr.FileID, ptr.Offset)
 	}
-	noteOuterLeafLoad(ptr.ValuePtr(), len(data), iterator)
+	noteOuterLeafLoad(ptr.ValuePtr(), iterator)
 	return verifiedNow, nil
 }
 

@@ -59,7 +59,6 @@ func TestIterator_LeafRefFallbackCountsAsIteratorLoad(t *testing.T) {
 	outerLeafLoadsTotal.Store(0)
 	outerLeafPointLoadsTotal.Store(0)
 	outerLeafIteratorLoadsTotal.Store(0)
-	outerLeafBytesTotal.Store(0)
 	outerLeafSamplesTotal.Store(0)
 	outerLeafRecent64HitsTotal.Store(0)
 	outerLeafRecent256HitsTotal.Store(0)

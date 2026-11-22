@@ -76,7 +76,8 @@ func (s *Snapshot) InspectPinnedCOWLeafRecord(ptr page.ValuePtr, limits valuelog
 }
 
 // PinnedCOWLeafRead borrows the exact inspected segment and its decoded cache
-// only during WithPinnedCOWLeafRecord's callback. It must not be retained.
+// during a WithPinnedCOWLeafRecord or GetEntryExactWithPinnedCOWLeaf callback.
+// The caller must not retain it.
 type PinnedCOWLeafRead struct {
 	file   *valuelog.File
 	cache  *leafPageReadCache
@@ -94,15 +95,24 @@ func (s *Snapshot) WithPinnedCOWLeafRecord(ptr page.LeafLogPtr, limits valuelog.
 		return nil, fmt.Errorf("COW physical leaf pinned-file ptr=%+v: %w", ptr.ValuePtr(), err)
 	}
 	defer s.endRead()
+	record, err := s.inspectPinnedCOWLeafRecord(ptr, limits)
+	if err != nil {
+		return nil, err
+	}
+	return read(record)
+}
+
+// The caller holds a snapshot read through inspection and all record use.
+func (s *Snapshot) inspectPinnedCOWLeafRecord(ptr page.LeafLogPtr, limits valuelog.COWReadLimits) (PinnedCOWLeafRead, error) {
 	f, identity, err := s.pinnedValueLogSegment(ptr.ValueLogFileID())
 	if err != nil {
-		return nil, fmt.Errorf("COW physical leaf pinned-file ptr=%+v: %w", ptr.ValuePtr(), err)
+		return PinnedCOWLeafRead{}, fmt.Errorf("COW physical leaf pinned-file ptr=%+v: %w", ptr.ValuePtr(), err)
 	}
 	shape, err := f.InspectCOWLeafRecord(ptr.ValuePtr(), limits)
 	if err != nil {
-		return nil, fmt.Errorf("COW physical leaf inspect ptr=%+v file=%q identity=%+v: %w", ptr.ValuePtr(), f.File.Name(), identity, err)
+		return PinnedCOWLeafRead{}, fmt.Errorf("COW physical leaf inspect ptr=%+v file=%q identity=%+v: %w", ptr.ValuePtr(), f.File.Name(), identity, err)
 	}
-	return read(PinnedCOWLeafRead{file: f, cache: s.reader.leafPageCache, ptr: ptr, limits: limits, shape: shape})
+	return PinnedCOWLeafRead{file: f, cache: s.reader.leafPageCache, ptr: ptr, limits: limits, shape: shape}, nil
 }
 
 func (r *PinnedCOWLeafRead) FileName() string { return r.file.File.Name() }
@@ -392,6 +402,23 @@ func (s *Snapshot) GetEntryExactWithFixedScratch(key, keyScratch, leafScratch []
 	}
 	defer s.endRead()
 	return s.tree.GetEntryWithFixedScratch(key, keyScratch, leafScratch, readLeaf)
+}
+
+// GetEntryExactWithPinnedCOWLeaf performs a fixed-scratch point read and
+// inspects any logged leaf under the same snapshot read pin as the traversal.
+// The record is scoped to readLeaf. Returned slices have the same lifetime as
+// GetEntryExactWithFixedScratch.
+func (s *Snapshot) GetEntryExactWithPinnedCOWLeaf(key, keyScratch, leafScratch []byte, limits valuelog.COWReadLimits, readLeaf func(page.LeafLogPtr, []byte, PinnedCOWLeafRead) ([]byte, error)) (node.LeafEntry, error) {
+	if readLeaf == nil {
+		return s.GetEntryExactWithFixedScratch(key, keyScratch, leafScratch, nil)
+	}
+	return s.GetEntryExactWithFixedScratch(key, keyScratch, leafScratch, func(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
+		record, err := s.inspectPinnedCOWLeafRecord(ptr, limits)
+		if err != nil {
+			return nil, err
+		}
+		return readLeaf(ptr, dst, record)
+	})
 }
 
 // OwnedUserRootEmpty checks the exact tree pinned by this snapshot. It does
