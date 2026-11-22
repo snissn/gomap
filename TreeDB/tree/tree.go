@@ -689,6 +689,15 @@ func (t *Tree) getEntry(key, keyScratch, leafScratch []byte, readLeaf func(page.
 	if t.pager != nil {
 		verifyAlways = t.pager.VerifyOnRead()
 	}
+	if copyLeaf != nil {
+		// PRIMARY selects and loads operands with the ordinary byte reader.
+		// Set up its adapter outside the traversal loop so it stays on the stack.
+		readCopy := copyLeaf.read
+		readLeaf = func(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
+			data, _, err := readCopy(ptr, dst)
+			return data, err
+		}
+	}
 
 	for depth := 0; depth < maxTraversalDepth; depth++ {
 		var n node.Node
@@ -709,14 +718,7 @@ func (t *Tree) getEntry(key, keyScratch, leafScratch []byte, readLeaf func(page.
 			if depth != 0 {
 				return node.LeafEntry{}, node.ErrPrimaryDirectory
 			}
-			if copyLeaf != nil {
-				readCopy := copyLeaf.read
-				readLeaf = func(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
-					data, _, err := readCopy(ptr, dst)
-					return data, err
-				}
-				copyLeaf = nil
-			}
+			copyLeaf = nil
 			var err error
 			var inline node.PrimaryDirectoryEntry
 			currRef, inline, err = t.selectPrimaryOperand(n.Data(), key, readLeaf, leafScratch, bounded)
