@@ -8,6 +8,7 @@ import subprocess
 import textwrap
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -76,19 +77,57 @@ class TreeDBCIContractTests(unittest.TestCase):
         )
         self.assertLess(job.index("run: go clean -testcache"), job.index("- name: Test\n"))
 
-    def test_only_pr_root_race_narrows_original_size_offline_compact(self) -> None:
-        # Complete top-level discovery and the parent assignment remain intact.
-        # Never give every loaded root test a shared subtest inclusion filter.
+    def test_only_pr_root_race_excludes_redundant_exact_work(self) -> None:
+        # All top-level assignments stay intact. Never impose a shared subtest
+        # inclusion filter or broad -short on these loaded root suites.
         race = block(self.source, "  race:\n", "\n  perf:\n")
         root = block(race, 'if [ -s "$root_test_file" ]; then', 'if [ -s "$caching_test_file" ]; then')
-        parent = "TestCompactStorageExhaustiveCommandWALRandom4KOffline"
-        skip = f"root_race_options=(-skip '^{parent}$/^keys100000$')"
-        self.assertEqual(self.source.count(skip), 1)
-        self.assertIn("root_race_options=()", root)
-        guard = f'if [[ "$GITHUB_EVENT_NAME" == pull_request ]] && grep -Fxq {parent} "$root_test_file"; then'
-        self.assertIn(skip, block(root, guard, "            fi"))
+        compact = "TestCompactStorageExhaustiveCommandWALRandom4KOffline"
+        driver = "TestProductionAuthorityExecutableCompositeOmissionMatrix"
+        compact_exclusion = f"^{compact}$/^keys100000$"
+        driver_exclusion = f"^{driver}$"
+        self.assertEqual(self.source.count(compact_exclusion), 1)
+        self.assertEqual(self.source.count(driver_exclusion), 1)
         self.assertIn(' . -run "$root_regex" "${root_race_options[@]}"', root)
         self.assertNotIn(" -short", root)
+        options = textwrap.dedent(block(root, "root_race_options=()",
+                                        "            GOMEMLIMIT=4GiB GOMAXPROCS=2 go test"))
+        shell = ('set -euo pipefail\nGITHUB_EVENT_NAME="$1"\nroot_test_file="$2"\n'
+                 + options + '\nfor arg in "${root_race_options[@]}"; do printf "arg:%s\n" "$arg"; done')
+        for event, assigned, want in (
+            ("pull_request", [compact], [compact_exclusion]),
+            ("pull_request", [driver], [driver_exclusion]),
+            ("pull_request", [compact, driver], [compact_exclusion, driver_exclusion]),
+            ("pull_request", [compact + "Another", driver + "Another"], []),
+            ("push", [compact, driver], []),
+            ("merge_group", [compact, driver], []),
+            ("workflow_dispatch", [compact, driver], []),
+        ):
+            with self.subTest(event=event, assigned=assigned):
+                with TemporaryDirectory() as tmp:
+                    tests = Path(tmp) / "assigned-tests"
+                    tests.write_text("\n".join(assigned) + "\n", encoding="utf-8")
+                    result = subprocess.run(
+                        ["bash", "-c", shell, "test-root-race", event, str(tests)],
+                        check=True, capture_output=True, text=True, timeout=5,
+                    )
+                args = [line[4:] for line in result.stdout.splitlines() if line.startswith("arg:")]
+                self.assertEqual(args, ["-skip", "|".join(want)] if want else [])
+
+    def test_pr_omission_driver_preserves_owning_normal_and_race_routes(self) -> None:
+        normal = block(self.source, "  test:\n", "\n  race:\n")
+        race = block(self.source, "  race:\n", "\n  perf:\n")
+        required = block(self.source, "  required:\n")
+        self.assertIn('xargs go test -json -timeout 30m -p 1 < "$package_file"', normal)
+        self.assertNotIn("TestProductionAuthorityExecutableCompositeOmissionMatrix", normal)
+        self.assertIn('go test -json -race -p 1 -timeout 20m ./collections', race)
+        self.assertIn('xargs go test -json -race -p 1 -timeout 12m < "$package_file"', race)
+        package_scope = next(line for line in race.splitlines() if "packages go list" in line)
+        for owner in ("dictdb", "templatedb", "valuelog"):
+            with self.subTest(owner=owner):
+                self.assertNotIn(f"/internal/{owner}", package_scope)
+        self.assertIn("      - test", required)
+        self.assertIn("      - race", required)
 
     def test_required_test_jobs_checkout_the_event_sha(self) -> None:
         required_jobs = (
