@@ -162,6 +162,13 @@ func isLeafLogFileID(fileID uint32) bool {
 	return lane == ReservedLeafLogLaneID
 }
 
+func (f *File) mappedGroupedFrameCacheAllowsRaw(rawLen int) bool {
+	if f.manager != nil && f.manager.skipCurrentLeafMmapCache.Load() && f.currentWritable.Load() && f.allowsCompactLeafPayload() {
+		return false
+	}
+	return f.groupedFrameCacheAllowsRaw(rawLen)
+}
+
 func (f *File) currentWritablePersistentMmapEnabled() bool {
 	if f == nil || !f.currentWritable.Load() {
 		return false
@@ -727,7 +734,7 @@ func (f *File) readViaMmapView(ptr page.ValuePtr, verifyCRC bool) ([]byte, error
 			return out, nil, true
 		}
 
-		cacheableRaw := f.groupedFrameCacheAllowsRaw(int(rawLen))
+		cacheableRaw := f.mappedGroupedFrameCacheAllowsRaw(int(rawLen))
 
 		retainRaw := cacheableRaw || readViaMmapViewPrefixCacheEnabled
 		pooledRaw := !retainRaw
@@ -1012,7 +1019,7 @@ func (f *File) readViaMmapViewTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 	// One-off read paths (dst=nil) should avoid grouped-cache writeback; this
 	// path is dominated by high-concurrency point reads where cache-store lock
 	// traffic can outweigh reuse.
-	cacheableRaw := copyValueToDst && f.groupedFrameCacheAllowsRaw(int(rawLen))
+	cacheableRaw := copyValueToDst && f.mappedGroupedFrameCacheAllowsRaw(int(rawLen))
 
 	// When raw payload may be cached, decode into pooled scratch so the grouped
 	// cache can retain ownership and return buffers to the pool on eviction.
@@ -1334,7 +1341,7 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		return dst, nil, true
 	}
 	// Owned point gets share the existing entry, raw-size and byte-budget limits.
-	cacheableRaw := f.groupedFrameCacheAllowsRaw(int(rawLen))
+	cacheableRaw := f.mappedGroupedFrameCacheAllowsRaw(int(rawLen))
 
 	// Decode into pooled scratch even when we plan to cache decoded raw bytes.
 	// When cached, ownership transfers to groupedFrameCacheStore(..., pooled=true)

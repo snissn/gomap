@@ -47,13 +47,18 @@ func TestCurrentLeafMmapSkipsDecodedFrameAdmission(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = m.Close() })
 	m.SetCurrentWritableMmapEnabled(true)
-	m.SetSkipCurrentLeafFrameCache(true)
-	for _, lane := range []uint32{ReservedLeafLogLaneID, 0} {
-		fileID, err := EncodeFileID(lane, 1)
+	m.SetSkipCurrentMappedLeafFrameCache(true)
+	// Both files use the reserved lane. The leaf namespace determines which
+	// segment is eligible for the page cache.
+	paths := []string{
+		compactLeafPayloadTestPath(t, dir, 1),
+		filepath.Join(dir, fmt.Sprintf("value-l%d-000002.log", ReservedLeafLogLaneID)),
+	}
+	for i, path := range paths {
+		fileID, err := EncodeFileID(ReservedLeafLogLaneID, uint32(i+1))
 		if err != nil {
 			t.Fatal(err)
 		}
-		path := filepath.Join(dir, fmt.Sprintf("value-l%d-000001.log", lane))
 		w, err := NewWriter(path, fileID)
 		if err != nil {
 			t.Fatal(err)
@@ -77,14 +82,14 @@ func TestCurrentLeafMmapSkipsDecodedFrameAdmission(t *testing.T) {
 			for i, ptr := range ptrs {
 				got, err := m.ReadAppend(ptr, nil)
 				if err != nil || !bytes.Equal(got, want[i]) {
-					t.Fatalf("lane %d record %d read failed: %v", lane, i, err)
+					t.Fatalf("file %d record %d read failed: %v", fileID, i, err)
 				}
 			}
 			if stats := f.groupedFrameCacheDetailedStats(); stats.Entries != wantEntries || f.mmapReadHits.Load()-hits != uint64(len(ptrs)) {
-				t.Fatalf("lane %d current=%v: entries=%d (want %d), mmap hits=%d", lane, f.IsCurrentWritable(), stats.Entries, wantEntries, f.mmapReadHits.Load()-hits)
+				t.Fatalf("file %d current=%v: entries=%d (want %d), mmap hits=%d", fileID, f.IsCurrentWritable(), stats.Entries, wantEntries, f.mmapReadHits.Load()-hits)
 			}
 		}
-		if lane == ReservedLeafLogLaneID {
+		if i == 0 {
 			read(0)
 			m.DemoteCurrentWritable(fileID)
 		}

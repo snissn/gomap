@@ -78,8 +78,9 @@ reserves address space beyond EOF. Policy denials and unreadable ranges use
 the bounded positional path. Sealed mapping budgets apply as usual, and the
 verified `no_wal_fast` profile enables current-file read-only mapping.
 When its outer-leaf read cache is enabled, the backend skips decoded grouped
-frame admission for current leaf segments. The page cache owns retained decoded
-leaves, and the frame cache remains available for sealed leaves and values.
+frame admission on mapped reads of current leaf segments. The page cache owns
+retained decoded leaves. Sealed leaves, ordinary values, and positional reads
+use the existing frame admission policy.
 
 Only the record shape leaves inspection. A full read rechecks that shape and
 verifies the CRC before decoding. It copies compressed input into admitted
