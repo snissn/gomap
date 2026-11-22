@@ -146,6 +146,8 @@ type leafPageReadCacheSlot struct {
 	data                   []byte
 	valid                  bool
 	recordChecksumVerified bool
+	// The ordinary key-only marker cannot establish proof for a bounded copy.
+	copiedPageChecksumVerified atomic.Bool
 	// A zero policy is uncredited. Only a successful bounded dictionary decode
 	// may establish this certificate, under the same slot lock as its bytes.
 	cowReadPolicy        valuelog.COWReadLimits
@@ -583,6 +585,7 @@ func (s *leafPageReadCacheSlot) storeIntoBackingLocked(key leafPageReadCacheKey,
 	s.recordChecksumVerified = recordChecksumVerified
 	s.cowReadPolicy = valuelog.COWReadLimits{}
 	s.pageChecksumVerified.Store(false)
+	s.copiedPageChecksumVerified.Store(false)
 	s.recent.Store(true)
 	s.keyFP.Store(leafPageReadCacheKeyFingerprint(key))
 	return result
@@ -834,7 +837,12 @@ func (c *leafPageReadCache) getToWithCOWPolicy(ptr page.LeafLogPtr, dst []byte, 
 			c.misses.Add(1)
 			return nil, false, leafPageReadCacheState{}, false
 		}
-		state := leafPageReadCacheState{RecordChecksumVerified: slot.recordChecksumVerified, CacheEntryPresent: true, PageChecksumVerified: slot.pageChecksumVerified.Load()}
+		state := leafPageReadCacheState{RecordChecksumVerified: slot.recordChecksumVerified, CacheEntryPresent: true}
+		if requireVerified {
+			state.PageChecksumVerified = slot.copiedPageChecksumVerified.Load()
+		} else {
+			state.PageChecksumVerified = slot.pageChecksumVerified.Load()
+		}
 		if cap(dst) >= len(slot.data) {
 			out := dst[:len(slot.data)]
 			copy(out, slot.data)
@@ -851,6 +859,35 @@ func (c *leafPageReadCache) getToWithCOWPolicy(ptr page.LeafLogPtr, dst []byte, 
 	}
 	c.misses.Add(1)
 	return nil, false, leafPageReadCacheState{}, false
+}
+
+// markCopiedPageChecksumVerified follows CRC and type validation of a bounded
+// copy. Publish only if the current slot still owns those exact verified bytes.
+func (c *leafPageReadCache) markCopiedPageChecksumVerified(ptr page.LeafLogPtr, verifiedPage []byte) {
+	if c == nil || c.disabled.Load() || len(c.slots) == 0 || len(c.buckets) == 0 || len(verifiedPage) != page.PageSize {
+		return
+	}
+	key := newLeafPageReadCacheKey(ptr)
+	keyFP := leafPageReadCacheKeyFingerprint(key)
+	start, end := c.bucketRange(c.bucketIndex(key))
+	for i := start; i < end; i++ {
+		slot := &c.slots[i]
+		if slot.keyFP.Load() != keyFP {
+			continue
+		}
+		if !slot.mu.TryRLock() {
+			return
+		}
+		if slot.valid && slot.key == key {
+			if slot.recordChecksumVerified && !c.disabled.Load() && bytes.Equal(slot.data, verifiedPage) {
+				slot.copiedPageChecksumVerified.Store(true)
+				slot.MarkLeafLogPageViewChecksumVerified()
+			}
+			slot.mu.RUnlock()
+			return
+		}
+		slot.mu.RUnlock()
+	}
 }
 
 // cowReadPolicyAllows keeps one complete certificate; incomparable policies

@@ -648,7 +648,7 @@ func (t *Tree) loadNodeViewWithLoadKindInto(dst *node.Node, pageID uint64, verif
 // CAUTION: Returned entry Key/Value might point directly to mmap memory.
 // Do not modify or hold reference for long.
 func (t *Tree) GetEntry(key []byte) (node.LeafEntry, error) {
-	return t.getEntry(key, nil, nil, nil, false)
+	return t.getEntry(key, nil, nil, nil, nil, false)
 }
 
 // GetEntryWithFixedScratch borrows admitted fixed-page scratch and returns an
@@ -658,10 +658,29 @@ func (t *Tree) GetEntryWithFixedScratch(key, keyScratch, leafScratch []byte, rea
 	if cap(keyScratch) < page.PageSize || cap(leafScratch) < page.PageSize {
 		return node.LeafEntry{}, node.ErrCorruptedNode
 	}
-	return t.getEntry(key, keyScratch, leafScratch, readLeaf, true)
+	return t.getEntry(key, keyScratch, leafScratch, readLeaf, nil, true)
 }
 
-func (t *Tree) getEntry(key, keyScratch, leafScratch []byte, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error), bounded bool) (node.LeafEntry, error) {
+type fixedLeafLogPointCopy struct {
+	read func(page.LeafLogPtr, []byte) ([]byte, LeafLogPageReadState, error)
+	mark func(page.LeafLogPtr, []byte)
+}
+
+// GetEntryWithFixedScratchLeafProof accepts checksum state returned with an
+// ordinary point lookup's exact copied page. An optional mark follows successful page
+// checksum and type validation of an unmarked cached copy.
+func (t *Tree) GetEntryWithFixedScratchLeafProof(key, keyScratch, leafScratch []byte, readLeaf func(page.LeafLogPtr, []byte) ([]byte, LeafLogPageReadState, error), mark func(page.LeafLogPtr, []byte)) (node.LeafEntry, error) {
+	if readLeaf == nil {
+		return t.GetEntryWithFixedScratch(key, keyScratch, leafScratch, nil)
+	}
+	if cap(keyScratch) < page.PageSize || cap(leafScratch) < page.PageSize {
+		return node.LeafEntry{}, node.ErrCorruptedNode
+	}
+	copyLeaf := fixedLeafLogPointCopy{read: readLeaf, mark: mark}
+	return t.getEntry(key, keyScratch, leafScratch, nil, &copyLeaf, true)
+}
+
+func (t *Tree) getEntry(key, keyScratch, leafScratch []byte, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error), copyLeaf *fixedLeafLogPointCopy, bounded bool) (node.LeafEntry, error) {
 	if t.pointDefinitelyAbsent(key) {
 		return node.LeafEntry{}, ErrKeyNotFound
 	}
@@ -673,7 +692,11 @@ func (t *Tree) getEntry(key, keyScratch, leafScratch []byte, readLeaf func(page.
 
 	for depth := 0; depth < maxTraversalDepth; depth++ {
 		var n node.Node
-		if err := t.loadReadRefInto(&n, currRef, verifyAlways, keyScratch, leafScratch, readLeaf, bounded); err != nil {
+		if copyLeaf != nil && currRef.Kind == page.ChildRefLeafLog {
+			if err := t.loadFixedPointLeafWithProof(&n, currRef.Log, leafScratch, copyLeaf, verifyAlways); err != nil {
+				return node.LeafEntry{}, err
+			}
+		} else if err := t.loadReadRefInto(&n, currRef, verifyAlways, keyScratch, leafScratch, readLeaf, bounded); err != nil {
 			return node.LeafEntry{}, err
 		}
 
@@ -685,6 +708,14 @@ func (t *Tree) getEntry(key, keyScratch, leafScratch []byte, readLeaf func(page.
 		case page.PageTypePrimaryDirectory:
 			if depth != 0 {
 				return node.LeafEntry{}, node.ErrPrimaryDirectory
+			}
+			if copyLeaf != nil {
+				readCopy := copyLeaf.read
+				readLeaf = func(ptr page.LeafLogPtr, dst []byte) ([]byte, error) {
+					data, _, err := readCopy(ptr, dst)
+					return data, err
+				}
+				copyLeaf = nil
 			}
 			var err error
 			var inline node.PrimaryDirectoryEntry
@@ -751,6 +782,24 @@ func (t *Tree) getEntry(key, keyScratch, leafScratch []byte, readLeaf func(page.
 		}
 	}
 	return node.LeafEntry{}, errors.New("tree too deep")
+}
+
+func (t *Tree) loadFixedPointLeafWithProof(n *node.Node, ptr page.LeafLogPtr, scratch []byte, copyLeaf *fixedLeafLogPointCopy, verifyAlways bool) error {
+	data, state, err := copyLeaf.read(ptr, scratch[:0])
+	if err != nil {
+		return err
+	}
+	if !aliasesFixedLeafLogScratch(data, scratch) {
+		return ErrOwnedIteratorLeafReader
+	}
+	if verifyAlways {
+		state = LeafLogPageReadState{}
+	}
+	verified, err := validateLeafLogNodeIntoWithState(n, data, ptr, t.shouldVerifyLeafRefChecksum(), false, state)
+	if err == nil && verified && state.RecordChecksumVerified && state.CacheEntryPresent && copyLeaf.mark != nil {
+		copyLeaf.mark(ptr, data)
+	}
+	return err
 }
 
 // GetEntryExact is an alias for GetEntry.

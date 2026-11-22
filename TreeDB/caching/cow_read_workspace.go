@@ -831,7 +831,8 @@ func (b *cowBackendBasis) readPhysicalLeafWithWorkspace(c *cowCache, w *cowReadW
 // owns its checked definition separately.
 func (b *cowBackendBasis) readPhysicalLeafWithDictionary(c *cowCache, w *cowReadWorkspace, ptr page.LeafLogPtr, dst []byte, native, localBlock bool, independent *cowCacheDictionaryRead) ([]byte, error) {
 	return b.snapshot.WithPinnedCOWLeafRecord(ptr, w.limits, func(record backenddb.PinnedCOWLeafRead) ([]byte, error) {
-		return readInspectedPhysicalLeaf(c, w, ptr, dst, native, localBlock, independent, &record)
+		data, _, err := readInspectedPhysicalLeaf(c, w, ptr, dst, native, localBlock, independent, &record)
+		return data, err
 	})
 }
 
@@ -848,12 +849,13 @@ func (b *cowBackendBasis) readPhysicalPoint(c *cowCache, w *cowReadWorkspace, ke
 	if err != nil {
 		return node.LeafEntry{}, err
 	}
-	return b.snapshot.GetEntryExactWithPinnedCOWLeaf(key, point.key[:], point.leaf[:], w.limits, func(ptr page.LeafLogPtr, dst []byte, record backenddb.PinnedCOWLeafRead) ([]byte, error) {
+	return b.snapshot.GetEntryExactWithPinnedCOWLeaf(key, point.key[:], point.leaf[:], w.limits, func(ptr page.LeafLogPtr, dst []byte, record backenddb.PinnedCOWLeafRead) ([]byte, tree.LeafLogPageReadState, error) {
 		return readInspectedPhysicalLeaf(c, w, ptr, dst, false, localBlock, independent, &record)
 	})
 }
 
-func readInspectedPhysicalLeaf(c *cowCache, w *cowReadWorkspace, ptr page.LeafLogPtr, dst []byte, native, localBlock bool, independent *cowCacheDictionaryRead, record *backenddb.PinnedCOWLeafRead) ([]byte, error) {
+func readInspectedPhysicalLeaf(c *cowCache, w *cowReadWorkspace, ptr page.LeafLogPtr, dst []byte, native, localBlock bool, independent *cowCacheDictionaryRead, record *backenddb.PinnedCOWLeafRead) ([]byte, tree.LeafLogPageReadState, error) {
+	var noProof tree.LeafLogPageReadState
 	shape := record.Shape()
 	// Packing/rewrite may legitimately publish dictionary leaves even though
 	// the ordinary caching appender supplies dictionary zero. Native callers
@@ -862,24 +864,25 @@ func readInspectedPhysicalLeaf(c *cowCache, w *cowReadWorkspace, ptr page.LeafLo
 	unsupportedDictionary := shape.DictID != 0 && (independent == nil || independent.provider == nil || independent.cache != c)
 	unsupportedBlock := shape.DictID == 0 && shape.Codec != valuelog.BlockCodecSnappy && shape.Codec != valuelog.BlockCodecLZ4
 	if native && shape.Compressed && (unsupportedDictionary || unsupportedBlock) {
-		return nil, fmt.Errorf("COW physical leaf native-codec ptr=%+v file=%q compressed=%t dictionary=%d codec=%d record=%d raw=%d value=%d: %w", ptr.ValuePtr(), record.FileName(), shape.Compressed, shape.DictID, shape.Codec, shape.RecordBytes, shape.RawBytes, shape.ValueBytes, valuelog.ErrCOWReadUnsupported)
+		return nil, noProof, fmt.Errorf("COW physical leaf native-codec ptr=%+v file=%q compressed=%t dictionary=%d codec=%d record=%d raw=%d value=%d: %w", ptr.ValuePtr(), record.FileName(), shape.Compressed, shape.DictID, shape.Codec, shape.RecordBytes, shape.RawBytes, shape.ValueBytes, valuelog.ErrCOWReadUnsupported)
 	}
 	if shape.DictID != 0 && independent == nil {
 		if w.snapshot == nil {
-			return nil, errCOWPhysicalDictionary
+			return nil, noProof, errCOWPhysicalDictionary
 		}
 		// Without independently retained definition capability, preserve the
 		// complete cut's dictionary policy and local admission before any hit.
-		return w.readPinnedLeaf(record, dst, nil)
+		data, err := w.readPinnedLeaf(record, dst, nil)
+		return data, noProof, err
 	}
 	// Dictionary credit records the actual successful bounded decode policy.
 	// Every caller, including canonical readers, must dominate that credit.
 	// Inspection and native capability checks above remain mandatory on a hit.
-	if data, hit, err := record.CopyVerifiedPage(dst); err != nil || hit {
+	if data, state, hit, err := record.CopyVerifiedPage(dst); err != nil || hit {
 		if err != nil {
-			return nil, fmt.Errorf("COW physical leaf verified-cache ptr=%+v file=%q: %w", ptr.ValuePtr(), record.FileName(), err)
+			return nil, noProof, fmt.Errorf("COW physical leaf verified-cache ptr=%+v file=%q: %w", ptr.ValuePtr(), record.FileName(), err)
 		}
-		return data, err
+		return data, state, nil
 	}
 	// Reuse a matching local dictionary codec first, as on the original
 	// borrowed path. Otherwise the shared generic owner supplies decode storage.
@@ -892,17 +895,17 @@ func readInspectedPhysicalLeaf(c *cowCache, w *cowReadWorkspace, ptr page.LeafLo
 		c.physicalMu.Lock()
 		// A preceding decoder may have admitted this exact inspected leaf
 		// while we waited. Preserve the original policy before copying a hit.
-		if data, hit, cacheErr := record.CopyVerifiedPage(dst); cacheErr != nil || hit {
+		if data, state, hit, cacheErr := record.CopyVerifiedPage(dst); cacheErr != nil || hit {
 			c.physicalMu.Unlock()
-			return data, cacheErr
+			return data, state, cacheErr
 		}
 		shared, workspaceErr := c.physicalWorkspaceLocked(w.limits)
 		if workspaceErr != nil {
 			c.physicalMu.Unlock()
 			if shape.DictID != 0 && errors.Is(workspaceErr, memtable.ErrCOWCapacity) {
-				return nil, &cowPhysicalDictionaryCapacity{cause: workspaceErr}
+				return nil, noProof, &cowPhysicalDictionaryCapacity{cause: workspaceErr}
 			}
-			return nil, workspaceErr
+			return nil, noProof, workspaceErr
 		}
 		data, err := shared.readPinnedLeaf(record, dst, independent)
 		if err == nil {
@@ -913,23 +916,23 @@ func readInspectedPhysicalLeaf(c *cowCache, w *cowReadWorkspace, ptr page.LeafLo
 		c.physicalMu.Unlock()
 		if err != nil {
 			if shape.DictID != 0 && errors.Is(err, memtable.ErrCOWCapacity) {
-				return nil, &cowPhysicalDictionaryCapacity{cause: err}
+				return nil, noProof, &cowPhysicalDictionaryCapacity{cause: err}
 			}
-			return nil, err
+			return nil, noProof, err
 		}
-		return data, nil
+		return data, noProof, nil
 	}
 	data, err := w.readPinnedLeaf(record, dst, nil)
 	if err != nil {
 		if shape.DictID != 0 && errors.Is(err, memtable.ErrCOWCapacity) {
-			return nil, &cowPhysicalDictionaryCapacity{cause: err}
+			return nil, noProof, &cowPhysicalDictionaryCapacity{cause: err}
 		}
-		return nil, fmt.Errorf("COW physical leaf decode ptr=%+v file=%q compressed=%t dictionary=%d codec=%d record=%d raw=%d value=%d: %w", ptr.ValuePtr(), record.FileName(), shape.Compressed, shape.DictID, shape.Codec, shape.RecordBytes, shape.RawBytes, shape.ValueBytes, err)
+		return nil, noProof, fmt.Errorf("COW physical leaf decode ptr=%+v file=%q compressed=%t dictionary=%d codec=%d record=%d raw=%d value=%d: %w", ptr.ValuePtr(), record.FileName(), shape.Compressed, shape.DictID, shape.Codec, shape.RecordBytes, shape.RawBytes, shape.ValueBytes, err)
 	}
 	if err = record.AdmitVerifiedPage(data); err != nil {
-		return nil, fmt.Errorf("COW physical leaf verified-admission ptr=%+v file=%q: %w", ptr.ValuePtr(), record.FileName(), err)
+		return nil, noProof, fmt.Errorf("COW physical leaf verified-admission ptr=%+v file=%q: %w", ptr.ValuePtr(), record.FileName(), err)
 	}
-	return data, nil
+	return data, noProof, nil
 }
 
 // Physical entries borrow this snapshot's admitted page scratch. cowReadMu
